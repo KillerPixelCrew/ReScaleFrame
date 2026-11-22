@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
+use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};
 use crate::overlay_host_abi::{
-    RSF_OVERLAY_HOST_PANEL_LOADED, RSF_OVERLAY_HOST_PANEL_MISSING_EXPORTS,
-    RSF_OVERLAY_HOST_PANEL_NO_PATH, RSF_OVERLAY_HOST_PANEL_NOT_LOADED, rsf_overlay_host_panel,
+    rsf_overlay, rsf_overlay_draw_data, rsf_overlay_host_panel, rsf_overlay_input,
 };
 use std::ffi::{CStr, c_void};
 use std::ptr::null_mut;
@@ -48,14 +48,43 @@ mod elapsed_tests {
 // panel code after a renderer has stopped.
 static PUBLISHED: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
-impl rsf_overlay_host_panel {
-    pub(crate) fn complete(&self) -> bool {
-        self.create.is_some()
-            && self.destroy.is_some()
-            && self.frame.is_some()
-            && self.texture_updates.is_some()
-            && self.textures_to_free.is_some()
+#[derive(Clone, Copy)]
+pub(super) struct PanelEntries {
+    pub create: unsafe extern "C" fn(u32) -> *mut rsf_overlay,
+    pub destroy: unsafe extern "C" fn(*mut rsf_overlay),
+    pub frame: unsafe extern "C" fn(
+        *mut rsf_overlay,
+        *const rsf_overlay_input,
+        *const rsf_overlay_stats,
+        *mut rsf_overlay_draw_data,
+        *mut rsf_overlay_intent,
+    ) -> i32,
+    pub texture_updates:
+        unsafe extern "C" fn(*mut rsf_overlay, *mut rsf_overlay_texture_update, u32) -> u32,
+    pub textures_to_free: unsafe extern "C" fn(*mut rsf_overlay, *mut u64, u32) -> u32,
+}
+
+impl PanelEntries {
+    pub(super) fn admit(panel: rsf_overlay_host_panel) -> Option<Self> {
+        Some(Self {
+            create: panel.create?,
+            destroy: panel.destroy?,
+            frame: panel.frame?,
+            texture_updates: panel.texture_updates?,
+            textures_to_free: panel.textures_to_free?,
+        })
     }
+}
+
+pub(super) enum LoadError {
+    NoPath,
+    CouldNotLoad(u32),
+    MissingExports,
+}
+
+pub(super) struct OpenPanel {
+    pub entries: PanelEntries,
+    module: HMODULE,
 }
 
 fn panel_path() -> Option<Vec<u16>> {
@@ -74,7 +103,7 @@ fn panel_path() -> Option<Vec<u16>> {
     let mut owner = null_mut();
     let flags =
         GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT;
-    let address = rsf_core_overlay_panel_open as *const c_void;
+    let address = open_panel as *const c_void;
     if unsafe { GetModuleHandleExW(flags, address.cast(), &mut owner) } == 0 {
         return None;
     }
@@ -106,50 +135,36 @@ fn exports(module: HMODULE) -> rsf_overlay_host_panel {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_overlay_panel_open(
-    out: *mut rsf_overlay_host_panel,
-    error: *mut u32,
-    returned_module: *mut HMODULE,
-) -> u32 {
-    let Some(path) = panel_path() else {
-        return RSF_OVERLAY_HOST_PANEL_NO_PATH as u32;
-    };
+pub(super) fn open_panel() -> Result<OpenPanel, LoadError> {
+    let path = panel_path().ok_or(LoadError::NoPath)?;
     let module = unsafe { LoadLibraryW(path.as_ptr()) };
     if module.is_null() {
-        if !error.is_null() {
-            unsafe { error.write(GetLastError()) };
-        }
-        return RSF_OVERLAY_HOST_PANEL_NOT_LOADED as u32;
+        return Err(LoadError::CouldNotLoad(unsafe { GetLastError() }));
     }
-    let panel = exports(module);
-    if !panel.complete() {
-        unsafe { rsf_core_overlay_panel_release(module) };
-        return RSF_OVERLAY_HOST_PANEL_MISSING_EXPORTS as u32;
-    }
-    if returned_module.is_null() {
-        unsafe { rsf_core_overlay_panel_retain(module) };
-    } else {
-        unsafe { returned_module.write(module) };
-    }
-    unsafe { out.write(panel) };
-    RSF_OVERLAY_HOST_PANEL_LOADED as u32
+    let Some(entries) = PanelEntries::admit(exports(module)) else {
+        unsafe { FreeLibrary(module) };
+        return Err(LoadError::MissingExports);
+    };
+    Ok(OpenPanel { entries, module })
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_overlay_panel_release(module: HMODULE) {
-    unsafe { FreeLibrary(module) };
-}
-
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_overlay_panel_retain(module: HMODULE) {
-    {
+impl OpenPanel {
+    pub(super) fn publish(mut self) -> PanelEntries {
         let mut published = PUBLISHED.lock().unwrap();
-        if !published.contains(&module.addr()) {
-            published.push(module.addr());
-            return;
+        if !published.contains(&self.module.addr()) {
+            published.push(self.module.addr());
+            self.module = null_mut();
+        }
+        // A duplicate reference is released by Drop after the lock is released.
+        drop(published);
+        self.entries
+    }
+}
+
+impl Drop for OpenPanel {
+    fn drop(&mut self) {
+        if !self.module.is_null() {
+            unsafe { FreeLibrary(self.module) };
         }
     }
-    // Do not call into the Windows loader while holding the registry lock.
-    unsafe { rsf_core_overlay_panel_release(module) };
 }

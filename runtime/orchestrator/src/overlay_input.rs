@@ -609,7 +609,7 @@ pub(super) extern "C" fn rsf_overlay_input_visible() -> u32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_overlay_input_poll_toggle() {
+pub(super) extern "C" fn rsf_overlay_input_poll_toggle() {
     let window = window::rsf_core_overlay_input_window();
     if window.is_null() {
         return;

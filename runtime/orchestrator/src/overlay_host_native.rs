@@ -7,7 +7,6 @@ use crate::overlay_input::{
     rsf_overlay_input_collect, rsf_overlay_input_install, rsf_overlay_input_set_visible,
     rsf_overlay_input_uninstall, rsf_overlay_input_visible,
 };
-use crate::overlay_panel::rsf_core_overlay_panel_open;
 use std::mem::{offset_of, transmute};
 use std::ptr::null;
 use windows_sys::Win32::System::{
@@ -92,10 +91,6 @@ macro_rules! com_call {
             method($object, $($arg),+)
         }
     }};
-}
-
-unsafe extern "C" fn load_panel(out: *mut rsf_overlay_host_panel, error: *mut u32) -> u32 {
-    unsafe { rsf_core_overlay_panel_open(out, error, null_mut()) }
 }
 
 unsafe extern "C" fn chain_device(chain: Handle, out: *mut Handle) -> i32 {
@@ -326,7 +321,6 @@ unsafe extern "C" fn thread_id() -> u32 {
 }
 
 static PLATFORM: Platform = Platform {
-    load_panel: Some(load_panel),
     chain_device: Some(chain_device),
     chain_buffer: Some(chain_buffer),
     chain_window: Some(chain_window),
@@ -355,7 +349,11 @@ static PLATFORM: Platform = Platform {
 };
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_overlay_host_start(chain: Handle, log: Log, user: Handle) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_overlay_host_start(
+    chain: Handle,
+    log: Log,
+    user: Handle,
+) -> i32 {
     unsafe { rsf_core_overlay_host_start(&PLATFORM, chain, log, user) }
 }
 
@@ -445,7 +443,7 @@ extern "C" fn rsf_overlay_host_toggle() {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_overlay_host_present(
+pub(crate) unsafe extern "C" fn rsf_overlay_host_present(
     chain: Handle,
     stats: *const rsf_overlay_stats,
     intent: *mut rsf_overlay_intent,
@@ -470,7 +468,7 @@ unsafe extern "C" fn rsf_overlay_host_present(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_overlay_host_stop() {
+pub(crate) extern "C" fn rsf_overlay_host_stop() {
     rsf_core_overlay_host_stop(&PLATFORM);
 }
 

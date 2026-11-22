@@ -886,7 +886,7 @@ fn depth_domains_bytes(pass: &Pass) -> &[u8] {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_fg_options_set(options: *const Options) {
+pub(super) unsafe extern "C" fn rsf_native_fg_options_set(options: *const Options) {
     if options.is_null() || unsafe { options.cast::<u32>().read() } < size_of::<Options>() as u32 {
         return;
     }
@@ -911,7 +911,7 @@ unsafe extern "C" fn rsf_native_fg_set_log(log: Log, user: Handle) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_fg_status_get(status: *mut NativeStatus) -> i32 {
+pub(super) unsafe extern "C" fn rsf_native_fg_status_get(status: *mut NativeStatus) -> i32 {
     let p = &NATIVE_PLATFORM;
     if status.is_null() || unsafe { status.cast::<u32>().read() } < size_of::<NativeStatus>() as u32
     {
@@ -2308,15 +2308,15 @@ mod tests {
             frame_limit_us: 0,
             debug: 0,
         };
-        unsafe { rsf_core_native_fg_options_set(&options) };
+        unsafe { rsf_native_fg_options_set(&options) };
         assert_eq!(requested().mode, before.mode);
         options.struct_size = size_of::<Options>() as u32;
         options.mode = RSF_FG_DYNAMIC + 1;
-        unsafe { rsf_core_native_fg_options_set(&options) };
+        unsafe { rsf_native_fg_options_set(&options) };
         assert_eq!(requested().mode, before.mode);
         options.mode = RSF_FG_FIXED;
         options.reflex_mode = RSF_REFLEX_BOOST + 1;
-        unsafe { rsf_core_native_fg_options_set(&options) };
+        unsafe { rsf_native_fg_options_set(&options) };
         assert_eq!(requested().mode, before.mode);
     }
 

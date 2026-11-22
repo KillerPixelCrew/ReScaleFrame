@@ -3,6 +3,9 @@
 use super::*;
 use crate::fg12_abi::rsf_native_latency_frame;
 use crate::native_fg_cpu_abi::rsf_streamline_latency_status;
+use crate::overlay_service::{
+    rsf_overlay_configure_bound, rsf_overlay_notify_bound, rsf_overlay_present_bound,
+};
 use crate::{d3d11_present as present, fg12, gl_shared_surface as gl, sr12};
 
 unsafe extern "C" {
@@ -16,17 +19,6 @@ unsafe extern "C" {
     fn rsf_native_latency_end_session(session: u64);
     fn rsf_input_dump_cancel(session: u64);
     fn rsf_gl_contract_dlss_preset_valid(preset: u32) -> c_int;
-    fn rsf_overlay_configure_bound(setup: *const rsf_overlay_service_setup) -> i32;
-    fn rsf_overlay_present_bound(
-        device: Handle,
-        queue: Handle,
-        chain: Handle,
-        backbuffer: Handle,
-        window: Handle,
-        log: Log,
-        user: Handle,
-    ) -> i32;
-    fn rsf_overlay_notify_bound(reason: u32) -> i32;
 }
 
 unsafe extern "C" fn gl_open(log: Log, user: Handle, out: *mut Handle) -> i32 {

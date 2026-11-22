@@ -788,9 +788,9 @@ generate("runtime/orchestrator/src/native_translucency_abi.rs",
           "-Iruntime/graphics/include", "-Iruntime/contract/include", "-Isdk/game/include"],
          ["--with-derive-default"])
 # Match the overlay's existing std paths and import types that other modules already own.
-generate("runtime/orchestrator/src/overlay_abi.rs", "runtime/orchestrator/src/overlay_platform.h",
+generate("runtime/orchestrator/src/overlay_abi.rs", "runtime/orchestrator/include/rescaleframe/overlay_api.h",
          "wchar_t|rsf_overlay_(api|service_setup|service_option|capture|diagnostics|"
-         "input_counters|platform|texture_update)|rsf_native_(latency_status|input_routes)|rsf_render_status",
+         "input_counters|texture_update)|rsf_native_(latency_status|input_routes)|rsf_render_status",
          "RSF_OVERLAY_(API_VERSION|CAPTURE_.*|NOTIFY_.*|SERVICE_OPTION_(TOGGLE|NUMBER|LIMIT)|"
          "HOST_OPTION_(TOGGLE|NUMBER)|FG_RUNTIME_SWITCH)|RSF_(REFLEX_ON|SR_NONE|SR_DLSS|SR_FSR3|SR_FSR4|SR_SPATIAL)",
          ["-include", "rescaleframe/overlay_api.h", "-include", "rescaleframe/overlay.h",
@@ -813,10 +813,7 @@ generate("runtime/orchestrator/src/overlay_abi.rs", "runtime/orchestrator/src/ov
                         "    }\n"
                         "}",
           "--raw-line", "use crate::cpu_abi::rsf_native_cpu_counters;",
-          "--raw-line", "use crate::render_abi::{\n"
-                        "    rsf_generation_provider, rsf_native_fg_options, rsf_native_fg_status, rsf_render_settings,\n"
-                        "    rsf_sharpening_options,\n"
-                        "};",
+          "--raw-line", "use crate::render_abi::rsf_render_settings;",
           "--raw-line", "use rsf_game_sys::rsf_game_log_fn;",
           "--raw-line", "pub use rsf_game_sys::sr_abi::{\n"
                         "    RSF_OVERLAY_SR_INPUT_COLOR, RSF_OVERLAY_SR_INPUT_DEPTH, RSF_OVERLAY_SR_INPUT_EXPOSURE,\n"
@@ -838,7 +835,7 @@ generate("tests/overlay/src/abi.rs", "loader/proxy/src/overlay_host.h",
           "--with-derive-default", "--raw-line", "#![allow(dead_code)]"])
 generate("runtime/orchestrator/src/overlay_host_abi.rs", "runtime/orchestrator/src/overlay_panel.h",
          "rsf_overlay(_result|_input(_options|_log_fn)?|_draw_data|_vertex|_draw_call|_host_panel)?",
-         "RSF_OVERLAY_(ABI_VERSION|INPUT_ABI_VERSION|HOST_PANEL_.*)",
+         "RSF_OVERLAY_(ABI_VERSION|INPUT_ABI_VERSION)",
          ["-include", "rescaleframe/overlay_input.h", "-Iui/overlay/include", "-Iruntime/graphics/include"],
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line",
           "use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};"])

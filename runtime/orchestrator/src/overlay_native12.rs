@@ -6,8 +6,7 @@ use crate::overlay_geometry::{
     borrowed_draw_slice, draw_clip, patch_fits, valid_indices, valid_texture,
 };
 use crate::overlay_host_abi::{
-    RSF_OVERLAY_ABI_VERSION, RSF_OVERLAY_HOST_PANEL_LOADED, rsf_overlay,
-    rsf_overlay_draw_data as DrawData, rsf_overlay_host_panel, rsf_overlay_input,
+    RSF_OVERLAY_ABI_VERSION, rsf_overlay, rsf_overlay_draw_data as DrawData, rsf_overlay_input,
     rsf_overlay_vertex,
 };
 use crate::overlay_native12_abi::{
@@ -15,10 +14,7 @@ use crate::overlay_native12_abi::{
     rsf_overlay12_frame as FrameTable, rsf_overlay12_log, rsf_overlay12_platform as Platform,
     rsf_overlay12_target as Target,
 };
-use crate::overlay_panel::{
-    elapsed_seconds, rsf_core_overlay_panel_open, rsf_core_overlay_panel_release,
-    rsf_core_overlay_panel_retain,
-};
+use crate::overlay_panel::{OpenPanel, PanelEntries, elapsed_seconds, open_panel};
 use crate::owned_win32_handle;
 use crate::sr_session::has_capacity;
 use std::ffi::{CStr, c_void};
@@ -46,9 +42,9 @@ const FENCE_WAIT_MS: u32 = 5000;
 const RETRY_DELAY_MS: u64 = 1000;
 
 struct Ui {
-    api: rsf_overlay_host_panel,
+    api: PanelEntries,
     handle: NonNull<rsf_overlay>,
-    module: *mut c_void,
+    module: Option<OpenPanel>,
 }
 
 // The panel lock serializes all calls into this instance.
@@ -56,36 +52,26 @@ unsafe impl Send for Ui {}
 
 impl Ui {
     fn open() -> Option<Self> {
-        let mut api = rsf_overlay_host_panel::default();
-        let mut module = null_mut();
-        if unsafe { rsf_core_overlay_panel_open(&mut api, null_mut(), &mut module) }
-            != RSF_OVERLAY_HOST_PANEL_LOADED as u32
-        {
-            return None;
-        }
-        let handle = unsafe { (api.create.unwrap())(RSF_OVERLAY_ABI_VERSION) };
-        let Some(handle) = NonNull::new(handle) else {
-            unsafe { rsf_core_overlay_panel_release(module) };
-            return None;
-        };
+        let module = open_panel().ok()?;
+        let api = module.entries;
+        let handle = NonNull::new(unsafe { (api.create)(RSF_OVERLAY_ABI_VERSION) })?;
         Some(Self {
             api,
             handle,
-            module,
+            module: Some(module),
         })
     }
 
     fn publish(&mut self) {
-        unsafe { rsf_core_overlay_panel_retain(std::mem::replace(&mut self.module, null_mut())) };
+        if let Some(module) = self.module.take() {
+            module.publish();
+        }
     }
 }
 
 impl Drop for Ui {
     fn drop(&mut self) {
-        unsafe { (self.api.destroy.unwrap())(self.handle.as_ptr()) };
-        if !self.module.is_null() {
-            unsafe { rsf_core_overlay_panel_release(self.module) };
-        }
+        unsafe { (self.api.destroy)(self.handle.as_ptr()) };
     }
 }
 
@@ -415,11 +401,7 @@ impl Atlas {
         let mut batch = [rsf_overlay_texture_update::default(); ATLAS_BATCH];
         loop {
             let count = unsafe {
-                (ui.api.texture_updates.unwrap())(
-                    ui.handle.as_ptr(),
-                    batch.as_mut_ptr(),
-                    ATLAS_BATCH as u32,
-                )
+                (ui.api.texture_updates)(ui.handle.as_ptr(), batch.as_mut_ptr(), ATLAS_BATCH as u32)
             };
             if count == 0 {
                 break;
@@ -453,11 +435,7 @@ impl Atlas {
         let mut ids = [0; ATLAS_BATCH];
         loop {
             let count = unsafe {
-                (ui.api.textures_to_free.unwrap())(
-                    ui.handle.as_ptr(),
-                    ids.as_mut_ptr(),
-                    ATLAS_BATCH as u32,
-                )
+                (ui.api.textures_to_free)(ui.handle.as_ptr(), ids.as_mut_ptr(), ATLAS_BATCH as u32)
             };
             if count == 0 {
                 return Some(());
@@ -898,9 +876,8 @@ impl Started {
         }
         input.startup_hint_alpha = hint_alpha;
         let ui = &self.ui;
-        if unsafe {
-            (ui.api.frame.unwrap())(ui.handle.as_ptr(), &input, stats, &mut data, &mut decided)
-        } != 0
+        if unsafe { (ui.api.frame)(ui.handle.as_ptr(), &input, stats, &mut data, &mut decided) }
+            != 0
         {
             self.fail(platform);
             return None;
@@ -1102,16 +1079,31 @@ mod tests {
 
     unsafe extern "C" fn destroy_ui(_: *mut rsf_overlay) {}
 
+    unsafe extern "C" fn unused_create(_: u32) -> *mut rsf_overlay {
+        unreachable!("the atlas fixture supplies its own panel")
+    }
+
+    unsafe extern "C" fn unused_frame(
+        _: *mut rsf_overlay,
+        _: *const rsf_overlay_input,
+        _: *const rsf_overlay_stats,
+        _: *mut DrawData,
+        _: *mut rsf_overlay_intent,
+    ) -> i32 {
+        unreachable!("the atlas fixture supplies draw data")
+    }
+
     fn fake_ui(native: *mut c_void) -> Ui {
         Ui {
-            api: rsf_overlay_host_panel {
-                destroy: Some(destroy_ui),
-                texture_updates: Some(updates),
-                textures_to_free: Some(frees),
-                ..Default::default()
+            api: PanelEntries {
+                create: unused_create,
+                destroy: destroy_ui,
+                frame: unused_frame,
+                texture_updates: updates,
+                textures_to_free: frees,
             },
             handle: NonNull::new(native.cast()).unwrap(),
-            module: null_mut(),
+            module: None,
         }
     }
 

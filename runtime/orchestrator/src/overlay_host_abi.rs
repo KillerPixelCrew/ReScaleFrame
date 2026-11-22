@@ -227,8 +227,3 @@ const _: () = {
     ["Offset of field: rsf_overlay_host_panel::textures_to_free"]
         [::core::mem::offset_of!(rsf_overlay_host_panel, textures_to_free) - 32usize];
 };
-pub const RSF_OVERLAY_HOST_PANEL_LOADED: _bindgen_ty_1 = 0;
-pub const RSF_OVERLAY_HOST_PANEL_NO_PATH: _bindgen_ty_1 = 1;
-pub const RSF_OVERLAY_HOST_PANEL_NOT_LOADED: _bindgen_ty_1 = 2;
-pub const RSF_OVERLAY_HOST_PANEL_MISSING_EXPORTS: _bindgen_ty_1 = 3;
-pub type _bindgen_ty_1 = ::core::ffi::c_int;

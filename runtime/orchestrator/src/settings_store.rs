@@ -626,7 +626,7 @@ pub(crate) unsafe extern "C" fn write_dlss_preset(
 /// # Safety
 /// All non-null strings must be terminated and readable throughout the call.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_adapter_setting_read_bool(
+unsafe extern "C" fn rsf_adapter_setting_read_bool(
     ini: PCWSTR,
     section: PCWSTR,
     key: PCWSTR,
@@ -643,7 +643,7 @@ unsafe extern "C" fn rsf_core_adapter_setting_read_bool(
 /// # Safety
 /// All non-null strings must be terminated and readable throughout the call.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_adapter_setting_write_bool(
+unsafe extern "C" fn rsf_adapter_setting_write_bool(
     ini: PCWSTR,
     section: PCWSTR,
     key: PCWSTR,

@@ -68,7 +68,7 @@ unsafe extern "C" fn rsf_dlss_pipeline_set_sharpening(options: *const Sharpening
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_dlss_pipeline_apply_sharpening(
+pub(crate) extern "C" fn rsf_core_dlss_pipeline_apply_sharpening(
     settings: &crate::render_abi::rsf_render_settings,
 ) {
     let options = crate::settings_store::sharpening_of(settings, &sharpening_policy::defaults());

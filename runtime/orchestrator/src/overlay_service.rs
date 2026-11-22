@@ -1,7 +1,49 @@
 // SPDX-License-Identifier: MIT
 //! The runtime DLL's shared overlay service. Graphics and callbacks stay on the caller's
 //! Present thread. Published settings and the last sampled frame can be read by any thread.
+use crate::d3d11_d3d12::borrow;
+use crate::d3d11_present::{
+    rsf_core_d3d11p_backend, rsf_core_d3d11p_backend_choices, rsf_core_d3d11p_has_owner,
+    rsf_core_d3d11p_request, rsf_core_d3d11p_session, rsf_core_d3d11p_switch_result,
+};
+use crate::dlss_pipeline::exports::rsf_core_dlss_pipeline_apply_sharpening;
+use crate::frame_limit::rsf_core_overlay_refresh_mhz;
+use crate::graphics_d3d11::rsf_call_native_log;
+use crate::native_fg::{rsf_native_fg_options_set, rsf_native_fg_status_get};
+use crate::native_fg_cpu::{
+    platform::rsf_native_latency_status_get, rsf_core_native_input_routes_get,
+};
+#[cfg(not(test))]
+use crate::overlay_host::native::rsf_overlay_host_present;
+use crate::overlay_input::{rsf_overlay_input_set_visible, rsf_overlay_input_visible};
+use crate::overlay_input_route::rsf_overlay_input_counters_get;
+#[cfg(not(test))]
+use crate::overlay_wrapped12::native::{
+    rsf_overlay_d3d12_frame_for_window, rsf_overlay_d3d12_stop,
+};
 use crate::sharpening_policy;
+use crate::streamline_sr::preset_valid;
+#[cfg(not(test))]
+use crate::{
+    d3d11_observer_abi::{RSF_OBSERVER_ABI_VERSION, rsf_observer_options},
+    overlay_input::rsf_overlay_input_poll_toggle,
+    scene_abi::rsf_observer_present_event,
+};
+#[cfg(not(test))]
+use windows::Win32::Graphics::Dxgi::DXGI_PRESENT_TEST;
+use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
+use windows_sys::Win32::{
+    System::{SystemInformation::GetTickCount64, Threading::GetCurrentProcessId},
+    UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId},
+};
+
+unsafe extern "C" {
+    // The native presentation bridge supplies its SDK-backed provider table.
+    fn rsf_d3d11_present_provider() -> *const crate::render_abi::rsf_generation_provider;
+    #[cfg(not(test))]
+    fn rsf_observer_install_guarded(options: *const rsf_observer_options) -> i32;
+}
+
 use crate::{
     fg_status,
     overlay_abi::*,
@@ -60,16 +102,38 @@ const OPTION_LIMIT: usize = RSF_OVERLAY_SERVICE_OPTION_LIMIT as usize;
 const APPLY_LOG_LIMIT: u32 = 200;
 type Status = rsf_render_status;
 
-// Native callbacks are supplied by the DLL, so the Rust archive also links into
-// core-only consumers without pulling in the overlay's native graphics hosts.
-static PLATFORM: OnceLock<rsf_overlay_platform> = OnceLock::new();
+#[cfg(not(test))]
+use crate::overlay_host::native::{rsf_overlay_host_start, rsf_overlay_host_stop as host_stop};
 
-fn platform() -> &'static rsf_overlay_platform {
-    // A caller can acquire a service callback only through the successful API query.
-    PLATFORM
-        .get()
-        .expect("overlay platform was installed by the DLL")
+#[cfg(not(test))]
+unsafe fn host_start(chain: *mut c_void, log: rsf_game_log_fn, user: *mut c_void) -> i32 {
+    i32::from(unsafe { rsf_overlay_host_start(chain, log, user) } != 0)
 }
+
+#[cfg(not(test))]
+unsafe fn host_present(
+    chain: *mut c_void,
+    stats: *const rsf_overlay_stats,
+    intent: *mut rsf_overlay_intent,
+) -> i32 {
+    i32::from(unsafe { rsf_overlay_host_present(chain, stats, intent) } != 0)
+}
+
+// Unit fixtures exercise admission and reset independently of native graphics.
+#[cfg(test)]
+unsafe fn host_start(_: *mut c_void, _: rsf_game_log_fn, _: *mut c_void) -> i32 {
+    0
+}
+#[cfg(test)]
+unsafe fn host_present(
+    _: *mut c_void,
+    _: *const rsf_overlay_stats,
+    _: *mut rsf_overlay_intent,
+) -> i32 {
+    0
+}
+#[cfg(test)]
+fn host_stop() {}
 
 static CLAIMED: AtomicBool = AtomicBool::new(false);
 static CONFIG: OnceLock<Config> = OnceLock::new();
@@ -161,13 +225,13 @@ unsafe impl Sync for Callbacks {}
 
 impl Callbacks {
     fn say(&self, message: std::fmt::Arguments<'_>) {
-        if let Some(log) = self.log {
+        if self.log.is_some() {
             let message = message.to_string();
             // Match the native log's 256-byte buffer, including the terminator.
             let mut bytes = [0u8; 256];
             let length = message.len().min(bytes.len() - 1);
             bytes[..length].copy_from_slice(&message.as_bytes()[..length]);
-            unsafe { log(self.user, bytes.as_ptr().cast()) };
+            unsafe { rsf_call_native_log(self.log, self.user, bytes.as_ptr().cast()) };
         }
     }
 }
@@ -327,7 +391,7 @@ impl Config {
             && self.accepts_fg_backend(value.fg_backend)
             && has(self.latency_choices, value.latency)
             && (1..=self.max_generated).contains(&value.generated_frames)
-            && unsafe { (platform().valid_preset.unwrap())(value.dlss_preset) } != 0
+            && preset_valid(value.dlss_preset)
             && sharpening_policy::valid(&sharpening_of(value, &sharpening_policy::defaults()))
     }
 
@@ -357,7 +421,7 @@ impl Config {
         if !(1..=self.max_generated).contains(&value.generated_frames) {
             value.generated_frames = defaults.generated_frames;
         }
-        if unsafe { (platform().valid_preset.unwrap())(value.dlss_preset) } == 0 {
+        if !preset_valid(value.dlss_preset) {
             value.dlss_preset = defaults.dlss_preset;
         }
         let options =
@@ -505,7 +569,7 @@ fn copy_reason(dest: &mut [c_char], reason: &CStr) {
 fn forward_fg(value: &Settings) -> i32 {
     let mut current: FgStatus = unsafe { std::mem::zeroed() };
     current.struct_size = abi_size::<FgStatus>();
-    unsafe { (platform().fg_status_get.unwrap())(&mut current) };
+    unsafe { rsf_native_fg_status_get(&mut current) };
     let options = rsf_native_fg_options {
         struct_size: abi_size::<rsf_native_fg_options>(),
         mode: if value.fg_enabled != 0 {
@@ -518,15 +582,15 @@ fn forward_fg(value: &Settings) -> i32 {
         frame_limit_us: value.frame_limit_us,
         ..current.requested
     };
-    unsafe { (platform().fg_options_set.unwrap())(&options) };
+    unsafe { rsf_native_fg_options_set(&options) };
     if value.fg_enabled == 0
         || value.fg_backend == RSF_FG_BACKEND_AUTO
-        || unsafe { (platform().present_has_owner.unwrap())() } == 0
-        || unsafe { (platform().present_backend.unwrap())() } == value.fg_backend
+        || rsf_core_d3d11p_has_owner() == 0
+        || rsf_core_d3d11p_backend() == value.fg_backend
     {
         return OK;
     }
-    unsafe { (platform().present_request.unwrap())(value.fg_backend) }
+    rsf_core_d3d11p_request(value.fg_backend)
 }
 
 unsafe extern "C" fn configure(setup: *const rsf_overlay_service_setup) -> i32 {
@@ -534,7 +598,7 @@ unsafe extern "C" fn configure(setup: *const rsf_overlay_service_setup) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay_configure_deferred(
+pub(super) unsafe extern "C" fn rsf_overlay_configure_bound(
     setup: *const rsf_overlay_service_setup,
 ) -> i32 {
     unsafe { configure_inner(setup, true) }
@@ -571,7 +635,7 @@ unsafe fn configure_inner(setup: *const rsf_overlay_service_setup, deferred: boo
     let requested = if deferred {
         OK
     } else {
-        unsafe { (platform().set_sharpening.unwrap())(&settings) };
+        rsf_core_dlss_pipeline_apply_sharpening(&settings);
         forward_fg(&settings)
     };
     {
@@ -644,7 +708,7 @@ fn apply(config: &Config, request: impl FnOnce(Settings) -> Settings, origin: &s
             let requested = if config.deferred {
                 OK
             } else {
-                unsafe { (platform().set_sharpening.unwrap())(&value) };
+                rsf_core_dlss_pipeline_apply_sharpening(&value);
                 forward_fg(&value)
             };
             self::state().request_result = requested;
@@ -686,12 +750,12 @@ impl Sample {
             });
         let mut fg: FgStatus = unsafe { std::mem::zeroed() };
         fg.struct_size = abi_size::<FgStatus>();
-        unsafe { bound_status.unwrap_or_else(|| platform().fg_status_get.unwrap())(&mut fg) };
-        let fg_owner = unsafe { (platform().present_has_owner.unwrap())() } != 0;
+        unsafe { bound_status.unwrap_or(rsf_native_fg_status_get)(&mut fg) };
+        let fg_owner = rsf_core_d3d11p_has_owner() != 0;
         let mut fg_backend = 0;
         if fg_owner {
-            let provider = unsafe { (platform().present_provider.unwrap())().as_ref() };
-            let session = unsafe { (platform().present_session.unwrap())() };
+            let provider = unsafe { rsf_d3d11_present_provider().as_ref() };
+            let session = rsf_core_d3d11p_session();
             if let Some(status) = provider
                 .and_then(|provider| provider.status)
                 .filter(|_| bound_status.is_none() && !session.is_null())
@@ -709,15 +773,15 @@ impl Sample {
                     fg.last_result = queried;
                 }
             }
-            fg_backend = unsafe { (platform().present_backend.unwrap())() };
+            fg_backend = rsf_core_d3d11p_backend();
         }
         Self {
             sr,
             fg,
             fg_owner,
             fg_backend,
-            bridge_choices: unsafe { (platform().present_backend_choices.unwrap())() },
-            switch_result: unsafe { (platform().present_switch_result.unwrap())() },
+            bridge_choices: rsf_core_d3d11p_backend_choices(),
+            switch_result: rsf_core_d3d11p_switch_result(),
         }
     }
 }
@@ -927,8 +991,8 @@ impl State {
 fn sample_latency(stats: &mut rsf_overlay_stats) {
     fill_latency_stats(
         stats,
-        platform().latency_status_get.unwrap(),
-        platform().input_routes_get.unwrap(),
+        rsf_native_latency_status_get,
+        rsf_core_native_input_routes_get,
     );
     let mut ticks = 0;
     let mut frequency = 0;
@@ -1071,21 +1135,28 @@ fn apply_intent(config: &Config, intent: &rsf_overlay_intent) {
 unsafe extern "C" fn present(chain: *mut c_void, drawn: *mut u32) -> i32 {
     unsafe {
         present_inner(chain, null_mut(), drawn, None, |stats, intent| {
-            (platform().present.unwrap())(chain, stats, intent)
+            host_present(chain, stats, intent)
         })
     }
 }
 
-type DrawBound =
-    unsafe extern "C" fn(*mut c_void, *const rsf_overlay_stats, *mut rsf_overlay_intent) -> i32;
 type FgStatusGet = unsafe extern "C" fn(*mut FgStatus) -> i32;
 
+#[cfg(not(test))]
+unsafe extern "C" fn bound_status(out: *mut FgStatus) -> i32 {
+    crate::fg12::bind_native_platform();
+    unsafe { crate::fg12::rsf_core_fg12_status(out) }
+}
+
+#[cfg(not(test))]
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay_present_bound(
+pub(super) unsafe extern "C" fn rsf_overlay_present_bound(
+    device: *mut c_void,
+    queue: *mut c_void,
     chain: *mut c_void,
+    backbuffer: *mut c_void,
     input_window: *mut c_void,
-    status_get: FgStatusGet,
-    draw: DrawBound,
+    log: rsf_game_log_fn,
     user: *mut c_void,
 ) -> i32 {
     unsafe {
@@ -1093,8 +1164,19 @@ unsafe extern "C" fn rsf_core_overlay_present_bound(
             chain,
             input_window,
             null_mut(),
-            Some(status_get),
-            |stats, intent| draw(user, stats, intent),
+            Some(bound_status),
+            |stats, intent| {
+                rsf_overlay_d3d12_frame_for_window(
+                    device,
+                    queue,
+                    backbuffer,
+                    input_window,
+                    stats,
+                    intent,
+                    log,
+                    user,
+                )
+            },
         )
     }
 }
@@ -1118,12 +1200,14 @@ unsafe fn present_inner(
     let Ok(_panel) = PANEL.try_lock() else {
         return BUSY;
     };
-    let mut width = 0;
-    let mut height = 0;
-    let chain_window = unsafe { (platform().window.unwrap())(chain, &mut width, &mut height) };
-    if chain_window.is_null() || config.deferred == input_window.is_null() {
-        return INVALID_ARGUMENT;
-    }
+    let (chain_window, width, height) = unsafe { borrow::<IDXGISwapChain>(&chain).GetDesc() }
+        .map_or((null_mut(), 0, 0), |desc| {
+            (
+                desc.OutputWindow.0,
+                desc.BufferDesc.Width,
+                desc.BufferDesc.Height,
+            )
+        });
     let window = if input_window.is_null() {
         chain_window
     } else {
@@ -1141,9 +1225,7 @@ unsafe fn present_inner(
         return NOT_READY;
     }
     if lifecycle != STARTED && !config.deferred {
-        match unsafe {
-            (platform().start.unwrap())(chain, config.callbacks.log, config.callbacks.user)
-        } {
+        match unsafe { host_start(chain, config.callbacks.log, config.callbacks.user) } {
             0 => {
                 LIFECYCLE.store(FAILED, Ordering::Release);
                 config.callbacks.say(format_args!(
@@ -1158,7 +1240,7 @@ unsafe fn present_inner(
     }
 
     let sample = Sample::read(config, bound_status);
-    let now = unsafe { (platform().tick.unwrap())() };
+    let now = unsafe { GetTickCount64() };
     let mut reason = [0; 160];
     let mut stats = {
         let mut state = state();
@@ -1183,7 +1265,7 @@ unsafe fn present_inner(
     }
     sample_latency(&mut stats);
     if visible() != 0 {
-        let now = unsafe { (platform().tick.unwrap())() };
+        let now = unsafe { GetTickCount64() };
         let refresh_due = {
             let mut state = state();
             let due = state.refresh_tick == 0 || now.wrapping_sub(state.refresh_tick) >= 1000;
@@ -1193,7 +1275,7 @@ unsafe fn present_inner(
             due
         };
         let refresh = if refresh_due {
-            unsafe { (platform().refresh.unwrap())(window) }
+            rsf_core_overlay_refresh_mhz(window)
         } else {
             0
         };
@@ -1229,15 +1311,19 @@ unsafe fn present_inner(
 }
 
 unsafe extern "C" fn notify(_chain: *mut c_void, reason: u32) -> i32 {
-    notify_inner(reason, false, || unsafe { (platform().stop.unwrap())() })
+    notify_inner(reason, false, || {
+        host_stop();
+        OK
+    })
 }
 
+#[cfg(not(test))]
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_notify_bound(
-    reason: u32,
-    stop: unsafe extern "C" fn() -> i32,
-) -> i32 {
-    notify_inner(reason, true, || unsafe { stop() })
+pub(super) extern "C" fn rsf_overlay_notify_bound(reason: u32) -> i32 {
+    notify_inner(reason, true, || {
+        rsf_overlay_d3d12_stop();
+        OK
+    })
 }
 
 fn notify_inner(reason: u32, deferred: bool, stop: impl FnOnce() -> i32) -> i32 {
@@ -1314,7 +1400,7 @@ fn started() -> bool {
 
 extern "C" fn visible() -> u32 {
     if started() {
-        unsafe { (platform().input_visible.unwrap())() }
+        rsf_overlay_input_visible()
     } else {
         0
     }
@@ -1324,7 +1410,7 @@ extern "C" fn set_visible(requested: u32) -> i32 {
     if !started() {
         return NOT_READY;
     }
-    unsafe { (platform().input_set_visible.unwrap())(u32::from(requested != 0)) };
+    rsf_overlay_input_set_visible(u32::from(requested != 0));
     if (visible() != 0) == (requested != 0) {
         OK
     } else {
@@ -1342,7 +1428,7 @@ unsafe extern "C" fn capture(out: *mut rsf_overlay_capture) -> i32 {
     }
     let started = started();
     let open = if started {
-        unsafe { (platform().input_visible.unwrap())() }
+        rsf_overlay_input_visible()
     } else {
         0
     };
@@ -1371,7 +1457,9 @@ unsafe extern "C" fn status(out: *mut Status) -> i32 {
     let Some(config) = CONFIG.get() else {
         return NOT_READY;
     };
-    let foreground = unsafe { (platform().foreground.unwrap())() };
+    let mut process = 0;
+    unsafe { GetWindowThreadProcessId(GetForegroundWindow(), &mut process) };
+    let foreground = u32::from(process == unsafe { GetCurrentProcessId() });
     let snapshot = state().status(config, foreground);
     unsafe { out.write(snapshot) };
     OK
@@ -1414,16 +1502,13 @@ pub(crate) unsafe extern "C" fn settings_apply(request: *const Settings) -> i32 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_get_overlay_diagnostics(
-    out: *mut rsf_overlay_diagnostics,
-    native: &rsf_overlay_platform,
-) -> i32 {
+unsafe extern "C" fn rsf_get_overlay_diagnostics(out: *mut rsf_overlay_diagnostics) -> i32 {
     if !unsafe { fits(out) } {
         return INVALID_ARGUMENT;
     }
     let started = started();
     let open = if started {
-        unsafe { (native.input_visible.unwrap())() }
+        rsf_overlay_input_visible()
     } else {
         0
     };
@@ -1448,7 +1533,7 @@ unsafe extern "C" fn rsf_core_get_overlay_diagnostics(
         struct_size: abi_size::<rsf_overlay_input_counters>(),
         ..Default::default()
     };
-    if unsafe { (native.input_counters_get.unwrap())(&mut input) } == OK {
+    if unsafe { rsf_overlay_input_counters_get(&mut input) } == OK {
         value.input_installed = input.installed;
         value.cursor_freed = input.cursor_freed;
         value.pointer_received = input.pointer_received;
@@ -1467,17 +1552,13 @@ unsafe extern "C" fn rsf_core_get_overlay_diagnostics(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_get_overlay_api(
-    api: *mut rsf_overlay_api,
-    native: &rsf_overlay_platform,
-) -> i32 {
+unsafe extern "C" fn rsf_get_overlay_api(api: *mut rsf_overlay_api) -> i32 {
     if !unsafe { fits(api) } {
         return INVALID_ARGUMENT;
     }
     if unsafe { (*api).abi_version } != RSF_OVERLAY_API_VERSION {
         return ABI_MISMATCH;
     }
-    PLATFORM.get_or_init(|| *native);
     unsafe {
         api.write(rsf_overlay_api {
             struct_size: abi_size::<rsf_overlay_api>(),
@@ -1495,4 +1576,39 @@ unsafe extern "C" fn rsf_core_get_overlay_api(
         })
     };
     OK
+}
+
+#[cfg(not(test))]
+unsafe extern "C" fn observed_present(_: *mut c_void, event: *const rsf_observer_present_event) {
+    let Some(event) = (unsafe { event.as_ref() }) else {
+        return;
+    };
+    if event.completed == 0 && event.flags & DXGI_PRESENT_TEST.0 == 0 {
+        rsf_overlay_input_poll_toggle();
+        unsafe { present(event.swapchain, null_mut()) };
+    }
+}
+
+#[cfg(not(test))]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_start_d3d11_overlay(setup: *const rsf_overlay_service_setup) -> i32 {
+    let configured = unsafe { configure(setup) };
+    if configured != OK {
+        return configured;
+    }
+    let observer = rsf_observer_options {
+        struct_size: abi_size::<rsf_observer_options>(),
+        abi_version: RSF_OBSERVER_ABI_VERSION,
+        format: u32::MAX,
+        minimum_width: u32::MAX,
+        capacity: 1,
+        on_present_event: Some(observed_present),
+        ..unsafe { std::mem::zeroed() }
+    };
+    // The observer's native registration can allocate and throw.
+    if unsafe { rsf_observer_install_guarded(&observer) } == OK {
+        OK
+    } else {
+        NOT_READY
+    }
 }

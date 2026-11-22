@@ -10,7 +10,7 @@ use std::ffi::{CStr, c_void};
 use std::ptr;
 use std::sync::Mutex;
 #[cfg(not(test))]
-mod native;
+pub(super) mod native;
 
 const NOT_SUPPORTED: i32 = -7;
 

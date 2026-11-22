@@ -9,12 +9,12 @@
 use crate::com_ref::ComRef;
 use crate::graphics_d3d11::rsf_call_native_log;
 use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};
+#[cfg(test)]
+use crate::overlay_host_abi::rsf_overlay_host_panel;
 use crate::overlay_host_abi::{
-    RSF_OVERLAY_ABI_VERSION, RSF_OVERLAY_HOST_PANEL_LOADED, RSF_OVERLAY_HOST_PANEL_MISSING_EXPORTS,
-    RSF_OVERLAY_HOST_PANEL_NO_PATH, RSF_OVERLAY_HOST_PANEL_NOT_LOADED, rsf_overlay,
-    rsf_overlay_draw_data, rsf_overlay_host_panel, rsf_overlay_input,
+    RSF_OVERLAY_ABI_VERSION, rsf_overlay, rsf_overlay_draw_data, rsf_overlay_input,
 };
-use crate::overlay_panel::elapsed_seconds;
+use crate::overlay_panel::{LoadError, PanelEntries, elapsed_seconds};
 use std::ffi::{CString, c_char, c_void};
 use std::fmt::Display;
 use std::ptr::{self, null_mut};
@@ -22,6 +22,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 
 type Handle = *mut c_void;
+
+// Keep the fixture's injected raw loader and its original refusal cases.
+#[cfg(test)]
+const RSF_OVERLAY_HOST_PANEL_LOADED: i32 = 0;
+#[cfg(test)]
+const RSF_OVERLAY_HOST_PANEL_NO_PATH: i32 = 1;
+#[cfg(test)]
+const RSF_OVERLAY_HOST_PANEL_NOT_LOADED: i32 = 2;
+#[cfg(test)]
+const RSF_OVERLAY_HOST_PANEL_MISSING_EXPORTS: i32 = 3;
 
 type Log = Option<unsafe extern "C" fn(user: *mut c_void, message: *const c_char)>;
 #[derive(Default, Copy, Clone)]
@@ -46,6 +56,7 @@ impl Default for Targets {
 }
 #[derive(Default, Copy, Clone)]
 struct Platform {
+    #[cfg(test)]
     load_panel:
         Option<unsafe extern "C" fn(out: *mut rsf_overlay_host_panel, error: *mut u32) -> u32>,
     chain_device: Option<unsafe extern "C" fn(chain: *mut c_void, device: *mut *mut c_void) -> i32>,
@@ -240,7 +251,7 @@ impl Drop for SavedTargets<'_> {
 }
 
 struct Host {
-    api: Option<rsf_overlay_host_panel>,
+    api: Option<PanelEntries>,
     panel: *mut rsf_overlay,
     renderer: Handle,
     device: Option<ComRef>,
@@ -279,23 +290,37 @@ impl Host {
         }
     }
 
-    fn panel_api(&mut self, p: &Platform) -> Option<rsf_overlay_host_panel> {
+    fn panel_api(&mut self, _platform: &Platform) -> Option<PanelEntries> {
         if self.api.is_none() {
-            let mut api = rsf_overlay_host_panel::default();
-            let mut error = 0;
-            let status = unsafe { leaf(p.load_panel)(&mut api, &mut error) } as i32;
-            match status {
-                RSF_OVERLAY_HOST_PANEL_LOADED if api.complete() => self.api = Some(api),
-                RSF_OVERLAY_HOST_PANEL_NO_PATH => {
-                    say("overlay: cannot work out where the panel DLL is");
+            #[cfg(not(test))]
+            let loaded = crate::overlay_panel::open_panel().map(|panel| panel.publish());
+            #[cfg(test)]
+            let loaded = {
+                let mut api = rsf_overlay_host_panel::default();
+                let mut error = 0;
+                let status = unsafe { leaf(_platform.load_panel)(&mut api, &mut error) } as i32;
+                match status {
+                    RSF_OVERLAY_HOST_PANEL_LOADED => {
+                        PanelEntries::admit(api).ok_or(LoadError::MissingExports)
+                    }
+                    RSF_OVERLAY_HOST_PANEL_NO_PATH => Err(LoadError::NoPath),
+                    RSF_OVERLAY_HOST_PANEL_NOT_LOADED => Err(LoadError::CouldNotLoad(error)),
+                    RSF_OVERLAY_HOST_PANEL_MISSING_EXPORTS => Err(LoadError::MissingExports),
+                    _ => {
+                        say("overlay: the panel DLL loader returned an unknown status");
+                        return None;
+                    }
                 }
-                RSF_OVERLAY_HOST_PANEL_NOT_LOADED => say(format_args!(
+            };
+            match loaded {
+                Ok(entries) => self.api = Some(entries),
+                Err(LoadError::NoPath) => say("overlay: cannot work out where the panel DLL is"),
+                Err(LoadError::CouldNotLoad(error)) => say(format_args!(
                     "overlay: the panel DLL did not load, error {error}. Set RSF_OVERLAY_DLL to point at rescaleframe_overlay.dll"
                 )),
-                RSF_OVERLAY_HOST_PANEL_LOADED | RSF_OVERLAY_HOST_PANEL_MISSING_EXPORTS => {
+                Err(LoadError::MissingExports) => {
                     say("overlay: the panel DLL loaded but does not export the five entry points");
                 }
-                _ => say("overlay: the panel DLL loader returned an unknown status"),
             }
         }
         self.api
@@ -314,7 +339,7 @@ impl Host {
             self.failed = true;
             return 0;
         };
-        let panel = unsafe { leaf(api.create)(RSF_OVERLAY_ABI_VERSION) };
+        let panel = unsafe { (api.create)(RSF_OVERLAY_ABI_VERSION) };
         if panel.is_null() {
             refusals.say_panel();
             self.failed = true;
@@ -331,7 +356,7 @@ impl Host {
         };
         if built != 0 {
             refusals.say(refusals.renderer);
-            unsafe { leaf(api.destroy)(panel) };
+            unsafe { (api.destroy)(panel) };
             self.failed = true;
             return 0;
         }
@@ -350,7 +375,7 @@ impl Host {
         };
         if installed != Some(0) {
             unsafe { leaf(p.renderer_destroy)(renderer) };
-            unsafe { leaf(api.destroy)(panel) };
+            unsafe { (api.destroy)(panel) };
             self.failed = true;
             return 0;
         }
@@ -443,11 +468,11 @@ impl Host {
     }
 
     /* Drain each queue until a batch comes back short. */
-    fn upload_textures(&self, p: &Platform, api: &rsf_overlay_host_panel, context: Handle) {
+    fn upload_textures(&self, p: &Platform, api: &PanelEntries, context: Handle) {
         let mut updates = [rsf_overlay_texture_update::default(); UPDATE_BATCH];
         loop {
             let count = unsafe {
-                leaf(api.texture_updates)(self.panel, updates.as_mut_ptr(), UPDATE_BATCH as u32)
+                (api.texture_updates)(self.panel, updates.as_mut_ptr(), UPDATE_BATCH as u32)
             } as usize;
             for update in &updates[..count.min(UPDATE_BATCH)] {
                 if unsafe { leaf(p.renderer_upload)(self.renderer, context, update) } != 0 {
@@ -460,11 +485,11 @@ impl Host {
         }
     }
 
-    fn free_textures(&self, p: &Platform, api: &rsf_overlay_host_panel) {
+    fn free_textures(&self, p: &Platform, api: &PanelEntries) {
         let mut finished = [0; UPDATE_BATCH];
         loop {
             let count = unsafe {
-                leaf(api.textures_to_free)(self.panel, finished.as_mut_ptr(), UPDATE_BATCH as u32)
+                (api.textures_to_free)(self.panel, finished.as_mut_ptr(), UPDATE_BATCH as u32)
             } as usize;
             for &id in &finished[..count.min(UPDATE_BATCH)] {
                 unsafe { leaf(p.renderer_free)(self.renderer, id) };
@@ -478,7 +503,7 @@ impl Host {
     fn layout(
         &mut self,
         p: &Platform,
-        api: &rsf_overlay_host_panel,
+        api: &PanelEntries,
         dimensions: (u32, u32),
         stats: &rsf_overlay_stats,
         hint: f32,
@@ -499,7 +524,7 @@ impl Host {
             struct_size: size_of::<rsf_overlay_intent>() as u32,
             ..Default::default()
         };
-        let result = unsafe { leaf(api.frame)(self.panel, &input, stats, &mut data, &mut decided) };
+        let result = unsafe { (api.frame)(self.panel, &input, stats, &mut data, &mut decided) };
         if result != 0 {
             say(format_args!(
                 "overlay: the panel failed to lay out a frame, result {result}. Closing it"
@@ -516,7 +541,7 @@ impl Host {
     fn paint(
         &self,
         p: &Platform,
-        api: &rsf_overlay_host_panel,
+        api: &PanelEntries,
         context: Handle,
         target: Handle,
         dimensions: (u32, u32),
@@ -778,8 +803,8 @@ impl Host {
             self.renderer = null_mut();
         }
         if !self.panel.is_null() {
-            if let Some(destroy) = self.api.and_then(|api| api.destroy) {
-                unsafe { destroy(self.panel) };
+            if let Some(api) = self.api {
+                unsafe { (api.destroy)(self.panel) };
             }
             self.panel = null_mut();
         }
@@ -988,4 +1013,4 @@ mod tests;
 
 #[cfg(not(test))]
 #[path = "overlay_host_native.rs"]
-mod native;
+pub(super) mod native;

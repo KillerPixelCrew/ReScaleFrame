@@ -290,7 +290,7 @@ unsafe extern "C" fn rsf_overlay_d3d12_frame(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_overlay_d3d12_frame_for_window(
+pub(crate) unsafe extern "C" fn rsf_overlay_d3d12_frame_for_window(
     device: Handle,
     queue: Handle,
     backbuffer: Handle,
@@ -311,7 +311,7 @@ unsafe extern "C" fn rsf_overlay_d3d12_frame_for_window(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_overlay_d3d12_stop() {
+pub(crate) extern "C" fn rsf_overlay_d3d12_stop() {
     rsf_core_overlay11on12_stop(&PLATFORM);
 }
 

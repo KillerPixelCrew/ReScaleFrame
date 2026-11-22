@@ -574,6 +574,12 @@ extern "C" rsf_observer_result rsf_observer_install(const rsf_observer_options* 
     return rsf_core_observer11_install(options, &callbacks, &setup, probe_hooks, &hook_ops);
 }
 
+// Contain exceptions in the native registration code before returning to Rust.
+extern "C" rsf_observer_result rsf_observer_install_guarded(const rsf_observer_options* options) noexcept try
+{
+    return rsf_observer_install(options);
+} catch (...) { return RSF_OBSERVER_ERROR_NO_DEVICE; }
+
 extern "C" rsf_observer_result rsf_observer_uninstall(void)
 {
     return rsf_core_observer11_uninstall_hooks(&hook_ops);

@@ -27,7 +27,7 @@ add_library(rsf_orchestrator_core OBJECT
     src/rust_exports.c
     src/callback_render_host_platform.cpp
     src/render_host_platform.cpp
-    src/overlay_platform.cpp)
+)
 target_include_directories(rsf_orchestrator_core PUBLIC include)
 target_compile_definitions(rsf_orchestrator_core PUBLIC RSF_RUNTIME_BUILD)
 target_link_libraries(rsf_orchestrator_core PUBLIC rsf_native_cpu)

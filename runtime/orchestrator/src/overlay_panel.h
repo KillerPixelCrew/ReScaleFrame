@@ -19,20 +19,6 @@ typedef struct rsf_overlay_host_panel {
     uint32_t (*textures_to_free)(rsf_overlay* overlay, uint64_t* ids, uint32_t max_ids);
 } rsf_overlay_host_panel;
 
-/* Why the panel DLL is not available. `error` is GetLastError for a failed load. */
-enum {
-    RSF_OVERLAY_HOST_PANEL_LOADED = 0,
-    RSF_OVERLAY_HOST_PANEL_NO_PATH = 1,
-    RSF_OVERLAY_HOST_PANEL_NOT_LOADED = 2,
-    RSF_OVERLAY_HOST_PANEL_MISSING_EXPORTS = 3
-};
-
-/* If module is null, a successful load retains the module for the process.
-   Otherwise it transfers a reference that must be released or retained. */
-uint32_t rsf_core_overlay_panel_open(rsf_overlay_host_panel* out, uint32_t* error, void** module);
-void rsf_core_overlay_panel_release(void* module);
-void rsf_core_overlay_panel_retain(void* module);
-
 #ifdef __cplusplus
 }
 #endif
