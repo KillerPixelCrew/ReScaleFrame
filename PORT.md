@@ -2194,7 +2194,7 @@ Port swap ownership, projection jitter, temporal history and tonemap routing. Ad
 **Port files (7)**
 
 - [ ] [games/anomaly/src/sr_jitter.h](games/anomaly/src/sr_jitter.h)
-- [ ] [games/anomaly/src/sr_swap.cpp](games/anomaly/src/sr_swap.cpp)
+- [x] [games/anomaly/src/sr_swap.cpp](games/anomaly/src/sr_swap.cpp)
 - [ ] [games/anomaly/src/sr_swap.h](games/anomaly/src/sr_swap.h)
 - [x] [games/anomaly/src/sr_swap_platform.h](games/anomaly/src/sr_swap_platform.h)
 - [x] [games/anomaly/src/sr_temporal.cpp](games/anomaly/src/sr_temporal.cpp)
