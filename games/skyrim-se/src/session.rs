@@ -125,8 +125,6 @@ unsafe impl Sync for Leaves {}
 
 #[cfg(not(test))]
 unsafe extern "C" {
-    fn rsf_skyrim_cpu_prepare() -> bool;
-    fn rsf_skyrim_call_log(host: *const rsf_game_host_services, message: *const c_char) -> bool;
     fn rsf_skyrim_host_create_guarded(
         create: usize,
         setup: *const HostSetup,
@@ -149,11 +147,11 @@ pub(crate) static NATIVE_LEAVES: Leaves = Leaves {
     observers: &observers::NATIVE_LEAVES,
     admit_observers: crate::plugin::rsf_skyrim_observer_admit,
     observers_busy: observers::busy,
-    cpu_prepare: rsf_skyrim_cpu_prepare,
+    cpu_prepare: crate::cpu_hooks::prepare,
     cpu_start: crate::cpu_events::rsf_skyrim_cpu_start,
     checkpoint: crate::compatibility::checkpoint,
     compatibility_status: crate::compatibility::status,
-    log: rsf_skyrim_call_log,
+    log: crate::render_native::log_host,
     host_create: rsf_skyrim_host_create_guarded,
     host_set_active: rsf_skyrim_host_active_guarded,
     accept_window: crate::render_observer::rsf_skyrim_render_accept_window,

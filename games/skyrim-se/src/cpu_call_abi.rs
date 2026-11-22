@@ -16,6 +16,13 @@ pub const RSF_SKYRIM_CPU_PLAYER_UPDATE: rsf_skyrim_cpu_hook = 11;
 pub const RSF_SKYRIM_CPU_PLAYER_CAMERA: rsf_skyrim_cpu_hook = 12;
 pub const RSF_SKYRIM_CPU_HOOK_COUNT: rsf_skyrim_cpu_hook = 13;
 pub type rsf_skyrim_cpu_hook = ::std::os::raw::c_int;
+pub const RSF_SKYRIM_OBSERVER_JITTER: rsf_skyrim_observer_hook = 0;
+pub const RSF_SKYRIM_OBSERVER_PROCESS: rsf_skyrim_observer_hook = 1;
+pub const RSF_SKYRIM_OBSERVER_RESOLUTION: rsf_skyrim_observer_hook = 2;
+pub const RSF_SKYRIM_OBSERVER_END: rsf_skyrim_observer_hook = 3;
+pub const RSF_SKYRIM_OBSERVER_UPLOAD: rsf_skyrim_observer_hook = 4;
+pub const RSF_SKYRIM_OBSERVER_HOOK_COUNT: rsf_skyrim_observer_hook = 5;
+pub type rsf_skyrim_observer_hook = ::std::os::raw::c_int;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct rsf_skyrim_cpu_call {

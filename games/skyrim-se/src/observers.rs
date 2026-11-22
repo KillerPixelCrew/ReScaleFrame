@@ -36,13 +36,8 @@ pub(crate) struct Leaves {
 const _: () = assert!(size_of::<Leaves>() == 56);
 
 #[cfg(not(test))]
-unsafe extern "C" {
-    fn rsf_skyrim_call_log(host: *const rsf_game_host_services, message: *const c_char) -> bool;
-}
-
-#[cfg(not(test))]
 unsafe extern "C" fn log(host: *const rsf_game_host_services, message: *const c_char) {
-    unsafe { rsf_skyrim_call_log(host, message) };
+    unsafe { crate::render_native::log_host(host, message) };
 }
 
 #[cfg(not(test))]
@@ -152,8 +147,35 @@ static ORIGINALS: [AtomicPtr<c_void>; HOOKS.len()] =
     [const { AtomicPtr::new(ptr::null_mut()) }; HOOKS.len()];
 
 unsafe extern "C" {
-    fn rsf_skyrim_observer_detour(index: u32) -> *mut c_void;
+    fn rsf_skyrim_observe_jitter(state: *mut c_void);
+    fn rsf_skyrim_observe_process(
+        manager: *mut c_void,
+        input: u32,
+        output: u32,
+        arg4: usize,
+        arg5: u8,
+    ) -> usize;
+    fn rsf_skyrim_observe_resolution(state: *mut c_void);
+    fn rsf_skyrim_observe_end() -> usize;
+    fn rsf_skyrim_observe_upload(renderer: *mut c_void, flags: u8);
 }
+
+const _: () = assert!(HOOKS.len() == crate::cpu_call_abi::RSF_SKYRIM_OBSERVER_HOOK_COUNT as usize);
+
+const DETOURS: [*const c_void; HOOKS.len()] = {
+    use crate::cpu_call_abi::{
+        RSF_SKYRIM_OBSERVER_END, RSF_SKYRIM_OBSERVER_JITTER, RSF_SKYRIM_OBSERVER_PROCESS,
+        RSF_SKYRIM_OBSERVER_RESOLUTION, RSF_SKYRIM_OBSERVER_UPLOAD,
+    };
+    let mut detours = [ptr::null(); HOOKS.len()];
+    detours[RSF_SKYRIM_OBSERVER_JITTER as usize] = rsf_skyrim_observe_jitter as *const c_void;
+    detours[RSF_SKYRIM_OBSERVER_PROCESS as usize] = rsf_skyrim_observe_process as *const c_void;
+    detours[RSF_SKYRIM_OBSERVER_RESOLUTION as usize] =
+        rsf_skyrim_observe_resolution as *const c_void;
+    detours[RSF_SKYRIM_OBSERVER_END as usize] = rsf_skyrim_observe_end as *const c_void;
+    detours[RSF_SKYRIM_OBSERVER_UPLOAD as usize] = rsf_skyrim_observe_upload as *const c_void;
+    detours
+};
 
 pub(crate) fn bind_targets(targets: [usize; HOOKS.len()]) {
     for (slot, target) in TARGETS.iter().zip(targets) {
@@ -177,9 +199,11 @@ extern "C" fn rsf_skyrim_observer_initialize() -> bool {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_skyrim_observer_create(index: u32) -> bool {
-    let detour = unsafe { rsf_skyrim_observer_detour(index) };
+    let detour = DETOURS[index as usize];
     let mut original = ptr::null_mut();
-    if !unsafe { rsf_windows::minhook::create(target(index as usize), detour, &mut original) } {
+    if !unsafe {
+        rsf_windows::minhook::create(target(index as usize), detour.cast_mut(), &mut original)
+    } {
         return false;
     }
     ORIGINALS[index as usize].store(original, Ordering::Release);
@@ -207,7 +231,7 @@ extern "C" fn rsf_skyrim_observer_disable(index: u32) -> bool {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_skyrim_observer_pin() -> bool {
-    let address = unsafe { rsf_skyrim_observer_detour(0) } as usize;
+    let address = DETOURS[0] as usize;
     crate::platform::get().is_some_and(|platform| platform.pin_module(address) != 0)
 }
 

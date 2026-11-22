@@ -7,10 +7,10 @@ use crate::cpu_native::*;
 use crate::cpu_policy::*;
 use crate::cpu_sources::*;
 use crate::platform;
-use crate::render_native::{rsf_skyrim_call_render_pass, thread};
+use crate::render_native::{log_host, rsf_skyrim_call_render_pass, thread};
 use rsf_game_sys::*;
 use std::cell::Cell;
-use std::ffi::{CStr, CString, c_char};
+use std::ffi::{CStr, CString};
 use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
 use winapi::um::profileapi::QueryPerformanceCounter;
@@ -29,8 +29,7 @@ unsafe extern "C" {
         main: usize,
         facts: &mut rsf_skyrim_menu_observation,
     ) -> bool;
-    fn rsf_skyrim_call_cpu_event(host: &rsf_game_host_services, event: &rsf_game_cpu_event);
-    fn rsf_skyrim_call_log(host: &rsf_game_host_services, message: *const c_char) -> bool;
+    fn rsf_skyrim_cpu_event_guarded(host: &rsf_game_host_services, event: &rsf_game_cpu_event);
 }
 
 struct Frame {
@@ -117,7 +116,7 @@ fn log(host: &rsf_game_host_services, message: String) {
     if host.log.is_some()
         && let Ok(message) = CString::new(message)
     {
-        unsafe { rsf_skyrim_call_log(host, message.as_ptr()) };
+        unsafe { log_host(host, message.as_ptr()) };
     }
 }
 
@@ -140,7 +139,7 @@ fn frame_event(frame: NonNull<Frame>, stage: u32) {
         );
         (host, event)
     };
-    unsafe { rsf_skyrim_call_cpu_event(&host, &event) };
+    unsafe { rsf_skyrim_cpu_event_guarded(&host, &event) };
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -174,7 +173,7 @@ fn source_event(
         reason,
         poll_begin,
     );
-    unsafe { rsf_skyrim_call_cpu_event(&host, &event.header) };
+    unsafe { rsf_skyrim_cpu_event_guarded(&host, &event.header) };
 }
 
 fn abort(services: Services, source: u64, reason: u32) {
@@ -873,8 +872,11 @@ unsafe extern "C" fn rsf_skyrim_cpu_after(
             event,
         } => {
             DISPATCHED_LIST.set(*previous);
-            if returned && let Some(services) = services {
-                unsafe { rsf_skyrim_call_cpu_event(&services.host, event) };
+            if returned
+                && let Some(services) = services
+                && services.host.cpu_event.is_some()
+            {
+                unsafe { rsf_skyrim_cpu_event_guarded(&services.host, event) };
             }
         }
         Receipt::Controls => {

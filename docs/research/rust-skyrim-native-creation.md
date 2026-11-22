@@ -440,3 +440,32 @@ The Windows x64 CPU call stays 344 bytes, aligned to 8 with receipt storage at b
 new menu record is three bytes. Bindgen 0.72.1 recreated the checked-in bindings, and Rust
 1.94.1 formatting and locked offline Cargo metadata passed. MSVC `/Zs /W4 /WX` parsed the C11
 entry and all five C++ leaves. No builds, links, fixtures, lint, devices or game runs were used.
+
+## C11 guarded copy and continuation registration from 6c935471
+
+First replay `eaa34a66`, which changes the guarded read to C11. MSVC still performs the copy
+inside `__try` and returns false from `__except`. MinGW still queries the committed region,
+rejects inaccessible and guarded pages, checks that the copy fits, and then calls `memcpy`.
+The adapter and the existing input fixture use the same C source. The fixture keeps its
+original C++ link driver and its existing C11 entry.
+
+Then replay the continuation registration change. Rust binds the 13 typed CPU detour addresses
+to the checked hook order and the five renderer observer addresses to shared generated indices.
+CPU prepare now pins its detour's DLL by the first typed address, which belongs to the same
+module as the former C++ table. Trampolines still publish before enable. Rust checks optional
+logging, CPU event and render-pass callbacks. Their native call leaves still contain C++
+exceptions, and the host callback results retain their previous meaning.
+
+The remaining executable native owners are `plugin.c` for the GameSDK DLL export and
+`guarded_read.c` for the fault boundary. The four C++ files retain typed engine or Runtime calls:
+`native_creation.cpp` holds the D3D11 caller, HRESULT and unwind scope, `compatibility.cpp`
+holds the resolver, initializer, configuration and HDR calls, `cpu_events.cpp` holds the
+engine calls, callback receipts and menu-query guard, and `render_detours.cpp` holds the
+five renderer continuations, TAA restore receipt and foreign callback guards.
+
+Source comparison matched all 18 typed forwarder bodies after normalizing their symbol names
+and observer indices. The CPU admission predicates, caller captures, direct I01 Steam path,
+Community Shaders sources and S02 retirement bodies matched the base. Rust 1.94.1 format checks,
+bindgen 0.72.1 regeneration for Windows x64, locked offline metadata and diff checks passed.
+MSVC `/Zs /W4 /WX` and MinGW `-fsyntax-only -Wall -Wextra -Werror` parsed both C11 sources
+and all four C++ sources. No builds, links, fixtures, lint or devices were run.

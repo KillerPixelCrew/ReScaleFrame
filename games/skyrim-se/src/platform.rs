@@ -104,8 +104,6 @@ mod native {
 
     unsafe extern "C" {
         fn rsf_skyrim_guarded_read(address: usize, out: *mut c_void, size: usize) -> bool;
-        fn rsf_skyrim_call_log(host: *const rsf_game_host_services, message: *const c_char)
-        -> bool;
         fn rsf_skyrim_creation_begin_guarded(
             service: usize,
             user: *mut c_void,
@@ -120,7 +118,7 @@ mod native {
     }
 
     unsafe extern "C" fn log(host: *const rsf_game_host_services, message: *const c_char) {
-        unsafe { rsf_skyrim_call_log(host, message) };
+        unsafe { crate::render_native::log_host(host, message) };
     }
 
     pub(crate) static NATIVE_PLATFORM: Platform = Platform {

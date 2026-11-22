@@ -23,6 +23,15 @@ enum rsf_skyrim_cpu_hook {
     RSF_SKYRIM_CPU_HOOK_COUNT
 };
 
+enum rsf_skyrim_observer_hook {
+    RSF_SKYRIM_OBSERVER_JITTER,
+    RSF_SKYRIM_OBSERVER_PROCESS,
+    RSF_SKYRIM_OBSERVER_RESOLUTION,
+    RSF_SKYRIM_OBSERVER_END,
+    RSF_SKYRIM_OBSERVER_UPLOAD,
+    RSF_SKYRIM_OBSERVER_HOOK_COUNT
+};
+
 struct rsf_skyrim_cpu_call {
     uintptr_t owner;
     uintptr_t argument;

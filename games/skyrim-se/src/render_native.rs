@@ -2,7 +2,7 @@
 //! Typed Windows graphics leases and the guarded native CPU and host callback boundary.
 
 use rsf_game_sys::{rsf_game_host_services, rsf_game_render_config, rsf_game_render_pass};
-use std::ffi::c_void;
+use std::ffi::{c_char, c_void};
 use std::ptr::{self, NonNull};
 use winapi::Interface;
 use winapi::shared::dxgi::IDXGISwapChain;
@@ -12,7 +12,8 @@ use winapi::um::d3d11::{
 use winapi::um::unknwnbase::IUnknown;
 
 unsafe extern "C" {
-    pub(crate) fn rsf_skyrim_call_render_pass(
+    fn rsf_skyrim_log_guarded(host: &rsf_game_host_services, message: *const c_char) -> bool;
+    fn rsf_skyrim_render_pass_guarded(
         host: &rsf_game_host_services,
         context: *mut c_void,
         pass: &rsf_game_render_pass,
@@ -27,6 +28,27 @@ unsafe extern "C" {
         host: &rsf_game_host_services,
         config: &mut rsf_game_render_config,
     ) -> bool;
+}
+
+// The native leaves contain foreign exceptions. Rust decides whether to call an optional hook.
+pub(crate) unsafe extern "C" fn log_host(
+    host: *const rsf_game_host_services,
+    message: *const c_char,
+) -> bool {
+    match unsafe { host.as_ref() } {
+        Some(host) if host.log.is_some() => unsafe { rsf_skyrim_log_guarded(host, message) },
+        _ => true,
+    }
+}
+
+pub(crate) unsafe fn rsf_skyrim_call_render_pass(
+    host: &rsf_game_host_services,
+    context: *mut c_void,
+    pass: &rsf_game_render_pass,
+    begin: u32,
+) -> bool {
+    host.render_pass.is_some()
+        && unsafe { rsf_skyrim_render_pass_guarded(host, context, pass, begin) }
 }
 
 pub(crate) unsafe fn rsf_skyrim_call_upscale(

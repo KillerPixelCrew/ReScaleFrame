@@ -2,6 +2,7 @@
 // Typed native render continuations and foreign exception guards.
 #include <rescaleframe/game_api.h>
 #include <windows.h>
+#include "cpu_call.h"
 #include "observer_platform.h"
 #include "postprocess_platform.h"
 #include "render_observer_platform.h"
@@ -15,14 +16,13 @@ extern "C" bool rsf_skyrim_resolution_controls(uintptr_t) noexcept;
 extern "C" void rsf_skyrim_observer_enter() noexcept;
 extern "C" void rsf_skyrim_observer_leave() noexcept;
 
-extern "C" bool rsf_skyrim_call_log(const rsf_game_host_services* host, const char* message) noexcept try {
-    if (host && host->log) host->log(host->user, message);
+extern "C" bool rsf_skyrim_log_guarded(const rsf_game_host_services* host, const char* message) noexcept try {
+    host->log(host->user, message);
     return true;
 } catch (...) { return false; }
 
-extern "C" bool rsf_skyrim_call_render_pass(const rsf_game_host_services* host, void* context,
+extern "C" bool rsf_skyrim_render_pass_guarded(const rsf_game_host_services* host, void* context,
     const rsf_game_render_pass* pass, uint32_t begin) noexcept try {
-    if (!host->render_pass) return false;
     host->render_pass(host->user, context, pass, begin);
     return true;
 } catch (...) { return false; }
@@ -51,13 +51,13 @@ struct ObserverLease {
     ObserverLease& operator=(const ObserverLease&) = delete;
 };
 
-enum ObserverIndex : uint32_t { jitter, process, resolution, end, upload, observer_count };
-
-template<class Function> Function continuation(ObserverIndex index) noexcept {
+template<class Function> Function continuation(rsf_skyrim_observer_hook index) noexcept {
     return reinterpret_cast<Function>(rsf_skyrim_observer_original(index));
 }
 
-uintptr_t observe_process(void* manager, uint32_t input, uint32_t output, uintptr_t argument4, uint8_t argument5) noexcept
+} // namespace
+
+extern "C" uintptr_t rsf_skyrim_observe_process(void* manager, uint32_t input, uint32_t output, uintptr_t argument4, uint8_t argument5) noexcept
 {
 #if defined(_MSC_VER)
     const auto caller = uintptr_t(_ReturnAddress());
@@ -71,41 +71,39 @@ uintptr_t observe_process(void* manager, uint32_t input, uint32_t output, uintpt
     } restore;
     const rsf_skyrim_cs_hdr_call call{caller, uintptr_t(manager), argument4, input, output, argument5};
     rsf_skyrim_postprocess_prepare(&call, &restore.receipt);
-    return continuation<ProcessMain>(process)(manager, input, output, argument4, argument5);
+    return continuation<ProcessMain>(RSF_SKYRIM_OBSERVER_PROCESS)(manager, input, output, argument4, argument5);
 }
 
-void observe_jitter(void* state) noexcept
+extern "C" void rsf_skyrim_observe_jitter(void* state) noexcept
 {
     ObserverLease activity;
-    continuation<UpdateJitter>(jitter)(state);
+    continuation<UpdateJitter>(RSF_SKYRIM_OBSERVER_JITTER)(state);
     rsf_skyrim_render_jitter_observed(uintptr_t(state));
 }
 
-void observe_resolution(void* state) noexcept {
+extern "C" void rsf_skyrim_observe_resolution(void* state) noexcept {
     ObserverLease activity;
-    if (!rsf_skyrim_resolution_controls(uintptr_t(state))) continuation<UpdateJitter>(resolution)(state);
+    if (!rsf_skyrim_resolution_controls(uintptr_t(state))) continuation<UpdateJitter>(RSF_SKYRIM_OBSERVER_RESOLUTION)(state);
 }
 
-uintptr_t observe_end() noexcept
+extern "C" uintptr_t rsf_skyrim_observe_end() noexcept
 {
     ObserverLease activity;
     rsf_game_host_services host{};
     rsf_skyrim_render_end_enter(&host);
-    const auto result = continuation<RendererEnd>(end)();
+    const auto result = continuation<RendererEnd>(RSF_SKYRIM_OBSERVER_END)();
     rsf_skyrim_render_end_leave(&host);
     return result;
 }
 
-void observe_upload(void* renderer, uint8_t flags) noexcept
+extern "C" void rsf_skyrim_observe_upload(void* renderer, uint8_t flags) noexcept
 {
     ObserverLease activity;
     rsf_skyrim_upload_observation observation{};
     const bool uploading = rsf_skyrim_render_upload_enter(uintptr_t(renderer), &observation);
-    continuation<UploadFrame>(upload)(renderer, flags);
+    continuation<UploadFrame>(RSF_SKYRIM_OBSERVER_UPLOAD)(renderer, flags);
     if (uploading) rsf_skyrim_render_upload_leave(&observation, flags);
 }
-
-} // namespace
 
 extern "C" bool rsf_skyrim_host_create_guarded(uintptr_t address, const rsf_d3d11_host_setup* setup,
     rsf_game_host_services* services, int32_t* result) noexcept try
@@ -120,15 +118,3 @@ extern "C" bool rsf_skyrim_host_active_guarded(uintptr_t address, void* user, ui
     *result = reinterpret_cast<decltype(&rsf_d3d11_host_set_active)>(address)(user, active);
     return true;
 } catch (...) { return false; }
-
-extern "C" void* rsf_skyrim_observer_detour(uint32_t index) noexcept
-{
-    static void* const detours[observer_count]{
-        reinterpret_cast<void*>(&observe_jitter),
-        reinterpret_cast<void*>(&observe_process),
-        reinterpret_cast<void*>(&observe_resolution),
-        reinterpret_cast<void*>(&observe_end),
-        reinterpret_cast<void*>(&observe_upload),
-    };
-    return index < observer_count ? detours[index] : nullptr;
-}

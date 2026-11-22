@@ -116,13 +116,45 @@ const _: () = assert!(HOOKS.len() == crate::cpu_call_abi::RSF_SKYRIM_CPU_HOOK_CO
 
 const INDICES: std::ops::Range<usize> = 0..HOOKS.len();
 
-/// Static list of typed native detours, in the same order as HOOKS.
-#[repr(C)]
-struct Detours {
-    struct_size: u32,
-    version: u32,
-    functions: [*const c_void; HOOKS.len()],
+// C++ owns the native calls and unwind receipts. Rust binds their typed addresses to the
+// checked hook order and publishes the original trampoline before enabling a detour.
+unsafe extern "C" {
+    fn rsf_skyrim_cpu_tick(main: *mut c_void) -> i16;
+    fn rsf_skyrim_cpu_poll(manager: *mut c_void, timestep: f32) -> usize;
+    fn rsf_skyrim_cpu_render(main: *mut c_void) -> usize;
+    fn rsf_skyrim_cpu_dispatch(manager: *mut c_void, list: *mut c_void) -> i32;
+    fn rsf_skyrim_cpu_world(main: *mut c_void, output: u32, flags: u8) -> usize;
+    fn rsf_skyrim_cpu_controls(owner: *mut c_void, list: *mut c_void, source: *mut c_void)
+    -> usize;
+    fn rsf_skyrim_cpu_camera_update(state: *mut c_void) -> usize;
+    fn rsf_skyrim_cpu_jobs_submit() -> u32;
+    fn rsf_skyrim_cpu_jobs_join() -> u32;
+    fn rsf_skyrim_cpu_named_poll(data: *mut c_void) -> usize;
+    fn rsf_skyrim_cpu_movement(
+        actor: *mut c_void,
+        timestep: f32,
+        argument: *mut c_void,
+        output: *mut f32,
+    );
+    fn rsf_skyrim_cpu_player_update(actor: *mut c_void, timestep: f32) -> usize;
+    fn rsf_skyrim_cpu_player_camera_update(camera: *mut c_void);
 }
+
+const DETOURS: [*const c_void; HOOKS.len()] = [
+    rsf_skyrim_cpu_tick as *const c_void,
+    rsf_skyrim_cpu_poll as *const c_void,
+    rsf_skyrim_cpu_render as *const c_void,
+    rsf_skyrim_cpu_dispatch as *const c_void,
+    rsf_skyrim_cpu_world as *const c_void,
+    rsf_skyrim_cpu_controls as *const c_void,
+    rsf_skyrim_cpu_camera_update as *const c_void,
+    rsf_skyrim_cpu_jobs_submit as *const c_void,
+    rsf_skyrim_cpu_jobs_join as *const c_void,
+    rsf_skyrim_cpu_named_poll as *const c_void,
+    rsf_skyrim_cpu_movement as *const c_void,
+    rsf_skyrim_cpu_player_update as *const c_void,
+    rsf_skyrim_cpu_player_camera_update as *const c_void,
+];
 
 static ORIGINALS: [AtomicPtr<c_void>; HOOKS.len()] =
     [const { AtomicPtr::new(ptr::null_mut()) }; HOOKS.len()];
@@ -161,7 +193,6 @@ pub(crate) struct StartRefusal {
 }
 
 const _: () = {
-    assert!(size_of::<Detours>() == 8 + HOOKS.len() * size_of::<usize>());
     assert!(size_of::<Services>() == size_of::<rsf_game_host_services>() + 8);
     assert!(std::mem::offset_of!(Services, frequency) == size_of::<rsf_game_host_services>());
     assert!(size_of::<StartRefusal>() == 16);
@@ -239,7 +270,7 @@ impl Control {
         });
     }
 
-    fn prepare(&mut self, platform: &Platform, detours: &Detours) -> bool {
+    fn prepare(&mut self, platform: &Platform) -> bool {
         if active() || rsf_skyrim_cpu_rust_busy() || !self.hooks.is_disabled() {
             return false;
         }
@@ -255,8 +286,7 @@ impl Control {
             }
             self.base = base;
             if !self.hooks.create(|index| {
-                let Some(original) =
-                    platform.hook_create(target(base, index), detours.functions[index])
+                let Some(original) = platform.hook_create(target(base, index), DETOURS[index])
                 else {
                     return false;
                 };
@@ -271,9 +301,7 @@ impl Control {
         }
 
         let frequency = qpc_frequency();
-        if frequency == 0
-            || (!self.pinned && platform.pin_module(std::ptr::from_ref(detours) as usize) == 0)
-        {
+        if frequency == 0 || (!self.pinned && platform.pin_module(DETOURS[0] as usize) == 0) {
             if !self.pinned {
                 self.remove_unpinned();
             }
@@ -330,22 +358,14 @@ impl Control {
     }
 }
 
-// The native wrappers lend their static, versioned tables and stack out parameters.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_rust_prepare(detours: &Detours) -> bool {
+pub(crate) extern "C" fn prepare() -> bool {
     let Some(platform) = platform::get() else {
         return false;
     };
-    if detours.struct_size as usize != size_of::<Detours>()
-        || detours.version != 1
-        || detours.functions.iter().any(|detour| detour.is_null())
-    {
-        return false;
-    }
     CONTROL
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .prepare(platform, detours)
+        .prepare(platform)
 }
 
 #[unsafe(no_mangle)]

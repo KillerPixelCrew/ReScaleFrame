@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include "cpu_events.h"
+#include <rescaleframe/game_api.h>
 #include "cpu_call.h"
 
 #if defined(_MSC_VER)
@@ -23,12 +23,6 @@ static_assert(RSF_SKYRIM_CPU_HOOK_COUNT == 13);
 static_assert(sizeof(rsf_skyrim_menu_observation) == 3);
 
 namespace {
-struct CpuDetours {
-    uint32_t struct_size, version;
-    void* functions[RSF_SKYRIM_CPU_HOOK_COUNT];
-};
-static_assert(sizeof(CpuDetours) == 8 + RSF_SKYRIM_CPU_HOOK_COUNT * sizeof(void*));
-
 struct Scope {
     rsf_skyrim_cpu_hook index;
     rsf_skyrim_cpu_call call;
@@ -63,116 +57,94 @@ template<class Function> Function continuation(rsf_skyrim_cpu_hook index) noexce
     return reinterpret_cast<Function>(rsf_skyrim_cpu_original(index));
 }
 
-short tick(void* main)
+} // namespace
+
+extern "C" short rsf_skyrim_cpu_tick(void* main)
 {
-    const auto original = continuation<decltype(&tick)>(RSF_SKYRIM_CPU_TICK);
+    const auto original = continuation<decltype(&rsf_skyrim_cpu_tick)>(RSF_SKYRIM_CPU_TICK);
     if (!rsf_skyrim_cpu_tick_admissible()) return original(main);
     Scope scope{RSF_SKYRIM_CPU_TICK, uintptr_t(main)};
     return scope.complete(original(main));
 }
 
 // The native timestep is in XMM1.
-uintptr_t poll(void* manager, float timestep)
+extern "C" uintptr_t rsf_skyrim_cpu_poll(void* manager, float timestep)
 {
-    const auto original = continuation<decltype(&poll)>(RSF_SKYRIM_CPU_POLL);
+    const auto original = continuation<decltype(&rsf_skyrim_cpu_poll)>(RSF_SKYRIM_CPU_POLL);
     Scope scope{RSF_SKYRIM_CPU_POLL, uintptr_t(manager)};
     return scope.complete(original(manager, timestep));
 }
 
-uintptr_t render(void* main)
+extern "C" uintptr_t rsf_skyrim_cpu_render(void* main)
 {
     rsf_game_render_pass pass{};
     Scope scope{RSF_SKYRIM_CPU_RENDER, uintptr_t(main), 0, 0, &pass};
-    return scope.complete(continuation<decltype(&render)>(RSF_SKYRIM_CPU_RENDER)(main));
+    return scope.complete(continuation<decltype(&rsf_skyrim_cpu_render)>(RSF_SKYRIM_CPU_RENDER)(main));
 }
 
-int dispatch(void* manager, void* list)
+extern "C" int rsf_skyrim_cpu_dispatch(void* manager, void* list)
 {
     Scope scope{RSF_SKYRIM_CPU_DISPATCH, uintptr_t(manager), uintptr_t(list)};
-    return scope.complete(continuation<decltype(&dispatch)>(RSF_SKYRIM_CPU_DISPATCH)(manager, list));
+    return scope.complete(continuation<decltype(&rsf_skyrim_cpu_dispatch)>(RSF_SKYRIM_CPU_DISPATCH)(manager, list));
 }
 
-uintptr_t world(void* main, uint32_t output, uint8_t flags)
+extern "C" uintptr_t rsf_skyrim_cpu_world(void* main, uint32_t output, uint8_t flags)
 {
     rsf_game_render_pass pass{};
     Scope scope{RSF_SKYRIM_CPU_WORLD, uintptr_t(main), output, RSF_SKYRIM_CALLER, &pass};
-    return scope.complete(continuation<decltype(&world)>(RSF_SKYRIM_CPU_WORLD)(main, output, flags));
+    return scope.complete(continuation<decltype(&rsf_skyrim_cpu_world)>(RSF_SKYRIM_CPU_WORLD)(main, output, flags));
 }
 
-uintptr_t controls(void* owner, void* list, void* source)
+extern "C" uintptr_t rsf_skyrim_cpu_controls(void* owner, void* list, void* source)
 {
     Scope scope{RSF_SKYRIM_CPU_CONTROLS, uintptr_t(owner), uintptr_t(list)};
     // The event-source pointer in R8 is forwarded unchanged.
-    return scope.complete(continuation<decltype(&controls)>(RSF_SKYRIM_CPU_CONTROLS)(owner, list, source));
+    return scope.complete(continuation<decltype(&rsf_skyrim_cpu_controls)>(RSF_SKYRIM_CPU_CONTROLS)(owner, list, source));
 }
 
-uintptr_t camera_update(void* state)
+extern "C" uintptr_t rsf_skyrim_cpu_camera_update(void* state)
 {
     Scope scope{RSF_SKYRIM_CPU_CAMERA, uintptr_t(state)};
-    return scope.complete(continuation<decltype(&camera_update)>(RSF_SKYRIM_CPU_CAMERA)(state));
+    return scope.complete(continuation<decltype(&rsf_skyrim_cpu_camera_update)>(RSF_SKYRIM_CPU_CAMERA)(state));
 }
 
-uint32_t jobs_submit()
+extern "C" uint32_t rsf_skyrim_cpu_jobs_submit()
 {
     Scope scope{RSF_SKYRIM_CPU_SUBMIT, 0, 0, RSF_SKYRIM_CALLER};
-    return scope.complete(continuation<decltype(&jobs_submit)>(RSF_SKYRIM_CPU_SUBMIT)());
+    return scope.complete(continuation<decltype(&rsf_skyrim_cpu_jobs_submit)>(RSF_SKYRIM_CPU_SUBMIT)());
 }
 
-uint32_t jobs_join()
+extern "C" uint32_t rsf_skyrim_cpu_jobs_join()
 {
     Scope scope{RSF_SKYRIM_CPU_JOIN, 0, 0, RSF_SKYRIM_CALLER};
-    return scope.complete(continuation<decltype(&jobs_join)>(RSF_SKYRIM_CPU_JOIN)());
+    return scope.complete(continuation<decltype(&rsf_skyrim_cpu_jobs_join)>(RSF_SKYRIM_CPU_JOIN)());
 }
 
-uintptr_t named_poll(void* data)
+extern "C" uintptr_t rsf_skyrim_cpu_named_poll(void* data)
 {
     Scope scope{RSF_SKYRIM_CPU_NAMED_POLL, 0, 0, RSF_SKYRIM_CALLER};
-    return scope.complete(continuation<decltype(&named_poll)>(RSF_SKYRIM_CPU_NAMED_POLL)(data));
+    return scope.complete(continuation<decltype(&rsf_skyrim_cpu_named_poll)>(RSF_SKYRIM_CPU_NAMED_POLL)(data));
 }
 
-void movement(void* actor, float timestep, void* argument, float* output)
+extern "C" void rsf_skyrim_cpu_movement(void* actor, float timestep, void* argument, float* output)
 {
     Scope scope{RSF_SKYRIM_CPU_MOVEMENT, uintptr_t(actor)};
-    continuation<decltype(&movement)>(RSF_SKYRIM_CPU_MOVEMENT)(actor, timestep, argument, output);
+    continuation<decltype(&rsf_skyrim_cpu_movement)>(RSF_SKYRIM_CPU_MOVEMENT)(actor, timestep, argument, output);
     scope.complete(0);
 }
 
-uintptr_t player_update(void* actor, float timestep)
+extern "C" uintptr_t rsf_skyrim_cpu_player_update(void* actor, float timestep)
 {
     Scope scope{RSF_SKYRIM_CPU_PLAYER_UPDATE, uintptr_t(actor)};
-    return scope.complete(continuation<decltype(&player_update)>(RSF_SKYRIM_CPU_PLAYER_UPDATE)(actor, timestep));
+    return scope.complete(continuation<decltype(&rsf_skyrim_cpu_player_update)>(RSF_SKYRIM_CPU_PLAYER_UPDATE)(actor, timestep));
 }
 
 // TESCamera::Update forwards to the current state vfunc and has a void result.
-void player_camera_update(void* camera)
+extern "C" void rsf_skyrim_cpu_player_camera_update(void* camera)
 {
     Scope scope{RSF_SKYRIM_CPU_PLAYER_CAMERA, uintptr_t(camera)};
-    continuation<decltype(&player_camera_update)>(RSF_SKYRIM_CPU_PLAYER_CAMERA)(camera);
+    continuation<decltype(&rsf_skyrim_cpu_player_camera_update)>(RSF_SKYRIM_CPU_PLAYER_CAMERA)(camera);
     scope.complete(0);
-}
-
-const CpuDetours detours{sizeof(CpuDetours), 1, {
-    reinterpret_cast<void*>(&tick),
-    reinterpret_cast<void*>(&poll),
-    reinterpret_cast<void*>(&render),
-    reinterpret_cast<void*>(&dispatch),
-    reinterpret_cast<void*>(&world),
-    reinterpret_cast<void*>(&controls),
-    reinterpret_cast<void*>(&camera_update),
-    reinterpret_cast<void*>(&jobs_submit),
-    reinterpret_cast<void*>(&jobs_join),
-    reinterpret_cast<void*>(&named_poll),
-    reinterpret_cast<void*>(&movement),
-    reinterpret_cast<void*>(&player_update),
-    reinterpret_cast<void*>(&player_camera_update),
-}};
-}
-
-extern "C" bool rsf_skyrim_cpu_rust_prepare(const CpuDetours*) noexcept;
-
-extern "C" bool rsf_skyrim_cpu_prepare() noexcept
-{
-    return rsf_skyrim_cpu_rust_prepare(&detours);
 }
 
 extern "C" bool rsf_skyrim_query_menus(uintptr_t open_address, uintptr_t frozen_address, uintptr_t ui,
@@ -187,8 +159,8 @@ extern "C" bool rsf_skyrim_query_menus(uintptr_t open_address, uintptr_t frozen_
     return true;
 } catch (...) { return false; }
 
-extern "C" void rsf_skyrim_call_cpu_event(
+extern "C" void rsf_skyrim_cpu_event_guarded(
     const rsf_game_host_services* host, const rsf_game_cpu_event* event) noexcept try
 {
-    if (host->cpu_event) host->cpu_event(host->user, event);
+    host->cpu_event(host->user, event);
 } catch (...) {}
