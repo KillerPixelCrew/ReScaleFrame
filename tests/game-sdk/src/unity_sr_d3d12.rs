@@ -5,6 +5,7 @@ mod dxgi_format;
 mod gpu;
 mod math;
 mod rdr2;
+mod streamline;
 
 use crate::unity_sr_d3d12_abi::*;
 use gpu::{COPY_SOURCE, Gpu, SHADER_READ};
@@ -419,11 +420,9 @@ fn run(args: &Args) -> Result<i32> {
     }
     if let Some(shared) = &shared {
         // FG contracts on viewport zero independently of SR while borrowing the same token.
-        match unsafe { rsf_fixture_unity_shared_constants(shared.0, &pass) } {
-            1 => eprintln!("PASS: independent SR/FG constants accepted on the same source token."),
-            2 => {}
-            _ => return Err("Streamline refused independent FG constants".into()),
-        }
+        let token = unsafe { rsf_streamline_host_token(shared.0, 1) };
+        streamline::set_shared_constants(shared.0, token, &pass)?;
+        eprintln!("PASS: independent SR/FG constants accepted on the same source token.");
     }
 
     let readback = gpu.readback(&inputs.output)?;

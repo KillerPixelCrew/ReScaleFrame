@@ -1186,7 +1186,7 @@ generate("tests/game-sdk/src/unity_sr_d3d12_abi.rs", "tests/unity_sr_d3d12_abi.h
           "-Iruntime/graphics/include", "-Iruntime/presentation/include", "-Iruntime/backends/dlss/include",
           "-Igames/unity-mono/include", "-fdeclspec"],
          ["--allowlist-function", "rsf_(fixture_unity_.*|sr12_(create|plan|evaluate|destroy)|"
-          "streamline_host_(adopt|acquire|marker|sleep|destroy)|fg12_status|native_latency_(status_get|ping)|"
+          "streamline_host_(adopt|module|token|acquire|marker|sleep|destroy)|fg12_status|native_latency_(status_get|ping)|"
           "render_(host_create|settings_(get|apply)|overlay_(toggle|visible))|rdr2_fill_runtime_setup)",
           "--no-recursive-allowlist", "--with-derive-default", "--no-prepend-enum-name",
           "--raw-line", "use rsf_game_sys::{\n"

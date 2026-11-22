@@ -358,6 +358,15 @@ unsafe extern "C" {
     ) -> rsf_backend_result;
 }
 unsafe extern "C" {
+    pub fn rsf_streamline_host_module(arg1: *mut rsf_streamline_host) -> *mut ::core::ffi::c_void;
+}
+unsafe extern "C" {
+    pub fn rsf_streamline_host_token(
+        arg1: *mut rsf_streamline_host,
+        frame_id: u64,
+    ) -> *mut ::core::ffi::c_void;
+}
+unsafe extern "C" {
     pub fn rsf_streamline_host_acquire(
         arg1: *mut rsf_streamline_host,
         frame_id: u64,
@@ -827,10 +836,4 @@ pub const RSF_FIXTURE_UNITY_INPUT_SAMPLE: rsf_fixture_unity_constants = 6;
 pub type rsf_fixture_unity_constants = ::core::ffi::c_int;
 unsafe extern "C" {
     pub fn rsf_fixture_unity_dlss_preset_valid(preset: u32) -> ::core::ffi::c_int;
-}
-unsafe extern "C" {
-    pub fn rsf_fixture_unity_shared_constants(
-        arg1: *mut rsf_streamline_host,
-        arg2: *const rsf_game_render_pass,
-    ) -> u32;
 }
