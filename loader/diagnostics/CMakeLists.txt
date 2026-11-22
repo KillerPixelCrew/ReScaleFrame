@@ -1,6 +1,3 @@
-set(RSF_RENDERDOC_INCLUDE "${CMAKE_SOURCE_DIR}/vendor/renderdoc" CACHE PATH
-    "Directory holding RenderDoc's renderdoc_app.h")
-
 add_library(rsf_loader_diagnostics STATIC
     src/module_dump.c)
 target_include_directories(rsf_loader_diagnostics PUBLIC include)

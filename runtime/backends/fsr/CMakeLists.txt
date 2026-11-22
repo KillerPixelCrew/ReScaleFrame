@@ -1,6 +1,3 @@
-set(RSF_FFX_INCLUDE "${CMAKE_SOURCE_DIR}/vendor/fidelityfx/Kits/FidelityFX/api/include" CACHE PATH
-    "Directory holding FidelityFX's ffx_api.h")
-
 add_library(rsf_fsr STATIC src/fsr_backend.c src/fsr_generation.c)
 target_include_directories(rsf_fsr PUBLIC include)
 rsf_add_rust_static(rsf_fsr4_compat_rust rsf_rust_fsr4_compat rsf-fsr4-compat rsf_fsr4_compat)
@@ -28,7 +25,7 @@ endif()
 
 add_library(ReScaleFrame::FSR ALIAS rsf_fsr)
 
-if(EXISTS "${RSF_FFX_INCLUDE}/../../framegeneration/include/ffx_framegeneration.h")
+if(RSF_HAVE_FFX_FG)
     target_compile_definitions(rsf_fsr PRIVATE RSF_HAVE_FFX_FG=1)
     target_include_directories(rsf_fsr SYSTEM PRIVATE "${RSF_FFX_INCLUDE}/../../framegeneration/include")
 endif()

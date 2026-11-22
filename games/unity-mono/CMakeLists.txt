@@ -1,5 +1,3 @@
-set(RSF_UNITY_NATIVE_INCLUDE "${CMAKE_SOURCE_DIR}/vendor/unity-native/include" CACHE PATH
-    "Unity native-plugin headers; untracked, see docs/dependencies.md")
 # The package uses the shared state archive. Only the Mono plugin links the Runtime DLL imports.
 rsf_add_rust_static(rsf_unity_mono_rust rsf_rust_unity_mono rsf-unity-mono rsf_unity_mono)
 rsf_add_rust_static(rsf_unity_mono_plugin_rust rsf_rust_unity_mono_plugin rsf-unity-mono rsf_unity_mono

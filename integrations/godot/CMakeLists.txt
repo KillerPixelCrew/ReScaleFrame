@@ -13,7 +13,7 @@ endif()
 # exports.def lists the GDExtension entry and the engine exports, all Rust. runtime_platform.c
 # supplies the optional provider symbols, the project version, the layout checks and DLL unload.
 add_library(rsf_godot SHARED native/exports.def native/runtime_platform.c)
-if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
+if(RSF_HAVE_VULKAN)
     target_include_directories(rsf_godot SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
 endif()
 target_compile_definitions(rsf_godot PRIVATE RSF_GODOT_NATIVE_BUILD RSF_STREAMLINE_HOST_BUILD)

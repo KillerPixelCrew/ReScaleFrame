@@ -28,7 +28,7 @@ set_target_properties(rsf_asi_rdr2 PROPERTIES OUTPUT_NAME "ReScaleFrame.RDR2" PR
 add_dependencies(rsf_asi_rdr2 rsf_orchestrator rsf_game_rdr2)
 
 # Explicit research helper, never autoloaded or included in the ASI deployment.
-add_library(rsf_rdr2_attach SHARED src/attach_entry.c)
+add_library(rsf_rdr2_attach SHARED EXCLUDE_FROM_ALL src/attach_entry.c)
 target_include_directories(rsf_rdr2_attach PRIVATE ../../runtime/orchestrator/include)
 target_compile_definitions(rsf_rdr2_attach PRIVATE _CRT_SECURE_NO_WARNINGS)
 target_link_libraries(rsf_rdr2_attach PRIVATE rsf_rdr2_rust ReScaleFrame::GameSDK ReScaleFrame::RuntimeCommon ReScaleFrame::Contract minhook user32 rsf_build_options)

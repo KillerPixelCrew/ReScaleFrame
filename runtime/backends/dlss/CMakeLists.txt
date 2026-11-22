@@ -1,6 +1,3 @@
-set(RSF_STREAMLINE_INCLUDE "${CMAKE_SOURCE_DIR}/vendor/streamline/include" CACHE PATH
-    "Directory holding Streamline's sl.h")
-
 # DLSS SR, the D3D12 Streamline host (streamline_host/native.rs), the RTX 40 MFG compatibility path
 # and the Reflex API audit live in the Rust orchestrator. This target carries the public C headers
 # and the archive that defines them. Only test fixtures still read the Streamline headers.
