@@ -2204,7 +2204,7 @@ Port swap ownership, projection jitter, temporal history and tonemap routing. Ad
 
 - [ ] [tests/anomaly_sr_jitter_reference.h](tests/anomaly_sr_jitter_reference.h) (independent native projection oracle)
 - [ ] [tests/anomaly_sr_jitter.cpp](tests/anomaly_sr_jitter.cpp)
-- [ ] [tests/anomaly_sr_jitter_device.cpp](tests/anomaly_sr_jitter_device.cpp)
+- [x] [tests/anomaly_sr_jitter_device.cpp](tests/anomaly_sr_jitter_device.cpp)
 - [ ] [tests/anomaly_sr_swap.cpp](tests/anomaly_sr_swap.cpp)
 - [ ] [tests/anomaly_sr_temporal_device.cpp](tests/anomaly_sr_temporal_device.cpp)
 - [ ] [tests/anomaly_temporal_tests.cpp](tests/anomaly_temporal_tests.cpp)
