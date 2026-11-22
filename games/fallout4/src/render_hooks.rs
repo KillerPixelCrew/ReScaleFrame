@@ -34,7 +34,7 @@ use crate::sys::{
     NativeRenderExports as RenderExports, NativeRenderScopeKey as ScopeKey, NativeWorld as World,
     NativeWorldAdmission as WorldAdmission,
 };
-use crate::{MH_OK, Ops, image, read};
+use crate::{MH_OK, image, read};
 use rsf_game_sys::{rsf_game_host_services, rsf_game_render_pass};
 use std::ffi::{CStr, c_void};
 use std::mem::offset_of;
@@ -318,9 +318,9 @@ fn target(hook: &Hook) -> *mut c_void {
     (image() + hook.rva) as *mut c_void
 }
 
-fn report(ops: &Ops, message: &CStr) {
+fn report(message: &CStr) {
     let host = HOST.lock().unwrap_or_else(PoisonError::into_inner).0;
-    let _ = ops.log_host(&host, message);
+    let _ = crate::log_host(&host, message);
 }
 
 #[unsafe(no_mangle)]
@@ -354,7 +354,7 @@ pub(crate) fn busy() -> bool {
 /// Checks the guards and the synchronous services, negotiates the Runtime exports and creates
 /// every missing detour disabled. A creation failure removes the hooks this call created, in
 /// reverse order; a removal MinHook refuses keeps its record and trampoline.
-pub(crate) fn prepare(ops: &Ops, services: &rsf_game_host_services, build: &ExactBuild) -> bool {
+pub(crate) fn prepare(services: &rsf_game_host_services, build: &ExactBuild) -> bool {
     if live()
         || busy()
         || services.process_upscale.is_none()
@@ -403,7 +403,6 @@ pub(crate) fn prepare(ops: &Ops, services: &rsf_game_host_services, build: &Exac
                 created[index] = false;
             } else {
                 report(
-                    ops,
                     c"Fallout4 cold render-hook rollback refused; retained hook ownership, startup remains refused.",
                 );
             }
@@ -417,7 +416,7 @@ pub(crate) fn prepare(ops: &Ops, services: &rsf_game_host_services, build: &Exac
 
 /// Rechecks the guards, queues every created detour, sets live and applies the queue. A missing
 /// record or a refused queue or apply clears live and queues every created detour disabled.
-pub(crate) fn start(ops: &Ops) -> bool {
+pub(crate) fn start() -> bool {
     if busy() || !verify() {
         return false;
     }
@@ -443,7 +442,6 @@ pub(crate) fn start(ops: &Ops) -> bool {
     }
     drop(created);
     report(
-        ops,
         c"Fallout4 guarded native DR/SR/auxiliary output callbacks enabled; actual producer and screen admission required, FG/input capabilities remain gated.",
     );
     true
@@ -455,7 +453,7 @@ pub(crate) fn quiesce() {
 
 /// Clears live and disables every created detour once no scope is open. Trampolines and records
 /// stay for a later start.
-pub(crate) fn stop(ops: &Ops) -> bool {
+pub(crate) fn stop() -> bool {
     quiesce();
     if busy() {
         return false;
@@ -464,7 +462,7 @@ pub(crate) fn stop(ops: &Ops) -> bool {
     let mut disabled = true;
     for (index, hook) in HOOKS.iter().enumerate() {
         if created[index] {
-            let result = ops.disable_hook(target(hook) as usize);
+            let result = crate::disable_hook(target(hook) as usize);
             disabled = disabled && result;
         }
     }

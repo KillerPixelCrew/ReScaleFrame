@@ -11,8 +11,8 @@ use crate::sys::{
     rsf_d3d11_host_setup, rsf_motion_decode_params,
 };
 use crate::{
-    EXECUTABLE_SHA256, Ops, PENDING, RSF_ERROR_BUSY, RSF_ERROR_INVALID_ARGUMENT,
-    RSF_ERROR_NATIVE_REFUSED, RSF_ERROR_NOT_READY, RSF_OK, Threw, cpu_events, dpi, ops, pin,
+    EXECUTABLE_SHA256, PENDING, RSF_ERROR_BUSY, RSF_ERROR_INVALID_ARGUMENT,
+    RSF_ERROR_NATIVE_REFUSED, RSF_ERROR_NOT_READY, RSF_OK, Threw, cpu_events, dpi, pin,
     render_hooks,
 };
 use rsf_game_sys::call_header::validate;
@@ -88,41 +88,39 @@ impl Session {
 
     fn refuse(
         &mut self,
-        ops: &Ops,
         host: &rsf_game_host_services,
         message: &'static CStr,
     ) -> Result<rsf_result, Threw> {
         self.reason = message;
-        ops.log_host(host, message)?;
+        crate::log_host(host, message)?;
         Ok(RSF_ERROR_NATIVE_REFUSED)
     }
 
-    fn suspend(&mut self, ops: &Ops) -> Result<(), Threw> {
+    fn suspend(&mut self) -> Result<(), Threw> {
         creation::quiesce();
         render_hooks::quiesce();
         cpu_events::quiesce();
         if let Some(host) = self.host
             && !host.services.user.is_null()
         {
-            ops.host_set_active(host.activate, host.services.user, 0)?;
+            crate::host_set_active(host.activate, host.services.user, 0)?;
         }
         self.active = false;
         Ok(())
     }
 
-    fn release_hooks(&self, ops: &Ops) -> bool {
-        let rendering = render_hooks::stop(ops);
-        let created = creation::stop(ops);
+    fn release_hooks(&self) -> bool {
+        let rendering = render_hooks::stop();
+        let created = creation::stop();
         // Keep the CPU owner until its native Swap has closed every render lease.
         if !rendering || !created || self.busy() {
             return false;
         }
-        cpu_events::stop(ops)
+        cpu_events::stop()
     }
 
     // The Runtime's scoped D3D11 host for this process, with this adapter's facts.
     fn create_host(
-        ops: &Ops,
         runtime: *mut c_void,
         create: Create,
         activate: Activate,
@@ -170,9 +168,8 @@ impl Session {
         // Implemented producer declarations for cold admission tests, not acceptance.
         setup.capabilities = RSF_D3D11_HOST_CAP_FG_INPUTS | RSF_D3D11_HOST_CAP_INPUT_TIMELINE;
         let mut bound = *host;
-        let result = ops
-            .host_create(create, &setup, &mut bound)
-            .map_err(|_| RSF_ERROR_NOT_READY)?;
+        let result =
+            crate::host_create(create, &setup, &mut bound).map_err(|_| RSF_ERROR_NOT_READY)?;
         if result != RSF_OK {
             return Err(result);
         }
@@ -183,46 +180,42 @@ impl Session {
         })
     }
 
-    fn prepare(&mut self, ops: &Ops, host: &rsf_game_host_services) -> Result<rsf_result, Threw> {
+    fn prepare(&mut self, host: &rsf_game_host_services) -> Result<rsf_result, Threw> {
         if self.prepared || self.busy() {
             return Ok(RSF_ERROR_BUSY);
         }
         let Some(build) = creation::admit_build() else {
             return self.refuse(
-                ops,
                 host,
                 c"Fallout4 cold creation refused: executable identity mismatch.",
             );
         };
         if !creation::preflight() {
             return self.refuse(
-                ops,
                 host,
                 c"Fallout4 cold creation refused: expected native bytes or cold owner unavailable.",
             );
         }
-        if let Some(refusal) = dpi::prepare(ops, host)? {
+        if let Some(refusal) = dpi::prepare(host)? {
             self.reason = refusal;
-            ops.log_host(host, refusal)?;
+            crate::log_host(host, refusal)?;
             return Ok(RSF_ERROR_NATIVE_REFUSED);
         }
         if !render_hooks::verify_with_inputs(&build) {
             return self.refuse(
-                ops,
                 host,
                 c"Fallout4 render preparation refused: native call, TAA, resource, camera or depth-domain guard mismatch.",
             );
         }
-        if !ops.initialize_hooks() {
+        if !crate::initialize_hooks() {
             return self.refuse(
-                ops,
                 host,
                 c"Fallout4 cold creation refused: native hook initialization failed.",
             );
         }
         let adapter = prepare as unsafe extern "C" fn(_) -> _;
         if !pin(adapter as *const c_void) {
-            return self.refuse(ops, host, c"Fallout4 native hook lifetime pin refused.");
+            return self.refuse(host, c"Fallout4 native hook lifetime pin refused.");
         }
         let runtime = unsafe { GetModuleHandleW(w!("ReScaleFrame.Runtime.dll")) };
         // SAFETY: the process-lived Runtime exports these signatures in d3d11_host.h.
@@ -239,37 +232,33 @@ impl Session {
         {
             if !same_upstream_identity(&bound.upstream, host) {
                 return self.refuse(
-                    ops,
                     host,
                     c"Fallout4 process-lived creation host requires the original session.",
                 );
             }
             bound
         } else {
-            match Self::create_host(ops, runtime, create, activate, host) {
+            match Self::create_host(runtime, create, activate, host) {
                 Ok(bound) => bound,
                 Err(result) => return Ok(result),
             }
         };
         self.host = Some(bound);
         let services = bound.services;
-        if !creation::prepare(ops, &services, &build) {
+        if !creation::prepare(&services, &build) {
             return self.refuse(
-                ops,
                 host,
                 c"Fallout4 cold creation refused: native bytes, owner, Steam forwarding or scoped services unavailable.",
             );
         }
-        if !render_hooks::prepare(ops, &services, &build) {
+        if !render_hooks::prepare(&services, &build) {
             return self.refuse(
-                ops,
                 host,
                 c"Fallout4 render preparation refused: native guards, synchronous services or hook creation unavailable.",
             );
         }
-        if !cpu_events::prepare(ops, &services, &build) {
+        if !cpu_events::prepare(&services, &build) {
             return self.refuse(
-                ops,
                 host,
                 c"Fallout4 CPU preparation refused: guarded Swap/input callbacks or source services unavailable.",
             );
@@ -279,7 +268,7 @@ impl Session {
         Ok(RSF_OK)
     }
 
-    fn start(&mut self, ops: &Ops) -> Result<rsf_result, Threw> {
+    fn start(&mut self) -> Result<rsf_result, Threw> {
         if !self.prepared {
             return Ok(RSF_ERROR_NOT_READY);
         }
@@ -289,25 +278,25 @@ impl Session {
         let Some(host) = self.host else {
             return Ok(RSF_ERROR_NOT_READY);
         };
-        let failed = if !cpu_events::start(ops) {
+        let failed = if !cpu_events::start() {
             Some(c"Fallout4 start refused: CPU source/input guards or hooks.")
-        } else if !render_hooks::start(ops) {
+        } else if !render_hooks::start() {
             Some(c"Fallout4 start refused: render/TAA guards or hooks.")
-        } else if !creation::start(ops) {
+        } else if !creation::start() {
             Some(c"Fallout4 start refused: cold owner, creation call/thunk or hook.")
         } else {
             None
         };
         if let Some(failed) = failed {
-            self.suspend(ops)?;
-            let _ = self.release_hooks(ops);
+            self.suspend()?;
+            let _ = self.release_hooks();
             self.prepared = false;
-            return self.refuse(ops, &host.upstream, failed);
+            return self.refuse(&host.upstream, failed);
         }
-        let result = ops.host_set_active(host.activate, host.services.user, 1)?;
+        let result = crate::host_set_active(host.activate, host.services.user, 1)?;
         if result != RSF_OK {
-            self.suspend(ops)?;
-            let _ = self.release_hooks(ops);
+            self.suspend()?;
+            let _ = self.release_hooks();
             self.prepared = false;
             return Ok(result);
         }
@@ -315,14 +304,14 @@ impl Session {
         Ok(RSF_OK)
     }
 
-    fn quiesce(&mut self, ops: &Ops) -> Result<rsf_result, Threw> {
-        self.suspend(ops)?;
+    fn quiesce(&mut self) -> Result<rsf_result, Threw> {
+        self.suspend()?;
         Ok(if self.busy() { RSF_ERROR_BUSY } else { RSF_OK })
     }
 
-    fn stop(&mut self, ops: &Ops) -> Result<rsf_result, Threw> {
-        self.suspend(ops)?;
-        if !self.release_hooks(ops) {
+    fn stop(&mut self) -> Result<rsf_result, Threw> {
+        self.suspend()?;
+        if !self.release_hooks() {
             return Ok(RSF_ERROR_BUSY);
         }
         // Steam's immutable relays and MinHook trampolines remain process-lived.
@@ -331,12 +320,8 @@ impl Session {
     }
 }
 
-fn run(entry: impl FnOnce(&mut Session, &Ops) -> Result<rsf_result, Threw>) -> rsf_result {
-    let Some(ops) = ops() else {
-        return RSF_ERROR_NOT_READY;
-    };
-    let mut session = session();
-    entry(&mut session, ops).unwrap_or(RSF_ERROR_NOT_READY)
+fn run(entry: impl FnOnce(&mut Session) -> Result<rsf_result, Threw>) -> rsf_result {
+    entry(&mut session()).unwrap_or(RSF_ERROR_NOT_READY)
 }
 
 pub(crate) unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> rsf_result {
@@ -353,7 +338,7 @@ pub(crate) unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> r
     if host.session_id == 0 {
         return RSF_ERROR_INVALID_ARGUMENT;
     }
-    run(|session, ops| session.prepare(ops, &host))
+    run(|session| session.prepare(&host))
 }
 
 pub(crate) unsafe extern "C" fn start(args: *const rsf_game_start_args) -> rsf_result {

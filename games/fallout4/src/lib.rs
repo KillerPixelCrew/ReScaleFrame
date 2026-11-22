@@ -64,7 +64,6 @@ use rsf_game_sys::{
 use std::ffi::{CStr, CString, c_void};
 use std::mem::MaybeUninit;
 use std::ptr::null_mut;
-use std::sync::OnceLock;
 use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExW,
@@ -72,12 +71,10 @@ use windows_sys::Win32::System::LibraryLoader::{
 };
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
-const RSF_OK: rsf_result = 0;
-const RSF_ERROR_INVALID_ARGUMENT: rsf_result = -1;
-const RSF_ERROR_ABI_MISMATCH: rsf_result = -2;
-const RSF_ERROR_NOT_READY: rsf_result = -3;
-const RSF_ERROR_BUSY: rsf_result = -4;
-const RSF_ERROR_NATIVE_REFUSED: rsf_result = -5;
+use rsf_game_sys::{
+    RSF_ERROR_ABI_MISMATCH, RSF_ERROR_BUSY, RSF_ERROR_INVALID_ARGUMENT, RSF_ERROR_NATIVE_REFUSED,
+    RSF_ERROR_NOT_READY, RSF_OK,
+};
 use rsf_game_sys::{RSF_GAME_RECOGNIZED as RECOGNIZED, RSF_GAME_UNKNOWN as UNKNOWN};
 const AMD64: u16 = 0x8664;
 
@@ -91,9 +88,6 @@ const PENDING: &CStr = c"Guarded native/reduced SR callbacks; game quality, FG a
 
 /// A native leaf threw; the lifecycle entry reports RSF_ERROR_NOT_READY as the former native catch did.
 pub(crate) struct Threw;
-
-/// Operations provided by the linked native guards and MinHook.
-pub(crate) struct Ops;
 
 // MinHook.h, MH_STATUS. The native CMake target links the same MinHook instance for all seams.
 const MH_OK: i32 = 0;
@@ -141,116 +135,87 @@ unsafe extern "C" {
     ) -> bool;
 }
 
-static OPS: OnceLock<Ops> = OnceLock::new();
-
-pub(crate) fn ops() -> Option<&'static Ops> {
-    OPS.get()
-}
-
 fn completed(returned: bool) -> Result<(), Threw> {
     if returned { Ok(()) } else { Err(Threw) }
 }
 
-impl Ops {
-    pub(crate) fn log(
-        &self,
-        log: rsf_game_log_fn,
-        user: *mut c_void,
-        message: &CStr,
-    ) -> Result<(), Threw> {
-        completed(unsafe { rsf_fallout4_native_log(log, user, message.as_ptr()) })
-    }
+// The linked native guards and MinHook.
+pub(crate) fn log(log: rsf_game_log_fn, user: *mut c_void, message: &CStr) -> Result<(), Threw> {
+    completed(unsafe { rsf_fallout4_native_log(log, user, message.as_ptr()) })
+}
 
-    pub(crate) fn log_host(
-        &self,
-        host: &rsf_game_host_services,
-        message: &CStr,
-    ) -> Result<(), Threw> {
-        self.log(host.log, host.user, message)
-    }
+pub(crate) fn log_host(host: &rsf_game_host_services, message: &CStr) -> Result<(), Threw> {
+    log(host.log, host.user, message)
+}
 
-    pub(crate) fn initialize_hooks(&self) -> bool {
-        matches!(
-            unsafe { MH_Initialize() },
-            MH_OK | MH_ERROR_ALREADY_INITIALIZED
-        )
-    }
+pub(crate) fn initialize_hooks() -> bool {
+    matches!(
+        unsafe { MH_Initialize() },
+        MH_OK | MH_ERROR_ALREADY_INITIALIZED
+    )
+}
 
-    pub(crate) fn enable_hook(&self, target: usize) -> bool {
-        unsafe { MH_EnableHook(target as *mut c_void) == MH_OK }
-    }
+pub(crate) fn enable_hook(target: usize) -> bool {
+    unsafe { MH_EnableHook(target as *mut c_void) == MH_OK }
+}
 
-    pub(crate) fn disable_hook(&self, target: usize) -> bool {
-        matches!(
-            unsafe { MH_DisableHook(target as *mut c_void) },
-            MH_OK | MH_ERROR_DISABLED
-        )
-    }
+pub(crate) fn disable_hook(target: usize) -> bool {
+    matches!(
+        unsafe { MH_DisableHook(target as *mut c_void) },
+        MH_OK | MH_ERROR_DISABLED
+    )
+}
 
-    pub(crate) fn host_create(
-        &self,
-        create: session::Create,
-        setup: &rsf_d3d11_host_setup,
-        services: &mut rsf_game_host_services,
-    ) -> Result<rsf_result, Threw> {
-        let mut result = RSF_ERROR_NOT_READY;
-        completed(unsafe {
-            rsf_fallout4_native_host_create(create, setup, services, &mut result)
-        })?;
-        Ok(result)
-    }
+pub(crate) fn host_create(
+    create: session::Create,
+    setup: &rsf_d3d11_host_setup,
+    services: &mut rsf_game_host_services,
+) -> Result<rsf_result, Threw> {
+    let mut result = RSF_ERROR_NOT_READY;
+    completed(unsafe { rsf_fallout4_native_host_create(create, setup, services, &mut result) })?;
+    Ok(result)
+}
 
-    pub(crate) fn host_set_active(
-        &self,
-        activate: session::Activate,
-        user: *mut c_void,
-        active: u32,
-    ) -> Result<rsf_result, Threw> {
-        let mut result = RSF_ERROR_NOT_READY;
-        completed(unsafe {
-            rsf_fallout4_native_host_set_active(activate, user, active, &mut result)
-        })?;
-        Ok(result)
-    }
+pub(crate) fn host_set_active(
+    activate: session::Activate,
+    user: *mut c_void,
+    active: u32,
+) -> Result<rsf_result, Threw> {
+    let mut result = RSF_ERROR_NOT_READY;
+    completed(unsafe { rsf_fallout4_native_host_set_active(activate, user, active, &mut result) })?;
+    Ok(result)
+}
 
-    pub(crate) fn creation_begin(
-        &self,
-        begin: creation::Begin,
-        user: *mut c_void,
-        scope: &mut rsf_d3d11_creation_scope,
-    ) -> Result<rsf_result, Threw> {
-        let mut result = RSF_ERROR_NOT_READY;
-        completed(unsafe { rsf_fallout4_native_creation_begin(begin, user, scope, &mut result) })?;
-        Ok(result)
-    }
+pub(crate) fn creation_begin(
+    begin: creation::Begin,
+    user: *mut c_void,
+    scope: &mut rsf_d3d11_creation_scope,
+) -> Result<rsf_result, Threw> {
+    let mut result = RSF_ERROR_NOT_READY;
+    completed(unsafe { rsf_fallout4_native_creation_begin(begin, user, scope, &mut result) })?;
+    Ok(result)
+}
 
-    pub(crate) fn creation_end(
-        &self,
-        end: creation::End,
-        user: *mut c_void,
-        scope: &rsf_d3d11_creation_scope,
-        outputs: Option<&rsf_d3d11_native_chain>,
-    ) -> Result<rsf_result, Threw> {
-        let outputs = outputs.map_or(std::ptr::null(), std::ptr::from_ref);
-        let mut result = RSF_ERROR_NOT_READY;
-        completed(unsafe {
-            rsf_fallout4_native_creation_end(end, user, scope, outputs, &mut result)
-        })?;
-        Ok(result)
-    }
+pub(crate) fn creation_end(
+    end: creation::End,
+    user: *mut c_void,
+    scope: &rsf_d3d11_creation_scope,
+    outputs: Option<&rsf_d3d11_native_chain>,
+) -> Result<rsf_result, Threw> {
+    let outputs = outputs.map_or(std::ptr::null(), std::ptr::from_ref);
+    let mut result = RSF_ERROR_NOT_READY;
+    completed(unsafe { rsf_fallout4_native_creation_end(end, user, scope, outputs, &mut result) })?;
+    Ok(result)
+}
 
-    pub(crate) fn bind_presentation(
-        &self,
-        bind: creation::Bind,
-        user: *mut c_void,
-        binding: &rsf_d3d11_presentation_binding,
-    ) -> Result<rsf_result, Threw> {
-        let mut result = RSF_ERROR_NOT_READY;
-        completed(unsafe {
-            rsf_fallout4_native_bind_presentation(bind, user, binding, &mut result)
-        })?;
-        Ok(result)
-    }
+pub(crate) fn bind_presentation(
+    bind: creation::Bind,
+    user: *mut c_void,
+    binding: &rsf_d3d11_presentation_binding,
+) -> Result<rsf_result, Threw> {
+    let mut result = RSF_ERROR_NOT_READY;
+    completed(unsafe { rsf_fallout4_native_bind_presentation(bind, user, binding, &mut result) })?;
+    Ok(result)
 }
 
 /// Plain data that every bit pattern of its size represents.
@@ -366,7 +331,6 @@ unsafe extern "C" fn rsf_get_game_plugin_api(
     if requested_abi != RSF_GAME_ABI_VERSION {
         return RSF_ERROR_ABI_MISMATCH;
     }
-    let _ = OPS.get_or_init(|| Ops);
     let api = rsf_game_plugin_api {
         struct_size: size_of::<rsf_game_plugin_api>() as u32,
         abi_version: RSF_GAME_ABI_VERSION,

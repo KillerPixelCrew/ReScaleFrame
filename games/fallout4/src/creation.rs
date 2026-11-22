@@ -16,9 +16,9 @@ use crate::sys::{
     rsf_d3d11_presentation_binding, rsf_fallout4_create_call,
 };
 use crate::{
-    EXECUTABLE, EXECUTABLE_SHA256, MH_CreateHook, MH_OK, Ops, Plain, RSF_ERROR_NOT_READY, RSF_OK,
+    EXECUTABLE, EXECUTABLE_SHA256, MH_CreateHook, MH_OK, Plain, RSF_ERROR_NOT_READY, RSF_OK,
 };
-use crate::{image, message, ops, read};
+use crate::{image, message, read};
 use rsf_game_sys::rsf_game_host_services;
 use rsf_game_sys::win32::typed_export;
 use std::ffi::c_void;
@@ -199,7 +199,7 @@ pub(crate) fn busy() -> bool {
 
 /// Resolves the Runtime creation exports, prepares Steam's chain forwarding and creates the
 /// disabled creation hook.
-pub(crate) fn prepare(ops: &Ops, services: &rsf_game_host_services, _build: &ExactBuild) -> bool {
+pub(crate) fn prepare(services: &rsf_game_host_services, _build: &ExactBuild) -> bool {
     if !preflight() {
         return false;
     }
@@ -231,18 +231,18 @@ pub(crate) fn prepare(ops: &Ops, services: &rsf_game_host_services, _build: &Exa
         bind,
     };
     *SCOPED.lock().unwrap_or_else(PoisonError::into_inner) = Some(scoped);
-    let _ = ops.log_host(
+    let _ = crate::log_host(
         services,
         c"Fallout4 AE cold creation prepared at thunk22C4CD9, caller1824D40; native arguments and outer wrapper retained; scene admission remains separate.",
     );
     true
 }
 
-pub(crate) fn start(ops: &Ops) -> bool {
+pub(crate) fn start() -> bool {
     if !hook_created() || !expected_creation() || !cold_owner() {
         return false;
     }
-    if !ops.enable_hook(hook_address()) {
+    if !crate::enable_hook(hook_address()) {
         return false;
     }
     ENABLED.store(true, Ordering::Release);
@@ -253,9 +253,9 @@ pub(crate) fn quiesce() {
     ENABLED.store(false, Ordering::Release);
 }
 
-pub(crate) fn stop(ops: &Ops) -> bool {
+pub(crate) fn stop() -> bool {
     quiesce();
-    let disabled = !hook_created() || ops.disable_hook(hook_address());
+    let disabled = !hook_created() || crate::disable_hook(hook_address());
     disabled && !busy()
 }
 
@@ -304,7 +304,6 @@ fn owner_call(
 // Closes an open scope after the complete native call. A successful matched close binds the
 // final outer swapchain for presentation. The thread's last error is preserved.
 fn close(
-    ops: &Ops,
     scoped: &Scoped,
     scope: &rsf_d3d11_creation_scope,
     outputs: Option<&rsf_d3d11_native_chain>,
@@ -314,7 +313,7 @@ fn close(
     let user = scoped.host.user;
     let mut admitted = RSF_ERROR_NOT_READY;
     let mut bound = RSF_ERROR_NOT_READY;
-    if let Ok(result) = ops.creation_end(scoped.end, user, scope, outputs) {
+    if let Ok(result) = crate::creation_end(scoped.end, user, scope, outputs) {
         admitted = result;
         if admitted == RSF_OK
             && let Some(swapchain) = outputs
@@ -327,7 +326,7 @@ fn close(
                 // The caller-owned chain slot after the Runtime's scope end.
                 swapchain: swapchain as *mut c_void,
             };
-            if let Ok(result) = ops.bind_presentation(scoped.bind, user, &binding) {
+            if let Ok(result) = crate::bind_presentation(scoped.bind, user, &binding) {
                 bound = result;
             }
         }
@@ -336,11 +335,11 @@ fn close(
         "Fallout4 cold creation native_HRESULT=0x{:08x} scope_end={admitted} binding={bound}; outer outputs retained, no scene/input producers",
         native_result as u32
     ));
-    let _ = ops.log_host(&scoped.host, &text);
+    let _ = crate::log_host(&scoped.host, &text);
     unsafe { SetLastError(last_error) };
 }
 
-fn observe(ops: &Ops, caller: usize, call: &rsf_fallout4_create_call) -> i32 {
+fn observe(caller: usize, call: &rsf_fallout4_create_call) -> i32 {
     let _entry = Entry::new();
     let entry_error = unsafe { GetLastError() };
     let scoped = *SCOPED.lock().unwrap_or_else(PoisonError::into_inner);
@@ -355,7 +354,7 @@ fn observe(ops: &Ops, caller: usize, call: &rsf_fallout4_create_call) -> i32 {
         && let Some(scoped) = scoped.as_ref()
     {
         scope.window = window as *mut c_void;
-        let begun = ops.creation_begin(scoped.begin, scoped.host.user, &mut scope);
+        let begun = crate::creation_begin(scoped.begin, scoped.host.user, &mut scope);
         if begun.is_ok_and(|result| result == RSF_OK) {
             open = Some(scoped);
         }
@@ -390,7 +389,7 @@ fn observe(ops: &Ops, caller: usize, call: &rsf_fallout4_create_call) -> i32 {
             }
         }
         unsafe { SetLastError(native_error) };
-        close(ops, scoped, &scope, outputs.as_ref(), result);
+        close(scoped, &scope, outputs.as_ref(), result);
     }
     unsafe { SetLastError(native_error) };
     result
@@ -445,9 +444,6 @@ unsafe extern "system" fn observe_create(
     feature_level: *mut i32,
     immediate_context: *mut *mut c_void,
 ) -> i32 {
-    let Some(ops) = ops() else {
-        return E_FAIL;
-    };
     let caller =
         (flags_and_caller_high & 0xffff_ffff_0000_0000) | (driver_type_and_caller_low >> 32);
     let call = rsf_fallout4_create_call {
@@ -464,7 +460,7 @@ unsafe extern "system" fn observe_create(
         feature_level,
         immediate_context,
     };
-    observe(ops, caller as usize, &call)
+    observe(caller as usize, &call)
 }
 
 pub(crate) unsafe extern "C" fn rsf_fallout4_accept_window(

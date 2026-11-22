@@ -26,9 +26,7 @@ use crate::sys::{
     RSF_FALLOUT4_CPU_HOOK_WORKER_JOIN, RSF_FALLOUT4_CPU_HOOK_WRAPPER, RSF_FALLOUT4_CPU_SCOPE_WORDS,
     rsf_fallout4_cpu_identity, rsf_fallout4_cpu_scope,
 };
-use crate::{
-    MH_CreateHook, MH_OK, MH_RemoveHook, Ops, Plain, creation, image, message, ops, pin, read,
-};
+use crate::{MH_CreateHook, MH_OK, MH_RemoveHook, Plain, creation, image, message, pin, read};
 use handoff::{
     CpuIdentity, Phase, WorkerCycle, WorkerTicket, active_join_matches, invalidates_render_source,
 };
@@ -209,10 +207,7 @@ fn predicate_bits(terms: &[bool]) -> u32 {
 }
 
 fn log(host: &rsf_game_host_services, text: String) {
-    if let Some(ops) = ops() {
-        let text = message(text);
-        let _ = ops.log_host(host, &text);
-    }
+    let _ = crate::log_host(host, &message(text));
 }
 
 /// A pointer as the previous native MSVC %p rendering.
@@ -3284,11 +3279,7 @@ pub(crate) fn busy() -> bool {
 }
 
 /// Checks the build, the guards and the services, then creates every detour disabled.
-pub(crate) fn prepare(
-    ops: &Ops,
-    services: &rsf_game_host_services,
-    _build: &creation::ExactBuild,
-) -> bool {
+pub(crate) fn prepare(services: &rsf_game_host_services, _build: &creation::ExactBuild) -> bool {
     if services.struct_size < size_of::<rsf_game_host_services>() as u32
         || services.abi_version != RSF_GAME_ABI_VERSION
         || services.session_id == 0
@@ -3315,13 +3306,13 @@ pub(crate) fn prepare(
         if create_hook(hook, hook_target(hook)) {
             continue;
         }
-        let _ = stop(ops);
+        let _ = stop();
         return false;
     }
     true
 }
 
-pub(crate) fn start(ops: &Ops) -> bool {
+pub(crate) fn start() -> bool {
     if !native::guards() || !native::notification_guards() {
         return false;
     }
@@ -3330,12 +3321,12 @@ pub(crate) fn start(ops: &Ops) -> bool {
     }
     ENABLED.store(true, Release);
     for hook in HOOKS {
-        if ops.enable_hook(hook_target(hook) as usize) {
+        if crate::enable_hook(hook_target(hook) as usize) {
             continue;
         }
         quiesce();
         for installed in HOOKS {
-            let _ = ops.disable_hook(hook_target(installed) as usize);
+            let _ = crate::disable_hook(hook_target(installed) as usize);
         }
         return false;
     }
@@ -3345,7 +3336,7 @@ pub(crate) fn start(ops: &Ops) -> bool {
     quiesce();
     let _ = retire_peek();
     for hook in HOOKS {
-        let _ = ops.disable_hook(hook_target(hook) as usize);
+        let _ = crate::disable_hook(hook_target(hook) as usize);
     }
     false
 }
@@ -3357,7 +3348,7 @@ pub(crate) fn quiesce() {
 
 /// Restores the import cell, drains every obligation and removes every detour. False leaves the
 /// remaining hooks for a later stop.
-pub(crate) fn stop(ops: &Ops) -> bool {
+pub(crate) fn stop() -> bool {
     quiesce();
     if !retire_peek() || busy() {
         return false;
@@ -3371,7 +3362,7 @@ pub(crate) fn stop(ops: &Ops) -> bool {
             continue;
         }
         let target = hook_target(hook);
-        if !ops.disable_hook(target as usize) || busy() || !remove_hook(hook, target) {
+        if !crate::disable_hook(target as usize) || busy() || !remove_hook(hook, target) {
             return false;
         }
     }

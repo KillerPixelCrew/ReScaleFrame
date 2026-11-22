@@ -7,7 +7,7 @@
 use crate::build_layout::{
     RENDERER_DEVICE as DEVICE, RENDERER_POINTER as OWNER_RVA, RENDERER_WINDOW as WINDOW,
 };
-use crate::{Ops, Threw, image, message, read};
+use crate::{Threw, image, message, read};
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::{CStr, c_void};
 use windows_sys::Win32::Foundation::{
@@ -89,17 +89,14 @@ fn owner() -> Option<(usize, usize)> {
 
 /// Requests and verifies startup awareness. Returns the refusal reason, if any. The thread's
 /// last error is preserved.
-pub(crate) fn prepare(
-    ops: &Ops,
-    host: &rsf_game_host_services,
-) -> Result<Option<&'static CStr>, Threw> {
+pub(crate) fn prepare(host: &rsf_game_host_services) -> Result<Option<&'static CStr>, Threw> {
     let saved_error = unsafe { GetLastError() };
-    let result = request(ops, host);
+    let result = request(host);
     unsafe { SetLastError(saved_error) };
     result
 }
 
-fn request(ops: &Ops, host: &rsf_game_host_services) -> Result<Option<&'static CStr>, Threw> {
+fn request(host: &rsf_game_host_services) -> Result<Option<&'static CStr>, Threw> {
     let owner = owner();
     let owner_read = owner.is_some();
     let (device, window) = owner.unwrap_or((0, 0));
@@ -165,7 +162,7 @@ fn request(ops: &Ops, host: &rsf_game_host_services) -> Result<Option<&'static C
             process_after as usize,
             thread_after as usize,
         ));
-        ops.log_host(host, &text)?;
+        crate::log_host(host, &text)?;
     }
     Ok(if !cold {
         Some(c"Fallout4 DPI startup refused: native owner unreadable or window/device already created.")
