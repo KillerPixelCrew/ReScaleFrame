@@ -2585,7 +2585,7 @@ Port the cold creation routes, session, event proofs and compatibility handoff.
 - [x] [games/skyrim-se/src/observer_platform.h](games/skyrim-se/src/observer_platform.h)
 - [ ] [games/skyrim-se/src/plugin.cpp](games/skyrim-se/src/plugin.cpp)
 - [x] [games/skyrim-se/src/session_platform.h](games/skyrim-se/src/session_platform.h)
-- [ ] [games/skyrim-se/src/guarded_read.cpp](games/skyrim-se/src/guarded_read.cpp) (native SEH read and write guards)
+- [x] [games/skyrim-se/src/guarded_read.cpp](games/skyrim-se/src/guarded_read.cpp) (native SEH read and write guards)
 
 **Fixtures (1)**
 
