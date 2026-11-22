@@ -16,15 +16,74 @@ type Info = rsf_srvk_fsr4_provider_info;
 const FIRST_RESERVED_QUEUE_FAMILY: u32 = 0xffff_fffd;
 const FRAME_PREFIX: usize = offset_of!(Frame, bias_current_color);
 
-#[repr(C)]
-struct Provider {
-    create: unsafe extern "C" fn(*const Setup, *const Handoff, *mut Handle) -> i32,
-    plan: unsafe extern "C" fn(*const c_void, *mut u32, *mut u32) -> i32,
-    evaluate: unsafe extern "C" fn(Handle, Handle, *const Frame, *mut Handle) -> i32,
-    destroy: unsafe extern "C" fn(Handle) -> i32,
-    retire: unsafe extern "C" fn(Handle, Handle),
-    submitted: unsafe extern "C" fn(Handle, Handle) -> i32,
-    info: unsafe extern "C" fn(*const c_void, *mut Info) -> i32,
+/// The FSR4 owner's calls after admission: `vulkan_fsr4_sr::PROVIDER` in a build with the Vulkan
+/// FSR4 provider, a stub in the tests below.
+pub(crate) struct Provider {
+    pub(crate) create: unsafe fn(*const Setup, *const Handoff, *mut Handle) -> i32,
+    pub(crate) plan: unsafe fn(*const c_void, *mut u32, *mut u32) -> i32,
+    pub(crate) evaluate: unsafe fn(Handle, Handle, *const Frame, *mut Handle) -> i32,
+    pub(crate) destroy: unsafe fn(Handle) -> i32,
+    pub(crate) retire: unsafe fn(Handle, Handle),
+    pub(crate) submitted: unsafe fn(Handle, Handle) -> i32,
+    pub(crate) info: unsafe fn(*const c_void, *mut Info) -> i32,
+}
+
+/// The provider of this build; null reports NOT_COMPILED (CMake sets `fsr4-vk` with the
+/// FidelityFX DX12 SR runtime).
+fn provider() -> *const Provider {
+    if cfg!(feature = "fsr4-vk") {
+        &crate::vulkan_fsr4_sr::PROVIDER
+    } else {
+        ptr::null()
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_srvk_fsr4_create(
+    setup: *const Setup,
+    handoff: *const Handoff,
+    owner: *mut Handle,
+) -> i32 {
+    unsafe { rsf_core_srvk_fsr4_create(provider(), setup, handoff, owner) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_srvk_fsr4_plan(
+    owner: *const c_void,
+    width: *mut u32,
+    height: *mut u32,
+) -> i32 {
+    unsafe { rsf_core_srvk_fsr4_plan(provider(), owner, width, height) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_srvk_fsr4_evaluate(
+    owner: Handle,
+    commands: Handle,
+    frame: *const Frame,
+    continuation: *mut Handle,
+) -> i32 {
+    unsafe { rsf_core_srvk_fsr4_evaluate(provider(), owner, commands, frame, continuation) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_srvk_fsr4_destroy(owner: Handle) -> i32 {
+    unsafe { rsf_core_srvk_fsr4_destroy(provider(), owner) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_srvk_fsr4_retire_commands(owner: Handle, commands: Handle) {
+    unsafe { rsf_core_srvk_fsr4_retire_commands(provider(), owner, commands) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_srvk_fsr4_submitted(owner: Handle, commands: Handle) -> i32 {
+    unsafe { rsf_core_srvk_fsr4_submitted(provider(), owner, commands) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_srvk_fsr4_info(owner: *const c_void, out: *mut Info) -> i32 {
+    unsafe { rsf_core_srvk_fsr4_info(provider(), owner, out) }
 }
 
 fn public_result(result: i32) -> i32 {
@@ -85,8 +144,7 @@ pub(super) fn private_setup_result(error: i32) -> i32 {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_fsr4_create(
+unsafe fn rsf_core_srvk_fsr4_create(
     provider: *const Provider,
     setup: *const Setup,
     handoff: *const Handoff,
@@ -106,8 +164,7 @@ unsafe extern "C" fn rsf_core_srvk_fsr4_create(
     public_result(unsafe { (provider.create)(&setup, &handoff, owner) })
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_fsr4_plan(
+unsafe fn rsf_core_srvk_fsr4_plan(
     provider: *const Provider,
     owner: *const c_void,
     width: *mut u32,
@@ -154,8 +211,7 @@ pub(super) unsafe fn normalize_frame(frame: *const Frame) -> Result<Frame, i32> 
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_fsr4_evaluate(
+unsafe fn rsf_core_srvk_fsr4_evaluate(
     provider: *const Provider,
     owner: Handle,
     commands: Handle,
@@ -197,8 +253,7 @@ unsafe extern "C" fn rsf_core_srvk_fsr4_evaluate(
     public_result(unsafe { (provider.evaluate)(owner, commands, &frame, continuation) })
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_fsr4_destroy(provider: *const Provider, owner: Handle) -> i32 {
+unsafe fn rsf_core_srvk_fsr4_destroy(provider: *const Provider, owner: Handle) -> i32 {
     if owner.is_null() {
         return 0;
     }
@@ -208,8 +263,7 @@ unsafe extern "C" fn rsf_core_srvk_fsr4_destroy(provider: *const Provider, owner
     public_result(unsafe { (provider.destroy)(owner) })
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_fsr4_retire_commands(
+unsafe fn rsf_core_srvk_fsr4_retire_commands(
     provider: *const Provider,
     owner: Handle,
     commands: Handle,
@@ -219,8 +273,7 @@ unsafe extern "C" fn rsf_core_srvk_fsr4_retire_commands(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_fsr4_submitted(
+unsafe fn rsf_core_srvk_fsr4_submitted(
     provider: *const Provider,
     owner: Handle,
     commands: Handle,
@@ -234,8 +287,7 @@ unsafe extern "C" fn rsf_core_srvk_fsr4_submitted(
     public_result(unsafe { (provider.submitted)(owner, commands) })
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_fsr4_info(
+unsafe fn rsf_core_srvk_fsr4_info(
     provider: *const Provider,
     owner: *const c_void,
     out: *mut Info,
@@ -584,11 +636,7 @@ mod tests {
         }
     }
 
-    unsafe extern "C" fn allocate(
-        setup: *const Setup,
-        handoff: *const Handoff,
-        out: *mut Handle,
-    ) -> i32 {
+    unsafe fn allocate(setup: *const Setup, handoff: *const Handoff, out: *mut Handle) -> i32 {
         let (setup, handoff) = unsafe { (&*setup, &*handoff) };
         assert_eq!((setup.output_width, handoff.timeline_enabled), (640, 1));
         let result = if handoff.abi_version == RSF_SRVK_SPLIT_TRACKED_ABI_VERSION {
@@ -610,7 +658,7 @@ mod tests {
         info,
     };
 
-    unsafe extern "C" fn plan(_: *const c_void, w: *mut u32, h: *mut u32) -> i32 {
+    unsafe fn plan(_: *const c_void, w: *mut u32, h: *mut u32) -> i32 {
         unsafe {
             w.write(320);
             h.write(180);
@@ -618,18 +666,13 @@ mod tests {
         0
     }
 
-    unsafe extern "C" fn evaluate(
-        owner: Handle,
-        _: Handle,
-        frame: *const Frame,
-        next: *mut Handle,
-    ) -> i32 {
+    unsafe fn evaluate(owner: Handle, _: Handle, frame: *const Frame, next: *mut Handle) -> i32 {
         assert_eq!(unsafe { (*frame).struct_size } as usize, size_of::<Frame>());
         unsafe { next.write(ptr::dangling_mut::<u16>().cast()) };
         unsafe { *owner.cast::<i32>() }
     }
 
-    unsafe extern "C" fn destroy(owner: Handle) -> i32 {
+    unsafe fn destroy(owner: Handle) -> i32 {
         let result = unsafe { *owner.cast::<i32>() };
         if result == 0 {
             unsafe { drop(Box::from_raw(owner.cast::<i32>())) };
@@ -637,13 +680,13 @@ mod tests {
         result
     }
 
-    unsafe extern "C" fn retire(_: Handle, _: Handle) {}
+    unsafe fn retire(_: Handle, _: Handle) {}
 
-    unsafe extern "C" fn submitted(owner: Handle, _: Handle) -> i32 {
+    unsafe fn submitted(owner: Handle, _: Handle) -> i32 {
         unsafe { *owner.cast::<i32>() }
     }
 
-    unsafe extern "C" fn info(owner: *const c_void, out: *mut Info) -> i32 {
+    unsafe fn info(owner: *const c_void, out: *mut Info) -> i32 {
         let result = unsafe { *owner.cast::<i32>() };
         if result == 0 {
             let out = unsafe { &mut *out };

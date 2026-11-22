@@ -1,6 +1,10 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
-#include "../runtime/orchestrator/src/native_sr_fsr4_vulkan.h"
+#include <rescaleframe/native_sr_split_vulkan.h>
+#include "../runtime/vulkan/fsr4/bridge_api.h"
+
+/* The bridge facts of a private FSR4 owner (vulkan_fsr4_sr.rs). */
+int32_t rsf_fsr4vk_info(const rsf_fsr4vk*, rsf_fsr4_bridge_info*);
 
 typedef struct rsf_fsr4sr_fixture_calls {
     int32_t (*create)(const rsf_srvk_setup*, const rsf_fsr4vk_handoff*, rsf_fsr4vk**);

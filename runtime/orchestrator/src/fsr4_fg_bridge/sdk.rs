@@ -346,7 +346,7 @@ mod tests {
         ptr::without_provenance_mut(value)
     }
 
-    unsafe extern "C" fn query(
+    unsafe extern "C-unwind" fn query(
         context: *mut ffxContext,
         input: *mut ffxQueryDescHeader,
     ) -> ffxReturnCode_t {

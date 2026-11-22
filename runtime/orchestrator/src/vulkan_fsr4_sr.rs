@@ -11,7 +11,7 @@ use crate::vulkan_sr::{
     GENERAL, R32_FLOAT, RG16_FLOAT, RGBA16_FLOAT, SAMPLED_USAGE, SHADER_READ, SHARPENING_VENDOR,
     STORAGE_USAGE, TRANSFER_DST, valid_frame_record, valid_image,
 };
-use crate::vulkan_sr_split::SplitLease;
+use crate::vulkan_sr_split::{Provider, SplitLease};
 use ash::vk;
 use rsf_game_sys::{RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_SR, RSF_FRAME_FLAG_RESET};
 use std::ffi::{CStr, c_char, c_void};
@@ -681,15 +681,21 @@ unsafe fn create(
     unsafe { create_admitted(ops, setup, handoff, output) }
 }
 
-/// For the split dispatcher after Rust has admitted copied setup and handoff records.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4vk_create_admitted(
-    setup: &Setup,
-    handoff: &Handoff,
-    output: *mut *mut Owner,
-) -> i32 {
-    unsafe { create_admitted(&NATIVE, *setup, *handoff, output) }
-}
+/// The split dispatcher's provider (vulkan_sr_split.rs), which has admitted and copied the setup
+/// and handoff records.
+pub(crate) static PROVIDER: Provider = Provider {
+    create: |setup, handoff, owner| unsafe {
+        create_admitted(&NATIVE, *setup, *handoff, owner.cast())
+    },
+    plan: |owner, width, height| unsafe { rsf_fsr4vk_plan(owner.cast(), width, height) },
+    evaluate: |owner, commands, frame, next| unsafe {
+        rsf_fsr4vk_evaluate(owner.cast(), commands, frame, next)
+    },
+    destroy: |owner| unsafe { rsf_fsr4vk_destroy(owner.cast()) },
+    retire: |owner, commands| unsafe { rsf_fsr4vk_retire_commands(owner.cast(), commands) },
+    submitted: |owner, commands| unsafe { rsf_fsr4vk_submitted(owner.cast(), commands) },
+    info: |owner, info| unsafe { public_info(owner.cast(), &mut *info) },
+};
 
 unsafe fn create_admitted(
     ops: &'static Platform,
@@ -748,8 +754,7 @@ unsafe fn create_admitted(
     0
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4vk_plan(
+unsafe fn rsf_fsr4vk_plan(
     owner: *const Owner,
     width: *mut u32,
     height: *mut u32,
@@ -767,13 +772,13 @@ unsafe extern "C" fn rsf_fsr4vk_plan(
     0
 }
 
+/// Called by the C contract test (tests/native_sr_fsr4_vulkan_main.c).
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fsr4vk_info(owner: *const Owner, info: *mut Info) -> i32 {
     unsafe { owner.as_ref() }.map_or(INVALID, |owner| owner.info(info))
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4vk_public_info(
+unsafe fn public_info(
     owner: *const Owner,
     public: &mut rsf_srvk_fsr4_provider_info,
 ) -> i32 {
@@ -795,8 +800,7 @@ unsafe extern "C" fn rsf_core_fsr4vk_public_info(
     result
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4vk_evaluate(
+unsafe fn rsf_fsr4vk_evaluate(
     owner: *mut Owner,
     commands: Handle,
     frame: *const Frame,
@@ -841,8 +845,7 @@ unsafe extern "C" fn rsf_fsr4vk_evaluate(
         .unwrap_or(0)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4vk_destroy(owner: *mut Owner) -> i32 {
+unsafe fn rsf_fsr4vk_destroy(owner: *mut Owner) -> i32 {
     let Some(owned) = (unsafe { owner.as_mut() }) else {
         return 0;
     };
@@ -853,15 +856,13 @@ unsafe extern "C" fn rsf_fsr4vk_destroy(owner: *mut Owner) -> i32 {
     0
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4vk_retire_commands(owner: *mut Owner, commands: Handle) {
+unsafe fn rsf_fsr4vk_retire_commands(owner: *mut Owner, commands: Handle) {
     if let Some(owner) = unsafe { owner.as_ref() } {
         unsafe { (owner.ops().retire.unwrap())(owner.graphics.handle, commands) };
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4vk_submitted(owner: *mut Owner, commands: Handle) -> i32 {
+unsafe fn rsf_fsr4vk_submitted(owner: *mut Owner, commands: Handle) -> i32 {
     if let Some(owner) = unsafe { owner.as_mut() }
         && owner.lease.submitted(commands)
     {
