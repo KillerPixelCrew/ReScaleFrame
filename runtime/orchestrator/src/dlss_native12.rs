@@ -8,6 +8,9 @@ use crate::com_ref::ComRef;
 use crate::gl_pipeline_abi::rsf_dlss_setup as Setup;
 use crate::render_abi::{RSF_DLSS_ABI_VERSION, rsf_sr_frame as Frame};
 use crate::sdk_module::{SdkModule, wide_path};
+use crate::streamline_sr::sdk::{
+    FEATURE_DLSS, PREFERENCE_FRAME_TAGGING, PREFERENCE_MANUAL_HOOKING, RENDER_API_D3D12,
+};
 use crate::streamline_sr::{
     Constants, Dimensions, Optimal, OptionPayload, Options, TagBatch, dimensions, dlss_mode,
 };
@@ -288,13 +291,13 @@ impl DeviceRegistration {
         let owned = matches!(registration.route, Route::Owned);
         if owned {
             let preferences = Preferences {
-                flags: (1 << 2) | (1 << 7),
+                flags: PREFERENCE_MANUAL_HOOKING | PREFERENCE_FRAME_TAGGING,
                 engine_version: setup.engine_version_utf8,
                 project_id: setup.project_id_utf8,
                 engine: crate::streamline_policy::engine_type(setup.engine),
                 application_id: setup.application_id,
-                render_api: 1,
-                feature: 0,
+                render_api: RENDER_API_D3D12,
+                feature: FEATURE_DLSS,
             };
             let result = unsafe { (platform.init)(native.as_ptr(), &preferences) };
             if result != OK {

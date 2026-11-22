@@ -2,6 +2,9 @@
 //! Streamline 2.14.1 records for the Direct3D SR callers. The record layouts are checked against the
 //! pinned SDK headers by `runtime/backends/dlss/src/dlss_streamline.cpp`; Rust builds them and calls
 //! the SDK entry points through typed function pointers.
+#[cfg(not(test))]
+mod layout_fixture;
+
 use super::records_abi::{
     rsf_sl_sdk_adapter as Adapter, rsf_sl_sdk_dlss_optimal as DlssOptimal,
     rsf_sl_sdk_dlss_options as DlssOptions, rsf_sl_sdk_requirements as Requirements,
@@ -25,6 +28,17 @@ pub(crate) const FEATURE_DLSS: u32 = 0;
 pub(crate) const FEATURE_COMMON: u32 = u32::MAX;
 /// `sl::Result::eOk`.
 pub(crate) const RESULT_OK: i32 = 0;
+/// `PreferenceFlags::eUseManualHooking` and `eUseFrameBasedResourceTagging`.
+pub(crate) const PREFERENCE_MANUAL_HOOKING: u64 = 1 << 2;
+pub(crate) const PREFERENCE_FRAME_TAGGING: u64 = 1 << 7;
+/// `RenderAPI::eD3D11` and `eD3D12`, and `LogLevel::eDefault`.
+pub(crate) const RENDER_API_D3D11: u32 = 0;
+pub(crate) const RENDER_API_D3D12: u32 = 1;
+pub(crate) const LOG_LEVEL_DEFAULT: u32 = 1;
+/// `Result::eErrorDriverOutOfDate`, `eErrorOSOutOfDate` and `eErrorNoSupportedAdapterFound`.
+pub(crate) const RESULT_DRIVER_OUT_OF_DATE: u32 = 2;
+pub(crate) const RESULT_OS_OUT_OF_DATE: u32 = 3;
+pub(crate) const RESULT_NO_SUPPORTED_ADAPTER: u32 = 6;
 /// `LogType::eWarn` and `LogType::eError`.
 pub(crate) const LOG_WARN: u32 = 1;
 pub(crate) const LOG_ERROR: u32 = 2;

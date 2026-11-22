@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 use super::{Handle, OK, Plan, Startup, Support};
+use crate::streamline_sr::sdk::{
+    RESULT_DRIVER_OUT_OF_DATE, RESULT_NO_SUPPORTED_ADAPTER, RESULT_OS_OUT_OF_DATE,
+};
 use crate::streamline_sr::{Dimensions, Optimal, dimensions};
 use std::ptr::{addr_of, addr_of_mut};
 
 const NOT_SUPPORTED: i32 = -7;
-const DRIVER_OUT_OF_DATE: u32 = 2;
-const OS_OUT_OF_DATE: u32 = 3;
-const NO_SUPPORTED_ADAPTER: u32 = 6;
 
 #[repr(C)]
 #[derive(Default)]
@@ -70,9 +70,9 @@ impl Platform {
             out.write(Support {
                 struct_size: size,
                 supported: supported.into(),
-                driver_out_of_date: (result == DRIVER_OUT_OF_DATE).into(),
-                os_out_of_date: (result == OS_OUT_OF_DATE).into(),
-                no_supported_adapter: (result == NO_SUPPORTED_ADAPTER).into(),
+                driver_out_of_date: (result == RESULT_DRIVER_OUT_OF_DATE).into(),
+                os_out_of_date: (result == RESULT_OS_OUT_OF_DATE).into(),
+                no_supported_adapter: (result == RESULT_NO_SUPPORTED_ADAPTER).into(),
                 required_driver_major: 0,
                 required_driver_minor: 0,
                 detected_driver_major: 0,

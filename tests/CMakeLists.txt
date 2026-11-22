@@ -535,6 +535,15 @@ add_test(NAME dlss_backend COMMAND rsf_dlss_backend)
 # Loading a vendor runtime that talks to a driver is another place a hang is plausible.
 set_tests_properties(dlss_backend PROPERTIES TIMEOUT 120)
 
+# Rust builds the Streamline records for DLSS SR. sl.h is C++ only, so a C++ translation unit
+# reports the SDK's layouts, defaults and enum values and the Rust fixture compares them.
+if(EXISTS "${RSF_STREAMLINE_INCLUDE}/sl.h")
+    add_executable(rsf_dlss_sr_layout dlss_sr_layout_main.c dlss_sr_layout_facts.cpp)
+    target_include_directories(rsf_dlss_sr_layout SYSTEM PRIVATE "${RSF_STREAMLINE_INCLUDE}")
+    target_link_libraries(rsf_dlss_sr_layout PRIVATE ReScaleFrame::DLSS rsf_build_options d3d12)
+    add_test(NAME dlss_sr_layout COMMAND rsf_dlss_sr_layout)
+endif()
+
 add_test(NAME launcher_version COMMAND rsf_launcher --version)
 set_tests_properties(launcher_version PROPERTIES PASS_REGULAR_EXPRESSION "ReScaleFrame ${PROJECT_VERSION}")
 

@@ -8,6 +8,7 @@ use std::ptr::null_mut;
 pub(crate) mod native;
 #[path = "streamline_sr/records_abi.rs"]
 mod records_abi;
+pub(crate) mod signature;
 // The typed SDK call tables are compiled out of unit tests, which leaves their constants unused.
 #[cfg_attr(test, allow(dead_code))]
 pub(super) mod sdk;

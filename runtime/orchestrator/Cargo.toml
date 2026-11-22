@@ -40,6 +40,7 @@ windows-sys = { version = "0.61", features = [
   "Win32_Graphics_OpenGL",
   "Win32_Security",
   "Win32_Security_Cryptography",
+  "Win32_Security_WinTrust",
   "Win32_Storage_FileSystem",
   "Win32_System_Diagnostics_Debug",
   "Win32_System_Diagnostics_ToolHelp",

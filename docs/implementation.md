@@ -8297,8 +8297,10 @@ documents the preserved vendor descriptor and exception boundaries.
 ### Direct3D DLSS SR SDK calls
 
 Rust now builds the Streamline 2.14.1 records and calls the SDK entry points for D3D11, shared-host
-and native D3D12 DLSS SR. `dlss_native12.cpp` and `streamline_sr.h` are gone; `dlss_streamline.cpp`
-keeps only the layout checks against the pinned headers and the vendor signature call. See the
+and native D3D12 DLSS SR. `dlss_native12.cpp`, `streamline_sr.h` and `dlss_streamline.cpp` are gone. Rust verifies the interposer
+signature itself, and the layout, default and enum checks against the C++-only headers are the
+`dlss_sr_layout` test. See the
 [source record](research/rust-d3d11-sr-pipeline-cutover.md#direct3d-sr-sdk-calls-in-rust-after-f43a03ae).
-Verified: scratch-crate type check, clippy and unit tests, and MSVC syntax checks. The tip does not
-build as a whole, and no SDK, device or game run was made.
+Verified: scratch-crate type check, clippy and unit tests (including the signature check on the real
+interposer and the native comparison), and MSVC syntax checks. The tip does not build as a whole, and
+no SDK call, device or game run was made.

@@ -12,6 +12,10 @@ use crate::gl_pipeline_abi::{rsf_dlss_log_fn as Log, rsf_dlss_setup as Setup};
 use crate::render_abi::{RSF_DLSS_ABI_VERSION, rsf_dlss_frame as Frame};
 use crate::sdk_module::{SdkModule, wide_path};
 use crate::sr_session::has_capacity;
+use crate::streamline_sr::sdk::{
+    FEATURE_DLSS, LOG_LEVEL_DEFAULT, PREFERENCE_FRAME_TAGGING, PREFERENCE_MANUAL_HOOKING,
+    RENDER_API_D3D11,
+};
 use crate::streamline_sr::{OptionPayload, Options, TagBatch, dlss_mode};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::{NonNull, addr_of, null, null_mut};
@@ -30,11 +34,6 @@ const NOT_READY: i32 = -8;
 const FEATURE_FAILED: i32 = -9;
 const OPTIMAL: u32 = 1;
 const OPTIONS: u32 = 2;
-const USE_MANUAL_HOOKING: u64 = 1 << 2;
-const USE_FRAME_BASED_RESOURCE_TAGGING: u64 = 1 << 7;
-const RENDER_D3D11: u32 = 0;
-const LOG_DEFAULT: u32 = 1;
-const FEATURE_DLSS: u32 = 0;
 
 const SHARED_ENTRY_COUNT: usize = 7;
 const ENTRY_NAMES: [&CStr; 12] = [
@@ -212,11 +211,11 @@ impl Startup {
             logs,
             engine_version: setup.engine_version_utf8,
             project_id: setup.project_id_utf8,
-            flags: USE_MANUAL_HOOKING | USE_FRAME_BASED_RESOURCE_TAGGING,
+            flags: PREFERENCE_MANUAL_HOOKING | PREFERENCE_FRAME_TAGGING,
             engine: crate::streamline_policy::engine_type(setup.engine),
             application_id: setup.application_id,
-            render_api: RENDER_D3D11,
-            log_level: LOG_DEFAULT,
+            render_api: RENDER_API_D3D11,
+            log_level: LOG_LEVEL_DEFAULT,
             show_console: 0,
             feature: FEATURE_DLSS,
         };

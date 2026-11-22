@@ -144,6 +144,7 @@ A sweep of `git ls-files '*.cpp'` on 2026-11-22 found first-party C++ that the p
 - [x] [tests/ac7_render_scope_exceptions.cpp](tests/ac7_render_scope_exceptions.cpp) (A02; the throwing callbacks are C in `tests/ac7_render_scope.c` and raise the MSVC C++ exception code)
 - [ ] [tests/anomaly_motion_contract_main.cpp](tests/anomaly_motion_contract_main.cpp) (N04)
 - [ ] [tests/anomaly_sr_swap_profile.cpp](tests/anomaly_sr_swap_profile.cpp) (N07)
+- [ ] [tests/dlss_sr_layout_facts.cpp](tests/dlss_sr_layout_facts.cpp) (D05; C++-only vendor header layout check; blocked: `sl.h` declares `sl::` types with constructors and a virtual member, so the layout, GUID and default checks need a C++ compiler. It holds `static_assert`s against the pinned headers and two reporting functions that `dlss_sr_layout_main.c` hands to the Rust comparison in `streamline_sr/sdk/layout_fixture.rs`; test only, no runtime caller)
 
 ## Core, loader and overlay
 
@@ -1186,7 +1187,7 @@ Port Streamline startup, DLSS frame planning, evaluate and shutdown across share
 - [x] [runtime/backends/dlss/include/rescaleframe/dlss_native12.h](runtime/backends/dlss/include/rescaleframe/dlss_native12.h)
 - [x] [runtime/backends/dlss/include/rescaleframe/dlss_preset.h](runtime/backends/dlss/include/rescaleframe/dlss_preset.h)
 - [x] [runtime/backends/dlss/src/dlss_native12.cpp](runtime/backends/dlss/src/dlss_native12.cpp) (deleted; Rust owns the typed D3D12 SDK calls in `dlss_native12/sdk.rs`)
-- [ ] [runtime/backends/dlss/src/dlss_streamline.cpp](runtime/backends/dlss/src/dlss_streamline.cpp) (native SDK layout assertions and the vendor signature call only; blocked: `sl.h` and `sl_security.h` are C++-only headers, so the record layouts, GUIDs and enums can be asserted against them only by a C++ compiler, and `sl_security.h` defines globals, so `sl::security::verifyEmbeddedSignature` needs one translation unit. Callers: Rust `dlss_streamline/sdk.rs` and `dlss_native12/sdk.rs` through `rsf_dlss_sdk_compiled`; the Rust loader through `rsf_dlss_sdk_verify_signature`; the D06 `mfg_unlock.h` lease adapter through `rsf_dlss_verify_runtime_signature`. Removing the signature half needs a Rust WinVerifyTrust port of the vendor check)
+- [x] [runtime/backends/dlss/src/dlss_streamline.cpp](runtime/backends/dlss/src/dlss_streamline.cpp) (deleted; Rust owns the signature verification in `streamline_sr/signature.rs`, exported as `rsf_dlss_sdk_verify_signature`, and the SDK default and enum checks in the `dlss_sr_layout` fixture; the remaining C++-only vendor header checks are in `tests/dlss_sr_layout_facts.cpp`, listed under C++ introduced during the port)
 - [x] [runtime/backends/dlss/src/streamline_frame.h](runtime/backends/dlss/src/streamline_frame.h) (C declaration only: `rsf_streamline_common_set`)
 - [x] [runtime/backends/dlss/src/streamline_load.h](runtime/backends/dlss/src/streamline_load.h) (C declaration only: the Rust interposer loader `rsf_streamline_load_interposer`)
 - [x] [runtime/backends/dlss/src/streamline_sr.h](runtime/backends/dlss/src/streamline_sr.h) (deleted; the SDK records are built in Rust and checked in `dlss_streamline.cpp`)

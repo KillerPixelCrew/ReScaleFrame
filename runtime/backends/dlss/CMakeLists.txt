@@ -3,7 +3,7 @@ set(RSF_STREAMLINE_INCLUDE "${CMAKE_SOURCE_DIR}/vendor/streamline/include" CACHE
 
 # The RTX 40 MFG compatibility path and the Reflex API audit live in the Rust orchestrator
 # (mfg_state.rs, reflex_audit.rs); mfg_unlock.h and reflex_audit.h declare their C entry points.
-add_library(rsf_dlss STATIC src/dlss_streamline.cpp src/dlss_generation.cpp)
+add_library(rsf_dlss STATIC src/dlss_generation.cpp)
 target_compile_definitions(rsf_dlss PRIVATE RSF_STREAMLINE_HOST_BUILD)
 target_include_directories(rsf_dlss PUBLIC include)
 target_link_libraries(rsf_dlss PRIVATE rsf_build_options)

@@ -8,17 +8,14 @@ use crate::streamline_sr::native::{
 };
 use crate::streamline_sr::sdk::{
     self as records, ConstantsFn, EvaluateFn, FEATURE_COMMON, FEATURE_DLSS, FeatureFn, FreeFn,
-    HookAfterPresentFn, HookPresentFn, InitFn, OptimalFn, OptionsFn, PREFERENCES, RESULT_OK,
-    SDK_VERSION, SetDeviceFn, ShutdownFn, SupportedFn, TagRecords, TagsFn, TokenFn,
+    HookAfterPresentFn, HookPresentFn, InitFn, LOG_LEVEL_DEFAULT, OptimalFn, OptionsFn,
+    PREFERENCES, RESULT_OK, SDK_VERSION, SetDeviceFn, ShutdownFn, SupportedFn, TagRecords, TagsFn,
+    TokenFn,
 };
 use crate::vulkan_streamline_camera::{rsf_slvk_sdk_header, rsf_slvk_sdk_preferences};
 use std::mem::transmute_copy;
 
-/// `LogLevel::eDefault`.
-const LOG_DEFAULT: u32 = 1;
-
 unsafe extern "C" {
-    fn rsf_dlss_sdk_compiled() -> u32;
     fn rsf_streamline_host_token(host: Handle, frame_id: u64) -> Handle;
 }
 
@@ -110,7 +107,7 @@ unsafe extern "C" fn init(handle: Handle, input: &Preferences) -> i32 {
     native.feature_id = input.feature;
     let preferences = rsf_slvk_sdk_preferences {
         base: PREFERENCES,
-        log_level: LOG_DEFAULT,
+        log_level: LOG_LEVEL_DEFAULT,
         plugin_paths: native.plugin_paths.as_mut_ptr(),
         num_plugin_paths: 1,
         flags: input.flags,
@@ -360,8 +357,8 @@ static PLATFORM: Platform = Platform {
     free_viewport,
 };
 
-/// The typed SDK calls, or nothing in a build whose Streamline headers were unavailable to verify
-/// the record layouts.
+/// The typed SDK calls. The vendor headers check the record layouts they build in the
+/// `dlss_sr_layout` test (`tests/dlss_sr_layout_facts.cpp`).
 pub(super) fn platform() -> Option<&'static Platform> {
-    (unsafe { rsf_dlss_sdk_compiled() } != 0).then_some(&PLATFORM)
+    Some(&PLATFORM)
 }

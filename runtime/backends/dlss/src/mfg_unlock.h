@@ -30,8 +30,9 @@ void rsf_core_mfg_destroy(rsf_mfg_state* owner);
 }
 
 /* Lease adapter kept only for the D3D12 Streamline host in dlss_generation.cpp.
- * Remove it once that caller owns an rsf_mfg_state directly. */
-bool rsf_dlss_verify_runtime_signature(const wchar_t* path);
+ * Remove it once that caller owns an rsf_mfg_state directly. The signature check is the Rust
+ * loader's (streamline_sr/signature.rs). */
+extern "C" bool rsf_dlss_sdk_verify_signature(const wchar_t* path);
 
 namespace rsf {
 class MfgUnlock {
@@ -45,7 +46,7 @@ public:
     {
         if (owner_)
             rsf_core_mfg_prime(owner_, device, directory,
-                require_signature ? &rsf_dlss_verify_runtime_signature : nullptr, log, user);
+                require_signature ? &rsf_dlss_sdk_verify_signature : nullptr, log, user);
     }
     void prepare(void* device, void* get_state, rsf_backend_log_fn log, void* user)
     {

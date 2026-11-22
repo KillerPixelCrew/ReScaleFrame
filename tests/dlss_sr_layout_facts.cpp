@@ -1,16 +1,10 @@
 // SPDX-License-Identifier: MIT
-// Native boundary of the Direct3D DLSS SR facades. Rust builds the Streamline 2.14.1 records and
-// calls the SDK's C entry points itself (runtime/orchestrator/src/streamline_sr/sdk.rs). What stays
-// native is what only the vendor C++ headers can answer:
-//  - the record layouts, struct versions and defaults Rust copies, checked against the pinned
-//    headers at build time and once at run time;
-//  - sl_security.h, whose definitions are the vendor's signature verification and which defines
-//    globals, so it belongs in exactly one translation unit.
-
-#include <rescaleframe/dlss.h>
-#include "streamline_load.h"
-
-#if RSF_HAVE_STREAMLINE
+// Checks the Streamline records and constants that Rust builds against the vendor declarations.
+// sl.h and sl_security.h are C++ only (namespaces, constructors, virtual members), so they cannot
+// be measured from C or Rust. The static assertions fix the layouts, GUIDs and enum values at
+// build time. The two exported functions report what the SDK constructors and enums actually
+// hold; runtime/orchestrator/src/streamline_sr/sdk/layout_fixture.rs holds the expectations and
+// compares them, so a drifting Rust default or literal fails the dlss_sr_layout test.
 
 #include <windows.h>
 
@@ -19,25 +13,16 @@
 #include <sl.h>
 #include <sl_consts.h>
 #include <sl_dlss.h>
-#include "streamline_sr_records.h"
-#include "../../../vulkan/streamline/sdk_records_checks.h"
-
-// sl_security.h includes <Softpub.h>, which mingw-w64 ships as <softpub.h>. Windows filesystems do
-// not care and the reference MSVC build gets the real check; the cross build compiles without it
-// and refuses to load rather than pretending it verified anything.
-#if __has_include(<Softpub.h>)
-#include <sl_security.h>
-#define RSF_HAVE_SIGNATURE_CHECK 1
-#else
-#define RSF_HAVE_SIGNATURE_CHECK 0
-#endif
+#include "../runtime/backends/dlss/src/streamline_sr_records.h"
+#include "../runtime/vulkan/streamline/sdk_records_checks.h"
 
 #include <cfloat>
 #include <climits>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 
 namespace {
-
 #if defined(__clang__)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Winvalid-offsetof"
@@ -145,90 +130,86 @@ RSF_SL_AT(DLSSOptimalSettings, rsf_sl_sdk_dlss_optimal, renderHeightMax, height_
 #pragma GCC diagnostic pop
 #endif
 
-// Values the Rust SR code carries as literals.
+// The enum and constant values Rust carries as literals are compared at run time by
+// rsf_test_dlss_sr_values below.
 static_assert(sizeof(wchar_t) == sizeof(uint16_t));
-static_assert(sl::kFeatureDLSS == 0 && sl::kFeatureCommon == 0xffffffffu);
-static_assert(uint64_t(sl::PreferenceFlags::eDisableCLStateTracking) == (1ull << 0) &&
-    uint64_t(sl::PreferenceFlags::eUseManualHooking) == (1ull << 2) &&
-    uint64_t(sl::PreferenceFlags::eAllowOTA) == (1ull << 3) &&
-    uint64_t(sl::PreferenceFlags::eLoadDownloadedPlugins) == (1ull << 6) &&
-    uint64_t(sl::PreferenceFlags::eUseFrameBasedResourceTagging) == (1ull << 7));
-static_assert(uint32_t(sl::EngineType::eCustom) == 0 && uint32_t(sl::EngineType::eUnreal) == RSF_DLSS_ENGINE_UNREAL &&
-    uint32_t(sl::EngineType::eUnity) == RSF_DLSS_ENGINE_UNITY);
-static_assert(uint32_t(sl::RenderAPI::eD3D11) == 0 && uint32_t(sl::RenderAPI::eD3D12) == 1);
-static_assert(uint32_t(sl::LogLevel::eDefault) == 1 && uint32_t(sl::LogType::eWarn) == 1 &&
-    uint32_t(sl::LogType::eError) == 2);
-static_assert(uint32_t(sl::Result::eOk) == 0 && uint32_t(sl::Result::eErrorDriverOutOfDate) == 2 &&
-    uint32_t(sl::Result::eErrorOSOutOfDate) == 3 && uint32_t(sl::Result::eErrorNoSupportedAdapterFound) == 6);
-static_assert(uint32_t(sl::DLSSMode::eOff) == 0 && uint32_t(sl::DLSSMode::eMaxPerformance) == 1 &&
-    uint32_t(sl::DLSSMode::eBalanced) == 2 && uint32_t(sl::DLSSMode::eMaxQuality) == 3 &&
-    uint32_t(sl::DLSSMode::eUltraPerformance) == 4 && uint32_t(sl::DLSSMode::eDLAA) == 6);
-static_assert(sl::kBufferTypeScalingInputColor == 3 && sl::kBufferTypeScalingOutputColor == 4 &&
-    sl::kBufferTypeDepth == 0 && sl::kBufferTypeMotionVectors == 1 && sl::kBufferTypeExposure == 13 &&
-    sl::kBufferTypeTransparencyHint == 27 && sl::kBufferTypeBiasCurrentColorHint == 29 &&
-    sl::kBufferTypeColorBeforeTransparency == 40 && sl::kBufferTypeTransparencyLayer == 51 &&
-    sl::ResourceLifecycle::eOnlyValidNow == 0 && uint32_t(sl::ResourceType::eTex2d) == 0);
-static_assert(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE == 0x40 && D3D12_RESOURCE_STATE_UNORDERED_ACCESS == 8);
 
-// The constructors set the struct versions and every default the Rust builders copy, which no
-// static assertion can see. A mismatch disables the SDK path rather than sending a stale layout.
-bool records_match() noexcept
+template <class T>
+size_t copy_object(const T& object, void* out, size_t capacity)
 {
-    const sl::Preferences preferences{};
-    const sl::Constants constants{};
-    const sl::DLSSOptions options{};
-    const sl::DLSSOptimalSettings optimal{};
-    const sl::FeatureRequirements requirements{};
-    const sl::AdapterInfo adapter{};
-    const sl::ViewportHandle viewport(0u);
-    sl::Resource resource(sl::ResourceType::eTex2d, nullptr);
-    const sl::ResourceTag tag(&resource, sl::kBufferTypeDepth, sl::ResourceLifecycle::eOnlyValidNow);
-    return preferences.structVersion == 1 && constants.structVersion == 2 && options.structVersion == 3 &&
-        optimal.structVersion == 1 && requirements.structVersion == 2 && adapter.structVersion == 1 &&
-        viewport.structVersion == 1 && resource.structVersion == 1 && tag.structVersion == 1 &&
-        uint64_t(preferences.flags) == ((1ull << 0) | (1ull << 3) | (1ull << 6)) &&
-        preferences.logLevel == sl::LogLevel::eDefault && !preferences.showConsole &&
-        constants.clipToLensClip.row[0].x == FLT_MAX && constants.orthographicProjection == sl::Boolean::eFalse &&
-        constants.motionVectorsDilated == sl::Boolean::eFalse &&
-        constants.motionVectorsJittered == sl::Boolean::eFalse &&
-        constants.minRelativeLinearDepthObjectSeparation == 40.0f &&
-        options.preExposure == 1.0f && options.exposureScale == 1.0f &&
-        options.colorBuffersHDR == sl::Boolean::eTrue && options.indicatorInvertAxisX == sl::Boolean::eFalse &&
-        options.indicatorInvertAxisY == sl::Boolean::eFalse && uint32_t(options.dlaaPreset) == 0 &&
-        resource.type == sl::ResourceType::eTex2d && resource.state == UINT_MAX;
+    static_assert(__is_trivially_copyable(T));
+    if (out && capacity >= sizeof(T)) std::memcpy(out, &object, sizeof(T));
+    return sizeof(T);
 }
 
 } // namespace
-#endif
 
-// Whether the pinned Streamline headers were available and their records match what Rust builds.
-extern "C" uint32_t rsf_dlss_sdk_compiled()
+// The bytes of a default-constructed SDK object of the given kind, which Rust compares field by
+// field. A null or short buffer only reports the size.
+extern "C" size_t rsf_test_dlss_sr_default(uint32_t kind, void* out, size_t capacity)
 {
-#if RSF_HAVE_STREAMLINE
-    static const bool matches = records_match();
-    return matches;
-#else
-    return 0;
-#endif
-}
-
-// Streamline's embedded-signature check, for the D3D12 host's MFG lease adapter (mfg_unlock.h).
-bool rsf_dlss_verify_runtime_signature(const wchar_t* path)
-{
-#if RSF_HAVE_STREAMLINE && RSF_HAVE_SIGNATURE_CHECK
-    try {
-        return sl::security::verifyEmbeddedSignature(path);
-    } catch (...) {
-        return false;
+    switch (kind) {
+    case 0: return copy_object(sl::Preferences{}, out, capacity);
+    case 1: return copy_object(sl::Constants{}, out, capacity);
+    case 2: return copy_object(sl::DLSSOptions{}, out, capacity);
+    case 3: return copy_object(sl::DLSSOptimalSettings{}, out, capacity);
+    case 4: return copy_object(sl::FeatureRequirements{}, out, capacity);
+    case 5: return copy_object(sl::AdapterInfo{}, out, capacity);
+    case 6: return copy_object(sl::ViewportHandle(0u), out, capacity);
+    case 7: return copy_object(sl::Resource(sl::ResourceType::eTex2d, nullptr), out, capacity);
+    case 8:
+        return copy_object(sl::ResourceTag(nullptr, sl::kBufferTypeDepth, sl::ResourceLifecycle::eOnlyValidNow),
+            out, capacity);
+    default: return 0;
     }
-#else
-    (void)path;
-    return false;
-#endif
 }
 
-// The same check for the Rust loaders.
-extern "C" bool rsf_dlss_sdk_verify_signature(const wchar_t* path)
+// The SDK values the Rust SR code carries as literals, in the order the Rust expectations list them.
+extern "C" size_t rsf_test_dlss_sr_values(uint64_t* out, size_t capacity)
 {
-    return rsf_dlss_verify_runtime_signature(path);
+    const uint64_t values[] = {
+        sl::kSDKVersion,
+        sl::kFeatureDLSS,
+        sl::kFeatureCommon,
+        uint64_t(sl::PreferenceFlags::eUseManualHooking),
+        uint64_t(sl::PreferenceFlags::eUseFrameBasedResourceTagging),
+        uint64_t(sl::PreferenceFlags::eDisableCLStateTracking) | uint64_t(sl::PreferenceFlags::eAllowOTA) |
+            uint64_t(sl::PreferenceFlags::eLoadDownloadedPlugins),
+        uint64_t(sl::EngineType::eCustom),
+        uint64_t(sl::EngineType::eUnreal),
+        uint64_t(sl::EngineType::eUnity),
+        uint64_t(sl::RenderAPI::eD3D11),
+        uint64_t(sl::RenderAPI::eD3D12),
+        uint64_t(sl::LogLevel::eDefault),
+        uint64_t(sl::LogType::eWarn),
+        uint64_t(sl::LogType::eError),
+        uint64_t(uint32_t(sl::Result::eOk)),
+        uint64_t(sl::Result::eErrorDriverOutOfDate),
+        uint64_t(sl::Result::eErrorOSOutOfDate),
+        uint64_t(sl::Result::eErrorNoSupportedAdapterFound),
+        uint64_t(sl::DLSSMode::eDLAA),
+        uint64_t(sl::DLSSMode::eMaxQuality),
+        uint64_t(sl::DLSSMode::eBalanced),
+        uint64_t(sl::DLSSMode::eMaxPerformance),
+        uint64_t(sl::DLSSMode::eUltraPerformance),
+        uint64_t(sl::DLSSMode::eOff),
+        sl::kBufferTypeScalingInputColor,
+        sl::kBufferTypeScalingOutputColor,
+        sl::kBufferTypeDepth,
+        sl::kBufferTypeMotionVectors,
+        sl::kBufferTypeExposure,
+        sl::kBufferTypeTransparencyHint,
+        sl::kBufferTypeBiasCurrentColorHint,
+        sl::kBufferTypeColorBeforeTransparency,
+        sl::kBufferTypeTransparencyLayer,
+        uint64_t(sl::ResourceLifecycle::eOnlyValidNow),
+        uint64_t(sl::ResourceType::eTex2d),
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        uint64_t(sl::Boolean::eFalse),
+        uint64_t(sl::Boolean::eTrue),
+    };
+    const size_t count = sizeof(values) / sizeof(values[0]);
+    if (out && capacity >= count) std::memcpy(out, values, sizeof(values));
+    return count;
 }

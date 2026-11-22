@@ -22,7 +22,6 @@ use std::mem::transmute_copy;
 const LEGACY_SR_LOG: u32 = 0;
 
 unsafe extern "C" {
-    fn rsf_dlss_sdk_compiled() -> u32;
     fn rsf_streamline_host_module(host: Handle) -> Handle;
     fn rsf_streamline_host_token(host: Handle, source: u64) -> Handle;
     fn rsf_streamline_host_drain(host: Handle) -> i32;
@@ -509,8 +508,8 @@ static PLATFORM: Platform = Platform {
     shutdown,
 };
 
-/// The typed SDK calls, or nothing in a build whose Streamline headers were unavailable to verify
-/// the record layouts.
+/// The typed SDK calls. The vendor headers check the record layouts they build in the
+/// `dlss_sr_layout` test (`tests/dlss_sr_layout_facts.cpp`).
 pub(super) fn platform() -> Option<&'static Platform> {
-    (unsafe { rsf_dlss_sdk_compiled() } != 0).then_some(&PLATFORM)
+    Some(&PLATFORM)
 }

@@ -151,7 +151,7 @@ depth separation, the false orthographic, dilated and jittered flags, and the `D
 defaults for exposure and indicator axes. Both D3D12 `slInit` and the D3D11 `slInit` keep their
 log levels, and the D3D12 path still installs no message callback.
 
-What stays native. `dlss_streamline.cpp` checks every record, GUID, enum and buffer-type value
+What stayed native in the first pass (replaced by the follow-up below). `dlss_streamline.cpp` checks every record, GUID, enum and buffer-type value
 Rust copies against the pinned headers with `static_assert`, and `rsf_dlss_sdk_compiled()`
 constructs each SDK record once to confirm the struct versions and defaults Rust writes. The
 SDK path stays unavailable when the headers are absent or the check fails, as `RSF_HAVE_STREAMLINE=0`
@@ -182,3 +182,49 @@ pinned 2.14.1 headers, and a linked probe of `dlss_streamline.cpp` returned
 `rsf_dlss_sdk_compiled() == 1` and refused an unsigned module. No SDK call was made, no device was
 created and no game was run, so slInit, tagging and evaluation against a real interposer remain
 unverified.
+
+### Signature verification and SDK fact checks in Rust
+
+Question: can the last native file go? `dlss_streamline.cpp` held the vendor signature call, a
+run-time check of the SDK constructors and the layout `static_assert`s. The answer is yes for the
+first two and, for the third, only as a test.
+
+Signature. `streamline_sr/signature.rs` verifies `sl.interposer.dll` from the behaviour the vendor
+header documents, with no code taken from it: the OS must accept the file through `WinVerifyTrust`
+(generic verify v2, no UI, no revocation check, signature 0 under the strong-signing policy OID
+`1.3.6.1.4.1.311.72.1.1`), the file must report exactly one secondary signature, and that nested
+signature (unauthenticated attribute `1.3.6.1.4.1.311.2.4.1` of the primary signer) must name a
+certificate, found by issuer and serial number in the embedded PKCS#7 store, whose RSA public key
+decodes to the pinned 411-byte CNG blob of NVIDIA's Streamline key. The verification state is
+always closed. `wintrust.dll` and `crypt32.dll` are loaded from System32 on first use, as before,
+so the runtime gains no load-time import the game directory could shadow. The key bytes are the
+published Streamline key; the unit test accepts the real 2.14.1 interposer from
+`RSF_STREAMLINE_BIN` (skipped when unset), refuses a copy with one flipped byte, a missing path,
+a null path and an unsigned executable, and checks the blob header. `rsf_dlss_sdk_verify_signature`
+is exported from Rust under its old `extern "C"` name; D06's `mfg_unlock.h` lease adapter now
+declares that name instead of the C++-linkage symbol, a one-line caller change.
+
+Run-time check. The constructors' struct versions and defaults, which `rsf_dlss_sdk_compiled()` used
+to confirm in C++, are now expectations in Rust. `tests/dlss_sr_layout_facts.cpp` reports the bytes
+of each default-constructed SDK object (`Preferences`, `Constants`, `DLSSOptions`,
+`DLSSOptimalSettings`, `FeatureRequirements`, `AdapterInfo`, `ViewportHandle`, `Resource`,
+`ResourceTag`) and the SDK values Rust carries as literals (SDK version, feature IDs, preference
+flags, engine, render API, log, result and DLSS mode enums, buffer types, resource states).
+`streamline_sr/sdk/layout_fixture.rs` compares them with the records its builders produce: header
+GUID and version, the defaults Rust leaves unset, and every literal. The SR platforms are no longer
+gated on a build-time header probe, so DLSS SR is available wherever the runtime is; the
+`dlss_sr_layout` test is what ties the records to the pinned headers. Negative check: changing the
+Rust relative-depth default or dropping a default preference flag fails the fixture with the
+field named.
+
+What remains in C++ is `tests/dlss_sr_layout_facts.cpp` and its C `main`: the `static_assert`
+layouts, GUIDs and offsets against the C++-only `sl.h`, and the two reporting functions. It has no
+runtime caller and is listed in PORT.md as a C++-only vendor header layout check, the same status as
+`tests/loader/vendor_layout_facts.cpp`. `dlss_streamline.cpp` is deleted.
+
+Source evidence. MSVC `/W4 /WX /Zs` passed for the facts translation unit and its C main against
+the pinned 2.14.1 headers. In the scratch crate over the real sources (as above), `cargo test`
+passed 19 tests, including the signature tests against the shipped interposer and the native
+comparison with the facts translation unit linked in, and `cargo clippy --lib --tests -D warnings`
+had no finding in the changed modules. The full CMake configure still fails at the tip's
+`tests/CMakeLists.txt`, so the `dlss_sr_layout` executable itself and `ctest` did not run.
