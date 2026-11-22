@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-#include <rescaleframe/game_renderer.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -38,7 +37,3 @@ static_assert(sizeof(rsf_godot_render_frame) == 24 && alignof(rsf_godot_render_f
     offsetof(rsf_godot_render_frame, source_frame_id) == 0 && offsetof(rsf_godot_render_frame, frame_seconds) == 8 &&
     offsetof(rsf_godot_render_frame, gameplay) == 16 && offsetof(rsf_godot_render_frame, sequence_break) == 20,
     "frame.rs mirrors the render frame layout");
-static_assert(RSF_GAME_CPU_FRAME_BEGIN == 0 && RSF_GAME_CPU_INPUT_SAMPLE == 1 &&
-    RSF_GAME_CPU_SIMULATION_BEGIN == 2 && RSF_GAME_CPU_SIMULATION_END == 3 &&
-    RSF_GAME_CPU_FRAME_END == 4 && RSF_GAME_CPU_INPUT_EVENT == 5,
-    "frame.rs mirrors these CPU stages");

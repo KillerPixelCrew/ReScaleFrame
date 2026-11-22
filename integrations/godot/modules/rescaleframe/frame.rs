@@ -8,13 +8,10 @@
 use core::mem::{align_of, offset_of, size_of};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-// Matches game_renderer.h. frame.h checks these values.
-const FRAME_BEGIN: u32 = 0;
-const INPUT_SAMPLE: u32 = 1;
-const SIMULATION_BEGIN: u32 = 2;
-const SIMULATION_END: u32 = 3;
-const FRAME_END: u32 = 4;
-const INPUT_EVENT: u32 = 5;
+use crate::frame_event_abi::{
+    RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_FRAME_END, RSF_GAME_CPU_INPUT_EVENT,
+    RSF_GAME_CPU_INPUT_SAMPLE, RSF_GAME_CPU_SIMULATION_BEGIN, RSF_GAME_CPU_SIMULATION_END,
+};
 
 const DEFAULT_SECONDS: f64 = 1.0 / 60.0;
 
@@ -121,7 +118,7 @@ pub unsafe extern "C" fn rsf_godot_cpu_begin(callbacks: *const FrameCallbacks) {
     CPU.sampled.store(false, R);
     CPU.simulation_ended.store(false, R);
     CPU.queued.store(false, R);
-    emit(callbacks, FRAME_BEGIN, 0);
+    emit(callbacks, RSF_GAME_CPU_FRAME_BEGIN, 0);
 }
 
 /// # Safety
@@ -129,7 +126,7 @@ pub unsafe extern "C" fn rsf_godot_cpu_begin(callbacks: *const FrameCallbacks) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_godot_cpu_sample(callbacks: *const FrameCallbacks) {
     if CPU.open.load(R) && !CPU.sampled.swap(true, R) {
-        emit(unsafe { &*callbacks }, INPUT_SAMPLE, 0);
+        emit(unsafe { &*callbacks }, RSF_GAME_CPU_INPUT_SAMPLE, 0);
     }
 }
 
@@ -139,7 +136,7 @@ pub unsafe extern "C" fn rsf_godot_cpu_sample(callbacks: *const FrameCallbacks) 
 pub unsafe extern "C" fn rsf_godot_cpu_simulation_begin(callbacks: *const FrameCallbacks) {
     let callbacks = unsafe { &*callbacks };
     if CPU.open.load(R) {
-        emit(callbacks, SIMULATION_BEGIN, 0);
+        emit(callbacks, RSF_GAME_CPU_SIMULATION_BEGIN, 0);
     }
 }
 
@@ -152,7 +149,7 @@ pub unsafe extern "C" fn rsf_godot_cpu_simulation_begin(callbacks: *const FrameC
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_godot_cpu_queue(callbacks: *const FrameCallbacks, present: u32) {
     let callbacks = unsafe { &*callbacks };
-    emit(callbacks, SIMULATION_END, 0);
+    emit(callbacks, RSF_GAME_CPU_SIMULATION_END, 0);
     CPU.simulation_ended.store(true, R);
     CPU.queued.store(present != 0, R);
     let frame = if present != 0 { CPU.frame.load(R) } else { 0 };
@@ -169,9 +166,9 @@ pub unsafe extern "C" fn rsf_godot_cpu_end(callbacks: *const FrameCallbacks) {
         return;
     }
     if !CPU.simulation_ended.load(R) {
-        emit(callbacks, SIMULATION_END, 0);
+        emit(callbacks, RSF_GAME_CPU_SIMULATION_END, 0);
     }
-    emit(callbacks, FRAME_END, CPU.queued.load(R) as u32);
+    emit(callbacks, RSF_GAME_CPU_FRAME_END, CPU.queued.load(R) as u32);
     CPU.open.store(false, R);
 }
 
@@ -185,7 +182,7 @@ pub unsafe extern "C" fn rsf_godot_cpu_input(callbacks: *const FrameCallbacks, k
     let framed = CPU.open.load(R);
     let source = if framed { CPU.frame.load(R) } else { 0 };
     // SAFETY: valid callbacks, see above.
-    unsafe { (callbacks.report)(INPUT_EVENT, source, 0, kind, (!framed) as u32) };
+    unsafe { (callbacks.report)(RSF_GAME_CPU_INPUT_EVENT, source, 0, kind, (!framed) as u32) };
 }
 
 /// Render thread: the queued draw begins.

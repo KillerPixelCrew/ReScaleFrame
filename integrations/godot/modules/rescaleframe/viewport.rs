@@ -4,6 +4,8 @@
 
 mod cpu_facts;
 mod frame;
+#[path = "../../../../sdk/game/src/frame_event_abi.rs"]
+mod frame_event_abi;
 mod host;
 mod pass;
 mod primary;

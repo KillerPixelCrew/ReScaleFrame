@@ -13,39 +13,10 @@ use core::mem::{align_of, offset_of, size_of};
 use crate::host;
 use crate::primary::{self, Admission, DRIVER_VULKAN, History};
 
-// game_renderer.h and game_frame.h. pass.h checks these values.
-const RENDER_SR: u32 = 1;
-const RENDER_FINAL_SCENE: u32 = 10;
-const RENDER_RESET: u32 = 1;
-const RENDER_PRIMARY: u32 = 2;
-const SCREEN_MENU: u32 = 1;
-const SCREEN_FLIGHT: u32 = 4;
-const CAMERA_ABI_VERSION: u32 = 1;
-
-/// Mirror of the public `rsf_camera_frame`, camera ABI 1. pass.h checks every offset.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct CameraFrame {
-    struct_size: u32,
-    abi_version: u32,
-    view_to_clip: [f32; 16],
-    clip_to_view: [f32; 16],
-    view_to_world: [f32; 16],
-    world_to_view: [f32; 16],
-    clip_to_previous_clip: [f32; 16],
-    jitter_pixels: [f32; 2],
-    previous_jitter_pixels: [f32; 2],
-    render_width: u32,
-    render_height: u32,
-    output_width: u32,
-    output_height: u32,
-    near_plane: f32,
-    far_plane: f32,
-    vertical_fov_radians: f32,
-    depth_inverted: u32,
-    motion_jittered: u32,
-    frame_time_seconds: f32,
-}
+use crate::frame_event_abi::{
+    RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_PRIMARY,
+    RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR, rsf_camera_frame,
+};
 
 /// The non-pointer pass fields, private to the module. The C++ copies them into the public pass.
 #[repr(C)]
@@ -67,7 +38,7 @@ pub struct Record {
     motion_camera_included: u32,
     camera_valid: u32,
     previous_clip_to_clip: [f32; 16],
-    camera: CameraFrame,
+    camera: rsf_camera_frame,
     reset_generation: u64,
 }
 
@@ -85,20 +56,12 @@ pub struct SrFacts {
     /// Godot's TAA jitter in its own units, as `taa_jitter` and `prev_taa_jitter`.
     jitter: [f32; 2],
     previous_jitter: [f32; 2],
-    gameplay: u32,
+    screen: u32,
     driver: u32,
     _reserved: u32,
 }
 
 const _: () = {
-    assert!(size_of::<CameraFrame>() == 384 && align_of::<CameraFrame>() == 4);
-    assert!(offset_of!(CameraFrame, view_to_clip) == 8);
-    assert!(offset_of!(CameraFrame, clip_to_previous_clip) == 264);
-    assert!(offset_of!(CameraFrame, jitter_pixels) == 328);
-    assert!(offset_of!(CameraFrame, render_width) == 344);
-    assert!(offset_of!(CameraFrame, near_plane) == 360);
-    assert!(offset_of!(CameraFrame, depth_inverted) == 372);
-    assert!(offset_of!(CameraFrame, frame_time_seconds) == 380);
     assert!(size_of::<Record>() == 520 && align_of::<Record>() == 8);
     assert!(offset_of!(Record, role) == 24);
     assert!(offset_of!(Record, driver) == 40);
@@ -112,11 +75,11 @@ const _: () = {
     assert!(offset_of!(SrFacts, near_plane) == 64);
     assert!(offset_of!(SrFacts, jitter) == 76);
     assert!(offset_of!(SrFacts, previous_jitter) == 84);
-    assert!(offset_of!(SrFacts, gameplay) == 92);
+    assert!(offset_of!(SrFacts, screen) == 92);
     assert!(offset_of!(SrFacts, driver) == 96);
 };
 
-const ZERO_CAMERA: CameraFrame = CameraFrame {
+const ZERO_CAMERA: rsf_camera_frame = rsf_camera_frame {
     struct_size: 0,
     abi_version: 0,
     view_to_clip: [0.0; 16],
@@ -195,14 +158,15 @@ pub unsafe extern "C" fn rsf_godot_sr_plan(facts: *const SrFacts, out: *mut Reco
         session_id: host::rsf_godot_host_session(),
         source_frame_id: facts.source_frame_id,
         key: facts.render_target,
-        role: RENDER_SR,
-        flags: RENDER_PRIMARY | if identity.reset { RENDER_RESET } else { 0 },
+        role: RSF_GAME_RENDER_SR,
+        flags: RSF_GAME_RENDER_PRIMARY
+            | if identity.reset {
+                RSF_GAME_RENDER_RESET
+            } else {
+                0
+            },
         resource_generation: identity.resource_generation,
-        screen: if facts.gameplay != 0 {
-            SCREEN_FLIGHT
-        } else {
-            SCREEN_MENU
-        },
+        screen: facts.screen,
         driver: facts.driver,
         normalized_depth: (facts.driver == DRIVER_VULKAN) as u32,
         motion_to_uv: [-1.0, -1.0],
@@ -210,9 +174,9 @@ pub unsafe extern "C" fn rsf_godot_sr_plan(facts: *const SrFacts, out: *mut Reco
         camera_valid: 1,
         previous_clip_to_clip: [0.0; 16],
         reset_generation: identity.reset_generation,
-        camera: CameraFrame {
-            struct_size: size_of::<CameraFrame>() as u32,
-            abi_version: CAMERA_ABI_VERSION,
+        camera: rsf_camera_frame {
+            struct_size: size_of::<rsf_camera_frame>() as u32,
+            abi_version: RSF_GAME_CAMERA_ABI_VERSION,
             jitter_pixels: pixels(facts.jitter),
             previous_jitter_pixels: pixels(facts.previous_jitter),
             render_width,
@@ -269,7 +233,7 @@ pub unsafe extern "C" fn rsf_godot_final_scene_plan(
     ) {
         return 0;
     }
-    record.role = RENDER_FINAL_SCENE;
+    record.role = RSF_GAME_RENDER_FINAL_SCENE;
     record.driver = facts.driver;
     unsafe { out.write(record) };
     1

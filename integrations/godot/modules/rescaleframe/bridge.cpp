@@ -447,7 +447,7 @@ void upscale(const RenderDataRD *data, double) {
         frame.source_frame_id, rb->get_render_target().get_id(), target.x, target.y, scene->z_near, scene->z_far,
         Math::deg_to_rad(scene->cam_projection.get_fovy(scene->cam_projection.get_fov(), 1.0 / scene->cam_projection.get_aspect())),
         {scene->taa_jitter.x, scene->taa_jitter.y}, {scene->prev_taa_jitter.x, scene->prev_taa_jitter.y},
-        frame.gameplay, facts.driver, 0};
+        frame.gameplay ? RSF_SCREEN_FLIGHT : RSF_SCREEN_MENU, facts.driver, 0};
     rsf_godot_pass_record record;
     rsf_godot_sr_plan(&sr, &record);
     auto &camera = record.camera;
