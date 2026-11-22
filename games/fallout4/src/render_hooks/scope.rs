@@ -15,6 +15,7 @@
 use super::World;
 use super::publication;
 use super::recovery::{self, Leaves as RecoveryLeaves};
+pub(super) use crate::render_records::NativeRenderOwner as Owner;
 use crate::resolution::is_busy as resolution_busy;
 use crate::resolution_stages::RSF_FALLOUT4_STAGE_SOURCE_RETIRED as SOURCE_RETIRED;
 use crate::{RSF_ERROR_NOT_READY, RSF_OK, image};
@@ -28,22 +29,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 // WorldBegin, the FRAME and SUBMISSION pass key.
 const FRAME_PASS: usize = 0x21f_0ac0;
-
-/// NativeRenderOwner: the native renderer, device, Context, chain, window, scene graph view and
-/// frame counter, read whole by the typed owner reader. The DR seam (producer.rs) compares it with
-/// the leased FRAME.
-#[repr(C)]
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-pub(super) struct Owner {
-    pub(super) renderer: usize,
-    pub(super) device: usize,
-    pub(super) context: usize,
-    pub(super) chain: usize,
-    pub(super) window: usize,
-    pub(super) graph: usize,
-    pub(super) view: usize,
-    pub(super) frame: u32,
-}
 
 const _: () = {
     assert!(size_of::<Owner>() == 64 && offset_of!(Owner, frame) == 56);

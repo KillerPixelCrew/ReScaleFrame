@@ -431,6 +431,11 @@ ABI checks and fixture, device and game runs for these ports remain open.
   and engine unwind guards remain in C++. Rust also sequences COM
   identity comparisons while the native World retains the leases. Source
   and native syntax checks passed. [Screen and viewport instruction replays](research/rust-fallout4-render-hooks.md#screen-and-viewport-instruction-replays)
+- The Fallout 4 render ABI headers now parse as C11. Bindgen supplies
+  the shared input, depth and hook records, and the layout comparison
+  matched all 30 existing records. C++ retains World reference ownership
+  and original-call unwind guards. Source and syntax checks passed.
+  [C render ABI headers](research/rust-fallout4-render-hooks.md#c-render-abi-headers-and-generated-records)
 - AC7's Rust F9 path admits geometry reads and writes the existing JSONL
   schema. The velocity owner admits commit targets and applies the
   existing profile and log limits. D3D11 readback, blob deduplication,

@@ -4,12 +4,11 @@
 use crate::build_layout::{
     RENDERER_CHAIN, RENDERER_CONTEXT, RENDERER_OBJECT, RENDERER_POINTER, RENDERER_WINDOW,
 };
-use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;
 use crate::cpu_events::{current_identity, render_source_is_current};
 use crate::depth_domains::{self, Snapshot};
-pub(crate) use crate::render_records::rsf_fallout4_NativeOutputOwner as OutputOwner;
-use crate::render_records::rsf_fallout4_NativeResolutionReceipt as Receipt;
-use crate::screen::{NativeScreen, WORLD_LEASE_INVALID, rsf_fallout4_screen_classify};
+pub(crate) use crate::render_records::NativeOutputOwner as OutputOwner;
+use crate::render_records::NativeResolutionReceipt as Receipt;
+use crate::screen::{WORLD_LEASE_INVALID, rsf_fallout4_ordinary_screen_refusals};
 use crate::{Plain, image, read};
 use rsf_game_sys::{
     RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_SR, rsf_game_host_services,
@@ -61,15 +60,6 @@ unsafe extern "C" {
         context: *mut c_void,
         receipt: &Receipt,
     );
-}
-
-fn screen_refusals(source: &CpuIdentity) -> u32 {
-    // SAFETY: the empty pass has no resources. Classification supplies screen
-    // facts and the expected invalid-world-lease refusal.
-    let candidate = unsafe { std::mem::zeroed() };
-    let mut screen = NativeScreen::EMPTY;
-    rsf_fallout4_screen_classify(source, &candidate, true, &mut screen);
-    screen.refusals
 }
 
 impl OutputOwner {
@@ -533,7 +523,7 @@ unsafe fn configure(
     }
     let render = configured_targets(host, &pass, context, size)?;
     if !render_source_is_current(&cpu)
-        || screen_refusals(&cpu) != WORLD_LEASE_INVALID
+        || rsf_fallout4_ordinary_screen_refusals(&cpu) != WORLD_LEASE_INVALID
         || !input_enabled(base)
     {
         return None;

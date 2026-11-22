@@ -17,6 +17,11 @@ use crate::creation;
 use crate::d3d11::same_native;
 use crate::depth_domains::{self, Snapshot};
 use crate::render_records::{
+    NativeFramebufferReceipt as FramebufferReceipt, NativeInputHistoryReceipt as HistoryReceipt,
+    NativeInputReceipt as Receipt, NativeInputResourceFacts as ResourceFacts,
+    NativeInputState as State, NativeInputSwapFacts as SwapFacts,
+};
+use crate::render_records::{
     native_input_colour as SLOT_COLOUR, native_input_depth as SLOT_DEPTH,
     native_input_motion as SLOT_MOTION, native_input_no_slot as NO_SLOT,
     native_input_pipboy as SLOT_PIPBOY, native_input_refraction_normals as SLOT_REFRACTION_NORMALS,
@@ -62,33 +67,6 @@ static CHANGE_BUDGET: AtomicU32 = AtomicU32::new(0);
 static SEEN_REASONS: [AtomicBool; 256] = [const { AtomicBool::new(false) }; 256];
 static REASON_BUDGET: AtomicU32 = AtomicU32::new(0);
 
-/// render_inputs_platform.h `detail::NativeState`.
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-struct State {
-    renderer: usize,
-    camera: usize,
-    cache: usize,
-    context: usize,
-    device: usize,
-    chain: usize,
-    window: usize,
-    frame: u32,
-    width: u32,
-    height: u32,
-    count: u32,
-    taa: u32,
-    disable: u32,
-    colour: u32,
-    motion: u32,
-    depth: u32,
-    ratio: [f32; 2],
-    viewport: [f32; 4],
-    delta_seconds: f32,
-    default_viewport: u8,
-    dynamic_viewport: u8,
-}
-
 /// One native platform render target record (0x30 bytes at renderer+0xa58).
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -117,109 +95,6 @@ struct ViewportFacts {
     count: u32,
     copied: u32,
     viewport: [f32; 6],
-}
-
-/// render_inputs_platform.h `NativeInputSwapFacts`.
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-#[allow(dead_code)] // padding
-struct SwapFacts {
-    window: u64,
-    read: u32,
-    width: u32,
-    height: u32,
-    reserved: u32,
-}
-
-/// render_inputs_platform.h `NativeInputResourceFacts`.
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-#[allow(dead_code)] // read and bind_flags are printed by the C++ receipt leaf
-struct ResourceFacts {
-    identity: u64,
-    pointer: u64,
-    device: u64,
-    read: u32,
-    width: u32,
-    height: u32,
-    format: u32,
-    mip_levels: u32,
-    array_size: u32,
-    sample_count: u32,
-    sample_quality: u32,
-    bind_flags: u32,
-    view_format: u32,
-    view_dimension: u32,
-    view_mip: u32,
-    view_mips: u32,
-    reserved: u32,
-}
-
-/// render_inputs_platform.h `NativeInputReceipt`: every local the former reader receipt printed.
-#[repr(C)]
-#[derive(Clone, Copy)]
-#[allow(dead_code)] // printed by the C++ receipt leaf
-struct Receipt {
-    before: State,
-    native: NativeCamera,
-    views: [ResourceFacts; 3],
-    rtv: ResourceFacts,
-    swap: SwapFacts,
-    expected_renderer: u64,
-    selected: u64,
-    last_key: u64,
-    expected: [u64; 3],
-    after_frame: u32,
-    scanned: u32,
-    camera_matches: u32,
-    matching_jitter: u32,
-    last_jitter: u32,
-    viewport_count: u32,
-    confirmed_viewport_count: u32,
-    camera_read: u32,
-    resource_match: [u32; 3],
-    device_match: [u32; 3],
-    viewport: [f32; 6],
-    confirmed_viewport: [f32; 6],
-}
-
-/// render_inputs_platform.h `NativeInputHistoryReceipt`.
-#[repr(C)]
-#[allow(dead_code)] // printed by the C++ receipt leaf
-struct HistoryReceipt {
-    frame: u32,
-    previous_frame: u32,
-    reset: u32,
-    reasons: u32,
-    width: u32,
-    height: u32,
-    previous_width: u32,
-    previous_height: u32,
-    raster: CameraRaster,
-    previous_raster: CameraRaster,
-}
-
-/// render_inputs_platform.h `NativeFramebufferReceipt`.
-#[repr(C)]
-#[derive(Default)]
-#[allow(dead_code)] // printed by the C++ receipt leaf
-struct FramebufferReceipt {
-    before: State,
-    after: State,
-    swap: SwapFacts,
-    target_texture: u64,
-    target_rtv: u64,
-    leased: u64,
-    platform: u32,
-    confirmed_platform: u32,
-    width: u32,
-    height: u32,
-    mip_levels: u32,
-    array_size: u32,
-    sample_count: u32,
-    format: u32,
-    rtv_dimension: u32,
-    rtv_mip: u32,
 }
 
 pub(crate) struct FramebufferLease {

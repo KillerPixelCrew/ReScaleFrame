@@ -23,7 +23,10 @@ use crate::camera::{self, CameraDepthBound, CameraRaster};
 use crate::cpu_abi::rsf_fallout4_cpu_identity;
 use crate::cpu_events::{current_identity, render_source_is_current};
 use crate::d3d11::same_native;
-use crate::render_records::rsf_fallout4_NativeDepthMathFailure as MathFailure;
+pub(crate) use crate::render_records::{
+    NativeDepthCamera as DepthCamera, NativeDepthSnapshot as Snapshot,
+};
+use crate::render_records::{NativeDepthMaps as Maps, NativeDepthMathFailure as MathFailure};
 use crate::{Plain, image, read};
 use rsf_game_sys::{
     RSF_DEPTH_DOMAIN_INCLUDE_MAX, RSF_DEPTH_DOMAIN_INCLUDE_MIN, RSF_DEPTH_DOMAINS_VERSION,
@@ -52,78 +55,6 @@ const D3D11_SRV_DIMENSION_TEXTURE2D: u32 = 4;
 static VERIFIED: AtomicBool = AtomicBool::new(false);
 static REPORTED: AtomicU64 = AtomicU64::new(0);
 static LEASE_BUDGET: AtomicU32 = AtomicU32::new(0);
-
-/// depth_domains.h `NativeDepthCamera`: one copied native camera cache entry.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(crate) struct DepthCamera {
-    pub(crate) view: Flat,
-    pub(crate) projection: Flat,
-    view_projection: Flat,
-    pub(crate) view_projection_unjittered: Flat,
-    pub(crate) origin: [f32; 3],
-    port: [f32; 4],
-}
-
-/// depth_domains.h `NativeDepthSnapshot`. Keys are opaque identities, never dereferenced from a
-/// copy.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(crate) struct Snapshot {
-    identity: Identity,
-    pub(crate) native_frame: u64,
-    renderer_key: u64,
-    context_key: u64,
-    pub(crate) device_context_key: u64,
-    device_key: u64,
-    pub(crate) window_key: u64,
-    pub(crate) chain_key: u64,
-    graph_key: u64,
-    near_camera_key: u64,
-    pub(crate) world_camera_key: u64,
-    pub(crate) cache_key: u64,
-    pub(crate) depth_key: u64,
-    depth_srv_key: u64,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    cache_count: u32,
-    depth_slot: u32,
-    taa: u32,
-    disable: u32,
-    mode: u8,
-    intervals: [f32; 4],
-    jitter: [f32; 2],
-    ratio: [f32; 2],
-    near_inverse_transposed: Flat,
-    near_camera: DepthCamera,
-    pub(crate) world_camera: DepthCamera,
-    world_unjittered_camera: DepthCamera,
-    pub(crate) render_rect: [i32; 4],
-    pub(crate) actual_raster: [f32; 6],
-    shadow_raster: [f32; 6],
-    normalized_port: [f32; 4],
-    shadow_dirty: u32,
-    colour_selector: u32,
-    depth_selector: u32,
-    cube_selector: u32,
-    descriptor_width: u32,
-    descriptor_height: u32,
-    descriptor_read: bool,
-    cube_key: u64,
-    depth_dsv_key: u64,
-    colour_slot: u32,
-    bound_colour_slot: u32,
-    bound_depth_slot: u32,
-    colour_texture_key: u64,
-    colour_rtv_key: u64,
-    scissor: [i32; 4],
-    scissor_enabled: bool,
-    default_viewport: u8,
-    dynamic_viewport: u8,
-    valid: bool,
-    raster_valid: bool,
-    maps: Maps,
-}
 
 #[derive(Clone, Copy, Default)]
 struct TextureFacts {
@@ -288,9 +219,9 @@ pub(crate) const EMPTY: Snapshot = Snapshot {
     valid: false,
     raster_valid: false,
     maps: Maps {
-        near: [[0.0; 4]; 4],
-        world: [[0.0; 4]; 4],
-        projection: [[0.0; 4]; 4],
+        near_map: [[0.0; 4]; 4],
+        world_map: [[0.0; 4]; 4],
+        projection_map: [[0.0; 4]; 4],
     },
 };
 
@@ -776,15 +707,6 @@ fn same(a: &Snapshot, b: &Snapshot) -> bool {
         && same_camera(&a.world_unjittered_camera, &b.world_unjittered_camera)
 }
 
-/// Source-clip maps recovered from one admitted sample.
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct Maps {
-    near: Matrix,
-    world: Matrix,
-    projection: Matrix,
-}
-
 fn math(s: &Snapshot, stage: &mut Stage, detail: &mut MathFailure) -> Option<Maps> {
     *stage = Stage::CameraMath;
     if !valid_camera(&s.near_camera)
@@ -868,9 +790,9 @@ fn math(s: &Snapshot, stage: &mut Stage, detail: &mut MathFailure) -> Option<Map
     }
     *stage = Stage::WorldW;
     forward_domain(&world, s.intervals[3] - s.intervals[2], detail).then_some(Maps {
-        near,
-        world,
-        projection,
+        near_map: near,
+        world_map: world,
+        projection_map: projection,
     })
 }
 
@@ -1512,7 +1434,7 @@ fn make(
     }
     let maps = &snapshot.maps;
     let mut native_projection = [0.0; 16];
-    if !camera::store(&maps.projection, &mut native_projection) {
+    if !camera::store(&maps.projection_map, &mut native_projection) {
         return refused(Stage::FiniteMap, snapshot, report, None);
     }
     let [x, y, width, height, ..] = snapshot.actual_raster;
@@ -1524,9 +1446,9 @@ fn make(
         return refused(Stage::RasterMath, snapshot, report, None);
     };
     let affine = xm::load(&affine);
-    let projection = xm::multiply(&maps.projection, &affine);
-    let near = xm::multiply(&maps.near, &affine);
-    let world = xm::multiply(&maps.world, &affine);
+    let projection = xm::multiply(&maps.projection_map, &affine);
+    let near = xm::multiply(&maps.near_map, &affine);
+    let world = xm::multiply(&maps.world_map, &affine);
     let frame = &pass.camera;
     if !camera::invert(&projection).is_some_and(|inverse| {
         matches(&projection, &frame.view_to_clip) && matches(&inverse, &frame.clip_to_view)
@@ -1771,7 +1693,7 @@ mod tests {
         let maps = math(&snapshot, &mut stage, &mut detail).expect("fixture admits");
         assert_eq!(stage, Stage::WorldW);
         let mut values = [0.0; 16];
-        for map in [&maps.near, &maps.world] {
+        for map in [&maps.near_map, &maps.world_map] {
             assert!(camera::store(map, &mut values));
             for (index, value) in values.iter().enumerate() {
                 let expected = if index % 5 == 0 { 1.0 } else { 0.0 };

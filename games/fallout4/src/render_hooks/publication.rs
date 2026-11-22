@@ -16,6 +16,9 @@ use super::World;
 use super::recovery::{self, Leaves as RecoveryLeaves};
 use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;
 use crate::render_inputs;
+use crate::render_records::{
+    NativeAuxiliaryInputs as AuxiliaryInputs, NativePublicationInputs as Inputs,
+};
 use crate::resolution::rsf_fallout4_resolution_inputs;
 use crate::resolution_stages::{
     RSF_FALLOUT4_STAGE_EVALUATED as EVALUATED, RSF_FALLOUT4_STAGE_OUTPUT_READY as OUTPUT_READY,
@@ -43,21 +46,6 @@ use windows::core::Interface;
 const SR_PASS: usize = super::EFFECTS_CALL.0;
 
 const SCREEN_RECEIPTS: u32 = 8;
-
-/// NativePublicationInputs: borrowed facts of the SR input lease, valid until it is released.
-#[repr(C)]
-struct Inputs {
-    pass: *const rsf_game_render_pass,
-    context: *mut c_void,
-    chain: *mut c_void,
-}
-
-// The live input lease owns these textures through the synchronous evaluation.
-#[repr(C)]
-struct AuxiliaryInputs {
-    textures: [*mut c_void; 5],
-    raster: [f32; 4],
-}
 
 /// Facts from the same framebuffer acquisition that owns the texture.
 #[derive(Default)]

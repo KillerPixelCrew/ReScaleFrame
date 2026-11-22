@@ -623,3 +623,46 @@ Source checks compared both viewport guard spans against the retained
 disassembly. Pinned Rust 1.94.1 formatting, bindgen 0.72.1, locked offline
 Windows Cargo metadata and MSVC x64 syntax-only checks covered this pass.
 Build, link, fixture, lint, device and game verification remain open.
+
+
+## C render ABI headers and generated records
+
+This source pass starts at `818a5ede`, which already removed the
+`render_hooks.h` forwarding step. The remaining data and call boundaries
+in `render_records.h`, `render_inputs_platform.h`, `depth_domains.h`,
+`screen.h`, `resolution_platform.h` and `render_hooks_platform.h` are
+C11 headers with C++ linkage and exception specifications where applicable.
+`render_records.rs` is generated from the C declarations in this private ABI. It supplies the camera, input receipts, depth snapshot, World
+facts and hook argument records. The Rust seam callback tables still model
+required callbacks and supply the existing fake leaves to the Rust fixtures.
+
+A Windows x64 Clang AST comparison of the previous C++ declarations and
+current C declarations matched all 30 existing records in size, alignment,
+field width and offset. It mapped the renamed input state back to the
+original name. The 1496-byte depth snapshot retains maps at byte 1304,
+with three 64-byte row-vector matrices in near, world and projection order.
+The input reader, history and framebuffer receipts retain 912, 96 and 344
+bytes respectively. The temporary baseline copy used the C offsetof header
+and Clang builtin because the installed libclang predates the MSVC STL.
+
+The ordinary-World refusal-only call now constructs its empty SDK pass in
+one Rust helper used by both producer and resolution admission. The
+source check precedes the native menu probes, and the present result ordinals,
+no-camera sentinel, argument order, and log callbacks retain their original
+values. Source comparison found the existing freeze reads
+(`0x1a80480`, `0x1a804a0`), camera equality replay (`0x102b5c0`) and
+explicit viewport replay (`0x1817ef0..0x1817f33` and
+`0x1817f97..0x181806d`) still run in the prior order. The original-call
+detour bodies match after accounting for the C spellings of the Present
+constants. The executable fingerprint and earlier guard evidence remain in
+[engine metadata](../../games/fallout4/engine.json).
+
+`render_inputs.h` remains a C++ ownership header for WRL references in the
+World. C++ still hosts the original trampolines, native unwind guards,
+throwing menu and host boundaries, and the receipt formatter calls. Rust
+sees the generated receipt or borrowed facts at those boundaries.
+
+The layout comparison, individual and combined MSVC C11 syntax checks,
+MSVC C++20 syntax checks, pinned Rust 1.94.1 formatting, byte-identical
+bindgen 0.72.1 regeneration and locked offline Windows Cargo metadata all
+passed. Build, link, fixture and runtime checks remain open.

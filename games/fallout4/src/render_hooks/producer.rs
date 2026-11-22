@@ -21,6 +21,7 @@ use super::scope::Owner;
 use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;
 use crate::cpu_events::rsf_fallout4_cpu_render_source_is_current;
 use crate::depth_domains::{EMPTY, Snapshot};
+use crate::render_records::NativePrepassCall as PrepassCall;
 use crate::resolution::{self, TARGETS};
 use crate::resolution_stages::RSF_FALLOUT4_STAGE_HUDLESS as HUDLESS;
 use crate::screen::WORLD_LEASE_INVALID;
@@ -35,14 +36,6 @@ const HUDLESS_RETURN: usize = super::return_rva(super::HUDLESS_CALL);
 // (PRODUCER_CALLS).
 const DYNAMIC_RESOLUTION_RETURN: usize = super::return_rva(super::DR_CALL);
 const PREPASS_RETURN: usize = super::return_rva(super::PREPASS_CALL);
-
-/// NativePrepassCall: the World source before the original prepass and its selection, held on
-/// the detour's frame across the original.
-#[repr(C)]
-struct PrepassCall {
-    identity: CpuIdentity,
-    selected: bool,
-}
 
 const _: () = {
     assert!(size_of::<PrepassCall>() == 48 && offset_of!(PrepassCall, selected) == 40);

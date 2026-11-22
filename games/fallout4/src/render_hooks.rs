@@ -28,6 +28,10 @@ use crate::cpu_events::{rsf_fallout4_cpu_begin_render, rsf_fallout4_cpu_render_s
 use crate::creation::{ExactBuild, accept_window};
 use crate::depth_domains::rsf_fallout4_depth_verify;
 use crate::render_inputs::verify_for_build;
+use crate::render_records::{
+    NativeRenderExports as RenderExports, NativeRenderScopeKey as ScopeKey, NativeWorld as World,
+    NativeWorldAdmission as WorldAdmission,
+};
 use crate::resolution::{is_busy as resolution_busy, rsf_fallout4_resolution_verify};
 use crate::screen::rsf_fallout4_verify_screen_queries;
 use crate::{MH_OK, Ops, image, read};
@@ -39,33 +43,6 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::core::{s, w};
-
-// A fresh snapshot of the calling thread's World. Pass pointers name that World's fields.
-#[repr(C)]
-struct World {
-    cpu: CpuIdentity,
-    pass: *mut rsf_game_render_pass,
-    frame_pass: *mut rsf_game_render_pass,
-    submission_pass: *mut rsf_game_render_pass,
-    screen_basis: *mut rsf_game_render_pass,
-    context: *mut c_void,
-    chain: *mut c_void,
-    upscale: bool,
-    recovery_exported: bool,
-    in_imagespace: bool,
-    inputs: bool,
-    published: bool,
-    window_open: bool,
-    frame_open: bool,
-    submission_open: bool,
-    refused: bool,
-    raster_refused: bool,
-    auxiliary_open: bool,
-    depth_valid: bool,
-    raster_valid: bool,
-    depth_interrupted: bool,
-    full_output_resolved: bool,
-}
 
 const _: () = {
     assert!(size_of::<World>() == 104);
@@ -309,15 +286,6 @@ pub(crate) fn verify_with_inputs(build: &ExactBuild) -> bool {
 // ---------------------------------------------------------------------------------------------
 // Native leaves and lifecycle state.
 
-#[repr(C)]
-struct RenderExports {
-    upscale_auxiliaries: *mut c_void,
-    restore_auxiliaries: *mut c_void,
-    reduced_frame: *mut c_void,
-    capture_texture: *mut c_void,
-    capture_requested: *mut c_void,
-}
-
 unsafe extern "system" {
     fn MH_QueueEnableHook(target: *mut c_void) -> i32;
     fn MH_QueueDisableHook(target: *mut c_void) -> i32;
@@ -510,27 +478,6 @@ pub(crate) fn stop(ops: &Ops) -> bool {
 
 // ---------------------------------------------------------------------------------------------
 // World and Present admission.
-
-#[repr(C)]
-struct WorldAdmission {
-    caller: usize,
-    session: u64,
-    live: bool,
-    ordinary_world: bool,
-    frame_open: bool,
-    auxiliary_open: bool,
-    recovery_owned: bool,
-}
-
-#[repr(C)]
-#[derive(Default, PartialEq, Eq)]
-struct ScopeKey {
-    frame: u64,
-    view: u64,
-    window: u64,
-    context: usize,
-    chain: usize,
-}
 
 #[repr(u32)]
 #[derive(PartialEq, Eq)]

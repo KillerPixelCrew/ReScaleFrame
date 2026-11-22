@@ -2,6 +2,7 @@
 #include "render_hooks_platform.h"
 #include "cpu_events_platform.h"
 #include "render_inputs.h"
+#include "render_inputs_platform.h"
 #include "resolution_platform.h"
 #include "screen.h"
 #include "depth_domains.h"
@@ -45,10 +46,11 @@ rsf_game_host_services host{};
 // Rust owns the live flag with its release store and acquire load.
 bool live() noexcept { return rsf_fallout4_render_live(); }
 std::atomic<uint32_t> entered{}, windows{}, frames{}, auxiliaries{};
+constexpr NativeScreen empty_screen{RSF_SCREEN_UNKNOWN, 0, 0, UINT32_MAX, 0};
 struct World {
     CpuIdentity cpu{};
     rsf_game_render_pass pass{}, frame_pass{}, submission_pass{}, screen_basis{};
-    NativeScreen screen{};
+    NativeScreen screen=empty_screen;
     NativeDepthSnapshot depth_snapshot{}, raster_snapshot{};
     // Recovery leases. Rust (render_hooks/recovery.rs) owns the token and decides adoption and
     // release; the candidate lives only for one Rust step.
@@ -79,9 +81,6 @@ struct Entry {
     Entry() { entered.fetch_add(1, std::memory_order_acq_rel); }
     ~Entry() { entered.fetch_sub(1, std::memory_order_acq_rel); }
 };
-bool same_source() {
-    return world.cpu.session == host.session_id && rsf_fallout4_cpu_render_source_is_current(&world.cpu);
-}
 void notify(const rsf_game_render_pass& pass, void* context, uint32_t begin) noexcept {
     if (host.render_pass) try { host.render_pass(host.user, context, &pass, begin); } catch (...) {}
 }
@@ -106,7 +105,9 @@ void read_world(NativeWorld* out) noexcept {
         world.full_output_resolved};
 }
 void recovery_refuse() noexcept { world.refused=true; }
-bool recovery_same_source() noexcept { return same_source(); }
+bool recovery_same_source() noexcept {
+    return world.cpu.session == host.session_id && rsf_fallout4_cpu_render_source_is_current(&world.cpu);
+}
 void recovery_resolve(bool full_output, bool published) noexcept {
     world.full_output_resolved=full_output; world.published=published;
 }
@@ -282,10 +283,7 @@ void producer_invalidate(bool raster) noexcept {
 void producer_interrupt_depth(bool interrupted) noexcept { world.depth_interrupted=interrupted; }
 void producer_refuse_raster() noexcept { world.raster_refused=world.refused=true; }
 uint32_t producer_screen_refusals() noexcept {
-    const rsf_game_render_pass candidate{};
-    NativeScreen screen{};
-    rsf_fallout4_screen_classify(&world.cpu,&candidate,true,&screen);
-    return screen.refusals;
+    return rsf_fallout4_ordinary_screen_refusals(&world.cpu);
 }
 bool producer_configure() noexcept {
     return rsf_fallout4_resolution_configure(&host,&world.frame_pass,world.context.Get(),reserve_recovery);
@@ -463,13 +461,13 @@ void observe_native_present(void* renderer) {
         world.frame_pass.window_key,uintptr_t(world.context.Get()),uintptr_t(world.chain.Get())};
     const auto matched=rsf_fallout4_render_match_present(caller,uintptr_t(renderer),world.submission_open,
         &leased);
-    if (matched!=NativePresentMatch::unrelated) {
+    if (matched!=PresentUnrelated) {
         const auto cpu=world.cpu;
-        if (matched==NativePresentMatch::matched)
+        if (matched==PresentMatched)
             rsf_fallout4_render_capture_recovery(&world.raster_snapshot,read_world,
                 report,recovery_capture_requested,recovery_capture);
         switch (rsf_fallout4_render_admit_present(matched,host.session_id,&cpu,revalidate_present_screen)) {
-        case NativePresentAdmission::complete: {
+        case PresentComplete: {
             rsf_fallout4_render_close_submission(&scope_leaves);
             // Close the same CPU phase after the original, even if it reenters.
             phase.owner=cpu;
@@ -479,10 +477,10 @@ void observe_native_present(void* renderer) {
                 report("Fallout4 native SUBMISSION end before original outer Present; FRAME/WINDOW remain open.");
             break;
         }
-        case NativePresentAdmission::refused:
+        case PresentRefused:
             rsf_fallout4_render_diagnostic("Fallout4 pre-Present screen/refusal changed; submission completion withheld from FG.");
             break;
-        case NativePresentAdmission::source_changed:
+        case PresentSourceChanged:
             // Missing completion refuses prepare; the old scope drains after Swap.
             world.refused=true;
             rsf_fallout4_render_diagnostic("Fallout4 pre-Present source/owner changed; submission completion withheld from FG.");

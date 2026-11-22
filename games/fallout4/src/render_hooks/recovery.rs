@@ -9,6 +9,7 @@
 //! World flags (NativeRecoveryLeaves in render_hooks_platform.h). The state is per thread, as the
 //! C++ World is. See docs/research/rust-fallout4-render-hooks.md.
 
+pub(super) use crate::render_records::NativeRecoveryLease as Lease;
 use crate::resolution::owns_full_output;
 use crate::{RSF_ERROR_NOT_READY, RSF_OK, message};
 use rsf_game_sys::{rsf_game_render_pass, rsf_result};
@@ -91,14 +92,6 @@ fn request(operation: u32, token: u64, surfaces: &[Surface; SURFACES]) -> Reques
 pub(super) use crate::resolution::OutputOwner;
 
 use super::World;
-
-/// NativeRecoveryLease: borrowed facts of a C++ lease, valid until that lease is replaced.
-#[repr(C)]
-pub(super) struct Lease {
-    pass: *const rsf_game_render_pass,
-    context: *mut c_void,
-    textures: [*mut c_void; SURFACES],
-}
 
 const _: () = {
     assert!(size_of::<Surface>() == 80);

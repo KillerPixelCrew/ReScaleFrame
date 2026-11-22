@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Keep the native diagnostic callback guard and receipt formatting.
 #include "depth_domains.h"
-#include "render_records.h"
 #include <cstdio>
 
 namespace rsf::fallout4 {

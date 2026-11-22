@@ -3,7 +3,7 @@
 
 use crate::cpu_abi::rsf_fallout4_cpu_identity;
 use crate::cpu_events::render_source_is_current;
-pub(crate) use crate::render_records::rsf_fallout4_NativeScreen as NativeScreen;
+pub(crate) use crate::render_records::NativeScreen;
 use crate::{image, matches_bytes, read};
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_AFTER_SIMULATION, RSF_GAME_RENDER_PRIMARY,
@@ -418,4 +418,16 @@ pub(crate) extern "C" fn rsf_fallout4_screen_classify(
     } else if result.refusals == 0 {
         result.screen = RSF_SCREEN_GAMEPLAY;
     }
+}
+
+#[unsafe(no_mangle)]
+pub(crate) extern "C" fn rsf_fallout4_ordinary_screen_refusals(
+    source: &rsf_fallout4_cpu_identity,
+) -> u32 {
+    // SAFETY: the empty pass has no resources. Classification supplies screen
+    // facts and the expected invalid-world-lease refusal.
+    let candidate = unsafe { std::mem::zeroed() };
+    let mut screen = NativeScreen::EMPTY;
+    rsf_fallout4_screen_classify(source, &candidate, true, &mut screen);
+    screen.refusals
 }

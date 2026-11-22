@@ -16,6 +16,7 @@ use super::World;
 use super::publication::{self, Leaves as PublicationLeaves, SrOutcome};
 use super::recovery::{self, Leaves as RecoveryLeaves};
 use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;
+use crate::render_records::NativeEffectsCall as EffectsCall;
 use crate::resolution::owns_full_output;
 use crate::resolution_stages::{
     RSF_FALLOUT4_STAGE_EFFECTS_RETURNED as EFFECTS_RETURNED, RSF_FALLOUT4_STAGE_PRE_SR as PRE_SR,
@@ -39,17 +40,6 @@ const EFFECTS_FIRST: u32 = 0;
 const EFFECTS_LAST: u32 = 13;
 const EFFECTS_MODE: u32 = 1;
 const EFFECTS_FLAGS: u32 = 1;
-
-/// NativeEffectsCall: the return address and arguments of one Effects call.
-#[repr(C)]
-struct EffectsCall {
-    caller: usize,
-    manager: usize,
-    first: u32,
-    last: u32,
-    mode: u32,
-    flags: u32,
-}
 
 const _: () = {
     assert!(size_of::<EffectsCall>() == 32);

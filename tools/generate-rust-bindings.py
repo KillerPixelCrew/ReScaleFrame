@@ -27,12 +27,20 @@ def generate(output, header, types, constants, clang_args, extra=(), *, use_core
 generate("games/ac7/src/velocity_state_abi.rs", "runtime/graphics/include/rescaleframe/d3d11_state.h",
          "rsf_d3d11_state", "NOTHING", [],
          ["--allowlist-function", "rsf_d3d11_state_(save|restore)", "--no-derive-copy"])
-generate("games/fallout4/src/render_records.rs", "games/fallout4/src/render_records.h",
-         "rsf::fallout4::Native(Screen|OutputOwner|ResolutionReceipt|DepthMathFailure|InputSlot|InputReferences)", "NOTHING",
-         ["-x", "c++", "-std=c++20"],
-         ["--no-prepend-enum-name", "--with-derive-default", "--with-derive-partialeq",
-          "--with-derive-eq", "--raw-line", "#![allow(non_upper_case_globals)]",
-          "--raw-line", "// SPDX-License-Identifier: MIT"])
+generate("games/fallout4/src/render_records.rs", "games/fallout4/src/render_hooks_platform.h",
+         "Native(Screen|OutputOwner|ResolutionReceipt|Depth(Camera|Maps|Snapshot|MathFailure)|Camera|"
+         "Input(References|State|SwapFacts|ResourceFacts|Receipt|HistoryReceipt)|FramebufferReceipt|"
+         "World|WorldAdmission|Render(Exports|ScopeKey|Owner)|EffectsCall|PrepassCall|"
+         "PublicationInputs|AuxiliaryInputs|RecoveryLease)|CameraRaster",
+         "native_input_.*", ["-std=c11", "-Isdk/game/include"],
+         ["--no-recursive-allowlist", "--blocklist-type", "rsf_fallout4_cpu_identity|rsf_game_render_pass",
+          "--with-derive-default", "--with-derive-partialeq", "--with-derive-eq",
+          "--with-derive-custom-struct", "NativeDepthSnapshot=Copy,Clone",
+          "--no-default", "NativeDepthSnapshot|NativePrepassCall|NativeWorld|NativeScreen",
+          "--raw-line", "#![allow(non_upper_case_globals)]",
+          "--raw-line", "// SPDX-License-Identifier: MIT",
+          "--raw-line", "use crate::cpu_abi::rsf_fallout4_cpu_identity;",
+          "--raw-line", "use rsf_game_sys::rsf_game_render_pass;"])
 generate("games/fallout4/src/resolution_stages.rs", "games/fallout4/src/resolution_stages.h",
          "NOTHING", "RSF_FALLOUT4_STAGE_.*", [])
 generate("sdk/game/src/d3d11_reduced_abi.rs", "runtime/orchestrator/include/rescaleframe/d3d11_host.h",

@@ -78,7 +78,7 @@ extern "C" void rsf_fallout4_inputs_report_reader(NativeInputReport report, cons
     } catch (...) {}
 }
 // The text of the former state reread mismatch; Rust keeps the per-mask and sixteen-text budget.
-extern "C" void rsf_fallout4_inputs_report_mismatch(NativeInputReport report, const detail::NativeState* first, const detail::NativeState* second,
+extern "C" void rsf_fallout4_inputs_report_mismatch(NativeInputReport report, const NativeInputState* first, const NativeInputState* second,
     uint32_t mask) noexcept {
     if (!first || !second) return;
     try {

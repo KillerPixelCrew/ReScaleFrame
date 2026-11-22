@@ -10,32 +10,12 @@
 
 pub(crate) mod xm;
 
+pub(crate) use crate::render_records::{CameraRaster, NativeCamera};
 use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, rsf_camera_frame};
 use std::f32::consts::PI;
 use xm::Matrix;
 
 type Flat = [f32; 16];
-
-/// `NativeCamera`: copied native caches, row-vector convention.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(crate) struct NativeCamera {
-    pub(crate) view: Flat,
-    pub(crate) projection: Flat,
-    pub(crate) view_projection_unjittered: Flat,
-    pub(crate) previous_view_projection_unjittered: Flat,
-    pub(crate) position_adjust: [f32; 3],
-    pub(crate) previous_position_adjust: [f32; 3],
-    pub(crate) jitter_ndc: [f32; 2],
-}
-
-/// `CameraRaster`: the native viewport and its integer LTRB crop.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(crate) struct CameraRaster {
-    pub(crate) xywh: [f32; 4],
-    pub(crate) crop: [i32; 4],
-}
 
 /// `CameraDepthBound`, read by depth_domains.rs and the camera fixture.
 #[repr(C)]
