@@ -6,6 +6,7 @@ use rsf_game_sys::rsf_game_cpu_event;
 type rsf_unity_config = ::core::ffi::c_void;
 type rsf_unity_packet = ::core::ffi::c_void;
 
+pub const RSF_UNITY_NATIVE_ABI_VERSION: u32 = 5;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_unity_native_api {

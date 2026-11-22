@@ -2,6 +2,9 @@
 
 #![allow(non_camel_case_types)]
 
+pub const RSF_UNITY_D3D12_EVENT_FLUSH: u32 = 2;
+pub const RSF_UNITY_D3D12_EVENT_SYNC: u32 = 4;
+pub const RSF_UNITY_D3D12_EVENT_MODIFIES: u32 = 8;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_unity_d3d12_engine {
@@ -19,13 +22,10 @@ pub struct rsf_unity_d3d12_engine {
             states: *const i32,
         ) -> u64,
     >,
-    pub slot_reset: ::core::option::Option<
-        unsafe extern "C" fn(bridge: u32, list: *mut ::core::ffi::c_void, slot: u32),
-    >,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_unity_d3d12_engine"][::core::mem::size_of::<rsf_unity_d3d12_engine>() - 64usize];
+    ["Size of rsf_unity_d3d12_engine"][::core::mem::size_of::<rsf_unity_d3d12_engine>() - 56usize];
     ["Alignment of rsf_unity_d3d12_engine"]
         [::core::mem::align_of::<rsf_unity_d3d12_engine>() - 8usize];
     ["Offset of field: rsf_unity_d3d12_engine::device"]
@@ -42,6 +42,4 @@ const _: () = {
         [::core::mem::offset_of!(rsf_unity_d3d12_engine, recording_list) - 40usize];
     ["Offset of field: rsf_unity_d3d12_engine::execute"]
         [::core::mem::offset_of!(rsf_unity_d3d12_engine, execute) - 48usize];
-    ["Offset of field: rsf_unity_d3d12_engine::slot_reset"]
-        [::core::mem::offset_of!(rsf_unity_d3d12_engine, slot_reset) - 56usize];
 };

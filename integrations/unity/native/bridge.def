@@ -1,0 +1,4 @@
+EXPORTS
+    rsf_unity_get_render_event
+    rsf_unity_get_event_id
+    rsf_unity_set_engine_spatial

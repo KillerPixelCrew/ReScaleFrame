@@ -407,7 +407,7 @@ unsafe extern "C" fn host_cpu_event(_: *mut c_void, event: *const rsf_game_cpu_e
 /// # Safety
 /// `text` is null or NUL-terminated.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_log(text: *const c_char) {
+pub(crate) unsafe extern "C" fn rsf_unity_package_log(text: *const c_char) {
     if text.is_null() {
         return;
     }

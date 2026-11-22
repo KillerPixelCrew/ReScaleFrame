@@ -2,6 +2,7 @@
 //! Package entry points backed by the linked Unity SDK and Runtime shims.
 use super::services::backend_log;
 use super::{BACKEND_OK, PACKAGE, routing, services};
+use crate::bridge_native::package::graphics;
 use crate::generation::RSF_DLSS_ENGINE_UNITY;
 use crate::package_abi::{
     RSF_DLSS_ABI_VERSION, RSF_SR12_PLAN_ABI_VERSION, rsf_dlss_setup, rsf_sr12,
@@ -10,17 +11,14 @@ use crate::package_abi::{
 use crate::preview_abi::rsf_d3d12_window_observer;
 use rsf_game_sys::rsf_game_render_pass;
 use std::ffi::{c_int, c_void};
-use std::ptr::null_mut;
 use std::sync::atomic::Ordering::SeqCst;
 use windows::Win32::Graphics::{
-    Direct3D12::{ID3D12CommandQueue, ID3D12Device, ID3D12GraphicsCommandList, ID3D12Resource},
+    Direct3D12::{ID3D12Device, ID3D12GraphicsCommandList, ID3D12Resource},
     Dxgi::{CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIAdapter1, IDXGIFactory4},
 };
 use windows::core::Interface;
 
 unsafe extern "C" {
-    fn rsf_unity_package_acquire_graphics(device: *mut *mut c_void, queue: *mut *mut c_void)
-    -> u32;
     fn rsf_unity_package_choose_fg(vendor: u32, software: u32) -> u32;
     fn rsf_unity_package_create_planned(
         setup: *const rsf_sr12_setup,
@@ -44,21 +42,6 @@ unsafe extern "C" {
         visible: bool,
     ) -> bool;
     fn rsf_unity_preview_hide();
-}
-
-// Each pointer carries one transferred COM reference from the active D3D11, D3D12 or Vulkan
-// bridge. That bridge acquires its own receipt before returning the pair.
-fn graphics() -> Option<(ID3D12Device, ID3D12CommandQueue)> {
-    let (mut device, mut queue) = (null_mut(), null_mut());
-    if unsafe { rsf_unity_package_acquire_graphics(&mut device, &mut queue) } == 0 {
-        return None;
-    }
-    Some(unsafe {
-        (
-            ID3D12Device::from_raw(device),
-            ID3D12CommandQueue::from_raw(queue),
-        )
-    })
 }
 
 /// Runs inside the bridge's admitted SR callback and borrows the recording list.

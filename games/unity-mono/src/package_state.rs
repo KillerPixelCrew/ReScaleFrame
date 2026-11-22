@@ -15,7 +15,7 @@
 mod native;
 mod presentation;
 mod routing;
-mod services;
+pub(crate) mod services;
 #[cfg(windows)]
 mod windows;
 
@@ -427,14 +427,18 @@ fn d3d_ring(bridge: u32) -> Option<MutexGuard<'static, ProducerRing>> {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_package_sr_slot_reset(bridge: u32, commands: *mut c_void, slot: u32) {
+pub(crate) extern "C" fn rsf_unity_package_sr_slot_reset(
+    bridge: u32,
+    commands: *mut c_void,
+    slot: u32,
+) {
     if let Some(mut ring) = d3d_ring(bridge) {
         ring.reset(commands, slot);
     }
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_package_sr_slots_released(bridge: u32) {
+pub(crate) extern "C" fn rsf_unity_package_sr_slots_released(bridge: u32) {
     if let Some(mut ring) = d3d_ring(bridge) {
         ring.released();
     }
@@ -984,7 +988,7 @@ unsafe extern "C" fn render_config(_: *mut c_void, output: *mut rsf_game_render_
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_package_bridge_failed(result: i32) {
+pub(crate) extern "C" fn rsf_unity_package_bridge_failed(result: i32) {
     PACKAGE.bridge_failed(result);
 }
 

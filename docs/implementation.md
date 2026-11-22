@@ -194,6 +194,13 @@ bindings, locked offline metadata and source comparisons passed. Build,
 fixture and device results remain open.
 [Direct3D bridge evidence](research/rust-unity-d3d-typed-bridge.md)
 
+Unity's shared bridge now owns managed callbacks, Direct3D event dispatch,
+Win32 message facts and package retirement in Rust. The native leaves bind
+Unity's SDK and adapt the existing Vulkan C++ boundary. Source comparisons,
+pinned formatting, targeted binding generation, locked offline metadata and
+standalone native syntax passed. Build, fixture and device results remain open.
+[Unity native bridge leaves](research/rust-unity-native-bridge-leaves.md)
+
 The shared Vulkan-to-D3D12 FG paths now admit swapchain extensions and
 select vsync in Rust. The FSR4 state fixture uses the current graphics
 callback table. Build, fixture and device checks remain open.

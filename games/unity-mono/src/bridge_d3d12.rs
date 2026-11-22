@@ -69,16 +69,14 @@ fn source(pass: &rsf_game_render_pass) -> rsf_unity_source_submission {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_d3d12_completed() -> u64 {
+pub(crate) fn completed() -> u64 {
     let fence = FENCE.lock().unwrap_or_else(PoisonError::into_inner);
     fence
         .as_ref()
         .map_or(0, |fence| unsafe { fence.GetCompletedValue() })
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_d3d12_release_graphics() {
+pub(crate) fn release_graphics() {
     let slots = std::mem::take(&mut *SLOTS.lock().unwrap_or_else(PoisonError::into_inner));
     drop(slots);
     let fence = FENCE.lock().unwrap_or_else(PoisonError::into_inner).take();
@@ -112,7 +110,7 @@ unsafe fn capture(
     if !fence
         || completion == 0
         || completion == u64::MAX
-        || fence_status(rsf_unity_d3d12_completed(), 0) != FenceStatus::Complete
+        || fence_status(completed(), 0) != FenceStatus::Complete
     {
         return None;
     }
@@ -172,9 +170,7 @@ unsafe fn reconstruct(
         slot: 0,
         pending_generation: 0,
     };
-    if unsafe { rsf_unity_frames_admit_frame(packet, rsf_unity_d3d12_completed(), &mut admission) }
-        == 0
-    {
+    if unsafe { rsf_unity_frames_admit_frame(packet, completed(), &mut admission) } == 0 {
         return None;
     }
     let index = admission.slot as usize;
@@ -223,10 +219,9 @@ unsafe fn reconstruct(
             .ok()?;
     }
     let list = commands.list.as_raw();
-    if let Some(reset) = engine.slot_reset {
-        // A reset proves discard of any preceding recording that never reached Unity.
-        unsafe { reset(12, list, admission.slot) };
-    }
+    // A reset proves discard of any preceding recording that never reached Unity.
+    #[cfg(not(feature = "mono-plugin"))]
+    crate::package_state::rsf_unity_package_sr_slot_reset(12, list, admission.slot);
     let mut pass = build_d3d12_pass(packet);
     if hudless {
         pass.role = RSF_GAME_RENDER_FINAL_SCENE;
@@ -271,19 +266,16 @@ unsafe fn reconstruct(
     Some(())
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_d3d12_render_packet(
-    engine: *const rsf_unity_d3d12_engine,
-    host: *const rsf_game_host_services,
+pub(crate) unsafe fn render_packet(
+    engine: &rsf_unity_d3d12_engine,
+    host: &rsf_game_host_services,
     offset: u32,
-    packet: *const rsf_unity_packet,
+    packet: &rsf_unity_packet,
 ) {
     if !rsf_unity_frames_begin_d3d12_event() {
         return;
     }
     let _event = Event;
-    // The native render callback holds the frame admission and packet lease.
-    let (engine, host, packet) = unsafe { (&*engine, &*host, &*packet) };
     if rsf_unity_frames_active() == 0 || host.render_pass.is_none() {
         return;
     }

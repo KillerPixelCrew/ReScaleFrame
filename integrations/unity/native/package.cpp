@@ -12,11 +12,7 @@
 #include <windows.h>
 #include <d3d12.h>
 #include <IUnityGraphics.h>
-#include <wrl/client.h>
 
-extern "C" void UNITY_INTERFACE_API rsf_unity_package_bridge_load(IUnityInterfaces*);
-extern "C" void UNITY_INTERFACE_API rsf_unity_package_bridge_unload();
-extern "C" int rsf_unity_set_engine_spatial(uint32_t, uint32_t) noexcept;
 
 extern "C" uint64_t rsf_unity_package_session_seed() noexcept;
 extern "C" void rsf_unity_package_timestamp(uint64_t*, uint64_t*) noexcept;
@@ -49,7 +45,6 @@ static_assert(kUnityGfxDeviceEventInitialize == RSF_UNITY_DEVICE_EVENT_INITIALIZ
 static_assert(kUnityGfxDeviceEventShutdown == RSF_UNITY_DEVICE_EVENT_SHUTDOWN);
 
 namespace {
-using Microsoft::WRL::ComPtr;
 void UNITY_INTERFACE_API device_event(UnityGfxDeviceEventType type)
 {
     rsf_unity_package_device_event(static_cast<uint32_t>(type));
@@ -66,10 +61,6 @@ void device_callback(void* pointer, uint32_t subscribe) noexcept
     if (subscribe) graphics->RegisterDeviceEventCallback(device_event);
     else graphics->UnregisterDeviceEventCallback(device_event);
 }
-uint32_t bridge_open(uint32_t is_editor) noexcept try
-{
-    return rsf_unity_package_bridge_open(is_editor != 0) ? 1u : 0u;
-} catch (...) { return 0; }
 int fg_window(const rsf_game_render_pass* pass, uint32_t catch_exception) noexcept
 {
     // The player call keeps its noexcept boundary. The preview observer can report refusal.
@@ -84,15 +75,6 @@ int fg_window(const rsf_game_render_pass* pass, uint32_t catch_exception) noexce
         return 0;
     }
 }
-}
-extern "C" uint32_t rsf_unity_package_acquire_graphics(void** device, void** queue) noexcept
-{
-    ComPtr<ID3D12Device> owning_device;
-    ComPtr<ID3D12CommandQueue> owning_queue;
-    if (!rsf_unity_package_graphics(owning_device, owning_queue) || !owning_device || !owning_queue) return 0;
-    *device = owning_device.Detach();
-    *queue = owning_queue.Detach();
-    return 1;
 }
 extern "C" uint32_t rsf_unity_package_choose_fg(uint32_t vendor, uint32_t software) noexcept
 {
@@ -117,8 +99,8 @@ constexpr rsf_unity_package_platform platform{
     []() noexcept { return rsf_d3d11_present_backend(); },
     []() noexcept { return rsf_d3d11_present_switch_result(); },
     []() noexcept { return rsf_d3d11_present_generation(); },
-    [](uint32_t enabled) noexcept { rsf_unity_bridge_activate(enabled != 0); },
-    []() noexcept -> uint32_t { return rsf_unity_package_bridge_try_close() ? 1u : 0u; },
+    rsf_unity_bridge_activate,
+    rsf_unity_package_bridge_try_close,
     [](uint64_t session) noexcept -> uint32_t { return rsf_fg12_end_session(session) ? 1u : 0u; },
     rsf_sr12_quality_supported,
     rsf_unity_package_create_view,
@@ -128,16 +110,14 @@ constexpr rsf_unity_package_platform platform{
         return rsf_sr12_evaluate(sr, commands, pass, slot);
     },
     [](rsf_sr12* sr) noexcept { rsf_sr12_destroy(sr); },
-    [](uint32_t commit) noexcept { rsf_unity_package_bridge_finish_retirement(commit != 0); },
+    rsf_unity_package_bridge_finish_retirement,
     [](const rsf_fg12_setup* setup) noexcept -> int32_t { return rsf_fg12_install(setup); },
     []() noexcept -> uint32_t { return rsf_d3d11_present_has_owner() ? 1u : 0u; },
     [](uint32_t backend) noexcept -> int32_t { return rsf_d3d11_present_request(backend); },
     rsf_unity_package_default_fg,
-    bridge_open,
+    rsf_unity_package_bridge_open,
     rsf_unity_package_session_seed,
-    [](const rsf_game_host_services* services, rsf_unity_native_api* api) noexcept -> uint32_t {
-        return rsf_unity_bridge_prepare(*services, api) ? 1u : 0u;
-    },
+    rsf_unity_package_bridge_prepare,
     rsf_unity_package_local_app_data,
     rsf_unity_package_create_directory,
     rsf_unity_package_log_open,
@@ -163,12 +143,8 @@ constexpr rsf_unity_package_platform platform{
     },
     [](void* window) noexcept -> uint32_t { return rsf_uvk_owns_window(window) ? 1u : 0u; },
     rsf_unity_package_window_class,
-    [](void* interfaces) noexcept -> uint32_t {
-        if (!interfaces) return 0;
-        rsf_unity_package_bridge_load(static_cast<IUnityInterfaces*>(interfaces));
-        return 1;
-    },
-    []() noexcept { rsf_unity_package_bridge_unload(); },
+    rsf_unity_package_bridge_load,
+    rsf_unity_package_bridge_unload,
     graphics_interface,
     preload,
     device_callback,

@@ -523,7 +523,7 @@ pub(crate) extern "C" fn rsf_unity_frames_active() -> u32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_frames_report_managed(stage: u32) {
+pub(crate) extern "C" fn rsf_unity_frames_report_managed(stage: u32) {
     let state = lock();
     if !state.closed {
         MANAGED_STAGE.store(stage, Ordering::SeqCst);
@@ -561,7 +561,7 @@ unsafe fn admit(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_frames_admit_packet(
+pub(crate) unsafe extern "C" fn rsf_unity_frames_admit_packet(
     packet: *const rsf_unity_packet,
     session_id: u64,
     slot: *mut u32,
@@ -591,7 +591,7 @@ unsafe fn admit_leased_packet(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_frames_take_packet(
+pub(crate) unsafe extern "C" fn rsf_unity_frames_take_packet(
     address: *const c_void,
     packet: *mut rsf_unity_packet,
     slot: *mut u32,
@@ -610,7 +610,7 @@ unsafe extern "C" fn rsf_unity_frames_take_packet(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_frames_admit_leased_packet(
+pub(crate) unsafe extern "C" fn rsf_unity_frames_admit_leased_packet(
     packet: *const rsf_unity_packet,
     session_id: u64,
     ops: *const rsf_unity_texture_ops,
@@ -622,7 +622,7 @@ unsafe extern "C" fn rsf_unity_frames_admit_leased_packet(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_frames_cpu_stage(
+pub(crate) unsafe extern "C" fn rsf_unity_frames_cpu_stage(
     services: *const rsf_game_host_services,
     stage: u32,
     source: u64,
@@ -656,7 +656,7 @@ unsafe extern "C" fn rsf_unity_frames_cpu_stage(
 /// The render event that took a leased packet from `slot` has ended: free the slot, then release
 /// the lease outside the state mutex.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_frames_end_packet(slot: u32) {
+pub(crate) extern "C" fn rsf_unity_frames_end_packet(slot: u32) {
     let lease = lock().end_packet(slot as usize);
     if let Some(lease) = lease {
         lease.end();
@@ -664,7 +664,7 @@ extern "C" fn rsf_unity_frames_end_packet(slot: u32) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_frames_config(
+pub(crate) unsafe extern "C" fn rsf_unity_frames_config(
     services: *const rsf_game_host_services,
     output_width: u32,
     output_height: u32,
@@ -708,7 +708,7 @@ unsafe extern "C" fn rsf_unity_frames_config(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_frames_set_policy(engine_spatial: u32, quality: u32) -> c_int {
+pub(crate) extern "C" fn rsf_unity_frames_set_policy(engine_spatial: u32, quality: u32) -> c_int {
     let mut state = lock();
     c_int::from(state.set_policy(engine_spatial, quality, ACTIVE.load(Ordering::SeqCst)))
 }
@@ -927,32 +927,32 @@ pub(crate) extern "C" fn rsf_unity_frames_callback_leave() {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_frames_open_callbacks() {
+pub(crate) extern "C" fn rsf_unity_frames_open_callbacks() {
     lock().closed = false;
 }
 
 /// Keep queued packet delivery open until all packets have been taken
 /// and every leased packet's render event has ended.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_frames_try_close() -> u32 {
+pub(crate) extern "C" fn rsf_unity_frames_try_close() -> u32 {
     let mut state = lock();
     u32::from(state.try_close(ACTIVE.load(Ordering::SeqCst)))
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_frames_try_close_completed(completed: u64) -> u32 {
+pub(crate) extern "C" fn rsf_unity_frames_try_close_completed(completed: u64) -> u32 {
     let mut state = lock();
     u32::from(state.try_close_completed(ACTIVE.load(Ordering::SeqCst), completed))
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_frames_drained(completed: u64) -> u32 {
+pub(crate) extern "C" fn rsf_unity_frames_drained(completed: u64) -> u32 {
     let state = lock();
     u32::from(state.callbacks == 0 && state.drained(completed))
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_frames_release() {
+pub(crate) extern "C" fn rsf_unity_frames_release() {
     let leases = lock().release();
     MANAGED_STAGE.store(0, Ordering::SeqCst);
     for lease in leases.into_iter().flatten() {
@@ -962,7 +962,7 @@ extern "C" fn rsf_unity_frames_release() {
 
 #[cfg(windows)]
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_retain_texture(texture: *mut c_void) {
+pub(crate) unsafe extern "C" fn rsf_unity_retain_texture(texture: *mut c_void) {
     use windows::core::{IUnknown, Interface};
     if let Some(resource) = unsafe { IUnknown::from_raw_borrowed(&texture) } {
         let _ = resource.clone().into_raw();
@@ -971,7 +971,7 @@ unsafe extern "C" fn rsf_unity_retain_texture(texture: *mut c_void) {
 
 #[cfg(windows)]
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_release_texture(texture: *mut c_void) {
+pub(crate) unsafe extern "C" fn rsf_unity_release_texture(texture: *mut c_void) {
     use windows::core::{IUnknown, Interface};
     if !texture.is_null() {
         drop(unsafe { IUnknown::from_raw(texture) });

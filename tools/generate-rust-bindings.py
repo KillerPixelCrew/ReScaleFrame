@@ -496,7 +496,7 @@ generate("games/anomaly/src/temporal_fixture/abi.rs", "games/anomaly/temporal/fi
          "rsf_anomaly_plan_.*", "NOTHING", [],
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]"])
 generate("games/unity-mono/src/plugin_abi.rs", "games/unity-mono/include/rescaleframe/unity_bridge.h",
-         "rsf_unity_native_api", "NOTHING",
+         "rsf_unity_native_api", "RSF_UNITY_NATIVE_ABI_VERSION",
          ["-Isdk/game/include", "-Igames/unity-mono/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "use rsf_game_sys::rsf_game_cpu_event;",
@@ -510,7 +510,18 @@ generate("games/unity-mono/src/bridge_abi.rs", "games/unity-mono/src/bridge_stat
           "--raw-line", "use rsf_game_sys::rsf_camera_frame;",
           "--with-derive-custom-struct", "rsf_unity_packet=Copy,Clone"])
 generate("games/unity-mono/src/bridge_d3d12_abi.rs", "games/unity-mono/src/bridge_d3d12.h",
-         "rsf_unity_d3d12_engine", "NOTHING", ["-Isdk/game/include", "-Igames/unity-mono/include"])
+         "rsf_unity_d3d12_engine", "RSF_UNITY_D3D12_EVENT_.*",
+         ["-Isdk/game/include", "-Igames/unity-mono/include"])
+generate("games/unity-mono/src/bridge_present_abi.rs",
+         "runtime/presentation/include/rescaleframe/d3d11_present_bridge.h",
+         "rsf_streamline_(graphics|host)", "NOTHING",
+         ["-Iruntime/presentation/include", "-Iruntime/backends/dlss/include",
+          "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Isdk/game/include"],
+         ["--allowlist-function",
+          "rsf_(d3d11_present_(graphics|host)|streamline_host_native)"])
+generate("games/unity-mono/src/bridge_route_abi.rs", "games/unity-mono/src/bridge.h",
+         "NOTHING", "RSF_UNITY_BRIDGE_(NONE|D3D11|D3D12|VULKAN)",
+         ["-Isdk/game/include", "-Igames/unity-mono/include"])
 generate("games/unity-mono/src/shared_surface_abi.rs", "runtime/presentation/include/rescaleframe/shared_surface.h",
          "rsf_shared_.*", "RSF_SHARED_SURFACE_ABI_VERSION", [],
          ["--allowlist-function",

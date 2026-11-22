@@ -38,7 +38,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 #[cfg(all(windows, not(feature = "mono-plugin")))]
 #[path = "bridge_d3d11.rs"]
-mod graphics;
+pub(crate) mod graphics;
 
 const SLOTS: usize = RSF_UNITY_FRAMES_SLOTS as usize;
 /// Colour, depth, motion, output, the HUD-less scene and the Editor preview source.
@@ -569,8 +569,7 @@ pub(crate) fn wait_completion(value: u64) -> bool {
 
 /// Fence reads run outside the state mutex. The closed callback admission and this close keep
 /// the record alive and prevent new submissions.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_d3d11_try_close() -> bool {
+pub(crate) fn try_close() -> bool {
     let Some(proof) = lock().close() else {
         return false;
     };
@@ -582,8 +581,7 @@ extern "C" fn rsf_unity_d3d11_try_close() -> bool {
 
 /// The package's checked close still holds the proof. The destruction leaves are infallible.
 /// Surfaces go first, then the slots and the shared graphics (`SharedDevice::drop`).
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_d3d11_release() -> bool {
+pub(crate) fn release() -> bool {
     let Some(device) = lock().take_for_release() else {
         return false;
     };
@@ -593,8 +591,7 @@ extern "C" fn rsf_unity_d3d11_release() -> bool {
     true
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_d3d11_open() {
+pub(crate) fn open() {
     lock().open();
 }
 

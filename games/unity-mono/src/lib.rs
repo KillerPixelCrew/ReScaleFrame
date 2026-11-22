@@ -9,6 +9,12 @@ mod bridge_d3d12;
 #[cfg(windows)]
 mod bridge_d3d12_abi;
 mod bridge_interop;
+#[cfg(windows)]
+mod bridge_native;
+#[cfg(all(windows, not(feature = "mono-plugin")))]
+mod bridge_present_abi;
+#[cfg(all(windows, not(feature = "mono-plugin")))]
+mod bridge_route_abi;
 mod bridge_state;
 mod d3d11_pass;
 #[cfg(any(test, all(windows, not(feature = "mono-plugin"))))]

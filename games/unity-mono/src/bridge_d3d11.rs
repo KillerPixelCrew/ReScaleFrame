@@ -3,14 +3,20 @@
 
 use super::*;
 use crate::bridge_abi::rsf_unity_packet;
+use crate::bridge_present_abi::{
+    rsf_d3d11_present_graphics, rsf_d3d11_present_host, rsf_streamline_graphics,
+    rsf_streamline_host_native,
+};
 use crate::bridge_state::{rsf_unity_frames_activate, rsf_unity_frames_active};
 use crate::d3d11_pass::{
     self, HANDBACK_FAILED, PassPlan, RETIRED, ROUTE_NONE, ROUTE_PREVIEW, ROUTE_WINDOW,
 };
+use crate::package_state::services::rsf_unity_package_log;
+use crate::package_state::{rsf_unity_package_bridge_failed, rsf_unity_package_sr_slot_reset};
 use crate::shared_surface_abi::*;
 use rsf_game_sys::rsf_game_render_pass;
 use rsf_runtime_submission::{FenceStatus, fence_status};
-use std::ffi::{CStr, c_char};
+use std::ffi::CStr;
 use std::mem::ManuallyDrop;
 use std::ptr::{null, null_mut};
 use windows::Win32::{
@@ -34,9 +40,6 @@ const RSF_SHARED_OK: rsf_shared_result = 0;
 unsafe extern "C" {
     fn rsf_unity_d3d11_engine_device() -> *mut c_void;
     fn rsf_unity_d3d11_engine_swapchain() -> *mut c_void;
-    fn rsf_unity_d3d11_runtime_graphics(device: *mut *mut c_void, queue: *mut *mut c_void) -> bool;
-    fn rsf_unity_d3d11_report_creation_failure(message: *const c_char);
-    fn rsf_unity_package_sr_slot_reset(bridge: u32, list: *mut c_void, slot: u32);
 }
 
 unsafe fn borrowed<T: Interface>(raw: &*mut c_void) -> &T {
@@ -58,11 +61,18 @@ unsafe fn prepare_device(host: &rsf_game_host_services, out: &mut DeviceHandles)
     let context11 = context.cast::<ID3D11DeviceContext4>().ok()?;
     out.device11 = device11.into_raw();
     out.context11 = context11.into_raw();
-    let (mut device12, mut queue12) = (null_mut(), null_mut());
-    if unsafe { rsf_unity_d3d11_runtime_graphics(&mut device12, &mut queue12) } {
+    let mut graphics: rsf_streamline_graphics = unsafe { std::mem::zeroed() };
+    graphics.struct_size = size_of::<rsf_streamline_graphics>() as u32;
+    if unsafe { rsf_d3d11_present_graphics(&mut graphics) } != 0 {
         // Shared textures and command lists use the Runtime's native device and queue.
-        let device = unsafe { ID3D12Device::from_raw_borrowed(&device12) }?.clone();
-        let queue = unsafe { ID3D12CommandQueue::from_raw_borrowed(&queue12) }?.clone();
+        let present = unsafe { rsf_d3d11_present_host() };
+        let native_queue = if present.is_null() {
+            graphics.queue
+        } else {
+            unsafe { rsf_streamline_host_native(present, graphics.queue) }
+        };
+        let device = unsafe { ID3D12Device::from_raw_borrowed(&graphics.native_device) }?.clone();
+        let queue = unsafe { ID3D12CommandQueue::from_raw_borrowed(&native_queue) }?.clone();
         out.device12 = device.into_raw();
         out.queue12 = queue.into_raw();
     } else {
@@ -225,7 +235,11 @@ struct SurfaceLease;
 
 impl SurfaceLease {
     fn acquire() -> Option<Self> {
-        rsf_unity_d3d11_surfaces_begin().then_some(Self)
+        if rsf_unity_d3d11_surfaces_begin() {
+            Some(Self)
+        } else {
+            None
+        }
     }
 }
 
@@ -473,7 +487,7 @@ impl Interop<'_> {
         if !d3d11_pass::apply_pending_change(&mut plan) {
             return None;
         }
-        unsafe { rsf_unity_package_sr_slot_reset(11, slot.list, index as u32) };
+        rsf_unity_package_sr_slot_reset(11, slot.list, index as u32);
         self.pass(slot.list, &plan.pass, 1);
         for (raw, state) in resources.into_iter().zip(plan.states) {
             unsafe {
@@ -510,23 +524,23 @@ impl Interop<'_> {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_d3d11_render_packet(
-    host: *const rsf_game_host_services,
+pub(crate) unsafe fn render_packet(
+    host: &rsf_game_host_services,
     offset: u32,
     editor: bool,
-    packet: *const rsf_unity_packet,
+    packet: &rsf_unity_packet,
 ) {
-    let (host, packet) = unsafe { (&*host, &*packet) };
     if rsf_unity_frames_active() == 0 {
         return;
     }
     let mut device = DeviceHandles::EMPTY;
     let ready = unsafe { rsf_unity_d3d11_initialize(host, &OPS, &mut device) };
     if ready == DEVICE_FAILED {
+        // RSF_BACKEND_ERROR_INIT_FAILED is a C cast macro.
+        rsf_unity_package_bridge_failed(-6);
         unsafe {
-            rsf_unity_d3d11_report_creation_failure(c"Unity DX11 shared device/fence initialization failed; native output remains in place.".as_ptr());
-        }
+            rsf_unity_package_log(c"Unity DX11 shared device/fence initialization failed; native output remains in place.".as_ptr())
+        };
     }
     if ready != DEVICE_READY || host.render_pass.is_none() {
         return;
@@ -553,20 +567,10 @@ unsafe extern "C" fn rsf_unity_d3d11_render_packet(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_d3d11_graphics(
-    device: *mut *mut c_void,
-    queue: *mut *mut c_void,
-) -> bool {
+pub(crate) fn graphics() -> Option<(ID3D12Device, ID3D12CommandQueue)> {
     // The caller holds callback admission until it receives both owning references.
-    let Some(shared) = lock().view() else {
-        return false;
-    };
-    let owning_device = unsafe { borrowed::<ID3D12Device>(&shared.device12) }.clone();
-    let owning_queue = unsafe { borrowed::<ID3D12CommandQueue>(&shared.queue12) }.clone();
-    unsafe {
-        device.write(owning_device.into_raw());
-        queue.write(owning_queue.into_raw());
-    }
-    true
+    let shared = lock().view()?;
+    let device = unsafe { borrowed::<ID3D12Device>(&shared.device12) }.clone();
+    let queue = unsafe { borrowed::<ID3D12CommandQueue>(&shared.queue12) }.clone();
+    Some((device, queue))
 }
