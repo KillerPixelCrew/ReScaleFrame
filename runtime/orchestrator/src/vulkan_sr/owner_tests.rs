@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::vulkan_dlss_sr_abi::{
-    rsf_vkdlss_commands, rsf_vkdlss_options, rsf_vkdlss_platform, rsf_vkdlss_tag,
+    rsf_vkdlss_commands, rsf_vkdlss_init, rsf_vkdlss_options, rsf_vkdlss_platform, rsf_vkdlss_tag,
 };
 use crate::vulkan_fg_resources_abi::rsf_vkfg_image;
 use crate::vulkan_latency_abi::{RSF_SLVK_ABI_VERSION, rsf_slvk_call};
@@ -183,24 +183,24 @@ fn fake_dlss_commands() -> rsf_vkdlss_commands {
 }
 
 static DLSS: rsf_vkdlss_platform = rsf_vkdlss_platform {
-    open: Some(leaf!(|setup: *const Setup,
-                      native: *mut Handle,
-                      w: *mut u32,
-                      h: *mut u32,
-                      commands: *mut rsf_vkdlss_commands,
-                      options: *const rsf_vkdlss_options|
+    open: Some(leaf!(|setup: *const Setup, native: *mut Handle| -> i32 {
+        unsafe { native.write((*setup).device) };
+        0
+    })),
+    initialize: Some(leaf!(|_: Handle, token: usize, user: Handle| -> i32 {
+        assert_eq!(token, 0);
+        let init = unsafe { &mut *user.cast::<rsf_vkdlss_init>() };
+        let options = unsafe { &*init.options };
+        assert_eq!((options.mode, options.width, options.height), (3, 128, 72));
+        assert_eq!((options.hdr, options.auto_exposure), (1, 0));
+        init.width = 64;
+        init.height = 36;
+        0
+    })),
+    prepare: Some(leaf!(|_: Handle,
+                         commands: *mut rsf_vkdlss_commands|
      -> i32 {
-        unsafe {
-            assert_eq!(
-                ((*options).mode, (*options).width, (*options).height),
-                (3, 128, 72)
-            );
-            assert_eq!(((*options).hdr, (*options).auto_exposure), (1, 0));
-            native.write((*setup).device);
-            w.write(64);
-            h.write(36);
-            commands.write(fake_dlss_commands());
-        }
+        unsafe { commands.write(fake_dlss_commands()) };
         0
     })),
     close: Some(leaf!(|native: Handle| -> () {
@@ -845,6 +845,23 @@ fn ffx_memory_type_prefers_first_device_local_else_last_compatible() {
 fn dlss_owner_routing_preserves_history_and_checked_release() {
     let mut state = Fake::default();
     let setup = state.setup(RSF_SR_DLSS);
+    static REFUSING: rsf_vkdlss_platform = rsf_vkdlss_platform {
+        invoke: Some(leaf!(|call: *const rsf_slvk_call| -> i32 {
+            let call = unsafe { &*call };
+            assert_eq!(call.struct_size as usize, size_of::<rsf_slvk_call>());
+            assert_eq!(call.abi_version, RSF_SLVK_ABI_VERSION);
+            assert_eq!((call.session_id, call.frame_id), (0, 0));
+            assert!(call.callback.is_some());
+            NOT_READY
+        })),
+        ..DLSS
+    };
+    assert_eq!(
+        crate::vulkan_dlss_sr::Owner::create(&REFUSING, &setup).err(),
+        Some(NOT_READY)
+    );
+    assert_eq!(std::mem::take(&mut state.calls), [Call::Close]);
+
     let mut raw = ptr::null_mut();
     assert_eq!(
         unsafe { rsf_core_srvk_create(None, &setup, &mut raw) },

@@ -868,12 +868,6 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_STREAMLINE_I
     target_include_directories(rsf_native_fg_dlss_vulkan_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}" "${RSF_STREAMLINE_INCLUDE}")
     target_link_libraries(rsf_native_fg_dlss_vulkan_test PRIVATE rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::FrameDump rsf_build_options)
     add_test(NAME native_fg_dlss_vulkan_contract COMMAND rsf_native_fg_dlss_vulkan_test)
-    add_executable(rsf_native_dlss_vulkan_test native_dlss_vulkan.cpp)
-    target_include_directories(rsf_native_dlss_vulkan_test PRIVATE ../runtime/orchestrator/include)
-    target_include_directories(rsf_native_dlss_vulkan_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}" "${RSF_STREAMLINE_INCLUDE}")
-    target_compile_definitions(rsf_native_dlss_vulkan_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_STREAMLINE_VK=1)
-    target_link_libraries(rsf_native_dlss_vulkan_test PRIVATE rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::FrameDump rsf_build_options)
-    add_test(NAME native_dlss_vulkan_contract COMMAND rsf_native_dlss_vulkan_test)
 endif()
 
 

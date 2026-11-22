@@ -40,16 +40,9 @@ sl::Resource resource(const Image& image, uint32_t layout) {
     result.flags = 0; result.usage = image.usage;
     return result;
 }
-struct Init {
-    Native& native;
-    uint32_t& width;
-    uint32_t& height;
-    const rsf_vkdlss_options& options;
-};
-
-rsf_backend_result initialize(void* module, uintptr_t, void* user) {
-    auto& init = *static_cast<Init*>(user);
-    auto& self = init.native;
+rsf_backend_result initialize(void* module, uintptr_t, void* user) noexcept try {
+    auto& init = *static_cast<rsf_vkdlss_init*>(user);
+    auto& self = *static_cast<Native*>(init.native);
     auto supported = entry<PFun_slIsFeatureSupported*>(module, "slIsFeatureSupported");
     auto feature = entry<PFun_slGetFeatureFunction*>(module, "slGetFeatureFunction");
     self.constants = entry<PFun_slSetConstants*>(module, "slSetConstants"); self.tags = entry<PFun_slSetTagForFrame*>(module, "slSetTagForFrame");
@@ -62,12 +55,12 @@ rsf_backend_result initialize(void* module, uintptr_t, void* user) {
         feature(sl::kFeatureDLSS, "slDLSSSetOptions", options) != sl::Result::eOk || !optimal || !options) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
     self.optimal = reinterpret_cast<PFun_slDLSSGetOptimalSettings*>(optimal); self.options = reinterpret_cast<PFun_slDLSSSetOptions*>(options);
     sl::DLSSOptions request{};
-    std::memcpy(static_cast<void*>(&request), &init.options, sizeof(request));
+    std::memcpy(static_cast<void*>(&request), init.options, sizeof(request));
     sl::DLSSOptimalSettings plan{};
     if (self.optimal(request, plan) != sl::Result::eOk || !plan.optimalRenderWidth || !plan.optimalRenderHeight) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     init.width = plan.optimalRenderWidth; init.height = plan.optimalRenderHeight;
     return RSF_BACKEND_OK;
-}
+} catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 int32_t set_constants(void* native, uintptr_t token, const rsf_slvk_sdk_constants* input) {
     auto& self = *static_cast<Native*>(native);
     DirectX::XMFLOAT4X4 previous{}, inverse{}; std::memcpy(&previous, input->clip_to_previous, sizeof(previous));
@@ -115,14 +108,16 @@ void capture_record(void* native, void* commands, const rsf_srvk_image* image,
     (void)static_cast<Native*>(native)->capture.record(
         static_cast<VkCommandBuffer>(commands), *image, *record, role, reset);
 }
-int32_t open(const rsf_srvk_setup* setup, void** out, uint32_t* width, uint32_t* height, rsf_vkdlss_commands* commands,
-    const rsf_vkdlss_options* options) noexcept try {
+int32_t open(const rsf_srvk_setup* setup, void** out) noexcept try {
     auto self = std::make_unique<Native>();
     self->setup = *setup;
-    Init init{*self, *width, *height, *options};
-    const rsf_slvk_call call{sizeof(call), RSF_SLVK_ABI_VERSION, 0, 0, initialize, &init};
-    const auto result = rsf_slvk_invoke(&call);
-    if (result != RSF_BACKEND_OK) return result;
+    *out = self.release();
+    return RSF_BACKEND_OK;
+} catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
+
+int32_t prepare(void* native, rsf_vkdlss_commands* commands) noexcept try {
+    auto* self = static_cast<Native*>(native);
+    const auto* setup = &self->setup;
     if (!self->gpu.load_images(*setup, true)) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
 #define RSF_LOAD(member, function) commands->member = setup->device_proc(setup->device, #function); if (!commands->member) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT
     RSF_LOAD(barrier, vkCmdPipelineBarrier);
@@ -138,7 +133,6 @@ int32_t open(const rsf_srvk_setup* setup, void** out, uint32_t* width, uint32_t*
     self->capture.set_provider(0, RSF_SR_DLSS);
     if (!self->capture.initialize(static_cast<VkDevice>(setup->device), setup->device_proc, memory))
         return RSF_BACKEND_ERROR_INIT_FAILED;
-    *out = self.release();
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
@@ -148,6 +142,8 @@ const rsf_vkdlss_platform rsf::dlss_vk::leaves{
     open,
     [](void* native) { delete static_cast<Native*>(native); },
     rsf_slvk_invoke,
+    initialize,
+    prepare,
     [](void* native, Image* image, uint32_t width, uint32_t height, uint32_t format, uint32_t usage) {
         return rsf_core_vkfg_ensure_image_usage(&rsf::vkfg::platform, static_cast<Native*>(native)->gpu.get(),
             image, width, height, format, usage, 1);
@@ -185,7 +181,7 @@ const rsf_vkdlss_platform rsf::dlss_vk::leaves{
     },
     rsf_dlss_preset_valid,
 };
-static_assert(sizeof(rsf_vkdlss_platform) == 16 * sizeof(void*));
+static_assert(sizeof(rsf_vkdlss_platform) == 18 * sizeof(void*));
 static_assert(sizeof(rsf_vkdlss_tag) == 24);
 static_assert(sl::kBufferTypeDepth == 0 && sl::kBufferTypeMotionVectors == 1 &&
     sl::kBufferTypeScalingInputColor == 3 && sl::kBufferTypeScalingOutputColor == 4 &&

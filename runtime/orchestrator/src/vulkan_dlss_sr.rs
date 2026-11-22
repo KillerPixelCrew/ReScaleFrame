@@ -4,8 +4,8 @@ use crate::frame_capture_vk::sr_capture_inputs;
 mod commands;
 use self::commands::Dispatch;
 use crate::vulkan_dlss_sr_abi::{
-    rsf_vkdlss_commands, rsf_vkdlss_images, rsf_vkdlss_options, rsf_vkdlss_platform as Platform,
-    rsf_vkdlss_tag,
+    rsf_vkdlss_commands, rsf_vkdlss_images, rsf_vkdlss_init, rsf_vkdlss_options,
+    rsf_vkdlss_platform as Platform, rsf_vkdlss_tag,
 };
 use crate::vulkan_latency_abi::{RSF_SLVK_ABI_VERSION, rsf_slvk_call, rsf_slvk_callback};
 use crate::vulkan_ownership::Claim;
@@ -325,24 +325,35 @@ impl Owner {
             return Err(INIT_FAILED);
         }
         let mut owner = unsafe { Box::from_raw(raw) };
-        let mut commands = rsf_vkdlss_commands::default();
-        let plan_options = options(mode, setup.output_width, setup.output_height);
-        let result = unsafe {
-            (platform.open.unwrap())(
-                setup,
-                &mut owner.native,
-                &mut owner.width,
-                &mut owner.height,
-                &mut commands,
-                &plan_options,
-            )
+        let result = unsafe { (platform.open.unwrap())(setup, &mut owner.native) };
+        if result != 0 {
+            return Err(result);
+        }
+        if owner.native.is_null() {
+            return Err(INIT_FAILED);
+        }
+        let request = options(mode, setup.output_width, setup.output_height);
+        let mut init = rsf_vkdlss_init {
+            native: owner.native,
+            width: 0,
+            height: 0,
+            options: &request,
         };
+        let call =
+            rsf_slvk_call::for_record(None, platform.initialize, ptr::from_mut(&mut init).cast());
+        let result = unsafe { (platform.invoke.unwrap())(&call) };
+        if result != 0 {
+            return Err(result);
+        }
+        owner.width = init.width;
+        owner.height = init.height;
+        let mut commands = rsf_vkdlss_commands::default();
+        let result = unsafe { (platform.prepare.unwrap())(owner.native, &mut commands) };
         if result != 0 {
             return Err(result);
         }
         owner.dispatch = Some(Dispatch::new(commands).ok_or(MISSING_ENTRY_POINT)?);
-        if owner.native.is_null() || owner.width == 0 || owner.height == 0 || !owner.allocate(setup)
-        {
+        if owner.width == 0 || owner.height == 0 || !owner.allocate(setup) {
             return Err(INIT_FAILED);
         }
         Ok(owner)
