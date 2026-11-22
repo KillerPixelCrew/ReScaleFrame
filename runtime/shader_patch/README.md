@@ -2,13 +2,19 @@
 
 The generic C API is `include/rescaleframe/shader_patch.h`. The Runtime exports
 `rsf_get_shader_patch_api`. Its owner is Rust, in
-`runtime/orchestrator/src/shader_patch.rs`; `src/platform.cpp` holds only the yyjson,
-D3DCompiler, D3D11 and MinHook calls. See [the port notes](../../docs/research/rust-shader-patch.md).
+`runtime/orchestrator/src/shader_patch.rs`. The compiler, D3D11 and MinHook
+calls are in Rust. The pinned yyjson parser uses a small C visitor shared by the
+Runtime and the Rust fixtures. See [the port notes](../../docs/research/rust-shader-patch.md).
 Callers borrow returned metadata/bytes until the stated
 session lifetime and release returned D3D11 COM objects themselves. Devices,
 contexts and compiler entry points are borrowed. Calls use the graphics owner
 thread; prepare serializes one session. Root tags and intended bindings are pack
-data, never game switches in core.
+data. Every admitted root is queryable. Omitted patched hashes and tags are
+empty strings, and omitted stages are zero.
+
+Inventory dumps return `RSF_PATCH_INTERNAL` if any entry fails. The service
+continues collecting other entries and records the affected shader hashes and
+operations in `inventory-report.txt`.
 
 `tools/rsf_shader_pack.py build <source-dir> <output.rsfpatch>` builds the raw v1
 container. `inspect <pack>` prints metadata and content hash. Metadata may reference

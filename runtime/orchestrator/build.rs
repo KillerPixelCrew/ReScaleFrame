@@ -12,7 +12,7 @@ fn shader_patch_parser() {
     };
     for file in [
         "src/json.c",
-        "src/platform.h",
+        "src/json.h",
         "include/rescaleframe/shader_patch.h",
         "yyjson.cmake",
         "yyjson.lock.json",

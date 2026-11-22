@@ -2,12 +2,12 @@
 //! Variant admission: native resources, buffers and stage interfaces stay as compiled, and only
 //! the pack's declared bindings and interpolants may be added.
 
+use super::leaf::{
+    BindingRecord, ParameterRecord, Platform, RSF_PATCH_SIGNATURE_INPUT,
+    RSF_PATCH_SIGNATURE_OUTPUT, ReflectionSink,
+};
 use super::pack::{Json, text, uint};
 use super::{Outcome, REFLECTION, check, raw, refuse};
-use crate::shader_patch_abi::{
-    RSF_PATCH_SIGNATURE_INPUT, RSF_PATCH_SIGNATURE_OUTPUT, rsf_patch_binding, rsf_patch_parameter,
-    rsf_patch_platform, rsf_patch_reflection,
-};
 use std::ffi::{CStr, c_char, c_void};
 
 #[derive(Clone, Default)]
@@ -59,11 +59,11 @@ fn shader<'a>(user: *mut c_void) -> &'a mut Shader {
     unsafe { &mut *user.cast::<Shader>() }
 }
 
-unsafe extern "C" fn on_shader(user: *mut c_void, version: u32) {
+unsafe fn on_shader(user: *mut c_void, version: u32) {
     shader(user).version = version;
 }
 
-unsafe extern "C" fn on_binding(user: *mut c_void, b: *const rsf_patch_binding) {
+unsafe fn on_binding(user: *mut c_void, b: *const BindingRecord) {
     let b = unsafe { &*b };
     shader(user).bindings.push(Binding {
         name: name(b.name),
@@ -75,7 +75,7 @@ unsafe extern "C" fn on_binding(user: *mut c_void, b: *const rsf_patch_binding) 
     });
 }
 
-unsafe extern "C" fn on_buffer(user: *mut c_void, text: *const c_char, size: u32) {
+unsafe fn on_buffer(user: *mut c_void, text: *const c_char, size: u32) {
     shader(user).buffers.push(Buffer {
         name: name(text),
         size,
@@ -83,17 +83,13 @@ unsafe extern "C" fn on_buffer(user: *mut c_void, text: *const c_char, size: u32
     });
 }
 
-unsafe extern "C" fn on_variable(user: *mut c_void, text: *const c_char, offset: u32, size: u32) {
+unsafe fn on_variable(user: *mut c_void, text: *const c_char, offset: u32, size: u32) {
     if let Some(buffer) = shader(user).buffers.last_mut() {
         buffer.variables.push((name(text), offset, size));
     }
 }
 
-unsafe extern "C" fn on_parameter(
-    user: *mut c_void,
-    signature: u32,
-    p: *const rsf_patch_parameter,
-) {
+unsafe fn on_parameter(user: *mut c_void, signature: u32, p: *const ParameterRecord) {
     let p = unsafe { &*p };
     let parameter = Parameter {
         semantic: name(p.semantic),
@@ -111,9 +107,9 @@ unsafe extern "C" fn on_parameter(
     }
 }
 
-pub(crate) fn reflect(platform: &rsf_patch_platform, code: &[u8]) -> Option<Shader> {
+pub(crate) fn reflect(platform: &Platform, code: &[u8]) -> Option<Shader> {
     let mut shader = Shader::default();
-    let sink = rsf_patch_reflection {
+    let sink = ReflectionSink {
         user: (&raw mut shader).cast(),
         shader: Some(on_shader),
         binding: Some(on_binding),
@@ -127,7 +123,7 @@ pub(crate) fn reflect(platform: &rsf_patch_platform, code: &[u8]) -> Option<Shad
 
 /// Checks a compiled variant against the stock shader it replaces.
 pub(crate) fn admit(
-    platform: &rsf_patch_platform,
+    platform: &Platform,
     rules: &Json,
     stock: &[u8],
     variant: &[u8],

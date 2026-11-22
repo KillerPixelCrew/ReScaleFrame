@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! `.rsfpatch` v1 admission and the JSON source rules it carries.
 
+use super::leaf::Platform;
 use super::{ANCHOR, FORMAT, Files, HASH, Outcome, SOURCE, check, refuse, sha256};
 use crate::shader_patch_abi::{
-    RSF_PATCH_JSON_ARRAY, RSF_PATCH_JSON_OBJECT, RSF_PATCH_JSON_SINT, RSF_PATCH_JSON_STRING,
-    RSF_PATCH_JSON_UINT, rsf_patch_bytes, rsf_patch_platform,
+    RSF_PATCH_JSON_ARRAY, RSF_PATCH_JSON_OBJECT, RSF_PATCH_JSON_OTHER, RSF_PATCH_JSON_SINT,
+    RSF_PATCH_JSON_STRING, RSF_PATCH_JSON_UINT, rsf_patch_bytes,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{c_char, c_void};
@@ -105,7 +106,11 @@ impl Builder {
             }
             k if k == RSF_PATCH_JSON_ARRAY as u32 => Json::Arr(Vec::new()),
             k if k == RSF_PATCH_JSON_OBJECT as u32 => Json::Obj(Vec::new()),
-            _ => Json::Other,
+            k if k == RSF_PATCH_JSON_OTHER as u32 => Json::Other,
+            _ => {
+                self.failed = Some("unknown JSON event");
+                return;
+            }
         };
         self.complete(value);
     }
@@ -140,6 +145,25 @@ impl Builder {
     }
 }
 
+#[cfg(test)]
+#[test]
+fn builder_rejects_duplicate_keys_and_embedded_nuls() {
+    let object = RSF_PATCH_JSON_OBJECT as u32;
+    let string = RSF_PATCH_JSON_STRING as u32;
+    let uint = RSF_PATCH_JSON_UINT as u32;
+    let mut builder = Builder::default();
+    builder.node(object, 0, b"", 2);
+    builder.node(string, 0, b"key", 3);
+    builder.node(uint, 1, b"", 0);
+    builder.node(string, 0, b"key", 3);
+    assert_eq!(builder.failed, Some("duplicate JSON key"));
+
+    let mut builder = Builder::default();
+    builder.node(object, 0, b"", 1);
+    builder.node(string, 0, b"\0", 1);
+    assert_eq!(builder.failed, Some("embedded NUL"));
+}
+
 unsafe extern "C" fn visit(
     user: *mut c_void,
     kind: u32,
@@ -156,7 +180,7 @@ unsafe extern "C" fn visit(
     builder.node(kind, number, bytes, size);
 }
 
-pub(crate) fn json(platform: &rsf_patch_platform, data: &[u8]) -> Outcome<Json> {
+pub(crate) fn json(platform: &Platform, data: &[u8]) -> Outcome<Json> {
     let mut builder = Builder::default();
     let text = super::raw(data);
     let parse = platform.parse_json.expect("bound shader patch platform");
@@ -189,7 +213,7 @@ pub(crate) struct Pack {
 }
 
 impl Pack {
-    pub(crate) fn load(platform: &rsf_patch_platform, data: &[u8]) -> Outcome<Pack> {
+    pub(crate) fn load(platform: &Platform, data: &[u8]) -> Outcome<Pack> {
         check(
             slice(data, 0, 8)? == b"RSFPATCH" && integer(data, 8, 4)? == 1,
             FORMAT,

@@ -405,12 +405,10 @@ generate("runtime/orchestrator/src/overlay_host_abi.rs", "loader/proxy/src/overl
          ["-Iui/overlay/include"],
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line",
           "use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};"])
-generate("runtime/orchestrator/src/shader_patch_abi.rs", "runtime/shader_patch/src/platform.h",
-         "rsf_patch_(sink|json_visit|include_fn|compile|binding|parameter|reflection|platform|file_sink)",
-         "RSF_PATCH_(JSON_.*|SIGNATURE_.*|USAGE_DYNAMIC|CPU_ACCESS_WRITE|CONSTANT_SLOTS)",
+generate("runtime/orchestrator/src/shader_patch_abi.rs", "runtime/shader_patch/src/json.h",
+         "rsf_patch_json_visit", "RSF_PATCH_JSON_.*",
          ["-Iruntime/shader_patch/include"],
-         ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]",
-          "--raw-line", "pub(crate) use rsf_game_sys::shader_patch_abi::*;"])
+         ["--no-recursive-allowlist", "--raw-line", "pub(crate) use rsf_game_sys::shader_patch_abi::*;"])
 generate("runtime/orchestrator/src/ui_identify_abi.rs", "runtime/graphics/include/rescaleframe/ui_identify.h",
          "rsf_ui_(set|result|registry_counters)", "RSF_UI_(IDENTIFY_ABI_VERSION|MAX_.*)", [])
 generate("runtime/orchestrator/src/ui_layer_abi.rs", "runtime/graphics/include/rescaleframe/ui_layer.h",

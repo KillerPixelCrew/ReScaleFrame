@@ -1,13 +1,10 @@
 // SPDX-License-Identifier: MIT
 //! Owner tests with production JSON parsing and fake compiler and device leaves.
 
+use super::leaf::*;
 use super::reflection::{Binding, Buffer, Parameter, Shader, compare};
 use super::*;
-use crate::shader_patch_abi::{
-    RSF_PATCH_CPU_ACCESS_WRITE, RSF_PATCH_SIGNATURE_OUTPUT, RSF_PATCH_USAGE_DYNAMIC,
-    rsf_patch_binding, rsf_patch_define, rsf_patch_json_visit, rsf_patch_parameter,
-    rsf_patch_reflection,
-};
+use crate::shader_patch_abi::{rsf_patch_define, rsf_patch_json_visit};
 use std::ffi::CStr;
 use std::os::windows::ffi::OsStrExt;
 use std::sync::atomic::AtomicUsize;
@@ -20,10 +17,14 @@ unsafe extern "C" {
     ) -> i32;
 }
 
+pub(super) const DYNAMIC_USAGE: u32 = 2;
+pub(super) const CPU_WRITE: u32 = 0x10000;
+pub(super) const CONSTANT_SLOTS: u32 = 14;
+
 const E_FAIL: i32 = 0x8000_4005_u32 as i32;
 
 /// Output is `target|defines|source` with each `#include "name"` line expanded.
-unsafe extern "C" fn fake_compile(call: *const rsf_patch_compile) -> i32 {
+unsafe fn fake_compile(call: *const CompileCall) -> i32 {
     let call = unsafe { &*call };
     let source = bytes(call.source).unwrap_or_default();
     let fail = |text: &[u8]| {
@@ -60,14 +61,14 @@ unsafe extern "C" fn fake_compile(call: *const rsf_patch_compile) -> i32 {
 }
 
 /// Every shader has one position output; marker text adds facts.
-unsafe extern "C" fn fake_reflect(code: rsf_patch_bytes, sink: *const rsf_patch_reflection) -> i32 {
+unsafe fn fake_reflect(code: rsf_patch_bytes, sink: *const ReflectionSink) -> i32 {
     let sink = unsafe { &*sink };
     let code = bytes(code).unwrap_or_default();
     let has = |marker: &[u8]| pack::find(code, marker, 0).is_some();
     if has(b"reflect_fail") {
         return -1;
     }
-    let parameter = |semantic: &CStr, index: u32| rsf_patch_parameter {
+    let parameter = |semantic: &CStr, index: u32| ParameterRecord {
         semantic: semantic.as_ptr(),
         index,
         reg: index,
@@ -84,7 +85,7 @@ unsafe extern "C" fn fake_reflect(code: rsf_patch_bytes, sink: *const rsf_patch_
             (sink.parameter.unwrap())(sink.user, RSF_PATCH_SIGNATURE_OUTPUT as u32, &texcoord);
         }
         if has(b"b13") {
-            let binding = rsf_patch_binding {
+            let binding = BindingRecord {
                 name: c"rsf_motion".as_ptr(),
                 type_: 0,
                 point: 13,
@@ -98,18 +99,14 @@ unsafe extern "C" fn fake_reflect(code: rsf_patch_bytes, sink: *const rsf_patch_
     0
 }
 
-unsafe extern "C" fn fake_disassemble(
-    code: rsf_patch_bytes,
-    user: *mut c_void,
-    text: rsf_patch_sink,
-) -> i32 {
+unsafe fn fake_disassemble(code: rsf_patch_bytes, user: *mut c_void, text: Sink) -> i32 {
     let asm = [b"asm:", bytes(code).unwrap_or_default()].concat();
     unsafe { (text.unwrap())(user, asm.as_ptr().cast(), asm.len()) };
     0
 }
 
 // The fake device method calls the hooked pixel entry point, as a driver vtable would.
-unsafe extern "C" fn fake_create_shader(
+unsafe fn fake_create_shader(
     device: *mut c_void,
     _: u32,
     code: rsf_patch_bytes,
@@ -118,16 +115,16 @@ unsafe extern "C" fn fake_create_shader(
     unsafe { d3d11::DETOURS[1](device, code.data, code.size, ptr::null_mut(), out) }
 }
 
-unsafe extern "C" fn fake_buffer(_: *mut c_void, _: u32, out: *mut *mut c_void) -> i32 {
+unsafe fn fake_buffer(_: *mut c_void, _: u32, out: *mut *mut c_void) -> i32 {
     unsafe { *out = ptr::dangling_mut() };
     0
 }
 
-unsafe extern "C" fn fake_desc(_: *mut c_void, width: *mut u32, usage: *mut u32, access: *mut u32) {
+unsafe fn fake_desc(_: *mut c_void, width: *mut u32, usage: *mut u32, access: *mut u32) {
     unsafe {
         *width = 16;
-        *usage = RSF_PATCH_USAGE_DYNAMIC as u32;
-        *access = RSF_PATCH_CPU_ACCESS_WRITE as u32;
+        *usage = DYNAMIC_USAGE;
+        *access = CPU_WRITE;
     }
 }
 
@@ -137,16 +134,16 @@ static DISABLED: AtomicUsize = AtomicUsize::new(0);
 static FAIL_ENABLE: AtomicUsize = AtomicUsize::new(0);
 static REMOVED: AtomicUsize = AtomicUsize::new(0);
 
-unsafe extern "C" fn fake_upload(_: *mut c_void, _: *mut c_void, _: rsf_patch_bytes) -> i32 {
+unsafe fn fake_upload(_: *mut c_void, _: *mut c_void, _: rsf_patch_bytes) -> i32 {
     UPLOADS.fetch_add(1, Ordering::Relaxed);
     0
 }
 
-unsafe extern "C" fn fake_bind(_: *mut c_void, _: u32, _: u32, _: *mut c_void) {
+unsafe fn fake_bind(_: *mut c_void, _: u32, _: u32, _: *mut c_void) {
     BINDS.fetch_add(1, Ordering::Relaxed);
 }
 
-unsafe extern "C" fn fake_ready() -> i32 {
+unsafe fn fake_ready() -> i32 {
     1
 }
 
@@ -161,11 +158,7 @@ unsafe extern "system" fn fake_original(
     7
 }
 
-unsafe extern "C" fn fake_hook(
-    target: *mut c_void,
-    _: *mut c_void,
-    original: *mut *mut c_void,
-) -> i32 {
+unsafe fn fake_hook(target: *mut c_void, _: *mut c_void, original: *mut *mut c_void) -> i32 {
     // An entry point numbered 99 refuses to be hooked.
     if target as usize == 99 {
         return 0;
@@ -174,20 +167,19 @@ unsafe extern "C" fn fake_hook(
     1
 }
 
-unsafe extern "C" fn fake_enable(target: *mut c_void) -> i32 {
+unsafe fn fake_enable(target: *mut c_void) -> i32 {
     i32::from(target as usize != FAIL_ENABLE.load(Ordering::Relaxed))
 }
 
-unsafe extern "C" fn fake_disable(_: *mut c_void) {
+unsafe fn fake_disable(_: *mut c_void) {
     DISABLED.fetch_add(1, Ordering::Relaxed);
 }
 
-unsafe extern "C" fn fake_remove(_: *mut c_void) {
+unsafe fn fake_remove(_: *mut c_void) {
     REMOVED.fetch_add(1, Ordering::Relaxed);
 }
 
-static FAKE: rsf_patch_platform = rsf_patch_platform {
-    struct_size: size_of::<rsf_patch_platform>() as u32,
+pub(super) static FAKE: Platform = Platform {
     parse_json: Some(rsf_patch_parse_json),
     compile: Some(fake_compile),
     reflect: Some(fake_reflect),
@@ -205,13 +197,12 @@ static FAKE: rsf_patch_platform = rsf_patch_platform {
 };
 
 fn api() -> rsf_shader_patch_api {
-    rsf_shader_patch_bind(&FAKE);
     let mut api = rsf_shader_patch_api {
         struct_size: size_of::<rsf_shader_patch_api>() as u32,
         abi_version: VERSION,
         ..Default::default()
     };
-    assert_eq!(unsafe { rsf_shader_patch_query(&mut api) }, OK);
+    assert_eq!(unsafe { rsf_get_shader_patch_api(&mut api) }, OK);
     api
 }
 
@@ -946,10 +937,10 @@ fn compile_failures_report_bounded_compiler_text() {
 fn query_and_resource_calls_validate_their_arguments() {
     let mut api = api();
     api.struct_size -= 1;
-    assert_eq!(unsafe { rsf_shader_patch_query(&mut api) }, ARGUMENT);
+    assert_eq!(unsafe { rsf_get_shader_patch_api(&mut api) }, ARGUMENT);
     let mut api = self::api();
     api.abi_version = 2;
-    assert_eq!(unsafe { rsf_shader_patch_query(&mut api) }, ABI);
+    assert_eq!(unsafe { rsf_get_shader_patch_api(&mut api) }, ABI);
     let api = self::api();
     let device = ptr::dangling_mut::<c_void>();
     let mut buffer = ptr::dangling_mut();
@@ -1126,7 +1117,7 @@ fn short_records_are_refused_from_their_size_field_alone() {
         counters_record,
         request_record,
     ] = sizes.each_mut().map(ptr::from_mut);
-    assert_eq!(unsafe { rsf_shader_patch_query(query.cast()) }, ARGUMENT);
+    assert_eq!(unsafe { rsf_get_shader_patch_api(query.cast()) }, ARGUMENT);
     assert_eq!(
         unsafe { (api.counters.unwrap())(counters_record.cast()) },
         ARGUMENT

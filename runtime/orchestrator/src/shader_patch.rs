@@ -2,13 +2,16 @@
 //! Owner of the Runtime shader patch service behind `rescaleframe/shader_patch.h`.
 //!
 //! One process-wide owner serves every SDK client: the source claim registry, counters, the
-//! creation inventory and D3D11 hooks. Sessions own one admitted pack each. Native leaves in
-//! `runtime/shader_patch/src/platform.cpp` parse JSON with yyjson and make the D3DCompiler,
-//! D3D11 and MinHook calls.
+//! creation inventory and D3D11 hooks. Sessions own one admitted pack each.
 
 mod d3d11;
 mod dxbc;
+#[cfg(not(test))]
+mod fixture;
+mod leaf;
 mod pack;
+#[cfg(not(test))]
+mod platform;
 mod reflection;
 #[cfg(test)]
 mod tests;
@@ -16,11 +19,11 @@ mod tests;
 use crate::shader_patch_abi::{
     RSF_PATCH_ABI, RSF_PATCH_ANCHOR, RSF_PATCH_ARGUMENT, RSF_PATCH_COMPILE, RSF_PATCH_FORMAT,
     RSF_PATCH_HASH, RSF_PATCH_INTERNAL, RSF_PATCH_OK, RSF_PATCH_ORIGINAL, RSF_PATCH_REFLECTION,
-    RSF_PATCH_SOURCE, RSF_SHADER_PATCH_VERSION, rsf_patch_bytes, rsf_patch_compile,
-    rsf_patch_counters, rsf_patch_file_sink, rsf_patch_output, rsf_patch_platform,
-    rsf_patch_request, rsf_patch_root, rsf_patch_session, rsf_patch_sink, rsf_shader_patch_api,
+    RSF_PATCH_SOURCE, RSF_SHADER_PATCH_VERSION, rsf_patch_bytes, rsf_patch_counters,
+    rsf_patch_output, rsf_patch_request, rsf_patch_root, rsf_patch_session, rsf_shader_patch_api,
 };
 use crate::sr_session::has_capacity;
+use leaf::{CompileCall, Platform};
 use pack::{Json, Pack, bytes, string, text};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -29,7 +32,7 @@ use std::os::windows::ffi::OsStringExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Mutex, MutexGuard};
 use std::{fs, ptr};
 use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::Security::Cryptography::{
@@ -108,22 +111,15 @@ static OWNERS: Mutex<Owners> = Mutex::new(BTreeMap::new());
 // Distinguishes concurrent cache writers within this process.
 static TEMPORARY: AtomicU64 = AtomicU64::new(0);
 
-static PLATFORM: OnceLock<&'static rsf_patch_platform> = OnceLock::new();
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_shader_patch_bind(platform: &'static rsf_patch_platform) {
-    assert_eq!(
-        platform.struct_size as usize,
-        size_of::<rsf_patch_platform>()
-    );
-    let _ = PLATFORM.set(platform);
-}
-
-fn platform() -> &'static rsf_patch_platform {
-    PLATFORM
-        .get()
-        .copied()
-        .expect("shader patch platform bound by the public query")
+fn platform() -> &'static Platform {
+    #[cfg(not(test))]
+    {
+        &platform::PLATFORM
+    }
+    #[cfg(test)]
+    {
+        &tests::FAKE
+    }
 }
 
 /// Admits a caller record by its leading `struct_size`, then its `abi_version`, before any
@@ -267,13 +263,21 @@ fn admit_roots(pack: &Pack) -> Outcome<Vec<Root>> {
                 "root source hash differs from source list",
             )?;
         }
+        let patched = optional(b"patched_sha256")?;
+        if entry.get(b"patched_sha256").is_some() {
+            check(
+                patched.len() == 64 && patched.iter().all(u8::is_ascii_hexdigit),
+                FORMAT,
+                "invalid patched root hash",
+            )?;
+        }
         let stage = optional(b"stage")?.first().copied().unwrap_or_default();
         let c_string =
             |bytes: &[u8]| CString::new(bytes).map_err(|_| refuse(FORMAT, "embedded NUL"));
         roots.push(Root {
             name: c_string(name)?,
             source: c_string(source)?,
-            patched: c_string(optional(b"patched_sha256")?)?,
+            patched: c_string(patched)?,
             tag: c_string(optional(b"tag")?)?,
             // Widen the first byte as a signed char to preserve the v1 ABI.
             stage: stage as i8 as u32,
@@ -311,7 +315,7 @@ fn compiler_identity(compiler: *mut c_void) -> Outcome<String> {
 }
 
 fn open_session(
-    platform: &rsf_patch_platform,
+    platform: &Platform,
     blob: rsf_patch_bytes,
     cache: *const u16,
     compiler: *mut c_void,
@@ -424,7 +428,7 @@ fn compilation<'a, 'b>(user: *mut c_void) -> &'a mut Compilation<'b> {
 }
 
 /// D3DCompile resolves includes case-insensitively with either separator.
-unsafe extern "C" fn include(
+unsafe fn include(
     user: *mut c_void,
     name: *const c_char,
     data: *mut *const c_void,
@@ -456,17 +460,17 @@ fn copy(data: *const c_void, size: usize) -> Vec<u8> {
     }
 }
 
-unsafe extern "C" fn code(user: *mut c_void, data: *const c_void, size: usize) {
+unsafe fn code(user: *mut c_void, data: *const c_void, size: usize) {
     compilation(user).code = Some(copy(data, size));
 }
 
-unsafe extern "C" fn errors(user: *mut c_void, data: *const c_void, size: usize) {
+unsafe fn errors(user: *mut c_void, data: *const c_void, size: usize) {
     compilation(user).errors = Some(copy(data, size));
 }
 
 /// Compiles `source` with the caller's inputs and includes from `files`.
 fn compile(
-    platform: &rsf_patch_platform,
+    platform: &Platform,
     compiler: *mut c_void,
     r: &rsf_patch_request,
     files: &Files,
@@ -484,7 +488,7 @@ fn compile(
         code: None,
         errors: None,
     };
-    let call = rsf_patch_compile {
+    let call = CompileCall {
         compiler,
         source: raw(source),
         defines: r.defines,
@@ -515,7 +519,7 @@ fn compile(
 
 /// Acquires, proves, builds or reuses one variant. Returns whether the cache supplied it.
 fn prepare_variant(
-    platform: &rsf_patch_platform,
+    platform: &Platform,
     s: &Session,
     r: &rsf_patch_request,
     output: &mut Vec<u8>,
@@ -686,7 +690,7 @@ unsafe extern "C" fn counters(out: *mut rsf_patch_counters) -> i32 {
 
 /// Fills the v1 table. Every client shares this owner's sessions, claims, hooks and counters.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_shader_patch_query(api: *mut rsf_shader_patch_api) -> i32 {
+unsafe extern "C" fn rsf_get_shader_patch_api(api: *mut rsf_shader_patch_api) -> i32 {
     let api = match unsafe { record(api) } {
         Ok(api) => api,
         Err(code) => return code,
@@ -709,94 +713,4 @@ unsafe extern "C" fn rsf_shader_patch_query(api: *mut rsf_shader_patch_api) -> i
         dump: Some(d3d11::dump),
     };
     OK
-}
-
-fn report(reason: *mut c_char, refusal: &Refusal) -> i32 {
-    if let Some(reason) = unsafe { reason.cast::<[c_char; 256]>().as_mut() } {
-        write_reason(reason, &refusal.reason);
-    }
-    refusal.code
-}
-
-/// Development entry: the pack's source tree for `files` named by `names`.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_shader_patch_transform(
-    pack: rsf_patch_bytes,
-    names: *const rsf_patch_bytes,
-    files: *const rsf_patch_bytes,
-    count: usize,
-    user: *mut c_void,
-    output: rsf_patch_file_sink,
-    reason: *mut c_char,
-) -> i32 {
-    guarded(|| {
-        let result = (|| -> Outcome<Files> {
-            check(
-                output.is_some() && (count == 0 || !names.is_null() && !files.is_null()),
-                ARGUMENT,
-                "transform arguments",
-            )?;
-            let pack = Pack::load(platform(), bytes(pack)?)?;
-            let mut originals = Files::new();
-            for i in 0..count {
-                let (name, file) = unsafe { (*names.add(i), *files.add(i)) };
-                originals.insert(bytes(name)?.to_vec(), bytes(file)?.to_vec());
-            }
-            pack.transform(&originals)
-        })();
-        match result {
-            Ok(tree) => {
-                let sink = output.expect("checked");
-                for (name, data) in &tree {
-                    let data = raw(data);
-                    unsafe { sink(user, name.as_ptr().cast(), name.len(), data.data, data.size) };
-                }
-                OK
-            }
-            Err(refusal) => report(reason, &refusal),
-        }
-    })
-}
-
-/// Development entry: the synthetic same-length DXBC instruction replacement.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_shader_patch_rewrite_dxbc(
-    input: rsf_patch_bytes,
-    expected_sha256: *const c_char,
-    instruction: *const u32,
-    instruction_words: usize,
-    replacement: *const u32,
-    replacement_words: usize,
-    user: *mut c_void,
-    output: rsf_patch_sink,
-    reason: *mut c_char,
-) -> i32 {
-    let words = |p: *const u32, n: usize| {
-        if n == 0 || p.is_null() {
-            &[][..]
-        } else {
-            unsafe { std::slice::from_raw_parts(p, n) }
-        }
-    };
-    guarded(|| {
-        let result = (|| -> Outcome<Vec<u8>> {
-            check(
-                output.is_some() && !expected_sha256.is_null(),
-                ARGUMENT,
-                "rewrite arguments",
-            )?;
-            let hash = unsafe { c_bytes(expected_sha256) };
-            let instruction = words(instruction, instruction_words);
-            let replacement = words(replacement, replacement_words);
-            dxbc::rewrite(bytes(input)?, hash, instruction, replacement)
-        })();
-        match result {
-            Ok(rewritten) => {
-                let data = raw(&rewritten);
-                unsafe { (output.expect("checked"))(user, data.data, data.size) };
-                OK
-            }
-            Err(refusal) => report(reason, &refusal),
-        }
-    })
 }

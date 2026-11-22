@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Keep yyjson's inline accessors behind the visitor ABI used by the Rust pack builder.
-#include "platform.h"
+#include "json.h"
 #include <yyjson.h>
 #include <stdlib.h>
 

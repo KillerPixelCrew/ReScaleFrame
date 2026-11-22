@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MIT
 //! D3D11 creation interception, the bytecode inventory and generic constant buffers.
 
+#[cfg(not(test))]
+use super::platform::{CONSTANT_SLOTS, CPU_WRITE, DYNAMIC_USAGE};
+#[cfg(test)]
+use super::tests::{CONSTANT_SLOTS, CPU_WRITE, DYNAMIC_USAGE};
 use super::{
     ARGUMENT, COMPILE, COUNTERS, INTERNAL, OK, guarded, lock, platform, raw, sha256, wide_path,
 };
-use crate::shader_patch_abi::{
-    RSF_PATCH_CONSTANT_SLOTS, RSF_PATCH_CPU_ACCESS_WRITE, RSF_PATCH_USAGE_DYNAMIC, rsf_patch_bytes,
-};
+use crate::shader_patch_abi::rsf_patch_bytes;
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::ffi::{c_char, c_void};
@@ -185,8 +187,7 @@ pub(super) unsafe extern "C" fn upload_constant(
     let p = platform();
     let (mut width, mut usage, mut access) = (0, 0, 0);
     unsafe { (p.buffer_desc.unwrap())(buffer, &mut width, &mut usage, &mut access) };
-    let writable =
-        usage == RSF_PATCH_USAGE_DYNAMIC as u32 && access & RSF_PATCH_CPU_ACCESS_WRITE as u32 != 0;
+    let writable = usage == DYNAMIC_USAGE && access & CPU_WRITE != 0;
     if bytes.size != width as usize || !writable {
         return ARGUMENT;
     }
@@ -203,14 +204,14 @@ pub(super) unsafe extern "C" fn bind_constant(
     buffer: *mut c_void,
 ) -> i32 {
     let known = u8::try_from(stage).is_ok_and(|s| STAGES.contains(&s));
-    if context.is_null() || slot >= RSF_PATCH_CONSTANT_SLOTS as u32 || !known {
+    if context.is_null() || slot >= CONSTANT_SLOTS || !known {
         return ARGUMENT;
     }
     unsafe { (platform().bind_constant.unwrap())(context, stage, slot, buffer) };
     OK
 }
 
-unsafe extern "C" fn append(user: *mut c_void, data: *const c_void, size: usize) {
+unsafe fn append(user: *mut c_void, data: *const c_void, size: usize) {
     let out = unsafe { &mut *user.cast::<Vec<u8>>() };
     if size != 0 {
         out.extend_from_slice(unsafe { std::slice::from_raw_parts(data.cast::<u8>(), size) });
