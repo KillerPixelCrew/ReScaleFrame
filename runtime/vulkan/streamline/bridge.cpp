@@ -14,7 +14,7 @@
 #include <cstdint>
 #include <atomic>
 #include <cstdio>
-#include <vulkan/vulkan.h>
+#include "wsi_abi.h"
 #include <sl.h>
 #include <sl_dlss_g.h>
 #include <sl_reflex.h>
@@ -57,19 +57,12 @@ int32_t rsf_slvk_life_initialize(const RsfSlLifecyclePlatform*, const wchar_t*, 
     uint32_t, uint32_t, uint32_t);
 int32_t rsf_slvk_life_shutdown(const RsfSlLifecyclePlatform*);
 int32_t rsf_slvk_life_unload(const RsfSlLifecyclePlatform*);
-uint32_t rsf_slvk_life_initialized();
 void* rsf_slvk_life_module();
-void* rsf_slvk_life_instance_proc();
-void* rsf_slvk_life_device_proc();
-void* rsf_slvk_life_interposer_symbol(const char*);
-void* rsf_slvk_life_common_symbol(const char*);
 void rsf_slvk_diagnostic_present_error(int32_t result);
 int32_t rsf_slvk_diagnostic_take_present_error();
 uint64_t rsf_slvk_diagnostic_worker_timeout_epoch();
 void rsf_slvk_diagnostic_set_verbose(uint32_t verbose);
 uint32_t rsf_slvk_diagnostic_message(const char* message, uint32_t info);
-void rsf_slvk_fg_swapchain_created(uint64_t);
-void rsf_slvk_fg_swapchain_destroyed(uint64_t);
 int32_t rsf_slvk_fg_set(const RsfSlFgPlatform*, int32_t, const RsfSlFgOptions*);
 int32_t rsf_slvk_fg_disable(const RsfSlFgPlatform*);
 int32_t rsf_slvk_fg_free(const RsfSlFgPlatform*);
@@ -101,25 +94,6 @@ const sl::ViewportHandle viewport(0);
 
 /// @brief Resolves a function from the supplied interposer without acquiring another module reference.
 template<class T> T entry(HMODULE library, const char* name) { return reinterpret_cast<T>(GetProcAddress(library, name)); }
-/// @brief Resolves an export of the plugin directory's loaded sl.common.dll, or null.
-template<class T> T commonProc(const char* name) { return reinterpret_cast<T>(rsf_slvk_life_common_symbol(name)); }
-bool sdkInitialized() { return rsf_slvk_life_initialized() != 0; }
-/// @brief Interposer Vulkan resolvers. Rust keeps them after slShutdown until explicit unload.
-PFN_vkGetInstanceProcAddr instanceProc() {
-    return reinterpret_cast<PFN_vkGetInstanceProcAddr>(rsf_slvk_life_instance_proc());
-}
-PFN_vkGetDeviceProcAddr deviceProc() {
-    return reinterpret_cast<PFN_vkGetDeviceProcAddr>(rsf_slvk_life_device_proc());
-}
-template<class T> T instanceCall(VkInstance instance, const char* name) {
-    const auto resolve = instanceProc();
-    return resolve ? reinterpret_cast<T>(resolve(instance, name)) : nullptr;
-}
-template<class T> T deviceCall(VkDevice device, const char* name) {
-    const auto resolve = deviceProc();
-    return resolve ? reinterpret_cast<T>(resolve(device, name)) : nullptr;
-}
-
 /// @brief Clears the SDK entry points that slShutdown, a failed slInit or unload invalidates.
 /// @details The Vulkan dispatch entry points are owned by the Rust lifecycle and stay until the module is unloaded.
 void clearSdkFunctions() noexcept {
@@ -447,127 +421,6 @@ RSF_SL_VK_EXPORT int rsf_vk_sl_unload_checked() {
 }
 RSF_SL_VK_EXPORT void VulkanStorySlUnload() {
     rsf_vk_sl_unload_checked();
-}
-
-/// @brief Returns an interposer instance/global Vulkan function address.
-/// @details Returned pointers borrow the loaded module lifetime.
-/// @return Resolved address, or null when the module/lookup is unavailable.
-RSF_SL_VK_EXPORT PFN_vkVoidFunction VulkanStorySlGetInstanceProcAddr(
-    VkInstance instance, const char* name) {
-    const auto resolve = instanceProc();
-    return resolve ? resolve(instance, name) : nullptr;
-}
-/// @brief Returns an interposer device Vulkan function address.
-/// @details Returned pointers borrow the loaded module lifetime.
-/// @return Resolved address, or null when the module/lookup is unavailable.
-RSF_SL_VK_EXPORT PFN_vkVoidFunction VulkanStorySlGetDeviceProcAddr(
-    VkDevice device, const char* name) {
-    const auto resolve = deviceProc();
-    return resolve ? resolve(device, name) : nullptr;
-}
-
-/// @brief Forwards instance creation through interposer-owned Vulkan dispatch.
-/// @return The Vulkan result, or VK_ERROR_INITIALIZATION_FAILED when dispatch is unavailable.
-RSF_SL_VK_EXPORT VkResult VulkanStorySlCreateInstance(const VkInstanceCreateInfo* info, VkInstance* instance) {
-    auto call = instanceCall<PFN_vkCreateInstance>(nullptr, "vkCreateInstance");
-    return call ? call(info, nullptr, instance) : VK_ERROR_INITIALIZATION_FAILED;
-}
-/// @brief Enumerates physical devices through the interposer using Vulkan count/query semantics.
-/// @return The Vulkan enumeration result or initialization failure.
-RSF_SL_VK_EXPORT VkResult VulkanStorySlEnumeratePhysicalDevices(VkInstance instance,
-    uint32_t* count, VkPhysicalDevice* devices) {
-    auto call = instanceCall<PFN_vkEnumeratePhysicalDevices>(instance, "vkEnumeratePhysicalDevices");
-    return call ? call(instance, count, devices) : VK_ERROR_INITIALIZATION_FAILED;
-}
-/// @brief Creates a logical device through the interposer for the selected physical device.
-/// @return The Vulkan creation result or initialization failure.
-RSF_SL_VK_EXPORT VkResult VulkanStorySlCreateDevice(VkInstance instance, VkPhysicalDevice physical,
-    const VkDeviceCreateInfo* info, VkDevice* device) {
-    auto call = instanceCall<PFN_vkCreateDevice>(instance, "vkCreateDevice");
-    return call ? call(physical, info, nullptr, device) : VK_ERROR_INITIALIZATION_FAILED;
-}
-/// @brief Creates a Win32 Vulkan surface through interposer dispatch.
-/// @details The caller owns the returned surface and keeps its borrowed window valid through surface use.
-/// @return The Vulkan creation result or initialization failure.
-RSF_SL_VK_EXPORT VkResult VulkanStorySlCreateWin32Surface(VkInstance instance,
-    const VkWin32SurfaceCreateInfoKHR* info, VkSurfaceKHR* surface) {
-    auto call = instanceCall<PFN_vkCreateWin32SurfaceKHR>(instance, "vkCreateWin32SurfaceKHR");
-    return call ? call(instance, info, nullptr, surface) : VK_ERROR_INITIALIZATION_FAILED;
-}
-/// @brief Destroys a caller-owned surface through its interposer dispatch when available.
-/// @details The caller must first retire swapchains referring to this surface.
-RSF_SL_VK_EXPORT void VulkanStorySlDestroySurface(VkInstance instance, VkSurfaceKHR surface) {
-    auto call = instanceCall<PFN_vkDestroySurfaceKHR>(instance, "vkDestroySurfaceKHR");
-    if (call) call(instance, surface, nullptr);
-}
-/// @brief Creates an interposer swapchain and records it as the current presentation owner.
-/// @details Successful creation invalidates cached dimensions/options without resetting feature enablement.
-/// @return The Vulkan creation result or initialization failure.
-RSF_SL_VK_EXPORT VkResult VulkanStorySlCreateSwapchain(VkDevice device,
-    const VkSwapchainCreateInfoKHR* info, VkSwapchainKHR* swapchain) {
-    auto call = deviceCall<PFN_vkCreateSwapchainKHR>(device, "vkCreateSwapchainKHR");
-    VkResult result = call ? call(device, info, nullptr, swapchain) : VK_ERROR_INITIALIZATION_FAILED;
-    if (result == VK_SUCCESS && swapchain) rsf_slvk_fg_swapchain_created(reinterpret_cast<uint64_t>(*swapchain));
-    return result;
-}
-/// @brief Destroys the supplied interposer swapchain after caller-provided retirement.
-/// @details Destroying an old retired chain does not clear the live successor's cached state.
-RSF_SL_VK_EXPORT void VulkanStorySlDestroySwapchain(VkDevice device, VkSwapchainKHR swapchain) {
-    auto call = deviceCall<PFN_vkDestroySwapchainKHR>(device, "vkDestroySwapchainKHR");
-    if (!call) return;
-    call(device, swapchain, nullptr);
-    rsf_slvk_fg_swapchain_destroyed(reinterpret_cast<uint64_t>(swapchain));
-}
-/// @brief Enumerates images belonging to the interposer-created swapchain.
-/// @details Count and image storage use ordinary Vulkan query/enumeration rules.
-/// @return The Vulkan enumeration result or initialization failure.
-RSF_SL_VK_EXPORT VkResult VulkanStorySlGetSwapchainImages(VkDevice device, VkSwapchainKHR swapchain,
-    uint32_t* count, VkImage* images) {
-    auto call = deviceCall<PFN_vkGetSwapchainImagesKHR>(device, "vkGetSwapchainImagesKHR");
-    return call ? call(device, swapchain, count, images) : VK_ERROR_INITIALIZATION_FAILED;
-}
-/// @brief Acquires an image through the same interposer owner that created the chain.
-/// @details Timeout and binary semaphore/fence pointers follow the borrowed Vulkan call contract.
-/// @return The Vulkan acquisition result or initialization failure.
-RSF_SL_VK_EXPORT VkResult VulkanStorySlAcquire(VkDevice device, VkSwapchainKHR swapchain,
-    uint64_t timeout, VkSemaphore semaphore, VkFence fence, uint32_t* index) {
-    auto call = deviceCall<PFN_vkAcquireNextImageKHR>(device, "vkAcquireNextImageKHR");
-    return call ? call(device, swapchain, timeout, semaphore, fence, index) : VK_ERROR_INITIALIZATION_FAILED;
-}
-/// @brief Queues presentation through the interposer on the borrowed Vulkan queue.
-/// @details Returned success does not establish GPU or display scanout completion.
-/// @return The Vulkan queue-present result or initialization failure.
-RSF_SL_VK_EXPORT VkResult VulkanStorySlPresent(VkDevice device, VkQueue queue, const VkPresentInfoKHR* info) {
-    auto call = deviceCall<PFN_vkQueuePresentKHR>(device, "vkQueuePresentKHR");
-    return call ? call(queue, info) : VK_ERROR_INITIALIZATION_FAILED;
-}
-RSF_SL_VK_EXPORT int VulkanStorySlQueuePresentSynchronized(uintptr_t function, void* queue, const void* info) {
-    auto present = reinterpret_cast<PFN_vkQueuePresentKHR>(function);
-    if (!present || !queue || !info) return VK_ERROR_INITIALIZATION_FAILED;
-    if (!sdkInitialized()) return present(static_cast<VkQueue>(queue), static_cast<const VkPresentInfoKHR*>(info));
-    using Call = VkResult (*)(PFN_vkQueuePresentKHR, VkQueue, const VkPresentInfoKHR*);
-    auto call = commonProc<Call>("rsfSlVulkanQueuePresent");
-    return call ? call(present, static_cast<VkQueue>(queue), static_cast<const VkPresentInfoKHR*>(info)) : VK_ERROR_EXTENSION_NOT_PRESENT;
-}
-RSF_SL_VK_EXPORT int VulkanStorySlVulkanWsiCall(int32_t (*callback)(void*), void* user) {
-    if (!callback || !user) return VK_ERROR_INITIALIZATION_FAILED;
-    if (!sdkInitialized()) return callback(user);
-    using Call = int32_t (*)(int32_t (*)(void*), void*);
-    auto call = commonProc<Call>("rsfSlVulkanWsiCall");
-    return call ? call(callback, user) : VK_ERROR_EXTENSION_NOT_PRESENT;
-}
-RSF_SL_VK_EXPORT int VulkanStorySlWithoutDlssG(int32_t (*callback)(void*), void* user) {
-    if (!callback) return VK_ERROR_INITIALIZATION_FAILED;
-    if (!sdkInitialized()) return callback(user);
-    using Call = int32_t (*)(int32_t (*)(void*), void*);
-    auto call = reinterpret_cast<Call>(rsf_slvk_life_interposer_symbol("rsfSlVulkanWithoutDlssGCall"));
-    return call ? call(callback, user) : VK_ERROR_EXTENSION_NOT_PRESENT;
-}
-/// @brief Forwards logical-device idle waiting through interposer dispatch.
-/// @return The checked Vulkan wait result, or initialization failure.
-RSF_SL_VK_EXPORT VkResult VulkanStorySlDeviceWaitIdle(VkDevice device) {
-    auto call = deviceCall<PFN_vkDeviceWaitIdle>(device, "vkDeviceWaitIdle");
-    return call ? call(device) : VK_ERROR_INITIALIZATION_FAILED;
 }
 
 // Resolve feature functions after the Vulkan device exists and the SL proxy has seen it.

@@ -576,6 +576,9 @@ dependencies = [
 [[package]]
 name = "rsf-streamline-vk"
 version = "0.1.2"
+dependencies = [
+ "ash",
+]
 
 [[package]]
 name = "rsf-unity-mono"

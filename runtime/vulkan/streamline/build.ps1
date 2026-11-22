@@ -23,6 +23,7 @@ $cargo = (Get-Command cargo.exe -ErrorAction Stop).Source
 if (-not $VulkanSdkRoot) { throw 'Specify -VulkanSdkRoot or set VULKAN_SDK.' }
 
 $source = Join-Path $PSScriptRoot 'bridge.cpp'
+$wsiExports = Join-Path $PSScriptRoot 'wsi_exports.def'
 $sdk = (Resolve-Path -LiteralPath $SdkRoot).Path
 $vulkanSdk = (Resolve-Path -LiteralPath $VulkanSdkRoot).Path
 $include = Join-Path $sdk 'include'
@@ -71,7 +72,7 @@ try {
         Pop-Location
     }
     $rustArchive = Join-Path $rustOutput "$rustTarget/release/librsf_streamline_vk.a"
-    & $compiler -std=c++20 -O2 -shared -static -I $include -I $vulkanInclude @correctionArguments $source $rustArchive `
+    & $compiler -std=c++20 -O2 -shared -static -I $include -I $vulkanInclude @correctionArguments $source $wsiExports $rustArchive `
         -o $temporary -lwintrust -ladvapi32 -lntdll -luserenv -lws2_32 -ldbghelp
     if ($LASTEXITCODE -ne 0) { throw 'Streamline bridge compilation failed.' }
     Move-Item -LiteralPath $temporary -Destination $target -Force

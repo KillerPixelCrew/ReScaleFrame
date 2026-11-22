@@ -1,0 +1,17 @@
+EXPORTS
+    VulkanStorySlGetInstanceProcAddr
+    VulkanStorySlGetDeviceProcAddr
+    VulkanStorySlCreateInstance
+    VulkanStorySlEnumeratePhysicalDevices
+    VulkanStorySlCreateDevice
+    VulkanStorySlCreateWin32Surface
+    VulkanStorySlDestroySurface
+    VulkanStorySlCreateSwapchain
+    VulkanStorySlDestroySwapchain
+    VulkanStorySlGetSwapchainImages
+    VulkanStorySlAcquire
+    VulkanStorySlPresent
+    VulkanStorySlDeviceWaitIdle
+    VulkanStorySlQueuePresentSynchronized
+    VulkanStorySlVulkanWsiCall
+    VulkanStorySlWithoutDlssG

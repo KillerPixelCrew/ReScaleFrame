@@ -7,9 +7,12 @@ publish.workspace = true
 license.workspace = true
 
 # Linked into both the Runtime's native Vulkan services and the standalone
-# Streamline bridge DLL, so it carries no dependencies.
+# Streamline bridge DLL.
 [lib]
 crate-type = ["staticlib"]
+
+[target.'cfg(windows)'.dependencies]
+ash = { version = "=0.38.0", default-features = false, features = ["std"] }
 
 [lints]
 workspace = true

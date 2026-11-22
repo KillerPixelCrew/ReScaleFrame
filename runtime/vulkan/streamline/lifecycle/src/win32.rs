@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Windows loader bindings and the C entry points called by bridge.cpp.
 
+mod wsi;
+
 use crate::frame_generation::{Options, Platform as FgPlatform};
 use crate::lifecycle::{Lifecycle, Platform, System, feature_mask};
 use std::ffi::{CStr, c_char, c_void};
@@ -100,49 +102,10 @@ unsafe extern "C" fn rsf_slvk_life_unload(platform: &Platform) -> i32 {
     unsafe { LIFECYCLE.unload(&Win32, platform) }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_slvk_life_initialized() -> u32 {
-    u32::from(LIFECYCLE.initialized())
-}
-
 /// The interposer while the SDK is initialized, otherwise null.
 #[unsafe(no_mangle)]
 extern "C" fn rsf_slvk_life_module() -> *mut c_void {
     LIFECYCLE.module()
-}
-
-/// vkGetInstanceProcAddr of the loaded interposer. Kept after slShutdown.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_slvk_life_instance_proc() -> *mut c_void {
-    LIFECYCLE.instance_proc()
-}
-
-/// vkGetDeviceProcAddr of the loaded interposer. Kept after slShutdown.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_slvk_life_device_proc() -> *mut c_void {
-    LIFECYCLE.device_proc()
-}
-
-/// Resolves an export of the loaded interposer without another module reference.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_slvk_life_interposer_symbol(name: *const c_char) -> *mut c_void {
-    unsafe { LIFECYCLE.interposer_symbol(&Win32, name) }
-}
-
-/// Resolves an export of sl.common.dll from the plugin directory if it is loaded.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_slvk_life_common_symbol(name: *const c_char) -> *mut c_void {
-    unsafe { LIFECYCLE.common_symbol(&Win32, name) }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_slvk_fg_swapchain_created(swapchain: u64) {
-    LIFECYCLE.swapchain().created(swapchain);
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_slvk_fg_swapchain_destroyed(swapchain: u64) {
-    LIFECYCLE.swapchain().destroyed(swapchain);
 }
 
 #[unsafe(no_mangle)]
