@@ -39,6 +39,9 @@ const wchar_t* rsf_dump_basename(const wchar_t* path);
 
 void rsf_sha256_hex(const void* data, size_t size, char out[65]);
 
+rsf_dump_result rsf_dump_poll_code(double threshold, uint32_t poll_ms, uint32_t timeout_ms,
+                                   uint32_t required_stable, double* last_entropy);
+
 /* Sidecar sections. Each writes one `"key": value,` entry including the trailing comma. */
 uint32_t rsf_dump_write_threads(FILE* stream, const rsf_module_entry* modules,
                                 size_t module_count);

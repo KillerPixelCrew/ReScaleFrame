@@ -136,48 +136,6 @@ static const void* resolve_base(const void* module_base)
     return module_base ? module_base : (const void*)GetModuleHandleW(NULL);
 }
 
-rsf_dump_result rsf_measure_module_code(const void* module_base, double* entropy)
-{
-    if (!entropy) {
-        return RSF_DUMP_ERROR_INVALID_ARGUMENT;
-    }
-    const unsigned char* base = (const unsigned char*)resolve_base(module_base);
-    const IMAGE_NT_HEADERS64* headers = nt_headers(base);
-    if (!headers) {
-        return RSF_DUMP_ERROR_NOT_A_PE;
-    }
-
-    /* The section holding the entry point is the one that has to be readable for analysis to be
-       worth anything. On a protected build that is the packer stub, so also consider the largest
-       executable section, which is where the real code lives. */
-    const IMAGE_SECTION_HEADER* sections = IMAGE_FIRST_SECTION(headers);
-    const IMAGE_SECTION_HEADER* chosen = NULL;
-    DWORD largest = 0;
-    for (WORD index = 0; index < headers->FileHeader.NumberOfSections; ++index) {
-        if ((sections[index].Characteristics & IMAGE_SCN_MEM_EXECUTE) == 0) {
-            continue;
-        }
-        const DWORD size = sections[index].Misc.VirtualSize;
-        if (size > largest) {
-            largest = size;
-            chosen = &sections[index];
-        }
-    }
-    if (!chosen) {
-        return RSF_DUMP_ERROR_NOT_A_PE;
-    }
-
-    const size_t size = (size_t)chosen->Misc.VirtualSize;
-    unsigned char* buffer = (unsigned char*)malloc(size < RSF_ENTROPY_WINDOW ? RSF_ENTROPY_WINDOW : size);
-    if (!buffer) {
-        return RSF_DUMP_ERROR_WRITE_FAILED;
-    }
-    rsf_dump_read_guarded(base + chosen->VirtualAddress, buffer, size);
-    *entropy = rsf_sampled_entropy(buffer, size, RSF_ENTROPY_WINDOW, RSF_ENTROPY_SAMPLES);
-    free(buffer);
-    return RSF_DUMP_OK;
-}
-
 static void collect_modules(rsf_module_entry* entries, size_t capacity, size_t* count)
 {
     *count = 0;
@@ -838,28 +796,18 @@ rsf_dump_result rsf_dump_when_decrypted(const rsf_dump_options* options, uint32_
                                         uint32_t timeout_ms, uint32_t stable_samples,
                                         rsf_dump_report* report)
 {
-    if (!options || poll_interval_ms == 0 || stable_samples == 0) {
+    if (!options || options->struct_size < RSF_DUMP_OPTIONS_V1_SIZE) {
         return RSF_DUMP_ERROR_INVALID_ARGUMENT;
     }
-
-    const DWORD deadline = GetTickCount() + timeout_ms;
-    uint32_t stable = 0;
-    for (;;) {
-        double entropy = 0.0;
-        const rsf_dump_result measured = rsf_measure_module_code(NULL, &entropy);
-        if (measured != RSF_DUMP_OK) {
-            return measured;
-        }
-        stable = entropy < options->entropy_threshold ? stable + 1 : 0;
-        if (stable >= stable_samples) {
-            return rsf_dump_module(NULL, options, report);
-        }
-        if (timeout_ms != 0 && (LONG)(GetTickCount() - deadline) >= 0) {
-            if (report && report->struct_size >= sizeof(rsf_dump_report)) {
-                report->code_entropy = entropy;
-            }
-            return RSF_DUMP_ERROR_STILL_ENCRYPTED;
-        }
-        Sleep(poll_interval_ms);
+    double entropy = 0.0;
+    const rsf_dump_result result = rsf_dump_poll_code(options->entropy_threshold, poll_interval_ms,
+                                                      timeout_ms, stable_samples, &entropy);
+    if (result == RSF_DUMP_OK) {
+        return rsf_dump_module(NULL, options, report);
     }
+    if (result == RSF_DUMP_ERROR_STILL_ENCRYPTED && report &&
+        report->struct_size >= sizeof(rsf_dump_report)) {
+        report->code_entropy = entropy;
+    }
+    return result;
 }

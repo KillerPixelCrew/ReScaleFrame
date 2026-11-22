@@ -103,3 +103,13 @@ compares section digests with BCrypt across the bytes in the file. The short v1 
 sentinel immediately after its ABI prefix to detect writes into the extension. CTest retains
 the same fixture target, output directory and timeout. The CLI expects the UTF-8 directory
 already required by the dump API.
+
+## Executable entropy and polling
+
+Rust now implements `rsf_measure_module_code` and its bounded poll loop. The PE selection
+still uses the largest executable section and the same evenly spaced 64 KiB windows. A single
+window is copied at a time with the existing guarded zero-fill behavior. The reader checks
+the PE header and live range before sampling. The poll uses the 64-bit tick count to support
+the full 32-bit timeout range and preserves the consecutive-sample threshold and zero timeout.
+The native writer still owns dump publication and updates only the existing timeout report
+field. The public header retains all declarations and layout.

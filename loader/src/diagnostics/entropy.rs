@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use std::{ffi::c_void, slice};
 
-fn entropy(bytes: &[u8]) -> f64 {
+pub(super) fn entropy(bytes: &[u8]) -> f64 {
     let mut counts = [0usize; 256];
     for &byte in bytes {
         counts[usize::from(byte)] += 1;
@@ -34,8 +34,19 @@ unsafe extern "C" fn rsf_sampled_entropy(
         return 0.0;
     }
     let bytes = unsafe { slice::from_raw_parts(data.cast(), size) };
+    sampled(size, window, samples, |offset, length| {
+        entropy(&bytes[offset..offset + length])
+    })
+}
+
+pub(super) fn sampled(
+    size: usize,
+    window: usize,
+    samples: usize,
+    mut measure: impl FnMut(usize, usize) -> f64,
+) -> f64 {
     if size <= window {
-        return entropy(bytes);
+        return measure(0, size);
     }
     let span = (size - window) as u128;
     let mut total = 0.0;
@@ -46,7 +57,7 @@ unsafe extern "C" fn rsf_sampled_entropy(
         } else {
             (span * index as u128 / (samples - 1) as u128) as usize
         };
-        total += entropy(&bytes[offset..offset + window]);
+        total += measure(offset, window);
     }
     total / samples as f64
 }

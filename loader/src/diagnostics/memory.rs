@@ -65,7 +65,7 @@ fn readable_extent(cache: &mut rsf_mem_cache, start: usize, size: usize) -> usiz
     offset
 }
 
-unsafe fn read(source: usize, destination: *mut u8, size: usize) -> (bool, usize) {
+pub(super) unsafe fn read(source: usize, destination: *mut u8, size: usize) -> (bool, usize) {
     let mut copied = 0;
     let result = unsafe {
         ReadProcessMemory(
@@ -123,7 +123,7 @@ unsafe extern "C" fn rsf_dump_read_exact(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dump_read_guarded(
+pub(super) unsafe extern "C" fn rsf_dump_read_guarded(
     source: *const u8,
     destination: *mut u8,
     size: usize,
