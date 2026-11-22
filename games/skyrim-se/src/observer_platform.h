@@ -32,3 +32,9 @@ extern "C" const char* rsf_skyrim_executable_sha256() noexcept;
 extern "C" int32_t rsf_skyrim_observer_admit(
     int32_t (*sampling)(), int32_t (*presentation_inputs)(),
     rsf_skyrim_observer_targets* out) noexcept;
+extern "C" bool rsf_skyrim_observer_initialize() noexcept;
+extern "C" bool rsf_skyrim_observer_create(void* target, void* detour, void** original) noexcept;
+extern "C" bool rsf_skyrim_observer_remove(void* target, void** original) noexcept;
+extern "C" int32_t rsf_skyrim_observer_enable(void* target) noexcept;
+extern "C" bool rsf_skyrim_observer_disable(void* target) noexcept;
+extern "C" bool rsf_skyrim_observer_pin(uintptr_t address) noexcept;

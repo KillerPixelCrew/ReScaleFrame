@@ -13,9 +13,8 @@ use crate::scene_abi::{rsf_native_present_record, rsf_observer_present_event};
 pub(crate) use rsf_game_sys::d3d11_chain_abi::*;
 use rsf_game_sys::d3d11_host_abi::rsf_d3d11_auxiliary_surface;
 pub(crate) use rsf_game_sys::d3d11_host_abi::{
-    rsf_d3d11_host_setup, rsf_d3d11_native_chain, rsf_d3d11_creation_scope,
-    rsf_d3d11_auxiliary_pass, rsf_d3d11_auxiliary_scope, rsf_d3d11_host_capture,
-    rsf_d3d11_sampler_bias,
+    rsf_d3d11_auxiliary_pass, rsf_d3d11_auxiliary_scope, rsf_d3d11_creation_scope,
+    rsf_d3d11_host_capture, rsf_d3d11_host_setup, rsf_d3d11_native_chain, rsf_d3d11_sampler_bias,
 };
 use rsf_game_sys::{rsf_frame_record, rsf_game_cpu_event, rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::{c_char, c_int, c_void};

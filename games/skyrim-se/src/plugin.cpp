@@ -88,8 +88,6 @@ int accept_presentation_window(void*, void* window) noexcept
     return rsf_skyrim_render_accept_window(window) ? 1 : 0;
 }
 
-bool accepting() noexcept { return rsf_skyrim_session_accepting(); }
-
 uintptr_t observe_process(void* manager, uint32_t input, uint32_t output, uintptr_t argument4, uint8_t argument5) noexcept
 {
 #if defined(_MSC_VER)
@@ -177,13 +175,6 @@ const ObserverHook& observer_hook(uint32_t index) noexcept
     };
     return hooks[index];
 }
-
-extern "C" bool rsf_skyrim_observer_initialize() noexcept;
-extern "C" bool rsf_skyrim_observer_create(void*, void*, void**) noexcept;
-extern "C" bool rsf_skyrim_observer_remove(void*, void**) noexcept;
-extern "C" int32_t rsf_skyrim_observer_enable(void*) noexcept;
-extern "C" bool rsf_skyrim_observer_disable(void*) noexcept;
-extern "C" bool rsf_skyrim_observer_pin(uintptr_t) noexcept;
 
 constexpr rsf_skyrim_observer_leaves observer_leaves{
     rsf_skyrim_observer_initialize,

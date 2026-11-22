@@ -193,9 +193,10 @@ generate("games/fallout4/src/platform_abi.rs", "games/fallout4/src/fallout4_plat
          ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/graphics/include",
           "-Iruntime/presentation/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]", "--raw-line", "type wchar_t = u16;",
-          "--raw-line", "use rsf_game_sys::rsf_game_host_services;",
-          "--raw-line", "pub use rsf_game_sys::d3d11_host_abi::{rsf_d3d11_creation_scope, rsf_d3d11_host_setup, rsf_d3d11_native_chain};",
-          "--raw-line", "pub use rsf_game_sys::sr_abi::rsf_motion_decode_params;"])
+          "--raw-line", "pub use rsf_game_sys::d3d11_host_abi::{\n"
+          "    rsf_d3d11_creation_scope, rsf_d3d11_host_setup, rsf_d3d11_native_chain,\n};",
+          "--raw-line", "pub use rsf_game_sys::sr_abi::rsf_motion_decode_params;",
+          "--raw-line", "use rsf_game_sys::rsf_game_host_services;"])
 generate("games/fallout4/src/cpu_abi.rs", "games/fallout4/src/cpu_events_platform.h",
          "rsf_fallout4_cpu_(identity|scope)", "RSF_FALLOUT4_CPU_(HOOK_.*|SCOPE_WORDS)",
          ["-Isdk/game/include"],

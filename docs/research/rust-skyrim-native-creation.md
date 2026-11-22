@@ -343,3 +343,39 @@ Fallout 4 and the Runtime. The portable CPU policy assertions moved to Rust. The
 `skyrim_input_contract` CTest executable still exercises real guarded input-list reads and the
 native RenderEntry ABI. Verification covered source checks, Rust 1.94.1 formatting, locked offline
 metadata and focused bindgen 0.72.1 regeneration. Builds and fixtures remain unrun.
+
+## Follow-up from 82b39a63
+
+The startup and input changes were reapplied on `82b39a63`. The shared D3D11 setup binding
+includes that base's `depth_far_plane` extension. Skyrim retains finite depth and Fallout 4
+retains its own depth convention. The platform is published before both cold render guards.
+S02's auxiliary retirement, session admission and retained-lease paths are preserved. Cold
+creation calls the existing I01 Steam C ABI.
+
+Rust now invokes MinHook for creation, compatibility, CPU production and observers. CPU
+trampolines are published with release ordering before enabling and acquired by the native
+detours. Device creation retains idempotent enable status, and observers and CPU hooks keep raw
+enable results for diagnostics. The session calls Rust render and CPU services directly and keeps
+separate results for Runtime refusal and foreign exceptions.
+
+The remaining native boundaries are:
+
+- `native_creation.cpp` captures its own engine caller address for the verified game and
+  Display Tweaks routes. Its typed D3D11 forwarder retains the native HRESULT, arguments and
+  stack unwind, and its destructor releases the Runtime scope and restores last error.
+- `compatibility.cpp` forwards the original GetProcAddress, initializer, configuration and HDR
+  calls. The HDR hook captures the renderer caller's return address and restores the scoped
+  observation on unwind. The initializer catches exceptions before returning into Rust.
+- `cpu_events.cpp` keeps the typed original calls, detour-local return addresses for World and
+  native job provenance, synchronous callback exception guards and the remaining TLS event
+  sequencing. The proof store, checked engine input reads and MinHook transaction are Rust.
+- `plugin.cpp` publishes the native GameSDK entry and retains the typed observer forwarders,
+  the original post-process call frame and callback exception guards around the host and Runtime.
+- `guarded_read.cpp` is the common fault boundary used by native creation and CPU input. On
+  MSVC the actual copy is inside `__try`/`__except`. The existing MinGW route checks the
+  committed readable region with VirtualQuery before copying.
+
+The seven assigned headers now contain declarations, private wire records and layout checks.
+`tests/skyrim_input.cpp` was replaced by a Rust fixture body and C entry point with the
+same CTest name. It uses the production guarded-copy callback for the valid, cyclic, bounded
+and unreadable pointer cases. Render scope and event receipts are checked in Rust.

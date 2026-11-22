@@ -31,7 +31,7 @@ struct rsf_skyrim_session_leaves {
     // The game window class policy lent to the presentation bridge.
     int (*accept_window)(void* user, void* window);
 };
-static_assert(sizeof(rsf_skyrim_session_leaves) == 8 + 13 * sizeof(void*));
+static_assert(sizeof(rsf_skyrim_session_leaves) == 8 + 12 * sizeof(void*));
 static_assert(sizeof(rsf_motion_decode_params) == 48);
 static_assert(offsetof(rsf_d3d11_host_setup, depth_far_plane) == 160 && offsetof(rsf_d3d11_host_setup, motion) == 80 &&
     offsetof(rsf_d3d11_host_setup, quality_choices) == 128 &&

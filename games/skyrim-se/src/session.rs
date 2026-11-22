@@ -116,7 +116,7 @@ pub(crate) struct Leaves {
 }
 
 const _: () = {
-    assert!(size_of::<Leaves>() == 8 + (13 + cfg!(test) as usize) * size_of::<usize>());
+    assert!(size_of::<Leaves>() == 8 + (12 + cfg!(test) as usize) * size_of::<usize>());
 };
 
 /// A native leaf threw. A lifecycle entry reports RSF_ERROR_NOT_READY as the former C++ catch did.
