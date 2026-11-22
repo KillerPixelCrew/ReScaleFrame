@@ -30,7 +30,7 @@ use crate::depth_domains::rsf_fallout4_depth_verify;
 use crate::render_inputs::verify_for_build;
 use crate::resolution::{is_busy as resolution_busy, rsf_fallout4_resolution_verify};
 use crate::screen::rsf_fallout4_verify_screen_queries;
-use crate::{Ops, image, read};
+use crate::{MH_OK, Ops, image, read};
 use rsf_game_sys::{rsf_game_host_services, rsf_game_render_pass};
 use std::ffi::{CStr, c_void};
 use std::mem::offset_of;
@@ -124,22 +124,19 @@ unsafe extern "C" fn rsf_fallout4_render_read_owner(output: &mut scope::Owner) -
     true
 }
 
-/// The supplied output points to the native caller's outer chain slot.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_render_read_outer_chain(
-    renderer: usize,
-    chain: &mut usize,
-) -> bool {
-    let Some(window_cell) =
-        read::<usize>(image() + 0x38e13b0).filter(|&value| value == renderer + RENDERER_WINDOW)
-    else {
+extern "C" fn rsf_fallout4_render_read_manager(output: &mut usize) -> bool {
+    let Some(manager) = read(image() + crate::resolution::MANAGER) else {
         return false;
     };
-    let Some(outer) = read::<usize>(window_cell + 0x18) else {
-        return false;
-    };
-    *chain = outer;
+    *output = manager;
     true
+}
+
+fn read_outer_chain(base: usize, renderer: usize) -> Option<usize> {
+    let window_cell =
+        read::<usize>(base + 0x38e13b0).filter(|&value| value == renderer + RENDERER_WINDOW)?;
+    read(window_cell + 0x18)
 }
 
 // Return addresses of the guarded MainDraw and Swap calls in verify.
@@ -322,7 +319,11 @@ struct RenderExports {
 }
 
 type CreateHook = unsafe extern "C" fn(u32, *mut c_void) -> bool;
-type QueueHook = unsafe extern "C" fn(*mut c_void) -> bool;
+unsafe extern "system" {
+    fn MH_QueueEnableHook(target: *mut c_void) -> i32;
+    fn MH_QueueDisableHook(target: *mut c_void) -> i32;
+    fn MH_ApplyQueued() -> i32;
+}
 type Query = unsafe extern "C" fn() -> bool;
 type BindExports = unsafe extern "C" fn(&RenderExports);
 type BindHost = unsafe extern "C" fn(&rsf_game_host_services);
@@ -332,9 +333,6 @@ type BindHost = unsafe extern "C" fn(&rsf_game_host_services);
 struct NativeLeaves {
     create_hook: Option<CreateHook>,
     remove_hook: Option<CreateHook>,
-    queue_enable_hook: Option<QueueHook>,
-    queue_disable_hook: Option<QueueHook>,
-    apply_queued: Option<Query>,
     scopes_busy: Option<Query>,
     bind_exports: Option<BindExports>,
     bind_host: Option<BindHost>,
@@ -342,16 +340,13 @@ struct NativeLeaves {
 
 const _: () = {
     assert!(size_of::<RenderExports>() == 5 * size_of::<usize>());
-    assert!(size_of::<NativeLeaves>() == 8 * size_of::<usize>());
+    assert!(size_of::<NativeLeaves>() == 5 * size_of::<usize>());
 };
 
 /// The complete leaf table.
 struct Leaves {
     create_hook: CreateHook,
     remove_hook: CreateHook,
-    queue_enable_hook: QueueHook,
-    queue_disable_hook: QueueHook,
-    apply_queued: Query,
     scopes_busy: Query,
     bind_exports: BindExports,
     bind_host: BindHost,
@@ -376,9 +371,6 @@ unsafe extern "C" fn rsf_fallout4_render_publish(table: *const NativeLeaves) -> 
         Some(Leaves {
             create_hook: table.create_hook?,
             remove_hook: table.remove_hook?,
-            queue_enable_hook: table.queue_enable_hook?,
-            queue_disable_hook: table.queue_disable_hook?,
-            apply_queued: table.apply_queued?,
             scopes_busy: table.scopes_busy?,
             bind_exports: table.bind_exports?,
             bind_host: table.bind_host?,
@@ -508,30 +500,27 @@ pub(crate) fn prepare(ops: &Ops, services: &rsf_game_host_services, build: &Exac
 /// Rechecks the guards, queues every created detour, sets live and applies the queue. A missing
 /// record or a refused queue or apply clears live and queues every created detour disabled.
 pub(crate) fn start(ops: &Ops) -> bool {
-    let Some(leaves) = leaves() else {
-        return false;
-    };
-    if busy() || !verify() {
+    if leaves().is_none() || busy() || !verify() {
         return false;
     }
     let created = created();
     let mut queued = true;
     for (index, hook) in HOOKS.iter().enumerate() {
-        if !created[index] || !unsafe { (leaves.queue_enable_hook)(target(hook)) } {
+        if !created[index] || unsafe { MH_QueueEnableHook(target(hook)) } != MH_OK {
             queued = false;
         }
     }
     if queued {
         LIVE.store(true, Ordering::Release);
     }
-    if !queued || !unsafe { (leaves.apply_queued)() } {
+    if !queued || unsafe { MH_ApplyQueued() } != MH_OK {
         LIVE.store(false, Ordering::Release);
         for (index, hook) in HOOKS.iter().enumerate() {
             if created[index] {
-                let _ = unsafe { (leaves.queue_disable_hook)(target(hook)) };
+                let _ = unsafe { MH_QueueDisableHook(target(hook)) };
             }
         }
-        let _ = unsafe { (leaves.apply_queued)() };
+        let _ = unsafe { MH_ApplyQueued() };
         return false;
     }
     drop(created);
@@ -604,7 +593,6 @@ enum PresentAdmission {
     Complete = 2,
 }
 
-type ReadPresentOwner = unsafe extern "C" fn(&mut ScopeKey, &mut usize) -> bool;
 type RevalidatePresentScreen = unsafe extern "C" fn() -> bool;
 
 const _: () = {
@@ -643,7 +631,6 @@ extern "C" fn rsf_fallout4_render_match_present(
     renderer: usize,
     submission_open: bool,
     leased: &ScopeKey,
-    read_owner: ReadPresentOwner,
 ) -> PresentMatch {
     let base = image();
     if caller != base + OUTER_PRESENT_RETURN
@@ -652,12 +639,17 @@ extern "C" fn rsf_fallout4_render_match_present(
     {
         return PresentMatch::Unrelated;
     }
-    let mut current = ScopeKey::default();
-    let mut outer_chain = 0;
-    if unsafe { read_owner(&mut current, &mut outer_chain) }
-        && outer_chain == leased.chain
-        && current == *leased
-    {
+    let matches = read_owner(base).is_some_and(|current| {
+        read_outer_chain(base, current.renderer) == Some(leased.chain)
+            && ScopeKey {
+                frame: u64::from(current.frame),
+                view: current.view as u64,
+                window: current.window as u64,
+                context: current.context,
+                chain: current.chain,
+            } == *leased
+    });
+    if matches {
         PresentMatch::Matched
     } else {
         PresentMatch::OwnerChanged
@@ -679,7 +671,10 @@ extern "C" fn rsf_fallout4_render_admit_present(
         return PresentAdmission::SourceChanged;
     }
     // Revalidate any leased screen and keep earlier refusals sticky for the source.
-    if unsafe { revalidate_screen() } {
+    let refused = unsafe { revalidate_screen() };
+    if !unsafe { rsf_fallout4_cpu_render_source_is_current(cpu) } {
+        PresentAdmission::SourceChanged
+    } else if refused {
         PresentAdmission::Refused
     } else {
         PresentAdmission::Complete

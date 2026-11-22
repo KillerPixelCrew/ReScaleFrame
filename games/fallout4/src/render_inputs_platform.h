@@ -4,9 +4,17 @@
 // owner (render_inputs.rs). Not a DLL ABI: both sides link into ReScaleFrame.Game.Fallout4.dll.
 // render_inputs.rs mirrors every structure here and asserts the same layout.
 #include "depth_domains.h"
-#include "native_input_state.h"
 #include <rescaleframe/game_renderer.h>
 #include <cstddef>
+
+namespace rsf::fallout4::detail {
+struct NativeState {
+    uintptr_t renderer{}, camera{}, cache{}, context{}, device{}, chain{}, window{};
+    uint32_t frame{}, width{}, height{}, count{}, taa{}, disable{}, colour{}, motion{}, depth{};
+    float ratio[2]{}, viewport[4]{}, delta_seconds{};
+    unsigned char default_viewport{}, dynamic_viewport{};
+};
+}
 
 namespace rsf::fallout4 {
 struct NativeCamera {
@@ -82,30 +90,18 @@ struct NativeFramebufferFacts {
     uint64_t native_frame{}, window_key{};
 };
 
-// Leaves the Rust owner cannot express without C++ or COM. None of them throws. Rust owns the
-// engine reads, the code guards, every admission decision, the camera history and the passes.
+// The readers transfer an owned reference for each nonnull slot.
 // lease is the caller's NativeInputLease (render_inputs.cpp); it holds typed COM references until
 // the wrapper moves them into its output or discards them.
-struct NativeInputLeaves {
-    // Guarded receipts with the former text. Rust keeps the stage masks and budgets.
-    void (*reader)(NativeInputReport, const char* stage, const NativeInputReceipt*,
-        const rsf_game_render_pass*);
-    void (*mismatch)(NativeInputReport, const detail::NativeState* before,
-        const detail::NativeState* after, uint32_t mask);
-    void (*history)(NativeInputReport, const NativeInputHistoryReceipt*);
-    void (*framebuffer)(NativeInputReport, const char* stage, const char* owner_stage,
-        const NativeFramebufferReceipt*);
-};
-
 struct NativeInputLease;
 
 extern "C" {
 bool rsf_fallout4_inputs_claim_exception() noexcept;
-bool rsf_fallout4_inputs_read(const NativeInputLeaves*, const NativeDepthLeaves*, NativeInputLease* lease,
+bool rsf_fallout4_inputs_read(NativeInputLease* lease,
     NativeInputReport, const NativeDepthSnapshot* producer, rsf_game_render_pass*) noexcept;
 bool rsf_fallout4_inputs_read_raster(NativeInputLease* lease,
     const rsf_game_render_pass* frame, const NativeDepthSnapshot* producer, rsf_game_render_pass*) noexcept;
-bool rsf_fallout4_inputs_read_framebuffer(const NativeInputLeaves*, NativeInputLease* lease, NativeInputReport,
+bool rsf_fallout4_inputs_read_framebuffer(NativeInputLease* lease, NativeInputReport,
     NativeFramebufferFacts*) noexcept;
 }
 
@@ -127,5 +123,4 @@ static_assert(sizeof(NativeFramebufferReceipt) == 344 && offsetof(NativeFramebuf
     offsetof(NativeFramebufferReceipt, target_texture) == 280 && offsetof(NativeFramebufferReceipt, platform) == 304 &&
     offsetof(NativeFramebufferReceipt, rtv_mip) == 340);
 static_assert(sizeof(NativeFramebufferFacts) == 16);
-static_assert(sizeof(NativeInputLeaves) == 4 * sizeof(void*));
 }

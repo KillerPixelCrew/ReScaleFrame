@@ -44,10 +44,6 @@ struct NativeRenderHookLeaves {
     bool (*create_hook)(uint32_t hook, void* target) noexcept;
     // MH_RemoveHook; clears the typed trampoline only when removal succeeded.
     bool (*remove_hook)(uint32_t hook, void* target) noexcept;
-    // MH_QueueEnableHook, MH_QueueDisableHook and MH_ApplyQueued, each true only for MH_OK.
-    bool (*queue_enable_hook)(void* target) noexcept;
-    bool (*queue_disable_hook)(void* target) noexcept;
-    bool (*apply_queued)() noexcept;
     // Any detour in flight or any WINDOW, FRAME or auxiliary scope open. Rust adds owned
     // recovery tokens and the resolution owner.
     bool (*scopes_busy)() noexcept;
@@ -57,7 +53,7 @@ struct NativeRenderHookLeaves {
 };
 
 static_assert(sizeof(NativeRenderExports) == 5 * sizeof(void*));
-static_assert(sizeof(NativeRenderHookLeaves) == 8 * sizeof(void*));
+static_assert(sizeof(NativeRenderHookLeaves) == 5 * sizeof(void*));
 
 // The process-lived leaf table of render_hooks.cpp.
 const NativeRenderHookLeaves* render_hook_leaves() noexcept;
@@ -76,7 +72,6 @@ struct NativeRenderScopeKey {
 enum class NativePresentMatch : uint32_t { unrelated = 0, owner_changed = 1, matched = 2 };
 enum class NativePresentAdmission : uint32_t { source_changed = 0, refused = 1, complete = 2 };
 
-using ReadPresentOwner = bool (*)(NativeRenderScopeKey*, uintptr_t* outer_chain) noexcept;
 using RevalidatePresentScreen = bool (*)() noexcept;
 
 static_assert(sizeof(NativeWorldAdmission) == 24 && offsetof(NativeWorldAdmission, live) == 16 &&
@@ -233,8 +228,13 @@ struct NativeRenderOwner {
     uintptr_t renderer, device, context, chain, window, graph, view;
     uint32_t frame;
 };
-extern "C" bool rsf_fallout4_render_read_owner(NativeRenderOwner*);
-extern "C" bool rsf_fallout4_render_read_outer_chain(uintptr_t renderer, uintptr_t* chain);
+extern "C" bool rsf_fallout4_render_read_owner(NativeRenderOwner*) noexcept;
+extern "C" bool rsf_fallout4_render_read_manager(uintptr_t*) noexcept;
+extern "C" bool rsf_fallout4_render_same_object(void*, void*) noexcept;
+extern "C" bool rsf_fallout4_render_check_owner(void*, void*, uintptr_t device, uintptr_t window) noexcept;
+extern "C" bool rsf_fallout4_render_auxiliary_depth(void*) noexcept;
+extern "C" bool rsf_fallout4_render_auxiliary_colour(void*, void*, uint32_t width, uint32_t height) noexcept;
+extern "C" void rsf_fallout4_render_framebuffer_extent(void*, uint32_t (*)[3]) noexcept;
 
 struct NativeScopeLeaves {
     void (*world)(NativeWorld*) noexcept;
@@ -356,7 +356,7 @@ bool rsf_fallout4_render_publish(const NativeRenderHookLeaves*) noexcept;
 bool rsf_fallout4_render_live() noexcept;
 bool rsf_fallout4_render_admit_world(const NativeWorldAdmission*, const rsf_fallout4_cpu_identity*) noexcept;
 NativePresentMatch rsf_fallout4_render_match_present(uintptr_t caller, uintptr_t renderer,
-    bool submission_open, const NativeRenderScopeKey*, ReadPresentOwner) noexcept;
+    bool submission_open, const NativeRenderScopeKey*) noexcept;
 NativePresentAdmission rsf_fallout4_render_admit_present(NativePresentMatch, uint64_t session,
     const rsf_fallout4_cpu_identity*, RevalidatePresentScreen) noexcept;
 // Preflight, RESERVE and confirmation before the first native ratio write.

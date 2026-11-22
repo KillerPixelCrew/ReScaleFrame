@@ -256,12 +256,13 @@ descriptor-copy and object-retirement coverage and live capture
 remain open. [Shot ownership](research/rust-rdr2-asi.md#native-capture-shot-and-tail-ownership)
 
 Fallout 4's render callbacks sequence World and Present admission, producer
-reads, SR publication, and reduced recovery in Rust. Typed detours call
-their originals on native frames and own COM leases. Effects cleanup uses
-the admitted World's identity across the original call, and the HUDless
-lease stays on the viewport detour's stack. F03 has source and binding
-checks. Build, fixtures and matched game captures remain open.
-[Render hook transactions](research/rust-fallout4-render-hooks.md#render-transaction-contracts)
+reads, SR publication, and reduced recovery in Rust. The readers hold
+candidate D3D11 references in Rust and transfer them to the native World
+after admission. Present uses the matched frame and CPU identity across
+the original call and retires its CPU phase on unwind. Typed detours keep
+their original calls on native frames. Build, fixtures and matched game
+captures remain open.
+[Render hook and input cutover](research/rust-fallout4-render-hooks.md#typed-input-and-present-boundaries)
 
 Unity's Editor preview validates its parent and child before admitting
 rendering. Runtime owns the per-output D3D12 copy, swapchain and fence.

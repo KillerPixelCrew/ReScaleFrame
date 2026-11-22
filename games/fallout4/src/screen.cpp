@@ -1,65 +1,27 @@
 // SPDX-License-Identifier: MIT
+// Contain exceptions from the four native screen query signatures.
 #include "screen.h"
-#include <stddef.h>
 
-extern "C" {
-struct rsf_fallout4_menu_call { uintptr_t name, expected; };
-struct rsf_fallout4_screen_plan {
-    uintptr_t ui;
-    rsf_fallout4_menu_call menus[6];
-    uintptr_t menu_open, freeze_background, freeze_pause, camera_equals, camera;
-};
-struct rsf_fallout4_screen_result {
-    uintptr_t names[6];
-    uint8_t open[6], frozen_background, frozen_pause;
-    uint16_t cameras;
-};
-using ScreenObserve = bool (*)(const rsf_fallout4_screen_plan&, rsf_fallout4_screen_result&);
-void rsf_fallout4_screen_classify(const rsf_fallout4_cpu_identity*, const rsf_game_render_pass*,
-    bool ordinary_world, rsf::fallout4::NativeScreen*, ScreenObserve) noexcept;
-}
-
-static_assert(sizeof(rsf_fallout4_screen_plan) == 144 && offsetof(rsf_fallout4_screen_plan, menus) == 8);
-static_assert(sizeof(rsf_fallout4_screen_result) == 64 && offsetof(rsf_fallout4_screen_result, cameras) == 56);
-static_assert(sizeof(rsf::fallout4::NativeScreen) == 24 && offsetof(rsf::fallout4::NativeScreen, camera_state) == 16);
-static_assert(RSF_SCREEN_UNKNOWN == 0 && RSF_SCREEN_MENU == 1 && RSF_SCREEN_LOADING == 7 && RSF_SCREEN_GAMEPLAY == 8);
-
-namespace rsf::fallout4 {
-namespace {
-using MenuName = const void* (*)();
-using MenuOpen = bool (*)(void*, const void*);
-using Freeze = bool (*)(void*);
-using CameraEquals = bool (*)(void*, uint32_t);
-
-bool observe(const rsf_fallout4_screen_plan& plan, rsf_fallout4_screen_result& observed) noexcept try
-{
-    auto* ui = reinterpret_cast<void*>(plan.ui);
-    const auto open = reinterpret_cast<MenuOpen>(plan.menu_open);
-    for (size_t index = 0; index < 6; ++index) {
-        const auto name = reinterpret_cast<MenuName>(plan.menus[index].name)();
-        observed.names[index] = uintptr_t(name);
-        // Only the exact verified menu object can enter the native UI query.
-        if (observed.names[index] != plan.menus[index].expected) return true;
-        observed.open[index] = static_cast<uint8_t>(open(ui, name));
-    }
-    observed.frozen_background = static_cast<uint8_t>(reinterpret_cast<Freeze>(plan.freeze_background)(ui));
-    observed.frozen_pause = static_cast<uint8_t>(reinterpret_cast<Freeze>(plan.freeze_pause)(ui));
-    if (plan.camera) {
-        const auto equals = reinterpret_cast<CameraEquals>(plan.camera_equals);
-        for (uint32_t index = 0; index < 13; ++index) {
-            if (equals(reinterpret_cast<void*>(plan.camera), index))
-                observed.cameras = static_cast<uint16_t>(observed.cameras | (1u << index));
-        }
-    }
+extern "C" bool rsf_fallout4_menu_name(uintptr_t entry, uintptr_t* name) noexcept try {
+    using MenuName = const void* (*)();
+    *name = reinterpret_cast<uintptr_t>(reinterpret_cast<MenuName>(entry)());
     return true;
 } catch (...) { return false; }
-}
 
-NativeScreen classify_native_screen(const CpuIdentity& source, const rsf_game_render_pass& pass,
-    bool ordinary_world) noexcept
-{
-    NativeScreen result{};
-    rsf_fallout4_screen_classify(&source, &pass, ordinary_world, &result, observe);
-    return result;
-}
-}
+extern "C" bool rsf_fallout4_menu_open(uintptr_t entry, uintptr_t ui, uintptr_t name, bool* open) noexcept try {
+    using MenuOpen = bool (*)(void*, const void*);
+    *open = reinterpret_cast<MenuOpen>(entry)(reinterpret_cast<void*>(ui), reinterpret_cast<const void*>(name));
+    return true;
+} catch (...) { return false; }
+
+extern "C" bool rsf_fallout4_menu_freeze(uintptr_t entry, uintptr_t ui, bool* frozen) noexcept try {
+    using Freeze = bool (*)(void*);
+    *frozen = reinterpret_cast<Freeze>(entry)(reinterpret_cast<void*>(ui));
+    return true;
+} catch (...) { return false; }
+
+extern "C" bool rsf_fallout4_camera_equals(uintptr_t entry, uintptr_t camera, uint32_t index, bool* equal) noexcept try {
+    using CameraEquals = bool (*)(void*, uint32_t);
+    *equal = reinterpret_cast<CameraEquals>(entry)(reinterpret_cast<void*>(camera), index);
+    return true;
+} catch (...) { return false; }

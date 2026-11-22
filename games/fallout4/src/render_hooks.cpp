@@ -73,11 +73,6 @@ thread_local World world;
 thread_local bool ordinary_world{};
 // Nested prepass depth; the detour's guard restores it when the original returns or unwinds.
 thread_local uint32_t prepass_depth{};
-uintptr_t image() { return uintptr_t(GetModuleHandleW(nullptr)); }
-bool read(uintptr_t address, void* destination, size_t length) {
-    SIZE_T copied{};
-    return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(address), destination, length, &copied) && copied == length;
-}
 void report(const char* message) noexcept {
     if (host.log) try { host.log(host.user, message); } catch (...) {}
 }
@@ -94,12 +89,6 @@ bool same_source() {
 }
 void notify(const rsf_game_render_pass& pass, void* context, uint32_t begin) noexcept {
     if (host.render_pass) try { host.render_pass(host.user, context, &pass, begin); } catch (...) {}
-}
-using Owner = NativeRenderOwner;
-bool same_object(IUnknown* a, IUnknown* b) {
-    Microsoft::WRL::ComPtr<IUnknown> left,right;
-    return a && b && SUCCEEDED(a->QueryInterface(IID_PPV_ARGS(&left))) &&
-        SUCCEEDED(b->QueryInterface(IID_PPV_ARGS(&right))) && left.Get()==right.Get();
 }
 bool drain_auxiliaries() noexcept {
     if (!world.auxiliary_open) return true;
@@ -136,10 +125,10 @@ bool recovery_read_raster(bool producer) noexcept {
 // Colour, depth, motion, Pip-Boy, VATS and refraction COM identity, in that order; owners adds
 // Context and chain first.
 bool same_resources(const NativeInputs& current, const NativeInputs& held, bool owners) noexcept {
-    return (!owners || (same_object(current.context.Get(),held.context.Get()) && same_object(current.chain.Get(),held.chain.Get()))) &&
-        same_object(current.colour.Get(),held.colour.Get()) && same_object(current.depth.Get(),held.depth.Get()) &&
-        same_object(current.motion.Get(),held.motion.Get()) && same_object(current.pipboy.Get(),held.pipboy.Get()) &&
-        same_object(current.vats.Get(),held.vats.Get()) && same_object(current.refraction_normals.Get(),held.refraction_normals.Get());
+    return (!owners || (rsf_fallout4_render_same_object(current.context.Get(),held.context.Get()) && rsf_fallout4_render_same_object(current.chain.Get(),held.chain.Get()))) &&
+        rsf_fallout4_render_same_object(current.colour.Get(),held.colour.Get()) && rsf_fallout4_render_same_object(current.depth.Get(),held.depth.Get()) &&
+        rsf_fallout4_render_same_object(current.motion.Get(),held.motion.Get()) && rsf_fallout4_render_same_object(current.pipboy.Get(),held.pipboy.Get()) &&
+        rsf_fallout4_render_same_object(current.vats.Get(),held.vats.Get()) && rsf_fallout4_render_same_object(current.refraction_normals.Get(),held.refraction_normals.Get());
 }
 bool recovery_same_resources(bool owners) noexcept {
     return same_resources(world.recovery_candidate,world.recovery_inputs,owners);
@@ -178,34 +167,21 @@ bool recovery_owned() noexcept { return rsf_fallout4_recovery_token()!=0; }
 bool reserve_recovery(const rsf_game_render_pass& planned) noexcept {
     return rsf_fallout4_recovery_reserve(&recovery_leaves,&planned);
 }
-bool auxiliary_colour(ID3D11Texture2D* texture, const NativeInputs& inputs) {
-    if (!texture) return false;
-    Microsoft::WRL::ComPtr<ID3D11Device> device,owner;
-    inputs.context->GetDevice(&device); texture->GetDevice(&owner);
-    D3D11_TEXTURE2D_DESC d{}; texture->GetDesc(&d);
-    if (!same_object(device.Get(),owner.Get()) || d.Width!=inputs.pass.camera.output_width || d.Height!=inputs.pass.camera.output_height ||
-        d.MipLevels!=1 || d.ArraySize!=1 || d.SampleDesc.Count!=1 || d.SampleDesc.Quality || d.Usage!=D3D11_USAGE_DEFAULT) return false;
-    UINT support{};
-    constexpr UINT required=D3D11_FORMAT_SUPPORT_TEXTURE2D|D3D11_FORMAT_SUPPORT_SHADER_LOAD|D3D11_FORMAT_SUPPORT_RENDER_TARGET;
-    if (FAILED(device->CheckFormatSupport(d.Format,&support)) || (support&required)!=required) return false;
-    return d.Format==DXGI_FORMAT_R8_UNORM || d.Format==DXGI_FORMAT_R8G8B8A8_UNORM || d.Format==DXGI_FORMAT_R16G16_FLOAT ||
-        d.Format==DXGI_FORMAT_R16_FLOAT || d.Format==DXGI_FORMAT_R32_FLOAT || d.Format==DXGI_FORMAT_R16G16B16A16_FLOAT || d.Format==DXGI_FORMAT_R11G11B10_FLOAT;
-}
 bool publication_auxiliary_inputs(NativeAuxiliaryInputs* out) noexcept {
     const auto& inputs=world.sr_inputs;
-    D3D11_TEXTURE2D_DESC depth{};
-    inputs.depth->GetDesc(&depth);
-    if (depth.Format!=DXGI_FORMAT_R24G8_TYPELESS) return false;
+    if (!rsf_fallout4_render_auxiliary_depth(inputs.depth.Get())) return false;
     const auto& raster=world.depth_snapshot.actual_raster;
     *out={{inputs.depth.Get(),inputs.motion.Get(),inputs.pipboy.Get(),inputs.vats.Get(),
         inputs.refraction_normals.Get()},{raster[0],raster[1],raster[2],raster[3]}};
     return true;
 }
 bool publication_auxiliary_colour(void* texture) noexcept {
-    return auxiliary_colour(static_cast<ID3D11Texture2D*>(texture),world.sr_inputs);
+    const auto& inputs=world.sr_inputs;
+    return rsf_fallout4_render_auxiliary_colour(texture,inputs.context.Get(),
+        inputs.pass.camera.output_width,inputs.pass.camera.output_height);
 }
 bool publication_same_texture(void* first, void* second) noexcept {
-    return same_object(static_cast<ID3D11Texture2D*>(first),static_cast<ID3D11Texture2D*>(second));
+    return rsf_fallout4_render_same_object(first,second);
 }
 int32_t publication_reconstruct(const rsf_game_render_pass* pass, const rsf_d3d11_auxiliary_surface* surfaces,
     uint32_t count) noexcept try {
@@ -277,10 +253,8 @@ void publication_report_state(uint32_t stage, const rsf_game_render_pass* pass, 
 }
 bool publication_read_framebuffer(NativeFramebuffer* lease, NativePublicationFramebuffer* out) noexcept {
     const bool acquired=read_native_framebuffer(*lease,report);
-    D3D11_TEXTURE2D_DESC description{};
-    if (lease->texture) lease->texture->GetDesc(&description);
-    *out={lease->context.Get(),lease->chain.Get(),lease->texture.Get(),lease->native_frame,lease->window_key,
-        {description.Width,description.Height,description.SampleDesc.Count}};
+    *out={lease->context.Get(),lease->chain.Get(),lease->texture.Get(),lease->native_frame,lease->window_key,{}};
+    rsf_fallout4_render_framebuffer_extent(lease->texture.Get(),&out->extent);
     return acquired;
 }
 void publication_publish_window(const NativeFramebuffer* lease, const rsf_game_render_pass* window) noexcept {
@@ -298,17 +272,11 @@ constexpr NativePublicationLeaves publication_leaves{read_world, diagnostic, pub
 // FRAME, SUBMISSION and WINDOW scope leaves (render_hooks_platform.h). Rust (render_hooks/scope.rs)
 // decides the owner lease verdict, the FRAME identity and the begin and close order; these read
 // the native owner, compare COM identity, hold the Context and chain leases and keep the counters.
-bool scope_read_owner(NativeRenderOwner* value) noexcept { return rsf_fallout4_render_read_owner(value); }
 bool scope_lease_owner(const NativeRenderOwner* before) noexcept try {
     world.owner_context=reinterpret_cast<ID3D11DeviceContext*>(before->context);
     world.owner_chain=reinterpret_cast<IDXGISwapChain*>(before->chain);
-    Microsoft::WRL::ComPtr<ID3D11Device> device,chain_device;
-    world.owner_context->GetDevice(&device);
-    DXGI_SWAP_CHAIN_DESC description{};
-    return world.owner_context->GetType()==D3D11_DEVICE_CONTEXT_IMMEDIATE &&
-        same_object(device.Get(),reinterpret_cast<ID3D11Device*>(before->device)) &&
-        SUCCEEDED(world.owner_chain->GetDevice(IID_PPV_ARGS(&chain_device))) && same_object(device.Get(),chain_device.Get()) &&
-        SUCCEEDED(world.owner_chain->GetDesc(&description)) && description.OutputWindow==reinterpret_cast<HWND>(before->window);
+    return rsf_fallout4_render_check_owner(world.owner_context.Get(),world.owner_chain.Get(),
+        before->device,before->window);
 } catch (...) { return false; }
 void scope_adopt_owner() noexcept {
     world.context=std::move(world.owner_context); world.chain=std::move(world.owner_chain);
@@ -320,7 +288,7 @@ void scope_close_submission() noexcept { world.submission_open=false; }
 void scope_close_window() noexcept { world.window_open=false; windows.fetch_sub(1,std::memory_order_acq_rel); }
 void scope_close_frame() noexcept { world.frame_open=false; frames.fetch_sub(1,std::memory_order_acq_rel); }
 void scope_reset() noexcept { world={}; }
-constexpr NativeScopeLeaves scope_leaves{read_world, scope_read_owner, scope_lease_owner, scope_adopt_owner,
+constexpr NativeScopeLeaves scope_leaves{read_world, rsf_fallout4_render_read_owner, scope_lease_owner, scope_adopt_owner,
     scope_discard_owner, scope_open_frame, scope_open_submission, scope_close_submission, scope_close_window,
     scope_close_frame, drain_auxiliaries, finish_resolution_source, scope_reset, publication_notify, diagnostic,
     publication_report_state};
@@ -329,10 +297,8 @@ constexpr NativeScopeLeaves scope_leaves{read_world, scope_read_owner, scope_lea
 // the TAA gate; these read the World, read the native manager cell and keep the World flags.
 void imagespace_enter() noexcept { world.in_imagespace=true; }
 void imagespace_leave() noexcept { world.in_imagespace=world.published=world.full_output_resolved=false; }
-// ReadProcessMemory only, like the owner read; noexcept keeps any throw out of the Rust frame.
-bool imagespace_manager(uintptr_t* manager) noexcept { return read(image()+0x3e5e4b0,manager,sizeof(*manager)); }
 constexpr NativeImagespaceLeaves imagespace_leaves{read_world, imagespace_enter, imagespace_leave,
-    imagespace_manager, drain_auxiliaries, end_output_resolution, publication_report_state, diagnostic};
+    rsf_fallout4_render_read_manager, drain_auxiliaries, end_output_resolution, publication_report_state, diagnostic};
 // Viewport, DR and prepass leaves (render_hooks_platform.h). Rust (render_hooks/producer.rs)
 // selects the calls and sequences the selector write, the HUDless seam, the DR admission and the
 // prepass capture; these read the World, call the typed screen, owner, resolution and depth
@@ -353,14 +319,14 @@ bool producer_configure() noexcept {
 // The raster capture does not establish temporal admission. The depth capture uses
 // the ABI identity recorded across the admitted original prepass call.
 bool producer_capture_raster(const rsf_fallout4_cpu_identity* identity) noexcept {
-    return rsf_fallout4_depth_capture_raster(native_depth_leaves(),identity,&world.raster_snapshot,report);
+    return rsf_fallout4_depth_capture_raster(identity,&world.raster_snapshot,report);
 }
 bool producer_capture_depth(const rsf_fallout4_cpu_identity* identity, NativeDepthSnapshot* snapshot) noexcept {
-    return rsf_fallout4_depth_capture(native_depth_leaves(),identity,snapshot,report);
+    return rsf_fallout4_depth_capture(identity,snapshot,report);
 }
 void producer_adopt_depth(const NativeDepthSnapshot* snapshot) noexcept { world.depth_snapshot=*snapshot; }
 constexpr NativeProducerLeaves producer_leaves{read_world, producer_invalidate, producer_interrupt_depth,
-    producer_refuse_raster, native_resolution_write, producer_screen_refusals, scope_read_owner,
+    producer_refuse_raster, native_resolution_write, producer_screen_refusals, rsf_fallout4_render_read_owner,
     producer_configure, producer_capture_raster, producer_capture_depth, producer_adopt_depth,
     publication_report_state, diagnostic};
 void observe_viewport(void* manager, bool enabled) {
@@ -493,14 +459,7 @@ bool observe_taa(void* effect) {
     SetLastError(error);
     return active;
 }
-bool read_present_owner(NativeRenderScopeKey* key, uintptr_t* outer_chain) noexcept {
-    Owner current{};
-    if (!rsf_fallout4_render_read_owner(&current) ||
-        !rsf_fallout4_render_read_outer_chain(current.renderer, outer_chain)) return false;
-    *key={current.frame,current.view,current.window,current.context,current.chain};
-    return true;
-}
-void capture_recovery_output() {
+void capture_recovery_output() noexcept try {
     // Preserve failed reduced-frame output for diagnostics independently of
     // temporal/FG admission. The runtime rechecks the exact capture identity.
     if (rsf_fallout4_recovery_committed() && capture_texture && capture_requested &&
@@ -508,7 +467,7 @@ void capture_recovery_output() {
         NativeFramebuffer observed;
         if (read_native_framebuffer(observed,report) && observed.native_frame==world.frame_pass.native_frame &&
             observed.window_key==world.frame_pass.window_key && observed.context.Get()==world.context.Get() &&
-            same_object(observed.chain.Get(),world.chain.Get())) {
+            rsf_fallout4_render_same_object(observed.chain.Get(),world.chain.Get())) {
             rsf_d3d11_host_capture capture{};
             capture.struct_size=sizeof(capture); capture.abi_version=RSF_D3D11_HOST_ABI_VERSION;
             capture.session_id=world.cpu.session; capture.native_frame=world.frame_pass.native_frame;
@@ -519,7 +478,7 @@ void capture_recovery_output() {
             (void)capture_texture(host.user,observed.context.Get(),&capture);
         }
     }
-}
+} catch (...) {}
 bool revalidate_present_screen() noexcept {
     if (world.inputs) rsf_fallout4_render_screen_facts(&publication_leaves,&recovery_leaves,&world.pass,false);
     return world.refused;
@@ -532,21 +491,29 @@ void observe_native_present(void* renderer) {
 #else
     const auto caller=uintptr_t(__builtin_return_address(0));
 #endif
-    CpuIdentity phase_owner{};
-    bool cpu_phase=false;
+    struct PresentPhase {
+        CpuIdentity owner{};
+        bool active{};
+        ~PresentPhase() {
+            if (!active) return;
+            const auto error=GetLastError();
+            rsf_fallout4_cpu_end_present_phase(&owner);
+            SetLastError(error);
+        }
+    } phase;
     const NativeRenderScopeKey leased{world.frame_pass.native_frame,world.frame_pass.view_key,
         world.frame_pass.window_key,uintptr_t(world.context.Get()),uintptr_t(world.chain.Get())};
     const auto matched=rsf_fallout4_render_match_present(caller,uintptr_t(renderer),world.submission_open,
-        &leased,read_present_owner);
+        &leased);
     if (matched!=NativePresentMatch::unrelated) {
-        if (matched==NativePresentMatch::matched) capture_recovery_output();
         const auto cpu=world.cpu;
+        if (matched==NativePresentMatch::matched) capture_recovery_output();
         switch (rsf_fallout4_render_admit_present(matched,host.session_id,&cpu,revalidate_present_screen)) {
         case NativePresentAdmission::complete: {
             rsf_fallout4_render_close_submission(&scope_leaves);
             // Close the same CPU phase after the original, even if it reenters.
-            phase_owner=world.cpu;
-            cpu_phase=rsf_fallout4_cpu_begin_present_phase(&phase_owner,world.frame_pass.native_frame,world.frame_pass.window_key);
+            phase.owner=cpu;
+            phase.active=rsf_fallout4_cpu_begin_present_phase(&phase.owner,leased.frame,leased.window);
             static std::atomic_flag announced = ATOMIC_FLAG_INIT;
             if (!announced.test_and_set(std::memory_order_relaxed))
                 report("Fallout4 native SUBMISSION end before original outer Present; FRAME/WINDOW remain open.");
@@ -564,9 +531,6 @@ void observe_native_present(void* renderer) {
     }
     SetLastError(error);
     native_present(renderer);
-    const auto native_error=GetLastError();
-    if (cpu_phase) rsf_fallout4_cpu_end_present_phase(&phase_owner);
-    SetLastError(native_error);
 }
 // NativeRenderHook order. MinHook writes each typed trampoline at creation; the detours call
 // them on their own C++ frames. Rust (render_hooks.rs) owns the RVAs, entry bytes and created
@@ -589,9 +553,6 @@ bool remove_hook(uint32_t hook, void* target) noexcept {
     *originals[hook] = nullptr;
     return true;
 }
-bool queue_enable_hook(void* target) noexcept { return MH_QueueEnableHook(target) == MH_OK; }
-bool queue_disable_hook(void* target) noexcept { return MH_QueueDisableHook(target) == MH_OK; }
-bool apply_queued() noexcept { return MH_ApplyQueued() == MH_OK; }
 // The C++ half of busy; Rust adds the resolution owner.
 bool scopes_busy() noexcept {
     return entered.load(std::memory_order_acquire) || windows.load(std::memory_order_acquire) || frames.load(std::memory_order_acquire) || auxiliaries.load(std::memory_order_acquire);
@@ -604,8 +565,7 @@ void bind_exports(const NativeRenderExports* exports) noexcept {
     capture_requested=reinterpret_cast<CaptureRequested>(exports->capture_requested);
 }
 void bind_host(const rsf_game_host_services* services) noexcept { host = *services; }
-constexpr NativeRenderHookLeaves leaves{create_hook, remove_hook, queue_enable_hook, queue_disable_hook,
-    apply_queued, scopes_busy, bind_exports, bind_host};
+constexpr NativeRenderHookLeaves leaves{create_hook, remove_hook, scopes_busy, bind_exports, bind_host};
 }
 const NativeRenderHookLeaves* render_hook_leaves() noexcept { return &leaves; }
 // Rust (render_hooks/scope.rs) sequences the post-Swap scope end.

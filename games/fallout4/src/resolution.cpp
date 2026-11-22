@@ -1,33 +1,24 @@
 // SPDX-License-Identifier: MIT
 #include "resolution_platform.h"
 #include "depth_domains.h"
-#include "screen.h"
 #include <windows.h>
 #include <cstdio>
 
 namespace rsf::fallout4 {
-namespace {
-uint32_t screen_refusals(const rsf_fallout4_cpu_identity* source) noexcept {
-    const CpuIdentity cpu{source->session, source->source, source->submission,
-        source->began_qpc, source->frequency};
-    const rsf_game_render_pass candidate{};
-    return classify_native_screen(cpu, candidate, true).refusals;
-}
-
-bool reconfigure(const rsf_game_host_services* host, void* context, const rsf_game_render_pass* planning) noexcept try {
+extern "C" bool rsf_fallout4_resolution_reconfigure(const rsf_game_host_services* host, void* context, const rsf_game_render_pass* planning) noexcept try {
     (void)host->process_upscale(host->user, context, planning);
     return true;
 } catch (...) { return false; }
 
-bool render_config(const rsf_game_host_services* host, rsf_game_render_config* config) noexcept try {
+extern "C" bool rsf_fallout4_resolution_config(const rsf_game_host_services* host, rsf_game_render_config* config) noexcept try {
     return host->render_config(host->user, config) != 0;
 } catch (...) { return false; }
 
-bool reserve_output(ResolutionReserve reserve, const rsf_game_render_pass* planning) noexcept try {
+extern "C" bool rsf_fallout4_resolution_reserve(ResolutionReserve reserve, const rsf_game_render_pass* planning) noexcept try {
     return reserve(*planning);
 } catch (...) { return false; }
 
-void report_receipt(ResolutionReport report, const rsf_game_render_pass* pass, void* context,
+extern "C" void rsf_fallout4_resolution_report_receipt(ResolutionReport report, const rsf_game_render_pass* pass, void* context,
     const NativeResolutionReceipt* receipt) noexcept try {
     const auto& facts = *receipt;
     char text[1700]{};
@@ -50,13 +41,10 @@ void report_receipt(ResolutionReport report, const rsf_game_render_pass* pass, v
     report(text);
 } catch (...) {}
 
-const NativeResolutionLeaves leaves{screen_refusals, reconfigure, render_config, reserve_output, report_receipt};
-}
-
 void report_resolution_state(uint32_t stage, const rsf_game_render_pass& pass, void* context,
     bool published, int32_t result, ResolutionReport report) noexcept {
     struct Restore { DWORD error; ~Restore() { SetLastError(error); } } restore{GetLastError()};
-    rsf_fallout4_resolution_report(&leaves, stage, &pass, context,
+    rsf_fallout4_resolution_report(stage, &pass, context,
         published, result, report);
 }
 
@@ -66,7 +54,7 @@ bool native_resolution_inputs(const rsf_game_render_pass& pass) noexcept {
 
 bool configure_native_resolution(const rsf_game_host_services& host, const rsf_game_render_pass& frame,
     void* context, ResolutionReserve reserve) noexcept {
-    return rsf_fallout4_resolution_configure(&leaves, &host, &frame, context, reserve);
+    return rsf_fallout4_resolution_configure(&host, &frame, context, reserve);
 }
 
 bool preflight_output_resolution(const rsf_game_render_pass& pass, void* context,
@@ -75,7 +63,7 @@ bool preflight_output_resolution(const rsf_game_render_pass& pass, void* context
 }
 
 bool begin_output_resolution(const NativeDepthSnapshot& snapshot, const rsf_game_render_pass& pass) noexcept {
-    return rsf_fallout4_resolution_begin_output(native_depth_leaves(), &snapshot, &pass);
+    return rsf_fallout4_resolution_begin_output(&snapshot, &pass);
 }
 
 bool native_resolution_write() noexcept { return rsf_fallout4_resolution_native_dr(); }

@@ -24,9 +24,8 @@ struct NativeInputLease {
 };
 static_assert(sizeof(NativeInputLease) == 8 * sizeof(void*) && offsetof(NativeInputLease, textures) == 16);
 
-namespace {
 // The text the former reader receipt wrote; Rust decides the stage and its once-per-stage mask.
-void reader(NativeInputReport report, const char* stage, const NativeInputReceipt* receipt,
+extern "C" void rsf_fallout4_inputs_report_reader(NativeInputReport report, const char* stage, const NativeInputReceipt* receipt,
     const rsf_game_render_pass* pass) noexcept {
     if (!report || !stage || !receipt || !pass) return;
     try {
@@ -68,7 +67,7 @@ void reader(NativeInputReport report, const char* stage, const NativeInputReceip
     } catch (...) {}
 }
 // The text of the former state reread mismatch; Rust keeps the per-mask and sixteen-text budget.
-void mismatch(NativeInputReport report, const detail::NativeState* first, const detail::NativeState* second,
+extern "C" void rsf_fallout4_inputs_report_mismatch(NativeInputReport report, const detail::NativeState* first, const detail::NativeState* second,
     uint32_t mask) noexcept {
     if (!report || !first || !second) return;
     try {
@@ -87,7 +86,7 @@ void mismatch(NativeInputReport report, const detail::NativeState* first, const 
     } catch (...) {}
 }
 // The text of the former camera history receipt; Rust keeps the per-reason and 32-text budget.
-void history(NativeInputReport report, const NativeInputHistoryReceipt* receipt) noexcept {
+extern "C" void rsf_fallout4_inputs_report_history(NativeInputReport report, const NativeInputHistoryReceipt* receipt) noexcept {
     if (!report || !receipt) return;
     try {
         const auto& h = *receipt;
@@ -101,7 +100,7 @@ void history(NativeInputReport report, const NativeInputHistoryReceipt* receipt)
     } catch (...) {}
 }
 // The text of the former framebuffer receipt; Rust keeps its once-per-stage mask.
-void framebuffer(NativeInputReport report, const char* stage, const char* owner_stage,
+extern "C" void rsf_fallout4_inputs_report_framebuffer(NativeInputReport report, const char* stage, const char* owner_stage,
     const NativeFramebufferReceipt* receipt) noexcept {
     if (!report || !stage || !owner_stage || !receipt) return;
     try {
@@ -123,8 +122,7 @@ void framebuffer(NativeInputReport report, const char* stage, const char* owner_
     } catch (...) {}
 }
 
-constexpr NativeInputLeaves leaves{reader, mismatch, history, framebuffer};
-
+namespace {
 void take(NativeInputs& result, NativeInputLease& lease) noexcept {
     result.context.Attach(std::exchange(lease.context, nullptr));
     result.chain.Attach(std::exchange(lease.chain, nullptr));
@@ -141,7 +139,7 @@ bool read_native_inputs(NativeInputs& output, void (*report)(const char*), const
     output={};
     NativeInputLease lease;
     NativeInputs result;
-    if (!rsf_fallout4_inputs_read(&leaves,native_depth_leaves(),&lease,report,producer,&result.pass)) return false;
+    if (!rsf_fallout4_inputs_read(&lease,report,producer,&result.pass)) return false;
     take(result,lease);
     output=std::move(result); return true;
 } catch (...) {
@@ -163,7 +161,7 @@ bool read_native_framebuffer(NativeFramebuffer& output, void (*report)(const cha
     output={};
     NativeInputLease lease;
     NativeFramebufferFacts facts{};
-    if (!rsf_fallout4_inputs_read_framebuffer(&leaves,&lease,report,&facts)) return false;
+    if (!rsf_fallout4_inputs_read_framebuffer(&lease,report,&facts)) return false;
     NativeFramebuffer result;
     result.context.Attach(std::exchange(lease.context, nullptr));
     result.chain.Attach(std::exchange(lease.chain, nullptr));

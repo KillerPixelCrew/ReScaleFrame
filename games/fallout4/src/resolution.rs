@@ -6,8 +6,9 @@ use crate::build_layout::{
 };
 use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;
 use crate::cpu_events::{current_identity, render_source_is_current};
-use crate::depth_domains::{self, NativeLeaves as DepthLeaves, Snapshot};
-use crate::{Plain, image, read, screen::WORLD_LEASE_INVALID};
+use crate::depth_domains::{self, Snapshot};
+use crate::screen::{NativeScreen, WORLD_LEASE_INVALID, rsf_fallout4_screen_classify};
+use crate::{Plain, image, read};
 use rsf_game_sys::{
     RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_SR, rsf_game_host_services,
     rsf_game_render_config, rsf_game_render_pass,
@@ -29,24 +30,38 @@ const ACTIVE: usize = TARGETS + 0xfe5;
 const DISABLED: usize = TARGETS + 0xfe8;
 const SHADOW: usize = 0x1b70;
 const RASTER: usize = 0x90;
-const MANAGER: usize = 0x3e5e4b0;
+pub(crate) const MANAGER: usize = 0x3e5e4b0;
 const SHADOW_VIEWPORT_DIRTY: u32 = 2;
 
 type Reserve = Option<unsafe extern "C" fn(*const rsf_game_render_pass) -> bool>;
 type Report = Option<unsafe extern "C" fn(*const c_char)>;
 
-#[repr(C)]
-struct Leaves {
-    screen_refusals: unsafe extern "C" fn(&CpuIdentity) -> u32,
-    reconfigure: unsafe extern "C" fn(
-        *const rsf_game_host_services,
-        *mut c_void,
-        &rsf_game_render_pass,
-    ) -> bool,
-    render_config:
-        unsafe extern "C" fn(*const rsf_game_host_services, &mut rsf_game_render_config) -> bool,
-    reserve: unsafe extern "C" fn(Reserve, &rsf_game_render_pass) -> bool,
-    report: unsafe extern "C" fn(Report, &rsf_game_render_pass, *mut c_void, &Receipt),
+unsafe extern "C" {
+    fn rsf_fallout4_resolution_reconfigure(
+        host: *const rsf_game_host_services,
+        context: *mut c_void,
+        planning: &rsf_game_render_pass,
+    ) -> bool;
+    fn rsf_fallout4_resolution_config(
+        host: *const rsf_game_host_services,
+        config: &mut rsf_game_render_config,
+    ) -> bool;
+    fn rsf_fallout4_resolution_reserve(reserve: Reserve, planning: &rsf_game_render_pass) -> bool;
+    fn rsf_fallout4_resolution_report_receipt(
+        report: Report,
+        pass: &rsf_game_render_pass,
+        context: *mut c_void,
+        receipt: &Receipt,
+    );
+}
+
+fn screen_refusals(source: &CpuIdentity) -> u32 {
+    // SAFETY: the empty pass has no resources. Classification supplies screen
+    // facts and the expected invalid-world-lease refusal.
+    let candidate = unsafe { std::mem::zeroed() };
+    let mut screen = NativeScreen::EMPTY;
+    rsf_fallout4_screen_classify(source, &candidate, true, &mut screen);
+    screen.refusals
 }
 
 #[repr(C)]
@@ -97,7 +112,6 @@ const _: () = {
     assert!(size_of::<Receipt>() == 128 && offset_of!(Receipt, input_ratio) == 32);
     assert!(offset_of!(Receipt, frame) == 72 && offset_of!(Receipt, evaluation) == 87);
     assert!(offset_of!(Receipt, actual_count) == 96);
-    assert!(size_of::<Leaves>() == 5 * size_of::<usize>());
 };
 
 #[derive(Clone, Copy, Default)]
@@ -452,7 +466,6 @@ fn output_size(pass: &rsf_game_render_pass) -> [u32; 2] {
 }
 
 fn configured_targets(
-    leaves: &Leaves,
     host: *const rsf_game_host_services,
     frame: &rsf_game_render_pass,
     context: *mut c_void,
@@ -463,11 +476,11 @@ fn configured_targets(
     planning.flags = RSF_GAME_RENDER_RECONFIGURE | RSF_GAME_RENDER_NO_FG;
     [planning.camera.output_width, planning.camera.output_height] = size;
     // Reconfigure prepares the plan. Admission comes from the sized config that follows.
-    if !unsafe { (leaves.reconfigure)(host, context, &planning) } {
+    if !unsafe { rsf_fallout4_resolution_reconfigure(host, context, &planning) } {
         return None;
     }
     let mut config = rsf_game_render_config::request();
-    if !unsafe { (leaves.render_config)(host, &mut config) } {
+    if !unsafe { rsf_fallout4_resolution_config(host, &mut config) } {
         return None;
     }
     config.checked_render_extent(size)
@@ -512,7 +525,6 @@ fn preflight(
 // The SDK and recovery calls can reenter the native hooks. Do not keep a Rust reference to
 // their World pass or a borrow of the thread-local scope across either call.
 unsafe fn configure(
-    leaves: &Leaves,
     host: *const rsf_game_host_services,
     frame: *const rsf_game_render_pass,
     context: *mut c_void,
@@ -542,9 +554,9 @@ unsafe fn configure(
     if !size.iter().all(|value| (1..=16384).contains(value)) || !input_enabled(base) {
         return None;
     }
-    let render = configured_targets(leaves, host, &pass, context, size)?;
+    let render = configured_targets(host, &pass, context, size)?;
     if !render_source_is_current(&cpu)
-        || unsafe { (leaves.screen_refusals)(&cpu) } != WORLD_LEASE_INVALID
+        || screen_refusals(&cpu) != WORLD_LEASE_INVALID
         || !input_enabled(base)
     {
         return None;
@@ -582,7 +594,7 @@ unsafe fn configure(
         planning.output_rect = [0, 0, size[0] as i32, size[1] as i32];
         if reserve.is_none()
             || preflight(base, &planning, context).is_none()
-            || !unsafe { (leaves.reserve)(reserve, &planning) }
+            || !unsafe { rsf_fallout4_resolution_reserve(reserve, &planning) }
         {
             SCOPE.set(Scope::default());
             return None;
@@ -608,15 +620,11 @@ unsafe fn configure(
     Some(())
 }
 
-fn begin_output(
-    depth: &DepthLeaves,
-    snapshot: &Snapshot,
-    pass: &rsf_game_render_pass,
-) -> Option<()> {
+fn begin_output(snapshot: &Snapshot, pass: &rsf_game_render_pass) -> Option<()> {
     if SCOPE.get().output {
         return None;
     }
-    let (context, device_context, chain) = depth_domains::resolution_owner(depth, snapshot)?;
+    let (context, device_context, chain) = depth_domains::resolution_owner(snapshot)?;
     let mut scope = SCOPE.get();
     if !scope.input {
         scope = Scope {
@@ -957,13 +965,12 @@ pub(crate) extern "C" fn rsf_fallout4_resolution_inputs(pass: &rsf_game_render_p
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fallout4_resolution_configure(
-    leaves: &Leaves,
     host: *const rsf_game_host_services,
     frame: *const rsf_game_render_pass,
     context: *mut c_void,
     reserve: Reserve,
 ) -> bool {
-    unsafe { configure(leaves, host, frame, context, reserve) }.is_some()
+    unsafe { configure(host, frame, context, reserve) }.is_some()
 }
 
 #[unsafe(no_mangle)]
@@ -986,11 +993,10 @@ unsafe extern "C" fn rsf_fallout4_resolution_preflight(
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_fallout4_resolution_begin_output(
-    depth: &DepthLeaves,
     snapshot: &Snapshot,
     pass: &rsf_game_render_pass,
 ) -> bool {
-    begin_output(depth, snapshot, pass).is_some()
+    begin_output(snapshot, pass).is_some()
 }
 
 #[unsafe(no_mangle)]
@@ -1039,7 +1045,6 @@ pub(crate) fn refused() -> bool {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fallout4_resolution_report(
-    leaves: &Leaves,
     stage: u32,
     pass: *const rsf_game_render_pass,
     context: *mut c_void,
@@ -1109,7 +1114,7 @@ unsafe extern "C" fn rsf_fallout4_resolution_report(
             receipt.actual_raster = raster;
         }
     }
-    unsafe { (leaves.report)(report, &pass, context, &receipt) };
+    unsafe { rsf_fallout4_resolution_report_receipt(report, &pass, context, &receipt) };
 }
 
 #[cfg(test)]

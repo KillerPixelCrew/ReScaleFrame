@@ -4,8 +4,7 @@
 #include <rescaleframe/game_renderer.h>
 #include <cstddef>
 
-// Admission and composition live in the rsf-fallout4 crate (depth_domains.rs). depth_domains.cpp
-// supplies its native leaves (depth_domains_platform.h). These wrappers keep the C++ signatures.
+// Admission and composition live in depth_domains.rs. The native callers borrow these records.
 namespace rsf::fallout4 {
 struct NativeDepthCamera {
     float view[16]{}, projection[16]{}, view_projection[16]{};
@@ -49,37 +48,25 @@ static_assert(offsetof(NativeDepthSnapshot, native_frame) == 40 && offsetof(Nati
     offsetof(NativeDepthSnapshot, raster_valid) == 1300 && offsetof(NativeDepthSnapshot, maps) == 1304);
 
 using NativeDepthReport = void (*)(const char*);
-struct NativeDepthLeaves;
-// The process-lived leaf table of depth_domains.cpp.
-const NativeDepthLeaves* native_depth_leaves() noexcept;
-
 extern "C" {
-bool rsf_fallout4_depth_verify() noexcept;
-bool rsf_fallout4_depth_capture_raster(const NativeDepthLeaves*, const rsf_fallout4_cpu_identity*,
+bool rsf_fallout4_depth_capture_raster(const rsf_fallout4_cpu_identity*,
     NativeDepthSnapshot*, NativeDepthReport) noexcept;
-bool rsf_fallout4_depth_raster_current(const NativeDepthLeaves*, const NativeDepthSnapshot*) noexcept;
-bool rsf_fallout4_depth_snapshot_current(const NativeDepthLeaves*, const NativeDepthSnapshot*,
-    NativeDepthReport) noexcept;
-bool rsf_fallout4_depth_capture(const NativeDepthLeaves*, const rsf_fallout4_cpu_identity*,
+bool rsf_fallout4_depth_raster_current(const NativeDepthSnapshot*) noexcept;
+bool rsf_fallout4_depth_capture(const rsf_fallout4_cpu_identity*,
     NativeDepthSnapshot*, NativeDepthReport) noexcept;
-bool rsf_fallout4_depth_make(const NativeDepthLeaves*, const NativeDepthSnapshot*,
+bool rsf_fallout4_depth_make(const NativeDepthSnapshot*,
     const rsf_fallout4_cpu_identity*, const rsf_game_render_pass*, rsf_game_depth_domains*,
     NativeDepthReport) noexcept;
 }
 
 inline bool native_raster_snapshot_current(const NativeDepthSnapshot& snapshot) noexcept {
-    return rsf_fallout4_depth_raster_current(native_depth_leaves(), &snapshot);
-}
-inline bool verify_native_depth_domains() noexcept { return rsf_fallout4_depth_verify(); }
-inline bool native_depth_snapshot_current(const NativeDepthSnapshot& snapshot,
-    void (*report)(const char*) = nullptr) noexcept {
-    return rsf_fallout4_depth_snapshot_current(native_depth_leaves(), &snapshot, report);
+    return rsf_fallout4_depth_raster_current(&snapshot);
 }
 // Describes scalar depth at the composed raster samples, not spatial reprojection.
 // Failure leaves output all zero; caller must refuse mapping rather than use raw depth.
 inline bool make_native_depth_domains(const NativeDepthSnapshot& snapshot, const CpuIdentity& cpu,
     const rsf_game_render_pass& pass, rsf_game_depth_domains& output,
     void (*report)(const char*) = nullptr) noexcept {
-    return rsf_fallout4_depth_make(native_depth_leaves(), &snapshot, &cpu, &pass, &output, report);
+    return rsf_fallout4_depth_make(&snapshot, &cpu, &pass, &output, report);
 }
 }

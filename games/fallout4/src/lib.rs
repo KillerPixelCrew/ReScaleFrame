@@ -9,11 +9,11 @@
 //!
 //! Native leaves stay in C++ and reach this crate through linked host and CPU functions
 //! (fallout4_platform.h and cpu_events_platform.h), the render hook
-//! leaves (render_hooks_platform.h) and the per-call depth-domain and render-input leaves
-//! (depth_domains_platform.h, render_inputs_platform.h): MinHook, the typed detour shells with
+//! leaves (render_hooks_platform.h), and the linked depth-domain and render-input diagnostics:
+//! the typed detour shells with
 //! their return addresses and trampoline calls, exception guards, the shared file hash, the Steam
-//! chain facade, the render producer callbacks and recovery leaves, the typed COM leases, and the
-//! D3D11 and COM facts.
+//! chain facade, and the render producer callbacks and recovery leaves. Rust samples the
+//! typed D3D11 and COM facts, and transfers admitted references to the native World.
 //! The Runtime decides vendors, presentation and pacing; this crate reports native facts only.
 #![cfg(windows)]
 

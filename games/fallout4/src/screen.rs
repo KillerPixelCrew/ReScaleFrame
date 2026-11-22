@@ -299,40 +299,69 @@ impl Observation {
     }
 }
 
-#[repr(C)]
-struct MenuCall {
-    name: usize,
-    expected: usize,
+unsafe extern "C" {
+    fn rsf_fallout4_menu_name(entry: usize, name: &mut usize) -> bool;
+    fn rsf_fallout4_menu_open(entry: usize, ui: usize, name: usize, open: &mut bool) -> bool;
+    fn rsf_fallout4_menu_freeze(entry: usize, ui: usize, frozen: &mut bool) -> bool;
+    fn rsf_fallout4_camera_equals(
+        entry: usize,
+        camera: usize,
+        index: u32,
+        equal: &mut bool,
+    ) -> bool;
 }
 
-#[repr(C)]
-struct QueryPlan {
-    ui: usize,
-    menus: [MenuCall; MENUS.len()],
-    menu_open: usize,
-    freeze_background: usize,
-    freeze_pause: usize,
-    camera_equals: usize,
-    camera: usize,
+const _: () = assert!(size_of::<Observation>() == 80);
+
+/// The verified entry points run on the engine callback. The C++ leaves contain
+/// exceptions from individual native calls. A mismatched name retains the facts
+/// from earlier menus and skips all later calls.
+fn observe(base: usize, ui: usize, camera: usize) -> Option<(u32, Option<u16>)> {
+    let mut facts = 0;
+    for menu in MENUS {
+        let mut name = 0;
+        if !unsafe { rsf_fallout4_menu_name(base + menu.entry, &mut name) } {
+            return None;
+        }
+        if name != base + menu.object {
+            return Some((facts, None));
+        }
+        let mut open = false;
+        if !unsafe { rsf_fallout4_menu_open(base + MENU_OPEN, ui, name, &mut open) } {
+            return None;
+        }
+        if open {
+            facts |= menu.fact;
+        }
+    }
+    for (entry, fact) in [
+        (FREEZE_BACKGROUND, FROZEN_BACKGROUND),
+        (FREEZE_PAUSE, FROZEN_PAUSE),
+    ] {
+        let mut frozen = false;
+        if !unsafe { rsf_fallout4_menu_freeze(base + entry, ui, &mut frozen) } {
+            return None;
+        }
+        if frozen {
+            facts |= fact;
+        }
+    }
+    let mut cameras = 0;
+    if camera != 0 {
+        for index in 0..13 {
+            let mut equal = false;
+            if !unsafe {
+                rsf_fallout4_camera_equals(base + CAMERA_EQUALS, camera, index, &mut equal)
+            } {
+                return None;
+            }
+            if equal {
+                cameras |= 1 << index;
+            }
+        }
+    }
+    Some((facts, Some(cameras)))
 }
-
-#[repr(C)]
-#[derive(Default)]
-struct QueryResult {
-    names: [usize; MENUS.len()],
-    open: [u8; MENUS.len()],
-    frozen_background: u8,
-    frozen_pause: u8,
-    cameras: u16,
-}
-
-const _: () = {
-    assert!(size_of::<Observation>() == 80);
-    assert!(size_of::<QueryPlan>() == 144 && std::mem::offset_of!(QueryPlan, menus) == 8);
-    assert!(size_of::<QueryResult>() == 64 && std::mem::offset_of!(QueryResult, cameras) == 56);
-};
-
-type Observe = unsafe extern "C" fn(&QueryPlan, &mut QueryResult) -> bool;
 
 struct LastError(u32);
 
@@ -345,12 +374,11 @@ impl Drop for LastError {
 /// Query only on the engine callback. The native leaf contains the exception
 /// guard around the engine calls.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_screen_classify(
+pub(crate) extern "C" fn rsf_fallout4_screen_classify(
     source: &rsf_fallout4_cpu_identity,
     pass: &rsf_game_render_pass,
     ordinary_world: bool,
     result: &mut NativeScreen,
-    observe: Observe,
 ) {
     let _error = LastError(unsafe { GetLastError() });
     let base = VERIFIED_IMAGE.load(Ordering::Acquire);
@@ -371,47 +399,24 @@ extern "C" fn rsf_fallout4_screen_classify(
     } else {
         0
     };
-    let plan = QueryPlan {
-        ui: before.ui,
-        menus: MENUS.map(|menu| MenuCall {
-            name: base + menu.entry,
-            expected: base + menu.object,
-        }),
-        menu_open: base + MENU_OPEN,
-        freeze_background: base + FREEZE_BACKGROUND,
-        freeze_pause: base + FREEZE_PAUSE,
-        camera_equals: base + CAMERA_EQUALS,
-        camera,
-    };
-    let mut observed = QueryResult::default();
-    if !unsafe { observe(&plan, &mut observed) } {
+    let Some((facts, cameras)) = observe(base, before.ui, camera) else {
         *result = NativeScreen::refused(QUERY_UNAVAILABLE);
         return;
-    }
+    };
     *result = NativeScreen::refused(0);
-    for (index, menu) in MENUS.iter().enumerate() {
-        if observed.names[index] != plan.menus[index].expected {
-            result.refusals = QUERY_UNAVAILABLE;
-            return;
-        }
-        if observed.open[index] != 0 {
-            result.facts |= menu.fact;
-        }
-    }
-    if observed.frozen_background != 0 {
-        result.facts |= FROZEN_BACKGROUND;
-    }
-    if observed.frozen_pause != 0 {
-        result.facts |= FROZEN_PAUSE;
-    }
-    if observed.cameras & (1 << 2) != 0 {
+    result.facts = facts;
+    let Some(cameras) = cameras else {
+        result.refusals = QUERY_UNAVAILABLE;
+        return;
+    };
+    if cameras & (1 << 2) != 0 {
         result.facts |= VATS_CAMERA;
     }
-    if observed.cameras & (1 << 3) != 0 {
+    if cameras & (1 << 3) != 0 {
         result.facts |= FREE_CAMERA;
     }
-    if observed.cameras.count_ones() == 1 {
-        result.camera_index = observed.cameras.trailing_zeros();
+    if cameras.count_ones() == 1 {
+        result.camera_index = cameras.trailing_zeros();
     }
     result.camera_state = before.camera_state;
     if Observation::read(base).as_ref() != Some(&before)

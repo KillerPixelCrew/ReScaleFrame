@@ -178,7 +178,7 @@ struct ViewFacts {
     mip_levels: u32,
 }
 
-/// depth_domains_platform.h `NativeDepthMathFailure`: the largest projection error and the last
+/// depth_domains.cpp `NativeDepthMathFailure`: the largest projection error and the last
 /// forward-W bound, printed by the refusal leaf.
 #[repr(C)]
 #[allow(dead_code)] // the W fields are read by the C++ receipt leaf
@@ -192,20 +192,23 @@ struct MathFailure {
     range: f64,
 }
 
-/// depth_domains_platform.h `NativeDepthLeaves`, built by depth_domains.cpp.
-#[repr(C)]
-#[allow(dead_code)] // constructed by the C++ leaf table
-pub(crate) struct NativeLeaves {
-    refusal: Option<
-        unsafe extern "C" fn(Report, *const c_char, *const Snapshot, *const MathFailure, u32),
-    >,
-    lease:
-        Option<unsafe extern "C" fn(Report, *const Snapshot, *const Snapshot, u32, u32, u32, u32)>,
-}
-
-pub(crate) struct Leaves {
-    refusal: unsafe extern "C" fn(Report, *const c_char, *const Snapshot, *const MathFailure, u32),
-    lease: unsafe extern "C" fn(Report, *const Snapshot, *const Snapshot, u32, u32, u32, u32),
+unsafe extern "C" {
+    fn rsf_fallout4_depth_report_refusal(
+        report: Report,
+        stage: *const c_char,
+        snapshot: &Snapshot,
+        detail: *const MathFailure,
+        math: u32,
+    );
+    fn rsf_fallout4_depth_report_lease(
+        report: Report,
+        snapshot: &Snapshot,
+        current: &Snapshot,
+        reached: u32,
+        passed: u32,
+        stage: u32,
+        changed: u32,
+    );
 }
 
 const _: () = {
@@ -229,7 +232,6 @@ const _: () = {
     assert!(offset_of!(Snapshot, maps) == 1304);
     assert!(size_of::<MathFailure>() == 64 && offset_of!(MathFailure, w) == 16);
     assert!(offset_of!(MathFailure, range) == 56);
-    assert!(size_of::<NativeLeaves>() == 2 * 8);
 };
 
 const NO_IDENTITY: Identity = Identity::ZERO;
@@ -415,15 +417,6 @@ const NAMES: [&CStr; 35] = [
 ];
 const _: () = assert!(Stage::NearBasis as usize + 1 == NAMES.len() && NAMES.len() <= 64);
 
-impl Leaves {
-    fn from_native(table: &NativeLeaves) -> Option<Self> {
-        Some(Self {
-            refusal: table.refusal?,
-            lease: table.lease?,
-        })
-    }
-}
-
 /// Two canonical identities of live objects name the same object.
 fn same_object(a: u64, b: u64) -> bool {
     a != 0 && b != 0 && a == b
@@ -479,13 +472,7 @@ fn same_identity(a: &Identity, b: &Identity) -> bool {
 }
 
 /// Reports `stage` once for the process when a callback is supplied. Always refuses.
-fn refuse(
-    leaves: &Leaves,
-    stage: Stage,
-    snapshot: &Snapshot,
-    report: Report,
-    detail: Option<&MathFailure>,
-) -> bool {
+fn refuse(stage: Stage, snapshot: &Snapshot, report: Report, detail: Option<&MathFailure>) -> bool {
     if report.is_some() {
         let bit = 1u64 << stage as u32;
         if REPORTED.fetch_or(bit, Ordering::Relaxed) & bit == 0 {
@@ -496,7 +483,7 @@ fn refuse(
             };
             let detail = detail.map_or(std::ptr::null(), std::ptr::from_ref);
             unsafe {
-                (leaves.refusal)(
+                rsf_fallout4_depth_report_refusal(
                     report,
                     NAMES[stage as usize].as_ptr(),
                     snapshot,
@@ -510,13 +497,12 @@ fn refuse(
 }
 
 fn refused<T>(
-    leaves: &Leaves,
     stage: Stage,
     snapshot: &Snapshot,
     report: Report,
     detail: Option<&MathFailure>,
 ) -> Option<T> {
-    refuse(leaves, stage, snapshot, report, detail);
+    refuse(stage, snapshot, report, detail);
     None
 }
 
@@ -1330,7 +1316,7 @@ fn verify() -> bool {
     okay
 }
 
-fn capture_raster(leaves: &Leaves, cpu: &Identity, report: Report) -> Option<Snapshot> {
+fn capture_raster(cpu: &Identity, report: Report) -> Option<Snapshot> {
     let (mut before, mut after) = (EMPTY, EMPTY);
     let mut stage = Stage::Source;
     let admitted = VERIFIED.load(Ordering::Acquire)
@@ -1346,7 +1332,7 @@ fn capture_raster(leaves: &Leaves, cpu: &Identity, report: Report) -> Option<Sna
         && before.dynamic_viewport == after.dynamic_viewport
         && same_identity(cpu, &current_identity());
     if !admitted {
-        return refused(leaves, stage, &before, report, None);
+        return refused(stage, &before, report, None);
     }
     before.raster_valid = true;
     Some(before)
@@ -1363,15 +1349,11 @@ pub(crate) fn raster_current(snapshot: &Snapshot) -> bool {
 
 // Output can borrow either the raster-only recovery producer or the temporal producer.
 // The three keys are usable only during the current synchronous render callback.
-pub(crate) fn resolution_owner(
-    leaves: &NativeLeaves,
-    snapshot: &Snapshot,
-) -> Option<(usize, usize, usize)> {
-    let leaves = Leaves::from_native(leaves)?;
+pub(crate) fn resolution_owner(snapshot: &Snapshot) -> Option<(usize, usize, usize)> {
     let current = if snapshot.raster_valid {
         raster_current(snapshot)
     } else {
-        snapshot_current(&leaves, snapshot, None)
+        snapshot_current(snapshot, None)
     };
     current.then_some((
         snapshot.context_key as usize,
@@ -1380,7 +1362,7 @@ pub(crate) fn resolution_owner(
     ))
 }
 
-pub(crate) fn snapshot_current(leaves: &Leaves, snapshot: &Snapshot, report: Report) -> bool {
+pub(crate) fn snapshot_current(snapshot: &Snapshot, report: Report) -> bool {
     let mut stage = Stage::Source;
     let mut current = EMPTY;
     let (mut reached, mut passed) = (0u32, 0u32);
@@ -1434,7 +1416,7 @@ pub(crate) fn snapshot_current(leaves: &Leaves, snapshot: &Snapshot, report: Rep
         }
         if LEASE_BUDGET.fetch_add(1, Ordering::Relaxed) < 16 {
             unsafe {
-                (leaves.lease)(
+                rsf_fallout4_depth_report_lease(
                     report,
                     snapshot,
                     &current,
@@ -1449,31 +1431,31 @@ pub(crate) fn snapshot_current(leaves: &Leaves, snapshot: &Snapshot, report: Rep
     okay
 }
 
-fn capture(leaves: &Leaves, cpu: &Identity, report: Report) -> Option<Snapshot> {
+fn capture(cpu: &Identity, report: Report) -> Option<Snapshot> {
     let (mut before, mut after) = (EMPTY, EMPTY);
     before.identity = *cpu;
     let mut stage = Stage::Unverified;
     let mut detail = NO_FAILURE;
     if !VERIFIED.load(Ordering::Acquire) {
-        return refused(leaves, stage, &before, report, None);
+        return refused(stage, &before, report, None);
     }
     if !same_identity(cpu, &current_identity()) || !render_source_is_current(cpu) {
-        return refused(leaves, Stage::Source, &before, report, None);
+        return refused(Stage::Source, &before, report, None);
     }
     if !sample(cpu, &mut before, &mut stage) || !producer_raster(&mut before, &mut stage, true) {
-        return refused(leaves, stage, &before, report, Some(&detail));
+        return refused(stage, &before, report, Some(&detail));
     }
     let Some(maps) = math(&before, &mut stage, &mut detail) else {
-        return refused(leaves, stage, &before, report, Some(&detail));
+        return refused(stage, &before, report, Some(&detail));
     };
     if !sample(cpu, &mut after, &mut stage) || !producer_raster(&mut after, &mut stage, true) {
-        return refused(leaves, stage, &after, report, None);
+        return refused(stage, &after, report, None);
     }
     if !same(&before, &after) || !same_raster(&before, &after) {
-        return refused(leaves, Stage::StateChanged, &after, report, None);
+        return refused(Stage::StateChanged, &after, report, None);
     }
     if !same_identity(cpu, &current_identity()) || !render_source_is_current(cpu) {
-        return refused(leaves, Stage::Source, &after, report, None);
+        return refused(Stage::Source, &after, report, None);
     }
     before.maps = maps;
     before.valid = true;
@@ -1514,37 +1496,36 @@ fn pass_matches(snapshot: &Snapshot, cpu: &Identity, pass: &rsf_game_render_pass
 }
 
 fn make(
-    leaves: &Leaves,
     snapshot: &Snapshot,
     cpu: &Identity,
     pass: &rsf_game_render_pass,
     report: Report,
 ) -> Option<rsf_game_depth_domains> {
     if !VERIFIED.load(Ordering::Acquire) {
-        return refused(leaves, Stage::Unverified, snapshot, report, None);
+        return refused(Stage::Unverified, snapshot, report, None);
     }
     if !snapshot.valid
         || !same_identity(&snapshot.identity, cpu)
         || !same_identity(cpu, &current_identity())
         || !render_source_is_current(cpu)
     {
-        return refused(leaves, Stage::Source, snapshot, report, None);
+        return refused(Stage::Source, snapshot, report, None);
     }
     if !pass_matches(snapshot, cpu, pass) {
-        return refused(leaves, Stage::PassAssociation, snapshot, report, None);
+        return refused(Stage::PassAssociation, snapshot, report, None);
     }
     let (mut current, mut confirmed) = (EMPTY, EMPTY);
     let mut stage = Stage::Source;
     if !sample(cpu, &mut current, &mut stage) {
-        return refused(leaves, stage, &current, report, None);
+        return refused(stage, &current, report, None);
     }
     if !same(snapshot, &current) {
-        return refused(leaves, Stage::StateChanged, &current, report, None);
+        return refused(Stage::StateChanged, &current, report, None);
     }
     let maps = &snapshot.maps;
     let mut native_projection = [0.0; 16];
     if !camera::store(&maps.projection, &mut native_projection) {
-        return refused(leaves, Stage::FiniteMap, snapshot, report, None);
+        return refused(Stage::FiniteMap, snapshot, report, None);
     }
     let [x, y, width, height, ..] = snapshot.actual_raster;
     let raster = CameraRaster {
@@ -1552,7 +1533,7 @@ fn make(
         crop: snapshot.render_rect,
     };
     let Some(affine) = camera::raster_transform(&raster) else {
-        return refused(leaves, Stage::RasterMath, snapshot, report, None);
+        return refused(Stage::RasterMath, snapshot, report, None);
     };
     let affine = xm::load(&affine);
     let projection = xm::multiply(&maps.projection, &affine);
@@ -1562,7 +1543,7 @@ fn make(
     if !camera::invert(&projection).is_some_and(|inverse| {
         matches(&projection, &frame.view_to_clip) && matches(&inverse, &frame.clip_to_view)
     }) {
-        return refused(leaves, Stage::TargetCamera, snapshot, report, None);
+        return refused(Stage::TargetCamera, snapshot, report, None);
     }
     let w = &snapshot.world_camera;
     let world_view = xm::multiply(
@@ -1573,21 +1554,21 @@ fn make(
         || !camera::invert(&world_view)
             .is_some_and(|view_world| matches(&view_world, &frame.view_to_world))
     {
-        return refused(leaves, Stage::TargetCamera, snapshot, report, None);
+        return refused(Stage::TargetCamera, snapshot, report, None);
     }
     let mut target = [0.0; 16];
     if !camera::store(&projection, &mut target) {
-        return refused(leaves, Stage::TargetCamera, snapshot, report, None);
+        return refused(Stage::TargetCamera, snapshot, report, None);
     }
     let Some([jitter_x, jitter_y]) =
         camera::projection_jitter(&w.projection, &native_projection, [width, height])
     else {
-        return refused(leaves, Stage::TargetCamera, snapshot, report, None);
+        return refused(Stage::TargetCamera, snapshot, report, None);
     };
     if !camera::near(frame.jitter_pixels[0], jitter_x)
         || !camera::near(frame.jitter_pixels[1], jitter_y)
     {
-        return refused(leaves, Stage::TargetCamera, snapshot, report, None);
+        return refused(Stage::TargetCamera, snapshot, report, None);
     }
     let depth = native::texture(pass.depth as u64);
     if depth.format != DXGI_FORMAT_R24G8_TYPELESS
@@ -1599,7 +1580,7 @@ fn make(
         || depth.sample_quality != 0
         || !same_native(depth.device, current.device_key)
     {
-        return refused(leaves, Stage::DepthFormat, snapshot, report, None);
+        return refused(Stage::DepthFormat, snapshot, report, None);
     }
     let view = native::view(current.depth_srv_key);
     if view.format != DXGI_FORMAT_R24_UNORM_X8_TYPELESS
@@ -1609,7 +1590,7 @@ fn make(
         || !same_object(view.resource, depth.resource)
         || !same_object(view.device, depth.device)
     {
-        return refused(leaves, Stage::DepthView, snapshot, report, None);
+        return refused(Stage::DepthView, snapshot, report, None);
     }
     let mut result = NO_DOMAINS;
     result.struct_size = size_of::<rsf_game_depth_domains>() as u32;
@@ -1629,25 +1610,19 @@ fn make(
         domain.viewport_max_depth = snapshot.intervals[index * 2 + 1];
         let map = if far { &world } else { &near };
         if !camera::store(map, &mut domain.source_clip_to_target_clip) {
-            return refused(leaves, Stage::FiniteMap, snapshot, report, None);
+            return refused(Stage::FiniteMap, snapshot, report, None);
         }
     }
     if !sample(cpu, &mut confirmed, &mut stage) {
-        return refused(leaves, stage, &confirmed, report, None);
+        return refused(stage, &confirmed, report, None);
     }
     if !same(snapshot, &confirmed) {
-        return refused(leaves, Stage::StateChanged, &confirmed, report, None);
+        return refused(Stage::StateChanged, &confirmed, report, None);
     }
     if !same_identity(cpu, &current_identity()) || !render_source_is_current(cpu) {
-        return refused(leaves, Stage::Source, &confirmed, report, None);
+        return refused(Stage::Source, &confirmed, report, None);
     }
     Some(result)
-}
-
-/// # Safety
-/// A nonnull pointer must name a readable native leaf table.
-pub(crate) unsafe fn complete(leaves: *const NativeLeaves) -> Option<Leaves> {
-    unsafe { leaves.as_ref() }.and_then(Leaves::from_native)
 }
 
 /// Checks the expected bytes of every native site the snapshot depends on.
@@ -1659,11 +1634,10 @@ pub(crate) extern "C" fn rsf_fallout4_depth_verify() -> bool {
 /// Owner and producer raster only, sampled twice. Never temporal admission.
 ///
 /// # Safety
-/// `leaves` is the complete process-lived table; `cpu` is readable and `output` writable, and
+/// `cpu` is readable and `output` writable, and
 /// neither overlaps the other.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fallout4_depth_capture_raster(
-    leaves: *const NativeLeaves,
     cpu: *const Identity,
     output: *mut Snapshot,
     report: Report,
@@ -1672,51 +1646,30 @@ unsafe extern "C" fn rsf_fallout4_depth_capture_raster(
         return false;
     };
     *output = EMPTY;
-    let (Some(leaves), Some(cpu)) = (unsafe { complete(leaves) }, unsafe { cpu.as_ref() }) else {
+    let Some(cpu) = (unsafe { cpu.as_ref() }) else {
         return false;
     };
     let cpu = *cpu;
-    capture_raster(&leaves, &cpu, report).is_some_and(|snapshot| {
+    capture_raster(&cpu, report).is_some_and(|snapshot| {
         *output = snapshot;
         true
     })
 }
 
 /// # Safety
-/// `leaves` is the complete process-lived table; `snapshot` is readable.
+/// `snapshot` is readable.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_depth_raster_current(
-    leaves: *const NativeLeaves,
-    snapshot: *const Snapshot,
-) -> bool {
-    match (unsafe { complete(leaves) }, unsafe { snapshot.as_ref() }) {
-        (Some(_), Some(snapshot)) => raster_current(snapshot),
-        _ => false,
-    }
-}
-
-/// # Safety
-/// `leaves` is the complete process-lived table; `snapshot` is readable.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_depth_snapshot_current(
-    leaves: *const NativeLeaves,
-    snapshot: *const Snapshot,
-    report: Report,
-) -> bool {
-    match (unsafe { complete(leaves) }, unsafe { snapshot.as_ref() }) {
-        (Some(leaves), Some(snapshot)) => snapshot_current(&leaves, snapshot, report),
-        _ => false,
-    }
+unsafe extern "C" fn rsf_fallout4_depth_raster_current(snapshot: *const Snapshot) -> bool {
+    unsafe { snapshot.as_ref() }.is_some_and(raster_current)
 }
 
 /// The temporal snapshot after the original prepass returned at its exact caller.
 ///
 /// # Safety
-/// `leaves` is the complete process-lived table; `cpu` is readable and `output` writable, and
+/// `cpu` is readable and `output` writable, and
 /// neither overlaps the other.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fallout4_depth_capture(
-    leaves: *const NativeLeaves,
     cpu: *const Identity,
     output: *mut Snapshot,
     report: Report,
@@ -1725,11 +1678,11 @@ unsafe extern "C" fn rsf_fallout4_depth_capture(
         return false;
     };
     *output = EMPTY;
-    let (Some(leaves), Some(cpu)) = (unsafe { complete(leaves) }, unsafe { cpu.as_ref() }) else {
+    let Some(cpu) = (unsafe { cpu.as_ref() }) else {
         return false;
     };
     let cpu = *cpu;
-    capture(&leaves, &cpu, report).is_some_and(|snapshot| {
+    capture(&cpu, report).is_some_and(|snapshot| {
         *output = snapshot;
         true
     })
@@ -1740,11 +1693,10 @@ unsafe extern "C" fn rsf_fallout4_depth_capture(
 /// copy afterwards, and the result is written only on admission.
 ///
 /// # Safety
-/// `leaves` is the complete process-lived table; `snapshot`, `cpu` and `pass` are readable and
+/// `snapshot`, `cpu` and `pass` are readable and
 /// `output` is writable. Only `output` and `pass` may overlap.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fallout4_depth_make(
-    leaves: *const NativeLeaves,
     snapshot: *const Snapshot,
     cpu: *const Identity,
     pass: *const rsf_game_render_pass,
@@ -1755,18 +1707,15 @@ unsafe extern "C" fn rsf_fallout4_depth_make(
         return false;
     }
     unsafe { output.write(NO_DOMAINS) };
-    let (Some(leaves), Some(snapshot), Some(cpu)) = (
-        unsafe { complete(leaves) },
-        unsafe { snapshot.as_ref() },
-        unsafe { cpu.as_ref() },
-    ) else {
+    let (Some(snapshot), Some(cpu)) = (unsafe { snapshot.as_ref() }, unsafe { cpu.as_ref() })
+    else {
         return false;
     };
     if pass.is_null() {
         return false;
     }
     let (snapshot, cpu, pass) = (*snapshot, *cpu, unsafe { pass.read() });
-    match make(&leaves, &snapshot, &cpu, &pass, report) {
+    match make(&snapshot, &cpu, &pass, report) {
         Some(result) => {
             unsafe { output.write(result) };
             true

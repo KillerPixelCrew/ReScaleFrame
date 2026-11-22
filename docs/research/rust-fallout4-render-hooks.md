@@ -466,3 +466,47 @@ Effects manager and replaced source, an owned return after source
 invalidation, withheld retirement, failed output restoration, fractional
 auxiliary mapping and a partially read framebuffer. Native run and capture
 requirements from the previous sections remain open.
+
+## Typed input and Present boundaries
+
+The baseline was `84a8b9eb`. The follow-up removes residual callback-table and COM
+observation work while preserving the same Fallout 4 AE 1.11.240 hook entry and
+caller guards. The source comparison followed each replaced native leaf to the
+corresponding Rust caller. No new hook sites, layouts or engine behavior were
+inferred from that comparison.
+
+- `render_inputs/native.rs` holds the candidate Context, chain and six texture
+  references as typed Rust values. Each accepted reader transfers its references
+  once. A refusal drops the candidate after the same receipt point. The
+  framebuffer lease still crosses as one acquisition, and the resource and
+  native-owner rereads still precede publication.
+- `d3d11.rs` uses the SDK's typed interfaces for canonical `IUnknown` comparisons,
+  immediate Context and chain checks, auxiliary format support and framebuffer
+  extent. Reference transfer and the World stores still use native RAII.
+- `screen.rs` keeps the guarded entry addresses and calls the menu-name leaf
+  first for each menu. The expected name object still gates the menu-open call.
+  Freeze and camera probes follow in their prior order. The four native call
+  signatures retain their exception guards. The depth, input and resolution
+  receipts also retain their guarded callbacks and text.
+- `render_hooks.rs` reads the exact outer chain through the renderer's window
+  cell and compares frame, view, window, Context and chain against the leased
+  values. The source check is repeated after the screen callback. The native
+  Present detour closes SUBMISSION before the original and uses the admitted
+  CPU identity and matched frame/window to open its CPU phase. Its destructor
+  retires that phase on return or unwind and preserves the current LastError.
+  The post-Swap WINDOW/FRAME, recovery, auxiliary and resolution retirement
+  order remains in `render_hooks/scope.rs`.
+- Render MinHook queue and apply calls now link directly to the same MinHook
+  instance. Hook creation and checked rollback still use native typed trampoline
+  storage. The F01 direct Steam chain, guarded cold creation and CPU ABI are
+  the same baseline paths.
+
+The remaining shells contain native engine and host calls, the typed
+trampolines, TLS World storage and COM transfer or callback lifetime guards.
+Their private headers still describe those boundaries. This pass removes the
+depth platform table, the separate input-state header and the native padding
+fixture. The padding test now calls the production comparators directly from
+Rust. The layout, formatting, generated bindings and locked offline dependency
+metadata are source checks. Workspace-wide rustfmt also flags the baseline import order
+in the generated Fallout 4 platform bindings. Native build, linkage, tests and game evidence
+remain open.

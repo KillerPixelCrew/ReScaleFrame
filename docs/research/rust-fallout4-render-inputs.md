@@ -67,8 +67,10 @@ the shared reader bit, as the C++ `fetch_or` did.
   resource. Identity comparison is on the canonical `IUnknown`, as `same_object` was.
 - A failed partial `ReadProcessMemory` no longer leaves partial bytes in a field. Only receipt text
   for an already refused stage could have shown them.
-- `native_input_state.h` stays for `tests/fallout4_input_state.cpp` and the receipt leaves; the
-  production comparison is the Rust mirror, which has unit tests for the same rules.
+- The native padding fixture initially used `native_input_state.h`. The later input cutover
+  moved that fixture into Rust, where it poisons the six trailing bytes in place and borrows
+  both records directly into the production owner and state predicates.
+  `render_inputs_platform.h` keeps the layout only for the native diagnostic receipt.
 
 ## Preserved details
 

@@ -27,8 +27,6 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 type Flat = [f32; 16];
 type Report = Option<unsafe extern "C" fn(*const c_char)>;
-/// render_inputs.cpp `NativeInputLease`, opaque here.
-type Lease = *mut native::NativeLease;
 
 const STATE_RVA: usize = 0x3d871a0;
 const TARGETS_RVA: usize = 0x2f4d750;
@@ -64,7 +62,7 @@ static CHANGE_BUDGET: AtomicU32 = AtomicU32::new(0);
 static SEEN_REASONS: [AtomicBool; 256] = [const { AtomicBool::new(false) }; 256];
 static REASON_BUDGET: AtomicU32 = AtomicU32::new(0);
 
-/// native_input_state.h `detail::NativeState`.
+/// render_inputs_platform.h `detail::NativeState`.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct State {
@@ -232,27 +230,26 @@ struct FramebufferFacts {
     window_key: u64,
 }
 
-/// render_inputs_platform.h `NativeInputLeaves`, built by render_inputs.cpp.
-#[repr(C)]
-#[allow(dead_code)] // constructed by the C++ leaf table
-pub(crate) struct NativeLeaves {
-    reader: Option<
-        unsafe extern "C" fn(Report, *const c_char, *const Receipt, *const rsf_game_render_pass),
-    >,
-    mismatch: Option<unsafe extern "C" fn(Report, *const State, *const State, u32)>,
-    history: Option<unsafe extern "C" fn(Report, *const HistoryReceipt)>,
-    framebuffer: Option<
-        unsafe extern "C" fn(Report, *const c_char, *const c_char, *const FramebufferReceipt),
-    >,
-}
-
-pub(crate) struct Leaves {
-    reader:
-        unsafe extern "C" fn(Report, *const c_char, *const Receipt, *const rsf_game_render_pass),
-    mismatch: unsafe extern "C" fn(Report, *const State, *const State, u32),
-    history: unsafe extern "C" fn(Report, *const HistoryReceipt),
-    framebuffer:
-        unsafe extern "C" fn(Report, *const c_char, *const c_char, *const FramebufferReceipt),
+unsafe extern "C" {
+    fn rsf_fallout4_inputs_report_reader(
+        report: Report,
+        stage: *const c_char,
+        receipt: &Receipt,
+        pass: &rsf_game_render_pass,
+    );
+    fn rsf_fallout4_inputs_report_mismatch(
+        report: Report,
+        before: &State,
+        after: &State,
+        mask: u32,
+    );
+    fn rsf_fallout4_inputs_report_history(report: Report, receipt: &HistoryReceipt);
+    fn rsf_fallout4_inputs_report_framebuffer(
+        report: Report,
+        stage: *const c_char,
+        owner_stage: *const c_char,
+        receipt: &FramebufferReceipt,
+    );
 }
 
 const _: () = {
@@ -279,7 +276,6 @@ const _: () = {
     assert!(offset_of!(FramebufferReceipt, platform) == 304);
     assert!(offset_of!(FramebufferReceipt, rtv_mip) == 340);
     assert!(size_of::<FramebufferFacts>() == 16);
-    assert!(size_of::<NativeLeaves>() == 4 * 8);
 };
 
 const NO_CAMERA: NativeCamera = NativeCamera {
@@ -423,17 +419,6 @@ const _: () = assert!(
     Framebuffer::Accepted as usize + 1 == FRAMEBUFFER_NAMES.len() && FRAMEBUFFER_NAMES.len() <= 32
 );
 
-impl Leaves {
-    fn from_native(table: &NativeLeaves) -> Option<Self> {
-        Some(Self {
-            reader: table.reader?,
-            mismatch: table.mismatch?,
-            history: table.history?,
-            framebuffer: table.framebuffer?,
-        })
-    }
-}
-
 /// Two canonical identities of live objects name the same object.
 fn same_object(a: u64, b: u64) -> bool {
     a != 0 && b != 0 && a == b
@@ -505,13 +490,6 @@ fn same_native_state(a: &State, b: &State) -> bool {
         && a.dynamic_viewport == b.dynamic_viewport
         && bits(&a.ratio) == bits(&b.ratio)
         && bits(&a.viewport) == bits(&b.viewport)
-}
-
-/// `memcmp` equality of two copied cameras.
-/// Called by the native layout fixture with different bytes in the record's padding.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_compare_input_state(a: &State, b: &State) -> u32 {
-    u32::from(same_native_owner(a, b)) | (u32::from(same_native_state(a, b)) << 1)
 }
 
 fn same_camera(a: &NativeCamera, b: &NativeCamera) -> bool {
@@ -683,7 +661,7 @@ struct ViewCheck<'a> {
 
 #[allow(clippy::too_many_arguments)] // the C++ view_texture arguments and its facts
 fn view_texture(
-    lease: Lease,
+    lease: &mut native::NativeLease,
     slot: u32,
     view: u64,
     expected: u64,
@@ -731,7 +709,13 @@ fn extent(facts: &ResourceFacts, width: u32, height: u32) -> bool {
 /// native record, view, device and extent agree before and after. Only full-output allocations
 /// share the verified Main viewport/crop; the native format is deliberately not inferred from the
 /// logical role.
-fn auxiliary(lease: Lease, native: &State, device: u64, logical: u32, slot: u32) -> bool {
+fn auxiliary(
+    lease: &mut native::NativeLease,
+    native: &State,
+    device: u64,
+    logical: u32,
+    slot: u32,
+) -> bool {
     let map = colour_map(logical);
     let (mut platform, mut confirmed_platform) = (0u32, 0u32);
     let (mut target, mut confirmed_target) = (Target::default(), Target::default());
@@ -838,7 +822,7 @@ impl Reading {
 
 /// One bundle per named stage, at most one per stage per process. Loading cannot spend the
 /// budget reserved for a later distinct refusal stage.
-fn receipt(leaves: &Leaves, report: Report, stage: Stage, reading: &mut Reading) {
+fn receipt(report: Report, stage: Stage, reading: &mut Reading) {
     if report.is_none() {
         return;
     }
@@ -848,7 +832,7 @@ fn receipt(leaves: &Leaves, report: Report, stage: Stage, reading: &mut Reading)
     }
     reading.receipt.after_frame = reading.after.frame;
     unsafe {
-        (leaves.reader)(
+        rsf_fallout4_inputs_report_reader(
             report,
             NAMES[stage as usize].as_ptr(),
             &reading.receipt,
@@ -939,7 +923,7 @@ impl DepthRequirement {
 }
 
 fn lease_views(
-    lease: Lease,
+    lease: &mut native::NativeLease,
     records: &InputRecords,
     device: u64,
     requirement: DepthRequirement,
@@ -986,7 +970,7 @@ fn lease_views(
 }
 
 fn validate_views(
-    lease: Lease,
+    lease: &mut native::NativeLease,
     colour_rtv: u64,
     [width, height]: [u32; 2],
     requirement: DepthRequirement,
@@ -1020,9 +1004,7 @@ fn validate_views(
 /// The full reader. Supplies native resource/camera/rect/frame facts only; the caller supplies
 /// the verified session, source, submission, scope, role, screen and eligibility facts.
 fn read_inputs(
-    leaves: &Leaves,
-    depth: Option<&depth_domains::Leaves>,
-    lease: Lease,
+    lease: &mut native::NativeLease,
     report: Report,
     producer: Option<&Snapshot>,
     r: &mut Reading,
@@ -1033,7 +1015,7 @@ fn read_inputs(
     state(&mut r.receipt.before)?;
     let before = r.receipt.before;
     if let Some(p) = producer {
-        if !depth.is_some_and(|depth| depth_domains::snapshot_current(depth, p, None))
+        if !depth_domains::snapshot_current(p, None)
             || p.native_frame != u64::from(before.frame)
             || p.world_camera_key != before.camera as u64
             || p.width != before.width
@@ -1202,7 +1184,7 @@ fn read_inputs(
             && !SEEN_CHANGES[mask as usize].swap(true, Ordering::Relaxed)
             && CHANGE_BUDGET.fetch_add(1, Ordering::Relaxed) < 16
         {
-            unsafe { (leaves.mismatch)(report, &before, &after, mask) };
+            unsafe { rsf_fallout4_inputs_report_mismatch(report, &before, &after, mask) };
         }
         return Err(Stage::StateChanged);
     }
@@ -1214,7 +1196,7 @@ fn read_inputs(
         return Err(Stage::ViewportBounds);
     }
     if let Some(p) = producer
-        && !depth.is_some_and(|depth| depth_domains::snapshot_current(depth, p, report))
+        && !depth_domains::snapshot_current(p, report)
     {
         return Err(Stage::ProducerChanged);
     }
@@ -1272,7 +1254,7 @@ fn read_inputs(
                 raster,
                 previous_raster: previous.raster,
             };
-            unsafe { (leaves.history)(report, &text) };
+            unsafe { rsf_fallout4_inputs_report_history(report, &text) };
         }
         if !next.reset {
             next.previous_jitter = previous.jitter;
@@ -1330,7 +1312,7 @@ fn read_inputs(
 /// Raster/resource lease only. No temporal camera, history or depth admission. All downstream
 /// allocations are conservatively required before native reduction.
 fn read_raster(
-    lease: Lease,
+    lease: &mut native::NativeLease,
     frame: &rsf_game_render_pass,
     producer: Option<&Snapshot>,
 ) -> Option<rsf_game_render_pass> {
@@ -1469,7 +1451,7 @@ fn read_raster(
 
 /// Logical FrameBuffer0 resolved after imagespace.
 fn read_framebuffer(
-    lease: Lease,
+    lease: &mut native::NativeLease,
     r: &mut FramebufferReceipt,
     owner_failure: &mut Stage,
 ) -> Result<(), Framebuffer> {
@@ -1557,7 +1539,6 @@ fn read_framebuffer(
 }
 
 fn framebuffer_receipt(
-    leaves: &Leaves,
     report: Report,
     stage: Framebuffer,
     owner_failure: Stage,
@@ -1571,17 +1552,13 @@ fn framebuffer_receipt(
         return;
     }
     unsafe {
-        (leaves.framebuffer)(
+        rsf_fallout4_inputs_report_framebuffer(
             report,
             FRAMEBUFFER_NAMES[stage as usize].as_ptr(),
             NAMES[owner_failure as usize].as_ptr(),
             r,
         )
     };
-}
-
-unsafe fn complete(leaves: *const NativeLeaves) -> Option<Leaves> {
-    unsafe { leaves.as_ref() }.and_then(Leaves::from_native)
 }
 
 pub(crate) fn verify_for_build(_build: &creation::ExactBuild) -> bool {
@@ -1605,13 +1582,10 @@ extern "C" fn rsf_fallout4_inputs_claim_exception() -> bool {
 /// keeps the lease only then.
 ///
 /// # Safety
-/// `leaves` is the complete process-lived table, `depth` the depth-domain table or null, `lease`
-/// the caller's empty `NativeInputLease`, `producer` null or readable and `output` writable.
+/// `transferred` points to the caller's empty lease, `producer` null or readable and `output` writable.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fallout4_inputs_read(
-    leaves: *const NativeLeaves,
-    depth: *const depth_domains::NativeLeaves,
-    lease: Lease,
+    transferred: *mut native::TransferredLease,
     report: Report,
     producer: *const Snapshot,
     output: *mut rsf_game_render_pass,
@@ -1621,30 +1595,21 @@ unsafe extern "C" fn rsf_fallout4_inputs_read(
     };
     // SAFETY: the SDK record holds only integers, floats and raw pointers.
     *output = unsafe { std::mem::zeroed() };
-    let Some(leaves) = (unsafe { complete(leaves) }) else {
-        return false;
-    };
-    if lease.is_null() {
+    if transferred.is_null() {
         return false;
     }
-    let depth = unsafe { depth_domains::complete(depth) };
     let producer = unsafe { producer.as_ref() }.copied();
     let mut reading = Reading::new();
-    match read_inputs(
-        &leaves,
-        depth.as_ref(),
-        lease,
-        report,
-        producer.as_ref(),
-        &mut reading,
-    ) {
+    let mut lease = native::NativeLease::default();
+    match read_inputs(&mut lease, report, producer.as_ref(), &mut reading) {
         Ok(()) => {
-            receipt(&leaves, report, Stage::Accepted, &mut reading);
+            receipt(report, Stage::Accepted, &mut reading);
             *output = reading.pass;
+            unsafe { transferred.write(lease.transfer()) };
             true
         }
         Err(stage) => {
-            receipt(&leaves, report, stage, &mut reading);
+            receipt(report, stage, &mut reading);
             false
         }
     }
@@ -1653,11 +1618,11 @@ unsafe extern "C" fn rsf_fallout4_inputs_read(
 /// The raster reader. `output` is cleared first and written only on admission.
 ///
 /// # Safety
-/// `lease` is the caller's empty `NativeInputLease`, `frame` readable, `producer` null or readable and
+/// `transferred` points to the caller's empty lease, `frame` readable, `producer` null or readable and
 /// `output` writable.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fallout4_inputs_read_raster(
-    lease: Lease,
+    transferred: *mut native::TransferredLease,
     frame: *const rsf_game_render_pass,
     producer: *const Snapshot,
     output: *mut rsf_game_render_pass,
@@ -1667,14 +1632,18 @@ unsafe extern "C" fn rsf_fallout4_inputs_read_raster(
     }
     // SAFETY: the SDK record holds only integers, floats and raw pointers.
     unsafe { output.write(std::mem::zeroed()) };
-    if lease.is_null() || frame.is_null() {
+    if transferred.is_null() || frame.is_null() {
         return false;
     }
     let frame = unsafe { frame.read() };
     let producer = unsafe { producer.as_ref() }.copied();
-    match read_raster(lease, &frame, producer.as_ref()) {
+    let mut lease = native::NativeLease::default();
+    match read_raster(&mut lease, &frame, producer.as_ref()) {
         Some(pass) => {
-            unsafe { output.write(pass) };
+            unsafe {
+                output.write(pass);
+                transferred.write(lease.transfer())
+            };
             true
         }
         None => false,
@@ -1684,12 +1653,11 @@ unsafe extern "C" fn rsf_fallout4_inputs_read_raster(
 /// The framebuffer reader. `output` is cleared first and written only on admission.
 ///
 /// # Safety
-/// `leaves` is the complete process-lived table, `lease` the caller's empty `NativeInputLease`
+/// `transferred` points to the caller's empty lease
 /// and `output` writable.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fallout4_inputs_read_framebuffer(
-    leaves: *const NativeLeaves,
-    lease: Lease,
+    transferred: *mut native::TransferredLease,
     report: Report,
     output: *mut FramebufferFacts,
 ) -> bool {
@@ -1700,31 +1668,24 @@ unsafe extern "C" fn rsf_fallout4_inputs_read_framebuffer(
         native_frame: 0,
         window_key: 0,
     };
-    let Some(leaves) = (unsafe { complete(leaves) }) else {
-        return false;
-    };
-    if lease.is_null() {
+    if transferred.is_null() {
         return false;
     }
     let mut receipt = FramebufferReceipt::default();
     let mut owner_failure = Stage::Owner;
-    match read_framebuffer(lease, &mut receipt, &mut owner_failure) {
+    let mut lease = native::NativeLease::default();
+    match read_framebuffer(&mut lease, &mut receipt, &mut owner_failure) {
         Ok(()) => {
-            framebuffer_receipt(
-                &leaves,
-                report,
-                Framebuffer::Accepted,
-                owner_failure,
-                &receipt,
-            );
+            framebuffer_receipt(report, Framebuffer::Accepted, owner_failure, &receipt);
             *output = FramebufferFacts {
                 native_frame: u64::from(receipt.before.frame),
                 window_key: receipt.before.window as u64,
             };
+            unsafe { transferred.write(lease.transfer()) };
             true
         }
         Err(stage) => {
-            framebuffer_receipt(&leaves, report, stage, owner_failure, &receipt);
+            framebuffer_receipt(report, stage, owner_failure, &receipt);
             false
         }
     }
@@ -1768,6 +1729,35 @@ mod tests {
         renderer[index] = 42;
         std::hint::black_box(&renderer);
         assert!(!original.current(base, slots));
+    }
+
+    #[test]
+    fn owner_and_state_ignore_initialized_padding() {
+        use std::mem::{MaybeUninit, offset_of};
+
+        const PADDING: usize = offset_of!(State, dynamic_viewport) + size_of::<u8>();
+        const SIZE: usize = size_of::<State>();
+        const _: () = assert!(PADDING == 122 && SIZE == 128);
+
+        let mut before = MaybeUninit::<State>::zeroed();
+        let mut after = MaybeUninit::<State>::zeroed();
+        // SAFETY: every State field accepts zero. Write the six trailing
+        // bytes in place and borrow the values without moving their padding.
+        unsafe {
+            let before_padding = before.as_mut_ptr().cast::<u8>().add(PADDING);
+            let after_padding = after.as_mut_ptr().cast::<u8>().add(PADDING);
+            before_padding.write_bytes(0xa5, SIZE - PADDING);
+            after_padding.write_bytes(0x5a, SIZE - PADDING);
+            assert_ne!(before_padding.read(), after_padding.read());
+            assert!(same_native_owner(
+                before.assume_init_ref(),
+                after.assume_init_ref()
+            ));
+            assert!(same_native_state(
+                before.assume_init_ref(),
+                after.assume_init_ref()
+            ));
+        }
     }
 
     #[test]

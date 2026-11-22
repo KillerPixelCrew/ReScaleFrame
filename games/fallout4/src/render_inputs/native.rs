@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Typed D3D11 input observations and references transferred to the caller's lease.
 
-use super::{DeviceFacts, Lease, ResourceFacts, SwapFacts, ViewportFacts};
+use super::{DeviceFacts, ResourceFacts, SwapFacts, ViewportFacts};
 use crate::d3d11::{identity, viewport as read_viewport};
 use std::ffi::c_void;
-use std::ptr;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_DEVICE_CONTEXT_IMMEDIATE, D3D11_RENDER_TARGET_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC,
     D3D11_TEXTURE2D_DESC, ID3D11Device, ID3D11DeviceContext, ID3D11RenderTargetView,
@@ -13,33 +12,53 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
 use windows::core::Interface;
 
-/// Raw owned references for the C++ World caller. Each nonnull field holds one reference.
-/// The caller's guard releases any values it has not attached to its output.
-#[repr(C)]
+/// Candidate references stay in Rust until a reader admits its pass.
+#[derive(Default)]
 pub(super) struct NativeLease {
+    textures: [Option<ID3D11Texture2D>; 6],
+    chain: Option<IDXGISwapChain>,
+    context: Option<ID3D11DeviceContext>,
+}
+
+/// Each nonnull field transfers one owned reference to the native World.
+#[repr(C)]
+pub(super) struct TransferredLease {
     context: *mut c_void,
     chain: *mut c_void,
     textures: [*mut c_void; 6],
 }
 
-const _: () = assert!(size_of::<NativeLease>() == 8 * size_of::<usize>());
+const _: () = {
+    assert!(size_of::<TransferredLease>() == 8 * size_of::<usize>());
+    assert!(std::mem::offset_of!(TransferredLease, textures) == 16);
+};
 
-pub(super) fn owner(lease: Lease, context: usize, chain: usize) -> DeviceFacts {
+impl NativeLease {
+    pub(super) fn transfer(self) -> TransferredLease {
+        fn raw<T: Interface>(owned: Option<T>) -> *mut c_void {
+            owned.map_or(std::ptr::null_mut(), Interface::into_raw)
+        }
+        TransferredLease {
+            context: raw(self.context),
+            chain: raw(self.chain),
+            textures: self.textures.map(raw),
+        }
+    }
+}
+
+pub(super) fn owner(lease: &mut NativeLease, context: usize, chain: usize) -> DeviceFacts {
     let context = context as *mut c_void;
     let chain = chain as *mut c_void;
     let mut facts = DeviceFacts::default();
-    // SAFETY: the owner snapshot verified these native fields, and the caller
-    // supplies a fresh lease on its stack.
+    // SAFETY: the owner snapshot verified these native fields.
     let (Some(context), Some(chain)) = (
         unsafe { ID3D11DeviceContext::from_raw_borrowed(&context) },
         unsafe { IDXGISwapChain::from_raw_borrowed(&chain) },
     ) else {
         return facts;
     };
-    unsafe {
-        (*lease).context = context.clone().into_raw();
-        (*lease).chain = chain.clone().into_raw();
-    }
+    lease.context = Some(context.clone());
+    lease.chain = Some(chain.clone());
     facts.immediate = u32::from(unsafe { context.GetType() } == D3D11_DEVICE_CONTEXT_IMMEDIATE);
     facts.device = unsafe { context.GetDevice() }.as_ref().map_or(0, identity);
     if let Ok(device) = unsafe { chain.GetDevice::<ID3D11Device>() } {
@@ -81,7 +100,12 @@ pub(super) fn swap(chain: usize) -> SwapFacts {
     }
 }
 
-pub(super) fn resource(lease: Lease, slot: u32, key: u64, render_target: bool) -> ResourceFacts {
+pub(super) fn resource(
+    lease: &mut NativeLease,
+    slot: u32,
+    key: u64,
+    render_target: bool,
+) -> ResourceFacts {
     let mut facts = ResourceFacts::default();
     let raw = key as *mut c_void;
     // SAFETY: the native slot supplies a live view matching render_target.
@@ -126,23 +150,14 @@ pub(super) fn resource(lease: Lease, slot: u32, key: u64, render_target: bool) -
     facts.sample_quality = desc.SampleDesc.Quality;
     facts.bind_flags = desc.BindFlags;
     facts.device = unsafe { texture.GetDevice() }.as_ref().map_or(0, identity);
-    // SAFETY: the caller supplies its writable stack lease. NO_SLOT is outside the array.
-    if let Some(owned) = unsafe { &mut (*lease).textures }.get_mut(slot as usize) {
-        release_texture(std::mem::replace(owned, texture.into_raw()));
+    if let Some(owned) = lease.textures.get_mut(slot as usize) {
+        *owned = Some(texture);
     }
     facts
 }
 
-pub(super) fn release(lease: Lease, slot: u32) {
-    // SAFETY: the caller supplies its writable stack lease.
-    if let Some(owned) = unsafe { &mut (*lease).textures }.get_mut(slot as usize) {
-        release_texture(std::mem::replace(owned, ptr::null_mut()));
-    }
-}
-
-fn release_texture(raw: *mut c_void) {
-    if !raw.is_null() {
-        // SAFETY: the nonnull raw value carries the reference removed from the lease.
-        drop(unsafe { ID3D11Texture2D::from_raw(raw) });
+pub(super) fn release(lease: &mut NativeLease, slot: u32) {
+    if let Some(owned) = lease.textures.get_mut(slot as usize) {
+        *owned = None;
     }
 }
