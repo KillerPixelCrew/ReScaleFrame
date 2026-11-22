@@ -29,8 +29,8 @@ the exception guards.
 | Package state: settings, `rsfu_status` and `rsfu_frame_counters`, render plan, session lifecycle, per-view SR contexts, presentation, session services | `package_state.rs`, `package_state/`, `package_views.rs` |
 
 C keeps `integrations/unity/native`: `render_bridge.c`, `package.c` and `vulkan_bridge.c` (Unity graphics dispatch, the `rsfu_*` and bridge
-exports, guards for foreign callbacks, and the typed Win32, SDK and Runtime calls the package lends
-through `rsf_unity_package_platform`). The Editor preview lends Runtime a destination token and a
+exports and guards for foreign callbacks; the package state binds the Runtime and its Win32 calls
+directly in package_state/native.rs). The Editor preview lends Runtime a destination token and a
 source with its D3D12 state; Runtime owns the per-output swapchain, copy and submission fence and
 waits for completion before replacing the old swapchain.
 

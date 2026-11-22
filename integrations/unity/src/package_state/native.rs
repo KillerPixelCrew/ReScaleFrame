@@ -19,7 +19,7 @@ use crate::sys::{
     rsf_sr12_plan_result, rsf_sr12_quality_supported, rsf_sr12_set_sharpening, rsf_sr12_setup,
     rsf_unity_package_view_setup,
 };
-use crate::vulkan_state::bridge::rsf_uvk_bridge_owns_window;
+use crate::vulkan_state::bridge::{rsf_uvk_bridge_owns_window, rsf_uvk_bridge_update_window};
 use rsf_windows::rsf_win32_input_kind;
 use std::ffi::{c_int, c_void};
 use std::sync::atomic::Ordering::SeqCst;
@@ -225,7 +225,7 @@ pub(super) extern "C" fn rsf_unity_package_prepare_preview(width: u32, height: u
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_package_preview_region(
+extern "C" fn rsfu_preview_region(
     left: i32,
     top: i32,
     width: i32,
@@ -238,9 +238,15 @@ extern "C" fn rsf_unity_package_preview_region(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_package_shutdown() -> u32 {
+extern "C" fn rsfu_shutdown() -> c_int {
     if PACKAGE.services.editor.load(SeqCst) {
         rsf_unity_preview_hide();
     }
-    u32::from(routing::shutdown())
+    c_int::from(routing::shutdown())
+}
+
+/// The managed adapter's resize of the player's presentation surface.
+#[unsafe(no_mangle)]
+extern "C" fn rsfu_surface(width: u32, height: u32) -> c_int {
+    c_int::from(rsf_uvk_bridge_update_window(width, height))
 }

@@ -32,8 +32,8 @@ int main(void) { IUnityGraphicsD3D11* unity = 0; return unity && unity->GetSwapC
     endif()
     target_include_directories(rsf_unity_package PRIVATE native include)
     target_include_directories(rsf_unity_package SYSTEM PRIVATE "${RSF_UNITY_NATIVE_INCLUDE}")
-    # The package's native sources are C11 leaves: Unity SDK calls, foreign exception guards and the
-    # platform table. native/unity_sdk.h keeps each leaf's copy of the Unity interface
+    # The package's native sources are C11 leaves: Unity SDK calls and foreign exception guards.
+    # native/unity_sdk.h keeps each leaf's copy of the Unity interface
     # GUIDs distinct so they link into one module. The shared D3D12 bridge keeps its frame state in
     # the rsf-unity archive (src/bridge_state.rs), whose mono-plugin subset the game plugin bundles; the D3D11
     # and Vulkan bridges use that packet store and policy and each use a Runtime submission ring.
@@ -42,8 +42,7 @@ int main(void) { IUnityGraphicsD3D11* unity = 0; return unity && unity->GetSwapC
     # lifecycle. Settings, status, session state, SR views, presentation and session services live
     # there too, [UnitySR] paths included (package_state.rs, package_views.rs,
     # package_state/presentation.rs, package_state/services.rs, runtime_config.rs, via
-    # native/package_state.h). The game plugin's Runtime setup reaches the Runtime through its own
-    # native leaves. The package's Rust Editor preview links directly to the embedded Runtime presenter.
+    # native/package_state.h). The game plugin's Runtime setup imports the Runtime directly. The package's Rust Editor preview links directly to the embedded Runtime presenter.
     target_link_libraries(rsf_unity_package PRIVATE rsf_orchestrator_core rsf_unity_rust ReScaleFrame::RuntimeCommon rsf_build_options d3d12 d3d11)
     set_target_properties(rsf_unity_package PROPERTIES OUTPUT_NAME "ReScaleFrame.Unity.Native")
 endif()

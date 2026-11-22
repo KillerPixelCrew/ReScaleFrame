@@ -425,7 +425,7 @@ pub(super) fn report_window_message(message: u32, lparam: isize) {
 
 /// rsfu_input's checks come first, as they did; nothing is reported for no kinds.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_package_input(frame: u64, kinds: u32) -> c_int {
+extern "C" fn rsfu_input(frame: u64, kinds: u32) -> c_int {
     if frame == 0 || kinds & !INPUT_KINDS != 0 {
         return BACKEND_INVALID_ARGUMENT;
     }
@@ -467,10 +467,10 @@ mod tests {
     #[test]
     fn rsfu_input_checks_its_arguments_first() {
         unsafe {
-            assert_eq!(rsf_unity_package_input(0, 1), BACKEND_INVALID_ARGUMENT);
-            assert_eq!(rsf_unity_package_input(1, 8), BACKEND_INVALID_ARGUMENT);
-            assert_eq!(rsf_unity_package_input(1, 0), BACKEND_OK);
-            assert_eq!(rsf_unity_package_input(1, 7), BACKEND_FEATURE_FAILED);
+            assert_eq!(rsfu_input(0, 1), BACKEND_INVALID_ARGUMENT);
+            assert_eq!(rsfu_input(1, 8), BACKEND_INVALID_ARGUMENT);
+            assert_eq!(rsfu_input(1, 0), BACKEND_OK);
+            assert_eq!(rsfu_input(1, 7), BACKEND_FEATURE_FAILED);
             // A null text or table is ignored.
             rsf_unity_package_log(std::ptr::null());
             rsf_unity_package_log(c"x".as_ptr());

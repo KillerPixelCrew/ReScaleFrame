@@ -31,7 +31,7 @@ mod present;
 mod queue;
 #[path = "vulkan_bridge/window.rs"]
 mod window;
-pub(crate) use window::{create_window, rsf_uvk_bridge_owns_window};
+pub(crate) use window::{create_window, rsf_uvk_bridge_owns_window, rsf_uvk_bridge_update_window};
 
 const EVENT_WINDOW: u32 = 1;
 // The C backend status values are cast macros.

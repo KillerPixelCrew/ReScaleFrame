@@ -2,3 +2,13 @@ EXPORTS
     rsf_unity_get_render_event
     rsf_unity_get_event_id
     rsf_unity_set_engine_spatial
+    rsfu_initialize
+    rsfu_configure
+    rsfu_settings
+    rsfu_temporal_ready
+    rsfu_surface
+    rsfu_preview_region
+    rsfu_frame_counters
+    rsfu_status
+    rsfu_input
+    rsfu_shutdown

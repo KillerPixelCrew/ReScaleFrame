@@ -814,9 +814,7 @@ unsafe fn struct_size<T>(value: *const T) -> u32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_configure(
-    input: *const rsf_unity_package_settings,
-) -> c_int {
+unsafe extern "C" fn rsfu_configure(input: *const rsf_unity_package_settings) -> c_int {
     let _operation = OPERATIONS.lock().unwrap_or_else(PoisonError::into_inner);
     let Some(leaves) = LEAVES.get() else {
         return 0;
@@ -831,9 +829,7 @@ unsafe extern "C" fn rsf_unity_package_configure(
 
 /// Accepts a longer structure and writes only this version's fields.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_settings_get(
-    output: *mut rsf_unity_package_settings,
-) -> c_int {
+unsafe extern "C" fn rsfu_settings(output: *mut rsf_unity_package_settings) -> c_int {
     let _operation = OPERATIONS.lock().unwrap_or_else(PoisonError::into_inner);
     if output.is_null()
         || unsafe { struct_size(output) } < size_of::<rsf_unity_package_settings>() as u32
@@ -846,7 +842,7 @@ unsafe extern "C" fn rsf_unity_package_settings_get(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_status_get(output: *mut rsf_unity_package_status) -> c_int {
+unsafe extern "C" fn rsfu_status(output: *mut rsf_unity_package_status) -> c_int {
     let _operation = OPERATIONS.lock().unwrap_or_else(PoisonError::into_inner);
     let Some(leaves) = LEAVES.get() else {
         return 0;
@@ -861,9 +857,7 @@ unsafe extern "C" fn rsf_unity_package_status_get(output: *mut rsf_unity_package
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_frame_counters(
-    output: *mut rsf_unity_frame_counters,
-) -> c_int {
+unsafe extern "C" fn rsfu_frame_counters(output: *mut rsf_unity_frame_counters) -> c_int {
     let Some(leaves) = LEAVES.get() else {
         return 0;
     };
@@ -877,12 +871,12 @@ unsafe extern "C" fn rsf_unity_package_frame_counters(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_package_temporal_ready() -> u32 {
-    u32::from(PACKAGE.temporal_ready.load(SeqCst))
+extern "C" fn rsfu_temporal_ready() -> c_int {
+    c_int::from(PACKAGE.temporal_ready.load(SeqCst))
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_initialize(
+unsafe extern "C" fn rsfu_initialize(
     runtime: *const c_char,
     engine: *const c_char,
     project: *const c_char,
@@ -2157,29 +2151,26 @@ mod tests {
     fn exports_check_structure_sizes() {
         let mut settings = DEFAULT_SETTINGS;
         settings.struct_size -= 1;
-        assert_eq!(unsafe { rsf_unity_package_configure(&settings) }, 0);
-        assert_eq!(unsafe { rsf_unity_package_configure(std::ptr::null()) }, 0);
-        assert_eq!(unsafe { rsf_unity_package_settings_get(&mut settings) }, 0);
+        assert_eq!(unsafe { rsfu_configure(&settings) }, 0);
+        assert_eq!(unsafe { rsfu_configure(std::ptr::null()) }, 0);
+        assert_eq!(unsafe { rsfu_settings(&mut settings) }, 0);
         settings.struct_size += 1;
         settings.abi_version = 1;
-        assert_eq!(unsafe { rsf_unity_package_settings_get(&mut settings) }, 0);
+        assert_eq!(unsafe { rsfu_settings(&mut settings) }, 0);
         settings.abi_version = 2;
         settings.quality = 4;
-        assert_eq!(unsafe { rsf_unity_package_settings_get(&mut settings) }, 1);
+        assert_eq!(unsafe { rsfu_settings(&mut settings) }, 1);
         assert_eq!(settings.quality, PACKAGE.lock().settings.quality);
         let mut status = rsf_unity_package_status {
             struct_size: 183,
             ..Default::default()
         };
-        assert_eq!(unsafe { rsf_unity_package_status_get(&mut status) }, 0);
+        assert_eq!(unsafe { rsfu_status(&mut status) }, 0);
         let mut counters = rsf_unity_frame_counters {
             struct_size: 41,
             ..Default::default()
         };
-        assert_eq!(
-            unsafe { rsf_unity_package_frame_counters(&mut counters) },
-            0
-        );
+        assert_eq!(unsafe { rsfu_frame_counters(&mut counters) }, 0);
         let mut plan = rsf_game_render_config {
             struct_size: 23,
             ..EMPTY_PLAN
@@ -2200,24 +2191,12 @@ mod tests {
         let mut api: rsf_unity_native_api = unsafe { std::mem::zeroed() };
         let output = &raw mut api;
         unsafe {
+            assert_eq!(rsfu_initialize(text, text, text, output), code::FAILED);
+            assert_eq!(rsfu_initialize(none, text, text, output), code::FAILED);
+            assert_eq!(rsfu_initialize(text, none, text, output), code::FAILED);
+            assert_eq!(rsfu_initialize(text, text, none, output), code::FAILED);
             assert_eq!(
-                rsf_unity_package_initialize(text, text, text, output),
-                code::FAILED
-            );
-            assert_eq!(
-                rsf_unity_package_initialize(none, text, text, output),
-                code::FAILED
-            );
-            assert_eq!(
-                rsf_unity_package_initialize(text, none, text, output),
-                code::FAILED
-            );
-            assert_eq!(
-                rsf_unity_package_initialize(text, text, none, output),
-                code::FAILED
-            );
-            assert_eq!(
-                rsf_unity_package_initialize(text, text, text, std::ptr::null_mut()),
+                rsfu_initialize(text, text, text, std::ptr::null_mut()),
                 code::FAILED
             );
         }

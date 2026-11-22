@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
 /* Internal package ABI. Rust owns package state, routing, SR planning and the session
-   and Unity device lifecycles. The C11 leaf package.c supplies the rsfu_* exports and the Unity SDK
-   calls. Settings, status and frame-counter layouts are also used by Runtime/Native.cs. */
+   and Unity device lifecycles. The C11 leaf package.c supplies the Unity SDK calls; the rsfu_*
+   exports are Rust (native/bridge.def). Settings, status and frame-counter layouts are also used by Runtime/Native.cs. */
 #include <rescaleframe/game_renderer.h>
 #include <rescaleframe/sharpening_settings.h>
 #include <rescaleframe/unity_bridge.h>
@@ -54,37 +54,12 @@ typedef struct rsf_unity_package_view_setup {
     const char* engine_version_utf8;
     const char* project_id_utf8;
 } rsf_unity_package_view_setup;
-
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* The bodies of rsfu_configure, rsfu_settings, rsfu_status, rsfu_frame_counters and
-   rsfu_temporal_ready, with the same checks and result codes. */
-int rsf_unity_package_configure(const rsf_unity_package_settings* input);
-int rsf_unity_package_settings_get(rsf_unity_package_settings* output);
-int rsf_unity_package_status_get(rsf_unity_package_status* output);
-int rsf_unity_package_frame_counters(rsf_unity_frame_counters* output);
-uint32_t rsf_unity_package_temporal_ready(void);
-
-/* Session lifecycle. initialize retires a started or partially opened session once the bridge has drained and the
-   Runtime has ended its session (2 while either is pending), forgets the session's plan, status
-   and bridge failure, stores rsfu_initialize's identity (the UTF-8 SDK root, Unity version and
-   project id; 0 when one or output is null) and opens the new session: the per-process log
-   unless a log is open, the Editor's generation install, the player's input window while none
-   is hooked, the player's Vulkan surface, and the bridge prepared with this session's host
-   services (0 when the surface or bridge refuses). It then activates the bridge with the
-   persisted reconstruction request and writes the bridge's managed API to output (1). Settings
-   persist across sessions. */
-int rsf_unity_package_initialize(const char* runtime, const char* engine, const char* project,
-    rsf_unity_native_api* output);
-
 void rsf_unity_package_plugin_load(void* interfaces);
 void rsf_unity_package_plugin_unload(void);
 void rsf_unity_package_device_event(uint32_t sdk_event);
-
-int rsf_unity_package_input(uint64_t frame, uint32_t kinds);
-int rsf_unity_package_preview_region(int32_t left, int32_t top, int32_t width, int32_t height, uint32_t visible);
-uint32_t rsf_unity_package_shutdown(void);
 #ifdef __cplusplus
 }
 #endif

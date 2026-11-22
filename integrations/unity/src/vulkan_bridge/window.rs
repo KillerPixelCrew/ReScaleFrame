@@ -110,8 +110,7 @@ pub(crate) extern "C" fn rsf_uvk_bridge_owns_window(candidate: *mut c_void) -> b
     !window.is_null() && window == candidate
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_uvk_bridge_update_window(width: u32, height: u32) -> bool {
+pub(crate) fn rsf_uvk_bridge_update_window(width: u32, height: u32) -> bool {
     let window = surface_window();
     if width == 0 || height == 0 || !on_window_thread(window) {
         return false;
