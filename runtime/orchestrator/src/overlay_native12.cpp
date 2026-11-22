@@ -8,7 +8,6 @@
 #include <wrl/client.h>
 #include <cstddef>
 #include <cstring>
-#include <memory>
 // overlay_native12_abi.rs asserts the same layout.
 static_assert(sizeof(rsf_overlay12_frame) == 4 * sizeof(void*) &&
     offsetof(rsf_overlay12_platform, create_frame) == 2 * sizeof(void*) &&
@@ -37,16 +36,32 @@ Frame borrow(const rsf_overlay12_frame* frame)
         static_cast<ID3D12GraphicsCommandList*>(frame->commands),
         static_cast<ID3D12DescriptorHeap*>(frame->srv), static_cast<ID3D12DescriptorHeap*>(frame->rtv)};
 }
-// The three slot frames are leased by the Rust owner, which releases them last slot first
-// immediately before destroy_renderer, where these members used to be destroyed.
-struct Renderer {
-    ComPtr<ID3D12Device> device;
-    ComPtr<ID3D12CommandQueue> queue;
-    ComPtr<ID3D12RootSignature> root;
-    ComPtr<ID3DBlob> vertex_shader, pixel_shader;
-    UINT stride{};
+static_assert(sizeof(rsf_overlay12_objects) == 48 &&
+    offsetof(rsf_overlay12_objects, srv_stride) == 40);
 
+// A non-owning view of the interfaces for this SDK call.
+struct Renderer {
+    ID3D12Device* device;
+    ID3D12CommandQueue* queue;
+    ID3D12RootSignature* root;
+    ID3DBlob* vertex_shader;
+    ID3DBlob* pixel_shader;
+    UINT stride;
 };
+
+Renderer borrow_renderer(void* native)
+{
+    const auto& objects = *static_cast<const rsf_overlay12_objects*>(native);
+    return {
+        static_cast<ID3D12Device*>(objects.device),
+        static_cast<ID3D12CommandQueue*>(objects.queue),
+        static_cast<ID3D12RootSignature*>(objects.root),
+        static_cast<ID3DBlob*>(objects.vertex_shader),
+        static_cast<ID3DBlob*>(objects.pixel_shader),
+        objects.srv_stride,
+    };
+}
+
 void transition(ID3D12GraphicsCommandList* commands, ID3D12Resource* resource,
     D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
 {
@@ -57,7 +72,7 @@ void transition(ID3D12GraphicsCommandList* commands, ID3D12Resource* resource,
 void* create_upload(void* native, uint64_t size, uint64_t* capacity)
 {
     if (!size || size>UINT64_MAX-65535) return nullptr;
-    auto& p=*static_cast<Renderer*>(native);
+    const auto p = borrow_renderer(native);
     D3D12_HEAP_PROPERTIES heap{}; heap.Type=D3D12_HEAP_TYPE_UPLOAD;
     D3D12_RESOURCE_DESC desc{}; desc.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;
     desc.Width=(size+65535)&~uint64_t(65535); desc.Height=1;desc.DepthOrArraySize=1;desc.MipLevels=1;
@@ -68,14 +83,19 @@ void* create_upload(void* native, uint64_t size, uint64_t* capacity)
     if (capacity) *capacity=desc.Width;
     return buffer.Detach();
 }
-bool initialize(Renderer& p, ID3D12Device* device, ID3D12CommandQueue* queue, void** completion)
+bool initialize(ID3D12Device* device, ID3D12CommandQueue* queue,
+    rsf_overlay12_objects* out, void** completion)
 {
-    p.device=device;p.queue=queue;p.stride=device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    const auto stride = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    ComPtr<ID3D12Device> device_ref = device;
+    ComPtr<ID3D12CommandQueue> queue_ref = queue;
+    ComPtr<ID3D12RootSignature> root;
+    ComPtr<ID3DBlob> vertex_shader, pixel_shader;
     ComPtr<ID3D12Fence> fence;
     if (FAILED(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&fence)))) return false;
     ComPtr<ID3DBlob> errors, signature;
-    if (FAILED(D3DCompile(shader,sizeof(shader)-1,nullptr,nullptr,nullptr,"vs","vs_5_0",D3DCOMPILE_ENABLE_STRICTNESS,0,&p.vertex_shader,&errors)) ||
-        FAILED(D3DCompile(shader,sizeof(shader)-1,nullptr,nullptr,nullptr,"ps","ps_5_0",D3DCOMPILE_ENABLE_STRICTNESS,0,&p.pixel_shader,&errors))) return false;
+    if (FAILED(D3DCompile(shader,sizeof(shader)-1,nullptr,nullptr,nullptr,"vs","vs_5_0",D3DCOMPILE_ENABLE_STRICTNESS,0,&vertex_shader,&errors)) ||
+        FAILED(D3DCompile(shader,sizeof(shader)-1,nullptr,nullptr,nullptr,"ps","ps_5_0",D3DCOMPILE_ENABLE_STRICTNESS,0,&pixel_shader,&errors))) return false;
     D3D12_DESCRIPTOR_RANGE range{D3D12_DESCRIPTOR_RANGE_TYPE_SRV,1,0,0,0};
     D3D12_ROOT_PARAMETER parameters[2]{};
     parameters[0].ParameterType=D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
@@ -89,7 +109,9 @@ bool initialize(Renderer& p, ID3D12Device* device, ID3D12CommandQueue* queue, vo
     sampler.ShaderVisibility=D3D12_SHADER_VISIBILITY_PIXEL;
     D3D12_ROOT_SIGNATURE_DESC desc{2,parameters,1,&sampler,D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT};
     if (FAILED(D3D12SerializeRootSignature(&desc,D3D_ROOT_SIGNATURE_VERSION_1,&signature,&errors)) ||
-        FAILED(device->CreateRootSignature(0,signature->GetBufferPointer(),signature->GetBufferSize(),IID_PPV_ARGS(&p.root)))) return false;
+        FAILED(device->CreateRootSignature(0,signature->GetBufferPointer(),signature->GetBufferSize(),IID_PPV_ARGS(&root)))) return false;
+    *out = {pixel_shader.Detach(), vertex_shader.Detach(), root.Detach(),
+        queue_ref.Detach(), device_ref.Detach(), stride};
     *completion=fence.Detach();
     return true;
 }
@@ -97,8 +119,8 @@ bool initialize(Renderer& p, ID3D12Device* device, ID3D12CommandQueue* queue, vo
 // owner, which releases a refused slot's objects in reverse creation order.
 uint32_t create_frame(void* native, rsf_overlay12_frame* out)
 {
-    auto& p=*static_cast<Renderer*>(native);
-    auto* device=p.device.Get();
+    const auto p = borrow_renderer(native);
+    auto* device=p.device;
     ComPtr<ID3D12CommandAllocator> allocator;ComPtr<ID3D12GraphicsCommandList> commands;
     ComPtr<ID3D12DescriptorHeap> srv,rtv;
     const bool created=[&]{
@@ -116,12 +138,12 @@ uint32_t create_frame(void* native, rsf_overlay12_frame* out)
 }
 void* create_pipeline(void* native, uint32_t format)
 {
-    auto& p=*static_cast<Renderer*>(native);
+    const auto p = borrow_renderer(native);
     D3D12_INPUT_ELEMENT_DESC layout[]{
         {"POSITION",0,DXGI_FORMAT_R32G32_FLOAT,0,0,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},
         {"TEXCOORD",0,DXGI_FORMAT_R32G32_FLOAT,0,8,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},
         {"COLOR",0,DXGI_FORMAT_R8G8B8A8_UNORM,0,16,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0}};
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC desc{};desc.pRootSignature=p.root.Get();
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC desc{};desc.pRootSignature=p.root;
     desc.VS={p.vertex_shader->GetBufferPointer(),p.vertex_shader->GetBufferSize()};
     desc.PS={p.pixel_shader->GetBufferPointer(),p.pixel_shader->GetBufferSize()};
     desc.InputLayout={layout,3};desc.PrimitiveTopologyType=D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
@@ -140,7 +162,7 @@ void* create_pipeline(void* native, uint32_t format)
 }
 void* create_texture(void* native, uint32_t width, uint32_t height)
 {
-    auto& p=*static_cast<Renderer*>(native);
+    const auto p = borrow_renderer(native);
     D3D12_RESOURCE_DESC desc{};desc.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     desc.Width=width;desc.Height=height;desc.DepthOrArraySize=1;desc.MipLevels=1;
     desc.Format=DXGI_FORMAT_R8G8B8A8_UNORM;desc.SampleDesc.Count=1;
@@ -151,7 +173,7 @@ void* create_texture(void* native, uint32_t width, uint32_t height)
 }
 void* upload_texture(void* native, const rsf_overlay12_frame* slot, void* resource, const rsf_overlay_texture_update* patch)
 {
-    auto& p=*static_cast<Renderer*>(native);
+    const auto p = borrow_renderer(native);
     const auto frame=borrow(slot);
     const auto& update=*patch;
     auto* destination=static_cast<ID3D12Resource*>(resource);
@@ -173,7 +195,7 @@ void* upload_texture(void* native, const rsf_overlay12_frame* slot, void* resour
     transition(frame.commands,destination,D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     return upload.Detach();
 }
-bool draw(Renderer& p, const Frame& frame, const rsf_overlay12_draw& binding,
+bool draw(const Renderer& p, const Frame& frame, const rsf_overlay12_draw& binding,
     void* const* textures, UINT texture_count, const rsf_overlay12_draw_call* calls, UINT call_count)
 {
     const auto [target_resource,pipeline,vertex_resource,index_resource,vertex_data,index_data,width,height,vertex_bytes,index_bytes]=binding;
@@ -194,7 +216,7 @@ bool draw(Renderer& p, const Frame& frame, const rsf_overlay12_draw& binding,
     }
     auto* commands=frame.commands;transition(commands,target,D3D12_RESOURCE_STATE_PRESENT,D3D12_RESOURCE_STATE_RENDER_TARGET);
     const auto rtv=frame.rtv->GetCPUDescriptorHandleForHeapStart();p.device->CreateRenderTargetView(target,nullptr,rtv);
-    commands->OMSetRenderTargets(1,&rtv,FALSE,nullptr);commands->SetPipelineState(static_cast<ID3D12PipelineState*>(pipeline));commands->SetGraphicsRootSignature(p.root.Get());
+    commands->OMSetRenderTargets(1,&rtv,FALSE,nullptr);commands->SetPipelineState(static_cast<ID3D12PipelineState*>(pipeline));commands->SetGraphicsRootSignature(p.root);
     ID3D12DescriptorHeap* heaps[]{frame.srv};commands->SetDescriptorHeaps(1,heaps);
     const float scale[]{2.0f/static_cast<float>(width),2.0f/static_cast<float>(height)};commands->SetGraphicsRoot32BitConstants(0,2,scale,0);
     const D3D12_VIEWPORT viewport{0,0,static_cast<float>(width),static_cast<float>(height),0,1};commands->RSSetViewports(1,&viewport);
@@ -215,9 +237,15 @@ void* output_window(void* chain) {
 }
 
 void* create_renderer(void* device, void* queue, void** fence) noexcept try {
-    auto renderer=std::make_unique<Renderer>();
-    return initialize(*renderer, static_cast<ID3D12Device*>(device), static_cast<ID3D12CommandQueue*>(queue), fence)
-        ? renderer.release() : nullptr;
+    rsf_overlay12_objects objects{};
+    void* result = nullptr;
+    if (!initialize(static_cast<ID3D12Device*>(device), static_cast<ID3D12CommandQueue*>(queue),
+            &objects, &result)) return nullptr;
+    ComPtr<ID3D12Fence> reference;
+    reference.Attach(static_cast<ID3D12Fence*>(result));
+    auto* renderer = rsf_core_overlay12_adopt(&objects);
+    if (renderer) *fence = reference.Detach();
+    return renderer;
 } catch (...) { return nullptr; }
 
 uint32_t install_input(void* window, rsf_overlay12_log logger, void* user) noexcept try {
@@ -228,10 +256,6 @@ uint32_t install_input(void* window, rsf_overlay12_log logger, void* user) noexc
 uint32_t stop_input() {
     const auto result=rsf_overlay_input_uninstall();
     return result==RSF_OVERLAY_INPUT_OK || result==RSF_OVERLAY_INPUT_ERROR_NOT_INSTALLED;
-}
-
-void destroy_renderer(void* native) {
-    delete static_cast<Renderer*>(native);
 }
 
 uint64_t completed(void* fence) {
@@ -260,24 +284,25 @@ uint32_t collect_input(rsf_overlay_input* input, uint32_t width, uint32_t height
 
 uint32_t record(void* native, const rsf_overlay12_frame* slot, const rsf_overlay12_draw* binding,
     void* const* textures, uint32_t texture_count, const rsf_overlay12_draw_call* calls, uint32_t call_count) noexcept try {
-    auto& renderer=*static_cast<Renderer*>(native);
+    const auto renderer = borrow_renderer(native);
     const auto frame=borrow(slot);
     return draw(renderer,frame,*binding,textures,texture_count,calls,call_count) &&
         SUCCEEDED(frame.commands->Close());
 } catch (...) { return 0; }
 
 void execute(void* native, const rsf_overlay12_frame* slot) {
-    auto& renderer=*static_cast<Renderer*>(native);
+    const auto renderer = borrow_renderer(native);
     ID3D12CommandList* lists[]{borrow(slot).commands};
     renderer.queue->ExecuteCommandLists(1,lists);
 }
 
 uint32_t signal(void* native, void* fence, uint64_t value) {
-    return SUCCEEDED(static_cast<Renderer*>(native)->queue->Signal(static_cast<ID3D12Fence*>(fence),value));
+    return SUCCEEDED(borrow_renderer(native).queue->Signal(static_cast<ID3D12Fence*>(fence),value));
 }
 
 constexpr rsf_overlay12_platform platform{
-    output_window, create_renderer, create_frame, install_input, stop_input, destroy_renderer, rsf_overlay_input_visible,
+    output_window, create_renderer, create_frame, install_input, stop_input,
+    rsf_core_overlay12_destroy, rsf_overlay_input_visible,
     rsf_overlay_input_set_visible, completed, arm, begin_frame, create_pipeline, create_upload, collect_input,
     create_texture, upload_texture, record, execute, signal,
 };
