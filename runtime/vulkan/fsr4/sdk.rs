@@ -4,31 +4,14 @@ use super::{
     Context, DEPTH_INFINITE, DEPTH_INVERTED, Dispatch, FAILED, Handle, MAX_VERSIONS,
     MOTION_JITTERED, Version, ffx_version,
 };
+use super::provider_module;
+use crate::ffx_abi::*;
 use core::ptr;
-
-#[path = "sdk_abi.rs"]
-mod abi;
-use abi::*;
-
-#[cfg(windows)]
-#[path = "sdk_commands.rs"]
-mod commands;
-#[cfg(windows)]
-#[path = "../dx12_bridge_commands.rs"]
-mod dx12;
-#[cfg(windows)]
-#[path = "../dx12_provider_module.rs"]
-mod provider_module;
-// The lease entry points live in the archive's non-test native module.
-#[cfg(all(windows, not(test)))]
-#[path = "native.rs"]
-mod native;
-#[cfg(windows)]
 use windows::Win32::Foundation::FARPROC;
 
-#[cfg(windows)]
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_own_directory(out: *mut u16, capacity: u32) -> u32 {
+/// Writes the directory of the module holding this bridge, with its trailing
+/// separator, and returns its length; zero when it does not fit.
+pub(super) fn own_directory(out: &mut [u16]) -> usize {
     use windows::{
         Win32::{
             Foundation::{HMODULE, MAX_PATH},
@@ -42,7 +25,7 @@ unsafe extern "C" fn rsf_core_fsr4sr_own_directory(out: *mut u16, capacity: u32)
     };
 
     let mut module = HMODULE::default();
-    let address = PCWSTR(rsf_core_fsr4sr_own_directory as *const () as *const u16);
+    let address = PCWSTR(own_directory as *const () as *const u16);
     if unsafe {
         GetModuleHandleExW(
             GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
@@ -66,16 +49,14 @@ unsafe extern "C" fn rsf_core_fsr4sr_own_directory(out: *mut u16, capacity: u32)
         return 0;
     };
     let directory = separator + 1;
-    if directory > capacity as usize {
+    if directory > out.len() {
         return 0;
     }
-    unsafe { ptr::copy_nonoverlapping(path.as_ptr(), out, directory) };
-    directory as u32
+    out[..directory].copy_from_slice(&path[..directory]);
+    directory
 }
 
-#[cfg(windows)]
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_load_provider(
+pub(super) unsafe fn load_provider(
     path: *const u16,
     out: &mut Handle,
     create: &mut PfnFfxCreateContext,
@@ -113,16 +94,6 @@ unsafe extern "C" fn rsf_core_fsr4sr_load_provider(
     }
 }
 
-#[cfg(windows)]
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_release_provider_objects(
-    objects: &[Handle; 10],
-    event: Handle,
-    module: Handle,
-) {
-    unsafe { provider_module::release(objects, event, module) };
-}
-
 // Function-like FidelityFX macros of the pinned 2.4.0 headers; see
 // docs/research/rust-vulkan-ffx-v05.md.
 const UPSCALE_CREATE: u32 = 0x10000;
@@ -137,15 +108,14 @@ fn header(kind: u32, next: *mut ffxApiHeader) -> ffxApiHeader {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_sdk_versions(
+pub(super) unsafe fn versions(
     query: PfnFfxQuery,
     device: Handle,
     output: *mut Version,
-    count: *mut u64,
+    count: &mut u64,
 ) -> i32 {
     let Some(query) = query else { return FAILED };
-    let capacity = unsafe { count.read() };
+    let capacity = *count;
     if capacity > MAX_VERSIONS as u64 {
         return FAILED;
     }
@@ -162,7 +132,7 @@ unsafe extern "C" fn rsf_core_fsr4sr_sdk_versions(
     let result = unsafe { query(ptr::null_mut(), &raw mut request.header) } as i32;
     if result == 0 {
         // The owner rejects an overflow count after the call.
-        let stored = unsafe { count.read() }.min(capacity) as usize;
+        let stored = (*count).min(capacity) as usize;
         for (index, (&id, &name)) in ids.iter().zip(&names).take(stored).enumerate() {
             unsafe { output.add(index).write(ffx_version::from_sdk(id, name)) };
         }
@@ -170,12 +140,11 @@ unsafe extern "C" fn rsf_core_fsr4sr_sdk_versions(
     result
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_sdk_provider(
+pub(super) unsafe fn provider(
     query: PfnFfxQuery,
     effect: *mut ffxContext,
-    output: *mut Version,
-    parsed: *mut u32,
+    output: &mut Version,
+    parsed: &mut bool,
 ) -> i32 {
     let Some(query) = query else { return FAILED };
     let mut desc = ffxQueryGetProviderVersion {
@@ -189,16 +158,13 @@ unsafe extern "C" fn rsf_core_fsr4sr_sdk_provider(
     if result == 0 {
         let (version, numeric) =
             unsafe { ffx_version::parse_sdk(desc.versionId, desc.versionName) };
-        unsafe {
-            output.write(version);
-            parsed.write(u32::from(numeric));
-        }
+        *output = version;
+        *parsed = numeric;
     }
     result
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_sdk_create(
+pub(super) unsafe fn create(
     create: PfnFfxCreateContext,
     effect: *mut ffxContext,
     backend: *mut ffxApiHeader,
@@ -243,8 +209,7 @@ unsafe extern "C" fn rsf_core_fsr4sr_sdk_create(
     result
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_sdk_plan(
+pub(super) unsafe fn plan(
     query: PfnFfxQuery,
     effect: *mut ffxContext,
     quality: u32,
@@ -265,14 +230,10 @@ unsafe extern "C" fn rsf_core_fsr4sr_sdk_plan(
     unsafe { query(effect, &raw mut desc.header) as i32 }
 }
 
-/// The COM leaf writes resource descriptions from the actual D3D12 images.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_sdk_dispatch(
-    frame: &Dispatch,
-    commands: Handle,
-    output: *mut ffxDispatchDescUpscale,
-) {
-    let desc = ffxDispatchDescUpscale {
+/// The dispatch descriptor; the COM leaf adds resource descriptions from the
+/// actual D3D12 images.
+pub(super) fn dispatch(frame: &Dispatch, commands: Handle) -> ffxDispatchDescUpscale {
+    ffxDispatchDescUpscale {
         header: header(UPSCALE_DISPATCH, ptr::null_mut()),
         commandList: commands,
         jitterOffset: FfxApiFloatCoords2D {
@@ -302,6 +263,5 @@ unsafe extern "C" fn rsf_core_fsr4sr_sdk_dispatch(
         cameraFovAngleVertical: frame.vertical_fov,
         viewSpaceToMetersFactor: 1.0,
         ..Default::default()
-    };
-    unsafe { output.write(desc) };
+    }
 }

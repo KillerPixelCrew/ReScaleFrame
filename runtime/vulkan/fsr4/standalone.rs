@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Vulkan-1.dll is borrowed from the caller's process for the legacy ABI.
-use super::{FAILED, Handle, Platform, Request, Session, candidate, create};
+use super::{FAILED, Handle, Request, Session, candidate, create};
 use ash::vk::{self, Handle as _};
 use core::ptr;
 use windows::{
@@ -22,8 +22,7 @@ fn entry(name: &core::ffi::CStr) -> FARPROC {
     unsafe { GetProcAddress(module, PCSTR(name.as_ptr().cast())) }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4sr_probe_physical(physical: Handle) -> i32 {
+pub(super) unsafe fn probe_physical(physical: Handle) -> i32 {
     if physical.is_null() {
         return FAILED;
     }
@@ -42,9 +41,7 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4sr_probe_physical(physical: Handle)
     if candidate(info.vendor_id) { 0 } else { -3 }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4sr_create_physical(
-    ops: *const Platform,
+pub(super) unsafe fn create_physical(
     physical: Handle,
     render_width: u32,
     render_height: u32,
@@ -83,5 +80,5 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4sr_create_physical(
         output_height,
         flags: 0,
     };
-    unsafe { create(ops, &request, output) }
+    unsafe { create(&request, output) }
 }

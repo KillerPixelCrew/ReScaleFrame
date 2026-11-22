@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
-use super::{Dispatch, Handle, abi::*, dx12, rsf_core_fsr4sr_sdk_dispatch};
+use super::{Dispatch, Handle, Texture, dx12, sdk};
+use crate::ffx_abi::{FFX_API_RESOURCE_STATE_COMPUTE_READ, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS, PfnFfxDispatch, ffxContext};
+use crate::ffx_resource;
 use windows::{
     Win32::{
         Foundation::{HANDLE, WAIT_OBJECT_0},
@@ -16,10 +18,7 @@ use windows::{
     core::{Interface, PCWSTR},
 };
 
-type Describe = unsafe extern "C" fn(Handle, u32, *mut FfxApiResource);
-
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4sr_find_adapter(
+pub(super) fn find_adapter(
     luid: u64,
     factory_out: &mut Handle,
     adapter_out: &mut Handle,
@@ -54,8 +53,7 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4sr_find_adapter(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4sr_create_device(
+pub(super) unsafe fn create_device(
     adapter: Handle,
     device_out: &mut Handle,
     queue_out: &mut Handle,
@@ -75,59 +73,49 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4sr_create_device(
     )
 }
 
-const ALLOCATORS: usize = 3;
-
-#[repr(C)]
-pub(super) struct CommandObjects {
-    pub(super) completion: Handle,
-    pub(super) event: Handle,
-    pub(super) allocators: [Handle; ALLOCATORS],
-    pub(super) list: Handle,
-}
-
-const _: () = assert!(size_of::<CommandObjects>() == 6 * size_of::<Handle>());
-
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4sr_create_commands(
+/// Creates the local completion fence, its event (-10 on failure), the allocators and a
+/// closed list. Partial results stay with the caller's outputs.
+pub(super) unsafe fn create_commands(
     device: Handle,
-    out: &mut CommandObjects,
+    completion: &mut Handle,
+    event_out: &mut Handle,
+    allocators: &mut [Handle],
+    list_out: &mut Handle,
 ) -> i32 {
     let device: &ID3D12Device = unsafe { dx12::borrow(&device) };
     let fence = unsafe { device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) };
-    let code = dx12::store_interface(fence, &mut out.completion);
+    let code = dx12::store_interface(fence, completion);
     if code != 0 {
         return code;
     }
     let Ok(event) = (unsafe { CreateEventW(None, false, false, PCWSTR::null()) }) else {
         return -10;
     };
-    out.event = event.0;
+    *event_out = event.0;
     let kind = D3D12_COMMAND_LIST_TYPE_DIRECT;
-    for output in &mut out.allocators {
+    for output in allocators.iter_mut() {
         let allocator = unsafe { device.CreateCommandAllocator::<ID3D12CommandAllocator>(kind) };
         let code = dx12::store_interface(allocator, output);
         if code != 0 {
             return code;
         }
     }
-    let allocator = unsafe { dx12::borrow(&out.allocators[0]) };
+    let allocator = unsafe { dx12::borrow(&allocators[0]) };
     match dx12::create_list(device, allocator, 0, kind) {
         Ok(list) => {
             let result = unsafe { list.Close() };
-            out.list = list.into_raw();
+            *list_out = list.into_raw();
             dx12::status(result)
         }
         Err(error) => error.code().0,
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4sr_completed(fence: Handle) -> u64 {
+pub(super) unsafe fn completed(fence: Handle) -> u64 {
     unsafe { dx12::borrow::<ID3D12Fence>(&fence).GetCompletedValue() }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4sr_wait_event(
+pub(super) unsafe fn wait_event(
     fence: Handle,
     event: Handle,
     value: u64,
@@ -145,8 +133,7 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4sr_wait_event(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4sr_shared_fence(
+pub(super) unsafe fn shared_fence(
     device: Handle,
     fence: &mut Handle,
     handle: &mut Handle,
@@ -154,24 +141,20 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4sr_shared_fence(
     unsafe { dx12::create_shared_fence(device, fence, handle) }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4sr_release_image(image: Handle) {
+pub(super) unsafe fn release_image(image: Handle) {
     unsafe { dx12::release_image(image) };
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4sr_describe(
-    image: Handle,
-    output: &mut super::super::Texture,
-) {
+pub(super) unsafe fn describe(image: Handle) -> Texture {
     let desc = unsafe { dx12::borrow::<ID3D12Resource>(&image).GetDesc() };
-    output.width = desc.Width;
-    output.height = desc.Height;
-    output.format = desc.Format.0 as u32;
+    Texture {
+        width: desc.Width,
+        height: desc.Height,
+        format: desc.Format.0 as u32,
+    }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4sr_shared_image(
+pub(super) unsafe fn shared_image(
     device: Handle,
     width: u32,
     height: u32,
@@ -209,14 +192,12 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4sr_shared_image(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4sr_record(
+pub(super) unsafe fn record(
     commands: Handle,
     allocator: Handle,
     frame: &Dispatch,
     context: *mut ffxContext,
     dispatch: PfnFfxDispatch,
-    describe: Describe,
 ) -> i32 {
     let Some(dispatch) = dispatch else { return -1 };
     let list: &ID3D12GraphicsCommandList = unsafe { dx12::borrow(&commands) };
@@ -236,16 +217,15 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4sr_record(
         dx12::transition(list, unsafe { dx12::borrow(image) }, COMMON, *state);
     }
 
-    let mut desc = ffxDispatchDescUpscale::default();
+    let mut desc = sdk::dispatch(frame, commands);
+    // FidelityFX owns the DXGI format and resource-description conventions.
+    const COMPUTE_READ: u32 = FFX_API_RESOURCE_STATE_COMPUTE_READ as u32;
+    const UNORDERED_ACCESS: u32 = FFX_API_RESOURCE_STATE_UNORDERED_ACCESS as u32;
     unsafe {
-        rsf_core_fsr4sr_sdk_dispatch(frame, commands, &mut desc);
-        // FidelityFX owns the DXGI format and resource-description conventions.
-        const COMPUTE_READ: u32 = FFX_API_RESOURCE_STATE_COMPUTE_READ as u32;
-        const UNORDERED_ACCESS: u32 = FFX_API_RESOURCE_STATE_UNORDERED_ACCESS as u32;
-        describe(frame.color, COMPUTE_READ, &mut desc.color);
-        describe(frame.depth, COMPUTE_READ, &mut desc.depth);
-        describe(frame.motion, COMPUTE_READ, &mut desc.motionVectors);
-        describe(frame.output, UNORDERED_ACCESS, &mut desc.output);
+        desc.color = ffx_resource::describe(frame.color, COMPUTE_READ);
+        desc.depth = ffx_resource::describe(frame.depth, COMPUTE_READ);
+        desc.motionVectors = ffx_resource::describe(frame.motion, COMPUTE_READ);
+        desc.output = ffx_resource::describe(frame.output, UNORDERED_ACCESS);
     }
     let code = unsafe { dispatch(context, &raw const desc.header) } as i32;
     if code != 0 {
@@ -258,17 +238,10 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4sr_record(
     dx12::status(unsafe { list.Close() })
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4sr_execute(queue: Handle, commands: Handle) {
+pub(super) unsafe fn execute(queue: Handle, commands: Handle) {
     unsafe { dx12::execute(queue, commands) };
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4sr_queue_fence(
-    queue: Handle,
-    fence: Handle,
-    value: u64,
-    signal: u32,
-) -> i32 {
-    unsafe { dx12::queue_fence(queue, fence, value, signal != 0) }
+pub(super) unsafe fn queue_fence(queue: Handle, fence: Handle, value: u64, signal: bool) -> i32 {
+    unsafe { dx12::queue_fence(queue, fence, value, signal) }
 }

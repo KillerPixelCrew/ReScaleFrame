@@ -9,7 +9,7 @@ use crate::ffx_version::{self, MAX_VERSIONS, Version};
 use core::ffi::{CStr, c_void};
 use core::ptr;
 use rsf_game_sys::windows_path::absolute_wide_path;
-use std::alloc::{Layout, alloc};
+use rsf_game_sys::ffi_util::try_box;
 
 use crate::sys::{
     RSF_FSR4_BRIDGE_ABI_MISMATCH as ABI_MISMATCH,
@@ -20,20 +20,23 @@ use crate::sys::{
 #[path = "completion.rs"]
 mod completion;
 use completion::next_local_completion;
-#[cfg(windows)]
+#[path = "sdk_commands.rs"]
+mod commands;
+#[path = "../dx12_bridge_commands.rs"]
+mod dx12;
+#[path = "native.rs"]
+mod native;
+use native::Capsule;
+#[path = "../dx12_provider_module.rs"]
+mod provider_module;
 #[path = "sdk.rs"]
 mod sdk;
-#[cfg(windows)]
 #[path = "standalone.rs"]
 mod standalone;
 #[path = "../timeline_pair.rs"]
 mod timeline_pair;
 
 type Handle = *mut c_void;
-type Native = *mut c_void;
-type Step = unsafe extern "C" fn(Native) -> i32;
-
-const PLATFORM_ABI_VERSION: u32 = 1;
 const UNEXPECTED: i32 = 0x8000_ffff_u32 as i32; // E_UNEXPECTED
 const DEVICE_REMOVED: i32 = 0x887a_0005_u32 as i32; // DXGI_ERROR_DEVICE_REMOVED
 
@@ -154,36 +157,6 @@ struct Dispatch {
     slot: u32,
 }
 
-#[repr(C)]
-struct Platform {
-    struct_size: u32,
-    abi_version: u32,
-    allocate: unsafe extern "C" fn() -> Native,
-    release: unsafe extern "C" fn(Native),
-    objects: unsafe extern "C" fn(Native) -> u32,
-    find_adapter: unsafe extern "C" fn(Native, u64, *mut u32) -> i32,
-    create_device: Step,
-    own_directory: unsafe extern "C" fn(*mut u16, u32) -> u32,
-    load: unsafe extern "C" fn(Native, *const u16) -> i32,
-    acquire_compatibility: unsafe extern "C" fn(Native) -> u32,
-    release_compatibility: unsafe extern "C" fn(Native),
-    versions: unsafe extern "C" fn(Native, *mut Version, *mut u64) -> i32,
-    create_context: unsafe extern "C" fn(Native, *const Context) -> i32,
-    provider: unsafe extern "C" fn(Native, *mut Version, *mut u32) -> i32,
-    create_commands: Step,
-    plan: unsafe extern "C" fn(Native, u32, u32, u32, *mut u32, *mut u32) -> i32,
-    create_image: unsafe extern "C" fn(Native, u32, u32, u32, u32, *mut Handle, *mut Handle) -> i32,
-    create_fence: unsafe extern "C" fn(Native, *mut Handle) -> i32,
-    describe: unsafe extern "C" fn(Handle, *mut Texture),
-    completed: unsafe extern "C" fn(Native) -> u64,
-    wait_event: unsafe extern "C" fn(Native, u64, u32) -> i32,
-    record: unsafe extern "C" fn(Native, *const Dispatch) -> i32,
-    wait_shared: unsafe extern "C" fn(Native, u64) -> i32,
-    execute: unsafe extern "C" fn(Native),
-    signal: unsafe extern "C" fn(Native, u64, u32) -> i32,
-    destroy_context: Step,
-}
-
 const _: () = {
     use std::mem::offset_of;
     assert!(size_of::<LegacyFrame>() == 96 && offset_of!(LegacyFrame, ready_value) == 80);
@@ -192,9 +165,6 @@ const _: () = {
     assert!(size_of::<Texture>() == 16 && offset_of!(Texture, format) == 12);
     assert!(size_of::<Dispatch>() == 96 && offset_of!(Dispatch, render_width) == 32);
     assert!(offset_of!(Dispatch, frame_time_ms) == 64 && offset_of!(Dispatch, reset) == 88);
-    assert!(size_of::<Platform>() == 8 + 24 * size_of::<Handle>());
-    assert!(offset_of!(Platform, allocate) == 8 && offset_of!(Platform, create_context) == 88);
-    assert!(offset_of!(Platform, destroy_context) == 192);
 };
 
 fn candidate(vendor: u32) -> bool {
@@ -239,10 +209,10 @@ unsafe fn wide<'a>(text: *const u16) -> &'a [u16] {
     unsafe { std::slice::from_raw_parts(text, length) }
 }
 
-fn provider_path(ops: &Platform, directory: *const u16) -> Option<Vec<u16>> {
+fn provider_path(directory: *const u16) -> Option<Vec<u16>> {
     let mut path = if directory.is_null() {
         let mut own = [0; MAX_PATH];
-        let length = unsafe { (ops.own_directory)(own.as_mut_ptr(), MAX_PATH as u32) } as usize;
+        let length = sdk::own_directory(&mut own);
         own[..length.min(MAX_PATH)].to_vec()
     } else {
         unsafe { wide(directory) }.to_vec()
@@ -275,19 +245,10 @@ unsafe fn check_header(header: *const u32, required: usize) -> i32 {
     }
 }
 
-/// # Safety
-/// A non-null table must stay valid for the process lifetime.
-unsafe fn platform(ops: *const Platform) -> Option<&'static Platform> {
-    let ops = unsafe { ops.as_ref() }?;
-    (ops.struct_size as usize >= size_of::<Platform>() && ops.abi_version == PLATFORM_ABI_VERSION)
-        .then_some(ops)
-}
-
 // The host serializes every call on one bridge. Native owners stay behind
 // `native` until checked destruction releases them.
 struct Session {
-    ops: &'static Platform,
-    native: Native,
+    native: Box<Capsule>,
     adapter_luid: u64,
     provider_version: u64,
     vendor: u32,
@@ -308,9 +269,8 @@ struct Session {
 }
 
 impl Session {
-    fn new(ops: &'static Platform, native: Native) -> Self {
+    fn new(native: Box<Capsule>) -> Self {
         Self {
-            ops,
             native,
             adapter_luid: 0,
             provider_version: 0,
@@ -330,7 +290,7 @@ impl Session {
     }
 
     fn has(&self, objects: u32) -> bool {
-        (unsafe { (self.ops.objects)(self.native) } & objects) == objects
+        (self.native.objects() & objects) == objects
     }
 
     fn retain(&mut self, code: i32) -> i32 {
@@ -345,36 +305,35 @@ impl Session {
     /// provider is forced and the effective provider must be that ID with an
     /// FSR 4 name; there is no fallback to an older provider.
     fn initialize(&mut self, request: &Request) -> i32 {
-        let ops = self.ops;
-        let native = self.native;
+        let native = &mut self.native;
         let mut vendor = 0;
-        let code = unsafe { (ops.find_adapter)(native, request.luid, &mut vendor) };
+        let code = native.find_adapter(request.luid, &mut vendor);
         if code != 0 {
             return code;
         }
         if !candidate(vendor) {
             return UNSUPPORTED_VENDOR;
         }
-        let code = unsafe { (ops.create_device)(native) };
+        let code = native.create_device();
         if code != 0 {
             return code;
         }
-        let Some(path) = provider_path(ops, request.directory) else {
+        let Some(path) = provider_path(request.directory) else {
             return NO_DIRECTORY;
         };
-        let code = unsafe { (ops.load)(native, path.as_ptr()) };
+        let code = native.load(path.as_ptr());
         if code != 0 {
             return code;
         }
         if matches!(vendor, NVIDIA | INTEL) {
-            if unsafe { (ops.acquire_compatibility)(native) } == 0 {
+            if !native.acquire_compatibility() {
                 return COMPATIBILITY_REFUSED;
             }
             self.compatibility = true;
         }
         let mut versions = [Version::default(); MAX_VERSIONS];
         let mut count = MAX_VERSIONS as u64;
-        let code = unsafe { (ops.versions)(native, versions.as_mut_ptr(), &mut count) };
+        let code = native.versions(&mut versions, &mut count);
         if code != 0 {
             return code;
         }
@@ -389,19 +348,19 @@ impl Session {
             output_height: request.output_height,
             flags: request.flags,
         };
-        let code = unsafe { (ops.create_context)(native, &context) };
+        let code = native.create_context(&context);
         if code != 0 {
             return code;
         }
         let mut provider = Version::default();
-        let mut parsed = 0;
-        let code = unsafe { (ops.provider)(native, &mut provider, &mut parsed) };
+        let mut parsed = false;
+        let code = native.provider(&mut provider, &mut parsed);
         if code != 0 {
             return code;
         }
         // The signed loader can select a legacy FSR provider on older GPUs.
         // This option promises the ML upscaler, so reject that substitution.
-        if provider.id != selected || !is_fsr4(&provider, parsed != 0) {
+        if provider.id != selected || !is_fsr4(&provider, parsed) {
             return NO_FSR4_PROVIDER;
         }
         self.adapter_luid = request.luid;
@@ -410,7 +369,7 @@ impl Session {
         self.max_render = [request.render_width, request.render_height];
         self.max_output = [request.output_width, request.output_height];
         self.depth_infinite = request.flags & DEPTH_INFINITE != 0;
-        unsafe { (ops.create_commands)(native) }
+        self.native.create_commands()
     }
 
     /// Waits up to ten seconds for a local completion-fence value.
@@ -427,8 +386,7 @@ impl Session {
         if !self.has(LOCAL_FENCE) {
             return self.retain(UNEXPECTED);
         }
-        let ops = self.ops;
-        let completed = unsafe { (ops.completed)(self.native) };
+        let completed = self.native.completed();
         if completed == u64::MAX {
             return self.retain(DEVICE_REMOVED);
         }
@@ -438,12 +396,12 @@ impl Session {
         if !self.has(EVENT) {
             return FAILED;
         }
-        let code = unsafe { (ops.wait_event)(self.native, target, WAIT_MS) };
+        let code = self.native.wait_event(target, WAIT_MS);
         if code != 0 {
             return code;
         }
         // An earlier timed-out wait can also have signalled the shared event.
-        let completed = unsafe { (ops.completed)(self.native) };
+        let completed = self.native.completed();
         if completed == u64::MAX {
             return self.retain(DEVICE_REMOVED);
         }
@@ -468,7 +426,7 @@ impl Session {
             return self.retain(idle);
         }
         if self.has(EFFECT) {
-            let code = unsafe { (self.ops.destroy_context)(self.native) };
+            let code = self.native.destroy_context();
             if code != 0 {
                 return self.retain(code);
             }
@@ -520,11 +478,7 @@ impl Session {
         if !valid {
             return false;
         }
-        let describe = |resource| {
-            let mut texture = Texture::default();
-            unsafe { (self.ops.describe)(resource, &mut texture) };
-            texture
-        };
+        let describe = native::describe;
         let color = describe(frame.color);
         let depth = describe(frame.depth);
         let motion = describe(frame.motion);
@@ -569,23 +523,22 @@ impl Session {
         }
         dispatch.slot = slot as u32;
         dispatch.sharpness = self.sharpness;
-        let ops = self.ops;
-        let code = unsafe { (ops.record)(self.native, &dispatch) };
+        let code = self.native.record(&dispatch);
         if code != 0 {
             return code;
         }
-        let code = unsafe { (ops.wait_shared)(self.native, ready) };
+        let code = self.native.wait_shared(ready);
         if code != 0 {
             return code;
         }
-        unsafe { (ops.execute)(self.native) };
+        self.native.execute();
         self.completion = completed;
         self.allocator_values[slot] = completed;
-        let handoff = unsafe { (ops.signal)(self.native, done, 1) };
+        let handoff = self.native.signal(done, true);
         if handoff == 0 {
             self.last_done = done;
         }
-        let retired = unsafe { (ops.signal)(self.native, completed, 0) };
+        let retired = self.native.signal(completed, false);
         if retired != 0 {
             return self.retain(retired);
         }
@@ -604,12 +557,11 @@ impl Session {
         {
             return result;
         }
-        let ops = self.ops;
-        let wait = unsafe { (ops.wait_shared)(self.native, ready) };
+        let wait = self.native.wait_shared(ready);
         if wait != 0 {
             return self.retain(wait);
         }
-        let handoff = unsafe { (ops.signal)(self.native, done, 1) };
+        let handoff = self.native.signal(done, true);
         if handoff == 0 {
             self.last_done = done;
         }
@@ -617,7 +569,7 @@ impl Session {
             return self.retain(UNEXPECTED);
         };
         self.completion = completed;
-        let retired = unsafe { (ops.signal)(self.native, completed, 0) };
+        let retired = self.native.signal(completed, false);
         if retired != 0 {
             return self.retain(retired);
         }
@@ -634,8 +586,8 @@ impl Session {
 }
 
 /// # Safety
-/// `ops` must be the static native table; `output` must be writable.
-unsafe fn create(ops: *const Platform, request: &Request, output: *mut *mut Session) -> i32 {
+/// `output` must be writable.
+unsafe fn create(request: &Request, output: *mut *mut Session) -> i32 {
     if request.luid == 0
         || output.is_null()
         || request.render_width == 0
@@ -646,23 +598,17 @@ unsafe fn create(ops: *const Platform, request: &Request, output: *mut *mut Sess
         return FAILED;
     }
     unsafe { output.write(ptr::null_mut()) };
-    let Some(ops) = (unsafe { platform(ops) }) else {
-        return FAILED;
+    let Some(native) = try_box(Capsule::EMPTY) else {
+        return OUT_OF_MEMORY;
     };
-    let native = unsafe { (ops.allocate)() };
-    if native.is_null() {
+    let Some(session) = try_box(Session::new(native)) else {
         return OUT_OF_MEMORY;
-    }
-    let session = unsafe { alloc(Layout::new::<Session>()) }.cast::<Session>();
-    if session.is_null() {
-        unsafe { (ops.release)(native) };
-        return OUT_OF_MEMORY;
-    }
-    unsafe { session.write(Session::new(ops, native)) };
+    };
+    let session = Box::into_raw(session);
     let code = unsafe { &mut *session }.initialize(request);
     if code != 0 {
         // A failed checked cleanup returns the retained owner to the caller.
-        if unsafe { rsf_core_fsr4sr_destroy(session) } != 0 {
+        if unsafe { destroy(session) } != 0 {
             unsafe { output.write(session) };
         }
         return code;
@@ -671,33 +617,9 @@ unsafe fn create(ops: *const Platform, request: &Request, output: *mut *mut Sess
     0
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_fsr4sr_candidate_vendor(vendor: u32) -> u32 {
-    u32::from(candidate(vendor))
-}
-
 /// # Safety
-/// `request` and `output` follow rsf_vk_fsr4_create; `ops` is the static table.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_create(
-    ops: *const Platform,
-    request: *const Request,
-    output: *mut *mut Session,
-) -> i32 {
-    let Some(request) = (unsafe { request.as_ref() }) else {
-        return FAILED;
-    };
-    unsafe { create(ops, request, output) }
-}
-
-/// # Safety
-/// `setup` and `output` follow RsfFsr4BridgeCreate; `ops` is the static table.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_create_public(
-    ops: *const Platform,
-    setup: *const BridgeCreate,
-    output: *mut *mut Session,
-) -> i32 {
+/// `setup` and `output` follow RsfFsr4BridgeCreate.
+unsafe fn create_public(setup: *const BridgeCreate, output: *mut *mut Session) -> i32 {
     if output.is_null() {
         return INVALID_ARGUMENT;
     }
@@ -737,13 +659,12 @@ unsafe extern "C" fn rsf_core_fsr4sr_create_public(
         output_height: setup.output_height,
         flags,
     };
-    unsafe { create(ops, &request, output) }
+    unsafe { create(&request, output) }
 }
 
 /// # Safety
 /// Non-null pointers must be a live bridge and a writable info structure.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_info(session: *const Session, info: *mut BridgeInfo) -> i32 {
+unsafe fn info(session: *const Session, info: *mut BridgeInfo) -> i32 {
     let Some(session) = (unsafe { session.as_ref() }) else {
         return INVALID_ARGUMENT;
     };
@@ -764,8 +685,7 @@ unsafe extern "C" fn rsf_core_fsr4sr_info(session: *const Session, info: *mut Br
 
 /// # Safety
 /// A non-null `session` must be a live bridge.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_sharpness(session: *mut Session, amount: f32) -> i32 {
+unsafe fn sharpness(session: *mut Session, amount: f32) -> i32 {
     let Some(session) = (unsafe { session.as_mut() }) else {
         return INVALID_ARGUMENT;
     };
@@ -778,14 +698,13 @@ unsafe extern "C" fn rsf_core_fsr4sr_sharpness(session: *mut Session, amount: f3
 
 /// # Safety
 /// Non-null pointers must be a live bridge and writable outputs.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_plan(
+unsafe fn plan(
     session: *mut Session,
     quality: u32,
     width: *mut u32,
     height: *mut u32,
 ) -> i32 {
-    let Some(session) = (unsafe { session.as_ref() }) else {
+    let Some(session) = (unsafe { session.as_mut() }) else {
         return INVALID_ARGUMENT;
     };
     if width.is_null() || height.is_null() || quality > MAX_QUALITY {
@@ -796,22 +715,14 @@ unsafe extern "C" fn rsf_core_fsr4sr_plan(
         height.write(0);
     }
     let [output_width, output_height] = session.max_output;
-    unsafe {
-        (session.ops.plan)(
-            session.native,
-            quality,
-            output_width,
-            output_height,
-            width,
-            height,
-        )
-    }
+    session
+        .native
+        .plan(quality, output_width, output_height, width, height)
 }
 
 /// # Safety
 /// Non-null pointers must be a live bridge and writable outputs.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_create_image(
+unsafe fn create_image(
     session: *mut Session,
     width: u32,
     height: u32,
@@ -833,27 +744,16 @@ unsafe extern "C" fn rsf_core_fsr4sr_create_image(
     if !session.has(DEVICE) {
         return FAILED;
     }
-    unsafe {
-        (session.ops.create_image)(
-            session.native,
-            width,
-            height,
-            format,
-            writable,
-            handle,
-            resource,
-        )
-    }
+    session.native.create_image(width, height, format, writable, handle, resource)
 }
 
 /// # Safety
 /// Non-null pointers must be a live bridge and a writable handle.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_create_fence(
+unsafe fn create_fence(
     session: *mut Session,
     handle: *mut Handle,
 ) -> i32 {
-    let Some(session) = (unsafe { session.as_ref() }) else {
+    let Some(session) = (unsafe { session.as_mut() }) else {
         return FAILED;
     };
     if handle.is_null() {
@@ -863,7 +763,7 @@ unsafe extern "C" fn rsf_core_fsr4sr_create_fence(
     if !session.has(DEVICE) {
         return FAILED;
     }
-    unsafe { (session.ops.create_fence)(session.native, handle) }
+    session.native.create_fence(handle)
 }
 
 fn frame_time_ms(delta: f32) -> f32 {
@@ -876,8 +776,7 @@ fn frame_time_ms(delta: f32) -> f32 {
 
 /// # Safety
 /// Non-null pointers must be a live bridge and a readable legacy frame.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_evaluate_legacy(
+unsafe fn evaluate_legacy(
     session: *mut Session,
     frame: *const LegacyFrame,
 ) -> i32 {
@@ -916,8 +815,7 @@ unsafe extern "C" fn rsf_core_fsr4sr_evaluate_legacy(
 
 /// # Safety
 /// Non-null pointers must be a live bridge and a readable frame header.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_evaluate(
+unsafe fn evaluate(
     session: *mut Session,
     frame: *const BridgeFrame,
 ) -> i32 {
@@ -970,15 +868,13 @@ unsafe extern "C" fn rsf_core_fsr4sr_evaluate(
 
 /// # Safety
 /// A non-null `session` must be a live bridge.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_wait_idle(session: *mut Session) -> i32 {
+unsafe fn wait_idle(session: *mut Session) -> i32 {
     unsafe { session.as_mut() }.map_or(0, |session| session.wait(session.completion))
 }
 
 /// # Safety
 /// A non-null `session` must be a live bridge.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_prepare_destroy(session: *mut Session) -> i32 {
+unsafe fn prepare_destroy(session: *mut Session) -> i32 {
     unsafe { session.as_mut() }.map_or(0, Session::prepare)
 }
 
@@ -989,8 +885,7 @@ unsafe extern "C" fn rsf_core_fsr4sr_prepare_destroy(session: *mut Session) -> i
 ///
 /// # Safety
 /// A non-null `session` must be a live bridge with no other users.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_destroy(session: *mut Session) -> i32 {
+unsafe fn destroy(session: *mut Session) -> i32 {
     let Some(owner) = (unsafe { session.as_mut() }) else {
         return 0;
     };
@@ -998,10 +893,8 @@ unsafe extern "C" fn rsf_core_fsr4sr_destroy(session: *mut Session) -> i32 {
     if code != 0 {
         return code;
     }
-    // The SDK context is destroyed; dropping the lease restores native capability answers.
-    unsafe { (owner.ops.release_compatibility)(owner.native) };
-    owner.compatibility = false;
-    unsafe { (owner.ops.release)(owner.native) };
+    // The SDK context is destroyed; dropping the capsule releases the lease first,
+    // which restores native capability answers, then the native owners.
     drop(unsafe { Box::from_raw(session) });
     0
 }
@@ -1095,18 +988,18 @@ mod tests {
     fn null_bridges_and_vendor_policy() {
         unsafe {
             assert_eq!(
-                rsf_core_fsr4sr_sharpness(ptr::null_mut(), 0.5),
+                sharpness(ptr::null_mut(), 0.5),
                 INVALID_ARGUMENT
             );
-            assert_eq!(rsf_core_fsr4sr_wait_idle(ptr::null_mut()), 0);
-            assert_eq!(rsf_core_fsr4sr_prepare_destroy(ptr::null_mut()), 0);
-            assert_eq!(rsf_core_fsr4sr_destroy(ptr::null_mut()), 0);
+            assert_eq!(wait_idle(ptr::null_mut()), 0);
+            assert_eq!(prepare_destroy(ptr::null_mut()), 0);
+            assert_eq!(destroy(ptr::null_mut()), 0);
             assert_eq!(
-                rsf_core_fsr4sr_evaluate_legacy(ptr::null_mut(), ptr::null()),
+                evaluate_legacy(ptr::null_mut(), ptr::null()),
                 FAILED
             );
         }
-        assert_eq!(rsf_core_fsr4sr_candidate_vendor(0x10de), 1);
-        assert_eq!(rsf_core_fsr4sr_candidate_vendor(0x5143), 0);
+        assert!(candidate(0x10de));
+        assert!(!candidate(0x5143));
     }
 }

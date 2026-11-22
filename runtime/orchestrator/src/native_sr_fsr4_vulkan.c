@@ -29,9 +29,7 @@ int rsf_vk_fsr4_create_shared_image(rsf_fsr4_bridge*, uint32_t, uint32_t, uint32
 int rsf_vk_fsr4_create_shared_fence(rsf_fsr4_bridge*, void**);
 int rsf_vk_fsr4_prepare_destroy(rsf_fsr4_bridge*);
 int rsf_vk_fsr4_destroy_checked(rsf_fsr4_bridge*);
-int32_t rsf_core_fsr4sr_info(const rsf_fsr4_bridge*, rsf_fsr4_bridge_info*);
-int32_t rsf_core_fsr4sr_sharpness(rsf_fsr4_bridge*, float);
-void rsf_core_fsr4sr_release_image(void*);
+void rsf_vk_fsr4_release_image(void*);
 int32_t rsf_core_fsr4vk_create_admitted(const rsf_fsr4vk_platform*, const rsf_srvk_setup*,
     const rsf_fsr4vk_handoff*, rsf_fsr4vk**);
 
@@ -135,10 +133,10 @@ static rsf_fsr4vk_platform platform_table = {
     .close = rsf_fsr4vk_graphics_close,
     .bridge_create = bridge_create,
     .bridge_plan = bridge_plan,
-    .bridge_info = rsf_core_fsr4sr_info,
+    .bridge_info = RsfFsr4BridgeInfo,
     .create_fence = create_fence,
     .create_image = create_image,
-    .release_image = rsf_core_fsr4sr_release_image,
+    .release_image = rsf_vk_fsr4_release_image,
     .capture_initialize = rsf_fsr4vk_capture_initialize,
     .capture_begin = rsf_fsr4vk_capture_begin,
     .capture_record = rsf_fsr4vk_capture_record,
@@ -148,7 +146,7 @@ static rsf_fsr4vk_platform platform_table = {
     .copy = rsf_fsr4vk_graphics_copy,
     .split = split,
     .sharpening_valid = NULL,
-    .bridge_sharpness = rsf_core_fsr4sr_sharpness,
+    .bridge_sharpness = RsfFsr4BridgeSharpness,
     .bridge_evaluate = bridge_evaluate,
     .sharpen = rsf_fsr4vk_graphics_sharpen,
     .retire = rsf_fsr4vk_graphics_retire,
