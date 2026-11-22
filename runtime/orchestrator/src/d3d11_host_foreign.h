@@ -3,7 +3,7 @@
 #include <rescaleframe/d3d11_present_bridge.h>
 #include <rescaleframe/game_api.h>
 #include <rescaleframe/overlay_api.h>
-#include "native_sr_completion.h"
+#include <rescaleframe/native_sr.h>
 
 #ifdef __cplusplus
 extern "C" {

@@ -63,23 +63,22 @@ use windows::core::Interface;
 const INVALID: i32 = -1;
 #[cfg(not(test))]
 const ABI_MISMATCH: i32 = -2;
+#[cfg(not(test))]
 const NOT_READY: i32 = -3;
 const RESOURCE_FAILED: i32 = -7;
-const LEAF_FAULT: i32 = i32::MIN;
 const SR: u32 = 0;
 const FG: u32 = 1;
 type Texture = *mut c_void;
 
 #[cfg(not(test))]
-unsafe fn validate_device(context: *mut c_void, pass: *const Pass) -> i32 {
+unsafe fn validate_device(context: *mut c_void, pass: &Pass) -> bool {
     let context = unsafe { crate::d3d11_d3d12::borrow::<ID3D11DeviceContext>(&context) };
     let Ok(device) = (unsafe { context.GetDevice() }) else {
-        return 0;
+        return false;
     };
     let Some(identity) = (unsafe { ComRef::identity(device.as_raw()) }) else {
-        return 0;
+        return false;
     };
-    let pass = unsafe { &*pass };
     let textures = [
         pass.color_input,
         pass.color_output,
@@ -89,16 +88,14 @@ unsafe fn validate_device(context: *mut c_void, pass: *const Pass) -> i32 {
         pass.color_output_readable,
         pass.temporal_mask,
     ];
-    i32::from(
-        textures
-            .into_iter()
-            .filter(|texture| !texture.is_null())
-            .all(|texture| {
-                unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(texture)) }
-                    .and_then(|owner| unsafe { ComRef::identity(owner.as_ptr()) })
-                    .is_some_and(|other| other.as_ptr() == identity.as_ptr())
-            }),
-    )
+    textures
+        .into_iter()
+        .filter(|texture| !texture.is_null())
+        .all(|texture| {
+            unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(texture)) }
+                .and_then(|owner| unsafe { ComRef::identity(owner.as_ptr()) })
+                .is_some_and(|other| other.as_ptr() == identity.as_ptr())
+        })
 }
 
 #[cfg(not(test))]
@@ -142,8 +139,8 @@ fn validate_pass(pass: &Pass) -> Result<[u32; 2], i32> {
 }
 
 #[cfg(not(test))]
-unsafe fn input_is_local(pass: &Pass, depth_layout: i32) -> bool {
-    if depth_layout != 0 || pass.render_rect[0] != 0 || pass.render_rect[1] != 0 {
+unsafe fn input_is_local(pass: &Pass, depth_domains: bool) -> bool {
+    if depth_domains || pass.render_rect[0] != 0 || pass.render_rect[1] != 0 {
         return false;
     }
     let render = (pass.camera.render_width, pass.camera.render_height);
@@ -157,41 +154,48 @@ unsafe fn input_is_local(pass: &Pass, depth_layout: i32) -> bool {
 }
 
 fn discard_history(owner: u32, result: i32) -> i32 {
-    if result != LEAF_FAULT {
-        reset_history(owner);
-    }
+    reset_history(owner);
     result
 }
 
+type PrepareRegions = unsafe fn(Texture, &Pass, &mut [Texture; 3]) -> bool;
+
+/// Decodes the region preparation once for SR and explicit FG: the three textures on
+/// success, `RESOURCE_FAILED` for a refusal or an incomplete publication.
 unsafe fn prepare_regions(
-    prepare: unsafe extern "C" fn(Texture, *const Pass, *mut Texture) -> i32,
+    prepare: PrepareRegions,
     context: Texture,
     pass: &Pass,
 ) -> Result<[Texture; 3], i32> {
     let mut textures = [std::ptr::null_mut(); 3];
-    match unsafe { prepare(context, pass, textures.as_mut_ptr()) } {
-        1 if textures.iter().all(|texture| !texture.is_null()) => Ok(textures),
-        LEAF_FAULT => Err(LEAF_FAULT),
-        _ => Err(RESOURCE_FAILED),
+    if unsafe { prepare(context, pass, &mut textures) }
+        && textures.iter().all(|texture| !texture.is_null())
+    {
+        Ok(textures)
+    } else {
+        Err(RESOURCE_FAILED)
     }
 }
 
+/// D3D11 host entry. Every native write of this call is recorded on the immediate
+/// context before it returns, so the receipt is always ordered.
 #[cfg(not(test))]
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_sr_evaluate(
+pub(crate) unsafe extern "C" fn rsf_native_sr_evaluate_ordered(
     context: *mut c_void,
     pass: *const Pass,
     ordered: *mut u32,
 ) -> i32 {
     let result = unsafe { evaluate(context, pass) };
     if !ordered.is_null() {
-        unsafe { ordered.write(u32::from(result != LEAF_FAULT)) };
+        unsafe { ordered.write(1) };
     }
-    if result == LEAF_FAULT {
-        discard_history(SR, RESOURCE_FAILED)
-    } else {
-        result
-    }
+    result
+}
+
+#[cfg(not(test))]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_native_sr_evaluate(context: *mut c_void, pass: *const Pass) -> i32 {
+    unsafe { evaluate(context, pass) }
 }
 
 #[cfg(not(test))]
@@ -212,32 +216,24 @@ unsafe fn evaluate(context: *mut c_void, pass: *const Pass) -> i32 {
     if unsafe { rsf_d3d11_output_is_immediate(context) } == 0 {
         return INVALID;
     }
-    match unsafe { validate_device(context, pass) } {
-        0 => return INVALID,
-        1 => {}
-        LEAF_FAULT => return LEAF_FAULT,
-        _ => return RESOURCE_FAILED,
+    if !unsafe { validate_device(context, pass) } {
+        return INVALID;
     }
-    let depth_layout = unsafe { platform::depth_layout(pass) };
-    if depth_layout < 0 {
-        return match depth_layout {
-            -1 => INVALID,
-            LEAF_FAULT => LEAF_FAULT,
-            _ => RESOURCE_FAILED,
-        };
-    }
+    let Some(depth_domains) = (unsafe { platform::depth_layout(pass) }) else {
+        return INVALID;
+    };
     let Some(_bindings) =
         (unsafe { SavedBindings::new(context, rsf_d3d11_state_save, rsf_d3d11_state_restore) })
     else {
         return RESOURCE_FAILED;
     };
     unsafe { clear_predication(context) };
-    let resized = unsafe { platform::rsf_native_sr_resize_guarded(output_width, output_height) };
+    let resized = unsafe { platform::resize_output(output_width, output_height) };
     if resized != 0 {
         return discard_history(SR, resized);
     }
 
-    let textures = if unsafe { input_is_local(pass, depth_layout) } {
+    let textures = if unsafe { input_is_local(pass, depth_domains) } {
         [pass.color_input, pass.depth, pass.motion]
     } else {
         match unsafe { prepare_regions(platform::prepare, context, pass) } {
@@ -264,7 +260,6 @@ unsafe fn evaluate(context: *mut c_void, pass: *const Pass) -> i32 {
     match unsafe { rsf_native_translucency_take(pass, &mut masks) } {
         0 => {}
         -1 => return RESOURCE_FAILED,
-        LEAF_FAULT => return LEAF_FAULT,
         _ => {
             frame.color_before_transparency = masks.color_before_transparency;
             frame.transparency_layer = masks.transparency_layer;
@@ -274,26 +269,19 @@ unsafe fn evaluate(context: *mut c_void, pass: *const Pass) -> i32 {
             frame.motion_depth_layer = masks.motion_depth;
         }
     }
-    if !pass.temporal_mask.is_null() {
-        match unsafe { platform::merge_mask(context, pass, &mut frame) } {
-            0 => return RESOURCE_FAILED,
-            LEAF_FAULT => return LEAF_FAULT,
-            _ => {}
-        }
+    if !pass.temporal_mask.is_null() && !unsafe { platform::merge_mask(context, pass, &mut frame) }
+    {
+        return RESOURCE_FAILED;
     }
 
-    let result = with_scene(pass, || unsafe {
-        platform::rsf_native_sr_frame_guarded(context, &frame)
-    });
+    let result = with_scene(pass, || unsafe { platform::run_frame(context, &frame) });
     if result != 0 {
         return discard_history(SR, result);
     }
     // The provider output stays private until the current immediate stream
     // publishes it into the adapter's leased native destinations.
-    match unsafe { platform::publish_output(context, pass) } {
-        0 => return discard_history(SR, RESOURCE_FAILED),
-        LEAF_FAULT => return LEAF_FAULT,
-        _ => {}
+    if !unsafe { platform::publish_output(context, pass) } {
+        return discard_history(SR, RESOURCE_FAILED);
     }
     commit_history(SR, pass);
     0
@@ -351,14 +339,7 @@ unsafe fn capture_on_stream(context: Texture, pass: &Pass, motion: &DecodeParams
             };
             stage(c"normalize-regions-decode");
             let [color, depth, vectors] =
-                match unsafe { prepare_regions(platform::prepare, context, pass) } {
-                    Ok(textures) => textures,
-                    Err(LEAF_FAULT) => {
-                        reset_history(FG);
-                        return None;
-                    }
-                    Err(_) => return None,
-                };
+                unsafe { prepare_regions(platform::prepare, context, pass) }.ok()?;
             if unsafe {
                 rsf_motion_decode_run(inputs.decode.get().cast(), context, vectors, motion)
             } != 0
@@ -417,9 +398,7 @@ unsafe fn capture_on_stream(context: Texture, pass: &Pass, motion: &DecodeParams
             }
             let accepted = with_scene(&captured, || unsafe {
                 stage(c"normalize-capture");
-                if platform::rsf_native_sr_fg_capture_guarded(context, &frame) == 0 {
-                    return 0;
-                }
+                platform::capture_fg(context, &frame);
                 stage(c"normalize-captured");
                 rsf_native_fg_inputs_ready(pass.source_frame_id)
             });
@@ -467,17 +446,10 @@ unsafe fn capture_validated(context: Texture, pass: &Pass, motion: &DecodeParams
             0,
         )
     };
-    match unsafe { validate_device(context, pass) } {
-        0 => return INVALID,
-        1 => {}
-        LEAF_FAULT => return discard_history(FG, NOT_READY),
-        _ => return NOT_READY,
-    }
-    match unsafe { platform::depth_layout(pass) } {
-        -1 => return INVALID,
-        LEAF_FAULT => return discard_history(FG, NOT_READY),
-        n if n < 0 => return NOT_READY,
-        _ => {}
+    if !unsafe { validate_device(context, pass) }
+        || unsafe { platform::depth_layout(pass) }.is_none()
+    {
+        return INVALID;
     }
     if unsafe { capture_on_stream(context, pass, motion) }.is_some() {
         0
@@ -540,12 +512,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn failed_fg_preparation_resets_only_fg_history() {
-        unsafe extern "C" fn fault(_: Texture, _: *const Pass, _: *mut Texture) -> i32 {
-            LEAF_FAULT
+    fn region_refusal_keeps_history_and_discard_resets_one_owner() {
+        unsafe fn refused(_: Texture, _: &Pass, _: &mut [Texture; 3]) -> bool {
+            false
         }
-        unsafe extern "C" fn incomplete(_: Texture, _: *const Pass, _: *mut Texture) -> i32 {
-            1
+        unsafe fn incomplete(_: Texture, _: &Pass, out: &mut [Texture; 3]) -> bool {
+            out[0] = std::ptr::dangling_mut();
+            true
         }
         let mut pass: Pass = unsafe { std::mem::zeroed() };
         pass.session_id = 1;
@@ -561,10 +534,12 @@ mod tests {
             Err(RESOURCE_FAILED)
         );
         assert_eq!(
-            unsafe { prepare_regions(fault, std::ptr::null_mut(), &pass) },
-            Err(LEAF_FAULT)
+            unsafe { prepare_regions(refused, std::ptr::null_mut(), &pass) },
+            Err(RESOURCE_FAILED)
         );
-        assert_eq!(discard_history(FG, NOT_READY), NOT_READY);
+        assert_eq!(camera_for(SR, &pass).reset, 0);
+        assert_eq!(camera_for(FG, &pass).reset, 0);
+        assert_eq!(discard_history(FG, RESOURCE_FAILED), RESOURCE_FAILED);
         assert_eq!(camera_for(SR, &pass).reset, 0);
         assert_eq!(camera_for(FG, &pass).reset, 1);
         reset_history(SR);

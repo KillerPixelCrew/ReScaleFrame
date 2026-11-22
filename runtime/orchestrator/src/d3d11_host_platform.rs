@@ -29,6 +29,7 @@ use crate::native_fg_cpu::platform::{
 };
 use crate::native_fg_cpu_abi::rsf_native_latency_window;
 use crate::native_scene::{rsf_native_scene_pass, rsf_native_scene_present_path};
+use crate::native_sr::rsf_native_sr_evaluate_ordered;
 use crate::native_window::{
     rsf_native_window_last_present, rsf_native_window_match, rsf_native_window_present,
     rsf_native_window_scope,
@@ -107,7 +108,7 @@ pub(super) fn linked_platform() -> rsf_d3d11h_platform {
         pipeline_status: rsf_d3d11h_read_pipeline_status,
         pipeline_colour: rsf_d3d11h_pipeline_colour,
         pipeline_output: rsf_dlss_pipeline_output_texture,
-        sr_evaluate: rsf_native_sr_evaluate_ordered_guarded,
+        sr_evaluate: rsf_native_sr_evaluate_ordered,
         dump_configure,
         dump_request: rsf_d3d11h_guard_dump_request,
         dump_requested: rsf_d3d11h_guard_dump_requested,

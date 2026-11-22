@@ -1070,8 +1070,8 @@ Port generic SR setup, legacy bridging and auxiliary reconstruction. Trace the p
 - [x] [runtime/orchestrator/src/auxiliary_sr.h](runtime/orchestrator/src/auxiliary_sr.h)
 - [x] [runtime/orchestrator/src/auxiliary_sr_platform.h](runtime/orchestrator/src/auxiliary_sr_platform.h)
 - [x] [runtime/orchestrator/src/d3d11_sr_api.cpp](runtime/orchestrator/src/d3d11_sr_api.cpp)
-- [ ] [runtime/orchestrator/src/native_sr.cpp](runtime/orchestrator/src/native_sr.cpp)
-- [x] [runtime/orchestrator/src/native_sr_completion.h](runtime/orchestrator/src/native_sr_completion.h)
+- [x] [runtime/orchestrator/src/native_sr.cpp](runtime/orchestrator/src/native_sr.cpp) Deleted. Every guarded callee is a Rust export, so `native_sr.rs` calls them directly and exports `rsf_native_sr_evaluate` itself.
+- [x] [runtime/orchestrator/src/native_sr_completion.h](runtime/orchestrator/src/native_sr_completion.h) Deleted with `native_sr.cpp`. The D3D11 host takes the Rust ordered entry.
 - [x] [runtime/orchestrator/src/sr_bridge_platform.cpp](runtime/orchestrator/src/sr_bridge_platform.cpp)
 - [x] [runtime/orchestrator/src/sr_legacy_adapter.cpp](runtime/orchestrator/src/sr_legacy_adapter.cpp)
 - [x] [runtime/orchestrator/src/sr_legacy_adapter.h](runtime/orchestrator/src/sr_legacy_adapter.h)

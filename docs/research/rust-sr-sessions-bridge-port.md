@@ -23,11 +23,11 @@ C ABI retained around the migrated owner.
 The public ABI declarations in `runtime/orchestrator/include/rescaleframe/d3d11_sr_api.h`,
 `runtime/orchestrator/include/rescaleframe/native_sr.h` and
 `runtime/orchestrator/include/rescaleframe/sr_session.h` remain in force.
-`runtime/orchestrator/src/auxiliary_sr.h`,
+At this baseline, `runtime/orchestrator/src/auxiliary_sr.h`,
 `runtime/orchestrator/src/native_sr_completion.h` and
-`runtime/orchestrator/src/sr_legacy_adapter.h` remain C++ interfaces used by
-native callers. The following native paths remain in the implementation and
-should stay open if the checklist requires removing their C++:
+`runtime/orchestrator/src/sr_legacy_adapter.h` remained C++ interfaces used by
+native callers. The following native paths remained in the implementation
+(all since removed, see below):
 `runtime/orchestrator/src/auxiliary_sr.cpp`,
 `runtime/orchestrator/src/d3d11_sr_api.cpp`,
 `runtime/orchestrator/src/native_sr.cpp`,
@@ -41,7 +41,7 @@ setup marshalling. All four device/ABI harnesses remain native fixtures.
 - **Reuse the saved D3D11 state guard for auxiliary passes.** One generated state binding and the output owner's save/restore pair cover preparation, commit and rollback.
 - **Reuse one fake IUnknown header for orchestrator ownership tests.** The four fixture families embed or reuse the same header, callable QueryInterface and checked refcount. The D3D12 fixture still records its last release.
 - **Decode region-preparation failures once for SR and explicit FG.** The shared decoder publishes the three textures only for complete success. Explicit FG takes the failure path before calling its motion decoder.
-- **Invalidate the FG history when its own input validation faults.** Device and depth faults reset FG alone. The synthetic source fixture checks both history slots.
+- **Invalidate the FG history when its own input validation faults.** Device and depth faults reset FG alone. The synthetic source fixture checks both history slots. The guard retirement below later removed the fault sources themselves.
 - **Expose the SR bridge's retained-on-timeout destruction result.** Close returns NOT_READY with the owner live and consumes it only on success. A fake-queue fixture checks the retained leases and a successful retry.
 - **Preserve the supplied far-plane convention independently of depth direction.** The Rust adapter preserves `open.depth_infinite`. The C++ factory explicitly supplies the old derived convention for legacy pipeline callers whose setup has no independent field.
 - **Share the destructor-backed owner for opaque graphics handles.** Bridge, OpenGL and native FG normalization share the same non-COM destructor owner. Each client retains its own GPU retirement ordering.
@@ -74,7 +74,7 @@ device execution remain user-owned.
 | `runtime/orchestrator/src/sr_legacy_adapter.cpp` | Removed. `sr_legacy.rs` builds the session setup and calls the existing bridge, motion resolve and capture services. The private C declaration in `sr_legacy_adapter.h` remains for the legacy pipeline caller. |
 | `runtime/orchestrator/src/sr_bridge_platform.cpp` | Removed. `sr_bridge/platform.rs` implements the Windows platform and capture calls. `d3d11_d3d12.rs` shares command, copy, event and fence operations with the existing native FG path. The bridge owner still controls all waits, leases and consume-on-success retirement. |
 | `runtime/orchestrator/src/auxiliary_sr.cpp` and `auxiliary_sr.h` | Removed. `auxiliary_sr/platform.rs` populates the existing generated table and uses the same shader, state helpers, resource flags and draw order. The C++ convenience wrapper is local to the remaining device fixture. |
-| `runtime/orchestrator/src/native_sr.cpp` | Partial. Rust checks COM device identity and clears predication. C++ still owns the remaining pipeline and normalization callbacks and their exception containment. `native_sr_completion.h` still declares the ordered receipt consumed by the host. |
+| `runtime/orchestrator/src/native_sr.cpp` | Removed, with `native_sr_completion.h`. See [the D03 guard retirement](#d03-native-sr-guard-retirement). |
 | `tests/sr_session.cpp` | Removed. The CTest entry invokes the Rust fixture with the same deterministic provider cases, including copied paths, replacement refusal, reset, stale generations and retirement counts. |
 | `tests/sr_bridge.cpp` | Removed. Its Rust fixture keeps the explicit hardware arguments, backend/quality sequence, exposure switches, pixel readback and checked close. The C entry now links the embedded core. The separate D3D11 Runtime API fixture still exercises the DLL query. |
 
@@ -145,3 +145,39 @@ syntax-only checks passed. MSVC checked the native SR boundary and both
 Streamline-header consumers with the SDK disabled, then checked the
 consumers with the local SDK headers enabled. Build, link and runtime
 behavior remain unverified.
+
+<a id="d03-native-sr-guard-retirement"></a>
+
+## D03 native SR guard retirement
+
+`native_sr.cpp` held four `catch (...)` wrappers and the public
+`rsf_native_sr_evaluate`. Each wrapped callee is a Rust export of this crate:
+`rsf_dlss_pipeline_resize_output` and `rsf_dlss_pipeline_on_frame`
+(`dlss_pipeline/exports.rs`), `rsf_native_fg_capture` (`native_fg.rs`) and
+`rsf_core_native_sr_evaluate` (`native_sr.rs`). No first-party C++ runs
+between the guard and the vendor SDK. The D3D11 FSR and XeSS backends are C
+(`fsr_backend.c`, `xess_backend.c`), and the Streamline calls keep their own
+leaf guards in `dlss_streamline.cpp`. A Rust panic cannot leave an
+`extern "C"` Rust function, which aborts instead. A foreign exception crossing
+the Rust frames would already be undefined behavior before the outer catch.
+The same exports are called unguarded by `d3d11_sr_api.rs`, the D3D11 host
+resize leaf and `loader/proxy/src/dlss_bridge.c`. No guard was therefore
+converted to a C11 SEH leaf.
+
+- `native_sr/platform.rs` calls the pipeline resize, frame and FG capture
+  exports directly. `rsf_native_sr_evaluate` is a Rust `no_mangle` export, and
+  `rust_exports.c` adds its `/export:` so the Runtime DLL, the AC7 carrier, the
+  shared loader and the Minecraft DLL keep the name.
+- The D01 host's `sr_evaluate` entry is now `rsf_native_sr_evaluate_ordered` in
+  Rust. Every native write of the call is recorded on the immediate context
+  before it returns, so it always reports an ordered receipt. Only the removed
+  C++ handler ever reported zero. `native_sr_completion.h` was deleted,
+  `d3d11_host_foreign.h` includes `native_sr.h` for the capture declaration,
+  and the regenerated `d3d11_host_foreign_abi.rs` drops the old guarded entry.
+- With no producer left, `LEAF_FAULT` and its branches were removed.
+  Validation and region, mask and reinsertion helpers return `bool` or
+  `Option`. A region refusal still returns `RESOURCE_FAILED` without touching
+  either history. The FG fault reset that closed the "Invalidate the FG history
+  when its own input validation faults" finding has no fault source left.
+  `discard_history` still resets only the named owner, and the unit test checks
+  both slots.

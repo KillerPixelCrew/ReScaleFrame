@@ -129,7 +129,7 @@ generate("runtime/orchestrator/src/d3d11_host_foreign_abi.rs", "runtime/orchestr
           "-Iruntime/presentation/include", "-Iruntime/contract/include",
           "-Iruntime/backends/dlss/include"],
          ["--no-recursive-allowlist",
-          "--allowlist-function", "rsf_(d3d11h_guard_.*|native_sr_(capture_fg|evaluate_ordered_guarded))",
+          "--allowlist-function", "rsf_(d3d11h_guard_.*|native_sr_capture_fg)",
           "--raw-line", "use crate::fg12_abi::{rsf_d3d11_present_setup, rsf_observer_present_event_fn};",
           "--raw-line", "use crate::overlay_abi::rsf_overlay_service_setup;",
           "--raw-line", "use crate::render_abi::rsf_render_settings;",

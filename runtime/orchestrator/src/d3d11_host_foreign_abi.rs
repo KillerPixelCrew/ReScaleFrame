@@ -16,13 +16,6 @@ unsafe extern "C" {
     ) -> i32;
 }
 unsafe extern "C" {
-    pub fn rsf_native_sr_evaluate_ordered_guarded(
-        context: *mut ::core::ffi::c_void,
-        pass: *const rsf_game_render_pass,
-        ordered: *mut u32,
-    ) -> i32;
-}
-unsafe extern "C" {
     pub fn rsf_d3d11h_guard_present_install(arg1: *const rsf_d3d11_present_setup) -> i32;
 }
 unsafe extern "C" {

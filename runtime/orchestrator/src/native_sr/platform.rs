@@ -10,36 +10,46 @@ use crate::native_reinsert::rsf_native_reinsert;
 use rsf_game_sys::renderer_policy::depth_domains_requested;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32G32_FLOAT;
 
+// The pipeline and FG capture owners are Rust exports of this crate. Vendor C++
+// below them contains its own exceptions at the SDK leaf, so these calls need no
+// native guard.
 unsafe extern "C" {
-    pub(super) fn rsf_native_sr_resize_guarded(width: u32, height: u32) -> i32;
-    pub(super) fn rsf_native_sr_frame_guarded(context: Texture, frame: *const Frame) -> i32;
-    pub(super) fn rsf_native_sr_fg_capture_guarded(
-        context: Texture,
-        frame: *const DlssFrame,
+    fn rsf_dlss_pipeline_resize_output(
+        width: u32,
+        height: u32,
+        render_width: *mut u32,
+        render_height: *mut u32,
     ) -> i32;
+    fn rsf_dlss_pipeline_on_frame(context: Texture, frame: *const Frame) -> i32;
+    fn rsf_native_fg_capture(context: Texture, frame: *const DlssFrame);
     fn rsf_dlss_pipeline_output_texture() -> Texture;
 }
 
-pub(super) unsafe fn depth_layout(pass: *const Pass) -> i32 {
-    let pass = unsafe { &*pass };
-    let desc = unsafe { texture_desc(pass.depth) };
-    if !unsafe {
-        rsf_native_regions_depth_valid(&pass.depth_domains, desc.format, &pass.render_rect)
-    } {
-        return -1;
+pub(super) unsafe fn resize_output(width: u32, height: u32) -> i32 {
+    unsafe {
+        rsf_dlss_pipeline_resize_output(width, height, std::ptr::null_mut(), std::ptr::null_mut())
     }
-    i32::from(depth_domains_requested(&pass.depth_domains))
 }
 
-pub(super) unsafe extern "C" fn prepare(
-    context: Texture,
-    pass: *const Pass,
-    out: *mut Texture,
-) -> i32 {
+pub(super) unsafe fn run_frame(context: Texture, frame: &Frame) -> i32 {
+    unsafe { rsf_dlss_pipeline_on_frame(context, frame) }
+}
+
+pub(super) unsafe fn capture_fg(context: Texture, frame: &DlssFrame) {
+    unsafe { rsf_native_fg_capture(context, frame) }
+}
+
+/// Returns None when the depth layout is refused, otherwise whether depth domains are requested.
+pub(super) unsafe fn depth_layout(pass: *const Pass) -> Option<bool> {
     let pass = unsafe { &*pass };
-    let mut textures = [std::ptr::null_mut(); 3];
-    let [color, depth, motion] = &mut textures;
-    if !unsafe {
+    let desc = unsafe { texture_desc(pass.depth) };
+    unsafe { rsf_native_regions_depth_valid(&pass.depth_domains, desc.format, &pass.render_rect) }
+        .then(|| depth_domains_requested(&pass.depth_domains))
+}
+
+pub(super) unsafe fn prepare(context: Texture, pass: &Pass, out: &mut [Texture; 3]) -> bool {
+    let [color, depth, motion] = out;
+    unsafe {
         rsf_native_regions_prepare(
             context,
             pass.color_input,
@@ -52,14 +62,10 @@ pub(super) unsafe extern "C" fn prepare(
             &pass.depth_domains,
             pass.camera.depth_inverted != 0,
         )
-    } {
-        return 0;
     }
-    unsafe { out.cast::<[Texture; 3]>().write(textures) };
-    1
 }
 
-pub(super) unsafe fn merge_mask(context: Texture, pass: *const Pass, frame: *mut Frame) -> i32 {
+pub(super) unsafe fn merge_mask(context: Texture, pass: *const Pass, frame: *mut Frame) -> bool {
     let pass = unsafe { &*pass };
     let frame = unsafe { &mut *frame };
     let (mut reactive, mut bias) = (std::ptr::null_mut(), std::ptr::null_mut());
@@ -75,16 +81,16 @@ pub(super) unsafe fn merge_mask(context: Texture, pass: *const Pass, frame: *mut
             &mut bias,
         )
     } {
-        return 0;
+        return false;
     }
     frame.reactive_mask = reactive;
     frame.bias_mask = bias;
-    1
+    true
 }
 
-pub(super) unsafe fn publish_output(context: Texture, pass: *const Pass) -> i32 {
+pub(super) unsafe fn publish_output(context: Texture, pass: *const Pass) -> bool {
     let pass = unsafe { &*pass };
-    i32::from(unsafe {
+    unsafe {
         rsf_native_reinsert(
             context,
             rsf_dlss_pipeline_output_texture(),
@@ -92,7 +98,7 @@ pub(super) unsafe fn publish_output(context: Texture, pass: *const Pass) -> i32 
             pass.color_output_readable,
             &pass.output_rect,
         )
-    })
+    }
 }
 
 pub(super) unsafe fn create_decode(device: Texture, width: u32, height: u32) -> Texture {
