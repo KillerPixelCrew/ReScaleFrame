@@ -21,9 +21,11 @@ source and consumer receipts, presentation admission and capture retirement
 retain their existing owners and call sites. SDK descriptor construction,
 registration, capture and provider registration glue remain in the native leaves.
 
-The dispatch contract with fake providers and the FFX reset, submission and
-WSI route scenario bodies remain C++ fixtures. The public Vulkan FG header
-and existing platform and frame record layouts remain unchanged.
+At this revision the dispatch contract with fake providers and the FFX
+reset, submission and WSI route scenario bodies were still C++ fixtures.
+The [CPU fixture follow-up](rust-vulkan-fg-cpu-fixtures.md) records their
+port. The public Vulkan FG header and the existing platform and frame
+record layouts were unchanged.
 
 Verification was source-only. The bindings were regenerated with bindgen
 0.72.1. Rust 1.94.1 formatting for the affected packages, locked offline

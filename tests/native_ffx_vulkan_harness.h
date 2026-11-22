@@ -3,6 +3,7 @@
 // Only the module, SDK and Vulkan entry points are fakes. No GPU work.
 #pragma once
 #include "../runtime/orchestrator/src/native_fg_vulkan.cpp"
+#include "vulkan-fg/ffx_abi.h"
 #include <cstdio>
 #include <cstdlib>
 
@@ -16,16 +17,8 @@ namespace fake {
 inline void require(bool value, const char* text) { if (!value) { std::fprintf(stderr, "%s\n", text); std::exit(1); } }
 template<class T> T id(uint64_t value) { return reinterpret_cast<T>(static_cast<uintptr_t>(value)); }
 
-struct State {
+struct State : rsf_ffx_fixture_state {
     uint64_t next = 100;
-    uint32_t resets = 0, submits = 0, waits = 0, copies = 0, sdk_records = 0, generated = 0;
-    uint32_t configurations = 0, activations = 0, present_calls = 0, drains = 0, idles = 0, locks = 0, unlocks = 0;
-    uint32_t effects_destroyed = 0, swapchains_destroyed = 0, chains_destroyed = 0;
-    uint32_t destroyed_images = 0, freed_memories = 0, destroyed_fences = 0;
-    bool reject_prepare = false, reject_wait = false, reject_bind = false, reject_drain = false, reject_effect_destroy = false;
-    bool reject_swapchain_destroy = false, reject_generate = false, check_reset = false, expected_reset = false, enabled = false;
-    uint64_t configured_frame = 0, generated_frame = 0;
-    VkResult present_result = VK_SUCCESS;
     FfxApiFrameGenerationDispatchFunc callback = nullptr;
     void* context = nullptr;
     rsf_ffxgvk_native* native = nullptr;
@@ -43,7 +36,7 @@ VkResult VKAPI_PTR wait_fences(VkDevice, uint32_t count, const VkFence* fence, V
     ++state.waits; return state.reject_wait ? VK_TIMEOUT : VK_SUCCESS;
 }
 int32_t submit(void*, uint32_t count, const void* commands, uint64_t fence) {
-    require(!count && !commands && fence, "fences are queued after successful host submissions"); ++state.submits; return VK_SUCCESS;
+    require(!count && !commands && fence, "fences are queued after successful host submissions"); ++state.submits; return state.reject_submit ? VK_ERROR_DEVICE_LOST : VK_SUCCESS;
 }
 void lock(void*) { ++state.locks; }
 void unlock(void*) { ++state.unlocks; }
@@ -119,7 +112,7 @@ VkResult VKAPI_PTR present(VkQueue queue, const VkPresentInfoKHR*) {
         require(state.callback(&request, state.context) == expected,
             "generation callback returns the SDK result for the leased source frame");
     }
-    return state.present_result;
+    return VkResult(state.present_result);
 }
 VkResult VKAPI_PTR swapchain_images(VkDevice, VkSwapchainKHR chain, uint32_t* count, VkImage* images) {
     require(chain == state.native->chain, "images come from the owned chain");
@@ -217,33 +210,4 @@ struct Setup {
     }
 };
 
-inline rsf_frame_record record(uint64_t session, uint64_t frame, uint32_t view = 0, uint32_t generation = 1, uint32_t flags = 0) {
-    rsf_frame_record result{}; result.struct_size = sizeof(result); result.abi_version = RSF_GAME_FRAME_ABI_VERSION;
-    result.session_id = session; result.frame_id = frame; result.view_id = view; result.resource_generation = generation; result.flags = flags;
-    result.render_width = result.output_width = 640; result.render_height = result.output_height = 360; result.frame_time_ms = 16.667f;
-    auto& camera = result.camera; camera.struct_size = sizeof(camera); camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
-    camera.render_width = camera.output_width = 640; camera.render_height = camera.output_height = 360;
-    camera.near_plane = 0.05f; camera.far_plane = 100; camera.vertical_fov_radians = 1; camera.depth_inverted = 1;
-    for (auto* matrix : {camera.view_to_clip, camera.clip_to_view, camera.view_to_world, camera.world_to_view, camera.clip_to_previous_clip})
-        for (uint32_t i = 0; i < 16; i += 5) matrix[i] = 1;
-    return result;
-}
-inline rsf_fgvk_frame frame(const rsf_frame_record& source) {
-    rsf_fgvk_frame result{}; result.struct_size = sizeof(result); result.abi_version = RSF_FGVK_ABI_VERSION; result.record = &source;
-    auto image = [](uint32_t format) { return rsf_srvk_image{id<void*>(1), 12, format, 640, 360, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1}; };
-    result.depth = image(VK_FORMAT_R32_SFLOAT); result.motion = image(VK_FORMAT_R16G16_SFLOAT); result.hudless = image(VK_FORMAT_R8G8B8A8_UNORM);
-    result.motion_scale_x = 640; result.motion_scale_y = 360; return result;
-}
-inline void complete(rsf_ffxgvk* self, const rsf_frame_record& source, void* prepare, void* hudless) {
-    auto input = frame(source);
-    require(rsf_ffxgvk_prepare(self, prepare, &input) == RSF_BACKEND_OK && rsf_ffxgvk_hudless(self, hudless, &input) == RSF_BACKEND_OK,
-        "real prepare and HUD-less recording accepted the source");
-}
-inline rsf_ffxgvk* start(const rsf_ffxgvk_ops& table, Setup& setup) {
-    SetEnvironmentVariableW(L"RSF_VULKAN_FRAME_CAPTURE_DIR", nullptr); SetEnvironmentVariableW(L"RSF_VULKAN_TIMING_FILE", nullptr);
-    rsf_ffxgvk* self = nullptr; uint64_t chain = 0;
-    require(rsf_core_ffxgvk_create_native(&table, &setup.value, &self, &chain) == RSF_BACKEND_OK && self && chain == 3,
-        "Rust owner admits the swapchain and opens the native leaf");
-    return self;
-}
 }

@@ -3785,6 +3785,11 @@ now use typed Rust Vulkan records. The corrected SDK dispatch fixture runs its
 assertions in Rust. This revision has source checks only.
 [Shared Vulkan FG dispatch audit](research/rust-vulkan-fg-shared-dispatch.md)
 
+Rust now drives the Vulkan FG provider dispatch, FidelityFX reset,
+submission and WSI route CPU fixtures. The fixtures keep their existing
+CTest names and retain SDK-facing callback fakes in C++.
+[Vulkan FG CPU fixture audit](research/rust-vulkan-fg-cpu-fixtures.md)
+
 The FidelityFX generation callback now reads the exact configured frame
 record from the Rust WSI route. Rust publishes the record only after SDK
 configure succeeds and counts only successful dispatches. The native callback

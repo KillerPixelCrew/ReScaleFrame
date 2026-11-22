@@ -868,6 +868,20 @@ generate("tests/generation/src/session_abi.rs", "tests/generation/session_abi.h"
 generate("tests/vulkan-fg/src/wsi_abi.rs", "tests/vulkan-fg/wsi_abi.h",
          "rsf_wsi_fixture_(counts|calls)", "NOTHING", [])
 
+for fixture in ("dispatch", "ffx"):
+    symbols = (r"rsf_(fgvk_.*|core_fgvk_presentation_.*|fixture_(dispatch_state|block_sleep|wait_sleep|release_sleep))"
+               if fixture == "dispatch" else
+               r"rsf_(ffxgvk_.*|fixture_(ffx|wsi)_.*|core_vkfg_(ensure_image|release_image))")
+    generate(f"tests/vulkan-fg/src/{fixture}_abi.rs", f"tests/vulkan-fg/{fixture}_abi.h",
+             "rsf_fixture_result", "RSF_(FGVK_.*|SRVK_ABI_VERSION|FSR4FG_NOT_SUPPORTED)",
+             ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Isdk/game/include",
+              *(["-x", "c++", "-std=c++17", "-Wno-pragma-once-outside-header"] if fixture == "ffx" else [])],
+             ["--allowlist-function", symbols, "--blocklist-function", "rsf_fixture_.*_run",
+              "--blocklist-type", "rsf_frame_record",
+              "--raw-line", "#![allow(dead_code)]",
+              "--raw-line", "use rsf_game_sys::rsf_frame_record;",
+              "--no-prepend-enum-name", "--with-derive-default"])
+
 generate("tests/generation/src/dll_abi.rs", "tests/generation/dll_abi.h",
          "rsf_(d3d11_(fg_(api|inputs)|present_api)|get_d3d11_(fg|present)_api_fn|fg_fixture_imports|"
          "native_(fg_(options|status)|cpu_frame)|observer_present_event)",
