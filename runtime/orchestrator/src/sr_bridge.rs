@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // D3D11 to D3D12 SR bridge: the game's D3D11 device, a D3D12 device on the same adapter, shared
 // surfaces and one shared fence. This owner decides lifetime, cross-API ordering, input leases,
-// GPU retirement and failure policy. The Windows platform supplies the native operations.
+// GPU retirement and failure policy. `native` (platform.rs; fakes under test) supplies the
+// native operations.
 use crate::sys::RSF_SR_NONE;
 use rsf_game_sys::backend_result::{
     ABI_MISMATCH, FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, NOT_READY, NOT_SUPPORTED, OK,
@@ -11,6 +12,10 @@ use rsf_game_sys::backend_result::{
 mod fixture;
 #[cfg(not(test))]
 mod platform;
+#[cfg(not(test))]
+use platform as native;
+#[cfg(test)]
+use tests::native;
 
 use crate::com_ref::ComRef;
 use crate::owned_handle::OwnedHandle as Owned;
@@ -59,55 +64,6 @@ pub(crate) struct TextureDesc {
     format: u32,
     samples: u32,
     array_size: u32,
-}
-
-#[repr(C)]
-pub(crate) struct Platform {
-    session_create: unsafe extern "C" fn(*const rsf_sr_session_setup, *mut Handle) -> i32,
-    session_select: unsafe extern "C" fn(Handle, u32, u32, u64) -> i32,
-    session_set_auto_exposure: unsafe extern "C" fn(Handle, u32) -> i32,
-    session_evaluate: unsafe extern "C" fn(Handle, Handle, *const rsf_sr_frame) -> i32,
-    session_warm_up: unsafe extern "C" fn(Handle, Handle, *const rsf_sr_frame) -> i32,
-    session_get_status: unsafe extern "C" fn(Handle, *mut rsf_sr_session_status) -> i32,
-    session_destroy: unsafe extern "C" fn(Handle),
-    validate_frame: unsafe extern "C" fn(*const rsf_sr_frame) -> i32,
-    immediate_context: unsafe extern "C" fn(Handle) -> Handle,
-    query_context4: unsafe extern "C" fn(Handle) -> Handle,
-    create_device12: unsafe extern "C" fn(Handle) -> Handle,
-    create_queue: unsafe extern "C" fn(Handle) -> Handle,
-    create_commands: unsafe extern "C" fn(Handle, *mut Handle, *mut Handle) -> i32,
-    create_output: unsafe extern "C" fn(Handle, u32, u32, u32) -> Handle,
-    create_texture: unsafe extern "C" fn(Handle, u32, u32, u32) -> Handle,
-    create_fence: unsafe extern "C" fn(Handle) -> Handle,
-    create_event: unsafe extern "C" fn() -> Handle,
-    close_event: unsafe extern "C" fn(Handle),
-    describe: unsafe extern "C" fn(Handle, Handle, *mut TextureDesc) -> i32,
-    same_context: unsafe extern "C" fn(Handle, Handle) -> i32,
-    wait_fence: unsafe extern "C" fn(Handle, u64, Handle, u32) -> i32,
-    flush: unsafe extern "C" fn(Handle),
-    copy_region: unsafe extern "C" fn(Handle, Handle, Handle, u32, u32),
-    copy_resource: unsafe extern "C" fn(Handle, Handle, Handle),
-    context_signal: unsafe extern "C" fn(Handle, Handle, u64) -> i32,
-    context_wait: unsafe extern "C" fn(Handle, Handle, u64) -> i32,
-    reset_commands: unsafe extern "C" fn(Handle, Handle) -> i32,
-    transition: unsafe extern "C" fn(Handle, Handle, u32, u32),
-    copy_transitioned: unsafe extern "C" fn(Handle, Handle, u32, u32, Handle, u32, u32),
-    submit: unsafe extern "C" fn(Handle, Handle) -> i32,
-    queue_wait: unsafe extern "C" fn(Handle, Handle, u64) -> i32,
-    queue_signal: unsafe extern "C" fn(Handle, Handle, u64) -> i32,
-    device_ready: unsafe extern "C" fn(Handle) -> i32,
-    surface_create: unsafe extern "C" fn(Handle, Handle, u32, u32, u32, Log, Handle) -> Handle,
-    surface_destroy: unsafe extern "C" fn(Handle),
-    surface_d3d11: unsafe extern "C" fn(Handle) -> Handle,
-    surface_d3d12: unsafe extern "C" fn(Handle) -> Handle,
-    fence_create: unsafe extern "C" fn(Handle, Handle, Log, Handle) -> Handle,
-    fence_destroy: unsafe extern "C" fn(Handle),
-    fence_d3d11: unsafe extern "C" fn(Handle) -> Handle,
-    fence_d3d12: unsafe extern "C" fn(Handle) -> Handle,
-    dump_poll_requested: unsafe extern "C" fn() -> i32,
-    dump_inputs: unsafe extern "C" fn(Handle, *const rsf_sr_frame, u32, u32),
-    dump_wants: unsafe extern "C" fn(*const rsf_frame_record) -> i32,
-    dump_result: unsafe extern "C" fn(Handle, *const rsf_sr_frame, u32, i32, u32),
 }
 
 fn owned_com(object: Handle) -> Option<ComRef> {
@@ -197,7 +153,6 @@ pub(crate) struct Bridge {
     // so the per-frame identity check needs no QueryInterface.
     immediate: ComRef,
     device11: ComRef,
-    platform: &'static Platform,
     log: Log,
     log_user: Handle,
     tick: u64,
@@ -252,38 +207,37 @@ fn mask_accepted(desc: &TextureDesc, record: &rsf_frame_record) -> bool {
 }
 
 impl Bridge {
-    fn open(platform: &'static Platform, setup: &rsf_sr_session_setup) -> Result<Self, i32> {
-        let p = platform;
+    fn open(setup: &rsf_sr_session_setup) -> Result<Self, i32> {
         let (log, log_user) = (setup.open.log, setup.open.log_user);
         let device11 = unsafe { ComRef::retain(setup.open.device) };
-        let immediate = owned_com(unsafe { (p.immediate_context)(com(&device11)) });
+        let immediate = owned_com(unsafe { native::immediate_context(com(&device11)) });
         let immediate = immediate.ok_or(NOT_SUPPORTED)?;
-        let context = owned_com(unsafe { (p.query_context4)(com(&immediate)) });
+        let context = owned_com(unsafe { native::query_context4(com(&immediate)) });
         let context = context.ok_or(NOT_SUPPORTED)?;
-        let device12 = owned_com(unsafe { (p.create_device12)(com(&device11)) });
+        let device12 = owned_com(unsafe { native::create_device12(com(&device11)) });
         let device12 = device12.ok_or(NOT_SUPPORTED)?;
-        let queue = owned_com(unsafe { (p.create_queue)(com(&device12)) }).ok_or(INIT_FAILED)?;
-        let fence = unsafe { (p.fence_create)(com(&device11), com(&device12), log, log_user) };
-        let fence = Owned::new(fence, p.fence_destroy).ok_or(INIT_FAILED)?;
+        let queue = owned_com(unsafe { native::create_queue(com(&device12)) }).ok_or(INIT_FAILED)?;
+        let fence = unsafe { native::fence_create(com(&device11), com(&device12), log, log_user) };
+        let fence = Owned::new(fence, native::fence_destroy).ok_or(INIT_FAILED)?;
         let fence = SharedFence {
-            d3d11: unsafe { (p.fence_d3d11)(fence.get()) },
-            d3d12: unsafe { (p.fence_d3d12)(fence.get()) },
+            d3d11: unsafe { native::fence_d3d11(fence.get()) },
+            d3d12: unsafe { native::fence_d3d12(fence.get()) },
             _owner: fence,
         };
-        let event = Owned::new(unsafe { (p.create_event)() }, p.close_event).ok_or(INIT_FAILED)?;
+        let event = Owned::new(unsafe { native::create_event() }, native::close_event).ok_or(INIT_FAILED)?;
         let mut commands = Vec::with_capacity(COMMAND_SLOTS);
         for _ in 0..COMMAND_SLOTS {
-            commands.push(create_commands(p, &device12).ok_or(INIT_FAILED)?);
+            commands.push(create_commands(&device12).ok_or(INIT_FAILED)?);
         }
         let mut translated = *setup;
         translated.open.api = RSF_API_D3D12;
         translated.open.device = com(&device12);
         let mut session = ptr::null_mut();
-        let result = unsafe { (p.session_create)(&translated, &mut session) };
+        let result = unsafe { native::session_create(&translated, &mut session) };
         if result != OK {
             return Err(result);
         }
-        let session = Owned::new(session, p.session_destroy).ok_or(INIT_FAILED)?;
+        let session = Owned::new(session, native::session_destroy).ok_or(INIT_FAILED)?;
         Ok(Self {
             warm_up: None,
             session,
@@ -298,7 +252,6 @@ impl Bridge {
             context,
             immediate,
             device11,
-            platform,
             log,
             log_user,
             tick: 0,
@@ -320,19 +273,17 @@ impl Bridge {
     }
 
     fn wait_value(&self, value: u64) -> bool {
-        let p = self.platform;
-        unsafe { (p.wait_fence)(self.fence.d3d12, value, self.event.get(), FENCE_TIMEOUT_MS) != 0 }
+        unsafe { native::wait_fence(self.fence.d3d12, value, self.event.get(), FENCE_TIMEOUT_MS) != 0 }
     }
 
     fn arm_signal(&mut self, source: SignalSource) -> bool {
-        let p = self.platform;
         let armed = unsafe {
             match source {
                 SignalSource::Context => {
-                    (p.context_signal)(com(&self.context), self.fence.d3d11, self.tick)
+                    native::context_signal(com(&self.context), self.fence.d3d11, self.tick)
                 }
                 SignalSource::Queue => {
-                    (p.queue_signal)(com(&self.queue), self.fence.d3d12, self.tick)
+                    native::queue_signal(com(&self.queue), self.fence.d3d12, self.tick)
                 }
             }
         } != 0;
@@ -351,7 +302,7 @@ impl Bridge {
 
     fn flush_signal(&mut self) {
         if self.signal_unflushed {
-            unsafe { (self.platform.flush)(com(&self.context)) };
+            unsafe { native::flush(com(&self.context)) };
             self.signal_unflushed = false;
         }
     }
@@ -371,14 +322,13 @@ impl Bridge {
     fn effective_backend(&self) -> u32 {
         let mut status: rsf_sr_session_status = unsafe { std::mem::zeroed() };
         status.struct_size = size_of::<rsf_sr_session_status>() as u32;
-        unsafe { (self.platform.session_get_status)(self.session.get(), &mut status) };
+        unsafe { native::session_get_status(self.session.get(), &mut status) };
         status.effective
     }
 
     // The description of a D3D11 input owned by the bridge's device, from the cache when the
     // texture is the one last seen in this slot. None for a texture from another device.
     fn describe(&mut self, slot: usize, resource: Handle) -> Option<TextureDesc> {
-        let p = self.platform;
         let device = com(&self.device11);
         let cached = &mut self.validated[slot];
         if cached
@@ -393,7 +343,7 @@ impl Bridge {
             return None;
         }
         let mut desc = TextureDesc::default();
-        if unsafe { (p.describe)(resource, device, &mut desc) } == 0 {
+        if unsafe { native::describe(resource, device, &mut desc) } == 0 {
             return None;
         }
         cached.desc = desc;
@@ -420,7 +370,6 @@ impl Bridge {
             return Err(self.gpu_failure());
         }
         self.prepared = None;
-        let p = self.platform;
         let (device11, device12) = (com(&self.device11), com(&self.device12));
         let mut surfaces = Surfaces {
             owners: Vec::with_capacity(SLOTS),
@@ -435,7 +384,7 @@ impl Bridge {
                 _ => COLOR_FORMAT,
             };
             let surface = unsafe {
-                (p.surface_create)(
+                native::surface_create(
                     device11,
                     device12,
                     width,
@@ -445,15 +394,15 @@ impl Bridge {
                     self.log_user,
                 )
             };
-            let Some(surface) = Owned::new(surface, p.surface_destroy) else {
+            let Some(surface) = Owned::new(surface, native::surface_destroy) else {
                 return Err(INIT_FAILED);
             };
-            surfaces.d3d11[slot] = unsafe { (p.surface_d3d11)(surface.get()) };
-            surfaces.d3d12[slot] = unsafe { (p.surface_d3d12)(surface.get()) };
+            surfaces.d3d11[slot] = unsafe { native::surface_d3d11(surface.get()) };
+            surfaces.d3d12[slot] = unsafe { native::surface_d3d12(surface.get()) };
             surfaces.owners.push(surface);
         }
         let output = unsafe {
-            (p.create_output)(
+            native::create_output(
                 device12,
                 record.output_width,
                 record.output_height,
@@ -475,17 +424,16 @@ impl Bridge {
     // queue runs nothing else while a warm-up is pending, so a retried signal is ordered after the
     // list. Returns whether no warm-up is pending.
     fn reap_warm_up(&mut self, timeout_ms: u32) -> bool {
-        let p = self.platform;
         let Some(pending) = &mut self.warm_up else {
             return true;
         };
         let fence = com(&pending.fence);
         if !pending.signaled {
-            pending.signaled = unsafe { (p.queue_signal)(com(&self.queue), fence, 1) } != 0;
+            pending.signaled = unsafe { native::queue_signal(com(&self.queue), fence, 1) } != 0;
         }
         let completed = pending.signaled
-            && unsafe { (p.wait_fence)(fence, 1, pending.event.get(), timeout_ms) } != 0;
-        if !completed && unsafe { (p.device_ready)(com(&self.device12)) } != 0 {
+            && unsafe { native::wait_fence(fence, 1, pending.event.get(), timeout_ms) } != 0;
+        if !completed && unsafe { native::device_ready(com(&self.device12)) } != 0 {
             return false;
         }
         self.warm_up = None;
@@ -511,8 +459,7 @@ impl Bridge {
         if !self.wait() {
             return self.gpu_failure();
         }
-        let p = self.platform;
-        unsafe { (p.session_select)(self.session.get(), backend, quality, version_id) }
+        unsafe { native::session_select(self.session.get(), backend, quality, version_id) }
     }
 
     fn set_auto_exposure(&mut self, enabled: u32) -> i32 {
@@ -529,8 +476,7 @@ impl Bridge {
         if !self.wait() {
             return self.gpu_failure();
         }
-        let p = self.platform;
-        let result = unsafe { (p.session_set_auto_exposure)(self.session.get(), enabled) };
+        let result = unsafe { native::session_set_auto_exposure(self.session.get(), enabled) };
         if result == OK {
             self.auto_exposure = enabled;
         }
@@ -545,23 +491,22 @@ impl Bridge {
         if !self.reap_warm_up(0) {
             return NOT_READY;
         }
-        let p = self.platform;
-        let result = unsafe { (p.validate_frame)(frame) };
+        let result = unsafe { native::validate_frame(frame) };
         if result != OK {
             return result;
         }
         let frame = unsafe { &*frame };
         let record = unsafe { &*frame.record };
         let hdr = u32::from(self.hdr);
-        if unsafe { (p.dump_poll_requested)() } != 0 {
+        if unsafe { native::dump_poll_requested() } != 0 {
             let backend = self.effective_backend();
-            unsafe { (p.dump_inputs)(context_pointer, frame, backend, hdr) };
+            unsafe { native::dump_inputs(context_pointer, frame, backend, hdr) };
         }
         // The pointer the device handed out needs no QueryInterface; anything else must be the
         // same context reached through another interface.
         let context = com(&self.context);
         if context_pointer != com(&self.immediate)
-            && unsafe { (p.same_context)(context_pointer, context) } == 0
+            && unsafe { native::same_context(context_pointer, context) } == 0
         {
             return INVALID_ARGUMENT;
         }
@@ -619,19 +564,19 @@ impl Bridge {
             com(&self.commands[slot].allocator),
             com(&self.commands[slot].list),
         );
-        if unsafe { (p.reset_commands)(allocator, list) } == 0 {
+        if unsafe { native::reset_commands(allocator, list) } == 0 {
             return self.gpu_failure();
         }
         for (index, input) in inputs[..=EXPOSURE].iter().enumerate() {
             if !input.resource.is_null() {
                 let (width, height) = extent(index, record);
-                unsafe { (p.copy_region)(context, shared11[index], input.resource, width, height) };
+                unsafe { native::copy_region(context, shared11[index], input.resource, width, height) };
             }
         }
         for (index, &mask) in masks.iter().enumerate() {
             if !mask.is_null() {
                 let (width, height) = (record.render_width, record.render_height);
-                unsafe { (p.copy_region)(context, shared11[MASKS + index], mask, width, height) };
+                unsafe { native::copy_region(context, shared11[MASKS + index], mask, width, height) };
             }
         }
         if !self.signal(SignalSource::Context) {
@@ -639,7 +584,7 @@ impl Bridge {
         }
         // Required: the D3D12 queue waits on this signal, which has to reach the GPU first.
         self.flush_signal();
-        if unsafe { (p.queue_wait)(queue, fence12, self.tick) } == 0 {
+        if unsafe { native::queue_wait(queue, fence12, self.tick) } == 0 {
             return self.gpu_failure();
         }
 
@@ -655,7 +600,7 @@ impl Bridge {
                 target.resource = shared12[index];
                 target.state = STATE_SHADER_RESOURCE;
                 unsafe {
-                    (p.transition)(list, shared12[index], STATE_COMMON, STATE_SHADER_RESOURCE)
+                    native::transition(list, shared12[index], STATE_COMMON, STATE_SHADER_RESOURCE)
                 };
             }
         }
@@ -668,26 +613,26 @@ impl Bridge {
             let shared = shared12[MASKS + index];
             target.resource = shared;
             target.state = STATE_SHADER_RESOURCE;
-            unsafe { (p.transition)(list, shared, STATE_COMMON, STATE_SHADER_RESOURCE) };
+            unsafe { native::transition(list, shared, STATE_COMMON, STATE_SHADER_RESOURCE) };
         }
         translated.output.resource = output;
         translated.output.state = STATE_UNORDERED_ACCESS;
-        let result = unsafe { (p.session_evaluate)(self.session.get(), list, &translated) };
+        let result = unsafe { native::session_evaluate(self.session.get(), list, &translated) };
         for (index, &mask) in masks.iter().enumerate() {
             if !mask.is_null() {
                 let shared = shared12[MASKS + index];
-                unsafe { (p.transition)(list, shared, STATE_SHADER_RESOURCE, STATE_COMMON) };
+                unsafe { native::transition(list, shared, STATE_SHADER_RESOURCE, STATE_COMMON) };
             }
         }
         for (index, input) in inputs[..=EXPOSURE].iter().enumerate() {
             if !input.resource.is_null() {
                 let shared = shared12[index];
-                unsafe { (p.transition)(list, shared, STATE_SHADER_RESOURCE, STATE_COMMON) };
+                unsafe { native::transition(list, shared, STATE_SHADER_RESOURCE, STATE_COMMON) };
             }
         }
         if result == OK {
             unsafe {
-                (p.copy_transitioned)(
+                native::copy_transitioned(
                     list,
                     shared12[OUTPUT],
                     STATE_COMMON,
@@ -698,7 +643,7 @@ impl Bridge {
                 )
             };
         }
-        if unsafe { (p.submit)(queue, list) } == 0 {
+        if unsafe { native::submit(queue, list) } == 0 {
             return self.gpu_failure();
         }
         if !self.signal(SignalSource::Queue) {
@@ -708,20 +653,20 @@ impl Bridge {
         self.commands[slot].complete = complete;
         self.next_commands = (slot + 1) % COMMAND_SLOTS;
         // Even a refused evaluation may have recorded commands that reference shared inputs.
-        if unsafe { (p.context_wait)(context, fence11, complete) } == 0 {
+        if unsafe { native::context_wait(context, fence11, complete) } == 0 {
             return self.gpu_failure();
         }
         if result == OK {
-            unsafe { (p.copy_resource)(context, frame.output.resource, shared11[OUTPUT]) };
+            unsafe { native::copy_resource(context, frame.output.resource, shared11[OUTPUT]) };
             if !self.signal(SignalSource::Context) {
                 return self.gpu_failure();
             }
             // Not flushed here: the game's Present submits it, and only a CPU wait needs it
             // sooner, which wait() covers.
         }
-        if unsafe { (p.dump_wants)(frame.record) } != 0 {
+        if unsafe { native::dump_wants(frame.record) } != 0 {
             let backend = self.effective_backend();
-            unsafe { (p.dump_result)(context_pointer, frame, backend, result, hdr) };
+            unsafe { native::dump_result(context_pointer, frame, backend, result, hdr) };
         }
         result
     }
@@ -736,7 +681,6 @@ impl Bridge {
         if !self.reap_warm_up(FENCE_TIMEOUT_MS) {
             return NOT_READY;
         }
-        let p = self.platform;
         let device = com(&self.device12);
         let inputs = [
             (render.0, render.1, COLOR_FORMAT),
@@ -747,26 +691,26 @@ impl Bridge {
         let count = if manual_exposure { 4 } else { 3 };
         let mut resources: [Option<ComRef>; 4] = Default::default();
         for (resource, &(width, height, format)) in resources.iter_mut().zip(&inputs).take(count) {
-            *resource = owned_com(unsafe { (p.create_texture)(device, width, height, format) });
+            *resource = owned_com(unsafe { native::create_texture(device, width, height, format) });
             if resource.is_none() {
                 return INIT_FAILED;
             }
         }
-        let target = unsafe { (p.create_output)(device, output.0, output.1, COLOR_FORMAT) };
+        let target = unsafe { native::create_output(device, output.0, output.1, COLOR_FORMAT) };
         let Some(target) = owned_com(target) else {
             return INIT_FAILED;
         };
-        let Some(commands) = create_commands(p, &self.device12) else {
+        let Some(commands) = create_commands(&self.device12) else {
             return INIT_FAILED;
         };
         let list = com(&commands.list);
-        if unsafe { (p.reset_commands)(com(&commands.allocator), list) } == 0 {
+        if unsafe { native::reset_commands(com(&commands.allocator), list) } == 0 {
             return INIT_FAILED;
         }
-        let Some(fence) = owned_com(unsafe { (p.create_fence)(device) }) else {
+        let Some(fence) = owned_com(unsafe { native::create_fence(device) }) else {
             return INIT_FAILED;
         };
-        let Some(event) = Owned::new(unsafe { (p.create_event)() }, p.close_event) else {
+        let Some(event) = Owned::new(unsafe { native::create_event() }, native::close_event) else {
             return INIT_FAILED;
         };
 
@@ -807,7 +751,7 @@ impl Bridge {
             slot.width = width;
             slot.height = height;
             slot.state = STATE_SHADER_RESOURCE;
-            unsafe { (p.transition)(list, com(resource), STATE_COMMON, STATE_SHADER_RESOURCE) };
+            unsafe { native::transition(list, com(resource), STATE_COMMON, STATE_SHADER_RESOURCE) };
         }
         frame.output.struct_size = size_of::<rsf_backend_resource>() as u32;
         frame.output.resource = com(&target);
@@ -815,17 +759,17 @@ impl Bridge {
         frame.output.state = STATE_UNORDERED_ACCESS;
 
         let started = Instant::now();
-        let mut result = unsafe { (p.session_warm_up)(self.session.get(), list, &frame) };
+        let mut result = unsafe { native::session_warm_up(self.session.get(), list, &frame) };
         let queue = com(&self.queue);
         let mut pending = None;
-        if unsafe { (p.submit)(queue, list) } != 0 {
-            let signaled = unsafe { (p.queue_signal)(queue, com(&fence), 1) } != 0;
+        if unsafe { native::submit(queue, list) } != 0 {
+            let signaled = unsafe { native::queue_signal(queue, com(&fence), 1) } != 0;
             let completed = signaled
-                && unsafe { (p.wait_fence)(com(&fence), 1, event.get(), WARM_UP_TIMEOUT_MS) } != 0;
+                && unsafe { native::wait_fence(com(&fence), 1, event.get(), WARM_UP_TIMEOUT_MS) } != 0;
             if !completed && result == OK {
                 result = FEATURE_FAILED;
             }
-            if !completed && unsafe { (p.device_ready)(device) } != 0 {
+            if !completed && unsafe { native::device_ready(device) } != 0 {
                 pending = Some(PendingWarmUp {
                     _resources: resources,
                     _target: target,
@@ -853,13 +797,13 @@ impl Bridge {
 
     fn retire(&mut self) -> bool {
         (self.wait() && self.reap_warm_up(FENCE_TIMEOUT_MS))
-            || unsafe { (self.platform.device_ready)(com(&self.device12)) } == 0
+            || unsafe { native::device_ready(com(&self.device12)) } == 0
     }
 }
 
-fn create_commands(p: &Platform, device12: &ComRef) -> Option<Commands> {
+fn create_commands(device12: &ComRef) -> Option<Commands> {
     let (mut allocator, mut list) = (ptr::null_mut(), ptr::null_mut());
-    if unsafe { (p.create_commands)(com(device12), &mut allocator, &mut list) } == 0 {
+    if unsafe { native::create_commands(com(device12), &mut allocator, &mut list) } == 0 {
         return None;
     }
     Some(Commands {
@@ -869,23 +813,11 @@ fn create_commands(p: &Platform, device12: &ComRef) -> Option<Commands> {
     })
 }
 
-#[cfg(not(test))]
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_sr_bridge_create(
     setup: *const rsf_sr_session_setup,
     out: *mut *mut Bridge,
 ) -> i32 {
-    unsafe { rsf_core_sr_bridge_create(setup, out, &platform::WINDOWS) }
-}
-
-unsafe fn rsf_core_sr_bridge_create(
-    setup: *const rsf_sr_session_setup,
-    out: *mut *mut Bridge,
-    platform: *const Platform,
-) -> i32 {
-    let Some(platform) = (unsafe { platform.as_ref() }) else {
-        return INVALID_ARGUMENT;
-    };
     if out.is_null()
         || !unsafe { has_capacity(setup) && has_capacity(ptr::addr_of!((*setup).open)) }
     {
@@ -904,7 +836,7 @@ unsafe fn rsf_core_sr_bridge_create(
     if setup.open.api != API_D3D11 {
         return WRONG_API;
     }
-    let bridge = match Bridge::open(platform, setup) {
+    let bridge = match Bridge::open(setup) {
         Ok(bridge) => bridge,
         Err(result) => return result,
     };
@@ -985,7 +917,7 @@ pub(super) unsafe extern "C" fn rsf_sr_bridge_get_status(
 ) -> i32 {
     match unsafe { bridge.as_ref() } {
         Some(bridge) => unsafe {
-            (bridge.platform.session_get_status)(bridge.session.get(), status)
+            native::session_get_status(bridge.session.get(), status)
         },
         None => INVALID_ARGUMENT,
     }

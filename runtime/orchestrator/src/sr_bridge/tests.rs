@@ -118,83 +118,83 @@ const SLOT_NAMES: [&str; SLOTS] = [
     "transparency",
 ];
 
-unsafe extern "C" fn session_create(setup: *const rsf_sr_session_setup, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn session_create(setup: *const rsf_sr_session_setup, out: *mut Handle) -> i32 {
     let open = unsafe { (*setup).open };
     assert_eq!(open.api, RSF_API_D3D12);
     assert_eq!(name(open.device), "device12");
     unsafe { out.write(created("session")) };
     OK
 }
-unsafe extern "C" fn session_select(_: Handle, backend: u32, _: u32, _: u64) -> i32 {
+pub(super) unsafe extern "C" fn session_select(_: Handle, backend: u32, _: u32, _: u64) -> i32 {
     event(format!("select {backend}"));
     OK
 }
-unsafe extern "C" fn session_set_auto_exposure(_: Handle, enabled: u32) -> i32 {
+pub(super) unsafe extern "C" fn session_set_auto_exposure(_: Handle, enabled: u32) -> i32 {
     event(format!("auto exposure {enabled}"));
     OK
 }
-unsafe extern "C" fn session_evaluate(_: Handle, list: Handle, frame: *const rsf_sr_frame) -> i32 {
+pub(super) unsafe extern "C" fn session_evaluate(_: Handle, list: Handle, frame: *const rsf_sr_frame) -> i32 {
     assert_eq!(name(list), "list");
     world(|world| world.evaluated = Some(unsafe { *frame }));
     event("evaluate".into());
     OK
 }
-unsafe extern "C" fn session_warm_up(_: Handle, _: Handle, frame: *const rsf_sr_frame) -> i32 {
+pub(super) unsafe extern "C" fn session_warm_up(_: Handle, _: Handle, frame: *const rsf_sr_frame) -> i32 {
     world(|world| world.evaluated = Some(unsafe { *frame }));
     event("warm up".into());
     OK
 }
-unsafe extern "C" fn session_get_status(_: Handle, status: *mut rsf_sr_session_status) -> i32 {
+pub(super) unsafe extern "C" fn session_get_status(_: Handle, status: *mut rsf_sr_session_status) -> i32 {
     unsafe { (*status).effective = 3 };
     OK
 }
-unsafe extern "C" fn session_destroy(session: Handle) {
+pub(super) unsafe extern "C" fn session_destroy(session: Handle) {
     event("destroy session".into());
     close(session);
 }
-unsafe extern "C" fn validate_frame(frame: *const rsf_sr_frame) -> i32 {
+pub(super) unsafe extern "C" fn validate_frame(frame: *const rsf_sr_frame) -> i32 {
     if frame.is_null() {
         INVALID_ARGUMENT
     } else {
         OK
     }
 }
-unsafe extern "C" fn immediate_context(_: Handle) -> Handle {
+pub(super) unsafe extern "C" fn immediate_context(_: Handle) -> Handle {
     created("immediate")
 }
-unsafe extern "C" fn query_context4(_: Handle) -> Handle {
+pub(super) unsafe extern "C" fn query_context4(_: Handle) -> Handle {
     created("context")
 }
-unsafe extern "C" fn create_device12(_: Handle) -> Handle {
+pub(super) unsafe extern "C" fn create_device12(_: Handle) -> Handle {
     created("device12")
 }
-unsafe extern "C" fn create_queue(_: Handle) -> Handle {
+pub(super) unsafe extern "C" fn create_queue(_: Handle) -> Handle {
     created("queue")
 }
-unsafe extern "C" fn create_commands(_: Handle, allocator: *mut Handle, list: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn create_commands(_: Handle, allocator: *mut Handle, list: *mut Handle) -> i32 {
     unsafe {
         allocator.write(created("allocator"));
         list.write(created("list"));
     }
     1
 }
-unsafe extern "C" fn create_output(_: Handle, width: u32, height: u32, _: u32) -> Handle {
+pub(super) unsafe extern "C" fn create_output(_: Handle, width: u32, height: u32, _: u32) -> Handle {
     created(&format!("output12 {width}x{height}"))
 }
-unsafe extern "C" fn create_texture(_: Handle, _: u32, _: u32, _: u32) -> Handle {
+pub(super) unsafe extern "C" fn create_texture(_: Handle, _: u32, _: u32, _: u32) -> Handle {
     created("warm texture")
 }
-unsafe extern "C" fn create_fence(_: Handle) -> Handle {
+pub(super) unsafe extern "C" fn create_fence(_: Handle) -> Handle {
     created("warm fence")
 }
-unsafe extern "C" fn create_event() -> Handle {
+pub(super) unsafe extern "C" fn create_event() -> Handle {
     created("event")
 }
-unsafe extern "C" fn close_event(handle: Handle) {
+pub(super) unsafe extern "C" fn close_event(handle: Handle) {
     event(format!("close {}", name(handle)));
     close(handle);
 }
-unsafe extern "C" fn describe(texture: Handle, device: Handle, out: *mut TextureDesc) -> i32 {
+pub(super) unsafe extern "C" fn describe(texture: Handle, device: Handle, out: *mut TextureDesc) -> i32 {
     match world(|world| world.descs.get(&(texture as usize)).copied()) {
         Some((desc, owner)) if owner == device => {
             unsafe { out.write(desc) };
@@ -203,10 +203,10 @@ unsafe extern "C" fn describe(texture: Handle, device: Handle, out: *mut Texture
         _ => 0,
     }
 }
-unsafe extern "C" fn same_context(pointer: Handle, context: Handle) -> i32 {
+pub(super) unsafe extern "C" fn same_context(pointer: Handle, context: Handle) -> i32 {
     i32::from(pointer == context)
 }
-unsafe extern "C" fn wait_fence(fence: Handle, value: u64, _: Handle, _: u32) -> i32 {
+pub(super) unsafe extern "C" fn wait_fence(fence: Handle, value: u64, _: Handle, _: u32) -> i32 {
     let fence = name(fence);
     event(format!("wait {fence} {value}"));
     let failed = world(|world| {
@@ -218,40 +218,40 @@ unsafe extern "C" fn wait_fence(fence: Handle, value: u64, _: Handle, _: u32) ->
     });
     i32::from(!failed)
 }
-unsafe extern "C" fn flush(_: Handle) {
+pub(super) unsafe extern "C" fn flush(_: Handle) {
     event("flush".into());
 }
-unsafe extern "C" fn copy_region(_: Handle, to: Handle, from: Handle, width: u32, height: u32) {
+pub(super) unsafe extern "C" fn copy_region(_: Handle, to: Handle, from: Handle, width: u32, height: u32) {
     event(format!(
         "copy {} -> {} {width}x{height}",
         name(from),
         name(to)
     ));
 }
-unsafe extern "C" fn copy_resource(_: Handle, to: Handle, from: Handle) {
+pub(super) unsafe extern "C" fn copy_resource(_: Handle, to: Handle, from: Handle) {
     event(format!("copy {} -> {}", name(from), name(to)));
 }
-unsafe extern "C" fn context_signal(_: Handle, fence: Handle, value: u64) -> i32 {
+pub(super) unsafe extern "C" fn context_signal(_: Handle, fence: Handle, value: u64) -> i32 {
     assert_eq!(name(fence), "fence11");
     event(format!("d3d11 signal {value}"));
     i32::from(world(|world| world.bridge_signal_failure != value))
 }
-unsafe extern "C" fn context_wait(_: Handle, fence: Handle, value: u64) -> i32 {
+pub(super) unsafe extern "C" fn context_wait(_: Handle, fence: Handle, value: u64) -> i32 {
     assert_eq!(name(fence), "fence11");
     event(format!("d3d11 wait {value}"));
     1
 }
-unsafe extern "C" fn reset_commands(_: Handle, _: Handle) -> i32 {
+pub(super) unsafe extern "C" fn reset_commands(_: Handle, _: Handle) -> i32 {
     event("reset".into());
     1
 }
-unsafe extern "C" fn transition(_: Handle, resource: Handle, before: u32, after: u32) {
+pub(super) unsafe extern "C" fn transition(_: Handle, resource: Handle, before: u32, after: u32) {
     event(format!(
         "barrier {} {before:#x}->{after:#x}",
         name(resource)
     ));
 }
-unsafe extern "C" fn copy_transitioned(
+pub(super) unsafe extern "C" fn copy_transitioned(
     _: Handle,
     to: Handle,
     _: u32,
@@ -262,15 +262,15 @@ unsafe extern "C" fn copy_transitioned(
 ) {
     event(format!("copy {} -> {}", name(from), name(to)));
 }
-unsafe extern "C" fn submit(_: Handle, _: Handle) -> i32 {
+pub(super) unsafe extern "C" fn submit(_: Handle, _: Handle) -> i32 {
     event("submit".into());
     1
 }
-unsafe extern "C" fn queue_wait(_: Handle, _: Handle, value: u64) -> i32 {
+pub(super) unsafe extern "C" fn queue_wait(_: Handle, _: Handle, value: u64) -> i32 {
     event(format!("d3d12 wait {value}"));
     i32::from(!world(|world| world.queue_wait_fails))
 }
-unsafe extern "C" fn queue_signal(_: Handle, fence: Handle, value: u64) -> i32 {
+pub(super) unsafe extern "C" fn queue_signal(_: Handle, fence: Handle, value: u64) -> i32 {
     if name(fence) == "warm fence" {
         event(format!("d3d12 signal warm fence {value}"));
         return i32::from(!world(|world| world.warm_signal_fails));
@@ -278,10 +278,10 @@ unsafe extern "C" fn queue_signal(_: Handle, fence: Handle, value: u64) -> i32 {
     event(format!("d3d12 signal {value}"));
     i32::from(world(|world| world.bridge_signal_failure != value))
 }
-unsafe extern "C" fn device_ready(_: Handle) -> i32 {
+pub(super) unsafe extern "C" fn device_ready(_: Handle) -> i32 {
     i32::from(world(|world| world.device_ready))
 }
-unsafe extern "C" fn surface_create(
+pub(super) unsafe extern "C" fn surface_create(
     _: Handle,
     _: Handle,
     width: u32,
@@ -300,7 +300,7 @@ unsafe extern "C" fn surface_create(
     event(format!("create {slot} {width}x{height} {format}"));
     surface
 }
-unsafe extern "C" fn surface_destroy(surface: Handle) {
+pub(super) unsafe extern "C" fn surface_destroy(surface: Handle) {
     event(format!("destroy {}", name(surface)));
     close(surface);
 }
@@ -308,84 +308,41 @@ fn child(handle: Handle, d3d12: bool) -> Handle {
     let (d3d11, other) = world(|world| world.children[&(handle as usize)]);
     if d3d12 { other } else { d3d11 }
 }
-unsafe extern "C" fn surface_d3d11(surface: Handle) -> Handle {
+pub(super) unsafe extern "C" fn surface_d3d11(surface: Handle) -> Handle {
     child(surface, false)
 }
-unsafe extern "C" fn surface_d3d12(surface: Handle) -> Handle {
+pub(super) unsafe extern "C" fn surface_d3d12(surface: Handle) -> Handle {
     child(surface, true)
 }
-unsafe extern "C" fn fence_create(_: Handle, _: Handle, _: Log, _: Handle) -> Handle {
+pub(super) unsafe extern "C" fn fence_create(_: Handle, _: Handle, _: Log, _: Handle) -> Handle {
     let fence = created("fence");
     let children = (object("fence11"), object("fence12"));
     world(|world| world.children.insert(fence as usize, children));
     fence
 }
-unsafe extern "C" fn fence_destroy(fence: Handle) {
+pub(super) unsafe extern "C" fn fence_destroy(fence: Handle) {
     event("destroy fence".into());
     close(fence);
 }
-unsafe extern "C" fn fence_d3d11(fence: Handle) -> Handle {
+pub(super) unsafe extern "C" fn fence_d3d11(fence: Handle) -> Handle {
     child(fence, false)
 }
-unsafe extern "C" fn fence_d3d12(fence: Handle) -> Handle {
+pub(super) unsafe extern "C" fn fence_d3d12(fence: Handle) -> Handle {
     child(fence, true)
 }
-unsafe extern "C" fn dump_poll_requested() -> i32 {
+pub(super) unsafe extern "C" fn dump_poll_requested() -> i32 {
     0
 }
-unsafe extern "C" fn dump_inputs(_: Handle, _: *const rsf_sr_frame, _: u32, _: u32) {}
-unsafe extern "C" fn dump_wants(_: *const rsf_frame_record) -> i32 {
+pub(super) unsafe extern "C" fn dump_inputs(_: Handle, _: *const rsf_sr_frame, _: u32, _: u32) {}
+pub(super) unsafe extern "C" fn dump_wants(_: *const rsf_frame_record) -> i32 {
     0
 }
-unsafe extern "C" fn dump_result(_: Handle, _: *const rsf_sr_frame, _: u32, _: i32, _: u32) {}
+pub(super) unsafe extern "C" fn dump_result(_: Handle, _: *const rsf_sr_frame, _: u32, _: i32, _: u32) {}
 
-static PLATFORM: Platform = Platform {
-    session_create,
-    session_select,
-    session_set_auto_exposure,
-    session_evaluate,
-    session_warm_up,
-    session_get_status,
-    session_destroy,
-    validate_frame,
-    immediate_context,
-    query_context4,
-    create_device12,
-    create_queue,
-    create_commands,
-    create_output,
-    create_texture,
-    create_fence,
-    create_event,
-    close_event,
-    describe,
-    same_context,
-    wait_fence,
-    flush,
-    copy_region,
-    copy_resource,
-    context_signal,
-    context_wait,
-    reset_commands,
-    transition,
-    copy_transitioned,
-    submit,
-    queue_wait,
-    queue_signal,
-    device_ready,
-    surface_create,
-    surface_destroy,
-    surface_d3d11,
-    surface_d3d12,
-    fence_create,
-    fence_destroy,
-    fence_d3d11,
-    fence_d3d12,
-    dump_poll_requested,
-    dump_inputs,
-    dump_wants,
-    dump_result,
-};
+// The fakes sr_bridge.rs calls in place of sr_bridge/platform.rs.
+pub(super) mod native {
+    pub(in crate::sr_bridge) use super::{close_event, context_signal, context_wait, copy_region, copy_resource, copy_transitioned, create_commands, create_device12, create_event, create_fence, create_output, create_queue, create_texture, describe, device_ready, dump_inputs, dump_poll_requested, dump_result, dump_wants, fence_create, fence_d3d11, fence_d3d12, fence_destroy, flush, immediate_context, query_context4, queue_signal, queue_wait, reset_commands, same_context, session_create, session_destroy, session_evaluate, session_get_status, session_select, session_set_auto_exposure, session_warm_up, submit, surface_create, surface_d3d11, surface_d3d12, surface_destroy, transition, validate_frame, wait_fence};
+}
 
 unsafe extern "C" fn log(_: Handle, message: *const std::ffi::c_char) {
     let message = unsafe { std::ffi::CStr::from_ptr(message) };
@@ -425,7 +382,7 @@ impl Scene {
         setup.open.auto_exposure = 1;
         setup.open.log = Some(log);
         let mut bridge = ptr::null_mut();
-        let result = unsafe { rsf_core_sr_bridge_create(&setup, &mut bridge, &PLATFORM) };
+        let result = unsafe { rsf_sr_bridge_create(&setup, &mut bridge) };
         assert_eq!(result, OK);
         assert_eq!(refs(device), 2, "the bridge holds the game device");
         let textures = vec![

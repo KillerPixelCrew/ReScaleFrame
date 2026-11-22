@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::d3d11_d3d12::{
-    arm_fence, borrow, close_commands, close_event, context_signal, context_wait, copy_resource,
-    copy_transitioned, create_commands, create_event, create_output, create_texture12, execute,
-    fence_d3d11, fence_d3d12, flush, query, queue_signal, queue_wait, reset_commands,
-    surface_d3d11, surface_d3d12, surface_destroy, transition,
+use crate::d3d11_d3d12::{arm_fence, borrow, close_commands, create_texture12, execute, query};
+// The leaves sr_bridge.rs calls as `native::*`; sr_bridge/tests.rs fakes the same names.
+pub(super) use crate::d3d11_d3d12::{
+    close_event, context_signal, context_wait, copy_resource, copy_transitioned, create_commands,
+    create_event, create_output, fence_d3d11, fence_d3d12, flush, queue_signal, queue_wait,
+    reset_commands, surface_d3d11, surface_d3d12, surface_destroy, transition,
 };
+pub(super) use crate::sr_session::rsf_core_validate_sr_frame as validate_frame;
 use crate::d3d12_fence::rsf_core_d3d12_wait_fence;
 use crate::fg_leases::rsf_d3d12_fence_completed;
 use crate::shared_surface::{
     ABI_VERSION, SurfaceSetup, rsf_shared_fence_create, rsf_shared_fence_destroy,
     rsf_shared_surface_create,
 };
-use crate::sr_session::*;
 // The Rust definitions, not the declarations sr_session.h also provides through crate::sys.
 use crate::sr_session::{
     rsf_sr_session_create, rsf_sr_session_destroy, rsf_sr_session_evaluate,
@@ -42,7 +43,8 @@ unsafe extern "C" {
     fn rsf_input_dump_poll();
     fn rsf_input_dump_requested() -> i32;
     fn rsf_input_dump_begin_record(record: *const rsf_frame_record, backend: u32) -> i32;
-    fn rsf_input_dump_wants(record: *const rsf_frame_record) -> i32;
+    #[link_name = "rsf_input_dump_wants"]
+    pub(super) fn dump_wants(record: *const rsf_frame_record) -> i32;
     fn rsf_input_dump_sr_frame(frame: *const rsf_sr_frame, backend: u32, sdr: u32);
     fn rsf_input_dump_result(
         record: *const rsf_frame_record,
@@ -61,10 +63,10 @@ unsafe extern "C" {
     ) -> i32;
 }
 
-unsafe extern "C" fn session_create(setup: *const rsf_sr_session_setup, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn session_create(setup: *const rsf_sr_session_setup, out: *mut Handle) -> i32 {
     unsafe { rsf_sr_session_create(setup, out.cast()) }
 }
-unsafe extern "C" fn session_select(
+pub(super) unsafe extern "C" fn session_select(
     session: Handle,
     backend: u32,
     quality: u32,
@@ -72,37 +74,37 @@ unsafe extern "C" fn session_select(
 ) -> i32 {
     unsafe { rsf_sr_session_select(session.cast(), backend, quality, version) }
 }
-unsafe extern "C" fn session_set_auto_exposure(session: Handle, enabled: u32) -> i32 {
+pub(super) unsafe extern "C" fn session_set_auto_exposure(session: Handle, enabled: u32) -> i32 {
     unsafe { rsf_sr_session_set_auto_exposure(session.cast(), enabled) }
 }
-unsafe extern "C" fn session_evaluate(
+pub(super) unsafe extern "C" fn session_evaluate(
     session: Handle,
     context: Handle,
     frame: *const rsf_sr_frame,
 ) -> i32 {
     unsafe { rsf_sr_session_evaluate(session.cast(), context, frame) }
 }
-unsafe extern "C" fn session_warm_up(
+pub(super) unsafe extern "C" fn session_warm_up(
     session: Handle,
     context: Handle,
     frame: *const rsf_sr_frame,
 ) -> i32 {
     unsafe { rsf_sr_session_warm_up(session.cast(), context, frame) }
 }
-unsafe extern "C" fn session_get_status(
+pub(super) unsafe extern "C" fn session_get_status(
     session: Handle,
     status: *mut rsf_sr_session_status,
 ) -> i32 {
     unsafe { rsf_sr_session_get_status(session.cast(), status) }
 }
-unsafe extern "C" fn session_destroy(session: Handle) {
+pub(super) unsafe extern "C" fn session_destroy(session: Handle) {
     unsafe { rsf_sr_session_destroy(session.cast()) };
 }
-unsafe extern "C" fn immediate_context(device: Handle) -> Handle {
+pub(super) unsafe extern "C" fn immediate_context(device: Handle) -> Handle {
     unsafe { borrow::<ID3D11Device>(&device).GetImmediateContext() }
         .map_or(null_mut(), Interface::into_raw)
 }
-unsafe extern "C" fn create_device12(device: Handle) -> Handle {
+pub(super) unsafe extern "C" fn create_device12(device: Handle) -> Handle {
     let result = || -> windows::core::Result<_> {
         let dxgi = unsafe { borrow::<ID3D11Device>(&device) }.cast::<IDXGIDevice>()?;
         let adapter = unsafe { dxgi.GetAdapter() }?;
@@ -112,7 +114,7 @@ unsafe extern "C" fn create_device12(device: Handle) -> Handle {
     };
     result().unwrap_or(null_mut())
 }
-unsafe extern "C" fn create_queue(device: Handle) -> Handle {
+pub(super) unsafe extern "C" fn create_queue(device: Handle) -> Handle {
     let desc = D3D12_COMMAND_QUEUE_DESC {
         Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
         ..Default::default()
@@ -120,7 +122,7 @@ unsafe extern "C" fn create_queue(device: Handle) -> Handle {
     unsafe { borrow::<ID3D12Device>(&device).CreateCommandQueue::<ID3D12CommandQueue>(&desc) }
         .map_or(null_mut(), Interface::into_raw)
 }
-unsafe extern "C" fn create_texture(
+pub(super) unsafe extern "C" fn create_texture(
     device: Handle,
     width: u32,
     height: u32,
@@ -137,11 +139,11 @@ unsafe extern "C" fn create_texture(
         )
     }
 }
-unsafe extern "C" fn create_fence(device: Handle) -> Handle {
+pub(super) unsafe extern "C" fn create_fence(device: Handle) -> Handle {
     unsafe { borrow::<ID3D12Device>(&device).CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) }
         .map_or(null_mut(), Interface::into_raw)
 }
-unsafe extern "C" fn describe(texture: Handle, device: Handle, out: *mut TextureDesc) -> i32 {
+pub(super) unsafe extern "C" fn describe(texture: Handle, device: Handle, out: *mut TextureDesc) -> i32 {
     let texture = unsafe { borrow::<ID3D11Texture2D>(&texture) };
     let Ok(owner) = (unsafe { texture.GetDevice() }) else {
         return 0;
@@ -162,11 +164,11 @@ unsafe extern "C" fn describe(texture: Handle, device: Handle, out: *mut Texture
     }
     1
 }
-unsafe extern "C" fn same_context(context: Handle, context4: Handle) -> i32 {
+pub(super) unsafe extern "C" fn same_context(context: Handle, context4: Handle) -> i32 {
     let found = unsafe { borrow::<ID3D11DeviceContext>(&context) }.cast::<ID3D11DeviceContext4>();
     i32::from(found.is_ok_and(|found| found.as_raw() == context4))
 }
-unsafe extern "C" fn wait_fence(fence: Handle, value: u64, event: Handle, timeout_ms: u32) -> i32 {
+pub(super) unsafe extern "C" fn wait_fence(fence: Handle, value: u64, event: Handle, timeout_ms: u32) -> i32 {
     i32::from(
         unsafe {
             rsf_core_d3d12_wait_fence(
@@ -180,7 +182,7 @@ unsafe extern "C" fn wait_fence(fence: Handle, value: u64, event: Handle, timeou
         } >= 0,
     )
 }
-unsafe extern "C" fn copy_region(
+pub(super) unsafe extern "C" fn copy_region(
     context: Handle,
     destination: Handle,
     source: Handle,
@@ -206,17 +208,17 @@ unsafe extern "C" fn copy_region(
         );
     }
 }
-unsafe extern "C" fn submit(queue: Handle, list: Handle) -> i32 {
+pub(super) unsafe extern "C" fn submit(queue: Handle, list: Handle) -> i32 {
     if unsafe { close_commands(list) } == 0 {
         return 0;
     }
     unsafe { execute(queue, list) };
     1
 }
-unsafe extern "C" fn device_ready(device: Handle) -> i32 {
+pub(super) unsafe extern "C" fn device_ready(device: Handle) -> i32 {
     i32::from(unsafe { borrow::<ID3D12Device>(&device).GetDeviceRemovedReason() }.is_ok())
 }
-unsafe extern "C" fn surface_create(
+pub(super) unsafe extern "C" fn surface_create(
     device11: Handle,
     device12: Handle,
     width: u32,
@@ -243,7 +245,7 @@ unsafe extern "C" fn surface_create(
         null_mut()
     }
 }
-unsafe extern "C" fn fence_create(
+pub(super) unsafe extern "C" fn fence_create(
     device11: Handle,
     device12: Handle,
     log: Log,
@@ -256,10 +258,10 @@ unsafe extern "C" fn fence_create(
         null_mut()
     }
 }
-unsafe extern "C" fn fence_destroy(fence: Handle) {
+pub(super) unsafe extern "C" fn fence_destroy(fence: Handle) {
     unsafe { rsf_shared_fence_destroy(fence.cast()) };
 }
-unsafe extern "C" fn dump_poll_requested() -> i32 {
+pub(super) unsafe extern "C" fn dump_poll_requested() -> i32 {
     unsafe {
         rsf_input_dump_poll();
         rsf_input_dump_requested()
@@ -270,7 +272,7 @@ const HDR: u32 = 3;
 const DUMP_DEPTH: u32 = 4;
 const SCALAR: u32 = 5;
 const DENSE_MOTION: u32 = 7;
-unsafe extern "C" fn dump_inputs(
+pub(super) unsafe extern "C" fn dump_inputs(
     context: Handle,
     frame: *const rsf_sr_frame,
     backend: u32,
@@ -333,7 +335,7 @@ unsafe extern "C" fn dump_inputs(
         };
     }
 }
-unsafe extern "C" fn dump_result(
+pub(super) unsafe extern "C" fn dump_result(
     context: Handle,
     frame: *const rsf_sr_frame,
     backend: u32,
@@ -357,50 +359,6 @@ unsafe extern "C" fn dump_result(
     }
 }
 
-pub(super) static WINDOWS: Platform = Platform {
-    session_create,
-    session_select,
-    session_set_auto_exposure,
-    session_evaluate,
-    session_warm_up,
-    session_get_status,
-    session_destroy,
-    validate_frame: rsf_core_validate_sr_frame,
-    immediate_context,
-    query_context4: query::<ID3D11DeviceContext, ID3D11DeviceContext4>,
-    create_device12,
-    create_queue,
-    create_commands,
-    create_output,
-    create_texture,
-    create_fence,
-    create_event,
-    close_event,
-    describe,
-    same_context,
-    wait_fence,
-    flush,
-    copy_region,
-    copy_resource,
-    context_signal,
-    context_wait,
-    reset_commands,
-    transition,
-    copy_transitioned,
-    submit,
-    queue_wait,
-    queue_signal,
-    device_ready,
-    surface_create,
-    surface_destroy,
-    surface_d3d11,
-    surface_d3d12,
-    fence_create,
-    fence_destroy,
-    fence_d3d11,
-    fence_d3d12,
-    dump_poll_requested,
-    dump_inputs,
-    dump_wants: rsf_input_dump_wants,
-    dump_result,
-};
+pub(super) unsafe extern "C" fn query_context4(context: Handle) -> Handle {
+    unsafe { query::<ID3D11DeviceContext, ID3D11DeviceContext4>(context) }
+}
