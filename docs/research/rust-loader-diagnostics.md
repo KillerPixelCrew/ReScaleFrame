@@ -254,3 +254,11 @@ descriptor kind and the original payload spans.
 
 The last native wrapper support header is reduced to the vendor catalog and guarded platform
 declarations. The DXGI and Vulkan platforms now share the Rust per-thread present scope.
+
+## Module writer boundary
+
+The PE relayout, import scan and final sidecar publication now belong to
+`loader/diagnostics/src/module_dump_writer.c`. That translation unit depends on the private
+image and module inventory helpers, the protected reader, and the sidecar sections. The
+engine patch and console callbacks stay in their existing native translation unit. The
+writer's algorithms and public dump declarations are unchanged.

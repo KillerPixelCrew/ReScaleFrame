@@ -21,6 +21,10 @@ typedef struct rsf_module_entry {
     size_t size;
 } rsf_module_entry;
 
+const void* rsf_dump_resolve_base(const void* module_base);
+const IMAGE_NT_HEADERS64* rsf_dump_nt_headers(const void* base);
+void rsf_dump_collect_modules(rsf_module_entry* entries, size_t capacity, size_t* count);
+
 /* Per-section result gathered while the dump is written. */
 typedef struct rsf_section_digest {
     int valid;
