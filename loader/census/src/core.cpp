@@ -9,6 +9,7 @@
 
 #include "census_internal.h"
 #include "wrapper_platform.h"
+#include "stats_platform.h"
 
 extern "C" void rsf_census_static_scan(void (*add)(const char*, const char*, uint64_t, uint64_t));
 
@@ -61,31 +62,11 @@ void register_wrappers_vk(void** table) noexcept {
 
 namespace {
 
-constexpr uint32_t kSiteCapacity = 8192;
-constexpr uint32_t kSiteThreads = 6;
 constexpr uint32_t kModuleCapacity = 512;
 constexpr uint32_t kThreadCapacity = 256;
-constexpr uint32_t kQueueCapacity = 128;
 constexpr uint32_t kFindingCapacity = 192;
-constexpr uint32_t kHistBuckets = 66; // 0 unused, 1..64 exact, 65 means 65 or more
 constexpr size_t kSummaryCapacity = 4u << 20;
 constexpr size_t kFileBuffer = 256u << 10;
-
-struct Site {
-    std::atomic<uint64_t> key{0};
-    std::atomic<uint64_t> count{0};
-    std::atomic<uint64_t> first_present{0}; // present index + 1, 0 when unset
-    std::atomic<uint64_t> last_present{0};
-    std::atomic<uint32_t> tids[kSiteThreads]{};
-    std::atomic<uint32_t> tid_count{0};
-};
-
-struct FnStat {
-    std::atomic<uint64_t> calls{0};
-    std::atomic<uint32_t> cur{0};
-    std::atomic<uint64_t> hist[kHistBuckets]{};
-    std::atomic<uint64_t> presents_with_calls{0};
-};
 
 struct ModuleEntry {
     std::atomic<uint64_t> base{0};
@@ -97,18 +78,6 @@ struct ThreadEntry {
     std::atomic<uint32_t> tid{0};
     std::atomic<uint64_t> calls{0};
     char name[40]{};
-};
-
-struct QueueStat {
-    std::atomic<uint64_t> ptr{0};
-    std::atomic<uint8_t> kind{0};
-    std::atomic<uint32_t> a{0}, b{0}, c{0};
-    std::atomic<uint64_t> calls{0};
-    std::atomic<uint64_t> lists{0};
-    std::atomic<uint32_t> cur{0};
-    std::atomic<uint64_t> first_present{0};
-    std::atomic<uint64_t> last_present{0};
-    std::atomic<uint64_t> hist[kHistBuckets]{};
 };
 
 struct Finding {
@@ -132,22 +101,13 @@ struct State {
 
     LARGE_INTEGER qpc_freq{};
     LARGE_INTEGER qpc_start{};
-    std::atomic<uint64_t> present{0};
-
-    Site* sites = nullptr;
-    std::atomic<uint32_t> site_count{0};
-    std::atomic<uint32_t> site_overflow{0};
-    FnStat fn[kFnCount];
-
     ModuleEntry modules[kModuleCapacity];
     std::atomic<uint32_t> module_count{0};
     ThreadEntry threads[kThreadCapacity];
-    QueueStat queues[kQueueCapacity];
 
     Finding findings[kFindingCapacity];
     std::atomic<uint32_t> finding_count{0};
 
-    std::atomic<uint64_t> calls_seen{0};
     std::atomic<uint64_t> queued{0};
     std::atomic<uint64_t> written{0};
     std::atomic<uint64_t> dropped_queue{0};
@@ -213,25 +173,6 @@ void resolve_module_name(uint32_t i) noexcept {
 }
 
 // ---- Sites and thread table -------------------------------------------------------------------
-Site* find_site(uint64_t key) noexcept {
-    uint64_t h = key * 0x9E3779B97F4A7C15ull;
-    uint32_t i = static_cast<uint32_t>(h >> 40) & (kSiteCapacity - 1);
-    for (uint32_t probe = 0; probe < 64; ++probe, i = (i + 1) & (kSiteCapacity - 1)) {
-        Site& s = g.sites[i];
-        uint64_t k = s.key.load(std::memory_order_acquire);
-        if (k == key) return &s;
-        if (k == 0) {
-            uint64_t expected = 0;
-            if (s.key.compare_exchange_strong(expected, key)) {
-                g.site_count.fetch_add(1, std::memory_order_relaxed);
-                return &s;
-            }
-            if (expected == key) return &s;
-        }
-    }
-    return nullptr;
-}
-
 void note_thread(uint32_t tid) noexcept {
     uint32_t i = (tid * 2654435761u >> 8) & (kThreadCapacity - 1);
     for (uint32_t probe = 0; probe < kThreadCapacity; ++probe, i = (i + 1) & (kThreadCapacity - 1)) {
@@ -324,27 +265,6 @@ void drain_locked() noexcept {
     rsf_census_record_drain(&writer);
 }
 
-void roll_hist(std::atomic<uint32_t>& cur, std::atomic<uint64_t>* hist) noexcept {
-    uint32_t c = cur.exchange(0, std::memory_order_relaxed);
-    if (c) hist[c >= 65 ? 65 : c].fetch_add(1, std::memory_order_relaxed);
-}
-
-void summary_hist(Json& j, const std::atomic<uint64_t>* hist) noexcept {
-    j.obj("calls_per_present");
-    for (uint32_t b = 1; b < kHistBuckets; ++b) {
-        uint64_t n = hist[b].load(std::memory_order_relaxed);
-        if (!n) continue;
-        char key[8];
-        if (b == kHistBuckets - 1) {
-            std::snprintf(key, sizeof(key), "65+");
-        } else {
-            std::snprintf(key, sizeof(key), "%u", b);
-        }
-        j.u64(key, n);
-    }
-    j.end_obj();
-}
-
 void write_summary_locked() noexcept {
     if (!g.summary_buf) return;
     Json j(g.summary_buf, kSummaryCapacity - 16);
@@ -356,7 +276,10 @@ void write_summary_locked() noexcept {
     j.str("process", slash ? slash + 1 : exe);
     j.u64("pid", GetCurrentProcessId());
     j.u64("elapsed_ms", now_us() / 1000);
-    j.u64("present_index", g.present.load());
+    uint64_t calls_seen = 0, present = 0;
+    uint32_t sites = 0, site_overflow = 0;
+    rsf_census_stats_counts(&calls_seen, &present, &sites, &site_overflow);
+    j.u64("present_index", present);
     j.obj("budget");
     j.u64("byte_budget", g.budget);
     j.u64("bytes_written", g.bytes_written.load());
@@ -365,55 +288,25 @@ void write_summary_locked() noexcept {
     j.u64("sample_interval", g.interval);
     j.end_obj();
     j.obj("counters");
-    j.u64("calls_seen", g.calls_seen.load());
+    j.u64("calls_seen", calls_seen);
     j.u64("records_queued", g.queued.load());
     j.u64("records_written", g.written.load());
     j.u64("dropped_queue", g.dropped_queue.load());
     j.u64("dropped_budget", g.dropped_budget.load());
     j.u64("dropped_size", g.dropped_size.load());
-    j.u64("sites", g.site_count.load());
-    j.u64("site_overflow", g.site_overflow.load());
+    j.u64("sites", sites);
+    j.u64("site_overflow", site_overflow);
     j.end_obj();
 
-    j.arr("sites");
-    for (uint32_t i = 0; i < kSiteCapacity; ++i) {
-        const Site& s = g.sites[i];
-        uint64_t key = s.key.load(std::memory_order_acquire);
-        if (!key) continue;
-        const uint32_t fi = static_cast<uint32_t>(key >> 48);
-        const uint32_t mi = static_cast<uint32_t>(key >> 32) & 0xFFFF;
-        resolve_module_name(mi);
-        j.obj();
-        j.str("api", kFns[fi].api);
-        j.str("function", kFns[fi].name ? kFns[fi].name : kFns[fi].id);
-        j.str("module", g.modules[mi].name);
-        j.hex("rva", key & 0xFFFFFFFFull);
-        j.arr("threads");
-        uint32_t nt = s.tid_count.load();
-        for (uint32_t t = 0; t < nt && t < kSiteThreads; ++t) j.u64(nullptr, s.tids[t].load());
-        j.end_arr();
-        if (nt > kSiteThreads) j.u64("threads_beyond_listed", nt - kSiteThreads);
-        j.u64("count", s.count.load());
-        uint64_t fp = s.first_present.load();
-        j.u64("first_present", fp ? fp - 1 : 0);
-        uint64_t lp = s.last_present.load();
-        j.u64("last_present", lp ? lp - 1 : 0);
-        j.end_obj();
-    }
-    j.end_arr();
-
-    j.arr("histograms");
-    for (uint32_t f = 0; f < kFnCount; ++f) {
-        const FnStat& fs = g.fn[f];
-        uint64_t calls = fs.calls.load();
-        if (!calls) continue;
-        j.obj();
-        j.str("function", kFns[f].name ? kFns[f].name : kFns[f].id);
-        j.u64("calls", calls);
-        summary_hist(j, fs.hist);
-        j.end_obj();
-    }
-    j.end_arr();
+    static const rsf_census_stats_names names = {
+        kFns,
+        [](uint32_t index) -> const char* {
+            resolve_module_name(index);
+            return g.modules[index].name;
+        },
+    };
+    rsf_census_stats_sites(j.state(), &names);
+    rsf_census_stats_histograms(j.state(), kFns);
 
     j.arr("threads");
     for (uint32_t i = 0; i < kThreadCapacity; ++i) {
@@ -427,32 +320,7 @@ void write_summary_locked() noexcept {
     }
     j.end_arr();
 
-    j.arr("queues");
-    for (uint32_t i = 0; i < kQueueCapacity; ++i) {
-        const QueueStat& q = g.queues[i];
-        uint64_t p = q.ptr.load(std::memory_order_acquire);
-        if (!p) continue;
-        j.obj();
-        j.str("kind", q.kind.load() == static_cast<uint8_t>(QueueKind::D3d12) ? "d3d12" : "vulkan");
-        j.hex("queue", p);
-        if (q.kind.load() == static_cast<uint8_t>(QueueKind::D3d12)) {
-            j.u64("type", q.a.load());
-            j.i64("priority", static_cast<int32_t>(q.b.load()));
-            j.hex("flags", q.c.load());
-        } else {
-            j.u64("family", q.a.load());
-            j.u64("index", q.b.load());
-        }
-        j.u64("submit_calls", q.calls.load());
-        j.u64("lists_or_batches", q.lists.load());
-        uint64_t fp = q.first_present.load();
-        j.u64("first_present", fp ? fp - 1 : 0);
-        uint64_t lp = q.last_present.load();
-        j.u64("last_present", lp ? lp - 1 : 0);
-        summary_hist(j, q.hist);
-        j.end_obj();
-    }
-    j.end_arr();
+    rsf_census_stats_queues(j.state());
 
     hooks_summary(j);
 
@@ -524,7 +392,7 @@ LONG CALLBACK fatal_exception(EXCEPTION_POINTERS* info) noexcept {
             c.json().str("event", "fatal_exception");
             c.json().hex("code", code);
             c.json().hex("address", reinterpret_cast<uint64_t>(info->ExceptionRecord->ExceptionAddress));
-            c.json().u64("present", g.present.load());
+            c.json().u64("present", rsf_census_stats_present_index());
         }
         c.finish(code);
     }
@@ -582,44 +450,18 @@ void Json::f32(const char* key, double v) noexcept {
 // ---- Call -------------------------------------------------------------------------------------
 Call::Call(Fn fn, void* return_address) noexcept : fn_(fn), full_(false), json_(buf_, kBodyMax) {
     if (!g.active.load(std::memory_order_acquire)) return;
-    g.calls_seen.fetch_add(1, std::memory_order_relaxed);
-    FnStat& fs = g.fn[idx(fn)];
-    ord_ = fs.calls.fetch_add(1, std::memory_order_relaxed) + 1;
-    fs.cur.fetch_add(1, std::memory_order_relaxed);
-
     PVOID base = nullptr;
     if (g.pc_to_header) g.pc_to_header(return_address, &base);
     base_ = reinterpret_cast<uint64_t>(base);
     rva_ = base ? static_cast<uint32_t>(reinterpret_cast<uintptr_t>(return_address) - base_)
                 : static_cast<uint32_t>(reinterpret_cast<uintptr_t>(return_address));
     const uint32_t mi = module_index(base_);
-    const uint64_t key = (static_cast<uint64_t>(idx(fn)) << 48) | (static_cast<uint64_t>(mi) << 32) | rva_;
-    Site* s = find_site(key ? key : 1);
-    if (!s) {
-        g.site_overflow.fetch_add(1, std::memory_order_relaxed);
-        return;
-    }
     tid_ = GetCurrentThreadId();
-    const uint64_t present = g.present.load(std::memory_order_relaxed);
-    site_ord_ = s->count.fetch_add(1, std::memory_order_relaxed) + 1;
-    uint64_t zero = 0;
-    s->first_present.compare_exchange_strong(zero, present + 1);
-    s->last_present.store(present + 1, std::memory_order_relaxed);
-    note_thread(tid_);
-    uint32_t nt = s->tid_count.load(std::memory_order_relaxed);
-    bool seen = false;
-    for (uint32_t i = 0; i < nt && i < kSiteThreads; ++i) {
-        if (s->tids[i].load(std::memory_order_relaxed) == tid_) {
-            seen = true;
-            break;
-        }
-    }
-    if (!seen) {
-        uint32_t slot = s->tid_count.fetch_add(1, std::memory_order_relaxed);
-        if (slot < kSiteThreads) s->tids[slot].store(tid_, std::memory_order_relaxed);
-    }
-    const uint64_t n = site_ord_ - 1;
-    full_ = n < g.cap || (g.interval && (n - g.cap) % g.interval == 0);
+    rsf_census_sample sample{};
+    full_ = rsf_census_stats_sample(static_cast<uint16_t>(fn), mi, rva_, tid_, &sample);
+    ord_ = sample.ordinal;
+    site_ord_ = sample.site_ordinal;
+    if (site_ord_) note_thread(tid_);
     if (full_) {
         t_us_ = now_us();
         // Walk from here and keep the frames from the intercepted call's caller outward. The walk
@@ -653,7 +495,7 @@ void Call::finish(uint64_t ret) noexcept {
     c->len = static_cast<uint32_t>(json_.size());
     c->fn = static_cast<uint16_t>(idx(fn_));
     c->t_us = t_us_;
-    c->present = g.present.load(std::memory_order_relaxed);
+    c->present = rsf_census_stats_present_index();
     c->ord = ord_;
     c->site_ord = site_ord_;
     c->base = base_;
@@ -672,59 +514,17 @@ void Call::finish(uint64_t ret) noexcept {
 
 // ---- Present and queue statistics -------------------------------------------------------------
 void note_present_begin() noexcept {
-    if (!g.active.load(std::memory_order_acquire)) return;
-    for (size_t f = 0; f < kFnCount; ++f) roll_hist(g.fn[f].cur, g.fn[f].hist);
-    for (uint32_t i = 0; i < kQueueCapacity; ++i) {
-        if (g.queues[i].ptr.load(std::memory_order_acquire)) roll_hist(g.queues[i].cur, g.queues[i].hist);
-    }
-    g.present.fetch_add(1, std::memory_order_relaxed);
+    if (installed()) rsf_census_stats_present();
 }
 
-uint64_t present_index() noexcept { return g.present.load(std::memory_order_relaxed); }
-
-namespace {
-QueueStat* find_queue(QueueKind kind, const void* queue, bool create) noexcept {
-    const uint64_t p = reinterpret_cast<uint64_t>(queue);
-    if (!p) return nullptr;
-    uint32_t i = static_cast<uint32_t>((p >> 4) * 2654435761u >> 8) & (kQueueCapacity - 1);
-    for (uint32_t probe = 0; probe < kQueueCapacity; ++probe, i = (i + 1) & (kQueueCapacity - 1)) {
-        QueueStat& q = g.queues[i];
-        uint64_t cur = q.ptr.load(std::memory_order_acquire);
-        if (cur == p && q.kind.load() == static_cast<uint8_t>(kind)) return &q;
-        if (cur == 0) {
-            if (!create) return nullptr;
-            uint64_t expected = 0;
-            if (q.ptr.compare_exchange_strong(expected, p)) {
-                q.kind.store(static_cast<uint8_t>(kind));
-                return &q;
-            }
-        }
-    }
-    return nullptr;
-}
-} // namespace
+uint64_t present_index() noexcept { return rsf_census_stats_present_index(); }
 
 void queue_describe(QueueKind kind, const void* queue, uint32_t a, uint32_t b, uint32_t c) noexcept {
-    if (!g.active.load(std::memory_order_acquire)) return;
-    QueueStat* q = find_queue(kind, queue, true);
-    if (!q) return;
-    q->a.store(a);
-    q->b.store(b);
-    q->c.store(c);
+    if (installed()) rsf_census_stats_queue_describe(static_cast<uint8_t>(kind), queue, a, b, c);
 }
 
 bool queue_submit(QueueKind kind, const void* queue, uint32_t lists) noexcept {
-    if (!g.active.load(std::memory_order_acquire)) return false;
-    QueueStat* q = find_queue(kind, queue, true);
-    if (!q) return false;
-    const uint64_t present = g.present.load(std::memory_order_relaxed);
-    const bool first = q->calls.fetch_add(1, std::memory_order_relaxed) == 0;
-    q->lists.fetch_add(lists, std::memory_order_relaxed);
-    q->cur.fetch_add(1, std::memory_order_relaxed);
-    uint64_t zero = 0;
-    q->first_present.compare_exchange_strong(zero, present + 1);
-    q->last_present.store(present + 1, std::memory_order_relaxed);
-    return first;
+    return installed() && rsf_census_stats_queue_submit(static_cast<uint8_t>(kind), queue, lists);
 }
 
 void add_finding(const char* vendor, const char* what, uint64_t rva, uint64_t function_rva) noexcept {
@@ -773,14 +573,14 @@ rsf_census_result core_install(const rsf_census_options* opt) noexcept {
     }
 
     if (!rsf_census_record_init()) return RSF_CENSUS_ERROR_IO;
-    g.sites = static_cast<Site*>(VirtualAlloc(nullptr, sizeof(Site) * kSiteCapacity,
-                                              MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    if (!rsf_census_stats_init(static_cast<uint16_t>(kFnCount), g.cap, g.interval)) {
+        return RSF_CENSUS_ERROR_IO;
+    }
     g.file_buf = static_cast<char*>(VirtualAlloc(nullptr, kFileBuffer, MEM_COMMIT | MEM_RESERVE,
                                                  PAGE_READWRITE));
     g.summary_buf = static_cast<char*>(VirtualAlloc(nullptr, kSummaryCapacity, MEM_COMMIT | MEM_RESERVE,
                                                     PAGE_READWRITE));
-    if (!g.sites || !g.file_buf || !g.summary_buf) return RSF_CENSUS_ERROR_IO;
-    for (uint32_t i = 0; i < kSiteCapacity; ++i) new (&g.sites[i]) Site();
+    if (!g.file_buf || !g.summary_buf) return RSF_CENSUS_ERROR_IO;
 
     wchar_t path[MAX_PATH + 32];
     std::swprintf(path, std::size(path), L"%ls\\census.jsonl", g.dir);
@@ -847,16 +647,14 @@ rsf_census_result rsf_census_flush(void) {
 rsf_census_result rsf_census_get_counters(rsf_census_counters* out) {
     if (!out || out->struct_size < sizeof(rsf_census_counters)) return RSF_CENSUS_ERROR_INVALID_ARGUMENT;
     if (out->abi_version != RSF_CENSUS_ABI_VERSION) return RSF_CENSUS_ERROR_ABI_MISMATCH;
-    out->calls_seen = g.calls_seen.load();
+    rsf_census_stats_counts(&out->calls_seen, &out->present_index,
+                            &out->sites, &out->site_overflow);
     out->records_queued = g.queued.load();
     out->records_written = g.written.load();
     out->records_dropped_queue = g.dropped_queue.load();
     out->records_dropped_budget = g.dropped_budget.load();
     out->records_dropped_size = g.dropped_size.load();
     out->bytes_written = g.bytes_written.load();
-    out->present_index = g.present.load();
-    out->sites = g.site_count.load();
-    out->site_overflow = g.site_overflow.load();
     hook_counts(out->hooks_installed, out->hook_conflicts, out->modules_hooked);
     out->static_findings = g.finding_count.load() > kFindingCapacity ? kFindingCapacity : g.finding_count.load();
     return RSF_CENSUS_OK;

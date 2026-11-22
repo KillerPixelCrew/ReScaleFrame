@@ -173,6 +173,8 @@ the existing writer lock, serializes the same JSONL envelope and sends the resul
 to the current file writer. The line scratch buffer belongs to the queue so fatal-error
 draining does not put a full JSONL line on the crash thread's stack.
 
-The SEH and executable-memory probes live in a separate native platform file. The C++
-census core still owns installation, sampling and aggregation, native writer scheduling,
-and the on-disk byte budget.
+The SEH and executable-memory probes live in a separate native platform file. Rust owns
+call-site admission, the sampling cadence, per-function and per-queue histograms, and
+present indexing. The same summary entries keep their original array order, capacities,
+and field names. The C++ census core still owns installation, native writer scheduling,
+module and thread naming, and the on-disk byte budget.

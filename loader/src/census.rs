@@ -8,5 +8,7 @@ mod json_abi;
 mod record;
 mod record_abi;
 mod static_scan;
+mod stats;
+mod stats_abi;
 mod vulkan;
 mod wrapper_abi;
