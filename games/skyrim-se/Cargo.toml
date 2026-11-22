@@ -24,6 +24,10 @@ windows-sys = { workspace = true, features = [
 ] }
 winapi = { version = "=0.3.9", features = ["d3d11", "dxgi", "processthreadsapi", "profileapi", "winuser"] }
 
+[features]
+# rsf_skyrim_input_fixture, called by the skyrim_input ctest executable; the plugin archive is built without it.
+fixtures = []
+
 [build-dependencies]
 rsf-bindgen = { path = "../../tools/bindgen" }
 cc.workspace = true

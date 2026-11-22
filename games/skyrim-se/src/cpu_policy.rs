@@ -2,6 +2,7 @@
 //! CPU and render facts for the matched Skyrim executable. The native detours own the
 //! callback leases and original calls. The host receives these facts at the native boundaries.
 
+#[cfg(feature = "fixtures")]
 mod fixture;
 
 use crate::cpu_native::{JOB_MANAGER, MAIN, PLAYER, REQUESTED_MODE, RUNNING_MODE};
