@@ -35,7 +35,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 /// RSF_BACKEND_ERROR_INVALID_ARGUMENT and RSF_BACKEND_ERROR_FEATURE_FAILED, cast macros;
 /// package.cpp asserts them.
 const BACKEND_INVALID_ARGUMENT: i32 = -1;
-const BACKEND_FEATURE_FAILED: i32 = -9;
+pub(super) const BACKEND_FEATURE_FAILED: i32 = -9;
 /// The kinds rsfu_input accepts.
 const INPUT_KINDS: u32 = RSF_GAME_INPUT_KEYBOARD | RSF_GAME_INPUT_MOUSE | RSF_GAME_INPUT_CONTROLLER;
 /// winuser.h's message ranges and raw-input device types; package.cpp asserts them.
@@ -343,18 +343,19 @@ impl Package {
         }
     }
 
-    /// Plugin unload, after Unity's device shutdown: the input window gets its procedure back
-    /// while ours is still installed, then the log closes. Later lines reach the debugger only.
-    pub(super) fn unload(&self, leaves: &Leaves) {
-        {
-            let mut window = lock(&self.services.window);
-            let previous = self.services.previous.load(SeqCst);
-            if !window.is_none() && !previous.is_null() {
-                leaves.restore(*window, previous);
-            }
-            *window = Handle::NONE;
-            self.services.previous.store(null_mut(), SeqCst);
+    pub(super) fn stop_window_input(&self, leaves: &Leaves) {
+        let mut window = lock(&self.services.window);
+        let previous = self.services.previous.load(SeqCst);
+        if !window.is_none() && !previous.is_null() {
+            leaves.restore(*window, previous);
         }
+        *window = Handle::NONE;
+        self.services.previous.store(null_mut(), SeqCst);
+    }
+
+    /// A WNDPROC that the platform could not detach keeps its own forwarding receipt.
+    pub(super) fn unload(&self, leaves: &Leaves) {
+        self.stop_window_input(leaves);
         let mut file = lock(&self.services.log);
         if !file.is_none() {
             leaves.log_close(*file);

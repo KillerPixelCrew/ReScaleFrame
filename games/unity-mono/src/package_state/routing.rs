@@ -172,16 +172,21 @@ impl Package {
             return;
         }
         leaves.bridge_unload();
+        self.presentation.device_retired();
         self.device.store(DEVICE_WAITING, SeqCst);
     }
 
     /// rsfu_shutdown after the preview is hidden: nothing to retire while waiting, a retained
     /// device refuses, a ready one reports its session's retirement.
     pub(super) fn shutdown(&self, leaves: &Leaves) -> bool {
-        match self.device.load(SeqCst) {
+        let retired = match self.device.load(SeqCst) {
             DEVICE_READY => self.retire(leaves),
             device => device == DEVICE_WAITING,
+        };
+        if retired {
+            self.stop_window_input(leaves);
         }
+        retired
     }
 }
 

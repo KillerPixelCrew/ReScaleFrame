@@ -331,12 +331,16 @@ impl Leaves {
         (unsafe { (self.sr_create)(commands, setup, &mut result, &mut sr) } != 0)
             .then_some((result, sr))
     }
-    /// The context's planned input extents. The C++ never read the result; they stay zero on a
-    /// refusal.
-    fn sr_plan(&self, sr: *mut rsf_sr12) -> (u32, u32) {
+    fn sr_plan(&self, sr: *mut rsf_sr12, output: (u32, u32)) -> Result<(u32, u32), i32> {
         let (mut width, mut height) = (0u32, 0u32);
-        unsafe { (self.sr_plan)(sr, &mut width, &mut height) };
-        (width, height)
+        let result = unsafe { (self.sr_plan)(sr, &mut width, &mut height) };
+        if result != BACKEND_OK {
+            return Err(result);
+        }
+        if width == 0 || height == 0 || width > output.0 || height > output.1 {
+            return Err(services::BACKEND_FEATURE_FAILED);
+        }
+        Ok((width, height))
     }
     /// The stored sharpening, or the Runtime defaults while its struct_size is zero.
     fn sharpening(&self, stored: &rsf_sharpening_options) -> rsf_sharpening_options {
@@ -498,7 +502,7 @@ impl Package {
         } else {
             leaves.present_switch_result()
         };
-        let latency = leaves.latency_status();
+        let latency = leaves.latency_status().unwrap_or_default();
         let mut state = self.lock();
         let status = &mut state.status;
         status.fg_backend = fg_backend;
@@ -506,8 +510,6 @@ impl Package {
         status.fg_active = fg.vendor.active;
         status.max_generated_frames = fg.vendor.max_generated_frames;
         status.generated_frames = fg.vendor.effective_generated_frames;
-        status.latency_available = fg.vendor.low_latency_available;
-        status.latency_mode = fg.vendor.effective_reflex;
         status.reason = fg.reason;
         status.tagged_frames = fg.tagged_frames;
         status.fg_result = fg_result;
@@ -516,20 +518,20 @@ impl Package {
             status.sr_result = failure;
             status.active_sr = 0;
         }
-        if let Some(latency) = latency {
-            status.sleep_calls = latency.paced_frames;
-            status.marker_calls = latency.marker_calls;
-            status.pcl_available = latency.pcl_available;
-            status.latency_report_available = latency.report_available;
-            status.latency_owner = latency.owner;
-            status.keyboard_inputs = latency.events.input_events[0];
-            status.mouse_inputs = latency.events.input_events[1];
-            status.controller_inputs = latency.events.input_events[2];
-            status.pcl_pings = latency.events.pings;
-            status.input_substitutes = latency.events.substitutes;
-            status.order_violations = latency.events.order_violations;
-            status.derived_boundaries = latency.derived_boundaries;
-        }
+        status.latency_available = latency.available;
+        status.latency_mode = latency.effective_mode;
+        status.sleep_calls = latency.paced_frames;
+        status.marker_calls = latency.marker_calls;
+        status.pcl_available = latency.pcl_available;
+        status.latency_report_available = latency.report_available;
+        status.latency_owner = latency.owner;
+        status.keyboard_inputs = latency.events.input_events[0];
+        status.mouse_inputs = latency.events.input_events[1];
+        status.controller_inputs = latency.events.input_events[2];
+        status.pcl_pings = latency.events.pings;
+        status.input_substitutes = latency.events.substitutes;
+        status.order_violations = latency.events.order_violations;
+        status.derived_boundaries = latency.derived_boundaries;
         *status
     }
 
@@ -736,8 +738,20 @@ impl Package {
         if sr.is_null() {
             return None;
         }
+        let render = match leaves.sr_plan(sr, output) {
+            Ok(render) => render,
+            Err(result) => {
+                leaves.sr_destroy(sr);
+                self.temporal_ready.store(false, SeqCst);
+                let mut state = self.lock();
+                state.plan = EMPTY_PLAN;
+                state.status.active_sr = 0;
+                state.status.sr_result = result;
+                return None;
+            }
+        };
         let mut view = View::created(sr, backend, output);
-        view.render = leaves.sr_plan(sr);
+        view.render = render;
         self.view_planned(backend, output, view.render);
         self.log(
             leaves,
@@ -941,6 +955,7 @@ mod tests {
         vendor_creates: bool,
         create_result: i32,
         evaluate_result: i32,
+        plan_result: i32,
         /// A context's planned input extents.
         plan: (u32, u32),
         install_result: i32,
@@ -984,6 +999,7 @@ mod tests {
         vendor_creates: true,
         create_result: 0,
         evaluate_result: 0,
+        plan_result: 0,
         plan: (1280, 720),
         install_result: 0,
         owner: true,
@@ -1068,6 +1084,8 @@ mod tests {
             return 0;
         }
         status.paced_frames = 11;
+        status.available = 1;
+        status.effective_mode = 1;
         status.owner = 2;
         status.events.input_events = [4, 5, 6];
         status.derived_boundaries = 8;
@@ -1162,7 +1180,7 @@ mod tests {
             width.write(planned_width);
             height.write(planned_height);
         }
-        0
+        fake().plan_result
     }
     unsafe extern "C" fn sharpening_defaults(output: *mut rsf_sharpening_options) {
         call("defaults".into());
@@ -1709,7 +1727,7 @@ mod tests {
             (status.max_generated_frames, status.generated_frames),
             (3, 2)
         );
-        assert_eq!((status.latency_available, status.latency_mode), (1, 2));
+        assert_eq!((status.latency_available, status.latency_mode), (1, 1));
         assert_eq!(
             (status.reason, status.tagged_frames, status.fg_result),
             (3, 9, -7)
@@ -1735,7 +1753,9 @@ mod tests {
             (status.fg_result, status.sr_result, status.active_sr),
             (-3, -9, 0)
         );
-        assert_eq!(status.sleep_calls, 1);
+        assert_eq!(status.sleep_calls, 0);
+        assert_eq!((status.latency_available, status.latency_mode), (0, 0));
+        assert_eq!((status.latency_owner, status.keyboard_inputs), (0, 0));
         // The merge is stored.
         assert_eq!(package.lock().status.fg_backend, 5);
         let counters = package.frame_counters(&leaves);
@@ -2073,6 +2093,12 @@ mod tests {
         package.request_generation(&leaves);
         assert_eq!(calls(), ["owner", "backend"]);
         assert_eq!(package.lock().status.fg_result, 0);
+        package.device_event(&leaves, true);
+        package.device_event(&leaves, false);
+        package.device_event(&leaves, true);
+        calls();
+        package.request_generation(&leaves);
+        assert_eq!(calls(), ["owner", "fg default", "backend", "request 3"]);
         // Another provider is requested and its result recorded.
         package.lock().settings.fg_backend = RSF_FG_BACKEND_DLSS;
         set(|f| f.request_result = -2);
@@ -2085,6 +2111,29 @@ mod tests {
         for _ in 0..2 {
             package.request_generation(&leaves);
             assert_eq!(calls(), ["owner", "fg default", "backend", "request 0"]);
+        }
+    }
+
+    #[test]
+    fn a_refused_or_invalid_plan_releases_the_context_without_publishing() {
+        let package = Package::new();
+        let leaves = leaves();
+        let pass = sr_pass(1, (1920, 1080), (960, 540));
+        for (result, extent, expected) in [
+            (-4, (960, 540), -4),
+            (0, (0, 540), services::BACKEND_FEATURE_FAILED),
+            (0, (1921, 540), services::BACKEND_FEATURE_FAILED),
+        ] {
+            set(|f| {
+                f.plan_result = result;
+                f.plan = extent;
+            });
+            package.render(&leaves, list(0xa0), &pass);
+            assert_eq!(&calls()[2..], ["plan", "destroy 0x103"]);
+            assert!(!package.temporal_ready.load(SeqCst));
+            let state = package.lock();
+            assert_eq!(state.plan.enabled, 0);
+            assert_eq!(state.status.sr_result, expected);
         }
     }
 

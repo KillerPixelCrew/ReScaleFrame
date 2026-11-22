@@ -25,6 +25,7 @@
 #include <IUnityGraphics.h>
 #include <IUnityGraphicsD3D12.h>
 #include <wrl/client.h>
+#include <atomic>
 #include <mutex>
 #include <string>
 #include <cstring>
@@ -60,12 +61,25 @@ IUnityGraphics* graphics = nullptr;
 // The table, defined below; the log, window guard, render callback, window procedure and exports
 // hand it to Rust.
 const rsf_unity_package_platform* leaves() noexcept;
-// The hooked input window's procedure: services.rs reports the message and names the procedure
-// it goes on to.
+// The receipt outlives the Rust session. A later subclass can still call us after Unity has
+// unloaded the plugin, so keep a module reference until the owner thread verifies detachment.
+std::atomic<WNDPROC> input_previous{nullptr};
+std::atomic<bool> input_enabled{false};
+std::atomic<bool> input_destroyed{false};
+std::atomic<uint32_t> input_calls{0};
+HWND input_window = nullptr;
+DWORD input_owner = 0;
+HMODULE input_module = nullptr;
+
 LRESULT CALLBACK input_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 {
-    const auto previous = reinterpret_cast<WNDPROC>(rsf_unity_package_window_message(message, lparam, leaves()));
-    return previous ? CallWindowProcW(previous, hwnd, message, wparam, lparam) : DefWindowProcW(hwnd, message, wparam, lparam);
+    ++input_calls;
+    const auto previous = input_previous.load();
+    if (input_enabled.load()) rsf_unity_package_window_message(message, lparam, leaves());
+    const auto result = CallWindowProcW(previous, hwnd, message, wparam, lparam);
+    if (message == WM_NCDESTROY) input_destroyed.store(true);
+    --input_calls;
+    return result;
 }
 // rsf_unity_package_platform's input-window leaves.
 BOOL CALLBACK find_player_window(HWND hwnd, LPARAM found)
@@ -81,12 +95,53 @@ void* player_window() noexcept
 }
 void* subclass(void* window) noexcept
 {
-    return reinterpret_cast<void*>(SetWindowLongPtrW(static_cast<HWND>(window), GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(input_proc)));
+    const auto hwnd = static_cast<HWND>(window);
+    const auto owner = GetCurrentThreadId();
+    if (GetWindowThreadProcessId(hwnd, nullptr) != owner) return nullptr;
+    if (input_module) {
+        // A retained chain can still be serving this window. Reuse its receipt on reload.
+        if (!input_destroyed.load()) {
+            if (input_window != hwnd || input_owner != owner) return nullptr;
+            input_enabled.store(true);
+            return reinterpret_cast<void*>(input_previous.load());
+        }
+        if (input_owner != owner || input_calls.load() != 0) return nullptr;
+        FreeLibrary(input_module);
+        input_module = nullptr;
+    }
+    const auto previous = reinterpret_cast<WNDPROC>(GetWindowLongPtrW(hwnd, GWLP_WNDPROC));
+    if (!previous || previous == input_proc) return nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+            reinterpret_cast<LPCWSTR>(input_proc), &input_module)) return nullptr;
+    input_previous.store(previous);
+    const auto replaced = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(input_proc));
+    if (!replaced) {
+        FreeLibrary(input_module);
+        input_module = nullptr;
+        return nullptr;
+    }
+    input_previous.store(reinterpret_cast<WNDPROC>(replaced));
+    input_window = hwnd;
+    input_owner = owner;
+    input_destroyed.store(false);
+    input_enabled.store(true);
+    return reinterpret_cast<void*>(replaced);
 }
-void restore(void* window, void* previous) noexcept
+void restore(void* window, void*) noexcept
 {
-    if (reinterpret_cast<WNDPROC>(GetWindowLongPtrW(static_cast<HWND>(window), GWLP_WNDPROC)) == input_proc)
-        SetWindowLongPtrW(static_cast<HWND>(window), GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(previous));
+    input_enabled.store(false);
+    if (!input_module || input_window != window || input_owner != GetCurrentThreadId() ||
+        input_calls.load() != 0) return;
+    if (!input_destroyed.load()) {
+        if (reinterpret_cast<WNDPROC>(GetWindowLongPtrW(input_window, GWLP_WNDPROC)) != input_proc) return;
+        if (SetWindowLongPtrW(input_window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(input_previous.load())) !=
+            reinterpret_cast<LONG_PTR>(input_proc)) return;
+    }
+    input_previous.store(nullptr);
+    input_window = nullptr;
+    input_owner = 0;
+    FreeLibrary(input_module);
+    input_module = nullptr;
 }
 uint32_t raw_input_type(intptr_t lparam, uint32_t* type) noexcept
 {

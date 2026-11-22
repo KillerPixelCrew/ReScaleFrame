@@ -85,6 +85,9 @@ pub(super) struct Presentation {
 }
 
 impl Presentation {
+    pub(super) fn device_retired(&self) {
+        self.default_backend.store(0, SeqCst);
+    }
     pub(super) const fn new() -> Self {
         Self {
             identity: Mutex::new(None),
