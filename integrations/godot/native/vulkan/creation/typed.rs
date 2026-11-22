@@ -2,9 +2,6 @@
 //! The loader's typed entry points and borrowed device negotiation operations.
 
 use super::VK_ERROR_INITIALIZATION_FAILED;
-use crate::sys::*;
-use crate::vulkan::handle;
-use ash::vk::{self, Handle};
 use crate::platform::vulkan_negotiation::{
     VK_XESS_ENABLED_FEATURES, VK_XESS_FEATURES2, VK_XESS_FLOAT16_INT8, VK_XESS_INTEGER_DOT_PRODUCT,
     VK_XESS_SCALAR_BLOCK_LAYOUT,
@@ -14,6 +11,9 @@ use crate::platform::{
     VkAdapter, VkCreationLeaves, VkDeviceCall, VkDeviceDerive, VkFunction, VkInstanceCall,
     VkLatencyRequirements, VkProc,
 };
+use crate::sys::*;
+use crate::vulkan::handle;
+use ash::vk::{self, Handle};
 use std::ffi::{c_char, c_void};
 use std::ptr;
 use std::sync::OnceLock;
@@ -107,10 +107,9 @@ pub(crate) fn entry(route: u32) -> Option<VkFunction> {
                 vk::PFN_vkCreateInstance,
                 VkFunction,
             >(create_instance)),
-            VK_ROUTE_CREATE_DEVICE => Some(std::mem::transmute::<
-                vk::PFN_vkCreateDevice,
-                VkFunction,
-            >(create_device)),
+            VK_ROUTE_CREATE_DEVICE => Some(
+                std::mem::transmute::<vk::PFN_vkCreateDevice, VkFunction>(create_device),
+            ),
             VK_ROUTE_DESTROY_DEVICE => Some(std::mem::transmute::<
                 vk::PFN_vkDestroyDevice,
                 VkFunction,
@@ -389,7 +388,11 @@ unsafe extern "C" fn derive_device(
     if stage >= 3 {
         return ptr::null();
     }
-    let slot = unsafe { stages.cast::<vk::DeviceCreateInfo<'static>>().add(stage as usize) };
+    let slot = unsafe {
+        stages
+            .cast::<vk::DeviceCreateInfo<'static>>()
+            .add(stage as usize)
+    };
     unsafe { slot.write(request) };
     slot.cast()
 }

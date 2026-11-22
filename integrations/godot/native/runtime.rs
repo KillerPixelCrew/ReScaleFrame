@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Engine ABI entry points backed by the existing Rust session and execution receipts.
 
-use crate::host::native_platform;
-use crate::platform::{Settings, Setup};
+use crate::platform::{Platform, Settings, Setup};
 use crate::sys::*;
 use crate::vulkan::native::{rsf_godot_vk_capture_present, rsf_godot_vk_render_begin};
 use rsf_game_sys::{RSF_GAME_RENDER_FRAME, RSF_GAME_RENDER_PRESENT, rsf_game_render_pass};
@@ -18,7 +17,7 @@ thread_local! {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsfg_boot(setup: *const Setup) -> i32 {
-    unsafe { crate::rsf_godot_boot(native_platform(), setup) }
+    unsafe { crate::rsf_godot_boot(setup) }
 }
 
 #[unsafe(no_mangle)]
@@ -37,7 +36,7 @@ unsafe extern "C" fn rsfg_create_swapchain(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsfg_configure(settings: *const Settings) -> i32 {
-    unsafe { crate::rsf_godot_configure(native_platform(), settings) }
+    unsafe { crate::rsf_godot_configure(settings) }
 }
 
 /// The engine's declared size word is safe to read before borrowing the full pass.
@@ -63,7 +62,9 @@ unsafe extern "C" fn rsfg_render(
     if rsf_game_sys::depth_domains_requested(&pass.depth_domains) {
         return 0;
     }
-    unsafe { crate::rsf_godot_d3d12_render(native_platform(), device, queue, commands, pass) }
+    crate::CONTROL
+        .d3d12
+        .render(&crate::CONTROL, &Platform, device, queue, commands, pass)
 }
 
 #[unsafe(no_mangle)]
@@ -71,13 +72,18 @@ extern "C" fn rsfg_render_begin(frame: u64) {
     if crate::CONTROL.vulkan.booted() {
         rsf_godot_vk_render_begin(frame, 0);
     } else if crate::CONTROL.booted() {
-        unsafe { crate::rsf_godot_d3d12_render_begin(native_platform(), frame) };
+        crate::CONTROL
+            .d3d12
+            .render_begin(&crate::CONTROL, &Platform, frame);
     }
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsfg_vk_present_marker(window: u64, begin: u32) -> i32 {
-    let admitted = unsafe { crate::rsf_godot_vk_present_marker(native_platform(), window, begin) };
+    let admitted: i32 = crate::CONTROL
+        .window
+        .present_marker(&Platform, crate::CONTROL.vulkan.booted(), window, begin)
+        .into();
     if admitted != 0 {
         CAPTURE_NATIVE_PRESENT.set(begin != 0);
     }
@@ -96,7 +102,7 @@ unsafe extern "C" fn rsfg_vk_execution(pass: *const rsf_game_render_pass, begin:
         rsf_godot_vk_render_begin(pass.source_frame_id, 1);
         return 1;
     }
-    let admitted = unsafe { crate::rsf_godot_execution(pass, begin) };
+    let admitted: i32 = crate::CONTROL.window.execution(pass, begin).into();
     if admitted != 0 && pass.role == RSF_GAME_RENDER_PRESENT {
         CAPTURE_NATIVE_PRESENT.set(begin != 0);
     }
@@ -121,9 +127,8 @@ unsafe extern "C" fn rsfg_vk_native_present(
     info: *const c_void,
 ) -> i32 {
     // The engine supplies the native function address in a uint64_t wire field (Windows x64).
-    let callback = unsafe {
-        std::mem::transmute::<u64, Option<crate::platform::VkFunction>>(callback)
-    };
+    let callback =
+        unsafe { std::mem::transmute::<u64, Option<crate::platform::VkFunction>>(callback) };
     let mut call = PresentCall {
         callback,
         queue,
@@ -163,15 +168,17 @@ unsafe extern "C" fn rsfg_vk_foreign_call(callback: rsf_vk_wsi_call, user: Handl
 
 #[unsafe(no_mangle)]
 extern "C" fn rsfg_shutdown() -> i32 {
-    unsafe {
-        let platform = native_platform();
-        crate::rsf_godot_window_release(platform);
-        if crate::CONTROL.vulkan.booted() {
-            crate::rsf_godot_shutdown_vulkan(platform)
-        } else {
-            crate::rsf_godot_d3d12_shutdown(platform)
-        }
+    let control = &crate::CONTROL;
+    control.window.release(&Platform);
+    let result = if control.vulkan.booted() {
+        control.vulkan.shutdown(&Platform)
+    } else {
+        control.d3d12.shutdown(control, &Platform)
+    };
+    if result != 0 {
+        control.window.bind_cpu_service(None);
     }
+    result
 }
 
 /// `ReScaleFrameRuntime.request_frame_dump`, on the render thread.

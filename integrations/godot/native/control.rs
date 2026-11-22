@@ -397,6 +397,8 @@ impl Control {
         self.session().status.active_sr = 0;
     }
 
+    /// Forwards the engine module's log line; only the Windows entry points call it.
+    #[cfg_attr(test, allow(dead_code))]
     pub(crate) fn log(&self, message: *const c_char) {
         let (log, user) = {
             let session = self.session();

@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! Test leaves. Recorded calls are thread-local, so parallel tests do not share them.
 use super::{
-    ABI_VERSION, FgFacts, FgInstall, FgOptions, InputFacts, LatencyFacts, LockedBody,
-    PLATFORM_VERSION, Platform, Setup, Sharpening, SrContext, SrCreate, SrEvaluate, Status,
-    VkFacts, VkLatencyFacts, VkProc, VkSrContext, VkSrCreate, WindowFacts, WindowIdentity,
+    ABI_VERSION, CpuService, FgFacts, FgInstall, FgOptions, InputFacts, LatencyFacts, Platform,
+    Setup, Sharpening, SrContext, SrCreate, SrEvaluate, Status, VkFacts, VkLatencyFacts, VkProc,
+    VkSrContext, VkSrCreate, WindowFacts, WindowIdentity,
 };
 use rsf_game_sys::{rsf_game_cpu_event, rsf_game_render_pass};
 use std::cell::{Cell, RefCell};
-use std::ffi::{CStr, c_void};
+use std::ffi::{CStr, c_int, c_void};
 use std::ptr;
 
 pub(crate) fn setup(runtime: &CStr) -> Setup {
@@ -145,69 +145,432 @@ pub(crate) fn sharpening_defaults() -> Sharpening {
     }
 }
 
-unsafe extern "C" fn tick_count() -> u64 {
-    41
-}
+/// The test platform: every method records its call or answers from the thread-local settings.
+pub(crate) static LEAVES: Platform = Platform;
 
-unsafe extern "C" fn prepare_capture() -> u32 {
-    1
-}
+impl Platform {
+    pub(crate) fn tick_count(&self) -> u64 {
+        41
+    }
 
-unsafe extern "C" fn fg_install(_: *const FgInstall) -> i32 {
-    INSTALLS.set(INSTALLS.get() + 1);
-    INSTALL_RESULT.get()
-}
+    pub(crate) fn prepare_capture(&self) -> bool {
+        true
+    }
 
-unsafe extern "C" fn fg_options(options: *const FgOptions) {
-    // SAFETY: the owner passes a live record.
-    FG_OPTIONS.set(Some(unsafe { *options }));
-}
+    pub(crate) fn fg_install(&self, _: &FgInstall) -> i32 {
+        INSTALLS.set(INSTALLS.get() + 1);
+        INSTALL_RESULT.get()
+    }
 
-unsafe extern "C" fn dlss_preset_valid(preset: u32) -> u32 {
-    u32::from(preset <= 15)
-}
+    pub(crate) fn fg_options(&self, options: &FgOptions) {
+        FG_OPTIONS.set(Some(*options));
+    }
 
-unsafe extern "C" fn sharpening_valid(options: *const Sharpening) -> u32 {
-    // SAFETY: the owner passes a live record.
-    u32::from(unsafe { (*options).mode } <= 4)
-}
+    pub(crate) fn dlss_preset_valid(&self, preset: u32) -> bool {
+        preset <= 15
+    }
 
-unsafe extern "C" fn write_sharpening_defaults(options: *mut Sharpening) {
-    // SAFETY: the owner passes a writable record.
-    unsafe { options.write(sharpening_defaults()) };
-}
+    pub(crate) fn sharpening_valid(&self, options: &Sharpening) -> bool {
+        options.mode <= 4
+    }
 
-unsafe extern "C" fn fg_backend_known(backend: u32) -> u32 {
-    u32::from(matches!(backend, 1 | 3 | 4 | 5))
-}
+    pub(crate) fn sharpening_defaults(&self) -> Sharpening {
+        sharpening_defaults()
+    }
 
-unsafe extern "C" fn vulkan_supported() -> u32 {
-    u32::from(VK_SUPPORTED.get())
-}
+    pub(crate) fn fg_backend_known(&self, backend: u32) -> bool {
+        matches!(backend, 1 | 3 | 4 | 5)
+    }
 
-unsafe extern "C" fn vulkan_latency_facts(facts: *mut VkLatencyFacts) -> u32 {
-    match VK_LATENCY.get() {
-        Some(value) => {
-            // SAFETY: the owner passes a writable record.
-            unsafe { facts.write(value) };
-            1
+    pub(crate) fn vulkan_supported(&self) -> bool {
+        VK_SUPPORTED.get()
+    }
+
+    pub(crate) fn vulkan_latency_facts(&self) -> Option<VkLatencyFacts> {
+        VK_LATENCY.get()
+    }
+
+    // A panic cannot be allowed to hide guard misuse, so it is recorded as a call instead.
+    pub(crate) fn vulkan_locked<F: FnMut() -> c_int>(&self, mut body: F) -> c_int {
+        if VK_LOCKED.get() {
+            VK_CALLS.with_borrow_mut(|calls| calls.push("reentered"));
+            return 0;
         }
-        None => 0,
+        VK_LOCKED.set(true);
+        let result = body();
+        VK_LOCKED.set(false);
+        result
+    }
+
+    pub(crate) fn vulkan_start(&self, _: &Setup) -> c_int {
+        record("start");
+        VK_START.get()
+    }
+
+    pub(crate) fn vulkan_stop(&self) -> c_int {
+        record("stop");
+        VK_STOP.get()
+    }
+
+    pub(crate) fn vulkan_release(&self, session: u64) {
+        record("release");
+        VK_RELEASED.set(Some(session));
+    }
+
+    pub(crate) fn vulkan_facts(&self) -> VkFacts {
+        record("facts");
+        VK_FACTS.get()
+    }
+
+    pub(crate) fn vulkan_presenter_max(&self) -> Option<u32> {
+        record("presenter_max");
+        VK_PRESENTER_MAX.get()
+    }
+
+    pub(crate) fn vulkan_fsr4_fg_probe(&self) -> u32 {
+        record("fsr4_fg_probe");
+        VK_PROBE.get()
+    }
+
+    pub(crate) fn vulkan_latency_options(&self, mode: u32, frame_limit_us: u32) -> i32 {
+        record("latency_options");
+        VK_LATENCY_OPTIONS.set(Some((mode, frame_limit_us)));
+        VK_LATENCY_RESULT.get()
+    }
+
+    pub(crate) fn cpu_counters(&self) -> InputFacts {
+        INPUTS
+    }
+
+    pub(crate) fn window_facts(&self, window: *mut c_void) -> WindowFacts {
+        FACTS_WINDOW.set(Some(window.addr()));
+        WindowFacts {
+            foreground_process_id: 10,
+            current_process_id: 10,
+            input_window_visible: 1,
+            reserved: 0,
+        }
+    }
+
+    pub(crate) fn fg_facts(&self) -> FgFacts {
+        FG.get()
+    }
+
+    pub(crate) fn latency_facts(&self) -> Option<LatencyFacts> {
+        LATENCY.get()
+    }
+
+    pub(crate) fn d3d12_bind(&self, _: *mut c_void, _: *mut c_void) -> bool {
+        d3d12("bind", 0);
+        BIND.get() != 0
+    }
+
+    pub(crate) fn d3d12_wait(&self, value: u64) -> bool {
+        d3d12("wait", value);
+        WAIT.get() != 0
+    }
+
+    pub(crate) fn d3d12_signal(&self, value: u64) -> bool {
+        d3d12("signal", value);
+        SIGNAL.get() != 0
+    }
+
+    pub(crate) fn sr_default_backend(&self) -> u32 {
+        SR_DEFAULT.get()
+    }
+
+    pub(crate) fn fg_default_backend(&self) -> u32 {
+        FG_DEFAULT.get()
+    }
+
+    pub(crate) fn present_owner(&self) -> Option<u32> {
+        PRESENT_OWNER.get()
+    }
+
+    pub(crate) fn present_request(&self, backend: u32) {
+        d3d12("present_request", backend.into());
+    }
+
+    pub(crate) fn sr_create(&self, request: &SrCreate, desired: (u32, u32)) -> Option<SrContext> {
+        d3d12("create", request.backend.into());
+        let mut context = SrContext {
+            handle: ptr::null_mut(),
+            result: 0,
+            desired_width: desired.0,
+            desired_height: desired.1,
+            reserved: 0,
+        };
+        match REFUSED.get() {
+            Some((backend, result)) if backend == request.backend => context.result = result,
+            _ => {
+                CONTEXTS.set(CONTEXTS.get() + 1);
+                context.handle =
+                    ptr::without_provenance_mut(context_handle(CONTEXTS.get()) as usize);
+                (context.desired_width, context.desired_height) = PLAN.get();
+            }
+        }
+        Some(context)
+    }
+
+    pub(crate) fn sr_destroy(&self, context: *mut c_void) {
+        d3d12("destroy", context.addr() as u64);
+    }
+
+    pub(crate) fn sr_evaluate(
+        &self,
+        _: *mut c_void,
+        _: *mut c_void,
+        _: &rsf_game_render_pass,
+        request: &SrEvaluate,
+    ) -> Option<i32> {
+        d3d12("evaluate", request.slot.into());
+        EVALUATE.set(Some(*request));
+        Some(EVALUATED.get())
+    }
+
+    pub(crate) fn sr_refusal_log(&self, _: &rsf_game_render_pass, desired: (u32, u32)) {
+        d3d12("refusal_log", desired.0.into());
+    }
+
+    pub(crate) fn capture_sr_begin(&self, _: &rsf_game_render_pass) -> bool {
+        CAPTURE_SR_BEGIN.get() != 0
+    }
+
+    pub(crate) fn final_scene(&self, _: *mut c_void, _: &rsf_game_render_pass, slot: u32) -> bool {
+        d3d12("final_scene", slot.into());
+        true
+    }
+
+    pub(crate) fn fg_submitted(&self, _: u64, frame: u64) {
+        d3d12("fg_submitted", frame);
+    }
+
+    pub(crate) fn render_begin(&self, _: u64, frame: u64) -> bool {
+        d3d12("render_begin", frame);
+        RENDER_BEGIN.get() != 0
+    }
+
+    pub(crate) fn present_window(&self, pass: &rsf_game_render_pass) {
+        WINDOW.set(Some((
+            pass.source_frame_id,
+            pass.session_id,
+            pass.role,
+            pass.screen,
+            pass.swapchain.addr(),
+            pass.color_input.addr(),
+        )));
+    }
+
+    pub(crate) fn fg_end_session(&self, session: u64) -> bool {
+        d3d12("end_session", session);
+        END_SESSION.get() != 0
+    }
+
+    pub(crate) fn d3d12_release(&self, context: *mut c_void, _: u64) -> bool {
+        d3d12("release", context.addr() as u64);
+        true
+    }
+
+    pub(crate) fn vulkan_presenter_drain(&self, disable: bool) -> i32 {
+        vk_sr("drain", disable.into());
+        VK_DRAIN.get()
+    }
+
+    pub(crate) fn vulkan_device_idle(&self, device: *mut c_void, proc: Option<VkProc>) -> bool {
+        vk_sr("idle", device.addr() as u64);
+        VK_IDLE.get() != 0 && proc.is_some()
+    }
+
+    pub(crate) fn vulkan_sr_destroy(&self, context: *mut c_void) -> i32 {
+        vk_sr(
+            if vk_is_split(context) {
+                "fsr4_destroy"
+            } else {
+                "destroy"
+            },
+            context.addr() as u64,
+        );
+        let result = VK_DESTROY.get();
+        if result == 0 {
+            VK_SPLIT_CONTEXTS
+                .with_borrow_mut(|owners| owners.retain(|owner| *owner != context.addr()));
+        }
+        result
+    }
+
+    pub(crate) fn vulkan_sr_create(
+        &self,
+        _: *mut c_void,
+        request: &VkSrCreate,
+    ) -> (bool, VkSrContext) {
+        let mut created = VkSrContext {
+            handle: ptr::null_mut(),
+            result: 0,
+            reserved: 0,
+        };
+        let split = request.backend == 4;
+        if split && VK_SPLIT_OPEN_RESULT.get() != 0 {
+            created.result = VK_SPLIT_OPEN_RESULT.get();
+            return (true, created);
+        }
+        let completed = vk_sr(
+            if split { "fsr4_create" } else { "create" },
+            request.backend.into(),
+        );
+        let (result, handle) = VK_CREATE.get();
+        if handle {
+            VK_CONTEXTS.set(VK_CONTEXTS.get() + 1);
+            created.handle =
+                ptr::without_provenance_mut(vk_context_handle(VK_CONTEXTS.get()) as usize);
+            if split {
+                VK_SPLIT_CONTEXTS.with_borrow_mut(|owners| owners.push(created.handle.addr()));
+            }
+        }
+        created.result = result;
+        if completed != 0 && result == 0 && request.backend == 1 {
+            vk_sr("preset", request.preset.into());
+        }
+        (completed != 0, created)
+    }
+
+    pub(crate) fn vulkan_sr_plan(
+        &self,
+        _: *mut c_void,
+        context: *mut c_void,
+    ) -> Option<(u32, u32)> {
+        let planned = VK_PLAN.get();
+        (vk_sr(
+            if vk_is_split(context) {
+                "fsr4_plan"
+            } else {
+                "plan"
+            },
+            context.addr() as u64,
+        ) != 0)
+            .then_some(planned)
+    }
+
+    pub(crate) fn vulkan_sr_record(
+        &self,
+        _: *mut c_void,
+        context: *mut c_void,
+        sharpening: &Sharpening,
+        provider: &mut i32,
+    ) -> Option<(i32, *mut c_void)> {
+        let mut commands = 0x20;
+        if !context.is_null() {
+            // The owner lends the resolved options for the evaluation it records.
+            VK_SHARPENING.set(Some(*sharpening));
+            let split = vk_is_split(context);
+            let result = if split && !VK_SPLIT_RECORD.get() {
+                -8
+            } else {
+                if vk_sr(
+                    if split { "fsr4_evaluate" } else { "evaluate" },
+                    context.addr() as u64,
+                ) == 0
+                {
+                    return None;
+                }
+                if split {
+                    commands = VK_NEXT.get();
+                }
+                VK_EVALUATED.get()
+            };
+            *provider = result;
+            if result == 0 {
+                return Some((0, ptr::without_provenance_mut(commands)));
+            }
+        }
+        let next = ptr::without_provenance_mut(commands);
+        if commands == 0 {
+            return Some((-8, next));
+        }
+        (vk_sr("fallback", 0) != 0).then_some((VK_FALLBACK.get(), next))
+    }
+
+    pub(crate) fn vulkan_sr_log(&self, _: *mut c_void, kind: u32, _: i32, _: i32) -> Option<()> {
+        (vk_sr("log", kind.into()) != 0).then_some(())
+    }
+
+    pub(crate) fn vulkan_sr_dump_result(&self, _: *mut c_void, backend: u32, _: i32) -> Option<()> {
+        (vk_sr("dump", backend.into()) != 0).then_some(())
+    }
+
+    pub(crate) fn window_identity(&self, window: *mut c_void) -> WindowIdentity {
+        window_call("identity", window.addr() as u64);
+        let (process, current, class) = IDENTITY.get();
+        let mut value = WindowIdentity {
+            process_id: process,
+            current_process_id: current,
+            class_length: class.len() as u32,
+            ..WindowIdentity::default()
+        };
+        for (slot, unit) in value.class_name.iter_mut().zip(class.encode_utf16()) {
+            *slot = unit;
+        }
+        value
+    }
+
+    pub(crate) fn window_procedure_get(&self, _: *mut c_void) -> isize {
+        window_call("get", 0);
+        PROCEDURE.get()
+    }
+
+    pub(crate) fn window_procedure_set(&self, _: *mut c_void, procedure: isize) -> isize {
+        window_call("set", procedure as u64);
+        if PROCEDURE_REFUSED.get() {
+            return 0;
+        }
+        PROCEDURE.replace(procedure)
+    }
+
+    pub(crate) fn window_forward(
+        &self,
+        previous: isize,
+        window: *mut c_void,
+        message: u32,
+        _: usize,
+        _: isize,
+    ) -> isize {
+        window_call("forward", previous as u64);
+        window_call("forward_window", window.addr() as u64);
+        window_call("forward_message", message.into());
+        FORWARDED
+    }
+
+    pub(crate) fn query_counter(&self) -> (u64, u64) {
+        (1000, 10_000_000)
+    }
+
+    pub(crate) fn cpu_service(&self, vulkan: bool) -> Option<&'static CpuService> {
+        Some(if vulkan { &VK_CPU } else { &D3D12_CPU })
+    }
+
+    pub(crate) fn vulkan_present_marker(&self, begin: u32) {
+        window_call("marker", begin.into());
+    }
+
+    pub(crate) fn sr_select_backend(&self, vendor: u32, software: u32, choices: u32) -> u32 {
+        SR_ASKED.set(Some((vendor, software, choices)));
+        SR_SELECTED.get()
+    }
+
+    pub(crate) fn fg_select_backend(&self, vendor: u32, software: u32, choices: u32) -> u32 {
+        FG_ASKED.set(Some((vendor, software, choices)));
+        FG_SELECTED.get()
     }
 }
 
-// A panic cannot leave these extern "C" leaves, so guard misuse is recorded as a call instead.
-unsafe extern "C" fn vulkan_locked(body: LockedBody, user: *mut c_void) -> i32 {
-    if VK_LOCKED.get() {
-        VK_CALLS.with_borrow_mut(|calls| calls.push("reentered"));
-        return 0;
-    }
-    VK_LOCKED.set(true);
-    // SAFETY: the owner passes its body and closure.
-    let result = unsafe { body(user) };
-    VK_LOCKED.set(false);
-    result
-}
+pub(crate) const INPUTS: InputFacts = InputFacts {
+    keyboard: 1,
+    mouse: 2,
+    controller: 3,
+    pings: 4,
+    substitutes: 5,
+    order_violations: 6,
+    derived_boundaries: 7,
+};
 
 fn record(call: &'static str) {
     VK_CALLS.with_borrow_mut(|calls| {
@@ -223,94 +586,6 @@ pub(crate) fn take_calls() -> Vec<&'static str> {
     VK_CALLS.take()
 }
 
-unsafe extern "C" fn vulkan_start(_: *const Setup) -> i32 {
-    record("start");
-    VK_START.get()
-}
-
-unsafe extern "C" fn vulkan_stop() -> i32 {
-    record("stop");
-    VK_STOP.get()
-}
-
-unsafe extern "C" fn vulkan_release(session: u64) {
-    record("release");
-    VK_RELEASED.set(Some(session));
-}
-
-unsafe extern "C" fn vulkan_facts(facts: *mut VkFacts) {
-    record("facts");
-    // SAFETY: the owner passes a writable record.
-    unsafe { facts.write(VK_FACTS.get()) };
-}
-
-unsafe extern "C" fn vulkan_presenter_max(count: *mut u32) -> i32 {
-    record("presenter_max");
-    match VK_PRESENTER_MAX.get() {
-        Some(value) => {
-            // SAFETY: the owner passes a writable count.
-            unsafe { count.write(value) };
-            0
-        }
-        None => -8,
-    }
-}
-
-unsafe extern "C" fn vulkan_fsr4_fg_probe() -> u32 {
-    record("fsr4_fg_probe");
-    VK_PROBE.get()
-}
-
-unsafe extern "C" fn vulkan_latency_options(mode: u32, frame_limit_us: u32) -> i32 {
-    record("latency_options");
-    VK_LATENCY_OPTIONS.set(Some((mode, frame_limit_us)));
-    VK_LATENCY_RESULT.get()
-}
-
-pub(crate) const INPUTS: InputFacts = InputFacts {
-    keyboard: 1,
-    mouse: 2,
-    controller: 3,
-    pings: 4,
-    substitutes: 5,
-    order_violations: 6,
-    derived_boundaries: 7,
-};
-
-unsafe extern "C" fn cpu_counters(facts: *mut InputFacts) {
-    // SAFETY: the owner passes a writable record.
-    unsafe { facts.write(INPUTS) };
-}
-
-unsafe extern "C" fn window_facts(window: *mut c_void, facts: *mut WindowFacts) {
-    FACTS_WINDOW.set(Some(window.addr()));
-    // SAFETY: the owner passes a writable record.
-    unsafe {
-        facts.write(WindowFacts {
-            foreground_process_id: 10,
-            current_process_id: 10,
-            input_window_visible: 1,
-            reserved: 0,
-        })
-    };
-}
-
-unsafe extern "C" fn fg_facts(facts: *mut FgFacts) {
-    // SAFETY: the owner passes a writable record.
-    unsafe { facts.write(FG.get()) };
-}
-
-unsafe extern "C" fn latency_facts(facts: *mut LatencyFacts) -> u32 {
-    match LATENCY.get() {
-        Some(value) => {
-            // SAFETY: the owner passes a writable record.
-            unsafe { facts.write(value) };
-            1
-        }
-        None => 0,
-    }
-}
-
 fn d3d12(call: &'static str, argument: u64) {
     D3D12_CALLS.with_borrow_mut(|calls| calls.push((call, argument)));
 }
@@ -323,125 +598,6 @@ pub(crate) fn take_d3d12_calls() -> Vec<(&'static str, u64)> {
 /// The handle of the nth context the fake created.
 pub(crate) const fn context_handle(nth: usize) -> u64 {
     (nth * 0x1000) as u64
-}
-
-unsafe extern "C" fn d3d12_bind(_: *mut c_void, _: *mut c_void) -> u32 {
-    d3d12("bind", 0);
-    BIND.get()
-}
-
-unsafe extern "C" fn d3d12_wait(value: u64) -> u32 {
-    d3d12("wait", value);
-    WAIT.get()
-}
-
-unsafe extern "C" fn d3d12_signal(value: u64) -> u32 {
-    d3d12("signal", value);
-    SIGNAL.get()
-}
-
-unsafe extern "C" fn sr_default_backend() -> u32 {
-    SR_DEFAULT.get()
-}
-
-unsafe extern "C" fn fg_default_backend() -> u32 {
-    FG_DEFAULT.get()
-}
-
-unsafe extern "C" fn present_owner(backend: *mut u32) -> u32 {
-    match PRESENT_OWNER.get() {
-        Some(value) => {
-            // SAFETY: the owner passes a writable backend.
-            unsafe { backend.write(value) };
-            1
-        }
-        None => 0,
-    }
-}
-
-unsafe extern "C" fn present_request(backend: u32) {
-    d3d12("present_request", backend.into());
-}
-
-unsafe extern "C" fn sr_create(request: *const SrCreate, context: *mut SrContext) -> u32 {
-    // SAFETY: the owner passes live records.
-    let (request, context) = unsafe { (&*request, &mut *context) };
-    d3d12("create", request.backend.into());
-    match REFUSED.get() {
-        Some((backend, result)) if backend == request.backend => context.result = result,
-        _ => {
-            CONTEXTS.set(CONTEXTS.get() + 1);
-            context.handle = ptr::without_provenance_mut(context_handle(CONTEXTS.get()) as usize);
-            context.result = 0;
-            (context.desired_width, context.desired_height) = PLAN.get();
-        }
-    }
-    1
-}
-
-unsafe extern "C" fn sr_destroy(context: *mut c_void) {
-    d3d12("destroy", context.addr() as u64);
-}
-
-unsafe extern "C" fn sr_evaluate(
-    _: *mut c_void,
-    _: *mut c_void,
-    _: *const rsf_game_render_pass,
-    request: *const SrEvaluate,
-    result: *mut i32,
-) -> u32 {
-    // SAFETY: the owner passes live records.
-    let request = unsafe { *request };
-    d3d12("evaluate", request.slot.into());
-    EVALUATE.set(Some(request));
-    // SAFETY: the owner passes a writable result.
-    unsafe { result.write(EVALUATED.get()) };
-    1
-}
-
-unsafe extern "C" fn sr_refusal_log(_: *const rsf_game_render_pass, width: u32, _: u32) {
-    d3d12("refusal_log", width.into());
-}
-
-unsafe extern "C" fn capture_sr_begin(_: *const rsf_game_render_pass) -> u32 {
-    CAPTURE_SR_BEGIN.get()
-}
-
-unsafe extern "C" fn final_scene(_: *mut c_void, _: *const rsf_game_render_pass, slot: u32) -> u32 {
-    d3d12("final_scene", slot.into());
-    1
-}
-
-unsafe extern "C" fn fg_submitted(_: u64, frame: u64) {
-    d3d12("fg_submitted", frame);
-}
-
-unsafe extern "C" fn render_begin(_: u64, frame: u64) -> u32 {
-    d3d12("render_begin", frame);
-    RENDER_BEGIN.get()
-}
-
-unsafe extern "C" fn present_window(pass: *const rsf_game_render_pass) {
-    // SAFETY: the owner passes a live pass.
-    let pass = unsafe { &*pass };
-    WINDOW.set(Some((
-        pass.source_frame_id,
-        pass.session_id,
-        pass.role,
-        pass.screen,
-        pass.swapchain.addr(),
-        pass.color_input.addr(),
-    )));
-}
-
-unsafe extern "C" fn fg_end_session(session: u64) -> u32 {
-    d3d12("end_session", session);
-    END_SESSION.get()
-}
-
-unsafe extern "C" fn d3d12_release(context: *mut c_void, _: u64) -> u32 {
-    d3d12("release", context.addr() as u64);
-    1
 }
 
 /// Records the call; zero when the test made it throw.
@@ -460,139 +616,8 @@ pub(crate) const fn vk_context_handle(nth: usize) -> u64 {
     (nth * 0x10000) as u64
 }
 
-unsafe extern "C" fn vulkan_presenter_drain(disable: u32) -> i32 {
-    vk_sr("drain", disable.into());
-    VK_DRAIN.get()
-}
-
-unsafe extern "C" fn vulkan_device_idle(device: *mut c_void, proc: Option<VkProc>) -> u32 {
-    vk_sr("idle", device.addr() as u64);
-    VK_IDLE.get() * u32::from(proc.is_some())
-}
-
 pub(crate) fn vk_is_split(context: *mut c_void) -> bool {
     VK_SPLIT_CONTEXTS.with_borrow(|owners| owners.contains(&context.addr()))
-}
-
-unsafe extern "C" fn vulkan_sr_destroy(context: *mut c_void) -> i32 {
-    vk_sr(
-        if vk_is_split(context) {
-            "fsr4_destroy"
-        } else {
-            "destroy"
-        },
-        context.addr() as u64,
-    );
-    let result = VK_DESTROY.get();
-    if result == 0 {
-        VK_SPLIT_CONTEXTS.with_borrow_mut(|owners| owners.retain(|owner| *owner != context.addr()));
-    }
-    result
-}
-
-unsafe extern "C" fn vulkan_sr_create(
-    _: *mut c_void,
-    request: *const VkSrCreate,
-    created: *mut VkSrContext,
-) -> u32 {
-    // SAFETY: the owner passes live records.
-    let (request, created) = unsafe { (&*request, &mut *created) };
-    let split = request.backend == 4;
-    if split && VK_SPLIT_OPEN_RESULT.get() != 0 {
-        created.result = VK_SPLIT_OPEN_RESULT.get();
-        return 1;
-    }
-    let completed = vk_sr(
-        if split { "fsr4_create" } else { "create" },
-        request.backend.into(),
-    );
-    let (result, handle) = VK_CREATE.get();
-    if handle {
-        VK_CONTEXTS.set(VK_CONTEXTS.get() + 1);
-        created.handle = ptr::without_provenance_mut(vk_context_handle(VK_CONTEXTS.get()) as usize);
-        if split {
-            VK_SPLIT_CONTEXTS.with_borrow_mut(|owners| owners.push(created.handle.addr()));
-        }
-    }
-    created.result = result;
-    if completed != 0 && result == 0 && request.backend == 1 {
-        vk_sr("preset", request.preset.into());
-    }
-    completed
-}
-
-unsafe extern "C" fn vulkan_sr_plan(
-    _: *mut c_void,
-    context: *mut c_void,
-    width: *mut u32,
-    height: *mut u32,
-) -> u32 {
-    let (planned_width, planned_height) = VK_PLAN.get();
-    unsafe {
-        width.write(planned_width);
-        height.write(planned_height);
-    }
-    vk_sr(
-        if vk_is_split(context) {
-            "fsr4_plan"
-        } else {
-            "plan"
-        },
-        context.addr() as u64,
-    )
-}
-
-unsafe extern "C" fn vulkan_sr_record(
-    _: *mut c_void,
-    context: *mut c_void,
-    sharpening: *const Sharpening,
-    provider: *mut i32,
-    output: *mut i32,
-    next: *mut *mut c_void,
-) -> u32 {
-    let mut commands = 0x20;
-    if !context.is_null() {
-        // The owner lends the resolved options for the evaluation it records.
-        VK_SHARPENING.set(unsafe { sharpening.as_ref() }.copied());
-        let split = vk_is_split(context);
-        let result = if split && !VK_SPLIT_RECORD.get() {
-            -8
-        } else {
-            if vk_sr(
-                if split { "fsr4_evaluate" } else { "evaluate" },
-                context.addr() as u64,
-            ) == 0
-            {
-                return 0;
-            }
-            if split {
-                commands = VK_NEXT.get();
-            }
-            VK_EVALUATED.get()
-        };
-        unsafe { provider.write(result) };
-        if result == 0 {
-            unsafe {
-                output.write(0);
-                next.write(ptr::without_provenance_mut(commands));
-            }
-            return 1;
-        }
-    }
-    unsafe { next.write(ptr::without_provenance_mut(commands)) };
-    if commands == 0 {
-        return 1;
-    }
-    unsafe { output.write(VK_FALLBACK.get()) };
-    vk_sr("fallback", 0)
-}
-
-unsafe extern "C" fn vulkan_sr_log(_: *mut c_void, kind: u32, _: i32, _: i32) -> u32 {
-    vk_sr("log", kind.into())
-}
-
-unsafe extern "C" fn vulkan_sr_dump_result(_: *mut c_void, backend: u32, _: i32) -> u32 {
-    vk_sr("dump", backend.into())
 }
 
 fn window_call(call: &'static str, argument: u64) {
@@ -609,54 +634,10 @@ pub(crate) fn take_cpu_events() -> Vec<(bool, u32, u64, u32, u32)> {
     CPU_EVENTS.take()
 }
 
-unsafe extern "C" fn window_identity(window: *mut c_void, identity: *mut WindowIdentity) {
-    window_call("identity", window.addr() as u64);
-    let (process, current, class) = IDENTITY.get();
-    let mut value = WindowIdentity {
-        process_id: process,
-        current_process_id: current,
-        class_length: class.len() as u32,
-        ..WindowIdentity::default()
-    };
-    for (slot, unit) in value.class_name.iter_mut().zip(class.encode_utf16()) {
-        *slot = unit;
-    }
-    // SAFETY: the owner passes a writable record.
-    unsafe { identity.write(value) };
-}
-
-unsafe extern "C" fn window_procedure_get(_: *mut c_void) -> isize {
-    window_call("get", 0);
-    PROCEDURE.get()
-}
-
-unsafe extern "C" fn window_procedure_set(_: *mut c_void, procedure: isize) -> isize {
-    window_call("set", procedure as u64);
-    if PROCEDURE_REFUSED.get() {
-        return 0;
-    }
-    PROCEDURE.replace(procedure)
-}
-
-unsafe extern "C" fn window_forward(
-    previous: isize,
-    window: *mut c_void,
-    message: u32,
-    _: usize,
-    _: isize,
-) -> isize {
-    window_call("forward", previous as u64);
-    window_call("forward_window", window.addr() as u64);
-    window_call("forward_message", message.into());
-    FORWARDED
-}
-
-unsafe extern "C" fn query_counter(counter: *mut u64, frequency: *mut u64) {
-    // SAFETY: the owner passes writable values.
-    unsafe {
-        counter.write(1000);
-        frequency.write(10_000_000);
-    }
+/// The last Auto question each policy leaf was asked: vendor, software and choices.
+#[allow(clippy::type_complexity)]
+pub(crate) fn take_auto() -> (Option<(u32, u32, u32)>, Option<(u32, u32, u32)>) {
+    (SR_ASKED.take(), FG_ASKED.take())
 }
 
 fn cpu(vulkan: bool, event: *const rsf_game_cpu_event) {
@@ -691,8 +672,8 @@ unsafe extern "C" fn vulkan_latency_ping(window: *mut c_void) -> i32 {
     2
 }
 
-pub(crate) static D3D12_CPU: super::CpuService = super::CpuService {
-    struct_size: size_of::<super::CpuService>() as u32,
+pub(crate) static D3D12_CPU: CpuService = CpuService {
+    struct_size: size_of::<CpuService>() as u32,
     version: super::CPU_SERVICE_VERSION,
     report: cpu_event,
     ping: latency_ping,
@@ -709,99 +690,9 @@ unsafe extern "C" fn execution(pass: *const rsf_game_render_pass, begin: u32) ->
     0
 }
 
-pub(crate) static VK_CPU: super::CpuService = super::CpuService {
+pub(crate) static VK_CPU: CpuService = CpuService {
     report: vulkan_cpu_event,
     ping: vulkan_latency_ping,
     execution: Some(execution),
     ..D3D12_CPU
-};
-
-unsafe extern "C" fn d3d12_cpu_service() -> *const super::CpuService {
-    &D3D12_CPU
-}
-unsafe extern "C" fn vulkan_cpu_service() -> *const super::CpuService {
-    &VK_CPU
-}
-
-unsafe extern "C" fn vulkan_present_marker(begin: u32) {
-    window_call("marker", begin.into());
-}
-
-/// The last Auto question each policy leaf was asked: vendor, software and choices.
-#[allow(clippy::type_complexity)]
-pub(crate) fn take_auto() -> (Option<(u32, u32, u32)>, Option<(u32, u32, u32)>) {
-    (SR_ASKED.take(), FG_ASKED.take())
-}
-
-unsafe extern "C" fn sr_select_backend(vendor: u32, software: u32, choices: u32) -> u32 {
-    SR_ASKED.set(Some((vendor, software, choices)));
-    SR_SELECTED.get()
-}
-
-unsafe extern "C" fn fg_select_backend(vendor: u32, software: u32, choices: u32) -> u32 {
-    FG_ASKED.set(Some((vendor, software, choices)));
-    FG_SELECTED.get()
-}
-
-pub(crate) static LEAVES: Platform = Platform {
-    struct_size: size_of::<Platform>() as u32,
-    version: PLATFORM_VERSION,
-    tick_count,
-    prepare_capture,
-    fg_install,
-    fg_options,
-    dlss_preset_valid,
-    sharpening_valid,
-    sharpening_defaults: write_sharpening_defaults,
-    fg_backend_known,
-    vulkan_supported,
-    vulkan_latency_facts,
-    vulkan_locked,
-    vulkan_start,
-    vulkan_stop,
-    vulkan_release,
-    vulkan_facts,
-    vulkan_presenter_max,
-    vulkan_fsr4_fg_probe,
-    vulkan_latency_options,
-    cpu_counters,
-    window_facts,
-    fg_facts,
-    latency_facts,
-    d3d12_bind,
-    d3d12_wait,
-    d3d12_signal,
-    sr_default_backend,
-    fg_default_backend,
-    present_owner,
-    present_request,
-    sr_create,
-    sr_destroy,
-    sr_evaluate,
-    sr_refusal_log,
-    capture_sr_begin,
-    final_scene,
-    fg_submitted,
-    render_begin,
-    present_window,
-    fg_end_session,
-    d3d12_release,
-    vulkan_presenter_drain,
-    vulkan_device_idle,
-    vulkan_sr_destroy,
-    vulkan_sr_create,
-    vulkan_sr_plan,
-    vulkan_sr_record,
-    vulkan_sr_log,
-    vulkan_sr_dump_result,
-    window_identity,
-    window_procedure_get,
-    window_procedure_set,
-    window_forward,
-    query_counter,
-    d3d12_cpu_service,
-    vulkan_cpu_service,
-    vulkan_present_marker,
-    sr_select_backend,
-    fg_select_backend,
 };

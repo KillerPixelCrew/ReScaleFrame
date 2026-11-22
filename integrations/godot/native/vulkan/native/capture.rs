@@ -47,9 +47,13 @@ pub(super) struct Capture {
     record: Option<rsf_frame_record>,
 }
 
-pub(super) fn readable_create(setup: &rsf_fgvk_setup) -> Option<vk::SwapchainCreateInfoKHR<'static>> {
+pub(super) fn readable_create(
+    setup: &rsf_fgvk_setup,
+) -> Option<vk::SwapchainCreateInfoKHR<'static>> {
     features().capture.create?;
-    let info = setup.create_info.cast::<vk::SwapchainCreateInfoKHR<'static>>();
+    let info = setup
+        .create_info
+        .cast::<vk::SwapchainCreateInfoKHR<'static>>();
     if info.is_null() {
         return None;
     }
@@ -264,7 +268,10 @@ impl Capture {
         }
 
         let info = unsafe { &*info.cast::<vk::PresentInfoKHR<'_>>() };
-        if info.swapchain_count != 1 || info.p_swapchains.is_null() || info.p_image_indices.is_null() {
+        if info.swapchain_count != 1
+            || info.p_swapchains.is_null()
+            || info.p_image_indices.is_null()
+        {
             return false;
         }
         let chain = unsafe { *info.p_swapchains };
@@ -310,12 +317,12 @@ impl Capture {
             let proc = self.setup.graphics.device_proc?;
             let device = self.setup.graphics.device;
             let get = unsafe {
-                std::mem::transmute::<Option<VkFunction>, Option<vk::PFN_vkGetSwapchainImagesKHR>>(proc(
-                    device,
-                    c"vkGetSwapchainImagesKHR".as_ptr(),
-                ))
+                std::mem::transmute::<Option<VkFunction>, Option<vk::PFN_vkGetSwapchainImagesKHR>>(
+                    proc(device, c"vkGetSwapchainImagesKHR".as_ptr()),
+                )
             }?;
-            if unsafe { get(handle(device), self.chain, &mut count, ptr::null_mut()) } != vk::Result::SUCCESS
+            if unsafe { get(handle(device), self.chain, &mut count, ptr::null_mut()) }
+                != vk::Result::SUCCESS
                 || count == 0
                 || count as usize > SWAPCHAIN_IMAGES
             {

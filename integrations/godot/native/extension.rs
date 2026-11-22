@@ -174,10 +174,8 @@ pub(crate) unsafe extern "C" fn rsf_godot_extension_configure(
             return 0;
         }
     }
-    let Some(platform) = (unsafe { crate::leaves(crate::host::native_platform()) }) else {
-        return 0;
-    };
-    compose(platform, &values).map_or(0, |value| crate::CONTROL.configure_engine(&value, viewport))
+    compose(&crate::platform::Platform, &values)
+        .map_or(0, |value| crate::CONTROL.configure_engine(&value, viewport))
 }
 
 /// The scripting status schema. Godot's callback materializes the scalar values

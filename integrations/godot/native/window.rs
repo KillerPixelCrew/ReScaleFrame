@@ -15,7 +15,7 @@
 //! `runtime.cpp` keeps the typed Win32 and Runtime calls as leaves. What an input event, a ping
 //! or a present marker means, and any pacing, stays with the Runtime (Rule 3): this owner reports
 //! what the window received and when.
-use crate::platform::{self, CpuService, Platform};
+use crate::platform::{CpuService, Platform};
 use rsf_game_sys::ffi_util::ascii_wide;
 use rsf_game_sys::{
     RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_INPUT_EVENT,
@@ -55,13 +55,9 @@ unsafe extern "system" fn procedure(
     lparam: isize,
 ) -> isize {
     let control = &*crate::CONTROL;
-    match platform::registered() {
-        Some(platform) => control
-            .window
-            .message(platform, window, message, wparam, lparam),
-        // Not reached: the procedure is attached only through a registered table.
-        None => 0,
-    }
+    control
+        .window
+        .message(&Platform, window, message, wparam, lparam)
 }
 
 /// `WNDPROC`.

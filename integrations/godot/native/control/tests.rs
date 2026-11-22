@@ -300,7 +300,7 @@ fn exported_status_accepts_the_same_output_twice() {
     let setup = fake::setup(c"C:/game/runtime");
     // SAFETY: the fake table and the initialized setup live for the call; the output is writable.
     unsafe {
-        assert_eq!(crate::rsf_godot_boot(&fake::LEAVES, &setup), 1);
+        assert_eq!(crate::rsf_godot_boot(&setup), 1);
         assert_eq!(crate::rsfg_status(&mut output), 1);
         assert_eq!(output.abi_version, ABI_VERSION);
         assert_eq!(crate::rsfg_status(&mut output), 1);
@@ -314,10 +314,7 @@ fn short_abi_records_need_only_the_size_word() {
     // SAFETY: the size word is the entire advertised record.
     unsafe {
         assert_eq!(crate::rsfg_attach_engine(size_word.cast()), 0);
-        assert_eq!(crate::rsf_godot_boot(&fake::LEAVES, size_word.cast()), 0);
-        assert_eq!(
-            crate::rsf_godot_configure(&fake::LEAVES, size_word.cast()),
-            0
-        );
+        assert_eq!(crate::rsf_godot_boot(size_word.cast()), 0);
+        assert_eq!(crate::rsf_godot_configure(size_word.cast()), 0);
     }
 }

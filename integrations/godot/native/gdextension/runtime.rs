@@ -44,7 +44,7 @@ fn admission(godot: &'static Godot, rendering: ObjectPtr) -> u32 {
     extension::admission(
         driver.as_deref(),
         method.as_deref(),
-        crate::host::native_platform().vulkan_supported(),
+        crate::platform::Platform.vulkan_supported(),
     )
 }
 

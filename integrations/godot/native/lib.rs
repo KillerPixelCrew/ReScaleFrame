@@ -50,7 +50,7 @@ use platform::{
     ABI_VERSION, EFFECT_VERSION, EffectLeaves, EffectStatus, EngineServices, Platform,
     SETTINGS_ABI_VERSION, Settings, Setup, Status, VkFunction, VkProc,
 };
-use rsf_game_sys::{rsf_game_cpu_event, rsf_game_log_fn, rsf_game_render_pass};
+use rsf_game_sys::{rsf_game_cpu_event, rsf_game_log_fn};
 use std::ffi::{c_char, c_int, c_void};
 use std::sync::LazyLock;
 
@@ -83,13 +83,6 @@ unsafe fn checked_output<T>(record: *mut T, abi: u32) -> Option<*mut T> {
 }
 
 /// # Safety
-/// `table` is null or the process-lived leaf table.
-unsafe fn leaves(table: *const Platform) -> Option<&'static Platform> {
-    // SAFETY: the caller's guarantee.
-    unsafe { platform::register(table) }
-}
-
-/// # Safety
 /// `services` is null or a readable `rsf_godot_engine_services` of its stated size.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsfg_attach_engine(services: *const EngineServices) -> c_int {
@@ -115,36 +108,26 @@ extern "C" fn rsfg_reset_history() {
 }
 
 /// # Safety
-/// `table` is null or the leaf table; `setup` is null or a readable `rsf_godot_setup` of its
-/// stated size whose strings are null or NUL-terminated for the call.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_boot(table: *const Platform, setup: *const Setup) -> c_int {
+/// `setup` is null or a readable `rsf_godot_setup` of its stated size whose strings are null or
+/// NUL-terminated for the call.
+unsafe fn rsf_godot_boot(setup: *const Setup) -> c_int {
     // SAFETY: the caller's guarantee.
-    match unsafe { (leaves(table), checked(setup, ABI_VERSION)) } {
-        (Some(platform), Some(setup)) => {
-            let result = CONTROL.boot(platform, setup);
-            if result != 0 {
-                CONTROL.window.bind_cpu_service(platform.cpu_service(false));
-            }
-            result
-        }
-        _ => 0,
+    let Some(setup) = (unsafe { checked(setup, ABI_VERSION) }) else {
+        return 0;
+    };
+    let result = CONTROL.boot(&Platform, setup);
+    if result != 0 {
+        CONTROL.window.bind_cpu_service(Platform.cpu_service(false));
     }
+    result
 }
 
 /// # Safety
-/// `table` is null or the leaf table; `settings` is null or a readable `rsf_godot_settings` of
-/// its stated size.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_configure(
-    table: *const Platform,
-    settings: *const Settings,
-) -> c_int {
+/// `settings` is null or a readable `rsf_godot_settings` of its stated size.
+unsafe fn rsf_godot_configure(settings: *const Settings) -> c_int {
     // SAFETY: the caller's guarantee.
-    match unsafe { (leaves(table), checked(settings, SETTINGS_ABI_VERSION)) } {
-        (Some(platform), Some(settings)) => CONTROL.configure(platform, settings),
-        _ => 0,
-    }
+    unsafe { checked(settings, SETTINGS_ABI_VERSION) }
+        .map_or(0, |settings| CONTROL.configure(&Platform, settings))
 }
 
 /// # Safety
@@ -160,145 +143,33 @@ unsafe extern "C" fn rsfg_settings(settings: *mut Settings) -> c_int {
 /// `status` follows the checked output record contract.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsfg_status(status: *mut Status) -> c_int {
-    // SAFETY: the caller's guarantee.
-    match (platform::registered(), unsafe {
-        checked_output(status, ABI_VERSION)
-    }) {
-        // SAFETY: checked_output established the record.
-        (Some(platform), Some(status)) => unsafe { CONTROL.status(platform, status) },
-        _ => 0,
-    }
+    // SAFETY: the caller's guarantee; checked_output established the record.
+    unsafe { checked_output(status, ABI_VERSION) }
+        .map_or(0, |status| unsafe { CONTROL.status(&Platform, status) })
 }
 
-/// `message` is forwarded to the session log unchanged, as the C++ trampoline did.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_log(message: *const c_char) {
-    CONTROL.log(message);
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_booted() -> c_int {
-    CONTROL.booted().into()
-}
-
-// The D3D12 SR context and submission owner (d3d12.rs), called by the rsfg_* forwarders in
-// runtime.cpp on Godot's render thread.
-
-/// # Safety
-/// `table` is null or the leaf table; `pass` is null or a readable `rsf_game_render_pass` of its
-/// stated size; `device`, `queue` and `commands` are the engine's live D3D12 objects for the call.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_d3d12_render(
-    table: *const Platform,
-    device: *mut c_void,
-    queue: *mut c_void,
-    commands: *mut c_void,
-    pass: *const rsf_game_render_pass,
-) -> c_int {
-    // SAFETY: the caller's guarantee.
-    let (Some(platform), Some(pass)) = (unsafe { leaves(table) }, unsafe { pass.as_ref() }) else {
-        return 0;
-    };
-    if !CONTROL.booted()
-        || device.is_null()
-        || queue.is_null()
-        || commands.is_null()
-        || (pass.struct_size as usize) < size_of::<rsf_game_render_pass>()
-    {
-        return 0;
-    }
-    CONTROL
-        .d3d12
-        .render(&CONTROL, platform, device, queue, commands, pass)
-}
-
-/// # Safety
-/// `table` is null or the leaf table.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_d3d12_render_begin(table: *const Platform, frame: u64) {
-    // SAFETY: the caller's guarantee.
-    if let Some(platform) = unsafe { leaves(table) }
-        && CONTROL.booted()
-    {
-        CONTROL.d3d12.render_begin(&CONTROL, platform, frame);
-    }
-}
+// The D3D12 SR context and submission owner (d3d12.rs), called by the rsfg_* entries in runtime.rs
+// on Godot's render thread.
 
 /// # Safety
 /// `lists` is null or readable for `count` entries.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsfg_submitted(queue: *mut c_void, lists: *const *mut c_void, count: u32) {
-    let Some(platform) = platform::registered() else {
-        return;
-    };
     if queue.is_null() || lists.is_null() || count == 0 {
         return;
     }
     // SAFETY: `count` readable command list pointers, compared by address only.
     let lists = unsafe { std::slice::from_raw_parts(lists.cast::<usize>(), count as usize) };
-    CONTROL.d3d12.submitted(platform, queue, lists);
+    CONTROL.d3d12.submitted(&Platform, queue, lists);
 }
 
 /// # Safety
 /// `chain` is the engine's swapchain for the call.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsfg_present(chain: *mut c_void) {
-    if let Some(platform) = platform::registered()
-        && CONTROL.booted()
-        && !chain.is_null()
-    {
-        CONTROL.d3d12.present(&CONTROL, platform, chain);
+    if CONTROL.booted() && !chain.is_null() {
+        CONTROL.d3d12.present(&CONTROL, &Platform, chain);
     }
-}
-
-/// # Safety
-/// `table` is null or the leaf table.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_d3d12_shutdown(table: *const Platform) -> c_int {
-    // SAFETY: the caller's guarantee.
-    let result =
-        unsafe { leaves(table) }.map_or(0, |platform| CONTROL.d3d12.shutdown(&CONTROL, platform));
-    if result != 0 {
-        CONTROL.window.bind_cpu_service(None);
-    }
-    result
-}
-
-// The Vulkan session binds the CPU services at boot and releases them after checked shutdown.
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_vk_booted() -> c_int {
-    CONTROL.vulkan.booted().into()
-}
-
-/// # Safety
-/// `table` is null or the leaf table; `setup` is null or a readable `rsf_godot_setup` of its
-/// stated size whose strings are null or NUL-terminated for the call.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_boot_vulkan(table: *const Platform, setup: *const Setup) -> c_int {
-    // SAFETY: the caller's guarantee.
-    match unsafe { (leaves(table), checked(setup, ABI_VERSION)) } {
-        (Some(platform), Some(setup)) => {
-            let result = CONTROL.vulkan.boot(platform, setup);
-            if result != 0 {
-                CONTROL.window.bind_cpu_service(platform.cpu_service(true));
-            }
-            result
-        }
-        _ => 0,
-    }
-}
-
-/// # Safety
-/// `table` is null or the leaf table.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_shutdown_vulkan(table: *const Platform) -> c_int {
-    // SAFETY: the caller's guarantee.
-    let result = unsafe { leaves(table) }.map_or(0, |platform| CONTROL.vulkan.shutdown(platform));
-    if result != 0 {
-        CONTROL.window.bind_cpu_service(None);
-    }
-    result
 }
 
 use vulkan::creation::typed::{self, Requirements};
@@ -349,20 +220,7 @@ unsafe fn vk_resolve(scope: u32, object: *mut c_void, name: *const c_char) -> Op
     }
 }
 
-// The input window owner (window.rs), called by the rsfg_* forwarders and the accept_window
-// trampoline in runtime.cpp.
-
-/// The Runtime's `accept_window` question and the admission `rsfg_vk_window` asks.
-///
-/// # Safety
-/// `table` is null or the leaf table; `window` is a window handle, compared and passed through.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_accept_window(table: *const Platform, window: *mut c_void) -> c_int {
-    // SAFETY: the caller's guarantee.
-    unsafe { leaves(table) }
-        .is_some_and(|platform| CONTROL.window.accept(platform, window))
-        .into()
-}
+// The input window owner (window.rs).
 
 /// `rsfg_cpu`.
 ///
@@ -376,21 +234,7 @@ unsafe extern "C" fn rsfg_cpu(event: *const rsf_game_cpu_event) {
         Some(&size) if size as usize >= size_of::<rsf_game_cpu_event>() => unsafe { &*event },
         _ => return,
     };
-    if let Some(platform) = platform::registered() {
-        CONTROL.window.cpu(platform, event);
-    }
-}
-
-/// The window part of `rsfg_shutdown`, before either backend stops.
-///
-/// # Safety
-/// `table` is null or the leaf table.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_window_release(table: *const Platform) {
-    // SAFETY: the caller's guarantee.
-    if let Some(platform) = unsafe { leaves(table) } {
-        CONTROL.window.release(platform);
-    }
+    CONTROL.window.cpu(&Platform, event);
 }
 
 /// Request a PCL ping for the admitted window.
@@ -403,48 +247,10 @@ extern "C" fn rsfg_request_latency_ping() -> c_int {
 /// keeps its window as the session's primary window.
 #[unsafe(no_mangle)]
 extern "C" fn rsfg_vk_window(window: *mut c_void) {
-    if let Some(platform) = platform::registered()
-        && CONTROL.vulkan.booted()
-    {
-        CONTROL.window.accept(platform, window);
+    if CONTROL.vulkan.booted() {
+        CONTROL.window.accept(&Platform, window);
         CONTROL.vulkan.report_window(window);
     }
-}
-
-/// # Safety
-/// The native export checked the pass size and borrows it for the call.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_execution(pass: *const rsf_game_render_pass, begin: u32) -> c_int {
-    // SAFETY: the native export lends a complete pass.
-    let pass = unsafe { &*pass };
-    CONTROL.window.execution(pass, begin).into()
-}
-
-/// The Vulkan session's primary window, null when none was reported since its start. Read by
-/// `rsfg_vk_create` under the guard.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_vk_primary_window() -> *mut c_void {
-    CONTROL.vulkan.primary_window()
-}
-
-/// `rsfg_vk_present_marker`: nonzero when the marker was reported for the admitted window.
-///
-/// # Safety
-/// `table` is null or the leaf table.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_present_marker(
-    table: *const Platform,
-    window: u64,
-    begin: u32,
-) -> c_int {
-    // SAFETY: the caller's guarantee.
-    unsafe { leaves(table) }
-        .is_some_and(|platform| {
-            CONTROL
-                .window
-                .present_marker(platform, CONTROL.vulkan.booted(), window, begin)
-        })
-        .into()
 }
 
 // The compositor effect owner (effect.rs). Each ReScaleFrameEffect instance owns one directly

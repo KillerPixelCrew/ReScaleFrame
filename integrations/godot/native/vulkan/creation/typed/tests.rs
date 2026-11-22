@@ -102,7 +102,10 @@ unsafe extern "system" fn mock_create_instance(
     CALLS.with_borrow_mut(|calls| {
         calls.instance = Some((
             app.api_version,
-            names(info.pp_enabled_extension_names, info.enabled_extension_count),
+            names(
+                info.pp_enabled_extension_names,
+                info.enabled_extension_count,
+            ),
             allocator.addr(),
         ));
     });
@@ -118,7 +121,8 @@ unsafe extern "system" fn mock_create_device(
 ) -> vk::Result {
     let request = unsafe { &*info };
     let head = request.p_next.cast::<vk::BaseInStructure<'static>>();
-    let root = unsafe { head.as_ref() }.filter(|node| node.s_type == Tag::PHYSICAL_DEVICE_FEATURES_2);
+    let root =
+        unsafe { head.as_ref() }.filter(|node| node.s_type == Tag::PHYSICAL_DEVICE_FEATURES_2);
     let features =
         root.map(|_| unsafe { (*head.cast::<vk::PhysicalDeviceFeatures2<'static>>()).features });
     let observation = ObservedDevice {
@@ -129,9 +133,13 @@ unsafe extern "system" fn mock_create_device(
         core_features: request.p_enabled_features.addr(),
         root: root.is_some(),
         inherited: features.is_some_and(|value| value.shader_clip_distance != 0),
-        sdk_write: features.is_some_and(|value| value.shader_storage_image_write_without_format != 0),
+        sdk_write: features
+            .is_some_and(|value| value.shader_storage_image_write_without_format != 0),
         individual_features: feature(head, Tag::PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES)
-            && feature(head, Tag::PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_FEATURES),
+            && feature(
+                head,
+                Tag::PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_FEATURES,
+            ),
         extensions: names(
             request.pp_enabled_extension_names,
             request.enabled_extension_count,
@@ -166,7 +174,11 @@ unsafe extern "system" fn mock_enumerate(
         .enumerate()
         {
             let mut entry = vk::ExtensionProperties::default();
-            for (slot, &byte) in entry.extension_name.iter_mut().zip(name.to_bytes_with_nul()) {
+            for (slot, &byte) in entry
+                .extension_name
+                .iter_mut()
+                .zip(name.to_bytes_with_nul())
+            {
                 *slot = byte as c_char;
             }
             unsafe { entries.add(index).write(entry) };
@@ -212,10 +224,9 @@ unsafe extern "C" fn mock_proc(_: *mut c_void, name: *const c_char) -> Option<Vk
     }
     unsafe {
         match CStr::from_ptr(name).to_bytes() {
-            b"vkCreateInstance" => Some(std::mem::transmute::<
-                vk::PFN_vkCreateInstance,
-                VkFunction,
-            >(mock_create_instance)),
+            b"vkCreateInstance" => Some(
+                std::mem::transmute::<vk::PFN_vkCreateInstance, VkFunction>(mock_create_instance),
+            ),
             b"vkCreateDevice" => Some(std::mem::transmute::<vk::PFN_vkCreateDevice, VkFunction>(
                 mock_create_device,
             )),
@@ -227,9 +238,9 @@ unsafe extern "C" fn mock_proc(_: *mut c_void, name: *const c_char) -> Option<Vk
                 vk::PFN_vkGetPhysicalDeviceProperties,
                 VkFunction,
             >(mock_properties)),
-            b"vkGetDeviceProcAddr" => Some(std::mem::transmute::<VkProc, VkFunction>(
-                mock_device_proc,
-            )),
+            b"vkGetDeviceProcAddr" => {
+                Some(std::mem::transmute::<VkProc, VkFunction>(mock_device_proc))
+            }
             _ => None,
         }
     }
@@ -367,14 +378,16 @@ fn typed_creation_negotiates_on_owners_and_preserves_engine_records() {
         );
     });
 
-    let mut half = made(|half: &mut vk::PhysicalDeviceShaderFloat16Int8Features| {
-        half.shader_float16 = 1
-    });
-    let timeline = made(|timeline: &mut vk::PhysicalDeviceTimelineSemaphoreFeatures| {
-        timeline.timeline_semaphore = 1;
-        timeline.p_next = (&raw mut half).cast();
-    });
-    let enabled = made(|features: &mut vk::PhysicalDeviceFeatures| features.shader_clip_distance = 1);
+    let mut half =
+        made(|half: &mut vk::PhysicalDeviceShaderFloat16Int8Features| half.shader_float16 = 1);
+    let timeline = made(
+        |timeline: &mut vk::PhysicalDeviceTimelineSemaphoreFeatures| {
+            timeline.timeline_semaphore = 1;
+            timeline.p_next = (&raw mut half).cast();
+        },
+    );
+    let enabled =
+        made(|features: &mut vk::PhysicalDeviceFeatures| features.shader_clip_distance = 1);
     let queue = made(|queue: &mut vk::DeviceQueueCreateInfo| {
         queue.queue_family_index = 4;
         queue.queue_count = 2;
@@ -518,9 +531,8 @@ fn typed_creation_negotiates_on_owners_and_preserves_engine_records() {
 #[test]
 fn typed_clone_promotes_existing_features2_without_editing_links() {
     let mut root = vk::PhysicalDeviceFeatures2::default();
-    let mut v13 = made(|v13: &mut vk::PhysicalDeviceVulkan13Features| {
-        v13.p_next = (&raw mut root).cast()
-    });
+    let mut v13 =
+        made(|v13: &mut vk::PhysicalDeviceVulkan13Features| v13.p_next = (&raw mut root).cast());
     let v12 = made(|v12: &mut vk::PhysicalDeviceVulkan12Features| {
         v12.p_next = (&raw mut v13).cast();
         v12.timeline_semaphore = 1;
@@ -554,7 +566,15 @@ fn typed_clone_promotes_existing_features2_without_editing_links() {
     assert!(root.p_next.is_null());
 
     v13.s_type = Tag::PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-    assert!(unsafe { Chain::copy(info.p_next.cast()) }.unwrap().is_none());
+    assert!(
+        unsafe { Chain::copy(info.p_next.cast()) }
+            .unwrap()
+            .is_none()
+    );
     v13.s_type = Tag::from_raw(0x7ffffffe);
-    assert!(unsafe { Chain::copy(info.p_next.cast()) }.unwrap().is_none());
+    assert!(
+        unsafe { Chain::copy(info.p_next.cast()) }
+            .unwrap()
+            .is_none()
+    );
 }
