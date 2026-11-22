@@ -24,7 +24,7 @@ use crate::abi::{
     RSF_OVERLAY_OK, RsfOverlayDrawData, RsfOverlayInput, RsfOverlayIntent, RsfOverlayResult,
     RsfOverlayStats, RsfOverlayTextureUpdate,
 };
-use crate::model::{FrameInput, Quality, Stats};
+use crate::model::{FrameInput, Stats};
 use crate::overlay::Overlay;
 
 /// Longest borrowed string the overlay will read.
@@ -326,7 +326,6 @@ unsafe fn borrow_stats(stats: &RsfOverlayStats) -> Stats<'_> {
     Stats {
         backend_loaded: stats.backend_loaded != 0,
         refusal_reason: unsafe { borrow_str(stats.refusal_reason) },
-        quality: Quality::from_abi(stats.quality),
         quality_raw: stats.quality,
         enabled: stats.enabled != 0,
         backend: stats.backend,

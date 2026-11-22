@@ -188,12 +188,12 @@ impl Selection {
     /// Reconcile with what the runtime says is in effect. Called once per frame, whether or not
     /// the panel is visible, so a change applied while it was hidden is not shown as still pending.
     pub(crate) fn reconcile(&mut self, stats: &Stats<'_>) {
-        if self.requested_quality == stats.quality {
+        if self.requested_quality == stats.quality() {
             self.requested_quality = None;
         }
         self.quality = self
             .requested_quality
-            .or(stats.quality)
+            .or(stats.quality())
             .unwrap_or(self.quality);
 
         if self.requested_enabled == Some(stats.enabled) {
@@ -919,7 +919,7 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
     if stats.sr_quality_locked {
         note(ui, "Input resolution is controlled by the game", MUTED);
     }
-    match (selection.requested_quality, stats.quality) {
+    match (selection.requested_quality, stats.quality()) {
         (Some(requested), effect) => {
             let in_effect = match effect {
                 Some(level) => level.label().to_owned(),

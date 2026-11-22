@@ -162,7 +162,7 @@ pub struct RsfOverlayStats {
     /// Last provider-selection persistence result.
     pub fg_selection_result: i32,
     /// ABI 10. Super-resolution backend IDs the host can switch to, as bits (bit n is backend ID
-    /// n). Zero means no mask was supplied and the default list applies.
+    /// n). Zero disables the upscaling controls. SR-capable hosts supply their actual mask.
     pub sr_backend_choices: u32,
     /// Requested DLSS model; driver overrides can replace it.
     pub dlss_preset: u32,

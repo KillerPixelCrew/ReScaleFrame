@@ -13,15 +13,17 @@ use crate::sr_session::has_capacity;
 use std::ffi::{CString, c_char, c_void};
 use std::mem;
 use std::ptr::null_mut;
-
-mod platform;
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
+
+mod pipeline;
+mod platform;
 
 type Handle = *mut c_void;
 const ABI: u32 = 1;
 const OK: i32 = 0;
 const INVALID: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
+const SHADER_FAILED: i32 = -3;
 const RESOURCE_FAILED: i32 = -4;
 const MAX_VERTICES: u32 = 1 << 22;
 const MAX_INDICES: u32 = 1 << 23;
@@ -39,8 +41,6 @@ struct Setup {
     log_user: Handle,
 }
 
-// Same order as rsf_overlay11_pipeline. The pipeline leaf transfers any references
-// it acquired, including on a partial creation failure.
 type RawPipeline = [Handle; 8];
 
 struct Draw {
@@ -51,16 +51,21 @@ struct Draw {
     clip: [i32; 4],
 }
 
-#[repr(C)]
-struct Platform {
-    pipeline: unsafe extern "C" fn(Handle, &Setup, &mut RawPipeline) -> i32,
-    log: unsafe extern "C" fn(LogFn, Handle, *const c_char),
+unsafe extern "C" {
+    fn rsf_overlay_renderer_log(log: LogFn, user: Handle, message: *const c_char);
 }
 
-const _: () = {
-    assert!(size_of::<Setup>() == 24);
-    assert!(size_of::<Platform>() == 2 * size_of::<Handle>());
-};
+impl Setup {
+    fn say(&self, text: &str) {
+        if self.log.is_some()
+            && let Ok(text) = CString::new(text)
+        {
+            unsafe { rsf_overlay_renderer_log(self.log, self.log_user, text.as_ptr()) };
+        }
+    }
+}
+
+const _: () = assert!(size_of::<Setup>() == 24);
 
 struct Texture {
     id: u64,
@@ -91,16 +96,11 @@ struct Renderer {
     pipeline: [ComRef; 8],
     device: ComRef,
     setup: Setup,
-    platform: &'static Platform,
 }
 
 impl Renderer {
     fn say(&self, text: &str) {
-        if self.setup.log.is_some()
-            && let Ok(text) = CString::new(text)
-        {
-            unsafe { (self.platform.log)(self.setup.log, self.setup.log_user, text.as_ptr()) };
-        }
+        self.setup.say(text);
     }
 
     fn state(&self) -> Option<MutexGuard<'_, State>> {
@@ -416,11 +416,10 @@ fn clip_rect(call: &DrawCall, width: u32, height: u32) -> Option<[i32; 4]> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay11_create(
+unsafe extern "C" fn rsf_overlay_renderer_create(
     device: Handle,
     setup: *const Setup,
-    out: *mut *mut Renderer,
-    platform: &'static Platform,
+    out: *mut Handle,
 ) -> i32 {
     if device.is_null() || out.is_null() || !unsafe { has_capacity(setup) } {
         return INVALID;
@@ -430,38 +429,22 @@ unsafe extern "C" fn rsf_core_overlay11_create(
         return ABI_MISMATCH;
     }
     unsafe { out.write(null_mut()) };
-    let mut raw = [null_mut(); 8];
-    let status = unsafe { (platform.pipeline)(device, setup, &mut raw) };
-    let pipeline = raw.map(|handle| unsafe { ComRef::from_owned(handle) });
-    if status != OK {
-        return status;
-    }
-    let [
-        Some(vs),
-        Some(ps),
-        Some(layout),
-        Some(constants),
-        Some(blend),
-        Some(depth),
-        Some(raster),
-        Some(sampler),
-    ] = pipeline
-    else {
-        return RESOURCE_FAILED;
+    let pipeline = match unsafe { pipeline::create(device, setup) } {
+        Ok(pipeline) => pipeline,
+        Err(status) => return status,
     };
     let renderer = crate::allocate_handle(Renderer {
         state: Mutex::new(State::default()),
         pending_free: Mutex::new(Vec::new()),
-        pipeline: [vs, ps, layout, constants, blend, depth, raster, sampler],
+        pipeline,
         device: unsafe { ComRef::retain(device) },
         setup: *setup,
-        platform,
     });
     let Some(owner) = (unsafe { renderer.as_ref() }) else {
         return RESOURCE_FAILED;
     };
     owner.say("overlay renderer ready");
-    unsafe { out.write(renderer) };
+    unsafe { out.write(renderer.cast()) };
     OK
 }
 

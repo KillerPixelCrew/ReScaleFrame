@@ -146,9 +146,7 @@ pub struct Stats<'a> {
     pub backend_loaded: bool,
     /// Why the backend is unusable, when it is.
     pub refusal_reason: Option<&'a str>,
-    /// The quality in effect, or `None` when the runtime named one this build does not know.
-    pub quality: Option<Quality>,
-    /// The raw quality value, kept so an unknown one can be shown as the number it was.
+    /// The quality in effect, including numeric values this panel build does not recognize.
     pub quality_raw: abi::RsfOverlayQuality,
     /// Requested DLSS model.
     pub dlss_preset: u32,
@@ -297,7 +295,6 @@ impl Default for Stats<'_> {
         Self {
             backend_loaded: false,
             refusal_reason: None,
-            quality: Some(Quality::Native),
             quality_raw: abi::RSF_OVERLAY_QUALITY_NATIVE,
             dlss_preset: 0,
             dlss_preset_available: false,
@@ -326,7 +323,12 @@ impl Stats<'_> {
     /// Set the quality in effect from a raw ABI value, keeping the raw number.
     pub fn set_quality(&mut self, raw: abi::RsfOverlayQuality) {
         self.quality_raw = raw;
-        self.quality = Quality::from_abi(raw);
+    }
+
+    /// Decode the reported quality when this panel recognizes it.
+    #[must_use]
+    pub fn quality(&self) -> Option<Quality> {
+        Quality::from_abi(self.quality_raw)
     }
 }
 
@@ -538,7 +540,7 @@ mod tests {
 
         let mut stats = Stats::default();
         stats.set_quality(7);
-        assert_eq!(stats.quality, None);
+        assert_eq!(stats.quality(), None);
         assert_eq!(stats.quality_raw, 7);
     }
     #[test]
