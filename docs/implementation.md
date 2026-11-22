@@ -934,6 +934,13 @@ native package boundary. Source review covers the receipts, per-view SR
 epoch and resize and release proofs. Build and device validation remain open.
 [U04 source audit](research/rust-unity-vulkan-platform.md)
 
+The Unity Vulkan route now admits and executes queued textures, prepares
+and forwards Present, and manages the original player HWND in Rust.
+C++ supplies the Unity V2 interface and guards foreign callbacks.
+The source review checks the same U02 recording epoch, queue receipts,
+and GPU drain through resize and release. Build and device checks remain open.
+[Unity Vulkan callback boundary audit](research/rust-unity-vulkan-callback-boundary.md)
+
 Unity's D3D11 bridge now publishes its shared graphics interfaces,
 fences and command slots as a complete Rust-owned record. Failed
 initialization rolls back the partial objects. The existing retirement

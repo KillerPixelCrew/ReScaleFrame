@@ -14,10 +14,9 @@
    package bridge's submission ring (bridge_interop.h); a process has one Unity renderer, so the
    D3D11 and Vulkan bridges never use it at once. Rust owns the shared graphics device record,
    Vulkan dispatch, command pool, per-slot handles and imported images. vulkan_platform.rs
-   executes the graphics operations. vulkan_bridge.cpp keeps Unity and Win32 presentation access.
-
-   Event slots number RSF_UNITY_FRAMES_PACKETS: each event carries one packet taken from the
-   shared store. vulkan_bridge.cpp sizes its image arrays to match. */
+   executes the graphics operations. Rust also owns the HWND path and the image descriptors
+   copied into each admitted event. vulkan_bridge.cpp calls the Unity SDK and guards foreign
+   callbacks. */
 #include "bridge_state.h"
 
 /* Render event kinds, by offset from the bridge's first event ID. */
@@ -41,7 +40,7 @@ typedef struct rsf_unity_vulkan_frame {
 uint32_t rsf_unity_vulkan_set_window(const rsf_unity_vulkan_frame* frame, uint64_t instance, void* device, uint64_t queue, void* parent);
 
 /* Copies frame into a free event slot of this kind. Returns the copy's address, which Unity hands
-   back to the queue callback as identity only, and its slot for the caller's images; NULL when
+   back to the queue callback as identity only, and its slot; NULL when
    faulted, closing, of an unknown kind or full. */
 void* rsf_unity_vulkan_admit_event(const rsf_unity_vulkan_frame* frame, uint32_t kind, uint32_t reconfigure,
     uint32_t* slot);

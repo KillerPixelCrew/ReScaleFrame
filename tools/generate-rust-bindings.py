@@ -527,6 +527,12 @@ generate("games/unity-mono/src/shared_surface_abi.rs", "runtime/presentation/inc
          "rsf_shared_.*", "RSF_SHARED_SURFACE_ABI_VERSION", [],
          ["--allowlist-function",
           "rsf_shared_(surface_(create|destroy|d3d11|d3d12)|fence_(create|destroy|d3d11|d3d12))"])
+generate("games/unity-mono/src/vulkan_foreign_abi.rs", "integrations/unity/native/vulkan_foreign.h",
+         "rsf_uvk_engine_(image|instance)", "NOTHING",
+         ["-Igames/unity-mono/src", "-Igames/unity-mono/include", "-Isdk/game/include"],
+         ["--no-recursive-allowlist", "--allowlist-function", "rsf_uvk_foreign_.*",
+          "--with-derive-default", "--raw-line", "use crate::vulkan_handles::rsf_unity_vulkan_device_handles;",
+          "--raw-line", "use rsf_game_sys::{rsf_game_host_services, rsf_game_render_pass};"])
 generate("games/unity-mono/src/vulkan_handles.rs", "games/unity-mono/src/vulkan_state.h",
          "rsf_unity_vulkan_(device|command|image)_handles", "NOTHING",
          ["-Igames/unity-mono/include", "-Isdk/game/include"],

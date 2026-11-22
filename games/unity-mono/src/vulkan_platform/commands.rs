@@ -9,8 +9,7 @@ use std::ptr::null;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::core::Interface;
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_uvk_gpu_begin(
+pub(crate) unsafe extern "C" fn rsf_uvk_gpu_begin(
     shared: *const DeviceHandles,
     slot: *const CommandSlot,
     ring: u32,
@@ -51,8 +50,7 @@ unsafe extern "C" fn rsf_uvk_gpu_begin(
     true
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_uvk_gpu_upload(
+pub(crate) unsafe extern "C" fn rsf_uvk_gpu_upload(
     shared: *const DeviceHandles,
     slot: *const CommandSlot,
     waits: *const vk::Semaphore,
@@ -108,8 +106,7 @@ unsafe extern "C" fn rsf_uvk_gpu_upload(
     unsafe { queue.Wait(fence, value).is_ok() }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_uvk_gpu_submit(
+pub(crate) unsafe extern "C" fn rsf_uvk_gpu_submit(
     shared: *const DeviceHandles,
     slot: *const CommandSlot,
     ring: u32,
@@ -156,8 +153,7 @@ unsafe extern "C" fn rsf_uvk_gpu_submit(
     true
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_uvk_gpu_dx_barrier(
+pub(crate) unsafe extern "C" fn rsf_uvk_gpu_dx_barrier(
     list: *mut c_void,
     resource: *mut c_void,
     before: i32,
@@ -178,8 +174,7 @@ unsafe extern "C" fn rsf_uvk_gpu_dx_barrier(
     unsafe { borrow::<ID3D12GraphicsCommandList>(&list).ResourceBarrier(&[barrier]) };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_uvk_gpu_dx_copy(
+pub(crate) unsafe extern "C" fn rsf_uvk_gpu_dx_copy(
     list: *mut c_void,
     target: *mut c_void,
     source: *mut c_void,
@@ -216,8 +211,7 @@ unsafe fn image_barrier(dispatch: &Dispatch, command: u64, barrier: &vk::ImageMe
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_uvk_gpu_image_transition(
+pub(crate) unsafe extern "C" fn rsf_uvk_gpu_image_transition(
     shared: *const DeviceHandles,
     command: u64,
     image: u64,
@@ -271,8 +265,7 @@ fn color_range() -> vk::ImageSubresourceRange {
         .layer_count(1)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_uvk_gpu_copy(
+pub(crate) unsafe extern "C" fn rsf_uvk_gpu_copy(
     shared: *const DeviceHandles,
     command: u64,
     source: u64,
@@ -304,8 +297,7 @@ unsafe extern "C" fn rsf_uvk_gpu_copy(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_uvk_gpu_blit_present(
+pub(crate) unsafe extern "C" fn rsf_uvk_gpu_blit_present(
     shared: *const DeviceHandles,
     command: u64,
     presented: u64,

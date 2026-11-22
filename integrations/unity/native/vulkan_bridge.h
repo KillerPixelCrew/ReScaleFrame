@@ -5,7 +5,7 @@
 #include <IUnityInterface.h>
 #include <wrl/client.h>
 // Unity package entry points for plugin events, texture/queue access and HWND management.
-// Vulkan and D3D12 command ownership uses the private Rust GPU boundary in vulkan_gpu.h.
+// Foreign callback guards and the Rust ingress use the private vulkan_foreign.h contract.
 void rsf_uvk_preload(IUnityInterfaces*);
 void rsf_uvk_load(IUnityInterfaces*, int event_id);
 void rsf_uvk_unload() noexcept;

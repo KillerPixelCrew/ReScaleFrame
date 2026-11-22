@@ -37,8 +37,9 @@ through `vkDeviceWaitIdle` and the semaphore destruction, and the window thread 
 waiting to create the DXGI swap chain.
 Rust owns the shared D3D12 device, queue and fence, the Vulkan import, the shared images and
 the command pool and slots. `vulkan_platform.rs` and its submodules execute the typed graphics
-calls, including the HWND swapchain. `integrations/unity/native/vulkan_bridge.cpp` keeps Unity
-interfaces, Win32 window handling, and the intercepted Present callback. An admitted Present
+calls, including the HWND swapchain. `vulkan_bridge.rs` owns queue and Present routing, event
+image receipts and Win32 window handling. `integrations/unity/native/vulkan_bridge.cpp` keeps
+Unity graphics dispatch and guards foreign callbacks. An admitted Present
 holds its entry through native forwarding and keeps a local COM reference to the DXGI backbuffer
 during that call. Unity swapchain setup publishes a complete record and rolls back earlier semaphores if a
 later step or publication refuses.

@@ -19,8 +19,9 @@
 //! the forwarded vkQueuePresentKHR, and retirement keeps it through vkDeviceWaitIdle and the
 //! semaphore destruction, which need host access to the device's queues.
 //!
-//! vulkan_platform.rs executes GPU operations through the borrowed device view. Unity interface
-//! access and window-thread handling stay in C++. Callbacks run outside the state mutex.
+//! vulkan_bridge.rs runs frame and HWND presentation through the typed platform owner.
+//! The native boundary calls Unity's versioned interface and guards foreign callbacks.
+//! Callbacks run outside the state mutex.
 //! The orchestrator's Vulkan frame-generation swapchain owners have their own presentation
 //! tables and this crate does not link them, so the registry here is the bridge's own.
 //!
@@ -39,6 +40,10 @@ use rsf_game_sys::rsf_game_host_services;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
+
+#[cfg(all(windows, not(feature = "mono-plugin")))]
+#[path = "vulkan_bridge.rs"]
+mod bridge;
 
 const EVENTS: usize = RSF_UNITY_FRAMES_PACKETS as usize;
 const SLOTS: usize = RSF_UNITY_FRAMES_SLOTS as usize;
@@ -78,6 +83,8 @@ struct Event {
     kind: u32,
     reconfigure: bool,
     stage: Stage,
+    #[cfg(all(windows, not(feature = "mono-plugin")))]
+    textures: bridge::Textures,
 }
 
 const FREE: Event = Event {
@@ -85,6 +92,8 @@ const FREE: Event = Event {
     kind: 0,
     reconfigure: false,
     stage: Stage::Free,
+    #[cfg(all(windows, not(feature = "mono-plugin")))]
+    textures: bridge::Textures::EMPTY,
 };
 
 /// One started event: its slot, frame with services, kind and whether it applies a policy change.
@@ -102,6 +111,7 @@ struct ImageKey {
 struct Image {
     key: ImageKey,
     handles: ImageHandles,
+    #[cfg(any(test, all(windows, not(feature = "mono-plugin"))))]
     initialized: bool,
 }
 
@@ -188,6 +198,7 @@ struct SharedDevice {
     pool: u64,
     slots: [CommandSlot; SLOTS],
     epoch: u64,
+    #[cfg(all(windows, not(feature = "mono-plugin")))]
     recordings: [u64; SLOTS],
 }
 
@@ -199,6 +210,7 @@ impl SharedDevice {
             pool: 0,
             slots: [CommandSlot::EMPTY; SLOTS],
             epoch: 0,
+            #[cfg(all(windows, not(feature = "mono-plugin")))]
             recordings: [0; SLOTS],
         }
     }
@@ -283,6 +295,7 @@ struct State {
     surface: Option<Surface>,
     images: [Option<Image>; SHARED_IMAGES],
     /// Images whose barriers are recorded in the current command buffer.
+    #[cfg(any(test, all(windows, not(feature = "mono-plugin"))))]
     recorded_images: u32,
     /// Vulkan accepted an upload, but no Vulkan slot fence covers it yet.
     partial_submission: bool,
@@ -310,6 +323,7 @@ impl State {
             window: None,
             surface: None,
             images: [None; SHARED_IMAGES],
+            #[cfg(any(test, all(windows, not(feature = "mono-plugin"))))]
             recorded_images: 0,
             partial_submission: false,
         }
@@ -347,6 +361,8 @@ impl State {
             kind,
             reconfigure,
             stage: Stage::Queued,
+            #[cfg(all(windows, not(feature = "mono-plugin")))]
+            textures: bridge::Textures::EMPTY,
         };
         Some(slot)
     }
@@ -416,6 +432,7 @@ impl State {
             && self.events.iter().all(|event| event.stage == Stage::Free)
     }
 
+    #[cfg(any(test, all(windows, not(feature = "mono-plugin"))))]
     fn record_image(&mut self, index: usize) -> bool {
         let Some(image) = self.images.get(index).copied().flatten() else {
             return false;
@@ -424,6 +441,7 @@ impl State {
         image.initialized
     }
 
+    #[cfg(any(test, all(windows, not(feature = "mono-plugin"))))]
     fn accept_recorded_images(&mut self) {
         let mask = std::mem::take(&mut self.recorded_images);
         for (index, image) in self.images.iter_mut().enumerate() {
@@ -435,11 +453,13 @@ impl State {
         }
     }
 
+    #[cfg(any(test, all(windows, not(feature = "mono-plugin"))))]
     fn upload_submitted(&mut self) {
         self.accept_recorded_images();
         self.partial_submission = true;
     }
 
+    #[cfg(any(test, all(windows, not(feature = "mono-plugin"))))]
     fn handback_fenced(&mut self) {
         self.accept_recorded_images();
         self.partial_submission = false;
@@ -702,6 +722,7 @@ fn prepare_image(state: &Mutex<State>, index: usize, key: ImageKey) -> Option<Im
         state.images[index].replace(Image {
             key,
             handles,
+            #[cfg(any(test, all(windows, not(feature = "mono-plugin"))))]
             initialized: false,
         })
     };
@@ -736,13 +757,13 @@ unsafe extern "C" fn rsf_unity_vulkan_prepare_image(
     true
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, not(feature = "mono-plugin")))]
 pub(super) fn record_image(index: u32) -> bool {
     lock().record_image(index as usize)
 }
 
 /// Called after the Vulkan slot fence completed and all command buffers and lists reset.
-#[cfg(windows)]
+#[cfg(all(windows, not(feature = "mono-plugin")))]
 pub(super) fn begin_recording(index: u32) -> Option<(u64, u64)> {
     let mut state = lock();
     state.recorded_images = 0;
@@ -752,12 +773,12 @@ pub(super) fn begin_recording(index: u32) -> Option<(u64, u64)> {
     (device.epoch != 0).then_some((device.epoch, *serial))
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, not(feature = "mono-plugin")))]
 pub(super) fn upload_submitted() {
     lock().upload_submitted();
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, not(feature = "mono-plugin")))]
 pub(super) fn handback_fenced() {
     lock().handback_fenced();
 }
@@ -908,8 +929,7 @@ struct Swapchain {
     present_ready: Vec<u64>,
 }
 
-/// The presented image of a leased swapchain (rsf_unity_vulkan_present_source). Written for
-/// vulkan_bridge.cpp; only the tests read it here.
+/// The presented image of a leased swapchain and the semaphore for forwarding.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[allow(dead_code)]

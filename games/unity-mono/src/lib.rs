@@ -41,8 +41,10 @@ mod runtime_setup;
 mod shared_surface_abi;
 #[cfg(any(test, all(windows, feature = "mono-plugin")))]
 mod startup_policy;
+#[cfg(all(windows, not(feature = "mono-plugin")))]
+mod vulkan_foreign_abi;
 mod vulkan_handles;
-#[cfg(windows)]
+#[cfg(all(windows, not(feature = "mono-plugin")))]
 mod vulkan_platform;
 mod vulkan_resolver;
 mod vulkan_state;

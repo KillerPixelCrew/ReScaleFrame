@@ -14,8 +14,7 @@ use windows::core::Interface;
 const FORMAT: DXGI_FORMAT = DXGI_FORMAT_R8G8B8A8_UNORM;
 const BUFFER_COUNT: u32 = 3;
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_uvk_gpu_chain_create(
+pub(crate) unsafe extern "C" fn rsf_uvk_gpu_chain_create(
     shared: *const DeviceHandles,
     window: *mut c_void,
     width: u32,
@@ -52,8 +51,7 @@ unsafe extern "C" fn rsf_uvk_gpu_chain_create(
     chain.map_or(null_mut(), Interface::into_raw)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_uvk_gpu_chain_extent(
+pub(crate) unsafe extern "C" fn rsf_uvk_gpu_chain_extent(
     chain: *mut c_void,
     width: *mut u32,
     height: *mut u32,
@@ -65,8 +63,11 @@ unsafe extern "C" fn rsf_uvk_gpu_chain_extent(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_uvk_gpu_chain_resize(chain: *mut c_void, width: u32, height: u32) -> bool {
+pub(crate) unsafe extern "C" fn rsf_uvk_gpu_chain_resize(
+    chain: *mut c_void,
+    width: u32,
+    height: u32,
+) -> bool {
     unsafe {
         borrow::<IDXGISwapChain3>(&chain)
             .ResizeBuffers(BUFFER_COUNT, width, height, FORMAT, DXGI_SWAP_CHAIN_FLAG(0))
@@ -74,20 +75,17 @@ unsafe extern "C" fn rsf_uvk_gpu_chain_resize(chain: *mut c_void, width: u32, he
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_uvk_gpu_chain_destroy(chain: *mut c_void) {
+pub(crate) unsafe extern "C" fn rsf_uvk_gpu_chain_destroy(chain: *mut c_void) {
     unsafe { release::<IDXGISwapChain3>(chain) };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_uvk_gpu_chain_buffer(chain: *mut c_void) -> *mut c_void {
+pub(crate) unsafe extern "C" fn rsf_uvk_gpu_chain_buffer(chain: *mut c_void) -> *mut c_void {
     let chain = unsafe { borrow::<IDXGISwapChain3>(&chain) };
     unsafe { chain.GetBuffer::<ID3D12Resource>(chain.GetCurrentBackBufferIndex()) }
         .map_or(null_mut(), Interface::into_raw)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_uvk_gpu_chain_present(chain: *mut c_void) -> bool {
+pub(crate) unsafe extern "C" fn rsf_uvk_gpu_chain_present(chain: *mut c_void) -> bool {
     unsafe {
         borrow::<IDXGISwapChain3>(&chain)
             .Present(0, DXGI_PRESENT(0))
