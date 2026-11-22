@@ -29,7 +29,7 @@ use windows::core::{IUnknown, Interface, PCSTR, PCWSTR, w};
 type Raw = *mut c_void;
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_present_fixture_debug_errors(device: Raw) -> i32 {
+pub(super) unsafe extern "C" fn rsf_present_fixture_debug_errors(device: Raw) -> i32 {
     let device = unsafe { ID3D12Device::from_raw_borrowed(&device) }.unwrap();
     let Ok(messages) = device.cast::<ID3D12InfoQueue>() else {
         return 1;

@@ -2,6 +2,7 @@
 //! Synthetic SR evaluation on the presentation fixture's existing Streamline host.
 use crate::d3d11_bridge_sr_abi::*;
 use crate::d3d11_device_checks::rsf_d3d11_fixture_red_half;
+use crate::present_fixture_loops_abi::{rsf_streamline_host_abort, rsf_streamline_host_begin};
 use rsf_game_sys::rsf_game_render_pass;
 use std::ffi::c_void;
 use std::ptr::{null, null_mut};
@@ -76,7 +77,7 @@ unsafe extern "C" fn rsf_d3d11_fixture_shared_sr(
     let mut pass: rsf_game_render_pass = unsafe { std::mem::zeroed() };
     pass.struct_size = size_of::<rsf_game_render_pass>() as u32;
     pass.source_frame_id = 1;
-    if unsafe { rsf_streamline_host_begin(host, 1) } != 0 {
+    if unsafe { rsf_streamline_host_begin(host.cast(), 1) } != 0 {
         return 1;
     }
     unsafe { rsf_native_fg_scene(&pass) };
@@ -87,7 +88,7 @@ unsafe extern "C" fn rsf_d3d11_fixture_shared_sr(
     } else {
         0
     };
-    unsafe { rsf_streamline_host_abort(host, 1) };
+    unsafe { rsf_streamline_host_abort(host.cast(), 1) };
     if unsafe { rsf_dlss_release_resources() } != 0
         || unsafe { rsf_dlss_shutdown() } != 0
         || sample == 0

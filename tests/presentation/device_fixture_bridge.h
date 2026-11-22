@@ -38,7 +38,8 @@ typedef struct rsf_fg_fixture_submission {
     uint64_t source;
     uint32_t produce_input, submit, view, overlay;
     int32_t overlay_visible;
-    void (*prepare)(void* commands, void* backbuffer, void* session);
+    void* prepare_user;
+    void (*prepare)(void* user, void* commands, void* backbuffer, void* session);
     void (*log)(void* user, const char* message);
 } rsf_fg_fixture_submission;
 /* A graphics error returns 1. A failed overlay draw clears accepted without ending the run. */

@@ -40,7 +40,7 @@ impl Drop for Focus {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fg_bridge_fixture_focus_start(window: HWND) -> *mut c_void {
+pub(super) extern "C" fn rsf_fg_bridge_fixture_focus_start(window: HWND) -> *mut c_void {
     let mut focus = Focus {
         previous: unsafe { GetForegroundWindow() },
         window,
@@ -79,7 +79,7 @@ extern "C" fn rsf_fg_bridge_fixture_focus_start(window: HWND) -> *mut c_void {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg_bridge_fixture_focus_valid(lease: *const c_void) -> i32 {
+pub(super) unsafe extern "C" fn rsf_fg_bridge_fixture_focus_valid(lease: *const c_void) -> i32 {
     let lease = unsafe { &*lease.cast::<Focus>() };
     i32::from(lease.started.elapsed() < LIMIT && unsafe { GetForegroundWindow() } == lease.window)
 }

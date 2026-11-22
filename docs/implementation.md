@@ -3206,6 +3206,13 @@ AC7 scope packet assembly, overlay submission and focus handling. Both
 native fixture runners still contain scenario logic.
 [Bridge state and device source checks](research/rust-d3d11-bridge-native-owner.md)
 
+Both linked D02 fixtures now schedule live source frames and check
+vendor activity, switches, and retirement in Rust. Their native
+launchers keep device startup and cleanup, and the AC7 fixture keeps its
+guarded native command-list seam. The evidence is source and native
+syntax verification.
+[Linked device loop source checks](research/rust-d02-fixture-loops.md)
+
 The scoped owner check now queries the caller's live COM receiver for
 its canonical identity and compares that address with the published
 facade. It rechecks publication after the query. The synthetic scoped

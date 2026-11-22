@@ -7,6 +7,7 @@
 #include <rescaleframe/native_scene.h>
 #include <rescaleframe/native_window.h>
 #include "presentation/d3d11_scope_fixture.h"
+#include "presentation/present_fixture_loops.h"
 #include <d3d11.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
@@ -16,8 +17,8 @@
 #include <cstring>
 #include <cstddef>
 #include <cwchar>
-#include <algorithm>
 using Microsoft::WRL::ComPtr;
+static_assert(sizeof(rsf_ac7_loop) == 104 && offsetof(rsf_ac7_loop, read_cpu) == 96);
 extern "C" int rsf_d3d11_fixture_shared_sr(void* host, void* device, void* context,
     void* const* textures, rsf_dlss_log_fn log, rsf_dlss_frame* frame);
 
@@ -31,6 +32,14 @@ struct NativeList {
     bool executing = false;
     unsigned char padding[3]{};
     uint32_t count = 0, uid = 1;
+
+    void reset() {
+        root = nullptr;
+        tail = &root;
+        executing = false;
+        count = 0;
+        uid = 1;
+    }
 };
 static_assert(sizeof(NativeCommand) == 16 && sizeof(NativeList) == 32 &&
     offsetof(NativeList, count) == 0x14 && offsetof(NativeList, uid) == 0x18);
@@ -51,7 +60,6 @@ void run(NativeList& list) {
 DWORD submission_stall_ms = 0;
 uint32_t expected_presentation_path = RSF_NATIVE_SCENE_PRESENT_NONE;
 ID3D11DeviceContext* final_context = nullptr;
-void cpu_event(uint64_t id, uint32_t stage);
 void queued_pass(void*, void*, const rsf_game_render_pass* pass, uint32_t begin) {
     if (pass->role == RSF_GAME_RENDER_SUBMISSION) rsf_native_fg_submission(pass, begin);
     if (pass->role == RSF_GAME_RENDER_FRAME) rsf_native_fg_frame(pass, begin);
@@ -87,8 +95,7 @@ struct PresentCommand : NativeCommand {
         present.result = present.chain->Present(0, 0);
         // RenderSubmitEnd precedes PresentStart, so PresentEnd retires the token unless the
         // game thread's SimulationEnd is still outstanding.
-        queued_passes_ok &= (rsf_streamline_host_token(rsf_d3d11_present_host(), window.source_frame_id) != nullptr) ==
-            present.simulation_pending;
+        queued_passes_ok &= rsf_d3d11_fixture_token_matches(window.source_frame_id, uint32_t(present.simulation_pending)) != 0;
     }; }
 };
 struct EvaluateCommand : NativeCommand {
@@ -107,7 +114,7 @@ struct EvaluateCommand : NativeCommand {
 struct SimulationEndCommand : NativeCommand {
     uint64_t source = 0;
     SimulationEndCommand() { execute = [](void*, NativeCommand* command) {
-        cpu_event(static_cast<SimulationEndCommand*>(command)->source, RSF_GAME_CPU_SIMULATION_END);
+        rsf_d3d11_fixture_cpu_event(static_cast<SimulationEndCommand*>(command)->source, RSF_GAME_CPU_SIMULATION_END);
     }; }
 };
 uint64_t marker_reentry_source{};
@@ -137,10 +144,76 @@ void before_present(void*, void* chain) {
     if (device) static_cast<IUnknown*>(device)->Release();
     if (context) static_cast<IUnknown*>(context)->Release();
 }
-void cpu_event(uint64_t id, uint32_t stage) {
-    LARGE_INTEGER now{}, frequency{}; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
-    rsf_game_cpu_event event{sizeof(event), stage, 42, id, uint64_t(now.QuadPart), uint64_t(frequency.QuadPart), 1};
-    if (rsf_native_cpu_event(&event)) rsf_native_fg_cpu(&event);
+// AC7 render scopes queue commands into their native list. Keep that list and
+// the native command execution guard in the same translation unit.
+struct FrameCommands {
+    rsf_ac7_render_scopes* scopes;
+    ID3D11Device* device;
+    ID3D11DeviceContext* context;
+    IDXGISwapChain* chain;
+    ID3D11Texture2D* hudless;
+    ID3D11RenderTargetView* hudless_target;
+    HWND window;
+    rsf_dlss_frame* frame;
+    NativeList commands;
+    rsf_ac7_render_ticket* frame_ticket = nullptr;
+
+    FrameCommands(rsf_ac7_render_scopes* scopes, ID3D11Device* device, ID3D11DeviceContext* context,
+        IDXGISwapChain* chain, ID3D11Texture2D* hudless, ID3D11RenderTargetView* hudless_target,
+        HWND window, rsf_dlss_frame* frame)
+        : scopes(scopes), device(device), context(context), chain(chain), hudless(hudless),
+          hudless_target(hudless_target), window(window), frame(frame) {}
+};
+
+const rsf_d3d11_scope_fixture_calls scope_calls{rsf_ac7_render_scope_open, rsf_ac7_render_scope_close};
+
+int begin_commands(void* user, const rsf_game_render_pass* source, uint32_t direct) noexcept try {
+    auto& frame = *static_cast<FrameCommands*>(user);
+    expected_presentation_path = direct ? RSF_NATIVE_SCENE_PRESENT_DIRECT : RSF_NATIVE_SCENE_PRESENT_SAMPLED;
+    frame.commands.reset();
+    frame.frame_ticket = nullptr;
+    if (!rsf_d3d11_fixture_scope_begin(&scope_calls, frame.scopes, &frame.commands, source, &frame.frame_ticket)) return 0;
+    run(frame.commands);
+    return 1;
+} catch (...) {
+    return 0;
+}
+
+int draw_present(void* user, const rsf_game_render_pass* source, uint32_t direct, uint32_t late_simulation,
+    int32_t* evaluated, int32_t* presented) noexcept try {
+    auto& frame = *static_cast<FrameCommands*>(user);
+    auto& commands = frame.commands;
+    rsf_ac7_render_ticket *submission_ticket = nullptr, *window_ticket = nullptr;
+    if (!rsf_d3d11_fixture_scope_scene(&scope_calls, frame.scopes, &commands, source, &submission_ticket)) return -1;
+    frame.frame->reset = source->source_frame_id == 2;
+    EvaluateCommand evaluate; evaluate.context = frame.context; evaluate.source = source; evaluate.frame = frame.frame;
+    append(commands, evaluate);
+    ComPtr<ID3D11Texture2D> backbuffer; ComPtr<ID3D11RenderTargetView> target;
+    if (FAILED(frame.chain->GetBuffer(0, IID_PPV_ARGS(&backbuffer))) ||
+        FAILED(frame.device->CreateRenderTargetView(backbuffer.Get(), nullptr, &target))) return -1;
+    const float color[]{0.25f, 0.2f, 0.6f, 1};
+    frame.context->ClearRenderTargetView(target.Get(), color);
+    frame.context->ClearRenderTargetView(frame.hudless_target, color);
+    if (!rsf_d3d11_fixture_scope_window(&scope_calls, frame.scopes, &commands, source,
+        submission_ticket, backbuffer.Get(), frame.hudless, frame.window, frame.chain, direct, &window_ticket)) return -1;
+    PresentCommand present; present.chain = frame.chain; present.simulation_pending = late_simulation != 0;
+    append(commands, present);
+    if (!rsf_ac7_render_scope_close(window_ticket, &commands)) return -1;
+    SimulationEndCommand simulation_end; simulation_end.source = source->source_frame_id;
+    if (late_simulation) append(commands, simulation_end);
+    if (!rsf_ac7_render_scope_close(frame.frame_ticket, &commands)) return -1;
+    run(commands);
+    *evaluated = evaluate.result;
+    *presented = present.result;
+    return int(queued_passes_ok);
+} catch (...) {
+    return -1;
+}
+
+int finish_commands(void* user) noexcept {
+    auto* scopes = static_cast<FrameCommands*>(user)->scopes;
+    rsf_ac7_render_scopes_quiesce(scopes);
+    return rsf_ac7_render_scopes_destroy(scopes);
 }
 namespace {
 const rsf_d3d11_marker_fixture_calls marker_calls{
@@ -321,8 +394,6 @@ int main(int argc, char** argv) {
             options.frame_limit_us = uint32_t(std::strtoul(limit_text, nullptr, 0));
         if (GetEnvironmentVariableA("RSF_TEST_SUBMISSION_STALL_MS", limit_text, sizeof(limit_text)))
             submission_stall_ms = DWORD(std::strtoul(limit_text, nullptr, 0));
-        LARGE_INTEGER limit_frequency{}; QueryPerformanceFrequency(&limit_frequency);
-        double active_ms = 0, inactive_ms = 0; uint32_t active_frames = 0, inactive_frames = 0;
         rsf_native_fg_options_set(&options); rsf_native_fg_set_log(log_message, nullptr);
         final_context = context.Get();
         D3D11_TEXTURE2D_DESC scene_desc{}; scene_desc.Width = scene_desc.Height = 512;
@@ -347,191 +418,15 @@ int main(int argc, char** argv) {
         source.output_rect[2] = source.output_rect[3] = 512;
         rsf_ac7_render_scopes* scopes = nullptr;
         if (!rsf_ac7_render_scopes_create_passes(42, 8, nullptr, queued_pass, nullptr, &scopes)) return 1;
-        const rsf_d3d11_scope_fixture_calls scope_calls{rsf_ac7_render_scope_open, rsf_ac7_render_scope_close};
-        bool sampled_active = false, direct_active = false;
-        const uint64_t frame_count = pacing_fixture ? 240 : switching ? 120 : 16;
-        uint32_t provider_activity[6]{};
-        uint64_t sleeps_expected = 1;
-        for (uint64_t id = 2; id < 2 + frame_count; ++id) {
-            const auto frame_provider = rsf_d3d11_present_backend();
-            const bool direct = id >= 2 + frame_count / 2;
-            expected_presentation_path = direct ? RSF_NATIVE_SCENE_PRESENT_DIRECT : RSF_NATIVE_SCENE_PRESENT_SAMPLED;
-            source.screen = id < 2 + frame_count / 3 ? RSF_SCREEN_FLIGHT :
-                id < 2 + 2 * frame_count / 3 ? RSF_SCREEN_HANGAR : RSF_SCREEN_BRIEFING;
-            options.reflex_mode = id < 2 + frame_count / 3 ? RSF_REFLEX_OFF :
-                id < 2 + 2 * frame_count / 3 ? RSF_REFLEX_ON : RSF_REFLEX_BOOST;
-            // Requests beyond this GPU's capability must clamp without disabling generation.
-            if (switching) options.generated_frames = (id % 12 < 6) ? 1u : 3u;
-            rsf_native_fg_options_set(&options);
-            LARGE_INTEGER frame_started{}; QueryPerformanceCounter(&frame_started);
-            cpu_event(id, RSF_GAME_CPU_FRAME_BEGIN);
-            rsf_streamline_latency_status reserved{}; reserved.struct_size = sizeof(reserved);
-            if (rsf_streamline_host_latency_status(rsf_d3d11_present_host(), &reserved) != RSF_BACKEND_OK ||
-                reserved.sleep_calls != sleeps_expected) { std::printf("sleep count source=%llu actual=%llu expected=%llu\n", static_cast<unsigned long long>(id), static_cast<unsigned long long>(reserved.sleep_calls), static_cast<unsigned long long>(sleeps_expected)); return 1; }
-            source.source_frame_id = source.submission_id = source.native_frame = source.scope_id = id;
-            NativeList commands;
-            rsf_ac7_render_ticket *frame_ticket = nullptr, *submission_ticket = nullptr, *window_ticket = nullptr;
-            if (!rsf_d3d11_fixture_scope_begin(&scope_calls, scopes, &commands, &source, &frame_ticket)) return 1;
-            run(commands); // Native BeginFrame can execute before game-thread Reflex sleep.
-            cpu_event(id, RSF_GAME_CPU_PACING);
-            rsf_native_fg_status pacing{}; pacing.struct_size=sizeof(pacing);
-            if (!rsf_native_fg_status_get(&pacing)) return 1;
-            // Pacing is a core choice, independent of which FG provider is selected.
-            if (pacing.vendor.pacing_owner==RSF_PACING_REFLEX) ++sleeps_expected;
-            rsf_streamline_latency_status paced{}; paced.struct_size=sizeof(paced);
-            if (rsf_streamline_host_latency_status(rsf_d3d11_present_host(),&paced)!=RSF_BACKEND_OK ||
-                paced.sleep_calls!=sleeps_expected) return 1;
-            if (!switching && rsf_streamline_host_sleep(rsf_d3d11_present_host(), id) != RSF_BACKEND_ERROR_INVALID_ARGUMENT) return 1;
-            MSG message{}; PeekMessageW(&message, window, 0, 0, PM_NOREMOVE);
-            cpu_event(id, RSF_GAME_CPU_INPUT_SAMPLE);
-            LARGE_INTEGER input_time{}, input_frequency{};
-            QueryPerformanceCounter(&input_time); QueryPerformanceFrequency(&input_frequency);
-            rsf_game_cpu_event input{sizeof(input), RSF_GAME_CPU_INPUT_EVENT, 42, id,
-                uint64_t(input_time.QuadPart), uint64_t(input_frequency.QuadPart), 1,
-                RSF_GAME_INPUT_MOUSE | RSF_GAME_INPUT_KEYBOARD, WM_MOUSEMOVE};
-            if (!rsf_native_cpu_event(&input)) return 1;
-            rsf_native_fg_cpu(&input);
-            input.input_kind = RSF_GAME_INPUT_CONTROLLER; input.message_id = 0;
-            if (!rsf_native_cpu_event(&input)) return 1;
-            rsf_native_fg_cpu(&input); rsf_native_fg_cpu(&input); // SDK controller marker is once per frame.
-            rsf_native_cpu_frame input_record{}; input_record.struct_size = sizeof(input_record);
-            if (!rsf_native_cpu_read(42, id, &input_record) || input_record.stage_mask != 3 ||
-                input_record.input_mask != 7 || input_record.input_events[0] != 1 ||
-                input_record.input_events[1] != 1 || input_record.input_events[2] != 1) return 1;
-            cpu_event(id, RSF_GAME_CPU_SIMULATION_BEGIN);
-            const bool late_simulation_end = (id & 1u) != 0;
-            if (!late_simulation_end) cpu_event(id, RSF_GAME_CPU_SIMULATION_END);
-            if (!rsf_d3d11_fixture_scope_scene(&scope_calls, scopes, &commands, &source, &submission_ticket)) return 1;
-            frame.reset = id == 2;
-            EvaluateCommand evaluate; evaluate.context = context.Get(); evaluate.source = &source; evaluate.frame = &frame;
-            append(commands, evaluate);
-            ComPtr<ID3D11Texture2D> backbuffer; ComPtr<ID3D11RenderTargetView> target;
-            if (FAILED(chain->GetBuffer(0, IID_PPV_ARGS(&backbuffer))) || FAILED(device->CreateRenderTargetView(backbuffer.Get(), nullptr, &target))) return 1;
-            const float color[]{0.25f, 0.2f, 0.6f, 1}; context->ClearRenderTargetView(target.Get(), color);
-            context->ClearRenderTargetView(hudless_target.Get(), color);
-            if (!rsf_d3d11_fixture_scope_window(&scope_calls, scopes, &commands, &source,
-                submission_ticket, backbuffer.Get(), hudless.Get(), window, chain.Get(), uint32_t(direct), &window_ticket)) return 1;
-            PresentCommand present; present.chain = chain.Get(); present.simulation_pending = late_simulation_end;
-            append(commands, present);
-            if (!rsf_ac7_render_scope_close(window_ticket, &commands)) return 1;
-            SimulationEndCommand simulation_end; simulation_end.source = id;
-            if (late_simulation_end) append(commands, simulation_end);
-            if (!rsf_ac7_render_scope_close(frame_ticket, &commands)) return 1;
-            run(commands);
-            cpu_event(id, RSF_GAME_CPU_FRAME_END);
-            if (!queued_passes_ok || evaluate.result != RSF_DLSS_OK || FAILED(present.result) ||
-                rsf_streamline_host_token(rsf_d3d11_present_host(), id)) {
-                auto* gpu = static_cast<ID3D12Device*>(transfer_graphics.native_device);
-                std::printf("AC7 adapter failed source=%llu SR=%d Present=%08lx device=%08lx passes=%u\n",
-                    static_cast<unsigned long long>(id), evaluate.result, present.result, gpu->GetDeviceRemovedReason(), unsigned(queued_passes_ok));
-                rsf_present_fixture_debug_errors(gpu);
-                return 1;
-            }
-            rsf_native_fg_status activity{}; activity.struct_size = sizeof(activity);
-            if (!rsf_native_fg_status_get(&activity)) return 1;
-            const auto provider = frame_provider;
-            // Present may complete a queued provider switch. Historical frame eligibility
-            // then belongs to the old provider, while latency status describes the new owner.
-            if (provider == RSF_FG_BACKEND_DLSS && rsf_d3d11_present_backend() == provider && activity.vendor.effective_reflex !=
-                (activity.vendor.effective_mode == RSF_FG_OFF ? options.reflex_mode : options.reflex_mode ? options.reflex_mode : RSF_REFLEX_ON)) { std::printf("Reflex mismatch source=%llu effective=%u requested=%u mode=%u\n", static_cast<unsigned long long>(id), activity.vendor.effective_reflex, options.reflex_mode, activity.vendor.effective_mode); return 1; }
-            if (switching) {
-                std::printf("adapter source=%llu backend=%u mode=%u active=%u result=%d generated=%u max=%u\n",
-                    static_cast<unsigned long long>(id), provider, activity.vendor.effective_mode, activity.vendor.active,
-                    activity.last_result, activity.vendor.effective_generated_frames, activity.vendor.max_generated_frames);
-                if (activity.vendor.active) {
-                    ++provider_activity[provider];
-                    if (activity.vendor.effective_generated_frames != std::min(options.generated_frames, activity.vendor.max_generated_frames)) { std::printf("multiplier mismatch source=%llu effective=%u requested=%u max=%u\n", static_cast<unsigned long long>(id), activity.vendor.effective_generated_frames, options.generated_frames, activity.vendor.max_generated_frames); return 1; }
-                }
-                uint32_t next = UINT32_MAX;
-                if (id == 13 || id == 53) next = RSF_FG_BACKEND_FSR3;
-                if (id == 25 || id == 65) next = RSF_FG_BACKEND_XESS;
-                if (id == 37) next = 0;
-                if (id == 43 || id == 75) next = RSF_FG_BACKEND_DLSS;
-                if (next != UINT32_MAX && rsf_d3d11_present_request(next) != RSF_BACKEND_OK) return 1;
-                if (activity.last_result) return 1;
-            }
-            if (direct) direct_active |= activity.vendor.active != 0;
-            else sampled_active |= activity.vendor.active != 0;
-            LARGE_INTEGER frame_ended{}; QueryPerformanceCounter(&frame_ended);
-            const double frame_ms = double(frame_ended.QuadPart - frame_started.QuadPart) * 1000.0 / double(limit_frequency.QuadPart);
-            if (activity.vendor.active) { active_ms += frame_ms; ++active_frames; }
-            else { inactive_ms += frame_ms; ++inactive_frames; }
-            if (!pacing_fixture) Sleep(16);
-        }
-        std::printf("frame limit: requested %u us between rendered frames; generating %u frames mean %.2f ms, not generating %u frames mean %.2f ms\n",
-            options.frame_limit_us, active_frames, active_frames ? active_ms / active_frames : 0.0,
-            inactive_frames, inactive_frames ? inactive_ms / inactive_frames : 0.0);
-        rsf_ac7_render_scopes_quiesce(scopes);
-        if (!rsf_ac7_render_scopes_destroy(scopes)) return 1;
-        observed_presenter = {}; observed_presenter.struct_size = sizeof(observed_presenter);
-        if (rsf_observer_get_status(&observed_presenter) != RSF_OBSERVER_OK ||
-            observed_presenter.frames_presented != 12 + frame_count) return 1;
-        std::puts("PASS: application frame count matches source Presents");
-        std::printf("PASS: %llu sampled/direct queued frames across flight/hangar/briefing; wrong source/viewport and missing sampled binding rejected; all CPU tokens retired\n",
-            static_cast<unsigned long long>(frame_count));
-        std::printf("present paths: sampled active=%u direct active=%u\n", unsigned(sampled_active), unsigned(direct_active));
-        if (!ordering_only && (!sampled_active || !direct_active)) return 1;
-        rsf_native_fg_status observed{}; observed.struct_size = sizeof(observed);
-        rsf_native_fg_status_get(&observed);
-        std::printf("synthetic enabled FG: tagged=%llu mode=%u generated=%u active=%u aggregate presents=%llu result=%d SDK status=%d\n",
-            static_cast<unsigned long long>(observed.tagged_frames), observed.vendor.effective_mode, observed.vendor.effective_generated_frames,
-            observed.vendor.active, static_cast<unsigned long long>(observed.vendor.total_presented), observed.last_result, observed.vendor.vendor_status);
-        if (!observed.tagged_frames || observed.last_result || observed.vendor.vendor_status ||
-            (!ordering_only && !switching && !observed.vendor.active)) return 1;
-        rsf_streamline_latency_status latency{}; latency.struct_size = sizeof(latency);
-        rsf_streamline_host_latency_status(rsf_d3d11_present_host(), &latency);
-        std::printf("latency sleeps=%llu markers=%llu\n", static_cast<unsigned long long>(latency.sleep_calls), static_cast<unsigned long long>(latency.marker_calls));
-        if (rsf_streamline_host_latency_status(rsf_d3d11_present_host(), &latency) != RSF_BACKEND_OK ||
-            latency.sleep_calls != sleeps_expected || latency.marker_calls != frame_count * 7) return 1;
-        if (switching) {
-            std::printf("AC7 adapter active samples: DLSS=%u FSR3=%u XeSS=%u; live multiplier requests 2x/4x clamp to SDK limit\n",
-                provider_activity[1], provider_activity[3], provider_activity[5]);
-            if (!provider_activity[3] || !provider_activity[5]) return 1;
-            if (!provider_activity[1]) {
-                if (visible_fixture && GetForegroundWindow() == window) return 1;
-                std::puts("NOT RUN: DLSS activity acceptance requires a foreground game; this fixture was denied foreground ownership");
-            }
-        }
-        const auto input_probe = frame_count + 2;
-        if (!latency.pcl_message_id || rsf_streamline_host_begin(rsf_d3d11_present_host(), input_probe) != RSF_BACKEND_OK ||
-            rsf_streamline_host_input(rsf_d3d11_present_host(), input_probe, 0, latency.pcl_message_id) != RSF_BACKEND_OK ||
-            rsf_streamline_host_abort(rsf_d3d11_present_host(), input_probe) != RSF_BACKEND_OK) return 1;
-        std::puts("PASS: keyboard/mouse dequeue records, controller marker deduplication and SDK-registered PCL ping routing");
-        const auto unpresented = frame_count + 3;
-        cpu_event(unpresented, RSF_GAME_CPU_FRAME_BEGIN);
-        cpu_event(unpresented, RSF_GAME_CPU_PACING);
-        for (uint32_t stage = RSF_GAME_CPU_INPUT_SAMPLE; stage <= RSF_GAME_CPU_FRAME_END; ++stage) cpu_event(unpresented, stage);
-        source.source_frame_id = unpresented; rsf_native_fg_submission(&source, 1); rsf_native_fg_submission(&source, 0);
-        source.role = RSF_GAME_RENDER_WINDOW; source.swapchain = chain.Get();
-        if (!rsf_streamline_host_token(rsf_d3d11_present_host(), unpresented)) return 1;
-        rsf_native_fg_window_end(&source);
-        if (rsf_streamline_host_token(rsf_d3d11_present_host(), unpresented)) return 1;
-        const auto abort_started = GetTickCount64();
-        cpu_event(unpresented + 1, RSF_GAME_CPU_FRAME_BEGIN);
-        if (GetTickCount64() - abort_started >= 500 ||
-            !rsf_streamline_host_token(rsf_d3d11_present_host(), unpresented + 1)) return 1;
-        // The abandoned window also releases the next frame's pacing join.
-        const auto milliseconds = [](LARGE_INTEGER begin) {
-            LARGE_INTEGER end{}, frequency{}; QueryPerformanceCounter(&end); QueryPerformanceFrequency(&frequency);
-            return double(end.QuadPart - begin.QuadPart) * 1000.0 / double(frequency.QuadPart);
+        FrameCommands commands{scopes, device.Get(), context.Get(), chain.Get(), hudless.Get(),
+            hudless_target.Get(), window, &frame};
+        const rsf_ac7_loop loop{
+            chain.Get(), window, transfer_graphics.native_device, &source, &options,
+            uint32_t(switching), uint32_t(pacing_fixture), uint32_t(ordering_only), uint32_t(visible_fixture),
+            &commands, begin_commands, draw_present, finish_commands,
+            rsf_native_fg_status_get, rsf_native_cpu_read,
         };
-        LARGE_INTEGER released{}; QueryPerformanceCounter(&released);
-        cpu_event(unpresented + 1, RSF_GAME_CPU_PACING);
-        const auto released_ms = milliseconds(released);
-        // A frame that never reaches Present or EndFrame holds the next sleep for one bounded wait.
-        cpu_event(unpresented + 2, RSF_GAME_CPU_FRAME_BEGIN);
-        LARGE_INTEGER held{}; QueryPerformanceCounter(&held);
-        cpu_event(unpresented + 2, RSF_GAME_CPU_PACING);
-        const auto held_ms = milliseconds(held);
-        std::printf("pacing join: released %.2f ms, bounded wait %.2f ms\n", released_ms, held_ms);
-        // A requested frame limit puts its own driver sleep into both measurements.
-        if (!options.frame_limit_us && (released_ms >= 18.0 || held_ms < 18.0 || held_ms >= 200.0)) return 1;
-        for (uint64_t id = unpresented + 1; id <= unpresented + 2; ++id) {
-            if (rsf_streamline_host_abort(rsf_d3d11_present_host(), id) != RSF_BACKEND_OK) return 1;
-            cpu_event(id, RSF_GAME_CPU_FRAME_END);
-        }
-        std::puts("PASS: an abandoned window releases the next frame's sleep; a frame without completion holds it for one bounded wait");
-        options.mode = RSF_FG_OFF; rsf_native_fg_options_set(&options);
+        if (rsf_d3d11_fixture_run_loop(&loop)) return 1;
         if (rsf_dlss_release_resources() != RSF_DLSS_OK || rsf_dlss_shutdown() != RSF_DLSS_OK) return 1;
     }
     if (!enabled_fixture && !rsf_d3d11_marker_fixture(chain.Get(), &marker_calls)) return 1;

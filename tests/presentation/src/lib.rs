@@ -4,6 +4,7 @@
 mod d3d11_bridge_sr;
 mod d3d11_bridge_sr_abi;
 mod d3d11_device_checks;
+mod d3d11_fixture_loop;
 #[cfg(feature = "d3d11-host-device-fixtures")]
 mod d3d11_host_device;
 mod d3d11_marker;
@@ -12,7 +13,9 @@ mod d3d11_scope_fixture;
 mod d3d11_scope_fixture_abi;
 mod fg_bridge;
 mod fg_device_runner_abi;
+mod fg_fixture_callbacks;
 mod fg_fixture_focus;
+mod fg_fixture_loop;
 mod fixture_device;
 mod fixture_device_abi;
 mod fsr4_fg_bridge;
@@ -24,6 +27,8 @@ mod gl_fixture_abi;
 mod gl_pipeline_fixture;
 #[cfg(feature = "gl-device-fixture")]
 mod gl_pipeline_fixture_abi;
+mod present_fixture_loops_abi;
+mod present_fixture_time;
 mod shared_surface_abi;
 
 use shared_surface_abi::*;

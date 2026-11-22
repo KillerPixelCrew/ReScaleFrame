@@ -23,7 +23,7 @@ use windows::core::{BOOL, Interface};
 type Raw = *mut c_void;
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg_bridge_fixture_submit(
+pub(super) unsafe extern "C" fn rsf_fg_bridge_fixture_submit(
     frame: &rsf_fg_fixture_submission,
     accepted: &mut u32,
 ) -> i32 {
@@ -43,7 +43,14 @@ unsafe extern "C" fn rsf_fg_bridge_fixture_submit(
     if frame.produce_input != 0
         && let Some(prepare) = frame.prepare
     {
-        unsafe { prepare(frame.list, backbuffer.as_raw(), frame.session) };
+        unsafe {
+            prepare(
+                frame.prepare_user,
+                frame.list,
+                backbuffer.as_raw(),
+                frame.session,
+            )
+        };
     }
     if frame.overlay != 0 {
         let list = unsafe { borrow::<ID3D12GraphicsCommandList>(&frame.list) };
@@ -155,7 +162,12 @@ unsafe fn barrier(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg_bridge_fixture_barrier(list: Raw, resource: Raw, from: u32, to: u32) {
+pub(super) unsafe extern "C" fn rsf_fg_bridge_fixture_barrier(
+    list: Raw,
+    resource: Raw,
+    from: u32,
+    to: u32,
+) {
     let list = unsafe { borrow::<ID3D12GraphicsCommandList>(&list) };
     unsafe {
         barrier(
@@ -168,7 +180,7 @@ unsafe extern "C" fn rsf_fg_bridge_fixture_barrier(list: Raw, resource: Raw, fro
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg_bridge_fixture_inputs(
+pub(super) unsafe extern "C" fn rsf_fg_bridge_fixture_inputs(
     list: Raw,
     depth: Raw,
     motion: Raw,
@@ -210,7 +222,7 @@ unsafe extern "C" fn rsf_fg_bridge_fixture_inputs(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg_bridge_fixture_frame(
+pub(super) unsafe extern "C" fn rsf_fg_bridge_fixture_frame(
     backbuffer: Raw,
     depth: Raw,
     source: u64,
@@ -259,7 +271,7 @@ unsafe fn resource_device(raw: Raw) -> Option<ID3D12Device> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg_bridge_fixture_hudless(
+pub(super) unsafe extern "C" fn rsf_fg_bridge_fixture_hudless(
     list: Raw,
     color: Raw,
     heap: Raw,
@@ -308,7 +320,7 @@ unsafe extern "C" fn rsf_fg_bridge_fixture_hudless(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg_bridge_fixture_capture_flip(
+pub(super) unsafe extern "C" fn rsf_fg_bridge_fixture_capture_flip(
     list: Raw,
     back: Raw,
     readback_slot: *mut Raw,
@@ -407,7 +419,7 @@ unsafe extern "C" fn rsf_fg_bridge_fixture_capture_flip(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fg_bridge_fixture_source(frame: u64, switching: u32) -> u64 {
+pub(super) extern "C" fn rsf_fg_bridge_fixture_source(frame: u64, switching: u32) -> u64 {
     if switching == 0 {
         frame
     } else {
@@ -415,34 +427,29 @@ extern "C" fn rsf_fg_bridge_fixture_source(frame: u64, switching: u32) -> u64 {
     }
 }
 
-#[repr(C)]
-struct FramePlan {
-    produce_input: u32,
-    submit: u32,
-    view: u32,
-    overlay_visible: i32,
-    expected_tag: u32,
-    expect_refusal: u32,
-    legacy_request: i32,
-    legacy_expected: i32,
-    hot_request: i32,
+pub(super) struct FramePlan {
+    pub(super) produce_input: u32,
+    pub(super) submit: u32,
+    pub(super) view: u32,
+    pub(super) overlay_visible: i32,
+    pub(super) expected_tag: u32,
+    pub(super) expect_refusal: u32,
+    pub(super) legacy_request: i32,
+    pub(super) legacy_expected: i32,
+    pub(super) hot_request: i32,
 }
 
-const _: () = assert!(size_of::<FramePlan>() == 36);
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg_bridge_fixture_plan(
+pub(super) fn frame_plan(
     frame: u64,
     hot: u32,
     mfg: u32,
     vendor: u32,
     current_backend: u32,
     has_streamline_directory: u32,
-    out: *mut FramePlan,
-) {
+) -> FramePlan {
     let hot = hot != 0;
     let mfg = mfg != 0;
-    let plan = FramePlan {
+    FramePlan {
         produce_input: u32::from(!hot || frame != 7),
         submit: u32::from(hot || frame != 11),
         view: if !hot && frame == 10 { 2 } else { 1 },
@@ -482,12 +489,11 @@ unsafe extern "C" fn rsf_fg_bridge_fixture_plan(
             114 if mfg => 1,
             _ => -1,
         },
-    };
-    unsafe { out.write(plan) };
+    }
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fg_bridge_fixture_mfg_count(frame: u64) -> u32 {
+pub(super) extern "C" fn rsf_fg_bridge_fixture_mfg_count(frame: u64) -> u32 {
     match frame {
         45 => 2,
         60 | 100 => 3,
@@ -627,7 +633,7 @@ unsafe extern "C" fn rsf_fg_bridge_fixture_commands(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg_bridge_fixture_check_flip(readback: Raw, frame: u64) -> i32 {
+pub(super) unsafe extern "C" fn rsf_fg_bridge_fixture_check_flip(readback: Raw, frame: u64) -> i32 {
     let Some(readback) = (unsafe { ID3D12Resource::from_raw_borrowed(&readback) }) else {
         return -1;
     };
@@ -651,7 +657,7 @@ unsafe extern "C" fn rsf_fg_bridge_fixture_check_flip(readback: Raw, frame: u64)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg_bridge_fixture_query(chain: Raw, previous: &mut u32) -> u32 {
+pub(super) unsafe extern "C" fn rsf_fg_bridge_fixture_query(chain: Raw, previous: &mut u32) -> u32 {
     let chain = unsafe { borrow::<IDXGISwapChain>(&chain) };
     let mut bad = 0;
     let mut fullscreen = BOOL(0);
@@ -711,7 +717,7 @@ unsafe extern "C" fn rsf_fg_bridge_fixture_execute(queue: Raw, commands: Raw) ->
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg_bridge_fixture_drain(
+pub(super) unsafe extern "C" fn rsf_fg_bridge_fixture_drain(
     queue: Raw,
     fence: Raw,
     event: Raw,

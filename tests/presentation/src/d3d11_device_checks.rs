@@ -150,7 +150,7 @@ pub(super) unsafe extern "C" fn rsf_d3d11_fixture_red_half(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_fixture_flip_source(
+pub(super) unsafe extern "C" fn rsf_d3d11_fixture_flip_source(
     device: Raw,
     context: Raw,
     target: Raw,

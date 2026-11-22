@@ -47,8 +47,10 @@ pub struct rsf_fg_fixture_submission {
     pub view: u32,
     pub overlay: u32,
     pub overlay_visible: i32,
+    pub prepare_user: *mut ::core::ffi::c_void,
     pub prepare: ::core::option::Option<
         unsafe extern "C" fn(
+            user: *mut ::core::ffi::c_void,
             commands: *mut ::core::ffi::c_void,
             backbuffer: *mut ::core::ffi::c_void,
             session: *mut ::core::ffi::c_void,
@@ -61,7 +63,7 @@ pub struct rsf_fg_fixture_submission {
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_fg_fixture_submission"]
-        [::core::mem::size_of::<rsf_fg_fixture_submission>() - 112usize];
+        [::core::mem::size_of::<rsf_fg_fixture_submission>() - 120usize];
     ["Alignment of rsf_fg_fixture_submission"]
         [::core::mem::align_of::<rsf_fg_fixture_submission>() - 8usize];
     ["Offset of field: rsf_fg_fixture_submission::chain"]
@@ -92,8 +94,10 @@ const _: () = {
         [::core::mem::offset_of!(rsf_fg_fixture_submission, overlay) - 84usize];
     ["Offset of field: rsf_fg_fixture_submission::overlay_visible"]
         [::core::mem::offset_of!(rsf_fg_fixture_submission, overlay_visible) - 88usize];
+    ["Offset of field: rsf_fg_fixture_submission::prepare_user"]
+        [::core::mem::offset_of!(rsf_fg_fixture_submission, prepare_user) - 96usize];
     ["Offset of field: rsf_fg_fixture_submission::prepare"]
-        [::core::mem::offset_of!(rsf_fg_fixture_submission, prepare) - 96usize];
+        [::core::mem::offset_of!(rsf_fg_fixture_submission, prepare) - 104usize];
     ["Offset of field: rsf_fg_fixture_submission::log"]
-        [::core::mem::offset_of!(rsf_fg_fixture_submission, log) - 104usize];
+        [::core::mem::offset_of!(rsf_fg_fixture_submission, log) - 112usize];
 };

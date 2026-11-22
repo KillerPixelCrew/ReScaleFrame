@@ -4,22 +4,8 @@
 use rsf_game_sys::rsf_game_render_pass;
 pub type rsf_dlss_result = i32;
 pub type rsf_dlss_quality = u32;
-pub type rsf_backend_result = i32;
-pub type rsf_streamline_host = ::core::ffi::c_void;
 
 pub const RSF_DLSS_ABI_VERSION: u32 = 5;
-unsafe extern "C" {
-    pub fn rsf_streamline_host_begin(
-        arg1: *mut rsf_streamline_host,
-        frame_id: u64,
-    ) -> rsf_backend_result;
-}
-unsafe extern "C" {
-    pub fn rsf_streamline_host_abort(
-        arg1: *mut rsf_streamline_host,
-        frame_id: u64,
-    ) -> rsf_backend_result;
-}
 pub type rsf_dlss_log_fn = ::core::option::Option<
     unsafe extern "C" fn(user: *mut ::core::ffi::c_void, message: *const ::core::ffi::c_char),
 >;
