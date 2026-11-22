@@ -1031,7 +1031,11 @@ impl Platform {
         call: *mut c_void,
         request: &VkSrCreate,
     ) -> (bool, VkSrContext) {
-        let mut created = VkSrContext::default();
+        let mut created = VkSrContext {
+            handle: std::ptr::null_mut(),
+            result: 0,
+            reserved: 0,
+        };
         let completed = unsafe { (self.vulkan_sr_create)(call, request, &mut created) } != 0;
         (completed, created)
     }

@@ -21,27 +21,37 @@ use windows_sys::Win32::System::Threading::GetCurrentProcess;
 use windows_sys::core::w;
 
 // The native leaf asserts these status values against the pinned MinHook header.
+#[cfg_attr(test, allow(dead_code))]
 const MH_ERROR_ENABLED: i32 = 5;
+#[cfg_attr(test, allow(dead_code))]
 const MH_ERROR_MEMORY_PROTECT: i32 = 10;
 
+#[cfg_attr(test, allow(dead_code))]
 type CurrentIndex = unsafe extern "C" fn(*mut c_void, *mut u32) -> bool;
+#[cfg_attr(test, allow(dead_code))]
 type Dispatch = unsafe extern "C" fn(*mut c_void) -> usize;
+#[cfg_attr(test, allow(dead_code))]
 type Render =
     unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut c_void, u32) -> usize;
 
+#[cfg_attr(test, allow(dead_code))]
 struct Options {
     current_index: CurrentIndex,
     trace: bool,
 }
 
+#[cfg_attr(test, allow(dead_code))]
 static ORIGINAL_DISPATCH: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+#[cfg_attr(test, allow(dead_code))]
 static ORIGINAL_RENDER: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 
+#[cfg_attr(test, allow(dead_code))]
 unsafe extern "C" fn dispatch(context: *mut c_void) -> usize {
     observe_dispatch();
     unsafe { trampoline::<Dispatch>(&ORIGINAL_DISPATCH).map_or(0, |native| native(context)) }
 }
 
+#[cfg_attr(test, allow(dead_code))]
 unsafe extern "C" fn trace_render(
     renderer: *mut c_void,
     draws: *mut c_void,
@@ -56,6 +66,7 @@ unsafe extern "C" fn trace_render(
     }
 }
 
+#[cfg_attr(test, allow(dead_code))]
 fn create(
     asi: &AsiPlatform,
     target: usize,
@@ -66,16 +77,23 @@ fn create(
     unsafe { (asi.hook_create)(target, detour, original.as_ptr()) }
 }
 
+#[cfg_attr(test, allow(dead_code))]
 fn enable(target: usize) -> i32 {
     unsafe { MH_EnableHook(target as *mut c_void) }
 }
 
+#[cfg_attr(test, allow(dead_code))]
 static OPTIONS: OnceLock<Options> = OnceLock::new();
+#[cfg_attr(test, allow(dead_code))]
 static ATTEMPTED: Mutex<bool> = Mutex::new(false);
+#[cfg_attr(test, allow(dead_code))]
 static REPAIRED: AtomicBool = AtomicBool::new(false);
+#[cfg_attr(test, allow(dead_code))]
 static OBSERVED: AtomicU32 = AtomicU32::new(0);
+#[cfg_attr(test, allow(dead_code))]
 static MISMATCHED: AtomicU32 = AtomicU32::new(0);
 
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn install(current_index: CurrentIndex, trace: bool) -> bool {
     let Some(asi) = asi::platform() else {
         return false;
@@ -107,6 +125,7 @@ pub(crate) fn install(current_index: CurrentIndex, trace: bool) -> bool {
         && enable(site) == MH_OK
 }
 
+#[cfg_attr(test, allow(dead_code))]
 fn renderer_matches(asi: &AsiPlatform, base: usize) -> bool {
     asi::pe_header(asi, base).is_some_and(|(_, signature, timestamp, size)| {
         signature == asi::PE_SIGNATURE
@@ -116,6 +135,7 @@ fn renderer_matches(asi: &AsiPlatform, base: usize) -> bool {
         && asi.matches(base + profile::ENTRY, &profile::ENTRY_BYTES)
 }
 
+#[cfg_attr(test, allow(dead_code))]
 fn relay(base: usize) -> [u8; 43] {
     let mut code = profile::RELAY;
     let continuation = ((base + profile::AFTER_COMPARISON) as u64).to_le_bytes();
@@ -124,6 +144,7 @@ fn relay(base: usize) -> [u8; 43] {
     code
 }
 
+#[cfg_attr(test, allow(dead_code))]
 fn observe_dispatch() {
     let (Some(asi), Some(options)) = (asi::platform(), OPTIONS.get()) else {
         return;
@@ -205,6 +226,7 @@ fn observe_dispatch() {
     }
 }
 
+#[cfg_attr(test, allow(dead_code))]
 fn observe_trace(renderer: *const c_void, list: *const c_void, index: u32) {
     let (Some(asi), Some(options)) = (asi::platform(), OPTIONS.get()) else {
         return;

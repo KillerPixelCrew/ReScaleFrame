@@ -9,17 +9,17 @@ fn host() -> Host {
 }
 
 fn descriptor() -> Evaluation {
-    Evaluation {
-        color: 0x10 as *mut c_void,
-        output: 0x20 as *mut c_void,
-        depth: 0x30 as *mut c_void,
-        motion: 0x40 as *mut c_void,
-        jitter: [0.25, -0.5],
-        width: 1706,
-        height: 1066,
-        motion_scale: [1706.0, 1066.0],
-        ..Evaluation::default()
-    }
+    // The native record's reserved fields stay private to the layout module.
+    let mut descriptor = Evaluation::default();
+    descriptor.color = 0x10 as *mut c_void;
+    descriptor.output = 0x20 as *mut c_void;
+    descriptor.depth = 0x30 as *mut c_void;
+    descriptor.motion = 0x40 as *mut c_void;
+    descriptor.jitter = [0.25, -0.5];
+    descriptor.width = 1706;
+    descriptor.height = 1066;
+    descriptor.motion_scale = [1706.0, 1066.0];
+    descriptor
 }
 
 fn request() -> Request {
@@ -145,7 +145,7 @@ fn sr_pass_carries_identity_motion_scale_and_fg_refusal() {
     assert_eq!(pass.render_rect, [0, 0, 1706, 1066]);
     assert_eq!(pass.output_rect, [0, 0, 2560, 1600]);
     assert_eq!(pass.motion_to_uv, [-1.0, -1.0]);
-    assert_eq!((pass.screen, pass.source_frame_id), (SCREEN_UNKNOWN, 0));
+    assert_eq!((pass.screen, pass.source_frame_id), (RSF_SCREEN_UNKNOWN, 0));
     assert_eq!((pass.camera_valid, pass.motion_camera_included), (1, 1));
     let flight = sr_pass(
         &host(),
@@ -156,7 +156,10 @@ fn sr_pass_carries_identity_motion_scale_and_fg_refusal() {
         (0x70, 41, false, 41),
     );
     assert_eq!(flight.flags, RSF_GAME_RENDER_PRIMARY);
-    assert_eq!((flight.screen, flight.source_frame_id), (SCREEN_FLIGHT, 41));
+    assert_eq!(
+        (flight.screen, flight.source_frame_id),
+        (RSF_SCREEN_FLIGHT, 41)
+    );
 }
 
 #[test]

@@ -149,7 +149,8 @@ pub(crate) fn configure(
             // After restoring the saved fields, the native resolver can resume ownership.
             unsafe {
                 write_values(pointer + RATIO, &previous.saved_ratios);
-                ptr::with_exposed_provenance_mut(pointer + RATIO_LOCK).write(previous.saved_lock);
+                ptr::with_exposed_provenance_mut::<u32>(pointer + RATIO_LOCK)
+                    .write(previous.saved_lock);
             }
             state().owner = None;
             let _ = reset_history(platform, base);

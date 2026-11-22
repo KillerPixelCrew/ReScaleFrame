@@ -9,8 +9,8 @@ use crate::platform::vulkan_negotiation::{
 };
 use crate::platform::{
     VK_CREATION_VERSION, VK_ROUTE_CREATE_DEVICE, VK_ROUTE_CREATE_INSTANCE, VK_ROUTE_DESTROY_DEVICE,
-    VkAdapter, VkChainFacts, VkCreationLeaves, VkDeviceCall, VkDeviceDerive, VkFunction,
-    VkInstanceCall, VkLatencyRequirements, VkProc,
+    VkAdapter, VkCreationLeaves, VkDeviceCall, VkDeviceDerive, VkFunction, VkInstanceCall,
+    VkLatencyRequirements, VkProc,
 };
 use std::ffi::{c_char, c_void};
 use std::ptr;
@@ -101,15 +101,18 @@ pub(crate) fn entry(route: u32) -> Option<VkFunction> {
     // The loader uses PFN_vkVoidFunction as the transport for named entry points on Win64.
     unsafe {
         match route {
-            VK_ROUTE_CREATE_INSTANCE => {
-                std::mem::transmute::<PFN_vkCreateInstance, _>(Some(create_instance))
-            }
-            VK_ROUTE_CREATE_DEVICE => {
-                std::mem::transmute::<PFN_vkCreateDevice, _>(Some(create_device))
-            }
-            VK_ROUTE_DESTROY_DEVICE => {
-                std::mem::transmute::<PFN_vkDestroyDevice, _>(Some(destroy_device))
-            }
+            VK_ROUTE_CREATE_INSTANCE => std::mem::transmute::<
+                PFN_vkCreateInstance,
+                std::option::Option<unsafe extern "C" fn()>,
+            >(Some(create_instance)),
+            VK_ROUTE_CREATE_DEVICE => std::mem::transmute::<
+                PFN_vkCreateDevice,
+                std::option::Option<unsafe extern "C" fn()>,
+            >(Some(create_device)),
+            VK_ROUTE_DESTROY_DEVICE => std::mem::transmute::<
+                PFN_vkDestroyDevice,
+                std::option::Option<unsafe extern "C" fn()>,
+            >(Some(destroy_device)),
             _ => None,
         }
     }
@@ -213,7 +216,11 @@ unsafe extern "C" fn call_create_instance(
     allocator: *const c_void,
     output: *mut c_void,
 ) -> i32 {
-    let create = unsafe { std::mem::transmute::<_, PFN_vkCreateInstance>(Some(create)) };
+    let create = unsafe {
+        std::mem::transmute::<std::option::Option<unsafe extern "C" fn()>, PFN_vkCreateInstance>(
+            Some(create),
+        )
+    };
     unsafe {
         create.expect("resolved vkCreateInstance")(info.cast(), allocator.cast(), output.cast())
     }
@@ -291,7 +298,10 @@ unsafe extern "C" fn device_extensions(
     count: u32,
 ) -> u32 {
     let enumerate = unsafe {
-        std::mem::transmute::<_, PFN_vkEnumerateDeviceExtensionProperties>(Some(enumerate))
+        std::mem::transmute::<
+            std::option::Option<unsafe extern "C" fn()>,
+            PFN_vkEnumerateDeviceExtensionProperties,
+        >(Some(enumerate))
     }
     .expect("resolved vkEnumerateDeviceExtensionProperties");
     let mut n = 0;
@@ -411,7 +421,11 @@ unsafe extern "C" fn call_create_device(
     allocator: *const c_void,
     output: *mut c_void,
 ) -> i32 {
-    let create = unsafe { std::mem::transmute::<_, PFN_vkCreateDevice>(Some(create)) };
+    let create = unsafe {
+        std::mem::transmute::<std::option::Option<unsafe extern "C" fn()>, PFN_vkCreateDevice>(
+            Some(create),
+        )
+    };
     unsafe {
         create.expect("resolved vkCreateDevice")(
             physical.cast(),
@@ -454,7 +468,11 @@ unsafe extern "C" fn call_destroy_device(
     device: *mut c_void,
     allocator: *const c_void,
 ) {
-    let destroy = unsafe { std::mem::transmute::<_, PFN_vkDestroyDevice>(Some(destroy)) };
+    let destroy = unsafe {
+        std::mem::transmute::<std::option::Option<unsafe extern "C" fn()>, PFN_vkDestroyDevice>(
+            Some(destroy),
+        )
+    };
     unsafe { destroy.expect("resolved vkDestroyDevice")(device.cast(), allocator.cast()) };
 }
 
@@ -463,8 +481,12 @@ unsafe extern "C" fn adapter(
     physical: *mut c_void,
     out: *mut VkAdapter,
 ) -> u32 {
-    let properties =
-        unsafe { std::mem::transmute::<_, PFN_vkGetPhysicalDeviceProperties>(Some(function)) };
+    let properties = unsafe {
+        std::mem::transmute::<
+            std::option::Option<unsafe extern "C" fn()>,
+            PFN_vkGetPhysicalDeviceProperties,
+        >(Some(function))
+    };
     let mut value = VkPhysicalDeviceProperties::default();
     unsafe {
         properties.expect("resolved vkGetPhysicalDeviceProperties")(physical.cast(), &mut value)

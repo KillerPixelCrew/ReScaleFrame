@@ -174,7 +174,8 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_d3d12_copy(
     let bytes = bytes.max(padded_bytes);
     if let Some(buffer) = leases.buffer {
         // The retained tail can be reused only when its buffer can hold this copy.
-        let buffer = unsafe { ID3D12Resource::from_raw_borrowed(&buffer.as_ptr()) }
+        let raw = buffer.as_ptr();
+        let buffer = unsafe { ID3D12Resource::from_raw_borrowed(&raw) }
             .map(|buffer| unsafe { buffer.GetDesc() });
         if buffer.is_none_or(|desc| desc.Width < bytes) {
             return false;

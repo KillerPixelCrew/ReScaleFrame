@@ -65,6 +65,8 @@ fn publication_checks_size_and_abi() {
     );
 }
 
+// The callee reads these records through the raw pointer it was given.
+#[allow(unused_assignments)]
 #[test]
 fn lifecycle_refuses_before_validated_native_preparation() {
     let api = published();

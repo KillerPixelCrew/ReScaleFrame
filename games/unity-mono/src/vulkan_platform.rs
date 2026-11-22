@@ -31,6 +31,16 @@ const FENCE_HANDLE: vk::ExternalSemaphoreHandleTypeFlags =
     vk::ExternalSemaphoreHandleTypeFlags::D3D12_FENCE;
 const SUCCESS: vk::Result = vk::Result::SUCCESS;
 
+// Selects the instance or device resolver for a dispatch entry.
+macro_rules! resolver {
+    (instance, $instance:ident, $device:ident) => {
+        $instance
+    };
+    (device, $instance:ident, $device:ident) => {
+        $device
+    };
+}
+
 macro_rules! dispatch {
     ($($scope:ident $field:ident: $ty:ident = $name:literal),+ $(,)?) => {
         struct Dispatch {
@@ -41,11 +51,11 @@ macro_rules! dispatch {
                 instance: vk::Instance, device: vk::Device,
                 gipa: vk::PFN_vkGetInstanceProcAddr, gdpa: vk::PFN_vkGetDeviceProcAddr,
             ) -> Option<Self> {
-                let instance = |name: &std::ffi::CStr| unsafe { gipa(instance, name.as_ptr()) };
-                let device = |name: &std::ffi::CStr| unsafe { gdpa(device, name.as_ptr()) };
+                let by_instance = |name: &std::ffi::CStr| unsafe { gipa(instance, name.as_ptr()) };
+                let by_device = |name: &std::ffi::CStr| unsafe { gdpa(device, name.as_ptr()) };
                 Some(Self {
                     // Each query uses the owner of the Vulkan operation and its exact signature.
-                    $($field: unsafe { std::mem::transmute::<unsafe extern "system" fn(), vk::$ty>($scope($name)?) },)+
+                    $($field: unsafe { std::mem::transmute::<unsafe extern "system" fn(), vk::$ty>(resolver!($scope, by_instance, by_device)($name)?) },)+
                 })
             }
         }
@@ -158,6 +168,8 @@ pub(crate) unsafe extern "C" fn rsf_uvk_gpu_create_device(
         return 0;
     };
     let dispatch = unsafe { shared.dispatch() };
+    // Copied so the handle can be recorded in shared between the two calls.
+    let import_semaphore = dispatch.import_semaphore;
     let mut semaphore = vk::Semaphore::null();
     let mut result = unsafe {
         (dispatch.create_semaphore)(
@@ -173,7 +185,7 @@ pub(crate) unsafe extern "C" fn rsf_uvk_gpu_create_device(
             .semaphore(semaphore)
             .handle_type(FENCE_HANDLE)
             .handle(handle.0 as isize);
-        result = unsafe { (dispatch.import_semaphore)(shared.vk_device(), &info) };
+        result = unsafe { import_semaphore(shared.vk_device(), &info) };
     }
     unsafe { CloseHandle(handle.0) };
     u32::from(result == SUCCESS)

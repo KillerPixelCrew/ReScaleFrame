@@ -395,7 +395,7 @@ fn scan_modules(cfg: &Config) {
         let source = usize::from_le_bytes(row[0x50..0x58].try_into().unwrap());
         let mut path = [0u16; MAX_PATH as usize];
         let units = length / 2;
-        if module == 0 || source == 0 || length % 2 != 0 || units >= path.len() {
+        if module == 0 || source == 0 || !length.is_multiple_of(2) || units >= path.len() {
             continue;
         }
         let copied =

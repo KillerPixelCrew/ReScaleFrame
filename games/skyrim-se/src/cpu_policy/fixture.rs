@@ -167,6 +167,8 @@ fn render_scope(check: &mut impl FnMut(bool, &str)) {
     );
 }
 
+// The callee reads these records through the raw pointer it was given.
+#[allow(unused_assignments)]
 fn input_headers(read: ReadNative, check: &mut impl FnMut(bool, &str)) {
     let mut event = NativeInputEvent::default();
     let classify = |list: &usize| rsf_skyrim_cpu_input_kinds(ptr::from_ref(list) as usize, read);

@@ -31,6 +31,7 @@ unsafe extern "C" {
         services: *const rsf_game_host_services,
         reconfigure: bool,
     ) -> bool;
+    #[cfg_attr(test, allow(dead_code))]
     fn rsf_uvk_bridge_graphics(device: *mut *mut c_void, queue: *mut *mut c_void) -> bool;
     fn rsf_unity_vulkan_open();
     fn rsf_unity_vulkan_stop_admission();
@@ -218,6 +219,7 @@ pub(super) fn render(
     }
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn graphics() -> Option<(ID3D12Device, ID3D12CommandQueue)> {
     match route() {
         Route::D3d12 => {

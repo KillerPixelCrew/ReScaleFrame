@@ -119,27 +119,41 @@ const INDICES: std::ops::Range<usize> = 0..HOOKS.len();
 // C++ owns the native calls and unwind receipts. Rust binds their typed addresses to the
 // checked hook order and publishes the original trampoline before enabling a detour.
 unsafe extern "C" {
+    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_tick(main: *mut c_void) -> i16;
+    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_poll(manager: *mut c_void, timestep: f32) -> usize;
+    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_render(main: *mut c_void) -> usize;
+    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_dispatch(manager: *mut c_void, list: *mut c_void) -> i32;
+    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_world(main: *mut c_void, output: u32, flags: u8) -> usize;
+    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_controls(owner: *mut c_void, list: *mut c_void, source: *mut c_void)
     -> usize;
+    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_camera_update(state: *mut c_void) -> usize;
+    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_jobs_submit() -> u32;
+    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_jobs_join() -> u32;
+    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_named_poll(data: *mut c_void) -> usize;
+    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_movement(
         actor: *mut c_void,
         timestep: f32,
         argument: *mut c_void,
         output: *mut f32,
     );
+    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_player_update(actor: *mut c_void, timestep: f32) -> usize;
+    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_player_camera_update(camera: *mut c_void);
 }
 
+#[cfg_attr(test, allow(dead_code))]
 const DETOURS: [*const c_void; HOOKS.len()] = [
     rsf_skyrim_cpu_tick as *const c_void,
     rsf_skyrim_cpu_poll as *const c_void,
@@ -166,6 +180,7 @@ extern "C" fn rsf_skyrim_cpu_original(index: u32) -> *mut c_void {
         .map_or(ptr::null_mut(), |slot| slot.load(Ordering::Acquire))
 }
 
+#[cfg_attr(test, allow(dead_code))]
 fn qpc_frequency() -> u64 {
     let mut value: LARGE_INTEGER = unsafe { std::mem::zeroed() };
     if unsafe { QueryPerformanceFrequency(&mut value) } == 0 {
@@ -256,7 +271,9 @@ impl StartRefusal {
     }
 }
 
+#[cfg_attr(test, allow(dead_code))]
 impl Control {
+    #[cfg_attr(test, allow(dead_code))]
     fn remove_unpinned(&mut self) {
         let base = self.base;
         self.hooks.remove(INDICES, |index| {
@@ -270,6 +287,7 @@ impl Control {
         });
     }
 
+    #[cfg_attr(test, allow(dead_code))]
     fn prepare(&mut self, platform: &Platform) -> bool {
         if active() || rsf_skyrim_cpu_rust_busy() || !self.hooks.is_disabled() {
             return false;
@@ -358,6 +376,7 @@ impl Control {
     }
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) extern "C" fn prepare() -> bool {
     let Some(platform) = platform::get() else {
         return false;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::config::{BAD_SIZE, MAX_SIZE, parse};
 use super::forwarding::InitOnce;
-use super::{entry, load_library, load_system, module_path, null, null_mut, wide};
+use super::{entry, load_library, load_system, module_path, null, null_mut};
 use std::ffi::{CStr, CString, OsString, c_void};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
@@ -270,7 +270,9 @@ unsafe extern "system" fn rsf_thin_create(
         *mut c_void,
     ) -> HRESULT;
     system_proc(c"DirectInput8Create").map_or(E_FAIL, |address| unsafe {
-        std::mem::transmute::<_, Create>(address)(instance, version, iid, output, outer)
+        std::mem::transmute::<unsafe extern "system" fn() -> isize, Create>(address)(
+            instance, version, iid, output, outer,
+        )
     })
 }
 
@@ -283,14 +285,16 @@ unsafe extern "system" fn rsf_thin_get_class_object(
     type GetClass =
         unsafe extern "system" fn(*const GUID, *const GUID, *mut *mut c_void) -> HRESULT;
     system_proc(c"DllGetClassObject").map_or(E_FAIL, |address| unsafe {
-        std::mem::transmute::<_, GetClass>(address)(clsid, iid, output)
+        std::mem::transmute::<unsafe extern "system" fn() -> isize, GetClass>(address)(
+            clsid, iid, output,
+        )
     })
 }
 
 fn forward_status(name: &CStr) -> HRESULT {
     type Status = unsafe extern "system" fn() -> HRESULT;
     system_proc(name).map_or(E_FAIL, |address| unsafe {
-        std::mem::transmute::<_, Status>(address)()
+        std::mem::transmute::<unsafe extern "system" fn() -> isize, Status>(address)()
     })
 }
 
@@ -313,6 +317,6 @@ extern "system" fn rsf_thin_unregister_server() -> HRESULT {
 extern "system" fn rsf_thin_joystick_format() -> *const c_void {
     type Format = unsafe extern "system" fn() -> *const c_void;
     system_proc(c"GetdfDIJoystick").map_or(null(), |address| unsafe {
-        std::mem::transmute::<_, Format>(address)()
+        std::mem::transmute::<unsafe extern "system" fn() -> isize, Format>(address)()
     })
 }

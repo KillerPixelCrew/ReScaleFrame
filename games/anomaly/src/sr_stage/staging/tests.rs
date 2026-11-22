@@ -258,6 +258,7 @@ fn map_refusals_keep_the_size_and_format_and_never_unmap() {
     leaves(|state| state.immediate = false);
     let (layout, mapping) = map(&p, context(), &held);
     assert!(mapping.is_none());
+    drop(mapping);
     assert_eq!((layout.width, layout.height, layout.format), (4, 2, 10));
     assert_eq!(calls(), ["pixel 10", "GetDevice", "GetType"]);
     leaves(|state| state.immediate = true);
@@ -265,6 +266,7 @@ fn map_refusals_keep_the_size_and_format_and_never_unmap() {
     leaves(|state| state.map = false);
     let (layout, mapping) = map(&p, context(), &held);
     assert!(mapping.is_none());
+    drop(mapping);
     assert_eq!(layout.pixel_bytes, 8);
     assert_eq!(
         calls().last().map(|call| call.starts_with("map ")),
@@ -283,6 +285,7 @@ fn map_refusals_keep_the_size_and_format_and_never_unmap() {
     let unknown = GpuLease(d3d().lease(unsafe { (d3d().as_texture)(unknown) }).unwrap());
     let (layout, mapping) = map(&p, context(), &unknown);
     assert!(mapping.is_none());
+    drop(mapping);
     assert_eq!((layout.format, layout.pixel_bytes), (2, 0));
     assert_eq!(calls(), ["pixel 2", "GetDevice"]);
 

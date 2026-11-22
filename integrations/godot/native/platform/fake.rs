@@ -83,6 +83,7 @@ thread_local! {
     pub(crate) static RENDER_BEGIN: Cell<u32> = const { Cell::new(1) };
     pub(crate) static END_SESSION: Cell<u32> = const { Cell::new(1) };
     /// The last Present pass: source frame, session, role, screen, swapchain and colour input.
+    #[allow(clippy::type_complexity)]
     pub(crate) static WINDOW: Cell<Option<(u64, u64, u32, u32, usize, usize)>> =
         const { Cell::new(None) };
     /// The Vulkan SR context leaves in call order, each with its main argument.
@@ -116,6 +117,7 @@ thread_local! {
     /// The window, input, ping and marker leaves in call order, each with its main argument.
     static WINDOW_CALLS: RefCell<Vec<(&'static str, u64)>> = const { RefCell::new(Vec::new()) };
     /// The CPU events reported: Vulkan, stage, session, message and flags.
+    #[allow(clippy::type_complexity)]
     static CPU_EVENTS: RefCell<Vec<(bool, u32, u64, u32, u32)>> = const { RefCell::new(Vec::new()) };
     static SR_ASKED: Cell<Option<(u32, u32, u32)>> = const { Cell::new(None) };
     static FG_ASKED: Cell<Option<(u32, u32, u32)>> = const { Cell::new(None) };
@@ -727,6 +729,7 @@ unsafe extern "C" fn vulkan_present_marker(begin: u32) {
 }
 
 /// The last Auto question each policy leaf was asked: vendor, software and choices.
+#[allow(clippy::type_complexity)]
 pub(crate) fn take_auto() -> (Option<(u32, u32, u32)>, Option<(u32, u32, u32)>) {
     (SR_ASKED.take(), FG_ASKED.take())
 }

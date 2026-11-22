@@ -22,6 +22,7 @@
 //! keeps the exported rsf_get_game_plugin_api. The combined carriers call `carrier.rs` for their executable and
 //! window identifiers, GameSDK probe and decrypted patch policy through ac7_carrier.h.
 #[cfg(windows)]
+#[allow(dead_code)] // bindgen output; the native leaves are declared for the C++ side too.
 mod capture_platform_abi;
 mod carrier;
 mod carrier_abi;

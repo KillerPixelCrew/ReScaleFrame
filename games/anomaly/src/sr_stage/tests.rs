@@ -541,7 +541,7 @@ fn installed(stage: u32, table: &Platform) -> Stage {
 fn frame_facts_require_the_current_target_and_readable_world_options() {
     let table = platform();
     let driver = Stage::new();
-    driver.register(&table);
+    driver.register(&*table);
     let mut state = State::default();
     let target = std::ptr::without_provenance_mut(0x20);
     fake(|f| f.render_target = 0x20);
@@ -570,7 +570,7 @@ fn frame_facts_require_the_current_target_and_readable_world_options() {
 fn loading_gate_preserves_precache_read_order_and_refuses_unknown_facts() {
     let table = platform();
     let driver = Stage::new();
-    driver.register(&table);
+    driver.register(&*table);
     assert!(!driver.loading());
     fake(|f| {
         f.precache_reads = 0;

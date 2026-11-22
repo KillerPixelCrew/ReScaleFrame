@@ -93,7 +93,8 @@ fn sha256(input: &[u8]) -> Option<[u8; 32]> {
     let mut size = digest.len() as u32;
     let hashed =
         unsafe { GetProcAddress(module, s!("CryptHashCertificate2")) }.is_some_and(|entry| {
-            let hash = unsafe { std::mem::transmute::<_, Hash>(entry) };
+            let hash =
+                unsafe { std::mem::transmute::<unsafe extern "system" fn() -> isize, Hash>(entry) };
             unsafe {
                 hash(
                     w!("SHA256"),

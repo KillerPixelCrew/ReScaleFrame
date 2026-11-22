@@ -15,7 +15,7 @@ use rsf_game_sys::sr_abi::*;
 use rsf_game_sys::{rsf_camera_frame, rsf_game_log_fn, rsf_game_render_pass};
 use std::cell::UnsafeCell;
 use std::ffi::{CStr, CString, c_char, c_void};
-use std::ptr::{null, null_mut};
+use std::ptr::null_mut;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Instant;
 
@@ -99,6 +99,8 @@ fn copy_text(out: &mut [c_char], text: &str) {
 
 #[repr(u8)]
 enum ApiStatus {
+    // Status 0: reported when the query succeeds, so it is never constructed as an error.
+    #[allow(dead_code)]
     Bound,
     Missing,
     Refused,
@@ -750,7 +752,7 @@ impl Driver {
         } else {
             let mut wanted = wanted;
             let previous = render.backend_request;
-            if !previous.is_some_and(|(request, _)| request == wanted.backend) {
+            if previous.is_none_or(|(request, _)| request != wanted.backend) {
                 let selected = Self::resolve_backend(render, device, wanted.backend);
                 render.backend_request = Some((wanted.backend, selected));
                 if selected.is_none() {

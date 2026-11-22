@@ -189,6 +189,8 @@ type DiagnosticsFn = unsafe extern "C" fn(*mut rsf_overlay_diagnostics) -> i32;
 /// A validated table: every entry present, the size and version of this adapter's header.
 #[derive(Clone, Copy)]
 struct Api {
+    // The admitted table itself is returned only by the test bind entry.
+    #[cfg_attr(not(test), allow(dead_code))]
     table: rsf_overlay_api,
     configure: unsafe extern "C" fn(*const rsf_overlay_service_setup) -> i32,
     present: unsafe extern "C" fn(*mut c_void, *mut u32) -> i32,
@@ -1214,6 +1216,7 @@ pub(crate) use win32::engine_window;
 
 mod win32 {
     use crate::ini;
+    use std::ffi::c_void;
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_INSERT};
     use windows_sys::Win32::UI::WindowsAndMessaging::{

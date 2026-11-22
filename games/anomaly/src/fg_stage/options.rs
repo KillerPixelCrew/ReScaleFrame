@@ -8,7 +8,6 @@ use crate::ini;
 use std::ffi::{CString, OsString};
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
-use std::slice;
 use std::sync::Mutex;
 use windows_sys::Win32::Foundation::MAX_PATH;
 use windows_sys::core::{PCWSTR, w};

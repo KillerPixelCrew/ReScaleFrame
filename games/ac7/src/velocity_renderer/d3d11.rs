@@ -809,9 +809,9 @@ impl Pipeline {
             c.HSGetShader(&mut hull, None, None);
             c.DSGetShader(&mut domain, None, None);
         }
-        let stages = u32::from(geometry.is_some()) * STAGE_GEOMETRY
-            | u32::from(hull.is_some()) * STAGE_HULL
-            | u32::from(domain.is_some()) * STAGE_DOMAIN;
+        let stages = (u32::from(geometry.is_some()) * STAGE_GEOMETRY)
+            | (u32::from(hull.is_some()) * STAGE_HULL)
+            | (u32::from(domain.is_some()) * STAGE_DOMAIN);
         let route = route(topology, stages);
         if route == ROUTE_MISMATCHED {
             refused(c"incomplete tessellation pipeline or combined native GS/tessellation requires a matching route");

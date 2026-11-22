@@ -691,6 +691,8 @@ fn bloom_scene_input(bloom: u64, scene: NativeRef) -> Result<*mut NativeRef, Exh
 
 static ORDERING_REPORTS: AtomicU32 = AtomicU32::new(0);
 
+// Row and column index two matrices and the axes together.
+#[allow(clippy::needless_range_loop)]
 pub(super) fn make_plan(
     owner: &Renderer,
     context: *mut c_void,

@@ -3,6 +3,7 @@ use std::ffi::{c_char, c_void};
 
 // Adapter options are read and applied by the Present owner.
 #[repr(C)]
+#[derive(Copy, Clone)]
 pub(crate) struct rsf_anomaly_overlay_option {
     pub(crate) label: *const c_char,
     pub(crate) toggle: u32,
@@ -16,7 +17,7 @@ pub(crate) struct rsf_anomaly_overlay_option {
 }
 
 // The borrowed D3D11 device address is used only as an identity.
-#[derive(Default)]
+#[derive(Copy, Clone, Default)]
 #[repr(C)]
 pub(crate) struct rsf_anomaly_overlay_chain {
     pub(crate) window: *mut c_void,

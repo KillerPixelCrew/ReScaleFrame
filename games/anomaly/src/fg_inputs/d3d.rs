@@ -231,6 +231,7 @@ unsafe extern "C" fn motion_view(raw: Raw, texture: Raw) -> Raw {
     owned(view)
 }
 
+#[allow(clippy::too_many_arguments)]
 unsafe fn dispatch(
     scope: StateScope,
     raw: Raw,

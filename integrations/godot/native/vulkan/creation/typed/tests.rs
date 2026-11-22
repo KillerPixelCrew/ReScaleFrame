@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::super::VK_ERROR_EXTENSION_NOT_PRESENT;
 use super::*;
+use crate::platform::VkChainFacts;
 use crate::platform::vulkan_negotiation::VK_ERROR_FEATURE_NOT_PRESENT;
 use std::cell::RefCell;
 use std::ffi::CStr;
@@ -40,17 +41,22 @@ struct ObservedDevice {
 
 thread_local! {
     static CALLS: RefCell<Calls> = RefCell::default();
-    static INSTANCE_NAMES: [*const c_char; 2] = [c"VK_EXT_fixture".as_ptr(); 2];
-    static DEVICE_NAMES: [*const c_char; 3] = [
-        c"VK_KHR_swapchain".as_ptr(), c"VK_EXT_mutable_descriptor_type".as_ptr(),
-        c"VK_EXT_mutable_descriptor_type".as_ptr(),
-    ];
-    static LATENCY_NAMES: [*const c_char; 1] = [c"VK_AMD_anti_lag".as_ptr()];
-    static AMD: std::cell::Cell<VkPhysicalDeviceAntiLagFeaturesAMD> = std::cell::Cell::new(
-        VkPhysicalDeviceAntiLagFeaturesAMD {
-            sType: TAG_PHYSICAL_DEVICE_ANTI_LAG_FEATURES_AMD, pNext: ptr::null_mut(), antiLag: 1,
-        }
-    );
+    static INSTANCE_NAMES: [*const c_char; 2] = const { [c"VK_EXT_fixture".as_ptr(); 2] };
+    static DEVICE_NAMES: [*const c_char; 3] = const {
+        [
+            c"VK_KHR_swapchain".as_ptr(),
+            c"VK_EXT_mutable_descriptor_type".as_ptr(),
+            c"VK_EXT_mutable_descriptor_type".as_ptr(),
+        ]
+    };
+    static LATENCY_NAMES: [*const c_char; 1] = const { [c"VK_AMD_anti_lag".as_ptr()] };
+    static AMD: std::cell::Cell<VkPhysicalDeviceAntiLagFeaturesAMD> = const {
+        std::cell::Cell::new(VkPhysicalDeviceAntiLagFeaturesAMD {
+            sType: TAG_PHYSICAL_DEVICE_ANTI_LAG_FEATURES_AMD,
+            pNext: ptr::null_mut(),
+            antiLag: 1,
+        })
+    };
 }
 
 fn names(list: *const *const c_char, count: u32) -> Vec<String> {
@@ -190,22 +196,26 @@ unsafe extern "C" fn mock_proc(_: *mut c_void, name: *const c_char) -> Option<Vk
     }
     unsafe {
         match CStr::from_ptr(name).to_bytes() {
-            b"vkCreateInstance" => {
-                std::mem::transmute::<PFN_vkCreateInstance, _>(Some(mock_create_instance))
-            }
-            b"vkCreateDevice" => {
-                std::mem::transmute::<PFN_vkCreateDevice, _>(Some(mock_create_device))
-            }
+            b"vkCreateInstance" => std::mem::transmute::<
+                PFN_vkCreateInstance,
+                std::option::Option<unsafe extern "C" fn()>,
+            >(Some(mock_create_instance)),
+            b"vkCreateDevice" => std::mem::transmute::<
+                PFN_vkCreateDevice,
+                std::option::Option<unsafe extern "C" fn()>,
+            >(Some(mock_create_device)),
             b"vkEnumerateDeviceExtensionProperties" => std::mem::transmute::<
                 PFN_vkEnumerateDeviceExtensionProperties,
-                _,
+                std::option::Option<unsafe extern "C" fn()>,
             >(Some(mock_enumerate)),
-            b"vkGetPhysicalDeviceProperties" => {
-                std::mem::transmute::<PFN_vkGetPhysicalDeviceProperties, _>(Some(mock_properties))
-            }
-            b"vkGetDeviceProcAddr" => {
-                std::mem::transmute::<Option<VkProc>, _>(Some(mock_device_proc))
-            }
+            b"vkGetPhysicalDeviceProperties" => std::mem::transmute::<
+                PFN_vkGetPhysicalDeviceProperties,
+                std::option::Option<unsafe extern "C" fn()>,
+            >(Some(mock_properties)),
+            b"vkGetDeviceProcAddr" => std::mem::transmute::<
+                Option<VkProc>,
+                std::option::Option<unsafe extern "C" fn()>,
+            >(Some(mock_device_proc)),
             _ => None,
         }
     }
@@ -315,10 +325,9 @@ fn typed_creation_negotiates_on_owners_and_preserves_engine_records() {
     let gipa = begin(1);
     assert!(unsafe { gipa(ptr::null_mut(), ptr::null()) }.is_none());
     let create = unsafe {
-        std::mem::transmute::<_, PFN_vkCreateInstance>(gipa(
-            ptr::null_mut(),
-            c"vkCreateInstance".as_ptr(),
-        ))
+        std::mem::transmute::<std::option::Option<unsafe extern "C" fn()>, PFN_vkCreateInstance>(
+            gipa(ptr::null_mut(), c"vkCreateInstance".as_ptr()),
+        )
     }
     .unwrap();
     let app = VkApplicationInfo {
@@ -387,10 +396,9 @@ fn typed_creation_negotiates_on_owners_and_preserves_engine_records() {
     };
     let run = |gipa: VkProc, info: &VkDeviceCreateInfo| {
         let create = unsafe {
-            std::mem::transmute::<_, PFN_vkCreateDevice>(gipa(
-                instance.cast(),
-                c"vkCreateDevice".as_ptr(),
-            ))
+            std::mem::transmute::<std::option::Option<unsafe extern "C" fn()>, PFN_vkCreateDevice>(
+                gipa(instance.cast(), c"vkCreateDevice".as_ptr()),
+            )
         }
         .unwrap();
         let mut device = ptr::null_mut();
@@ -471,17 +479,16 @@ fn typed_creation_negotiates_on_owners_and_preserves_engine_records() {
         );
     });
     let gdpa = unsafe {
-        std::mem::transmute::<_, Option<VkProc>>(gipa(
+        std::mem::transmute::<std::option::Option<unsafe extern "C" fn()>, Option<VkProc>>(gipa(
             instance.cast(),
             c"vkGetDeviceProcAddr".as_ptr(),
         ))
     }
     .unwrap();
     let destroy = unsafe {
-        std::mem::transmute::<_, PFN_vkDestroyDevice>(gdpa(
-            device.cast(),
-            c"vkDestroyDevice".as_ptr(),
-        ))
+        std::mem::transmute::<std::option::Option<unsafe extern "C" fn()>, PFN_vkDestroyDevice>(
+            gdpa(device.cast(), c"vkDestroyDevice".as_ptr()),
+        )
     }
     .unwrap();
     unsafe { destroy(device, &allocator) };
@@ -501,6 +508,8 @@ fn typed_creation_negotiates_on_owners_and_preserves_engine_records() {
     );
 }
 
+// The callee reads these records through the raw pointer it was given.
+#[allow(unused_assignments)]
 #[test]
 fn typed_clone_promotes_existing_features2_without_editing_links() {
     let mut root = VkPhysicalDeviceFeatures2 {

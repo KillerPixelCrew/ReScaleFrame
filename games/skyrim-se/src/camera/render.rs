@@ -229,40 +229,6 @@ fn history_consumed(fg: bool, accepted_sr: Option<SrFrame>, previous: SrFrame) -
     fg || accepted_sr == Some(previous)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn refused_sr_lease_resets_next_history_without_affecting_fg() {
-        let accepted = SrFrame {
-            session: 7,
-            frame: 1,
-        };
-        let refused = SrFrame {
-            session: 7,
-            frame: 2,
-        };
-        assert!(history_consumed(false, Some(accepted), accepted));
-        // Frame 2 sampled the camera but never acquired valid render inputs.
-        assert!(!history_consumed(false, Some(accepted), refused));
-        assert!(history_consumed(true, Some(accepted), refused));
-
-        // Frame 3 must evaluate with a reset. Once it succeeds, frame 4 can
-        // use its receipt normally instead of carrying the reset forward.
-        let recovered = SrFrame {
-            session: 7,
-            frame: 3,
-        };
-        assert!(history_consumed(false, Some(recovered), recovered));
-        let new_session = SrFrame {
-            session: 8,
-            ..accepted
-        };
-        assert!(!history_consumed(false, Some(accepted), new_session));
-    }
-}
-
 pub(crate) fn describe_inputs(platform: &Platform, base: usize, host: &rsf_game_host_services) {
     use std::ptr;
     use winapi::um::d3d11::ID3D11Texture2D;
@@ -306,4 +272,38 @@ pub(crate) fn describe_inputs(platform: &Platform, base: usize, host: &rsf_game_
         origins[3], origins[4], origins[5], current[0], current[5], previous[0], previous[5],
         desc.Width, desc.Height, desc.Format, desc.SampleDesc.Count,
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refused_sr_lease_resets_next_history_without_affecting_fg() {
+        let accepted = SrFrame {
+            session: 7,
+            frame: 1,
+        };
+        let refused = SrFrame {
+            session: 7,
+            frame: 2,
+        };
+        assert!(history_consumed(false, Some(accepted), accepted));
+        // Frame 2 sampled the camera but never acquired valid render inputs.
+        assert!(!history_consumed(false, Some(accepted), refused));
+        assert!(history_consumed(true, Some(accepted), refused));
+
+        // Frame 3 must evaluate with a reset. Once it succeeds, frame 4 can
+        // use its receipt normally instead of carrying the reset forward.
+        let recovered = SrFrame {
+            session: 7,
+            frame: 3,
+        };
+        assert!(history_consumed(false, Some(recovered), recovered));
+        let new_session = SrFrame {
+            session: 8,
+            ..accepted
+        };
+        assert!(!history_consumed(false, Some(accepted), new_session));
+    }
 }

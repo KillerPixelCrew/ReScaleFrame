@@ -42,10 +42,10 @@ pub(super) unsafe fn write_sidecar(
     );
     out.emit("  \"module\": {\"path\": \"");
     unsafe { path(out, info.module_path) };
-    let _ = write!(
+    let _ = writeln!(
         out,
         "\", \"load_base\": \"{:#x}\", \"preferred_base\": \"{:#x}\", \
-        \"size_of_image\": {}, \"entry_point_rva\": \"{:#x}\"}},\n",
+        \"size_of_image\": {}, \"entry_point_rva\": \"{:#x}\"}},",
         image.base as usize, info.preferred_base, image.image_size, info.entry_rva
     );
     out.emit("  \"code_entropy\": ");
@@ -134,9 +134,9 @@ pub(super) unsafe fn write_sidecar(
     let name_list = (!info.name_list.is_null()).then(|| unsafe { CStr::from_ptr(info.name_list) });
     write_names(out, name_list);
     let now = rsf_dump_now_ms();
-    let _ = write!(
+    let _ = writeln!(
         out,
-        "  \"timing_ms\": {{\"section_hash_and_entropy\": {}, \"structured_sections\": {}, \"total\": {}}},\n",
+        "  \"timing_ms\": {{\"section_hash_and_entropy\": {}, \"structured_sections\": {}, \"total\": {}}},",
         (info.hash_ms + 0.5) as u32,
         (now - structured + 0.5) as u32,
         (now - info.started_ms + 0.5) as u32

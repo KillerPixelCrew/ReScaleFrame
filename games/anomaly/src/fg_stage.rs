@@ -89,7 +89,7 @@ struct FgBindings {
         context11: *mut c_void,
         list12: *mut c_void,
         backbuffer12: *mut c_void,
-        host: *mut rsf_streamline_host,
+        host: *mut c_void,
         provider: *mut c_void,
         sync: u32,
     ),

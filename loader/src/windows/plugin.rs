@@ -166,10 +166,14 @@ fn configure(module: HMODULE) -> Option<u32> {
         note(b"Runtime session ABI unavailable.");
         return None;
     };
-    let prepare = unsafe { std::mem::transmute::<_, Prepare>(prepare) };
-    let start = unsafe { std::mem::transmute::<_, Start>(start) };
+    let prepare =
+        unsafe { std::mem::transmute::<unsafe extern "system" fn() -> isize, Prepare>(prepare) };
+    let start =
+        unsafe { std::mem::transmute::<unsafe extern "system" fn() -> isize, Start>(start) };
     if let Some(sink) = resolve(c"rsf_native_cpu_event") {
-        let _ = CPU_SINK.set(unsafe { std::mem::transmute::<_, CpuSink>(sink) });
+        let _ = CPU_SINK.set(unsafe {
+            std::mem::transmute::<unsafe extern "system" fn() -> isize, CpuSink>(sink)
+        });
     }
     let executable = module_path(null_mut())?;
     let name = CString::new(executable.file_name()?.to_string_lossy().as_bytes()).ok()?;

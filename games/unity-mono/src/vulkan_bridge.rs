@@ -107,8 +107,11 @@ unsafe extern "C" fn rsf_uvk_bridge_create_device(
     output.vk_queue = instance.queue;
     output.vk_queue_family = instance.queue_family;
     // The native loader supplies these two exact Vulkan entry points on Windows x64.
-    let gipa = unsafe { std::mem::transmute::<_, vk::PFN_vkGetInstanceProcAddr>(gipa) };
-    let gdpa = unsafe { std::mem::transmute::<_, vk::PFN_vkGetDeviceProcAddr>(gdpa) };
+    let gipa = unsafe {
+        std::mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkGetInstanceProcAddr>(gipa)
+    };
+    let gdpa =
+        unsafe { std::mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkGetDeviceProcAddr>(gdpa) };
     if !unsafe { rsf_unity_vk_interop_ready(vk::Device::from_raw(instance.device), gdpa) } {
         log(
             services,

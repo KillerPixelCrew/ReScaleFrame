@@ -10,7 +10,7 @@ use rsf_game_sys::d3d11_host_abi::rsf_d3d11_sampler_bias as Bias;
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 const FLUSH: usize = 0x101_0de0;
 const FLUSH_BYTES: [u8; 18] = [

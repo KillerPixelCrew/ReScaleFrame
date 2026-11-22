@@ -355,5 +355,5 @@ impl Creation {
 #[cfg(test)]
 mod tests;
 
-pub(super) mod abi;
+pub(crate) mod abi;
 pub(crate) mod typed;

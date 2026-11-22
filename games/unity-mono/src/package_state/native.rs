@@ -10,7 +10,6 @@ use crate::package_abi::{
     rsf_sr12_plan_result, rsf_sr12_setup, rsf_unity_package_view_setup,
 };
 use crate::preview_abi::rsf_d3d12_window_observer;
-use rsf_game_sys::rsf_game_render_pass;
 use std::ffi::{c_int, c_void};
 use std::sync::atomic::Ordering::SeqCst;
 use windows::Win32::Graphics::{

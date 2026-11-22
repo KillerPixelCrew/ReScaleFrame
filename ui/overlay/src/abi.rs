@@ -47,6 +47,8 @@ pub(crate) use wire::{
 
 /// Version of the panel ABI implemented by this build.
 pub use wire::RSF_OVERLAY_ABI_VERSION;
+/// A host option whose value is 0 or 1.
+pub use wire::RSF_OVERLAY_HOST_OPTION_TOGGLE;
 /// XeSS Ultra Quality preset.
 pub use wire::RSF_OVERLAY_QUALITY_ULTRA_QUALITY;
 /// An adapter option borrowed for the frame call.

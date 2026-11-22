@@ -258,6 +258,31 @@ impl Selection {
     }
 }
 
+/// One rectangle per host option. The array is longer than the standard library's `Default`
+/// arrays, so it carries its own.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HostOptionControls(pub [Option<Rect>; MAX_HOST_OPTIONS]);
+
+impl Default for HostOptionControls {
+    fn default() -> Self {
+        Self([None; MAX_HOST_OPTIONS])
+    }
+}
+
+impl std::ops::Deref for HostOptionControls {
+    type Target = [Option<Rect>; MAX_HOST_OPTIONS];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for HostOptionControls {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 /// Where the panel's interactive controls ended up, in egui points.
 ///
 /// The C boundary does not pass these on. They exist because the unit tests tap the controls,
@@ -305,7 +330,7 @@ pub struct Controls {
     /// Debug tint switch row.
     pub sharpening_debug: Option<Rect>,
     /// Host options: the switch row of a toggle, the up button of a number.
-    pub host_option: [Option<Rect>; MAX_HOST_OPTIONS],
+    pub host_option: HostOptionControls,
     /// FPS overlay switch row.
     pub hud: Option<Rect>,
     /// Compact and detailed FPS overlay.

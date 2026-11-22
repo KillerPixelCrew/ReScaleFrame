@@ -332,6 +332,8 @@ fn stage2_normal() {
     assert!(rsf_anomaly_swap_shutdown(c.swap) && c.stock() && c.host().drops == 1);
 }
 
+// Row and column index two matrices and the axes together.
+#[allow(clippy::needless_range_loop)]
 #[cfg_attr(test, test)]
 fn stage2_optional_odd() {
     let c = Case::new(false);

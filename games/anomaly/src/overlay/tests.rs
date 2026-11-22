@@ -141,7 +141,7 @@ static SR_OFFER: AtomicU32 = AtomicU32::new(0);
 static FG_LINK: AtomicU32 = AtomicU32::new(0);
 static SR_REQUESTS: AtomicU32 = AtomicU32::new(0);
 
-fn sr_choices() -> OverlayChoices {
+fn sr_choices(_: *mut c_void) -> OverlayChoices {
     if SR_OFFER.load(Ordering::SeqCst) == 0 {
         return Default::default();
     }

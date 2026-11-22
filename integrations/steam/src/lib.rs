@@ -230,7 +230,7 @@ fn dispatch_present(receiver: Receiver, interval: u32, flags: u32) -> Option<i32
         sync_interval: interval,
         flags,
     };
-    handled(&mut request).then(|| unsafe { request.result.hresult })
+    handled(&mut request).then_some(unsafe { request.result.hresult })
 }
 
 fn dispatch_present1(
@@ -245,7 +245,7 @@ fn dispatch_present1(
         flags,
         parameters,
     };
-    handled(&mut request).then(|| unsafe { request.result.hresult })
+    handled(&mut request).then_some(unsafe { request.result.hresult })
 }
 
 // A facade must enter RSF before Steam acquires its global Present lock.

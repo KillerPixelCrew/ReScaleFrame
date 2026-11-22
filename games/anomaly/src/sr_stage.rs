@@ -62,9 +62,13 @@ const BACKEND_DLSS: u32 = 1;
 const BACKENDS: u32 = RSF_ANOMALY_SR_ADAPTER_BACKENDS | (1 << BACKEND_AUTO);
 const QUALITIES: u32 = RSF_ANOMALY_SR_ADAPTER_QUALITIES;
 const MAX_PATH: usize = 260;
-// The vendor runtime directories, in Paths::vendors order.
+// The vendor runtime directories, in Paths::vendors order. Production code destructures the
+// array; the indices name its slots for the tests.
+#[allow(dead_code)]
 const STREAMLINE: usize = 0;
+#[allow(dead_code)]
 const FIDELITYFX: usize = 1;
+#[allow(dead_code)]
 const XESS: usize = 2;
 // Temporal driver refusal transport values.
 const REFUSAL_PREPARE: u8 = 2;

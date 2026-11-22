@@ -612,7 +612,7 @@ pub(crate) fn install(platform: &AsiPlatform, configured_quality: u32) -> bool {
 /// RSF's quality preference from the registered ScriptHook game fiber, never the presentation or
 /// job workers. A change pins the pending owner and requests the engine's own reconfiguration.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_engine_quality_tick(quality: u32) {
+pub(crate) unsafe extern "C" fn rsf_rdr2_engine_quality_tick(quality: u32) {
     if !INSTALLED.load(Ordering::SeqCst) || quality > QUALITY_LIMIT {
         return;
     }

@@ -567,6 +567,7 @@ pub(crate) unsafe fn render_packet(
     }
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn graphics() -> Option<(ID3D12Device, ID3D12CommandQueue)> {
     // The caller holds callback admission until it receives both owning references.
     let shared = lock().view()?;

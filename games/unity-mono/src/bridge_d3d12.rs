@@ -18,7 +18,7 @@ use rsf_game_sys::{
     rsf_game_render_pass,
 };
 use rsf_runtime_submission::{FenceStatus, fence_status};
-use std::ffi::{CStr, c_void};
+use std::ffi::CStr;
 use std::ptr::null_mut;
 use std::sync::{Mutex, PoisonError};
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain3;

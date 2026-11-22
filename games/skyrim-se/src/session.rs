@@ -809,7 +809,7 @@ fn run(entry: impl FnOnce(&mut Session, &Leaves) -> Result<rsf_result, Threw>) -
         return NOT_READY;
     };
     let mut session = session();
-    entry(&mut *session, leaves).unwrap_or(NOT_READY)
+    entry(&mut session, leaves).unwrap_or(NOT_READY)
 }
 
 pub(crate) unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> rsf_result {

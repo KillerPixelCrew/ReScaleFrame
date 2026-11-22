@@ -216,7 +216,7 @@ unsafe extern "C" fn rsf_godot_d3d12_render_begin(table: *const Platform, frame:
 /// `lists` is null or readable for `count` entries.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsfg_submitted(queue: *mut c_void, lists: *const *mut c_void, count: u32) {
-    let Some(platform) = (platform::registered()) else {
+    let Some(platform) = platform::registered() else {
         return;
     };
     if queue.is_null() || lists.is_null() || count == 0 {

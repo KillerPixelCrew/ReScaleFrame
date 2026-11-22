@@ -185,7 +185,10 @@ unsafe extern "C" fn create_instance(
     _: *const c_void,
     output: *mut c_void,
 ) -> i32 {
-    assert_eq!(create as usize, create_marker as usize);
+    assert_eq!(
+        create as *const () as usize,
+        create_marker as *const () as usize
+    );
     record(format!("create_instance {:#x}", request.addr()));
     let result = next_result();
     if result == VK_SUCCESS {
@@ -256,7 +259,7 @@ unsafe extern "C" fn device_extensions(
     list: *const *const c_char,
     count: u32,
 ) -> u32 {
-    assert_eq!(enumerate as usize, enumerate_marker as usize);
+    assert_eq!(enumerate as usize, enumerate_marker as *const () as usize);
     record(format!(
         "device_extensions {:#x} {}",
         physical.addr(),
@@ -328,7 +331,10 @@ unsafe extern "C" fn create_device(
     _: *const c_void,
     output: *mut c_void,
 ) -> i32 {
-    assert_eq!(create as usize, create_marker as usize);
+    assert_eq!(
+        create as *const () as usize,
+        create_marker as *const () as usize
+    );
     assert_eq!(physical.addr(), PHYSICAL);
     record(format!("create_device {:#x}", request.addr()));
     let result = next_result();
@@ -363,7 +369,10 @@ unsafe extern "C" fn latency_destroyed(device: *mut c_void) {
 }
 
 unsafe extern "C" fn destroy_device(destroy: VkFunction, device: *mut c_void, _: *const c_void) {
-    assert_eq!(destroy as usize, destroy_marker as usize);
+    assert_eq!(
+        destroy as *const () as usize,
+        destroy_marker as *const () as usize
+    );
     record(format!("destroy_device {:#x}", device.addr()));
 }
 
@@ -372,7 +381,7 @@ unsafe extern "C" fn adapter(
     physical: *mut c_void,
     output: *mut VkAdapter,
 ) -> u32 {
-    assert_eq!(properties as usize, properties_marker as usize);
+    assert_eq!(properties as usize, properties_marker as *const () as usize);
     record(format!("adapter {:#x}", physical.addr()));
     let Some(value) = ADAPTER.get() else {
         return 0;
@@ -506,7 +515,10 @@ fn routes_intercept_creation_and_forward_everything_else() {
         let (route, function) =
             creation.resolve(VK_SCOPE_INSTANCE, instance, c"vkFixtureOther".as_ptr());
         assert_eq!(route, VK_ROUTE_FORWARD);
-        assert_eq!(function.map(|f| f as usize), Some(other_marker as usize));
+        assert_eq!(
+            function.map(|f| f as usize),
+            Some(other_marker as *const () as usize)
+        );
         assert_eq!(take_calls(), ["underlying 0x11 vkFixtureOther"]);
 
         let device = ptr::without_provenance_mut(DEVICE);
@@ -519,7 +531,10 @@ fn routes_intercept_creation_and_forward_everything_else() {
         let (route, function) =
             creation.resolve(VK_SCOPE_DEVICE, device, c"vkQueueSubmit".as_ptr());
         assert_eq!(route, VK_ROUTE_FORWARD);
-        assert_eq!(function.map(|f| f as usize), Some(other_marker as usize));
+        assert_eq!(
+            function.map(|f| f as usize),
+            Some(other_marker as *const () as usize)
+        );
         assert_eq!(
             take_calls(),
             [

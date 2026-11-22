@@ -33,6 +33,7 @@ pub(crate) fn resolve(
 }
 
 /// Provider-independent root beside the startup INI.
+#[cfg_attr(not(feature = "mono-plugin"), allow(dead_code))]
 pub(crate) fn runtime_root(ini: &[u16]) -> Vec<u16> {
     let end = ini.iter().rposition(separator).map_or(0, |index| index + 1);
     let mut root = ini[..end].to_vec();
@@ -41,6 +42,7 @@ pub(crate) fn runtime_root(ini: &[u16]) -> Vec<u16> {
 }
 
 /// `<ini directory>\ReScaleFrame\preferences.ini`, where the overlay saves next-start choices.
+#[cfg_attr(not(feature = "mono-plugin"), allow(dead_code))]
 pub(crate) fn preferences_path(ini: &[u16]) -> Vec<u16> {
     let mut preferences = runtime_root(ini);
     preferences.extend("\\preferences.ini".encode_utf16());
@@ -110,11 +112,13 @@ mod platform {
     }
 
     /// GetPrivateProfileIntW as the C++ read it: the INT result taken as UINT.
+    #[cfg_attr(not(feature = "mono-plugin"), allow(dead_code))]
     pub(crate) fn profile_int(section: PCWSTR, name: PCWSTR, default: u32, file: PCWSTR) -> u32 {
         (unsafe { GetPrivateProfileIntW(section, name, default as i32, file) }) as u32
     }
 
     /// [UnitySR] `name` as an unsigned integer.
+    #[cfg_attr(not(feature = "mono-plugin"), allow(dead_code))]
     pub(crate) fn setting(ini: &Ini, name: PCWSTR, default: u32) -> u32 {
         profile_int(SECTION, name, default, ini.as_ptr())
     }

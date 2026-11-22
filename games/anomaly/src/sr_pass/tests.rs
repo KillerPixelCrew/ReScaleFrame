@@ -118,7 +118,8 @@ fn inputs() -> PassInputs {
 fn motion_decode_uses_validity_and_canonical_uv() {
     let p = crate::sr_temporal::motion_decode_params();
     assert_eq!(p.struct_size as usize, size_of_val(&p));
-    let v1_size = offset_of!(rsf_motion_decode_params, zero_means_unwritten) + size_of::<u32>();
+    let v1_size =
+        std::mem::offset_of!(rsf_motion_decode_params, zero_means_unwritten) + size_of::<u32>();
     assert!(p.struct_size as usize > v1_size);
     assert_eq!(
         [
@@ -298,6 +299,7 @@ fn pass_carries_rectangles_identity_and_camera_reprojection() {
 
 #[test]
 fn refusals_leave_the_native_output_empty() {
+    #[allow(clippy::type_complexity)]
     let faults: [(fn(&mut PassInputs), PassError); 14] = [
         (|v| v.frame.render_width = 2000, PassError::Sizes),
         (|v| v.frame.render_height = 0, PassError::Sizes),

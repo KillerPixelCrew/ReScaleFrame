@@ -698,12 +698,10 @@ extern "system" fn sl_get_feature(feature_id: u32, name: *const c_char, output: 
         && let Some(real) = read::<8>(output as u64, 0)
             .map(u64::from_le_bytes)
             .filter(|&real| real != 0)
+        && let Ok(name) = CStr::from_bytes_until_nul(&text)
+        && let Some(wrapper) = bind_named(c"streamline", name, real as Ptr)
     {
-        if let Ok(name) = CStr::from_bytes_until_nul(&text)
-            && let Some(wrapper) = bind_named(c"streamline", name, real as Ptr)
-        {
-            unsafe { platform().write_ptr.unwrap()(output, wrapper) };
-        }
+        unsafe { platform().write_ptr.unwrap()(output, wrapper) };
     }
     unsafe { rsf_census_call_finish(call, u64::from(result as u32)) };
     result

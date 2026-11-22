@@ -4,7 +4,7 @@
 use super::{Bytes, Identity};
 use crate::shader_family::FAMILIES;
 use std::collections::HashSet;
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::c_void;
 
 #[repr(C)]
 pub(super) struct Root {
@@ -449,11 +449,8 @@ mod tests {
             report: remember,
         };
         let admit = |roots: &Vec<_>, count| unsafe {
-            rsf_anomaly_shader_pack_manifest(
-                Bytes::from(NS.as_bytes()),
-                count,
-                std::ptr::from_ref(roots).cast(),
-                read,
+            publish(
+                admit_pack(NS.as_bytes(), count, std::ptr::from_ref(roots).cast(), read),
                 &refusal,
             )
         };

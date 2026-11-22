@@ -55,7 +55,10 @@ pub(super) fn readable_create(setup: &rsf_fgvk_setup) -> Option<VkSwapchainCreat
     let graphics = &setup.graphics;
     if let Some(instance_proc) = graphics.instance_proc {
         let get = unsafe {
-            std::mem::transmute::<_, PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR>(instance_proc(
+            std::mem::transmute::<
+                std::option::Option<unsafe extern "C" fn()>,
+                PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR,
+            >(instance_proc(
                 graphics.instance,
                 c"vkGetPhysicalDeviceSurfaceCapabilitiesKHR".as_ptr(),
             ))
@@ -111,7 +114,10 @@ impl Capture {
         self.usage = info.imageUsage;
         if let Some(proc) = setup.graphics.instance_proc {
             let properties = unsafe {
-                std::mem::transmute::<_, PFN_vkGetPhysicalDeviceMemoryProperties>(proc(
+                std::mem::transmute::<
+                    std::option::Option<unsafe extern "C" fn()>,
+                    PFN_vkGetPhysicalDeviceMemoryProperties,
+                >(proc(
                     setup.graphics.instance,
                     c"vkGetPhysicalDeviceMemoryProperties".as_ptr(),
                 ))
@@ -300,10 +306,10 @@ impl Capture {
             let proc = self.setup.graphics.device_proc?;
             let device = self.setup.graphics.device;
             let get = unsafe {
-                std::mem::transmute::<_, PFN_vkGetSwapchainImagesKHR>(proc(
-                    device,
-                    c"vkGetSwapchainImagesKHR".as_ptr(),
-                ))
+                std::mem::transmute::<
+                    std::option::Option<unsafe extern "C" fn()>,
+                    PFN_vkGetSwapchainImagesKHR,
+                >(proc(device, c"vkGetSwapchainImagesKHR".as_ptr()))
             }?;
             if unsafe { get(device.cast(), self.chain, &mut count, ptr::null_mut()) } != VK_SUCCESS
                 || count == 0

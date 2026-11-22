@@ -39,7 +39,6 @@ type FsrDispatchFn = unsafe extern "C" fn(*mut c_void, *const c_void) -> i32;
 type FsrCreateFn = unsafe extern "C" fn(*mut c_void, *const c_void) -> i32;
 type NgxGetIntFn = unsafe extern "C" fn(*mut c_void, *const c_char, *mut i32) -> u32;
 
-/// RSF_SCREEN_UNKNOWN and RSF_SCREEN_FLIGHT from game_frame.h.
 /// Returned only if a detour runs without its trampoline, which MinHook never allows.
 const NO_TRAMPOLINE: i32 = i32::MIN;
 const FSR_CREATE_REPORTS: u32 = 4;
@@ -85,13 +84,18 @@ impl Observer {
         let mut original = ptr::null_mut();
         self.active = if candidate == 0 {
             0
-        } else if self.originals.contains_key(&candidate) {
-            candidate
-        } else if attach(&mut original) {
-            self.originals.insert(candidate, original as usize);
-            candidate
         } else {
-            0
+            match self.originals.entry(candidate) {
+                std::collections::btree_map::Entry::Occupied(_) => candidate,
+                std::collections::btree_map::Entry::Vacant(slot) => {
+                    if attach(&mut original) {
+                        slot.insert(original as usize);
+                        candidate
+                    } else {
+                        0
+                    }
+                }
+            }
         };
         previous != self.active
     }

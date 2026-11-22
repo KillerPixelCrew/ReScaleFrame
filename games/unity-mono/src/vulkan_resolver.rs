@@ -408,11 +408,11 @@ mod tests {
         incomplete[PRESENT as usize] = None;
         assert_eq!(
             address(state.bind(Some(loader), &incomplete)),
-            Some(loader as usize)
+            Some(loader as *const () as usize)
         );
         assert_eq!(
             address(state.bind(Some(loader), &table()[1..])),
-            Some(loader as usize)
+            Some(loader as *const () as usize)
         );
         assert!(state.interceptors.iter().all(Option::is_none));
         assert_eq!(address(state.original(INSTANCE_PROC)), None);
@@ -421,12 +421,12 @@ mod tests {
         forward[FORWARD as usize] = Some(other_loader);
         assert_eq!(
             address(state.bind(Some(loader), &forward)),
-            Some(interceptor as usize)
+            Some(interceptor as *const () as usize)
         );
         assert!(state.interceptors[FORWARD as usize].is_none());
         assert_eq!(
             address(state.original(INSTANCE_PROC)),
-            Some(loader as usize)
+            Some(loader as *const () as usize)
         );
     }
 
@@ -434,7 +434,7 @@ mod tests {
     fn disabled_and_null_resolutions_forward_without_saving() {
         let mut state = Resolver::NEW;
         let present = state.resolve(Some(c"vkQueuePresentKHR"), Some(loader), false);
-        assert_eq!(address(present), Some(loader as usize));
+        assert_eq!(address(present), Some(loader as *const () as usize));
         assert_eq!(address(state.original(PRESENT)), None);
 
         state.bind(Some(loader), &table());
@@ -445,10 +445,13 @@ mod tests {
         assert_eq!(address(state.original(PRESENT)), None);
         assert_eq!(
             address(state.resolve(None, Some(loader), true)),
-            Some(loader as usize)
+            Some(loader as *const () as usize)
         );
         let device_proc = state.resolve(Some(c"vkGetDeviceProcAddr"), Some(other_loader), false);
-        assert_eq!(address(device_proc), Some(other_loader as usize));
+        assert_eq!(
+            address(device_proc),
+            Some(other_loader as *const () as usize)
+        );
         assert_eq!(address(state.original(DEVICE_PROC)), None);
         assert_eq!(address(state.original(SLOTS as u32)), None);
     }

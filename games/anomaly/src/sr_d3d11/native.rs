@@ -264,7 +264,12 @@ unsafe extern "C" fn rsf_anomaly_sr_describe_texture(raw: Ptr, out: &mut Texture
     let texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&raw) }.unwrap();
     let mut desc = D3D11_TEXTURE2D_DESC::default();
     unsafe { texture.GetDesc(&mut desc) };
-    *out = unsafe { std::mem::transmute(desc) };
+    *out = unsafe {
+        std::mem::transmute::<
+            windows::Win32::Graphics::Direct3D11::D3D11_TEXTURE2D_DESC,
+            crate::sr_d3d11::Texture,
+        >(desc)
+    };
 }
 
 fn write_descriptor<D>(out: &mut View, desc: &D) {
@@ -528,7 +533,7 @@ unsafe extern "C" fn rsf_anomaly_sr_ps_resources(
 unsafe extern "C" fn rsf_anomaly_sr_clear_stencil(raw: Ptr, depth: Ptr) {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
     let depth = unsafe { ID3D11DepthStencilView::from_raw_borrowed(&depth) }.unwrap();
-    unsafe { context.ClearDepthStencilView(depth, D3D11_CLEAR_STENCIL.0 as u32, 1.0, 0) };
+    unsafe { context.ClearDepthStencilView(depth, D3D11_CLEAR_STENCIL.0, 1.0, 0) };
 }
 
 fn without_predication(context: &ID3D11DeviceContext, operation: impl FnOnce()) {

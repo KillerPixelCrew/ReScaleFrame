@@ -32,7 +32,10 @@ struct Description {
 #[derive(Copy, Clone)]
 struct Targets {
     pub depth_copy: *mut c_void,
+    // The full target set; dispatch receives the depth and motion views separately.
+    #[allow(dead_code)]
     pub depth: *mut c_void,
+    #[allow(dead_code)]
     pub motion: *mut c_void,
     pub depth_view: *mut c_void,
     pub depth_uav: *mut c_void,
@@ -76,6 +79,7 @@ struct Bindings {
     depth_view: unsafe extern "C" fn(device: *mut c_void, depth_copy: *mut c_void) -> *mut c_void,
     unordered_view: unsafe extern "C" fn(device: *mut c_void, texture: *mut c_void) -> *mut c_void,
     motion_view: unsafe extern "C" fn(device: *mut c_void, texture: *mut c_void) -> *mut c_void,
+    #[allow(clippy::type_complexity)]
     dispatch: unsafe fn(
         state_scope: StateScope,
         context: *mut c_void,
@@ -91,8 +95,11 @@ struct Bindings {
 
 #[cfg(windows)]
 #[derive(Clone, Copy)]
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) struct StateScope {
+    #[cfg_attr(test, allow(dead_code))]
     pub(super) save: unsafe extern "C" fn(*mut c_void, *mut rsf_d3d11_state) -> u32,
+    #[cfg_attr(test, allow(dead_code))]
     pub(super) restore: unsafe extern "C" fn(*mut c_void, *mut rsf_d3d11_state),
 }
 

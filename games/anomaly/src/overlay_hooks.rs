@@ -691,6 +691,14 @@ unsafe extern "C" fn rsf_anomaly_overlay_before_resize(chain: *mut c_void) {
     }
 }
 
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_overlay_install_default_input(
+    hooks: &HookOps,
+    reason: &mut Reason,
+) -> bool {
+    install_input(hooks, reason)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -831,12 +839,4 @@ mod tests {
         }
         assert_eq!(CALLS.with_borrow(|calls| calls.len()), 12);
     }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_overlay_install_default_input(
-    hooks: &HookOps,
-    reason: &mut Reason,
-) -> bool {
-    install_input(hooks, reason)
 }

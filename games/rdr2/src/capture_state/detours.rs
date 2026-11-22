@@ -404,6 +404,8 @@ unsafe extern "system" fn set_rtv(
         *const D3D12_CPU_DESCRIPTOR_HANDLE,
     );
     unsafe { original::<Original>(Role::SetRtv)(list, count, handles, contiguous, depth) };
+    // Without descriptors the handle pointer may be dangling, so it is only read for a count.
+    #[allow(clippy::unnecessary_lazy_evaluations)]
     let first = (count != 0)
         .then(|| unsafe { handles.as_ref() })
         .flatten()

@@ -33,12 +33,14 @@ use windows_sys::Win32::System::Threading::GetCurrentProcess;
 const PATH_LIMIT: usize = 32768;
 const MODULE_NAME: *const u16 = windows_sys::w!("CommunityShaders.dll");
 const EXCEPTION: &CStr = c"CS initializer exception; RSF coexistence refused for this process.";
+#[cfg_attr(test, allow(dead_code))]
 const ARMED: &CStr = c"CS initializer interception armed before module load; awaiting exact-profile initialization if present.";
 const EXCLUDED: &CStr = c"CS 1.9.1 Upscaling lifecycle excluded; original configuration and other feature initialization forwarded; runtime coexistence unvalidated.";
 
 type Withdraw = unsafe extern "C" fn();
 
 unsafe extern "system" {
+    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cs_resolve(module: HMODULE, name: *const u8) -> FARPROC;
 }
 
@@ -69,8 +71,10 @@ unsafe extern "C" fn read(address: usize, output: *mut c_void, size: usize) -> b
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, allow(dead_code))]
 enum Phase {
     Unarmed,
+    #[cfg_attr(test, allow(dead_code))]
     Arming,
     Armed,
     Captured,
@@ -168,6 +172,7 @@ fn module_path(module: usize, buffer: &mut [u16; PATH_LIMIT]) -> Option<usize> {
     (len != 0 && len < PATH_LIMIT).then_some(len)
 }
 
+#[cfg_attr(test, allow(dead_code))]
 fn file_kind(path: &[u16]) -> u32 {
     let attributes = unsafe { GetFileAttributesW(path.as_ptr()) };
     if attributes != INVALID_FILE_ATTRIBUTES {
@@ -243,6 +248,7 @@ fn inspect_profile(path: &[u16], module: usize, read: Read) -> Option<bool> {
     Some(profile_matches(bytes, module, read))
 }
 
+#[cfg_attr(test, allow(dead_code))]
 fn installed_profile() -> Result<(), &'static CStr> {
     let mut path = [0; PATH_LIMIT];
     if let Some(module) = Module::borrow(0) {
@@ -287,6 +293,7 @@ fn create_hook(platform: &Platform, slot: usize, target: usize, detour: *const c
     true
 }
 
+#[cfg_attr(test, allow(dead_code))]
 fn arm(platform: &Platform) -> Result<(), &'static CStr> {
     installed_profile()?;
     if !rsf_windows::minhook::initialize() {
@@ -336,6 +343,7 @@ pub(crate) unsafe extern "C" fn checkpoint(refusal: *mut *const c_char, arm: boo
     checkpoint_with(unsafe { &mut *refusal }, withdraw)
 }
 
+#[cfg_attr(test, allow(dead_code))]
 fn checkpoint_with(refusal: &mut *const c_char, withdraw: Option<Withdraw>) -> bool {
     let Some(platform) = platform::get() else {
         return false;
@@ -447,7 +455,7 @@ fn initialize(platform: &Platform, skse: *const c_void) -> bool {
     let mut path = [0; PATH_LIMIT];
     let length = module_path(module, &mut path);
     if module.checked_add(INITIALIZE) != Some(original)
-        || !length.is_some_and(|len| inspect_profile(&path[..len], module, read) == Some(true))
+        || length.is_none_or(|len| inspect_profile(&path[..len], module, read) != Some(true))
         || features_inactive(module, false, read) != Some(true)
         || before_device(platform.main_module(), read) != Some(true)
     {
@@ -511,36 +519,6 @@ fn initialize(platform: &Platform, skse: *const c_void) -> bool {
     result
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn repeated_initializer_lookups_remain_wrapped_with_one_invocation() {
-        let mut state = State {
-            phase: Phase::Armed,
-            reason: None,
-            module: 0,
-            original: 0,
-            callout: 3,
-            withdraw: None,
-        };
-        assert!(state.capture(7, 11));
-        assert!(state.capture(7, 11));
-        assert!(!state.capture(8, 11));
-        assert!(!state.capture(7, 12));
-        assert_eq!(state.claim_initializer(), Some((7, 11, 3)));
-        assert!(state.capture(7, 11));
-        assert!(state.claim_initializer().is_none());
-        state.phase = Phase::Excluded;
-        assert!(state.capture(7, 11));
-        assert!(state.claim_initializer().is_none());
-        state.phase = Phase::Refused;
-        assert!(state.capture(7, 11));
-        assert!(state.claim_initializer().is_none());
-    }
-}
-
 unsafe extern "C" fn initialize_detour(skse: *const c_void) -> bool {
     let Some(platform) = platform::get() else {
         return false;
@@ -576,6 +554,7 @@ pub(crate) extern "C" fn rsf_skyrim_cs_render_allowed() -> bool {
     render_allowed(current_module())
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) extern "C" fn status() -> *const c_char {
     let module = current_module();
     let (phase, reason) = {
@@ -602,4 +581,34 @@ pub(crate) fn matches_postprocess(call: &HdrCall) -> bool {
         (state.phase, state.module)
     };
     allowed(game, module, phase == Phase::Excluded, call, read).is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repeated_initializer_lookups_remain_wrapped_with_one_invocation() {
+        let mut state = State {
+            phase: Phase::Armed,
+            reason: None,
+            module: 0,
+            original: 0,
+            callout: 3,
+            withdraw: None,
+        };
+        assert!(state.capture(7, 11));
+        assert!(state.capture(7, 11));
+        assert!(!state.capture(8, 11));
+        assert!(!state.capture(7, 12));
+        assert_eq!(state.claim_initializer(), Some((7, 11, 3)));
+        assert!(state.capture(7, 11));
+        assert!(state.claim_initializer().is_none());
+        state.phase = Phase::Excluded;
+        assert!(state.capture(7, 11));
+        assert!(state.claim_initializer().is_none());
+        state.phase = Phase::Refused;
+        assert!(state.capture(7, 11));
+        assert!(state.claim_initializer().is_none());
+    }
 }

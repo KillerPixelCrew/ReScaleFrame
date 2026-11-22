@@ -137,6 +137,7 @@ unsafe extern "C" fn motion_view(_: *mut c_void, texture: *mut c_void) -> *mut c
     texture
 }
 
+#[allow(clippy::too_many_arguments)]
 unsafe fn dispatch(
     _: StateScope,
     context: *mut c_void,

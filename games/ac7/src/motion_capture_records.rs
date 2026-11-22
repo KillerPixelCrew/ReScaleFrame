@@ -287,68 +287,6 @@ pub unsafe extern "C" fn rsf_ac7_velocity_reason(facts: *const VelocityFacts) ->
     observe_velocity(unsafe { facts.as_ref() }).as_ptr()
 }
 
-#[cfg(test)]
-mod velocity_reason_tests {
-    use super::{VelocityFacts, rsf_ac7_velocity_reason};
-    use std::ffi::CStr;
-
-    #[test]
-    fn classifies_motion_capture_velocity_facts() {
-        let mut facts = VelocityFacts {
-            fields_valid: 1,
-            accepted: 0,
-            visible: 1,
-            mobility: 2,
-            relevance: 0x4001,
-            has_velocity_called: 0,
-            has_velocity: 0,
-            camera_cut: 0,
-            always_velocity: 0,
-            history_checked: 0,
-            history_found: 0,
-            radius: 0.5,
-            distance_squared: 10000.0,
-            lod_factor: 1.0,
-            minimum_size: 0.5,
-        };
-        let check = |facts: &VelocityFacts, expected: &CStr| {
-            // SAFETY: The fixture lends a live record and the classifier returns a static C string.
-            let reason = unsafe { CStr::from_ptr(rsf_ac7_velocity_reason(facts)) };
-            assert_eq!(reason, expected);
-        };
-        check(&facts, c"size");
-        facts.minimum_size = 50.0;
-        facts.radius = 100.0;
-        check(&facts, c"size"); // Exact equality.
-        facts.minimum_size = 0.5;
-        facts.radius = 2.0;
-        facts.has_velocity_called = 1;
-        facts.history_checked = 1;
-        check(&facts, c"missing_history");
-        facts.history_found = 1;
-        check(&facts, c"unchanged_transform");
-        facts.camera_cut = 1;
-        check(&facts, c"camera_cut");
-        facts.accepted = 1;
-        check(&facts, c"accepted");
-        facts.accepted = 0;
-        facts.has_velocity_called = 0;
-        facts.radius = f32::NAN;
-        check(&facts, c"nonfinite");
-        facts.fields_valid = 0;
-        check(&facts, c"unreadable");
-        facts.fields_valid = 1;
-        facts.visible = 0;
-        check(&facts, c"visibility");
-        facts.visible = 1;
-        facts.mobility = 0;
-        check(&facts, c"mobility");
-        facts.mobility = 2;
-        facts.relevance = 1;
-        check(&facts, c"material_or_main_pass");
-    }
-}
-
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_ac7_capture_swap_engine(
     event: *mut EngineRecord,
@@ -666,4 +604,66 @@ pub(super) fn reset_records() {
     records.commands_dropped = 0;
     records.draw_dropped = 0;
     records.blob_dropped = 0;
+}
+
+#[cfg(test)]
+mod velocity_reason_tests {
+    use super::{VelocityFacts, rsf_ac7_velocity_reason};
+    use std::ffi::CStr;
+
+    #[test]
+    fn classifies_motion_capture_velocity_facts() {
+        let mut facts = VelocityFacts {
+            fields_valid: 1,
+            accepted: 0,
+            visible: 1,
+            mobility: 2,
+            relevance: 0x4001,
+            has_velocity_called: 0,
+            has_velocity: 0,
+            camera_cut: 0,
+            always_velocity: 0,
+            history_checked: 0,
+            history_found: 0,
+            radius: 0.5,
+            distance_squared: 10000.0,
+            lod_factor: 1.0,
+            minimum_size: 0.5,
+        };
+        let check = |facts: &VelocityFacts, expected: &CStr| {
+            // SAFETY: The fixture lends a live record and the classifier returns a static C string.
+            let reason = unsafe { CStr::from_ptr(rsf_ac7_velocity_reason(facts)) };
+            assert_eq!(reason, expected);
+        };
+        check(&facts, c"size");
+        facts.minimum_size = 50.0;
+        facts.radius = 100.0;
+        check(&facts, c"size"); // Exact equality.
+        facts.minimum_size = 0.5;
+        facts.radius = 2.0;
+        facts.has_velocity_called = 1;
+        facts.history_checked = 1;
+        check(&facts, c"missing_history");
+        facts.history_found = 1;
+        check(&facts, c"unchanged_transform");
+        facts.camera_cut = 1;
+        check(&facts, c"camera_cut");
+        facts.accepted = 1;
+        check(&facts, c"accepted");
+        facts.accepted = 0;
+        facts.has_velocity_called = 0;
+        facts.radius = f32::NAN;
+        check(&facts, c"nonfinite");
+        facts.fields_valid = 0;
+        check(&facts, c"unreadable");
+        facts.fields_valid = 1;
+        facts.visible = 0;
+        check(&facts, c"visibility");
+        facts.visible = 1;
+        facts.mobility = 0;
+        check(&facts, c"mobility");
+        facts.mobility = 2;
+        facts.relevance = 1;
+        check(&facts, c"material_or_main_pass");
+    }
 }

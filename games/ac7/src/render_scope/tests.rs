@@ -60,6 +60,7 @@ impl List {
 struct Check {
     scopes: Cell<*mut Scopes>,
     /// (callback, begin, native_frame, scope_id, struct_size)
+    #[allow(clippy::type_complexity)]
     observed: RefCell<Vec<(&'static str, u32, u64, u64, u32)>>,
     unload_refused: Cell<bool>,
     resolved: Cell<u32>,
