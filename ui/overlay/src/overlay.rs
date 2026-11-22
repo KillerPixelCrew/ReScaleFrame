@@ -747,6 +747,30 @@ mod tests {
     }
 
     #[test]
+    fn automatic_fg_provider_keeps_the_resolved_provider_usable() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.generation.backend = 1;
+        stats.generation.requested_backend = 7;
+        stats.generation.backend_choices = 0x3b | (1 << 7);
+        stats.generation.available = true;
+        on_tab(&mut overlay, Tab::Frames);
+        settle(&mut overlay, &stats);
+
+        let enabled = overlay.controls().fg_enabled.expect("FG enable control");
+        let [_, release] = click(&mut overlay, &stats, enabled);
+        assert!(release.fg_changed);
+        assert!(!release.fg_backend_changed);
+
+        stats.generation.requested_backend = 1;
+        settle(&mut overlay, &stats);
+        let automatic = overlay.controls().fg_backend[5].expect("Auto provider");
+        let [_, release] = click(&mut overlay, &stats, automatic);
+        assert!(release.fg_backend_changed);
+        assert_eq!(release.fg_backend, 7);
+    }
+
+    #[test]
     fn an_unimplemented_generation_provider_cannot_be_selected() {
         let mut overlay = Overlay::new();
         let mut stats = stats_with_backend();

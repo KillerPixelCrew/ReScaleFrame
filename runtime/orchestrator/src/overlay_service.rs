@@ -205,7 +205,8 @@ unsafe fn copy_wide(text: *const u16) -> Vec<u16> {
 impl Config {
     unsafe fn read_setup(setup: &rsf_overlay_service_setup) -> Result<(Self, Sharpening), i32> {
         if setup.option_count > RSF_OVERLAY_SERVICE_OPTION_LIMIT
-            || (setup.option_count != 0 && setup.options.is_null())
+            || (setup.option_count != 0
+                && (setup.options.is_null() || setup.option_changed.is_none()))
         {
             return Err(INVALID_ARGUMENT);
         }
@@ -296,6 +297,14 @@ impl Config {
         Ok((config, sharpening))
     }
 
+    fn accepts_fg_backend(&self, backend: u32) -> bool {
+        if self.fg_choices == 0 {
+            backend == RSF_FG_BACKEND_AUTO
+        } else {
+            has(self.fg_choices, backend)
+        }
+    }
+
     fn valid(&self, value: &Settings) -> bool {
         let sr_valid = if self.sr_choices == 0 {
             value.sr_enabled == 0
@@ -304,14 +313,12 @@ impl Config {
         } else {
             has(self.sr_choices, value.sr_backend) && has(self.quality_choices, value.sr_quality)
         };
-        let fg_valid = (self.fg_choices == 0 && value.fg_backend == RSF_FG_BACKEND_AUTO)
-            || has(self.fg_choices, value.fg_backend);
         value.sr_enabled <= 1
             && value.fg_enabled <= 1
             && value.status_overlay <= 1
             && sr_valid
             && (value.fg_enabled == 0 || self.fg_choices != 0)
-            && fg_valid
+            && self.accepts_fg_backend(value.fg_backend)
             && has(self.latency_choices, value.latency)
             && (1..=self.max_generated).contains(&value.generated_frames)
             && unsafe { (platform().valid_preset.unwrap())(value.dlss_preset) } != 0
@@ -332,7 +339,7 @@ impl Config {
         if value.fg_enabled > 1 || (value.fg_enabled != 0 && self.fg_choices == 0) {
             value.fg_enabled = defaults.fg_enabled;
         }
-        if self.fg_choices != 0 && !has(self.fg_choices, value.fg_backend) {
+        if !self.accepts_fg_backend(value.fg_backend) {
             value.fg_backend = defaults.fg_backend;
         }
         if value.status_overlay > 1 {
@@ -452,12 +459,8 @@ impl State {
             if fg.last_result != OK {
                 return Some(c"FG backend error");
             }
-            match fg.reason {
-                RSF_NATIVE_FG_REASON_NONE => {}
-                RSF_NATIVE_FG_REASON_RESET => return Some(c"Resetting temporal history"),
-                RSF_NATIVE_FG_REASON_SCENE_UNSUPPORTED => return Some(c"Scene is not eligible"),
-                RSF_NATIVE_FG_REASON_HUDLESS_MISSING => return Some(c"HUD-less scene missing"),
-                _ => return Some(c"Frame inputs or submission not matched"),
+            if let Some(description) = crate::fg_reasons::description(fg.reason) {
+                return Some(description);
             }
             if fg.vendor.active == 0 {
                 return Some(c"FG requested; the provider reports inactive");
@@ -770,13 +773,7 @@ impl State {
             } else {
                 sample.fg_backend
             },
-            fg_requested_backend: if !fg_enabled {
-                0
-            } else if settings.fg_backend == RSF_FG_BACKEND_AUTO {
-                sample.fg_backend
-            } else {
-                settings.fg_backend
-            },
+            fg_requested_backend: if fg_enabled { settings.fg_backend } else { 0 },
             fg_backend_choices: self.fg_choices(config)
                 | 1
                 | if sample.fg_owner {
@@ -977,7 +974,7 @@ fn apply_intent(config: &Config, intent: &rsf_overlay_intent) {
         let accepted = config
             .callbacks
             .option_changed
-            .is_none_or(|changed| unsafe {
+            .is_some_and(|changed| unsafe {
                 changed(config.callbacks.user, intent.host_option_index, wanted) != 0
             });
         if accepted {

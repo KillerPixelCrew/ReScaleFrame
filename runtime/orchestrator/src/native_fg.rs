@@ -1183,34 +1183,25 @@ impl Admission {
     }
 
     fn reason(&self) -> u32 {
-        use crate::render_abi::RSF_NATIVE_FG_REASON_NONE as NONE;
-        // Values from rescaleframe/native_fg.h; the overlay maps them to text.
-        const NO_MATCH: u32 = 1;
-        const NOT_PREPARED: u32 = 2;
-        const NO_SUBMISSION: u32 = 3;
-        const SCENE_UNSUPPORTED: u32 = 4;
-        const RESET: u32 = 5;
-        const VSYNC: u32 = 6;
-        const INVALID_INPUT: u32 = 7;
-        const HUDLESS_MISSING: u32 = 8;
+        use crate::fg_reasons::codes::*;
         if !self.matched {
-            NO_MATCH
+            RSF_NATIVE_FG_REASON_NO_MATCH
         } else if !self.inputs {
-            NOT_PREPARED
+            RSF_NATIVE_FG_REASON_NOT_PREPARED
         } else if !self.submitted {
-            NO_SUBMISSION
+            RSF_NATIVE_FG_REASON_NO_SUBMISSION
         } else if !self.scene_supported {
-            SCENE_UNSUPPORTED
+            RSF_NATIVE_FG_REASON_SCENE_UNSUPPORTED
         } else if !self.continuous {
-            RESET
+            RSF_NATIVE_FG_REASON_RESET
         } else if !self.vsync {
-            VSYNC
+            RSF_NATIVE_FG_REASON_VSYNC
         } else if !self.hudless {
-            HUDLESS_MISSING
+            RSF_NATIVE_FG_REASON_HUDLESS_MISSING
         } else if !self.valid() {
-            INVALID_INPUT
+            RSF_NATIVE_FG_REASON_INVALID_INPUT
         } else {
-            NONE
+            RSF_NATIVE_FG_REASON_NONE
         }
     }
 

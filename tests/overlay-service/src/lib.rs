@@ -110,6 +110,7 @@ extern "C" fn rsf_test_overlay_no_sr(query: Query) -> i32 {
             ("SR", "1"),
             ("SRBackend", "4"),
             ("SRQuality", "3"),
+            ("FGBackend", "1"),
             ("StatusOverlay", "1"),
         ]
         .into_iter()
@@ -177,6 +178,10 @@ extern "C" fn rsf_test_overlay_no_sr(query: Query) -> i32 {
         settings.status_overlay == 1,
         "unrelated saved settings survive",
     );
+    checks.check(
+        settings.fg_backend == RSF_FG_BACKEND_AUTO && ini.read("FGBackend") == 1,
+        "an adapter without FG normalizes its saved backend to Auto in memory",
+    );
     checks.check(ini.read("SR") == 1, "loading does not rewrite the file");
 
     let invalid = [
@@ -220,6 +225,10 @@ extern "C" fn rsf_test_overlay_no_sr(query: Query) -> i32 {
     checks.check(
         ini.read("SR") == 0 && ini.read("SRBackend") == 1 && ini.read("StatusOverlay") == 0,
         "and persist SR as Off",
+    );
+    checks.check(
+        ini.read("FGBackend") == RSF_FG_BACKEND_AUTO,
+        "the next accepted write persists the normalized FG backend",
     );
 
     let mut status = rsf_render_status {

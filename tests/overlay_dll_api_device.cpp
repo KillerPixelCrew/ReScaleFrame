@@ -24,6 +24,7 @@ void check(bool condition, const char* what)
 HWND accepted_window{};
 int window_calls = 0, report_calls = 0;
 int option_reads = 0, label_reads = 0;
+int32_t option_value = 1;
 bool label_order = true;
 char live_option_label[64] = "Fixture pack: loading";
 void log(void*, const char* message) { std::printf("  log: %s\n", message); }
@@ -143,8 +144,13 @@ int main()
     setup.option_count = 1; setup.options = &option;
     setup.options_read = [](void*, int32_t* values, uint32_t count) {
         ++option_reads;
-        if (count) values[0] = 1;
+        if (count) values[0] = option_value;
         std::snprintf(live_option_label, sizeof(live_option_label), "Fixture pack: frame %d", option_reads);
+    };
+    setup.option_changed = [](void*, uint32_t index, int32_t value) {
+        if (index != 0 || value < 0 || value > 1) return 0;
+        option_value = value;
+        return 1;
     };
     setup.option_label = [](void*, uint32_t index) -> const char* {
         ++label_reads; label_order = label_order && index == 0 && label_reads == option_reads;

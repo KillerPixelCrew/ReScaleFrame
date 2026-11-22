@@ -149,7 +149,8 @@ typedef struct rsf_overlay_service_setup {
        applies SR choices at its own drained boundary. Borrowed for the call. */
     void (*settings_changed)(void* user, const rsf_render_settings* applied);
     void* user;
-    /* API 2. Up to RSF_OVERLAY_SERVICE_OPTION_LIMIT options, copied. */
+    /* API 2. Up to RSF_OVERLAY_SERVICE_OPTION_LIMIT options, copied. A nonempty
+       list requires option_changed to apply and persist edits. */
     uint32_t option_count;
     const rsf_overlay_service_option* options;
     /* Present-owner thread, each presented frame: write the current value of every option.

@@ -77,12 +77,14 @@ const SR_BACKENDS: [(u32, &str); 6] = [
 ];
 
 /// Frame generation providers by ID. Zero is Off, and the ID is the bit in the choices mask.
-const FG_PROVIDERS: [(u32, &str); 5] = [
+const FG_AUTO: u32 = 7;
+const FG_PROVIDERS: [(u32, &str); 6] = [
     (0, "Off"),
     (1, "DLSS-G"),
     (3, "FSR3"),
     (4, "FSR4"),
     (5, "XeSS"),
+    (FG_AUTO, "Auto"),
 ];
 
 const DLSS_PRESETS: [(u32, &str); 7] = [
@@ -263,7 +265,7 @@ pub struct Controls {
     /// One control per SR backend, in `SR_BACKENDS` order.
     pub backend: [Option<Rect>; 6],
     /// Off, DLSS-G, FSR3, FSR4 and XeSS generation choices.
-    pub fg_backend: [Option<Rect>; 5],
+    pub fg_backend: [Option<Rect>; FG_PROVIDERS.len()],
     /// The frame generation switch row.
     pub fg_enabled: Option<Rect>,
     /// Multiplier segments, 2x first.
@@ -996,7 +998,8 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
     }
 
     heading(ui, "Provider");
-    let pending = generation.requested_backend != generation.backend;
+    let pending = generation.requested_backend != FG_AUTO
+        && generation.requested_backend != generation.backend;
     let items: Vec<Segment> = FG_PROVIDERS
         .iter()
         .map(|(id, name)| Segment {
@@ -1034,7 +1037,7 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
     }
     let missing: Vec<&str> = FG_PROVIDERS
         .iter()
-        .filter(|(id, _)| *id != 0 && generation.backend_choices & (1 << id) == 0)
+        .filter(|(id, _)| *id != 0 && *id != FG_AUTO && generation.backend_choices & (1 << id) == 0)
         .map(|(_, name)| *name)
         .collect();
     let mut line = if runtime_switching {
@@ -2259,16 +2262,7 @@ fn fg_backend_name(backend: u32) -> &'static str {
 }
 
 fn waiting_reason(reason: u32) -> &'static str {
-    match reason {
-        1 => "Waiting for a matching scene and window",
-        2 => "Waiting for reconstruction inputs",
-        3 => "Waiting for a complete frame submission",
-        4 => "Waiting for an eligible scene",
-        5 => "Suspended for a camera cut",
-        6 => "Current VSync mode is unsupported",
-        8 => "Waiting for a HUD-less scene color",
-        _ => "Waiting for SDK-confirmed generation",
-    }
+    crate::fg_reasons::text(reason).unwrap_or("Waiting for SDK-confirmed generation")
 }
 
 fn on_off(value: bool) -> &'static str {

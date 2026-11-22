@@ -13,10 +13,9 @@ use crate::fg_choice;
 use crate::fg12_abi::rsf_fg12_setup as FgSetup;
 use crate::gl_pipeline_abi::{rsf_dlss_setup as DlssSetup, rsf_sr12_setup as SrSetup};
 use crate::overlay_abi::{
-    RSF_NATIVE_FG_REASON_HUDLESS_MISSING, RSF_NATIVE_FG_REASON_RESET,
-    RSF_NATIVE_FG_REASON_SCENE_UNSUPPORTED, RSF_OVERLAY_FG_RUNTIME_SWITCH,
-    RSF_OVERLAY_HOST_OPTION_TOGGLE, RSF_REFLEX_ON, rsf_overlay_host_option as HostOption,
-    rsf_overlay_intent as Intent, rsf_overlay_stats as Stats, rsf_render_status as Status,
+    RSF_OVERLAY_FG_RUNTIME_SWITCH, RSF_OVERLAY_HOST_OPTION_TOGGLE, RSF_REFLEX_ON,
+    rsf_overlay_host_option as HostOption, rsf_overlay_intent as Intent,
+    rsf_overlay_stats as Stats, rsf_render_status as Status,
 };
 use crate::overlay_settings::{
     apply_settings_intent, fill_sharpening_stats, settings_changed, sr_name,
@@ -1094,14 +1093,8 @@ impl Host {
             "FG presentation unavailable"
         } else if fg.last_result != 0 {
             "FG backend error"
-        } else if fg.reason == RSF_NATIVE_FG_REASON_RESET {
-            "Resetting temporal history"
-        } else if fg.reason == RSF_NATIVE_FG_REASON_SCENE_UNSUPPORTED {
-            "Scene is not eligible"
-        } else if fg.reason == RSF_NATIVE_FG_REASON_HUDLESS_MISSING {
-            "HUD-less scene missing"
-        } else if fg.reason != 0 {
-            "Frame inputs or submission not matched"
+        } else if let Some(description) = crate::fg_reasons::text(fg.reason) {
+            description
         } else if fg.vendor.active != 0 {
             "Active"
         } else if value.foreground == 0 {

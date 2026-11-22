@@ -617,7 +617,7 @@ mod tests {
         let input = input();
         let stats = stats();
         let mut draw = RsfOverlayDrawData::default();
-        let mut intent = RsfOverlayIntent::default();
+        let mut intent = encode_intent(crate::model::Intent::default());
         // More than one, because egui lays a new window out invisibly to size it first.
         for _ in 0..3 {
             let code =

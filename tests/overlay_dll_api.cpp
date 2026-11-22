@@ -143,6 +143,7 @@ int main()
     std::array<rsf_overlay_service_option, RSF_OVERLAY_SERVICE_OPTION_LIMIT + 1> adapter_options{};
     adapter_options.fill({"Adapter option", RSF_OVERLAY_SERVICE_OPTION_TOGGLE, 0, 0, 1, 1, 1, 0});
     setup.options = adapter_options.data(); setup.option_count = RSF_OVERLAY_SERVICE_OPTION_LIMIT;
+    setup.option_changed = [](void*, uint32_t, int32_t) { return 0; };
 
     check(api.configure(nullptr) == RSF_ERROR_INVALID_ARGUMENT, "null setup");
     auto bad = setup; bad.struct_size = sizeof(bad) - 4;
@@ -169,6 +170,8 @@ int main()
     check(api.configure(&bad) == RSF_ERROR_ABI_MISMATCH, "defaults version");
     bad = setup; bad.option_count = RSF_OVERLAY_SERVICE_OPTION_LIMIT + 1;
     check(api.configure(&bad) == RSF_ERROR_INVALID_ARGUMENT, "too many adapter options");
+    bad = setup; bad.option_changed = nullptr;
+    check(api.configure(&bad) == RSF_ERROR_INVALID_ARGUMENT, "editable adapter options require acknowledgement");
     check(api.settings_get(&settings) == RSF_ERROR_NOT_READY, "refused setups did not configure");
 
     check(api.configure(&setup) == RSF_OK, "configure at the adapter option limit");
