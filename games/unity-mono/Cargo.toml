@@ -11,11 +11,13 @@ crate-type = ["staticlib"]
 
 [dependencies]
 rsf-game-sys = { path = "../../sdk/game" }
+rsf-runtime-submission = { path = "../../runtime/graphics/submission" }
 
 [target."cfg(windows)".dependencies.windows-sys]
 version = "0.61"
 features = [
   "Win32_Foundation",
+  "Win32_Graphics_Gdi",
   "Win32_Security",
   "Win32_Storage_FileSystem",
   "Win32_System_Diagnostics_Debug",

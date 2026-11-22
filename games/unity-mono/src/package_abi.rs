@@ -5,6 +5,7 @@
 type wchar_t = u16;
 use crate::plugin_abi::rsf_unity_native_api;
 use crate::runtime_abi::rsf_fg12_setup;
+pub use rsf_game_sys::sharpening_abi::rsf_sharpening_options;
 use rsf_game_sys::{
     rsf_game_cpu_event, rsf_game_host_services, rsf_game_render_config_fn, rsf_game_render_pass,
     rsf_game_render_pass_fn,
@@ -276,59 +277,6 @@ const _: () = {
         [::core::mem::offset_of!(rsf_native_latency_status, events) - 56usize];
 };
 #[repr(C)]
-#[derive(Default, Copy, Clone)]
-pub struct rsf_sharpening_options {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub mode: u32,
-    pub sharpness: f32,
-    pub mas: u32,
-    pub motion_sharpness: f32,
-    pub motion_threshold: f32,
-    pub motion_scale_limit: f32,
-    pub contrast_enabled: u32,
-    pub contrast: f32,
-    pub depth_scale: f32,
-    pub depth_bias: f32,
-    pub clamp_output: u32,
-    pub debug: u32,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_sharpening_options"][::core::mem::size_of::<rsf_sharpening_options>() - 56usize];
-    ["Alignment of rsf_sharpening_options"]
-        [::core::mem::align_of::<rsf_sharpening_options>() - 4usize];
-    ["Offset of field: rsf_sharpening_options::struct_size"]
-        [::core::mem::offset_of!(rsf_sharpening_options, struct_size) - 0usize];
-    ["Offset of field: rsf_sharpening_options::abi_version"]
-        [::core::mem::offset_of!(rsf_sharpening_options, abi_version) - 4usize];
-    ["Offset of field: rsf_sharpening_options::mode"]
-        [::core::mem::offset_of!(rsf_sharpening_options, mode) - 8usize];
-    ["Offset of field: rsf_sharpening_options::sharpness"]
-        [::core::mem::offset_of!(rsf_sharpening_options, sharpness) - 12usize];
-    ["Offset of field: rsf_sharpening_options::mas"]
-        [::core::mem::offset_of!(rsf_sharpening_options, mas) - 16usize];
-    ["Offset of field: rsf_sharpening_options::motion_sharpness"]
-        [::core::mem::offset_of!(rsf_sharpening_options, motion_sharpness) - 20usize];
-    ["Offset of field: rsf_sharpening_options::motion_threshold"]
-        [::core::mem::offset_of!(rsf_sharpening_options, motion_threshold) - 24usize];
-    ["Offset of field: rsf_sharpening_options::motion_scale_limit"]
-        [::core::mem::offset_of!(rsf_sharpening_options, motion_scale_limit) - 28usize];
-    ["Offset of field: rsf_sharpening_options::contrast_enabled"]
-        [::core::mem::offset_of!(rsf_sharpening_options, contrast_enabled) - 32usize];
-    ["Offset of field: rsf_sharpening_options::contrast"]
-        [::core::mem::offset_of!(rsf_sharpening_options, contrast) - 36usize];
-    ["Offset of field: rsf_sharpening_options::depth_scale"]
-        [::core::mem::offset_of!(rsf_sharpening_options, depth_scale) - 40usize];
-    ["Offset of field: rsf_sharpening_options::depth_bias"]
-        [::core::mem::offset_of!(rsf_sharpening_options, depth_bias) - 44usize];
-    ["Offset of field: rsf_sharpening_options::clamp_output"]
-        [::core::mem::offset_of!(rsf_sharpening_options, clamp_output) - 48usize];
-    ["Offset of field: rsf_sharpening_options::debug"]
-        [::core::mem::offset_of!(rsf_sharpening_options, debug) - 52usize];
-};
-#[repr(C)]
-#[derive(Default, Copy, Clone)]
 pub struct rsf_unity_package_settings {
     pub struct_size: u32,
     pub abi_version: u32,
@@ -374,6 +322,15 @@ const _: () = {
     ["Offset of field: rsf_unity_package_settings::sharpening"]
         [::core::mem::offset_of!(rsf_unity_package_settings, sharpening) - 44usize];
 };
+impl Default for rsf_unity_package_settings {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct rsf_unity_package_status {

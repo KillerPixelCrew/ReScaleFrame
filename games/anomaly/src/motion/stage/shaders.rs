@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::digest::sha256;
+use crate::shader_family::{FAMILY_COUNT, NO_FAMILY, diagnostic_family_name};
 use crate::shader_loader::{
-    DecodedFrame, Entry, FrameLayout, Manifest, Reflection, RuntimePack, decode_frame,
+    DecodedFrame, Entry, FrameLayout, Manifest, OUTCOME_NAMES, Reflection, RuntimePack,
+    decode_frame, outcome_name,
 };
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -13,29 +15,6 @@ const CREATE_FAILED: u8 = 9;
 const NAMES_LIMIT: usize = 16_384;
 const SHADER_OBJECT_OFFSET: usize = 0x10;
 const FILENAME_CAPACITY: usize = 520;
-
-pub(super) const OUTCOME_NAMES: [&str; 10] = [
-    "not_allowlisted",
-    "replaced",
-    "replaced_from_cache",
-    "unknown_caller",
-    "unreadable",
-    "original_compile_failed",
-    "original_mismatch",
-    "motion_compile_failed",
-    "reflection_mismatch",
-    "create_failed",
-];
-pub(super) const FAMILY_NAMES: [&str; 8] = [
-    "other",
-    "core_static",
-    "core_model",
-    "core_pixel",
-    "foliage_tree",
-    "foliage_detail",
-    "tess_hull",
-    "tess_domain",
-];
 
 pub(in crate::motion) struct Variant {
     stock: Lease,
@@ -312,7 +291,7 @@ impl Pack {
 
 #[derive(Default, Clone, Copy)]
 pub(super) struct ShaderCounters {
-    pub outcomes: [[u64; 10]; 8],
+    pub outcomes: [[u64; OUTCOME_NAMES.len()]; FAMILY_COUNT],
     pub frame_refusals: u64,
 }
 
@@ -657,9 +636,7 @@ impl Stage {
             }
             let device = old.device.as_ptr();
             let replacement = Replacement::build(p, &pack, &old.request, entry, device, false)
-                .map_err(|(outcome, detail)| {
-                    format!("{}: {detail}", OUTCOME_NAMES[outcome as usize])
-                })?;
+                .map_err(|(outcome, detail)| format!("{}: {detail}", outcome_name(outcome)))?;
             let key = old.stock.as_ptr();
             next.insert(
                 key as usize,
@@ -719,7 +696,7 @@ impl Stage {
             return;
         };
         let Some(entry) = pack.entry(&hash) else {
-            loader.stats.outcomes[0][NOT_ALLOWLISTED as usize] += 1;
+            loader.stats.outcomes[NO_FAMILY as usize][NOT_ALLOWLISTED as usize] += 1;
             return;
         };
         let family = entry.family as usize;
@@ -754,7 +731,9 @@ impl Stage {
                     loader.replacement_logs += 1;
                     self.log().say(format!(
                         "Anomaly motion variant {name} {} skin={} ({}) for {file}",
-                        FAMILY_NAMES[family], replacement.skin, OUTCOME_NAMES[outcome as usize]
+                        diagnostic_family_name(entry.family),
+                        replacement.skin,
+                        outcome_name(outcome)
                     ));
                 }
                 let variant = replacement.publish(p, call.stock, Arc::new(request), entry, device);
@@ -768,7 +747,7 @@ impl Stage {
                     let detail: String = detail.chars().take(300).collect();
                     self.log().say(format!(
                         "Anomaly motion kept stock {name} ({}): {detail}; {file}",
-                        OUTCOME_NAMES[outcome as usize]
+                        outcome_name(outcome)
                     ));
                 }
                 outcome

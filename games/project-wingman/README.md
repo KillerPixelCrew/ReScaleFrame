@@ -27,20 +27,23 @@ identity only.
 fingerprint before creating a disabled hook. A different process or modified entry returns
 `RSF_ERROR_NATIVE_REFUSED`. `start` enables observation; native TAA still runs unchanged.
 `quiesce` stops publication and `stop` disables the hook, returning `BUSY` while calls retain
-host services. The module and one trampoline are pinned for process lifetime, keeping late
+host services. The module and its trampolines are pinned for process lifetime, keeping late
 native entries safe after disable. Rendering readiness remains zero.
 
 The dedicated `rsf_proxy_wingman` target produces `wingman/bin/Release/xinput1_3.dll` under the
 build directory. It forwards the system DLL's names and ordinals, including Wingman's imports
 2/3. Place it beside the shipping executable, and the runtime/plugin DLLs in a `ReScaleFrame`
-subdirectory. Add `[ProjectWingman] ObserveNative=1` to `ReScaleFrame.ini`. Its worker uses the
-orchestrator's plugin-session lifecycle outside the loader lock and writes
-`ReScaleFrame/project-wingman.log`. `ObserveNative=0` prevents startup on the next launch.
+subdirectory with `rescaleframe_overlay.dll`. The worker opens the shared settings store and
+writes `ReScaleFrame/project-wingman.log` outside the loader lock. In the D3D11 game window,
+press Insert and use **Advanced → Observe native temporal passes** to save the
+`[ProjectWingman] ObserveNative` choice in `ReScaleFrame.ini`. It takes effect after a restart.
+The shared panel can open with the temporal observer disabled.
 
-Records contain copied view/history keys, jitter, rectangles and opaque RDG references, sampled
-once per history owner per second and on rectangle changes. They do not identify stereo eyes,
-retain textures or authorize GPU/Present work. The desktop run verified readable native calls;
-VR hardware was unavailable. See the research for the recorded dimensions and remaining work.
+Construction records contain copied view/history keys, jitter, rectangles and opaque RDG
+references. They are sampled once per history owner per second and on rectangle changes.
+Execution records acquire four COM texture leases on the native RHI stream and release them
+when the diagnostic command drains. The earlier desktop run verified readable construction
+calls. The new execution, panel and VR paths still need game validation.
 
 Build and run the contract checks from the repository root:
 

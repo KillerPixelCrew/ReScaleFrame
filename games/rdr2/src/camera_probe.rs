@@ -19,7 +19,6 @@ use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 use windows_sys::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
 
 const CAPTURE_FRAMES: u32 = 64;
-const PATH_LIMIT: usize = 260 - 64;
 const CAMERA_POSITION: u64 = 0x5352_e025_ec2b_416f;
 const CAMERA_ROTATION: u64 = 0x6026_85bd_85dd_26ca;
 const CAMERA_FOV: u64 = 0x04af_7797_1e50_8f6a;
@@ -189,15 +188,11 @@ unsafe extern "C" fn rsf_rdr2_install_camera_probe(directory: *const u16) -> boo
         DiagnosticHook::new(fsr_hook as *const c_void, FSR.as_ptr()),
         DiagnosticHook::new(dlss_hook as *const c_void, DLSS.as_ptr()),
     ];
-    if directory.is_null() {
-        return false;
-    }
-    let Some(length) = (0..=PATH_LIMIT).find(|&index| unsafe { directory.add(index).read() } == 0)
-    else {
+    let Some(directory) = (unsafe { crate::diagnostics::capture_directory(directory) }) else {
         return false;
     };
     let mut probe = lock(&PROBE);
-    if length == 0 || probe.is_some() {
+    if probe.is_some() {
         return false;
     }
     let image = unsafe { (platform.main_module)() };
@@ -221,9 +216,7 @@ unsafe extern "C" fn rsf_rdr2_install_camera_probe(directory: *const u16) -> boo
         DiagnosticInstall::Refused => return false,
         DiagnosticInstall::Retained => false,
     };
-    let directory = PathBuf::from(OsString::from_wide(unsafe {
-        std::slice::from_raw_parts(directory, length)
-    }));
+    let directory = PathBuf::from(OsString::from_wide(directory));
     *probe = Some(Probe {
         request: directory.join("camera.request"),
         directory,

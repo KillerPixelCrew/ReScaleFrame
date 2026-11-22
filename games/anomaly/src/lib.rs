@@ -5,12 +5,15 @@ mod adapter_options;
 mod bootstrap;
 mod camera;
 #[cfg(windows)]
+mod capture_clock;
+#[cfg(windows)]
 mod digest;
 mod engine_guards;
 #[cfg(windows)]
 mod engine_slots;
 #[cfg(windows)]
 mod executable;
+mod ffi;
 #[cfg(any(windows, test))]
 mod fg_inputs;
 #[cfg(any(windows, test))]
@@ -48,7 +51,10 @@ mod overlay_abi;
 #[cfg(windows)]
 mod overlay_hooks;
 #[cfg(windows)]
+mod overlay_native;
+#[cfg(windows)]
 mod runtime_module;
+mod shader_family;
 #[cfg(windows)]
 mod shader_loader;
 mod sr_d3d11;
@@ -60,6 +66,7 @@ mod sr_swap;
 mod sr_swap_abi;
 mod sr_temporal;
 mod sr_tonemap;
+mod wide;
 
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_detect_game_fn, rsf_game_hooks_api, rsf_game_info,
@@ -108,6 +115,38 @@ unsafe extern "C" fn rsf_anomaly_match_build(
     let executable = unsafe { slice::from_raw_parts(executable.cast(), executable_len) };
     let sha256 = unsafe { slice::from_raw_parts(sha256.cast(), sha256_len) };
     match_build(builds, executable, sha256).unwrap_or(usize::MAX)
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_match_build_wide(
+    builds: *const BuildIdentity,
+    count: usize,
+    executable: *const u16,
+    executable_len: usize,
+    sha256: *const c_char,
+    sha256_len: usize,
+) -> usize {
+    let mut ascii = [0u8; 63];
+    if !(1..=ascii.len()).contains(&executable_len) || sha256_len != 64 {
+        return usize::MAX;
+    }
+    let executable = unsafe { slice::from_raw_parts(executable, executable_len) };
+    for (&unit, output) in executable.iter().zip(&mut ascii) {
+        if !(1..=0x7f).contains(&unit) {
+            return usize::MAX;
+        }
+        *output = unit as u8;
+    }
+    unsafe {
+        rsf_anomaly_match_build(
+            builds,
+            count,
+            ascii.as_ptr().cast(),
+            executable_len,
+            sha256,
+            sha256_len,
+        )
+    }
 }
 
 #[unsafe(no_mangle)]

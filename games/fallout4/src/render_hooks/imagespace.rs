@@ -12,60 +12,33 @@
 //! the original unwinds (NativeImagespaceLeaves in render_hooks_platform.h). Refusal, source and
 //! raster checks use the recovery leaves. See docs/research/rust-fallout4-render-hooks.md.
 
+use super::World;
 use super::publication::{self, Leaves as PublicationLeaves, SrOutcome};
 use super::recovery::{self, Leaves as RecoveryLeaves};
 use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;
 use crate::resolution::owns_full_output;
+use crate::resolution_stages::{
+    RSF_FALLOUT4_STAGE_EFFECTS_RETURNED as EFFECTS_RETURNED, RSF_FALLOUT4_STAGE_PRE_SR as PRE_SR,
+    RSF_FALLOUT4_STAGE_UI_RESTORED as UI_RESTORED, RSF_FALLOUT4_STAGE_UI_RETURN as UI_RETURN,
+};
 use crate::{RSF_ERROR_NOT_READY, RSF_OK, image, message};
 use rsf_game_sys::{rsf_game_render_pass, rsf_result};
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::offset_of;
-use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 // Returns of the three selected imagespace calls (WORLD_CALLS in render_hooks.rs).
-const IMAGESPACE_RETURNS: [usize; 3] = [0xc3_83c7, 0xc3_9d6f, 0xc3_9e13];
+const IMAGESPACE_RETURNS: [usize; 3] = [
+    super::return_rva(super::IMAGESPACE_CALLS[0]),
+    super::return_rva(super::IMAGESPACE_CALLS[1]),
+    super::return_rva(super::IMAGESPACE_CALLS[2]),
+];
 // Return of the Effects call inside imagespace (call 0x21fa283) and its exact range arguments.
-const EFFECTS_RETURN: usize = 0x21f_a288;
+const EFFECTS_RETURN: usize = super::return_rva(super::EFFECTS_CALL);
 const EFFECTS_FIRST: u32 = 0;
 const EFFECTS_LAST: u32 = 13;
 const EFFECTS_MODE: u32 = 1;
 const EFFECTS_FLAGS: u32 = 1;
-
-// ResolutionStage (resolution.h).
-const PRE_SR: u32 = 0;
-const EFFECTS_RETURNED: u32 = 3;
-const UI_RETURN: u32 = 5;
-const UI_RESTORED: u32 = 6;
-
-/// NativeImagespaceWorld: the World values a step reads at the moment it runs. The pass pointers
-/// name World fields of the calling thread and stay valid for it.
-#[repr(C)]
-struct World {
-    cpu: CpuIdentity,
-    pass: *const rsf_game_render_pass,
-    frame_pass: *const rsf_game_render_pass,
-    context: *mut c_void,
-    in_imagespace: bool,
-    inputs: bool,
-    published: bool,
-    frame_open: bool,
-    full_output_resolved: bool,
-    auxiliary_open: bool,
-    // The same-frame raster snapshot of the prepass is valid.
-    raster_valid: bool,
-}
-
-impl World {
-    /// The input pass once FG inputs are published, the FRAME pass before.
-    fn state(&self) -> *const rsf_game_render_pass {
-        if self.inputs {
-            self.pass
-        } else {
-            self.frame_pass
-        }
-    }
-}
 
 /// NativeEffectsCall: the return address and arguments of one Effects call.
 #[repr(C)]
@@ -79,11 +52,6 @@ struct EffectsCall {
 }
 
 const _: () = {
-    assert!(size_of::<World>() == 72);
-    assert!(offset_of!(World, pass) == 40);
-    assert!(offset_of!(World, context) == 56);
-    assert!(offset_of!(World, in_imagespace) == 64);
-    assert!(offset_of!(World, raster_valid) == 70);
     assert!(size_of::<EffectsCall>() == 32);
     assert!(offset_of!(EffectsCall, first) == 16);
     assert!(offset_of!(EffectsCall, flags) == 28);
@@ -115,31 +83,11 @@ const _: () = assert!(size_of::<Leaves>() == 8 * size_of::<usize>());
 
 impl Leaves {
     fn world(&self) -> World {
-        let mut world = World {
-            cpu: CpuIdentity {
-                session: 0,
-                source: 0,
-                submission: 0,
-                began_qpc: 0,
-                frequency: 0,
-            },
-            pass: null(),
-            frame_pass: null(),
-            context: null_mut(),
-            in_imagespace: false,
-            inputs: false,
-            published: false,
-            frame_open: false,
-            full_output_resolved: false,
-            auxiliary_open: false,
-            raster_valid: false,
-        };
-        unsafe { (self.world)(&mut world) };
-        world
+        World::read(self.world)
     }
     fn manager(&self) -> Option<usize> {
         let mut manager = 0;
-        unsafe { (self.manager)(&mut manager) }.then_some(manager)
+        (unsafe { (self.manager)(&mut manager) } && manager != 0).then_some(manager)
     }
     /// The resolution receipt on the World's state pass.
     fn report_state(&self, stage: u32, result: rsf_result) {
@@ -182,10 +130,13 @@ fn leave_imagespace(leaves: &Leaves, recovery: &RecoveryLeaves) {
         );
     }
     leaves.report_state(UI_RETURN, RSF_OK);
-    if !unsafe { (leaves.end_output)() } {
+    let result = if unsafe { (leaves.end_output)() } {
+        RSF_OK
+    } else {
         recovery.refuse();
-    }
-    leaves.report_state(UI_RESTORED, RSF_OK);
+        RSF_ERROR_NOT_READY
+    };
+    leaves.report_state(UI_RESTORED, result);
     if owns_full_output() {
         recovery.refuse();
         leaves.diagnostic(
@@ -206,14 +157,31 @@ fn imagespace_effects(call: &EffectsCall) -> bool {
 
 /// Before the original Effects range: on the live or recovery-owned imagespace call whose manager
 /// is the native imagespace manager, the pre-SR receipt, then the SR seam.
-fn before_effects(leaves: &Leaves, call: &EffectsCall, emit_sr: impl FnOnce() -> SrOutcome) {
-    if !(super::live() || recovery::token() != 0) || !imagespace_effects(call) {
-        return;
-    }
-    if leaves.manager() != Some(call.manager) {
-        return;
+fn before_effects(
+    leaves: &Leaves,
+    recovery: &RecoveryLeaves,
+    call: &EffectsCall,
+    emit_sr: impl FnOnce() -> SrOutcome,
+) -> Option<CpuIdentity> {
+    if !imagespace_effects(call) {
+        return None;
     }
     let world = leaves.world();
+    if !world.in_imagespace
+        || !world.frame_open
+        || world.cpu.source == 0
+        || leaves.manager() != Some(call.manager)
+    {
+        return None;
+    }
+    // An already-owned transaction still needs the Effects cleanup boundary after quiesce
+    // or source invalidation. The return must still name this same World.
+    if !(recovery::token() != 0
+        || world.auxiliary_open
+        || (super::live() && recovery.same_source()))
+    {
+        return None;
+    }
     unsafe {
         (leaves.report_state)(
             PRE_SR,
@@ -226,12 +194,14 @@ fn before_effects(leaves: &Leaves, call: &EffectsCall, emit_sr: impl FnOnce() ->
     if emit_sr() == SrOutcome::Failed {
         leaves.diagnostic(c"Fallout4 SR callback failed; native imagespace retained.");
     }
+    Some(world.cpu)
 }
 
 /// After the original Effects range of the imagespace call: the Effects receipt, RETIRE an owned
 /// recovery token (its VATS original), then drain open auxiliaries.
-fn after_effects(leaves: &Leaves, recovery: &RecoveryLeaves, call: &EffectsCall) {
-    if !imagespace_effects(call) {
+fn after_effects(leaves: &Leaves, recovery: &RecoveryLeaves, receipt: &CpuIdentity) {
+    let world = leaves.world();
+    if !world.in_imagespace || !world.frame_open || world.cpu != *receipt {
         return;
     }
     leaves.report_state(EFFECTS_RETURNED, RSF_OK);
@@ -312,17 +282,24 @@ extern "C" fn rsf_fallout4_render_before_effects(
     publication: &PublicationLeaves,
     recovery: &RecoveryLeaves,
     call: &EffectsCall,
-) {
-    before_effects(leaves, call, || publication::emit_sr(publication, recovery))
+    receipt: &mut CpuIdentity,
+) -> bool {
+    let Some(admitted) = before_effects(leaves, recovery, call, || {
+        publication::emit_sr(publication, recovery)
+    }) else {
+        return false;
+    };
+    *receipt = admitted;
+    true
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_fallout4_render_after_effects(
     leaves: &Leaves,
     recovery: &RecoveryLeaves,
-    call: &EffectsCall,
+    receipt: &CpuIdentity,
 ) {
-    after_effects(leaves, recovery, call)
+    after_effects(leaves, recovery, receipt)
 }
 
 /// The TAA active answer after the original query.

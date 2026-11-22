@@ -665,7 +665,7 @@ pub struct rsf_anomaly_swap_platform {
             constant: *mut ::core::ffi::c_void,
             x: f32,
             y: f32,
-        ) -> bool,
+        ) -> u32,
     >,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]

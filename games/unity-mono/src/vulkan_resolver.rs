@@ -39,11 +39,10 @@ const KEYS: [(u32, &CStr); 7] = [
 ];
 
 /// The device extensions the shared memory and fence imports need.
-const INTEROP: [&CStr; 2] = [
-    c"VK_KHR_external_memory_win32",
-    c"VK_KHR_external_semaphore_win32",
-];
-/// Their import entry points, checked when the created device's request is not on record.
+#[path = "../../../runtime/common/src/vulkan_extensions.rs"]
+mod vulkan_extensions;
+use vulkan_extensions::WIN32_INTEROP as INTEROP;
+
 const INTEROP_FUNCTIONS: [&CStr; 2] = [
     c"vkImportSemaphoreWin32HandleKHR",
     c"vkGetMemoryWin32HandlePropertiesKHR",
@@ -305,24 +304,7 @@ fn available(
 /// Unity's names followed by each interop name it lacks. None when the list cannot be allocated.
 /// Each supplied name is null or NUL-terminated.
 unsafe fn merge(supplied: &[*const c_char]) -> Option<Vec<*const c_char>> {
-    let mut extensions = Vec::new();
-    if supplied.len() > u32::MAX as usize - INTEROP.len()
-        || extensions
-            .try_reserve_exact(supplied.len() + INTEROP.len())
-            .is_err()
-    {
-        return None;
-    }
-    extensions.extend_from_slice(supplied);
-    for name in INTEROP {
-        let has_name = extensions
-            .iter()
-            .any(|&candidate| !candidate.is_null() && unsafe { CStr::from_ptr(candidate) } == name);
-        if !has_name {
-            extensions.push(name.as_ptr());
-        }
-    }
-    Some(extensions)
+    unsafe { vulkan_extensions::merge(supplied, &INTEROP.map(CStr::as_ptr)) }
 }
 
 /// Unity lends the native create request and its borrowed pointers until the driver returns.

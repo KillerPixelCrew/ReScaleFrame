@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: MIT
 use crate::sdk_module::SdkModule;
+use rsf_game_sys::plugin_session_abi::{
+    RSF_PLUGIN_SESSION_ABI_VERSION, rsf_plugin_session_options,
+};
+use rsf_game_sys::windows_path::absolute_wide_path;
 use rsf_game_sys::*;
 use std::ffi::CStr;
 use std::ptr;
@@ -22,15 +26,6 @@ const CONTROL_ARGS: rsf_game_control_args = rsf_game_control_args {
     struct_size: size_of::<rsf_game_control_args>() as u32,
     abi_version: RSF_GAME_ABI_VERSION,
 };
-
-#[repr(C)]
-struct Options {
-    size: u32,
-    version: u32,
-    path: *const u16,
-    probe: *const rsf_game_probe,
-    services: rsf_game_host_services,
-}
 
 type Control = Option<unsafe extern "C" fn(*const rsf_game_control_args) -> i32>;
 unsafe extern "C" {
@@ -106,19 +101,9 @@ struct Session {
     phase: RwLock<Phase>,
 }
 
-// The caller supplies a terminated UTF-16 path. Only inspect its prefix.
-unsafe fn absolute(path: *const u16) -> bool {
-    if path.is_null() || unsafe { *path } == 0 {
-        return false;
-    }
-    let second = unsafe { *path.add(1) };
-    (second == u16::from(b':') && matches!(unsafe { *path.add(2) }, 47 | 92))
-        || (unsafe { *path } == u16::from(b'\\') && second == u16::from(b'\\'))
-}
-
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_plugin_session_prepare(
-    options: *const Options,
+    options: *const rsf_plugin_session_options,
     out: *mut *mut Session,
 ) -> i32 {
     if out.is_null() {
@@ -126,12 +111,13 @@ unsafe extern "C" fn rsf_plugin_session_prepare(
     }
     unsafe { out.write(ptr::null_mut()) };
     if options.is_null()
-        || (unsafe { options.cast::<u32>().read() } as usize) < size_of::<Options>()
+        || (unsafe { options.cast::<u32>().read() } as usize)
+            < size_of::<rsf_plugin_session_options>()
     {
         return INVALID_ARGUMENT;
     }
     let options = unsafe { &*options };
-    if !unsafe { absolute(options.path) }
+    if !unsafe { absolute_wide_path(options.plugin_path, 32767) }
         || options.probe.is_null()
         || (unsafe { options.probe.cast::<u32>().read() } as usize) < size_of::<rsf_game_probe>()
         || (options.services.struct_size as usize) < size_of::<rsf_game_host_services>()
@@ -139,13 +125,15 @@ unsafe extern "C" fn rsf_plugin_session_prepare(
     {
         return INVALID_ARGUMENT;
     }
-    if options.version != 1 || options.services.abi_version != RSF_GAME_ABI_VERSION {
+    if options.abi_version != RSF_PLUGIN_SESSION_ABI_VERSION
+        || options.services.abi_version != RSF_GAME_ABI_VERSION
+    {
         return ABI_MISMATCH;
     }
 
     let handle = unsafe {
         LoadLibraryExW(
-            options.path,
+            options.plugin_path,
             ptr::null_mut(),
             LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
         )

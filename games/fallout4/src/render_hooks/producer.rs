@@ -14,6 +14,7 @@
 //! and snapshots (NativeProducerLeaves in render_hooks_platform.h). Refusal and source checks use
 //! the recovery leaves. See docs/research/rust-fallout4-render-hooks.md.
 
+use super::World;
 use super::publication::{self, Leaves as PublicationLeaves};
 use super::recovery::{self, Leaves as RecoveryLeaves};
 use super::scope::Owner;
@@ -21,39 +22,19 @@ use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;
 use crate::cpu_events::rsf_fallout4_cpu_render_source_is_current;
 use crate::depth_domains::{EMPTY, Snapshot};
 use crate::resolution::{self, TARGETS};
+use crate::resolution_stages::RSF_FALLOUT4_STAGE_HUDLESS as HUDLESS;
 use crate::screen::WORLD_LEASE_INVALID;
 use crate::{RSF_OK, image};
 use rsf_game_sys::{rsf_game_render_pass, rsf_result};
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::offset_of;
-use std::ptr::{null, null_mut};
 
 // Return of the HUDless viewport selection inside imagespace (call 0x21fa2c5, WORLD_CALLS).
-const HUDLESS_RETURN: usize = 0x21f_a2ca;
+const HUDLESS_RETURN: usize = super::return_rva(super::HUDLESS_CALL);
 // Returns of the selected DR writer (call 0x21f9f2f) and prepass (call 0x21f9f73) calls
 // (PRODUCER_CALLS).
-const DYNAMIC_RESOLUTION_RETURN: usize = 0x21f_9f34;
-const PREPASS_RETURN: usize = 0x21f_9f78;
-
-// ResolutionStage::hudless (resolution.h).
-const HUDLESS: u32 = 4;
-
-/// NativeProducerWorld: the World values a step reads at the moment it runs. The pass pointers
-/// name World fields of the calling thread and stay valid for it.
-#[repr(C)]
-struct World {
-    cpu: CpuIdentity,
-    pass: *const rsf_game_render_pass,
-    frame_pass: *const rsf_game_render_pass,
-    context: *mut c_void,
-    chain: *mut c_void,
-    inputs: bool,
-    published: bool,
-    frame_open: bool,
-    submission_open: bool,
-    // A nested prepass ran inside the selected one.
-    depth_interrupted: bool,
-}
+const DYNAMIC_RESOLUTION_RETURN: usize = super::return_rva(super::DR_CALL);
+const PREPASS_RETURN: usize = super::return_rva(super::PREPASS_CALL);
 
 /// NativePrepassCall: the World source before the original prepass and its selection, held on
 /// the detour's frame across the original.
@@ -64,12 +45,6 @@ struct PrepassCall {
 }
 
 const _: () = {
-    assert!(size_of::<World>() == 80);
-    assert!(offset_of!(World, pass) == 40);
-    assert!(offset_of!(World, context) == 56);
-    assert!(offset_of!(World, chain) == 64);
-    assert!(offset_of!(World, inputs) == 72);
-    assert!(offset_of!(World, depth_interrupted) == 76);
     assert!(size_of::<PrepassCall>() == 48 && offset_of!(PrepassCall, selected) == 40);
 };
 
@@ -108,26 +83,7 @@ const _: () = assert!(size_of::<Leaves>() == 13 * size_of::<usize>());
 
 impl Leaves {
     fn world(&self) -> World {
-        let mut world = World {
-            cpu: CpuIdentity {
-                session: 0,
-                source: 0,
-                submission: 0,
-                began_qpc: 0,
-                frequency: 0,
-            },
-            pass: null(),
-            frame_pass: null(),
-            context: null_mut(),
-            chain: null_mut(),
-            inputs: false,
-            published: false,
-            frame_open: false,
-            submission_open: false,
-            depth_interrupted: false,
-        };
-        unsafe { (self.world)(&mut world) };
-        world
+        World::read(self.world)
     }
     fn read_owner(&self) -> Option<Owner> {
         let mut owner = Owner::default();
@@ -163,11 +119,7 @@ fn after_viewport(
     }
     if super::live() && targets && caller == base + HUDLESS_RETURN {
         let world = leaves.world();
-        let state = if world.inputs {
-            world.pass
-        } else {
-            world.frame_pass
-        };
+        let state = world.state();
         unsafe { (leaves.report_state)(HUDLESS, state, world.context, world.published, RSF_OK) };
         emit_hudless();
     }
@@ -320,6 +272,7 @@ extern "C" fn rsf_fallout4_render_after_viewport(
     caller: usize,
     manager: usize,
     enabled: bool,
+    framebuffer: *mut c_void,
 ) {
     after_viewport(
         leaves,
@@ -328,7 +281,7 @@ extern "C" fn rsf_fallout4_render_after_viewport(
         manager,
         enabled,
         resolution::native_viewport,
-        || publication::emit_hudless(publication, recovery),
+        || publication::emit_hudless(publication, recovery, framebuffer),
     )
 }
 

@@ -9,7 +9,7 @@ use rsf_game_sys::{
     rsf_result,
 };
 use std::ffi::{CStr, CString, c_char, c_void};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
 const OK: rsf_result = 0;
@@ -31,24 +31,27 @@ pub(crate) struct Platform {
     verify_executable: unsafe extern "C" fn() -> bool,
     pub(crate) image_base: unsafe extern "C" fn() -> usize,
     pub(crate) copy: CopyMemory,
-    tick_count: unsafe extern "C" fn() -> u64,
-    create_hook: unsafe extern "C" fn(usize) -> bool,
+    pub(crate) tick_count: unsafe extern "C" fn() -> u64,
+    pub(crate) create_hook: unsafe extern "C" fn(usize, usize, *mut usize) -> bool,
     pub(crate) enable_hook: unsafe extern "C" fn(usize) -> bool,
     pub(crate) disable_hook: unsafe extern "C" fn(usize) -> bool,
-    pub(crate) create_execution_hook: unsafe extern "C" fn(u32, usize) -> bool,
+    pub(crate) acquire_texture: unsafe extern "C" fn(usize) -> *mut c_void,
+    pub(crate) release_texture: unsafe extern "C" fn(*mut c_void),
     pub(crate) report_execution: unsafe extern "C" fn(
         *const rsf_game_host_services,
-        *mut c_void,
+        usize,
         *const rsf_game_render_pass,
+        bool,
     ),
     log: unsafe extern "C" fn(rsf_game_log_fn, *mut c_void, *const c_char),
 }
 
-const _: () = assert!(size_of::<Platform>() == 10 * size_of::<usize>());
+const _: () = assert!(size_of::<Platform>() == 11 * size_of::<usize>());
 
 static PLATFORM: OnceLock<Platform> = OnceLock::new();
 static ACCEPTING: AtomicBool = AtomicBool::new(false);
 static CALLS: AtomicU32 = AtomicU32::new(0);
+static ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 static STATE: Mutex<State> = Mutex::new(State {
     host: None,
     target: 0,
@@ -70,9 +73,46 @@ pub(crate) fn accepting() -> bool {
     ACCEPTING.load(Ordering::Acquire)
 }
 
+#[unsafe(no_mangle)]
+extern "C" fn rsf_wingman_accepting() -> bool {
+    accepting()
+}
+
 pub(crate) fn active_host() -> Option<rsf_game_host_services> {
     let state = state();
     state.host.filter(|_| accepting())
+}
+
+pub(crate) fn install_trampoline(
+    platform: &Platform,
+    target: usize,
+    detour: usize,
+    original: &AtomicUsize,
+) -> bool {
+    if original.load(Ordering::Acquire) != 0 {
+        return true;
+    }
+    let mut address = 0;
+    if !unsafe { (platform.create_hook)(target, detour, &mut address) } || address == 0 {
+        return false;
+    }
+    original.store(address, Ordering::Release);
+    true
+}
+
+pub(crate) struct Entry<'a>(&'a AtomicU32);
+
+impl<'a> Entry<'a> {
+    pub(crate) fn new(calls: &'a AtomicU32) -> Self {
+        calls.fetch_add(1, Ordering::AcqRel);
+        Self(calls)
+    }
+}
+
+impl Drop for Entry<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Release);
+    }
 }
 
 type Rect = [i32; 4];
@@ -154,7 +194,12 @@ pub(crate) unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> r
             c"Native temporal observer refused: executable identity or entry bytes differ.";
         return NATIVE_REFUSED;
     };
-    if !unsafe { (platform.create_hook)(target) } {
+    if !install_trampoline(
+        platform,
+        target,
+        add_passes as *const () as usize,
+        &ORIGINAL,
+    ) {
         return NATIVE_REFUSED;
     }
     if !execution::prepare(platform) {
@@ -330,18 +375,45 @@ fn sample(
     Some((host, state.serial))
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_wingman_observer_enter() {
-    CALLS.fetch_add(1, Ordering::AcqRel);
+type AddPasses = unsafe extern "C-unwind" fn(
+    usize,
+    *const c_void,
+    *const c_void,
+    *const c_void,
+    *const c_void,
+    *const c_void,
+    *const c_void,
+    *const c_void,
+);
+
+unsafe extern "C-unwind" fn add_passes(
+    this: usize,
+    graph: *const c_void,
+    view: *const c_void,
+    input: *const c_void,
+    output: *const c_void,
+    output_rect: *const c_void,
+    half: *const c_void,
+    half_rect: *const c_void,
+) {
+    let _entry = Entry::new(&CALLS);
+    let original: AddPasses = unsafe { std::mem::transmute(ORIGINAL.load(Ordering::Acquire)) };
+    unsafe {
+        original(
+            this,
+            graph,
+            view,
+            input,
+            output,
+            output_rect,
+            half,
+            half_rect,
+        )
+    };
+    observe(graph, view, input, output, output_rect, half, half_rect);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_wingman_observer_leave() {
-    CALLS.fetch_sub(1, Ordering::Release);
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_wingman_observe(
+fn observe(
     graph: *const c_void,
     view: *const c_void,
     input: *const c_void,

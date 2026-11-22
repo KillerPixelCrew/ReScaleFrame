@@ -44,15 +44,13 @@ pub(super) fn rewrite(
     check(whole, ARGUMENT, "whole same-size instruction required")?;
     let stored = dxbc_digest_bytes(checksum(&input[20..])?);
     check(stored == input[4..20], FORMAT, "DXBC checksum")?;
-    let chunks = word(input, 28)? as usize;
-    check(chunks <= (input.len() - 32) / 4, FORMAT, "DXBC chunks")?;
+    let chunks = dxbc_chunks::chunk_table(input, word(input, 28)? as usize)
+        .ok_or_else(|| refuse(FORMAT, "DXBC chunks"))?;
     let pattern: Vec<u8> = instruction.iter().flat_map(|t| t.to_le_bytes()).collect();
     let mut found = None;
     let mut count = 0;
-    for i in 0..chunks {
-        let at = word(input, 32 + i * 4)? as usize;
-        let chunk = dxbc_chunks::chunk_at(input, 32 + chunks * 4, at)
-            .ok_or_else(|| refuse(FORMAT, "DXBC chunk size"))?;
+    for entry in chunks {
+        let (at, chunk) = entry.ok_or_else(|| refuse(FORMAT, "DXBC chunk size"))?;
         let size = chunk.data.len();
         let kind = chunk.tag;
         if kind != b"SHDR" && kind != b"SHEX" {

@@ -3,16 +3,16 @@
 
 use crate::dxbc_chunks::Chunk;
 use crate::velocity_container::{
-    Resize, Semantic, borrowed, chunk_index, chunks, native_output, read_signature, resize_bytes,
-    shader_index, valid_container_size, write_container, write_signature,
+    Resize, Semantic, borrowed, chunk_index, chunks, native_output, read_signature, shader_index,
+    valid_container_size,
 };
+use crate::velocity_stage::{CompileHelper, HelperCache, compile_bytecode, write_stage_inputs};
 use crate::velocity_tokens::{
     DCL_TEMPS, Instruction, MAX_TEMPS, OperandEdit, OperandView, append_words, instructions,
-    read_operands, rewrite_operands, temp_count, write_instructions,
+    read_operands, rewrite_operands, temp_count,
 };
 use std::borrow::Cow;
-use std::ffi::{c_char, c_void};
-use std::ptr;
+use std::ffi::c_void;
 
 const PIXEL_PROFILE: u32 = 0x50;
 const MAX_INPUTS: u32 = 32;
@@ -48,8 +48,6 @@ float4 main(float4 current_clip:RSFCUR0,float4 previous:RSFPREV0,float4 colour:R
     float2 old=previous.xy/previous.w-Jitter.zw;
     return float4((current-old)*0.2495+32767.0/65535.0,0,0);
 }"#;
-
-type CompileHelper = unsafe extern "C" fn(*const c_char, usize, *mut *const u8, *mut usize) -> bool;
 
 impl Instruction {
     fn operand_mask(&self, operand: &OperandView) -> u32 {
@@ -371,28 +369,7 @@ fn patch<'a>(
     let extra_inputs = helper_inputs(helper[extra_input].data)?;
     let code = assemble(original, added, extra_inputs, previous, current, blend)?;
 
-    let mut shader_bytes = Vec::new();
-    let shader_output = &mut shader_bytes;
-    write_instructions(&code, move |size| resize_bytes(shader_output, size))?;
-    let mut input_bytes = Vec::new();
-    let input_output = &mut input_bytes;
-    write_signature(&inputs, false, move |size| resize_bytes(input_output, size))?;
-    let mut output = Vec::new();
-    output.try_reserve_exact(native.len()).ok()?;
-    for (index, chunk) in native.iter().enumerate() {
-        let data = if index == shader {
-            shader_bytes.as_slice()
-        } else if index == input {
-            input_bytes.as_slice()
-        } else {
-            chunk.data
-        };
-        output.push(Chunk {
-            tag: chunk.tag,
-            data,
-        });
-    }
-    write_container(&output, allocate)
+    write_stage_inputs(native, shader, input, &inputs, &code, None, allocate)
 }
 
 /// The caller lends native bytecode and a separate destination. The compiler leaf returns a
@@ -414,20 +391,15 @@ unsafe extern "C" fn rsf_core_ac7_velocity_pixel_shader(
     let Some(native) = unsafe { borrowed(bytes, size) }.and_then(chunks) else {
         return false;
     };
-    let mut helper = ptr::null();
-    let mut helper_size = 0;
-    let compiled = unsafe {
-        compile_helper(
-            HELPER_SOURCE.as_ptr().cast(),
-            HELPER_SOURCE.len(),
-            &mut helper,
-            &mut helper_size,
-        )
-    };
-    if !compiled || !valid_container_size(helper_size) {
-        return false;
-    }
-    let Some(helper) = unsafe { borrowed(helper, helper_size) }.and_then(chunks) else {
+    static HELPER: HelperCache = HelperCache::new();
+    let Some(helper) = compile_bytecode(
+        &HELPER,
+        compile_helper,
+        HELPER_SOURCE,
+        c"ac7-translucent-velocity",
+        c"ps_5_0",
+    )
+    .and_then(chunks) else {
         return false;
     };
     patch(&native, &helper, blend, previous, current, |size| unsafe {

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-use super::shaders::{FAMILY_NAMES, OUTCOME_NAMES};
 use super::*;
+use crate::shader_family::diagnostic_family_name;
+use crate::shader_loader::outcome_name;
 use std::fmt::Write;
 
 const CLASSES: [&str; 9] = [
@@ -241,8 +242,10 @@ impl Stage {
             log.say(line);
         }
         let mut shaders = String::from("Anomaly motion shaders (totals)");
-        for (family, counts) in FAMILY_NAMES.iter().zip(shader.outcomes) {
-            for (outcome, count) in OUTCOME_NAMES.iter().zip(counts).filter(|(_, c)| *c != 0) {
+        for (id, counts) in shader.outcomes.into_iter().enumerate() {
+            let family = diagnostic_family_name(id as u8);
+            for (id, count) in counts.into_iter().enumerate().filter(|(_, c)| *c != 0) {
+                let outcome = outcome_name(id as u8);
                 let _ = write!(shaders, " {family}.{outcome}={count}");
             }
         }

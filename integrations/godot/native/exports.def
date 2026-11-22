@@ -1,0 +1,11 @@
+EXPORTS
+    rsfg_attach_engine
+    rsfg_configure_engine
+    rsfg_reset_history
+    rsfg_status
+    rsfg_settings
+    rsfg_submitted
+    rsfg_present
+    rsfg_cpu
+    rsfg_request_latency_ping
+    rsfg_vk_window

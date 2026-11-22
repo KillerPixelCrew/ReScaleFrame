@@ -108,7 +108,7 @@ struct AdapterOption {
     step: i32,
     divisor: u32,
     get: unsafe extern "C" fn() -> i32,
-    set: unsafe extern "C" fn(i32),
+    set: unsafe extern "C" fn(i32) -> bool,
 }
 
 // SAFETY: the label is an immutable or stage-owned static buffer, and get/set are plain functions.
@@ -128,6 +128,10 @@ impl AdapterOption {
             get: option.get?,
             set: option.set?,
         })
+    }
+
+    fn apply(&self, value: i32) -> bool {
+        (self.minimum..=self.maximum).contains(&value) && unsafe { (self.set)(value) }
     }
 
     fn describe(&self) -> rsf_overlay_service_option {
@@ -254,8 +258,8 @@ fn bind(query: rsf_get_overlay_api_fn) -> Result<Api, Refusal> {
     validate(result, &table)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_overlay_bind(
+#[cfg(test)]
+unsafe fn rsf_anomaly_overlay_bind(
     query: rsf_get_overlay_api_fn,
     out: *mut rsf_overlay_api,
     reason: *mut *const c_char,
@@ -491,7 +495,7 @@ fn configure_capture(
             .map(PathBuf::from)
             .unwrap_or_default()
             .join("RSF-OverlayCapture")
-            .join(win32::local_stamp())
+            .join(crate::capture_clock::local_timestamp())
             .to_string_lossy()
             .into_owned()
     } else {
@@ -1089,11 +1093,6 @@ extern "C" fn rsf_anomaly_overlay_capture_bits(_: *mut c_void) -> u32 {
     OVERLAY.running().map_or(0, Service::capture_bits)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_overlay_engine_window(window: *mut c_void) -> u32 {
-    win32::engine_window(window).into()
-}
-
 /// Present-owner thread, immediately before the real Present (never for DXGI_PRESENT_TEST).
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_overlay_present(_: *mut c_void, chain: *mut c_void) {
@@ -1144,13 +1143,11 @@ unsafe extern "C" fn options_read(_: *mut c_void, values: *mut i32, count: u32) 
 }
 
 unsafe extern "C" fn option_changed(_: *mut c_void, index: u32, value: i32) -> c_int {
-    match service().and_then(|service| service.options.get(index as usize)) {
-        Some(option) => {
-            unsafe { (option.set)(value) };
-            1
-        }
-        None => 0,
-    }
+    i32::from(
+        service()
+            .and_then(|service| service.options.get(index as usize))
+            .is_some_and(|option| option.apply(value)),
+    )
 }
 
 unsafe extern "C" fn option_label(_: *mut c_void, index: u32) -> *const c_char {
@@ -1163,9 +1160,6 @@ unsafe extern "C" fn option_label(_: *mut c_void, index: u32) -> *const c_char {
 
 mod win32 {
     use crate::ini;
-    use std::mem;
-    use windows_sys::Win32::Foundation::SYSTEMTIME;
-    use windows_sys::Win32::System::SystemInformation::GetLocalTime;
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_INSERT};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -1210,15 +1204,6 @@ mod win32 {
         let mut text = [0u16; MAX_PATH];
         let length = unsafe { ini::read_text(ini.as_ptr(), key, w!(""), &mut text) };
         text[..length.min(MAX_PATH)].to_vec()
-    }
-
-    pub(super) fn local_stamp() -> String {
-        let mut t: SYSTEMTIME = unsafe { mem::zeroed() };
-        unsafe { GetLocalTime(&mut t) };
-        format!(
-            "{:04}{:02}{:02}-{:02}{:02}{:02}",
-            t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond
-        )
     }
 }
 

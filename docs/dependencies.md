@@ -104,6 +104,11 @@ original-file baselines. The older verified-deployment input remains an optional
 
 The native build needs the Windows/C++ toolchain. Rust dependencies are pinned in `Cargo.toml` and `Cargo.lock`. MinGW-w64 and Wine support the optional Linux cross-build.
 
+The Windows Rust runtime uses [ash](https://crates.io/crates/ash) 0.38.0+1.3.281
+(MIT OR Apache-2.0) for typed Vulkan descriptors and function signatures. Its
+loader and link features are disabled. The graphics host continues to lend
+the Vulkan procedure resolvers.
+
 Vendor SDKs, reference checkouts, Epic source, and game binaries are kept outside version control. [The source map](research/source-map.md) records inspected revisions; Epic links require authorized access.
 
 ## Optional local SDKs

@@ -307,9 +307,9 @@ unsafe extern "C" fn correct_position_constant(
     _: *mut c_void,
     x: f32,
     y: f32,
-) -> bool {
+) -> u32 {
     host(user).positions.push((x, y));
-    true
+    1
 }
 
 struct Case {

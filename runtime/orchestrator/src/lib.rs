@@ -62,6 +62,8 @@ mod d3d12_observer;
 mod d3d12_sharpening;
 #[cfg(windows)]
 mod d3d12_sr;
+#[cfg(any(windows, test))]
+mod d3d12_window_presenter;
 #[cfg(windows)]
 mod depth_replay;
 #[cfg(windows)]
@@ -87,6 +89,8 @@ mod dx12_vulkan_interop;
 #[cfg(windows)]
 mod dx12_vulkan_interop_abi;
 #[cfg(windows)]
+mod dx12_vulkan_platform;
+#[cfg(windows)]
 #[path = "../../graphics/src/dxbc_chunks.rs"]
 mod dxbc_chunks;
 #[cfg(windows)]
@@ -99,6 +103,8 @@ mod motion_d3d11;
 mod motion_decode;
 #[cfg(windows)]
 mod motion_resolve;
+#[cfg(windows)]
+mod motion_resolve_params;
 #[cfg(windows)]
 mod native_composition;
 #[cfg(windows)]
@@ -207,6 +213,8 @@ mod overlay_renderer11;
 #[cfg(windows)]
 mod overlay_service;
 #[cfg(windows)]
+mod overlay_settings;
+#[cfg(windows)]
 mod overlay_visibility;
 #[cfg(windows)]
 mod overlay_window;
@@ -264,6 +272,8 @@ mod sr_session;
 mod streamline_host;
 #[cfg(windows)]
 mod streamline_log;
+#[cfg(windows)]
+mod streamline_policy;
 #[cfg(windows)]
 mod streamline_sr;
 #[cfg(all(windows, test))]
@@ -332,6 +342,8 @@ mod vulkan_sharpening_abi;
 mod vulkan_sr;
 #[cfg(windows)]
 mod vulkan_sr_abi;
+#[cfg(windows)]
+mod vulkan_sr_session;
 #[cfg(windows)]
 mod vulkan_sr_split;
 #[cfg(windows)]

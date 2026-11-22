@@ -15,7 +15,5 @@ struct rsf_vkffx_exports {
 
 };
 
-inline rsf_vk_function rsf_vkffx_symbol(void* module, const char* name) noexcept {
-    return reinterpret_cast<rsf_vk_function>(GetProcAddress(static_cast<HMODULE>(module), name));
-}
+extern "C" rsf_vk_function rsf_vkffx_symbol(void* module, const char* name);
 #endif

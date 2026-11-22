@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT */
-/* Structured sidecar sections: guarded memory access, threads, function starts from the exception
+/* Structured sidecar sections: threads, function starts from the exception
    directory and the caller-supplied name list. RTTI lives in module_dump_rtti.c. */
 
 #include "module_dump_internal.h"
@@ -13,94 +13,6 @@
 #define RSF_MAX_PDATA_BYTES (96u * 1024u * 1024u)
 #define RSF_MAX_NAME_LINES 2000000u
 #define RSF_MAX_NAME_BYTES 1024u
-
-/* ---- guarded memory ---- */
-
-static int region_usable(const MEMORY_BASIC_INFORMATION* region)
-{
-    const DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
-                           PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
-    return region->State == MEM_COMMIT && (region->Protect & readable) != 0 &&
-           (region->Protect & PAGE_GUARD) == 0 && (region->Protect & PAGE_NOACCESS) == 0;
-}
-
-size_t rsf_dump_readable_extent(rsf_mem_cache* cache, const void* address, size_t wanted)
-{
-    const unsigned char* cursor = (const unsigned char*)address;
-    size_t total = 0;
-    while (total < wanted) {
-        if (!(cache->low <= cursor && cursor < cache->high)) {
-            MEMORY_BASIC_INFORMATION region;
-            if (VirtualQuery(cursor, &region, sizeof(region)) != sizeof(region) ||
-                !region_usable(&region)) {
-                cache->low = cache->high = NULL;
-                break;
-            }
-            cache->low = (const unsigned char*)region.BaseAddress;
-            cache->high = cache->low + region.RegionSize;
-            if (!(cache->low <= cursor && cursor < cache->high)) {
-                cache->low = cache->high = NULL;
-                break;
-            }
-        }
-        size_t chunk = (size_t)(cache->high - cursor);
-        if (chunk > wanted - total) {
-            chunk = wanted - total;
-        }
-        total += chunk;
-        cursor += chunk;
-    }
-    return total;
-}
-
-int rsf_dump_read_exact(rsf_mem_cache* cache, const void* address, void* destination, size_t size)
-{
-    if (rsf_dump_readable_extent(cache, address, size) < size) {
-        return 0;
-    }
-    memcpy(destination, address, size);
-    return 1;
-}
-
-/* Copy from another module's memory, tolerating pages that are not committed or not readable.
-   A section's virtual size routinely exceeds what was loaded from disk, and reading blindly
-   would fault. Unreadable bytes become zeroes, which is what those pages hold anyway. */
-size_t rsf_dump_read_guarded(const unsigned char* source, unsigned char* destination, size_t size)
-{
-    SYSTEM_INFO info;
-    GetSystemInfo(&info);
-    const size_t page = info.dwPageSize ? (size_t)info.dwPageSize : 4096u;
-
-    memset(destination, 0, size);
-    size_t copied = 0;
-    size_t offset = 0;
-    while (offset < size) {
-        MEMORY_BASIC_INFORMATION region;
-        if (VirtualQuery(source + offset, &region, sizeof(region)) != sizeof(region)) {
-            break;
-        }
-        /* Measure from the region's end. The region can start before the address we asked about,
-           so subtracting its base from `source` can underflow. */
-        const unsigned char* region_end =
-            (const unsigned char*)region.BaseAddress + region.RegionSize;
-        size_t available = (size_t)(region_end - (source + offset));
-        if (available > size - offset) {
-            available = size - offset;
-        }
-        if (available == 0) {
-            available = page;
-            if (available > size - offset) {
-                available = size - offset;
-            }
-        }
-        if (region_usable(&region)) {
-            memcpy(destination + offset, source + offset, available);
-            copied += available;
-        }
-        offset += available;
-    }
-    return copied;
-}
 
 /* ---- JSON helpers ---- */
 

@@ -640,7 +640,6 @@ static void on_shader_created(void* user, void* shader, uint32_t stage, const vo
     unsigned int index;
     (void)user;
     rsf_ac7_motion_capture_shader(shader, stage, bytecode, bytes);
-    rsf_ac7_velocity_shader_seen(shader, stage, bytecode, bytes);
     if (stage > RSF_OBSERVER_STAGE_PIXEL) {
         return;
     }

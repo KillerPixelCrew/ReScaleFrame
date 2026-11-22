@@ -7,13 +7,6 @@
 #define CHECK(condition) do { if (!(condition)) { \
     std::fprintf(stderr, "XeSS input range contract failed: %s\n", #condition); std::abort(); \
 } } while (0)
-extern "C" {
-int32_t rsf_core_xessvk_create(const rsf::xess_vk::Ops*, const rsf_srvk_setup*, void**);
-int32_t rsf_core_xessvk_plan(const void*, uint32_t*, uint32_t*);
-int32_t rsf_core_xessvk_evaluate(void*, void*, const rsf_srvk_frame*);
-void rsf_core_xessvk_retire_commands(void*, void*);
-int32_t rsf_core_xessvk_destroy(void*);
-}
 namespace {
 unsigned executed{}, copied{}, images{}, destroyed_images{}, views{}, destroyed_views{}, freed{}, contexts{}, destroyed_contexts{};
 uint32_t expected_width{}, expected_height{}, expected_reset{};
@@ -125,8 +118,8 @@ int main() {
     void* const device = reinterpret_cast<void*>(1);
     rsf_srvk_setup setup{sizeof(setup), RSF_SRVK_ABI_VERSION, device, device, device, instance_proc, device_proc,
         RSF_SR_XESS, 1, 1920, 1080, 0, 0, 0, "C:\\fake"};
-    void* self = nullptr;
-    CHECK(rsf_core_xessvk_create(&ops, &setup, &self) == RSF_BACKEND_OK && self);
+    rsf_srvk* self = nullptr;
+    CHECK(rsf_srvk_create(&setup, &self) == RSF_BACKEND_OK && self);
     CHECK(contexts == 1 && images == 4 && views == 4);
     CHECK(rsf_core_xessvk_shutdown(&ops) == RSF_BACKEND_ERROR_NOT_READY);
     rsf_frame_record record{}; record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
@@ -147,16 +140,16 @@ int main() {
         expected_width = w; expected_height = h;
     };
     void* const commands = reinterpret_cast<void*>(2);
-    uint32_t w{}, h{}; CHECK(rsf_core_xessvk_plan(self, &w, &h) == 0 && w == 1130 && h == 636);
+    uint32_t w{}, h{}; CHECK(rsf_srvk_plan(self, &w, &h) == 0 && w == 1130 && h == 636);
     dimensions(1128, 632); record.frame_id = 1; expected_reset = 1;
-    CHECK(rsf_core_xessvk_evaluate(self, commands, &input) == 0 && executed == 1 && copied == 4);
+    CHECK(rsf_srvk_evaluate(self, commands, &input) == 0 && executed == 1 && copied == 4);
     record.frame_id = 2; expected_reset = 0;
-    CHECK(rsf_core_xessvk_evaluate(self, commands, &input) == 0 && executed == 2);
+    CHECK(rsf_srvk_evaluate(self, commands, &input) == 0 && executed == 2);
     dimensions(1280, 720); record.frame_id = 3; expected_reset = 1;
-    CHECK(rsf_core_xessvk_evaluate(self, commands, &input) == 0 && executed == 3);
+    CHECK(rsf_srvk_evaluate(self, commands, &input) == 0 && executed == 3);
     auto reject = [&] {
         const unsigned before = copied;
-        CHECK(rsf_core_xessvk_evaluate(self, commands, &input) == RSF_BACKEND_ERROR_INVALID_ARGUMENT && copied == before && executed == 3);
+        CHECK(rsf_srvk_evaluate(self, commands, &input) == RSF_BACKEND_ERROR_INVALID_ARGUMENT && copied == before && executed == 3);
     };
     dimensions(1023, 632); reject(); dimensions(1128, 575); reject();
     dimensions(1281, 632); reject(); dimensions(1128, 721); reject();
@@ -165,8 +158,8 @@ int main() {
     dimensions(1128, 632); record.camera.render_width--; reject();
     dimensions(1128, 632); record.camera.output_height--; reject();
     record.camera.output_height++;
-    rsf_core_xessvk_retire_commands(self, commands);
-    CHECK(rsf_core_xessvk_destroy(self) == RSF_BACKEND_OK);
+    rsf_srvk_retire_commands(self, commands);
+    CHECK(rsf_srvk_destroy(self) == RSF_BACKEND_OK);
     CHECK(destroyed_contexts == 1 && destroyed_images == 4 && destroyed_views == 4 && freed == 4);
     CHECK(rsf_core_xessvk_shutdown(&ops) == RSF_BACKEND_OK);
     std::puts("PASS: XeSS Vulkan input range, cache sizing, reset and teardown");
@@ -405,9 +398,9 @@ void device_case(Gpu& gpu, const char* directory, uint32_t quality) {
     setup.backend = RSF_SR_XESS; setup.quality = quality; setup.output_width = 320; setup.output_height = 180;
     setup.depth_inverted = 1; setup.runtime_directory_utf8 = directory;
     rsf_srvk* context = nullptr; auto result = rsf_srvk_create(&setup, &context);
-    std::printf("Vulkan SR backend %u create=%d\n", RSF_SR_XESS, result); require(result == RSF_BACKEND_OK && context, "create native Vulkan SR context");
     // Context retirement must precede device retirement even when an assertion fails.
     struct ContextOwner { Gpu& gpu; rsf_srvk* value; ~ContextOwner() { (void)gpu.idle(gpu.device); (void)rsf_srvk_destroy(value); } } owner{gpu, context};
+    std::printf("Vulkan SR backend %u create=%d\n", RSF_SR_XESS, result); require(result == RSF_BACKEND_OK && context, "create native Vulkan SR context");
     uint32_t width = 0, height = 0; require(rsf_srvk_plan(context, &width, &height) == RSF_BACKEND_OK && width && height, "SR sizing plan");
     require(rsf_xessvk_shutdown() == RSF_BACKEND_ERROR_NOT_READY, "live XeSS context pins SDK module");
     auto color = gpu.image(width, height, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);

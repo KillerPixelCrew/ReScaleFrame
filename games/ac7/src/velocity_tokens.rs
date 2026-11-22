@@ -118,7 +118,9 @@ pub(crate) fn read_instructions(
     let mut remaining = code.as_slice();
     while !remaining.is_empty() {
         let (opcode, words) = instruction(remaining)?;
-        visit(opcode, words, (88..=106).contains(&opcode))?;
+        // SM4 declarations, SM5 stream/function/tessellation/resource declarations,
+        // and the later GS instance count. Hull phase markers are separate opcodes.
+        visit(opcode, words, matches!(opcode, 88..=106 | 143..=162 | 206))?;
         remaining = &remaining[words.len()..];
     }
     Some(())
@@ -144,6 +146,29 @@ pub(crate) fn instructions(bytes: &[u8], profile: u32) -> Option<Vec<Instruction
         Some(())
     })?;
     Some(code)
+}
+
+#[cfg(test)]
+#[test]
+fn sm5_resource_declarations_are_not_executable_instructions() {
+    let profile = 0x20050u32;
+    let words = [
+        profile,
+        10,
+        0x0300_00a1,
+        0x0010_7000,
+        126, // dcl_resource_raw
+        0x0400_00a2,
+        0x0010_7000,
+        125,
+        16,          // dcl_resource_structured
+        0x0100_003e, // ret
+    ];
+    let bytes: Vec<_> = words.into_iter().flat_map(u32::to_le_bytes).collect();
+    let code = instructions(&bytes, profile).unwrap();
+    assert!(code[0].declaration);
+    assert!(code[1].declaration);
+    assert!(!code[2].declaration);
 }
 
 pub(crate) fn append_words(code: &mut Vec<u32>, words: &[u32]) -> Option<()> {

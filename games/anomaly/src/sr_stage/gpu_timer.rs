@@ -6,6 +6,9 @@ use std::ffi::c_void;
 
 type Handle = *mut c_void;
 const SLOTS: usize = 4;
+// ID3D11DeviceContext::GetData HRESULTs.
+const READY: i32 = 0;
+const PENDING: i32 = 1;
 
 enum Work {
     Free,
@@ -65,10 +68,15 @@ impl Ring {
             };
             let mut frequency = 0;
             let mut disjoint = false;
-            if !leaf!(
-                platform,
-                timer_clock(context, slot.clock.as_ptr(), &mut frequency, &mut disjoint)
-            ) {
+            let clock = platform.timer_clock.map_or(-1, |query| unsafe {
+                query(context, slot.clock.as_ptr(), &mut frequency, &mut disjoint)
+            });
+            if clock == PENDING {
+                continue;
+            }
+            if clock != READY {
+                slot.work = Work::Free;
+                stats.skipped += u64::from(swapped.is_some());
                 continue;
             }
             let Some(swapped) = swapped else {
@@ -77,13 +85,21 @@ impl Ring {
                 continue;
             };
             let mut ticks = [0; 3];
-            if ![&slot.begin, &slot.seam, &slot.end]
-                .into_iter()
-                .zip(&mut ticks)
-                .all(|(query, tick)| {
-                    leaf!(platform, timer_timestamp(context, query.as_ptr(), tick))
+            let status = [&slot.begin, &slot.seam, &slot.end].map(|query| query.as_ptr());
+            let status = std::array::from_fn::<_, 3, _>(|i| {
+                platform.timer_timestamp.map_or(-1, |query| unsafe {
+                    query(context, status[i], &mut ticks[i])
                 })
+            });
+            if status
+                .iter()
+                .any(|result| !matches!(*result, READY | PENDING))
             {
+                slot.work = Work::Free;
+                stats.skipped += 1;
+                continue;
+            }
+            if status.contains(&PENDING) {
                 continue;
             }
             slot.work = Work::Free;
@@ -108,6 +124,7 @@ impl Ring {
 pub(super) struct Timer {
     ring: Option<Ring>,
     stats: Stats,
+    pub(super) generation: u64,
 }
 
 // The stage lock serializes access. D3D11 device and query references can be
@@ -115,6 +132,12 @@ pub(super) struct Timer {
 unsafe impl Send for Timer {}
 
 impl Timer {
+    pub(super) fn reset(&mut self) {
+        self.ring = None;
+        self.stats = Stats::default();
+        self.generation = self.generation.wrapping_add(1);
+    }
+
     pub(super) fn begin(&mut self, platform: &Platform, device: Handle, context: Handle) {
         if context.is_null() {
             return;
@@ -124,7 +147,7 @@ impl Timer {
             .as_ref()
             .is_none_or(|ring| ring.device.as_ptr() != device)
         {
-            *self = Self::default();
+            self.reset();
             if !device.is_null() {
                 self.ring = Ring::new(platform, device);
                 self.stats.device = self.ring.is_some();

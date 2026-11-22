@@ -64,7 +64,7 @@ Dictionary ReScaleFrameRuntime::get_status() const
     result["graphics_driver_supported"] = (admitted & RSF_GODOT_ADMIT_DRIVER) != 0;
     result["renderer_supported"] = (admitted & RSF_GODOT_ADMIT_RENDERER) != 0;
     rsf_godot_status status{sizeof(status), RSF_GODOT_ABI_VERSION};
-    const bool available = rsf_godot_status_ready(rsf_godot_platform_leaves(), &status) != 0;
+    const bool available = rsfg_status(&status) != 0 && status.session_id != 0;
     result["engine_bridge_ready"] = available;
     if (!available) return result;
     rsf_godot_settings requested{sizeof(requested), RSF_GODOT_SETTINGS_ABI_VERSION};

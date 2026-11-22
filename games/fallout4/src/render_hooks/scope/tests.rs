@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! FRAME, SUBMISSION and WINDOW order with fake leaves standing in for render_hooks.cpp.
 use super::*;
-use crate::render_hooks::recovery::{Facts, Lease, OutputOwner, Request};
+use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;
+use crate::render_hooks::recovery::fixtures::IDLE;
 use rsf_game_sys::{RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_WINDOW};
 use std::cell::RefCell;
 
@@ -204,45 +205,11 @@ unsafe extern "C" fn refuse() {
     event("refuse", 0);
     with(|fake| fake.refused = true);
 }
-unsafe extern "C" fn facts(_: &mut Facts) {}
-unsafe extern "C" fn yes() -> bool {
-    true
-}
-unsafe extern "C" fn resolve(_: bool, _: bool) {}
-unsafe extern "C" fn unused(_: bool) -> bool {
-    unreachable!()
-}
-unsafe extern "C" fn adopt(_: *const i32) {}
-unsafe extern "C" fn nothing() {}
-unsafe extern "C" fn lease(_: u32, _: &mut Lease) {}
-unsafe extern "C" fn preflight(
-    _: *const rsf_game_render_pass,
-    _: *mut c_void,
-    _: &mut OutputOwner,
-) -> bool {
-    false
-}
-unsafe extern "C" fn reduce(_: &mut Request, _: &mut rsf_result) -> bool {
-    false
-}
 
-// No token is owned, so RETIRE answers without a host call.
 const RECOVERY: RecoveryLeaves = RecoveryLeaves {
     report,
     refuse,
-    facts,
-    same_source: yes,
-    resolve,
-    read_raster: unused,
-    same_resources: unused,
-    adopt,
-    discard: nothing,
-    release: nothing,
-    lease,
-    preflight,
-    raster_current: yes,
-    begin_output: yes,
-    reduce,
+    ..IDLE
 };
 
 fn events() -> Vec<(&'static str, u32)> {

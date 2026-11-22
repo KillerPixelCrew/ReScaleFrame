@@ -3,15 +3,10 @@
 //! temporal state, the TAA camera cache scan, the logical-to-platform target maps, resource and
 //! raster admission, the steady camera history, and the GameSDK pass each reader leases.
 //!
-//! render_inputs.cpp supplies narrow leaves through `Leaves` (render_inputs_platform.h): canonical
-//! COM identity, the lease that holds the context, chain and textures as typed COM references, the
-//! D3D11 and DXGI facts, and the receipts with their original text. Engine memory is read here
-//! through the guarded `crate::read`. Camera math goes through `camera`, producer agreement through
-//! `depth_domains`.
-//!
-//! Every refusal names the stage the C++ named and reports it once per stage when a report
-//! callback is supplied. Fields written before the failing step remain in the reported copy. A
-//! pass is written only on admission; the lease the C++ wrapper discards on refusal.
+//! Rust samples the D3D11 resources and lends their owned references to the
+//! native World caller. The native leaves format and report existing receipts.
+
+mod native;
 
 use crate::build_layout::{
     RENDERER_CHAIN, RENDERER_CONTEXT, RENDERER_DEVICE, RENDERER_OBJECT, RENDERER_POINTER,
@@ -19,8 +14,10 @@ use crate::build_layout::{
 };
 use crate::camera::{self, CameraRaster, NativeCamera};
 use crate::creation;
+use crate::d3d11::same_native;
 use crate::depth_domains::{self, Snapshot};
 use crate::{Plain, image, read};
+use rsf_game_sys::RSF_SCREEN_UNKNOWN;
 use rsf_game_sys::{
     RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR, rsf_game_render_pass,
 };
@@ -31,7 +28,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 type Flat = [f32; 16];
 type Report = Option<unsafe extern "C" fn(*const c_char)>;
 /// render_inputs.cpp `NativeInputLease`, opaque here.
-type Lease = *mut c_void;
+type Lease = *mut native::NativeLease;
 
 const STATE_RVA: usize = 0x3d871a0;
 const TARGETS_RVA: usize = 0x2f4d750;
@@ -49,8 +46,6 @@ const DXGI_FORMAT_R24G8_TYPELESS: u32 = 44;
 const DXGI_FORMAT_R24_UNORM_X8_TYPELESS: u32 = 46;
 const D3D11_SRV_DIMENSION_TEXTURE2D: u32 = 4;
 const D3D11_RTV_DIMENSION_TEXTURE2D: u32 = 4;
-/// game_frame.h `RSF_SCREEN_UNKNOWN`.
-const RSF_SCREEN_UNKNOWN: u32 = 0;
 
 // render_inputs_platform.h lease slots.
 const SLOT_COLOUR: u32 = 0;
@@ -111,8 +106,6 @@ struct Target {
 // SAFETY: six integers; any bytes are a value.
 unsafe impl Plain for Target {}
 
-/// render_inputs_platform.h `NativeInputDeviceFacts`.
-#[repr(C)]
 #[derive(Default)]
 struct DeviceFacts {
     device: u64,
@@ -121,8 +114,6 @@ struct DeviceFacts {
     chain_device_read: u32,
 }
 
-/// render_inputs_platform.h `NativeInputViewportFacts`.
-#[repr(C)]
 #[derive(Default)]
 struct ViewportFacts {
     count: u32,
@@ -245,12 +236,6 @@ struct FramebufferFacts {
 #[repr(C)]
 #[allow(dead_code)] // constructed by the C++ leaf table
 pub(crate) struct NativeLeaves {
-    identity: Option<unsafe extern "C" fn(u64) -> u64>,
-    owner: Option<unsafe extern "C" fn(Lease, u64, u64, *mut DeviceFacts)>,
-    viewport: Option<unsafe extern "C" fn(u64, *mut ViewportFacts)>,
-    swap: Option<unsafe extern "C" fn(u64, *mut SwapFacts)>,
-    resource: Option<unsafe extern "C" fn(Lease, u32, u64, u32, *mut ResourceFacts)>,
-    release: Option<unsafe extern "C" fn(Lease, u32)>,
     reader: Option<
         unsafe extern "C" fn(Report, *const c_char, *const Receipt, *const rsf_game_render_pass),
     >,
@@ -262,12 +247,6 @@ pub(crate) struct NativeLeaves {
 }
 
 pub(crate) struct Leaves {
-    identity: unsafe extern "C" fn(u64) -> u64,
-    owner: unsafe extern "C" fn(Lease, u64, u64, *mut DeviceFacts),
-    viewport: unsafe extern "C" fn(u64, *mut ViewportFacts),
-    swap: unsafe extern "C" fn(u64, *mut SwapFacts),
-    resource: unsafe extern "C" fn(Lease, u32, u64, u32, *mut ResourceFacts),
-    release: unsafe extern "C" fn(Lease, u32),
     reader:
         unsafe extern "C" fn(Report, *const c_char, *const Receipt, *const rsf_game_render_pass),
     mismatch: unsafe extern "C" fn(Report, *const State, *const State, u32),
@@ -283,8 +262,6 @@ const _: () = {
     assert!(offset_of!(State, delta_seconds) == 116 && offset_of!(State, default_viewport) == 120);
     assert!(offset_of!(State, dynamic_viewport) == 121);
     assert!(size_of::<Target>() == 0x30);
-    assert!(size_of::<DeviceFacts>() == 24 && offset_of!(DeviceFacts, immediate) == 16);
-    assert!(size_of::<ViewportFacts>() == 32 && offset_of!(ViewportFacts, viewport) == 8);
     assert!(size_of::<SwapFacts>() == 24 && offset_of!(SwapFacts, read) == 8);
     assert!(size_of::<ResourceFacts>() == 80 && offset_of!(ResourceFacts, read) == 24);
     assert!(offset_of!(ResourceFacts, view_format) == 60);
@@ -302,7 +279,7 @@ const _: () = {
     assert!(offset_of!(FramebufferReceipt, platform) == 304);
     assert!(offset_of!(FramebufferReceipt, rtv_mip) == 340);
     assert!(size_of::<FramebufferFacts>() == 16);
-    assert!(size_of::<NativeLeaves>() == 10 * 8);
+    assert!(size_of::<NativeLeaves>() == 4 * 8);
 };
 
 const NO_CAMERA: NativeCamera = NativeCamera {
@@ -449,59 +426,11 @@ const _: () = assert!(
 impl Leaves {
     fn from_native(table: &NativeLeaves) -> Option<Self> {
         Some(Self {
-            identity: table.identity?,
-            owner: table.owner?,
-            viewport: table.viewport?,
-            swap: table.swap?,
-            resource: table.resource?,
-            release: table.release?,
             reader: table.reader?,
             mismatch: table.mismatch?,
             history: table.history?,
             framebuffer: table.framebuffer?,
         })
-    }
-
-    /// Canonical identity of a live COM object, 0 when null or not an object.
-    fn identity(&self, object: u64) -> u64 {
-        unsafe { (self.identity)(object) }
-    }
-
-    /// `object` is the canonical identity of a live object, `native` a native pointer: the C++
-    /// `same_object`, which required both and compared their IUnknown identities.
-    fn same_native(&self, object: u64, native: u64) -> bool {
-        object != 0 && native != 0 && self.identity(native) == object
-    }
-
-    /// Leases the native context and chain, then reports their devices.
-    fn owner(&self, lease: Lease, context: usize, chain: usize) -> DeviceFacts {
-        let mut facts = DeviceFacts::default();
-        unsafe { (self.owner)(lease, context as u64, chain as u64, &mut facts) };
-        facts
-    }
-
-    fn viewport(&self, context: usize) -> ViewportFacts {
-        let mut facts = ViewportFacts::default();
-        unsafe { (self.viewport)(context as u64, &mut facts) };
-        facts
-    }
-
-    fn swap(&self, chain: usize) -> SwapFacts {
-        let mut facts = SwapFacts::default();
-        unsafe { (self.swap)(chain as u64, &mut facts) };
-        facts
-    }
-
-    /// The resource of a shader-resource or render-target view, leased into `slot` unless it is
-    /// `NO_SLOT`.
-    fn resource(&self, lease: Lease, slot: u32, view: u64, render_target: bool) -> ResourceFacts {
-        let mut facts = ResourceFacts::default();
-        unsafe { (self.resource)(lease, slot, view, u32::from(render_target), &mut facts) };
-        facts
-    }
-
-    fn release(&self, lease: Lease, slot: u32) {
-        unsafe { (self.release)(lease, slot) };
     }
 }
 
@@ -579,6 +508,12 @@ fn same_native_state(a: &State, b: &State) -> bool {
 }
 
 /// `memcmp` equality of two copied cameras.
+/// Called by the native layout fixture with different bytes in the record's padding.
+#[unsafe(no_mangle)]
+extern "C" fn rsf_fallout4_compare_input_state(a: &State, b: &State) -> u32 {
+    u32::from(same_native_owner(a, b)) | (u32::from(same_native_state(a, b)) << 1)
+}
+
 fn same_camera(a: &NativeCamera, b: &NativeCamera) -> bool {
     bits(&a.view) == bits(&b.view)
         && bits(&a.projection) == bits(&b.projection)
@@ -591,10 +526,6 @@ fn same_camera(a: &NativeCamera, b: &NativeCamera) -> bool {
 }
 
 /// `memcmp` equality of two rasters.
-fn same_raster(a: &CameraRaster, b: &CameraRaster) -> bool {
-    bits(&a.xywh) == bits(&b.xywh) && a.crop == b.crop
-}
-
 fn close_matrix(a: &Flat, b: &Flat) -> bool {
     rsf_game_sys::camera_math::finite_matrix_close(a, b, 0.001)
 }
@@ -699,13 +630,12 @@ fn state(out: &mut State) -> Result<(), Stage> {
 /// The one bound viewport: `(admitted, count, viewport)`. The count is the copied count when the
 /// first count was one, as the C++ reported it.
 fn active_full_viewport(
-    leaves: &Leaves,
     context: usize,
     width: u32,
     height: u32,
     full: bool,
 ) -> (bool, u32, [f32; 6]) {
-    let facts = leaves.viewport(context);
+    let facts = native::viewport(context);
     if facts.count != 1 {
         return (false, facts.count, facts.viewport);
     }
@@ -753,7 +683,6 @@ struct ViewCheck<'a> {
 
 #[allow(clippy::too_many_arguments)] // the C++ view_texture arguments and its facts
 fn view_texture(
-    leaves: &Leaves,
     lease: Lease,
     slot: u32,
     view: u64,
@@ -765,13 +694,13 @@ fn view_texture(
     if view == 0 || expected == 0 {
         return false;
     }
-    *check.facts = leaves.resource(lease, slot, view, false);
+    *check.facts = native::resource(lease, slot, view, false);
     let facts = *check.facts;
     // A missing resource or a failed Texture2D query.
     if facts.pointer == 0 {
         return false;
     }
-    *check.resource_match = u32::from(leaves.same_native(facts.identity, expected));
+    *check.resource_match = u32::from(same_native(facts.identity, expected));
     if *check.resource_match == 0 {
         return false;
     }
@@ -802,14 +731,7 @@ fn extent(facts: &ResourceFacts, width: u32, height: u32) -> bool {
 /// native record, view, device and extent agree before and after. Only full-output allocations
 /// share the verified Main viewport/crop; the native format is deliberately not inferred from the
 /// logical role.
-fn auxiliary(
-    leaves: &Leaves,
-    lease: Lease,
-    native: &State,
-    device: u64,
-    logical: u32,
-    slot: u32,
-) -> bool {
+fn auxiliary(lease: Lease, native: &State, device: u64, logical: u32, slot: u32) -> bool {
     let map = colour_map(logical);
     let (mut platform, mut confirmed_platform) = (0u32, 0u32);
     let (mut target, mut confirmed_target) = (Target::default(), Target::default());
@@ -821,9 +743,9 @@ fn auxiliary(
     {
         return false;
     }
-    let facts = leaves.resource(lease, slot, target.rtv, true);
+    let facts = native::resource(lease, slot, target.rtv, true);
     let admitted = facts.pointer != 0
-        && leaves.same_native(facts.identity, target.texture)
+        && same_native(facts.identity, target.texture)
         && same_object(facts.device, device)
         && extent(&facts, native.width, native.height)
         && facts.view_dimension == D3D11_RTV_DIMENSION_TEXTURE2D
@@ -833,7 +755,7 @@ fn auxiliary(
         && load(target_at(native.renderer, platform), &mut confirmed_target)
         && target == confirmed_target;
     if !admitted {
-        leaves.release(lease, slot);
+        native::release(lease, slot);
     }
     admitted
 }
@@ -978,6 +900,123 @@ fn verify(admit: impl FnOnce() -> bool) -> bool {
     okay
 }
 
+#[derive(Default, PartialEq, Eq)]
+struct InputRecords {
+    colour: Target,
+    motion: Target,
+    depth: u64,
+    depth_srv: u64,
+}
+
+impl InputRecords {
+    fn read(renderer: usize, [colour, motion, depth]: [u32; 3]) -> Option<Self> {
+        let target = depth_at(renderer, depth);
+        Some(Self {
+            colour: read(target_at(renderer, colour))?,
+            motion: read(target_at(renderer, motion))?,
+            depth: read(target)?,
+            depth_srv: read(target.wrapping_add(0x88))?,
+        })
+    }
+
+    fn current(&self, renderer: usize, slots: [u32; 3]) -> bool {
+        Self::read(renderer, slots).as_ref() == Some(self)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum DepthRequirement {
+    Temporal,
+    Raster,
+}
+
+impl DepthRequirement {
+    fn accepts(self, depth: u32) -> bool {
+        depth == DXGI_FORMAT_R24G8_TYPELESS
+            || matches!(self, Self::Temporal)
+                && matches!(depth, DXGI_FORMAT_R32_TYPELESS | DXGI_FORMAT_R32_FLOAT)
+    }
+}
+
+fn lease_views(
+    lease: Lease,
+    records: &InputRecords,
+    device: u64,
+    requirement: DepthRequirement,
+    receipt: &mut Receipt,
+) -> Result<(), Stage> {
+    let depth_format = match requirement {
+        DepthRequirement::Temporal => None,
+        DepthRequirement::Raster => Some(DXGI_FORMAT_R24_UNORM_X8_TYPELESS),
+    };
+    let views = [
+        (
+            SLOT_COLOUR,
+            records.colour.srv,
+            records.colour.texture,
+            Some(DXGI_FORMAT_R11G11B10_FLOAT),
+            Stage::ColourSrv,
+        ),
+        (
+            SLOT_MOTION,
+            records.motion.srv,
+            records.motion.texture,
+            Some(DXGI_FORMAT_R16G16_FLOAT),
+            Stage::MotionSrv,
+        ),
+        (
+            SLOT_DEPTH,
+            records.depth_srv,
+            records.depth,
+            depth_format,
+            Stage::DepthSrv,
+        ),
+    ];
+    for (index, (slot, view, expected, format, stage)) in views.into_iter().enumerate() {
+        let check = ViewCheck {
+            facts: &mut receipt.views[index],
+            resource_match: &mut receipt.resource_match[index],
+            device_match: &mut receipt.device_match[index],
+        };
+        if !view_texture(lease, slot, view, expected, device, format, check) {
+            return Err(stage);
+        }
+    }
+    Ok(())
+}
+
+fn validate_views(
+    lease: Lease,
+    colour_rtv: u64,
+    [width, height]: [u32; 2],
+    requirement: DepthRequirement,
+    receipt: &mut Receipt,
+) -> Result<(), Stage> {
+    let [c, m, d] = receipt.views;
+    receipt.rtv = native::resource(lease, NO_SLOT, colour_rtv, true);
+    let rtv = receipt.rtv;
+    if !same_object(rtv.identity, c.identity)
+        || rtv.view_dimension != D3D11_RTV_DIMENSION_TEXTURE2D
+        || rtv.view_format != DXGI_FORMAT_R11G11B10_FLOAT
+        || rtv.view_mip != 0
+    {
+        return Err(Stage::ColourRtv);
+    }
+    if !receipt
+        .views
+        .iter()
+        .all(|facts| extent(facts, width, height))
+        || c.format != DXGI_FORMAT_R11G11B10_FLOAT
+        || m.format != DXGI_FORMAT_R16G16_FLOAT
+        || !requirement.accepts(d.format)
+        || matches!(requirement, DepthRequirement::Raster)
+            && receipt.views.iter().any(|facts| facts.sample_quality != 0)
+    {
+        return Err(Stage::ExtentFormat);
+    }
+    Ok(())
+}
+
 /// The full reader. Supplies native resource/camera/rect/frame facts only; the caller supplies
 /// the verified session, source, submission, scope, role, screen and eligibility facts.
 fn read_inputs(
@@ -1040,24 +1079,16 @@ fn read_inputs(
     }
     r.receipt.camera_read = 1;
     let native = r.receipt.native;
-    let (mut colour, mut motion) = (Target::default(), Target::default());
-    let (mut depth_texture, mut depth_view) = (0u64, 0u64);
-    if !load(target_at(before.renderer, before.colour), &mut colour)
-        || !load(target_at(before.renderer, before.motion), &mut motion)
-        || !load(depth_at(before.renderer, before.depth), &mut depth_texture)
-        || !load(
-            depth_at(before.renderer, before.depth).wrapping_add(0x88),
-            &mut depth_view,
-        )
-    {
-        return Err(Stage::TargetRead);
-    }
-    r.receipt.expected = [colour.texture, motion.texture, depth_texture];
-    let devices = leaves.owner(lease, before.context, before.chain);
+    let slots = [before.colour, before.motion, before.depth];
+    let records = InputRecords::read(before.renderer, slots).ok_or(Stage::TargetRead)?;
+    let colour = records.colour;
+    let depth_texture = records.depth;
+    r.receipt.expected = [colour.texture, records.motion.texture, depth_texture];
+    let devices = native::owner(lease, before.context, before.chain);
     if devices.immediate == 0 {
         return Err(Stage::Context);
     }
-    if !leaves.same_native(devices.device, before.device as u64)
+    if !same_native(devices.device, before.device as u64)
         || devices.chain_device_read == 0
         || !same_object(devices.device, devices.chain_device)
     {
@@ -1065,51 +1096,21 @@ fn read_inputs(
     }
     let full = producer.is_none();
     let (admitted, count, viewport) =
-        active_full_viewport(leaves, before.context, before.width, before.height, full);
+        active_full_viewport(before.context, before.width, before.height, full);
     r.receipt.viewport_count = count;
     r.receipt.viewport = viewport;
     if !admitted {
         return Err(Stage::ViewportBounds);
     }
-    let views = [
-        (
-            SLOT_COLOUR,
-            colour.srv,
-            colour.texture,
-            Some(DXGI_FORMAT_R11G11B10_FLOAT),
-            Stage::ColourSrv,
-        ),
-        (
-            SLOT_MOTION,
-            motion.srv,
-            motion.texture,
-            Some(DXGI_FORMAT_R16G16_FLOAT),
-            Stage::MotionSrv,
-        ),
-        (SLOT_DEPTH, depth_view, depth_texture, None, Stage::DepthSrv),
-    ];
-    for (index, (slot, view, expected, format, stage)) in views.into_iter().enumerate() {
-        let rc = &mut r.receipt;
-        let check = ViewCheck {
-            facts: &mut rc.views[index],
-            resource_match: &mut rc.resource_match[index],
-            device_match: &mut rc.device_match[index],
-        };
-        if !view_texture(
-            leaves,
-            lease,
-            slot,
-            view,
-            expected,
-            devices.device,
-            format,
-            check,
-        ) {
-            return Err(stage);
-        }
-    }
+    lease_views(
+        lease,
+        &records,
+        devices.device,
+        DepthRequirement::Temporal,
+        &mut r.receipt,
+    )?;
     let [c, m, d] = r.receipt.views;
-    r.receipt.swap = leaves.swap(before.chain);
+    r.receipt.swap = native::swap(before.chain);
     let swap = r.receipt.swap;
     if swap.read == 0
         || swap.window != before.window as u64
@@ -1119,26 +1120,13 @@ fn read_inputs(
     {
         return Err(Stage::Swap);
     }
-    r.receipt.rtv = leaves.resource(lease, NO_SLOT, colour.rtv, true);
-    let rtv = r.receipt.rtv;
-    if !same_object(rtv.identity, c.identity)
-        || rtv.view_dimension != D3D11_RTV_DIMENSION_TEXTURE2D
-        || rtv.view_format != DXGI_FORMAT_R11G11B10_FLOAT
-        || rtv.view_mip != 0
-    {
-        return Err(Stage::ColourRtv);
-    }
-    if !extent(&c, before.width, before.height)
-        || !extent(&d, before.width, before.height)
-        || !extent(&m, before.width, before.height)
-        || c.format != DXGI_FORMAT_R11G11B10_FLOAT
-        || m.format != DXGI_FORMAT_R16G16_FLOAT
-        || (d.format != DXGI_FORMAT_R24G8_TYPELESS
-            && d.format != DXGI_FORMAT_R32_TYPELESS
-            && d.format != DXGI_FORMAT_R32_FLOAT)
-    {
-        return Err(Stage::ExtentFormat);
-    }
+    validate_views(
+        lease,
+        colour.rtv,
+        [before.width, before.height],
+        DepthRequirement::Temporal,
+        &mut r.receipt,
+    )?;
     let mut raster = NO_RASTER;
     if let Some(p) = producer {
         raster.xywh.copy_from_slice(&p.actual_raster[..4]);
@@ -1164,16 +1152,9 @@ fn read_inputs(
     let width = raster.crop[2].wrapping_sub(raster.crop[0]) as u32;
     let height = raster.crop[3].wrapping_sub(raster.crop[1]) as u32;
     // Optional allocations; a refused one excludes only its consumer.
-    auxiliary(
-        leaves,
-        lease,
-        &before,
-        devices.device,
-        14,
-        SLOT_REFRACTION_NORMALS,
-    );
-    auxiliary(leaves, lease, &before, devices.device, 30, SLOT_PIPBOY);
-    auxiliary(leaves, lease, &before, devices.device, 15, SLOT_VATS);
+    auxiliary(lease, &before, devices.device, 14, SLOT_REFRACTION_NORMALS);
+    auxiliary(lease, &before, devices.device, 30, SLOT_PIPBOY);
+    auxiliary(lease, &before, devices.device, 15, SLOT_VATS);
     let history = HISTORY.get();
     let previous_raster = if history.seen && history.frame != before.frame {
         Some(history.raster)
@@ -1226,7 +1207,7 @@ fn read_inputs(
         return Err(Stage::StateChanged);
     }
     let (admitted, count, confirmed_viewport) =
-        active_full_viewport(leaves, before.context, before.width, before.height, full);
+        active_full_viewport(before.context, before.width, before.height, full);
     r.receipt.confirmed_viewport_count = count;
     r.receipt.confirmed_viewport = confirmed_viewport;
     if !admitted || bits(&viewport) != bits(&confirmed_viewport) {
@@ -1236,6 +1217,9 @@ fn read_inputs(
         && !depth.is_some_and(|depth| depth_domains::snapshot_current(depth, p, report))
     {
         return Err(Stage::ProducerChanged);
+    }
+    if !records.current(before.renderer, slots) {
+        return Err(Stage::StateChanged);
     }
     let mut confirmed = NO_CAMERA;
     if !read_camera(selected, &mut confirmed) || !same_camera(&native, &confirmed) {
@@ -1260,7 +1244,7 @@ fn read_inputs(
             previous.camera != before.camera,
             before.frame != previous.frame.wrapping_add(1),
             previous.width != width || previous.height != height,
-            !same_raster(&previous.raster, &raster),
+            !previous.raster.same_bits(&raster),
             !close_matrix(
                 &native.previous_view_projection_unjittered,
                 &previous.native.view_projection_unjittered,
@@ -1301,7 +1285,7 @@ fn read_inputs(
             &native.view_projection_unjittered,
             &history.native.view_projection_unjittered,
         )
-        || !same_raster(&history.raster, &raster)
+        || !history.raster.same_bits(&raster)
     {
         return Err(Stage::HistoryChanged);
     }
@@ -1346,8 +1330,6 @@ fn read_inputs(
 /// Raster/resource lease only. No temporal camera, history or depth admission. All downstream
 /// allocations are conservatively required before native reduction.
 fn read_raster(
-    leaves: &Leaves,
-    depth: Option<&depth_domains::Leaves>,
     lease: Lease,
     frame: &rsf_game_render_pass,
     producer: Option<&Snapshot>,
@@ -1369,7 +1351,7 @@ fn read_raster(
         return None;
     }
     if let Some(p) = producer
-        && (!depth.is_some_and(|depth| depth_domains::raster_current(depth, p))
+        && (!depth_domains::raster_current(p)
             || p.native_frame != u64::from(before.frame)
             || p.world_camera_key != view
             || p.device_context_key != before.context as u64
@@ -1379,33 +1361,28 @@ fn read_raster(
         return None;
     }
     let (mut colour_slot, mut motion_slot, mut depth_slot) = (0u32, 0u32, 0u32);
-    let (mut colour, mut motion) = (Target::default(), Target::default());
-    let (mut depth_texture, mut depth_srv) = (0u64, 0u64);
     if !load(targets.wrapping_add(0xdf4 + 4), &mut colour_slot)
         || colour_slot >= 101
         || !load(targets.wrapping_add(0xdf4 + 32 * 4), &mut motion_slot)
         || motion_slot >= 101
         || !load(targets.wrapping_add(0xf84 + 4), &mut depth_slot)
         || depth_slot >= 13
-        || !load(target_at(before.renderer, colour_slot), &mut colour)
-        || !load(target_at(before.renderer, motion_slot), &mut motion)
-        || !load(depth_at(before.renderer, depth_slot), &mut depth_texture)
-        || !load(
-            depth_at(before.renderer, depth_slot).wrapping_add(0x88),
-            &mut depth_srv,
-        )
     {
         return None;
     }
-    let devices = leaves.owner(lease, before.context, before.chain);
+    let slots = [colour_slot, motion_slot, depth_slot];
+    let records = InputRecords::read(before.renderer, slots)?;
+    let colour = records.colour;
+    let depth_texture = records.depth;
+    let devices = native::owner(lease, before.context, before.chain);
     if devices.immediate == 0
-        || !leaves.same_native(devices.device, before.device as u64)
+        || !same_native(devices.device, before.device as u64)
         || devices.chain_device_read == 0
         || !same_object(devices.device, devices.chain_device)
     {
         return None;
     }
-    let swap = leaves.swap(before.chain);
+    let swap = native::swap(before.chain);
     if swap.read == 0
         || swap.window != before.window as u64
         || swap.width != before.width
@@ -1414,88 +1391,38 @@ fn read_raster(
     {
         return None;
     }
-    let mut views = [ResourceFacts::default(); 3];
-    let (mut matches, mut devices_match) = ([0u32; 3], [0u32; 3]);
-    let checks = [
-        (
-            SLOT_COLOUR,
-            colour.srv,
-            colour.texture,
-            DXGI_FORMAT_R11G11B10_FLOAT,
-        ),
-        (
-            SLOT_MOTION,
-            motion.srv,
-            motion.texture,
-            DXGI_FORMAT_R16G16_FLOAT,
-        ),
-        (
-            SLOT_DEPTH,
-            depth_srv,
-            depth_texture,
-            DXGI_FORMAT_R24_UNORM_X8_TYPELESS,
-        ),
-    ];
-    for (index, (slot, view, expected, format)) in checks.into_iter().enumerate() {
-        let check = ViewCheck {
-            facts: &mut views[index],
-            resource_match: &mut matches[index],
-            device_match: &mut devices_match[index],
-        };
-        if !view_texture(
-            leaves,
-            lease,
-            slot,
-            view,
-            expected,
-            devices.device,
-            Some(format),
-            check,
-        ) {
-            return None;
-        }
-    }
+    let mut receipt = Reading::new().receipt;
+    lease_views(
+        lease,
+        &records,
+        devices.device,
+        DepthRequirement::Raster,
+        &mut receipt,
+    )
+    .ok()?;
     if colour.rtv == 0 {
         return None;
     }
-    let [c, m, d] = views;
-    let rtv = leaves.resource(lease, NO_SLOT, colour.rtv, true);
-    if !same_object(rtv.identity, c.identity)
-        || rtv.view_format != DXGI_FORMAT_R11G11B10_FLOAT
-        || rtv.view_dimension != D3D11_RTV_DIMENSION_TEXTURE2D
-        || rtv.view_mip != 0
-        || !extent(&c, before.width, before.height)
-        || c.format != DXGI_FORMAT_R11G11B10_FLOAT
-        || !extent(&d, before.width, before.height)
-        || d.format != DXGI_FORMAT_R24G8_TYPELESS
-        || !extent(&m, before.width, before.height)
-        || m.format != DXGI_FORMAT_R16G16_FLOAT
-        || c.sample_quality != 0
-        || d.sample_quality != 0
-        || m.sample_quality != 0
-    {
-        return None;
-    }
+    validate_views(
+        lease,
+        colour.rtv,
+        [before.width, before.height],
+        DepthRequirement::Raster,
+        &mut receipt,
+    )
+    .ok()?;
+    let [c, m, d] = receipt.views;
     // No inactive-consumer predicate has been established. Require all three native
     // allocations, independently, rather than omitting a missing field.
-    let refraction = auxiliary(
-        leaves,
-        lease,
-        &before,
-        devices.device,
-        14,
-        SLOT_REFRACTION_NORMALS,
-    );
-    let pipboy = auxiliary(leaves, lease, &before, devices.device, 30, SLOT_PIPBOY);
-    let vats = auxiliary(leaves, lease, &before, devices.device, 15, SLOT_VATS);
+    let refraction = auxiliary(lease, &before, devices.device, 14, SLOT_REFRACTION_NORMALS);
+    let pipboy = auxiliary(lease, &before, devices.device, 30, SLOT_PIPBOY);
+    let vats = auxiliary(lease, &before, devices.device, 15, SLOT_VATS);
     if !refraction || !pipboy || !vats {
         return None;
     }
     let mut after = State::default();
     let (mut confirmed_graph, mut confirmed_view) = (0usize, 0u64);
     let (mut confirmed_colour, mut confirmed_motion, mut confirmed_depth) = (0u32, 0u32, 0u32);
-    let (mut colour_target, mut motion_target) = (Target::default(), Target::default());
-    let (mut confirmed_depth_texture, mut confirmed_depth_srv) = (0u64, 0u64);
     if owner(&mut after).is_err()
         || !same_native_owner(&before, &after)
         || !load(base.wrapping_add(WORLD_GRAPH_POINTER), &mut confirmed_graph)
@@ -1508,26 +1435,12 @@ fn read_raster(
         || confirmed_motion != motion_slot
         || !load(targets.wrapping_add(0xf84 + 4), &mut confirmed_depth)
         || confirmed_depth != depth_slot
-        || !load(target_at(before.renderer, colour_slot), &mut colour_target)
-        || colour != colour_target
-        || !load(target_at(before.renderer, motion_slot), &mut motion_target)
-        || motion != motion_target
-        || !load(
-            depth_at(before.renderer, depth_slot),
-            &mut confirmed_depth_texture,
-        )
-        || confirmed_depth_texture != depth_texture
-        || !load(
-            depth_at(before.renderer, depth_slot).wrapping_add(0x88),
-            &mut confirmed_depth_srv,
-        )
-        || confirmed_depth_srv != depth_srv
+        || !records.current(before.renderer, slots)
     {
         return None;
     }
     if let Some(p) = producer
-        && (p.depth_key != depth_texture
-            || !depth.is_some_and(|depth| depth_domains::raster_current(depth, p)))
+        && (p.depth_key != depth_texture || !depth_domains::raster_current(p))
     {
         return None;
     }
@@ -1556,7 +1469,6 @@ fn read_raster(
 
 /// Logical FrameBuffer0 resolved after imagespace.
 fn read_framebuffer(
-    leaves: &Leaves,
     lease: Lease,
     r: &mut FramebufferReceipt,
     owner_failure: &mut Stage,
@@ -1581,12 +1493,12 @@ fn read_framebuffer(
     if !target_read || target.rtv == 0 {
         return Err(Framebuffer::Target);
     }
-    let devices = leaves.owner(lease, before.context, before.chain);
+    let devices = native::owner(lease, before.context, before.chain);
     if devices.immediate == 0 {
         return Err(Framebuffer::Context);
     }
-    let facts = leaves.resource(lease, SLOT_COLOUR, target.rtv, true);
-    if !leaves.same_native(devices.device, before.device as u64) {
+    let facts = native::resource(lease, SLOT_COLOUR, target.rtv, true);
+    if !same_native(devices.device, before.device as u64) {
         return Err(Framebuffer::Device);
     }
     // A missing resource or a failed Texture2D query.
@@ -1594,7 +1506,7 @@ fn read_framebuffer(
     if facts.pointer == 0 {
         return Err(Framebuffer::Resource);
     }
-    if target.texture != 0 && !leaves.same_native(facts.identity, target.texture) {
+    if target.texture != 0 && !same_native(facts.identity, target.texture) {
         return Err(Framebuffer::TargetTexture);
     }
     if devices.chain_device_read == 0 || !same_object(devices.device, devices.chain_device) {
@@ -1617,7 +1529,7 @@ fn read_framebuffer(
     if facts.view_dimension != D3D11_RTV_DIMENSION_TEXTURE2D || facts.view_mip != 0 {
         return Err(Framebuffer::Rtv);
     }
-    r.swap = leaves.swap(before.chain);
+    r.swap = native::swap(before.chain);
     if r.swap.read == 0 {
         return Err(Framebuffer::Swap);
     }
@@ -1741,13 +1653,10 @@ unsafe extern "C" fn rsf_fallout4_inputs_read(
 /// The raster reader. `output` is cleared first and written only on admission.
 ///
 /// # Safety
-/// `leaves` is the complete process-lived table, `depth` the depth-domain table or null, `lease`
-/// the caller's empty `NativeInputLease`, `frame` readable, `producer` null or readable and
+/// `lease` is the caller's empty `NativeInputLease`, `frame` readable, `producer` null or readable and
 /// `output` writable.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fallout4_inputs_read_raster(
-    leaves: *const NativeLeaves,
-    depth: *const depth_domains::NativeLeaves,
     lease: Lease,
     frame: *const rsf_game_render_pass,
     producer: *const Snapshot,
@@ -1758,16 +1667,12 @@ unsafe extern "C" fn rsf_fallout4_inputs_read_raster(
     }
     // SAFETY: the SDK record holds only integers, floats and raw pointers.
     unsafe { output.write(std::mem::zeroed()) };
-    let Some(leaves) = (unsafe { complete(leaves) }) else {
-        return false;
-    };
     if lease.is_null() || frame.is_null() {
         return false;
     }
     let frame = unsafe { frame.read() };
-    let depth = unsafe { depth_domains::complete(depth) };
     let producer = unsafe { producer.as_ref() }.copied();
-    match read_raster(&leaves, depth.as_ref(), lease, &frame, producer.as_ref()) {
+    match read_raster(lease, &frame, producer.as_ref()) {
         Some(pass) => {
             unsafe { output.write(pass) };
             true
@@ -1803,7 +1708,7 @@ unsafe extern "C" fn rsf_fallout4_inputs_read_framebuffer(
     }
     let mut receipt = FramebufferReceipt::default();
     let mut owner_failure = Stage::Owner;
-    match read_framebuffer(&leaves, lease, &mut receipt, &mut owner_failure) {
+    match read_framebuffer(lease, &mut receipt, &mut owner_failure) {
         Ok(()) => {
             framebuffer_receipt(
                 &leaves,
@@ -1845,7 +1750,26 @@ mod tests {
         );
     }
 
-    // tests/fallout4_input_state.cpp checks the same rules on the C++ header.
+    #[test]
+    fn lease_detects_replaced_records_at_unchanged_slots() {
+        let mut renderer = [0u64; 0x2000 / size_of::<u64>()];
+        let base = renderer.as_mut_ptr() as usize;
+        let slots = [1, 32, 1];
+        let original = InputRecords::read(base, slots).unwrap();
+        assert!(original.current(base, slots));
+        for (slot, offset) in [(1, 16), (32, 24)] {
+            let index = (target_at(base, slot) - base + offset) / size_of::<u64>();
+            renderer[index] = 42;
+            std::hint::black_box(&renderer);
+            assert!(!original.current(base, slots));
+            renderer[index] = 0;
+        }
+        let index = (depth_at(base, slots[2]) - base + 0x88) / size_of::<u64>();
+        renderer[index] = 42;
+        std::hint::black_box(&renderer);
+        assert!(!original.current(base, slots));
+    }
+
     #[test]
     fn owner_and_state_compare_exactly_their_fields() {
         let before = State::default();
@@ -1897,9 +1821,25 @@ mod tests {
         let mut other = nan;
         other.viewport[1] = f32::from_bits(0x7fc0_0124);
         assert!(!same_native_state(&nan, &other));
-        let mut after = before;
-        after.default_viewport = 1;
-        assert!(!same_native_state(&before, &after) && same_native_owner(&before, &after));
+        let temporal_only: [fn(&mut State); 2] = [
+            |state| state.default_viewport = 1,
+            |state| state.dynamic_viewport = 1,
+        ];
+        for change in temporal_only {
+            let mut after = before;
+            change(&mut after);
+            assert!(!same_native_state(&before, &after) && same_native_owner(&before, &after));
+        }
+        for index in 0..before.ratio.len() {
+            let mut after = before;
+            after.ratio[index] = 1.0;
+            assert!(!same_native_state(&before, &after) && same_native_owner(&before, &after));
+        }
+        for index in 0..before.viewport.len() {
+            let mut after = before;
+            after.viewport[index] = 1.0;
+            assert!(!same_native_state(&before, &after) && same_native_owner(&before, &after));
+        }
     }
 
     #[test]
@@ -1910,9 +1850,12 @@ mod tests {
         b.jitter_ndc[1] = -0.0;
         assert!(!same_camera(&a, &b));
         let mut raster = NO_RASTER;
-        assert!(same_raster(&raster, &NO_RASTER));
+        assert!(raster.same_bits(&NO_RASTER));
+        raster.xywh[3] = -0.0;
+        assert!(!raster.same_bits(&NO_RASTER));
+        raster = NO_RASTER;
         raster.crop[3] = 1;
-        assert!(!same_raster(&raster, &NO_RASTER));
+        assert!(!raster.same_bits(&NO_RASTER));
     }
 
     #[test]

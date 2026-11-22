@@ -37,7 +37,7 @@ fn completion_result(done: u64, value: u64) -> Option<i32> {
     }
 }
 
-fn wait_for_value(
+pub(super) fn wait_for_value(
     value: u64,
     timeout_ms: u32,
     mut completed: impl FnMut() -> u64,

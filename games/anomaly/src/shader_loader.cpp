@@ -197,11 +197,7 @@ const char* compatibility_name(Compatibility value) noexcept
 }
 const char* outcome_name(Outcome value) noexcept
 {
-    static constexpr const char* names[] = {"not_allowlisted", "replaced", "replaced_from_cache", "unknown_caller",
-        "unreadable", "original_compile_failed", "original_mismatch", "motion_compile_failed", "reflection_mismatch",
-        "create_failed"};
-    const auto i = static_cast<std::size_t>(value);
-    return i < std::size(names) ? names[i] : "unknown";
+    return rsf_anomaly_shader_outcome_name(static_cast<uint8_t>(value));
 }
 
 Manifest::Manifest(rsf_anomaly_shader_admitted* owned) noexcept
@@ -311,10 +307,6 @@ ShaderLoader::ShaderLoader(Manifest manifest, std::filesystem::path deployment, 
 ShaderLoader::ShaderLoader(Manifest manifest, Compiler& compiler, Reflector& reflector, Prepare prepare)
     : manifest_(std::move(manifest)), compiler_(compiler), reflector_(reflector), runtime_prepare_(std::move(prepare)) {}
 
-const ManifestEntry* ShaderLoader::lookup(std::span<const std::byte> source) const
-{
-    return manifest_.find(sha256_hex(source));
-}
 std::string ShaderLoader::cache_key(const ShaderRequest& request, const ManifestEntry& entry) const
 {
     const RequestView input(request);
@@ -325,8 +317,9 @@ std::string ShaderLoader::cache_key(const ShaderRequest& request, const Manifest
 }
 Prepared ShaderLoader::prepare(const ShaderRequest& request)
 {
-    const auto* entry = lookup(request.source);
-    if (!entry || !rsf_anomaly_shader_stage_matches(bytes(request.target), static_cast<uint8_t>(entry->stage))) return {};
+    const auto* row = rsf_anomaly_shader_match_request(manifest_.admitted(), bytes(request.source), bytes(request.target));
+    if (!row) return {};
+    const auto* entry = &manifest_entry(*row);
     if (runtime_prepare_) return runtime_prepare_(request, *entry);
     const RequestView input(request);
     const auto id = identity(manifest_, *entry);

@@ -6,6 +6,8 @@ static REGISTERED: AtomicU32 = AtomicU32::new(0);
 static SR: AtomicU32 = AtomicU32::new(0);
 static MOTION: AtomicU32 = AtomicU32::new(0);
 static FG: AtomicU32 = AtomicU32::new(0);
+static RECEIPTS: AtomicU32 = AtomicU32::new(0);
+static INPUT_ACCEPTS: AtomicBool = AtomicBool::new(false);
 static INPUT: AtomicU32 = AtomicU32::new(0);
 static OVERLAY: AtomicU32 = AtomicU32::new(0);
 static SINK: AtomicU32 = AtomicU32::new(0);
@@ -52,11 +54,12 @@ unsafe extern "C" fn fg_installed() -> bool {
     FG.load(SeqCst) != 0
 }
 unsafe extern "C" fn input_observation(_: *mut *const c_char) -> bool {
+    RECEIPTS.fetch_add(1, SeqCst);
     true
 }
 unsafe extern "C" fn input_hook(_: usize, _: *mut *const c_char) -> bool {
     INPUT.fetch_add(1, SeqCst);
-    true
+    INPUT_ACCEPTS.load(SeqCst)
 }
 unsafe extern "C" fn overlay(_: HMODULE, _: *const u16, _: rsf_game_log_fn) -> bool {
     OVERLAY.fetch_add(1, SeqCst);
@@ -69,7 +72,7 @@ unsafe extern "C" fn prepare(options: *const SessionOptions, session: *mut *mut 
     PREPARED.fetch_add(1, SeqCst);
     let options = unsafe { &*options };
     let probe = unsafe { &*options.probe };
-    let valid = options.struct_size == 128
+    let valid = options.struct_size as usize == size_of::<SessionOptions>()
         && options.abi_version == SESSION_ABI_VERSION
         && !options.plugin_path.is_null()
         && probe.pe_machine == AMD64
@@ -145,7 +148,7 @@ fn retry_repeats_only_unfinished_steps() {
     let request = Request {
         ini: &ini,
         build: 0,
-        identity: &builds[0],
+        builds: &builds,
         observe: true,
         overlay: true,
     };
@@ -163,13 +166,16 @@ fn retry_repeats_only_unfinished_steps() {
         OVERLAY_REFUSED
     );
     assert_eq!(counts(), [1, 1, 1, 1, 1, 1, 1, 1, 0]);
+    assert_eq!(RECEIPTS.load(SeqCst), 1);
+    INPUT_ACCEPTS.store(true, SeqCst);
     OVERLAY_ACCEPTS.store(true, SeqCst);
     assert_eq!(
         orchestrate(&mut entry, &leaves, &request, &runtime, register_options),
         READY
     );
     assert!(entry.started && entry.observation == Observation::Active);
-    assert_eq!(counts(), [1, 1, 1, 1, 1, 1, 1, 2, 1]);
+    assert_eq!(counts(), [1, 1, 1, 1, 2, 1, 1, 2, 1]);
+    assert_eq!(RECEIPTS.load(SeqCst), 1);
     assert!(OPTIONS_VALID.load(SeqCst));
 
     PREPARE_RESULT.store(-4, SeqCst);
@@ -179,12 +185,12 @@ fn retry_repeats_only_unfinished_steps() {
         PREPARE_REFUSED
     );
     assert!(!entry.session.is_null() && entry.observation == Observation::RetainedAfterRefusal);
-    assert_eq!(counts(), [2, 2, 2, 2, 2, 2, 1, 2, 1]);
+    assert_eq!(counts(), [2, 2, 2, 2, 3, 2, 1, 2, 1]);
     assert_eq!(
         orchestrate(&mut entry, &leaves, &request, &runtime, register_options),
         PREPARE_REFUSED
     );
-    assert_eq!(counts(), [2, 2, 2, 2, 2, 2, 1, 2, 1]);
+    assert_eq!(counts(), [2, 2, 2, 2, 3, 2, 1, 2, 1]);
     assert_eq!(QUIESCED.load(SeqCst), 1);
     assert_eq!(STOPPED.load(SeqCst), 0);
     let retained = entry.session;
@@ -195,7 +201,7 @@ fn retry_repeats_only_unfinished_steps() {
         PREPARE_REFUSED
     );
     assert_eq!(entry.session, retained);
-    assert_eq!(counts(), [2, 2, 2, 2, 2, 2, 1, 2, 1]);
+    assert_eq!(counts(), [2, 2, 2, 2, 3, 2, 1, 2, 1]);
     assert_eq!(STOPPED.load(SeqCst), 1);
 
     PREPARE_RESULT.store(RSF_OK, SeqCst);
@@ -204,7 +210,7 @@ fn retry_repeats_only_unfinished_steps() {
         orchestrate(&mut entry, &leaves, &request, &runtime, register_options),
         READY
     );
-    assert_eq!(counts(), [2, 2, 2, 2, 2, 3, 2, 3, 2]);
+    assert_eq!(counts(), [2, 2, 2, 2, 3, 3, 2, 3, 2]);
     assert!(entry.started && entry.observation == Observation::Active);
     assert_eq!(QUIESCED.load(SeqCst), 3);
     assert_eq!(STOPPED.load(SeqCst), 2);
@@ -216,13 +222,13 @@ fn retry_repeats_only_unfinished_steps() {
         START_REFUSED
     );
     assert!(!entry.session.is_null() && entry.observation == Observation::Prepared);
-    assert_eq!(counts(), [3, 3, 3, 3, 3, 4, 3, 3, 2]);
+    assert_eq!(counts(), [3, 3, 3, 3, 4, 4, 3, 3, 2]);
     START_RESULT.store(RSF_OK, SeqCst);
     assert_eq!(
         orchestrate(&mut entry, &leaves, &request, &runtime, register_options),
         READY
     );
-    assert_eq!(counts(), [3, 3, 3, 3, 3, 4, 4, 4, 3]);
+    assert_eq!(counts(), [3, 3, 3, 3, 4, 4, 4, 4, 3]);
     assert!(entry.started && entry.observation == Observation::Active);
     assert_eq!(QUIESCED.load(SeqCst), 3);
     assert_eq!(STOPPED.load(SeqCst), 2);

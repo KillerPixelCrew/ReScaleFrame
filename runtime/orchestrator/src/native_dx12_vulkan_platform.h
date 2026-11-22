@@ -26,15 +26,6 @@ typedef struct rsf_dx12vk_platform {
 extern "C" {
 #endif
 const rsf_dx12vk_platform* rsf_dx12vk_platform_ops();
-int32_t rsf_core_dx12vk_interop_create(const rsf_dx12vk_platform*, const rsf_srvk_setup*,
-    const rsf_dx12vk_interop_callbacks*, uint32_t timeline_enabled, rsf_dx12vk_interop**);
 #ifdef __cplusplus
-}
-#endif
-
-#ifdef __cplusplus
-namespace dx12vk_platform {
-int32_t lookup_proc(rsf_vk_get_proc, void*, const char*, rsf_vk_function*) noexcept;
-int32_t adapter_luid(const rsf_srvk_setup*, uint64_t*) noexcept;
 }
 #endif

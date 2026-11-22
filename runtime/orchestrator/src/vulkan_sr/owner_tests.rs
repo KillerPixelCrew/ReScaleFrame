@@ -29,12 +29,15 @@ enum Call {
     Destroy,
     Clear,
     Release(u64, u64),
+    ReleaseImage(u64),
+    ReleaseMemory(u64),
     Close,
 }
 
 struct Fake {
     calls: Vec<Call>,
     effective: u64,
+    blit_features: u32,
     fail_allocation: bool,
     dispatch_result: i32,
     destroy_result: i32,
@@ -45,6 +48,7 @@ impl Default for Fake {
         Self {
             calls: Vec::new(),
             effective: 33,
+            blit_features: 0,
             fail_allocation: false,
             dispatch_result: 0,
             destroy_result: 0,
@@ -83,14 +87,6 @@ impl Fake {
             runtime_directory_utf8: c"C:\\payload".as_ptr(),
         }
     }
-}
-
-// The stubs have the same calling convention as the C++ platform table.
-macro_rules! leaf {
-    (|$($arg:tt: $ty:ty),*| -> $ret:ty $body:block) => {{
-        unsafe extern "C" fn callback($($arg: $ty),*) -> $ret $body
-        callback
-    }};
 }
 
 static DLSS: rsf_vkdlss_platform = rsf_vkdlss_platform {
@@ -274,8 +270,16 @@ static FFX_IMAGES: ImageOps = ImageOps {
     })),
     create_view: None,
     destroy_view: None,
-    destroy_image: None,
-    free_memory: None,
+    destroy_image: Some(leaf!(|native: Handle, image: u64| -> () {
+        unsafe { fake(native) }
+            .calls
+            .push(Call::ReleaseImage(image));
+    })),
+    free_memory: Some(leaf!(|native: Handle, memory: u64| -> () {
+        unsafe { fake(native) }
+            .calls
+            .push(Call::ReleaseMemory(memory));
+    })),
     create_fence: None,
     destroy_fence: None,
     wait_fence: None,
@@ -364,9 +368,6 @@ pub(super) static PLATFORM: Platform = Platform {
         image_user: leaf!(|handle: Handle| -> Handle { handle }),
         images: &FFX_IMAGES,
         memory_type_count: leaf!(|_: Handle| -> u32 { 3 }),
-        release: leaf!(|handle: Handle, image: u64, memory: u64| -> () {
-            unsafe { fake(handle).calls.push(Call::Release(image, memory)) }
-        }),
         barrier: leaf!(|handle: Handle, _: Handle, plan: *const Barrier| -> () {
             unsafe { fake(handle).calls.push(Call::Barrier(*plan)) }
         }),
@@ -426,7 +427,7 @@ pub(super) static PLATFORM: Platform = Platform {
     fallback_probe: leaf!(|call: &rsf_srvk_fallback, out: &mut Blit| -> i32 {
         out.barrier = Some(unused);
         out.blit = Some(unused);
-        out.features = call.output.copy_source;
+        out.features = unsafe { fake(call.device) }.blit_features;
         0
     }),
     fallback_record: leaf!(|_: &rsf_srvk_fallback, _: &Blit| -> i32 { 123 }),
@@ -579,12 +580,12 @@ fn ffx_owner_reuses_staging_and_only_publishes_an_accepted_output() {
             Call::Dispatch(reset, 5, 15, f32::MAX, 0.75),
         ]);
         if !failure {
+            expected.push(Call::Capture("sr-output-linear".into()));
             expected.push(Call::Sharpen);
             if sequence == 1 {
                 expected.push(Call::Log);
             }
             expected.extend([
-                Call::Capture("sr-output-linear".into()),
                 Call::Barrier(Barrier::with_access(14, GENERAL, TRANSFER_SRC, 0x40, 0x800)),
                 Call::Copy(ImageCopy::transfer(14, 4, [128, 72])),
                 Call::Barrier(Barrier::with_access(14, TRANSFER_SRC, GENERAL, 0x800, 0x40)),
@@ -610,8 +611,10 @@ fn ffx_owner_reuses_staging_and_only_publishes_an_accepted_output() {
     assert!(state.calls.ends_with(&[
         Call::Destroy,
         Call::Clear,
-        Call::Release(14, 114),
-        Call::Release(15, 115),
+        Call::ReleaseImage(14),
+        Call::ReleaseMemory(114),
+        Call::ReleaseImage(15),
+        Call::ReleaseMemory(115),
         Call::Close
     ]));
     assert!(
@@ -643,10 +646,11 @@ fn ffx_creation_refusal_unwinds_partial_resources_and_native_aa_skips_the_query(
             Call::Create(29, 61),
             Call::Allocate(14, 128, 72, 15),
             Call::Allocate(15, 128, 72, 6),
+            Call::ReleaseImage(15),
             Call::Destroy,
             Call::Clear,
-            Call::Release(14, 114),
-            Call::Release(15, 0),
+            Call::ReleaseImage(14),
+            Call::ReleaseMemory(114),
             Call::Close,
         ]
     );
@@ -669,12 +673,62 @@ fn ffx_creation_refusal_unwinds_partial_resources_and_native_aa_skips_the_query(
             Call::Create(29, 61),
             Call::Destroy,
             Call::Clear,
-            Call::Release(0, 0),
-            Call::Release(0, 0),
             Call::Close,
         ]
     );
     assert!(owner.is_null());
+}
+
+#[test]
+fn ffx_create_preserves_cleanup_owner_when_the_effect_refuses_rollback() {
+    let mut state = Fake {
+        fail_allocation: true,
+        destroy_result: FAILED,
+        ..Fake::default()
+    };
+    let setup = state.setup(RSF_SR_FSR3);
+    let mut owner = ptr::null_mut();
+    assert_eq!(
+        unsafe { rsf_core_srvk_create(Some(&PLATFORM), &setup, &mut owner) },
+        INIT_FAILED
+    );
+    assert!(!owner.is_null());
+    let owner = owner.cast::<Owner>();
+    assert_eq!(state.calls.last(), Some(&Call::Destroy));
+    assert!(!state.calls.contains(&Call::Close));
+    assert!(!state.calls.contains(&Call::ReleaseImage(14)));
+    assert!(
+        DISPATCH
+            .lock()
+            .unwrap()
+            .contains_key(&(setup.device as usize))
+    );
+
+    let (mut width, mut height) = (0, 0);
+    assert_eq!(
+        unsafe { rsf_core_srvk_plan(owner, &mut width, &mut height) },
+        NOT_READY
+    );
+    let record = frame_record();
+    let input = frame_input(&setup, &record);
+    assert_eq!(
+        unsafe { rsf_core_srvk_evaluate(owner, setup.device, &input) },
+        NOT_READY
+    );
+    state.destroy_result = 0;
+    assert_eq!(unsafe { rsf_core_srvk_destroy(owner) }, 0);
+    assert!(state.calls.ends_with(&[
+        Call::Clear,
+        Call::ReleaseImage(14),
+        Call::ReleaseMemory(114),
+        Call::Close
+    ]));
+    assert!(
+        !DISPATCH
+            .lock()
+            .unwrap()
+            .contains_key(&(setup.device as usize))
+    );
 }
 
 #[test]
@@ -690,7 +744,10 @@ fn ffx_memory_type_prefers_first_device_local_else_last_compatible() {
         (u32::MAX, 32, 0, Some(31)),
         (u32::MAX, 0, u32::MAX, None),
     ] {
-        assert_eq!(memory_type(required, count, local), chosen);
+        assert_eq!(
+            (MemoryChoice::PreferDeviceLocal { type_count: count }).select(required, local),
+            chosen
+        );
     }
 }
 
@@ -810,7 +867,7 @@ fn fallback_checks_admission_and_linear_blit_capabilities_before_recording() {
         unsafe { rsf_core_srvk_spatial_fallback(Some(&PLATFORM), &call) },
         NOT_SUPPORTED
     );
-    call.output.copy_source = LINEAR_BLIT;
+    state.blit_features = LINEAR_BLIT;
     assert_eq!(
         unsafe { rsf_core_srvk_spatial_fallback(Some(&PLATFORM), &call) },
         123

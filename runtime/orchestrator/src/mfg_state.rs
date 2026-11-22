@@ -2,6 +2,9 @@
 use crate::sdk_module::SdkModule;
 use std::ffi::{c_char, c_void};
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
+use windows_sys::Win32::System::LibraryLoader::{
+    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GetModuleHandleExW,
+};
 
 type Handle = *mut c_void;
 
@@ -15,10 +18,11 @@ struct Platform {
     supported: unsafe extern "C" fn(Handle) -> u32,
     load_wrapper: unsafe extern "C" fn(*const u16, u32) -> Handle,
     prepare_wrapper: unsafe extern "C" fn(Handle) -> u32,
-    prepare_provider: unsafe extern "C" fn(Handle, Handle, u32, &mut [c_char; REPORT_BYTES]) -> i32,
+    provider_module: unsafe extern "C" fn() -> Handle,
+    prepare_provider: unsafe extern "C" fn(Handle, u32, &mut [c_char; REPORT_BYTES]) -> u32,
 }
 
-const _: () = assert!(size_of::<Platform>() == 4 * size_of::<Handle>());
+const _: () = assert!(size_of::<Platform>() == 5 * size_of::<Handle>());
 
 struct State {
     wrapper: Option<SdkModule>,
@@ -92,9 +96,16 @@ unsafe extern "C" fn rsf_core_mfg_prime(
         }
         state.status = REFUSED;
     }
-    let Some(wrapper) =
-        SdkModule::adopt_system(unsafe { (platform.load_wrapper)(directory, require_signature) })
-    else {
+    // The host owns a validated, NUL-terminated directory of at most 1024 units.
+    let path: Vec<_> = (0..)
+        .map(|index| unsafe { *directory.add(index) })
+        .take_while(|&unit| unit != 0)
+        .chain("\\sl.dlss_g.dll".encode_utf16())
+        .chain([0])
+        .collect();
+    let Some(wrapper) = SdkModule::adopt_system(unsafe {
+        (platform.load_wrapper)(path.as_ptr(), require_signature)
+    }) else {
         return 0;
     };
     let maximum = unsafe { (platform.prepare_wrapper)(wrapper.as_ptr()) }.max(1);
@@ -127,11 +138,37 @@ unsafe extern "C" fn rsf_core_mfg_prepare(
         // The update guard prevents releasing the module during the call.
         (wrapper.as_ptr(), state.maximum)
     };
-    let prepared = unsafe { (platform.prepare_provider)(wrapper, get_state, maximum, report) };
-    if prepared < 0 {
-        return 0;
+    let mut get_state_owner = std::ptr::null_mut();
+    let resolved = unsafe {
+        GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+            get_state.cast(),
+            &mut get_state_owner,
+        )
+    };
+    let get_state_owner = if resolved != 0 {
+        SdkModule::adopt_system(get_state_owner)
+    } else {
+        None
+    };
+    let prepared = get_state_owner.is_some_and(|module| {
+        if module.as_ptr() != wrapper {
+            return false;
+        }
+        let provider = SdkModule::adopt_system(unsafe { (platform.provider_module)() });
+        provider.is_some_and(|provider| {
+            (unsafe { (platform.prepare_provider)(provider.as_ptr(), maximum, report) }) != 0
+        })
+    });
+    if report[0] == 0 {
+        for (dst, &byte) in report.iter_mut().zip(
+            c"RTX 40 MFG unlock refused: wrapper or provider ownership mismatch"
+                .to_bytes_with_nul(),
+        ) {
+            *dst = byte as c_char;
+        }
     }
-    owner.state().status = if prepared == 0 { REFUSED } else { READY };
+    owner.state().status = if prepared { READY } else { REFUSED };
     1
 }
 

@@ -41,6 +41,7 @@ static_assert(sizeof(rsf_reflex_audit_hook) == 3 * sizeof(void*));
 static_assert(sizeof(rsf_reflex_audit_platform) == 7 * sizeof(void*));
 
 extern "C" {
+FARPROC rsf_core_reflex_audit_query();
 void rsf_core_reflex_audit_start(rsf_backend_log_fn, void*, const rsf_reflex_audit_platform*, RsfReflexAuditEmit);
 void rsf_core_reflex_audit_stop();
 void rsf_core_reflex_audit_event(uintptr_t, uintptr_t, uint32_t, uint64_t, const void*, RsfReflexAuditEmit);
@@ -223,8 +224,7 @@ constexpr rsf_reflex_audit_platform platform{
 
 RsfNvapiQuery rsf_nvapi_query()
 {
-    const auto module = GetModuleHandleW(L"nvapi64.dll");
-    return module ? reinterpret_cast<RsfNvapiQuery>(GetProcAddress(module, "nvapi_QueryInterface")) : nullptr;
+    return reinterpret_cast<RsfNvapiQuery>(rsf_core_reflex_audit_query());
 }
 void rsf_reflex_audit_start(rsf_backend_log_fn log, void* user)
 {

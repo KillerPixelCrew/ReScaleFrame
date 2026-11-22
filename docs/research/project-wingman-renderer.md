@@ -6,8 +6,8 @@ The Rust execution port at `e2942e45` recorded an RDG packet before the compute 
 existed and keyed it by the parameter block address. A culled pass never ran the
 consumer, leaving graph references in the ledger after the allocator reclaimed them.
 The fix publishes a packet after the registered compute pass finishes setup and
-removes it either when that specific pass executes or when its tracked allocation is
-destroyed. Only the RHI command's acquired COM leases survive the graph.
+removes it either when that specific pass executes or when its graph frees the
+allocator storage. Only the RHI command's acquired COM leases survive the graph.
 
 Static follow-up used the installed Steam build `16671873`, whose executable SHA256
 matches the table below. REA confirmed the PE identity. Its Ghidra 12.1.4 provider
@@ -24,16 +24,26 @@ also read by the execution slot at `0x5c4c9c0`.
 The graph clear function at RVA `0x6553230` iterates graph + 0x38 in reverse using
 its count at graph + 0x40. At `0x655334d` it calls each tracked allocation's first
 virtual slot with a zero delete flag before emptying the array and releasing allocator
-storage. The compute owner vtable's slot points to `0x591d000`, so the detour removes
-the embedded pass key before forwarding that call. This follows the local UE4.27.2
-reference's `FRDGBuilder::Clear` and `FRDGAllocator::ReleaseAll` mechanisms. The
-local reference files used here were `RenderGraphBuilder.cpp` (SHA256
+storage. The compute owner vtable's slot points to `0x591d000`. The first fix
+(`8745ac35`) used this destructor, which covers normal graph culling. Inlined
+builder destruction can release the graph memory without invoking this slot, so
+that hook alone could leave records for an abandoned graph.
+
+Both paths call `FMemStackBase::FreeChunks` at RVA `0x53821d0` with a null next
+chunk. The clear path does so at `0x655336d`; the inlined destruction sites in
+the deferred renderer do so at `0x5984ea7` and `0x5987a38`, using the same
+builder + 0x10 relationship. The detour removes only records from the matching
+builder before forwarding the full free, without touching unrelated stacks or
+partial stack frees. The local UE4.27.2 reference confirms the shared call from
+`FMemStackBase::Flush` and `~FMemStackBase` in `MemStack.h` (SHA256
+`abe45ff86fc2555da87c2159cedf16d4959002c80e7c85bac11d1459d130080d`).
+The graph clear paths were checked in `RenderGraphBuilder.cpp` (SHA256
 `9b95e665b034b6f7da60e1da57b854eda28e102a4cc4360f5fc8f87d2f8cc814`) and
 `RenderGraphDefinitions.h` (SHA256
 `b9bc5a9034abc73805b5084ae4744bb95845940dcfd5c8583eaa7b942827bfa7`).
 
-Setup and destructor entry guards are `48895424105553565741544155415641` and
-`40534883ec20488bd9f6c201740aba20`, respectively. Prepare checks both loaded vtable
+Setup and allocator free entry guards are `48895424105553565741544155415641`
+and `488bc4488950105341574883ec48488b`, respectively. Prepare checks both loaded vtable
 slots and all five entry guards. Admission additionally matches the construction
 graph and parameter block, and both actual vtable identities. The observer starts
 admitting only after every hook is enabled, and disables admission before teardown.

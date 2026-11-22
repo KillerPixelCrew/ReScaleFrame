@@ -1,29 +1,13 @@
 // SPDX-License-Identifier: MIT
-//! Godot Vulkan session state formerly held by `vulkan.cpp`: the boot state and session identity,
-//! the requested settings and their generation, the status record (ABI 3) with its latency
-//! overlay, the configure admission, the presenter currency rule for acquire, the FG enable rule,
-//! the fixed-guide retirement, the SR and FG accounting and the engine's primary window. Auto SR
-//! and FG are resolved by the Runtime's adapter policy through the `sr_select_backend` and
-//! `fg_select_backend` leaves, for the creation owner's adapter facts and the providers this
-//! session can serve (`Vulkan::providers`); the session decides no vendor preference. The SR
-//! context owner of `rsfg_render_vulkan` is the `sr` child module. The primary window is an
-//! atomic the guarded paths read; it was a guarded global, written only by `rsfg_vk_window`. The
-//! device creation owner (resolver routes, XeSS and interop requirements and their readiness) is
-//! the `creation` child module; the admission reads its readiness directly.
-//!
-//! `vulkan.cpp` keeps its guard and every Vulkan, Streamline, XeSS, FidelityFX, presenter,
-//! capture and SR provider call. Each transition that ran under that guard still does: boot,
-//! shutdown and configure run inside `Platform::vulkan_locked`, and the render, presentation and
-//! capture leaves call the `rsf_godot_vk_*` exports while they hold it. The lock order is the
-//! guard, then `state` or `contexts`; no leaf runs while either is held.
-//!
-//! The Vulkan admission stays distinct from the D3D12 one: the shared `rsfg_configure` refusal
-//! rules in `control.rs` run first, then these device, provider and presenter checks, and the
-//! latency options are applied before the request is stored, as before.
+//! Godot Vulkan settings, provider capability snapshots and pass status. Runtime
+//! selects Auto providers and owns the reconstruction and presentation mechanisms.
+//! State transitions run under the native graphics guard, with no callbacks while
+//! a Rust state lock is held.
+
 use crate::control::default_settings;
 use crate::platform::{
-    ABI_VERSION, Platform, Settings, Setup, Status, VkFacts, VkFgPass, VkLatencyFacts,
-    VkPresentFacts, VkSrFrame, VkView,
+    ABI_VERSION, Platform, Settings, Setup, Status, VkFacts, VkLatencyFacts, VkPresentFacts,
+    VkSrFrame, VkView,
 };
 use std::ffi::{c_int, c_void};
 use std::ptr;
@@ -44,7 +28,6 @@ const FG_FSR4: u32 = 4;
 const FG_XESS: u32 = 5;
 const FG_BACKEND_AUTO: u32 = 7;
 const SCREEN_FLIGHT: u32 = 4;
-const RENDER_SR: u32 = 1;
 /// The first registered window message; the PCL ping message is one when Streamline bound it.
 const REGISTERED_MESSAGE: u32 = 0xc000;
 /// `RSF_GODOT_VK_SR_*`: how an SR pass was counted.
@@ -63,27 +46,38 @@ struct Providers {
     fg: u32,
 }
 
-/// FSR4 and XeSS FG presenters allocate their guides for one SR plan.
-fn fixed_guides(backend: u32) -> bool {
-    backend == FG_FSR4 || backend == FG_XESS
+struct Capabilities {
+    facts: VkFacts,
+    device: creation::DeviceReceipt,
+    primary: bool,
 }
 
-/// The identity of the first SR pass a fixed-guide presenter recorded.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Guides {
-    session: u64,
-    view: u32,
-    width: u32,
-    height: u32,
+impl Capabilities {
+    fn sr_choices(&self) -> u32 {
+        choice(true, SR_FSR3)
+            | choice(self.facts.streamline_ready != 0, SR_DLSS)
+            | choice(self.device.xess, SR_XESS)
+            | choice(
+                self.facts.fsr4_sr_compiled != 0
+                    && self.facts.graph_handoff != 0
+                    && self.device.interop,
+                SR_FSR4,
+            )
+    }
+
+    fn fg_choices(&self) -> u32 {
+        choice(true, FG_FSR3)
+            | choice(
+                self.facts.xess_fg_compiled != 0 && self.device.interop && self.primary,
+                FG_XESS,
+            )
+    }
 }
 
 struct State {
     settings: Settings,
     generation: u64,
     status: Status,
-    /// The generation the live presenter was created for; zero retires it at the next acquire.
-    presenter_generation: u64,
-    guides: Option<Guides>,
 }
 
 fn initial_status() -> Status {
@@ -115,8 +109,6 @@ impl Vulkan {
                 settings: default_settings(),
                 generation: 1,
                 status: initial_status(),
-                presenter_generation: 0,
-                guides: None,
             }),
             contexts: Mutex::new(sr::Contexts::default()),
             creation: creation::Creation::new(),
@@ -152,7 +144,7 @@ impl Vulkan {
         &self,
         platform: &Platform,
         settings: &Settings,
-        facts: Option<VkFacts>,
+        capabilities: Option<&Capabilities>,
     ) -> Providers {
         let auto_sr = settings.sr_backend == SR_AUTO;
         let auto_fg = settings.fg_backend == FG_BACKEND_AUTO;
@@ -163,26 +155,28 @@ impl Vulkan {
         if !auto_sr && !auto_fg {
             return providers;
         }
-        let facts = facts.unwrap_or_else(|| platform.vulkan_facts());
-        let on = |flag: u32| flag != 0;
-        let streamline = on(facts.streamline_ready);
-        let interop = self.creation.interop_ready();
-        let adapter = self.creation.adapter().unwrap_or_default();
+        let snapshot;
+        let capabilities = match capabilities {
+            Some(capabilities) => capabilities,
+            None => {
+                snapshot = self.capabilities(platform);
+                &snapshot
+            }
+        };
+        let adapter = capabilities.device.adapter.unwrap_or_default();
         if auto_sr {
-            let choices = choice(true, SR_FSR3)
-                | choice(streamline, SR_DLSS)
-                | choice(self.creation.xess_ready(), SR_XESS)
-                | choice(
-                    on(facts.fsr4_sr_compiled) && on(facts.graph_handoff) && interop,
-                    SR_FSR4,
-                );
-            providers.sr = platform.sr_select_backend(adapter.vendor, adapter.software, choices);
+            providers.sr = platform.sr_select_backend(
+                adapter.vendor,
+                adapter.software,
+                capabilities.sr_choices(),
+            );
         }
         if auto_fg {
-            let primary = !self.primary_window().is_null();
-            let choices = choice(true, FG_FSR3)
-                | choice(on(facts.xess_fg_compiled) && interop && primary, FG_XESS);
-            providers.fg = platform.fg_select_backend(adapter.vendor, adapter.software, choices);
+            providers.fg = platform.fg_select_backend(
+                adapter.vendor,
+                adapter.software,
+                capabilities.fg_choices(),
+            );
         }
         providers
     }
@@ -273,11 +267,7 @@ impl Vulkan {
                 return 0;
             }
             let mut state = self.state();
-            let current = &state.settings;
-            if current.sr_backend != settings.sr_backend
-                || current.quality != settings.quality
-                || current.dlss_preset != settings.dlss_preset
-            {
+            if state.settings.reconstruction_key() != settings.reconstruction_key() {
                 state.generation = state.generation.wrapping_add(1);
             }
             state.settings = *settings;
@@ -285,33 +275,35 @@ impl Vulkan {
         })
     }
 
+    fn capabilities(&self, platform: &Platform) -> Capabilities {
+        Capabilities {
+            facts: platform.vulkan_facts(),
+            device: self.creation.render_receipt(),
+            primary: !self.primary_window().is_null(),
+        }
+    }
+
     /// Device readiness and provider refusals, in the order `vulkan.cpp` applied them. Runs under
     /// the guard; the FSR4 FG probe and the presenter capacity are asked only when reached.
     fn admit(&self, platform: &Platform, value: &Settings) -> bool {
-        let facts: VkFacts = platform.vulkan_facts();
+        let capabilities = self.capabilities(platform);
+        let facts = capabilities.facts;
         let on = |flag: u32| flag != 0;
-        let primary = !self.primary_window().is_null();
-        let interop = self.creation.interop_ready();
-        if value.sr_backend == SR_XESS && !self.creation.xess_ready() {
-            return false;
-        }
-        // These paths are added independently. Do not accept unavailable FG or silently
-        // substitute an FSR3 provider for an explicitly requested DLSS, XeSS or FSR4 path.
-        if value.sr_backend == SR_FSR4
-            && !(on(facts.fsr4_sr_compiled) && on(facts.graph_handoff) && interop)
+        // DLSS admission is still verified by its live provider at evaluation.
+        if matches!(value.sr_backend, SR_XESS | SR_FSR4)
+            && capabilities.sr_choices() & choice(true, value.sr_backend) == 0
         {
             return false;
         }
-        // Auto resolves among the providers this session can serve; none is refused below.
-        let selected = self.providers(platform, value, Some(facts)).fg;
+        let selected = self.providers(platform, value, Some(&capabilities)).fg;
         if !matches!(selected, FG_DLSS | FG_FSR3 | FG_FSR4 | FG_XESS) {
             return false;
         }
         if selected == FG_FSR4 {
             if !on(facts.fsr4_fg_compiled)
                 || !on(facts.presenter)
-                || !interop
-                || !primary
+                || !capabilities.device.interop
+                || !capabilities.primary
                 || value.generated_frames != 1
             {
                 return false;
@@ -321,7 +313,7 @@ impl Vulkan {
                 return false;
             }
         }
-        if selected == FG_XESS && !(on(facts.xess_fg_compiled) && interop && primary) {
+        if selected == FG_XESS && capabilities.fg_choices() & choice(true, selected) == 0 {
             return false;
         }
         if value.fg_mode != 0
@@ -355,6 +347,10 @@ impl Vulkan {
     /// Under the guard: what the render, presentation and capture leaves read. Auto is resolved
     /// from one settings snapshot after the state lock is released.
     pub(crate) fn view(&self, platform: &Platform) -> (VkView, c_int) {
+        self.view_for_device(platform, None)
+    }
+
+    fn view_for_device(&self, platform: &Platform, device: Option<usize>) -> (VkView, c_int) {
         let mut view = {
             let state = self.state();
             VkView {
@@ -365,10 +361,19 @@ impl Vulkan {
                 fg_backend: state.settings.fg_backend,
                 output_width: state.status.output_width,
                 output_height: state.status.output_height,
-                fg_result: state.status.fg_result,
             }
         };
-        let providers = self.providers(platform, &view.settings, None);
+        let capabilities =
+            if view.settings.sr_backend == SR_AUTO || view.settings.fg_backend == FG_BACKEND_AUTO {
+                device.map(|device| Capabilities {
+                    device: self.creation.device_receipt(device),
+                    facts: platform.vulkan_facts(),
+                    primary: !self.primary_window().is_null(),
+                })
+            } else {
+                None
+            };
+        let providers = self.providers(platform, &view.settings, capabilities.as_ref());
         view.sr_backend = providers.sr;
         view.fg_backend = providers.fg;
         (view, c_int::from(self.booted()))
@@ -381,25 +386,13 @@ impl Vulkan {
         status.fg_available = u32::from(ready);
         status.fg_backend = if ready { backend } else { 0 };
         status.max_generated_frames = if ready { maximum } else { 0 };
-        if ready {
-            state.presenter_generation = state.generation;
-            state.guides = None;
-        }
     }
 
-    /// Whether a presenter owning `backend` may keep acquiring. A provider switch, including Auto
-    /// resolving to another provider, or a new SR plan under a fixed-guide presenter, makes the
-    /// engine drain and recreate its WSI owner.
+    /// Provider changes still require the engine to recreate its WSI owner.
+    /// The Runtime presenter manages guide sizes at retired slot reuse.
     pub(crate) fn presenter_current(&self, platform: &Platform, backend: u32) -> bool {
-        let (settings, planned) = {
-            let state = self.state();
-            (
-                state.settings,
-                state.presenter_generation == state.generation,
-            )
-        };
+        let settings = self.state().settings;
         backend == self.providers(platform, &settings, None).fg
-            && !(fixed_guides(backend) && !planned)
     }
 
     pub(crate) fn presented(&self, facts: &VkPresentFacts) {
@@ -417,7 +410,6 @@ impl Vulkan {
     /// The live presenter was destroyed.
     pub(crate) fn presenter_retired(&self) {
         let mut state = self.state();
-        state.guides = None;
         let status = &mut state.status;
         status.fg_available = 0;
         status.fg_active = 0;
@@ -426,71 +418,35 @@ impl Vulkan {
         status.generated_frames = 0;
     }
 
-    /// FG runs only in requested gameplay on the flight screen.
-    pub(crate) fn fg_begin(&self, pass: &mut VkFgPass) {
-        let state = self.state();
-        let settings = &state.settings;
-        pass.enabled = u32::from(
-            settings.fg_mode != 0 && settings.gameplay != 0 && pass.screen == SCREEN_FLIGHT,
-        );
-        pass.generated_frames = settings.generated_frames;
-    }
-
-    /// After the presenter took the enable options: whether to record this pass. A refusal
-    /// stores its result.
-    pub(crate) fn fg_admit(&self, pass: &VkFgPass) -> bool {
+    /// Applies the engine's gameplay facts around one synchronous Runtime recording.
+    pub(crate) fn fg_pass(
+        &self,
+        screen: u32,
+        presenter: bool,
+        options: impl FnOnce(u32, u32) -> i32,
+        record: impl FnOnce() -> i32,
+    ) -> i32 {
+        let settings = self.state().settings;
+        let enabled =
+            u32::from(settings.fg_mode != 0 && settings.gameplay != 0 && screen == SCREEN_FLIGHT);
+        let options_result = if presenter {
+            options(enabled, settings.generated_frames)
+        } else {
+            BACKEND_ERROR_NOT_READY
+        };
+        let result = if options_result == BACKEND_OK {
+            record()
+        } else {
+            options_result
+        };
         let mut state = self.state();
-        let frames = state.settings.generated_frames;
-        if pass.backend_valid != 0 {
-            state.status.fg_backend = pass.backend;
-        }
-        let options_ok = pass.options_result == BACKEND_OK;
-        state.status.generated_frames = if pass.enabled != 0 && options_ok {
-            frames
+        state.status.generated_frames = if enabled != 0 && options_result == BACKEND_OK {
+            settings.generated_frames
         } else {
             0
         };
-        let fixed = fixed_guides(state.status.fg_backend);
-        if fixed
-            && pass.role == RENDER_SR
-            && state.guides.is_some_and(|guides| {
-                guides.session == pass.session_id
-                    && guides.view == pass.view_id
-                    && (guides.width != pass.render_width || guides.height != pass.render_height)
-            })
-        {
-            // The SDK's first plan can settle one frame after settings change. Retire fixed
-            // guide allocations through the normal WSI owner path.
-            state.presenter_generation = 0;
-        }
-        let guides_ready = !fixed || state.presenter_generation == state.generation;
-        if !options_ok {
-            state.status.fg_result = pass.options_result;
-            return false;
-        }
-        if !guides_ready {
-            state.status.fg_result = BACKEND_ERROR_NOT_READY;
-            return false;
-        }
-        true
-    }
-
-    /// The admitted pass was recorded with `result`.
-    pub(crate) fn fg_recorded(&self, pass: &VkFgPass, result: i32) {
-        let mut state = self.state();
         state.status.fg_result = result;
-        if fixed_guides(state.status.fg_backend)
-            && state.guides.is_none()
-            && pass.role == RENDER_SR
-            && result == BACKEND_OK
-        {
-            state.guides = Some(Guides {
-                session: pass.session_id,
-                view: pass.view_id,
-                width: pass.render_width,
-                height: pass.render_height,
-            });
-        }
+        result
     }
 
     /// One SR pass of `rsfg_render_vulkan`, after the provider, passthrough or fallback.

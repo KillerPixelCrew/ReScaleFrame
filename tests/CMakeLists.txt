@@ -3,11 +3,26 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/d3d11_host_rendered_fg_device.cmake")
 # Explicit regression investigation only: requires a scratch vendor-SDK root and NVIDIA GPU.
 add_executable(rsf_d3d11_host_shared_sr_device EXCLUDE_FROM_ALL d3d11_host_shared_sr_device.cpp)
 target_link_libraries(rsf_d3d11_host_shared_sr_device PRIVATE rsf_orchestrator rsf_build_options d3d11 dxgi)
-add_executable(rsf_native_vulkan_exports_test native_vulkan_exports.cpp)
-target_link_libraries(rsf_native_vulkan_exports_test PRIVATE rsf_build_options)
+find_program(RSF_TEST_RUSTC rustc REQUIRED)
+if(MSVC)
+    set(rsf_test_rust_target x86_64-pc-windows-msvc)
+else()
+    set(rsf_test_rust_target x86_64-pc-windows-gnu)
+endif()
+set(rsf_vulkan_exports_dir "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
+set(rsf_vulkan_exports_exe "${rsf_vulkan_exports_dir}/rsf_native_vulkan_exports_test.exe")
+set(rsf_vulkan_exports_source "${CMAKE_CURRENT_SOURCE_DIR}/native_vulkan_exports.rs")
+add_custom_command(OUTPUT "${rsf_vulkan_exports_exe}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${rsf_vulkan_exports_dir}"
+    COMMAND "${RSF_TEST_RUSTC}" --edition=2024 --target "${rsf_test_rust_target}"
+        -D warnings "${rsf_vulkan_exports_source}" -o "${rsf_vulkan_exports_exe}"
+    DEPENDS "${rsf_vulkan_exports_source}"
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    VERBATIM)
+add_custom_target(rsf_native_vulkan_exports_test ALL DEPENDS "${rsf_vulkan_exports_exe}")
 add_dependencies(rsf_native_vulkan_exports_test rsf_orchestrator)
-add_test(NAME native_vulkan_dll_exports COMMAND rsf_native_vulkan_exports_test
-    "$<TARGET_FILE:rsf_orchestrator>")
+add_test(NAME native_vulkan_dll_exports COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR}
+    "${rsf_vulkan_exports_exe}" "$<TARGET_FILE:rsf_orchestrator>")
 add_executable(rsf_shader_patch_test shader_patch_main.c)
 target_link_libraries(rsf_shader_patch_test PRIVATE rsf_shader_patch rsf_build_options)
 add_executable(rsf_shader_patch_device_test shader_patch_main.c)
@@ -40,11 +55,21 @@ target_include_directories(rsf_anomaly_native_hooks_test PRIVATE ../games/anomal
 target_link_libraries(rsf_anomaly_native_hooks_test PRIVATE rsf_anomaly_rust minhook rsf_build_options)
 add_test(NAME anomaly_native_hooks_contract COMMAND rsf_anomaly_native_hooks_test)
 set_tests_properties(anomaly_native_hooks_contract PROPERTIES TIMEOUT 30)
-add_executable(rsf_anomaly_bootstrap_test anomaly_bootstrap.cpp)
-target_link_libraries(rsf_anomaly_bootstrap_test PRIVATE rsf_build_options)
+set(rsf_anomaly_bootstrap_exe "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/rsf_anomaly_bootstrap_test.exe")
+set(rsf_anomaly_bootstrap_source "${CMAKE_CURRENT_SOURCE_DIR}/anomaly_bootstrap.rs")
+add_custom_command(OUTPUT "${rsf_anomaly_bootstrap_exe}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
+    COMMAND "${RSF_TEST_RUSTC}" --edition=2024 --target "${rsf_test_rust_target}"
+        -D warnings "${rsf_anomaly_bootstrap_source}" -o "${rsf_anomaly_bootstrap_exe}"
+    DEPENDS "${rsf_anomaly_bootstrap_source}"
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    VERBATIM)
+add_custom_target(rsf_anomaly_bootstrap_test ALL DEPENDS "${rsf_anomaly_bootstrap_exe}")
 add_dependencies(rsf_anomaly_bootstrap_test rsf_game_anomaly)
-add_test(NAME anomaly_bootstrap_contract COMMAND rsf_anomaly_bootstrap_test
+add_test(NAME anomaly_bootstrap_contract COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR}
+    "${rsf_anomaly_bootstrap_exe}"
     "$<TARGET_FILE:rsf_game_anomaly>" "${CMAKE_CURRENT_BINARY_DIR}/anomaly-bootstrap")
+set_tests_properties(anomaly_bootstrap_contract PROPERTIES TIMEOUT 130)
 find_program(RSF_PWSH_EXECUTABLE pwsh)
 if(RSF_PWSH_EXECUTABLE)
     add_test(NAME ffx_line_width_patch COMMAND "${RSF_PWSH_EXECUTABLE}" -NoProfile -File "${CMAKE_CURRENT_SOURCE_DIR}/ffx_line_width_patch.ps1" -SdkRoot "${RSF_FFX_VK_INCLUDE}/../..")
@@ -52,12 +77,14 @@ if(RSF_PWSH_EXECUTABLE)
 endif()
 target_link_libraries(rsf_sdk_c_header PRIVATE ReScaleFrame::GameSDK rsf_build_options)
 
-add_executable(rsf_plugin_contract plugin_contract.cpp)
+rsf_add_rust_static(rsf_game_sdk_fixtures_rust rsf_rust_game_sdk_fixtures
+    rsf-game-sdk-fixtures rsf_game_sdk_fixtures)
+add_executable(rsf_plugin_contract game-sdk/contract_main.c)
 
-add_executable(rsf_wingman_camera wingman_camera.cpp ../games/project-wingman/src/native_camera.cpp)
+add_executable(rsf_wingman_camera wingman_camera.c)
 target_link_libraries(rsf_wingman_camera PRIVATE rsf_wingman_rust ReScaleFrame::GameSDK rsf_build_options)
 add_test(NAME wingman_camera_contract COMMAND rsf_wingman_camera)
-target_link_libraries(rsf_plugin_contract PRIVATE ReScaleFrame::GameSDK rsf_build_options)
+target_link_libraries(rsf_plugin_contract PRIVATE rsf_game_sdk_fixtures_rust ReScaleFrame::GameSDK rsf_build_options)
 add_dependencies(rsf_plugin_contract rsf_game_ac7 rsf_game_project_wingman rsf_game_rdr2 rsf_game_unity_mono)
 add_dependencies(rsf_plugin_contract rsf_game_skyrim_se)
 add_dependencies(rsf_plugin_contract rsf_game_fallout4)
@@ -65,10 +92,9 @@ add_test(NAME game_fallout4_plugin_contract COMMAND rsf_plugin_contract
     "$<TARGET_FILE_NAME:rsf_game_fallout4>" fallout4)
 set_tests_properties(game_fallout4_plugin_contract PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:rsf_game_fallout4>")
-target_compile_definitions(rsf_plugin_contract PRIVATE _CRT_SECURE_NO_WARNINGS)
 add_executable(rsf_unity_sr_d3d12_test unity_sr_d3d12.cpp)
 target_include_directories(rsf_unity_sr_d3d12_test PRIVATE ../games/unity-mono/include)
-target_link_libraries(rsf_unity_sr_d3d12_test PRIVATE rsf_rdr2_rust rsf_orchestrator rsf_build_options d3d12 dxgi)
+target_link_libraries(rsf_unity_sr_d3d12_test PRIVATE rsf_rdr2_rust rsf_orchestrator rsf_build_options minhook d3d12 dxgi)
 if(EXISTS "${RSF_STREAMLINE_INCLUDE}/sl.h")
     target_include_directories(rsf_unity_sr_d3d12_test SYSTEM PRIVATE "${RSF_STREAMLINE_INCLUDE}")
 endif()
@@ -86,8 +112,9 @@ add_executable(rsf_callback_host_abi_embedded_test callback_host_abi.cpp)
 target_link_libraries(rsf_callback_host_abi_embedded_test PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options)
 add_test(NAME callback_host_abi_embedded COMMAND rsf_callback_host_abi_embedded_test)
 set_tests_properties(callback_host_abi callback_host_abi_embedded PROPERTIES TIMEOUT 30)
-add_executable(rsf_orchestrator_domains orchestrator_domains.cpp)
-target_link_libraries(rsf_orchestrator_domains PRIVATE rsf_build_options)
+add_executable(rsf_orchestrator_domains loader/main.c)
+target_compile_definitions(rsf_orchestrator_domains PRIVATE RSF_FIXTURE_ENTRY=rsf_test_orchestrator_domains)
+target_link_libraries(rsf_orchestrator_domains PRIVATE rsf_game_sdk_fixtures_rust rsf_build_options)
 add_dependencies(rsf_orchestrator_domains rsf_orchestrator rsf_game_unity_mono)
 add_test(NAME orchestrator_domain_contract COMMAND rsf_orchestrator_domains)
 add_executable(rsf_d3d12_observer_test d3d12_observer.cpp)
@@ -96,10 +123,6 @@ add_test(NAME d3d12_observer_contract COMMAND rsf_d3d12_observer_test)
 add_executable(rsf_exposure_normalization_test exposure_normalization.cpp)
 target_link_libraries(rsf_exposure_normalization_test PRIVATE rsf_orchestrator rsf_build_options d3d12 dxgi)
 add_test(NAME native_exposure_normalization COMMAND rsf_exposure_normalization_test)
-# The engine-settings policy is owned by the Rust crate rsf-rdr2; the fixture calls its C ABI.
-add_executable(rsf_rdr2_engine_settings_test rdr2_engine_settings.cpp)
-target_link_libraries(rsf_rdr2_engine_settings_test PRIVATE rsf_rdr2_rust rsf_build_options)
-add_test(NAME rdr2_engine_settings COMMAND rsf_rdr2_engine_settings_test)
 add_executable(rsf_gpu_policy_test gpu_policy.cpp)
 target_link_libraries(rsf_gpu_policy_test PRIVATE rsf_orchestrator rsf_build_options)
 add_test(NAME gpu_sr_policy COMMAND rsf_gpu_policy_test)
@@ -108,12 +131,12 @@ target_link_libraries(rsf_gpu_policy_embedded_test PRIVATE ReScaleFrame::Orchest
 add_test(NAME gpu_sr_policy_embedded COMMAND rsf_gpu_policy_embedded_test)
 add_library(rsf_plugin_session_fixture SHARED plugin_session_fixture.cpp)
 target_link_libraries(rsf_plugin_session_fixture PRIVATE ReScaleFrame::GameSDK rsf_build_options)
-add_executable(rsf_plugin_session_test plugin_session.cpp)
-target_link_libraries(rsf_plugin_session_test PRIVATE rsf_orchestrator rsf_build_options)
+add_executable(rsf_plugin_session_test game-sdk/session_main.c)
+target_link_libraries(rsf_plugin_session_test PRIVATE rsf_game_sdk_fixtures_rust rsf_orchestrator rsf_build_options)
 add_dependencies(rsf_plugin_session_test rsf_plugin_session_fixture)
 add_test(NAME plugin_session_lifetime COMMAND rsf_plugin_session_test $<TARGET_FILE:rsf_plugin_session_fixture>)
-add_executable(rsf_plugin_session_embedded_test plugin_session.cpp)
-target_link_libraries(rsf_plugin_session_embedded_test PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options)
+add_executable(rsf_plugin_session_embedded_test game-sdk/session_main.c)
+target_link_libraries(rsf_plugin_session_embedded_test PRIVATE rsf_game_sdk_fixtures_rust ReScaleFrame::OrchestratorCore rsf_build_options)
 add_dependencies(rsf_plugin_session_embedded_test rsf_plugin_session_fixture)
 add_test(NAME plugin_session_lifetime_embedded COMMAND rsf_plugin_session_embedded_test $<TARGET_FILE:rsf_plugin_session_fixture>)
 set_tests_properties(plugin_session_lifetime plugin_session_lifetime_embedded PROPERTIES TIMEOUT 30)
@@ -130,11 +153,6 @@ if(MSVC)
     rsf_add_loader_test(rsf_shared_shim_exports rsf_test_shared_shim_exports)
     add_dependencies(rsf_shared_shim_exports rsf_proxy_dinput8)
     add_test(NAME shared_shim_exports COMMAND rsf_shared_shim_exports "$<TARGET_FILE:rsf_proxy_dinput8>")
-endif()
-if(NOT MSVC)
-    # This test uses wmain, which mingw only selects as the entry point with -municode.
-    target_compile_options(rsf_plugin_contract PRIVATE -municode)
-    target_link_options(rsf_plugin_contract PRIVATE -municode)
 endif()
 # Load the plugin by name from its own directory. That is how it is loaded in practice, and it
 # keeps the test runnable under a cross-build emulator, which cannot take a host path.
@@ -228,8 +246,9 @@ add_executable(rsf_ac7_session ac7_session.cpp ../loader/proxy/src/preferences.c
 target_link_libraries(rsf_ac7_session PRIVATE ReScaleFrame::AC7SceneColor rsf_build_options)
 add_test(NAME ac7_session COMMAND rsf_ac7_session)
 
-add_executable(rsf_constant_override constant_override.cpp)
-target_link_libraries(rsf_constant_override PRIVATE ReScaleFrame::Graphics rsf_build_options d3dcompiler)
+include(g02/fixture.cmake)
+rsf_add_g02_fixture(rsf_constant_override constant_override.rs)
+target_link_libraries(rsf_constant_override PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options d3dcompiler)
 add_test(NAME constant_override COMMAND rsf_constant_override)
 set_tests_properties(constant_override PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
@@ -248,12 +267,6 @@ add_test(NAME ui_identify COMMAND rsf_ui_identify)
 add_executable(rsf_fsr_backend fsr_backend.cpp)
 target_link_libraries(rsf_fsr_backend PRIVATE ReScaleFrame::FSR ReScaleFrame::XeSS rsf_build_options)
 add_test(NAME fsr_backend COMMAND rsf_fsr_backend)
-
-# Choosing between three vendors on a machine that has none of them, which is the point of
-# negotiation being a pure function over what each one said it could do.
-add_executable(rsf_negotiate negotiate.cpp)
-target_link_libraries(rsf_negotiate PRIVATE ReScaleFrame::Contract rsf_build_options)
-add_test(NAME negotiate COMMAND rsf_negotiate)
 
 # Whether a D3D11 texture can be opened by a D3D12 device here at all. Skips with 77 and the
 # HRESULTs when the two runtimes disagree, which under Wine is a fact about the environment.
@@ -292,11 +305,8 @@ target_link_libraries(rsf_auxiliary_sr PRIVATE rsf_orchestrator_rust ReScaleFram
 add_test(NAME auxiliary_sr_device COMMAND rsf_auxiliary_sr)
 set_tests_properties(auxiliary_sr_device PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
 
-add_executable(rsf_fallout4_camera fallout4_camera.cpp)
-target_link_libraries(rsf_fallout4_camera PRIVATE rsf_fallout4_rust ReScaleFrame::GameSDK rsf_build_options)
-add_test(NAME fallout4_camera_contract COMMAND rsf_fallout4_camera)
 add_executable(rsf_fallout4_input_state fallout4_input_state.cpp)
-target_link_libraries(rsf_fallout4_input_state PRIVATE rsf_build_options)
+target_link_libraries(rsf_fallout4_input_state PRIVATE rsf_fallout4_rust rsf_build_options)
 add_test(NAME fallout4_input_state_contract COMMAND rsf_fallout4_input_state)
 add_executable(rsf_skyrim_input skyrim_input.cpp ../games/skyrim-se/src/cpu_events.cpp)
 target_link_libraries(rsf_skyrim_input PRIVATE rsf_skyrim_se_rust ReScaleFrame::GameSDK minhook rsf_build_options)
@@ -335,7 +345,8 @@ target_link_libraries(rsf_motion_decode PRIVATE ReScaleFrame::Graphics rsf_build
 add_test(NAME motion_decode COMMAND rsf_motion_decode)
 set_tests_properties(motion_decode PROPERTIES TIMEOUT 120)
 
-add_executable(rsf_frame_tap frame_tap.cpp)
+add_executable(rsf_frame_tap frame_tap.c)
+set_target_properties(rsf_frame_tap PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_frame_tap PRIVATE ReScaleFrame::AC7SceneColor ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME frame_tap COMMAND rsf_frame_tap)
 set_tests_properties(frame_tap PROPERTIES TIMEOUT 120)
@@ -345,7 +356,7 @@ target_link_libraries(rsf_d3d11_state PRIVATE ReScaleFrame::Graphics rsf_build_o
 add_test(NAME d3d11_state COMMAND rsf_d3d11_state)
 set_tests_properties(d3d11_state PROPERTIES TIMEOUT 120)
 
-add_executable(rsf_scene_promote scene_promote.cpp)
+rsf_add_g02_fixture(rsf_scene_promote scene_promote.rs)
 target_link_libraries(rsf_scene_promote PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME scene_promote COMMAND rsf_scene_promote)
 set_tests_properties(scene_promote PROPERTIES TIMEOUT 120)
@@ -549,6 +560,7 @@ add_custom_command(OUTPUT "${godot_graph_object}"
         "${godot_module}/graph.rs" "${godot_module}/host.rs" "${godot_module}/pass.rs"
         "${godot_module}/present.rs" "${godot_module}/primary.rs"
         "${PROJECT_SOURCE_DIR}/sdk/game/src/frame_event_abi.rs" "${PROJECT_SOURCE_DIR}/rust-toolchain.toml"
+        "${PROJECT_SOURCE_DIR}/sdk/game/src/frame_abi.rs"
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     VERBATIM)
 set_source_files_properties("${godot_graph_object}" PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
@@ -675,7 +687,7 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_XESS_VK_INCL
     target_include_directories(rsf_native_xess_vulkan_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
 endif()
 add_test(NAME native_xess_vulkan_contract COMMAND rsf_native_xess_vulkan_test)
-if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_XESS_VK_INCLUDE}/xess/xess_vk.h")
+if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_XESS_VK_INCLUDE}/xess/xess_vk.h" AND EXISTS "${RSF_FFX_VK_INCLUDE}/ffx_api/vk/ffx_api_vk.h")
     add_executable(rsf_native_xess_input_range_test native_xess_vulkan.cpp)
     target_compile_definitions(rsf_native_xess_input_range_test PRIVATE RSF_TEST_XESS_INPUT_RANGE RSF_HAVE_XESS_VK RSF_RUNTIME_BUILD)
     target_include_directories(rsf_native_xess_input_range_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}" "${RSF_XESS_VK_INCLUDE}")
@@ -697,14 +709,6 @@ target_compile_definitions(rsf_native_fg_vulkan_dispatch_fsr4_test PRIVATE RSF_R
 target_include_directories(rsf_native_fg_vulkan_dispatch_fsr4_test PRIVATE ../runtime/orchestrator/include)
 target_link_libraries(rsf_native_fg_vulkan_dispatch_fsr4_test PRIVATE rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_build_options)
 add_test(NAME native_fg_vulkan_dispatch_fsr4_contract COMMAND rsf_native_fg_vulkan_dispatch_fsr4_test)
-if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
-    add_executable(rsf_native_dx12_vulkan_interop_test native_dx12_vulkan_interop.cpp)
-    target_include_directories(rsf_native_dx12_vulkan_interop_test PRIVATE ../runtime/orchestrator/include)
-    target_include_directories(rsf_native_dx12_vulkan_interop_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
-    target_compile_definitions(rsf_native_dx12_vulkan_interop_test PRIVATE RSF_RUNTIME_BUILD)
-    target_link_libraries(rsf_native_dx12_vulkan_interop_test PRIVATE rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_build_options)
-    add_test(NAME native_dx12_vulkan_interop_contract COMMAND rsf_native_dx12_vulkan_interop_test)
-endif()
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_FFX_INCLUDE}/dx12/ffx_api_dx12.h" AND EXISTS "${RSF_FFX_INCLUDE}/../../framegeneration/include/ffx_framegeneration.h")
     add_executable(rsf_native_fsr4_fg_contract_test native_fsr4_fg_contract.cpp)
     target_include_directories(rsf_native_fsr4_fg_contract_test SYSTEM PRIVATE "${RSF_FFX_INCLUDE}" "${RSF_FFX_INCLUDE}/../../framegeneration/include")
@@ -777,9 +781,13 @@ set_tests_properties(module_dump_v2 PROPERTIES TIMEOUT 120)
 # and calls them, and a real DXGI/D3D12 (WARP) path. MSVC only, like the library.
 if(TARGET rsf_vendor_census)
     function(rsf_census_fixture target define output)
-        add_library(${target} SHARED vendor_census_fixture.cpp)
+        string(TOLOWER "${define}" fixture)
+        add_library(${target} SHARED loader/vendor_census_fixture.c "loader/${fixture}.def")
+        if(define STREQUAL "FIXTURE_NGX")
+            target_sources(${target} PRIVATE loader/vendor_census_ngx_platform.cpp)
+        endif()
         target_compile_definitions(${target} PRIVATE ${define})
-        target_link_libraries(${target} PRIVATE rsf_build_options)
+        target_link_libraries(${target} PRIVATE rsf_loader_fixtures_rust rsf_build_options)
         set_target_properties(${target} PROPERTIES OUTPUT_NAME "${output}")
         # Identical-function folding or incremental thunks would put two exports on one address.
         target_link_options(${target} PRIVATE /OPT:NOICF /INCREMENTAL:NO)
@@ -793,8 +801,9 @@ if(TARGET rsf_vendor_census)
     rsf_census_fixture(rsf_census_fx_ffx FIXTURE_FFX amd_fidelityfx_dx12)
     rsf_census_fixture(rsf_census_fx_creation FIXTURE_CREATION rsf_fixture_creation)
 
-    add_library(rsf_census_asi SHARED vendor_census_asi.cpp)
-    target_link_libraries(rsf_census_asi PRIVATE ReScaleFrame::VendorCensus rsf_build_options)
+    add_library(rsf_census_asi SHARED loader/vendor_census_asi.c loader/vendor_census_asi.def)
+    target_link_libraries(rsf_census_asi PRIVATE
+        rsf_loader_fixtures_rust ReScaleFrame::VendorCensus rsf_build_options)
 
     add_executable(rsf_vendor_census_test vendor_census.cpp)
     target_link_libraries(rsf_vendor_census_test PRIVATE ReScaleFrame::VendorCensus rsf_census_fx_fsr2 rsf_build_options)

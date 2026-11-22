@@ -9,5 +9,8 @@ license.workspace = true
 [lib]
 crate-type = ["staticlib"]
 
+[dependencies]
+rsf-game-sys = { path = "../../../../sdk/game" }
+
 [lints]
 workspace = true

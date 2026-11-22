@@ -39,6 +39,24 @@ RID resolve_motion(const Ref<RenderSceneBuffersRD> &buffers, RID depth, RID moti
 void release_motion();
 bool vulkan_enabled();
 uint64_t vk_resolver();
+bool vk_execution_supported();
+bool vk_execution(uint32_t role, uint64_t session, uint64_t source, uint64_t window, uint32_t begin);
+
+// One RenderingDevice::_execute_frame call. A successful final submit owns the receipt
+// across either the same driver call or Godot's separate presentation queue call.
+class VulkanExecutionScope {
+    VulkanExecutionScope *previous;
+    uint64_t queue, fence, session = 0, source = 0;
+    bool submitted = false;
+
+public:
+    VulkanExecutionScope(uint64_t queue, uint64_t fence, bool eligible);
+    ~VulkanExecutionScope();
+    VulkanExecutionScope(const VulkanExecutionScope &) = delete;
+    VulkanExecutionScope &operator=(const VulkanExecutionScope &) = delete;
+    static void submit(uint64_t queue, uint64_t fence, bool begin);
+    static bool present(uint64_t window, bool begin);
+};
 bool vk_present_marker(uint64_t window, uint32_t begin);
 int32_t vk_native_present(uint64_t callback, void* queue, const void* info);
 int32_t vk_wsi_call(int32_t (*callback)(void*), void* user);

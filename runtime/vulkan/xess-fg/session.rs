@@ -9,13 +9,24 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicI32, Ordering};
 
+#[path = "bridge_abi.rs"]
+mod bridge_abi;
 #[path = "capture.rs"]
 mod capture;
+#[path = "../timeline_pair.rs"]
+mod timeline_pair;
 #[path = "timing.rs"]
 mod timing;
 
-use capture::{Capture, Desc, Event, Footprint, Image};
-use timing::{Phase as TimingPhase, Report as TimingReport};
+use bridge_abi::{
+    RSF_XESS_BRIDGE_ABI_MISMATCH as ABI_MISMATCH,
+    RSF_XESS_BRIDGE_ABI_VERSION as BRIDGE_ABI_VERSION,
+    RSF_XESS_BRIDGE_INVALID_ARGUMENT as INVALID_ARGUMENT,
+    rsf_xess_bridge_create as IntegratedCreate, rsf_xess_bridge_frame as IntegratedFrame,
+    rsf_xess_bridge_present_status as IntegratedStatus, rsf_xess_bridge_start as IntegratedStart,
+};
+use capture::{Capture, Desc, Footprint};
+use timing::{Accumulator, Phase as TimingPhase, Report as TimingReport};
 
 type Handle = *mut c_void;
 type Step = unsafe extern "C" fn(Handle) -> i32;
@@ -55,26 +66,6 @@ impl Frame {
     }
 }
 
-#[repr(C)]
-struct IntegratedFrame {
-    struct_size: u32,
-    abi_version: u32,
-    frame_id: u32,
-    reset: u32,
-    vsync: u32,
-    reserved: u32,
-    color: Handle,
-    depth: Handle,
-    motion: Handle,
-    hudless: Handle,
-    view: [f32; 16],
-    projection: [f32; 16],
-    jitter: [f32; 2],
-    motion_scale: [f32; 2],
-    ready: u64,
-    done: u64,
-}
-
 impl From<&IntegratedFrame> for Frame {
     fn from(frame: &IntegratedFrame) -> Self {
         Self {
@@ -87,12 +78,12 @@ impl From<&IntegratedFrame> for Frame {
             motion: frame.motion,
             hudless: frame.hudless,
             ui: ptr::null_mut(),
-            view: frame.view,
-            projection: frame.projection,
-            jitter: frame.jitter,
-            motion_scale: frame.motion_scale,
-            ready: frame.ready,
-            done: frame.done,
+            view: frame.view_matrix,
+            projection: frame.projection_matrix,
+            jitter: [frame.jitter_x, frame.jitter_y],
+            motion_scale: [frame.motion_scale_x, frame.motion_scale_y],
+            ready: frame.ready_fence_value,
+            done: frame.done_fence_value,
         }
     }
 }
@@ -114,18 +105,10 @@ struct PresentResourceDesc {
 }
 
 #[repr(C)]
-struct IntegratedStatus {
-    struct_size: u32,
-    abi_version: u32,
-    result: PresentResult,
-    _reserved: u32,
-}
-
-#[repr(C)]
 struct Platform {
     struct_size: u32,
     abi_version: u32,
-    allocate: unsafe extern "C" fn(*mut Session) -> Handle,
+    allocate: unsafe extern "C" fn(*mut Session, *const Accumulator) -> Handle,
     release_native: unsafe extern "C" fn(Handle),
     load_runtime: unsafe extern "C" fn(Handle, *const u16, *mut Modules) -> i32,
     unload_module: unsafe extern "C" fn(Handle),
@@ -187,9 +170,7 @@ struct Platform {
     attach_capture: unsafe extern "C" fn(Handle, *const Capture),
     register_diagnostics: Step,
     capture_fingerprint: unsafe extern "C" fn(Handle) -> u32,
-    capture_failure: unsafe extern "C" fn(*const u16, *const c_char),
     capture_describe: unsafe extern "C" fn(Handle, *mut Desc),
-    capture_event: unsafe extern "C" fn(*const u16, *const Event) -> i32,
     // Writes the footprint, its byte size and a device reference. Nonzero
     // when the resource has no device.
     capture_footprint: unsafe extern "C" fn(Handle, *mut Footprint, *mut u64, *mut Handle) -> i32,
@@ -197,8 +178,9 @@ struct Platform {
     capture_readback: unsafe extern "C" fn(Handle, u64) -> Handle,
     capture_release: unsafe extern "C" fn(Handle),
     capture_copy: unsafe extern "C" fn(Handle, Handle, Handle, *const Footprint, u32),
-    // Maps one completed readback and writes its raw and JSON files.
-    capture_publish: unsafe extern "C" fn(*const u16, *const Image) -> i32,
+    // Lends bytes from a completed readback until capture_unmap.
+    capture_map: unsafe extern "C" fn(Handle, u64, *mut *const u8) -> i32,
+    capture_unmap: unsafe extern "C" fn(Handle),
 }
 
 const _: () = {
@@ -211,8 +193,6 @@ const _: () = {
     assert!(std::mem::offset_of!(IntegratedFrame, struct_size) == 0);
     assert!(std::mem::offset_of!(IntegratedFrame, abi_version) == 4);
     assert!(std::mem::offset_of!(IntegratedFrame, color) == 24);
-    assert!(std::mem::offset_of!(IntegratedFrame, view) == 56);
-    assert!(std::mem::offset_of!(IntegratedFrame, ready) == 200);
     assert!(size_of::<PresentResult>() == 12);
     assert!(size_of::<PresentResourceDesc>() == 16 && align_of::<PresentResourceDesc>() == 8);
     assert!(std::mem::offset_of!(PresentResourceDesc, height) == 8);
@@ -220,9 +200,7 @@ const _: () = {
     assert!(size_of::<IntegratedStatus>() == 24);
     assert!(std::mem::offset_of!(IntegratedStatus, struct_size) == 0);
     assert!(std::mem::offset_of!(IntegratedStatus, abi_version) == 4);
-    assert!(std::mem::offset_of!(IntegratedStatus, result) == 8);
-    assert!(std::mem::offset_of!(IntegratedStatus, _reserved) == 20);
-    assert!(size_of::<Platform>() == 544 && align_of::<Platform>() == 8);
+    assert!(size_of::<Platform>() == 536 && align_of::<Platform>() == 8);
     assert!(std::mem::offset_of!(Platform, allocate) == 8);
     assert!(std::mem::offset_of!(Platform, init_swapchain) == 112);
     assert!(std::mem::offset_of!(Platform, find_diagnostics) == 168);
@@ -239,14 +217,11 @@ const _: () = {
     assert!(std::mem::offset_of!(Platform, read_present_status) == 376);
     assert!(std::mem::offset_of!(Platform, serialize_enabled) == 448);
     assert!(std::mem::offset_of!(Platform, attach_capture) == 456);
-    assert!(std::mem::offset_of!(Platform, capture_footprint) == 504);
-    assert!(std::mem::offset_of!(Platform, capture_publish) == 536);
+    assert!(std::mem::offset_of!(Platform, capture_footprint) == 488);
+    assert!(std::mem::offset_of!(Platform, capture_unmap) == 528);
 };
 
-const PLATFORM_ABI_VERSION: u32 = 5;
-const BRIDGE_ABI_VERSION: u32 = 1;
-const INVALID_ARGUMENT: i32 = -10001;
-const ABI_MISMATCH: i32 = -10002;
+const PLATFORM_ABI_VERSION: u32 = 6;
 const WAIT_MS: u32 = 10_000;
 const WAIT_INCOMPLETE: i32 = -3;
 const ALLOCATOR_COUNT: u32 = 3;
@@ -288,7 +263,7 @@ enum Phase {
 
 // The caller guarantees the size word. The version is readable only after the
 // declared size covers the whole record.
-unsafe fn check_present_abi<T>(record: *const T) -> Result<(), i32> {
+unsafe fn check_bridge_abi<T>(record: *const T) -> Result<(), i32> {
     let header = record.cast::<u32>();
     if (unsafe { header.read() } as usize) < size_of::<T>() {
         return Err(INVALID_ARGUMENT);
@@ -303,16 +278,6 @@ fn success(code: i32) -> Result<(), i32> {
     if code < 0 { Err(code) } else { Ok(()) }
 }
 
-fn advance_timing(ops: &Platform, phase: TimingPhase, start: Option<i64>) -> Option<i64> {
-    start.map(|previous| {
-        let now = unsafe { (ops.timing_now)() };
-        timing::rsf_core_xess_timing_cpu(phase as u32, previous, now, unsafe {
-            (ops.timing_frequency)()
-        });
-        now
-    })
-}
-
 // The host serializes startup, presentation-side calls and retirement. The
 // native XeLL sleep and marker paths borrow their typed bindings independently.
 struct Session {
@@ -321,9 +286,11 @@ struct Session {
     // Owned. The SDK callbacks and the public capture calls borrow it
     // through the capsule while the session itself may be borrowed mutably.
     capture: NonNull<Capture>,
+    timing: NonNull<Accumulator>,
     modules: Modules,
     event: Option<OwnedHandle>,
     max_generated: u32,
+    active_generated: u32,
     width: u32,
     height: u32,
     backbuffer_hudless: bool,
@@ -336,6 +303,21 @@ struct Session {
 }
 
 impl Session {
+    fn timing(&self) -> &Accumulator {
+        unsafe { self.timing.as_ref() }
+    }
+
+    fn advance_timing(&self, phase: TimingPhase, start: Option<i64>) -> Option<i64> {
+        start.map(|previous| {
+            let now = unsafe { (self.platform.timing_now)() };
+            self.timing()
+                .cpu_sample(phase as u32, previous, now, unsafe {
+                    (self.platform.timing_frequency)()
+                });
+            now
+        })
+    }
+
     fn capture(&self) -> &Capture {
         unsafe { self.capture.as_ref() }
     }
@@ -455,13 +437,20 @@ impl Session {
         if !self.capture().initialize(native, self.modules.fg) {
             return CAPTURE_START_FAILED;
         }
-        let code = if integrated {
-            unsafe { (ops.set_generated)(native, generated) }
-        } else {
-            0
-        };
+        let code = self.set_generated(generated);
         if code >= 0 {
             self.phase = Phase::Started;
+        }
+        code
+    }
+
+    fn set_generated(&mut self, count: u32) -> i32 {
+        if count == self.active_generated {
+            return 0;
+        }
+        let code = unsafe { (self.platform.set_generated)(self.native, count) };
+        if code >= 0 {
+            self.active_generated = count;
         }
         code
     }
@@ -528,7 +517,6 @@ impl Session {
             desc
         };
         let color = describe(frame.color);
-        let hudless = describe(frame.hudless);
         let ui = (!frame.ui.is_null()).then(|| describe(frame.ui));
         let motion = describe(frame.motion);
         let depth = describe(frame.depth);
@@ -543,7 +531,7 @@ impl Session {
             DXGI_FORMAT_D32_FLOAT
         };
         color == output
-            && hudless == output
+            && (frame.hudless == frame.color || describe(frame.hudless) == output)
             && (self.backbuffer_hudless || ui.as_ref() == Some(&output))
             && motion.width == depth.width
             && motion.height == depth.height
@@ -616,8 +604,7 @@ impl Session {
 
     fn present_frame(&mut self, frame: &Frame) -> Result<(PresentResult, Option<i64>), i32> {
         if frame.frame_id == 0
-            || frame.ready == 0
-            || frame.done <= frame.ready
+            || !timeline_pair::can_signal_done(frame.ready, frame.done, self.last_done_signalled)
             || !frame.has_resources()
             || (!self.backbuffer_hudless && frame.ui.is_null())
         {
@@ -633,7 +620,7 @@ impl Session {
         let slot = self.next_allocator % ALLOCATOR_COUNT;
         self.next_allocator = self.next_allocator.wrapping_add(1);
         self.wait(self.allocator_completion[slot as usize])?;
-        let phase_start = advance_timing(ops, TimingPhase::AllocatorWait, phase_start);
+        let phase_start = self.advance_timing(TimingPhase::AllocatorWait, phase_start);
         let gpu_timed = timed && unsafe { (ops.begin_gpu_timing)(native, slot) } != 0;
         success(unsafe { (ops.reset_commands)(native, slot) })?;
         if gpu_timed {
@@ -645,18 +632,18 @@ impl Session {
         }
         success(unsafe { (ops.close_commands)(native) })?;
         success(unsafe { (ops.tag_constants)(native, frame) })?;
-        let phase_start = advance_timing(ops, TimingPhase::Record, phase_start);
+        let phase_start = self.advance_timing(TimingPhase::Record, phase_start);
 
         success(unsafe { (ops.wait_shared)(native, frame.ready) })?;
         unsafe { (ops.execute)(native) };
         let present_id = success(unsafe { (ops.set_present_id)(native, frame.frame_id) });
-        let phase_start = advance_timing(ops, TimingPhase::Submit, phase_start);
+        let phase_start = self.advance_timing(TimingPhase::Submit, phase_start);
         if gpu_timed {
             unsafe { (ops.mark_present_enter)(native, slot) };
         }
         let presented =
             present_id.and_then(|()| success(unsafe { (ops.present)(native, frame.vsync) }));
-        let phase_start = advance_timing(ops, TimingPhase::Present, phase_start);
+        let phase_start = self.advance_timing(TimingPhase::Present, phase_start);
         if gpu_timed {
             unsafe { (ops.finish_gpu_timing)(native, slot) };
         }
@@ -712,8 +699,7 @@ impl Session {
         } else {
             Err(-1)
         };
-        if frame.done > self.last_done_signalled
-            && frame.done > frame.ready
+        if timeline_pair::can_signal_done(frame.ready, frame.done, self.last_done_signalled)
             && let Err(code) = self.recover_handoff(frame)
         {
             self.retain_failure(code);
@@ -723,8 +709,10 @@ impl Session {
     }
 
     fn finish_present(&self, phase_start: Option<i64>) {
-        if advance_timing(self.platform, TimingPhase::Retire, phase_start).is_some()
-            && let Some(report) = timing::end_present()
+        if self
+            .advance_timing(TimingPhase::Retire, phase_start)
+            .is_some()
+            && let Some(report) = self.timing().end_present()
         {
             unsafe { (self.platform.timing_report)(&report) };
         }
@@ -780,6 +768,7 @@ impl Drop for Session {
         // The capsule no longer lends the capture, and checked retirement
         // unregistered the SDK callbacks. Remaining readbacks are released.
         drop(unsafe { Box::from_raw(self.capture.as_ptr()) });
+        drop(unsafe { Box::from_raw(self.timing.as_ptr()) });
         drop(self.event.take());
         // COM and the native callback storage are gone before the SDK DLLs unload.
         for module in [self.modules.fg, self.modules.xell] {
@@ -816,17 +805,20 @@ unsafe extern "C" fn rsf_core_xess_bridge_create(
         return -2;
     }
     let capture = Box::new(Capture::from_environment(platform));
+    let timing = NonNull::from(Box::leak(Box::<Accumulator>::default()));
     unsafe {
         session.write(Session {
             platform,
             native: ptr::null_mut(),
             capture: NonNull::from(Box::leak(capture)),
+            timing,
             modules: Modules {
                 fg: ptr::null_mut(),
                 xell: ptr::null_mut(),
             },
             event: None,
             max_generated: 0,
+            active_generated: 0,
             width: 0,
             height: 0,
             backbuffer_hudless: false,
@@ -838,7 +830,7 @@ unsafe extern "C" fn rsf_core_xess_bridge_create(
             failure: AtomicI32::new(0),
         });
     }
-    let native = unsafe { (platform.allocate)(session) };
+    let native = unsafe { (platform.allocate)(session, timing.as_ptr()) };
     if native.is_null() {
         drop(unsafe { Box::from_raw(session) });
         return -2;
@@ -863,6 +855,42 @@ unsafe extern "C" fn rsf_core_xess_bridge_create(
     unsafe { output.write(native) };
     CREATE_STAGE.set(c"ready");
     0
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_xess_bridge_create_integrated(
+    platform: *const Platform,
+    setup: *const IntegratedCreate,
+    output: *mut Handle,
+) -> i32 {
+    if output.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    unsafe { output.write(ptr::null_mut()) };
+    if setup.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    if let Err(code) = unsafe { check_bridge_abi(setup) } {
+        return code;
+    }
+    let setup = unsafe { &*setup };
+    let path = setup.runtime_directory;
+    // The caller lends a NUL-terminated UTF-16 path. Read each unit only
+    // after checking that the preceding unit was present.
+    if path.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    let first = unsafe { *path };
+    if first == 0 {
+        return INVALID_ARGUMENT;
+    }
+    let second = unsafe { *path.add(1) };
+    let absolute = (first == u16::from(b'\\') && second == u16::from(b'\\'))
+        || (second == u16::from(b':') && matches!(unsafe { *path.add(2) }, 47 | 92));
+    if !absolute {
+        return INVALID_ARGUMENT;
+    }
+    unsafe { rsf_core_xess_bridge_create(platform, setup.adapter_luid, path, output) }
 }
 
 #[unsafe(no_mangle)]
@@ -896,6 +924,32 @@ extern "C" fn rsf_core_xess_bridge_start(
 }
 
 #[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_xess_bridge_start_integrated(
+    owner: *mut Session,
+    setup: *const IntegratedStart,
+    unsupported: i32,
+) -> i32 {
+    if owner.is_null() || setup.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    if let Err(code) = unsafe { check_bridge_abi(setup) } {
+        return code;
+    }
+    let setup = unsafe { &*setup };
+    if setup.generated_count == 0 || setup.inverted_depth > 1 {
+        return INVALID_ARGUMENT;
+    }
+    unsafe { &mut *owner }.start(
+        setup.window,
+        setup.width,
+        setup.height,
+        setup.inverted_depth,
+        setup.generated_count,
+        unsupported,
+    )
+}
+
+#[unsafe(no_mangle)]
 extern "C" fn rsf_core_xess_bridge_started(owner: &Session) -> u32 {
     u32::from(owner.phase == Phase::Started)
 }
@@ -903,6 +957,48 @@ extern "C" fn rsf_core_xess_bridge_started(owner: &Session) -> u32 {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_xess_bridge_max_generated(owner: &Session) -> u32 {
     owner.max_generated
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_xess_bridge_active_generated(owner: &Session) -> u32 {
+    owner.active_generated
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_xess_bridge_set_generated(
+    owner: &mut Session,
+    count: u32,
+    unsupported: i32,
+) -> i32 {
+    if owner.phase != Phase::Started || count == 0 {
+        return INVALID_ARGUMENT;
+    }
+    if count > owner.max_generated {
+        return unsupported;
+    }
+    owner.set_generated(count)
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_xess_bridge_set_generated_legacy(
+    owner: &mut Session,
+    requested: u32,
+    effective: *mut u32,
+    maximum: *mut u32,
+) -> i32 {
+    if owner.phase != Phase::Started
+        || owner.max_generated == 0
+        || effective.is_null()
+        || maximum.is_null()
+    {
+        return -1;
+    }
+    let count = requested.clamp(1, owner.max_generated);
+    unsafe {
+        maximum.write(owner.max_generated);
+        effective.write(count);
+    }
+    owner.set_generated(count)
 }
 
 #[unsafe(no_mangle)]
@@ -955,12 +1051,15 @@ unsafe extern "C" fn rsf_core_xess_bridge_present_integrated(
     if frame.is_null() || status.is_null() {
         return INVALID_ARGUMENT;
     }
-    let admission = unsafe { check_present_abi(frame).and_then(|()| check_present_abi(status)) };
+    let admission = unsafe { check_bridge_abi(frame).and_then(|()| check_bridge_abi(status)) };
     if let Err(code) = admission {
         return code;
     }
-    let output = unsafe { ptr::addr_of_mut!((*status).result) };
-    unsafe { output.write(PresentResult::default()) };
+    unsafe {
+        (*status).frames_presented = 0;
+        (*status).fg_enabled = 0;
+        (*status).fg_result = 0;
+    }
     let Some(owner) = (unsafe { owner.as_mut() }) else {
         return INVALID_ARGUMENT;
     };
@@ -974,15 +1073,22 @@ unsafe extern "C" fn rsf_core_xess_bridge_present_integrated(
         || input.depth.is_null()
         || input.motion.is_null()
         || input.hudless.is_null()
-        || input.ready == 0
-        || input.ready <= owner.last_done_signalled
-        || input.done <= input.ready
+        || input.ready_fence_value <= owner.last_done_signalled
+        || !timeline_pair::can_signal_done(
+            input.ready_fence_value,
+            input.done_fence_value,
+            owner.last_done_signalled,
+        )
     {
         return INVALID_ARGUMENT;
     }
     match owner.present(&Frame::from(input), true) {
         Ok((result, phase_start)) => {
-            unsafe { output.write(result) };
+            unsafe {
+                (*status).frames_presented = result.frames_presented;
+                (*status).fg_enabled = result.fg_enabled;
+                (*status).fg_result = result.fg_result;
+            }
             owner.finish_present(phase_start);
             0
         }
@@ -1045,12 +1151,10 @@ mod tests {
         let mut status = IntegratedStatus {
             struct_size: size_of::<IntegratedStatus>() as u32,
             abi_version: BRIDGE_ABI_VERSION,
-            result: PresentResult {
-                frames_presented: 7,
-                fg_enabled: 1,
-                fg_result: -9,
-            },
-            _reserved: 0,
+            frames_presented: 7,
+            fg_enabled: 1,
+            fg_result: -9,
+            reserved: 0,
         };
         let short_frame = unsafe {
             rsf_core_xess_bridge_present_integrated(ptr::null_mut(), prefix.cast(), &mut status)
@@ -1076,8 +1180,8 @@ mod tests {
         };
         assert_eq!(wrong_frame, ABI_MISMATCH);
         assert_eq!(wrong_status, ABI_MISMATCH);
-        assert_eq!(status.result.frames_presented, 7);
-        assert_eq!(status.result.fg_enabled, 1);
-        assert_eq!(status.result.fg_result, -9);
+        assert_eq!(status.frames_presented, 7);
+        assert_eq!(status.fg_enabled, 1);
+        assert_eq!(status.fg_result, -9);
     }
 }

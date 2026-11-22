@@ -98,7 +98,7 @@ typedef struct rsf_overlay_sr_report {
    service only transports it: the adapter applies and persists a change in option_changed. */
 #define RSF_OVERLAY_SERVICE_OPTION_TOGGLE 0u /* value is 0 or 1 */
 #define RSF_OVERLAY_SERVICE_OPTION_NUMBER 1u /* minimum..maximum in steps, shown as value / divisor */
-#define RSF_OVERLAY_SERVICE_OPTION_LIMIT 32u
+#define RSF_OVERLAY_SERVICE_OPTION_LIMIT 40u
 typedef struct rsf_overlay_service_option {
     const char* label_utf8; /* copied by configure */
     uint32_t kind;
@@ -242,6 +242,12 @@ typedef rsf_result (*rsf_get_overlay_diagnostics_fn)(rsf_overlay_diagnostics* ou
    and struct_size is the runtime's sizeof(table). Querying loads nothing. */
 RSF_RUNTIME_API rsf_result rsf_get_overlay_api(rsf_overlay_api* api);
 typedef rsf_result (*rsf_get_overlay_api_fn)(rsf_overlay_api* api);
+
+/* Configure the shared panel and drive it from real D3D11/DXGI Present events for an
+   adapter without a presentation bridge. Call once from cold startup outside DllMain.
+   The observer leaves native Present in charge. Setup lifetime matches configure(). */
+typedef rsf_result (*rsf_start_d3d11_overlay_fn)(const rsf_overlay_service_setup* setup);
+RSF_RUNTIME_API rsf_result rsf_start_d3d11_overlay(const rsf_overlay_service_setup* setup);
 
 #ifdef __cplusplus
 }

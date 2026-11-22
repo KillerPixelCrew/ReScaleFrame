@@ -6,7 +6,7 @@
 //! plugin.cpp lends the bridge through rsf_unity_plugin_platform, and runtime_host.cpp keeps the
 //! exports and lends the typed Runtime calls through rsf_unity_runtime_platform. The Unity package
 //! links this archive for the bridge state (shared by its D3D11 and Vulkan bridge, whose D3D12
-//! submission sequencing is bridge_interop.rs, with the D3D11 bridge's graphics record, command
+//! submission sequencing uses separate Runtime rings, with the D3D11 bridge's graphics record, command
 //! slots, shared surfaces and leased packet admission in d3d11_state.rs, its route, pass and
 //! surface plan, policy change gate and retirement verdict in d3d11_pass.rs, and the Vulkan
 //! bridge's admission, lifecycle and presentation in
@@ -31,6 +31,7 @@ mod package_abi;
 mod package_state;
 mod package_views;
 mod plugin_abi;
+#[cfg(windows)]
 mod preview;
 mod runtime_abi;
 mod runtime_config;

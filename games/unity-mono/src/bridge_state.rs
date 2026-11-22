@@ -3,21 +3,17 @@
 //! and the Unity package, and both link this archive. This module owns packet admission and
 //! storage, the engine policy and its generation, frame admission into the command ring, source
 //! submission bookkeeping and retirement. bridge.cpp keeps the Unity interfaces, D3D12 objects,
-//! resource leases, render-pass calls and CPU input events, and reads the Unity frame fence.
+//! native frame-fence reads, recording events and the Win32 input producers.
 //!
 //! The Unity package's D3D11 and Vulkan bridge (integrations/unity/native/bridge.cpp) shares the
 //! activity flag, managed stage, callback count, packet store, policy and config: a process has
 //! one Unity renderer, so only one bridge uses this state. That bridge does not use the D3D12
-//! ring or sources; it applies policy changes through `pending_change` and `settle_change`, and
-//! its own D3D12 submission ring is `bridge_interop.rs`. The Vulkan bridge's admission and
-//! lifecycle are `vulkan_state.rs`.
+//! ring or sources. It applies policy changes through `pending_change` and `settle_change`.
+//! D3D11 and Vulkan each borrow a Runtime submission ring through `bridge_interop.rs`.
 //!
-//! The package's D3D11 route admits its packets with a lease (`rsf_unity_d3d11_admit_packet`,
-//! d3d11_state.rs): the store retains each Unity texture before the packet's address is returned,
-//! keeps the references with the stored packet, keeps the slot through the render event that
-//! takes it and releases them when that event ends or release cancels the packet. The typed
-//! AddRef and Release calls are bridge.cpp leaves. Mono D3D12 and Vulkan packets carry no lease
-//! and are freed when taken, as before.
+//! The D3D11 and D3D12 routes retain native textures at admission and hold the packet
+//! through its callback. The C++ leaves supply AddRef and Release. Vulkan carries borrowed
+//! image identities and returns its packet slot when taken.
 //!
 //! A fence completion of 0 stands for "no fence": every recorded submission is then in flight,
 //! as the C++ check `complete && (!fence || completed < complete)` had it.
@@ -25,11 +21,14 @@ use crate::bridge_abi::{
     RSF_UNITY_BRIDGE_ABI_VERSION, RSF_UNITY_FRAMES_PACKETS, RSF_UNITY_FRAMES_SLOTS,
     RSF_UNITY_FRAMES_SOURCES, RSF_UNITY_PACKET_HUDLESS, RSF_UNITY_PACKET_INPUTS_ONLY,
     RSF_UNITY_PACKET_PROBE, RSF_UNITY_PACKET_WINDOW, rsf_unity_config, rsf_unity_frame_admission,
-    rsf_unity_packet, rsf_unity_source_submission,
+    rsf_unity_packet, rsf_unity_source_submission, rsf_unity_texture_ops,
 };
 use rsf_game_sys::{
-    RSF_GAME_CAMERA_ABI_VERSION, rsf_camera_frame, rsf_game_host_services, rsf_game_render_config,
+    RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_INPUT_KEYED,
+    RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_SUBMISSION, rsf_camera_frame, rsf_game_cpu_event,
+    rsf_game_host_services, rsf_game_render_config, rsf_game_render_pass,
 };
+use std::cell::Cell;
 use std::ffi::{c_int, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -47,18 +46,6 @@ const NO_SOURCE: rsf_unity_source_submission = rsf_unity_source_submission {
     source_frame_id: 0,
     view_key: 0,
 };
-
-/// Typed reference leaves for a leased admission. Mirrors `rsf_unity_d3d11_texture_ops`
-/// (d3d11_state.h): `retain` adds one reference to a resource and `release` drops one. Neither is
-/// called with null.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(crate) struct LeaseOps {
-    pub(crate) retain: unsafe extern "C" fn(*mut c_void),
-    pub(crate) release: unsafe extern "C" fn(*mut c_void),
-}
-
-const _: () = assert!(size_of::<LeaseOps>() == 2 * size_of::<usize>());
 
 /// The references a stored packet holds on its colour, depth, motion and output resources, in
 /// that order, and the leaf that drops them. A null resource holds nothing.
@@ -123,17 +110,35 @@ struct State {
     policy: Policy,
 }
 
-// The packets hold Unity resource addresses as identity. This module never dereferences them.
-// A D3D11 packet's lease references are only passed to the typed leaves; the Mono D3D12 bridge
-// holds its own leases.
+// Packets hold Unity resource addresses. This module only passes leased resources to typed leaves.
 unsafe impl Send for State {}
 
 static STATE: Mutex<State> = Mutex::new(State::new());
 static ACTIVE: AtomicBool = AtomicBool::new(false);
+static D3D12_RECORDING: AtomicBool = AtomicBool::new(false);
 static MANAGED_STAGE: AtomicU32 = AtomicU32::new(0);
+
+thread_local! {
+    // The C02 host queries this only while processing the reconfiguration pass.
+    static DELIVERED_GENERATION: Cell<u32> = const { Cell::new(0) };
+}
 
 fn lock() -> MutexGuard<'static, State> {
     STATE.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn source_of(packet: &rsf_unity_packet) -> rsf_unity_source_submission {
+    rsf_unity_source_submission {
+        session_id: packet.session_id,
+        source_frame_id: packet.frame_id,
+        view_key: packet.view_key,
+    }
+}
+
+fn same_source(a: &rsf_unity_source_submission, b: &rsf_unity_source_submission) -> bool {
+    a.session_id == b.session_id
+        && a.source_frame_id == b.source_frame_id
+        && a.view_key == b.view_key
 }
 
 fn in_flight(complete: u64, completed: u64) -> bool {
@@ -233,21 +238,20 @@ impl State {
         &mut self,
         packet: &rsf_unity_packet,
         session_id: u64,
-        ops: LeaseOps,
+        ops: rsf_unity_texture_ops,
     ) -> Option<usize> {
+        let retain = ops.retain?;
+        let release = ops.release?;
         let slot = self.admit_packet(packet, session_id)?;
         let entry = &mut self.pending[slot];
         let stored = &entry.packet;
         let resources = [stored.color, stored.depth, stored.motion, stored.output];
         for resource in resources {
             if !resource.is_null() {
-                unsafe { (ops.retain)(resource) };
+                unsafe { retain(resource) };
             }
         }
-        entry.lease = Some(Lease {
-            resources,
-            release: ops.release,
-        });
+        entry.lease = Some(Lease { resources, release });
         Some(slot)
     }
 
@@ -299,7 +303,7 @@ impl State {
         let policy = &mut self.policy;
         policy.engine_spatial = engine_spatial;
         policy.quality = quality;
-        policy.generation = policy.generation.wrapping_add(1);
+        policy.generation = policy.generation.wrapping_add(1).max(1);
         if active {
             policy.pending = true;
         }
@@ -328,12 +332,14 @@ impl State {
         &mut self,
         packet: &rsf_unity_packet,
         completed: u64,
-        defer_policy: bool,
     ) -> Option<rsf_unity_frame_admission> {
-        if completed == u64::MAX {
+        if self.submission_unknown
+            || completed == u64::MAX
+            || !self.can_record_source(&source_of(packet))
+        {
             return None;
         }
-        let busy = self.any_in_flight(completed);
+        let busy = self.any_in_flight(completed) || in_flight(self.inline_complete, completed);
         let camera = &packet.camera;
         let hudless = packet.flags & RSF_UNITY_PACKET_HUDLESS != 0;
         let input = (camera.render_width, camera.render_height);
@@ -343,13 +349,10 @@ impl State {
             }
             self.input = input;
         }
-        let reconfigure = self.policy.pending;
-        if reconfigure {
-            if busy || (defer_policy && hudless) {
+        let pending_generation = self.pending_change();
+        if pending_generation.is_some() {
+            if busy || hudless {
                 return None;
-            }
-            if !defer_policy {
-                self.policy.pending = false;
             }
         } else if packet.generation != self.policy.generation {
             return None;
@@ -367,7 +370,7 @@ impl State {
         }
         Some(rsf_unity_frame_admission {
             slot: self.next as u32,
-            reconfigure: u32::from(reconfigure),
+            pending_generation: pending_generation.unwrap_or(0),
         })
     }
 
@@ -387,14 +390,32 @@ impl State {
             self.submission_unknown = true;
             return false;
         }
-        self.record_source(source, 0);
         self.next = (slot + 1) % SLOTS;
-        true
+        self.record_source(source, 0)
     }
 
-    fn record_source(&mut self, source: &rsf_unity_source_submission, inline_fence: u64) {
-        self.sources[(source.source_frame_id % SOURCES as u64) as usize] = *source;
+    fn can_record_source(&self, source: &rsf_unity_source_submission) -> bool {
+        source.source_frame_id != 0
+            && self
+                .sources
+                .iter()
+                .any(|entry| entry.source_frame_id == 0 || same_source(entry, source))
+    }
+
+    fn record_source(&mut self, source: &rsf_unity_source_submission, inline_fence: u64) -> bool {
+        if !self.can_record_source(source) {
+            return false;
+        }
+        if !self.sources.iter().any(|entry| same_source(entry, source)) {
+            let free = self
+                .sources
+                .iter_mut()
+                .find(|entry| entry.source_frame_id == 0)
+                .expect("checked receipt capacity");
+            *free = *source;
+        }
         self.inline_complete = self.inline_complete.max(inline_fence);
+        true
     }
 
     fn take_flushed(
@@ -403,22 +424,30 @@ impl State {
         source_frame_id: u64,
     ) -> ([rsf_unity_source_submission; SOURCES], usize) {
         let mut flushed = [NO_SOURCE; SOURCES];
-        let mut count = 0;
-        for source in &mut self.sources {
-            if source.source_frame_id != 0
-                && source.session_id == session_id
-                && source.source_frame_id <= source_frame_id
-            {
-                flushed[count] = *source;
+        let mut remaining = [NO_SOURCE; SOURCES];
+        let (mut count, mut retained) = (0, 0);
+        for source in self
+            .sources
+            .into_iter()
+            .filter(|source| source.source_frame_id != 0)
+        {
+            if source.session_id == session_id && source.source_frame_id <= source_frame_id {
+                flushed[count] = source;
                 count += 1;
-                *source = NO_SOURCE;
+            } else {
+                remaining[retained] = source;
+                retained += 1;
             }
         }
+        self.sources = remaining;
         (flushed, count)
     }
 
     fn drained(&self, completed: u64) -> bool {
-        if self.submission_unknown || self.pending.iter().any(|entry| entry.used) {
+        if completed == u64::MAX
+            || self.submission_unknown
+            || self.pending.iter().any(|entry| entry.used)
+        {
             return false;
         }
         !in_flight(self.inline_complete, completed) && !self.any_in_flight(completed)
@@ -498,7 +527,7 @@ extern "C" fn rsf_unity_frames_managed_stage() -> u32 {
 unsafe fn admit(
     packet: *const rsf_unity_packet,
     session_id: u64,
-    lease: Option<LeaseOps>,
+    lease: Option<rsf_unity_texture_ops>,
 ) -> Option<(usize, *mut c_void)> {
     if packet.is_null() {
         return None;
@@ -535,16 +564,16 @@ unsafe extern "C" fn rsf_unity_frames_admit_packet(
     address
 }
 
-/// The package D3D11 route's admission (`rsf_unity_d3d11_admit_packet`). The returned address
+/// Admission with native texture references. The returned address
 /// already holds the packet's lease.
 ///
 /// # Safety
 /// `packet` is null or readable for its leading size field, and for a whole packet when that
 /// field matches. `ops` must accept every non-null resource the packet names.
-pub(crate) unsafe fn admit_leased_packet(
+unsafe fn admit_leased_packet(
     packet: *const rsf_unity_packet,
     session_id: u64,
-    ops: LeaseOps,
+    ops: rsf_unity_texture_ops,
 ) -> *mut c_void {
     unsafe { admit(packet, session_id, Some(ops)) }.map_or(ptr::null_mut(), |(_, address)| address)
 }
@@ -566,6 +595,50 @@ unsafe extern "C" fn rsf_unity_frames_take_packet(
         slot.write(index as u32);
     }
     1
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_frames_admit_leased_packet(
+    packet: *const rsf_unity_packet,
+    session_id: u64,
+    ops: *const rsf_unity_texture_ops,
+) -> *mut c_void {
+    let Some(ops) = (unsafe { ops.as_ref() }) else {
+        return ptr::null_mut();
+    };
+    unsafe { admit_leased_packet(packet, session_id, *ops) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_frames_cpu_stage(
+    services: *const rsf_game_host_services,
+    stage: u32,
+    source: u64,
+    timestamp_qpc: u64,
+    qpc_frequency: u64,
+) {
+    let Some(services) = (unsafe { services.as_ref() }) else {
+        return;
+    };
+    if source == 0 || !ACTIVE.load(Ordering::SeqCst) {
+        return;
+    }
+    if let Some(deliver) = services.cpu_event {
+        let event = rsf_game_cpu_event {
+            struct_size: size_of::<rsf_game_cpu_event>() as u32,
+            stage,
+            session_id: services.session_id,
+            source_frame_id: source,
+            timestamp_qpc,
+            qpc_frequency,
+            render_expected: 0,
+            input_kind: 0,
+            message_id: 0,
+            event_version: RSF_GAME_CPU_EVENT_VERSION,
+            flags: RSF_GAME_CPU_INPUT_KEYED,
+        };
+        unsafe { deliver(services.user, &event) };
+    }
 }
 
 /// The render event that took a leased packet from `slot` has ended: free the slot, then release
@@ -697,34 +770,10 @@ unsafe extern "C" fn rsf_unity_frames_admit_frame(
     if admission.is_null() {
         return 0;
     }
-    let Some(admitted) = lock().admit_frame(packet, completed, false) else {
+    let Some(admitted) = lock().admit_frame(packet, completed) else {
         return 0;
     };
     unsafe { admission.write(admitted) };
-    1
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_mono_admit_frame(
-    packet: *const rsf_unity_packet,
-    completed: u64,
-    admission: *mut rsf_unity_frame_admission,
-    generation: *mut u32,
-) -> u32 {
-    let Some(packet) = (unsafe { packet.as_ref() }) else {
-        return 0;
-    };
-    if admission.is_null() || generation.is_null() {
-        return 0;
-    }
-    let mut state = lock();
-    let Some(admitted) = state.admit_frame(packet, completed, true) else {
-        return 0;
-    };
-    unsafe {
-        admission.write(admitted);
-        generation.write(state.policy.generation);
-    }
     1
 }
 
@@ -743,10 +792,15 @@ unsafe extern "C" fn rsf_unity_frames_submitted(
     if lock().submitted(admission, complete, source) {
         return 1;
     }
-    if matches!(complete, 0 | u64::MAX) {
-        ACTIVE.store(false, Ordering::SeqCst);
-    }
+    ACTIVE.store(false, Ordering::SeqCst);
     0
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_frames_can_record_source(
+    source: *const rsf_unity_source_submission,
+) -> u32 {
+    u32::from(unsafe { source.as_ref() }.is_some_and(|source| lock().can_record_source(source)))
 }
 
 #[unsafe(no_mangle)]
@@ -755,22 +809,94 @@ unsafe extern "C" fn rsf_unity_frames_record_source(
     inline_fence: u64,
 ) {
     if let Some(source) = unsafe { source.as_ref() } {
-        lock().record_source(source, inline_fence);
+        let recorded = lock().record_source(source, inline_fence);
+        debug_assert!(
+            recorded,
+            "the event checked inline receipt capacity before recording"
+        );
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_frames_take_flushed(
-    session_id: u64,
-    source_frame_id: u64,
-    output: *mut rsf_unity_source_submission,
-) -> u32 {
-    if output.is_null() {
+unsafe extern "C" fn rsf_unity_frames_flush_sources(
+    services: *const rsf_game_host_services,
+    queue: *mut c_void,
+    window: *const rsf_game_render_pass,
+) {
+    let (Some(services), Some(window)) = (unsafe { (services.as_ref(), window.as_ref()) }) else {
+        return;
+    };
+    let Some(render) = services.render_pass else {
+        return;
+    };
+    if queue.is_null() {
+        return;
+    }
+    let (flushed, count) = lock().take_flushed(window.session_id, window.source_frame_id);
+    for source in &flushed[..count] {
+        // The submission pass carries identity only. Unity has already flushed its lists.
+        let mut submission: rsf_game_render_pass = unsafe { std::mem::zeroed() };
+        submission.struct_size = size_of::<rsf_game_render_pass>() as u32;
+        submission.role = RSF_GAME_RENDER_SUBMISSION;
+        submission.session_id = source.session_id;
+        submission.source_frame_id = source.source_frame_id;
+        submission.view_key = source.view_key;
+        unsafe { render(services.user, queue, &submission, 0) };
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_frames_dispatch_d3d12(
+    services: *const rsf_game_host_services,
+    commands: *mut c_void,
+    pass: *mut rsf_game_render_pass,
+    generation: u32,
+) -> bool {
+    let (Some(services), Some(pass)) = (unsafe { (services.as_ref(), pass.as_mut()) }) else {
+        return false;
+    };
+    let Some(render) = services.render_pass else {
+        return false;
+    };
+    if commands.is_null() || pass.session_id != services.session_id {
+        return false;
+    }
+    if generation != 0 {
+        if lock().pending_change() != Some(generation) {
+            return false;
+        }
+        pass.flags |= RSF_GAME_RENDER_RECONFIGURE;
+        pass.camera_valid = 0;
+    }
+    DELIVERED_GENERATION.set(generation);
+    unsafe { render(services.user, commands, pass, 1) };
+    DELIVERED_GENERATION.set(0);
+    if generation != 0 {
+        lock().settle_change(generation);
+    }
+    true
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_mono_drained_generation(generation: *mut u32) -> c_int {
+    let delivered = DELIVERED_GENERATION.get();
+    if generation.is_null() || delivered == 0 {
         return 0;
     }
-    let (flushed, count) = lock().take_flushed(session_id, source_frame_id);
-    unsafe { ptr::copy_nonoverlapping(flushed.as_ptr(), output, count) };
-    count as u32
+    unsafe { generation.write(delivered) };
+    1
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_frames_begin_d3d12_event() -> bool {
+    D3D12_RECORDING
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_ok()
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_frames_end_d3d12_event() {
+    D3D12_RECORDING.store(false, Ordering::Release);
 }
 
 #[unsafe(no_mangle)]
@@ -944,7 +1070,10 @@ mod tests {
         LEASE_CALLS.with(|calls| calls.borrow_mut().push(("release", resource.addr())));
     }
 
-    const LEASE: LeaseOps = LeaseOps { retain, release };
+    const LEASE: rsf_unity_texture_ops = rsf_unity_texture_ops {
+        retain: Some(retain),
+        release: Some(release),
+    };
 
     fn lease_calls() -> Vec<(&'static str, usize)> {
         LEASE_CALLS.with(|calls| std::mem::take(&mut *calls.borrow_mut()))
@@ -1029,34 +1158,35 @@ mod tests {
     #[test]
     fn frames_wait_for_the_ring_before_changing_extents_or_policy() {
         let mut state = State::new();
-        let first = state.admit_frame(&packet(1), 0, false).unwrap();
-        assert_eq!((first.slot, first.reconfigure), (0, 0));
+        let first = state.admit_frame(&packet(1), 0).unwrap();
+        assert_eq!((first.slot, first.pending_generation), (0, 0));
         assert!(state.submitted(&first, 10, &source(1)));
 
         // Same extents and generation: the next slot is free.
-        let second = state.admit_frame(&packet(2), 0, false).unwrap();
+        let second = state.admit_frame(&packet(2), 0).unwrap();
         assert_eq!(second.slot, 1);
         assert!(state.submitted(&second, 11, &source(2)));
 
         // A size change waits for both submissions.
         let mut resized = packet(3);
         resized.camera.render_width = 960;
-        assert!(state.admit_frame(&resized, 10, false).is_none());
+        assert!(state.admit_frame(&resized, 10).is_none());
         assert_eq!(state.input, (1280, 720));
-        assert_eq!(state.admit_frame(&resized, 11, false).unwrap().slot, 2);
+        assert_eq!(state.admit_frame(&resized, 11).unwrap().slot, 2);
         assert_eq!(state.input, (960, 720));
 
         // A policy change advances the generation; stale packets wait for it.
         assert!(!state.set_policy(2, 1, true));
         assert!(state.set_policy(1, 3, true));
         assert_eq!(state.policy.generation, 2);
-        let mut admitted = state.admit_frame(&resized, 11, false).unwrap();
-        assert_eq!(admitted.reconfigure, 1);
+        let mut admitted = state.admit_frame(&resized, 11).unwrap();
+        assert_eq!(admitted.pending_generation, 2);
+        assert!(state.settle_change(admitted.pending_generation));
         assert!(state.submitted(&admitted, 12, &source(3)));
-        assert!(state.admit_frame(&resized, 12, false).is_none());
+        assert!(state.admit_frame(&resized, 12).is_none());
         resized.generation = 2;
-        admitted = state.admit_frame(&resized, 12, false).unwrap();
-        assert_eq!((admitted.slot, admitted.reconfigure), (0, 0));
+        admitted = state.admit_frame(&resized, 12).unwrap();
+        assert_eq!((admitted.slot, admitted.pending_generation), (0, 0));
 
         // An inactive bridge records the change without a pending reconfiguration.
         assert!(state.set_policy(0, 1, false));
@@ -1080,16 +1210,16 @@ mod tests {
     }
 
     #[test]
-    fn mono_keeps_the_generation_pending_until_the_list_is_ready() {
+    fn admission_keeps_the_generation_pending_until_delivery() {
         let mut state = State::new();
         assert!(state.set_policy(0, 1, true));
         let old = state.pending_change().unwrap();
         let mut hudless = packet(1);
         hudless.flags |= RSF_UNITY_PACKET_HUDLESS;
-        assert!(state.admit_frame(&hudless, 0, true).is_none());
+        assert!(state.admit_frame(&hudless, 0).is_none());
         assert_eq!(
-            state.admit_frame(&packet(1), 0, true).unwrap().reconfigure,
-            1
+            state.admit_frame(&packet(1), 0).unwrap().pending_generation,
+            old
         );
         assert_eq!(state.pending_change(), Some(old));
         assert!(state.set_policy(1, 5, true));
@@ -1102,22 +1232,22 @@ mod tests {
     fn a_busy_slot_is_not_reused() {
         let mut state = State::new();
         for (frame, complete) in [(1, 5), (2, 6), (3, 7)] {
-            let admitted = state.admit_frame(&packet(frame), 0, false).unwrap();
+            let admitted = state.admit_frame(&packet(frame), 0).unwrap();
             assert!(state.submitted(&admitted, complete, &source(frame)));
         }
-        assert!(state.admit_frame(&packet(4), 4, false).is_none());
-        assert_eq!(state.admit_frame(&packet(4), 5, false).unwrap().slot, 0);
+        assert!(state.admit_frame(&packet(4), 4).is_none());
+        assert_eq!(state.admit_frame(&packet(4), 5).unwrap().slot, 0);
         // Without a fence every recorded submission is in flight.
-        assert!(state.admit_frame(&packet(4), 0, false).is_none());
+        assert!(state.admit_frame(&packet(4), 0).is_none());
         // Device removal gives no completion proof for the recorded slots.
-        assert!(state.admit_frame(&packet(4), u64::MAX, false).is_none());
+        assert!(state.admit_frame(&packet(4), u64::MAX).is_none());
         assert!(!state.drained(u64::MAX));
     }
 
     #[test]
     fn a_missing_completion_blocks_retirement() {
         let mut state = State::new();
-        let admitted = state.admit_frame(&packet(1), 0, false).unwrap();
+        let admitted = state.admit_frame(&packet(1), 0).unwrap();
         assert!(!state.submitted(&admitted, 0, &source(1)));
         assert_eq!(state.next, 0);
         assert!(!state.drained(u64::MAX));
@@ -1126,9 +1256,16 @@ mod tests {
     }
 
     #[test]
-    fn sources_flush_by_session_and_frame_in_ring_order() {
+    fn sources_flush_by_session_frame_and_view_in_recording_order() {
         let mut state = State::new();
-        state.record_source(&source(9), 0);
+        let alternate_view = rsf_unity_source_submission {
+            view_key: 99,
+            ..source(9)
+        };
+        assert!(state.record_source(&source(9), 0));
+        assert!(state.record_source(&alternate_view, 0));
+        assert!(state.record_source(&source(1), 0));
+        assert!(state.record_source(&source(9), 0));
         state.record_source(&source(3), 0);
         state.record_source(&source(12), 0);
         state.record_source(
@@ -1140,11 +1277,31 @@ mod tests {
         );
         let (flushed, count) = state.take_flushed(SESSION, 10);
         let frames: Vec<u64> = flushed[..count].iter().map(|s| s.source_frame_id).collect();
-        assert_eq!(frames, [9, 3]);
+        assert_eq!(frames, [9, 9, 1, 3]);
+        assert_eq!(flushed[1].view_key, 99);
         let (flushed, count) = state.take_flushed(SESSION, 20);
         assert_eq!((count, flushed[0].source_frame_id), (1, 12));
         assert_eq!(state.take_flushed(SESSION, 20).1, 0);
         assert_eq!(state.take_flushed(SESSION + 1, 5).1, 1);
+    }
+
+    #[test]
+    fn a_delayed_flush_refuses_new_sources_at_capacity() {
+        let mut state = State::new();
+        for frame in 1..=SOURCES as u64 {
+            assert!(state.record_source(&source(frame), 0));
+        }
+        assert!(state.can_record_source(&source(1)));
+        let next = SOURCES as u64 + 1;
+        assert!(!state.record_source(&source(next), 0));
+        assert!(state.admit_frame(&packet(next), 0).is_none());
+        let (flushed, count) = state.take_flushed(SESSION, 1);
+        assert_eq!((count, flushed[0].source_frame_id), (1, 1));
+        assert!(state.admit_frame(&packet(next), 0).is_some());
+        assert!(state.record_source(&source(next), 0));
+        let (flushed, count) = state.take_flushed(SESSION, next);
+        assert_eq!((count, flushed[0].source_frame_id), (SOURCES, 2));
+        assert_eq!(flushed[SOURCES - 1].source_frame_id, next);
     }
 
     #[test]
@@ -1163,7 +1320,7 @@ mod tests {
     fn release_keeps_the_policy() {
         let mut state = State::new();
         assert!(state.set_policy(1, 4, true));
-        let admitted = state.admit_frame(&packet(1), 0, false).unwrap();
+        let admitted = state.admit_frame(&packet(1), 0).unwrap();
         assert!(state.submitted(&admitted, 3, &source(1)));
         state.release();
         assert_eq!(

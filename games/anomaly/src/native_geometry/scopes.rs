@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
-use super::{COUNTERS, Platform, capturing, read_pass, rsf_anomaly_geometry_binding};
+use super::{
+    COUNTERS, Platform, capturing, engine_layout, read_bytes, read_pass,
+    rsf_anomaly_geometry_binding,
+};
 use crate::native_geometry_abi::{
-    Context, Engine, FIRST_PERSON, MAIN, SCOPE, UNSET, ViewSample, Visual, WORLD, Window,
+    Context, Engine, FIRST_PERSON, MAIN, SCOPE, UNSET, Visual, WORLD, Window,
 };
 use std::{cell::Cell, ptr};
 
@@ -41,24 +44,27 @@ extern "C" fn rsf_anomaly_geometry_factory_leave() {
     FACTORY.set(FACTORY.get() - 1);
 }
 
-fn view(platform: &Platform, engine: Engine) -> u8 {
-    let mut sample = ViewSample::default();
-    if engine.module == 0 || !unsafe { (platform.view)(engine, &mut sample) } {
-        return UNSET;
-    }
-    if sample.active != 0
-        && sample.delay != 0
-        && sample.frame.is_multiple_of(u32::from(sample.delay))
-    {
-        SCOPE
-    } else {
-        MAIN
-    }
+fn view(platform: &Platform, engine: Engine) -> Option<u8> {
+    let layout = engine_layout(platform, engine)?;
+    let viewport = engine.module.checked_add(layout.viewport as usize)?;
+    let [active] = read_bytes(platform.read, viewport)?;
+    let [delay] = read_bytes(platform.read, viewport.checked_add(1)?)?;
+    let frame = u32::from_ne_bytes(read_bytes(
+        platform.read,
+        engine.module.checked_add(layout.frame as usize)?,
+    )?);
+    Some(
+        if active != 0 && delay != 0 && frame.is_multiple_of(u32::from(delay)) {
+            SCOPE
+        } else {
+            MAIN
+        },
+    )
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_geometry_view(platform: &Platform, engine: Engine) -> u8 {
-    view(platform, engine)
+    view(platform, engine).unwrap_or(UNSET)
 }
 
 #[unsafe(no_mangle)]
@@ -87,7 +93,7 @@ unsafe extern "C" fn rsf_anomaly_geometry_render_enter(
     if !capturing() {
         return false;
     }
-    let view = view(platform, rsf_anomaly_geometry_binding());
+    let view = rsf_anomaly_geometry_view(platform, rsf_anomaly_geometry_binding());
     match view {
         MAIN => COUNTERS.views_main.increment(),
         SCOPE => COUNTERS.views_scope.increment(),

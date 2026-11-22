@@ -12,21 +12,11 @@ static_assert(sizeof(DosFacts) == 8 && sizeof(PeFacts) == 12);
 static_assert(sizeof(ImageHeaders) == 16 && offsetof(ImageHeaders, pe) == 8);
 static_assert(sizeof(HookSite) == 48 && sizeof(ResolvedHookSite) == 24);
 
+extern "C" bool rsf_anomaly_hook_read_mapped(const void*, const void*, void*, size_t, bool,
+    decltype(&guarded_copy)) noexcept;
+
 bool read_mapped(const void* owner, const void* address, void* out, size_t size, bool executable) noexcept {
-    if (!address || !size) return false;
-    MEMORY_BASIC_INFORMATION info{};
-    if (!VirtualQuery(address, &info, sizeof(info)) || info.State != MEM_COMMIT ||
-        info.AllocationBase != owner || (info.Protect & (PAGE_GUARD | PAGE_NOACCESS))) return false;
-    const auto start = reinterpret_cast<uintptr_t>(address);
-    const auto region = reinterpret_cast<uintptr_t>(info.BaseAddress);
-    if (start < region || start - region > info.RegionSize || size > info.RegionSize - (start - region))
-        return false;
-    const auto protection = info.Protect & 0xff;
-    const bool exec_read = protection == PAGE_EXECUTE_READ || protection == PAGE_EXECUTE_READWRITE ||
-        protection == PAGE_EXECUTE_WRITECOPY;
-    const bool data_read = protection == PAGE_READONLY || protection == PAGE_READWRITE ||
-        protection == PAGE_WRITECOPY;
-    return (exec_read || (!executable && data_read)) && guarded_copy(out, address, size);
+    return rsf_anomaly_hook_read_mapped(owner, address, out, size, executable, guarded_copy);
 }
 
 using Read = bool (*)(const void*, const void*, void*, size_t, bool) noexcept;

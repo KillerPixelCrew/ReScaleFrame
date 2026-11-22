@@ -34,6 +34,7 @@ fn event(stage: u32, session: u64) -> rsf_game_cpu_event {
 
 fn admitted() -> Window {
     let window = Window::new();
+    window.bind_cpu_service(Some(&fake::D3D12_CPU));
     assert!(window.accept(&fake::LEAVES, handle(ENGINE)));
     fake::take_window_calls();
     window
@@ -42,6 +43,7 @@ fn admitted() -> Window {
 #[test]
 fn admits_the_first_engine_window_of_this_process() {
     let window = Window::new();
+    window.bind_cpu_service(Some(&fake::D3D12_CPU));
     assert!(!window.accept(&fake::LEAVES, ptr::null_mut()));
     assert!(fake::take_window_calls().is_empty());
     fake::IDENTITY.set((11, 10, "Engine"));
@@ -65,16 +67,17 @@ fn admits_the_first_engine_window_of_this_process() {
 fn frame_begin_attaches_the_procedure_once() {
     fake::PROCEDURE.set(fake::ENGINE_PROCEDURE);
     let window = Window::new();
+    window.bind_cpu_service(Some(&fake::D3D12_CPU));
     // Nothing is attached before a window is admitted.
-    window.cpu(&fake::LEAVES, false, &event(RSF_GAME_CPU_FRAME_BEGIN, 5));
+    window.cpu(&fake::LEAVES, &event(RSF_GAME_CPU_FRAME_BEGIN, 5));
     assert!(fake::take_window_calls().is_empty());
     assert!(window.accept(&fake::LEAVES, handle(ENGINE)));
     fake::take_window_calls();
     fake::take_cpu_events();
-    window.cpu(&fake::LEAVES, false, &event(RSF_GAME_CPU_INPUT_SAMPLE, 5));
+    window.cpu(&fake::LEAVES, &event(RSF_GAME_CPU_INPUT_SAMPLE, 5));
     assert!(fake::take_window_calls().is_empty());
-    window.cpu(&fake::LEAVES, false, &event(RSF_GAME_CPU_FRAME_BEGIN, 5));
-    window.cpu(&fake::LEAVES, false, &event(RSF_GAME_CPU_FRAME_BEGIN, 5));
+    window.cpu(&fake::LEAVES, &event(RSF_GAME_CPU_FRAME_BEGIN, 5));
+    window.cpu(&fake::LEAVES, &event(RSF_GAME_CPU_FRAME_BEGIN, 5));
     assert_eq!(
         fake::take_window_calls(),
         [("set", procedure_address() as u64)]
@@ -94,10 +97,11 @@ fn a_refused_attachment_is_retried_at_the_next_frame_begin() {
     fake::PROCEDURE.set(fake::ENGINE_PROCEDURE);
     let window = admitted();
     fake::PROCEDURE_REFUSED.set(true);
-    window.cpu(&fake::LEAVES, true, &event(RSF_GAME_CPU_FRAME_BEGIN, 5));
+    window.bind_cpu_service(Some(&fake::VK_CPU));
+    window.cpu(&fake::LEAVES, &event(RSF_GAME_CPU_FRAME_BEGIN, 5));
     fake::PROCEDURE_REFUSED.set(false);
-    window.cpu(&fake::LEAVES, true, &event(RSF_GAME_CPU_FRAME_BEGIN, 5));
-    window.cpu(&fake::LEAVES, true, &event(RSF_GAME_CPU_FRAME_BEGIN, 5));
+    window.cpu(&fake::LEAVES, &event(RSF_GAME_CPU_FRAME_BEGIN, 5));
+    window.cpu(&fake::LEAVES, &event(RSF_GAME_CPU_FRAME_BEGIN, 5));
     let set = ("set", procedure_address() as u64);
     assert_eq!(fake::take_window_calls(), [set, set]);
     // A Vulkan session's events reach the Vulkan latency owner.
@@ -108,17 +112,18 @@ fn a_refused_attachment_is_retried_at_the_next_frame_begin() {
 fn messages_report_the_session_and_reach_the_replaced_procedure() {
     fake::PROCEDURE.set(fake::ENGINE_PROCEDURE);
     let window = admitted();
+    window.bind_cpu_service(Some(&fake::VK_CPU));
     // Before attachment the default procedure answers.
     assert_eq!(
-        window.message(&fake::LEAVES, false, handle(ENGINE), 0x100, 0, 0),
+        window.message(&fake::LEAVES, handle(ENGINE), 0x100, 0, 0),
         fake::FORWARDED
     );
     assert_eq!(fake::take_window_calls()[0], ("forward", 0));
-    window.cpu(&fake::LEAVES, false, &event(RSF_GAME_CPU_FRAME_BEGIN, 7));
+    window.cpu(&fake::LEAVES, &event(RSF_GAME_CPU_FRAME_BEGIN, 7));
     fake::take_cpu_events();
     fake::take_window_calls();
     assert_eq!(
-        window.message(&fake::LEAVES, true, handle(ENGINE), 0x201, 1, 2),
+        window.message(&fake::LEAVES, handle(ENGINE), 0x201, 1, 2),
         fake::FORWARDED
     );
     assert_eq!(
@@ -145,7 +150,7 @@ fn messages_report_the_session_and_reach_the_replaced_procedure() {
 fn release_restores_only_its_own_procedure() {
     fake::PROCEDURE.set(fake::ENGINE_PROCEDURE);
     let window = admitted();
-    window.cpu(&fake::LEAVES, false, &event(RSF_GAME_CPU_FRAME_BEGIN, 7));
+    window.cpu(&fake::LEAVES, &event(RSF_GAME_CPU_FRAME_BEGIN, 7));
     fake::take_window_calls();
     window.release(&fake::LEAVES);
     assert_eq!(
@@ -156,7 +161,7 @@ fn release_restores_only_its_own_procedure() {
     assert!(window.input().is_null());
     // A released owner admits and attaches again.
     assert!(window.accept(&fake::LEAVES, handle(OTHER)));
-    window.cpu(&fake::LEAVES, false, &event(RSF_GAME_CPU_FRAME_BEGIN, 8));
+    window.cpu(&fake::LEAVES, &event(RSF_GAME_CPU_FRAME_BEGIN, 8));
     assert_eq!(fake::PROCEDURE.get(), procedure_address());
 }
 
@@ -164,7 +169,7 @@ fn release_restores_only_its_own_procedure() {
 fn a_refused_restore_keeps_the_previous_procedure_available() {
     fake::PROCEDURE.set(fake::ENGINE_PROCEDURE);
     let window = admitted();
-    window.cpu(&fake::LEAVES, false, &event(RSF_GAME_CPU_FRAME_BEGIN, 7));
+    window.cpu(&fake::LEAVES, &event(RSF_GAME_CPU_FRAME_BEGIN, 7));
     fake::take_window_calls();
     fake::PROCEDURE_REFUSED.set(true);
     window.release(&fake::LEAVES);
@@ -175,7 +180,7 @@ fn a_refused_restore_keeps_the_previous_procedure_available() {
     );
     assert_eq!(fake::PROCEDURE.get(), procedure_address());
     assert!(window.input().is_null());
-    window.message(&fake::LEAVES, false, handle(ENGINE), 0x100, 0, 0);
+    window.message(&fake::LEAVES, handle(ENGINE), 0x100, 0, 0);
     assert_eq!(
         fake::take_window_calls()[0],
         ("forward", fake::ENGINE_PROCEDURE as u64)
@@ -186,36 +191,53 @@ fn a_refused_restore_keeps_the_previous_procedure_available() {
 fn release_under_a_foreign_subclass_keeps_forwarding() {
     fake::PROCEDURE.set(fake::ENGINE_PROCEDURE);
     let window = admitted();
-    window.cpu(&fake::LEAVES, false, &event(RSF_GAME_CPU_FRAME_BEGIN, 7));
+    window.cpu(&fake::LEAVES, &event(RSF_GAME_CPU_FRAME_BEGIN, 7));
     fake::PROCEDURE.set(0x6000);
     fake::take_window_calls();
     fake::take_cpu_events();
     window.release(&fake::LEAVES);
     assert_eq!(fake::take_window_calls(), [("get", 0)]);
     assert!(window.input().is_null());
-    // The subclass above still forwards here; the replaced procedure keeps receiving messages,
-    // reported without a session as before.
-    window.message(&fake::LEAVES, false, handle(ENGINE), 0x100, 0, 0);
-    assert_eq!(fake::take_cpu_events()[0].2, 0);
+    // Retired windows keep forwarding without sending inputs to the active session.
+    window.message(&fake::LEAVES, handle(ENGINE), 0x100, 0, 0);
+    assert!(fake::take_cpu_events().is_empty());
     assert_eq!(
         fake::take_window_calls()[0],
         ("forward", fake::ENGINE_PROCEDURE as u64)
     );
-    // Nothing is attached again over the subclass at a later frame begin.
-    assert!(window.accept(&fake::LEAVES, handle(ENGINE)));
-    window.cpu(&fake::LEAVES, false, &event(RSF_GAME_CPU_FRAME_BEGIN, 8));
-    assert!(!fake::take_window_calls().iter().any(|call| call.0 == "set"));
+    fake::PROCEDURE.set(0x7000);
+    assert!(window.accept(&fake::LEAVES, handle(OTHER)));
+    window.cpu(&fake::LEAVES, &event(RSF_GAME_CPU_FRAME_BEGIN, 8));
+    assert_eq!(
+        fake::take_window_calls(),
+        [
+            ("identity", OTHER as u64),
+            ("set", procedure_address() as u64)
+        ]
+    );
+    fake::take_cpu_events();
+    window.message(&fake::LEAVES, handle(ENGINE), 0x100, 0, 0);
+    assert_eq!(
+        fake::take_window_calls()[0],
+        ("forward", fake::ENGINE_PROCEDURE as u64)
+    );
+    assert!(fake::take_cpu_events().is_empty());
+    window.message(&fake::LEAVES, handle(OTHER), 0x100, 0, 0);
+    assert_eq!(fake::take_window_calls()[0], ("forward", 0x7000));
+    assert_eq!(fake::take_cpu_events()[0].2, 8);
 }
 
 #[test]
 fn pings_and_present_markers_use_the_admitted_window() {
     let window = Window::new();
-    assert_eq!(window.latency_ping(&fake::LEAVES, false), 1);
+    window.bind_cpu_service(Some(&fake::D3D12_CPU));
+    assert_eq!(window.latency_ping(), 1);
     assert!(!window.present_marker(&fake::LEAVES, true, ENGINE as u64, 1));
     assert!(window.accept(&fake::LEAVES, handle(ENGINE)));
     fake::take_window_calls();
-    assert_eq!(window.latency_ping(&fake::LEAVES, false), 1);
-    assert_eq!(window.latency_ping(&fake::LEAVES, true), 2);
+    assert_eq!(window.latency_ping(), 1);
+    window.bind_cpu_service(Some(&fake::VK_CPU));
+    assert_eq!(window.latency_ping(), 2);
     assert!(!window.present_marker(&fake::LEAVES, false, ENGINE as u64, 1));
     assert!(!window.present_marker(&fake::LEAVES, true, 0, 1));
     assert!(!window.present_marker(&fake::LEAVES, true, OTHER as u64, 1));
@@ -228,6 +250,40 @@ fn pings_and_present_markers_use_the_admitted_window() {
             ("vulkan_ping", ENGINE as u64),
             ("marker", 1),
             ("marker", 0),
+        ]
+    );
+}
+
+#[test]
+fn explicit_present_forwards_one_matching_source_even_after_window_release() {
+    let window = admitted();
+    window.bind_cpu_service(Some(&fake::VK_CPU));
+    let mut pass = crate::d3d12::empty_pass();
+    pass.struct_size = size_of::<rsf_game_render_pass>() as u32;
+    pass.role = RSF_GAME_RENDER_PRESENT;
+    pass.session_id = 7;
+    pass.source_frame_id = 9;
+    pass.window_key = OTHER as u64;
+    assert!(!window.execution(&pass, 1));
+    pass.window_key = ENGINE as u64;
+    assert!(window.execution(&pass, 1));
+    assert!(!window.execution(&pass, 1));
+    window.release(&fake::LEAVES);
+    pass.source_frame_id = 8;
+    assert!(!window.execution(&pass, 0));
+    pass.source_frame_id = 9;
+    assert!(window.execution(&pass, 0));
+    assert_eq!(
+        fake::take_window_calls(),
+        [
+            ("execution_role", RSF_GAME_RENDER_PRESENT.into()),
+            ("execution_source", 9),
+            ("execution_window", ENGINE as u64),
+            ("execution_begin", 1),
+            ("execution_role", RSF_GAME_RENDER_PRESENT.into()),
+            ("execution_source", 9),
+            ("execution_window", ENGINE as u64),
+            ("execution_begin", 0),
         ]
     );
 }

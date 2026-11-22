@@ -116,7 +116,7 @@ public:
     virtual bool upload_projection(const void* matrix) noexcept = 0;
     // Stage 3: dx10SamplerStateCache::SetMipLODBias(&SSManager, value). Rebuilds every sampler when the value changes.
     virtual bool set_mip_bias(float value) noexcept = 0;
-    virtual bool correct_position_constant(void*, float, float) noexcept { return false; }
+    virtual uint32_t correct_position_constant(void*, float, float) noexcept { return 0; }
 protected:
     ~SwapHost() = default;
 };
@@ -139,6 +139,7 @@ public:
     void prepared() noexcept;
     // S-B seam. True when it closed a window (restore, then the seam pass). False passes through (menu, SVP, stock).
     bool seam() noexcept;
+    void* native_handle() const noexcept { return state_; }
     // End of phase_combine, the last call of CRender::Render. Restores and refuses when the seam did not fire.
     void combine_end() noexcept;
     // Before IRenderDeviceRender::End. Restores and refuses when a window survived the whole frame.

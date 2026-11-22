@@ -20,24 +20,11 @@ pub(super) fn write_new(
 }
 
 fn write_rows(path: &Path, mapping: &Mapping<'_>) -> bool {
-    let texture = &mapping.layout;
-    let Some(row) = texture.width.checked_mul(texture.pixel_bytes) else {
+    let Some(rows) = mapping.rows() else {
         return false;
     };
-    if texture.data.is_null() || row == 0 || texture.height == 0 || texture.row_pitch < row {
-        return false;
-    }
-    let span = u64::from(texture.row_pitch) * u64::from(texture.height - 1) + u64::from(row);
-    if span > isize::MAX as u64 || texture.data.addr().checked_add(span as usize).is_none() {
-        return false;
-    }
     write_new(path, |file| {
-        for y in 0..texture.height {
-            let offset = y as usize * texture.row_pitch as usize;
-            // The native map lends these rows until Unmap. Padding is skipped.
-            let bytes = unsafe {
-                std::slice::from_raw_parts(texture.data.cast::<u8>().add(offset), row as usize)
-            };
+        for bytes in rows {
             file.write_all(bytes)?;
         }
         Ok(())

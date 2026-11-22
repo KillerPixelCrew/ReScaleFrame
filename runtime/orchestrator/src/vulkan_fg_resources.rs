@@ -98,6 +98,46 @@ pub(super) fn ensure_image(
     usage: u32,
     with_view: bool,
 ) -> Result<(), i32> {
+    ensure_image_with_memory(
+        platform,
+        user,
+        current,
+        [width, height],
+        format,
+        usage,
+        (with_view, MemoryChoice::DeviceLocal),
+    )
+}
+
+pub(super) enum MemoryChoice {
+    DeviceLocal,
+    PreferDeviceLocal { type_count: u32 },
+}
+
+impl MemoryChoice {
+    pub(super) fn select(self, required: u32, local: u32) -> Option<u32> {
+        let compatible = match self {
+            Self::DeviceLocal => required & local,
+            Self::PreferDeviceLocal { type_count } => {
+                required & 1u32.checked_shl(type_count).map_or(u32::MAX, |bit| bit - 1)
+            }
+        };
+        match compatible & local {
+            0 => compatible.checked_ilog2(),
+            preferred => Some(preferred.trailing_zeros()),
+        }
+    }
+}
+
+pub(super) fn ensure_image_with_memory(
+    platform: &Platform,
+    user: *mut c_void,
+    current: &mut Image,
+    [width, height]: [u32; 2],
+    format: u32,
+    usage: u32,
+    (with_view, memory): (bool, MemoryChoice),
+) -> Result<(), i32> {
     const OUT_OF_DEVICE_MEMORY: i32 = -2;
     const INITIALIZATION_FAILED: i32 = -3;
     if current.image != 0
@@ -127,13 +167,9 @@ pub(super) fn ensure_image(
     }
     let (mut size, mut types) = (0, 0);
     unsafe { (platform.requirements.unwrap())(user, image.image, &mut size, &mut types) };
-    types &= unsafe { (platform.local_memory_types.unwrap())(user) };
-    if types == 0 {
-        return Err(OUT_OF_DEVICE_MEMORY);
-    }
-    let result = unsafe {
-        (platform.allocate.unwrap())(user, size, types.trailing_zeros(), &mut image.memory)
-    };
+    let local = unsafe { (platform.local_memory_types.unwrap())(user) };
+    let kind = memory.select(types, local).ok_or(OUT_OF_DEVICE_MEMORY)?;
+    let result = unsafe { (platform.allocate.unwrap())(user, size, kind, &mut image.memory) };
     if result != 0 || image.memory == 0 {
         return Err(if result != 0 {
             result

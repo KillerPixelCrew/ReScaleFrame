@@ -60,6 +60,7 @@ fn refs(handle: Handle) -> u32 {
 
 #[derive(Default)]
 struct World {
+    refused_preset: Option<u32>,
     events: Vec<String>,
     now: u64,
     completed: u64,
@@ -163,7 +164,7 @@ unsafe extern "C" fn depth_domains(_: *const Pass) -> u32 {
     0
 }
 unsafe extern "C" fn dlss_preset_valid(preset: u32) -> u32 {
-    u32::from(preset <= 15)
+    u32::from(with(|world| world.refused_preset != Some(preset)))
 }
 unsafe extern "C" fn fg_default_backend(vendor: u32, _: u32) -> u32 {
     if vendor == 0x10de { 1 } else { 3 }
@@ -573,6 +574,41 @@ fn creation_refuses_busy_before_installing_and_releases_admission_after_refusal(
 }
 
 #[test]
+fn diagnostics_save_live_capture_and_mark_graphics_for_restart() {
+    let ini = Temporary::new("diagnostic-options");
+    let host = host(&ini, 0);
+    events();
+    let set = |index: usize, value| {
+        host.diagnostic_intent(&Intent {
+            host_option_changed: 1,
+            host_option_index: index as u32,
+            host_option_value: value,
+            ..Intent::default()
+        });
+    };
+    set(OVERLAY_PROBE, 1);
+    set(FRAME_CAPTURE, 1);
+    set(GRAPHICS_DIAGNOSTICS, 1);
+    let state = host.lock();
+    let [probe, capture, graphics] =
+        host.diagnostic_options(state.capture_enabled, state.graphics_diagnostics);
+    assert_eq!((probe.value, capture.value, graphics.value), (1, 1, 1));
+    assert_eq!(
+        (probe.restart, capture.restart, graphics.restart),
+        (0, 0, 1)
+    );
+    assert!(state.capture_update);
+    drop(state);
+    assert_eq!(ini.integer("OverlayProbe"), 1);
+    assert_eq!(ini.integer("GraphicsDiagnostics"), 1);
+    assert!(ini.contents().contains("SRCaptureDirectory="));
+    assert!(!events().iter().any(|event| event == "diagnostics"));
+    set(FRAME_CAPTURE, 0);
+    assert!(!host.lock().capture_enabled);
+    assert!(host.lock().capture_update);
+}
+
+#[test]
 fn quality_follows_the_actual_input_ratio() {
     assert_eq!(infer_quality(1920, 1920), 0);
     assert_eq!(infer_quality(1280, 1920), 1);
@@ -784,13 +820,14 @@ fn settings_apply_validates_then_commits_one_section_write() {
     assert_eq!(saved.sr_quality, 2);
     assert_eq!(saved.sharpening_sharpness, 0.4);
     let before = ini.contents();
+    with(|world| world.refused_preset = Some(7));
     for change in [
         |s: &mut Settings| s.sr_enabled = 2,
         |s: &mut Settings| s.latency = 3,
         |s: &mut Settings| s.sr_quality = 5,
         |s: &mut Settings| s.generated_frames = 0,
         |s: &mut Settings| s.generated_frames = 16,
-        |s: &mut Settings| s.dlss_preset = 16,
+        |s: &mut Settings| s.dlss_preset = 7,
         |s: &mut Settings| s.sr_backend = 4,
         |s: &mut Settings| s.sr_backend = 40,
         |s: &mut Settings| s.fg_backend = 0,
@@ -1088,33 +1125,33 @@ fn latency_and_observer_submissions_reach_their_owners() {
 #[test]
 fn published_entries_refuse_foreign_users_and_short_structures() {
     let mut status: Status = Status::default();
-    assert_eq!(unsafe { rsf_core_render_status_get(null_mut()) }, INVALID);
+    assert_eq!(unsafe { rsf_render_status_get(null_mut()) }, INVALID);
     status.struct_size = 8;
-    assert_eq!(unsafe { rsf_core_render_status_get(&mut status) }, INVALID);
+    assert_eq!(unsafe { rsf_render_status_get(&mut status) }, INVALID);
     let mut settings: Settings = unsafe { std::mem::zeroed() };
     settings.struct_size = size_of::<Settings>() as u32;
     settings.abi_version = RSF_RENDER_FRONTEND_ABI_VERSION + 1;
     assert_eq!(
-        unsafe { rsf_core_render_settings_get(&mut settings) },
+        unsafe { rsf_render_settings_get(&mut settings) },
         ABI_MISMATCH
     );
     assert_eq!(
-        unsafe { rsf_core_render_settings_apply(&settings) },
+        unsafe { rsf_render_settings_apply(&settings) },
         ABI_MISMATCH
     );
     let stranger = 0x1234 as Handle;
     assert_eq!(
-        unsafe { rsf_core_render_host_graphics(stranger, stranger) },
+        unsafe { rsf_render_host_graphics(stranger, stranger) },
         INVALID
     );
     assert_eq!(
-        unsafe { rsf_core_render_host_device(stranger, stranger) },
+        unsafe { rsf_render_host_device(stranger, stranger) },
         NOT_READY
     );
     assert_eq!(
-        unsafe { rsf_core_render_host_factory(stranger, stranger) },
+        unsafe { rsf_render_host_factory(stranger, stranger) },
         NOT_READY
     );
-    assert_eq!(rsf_core_render_host_graphics_ready(stranger), 0);
-    assert!(unsafe { rsf_core_render_host_native_object(stranger, stranger) }.is_null());
+    assert_eq!(rsf_render_host_graphics_ready(stranger), 0);
+    assert!(unsafe { rsf_render_host_native_object(stranger, stranger) }.is_null());
 }

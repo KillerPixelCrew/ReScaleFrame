@@ -26,7 +26,7 @@ struct PositionPlatform {
 static_assert(sizeof(PositionLayout) == 72 && sizeof(PositionPlatform) == 32);
 extern "C" {
 bool rsf_anomaly_sr_correct_position_vector(float*, float, float) noexcept;
-bool rsf_anomaly_sr_correct_position_constant(const PositionLayout*, const PositionPlatform*, uintptr_t, float, float) noexcept;
+uint32_t rsf_anomaly_sr_correct_position_constant(const PositionLayout*, const PositionPlatform*, uintptr_t, float, float) noexcept;
 }
 
 inline bool correct_position_vector(PositionVector& value, float x, float y) noexcept {
@@ -41,7 +41,7 @@ public:
 protected:
     ~PositionConstantHost() = default;
 };
-inline bool correct_position_constant(PositionConstantHost& host, void* constant, float x, float y) noexcept {
+inline uint32_t correct_position_constant(PositionConstantHost& host, void* constant, float x, float y) noexcept {
     static constexpr PositionLayout layout{constant_destination_offset, constant_load_offset, geometry::constant_buffer_size_offset,
         geometry::constant_buffer_data_offset, constant_buffer_changed_offset, geometry::constant_buffer_slots,
         constant_stage_bits, {16, 12, 8, 20, 24, 28}};

@@ -4,6 +4,7 @@ use rsf_game_sys::{
     RSF_GAME_CPU_SIMULATION_END, RSF_GAME_RENDER_PRESENT, RSF_GAME_RENDER_SUBMISSION,
     rsf_game_render_pass,
 };
+use std::cell::Cell;
 use std::mem::{offset_of, size_of, take};
 use std::sync::Mutex;
 
@@ -35,6 +36,11 @@ impl Marker {
 struct Frame {
     session: u64,
     id: u64,
+}
+
+// The typed Present receipt is scoped to the calling thread and actual Present call.
+thread_local! {
+    static PRESENTING: Cell<Option<Frame>> = const { Cell::new(None) };
 }
 
 #[derive(Clone, Copy)]
@@ -127,6 +133,7 @@ static FRAMES: Mutex<Frames> = Mutex::new(Frames::new());
 
 #[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_latencyvk_frames_reset() {
+    PRESENTING.set(None);
     *FRAMES.lock().unwrap() = Frames::new();
 }
 
@@ -162,16 +169,23 @@ pub(crate) unsafe extern "C" fn rsf_core_latencyvk_execution(
         (RSF_GAME_RENDER_PRESENT, 0) => Marker::PresentEnd,
         _ => return INVALID,
     };
+    if matches!(marker, Marker::PresentEnd) && PRESENTING.get() == Some(frame) {
+        PRESENTING.set(None);
+    }
     if !frame_facts(frame.session, frame.id).is_some_and(|facts| {
         facts.failed == 0 && facts.stage_mask & (1 << RSF_GAME_CPU_SIMULATION_END) != 0
     }) {
         return NOT_READY;
     }
     let mut frames = FRAMES.lock().unwrap();
-    match frames.slot(frame) {
+    let result = match frames.slot(frame) {
         Some(record) if record.frame == frame => record.advance(marker),
         _ => NOT_READY,
+    };
+    if result > 0 && matches!(marker, Marker::PresentBegin) {
+        PRESENTING.set(Some(frame));
     }
+    result
 }
 
 #[unsafe(no_mangle)]
@@ -185,6 +199,9 @@ pub(crate) extern "C" fn rsf_core_latencyvk_legacy_present(begin: u32) -> u64 {
 }
 
 pub(super) fn legacy_present_source() -> Option<u64> {
+    if let Some(frame) = PRESENTING.get() {
+        return Some(frame.id);
+    }
     let frame = FRAMES.lock().unwrap().legacy.presenting;
     (frame != 0).then_some(frame)
 }

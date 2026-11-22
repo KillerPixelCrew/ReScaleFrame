@@ -425,3 +425,44 @@ configured at the DR return with the `hudless` receipt and HUDless WINDOW each f
 foreign prepass refusing that frame's depth, an overlapping DR writer while ownership is pending,
 a Pip-Boy or menu screen leaving native resolution alone, and the owned selector following a
 native full-viewport intent.
+
+
+## Render transaction contracts
+
+F03 starts at `70e01825` and uses the callback and executable evidence above.
+The rel32 guard descriptors are the source of the caller return RVAs and the
+SR pass key. The CPU and render guards share an exact bounded read with
+their existing 16-byte and 32-byte limits. No new executable or shader
+evidence was collected.
+
+- Effects entry checks the verified caller, range, manager and open
+  imagespace FRAME. Its stack receipt carries CPU identity through the native
+  call. An owned recovery token or auxiliary lease can still use this
+  boundary after quiesce or source invalidation if the World matches.
+  Imagespace and post-Swap cleanup still cover retained obligations.
+- Runtime OK releases a recovery token only with NEXT_REDUCTION_ALLOWED.
+  The retirement caller observes whether ownership ended. Resolution
+  reporting records NOT_READY when output restoration fails.
+- The viewport shell holds one typed framebuffer lease on its stack.
+  Acquisition returns identity and extent from that lease even on a partial
+  read, and WINDOW retains the colour from that same lease. The FINAL_SCENE
+  begin and end precede WINDOW begin.
+- The normal and reduced SR branches select their evaluation from Rust.
+  Reduced depth uses the integer render rectangle. Motion and optional
+  colour surfaces use the fractional viewport and camera jitter. Optional
+  surfaces are filtered by format and COM identity, and a sealed recovery
+  transaction still requires all five surfaces. The native leaf holds the
+  input COM references and guards the Runtime evaluation and restoration.
+- The callback seams share one native World snapshot and the recovery
+  fixtures share an idle table. Resolution and recovery use the same
+  output-owner record. The screen reader and publisher share their screen
+  record. Bindgen derives the receipt stage IDs and the Runtime/adapter
+  request, surface and constants from their C headers.
+
+Source validation used the previous guard tables and callback traces, bindgen
+0.72.1, pinned Rust 1.94.1 formatting and Git whitespace checks. No builds,
+tests, lint or devices were run. The updated fake leaves cover a foreign
+Effects manager and replaced source, an owned return after source
+invalidation, withheld retirement, failed output restoration, fractional
+auxiliary mapping and a partially read framebuffer. Native run and capture
+requirements from the previous sections remain open.

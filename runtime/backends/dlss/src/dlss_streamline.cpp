@@ -453,16 +453,7 @@ int32_t set_options(void* native, uint32_t slot, const rsf_streamline_sr_options
 {
     auto& self = *static_cast<Native*>(native);
     if (!rsf_dlss_preset_valid(input->preset)) return RSF_DLSS_ERROR_INVALID_ARGUMENT;
-    sl::DLSSOptions options{};
-    const auto preset = static_cast<sl::DLSSPreset>(input->preset);
-    options.dlaaPreset = options.qualityPreset = options.balancedPreset = preset;
-    options.performancePreset = options.ultraPerformancePreset = options.ultraQualityPreset = preset;
-    options.mode = static_cast<sl::DLSSMode>(input->mode);
-    options.outputWidth = input->width;
-    options.outputHeight = input->height;
-    options.colorBuffersHDR = flag(input->hdr);
-    options.useAutoExposure = flag(input->auto_exposure);
-    options.alphaUpscalingEnabled = flag(input->alpha);
+    const auto options = rsf::sr_options(*input);
     if (self.set_options(viewport_handle(slot), options) != sl::Result::eOk) {
         say("slDLSSSetOptions failed");
         return RSF_DLSS_ERROR_FEATURE_FAILED;

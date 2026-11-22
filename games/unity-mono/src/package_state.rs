@@ -45,6 +45,7 @@ use rsf_game_sys::{
     RSF_GAME_RENDER_RECONFIGURE, rsf_camera_frame, rsf_game_cpu_event, rsf_game_host_services,
     rsf_game_render_config, rsf_game_render_pass,
 };
+use rsf_game_sys::{RSF_SCREEN_FLIGHT, RSF_SCREEN_MENU};
 use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::ptr::null_mut;
@@ -55,8 +56,6 @@ use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 const BACKEND_OK: i32 = 0;
 /// RSF_SCREEN_MENU and RSF_SCREEN_FLIGHT, cast macros; package.cpp asserts them. The stored
 /// gameplay flag picks the screen class of every SR pass.
-const SCREEN_MENU: u32 = 1;
-const SCREEN_FLIGHT: u32 = 4;
 /// rsfu_initialize's results, part of the managed contract (ReScaleFrameRuntime.Apply).
 mod code {
     pub(super) const FAILED: i32 = 0;
@@ -598,15 +597,15 @@ impl Package {
 
     /// The stored status merged with the Runtime's generation and latency status. The merge is
     /// kept, as the C++ kept it. Leaves are called in the C++ order: generation status, present
-    /// backend, the switch result only without a generation result, latency status.
+    /// backend, provider-switch result, latency status.
     fn status(&self, leaves: &Leaves) -> rsf_unity_package_status {
         let fg = leaves.fg_status();
         let fg_backend = leaves.present_backend();
-        let fg_result = if fg.last_result != 0 {
-            fg.last_result
-        } else {
-            leaves.present_switch_result()
-        };
+        let fg_result = rsf_game_sys::presentation_result::PresentationResult {
+            session: fg.last_result,
+            provider_switch: leaves.present_switch_result(),
+        }
+        .aggregate();
         let latency = leaves.latency_status().unwrap_or_default();
         let mut state = self.lock();
         let status = &mut state.status;
@@ -770,9 +769,9 @@ impl Package {
         let settings = self.lock().settings;
         let mut pass = *original;
         pass.screen = if settings.gameplay != 0 {
-            SCREEN_FLIGHT
+            RSF_SCREEN_FLIGHT
         } else {
-            SCREEN_MENU
+            RSF_SCREEN_MENU
         };
         if pass.flags & RSF_GAME_RENDER_RECONFIGURE != 0 {
             self.reconfigured();
@@ -1842,16 +1841,16 @@ mod tests {
             (4, 5, 6)
         );
         assert_eq!((status.derived_boundaries, status.active_sr), (8, 3));
-        // A generation result wins over the switch result, which is then not read.
+        // The aggregate gives a provider-switch failure precedence over a session failure.
         set(|f| f.last_result = -3);
         set(|f| f.latency = false);
         package.bridge_failed(-9);
         package.lock().status.sleep_calls = 1;
         let status = package.status(&leaves);
-        assert_eq!(calls(), ["fg status", "backend", "latency"]);
+        assert_eq!(calls(), ["fg status", "backend", "switch", "latency"]);
         assert_eq!(
             (status.fg_result, status.sr_result, status.active_sr),
-            (-3, -9, 0)
+            (-7, -9, 0)
         );
         assert_eq!(status.sleep_calls, 0);
         assert_eq!((status.latency_available, status.latency_mode), (0, 0));

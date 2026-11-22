@@ -13,8 +13,8 @@ set_target_properties(rsf_game_rdr2 PROPERTIES OUTPUT_NAME "ReScaleFrame.Game.RD
 
 # Loaded by the game's ASI loader, so the file name is not a system DLL and nothing is forwarded.
 # Startup admission, configuration gates, ForceD3D12 and engine-settings ownership are the same Rust
-# archive. asi_entry.cpp lends the ASI and Runtime worker their native leaves.
-add_library(rsf_asi_rdr2 SHARED src/asi_entry.cpp src/social_club.cpp src/native_capture.cpp src/native_settings.cpp)
+# archive. asi_entry.cpp provides the DXGI and native diagnostic callbacks.
+add_library(rsf_asi_rdr2 SHARED src/asi_entry.cpp src/social_club.cpp src/native_capture.cpp)
 target_include_directories(rsf_asi_rdr2 PRIVATE ../../runtime/orchestrator/include)
 target_link_libraries(rsf_asi_rdr2 PRIVATE rsf_rdr2_rust
     ReScaleFrame::GameSDK ReScaleFrame::RuntimeCommon ReScaleFrame::Contract ReScaleFrame::LoaderDiagnostics
@@ -28,7 +28,7 @@ set_target_properties(rsf_asi_rdr2 PROPERTIES OUTPUT_NAME "ReScaleFrame.RDR2" PR
 add_dependencies(rsf_asi_rdr2 rsf_orchestrator rsf_game_rdr2)
 
 # Explicit research helper, never autoloaded or included in the ASI deployment.
-add_library(rsf_rdr2_attach SHARED src/attach_entry.cpp)
+add_library(rsf_rdr2_attach SHARED src/attach_entry.c)
 target_include_directories(rsf_rdr2_attach PRIVATE ../../runtime/orchestrator/include)
 target_compile_definitions(rsf_rdr2_attach PRIVATE _CRT_SECURE_NO_WARNINGS)
 target_link_libraries(rsf_rdr2_attach PRIVATE rsf_rdr2_rust ReScaleFrame::GameSDK ReScaleFrame::RuntimeCommon ReScaleFrame::Contract minhook user32 rsf_build_options)

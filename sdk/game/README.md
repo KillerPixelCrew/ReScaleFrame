@@ -24,6 +24,6 @@ AC7 and Unity implement lifecycle/rendering paths; Project Wingman refuses prepa
 All three currently return `rendering_ready = 0`, even where individual deployed paths have user
 acceptance. Recognition is separate from capability and validation.
 
-See [current status](../../docs/current-status.md) and [contract fixtures](../../tests/plugin_contract.cpp).
+See [current status](../../docs/current-status.md) and [contract fixtures](../../tests/game-sdk/src/contract.rs).
 The ABI 2 sketches in the [representation plan](../../docs/representation-plan.md) are historical
 design, superseded by these headers.

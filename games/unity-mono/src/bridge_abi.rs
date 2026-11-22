@@ -106,7 +106,7 @@ const _: () = {
 #[derive(Copy, Clone)]
 pub struct rsf_unity_frame_admission {
     pub slot: u32,
-    pub reconfigure: u32,
+    pub pending_generation: u32,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
@@ -116,8 +116,8 @@ const _: () = {
         [::core::mem::align_of::<rsf_unity_frame_admission>() - 4usize];
     ["Offset of field: rsf_unity_frame_admission::slot"]
         [::core::mem::offset_of!(rsf_unity_frame_admission, slot) - 0usize];
-    ["Offset of field: rsf_unity_frame_admission::reconfigure"]
-        [::core::mem::offset_of!(rsf_unity_frame_admission, reconfigure) - 4usize];
+    ["Offset of field: rsf_unity_frame_admission::pending_generation"]
+        [::core::mem::offset_of!(rsf_unity_frame_admission, pending_generation) - 4usize];
 };
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -138,4 +138,20 @@ const _: () = {
         [::core::mem::offset_of!(rsf_unity_source_submission, source_frame_id) - 8usize];
     ["Offset of field: rsf_unity_source_submission::view_key"]
         [::core::mem::offset_of!(rsf_unity_source_submission, view_key) - 16usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_unity_texture_ops {
+    pub retain: ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void)>,
+    pub release: ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void)>,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_unity_texture_ops"][::core::mem::size_of::<rsf_unity_texture_ops>() - 16usize];
+    ["Alignment of rsf_unity_texture_ops"]
+        [::core::mem::align_of::<rsf_unity_texture_ops>() - 8usize];
+    ["Offset of field: rsf_unity_texture_ops::retain"]
+        [::core::mem::offset_of!(rsf_unity_texture_ops, retain) - 0usize];
+    ["Offset of field: rsf_unity_texture_ops::release"]
+        [::core::mem::offset_of!(rsf_unity_texture_ops, release) - 8usize];
 };

@@ -4,9 +4,8 @@
 namespace rsf::fallout4 {
 // The render hook lifecycle (verify, prepare, start, quiesce, stop, busy) is Rust
 // (render_hooks.rs), with its leaves in render_hooks_platform.h.
-// CPU owner calls after the unchanged native Swap (including actual Present),
-// before clearing its current identity. Closes WINDOW/FRAME and drains any
-// refused SUBMISSION whose completion was withheld before Present.
-// Pending auxiliary/native-state ownership blocks the next World snapshot.
+// The CPU owner calls this after native Swap, before it clears the source
+// identity. The Rust render scope balances SUBMISSION, WINDOW and FRAME, then
+// tries to retire recovery, auxiliary and resolution ownership.
 void finish_render_scope() noexcept;
 }

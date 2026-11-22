@@ -362,9 +362,9 @@ void device_case(Gpu& gpu, const char* directory, uint32_t backend) {
     setup.backend = backend; setup.quality = 1; setup.output_width = 320; setup.output_height = 180;
     setup.depth_inverted = 1; setup.runtime_directory_utf8 = directory;
     rsf_srvk* context = nullptr; auto result = rsf_srvk_create(&setup, &context);
-    std::printf("Vulkan SR backend %u create=%d\n", backend, result); require(result == RSF_BACKEND_OK && context, "create native Vulkan SR context");
     // Context retirement must precede device retirement even when an assertion fails.
     struct ContextOwner { Gpu& gpu; rsf_srvk* value; ~ContextOwner() { (void)gpu.idle(gpu.device); (void)rsf_srvk_destroy(value); } } owner{gpu, context};
+    std::printf("Vulkan SR backend %u create=%d\n", backend, result); require(result == RSF_BACKEND_OK && context, "create native Vulkan SR context");
     uint32_t width = 0, height = 0; require(rsf_srvk_plan(context, &width, &height) == RSF_BACKEND_OK && width && height, "SR sizing plan");
     auto color = gpu.image(width, height, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
     auto depth = gpu.image(width, height, VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);

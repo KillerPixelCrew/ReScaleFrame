@@ -3,13 +3,13 @@
 // status handoff, prepare ordering on the frame token and vendor retirement.
 use super::*;
 use crate::com_ref::ComRef;
-use crate::d3d12_generation::read_options;
+use crate::d3d12_generation::{PrepareOrder, read_options};
 use crate::render_abi::{
     RSF_FG_AUTO, RSF_FG_DYNAMIC, RSF_FG_FIXED, RSF_FG_OFF, RSF_FG_STAT_ACTIVITY,
     RSF_FG_STAT_TOTAL_PRESENTED, rsf_fg_options as Options, rsf_fg_retirement as Retirement,
     rsf_generation_setup as GenerationSetup,
 };
-use rsf_game_sys::{RSF_FRAME_FLAG_RESET, RSF_FRAME_SOURCE_RENDERED};
+use rsf_game_sys::RSF_FRAME_SOURCE_RENDERED;
 
 const UI_NONE: u32 = 1;
 const HUDLESS: u32 = 4;
@@ -56,10 +56,7 @@ pub(super) struct Snapshot {
     status: Status,
     options: Options,
     retirement: Retirement,
-    revision: u64,
-    last_prepare: u64,
-    history_valid: bool,
-    prepared_enabled: bool,
+    order: PrepareOrder,
 }
 
 // The retirement fence is a borrowed, free-threaded interface that is only copied here.
@@ -79,10 +76,7 @@ impl Copied {
                 fence: null_mut(),
                 value: 0,
             },
-            revision: 0,
-            last_prepare: 0,
-            history_valid: false,
-            prepared_enabled: false,
+            order: PrepareOrder::default(),
         }))
     }
 
@@ -112,45 +106,31 @@ impl Copied {
             // Latency-only changes preserve current history and invalidation.
             return;
         }
-        value.revision = value.revision.wrapping_add(1);
+        value.order.invalidate();
         value.status.configured_mode = options.mode;
         value.status.effective_mode = options.mode;
         value.status.effective_generated_frames = generated;
         value.status.active = 0;
-        value.history_valid = false;
-        value.prepared_enabled = false;
     }
 
     pub(super) fn stage_prepare(&self, revision: u64, id: u64, mode: u32, generated: u32) -> bool {
         let mut value = self.lock();
-        if revision != value.revision || id <= value.last_prepare {
+        if !value.order.stage(revision, id) {
             return false;
         }
         value.status.effective_mode = mode;
         value.status.effective_generated_frames = generated;
         value.status.active = 0;
-        value.prepared_enabled = false;
-        value.history_valid = false;
         true
     }
 
     pub(super) fn complete_prepare(&self, revision: u64, id: u64, enabled: bool) -> bool {
-        let mut value = self.lock();
-        // A successfully tagged but aborted source is still consumed for ordering.
-        value.last_prepare = value.last_prepare.max(id);
-        if revision != value.revision {
-            return false;
-        }
-        value.history_valid = enabled;
-        value.prepared_enabled = enabled;
-        true
+        self.lock().order.complete(revision, id, enabled)
     }
 
     pub(super) fn abort(&self) {
         let mut value = self.lock();
-        value.revision = value.revision.wrapping_add(1);
-        value.history_valid = false;
-        value.prepared_enabled = false;
+        value.order.invalidate();
         value.status.active = 0;
     }
 
@@ -170,10 +150,7 @@ impl Copied {
         retirement: Retirement,
     ) -> Status {
         let mut value = self.lock();
-        let active = revision == value.revision
-            && value.history_valid
-            && value.prepared_enabled
-            && sdk_active;
+        let active = value.order.active(revision, sdk_active);
         let state = &mut value.status;
         // Publish only observed fields, preserving newer configuration and cumulative counters.
         state.max_generated_frames = observed.max_generated_frames;
@@ -283,7 +260,7 @@ fn poll(session: &Session, platform: &Platform) -> i32 {
     // DLSSGStatus::eOk is zero.
     let sdk_active = sdk.status == 0 && sdk.presented > 1;
     frames.cached_capability = session.copied.polled(
-        before.revision,
+        before.order.revision,
         &state,
         sdk.presented,
         sdk_active,
@@ -431,7 +408,20 @@ unsafe extern "C" fn rsf_core_slhost_session_configure(
         && before.options.mode == options.mode
         && before.options.generated_frames == options.generated_frames
         && before.options.dynamic_target_fps == options.dynamic_target_fps;
+    // Active DLSS-G needs Reflex's runtime frame tracking. Preserve the requested
+    // preference, while reporting the required effective mode separately.
+    let mode = if options.mode != RSF_FG_OFF && options.reflex_mode == RSF_REFLEX_OFF {
+        REFLEX_ON
+    } else {
+        options.reflex_mode
+    };
+    let host = session.host();
+    let reflex_matches = {
+        let frames = host.frames();
+        frames.reflex_mode == mode && frames.frame_limit_us == options.frame_limit_us
+    };
     if same_generation
+        && reflex_matches
         && before.options.reflex_mode == options.reflex_mode
         && before.options.frame_limit_us == options.frame_limit_us
     {
@@ -449,17 +439,13 @@ unsafe extern "C" fn rsf_core_slhost_session_configure(
     if options.mode != RSF_FG_OFF && before.status.low_latency_available == 0 {
         return NOT_SUPPORTED;
     }
-    // Active DLSS-G needs Reflex's runtime frame tracking. Preserve the requested
-    // preference, while reporting the required effective mode separately.
-    let mode = if options.mode != RSF_FG_OFF && options.reflex_mode == RSF_REFLEX_OFF {
-        REFLEX_ON
-    } else {
-        options.reflex_mode
-    };
-    let latency = reflex(session.host(), mode, options.frame_limit_us, platform);
+    let latency = reflex(host, mode, options.frame_limit_us, platform);
     if latency != OK {
         return latency;
     }
+    // Record the accepted latency change even if generation refuses the request.
+    // The next call compares against the live host before taking the equality fast path.
+    session.copied.lock().status.effective_reflex = mode;
     // A Reflex mode or limit change leaves generation and its history alone.
     if same_generation {
         session.copied.configured(&options, mode, 0, false);
@@ -494,10 +480,7 @@ unsafe extern "C" fn rsf_core_slhost_session_begin(
         return INVALID;
     }
     let host = session.host();
-    let mut result = acquire(host, id, platform);
-    if result == OK {
-        result = sleep(host, id, platform);
-    }
+    let result = begin(host, id, platform);
     if result == OK {
         session.copied.paced();
     }
@@ -535,7 +518,7 @@ unsafe extern "C" fn rsf_core_slhost_session_prepare(
     let frame = unsafe { &*frame };
     let record = unsafe { &*frame.record };
     let before = session.copied.read();
-    if session.chain.is_none() || record.frame_id <= before.last_prepare {
+    if session.chain.is_none() || record.frame_id <= before.order.last_prepare {
         return NOT_READY;
     }
     if record.source_provenance == RSF_FRAME_SOURCE_RENDERED {
@@ -583,14 +566,14 @@ unsafe extern "C" fn rsf_core_slhost_session_prepare(
     };
     if !session
         .copied
-        .stage_prepare(before.revision, record.frame_id, mode, staged_frames)
+        .stage_prepare(before.order.revision, record.frame_id, mode, staged_frames)
     {
         return NOT_READY;
     }
     if !enabled {
         return if session
             .copied
-            .complete_prepare(before.revision, record.frame_id, false)
+            .complete_prepare(before.order.revision, record.frame_id, false)
         {
             OK
         } else {
@@ -598,33 +581,28 @@ unsafe extern "C" fn rsf_core_slhost_session_prepare(
         };
     }
     let mut frames = host.frames();
-    let Some(slot) = frames
-        .slot(record.frame_id)
-        .filter(|&slot| frames.tokens[slot].handle.is_some())
-    else {
+    let Some(token) = frames.token_mut(record.frame_id) else {
         return NOT_READY;
     };
-    let token = frames.handle(slot);
-    let reset = !before.history_valid
-        || record.frame_id != before.last_prepare.wrapping_add(1)
-        || record.flags & RSF_FRAME_FLAG_RESET != 0;
+    let handle = token.handle.as_ptr();
+    let reset = before.order.reset_for(record);
     // The SR side may already have set this frame's shared constants.
-    let apply = !frames.tokens[slot].common[0];
+    let apply = !token.common[0];
     let result =
-        unsafe { (platform.constants)(host.native, token, frame, reset.into(), apply.into()) };
+        unsafe { (platform.constants)(host.native, handle, frame, reset.into(), apply.into()) };
     if result != OK {
         return result;
     }
     if apply {
-        frames.tokens[slot].common[0] = true;
+        token.common[0] = true;
     }
-    if unsafe { (platform.tags)(host.native, token, command, frame) } != OK {
+    if unsafe { (platform.tags)(host.native, handle, command, frame) } != OK {
         return FEATURE_FAILED;
     }
     drop(frames);
     if session
         .copied
-        .complete_prepare(before.revision, record.frame_id, true)
+        .complete_prepare(before.order.revision, record.frame_id, true)
     {
         OK
     } else {

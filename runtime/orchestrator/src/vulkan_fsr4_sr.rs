@@ -2,6 +2,7 @@
 use crate::allocate_handle;
 use crate::dx12_vulkan_interop::{Owner as Interop, checked};
 use crate::dx12_vulkan_interop_abi::rsf_dx12vk_shared_image;
+use crate::frame_capture_vk::sr_capture_inputs;
 use crate::sharpening_policy;
 use crate::sr_session::has_capacity;
 use crate::vulkan_external_copy::{self, Barrier, FAMILY_EXTERNAL, FAMILY_IGNORED, Transfer};
@@ -257,10 +258,9 @@ impl Owner {
         reset: u32,
     ) {
         unsafe { (self.ops().capture_begin.unwrap())(record) };
-        self.capture(commands, &frame.color, record, c"sr-source-jittered", reset);
-        self.capture(commands, &frame.color, record, c"sr-linear-color", reset);
-        self.capture(commands, &frame.depth, record, c"sr-depth", reset);
-        self.capture(commands, &frame.motion, record, c"sr-motion-uv", reset);
+        for (image, role) in sr_capture_inputs(frame) {
+            self.capture(commands, image, record, role, reset);
+        }
         let initialized = self.history.done != 0;
         let family = self.handoff.queue_family;
         for (source, target) in [frame.color, frame.depth, frame.motion]
@@ -319,6 +319,18 @@ impl Owner {
             commands,
             &Barrier::new(output.image, GENERAL, GENERAL, FAMILY_EXTERNAL, family),
         );
+        // Capture the SDK output after acquiring it and before RSF sharpening.
+        let captured = Image {
+            device: self.setup.device,
+            image: output.image,
+            format: output.format,
+            width: output.width,
+            height: output.height,
+            layout: GENERAL,
+            copy_source: 1,
+        };
+        unsafe { (self.ops().capture_parameters.unwrap())(frame, reset) };
+        self.capture(commands, &captured, record, c"sr-output-linear", reset);
         unsafe {
             (self.ops().sharpen.unwrap())(
                 self.graphics.handle,
@@ -339,19 +351,6 @@ impl Owner {
             ),
         );
         self.copy(commands, output.image, frame.output.image, self.output());
-        // The engine allocation is a transfer destination. Capture the matching
-        // copy source while it is owned by this Vulkan continuation.
-        let captured = Image {
-            device: self.setup.device,
-            image: output.image,
-            format: output.format,
-            width: output.width,
-            height: output.height,
-            layout: TRANSFER_SRC,
-            copy_source: 1,
-        };
-        unsafe { (self.ops().capture_parameters.unwrap())(frame, reset) };
-        self.capture(commands, &captured, record, c"sr-output-linear", reset);
         self.transition(
             commands,
             &Barrier::new(output.image, TRANSFER_SRC, GENERAL, family, FAMILY_EXTERNAL),
@@ -504,10 +503,29 @@ unsafe extern "C" fn rsf_core_fsr4vk_create(
         return INVALID;
     }
     unsafe { output.write(ptr::null_mut()) };
-    let (mut setup, handoff) = match unsafe { admit_setup(setup, handoff) } {
+    let (setup, handoff) = match unsafe { admit_setup(setup, handoff) } {
         Ok(args) => args,
         Err(error) => return private_setup_result(error),
     };
+    unsafe { create_admitted(ops, setup, handoff, output) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4vk_create_admitted(
+    ops: &'static Platform,
+    setup: &Setup,
+    handoff: &Handoff,
+    output: *mut *mut Owner,
+) -> i32 {
+    unsafe { create_admitted(ops, *setup, *handoff, output) }
+}
+
+unsafe fn create_admitted(
+    ops: &'static Platform,
+    mut setup: Setup,
+    handoff: Handoff,
+    output: *mut *mut Owner,
+) -> i32 {
     let wide = match directory::encode(unsafe { CStr::from_ptr(setup.runtime_directory_utf8) }) {
         Ok(wide) => wide,
         Err(directory::Error::Invalid) => return INVALID,

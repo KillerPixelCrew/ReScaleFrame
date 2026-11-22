@@ -15,6 +15,8 @@ use rsf_game_sys::{
 use std::cell::Cell;
 use std::ffi::{c_char, c_void};
 use std::sync::atomic::{AtomicU32, Ordering};
+use windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext;
+use windows::core::Interface;
 use windows_sys::Win32::System::{
     Diagnostics::Debug::WriteProcessMemory, Threading::GetCurrentProcess,
 };
@@ -35,7 +37,6 @@ type Report = Option<unsafe extern "C" fn(*const c_char)>;
 
 #[repr(C)]
 struct Leaves {
-    tls_slots: unsafe extern "C" fn() -> usize,
     screen_refusals: unsafe extern "C" fn(&CpuIdentity) -> u32,
     reconfigure: unsafe extern "C" fn(
         *const rsf_game_host_services,
@@ -45,7 +46,6 @@ struct Leaves {
     render_config:
         unsafe extern "C" fn(*const rsf_game_host_services, &mut rsf_game_render_config) -> bool,
     reserve: unsafe extern "C" fn(Reserve, &rsf_game_render_pass) -> bool,
-    build_viewport: unsafe extern "C" fn(usize, usize, usize, u32, u32),
     report: unsafe extern "C" fn(Report, &rsf_game_render_pass, *mut c_void, &Receipt),
 }
 
@@ -70,22 +70,34 @@ struct Receipt {
     scalars: bool,
     owner: bool,
     shadow: bool,
+    actual_count: u32,
+    actual_read: u32,
+    actual_raster: [f32; 6],
 }
 
 #[repr(C)]
-#[derive(Default)]
-struct OutputOwner {
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct OutputOwner {
     context: u64,
     manager: u64,
     triangles: [u64; 3],
 }
 
+impl OutputOwner {
+    pub(crate) const EMPTY: Self = Self {
+        context: 0,
+        manager: 0,
+        triangles: [0; 3],
+    };
+}
+
 const _: () = {
     use std::mem::offset_of;
     assert!(size_of::<OutputOwner>() == 40 && offset_of!(OutputOwner, triangles) == 16);
-    assert!(size_of::<Receipt>() == 96 && offset_of!(Receipt, input_ratio) == 32);
+    assert!(size_of::<Receipt>() == 128 && offset_of!(Receipt, input_ratio) == 32);
     assert!(offset_of!(Receipt, frame) == 72 && offset_of!(Receipt, evaluation) == 87);
-    assert!(size_of::<Leaves>() == 7 * size_of::<usize>());
+    assert!(offset_of!(Receipt, actual_count) == 96);
+    assert!(size_of::<Leaves>() == 5 * size_of::<usize>());
 };
 
 #[derive(Clone, Copy, Default)]
@@ -213,6 +225,7 @@ impl TargetWrites {
         saved: TargetValues,
         owned: TargetValues,
         changed: &mut bool,
+        same_owner: bool,
     ) -> bool {
         let mut okay = true;
         for (index, pending) in self.ratios.iter_mut().enumerate() {
@@ -222,6 +235,7 @@ impl TargetWrites {
                 owned.ratios[index],
                 pending,
                 changed,
+                same_owner,
             );
         }
         okay & restore(
@@ -230,6 +244,7 @@ impl TargetWrites {
             owned.active,
             &mut self.active,
             changed,
+            same_owner,
         )
     }
 }
@@ -244,6 +259,7 @@ struct FullOutput {
     raster: [f32; 6],
     owned_raster: [f32; 6],
     dirty: u32,
+    owned_dirty: Option<u32>,
     viewport_owned: bool,
     jitter_owned: bool,
     raster_owned: bool,
@@ -265,8 +281,8 @@ struct Scope {
 }
 
 impl Scope {
-    fn current(&self, leaves: &Leaves, base: usize, shadow: bool) -> bool {
-        (!shadow || native_context(leaves, base) == Some(self.context))
+    fn current(&self, base: usize, shadow: bool) -> bool {
+        (!shadow || native_context(base) == Some(self.context))
             && self.frame.frame_size_current(base)
             && self.frame.renderer_current(base)
     }
@@ -322,6 +338,13 @@ impl Field for u8 {
     }
 }
 
+impl Field for u32 {
+    type Bits = Self;
+    fn bits(self) -> Self::Bits {
+        self
+    }
+}
+
 impl Field for f32 {
     type Bits = u32;
     fn bits(self) -> Self::Bits {
@@ -336,42 +359,85 @@ impl<const N: usize> Field for [f32; N] {
     }
 }
 
+fn restore_pending<T: Field>(
+    pending: &mut bool,
+    changed: &mut bool,
+    saved: T,
+    owned: T,
+    same_owner: bool,
+    read_current: impl FnOnce() -> Option<T>,
+    write_saved: impl FnOnce(T) -> bool,
+) -> bool {
+    if !*pending {
+        return true;
+    }
+    let Some(current) = read_current() else {
+        return false;
+    };
+    if current.bits() == saved.bits() {
+        *pending = false;
+    } else if current.bits() != owned.bits() {
+        *changed = true;
+        *pending = false;
+    } else if same_owner && write_saved(saved) {
+        *pending = false;
+    }
+    !*pending
+}
+
 fn restore<T: Field>(
     address: usize,
     saved: T,
     owned: T,
     pending: &mut bool,
     changed: &mut bool,
+    same_owner: bool,
 ) -> bool {
-    if !*pending {
-        return true;
-    }
-    let Some(current) = read::<T>(address) else {
-        return false;
-    };
-    if current.bits() != saved.bits() {
-        if current.bits() != owned.bits() {
-            *changed = true;
-        } else if !write(address, &saved) {
-            return false;
-        }
-    }
-    *pending = false;
-    true
+    restore_pending(
+        pending,
+        changed,
+        saved,
+        owned,
+        same_owner,
+        || read(address),
+        |value| write(address, &value),
+    )
 }
 
-fn native_context(leaves: &Leaves, base: usize) -> Option<usize> {
-    let index = read::<u32>(base + 0x3e73018).filter(|&index| index <= 4096)?;
-    let slots = unsafe { (leaves.tls_slots)() };
-    if slots == 0 {
+#[derive(Clone, Copy)]
+struct CleanupOwners {
+    renderer: bool,
+    shadow: bool,
+    advanced: bool,
+}
+
+/// Revalidate live owners without treating a later frame as an automatic write refusal.
+fn cleanup_owners(base: usize, scope: &Scope, shadow: bool) -> Option<CleanupOwners> {
+    let frame = u64::from(read::<u32>(base + STATE + 0x98)?);
+    let advanced = frame != scope.frame.native_frame;
+    let renderer = scope.frame.renderer_current(base)
+        && read::<u32>(base + STATE + 0x78) == Some(scope.frame.size[0])
+        && read::<u32>(base + STATE + 0x7c) == Some(scope.frame.size[1]);
+    let context = if shadow {
+        native_context(base)?
+    } else {
+        scope.context
+    };
+    let shadow_current = context == scope.context;
+    if !advanced && (!renderer || !shadow_current) {
         return None;
     }
-    let block = read::<usize>(slots.wrapping_add(index as usize * size_of::<usize>()))
-        .filter(|&value| value != 0)?;
-    match read::<usize>(block.wrapping_add(0xb20))? {
-        0 => read::<usize>(base + 0x38e1398).filter(|&value| value != 0),
-        context => Some(context),
-    }
+    Some(CleanupOwners {
+        renderer,
+        shadow: shadow_current,
+        advanced,
+    })
+}
+
+fn native_context(base: usize) -> Option<usize> {
+    crate::build_layout::render_context(base, false)
+        .map(|(context, _)| context)
+        .filter(|&context| context != 0)
 }
 
 fn input_enabled(base: usize) -> bool {
@@ -408,7 +474,6 @@ fn configured_targets(
 }
 
 fn preflight(
-    leaves: &Leaves,
     base: usize,
     pass: &rsf_game_render_pass,
     context: *mut c_void,
@@ -416,7 +481,7 @@ fn preflight(
     if context.is_null() {
         return None;
     }
-    let engine = native_context(leaves, base)?;
+    let engine = native_context(base)?;
     let owner = FrameOwner::from_pass(
         pass,
         output_size(pass),
@@ -491,9 +556,9 @@ unsafe fn configure(
         ..Scope::default()
     };
     SCOPE.set(scope);
-    scope.context = native_context(leaves, base)?;
+    scope.context = native_context(base)?;
     SCOPE.set(scope);
-    if !scope.current(leaves, base, false) {
+    if !scope.current(base, false) {
         return None;
     }
     scope.original_targets = TargetValues::capture(base)?;
@@ -516,7 +581,7 @@ unsafe fn configure(
         planning.render_rect = [0, 0, render[0] as i32, render[1] as i32];
         planning.output_rect = [0, 0, size[0] as i32, size[1] as i32];
         if reserve.is_none()
-            || preflight(leaves, base, &planning, context).is_none()
+            || preflight(base, &planning, context).is_none()
             || !unsafe { (leaves.reserve)(reserve, &planning) }
         {
             SCOPE.set(Scope::default());
@@ -533,7 +598,7 @@ unsafe fn configure(
     };
     SCOPE.set(scope);
     if !okay {
-        if !finish_source(leaves, base) {
+        if !finish_source(base) {
             let mut pending = SCOPE.get();
             pending.changed = true;
             SCOPE.set(pending);
@@ -544,7 +609,6 @@ unsafe fn configure(
 }
 
 fn begin_output(
-    leaves: &Leaves,
     depth: &DepthLeaves,
     snapshot: &Snapshot,
     pass: &rsf_game_render_pass,
@@ -564,7 +628,7 @@ fn begin_output(
     scope.context = context;
     SCOPE.set(scope);
     let base = image();
-    if !scope.current(leaves, base, true) || read::<u32>(base + DISABLED) != Some(0) {
+    if !scope.current(base, true) || read::<u32>(base + DISABLED) != Some(0) {
         return None;
     }
     let shadow = scope.shadow();
@@ -594,7 +658,7 @@ fn begin_output(
     };
     if !okay {
         SCOPE.set(scope);
-        end_output(leaves, base);
+        end_output(base);
         return None;
     }
     full.raster_owned = true;
@@ -603,28 +667,40 @@ fn begin_output(
 
     // Supply explicit output dimensions through the native builder, independent of the last target.
     let [width, height] = scope.frame.size;
-    unsafe { (leaves.build_viewport)(base + 0x1817ef0, base + 0x3a25d00, shadow, width, height) };
+    // SAFETY: verification pins the builder bytes and the scope proves its live Context.
+    type BuildViewport = unsafe extern "C" fn(*mut c_void, *mut c_void, u32, u32, bool);
+    let build_viewport = unsafe { std::mem::transmute::<usize, BuildViewport>(base + 0x1817ef0) };
+    unsafe {
+        build_viewport(
+            (base + 0x3a25d00) as *mut c_void,
+            shadow as *mut c_void,
+            width,
+            height,
+            true,
+        )
+    };
     scope = SCOPE.get();
     let owned_raster = read::<[f32; 6]>(shadow.wrapping_add(RASTER));
     if let Some(raster) = owned_raster {
         scope.full.owned_raster = raster;
-        SCOPE.set(scope);
     }
+    scope.full.owned_dirty = read::<u32>(shadow).map(|dirty| dirty & SHADOW_VIEWPORT_DIRTY);
+    SCOPE.set(scope);
     if owned_raster.is_some_and(|raster| {
         let [width, height] = scope.frame.size;
         scope.full.geometry.current(base) && raster[..4] == [0.0, 0.0, width as f32, height as f32]
     }) {
         return Some(());
     }
-    end_output(leaves, base);
+    end_output(base);
     None
 }
 
-fn native_dr(leaves: &Leaves, base: usize, scope: &mut Scope) -> Option<()> {
+fn native_dr(base: usize, scope: &mut Scope) -> Option<()> {
     if !scope.input && !scope.output {
         return Some(());
     }
-    if !scope.current(leaves, base, scope.output) {
+    if !scope.current(base, scope.output) {
         return None;
     }
     let targets = TargetValues::capture(base)?;
@@ -651,28 +727,33 @@ fn native_dr(leaves: &Leaves, base: usize, scope: &mut Scope) -> Option<()> {
     Some(())
 }
 
-fn end_output(leaves: &Leaves, base: usize) -> bool {
+fn end_output(base: usize) -> bool {
     let mut scope = SCOPE.get();
     if !scope.output {
         return !scope.changed;
     }
-    if !scope.current(leaves, base, true) {
+    let Some(owners) = cleanup_owners(base, &scope, true) else {
         return false;
-    }
+    };
     let shadow = scope.shadow();
     let full = &mut scope.full;
-    if !full.geometry.current(base) {
+    if owners.advanced || !full.geometry.current(base) {
         scope.changed = true;
     }
-    let mut okay =
-        full.target_writes
-            .restore(base, full.targets, TargetValues::FULL, &mut scope.changed);
+    let mut okay = full.target_writes.restore(
+        base,
+        full.targets,
+        TargetValues::FULL,
+        &mut scope.changed,
+        owners.renderer,
+    );
     okay &= restore(
         base + VIEWPORT,
         full.viewport,
         0,
         &mut full.viewport_owned,
         &mut scope.changed,
+        owners.renderer,
     );
     okay &= restore(
         base + STATE + 4,
@@ -680,8 +761,11 @@ fn end_output(leaves: &Leaves, base: usize) -> bool {
         [0.0; 2],
         &mut full.jitter_owned,
         &mut scope.changed,
+        owners.renderer,
     );
-    if full.native_full_viewport {
+    // A new live Context supersedes the shadow association. Never chase the old
+    // pointer across this boundary. In the original Context compare each write.
+    if full.native_full_viewport || !owners.shadow {
         full.raster_owned = false;
         full.dirty_owned = false;
     }
@@ -691,18 +775,29 @@ fn end_output(leaves: &Leaves, base: usize) -> bool {
         full.owned_raster,
         &mut full.raster_owned,
         &mut scope.changed,
+        owners.renderer && owners.shadow,
     );
     if full.dirty_owned {
-        if read::<u32>(shadow).is_some_and(|dirty| {
-            write(
-                shadow,
-                &((dirty & !SHADOW_VIEWPORT_DIRTY) | (full.dirty & SHADOW_VIEWPORT_DIRTY)),
-            )
-        }) {
-            full.dirty_owned = false;
+        okay &= if let Some(dirty) = read::<u32>(shadow) {
+            let saved = full.dirty & SHADOW_VIEWPORT_DIRTY;
+            let current = dirty & SHADOW_VIEWPORT_DIRTY;
+            if let Some(owned) = full.owned_dirty {
+                restore_pending(
+                    &mut full.dirty_owned,
+                    &mut scope.changed,
+                    saved,
+                    owned,
+                    owners.renderer,
+                    || Some(current),
+                    |value| write(shadow, &((dirty & !SHADOW_VIEWPORT_DIRTY) | value)),
+                )
+            } else {
+                full.dirty_owned = current != saved;
+                !full.dirty_owned
+            }
         } else {
-            okay = false;
-        }
+            false
+        };
     }
     if okay {
         scope.output = false;
@@ -712,8 +807,8 @@ fn end_output(leaves: &Leaves, base: usize) -> bool {
     okay && !scope.changed
 }
 
-fn finish_source(leaves: &Leaves, base: usize) -> bool {
-    let valid = end_output(leaves, base);
+fn finish_source(base: usize) -> bool {
+    let valid = end_output(base);
     let mut scope = SCOPE.get();
     if scope.output {
         return false;
@@ -722,14 +817,16 @@ fn finish_source(leaves: &Leaves, base: usize) -> bool {
         SCOPE.set(Scope::default());
         return valid;
     }
-    if !scope.current(leaves, base, false) {
+    let Some(owners) = cleanup_owners(base, &scope, false) else {
         return false;
-    }
+    };
+    scope.changed |= owners.advanced;
     let okay = scope.input_writes.restore(
         base,
         scope.original_targets,
         scope.input_targets,
         &mut scope.changed,
+        owners.renderer,
     );
     let accepted = okay && valid && !scope.changed;
     if okay {
@@ -738,6 +835,17 @@ fn finish_source(leaves: &Leaves, base: usize) -> bool {
     }
     SCOPE.set(scope);
     accepted
+}
+
+/// The verified ordinary World boundary may retire an older scope on its owning thread.
+pub(crate) fn retry_retired(base: usize) {
+    let scope = SCOPE.get();
+    if (scope.input || scope.output)
+        && read::<u32>(base + STATE + 0x98)
+            .is_some_and(|frame| u64::from(frame) != scope.frame.native_frame)
+    {
+        let _ = finish_source(base);
+    }
 }
 
 fn in_receipt_budget(index: u32, pass: &rsf_game_render_pass, scope: &Scope) -> bool {
@@ -860,7 +968,6 @@ unsafe extern "C" fn rsf_fallout4_resolution_configure(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fallout4_resolution_preflight(
-    leaves: &Leaves,
     pass: &rsf_game_render_pass,
     context: *mut c_void,
     output: *mut OutputOwner,
@@ -868,7 +975,7 @@ unsafe extern "C" fn rsf_fallout4_resolution_preflight(
     if let Some(output) = unsafe { output.as_mut() } {
         *output = OutputOwner::default();
     }
-    let Some(owner) = preflight(leaves, image(), pass, context) else {
+    let Some(owner) = preflight(image(), pass, context) else {
         return false;
     };
     if let Some(output) = unsafe { output.as_mut() } {
@@ -879,18 +986,17 @@ unsafe extern "C" fn rsf_fallout4_resolution_preflight(
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_fallout4_resolution_begin_output(
-    leaves: &Leaves,
     depth: &DepthLeaves,
     snapshot: &Snapshot,
     pass: &rsf_game_render_pass,
 ) -> bool {
-    begin_output(leaves, depth, snapshot, pass).is_some()
+    begin_output(depth, snapshot, pass).is_some()
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_resolution_native_dr(leaves: &Leaves) -> bool {
+extern "C" fn rsf_fallout4_resolution_native_dr() -> bool {
     let mut scope = SCOPE.get();
-    let okay = native_dr(leaves, image(), &mut scope).is_some();
+    let okay = native_dr(image(), &mut scope).is_some();
     SCOPE.set(scope);
     okay
 }
@@ -910,13 +1016,13 @@ pub(crate) fn native_viewport(enabled: bool) -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_resolution_end_output(leaves: &Leaves) -> bool {
-    end_output(leaves, image())
+extern "C" fn rsf_fallout4_resolution_end_output() -> bool {
+    end_output(image())
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_resolution_finish_source(leaves: &Leaves) -> bool {
-    finish_source(leaves, image())
+extern "C" fn rsf_fallout4_resolution_finish_source() -> bool {
+    finish_source(image())
 }
 
 pub(crate) fn is_busy() -> bool {
@@ -941,18 +1047,17 @@ unsafe extern "C" fn rsf_fallout4_resolution_report(
     result: i32,
     report: Report,
 ) {
-    const STAGES: [&std::ffi::CStr; 8] = [
-        c"pre-sr",
-        c"output-ready",
-        c"evaluated",
-        c"effects-return",
-        c"hudless",
-        c"ui-return",
-        c"ui-restored",
-        c"source-retired",
-    ];
-    let Some(name) = STAGES.get(stage as usize) else {
-        return;
+    use crate::resolution_stages::*;
+    let name = match stage {
+        RSF_FALLOUT4_STAGE_PRE_SR => c"pre-sr",
+        RSF_FALLOUT4_STAGE_OUTPUT_READY => c"output-ready",
+        RSF_FALLOUT4_STAGE_EVALUATED => c"evaluated",
+        RSF_FALLOUT4_STAGE_EFFECTS_RETURNED => c"effects-return",
+        RSF_FALLOUT4_STAGE_HUDLESS => c"hudless",
+        RSF_FALLOUT4_STAGE_UI_RETURN => c"ui-return",
+        RSF_FALLOUT4_STAGE_UI_RESTORED => c"ui-restored",
+        RSF_FALLOUT4_STAGE_SOURCE_RETIRED => c"source-retired",
+        _ => return,
     };
     if report.is_none() {
         return;
@@ -969,7 +1074,7 @@ unsafe extern "C" fn rsf_fallout4_resolution_report(
     let mut receipt = Receipt {
         stage: name.as_ptr(),
         result,
-        evaluation: stage == 2,
+        evaluation: stage == RSF_FALLOUT4_STAGE_EVALUATED,
         published,
         input: scope.input,
         output: scope.output,
@@ -986,11 +1091,104 @@ unsafe extern "C" fn rsf_fallout4_resolution_report(
         scalars: false,
         owner: false,
         shadow: false,
+        actual_count: 0,
+        actual_read: 0,
+        actual_raster: [0.0; 6],
     };
     receipt.scalars = collect_scalars(base, &mut receipt).is_some();
-    receipt.owner = scope.current(leaves, base, true)
+    receipt.owner = scope.current(base, true)
         && !context.is_null()
         && context as usize == scope.frame.device_context;
     receipt.shadow = receipt.owner && collect_shadow(&scope, &mut receipt).is_some();
+    if receipt.owner {
+        // SAFETY: the receipt above verified the calling frame and its borrowed D3D11 context.
+        if let Some(context) = unsafe { ID3D11DeviceContext::from_raw_borrowed(&context) } {
+            let (count, copied, raster) = crate::d3d11::viewport(context);
+            receipt.actual_count = count;
+            receipt.actual_read = u32::from(copied == 1);
+            receipt.actual_raster = raster;
+        }
+    }
     unsafe { (leaves.report)(report, &pass, context, &receipt) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn world_retry_waits_for_frame_advance_and_retires_the_input_scope() {
+        let mut native = vec![0_u8; STATE + 0x9c];
+        let base = native.as_mut_ptr() as usize;
+        let native_frame = base + STATE + 0x98;
+        assert!(write(native_frame, &7_u32));
+        assert!(write(base + RATIOS, &0.5_f32));
+        let count = OWNERS.fetch_add(1, Ordering::AcqRel);
+        SCOPE.set(Scope {
+            frame: FrameOwner {
+                native_frame: 7,
+                ..FrameOwner::default()
+            },
+            original_targets: TargetValues {
+                ratios: [1.0; 2],
+                active: 0,
+            },
+            input_targets: TargetValues {
+                ratios: [0.5; 2],
+                active: 1,
+            },
+            input_writes: TargetWrites {
+                ratios: [true, false],
+                active: false,
+            },
+            input: true,
+            ..Scope::default()
+        });
+        retry_retired(base);
+        assert!(SCOPE.get().input && SCOPE.get().input_writes.ratios[0]);
+
+        assert!(write(native_frame, &8_u32));
+        assert!(write(base + RATIOS, &0.75_f32));
+        retry_retired(base);
+        assert!(!SCOPE.get().input);
+        assert_eq!(OWNERS.load(Ordering::Acquire), count);
+        assert_eq!(read::<f32>(base + RATIOS), Some(0.75));
+    }
+
+    #[test]
+    fn failed_restore_can_retire_a_superseded_value() {
+        let mut pending = true;
+        let mut changed = false;
+        assert!(!restore_pending(
+            &mut pending,
+            &mut changed,
+            1.0f32,
+            0.5,
+            true,
+            || Some(0.5),
+            |_| false
+        ));
+        assert!(pending && !changed);
+        // Identical owned bits with a different renderer cannot authorize a stale write.
+        assert!(!restore_pending(
+            &mut pending,
+            &mut changed,
+            1.0f32,
+            0.5,
+            false,
+            || Some(0.5),
+            |_| { panic!("old renderer does not authorize write") }
+        ));
+        // A new native frame has since supplied different ratios. Retire without a write.
+        assert!(restore_pending(
+            &mut pending,
+            &mut changed,
+            1.0f32,
+            0.5,
+            false,
+            || Some(0.75),
+            |_| { panic!("superseding value must survive") }
+        ));
+        assert!(!pending && changed);
+    }
 }

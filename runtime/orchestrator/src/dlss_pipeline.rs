@@ -20,15 +20,18 @@ use crate::d3d11_output_abi::{
 };
 use crate::dlss_pipeline_abi::*;
 use crate::frame_assembly::rsf_assemble_dlss_frame;
+use crate::frame_capture_vk::general;
+use crate::gl_pipeline_abi::rsf_dlss_setup;
+use crate::motion_resolve_params::{dense_resolve_params, has_motion_sentinel};
 use crate::native_sr_abi::{
     RSF_DLSS_PIPELINE_ABI_VERSION as ABI, rsf_dlss_pipeline_frame as Frame,
     rsf_motion_decode_params as DecodeParams,
 };
 use crate::native_sr_state::publish_surface;
+use crate::render_abi::RSF_DLSS_ABI_VERSION;
 use crate::render_abi::{
     RSF_FRAME_ASSEMBLY_ABI_VERSION, RSF_SHARPENING_ABI_VERSION, rsf_dlss_frame as DlssFrame,
-    rsf_frame_resources, rsf_motion_resolve_params, rsf_pipeline_camera_frame as Camera,
-    rsf_sharpening_options as Sharpening,
+    rsf_frame_resources, rsf_pipeline_camera_frame as Camera, rsf_sharpening_options as Sharpening,
 };
 use crate::sharpening_policy;
 use crate::sr_legacy::{
@@ -36,7 +39,7 @@ use crate::sr_legacy::{
     rsf_sr_legacy_select, rsf_sr_legacy_warm_up,
 };
 use std::ffi::{CStr, CString, c_char};
-use std::ptr::null_mut;
+use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 use std::time::Instant;
@@ -128,29 +131,19 @@ struct Range {
 impl Range {
     /// A build of the SDK that reports no range accepts the optimal size only, rather than
     /// being read as "any size".
-    fn of(plan: rsf_dlssp_range) -> Self {
+    fn of(plan: rsf_dlss_plan) -> Self {
         let or = |value: u32, fallback: u32| if value != 0 { value } else { fallback };
         Self {
-            width: plan.width,
-            height: plan.height,
+            width: plan.render_width,
+            height: plan.render_height,
             min: [
-                or(plan.min_width, plan.width),
-                or(plan.min_height, plan.height),
+                or(plan.render_width_min, plan.render_width),
+                or(plan.render_height_min, plan.render_height),
             ],
             max: [
-                or(plan.max_width, plan.width),
-                or(plan.max_height, plan.height),
+                or(plan.render_width_max, plan.render_width),
+                or(plan.render_height_max, plan.render_height),
             ],
-        }
-    }
-
-    /// Taken as reported, without the zero defaulting above.
-    fn reported(plan: rsf_dlssp_range) -> Self {
-        Self {
-            width: plan.width,
-            height: plan.height,
-            min: [plan.min_width, plan.min_height],
-            max: [plan.max_width, plan.max_height],
         }
     }
 
@@ -231,11 +224,22 @@ impl Shared {
     }
 }
 
+#[derive(Default)]
+struct DlssSettings {
+    directory: CString,
+    log_directory: Option<CString>,
+    engine_version: Option<CString>,
+    project_id: Option<CString>,
+    engine: u32,
+    require_signature: u32,
+}
+
 /// Owned by the thread that drives frames.
 struct Owned {
     device: Option<ComRef>,
     output: Option<ComRef>,
     streamline_loaded: bool,
+    dlss_settings: DlssSettings,
     // A cold viewport has no DLSS resources to release.
     dlss_evaluation_attempted: bool,
     // The decode pass is built for one render size. A size that failed to build is not retried
@@ -285,6 +289,7 @@ impl Owned {
             device: None,
             output: None,
             streamline_loaded: false,
+            dlss_settings: DlssSettings::default(),
             dlss_evaluation_attempted: false,
             decode: null_mut(),
             decode_extent: [0; 2],
@@ -364,17 +369,18 @@ fn needs_of(backend: u32) -> Needs {
     }
 }
 
-/* Whether the decode writes the sentinel for some pixels: a stored zero under the original rule, or
-an invalid validity channel. Either way those pixels need camera motion reconstructed, and a
-validity-marked decode leaves zero for valid stationary pixels, which must not be read as
-unwritten. */
-fn marks_unwritten(motion: &DecodeParams) -> bool {
-    motion.zero_means_unwritten != 0 || motion.validity_enabled != 0
+fn motion_to_uv(frame: &DlssFrame, already_uv: bool) -> [f32; 2] {
+    let [x, y] = [frame.motion_scale_x, frame.motion_scale_y];
+    if already_uv {
+        [x, y]
+    } else {
+        [0.5 * x, -0.5 * y]
+    }
 }
 
 // Canonical input is current-minus-previous UV. DLSS consumes displacement from the current pixel
 // toward its previous location. Dense resolve already emits that displacement; legacy unspecified
-// encodings retain their scale. The same rule as motion_convention.h.
+// encodings retain their scale.
 fn dlss_motion_scale(scale: f32, canonical_uv: bool, resolved: bool) -> f32 {
     if canonical_uv && !resolved {
         -scale
@@ -383,41 +389,13 @@ fn dlss_motion_scale(scale: f32, canonical_uv: bool, resolved: bool) -> f32 {
     }
 }
 
-// printf's %.9g for the diagnostic frame record.
-fn g9(value: f64) -> String {
-    if value.is_nan() {
-        return if value.is_sign_negative() {
-            "-nan"
-        } else {
-            "nan"
-        }
-        .into();
-    }
-    if value.is_infinite() {
-        return if value < 0.0 { "-inf" } else { "inf" }.into();
-    }
-    if value == 0.0 {
-        return if value.is_sign_negative() { "-0" } else { "0" }.into();
-    }
-    let trim = |text: String| {
-        if text.contains('.') {
-            text.trim_end_matches('0').trim_end_matches('.').to_owned()
-        } else {
-            text
-        }
-    };
-    let scientific = format!("{value:.8e}");
-    let (mantissa, exponent) = scientific.split_once('e').unwrap_or((&scientific, "0"));
-    let exponent: i32 = exponent.parse().unwrap_or(0);
-    if !(-4..9).contains(&exponent) {
-        let sign = if exponent < 0 { '-' } else { '+' };
-        format!(
-            "{}e{sign}{:02}",
-            trim(mantissa.to_owned()),
-            exponent.unsigned_abs()
-        )
-    } else {
-        trim(format!("{value:.*}", (8 - exponent) as usize))
+fn plan_request(width: u32, height: u32, quality: u32) -> rsf_dlss_plan {
+    rsf_dlss_plan {
+        struct_size: size_of::<rsf_dlss_plan>() as u32,
+        output_width: width,
+        output_height: height,
+        quality,
+        ..unsafe { std::mem::zeroed() }
     }
 }
 
@@ -620,6 +598,141 @@ impl Pipeline {
         (result, adapter)
     }
 
+    unsafe fn close_dlss(&self, p: &P, owned: &mut Owned) -> i32 {
+        let mut shutdown = OK;
+        if owned.streamline_loaded {
+            self.say("shutting streamline down");
+            // Frees the DLSS feature's own resources first. Streamline's shutdown does this too,
+            // but the order matters when the caller's device is about to go.
+            shutdown = unsafe {
+                (p.release_resources)();
+                (p.release_viewport)(LAYER_VIEWPORT);
+                (p.shutdown)()
+            };
+            if shutdown != OK {
+                self.say(format!("streamline shutdown failed (result {shutdown})"));
+                shutdown = STREAMLINE_FAILED;
+            }
+            owned.streamline_loaded = false;
+        }
+        shutdown
+    }
+
+    unsafe fn open_dlss(&self, p: &P, owned: &mut Owned) -> i32 {
+        let settings = &owned.dlss_settings;
+        if settings.directory.as_bytes().is_empty() {
+            return INVALID;
+        }
+        let sink = *self.sink.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut plugins = settings.directory.as_bytes().to_vec();
+        while matches!(plugins.last(), Some(b'\\' | b'/')) {
+            plugins.pop();
+        }
+        let interposer = [plugins.as_slice(), b"\\sl.interposer.dll"].concat();
+        self.say([b"loading streamline from ".as_slice(), &plugins].concat());
+        let plugins = CString::new(plugins).unwrap_or_default();
+        let interposer = CString::new(interposer).unwrap_or_default();
+        let host = unsafe { (p.present_host)() };
+        let loaded = if host.is_null() {
+            unsafe {
+                (p.load)(&rsf_dlss_setup {
+                    struct_size: size_of::<rsf_dlss_setup>() as u32,
+                    abi_version: RSF_DLSS_ABI_VERSION,
+                    interposer_path_utf8: interposer.as_ptr(),
+                    plugin_directory_utf8: plugins.as_ptr(),
+                    log_directory_utf8: settings
+                        .log_directory
+                        .as_ref()
+                        .map_or(null(), |s| s.as_ptr()),
+                    engine: settings.engine,
+                    engine_version_utf8: settings
+                        .engine_version
+                        .as_ref()
+                        .map_or(null(), |s| s.as_ptr()),
+                    project_id_utf8: settings.project_id.as_ref().map_or(null(), |s| s.as_ptr()),
+                    require_signature: settings.require_signature,
+                    log: Some(forward_dlss),
+                    ..Default::default()
+                })
+            }
+        } else {
+            unsafe { (p.share_host)(host, sink.log, sink.user as Raw) }
+        };
+        if loaded != 0 {
+            self.say(format!("streamline did not load (result {loaded})"));
+            return STREAMLINE_FAILED;
+        }
+        owned.streamline_loaded = true;
+
+        self.say("handing the game's device to streamline");
+        let device_set = unsafe { (p.set_device)(owned.device()) };
+        if device_set != 0 {
+            self.say(format!(
+                "streamline refused the device (result {device_set})"
+            ));
+            unsafe { self.close_dlss(p, owned) };
+            return STREAMLINE_FAILED;
+        }
+
+        self.say("asking whether DLSS runs on this adapter");
+        let mut support = rsf_dlss_support {
+            struct_size: size_of::<rsf_dlss_support>() as u32,
+            ..unsafe { std::mem::zeroed() }
+        };
+        let queried = unsafe { (p.query_support)(&mut support) };
+        if queried != 0 || support.supported == 0 {
+            // Which requirement failed is the difference between "update the driver" and "this
+            // machine cannot do it".
+            let flag = |set: u32, text: &'static str| if set != 0 { text } else { "" };
+            self.say(format!(
+                "DLSS is not available here (result {queried}), driver {}.{} against a required {}.{}{}{}{}",
+                support.detected_driver_major,
+                support.detected_driver_minor,
+                support.required_driver_major,
+                support.required_driver_minor,
+                flag(support.driver_out_of_date, ", driver out of date"),
+                flag(support.os_out_of_date, ", OS out of date"),
+                flag(support.no_supported_adapter, ", no supported adapter"),
+            ));
+            unsafe { self.close_dlss(p, owned) };
+            return if queried == DLSS_NOT_SUPPORTED {
+                NOT_SUPPORTED
+            } else {
+                STREAMLINE_FAILED
+            };
+        }
+
+        OK
+    }
+
+    unsafe fn plan_dlss(&self, p: &P, output: [u32; 2], quality: u32) -> Result<Range, i32> {
+        let mut plan = plan_request(output[0], output[1], quality);
+        let result = unsafe { (p.plan)(&mut plan) };
+        if result != OK || plan.render_width == 0 || plan.render_height == 0 {
+            self.say(format!(
+                "DLSS gave no render size for quality {quality} (result {result})"
+            ));
+            return Err(STREAMLINE_FAILED);
+        }
+        Ok(Range::of(plan))
+    }
+
+    unsafe fn prepare_dlss(
+        &self,
+        p: &P,
+        owned: &mut Owned,
+        output: [u32; 2],
+        quality: u32,
+    ) -> Result<Range, i32> {
+        if !owned.streamline_loaded {
+            let result = unsafe { self.open_dlss(p, owned) };
+            if result != OK {
+                return Err(result);
+            }
+        }
+        unsafe { self.plan_dlss(p, output, quality) }
+    }
+
     // Undo whatever is held, in the reverse of the order it was acquired. Safe at any point in a
     // partially completed start, which is what its failure paths rely on.
     unsafe fn tear_down(&self, p: &P, owned: &mut Owned) -> i32 {
@@ -656,22 +769,8 @@ impl Pipeline {
         self.release_layer(owned);
         unsafe { rsf_sr_legacy_destroy(owned.alternate) };
         owned.alternate = null_mut();
-        let mut shutdown = OK;
-        if owned.streamline_loaded {
-            self.say("shutting streamline down");
-            // Frees the DLSS feature's own resources first. Streamline's shutdown does this too,
-            // but the order matters when the caller's device is about to go.
-            shutdown = unsafe {
-                (p.release_resources)();
-                (p.release_viewport)(LAYER_VIEWPORT);
-                (p.shutdown)()
-            };
-            if shutdown != OK {
-                self.say(format!("streamline shutdown failed (result {shutdown})"));
-                shutdown = STREAMLINE_FAILED;
-            }
-            owned.streamline_loaded = false;
-        }
+        let shutdown = unsafe { self.close_dlss(p, owned) };
+        owned.dlss_settings = DlssSettings::default();
         owned.device = None;
         owned.dlss_evaluation_attempted = false;
         // Dropped after the last line above, because the DLSS backend keeps forward_dlss as its
@@ -693,13 +792,20 @@ impl Pipeline {
         shutdown
     }
 
+    #[cfg(test)]
     pub(super) unsafe fn start(&self, p: &P, device: Raw, setup: *const Setup) -> i32 {
+        unsafe { self.start_backend(p, device, setup, SR_DLSS) }
+    }
+
+    unsafe fn start_backend(&self, p: &P, device: Raw, setup: *const Setup, backend: u32) -> i32 {
         if device.is_null() || !unsafe { has_capacity(setup) } {
             return INVALID;
         }
         let setup = unsafe { &*setup };
-        if setup.streamline_directory_utf8.is_null()
-            || unsafe { *setup.streamline_directory_utf8 } == 0
+        if !(SR_DLSS..=SR_XESS).contains(&backend)
+            || (backend == SR_DLSS
+                && (setup.streamline_directory_utf8.is_null()
+                    || unsafe { *setup.streamline_directory_utf8 } == 0))
             || setup.output_width == 0
             || setup.output_height == 0
             || (setup.motion.struct_size as usize) < size_of::<DecodeParams>()
@@ -748,85 +854,42 @@ impl Pipeline {
             owned.motion.output_scale_y = 1.0;
         }
 
-        let mut plugins = unsafe { CStr::from_ptr(setup.streamline_directory_utf8) }
-            .to_bytes()
-            .to_vec();
-        while matches!(plugins.last(), Some(b'\\' | b'/')) {
-            plugins.pop();
-        }
-        let interposer = [plugins.as_slice(), b"\\sl.interposer.dll"].concat();
-        self.say([b"loading streamline from ".as_slice(), &plugins].concat());
-        let plugins = CString::new(plugins).unwrap_or_default();
-        let interposer = CString::new(interposer).unwrap_or_default();
-        let host = unsafe { (p.present_host)() };
-        let loaded = if host.is_null() {
-            unsafe {
-                (p.load)(
-                    setup,
-                    interposer.as_ptr(),
-                    plugins.as_ptr(),
-                    Some(forward_dlss),
-                )
+        let optional_string =
+            |text: *const c_char| (!text.is_null()).then(|| unsafe { copy_string(text) });
+        owned.dlss_settings = DlssSettings {
+            directory: unsafe { copy_string(setup.streamline_directory_utf8) },
+            log_directory: optional_string(setup.streamline_log_directory_utf8),
+            engine_version: optional_string(setup.engine_version_utf8),
+            project_id: optional_string(setup.project_id_utf8),
+            engine: setup.engine,
+            require_signature: setup.require_signature,
+        };
+        owned.device = Some(unsafe { ComRef::retain(device) });
+        let [width, height] = [setup.output_width, setup.output_height];
+        let mut range = Range::alternate([width, height]);
+        let result = if backend == SR_DLSS {
+            match unsafe { self.prepare_dlss(p, owned, [width, height], setup.quality) } {
+                Ok(plan) => {
+                    range = plan;
+                    OK
+                }
+                Err(result) => result,
             }
         } else {
-            unsafe { (p.share_host)(host, setup.log, setup.log_user) }
+            unsafe {
+                self.select_alternate(
+                    p,
+                    owned,
+                    backend,
+                    [width, height],
+                    setup.quality,
+                    &mut range,
+                )
+            }
         };
-        if loaded != 0 {
-            self.say(format!("streamline did not load (result {loaded})"));
+        if result != OK {
             unsafe { self.tear_down(p, owned) };
-            return STREAMLINE_FAILED;
-        }
-        owned.streamline_loaded = true;
-
-        self.say("handing the game's device to streamline");
-        owned.device = Some(unsafe { ComRef::retain(device) });
-        let device_set = unsafe { (p.set_device)(device) };
-        if device_set != 0 {
-            self.say(format!(
-                "streamline refused the device (result {device_set})"
-            ));
-            unsafe { self.tear_down(p, owned) };
-            return STREAMLINE_FAILED;
-        }
-
-        self.say("asking whether DLSS runs on this adapter");
-        let mut support = rsf_dlssp_support::default();
-        let queried = unsafe { (p.query_support)(&mut support) };
-        if queried != 0 || support.supported == 0 {
-            // Which requirement failed is the difference between "update the driver" and "this
-            // machine cannot do it".
-            let flag = |set: u32, text: &'static str| if set != 0 { text } else { "" };
-            self.say(format!(
-                "DLSS is not available here (result {queried}), driver {}.{} against a required {}.{}{}{}{}",
-                support.detected_major,
-                support.detected_minor,
-                support.required_major,
-                support.required_minor,
-                flag(support.driver_out_of_date, ", driver out of date"),
-                flag(support.os_out_of_date, ", OS out of date"),
-                flag(support.no_supported_adapter, ", no supported adapter"),
-            ));
-            unsafe { self.tear_down(p, owned) };
-            return if queried == DLSS_NOT_SUPPORTED {
-                NOT_SUPPORTED
-            } else {
-                STREAMLINE_FAILED
-            };
-        }
-
-        // The render size comes from DLSS rather than from a ratio computed here: DLSS decides
-        // what a quality level means, and a size that does not match is a rejected evaluate.
-        let [width, height] = [setup.output_width, setup.output_height];
-        self.say(format!(
-            "asking DLSS what quality level {} renders at for {width}x{height}",
-            setup.quality
-        ));
-        let mut plan = rsf_dlssp_range::default();
-        let planned = unsafe { (p.plan)(width, height, setup.quality, &mut plan) };
-        if planned != 0 || plan.width == 0 || plan.height == 0 {
-            self.say(format!("DLSS gave no render size (result {planned})"));
-            unsafe { self.tear_down(p, owned) };
-            return STREAMLINE_FAILED;
+            return result;
         }
 
         self.say(format!("creating the {width}x{height} output target"));
@@ -838,18 +901,20 @@ impl Pipeline {
         drop(self.set_output(owned, Some(output)));
         {
             let mut shared = self.shared();
-            shared.supported = true;
+            shared.supported = owned.streamline_loaded;
+            shared.backend = backend;
+            shared.requested_backend = backend;
             shared.output = [width, height];
             shared.quality = setup.quality;
-            shared.range = Range::of(plan);
+            shared.range = range;
             shared.scene = Counters::default();
             shared.failures = 0;
             shared.given_up = false;
             shared.running = true;
         }
         self.say(format!(
-            "pipeline ready: DLSS renders {}x{} for {width}x{height}",
-            plan.width, plan.height
+            "pipeline ready: backend {backend} renders {}x{} for {width}x{height}",
+            range.width, range.height
         ));
         OK
     }
@@ -870,7 +935,7 @@ impl Pipeline {
     }
 
     unsafe fn evaluate_scene(&self, p: &P, o: &mut Owned, context: Raw, frame: &Frame) -> i32 {
-        if o.device.is_none() || o.output.is_none() || !o.streamline_loaded {
+        if o.device.is_none() || o.output.is_none() {
             return NOT_RUNNING;
         }
         // Given up on, and said so once already. Returning before the decode and the assembly
@@ -986,7 +1051,7 @@ impl Pipeline {
         let mut camera: Camera = unsafe { *frame.camera };
         camera.struct_size = size_of::<Camera>() as u32;
         camera.motion_decoded = 1;
-        camera.has_motion_sentinel = u32::from(marks_unwritten(&o.motion));
+        camera.has_motion_sentinel = has_motion_sentinel(&o.motion);
         camera.motion_sentinel = o.motion.invalid_value;
         // A caller that gives a scale gives canonical current-minus-previous UV.
         let motion_in_uv = camera.motion_scale != [0.0; 2];
@@ -1067,18 +1132,14 @@ impl Pipeline {
             // Canonical inputs are current-minus-previous UV; legacy decode is NDC with Y up.
             // Resolve emits previous-minus-current pixels, without adding camera motion to written
             // samples.
-            let params = rsf_motion_resolve_params {
-                struct_size: size_of::<rsf_motion_resolve_params>() as u32,
-                clip_to_previous: dlss.clip_to_prev_clip,
-                decoded_to_pixels: [
-                    -(rw as f32) * dlss.motion_scale_x * if motion_in_uv { 1.0 } else { 0.5 },
-                    -(rh as f32) * dlss.motion_scale_y * if motion_in_uv { 1.0 } else { -0.5 },
-                ],
-                sentinel: camera.motion_sentinel,
-                has_sentinel: camera.has_motion_sentinel,
-                depth_layer: frame.motion_depth_layer,
-                jitter_pixels: camera.jitter_pixels,
-            };
+            let params = dense_resolve_params(
+                dlss.clip_to_prev_clip,
+                [rw, rh],
+                motion_to_uv(&dlss, motion_in_uv),
+                (camera.motion_sentinel, camera.has_motion_sentinel),
+                frame.motion_depth_layer,
+                camera.jitter_pixels,
+            );
             if unsafe { (p.resolve_run)(o.dense, context, dlss.motion, dlss.depth, &params) } == 0 {
                 return self.finish(o, RESOURCE_FAILED);
             }
@@ -1149,6 +1210,7 @@ impl Pipeline {
             .shared()
             .sharpening
             .unwrap_or_else(sharpening_policy::defaults);
+        let mut submitted = dlss;
         let evaluated = if backend == SR_DLSS {
             o.dlss_evaluation_attempted = true;
             unsafe { (p.fg_evaluate)(context, &dlss) }
@@ -1156,16 +1218,15 @@ impl Pipeline {
             // The legacy adapter takes canonical UV. The decode's own output, with no scale from
             // the caller, is current-minus-previous NDC with y up.
             let mut alternate = dlss;
-            if !motion_in_uv {
-                alternate.motion_scale_x *= 0.5;
-                alternate.motion_scale_y *= -0.5;
-            }
+            [alternate.motion_scale_x, alternate.motion_scale_y] =
+                motion_to_uv(&dlss, motion_in_uv);
             unsafe {
                 rsf_sr_legacy_evaluate(
                     o.alternate,
                     context,
                     &alternate,
-                    u32::from(marks_unwritten(&o.motion)),
+                    &mut submitted,
+                    has_motion_sentinel(&o.motion),
                     sharpening_policy::vendor_sharpness(&sharpen, backend),
                 )
             }
@@ -1297,7 +1358,9 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         // Post-SR, after decoding and fidelity correction. Failure keeps the vendor's valid output.
         unsafe { self.sharpen(p, o, context, frame, &dlss, &sharpen, backend) };
         if let Some(prefix) = prefix {
-            unsafe { self.write_dump(p, o, context, frame, &dlss, backend, &prefix, [ow, oh]) };
+            unsafe {
+                self.write_dump(p, o, context, frame, &submitted, backend, &prefix, [ow, oh])
+            };
         }
         unsafe {
             (p.input_dump)(
@@ -1510,41 +1573,73 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         } else {
             unsafe { (p.decode_texture)(o.decode) }
         };
-        let targets: [(&str, &[u8], Raw, u32); 7] = [
+        let targets: [(&str, &[u8], Raw, u32, bool); 10] = [
             (
-                "the scene colour it was given",
+                "engine scene colour",
                 b"_input",
                 frame.scene_color,
                 VIEW_RAW,
+                true,
             ),
-            ("the upscaled result", b"_output", o.output(), VIEW_RAW),
             (
-                "the game velocity it was given",
+                "submitted scene colour",
+                b"_input_submitted",
+                dlss.color_in,
+                VIEW_RAW,
+                true,
+            ),
+            (
+                "the upscaled result",
+                b"_output",
+                o.output(),
+                VIEW_RAW,
+                true,
+            ),
+            (
+                "engine velocity",
                 b"_motion",
                 frame.game_motion,
                 VIEW_VELOCITY,
+                true,
             ),
             (
-                "the decoded motion it submitted",
+                "decoded motion",
                 b"_motion_decoded",
                 decoded,
                 VIEW_DECODED_MOTION,
+                true,
             ),
             (
-                "the complete motion it submitted",
+                "submitted motion",
                 b"_motion_submitted",
                 dlss.motion,
                 VIEW_DECODED_MOTION,
+                true,
             ),
-            ("the depth it submitted", b"_depth", frame.depth, VIEW_RAW),
+            ("engine depth", b"_depth", frame.depth, VIEW_RAW, false),
             (
-                "the engine exposure guide",
+                "submitted depth",
+                b"_depth_submitted",
+                dlss.depth,
+                VIEW_RAW,
+                false,
+            ),
+            (
+                "engine exposure",
                 b"_exposure",
                 frame.exposure,
                 VIEW_RAW,
+                true,
+            ),
+            (
+                "submitted exposure",
+                b"_exposure_submitted",
+                dlss.exposure,
+                VIEW_RAW,
+                true,
             ),
         ];
-        for (what, suffix, texture, view) in targets {
+        for (what, suffix, texture, view, preview) in targets {
             if texture.is_null() {
                 continue;
             }
@@ -1565,7 +1660,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
             if raw != DUMP_OK {
                 self.say(format!("raw readback of {what} failed (result {raw})"));
             }
-            let written = if texture == frame.depth {
+            let written = if !preview {
                 raw
             } else {
                 unsafe {
@@ -1882,54 +1977,44 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
                 height_out.write(height);
             }
         };
-        let backend = self.shared().backend;
-        if backend != SR_DLSS {
-            // Only this path touches the frame-thread adapter.
-            let Some(guard) = self.owned() else {
-                return NOT_RUNNING;
-            };
-            let (mut width, mut height) = (0, 0);
-            if unsafe {
-                rsf_sr_legacy_select(guard.alternate, backend, quality, &mut width, &mut height)
-            } != 0
-            {
-                return NOT_SUPPORTED;
-            }
-            let mut shared = self.shared();
-            shared.quality = quality;
-            shared.range.width = width;
-            shared.range.height = height;
-            shared.reset_pending = true;
-            drop(shared);
-            write(width, height);
-            return OK;
-        }
-        let output = {
+        let Some(guard) = self.owned() else {
+            return NOT_RUNNING;
+        };
+        let (backend, output) = {
             let shared = self.shared();
             if !shared.running {
                 return NOT_RUNNING;
             }
-            shared.output
+            (shared.backend, shared.output)
         };
-        let mut plan = rsf_dlssp_range::default();
-        let planned = unsafe { (p.plan)(output[0], output[1], quality, &mut plan) };
-        if planned != 0 || plan.width == 0 || plan.height == 0 {
-            self.say(format!(
-                "quality {quality} refused: DLSS gave no render size (result {planned})"
-            ));
-            return STREAMLINE_FAILED;
-        }
+        let range = if backend != SR_DLSS {
+            let mut range = Range::alternate(output);
+            if unsafe {
+                rsf_sr_legacy_select(
+                    guard.alternate,
+                    backend,
+                    quality,
+                    &mut range.width,
+                    &mut range.height,
+                )
+            } != 0
+            {
+                return NOT_SUPPORTED;
+            }
+            range
+        } else {
+            match unsafe { self.plan_dlss(p, output, quality) } {
+                Ok(plan) => plan,
+                Err(result) => return result,
+            }
+        };
         {
             let mut shared = self.shared();
             shared.quality = quality;
+            shared.range = range;
             shared.restart_history();
-            shared.range = Range::of(plan);
         }
-        self.say(format!(
-            "quality {quality}: DLSS renders {}x{} for {}x{}",
-            plan.width, plan.height, output[0], output[1]
-        ));
-        write(plan.width, plan.height);
+        write(range.width, range.height);
         OK
     }
 
@@ -1972,12 +2057,10 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         let mut range = Range::alternate([width, height]);
         let mut next_alternate: *mut Adapter = null_mut();
         if backend == SR_DLSS {
-            let mut plan = rsf_dlssp_range::default();
-            let result = unsafe { (p.plan)(width, height, quality, &mut plan) };
-            if result != 0 || plan.width == 0 || plan.height == 0 {
-                return STREAMLINE_FAILED;
-            }
-            range = Range::of(plan);
+            range = match unsafe { self.plan_dlss(p, [width, height], quality) } {
+                Ok(plan) => plan,
+                Err(result) => return result,
+            };
         } else {
             let (mut result, created) = unsafe { self.create_alternate(p, o, width, height) };
             next_alternate = created.cast();
@@ -2038,6 +2121,60 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         OK
     }
 
+    unsafe fn select_alternate(
+        &self,
+        p: &P,
+        o: &mut Owned,
+        backend: u32,
+        output: [u32; 2],
+        quality: u32,
+        range: &mut Range,
+    ) -> i32 {
+        let mut result = OK;
+        if o.alternate.is_null() {
+            let (created, adapter) = unsafe { self.create_alternate(p, o, output[0], output[1]) };
+            result = created;
+            o.alternate = adapter.cast();
+        }
+        if result == 0 {
+            // A vendor builds its pipelines at its first dispatch (FSR4: about 25 s on a cold
+            // driver cache). Done here, at the boundary, with a line before and after.
+            self.say(format!(
+                "preparing backend {backend}: the vendor builds its pipelines on first use; the game pauses until it is done"
+            ));
+            let started = Instant::now();
+            result = unsafe {
+                rsf_sr_legacy_select(
+                    o.alternate,
+                    backend,
+                    quality,
+                    &mut range.width,
+                    &mut range.height,
+                )
+            };
+            if result == 0
+                && unsafe {
+                    rsf_sr_legacy_warm_up(
+                        o.alternate,
+                        range.width,
+                        range.height,
+                        output[0],
+                        output[1],
+                    )
+                } != 0
+            {
+                self.say(format!(
+                    "backend {backend} warm-up dispatch failed; its first frame may build the pipelines instead"
+                ));
+            }
+            self.say(format!(
+                "backend {backend} prepared in {:.0} ms",
+                started.elapsed().as_secs_f64() * 1000.0
+            ));
+        }
+        result
+    }
+
     // Compatibility selector for the existing frame pipeline, run at the render-thread command
     // boundary. Refusals preserve the active backend.
     pub(super) unsafe fn select_backend(
@@ -2063,68 +2200,33 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
             (shared.output, shared.quality)
         };
         let mut range = Range::alternate(output);
-        let mut result;
-        if backend == SR_DLSS {
-            let mut plan = rsf_dlssp_range::default();
-            result = unsafe { (p.plan)(output[0], output[1], quality, &mut plan) };
-            range = Range::reported(plan);
-            if result == 0 && !o.alternate.is_null() {
+        let result = if backend == SR_DLSS {
+            let was_loaded = o.streamline_loaded;
+            let mut result = match unsafe { self.prepare_dlss(p, o, output, quality) } {
+                Ok(plan) => {
+                    range = plan;
+                    OK
+                }
+                Err(result) => result,
+            };
+            if result == OK && !o.alternate.is_null() {
                 result = unsafe {
                     rsf_sr_legacy_select(o.alternate, SR_NONE, quality, null_mut(), null_mut())
                 };
             }
-            // The DLSS feature is not released: it was idle, and the next frame starts it without
-            // history. Releasing it rebuilt the feature inside the first frame back, about 50 ms.
+            if result != OK && !was_loaded {
+                unsafe { self.close_dlss(p, o) };
+            }
+            result
         } else {
-            result = 0;
-            if o.alternate.is_null() {
-                let (created, adapter) =
-                    unsafe { self.create_alternate(p, o, output[0], output[1]) };
-                result = created;
-                o.alternate = adapter.cast();
-            }
-            if result == 0 {
-                // A vendor builds its pipelines at its first dispatch (FSR4: about 25 s on a cold
-                // driver cache). Done here, at the boundary, with a line before and after.
-                self.say(format!(
-                    "preparing backend {backend}: the vendor builds its pipelines on first use; the game pauses until it is done"
-                ));
-                let started = Instant::now();
-                result = unsafe {
-                    rsf_sr_legacy_select(
-                        o.alternate,
-                        backend,
-                        quality,
-                        &mut range.width,
-                        &mut range.height,
-                    )
-                };
-                if result == 0
-                    && unsafe {
-                        rsf_sr_legacy_warm_up(
-                            o.alternate,
-                            range.width,
-                            range.height,
-                            output[0],
-                            output[1],
-                        )
-                    } != 0
-                {
-                    self.say(format!(
-                        "backend {backend} warm-up dispatch failed; its first frame may build the pipelines instead"
-                    ));
-                }
-                self.say(format!(
-                    "backend {backend} prepared in {:.0} ms",
-                    started.elapsed().as_secs_f64() * 1000.0
-                ));
-            }
-        }
+            unsafe { self.select_alternate(p, o, backend, output, quality, &mut range) }
+        };
         let active = {
             let mut shared = self.shared();
             shared.last_switch_result = result;
             if result == 0 {
                 shared.backend = backend;
+                shared.supported = o.streamline_loaded;
                 shared.range = range;
             }
             shared.backend
@@ -2170,7 +2272,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
 }
 
 fn frame_record(frame: &Frame, dlss: &DlssFrame, backend: u32, output: [u32; 2]) -> String {
-    let f = |value: f32| g9(f64::from(value));
+    let f = |value: f32| general(f64::from(value));
     let clip = dlss
         .clip_to_prev_clip
         .iter()
@@ -2197,8 +2299,13 @@ fn frame_record(frame: &Frame, dlss: &DlssFrame, backend: u32, output: [u32; 2])
 // C entry points. dlss_pipeline.cpp keeps every public export as a one-line forward that passes
 // its static leaf table.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_pipeline_start(p: &P, device: Raw, setup: *const Setup) -> i32 {
-    unsafe { PROCESS.start(p, device, setup) }
+unsafe extern "C" fn rsf_core_dlss_pipeline_start(
+    p: &P,
+    device: Raw,
+    setup: *const Setup,
+    backend: u32,
+) -> i32 {
+    unsafe { PROCESS.start_backend(p, device, setup, backend) }
 }
 
 #[unsafe(no_mangle)]

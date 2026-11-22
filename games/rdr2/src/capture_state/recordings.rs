@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Command-list observations and copied draw facts ordered by the native capture mutex.
-use super::{Capture, MAX_DRAW_METADATA, allocate};
+use super::{Capture, MAX_DRAW_METADATA, allocate, try_entry};
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr::null_mut;
@@ -28,6 +28,7 @@ struct DrawBinding {
     target: *mut c_void,
     pso: u64,
     pipeline: Pipeline,
+    pipeline_known: bool,
 }
 
 #[repr(C)]
@@ -45,11 +46,14 @@ pub(super) struct Draw {
     pub(super) pipeline: Pipeline,
     pub(super) stack: [*mut c_void; 12],
     pub(super) stack_size: u32,
+    pub(super) pipeline_known: bool,
 }
 
 const _: () = {
     assert!(size_of::<Pipeline>() == 40);
-    assert!(size_of::<DrawBinding>() == 56 && std::mem::offset_of!(DrawBinding, pipeline) == 16);
+    assert!(
+        size_of::<DrawBinding>() == 64 && std::mem::offset_of!(DrawBinding, pipeline_known) == 56
+    );
     assert!(size_of::<Draw>() == 192 && std::mem::offset_of!(Draw, stack) == 88);
 };
 
@@ -57,6 +61,7 @@ const _: () = {
 struct Recording {
     generation: u64,
     states: States,
+    wildcard_alias: bool,
     target: *mut c_void,
     pso: usize,
 }
@@ -75,6 +80,7 @@ pub(super) struct Submission {
     pub(super) serial: u64,
     generations: HashMap<usize, u64>,
     states: States,
+    wildcard_alias: bool,
 }
 
 #[derive(Default)]
@@ -85,19 +91,22 @@ pub(super) struct Readback {
     pub(super) list: *mut c_void,
     pub(super) queue: *mut c_void,
     claimed: Option<u64>,
+    pub(super) untracked: bool,
+    pub(super) discarded: bool,
 }
 
 impl Readback {
     pub(super) fn is_complete(&self, completed: u64) -> bool {
         self.fence_value != 0 && completed != u64::MAX && completed >= self.fence_value
     }
-}
 
-fn try_entry<V: Default>(map: &mut HashMap<usize, V>, key: usize) -> Option<&mut V> {
-    if !map.contains_key(&key) && map.try_reserve(1).is_err() {
-        return None;
+    pub(super) fn discarded_by_reset(&self, list: *mut c_void, generation: u64) -> bool {
+        self.list == list
+            && self.generation == generation
+            && self.claimed.is_none()
+            && self.submission == 0
+            && !self.untracked
     }
-    Some(map.entry(key).or_default())
 }
 
 impl Recordings {
@@ -108,12 +117,15 @@ impl Recordings {
     }
 
     fn state(&self, list: usize, resource: usize) -> u32 {
-        self.lists
-            .get(&list)
-            .and_then(|recording| recording.states.get(&resource))
-            .or_else(|| self.submitted.get(&resource))
-            .copied()
-            .unwrap_or(UNKNOWN)
+        if let Some(recording) = self.lists.get(&list) {
+            if let Some(&state) = recording.states.get(&resource) {
+                return state;
+            }
+            if recording.wildcard_alias {
+                return UNKNOWN;
+            }
+        }
+        self.submitted.get(&resource).copied().unwrap_or(UNKNOWN)
     }
 
     fn record(&mut self, list: usize, resource: usize, state: u32) {
@@ -134,12 +146,17 @@ impl Recordings {
             serial: self.submission_serial,
             generations: HashMap::new(),
             states: States::new(),
+            wildcard_alias: false,
         };
         submission.generations.try_reserve(lists.len()).ok()?;
         for &list in lists {
             let list = list as usize;
             if let Some(recording) = self.lists.get(&list) {
                 submission.generations.insert(list, recording.generation);
+                if recording.wildcard_alias {
+                    submission.states.clear();
+                    submission.wildcard_alias = true;
+                }
                 submission.states.try_reserve(recording.states.len()).ok()?;
                 // Last recording in submission order wins for states observed on several lists.
                 submission
@@ -151,6 +168,9 @@ impl Recordings {
     }
 
     fn submit(&mut self, submission: &mut Submission) -> u64 {
+        if submission.wildcard_alias {
+            self.submitted.clear();
+        }
         if self.submitted.try_reserve(submission.states.len()).is_ok() {
             self.submitted.extend(submission.states.drain());
         } else {
@@ -264,14 +284,12 @@ unsafe extern "C" fn rsf_rdr2_capture_get_draw_binding(
     if recording.target.is_null() {
         return false;
     }
+    let pipeline = recordings.pipelines.get(&recording.pso).copied();
     *out = DrawBinding {
         target: recording.target,
         pso: recording.pso as u64,
-        pipeline: recordings
-            .pipelines
-            .get(&recording.pso)
-            .copied()
-            .unwrap_or_default(),
+        pipeline: pipeline.unwrap_or_default(),
+        pipeline_known: pipeline.is_some(),
     };
     true
 }
@@ -324,21 +342,29 @@ unsafe extern "C" fn rsf_rdr2_capture_alias(
     list: *mut c_void,
     resource: *mut c_void,
 ) {
+    let recordings = unsafe { &mut *owner.recordings.get() };
     if !resource.is_null() {
-        unsafe { &mut *owner.recordings.get() }.record(list as usize, resource as usize, UNKNOWN);
+        recordings.record(list as usize, resource as usize, UNKNOWN);
+    } else if let Some(recording) = try_entry(&mut recordings.lists, list as usize) {
+        recording.states.clear();
+        recording.wildcard_alias = true;
+    } else {
+        recordings.submitted.clear();
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_reset_list(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_reset_list(
     owner: &Capture,
     list: *mut c_void,
     pso: *mut c_void,
 ) {
     let recordings = unsafe { &mut *owner.recordings.get() };
     if let Some(recording) = try_entry(&mut recordings.lists, list as usize) {
+        unsafe { super::shots::discard_reset(owner, list, recording.generation) };
         recording.generation = recording.generation.wrapping_add(1);
         recording.states.clear();
+        recording.wildcard_alias = false;
         recording.target = null_mut();
         recording.pso = pso as usize;
     }
@@ -372,7 +398,9 @@ pub(super) unsafe fn reuse_readback(
 ) -> bool {
     // Writes in one recording execute in order. A different recording may run on another queue.
     readback.is_complete(completed)
-        || (readback.claimed.is_none()
+        || (!readback.untracked
+            && !readback.discarded
+            && readback.claimed.is_none()
             && readback.queue.is_null()
             && readback.list == list
             && readback.generation == unsafe { &*owner.recordings.get() }.generation(list as usize))
@@ -396,7 +424,9 @@ pub(super) unsafe fn snapshot_submission(
 }
 
 pub(super) fn claim_readback(submission: &Submission, readback: &mut Readback) -> bool {
-    if readback.claimed.is_none()
+    if !readback.untracked
+        && !readback.discarded
+        && readback.claimed.is_none()
         && readback.queue.is_null()
         && submission.generations.get(&(readback.list as usize)) == Some(&readback.generation)
     {
@@ -443,8 +473,7 @@ pub(super) unsafe fn apply_submission(owner: &Capture, submission: *mut Submissi
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_discard_submission(submission: *mut Submission) {
+pub(super) unsafe fn discard_submission(submission: *mut Submission) {
     if !submission.is_null() {
         drop(unsafe { Box::from_raw(submission) });
     }
@@ -480,6 +509,78 @@ mod tests {
     }
 
     #[test]
+    fn wildcard_alias_invalidates_earlier_lists_and_preserves_later_transitions() {
+        let owner = Capture::new();
+        let earlier = without_provenance_mut(1);
+        let alias = without_provenance_mut(2);
+        let later = without_provenance_mut(3);
+        let unrelated_list = without_provenance_mut(4);
+        let a = without_provenance_mut(5);
+        let b = without_provenance_mut(6);
+        let c = without_provenance_mut(7);
+        unsafe {
+            rsf_rdr2_capture_initial_state(&owner, a, 4);
+            rsf_rdr2_capture_transition(&owner, earlier, b, 0, 8, false);
+            rsf_rdr2_capture_transition(&owner, alias, a, 0, 8, false);
+            rsf_rdr2_capture_alias(&owner, alias, null_mut());
+            assert_eq!(rsf_rdr2_capture_resource_state(&owner, alias, a), UNKNOWN);
+            rsf_rdr2_capture_transition(&owner, alias, c, 0, 16, false);
+            rsf_rdr2_capture_transition(&owner, later, b, 0, 32, false);
+            let submission = snapshot_submission(&owner, 3, [earlier, alias, later].as_ptr());
+            assert!(!submission.is_null());
+            apply_submission(&owner, submission);
+            discard_submission(submission);
+            assert_eq!(
+                rsf_rdr2_capture_resource_state(&owner, unrelated_list, a),
+                UNKNOWN
+            );
+            assert_eq!(
+                rsf_rdr2_capture_resource_state(&owner, unrelated_list, b),
+                32
+            );
+            assert_eq!(
+                rsf_rdr2_capture_resource_state(&owner, unrelated_list, c),
+                16
+            );
+        }
+    }
+
+    #[test]
+    fn bound_pipeline_keeps_the_pso_identity_after_facts_are_withdrawn() {
+        let owner = Capture::new();
+        let list = without_provenance_mut(1);
+        let resource = without_provenance_mut(2);
+        let pso = without_provenance_mut(3);
+        let mut binding = DrawBinding {
+            target: null_mut(),
+            pso: 0,
+            pipeline: Pipeline::default(),
+            pipeline_known: false,
+        };
+        unsafe {
+            rsf_rdr2_capture_record_rtv(&owner, 4, resource);
+            rsf_rdr2_capture_bind_rtv(&owner, list, &4);
+            rsf_rdr2_capture_bind_pipeline(&owner, list, pso);
+            rsf_rdr2_capture_record_pipeline(&owner, pso, &Pipeline::default());
+            assert!(rsf_rdr2_capture_get_draw_binding(
+                &owner,
+                list,
+                &mut binding
+            ));
+            assert!(binding.pipeline_known);
+            rsf_rdr2_capture_record_pipeline(&owner, pso, std::ptr::null());
+            assert!(rsf_rdr2_capture_get_draw_binding(
+                &owner,
+                list,
+                &mut binding
+            ));
+            assert!(!binding.pipeline_known);
+            assert_eq!(binding.pso, 3);
+            assert_eq!(binding.target, resource);
+        }
+    }
+
+    #[test]
     fn submission_keeps_the_recording_that_ran_when_the_list_is_reset() {
         let owner = Capture::new();
         let list = without_provenance_mut(1);
@@ -505,7 +606,7 @@ mod tests {
                 8
             );
             assert_eq!(rsf_rdr2_capture_resource_state(&owner, list, resource), 16);
-            rsf_rdr2_capture_discard_submission(receipt);
+            discard_submission(receipt);
         }
     }
 
@@ -526,7 +627,7 @@ mod tests {
             let serial = apply_submission(&owner, receipt);
             assert!(!submit_readback(&mut readback, other_queue, serial + 1));
             assert!(submit_readback(&mut readback, queue, serial));
-            rsf_rdr2_capture_discard_submission(receipt);
+            discard_submission(receipt);
         }
         assert!(awaits_fence(&readback, queue));
         assert!(!fence_readback(&mut readback, other_queue, 1));

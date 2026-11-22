@@ -18,6 +18,7 @@ typedef void (*rsf_ac7_capture_log_fn)(void* user, const char* message);
 void rsf_ac7_motion_capture_configure(const char* directory, rsf_ac7_capture_log_fn log, void* user);
 int rsf_ac7_motion_capture_install(void);
 void rsf_ac7_motion_capture_shutdown(void);
+// The carrier's shader creation callback feeds both F9 and translucent velocity.
 void rsf_ac7_motion_capture_shader(void* shader, uint32_t stage, const void* bytes, uint32_t size);
 void rsf_ac7_motion_capture_buffer(void* user, void* buffer, const void* initial,
                                   uint32_t bytes, uint32_t bind_flags);

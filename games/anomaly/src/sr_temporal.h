@@ -44,7 +44,7 @@ enum class Refusal : uint8_t {
     Prepare,      // the prepare pass could not run
     Pass,         // build_pass refused (see pass_errors)
     Pipeline,     // the Runtime refused or the backend failed (see results)
-    Reinsert,     // evaluated, but the output pass failed: the bilinear fallback was drawn
+    Reinsert,     // evaluated, but the output pass failed: followed by a bilinear recovery attempt
     Count
 };
 // The overlay/status reason for a refused pipeline start (fits rsf_overlay_sr_report::reason, 96 bytes).
@@ -57,7 +57,7 @@ struct TemporalCounters {
     std::array<uint64_t, 12> results{};                // by -rsf_dlss_pipeline_result (1..10), 11 = other
     std::array<uint64_t, static_cast<std::size_t>(ResetReason::Count)> resets{};
     uint64_t starts{}, start_failures{}, stops{}, selects{}, select_failures{}, qualities{}, quality_failures{}, presets{};
-    uint64_t resizes{}, resize_failures{}, bilinear{}, motion_missing{}, prepared{};
+    uint64_t resizes{}, resize_failures{}, bilinear{}, bilinear_failed{}, motion_missing{}, prepared{};
     // Backend requests announced before their blocking select (first use of a backend in this process), and the longest
     // select the render thread waited for, in milliseconds.
     uint64_t select_announced{}, longest_select_ms{};
@@ -118,8 +118,7 @@ public:
     // Render thread: the pipeline writes the next evaluated frame's backend inputs and output under `prefix_utf8`
     // (_input, _output, _motion, _motion_decoded, _motion_submitted, _depth, _exposure, _frame.json).
     bool request_dump(const std::string& prefix_utf8) noexcept;
-    void count(Refusal) noexcept;
-    void count_bilinear() noexcept;
+    void fallback(uint8_t reason, bool drawn) noexcept;
     void count_prepared(bool motion_missing) noexcept;
     // Quiesce or teardown: stop the pipeline (render thread or with rendering stopped).
     void stop() noexcept;

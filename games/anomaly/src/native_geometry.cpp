@@ -2,10 +2,10 @@
 #include "native_geometry.h"
 #include "build_profile.h"
 #include "geometry_retirement.h"
-#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstring>
+#include <limits>
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -72,12 +72,14 @@ using Context = rsf_anomaly_geometry_context;
 using Visual = rsf_anomaly_geometry_visual;
 using Window = rsf_anomaly_geometry_window;
 static_assert(sizeof(Engine) == 16 && sizeof(Context) == 16 && sizeof(Window) == 32 && sizeof(Visual) == 80);
-static_assert(sizeof(rsf_anomaly_geometry_facts) == 32 && sizeof(rsf_anomaly_geometry_platform) == 128);
+static_assert(sizeof(rsf_anomaly_geometry_facts) == 32 && sizeof(rsf_anomaly_geometry_platform) == 72 &&
+    offsetof(rsf_anomaly_geometry_platform, bones) == 64);
 static_assert(sizeof(GeometryStats) == 40 && sizeof(GeometryCoverage) == 1472);
-static_assert(sizeof(rsf_anomaly_geometry_palette) == 24 && sizeof(rsf_anomaly_geometry_view_sample) == 8);
+static_assert(sizeof(rsf_anomaly_geometry_layout) == 16 && sizeof(rsf_anomaly_geometry_native_matrix) == 64);
 static_assert(sizeof(rsf_anomaly_geometry_child_range) == 24 && sizeof(rsf_anomaly_geometry_callback) == 24);
 static_assert(sizeof(rsf_anomaly_geometry_hierarchy) == 32 && offsetof(rsf_anomaly_geometry_hierarchy, read) == 24);
-static_assert(sizeof(rsf_anomaly_geometry_writer) == 24 && sizeof(Matrix) == 128);
+static_assert(sizeof(rsf_anomaly_geometry_writer) == 16 && sizeof(Matrix) == 128 &&
+    alignof(Matrix) == alignof(double) && offsetof(Matrix, values) == 0);
 static_assert(sizeof(NativeSite) == 32 && offsetof(NativeSite, rva) == 8 && offsetof(NativeSite, expected) == 12);
 static_assert(sizeof(UniqueGuard) == 24 && offsetof(UniqueGuard, rva) == 8 && offsetof(UniqueGuard, expected_hex) == 16);
 static_assert(sizeof(rsf_anomaly_geometry_guard_profile) == 64 &&
@@ -105,12 +107,6 @@ template<class T>
 std::uint8_t encode_enum(std::optional<T> value) noexcept
 {
     return value ? static_cast<std::uint8_t>(*value) : static_cast<std::uint8_t>(RSF_ANOMALY_GEOMETRY_UNSET);
-}
-
-template<class T>
-bool read(std::uintptr_t address, T& value) noexcept
-{
-    return guarded_copy(&value, reinterpret_cast<const void*>(address), sizeof(T));
 }
 
 Engine bind(const std::byte* module, const BuildProfile& build) noexcept
@@ -155,60 +151,25 @@ rsf_anomaly_geometry_hierarchy hierarchy(Engine engine) noexcept
     return {{tables[0], tables[1], tables[2], tables[3]}, hierarchy_children_offset, guarded_copy};
 }
 
-std::uint8_t pass(Engine engine) noexcept
-{
-    std::uint32_t phase{};
-    if (read(engine.module + build_of(engine).geometry->render_phase_rva, phase)) {
-        if (phase == phase_normal) return RSF_ANOMALY_PASS_MAIN;
-        if (phase == phase_smap) return RSF_ANOMALY_PASS_SHADOW;
-    }
-    return RSF_ANOMALY_PASS_UNKNOWN;
-}
-
-bool view(Engine engine, rsf_anomaly_geometry_view_sample* sample) noexcept
+rsf_anomaly_geometry_layout layout(Engine engine) noexcept
 {
     const auto& build = build_of(engine);
-    const auto viewport = engine.module + build.geometry->second_viewport_rva;
-    return read(viewport, sample->active) && read(viewport + second_viewport_delay_offset, sample->delay) &&
-        read(engine.module + build.native->device_frame_rva, sample->frame);
+    return {build.geometry->render_phase_rva, build.geometry->second_viewport_rva,
+        build.native->device_frame_rva, build.geometry->world_matrix_rva};
 }
 
-std::uintptr_t world(Engine engine) noexcept
+bool bones(std::uintptr_t instances, std::uint32_t first, std::uint32_t count,
+    rsf_anomaly_geometry_native_matrix* out) noexcept
 {
-    return engine.module ? engine.module + build_of(engine).geometry->world_matrix_rva : 0;
-}
-
-bool skin_mode(std::uintptr_t skeleton, std::uint16_t* mode) noexcept
-{
-    return read(skeleton + 56, *mode);
-}
-
-bool palette(std::uintptr_t skeleton, rsf_anomaly_geometry_palette* sample) noexcept
-{
-    sample->layout = sbones_palette_layout;
-    return skin_mode(skeleton, &sample->mode) && read(skeleton + 60, sample->count);
-}
-
-std::uintptr_t bone_instances(std::uintptr_t skeleton) noexcept
-{
-    std::uintptr_t parent{}, instances{};
-    return read(skeleton + 8, parent) && parent && read(parent + bone_instances_offset, instances) ? instances : 0;
-}
-
-bool matrix(std::uintptr_t address, float* out) noexcept
-{
-    return guarded_copy(out, reinterpret_cast<const void*>(address), sizeof(float) * 16);
-}
-
-bool bone(std::uintptr_t instances, std::uint32_t index, float* out) noexcept
-{
-    return matrix(instances + index * bone_instance_stride + render_transform_offset, out);
-}
-
-std::int64_t tree_lod(std::uintptr_t visual) noexcept
-{
-    std::uint32_t lod{};
-    return read(visual + tree_pm_last_lod_offset, lod) ? static_cast<std::int64_t>(lod) : -1;
+    if (!instances || !count) return false;
+    const auto last = std::uintptr_t{first} + count - 1;
+    const auto end = last * bone_instance_stride + render_transform_offset + sizeof(*out);
+    if (instances > (std::numeric_limits<std::uintptr_t>::max)() - end) return false;
+    for (std::uint32_t i = 0; i < count; ++i) {
+        const auto address = instances + (std::uintptr_t{first} + i) * bone_instance_stride + render_transform_offset;
+        if (!guarded_copy(&out[i], reinterpret_cast<const void*>(address), sizeof(*out))) return false;
+    }
+    return true;
 }
 
 constexpr rsf_anomaly_geometry_platform platform{
@@ -218,8 +179,7 @@ constexpr rsf_anomaly_geometry_platform platform{
     []() noexcept { return native_hooks.enable(); },
     []() noexcept { return native_hooks.disable(); },
     hierarchy,
-    [](std::uintptr_t address, std::uintptr_t* result) noexcept { return read(address, *result); },
-    pass, view, world, matrix, skin_mode, palette, bone_instances, bone, tree_lod,
+    layout, guarded_copy, bones,
 };
 
 DrawClassification classification(std::uint8_t pass, std::uint8_t type, std::uint8_t verdict) noexcept
@@ -227,29 +187,20 @@ DrawClassification classification(std::uint8_t pass, std::uint8_t type, std::uin
     return {static_cast<DrawPass>(pass), static_cast<VisualType>(type), static_cast<DrawVerdict>(verdict)};
 }
 
-temporal::Mat4 copy_matrix(const Matrix& input) noexcept
-{
-    temporal::Mat4 result;
-    std::copy_n(input.values, result.values.size(), result.values.begin());
-    return result;
-}
-
 // The facade supplies the existing C++ snapshot's storage. Rust decides when
 // to sample, which rows are valid and when this copy is ready to publish.
 using CaptureStorage = std::optional<DrawCapture>;
 constexpr rsf_anomaly_geometry_writer writer{
-    [](void* user, const Visual* scope, const Matrix* matrix, std::uint32_t count) noexcept {
+    [](void* user, const Visual* scope, const Matrix* matrix, std::uint32_t count) noexcept -> Matrix* {
         auto& capture = static_cast<CaptureStorage*>(user)->emplace();
         capture.key = {scope->key.owner, scope->key.visual, scope->key.generation};
         capture.kind = static_cast<DrawKind>(scope->kind);
         capture.view = optional_enum<temporal::ViewId>(scope->view);
         capture.domain = optional_enum<temporal::ProjectionDomain>(scope->domain);
-        if (matrix) capture.world = copy_matrix(*matrix);
-        try { capture.bones.reserve(count); return true; }
-        catch (...) { return false; }
-    },
-    [](void* user, std::uint32_t, const Matrix* matrix) noexcept {
-        (**static_cast<CaptureStorage*>(user)).bones.push_back(copy_matrix(*matrix));
+        if (matrix) capture.world = *matrix;
+        try { capture.bones.resize(count); }
+        catch (...) { return nullptr; }
+        return capture.bones.data();
     },
     [](void* user, std::uint64_t layout) noexcept -> const void* {
         auto& capture = **static_cast<CaptureStorage*>(user);
@@ -442,14 +393,6 @@ std::optional<DrawCapture> capture_current_draw() noexcept
     return capture;
 }
 
-DrawVerdict classify_draw(const DrawFacts& facts) noexcept
-{
-    const rsf_anomaly_geometry_draw draw{static_cast<std::int32_t>(facts.pass), static_cast<std::int32_t>(facts.type),
-        static_cast<std::int32_t>(facts.lookup), facts.capturing, facts.world_readable, facts.world_identity,
-        facts.foliage_identity};
-    return static_cast<DrawVerdict>(rsf_anomaly_geometry_classify(&draw));
-}
-
 const char* pass_name(DrawPass pass) noexcept
 {
     return rsf_anomaly_geometry_pass_name(static_cast<std::uint8_t>(pass));
@@ -538,7 +481,7 @@ bool write_vertex_constants(std::uint32_t slot, std::uint32_t expected_size, std
 
 bool read_world_matrix(float (&out)[16]) noexcept
 {
-    return read(world(rsf_anomaly_geometry_binding()), out);
+    return rsf_anomaly_geometry_read_world(&platform, out);
 }
 
 std::optional<temporal::ViewId> current_render_view(const std::byte* module, const BuildProfile& build) noexcept

@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-#include "shader_loader.h"
+#include "shader_loader_platform.h"
 #include <windows.h>
 
 namespace rsf::anomaly::motion {
 // The live pack lends its reflector for the duration of shader preparation.
 extern "C" FARPROC rsf_anomaly_runtime_pack_reflector(const void*) noexcept;
+
+extern "C" bool rsf_anomaly_shader_reflect(FARPROC, rsf_anomaly_shader_bytes, void*,
+    bool (*)(void*, const rsf_anomaly_shader_reflection*)) noexcept;
 
 class D3DShaderReflector : public Reflector {
 public:

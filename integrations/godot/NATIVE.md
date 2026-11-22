@@ -1,5 +1,91 @@
 # Godot native integration ownership
 
+## Native control and D3D12 follow-up
+
+The existing engine ABI retains its function signatures and record layouts. The DLL exports
+control, status, CPU and several presentation notifications directly from Rust through
+`native/exports.def`. ABI checks read the size before the version and
+validate output headers without borrowing uninitialized bodies. The engine callback applies the
+typed extension settings through the same root-viewport admission and scaling path as the public
+Dictionary method.
+
+D3D12 status returns ABI 3 and reads latency availability, mode and counters from the Runtime
+latency owner. Godot and Unity use the same packaged vendor paths and give a nonzero provider
+switch result precedence in their legacy FG result. The sharpening record derives from the public
+C header for all three Rust consumers, with compile-time field offset checks.
+
+A D3D12 binding publishes the device and queue after fence creation. Present reuses a receipt from
+successful recording for its current session and source. HUD-less capture shares that source's
+slot while its lists await submission, waits for completion if the slot was signalled, and
+refuses it if the original SR slot wait failed. A native final-scene pass acquires its own retired
+slot. Window subclass forwarding remains keyed by HWND through a refused restoration so a
+replacement window can attach independently.
+
+Rust plans the motion diagnostic's buffer size and dispatch and supplies its shader. The
+GDExtension entry, class bindings, Variant/RID marshaling and RenderingDevice recording still
+use godot-cpp. COM, DXGI and C++ FrameCapture12 operations stay in typed native leaves.
+
+The native integration binds one versioned Runtime CPU service at backend setup. CPU facts and
+window messages use its report callback, and diagnostic pings use its ping callback. Godot admits
+the window. Runtime still owns marker mapping, ordering and pacing.
+
+Godot's pinned 4.7.2 source at `ed1daf0bf001b61586d9930840f2f1394092c079` shows the main
+RenderingDevice submitting the last graph command with the frame fence in `execute_chained_cmds`.
+`_execute_frame` then either presents inside that driver call or calls the separate presentation
+queue with the signalled semaphore. An execution scope copies the session and source for this
+specific main-device call. The Vulkan driver reports submit begin immediately before queue
+submission and submit end only after success. It brackets the actual native, proxy or mixed-batch
+Present call for the admitted HWND, skipping fan-out failures and Present calls without a matching
+submitted frame. The Runtime carries the explicit source during Present for the XeSS provider's
+existing identity lookup. No pacing or marker semantics are chosen in the engine.
+
+The new receipt export is optional at lookup. Older modules and DLLs retain their original
+entry points. The paired engine and native DLL use explicit execution facts. The pinned source
+patch was generated and checked in memory. The engine checkout, game installations and
+device fixtures were left untouched.
+
+Source evidence is in the Rust entry points, the CMake export list, the engine's
+`RSF_RESOLVE`/GetProcAddress calls, and recording fixtures for ABI reuse, failed fence creation,
+failed SR admission and wait, and window replacement. Bindings were regenerated using bindgen
+0.72.1 and formatted with the Rust 1.94.1 toolchain. Native linking, tests and device execution
+remain pending.
+
+### E02 checklist evidence
+
+| Finding | Source evidence |
+| --- | --- |
+| Reusable D3D12 status header | `control.rs` writes the current ABI and `control/tests.rs` passes the same buffer twice through `rsfg_status`. |
+| Shared packaged D3D12 paths | `sdk/game/src/vendor_paths.rs` supplies Godot's session storage and Unity's package identity. |
+| Simultaneous FG failures | `sdk/game/src/presentation_result.rs` keeps both facts and defines provider-switch precedence. The Unity and Godot fixtures both specify simultaneous failures. |
+| D3D12 latency mode and availability | The native leaf copies both from `rsf_native_latency_status_get` and `control.rs` uses that one latency snapshot for status. |
+| Completion fence before binding | `runtime.cpp` creates a candidate fence before committing COM ownership. `d3d12/tests.rs` requires repeated binding attempts while creation fails. |
+| Present recording receipt | `d3d12.rs` publishes after successful recording. The same-frame capture refusal fixture expects Present to report its unknown screen and missed SR. |
+| HUD-less slot admission | `d3d12.rs` matches the SR slot's session and source, waits on already-submitted work, and refuses the fixture's failed wait. |
+| Typed settings handoff | The extension's typed settings enter `bridge.cpp` through the same host admission and viewport scaling callbacks as the Dictionary method. |
+| Size-first ABI validation | Raw header reads in `lib.rs` reject the four-byte attach, boot and configure fixture before reading a version. |
+| Generated sharpening layout | `sdk/game/src/sharpening_abi.rs` is the type used by Godot, Unity and Runtime. |
+| Runtime CPU service and explicit Present | `native_cpu_service.h`, the Runtime graphics hosts and the paired Godot driver receipt carry CPU facts, ping requests and the admitted window's actual submission and Present scope. |
+| Auto policy delegation | The fake selectors return configured answers and record the arguments. The Runtime's own choice fixtures cover provider policy. |
+| Refused window restore | `window.rs` retains ownership per HWND and its fixture admits a replacement while the old window continues forwarding independently. |
+| Shared fixtures | `platform/fake.rs` provides versioned setup and status records and backend boot helpers. |
+
+`api.h` and `godot_platform.h` contain ABI declarations. The following first-party C++ files
+still contain implementation and remain open in the file inventory.
+
+- `extension.cpp` calls godot-cpp's `GDExtensionBinding::InitObject` and class-registration macros.
+- `effect.h` and `effect.cpp` define and implement the godot-cpp `CompositorEffect` subclass.
+  It supplies virtual dispatch, Godot references, RID-backed RenderingDevice commands and
+  the scripting Dictionary.
+- `runtime_control.h` and `runtime_control.cpp` define and implement the godot-cpp
+  `RefCounted` scripting class. It lends Godot Variants and RID values to the Rust settings
+  owner, marshals status and requests frame capture through RenderingServer.
+- `runtime.cpp` still holds the typed COM device, queue and fence leaves, DXGI and Win32
+  calls, C++ FrameCapture12 and native Runtime call records. Ten entry points now link
+  directly to their Rust definitions through the Windows export list.
+
+The C++ Godot class and capture boundaries need compatible Rust bindings or equivalent
+replacement ownership to remove the remaining native files.
+
 ## Rust control owner, first slice
 
 `ReScaleFrame.Godot.Native.dll` now links the `rsf-godot` staticlib (`native/lib.rs`) next to the
@@ -36,7 +122,7 @@ the integration; FG backend Auto resolution and SR Auto resolution still call th
 
 Preserved behaviour, including quirks:
 
-- The D3D12 status record carries ABI 1 and `rsfg_status` copies it to the caller, as before.
+- This slice returned ABI 1 for D3D12. The follow-up above corrected it to the current ABI.
 - A booted D3D12 session stays booted after `rsfg_shutdown`; a later `rsfg_boot` returns 1.
 - D3D12 configuration is accepted and stored before boot, as before. Vulkan configuration,
   settings and status route to the Vulkan session only after the shared refusal rules pass.

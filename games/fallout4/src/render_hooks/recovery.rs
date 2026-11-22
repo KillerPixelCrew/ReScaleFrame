@@ -19,22 +19,18 @@ use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 // rsf_d3d11_reduced_frame (d3d11_host.h).
-const ABI_VERSION: u32 = 1;
-const RESERVE: u32 = 0;
-const SEAL: u32 = 1;
-const FINISH: u32 = 2;
-const RETIRE: u32 = 3;
-const CANCEL: u32 = 4;
-const RESERVED: u32 = 1;
-const FULL_OUTPUT_DEFINED: u32 = 0x1;
-const TEMPORAL_OUTPUT: u32 = 0x2;
-const NEXT_REDUCTION_ALLOWED: u32 = 0x8;
-const TEMPORAL_ATTEMPTED: u32 = 0x40;
-
-// rsf_d3d11_auxiliary_surface (d3d11_host.h).
-const DEPTH_STENCIL: u32 = 0;
-const COLOUR: u32 = 1;
-const RESTORE_CONTENTS: u32 = 0x1;
+pub(super) use rsf_game_sys::d3d11_reduced_abi::rsf_d3d11_reduced_frame as Request;
+use rsf_game_sys::d3d11_reduced_abi::{
+    RSF_D3D11_AUXILIARY_COLOUR as COLOUR, RSF_D3D11_AUXILIARY_DEPTH_STENCIL as DEPTH_STENCIL,
+    RSF_D3D11_AUXILIARY_RESTORE_CONTENTS as RESTORE_CONTENTS, RSF_D3D11_REDUCED_CANCEL as CANCEL,
+    RSF_D3D11_REDUCED_FINISH as FINISH, RSF_D3D11_REDUCED_FRAME_ABI_VERSION as ABI_VERSION,
+    RSF_D3D11_REDUCED_FULL_OUTPUT_DEFINED as FULL_OUTPUT_DEFINED,
+    RSF_D3D11_REDUCED_NEXT_REDUCTION_ALLOWED as NEXT_REDUCTION_ALLOWED,
+    RSF_D3D11_REDUCED_RESERVE as RESERVE, RSF_D3D11_REDUCED_RESERVED as RESERVED,
+    RSF_D3D11_REDUCED_RETIRE as RETIRE, RSF_D3D11_REDUCED_SEAL as SEAL,
+    RSF_D3D11_REDUCED_TEMPORAL_ATTEMPTED as TEMPORAL_ATTEMPTED,
+    RSF_D3D11_REDUCED_TEMPORAL_OUTPUT as TEMPORAL_OUTPUT, rsf_d3d11_auxiliary_surface as Surface,
+};
 
 // NativeRecoveryLeaseSlot.
 const HELD: u32 = 0;
@@ -64,88 +60,37 @@ const REFUSALS: [&CStr; 8] = [
 ];
 const FINISH_RECEIPTS: u32 = 32;
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-#[allow(dead_code)] // read by the Runtime
-struct Surface {
-    struct_size: u32,
-    kind: u32,
-    texture: *mut c_void,
-    source_rect: [f32; 4],
-    output_rect: [i32; 4],
-    jitter_pixels: [f32; 2],
-    name: *const c_char,
-    source_name: *const c_char,
-    flags: u32,
-}
+const EMPTY_SURFACE: Surface = Surface {
+    struct_size: 0,
+    kind: 0,
+    texture: null_mut(),
+    source_rect: [0.0; 4],
+    output_rect: [0; 4],
+    jitter_pixels: [0.0; 2],
+    name: null(),
+    source_name: null(),
+    flags: 0,
+};
 
-impl Surface {
-    const EMPTY: Self = Self {
-        struct_size: 0,
-        kind: 0,
-        texture: null_mut(),
-        source_rect: [0.0; 4],
-        output_rect: [0; 4],
-        jitter_pixels: [0.0; 2],
-        name: null(),
-        source_name: null(),
-        flags: 0,
-    };
-}
-
-#[repr(C)]
-#[allow(dead_code)] // read by the Runtime
-pub(super) struct Request {
-    struct_size: u32,
-    abi_version: u32,
-    operation: u32,
-    disposition: u32,
-    token: u64,
-    owner: *const rsf_game_render_pass,
-    surface_count: u32,
-    reserved: u32,
-    surfaces: *const Surface,
-    temporal_result: i32,
-    result_flags: u32,
-}
-
-impl Request {
-    /// The C++ reduce leaf supplies the owner pass and Context of the held lease.
-    fn new(operation: u32, token: u64, surfaces: &[Surface; SURFACES]) -> Self {
-        Self {
-            struct_size: size_of::<Self>() as u32,
-            abi_version: ABI_VERSION,
-            operation,
-            disposition: 0,
-            token,
-            owner: null(),
-            surface_count: SURFACES as u32,
-            reserved: 0,
-            surfaces: surfaces.as_ptr(),
-            temporal_result: 0,
-            result_flags: 0,
-        }
+fn request(operation: u32, token: u64, surfaces: &[Surface; SURFACES]) -> Request {
+    Request {
+        struct_size: size_of::<Request>() as u32,
+        abi_version: ABI_VERSION,
+        operation,
+        disposition: 0,
+        token,
+        owner: null(),
+        surface_count: SURFACES as u32,
+        reserved: 0,
+        surfaces: surfaces.as_ptr(),
+        temporal_result: 0,
+        result_flags: 0,
     }
 }
 
-/// NativeOutputOwner (resolution.h): the native output scope a reservation was made against.
-#[repr(C)]
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-pub(super) struct OutputOwner {
-    context: u64,
-    manager: u64,
-    triangles: [u64; 3],
-}
+pub(super) use crate::resolution::OutputOwner;
 
-/// NativeRecoveryFacts: the World values each step reads at the moment it runs.
-#[repr(C)]
-pub(super) struct Facts {
-    context: *mut c_void,
-    source: u64,
-    exported: bool,
-    frame_open: bool,
-    full_output_resolved: bool,
-}
+use super::World;
 
 /// NativeRecoveryLease: borrowed facts of a C++ lease, valid until that lease is replaced.
 #[repr(C)]
@@ -165,8 +110,6 @@ const _: () = {
     assert!(offset_of!(Request, token) == 16);
     assert!(offset_of!(Request, surfaces) == 40);
     assert!(offset_of!(Request, result_flags) == 52);
-    assert!(size_of::<OutputOwner>() == 40 && offset_of!(OutputOwner, triangles) == 16);
-    assert!(size_of::<Facts>() == 24 && offset_of!(Facts, exported) == 16);
     assert!(size_of::<Lease>() == 7 * size_of::<usize>());
 };
 
@@ -177,7 +120,7 @@ const _: () = {
 pub(super) struct Leaves {
     pub(super) report: unsafe extern "C" fn(*const c_char),
     pub(super) refuse: unsafe extern "C" fn(),
-    pub(super) facts: unsafe extern "C" fn(&mut Facts),
+    pub(super) facts: unsafe extern "C" fn(&mut World),
     pub(super) same_source: unsafe extern "C" fn() -> bool,
     pub(super) resolve: unsafe extern "C" fn(bool, bool),
     pub(super) read_raster: unsafe extern "C" fn(bool) -> bool,
@@ -214,16 +157,8 @@ impl Leaves {
     pub(super) fn full_output_resolved(&self) -> bool {
         self.facts().full_output_resolved
     }
-    fn facts(&self) -> Facts {
-        let mut facts = Facts {
-            context: null_mut(),
-            source: 0,
-            exported: false,
-            frame_open: false,
-            full_output_resolved: false,
-        };
-        unsafe { (self.facts)(&mut facts) };
-        facts
+    fn facts(&self) -> World {
+        World::read(self.facts)
     }
     pub(super) fn same_source(&self) -> bool {
         unsafe { (self.same_source)() }
@@ -278,12 +213,8 @@ impl Recovery {
         committed: false,
         sealed: false,
         finished: false,
-        owner: OutputOwner {
-            context: 0,
-            manager: 0,
-            triangles: [0; 3],
-        },
-        surfaces: [Surface::EMPTY; SURFACES],
+        owner: OutputOwner::EMPTY,
+        surfaces: [EMPTY_SURFACE; SURFACES],
     };
 }
 
@@ -337,7 +268,7 @@ fn plan(leaves: &Leaves) -> [Surface; SURFACES] {
     let lease = leaves.lease(HELD);
     // SAFETY: the held slot always names its World pass.
     let pass = unsafe { &*lease.pass };
-    let mut surfaces = [Surface::EMPTY; SURFACES];
+    let mut surfaces = [EMPTY_SURFACE; SURFACES];
     for (index, surface) in surfaces.iter_mut().enumerate() {
         // Numeric nearest recovery keeps the native jittered integer lattice. These zero
         // operator offsets do not report zero native camera jitter.
@@ -364,7 +295,7 @@ fn call(leaves: &Leaves, operation: u32) -> bool {
     if recovery.token == 0 {
         return false;
     }
-    let mut request = Request::new(operation, recovery.token, &recovery.surfaces);
+    let mut request = request(operation, recovery.token, &recovery.surfaces);
     let mut result = RSF_ERROR_NOT_READY;
     if !unsafe { (leaves.reduce)(&mut request, &mut result) } {
         return false;
@@ -381,7 +312,7 @@ fn call(leaves: &Leaves, operation: u32) -> bool {
             let native = unsafe { request.owner.as_ref() }.map_or(0, |owner| owner.native_frame);
             let text = message(format!(
                 "Fallout4 reduced recovery source={} native={} result={} disposition={} flags=0x{:x} temporal_result={} temporal_attempted={}",
-                leaves.facts().source,
+                leaves.facts().cpu.source,
                 native,
                 result,
                 request.disposition,
@@ -398,7 +329,7 @@ fn call(leaves: &Leaves, operation: u32) -> bool {
     {
         update(|recovery| {
             recovery.token = 0;
-            recovery.surfaces = [Surface::EMPTY; SURFACES];
+            recovery.surfaces = [EMPTY_SURFACE; SURFACES];
         });
         unsafe { (leaves.release)() };
         OWNED.fetch_sub(1, Ordering::AcqRel);
@@ -411,7 +342,7 @@ fn call(leaves: &Leaves, operation: u32) -> bool {
 fn reserve(leaves: &Leaves, planned: &rsf_game_render_pass) -> bool {
     let facts = leaves.facts();
     if !super::live()
-        || !facts.exported
+        || !facts.recovery_exported
         || state().token != 0
         || !facts.frame_open
         || !leaves.same_source()
@@ -430,7 +361,7 @@ fn reserve(leaves: &Leaves, planned: &rsf_game_render_pass) -> bool {
     unsafe { (leaves.adopt)(planned.render_rect.as_ptr()) };
     let surfaces = plan(leaves);
     update(|recovery| recovery.surfaces = surfaces);
-    let mut request = Request::new(RESERVE, 0, &surfaces);
+    let mut request = request(RESERVE, 0, &surfaces);
     let mut result = RSF_ERROR_NOT_READY;
     let _ = unsafe { (leaves.reduce)(&mut request, &mut result) };
     if request.token != 0 {
@@ -527,19 +458,19 @@ pub(super) fn finish(leaves: &Leaves) -> bool {
 /// `finished` is this token's own proof that FINISH resolved full output. With it, RETIRE goes
 /// straight to the host, so a retry after the imagespace exit cleared the World's
 /// `full_output_resolved` still reaches it, and FINISH is never repeated. Without it, the guarded
-/// FINISH admission runs first, as before.
+/// FINISH admission runs first. Success means no token is still owned.
 pub(super) fn retire(leaves: &Leaves) -> bool {
     let recovery = state();
     if recovery.token == 0 {
         return true;
     }
     if !recovery.committed {
-        return call(leaves, CANCEL);
+        return call(leaves, CANCEL) && token() == 0;
     }
     if !recovery.finished && !finish(leaves) {
         return false;
     }
-    call(leaves, RETIRE)
+    call(leaves, RETIRE) && token() == 0
 }
 
 #[unsafe(no_mangle)]
@@ -570,6 +501,53 @@ pub(super) fn reset() {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_fallout4_recovery_reset() {
     reset();
+}
+
+#[cfg(test)]
+pub(super) mod fixtures {
+    use super::*;
+
+    unsafe extern "C" fn report(_: *const c_char) {}
+    unsafe extern "C" fn nothing() {}
+    unsafe extern "C" fn facts(_: &mut World) {}
+    unsafe extern "C" fn yes() -> bool {
+        true
+    }
+    unsafe extern "C" fn resolve(_: bool, _: bool) {}
+    unsafe extern "C" fn unused(_: bool) -> bool {
+        unreachable!()
+    }
+    unsafe extern "C" fn adopt(_: *const i32) {}
+    unsafe extern "C" fn lease(_: u32, _: &mut Lease) {}
+    unsafe extern "C" fn preflight(
+        _: *const rsf_game_render_pass,
+        _: *mut c_void,
+        _: &mut OutputOwner,
+    ) -> bool {
+        false
+    }
+    unsafe extern "C" fn reduce(_: &mut Request, _: &mut rsf_result) -> bool {
+        false
+    }
+
+    // A seam with no owned recovery transaction must never read its raster resources.
+    pub(in crate::render_hooks) const IDLE: Leaves = Leaves {
+        report,
+        refuse: nothing,
+        facts,
+        same_source: yes,
+        resolve,
+        read_raster: unused,
+        same_resources: unused,
+        adopt,
+        discard: nothing,
+        release: nothing,
+        lease,
+        preflight,
+        raster_current: yes,
+        begin_output: yes,
+        reduce,
+    };
 }
 
 #[cfg(test)]

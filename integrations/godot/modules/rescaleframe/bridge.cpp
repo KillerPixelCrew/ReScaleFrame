@@ -36,6 +36,7 @@ decltype(&rsfg_boot_vulkan) native_boot_vulkan = nullptr;
 decltype(&rsfg_vk_resolver) native_vk_resolver = nullptr;
 decltype(&rsfg_vk_window) native_vk_window = nullptr;
 decltype(&rsfg_vk_present_marker) native_vk_present_marker = nullptr;
+decltype(&rsfg_vk_execution) native_vk_execution = nullptr;
 decltype(&rsfg_vk_native_present) native_vk_native_present = nullptr;
 decltype(&rsfg_vk_wsi_call) native_vk_wsi_call = nullptr;
 decltype(&rsfg_vk_foreign_call) native_vk_foreign_call = nullptr;
@@ -74,28 +75,13 @@ Projection previous_projection;
 Transform3D previous_camera;
 static_assert(sizeof(real_t) == sizeof(float), "pass.rs takes Godot's jitter and camera scalars as float");
 
+bool configure_viewport(RID viewport, const Dictionary *options, const rsf_godot_settings *typed);
+
 int configure_from_extension(const rsf_godot_settings *value, uint64_t viewport_id) {
     if (!value || value->struct_size < sizeof(*value) || value->abi_version != RSF_GODOT_SETTINGS_ABI_VERSION) return 0;
     auto *bridge = Object::cast_to<ReScaleFrameBridge>(Engine::get_singleton()->get_singleton_object("ReScaleFrame"));
     if (!bridge) return 0;
-    Dictionary options;
-#define RSF_FIELD(name) options[#name] = value->name
-    options["sharpening_mode"] = value->sharpening.mode;
-    options["sharpening_sharpness"] = value->sharpening.sharpness;
-    options["sharpening_mas"] = value->sharpening.mas;
-    options["sharpening_motion_sharpness"] = value->sharpening.motion_sharpness;
-    options["sharpening_motion_threshold"] = value->sharpening.motion_threshold;
-    options["sharpening_motion_scale_limit"] = value->sharpening.motion_scale_limit;
-    options["sharpening_contrast_enabled"] = value->sharpening.contrast_enabled;
-    options["sharpening_contrast"] = value->sharpening.contrast;
-    options["sharpening_depth_scale"] = value->sharpening.depth_scale;
-    options["sharpening_depth_bias"] = value->sharpening.depth_bias;
-    options["sharpening_clamp_output"] = value->sharpening.clamp_output;
-    options["sharpening_debug"] = value->sharpening.debug;
-    RSF_FIELD(sr_backend); RSF_FIELD(quality); RSF_FIELD(dlss_preset); RSF_FIELD(fg_backend); RSF_FIELD(fg_mode);
-    RSF_FIELD(generated_frames); RSF_FIELD(latency_mode); RSF_FIELD(frame_limit_us); RSF_FIELD(gameplay);
-#undef RSF_FIELD
-    return bridge->configure(options, RID::from_uint64(viewport_id)) ? 1 : 0;
+    return configure_viewport(RID::from_uint64(viewport_id), nullptr, value) ? 1 : 0;
 }
 void reset_from_extension() { rsf_godot_reset_request(); }
 
@@ -128,7 +114,13 @@ uint32_t status_extent(rsf_godot_extent *out) {
     *out = {status.requested_sr, status.render_width, status.render_height, status.output_width, status.output_height};
     return 1;
 }
-void render_begin(uint64_t frame) { native_render_begin(frame); }
+void render_begin(uint64_t frame) {
+    if (RSFGodot::vk_execution_supported()) {
+        RSFGodot::vk_execution(RSF_GAME_RENDER_FRAME, rsf_godot_host_session(), frame, 0, 1);
+    } else {
+        native_render_begin(frame);
+    }
+}
 void set_scale(uint64_t viewport, double scale) {
     RSG::viewport->viewport_set_scaling_3d_scale(RID::from_uint64(viewport), scale);
 }
@@ -229,7 +221,8 @@ void ReScaleFrameBridge::reset_history() { rsf_godot_reset_request(); }
 namespace {
 // Godot and driver leaves for host.rs's configure sequence.
 struct ConfigureContext {
-    const Dictionary &options;
+    const Dictionary *options;
+    const rsf_godot_settings *typed;
     RID viewport;
     rsf_godot_settings value{sizeof(value), RSF_GODOT_SETTINGS_ABI_VERSION, 7, 1, 0, 7, 0, 1, 0, 0, 1};
 };
@@ -240,8 +233,10 @@ uint32_t configure_is_root(void *context) {
 }
 // Godot's Variant conversions, which differ from the GDExtension's checked integer parser.
 const rsf_godot_settings *configure_parse(void *context) {
-    const Dictionary &options = static_cast<ConfigureContext *>(context)->options;
-    rsf_godot_settings &value = static_cast<ConfigureContext *>(context)->value;
+    auto &request = *static_cast<ConfigureContext *>(context);
+    if (request.typed) return request.typed;
+    const Dictionary &options = *request.options;
+    rsf_godot_settings &value = request.value;
     value.sr_backend = options.get("sr_backend", value.sr_backend);
     value.quality = options.get("quality", value.quality);
     value.dlss_preset = options.get("dlss_preset", value.dlss_preset);
@@ -280,14 +275,17 @@ void configure_apply_scaling(void *context, uint32_t mode, float scale) {
         mode == RSF_GODOT_VIEWPORT_SPATIAL ? RSE::VIEWPORT_SCALING_3D_MODE_FSR : RSE::VIEWPORT_SCALING_3D_MODE_FSR2);
     rs->viewport_set_scaling_3d_scale(viewport, scale);
 }
-}
-bool ReScaleFrameBridge::configure(const Dictionary &options, RID viewport) {
-    ConfigureContext context{options, viewport};
+bool configure_viewport(RID viewport, const Dictionary *options, const rsf_godot_settings *typed) {
+    ConfigureContext context{options, typed, viewport};
     const rsf_godot_configure_facts facts{uint32_t(viewport.is_valid()),
         uint32_t(OS::get_singleton()->get_current_rendering_driver_name() == "vulkan")};
     const rsf_godot_configure_callbacks callbacks{&context, configure_is_root, configure_parse,
         configure_report_window, configure_native, configure_queue_primary, configure_apply_scaling};
     return rsf_godot_host_configure(&facts, &callbacks) != 0;
+}
+}
+bool ReScaleFrameBridge::configure(const Dictionary &options, RID viewport) {
+    return configure_viewport(viewport, &options, nullptr);
 }
 Dictionary ReScaleFrameBridge::get_status() const {
     Dictionary result;
@@ -329,6 +327,7 @@ uint32_t boot_load() {
     RSF_RESOLVE(create_swapchain); RSF_RESOLVE(configure); RSF_RESOLVE(status); RSF_RESOLVE(render);
     RSF_RESOLVE(cpu); RSF_RESOLVE(render_begin); RSF_RESOLVE(submitted); RSF_RESOLVE(present); RSF_RESOLVE(shutdown);
 #undef RSF_RESOLVE
+    native_vk_execution = reinterpret_cast<decltype(native_vk_execution)>(GetProcAddress(module, "rsfg_vk_execution"));
     native_vk_capture_setup = reinterpret_cast<decltype(native_vk_capture_setup)>(GetProcAddress(module, "rsfg_vk_capture_setup"));
     native_vk_capture_release = reinterpret_cast<decltype(native_vk_capture_release)>(GetProcAddress(module, "rsfg_vk_capture_release"));
     return 1;
@@ -381,6 +380,18 @@ bool create_swapchain(void *factory, void *queue, void *window, const void *desc
 bool vulkan_enabled() { return rsf_godot_host_ready() && OS::get_singleton()->get_current_rendering_driver_name() == "vulkan"; }
 uint64_t vk_resolver() { return vulkan_enabled() ? reinterpret_cast<uint64_t>(native_vk_resolver()) : 0; }
 bool vk_present_marker(uint64_t window, uint32_t begin) { return vulkan_enabled() && native_vk_present_marker(window, begin); }
+bool vk_execution_supported() { return vulkan_enabled() && native_vk_execution; }
+bool vk_execution(uint32_t role, uint64_t session, uint64_t source, uint64_t window, uint32_t begin) {
+    if (!vk_execution_supported()) return false;
+    rsf_game_render_pass pass{};
+    pass.struct_size = sizeof(pass);
+    pass.role = role;
+    pass.session_id = session;
+    pass.source_frame_id = source;
+    pass.window_key = window;
+    return native_vk_execution(&pass, begin) != 0;
+}
+
 int32_t vk_native_present(uint64_t callback, void* queue, const void* info) {
     if (vulkan_enabled()) return native_vk_native_present(callback, queue, info);
     using Present = int32_t (*)(void*, const void*);

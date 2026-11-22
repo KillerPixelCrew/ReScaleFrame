@@ -2,13 +2,13 @@
 //! Private layouts mirrored in native_geometry_platform.h.
 
 use crate::engine_guards::{NativeSite, Read, UniqueGuard};
+use crate::ffi::borrow_span;
 use crate::geometry_registry::IdentityRegistry;
 use crate::geometry_registry_abi::{
     RSF_ANOMALY_DRAW_COUNT, RSF_ANOMALY_PASS_COUNT, RSF_ANOMALY_TYPE_COUNT,
     rsf_anomaly_geometry_key as Key,
 };
 use std::ffi::c_void;
-use std::slice;
 
 pub(crate) const UNSET: u8 = 255;
 pub(crate) const RIGID: u8 = 0;
@@ -52,23 +52,16 @@ const _: () = {
 };
 
 #[repr(C)]
-#[derive(Default)]
-pub(crate) struct ViewSample {
+pub(crate) struct Layout {
+    pub phase: u32,
+    pub viewport: u32,
     pub frame: u32,
-    pub active: u8,
-    pub delay: u8,
+    pub world: u32,
 }
 
-#[repr(C)]
-#[derive(Default)]
-pub(crate) struct Palette {
-    pub instances: usize,
-    pub layout: u64,
-    pub count: u32,
-    pub mode: u16,
-}
-
+pub(crate) type NativeMatrix = [f32; 16];
 pub(crate) type Matrix = [f64; 16];
+pub(crate) type ReadBones = unsafe extern "C" fn(usize, u32, u32, *mut NativeMatrix) -> bool;
 
 #[repr(C)]
 pub(crate) struct Context {
@@ -129,8 +122,7 @@ pub(crate) struct Callback {
 
 #[repr(C)]
 pub(crate) struct Writer {
-    pub begin: unsafe extern "C" fn(*mut c_void, *const Visual, *const Matrix, u32) -> bool,
-    pub bone: unsafe extern "C" fn(*mut c_void, u32, *const Matrix),
+    pub begin: unsafe extern "C" fn(*mut c_void, *const Visual, *const Matrix, u32) -> *mut Matrix,
     pub finish: unsafe extern "C" fn(*mut c_void, u64) -> *const c_void,
 }
 
@@ -152,23 +144,15 @@ pub(crate) struct GuardProfile {
 // static profile tables, so every borrowed slice lives for the process.
 impl GuardProfile {
     pub fn layout_sites(&self) -> &[NativeSite] {
-        unsafe { borrowed(self.layout_sites, self.layout_count) }
+        unsafe { borrow_span(self.layout_sites, self.layout_count) }
     }
 
     pub fn sites(&self) -> &[NativeSite] {
-        unsafe { borrowed(self.sites, self.site_count) }
+        unsafe { borrow_span(self.sites, self.site_count) }
     }
 
     pub fn unique(&self) -> &[UniqueGuard] {
-        unsafe { borrowed(self.unique, self.unique_count) }
-    }
-}
-
-unsafe fn borrowed<'a, T>(data: *const T, count: usize) -> &'a [T] {
-    if count == 0 {
-        &[]
-    } else {
-        unsafe { slice::from_raw_parts(data, count) }
+        unsafe { borrow_span(self.unique, self.unique_count) }
     }
 }
 
@@ -180,16 +164,9 @@ pub(crate) struct Platform {
     pub enable: unsafe extern "C" fn() -> bool,
     pub disable: unsafe extern "C" fn() -> bool,
     pub hierarchy: unsafe extern "C" fn(Engine) -> Hierarchy,
-    pub pointer: unsafe extern "C" fn(usize, *mut usize) -> bool,
-    pub pass: unsafe extern "C" fn(Engine) -> u8,
-    pub view: unsafe extern "C" fn(Engine, *mut ViewSample) -> bool,
-    pub world: unsafe extern "C" fn(Engine) -> usize,
-    pub matrix: unsafe extern "C" fn(usize, *mut [f32; 16]) -> bool,
-    pub skin_mode: unsafe extern "C" fn(usize, *mut u16) -> bool,
-    pub palette: unsafe extern "C" fn(usize, *mut Palette) -> bool,
-    pub bone_instances: unsafe extern "C" fn(usize) -> usize,
-    pub bone: unsafe extern "C" fn(usize, u32, *mut [f32; 16]) -> bool,
-    pub tree_lod: unsafe extern "C" fn(usize) -> i64,
+    pub layout: unsafe extern "C" fn(Engine) -> Layout,
+    pub read: Read,
+    pub bones: ReadBones,
 }
 
 #[repr(C)]
@@ -226,19 +203,19 @@ pub(crate) struct Coverage {
 const _: () = {
     assert!(size_of::<Engine>() == 16);
     assert!(size_of::<ChildRange>() == 24);
-    assert!(size_of::<ViewSample>() == 8);
-    assert!(size_of::<Palette>() == 24);
+    assert!(size_of::<Layout>() == 16);
     assert!(size_of::<Context>() == 16);
     assert!(size_of::<Window>() == 32);
     assert!(size_of::<Visual>() == 80);
     assert!(size_of::<Facts>() == 32);
     assert!(size_of::<Callback>() == 24);
-    assert!(size_of::<Writer>() == 24);
+    assert!(size_of::<Writer>() == 16);
     assert!(size_of::<GuardProfile>() == 64);
     assert!(std::mem::offset_of!(GuardProfile, sites) == 24);
     assert!(std::mem::offset_of!(GuardProfile, unique) == 40);
     assert!(std::mem::offset_of!(GuardProfile, image_size) == 56);
-    assert!(size_of::<Platform>() == 128);
+    assert!(size_of::<Platform>() == 72);
+    assert!(std::mem::offset_of!(Platform, bones) == 64);
     assert!(size_of::<Stats>() == 40);
     assert!(size_of::<Coverage>() == 1472);
 };

@@ -11,12 +11,14 @@
 //! owner (`window.rs`) supplies the window the status facts describe.
 use crate::d3d12::D3d12;
 use crate::platform::{
-    EngineServices, FgFacts, FgInstall, FgOptions, InputFacts, LatencyFacts, Paths, Platform,
-    SETTINGS_ABI_VERSION, Settings, Setup, Sharpening, SrFrame, Status, WindowFacts,
+    ABI_VERSION, EngineServices, FgFacts, FgInstall, FgOptions, InputFacts, LatencyFacts, Paths,
+    Platform, SETTINGS_ABI_VERSION, Settings, Setup, Sharpening, SrFrame, Status, WindowFacts,
 };
 use crate::vulkan::Vulkan;
 use crate::window::Window;
-use rsf_game_sys::rsf_game_log_fn;
+use rsf_game_sys::{
+    presentation_result::PresentationResult, rsf_game_log_fn, vendor_paths::VendorPaths,
+};
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -35,8 +37,6 @@ const MAX_GENERATED_FRAMES: u32 = 15;
 const FG_STAT_TOTAL_PRESENTED: u32 = 1;
 const UI_MODE_BACKBUFFER_HUDLESS: u32 = 4;
 const DLSS_ENGINE_CUSTOM: u32 = 0;
-/// The D3D12 status record has always carried ABI 1, and `rsfg_status` copies it to the caller.
-const D3D12_STATUS_RECORD_ABI: u32 = 1;
 
 /// The settings both backends start from and the extension composes over.
 pub(crate) const fn default_settings() -> Settings {
@@ -89,39 +89,28 @@ pub(crate) fn settings_valid(platform: &Platform, value: &Settings) -> bool {
 /// pointers never sees them freed.
 struct SessionPaths {
     runtime: CString,
-    streamline: CString,
-    interposer: CString,
-    fidelityfx: CString,
-    xess: CString,
+    vendors: VendorPaths,
     version: CString,
     project: CString,
 }
 
 impl SessionPaths {
-    fn new(runtime: &CStr, version: &CStr, project: &CStr) -> Option<Self> {
-        let join = |suffix: &str| {
-            let mut bytes = runtime.to_bytes().to_vec();
-            bytes.extend_from_slice(suffix.as_bytes());
-            CString::new(bytes).ok()
-        };
-        Some(Self {
+    fn new(runtime: &CStr, version: &CStr, project: &CStr) -> Self {
+        Self {
             runtime: runtime.to_owned(),
-            streamline: join("/streamline")?,
-            interposer: join("/streamline/sl.interposer.dll")?,
-            fidelityfx: join("/fidelityfx")?,
-            xess: join("/xess")?,
+            vendors: VendorPaths::new(runtime),
             version: version.to_owned(),
             project: project.to_owned(),
-        })
+        }
     }
 
     fn native(&self) -> Paths {
         Paths {
             runtime_directory: self.runtime.as_ptr(),
-            streamline_directory: self.streamline.as_ptr(),
-            streamline_interposer: self.interposer.as_ptr(),
-            fidelityfx_directory: self.fidelityfx.as_ptr(),
-            xess_directory: self.xess.as_ptr(),
+            streamline_directory: self.vendors.streamline.as_ptr(),
+            streamline_interposer: self.vendors.interposer.as_ptr(),
+            fidelityfx_directory: self.vendors.fidelityfx.as_ptr(),
+            xess_directory: self.vendors.xess.as_ptr(),
             engine_version: self.version.as_ptr(),
             project_id: self.project.as_ptr(),
         }
@@ -146,9 +135,9 @@ impl SessionPaths {
             depth_infinite: 0,
             units_to_meters: 1.0,
             engine_type: DLSS_ENGINE_CUSTOM,
-            fidelityfx_directory: self.fidelityfx.as_ptr(),
-            xess_directory: self.xess.as_ptr(),
-            streamline_directory: self.streamline.as_ptr(),
+            fidelityfx_directory: self.vendors.fidelityfx.as_ptr(),
+            xess_directory: self.vendors.xess.as_ptr(),
+            streamline_directory: self.vendors.streamline.as_ptr(),
             engine_version: self.version.as_ptr(),
             project_id: self.project.as_ptr(),
         }
@@ -192,7 +181,7 @@ impl Control {
                 generation: 1,
                 status: Status {
                     struct_size: size_of::<Status>() as u32,
-                    abi_version: D3D12_STATUS_RECORD_ABI,
+                    abi_version: ABI_VERSION,
                     ..Status::default()
                 },
                 services: None,
@@ -225,8 +214,8 @@ impl Control {
     }
 
     /// Forwards to the engine module, which applies the request to its primary viewport and
-    /// returns to `rsfg_configure`. `settings` passes through unchecked; the module checks it.
-    pub(crate) fn configure_engine(&self, settings: *const Settings, viewport: u64) -> c_int {
+    /// returns to `rsfg_configure`. `settings` passed the size and ABI checks.
+    pub(crate) fn configure_engine(&self, settings: &Settings, viewport: u64) -> c_int {
         let configure = self
             .session()
             .services
@@ -281,10 +270,7 @@ impl Control {
                 CStr::from_ptr(setup.project_id),
             )
         };
-        let Some(paths) = SessionPaths::new(runtime, version, project) else {
-            return 0;
-        };
-        let paths: &'static SessionPaths = Box::leak(Box::new(paths));
+        let paths = Box::leak(Box::new(SessionPaths::new(runtime, version, project)));
         let session_id = platform.tick_count().wrapping_add(1);
         {
             let mut session = self.session();
@@ -310,11 +296,7 @@ impl Control {
         }
         {
             let mut session = self.session();
-            let current = &session.settings;
-            if current.sr_backend != settings.sr_backend
-                || current.quality != settings.quality
-                || current.dlss_preset != settings.dlss_preset
-            {
+            if session.settings.reconstruction_key() != settings.reconstruction_key() {
                 session.generation = session.generation.wrapping_add(1);
             }
             session.settings = *settings;
@@ -449,16 +431,14 @@ fn apply_fg(status: &mut Status, fg: &FgFacts) {
     status.fg_backend = fg.backend;
     status.fg_available = fg.available;
     status.fg_active = fg.active;
-    status.fg_result = if fg.switch_result != BACKEND_OK {
-        fg.switch_result
-    } else {
-        fg.last_result
-    };
+    status.fg_result = PresentationResult {
+        session: fg.last_result,
+        provider_switch: fg.switch_result,
+    }
+    .aggregate();
     status.reason = fg.reason;
     status.max_generated_frames = fg.max_generated_frames;
     status.generated_frames = fg.generated_frames;
-    status.latency_available = fg.latency_available;
-    status.latency_mode = fg.latency_mode;
     status.tagged_frames = fg.tagged_frames;
     status.total_presented = fg.total_presented;
     status.generated_presented = fg.generated_presented;
@@ -477,6 +457,8 @@ fn apply_latency(status: &mut Status, latency: &LatencyFacts) {
     status.pcl_available = latency.pcl_available;
     status.latency_report_available = latency.report_available;
     status.latency_owner = latency.owner;
+    status.latency_available = latency.available;
+    status.latency_mode = latency.effective_mode;
 }
 
 #[cfg(test)]

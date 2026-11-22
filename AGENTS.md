@@ -257,7 +257,7 @@ ReScaleFrame is MIT. Never copy GPL or other copyleft code into it, including po
 or algorithms; write first-party code from permissive sources or from behaviour. The existing
 exceptions keep their upstream terms and are listed in `docs/dependencies.md`.
 
-Mechanics that the header and `tests/plugin_contract.cpp` jointly enforce:
+Mechanics that the header and `tests/game-sdk/src/contract.rs` jointly enforce:
 
 - Size-checked call structures lead with `struct_size`; embedded metadata is part of its enclosing ABI. Entry points reject a short call structure with
   `RSF_ERROR_INVALID_ARGUMENT` and a mismatched `abi_version` with `RSF_ERROR_ABI_MISMATCH`.

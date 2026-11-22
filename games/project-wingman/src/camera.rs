@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Decode the verified UE4.27 view and family fields under the native guarded copy.
-use rsf_game_sys::camera_math::inverse_4x4;
+use rsf_game_sys::camera_math::{inverse_4x4, multiply_4x4 as multiply};
 use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, rsf_game_render_pass};
 use std::ffi::c_void;
 use std::mem::MaybeUninit;
@@ -36,18 +36,6 @@ pub(crate) unsafe fn read<T: Copy>(copy: CopyMemory, base: usize, offset: usize)
     } else {
         None
     }
-}
-
-fn multiply(a: &Matrix, b: &Matrix) -> Matrix {
-    std::array::from_fn(|index| {
-        let row = index / 4;
-        let column = index % 4;
-        let mut value = 0.0;
-        for inner in 0..4 {
-            value += a[row * 4 + inner] * b[inner * 4 + column];
-        }
-        value
-    })
 }
 
 fn inverse(input: Matrix) -> Option<Matrix> {
@@ -167,12 +155,6 @@ pub(crate) fn read_camera(
     valid
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_wingman_read_camera(
-    view: *const c_void,
-    pass: &mut rsf_game_render_pass,
-    copy: CopyMemory,
-) -> bool {
-    let view = view as usize;
-    read_camera(view, pass, copy, read_jitter(view, copy))
-}
+#[cfg(windows)]
+#[path = "camera_fixture.rs"]
+mod fixture;

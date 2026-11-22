@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 //! Presentation snapshots and the NGX observations belonging to one admitted capture.
-use super::{Capture, rsf_rdr2_capture_has_inputs};
+use super::{Capture, rsf_rdr2_capture_has_inputs, try_entry};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::{CStr, c_char, c_void};
-use std::ptr::{from_ref, null};
+use std::ptr::from_ref;
 use std::sync::atomic::Ordering;
 
 const MAX_HDR_BYTES: usize = 1024;
@@ -180,13 +180,6 @@ impl Metadata {
         self.temporal.clear();
     }
 
-    fn swapchain(&mut self, identity: usize) -> Option<&mut PresentationDetails> {
-        if !self.swapchains.contains_key(&identity) && self.swapchains.try_reserve(1).is_err() {
-            return None;
-        }
-        Some(self.swapchains.entry(identity).or_default())
-    }
-
     fn input(&mut self, id: InputId) -> Option<&mut Temporal> {
         self.temporal.iter_mut().find(|input| input.id == id)
     }
@@ -205,7 +198,10 @@ unsafe extern "C" fn rsf_rdr2_capture_record_color_space(
     identity: *mut c_void,
     color_space: u32,
 ) {
-    if let Some(details) = unsafe { &mut *owner.metadata.get() }.swapchain(identity.addr()) {
+    if let Some(details) = try_entry(
+        &mut unsafe { &mut *owner.metadata.get() }.swapchains,
+        identity.addr(),
+    ) {
         details.color_space = Some(color_space);
     }
 }
@@ -220,7 +216,10 @@ unsafe extern "C" fn rsf_rdr2_capture_record_hdr(
     bytes: *const u8,
     len: usize,
 ) {
-    if let Some(details) = unsafe { &mut *owner.metadata.get() }.swapchain(identity.addr()) {
+    if let Some(details) = try_entry(
+        &mut unsafe { &mut *owner.metadata.get() }.swapchains,
+        identity.addr(),
+    ) {
         let mut hdr = Hdr {
             kind,
             len: 0,
@@ -418,26 +417,22 @@ unsafe extern "C" fn rsf_rdr2_capture_input_camera(
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_rdr2_capture_input_scalar_key(index: u32, floating: &mut bool) -> *const c_char {
-    let index = index as usize;
-    *floating = index < FLOAT_SCALARS;
-    SCALAR_KEYS.get(index).map_or(null(), |key| key.as_ptr())
-}
+type ReadScalar = unsafe extern "C" fn(*const c_void, *const c_char, bool, &mut f64) -> bool;
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_input_scalar(
+unsafe extern "C" fn rsf_rdr2_capture_input_scalars(
     owner: &Capture,
     id: &InputId,
-    index: u32,
-    value: f64,
-    available: bool,
+    parameters: *const c_void,
+    read: ReadScalar,
 ) {
-    if let Some(scalar) = unsafe { &mut *owner.metadata.get() }
-        .input(*id)
-        .and_then(|input| input.scalars.get_mut(index as usize))
-    {
-        *scalar = (available && value.is_finite()).then_some(value);
+    if let Some(input) = unsafe { &mut *owner.metadata.get() }.input(*id) {
+        for (index, (key, scalar)) in SCALAR_KEYS.into_iter().zip(&mut input.scalars).enumerate() {
+            let mut value = 0.0;
+            let available =
+                unsafe { read(parameters, key.as_ptr(), index < FLOAT_SCALARS, &mut value) };
+            *scalar = (available && value.is_finite()).then_some(value);
+        }
     }
 }
 

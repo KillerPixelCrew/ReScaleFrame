@@ -11,6 +11,8 @@
 #include <stdio.h>
 #include <stdint.h>
 
+#include "module_dump_memory.h"
+
 #define RSF_MAX_MODULES 384
 
 typedef struct rsf_module_entry {
@@ -27,21 +29,6 @@ typedef struct rsf_section_digest {
     double entropy;
     char sha256[65];
 } rsf_section_digest;
-
-/* Guarded memory access. Every read of the target image outside the dump copy goes through these,
-   so a guard page, a decommitted range or an unmapped hole shortens the result instead of
-   faulting. */
-typedef struct rsf_mem_cache {
-    const unsigned char* low;
-    const unsigned char* high;
-} rsf_mem_cache;
-
-/* Contiguous readable bytes starting at `address`, up to `wanted`. */
-size_t rsf_dump_readable_extent(rsf_mem_cache* cache, const void* address, size_t wanted);
-/* Copy exactly `size` bytes, or return 0 and leave `destination` untouched. */
-int rsf_dump_read_exact(rsf_mem_cache* cache, const void* address, void* destination, size_t size);
-
-size_t rsf_dump_read_guarded(const unsigned char* source, unsigned char* destination, size_t size);
 
 void rsf_json_wide(FILE* stream, const wchar_t* text);
 void rsf_json_ascii(FILE* stream, const char* text, size_t limit);

@@ -6,8 +6,8 @@
 /// Executable recognition (PE timestamp 2024-03-11, see engine.json).
 pub(crate) const EXECUTABLE_NAME: &std::ffi::CStr = c"RDR2.exe";
 pub(crate) const EXECUTABLE: &[u8] = EXECUTABLE_NAME.to_bytes();
-pub(crate) const SHA256: &[u8] =
-    b"b56c9548f670654a9b73bf25def3cd73af12e269f6e47dba28a34079adaf465e";
+pub(crate) const SHA256: &std::ffi::CStr =
+    c"b56c9548f670654a9b73bf25def3cd73af12e269f6e47dba28a34079adaf465e";
 pub(crate) const AMD64: u16 = 0x8664;
 
 /// Loaded image identity checked before any hook is created.

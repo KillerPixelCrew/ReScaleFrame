@@ -4,9 +4,11 @@
 //! which the engine-settings owner and the ASI's native diagnostic owners are armed. The ASI loader
 //! loads the module during CRT startup, after decryption and before the engine reads its settings.
 //!
-//! `asi_entry.cpp` keeps the typed leaves (Win32 path and profile reads, this module's MinHook
-//! instance, DXGI and display queries, calls into verified engine functions, the native diagnostic
-//! owners) and the runtime session worker that `start_worker` launches.
+//! Platform callbacks also allow startup policy to be exercised in synthetic fixtures.
+#[cfg(all(windows, not(test)))]
+#[path = "asi/windows.rs"]
+mod windows;
+
 use crate::engine_settings;
 use crate::layout::{self, asi};
 use std::borrow::Cow;
@@ -88,7 +90,7 @@ pub(crate) fn install_diagnostic_hooks(
     DiagnosticInstall::Retained
 }
 
-/// Typed native leaves of the ASI, in `asi_platform.h` order and size.
+/// Process-lived Win32, native engine and diagnostic callbacks for ASI admission.
 #[repr(C)]
 pub(crate) struct AsiPlatform {
     _struct_size: u32,
@@ -339,22 +341,11 @@ enum Force {
 }
 
 pub(crate) fn pe_header(platform: &AsiPlatform, base: usize) -> Option<(usize, u32, u32, u32)> {
-    const DOS_SIGNATURE: u16 = 0x5a4d;
-    if base == 0 || platform.read_value::<u16>(base) != Some(DOS_SIGNATURE) {
-        return None;
-    }
-    let nt = platform
-        .read_value::<i32>(base + 0x3c)
-        .and_then(|offset| base.checked_add_signed(offset as isize))?;
-    Some((
-        nt,
-        platform.read_value(nt)?,
-        platform.read_value(nt + 8)?,
-        platform.read_value(nt + 0x50)?,
-    ))
+    let (nt, facts) = crate::platform::image_header(platform.read, base)?;
+    Some((nt, PE_SIGNATURE, facts.timestamp, facts.image_size))
 }
 
-pub(crate) const PE_SIGNATURE: u32 = 0x4550;
+pub(crate) use crate::platform::PE_SIGNATURE;
 
 /// Writes "d3d12" to the engine's API parameter when the image, the parameter's section and every
 /// read site match the supported build and nothing else has set it.

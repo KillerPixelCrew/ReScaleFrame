@@ -57,7 +57,6 @@ struct World {
     // SR input and HUDless framebuffer leases. Rust (render_hooks/publication.rs) releases each
     // when its step returns, as the former stack leases ended.
     NativeInputs sr_inputs{};
-    NativeFramebuffer hudless{};
     // Candidate owner Context and chain lease. Rust (render_hooks/scope.rs) adopts it into the
     // World or discards it when the begin step returns.
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> owner_context;
@@ -115,10 +114,15 @@ bool drain_auxiliaries() noexcept {
 static_assert(sizeof(rsf_d3d11_reduced_frame)==56 && offsetof(rsf_d3d11_reduced_frame,result_flags)==52);
 static_assert(sizeof(rsf_d3d11_auxiliary_surface)==80 && offsetof(rsf_d3d11_auxiliary_surface,flags)==72);
 static_assert(sizeof(NativeOutputOwner)==40);
-void recovery_refuse() noexcept { world.refused=true; }
-void recovery_facts(NativeRecoveryFacts* facts) noexcept {
-    *facts={world.context.Get(),world.cpu.source,reduced_frame!=nullptr,world.frame_open,world.full_output_resolved};
+void read_world(NativeWorld* out) noexcept {
+    *out={cpu_identity_abi(world.cpu),&world.pass,&world.frame_pass,&world.submission_pass,
+        &world.screen_basis,world.context.Get(),world.chain.Get(),host.process_upscale!=nullptr,
+        reduced_frame!=nullptr,world.in_imagespace,world.inputs,world.published,world.window_open,
+        world.frame_open,world.submission_open,world.refused,world.raster_refused,world.auxiliary_open,
+        world.depth_snapshot.valid,world.raster_snapshot.raster_valid,world.depth_interrupted,
+        world.full_output_resolved};
 }
+void recovery_refuse() noexcept { world.refused=true; }
 bool recovery_same_source() noexcept { return same_source(); }
 void recovery_resolve(bool full_output, bool published) noexcept {
     world.full_output_resolved=full_output; world.published=published;
@@ -166,7 +170,7 @@ bool recovery_reduce(rsf_d3d11_reduced_frame* request, int32_t* result) noexcept
     try { *result=reduced_frame(host.user,world.recovery_inputs.context.Get(),request); } catch (...) {}
     return true;
 }
-constexpr NativeRecoveryLeaves recovery_leaves{report, recovery_refuse, recovery_facts, recovery_same_source,
+constexpr NativeRecoveryLeaves recovery_leaves{report, recovery_refuse, read_world, recovery_same_source,
     recovery_resolve, recovery_read_raster, recovery_same_resources, recovery_adopt, recovery_discard,
     recovery_release, recovery_lease, recovery_preflight, recovery_raster_current, recovery_begin_output,
     recovery_reduce};
@@ -187,58 +191,44 @@ bool auxiliary_colour(ID3D11Texture2D* texture, const NativeInputs& inputs) {
     return d.Format==DXGI_FORMAT_R8_UNORM || d.Format==DXGI_FORMAT_R8G8B8A8_UNORM || d.Format==DXGI_FORMAT_R16G16_FLOAT ||
         d.Format==DXGI_FORMAT_R16_FLOAT || d.Format==DXGI_FORMAT_R32_FLOAT || d.Format==DXGI_FORMAT_R16G16B16A16_FLOAT || d.Format==DXGI_FORMAT_R11G11B10_FLOAT;
 }
-int32_t reconstruct(NativeInputs& inputs, const rsf_game_render_pass& pass) {
-    const bool reduced=pass.camera.render_width!=pass.camera.output_width || pass.camera.render_height!=pass.camera.output_height ||
-        pass.render_rect[0]!=0 || pass.render_rect[1]!=0;
-    if (!reduced) return host.process_upscale(host.user,inputs.context.Get(),&pass);
-    D3D11_TEXTURE2D_DESC depth{}; inputs.depth->GetDesc(&depth);
-    if (depth.Format!=DXGI_FORMAT_R24G8_TYPELESS || !auxiliary_colour(inputs.motion.Get(),inputs)) return RSF_ERROR_NATIVE_REFUSED;
-    std::array<rsf_d3d11_auxiliary_surface,5> surfaces{};
-    uint32_t count{};
-    const auto add=[&](ID3D11Texture2D* texture,uint32_t kind,uint32_t flags,const char* name,const char* source) {
-        auto& surface=surfaces[count++]; surface.struct_size=sizeof(surface); surface.kind=kind; surface.texture=texture;
-        for (unsigned i=0;i<4;++i) { surface.source_rect[i]=float(pass.render_rect[i]); surface.output_rect[i]=pass.output_rect[i]; }
-        if (kind==RSF_D3D11_AUXILIARY_COLOUR) {
-            surface.source_rect[0]=world.depth_snapshot.actual_raster[0]; surface.source_rect[1]=world.depth_snapshot.actual_raster[1];
-            surface.source_rect[2]=surface.source_rect[0]+world.depth_snapshot.actual_raster[2];
-            surface.source_rect[3]=surface.source_rect[1]+world.depth_snapshot.actual_raster[3];
-        }
-        surface.jitter_pixels[0]=pass.camera.jitter_pixels[0]; surface.jitter_pixels[1]=pass.camera.jitter_pixels[1];
-        surface.flags=flags; surface.name=name; surface.source_name=source;
-    };
-    add(inputs.depth.Get(),RSF_D3D11_AUXILIARY_DEPTH_STENCIL,0,"native_depth_expanded","native_depth_partitioned");
-    add(inputs.motion.Get(),RSF_D3D11_AUXILIARY_COLOUR,0,"native_motion_expanded","native_motion_reduced");
-    const auto optional=[&](ID3D11Texture2D* texture,uint32_t flags,const char* name,const char* source) {
-        if (!auxiliary_colour(texture,inputs) || same_object(texture,static_cast<ID3D11Texture2D*>(pass.color_output))) return;
-        for (uint32_t i=0;i<count;++i) if (same_object(texture,static_cast<ID3D11Texture2D*>(surfaces[i].texture))) return;
-        add(texture,RSF_D3D11_AUXILIARY_COLOUR,flags,name,source);
-    };
-    optional(inputs.pipboy.Get(),0,"native_pipboy_expanded","native_pipboy_reduced");
-    optional(inputs.vats.Get(),RSF_D3D11_AUXILIARY_RESTORE_CONTENTS,"native_vats_expanded","native_vats_reduced");
-    optional(inputs.refraction_normals.Get(),0,"native_refraction_expanded","native_refraction_reduced");
-    if (recovery_owned() && count!=RecoverySurfaceCount) return RSF_ERROR_NATIVE_REFUSED;
-    const rsf_d3d11_auxiliary_pass request{sizeof(request),RSF_D3D11_HOST_ABI_VERSION,&pass,count,surfaces.data()};
+bool publication_auxiliary_inputs(NativeAuxiliaryInputs* out) noexcept {
+    const auto& inputs=world.sr_inputs;
+    D3D11_TEXTURE2D_DESC depth{};
+    inputs.depth->GetDesc(&depth);
+    if (depth.Format!=DXGI_FORMAT_R24G8_TYPELESS) return false;
+    const auto& raster=world.depth_snapshot.actual_raster;
+    *out={{inputs.depth.Get(),inputs.motion.Get(),inputs.pipboy.Get(),inputs.vats.Get(),
+        inputs.refraction_normals.Get()},{raster[0],raster[1],raster[2],raster[3]}};
+    return true;
+}
+bool publication_auxiliary_colour(void* texture) noexcept {
+    return auxiliary_colour(static_cast<ID3D11Texture2D*>(texture),world.sr_inputs);
+}
+bool publication_same_texture(void* first, void* second) noexcept {
+    return same_object(static_cast<ID3D11Texture2D*>(first),static_cast<ID3D11Texture2D*>(second));
+}
+int32_t publication_reconstruct(const rsf_game_render_pass* pass, const rsf_d3d11_auxiliary_surface* surfaces,
+    uint32_t count) noexcept try {
+    const auto context=world.sr_inputs.context.Get();
+    if (count==0) return host.process_upscale(host.user,context,pass);
+    const rsf_d3d11_auxiliary_pass request{sizeof(request),RSF_D3D11_HOST_ABI_VERSION,pass,count,surfaces};
     if (!recovery_owned()) {
-        world.auxiliary_scope={sizeof(world.auxiliary_scope),RSF_D3D11_HOST_ABI_VERSION,pass.session_id,pass.native_frame,pass.view_key};
+        world.auxiliary_scope={sizeof(world.auxiliary_scope),RSF_D3D11_HOST_ABI_VERSION,pass->session_id,pass->native_frame,pass->view_key};
         world.auxiliary_open=true; auxiliaries.fetch_add(1,std::memory_order_acq_rel);
     }
     // The host adopts the sealed recovery originals while retaining this actual
     // fractional viewport/jitter temporal mapping. One evaluation, one owner.
-    const auto result=upscale_auxiliaries(host.user,inputs.context.Get(),&request);
+    const auto result=upscale_auxiliaries(host.user,context,&request);
     if (result!=RSF_OK && !recovery_owned()) (void)drain_auxiliaries();
     return result;
+} catch (...) {
+    (void)drain_auxiliaries();
+    return RSF_ERROR_NOT_READY;
 }
 // SR and HUDless publication leaves (render_hooks_platform.h). Rust (render_hooks/publication.rs)
 // sequences both seams and decides every refusal; these read the World, hold the SR input and
 // HUDless framebuffer leases, compare COM identity and guard the Runtime calls.
 static_assert(sizeof(NativeScreen)==24 && offsetof(NativeScreen,camera_state)==16);
-static_assert(int(ResolutionStage::output_ready)==1 && int(ResolutionStage::evaluated)==2);
-void publication_world(NativePublicationWorld* out) noexcept {
-    *out={cpu_identity_abi(world.cpu),&world.pass,&world.frame_pass,&world.screen_basis,world.context.Get(),
-        world.chain.Get(),host.process_upscale!=nullptr,world.in_imagespace,world.inputs,world.window_open,
-        world.frame_open,world.submission_open,world.refused,world.raster_refused,world.auxiliary_open,
-        world.depth_snapshot.valid};
-}
 bool publication_read_inputs() noexcept {
     world.sr_inputs={};
     return read_native_inputs(world.sr_inputs,report,&world.depth_snapshot);
@@ -283,48 +273,31 @@ bool publication_begin_output(const rsf_game_render_pass* pass) noexcept {
 }
 void publication_report_state(uint32_t stage, const rsf_game_render_pass* pass, void* context, bool published,
     int32_t result) noexcept {
-    report_resolution_state(static_cast<ResolutionStage>(stage),*pass,context,published,result,report);
+    report_resolution_state(stage,*pass,context,published,result,report);
 }
-int32_t publication_reconstruct(const rsf_game_render_pass* pass) noexcept {
-    int32_t result=RSF_ERROR_NOT_READY;
-    try { result=reconstruct(world.sr_inputs,*pass); } catch (...) { (void)drain_auxiliaries(); }
-    return result;
-}
-bool publication_read_framebuffer() noexcept {
-    world.hudless={};
-    return read_native_framebuffer(world.hudless,report);
-}
-void publication_framebuffer(NativePublicationFramebuffer* out) noexcept {
-    *out={world.hudless.context.Get(),world.hudless.chain.Get(),world.hudless.texture.Get(),
-        world.hudless.native_frame,world.hudless.window_key};
-}
-void publication_framebuffer_extent(uint32_t extent[3]) noexcept {
+bool publication_read_framebuffer(NativeFramebuffer* lease, NativePublicationFramebuffer* out) noexcept {
+    const bool acquired=read_native_framebuffer(*lease,report);
     D3D11_TEXTURE2D_DESC description{};
-    if (world.hudless.texture) world.hudless.texture->GetDesc(&description);
-    extent[0]=description.Width; extent[1]=description.Height; extent[2]=description.SampleDesc.Count;
+    if (lease->texture) lease->texture->GetDesc(&description);
+    *out={lease->context.Get(),lease->chain.Get(),lease->texture.Get(),lease->native_frame,lease->window_key,
+        {description.Width,description.Height,description.SampleDesc.Count}};
+    return acquired;
 }
-void publication_release_framebuffer() noexcept { world.hudless={}; }
-void publication_publish_window(const rsf_game_render_pass* window) noexcept {
-    world.final_colour=world.hudless.texture;
+void publication_publish_window(const NativeFramebuffer* lease, const rsf_game_render_pass* window) noexcept {
+    world.final_colour=lease->texture;
     world.pass=*window;
     world.window_open=true;
     windows.fetch_add(1,std::memory_order_acq_rel);
 }
-constexpr NativePublicationLeaves publication_leaves{publication_world, diagnostic, publication_read_inputs,
+constexpr NativePublicationLeaves publication_leaves{read_world, diagnostic, publication_read_inputs,
     publication_inputs, publication_release_inputs, publication_same_recovery_resources, publication_depth_domains,
     publication_plan, publication_render_config, publication_retain_inputs, publication_classify,
     publication_notify, publication_publish_inputs, publication_begin_output, publication_report_state,
-    publication_reconstruct, end_output_resolution, publication_read_framebuffer, publication_framebuffer,
-    publication_framebuffer_extent, publication_release_framebuffer, publication_publish_window};
+    publication_auxiliary_inputs, publication_auxiliary_colour, publication_same_texture,
+    publication_reconstruct, end_output_resolution, publication_read_framebuffer, publication_publish_window};
 // FRAME, SUBMISSION and WINDOW scope leaves (render_hooks_platform.h). Rust (render_hooks/scope.rs)
 // decides the owner lease verdict, the FRAME identity and the begin and close order; these read
 // the native owner, compare COM identity, hold the Context and chain leases and keep the counters.
-static_assert(int(ResolutionStage::source_retired)==7);
-void scope_world(NativeScopeWorld* out) noexcept {
-    *out={cpu_identity_abi(world.cpu),&world.pass,&world.frame_pass,&world.submission_pass,world.context.Get(),
-        world.inputs,world.published,world.window_open,world.frame_open,world.submission_open,world.refused,
-        world.auxiliary_open};
-}
 bool scope_read_owner(NativeRenderOwner* value) noexcept { return rsf_fallout4_render_read_owner(value); }
 bool scope_lease_owner(const NativeRenderOwner* before) noexcept try {
     world.owner_context=reinterpret_cast<ID3D11DeviceContext*>(before->context);
@@ -347,35 +320,23 @@ void scope_close_submission() noexcept { world.submission_open=false; }
 void scope_close_window() noexcept { world.window_open=false; windows.fetch_sub(1,std::memory_order_acq_rel); }
 void scope_close_frame() noexcept { world.frame_open=false; frames.fetch_sub(1,std::memory_order_acq_rel); }
 void scope_reset() noexcept { world={}; }
-constexpr NativeScopeLeaves scope_leaves{scope_world, scope_read_owner, scope_lease_owner, scope_adopt_owner,
+constexpr NativeScopeLeaves scope_leaves{read_world, scope_read_owner, scope_lease_owner, scope_adopt_owner,
     scope_discard_owner, scope_open_frame, scope_open_submission, scope_close_submission, scope_close_window,
     scope_close_frame, drain_auxiliaries, finish_resolution_source, scope_reset, publication_notify, diagnostic,
     publication_report_state};
 // Imagespace, Effects and TAA leaves (render_hooks_platform.h). Rust (render_hooks/imagespace.rs)
 // selects the calls and sequences entry, the SR seam, retirement, drain, output resolution and
 // the TAA gate; these read the World, read the native manager cell and keep the World flags.
-static_assert(int(ResolutionStage::pre_sr)==0 && int(ResolutionStage::effects_return)==3 &&
-    int(ResolutionStage::ui_return)==5 && int(ResolutionStage::ui_restored)==6);
-void imagespace_world(NativeImagespaceWorld* out) noexcept {
-    *out={cpu_identity_abi(world.cpu),&world.pass,&world.frame_pass,world.context.Get(),world.in_imagespace,
-        world.inputs,world.published,world.frame_open,world.full_output_resolved,world.auxiliary_open,
-        world.raster_snapshot.raster_valid};
-}
 void imagespace_enter() noexcept { world.in_imagespace=true; }
 void imagespace_leave() noexcept { world.in_imagespace=world.published=world.full_output_resolved=false; }
 // ReadProcessMemory only, like the owner read; noexcept keeps any throw out of the Rust frame.
 bool imagespace_manager(uintptr_t* manager) noexcept { return read(image()+0x3e5e4b0,manager,sizeof(*manager)); }
-constexpr NativeImagespaceLeaves imagespace_leaves{imagespace_world, imagespace_enter, imagespace_leave,
+constexpr NativeImagespaceLeaves imagespace_leaves{read_world, imagespace_enter, imagespace_leave,
     imagespace_manager, drain_auxiliaries, end_output_resolution, publication_report_state, diagnostic};
 // Viewport, DR and prepass leaves (render_hooks_platform.h). Rust (render_hooks/producer.rs)
 // selects the calls and sequences the selector write, the HUDless seam, the DR admission and the
 // prepass capture; these read the World, call the typed screen, owner, resolution and depth
 // readers and keep the World fields and snapshots.
-static_assert(int(ResolutionStage::hudless)==4);
-void producer_world(NativeProducerWorld* out) noexcept {
-    *out={cpu_identity_abi(world.cpu),&world.pass,&world.frame_pass,world.context.Get(),world.chain.Get(),
-        world.inputs,world.published,world.frame_open,world.submission_open,world.depth_interrupted};
-}
 void producer_invalidate(bool raster) noexcept {
     world.depth_snapshot={};
     if (raster) world.raster_snapshot={};
@@ -398,7 +359,7 @@ bool producer_capture_depth(const rsf_fallout4_cpu_identity* identity, NativeDep
     return rsf_fallout4_depth_capture(native_depth_leaves(),identity,snapshot,report);
 }
 void producer_adopt_depth(const NativeDepthSnapshot* snapshot) noexcept { world.depth_snapshot=*snapshot; }
-constexpr NativeProducerLeaves producer_leaves{producer_world, producer_invalidate, producer_interrupt_depth,
+constexpr NativeProducerLeaves producer_leaves{read_world, producer_invalidate, producer_interrupt_depth,
     producer_refuse_raster, native_resolution_write, producer_screen_refusals, scope_read_owner,
     producer_configure, producer_capture_raster, producer_capture_depth, producer_adopt_depth,
     publication_report_state, diagnostic};
@@ -412,8 +373,11 @@ void observe_viewport(void* manager, bool enabled) {
     viewport(manager, enabled);
     const auto error = GetLastError();
     // Rust follows the native intent with the owned selector and runs the HUDless seam.
-    rsf_fallout4_render_after_viewport(&producer_leaves,&publication_leaves,&recovery_leaves,caller,
-        uintptr_t(manager),enabled);
+    {
+        NativeFramebuffer framebuffer{};
+        rsf_fallout4_render_after_viewport(&producer_leaves,&publication_leaves,&recovery_leaves,caller,
+            uintptr_t(manager),enabled,&framebuffer);
+    }
     SetLastError(error);
 }
 void observe_world_begin() {
@@ -511,11 +475,13 @@ void observe_effects(void* manager, uint32_t first, uint32_t last, uint32_t mode
     // pre-SR receipt and the SR seam before the original, and the Effects receipt, RETIRE and
     // auxiliary drain after it.
     const NativeEffectsCall call{caller,uintptr_t(manager),first,last,mode,flags};
-    rsf_fallout4_render_before_effects(&imagespace_leaves,&publication_leaves,&recovery_leaves,&call);
+    rsf_fallout4_cpu_identity receipt{};
+    const bool admitted=rsf_fallout4_render_before_effects(
+        &imagespace_leaves,&publication_leaves,&recovery_leaves,&call,&receipt);
     SetLastError(error);
     effects(manager, first, last, mode, flags);
     const auto native_error=GetLastError();
-    rsf_fallout4_render_after_effects(&imagespace_leaves,&recovery_leaves,&call);
+    if (admitted) rsf_fallout4_render_after_effects(&imagespace_leaves,&recovery_leaves,&receipt);
     SetLastError(native_error);
 }
 bool observe_taa(void* effect) {

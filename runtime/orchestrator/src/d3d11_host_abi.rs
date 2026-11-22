@@ -30,27 +30,17 @@ pub(crate) const RSF_D3D11_DISPATCH_RELEASE: u32 = 1;
 pub(crate) const RSF_D3D11_DISPATCH_PRESENT: u32 = 2;
 pub(crate) const RSF_D3D11_DISPATCH_RESIZE_BUFFERS1: u32 = 7;
 
-pub(crate) const RSF_D3D11_REDUCED_FRAME_ABI_VERSION: u32 = 1;
-pub(crate) const RSF_D3D11_REDUCED_RESERVE: u32 = 0;
-pub(crate) const RSF_D3D11_REDUCED_SEAL: u32 = 1;
-pub(crate) const RSF_D3D11_REDUCED_FINISH: u32 = 2;
-pub(crate) const RSF_D3D11_REDUCED_RETIRE: u32 = 3;
-pub(crate) const RSF_D3D11_REDUCED_CANCEL: u32 = 4;
-pub(crate) const RSF_D3D11_REDUCED_NONE: u32 = 0;
-pub(crate) const RSF_D3D11_REDUCED_RESERVED: u32 = 1;
-pub(crate) const RSF_D3D11_REDUCED_SEALED: u32 = 2;
-pub(crate) const RSF_D3D11_REDUCED_TEMPORAL: u32 = 3;
-pub(crate) const RSF_D3D11_REDUCED_SPATIAL: u32 = 4;
-pub(crate) const RSF_D3D11_REDUCED_CANCELLED: u32 = 5;
-pub(crate) const RSF_D3D11_REDUCED_UNSAFE: u32 = 6;
-pub(crate) const RSF_D3D11_REDUCED_CLEANUP_PENDING: u32 = 7;
-pub(crate) const RSF_D3D11_REDUCED_FULL_OUTPUT_DEFINED: u32 = 0x1;
-pub(crate) const RSF_D3D11_REDUCED_TEMPORAL_OUTPUT: u32 = 0x2;
-pub(crate) const RSF_D3D11_REDUCED_SPATIAL_OUTPUT: u32 = 0x4;
-pub(crate) const RSF_D3D11_REDUCED_NEXT_REDUCTION_ALLOWED: u32 = 0x8;
-pub(crate) const RSF_D3D11_REDUCED_CLEANUP_REQUIRED: u32 = 0x10;
-pub(crate) const RSF_D3D11_REDUCED_REQUIRED_RECOVERY_FAILED: u32 = 0x20;
-pub(crate) const RSF_D3D11_REDUCED_TEMPORAL_ATTEMPTED: u32 = 0x40;
+pub(crate) use rsf_game_sys::d3d11_reduced_abi::{
+    RSF_D3D11_REDUCED_CANCEL, RSF_D3D11_REDUCED_CANCELLED, RSF_D3D11_REDUCED_CLEANUP_PENDING,
+    RSF_D3D11_REDUCED_CLEANUP_REQUIRED, RSF_D3D11_REDUCED_FINISH,
+    RSF_D3D11_REDUCED_FRAME_ABI_VERSION, RSF_D3D11_REDUCED_FULL_OUTPUT_DEFINED,
+    RSF_D3D11_REDUCED_NEXT_REDUCTION_ALLOWED, RSF_D3D11_REDUCED_NONE,
+    RSF_D3D11_REDUCED_REQUIRED_RECOVERY_FAILED, RSF_D3D11_REDUCED_RESERVE,
+    RSF_D3D11_REDUCED_RESERVED, RSF_D3D11_REDUCED_RETIRE, RSF_D3D11_REDUCED_SEAL,
+    RSF_D3D11_REDUCED_SEALED, RSF_D3D11_REDUCED_SPATIAL, RSF_D3D11_REDUCED_SPATIAL_OUTPUT,
+    RSF_D3D11_REDUCED_TEMPORAL, RSF_D3D11_REDUCED_TEMPORAL_ATTEMPTED,
+    RSF_D3D11_REDUCED_TEMPORAL_OUTPUT, RSF_D3D11_REDUCED_UNSAFE, rsf_d3d11_reduced_frame,
+};
 
 pub(crate) type Pass = rsf_game_render_pass;
 pub(crate) type Surface = rsf_d3d11_auxiliary_surface;
@@ -144,21 +134,6 @@ pub(crate) struct rsf_d3d11_capture_control {
 }
 
 #[repr(C)]
-pub(crate) struct rsf_d3d11_reduced_frame {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub operation: u32,
-    pub disposition: u32,
-    pub token: u64,
-    pub owner: *const Pass,
-    pub surface_count: u32,
-    pub reserved: u32,
-    pub surfaces: *const Surface,
-    pub temporal_result: i32,
-    pub result_flags: u32,
-}
-
-#[repr(C)]
 pub(crate) struct rsf_d3d11h_strings {
     pub streamline: *const c_char,
     pub fidelityfx: *const c_char,
@@ -175,7 +150,7 @@ pub(crate) struct rsf_d3d11h_pipeline_start {
     pub output_width: u32,
     pub output_height: u32,
     pub quality: u32,
-    pub reserved: u32,
+    pub backend: u32,
     pub setup: *const rsf_d3d11_host_setup,
     pub strings: *const rsf_d3d11h_strings,
     pub log: rsf_game_log_fn,

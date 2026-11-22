@@ -3,16 +3,15 @@ use super::Frontend;
 use crate::fg_stage_abi::*;
 use crate::ini;
 use std::ffi::{CString, OsString};
-use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
+use std::slice;
 use std::sync::Mutex;
-use std::{ptr, slice};
-use windows_sys::Win32::Foundation::{MAX_PATH, SYSTEMTIME};
-use windows_sys::Win32::System::SystemInformation::GetLocalTime;
+use windows_sys::Win32::Foundation::MAX_PATH;
 use windows_sys::core::{PCWSTR, w};
 
 #[derive(Clone, Copy)]
-pub(super) struct CaptureSettings {
+pub(crate) struct CaptureSettings {
     pub enabled: bool,
     pub start: u32,
     pub count: u32,
@@ -23,20 +22,26 @@ impl CaptureSettings {
     fn new(enabled: bool, start: u32, count: u32, interval: u32) -> Self {
         Self {
             enabled,
-            start,
+            start: start.min(i32::MAX as u32),
             count: count.min(16),
-            interval: interval.max(1),
+            interval: interval.clamp(1, i32::MAX as u32),
         }
     }
 
-    pub(super) unsafe fn read(path: PCWSTR) -> Self {
-        let get = |key, fallback| unsafe { ini::read_int(path, key, fallback) as u32 };
+    /// Uses the nonnegative ranges representable by the overlay's signed
+    /// controls. Keep the unsigned INI interpretation before clamping.
+    pub(crate) fn decode(mut read: impl FnMut(PCWSTR, i32) -> i32) -> Self {
+        let mut get = |key, fallback| read(key, fallback) as u32;
         Self::new(
             get(w!("FGCapture"), 0) != 0,
             get(w!("FGCaptureStart"), 600),
             get(w!("FGCaptureCount"), 3),
             get(w!("FGCaptureInterval"), 300),
         )
+    }
+
+    pub(super) unsafe fn read(path: PCWSTR) -> Self {
+        Self::decode(|key, fallback| unsafe { ini::read_int(path, key, fallback) })
     }
 }
 
@@ -133,50 +138,65 @@ impl Options {
             capture_interval: capture.interval,
             ..Default::default()
         };
-        let ini_path = PathBuf::from(OsString::from_wide(unsafe { wide(ini) }));
+        let ini_units = unsafe { crate::wide::terminated(ini) }.map_or(&[][..], |(units, _)| units);
+        let ini_path = PathBuf::from(OsString::from_wide(ini_units));
         let base = ini_path
             .parent()
             .unwrap_or_else(|| std::path::Path::new(""));
-        let text = |key, fallback: PathBuf| {
+        let text = |key| {
             let mut buffer = [0u16; MAX_PATH as usize];
             let len = unsafe { ini::read_text(ini, key, w!(""), &mut buffer) };
-            if len > 0 {
-                String::from_utf16_lossy(&buffer[..len])
-            } else {
-                String::from_utf16_lossy(&fallback.as_os_str().encode_wide().collect::<Vec<_>>())
-            }
+            buffer[..len].to_vec()
         };
-        let vendors = base.join("ReScaleFrame");
-        Self::admit(
-            &native,
-            text(
-                w!("FGCaptureDir"),
-                base.join("RSF-FGCapture").join(local_timestamp()),
-            ),
-            text(w!("SRStreamlineDir"), vendors.join("streamline")),
-            text(w!("SRFidelityFXDir"), vendors.join("fidelityfx")),
-            text(w!("SRXeSSDir"), vendors.join("xess")),
-        )
+        let capture = text(w!("FGCaptureDir"));
+        let capture_dir = if capture.is_empty() {
+            base.join("RSF-FGCapture")
+                .join(crate::capture_clock::local_timestamp())
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            String::from_utf16_lossy(&capture)
+        };
+        let vendors = crate::sr_stage::vendor_directories(ini_units, |key| {
+            let mut buffer = [0u16; MAX_PATH as usize];
+            let length = unsafe {
+                ini::rsf_anomaly_sr_ini_text(
+                    ini.cast(),
+                    key.as_ptr(),
+                    c"".as_ptr(),
+                    buffer.as_mut_ptr(),
+                    MAX_PATH,
+                )
+            };
+            buffer[..length as usize].to_vec()
+        });
+        Self::admit(&native, capture_dir, vendors)
     }
 
     pub(super) fn from_native(native: &rsf_anomaly_fg_config) -> Self {
-        let path = |value| String::from_utf16_lossy(unsafe { wide(value) });
+        let vendors = [
+            native.streamline_dir,
+            native.fidelityfx_dir,
+            native.xess_dir,
+        ]
+        .map(|path| {
+            crate::sr_stage::plain_directory(
+                unsafe { crate::wide::terminated(path) }.map_or(&[][..], |(units, _)| units),
+            )
+        });
         Self::admit(
             native,
-            path(native.capture_dir),
-            path(native.streamline_dir),
-            path(native.fidelityfx_dir),
-            path(native.xess_dir),
+            String::from_utf16_lossy(
+                unsafe { crate::wide::terminated(native.capture_dir) }
+                    .map_or(&[][..], |(units, _)| units),
+            ),
+            vendors,
         )
     }
 
-    fn admit(
-        native: &rsf_anomaly_fg_config,
-        capture_dir: String,
-        streamline: String,
-        fidelityfx: String,
-        xess: String,
-    ) -> Self {
+    fn admit(native: &rsf_anomaly_fg_config, capture_dir: String, vendors: [Vec<u16>; 3]) -> Self {
+        let [streamline, fidelityfx, xess] =
+            vendors.map(|dir| c_string(String::from_utf16_lossy(&dir)));
         let backend = native.backend;
         let known = RSF_FG_BACKEND_ALL.checked_shr(backend).unwrap_or(0) & 1 != 0;
         Self {
@@ -194,9 +214,9 @@ impl Options {
                     native.capture_interval,
                 ),
             )),
-            streamline: c_string(plain_directory(streamline)),
-            fidelityfx: c_string(plain_directory(fidelityfx)),
-            xess: c_string(plain_directory(xess)),
+            streamline,
+            fidelityfx,
+            xess,
             frontend: Frontend {
                 enabled: u32::from(native.enabled),
                 backend: if known { backend } else { RSF_FG_BACKEND_AUTO },
@@ -208,35 +228,8 @@ impl Options {
     }
 }
 
-unsafe fn wide<'a>(value: PCWSTR) -> &'a [u16] {
-    if value.is_null() {
-        return &[];
-    }
-    let mut size = 0;
-    // The carrier and fixture provide NUL-terminated Win32 strings.
-    while unsafe { value.add(size).read() } != 0 {
-        size += 1;
-    }
-    unsafe { slice::from_raw_parts(value, size) }
-}
-
-// The SR stage's rule: Streamline appends '/' to these paths, which a verbatim Win32 path rejects.
-fn plain_directory(path: String) -> String {
-    let units: Vec<u16> = path.encode_utf16().collect();
-    String::from_utf16_lossy(&crate::sr_stage::plain_directory(&units))
-}
-
 fn c_string(text: String) -> CString {
     CString::new(text).unwrap_or_default()
-}
-
-fn local_timestamp() -> String {
-    let mut time = SYSTEMTIME::default();
-    unsafe { GetLocalTime(ptr::from_mut(&mut time)) };
-    format!(
-        "{:04}{:02}{:02}-{:02}{:02}{:02}",
-        time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond
-    )
 }
 
 pub(super) fn backend_name(backend: u32) -> &'static str {
@@ -247,5 +240,28 @@ pub(super) fn backend_name(backend: u32) -> &'static str {
         RSF_FG_BACKEND_XESS => "XeSS",
         RSF_FG_BACKEND_AUTO => "Auto",
         _ => "Off",
+    }
+}
+
+#[cfg(test)]
+mod capture_settings_tests {
+    use super::*;
+
+    #[test]
+    fn persisted_capture_settings_fit_the_panel_ranges() {
+        let defaults = CaptureSettings::decode(|_, fallback| fallback);
+        assert_eq!(
+            (defaults.start, defaults.count, defaults.interval),
+            (600, 3, 300)
+        );
+
+        let large = CaptureSettings::decode(|_, _| -1);
+        assert!(large.enabled);
+        assert_eq!(
+            (large.start, large.count, large.interval),
+            (i32::MAX as u32, 16, i32::MAX as u32)
+        );
+        let zero = CaptureSettings::decode(|_, _| 0);
+        assert_eq!((zero.start, zero.count, zero.interval), (0, 0, 1));
     }
 }

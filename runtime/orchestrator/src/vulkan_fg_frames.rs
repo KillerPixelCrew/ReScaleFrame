@@ -14,6 +14,12 @@ use std::{ptr, slice};
 const SLOTS: usize = RSF_FGVK_FRAME_SLOTS as usize;
 const FG_VETO: u32 = RSF_FRAME_FLAG_NO_FG | RSF_FRAME_FLAG_AMBIGUOUS_ID;
 
+impl Slot {
+    pub(super) fn capture_group(&self, hudless: bool) -> u64 {
+        (self.recording_sequence << 1) | u64::from(hudless)
+    }
+}
+
 pub(super) fn valid_source_record(
     record: &rsf_frame_record,
     width: u32,

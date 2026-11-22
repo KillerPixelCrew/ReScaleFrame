@@ -1,5 +1,5 @@
-#include <rescaleframe/native_cpu.h>
 // SPDX-License-Identifier: MIT
+#include <rescaleframe/native_cpu.h>
 #include "api.h"
 #include "godot_platform.h"
 #include "vulkan_control.h"
@@ -18,6 +18,7 @@
 #include <string>
 #include <cstdio>
 #include <atomic>
+#include <utility>
 #include "../../../runtime/backends/common/frame_capture12.h"
 #include "../../../runtime/orchestrator/src/fg_auto_choice.h"
 
@@ -27,9 +28,10 @@
 // submissions and the Present pass identity by native/d3d12.rs, the Vulkan session by
 // native/vulkan.rs, and the input window admission, its window procedure, the input session, the
 // CPU event and ping routing and the present-marker admission by native/window.rs. This file
-// keeps the rsfg_* exports as forwarders and the leaves: the device, queue and fence references,
+// keeps native forwarders and the leaves: the device, queue and fence references,
 // the Runtime SR, FG, presentation, CPU event and latency calls, capture, DXGI, Win32 window
 // calls and the linked Runtime. The Vulkan leaves in the table below live in vulkan.cpp.
+static_assert(sizeof(rsf_cpu_session_service) == 32 && offsetof(rsf_cpu_session_service, execution) == 24);
 static_assert(sizeof(rsf_sharpening_options) == 56);
 static_assert(sizeof(rsf_godot_settings) == 100 && offsetof(rsf_godot_settings, sharpening) == 44);
 static_assert(sizeof(rsf_godot_status) == 256 && offsetof(rsf_godot_status, sr_result) == 40 &&
@@ -40,8 +42,8 @@ static_assert(sizeof(rsf_godot_setup) == 48 && sizeof(rsf_godot_engine_services)
 static_assert(sizeof(rsf_godot_fg_options) == 20 && sizeof(rsf_godot_fg_install) == 96 &&
     offsetof(rsf_godot_fg_install, fidelityfx_directory) == 56);
 static_assert(sizeof(rsf_godot_paths) == 56 && sizeof(rsf_godot_input_facts) == 56 && sizeof(rsf_godot_window_facts) == 16);
-static_assert(sizeof(rsf_godot_fg_facts) == 96 && offsetof(rsf_godot_fg_facts, tagged_frames) == 48);
-static_assert(sizeof(rsf_godot_latency_facts) == 88);
+static_assert(sizeof(rsf_godot_fg_facts) == 88 && offsetof(rsf_godot_fg_facts, tagged_frames) == 40);
+static_assert(sizeof(rsf_godot_latency_facts) == 96);
 static_assert(sizeof(rsf_godot_sr_create) == 88 && offsetof(rsf_godot_sr_create, paths) == 32 &&
     sizeof(rsf_godot_sr_context) == 24 && offsetof(rsf_godot_sr_context, desired_width) == 12 &&
     sizeof(rsf_godot_sr_evaluate) == 64);
@@ -49,11 +51,11 @@ static_assert(sizeof(rsf_godot_option_field) == 16 && sizeof(rsf_godot_option_va
 static_assert(offsetof(rsf_godot_platform, vulkan_locked) == 88 &&
     offsetof(rsf_godot_platform, latency_facts) == 176 && offsetof(rsf_godot_platform, d3d12_bind) == 184 &&
     offsetof(rsf_godot_platform, sr_evaluate) == 256 && offsetof(rsf_godot_platform, d3d12_release) == 320 &&
-    offsetof(rsf_godot_platform, vulkan_presenter_drain) == 328 && offsetof(rsf_godot_platform, vulkan_sr_create) == 360 &&
-    offsetof(rsf_godot_platform, vulkan_sr_evaluate) == 400 && offsetof(rsf_godot_platform, vulkan_sr_dump_result) == 432 &&
-    offsetof(rsf_godot_platform, window_identity) == 440 && offsetof(rsf_godot_platform, cpu_event) == 480 &&
-    offsetof(rsf_godot_platform, vulkan_present_marker) == 512 &&
-    offsetof(rsf_godot_platform, sr_select_backend) == 520 && sizeof(rsf_godot_platform) == 536);
+    offsetof(rsf_godot_platform, vulkan_presenter_drain) == 328 && offsetof(rsf_godot_platform, vulkan_sr_create) == 352 &&
+    offsetof(rsf_godot_platform, vulkan_sr_record) == 368 && offsetof(rsf_godot_platform, vulkan_sr_dump_result) == 384 &&
+    offsetof(rsf_godot_platform, window_identity) == 392 && offsetof(rsf_godot_platform, d3d12_cpu_service) == 432 &&
+    offsetof(rsf_godot_platform, vulkan_present_marker) == 448 &&
+    offsetof(rsf_godot_platform, sr_select_backend) == 456 && sizeof(rsf_godot_platform) == 472);
 static_assert(sizeof(rsf_godot_window_identity) == 144 && offsetof(rsf_godot_window_identity, class_name) == 16);
 static_assert(sizeof(rsf_game_cpu_event) == 64 && RSF_GAME_CPU_FRAME_BEGIN == 0 && RSF_GAME_CPU_INPUT_EVENT == 5 &&
     RSF_GAME_CPU_EVENT_VERSION == 1 && RSF_GAME_CPU_INPUT_KEYED == 1 && RSF_GAME_CPU_WINDOW_MESSAGE == 4,
@@ -84,7 +86,9 @@ void log(void*, const char* message)
 }
 bool wait(uint64_t value)
 {
-    if (!value || !fence || fence->GetCompletedValue() >= value) return true;
+    if (!value) return true;
+    if (!fence) return false;
+    if (fence->GetCompletedValue() >= value) return true;
     HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!event) return false;
     const bool okay = SUCCEEDED(fence->SetEventOnCompletion(value, event)) && WaitForSingleObject(event, 15000) == WAIT_OBJECT_0;
@@ -182,10 +186,6 @@ void leaf_query_counter(uint64_t* counter, uint64_t* frequency)
     QueryPerformanceCounter(&now); QueryPerformanceFrequency(&rate);
     *counter = static_cast<uint64_t>(now.QuadPart); *frequency = static_cast<uint64_t>(rate.QuadPart);
 }
-void leaf_cpu_event(const rsf_game_cpu_event* event) { rsf_fg12_cpu(event); }
-void leaf_vulkan_cpu_event(const rsf_game_cpu_event* event) { rsf_latencyvk_cpu(event); }
-int32_t leaf_latency_ping(void* window) { return rsf_native_latency_ping(window); }
-int32_t leaf_vulkan_latency_ping(void* window) { return rsf_latencyvk_ping(window); }
 void leaf_vulkan_present_marker(uint32_t begin) { rsf_latencyvk_present(begin); }
 void leaf_fg_facts(rsf_godot_fg_facts* facts)
 {
@@ -193,7 +193,6 @@ void leaf_fg_facts(rsf_godot_fg_facts* facts)
     facts->backend = rsf_d3d11_present_backend(); facts->available = fg.available; facts->active = fg.vendor.active;
     facts->switch_result = rsf_d3d11_present_switch_result(); facts->last_result = fg.last_result; facts->reason = fg.reason;
     facts->max_generated_frames = fg.vendor.max_generated_frames; facts->generated_frames = fg.vendor.effective_generated_frames;
-    facts->latency_available = fg.vendor.low_latency_available; facts->latency_mode = fg.vendor.effective_reflex;
     facts->tagged_frames = fg.tagged_frames;
     facts->total_presented = fg.vendor.total_presented; facts->generated_presented = fg.vendor.generated_presented;
     facts->statistics_flags = fg.vendor.valid_statistics;
@@ -212,14 +211,19 @@ uint32_t leaf_latency_facts(rsf_godot_latency_facts* facts)
     facts->paced_frames = latency.paced_frames; facts->marker_calls = latency.marker_calls;
     facts->pcl_available = latency.pcl_available; facts->report_available = latency.report_available;
     facts->owner = latency.owner;
+    facts->available = latency.available; facts->effective_mode = latency.effective_mode;
     return 1;
 }
 // D3D12 SR context and submission leaves for native/d3d12.rs.
 uint32_t leaf_d3d12_bind(void* owning_device, void* owning_queue)
 {
-    device = static_cast<ID3D12Device*>(owning_device);
+    auto* candidate = static_cast<ID3D12Device*>(owning_device);
+    ComPtr<ID3D12Fence> completion;
+    if (FAILED(candidate->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&completion)))) return 0;
+    device = candidate;
     queue = static_cast<ID3D12CommandQueue*>(owning_queue);
-    return SUCCEEDED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))) ? 1u : 0u;
+    fence = std::move(completion);
+    return 1;
 }
 uint32_t leaf_d3d12_wait(uint64_t value) { return wait(value) ? 1u : 0u; }
 uint32_t leaf_d3d12_signal(uint64_t value)
@@ -349,28 +353,14 @@ const rsf_godot_platform platform{sizeof(platform), RSF_GODOT_PLATFORM_VERSION, 
     leaf_present_owner, leaf_present_request, leaf_sr_create, leaf_sr_destroy, leaf_sr_evaluate, leaf_sr_refusal_log,
     leaf_capture_sr_begin, leaf_final_scene, leaf_fg_submitted, leaf_render_begin, leaf_present_window,
     leaf_fg_end_session, leaf_d3d12_release, vk::leaf_presenter_drain, vk::leaf_device_idle, vk::leaf_sr_destroy,
-    vk::leaf_fsr4_destroy, vk::leaf_sr_create, vk::leaf_fsr4_create, vk::leaf_dlss_preset, vk::leaf_sr_plan,
-    vk::leaf_fsr4_plan, vk::leaf_sr_evaluate, vk::leaf_fsr4_evaluate, vk::leaf_sr_fallback, vk::leaf_sr_log,
+    vk::leaf_sr_create, vk::leaf_sr_plan, vk::leaf_sr_record, vk::leaf_sr_log,
     vk::leaf_sr_dump_result, leaf_window_identity, leaf_window_procedure_get, leaf_window_procedure_set,
-    leaf_window_forward, leaf_query_counter, leaf_cpu_event, leaf_vulkan_cpu_event, leaf_latency_ping,
-    leaf_vulkan_latency_ping, leaf_vulkan_present_marker, leaf_sr_select_backend, leaf_fg_select_backend};
+    leaf_window_forward, leaf_query_counter, rsf_fg12_cpu_service, rsf_latencyvk_cpu_service,
+    leaf_vulkan_present_marker, leaf_sr_select_backend, leaf_fg_select_backend};
 bool booted() { return rsf_godot_booted() != 0; }
 }
 
 extern "C" const rsf_godot_platform* rsf_godot_platform_leaves(void) { return &platform; }
-
-extern "C" int rsfg_attach_engine(const rsf_godot_engine_services* services)
-{
-    return rsf_godot_attach_engine(services);
-}
-extern "C" int rsfg_configure_engine(const rsf_godot_settings* input, uint64_t viewport_id)
-{
-    return rsf_godot_configure_engine(&platform, input, viewport_id);
-}
-extern "C" void rsfg_reset_history()
-{
-    rsf_godot_reset_history(&platform);
-}
 
 extern "C" int rsfg_boot(const rsf_godot_setup* setup) try
 {
@@ -387,11 +377,6 @@ extern "C" int rsfg_configure(const rsf_godot_settings* input) try
     return rsf_godot_configure(&platform, input);
 } catch (...) { return 0; }
 
-extern "C" void rsfg_cpu(const rsf_game_cpu_event* event)
-{
-    rsf_godot_cpu(&platform, event);
-}
-
 extern "C" int rsfg_render(void* owning_device, void* owning_queue, void* commands, const rsf_game_render_pass* pass) try
 {
     if (!booted() || !owning_device || !owning_queue || !commands || !pass || pass->struct_size < sizeof(*pass)) return 0;
@@ -401,43 +386,27 @@ extern "C" int rsfg_render(void* owning_device, void* owning_queue, void* comman
 
 extern "C" void rsfg_render_begin(uint64_t frame) try
 {
-    if (rsf::godot_vk::booted()) { rsf::godot_vk::render_begin(frame); return; }
+    if (rsf_godot_vk_booted()) { rsf::godot_vk::render_begin(frame); return; }
     if (!booted()) return;
     rsf_godot_d3d12_render_begin(&platform, frame);
 } catch (...) {}
 
-extern "C" void rsfg_submitted(void* owning_queue, void* const* command_lists, uint32_t count)
-{
-    rsf_godot_d3d12_submitted(&platform, owning_queue, command_lists, count);
-}
-
-extern "C" void rsfg_present(void* chain)
-{
-    if (!booted() || !chain) return;
-    rsf_godot_d3d12_present(&platform, chain);
-}
-
-extern "C" int rsfg_status(rsf_godot_status* output) try
-{
-    return rsf_godot_status_get(&platform, output);
-} catch (...) { return 0; }
-
-extern "C" int rsfg_settings(rsf_godot_settings* output) try
-{
-    return rsf_godot_settings_get(&platform, output);
-} catch (...) { return 0; }
-extern "C" int rsfg_request_latency_ping(void)
-{
-    return rsf_godot_latency_ping(&platform);
-}
-extern "C" void rsfg_vk_window(void* window) {
-    rsf_godot_vk_window(&platform, window);
-}
 extern "C" int rsfg_vk_present_marker(uint64_t window, uint32_t begin) {
     if (!rsf_godot_vk_present_marker(&platform, window, begin)) return 0;
     capture_native_primary_present = begin != 0;
     return 1;
 }
+extern "C" int rsfg_vk_execution(const rsf_game_render_pass* pass, uint32_t begin) try {
+    if (!rsf_godot_vk_booted() || !pass || pass->struct_size < sizeof(*pass)) return 0;
+    if (pass->role == RSF_GAME_RENDER_FRAME) {
+        rsf::godot_vk::render_begin(pass->source_frame_id, true);
+        return 1;
+    }
+    const int admitted = rsf_godot_execution(pass, begin);
+    if (admitted && pass->role == RSF_GAME_RENDER_PRESENT) capture_native_primary_present = begin != 0;
+    return admitted;
+} catch (...) { return 0; }
+
 extern "C" int32_t rsfg_vk_native_present(uint64_t callback, void* owning_queue, const void* info) {
     struct Lease { uint64_t callback; void* queue; const void* info; } lease{callback, owning_queue, info};
     if (capture_native_primary_present) rsf::godot_vk::capture_present(info, 0, 1);
@@ -459,6 +428,6 @@ extern "C" int32_t rsfg_vk_foreign_call(rsf_vk_wsi_call callback, void* user) { 
 extern "C" int rsfg_shutdown(void) try
 {
     rsf_godot_window_release(&platform);
-    if (rsf::godot_vk::booted()) return rsf_godot_shutdown_vulkan(&platform);
+    if (rsf_godot_vk_booted()) return rsf_godot_shutdown_vulkan(&platform);
     return rsf_godot_d3d12_shutdown(&platform);
 } catch (...) { return 0; }

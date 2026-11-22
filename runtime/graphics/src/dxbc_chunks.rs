@@ -11,7 +11,20 @@ pub(crate) struct Chunk<'a> {
     pub(crate) data: &'a [u8],
 }
 
-pub(crate) fn chunk_at(bytes: &[u8], table_end: usize, offset: usize) -> Option<Chunk<'_>> {
+/// Walk the offset table of a caller-validated, declared DXBC container slice.
+pub(crate) fn chunk_table(
+    bytes: &[u8],
+    count: usize,
+) -> Option<impl Iterator<Item = Option<(usize, Chunk<'_>)>>> {
+    let table_end = 32usize.checked_add(count.checked_mul(4)?)?;
+    let table = bytes.get(32..table_end)?;
+    Some(table.chunks_exact(4).map(move |entry| {
+        let offset = word(entry, 0)? as usize;
+        Some((offset, chunk_at(bytes, table_end, offset)?))
+    }))
+}
+
+fn chunk_at(bytes: &[u8], table_end: usize, offset: usize) -> Option<Chunk<'_>> {
     if offset < table_end {
         return None;
     }

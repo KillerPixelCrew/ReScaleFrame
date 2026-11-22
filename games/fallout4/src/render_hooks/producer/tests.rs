@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Viewport, DR and prepass order with fake leaves standing in for render_hooks.cpp.
 use super::*;
-use crate::render_hooks::recovery::{Facts, Lease, OutputOwner, Request};
+use crate::render_hooks::recovery::fixtures::IDLE;
 use std::cell::RefCell;
 use std::sync::atomic::Ordering;
 
@@ -91,8 +91,8 @@ unsafe extern "C" fn world(out: &mut World) {
             began_qpc: 0,
             frequency: 0,
         };
-        out.pass = &fake.pass;
-        out.frame_pass = &fake.frame;
+        out.pass = &mut fake.pass;
+        out.frame_pass = &mut fake.frame;
         out.context = CONTEXT as *mut c_void;
         out.chain = CHAIN as *mut c_void;
         out.inputs = fake.inputs;
@@ -187,49 +187,16 @@ unsafe extern "C" fn report(_: *const c_char) {
 unsafe extern "C" fn refuse() {
     event("refuse", 0);
 }
-unsafe extern "C" fn facts(_: &mut Facts) {}
 unsafe extern "C" fn same_source() -> bool {
     event("same_source", 0);
     with(|fake| fake.same_source)
 }
-unsafe extern "C" fn resolve(_: bool, _: bool) {}
-unsafe extern "C" fn unused(_: bool) -> bool {
-    unreachable!()
-}
-unsafe extern "C" fn adopt(_: *const i32) {}
-unsafe extern "C" fn nothing() {}
-unsafe extern "C" fn lease(_: u32, _: &mut Lease) {}
-unsafe extern "C" fn preflight(
-    _: *const rsf_game_render_pass,
-    _: *mut c_void,
-    _: &mut OutputOwner,
-) -> bool {
-    false
-}
-unsafe extern "C" fn yes() -> bool {
-    true
-}
-unsafe extern "C" fn reduce(_: &mut Request, _: &mut rsf_result) -> bool {
-    false
-}
 
-// No recovery token is owned on a test thread.
 const RECOVERY: RecoveryLeaves = RecoveryLeaves {
     report,
     refuse,
-    facts,
     same_source,
-    resolve,
-    read_raster: unused,
-    same_resources: unused,
-    adopt,
-    discard: nothing,
-    release: nothing,
-    lease,
-    preflight,
-    raster_current: yes,
-    begin_output: yes,
-    reduce,
+    ..IDLE
 };
 
 fn viewport(caller: usize, manager: usize, write: bool) {

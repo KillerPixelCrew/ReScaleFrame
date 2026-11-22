@@ -171,28 +171,59 @@ fn version_name(status: &mut Status, name: &str) {
     }
 }
 
+// Copyable prepare ordering shared by the D3D12 providers. The caller owns the
+// mutex and publishes provider-specific observations separately.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct PrepareOrder {
+    pub(crate) revision: u64,
+    pub(crate) last_prepare: u64,
+    pub(crate) interpolated: Option<u64>,
+}
+
+impl PrepareOrder {
+    pub(crate) fn reset_for(self, record: &Record) -> bool {
+        record.flags & rsf_game_sys::RSF_FRAME_FLAG_RESET != 0
+            || self.interpolated.and_then(|id| id.checked_add(1)) != Some(record.frame_id)
+    }
+
+    pub(crate) fn stage(&mut self, revision: u64, id: u64) -> bool {
+        if revision != self.revision || id <= self.last_prepare {
+            return false;
+        }
+        self.interpolated = None;
+        true
+    }
+
+    pub(crate) fn complete(&mut self, revision: u64, id: u64, enabled: bool) -> bool {
+        // A successfully submitted source is consumed even when abort won the SDK gap.
+        self.last_prepare = self.last_prepare.max(id);
+        if revision != self.revision {
+            return false;
+        }
+        self.interpolated = enabled.then_some(id);
+        true
+    }
+
+    pub(crate) fn invalidate(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+        self.interpolated = None;
+    }
+
+    pub(crate) fn active(self, revision: u64, sdk_active: bool) -> bool {
+        revision == self.revision && self.interpolated.is_some() && sdk_active
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Snapshot {
     status: Status,
     request: Option<Options>,
-    revision: u64,
-    last_prepare: u64,
-    interpolated: Option<u64>,
+    order: PrepareOrder,
 }
 
 impl Snapshot {
     fn mode(self) -> u32 {
         self.request.map_or(RSF_FG_OFF, |options| options.mode)
-    }
-
-    fn reset_for(self, record: &Record) -> bool {
-        record.flags & rsf_game_sys::RSF_FRAME_FLAG_RESET != 0
-            || self.interpolated.and_then(|id| id.checked_add(1)) != Some(record.frame_id)
-    }
-
-    fn invalidate(&mut self) {
-        self.interpolated = None;
-        self.status.active = 0;
     }
 
     fn effective(&mut self, mode: u32, generated: u32) {
@@ -219,9 +250,7 @@ impl State {
         Self(Mutex::new(Snapshot {
             status,
             request: None,
-            revision: 0,
-            last_prepare: 0,
-            interpolated: None,
+            order: PrepareOrder::default(),
         }))
     }
 
@@ -236,37 +265,36 @@ impl State {
         state.status.effective_reflex = reflex;
         state.effective(mode, generated);
         if reset {
-            state.revision = state.revision.wrapping_add(1);
-            state.invalidate();
+            state.order.invalidate();
+            state.status.active = 0;
         }
     }
 
     fn reset_history(&self, revision: u64) -> bool {
         let mut state = self.0.lock().unwrap();
-        if revision != state.revision {
+        if revision != state.order.revision {
             return false;
         }
-        state.invalidate();
+        state.order.interpolated = None;
+        state.status.active = 0;
         true
     }
 
     fn stage(&self, revision: u64, id: u64, mode: u32, generated: u32) -> bool {
         let mut state = self.0.lock().unwrap();
-        if revision != state.revision || id <= state.last_prepare {
+        if !state.order.stage(revision, id) {
             return false;
         }
         state.effective(mode, generated);
-        state.invalidate();
+        state.status.active = 0;
         true
     }
 
     fn complete(&self, revision: u64, id: u64, enabled: bool, mode: u32, generated: u32) -> bool {
         let mut state = self.0.lock().unwrap();
-        state.last_prepare = state.last_prepare.max(id);
-        if revision != state.revision {
+        if !state.order.complete(revision, id, enabled) {
             return false;
         }
-        state.interpolated = enabled.then_some(id);
         state.effective(mode, generated);
         state.status.active = 0;
         true
@@ -274,8 +302,8 @@ impl State {
 
     fn abort(&self) {
         let mut state = self.0.lock().unwrap();
-        state.revision = state.revision.wrapping_add(1);
-        state.invalidate();
+        state.order.invalidate();
+        state.status.active = 0;
     }
 
     fn paced(&self) {
@@ -285,7 +313,7 @@ impl State {
 
     fn observe(&self, revision: u64, sample: Observation) -> Status {
         let mut state = self.0.lock().unwrap();
-        let active = revision == state.revision && state.interpolated.is_some() && sample.active;
+        let active = state.order.active(revision, sample.active);
         let status = &mut state.status;
         status.vendor_status = sample.vendor_status;
         if let Some((generated, presented)) = sample.callbacks {
@@ -449,7 +477,7 @@ const fn provider<S: Session>() -> Provider {
 }
 
 fn configure_disabled(state: &State, before: Snapshot, frame: u64, staged: bool) -> i32 {
-    let complete = state.complete(before.revision, frame, false, RSF_FG_OFF, 0);
+    let complete = state.complete(before.order.revision, frame, false, RSF_FG_OFF, 0);
     if staged && complete { OK } else { NOT_READY }
 }
 

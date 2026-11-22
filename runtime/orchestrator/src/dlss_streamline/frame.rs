@@ -61,14 +61,14 @@ impl Platform {
         if host.is_null() {
             unsafe { (self.owned_constants)(native, token, slot, &constants) }
         } else {
-            unsafe { (self.host_constants)(host, source, frame.viewport, &constants) }
+            unsafe { (self.host_constants)(host, source, slot, &constants) }
         }
     }
 }
 
 #[cfg(test)]
 #[test]
-fn frame_routes_preserve_optional_index_and_original_host_viewport() {
+fn frame_routes_preserve_optional_index_and_common_viewport() {
     use std::ptr::{null_mut, without_provenance_mut};
 
     unsafe extern "C" fn owned_token(_: Handle, index: *const u32) -> Handle {
@@ -90,8 +90,8 @@ fn frame_routes_preserve_optional_index_and_original_host_viewport() {
         slot: u32,
         constants: &Constants,
     ) -> i32 {
-        assert_eq!((token.addr(), slot), (2, 0));
-        assert_eq!(constants.frame.viewport, 7);
+        assert_eq!((token.addr(), slot), (2, 1));
+        assert_eq!(constants.frame.viewport, 1);
         assert_eq!(
             (constants.camera_pinhole, constants.motion_vectors_3d),
             ([0.0; 2], 0)
@@ -105,7 +105,7 @@ fn frame_routes_preserve_optional_index_and_original_host_viewport() {
         viewport: u32,
         constants: &Constants,
     ) -> i32 {
-        assert_eq!((host.addr(), source, viewport), (3, 42, 7));
+        assert_eq!((host.addr(), source, viewport), (3, 42, 1));
         assert_eq!(
             (constants.camera_pinhole, constants.motion_vectors_3d),
             ([0.0; 2], 0)
@@ -120,8 +120,8 @@ fn frame_routes_preserve_optional_index_and_original_host_viewport() {
         host_constants,
     };
     let mut frame: Frame = unsafe { std::mem::zeroed() };
-    frame.viewport = 7;
-    let slot = super::super::viewport_slot(frame.viewport);
+    frame.viewport = 1;
+    let slot = frame.viewport;
     assert_eq!(platform.token(null_mut(), null_mut(), 0, 0).addr(), 1);
     let owned = platform.token(null_mut(), null_mut(), 0, 9);
     assert_eq!(

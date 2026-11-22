@@ -3,16 +3,13 @@ use crate::allocate_handle;
 use crate::dx12_vulkan_interop_abi::*;
 use crate::owned_win32_handle;
 use crate::sr_session::has_capacity;
-use crate::vulkan_sr_abi::{
-    RSF_SRVK_ABI_VERSION, rsf_srvk_setup, rsf_vk_function, rsf_vk_get_proc,
-};
-use std::ffi::{CStr, c_char, c_void};
+use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_setup};
+use std::ffi::c_void;
 use std::os::windows::io::AsRawHandle;
 use std::ptr;
 
 const OUT_OF_HOST_MEMORY: i32 = -1;
 const INITIALIZATION_FAILED: i32 = -3;
-const EXTENSION_NOT_PRESENT: i32 = -7;
 const INCOMPATIBLE_DRIVER: i32 = -9;
 const TOO_MANY_OBJECTS: i32 = -10;
 const FORMAT_NOT_SUPPORTED: i32 = -11;
@@ -21,23 +18,6 @@ pub(super) const BGRA8_UNORM: u32 = 44;
 pub(super) const RG16_FLOAT: u32 = 83;
 pub(super) const R32_FLOAT: u32 = 100;
 const IMAGE_SLOTS: usize = 24;
-const INSTANCE_PROCS: [&CStr; 3] = [
-    c"vkGetPhysicalDeviceImageFormatProperties2",
-    c"vkGetPhysicalDeviceMemoryProperties",
-    c"vkGetPhysicalDeviceExternalSemaphoreProperties",
-];
-const DEVICE_PROCS: [&CStr; 10] = [
-    c"vkCreateImage",
-    c"vkDestroyImage",
-    c"vkGetImageMemoryRequirements",
-    c"vkGetMemoryWin32HandlePropertiesKHR",
-    c"vkAllocateMemory",
-    c"vkFreeMemory",
-    c"vkBindImageMemory",
-    c"vkCreateSemaphore",
-    c"vkDestroySemaphore",
-    c"vkImportSemaphoreWin32HandleKHR",
-];
 
 type Handle = *mut c_void;
 type Callbacks = rsf_dx12vk_interop_callbacks;
@@ -45,9 +25,6 @@ type Platform = rsf_dx12vk_platform;
 pub(super) type FenceFactory = unsafe extern "C" fn(Handle, *mut Handle) -> i32;
 pub(super) type ImageRelease = unsafe extern "C" fn(Handle);
 type Output = rsf_dx12vk_shared_image;
-pub(super) type Lookup =
-    unsafe extern "C" fn(rsf_vk_get_proc, Handle, *const c_char, &mut rsf_vk_function) -> i32;
-type DispatchEntries = [rsf_vk_function; INSTANCE_PROCS.len() + DEVICE_PROCS.len()];
 const INVALID: i32 = RSF_DX12VK_INTEROP_INVALID_ARGUMENT;
 const ABI_MISMATCH: i32 = RSF_DX12VK_INTEROP_ABI_MISMATCH;
 
@@ -55,46 +32,8 @@ pub(super) fn checked(result: i32) -> Result<(), i32> {
     if result == 0 { Ok(()) } else { Err(result) }
 }
 
-/// The native capsule uses these addresses only after successful resolution.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dx12vk_resolve_procs(
-    setup: &rsf_srvk_setup,
-    lookup: Lookup,
-    entries: &mut DispatchEntries,
-) -> i32 {
-    if setup.instance_proc.is_none() || setup.device_proc.is_none() {
-        return EXTENSION_NOT_PRESENT;
-    }
-    let (instance, device) = entries.split_at_mut(INSTANCE_PROCS.len());
-    for (names, output, proc, object) in [
-        (
-            INSTANCE_PROCS.as_slice(),
-            instance,
-            setup.instance_proc,
-            setup.instance,
-        ),
-        (
-            DEVICE_PROCS.as_slice(),
-            device,
-            setup.device_proc,
-            setup.device,
-        ),
-    ] {
-        for (name, address) in names.iter().zip(output) {
-            let result = unsafe { lookup(proc, object, name.as_ptr(), address) };
-            if result != 0 {
-                return result;
-            }
-        }
-    }
-
-    // Resolve every required function before reporting a missing address.
-    if entries.iter().all(Option::is_some) {
-        0
-    } else {
-        EXTENSION_NOT_PRESENT
-    }
-}
+#[cfg(test)]
+mod tests;
 
 #[derive(Default)]
 struct Image {
@@ -188,6 +127,30 @@ impl Owner {
                 (self.release_image)(image.dx12);
             }
         }
+    }
+
+    fn release_images(&mut self, images: [u64; 2]) -> Result<(), i32> {
+        // Check both identities before touching either slot. Zero represents
+        // a guide that has yet to be allocated after a failed prepare.
+        if images[0] != 0 && images[0] == images[1] {
+            return Err(INVALID);
+        }
+        let mut slots = [None; 2];
+        for (slot, handle) in slots.iter_mut().zip(images) {
+            if handle != 0 {
+                *slot = Some(
+                    self.images
+                        .iter()
+                        .position(|image| image.as_ref().is_some_and(|image| image.image == handle))
+                        .ok_or(INVALID)?,
+                );
+            }
+        }
+        for slot in slots.into_iter().flatten() {
+            let image = self.images[slot].take().unwrap();
+            self.release(&image);
+        }
+        Ok(())
     }
 
     pub(super) fn import_timeline(
@@ -313,13 +276,13 @@ impl Drop for Owner {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dx12vk_interop_create(
-    platform: &'static Platform,
+unsafe extern "C" fn rsf_dx12vk_interop_create(
     setup: *const rsf_srvk_setup,
     callbacks: *const Callbacks,
     timeline_enabled: u32,
     out: *mut *mut Owner,
 ) -> i32 {
+    let platform = &crate::dx12_vulkan_platform::PLATFORM;
     if out.is_null() {
         return INVALID;
     }
@@ -411,6 +374,18 @@ unsafe extern "C" fn rsf_dx12vk_interop_image(
         }
         Err(error) => error,
     }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_dx12vk_interop_release_guides(
+    owner: *mut Owner,
+    depth: u64,
+    motion: u64,
+) -> i32 {
+    let Some(owner) = (unsafe { owner.as_mut() }) else {
+        return INVALID;
+    };
+    owner.release_images([depth, motion]).err().unwrap_or(0)
 }
 
 #[unsafe(no_mangle)]

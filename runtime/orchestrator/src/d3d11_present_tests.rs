@@ -2059,7 +2059,7 @@ fn failed_creation_releases_partial_pairs_before_fallback() {
 }
 
 #[test]
-fn resize_normalizes_and_faults_on_lost_surfaces() {
+fn resize_normalizes_and_preserves_shared_surfaces_on_allocation_failure() {
     let _guard = reset();
     assert_eq!(prepare(&setup(FSR3, 0)), 1);
     let bridge = create();
@@ -2093,6 +2093,7 @@ fn resize_normalizes_and_faults_on_lost_surfaces() {
         DXGI_ERROR_INVALID_CALL
     );
     drop(retained);
+    take_calls();
     with(|fake| {
         fake.allocation_failure = Some(fake.buffers.len() + 1);
     });
@@ -2100,17 +2101,20 @@ fn resize_normalizes_and_faults_on_lost_surfaces() {
         unsafe { rsf_core_d3d11p_resize(chain, 2, 320, 200, 0, 0) },
         E_FAIL
     );
-    assert_eq!(unsafe { rsf_core_d3d11p_faulted(chain) }, 1);
-    assert_eq!(get_buffer(chain, 0), (DXGI_ERROR_INVALID_CALL, null_mut()));
+    assert!(!take_calls().contains(&"resize 3 320x200".to_owned()));
+    assert_eq!(unsafe { rsf_core_d3d11p_faulted(chain) }, 0);
+    let (result, still_old) = get_buffer(chain, 1);
+    assert_eq!((result, still_old), (S_OK, pointer));
+    drop(unsafe { ComRef::from_owned(still_old) });
     with(|fake| {
         assert_eq!(fake.buffers.len(), 6);
-        assert_eq!(fake.target_view.refs.get(), 1);
-        for buffer in &fake.buffers {
-            assert_eq!(buffer.application.refs.get(), 1);
-            assert_eq!(buffer.peer.as_ref().unwrap().refs.get(), 1);
-        }
+        assert_eq!(fake.target_view.refs.get(), 3);
+        assert!(
+            fake.buffers[4..].iter().all(|buffer| buffer.application.refs.get() == 1
+                && buffer.peer.as_ref().unwrap().refs.get() == 1)
+        );
     });
-    assert_eq!(present(bridge, 1, 0), DXGI_ERROR_DEVICE_REMOVED);
+    assert_eq!(present(bridge, 1, 0), S_OK);
     unsafe { bridge_release_owned(bridge) };
 }
 
@@ -2142,12 +2146,17 @@ fn failed_render_buffer_resize_exposes_no_partial_batch() {
         unsafe { rsf_core_d3d11p_resize(chain, 3, 320, 200, 24, 0) },
         E_FAIL
     );
-    assert!(take_calls().contains(&"resize 0 320x200".to_owned()));
-    assert_eq!(unsafe { rsf_core_d3d11p_faulted(chain) }, 1);
-    assert_eq!(get_buffer(chain, 0), (DXGI_ERROR_INVALID_CALL, null_mut()));
+    assert!(!take_calls().contains(&"resize 0 320x200".to_owned()));
+    assert_eq!(unsafe { rsf_core_d3d11p_faulted(chain) }, 0);
+    let (result, old) = get_buffer(chain, 0);
+    assert_eq!(
+        (result, old),
+        (S_OK, with(|fake| com_raw(&fake.buffers[0].application)))
+    );
+    drop(unsafe { ComRef::from_owned(old) });
     with(|fake| {
         assert_eq!(fake.buffers.len(), 4);
-        assert!(fake.buffers.iter().all(|b| b.application.refs.get() == 1));
+        assert!(fake.buffers[2..].iter().all(|b| b.application.refs.get() == 1));
     });
     unsafe { bridge_release_owned(bridge) };
 }
@@ -2177,15 +2186,19 @@ fn native_resize_publishes_new_bounds_only_after_physical_success() {
     assert_eq!((result, still_old), (S_OK, old));
     drop(unsafe { ComRef::from_owned(still_old) });
     assert_eq!(get_buffer(chain, 2), (DXGI_ERROR_INVALID_CALL, null_mut()));
+    with(|fake| {
+        assert_eq!(fake.buffers.len(), 5);
+        assert!(fake.buffers[2..].iter().all(|b| b.application.refs.get() == 1));
+    });
 
     with(|fake| fake.resize_result = S_OK);
     assert_eq!(resize(), S_OK);
     assert_eq!(unsafe { rsf_core_d3d11p_render_index(chain) }, 0);
     with(|fake| {
         assert_eq!(fake.buffer_count, 3);
-        assert_eq!(fake.buffers.len(), 5);
+        assert_eq!(fake.buffers.len(), 8);
         assert!(
-            fake.buffers[..2]
+            fake.buffers[..5]
                 .iter()
                 .all(|b| b.application.refs.get() == 1)
         );
@@ -2193,7 +2206,7 @@ fn native_resize_publishes_new_bounds_only_after_physical_success() {
     let (result, new) = get_buffer(chain, 2);
     assert_eq!(
         (result, new),
-        (S_OK, with(|fake| com_raw(&fake.buffers[4].application)))
+        (S_OK, with(|fake| com_raw(&fake.buffers[7].application)))
     );
     drop(unsafe { ComRef::from_owned(new) });
     unsafe { bridge_release_owned(bridge) };

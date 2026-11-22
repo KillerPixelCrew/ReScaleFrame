@@ -87,6 +87,18 @@ pub(super) unsafe fn make_dynamic(device: Handle, bytes: u32) -> Option<ComRef> 
     }
 }
 
+pub(super) unsafe fn resource_buffer_info(buffer: Handle) -> Option<(u32, u32)> {
+    type GetType = unsafe extern "system" fn(Handle, *mut u32);
+    let get_type: GetType = unsafe { std::mem::transmute(slot(buffer, 7)) };
+    let mut dimension = 0;
+    unsafe { get_type(buffer, &mut dimension) };
+    if dimension != RESOURCE_DIMENSION_BUFFER {
+        return None;
+    }
+    let desc = unsafe { buffer_desc(buffer) };
+    Some((desc.byte_width, desc.bind_flags))
+}
+
 pub(super) unsafe fn constant_size(buffer: Handle, bytes: u32) -> bool {
     let desc = unsafe { buffer_desc(buffer) };
     desc.byte_width == bytes && desc.bind_flags & BIND_CONSTANT_BUFFER != 0
@@ -145,14 +157,9 @@ unsafe extern "C" fn rsf_read_constant_buffer(
     {
         return INVALID;
     }
-    type GetType = unsafe extern "system" fn(Handle, *mut u32);
-    let get_type: GetType = unsafe { std::mem::transmute(slot(buffer, 7)) };
-    let mut dimension = 0;
-    unsafe { get_type(buffer, &mut dimension) };
-    if dimension != RESOURCE_DIMENSION_BUFFER {
+    let Some((width, _)) = (unsafe { resource_buffer_info(buffer) }) else {
         return INVALID;
-    }
-    let width = unsafe { buffer_desc(buffer) }.byte_width;
+    };
     if !unsafe { same_device(device, buffer) && same_device(device, context) } {
         return FOREIGN_DEVICE;
     }

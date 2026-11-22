@@ -14,13 +14,16 @@ static_assert(sizeof(rsf_xessgvk_ops) == 17 * sizeof(void*) && sizeof(rsf_xessgv
     sizeof(rsf_xess_bridge_frame) == 216 && sizeof(rsf_xess_bridge_present_status) == 24);
 
 namespace {
-const rsf_xessgvk_ops operations{
-    &rsf_dx12gvk_graphics, &rsf_dx12gvk_interop, rsf_xessvk_interop_create,
-    RsfXessBridgeCreate, RsfXessBridgeStart, RsfXessBridgeMaxGenerated, RsfXessBridgeSetGenerated,
-    VulkanStoryXessFgSetEnabled, RsfXessBridgePresent, RsfXessBridgeCaptureSource, RsfXessBridgeCapturedCallbacks,
-    VulkanStoryXessFgWaitIdle, VulkanStoryXessFgPrepareDestroy, VulkanStoryXessFgDestroyChecked,
-    VulkanStoryXessFgSleep, VulkanStoryXessFgMarker, VulkanStoryXessFgSetLatencyMode,
-};
+const rsf_xessgvk_ops& operations() {
+    static const rsf_xessgvk_ops value{
+        &rsf_dx12gvk_graphics(), &rsf_dx12gvk_interop, rsf_xessvk_interop_create,
+        RsfXessBridgeCreate, RsfXessBridgeStart, RsfXessBridgeMaxGenerated, RsfXessBridgeSetGenerated,
+        VulkanStoryXessFgSetEnabled, RsfXessBridgePresent, RsfXessBridgeCaptureSource, RsfXessBridgeCapturedCallbacks,
+        VulkanStoryXessFgWaitIdle, VulkanStoryXessFgPrepareDestroy, VulkanStoryXessFgDestroyChecked,
+        VulkanStoryXessFgSleep, VulkanStoryXessFgMarker, VulkanStoryXessFgSetLatencyMode,
+    };
+    return value;
+}
 
 int32_t present(void* owner, const rsf_dx12gvk_present_info* info, const rsf_frame_record* source, uint32_t exact) {
     return rsf_core_xessgvk_present(static_cast<rsf_xessgvk*>(owner), info, source, exact);
@@ -30,7 +33,7 @@ int32_t present(void* owner, const rsf_dx12gvk_present_info* info, const rsf_fra
 int32_t rsf_xessgvk_create(const rsf_fgvk_setup* setup, const rsf_xessgvk_options* options,
     rsf_xessgvk** output, uint64_t* chain) {
     // Rust admits the setup before it asks the shared graphics table to describe create_info.
-    return rsf_core_xessgvk_create(&operations, setup, options, output, chain);
+    return rsf_core_xessgvk_create(&operations(), setup, options, output, chain);
 }
 
 int32_t rsf_xessgvk_images(rsf_xessgvk* owner, uint32_t* count, uint64_t* output) {

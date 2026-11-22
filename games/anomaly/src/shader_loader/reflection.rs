@@ -1,88 +1,135 @@
 // SPDX-License-Identifier: MIT
 use super::{Bytes, Span};
 use std::ffi::{CStr, c_char, c_void};
+use std::ptr;
+use windows::Win32::Graphics::Direct3D11::*;
+use windows::core::{HRESULT, Interface, PCSTR};
+use windows_sys::Win32::Foundation::FARPROC;
 
-#[derive(Clone, Copy)]
-#[repr(u8)]
-enum Signature {
-    Input = 0,
-    Output = 1,
-    Patch = 2,
+type Reflect = unsafe extern "system" fn(
+    *const c_void,
+    usize,
+    *const windows::core::GUID,
+    *mut *mut c_void,
+) -> HRESULT;
+fn name(value: PCSTR) -> Bytes {
+    if value.is_null() {
+        Bytes::from(&[][..])
+    } else {
+        // This view is only consumed while the parent reflector is still live.
+        Bytes::from(unsafe { CStr::from_ptr(value.0.cast()) }.to_bytes())
+    }
 }
 
-#[derive(PartialEq, Eq)]
-#[repr(transparent)]
-struct ReflectionStep(u8);
-
-impl ReflectionStep {
-    const COPIED: Self = Self(0);
-    const UNAVAILABLE: Self = Self(1);
+fn signature(
+    count: u32,
+    mut read: impl FnMut(u32, &mut D3D11_SIGNATURE_PARAMETER_DESC) -> windows::core::Result<()>,
+) -> Option<Vec<Parameter>> {
+    (0..count)
+        .map(|index| {
+            let mut d = D3D11_SIGNATURE_PARAMETER_DESC::default();
+            read(index, &mut d).ok()?;
+            Some(Parameter {
+                name: name(d.SemanticName),
+                index: d.SemanticIndex,
+                register: d.Register,
+                system_value: d.SystemValueType.0 as u32,
+                component: d.ComponentType.0 as u32,
+                mask: u32::from(d.Mask),
+            })
+        })
+        .collect()
 }
 
-#[repr(C)]
-struct ReflectionCounts {
-    inputs: u32,
-    outputs: u32,
-    patch: u32,
-    bindings: u32,
-    buffers: u32,
+fn snapshot(
+    shader: &ID3D11ShaderReflection,
+    consume: impl FnOnce(&Reflection) -> bool,
+) -> Option<bool> {
+    let mut desc = D3D11_SHADER_DESC::default();
+    unsafe { shader.GetDesc(&mut desc) }.ok()?;
+    let inputs = signature(desc.InputParameters, |index, d| unsafe {
+        shader.GetInputParameterDesc(index, d)
+    })?;
+    let outputs = signature(desc.OutputParameters, |index, d| unsafe {
+        shader.GetOutputParameterDesc(index, d)
+    })?;
+    let patch = signature(desc.PatchConstantParameters, |index, d| unsafe {
+        shader.GetPatchConstantParameterDesc(index, d)
+    })?;
+
+    let mut bindings = Vec::new();
+    for index in 0..desc.BoundResources {
+        let mut d = D3D11_SHADER_INPUT_BIND_DESC::default();
+        unsafe { shader.GetResourceBindingDesc(index, &mut d) }.ok()?;
+        bindings.push(Binding {
+            name: name(d.Name),
+            kind: d.Type.0 as u32,
+            point: d.BindPoint,
+            count: d.BindCount,
+            return_type: d.ReturnType.0 as u32,
+            dimension: d.Dimension.0 as u32,
+        });
+    }
+
+    let mut buffers = Vec::new();
+    let mut variables = Vec::new();
+    for index in 0..desc.ConstantBuffers {
+        let buffer = unsafe { shader.GetConstantBufferByIndex(index) }?;
+        let mut d = D3D11_SHADER_BUFFER_DESC::default();
+        unsafe { buffer.GetDesc(&mut d) }.ok()?;
+        let mut rows = Vec::new();
+        for index in 0..d.Variables {
+            let variable = unsafe { buffer.GetVariableByIndex(index) }?;
+            let mut v = D3D11_SHADER_VARIABLE_DESC::default();
+            unsafe { variable.GetDesc(&mut v) }.ok()?;
+            rows.push(Variable {
+                name: name(v.Name),
+                offset: v.StartOffset,
+                size: v.Size,
+            });
+        }
+        buffers.push(Buffer {
+            name: name(d.Name),
+            size: d.Size,
+            variables: Span::from(rows.as_slice()),
+        });
+        variables.push(rows);
+    }
+    Some(consume(&Reflection {
+        version: desc.Version,
+        inputs: Span::from(inputs.as_slice()),
+        outputs: Span::from(outputs.as_slice()),
+        patch: Span::from(patch.as_slice()),
+        bindings: Span::from(bindings.as_slice()),
+        buffers: Span::from(buffers.as_slice()),
+    }))
 }
 
-#[repr(C)]
-struct ReflectionOperations {
-    parameter: unsafe extern "C" fn(*mut c_void, Signature, u32) -> ReflectionStep,
-    binding: unsafe extern "C" fn(*mut c_void, u32) -> ReflectionStep,
-    begin_buffer: unsafe extern "C" fn(*mut c_void, u32, *mut u32) -> ReflectionStep,
-    variable: unsafe extern "C" fn(*mut c_void, u32) -> ReflectionStep,
-    finish_buffer: unsafe extern "C" fn(*mut c_void) -> ReflectionStep,
-}
-
-const _: () = {
-    assert!(size_of::<ReflectionCounts>() == 20);
-    assert!(size_of::<ReflectionOperations>() == 40);
-};
-
-// The native reflector, destination and current buffer are live for this synchronous traversal.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_shader_enumerate_reflection(
+unsafe extern "C" fn rsf_anomaly_shader_reflect(
+    entry: FARPROC,
+    code: Bytes,
     user: *mut c_void,
-    counts: &ReflectionCounts,
-    ops: &ReflectionOperations,
+    consume: unsafe extern "C" fn(*mut c_void, &Reflection) -> bool,
 ) -> bool {
-    for (signature, count) in [
-        (Signature::Input, counts.inputs),
-        (Signature::Output, counts.outputs),
-        (Signature::Patch, counts.patch),
-    ] {
-        for index in 0..count {
-            let step = unsafe { (ops.parameter)(user, signature, index) };
-            // An unreadable signature row is omitted. A native copy failure ends enumeration.
-            if !matches!(step, ReflectionStep::COPIED | ReflectionStep::UNAVAILABLE) {
-                return false;
-            }
-        }
+    let Some(entry) = entry.filter(|_| code.len != 0) else {
+        return false;
+    };
+    let reflect: Reflect = unsafe { std::mem::transmute(entry) };
+    let mut raw = ptr::null_mut();
+    let status = unsafe {
+        reflect(
+            code.data.cast(),
+            code.len,
+            &ID3D11ShaderReflection::IID,
+            &mut raw,
+        )
+    };
+    if status.is_err() || raw.is_null() {
+        return false;
     }
-    for index in 0..counts.bindings {
-        if unsafe { (ops.binding)(user, index) } != ReflectionStep::COPIED {
-            return false;
-        }
-    }
-    for index in 0..counts.buffers {
-        let mut variables = 0;
-        if unsafe { (ops.begin_buffer)(user, index, &mut variables) } != ReflectionStep::COPIED {
-            return false;
-        }
-        for variable in 0..variables {
-            if unsafe { (ops.variable)(user, variable) } != ReflectionStep::COPIED {
-                return false;
-            }
-        }
-        // Publish only complete buffers, retaining any rows already published if this one fails.
-        if unsafe { (ops.finish_buffer)(user) } != ReflectionStep::COPIED {
-            return false;
-        }
-    }
-    true
+    let shader = unsafe { ID3D11ShaderReflection::from_raw(raw) };
+    snapshot(&shader, |value| unsafe { consume(user, value) }).unwrap_or(false)
 }
 
 #[repr(C)]
@@ -149,6 +196,16 @@ pub(crate) struct Reflection {
     bindings: Span<Binding>,
     buffers: Span<Buffer>,
 }
+
+const _: () = {
+    assert!(size_of::<Reflection>() == 88);
+    assert!(std::mem::offset_of!(Reflection, inputs) == 8);
+    assert!(std::mem::offset_of!(Reflection, buffers) == 72);
+    assert!(size_of::<Parameter>() == 40);
+    assert!(size_of::<Variable>() == 24);
+    assert!(size_of::<Buffer>() == 40);
+    assert!(size_of::<Binding>() == 40);
+};
 
 // One constant-buffer variable. `buffer` is its buffer's index in reflection order.
 pub(crate) struct Constant {
@@ -422,4 +479,20 @@ extern "C" fn rsf_anomaly_shader_tess_linkable(
         && covers(domain.outputs(), pixel.inputs())
         && !domain.patch().is_empty()
         && covers(hull.patch(), domain.patch())
+}
+
+#[cfg(test)]
+#[test]
+fn unreadable_signature_row_refuses_the_entire_signature() {
+    let mut visited = Vec::new();
+    let rows = signature(3, |index, _| {
+        visited.push(index);
+        if index == 1 {
+            HRESULT(0x8000_4005_u32 as i32).ok()
+        } else {
+            Ok(())
+        }
+    });
+    assert!(rows.is_none());
+    assert_eq!(visited, [0, 1]);
 }

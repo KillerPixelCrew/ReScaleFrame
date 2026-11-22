@@ -5,7 +5,7 @@
 mod tests;
 
 use crate::engine_guards::{Image, NativeSite, Read, UniqueGuard};
-use crate::executable::running_build;
+use crate::executable::observer_build;
 use crate::native_hooks::ImageHeaders;
 use crate::native_observer_abi::{
     RSF_ANOMALY_OBSERVATION_ABI, rsf_anomaly_native_observation as Observation,
@@ -59,7 +59,7 @@ unsafe extern "C" fn rsf_anomaly_observer_identify(
 ) -> *const c_char {
     // Both tables borrow the same static C++ build order as the native detours.
     let builds = unsafe { slice::from_raw_parts(builds, count) };
-    let build = match running_build(builds) {
+    let build = match observer_build(builds) {
         Ok(build) => build,
         Err(reason) => return reason.as_ptr(),
     };
@@ -87,6 +87,28 @@ unsafe extern "C" fn rsf_anomaly_observer_identify(
         executable: builds[build].executable,
     };
     ptr::null()
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_observer_read_frame(
+    image: &Image,
+    frame: u32,
+    width: u32,
+    height: u32,
+    out: &mut Frame,
+) -> bool {
+    let sample = || {
+        Some(Frame {
+            id: u32::from_le_bytes(image.copy(frame)?),
+            width: u32::from_le_bytes(image.copy(width)?),
+            height: u32::from_le_bytes(image.copy(height)?),
+        })
+    };
+    let Some(frame) = sample() else {
+        return false;
+    };
+    *out = frame;
+    true
 }
 
 // One atomic records whether entry was admitted and registers that invocation.

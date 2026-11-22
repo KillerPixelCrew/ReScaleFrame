@@ -12,10 +12,19 @@
 //! calls with their exception guards and the World fields (NativePublicationLeaves in
 //! render_hooks_platform.h). See docs/research/rust-fallout4-render-hooks.md.
 
+use super::World;
 use super::recovery::{self, Leaves as RecoveryLeaves};
 use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;
 use crate::resolution::rsf_fallout4_resolution_inputs;
-use crate::{RSF_ERROR_NOT_READY, RSF_OK, image, message};
+use crate::resolution_stages::{
+    RSF_FALLOUT4_STAGE_EVALUATED as EVALUATED, RSF_FALLOUT4_STAGE_OUTPUT_READY as OUTPUT_READY,
+};
+use crate::screen::NativeScreen as Screen;
+use crate::{RSF_ERROR_NATIVE_REFUSED, RSF_ERROR_NOT_READY, RSF_OK, image, message};
+use rsf_game_sys::d3d11_reduced_abi::{
+    RSF_D3D11_AUXILIARY_COLOUR, RSF_D3D11_AUXILIARY_DEPTH_STENCIL,
+    RSF_D3D11_AUXILIARY_RESTORE_CONTENTS, rsf_d3d11_auxiliary_surface as Surface,
+};
 use rsf_game_sys::{
     RSF_GAME_RENDER_AFTER_SIMULATION, RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_FINAL_SCENE,
     RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_RECONFIGURE,
@@ -32,35 +41,9 @@ const SCREEN_UNKNOWN: u32 = 0;
 const SCREEN_GAMEPLAY: u32 = 8;
 
 // The Effects call inside imagespace whose return is the SR pass key.
-const SR_PASS: usize = 0x21f_a283;
-
-// ResolutionStage (resolution.h).
-const OUTPUT_READY: u32 = 1;
-const EVALUATED: u32 = 2;
+const SR_PASS: usize = super::EFFECTS_CALL.0;
 
 const SCREEN_RECEIPTS: u32 = 8;
-
-/// NativePublicationWorld: the World values a step reads at the moment it runs. The pass
-/// pointers name World fields and stay valid for the thread.
-#[repr(C)]
-struct World {
-    cpu: CpuIdentity,
-    pass: *const rsf_game_render_pass,
-    frame_pass: *const rsf_game_render_pass,
-    screen_basis: *const rsf_game_render_pass,
-    context: *mut c_void,
-    chain: *mut c_void,
-    upscale: bool,
-    in_imagespace: bool,
-    inputs: bool,
-    window_open: bool,
-    frame_open: bool,
-    submission_open: bool,
-    refused: bool,
-    raster_refused: bool,
-    auxiliary_open: bool,
-    depth_valid: bool,
-}
 
 /// NativePublicationInputs: borrowed facts of the SR input lease, valid until it is released.
 #[repr(C)]
@@ -68,6 +51,13 @@ struct Inputs {
     pass: *const rsf_game_render_pass,
     context: *mut c_void,
     chain: *mut c_void,
+}
+
+// The live input lease owns these textures through the synchronous evaluation.
+#[repr(C)]
+struct AuxiliaryInputs {
+    textures: [*mut c_void; 5],
+    raster: [f32; 4],
 }
 
 /// NativePublicationFramebuffer: borrowed facts of the HUDless framebuffer lease, which may be
@@ -79,38 +69,14 @@ struct Framebuffer {
     texture: *mut c_void,
     native_frame: u64,
     window_key: u64,
-}
-
-/// NativeScreen (screen.h).
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct Screen {
-    screen: u32,
-    facts: u32,
-    refusals: u32,
-    camera_index: u32,
-    camera_state: usize,
-}
-
-impl Screen {
-    const EMPTY: Self = Self {
-        screen: SCREEN_UNKNOWN,
-        facts: 0,
-        refusals: 0,
-        camera_index: u32::MAX,
-        camera_state: 0,
-    };
+    extent: [u32; 3],
 }
 
 const _: () = {
     assert!(size_of::<CpuIdentity>() == 40);
-    assert!(size_of::<World>() == 96);
-    assert!(offset_of!(World, pass) == 40);
-    assert!(offset_of!(World, upscale) == 80);
-    assert!(offset_of!(World, depth_valid) == 89);
     assert!(size_of::<Inputs>() == 3 * size_of::<usize>());
-    assert!(size_of::<Framebuffer>() == 40 && offset_of!(Framebuffer, native_frame) == 24);
-    assert!(size_of::<Screen>() == 24 && offset_of!(Screen, camera_state) == 16);
+    assert!(size_of::<AuxiliaryInputs>() == 56 && offset_of!(AuxiliaryInputs, raster) == 40);
+    assert!(size_of::<Framebuffer>() == 56 && offset_of!(Framebuffer, native_frame) == 24);
 };
 
 /// NativePublicationLeaves, constant for the process. Every leaf acts on the calling thread's
@@ -142,47 +108,23 @@ pub(super) struct Leaves {
     begin_output: unsafe extern "C" fn(*const rsf_game_render_pass) -> bool,
     report_state: unsafe extern "C" fn(u32, *const rsf_game_render_pass, *mut c_void, bool, i32),
     // The guarded auxiliary or full-output evaluation of the input lease.
-    reconstruct: unsafe extern "C" fn(*const rsf_game_render_pass) -> rsf_result,
+    auxiliary_inputs: unsafe extern "C" fn(&mut AuxiliaryInputs) -> bool,
+    auxiliary_colour: unsafe extern "C" fn(*mut c_void) -> bool,
+    same_texture: unsafe extern "C" fn(*mut c_void, *mut c_void) -> bool,
+    reconstruct:
+        unsafe extern "C" fn(*const rsf_game_render_pass, *const Surface, u32) -> rsf_result,
     end_output: unsafe extern "C" fn() -> bool,
-    // Replace the framebuffer lease with a fresh logical framebuffer read.
-    read_framebuffer: unsafe extern "C" fn() -> bool,
-    framebuffer: unsafe extern "C" fn(&mut Framebuffer),
-    framebuffer_extent: unsafe extern "C" fn(&mut [u32; 3]),
-    release_framebuffer: unsafe extern "C" fn(),
-    // Final colour lease, World pass, open WINDOW and its counter.
-    publish_window: unsafe extern "C" fn(*const rsf_game_render_pass),
+    // Acquire in the caller's native stack lease and return the facts of that exact read.
+    read_framebuffer: unsafe extern "C" fn(*mut c_void, &mut Framebuffer) -> bool,
+    // Retain the final colour from that lease and open WINDOW.
+    publish_window: unsafe extern "C" fn(*const c_void, *const rsf_game_render_pass),
 }
 
 const _: () = assert!(size_of::<Leaves>() == 22 * size_of::<usize>());
 
 impl Leaves {
     fn world(&self) -> World {
-        let mut world = World {
-            cpu: CpuIdentity {
-                session: 0,
-                source: 0,
-                submission: 0,
-                began_qpc: 0,
-                frequency: 0,
-            },
-            pass: std::ptr::null(),
-            frame_pass: std::ptr::null(),
-            screen_basis: std::ptr::null(),
-            context: null_mut(),
-            chain: null_mut(),
-            upscale: false,
-            in_imagespace: false,
-            inputs: false,
-            window_open: false,
-            frame_open: false,
-            submission_open: false,
-            refused: false,
-            raster_refused: false,
-            auxiliary_open: false,
-            depth_valid: false,
-        };
-        unsafe { (self.world)(&mut world) };
-        world
+        World::read(self.world)
     }
     fn diagnostic(&self, text: &CStr) {
         unsafe { (self.diagnostic)(text.as_ptr()) }
@@ -215,17 +157,6 @@ impl Leaves {
     ) {
         unsafe { (self.report_state)(stage, pass, context, published, result) }
     }
-    fn framebuffer(&self) -> Framebuffer {
-        let mut frame = Framebuffer {
-            context: null_mut(),
-            chain: null_mut(),
-            texture: null_mut(),
-            native_frame: 0,
-            window_key: 0,
-        };
-        unsafe { (self.framebuffer)(&mut frame) };
-        frame
-    }
 }
 
 /// FINISHes the recovery token when the SR step returns, after the input lease is released, as
@@ -244,15 +175,6 @@ struct InputLease<'a>(&'a Leaves);
 impl Drop for InputLease<'_> {
     fn drop(&mut self) {
         unsafe { (self.0.release_inputs)() }
-    }
-}
-
-/// Releases the framebuffer lease when the HUDless step returns.
-struct FrameLease<'a>(&'a Leaves);
-
-impl Drop for FrameLease<'_> {
-    fn drop(&mut self) {
-        unsafe { (self.0.release_framebuffer)() }
     }
 }
 
@@ -441,7 +363,7 @@ pub(super) fn emit_sr(leaves: &Leaves, recovery: &RecoveryLeaves) -> SrOutcome {
         return SrOutcome::Refused;
     }
     leaves.report_state(OUTPUT_READY, &pass, lease.context, false, RSF_OK);
-    let result = unsafe { (leaves.reconstruct)(&pass) };
+    let result = reconstruct(leaves, &pass);
     leaves.report_state(EVALUATED, &pass, lease.context, result == RSF_OK, result);
     if result != RSF_OK {
         // A sealed ticket owns rollback/recovery; retain its output scope until FINISH so
@@ -460,25 +382,106 @@ pub(super) fn emit_sr(leaves: &Leaves, recovery: &RecoveryLeaves) -> SrOutcome {
     SrOutcome::Published
 }
 
+// Keep the depth mapping on the integer render rectangle. The colour surfaces share the
+// producer's fractional viewport and the same camera jitter.
+fn reconstruct(leaves: &Leaves, pass: &rsf_game_render_pass) -> rsf_result {
+    let reduced = pass.camera.render_width != pass.camera.output_width
+        || pass.camera.render_height != pass.camera.output_height
+        || pass.render_rect[0] != 0
+        || pass.render_rect[1] != 0;
+    if !reduced {
+        return unsafe { (leaves.reconstruct)(pass, std::ptr::null(), 0) };
+    }
+    let mut inputs = AuxiliaryInputs {
+        textures: [null_mut(); 5],
+        raster: [0.0; 4],
+    };
+    if !unsafe { (leaves.auxiliary_inputs)(&mut inputs) }
+        || !unsafe { (leaves.auxiliary_colour)(inputs.textures[1]) }
+    {
+        return RSF_ERROR_NATIVE_REFUSED;
+    }
+
+    let mut surfaces = [Surface::default(); 5];
+    let mut count = 0;
+    let [x, y, width, height] = inputs.raster;
+    let colours = [x, y, x + width, y + height];
+    let names = [
+        (c"native_depth_expanded", c"native_depth_partitioned"),
+        (c"native_motion_expanded", c"native_motion_reduced"),
+        (c"native_pipboy_expanded", c"native_pipboy_reduced"),
+        (c"native_vats_expanded", c"native_vats_reduced"),
+        (c"native_refraction_expanded", c"native_refraction_reduced"),
+    ];
+    for (slot, (texture, (name, source_name))) in inputs.textures.into_iter().zip(names).enumerate()
+    {
+        if slot >= 2
+            && (!unsafe { (leaves.auxiliary_colour)(texture) }
+                || unsafe { (leaves.same_texture)(texture, pass.color_output) }
+                || surfaces[..count]
+                    .iter()
+                    .any(|surface| unsafe { (leaves.same_texture)(texture, surface.texture) }))
+        {
+            continue;
+        }
+        let depth = slot == 0;
+        surfaces[count] = Surface {
+            struct_size: size_of::<Surface>() as u32,
+            kind: if depth {
+                RSF_D3D11_AUXILIARY_DEPTH_STENCIL
+            } else {
+                RSF_D3D11_AUXILIARY_COLOUR
+            },
+            texture,
+            source_rect: if depth {
+                pass.render_rect.map(|coordinate| coordinate as f32)
+            } else {
+                colours
+            },
+            output_rect: pass.output_rect,
+            jitter_pixels: pass.camera.jitter_pixels,
+            name: name.as_ptr(),
+            source_name: source_name.as_ptr(),
+            flags: if slot == 3 {
+                RSF_D3D11_AUXILIARY_RESTORE_CONTENTS
+            } else {
+                0
+            },
+        };
+        count += 1;
+    }
+    if recovery::token() != 0 && count != surfaces.len() {
+        return RSF_ERROR_NATIVE_REFUSED;
+    }
+    unsafe { (leaves.reconstruct)(pass, surfaces.as_ptr(), count as u32) }
+}
+
 /// MSVC `%p`: sixteen uppercase hexadecimal digits.
 fn pointer(value: usize) -> String {
     format!("{value:016X}")
 }
 
 /// The HUDless seam after the native HUDless viewport selection (producer.rs).
-pub(super) fn emit_hudless(leaves: &Leaves, recovery: &RecoveryLeaves) {
+pub(super) fn emit_hudless(leaves: &Leaves, recovery: &RecoveryLeaves, lease: *mut c_void) {
     let world = leaves.world();
     if !world.in_imagespace || !world.inputs || world.window_open || !recovery.same_source() {
         return;
     }
-    let _frame = FrameLease(leaves);
+    let mut frame = Framebuffer {
+        context: null_mut(),
+        chain: null_mut(),
+        texture: null_mut(),
+        native_frame: 0,
+        window_key: 0,
+        extent: [0; 3],
+    };
+    let acquired = unsafe { (leaves.read_framebuffer)(lease, &mut frame) };
     // The first refusal of each stage, naming the framebuffer and the retained identities.
     let refuse = |stage: u32, name: &str| {
         let bit = 1u32 << stage;
         if HUDLESS_STAGES.fetch_or(bit, Ordering::Relaxed) & bit != 0 {
             return;
         }
-        let frame = leaves.framebuffer();
         let world = leaves.world();
         // SAFETY: the World names its passes.
         let (pass, frame_pass, screen_basis) =
@@ -501,11 +504,10 @@ pub(super) fn emit_hudless(leaves: &Leaves, recovery: &RecoveryLeaves) {
         recovery.report_text(&text);
     };
     // A failed logical-0 read is not evidence that any identity comparison failed.
-    if !unsafe { (leaves.read_framebuffer)() } {
+    if !acquired {
         refuse(0, "framebuffer-read");
         return;
     }
-    let frame = leaves.framebuffer();
     let world = leaves.world();
     // SAFETY: the World names its pass.
     let pass = unsafe { *world.pass };
@@ -525,9 +527,7 @@ pub(super) fn emit_hudless(leaves: &Leaves, recovery: &RecoveryLeaves) {
         refuse(4, "outer-chain");
         return;
     }
-    let mut extent = [0u32; 3];
-    unsafe { (leaves.framebuffer_extent)(&mut extent) };
-    let [width, height, samples] = extent;
+    let [width, height, samples] = frame.extent;
     if width != pass.camera.output_width || height != pass.camera.output_height || samples != 1 {
         refuse(5, "output-extent");
         return;
@@ -544,7 +544,7 @@ pub(super) fn emit_hudless(leaves: &Leaves, recovery: &RecoveryLeaves) {
     window.role = RSF_GAME_RENDER_WINDOW;
     window.swapchain = world.chain;
     window.scene_surface = null_mut();
-    unsafe { (leaves.publish_window)(&window) };
+    unsafe { (leaves.publish_window)(lease, &window) };
     let world = leaves.world();
     // SAFETY: the World names its pass, now the open WINDOW.
     leaves.notify(unsafe { &*world.pass }, world.context, 1);

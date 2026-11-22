@@ -116,6 +116,17 @@ int main()
                   RSF_DLSS_ERROR_INVALID_ARGUMENT,
               "Evaluating without the required resources must be rejected.");
 
+        frame.color_in = frame.color_out = frame.depth = frame.motion = reinterpret_cast<void*>(1);
+        for (uint32_t viewport : {2u, 7u}) {
+            frame.viewport = viewport;
+            check(rsf_dlss_evaluate(reinterpret_cast<void*>(1), &frame) ==
+                      RSF_DLSS_ERROR_INVALID_ARGUMENT &&
+                  rsf_dlss_release_viewport(viewport) == RSF_DLSS_ERROR_INVALID_ARGUMENT,
+                  "Unsupported DLSS viewports must be refused.");
+        }
+        frame.viewport = 0;
+        frame.color_in = frame.color_out = frame.depth = frame.motion = nullptr;
+
         // The path does not exist. This must report a load failure, not take the process with it.
         check(rsf_dlss_load(&setup) == RSF_DLSS_ERROR_LOAD_FAILED,
               "An interposer that is not there must be reported as a load failure.");

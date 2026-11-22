@@ -9,14 +9,7 @@
 //! the shared D3D11/D3D12 fence, one D3D12 allocator and list per ring slot and the six
 //! `rsf_shared_surface` slots. This module also owns the single creator, the stopped state after a
 //! failed creation, each surface's key and its replacement, the surface lease, the checked close
-//! and the release. Slot rotation and fence values are the package bridge's submission ring
-//! (`bridge_interop.rs`).
-//!
-//! The D3D11 route also admits its packets here (`rsf_unity_d3d11_admit_packet`): the shared
-//! packet store (`bridge_state.rs`) retains the packet's Unity textures through the typed leaves
-//! before the stored address reaches Unity, holds the references through the render event that
-//! takes the packet and releases them when that event ends or the store's release cancels it.
-//! These references exist before the record is created and do not depend on it.
+//! and the release. The Runtime submission ring supplies slot rotation and fence values.
 //!
 //! The route, pass and surface plan of each render event, the shared surface format, the policy
 //! change gate and the submission's retirement verdict are `d3d11_pass.rs`. Its change gate
@@ -33,15 +26,12 @@
 //! graphics lookup copy the D3D12 device and queue without any admission, replaced surfaces
 //! without any hold on the views a frame had already taken, and kept the queued packets' texture
 //! references in a native array beside the Rust store.
-use crate::bridge_abi::{RSF_UNITY_FRAMES_SLOTS, rsf_unity_packet};
-use crate::bridge_interop::{
-    rsf_unity_interop_d3d11_drained, rsf_unity_interop_drained, rsf_unity_interop_release,
-    rsf_unity_interop_submitted,
-};
-use crate::bridge_state::{LeaseOps, admit_leased_packet};
+use crate::bridge_abi::RSF_UNITY_FRAMES_SLOTS;
+use crate::bridge_interop::D3D11;
 use crate::d3d11_pass::shared_format;
 use crate::device_creation::{Claim, Creation};
 use rsf_game_sys::rsf_game_host_services;
+use rsf_runtime_submission::SubmissionHandle;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -391,10 +381,9 @@ impl State {
 
 /// The checked close's verdict, in the C++ order: a completion read of UINT64_MAX is device
 /// removal, the ring must have reached its last completion and the last D3D11 copy its fence.
-fn retired(completed: u64, shared: u64) -> bool {
-    completed != u64::MAX
-        && rsf_unity_interop_drained(completed) != 0
-        && rsf_unity_interop_d3d11_drained(shared) != 0
+fn retired(ring: &SubmissionHandle, completed: u64, shared: u64) -> bool {
+    let ring = ring.lock();
+    ring.drained(completed) && ring.copy_drained(shared)
 }
 
 #[unsafe(no_mangle)]
@@ -477,6 +466,7 @@ fn prepare_surface(
     services: *const rsf_game_host_services,
     key: SurfaceKey,
     shared_format: u32,
+    ring: &SubmissionHandle,
 ) -> Option<*mut c_void> {
     let (retire, handles, ops) = {
         let mut state = lock_state(state);
@@ -488,11 +478,18 @@ fn prepare_surface(
         let device = state.creation.device.as_ref()?;
         (retire, device.handles, device.ops)
     };
-    // Every submission that may still read the replaced surface took a completion value no later
-    // than the last one handed out, so waiting for that value retires it. A first creation has
-    // nothing to retire.
-    if retire && !unsafe { (ops.wait)(&handles, rsf_unity_interop_submitted()) } {
-        return None;
+    // A replacement needs the D3D12 queue and Unity's D3D11 copy timeline. A first
+    // creation has no previous owner to retire.
+    if retire {
+        let submitted = ring.lock().submitted();
+        if !unsafe { (ops.wait)(&handles, submitted) } {
+            return None;
+        }
+        let (completed, shared) =
+            unsafe { ((ops.completed)(&handles), (ops.shared_completed)(&handles)) };
+        if !retired(ring, completed, shared) {
+            return None;
+        }
     }
     let mut created: *mut c_void = ptr::null_mut();
     let accepted = unsafe {
@@ -549,8 +546,11 @@ unsafe extern "C" fn rsf_unity_d3d11_prepare_surface(
         height,
         format: source_format,
     };
-    let shared = shared_format(index, source_format);
-    let Some(surface) = prepare_surface(&STATE, index as usize, services, key, shared) else {
+    let Some(shared) = shared_format(index, source_format) else {
+        return false;
+    };
+    let Some(surface) = prepare_surface(&STATE, index as usize, services, key, shared, &D3D11)
+    else {
         return false;
     };
     unsafe { view.write(surface) };
@@ -576,7 +576,7 @@ extern "C" fn rsf_unity_d3d11_try_close() -> bool {
     let (completed, shared) = proof.map_or((0, 0), |(handles, ops)| unsafe {
         ((ops.completed)(&handles), (ops.shared_completed)(&handles))
     });
-    retired(completed, shared)
+    retired(&D3D11, completed, shared)
 }
 
 /// The package's checked close still holds the proof. The destruction leaves are infallible.
@@ -587,7 +587,7 @@ extern "C" fn rsf_unity_d3d11_release() -> bool {
         return false;
     };
     drop(device);
-    rsf_unity_interop_release();
+    D3D11.reset();
     lock().released();
     true
 }
@@ -595,20 +595,6 @@ extern "C" fn rsf_unity_d3d11_release() -> bool {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_unity_d3d11_open() {
     lock().open();
-}
-
-/// `ops` is `rsf_unity_d3d11_texture_ops`. The store runs the retain leaf under its mutex while it
-/// publishes the packet, so the address is never visible without the lease.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_d3d11_admit_packet(
-    packet: *const rsf_unity_packet,
-    session_id: u64,
-    ops: *const LeaseOps,
-) -> *mut c_void {
-    let Some(ops) = (unsafe { ops.as_ref() }) else {
-        return ptr::null_mut();
-    };
-    unsafe { admit_leased_packet(packet, session_id, *ops) }
 }
 
 #[cfg(test)]
@@ -743,7 +729,14 @@ mod tests {
     }
 
     fn surface(state: &Mutex<State>, index: usize, width: u32) -> Option<*mut c_void> {
-        prepare_surface(state, index, ptr::null(), key(width), 2)
+        prepare_surface(
+            state,
+            index,
+            ptr::null(),
+            key(width),
+            2,
+            &SubmissionHandle::new(SLOTS),
+        )
     }
 
     fn refuse(name: &'static str) {
@@ -904,6 +897,40 @@ mod tests {
     }
 
     #[test]
+    fn replacement_keeps_the_old_surface_until_the_copy_timeline_retires() {
+        let state = published();
+        let ring = SubmissionHandle::new(SLOTS);
+        assert!(lock_state(&state).begin_surfaces());
+        assert_eq!(
+            prepare_surface(&state, 0, ptr::null(), key(16), 2, &ring),
+            Some(handle(16))
+        );
+        lock_state(&state).end_surfaces();
+        calls();
+
+        let fence = ring.lock().shared_tail().unwrap();
+        ring.lock().record_copy();
+        assert!(lock_state(&state).begin_surfaces());
+        assert_eq!(
+            prepare_surface(&state, 0, ptr::null(), key(32), 2, &ring),
+            None
+        );
+        assert_eq!(calls(), ["wait"]);
+        ring.lock().copy_submitted(fence);
+        assert_eq!(
+            prepare_surface(&state, 0, ptr::null(), key(32), 2, &ring),
+            None
+        );
+        assert_eq!(calls(), ["wait"]);
+        assert_eq!(
+            prepare_surface(&state, 0, ptr::null(), key(16), 2, &ring),
+            Some(handle(16))
+        );
+        assert!(retired(&ring, 0, fence));
+        assert!(!retired(&ring, 0, u64::MAX));
+    }
+
+    #[test]
     fn a_lease_never_replaces_a_view_it_lent() {
         let state = published();
         assert!(lock_state(&state).begin_surfaces());
@@ -997,7 +1024,6 @@ mod tests {
         // No record, so no surface lease.
         assert!(!rsf_unity_d3d11_surfaces_begin());
         // Without leaves or a packet nothing is admitted.
-        assert!(unsafe { rsf_unity_d3d11_admit_packet(ptr::null(), 0, ptr::null()) }.is_null());
         // Nothing was published by these refusals.
         assert!(!unsafe { rsf_unity_d3d11_device_view(&mut view) });
         assert_eq!(view, DeviceHandles::EMPTY);

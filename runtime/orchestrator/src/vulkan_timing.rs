@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::allocate_handle;
+use rsf_game_sys::windows_path;
 use std::ffi::{CStr, OsStr, c_char};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -25,15 +26,8 @@ struct Timing {
 }
 
 fn absolute_path(path: &OsStr) -> bool {
-    let mut units = path.encode_wide();
-    let first = units.next();
-    let second = units.next();
-    let third = units.next();
-    let backslash = u16::from(b'\\');
-    let drive = second == Some(u16::from(b':'))
-        && (third == Some(backslash) || third == Some(u16::from(b'/')));
-    let unc = first == Some(backslash) && second == Some(backslash);
-    (drive || unc) && units.take(32765).count() < 32765
+    path.encode_wide().take(32768).count() < 32768
+        && windows_path::absolute_path(path.encode_wide())
 }
 
 fn counter() -> i64 {

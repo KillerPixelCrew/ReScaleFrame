@@ -114,46 +114,10 @@ fn multiply(a: Matrix, b: Matrix) -> Matrix {
 }
 
 fn invert(matrix: Matrix) -> Option<Matrix> {
-    if !matrix.iter().all(|value| value.is_finite()) {
-        return None;
-    }
-    let mut augmented: [[f64; 8]; 4] = std::array::from_fn(|row| {
-        std::array::from_fn(|column| {
-            if column < 4 {
-                matrix[row * 4 + column]
-            } else {
-                f64::from(column - 4 == row)
-            }
-        })
-    });
-    for column in 0..4 {
-        let mut pivot = column;
-        for row in column + 1..4 {
-            if augmented[row][column].abs() > augmented[pivot][column].abs() {
-                pivot = row;
-            }
-        }
-        if augmented[pivot][column].abs() < 1e-300 {
-            return None;
-        }
-        augmented.swap(column, pivot);
-        let reciprocal = 1.0 / augmented[column][column];
-        for value in &mut augmented[column] {
-            *value *= reciprocal;
-        }
-        let normalized = augmented[column];
-        for (row, values) in augmented.iter_mut().enumerate() {
-            let factor = values[column];
-            if row != column && factor != 0.0 {
-                for (value, base) in values.iter_mut().zip(normalized) {
-                    *value -= factor * base;
-                }
-            }
-        }
-    }
-    Some(std::array::from_fn(|index| {
-        augmented[index / 4][4 + index % 4]
-    }))
+    rsf_game_sys::camera_math::inverse_4x4_with(
+        &matrix,
+        rsf_game_sys::camera_math::InversePolicy::Reciprocal,
+    )
 }
 
 pub(crate) fn pose(view: &EngineMatrix) -> Pose {

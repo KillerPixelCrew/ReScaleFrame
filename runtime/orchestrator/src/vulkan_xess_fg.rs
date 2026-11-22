@@ -12,11 +12,17 @@ use crate::vulkan_fg_abi::{
 use crate::vulkan_latency_frames::{Marker, legacy_present_source};
 use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_setup as Graphics};
 use rsf_game_sys::{RSF_FRAME_FLAG_RESET, rsf_frame_record as Record};
+#[path = "../../vulkan/xess-fg/bridge_abi.rs"]
+mod bridge_abi;
+use bridge_abi::{
+    RSF_XESS_BRIDGE_ABI_MISMATCH as XESS_ABI_MISMATCH, RSF_XESS_BRIDGE_ABI_VERSION as BRIDGE_ABI,
+    RSF_XESS_BRIDGE_INVALID_ARGUMENT as XESS_INVALID, rsf_xess_bridge_create as BridgeCreate,
+    rsf_xess_bridge_frame as BridgeFrame, rsf_xess_bridge_present_status as BridgeStatus,
+    rsf_xess_bridge_start as BridgeStart,
+};
 use std::ptr;
 use std::sync::{Mutex, MutexGuard};
 
-const XESS_INVALID: i32 = -10001;
-const XESS_ABI_MISMATCH: i32 = -10002;
 const ABI: u32 = 1;
 const REQUIRED_MARKERS: u8 = 0b1111;
 const LAST_MARKER: u32 = 6;
@@ -29,55 +35,6 @@ struct Options {
     timeline_enabled: u32,
     generated_count: u32,
     directory: *const u16,
-}
-
-#[repr(C)]
-struct BridgeCreate {
-    struct_size: u32,
-    abi_version: u32,
-    adapter_luid: u64,
-    directory: *const u16,
-}
-
-#[repr(C)]
-struct BridgeStart {
-    struct_size: u32,
-    abi_version: u32,
-    window: Handle,
-    width: u32,
-    height: u32,
-    depth_inverted: u32,
-    generated_count: u32,
-}
-
-#[repr(C)]
-struct BridgeFrame {
-    struct_size: u32,
-    abi_version: u32,
-    frame_id: u32,
-    reset: u32,
-    vsync: u32,
-    reserved: u32,
-    color: Handle,
-    depth: Handle,
-    motion: Handle,
-    hudless: Handle,
-    view: [f32; 16],
-    projection: [f32; 16],
-    jitter: [f32; 2],
-    motion_scale: [f32; 2],
-    ready: u64,
-    done: u64,
-}
-
-#[repr(C)]
-struct BridgeStatus {
-    struct_size: u32,
-    abi_version: u32,
-    frames_presented: u32,
-    enabled: u32,
-    result: i32,
-    reserved: u32,
 }
 
 #[repr(C)]
@@ -348,9 +305,9 @@ impl Vendor for Xess {
     fn create(&mut self, _: &Graphics, _: &Swapchain, luid: u64, _: u32) -> Result<u64, i32> {
         let create = BridgeCreate {
             struct_size: size_of::<BridgeCreate>() as u32,
-            abi_version: ABI,
+            abi_version: BRIDGE_ABI,
             adapter_luid: luid,
-            directory: std::mem::replace(&mut self.directory, ptr::null()),
+            runtime_directory: std::mem::replace(&mut self.directory, ptr::null()),
         };
         succeeded(unsafe { (self.ops.create)(&create, &mut self.bridge) })?;
         Ok(0)
@@ -359,11 +316,11 @@ impl Vendor for Xess {
     fn start(&self, graphics: &Graphics, swapchain: &Swapchain, options: Start) -> Result<(), i32> {
         let start = BridgeStart {
             struct_size: size_of::<BridgeStart>() as u32,
-            abi_version: ABI,
+            abi_version: BRIDGE_ABI,
             window: options.window,
             width: swapchain.width,
             height: swapchain.height,
-            depth_inverted: graphics.depth_inverted,
+            inverted_depth: graphics.depth_inverted,
             generated_count: options.generated_count,
         };
         succeeded(unsafe { (self.ops.start)(self.bridge, &start) })?;
@@ -469,9 +426,12 @@ impl Submission for XessSubmission<'_> {
             .record
             .filter(|record| record.frame_id == u64::from(self.sdk_id));
         let enabled_record = record.filter(|_| self.enabled());
+        let [jitter_x, jitter_y] =
+            enabled_record.map_or([0.0; 2], |record| record.camera.jitter_pixels);
+        let [motion_scale_x, motion_scale_y] = frame.scales;
         let input = BridgeFrame {
             struct_size: size_of::<BridgeFrame>() as u32,
-            abi_version: ABI,
+            abi_version: BRIDGE_ABI,
             frame_id: self.sdk_id,
             reset: u32::from(
                 enabled_record.is_none_or(|record| record.flags & RSF_FRAME_FLAG_RESET != 0),
@@ -482,19 +442,21 @@ impl Submission for XessSubmission<'_> {
             depth: frame.depth,
             motion: frame.motion,
             hudless: frame.hudless,
-            view: enabled_record.map_or(IDENTITY, |record| record.camera.world_to_view),
-            projection: enabled_record.map_or(IDENTITY, |record| record.camera.view_to_clip),
-            jitter: enabled_record.map_or([0.0; 2], |record| record.camera.jitter_pixels),
-            motion_scale: frame.scales,
-            ready: frame.ready,
-            done: frame.done,
+            view_matrix: enabled_record.map_or(IDENTITY, |record| record.camera.world_to_view),
+            projection_matrix: enabled_record.map_or(IDENTITY, |record| record.camera.view_to_clip),
+            jitter_x,
+            jitter_y,
+            motion_scale_x,
+            motion_scale_y,
+            ready_fence_value: frame.ready,
+            done_fence_value: frame.done,
         };
         let mut status = BridgeStatus {
             struct_size: size_of::<BridgeStatus>() as u32,
-            abi_version: ABI,
+            abi_version: BRIDGE_ABI,
             frames_presented: 0,
-            enabled: 0,
-            result: 0,
+            fg_enabled: 0,
+            fg_result: 0,
             reserved: 0,
         };
         let vendor = self.vendor;
@@ -515,8 +477,8 @@ impl Submission for XessSubmission<'_> {
             result,
             PresentStatus {
                 frames_presented: u64::from(status.frames_presented),
-                enabled: status.enabled,
-                result: status.result,
+                enabled: status.fg_enabled,
+                result: status.fg_result,
                 // The bridge queues a recovery signal on a failed Present. A
                 // real timeline and DX12 drain determine whether retirement is safe.
                 terminal: false,
@@ -691,6 +653,7 @@ unsafe extern "C" fn rsf_core_xessgvk_latency_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
     use std::sync::{Condvar, mpsc};
     use std::time::Duration;
 
@@ -698,6 +661,79 @@ mod tests {
     const NEXT: u32 = PRIOR + SLOT_COUNT as u32;
     const FAILED: u32 = NEXT + SLOT_COUNT as u32;
     const BOUND: Duration = Duration::from_secs(3);
+
+    #[test]
+    fn interop_validates_graphics_before_querying_the_bridge() {
+        unsafe extern "C" fn luid(bridge: Handle) -> u64 {
+            let calls = unsafe { &*bridge.cast::<Cell<u32>>() };
+            calls.set(calls.get() + 1);
+            7
+        }
+        unsafe extern "C" fn create(
+            _: *const Graphics,
+            callbacks: *const InteropCallbacks,
+            timeline: u32,
+            _: *mut Handle,
+        ) -> i32 {
+            let callbacks = unsafe { &*callbacks };
+            assert_eq!(callbacks.adapter_luid, 7);
+            assert_eq!(timeline, 1);
+            -9
+        }
+        unsafe extern "C" fn resolver(
+            _: Handle,
+            _: *const std::ffi::c_char,
+        ) -> crate::vulkan_sr_abi::rsf_vk_function {
+            None
+        }
+        unsafe extern "C" fn image(
+            _: Handle,
+            _: u32,
+            _: u32,
+            _: u32,
+            _: *mut Handle,
+            _: *mut Handle,
+        ) -> i32 {
+            -9
+        }
+        unsafe extern "C" fn release(_: Handle) {}
+        unsafe extern "C" fn fence(_: Handle, _: *mut Handle) -> i32 {
+            -9
+        }
+        let operations = ImportCreate {
+            adapter_luid: luid,
+            create,
+            create_image: image,
+            release_image: release,
+            create_fence: fence,
+        };
+        let calls = Cell::new(0u32);
+        let bridge = ptr::from_ref(&calls).cast_mut().cast();
+        let attempt = |setup, expected| {
+            let mut out = ptr::without_provenance_mut(1);
+            assert_eq!(
+                unsafe { rsf_core_xessvk_interop_create(&operations, setup, bridge, 1, &mut out) },
+                expected
+            );
+            assert!(out.is_null());
+        };
+        let mut setup: Graphics = unsafe { std::mem::zeroed() };
+        setup.struct_size = size_of::<Graphics>() as u32 - 1;
+        setup.abi_version = RSF_SRVK_ABI_VERSION + 1;
+        setup.device = bridge;
+        setup.physical_device = bridge;
+        setup.instance = bridge;
+        setup.device_proc = Some(resolver);
+        setup.instance_proc = Some(resolver);
+        attempt(ptr::null(), XESS_INVALID);
+        attempt(&setup, XESS_INVALID);
+        setup.struct_size += 1;
+        attempt(&setup, XESS_ABI_MISMATCH);
+        assert_eq!(calls.get(), 0);
+        setup.abi_version = RSF_SRVK_ABI_VERSION;
+        attempt(&setup, -9);
+        assert_eq!(calls.get(), 1);
+    }
 
     #[derive(Default)]
     struct Calls {

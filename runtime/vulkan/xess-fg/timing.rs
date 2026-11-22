@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Opt-in XeSS timing for both the Runtime and standalone bridge.
-use std::sync::{LazyLock, Mutex, PoisonError};
+use std::sync::{Mutex, PoisonError};
 
 const PHASES: usize = 6;
 const SEQUENCE: usize = 24;
@@ -52,12 +52,14 @@ const _: () = {
 
 #[derive(Default)]
 struct Batch {
+    phase_count: [u64; PHASES],
     phase_sum: [f64; PHASES],
     phase_max: [f64; PHASES],
     presents: u32,
     gpu_sum: f64,
     gpu_max: f64,
     copies_sum: f64,
+    copies_samples: u32,
     gpu_start_after_present_enter: f64,
     present_exit_after_gpu_end: f64,
     gpu_samples: u32,
@@ -76,6 +78,7 @@ impl Batch {
         };
         let ms = ticks as f64 * 1000.0 / frequency as f64;
         self.phase_sum[phase] += ms;
+        self.phase_count[phase] += 1;
         self.phase_max[phase] = self.phase_max[phase].max(ms);
         if phase == Phase::Present as usize && self.sequence_count < SEQUENCE {
             self.sequence[self.sequence_count] = ms;
@@ -103,6 +106,7 @@ impl Batch {
         self.gpu_sum += duration;
         self.gpu_max = self.gpu_max.max(duration);
         if (sample.start..=sample.end).contains(&sample.copies_end) {
+            self.copies_samples += 1;
             self.copies_sum += (sample.copies_end - sample.start) as f64 * 1000.0 / gpu_frequency;
         }
         self.gpu_start_after_present_enter +=
@@ -118,53 +122,69 @@ impl Batch {
             return None;
         }
         let batch = std::mem::take(self);
-        let presents = f64::from(batch.presents);
         let gpu_samples = f64::from(batch.gpu_samples.max(1));
         Some(Report {
             presents: batch.presents,
             gpu_samples: batch.gpu_samples,
             sequence_count: batch.sequence_count as u32,
             reserved: 0,
-            phase_mean: batch.phase_sum.map(|sum| sum / presents),
+            phase_mean: std::array::from_fn(|i| {
+                batch.phase_sum[i] / batch.phase_count[i].max(1) as f64
+            }),
             phase_max: batch.phase_max,
             gpu_mean: batch.gpu_sum / gpu_samples,
             gpu_max: batch.gpu_max,
             gpu_start_after_present_enter: batch.gpu_start_after_present_enter / gpu_samples,
             present_exit_after_gpu_end: batch.present_exit_after_gpu_end / gpu_samples,
-            copies_mean: batch.copies_sum / gpu_samples,
+            copies_mean: batch.copies_sum / f64::from(batch.copies_samples.max(1)),
             sequence: batch.sequence,
         })
     }
 }
 
-static BATCH: LazyLock<Mutex<Batch>> = LazyLock::new(|| Mutex::new(Batch::default()));
+// Kept at a stable address by the session. The GPU callback and XeLL
+// sleep can sample it without borrowing the mutable presentation owner.
+#[derive(Default)]
+pub(super) struct Accumulator(Mutex<Batch>);
+
+impl Accumulator {
+    pub(super) fn cpu_sample(&self, phase: u32, start: i64, end: i64, frequency: i64) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .cpu_sample(phase, start, end, frequency);
+    }
+
+    pub(super) fn end_present(&self) -> Option<Report> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .end_present()
+    }
+}
 
 #[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_core_xess_timing_cpu(
+extern "C" fn rsf_core_xess_timing_cpu(
+    timing: &Accumulator,
     phase: u32,
     start: i64,
     end: i64,
     frequency: i64,
 ) {
-    BATCH
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .cpu_sample(phase, start, end, frequency);
+    timing.cpu_sample(phase, start, end, frequency);
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_xess_timing_gpu(sample: &GpuSample, cpu_frequency: i64) {
-    BATCH
+extern "C" fn rsf_core_xess_timing_gpu(
+    timing: &Accumulator,
+    sample: &GpuSample,
+    cpu_frequency: i64,
+) {
+    timing
+        .0
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .gpu_sample(sample, cpu_frequency);
-}
-
-pub(super) fn end_present() -> Option<Report> {
-    BATCH
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .end_present()
 }
 
 #[cfg(test)]
@@ -195,7 +215,7 @@ mod tests {
         assert_eq!(report.presents, PRESENTS_PER_REPORT);
         assert_eq!(report.sequence_count, 1);
         assert_eq!(report.sequence[0], 10.0);
-        assert_eq!(report.phase_mean[Phase::Present as usize], 10.0 / 120.0);
+        assert_eq!(report.phase_mean[Phase::Present as usize], 10.0);
         assert_eq!(report.gpu_samples, 1);
         assert_eq!(report.gpu_mean, 300.0);
         assert_eq!(report.copies_mean, 100.0);

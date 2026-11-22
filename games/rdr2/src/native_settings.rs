@@ -2,7 +2,7 @@
 //! Opt-in, bounded settings evidence collection. The detours never change native data.
 use crate::asi::{self, AsiPlatform, DiagnosticHook, DiagnosticInstall, install_diagnostic_hooks};
 use crate::layout::settings_probe::{BIND, GETTER_SLOT, KEYS, METADATA_KEY, READ};
-use crate::platform::lock;
+use crate::platform::{lock, minhook::MH_EnableHook};
 use crate::runtime_worker::log;
 use std::ffi::{OsString, c_void};
 use std::fs::OpenOptions;
@@ -15,50 +15,77 @@ use std::sync::atomic::{AtomicBool, Ordering};
 struct Probe {
     output: PathBuf,
     image: usize,
+    image_size: usize,
     rows: u8,
     values: u8,
-    installed: bool,
 }
 
 static PROBE: Mutex<Option<Probe>> = Mutex::new(None);
 static ARMED: AtomicBool = AtomicBool::new(false);
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_settings_install(
-    path: *const u16,
-    hooks: *const [DiagnosticHook; 2],
-    enable: unsafe extern "C" fn(usize) -> i32,
-) -> bool {
-    let (Some(platform), Some(hooks)) = (asi::platform(), unsafe { hooks.as_ref() }) else {
+type Bind = unsafe extern "C" fn(*mut c_void, *const c_void, *const c_void);
+type Read = unsafe extern "C" fn(*const c_void, *mut c_void, *const c_void, *mut c_void, i32);
+static mut BIND_ORIGINAL: *mut c_void = std::ptr::null_mut();
+static mut READ_ORIGINAL: *mut c_void = std::ptr::null_mut();
+
+unsafe extern "C" fn bind(
+    destination: *mut c_void,
+    context: *const c_void,
+    metadata: *const c_void,
+) {
+    row(destination, context, metadata);
+    let original: Bind = unsafe { std::mem::transmute(BIND_ORIGINAL) };
+    unsafe { original(destination, context, metadata) };
+}
+
+unsafe extern "C" fn read(
+    path: *const c_void,
+    source: *mut c_void,
+    kind: *const c_void,
+    destination: *mut c_void,
+    flags: i32,
+) {
+    let original: Read = unsafe { std::mem::transmute(READ_ORIGINAL) };
+    unsafe { original(path, source, kind, destination, flags) };
+    value(path, source, kind, destination, flags);
+}
+
+unsafe extern "C" fn enable(target: usize) -> i32 {
+    unsafe { MH_EnableHook(target as _) }
+}
+
+pub(crate) fn install(path: &[u16]) -> bool {
+    let Some(platform) = asi::platform() else {
         return false;
     };
-    if path.is_null() {
-        return false;
-    }
-    let Some(length) = (0..32768).find(|&index| unsafe { path.add(index).read() } == 0) else {
-        return false;
-    };
+    let path = path.strip_suffix(&[0]).unwrap_or(path);
+    let hooks = [
+        DiagnosticHook::new(bind as *const c_void, &raw mut BIND_ORIGINAL),
+        DiagnosticHook::new(read as *const c_void, &raw mut READ_ORIGINAL),
+    ];
     let mut probe = lock(&PROBE);
-    if length == 0 || probe.is_some() {
+    if path.is_empty() || probe.is_some() {
         return false;
     }
     let image = unsafe { (platform.main_module)() };
-    let installed = match install_diagnostic_hooks(platform, image, [BIND, READ], hooks, enable) {
+    let Some((_, facts)) = crate::platform::image_header(platform.read, image) else {
+        return false;
+    };
+    let installed = match install_diagnostic_hooks(platform, image, [BIND, READ], &hooks, enable) {
         DiagnosticInstall::Installed => true,
         DiagnosticInstall::Refused => return false,
         DiagnosticInstall::Retained => false,
     };
     *probe = Some(Probe {
-        output: PathBuf::from(OsString::from_wide(unsafe {
-            std::slice::from_raw_parts(path, length)
-        })),
+        output: PathBuf::from(OsString::from_wide(path)),
         image,
+        image_size: facts.image_size as usize,
         rows: 0,
         values: 0,
-        installed,
     });
     drop(probe);
     if installed {
+        ARMED.store(true, Ordering::Release);
         log(
             "RDR2 native settings read-only probe installed: max16 rows /32 values; no menu mutation.",
         );
@@ -66,10 +93,23 @@ unsafe extern "C" fn rsf_rdr2_settings_install(
     installed
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_rdr2_native_settings_probe_arm() {
-    if lock(&PROBE).as_ref().is_some_and(|probe| probe.installed) {
-        ARMED.store(true, Ordering::Release);
+impl Probe {
+    // Keep successful external addresses for diagnosis. Null means the read failed or
+    // the pointer was null; only an address inside this image has an RVA.
+    fn address_fields(&self, address: Option<usize>) -> (String, String) {
+        match address.filter(|&address| address != 0) {
+            Some(address) => {
+                let rva = address
+                    .checked_sub(self.image)
+                    .filter(|&offset| offset < self.image_size);
+                let address = format!("\"{address:016x}\"");
+                (
+                    rva.map_or_else(|| "null".into(), |rva| format!("\"{rva:x}\"")),
+                    address,
+                )
+            }
+            None => ("null".into(), "null".into()),
+        }
     }
 }
 
@@ -90,12 +130,7 @@ fn hex_bytes(platform: &AsiPlatform, address: usize, size: usize) -> String {
     text
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_rdr2_settings_row(
-    destination: *const c_void,
-    context: *const c_void,
-    metadata: *const c_void,
-) {
+fn row(destination: *const c_void, context: *const c_void, metadata: *const c_void) {
     if !ARMED.load(Ordering::Acquire) {
         return;
     }
@@ -122,21 +157,20 @@ extern "C" fn rsf_rdr2_settings_row(
     else {
         return;
     };
-    let table = platform.read_value::<usize>(destination).unwrap_or(0);
+    let table = platform.read_value::<usize>(destination);
     let thread = unsafe { (platform.current_thread)() };
-    let rva = table.wrapping_sub(probe.image);
+    let (rva, table_address) = probe.address_fields(table);
     let destination_bytes = hex_bytes(platform, destination, 128);
     let context = hex_bytes(platform, context as usize, 128);
     let metadata = hex_bytes(platform, metadata, 128);
-    let table = hex_bytes(platform, table, 256);
+    let table = table.map_or_else(|| "null".into(), |table| hex_bytes(platform, table, 256));
     let _ = writeln!(
         file,
-        "{{\"event\":\"row\",\"thread\":{thread},\"key\":\"{key:08x}\",\"destination\":\"{destination:016X}\",\"vtable_rva\":\"{rva:x}\",\"destination_bytes\":{destination_bytes},\"context\":{context},\"metadata\":{metadata},\"destination_vtable\":{table}}}"
+        "{{\"event\":\"row\",\"thread\":{thread},\"key\":\"{key:08x}\",\"destination\":\"{destination:016X}\",\"vtable_rva\":{rva},\"vtable_address\":{table_address},\"destination_bytes\":{destination_bytes},\"context\":{context},\"metadata\":{metadata},\"destination_vtable\":{table}}}"
     );
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_rdr2_settings_value(
+fn value(
     path: *const c_void,
     source: *const c_void,
     kind: *const c_void,
@@ -162,19 +196,20 @@ extern "C" fn rsf_rdr2_settings_value(
         return;
     };
     let source = source as usize;
-    let table = platform.read_value::<usize>(source).unwrap_or(0);
-    let getter = platform
-        .read_value::<usize>(table.wrapping_add(GETTER_SLOT))
-        .unwrap_or(0);
+    let table = platform.read_value::<usize>(source);
+    let getter = table
+        .filter(|&address| address != 0)
+        .and_then(|address| address.checked_add(GETTER_SLOT))
+        .and_then(|address| platform.read_value::<usize>(address));
     let thread = unsafe { (platform.current_thread)() };
-    let rva = table.wrapping_sub(probe.image);
-    let getter_rva = getter.wrapping_sub(probe.image);
+    let (rva, table_address) = probe.address_fields(table);
+    let (getter_rva, getter_address) = probe.address_fields(getter);
     let path = hex_bytes(platform, path as usize, 128);
     let source_bytes = hex_bytes(platform, source, 128);
     let kind = hex_bytes(platform, kind as usize, 32);
     let value = hex_bytes(platform, destination as usize, 32);
     let _ = writeln!(
         file,
-        "{{\"event\":\"value\",\"thread\":{thread},\"source\":\"{source:016X}\",\"vtable_rva\":\"{rva:x}\",\"getter_rva\":\"{getter_rva:x}\",\"flags\":{flags},\"path\":{path},\"source_bytes\":{source_bytes},\"type\":{kind},\"value\":{value}}}"
+        "{{\"event\":\"value\",\"thread\":{thread},\"source\":\"{source:016X}\",\"vtable_rva\":{rva},\"vtable_address\":{table_address},\"getter_rva\":{getter_rva},\"getter_address\":{getter_address},\"flags\":{flags},\"path\":{path},\"source_bytes\":{source_bytes},\"type\":{kind},\"value\":{value}}}"
     );
 }

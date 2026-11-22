@@ -3,7 +3,14 @@
 //! instances and devices are addresses. The Vulkan-typed clone, copy and create effects are covered
 //! by the native `godot_vulkan_creation_contract` test.
 use super::*;
-use crate::platform::{VK_CREATION_VERSION, VK_SCOPE_INSTANCE, VkLatencyRequirements};
+use crate::platform::vulkan_negotiation::{
+    VK_ERROR_FEATURE_NOT_PRESENT, VK_XESS_ENABLED_FEATURES, VK_XESS_FEATURES2,
+    VK_XESS_FLOAT16_INT8, VK_XESS_INTEGER_DOT_PRODUCT, VK_XESS_SCALAR_BLOCK_LAYOUT,
+    xess_structures,
+};
+use crate::platform::{
+    VK_CREATION_VERSION, VK_SCOPE_INSTANCE, VkChainFacts, VkDeviceDerive, VkLatencyRequirements,
+};
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 
@@ -36,6 +43,7 @@ thread_local! {
     static XESS_DEVICE: Cell<bool> = const { Cell::new(true) };
     static INTEROP: Cell<bool> = const { Cell::new(false) };
     static LATENCY: Cell<bool> = const { Cell::new(false) };
+    static CREATED_DEVICE: Cell<usize> = const { Cell::new(DEVICE) };
     static RESULTS: RefCell<VecDeque<i32>> = const { RefCell::new(VecDeque::new()) };
     /// The properties leaf's answer; `None` throws.
     static ADAPTER: Cell<Option<VkAdapter>> = const { Cell::new(Some(NVIDIA)) };
@@ -329,7 +337,7 @@ unsafe extern "C" fn create_device(
         unsafe {
             output
                 .cast::<*mut c_void>()
-                .write(ptr::without_provenance_mut(DEVICE))
+                .write(ptr::without_provenance_mut(CREATED_DEVICE.get()))
         };
     }
     result
@@ -888,4 +896,40 @@ fn destroy_stops_latency_before_the_device_is_destroyed() {
             "destroy_device 0x13",
         ]
     );
+}
+
+#[test]
+fn readiness_belongs_to_the_created_device_and_survives_secondary_failure() {
+    let engine = engine_device_names();
+    let mut output = ptr::null_mut();
+    let creation = begun(true);
+    owned(&creation);
+    FACTS.set(VkChainFacts {
+        cloneable: 1,
+        timeline_semaphore: 1,
+        ..VkChainFacts::default()
+    });
+    INTEROP.set(true);
+    let call = device_call(&raw mut output, &engine);
+    assert_eq!(creation.create_device(&LEAVES, &call), VK_SUCCESS);
+    creation.report_render_device(output);
+    assert!(creation.xess_ready() && creation.interop_ready());
+
+    results(&[-2]);
+    assert_eq!(creation.create_device(&LEAVES, &call), -2);
+    assert!(creation.xess_ready() && creation.interop_ready());
+
+    let primary = output;
+    FACTS.set(VkChainFacts::default());
+    CREATED_DEVICE.set(DEVICE + 1);
+    assert_eq!(creation.create_device(&LEAVES, &call), VK_SUCCESS);
+    CREATED_DEVICE.set(DEVICE);
+    assert!(creation.xess_ready() && creation.interop_ready());
+    assert!(!creation.device_receipt(output.addr()).xess);
+    assert!(!creation.device_receipt(output.addr()).interop);
+
+    creation.destroy_device(&LEAVES, primary, ptr::null());
+    assert!(!creation.xess_ready() && !creation.interop_ready());
+    assert_eq!(creation.adapter(), None);
+    assert_eq!(creation.device_receipt(output.addr()).adapter, Some(NVIDIA));
 }

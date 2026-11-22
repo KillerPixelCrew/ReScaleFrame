@@ -9,21 +9,23 @@ use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, WS_POPUP};
 use windows_sys::core::{GUID, HRESULT, w};
 
+use crate::input::gate::{self, DeviceCalls, Gate};
+use crate::input::{KEYBOARD, MOUSE};
 use crate::lease::Lease;
 use crate::native_hooks::{HookOps, Target, enable_batch, transaction};
+use crate::overlay_native::{self as native, ChainObjects, Object};
 use crate::runtime_module::Module;
+use std::mem::transmute;
 
 const MAX_HOOKS: usize = 32;
 
 type Reason = *const c_char;
 type Address = usize;
-type Object = *mut c_void;
-type Symbol = unsafe extern "system" fn() -> isize;
 type SinkCallback = unsafe extern "C" fn(*mut c_void, *mut c_void);
 type InputObserver = unsafe extern "C" fn(u8);
 type Refusal = &'static CStr;
 
-// Method IDs are used by the native DXGI detours to look up their trampolines.
+// The DXGI detours use these IDs to look up their trampolines.
 #[derive(Clone, Copy)]
 #[repr(u32)]
 enum Method {
@@ -55,70 +57,7 @@ const IID_DIRECT_INPUT8_W: GUID = GUID::from_u128(0xbf798031_483a_4da2_aa99_5d64
 const GUID_SYS_MOUSE: GUID = GUID::from_u128(0x6f1d2b60_d5a0_11cf_bfc7_444553540000);
 const GUID_SYS_KEYBOARD: GUID = GUID::from_u128(0x6f1d2b61_d5a0_11cf_bfc7_444553540000);
 
-#[repr(C)]
-struct ComProbeOps {
-    slot: unsafe extern "C" fn(Object, usize) -> Address,
-    release: unsafe extern "C" fn(Object),
-}
-
-impl ComProbeOps {
-    fn lease(&self, object: Object) -> Option<Lease> {
-        Lease::new(object, self.release)
-    }
-
-    fn slot(&self, object: &Lease, slot: usize) -> Address {
-        unsafe { (self.slot)(object.as_ptr(), slot) }
-    }
-}
-
-#[repr(C)]
-struct InputProbeOps {
-    com: ComProbeOps,
-    create_input: unsafe extern "C" fn(Symbol, *const GUID, u32) -> Object,
-    create_device: unsafe extern "C" fn(Object, *const GUID) -> Object,
-    create_device_detour: Address,
-    acquire: Address,
-    unacquire: Address,
-    get_state: Address,
-    get_data: Address,
-    cooperative: Address,
-}
-
-#[derive(Default)]
-#[repr(C)]
-struct ChainObjects {
-    chain: Object,
-    context: Object,
-    device: Object,
-}
-
-#[repr(C)]
-struct PresentProbeOps {
-    com: ComProbeOps,
-    create_warp_chain: unsafe extern "C" fn(Symbol, HWND, u32, *mut ChainObjects) -> HRESULT,
-    query_chain1: unsafe extern "C" fn(Object) -> Object,
-    present: Address,
-    present1: Address,
-    resize_buffers: Address,
-    resize_target: Address,
-}
-
-const _: () = {
-    assert!(size_of::<GUID>() == 16 && std::mem::offset_of!(GUID, data4) == 8);
-    assert!(size_of::<ComProbeOps>() == 16 && size_of::<ChainObjects>() == 24);
-    assert!(
-        size_of::<InputProbeOps>() == 80
-            && std::mem::offset_of!(InputProbeOps, create_device_detour) == 32
-    );
-    assert!(
-        size_of::<PresentProbeOps>() == 64 && std::mem::offset_of!(PresentProbeOps, present) == 32
-    );
-};
-
-fn probe_input(
-    registration: &mut Registration<'_>,
-    ops: &InputProbeOps,
-) -> Result<Module, Refusal> {
+fn probe_input(registration: &mut Registration<'_>) -> Result<Module, Refusal> {
     const SUFFIX: &str = "\\dinput8.dll\0";
     let mut path = [0u16; MAX_PATH as usize];
     let length = unsafe { GetSystemDirectoryW(path.as_mut_ptr(), MAX_PATH) } as usize;
@@ -137,29 +76,53 @@ fn probe_input(
 
     let mut devices = 0;
     for iid in [&IID_DIRECT_INPUT8_A, &IID_DIRECT_INPUT8_W] {
-        let input = unsafe { (ops.create_input)(create, iid, 0x0800) };
-        let Some(input) = ops.com.lease(input) else {
+        let input = unsafe { native::create_input(create, iid, 0x0800) };
+        let Some(input) = Lease::new(input, native::release) else {
             continue;
         };
-        let create_device = ops.com.slot(&input, SLOT_CREATE_DEVICE);
+        let create_device = unsafe { native::slot(input.as_ptr(), SLOT_CREATE_DEVICE) };
         registration.add(
             create_device,
-            ops.create_device_detour,
+            hook_create_device as *const () as Address,
             Method::CreateDevice,
         )?;
         for guid in [&GUID_SYS_MOUSE, &GUID_SYS_KEYBOARD] {
-            let device = unsafe { (ops.create_device)(input.as_ptr(), guid) };
-            let Some(device) = ops.com.lease(device) else {
+            let device = unsafe { native::create_device(input.as_ptr(), guid) };
+            let Some(device) = Lease::new(device, native::release) else {
                 continue;
             };
             for (slot, detour, method) in [
-                (SLOT_ACQUIRE, ops.acquire, Method::Acquire),
-                (SLOT_UNACQUIRE, ops.unacquire, Method::Unacquire),
-                (SLOT_GET_STATE, ops.get_state, Method::GetState),
-                (SLOT_GET_DATA, ops.get_data, Method::GetData),
-                (SLOT_COOPERATIVE, ops.cooperative, Method::Cooperative),
+                (
+                    SLOT_ACQUIRE,
+                    hook_acquire as *const () as Address,
+                    Method::Acquire,
+                ),
+                (
+                    SLOT_UNACQUIRE,
+                    hook_unacquire as *const () as Address,
+                    Method::Unacquire,
+                ),
+                (
+                    SLOT_GET_STATE,
+                    hook_get_state as *const () as Address,
+                    Method::GetState,
+                ),
+                (
+                    SLOT_GET_DATA,
+                    hook_get_data as *const () as Address,
+                    Method::GetData,
+                ),
+                (
+                    SLOT_COOPERATIVE,
+                    hook_cooperative as *const () as Address,
+                    Method::Cooperative,
+                ),
             ] {
-                registration.add(ops.com.slot(&device, slot), detour, method)?;
+                registration.add(
+                    unsafe { native::slot(device.as_ptr(), slot) },
+                    detour,
+                    method,
+                )?;
             }
             devices += 1;
         }
@@ -174,10 +137,7 @@ unsafe extern "C" fn destroy_dummy_window(window: Object) {
     unsafe { DestroyWindow(window) };
 }
 
-fn probe_present(
-    registration: &mut Registration<'_>,
-    ops: &PresentProbeOps,
-) -> Result<Module, Refusal> {
+fn probe_present(registration: &mut Registration<'_>) -> Result<Module, Refusal> {
     const EXTENT: i32 = 8;
     let module = unsafe { Module::system(w!("d3d11.dll")) }.ok_or(c"d3d11.dll unavailable")?;
     let create = module
@@ -202,35 +162,50 @@ fn probe_present(
     let window = Lease::new(window, destroy_dummy_window).ok_or(c"dummy window creation failed")?;
     let mut objects = ChainObjects::default();
     let result =
-        unsafe { (ops.create_warp_chain)(create, window.as_ptr(), EXTENT as u32, &mut objects) };
+        unsafe { native::create_warp_chain(create, window.as_ptr(), EXTENT as u32, &mut objects) };
     // Release all returned objects in reverse order before destroying the window, even on failure.
-    let _device = ops.com.lease(objects.device);
-    let _context = ops.com.lease(objects.context);
-    let chain = ops.com.lease(objects.chain);
+    let _device = Lease::new(objects.device, native::release);
+    let _context = Lease::new(objects.context, native::release);
+    let chain = Lease::new(objects.chain, native::release);
     const CHAIN_FAILED: Refusal = c"dummy swap chain creation failed";
     if result < 0 {
         return Err(CHAIN_FAILED);
     }
     let chain = chain.ok_or(CHAIN_FAILED)?;
 
-    let chain1 = unsafe { (ops.query_chain1)(chain.as_ptr()) };
-    let present1 = ops
-        .com
-        .lease(chain1)
-        .map_or(0, |chain1| ops.com.slot(&chain1, SLOT_PRESENT1));
+    let chain1 = unsafe { native::query_chain1(chain.as_ptr()) };
+    let present1 = Lease::new(chain1, native::release).map_or(0, |chain1| unsafe {
+        native::slot(chain1.as_ptr(), SLOT_PRESENT1)
+    });
     for (slot, detour, method) in [
-        (SLOT_PRESENT, ops.present, Method::Present),
+        (
+            SLOT_PRESENT,
+            hook_present as *const () as Address,
+            Method::Present,
+        ),
         (
             SLOT_RESIZE_BUFFERS,
-            ops.resize_buffers,
+            hook_resize_buffers as *const () as Address,
             Method::ResizeBuffers,
         ),
-        (SLOT_RESIZE_TARGET, ops.resize_target, Method::ResizeTarget),
+        (
+            SLOT_RESIZE_TARGET,
+            hook_resize_target as *const () as Address,
+            Method::ResizeTarget,
+        ),
     ] {
-        registration.add(ops.com.slot(&chain, slot), detour, method)?;
+        registration.add(
+            unsafe { native::slot(chain.as_ptr(), slot) },
+            detour,
+            method,
+        )?;
     }
     if present1 != 0 {
-        registration.add(present1, ops.present1, Method::Present1)?;
+        registration.add(
+            present1,
+            hook_present1 as *const () as Address,
+            Method::Present1,
+        )?;
     }
     Ok(module)
 }
@@ -446,11 +421,10 @@ thread_local! {
 unsafe extern "C" fn rsf_anomaly_overlay_install_input(
     gate: Address,
     platform: &HookOps,
-    probe: &InputProbeOps,
     reason: &mut Reason,
 ) -> bool {
     match HOOKS.install(Binding::Input(gate), platform, |registration| {
-        probe_input(registration, probe).map(Some)
+        probe_input(registration).map(Some)
     }) {
         Ok(()) => true,
         Err(message) => {
@@ -466,7 +440,6 @@ unsafe extern "C" fn rsf_anomaly_overlay_install_present(
     resize: Option<SinkCallback>,
     user: Address,
     platform: &HookOps,
-    probe: &PresentProbeOps,
     reason: &mut Reason,
 ) -> bool {
     let Some(before_present) = before_present else {
@@ -479,7 +452,7 @@ unsafe extern "C" fn rsf_anomaly_overlay_install_present(
         user,
     };
     match HOOKS.install(Binding::Present(sink), platform, |registration| {
-        probe_present(registration, probe).map(Some)
+        probe_present(registration).map(Some)
     }) {
         Ok(()) => true,
         Err(message) => {
@@ -489,7 +462,6 @@ unsafe extern "C" fn rsf_anomaly_overlay_install_present(
     }
 }
 
-#[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_overlay_original(target: Address) -> Address {
     HOOKS
         .state()
@@ -499,7 +471,6 @@ extern "C" fn rsf_anomaly_overlay_original(target: Address) -> Address {
         .map_or(target, |hook| hook.original)
 }
 
-#[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_overlay_present_original(method: u32) -> Address {
     HOOKS
         .state()
@@ -509,7 +480,6 @@ extern "C" fn rsf_anomaly_overlay_present_original(method: u32) -> Address {
         .map_or(0, |hook| hook.original)
 }
 
-#[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_overlay_input_gate() -> Address {
     HOOKS.state().gate
 }
@@ -519,12 +489,194 @@ extern "C" fn rsf_anomaly_overlay_set_input_observer(observer: Option<InputObser
     HOOKS.state().observer = observer;
 }
 
-#[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_overlay_input_observer() -> Option<InputObserver> {
     HOOKS.state().observer
 }
 
-#[unsafe(no_mangle)]
+// Each ANSI or Unicode DirectInput class reaches the original from its own vtable.
+unsafe fn real_method(object: Object, slot: usize) -> Address {
+    rsf_anomaly_overlay_original(unsafe { native::slot(object, slot) })
+}
+
+unsafe fn device_calls(device: Object) -> DeviceCalls {
+    unsafe {
+        DeviceCalls {
+            acquire: transmute::<Address, unsafe extern "system" fn(Object) -> HRESULT>(
+                real_method(device, SLOT_ACQUIRE),
+            ),
+            unacquire: transmute::<Address, unsafe extern "system" fn(Object) -> HRESULT>(
+                real_method(device, SLOT_UNACQUIRE),
+            ),
+            get_state: transmute::<
+                Address,
+                unsafe extern "system" fn(Object, u32, Object) -> HRESULT,
+            >(real_method(device, SLOT_GET_STATE)),
+            get_data: transmute::<
+                Address,
+                unsafe extern "system" fn(Object, u32, *mut u8, *mut u32, u32) -> HRESULT,
+            >(real_method(device, SLOT_GET_DATA)),
+        }
+    }
+}
+
+fn active_gate() -> Option<&'static Gate> {
+    // The adapter publishes one gate for the process before enabling any input hook.
+    unsafe { (rsf_anomaly_overlay_input_gate() as *const Gate).as_ref() }
+}
+
+fn device_kind(guid: &GUID) -> Option<u8> {
+    if guid.data2 != GUID_SYS_MOUSE.data2
+        || guid.data3 != GUID_SYS_MOUSE.data3
+        || guid.data4 != GUID_SYS_MOUSE.data4
+    {
+        return None;
+    }
+    match guid.data1 {
+        0x6f1d2b60 | 0x6f1d2b80 | 0x6f1d2b81 => Some(MOUSE),
+        0x6f1d2b61 | 0x6f1d2b82 | 0x6f1d2b83 => Some(KEYBOARD),
+        _ => None,
+    }
+}
+
+unsafe extern "system" fn hook_create_device(
+    input: Object,
+    guid: *const GUID,
+    device: *mut Object,
+    outer: Object,
+) -> HRESULT {
+    let original: native::CreateDevice =
+        unsafe { transmute(real_method(input, SLOT_CREATE_DEVICE)) };
+    let result = unsafe { original(input, guid, device, outer) };
+    if result >= 0
+        && !device.is_null()
+        && let (Some(gate), Some(kind)) = (
+            active_gate(),
+            unsafe { guid.as_ref() }.and_then(device_kind),
+        )
+    {
+        gate::gate_add(gate, unsafe { device.read() }, kind);
+    }
+    result
+}
+
+unsafe extern "system" fn hook_acquire(device: Object) -> HRESULT {
+    let calls = unsafe { device_calls(device) };
+    match active_gate() {
+        Some(gate) => unsafe { gate::gate_acquire(gate, device, &calls) },
+        None => unsafe { (calls.acquire)(device) },
+    }
+}
+
+unsafe extern "system" fn hook_unacquire(device: Object) -> HRESULT {
+    let calls = unsafe { device_calls(device) };
+    match active_gate() {
+        Some(gate) => unsafe { gate::gate_unacquire(gate, device, &calls) },
+        None => unsafe { (calls.unacquire)(device) },
+    }
+}
+
+unsafe extern "system" fn hook_get_state(device: Object, size: u32, data: Object) -> HRESULT {
+    let calls = unsafe { device_calls(device) };
+    match active_gate() {
+        Some(gate) => unsafe { gate::gate_get_state(gate, device, &calls, size, data) },
+        None => unsafe { (calls.get_state)(device, size, data) },
+    }
+}
+
+unsafe extern "system" fn hook_get_data(
+    device: Object,
+    size: u32,
+    data: *mut u8,
+    count: *mut u32,
+    flags: u32,
+) -> HRESULT {
+    let calls = unsafe { device_calls(device) };
+    match active_gate() {
+        Some(gate) => unsafe {
+            gate::gate_get_data(
+                gate,
+                device,
+                &calls,
+                size,
+                data,
+                count,
+                flags,
+                Some(rsf_anomaly_overlay_input_observer),
+            )
+        },
+        None => unsafe { (calls.get_data)(device, size, data, count, flags) },
+    }
+}
+
+unsafe extern "system" fn hook_cooperative(device: Object, window: HWND, flags: u32) -> HRESULT {
+    let original: unsafe extern "system" fn(Object, HWND, u32) -> HRESULT =
+        unsafe { transmute(real_method(device, SLOT_COOPERATIVE)) };
+    let result = unsafe { original(device, window, flags) };
+    if result >= 0
+        && let Some(gate) = active_gate()
+    {
+        gate::gate_cooperative_level(gate, device, flags);
+    }
+    result
+}
+
+unsafe extern "system" fn hook_present(chain: Object, sync: u32, flags: u32) -> HRESULT {
+    let original: unsafe extern "system" fn(Object, u32, u32) -> HRESULT =
+        unsafe { transmute(rsf_anomaly_overlay_present_original(Method::Present as u32)) };
+    unsafe {
+        rsf_anomaly_overlay_before_present(chain, flags);
+        original(chain, sync, flags)
+    }
+}
+
+unsafe extern "system" fn hook_present1(
+    chain: Object,
+    sync: u32,
+    flags: u32,
+    parameters: *const c_void,
+) -> HRESULT {
+    let original: unsafe extern "system" fn(Object, u32, u32, *const c_void) -> HRESULT = unsafe {
+        transmute(rsf_anomaly_overlay_present_original(
+            Method::Present1 as u32,
+        ))
+    };
+    unsafe {
+        rsf_anomaly_overlay_before_present(chain, flags);
+        original(chain, sync, flags, parameters)
+    }
+}
+
+unsafe extern "system" fn hook_resize_buffers(
+    chain: Object,
+    count: u32,
+    width: u32,
+    height: u32,
+    format: u32,
+    flags: u32,
+) -> HRESULT {
+    let original: unsafe extern "system" fn(Object, u32, u32, u32, u32, u32) -> HRESULT = unsafe {
+        transmute(rsf_anomaly_overlay_present_original(
+            Method::ResizeBuffers as u32,
+        ))
+    };
+    unsafe {
+        rsf_anomaly_overlay_before_resize(chain);
+        original(chain, count, width, height, format, flags)
+    }
+}
+
+unsafe extern "system" fn hook_resize_target(chain: Object, mode: *const c_void) -> HRESULT {
+    let original: unsafe extern "system" fn(Object, *const c_void) -> HRESULT = unsafe {
+        transmute(rsf_anomaly_overlay_present_original(
+            Method::ResizeTarget as u32,
+        ))
+    };
+    unsafe {
+        rsf_anomaly_overlay_before_resize(chain);
+        original(chain, mode)
+    }
+}
+
 unsafe extern "C" fn rsf_anomaly_overlay_before_present(chain: *mut c_void, flags: u32) {
     const DXGI_PRESENT_TEST: u32 = 1;
     if flags & DXGI_PRESENT_TEST != 0 || IN_PRESENT.get() {
@@ -538,7 +690,6 @@ unsafe extern "C" fn rsf_anomaly_overlay_before_present(chain: *mut c_void, flag
     IN_PRESENT.set(false);
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_overlay_before_resize(chain: *mut c_void) {
     let Some(sink) = HOOKS.state().sink else {
         return;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include <sl.h>
+#include <sl_dlss.h>
 #include <cstddef>
 
 struct rsf_streamline_sr_options {
@@ -27,6 +28,22 @@ static_assert(sl::kBufferTypeScalingInputColor == 3 && sl::kBufferTypeScalingOut
     sl::ResourceLifecycle::eOnlyValidNow == 0);
 
 namespace rsf {
+inline sl::DLSSOptions sr_options(const rsf_streamline_sr_options& input)
+{
+    sl::DLSSOptions options{};
+    const auto preset = static_cast<sl::DLSSPreset>(input.preset);
+    options.dlaaPreset = options.qualityPreset = options.balancedPreset = preset;
+    options.performancePreset = options.ultraPerformancePreset = options.ultraQualityPreset = preset;
+    options.mode = static_cast<sl::DLSSMode>(input.mode);
+    options.outputWidth = input.width;
+    options.outputHeight = input.height;
+    options.colorBuffersHDR = input.hdr ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+    options.useAutoExposure = input.auto_exposure ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+    options.alphaUpscalingEnabled = input.alpha ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+    return options;
+}
+
+
 inline sl::Result set_sr_tags(PFun_slSetTagForFrame* set_tags, const sl::FrameToken& token,
     const sl::ViewportHandle& viewport, const rsf_streamline_sr_tags& input, sl::CommandBuffer* commands)
 {

@@ -38,10 +38,23 @@ unsafe extern "C" fn leaf_resources(call: *mut c_void, resources: *mut EffectRes
 
 unsafe extern "C" fn leaf_read_motion(
     call: *mut c_void,
+    plan: *const EffectReadback,
     data: *mut *const u8,
     size: *mut u64,
 ) -> u32 {
     assert_eq!(call, CALL);
+    // SAFETY: the owner lends the plan for this call.
+    let plan = unsafe { &*plan };
+    let frame = FRAME.get().expect("motion readback requires a frame");
+    assert_eq!(u64::from(plan.bytes), pixels(&frame) * SAMPLE_BYTES as u64);
+    assert_eq!(
+        plan.groups_x,
+        frame.internal_width.unsigned_abs().div_ceil(8)
+    );
+    assert_eq!(
+        plan.groups_y,
+        frame.internal_height.unsigned_abs().div_ceil(8)
+    );
     CALLS.with_borrow_mut(|calls| calls.push("read_motion"));
     BYTES.with_borrow(|bytes| {
         // SAFETY: the owner's outputs; the bytes are not touched until the call returns.

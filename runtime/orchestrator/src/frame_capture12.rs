@@ -164,6 +164,11 @@ impl Owner {
     }
 
     fn configure(&self, path: &CStr, first: u64, frames: u32) -> bool {
+        if path.is_empty() && frames == 0 {
+            // Stop admitting new legacy captures. Existing readbacks still own their slots.
+            self.lock().legacy = Legacy::default();
+            return true;
+        }
         if path.is_empty() || frames == 0 || frames > MAX_FRAMES {
             return false;
         }

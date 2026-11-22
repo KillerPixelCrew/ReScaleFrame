@@ -4,8 +4,6 @@
 //! evidence is in games/fallout4/engine.json and docs/research/fallout4-*.
 use crate::{Plain, image, read};
 use std::ffi::c_void;
-use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
-use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
 // Hooked functions, in RSF_FALLOUT4_CPU_HOOK_* order.
 pub(super) const HOOK_ENTRIES: [(usize, &[u8]); 10] = [
@@ -106,20 +104,7 @@ pub(super) fn load<T: Plain>(slot: &mut T, address: usize) -> bool {
 
 /// `expected` matches the image bytes at `rva`.
 pub(super) fn bytes(rva: usize, expected: &[u8]) -> bool {
-    let mut actual = [0u8; 16];
-    let mut copied = 0;
-    expected.len() <= actual.len()
-        && unsafe {
-            ReadProcessMemory(
-                GetCurrentProcess(),
-                (image() + rva) as *const c_void,
-                actual.as_mut_ptr().cast(),
-                expected.len(),
-                &mut copied,
-            )
-        } != 0
-        && copied == expected.len()
-        && actual[..expected.len()] == *expected
+    crate::matches_bytes::<16>(image() + rva, expected)
 }
 
 /// The eligible Main/input owner snapshot.

@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: MIT
-// SR Stages 4 and 5 pass construction (games/anomaly/src/sr_pass.h, sr_plan.h) without the game or a GPU: the motion
+// SR Stages 4 and 5 pass construction (games/anomaly/src/sr_pass.h) without the game or a GPU: the motion
 // decode parameters and their CPU reference on (0,0,1,0) versus (0,0,0,0), the X-Ray projection planes, the camera
 // matrices handed to the pipeline (clip-to-previous reprojects a world point exactly), jitter units and depth
-// convention, rectangles and flags, every build_pass refusal, the reset reasons and their order, the camera-cut rule,
-// the settings the adapter can apply and the render size it takes from a backend's plan.
+// convention, rectangles and flags, every build_pass refusal, the reset reasons and their order, the camera-cut rule
+// and the adapter's identity metadata.
 #include "sr_pass.h"
-#include "sr_plan.h"
 
 #include <cmath>
 #include <cstdio>
@@ -225,26 +224,7 @@ void resets() {
     CHECK(!camera_cut(a, pose_of(view_at(8, 0, 0, 0)), CutRule{10.0f, 45.0f}));
 }
 
-void settings_and_plans() {
-    CHECK(adapter_backend(backend_dlss) && adapter_backend(backend_fsr3) && adapter_backend(backend_fsr4) && adapter_backend(backend_xess));
-    CHECK(!adapter_backend(0) && !adapter_backend(2) && !adapter_backend(6) && !adapter_backend(7) && !adapter_backend(40));
-    for (uint32_t q = 0; q < 5; ++q) CHECK(adapter_quality(q));            // Native .. Ultra performance
-    CHECK(!adapter_quality(5) && !adapter_quality(6));
-    const SrSettings current{true, backend_xess, 2, 0};
-    auto s = sanitize({false, 2, 5, 3}, current);                           // FSR2 and quality 5 refused, field by field
-    CHECK(!s.enabled && s.backend == backend_xess && s.quality == 2 && s.preset == 3);
-    s = sanitize({true, backend_fsr3, 0, 0}, current);
-    CHECK(s.backend == backend_fsr3 && s.quality == 0);
-    // Render size from a backend's plan: kept when inside [ceil(output/2), output], refused otherwise.
-    ScalePlan plan{};
-    CHECK(make_plan_for_render(1920, 1080, 1280, 720, plan) && plan.render_width == 1280 && plan.render_height == 720 &&
-        near(plan.scale, 2.0 / 3, 1e-6));
-    CHECK(make_plan_for_render(1920, 1080, 960, 540, plan) && plan.render_width == 960);           // performance, exactly half
-    CHECK(make_plan_for_render(1920, 1080, 1920, 1080, plan) && plan.identity());                   // native
-    CHECK(make_plan_for_render(1920, 1080, 640, 360, plan) && plan.render_width == 640);           // ultra performance
-    CHECK(!make_plan_for_render(1920, 1080, 600, 340, plan) && plan.render_width == 0);            // below the 0.33 floor
-    CHECK(!make_plan_for_render(1920, 1080, 2000, 1080, plan) && !make_plan_for_render(0, 1080, 960, 540, plan));
-    CHECK(!make_plan_for_render(1921, 1081, 634, 356, plan) && make_plan_for_render(1921, 1081, 634, 357, plan));   // ceil(0.33 * x)
+void identity_metadata() {
     // Identity metadata.
     CHECK(view_space_to_meters == 1.0f && std::string_view{project_id}.size() == 36);
 }
@@ -253,7 +233,7 @@ void settings_and_plans() {
 int main(int argc, char** argv) {
     struct { const char* name; void (*run)(); } cases[] = {{"motion_decode", motion_decode}, {"planes", planes},
         {"camera", camera_matrices}, {"rects", rects_and_flags}, {"refusals", refusals}, {"resets", resets},
-        {"settings", settings_and_plans}};
+        {"identity", identity_metadata}};
     int ran = 0;
     for (const auto& item : cases) {
         if (argc > 1 && std::string_view{argv[1]} != item.name) continue;

@@ -1,15 +1,6 @@
-# The vendor-neutral contract.
-#
-# The headers declare what a backend is and implement nothing, so a backend compiles against them
-# without linking anything. Negotiation is the one piece with behaviour, and it is here rather than
-# in the orchestrator because it is a pure function over what the vendors said: no devices, no
-# loading, no state. That is what lets the awkward vendor combinations be tested on a machine that
-# has none of the hardware, which matters because those are exactly the combinations nobody can try.
-# Internal utility helpers, defined first so every runtime library can link them.
+# Shared C provider and frame-generation contracts.
 add_subdirectory("${CMAKE_SOURCE_DIR}/runtime/common" "${CMAKE_BINARY_DIR}/runtime/common")
-add_library(rsf_contract STATIC src/negotiate.cpp)
-rsf_add_rust_static(rsf_contract_rust rsf_rust_contract rsf-contract rsf_contract)
-target_include_directories(rsf_contract PUBLIC include)
-target_link_libraries(rsf_contract PUBLIC ReScaleFrame::GameSDK)
-target_link_libraries(rsf_contract PRIVATE rsf_contract_rust rsf_build_options)
+add_library(rsf_contract INTERFACE)
+target_include_directories(rsf_contract INTERFACE include)
+target_link_libraries(rsf_contract INTERFACE ReScaleFrame::GameSDK)
 add_library(ReScaleFrame::Contract ALIAS rsf_contract)

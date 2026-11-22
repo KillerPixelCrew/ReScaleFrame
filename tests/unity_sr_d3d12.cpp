@@ -269,7 +269,8 @@ int main(int argc, char** argv)
             !MultiByteToWideChar(CP_UTF8, 0, host_root, -1, root, 32768)) return 2;
         rdr2.struct_size = sizeof(rdr2); rdr2.abi_version = RSF_GAME_ABI_VERSION;
         rdr2.session_id = 7; rdr2.log = logger;
-        const auto profile = rsf_rdr2_runtime_setup(ini, root);
+        rsf_render_host_setup profile{};
+        rsf_rdr2_fill_runtime_setup(ini, root, &profile);
         created = rsf_render_host_create(&profile, &rdr2);
     } else created = rsf_sr12_create(&setup, &sr);
     if (created != RSF_BACKEND_OK) { std::fprintf(stderr, "Provider %u preparation refused %d\n", setup.backend, created); return 77; }

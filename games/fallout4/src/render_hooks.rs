@@ -31,16 +31,66 @@ use crate::render_inputs::verify_for_build;
 use crate::resolution::{is_busy as resolution_busy, rsf_fallout4_resolution_verify};
 use crate::screen::rsf_fallout4_verify_screen_queries;
 use crate::{Ops, image, read};
-use rsf_game_sys::rsf_game_host_services;
+use rsf_game_sys::{rsf_game_host_services, rsf_game_render_pass};
 use std::ffi::{CStr, c_void};
 use std::mem::offset_of;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
-use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
-use windows_sys::Win32::System::Threading::GetCurrentProcess;
 use windows_sys::core::{s, w};
+
+// A fresh snapshot of the calling thread's World. Pass pointers name that World's fields.
+#[repr(C)]
+struct World {
+    cpu: CpuIdentity,
+    pass: *mut rsf_game_render_pass,
+    frame_pass: *mut rsf_game_render_pass,
+    submission_pass: *mut rsf_game_render_pass,
+    screen_basis: *mut rsf_game_render_pass,
+    context: *mut c_void,
+    chain: *mut c_void,
+    upscale: bool,
+    recovery_exported: bool,
+    in_imagespace: bool,
+    inputs: bool,
+    published: bool,
+    window_open: bool,
+    frame_open: bool,
+    submission_open: bool,
+    refused: bool,
+    raster_refused: bool,
+    auxiliary_open: bool,
+    depth_valid: bool,
+    raster_valid: bool,
+    depth_interrupted: bool,
+    full_output_resolved: bool,
+}
+
+const _: () = {
+    assert!(size_of::<World>() == 104);
+    assert!(offset_of!(World, pass) == 40);
+    assert!(offset_of!(World, context) == 72);
+    assert!(offset_of!(World, upscale) == 88);
+    assert!(offset_of!(World, full_output_resolved) == 102);
+};
+
+impl World {
+    fn read(snapshot: unsafe extern "C" fn(&mut Self)) -> Self {
+        // SAFETY: the record contains integers, raw pointers and bools, all valid at zero.
+        let mut world = unsafe { std::mem::zeroed() };
+        unsafe { snapshot(&mut world) };
+        world
+    }
+
+    fn state(&self) -> *const rsf_game_render_pass {
+        if self.inputs {
+            self.pass
+        } else {
+            self.frame_pass
+        }
+    }
+}
 
 fn read_owner(base: usize) -> Option<scope::Owner> {
     let renderer =
@@ -93,8 +143,25 @@ unsafe extern "C" fn rsf_fallout4_render_read_outer_chain(
 }
 
 // Return addresses of the guarded MainDraw and Swap calls in verify.
-const ORDINARY_WORLD_RETURN: usize = 0xc3_82a5;
-const OUTER_PRESENT_RETURN: usize = 0xc3_35ec;
+const REL32_CALL_SIZE: usize = 5;
+type CallSite = (usize, usize);
+const fn return_rva(site: CallSite) -> usize {
+    site.0 + REL32_CALL_SIZE
+}
+
+const OUTER_PRESENT_CALL: CallSite = (0xc335e7, 0x1818550);
+const PREPASS_CALL: CallSite = (0x21f9f73, 0x21f38b0);
+const DR_CALL: CallSite = (0x21f9f2f, 0x1839ed0);
+const ORDINARY_WORLD_CALL: CallSite = (0xc382a0, 0x21f0ac0);
+const EFFECTS_CALL: CallSite = (0x21fa283, 0x2185420);
+const HUDLESS_CALL: CallSite = (0x21fa2c5, 0x1839ec0);
+const IMAGESPACE_CALLS: [CallSite; 3] = [
+    (0xc383c2, 0x21fa200),
+    (0xc39d6a, 0x21fa200),
+    (0xc39e0e, 0x21fa200),
+];
+const ORDINARY_WORLD_RETURN: usize = return_rva(ORDINARY_WORLD_CALL);
+const OUTER_PRESENT_RETURN: usize = return_rva(OUTER_PRESENT_CALL);
 const PRESENT_RENDERER: usize = 0x3a2_5d00;
 
 // ---------------------------------------------------------------------------------------------
@@ -163,9 +230,9 @@ const TAA_HOOK: usize = 7;
 // call and the native camera-setter caller (fallout4-depth-domains and
 // fallout4-reduced-consumers notes).
 const PRODUCER_CALLS: [(usize, usize); 9] = [
-    (0xc335e7, 0x1818550),
-    (0x21f9f73, 0x21f38b0),
-    (0x21f9f2f, 0x1839ed0),
+    OUTER_PRESENT_CALL,
+    PREPASS_CALL,
+    DR_CALL,
     (0x21f9f69, 0x21f30b0),
     (0x21f32a5, 0x182bf20),
     (0x21f32bb, 0x182bf20),
@@ -191,46 +258,29 @@ const PRESENT_GUARDS: [(usize, &[u8]); 7] = [
 // temporal update calls, the Effects (return 0x21fa288) and HUDless viewport (0x21fa2ca) calls
 // inside imagespace, and the three selected imagespace calls (0xc383c7, 0xc39d6f, 0xc39e13).
 const WORLD_CALLS: [(usize, usize); 8] = [
-    (0xc382a0, 0x21f0ac0),
+    ORDINARY_WORLD_CALL,
     (0x21f0ae6, 0x1839ec0),
     (0x21f0e4c, 0x182d580),
-    (0x21fa283, 0x2185420),
-    (0x21fa2c5, 0x1839ec0),
-    (0xc383c2, 0x21fa200),
-    (0xc39d6a, 0x21fa200),
-    (0xc39e0e, 0x21fa200),
+    EFFECTS_CALL,
+    HUDLESS_CALL,
+    IMAGESPACE_CALLS[0],
+    IMAGESPACE_CALLS[1],
+    IMAGESPACE_CALLS[2],
 ];
-
-/// `expected` matches the bytes at `address`, read whole. Entry bytes are at most 32 bytes.
-fn matches(address: usize, expected: &[u8]) -> bool {
-    let mut actual = [0u8; 32];
-    let mut copied = 0;
-    expected.len() <= actual.len()
-        && unsafe {
-            ReadProcessMemory(
-                GetCurrentProcess(),
-                address as *const c_void,
-                actual.as_mut_ptr().cast(),
-                expected.len(),
-                &mut copied,
-            )
-        } != 0
-        && copied == expected.len()
-        && actual[..expected.len()] == *expected
-}
 
 /// An instruction guard of at most 16 bytes at `rva`.
 fn guard(rva: usize, expected: &[u8]) -> bool {
-    expected.len() <= 16 && matches(image() + rva, expected)
+    crate::matches_bytes::<16>(image() + rva, expected)
 }
 
 /// The rel32 call at `rva` targets `target`.
 fn call(rva: usize, target: usize) -> bool {
-    let Some(bytes) = read::<[u8; 5]>(image() + rva) else {
+    let Some(bytes) = read::<[u8; REL32_CALL_SIZE]>(image() + rva) else {
         return false;
     };
     let relative = i32::from_le_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]);
-    bytes[0] == 0xe8 && (rva as isize + 5 + relative as isize) as usize == target
+    bytes[0] == 0xe8
+        && (rva as isize + REL32_CALL_SIZE as isize + relative as isize) as usize == target
 }
 
 /// Every hook entry, the resolution, screen and depth-domain guards, the TAA slot, then the call
@@ -239,7 +289,7 @@ pub(crate) fn verify() -> bool {
     let base = image();
     HOOKS
         .iter()
-        .all(|hook| matches(base + hook.rva, hook.entry))
+        .all(|hook| crate::matches_bytes::<32>(base + hook.rva, hook.entry))
         && rsf_fallout4_resolution_verify()
         && rsf_fallout4_verify_screen_queries()
         && rsf_fallout4_depth_verify()
@@ -580,7 +630,10 @@ extern "C" fn rsf_fallout4_render_admit_world(
         && !candidate.frame_open
         && !candidate.auxiliary_open
         && !candidate.recovery_owned
-        && !resolution_busy()
+        && {
+            crate::resolution::retry_retired(image());
+            !resolution_busy()
+        }
         && rsf_fallout4_cpu_begin_render()
 }
 

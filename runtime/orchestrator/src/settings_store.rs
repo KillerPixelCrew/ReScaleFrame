@@ -547,6 +547,44 @@ pub(crate) unsafe extern "C" fn write_dlss_preset(
     file.write_integer(DLSS_PRESET, preset)
 }
 
+/// # Safety
+/// All non-null strings must be terminated and readable throughout the call.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_adapter_setting_read_bool(
+    ini: PCWSTR,
+    section: PCWSTR,
+    key: PCWSTR,
+    fallback: u32,
+) -> i32 {
+    let Some(file) = File::new(ini, section).filter(|_| !key.is_null() && fallback <= 1) else {
+        return INVALID_ARGUMENT;
+    };
+    let _io = PROFILE_IO.lock().unwrap_or_else(|lock| lock.into_inner());
+    let stored = unsafe { GetPrivateProfileIntW(file.section, key, fallback as i32, file.ini) };
+    i32::from(stored != 0)
+}
+
+/// # Safety
+/// All non-null strings must be terminated and readable throughout the call.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_adapter_setting_write_bool(
+    ini: PCWSTR,
+    section: PCWSTR,
+    key: PCWSTR,
+    value: u32,
+) -> i32 {
+    let Some(file) = File::new(ini, section).filter(|_| !key.is_null() && value <= 1) else {
+        return INVALID_ARGUMENT;
+    };
+    let _io = PROFILE_IO.lock().unwrap_or_else(|lock| lock.into_inner());
+    let text = [u16::from(b'0') + value as u16, 0];
+    if unsafe { WritePrivateProfileStringW(file.section, key, text.as_ptr(), file.ini) } == 0 {
+        NOT_READY
+    } else {
+        OK
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

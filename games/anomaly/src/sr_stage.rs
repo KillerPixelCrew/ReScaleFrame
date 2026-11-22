@@ -25,6 +25,11 @@ use crate::sr_d3d11::{
 };
 use crate::sr_stage_abi::*;
 use crate::sr_swap_abi::{
+    RSF_ANOMALY_SWAP_RESTORE_COMBINE_END, RSF_ANOMALY_SWAP_RESTORE_FRAME_END,
+    RSF_ANOMALY_SWAP_RESTORE_ROLLBACK, RSF_ANOMALY_SWAP_RESTORE_SEAM,
+    RSF_ANOMALY_SWAP_RESTORE_SHUTDOWN, RSF_ANOMALY_SWAP_RESTORE_STALE_PREPARE,
+    RSF_ANOMALY_SWAP_SKIP_DEPTH, RSF_ANOMALY_SWAP_SKIP_LAYOUT, RSF_ANOMALY_SWAP_SKIP_MSAA,
+    RSF_ANOMALY_SWAP_SKIP_OFF, RSF_ANOMALY_SWAP_SKIP_SCOPE, RSF_ANOMALY_SWAP_SKIP_TWINS,
     rsf_anomaly_swap_fields as TargetFields, rsf_anomaly_swap_upscale as UpscaleInputs,
 };
 use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record};
@@ -33,7 +38,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{LazyLock, Mutex, MutexGuard};
 
 const PHASE_RENDER_SUBMIT: u32 = 2;
 const SCREEN_UNKNOWN: u32 = 0;
@@ -59,19 +64,17 @@ const XESS: usize = 2;
 // Refusal (sr_temporal.h).
 const REFUSAL_PREPARE: u8 = 2;
 const REFUSAL_REINSERT: u8 = 5;
-// Skip and Restore (sr_swap.h).
-const SKIP_OFF: usize = 0;
-const SKIP_SCOPE: usize = 1;
-const SKIP_MSAA: usize = 2;
-const SKIP_LAYOUT: usize = 3;
-const SKIP_TWINS: usize = 4;
-const SKIP_DEPTH: usize = 5;
-const RESTORE_SEAM: usize = 0;
-const RESTORE_COMBINE_END: usize = 1;
-const RESTORE_STALE_PREPARE: usize = 2;
-const RESTORE_SHUTDOWN: usize = 3;
-const RESTORE_ROLLBACK: usize = 4;
-const RESTORE_FRAME_END: usize = 5;
+const SPATIAL_PATH: u8 = 6;
+const EVALUATION_REFUSED: u8 = 7;
+const CAMERA_RECOVERY: u8 = 8;
+const MIP_OFFSET_DIVISOR: i32 = 10;
+const OPTION_SCALE: u32 = 6;
+const OPTION_CAPTURE_START: u32 = 7;
+const OPTION_CAPTURE_COUNT: u32 = 8;
+const OPTION_CAPTURE_INTERVAL: u32 = 9;
+const OPTION_CUT_DISTANCE: u32 = 10;
+const OPTION_CUT_ANGLE: u32 = 11;
+const OPTION_REQUIRE_SIGNATURE: u32 = 12;
 
 type Platform = rsf_anomaly_sr_stage_platform;
 type Config = rsf_anomaly_sr_stage_config;
@@ -372,28 +375,8 @@ impl Ini<'_> {
         let end = out[..length].iter().position(|&c| c == 0).unwrap_or(length);
         out[..end].to_vec()
     }
-    // SRStreamlineDir, SRFidelityFXDir and SRXeSSDir: an explicit value, else the package layout beside the INI
-    // (ReScaleFrame\streamline, fidelityfx, xess), as a plain directory. `path` is the INI path without its NUL.
     fn vendor_directories(&self, path: &[u16]) -> [PathBuf; 3] {
-        let beside = path_of(path);
-        let base = beside
-            .parent()
-            .unwrap_or_else(|| Path::new(""))
-            .join("ReScaleFrame");
-        [
-            (c"SRStreamlineDir", "streamline"),
-            (c"SRFidelityFXDir", "fidelityfx"),
-            (c"SRXeSSDir", "xess"),
-        ]
-        .map(|(key, fallback)| {
-            let value = self.text_of::<MAX_PATH>(key, c"");
-            let value = if value.is_empty() {
-                units(&base.join(fallback))
-            } else {
-                value
-            };
-            path_of(&plain_directory(&value))
-        })
+        vendor_directories(path, |key| self.text_of::<MAX_PATH>(key, c"")).map(|dir| path_of(&dir))
     }
     // SRScale: clamped; `defaulted` when missing or not a number (sr_stage.h).
     fn scale(&self) -> (f32, bool) {
@@ -408,30 +391,29 @@ impl Ini<'_> {
         let scale = clamp_scale(value as f32);
         (scale, value.is_nan() || value <= 0.0 || !value.is_finite())
     }
-    // SRMipBias: a decimal offset clamped to [-2, 1], or "off".
+    // SRMipBias: a decimal offset clamped to [-2, 1], "off", or "off" followed by the saved offset.
     fn mip_bias(&self) -> (f32, bool) {
         let text = self.text(c"SRMipBias", c"");
         let blank = |c: &u16| *c == 0x20 || *c == 0x09;
         let begin = text.iter().position(|c| !blank(c)).unwrap_or(text.len());
-        let rest = &text[begin..];
-        if rest.len() >= 3
+        let mut rest = &text[begin..];
+        let disabled = rest.len() >= 3
             && rest[..3]
                 .iter()
                 .map(|&c| c | 0x20)
                 .eq("off".bytes().map(u16::from))
-            && rest[3..].iter().all(blank)
-        {
-            return (DEFAULT_MIP_OFFSET, false);
+            && rest.get(3).is_none_or(blank);
+        if disabled {
+            rest = &rest[3..];
         }
         let (value, end) = wcstod(rest);
-        if rest.is_empty()
-            || end == 0
-            || rest[end..].iter().any(|c| !blank(c))
-            || !value.is_finite()
-        {
-            return (DEFAULT_MIP_OFFSET, true);
-        }
-        (clamp_mip_offset(value as f32), true)
+        let valid = end != 0 && rest[end..].iter().all(blank) && value.is_finite();
+        let offset = if valid {
+            clamp_mip_offset(value as f32)
+        } else {
+            DEFAULT_MIP_OFFSET
+        };
+        (offset, !disabled)
     }
     fn float(&self, key: &CStr, fallback: f32, low: f32, high: f32) -> f32 {
         let text = self.text(key, c"");
@@ -593,6 +575,7 @@ struct Reported {
     world_ms: [f64; 2],
     seam_ms: f64,
     world_samples: [u64; 2],
+    timer_generation: u64,
     seam_samples: u64,
 }
 
@@ -633,6 +616,7 @@ struct State {
     capture: Capture,
     burst: Burst,
     burst_gate: BurstGate,
+    burst_revision: u64,
     timer: gpu_timer::Timer,
     motion_view: Option<MotionView>,
     temporal_targets: Option<TemporalTargets>,
@@ -671,6 +655,7 @@ impl Default for State {
             capture: Capture::default(),
             burst: Burst::default(),
             burst_gate: BurstGate::new(),
+            burst_revision: 0,
             timer: gpu_timer::Timer::default(),
             motion_view: None,
             temporal_targets: None,
@@ -692,7 +677,7 @@ struct Live {
 
 pub(crate) struct Stage {
     platform: AtomicPtr<Platform>,
-    state: Mutex<Option<Box<State>>>,
+    state: LazyLock<Mutex<State>>,
     active: AtomicBool,
     // The configured stage and SRStageCapture, read without the stage lock by the overlay's report and request paths,
     // the observer's install decision and the motion stage's capture binding.
@@ -700,12 +685,6 @@ pub(crate) struct Stage {
     capture: AtomicBool,
     uv: [AtomicU32; 4],
     live: Live,
-}
-
-// The locked state a seam call lends to the controller's seam pass (Host::upscale and Host::round_trip).
-struct Scope<'a> {
-    stage: &'a Stage,
-    state: *mut State,
 }
 
 fn emit(log: rsf_anomaly_sr_log, user: Raw, text: &str) {
@@ -756,6 +735,29 @@ fn path_of(units: &[u16]) -> PathBuf {
     }
 }
 
+// Resolve explicit vendor directories or the package layout beside the INI.
+pub(crate) fn vendor_directories(ini: &[u16], read: impl Fn(&CStr) -> Vec<u16>) -> [Vec<u16>; 3] {
+    let path = path_of(ini);
+    let package = path
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .join("ReScaleFrame");
+    [
+        (c"SRStreamlineDir", "streamline"),
+        (c"SRFidelityFXDir", "fidelityfx"),
+        (c"SRXeSSDir", "xess"),
+    ]
+    .map(|(key, directory)| {
+        let value = read(key);
+        let value = if value.is_empty() {
+            units(&package.join(directory))
+        } else {
+            value
+        };
+        plain_directory(&value)
+    })
+}
+
 // A vendor runtime directory as Streamline, FidelityFX and XeSS can use it. The INI path the carrier hands over can
 // be a Win32 long-path name ("\\?\D:\...", "\\?\UNC\server\share\..."). Streamline appends "/sl.common.dll" to its
 // plugin directory, and a "\\?\" name disables the slash conversion, so every plugin failed to load and Stage 5
@@ -803,7 +805,7 @@ impl Stage {
     pub(crate) const fn new() -> Self {
         Self {
             platform: AtomicPtr::new(null_mut()),
-            state: Mutex::new(None),
+            state: LazyLock::new(|| Mutex::new(State::default())),
             active: AtomicBool::new(false),
             stage: AtomicU32::new(0),
             capture: AtomicBool::new(false),
@@ -839,13 +841,13 @@ impl Stage {
         self.platform.store(table.cast_mut(), Ordering::Release);
     }
 
-    fn lock(&self) -> MutexGuard<'_, Option<Box<State>>> {
+    fn lock(&self) -> MutexGuard<'_, State> {
         self.state
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
     }
 
-    fn active_lock(&self) -> Option<MutexGuard<'_, Option<Box<State>>>> {
+    fn active_lock(&self) -> Option<MutexGuard<'_, State>> {
         if !self.active() {
             return None;
         }
@@ -855,7 +857,7 @@ impl Stage {
 
     fn with<R>(&self, f: impl FnOnce(&mut State) -> R) -> R {
         let mut guard = self.lock();
-        f(guard.get_or_insert_with(Default::default))
+        f(&mut guard)
     }
 
     fn say(&self, state: &State, text: &str) {
@@ -1020,60 +1022,164 @@ impl Stage {
             RSF_ANOMALY_SR_OPTION_FIRST_PERSON_ZERO => flag(&live.first_person_zero),
             RSF_ANOMALY_SR_OPTION_JITTER => flag(&live.jitter),
             RSF_ANOMALY_SR_OPTION_MIP_BIAS => flag(&live.mip_bias),
-            RSF_ANOMALY_SR_OPTION_MIP_BIAS_OFFSET => (self.live_mip_offset() * 10.0).round() as i32,
+            RSF_ANOMALY_SR_OPTION_MIP_BIAS_OFFSET => {
+                (self.live_mip_offset() * MIP_OFFSET_DIVISOR as f32).round() as i32
+            }
+            OPTION_SCALE => self.with(|state| (state.current_scale * 100.0).round() as i32),
+            OPTION_CAPTURE_START => {
+                self.with(|state| state.config.capture_start.min(i32::MAX as u32) as i32)
+            }
+            OPTION_CAPTURE_COUNT => self.with(|state| state.config.capture_count as i32),
+            OPTION_CAPTURE_INTERVAL => {
+                self.with(|state| state.config.capture_interval.min(i32::MAX as u32) as i32)
+            }
+            OPTION_CUT_DISTANCE => {
+                self.with(|state| (state.config.cut_distance * 10.0).round() as i32)
+            }
+            OPTION_CUT_ANGLE => self.with(|state| (state.config.cut_degrees * 10.0).round() as i32),
+            OPTION_REQUIRE_SIGNATURE => {
+                self.with(|state| i32::from(state.config.require_signature))
+            }
             _ => 0,
         }
     }
 
     // Applies a panel value and saves it through the adapter option path.
-    pub(crate) fn set_option(&self, id: u32, value: i32) {
+    pub(crate) fn set_option(&self, id: u32, value: i32) -> bool {
         let p = self.platform();
         let live = &self.live;
         let persist_int = |key: &CStr, v: i32| leaf!(p, persist_int(key.as_ptr(), v));
         let persist_text = |key: &CStr, v: &str| {
-            if let Ok(text) = CString::new(v) {
-                leaf!(p, persist_text(key.as_ptr(), text.as_ptr()));
-            }
+            CString::new(v).is_ok_and(|text| leaf!(p, persist_text(key.as_ptr(), text.as_ptr())))
         };
-        let offset_text = || format!("{:.1}", f64::from(self.live_mip_offset()));
+        let enabled = value != 0;
+        let set_flag = |target: &AtomicBool, flag: bool, saved: bool| {
+            if saved {
+                target.store(flag, Ordering::Relaxed);
+            }
+            saved
+        };
         match id {
             RSF_ANOMALY_SR_OPTION_COLOUR_TRANSPORT => {
-                let transport = value == 0;
+                let transport = !enabled;
+                if !persist_int(c"SRColourTransport", i32::from(transport)) {
+                    return false;
+                }
                 live.colour_transport.store(transport, Ordering::Relaxed);
                 leaf!(p, apply_colour_transport(transport));
-                persist_int(c"SRColourTransport", i32::from(transport));
+                true
             }
-            RSF_ANOMALY_SR_OPTION_EXPOSURE_AUTO => {
-                live.exposure_auto.store(value != 0, Ordering::Relaxed);
-                persist_text(c"SRExposure", if value != 0 { "auto" } else { "constant" });
-            }
-            RSF_ANOMALY_SR_OPTION_FIRST_PERSON_ZERO => {
-                live.first_person_zero.store(value != 0, Ordering::Relaxed);
-                persist_int(c"SRFirstPersonZero", i32::from(value != 0));
-            }
-            RSF_ANOMALY_SR_OPTION_JITTER => {
-                live.jitter.store(value != 0, Ordering::Relaxed);
-                persist_int(c"SRJitter", i32::from(value != 0));
-            }
+            RSF_ANOMALY_SR_OPTION_EXPOSURE_AUTO => set_flag(
+                &live.exposure_auto,
+                enabled,
+                persist_text(c"SRExposure", if enabled { "auto" } else { "constant" }),
+            ),
+            RSF_ANOMALY_SR_OPTION_FIRST_PERSON_ZERO => set_flag(
+                &live.first_person_zero,
+                enabled,
+                persist_int(c"SRFirstPersonZero", i32::from(enabled)),
+            ),
+            RSF_ANOMALY_SR_OPTION_JITTER => set_flag(
+                &live.jitter,
+                enabled,
+                persist_int(c"SRJitter", i32::from(enabled)),
+            ),
             RSF_ANOMALY_SR_OPTION_MIP_BIAS => {
-                live.mip_bias.store(value != 0, Ordering::Relaxed);
-                persist_text(
-                    c"SRMipBias",
-                    &if value != 0 {
-                        offset_text()
-                    } else {
-                        "off".into()
-                    },
-                );
+                let offset = self.live_mip_offset();
+                let text = if enabled {
+                    format!("{offset:.1}")
+                } else {
+                    format!("off {offset:.1}")
+                };
+                set_flag(&live.mip_bias, enabled, persist_text(c"SRMipBias", &text))
             }
             RSF_ANOMALY_SR_OPTION_MIP_BIAS_OFFSET => {
-                live.mip_offset
-                    .store((value as f32 / 10.0).to_bits(), Ordering::Relaxed);
-                if live.mip_bias.load(Ordering::Relaxed) {
-                    persist_text(c"SRMipBias", &offset_text());
+                let offset = value as f32 / MIP_OFFSET_DIVISOR as f32;
+                let text = if live.mip_bias.load(Ordering::Relaxed) {
+                    format!("{offset:.1}")
+                } else {
+                    format!("off {offset:.1}")
+                };
+                if !persist_text(c"SRMipBias", &text) {
+                    return false;
                 }
+                live.mip_offset.store(offset.to_bits(), Ordering::Relaxed);
+                true
             }
-            _ => {}
+            OPTION_SCALE => self.with(|state| {
+                let scale = clamp_scale(value as f32 / 100.0);
+                if !persist_text(c"SRScale", &format!("{scale:.2}")) {
+                    return false;
+                }
+                state.current_scale = scale;
+                state.config.scale = scale;
+                state.config.scale_defaulted = false;
+                true
+            }),
+            OPTION_CUT_DISTANCE | OPTION_CUT_ANGLE => self.with(|state| {
+                let (target, key, min, max) = if id == OPTION_CUT_DISTANCE {
+                    (
+                        &mut state.config.cut_distance,
+                        c"SRCutDistance",
+                        0.1,
+                        1000.0,
+                    )
+                } else {
+                    (&mut state.config.cut_degrees, c"SRCutAngle", 1.0, 180.0)
+                };
+                let cut = (value as f32 / 10.0).clamp(min, max);
+                if !persist_text(key, &format!("{cut:.1}")) {
+                    return false;
+                }
+                *target = cut;
+                true
+            }),
+            OPTION_CAPTURE_START | OPTION_CAPTURE_COUNT | OPTION_CAPTURE_INTERVAL => {
+                self.with(|state| {
+                    let (target, key, value) = match id {
+                        OPTION_CAPTURE_START => (
+                            &mut state.config.capture_start,
+                            c"SRStageCaptureStart",
+                            value.max(0),
+                        ),
+                        OPTION_CAPTURE_COUNT => {
+                            let max = if state.config.stage == 3 { 32 } else { 16 };
+                            (
+                                &mut state.config.capture_count,
+                                c"SRStageCaptureCount",
+                                value.clamp(0, max),
+                            )
+                        }
+                        _ => (
+                            &mut state.config.capture_interval,
+                            c"SRStageCaptureInterval",
+                            value.max(1),
+                        ),
+                    };
+                    if !persist_int(key, value) {
+                        return false;
+                    }
+                    *target = value as u32;
+                    if state.config.stage == 3 {
+                        if id != OPTION_CAPTURE_INTERVAL && state.config.capture && self.active() {
+                            state.burst_revision = state.burst_revision.wrapping_add(1);
+                            self.bind_burst(state);
+                        }
+                    } else {
+                        state.capture.next = u64::from(state.config.capture_start);
+                        state.capture.remaining = state.config.capture_count;
+                    }
+                    true
+                })
+            }
+            OPTION_REQUIRE_SIGNATURE => self.with(|state| {
+                if !persist_int(c"SRRequireSignature", i32::from(enabled)) {
+                    return false;
+                }
+                state.config.require_signature = enabled;
+                true
+            }),
+            _ => false,
         }
     }
 
@@ -1119,7 +1225,7 @@ impl Stage {
     ) -> bool {
         let p = self.platform();
         let mut guard = self.lock();
-        let state = guard.get_or_insert_with(Default::default);
+        let state = &mut *guard;
         let stage = state.config.stage;
         if !selected(&state.config) {
             return true;
@@ -1145,16 +1251,22 @@ impl Stage {
         }
         // A re-start after quiesce finds our own detours in place of the guarded bytes; the first install verified them.
         if !created {
-            let failed = leaf!(
-                p,
-                verify_guards(
+            let Some(verify) = p.verify_guards else {
+                self.say(
+                    state,
+                    "Anomaly SR stage refused: guard verification unavailable.",
+                );
+                return false;
+            };
+            let failed = unsafe {
+                verify(
                     module,
                     image_size,
                     build,
                     world_window(stage),
-                    temporal(stage)
+                    temporal(stage),
                 )
-            );
+            };
             if !failed.is_null() {
                 // The leaf returns an immutable site name from the profile tables.
                 let name = unsafe { CStr::from_ptr(failed) }.to_string_lossy();
@@ -1213,9 +1325,6 @@ impl Stage {
             leaf!(p, set_rm_near(true));
         }
         self.active.store(true, Ordering::Release);
-        drop(guard);
-        let mut guard = self.lock();
-        let state = guard.get_or_insert_with(Default::default);
         if state.config.capture {
             self.bind_dump(state);
         }
@@ -1341,8 +1450,14 @@ impl Stage {
             return;
         };
         state.burst_gate = BurstGate::new();
+        let stem = format!("sr-jitter-{:016x}", state.session);
+        let directory = if state.burst_revision == 0 {
+            directory.join(stem)
+        } else {
+            directory.join(format!("{stem}-{}", state.burst_revision))
+        };
         state.burst = Burst {
-            directory: directory.join(format!("sr-jitter-{:016x}", state.session)),
+            directory,
             wanted: state.config.capture_count,
             start: u64::from(state.config.capture_start),
             frames: Vec::with_capacity(state.config.capture_count as usize),
@@ -1359,7 +1474,7 @@ impl Stage {
         let disabled = leaf!(p, remove_hooks());
         let mut guard = self.lock();
         self.active.store(false, Ordering::Release);
-        let state = guard.get_or_insert_with(Default::default);
+        let state = &mut *guard;
         if !disabled {
             // A partially disabled hook can still enter. Let it run stock and
             // keep its resources until the native removal can be retried.
@@ -1376,7 +1491,7 @@ impl Stage {
         state.motion_view = None;
         state.temporal_targets = None;
         state.native_depth_frame = None;
-        state.timer = gpu_timer::Timer::default();
+        state.timer.reset();
         self.publish(state, default_jitter());
         state.main_state = default_jitter();
         for frame in &mut state.burst.frames {
@@ -1607,16 +1722,9 @@ impl Stage {
         let Some(dump) = state.dump else { return };
         self.capture_abandon(state);
         state.capture.seam_taken = false;
-        unsafe { (dump.poll)() };
         let scheduled = state.capture.remaining != 0
             && state.world_frames >= state.capture.next
             && !self.loading();
-        if scheduled {
-            unsafe { (dump.request)() };
-        }
-        if unsafe { (dump.requested)() } == 0 {
-            return;
-        }
         let c = self.controller();
         let stage2 = c.window_open && c.stage == 2; // this frame renders the world at render size
         let engine_frame = leaf!(self.platform(), engine_frame());
@@ -1643,7 +1751,7 @@ impl Stage {
         } else {
             facts.device_height
         };
-        if unsafe { (dump.begin_record)(&state.capture.record, 0) } == 0 {
+        if !dump.admit(&state.capture.record, scheduled) {
             return;
         }
         state.capture.active = true;
@@ -1697,7 +1805,7 @@ impl Stage {
         let Some(mut guard) = self.active_lock() else {
             return;
         };
-        let state = guard.get_or_insert_with(Default::default);
+        let state = &mut *guard;
         // A window still open here (never expected) is closed first, so Device.dwWidth reads the output size again.
         leaf!(p, close_stale());
         state
@@ -1787,31 +1895,45 @@ impl Stage {
         }
     }
 
-    // Lends the locked state to the controller's seam pass for the duration of the call.
-    fn controller_seam(&self, state: &mut State) -> bool {
-        let mut scope = Scope { stage: self, state };
-        leaf!(self.platform(), seam((&mut scope as *mut Scope).cast()))
+    pub(crate) fn seam(&self, this: *mut c_void) {
+        self.seam_with(this, |run| {
+            let handle = leaf!(self.platform(), swap_handle()).cast();
+            // The controller handle is stable until native quiesce takes the stage lock.
+            unsafe { crate::sr_swap::run_seam(handle, run) };
+        });
     }
 
-    pub(crate) fn seam(&self, this: *mut c_void) {
+    fn seam_with(
+        &self,
+        this: *mut c_void,
+        dispatch: impl FnOnce(&mut dyn FnMut(crate::sr_swap::SeamPass<'_>) -> bool),
+    ) {
         let p = self.platform();
         let Some(mut guard) = self.active_lock() else {
             return;
         };
-        let state = guard.get_or_insert_with(Default::default);
+        let state = &mut *guard;
         let device = leaf!(p, device());
         let context = leaf!(p, context());
-        if self.controller().window_open {
-            state.timer.seam(p, device, context, true);
-            self.controller_seam(state);
+        let swapped = self.controller().window_open;
+        state.timer.seam(p, device, context, swapped);
+        if !swapped {
+            state.timer.finish(p, device, context);
+        }
+        dispatch(&mut |pass| match pass {
+            crate::sr_swap::SeamPass::Upscale(input) => {
+                (unsafe { Seam::upscale(input) }).is_some_and(|seam| self.upscale(state, &seam))
+            }
+            crate::sr_swap::SeamPass::RoundTrip(twin, engine) => {
+                self.round_trip(state, &Seam::round_trip(twin, engine))
+            }
+        });
+        if swapped {
             state
                 .timer
                 .finish(p, leaf!(p, device()), leaf!(p, context()));
             return;
         }
-        state.timer.seam(p, device, context, false);
-        state.timer.finish(p, device, context);
-        self.controller_seam(state); // counted as a pass-through
         // Stock capture: the engine generic0 as the post chain receives it, once per frame at the first seam call.
         if state.capture.active && !state.capture.seam_taken {
             let target = admitted_target(p, this);
@@ -1839,7 +1961,7 @@ impl Stage {
         }
     }
 
-    // Stage 2 and later, after the restore at the seam (Host::upscale).
+    // Stage 2 and later, after the restore at the seam.
     fn upscale(&self, state: &mut State, seam: &Seam) -> bool {
         let p = self.platform();
         let stage = state.config.stage;
@@ -1862,13 +1984,12 @@ impl Stage {
         }
         let ok = if sr_inputs(stage) && !seam.spatial_recovery {
             self.temporal_seam(state, seam)
+        } else if sr_inputs(stage) {
+            self.bilinear(seam, CAMERA_RECOVERY)
         } else {
-            if seam.spatial_recovery && sr_inputs(stage) {
-                leaf!(p, driver_count_bilinear());
-            }
             leaf!(p, draw_pass(UPSCALE, &seam.views))
         };
-        if state.capture.active {
+        if state.capture.active && ok {
             self.take(
                 state,
                 c"anomaly_seam_generic0",
@@ -1881,12 +2002,14 @@ impl Stage {
                 VIEW_RAW,
                 1.0,
             );
+        }
+        if state.capture.active {
             state.capture.seam_taken = true;
         }
         ok
     }
 
-    // Stage 1, after the restore at the seam (Host::round_trip).
+    // Stage 1, after the restore at the seam.
     fn round_trip(&self, state: &mut State, seam: &Seam) -> bool {
         if state.capture.active {
             self.take(
@@ -1946,21 +2069,19 @@ impl Stage {
         handle
     }
 
-    // Stages 4 and 5 at the S-B seam, after the engine fields are restored (section 12). Every refusal draws the Stage 2
-    // bilinear pass instead, so the engine always receives a complete world image.
+    fn bilinear(&self, seam: &Seam, reason: u8) -> bool {
+        let p = self.platform();
+        let drawn = leaf!(p, draw_pass(UPSCALE, &seam.views));
+        leaf!(p, driver_fallback(reason, drawn));
+        drawn
+    }
+
+    // Stages 4 and 5 at the S-B seam, after the engine fields are restored (section 12).
     fn temporal_seam(&self, state: &mut State, seam: &Seam) -> bool {
         let p = self.platform();
-        let bilinear = || {
-            leaf!(p, driver_count_bilinear());
-            leaf!(p, draw_pass(UPSCALE, &seam.views))
-        };
-        let refuse = |reason: u8| {
-            leaf!(p, driver_count(reason));
-            bilinear()
-        };
         let device = leaf!(p, device());
         if device.is_null() || leaf!(p, context()).is_null() || !leaf!(p, temporal_ready()) {
-            return refuse(REFUSAL_PREPARE);
+            return self.bilinear(seam, REFUSAL_PREPARE);
         }
         let stage = state.config.stage;
         let (rw, rh, ow, oh) = (
@@ -2011,7 +2132,7 @@ impl Stage {
             self.say(state, &text);
         }
         let Some(targets) = &state.temporal_targets else {
-            return refuse(REFUSAL_PREPARE);
+            return self.bilinear(seam, REFUSAL_PREPARE);
         };
         let textures = targets.view();
         let depth = leaf!(p, depth_texture());
@@ -2052,7 +2173,7 @@ impl Stage {
             ..DrawViews::default()
         };
         if !leaf!(p, draw_pass(PREPARE, &prepare)) {
-            return refuse(REFUSAL_PREPARE);
+            return self.bilinear(seam, REFUSAL_PREPARE);
         }
         leaf!(p, driver_count_prepared(!motion_present));
         self.take(
@@ -2090,7 +2211,7 @@ impl Stage {
             );
         }
         if !evaluate {
-            return bilinear();
+            return self.bilinear(seam, SPATIAL_PATH);
         }
         let pass = rsf_anomaly_sr_pass {
             native_frame: u64::from(engine_frame),
@@ -2164,7 +2285,7 @@ impl Stage {
             ..Default::default()
         };
         if !leaf!(p, driver_evaluate(&mut inputs, camera_out, backend_out)) {
-            return bilinear();
+            return self.bilinear(seam, EVALUATION_REFUSED);
         }
         if let Some(result) = result {
             unsafe { result(record, c"sr".as_ptr(), backend, 0) };
@@ -2180,7 +2301,7 @@ impl Stage {
         let mut reinsert = seam.views;
         reinsert.inputs[4] = textures.output_srv;
         if !leaf!(p, draw_pass(REINSERT, &reinsert)) {
-            return refuse(REFUSAL_REINSERT);
+            return self.bilinear(seam, REFUSAL_REINSERT);
         }
         true
     }
@@ -2190,7 +2311,7 @@ impl Stage {
         let Some(mut guard) = self.active_lock() else {
             return;
         };
-        let state = guard.get_or_insert_with(Default::default);
+        let state = &mut *guard;
         let was_refused = self.controller().refused;
         leaf!(p, combine_end());
         let c = self.controller();
@@ -2239,7 +2360,7 @@ impl Stage {
         let Some(mut guard) = self.active_lock() else {
             return;
         };
-        let state = guard.get_or_insert_with(Default::default);
+        let state = &mut *guard;
         leaf!(p, frame_end());
         state.native_depth_frame = None;
         if state.config.stage == 5 {
@@ -2400,7 +2521,7 @@ impl Stage {
         let p = self.platform();
         let mut lines = Vec::with_capacity(5);
         let mut guard = self.lock();
-        let state = guard.get_or_insert_with(Default::default);
+        let state = &mut *guard;
         let c = self.controller();
         let now = self.counters();
         let stage = state.config.stage;
@@ -2427,6 +2548,12 @@ impl Stage {
         let timer = state
             .timer
             .sample(p, leaf!(p, device()), leaf!(p, context()));
+        if state.reported.timer_generation != state.timer.generation {
+            state.reported.world_ms = [0.0; 2];
+            state.reported.seam_ms = 0.0;
+            state.reported.world_samples = [0; 2];
+            state.reported.seam_samples = 0;
+        }
         let r = &state.reported;
         let average = |sum: f64, before: f64, count: u64, before_count: u64| {
             if count > before_count {
@@ -2463,25 +2590,25 @@ impl Stage {
             d!(prepares),
             d!(eligible),
             d!(swapped),
-            skip(SKIP_OFF),
-            skip(SKIP_SCOPE),
-            skip(SKIP_MSAA),
-            skip(SKIP_LAYOUT),
-            skip(SKIP_TWINS),
+            skip(RSF_ANOMALY_SWAP_SKIP_OFF as usize),
+            skip(RSF_ANOMALY_SWAP_SKIP_SCOPE as usize),
+            skip(RSF_ANOMALY_SWAP_SKIP_MSAA as usize),
+            skip(RSF_ANOMALY_SWAP_SKIP_LAYOUT as usize),
+            skip(RSF_ANOMALY_SWAP_SKIP_TWINS as usize),
             d!(seams),
             d!(seams_without_window),
             d!(round_trips),
             d!(round_trip_failures),
-            rest(RESTORE_SEAM),
-            rest(RESTORE_COMBINE_END),
-            rest(RESTORE_STALE_PREPARE),
-            rest(RESTORE_FRAME_END),
-            rest(RESTORE_SHUTDOWN),
-            rest(RESTORE_ROLLBACK),
+            rest(RSF_ANOMALY_SWAP_RESTORE_SEAM as usize),
+            rest(RSF_ANOMALY_SWAP_RESTORE_COMBINE_END as usize),
+            rest(RSF_ANOMALY_SWAP_RESTORE_STALE_PREPARE as usize),
+            rest(RSF_ANOMALY_SWAP_RESTORE_FRAME_END as usize),
+            rest(RSF_ANOMALY_SWAP_RESTORE_SHUTDOWN as usize),
+            rest(RSF_ANOMALY_SWAP_RESTORE_ROLLBACK as usize),
             d!(rm_near_in_window),
             d!(foreign_changes),
             d!(write_faults),
-            skip(SKIP_DEPTH),
+            skip(RSF_ANOMALY_SWAP_SKIP_DEPTH as usize),
             d!(allocation_failures),
             d!(viewports),
             d!(ssao_viewport_swaps),
@@ -2559,6 +2686,7 @@ impl Stage {
             world_ms: timer.world_ms,
             seam_ms: timer.seam_ms,
             world_samples: timer.samples,
+            timer_generation: state.timer.generation,
             seam_samples: timer.seam_samples,
         };
         // The lines are emitted, and the driver reports, with the stage lock released.
@@ -2706,18 +2834,13 @@ unsafe extern "C" fn rsf_anomaly_sr_stage_configure_ini(
     log: rsf_anomaly_sr_log,
     user: *mut c_void,
 ) -> bool {
-    if ini.is_null() {
+    let Some((path, _)) = (unsafe { crate::wide::terminated(ini) }) else {
         return false;
-    }
-    let mut length = 0;
-    while unsafe { ini.add(length).read() } != 0 {
-        length += 1;
-    }
-    let path = unsafe { std::slice::from_raw_parts(ini, length) };
+    };
     STAGE.configure_ini(path, apply, log, user)
 }
 
-// The six live options in the shared overlay (AGENTS.md Rule 2), in RSF_ANOMALY_SR_OPTION_* order. The panel calls
+// The SR options in the shared overlay (AGENTS.md Rule 2), in RSF_ANOMALY_SR_OPTION_* order. The panel calls
 // get and set on the Present-owner thread, which is the engine's render thread.
 #[cfg(windows)]
 fn register_live_options() {
@@ -2728,16 +2851,16 @@ fn register_live_options() {
 }
 
 #[cfg(windows)]
-fn live_options() -> [crate::overlay_abi::rsf_anomaly_overlay_option; 6] {
+fn live_options() -> [crate::overlay_abi::rsf_anomaly_overlay_option; 13] {
     use crate::overlay_abi::rsf_anomaly_overlay_option;
     extern "C" fn get<const ID: u32>() -> i32 {
         STAGE.option(ID)
     }
-    extern "C" fn set<const ID: u32>(value: i32) {
-        STAGE.set_option(ID, value);
+    extern "C" fn set<const ID: u32>(value: i32) -> bool {
+        STAGE.set_option(ID, value)
     }
     type Get = unsafe extern "C" fn() -> i32;
-    type Set = unsafe extern "C" fn(i32);
+    type Set = unsafe extern "C" fn(i32) -> bool;
     let toggle = |label: &'static CStr, get: Get, set: Set| rsf_anomaly_overlay_option {
         label: label.as_ptr(),
         toggle: 1,
@@ -2748,6 +2871,13 @@ fn live_options() -> [crate::overlay_abi::rsf_anomaly_overlay_option; 6] {
         divisor: 1,
         get: Some(get),
         set: Some(set),
+    };
+    let number = |label, minimum, maximum, divisor, get, set| rsf_anomaly_overlay_option {
+        toggle: 0,
+        minimum,
+        maximum,
+        divisor,
+        ..toggle(label, get, set)
     };
     [
         toggle(
@@ -2777,13 +2907,69 @@ fn live_options() -> [crate::overlay_abi::rsf_anomaly_overlay_option; 6] {
         ),
         rsf_anomaly_overlay_option {
             toggle: 0,
-            minimum: -20,
-            maximum: 0,
-            divisor: 10,
+            minimum: (RSF_ANOMALY_SR_MIN_MIP_OFFSET * MIP_OFFSET_DIVISOR as f64) as i32,
+            maximum: (RSF_ANOMALY_SR_MAX_MIP_OFFSET * MIP_OFFSET_DIVISOR as f64) as i32,
+            divisor: MIP_OFFSET_DIVISOR as u32,
             ..toggle(
                 c"Mip bias offset",
                 get::<RSF_ANOMALY_SR_OPTION_MIP_BIAS_OFFSET>,
                 set::<RSF_ANOMALY_SR_OPTION_MIP_BIAS_OFFSET>,
+            )
+        },
+        number(
+            c"SR fallback scale",
+            33,
+            100,
+            100,
+            get::<OPTION_SCALE>,
+            set::<OPTION_SCALE>,
+        ),
+        number(
+            c"SR capture start frame",
+            0,
+            i32::MAX,
+            1,
+            get::<OPTION_CAPTURE_START>,
+            set::<OPTION_CAPTURE_START>,
+        ),
+        number(
+            c"SR capture frame count",
+            0,
+            32,
+            1,
+            get::<OPTION_CAPTURE_COUNT>,
+            set::<OPTION_CAPTURE_COUNT>,
+        ),
+        number(
+            c"SR capture interval",
+            1,
+            i32::MAX,
+            1,
+            get::<OPTION_CAPTURE_INTERVAL>,
+            set::<OPTION_CAPTURE_INTERVAL>,
+        ),
+        number(
+            c"SR camera cut distance (m)",
+            1,
+            10000,
+            10,
+            get::<OPTION_CUT_DISTANCE>,
+            set::<OPTION_CUT_DISTANCE>,
+        ),
+        number(
+            c"SR camera cut angle (deg)",
+            10,
+            1800,
+            10,
+            get::<OPTION_CUT_ANGLE>,
+            set::<OPTION_CUT_ANGLE>,
+        ),
+        rsf_anomaly_overlay_option {
+            restart: 1,
+            ..toggle(
+                c"Require signed SR libraries",
+                get::<OPTION_REQUIRE_SIGNATURE>,
+                set::<OPTION_REQUIRE_SIGNATURE>,
             )
         },
     ]
@@ -2848,40 +3034,6 @@ extern "C" fn rsf_anomaly_sr_stage_rm_near() {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_sr_stage_frame_end() {
     STAGE.frame_end();
-}
-// The controller's seam pass: `cookie` is the scope the enclosing seam call lent to the controller.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_stage_upscale(
-    cookie: *mut c_void,
-    input: *const UpscaleInputs,
-) -> bool {
-    let (Some(scope), Some(input)) = (unsafe { cookie.cast::<Scope>().as_ref() }, unsafe {
-        input.as_ref()
-    }) else {
-        return false;
-    };
-    let Some(seam) = (unsafe { Seam::upscale(input) }) else {
-        return false;
-    };
-    scope.stage.upscale(unsafe { &mut *scope.state }, &seam)
-}
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_stage_round_trip(
-    cookie: *mut c_void,
-    twin: *const TargetFields,
-    engine: *const TargetFields,
-) -> bool {
-    let (Some(scope), Some(twin), Some(engine)) = (
-        unsafe { cookie.cast::<Scope>().as_ref() },
-        unsafe { twin.as_ref() },
-        unsafe { engine.as_ref() },
-    ) else {
-        return false;
-    };
-    scope.stage.round_trip(
-        unsafe { &mut *scope.state },
-        &Seam::round_trip(twin, engine),
-    )
 }
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_sr_stage_report(emit: rsf_anomaly_sr_log, user: *mut c_void) {

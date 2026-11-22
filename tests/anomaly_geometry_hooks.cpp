@@ -38,6 +38,7 @@ bool constructing{};
 void* expected_instance = child.data();
 bool expect_identity = true;
 bool call_flush = false;
+bool valid_pm_palette = true;
 std::optional<temporal::ViewId> expected_view = temporal::ViewId::Scope;
 std::optional<temporal::ProjectionDomain> expected_domain = temporal::ProjectionDomain::FirstPerson;
 Flush flush_target{};
@@ -104,7 +105,13 @@ __declspec(noinline) void __fastcall skin_pm_fixture(void* instance, float lod)
     CHECK(instance == child.data() && lod == 0.875f);
     CHECK(borrow_draw() && borrow_draw()->kind == DrawKind::HardwareSkinned);
     const auto capture = capture_current_draw();
-    CHECK(capture && capture->bones.size() == 1 && capture->bones[0].at(0, 3) == 789);
+    CHECK(capture && capture->world);
+    if (valid_pm_palette) {
+        CHECK(capture->palette_layout != 0 && capture->bones.size() == 65);
+        CHECK(capture->bones.front().at(0, 3) == 789 && capture->bones.back().at(0, 3) == 853);
+    } else {
+        CHECK(capture->palette_layout == 0 && capture->bones.empty());
+    }
 }
 std::uint32_t flush_calls{};
 __declspec(noinline) void __fastcall flush_fixture()
@@ -296,24 +303,31 @@ int main(int argc, char** argv)
     }
     const auto first_generation = observed_generation;
     std::array<std::byte, 256> parent{};
-    std::array<std::byte, 168> bone{};
+    std::array<std::byte, 65 * 168> bone{};
     const auto parent_pointer = parent.data();
     const auto bone_pointer = bone.data();
     std::memcpy(parent.data() + 208, &bone_pointer, sizeof(bone_pointer));
     const auto check_skin = [&](std::size_t index, std::size_t offset, float lod, float translation) {
         const std::uint16_t mode = 2;
-        const std::uint32_t count = 1;
+        const std::uint32_t count = index == 4 ? 1 : 65;
         std::memcpy(child.data() + offset + 8, &parent_pointer, sizeof(parent_pointer));
         std::memcpy(child.data() + offset + 56, &mode, sizeof(mode));
         std::memcpy(child.data() + offset + 60, &count, sizeof(count));
         float transform[16];
         std::memcpy(transform, world, sizeof(transform));
-        transform[12] = translation;
-        std::memcpy(bone.data() + 64, transform, sizeof(transform));
+        for (std::uint32_t i = 0; i < count; ++i) {
+            transform[12] = translation + static_cast<float>(i);
+            std::memcpy(bone.data() + i * 168 + 64, transform, sizeof(transform));
+        }
         reinterpret_cast<Render>(fixtures[index])(child.data(), lod);
     };
     check_skin(4, 160, 0.625f, 456);
     check_skin(5, 208, 0.875f, 789);
+    // A bad affine lane in the second batch discards all 64 earlier matrices.
+    const float bad_lane = std::numeric_limits<float>::quiet_NaN();
+    std::memcpy(bone.data() + 64 * 168 + 64, &bad_lane, sizeof(bad_lane));
+    valid_pm_palette = false;
+    reinterpret_cast<Render>(fixtures[5])(child.data(), 0.875f);
     void* pointer = visual.data();
     destroy(&owner, &pointer, 0x12345678);
     CHECK(!pointer && !borrow_draw());

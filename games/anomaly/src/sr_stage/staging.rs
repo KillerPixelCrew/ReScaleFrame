@@ -82,14 +82,12 @@ pub(super) fn copy(
     Some(GpuLease(copy))
 }
 
-// What a staging texture reports, mapped or not: its rows while mapped, and the size and format for the summary.
+// What a staging texture reports, mapped or not: the size and format for the summary.
 #[derive(Clone, Copy)]
 pub(super) struct Layout {
-    pub(super) data: *const c_void,
     pub(super) width: u32,
     pub(super) height: u32,
     pub(super) format: u32,
-    pub(super) row_pitch: u32,
     pub(super) pixel_bytes: u32,
 }
 
@@ -99,6 +97,27 @@ pub(super) struct Mapping<'a> {
     texture: &'a GpuLease,
     unmap: unsafe extern "C" fn(*mut c_void, *mut c_void, u32),
     pub(super) layout: Layout,
+    data: *const c_void,
+    row_pitch: u32,
+}
+
+impl Mapping<'_> {
+    pub(super) fn rows(&self) -> Option<impl Iterator<Item = &[u8]>> {
+        let row = self.layout.width.checked_mul(self.layout.pixel_bytes)?;
+        let height = self.layout.height;
+        if self.data.is_null() || row == 0 || height == 0 || self.row_pitch < row {
+            return None;
+        }
+        let span = u64::from(self.row_pitch) * u64::from(height - 1) + u64::from(row);
+        if span > isize::MAX as u64 || self.data.addr().checked_add(span as usize).is_none() {
+            return None;
+        }
+        Some((0..height).map(move |y| {
+            let offset = y as usize * self.row_pitch as usize;
+            // The returned rows borrow this mapping and skip native row padding.
+            unsafe { std::slice::from_raw_parts(self.data.cast::<u8>().add(offset), row as usize) }
+        }))
+    }
 }
 
 impl Drop for Mapping<'_> {
@@ -115,11 +134,9 @@ pub(super) fn map<'a>(
     texture: &'a GpuLease,
 ) -> (Layout, Option<Mapping<'a>>) {
     let mut layout = Layout {
-        data: null(),
         width: 0,
         height: 0,
         format: 0,
-        row_pitch: 0,
         pixel_bytes: 0,
     };
     let (Some(d3d), Some(map_read), Some(unmap)) =
@@ -147,13 +164,13 @@ pub(super) fn map<'a>(
     if !unsafe { map_read(context, handle, SUBRESOURCE, &mut data, &mut row_pitch) } {
         return (layout, None);
     }
-    layout.data = data;
-    layout.row_pitch = row_pitch;
     let mapping = Mapping {
         context,
         texture,
         unmap,
         layout,
+        data,
+        row_pitch,
     };
     // The context's device reference drops after Map, as the former ComPtr did.
     drop(device);

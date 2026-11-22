@@ -31,6 +31,8 @@ struct VelocityProfileReport {
 };
 
 extern "C" {
+const char* rsf_ac7_velocity_fullscreen_source(void);
+const char* rsf_ac7_velocity_merge_source(void);
 // Nonzero with the slot and extent when the pass leases depth and motion and its view has motion
 // written for its frame, view and family. The decision is unavailable otherwise.
 int32_t rsf_ac7_velocity_commit_view(const rsf_game_render_pass* pass, VelocityViewDecision* decision);

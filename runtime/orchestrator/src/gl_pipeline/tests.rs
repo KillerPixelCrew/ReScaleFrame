@@ -62,6 +62,7 @@ fn fake_com(name: &'static str) -> *mut Fake {
 
 #[derive(Default)]
 struct World {
+    refused_preset: Option<u32>,
     events: Vec<String>,
     logs: Vec<String>,
     next: usize,
@@ -398,9 +399,9 @@ unsafe extern "C" fn dump_cancel(_: u64) {
     event("dump cancel".into());
 }
 
-// Stand-ins for the header predicates. The native table forwards to the published inlines.
+// The fixture supplies preset refusal; production forwards to the native header predicate.
 unsafe extern "C" fn dlss_preset_valid(preset: u32) -> c_int {
-    c_int::from(matches!(preset, 0 | 5 | 6 | 10..=13))
+    c_int::from(world(|world| world.refused_preset != Some(preset)))
 }
 unsafe extern "C" fn fg_default_backend(vendor: u32, software: u32) -> u32 {
     u32::from(vendor == 0x10de && software == 0)
@@ -895,6 +896,7 @@ fn input_attaches_only_to_open_cpu_frames() {
 #[test]
 fn rejected_options_do_not_touch_the_graphics_owner() {
     let pipeline = open_pipeline();
+    world(|world| world.refused_preset = Some(7));
     let mut invalid = [
         options(SR_SPATIAL, 1),
         options(8, 1),

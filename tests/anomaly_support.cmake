@@ -32,26 +32,17 @@ target_link_libraries(rsf_anomaly_geometry_hooks_test PRIVATE rsf_anomaly_rust m
 add_test(NAME anomaly_geometry_hooks_contract COMMAND rsf_anomaly_geometry_hooks_test)
 set_tests_properties(anomaly_geometry_contract anomaly_geometry_hooks_contract PROPERTIES TIMEOUT 60)
 
-# Shared-overlay wiring for Anomaly. The gate test uses a synthetic IDirectInputDevice8A; the API test uses fake
-# Runtime tables; the hooks test drives the production start() against a WARP swap chain and the system
-# DirectInput mouse/keyboard (skips with 77 where those do not exist). None of them loads the real Runtime,
-# the panel or the game, so they establish contracts, not an in-game acceptance. All three link the production
-# Rust gate (games/anomaly/src/input.rs).
-set(RSF_ANOMALY_OVERLAY_SOURCES
+# Rust unit fixtures cover the input gate and overlay API contracts. This fixture uses the
+# Windows SDK to exercise the installed hooks through WARP and system DirectInput.
+add_executable(rsf_anomaly_overlay_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_overlay_hooks.cpp"
     "${PROJECT_SOURCE_DIR}/games/anomaly/src/overlay_hooks.cpp"
     "${PROJECT_SOURCE_DIR}/games/anomaly/src/overlay_service.cpp")
-foreach(overlay_test IN ITEMS input_gate api hooks)
-    add_executable(rsf_anomaly_overlay_${overlay_test}_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_overlay_${overlay_test}.cpp"
-        ${RSF_ANOMALY_OVERLAY_SOURCES})
-    target_include_directories(rsf_anomaly_overlay_${overlay_test}_test PRIVATE
-        "${PROJECT_SOURCE_DIR}/games/anomaly/src" "${PROJECT_SOURCE_DIR}/runtime/orchestrator/include")
-    target_link_libraries(rsf_anomaly_overlay_${overlay_test}_test PRIVATE
-        rsf_anomaly_rust ReScaleFrame::GameSDK ReScaleFrame::Contract minhook rsf_build_options)
-    add_test(NAME anomaly_overlay_${overlay_test}_contract COMMAND rsf_anomaly_overlay_${overlay_test}_test)
-    set_tests_properties(anomaly_overlay_${overlay_test}_contract PROPERTIES TIMEOUT 60)
-endforeach()
-target_link_libraries(rsf_anomaly_overlay_hooks_test PRIVATE d3d11 dxgi dinput8 dxguid)
-set_tests_properties(anomaly_overlay_hooks_contract PROPERTIES SKIP_RETURN_CODE 77)
+target_include_directories(rsf_anomaly_overlay_hooks_test PRIVATE
+    "${PROJECT_SOURCE_DIR}/games/anomaly/src" "${PROJECT_SOURCE_DIR}/runtime/orchestrator/include")
+target_link_libraries(rsf_anomaly_overlay_hooks_test PRIVATE
+    rsf_anomaly_rust ReScaleFrame::GameSDK ReScaleFrame::Contract minhook rsf_build_options d3d11 dxgi dinput8 dxguid)
+add_test(NAME anomaly_overlay_hooks_contract COMMAND rsf_anomaly_overlay_hooks_test)
+set_tests_properties(anomaly_overlay_hooks_contract PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
 
 # SR Stage 0 site profile: compile-time consistency and runtime build selection. The guards are checked against the installed executable by
 # tests/anomaly_sr_evidence.py --verify, which is not registered here because it needs the game install.
@@ -86,14 +77,6 @@ add_test(NAME anomaly_sr_roundtrip_device COMMAND rsf_anomaly_sr_roundtrip_test)
 set_tests_properties(anomaly_sr_roundtrip_device PROPERTIES SKIP_RETURN_CODE 77)
 set_tests_properties(anomaly_sr_swap_contract anomaly_sr_swap_unknown_selection anomaly_sr_hooks_contract
     anomaly_sr_roundtrip_device PROPERTIES TIMEOUT 120)
-
-# SR Stage 2 (render-size world window). The plan test checks the render/output arithmetic; the Stage 2 swap cases live
-# in anomaly_sr_swap_contract and the upscale/depth-twin fixture in anomaly_sr_roundtrip_device.
-add_executable(rsf_anomaly_sr_plan_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_plan.cpp")
-target_include_directories(rsf_anomaly_sr_plan_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
-target_link_libraries(rsf_anomaly_sr_plan_test PRIVATE rsf_anomaly_rust rsf_build_options)
-add_test(NAME anomaly_sr_plan_contract COMMAND rsf_anomaly_sr_plan_test)
-set_tests_properties(anomaly_sr_plan_contract PROPERTIES TIMEOUT 30)
 
 # Motion MRT. The contract test checks the b13 layouts against the shader READMEs/headers, the history policy, the
 # RTV2 bind-preservation state machine on fake RCache memory and the shader-loader hook contract (caller frame,
@@ -177,7 +160,7 @@ if(Python3_Interpreter_FOUND)
         --measure-self-test)
     set_tests_properties(anomaly_sr_measure_self_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 endif()
-# SR Stages 4 and 5 (section 12). The pass contract checks sr_pass.h/sr_plan.h on the CPU. The Runtime API contract is a
+# SR Stages 4 and 5 (section 12). The pass contract checks sr_pass.h on the CPU. The Runtime API contract is a
 # client that imports ReScaleFrame.Runtime.dll like a carrier-loaded adapter and checks rsf_get_d3d11_sr_api plus the
 # adapter's table validation. The device fixture runs the production decode/resolve parameters and the prepare and
 # reinsert passes on any D3D11 device; its provider case needs the vendor runtimes in the package layout

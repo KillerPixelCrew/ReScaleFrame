@@ -256,3 +256,66 @@ that leaf. Source comparison and focused binding regeneration passed.
 The public declarations, shaders, capture order and profile data
 match in source. Build, fixtures and live Standard and AVX checks
 remain open.
+
+## N06 source review and port checkpoint
+
+Base `9bb9421d` includes the N07 restoration and retirement work. The stage
+calls the same Rust swap owner after the same verified native guard. It uses
+shared frame facts and counters. Twin retirement remains conditional on
+restoration. The scoped seam forwards the spatial recovery flag to the
+bilinear path and keeps the engine viewport handoff in the swap owner.
+Paths in the findings below are relative to `games/anomaly/src/` unless
+they specify another repository directory.
+
+- **Report whether failed constant correction restored all engine state.** sr_reconstruction.rs, sr_reconstruction.h, sr_swap.rs and sr_swap_platform.h. Stock vector and dirty byte are read back and retried synchronously while the engine staging slot is valid. An incomplete rollback is reported distinctly and the current seam uses spatial recovery. The native reconstruction fixture covers one-shot failures and a persistent rollback refusal.
+- **Resolve Anomaly's vendor runtime directories once for SR and FG.** sr_stage.rs and fg_stage/options.rs. One UTF-16 resolver uses the production INI lookup, explicit paths and the package defaults. FG preserves capture-path semantics and converts vendor paths to UTF-8 at the Runtime boundary.
+- **Give the remaining Anomaly SR keys overlay rows.** sr_stage.rs and sr_stage/tests.rs. All seven rows are registered. Scale and cut thresholds affect subsequent frames. Schedule edits change the diagnostic budget, and Stage 3 schedule edits start a separate burst when the start or count changes. Signature enforcement is applied at pipeline startup and the row signals restart.
+- **Make native guard availability part of SR stage admission.** sr_stage.rs, sr_stage.cpp and sr_stage/tests.rs. A fresh install requires the verification operation before engine setup or hook installation. An already installed matching build can reuse its verified trampolines. The missing-operation fixture expects admission refusal.
+- **Share the frame-dump admission transaction between Anomaly SR and motion.** frame_dump.rs, sr_stage.rs and motion/stage/capture.rs. Both stages use the same poll/request/begin transaction. The existing motion schedule fixture covers refusal without spending budget and the retry through that shared method.
+- **Pass the seam operation directly between its two Rust owners.** sr_stage.rs, sr_swap.rs, sr_stage.cpp and sr_stage_platform.h. The stage only obtains the native controller handle during its lock. It passes a borrowed Rust seam operation directly to the swap owner, which calls it after verified restoration. The native opaque cookie and C round trip are gone from the production path.
+- **Publish the actual bilinear fallback result.** sr_stage.rs, sr_temporal.rs and sr_stage_platform.h. The driver receives the reason and draw result after the spatial pass, counts success and failure separately, and emits a recovery status consistent with the result.
+- **Derive the overlay mip-bias range from the SR option bounds.** sr_stage.rs and sr_stage/tests.rs. The offset descriptor derives both limits from the INI bounds and shares its divisor with the getter and setter. The fixture checks the endpoints and a positive value.
+- **Keep pending GPU query results distinct from terminal failures.** sr_stage.cpp, sr_stage_platform.h, sr_stage/gpu_timer.rs and sr_stage/tests.rs. The native leaves return GetData HRESULTs. Pending queries are retained and a terminal failure makes its slot reusable. The existing stage fixture now covers pending, failure and a later accepted sample.
+- **Exercise the production Win32 INI callbacks in the SR package test.** ini.rs and sr_stage/tests.rs. The disk-backed test now uses the two actual Win32 callbacks. Its injected filesystem probe stays separate.
+- **Create only the depth state required by temporal preparation.** sr_d3d11/passes.rs. Temporal state creation requests only the no-depth state. Shared rasterizer and blend leases remain in the containing pass.
+- **Store the creating device in the temporal target cache key.** sr_d3d11/targets.rs. The cache key uses the original creating device identity, which remains live through the owned textures. Matching dimensions and format no longer calls GetDevice.
+- **Read swap counter buckets with the same constants used to increment them.** sr_stage.rs and sr_swap_abi.rs. Stage reports read the generated skip and restore constants used by the swap owner.
+- **Anomaly SR stage state is an Option<Box> that every accessor lazily recreates.** sr_stage.rs and sr_stage/tests.rs. Stage state initializes once in LazyLock<Mutex<State>> and install holds one guard.
+- **Reset the GPU timing report baseline when the D3D11 device changes.** sr_stage.rs, sr_stage/gpu_timer.rs and sr_stage/tests.rs. Timing samples and baselines are generation-bound. The report fixture records a nonzero sample and observes a zero count and average after device replacement.
+- **Share the Halton sample calculation used by Anomaly and Skyrim.** sdk/game/src/sampling.rs, sr_stage/math.rs and games/skyrim-se/src/resolution.rs. One algorithm supplies f64 and f32 versions without changing arithmetic precision or projection conventions.
+- **Keep mapped row data inside the mapping guard.** sr_stage/staging.rs, sr_stage/burst_file.rs and sr_stage/staging/tests.rs. Layout carries only descriptor metadata. Byte slices borrow the map guard, which unmaps on drop.
+
+### Native file and fixture disposition
+
+| N06 paths | Disposition |
+| --- | --- |
+| `games/anomaly/src/sr_plan.h`, `tests/anomaly_sr_plan.cpp` | Removed. Production and fixtures use the Rust plan implementation. The native swap fixture calls its narrow plan entry directly. |
+| `games/anomaly/src/sr_stage.cpp`, `sr_stage.h`, `sr_stage_platform.h` | Rust owns stage admission, locked state, policy and seam dispatch. Native retains guarded engine-memory and vtable access, hook installation and trampolines, D3D11 query leaves and the adapter's C++ entry surface. |
+| `games/anomaly/src/sr_d3d11.cpp`, `sr_d3d11.h`, `sr_d3d11_platform.h` | Retained for COM, D3D11 state, shader compilation and SDK descriptors. The existing Rust pass and target owners keep allocation, refusal and lease order. |
+| `games/anomaly/src/sr_reconstruction.h` | Native layout and guarded access leaves remain. Rust owns validation, correction and rollback verification. |
+| `games/anomaly/src/sr_pass.h`, `sr_settings.h` | Native pass and settings adapters remain for C++ consumers. The duplicate native settings admission was removed. Backend-requested rectangle and settings admission fixtures now exercise the Rust owners. |
+| `games/anomaly/src/sr_profile.h`, `tests/anomaly_sr_profile.cpp` | The Standard and AVX offsets and expected bytes remain in the native profile shared with guard evidence tools. The fixture checks relationships across the native profiles. |
+| `tests/anomaly_sr_hooks.cpp`, `anomaly_sr_runtime_api.cpp`, `anomaly_sr_roundtrip.cpp` | Retained native hook, real Runtime API negotiation and D3D11 device fixtures, respectively. |
+| `tests/anomaly_sr_reconstruction.cpp`, `anomaly_sr_pass.cpp` | Retained native ABI fixtures. Reconstruction coverage includes the new rollback result. The pass fixture keeps the CPU motion oracle and the real Rust pass through the C ABI. |
+
+### Remaining finding
+
+**Let the Runtime choose and default the Anomaly SR backend.** The shared
+D3D11 API's start leaf still calls the DLSS-specific pipeline. In
+`runtime/orchestrator/src/dlss_pipeline.rs`, startup sets up Streamline,
+checks DLSS support and obtains a DLSS render plan before allowing any
+alternate selection. The evaluation path also requires Streamline to be
+loaded. Using the Runtime's vendor preference alone would still refuse AMD
+or Intel devices before their selected providers can run. Closing this
+requires a generic Runtime start contract and alternate-first D3D11
+startup, followed by the adapter Auto setting and elimination of local
+availability/vendor ordering.
+
+Source review compared ordered stage, swap and D3D11 callback declarations
+(76, 11 and 23 slots), native initializers where designated, and generated
+stage and swap offsets. The private stage table is 608 bytes on Windows
+x64. Timing return types, the seam handle, the fallback outcome and the
+constant-correction result were checked on both sides. The C++ and Rust
+temporal counter layouts are declared as 432 bytes after adding the failure
+counter. Git whitespace checks passed. Binding generation, compile, link,
+lint and fixture/device execution were not run for this checkpoint.

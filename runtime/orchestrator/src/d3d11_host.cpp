@@ -2,6 +2,7 @@
 // Stable D3D11 host exports and the native leaf calls behind them. Admission,
 // callback leases, lifecycle, recovery and status live in d3d11_host.rs.
 #include "d3d11_host_platform.h"
+#include "dlss_pipeline_platform.h"
 #include "d3d11_output_platform.h"
 #include <rescaleframe/native_sr.h>
 #include <rescaleframe/native_cpu.h>
@@ -225,7 +226,7 @@ int32_t pipeline_start(void* device, const rsf_d3d11h_pipeline_start* request) n
     create.fsr2_directory_utf8 = create.fsr3_directory_utf8 = create.fsr4_directory_utf8 = text.fidelityfx;
     create.xess_directory_utf8 = text.xess; create.view_space_to_meters = setup.units_to_meters;
     create.standard_depth = !setup.depth_inverted;
-    return rsf_dlss_pipeline_start(static_cast<ID3D11Device*>(device), &create);
+    return rsf_dlss_pipeline_start_backend(device, &create, request->backend);
 } catch (...) { return RSF_ERROR_NOT_READY; }
 int32_t pipeline_resize(uint32_t width, uint32_t height) noexcept try
 {

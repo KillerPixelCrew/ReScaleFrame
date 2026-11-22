@@ -4,6 +4,7 @@
 //! queries are atomic. The NGX wrapper nesting is tracked on the calling thread.
 use std::alloc::{Layout, alloc};
 use std::cell::UnsafeCell;
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -16,6 +17,8 @@ mod hooks;
 #[cfg(windows)]
 mod install;
 mod metadata;
+#[cfg(windows)]
+mod poll;
 mod recordings;
 mod shots;
 use gpu_leases::Gpu;
@@ -26,6 +29,7 @@ use shots::{Ready, Shots};
 const MAX_DRAW_COPIES: u32 = 64;
 const MAX_DRAW_METADATA: usize = 4096;
 const INPUT_FRAMES: u32 = 4;
+#[cfg(any(windows, test))]
 const CAPTURE_TIMEOUT_MS: u64 = 5000;
 const SAVE_DRAW: u32 = 1;
 const KEEP_TAIL: u32 = 2;
@@ -39,9 +43,10 @@ struct Progress {
     timed_out: u32,
     write_failed: u32,
     requested_input_frames: u32,
+    readbacks_unavailable: u32,
 }
 
-const _: () = assert!(size_of::<Progress>() == 28);
+const _: () = assert!(size_of::<Progress>() == 32);
 
 #[derive(Default)]
 struct Ledger {
@@ -50,11 +55,13 @@ struct Ledger {
     written: u32,
     input_index: u32,
     inputs_in_flight: u32,
+    #[cfg_attr(not(any(windows, test)), allow(dead_code))]
     started: u64,
     dirty: bool,
     draw_overflow: bool,
     timed_out: bool,
     write_failed: bool,
+    readbacks_unavailable: u32,
 }
 
 impl Ledger {
@@ -67,6 +74,7 @@ impl Ledger {
             timed_out: u32::from(self.timed_out),
             write_failed: u32::from(self.write_failed),
             requested_input_frames: INPUT_FRAMES,
+            readbacks_unavailable: self.readbacks_unavailable,
         }
     }
 }
@@ -83,6 +91,7 @@ struct Capture {
     gpu: UnsafeCell<Gpu>,
     shots: UnsafeCell<Shots>,
     // The poll thread alone accesses this batch. It detaches shots under the native mutex.
+    #[cfg_attr(not(any(windows, test)), allow(dead_code))]
     ready: UnsafeCell<Ready>,
 }
 
@@ -122,6 +131,13 @@ fn allocate<T>(value: T) -> *mut T {
     owner
 }
 
+fn try_entry<V: Default>(map: &mut HashMap<usize, V>, key: usize) -> Option<&mut V> {
+    if !map.contains_key(&key) && map.try_reserve(1).is_err() {
+        return None;
+    }
+    Some(map.entry(key).or_default())
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn rsf_rdr2_capture_request(owner: &Capture) {
     owner.pending.store(true, Ordering::Release);
@@ -129,14 +145,13 @@ extern "C" fn rsf_rdr2_capture_request(owner: &Capture) {
 
 /// The poll thread lends the NUL-terminated request filename for the duration of the call.
 #[cfg(windows)]
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_poll_request(owner: &Capture, request: *const u16) {
-    use crate::diagnostics::{capture_key_down, foreground};
+unsafe fn poll_request(owner: &Capture, request: *const u16) {
+    use crate::diagnostics::{capture_key_down, capture_key_pressed, foreground};
     use windows_sys::Win32::Storage::FileSystem::DeleteFileW;
 
     let down = capture_key_down();
     let was_down = owner.key_down.swap(down, Ordering::Relaxed);
-    if down && !was_down && foreground() {
+    if capture_key_pressed(was_down, down, foreground()) {
         rsf_rdr2_capture_request(owner);
     }
     if unsafe { DeleteFileW(request) } != 0 {
@@ -195,8 +210,8 @@ extern "C" fn rsf_rdr2_capture_end_draws(owner: &Capture) {
     owner.active.store(false, Ordering::Release);
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_timeout(owner: &Capture, tick: u64) -> bool {
+#[cfg(any(windows, test))]
+unsafe fn timeout(owner: &Capture, tick: u64) -> bool {
     let ledger = unsafe { &mut *owner.ledger.get() };
     if ledger.dirty
         && tick.wrapping_sub(ledger.started) > CAPTURE_TIMEOUT_MS
@@ -231,8 +246,8 @@ unsafe fn commit_draw(owner: &Capture) -> u32 {
     action
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_readback_written(owner: &Capture, success: bool) {
+#[cfg(windows)]
+unsafe fn readback_written(owner: &Capture, success: bool) {
     let ledger = unsafe { &mut *owner.ledger.get() };
     if success {
         ledger.written = ledger.written.wrapping_add(1);
@@ -248,8 +263,11 @@ unsafe fn can_publish(owner: &Capture) -> bool {
 }
 
 #[cfg(any(windows, test))]
-unsafe fn mark_published(owner: &Capture) {
-    unsafe { (*owner.ledger.get()).dirty = false };
+unsafe fn mark_published(owner: &Capture, sequence: u32) {
+    let ledger = unsafe { &mut *owner.ledger.get() };
+    if ledger.sequence == sequence {
+        ledger.dirty = false;
+    }
 }
 
 #[cfg(test)]
@@ -276,8 +294,8 @@ mod tests {
             assert!(!metadata::rsf_rdr2_capture_track_evaluation(false));
             assert!(!metadata::rsf_rdr2_capture_track_evaluation(true));
             rsf_rdr2_capture_request(&owner);
-            assert!(!rsf_rdr2_capture_timeout(&owner, 5100));
-            assert!(rsf_rdr2_capture_timeout(&owner, 5101));
+            assert!(!timeout(&owner, 5100));
+            assert!(timeout(&owner, 5101));
             assert!(!can_publish(&owner));
             assert!(metadata::rsf_rdr2_capture_track_evaluation(true));
             assert!(!metadata::rsf_rdr2_capture_track_evaluation(false));
@@ -290,7 +308,7 @@ mod tests {
             (&mut *owner.shots.get()).pending.clear();
             assert!(can_publish(&owner));
             assert!(!rsf_rdr2_capture_can_arm(&owner));
-            mark_published(&owner);
+            mark_published(&owner, 1);
             assert!(rsf_rdr2_capture_can_arm(&owner));
         }
     }

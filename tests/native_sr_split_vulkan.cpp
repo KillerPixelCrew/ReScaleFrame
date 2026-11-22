@@ -26,11 +26,11 @@ rsf_fsr4vk instance;
 int32_t provider_result = 0;
 bool throw_evaluate = false, throw_info = false;
 unsigned creates = 0, evaluations = 0;
-const rsf_srvk_setup* forwarded_setup = nullptr;
-const rsf_fsr4vk_handoff* forwarded_handoff = nullptr;
+rsf_srvk_setup forwarded_setup{};
+rsf_fsr4vk_handoff forwarded_handoff{};
 }
-int32_t rsf_fsr4vk_create(const rsf_srvk_setup* setup, const rsf_fsr4vk_handoff* handoff, rsf_fsr4vk** out) {
-    ++creates; forwarded_setup = setup; forwarded_handoff = handoff;
+int32_t rsf_fsr4vk_create_admitted(const rsf_srvk_setup* setup, const rsf_fsr4vk_handoff* handoff, rsf_fsr4vk** out) {
+    ++creates; forwarded_setup = *setup; forwarded_handoff = *handoff;
     *out = &instance; return provider_result;
 }
 int32_t rsf_fsr4vk_plan(const rsf_fsr4vk*, uint32_t* width, uint32_t* height) {
@@ -137,7 +137,8 @@ int main() {
     // Forward-compatible size extensions keep the original prefix and version.
     setup.struct_size += 8; handoff.struct_size += 8;
     check(rsf_srvk_fsr4_create(&setup, &handoff, &owner) == 0 && owner == &instance &&
-        forwarded_setup == &setup && forwarded_handoff == &handoff, "compiled route forwards the actual setup and callback lease");
+        forwarded_setup.device == setup.device && forwarded_setup.output_width == setup.output_width &&
+        forwarded_handoff.split_record == handoff.split_record, "compiled route forwards the admitted setup and callback lease");
     handoff.abi_version = RSF_SRVK_SPLIT_TRACKED_ABI_VERSION;
     check(rsf_srvk_fsr4_create(&setup, &handoff, &owner) == 0, "tracked ABI routes to actual provider");
     check(rsf_srvk_fsr4_submitted(owner, commands) == 0, "notification reaches provider");

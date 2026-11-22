@@ -21,7 +21,7 @@
 // The snapshot, callback count, capture request, buffer and capture admission, the motion
 // classification and the probe's published stage, reason and inactive pipeline claims are owned by
 // native/effect.rs. This class keeps its registration and callback contract, the scene buffer,
-// scene data and RenderingDevice reads, the readback compute pass and the status Dictionary keys,
+// scene data and RenderingDevice reads, the readback recording calls and the status Dictionary keys,
 // and lends them as rsf_godot_effect_leaves (godot_platform.h).
 static_assert(sizeof(rsf_godot_effect_frame) == 272 && offsetof(rsf_godot_effect_frame, motion_valid) == 36 &&
     offsetof(rsf_godot_effect_frame, camera_transform) == 48 &&
@@ -30,6 +30,7 @@ static_assert(sizeof(rsf_godot_effect_frame) == 272 && offsetof(rsf_godot_effect
     offsetof(rsf_godot_effect_status, resources) == 288 && offsetof(rsf_godot_effect_status, buffers_available) == 312 &&
     offsetof(rsf_godot_effect_status, captures) == 320 && offsetof(rsf_godot_effect_status, capture_max_abs_uv) == 368 &&
     offsetof(rsf_godot_effect_status, stage) == 376 && offsetof(rsf_godot_effect_status, rendering_ready) == 400 &&
+    sizeof(rsf_godot_effect_readback) == 24 && offsetof(rsf_godot_effect_readback, groups_y) == 16 &&
     sizeof(rsf_godot_effect_leaves) == 32 && offsetof(rsf_godot_effect_leaves, read_motion) == 24,
     "native/platform.rs mirrors these layouts");
 
@@ -46,26 +47,17 @@ struct Call {
     Ref<RenderSceneBuffersRD> buffers;
     RenderingDevice* rd = nullptr;
     RID color, depth, motion;
-    Vector2i internal_size;
     PackedByteArray bytes;
 };
 Call& call_of(void* call) { return *static_cast<Call*>(call); }
 
-PackedByteArray read_motion(RenderingDevice* rd, RID motion, Vector2i size)
+PackedByteArray read_motion(RenderingDevice* rd, RID motion, const rsf_godot_effect_readback& plan)
 {
     // The engine velocity target is sampleable, but deliberately is not a copy source.
     // Convert into an owned buffer through the graph before bounded CPU readback.
     Ref<RDShaderSource> source;
     source.instantiate();
-    source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, R"(#version 450
-layout(local_size_x=8, local_size_y=8) in;
-layout(set=0,binding=0) uniform sampler2D motion_tex;
-layout(set=0,binding=1,std430) writeonly buffer Samples { vec2 velocity[]; };
-void main() {
-    ivec2 p=ivec2(gl_GlobalInvocationID.xy), size=textureSize(motion_tex,0);
-    if(any(greaterThanEqual(p,size))) return;
-    velocity[p.y*size.x+p.x]=texelFetch(motion_tex,p,0).xy;
-})");
+    source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, plan.shader);
     Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(source);
     if (spirv.is_null() || !spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE).is_empty()) return {};
     const RID shader = rd->shader_create_from_spirv(spirv);
@@ -74,7 +66,7 @@ void main() {
     Ref<RDSamplerState> sampler_state;
     sampler_state.instantiate();
     const RID sampler = rd->sampler_create(sampler_state);
-    const RID buffer = rd->storage_buffer_create(static_cast<uint32_t>(size.x) * size.y * 8);
+    const RID buffer = rd->storage_buffer_create(plan.bytes);
     Ref<RDUniform> texture_uniform;
     texture_uniform.instantiate();
     texture_uniform->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
@@ -95,7 +87,7 @@ void main() {
         const int64_t list = rd->compute_list_begin();
         rd->compute_list_bind_compute_pipeline(list, pipeline);
         rd->compute_list_bind_uniform_set(list, uniform_set, 0);
-        rd->compute_list_dispatch(list, (size.x + 7) / 8, (size.y + 7) / 8, 1);
+        rd->compute_list_dispatch(list, plan.groups_x, plan.groups_y, 1);
         rd->compute_list_end();
         result = rd->buffer_get_data(buffer);
     }
@@ -117,10 +109,10 @@ uint32_t leaf_frame(void* call, rsf_godot_effect_frame* frame) noexcept try {
     const Ref<RenderSceneBuffersRD>& buffers = value.buffers;
     frame->render_target = buffers->get_render_target().get_id();
     frame->views = buffers->get_view_count();
-    value.internal_size = buffers->get_internal_size();
+    const Vector2i internal_size = buffers->get_internal_size();
     const Vector2i output = buffers->get_target_size();
-    frame->internal_width = value.internal_size.x;
-    frame->internal_height = value.internal_size.y;
+    frame->internal_width = internal_size.x;
+    frame->internal_height = internal_size.y;
     frame->output_width = output.x;
     frame->output_height = output.y;
     const Transform3D camera = scene->get_cam_transform();
@@ -154,12 +146,12 @@ uint32_t leaf_resources(void* call, rsf_godot_effect_resources* resources) noexc
     return 1;
 } catch (...) { return 0; }
 
-uint32_t leaf_read_motion(void* call, const uint8_t** data, uint64_t* size) noexcept try {
+uint32_t leaf_read_motion(void* call, const rsf_godot_effect_readback* plan, const uint8_t** data, uint64_t* size) noexcept try {
     auto& value = call_of(call);
     *data = nullptr;
     *size = 0;
     // Packed data owns its CPU storage; the borrowed texture never leaves the callback.
-    value.bytes = read_motion(value.rd, value.motion, value.internal_size);
+    value.bytes = read_motion(value.rd, value.motion, *plan);
     *data = value.bytes.ptr();
     *size = static_cast<uint64_t>(value.bytes.size());
     return 1;

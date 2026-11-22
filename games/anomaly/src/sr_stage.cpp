@@ -14,7 +14,6 @@
 #include "sr_d3d11.h"
 #include "build_profile.h"
 #include "sr_jitter.h"
-#include "sr_plan.h"
 #include "sr_swap.h"
 #include "sr_reconstruction.h"
 #include "sr_temporal.h"
@@ -24,6 +23,7 @@
 #include <rescaleframe/texture_dump.h>
 #include <windows.h>
 #include <algorithm>
+#include <bit>
 #include <cstdio>
 #include <cmath>
 #include <cstring>
@@ -36,8 +36,8 @@ namespace rsf { uint32_t texture_pixel_bytes(DXGI_FORMAT format); }
 extern "C" {
 int32_t rsf_anomaly_sr_ini_int(const void*, const char*, int32_t) noexcept;
 uint32_t rsf_anomaly_sr_ini_text(const void*, const char*, const char*, uint16_t*, uint32_t) noexcept;
-void rsf_anomaly_sr_persist_int(const char*, int32_t) noexcept;
-void rsf_anomaly_sr_persist_text(const char*, const char*) noexcept;
+bool rsf_anomaly_sr_persist_int(const char*, int32_t) noexcept;
+bool rsf_anomaly_sr_persist_text(const char*, const char*) noexcept;
 void rsf_anomaly_sr_stage_register(const rsf_anomaly_sr_stage_platform*) noexcept;
 void rsf_anomaly_sr_stage_read_options(const void*, rsf_anomaly_sr_stage_config*) noexcept;
 float rsf_anomaly_sr_stage_read_scale(const void*, bool*) noexcept;
@@ -56,8 +56,6 @@ void rsf_anomaly_sr_stage_sun_end(bool) noexcept;
 void rsf_anomaly_sr_stage_position_setup(void*) noexcept;
 void rsf_anomaly_sr_stage_rm_near() noexcept;
 void rsf_anomaly_sr_stage_frame_end() noexcept;
-bool rsf_anomaly_sr_stage_upscale(void*, const rsf_anomaly_swap_upscale*) noexcept;
-bool rsf_anomaly_sr_stage_round_trip(void*, const rsf_anomaly_swap_fields*, const rsf_anomaly_swap_fields*) noexcept;
 void rsf_anomaly_sr_stage_report(rsf_anomaly_sr_log, void*) noexcept;
 void rsf_anomaly_sr_stage_jitter(rsf_anomaly_sr_jitter_state*) noexcept;
 void rsf_anomaly_sr_stage_jitter_uv(rsf_anomaly_sr_jitter_uv*) noexcept;
@@ -141,7 +139,7 @@ EnginePositionConstants position_constants;
 static_assert(D3D11_DEVICE_CONTEXT_IMMEDIATE == 0 && D3D11_USAGE_STAGING == 3 && D3D11_CPU_ACCESS_READ == 0x20000);
 static_assert(sizeof(rsf_anomaly_sr_frame_reads) == 168 && offsetof(rsf_anomaly_sr_frame_reads, render_view) == 152);
 static_assert(static_cast<uint32_t>(temporal::ViewId::Scope) == 1 && dx10_msaa_bit == (1u << 14));
-static_assert(sizeof(rsf_anomaly_sr_stage_platform) == 616 &&
+static_assert(sizeof(rsf_anomaly_sr_stage_platform) == 608 &&
     offsetof(rsf_anomaly_sr_stage_platform, immediate_context) == 280 &&
     offsetof(rsf_anomaly_sr_stage_platform, pixel_bytes) == 328 && offsetof(rsf_anomaly_sr_stage_platform, draw_pass) == 336);
 static_assert(first_person_depth_limit == 0.02f && RSF_SR_ROUND_TRIP == 0 && RSF_SR_UPSCALE == 1 &&
@@ -185,8 +183,6 @@ struct TwinLog {
 struct Host final : SwapHost {
     rsf_sr_stage_resources* resources{};
     const TwinLog* twin_log{}; // borrowed only while controller.prepare() runs
-    // While controller.seam() runs: the Rust scope lent by the seam call.
-    void* cookie{};
     Host() = default;
     Host(const Host&) = delete;
     Host& operator=(const Host&) = delete;
@@ -243,17 +239,11 @@ struct Host final : SwapHost {
         // takes references it never releases (stock leaks them on its own targets too), so this is diagnostic only.
         rsf_anomaly_sr_stage_retire_twins(resources, twin_refs);
     }
-    bool upscale(const UpscaleInputs& in) noexcept override {
-        return rsf_anomaly_sr_stage_upscale(cookie, &in);
-    }
     void set_viewport(uint32_t width, uint32_t height) noexcept override { set_full_viewport(context(), width, height); }
     bool upload_projection(const void* matrix) noexcept override { return call_set_projection(matrix); }
     bool set_mip_bias(float value) noexcept override { return call_set_mip_bias(value); }
-    bool correct_position_constant(void* constant, float x, float y) noexcept override {
+    uint32_t correct_position_constant(void* constant, float x, float y) noexcept override {
         return sr::correct_position_constant(position_constants, constant, x, y);
-    }
-    bool round_trip(const TargetFields& twin, const TargetFields& engine) noexcept override {
-        return rsf_anomaly_sr_stage_round_trip(cookie, &twin, &engine);
     }
 };
 
@@ -267,19 +257,6 @@ TemporalDriver driver;
 std::array<void*, 5> originals{};
 using Unary = void(__fastcall*)(void*);
 
-// ---- conversions between the native types and the Rust boundary --------------------------------------------------
-JitterState to_native(const rsf_anomaly_sr_jitter_state& s) noexcept {
-    JitterState out{};
-    out.frame = s.frame;
-    out.sequence_index = s.sequence_index;
-    out.phase_count = s.phase_count;
-    out.current_x = s.current_x; out.current_y = s.current_y;
-    out.previous_x = s.previous_x; out.previous_y = s.previous_y;
-    out.render_width = s.render_width; out.render_height = s.render_height;
-    out.previous_render_width = s.previous_render_width; out.previous_render_height = s.previous_render_height;
-    out.scope = s.scope; out.applied = s.applied; out.previous_applied = s.previous_applied; out.reset = s.reset;
-    return out;
-}
 // ---- guards and hooks -----------------------------------------------------------------------------------------------
 // The original can re-enter draw callbacks, so the stage lock is held only while changing the camera.
 // Scope cleanup also restores the camera if an engine C++ exception leaves the original.
@@ -415,12 +392,7 @@ const rsf_anomaly_sr_stage_platform platform{
         return prepared;
     },
     .prepared = [] { controller.prepared(); },
-    .seam = [](void* cookie) {
-        host.cookie = cookie;
-        const bool closed = controller.seam();
-        host.cookie = nullptr;
-        return closed;
-    },
+    .swap_handle = []() -> void* { return controller.native_handle(); },
     .combine_end = [] { controller.combine_end(); },
     .frame_end = [] { controller.frame_end(); },
     .rm_near = [] { controller.rm_near(); },
@@ -449,17 +421,19 @@ const rsf_anomaly_sr_stage_platform platform{
         auto* timestamp = static_cast<ID3D11Query*>(query);
         if (begin) ctx->Begin(timestamp); else ctx->End(timestamp);
     },
-    .timer_clock = [](void* context, void* query, uint64_t* frequency, bool* disjoint) {
+    .timer_clock = [](void* context, void* query, uint64_t* frequency, bool* disjoint) -> int32_t {
         D3D11_QUERY_DATA_TIMESTAMP_DISJOINT clock{};
-        if (static_cast<ID3D11DeviceContext*>(context)->GetData(static_cast<ID3D11Query*>(query),
-                &clock, sizeof(clock), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK) return false;
-        *frequency = clock.Frequency;
-        *disjoint = clock.Disjoint != FALSE;
-        return true;
+        const HRESULT result = static_cast<ID3D11DeviceContext*>(context)->GetData(static_cast<ID3D11Query*>(query),
+            &clock, sizeof(clock), D3D11_ASYNC_GETDATA_DONOTFLUSH);
+        if (result == S_OK) {
+            *frequency = clock.Frequency;
+            *disjoint = clock.Disjoint != FALSE;
+        }
+        return result;
     },
-    .timer_timestamp = [](void* context, void* query, uint64_t* ticks) {
+    .timer_timestamp = [](void* context, void* query, uint64_t* ticks) -> int32_t {
         return static_cast<ID3D11DeviceContext*>(context)->GetData(static_cast<ID3D11Query*>(query),
-            ticks, sizeof(*ticks), D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK;
+            ticks, sizeof(*ticks), D3D11_ASYNC_GETDATA_DONOTFLUSH);
     },
     .host_stats = [](uint64_t* bytes, uint64_t* refs) { rsf_anomaly_sr_stage_resource_stats(host.resources, bytes, refs); },
     .host_reset = [] { rsf_anomaly_sr_stage_reset_pass(host.resources); },
@@ -501,8 +475,7 @@ const rsf_anomaly_sr_stage_platform platform{
     .driver_request_dump = [](const char* prefix) {
         try { return driver.request_dump(prefix); } catch (...) { return false; }
     },
-    .driver_count = [](uint8_t reason) { driver.count(static_cast<Refusal>(reason)); },
-    .driver_count_bilinear = [] { driver.count_bilinear(); },
+    .driver_fallback = [](uint8_t reason, bool drawn) { driver.fallback(reason, drawn); },
     .driver_count_prepared = [](bool missing) { driver.count_prepared(missing); },
     .driver_stop = [] { driver.stop(); },
     .driver_report = [](bool exposure_auto, bool first_person_zero, rsf_anomaly_sr_log emit, void* user) {
@@ -577,7 +550,7 @@ void bind_platform() noexcept { rsf_anomaly_sr_stage_register(&platform); }
 JitterState current_jitter() noexcept {
     rsf_anomaly_sr_jitter_state state{};
     rsf_anomaly_sr_stage_jitter(&state);
-    return to_native(state);
+    return std::bit_cast<JitterState>(state);
 }
 JitterUv current_jitter_uv() noexcept {
     rsf_anomaly_sr_jitter_uv uv{};

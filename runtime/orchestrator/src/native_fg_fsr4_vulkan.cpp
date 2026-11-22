@@ -12,20 +12,22 @@ int32_t interop_create(const rsf_srvk_setup* setup, rsf_fsr4fg_bridge* bridge, u
         bridge, RsfFsr4FgCreateImage, RsfFsr4FgReleaseImage, RsfFsr4FgCreateFence};
     return rsf_dx12vk_interop_create(setup, &callbacks, timeline_enabled, output);
 }
-const rsf_fsr4gvk_ops operations{
-    RsfFsr4FgProbe, RsfFsr4FgCreate, RsfFsr4FgInfo, RsfFsr4FgStart,
-    RsfFsr4FgPresent, RsfFsr4FgDrain, RsfFsr4FgPrepareDestroy, RsfFsr4FgDestroy,
-    interop_create, rsf_dx12gvk_interop,
-    rsf_dx12gvk_graphics,
-};
+const rsf_fsr4gvk_ops& operations() {
+    static const rsf_fsr4gvk_ops value{
+        RsfFsr4FgProbe, RsfFsr4FgCreate, RsfFsr4FgInfo, RsfFsr4FgStart,
+        RsfFsr4FgPresent, RsfFsr4FgDrain, RsfFsr4FgPrepareDestroy, RsfFsr4FgDestroy,
+        interop_create, rsf_dx12gvk_interop, rsf_dx12gvk_graphics(),
+    };
+    return value;
+}
 }
 int32_t rsf_fsr4gvk_probe(const rsf_srvk_setup* setup, rsf_fsr4fg_info* out) {
-    return rsf_core_fsr4gvk_probe(&operations, setup, out);
+    return rsf_core_fsr4gvk_probe(&operations(), setup, out);
 }
 int32_t rsf_fsr4gvk_create(const rsf_fgvk_setup* setup, const rsf_fsr4gvk_options* options,
     rsf_fsr4gvk** output, uint64_t* chain) {
     // Rust admits the setup before it asks the embedded graphics table to describe create_info.
-    return rsf_core_fsr4gvk_create(&operations, setup, options, output, chain);
+    return rsf_core_fsr4gvk_create(&operations(), setup, options, output, chain);
 }
 namespace {
 int32_t present(rsf_fsr4gvk* owner, const void* info, const rsf_frame_record* source, uint32_t explicit_source) {

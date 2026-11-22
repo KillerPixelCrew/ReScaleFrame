@@ -11,6 +11,7 @@ use crate::motion_capture_session::{
 };
 use crate::shader_hash::crc32c;
 use crate::velocity_container::borrowed;
+use crate::velocity_pass_cache;
 use buffers::ConstantBuffers;
 use colour::ColourReadbacks;
 use geometry::GeometryReads;
@@ -123,13 +124,7 @@ impl Observations {
             )
     }
 
-    fn observe_shader(
-        &mut self,
-        identity: usize,
-        stage: u32,
-        bytes: &[u8],
-        constant_mask: u32,
-    ) -> bool {
+    fn forget_shader(&mut self, identity: usize, stage: u32) {
         if let Some(index) = self
             .shaders
             .iter()
@@ -137,18 +132,25 @@ impl Observations {
         {
             self.shader_bytes -= self.shaders.remove(index).data.len();
         }
-        if self.shaders.len() >= MAX_SHADERS || self.shader_bytes + bytes.len() > SHADER_BUDGET {
+    }
+
+    fn retain_shader(
+        &mut self,
+        identity: usize,
+        stage: u32,
+        data: Arc<Vec<u8>>,
+        constant_mask: u32,
+    ) -> bool {
+        if self.shaders.len() >= MAX_SHADERS || self.shader_bytes + data.len() > SHADER_BUDGET {
             self.shaders_dropped = self.shaders_dropped.wrapping_add(1);
             return true;
         }
 
-        let mut data = Vec::new();
-        if data.try_reserve_exact(bytes.len()).is_err() || self.shaders.try_reserve(1).is_err() {
+        if self.shaders.try_reserve(1).is_err() {
             return false;
         }
-        data.extend_from_slice(bytes);
         let facts = ShaderFacts {
-            hash: crc32c(bytes),
+            hash: crc32c(&data),
             constant_mask,
         };
         self.shader_bytes += data.len();
@@ -157,7 +159,7 @@ impl Observations {
             identity,
             stage,
             facts,
-            data: Arc::new(data),
+            data,
         });
         true
     }
@@ -165,25 +167,63 @@ impl Observations {
 
 type DisassembleConstants = unsafe extern "C" fn(*const c_void, usize) -> u32;
 
+fn shader_bytes(bytes: &[u8]) -> Option<Arc<Vec<u8>>> {
+    let mut data = Vec::new();
+    data.try_reserve_exact(bytes.len()).ok()?;
+    data.extend_from_slice(bytes);
+    Some(Arc::new(data))
+}
+
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_ac7_capture_observe_shader(
     shader: *mut c_void,
     stage: u32,
     bytes: *const c_void,
     size: u32,
-    disassemble: DisassembleConstants,
+    disassemble: Option<DisassembleConstants>,
 ) -> bool {
     let size = size as usize;
-    if !rsf_ac7_capture_enabled() || shader.is_null() || !(1..=MAX_SHADER_BYTES).contains(&size) {
+    if shader.is_null() {
+        return true;
+    }
+    let identity = shader.addr();
+    // Creation ends the old identity even when no consumer can retain the replacement.
+    if disassemble.is_some() {
+        observations().forget_shader(identity, stage);
+    }
+    let capture = disassemble.filter(|_| rsf_ac7_capture_enabled());
+    if !(1..=MAX_SHADER_BYTES).contains(&size) {
+        velocity_pass_cache::observe_shader(identity, stage, None);
+        return true;
+    }
+    if capture.is_none() && !velocity_pass_cache::observes_stage(stage) {
         return true;
     }
     // SAFETY: The creation callback lends its original bytecode until this call returns.
-    let Some(data) = (unsafe { borrowed(bytes.cast::<u8>(), size) }) else {
+    let Some(bytes) = (unsafe { borrowed(bytes.cast::<u8>(), size) }) else {
+        velocity_pass_cache::observe_shader(identity, stage, None);
         return true;
     };
+    let data = shader_bytes(bytes);
+    velocity_pass_cache::observe_shader(identity, stage, data.clone());
+    let Some(disassemble) = capture else {
+        return true;
+    };
+    let Some(data) = data else { return false };
     // Disassembly can load the compiler DLL. Keep it outside the cache lock.
-    let constant_mask = unsafe { disassemble(bytes, size) };
-    observations().observe_shader(shader.addr(), stage, data, constant_mask)
+    let constant_mask = unsafe { disassemble(bytes.as_ptr().cast(), size) };
+    observations().retain_shader(identity, stage, data, constant_mask)
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_ac7_velocity_shader_seen(
+    shader: *mut c_void,
+    stage: u32,
+    bytes: *const c_void,
+    size: u32,
+) {
+    // SAFETY: The velocity-only fixture lends the same creation callback byte span.
+    unsafe { rsf_ac7_capture_observe_shader(shader, stage, bytes, size, None) };
 }
 
 #[unsafe(no_mangle)]
@@ -279,4 +319,31 @@ unsafe fn observe_layout(
     snapshot.elements[..len].copy_from_slice(elements);
     cache.layouts.insert(identity, snapshot);
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capture_retains_the_shared_payload_and_forgets_replaced_facts() {
+        let data = shader_bytes(&[3, 1, 4]).unwrap();
+        let mut cache = Observations::default();
+        assert!(cache.retain_shader(1, 0, Arc::clone(&data), 1));
+        assert!(cache.retain_shader(2, 0, Arc::clone(&data), 2));
+        assert!(Arc::ptr_eq(&cache.shaders[0].data, &data));
+        assert_eq!(cache.shader_facts(1, 0).hash, crc32c(&data));
+        cache.forget_shader(1, 0);
+        assert_eq!(cache.shader_facts(1, 0).hash, 0);
+        assert_eq!(cache.shader_bytes, data.len());
+        assert!(cache.retain_shader(1, 0, data, 4));
+        assert_eq!(
+            cache
+                .shaders
+                .iter()
+                .map(|shader| shader.identity)
+                .collect::<Vec<_>>(),
+            [2, 1]
+        );
+    }
 }

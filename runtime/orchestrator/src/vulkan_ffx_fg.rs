@@ -411,12 +411,13 @@ impl Owner {
 
     fn guides_valid(&self, frame: &Frame, record: &Record) -> bool {
         let guide = |image: &Image, format: u32| {
-            image.device == self.device
-                && image.image != 0
-                && image.format == format
-                && image.width == record.render_width
-                && image.height == record.render_height
-                && image.layout == SHADER_READ
+            crate::vulkan_sr::valid_image(
+                image,
+                self.device,
+                [record.render_width, record.render_height],
+                SHADER_READ,
+                &[format],
+            )
         };
         guide(&frame.depth, R32F)
             && guide(&frame.motion, RG16F)

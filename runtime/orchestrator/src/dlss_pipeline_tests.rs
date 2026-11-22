@@ -2,6 +2,7 @@
 // Synthetic D3D11 SR pipeline contracts: fake COM objects, a fake leaf table and the legacy
 // adapter over a fake bridge. No device, window, SDK or shader is touched.
 use super::*;
+use crate::render_abi::rsf_motion_resolve_params;
 use crate::sr_legacy::fake as legacy;
 use std::cell::{Cell, RefCell};
 use std::ptr;
@@ -70,7 +71,7 @@ struct World {
     load: i32,
     support: i32,
     supported: u32,
-    plan: rsf_dlssp_range,
+    plan: rsf_dlss_plan,
     plan_result: i32,
     release_result: i32,
     decode_create: i32,
@@ -84,7 +85,7 @@ struct World {
     captures: Vec<DlssFrame>,
     layer_frames: Vec<DlssFrame>,
     transport: bool,
-    dumps: Vec<(String, u32, &'static str)>,
+    dumps: Vec<(String, u32, &'static str, Raw)>,
     reentered: Option<i32>,
     reenter: bool,
 }
@@ -98,13 +99,14 @@ impl World {
             load: 0,
             support: 0,
             supported: 1,
-            plan: rsf_dlssp_range {
-                width: 640,
-                height: 360,
-                min_width: 320,
-                min_height: 180,
-                max_width: 640,
-                max_height: 360,
+            plan: rsf_dlss_plan {
+                render_width: 640,
+                render_height: 360,
+                render_width_min: 320,
+                render_height_min: 180,
+                render_width_max: 640,
+                render_height_max: 360,
+                ..plan_request(0, 0, 0)
             },
             plan_result: 0,
             release_result: 0,
@@ -161,39 +163,47 @@ unsafe extern "C" fn share_host(_: Raw, _: rsf_dlssp_log_fn, _: Raw) -> i32 {
     call("share_host");
     with(|world| world.load)
 }
-unsafe extern "C" fn load(
-    setup: *const Setup,
-    interposer: *const c_char,
-    plugins: *const c_char,
-    log: rsf_dlssp_log_fn,
-) -> i32 {
-    assert!(log.is_some() && unsafe { (*setup).abi_version } == ABI);
+unsafe extern "C" fn load(setup: *const rsf_dlss_setup) -> i32 {
+    let setup = unsafe { &*setup };
+    assert!(setup.log.is_some() && setup.abi_version == RSF_DLSS_ABI_VERSION);
     let text = |value| {
         unsafe { CStr::from_ptr(value) }
             .to_string_lossy()
             .into_owned()
     };
-    call(format!("load {} {}", text(interposer), text(plugins)));
+    call(format!(
+        "load {} {}",
+        text(setup.interposer_path_utf8),
+        text(setup.plugin_directory_utf8)
+    ));
     with(|world| world.load)
 }
 unsafe extern "C" fn set_device(_: Raw) -> i32 {
     call("set_device");
     0
 }
-unsafe extern "C" fn query_support(out: *mut rsf_dlssp_support) -> i32 {
+unsafe extern "C" fn query_support(out: *mut rsf_dlss_support) -> i32 {
     let (result, supported) = with(|world| (world.support, world.supported));
     unsafe {
         (*out).supported = supported;
-        (*out).detected_major = 560;
-        (*out).required_major = 580;
+        (*out).detected_driver_major = 560;
+        (*out).required_driver_major = 580;
         (*out).driver_out_of_date = 1;
     }
     result
 }
-unsafe extern "C" fn plan(width: u32, height: u32, quality: u32, out: *mut rsf_dlssp_range) -> i32 {
+unsafe extern "C" fn plan(out: *mut rsf_dlss_plan) -> i32 {
+    let request = unsafe { &mut *out };
+    assert_eq!(request.struct_size as usize, size_of::<rsf_dlss_plan>());
+    let (width, height, quality) = (request.output_width, request.output_height, request.quality);
     call(format!("plan {width}x{height} q{quality}"));
     let (range, result) = with(|world| (world.plan, world.plan_result));
-    unsafe { out.write(range) };
+    *request = rsf_dlss_plan {
+        output_width: width,
+        output_height: height,
+        quality,
+        ..range
+    };
     result
 }
 unsafe extern "C" fn release_resources() -> i32 {
@@ -416,34 +426,34 @@ unsafe extern "C" fn input_dump(
     _: f32,
 ) {
 }
-unsafe fn dump(kind: &'static str, prefix: *const c_char, view: u32) -> i32 {
+unsafe fn dump(kind: &'static str, prefix: *const c_char, view: u32, texture: Raw) -> i32 {
     let prefix = unsafe { CStr::from_ptr(prefix) }
         .to_string_lossy()
         .into_owned();
-    with(|world| world.dumps.push((prefix, view, kind)));
+    with(|world| world.dumps.push((prefix, view, kind, texture)));
     0
 }
 unsafe extern "C" fn dump_bytes(
     _: Raw,
     _: Raw,
-    _: Raw,
+    texture: Raw,
     prefix: *const c_char,
     view: u32,
     _: f32,
     _: rsf_dlssp_log_fn,
 ) -> i32 {
-    unsafe { dump("bytes", prefix, view) }
+    unsafe { dump("bytes", prefix, view, texture) }
 }
 unsafe extern "C" fn dump_image(
     _: Raw,
     _: Raw,
-    _: Raw,
+    texture: Raw,
     prefix: *const c_char,
     view: u32,
     _: f32,
     _: rsf_dlssp_log_fn,
 ) -> i32 {
-    unsafe { dump("image", prefix, view) }
+    unsafe { dump("image", prefix, view, texture) }
 }
 
 static PLATFORM: P = P {
@@ -619,7 +629,7 @@ fn start_validates_plans_and_stop_releases_every_lease() {
     );
     assert_eq!(logged("loading streamline from C:\\sl"), 1);
     assert_eq!(
-        logged("pipeline ready: DLSS renders 640x360 for 1280x720"),
+        logged("pipeline ready: backend 1 renders 640x360 for 1280x720"),
         1
     );
     let output = pipeline.output_texture();
@@ -989,10 +999,10 @@ fn resize_prepares_before_commit_and_refusal_keeps_identity() {
 
     with(|world| {
         world.plan_result = 0;
-        world.plan.width = 960;
-        world.plan.height = 540;
-        world.plan.max_width = 960;
-        world.plan.max_height = 540;
+        world.plan.render_width = 960;
+        world.plan.render_height = 540;
+        world.plan.render_width_max = 960;
+        world.plan.render_height_max = 540;
     });
     let camera = camera();
     assert_eq!(run(&pipeline, &frame(&camera, [640, 360])), OK);
@@ -1122,13 +1132,20 @@ fn backend_switches_reuse_the_legacy_owner_and_refusals_keep_the_active_backend(
     );
     assert_eq!((status(&pipeline).render_width, width), (400, 400));
 
-    with(|world| world.calls.clear());
+    with(|world| {
+        world.calls.clear();
+        world.plan.render_width_min = 0;
+        world.plan.render_height_min = 0;
+        world.plan.render_width_max = 0;
+        world.plan.render_height_max = 0;
+    });
     assert_eq!(
         unsafe { pipeline.select_backend(&PLATFORM, SR_DLSS, &mut width, &mut height) },
         OK
     );
     assert_eq!(with(|world| world.calls.clone()), ["plan 1280x720 q1"]);
     assert_eq!(status(&pipeline).backend, SR_DLSS);
+    assert_eq!(run(&pipeline, &frame(&camera, [640, 360])), OK);
     let destroyed = legacy::DESTROYED.get();
     assert_eq!(unsafe { pipeline.stop(&PLATFORM) }, OK);
     assert_eq!(legacy::DESTROYED.get(), destroyed + 1);
@@ -1151,6 +1168,7 @@ fn reentrant_frame_thread_calls_refuse_instead_of_racing() {
 fn request_dump_writes_the_evaluated_frame_inputs_and_record() {
     let pipeline = Pipeline::new();
     assert_eq!(unsafe { pipeline.request_dump(c"x".as_ptr()) }, NOT_RUNNING);
+    with(|world| world.transport = true);
     started(&pipeline);
     assert_eq!(unsafe { pipeline.request_dump(c"".as_ptr()) }, INVALID);
     let directory = std::env::temp_dir().join(format!("rsf-sr-pipeline-{}", std::process::id()));
@@ -1158,16 +1176,20 @@ fn request_dump_writes_the_evaluated_frame_inputs_and_record() {
     let prefix = directory.join("frame").to_string_lossy().into_owned();
     let prefix_c = CString::new(prefix.clone()).unwrap();
     assert_eq!(unsafe { pipeline.request_dump(prefix_c.as_ptr()) }, OK);
-    assert_eq!(run(&pipeline, &frame(&camera(), [640, 360])), OK);
+    let camera = camera();
+    let mut input = frame(&camera, [640, 360]);
+    input.exposure = handle(0x4200);
+    assert_eq!(run(&pipeline, &input), OK);
     let dumps = with(|world| world.dumps.clone());
     let named = |suffix: &str, kind: &str| {
         dumps
             .iter()
-            .filter(|(path, _, k)| *path == format!("{prefix}{suffix}") && *k == kind)
+            .filter(|(path, _, k, _)| *path == format!("{prefix}{suffix}") && *k == kind)
             .count()
     };
     for suffix in [
         "_input",
+        "_input_submitted",
         "_output",
         "_motion",
         "_motion_decoded",
@@ -1180,7 +1202,27 @@ fn request_dump_writes_the_evaluated_frame_inputs_and_record() {
         );
     }
     assert_eq!((named("_depth", "bytes"), named("_depth", "image")), (1, 0));
-    assert_eq!(named("_exposure", "bytes"), 0, "absent inputs are skipped");
+    assert_eq!(
+        (
+            named("_depth_submitted", "bytes"),
+            named("_depth_submitted", "image")
+        ),
+        (1, 0)
+    );
+    let raw = |suffix: &str| {
+        dumps
+            .iter()
+            .find(|(path, _, kind, _)| *path == format!("{prefix}{suffix}") && *kind == "bytes")
+            .map(|(_, _, _, texture)| *texture)
+    };
+    assert_eq!(raw("_input"), Some(input.scene_color));
+    assert_eq!(raw("_input_submitted"), Some(handle(ENCODED)));
+    assert_eq!(raw("_depth"), Some(input.depth));
+    assert_eq!(raw("_depth_submitted"), Some(handle(RESOLVED_DEPTH)));
+    assert_eq!(raw("_motion_submitted"), Some(handle(RESOLVED_MOTION)));
+    assert_eq!(raw("_exposure"), Some(input.exposure));
+    assert_eq!(raw("_exposure_submitted"), None);
+
     let record = std::fs::read_to_string(format!("{prefix}_frame.json")).unwrap();
     assert!(
         record.starts_with(
@@ -1191,7 +1233,7 @@ fn request_dump_writes_the_evaluated_frame_inputs_and_record() {
     );
     let _ = std::fs::remove_dir_all(directory);
     // One request, one dump.
-    assert_eq!(run(&pipeline, &frame(&camera(), [640, 360])), OK);
+    assert_eq!(run(&pipeline, &input), OK);
     assert_eq!(with(|world| world.dumps.len()), dumps.len());
 }
 
@@ -1215,32 +1257,89 @@ fn sharpening_and_preset_settings_are_validated_through_their_owners() {
 }
 
 #[test]
-fn g9_matches_printf() {
-    let cases: [(f64, &str); 10] = [
-        (0.25, "0.25"),
-        (1.0, "1"),
-        (-0.5, "-0.5"),
-        (1.0e-7, "1e-07"),
-        (0.0001, "0.0001"),
-        (123456789.0, "123456789"),
-        (1234567890.0, "1.23456789e+09"),
-        (f64::from(0.1f32), "0.100000001"),
-        (f64::from(1.0f32 / 360.0), "0.00277777785"),
-        (0.0, "0"),
-    ];
-    for (value, text) in cases {
-        assert_eq!(g9(value), text, "{value}");
-    }
-}
-
-#[test]
 fn ranges_default_only_where_the_sdk_reported_none() {
-    let plan = rsf_dlssp_range {
-        width: 10,
-        height: 20,
-        ..Default::default()
+    let plan = rsf_dlss_plan {
+        render_width: 10,
+        render_height: 20,
+        ..plan_request(0, 0, 0)
     };
     assert_eq!(Range::of(plan).min, [10, 20]);
     assert_eq!(Range::of(plan).max, [10, 20]);
-    assert_eq!(Range::reported(plan).min, [0, 0]);
+}
+
+#[test]
+fn alternate_start_skips_streamline_and_can_lazily_switch_to_dlss() {
+    let pipeline = Pipeline::new();
+    let device = fake();
+    with(|world| world.load = -4);
+    assert_eq!(
+        unsafe { pipeline.start_backend(&PLATFORM, device, &setup(), 3) },
+        OK
+    );
+    assert_eq!(
+        (status(&pipeline).backend, status(&pipeline).dlss_supported),
+        (3, 0)
+    );
+    assert!(!with(|world| world
+        .calls
+        .iter()
+        .any(|call| call.starts_with("load"))));
+    let camera = camera();
+    let frame = frame(&camera, [320, 180]);
+    assert_eq!(run(&pipeline, &frame), OK);
+    let output = pipeline.output_texture();
+    assert_eq!(
+        unsafe { pipeline.select_backend(&PLATFORM, SR_DLSS, null_mut(), null_mut()) },
+        NOT_SUPPORTED
+    );
+    assert_eq!(status(&pipeline).backend, 3);
+    assert_eq!(pipeline.output_texture(), output);
+    assert_eq!(run(&pipeline, &frame), OK);
+    with(|world| world.load = 0);
+    assert_eq!(
+        unsafe { pipeline.select_backend(&PLATFORM, SR_DLSS, null_mut(), null_mut()) },
+        OK
+    );
+    assert_eq!(
+        (status(&pipeline).backend, status(&pipeline).dlss_supported),
+        (SR_DLSS, 1)
+    );
+    assert_eq!(pipeline.output_texture(), output);
+    assert_eq!(unsafe { pipeline.stop(&PLATFORM) }, OK);
+}
+
+#[test]
+fn alternate_quality_change_restarts_after_failure_limit() {
+    let pipeline = Pipeline::new();
+    assert_eq!(
+        unsafe { pipeline.start_backend(&PLATFORM, fake(), &setup(), 3) },
+        OK
+    );
+    let camera = camera();
+    let frame = frame(&camera, [320, 180]);
+    legacy::EVALUATE_RESULT.set(-7);
+    for _ in 0..FAILURE_LIMIT {
+        assert_eq!(run(&pipeline, &frame), EVALUATE_FAILED);
+    }
+    assert!(pipeline.shared().given_up);
+    legacy::EVALUATE_RESULT.set(0);
+    assert_eq!(
+        unsafe { pipeline.set_quality(&PLATFORM, 1, null_mut(), null_mut()) },
+        OK
+    );
+    assert!(!pipeline.shared().given_up);
+    assert_eq!(run(&pipeline, &frame), OK);
+    assert_eq!(unsafe { pipeline.stop(&PLATFORM) }, OK);
+}
+
+#[test]
+fn production_motion_scale_reconstructs_the_previous_feature_location() {
+    for (current, previous) in [(0.4f32, 0.5f32), (0.3, 0.7)] {
+        let raw_motion = previous - current;
+        let raw_scale = dlss_motion_scale(-1.0, true, false);
+        let dense_scale = dlss_motion_scale(0.001, true, true);
+        assert!((current + raw_motion * raw_scale - previous).abs() < 1e-6);
+        assert!((current + raw_motion * 1000.0 * dense_scale - previous).abs() < 1e-6);
+    }
+    assert_eq!(dlss_motion_scale(0.5, false, false), 0.5);
 }

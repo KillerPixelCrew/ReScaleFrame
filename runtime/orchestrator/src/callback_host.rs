@@ -13,6 +13,7 @@
 use crate::com_ref::ComRef;
 use crate::gl_pipeline_abi::{rsf_dlss_setup as DlssSetup, rsf_sr12_setup as SrSetup};
 use crate::overlay_abi::{rsf_overlay_intent as Intent, rsf_overlay_stats as Stats};
+use crate::overlay_settings::{fill_sharpening_stats, intent_sharpening, sr_name};
 use crate::render_abi::{
     RSF_DLSS_ABI_VERSION, rsf_native_fg_options as FgOptions, rsf_native_fg_status as FgStatus,
     rsf_sharpening_options as Sharpening,
@@ -21,7 +22,10 @@ use crate::settings_store::{
     rsf_settings_store_read_layout, rsf_settings_store_write_layout,
     rsf_settings_store_write_sharpening, write_dlss_preset,
 };
-use crate::sharpening_policy;
+use rsf_game_sys::plugin_session_abi::{
+    RSF_PLUGIN_SESSION_ABI_VERSION as SESSION_ABI_VERSION,
+    rsf_plugin_session_options as SessionOptions,
+};
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_FINAL_SCENE,
     RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR,
@@ -30,6 +34,7 @@ use rsf_game_sys::{
         RSF_CALLBACK_HOST_ABI_VERSION as HOST_ABI_VERSION, RSF_CALLBACK_HOST_ABI_VERSION_V2,
         rsf_callback_host_setup as Setup, rsf_callback_host_setup_v2 as SetupV2,
     },
+    recording_slots::RecordingSlots,
     rsf_game_cpu_event as CpuEvent, rsf_game_host_services as Services, rsf_game_probe as Probe,
     rsf_game_render_config as Config, rsf_game_render_pass as Pass,
 };
@@ -55,34 +60,16 @@ const OK: i32 = 0;
 const BACKEND_OK: i32 = 0;
 const BACKEND_NOT_SUPPORTED: i32 = -7;
 
-const SESSION_ABI_VERSION: u32 = 1;
 const SR_NONE: u32 = 0;
 const SR_DLSS: u32 = 1;
 const SR_XESS: u32 = 5;
 const SR_SPATIAL: u32 = 6;
 const SR_AUTO: u32 = 7;
-const SLOTS: usize = 3;
 const SHARPENING_POLL_MS: u64 = 1000;
 const SECTION: PCWSTR = w!("Rendering");
 // FILE_APPEND_DATA, and FILE_SHARE_READ | FILE_SHARE_WRITE.
 const LOG_ACCESS: u32 = 4;
 const LOG_SHARE: u32 = 3;
-
-/// plugin_session.h's rsf_plugin_session_options.
-#[repr(C)]
-pub(crate) struct SessionOptions {
-    struct_size: u32,
-    abi_version: u32,
-    plugin_path: *const u16,
-    probe: *const Probe,
-    services: Services,
-}
-
-const _: () = {
-    assert!(
-        size_of::<SessionOptions>() == 128 && std::mem::offset_of!(SessionOptions, services) == 24
-    );
-};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -158,7 +145,7 @@ struct State {
     input_height: u32,
     plan: Config,
     // Recording slots, bound to the first three command lists the adapter records with.
-    command_lists: [Handle; SLOTS],
+    command_lists: RecordingSlots,
     // `requested_*` is what the panel or start chose; `backend` and `quality` are what the
     // current context was prepared with.
     backend: u32,
@@ -185,21 +172,6 @@ struct State {
     // The chosen generation provider is saved for the next start only once the switch has landed.
     save_pending: bool,
     save_backend: u32,
-}
-
-impl State {
-    fn slot(&mut self, commands: Handle) -> Option<u32> {
-        let index = self
-            .command_lists
-            .iter()
-            .position(|&list| list == commands)
-            .or_else(|| {
-                let free = self.command_lists.iter().position(|list| list.is_null())?;
-                self.command_lists[free] = commands;
-                Some(free)
-            })?;
-        Some(index as u32)
-    }
 }
 
 pub(crate) struct Host {
@@ -250,19 +222,6 @@ fn try_lifecycle() -> Option<MutexGuard<'static, Published>> {
     }
 }
 
-fn sr_name(backend: u32) -> &'static CStr {
-    match backend {
-        1 => c"DLSS",
-        2 => c"FSR2",
-        3 => c"FSR3",
-        4 => c"FSR4",
-        5 => c"XeSS",
-        6 => c"FSR1",
-        _ => c"Off",
-    }
-}
-
-// Terminated UTF-16 copy of a terminated wide string.
 unsafe fn wide_copy(text: *const u16) -> Vec<u16> {
     let mut length = 0;
     while unsafe { *text.add(length) } != 0 {
@@ -406,7 +365,6 @@ impl Host {
                 let _ = unsafe { (p.fg_choice_save)(s.save_backend) };
             }
         }
-        let o = &s.sharpening;
         let mut stats = Stats {
             struct_size: size_of::<Stats>() as u32,
             backend_loaded: 1,
@@ -423,18 +381,6 @@ impl Host {
             sr_backend_choices: self.sr_choices,
             requested_backend: s.requested_backend,
             quality: s.quality,
-            sharpening_mode: o.mode,
-            sharpening_sharpness: o.sharpness,
-            sharpening_mas: o.mas,
-            sharpening_motion_sharpness: o.motion_sharpness,
-            sharpening_motion_threshold: o.motion_threshold,
-            sharpening_motion_scale_limit: o.motion_scale_limit,
-            sharpening_contrast_enabled: o.contrast_enabled,
-            sharpening_contrast: o.contrast,
-            sharpening_depth_scale: o.depth_scale,
-            sharpening_depth_bias: o.depth_bias,
-            sharpening_clamp_output: o.clamp_output,
-            sharpening_debug: o.debug,
             sharpening_available: u32::from((SR_DLSS..=SR_XESS).contains(&s.backend)),
             dlss_preset: s.preset,
             dlss_preset_available: 1,
@@ -463,6 +409,7 @@ impl Host {
                 .unwrap_or(0),
             ..Stats::default()
         };
+        fill_sharpening_stats(&mut stats, &s.sharpening);
         let reason: Option<&'static CStr> = if s.dirty {
             Some(c"Applying requested configuration after GPU completion")
         } else if s.last_result != 0 {
@@ -568,21 +515,7 @@ impl Host {
             }
         }
         if intent.sharpening_changed != 0 {
-            let requested = Sharpening {
-                mode: intent.sharpening_mode,
-                sharpness: intent.sharpening_sharpness,
-                mas: intent.sharpening_mas,
-                motion_sharpness: intent.sharpening_motion_sharpness,
-                motion_threshold: intent.sharpening_motion_threshold,
-                motion_scale_limit: intent.sharpening_motion_scale_limit,
-                contrast_enabled: intent.sharpening_contrast_enabled,
-                contrast: intent.sharpening_contrast,
-                depth_scale: intent.sharpening_depth_scale,
-                depth_bias: intent.sharpening_depth_bias,
-                clamp_output: intent.sharpening_clamp_output,
-                debug: intent.sharpening_debug,
-                ..sharpening_policy::defaults()
-            };
+            let requested = intent_sharpening(intent);
             if unsafe {
                 rsf_settings_store_write_sharpening(self.preferences.as_ptr(), SECTION, &requested)
             } == OK
@@ -705,7 +638,7 @@ impl Host {
                 s.input_width = setup.render_width;
                 s.input_height = setup.render_height;
             }
-            if let Some(slot) = s.slot(commands) {
+            if let Some(slot) = s.command_lists.bind(commands) {
                 let _ = unsafe { (p.sr12_evaluate)(s.inputs, commands, pass, slot) };
             }
             return;
@@ -713,7 +646,7 @@ impl Host {
         if s.sr.is_null() || pass.camera_valid == 0 {
             return;
         }
-        let Some(slot) = s.slot(commands) else {
+        let Some(slot) = s.command_lists.bind(commands) else {
             return;
         };
         let now = unsafe { (p.tick)() };
@@ -986,7 +919,7 @@ unsafe fn describe(setup: *const Setup, p: &'static Platform) -> Result<Host, u3
             input_width: 0,
             input_height: 0,
             plan: empty_plan(),
-            command_lists: [null_mut(); SLOTS],
+            command_lists: RecordingSlots::EMPTY,
             backend,
             quality,
             requested_backend: backend,
@@ -1125,20 +1058,18 @@ fn stop() -> u32 {
     0
 }
 
-/// # Safety
-/// `setup` is null or readable for its leading struct_size; `platform` is the static leaf table.
+#[cfg(not(test))]
+unsafe extern "C" {
+    fn rsf_callback_host_platform() -> &'static Platform;
+}
+
+#[cfg(not(test))]
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_callback_host_start(
-    setup: *const Setup,
-    platform: *const Platform,
-) -> u32 {
-    if platform.is_null() {
-        return 1;
-    }
-    unsafe { start(setup, &*platform) }
+unsafe extern "C" fn rsf_callback_host_start(setup: *const Setup) -> u32 {
+    unsafe { start(setup, rsf_callback_host_platform()) }
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_callback_host_stop() -> u32 {
+extern "C" fn rsf_callback_host_stop() -> u32 {
     stop()
 }

@@ -51,7 +51,6 @@ void rsf_anomaly_geometry_probe_visual(const rsf_anomaly_geometry_registry*, uin
     rsf_anomaly_geometry_probe*);
 uint64_t rsf_anomaly_geometry_retire(rsf_anomaly_geometry_registry*, uint64_t owner, uint64_t visual);
 size_t rsf_anomaly_geometry_retire_all(rsf_anomaly_geometry_registry*, rsf_anomaly_geometry_retired, void*);
-int32_t rsf_anomaly_geometry_classify(const rsf_anomaly_geometry_draw*);
 
 rsf_anomaly_geometry_retirements* rsf_anomaly_geometry_retirements_create(void);
 void rsf_anomaly_geometry_retirements_destroy(rsf_anomaly_geometry_retirements*);

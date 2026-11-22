@@ -1,33 +1,11 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::platform::{ABI_VERSION, fake};
+use crate::platform::fake;
+use crate::platform::fake::setup;
 use std::ptr;
 
-fn setup(runtime: &CStr) -> Setup {
-    Setup {
-        struct_size: size_of::<Setup>() as u32,
-        abi_version: ABI_VERSION,
-        runtime_directory: runtime.as_ptr(),
-        engine_version: c"4.7.2".as_ptr(),
-        project_id: c"125d2115-7176-46e1-8806-95b790f01717".as_ptr(),
-        log: None,
-        log_user: ptr::null_mut(),
-    }
-}
-
-fn booted() -> Control {
-    let control = Control::new();
-    fake::INSTALL_RESULT.set(BACKEND_OK);
-    assert_eq!(control.boot(&fake::LEAVES, &setup(c"C:/game/runtime")), 1);
-    control
-}
-
 fn status(control: &Control, platform: &Platform) -> (c_int, Status) {
-    let mut value = Status {
-        struct_size: size_of::<Status>() as u32,
-        abi_version: ABI_VERSION,
-        ..Status::default()
-    };
+    let mut value = fake::status_header();
     // SAFETY: a complete local record.
     (unsafe { control.status(platform, &mut value) }, value)
 }
@@ -98,12 +76,7 @@ fn configure_refusals_keep_the_request() {
 fn vulkan_booted() -> Control {
     fake::VK_FACTS.set(Default::default());
     let control = Control::new();
-    assert_eq!(
-        control
-            .vulkan
-            .boot(&fake::LEAVES, &setup(c"C:/game/runtime")),
-        1
-    );
+    fake::boot_vulkan(&control.vulkan, c"C:/game/runtime");
     fake::take_calls();
     control
 }
@@ -133,7 +106,7 @@ fn vulkan_receives_only_accepted_settings() {
 
 #[test]
 fn boot_derives_the_session() {
-    let control = booted();
+    let control = fake::boot_d3d12();
     assert!(control.booted());
     assert_eq!(control.session_id(), 42);
     let paths = control.paths().expect("paths");
@@ -177,7 +150,7 @@ fn boot_refusals() {
 
 #[test]
 fn d3d12_status_assembles_runtime_facts() {
-    let control = booted();
+    let control = fake::boot_d3d12();
     fake::FG.set(FgFacts {
         available: 1,
         backend: 3,
@@ -189,7 +162,7 @@ fn d3d12_status_assembles_runtime_facts() {
     });
     let (result, value) = status(&control, &fake::LEAVES);
     assert_eq!(result, 1);
-    assert_eq!(value.abi_version, D3D12_STATUS_RECORD_ABI);
+    assert_eq!(value.abi_version, ABI_VERSION);
     assert_eq!(value.session_id, 42);
     assert_eq!(
         (value.fg_backend, value.fg_available, value.fg_result),
@@ -216,6 +189,8 @@ fn d3d12_status_assembles_runtime_facts() {
         ..FgFacts::default()
     });
     fake::LATENCY.set(Some(LatencyFacts {
+        available: 1,
+        effective_mode: 2,
         paced_frames: 8,
         owner: 1,
         inputs: fake::INPUTS,
@@ -227,6 +202,7 @@ fn d3d12_status_assembles_runtime_facts() {
         (value.sleep_calls, value.latency_owner, value.mouse_inputs),
         (8, 1, 2)
     );
+    assert_eq!((value.latency_available, value.latency_mode), (1, 2));
     assert_eq!(value.derived_boundaries, 7);
 }
 
@@ -250,7 +226,7 @@ fn vulkan_status_adds_inputs_and_window() {
 
 #[test]
 fn sr_frames_report_the_effective_backend() {
-    let control = booted();
+    let control = fake::boot_d3d12();
     let frame = SrFrame {
         requested_sr: SR_SPATIAL,
         context_backend: 0,
@@ -305,15 +281,43 @@ fn engine_services_route_only_to_an_active_backend() {
     };
     let idle = Control::new();
     assert!(idle.attach_engine(&services));
-    assert_eq!(idle.configure_engine(ptr::null(), 5), 0);
+    assert_eq!(idle.configure_engine(&default_settings(), 5), 0);
     let vulkan = vulkan_booted();
     assert!(vulkan.attach_engine(&services));
-    assert_eq!(vulkan.configure_engine(ptr::null(), 5), 5);
-    let control = booted();
+    assert_eq!(vulkan.configure_engine(&default_settings(), 5), 5);
+    let control = fake::boot_d3d12();
     assert!(control.attach_engine(&services));
-    assert_eq!(control.configure_engine(ptr::null(), 6), 6);
+    assert_eq!(control.configure_engine(&default_settings(), 6), 6);
     assert!(!control.attach_engine(&EngineServices {
         reset_history: None,
         ..services
     }));
+}
+
+#[test]
+fn exported_status_accepts_the_same_output_twice() {
+    let mut output = fake::status_header();
+    let setup = fake::setup(c"C:/game/runtime");
+    // SAFETY: the fake table and the initialized setup live for the call; the output is writable.
+    unsafe {
+        assert_eq!(crate::rsf_godot_boot(&fake::LEAVES, &setup), 1);
+        assert_eq!(crate::rsfg_status(&mut output), 1);
+        assert_eq!(output.abi_version, ABI_VERSION);
+        assert_eq!(crate::rsfg_status(&mut output), 1);
+    }
+}
+
+#[test]
+fn short_abi_records_need_only_the_size_word() {
+    let short = size_of::<u32>() as u32;
+    let size_word = &raw const short;
+    // SAFETY: the size word is the entire advertised record.
+    unsafe {
+        assert_eq!(crate::rsfg_attach_engine(size_word.cast()), 0);
+        assert_eq!(crate::rsf_godot_boot(&fake::LEAVES, size_word.cast()), 0);
+        assert_eq!(
+            crate::rsf_godot_configure(&fake::LEAVES, size_word.cast()),
+            0
+        );
+    }
 }

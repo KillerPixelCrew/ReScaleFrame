@@ -99,15 +99,21 @@ impl Image {
 
     fn matches_hex(&self, rva: u32, hex: &[u8]) -> bool {
         let pairs = hex.chunks_exact(2);
-        if !pairs.remainder().is_empty() || self.address(rva, pairs.len()).is_none() {
+        if !pairs.remainder().is_empty() {
             return false;
         }
-        pairs.enumerate().all(|(offset, pair)| {
-            let (Some(high), Some(low)) = (digit(pair[0]), digit(pair[1])) else {
-                return false;
-            };
-            self.copy(rva + offset as u32) == Some([(high << 4) | low])
-        })
+        let Some(address) = self.address(rva, pairs.len()) else {
+            return false;
+        };
+        let Some(expected): Option<Vec<_>> = pairs
+            .map(|pair| Some((digit(pair[0])? << 4) | digit(pair[1])?))
+            .collect()
+        else {
+            return false;
+        };
+        let mut bytes = vec![0u8; expected.len()];
+        let copied = unsafe { (self.read)(bytes.as_mut_ptr().cast(), address.cast(), bytes.len()) };
+        copied && bytes == expected
     }
 }
 
@@ -122,12 +128,6 @@ fn digit(value: u8) -> Option<u8> {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_guard_site(image: &Image, rva: u32, expected: &[u8; 16]) -> bool {
     image.matches_site(rva, expected)
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_guard_hex(image: &Image, rva: u32, hex: *const c_char) -> bool {
-    // The native profile supplies a static NUL-terminated guard.
-    unsafe { image.matches_hex_guard(rva, hex) }
 }
 
 #[unsafe(no_mangle)]
@@ -178,5 +178,38 @@ mod tests {
         assert!(!matches(&bytes));
         bytes[16] = 0x91;
         assert!(matches(&bytes));
+    }
+}
+
+#[cfg(test)]
+mod range_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    thread_local! {
+        static READ_LENGTH: Cell<usize> = const { Cell::new(0) };
+    }
+
+    unsafe extern "C" fn record(out: *mut c_void, src: *const c_void, len: usize) -> bool {
+        let previous = READ_LENGTH.replace(len);
+        if previous != 0 {
+            return false;
+        }
+        unsafe { std::ptr::copy_nonoverlapping(src.cast::<u8>(), out.cast::<u8>(), len) };
+        true
+    }
+
+    #[test]
+    fn hex_guard_checks_one_bounded_read() {
+        let bytes = [0xff, 0x12, 0x34, 0xab];
+        let image = Image::new(bytes.as_ptr(), bytes.len() as u32, record);
+        assert!(image.matches_hex(1, b"1234ab"));
+        assert_eq!(READ_LENGTH.replace(0), 3);
+        assert!(!image.matches_hex(1, b"1234aa"));
+        assert_eq!(READ_LENGTH.replace(0), 3);
+        assert!(!image.matches_hex(2, b"1234ab"));
+        assert!(!image.matches_hex(1, b"1234a"));
+        assert!(!image.matches_hex(1, b"12z4ab"));
+        assert_eq!(READ_LENGTH.get(), 0);
     }
 }

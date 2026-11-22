@@ -24,31 +24,80 @@ def generate(output, header, types, constants, clang_args, extra=(), *, use_core
         Path(temporary.name).replace(output)
 
 
+generate("games/fallout4/src/resolution_stages.rs", "games/fallout4/src/resolution_stages.h",
+         "NOTHING", "RSF_FALLOUT4_STAGE_.*", [])
+generate("sdk/game/src/d3d11_reduced_abi.rs", "runtime/orchestrator/include/rescaleframe/d3d11_host.h",
+         "rsf_d3d11_reduced_frame", "RSF_D3D11_REDUCED_.*",
+         ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/graphics/include",
+          "-Iruntime/presentation/include"],
+         ["--no-recursive-allowlist", "--with-derive-default",
+          "--raw-line", "use crate::rsf_game_render_pass;",
+          "--raw-line", "pub use crate::d3d11_host_abi::{rsf_d3d11_auxiliary_surface, RSF_D3D11_AUXILIARY_COLOUR, RSF_D3D11_AUXILIARY_DEPTH_STENCIL, RSF_D3D11_AUXILIARY_RESTORE_CONTENTS};"])
+generate("loader/src/diagnostics/frame_capture_abi.rs", "loader/diagnostics/src/frame_capture_platform.h",
+         "rsf_capture_(result|calls|connect)", "NOTHING", ["-Iloader/diagnostics/include"])
+generate("loader/src/diagnostics/memory_abi.rs", "loader/diagnostics/src/module_dump_memory.h",
+         "rsf_mem_cache", "NOTHING", [], ["--with-derive-default"])
+generate("loader/src/census/json_abi.rs", "loader/census/src/json_platform.h",
+         "rsf_census_json", "NOTHING", [])
+generate("loader/src/census/decode_abi.rs", "loader/census/src/decode_platform.h",
+         "rsf_census_(resource_desc|read_resource)", "NOTHING", [],
+         ["--with-derive-default"])
+generate("tests/loader/src/windows/vendor_census_asi_abi.rs",
+         "loader/census/include/rescaleframe/vendor_census.h",
+         "rsf_census_options", "RSF_CENSUS_ABI_VERSION", [], ["--with-derive-default"])
 generate("runtime/backends/fsr/compat/src/abi.rs", "runtime/backends/fsr/src/fsr4_compat_platform.h",
          "rsf_fsr4_compat_.*", "RSF_FSR4_COMPAT_PLATFORM_ABI_VERSION", [])
-frame_records = "rsf_(camera_frame|game_cpu_event)"
+frame_types = "rsf_(frame_record|frame_id|frame_phase|screen_class|camera_frame)"
+frame_values = "RSF_(GAME_(FRAME|CAMERA)_ABI_VERSION|FRAME_(FLAG|SOURCE)_.*)"
+generate("sdk/game/src/frame_abi.rs", "sdk/game/include/rescaleframe/game_frame.h",
+         frame_types, frame_values, [], ["--raw-line", "#![allow(dead_code)]"])
+generate("runtime/vulkan/xess-fg/bridge_abi.rs", "runtime/vulkan/xess-fg/bridge_api.h",
+         "rsf_xess_bridge_(create|start|frame|present_status)", "RSF_XESS_BRIDGE_.*", [],
+         ["--raw-line", "#![allow(dead_code)]"])
+frame_records = "rsf_game_cpu_event"
 frame_constants = (
-    "RSF_(GAME_CAMERA_ABI_VERSION|GAME_CPU_(FRAME_BEGIN|INPUT_SAMPLE|SIMULATION_BEGIN|"
+    "RSF_(GAME_CPU_(FRAME_BEGIN|INPUT_SAMPLE|SIMULATION_BEGIN|"
     "SIMULATION_END|FRAME_END|INPUT_EVENT|EVENT_VERSION|INPUT_KEYED|INPUT_UNFRAMED)|"
     "GAME_RENDER_(SR|FINAL_SCENE|RESET|PRIMARY))"
 )
 generate("sdk/game/src/frame_event_abi.rs", "sdk/game/include/rescaleframe/game_api.h",
-         frame_records, frame_constants, ["-Isdk/game/include"])
+         frame_records, frame_constants, ["-Isdk/game/include"],
+         ["--blocklist-type", frame_types])
 generate("sdk/game/src/lib.rs", "sdk/game/include/rescaleframe/game_api.h",
          "rsf_(get_game_plugin_api_fn|frame_record|game_cpu_(source|receipt)_event)", "RSF_.*",
          ["-Isdk/game/include"], ["--blocklist-type", frame_records, "--blocklist-item", frame_constants,
-          "--raw-line", "mod frame_event_abi;", "--raw-line", "pub use frame_event_abi::*;",
-          "--raw-line", "pub mod camera_math;", "--raw-line", "pub mod d3d11_host_abi;",
-          "--raw-line", "pub mod plugin_session_abi;", "--raw-line", "mod render_config;",
-          "--raw-line", "mod render_pass;", "--raw-line", "pub mod shader_patch_abi;",
+          "--blocklist-type", frame_types, "--blocklist-item", frame_values,
+          "--raw-line", "mod frame_abi;",
+          "--raw-line", "pub use frame_abi::*;",
+          "--raw-line", "mod frame_event_abi;",
+          "--raw-line", "pub use frame_event_abi::*;",
+          "--raw-line", "pub mod callback_host_abi;",
+          "--raw-line", "pub mod camera_math;",
+          "--raw-line", "pub mod d3d11_host_abi;",
+          "--raw-line", "pub mod d3d11_reduced_abi;",
+          "--raw-line", "pub mod plugin_session_abi;",
+          "--raw-line", "pub mod presentation_result;",
+          "--raw-line", "pub mod recording_slots;",
+          "--raw-line", "mod render_config;",
+          "--raw-line", "mod render_pass;",
+          "--raw-line", "pub mod sampling;",
+          "--raw-line", "pub mod session;",
+          "--raw-line", "pub mod shader_patch_abi;",
+          "--raw-line", "pub mod sharpening_abi;",
           "--raw-line", "pub mod sr_abi;",
-          "--raw-line", "#[cfg(windows)]", "--raw-line", "pub mod win32;",
-          "--raw-line", "pub mod callback_host_abi;"])
+          "--raw-line", "pub mod vendor_paths;",
+          "--raw-line", "#[cfg(windows)]",
+          "--raw-line", "pub mod win32;",
+          "--raw-line", "pub mod windows_path;"])
 generate("sdk/game/src/callback_host_abi.rs", "runtime/orchestrator/include/rescaleframe/callback_render_host.h",
          "rsf_callback_host_setup(_v2)?", "RSF_CALLBACK_HOST_ABI_VERSION(_V2)?",
          ["-Isdk/game/include", "-Iruntime/orchestrator/include"],
          ["--no-recursive-allowlist", "--raw-line", "type wchar_t = u16;",
           "--raw-line", "use crate::rsf_game_probe;"])
+generate("sdk/game/src/sharpening_abi.rs",
+         "runtime/orchestrator/include/rescaleframe/sharpening_settings.h",
+         "rsf_sharpening_options", "NOTHING", [],
+         ["--with-derive-custom-struct", "rsf_sharpening_options=Debug,Default,PartialEq"])
 generate("sdk/game/src/shader_patch_abi.rs", "runtime/shader_patch/include/rescaleframe/shader_patch.h",
          "rsf_(get_shader_patch_api_fn|shader_patch_api|patch_.*)", "RSF_(SHADER_PATCH_VERSION|PATCH_.*)", [],
          ["--with-derive-default"])
@@ -57,6 +106,11 @@ generate("sdk/game/src/plugin_session_abi.rs", "runtime/orchestrator/include/res
          ["-Isdk/game/include", "-Iruntime/orchestrator/include"],
          ["--no-recursive-allowlist", "--raw-line", "type wchar_t = u16;",
           "--raw-line", "use crate::{rsf_game_host_services, rsf_game_probe};"])
+generate("games/project-wingman/src/overlay_abi.rs", "runtime/orchestrator/include/rescaleframe/overlay_api.h",
+         "rsf_(start_d3d11_overlay_fn|adapter_setting_(read|write)_bool_fn)",
+         "RSF_(OVERLAY_(API_VERSION|SERVICE_OPTION_TOGGLE)|RENDER_FRONTEND_ABI_VERSION|FG_BACKEND_AUTO|REFLEX_OFF)",
+         ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
+          "-include", "rescaleframe/adapter_settings.h", "-include", "rescaleframe/frame_generation.h"])
 generate("games/rdr2/src/runtime_worker_abi.rs", "games/rdr2/src/runtime_setup.h",
          "rsf_(rdr2_runtime_leaves|rdr2_fingerprint_fn|render_host_setup)",
          "RSF_(RENDER_HOST_(ABI_VERSION|OWNS_PRESENTATION)|UI_MODE_BACKBUFFER_HUDLESS)",
@@ -231,7 +285,7 @@ generate("games/unity-mono/src/plugin_abi.rs", "games/unity-mono/src/plugin_plat
           "--raw-line", "type rsf_unity_config = ::core::ffi::c_void;",
           "--raw-line", "type rsf_unity_packet = ::core::ffi::c_void;"])
 generate("games/unity-mono/src/bridge_abi.rs", "games/unity-mono/src/bridge_state.h",
-         "rsf_unity_(packet|config|frame_admission|source_submission)",
+         "rsf_unity_(packet|config|frame_admission|source_submission|texture_ops)",
          "RSF_UNITY_(BRIDGE_ABI_VERSION|PACKET_.*|FRAMES_.*|PREVIEW_SOURCE_COMMON)",
          ["-Isdk/game/include", "-Igames/unity-mono/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
@@ -248,7 +302,7 @@ generate("games/unity-mono/src/runtime_abi.rs", "games/unity-mono/src/runtime_pl
           "--raw-line", "use rsf_game_sys::callback_host_abi::rsf_callback_host_setup;"])
 generate("games/unity-mono/src/package_abi.rs", "integrations/unity/native/package_state.h",
          "rsf_(unity_(package_(settings|status|platform|view_setup)|frame_counters)|native_fg_(options|status)|fg_status|"
-         "sharpening_options|native_(latency_status|cpu_counters)|fg_mode|pacing_owner|reflex_mode|sr12)",
+         "native_(latency_status|cpu_counters)|fg_mode|pacing_owner|reflex_mode|sr12)",
          "RSF_(UNITY_(SETTINGS|PACKAGE)_ABI_VERSION|SR_NONE|FG_(OFF|STAT_TOTAL_PRESENTED))",
          ["-include", "rescaleframe/native_fg.h", "-include", "rescaleframe/native_cpu.h",
           "-include", "rescaleframe/sr_session.h", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
@@ -260,9 +314,10 @@ generate("games/unity-mono/src/package_abi.rs", "integrations/unity/native/packa
           "rsf_game_render_config_fn, rsf_game_render_pass, rsf_game_render_pass_fn};",
           "--raw-line", "use crate::plugin_abi::rsf_unity_native_api;",
           "--raw-line", "use crate::runtime_abi::rsf_fg12_setup;",
+          "--raw-line", "pub use rsf_game_sys::sharpening_abi::rsf_sharpening_options;",
           "--with-derive-custom-struct", "rsf_unity_package_platform=Copy,Clone"])
 generate("runtime/orchestrator/src/render_abi.rs", "runtime/orchestrator/include/rescaleframe/frame_assembly.h",
-         "rsf_(frame_resources|pipeline_camera_frame|dlss_frame|fg_choice|render_link|sr_session_setup|sr_session_status|sr_provider|fg_host|fg_session_status|generation_provider|native_fg_status|motion_resolve_params|render_settings|sharpening_options)",
+         "rsf_(frame_resources|pipeline_camera_frame|dlss_frame|fg_choice|render_link|sr_session_setup|sr_session_status|sr_provider|fg_host|fg_session_status|generation_provider|native_fg_status|motion_resolve_params|render_settings)",
          "RSF_(FRAME_ASSEMBLY_ABI_VERSION|DLSS_ABI_VERSION|FG_(BACKEND_(AUTO|ALL)|ABI_VERSION|OFF|FIXED|AUTO|DYNAMIC|STAT_(TOTAL_PRESENTED|GENERATED_PRESENTED|PRESENT_CALLBACKS|ACTIVITY))|NATIVE_FG_REASON_NONE|PACING_(NONE|REFLEX|XELL)|REFLEX_(OFF|BOOST)|RENDER_LINK_ABI_VERSION|SR_SESSION_ABI_VERSION|BACKEND_ABI_VERSION|API_D3D12|SR_(FSR2|XESS)|RENDER_FRONTEND_ABI_VERSION|SHARPENING_ABI_VERSION)",
          ["-include", "rescaleframe/fg_choice.h", "-include", "rescaleframe/render_links.h",
           "-include", "rescaleframe/render_frontend.h",
@@ -270,8 +325,9 @@ generate("runtime/orchestrator/src/render_abi.rs", "runtime/orchestrator/include
           "-include", "rescaleframe/native_fg.h", "-include", "rescaleframe/motion_resolve.h", "-Iruntime/orchestrator/include",
           "-Iruntime/contract/include", "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include",
           "-Iruntime/presentation/include", "-Isdk/game/include"],
-         ["--blocklist-type", "rsf_(frame_record|frame_id|frame_phase|screen_class|camera_frame)",
-          "--raw-line", "use rsf_game_sys::rsf_frame_record;"])
+         ["--blocklist-type", "rsf_(frame_record|frame_id|frame_phase|screen_class|camera_frame|sharpening_options)",
+          "--raw-line", "use rsf_game_sys::rsf_frame_record;",
+          "--raw-line", "pub use rsf_game_sys::sharpening_abi::rsf_sharpening_options;"])
 generate("runtime/orchestrator/src/vulkan_fg_abi.rs", "runtime/orchestrator/src/native_fg_vulkan_platform.h",
          "rsf_fgvk(_(setup|frame|status|host_options|latency_status|provider|platform|frame_slot|timeline|submit_plan))?|rsf_dlss(gvk_status|_capture_source)",
          "RSF_FGVK_.*",
@@ -377,11 +433,15 @@ generate("sdk/game/src/d3d11_host_abi.rs", "runtime/orchestrator/include/rescale
           "--raw-line", "use crate::rsf_game_render_pass;"])
 generate("runtime/orchestrator/src/auxiliary_sr_abi.rs", "runtime/orchestrator/src/auxiliary_sr_platform.h",
          "rsf_aux_platform",
-         "RSF_(AUX_.*|D3D11_AUXILIARY_.*|DEPTH_SCALE_(ABI_VERSION|OK))",
+         "RSF_(AUX_.*|DEPTH_SCALE_(ABI_VERSION|OK))",
          ["-Iruntime/orchestrator/include", "-Iruntime/graphics/include",
           "-Iruntime/presentation/include", "-Isdk/game/include"],
          ["--blocklist-type", "rsf_game_log_fn",
-          "--raw-line", "use rsf_game_sys::rsf_game_log_fn;", "--with-derive-default"])
+          "--blocklist-type", "rsf_d3d11_auxiliary_surface",
+          "--raw-line", "use rsf_game_sys::rsf_game_log_fn;",
+          "--raw-line", "pub use rsf_game_sys::d3d11_reduced_abi::{rsf_d3d11_auxiliary_surface, "
+          "RSF_D3D11_AUXILIARY_DEPTH_STENCIL, RSF_D3D11_AUXILIARY_COLOUR, RSF_D3D11_AUXILIARY_RESTORE_CONTENTS};",
+          "--with-derive-default"])
 generate("runtime/orchestrator/src/native_sr_abi.rs", "runtime/orchestrator/include/rescaleframe/native_sr.h",
          "rsf_(dlss_pipeline_frame|native_translucency_masks)", "NOTHING",
          ["-include", "rescaleframe/native_translucency.h", "-Iruntime/orchestrator/include",

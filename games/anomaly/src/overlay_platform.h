@@ -4,6 +4,7 @@
 // tools/generate-rust-bindings.py generates overlay_abi.rs from this header and the Runtime's overlay API.
 #include <rescaleframe/named_frame_dump.h>
 #include <rescaleframe/overlay_api.h>
+#include <stdbool.h>
 #include <stdint.h>
 
 // overlay::StartStatus.
@@ -19,7 +20,7 @@ typedef struct rsf_anomaly_overlay_option {
     int32_t minimum, maximum, step;
     uint32_t divisor;
     int32_t (*get)(void);
-    void (*set)(int32_t);
+    bool (*set)(int32_t);
 } rsf_anomaly_overlay_option;
 
 // A presented chain: its DXGI output window and size, and its D3D11 device, compared only.
@@ -29,7 +30,7 @@ typedef struct rsf_anomaly_overlay_chain {
     uint32_t width, height;
 } rsf_anomaly_overlay_chain;
 
-// The native leaves: COM calls on a presented chain and guarded hook installation.
+// Platform calls for the service: COM access and guarded hook installation.
 typedef struct rsf_anomaly_overlay_platform {
     // Zero when the chain's description cannot be read.
     uint32_t (*chain)(void* chain, rsf_anomaly_overlay_chain*);
@@ -56,8 +57,9 @@ extern "C" {
 #endif
 uint32_t rsf_anomaly_overlay_start(const rsf_anomaly_overlay_options*, const rsf_anomaly_overlay_platform*,
     const char** reason);
-uint32_t rsf_anomaly_overlay_bind(rsf_get_overlay_api_fn, rsf_overlay_api*, const char** reason);
-uint32_t rsf_anomaly_overlay_engine_window(void* window);
+uint32_t rsf_anomaly_overlay_describe_chain(void*, rsf_anomaly_overlay_chain*);
+int32_t rsf_anomaly_overlay_capture_backbuffer(void*, rsf_input_dump_named_texture_fn, const rsf_named_frame_dump*,
+    rsf_named_frame_dump_report*);
 uint32_t rsf_anomaly_overlay_capture_bits(void* user);
 void rsf_anomaly_overlay_present(void* user, void* chain);
 void rsf_anomaly_overlay_resize(void* user, void* chain);

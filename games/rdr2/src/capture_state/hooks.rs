@@ -3,7 +3,7 @@
 
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 // Order matches the private rsf_rdr2_capture_hook enum. Slot numbers are D3D12/DXGI vtable slots.
@@ -14,6 +14,7 @@ const HOOK_COUNT: usize = SLOTS.len();
 const OK: i32 = 0;
 const ALREADY_ENABLED: i32 = 5;
 const UNKNOWN: i32 = -1;
+const DIFFERENT_TARGET: i32 = -2;
 
 #[repr(C)]
 struct Ops {
@@ -28,14 +29,27 @@ const _: () = assert!(size_of::<Ops>() == 32);
 #[derive(Clone, Copy)]
 enum Hook {
     Vacant,
-    Installing,
+    Installing { target: usize },
     Created { target: usize, replacement: usize },
-    Enabled,
+    Enabled { target: usize },
     Refused,
 }
 
 static HOOKS: Mutex<[Hook; HOOK_COUNT]> = Mutex::new([Hook::Vacant; HOOK_COUNT]);
 static ORIGINALS: [AtomicUsize; HOOK_COUNT] = [const { AtomicUsize::new(0) }; HOOK_COUNT];
+static UNOBSERVED_HOOK_ROLES: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(windows)]
+pub(super) fn unobserved_roles() -> u32 {
+    UNOBSERVED_HOOK_ROLES.load(Ordering::Acquire)
+}
+
+fn different_target(ops: &Ops, role: usize, slot: u32, target: *mut c_void) {
+    let bit = 1 << role;
+    if UNOBSERVED_HOOK_ROLES.fetch_or(bit, Ordering::AcqRel) & bit == 0 {
+        unsafe { (ops.report)(slot, target, DIFFERENT_TARGET) };
+    }
+}
 
 fn hooks() -> MutexGuard<'static, [Hook; HOOK_COUNT]> {
     HOOKS.lock().unwrap_or_else(PoisonError::into_inner)
@@ -51,7 +65,9 @@ extern "C" fn rsf_rdr2_capture_hook_original(role: u32) -> usize {
 fn enable(ops: &Ops, role: usize, slot: u32, target: *mut c_void, replacement: *const c_void) {
     let status = unsafe { (ops.enable)(target) };
     hooks()[role] = if matches!(status, OK | ALREADY_ENABLED) {
-        Hook::Enabled
+        Hook::Enabled {
+            target: target.addr(),
+        }
     } else {
         Hook::Created {
             target: target.addr(),
@@ -74,22 +90,30 @@ extern "C" fn rsf_rdr2_capture_bind_hook(
     if object.is_null() || replacement.is_null() {
         return;
     }
+    // The target lookup can reenter. Keep it outside the registry lock.
+    let target = unsafe { (ops.target)(object, slot) };
+    if target.is_null() {
+        return;
+    }
     let previous = {
         let mut hooks = hooks();
         match hooks[role] {
             previous @ (Hook::Vacant | Hook::Created { .. }) => {
-                hooks[role] = Hook::Installing;
+                hooks[role] = Hook::Installing {
+                    target: target.addr(),
+                };
                 previous
+            }
+            Hook::Enabled { target: installed } | Hook::Installing { target: installed }
+                if installed != target.addr() =>
+            {
+                drop(hooks);
+                different_target(ops, role, slot, target);
+                return;
             }
             _ => return,
         }
     };
-    // The native methods can reenter. Rust does not hold the registration lock across them.
-    let target = unsafe { (ops.target)(object, slot) };
-    if target.is_null() {
-        hooks()[role] = previous;
-        return;
-    }
     if let Hook::Created {
         target: created,
         replacement: detour,
@@ -99,6 +123,7 @@ extern "C" fn rsf_rdr2_capture_bind_hook(
             enable(ops, role, slot, target, replacement);
         } else {
             hooks()[role] = previous;
+            different_target(ops, role, slot, target);
         }
         return;
     }
@@ -171,13 +196,18 @@ mod tests {
         rsf_rdr2_capture_bind_hook(&ops, 0, object, detour);
         rsf_rdr2_capture_bind_hook(&ops, 0, other, detour);
         assert_eq!(ENABLES.load(Ordering::Relaxed), 1);
+        assert_eq!(UNOBSERVED_HOOK_ROLES.load(Ordering::Acquire) & 1, 1);
+        UNOBSERVED_HOOK_ROLES.store(0, Ordering::Release);
         rsf_rdr2_capture_bind_hook(&ops, 0, object, detour);
         rsf_rdr2_capture_bind_hook(&ops, 0, object, detour);
+        rsf_rdr2_capture_bind_hook(&ops, 0, other, detour);
 
         assert_eq!(CREATES.load(Ordering::Relaxed), 1);
         assert_eq!(ENABLES.load(Ordering::Relaxed), 2);
         assert!(PUBLISHED_BEFORE_ENABLE.load(Ordering::Relaxed));
+        assert_eq!(UNOBSERVED_HOOK_ROLES.load(Ordering::Acquire) & 1, 1);
         hooks()[0] = Hook::Vacant;
         ORIGINALS[0].store(0, Ordering::Release);
+        UNOBSERVED_HOOK_ROLES.store(0, Ordering::Release);
     }
 }

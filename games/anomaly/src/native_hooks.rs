@@ -331,5 +331,47 @@ unsafe extern "C" fn rsf_anomaly_hook_set_created(batch: *const *mut c_void) -> 
     !unsafe { *batch }.is_null()
 }
 
+/// Check that a read is wholly inside one readable region of the intended
+/// image. The platform copy still contains faults if protection changes.
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_hook_read_mapped(
+    owner: *const c_void,
+    address: *const c_void,
+    out: *mut c_void,
+    size: usize,
+    executable: bool,
+    copy: crate::engine_guards::Read,
+) -> bool {
+    use windows_sys::Win32::System::Memory::{
+        MEM_COMMIT, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
+        PAGE_EXECUTE_WRITECOPY, PAGE_GUARD, PAGE_NOACCESS, PAGE_READONLY, PAGE_READWRITE,
+        PAGE_WRITECOPY, VirtualQuery,
+    };
+
+    if address.is_null() || size == 0 {
+        return false;
+    }
+    let mut region = MEMORY_BASIC_INFORMATION::default();
+    if unsafe { VirtualQuery(address, &mut region, size_of::<MEMORY_BASIC_INFORMATION>()) } == 0
+        || region.State != MEM_COMMIT
+        || region.AllocationBase.cast_const() != owner
+        || region.Protect & (PAGE_GUARD | PAGE_NOACCESS) != 0
+    {
+        return false;
+    }
+    let contained = address
+        .addr()
+        .checked_sub(region.BaseAddress.addr())
+        .and_then(|offset| offset.checked_add(size))
+        .is_some_and(|end| end <= region.RegionSize);
+    let readable = match region.Protect & 0xff {
+        PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY => true,
+        PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY => !executable,
+        _ => false,
+    };
+    contained && readable && unsafe { copy(out, address, size) }
+}
+
 #[cfg(test)]
 mod tests;

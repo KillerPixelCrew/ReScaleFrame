@@ -5,7 +5,7 @@
 //! admission budgets, duplicate detection, the pending readbacks and their
 //! publication after the bridge has drained its DX12 queue. The native leaves
 //! keep the fixed fingerprint admission, the typed SDK callback table, the
-//! DX12 readback, copy and map calls, and the on-disk file formats.
+//! DX12 readback, copy and map calls.
 //!
 //! The shared `rsf::FrameCapture12` owner does not fit this path: it records
 //! into its own command lists and completes on its own fences, while these
@@ -14,9 +14,11 @@
 //! modules that the standalone `rustc` build of the session cannot link.
 
 use super::{Handle, Platform};
-use std::ffi::CStr;
-use std::mem::MaybeUninit;
+use std::fs::{File, OpenOptions};
+use std::io::{self, BufWriter, Write};
 use std::os::windows::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
+use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -35,26 +37,15 @@ const OUTPUT_SLOTS: u32 = 15;
 const TEXTURE2D: u32 = 3;
 const BGRA8: u32 = 87;
 const STATE_COMMON: u32 = 0;
-// Results of the native publication leaf.
-const PUBLISHED: i32 = 0;
-const MAP_FAILED: i32 = -1;
-const WRITE_FAILED: i32 = -2;
+const PROVIDER_SHA256: &str = "ec5e0c65e075570c6ede72618bb666d0be0c2e10b2ea9762c0fe8cb8e375ab27";
 // RsfXessBridgeCaptureSource result when the source cannot be bound.
 const SOURCE_FAILED: i32 = -7012;
 
-/// The rsf_frame_record ABI 2 prefix Rust reads. The remainder, from
-/// `input_qpc` through `source_qpc_frequency`, is published unchanged.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(super) struct Record {
-    _header: [u32; 2],
-    frame_id: u64,
-    _session_id: u64,
-    _identity: [u32; 7],
-    output_width: u32,
-    output_height: u32,
-    _tail: [MaybeUninit<u8>; 420],
-}
+#[path = "../../../sdk/game/src/frame_abi.rs"]
+mod frame_abi;
+use frame_abi::{
+    RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record,
+};
 
 /// The D3D12_RESOURCE_DESC fields the callback contract and receipt use.
 #[repr(C)]
@@ -70,8 +61,7 @@ pub(super) struct Desc {
 }
 
 /// One xess-diagnostic-callbacks.jsonl receipt.
-#[repr(C)]
-pub(super) struct Event {
+struct Event {
     frame: u64,
     token: u64,
     resource: u64,
@@ -99,8 +89,7 @@ pub(super) struct Footprint {
 
 /// A pending readback. It holds one reference to its readback buffer and only
 /// the identities of the borrowed source resource and SDK command list.
-#[repr(C)]
-pub(super) struct Image {
+struct Image {
     readback: Handle,
     footprint: Footprint,
     bytes: u64,
@@ -112,7 +101,6 @@ pub(super) struct Image {
     generated_count: u32,
     actual_count: u32,
     generated: u32,
-    _reserved: u32,
     source: Record,
 }
 
@@ -121,19 +109,9 @@ const _: () = {
     assert!(std::mem::offset_of!(Record, frame_id) == 8);
     assert!(std::mem::offset_of!(Record, output_width) == 52);
     assert!(std::mem::offset_of!(Record, output_height) == 56);
-    assert!(std::mem::offset_of!(Record, _tail) == 60);
     assert!(size_of::<Desc>() == 32);
-    assert!(size_of::<Event>() == 64);
-    assert!(std::mem::offset_of!(Event, kind) == 40);
-    assert!(std::mem::offset_of!(Event, state) == 60);
     assert!(size_of::<Footprint>() == 32);
     assert!(std::mem::offset_of!(Footprint, row_pitch) == 24);
-    assert!(size_of::<Image>() == 576 && align_of::<Image>() == 8);
-    assert!(std::mem::offset_of!(Image, footprint) == 8);
-    assert!(std::mem::offset_of!(Image, bytes) == 40);
-    assert!(std::mem::offset_of!(Image, ordinal) == 72);
-    assert!(std::mem::offset_of!(Image, generated) == 88);
-    assert!(std::mem::offset_of!(Image, source) == 96);
 };
 
 #[derive(Clone, Copy)]
@@ -164,38 +142,22 @@ impl State {
 }
 
 struct Config {
-    // NUL-terminated UTF-16. Only the terminator when capture is disabled.
-    directory: Vec<u16>,
+    directory: Option<PathBuf>,
     first: u64,
     count: u64,
     probe: bool,
 }
 
-// GetEnvironmentVariableW into a 32-unit buffer: a value that does not fit
-// reports its required size and leaves the buffer unchanged, and an empty
-// value reports zero.
-fn read_variable(name: &str, buffer: &mut [u16; VALUE_CAPACITY]) -> bool {
-    let Some(value) = std::env::var_os(name) else {
-        return false;
-    };
-    let wide: Vec<u16> = value.encode_wide().collect();
-    if wide.len() >= VALUE_CAPACITY {
-        return true;
-    }
-    buffer[..wide.len()].copy_from_slice(&wide);
-    buffer[wide.len()] = 0;
-    !wide.is_empty()
-}
-
-fn terminated(buffer: &[u16]) -> &[u16] {
-    let end = buffer.iter().position(|&unit| unit == 0);
-    &buffer[..end.unwrap_or(buffer.len())]
+fn read_variable(name: &str) -> Option<Vec<u16>> {
+    let value = std::env::var_os(name)?;
+    let wide: Vec<u16> = value.encode_wide().take(VALUE_CAPACITY).collect();
+    (!wide.is_empty() && wide.len() < VALUE_CAPACITY).then_some(wide)
 }
 
 // wcstoull with base 10: leading white space, an optional sign that negates
 // modulo 2^64, and saturation on overflow.
 fn parse_unsigned(buffer: &[u16]) -> u64 {
-    let mut units = terminated(buffer)
+    let mut units = buffer
         .iter()
         .copied()
         .skip_while(|&unit| unit == 0x20 || (0x09..=0x0d).contains(&unit))
@@ -234,7 +196,7 @@ fn parse_unsigned(buffer: &[u16]) -> u64 {
 impl Config {
     fn from_environment() -> Self {
         let mut config = Self {
-            directory: vec![0],
+            directory: None,
             first: DEFAULT_FIRST,
             count: DEFAULT_COUNT,
             probe: false,
@@ -242,23 +204,22 @@ impl Config {
         let Some(path) = std::env::var_os("RSF_VULKAN_FRAME_CAPTURE_DIR") else {
             return config;
         };
-        let mut directory: Vec<u16> = path.encode_wide().collect();
-        if directory.is_empty() || directory.len() >= DIRECTORY_CAPACITY {
+        if path.is_empty()
+            || path.encode_wide().take(DIRECTORY_CAPACITY).count() == DIRECTORY_CAPACITY
+        {
             return config;
         }
-        let mut value = [0; VALUE_CAPACITY];
-        if read_variable("RSF_FRAME_CAPTURE_FIRST", &mut value) {
+        if let Some(value) = read_variable("RSF_FRAME_CAPTURE_FIRST") {
             config.first = parse_unsigned(&value);
         }
-        if read_variable("RSF_FRAME_CAPTURE_COUNT", &mut value) {
+        if let Some(value) = read_variable("RSF_FRAME_CAPTURE_COUNT") {
             config.count = parse_unsigned(&value).min(MAX_COUNT);
         }
-        config.probe = read_variable("RSF_XESS_DIAGNOSTIC_PROBE", &mut value)
-            && terminated(&value) == [u16::from(b'1')];
+        config.probe = read_variable("RSF_XESS_DIAGNOSTIC_PROBE")
+            .is_some_and(|value| value == [u16::from(b'1')]);
         // A directory that cannot be created leaves capture disabled.
         if std::fs::create_dir_all(&path).is_ok() {
-            directory.push(0);
-            config.directory = directory;
+            config.directory = Some(path.into());
         }
         config
     }
@@ -282,7 +243,7 @@ impl Capture {
     }
 
     fn enabled(&self) -> bool {
-        self.config.directory.len() > 1 && self.config.count != 0
+        self.config.directory.is_some() && self.config.count != 0
     }
 
     fn wants(&self, frame: u64) -> bool {
@@ -294,12 +255,11 @@ impl Capture {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn directory(&self) -> *const u16 {
-        self.config.directory.as_ptr()
-    }
-
-    fn failure(&self, reason: &CStr) {
-        unsafe { (self.ops.capture_failure)(self.directory(), reason.as_ptr()) };
+    fn failure(&self, reason: &str) {
+        if let Some(directory) = &self.config.directory {
+            let _ = append(directory.join("xess-capture-errors.log"))
+                .and_then(|mut file| writeln!(file, "{reason}"));
+        }
     }
 
     /// Admits the exact SDK binary and registers the callbacks once the
@@ -310,15 +270,15 @@ impl Capture {
         }
         let ops = self.ops;
         if unsafe { (ops.capture_fingerprint)(module) } == 0 {
-            self.failure(c"diagnostic-runtime-fingerprint");
+            self.failure("diagnostic-runtime-fingerprint");
             return false;
         }
         if unsafe { (ops.find_diagnostics)(native, module) } != 0 {
-            self.failure(c"diagnostic-export");
+            self.failure("diagnostic-export");
             return false;
         }
         if unsafe { (ops.register_diagnostics)(native) } < 0 {
-            self.failure(c"diagnostic-registration");
+            self.failure("diagnostic-registration");
             return false;
         }
         self.lock().registered = true;
@@ -343,7 +303,7 @@ impl Capture {
                 let spare = MAX_SOURCES + 1 - state.sources.len();
                 if state.sources.try_reserve_exact(spare).is_err() {
                     drop(state);
-                    self.failure(c"source-binding");
+                    self.failure("source-binding");
                     return false;
                 }
                 state
@@ -412,8 +372,10 @@ impl Capture {
             format: desc.format,
             state: resource_state,
         };
-        if unsafe { (ops.capture_event)(self.directory(), &event) } != 0 {
-            self.failure(c"callback-exception");
+        if let Some(directory) = &self.config.directory
+            && event.write(directory).is_err()
+        {
+            self.failure("callback-write");
             return;
         }
         if self.config.probe {
@@ -428,7 +390,7 @@ impl Capture {
             || desc.height != record.output_height
             || ordinal >= OUTPUT_SLOTS
         {
-            self.failure(c"callback-resource-contract");
+            self.failure("callback-resource-contract");
             return;
         }
         let duplicate = state.pending.iter().any(|image| {
@@ -437,18 +399,18 @@ impl Capture {
                 && image.ordinal == ordinal
         });
         if duplicate {
-            self.failure(c"duplicate-callback-resource");
+            self.failure("duplicate-callback-resource");
             return;
         }
         if state.pending.len() >= MAX_PENDING {
-            self.failure(c"capture-count-budget");
+            self.failure("capture-count-budget");
             return;
         }
         // Reserve the bounded slot first, so the push below cannot allocate
         // after a readback exists or a copy is recorded.
         let spare = MAX_PENDING - state.pending.len();
         if state.pending.try_reserve_exact(spare).is_err() {
-            self.failure(c"callback-exception");
+            self.failure("callback-exception");
             return;
         }
         let mut footprint = Footprint::default();
@@ -457,18 +419,18 @@ impl Capture {
         if unsafe { (ops.capture_footprint)(resource, &mut footprint, &mut bytes, &mut device) }
             != 0
         {
-            self.failure(c"resource-device");
+            self.failure("resource-device");
             return;
         }
         if bytes > BYTE_BUDGET.saturating_sub(state.retained_bytes) {
             unsafe { (ops.capture_release)(device) };
-            self.failure(c"capture-byte-budget");
+            self.failure("capture-byte-budget");
             return;
         }
         let readback = unsafe { (ops.capture_readback)(device, bytes) };
         unsafe { (ops.capture_release)(device) };
         if readback.is_null() {
-            self.failure(c"readback-allocation");
+            self.failure("readback-allocation");
             return;
         }
         // Own the allocation before recording any GPU reference.
@@ -485,7 +447,6 @@ impl Capture {
             generated_count: source.generated_count,
             actual_count: source.actual_count,
             generated: u32::from(generated),
-            _reserved: 0,
             source: source.record,
         });
         unsafe { (ops.capture_copy)(commands, resource, readback, &footprint, resource_state) };
@@ -505,18 +466,11 @@ impl Capture {
         // longer admitted, including while the setter runs unlocked below.
         state.closed = true;
         let mut okay = true;
-        for image in &state.pending {
-            match unsafe { (ops.capture_publish)(self.directory(), image) } {
-                PUBLISHED => {}
-                MAP_FAILED => {
+        if let Some(directory) = &self.config.directory {
+            for image in &state.pending {
+                if let Err(reason) = image.publish(ops, directory) {
                     okay = false;
-                    self.failure(c"readback-map");
-                }
-                WRITE_FAILED => okay = false,
-                _ => {
-                    // The batch stays owned for checked retirement.
-                    self.failure(c"readback-flush-exception");
-                    return false;
+                    self.failure(reason);
                 }
             }
         }
@@ -530,13 +484,175 @@ impl Capture {
         drop(state);
         if registered {
             if unsafe { (ops.unregister_diagnostics)(native) } < 0 {
-                self.failure(c"diagnostic-unregister");
+                self.failure("diagnostic-unregister");
                 return false;
             }
             self.lock().registered = false;
         }
         okay
     }
+}
+
+fn append(path: PathBuf) -> io::Result<File> {
+    OpenOptions::new().create(true).append(true).open(path)
+}
+
+impl Event {
+    fn write(&self, directory: &Path) -> io::Result<()> {
+        let line = format!(
+            concat!(
+                "{{\"frame\":{},\"token\":{},\"kind\":{},\"ordinal\":{},",
+                "\"generated\":{},\"resource\":{},\"commands\":{},",
+                "\"width\":{},\"height\":{},\"format\":{},",
+                "\"state\":{},\"fraction_established\":false}}\n",
+            ),
+            self.frame,
+            self.token,
+            self.kind,
+            self.ordinal,
+            self.generated != 0,
+            self.resource,
+            self.commands,
+            self.width,
+            self.height,
+            self.format,
+            self.state,
+        );
+        append(directory.join("xess-diagnostic-callbacks.jsonl"))?.write_all(line.as_bytes())
+    }
+}
+
+impl Image {
+    fn publish(&self, ops: &Platform, directory: &Path) -> Result<(), &'static str> {
+        let record = &self.source;
+        let generated = self.generated != 0;
+        let (role, boundary) = if generated {
+            (
+                "fg-xess-generated-before-present",
+                "sdk-interpolation-output-callback",
+            )
+        } else {
+            (
+                "fg-xess-sdk-backbuffer-input",
+                "sdk-input-backbuffer-callback",
+            )
+        };
+        let stem = format!(
+            "{}-{}-{role}-{}",
+            record.session_id, record.frame_id, self.ordinal
+        );
+
+        let mut pixels = ptr::null();
+        if unsafe { (ops.capture_map)(self.readback, self.bytes, &mut pixels) } != 0 {
+            return Err("readback-map");
+        }
+        let written = unsafe { self.write_pixels(&directory.join(format!("{stem}.raw")), pixels) };
+        unsafe { (ops.capture_unmap)(self.readback) };
+        let receipt = self.write_receipt(&directory.join(format!("{stem}.json")), role, boundary);
+        written.and(receipt).map_err(|_| "readback-write")
+    }
+
+    // The mapping remains live for this call. D3D12 writes the active texels
+    // of each row. Emit zeros for footprint padding without reading it.
+    unsafe fn write_pixels(&self, path: &Path, pixels: *const u8) -> io::Result<()> {
+        let layout = &self.footprint;
+        let start = layout.offset as usize;
+        let row_bytes = layout.width as usize * 4;
+        let pitch = layout.row_pitch as usize;
+        let rows = layout.height as usize;
+        let size = self.bytes as usize;
+        let end = rows
+            .checked_sub(1)
+            .and_then(|last| last.checked_mul(pitch))
+            .and_then(|offset| start.checked_add(offset))
+            .and_then(|offset| offset.checked_add(row_bytes));
+        if pixels.is_null()
+            || layout.format != BGRA8
+            || layout.depth != 1
+            || row_bytes > pitch
+            || end.is_none_or(|end| end > size)
+        {
+            return Err(io::Error::other("invalid mapped footprint"));
+        }
+        let mut raw = BufWriter::new(File::create(path)?);
+        let mut cursor = 0;
+        for row in 0..rows {
+            let offset = start + row * pitch;
+            write_padding(&mut raw, offset - cursor)?;
+            raw.write_all(unsafe { std::slice::from_raw_parts(pixels.add(offset), row_bytes) })?;
+            cursor = offset + row_bytes;
+        }
+        write_padding(&mut raw, size - cursor)?;
+        raw.flush()
+    }
+
+    fn write_receipt(&self, path: &Path, role: &str, boundary: &str) -> io::Result<()> {
+        let record = &self.source;
+        let camera = &record.camera;
+        let layout = &self.footprint;
+        // The metadata fields read by capture tooling retain their previous
+        // names and units. The matrices are sixteen row-major numbers.
+        let receipt = format!(
+            concat!(
+                "{{\n\"role\":\"{}\",\n\"frame\":{},\n\"session\":{},\n\"view\":{},",
+                "\n\"generation\":{},\n\"flags\":{},\n\"frame_time_ms\":{},",
+                "\n\"width\":{},\n\"height\":{},\n\"row_pitch\":{},\n\"offset\":{},",
+                "\n\"dxgi_format\":{},\n\"bytes\":{},\n\"fg_backend\":5,\n\"sdk_token\":{},",
+                "\n\"sdk_output_kind\":{},\n\"sdk_array_ordinal\":{},\n\"fraction_established\":false,",
+                "\n\"requested_generated_count\":{},\n\"observed_output_count\":{},\n\"generated\":{},",
+                "\n\"capture_boundary\":\"{}\",\n\"provider_sha256\":\"{}\",",
+                "\n\"source_resource\":{},\n\"command_list\":{},",
+                "\n\"completion\":\"bridge-owned-dx12-queue-drained\",\n\"render_size\":[{},{}],",
+                "\n\"output_size\":[{},{}],\n\"jitter_pixels\":{:?},\n\"matrix_convention\":\"row_vectors\",",
+                "\n\"view_to_clip\":{:?},\n\"clip_to_view\":{:?},\n\"view_to_world\":{:?},",
+                "\n\"world_to_view\":{:?},\n\"clip_to_previous_clip\":{:?}\n}}\n",
+            ),
+            role,
+            record.frame_id,
+            record.session_id,
+            record.view_id,
+            record.resource_generation,
+            record.flags,
+            record.frame_time_ms,
+            layout.width,
+            layout.height,
+            layout.row_pitch,
+            layout.offset,
+            layout.format,
+            self.bytes,
+            self.token,
+            self.kind,
+            self.ordinal,
+            self.generated_count,
+            self.actual_count,
+            self.generated != 0,
+            boundary,
+            PROVIDER_SHA256,
+            self.source_resource,
+            self.command_list,
+            camera.render_width,
+            camera.render_height,
+            camera.output_width,
+            camera.output_height,
+            camera.jitter_pixels,
+            camera.view_to_clip,
+            camera.clip_to_view,
+            camera.view_to_world,
+            camera.world_to_view,
+            camera.clip_to_previous_clip,
+        );
+        std::fs::write(path, receipt)
+    }
+}
+
+fn write_padding(out: &mut impl Write, mut bytes: usize) -> io::Result<()> {
+    const ZERO: [u8; 4096] = [0; 4096];
+    while bytes != 0 {
+        let count = bytes.min(ZERO.len());
+        out.write_all(&ZERO[..count])?;
+        bytes -= count;
+    }
+    Ok(())
 }
 
 impl Drop for Capture {
@@ -548,15 +664,31 @@ impl Drop for Capture {
     }
 }
 
-// The native bridge validates the public record before binding it.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_xess_capture_source(
     capture: *const Capture,
     record: *const Record,
     generated_count: u32,
 ) -> i32 {
-    let (Some(capture), Some(record)) = (unsafe { capture.as_ref() }, unsafe { record.as_ref() })
-    else {
+    use super::bridge_abi::{RSF_XESS_BRIDGE_ABI_MISMATCH, RSF_XESS_BRIDGE_INVALID_ARGUMENT};
+
+    if record.is_null() || (unsafe { record.cast::<u32>().read() } as usize) < size_of::<Record>() {
+        return RSF_XESS_BRIDGE_INVALID_ARGUMENT;
+    }
+    let record = unsafe { &*record };
+    if (record.camera.struct_size as usize) < size_of_val(&record.camera)
+        || record.frame_id == 0
+        || record.frame_id > u64::from(u32::MAX)
+        || record.session_id == 0
+    {
+        return RSF_XESS_BRIDGE_INVALID_ARGUMENT;
+    }
+    if record.abi_version != RSF_GAME_FRAME_ABI_VERSION
+        || record.camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION
+    {
+        return RSF_XESS_BRIDGE_ABI_MISMATCH;
+    }
+    let Some(capture) = (unsafe { capture.as_ref() }) else {
         return SOURCE_FAILED;
     };
     if capture.source(record, generated_count) {

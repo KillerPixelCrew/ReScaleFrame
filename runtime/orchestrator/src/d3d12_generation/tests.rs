@@ -25,12 +25,12 @@ fn enabled() -> (State, Options) {
 #[test]
 fn abort_wins_over_an_in_flight_preparation_and_observation() {
     let (state, _) = enabled();
-    let revision = state.read().revision;
+    let revision = state.read().order.revision;
     assert!(state.stage(revision, 28, RSF_FG_FIXED, 2));
     thread::scope(|scope| scope.spawn(|| state.abort()).join().unwrap());
     assert!(!state.complete(revision, 28, true, RSF_FG_FIXED, 2));
-    assert_eq!(state.read().last_prepare, 28);
-    assert_eq!(state.read().interpolated, None);
+    assert_eq!(state.read().order.last_prepare, 28);
+    assert_eq!(state.read().order.interpolated, None);
     assert!(!state.reset_history(revision));
     assert!(!state.stage(revision, 29, RSF_FG_FIXED, 2));
     let status = state.observe(
@@ -52,29 +52,29 @@ fn option_changes_keep_requested_count_and_consume_disabled_sources() {
     let before = state.read();
     assert_eq!(before.request.unwrap().generated_frames, 4);
     assert_eq!(before.status.effective_generated_frames, 2);
-    assert!(state.stage(before.revision, 7, RSF_FG_FIXED, 2));
-    assert!(state.complete(before.revision, 7, true, RSF_FG_FIXED, 2));
+    assert!(state.stage(before.order.revision, 7, RSF_FG_FIXED, 2));
+    assert!(state.complete(before.order.revision, 7, true, RSF_FG_FIXED, 2));
 
     options.frame_limit_us = 8_000;
     state.configured(options, RSF_FG_FIXED, 2, 1, false);
-    assert_eq!(state.read().interpolated, Some(7));
-    assert_eq!(state.read().revision, before.revision);
+    assert_eq!(state.read().order.interpolated, Some(7));
+    assert_eq!(state.read().order.revision, before.order.revision);
 
     options.mode = RSF_FG_OFF;
     state.configured(options, RSF_FG_OFF, 0, 0, true);
-    assert!(!state.complete(before.revision, 8, true, RSF_FG_FIXED, 2));
+    assert!(!state.complete(before.order.revision, 8, true, RSF_FG_FIXED, 2));
     assert_eq!(state.read().status.effective_mode, RSF_FG_OFF);
     let current = state.read();
-    assert!(state.stage(current.revision, 9, RSF_FG_OFF, 0));
-    assert!(state.complete(current.revision, 9, false, RSF_FG_OFF, 0));
-    assert_eq!(state.read().last_prepare, 9);
-    assert_eq!(state.read().interpolated, None);
+    assert!(state.stage(current.order.revision, 9, RSF_FG_OFF, 0));
+    assert!(state.complete(current.order.revision, 9, false, RSF_FG_OFF, 0));
+    assert_eq!(state.read().order.last_prepare, 9);
+    assert_eq!(state.read().order.interpolated, None);
 }
 
 #[test]
 fn callback_counts_and_dxgi_counts_have_separate_validity() {
     let (state, _) = enabled();
-    let rev = state.read().revision;
+    let rev = state.read().order.revision;
     assert!(state.stage(rev, 2, RSF_FG_FIXED, 1));
     assert!(state.complete(rev, 2, true, RSF_FG_FIXED, 1));
     let total = RSF_FG_STAT_TOTAL_PRESENTED;
@@ -152,7 +152,7 @@ fn status_snapshots_are_coherent_while_other_threads_abort_and_pace() {
             gate.wait();
             for count in 1..=SAMPLES {
                 state.observe(
-                    state.read().revision,
+                    state.read().order.revision,
                     Observation {
                         vendor_status: count as i32,
                         statistics: RSF_FG_STAT_ACTIVITY,

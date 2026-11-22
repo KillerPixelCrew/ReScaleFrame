@@ -22,8 +22,8 @@ set_property(TARGET godot-cpp PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CO
 # explicitly, so drop the leaked entry; the root CMakeLists clears stale copies before targets exist.
 unset(CMAKE_MSVC_RUNTIME_LIBRARY CACHE)
 
-# runtime.cpp keeps the rsfg_* exports and lends the linked Runtime through native/godot_platform.h.
-add_library(rsf_godot SHARED native/extension.cpp native/effect.cpp native/runtime.cpp native/runtime_control.cpp native/vulkan.cpp native/vulkan_creation.cpp)
+# Rust control exports are listed in exports.def. runtime.cpp lends the linked Runtime through godot_platform.h.
+add_library(rsf_godot SHARED native/exports.def native/extension.cpp native/effect.cpp native/runtime.cpp native/runtime_control.cpp native/vulkan.cpp native/vulkan_creation.cpp)
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
     target_include_directories(rsf_godot SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
 endif()

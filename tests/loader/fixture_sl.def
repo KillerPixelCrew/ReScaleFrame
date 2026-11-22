@@ -1,0 +1,5 @@
+EXPORTS
+    slInit
+    slSetConstants
+    slGetFeatureFunction
+    fixture_sl_raw

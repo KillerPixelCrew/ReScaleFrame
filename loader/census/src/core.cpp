@@ -9,6 +9,8 @@
 
 #include "census_internal.h"
 
+extern "C" void rsf_census_static_scan(void (*add)(const char*, const char*, uint64_t, uint64_t));
+
 namespace rsf_census {
 
 const FnDesc kFns[kFnCount] = {
@@ -554,7 +556,9 @@ void flush_all_locked(bool summary) noexcept {
 // its own thread and never delays the writer.
 DWORD WINAPI scan_main(void*) noexcept {
     const uint64_t start = now_us();
-    static_scan_run();
+    rsf_census_static_scan([](const char* vendor, const char* what, uint64_t rva, uint64_t function) {
+        add_finding(vendor, what, rva, function);
+    });
     Call c(Fn::CensusEvent, reinterpret_cast<void*>(&scan_main));
     if (c.full()) {
         c.json().str("event", "static_scan_done");
@@ -701,128 +705,14 @@ bool guarded(void (*fn)(void*), void* ctx) noexcept {
 }
 
 // ---- Json -------------------------------------------------------------------------------------
-void Json::put(const char* s, size_t n) noexcept {
-    if (overflow_) return;
-    if (len_ + n >= cap_) {
-        overflow_ = true;
-        return;
-    }
-    std::memcpy(buf_ + len_, s, n);
-    len_ += n;
-}
-
-void Json::put_escaped(const char* s) noexcept {
-    put("\"", 1);
-    for (; s && *s; ++s) {
-        const unsigned char c = static_cast<unsigned char>(*s);
-        if (c == '"' || c == '\\') {
-            char e[2] = {'\\', static_cast<char>(c)};
-            put(e, 2);
-        } else if (c < 0x20) {
-            char e[8];
-            int n = std::snprintf(e, sizeof(e), "\\u%04x", c);
-            put(e, static_cast<size_t>(n));
-        } else {
-            put(reinterpret_cast<const char*>(&c), 1);
-        }
-    }
-    put("\"", 1);
-}
-
-void Json::lead(const char* key) noexcept {
-    if (depth_ > 0) {
-        const uint32_t bit = 1u << (depth_ - 1);
-        if (comma_ & bit) put(",", 1);
-        comma_ |= bit;
-    }
-    if (key) {
-        put_escaped(key);
-        put(":", 1);
-    }
-}
-
-void Json::open(const char* key, char c) noexcept {
-    lead(key);
-    put(&c, 1);
-    if (depth_ < 31) ++depth_;
-    comma_ &= ~(1u << (depth_ - 1));
-}
-
-void Json::close(char c) noexcept {
-    if (depth_ > 0) --depth_;
-    put(&c, 1);
-}
-
-void Json::str(const char* key, const char* v) noexcept {
-    lead(key);
-    put_escaped(v ? v : "");
-}
-
-void Json::wstr(const char* key, const wchar_t* v) noexcept {
-    char tmp[512];
-    tmp[0] = 0;
-    if (v) WideCharToMultiByte(CP_UTF8, 0, v, -1, tmp, sizeof(tmp), nullptr, nullptr);
-    tmp[sizeof(tmp) - 1] = 0;
-    str(key, tmp);
-}
-
-void Json::u64(const char* key, uint64_t v) noexcept {
-    lead(key);
-    char t[24];
-    int n = std::snprintf(t, sizeof(t), "%llu", static_cast<unsigned long long>(v));
-    put(t, static_cast<size_t>(n));
-}
-
-void Json::i64(const char* key, int64_t v) noexcept {
-    lead(key);
-    char t[24];
-    int n = std::snprintf(t, sizeof(t), "%lld", static_cast<long long>(v));
-    put(t, static_cast<size_t>(n));
-}
-
-void Json::hex(const char* key, uint64_t v) noexcept {
-    lead(key);
-    char t[24];
-    int n = std::snprintf(t, sizeof(t), "\"0x%llx\"", static_cast<unsigned long long>(v));
-    put(t, static_cast<size_t>(n));
-}
-
 void Json::f32(const char* key, double v) noexcept {
-    lead(key);
     if (!std::isfinite(v)) {
-        put("null");
+        null(key);
         return;
     }
-    char t[40];
-    int n = std::snprintf(t, sizeof(t), "%.9g", v);
-    put(t, static_cast<size_t>(n));
-}
-
-void Json::boolean(const char* key, bool v) noexcept {
-    lead(key);
-    put(v ? "true" : "false");
-}
-
-void Json::null(const char* key) noexcept {
-    lead(key);
-    put("null");
-}
-
-void Json::bytes_hex(const char* key, const void* data, size_t n) noexcept {
-    lead(key);
-    put("\"", 1);
-    static const char digits[] = "0123456789abcdef";
-    const unsigned char* p = static_cast<const unsigned char*>(data);
-    for (size_t i = 0; i < n; ++i) {
-        char two[2] = {digits[p[i] >> 4], digits[p[i] & 15]};
-        put(two, 2);
-    }
-    put("\"", 1);
-}
-
-void Json::raw(const char* key, const char* json_text) noexcept {
-    lead(key);
-    put(json_text ? json_text : "null");
+    char text[40];
+    std::snprintf(text, sizeof(text), "%.9g", v);
+    raw(key, text);
 }
 
 // ---- Call -------------------------------------------------------------------------------------

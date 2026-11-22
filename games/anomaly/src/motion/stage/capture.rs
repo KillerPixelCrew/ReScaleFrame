@@ -118,14 +118,7 @@ impl Capture {
         if !written {
             return;
         }
-        unsafe { (self.api.poll)() };
         let scheduled = self.remaining != 0 && self.frames >= self.next;
-        if scheduled {
-            unsafe { (self.api.request)() };
-        }
-        if unsafe { (self.api.requested)() } == 0 {
-            return;
-        }
         // Every field in this FFI record (including its numeric C enum aliases) admits zero.
         let record = rsf_frame_record {
             struct_size: size_of::<rsf_frame_record>() as u32,
@@ -140,7 +133,7 @@ impl Capture {
             output_height: view.height,
             ..unsafe { std::mem::zeroed() }
         };
-        if unsafe { (self.api.begin_record)(&record, 0) } != 0 {
+        if self.api.admit(&record, scheduled) {
             self.active = Some(Active {
                 record,
                 generation: facts.generation,
@@ -350,5 +343,12 @@ mod tests {
             assert_eq!(d.copies, 3);
             assert_eq!(d.completed, [(14, 0), (17, 0x80004005_u32 as i32)]);
         });
+
+        // A manual request still enters with no scheduled budget.
+        unsafe { request() };
+        capture.frame(&frame(MAIN, 17), &view, true, &mut counters);
+        assert!(capture.active.is_some());
+        assert_eq!(capture.remaining, 0);
+        DUMP.with_borrow(|d| assert_eq!(d.begun.last(), Some(&(18, 3))));
     }
 }

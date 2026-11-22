@@ -10,11 +10,11 @@ type RefCall = unsafe extern "C" fn(*mut c_void);
 
 #[repr(C)]
 pub(super) struct Ops {
-    retain: RefCall,
-    release: RefCall,
-    create_fence: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
-    signal: unsafe extern "C" fn(*mut c_void, *mut c_void, u64) -> bool,
-    get_buffer: unsafe extern "C" fn(*mut c_void, u32) -> *mut c_void,
+    pub(super) retain: RefCall,
+    pub(super) release: RefCall,
+    pub(super) create_fence: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
+    pub(super) signal: unsafe extern "C" fn(*mut c_void, *mut c_void, u64) -> bool,
+    pub(super) get_buffer: unsafe extern "C" fn(*mut c_void, u32) -> *mut c_void,
 }
 
 #[repr(C)]
@@ -87,7 +87,7 @@ const _: () = {
 
 /// The native caller transfers the retained readback buffer and a process-lived leaf table.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_rdr2_capture_gpu_adopt(
+pub(super) extern "C" fn rsf_rdr2_capture_gpu_adopt(
     leases: &mut ReadbackLeases,
     buffer: *mut c_void,
     ops: &'static Ops,
@@ -273,6 +273,7 @@ unsafe extern "C" fn rsf_rdr2_capture_gpu_selected(
 
 /// Ready admission has removed all pending readback receipts under the native capture mutex.
 /// Take the idle queue and swapchain owners so their final Release calls run outside that mutex.
+#[cfg(any(windows, test))]
 pub(super) unsafe fn take_idle(owner: &Capture) -> *mut Gpu {
     let gpu = unsafe { &mut *owner.gpu.get() };
     if gpu.queues.is_empty() && gpu.backbuffers.is_none() {
@@ -285,8 +286,8 @@ pub(super) unsafe fn take_idle(owner: &Capture) -> *mut Gpu {
     retired
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_gpu_drop_idle(retired: *mut Gpu) {
+#[cfg(windows)]
+pub(super) fn drop_idle(retired: *mut Gpu) {
     if !retired.is_null() {
         drop(unsafe { Box::from_raw(retired) });
     }

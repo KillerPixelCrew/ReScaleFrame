@@ -1117,7 +1117,7 @@ impl Swap {
         }
     }
 
-    fn seam(&mut self) -> bool {
+    fn seam(&mut self, run: impl FnOnce(SeamPass<'_>) -> bool) -> bool {
         if !self.view.open {
             self.view.counters.seams_without_window += 1;
             return false;
@@ -1131,12 +1131,10 @@ impl Swap {
         }
         self.view.counters.round_trips += 1;
         let ok = if self.view.stage == 1 {
-            let twin = &raw const self.view.twins.targets[GENERIC0];
-            let engine = &raw const self.view.engine[GENERIC0].fields;
-            // The leaf reads both records during the call; this owner does not change them meanwhile.
-            self.platform
-                .round_trip
-                .is_some_and(|run| unsafe { run(self.platform.user, twin, engine) })
+            run(SeamPass::RoundTrip(
+                &self.view.twins.targets[GENERIC0],
+                &self.view.engine[GENERIC0].fields,
+            ))
         } else {
             let inputs = rsf_anomaly_swap_upscale {
                 generic0_twin: &raw const self.view.twins.targets[GENERIC0],
@@ -1153,11 +1151,7 @@ impl Swap {
                 output_height: self.view.output_height,
                 spatial_recovery: self.spatial_recovery,
             };
-            // The leaf runs the seam pass on the restored engine targets during the call.
-            let ok = self
-                .platform
-                .upscale
-                .is_some_and(|run| unsafe { run(self.platform.user, &inputs) });
+            let ok = run(SeamPass::Upscale(&inputs));
             self.set_viewport(self.view.output_width, self.view.output_height);
             ok
         };
@@ -1198,15 +1192,22 @@ impl Swap {
         }
         let (x, y) = (self.projection.x, self.projection.y);
         // The leaf corrects the engine's constant buffer under its exception guard.
-        let corrected = self
+        let result = self
             .platform
             .correct_position_constant
-            .is_some_and(|correct| unsafe { correct(self.platform.user, constant, x, y) });
-        if corrected {
+            .map_or(0, |correct| unsafe {
+                correct(self.platform.user, constant, x, y)
+            });
+        if result == 1 {
             self.view.counters.position_corrected += 1;
         } else {
             self.view.counters.position_refused += 1;
-            self.refuse(c"Deferred position constant correction refused.");
+            self.spatial_recovery = true;
+            if result == 0 {
+                self.refuse(c"Deferred position constant correction refused.");
+            } else {
+                self.fault(c"Deferred position constant correction rollback incomplete.");
+            }
         }
     }
 
@@ -1359,7 +1360,12 @@ fn platform_valid(platform: &Platform) -> bool {
         && platform.correct_position_constant.is_some()
 }
 
-struct Handle {
+pub(crate) enum SeamPass<'a> {
+    RoundTrip(&'a Fields, &'a Fields),
+    Upscale(&'a rsf_anomaly_swap_upscale),
+}
+
+pub(crate) struct Handle {
     swap: Swap,
     published: View,
 }
@@ -1433,9 +1439,24 @@ extern "C" fn rsf_anomaly_swap_prepared(swap: *mut Handle) {
     with(swap, (), Swap::prepared);
 }
 
+// The stage lock keeps the native controller and its handle live throughout the call.
+pub(crate) unsafe fn run_seam(swap: *mut Handle, run: impl FnOnce(SeamPass<'_>) -> bool) -> bool {
+    with(swap, false, |swap| swap.seam(run))
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_swap_seam(swap: *mut Handle) -> bool {
-    with(swap, false, Swap::seam)
+    with(swap, false, |swap| {
+        let platform = swap.platform;
+        swap.seam(|pass| match pass {
+            SeamPass::RoundTrip(twin, engine) => platform
+                .round_trip
+                .is_some_and(|run| unsafe { run(platform.user, twin, engine) }),
+            SeamPass::Upscale(inputs) => platform
+                .upscale
+                .is_some_and(|run| unsafe { run(platform.user, inputs) }),
+        })
+    })
 }
 
 #[unsafe(no_mangle)]

@@ -8,7 +8,8 @@ mod tests;
 mod window;
 
 use self::camera::Camera;
-use self::options::{CaptureSettings, Options, backend_name};
+pub(crate) use self::options::CaptureSettings;
+use self::options::{Options, backend_name};
 use crate::fg_inputs::{Owner as InputPass, Result as InputResult};
 use crate::fg_inputs_abi::rsf_anomaly_input_frame;
 use crate::fg_policy::Policy;

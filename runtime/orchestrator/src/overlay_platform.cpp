@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 // DLL export entry points and platform calls for the Rust overlay service.
+#include <rescaleframe/adapter_settings.h>
+#include <rescaleframe/d3d11_observer.h>
 #include <rescaleframe/dlss_pipeline.h>
 #include <rescaleframe/dlss_preset.h>
 #include "../../../loader/proxy/src/overlay_host.h"
@@ -76,9 +78,43 @@ constexpr rsf_overlay_platform platform{
     .present_backend = rsf_d3d11_present_backend, .present_backend_choices = rsf_d3d11_present_backend_choices,
     .present_switch_result = rsf_d3d11_present_switch_result, .present_request = rsf_d3d11_present_request,
 };
+
+const rsf_overlay_api& observed_panel()
+{
+    static const auto api = [] {
+        rsf_overlay_api value{};
+        value.struct_size = sizeof(value);
+        value.abi_version = RSF_OVERLAY_API_VERSION;
+        if (rsf_get_overlay_api(&value) != RSF_OK) value = {};
+        return value;
+    }();
+    return api;
+}
+
+void observed_present(void*, const rsf_observer_present_event* event) noexcept try
+{
+    if (!event || event->completed || (event->flags & DXGI_PRESENT_TEST)) return;
+    rsf_overlay_input_poll_toggle();
+    (void)observed_panel().present(event->swapchain, nullptr);
+} catch (...) {}
 }
 
 extern "C" {
+int32_t rsf_core_adapter_setting_read_bool(const wchar_t*, const wchar_t*, const wchar_t*, uint32_t);
+int32_t rsf_core_adapter_setting_write_bool(const wchar_t*, const wchar_t*, const wchar_t*, uint32_t);
+
+RSF_RUNTIME_API int32_t rsf_adapter_setting_read_bool(
+    const wchar_t* path, const wchar_t* section, const wchar_t* key, uint32_t fallback)
+{
+    return rsf_core_adapter_setting_read_bool(path, section, key, fallback);
+}
+
+RSF_RUNTIME_API int32_t rsf_adapter_setting_write_bool(
+    const wchar_t* path, const wchar_t* section, const wchar_t* key, uint32_t value)
+{
+    return rsf_core_adapter_setting_write_bool(path, section, key, value);
+}
+
 rsf_result rsf_core_get_overlay_api(rsf_overlay_api*, const rsf_overlay_platform*);
 rsf_result rsf_core_get_overlay_diagnostics(rsf_overlay_diagnostics*, const rsf_overlay_platform*);
 
@@ -91,4 +127,21 @@ RSF_RUNTIME_API rsf_result rsf_get_overlay_diagnostics(rsf_overlay_diagnostics* 
 {
     return rsf_core_get_overlay_diagnostics(out, &platform);
 }
+
+RSF_RUNTIME_API rsf_result rsf_start_d3d11_overlay(const rsf_overlay_service_setup* setup) try
+{
+    const auto& api = observed_panel();
+    if (!api.configure || !api.present) return RSF_ERROR_NOT_READY;
+    const auto configured = api.configure(setup);
+    if (configured != RSF_OK) return configured;
+    rsf_observer_options observer{};
+    observer.struct_size = sizeof(observer);
+    observer.abi_version = RSF_OBSERVER_ABI_VERSION;
+    // The panel needs a Present event. Filter out all texture and buffer cataloguing.
+    observer.format = UINT32_MAX;
+    observer.minimum_width = UINT32_MAX;
+    observer.capacity = 1;
+    observer.on_present_event = observed_present;
+    return rsf_observer_install(&observer) == RSF_OBSERVER_OK ? RSF_OK : RSF_ERROR_NOT_READY;
+} catch (...) { return RSF_ERROR_NOT_READY; }
 }

@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-#include "vulkan_creation.h"
 #include "godot_platform.h"
 #include <rescaleframe/native_xess_vulkan_requirements.h>
 #include <rescaleframe/native_latency_vulkan_requirements.h>
@@ -7,12 +6,8 @@
 #include <vector>
 #include <cstddef>
 
-// The resolver's routes, the stage order (XeSS, Win32 interop, core latency, native create), the
-// extension lists, the feature structures XeSS needs added, every retry and the XeSS and interop
-// readiness are owned by the creation owner in native/vulkan/creation.rs. This file keeps the
-// Vulkan entry points the resolver hands out, which forward to it, and the typed leaves it calls:
-// the feature chain facts and clones, request copies, the XeSS and core latency requirement calls
-// and the Vulkan create and destroy calls (godot_platform.h, rsf_godot_vk_creation_leaves).
+// Vulkan-typed request copies, chain inspection and driver calls. Rust owns
+// resolver routing, optional stage selection and the per-device receipt.
 static_assert(sizeof(rsf_godot_vk_chain_facts) == 40 && sizeof(rsf_godot_vk_device_derive) == 40 &&
     offsetof(rsf_godot_vk_device_derive, next) == 24 && sizeof(rsf_godot_vk_latency_requirements) == 24 &&
     sizeof(rsf_godot_vk_instance_call) == 48 && sizeof(rsf_godot_vk_device_call) == 56 &&
@@ -272,55 +267,20 @@ VkResult VKAPI_PTR create_device(VkPhysicalDevice physical, const VkDeviceCreate
 void VKAPI_PTR destroy_device(VkDevice device, const VkAllocationCallbacks* allocator) {
     rsf_godot_vk_destroy_device(&creation_leaves, device, allocator);
 }
-rsf_godot_vk_function route(uint32_t value, rsf_godot_vk_function forwarded);
-PFN_vkVoidFunction VKAPI_PTR device_proc(VkDevice device, const char* name) {
-    rsf_godot_vk_function forwarded = nullptr;
-    const auto value = rsf_godot_vk_creation_resolve(RSF_GODOT_VK_SCOPE_DEVICE, device, name, &forwarded);
-    return reinterpret_cast<PFN_vkVoidFunction>(route(value, forwarded));
-}
-// The entry point of an owner route.
-rsf_godot_vk_function route(uint32_t value, rsf_godot_vk_function forwarded) {
-    switch (value) {
-    case RSF_GODOT_VK_ROUTE_FORWARD: return forwarded;
-    case RSF_GODOT_VK_ROUTE_CREATE_INSTANCE: return reinterpret_cast<rsf_godot_vk_function>(create_instance);
-    case RSF_GODOT_VK_ROUTE_DEVICE_PROC: return reinterpret_cast<rsf_godot_vk_function>(device_proc);
-    case RSF_GODOT_VK_ROUTE_CREATE_DEVICE: return reinterpret_cast<rsf_godot_vk_function>(create_device);
-    case RSF_GODOT_VK_ROUTE_DESTROY_DEVICE: return reinterpret_cast<rsf_godot_vk_function>(destroy_device);
-    default: return nullptr;
-    }
-}
-rsf_godot_vk_function resolver(void* instance, const char* name) {
-    rsf_godot_vk_function forwarded = nullptr;
-    const auto value = rsf_godot_vk_creation_resolve(RSF_GODOT_VK_SCOPE_INSTANCE, instance, name, &forwarded);
-    return route(value, forwarded);
-}
 }
 #endif
-namespace rsf::godot_vk {
-rsf_godot_vk_proc creation_resolver(rsf_godot_vk_proc base, bool xess, rsf_game_log_fn log, void* user) {
+
+extern "C" rsf_godot_vk_proc rsf_godot_vk_creation_resolver(
+    rsf_godot_vk_proc base, uint32_t xess, rsf_game_log_fn log, void* user) {
 #if defined(RSF_VULKAN_SR_ENABLED)
-    return rsf_godot_vk_creation_begin(base, xess ? 1u : 0u, log, user) ? resolver : nullptr;
+    return rsf_godot_vk_creation_begin(base, xess, log, user,
+        reinterpret_cast<rsf_godot_vk_function>(create_instance),
+        reinterpret_cast<rsf_godot_vk_function>(create_device),
+        reinterpret_cast<rsf_godot_vk_function>(destroy_device));
 #else
-    (void)xess; (void)log; (void)user; return base;
+    (void)xess;
+    (void)log;
+    (void)user;
+    return base;
 #endif
-}
-bool xess_device_ready() {
-#if defined(RSF_VULKAN_SR_ENABLED)
-    return rsf_godot_vk_xess_ready() != 0;
-#else
-    return false;
-#endif
-}
-void stop_creation_requirements() {
-#if defined(RSF_VULKAN_SR_ENABLED)
-    rsf_godot_vk_creation_stop();
-#endif
-}
-bool interop_device_ready() {
-#if defined(RSF_VULKAN_SR_ENABLED)
-    return rsf_godot_vk_interop_ready() != 0;
-#else
-    return false;
-#endif
-}
 }

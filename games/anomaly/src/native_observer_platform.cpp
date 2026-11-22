@@ -2,6 +2,7 @@
 #include "native_observer.h"
 #include "build_profile.h"
 #include "fg_stage.h"
+#include "engine_guards.h"
 #include "input_hooks.h"
 #include "motion_stage.h"
 #include "native_geometry.h"
@@ -34,6 +35,8 @@ rsf_result rsf_anomaly_observer_status(rsf_game_renderer_status*) noexcept;
 rsf_result rsf_anomaly_observer_read(rsf_anomaly_native_observation*) noexcept;
 bool rsf_anomaly_observer_enter() noexcept;
 void rsf_anomaly_observer_leave() noexcept;
+bool rsf_anomaly_observer_read_frame(const rsf_anomaly_guard_image*, uint32_t, uint32_t, uint32_t,
+    rsf_anomaly_observer_frame*) noexcept;
 void rsf_anomaly_observer_render_begin(const rsf_anomaly_observer_platform*) noexcept;
 bool rsf_anomaly_observer_end_before(const rsf_anomaly_observer_platform*, bool observing) noexcept;
 void rsf_anomaly_observer_end_after(const rsf_anomaly_observer_platform*) noexcept;
@@ -137,11 +140,11 @@ bool enable_hooks(const rsf_anomaly_observer_engine* engine) noexcept {
 }
 
 bool read_frame(const rsf_anomaly_observer_engine* engine, rsf_anomaly_observer_frame* out) noexcept {
-    const auto* image = static_cast<const std::byte*>(engine->image);
-    const auto& profile = *build_profiles[engine->build].native;
-    return guarded_copy(&out->id, image + profile.device_frame_rva, sizeof(out->id)) &&
-        guarded_copy(&out->width, image + profile.device_width_rva, sizeof(out->width)) &&
-        guarded_copy(&out->height, image + profile.device_height_rva, sizeof(out->height));
+    const auto& build = build_profiles[engine->build];
+    const auto& profile = *build.native;
+    const auto image = guard_image(static_cast<const std::byte*>(engine->image), build.image_size());
+    return rsf_anomaly_observer_read_frame(&image, profile.device_frame_rva, profile.device_width_rva,
+        profile.device_height_rva, out);
 }
 bool read_camera(const float* view, const float* projection, rsf_anomaly_observer_camera* out) noexcept {
     return guarded_copy(out->view, view, sizeof(out->view)) &&

@@ -16,6 +16,9 @@ struct rsf_anomaly_build_identity {
 extern "C" size_t rsf_anomaly_match_build(const rsf_anomaly_build_identity*, size_t, const char*, size_t,
     const char*, size_t) noexcept;
 
+extern "C" size_t rsf_anomaly_match_build_wide(const rsf_anomaly_build_identity*, size_t, const wchar_t*, size_t,
+    const char*, size_t) noexcept;
+
 namespace rsf::anomaly {
 // One exact Anomaly executable: its file name, its SHA-256 and every native table the adapter uses on it. The adapter
 // selects a build once, at startup, from the running executable's name and hash (find_build). There is no pattern scan
@@ -55,13 +58,9 @@ inline const BuildProfile* find_build(std::string_view executable, std::string_v
 }
 // Same for a wide file name (GetModuleFileNameW). Anything outside ASCII matches no build.
 inline const BuildProfile* find_build(std::wstring_view executable, std::string_view sha256) noexcept {
-    char narrow[64]{};
-    if (executable.size() >= sizeof(narrow)) return nullptr;
-    for (size_t i = 0; i < executable.size(); ++i) {
-        if (executable[i] <= 0 || executable[i] > 0x7f) return nullptr;
-        narrow[i] = static_cast<char>(executable[i]);
-    }
-    return find_build(std::string_view{narrow, executable.size()}, sha256);
+    const auto index = rsf_anomaly_match_build_wide(build_identities.data(), build_identities.size(),
+        executable.data(), executable.size(), sha256.data(), sha256.size());
+    return index < build_profiles.size() ? &build_profiles[index] : nullptr;
 }
 
 }

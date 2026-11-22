@@ -5,24 +5,24 @@ use crate::runtime_worker_abi::{
     rsf_rdr2_fingerprint_fn, rsf_rdr2_runtime_leaves, rsf_render_host_setup,
 };
 use crate::{OK, asi, engine_settings, layout, script_input};
-use rsf_game_sys::plugin_session_abi::{
-    RSF_PLUGIN_SESSION_ABI_VERSION, rsf_plugin_session_options,
-};
-use rsf_game_sys::{RSF_GAME_ABI_VERSION, rsf_game_host_services, rsf_game_probe};
-use std::ffi::{CStr, OsString, c_char, c_void};
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::os::windows::ffi::OsStringExt;
-use std::path::PathBuf;
+use rsf_game_sys::plugin_session_abi::rsf_plugin_session_options;
+use rsf_game_sys::rsf_game_host_services;
+use rsf_game_sys::session::carrier_log::CarrierLog;
+use rsf_game_sys::session::{Probe, host_services, with_session_options};
+use rsf_game_sys::win32::module_path;
+use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{null, null_mut};
-use std::sync::{Mutex, OnceLock, PoisonError};
-use windows_sys::Win32::Foundation::HMODULE;
+use std::sync::OnceLock;
+use windows_sys::Win32::Foundation::{CloseHandle, HMODULE};
+use windows_sys::Win32::Storage::FileSystem::{
+    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+};
 use windows_sys::Win32::System::LibraryLoader::{
-    GetModuleFileNameW, GetModuleHandleW, GetProcAddress, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+    DisableThreadLibraryCalls, GetModuleHandleW, GetProcAddress, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
     LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LoadLibraryExW,
 };
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
-use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+use windows_sys::Win32::System::Threading::{CreateThread, GetCurrentProcessId};
 use windows_sys::Win32::System::WindowsProgramming::{
     GetPrivateProfileIntW, GetPrivateProfileStringW,
 };
@@ -33,43 +33,16 @@ type Prepare = unsafe extern "C" fn(*const rsf_plugin_session_options, *mut *mut
 type Start = unsafe extern "C" fn(*mut c_void) -> i32;
 type Create =
     unsafe extern "C" fn(*const rsf_render_host_setup, *mut rsf_game_host_services) -> i32;
-type Fingerprint = unsafe extern "C" fn(*const u16, *mut c_char) -> bool;
+type Fingerprint = unsafe extern "C" fn(*const u16, u32, *mut u8) -> u32;
 
-static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
-static LOG_WRITE: Mutex<()> = Mutex::new(());
-
-fn set_log_path(path: &[u16]) {
-    let path = path.strip_suffix(&[0]).unwrap_or(path);
-    let _ = LOG_PATH.set(PathBuf::from(OsString::from_wide(path)));
-}
+static LOG: CarrierLog = CarrierLog::new();
 
 pub(crate) fn log(message: impl AsRef<[u8]>) {
-    let Some(path) = LOG_PATH.get() else { return };
-    let _writer = LOG_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-        let tick = unsafe { GetTickCount64() };
-        let _ = write!(file, "[{tick}] ");
-        let _ = file.write_all(message.as_ref());
-        let _ = file.write_all(b"\n");
-    }
+    LOG.write(unsafe { GetTickCount64() }, message);
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_rdr2_runtime_log(_: *mut c_void, message: *const c_char) {
-    if !message.is_null() {
-        log(unsafe { CStr::from_ptr(message) }.to_bytes());
-    }
-}
-
-fn module_path(module: HMODULE) -> Option<Vec<u16>> {
-    let mut path = vec![0; 32768];
-    let length =
-        unsafe { GetModuleFileNameW(module, path.as_mut_ptr(), path.len() as u32) } as usize;
-    if length == 0 || length >= path.len() {
-        return None;
-    }
-    path.truncate(length);
-    Some(path)
+    unsafe { LOG.write_c_message(GetTickCount64(), message) };
 }
 
 pub(crate) fn append_path(parent: &[u16], suffix: &str) -> Vec<u16> {
@@ -162,116 +135,118 @@ pub(crate) unsafe fn export<F: Copy>(runtime: HMODULE, name: PCSTR) -> Option<F>
     Some(unsafe { std::mem::transmute_copy(&function) })
 }
 
+struct Refusal {
+    stage: &'static str,
+    result: i32,
+}
+
 fn run_session(
     runtime: HMODULE,
     config: &[u16],
     directory: &[u16],
     plugin: &[u16],
     fingerprint: Fingerprint,
-    asi: Option<(HMODULE, &rsf_rdr2_runtime_leaves)>,
-) -> u32 {
-    let (Some(prepare), Some(start)) = (
-        unsafe { export::<Prepare>(runtime, s!("rsf_plugin_session_prepare")) },
-        unsafe { export::<Start>(runtime, s!("rsf_plugin_session_start")) },
-    ) else {
-        if asi.is_some() {
-            log("Runtime plugin lifecycle exports are unavailable.");
-        }
-        return 1;
+    after_create: impl FnOnce(),
+) -> Result<(), Refusal> {
+    let lifecycle_missing = || Refusal {
+        stage: "Runtime lifecycle exports",
+        result: 1,
     };
-    let Some(mut executable) = module_path(null_mut()).filter(|path| asi::is_game(path)) else {
-        return 1;
+    let (prepare, start, quiesce, stop): (Prepare, Start, Start, Start) = unsafe {
+        (
+            export(runtime, s!("rsf_plugin_session_prepare")).ok_or_else(lifecycle_missing)?,
+            export(runtime, s!("rsf_plugin_session_start")).ok_or_else(lifecycle_missing)?,
+            export(runtime, s!("rsf_plugin_session_quiesce")).ok_or_else(lifecycle_missing)?,
+            export(runtime, s!("rsf_plugin_session_stop")).ok_or_else(lifecycle_missing)?,
+        )
     };
-    executable.push(0);
-    let mut digest = [0 as c_char; 65];
-    if !unsafe { fingerprint(executable.as_ptr(), digest.as_mut_ptr()) } {
-        if asi.is_some() {
-            log("Executable fingerprint could not be read.");
-        }
-        return 1;
+    let executable = unsafe { module_path(null_mut()) }
+        .filter(|path| asi::is_game(path.units()))
+        .ok_or(Refusal {
+            stage: "executable admission",
+            result: 1,
+        })?;
+    let mut bytes = [0u8; 32];
+    let sharing = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+    if unsafe {
+        fingerprint(
+            executable.terminated().as_ptr(),
+            sharing,
+            bytes.as_mut_ptr(),
+        )
+    } == 0
+    {
+        return Err(Refusal {
+            stage: "executable fingerprint",
+            result: 1,
+        });
     }
-    let probe = rsf_game_probe {
-        struct_size: size_of::<rsf_game_probe>() as u32,
-        pe_machine: layout::AMD64,
-        reserved: 0,
-        executable_name_utf8: layout::EXECUTABLE_NAME.as_ptr(),
-        sha256_hex: digest.as_ptr(),
+    let mut digest = [0u8; 65];
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for (pair, byte) in digest[..64].chunks_exact_mut(2).zip(bytes) {
+        pair.copy_from_slice(&[HEX[(byte >> 4) as usize], HEX[(byte & 15) as usize]]);
+    }
+    let hash = CStr::from_bytes_with_nul(&digest).expect("hex digest");
+    let probe = Probe {
+        machine: layout::AMD64,
+        executable: layout::EXECUTABLE_NAME,
+        sha256: hash,
     };
-    // Unused callbacks are null; the Runtime copies the fields it retains.
-    let mut services: rsf_game_host_services = unsafe { std::mem::zeroed() };
-    services.struct_size = size_of::<rsf_game_host_services>() as u32;
-    services.abi_version = RSF_GAME_ABI_VERSION;
-    services.session_id = unsafe { GetTickCount64() }.wrapping_add(1);
-    services.log = Some(rsf_rdr2_runtime_log);
-    let mut options = rsf_plugin_session_options {
-        struct_size: size_of::<rsf_plugin_session_options>() as u32,
-        abi_version: RSF_PLUGIN_SESSION_ABI_VERSION,
-        plugin_path: plugin.as_ptr(),
-        probe: &probe,
-        services,
-    };
+    let mut services = host_services(unsafe { GetTickCount64() }, Some(rsf_rdr2_runtime_log));
     let host_setup = setup(config.as_ptr(), directory.as_ptr());
-    let create = unsafe { export::<Create>(runtime, s!("rsf_render_host_create")) };
-    let Some(create) = create else {
-        if asi.is_some() {
-            log("RDR2 SR runtime host initialization refused.");
-        }
-        return 1;
-    };
-    let created = unsafe { create(&host_setup, &mut options.services) };
-    if let Some((_, asi)) = asi {
-        if created != OK {
-            log("RDR2 SR runtime host initialization refused.");
-            return 1;
-        }
-        if unsafe {
-            GetPrivateProfileIntW(w!("RDR2"), w!("NativeSettingsProbe"), 0, config.as_ptr())
-        } != 0
-        {
-            let path = profile_string(w!("RDR2"), w!("NativeSettingsProbePath"), config, 32768)
-                .unwrap_or_else(|| vec![0]);
-            if !asi
-                .native_settings
-                .is_some_and(|native| unsafe { native(path.as_ptr()) })
-            {
-                log("Native settings probe refused.");
-            }
-        }
+    let create =
+        unsafe { export::<Create>(runtime, s!("rsf_render_host_create")) }.ok_or(Refusal {
+            stage: "Runtime host export",
+            result: 1,
+        })?;
+    let created = unsafe { create(&host_setup, &mut services) };
+    if created != OK {
+        return Err(Refusal {
+            stage: "Runtime host initialization",
+            result: created,
+        });
     }
+    after_create();
+
     let mut session = null_mut();
-    let prepared = if created == OK {
-        unsafe { prepare(&options, &mut session) }
+    let prepared = with_session_options(plugin, probe, &services, |options| unsafe {
+        prepare(options, &mut session)
+    });
+    log(format!(
+        "RDR2 prepare result={prepared} sha256={}",
+        hash.to_string_lossy()
+    ));
+    let (stage, result) = if prepared == OK && !session.is_null() {
+        ("start", unsafe { start(session) })
     } else {
-        created
+        ("prepare", if prepared == OK { 1 } else { prepared })
     };
-    let prefix = if asi.is_some() {
-        "RDR2"
-    } else {
-        "RDR2 research"
-    };
-    let hash = unsafe { CStr::from_ptr(digest.as_ptr()) }.to_string_lossy();
-    log(format!("{prefix} prepare result={prepared} sha256={hash}"));
-    if prepared != OK {
-        return if asi.is_some() { prepared as u32 } else { 1 };
+    if result == OK {
+        log("RDR2 plugin session started.");
+        return Ok(());
     }
-    let started = unsafe { start(session) };
-    log(format!("{prefix} start result={started}"));
-    if let Some((module, _)) = asi {
-        if started == OK && !script_input::start(module, runtime, config) {
-            log(
-                "RDR2 ScriptHook input guard unavailable; shared overlay still uses its window input hook.",
-            );
+    log(format!("RDR2 {stage} refused, result={result}."));
+    if !session.is_null() {
+        // Runtime keeps the module admitted while this owner exists. Retry here on the
+        // startup worker so another prepare cannot overtake a partially retired plugin.
+        log("RDR2 is retiring the refused plugin session.");
+        while unsafe { quiesce(session) } != OK || unsafe { stop(session) } != OK {
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        unsafe {
-            engine_settings::rsf_rdr2_report_engine_settings(Some(rsf_rdr2_runtime_log), null_mut())
-        };
-        return started as u32;
     }
-    u32::from(started != OK)
+    Err(Refusal { stage, result })
+}
+
+fn log_refusal(prefix: &str, refusal: Refusal) -> i32 {
+    log(format!(
+        "{prefix} refused at {}, result={}.",
+        refusal.stage, refusal.result
+    ));
+    refusal.result
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_asi_start_runtime(
+pub(crate) unsafe extern "C" fn rsf_rdr2_asi_start_runtime(
     module: HMODULE,
     leaves: *const rsf_rdr2_runtime_leaves,
 ) -> u32 {
@@ -281,7 +256,9 @@ unsafe extern "C" fn rsf_rdr2_asi_start_runtime(
     let Some(fingerprint) = leaves.fingerprint else {
         return 1;
     };
-    let Some((root, config)) = module_path(module).and_then(|path| asi::deployment(&path)) else {
+    let Some((root, config)) =
+        unsafe { module_path(module) }.and_then(|path| asi::deployment(path.units()))
+    else {
         return 1;
     };
     if unsafe { GetPrivateProfileIntW(w!("RDR2"), w!("Enable"), 1, config.as_ptr()) } == 0 {
@@ -289,7 +266,7 @@ unsafe extern "C" fn rsf_rdr2_asi_start_runtime(
     }
     let directory = append_path(&root, "ReScaleFrame\\");
     let directory = &directory[..directory.len() - 1];
-    set_log_path(&append_path(directory, "rdr2.log"));
+    LOG.set_path(&append_path(directory, "rdr2.log"));
     log("RDR2 ASI entry started.");
     unsafe { asi::rsf_rdr2_asi_report_startup(Some(rsf_rdr2_runtime_log), null_mut()) };
     if let Some(diagnostics) = leaves.diagnostics {
@@ -325,15 +302,38 @@ unsafe extern "C" fn rsf_rdr2_asi_start_runtime(
         return 1;
     }
     let plugin = append_path(directory, "ReScaleFrame.Game.RDR2.dll");
-    run_session(
+    let result = run_session(
         runtime,
         &config,
         &append_path(directory, ""),
         &plugin,
         fingerprint,
-        Some((module, leaves)),
-    )
+        || {
+            if unsafe {
+                GetPrivateProfileIntW(w!("RDR2"), w!("NativeSettingsProbe"), 0, config.as_ptr())
+            } != 0
+            {
+                let path =
+                    profile_string(w!("RDR2"), w!("NativeSettingsProbePath"), &config, 32768)
+                        .unwrap_or_else(|| vec![0]);
+                if !crate::native_settings::install(&path) {
+                    log("Native settings probe refused.");
+                }
+            }
+        },
+    );
+    if result.is_ok() && !script_input::start(module, runtime, &config) {
+        log(
+            "RDR2 ScriptHook input guard unavailable; shared overlay still uses its window input hook.",
+        );
+    }
+    unsafe {
+        engine_settings::rsf_rdr2_report_engine_settings(Some(rsf_rdr2_runtime_log), null_mut())
+    };
+    result.map_or_else(|refusal| log_refusal("RDR2 ASI", refusal) as u32, |()| 0)
 }
+
+static ATTACH_FINGERPRINT: OnceLock<Fingerprint> = OnceLock::new();
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_rdr2_attach_start_runtime(
@@ -343,9 +343,28 @@ extern "C" fn rsf_rdr2_attach_start_runtime(
     let Some(fingerprint) = fingerprint else {
         return 1;
     };
-    let Some(path) = module_path(module) else {
+    if ATTACH_FINGERPRINT.set(fingerprint).is_err() {
+        return 1;
+    }
+    unsafe {
+        DisableThreadLibraryCalls(module);
+        let thread = CreateThread(null(), 0, Some(attach_worker), module, 0, null_mut());
+        if thread.is_null() {
+            return 1;
+        }
+        CloseHandle(thread);
+    }
+    0
+}
+
+unsafe extern "system" fn attach_worker(module: *mut c_void) -> u32 {
+    let Some(&fingerprint) = ATTACH_FINGERPRINT.get() else {
         return 1;
     };
+    let Some(path) = (unsafe { module_path(module) }) else {
+        return 1;
+    };
+    let path = path.units();
     let Some(separator) = path.iter().rposition(|&unit| unit == u16::from(b'\\')) else {
         return 1;
     };
@@ -359,12 +378,18 @@ extern "C" fn rsf_rdr2_attach_start_runtime(
     ) else {
         return 1;
     };
-    set_log_path(&output);
+    LOG.set_path(&output);
     log("RDR2 research attachment started; borrowing the already loaded runtime.");
     let runtime = unsafe { GetModuleHandleW(w!("ReScaleFrame.Runtime.dll")) };
     if runtime.is_null() {
         log("Attachment refused: no existing runtime.");
         return 1;
     }
-    run_session(runtime, &config, &directory, &plugin, fingerprint, None)
+    run_session(runtime, &config, &directory, &plugin, fingerprint, || {}).map_or_else(
+        |refusal| {
+            log_refusal("RDR2 research attachment", refusal);
+            1
+        },
+        |()| 0,
+    )
 }

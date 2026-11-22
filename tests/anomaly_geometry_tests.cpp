@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "native_geometry.h"
 #include "geometry_feed.h"
+#include "geometry_retirement.h"
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
@@ -16,6 +17,48 @@ extern "C" uint8_t rsf_anomaly_geometry_snapshot_kind(const SnapshotFacts*, uint
 
 namespace {
 namespace temporal = rsf::anomaly::temporal;
+
+// Exercises the Rust queue from the native history fixture and contains
+// any exceptions from the fixture's callback on this side of the C ABI.
+class RetirementQueue {
+public:
+    RetirementQueue();
+    ~RetirementQueue();
+    RetirementQueue(const RetirementQueue&) = delete;
+    RetirementQueue& operator=(const RetirementQueue&) = delete;
+    // GeometrySink::retired target. Thread-safe, noexcept; an allocation failure is counted, not thrown.
+    static void sink(void* queue, temporal::InstanceKey key) noexcept;
+    // Render thread only. Applies every queued retirement to the history that owns the frame.
+    std::size_t drain(void (*apply)(void* user, temporal::InstanceKey), void* user);
+    // Retirements that could not be queued. Stale snapshots stay harmless because the new generation
+    // never equals an old key and the registry refuses retired draws, but the count is evidence.
+    std::uint64_t dropped() const noexcept;
+private:
+    rsf_anomaly_geometry_retirements* state_;
+};
+
+RetirementQueue::RetirementQueue() : state_(rsf_anomaly_geometry_retirements_create()) {}
+RetirementQueue::~RetirementQueue() { rsf_anomaly_geometry_retirements_destroy(state_); }
+
+void RetirementQueue::sink(void* queue, temporal::InstanceKey key) noexcept
+{
+    if (!queue) return;
+    const auto retired = geometry_key(key);
+    rsf_anomaly_geometry_enqueue(static_cast<RetirementQueue*>(queue)->state_, &retired);
+}
+
+std::size_t RetirementQueue::drain(void (*apply)(void*, temporal::InstanceKey), void* user)
+{
+    RetirementCall call{apply, user};
+    const auto count = rsf_anomaly_geometry_drain(state_, apply ? RetirementCall::visit : nullptr, &call);
+    if (call.exception) std::rethrow_exception(call.exception);
+    return count;
+}
+
+std::uint64_t RetirementQueue::dropped() const noexcept
+{
+    return rsf_anomaly_geometry_dropped(state_);
+}
 
 enum class FeedStatus : std::uint8_t {
     NoDraw,           // No active, still-live identity on this thread.
@@ -181,6 +224,11 @@ int main()
         const auto copy = capture_current_draw();
         CHECK(copy && copy->bones.size() == 2 && copy->palette_layout != 0);
         CHECK(copy->bones[0].at(0, 3) == 17 && copy->bones[1].at(0, 3) == 37);
+        const auto wrapping_pointer = (std::numeric_limits<std::uintptr_t>::max)() - 64;
+        store(parent, 208, wrapping_pointer);
+        const auto unreadable = capture_current_draw();
+        CHECK(unreadable && unreadable->world && unreadable->bones.empty() && unreadable->palette_layout == 0);
+        store(parent, 208, bone_pointer);
         store(skeleton, 60, std::uint32_t{1025});
         CHECK(capture_current_draw()->bones.empty() && capture_current_draw()->palette_layout == 0);
         store(skeleton, 56, std::uint16_t{0});
@@ -312,63 +360,10 @@ int main()
     }
     CHECK(geometry_stats().capture_faults == 0);
 
-    // The visual lookup tells an unknown visual from an ambiguous pool.
-    {
-        IdentityRegistry pool;
-        CHECK(pool.probe_visual(0x500).lookup == VisualLookup::Missing && !pool.probe_visual(0x500).key);
-        const auto one = pool.acquire(0x1, 0x500);
-        CHECK(pool.probe_visual(0x500).lookup == VisualLookup::Unique && pool.probe_visual(0x500).key == one);
-        CHECK(pool.probe_visual(0x4ff).lookup == VisualLookup::Missing && pool.probe_visual(0x501).lookup == VisualLookup::Missing);
-        pool.acquire(0x2, 0x500);
-        CHECK(pool.probe_visual(0x500).lookup == VisualLookup::Ambiguous && !pool.probe_visual(0x500).key);
-        pool.retire(0x2, 0x500);
-        CHECK(pool.probe_visual(0x500).lookup == VisualLookup::Unique);
-    }
-
-    // Classification of a draw by pass, identity and world. Shadow and Z-fill need no motion and win over identity.
-    {
-        const auto verdict = [](DrawPass pass, VisualType type, VisualLookup lookup, bool readable = true, bool identity = false,
-                                 bool capturing = true) {
-            DrawFacts facts;
-            facts.pass = pass;
-            facts.type = type;
-            facts.lookup = lookup;
-            facts.capturing = capturing;
-            facts.world_readable = readable;
-            facts.world_identity = identity;
-            return classify_draw(facts);
-        };
-        constexpr auto Main = DrawPass::Main, Shadow = DrawPass::Shadow, Unknown = DrawPass::Unknown;
-        constexpr auto Static = VisualType::Static, Progressive = VisualType::Progressive, SkeletonST = VisualType::SkeletonST,
-            SkeletonPM = VisualType::SkeletonPM, TreeST = VisualType::TreeST, TreePM = VisualType::TreePM;
-        constexpr auto Missing = VisualLookup::Missing, Unique = VisualLookup::Unique, Ambiguous = VisualLookup::Ambiguous;
-        constexpr auto Identified = DrawVerdict::Identified, IgnoredShadow = DrawVerdict::IgnoredShadow,
-            IgnoredStaticWorld = DrawVerdict::IgnoredStaticWorld, UnidentifiedDynamic = DrawVerdict::UnidentifiedDynamic,
-            UnidentifiedDeformed = DrawVerdict::UnidentifiedDeformed, UnidentifiedAmbiguous = DrawVerdict::UnidentifiedAmbiguous,
-            UnidentifiedUnreadable = DrawVerdict::UnidentifiedUnreadable, UnidentifiedNoCapture = DrawVerdict::UnidentifiedNoCapture;
-        CHECK(verdict(Main, Static, Unique) == Identified);
-        CHECK(verdict(Main, SkeletonPM, Unique) == Identified && verdict(Main, TreeST, Unique) == Identified);
-        CHECK(verdict(Shadow, Static, Unique) == IgnoredShadow && verdict(Shadow, Progressive, Missing) == IgnoredShadow);
-        CHECK(verdict(Shadow, SkeletonST, Missing, false, false, false) == IgnoredShadow);
-        CHECK(verdict(Main, Static, Missing, true, true) == IgnoredStaticWorld);
-        CHECK(verdict(Main, Progressive, Missing, true, true) == IgnoredStaticWorld);
-        CHECK(verdict(Main, Static, Missing, true, false) == UnidentifiedDynamic);
-        CHECK(verdict(Main, Progressive, Missing, true, false) == UnidentifiedDynamic);
-        CHECK(verdict(Main, Static, Missing, false) == UnidentifiedUnreadable);
-        // A skinned visual always needs its palette, so an identity world never makes it static.
-        CHECK(verdict(Main, SkeletonST, Missing, true, true) == UnidentifiedDynamic);
-        CHECK(verdict(Main, SkeletonPM, Missing, false) == UnidentifiedDynamic);
-        // A tree sways in the vertex shader: unregistered it is a deformation gap, never static.
-        CHECK(verdict(Main, TreeST, Missing, true, true) == UnidentifiedDeformed);
-        CHECK(verdict(Main, TreePM, Missing, true, false) == UnidentifiedDeformed);
-        CHECK(verdict(Main, Static, Ambiguous) == UnidentifiedAmbiguous);
-        CHECK(verdict(Main, Static, Missing, true, true, false) == UnidentifiedNoCapture);
-        CHECK(verdict(Unknown, Static, Missing, true, true) == IgnoredStaticWorld);
-        CHECK(verdict(Unknown, Static, Unique) == Identified);
-        for (std::size_t i = 0; i < GeometryCoverage::verdicts; ++i) CHECK(std::strlen(verdict_name(static_cast<DrawVerdict>(i))) > 3);
-        for (std::size_t i = 0; i < GeometryCoverage::types; ++i) CHECK(std::strlen(visual_type_name(static_cast<VisualType>(i))) > 3);
-        for (std::size_t i = 0; i < GeometryCoverage::passes; ++i) CHECK(std::strlen(pass_name(static_cast<DrawPass>(i))) > 3);
-    }
+    // Verify the native name adapters still expose the Rust coverage labels.
+    for (std::size_t i = 0; i < GeometryCoverage::verdicts; ++i) CHECK(std::strlen(verdict_name(static_cast<DrawVerdict>(i))) > 3);
+    for (std::size_t i = 0; i < GeometryCoverage::types; ++i) CHECK(std::strlen(visual_type_name(static_cast<VisualType>(i))) > 3);
+    for (std::size_t i = 0; i < GeometryCoverage::passes; ++i) CHECK(std::strlen(pass_name(static_cast<DrawPass>(i))) > 3);
 
     // The enclosing view survives a projection-domain change, and a classification travels with the draw.
     {

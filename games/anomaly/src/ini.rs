@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::wide::terminated;
 use std::ffi::{CStr, c_char, c_void};
 use std::slice;
 use windows_sys::Win32::System::WindowsProgramming::{
@@ -10,14 +11,8 @@ const SECTION: PCWSTR = w!("Anomaly");
 
 // The caller provides a null pointer or a path readable through its terminator.
 pub(crate) unsafe fn path<'a>(text: PCWSTR) -> Option<&'a [u16]> {
-    if text.is_null() {
-        return None;
-    }
-    let mut length = 0;
-    while unsafe { *text.add(length) } != 0 {
-        length += 1;
-    }
-    (length != 0).then(|| unsafe { slice::from_raw_parts(text, length + 1) })
+    let (units, terminated) = unsafe { terminated(text) }?;
+    (!units.is_empty()).then_some(terminated)
 }
 
 // All string pointers borrow terminated UTF-16 for the duration of the call.
@@ -64,7 +59,7 @@ pub(crate) unsafe fn widen(text: *const c_char) -> Vec<u16> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_ini_int(
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_ini_int(
     path: *const c_void,
     key: *const c_char,
     fallback: i32,
@@ -74,7 +69,7 @@ unsafe extern "C" fn rsf_anomaly_sr_ini_int(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_ini_text(
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_ini_text(
     path: *const c_void,
     key: *const c_char,
     fallback: *const c_char,

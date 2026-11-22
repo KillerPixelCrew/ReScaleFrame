@@ -9,17 +9,54 @@ passed. Binary ABI, fixture, device and game results are pending.
 
 Steam D3D11 uses a static C entry for both Rust adapters and the existing
 C++ callers. Rust owns fingerprinting, MinHook installation and the typed
-relay, while C++ guards exceptions at the foreign calls. AC7 and RDR2
-retain their XInput observation interface with a shared Rust owner.
+relay, while C++ guards exceptions at the foreign calls. AC7 uses the shared Rust XInput owner.
 Pinned binding regeneration and source checks passed. Native linking,
 Steam cold creation, Present forwarding and controller observation
 remain to be verified. [Steam continuation evidence](research/skyrim-steam-present-continuation-20261116.md)
+
+Godot's DLL exports native control and presentation notifications from Rust. D3D12
+publishes its device binding after fence creation and tracks the render and capture slots
+by source. Godot and Unity share packaged vendor paths, the legacy FG result convention
+and the public sharpening binding. Godot binds a Runtime CPU service and reports its
+actual Vulkan submission and Present receipt. The export source coverage, pinned engine
+patch generation, binding regeneration and pinned formatting were checked. Build, fixture and device checks remain open.
+[Godot native control evidence](../integrations/godot/NATIVE.md#native-control-and-d3d12-follow-up)
+
+RDR2's ASI startup leaves, research-attach worker and native settings probe
+now run in Rust. Settings fixtures share the measured vectors with the
+Rust policy, and refused startup sessions retain their cleanup owner.
+The diagnostic C++ bridge and restart overlay controls remain open.
+Build, fixture and device checks are pending.
+[RDR2 startup source evidence](research/rust-rdr2-asi.md#r01-follow-up)
+
+The Anomaly SR stage calls the Rust swap owner directly at the seam.
+Guard admission, constant rollback outcomes, spatial recovery reporting,
+GPU query retirement and the seven SR overlay controls have been
+source-reviewed. The D3D11 startup dependency on DLSS still blocks
+Runtime-owned backend selection for this adapter. Builds, fixtures and
+game acceptance are pending.
+[Anomaly SR checkpoint](research/rust-anomaly-sr-stage.md#n06-source-review-and-port-checkpoint)
+
+Godot Vulkan uses device-keyed capability receipts and one Runtime SR session.
+Each FG pass reports its own outcome. The V03 presenter owns retired guide resizing,
+and the engine retains its exact submission and Present receipts. Source ABI
+comparison and pinned formatting passed. Build, fixture and device checks remain
+open. [Godot Vulkan E03 evidence](research/rust-godot-vulkan-e03.md)
 
 The Unity package now routes render callbacks, admits preview and
 generation windows, and handles device events in Rust. The managed
 exports matched in source, and pinned binding regeneration matched the
 private callback table. Build, Editor and player checks remain open.
 [Unity migration](rust-migration.md#remaining-integration-ports)
+
+Unity's D3D11, D3D12 and Vulkan bridges now share the Rust scalar pass
+builder. D3D12 retains view submission receipts through Unity's queue
+flush and acknowledges the reconfiguration generation after delivery.
+Separate Runtime rings track D3D11 and Vulkan interop submissions.
+D3D11 shared-surface replacement requires both fence timelines and
+rejects incompatible copy inputs. Source checks, pinned formatting and
+targeted binding regeneration passed. Build, fixture and device results
+remain open. [Unity bridge evidence](research/rust-unity-bridge-submission.md)
 
 The shared Vulkan-to-D3D12 FG paths now admit swapchain extensions and
 select vsync in Rust. The FSR4 state fixture uses the current graphics
@@ -88,10 +125,18 @@ releases partial allocations on refusal. The typed D3D11 descriptors
 and public C calls are unchanged in source. The device fixture remains
 unrun on this port. [Source comparison](rust-migration.md#native-policy-cutover)
 
-The standalone `rsf_negotiate` contract uses Rust for capability
-selection, preserving the C entry point, record layouts and FG-before-SR
-order. The native contract fixture and its new static link remain unrun.
-See [the Rust migration record](rust-migration.md#native-policy-cutover).
+The fixture-only negotiation policy has been retired. Production SR and FG
+selection stays with the orchestrator. The C backend declarations remain
+available to callers through the header-only Contract target.
+
+Plugin sessions use the generated GameSDK option record and the shared
+Windows path admission helper also used by the FidelityFX and Vulkan timing
+callers. The Rust fixtures cover plugin ABI, DLL and embedded session
+lifetimes, and Runtime export ownership. Native C++ still supplies the
+throwing plugin and the exception guard. The C fixture continues to exercise
+the SDK's inline frame eligibility rules. Pinned formatting, locked offline
+Windows Cargo metadata and source comparisons passed. Builds, fixture
+execution and device checks remain open.
 
 ## Remaining Rust integration ports
 
@@ -147,19 +192,24 @@ shots at the existing 84-copy budget. Interleaved submissions,
 descriptor-copy and object-retirement coverage and live capture
 remain open. [Shot ownership](research/rust-rdr2-asi.md#native-capture-shot-and-tail-ownership)
 
-Fallout 4's render hook lifecycle now verifies, installs, starts and
-retires the eight hooks in Rust. Typed detours still call their original
-functions on native frames. Pinned bindgen reproduced the changed private
-platform layout exactly. Producer callbacks and reduced-render recovery
-remain native. [Render hook lifecycle](research/rust-fallout4-render-hooks.md)
+Fallout 4's render callbacks sequence World and Present admission, producer
+reads, SR publication, and reduced recovery in Rust. Typed detours call
+their originals on native frames and own COM leases. Effects cleanup uses
+the admitted World's identity across the original call, and the HUDless
+lease stays on the viewport detour's stack. F03 has source and binding
+checks. Build, fixtures and matched game captures remain open.
+[Render hook transactions](research/rust-fallout4-render-hooks.md#render-transaction-contracts)
 
-Unity's Editor preview now owns its device, queue, swapchain and per-slot
-resources in Rust and requires a fresh drain proof before release. The
-Vulkan resolver owner also publishes the interceptor table, selects
+Unity's Editor preview validates its parent and child before admitting
+rendering. Runtime owns the per-output D3D12 copy, swapchain and fence.
+Its fixture injects a signal refusal after execution and checks that
+retirement preserves the recording. Build, fixture and Editor checks
+remain open. [Editor preview](research/rust-unity-preview-resources.md#runtime-presenter-and-editor-window-replacement)
+
+The Unity Vulkan resolver publishes the interceptor table, selects
 device extensions and resolves the swapchain destroy fallback. The
-saved function slots remain process-wide, and retirement still depends
-on reaching the destroy hook. [Editor preview](research/rust-unity-preview-resources.md) ·
-[Vulkan resolver](research/rust-unity-vulkan-resolver.md)
+saved function slots remain process-wide, and retirement depends on the
+destroy hook. [Vulkan resolver](research/rust-unity-vulkan-resolver.md)
 
 AC7's Rust F9 capture owner now writes the cloud and contact-light
 before-draw rows with the existing query and receipt order. Source
@@ -195,6 +245,12 @@ ABI checks and fixture, device and game runs for these ports remain open.
   the remaining hook lifecycle are native.
   [Render inputs](research/rust-fallout4-render-inputs.md) ·
   [Render hooks](research/rust-fallout4-render-hooks.md)
+- The Fallout 4 F02 follow-up shares render-context reads and camera jitter math, rechecks
+  the native records before handing out leases, stores the validated depth maps and allows
+  advanced-frame resolution cleanup at the ordinary World boundary. The camera fixtures
+  moved to Rust and the native padding fixture calls the production comparator. The changes
+  are source-checked and await build, fixtures and game or device validation.
+  [F02 input ownership and resolution retirement](research/rust-fallout4-f02.md)
 - AC7's Rust F9 path admits geometry reads and writes the existing JSONL
   schema. The velocity owner admits commit targets and applies the
   existing profile and log limits. D3D11 readback, blob deduplication,
@@ -213,10 +269,12 @@ ABI checks and fixture, device and game runs for these ports remain open.
 - Godot's private Rust SCons object assembles CPU event records. The engine
   callbacks still supply the timestamps, frame identity and input kinds.
   [Godot native migration](../integrations/godot/NATIVE.md)
-- Anomaly's existing Rust reflection owner now enumerates signatures,
-  resources and constant buffers through typed D3D leaves. The row order,
-  partial results and dynamic Runtime lookup were compared in source.
-  [Reflection owner](../games/anomaly/src/shader_loader/reflection.rs)
+- Anomaly's Rust reflection owner publishes a complete D3D11 snapshot and
+  refuses unreadable rows. Manifest admission, draw classification, and
+  reports share stable shader-family IDs. The offline tree compiler uses the
+  shared Rust compiler, and the guarded engine include lookup remains tied
+  to the Standard and AVX profiles.
+  [Shader loader port](research/rust-anomaly-shader-loader-n05.md)
 
 The [integration migration scope](rust-migration.md#remaining-integration-ports)
 covers the existing game and engine adapters beyond Anomaly. Project Wingman
@@ -823,6 +881,14 @@ arguments and token literals. The superseded private C++ codecs were
 removed. Build, emitted-bytecode parity and replay remain open.
 [Tessellation audit](research/rust-ac7-velocity-tessellation.md)
 
+A04 moves the helper compile requests and module caches into Rust and
+links the ordinary hull, corner hull and domain programs in one call.
+The history writer and readers share their HLSL table contract. The
+native pass keeps D3D11 shader and stream-output creation. Source checks
+and pinned formatting are complete. The Rust fixtures, WARP replay and
+game verification are pending.
+[A04 port evidence](research/rust-ac7-velocity-a04.md)
+
 AC7 motion capture now stores its bounded engine and renderer-root
 records and associates native queued commands in Rust. The typed
 detours and guarded reads stay native. Unwinding restores the nested
@@ -934,14 +1000,23 @@ inaccessible input or output and preserves last error. The existing
 native hooks fixture now covers both refusals. The fixture remains
 unrun on this revision.
 
-Anomaly's native observer now checks the exact Standard or AVX running
-build, PE image size and hook guards in Rust. The typed native calls
-still copy the PE data under SEH and run the mapped-region checks
-before MinHook registration. The changed-guard regression is present
-and remains unrun. Build and live observer verification remain open.
+Anomaly's native observer checks the exact Standard or AVX running
+build, PE image size, mapped regions and hook guards in Rust. The
+native leaves copy PE and engine data under SEH and call MinHook.
+Cold startup lends its verified build to synchronous observer prepare
+and tracks the two input installations independently. Build, fixture
+execution and live observer verification remain open.
 [Observer admission audit](research/rust-anomaly-native-observer.md#prepare-admission-from-3c73e3c4)
+[N01 source port](research/rust-anomaly-startup-n01.md)
 
 ## Rust orchestrator and first Anomaly port
+
+Anomaly's Rust geometry owner now reads and interprets draw-time producer
+facts using the selected profile's offsets and a guarded native copy.
+Skinned snapshots borrow storage for bounded reads of up to 64 matrices
+at a time. A failed read or invalid transform discards the whole palette.
+The geometry fixtures and live checks remain unrun.
+[Geometry reads and palette transfer](research/rust-anomaly-native-geometry.md#geometry-reads-and-palette-transfer)
 
 Anomaly's Rust geometry owner now distinguishes owned and borrowed
 child ranges before model reuse and retirement. The selected profile
@@ -985,6 +1060,13 @@ comparison matched the signature gate, required and optional lookup
 order, and enabled and disabled public entry points. The typed COM
 and SDK operations remain native. Build and device checks remain open.
 [Streamline startup](research/rust-d3d12-streamline-host-startup.md)
+
+D3D12 Streamline now shares prepare ordering with FSR and XeSS, releases failed
+combined-begin tokens, deduplicates controller samples and reconciles Reflex
+after rejected DLSS-G options. Rust also owns the common Present hook cache and
+compatibility module handoff. Source review is complete. Build, synthetic and
+device checks remain open.
+[Streamline generation port](research/rust-d3d12-streamline-generation-port.md)
 
 Anomaly now owns Stage 3 burst staging and mapping in Rust. The
 leased texture and device facts admit the same single-sample copy,
@@ -1040,6 +1122,13 @@ preserving their respective copy extents, capture inputs and fence
 order. Device and game checks remain open.
 [Anomaly probes](research/rust-anomaly-overlay-probes.md) ·
 [Vulkan FG staging](research/rust-vulkan-dlss-fg-cutover.md#guide-and-hud-less-staging-commands)
+
+The Anomaly adapter now implements the overlay's DirectInput and DXGI callbacks
+and COM access in Rust. The input gate reports from the buffered read that
+consumed the records. Diagnostic controls appear in the panel, and option
+callbacks report persistence failures. Source and binding checks are complete.
+Build, fixture and game verification remain open.
+[Anomaly input and overlay port](research/rust-anomaly-n02.md)
 
 The native D3D12 overlay now owns its three command and descriptor
 slots in Rust. The fixed slot array keeps partial references until
@@ -1196,6 +1285,14 @@ the binary and timeline wait plan. The native calls keep the typed
 Vulkan result and submit records. The new fixture checks the refusal
 and maximum-wait paths. Builds, fixtures and live checks remain open.
 [Present admission and waits](research/rust-vulkan-dx12-copy-plan.md#present-admission-and-waits)
+
+The common Vulkan-to-D3D12 importer and FG graphics leaves call typed
+Vulkan procedures from Rust. FSR4 and XeSS wait for the consumer timeline
+and Vulkan source fences before replacing depth and motion on a render
+extent change. The existing capture adapter and shared C++ device fixture
+remain. Source checks compared the Vulkan names and private table layouts,
+and locked Windows metadata resolved. Compile, link, fixture and device
+checks remain open. [Vulkan D3D12 interop](research/rust-vulkan-dx12-interop.md)
 
 The standalone FSR3 bridge now binds the SDK and owns the SR, FG and
 swapchain transactions in Rust. It keeps the active FG and swapchain
@@ -3440,6 +3537,9 @@ both carriers and Minecraft Release exports matched. The linked XeSS
 device fixture built. The worker verified SDK-disabled linkage in its
 isolated build. Device and game execution remain pending.
 See [the XeSS Vulkan FG cutover audit](research/rust-vulkan-xess-fg-cutover.md).
+V06 moved integrated ABI admission, interpolation count policy and diagnostic
+publication into the bridge's Rust session. The source port and remaining
+shared overlay dependency are recorded in [the V06 audit](research/rust-vulkan-xess-fg-v06.md).
 
 Vulkan DLSS FG now owns proxy admission, exact source state, private GPU
 leases, capture groups and checked teardown in Rust. It shares the FG
@@ -7469,3 +7569,15 @@ PCL telemetry: overlay ABI18 now carries actual keyboard/mouse/controller receip
 NVIDIA PCL tools located in official Reflex revision c2522cee75be7a952ab29281c4cf6d978c5e2e0e. PrintPCL failed FvSDK_CreateSession -1; full validation requires FrameView SDK setup/system restart per consumed NVIDIA guide. No installer, setup batch, reboot or vendor-tool acceptance performed.
 
 Session stopped at user request. User accepts the deployed SR/FG state as sufficient. PCL overlay ABI18 is built and CPU-tested; new overlay and XeLL settings guard were staged in trial235214, but gameplay/UI/settings verification was interrupted and remains incomplete. The stopped trial's21 manifest entries were restored and hash-verified by tools/restore-capture-trial.ps1 (resumed-restoration-20261116-235448-824.json). No FrameView installer, verification setup, reboot, full eng/verify.ps1 suite, release or readiness promotion performed. All current tracked changes and source diagnostics are checkpointed; licensed binaries, external references and captures remain ignored.
+
+
+### Vulkan SR provider admission (V01)
+
+Rust shares FidelityFX staging allocation with the Vulkan resource owner and
+preserves cleanup-only owners after refused FidelityFX or XeSS rollback. Vulkan
+SR captures the SDK output before RSF sharpening. The split FSR4 dispatcher
+uses its admitted records to create the owner. The XeSS fixtures exercise the
+production dispatcher, and a Rust fixture checks the Runtime DLL export
+inventory. [V01 port evidence](research/vulkan-sr-provider-admission-port.md)
+records the source checks, fixture changes and remaining C++ paths. Build,
+test, lint and device validation are pending.

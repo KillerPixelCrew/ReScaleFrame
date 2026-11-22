@@ -34,10 +34,6 @@ struct StartOptions {
     bool install_hooks{true};
 };
 
-// Validates a table obtained from `query`. On success fills `out`; on failure `out` is untouched and
-// `reason` names the refusal. Null `query` is "missing".
-StartStatus bind_api(rsf_get_overlay_api_fn query, rsf_overlay_api* out, const char** reason) noexcept;
-
 // Cold start, outside DllMain, before the first Present. Refuses cleanly and installs no hook unless
 // the API binds and the Runtime accepts the configuration. The Runtime accepts one configuration, so
 // after a hook refusal every later start refuses as well.
@@ -48,12 +44,6 @@ StartStatus bind_api(rsf_get_overlay_api_fn query, rsf_overlay_api* out, const c
 // OverlayCaptureDir (default <ini directory>\RSF-OverlayCapture\<local time>); the shared render settings (SR, FG, StatusOverlay, ...) are written
 // by the Runtime into the same section.
 StartStatus start(const StartOptions& options, const char** reason) noexcept;
-
-// Window filter given to the Runtime: the engine's main window in this process.
-bool is_engine_window(HWND window) noexcept;
-
-// The capture bits (RSF_OVERLAY_CAPTURE_*) the input gate acts on; 0 before start or when the query fails.
-uint32_t query_capture() noexcept;
 
 // The Present/ResizeBuffers sink the hooks call. Exposed so a contract can drive it with a real chain.
 PresentSink present_sink() noexcept;

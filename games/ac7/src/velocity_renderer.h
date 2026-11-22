@@ -6,7 +6,8 @@
 // velocity_renderer.rs owns the per-device renderer lifetime: the published renderer and its
 // device, replacement when a draw arrives on another device, the variant, history and profile
 // resets after a publication, and teardown at release. velocity_pass.cpp lends the leaves that
-// create and destroy its native renderer.
+// create and destroy its native renderer. Its replay lock spans each borrow from lookup through
+// the last D3D11 use and serializes publication, replacement, frame retirement and release.
 
 // create returns an initialized renderer for the device, or null. destroy deletes one that create
 // made. Neither may throw.

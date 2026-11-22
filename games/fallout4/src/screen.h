@@ -18,7 +18,6 @@ struct NativeScreen {
     uint32_t camera_index{UINT32_MAX};
     uintptr_t camera_state{};
 };
-bool verify_screen_queries() noexcept;
 // Called only in an engine-owned callback with the reader's synchronous world
 // resource/camera lease. ordinary_world is the guarded parent C382A5 fact.
 // This returns facts only; it neither clears NO_FG nor admits an input owner.

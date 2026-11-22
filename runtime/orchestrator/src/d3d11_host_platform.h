@@ -25,7 +25,7 @@ typedef struct rsf_d3d11h_strings {
 } rsf_d3d11h_strings;
 
 typedef struct rsf_d3d11h_pipeline_start {
-    uint32_t output_width, output_height, quality, reserved;
+    uint32_t output_width, output_height, quality, backend;
     const rsf_d3d11_host_setup* setup;
     const rsf_d3d11h_strings* strings;
     rsf_game_log_fn log;

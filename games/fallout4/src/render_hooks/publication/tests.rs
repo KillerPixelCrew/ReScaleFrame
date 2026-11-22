@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! SR and HUDless callback order with fake leaves standing in for render_hooks.cpp.
 use super::*;
-use crate::render_hooks::recovery::{Facts, Lease, OutputOwner, Request};
+use crate::render_hooks::recovery::fixtures::IDLE;
 use std::cell::RefCell;
 
 const CONTEXT: usize = 0x100;
@@ -20,6 +20,7 @@ struct Fake {
     config: i32,
     enabled: u32,
     framebuffer_frame: u64,
+    framebuffer_acquired: bool,
     events: Vec<(&'static str, u32)>,
 }
 
@@ -65,6 +66,7 @@ fn install(config: i32, enabled: u32) {
         config,
         enabled,
         framebuffer_frame: 5,
+        framebuffer_acquired: true,
         events: Vec::new(),
     })));
     crate::render_hooks::LIVE.store(true, Ordering::Release);
@@ -79,9 +81,9 @@ unsafe extern "C" fn world(out: &mut World) {
             began_qpc: 0,
             frequency: 0,
         };
-        out.pass = &fake.pass;
-        out.frame_pass = &fake.frame;
-        out.screen_basis = &fake.basis;
+        out.pass = &mut fake.pass;
+        out.frame_pass = &mut fake.frame;
+        out.screen_basis = &mut fake.basis;
         out.context = CONTEXT as *mut c_void;
         out.chain = CHAIN as *mut c_void;
         out.upscale = true;
@@ -185,7 +187,34 @@ unsafe extern "C" fn report_state(
 ) {
     event("report_state", stage);
 }
-unsafe extern "C" fn reconstruct(_: *const rsf_game_render_pass) -> rsf_result {
+unsafe extern "C" fn auxiliary_inputs(inputs: &mut AuxiliaryInputs) -> bool {
+    inputs.textures = [1, 2, 3, 4, 3].map(|id| id as *mut c_void);
+    inputs.raster = [1.25, 2.5, 640.0, 360.0];
+    true
+}
+unsafe extern "C" fn auxiliary_colour(texture: *mut c_void) -> bool {
+    !texture.is_null()
+}
+unsafe extern "C" fn same_texture(first: *mut c_void, second: *mut c_void) -> bool {
+    first == second
+}
+unsafe extern "C" fn reconstruct(
+    _: *const rsf_game_render_pass,
+    surfaces: *const Surface,
+    count: u32,
+) -> rsf_result {
+    if count != 0 {
+        let surfaces = unsafe { std::slice::from_raw_parts(surfaces, count as usize) };
+        let plan_matches = count == 4
+            && surfaces[0].kind == RSF_D3D11_AUXILIARY_DEPTH_STENCIL
+            && surfaces[1..]
+                .iter()
+                .all(|surface| surface.source_rect == [1.25, 2.5, 641.25, 362.5])
+            && surfaces[3].flags == RSF_D3D11_AUXILIARY_RESTORE_CONTENTS;
+        if !plan_matches {
+            event("incorrect_auxiliary_plan", count);
+        }
+    }
     event("reconstruct", 0);
     RSF_OK
 }
@@ -193,25 +222,18 @@ unsafe extern "C" fn end_output() -> bool {
     event("end_output", 0);
     true
 }
-unsafe extern "C" fn read_framebuffer() -> bool {
-    event("read_framebuffer", 0);
-    true
-}
-unsafe extern "C" fn framebuffer(out: &mut Framebuffer) {
+unsafe extern "C" fn read_framebuffer(lease: *mut c_void, out: &mut Framebuffer) -> bool {
+    event("read_framebuffer", lease as usize as u32);
     out.context = CONTEXT as *mut c_void;
     out.chain = CHAIN as *mut c_void;
     out.texture = TEXTURE as *mut c_void;
     out.native_frame = with(|fake| fake.framebuffer_frame);
     out.window_key = WINDOW_KEY;
+    out.extent = [1920, 1080, 1];
+    with(|fake| fake.framebuffer_acquired)
 }
-unsafe extern "C" fn framebuffer_extent(extent: &mut [u32; 3]) {
-    *extent = [1920, 1080, 1];
-}
-unsafe extern "C" fn release_framebuffer() {
-    event("release_framebuffer", 0);
-}
-unsafe extern "C" fn publish_window(window: *const rsf_game_render_pass) {
-    event("publish_window", 0);
+unsafe extern "C" fn publish_window(lease: *const c_void, window: *const rsf_game_render_pass) {
+    event("publish_window", lease as usize as u32);
     with(|fake| {
         fake.pass = unsafe { *window };
         fake.window_open = true;
@@ -234,61 +256,41 @@ const LEAVES: Leaves = Leaves {
     publish_inputs,
     begin_output,
     report_state,
+    auxiliary_inputs,
+    auxiliary_colour,
+    same_texture,
     reconstruct,
     end_output,
     read_framebuffer,
-    framebuffer,
-    framebuffer_extent,
-    release_framebuffer,
     publish_window,
 };
 
-unsafe extern "C" fn report(_: *const c_char) {}
 unsafe extern "C" fn refuse() {
     event("refuse", 0);
     with(|fake| fake.refused = true);
 }
-unsafe extern "C" fn facts(_: &mut Facts) {}
 unsafe extern "C" fn resolve(full_output: bool, published: bool) {
     event(
         "resolve",
         (u32::from(full_output) << 1) | u32::from(published),
     );
 }
-unsafe extern "C" fn unused(_: bool) -> bool {
-    unreachable!()
-}
-unsafe extern "C" fn adopt(_: *const i32) {}
-unsafe extern "C" fn nothing() {}
-unsafe extern "C" fn lease(_: u32, _: &mut Lease) {}
-unsafe extern "C" fn preflight(
-    _: *const rsf_game_render_pass,
-    _: *mut c_void,
-    _: &mut OutputOwner,
-) -> bool {
-    false
-}
-unsafe extern "C" fn reduce(_: &mut Request, _: &mut rsf_result) -> bool {
-    false
+
+unsafe extern "C" fn report(text: *const c_char) {
+    let text = unsafe { CStr::from_ptr(text) }.to_bytes();
+    if text.starts_with(b"Fallout4 HUDless stage=framebuffer-read ") {
+        let captured_identity = text
+            .windows(b"native=9/5".len())
+            .any(|part| part == b"native=9/5");
+        event("partial_framebuffer_receipt", u32::from(captured_identity));
+    }
 }
 
-// No token is owned, so SEAL and FINISH answer without a host call.
 const RECOVERY: RecoveryLeaves = RecoveryLeaves {
     report,
     refuse,
-    facts,
-    same_source: yes,
     resolve,
-    read_raster: unused,
-    same_resources: unused,
-    adopt,
-    discard: nothing,
-    release: nothing,
-    lease,
-    preflight,
-    raster_current: yes,
-    begin_output: yes,
-    reduce,
+    ..IDLE
 };
 
 fn events() -> Vec<(&'static str, u32)> {
@@ -364,17 +366,16 @@ fn hudless_opens_window_after_final_scene() {
     install(1, 1);
     assert_eq!(emit_sr(&LEAVES, &RECOVERY), SrOutcome::Published);
     let _ = events();
-    emit_hudless(&LEAVES, &RECOVERY);
+    emit_hudless(&LEAVES, &RECOVERY, TEXTURE as *mut c_void);
     assert_eq!(
         events(),
         [
-            ("read_framebuffer", 0),
+            ("read_framebuffer", TEXTURE as u32),
             ("classify", 0),
             ("final_scene", 1),
             ("final_scene", 0),
-            ("publish_window", 0),
+            ("publish_window", TEXTURE as u32),
             ("window", 1),
-            ("release_framebuffer", 0),
         ]
     );
     with(|fake| {
@@ -391,10 +392,27 @@ fn hudless_refuses_a_foreign_framebuffer_without_callbacks() {
     assert_eq!(emit_sr(&LEAVES, &RECOVERY), SrOutcome::Published);
     let _ = events();
     with(|fake| fake.framebuffer_frame = 6);
-    emit_hudless(&LEAVES, &RECOVERY);
+    emit_hudless(&LEAVES, &RECOVERY, TEXTURE as *mut c_void);
+    assert_eq!(events(), [("read_framebuffer", TEXTURE as u32)]);
+    assert!(with(|fake| !fake.window_open));
+}
+
+#[test]
+fn hudless_reports_partial_facts_from_the_refused_read() {
+    install(1, 1);
+    assert_eq!(emit_sr(&LEAVES, &RECOVERY), SrOutcome::Published);
+    let _ = events();
+    with(|fake| {
+        fake.framebuffer_frame = 9;
+        fake.framebuffer_acquired = false;
+    });
+    emit_hudless(&LEAVES, &RECOVERY, TEXTURE as *mut c_void);
     assert_eq!(
         events(),
-        [("read_framebuffer", 0), ("release_framebuffer", 0)]
+        [
+            ("read_framebuffer", TEXTURE as u32),
+            ("partial_framebuffer_receipt", 1)
+        ]
     );
     assert!(with(|fake| !fake.window_open));
 }

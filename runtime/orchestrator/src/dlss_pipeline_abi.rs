@@ -4,6 +4,8 @@
 // offsets with static_assert.
 #![allow(non_camel_case_types)]
 use crate::d3d11_output_abi::rsf_d3d11_texture_desc;
+pub use crate::dlss_streamline_abi::{rsf_dlss_plan, rsf_dlss_support};
+use crate::gl_pipeline_abi::rsf_dlss_setup;
 use crate::native_sr_abi::rsf_motion_decode_params;
 use crate::render_abi::{
     rsf_dlss_frame, rsf_motion_resolve_params, rsf_pipeline_camera_frame, rsf_sharpening_options,
@@ -29,30 +31,6 @@ pub struct rsf_dlss_pipeline_layer {
 
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
-pub struct rsf_dlssp_range {
-    pub width: u32,
-    pub height: u32,
-    pub min_width: u32,
-    pub min_height: u32,
-    pub max_width: u32,
-    pub max_height: u32,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Default)]
-pub struct rsf_dlssp_support {
-    pub supported: u32,
-    pub driver_out_of_date: u32,
-    pub os_out_of_date: u32,
-    pub no_supported_adapter: u32,
-    pub required_major: u32,
-    pub required_minor: u32,
-    pub detected_major: u32,
-    pub detected_minor: u32,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Default)]
 pub struct rsf_dlssp_sharpen_frame {
     pub depth_inverted: u32,
     pub motion_x: f32,
@@ -65,15 +43,10 @@ pub struct rsf_dlssp_sharpen_frame {
 pub struct rsf_dlssp_platform {
     pub present_host: unsafe extern "C" fn() -> Raw,
     pub share_host: unsafe extern "C" fn(Raw, rsf_dlssp_log_fn, Raw) -> i32,
-    pub load: unsafe extern "C" fn(
-        *const rsf_dlss_pipeline_setup,
-        *const c_char,
-        *const c_char,
-        rsf_dlssp_log_fn,
-    ) -> i32,
+    pub load: unsafe extern "C" fn(*const rsf_dlss_setup) -> i32,
     pub set_device: unsafe extern "C" fn(Raw) -> i32,
-    pub query_support: unsafe extern "C" fn(*mut rsf_dlssp_support) -> i32,
-    pub plan: unsafe extern "C" fn(u32, u32, u32, *mut rsf_dlssp_range) -> i32,
+    pub query_support: unsafe extern "C" fn(*mut rsf_dlss_support) -> i32,
+    pub plan: unsafe extern "C" fn(*mut rsf_dlss_plan) -> i32,
     pub release_resources: unsafe extern "C" fn() -> i32,
     pub release_viewport: unsafe extern "C" fn(u32) -> i32,
     pub shutdown: unsafe extern "C" fn() -> i32,
@@ -139,8 +112,6 @@ const _: () = {
     assert!(size_of::<rsf_dlss_pipeline_layer>() == 40);
     assert!(offset_of!(rsf_dlss_pipeline_layer, width) == 24);
     assert!(offset_of!(rsf_dlss_pipeline_layer, camera) == 32);
-    assert!(size_of::<rsf_dlssp_range>() == 24);
-    assert!(size_of::<rsf_dlssp_support>() == 32);
     assert!(size_of::<rsf_dlssp_sharpen_frame>() == 20);
-    assert!(size_of::<rsf_dlssp_platform>() == 43 * size_of::<usize>());
+    assert!(size_of::<rsf_dlssp_platform>() == 40 * size_of::<usize>());
 };

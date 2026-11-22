@@ -5,22 +5,25 @@
 
 mod coverage;
 mod scopes;
+#[cfg(test)]
+mod tests;
 mod vertex_constants;
 
 use crate::engine_guards::{Image, Read};
 use crate::geometry_registry::{
-    IdentityRegistry, Registry, rsf_anomaly_geometry_classify as classify,
-    rsf_anomaly_geometry_find as find, rsf_anomaly_geometry_probe_visual as probe_visual,
-    rsf_anomaly_geometry_register as register, rsf_anomaly_geometry_retire as retire,
-    rsf_anomaly_geometry_retire_all as retire_all,
+    IdentityRegistry, Registry, classify, rsf_anomaly_geometry_find as find,
+    rsf_anomaly_geometry_probe_visual as probe_visual, rsf_anomaly_geometry_register as register,
+    rsf_anomaly_geometry_retire as retire, rsf_anomaly_geometry_retire_all as retire_all,
 };
 use crate::geometry_registry_abi::{
     rsf_anomaly_geometry_draw as Draw, rsf_anomaly_geometry_key as Key,
     rsf_anomaly_geometry_probe as Probe, *,
 };
+use crate::motion::from_engine_matrix;
 use crate::native_geometry_abi::*;
 use coverage::COUNTERS;
 use std::ffi::c_void;
+use std::mem::MaybeUninit;
 use std::ptr::{self, with_exposed_provenance};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, RwLock};
@@ -28,6 +31,13 @@ use std::sync::{Mutex, RwLock};
 const UNKNOWN_PASS: u8 = RSF_ANOMALY_PASS_UNKNOWN as u8;
 const MAX_HIERARCHY: usize = 4096;
 const MAX_CAPTURE_BONES: u32 = 1024;
+const BONE_BATCH: usize = 64;
+const SKELETON_PARENT_OFFSET: usize = 8;
+const SKELETON_MODE_OFFSET: usize = 56;
+const SKELETON_COUNT_OFFSET: usize = 60;
+const BONE_INSTANCES_OFFSET: usize = 208; // CKinematics+128 IKinematics +0x50.
+const TREE_PM_LAST_LOD_OFFSET: usize = 0x108;
+const SBONES_PALETTE_LAYOUT: u64 = 0x53424f4e45530001; // Three float4 columns per bone.
 const ENGINE_IDENTITY: [f32; 16] = [
     1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.,
 ];
@@ -228,11 +238,13 @@ extern "C" fn rsf_anomaly_geometry_reset() {
 }
 
 fn read_pointer(platform: &Platform, address: usize) -> Option<usize> {
-    let mut pointer = 0;
-    unsafe { (platform.pointer)(address, &mut pointer) }.then_some(pointer)
+    read_bytes(platform.read, address).map(usize::from_ne_bytes)
 }
 
 fn read_bytes<const N: usize>(read: Read, address: usize) -> Option<[u8; N]> {
+    if address == 0 {
+        return None;
+    }
     address.checked_add(N)?;
     let mut bytes = [0; N];
     // The native leaf guards the read and reports whether the complete span was copied.
@@ -380,27 +392,62 @@ extern "C" fn rsf_anomaly_geometry_model_delete(
 }
 
 fn read_pass(platform: &Platform, engine: Engine) -> u8 {
-    if engine.module == 0 {
-        UNKNOWN_PASS
-    } else {
-        unsafe { (platform.pass)(engine) }
+    let phase = engine_layout(platform, engine)
+        .and_then(|layout| engine.module.checked_add(layout.phase as usize))
+        .and_then(|address| read_bytes(platform.read, address))
+        .map(u32::from_ne_bytes);
+    match phase {
+        Some(0) => RSF_ANOMALY_PASS_MAIN as u8,
+        Some(1) => RSF_ANOMALY_PASS_SHADOW as u8,
+        _ => UNKNOWN_PASS,
     }
 }
 
-fn read_world(platform: &Platform, address: usize) -> Option<[f32; 16]> {
-    let mut rows = [0.; 16];
-    (address != 0 && unsafe { (platform.matrix)(address, &mut rows) }).then_some(rows)
+fn engine_layout(platform: &Platform, engine: Engine) -> Option<Layout> {
+    (engine.module != 0).then(|| unsafe { (platform.layout)(engine) })
 }
 
-fn affine_matrix(native: [f32; 16]) -> Option<Matrix> {
+fn world_address(platform: &Platform, engine: Engine) -> Option<usize> {
+    engine
+        .module
+        .checked_add(engine_layout(platform, engine)?.world as usize)
+}
+
+fn read_world(platform: &Platform, address: usize) -> Option<NativeMatrix> {
+    let bytes = read_bytes::<64>(platform.read, address)?;
+    let (words, _) = bytes.as_chunks::<4>();
+    Some(std::array::from_fn(|i| f32::from_ne_bytes(words[i])))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_geometry_read_world(
+    platform: &Platform,
+    out: &mut MaybeUninit<NativeMatrix>,
+) -> bool {
+    let engine = rsf_anomaly_geometry_binding();
+    let Some(world) =
+        world_address(platform, engine).and_then(|address| read_world(platform, address))
+    else {
+        return false;
+    };
+    out.write(world);
+    true
+}
+
+fn skin_mode(platform: &Platform, skeleton: usize) -> Option<u16> {
+    if skeleton == 0 {
+        return None;
+    }
+    read_bytes(platform.read, skeleton.checked_add(SKELETON_MODE_OFFSET)?).map(u16::from_ne_bytes)
+}
+
+fn affine_matrix(native: &NativeMatrix) -> Option<Matrix> {
     if !native.iter().all(|lane| lane.is_finite())
         || [native[3], native[7], native[11], native[15]] != [0., 0., 0., 1.]
     {
         return None;
     }
-    Some(std::array::from_fn(|index| {
-        f64::from(native[index % 4 * 4 + index / 4])
-    }))
+    Some(from_engine_matrix(native))
 }
 
 #[unsafe(no_mangle)]
@@ -412,14 +459,13 @@ extern "C" fn rsf_anomaly_geometry_classify_visual(platform: &Platform, visual: 
     if capturing {
         probe_visual(&REGISTRY, visual.visual, &mut probe);
     }
-    let world = unsafe { (platform.world)(engine) };
+    let world = world_address(platform, engine).unwrap_or(0);
     let world_for_classification = (capturing
         && probe.lookup == RSF_ANOMALY_VISUAL_MISSING as u32
         && pass != RSF_ANOMALY_PASS_SHADOW as u8)
         .then(|| read_world(platform, world))
         .flatten();
-    let mut mode = 0;
-    if visual.skeleton != 0 && unsafe { (platform.skin_mode)(visual.skeleton, &mut mode) } {
+    if let Some(mode) = skin_mode(platform, visual.skeleton) {
         visual.kind = match mode {
             0 => SOFTWARE_SKINNED,
             1 => SINGLE_BONE,
@@ -466,32 +512,46 @@ extern "C" fn rsf_anomaly_geometry_borrow_draw() -> *const c_void {
         .map_or(ptr::null(), |visual| visual.facade)
 }
 
-fn palette(platform: &Platform, visual: &Visual) -> Option<Palette> {
-    let mut palette = Palette::default();
-    if visual.kind != HARDWARE_SKINNED
-        || visual.skeleton == 0
-        || !unsafe { (platform.palette)(visual.skeleton, &mut palette) }
-        || !(2..=5).contains(&palette.mode)
-        || !(1..=MAX_CAPTURE_BONES).contains(&palette.count)
-    {
+fn palette(platform: &Platform, visual: &Visual) -> Option<(usize, u32)> {
+    if visual.kind != HARDWARE_SKINNED {
         return None;
     }
-    palette.instances = unsafe { (platform.bone_instances)(visual.skeleton) };
-    (palette.instances != 0).then_some(palette)
+    let mode = skin_mode(platform, visual.skeleton)?;
+    let count = u32::from_ne_bytes(read_bytes(
+        platform.read,
+        visual.skeleton.checked_add(SKELETON_COUNT_OFFSET)?,
+    )?);
+    if !(2..=5).contains(&mode) || !(1..=MAX_CAPTURE_BONES).contains(&count) {
+        return None;
+    }
+    let parent = read_pointer(
+        platform,
+        visual.skeleton.checked_add(SKELETON_PARENT_OFFSET)?,
+    )?;
+    if parent == 0 {
+        return None;
+    }
+    let instances = read_pointer(platform, parent.checked_add(BONE_INSTANCES_OFFSET)?)?;
+    (instances != 0).then_some((instances, count))
 }
 
-fn write_palette(platform: &Platform, writer: &Writer, user: *mut c_void, palette: Palette) -> u64 {
-    for index in 0..palette.count {
-        let mut native = [0.; 16];
-        if !unsafe { (platform.bone)(palette.instances, index, &mut native) } {
-            return 0;
+fn write_palette(read: ReadBones, instances: usize, output: &mut [Matrix]) -> bool {
+    let mut native = [[0.; 16]; BONE_BATCH];
+    for (batch, output) in output.chunks_mut(BONE_BATCH).enumerate() {
+        let first = (batch * BONE_BATCH) as u32;
+        // The native leaf guards each strided read and initializes the entire
+        // requested batch on success. The output remains private until finish.
+        if !unsafe { read(instances, first, output.len() as u32, native.as_mut_ptr()) } {
+            return false;
         }
-        let Some(matrix) = affine_matrix(native) else {
-            return 0;
-        };
-        unsafe { (writer.bone)(user, index, &matrix) };
+        for (source, target) in native.iter().zip(output) {
+            let Some(matrix) = affine_matrix(source) else {
+                return false;
+            };
+            *target = matrix;
+        }
     }
-    palette.layout
+    true
 }
 
 struct Snapshot {
@@ -509,10 +569,11 @@ fn snapshot(
     if !live(visual) {
         return None;
     }
-    let world = read_world(platform, visual.world).and_then(affine_matrix);
-    let palette = palette(platform, visual);
-    let count = palette.as_ref().map_or(0, |palette| palette.count);
-    let has_storage = unsafe {
+    let world = read_world(platform, visual.world)
+        .as_ref()
+        .and_then(affine_matrix);
+    let (instances, count) = palette(platform, visual).unwrap_or_default();
+    let storage = unsafe {
         (writer.begin)(
             user,
             visual,
@@ -520,8 +581,14 @@ fn snapshot(
             count,
         )
     };
-    let layout = if has_storage {
-        palette.map_or(0, |palette| write_palette(platform, writer, user, palette))
+    let layout = if count != 0 && !storage.is_null() {
+        // The native writer lends count live matrices exclusively until finish.
+        let output = unsafe { std::slice::from_raw_parts_mut(storage, count as usize) };
+        if write_palette(platform.bones, instances, output) {
+            SBONES_PALETTE_LAYOUT
+        } else {
+            0
+        }
     } else {
         0
     };
@@ -576,7 +643,10 @@ unsafe extern "C" fn rsf_anomaly_geometry_observe(
         facts.view = visual.view;
         facts.domain = visual.domain;
         if visual.visual_type == RSF_ANOMALY_TYPE_TREE_PM as u8 && visual.visual != 0 {
-            facts.tree_lod = unsafe { (platform.tree_lod)(visual.visual as usize) };
+            facts.tree_lod = (visual.visual as usize)
+                .checked_add(TREE_PM_LAST_LOD_OFFSET)
+                .and_then(|address| read_bytes(platform.read, address))
+                .map_or(-1, |bytes| i64::from(u32::from_ne_bytes(bytes)));
         }
     }
     // The caller provides writable output storage without initializing its fields.

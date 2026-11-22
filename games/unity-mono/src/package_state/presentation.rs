@@ -13,6 +13,7 @@ use crate::package_abi::{RSF_FG_OFF, rsf_unity_package_platform, rsf_unity_packa
 use crate::runtime_abi::{
     RSF_FG_BACKEND_AUTO, RSF_REFLEX_OFF, rsf_fg12_setup, rsf_native_fg_options,
 };
+use rsf_game_sys::vendor_paths::VendorPaths;
 use std::ffi::CString;
 use std::sync::atomic::{AtomicU32, Ordering::SeqCst};
 use std::sync::{Mutex, PoisonError};
@@ -38,20 +39,16 @@ fn text(bytes: &[u8]) -> CString {
     CString::new(&bytes[..end]).unwrap_or_default()
 }
 
-fn joined(base: &CString, leaf: &str) -> CString {
-    text(&[base.as_bytes(), leaf.as_bytes()].concat())
-}
-
 impl Identity {
     /// The directories under the SDK root as the C++ made them, also for an empty root.
     pub(super) fn new(root: &[u8], version: &[u8], project: &[u8]) -> Self {
         let root = text(root);
-        let streamline = joined(&root, "/streamline");
+        let vendors = VendorPaths::new(&root);
         Self {
-            interposer: joined(&streamline, "/sl.interposer.dll"),
-            fsr: joined(&root, "/fidelityfx"),
-            xess: joined(&root, "/xess"),
-            streamline,
+            interposer: vendors.interposer,
+            fsr: vendors.fidelityfx,
+            xess: vendors.xess,
+            streamline: vendors.streamline,
             root,
             version: text(version),
             project: text(project),

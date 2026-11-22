@@ -1,0 +1,4 @@
+EXPORTS
+    xessSetJitterScale
+    xessD3D12Execute
+    fixture_xess_seen

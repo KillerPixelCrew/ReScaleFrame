@@ -97,13 +97,14 @@ unsafe extern "C" fn rsf_core_srvk_fsr4_create(
         return INVALID;
     }
     unsafe { owner.write(ptr::null_mut()) };
-    if let Err(error) = unsafe { admit_setup(setup, handoff) } {
-        return error;
-    }
+    let (setup, handoff) = match unsafe { admit_setup(setup, handoff) } {
+        Ok(records) => records,
+        Err(error) => return error,
+    };
     let Some(provider) = (unsafe { provider.as_ref() }) else {
         return NOT_COMPILED;
     };
-    public_result(unsafe { (provider.create)(setup, handoff, owner) })
+    public_result(unsafe { (provider.create)(&setup, &handoff, owner) })
 }
 
 #[unsafe(no_mangle)]
@@ -261,42 +262,39 @@ unsafe extern "C" fn rsf_core_srvk_fsr4_info(
     public_result(unsafe { (provider.info)(owner, out) })
 }
 
-#[repr(C)]
 #[derive(Default)]
 pub(super) struct SplitLease {
-    tracked: u32,
+    tracked: bool,
     producer: Handle,
     continuation: Handle,
 }
 
-const _: () = assert!(size_of::<SplitLease>() == 24);
-
 impl SplitLease {
     pub(super) fn new(version: u32) -> Self {
         Self {
-            tracked: u32::from(version == RSF_SRVK_SPLIT_TRACKED_ABI_VERSION),
+            tracked: version == RSF_SRVK_SPLIT_TRACKED_ABI_VERSION,
             ..Self::default()
         }
     }
 
     pub(super) fn pending(&self) -> bool {
-        self.tracked != 0 && (!self.producer.is_null() || !self.continuation.is_null())
+        self.tracked && (!self.producer.is_null() || !self.continuation.is_null())
     }
 
     pub(super) fn begin(&mut self, commands: Handle) {
-        if self.tracked != 0 {
+        if self.tracked {
             self.producer = commands;
         }
     }
 
     pub(super) fn resume(&mut self, commands: Handle) {
-        if self.tracked != 0 {
+        if self.tracked {
             self.continuation = commands;
         }
     }
 
     pub(super) fn submitted(&mut self, commands: Handle) -> bool {
-        if self.tracked == 0 || commands.is_null() {
+        if !self.tracked || commands.is_null() {
             return false;
         }
         if commands == self.producer {
@@ -311,26 +309,6 @@ impl SplitLease {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_split_pending(lease: &SplitLease) -> i32 {
-    i32::from(lease.pending())
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_split_begin(lease: &mut SplitLease, commands: Handle) {
-    lease.begin(commands);
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_split_resume(lease: &mut SplitLease, commands: Handle) {
-    lease.resume(commands);
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_split_submitted(lease: &mut SplitLease, commands: Handle) -> i32 {
-    i32::from(lease.submitted(commands))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,25 +318,22 @@ mod tests {
         let mut lease = SplitLease::default();
         let producer = ptr::dangling_mut::<u32>().cast();
         let resumed = ptr::dangling_mut::<u64>().cast();
-        rsf_core_split_begin(&mut lease, producer);
-        assert_eq!(rsf_core_split_pending(&lease), 0);
-        assert_eq!(rsf_core_split_submitted(&mut lease, producer), 0);
+        lease.begin(producer);
+        assert!(!lease.pending());
+        assert!(!lease.submitted(producer));
 
-        lease.tracked = 1;
-        rsf_core_split_begin(&mut lease, producer);
-        rsf_core_split_resume(&mut lease, resumed);
-        assert_eq!(rsf_core_split_pending(&lease), 1);
-        assert_eq!(rsf_core_split_submitted(&mut lease, resumed), 0);
-        assert_eq!(
-            rsf_core_split_submitted(&mut lease, ptr::dangling_mut::<u8>().cast()),
-            0
-        );
-        assert_eq!(rsf_core_split_submitted(&mut lease, producer), 1);
-        assert_eq!(rsf_core_split_pending(&lease), 1);
-        assert_eq!(rsf_core_split_submitted(&mut lease, producer), 0);
-        assert_eq!(rsf_core_split_submitted(&mut lease, resumed), 1);
-        assert_eq!(rsf_core_split_pending(&lease), 0);
-        rsf_core_split_begin(&mut lease, producer);
-        assert_eq!(rsf_core_split_pending(&lease), 1);
+        let mut lease = SplitLease::new(RSF_SRVK_SPLIT_TRACKED_ABI_VERSION);
+        lease.begin(producer);
+        lease.resume(resumed);
+        assert!(lease.pending());
+        assert!(!lease.submitted(resumed));
+        assert!(!lease.submitted(ptr::dangling_mut::<u8>().cast()));
+        assert!(lease.submitted(producer));
+        assert!(lease.pending());
+        assert!(!lease.submitted(producer));
+        assert!(lease.submitted(resumed));
+        assert!(!lease.pending());
+        lease.begin(producer);
+        assert!(lease.pending());
     }
 }

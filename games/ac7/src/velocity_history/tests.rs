@@ -85,7 +85,11 @@ fn frame_succession_wraps_but_never_follows_the_empty_frame() {
 fn capacity_doubles_from_1024_over_twice_the_frame_records() {
     let mut history = History::default();
     assert_eq!(history.begin_model(&model(1, 512)).1.capacity, 1024);
+    // A failed preparation leaves the full minimum capacity available.
+    assert_eq!(history.begin_model(&model(1, 512)).1.capacity, 1024);
+    history.record_model(0, 1, 512);
     assert_eq!(history.begin_model(&model(1, 1)).1.capacity, 2048);
+    history.record_model(0, 1, 1);
     assert_eq!(history.begin_model(&model(1, 1000)).1.capacity, 4096);
     // A new frame restarts the count.
     assert_eq!(history.begin_model(&model(2, 1)).1.capacity, 1024);
@@ -105,6 +109,7 @@ fn record_overflow_refuses_after_rotation_and_epoch() {
     );
 
     assert!(history.begin_model(&model(3, RECORD_LIMIT)).0);
+    history.record_model(0, 3, RECORD_LIMIT);
     assert!(!history.begin_model(&model(3, 1)).0);
     assert!(!history.begin_model(&model(3, u32::MAX)).0);
 }
@@ -214,8 +219,9 @@ fn commit_needs_written_motion_for_the_same_frame_view_and_family() {
         }
     );
     assert_eq!(history.commit_view(&view(6, 0, 0)), UNAVAILABLE_VIEW);
-    let mut family = view(5, 0, 0);
+    let mut family = view(5, 16, 8);
     family.family_key = 9;
+    assert_eq!(history.begin_view(&family), UNAVAILABLE_VIEW);
     assert_eq!(history.commit_view(&family), UNAVAILABLE_VIEW);
     // The history key finds the entry, but the commit still needs the drawn view key.
     let mut keyed = view(7, 16, 8);
@@ -224,6 +230,7 @@ fn commit_needs_written_motion_for_the_same_frame_view_and_family() {
     history.ready_view(slot, &keyed);
     history.mark_written(slot, true);
     keyed.view_key = 31;
+    assert_eq!(history.begin_view(&keyed), UNAVAILABLE_VIEW);
     assert_eq!(history.commit_view(&keyed), UNAVAILABLE_VIEW);
 
     history.mark_written(0, false);

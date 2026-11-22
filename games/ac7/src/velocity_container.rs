@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! DXBC containers and signatures for AC7's velocity shader transforms.
 //! The native callers keep their vectors and their typed compiler and shader operations.
-use crate::dxbc_chunks::{Chunk, chunk_at, word};
+use crate::dxbc_chunks::{Chunk, chunk_table, word};
 use crate::shader_hash::{dxbc_checksum, dxbc_digest_bytes};
 use std::ffi::{c_char, c_void};
 use std::slice;
@@ -122,14 +122,12 @@ pub(crate) fn read_container<'a>(
     let total = word(bytes, 24)? as usize;
     let count = word(bytes, 28)? as usize;
     let size = bytes.len();
-    if total > size || total < HEADER || count > 32 || count * 4 > total - HEADER {
+    if total > size || total < HEADER || count > 32 {
         return None;
     }
     let bytes = &bytes[..total];
-    let table_end = HEADER + count * 4;
-    for index in 0..count {
-        let offset = word(bytes, HEADER + index * 4)? as usize;
-        visit(chunk_at(bytes, table_end, offset)?)?;
+    for entry in chunk_table(bytes, count)? {
+        visit(entry?.1)?;
     }
     Some(())
 }
@@ -187,32 +185,6 @@ pub(crate) fn write_container<'a>(
 fn signature_layout(streams: bool) -> (usize, usize) {
     let fields_offset = if streams { 4 } else { 0 };
     (24 + fields_offset, fields_offset)
-}
-
-/// The caller lends the original container and copies each semantic in signature order.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ac7_velocity_signature(
-    bytes: *const u8,
-    size: usize,
-    output: bool,
-    user: *mut c_void,
-    append: AppendSemantic,
-) -> bool {
-    let Some(chunks) = (unsafe { borrowed(bytes, size) }).and_then(chunks) else {
-        return false;
-    };
-    let index = if output {
-        chunk_index(&chunks, b"OSGN").or_else(|| chunk_index(&chunks, b"OSG5"))
-    } else {
-        chunk_index(&chunks, b"ISGN")
-    };
-    let Some(chunk) = index.map(|index| &chunks[index]) else {
-        return false;
-    };
-    read_signature(chunk.data, chunk.tag == b"OSG5", |semantic| {
-        unsafe { append(user, &semantic.view()) }.then_some(())
-    })
-    .is_some()
 }
 
 pub(crate) fn read_signature<'a>(

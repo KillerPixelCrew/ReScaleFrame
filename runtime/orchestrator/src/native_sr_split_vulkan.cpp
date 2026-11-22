@@ -43,7 +43,7 @@ void retire_commands(rsf_fsr4vk* owner, void* commands) noexcept try
 catch (...) {}
 
 constexpr Provider native{
-    invoke<rsf_fsr4vk_create>, invoke<rsf_fsr4vk_plan>, invoke<rsf_fsr4vk_evaluate>,
+    invoke<rsf_fsr4vk_create_admitted>, invoke<rsf_fsr4vk_plan>, invoke<rsf_fsr4vk_evaluate>,
     invoke<rsf_fsr4vk_destroy>, retire_commands, invoke<rsf_fsr4vk_submitted>, read_info,
 };
 constexpr const Provider* provider = &native;
