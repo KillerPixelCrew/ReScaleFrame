@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::ffx_abi::*;
+use ash::vk::{self, Handle};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_RESET,
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
@@ -114,7 +115,8 @@ fn start(route: bool) -> *mut rsf_ffxgvk {
     owner
 }
 
-fn refused_second_owner() -> i32 {
+#[unsafe(no_mangle)]
+extern "C" fn rsf_fixture_ffx_refused_second_owner() -> i32 {
     let mut owner = ptr::null_mut();
     let mut chain = 0;
     let result = unsafe { rsf_fixture_ffx_start(false, &mut owner, &mut chain) };
@@ -123,10 +125,14 @@ fn refused_second_owner() -> i32 {
 }
 
 unsafe fn implicit(owner: *mut rsf_ffxgvk, chain: u64) -> i32 {
-    unsafe { rsf_fixture_ffx_present(owner, chain, ptr::null(), false) }
+    let chains = [vk::SwapchainKHR::from_raw(chain)];
+    let info = vk::PresentInfoKHR::default().swapchains(&chains);
+    unsafe { rsf_ffxgvk_present(owner, ptr::from_ref(&info).cast()) }
 }
 unsafe fn explicit(owner: *mut rsf_ffxgvk, chain: u64, source: *const rsf_frame_record) -> i32 {
-    unsafe { rsf_fixture_ffx_present(owner, chain, source, true) }
+    let chains = [vk::SwapchainKHR::from_raw(chain)];
+    let info = vk::PresentInfoKHR::default().swapchains(&chains);
+    unsafe { rsf_ffxgvk_present_source(owner, ptr::from_ref(&info).cast(), source) }
 }
 fn routed() -> *mut c_void {
     unsafe { rsf_fixture_ffx_routed() }
@@ -134,6 +140,7 @@ fn routed() -> *mut c_void {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_fixture_ffx_run(scenario: u32) -> i32 {
+    unsafe { (*crate::ffx_gpu::state()).next = 100 };
     match scenario {
         0 => reset(),
         1 => submission(),
@@ -832,7 +839,7 @@ fn wsi_route() {
         assert!(
             rsf_ffxgvk_destroy(owner) == FIXTURE_FEATURE_FAILED
                 && r!(unregistered) == 0
-                && refused_second_owner() == FIXTURE_NOT_SUPPORTED,
+                && rsf_fixture_ffx_refused_second_owner() == FIXTURE_NOT_SUPPORTED,
             "a refused unregister retains admission and the leaf for retry"
         );
         r!(refuse_unregister) = false;

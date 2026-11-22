@@ -1058,8 +1058,22 @@ generate("tests/generation/src/session_abi.rs", "tests/generation/session_abi.h"
           "--raw-line", "use crate::abi::rsf_fg_retirement;",
           "--raw-line", "use rsf_game_sys::rsf_frame_record;"])
 
-generate("tests/vulkan-fg/src/wsi_abi.rs", "tests/vulkan-fg/wsi_abi.h",
-         "rsf_wsi_fixture_(counts|calls)", "NOTHING", [])
+vulkan_sdk = os.environ.get("VULKAN_SDK")
+if vulkan_sdk:
+    vulkan_include = Path(vulkan_sdk) / "Include"
+    generate("tests/vulkan-fg/src/wsi_abi.rs", "tests/vulkan-fg/wsi_abi.h",
+             "rsf_ffx_wsi_dispatch", "NOTHING",
+             ["-x", "c++", "-std=c++17", "-Wno-pragma-once-outside-header", f"-I{vulkan_include}"],
+             ["--allowlist-function", "(rsf_fixture_sdk_wsi_.*|rsfFfxSetVulkanWsiDispatch)",
+              "--no-recursive-allowlist", "--blocklist-type", "Vk.*|PFN_vk.*",
+              "--raw-line", "#![allow(non_snake_case)]",
+              "--raw-line", "use ash::vk::{\n"
+                            "    self, Device as VkDevice, Queue as VkQueue, Result as VkResult, SwapchainKHR as VkSwapchainKHR,\n};",
+              "--raw-line", "type PFN_vkCreateSwapchainKHR = Option<vk::PFN_vkCreateSwapchainKHR>;",
+              "--raw-line", "type PFN_vkDestroySwapchainKHR = Option<vk::PFN_vkDestroySwapchainKHR>;",
+              "--raw-line", "type PFN_vkQueuePresentKHR = Option<vk::PFN_vkQueuePresentKHR>;",
+              "--raw-line", "type PFN_vkAcquireNextImageKHR = Option<vk::PFN_vkAcquireNextImageKHR>;",
+              "--raw-line", "type PFN_vkGetSwapchainImagesKHR = Option<vk::PFN_vkGetSwapchainImagesKHR>;"])
 
 for fixture in ("dispatch", "ffx"):
     symbols = (r"rsf_(fgvk_.*|core_fgvk_presentation_.*)"

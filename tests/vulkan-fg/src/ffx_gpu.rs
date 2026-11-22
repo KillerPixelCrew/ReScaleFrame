@@ -1,7 +1,27 @@
 // SPDX-License-Identifier: MIT
-use crate::ffx_abi::{rsf_ffx_fixture_state, rsf_fixture_ffx_state, rsf_vk_function};
+use crate::ffx_abi::{rsf_ffx_fixture_state, rsf_vk_function, rsf_wsi_route_fixture_state};
 use ash::vk::{self, Handle};
-use std::ffi::{CStr, c_char, c_void};
+use std::{
+    cell::UnsafeCell,
+    ffi::{CStr, c_char, c_void},
+};
+
+// Scenario, SDK callbacks and fake Vulkan calls all execute on the initiating
+// thread. Use raw pointers because Present can synchronously reenter teardown.
+thread_local! {
+    static FIXTURE: UnsafeCell<rsf_ffx_fixture_state> = const { UnsafeCell::new(unsafe { std::mem::zeroed() }) };
+    static ROUTE: UnsafeCell<rsf_wsi_route_fixture_state> = const { UnsafeCell::new(unsafe { std::mem::zeroed() }) };
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_fixture_ffx_state() -> *mut rsf_ffx_fixture_state {
+    state()
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_fixture_wsi_route_state() -> *mut rsf_wsi_route_fixture_state {
+    route()
+}
 
 #[unsafe(no_mangle)]
 unsafe extern "system" fn rsf_fixture_ffx_images(
@@ -52,8 +72,8 @@ extern "C" fn rsf_fixture_ffx_present_count(_: vk::SwapchainKHR) -> u64 {
 }
 
 // The FFX scenarios and their fake queue calls run on one thread.
-fn state() -> *mut rsf_ffx_fixture_state {
-    unsafe { rsf_fixture_ffx_state() }
+pub(super) fn state() -> *mut rsf_ffx_fixture_state {
+    FIXTURE.with(UnsafeCell::get)
 }
 
 fn next() -> u64 {
@@ -64,8 +84,8 @@ fn next() -> u64 {
     }
 }
 
-fn route() -> *mut crate::ffx_abi::rsf_wsi_route_fixture_state {
-    unsafe { crate::ffx_abi::rsf_fixture_wsi_route_state() }
+fn route() -> *mut rsf_wsi_route_fixture_state {
+    ROUTE.with(UnsafeCell::get)
 }
 
 unsafe extern "system" fn wsi_present(
@@ -84,13 +104,7 @@ unsafe extern "system" fn wsi_present(
         if (*route).destroy_inside {
             (*route).destroyed_inside = rsf_ffxgvk_destroy((*route).owner);
             (*route).routed_inside = rsf_fixture_ffx_routed();
-            let mut second = std::ptr::null_mut();
-            let mut chain = 0;
-            (*route).created_inside = rsf_fixture_ffx_start(false, &mut second, &mut chain);
-            assert!(
-                second.is_null() && chain == 0,
-                "refused owner publishes no handle"
-            );
+            (*route).created_inside = rsf_fixture_ffx_refused_second_owner();
         }
     }
     vk::Result::SUBOPTIMAL_KHR

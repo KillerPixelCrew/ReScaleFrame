@@ -18,13 +18,11 @@ mod drivers {
         host_images: 0,
     });
 
-    #[unsafe(no_mangle)]
-    unsafe extern "C" fn rsf_fixture_wsi_counts(out: *mut Counts) {
-        unsafe { out.write(*COUNTS.lock().unwrap()) };
+    pub(super) fn snapshot() -> Counts {
+        *COUNTS.lock().unwrap()
     }
 
-    #[unsafe(no_mangle)]
-    unsafe extern "system" fn rsf_fixture_host_create(
+    pub(super) unsafe extern "system" fn rsf_fixture_host_create(
         device: vk::Device,
         _: *const vk::SwapchainCreateInfoKHR<'_>,
         _: *const vk::AllocationCallbacks<'_>,
@@ -36,8 +34,7 @@ mod drivers {
         vk::Result::SUCCESS
     }
 
-    #[unsafe(no_mangle)]
-    extern "system" fn rsf_fixture_host_destroy(
+    pub(super) extern "system" fn rsf_fixture_host_destroy(
         device: vk::Device,
         _: vk::SwapchainKHR,
         _: *const vk::AllocationCallbacks<'_>,
@@ -46,17 +43,16 @@ mod drivers {
         COUNTS.lock().unwrap().host_destroys += 1;
     }
 
-    #[unsafe(no_mangle)]
-    extern "system" fn rsf_fixture_host_present(
-        _: vk::Queue,
+    pub(super) extern "system" fn rsf_fixture_host_present(
+        queue: vk::Queue,
         _: *const vk::PresentInfoKHR<'_>,
     ) -> vk::Result {
+        assert_eq!(queue.as_raw(), 22);
         COUNTS.lock().unwrap().host_presents += 1;
         vk::Result::SUCCESS
     }
 
-    #[unsafe(no_mangle)]
-    extern "system" fn rsf_fixture_host_acquire(
+    pub(super) extern "system" fn rsf_fixture_host_acquire(
         _: vk::Device,
         _: vk::SwapchainKHR,
         _: u64,
@@ -68,8 +64,7 @@ mod drivers {
         vk::Result::SUCCESS
     }
 
-    #[unsafe(no_mangle)]
-    extern "system" fn rsf_fixture_host_images(
+    pub(super) extern "system" fn rsf_fixture_host_images(
         _: vk::Device,
         _: vk::SwapchainKHR,
         _: *mut u32,
@@ -80,13 +75,14 @@ mod drivers {
     }
 
     #[unsafe(no_mangle)]
-    extern "system" fn vkCreateSwapchainKHR(
+    unsafe extern "system" fn vkCreateSwapchainKHR(
         _: vk::Device,
         _: *const vk::SwapchainCreateInfoKHR<'_>,
         _: *const vk::AllocationCallbacks<'_>,
-        _: *mut vk::SwapchainKHR,
+        chain: *mut vk::SwapchainKHR,
     ) -> vk::Result {
         COUNTS.lock().unwrap().native_creates += 1;
+        unsafe { chain.write(vk::SwapchainKHR::from_raw(20)) };
         vk::Result::SUCCESS
     }
 
@@ -105,7 +101,7 @@ mod drivers {
         _: *const vk::PresentInfoKHR<'_>,
     ) -> vk::Result {
         COUNTS.lock().unwrap().native_presents += 1;
-        vk::Result::SUCCESS
+        vk::Result::SUBOPTIMAL_KHR
     }
 
     #[unsafe(no_mangle)]
@@ -117,7 +113,7 @@ mod drivers {
         _: vk::Fence,
         _: *mut u32,
     ) -> vk::Result {
-        vk::Result::SUCCESS
+        vk::Result::TIMEOUT
     }
 
     #[unsafe(no_mangle)]
@@ -127,55 +123,95 @@ mod drivers {
         _: *mut u32,
         _: *mut vk::Image,
     ) -> vk::Result {
-        vk::Result::SUCCESS
+        vk::Result::INCOMPLETE
     }
 }
-use crate::wsi_abi::{rsf_wsi_fixture_calls as Calls, rsf_wsi_fixture_counts as Counts};
-use std::mem::MaybeUninit;
 
-fn verify(calls: &Calls) -> Result<(), &'static str> {
-    let registration = calls.registration.unwrap();
-    let create = calls.create.unwrap();
-    let destroy = calls.destroy.unwrap();
-    let present = calls.present.unwrap();
-    let acquire = calls.acquire.unwrap();
-    let images = calls.images.unwrap();
-    let counts = calls.counts.unwrap();
-    let read_counts = || {
-        let mut snapshot = MaybeUninit::uninit();
-        unsafe {
-            counts(snapshot.as_mut_ptr());
-            snapshot.assume_init()
-        }
+use crate::wsi_abi::*;
+use ash::vk::{self, Handle};
+use std::ptr;
+
+#[derive(Clone, Copy)]
+struct Counts {
+    native_creates: u32,
+    native_destroys: u32,
+    host_creates: u32,
+    host_destroys: u32,
+    native_presents: u32,
+    host_presents: u32,
+    host_acquires: u32,
+    host_images: u32,
+}
+
+fn verify() -> Result<(), &'static str> {
+    let device = vk::Device::from_raw(1);
+    let foreign = vk::Device::from_raw(2);
+    let queue = vk::Queue::from_raw(22);
+    let setup = rsf_ffx_wsi_dispatch {
+        struct_size: size_of::<rsf_ffx_wsi_dispatch>() as u32,
+        abi_version: 2,
+        device,
+        create: Some(drivers::rsf_fixture_host_create),
+        destroy: Some(drivers::rsf_fixture_host_destroy),
+        present: Some(drivers::rsf_fixture_host_present),
+        acquire: Some(drivers::rsf_fixture_host_acquire),
+        images: Some(drivers::rsf_fixture_host_images),
     };
-
-    const DEVICE: u32 = 1;
-    const FOREIGN: u32 = 2;
-    const ALL_HOOKS: u32 = 0x1f;
-    let mut chain = 0;
+    let short = rsf_ffx_wsi_dispatch {
+        struct_size: setup.struct_size - 1,
+        ..setup
+    };
+    let wrong_abi = rsf_ffx_wsi_dispatch {
+        abi_version: 1,
+        ..setup
+    };
+    let partial = rsf_ffx_wsi_dispatch {
+        destroy: None,
+        ..setup
+    };
+    let competing = rsf_ffx_wsi_dispatch {
+        device: foreign,
+        ..setup
+    };
+    let unregister = rsf_ffx_wsi_dispatch {
+        create: None,
+        destroy: None,
+        present: None,
+        acquire: None,
+        images: None,
+        ..setup
+    };
+    let mut chain = vk::SwapchainKHR::null();
     unsafe {
-        if registration(0, 2, 0, 0) != -1
-            || registration(DEVICE, 2, ALL_HOOKS, 1) != -1
-            || registration(DEVICE, 1, ALL_HOOKS, 0) != -2
-            || registration(DEVICE, 2, ALL_HOOKS & !2, 0) != -1
+        if rsfFfxSetVulkanWsiDispatch(ptr::null()) != -1
+            || rsfFfxSetVulkanWsiDispatch(&short) != -1
+            || rsfFfxSetVulkanWsiDispatch(&wrong_abi) != -2
+            || rsfFfxSetVulkanWsiDispatch(&partial) != -1
         {
             return Err("malformed dispatch records must be refused");
         }
-        if registration(DEVICE, 2, ALL_HOOKS, 0) != 0
-            || registration(FOREIGN, 2, ALL_HOOKS, 0) != -3
-        {
+        if rsfFfxSetVulkanWsiDispatch(&setup) != 0 || rsfFfxSetVulkanWsiDispatch(&competing) != -3 {
             return Err("a second device cannot replace the registered owner");
         }
-        if create(DEVICE, &mut chain) != 0 || chain != 10 {
+        if rsf_fixture_sdk_wsi_create(device, &mut chain) != vk::Result::SUCCESS
+            || chain.as_raw() != 10
+        {
             return Err("host create must return its swapchain");
         }
-        destroy(DEVICE, chain);
-        if present(DEVICE) != 0 || acquire(DEVICE, chain) != 0 || images(DEVICE, chain) != 0 {
+        rsf_fixture_sdk_wsi_destroy(device, chain);
+        if rsf_fixture_sdk_wsi_present(device, queue) != vk::Result::SUCCESS
+            || rsf_fixture_sdk_wsi_acquire(device, chain) != vk::Result::SUCCESS
+            || rsf_fixture_sdk_wsi_images(device, chain) != vk::Result::SUCCESS
+        {
             return Err("present, acquire and image queries must forward their results");
         }
-        create(FOREIGN, &mut chain);
-        destroy(FOREIGN, chain);
-        let first: Counts = read_counts();
+        if rsf_fixture_sdk_wsi_create(foreign, &mut chain) != vk::Result::SUCCESS
+            || chain.as_raw() != 20
+        {
+            return Err("a foreign device must use the real SDK fallback");
+        }
+        rsf_fixture_sdk_wsi_destroy(foreign, chain);
+        let first = drivers::snapshot();
         if first.native_creates != 1
             || first.native_destroys != 1
             || first.host_creates != 1
@@ -187,13 +223,22 @@ fn verify(calls: &Calls) -> Result<(), &'static str> {
         {
             return Err("the owner must route its own calls and leave the foreign device native");
         }
-        if registration(DEVICE, 2, 0, 0) != 0 {
+        if rsfFfxSetVulkanWsiDispatch(&unregister) != 0 {
             return Err("the owner must be able to unregister");
         }
-        create(DEVICE, &mut chain);
-        destroy(DEVICE, chain);
-        present(DEVICE);
-        let retired = read_counts();
+        if rsf_fixture_sdk_wsi_create(device, &mut chain) != vk::Result::SUCCESS
+            || chain.as_raw() != 20
+        {
+            return Err("native WSI discovery must resume after callback retirement");
+        }
+        rsf_fixture_sdk_wsi_destroy(device, chain);
+        if rsf_fixture_sdk_wsi_present(device, queue) != vk::Result::SUBOPTIMAL_KHR
+            || rsf_fixture_sdk_wsi_acquire(device, chain) != vk::Result::TIMEOUT
+            || rsf_fixture_sdk_wsi_images(device, chain) != vk::Result::INCOMPLETE
+        {
+            return Err("native WSI must resume after callback retirement");
+        }
+        let retired = drivers::snapshot();
         if retired.native_creates != 2
             || retired.native_destroys != 2
             || retired.native_presents != 1
@@ -201,15 +246,15 @@ fn verify(calls: &Calls) -> Result<(), &'static str> {
             || retired.host_destroys != 1
             || retired.host_presents != 1
         {
-            return Err("native WSI must resume after callback retirement");
+            return Err("the retired callback table must never be used again");
         }
     }
     Ok(())
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ffx_vulkan_wsi_dispatch_fixture(calls: &Calls) -> i32 {
-    match verify(calls) {
+extern "C" fn rsf_ffx_vulkan_wsi_dispatch_fixture() -> i32 {
+    match verify() {
         Ok(()) => 0,
         Err(message) => {
             eprintln!("{message}");

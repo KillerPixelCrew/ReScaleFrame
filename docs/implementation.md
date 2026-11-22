@@ -3973,6 +3973,11 @@ status codes and runs the common FidelityFX queue and resolver steps.
 The Vulkan CPU fixtures also use Rust test doubles at their SDK boundaries.
 [Shared WSI follow-up](research/rust-vulkan-fg-wsi-follow-up.md)
 
+Rust now owns the FidelityFX fixture state and constructs the corrected SDK
+WSI registration records. The shared resource header exposes the opaque
+Rust table used by the native consumers.
+[Vulkan FG resource and fixture boundaries](research/rust-vulkan-fg-wsi-boundaries.md)
+
 The FidelityFX generation callback now reads the exact configured frame
 record from the Rust WSI route. Rust publishes the record only after SDK
 configure succeeds and counts only successful dispatches. The native callback

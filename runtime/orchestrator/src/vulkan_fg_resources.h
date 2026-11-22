@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include <stdbool.h>
 #include "vulkan_fg_frames.h"
 
 typedef struct rsf_vkfg_image {
@@ -28,9 +29,21 @@ typedef struct rsf_vkfg_platform {
     int32_t (*submit_fence)(void*, uint64_t);
 } rsf_vkfg_platform;
 
+typedef struct rsf_vkfg_device rsf_vkfg_device;
+struct rsf_srvk_setup;
+struct rsf_fgvk_setup;
+struct VkPhysicalDeviceMemoryProperties;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+/* Device tables borrow the host dispatch until all images and fences have been
+   retired. Destroy accepts null and releases only the table. */
+extern const rsf_vkfg_platform rsf_core_vkfg_platform;
+rsf_vkfg_device* rsf_core_vkfg_load_device(const struct rsf_srvk_setup*, const struct rsf_fgvk_setup*, bool with_view);
+void rsf_core_vkfg_device_destroy(rsf_vkfg_device*);
+void rsf_core_vkfg_device_memory(rsf_vkfg_device*, const struct VkPhysicalDeviceMemoryProperties*);
+void rsf_core_vkfg_device_wait_timing(rsf_vkfg_device*, const char* stage, uint64_t frame);
 /* The native owner serializes slot access and drains it before releasing a
    committed image or fence. Failed replacement leaves the old image intact. */
 uint32_t rsf_core_vkfg_ensure_image(const rsf_vkfg_platform*, void*, rsf_vkfg_image*,

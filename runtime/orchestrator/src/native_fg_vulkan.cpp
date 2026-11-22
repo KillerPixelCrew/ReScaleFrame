@@ -10,7 +10,7 @@
 #include <ffx_api/ffx_framegeneration.h>
 #include <ffx_api/vk/ffx_api_vk.h>
 #include "vulkan_fg_copy.h"
-#include "vulkan_fg_resources_native.h"
+#include "vulkan_fg_resources.h"
 #include "vulkan_fg_wsi.h"
 #include "../../backends/common/frame_capture_vk.h"
 #include <memory>
@@ -40,7 +40,8 @@ struct rsf_ffxgvk_native {
     PFN_vkCreateSwapchainKHR native_create = nullptr;
     PFN_vkDestroySwapchainKHR native_destroy = nullptr;
     ffxQueryDescSwapchainReplacementFunctionsVK functions{};
-    rsf::vkfg::Device gpu;
+    std::unique_ptr<rsf_vkfg_device, decltype(&rsf_core_vkfg_device_destroy)> gpu{
+        nullptr, rsf_core_vkfg_device_destroy};
     PFN_vkCmdPipelineBarrier barrier = nullptr; PFN_vkCmdCopyImage copy = nullptr;
     PFN_vkDeviceWaitIdle idle = nullptr;
     VkPhysicalDeviceMemoryProperties memory_properties{};
@@ -203,8 +204,10 @@ int32_t read_memory(rsf_ffxgvk_native* self, rsf_vk_function query) noexcept try
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
 int32_t load_resources(rsf_ffxgvk_native* self) noexcept try {
-    if (!self->gpu.load(self->setup, false)) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
-    self->gpu.memory_types(self->memory_properties);
+    auto* device_resources = rsf_core_vkfg_load_device(&self->setup.graphics, &self->setup, false);
+    if (!device_resources) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
+    self->gpu.reset(device_resources);
+    rsf_core_vkfg_device_memory(self->gpu.get(), &self->memory_properties);
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
@@ -383,9 +386,9 @@ constexpr rsf_ffxgvk_ops operations{
     },
     capture_flush,
     [](rsf_ffxgvk_native* self, uint64_t frame) {
-        self->gpu.wait_timing(frame ? "ffx_slot_fence_wait" : nullptr, frame);
+        rsf_core_vkfg_device_wait_timing(self->gpu.get(), frame ? "ffx_slot_fence_wait" : nullptr, frame);
     },
-    rsf_core_vk_timing_begin, rsf_core_vk_timing_end, &rsf::vkfg::platform,
+    rsf_core_vk_timing_begin, rsf_core_vk_timing_end, &rsf_core_vkfg_platform,
 };
 }
 

@@ -757,6 +757,9 @@ unsafe extern "C" {
     pub fn rsf_fixture_wsi_route_state() -> *mut rsf_wsi_route_fixture_state;
 }
 unsafe extern "C" {
+    pub fn rsf_fixture_ffx_refused_second_owner() -> i32;
+}
+unsafe extern "C" {
     pub fn rsf_fixture_wsi_lookup(
         arg1: *mut ::core::ffi::c_void,
         arg2: *const ::core::ffi::c_char,
@@ -782,14 +785,6 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     pub fn rsf_fixture_ffx_platform() -> *const rsf_vkfg_platform;
-}
-unsafe extern "C" {
-    pub fn rsf_fixture_ffx_present(
-        arg1: *mut rsf_ffxgvk,
-        arg2: u64,
-        arg3: *const rsf_frame_record,
-        explicit_source: bool,
-    ) -> i32;
 }
 unsafe extern "C" {
     pub fn rsf_fixture_wsi_create(arg1: u64, arg2: *mut u64) -> i32;
