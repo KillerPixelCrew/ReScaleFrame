@@ -1450,7 +1450,7 @@ Port Vulkan-to-D3D12 graphics and queue handoff shared by the FSR4 and XeSS FG c
 **Fixtures (2)**
 
 - [x] [tests/native_dx12_vulkan_interop.cpp](tests/native_dx12_vulkan_interop.cpp)
-- [ ] [tests/vulkan_interop_fixture.h](tests/vulkan_interop_fixture.h)
+- [x] [tests/vulkan_interop_fixture.h](tests/vulkan_interop_fixture.h)
 
 **Rust review findings (5)**
 
@@ -1578,9 +1578,9 @@ Port the FSR3 and FSR4 bridge owners, private ABI and SDK patch payloads alongsi
 
 - [x] [tests/native_fsr4_fg_bridge.cpp](tests/native_fsr4_fg_bridge.cpp)
 - [x] [tests/native_fsr4_fg_contract.cpp](tests/native_fsr4_fg_contract.cpp)
-- [ ] [tests/native_fsr4_fg_state.cpp](tests/native_fsr4_fg_state.cpp)
+- [x] [tests/native_fsr4_fg_state.cpp](tests/native_fsr4_fg_state.cpp)
 - [x] [tests/native_sr_fsr4_state.cpp](tests/native_sr_fsr4_state.cpp)
-- [ ] [tests/native_sr_fsr4_vulkan.cpp](tests/native_sr_fsr4_vulkan.cpp)
+- [x] [tests/native_sr_fsr4_vulkan.cpp](tests/native_sr_fsr4_vulkan.cpp)
 
 **Rust review findings (13)**
 
