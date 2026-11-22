@@ -69,3 +69,26 @@ helpers, SDK-disable exports and native ABI class header to the base. The Rust
 provider profile mapping replaces the former C++ presence assertion by deriving
 eligibility from the same selection used at the native boundary. The six native
 profile records and their SDK payload checks retain their original definitions.
+
+## Native receipt forwarding on `3066e6ad`
+
+| Open PORT path | Source disposition |
+| --- | --- |
+| `dlss_generation.cpp` | Partial. Rust formats the two feature support codes and the accepted Reflex options receipt. The native leaf keeps typed SDK queries, result mapping, COM and Streamline class ownership, and the driver status query following accepted options. |
+| `mfg_unlock.cpp` | Partial. Rust reads the retained provider's path, checks eligibility, and formats wrapper and provider receipts after publishing status and releasing the update lock. The native leaf lends the original signature and adapter checks, applies the exact wrapper write, and returns the temporal result, gate result and failure code. Ineligible providers supply their native failure code without a patch call. Path diagnostics now use UTF-8 with the existing 511-byte payload limit. |
+| `mfg_unlock.h` | Retained. The noncopyable C++ lease continues to pair the opaque Rust owner with the native Streamline host lifetime. |
+| `reflex_audit.cpp` | Partial. The Rust audit resolves the four existing NVAPI interface IDs in their original order from the already loaded driver, alongside the existing sleep status query. Native code associates those addresses with the typed detours, captures real caller addresses, invokes the original trampolines exactly once, and supplies the existing MinHook operations and module pin. |
+| `reflex_audit.h` | Retained. It declares the optional native audit and its driver report path, including their SDK-disabled definitions. |
+| `streamline_diagnostics.h` | Retained. D3D12 generation and MFG receipts use its native C++ exception guard to invoke caller log functions from Rust. Legacy D3D11 Streamline also uses the header. |
+| `midpoint_fix.cpp` | Retained. Its native payload decompression, SHA-256 and descriptor checks, SDK adapter and module validation, and publication form one checked operation. Rust still supplies the same 16 version receipts and six immutable profile selections. |
+| `midpoint_fix.h` | Retained. It declares the native adapter check, mutation and result interface. |
+| `ngx_mfg_gate.h` | Retained. The candidate scan, expected bytes, adapter/provider admission and publication ledger are unchanged. |
+| `protected_pointer.h` | Retained. The exact CAS, page-protection verification and retry, flush, rollback and indeterminate-publication checks are unchanged. |
+
+The modified native calls stay in D06. No V04 source, shared module declarations,
+or binding generators changed. MSVC `/Zs /W4 /WX` checked the three modified native
+translation units with Streamline and NVAPI both enabled and both disabled.
+It also checked the native midpoint translation unit. Source comparison covered
+the pinned provider mapping, wrapper publication body, native detour bodies,
+and C++ disable gates. Pinned formatting, targeted binding regeneration and
+locked offline metadata passed. Build, device and runtime checks remain pending.

@@ -6,7 +6,6 @@ use std::ffi::{CStr, CString, c_char, c_void};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use windows::core::w;
 use windows_sys::Win32::{
-    Foundation::FARPROC,
     System::{
         LibraryLoader::{GetModuleHandleW, GetProcAddress},
         Threading::{GetCurrentProcessId, GetCurrentThreadId},
@@ -27,13 +26,13 @@ const HOOKS: usize = 4;
 
 // Borrow the module already owned by Streamline. The audit pins installed hook
 // targets and never obtains a second driver loader reference.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_reflex_audit_query() -> FARPROC {
+fn query_interface() -> Option<Query> {
     let module = unsafe { GetModuleHandleW(w!("nvapi64.dll").as_ptr()) };
     if module.is_null() {
         return None;
     }
-    unsafe { GetProcAddress(module, c"nvapi_QueryInterface".as_ptr().cast()) }
+    let address = unsafe { GetProcAddress(module, c"nvapi_QueryInterface".as_ptr().cast()) }?;
+    Some(unsafe { std::mem::transmute::<_, Query>(address) })
 }
 
 #[repr(C)]
@@ -46,7 +45,7 @@ struct Hook {
 
 #[repr(C)]
 struct Platform {
-    discover: unsafe extern "C" fn(*mut Hook) -> u32,
+    describe: unsafe extern "C" fn(&[*mut c_void; HOOKS], &mut [Hook; HOOKS]),
     initialize: unsafe extern "C" fn() -> u32,
     create: unsafe extern "C" fn(&Hook) -> u32,
     pin: unsafe extern "C" fn(*mut c_void) -> u32,
@@ -70,10 +69,13 @@ enum Install {
 }
 
 fn install(platform: &Platform) -> Install {
-    let mut hooks = [Hook::default(); HOOKS];
-    if unsafe { (platform.discover)(hooks.as_mut_ptr()) } == 0 {
+    let Some(query) = query_interface() else {
         return Install::Missing;
-    }
+    };
+    let targets =
+        [0xac1c_a9e0, 0xd998_4c05, 0xb9f6_faff, 0x13c9_8f73].map(|id| unsafe { query(id) });
+    let mut hooks = [Hook::default(); HOOKS];
+    unsafe { (platform.describe)(&targets, &mut hooks) };
     if unsafe { (platform.initialize)() } == 0 {
         return Install::Retry;
     }
@@ -441,10 +443,8 @@ unsafe extern "C" fn rsf_core_reflex_driver_sleep(
         version: version::<NV_GET_SLEEP_STATUS_PARAMS>(),
         ..Default::default()
     };
-    let address = unsafe { rsf_core_reflex_audit_query() }.map_or(std::ptr::null_mut(), |entry| {
-        let query = unsafe { std::mem::transmute::<_, Query>(entry) };
-        unsafe { query(0xaef9_6ca1) }
-    });
+    let address =
+        query_interface().map_or(std::ptr::null_mut(), |query| unsafe { query(0xaef9_6ca1) });
     let result = if address.is_null() {
         -3 // NVAPI_NO_IMPLEMENTATION
     } else {

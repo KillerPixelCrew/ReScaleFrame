@@ -12,7 +12,6 @@
 #include <dxgi1_6.h>
 #include <cmath>
 #include <cstddef>
-#include <cstdio>
 #include <cstring>
 #include <new>
 #if RSF_HAVE_STREAMLINE
@@ -150,6 +149,9 @@ void rsf_slhost_pack_options(uint32_t, uint32_t, uint32_t, float, rsf_slvk_sdk_f
 void rsf_slhost_pack_reflex(uint32_t, uint32_t, rsf_slvk_sdk_reflex_options*);
 void rsf_slhost_pack_pcl(rsf_slvk_sdk_pcl_options*);
 void rsf_slhost_format_version(const rsf_slhost_version*, rsf_fg_status*);
+void rsf_slhost_report_support(uint32_t, uint32_t, rsf_backend_log_fn, void*, RsfStreamlineEmitLog);
+void rsf_slhost_report_reflex_options(uint32_t, uint32_t, uint32_t,
+    rsf_backend_log_fn, void*, RsfStreamlineEmitLog);
 void rsf_slhost_pack_fg_camera(const rsf_fg_frame*, uint32_t, rsf_slvk_sdk_constants*);
 uint32_t rsf_slhost_plan_tags(const rsf_fg_frame*, rsf_slhost_tag*);
 void rsf_slhost_reflex_summary(const rsf_slhost_reflex_sample*, const uint64_t*, uint32_t,
@@ -550,10 +552,8 @@ int32_t reflex_options(void* native, uint32_t mode, uint32_t limit) noexcept
     std::memcpy(static_cast<void*>(&options), &packed, sizeof(options));
     if (!host.reflex_options || host.reflex_options(options) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
     if (host.log) {
-        char text[160]; std::snprintf(text, sizeof(text),
-            "Reflex options applied: mode=%u frameLimitUs=%u markerOptimization=%u",
-            mode, limit, uint32_t(options.useMarkersToOptimize));
-        host.log(host.log_user, text);
+        rsf_slhost_report_reflex_options(mode, limit, uint32_t(options.useMarkersToOptimize),
+            host.log, host.log_user, rsf::emit_streamline_log);
         report_driver_sleep(host);
     }
     return RSF_BACKEND_OK;
@@ -619,10 +619,7 @@ int32_t support(void* native, rsf_backend_log_fn log, void* user) noexcept
     const auto fg_support = host.supported(sl::kFeatureDLSS_G, info);
     const auto reflex_support = host.supported(sl::kFeatureReflex, info);
     if (fg_support == sl::Result::eOk && reflex_support == sl::Result::eOk) return RSF_BACKEND_OK;
-    if (log) {
-        char text[160]{}; std::snprintf(text, sizeof(text), "DLSS-G support=%u Reflex support=%u", unsigned(fg_support), unsigned(reflex_support));
-        log(user, text);
-    }
+    rsf_slhost_report_support(uint32_t(fg_support), uint32_t(reflex_support), log, user, rsf::emit_streamline_log);
     return RSF_BACKEND_ERROR_NOT_SUPPORTED;
 }
 

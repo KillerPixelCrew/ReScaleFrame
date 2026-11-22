@@ -54,6 +54,43 @@ fn emit_line(log: Log, user: *mut c_void, emit: Emit, text: String) {
 }
 
 #[unsafe(no_mangle)]
+extern "C" fn rsf_slhost_report_support(
+    fg: u32,
+    reflex: u32,
+    log: Log,
+    user: *mut c_void,
+    emit: Emit,
+) {
+    if log.is_some() {
+        emit_line(
+            log,
+            user,
+            emit,
+            format!("DLSS-G support={fg} Reflex support={reflex}"),
+        );
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_slhost_report_reflex_options(
+    mode: u32,
+    limit: u32,
+    marker_optimization: u32,
+    log: Log,
+    user: *mut c_void,
+    emit: Emit,
+) {
+    emit_line(
+        log,
+        user,
+        emit,
+        format!(
+            "Reflex options applied: mode={mode} frameLimitUs={limit} markerOptimization={marker_optimization}"
+        ),
+    );
+}
+
+#[unsafe(no_mangle)]
 extern "C" fn rsf_slhost_reflex_summary(
     samples: &[rsf_slhost_reflex_sample; REFLEX_SAMPLES],
     inputs: &[u64; 4],

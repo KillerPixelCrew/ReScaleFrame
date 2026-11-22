@@ -38,7 +38,7 @@ struct rsf_reflex_audit_hook {
     void** original;
 };
 struct rsf_reflex_audit_platform {
-    uint32_t (*discover)(rsf_reflex_audit_hook*);
+    void (*describe)(void* const*, rsf_reflex_audit_hook*);
     uint32_t (*initialize)();
     uint32_t (*create)(const rsf_reflex_audit_hook*);
     uint32_t (*pin)(void*);
@@ -50,7 +50,6 @@ static_assert(sizeof(rsf_reflex_audit_hook) == 3 * sizeof(void*));
 static_assert(sizeof(rsf_reflex_audit_platform) == 7 * sizeof(void*));
 
 extern "C" {
-FARPROC rsf_core_reflex_audit_query();
 void rsf_core_reflex_audit_start(rsf_backend_log_fn, void*, const rsf_reflex_audit_platform*, RsfStreamlineEmitLog);
 void rsf_core_reflex_audit_stop();
 void rsf_core_reflex_nvapi_observe(uint32_t, uintptr_t, void*, const void*, int32_t, RsfStreamlineEmitLog);
@@ -95,20 +94,16 @@ NvAPI_Status __cdecl observe_async(ID3D12CommandQueue* queue, NV_ASYNC_FRAME_MAR
     return result;
 }
 
-uint32_t discover(rsf_reflex_audit_hook* hooks)
+void describe(void* const* targets, rsf_reflex_audit_hook* hooks)
 {
-    using Query = void*(__cdecl*)(unsigned int);
-    const auto query = reinterpret_cast<Query>(rsf_core_reflex_audit_query());
-    if (!query) return 0;
-    hooks[0] = {query(0xac1ca9e0u), reinterpret_cast<void*>(&observe_mode), reinterpret_cast<void**>(&original_mode)};
-    hooks[1] = {query(0xd9984c05u), reinterpret_cast<void*>(&observe_marker), reinterpret_cast<void**>(&original_marker)};
-    hooks[2] = {query(0xb9f6faffu), reinterpret_cast<void*>(&observe_sync), reinterpret_cast<void**>(&original_sync)};
-    hooks[3] = {query(0x13c98f73u), reinterpret_cast<void*>(&observe_async), reinterpret_cast<void**>(&original_async)};
-    return 1;
+    hooks[0] = {targets[0], reinterpret_cast<void*>(&observe_mode), reinterpret_cast<void**>(&original_mode)};
+    hooks[1] = {targets[1], reinterpret_cast<void*>(&observe_marker), reinterpret_cast<void**>(&original_marker)};
+    hooks[2] = {targets[2], reinterpret_cast<void*>(&observe_sync), reinterpret_cast<void**>(&original_sync)};
+    hooks[3] = {targets[3], reinterpret_cast<void*>(&observe_async), reinterpret_cast<void**>(&original_async)};
 }
 
 constexpr rsf_reflex_audit_platform platform{
-    discover,
+    describe,
     []() -> uint32_t {
         const auto result = MH_Initialize();
         return result == MH_OK || result == MH_ERROR_ALREADY_INITIALIZED;

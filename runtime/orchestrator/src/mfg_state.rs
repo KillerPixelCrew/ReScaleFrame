@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
+use crate::render_abi::rsf_backend_log_fn as Log;
 use crate::sdk_module::SdkModule;
-use std::ffi::{c_char, c_void};
+use std::ffi::{CString, c_char, c_void};
 use std::ptr::null_mut;
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 use windows_sys::Win32::{
@@ -30,6 +31,7 @@ use windows_sys::Win32::{
 mod provider;
 
 type Handle = *mut c_void;
+type Emit = unsafe extern "C" fn(Log, Handle, *const c_char);
 
 const NOT_APPLICABLE: u32 = 0;
 const READY: u32 = 1;
@@ -43,10 +45,20 @@ struct Platform {
     supported: unsafe extern "C" fn(Handle) -> u32,
     verify_signature: unsafe extern "C" fn(*const u16) -> u32,
     publish_wrapper: unsafe extern "C" fn(Handle) -> u32,
-    prepare_provider: unsafe extern "C" fn(Handle, u32, &mut [c_char; REPORT_BYTES]) -> u32,
+    prepare_provider: unsafe extern "C" fn(Handle, *const u16, &mut ProviderReceipt),
 }
 
 const _: () = assert!(size_of::<Platform>() == 4 * size_of::<Handle>());
+
+#[repr(C)]
+#[derive(Default)]
+struct ProviderReceipt {
+    temporal: u32,
+    gate: u32,
+    failure: u32,
+}
+
+const _: () = assert!(size_of::<ProviderReceipt>() == 12);
 
 struct ModuleImage {
     base: *mut u8,
@@ -268,8 +280,7 @@ extern "C" fn rsf_core_mfg_create() -> *mut Owner {
     crate::allocate_handle(Owner(Mutex::new(State::new())))
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_mfg_prime(
+unsafe fn prime(
     owner: &Owner,
     platform: &Platform,
     device: Handle,
@@ -313,8 +324,30 @@ unsafe extern "C" fn rsf_core_mfg_prime(
     let mut state = owner.state();
     state.maximum = maximum;
     state.wrapper = Some(wrapper);
-    // Zero means no report. Any loaded wrapper logs its effective capacity.
-    state.maximum
+    maximum
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_mfg_prime(
+    owner: &Owner,
+    platform: &Platform,
+    device: Handle,
+    directory: *const u16,
+    require_signature: u32,
+    log: Log,
+    user: Handle,
+    emit: Emit,
+) {
+    let maximum = unsafe { prime(owner, platform, device, directory, require_signature) };
+    if maximum != 0 && log.is_some() {
+        let prepared = u32::from(maximum > 1);
+        let text = CString::new(format!(
+            "RTX 40 MFG wrapper prepared={prepared} capacity={maximum} before plugin initialization"
+        ));
+        if let Ok(text) = text {
+            unsafe { emit(log, user, text.as_ptr()) };
+        }
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -323,40 +356,75 @@ unsafe extern "C" fn rsf_core_mfg_prepare(
     platform: &Platform,
     device: Handle,
     get_state: Handle,
-    report: &mut [c_char; REPORT_BYTES],
-) -> u32 {
-    let Some(_update) = try_update() else {
-        return 0;
+    log: Log,
+    user: Handle,
+    emit: Emit,
+) {
+    let Some(update) = try_update() else {
+        return;
     };
     let (wrapper, maximum) = {
         let state = owner.state();
         if state.maximum <= 1 || device.is_null() || get_state.is_null() {
-            return 0;
+            return;
         }
         let Some(wrapper) = state.wrapper.as_ref() else {
-            return 0;
+            return;
         };
         // The update guard prevents releasing the module during the call.
         (wrapper.as_ptr(), state.maximum)
     };
-    let prepared = retain_module(get_state).is_some_and(|module| {
+    let mut path = [0u16; 32768];
+    let receipt = retain_module(get_state).and_then(|module| {
         if module.as_ptr() != wrapper {
-            return false;
+            return None;
         }
-        find_provider().is_some_and(|provider| {
-            (unsafe { (platform.prepare_provider)(provider.as_ptr(), maximum, report) }) != 0
-        })
+        let provider = find_provider()?;
+        let length = provider::module_path(provider.as_ptr(), &mut path).unwrap_or(0);
+        let mut receipt = ProviderReceipt::default();
+        let eligible = length != 0
+            && unsafe {
+                provider::rsf_mfg_supported_provider(provider.as_ptr(), path.as_ptr()) != 0
+            };
+        // A null path requests only the native failure receipt.
+        let path_ptr = if eligible {
+            path.as_ptr()
+        } else {
+            std::ptr::null()
+        };
+        unsafe { (platform.prepare_provider)(provider.as_ptr(), path_ptr, &mut receipt) };
+        Some((length, receipt))
     });
-    if report[0] == 0 {
-        for (dst, &byte) in report.iter_mut().zip(
-            c"RTX 40 MFG unlock refused: wrapper or provider ownership mismatch"
-                .to_bytes_with_nul(),
-        ) {
-            *dst = byte as c_char;
-        }
-    }
+    let prepared = receipt
+        .as_ref()
+        .is_some_and(|(_, receipt)| receipt.gate != 0);
     owner.state().status = if prepared { READY } else { REFUSED };
-    1
+    drop(update);
+    if log.is_none() {
+        return;
+    }
+    if let Some((
+        length,
+        ProviderReceipt {
+            temporal,
+            gate,
+            failure,
+        },
+    )) = receipt
+    {
+        let status = if prepared { "ready" } else { "refused" };
+        let path = String::from_utf16_lossy(&path[..length]);
+        let mut text = format!(
+            "RTX 40 MFG unlock {status}: wrapper_capacity={maximum} temporal={temporal} gate={gate} failure={failure} provider={path}"
+        );
+        text.truncate(text.floor_char_boundary(REPORT_BYTES - 1));
+        if let Ok(text) = CString::new(text) {
+            unsafe { emit(log, user, text.as_ptr()) };
+        }
+    } else {
+        let text = c"RTX 40 MFG unlock refused: wrapper or provider ownership mismatch";
+        unsafe { emit(log, user, text.as_ptr()) };
+    }
 }
 
 #[unsafe(no_mangle)]

@@ -109,7 +109,10 @@ unsafe extern "C" fn rsf_mfg_provider_profile(path: *const u16) -> u32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_mfg_supported_provider(module: Handle, path: *const u16) -> u32 {
+pub(super) unsafe extern "C" fn rsf_mfg_supported_provider(
+    module: Handle,
+    path: *const u16,
+) -> u32 {
     u32::from(
         implementation(module)
             && unsafe { rsf_mfg_provider_profile(path) } != Profile::Unsupported as u32,
@@ -129,10 +132,7 @@ fn retain_supported_provider(module: Handle) -> bool {
         return false;
     }
     let mut path = [0u16; 32768];
-    let length =
-        unsafe { GetModuleFileNameW(module, path.as_mut_ptr(), path.len() as u32) } as usize;
-    if length == 0
-        || length >= path.len()
+    if module_path(module, &mut path).is_none()
         || unsafe { rsf_mfg_supported_provider(module, path.as_ptr()) } == 0
     {
         return false;
@@ -150,6 +150,13 @@ fn retain_supported_provider(module: Handle) -> bool {
     // A racing owner or a full table leaves our temporary reference local.
     // The native patch caller retains the provider for the current operation.
     true
+}
+
+// The caller holds a loader reference while reading and lending this path.
+pub(super) fn module_path(module: Handle, path: &mut [u16; 32768]) -> Option<usize> {
+    let length =
+        unsafe { GetModuleFileNameW(module, path.as_mut_ptr(), path.len() as u32) } as usize;
+    (length != 0 && length < path.len()).then_some(length)
 }
 
 #[unsafe(no_mangle)]
