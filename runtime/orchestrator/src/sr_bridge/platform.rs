@@ -7,13 +7,13 @@ pub(super) use crate::d3d11_d3d12::{
     create_event, create_output, fence_d3d11, fence_d3d12, flush, queue_signal, queue_wait,
     reset_commands, surface_d3d11, surface_d3d12, surface_destroy, transition,
 };
-pub(super) use crate::sr_session::rsf_core_validate_sr_frame as validate_frame;
 use crate::d3d12_fence::rsf_core_d3d12_wait_fence;
 use crate::fg_leases::rsf_d3d12_fence_completed;
 use crate::shared_surface::{
     ABI_VERSION, SurfaceSetup, rsf_shared_fence_create, rsf_shared_fence_destroy,
     rsf_shared_surface_create,
 };
+pub(super) use crate::sr_session::rsf_core_validate_sr_frame as validate_frame;
 // The Rust definitions, not the declarations sr_session.h also provides through crate::sys.
 use crate::sr_session::{
     rsf_sr_session_create, rsf_sr_session_destroy, rsf_sr_session_evaluate,
@@ -63,7 +63,10 @@ unsafe extern "C" {
     ) -> i32;
 }
 
-pub(super) unsafe extern "C" fn session_create(setup: *const rsf_sr_session_setup, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn session_create(
+    setup: *const rsf_sr_session_setup,
+    out: *mut Handle,
+) -> i32 {
     unsafe { rsf_sr_session_create(setup, out.cast()) }
 }
 pub(super) unsafe extern "C" fn session_select(
@@ -143,7 +146,11 @@ pub(super) unsafe extern "C" fn create_fence(device: Handle) -> Handle {
     unsafe { borrow::<ID3D12Device>(&device).CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) }
         .map_or(null_mut(), Interface::into_raw)
 }
-pub(super) unsafe extern "C" fn describe(texture: Handle, device: Handle, out: *mut TextureDesc) -> i32 {
+pub(super) unsafe extern "C" fn describe(
+    texture: Handle,
+    device: Handle,
+    out: *mut TextureDesc,
+) -> i32 {
     let texture = unsafe { borrow::<ID3D11Texture2D>(&texture) };
     let Ok(owner) = (unsafe { texture.GetDevice() }) else {
         return 0;
@@ -168,7 +175,12 @@ pub(super) unsafe extern "C" fn same_context(context: Handle, context4: Handle) 
     let found = unsafe { borrow::<ID3D11DeviceContext>(&context) }.cast::<ID3D11DeviceContext4>();
     i32::from(found.is_ok_and(|found| found.as_raw() == context4))
 }
-pub(super) unsafe extern "C" fn wait_fence(fence: Handle, value: u64, event: Handle, timeout_ms: u32) -> i32 {
+pub(super) unsafe extern "C" fn wait_fence(
+    fence: Handle,
+    value: u64,
+    event: Handle,
+    timeout_ms: u32,
+) -> i32 {
     i32::from(
         unsafe {
             rsf_core_d3d12_wait_fence(

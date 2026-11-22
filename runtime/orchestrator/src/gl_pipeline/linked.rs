@@ -9,9 +9,9 @@ use crate::{d3d11_present as present, fg12, gl_shared_surface as gl, sr12};
 pub(super) use super::dxgi::{
     chain_create, rsf_core_gl_adapter_identity as adapter_identity,
     rsf_core_gl_chain_associate as chain_associate,
-    rsf_core_gl_chain_back_buffer as chain_back_buffer,
-    rsf_core_gl_chain_present as chain_present, rsf_core_gl_chain_resize as chain_resize,
-    rsf_core_gl_copy_resource as copy_resource, rsf_core_gl_transition as transition,
+    rsf_core_gl_chain_back_buffer as chain_back_buffer, rsf_core_gl_chain_present as chain_present,
+    rsf_core_gl_chain_resize as chain_resize, rsf_core_gl_copy_resource as copy_resource,
+    rsf_core_gl_transition as transition,
 };
 pub(super) use super::window::{
     rsf_core_gl_window_child_of as window_child_of, rsf_core_gl_window_resize as window_resize,
@@ -24,12 +24,12 @@ pub(super) use crate::d3d11_present::{
     rsf_core_d3d11p_host as present_host, rsf_core_d3d11p_request as present_request,
     rsf_core_d3d11p_switch_result as present_switch_result,
 };
+pub(super) use crate::fg_choice::rsf_fg_default_backend as fg_default_backend;
 pub(super) use crate::fg12::{
     rsf_core_fg12_cpu as fg_cpu, rsf_core_fg12_hudless as fg_hudless,
     rsf_core_fg12_options as fg_options, rsf_core_fg12_status as fg_status,
     rsf_core_fg12_submitted as fg_submitted, rsf_core_fg12_window as fg_window,
 };
-pub(super) use crate::fg_choice::rsf_fg_default_backend as fg_default_backend;
 pub(super) use crate::native_cpu::rsf_native_cpu_read as cpu_read;
 pub(super) use crate::overlay_service::{
     rsf_overlay_configure_bound as overlay_configure, rsf_overlay_notify_bound as overlay_notify,
@@ -98,7 +98,11 @@ pub(super) unsafe extern "C" fn pcl_message() -> u32 {
     }
 }
 
-pub(super) unsafe extern "C" fn gl_graphics(ctx: Handle, device: *mut Handle, queue: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn gl_graphics(
+    ctx: Handle,
+    device: *mut Handle,
+    queue: *mut Handle,
+) -> i32 {
     unsafe { gl::rsf_gl_graphics(ctx.cast(), device, queue) }
 }
 
@@ -112,7 +116,10 @@ pub(super) unsafe extern "C" fn gl_texture_create(
     unsafe { gl::rsf_gl_texture_create(ctx.cast(), width, height, format, out.cast()) }
 }
 
-pub(super) unsafe extern "C" fn gl_texture_get(texture: Handle, out: *mut rsf_gl_texture_info) -> i32 {
+pub(super) unsafe extern "C" fn gl_texture_get(
+    texture: Handle,
+    out: *mut rsf_gl_texture_info,
+) -> i32 {
     unsafe { gl::rsf_gl_texture_get(texture.cast(), out) }
 }
 
@@ -150,7 +157,12 @@ pub(super) unsafe extern "C" fn sr_plan(owner: Handle, width: *mut u32, height: 
     unsafe { sr12::rsf_core_sr12_plan(owner.cast(), width, height) }
 }
 
-pub(super) unsafe extern "C" fn sr_evaluate(owner: Handle, list: Handle, pass: *const Pass, slot: u32) -> i32 {
+pub(super) unsafe extern "C" fn sr_evaluate(
+    owner: Handle,
+    list: Handle,
+    pass: *const Pass,
+    slot: u32,
+) -> i32 {
     unsafe { sr12::rsf_core_sr12_evaluate(owner.cast(), list, pass, slot) }
 }
 

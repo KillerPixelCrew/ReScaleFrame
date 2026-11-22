@@ -40,8 +40,11 @@ const _: () = {
 // The owner's leaves, by the names sr12.rs calls them; sr12/tests.rs fakes the same names.
 unsafe extern "C" {
     #[link_name = "rsf_dlss_native12_create"]
-    pub(super) fn dlss_create(device: Handle, setup: *const rsf_dlss_setup, out: *mut Handle)
-    -> i32;
+    pub(super) fn dlss_create(
+        device: Handle,
+        setup: *const rsf_dlss_setup,
+        out: *mut Handle,
+    ) -> i32;
     #[link_name = "rsf_dlss_native12_create_shared"]
     pub(super) fn dlss_create_shared(
         device: Handle,
@@ -93,8 +96,11 @@ unsafe extern "C" {
     #[link_name = "rsf_sr_session_get_status"]
     pub(super) fn session_get_status(session: Handle, status: *mut rsf_sr_session_status) -> i32;
     #[link_name = "rsf_sr_session_evaluate"]
-    pub(super) fn session_evaluate(session: Handle, list: Handle, frame: *const rsf_sr_frame)
-    -> i32;
+    pub(super) fn session_evaluate(
+        session: Handle,
+        list: Handle,
+        frame: *const rsf_sr_frame,
+    ) -> i32;
     #[link_name = "rsf_sr_session_destroy"]
     pub(super) fn session_destroy(session: Handle);
     #[link_name = "rsf_input_dump_begin_record"]

@@ -160,7 +160,9 @@ pub(super) unsafe extern "C" fn pixels(
 
 // The fakes frame_capture12.rs calls in place of native::ops.
 pub(super) mod ops {
-    pub(in crate::frame_capture12) use super::{allocate, completed, copy, drain, failed, map, pixels, reserve, signal, unmap, wants};
+    pub(in crate::frame_capture12) use super::{
+        allocate, completed, copy, drain, failed, map, pixels, reserve, signal, unmap, wants,
+    };
 }
 
 fn owner() -> Owner {

@@ -70,22 +70,21 @@ pub(super) mod native {
         cpu_dispatch as cpu_dispatch_fg, cpu_event, device_of as chain_device,
         device_of as child_device, dispatch as chain_dispatch, dump_begin, dump_complete,
         dump_configure, dump_inputs, dump_pass, dump_result, dump_texture, dump_wants,
-        end as creation_end, evaluate as sr_evaluate, facade as present_is_owner,
-        fg_latency_event, fg_options_set, fg_prepare, fg_rendered_source_set, fg_retire,
-        fg_set_log, final_fact as fg_final, ini_read, ini_write,
-        last_present as window_last_present, native_present as dlss_native_present,
-        none as chain_buffer, none as chain_present, none as com_identity, nothing as dump_poll,
-        nothing as dump_request, observe as observer_install, output as pipeline_output,
-        overlay_configure, overlay_present, pass_fact as fg_frame, pass_fact as fg_submission,
-        pass_result as scene_pass, pass_result as window_scope, poll_toggle as overlay_poll_toggle,
-        preset as pipeline_preset, present_path as scene_present_path,
+        end as creation_end, evaluate as sr_evaluate, facade as present_is_owner, fg_latency_event,
+        fg_options_set, fg_prepare, fg_rendered_source_set, fg_retire, fg_set_log,
+        final_fact as fg_final, ini_read, ini_write, last_present as window_last_present,
+        native_present as dlss_native_present, none as chain_buffer, none as chain_present,
+        none as com_identity, nothing as dump_poll, nothing as dump_request,
+        observe as observer_install, output as pipeline_output, overlay_configure, overlay_present,
+        pass_fact as fg_frame, pass_fact as fg_submission, pass_result as scene_pass,
+        pass_result as window_scope, poll_toggle as overlay_poll_toggle,
+        present_path as scene_present_path, preset as pipeline_preset,
         refuse_bridge as present_install, refuse_bridge as present_install_scoped,
-        refuse_bridge as present_prepare, release_count as com_release,
-        resize as pipeline_resize, same as same_object, select as pipeline_quality,
-        select as pipeline_select, sharpen as pipeline_sharpen, start as pipeline_start,
-        status as pipeline_status, vendor as device_vendor, window as chain_window, window_match,
-        window_present, wrap as wrap_native, yes as device_ok, yes as is_immediate,
-        zero as dump_requested,
+        refuse_bridge as present_prepare, release_count as com_release, resize as pipeline_resize,
+        same as same_object, select as pipeline_quality, select as pipeline_select,
+        sharpen as pipeline_sharpen, start as pipeline_start, status as pipeline_status,
+        vendor as device_vendor, window as chain_window, window_match, window_present,
+        wrap as wrap_native, yes as device_ok, yes as is_immediate, zero as dump_requested,
     };
 }
 
@@ -285,7 +284,12 @@ pub(super) unsafe extern "C" fn ini_read(
 ) -> u32 {
     fallback
 }
-pub(super) unsafe extern "C" fn ini_write(_: *const u16, _: *const u16, _: *const c_char, _: u32) -> i32 {
+pub(super) unsafe extern "C" fn ini_write(
+    _: *const u16,
+    _: *const u16,
+    _: *const c_char,
+    _: u32,
+) -> i32 {
     OK
 }
 #[derive(Default)]

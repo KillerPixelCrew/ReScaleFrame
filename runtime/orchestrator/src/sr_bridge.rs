@@ -216,7 +216,8 @@ impl Bridge {
         let context = context.ok_or(NOT_SUPPORTED)?;
         let device12 = owned_com(unsafe { native::create_device12(com(&device11)) });
         let device12 = device12.ok_or(NOT_SUPPORTED)?;
-        let queue = owned_com(unsafe { native::create_queue(com(&device12)) }).ok_or(INIT_FAILED)?;
+        let queue =
+            owned_com(unsafe { native::create_queue(com(&device12)) }).ok_or(INIT_FAILED)?;
         let fence = unsafe { native::fence_create(com(&device11), com(&device12), log, log_user) };
         let fence = Owned::new(fence, native::fence_destroy).ok_or(INIT_FAILED)?;
         let fence = SharedFence {
@@ -224,7 +225,8 @@ impl Bridge {
             d3d12: unsafe { native::fence_d3d12(fence.get()) },
             _owner: fence,
         };
-        let event = Owned::new(unsafe { native::create_event() }, native::close_event).ok_or(INIT_FAILED)?;
+        let event = Owned::new(unsafe { native::create_event() }, native::close_event)
+            .ok_or(INIT_FAILED)?;
         let mut commands = Vec::with_capacity(COMMAND_SLOTS);
         for _ in 0..COMMAND_SLOTS {
             commands.push(create_commands(&device12).ok_or(INIT_FAILED)?);
@@ -273,7 +275,9 @@ impl Bridge {
     }
 
     fn wait_value(&self, value: u64) -> bool {
-        unsafe { native::wait_fence(self.fence.d3d12, value, self.event.get(), FENCE_TIMEOUT_MS) != 0 }
+        unsafe {
+            native::wait_fence(self.fence.d3d12, value, self.event.get(), FENCE_TIMEOUT_MS) != 0
+        }
     }
 
     fn arm_signal(&mut self, source: SignalSource) -> bool {
@@ -570,13 +574,17 @@ impl Bridge {
         for (index, input) in inputs[..=EXPOSURE].iter().enumerate() {
             if !input.resource.is_null() {
                 let (width, height) = extent(index, record);
-                unsafe { native::copy_region(context, shared11[index], input.resource, width, height) };
+                unsafe {
+                    native::copy_region(context, shared11[index], input.resource, width, height)
+                };
             }
         }
         for (index, &mask) in masks.iter().enumerate() {
             if !mask.is_null() {
                 let (width, height) = (record.render_width, record.render_height);
-                unsafe { native::copy_region(context, shared11[MASKS + index], mask, width, height) };
+                unsafe {
+                    native::copy_region(context, shared11[MASKS + index], mask, width, height)
+                };
             }
         }
         if !self.signal(SignalSource::Context) {
@@ -765,7 +773,8 @@ impl Bridge {
         if unsafe { native::submit(queue, list) } != 0 {
             let signaled = unsafe { native::queue_signal(queue, com(&fence), 1) } != 0;
             let completed = signaled
-                && unsafe { native::wait_fence(com(&fence), 1, event.get(), WARM_UP_TIMEOUT_MS) } != 0;
+                && unsafe { native::wait_fence(com(&fence), 1, event.get(), WARM_UP_TIMEOUT_MS) }
+                    != 0;
             if !completed && result == OK {
                 result = FEATURE_FAILED;
             }
@@ -916,9 +925,7 @@ pub(super) unsafe extern "C" fn rsf_sr_bridge_get_status(
     status: *mut rsf_sr_session_status,
 ) -> i32 {
     match unsafe { bridge.as_ref() } {
-        Some(bridge) => unsafe {
-            native::session_get_status(bridge.session.get(), status)
-        },
+        Some(bridge) => unsafe { native::session_get_status(bridge.session.get(), status) },
         None => INVALID_ARGUMENT,
     }
 }

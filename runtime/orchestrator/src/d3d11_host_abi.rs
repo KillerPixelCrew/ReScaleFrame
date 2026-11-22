@@ -3,6 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use rsf_game_sys::rsf_d3d11_auxiliary_surface;
+use rsf_game_sys::rsf_game_render_pass;
 pub(crate) use rsf_game_sys::*;
 pub(crate) use rsf_game_sys::{
     RSF_D3D11_CAPTURE_CONTROL_VERSION, RSF_D3D11_CAPTURE_FAILURES, RSF_D3D11_CAPTURE_SEQUENCE,
@@ -12,7 +13,6 @@ pub(crate) use rsf_game_sys::{
     rsf_d3d11_host_setup, rsf_d3d11_native_chain, rsf_d3d11_present_dispatch,
     rsf_d3d11_presentation_binding, rsf_d3d11_sampler_bias,
 };
-use rsf_game_sys::rsf_game_render_pass;
 use std::mem::{offset_of, size_of};
 
 pub(crate) use rsf_game_sys::{

@@ -149,7 +149,11 @@ pub(super) unsafe extern "C" fn gl_open(_: Log, _: Handle, out: *mut Handle) -> 
     unsafe { out.write(SHARING) };
     OK
 }
-pub(super) unsafe extern "C" fn gl_graphics(_: Handle, device: *mut Handle, queue: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn gl_graphics(
+    _: Handle,
+    device: *mut Handle,
+    queue: *mut Handle,
+) -> i32 {
     unsafe {
         device.write(DEVICE);
         queue.write(QUEUE);
@@ -179,7 +183,10 @@ pub(super) unsafe extern "C" fn gl_texture_create(
     unsafe { out.write(texture) };
     OK
 }
-pub(super) unsafe extern "C" fn gl_texture_get(texture: Handle, info: *mut rsf_gl_texture_info) -> i32 {
+pub(super) unsafe extern "C" fn gl_texture_get(
+    texture: Handle,
+    info: *mut rsf_gl_texture_info,
+) -> i32 {
     let info = unsafe { &mut *info };
     assert_eq!(info.struct_size as usize, size_of::<rsf_gl_texture_info>());
     let (width, height, format) = world(|world| world.texture_extents[&(texture as usize)]);
@@ -270,7 +277,13 @@ pub(super) unsafe extern "C" fn chain_create(
     OK
 }
 pub(super) unsafe extern "C" fn chain_associate(_: Handle, _: Handle) {}
-pub(super) unsafe extern "C" fn chain_resize(_: Handle, _: u32, width: u32, height: u32, _: u32) -> i32 {
+pub(super) unsafe extern "C" fn chain_resize(
+    _: Handle,
+    _: u32,
+    width: u32,
+    height: u32,
+    _: u32,
+) -> i32 {
     event(format!("chain {width}x{height}"));
     if world(|world| world.chain_resize_refused) {
         FEATURE_FAILED
@@ -285,7 +298,11 @@ pub(super) unsafe extern "C" fn chain_present(_: Handle, interval: u32) -> i32 {
     event(format!("present {interval}"));
     OK
 }
-pub(super) unsafe extern "C" fn adapter_identity(_: Handle, vendor: *mut u32, software: *mut u32) -> c_int {
+pub(super) unsafe extern "C" fn adapter_identity(
+    _: Handle,
+    vendor: *mut u32,
+    software: *mut u32,
+) -> c_int {
     unsafe {
         vendor.write(0x10de);
         software.write(0);
@@ -327,7 +344,12 @@ pub(super) unsafe extern "C" fn sr_plan(_: Handle, width: *mut u32, height: *mut
     }
     OK
 }
-pub(super) unsafe extern "C" fn sr_evaluate(sr: Handle, _: Handle, pass: *const Pass, slot: u32) -> i32 {
+pub(super) unsafe extern "C" fn sr_evaluate(
+    sr: Handle,
+    _: Handle,
+    pass: *const Pass,
+    slot: u32,
+) -> i32 {
     let pass = unsafe { &*pass };
     event(format!(
         "evaluate {} frame {} slot {slot} generation {}",
@@ -337,7 +359,10 @@ pub(super) unsafe extern "C" fn sr_evaluate(sr: Handle, _: Handle, pass: *const 
     ));
     OK
 }
-pub(super) unsafe extern "C" fn sr_set_sharpening(sr: Handle, options: *const rsf_sharpening_options) -> i32 {
+pub(super) unsafe extern "C" fn sr_set_sharpening(
+    sr: Handle,
+    options: *const rsf_sharpening_options,
+) -> i32 {
     assert!(sharpening_policy::valid(unsafe { &*options }));
     event(format!("sharpen {}", name(sr)));
     if world(|world| world.fail_sharpening) {
@@ -398,7 +423,11 @@ pub(super) unsafe extern "C" fn present_abort(_: u64) -> i32 {
 pub(super) unsafe extern "C" fn pcl_message() -> u32 {
     0
 }
-pub(super) unsafe extern "C" fn cpu_read(_: u64, frame: u64, out: *mut rsf_native_cpu_frame) -> c_int {
+pub(super) unsafe extern "C" fn cpu_read(
+    _: u64,
+    frame: u64,
+    out: *mut rsf_native_cpu_frame,
+) -> c_int {
     match world(|world| world.cpu_frames.get(&frame).copied()) {
         Some(ended) => {
             unsafe { (*out).ended = u32::from(ended) };
@@ -431,7 +460,9 @@ pub(super) unsafe extern "C" fn depth_domains_requested(pass: *const Pass) -> u3
     };
     u32::from(bytes.iter().any(|byte| *byte != 0))
 }
-pub(super) unsafe extern "C" fn overlay_configure(_: *const crate::sys::rsf_overlay_service_setup) -> i32 {
+pub(super) unsafe extern "C" fn overlay_configure(
+    _: *const crate::sys::rsf_overlay_service_setup,
+) -> i32 {
     NOT_READY
 }
 pub(super) unsafe extern "C" fn overlay_present(
@@ -451,7 +482,18 @@ pub(super) extern "C" fn overlay_notify(_: u32) -> i32 {
 
 // The fakes gl_pipeline.rs calls in place of gl_pipeline/linked.rs.
 pub(super) mod native {
-    pub(in crate::gl_pipeline) use super::{adapter_identity, chain_associate, chain_back_buffer, chain_create, chain_present, chain_resize, copy_resource, cpu_read, depth_domains_requested, dlss_preset_valid, dump_cancel, fg_cpu, fg_default_backend, fg_hudless, fg_install, fg_options, fg_status, fg_submitted, fg_window, gl_begin, gl_close, gl_drain, gl_graphics, gl_open, gl_submit, gl_texture_create, gl_texture_destroy, gl_texture_get, latency_completed, latency_end_session, overlay_configure, overlay_notify, overlay_present, pcl_message, present_abort, present_backend, present_backend_choices, present_host, present_is_owner, present_request, present_switch_result, sr_create, sr_destroy, sr_evaluate, sr_plan, sr_set_sharpening, transition, window_child_of, window_create, window_destroy, window_resize, window_show, window_valid};
+    pub(in crate::gl_pipeline) use super::{
+        adapter_identity, chain_associate, chain_back_buffer, chain_create, chain_present,
+        chain_resize, copy_resource, cpu_read, depth_domains_requested, dlss_preset_valid,
+        dump_cancel, fg_cpu, fg_default_backend, fg_hudless, fg_install, fg_options, fg_status,
+        fg_submitted, fg_window, gl_begin, gl_close, gl_drain, gl_graphics, gl_open, gl_submit,
+        gl_texture_create, gl_texture_destroy, gl_texture_get, latency_completed,
+        latency_end_session, overlay_configure, overlay_notify, overlay_present, pcl_message,
+        present_abort, present_backend, present_backend_choices, present_host, present_is_owner,
+        present_request, present_switch_result, sr_create, sr_destroy, sr_evaluate, sr_plan,
+        sr_set_sharpening, transition, window_child_of, window_create, window_destroy,
+        window_resize, window_show, window_valid,
+    };
 }
 
 unsafe extern "C" fn record_log(_: Handle, message: *const c_char) {
@@ -872,10 +914,7 @@ fn failed_chain_open_returns_a_cleanup_handle_if_retirement_refuses() {
         ["gl_close", "latency end", "dump cancel", "destroy window1"]
     );
     world(|world| world.chain_unowned = false);
-    assert_eq!(
-        unsafe { rsf_gl_pipeline_open(&setup(), &mut pipeline) },
-        OK
-    );
+    assert_eq!(unsafe { rsf_gl_pipeline_open(&setup(), &mut pipeline) }, OK);
     assert_eq!(events(), ["gl_open"]);
     assert_eq!(unsafe { rsf_gl_pipeline_close(pipeline) }, OK);
 }

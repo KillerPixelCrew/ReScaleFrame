@@ -100,7 +100,11 @@ const SESSION: usize = 0x5200;
 const CAPTURE: usize = 0x5300;
 const SHARPEN: usize = 0x5400;
 
-pub(super) unsafe extern "C" fn dlss_create(_: Handle, _: *const rsf_dlss_setup, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn dlss_create(
+    _: Handle,
+    _: *const rsf_dlss_setup,
+    out: *mut Handle,
+) -> i32 {
     event("dlss-create".into());
     unsafe { out.write(DLSS_CONTEXT as Handle) };
     OK
@@ -144,7 +148,11 @@ pub(super) unsafe extern "C" fn dlss_plan(
 pub(super) unsafe extern "C" fn dlss_set_sdr(_: Handle, sdr: u32) {
     event(format!("dlss-sdr {sdr}"));
 }
-pub(super) unsafe extern "C" fn dlss_evaluate(_: Handle, list: Handle, frame: *const rsf_sr_frame) -> i32 {
+pub(super) unsafe extern "C" fn dlss_evaluate(
+    _: Handle,
+    list: Handle,
+    frame: *const rsf_sr_frame,
+) -> i32 {
     let frame = unsafe { &*frame };
     event(format!(
         "evaluate {} reset={} color={} output={} exposure={}",
@@ -172,7 +180,10 @@ pub(super) unsafe extern "C" fn dlss_present(_: Handle, _: Handle, _: u32, _: u3
 pub(super) unsafe extern "C" fn dlss_destroy(_: Handle) {
     event("dlss-destroy".into());
 }
-pub(super) unsafe extern "C" fn session_create(setup: *const rsf_sr_session_setup, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn session_create(
+    setup: *const rsf_sr_session_setup,
+    out: *mut Handle,
+) -> i32 {
     let open = unsafe { &(*setup).open };
     event(format!(
         "session-create hdr={} auto={}",
@@ -181,11 +192,19 @@ pub(super) unsafe extern "C" fn session_create(setup: *const rsf_sr_session_setu
     unsafe { out.write(SESSION as Handle) };
     OK
 }
-pub(super) unsafe extern "C" fn session_select(_: Handle, backend: u32, quality: u32, _: u64) -> i32 {
+pub(super) unsafe extern "C" fn session_select(
+    _: Handle,
+    backend: u32,
+    quality: u32,
+    _: u64,
+) -> i32 {
     event(format!("session-select {backend} q{quality}"));
     OK
 }
-pub(super) unsafe extern "C" fn session_get_status(_: Handle, status: *mut rsf_sr_session_status) -> i32 {
+pub(super) unsafe extern "C" fn session_get_status(
+    _: Handle,
+    status: *mut rsf_sr_session_status,
+) -> i32 {
     let (width, height) = with(|world| world.plan);
     unsafe {
         (*status).render_width = width;
@@ -240,14 +259,26 @@ pub(super) unsafe extern "C" fn describe_stub(resource: Handle, out: *mut Textur
 pub(super) unsafe extern "C" fn owned_by(child: Handle, device: Handle) -> i32 {
     i32::from(object(child).device.get() == device as usize)
 }
-pub(super) unsafe extern "C" fn write_srv(_: Handle, heap: Handle, index: u32, resource: Handle, format: u32) {
+pub(super) unsafe extern "C" fn write_srv(
+    _: Handle,
+    heap: Handle,
+    index: u32,
+    resource: Handle,
+    format: u32,
+) {
     event(format!(
         "srv {} {index} {} f{format}",
         name(heap),
         name(resource)
     ));
 }
-pub(super) unsafe extern "C" fn write_uav(_: Handle, heap: Handle, index: u32, resource: Handle, format: u32) {
+pub(super) unsafe extern "C" fn write_uav(
+    _: Handle,
+    heap: Handle,
+    index: u32,
+    resource: Handle,
+    format: u32,
+) {
     event(format!(
         "uav {} {index} {} f{format}",
         name(heap),
@@ -282,7 +313,13 @@ pub(super) unsafe extern "C" fn transition(_: Handle, resource: Handle, before: 
         name(resource)
     ));
 }
-pub(super) unsafe extern "C" fn copy_region(_: Handle, target: Handle, source: Handle, w: u32, h: u32) {
+pub(super) unsafe extern "C" fn copy_region(
+    _: Handle,
+    target: Handle,
+    source: Handle,
+    w: u32,
+    h: u32,
+) {
     event(format!("copy {}<-{} {w}x{h}", name(target), name(source)));
 }
 pub(super) unsafe extern "C" fn copy_unit_exposure(_: Handle, target: Handle, _: Handle) {
@@ -426,10 +463,9 @@ pub(super) mod native {
         describe_stub as describe, dispatch, dlss_create, dlss_create_registered,
         dlss_create_shared, dlss_destroy, dlss_evaluate, dlss_evaluate as session_evaluate,
         dlss_evaluate_borrowed, dlss_plan, dlss_present, dlss_set_sdr, dump_begin_record,
-        dump_pass_metadata, dump_result, dump_sr_frame, fg_handoff, map, owned_by,
-        session_create, session_destroy, session_get_status, session_select, sharpen_create,
-        sharpen_destroy, sharpen_run, transition, unmap, write_exposure_upload, write_srv,
-        write_uav,
+        dump_pass_metadata, dump_result, dump_sr_frame, fg_handoff, map, owned_by, session_create,
+        session_destroy, session_get_status, session_select, sharpen_create, sharpen_destroy,
+        sharpen_run, transition, unmap, write_exposure_upload, write_srv, write_uav,
     };
 }
 unsafe extern "C" fn log(user: *mut c_void, message: *const c_char) {

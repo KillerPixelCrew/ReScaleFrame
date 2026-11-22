@@ -118,7 +118,10 @@ const SLOT_NAMES: [&str; SLOTS] = [
     "transparency",
 ];
 
-pub(super) unsafe extern "C" fn session_create(setup: *const rsf_sr_session_setup, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn session_create(
+    setup: *const rsf_sr_session_setup,
+    out: *mut Handle,
+) -> i32 {
     let open = unsafe { (*setup).open };
     assert_eq!(open.api, RSF_API_D3D12);
     assert_eq!(name(open.device), "device12");
@@ -133,18 +136,29 @@ pub(super) unsafe extern "C" fn session_set_auto_exposure(_: Handle, enabled: u3
     event(format!("auto exposure {enabled}"));
     OK
 }
-pub(super) unsafe extern "C" fn session_evaluate(_: Handle, list: Handle, frame: *const rsf_sr_frame) -> i32 {
+pub(super) unsafe extern "C" fn session_evaluate(
+    _: Handle,
+    list: Handle,
+    frame: *const rsf_sr_frame,
+) -> i32 {
     assert_eq!(name(list), "list");
     world(|world| world.evaluated = Some(unsafe { *frame }));
     event("evaluate".into());
     OK
 }
-pub(super) unsafe extern "C" fn session_warm_up(_: Handle, _: Handle, frame: *const rsf_sr_frame) -> i32 {
+pub(super) unsafe extern "C" fn session_warm_up(
+    _: Handle,
+    _: Handle,
+    frame: *const rsf_sr_frame,
+) -> i32 {
     world(|world| world.evaluated = Some(unsafe { *frame }));
     event("warm up".into());
     OK
 }
-pub(super) unsafe extern "C" fn session_get_status(_: Handle, status: *mut rsf_sr_session_status) -> i32 {
+pub(super) unsafe extern "C" fn session_get_status(
+    _: Handle,
+    status: *mut rsf_sr_session_status,
+) -> i32 {
     unsafe { (*status).effective = 3 };
     OK
 }
@@ -171,14 +185,23 @@ pub(super) unsafe extern "C" fn create_device12(_: Handle) -> Handle {
 pub(super) unsafe extern "C" fn create_queue(_: Handle) -> Handle {
     created("queue")
 }
-pub(super) unsafe extern "C" fn create_commands(_: Handle, allocator: *mut Handle, list: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn create_commands(
+    _: Handle,
+    allocator: *mut Handle,
+    list: *mut Handle,
+) -> i32 {
     unsafe {
         allocator.write(created("allocator"));
         list.write(created("list"));
     }
     1
 }
-pub(super) unsafe extern "C" fn create_output(_: Handle, width: u32, height: u32, _: u32) -> Handle {
+pub(super) unsafe extern "C" fn create_output(
+    _: Handle,
+    width: u32,
+    height: u32,
+    _: u32,
+) -> Handle {
     created(&format!("output12 {width}x{height}"))
 }
 pub(super) unsafe extern "C" fn create_texture(_: Handle, _: u32, _: u32, _: u32) -> Handle {
@@ -194,7 +217,11 @@ pub(super) unsafe extern "C" fn close_event(handle: Handle) {
     event(format!("close {}", name(handle)));
     close(handle);
 }
-pub(super) unsafe extern "C" fn describe(texture: Handle, device: Handle, out: *mut TextureDesc) -> i32 {
+pub(super) unsafe extern "C" fn describe(
+    texture: Handle,
+    device: Handle,
+    out: *mut TextureDesc,
+) -> i32 {
     match world(|world| world.descs.get(&(texture as usize)).copied()) {
         Some((desc, owner)) if owner == device => {
             unsafe { out.write(desc) };
@@ -221,7 +248,13 @@ pub(super) unsafe extern "C" fn wait_fence(fence: Handle, value: u64, _: Handle,
 pub(super) unsafe extern "C" fn flush(_: Handle) {
     event("flush".into());
 }
-pub(super) unsafe extern "C" fn copy_region(_: Handle, to: Handle, from: Handle, width: u32, height: u32) {
+pub(super) unsafe extern "C" fn copy_region(
+    _: Handle,
+    to: Handle,
+    from: Handle,
+    width: u32,
+    height: u32,
+) {
     event(format!(
         "copy {} -> {} {width}x{height}",
         name(from),
@@ -337,11 +370,27 @@ pub(super) unsafe extern "C" fn dump_inputs(_: Handle, _: *const rsf_sr_frame, _
 pub(super) unsafe extern "C" fn dump_wants(_: *const rsf_frame_record) -> i32 {
     0
 }
-pub(super) unsafe extern "C" fn dump_result(_: Handle, _: *const rsf_sr_frame, _: u32, _: i32, _: u32) {}
+pub(super) unsafe extern "C" fn dump_result(
+    _: Handle,
+    _: *const rsf_sr_frame,
+    _: u32,
+    _: i32,
+    _: u32,
+) {
+}
 
 // The fakes sr_bridge.rs calls in place of sr_bridge/platform.rs.
 pub(super) mod native {
-    pub(in crate::sr_bridge) use super::{close_event, context_signal, context_wait, copy_region, copy_resource, copy_transitioned, create_commands, create_device12, create_event, create_fence, create_output, create_queue, create_texture, describe, device_ready, dump_inputs, dump_poll_requested, dump_result, dump_wants, fence_create, fence_d3d11, fence_d3d12, fence_destroy, flush, immediate_context, query_context4, queue_signal, queue_wait, reset_commands, same_context, session_create, session_destroy, session_evaluate, session_get_status, session_select, session_set_auto_exposure, session_warm_up, submit, surface_create, surface_d3d11, surface_d3d12, surface_destroy, transition, validate_frame, wait_fence};
+    pub(in crate::sr_bridge) use super::{
+        close_event, context_signal, context_wait, copy_region, copy_resource, copy_transitioned,
+        create_commands, create_device12, create_event, create_fence, create_output, create_queue,
+        create_texture, describe, device_ready, dump_inputs, dump_poll_requested, dump_result,
+        dump_wants, fence_create, fence_d3d11, fence_d3d12, fence_destroy, flush,
+        immediate_context, query_context4, queue_signal, queue_wait, reset_commands, same_context,
+        session_create, session_destroy, session_evaluate, session_get_status, session_select,
+        session_set_auto_exposure, session_warm_up, submit, surface_create, surface_d3d11,
+        surface_d3d12, surface_destroy, transition, validate_frame, wait_fence,
+    };
 }
 
 unsafe extern "C" fn log(_: Handle, message: *const std::ffi::c_char) {

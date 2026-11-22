@@ -9,9 +9,7 @@ use crate::native_cpu::rsf_native_cpu_dispatch;
 use crate::native_fg_cpu::platform::rsf_native_fg_cpu;
 use crate::sys::rsf_observer_present_event;
 use crate::sys::rsf_streamline_host;
-use crate::sys::{
-    rsf_d3d11h_guard_dump_inputs_start, rsf_d3d11h_guard_dump_texture,
-};
+use crate::sys::{rsf_d3d11h_guard_dump_inputs_start, rsf_d3d11h_guard_dump_texture};
 use rsf_game_sys::{rsf_frame_record, rsf_game_cpu_event};
 use std::ffi::{c_char, c_void};
 use std::ptr::{NonNull, null_mut};
@@ -51,9 +49,8 @@ pub(super) use crate::native_sr::{
     rsf_native_sr_capture_fg as fg_capture, rsf_native_sr_evaluate_ordered as sr_evaluate,
 };
 pub(super) use crate::native_window::{
-    rsf_native_window_last_present as window_last_present,
-    rsf_native_window_match as window_match, rsf_native_window_present as window_present,
-    rsf_native_window_scope as window_scope,
+    rsf_native_window_last_present as window_last_present, rsf_native_window_match as window_match,
+    rsf_native_window_present as window_present, rsf_native_window_scope as window_scope,
 };
 pub(super) use crate::overlay_input::rsf_overlay_input_poll_toggle as overlay_poll_toggle;
 pub(super) use crate::settings_store::{
@@ -62,14 +59,12 @@ pub(super) use crate::settings_store::{
 pub(super) use crate::sys::{
     rsf_d3d11h_guard_chain_dispatch as chain_dispatch,
     rsf_d3d11h_guard_creation_begin as creation_begin,
-    rsf_d3d11h_guard_creation_end as creation_end,
-    rsf_d3d11h_guard_dump_begin as dump_begin,
+    rsf_d3d11h_guard_creation_end as creation_end, rsf_d3d11h_guard_dump_begin as dump_begin,
     rsf_d3d11h_guard_dump_complete as dump_complete,
-    rsf_d3d11h_guard_dump_configure as dump_configure,
-    rsf_d3d11h_guard_dump_pass as dump_pass, rsf_d3d11h_guard_dump_poll as dump_poll,
-    rsf_d3d11h_guard_dump_request as dump_request,
-    rsf_d3d11h_guard_dump_requested as dump_requested,
-    rsf_d3d11h_guard_dump_result as dump_result, rsf_d3d11h_guard_dump_wants as dump_wants,
+    rsf_d3d11h_guard_dump_configure as dump_configure, rsf_d3d11h_guard_dump_pass as dump_pass,
+    rsf_d3d11h_guard_dump_poll as dump_poll, rsf_d3d11h_guard_dump_request as dump_request,
+    rsf_d3d11h_guard_dump_requested as dump_requested, rsf_d3d11h_guard_dump_result as dump_result,
+    rsf_d3d11h_guard_dump_wants as dump_wants,
     rsf_d3d11h_guard_observer_install as observer_install,
     rsf_d3d11h_guard_overlay_configure as overlay_configure,
     rsf_d3d11h_guard_overlay_present as overlay_present,

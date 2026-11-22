@@ -44,13 +44,21 @@ pub(super) unsafe extern "C" fn factory_create(out: *mut Handle) -> i32 {
     unsafe { publish(CreateDXGIFactory1::<IDXGIFactory4>(), out) }
 }
 
-pub(super) unsafe extern "C" fn adapter_find(factory: Handle, luid: *const u8, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn adapter_find(
+    factory: Handle,
+    luid: *const u8,
+    out: *mut Handle,
+) -> i32 {
     let factory = unsafe { borrow::<IDXGIFactory4>(&factory) };
     let luid = unsafe { luid.cast::<LUID>().read_unaligned() };
     unsafe { publish(factory.EnumAdapterByLuid::<IDXGIAdapter1>(luid), out) }
 }
 
-pub(super) unsafe extern "C" fn device_create(adapter: Handle, level: u32, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn device_create(
+    adapter: Handle,
+    level: u32,
+    out: *mut Handle,
+) -> i32 {
     let adapter = unsafe { borrow::<IDXGIAdapter1>(&adapter) };
     let mut device = None::<ID3D12Device>;
     let result =
@@ -99,7 +107,11 @@ pub(super) unsafe extern "C" fn fence_create(device: Handle, out: *mut Handle) -
     }
 }
 
-pub(super) unsafe extern "C" fn shared_handle(device: Handle, object: Handle, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn shared_handle(
+    device: Handle,
+    object: Handle,
+    out: *mut Handle,
+) -> i32 {
     let device = unsafe { borrow::<ID3D12Device>(&device) };
     let object = unsafe { borrow::<ID3D12DeviceChild>(&object) };
     unsafe { out.write(null_mut()) };
@@ -115,7 +127,11 @@ pub(super) unsafe extern "C" fn handle_close(handle: Handle) {
     unsafe { CloseHandle(handle) };
 }
 
-pub(super) unsafe extern "C" fn slot_create(device: Handle, allocator: *mut Handle, list: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn slot_create(
+    device: Handle,
+    allocator: *mut Handle,
+    list: *mut Handle,
+) -> i32 {
     let device = unsafe { borrow::<ID3D12Device>(&device) };
     unsafe {
         allocator.write(null_mut());
@@ -159,7 +175,12 @@ pub(super) unsafe extern "C" fn fence_arm(fence: Handle, value: u64, event: Hand
     status(unsafe { borrow::<ID3D12Fence>(&fence).SetEventOnCompletion(value, HANDLE(event)) })
 }
 
-pub(super) unsafe extern "C" fn fence_wait(fence: Handle, value: u64, event: Handle, timeout: u32) -> i32 {
+pub(super) unsafe extern "C" fn fence_wait(
+    fence: Handle,
+    value: u64,
+    event: Handle,
+    timeout: u32,
+) -> i32 {
     i32::from(unsafe {
         crate::d3d12_fence::rsf_core_d3d12_wait_fence(
             fence,

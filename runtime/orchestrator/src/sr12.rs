@@ -428,7 +428,8 @@ unsafe fn create_gpu(
 ) -> Option<Gpu> {
     let device = setup.device;
     let (mut root, mut pipeline) = (ptr::null_mut(), ptr::null_mut());
-    if unsafe { native::create_pipeline(device, setup.log, setup.user, &mut root, &mut pipeline) } == 0
+    if unsafe { native::create_pipeline(device, setup.log, setup.user, &mut root, &mut pipeline) }
+        == 0
     {
         return None;
     }
@@ -467,7 +468,10 @@ unsafe fn create_gpu(
         // exposure is disabled; feed the actual constant scale, not HDR adaptation.
         let texture = unsafe { ComRef::from_owned(native::create_exposure_texture(device)) }?;
         let upload = unsafe {
-            ComRef::from_owned(native::create_exposure_upload(device, EXPOSURE_UPLOAD_BYTES))
+            ComRef::from_owned(native::create_exposure_upload(
+                device,
+                EXPOSURE_UPLOAD_BYTES,
+            ))
         }?;
         if unsafe { native::write_exposure_upload(upload.as_ptr(), 1.0) } == 0 {
             return None;
@@ -544,7 +548,8 @@ unsafe fn create(setup: *const Setup) -> Result<Sr12, i32> {
     if engine_extents {
         (width, height) = (s.render_width, s.render_height);
     }
-    let normalize_color = s.backend != RSF_SR_NONE || unsafe { native::capture_enabled(capture) } != 0;
+    let normalize_color =
+        s.backend != RSF_SR_NONE || unsafe { native::capture_enabled(capture) } != 0;
     let gpu = unsafe { create_gpu(&s, (width, height), normalize_color, external_exposure) }
         .ok_or(INIT_FAILED)?;
     let sharpening = sharpening_policy::defaults();
@@ -705,7 +710,10 @@ impl Sr12 {
         }
         if state.motion_readback[slot].is_none() {
             state.motion_readback[slot] = unsafe {
-                ComRef::from_owned(native::create_readback(self.device.as_ptr(), READBACK_BYTES))
+                ComRef::from_owned(native::create_readback(
+                    self.device.as_ptr(),
+                    READBACK_BYTES,
+                ))
             };
         }
         let Some(buffer) = state.motion_readback[slot].as_ref() else {
@@ -879,9 +887,16 @@ impl Sr12 {
         match self.native.vendor {
             Vendor::None => OK,
             Vendor::Dlss(context) if !pass.native_frame_context.is_null() => unsafe {
-                native::dlss_evaluate_borrowed(context.as_ptr(), list, frame, pass.native_frame_context)
+                native::dlss_evaluate_borrowed(
+                    context.as_ptr(),
+                    list,
+                    frame,
+                    pass.native_frame_context,
+                )
             },
-            Vendor::Dlss(context) => unsafe { native::dlss_evaluate(context.as_ptr(), list, frame) },
+            Vendor::Dlss(context) => unsafe {
+                native::dlss_evaluate(context.as_ptr(), list, frame)
+            },
             Vendor::Session(session) => unsafe {
                 native::session_evaluate(session.as_ptr(), list, frame)
             },
