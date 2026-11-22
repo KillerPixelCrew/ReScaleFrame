@@ -1,0 +1,5 @@
+EXPORTS
+    asi_install_result
+    asi_flush=rsf_census_flush
+    asi_counters=rsf_census_get_counters
+    asi_shutdown=rsf_census_shutdown

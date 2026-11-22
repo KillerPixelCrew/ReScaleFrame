@@ -12,6 +12,7 @@
 #include <type_traits>
 
 #include "rescaleframe/vendor_census.h"
+#include "decode_platform.h"
 
 namespace rsf_census {
 
@@ -246,39 +247,37 @@ inline bool guard(L&& lambda) noexcept {
 // ---- JSON line builder ------------------------------------------------------------------------
 class Json {
 public:
-    Json(char* buf, size_t cap) noexcept : buf_(buf), cap_(cap) {}
-    bool ok() const noexcept { return !overflow_; }
-    size_t size() const noexcept { return len_; }
+    Json(char* buf, size_t cap) noexcept : state_{buf, cap, 0, 0, 0, false} {}
+    bool ok() const noexcept { return !state_.overflow; }
+    size_t size() const noexcept { return state_.length; }
 
-    void obj(const char* key = nullptr) noexcept { open(key, '{'); }
-    void end_obj() noexcept { close('}'); }
-    void arr(const char* key = nullptr) noexcept { open(key, '['); }
-    void end_arr() noexcept { close(']'); }
-    void str(const char* key, const char* v) noexcept;
-    void wstr(const char* key, const wchar_t* v) noexcept;
-    void u64(const char* key, uint64_t v) noexcept;
-    void i64(const char* key, int64_t v) noexcept;
-    void hex(const char* key, uint64_t v) noexcept; // "0x..." string
+    void obj(const char* key = nullptr) noexcept { rsf_census_json_open(&state_, key, '{'); }
+    void end_obj() noexcept { rsf_census_json_close(&state_, '}'); }
+    void arr(const char* key = nullptr) noexcept { rsf_census_json_open(&state_, key, '['); }
+    void end_arr() noexcept { rsf_census_json_close(&state_, ']'); }
+    void str(const char* key, const char* v) noexcept { rsf_census_json_string(&state_, key, v); }
+    void wstr(const char* key, const wchar_t* v) noexcept {
+        rsf_census_json_wide(&state_, key, reinterpret_cast<const uint16_t*>(v));
+    }
+    void u64(const char* key, uint64_t v) noexcept { rsf_census_json_u64(&state_, key, v); }
+    void i64(const char* key, int64_t v) noexcept { rsf_census_json_i64(&state_, key, v); }
+    void hex(const char* key, uint64_t v) noexcept { rsf_census_json_hex(&state_, key, v); }
     void f32(const char* key, double v) noexcept;
-    void boolean(const char* key, bool v) noexcept;
-    void null(const char* key) noexcept;
-    void bytes_hex(const char* key, const void* data, size_t n) noexcept;
-    void raw(const char* key, const char* json_text) noexcept;
+    void boolean(const char* key, bool v) noexcept { raw(key, v ? "true" : "false"); }
+    void null(const char* key) noexcept { raw(key, nullptr); }
+    void bytes_hex(const char* key, const void* data, size_t n) noexcept {
+        rsf_census_json_bytes(&state_, key, data, n);
+    }
+    void raw(const char* key, const char* json_text) noexcept {
+        rsf_census_json_raw(&state_, key, json_text);
+    }
+    void resource(const char* key, const void* resource, bool d3d12,
+                  rsf_census_read_resource read) noexcept {
+        rsf_census_json_resource(&state_, key, resource, d3d12, read);
+    }
 
 private:
-    void open(const char* key, char c) noexcept;
-    void close(char c) noexcept;
-    void lead(const char* key) noexcept;
-    void put(const char* s, size_t n) noexcept;
-    void put(const char* s) noexcept { put(s, std::strlen(s)); }
-    void put_escaped(const char* s) noexcept;
-
-    char* buf_;
-    size_t cap_;
-    size_t len_ = 0;
-    uint32_t comma_ = 0; // bit per nesting level: an element already written
-    uint32_t depth_ = 0;
-    bool overflow_ = false;
+    rsf_census_json state_;
 };
 
 // ---- Per-call recording -----------------------------------------------------------------------
@@ -358,15 +357,27 @@ void hooks_summary(Json& j) noexcept;
 
 // Core services (core.cpp).
 rsf_census_result core_install(const rsf_census_options* opt) noexcept;
-void static_scan_run() noexcept;
 
-// Resource decode helpers (decode.cpp).
-const char* dxgi_format_name(uint32_t format) noexcept;
+// Resource decode helpers (decode_d3d_platform.cpp).
+inline const char* dxgi_format_name(uint32_t format) noexcept {
+    return rsf_census_dxgi_format_name(format);
+}
 void json_d3d12_resource(Json& j, const char* key, const void* resource) noexcept;
 void json_d3d11_resource(Json& j, const char* key, const void* resource) noexcept;
-void json_ptr_or_null(Json& j, const char* key, const void* p) noexcept;
+inline void json_ptr_or_null(Json& j, const char* key, const void* p) noexcept {
+    if (p) j.hex(key, reinterpret_cast<uint64_t>(p));
+    else j.null(key);
+}
 // Read a narrow or wide string argument; returns false when unreadable.
-bool read_arg_string(const void* p, char* out, size_t cap) noexcept;
-bool read_arg_wstring(const void* p, wchar_t* out, size_t cap) noexcept;
+inline bool read_arg_string(const void* p, char* out, size_t cap) noexcept {
+    if (!cap) return false;
+    out[0] = 0;
+    return plausible_ptr(p) && safe_read_cstr(static_cast<const char*>(p), out, cap);
+}
+inline bool read_arg_wstring(const void* p, wchar_t* out, size_t cap) noexcept {
+    if (!cap) return false;
+    out[0] = 0;
+    return plausible_ptr(p) && safe_read_wstr(static_cast<const wchar_t*>(p), out, cap);
+}
 
 } // namespace rsf_census

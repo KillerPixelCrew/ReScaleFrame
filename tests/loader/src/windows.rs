@@ -2,6 +2,10 @@
 mod fixture;
 mod forwarding;
 mod thin;
+#[cfg(target_env = "msvc")]
+mod vendor_census_asi;
+#[cfg(target_env = "msvc")]
+mod vendor_census_asi_abi;
 
 use std::ffi::{CStr, OsStr};
 use std::os::windows::ffi::OsStrExt;

@@ -783,8 +783,9 @@ if(TARGET rsf_vendor_census)
     rsf_census_fixture(rsf_census_fx_ffx FIXTURE_FFX amd_fidelityfx_dx12)
     rsf_census_fixture(rsf_census_fx_creation FIXTURE_CREATION rsf_fixture_creation)
 
-    add_library(rsf_census_asi SHARED vendor_census_asi.cpp)
-    target_link_libraries(rsf_census_asi PRIVATE ReScaleFrame::VendorCensus rsf_build_options)
+    add_library(rsf_census_asi SHARED loader/vendor_census_asi.c loader/vendor_census_asi.def)
+    target_link_libraries(rsf_census_asi PRIVATE
+        rsf_loader_fixtures_rust ReScaleFrame::VendorCensus rsf_build_options)
 
     add_executable(rsf_vendor_census_test vendor_census.cpp)
     target_link_libraries(rsf_vendor_census_test PRIVATE ReScaleFrame::VendorCensus rsf_census_fx_fsr2 rsf_build_options)

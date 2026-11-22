@@ -8,9 +8,8 @@ endif()
 
 add_library(rsf_vendor_census STATIC
     src/core.cpp
-    src/decode.cpp
+    src/decode_d3d_platform.cpp
     src/hooks.cpp
-    src/static_scan.cpp
     src/wrap_d3d.cpp
     src/wrap_fsr.cpp
     src/wrap_misc.cpp
@@ -18,5 +17,5 @@ add_library(rsf_vendor_census STATIC
     src/wrap_vk.cpp)
 target_include_directories(rsf_vendor_census PUBLIC include PRIVATE src)
 target_compile_features(rsf_vendor_census PUBLIC cxx_std_20)
-target_link_libraries(rsf_vendor_census PRIVATE minhook rsf_build_options)
+target_link_libraries(rsf_vendor_census PRIVATE rsf_loader_rust minhook rsf_build_options)
 add_library(ReScaleFrame::VendorCensus ALIAS rsf_vendor_census)

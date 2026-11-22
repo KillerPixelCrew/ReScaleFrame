@@ -33,6 +33,18 @@ generate("sdk/game/src/d3d11_reduced_abi.rs", "runtime/orchestrator/include/resc
          ["--no-recursive-allowlist", "--with-derive-default",
           "--raw-line", "use crate::rsf_game_render_pass;",
           "--raw-line", "pub use crate::d3d11_host_abi::{rsf_d3d11_auxiliary_surface, RSF_D3D11_AUXILIARY_COLOUR, RSF_D3D11_AUXILIARY_DEPTH_STENCIL, RSF_D3D11_AUXILIARY_RESTORE_CONTENTS};"])
+generate("loader/src/diagnostics/frame_capture_abi.rs", "loader/diagnostics/src/frame_capture_platform.h",
+         "rsf_capture_(result|calls|connect)", "NOTHING", ["-Iloader/diagnostics/include"])
+generate("loader/src/diagnostics/memory_abi.rs", "loader/diagnostics/src/module_dump_memory.h",
+         "rsf_mem_cache", "NOTHING", [], ["--with-derive-default"])
+generate("loader/src/census/json_abi.rs", "loader/census/src/json_platform.h",
+         "rsf_census_json", "NOTHING", [])
+generate("loader/src/census/decode_abi.rs", "loader/census/src/decode_platform.h",
+         "rsf_census_(resource_desc|read_resource)", "NOTHING", [],
+         ["--with-derive-default"])
+generate("tests/loader/src/windows/vendor_census_asi_abi.rs",
+         "loader/census/include/rescaleframe/vendor_census.h",
+         "rsf_census_options", "RSF_CENSUS_ABI_VERSION", [], ["--with-derive-default"])
 generate("runtime/backends/fsr/compat/src/abi.rs", "runtime/backends/fsr/src/fsr4_compat_platform.h",
          "rsf_fsr4_compat_.*", "RSF_FSR4_COMPAT_PLATFORM_ABI_VERSION", [])
 frame_records = "rsf_(camera_frame|game_cpu_event)"
