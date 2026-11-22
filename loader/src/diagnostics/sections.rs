@@ -50,7 +50,7 @@ impl fmt::Write for Stream {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_dump_now_ms() -> f64 {
+pub(super) extern "C" fn rsf_dump_now_ms() -> f64 {
     let (mut freq, mut counter) = (0, 0);
     if unsafe { QueryPerformanceFrequency(&mut freq) } != 0
         && freq != 0

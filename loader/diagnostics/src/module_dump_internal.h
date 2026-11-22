@@ -20,22 +20,11 @@ const void* rsf_dump_resolve_base(const void* module_base);
 const IMAGE_NT_HEADERS64* rsf_dump_nt_headers(const void* base);
 void rsf_dump_collect_modules(rsf_module_entry* entries, size_t capacity, size_t* count);
 
-/* Per-section result gathered while the dump is written. */
-typedef struct rsf_section_digest {
-    int valid;
-    uint64_t dumped_size;
-    uint64_t readable_bytes;
-    double entropy;
-    char sha256[65];
-} rsf_section_digest;
-
 void rsf_json_wide(FILE* stream, const wchar_t* text);
 void rsf_json_ascii(FILE* stream, const char* text, size_t limit);
 
 double rsf_dump_now_ms(void);
 const wchar_t* rsf_dump_basename(const wchar_t* path);
-
-void rsf_sha256_hex(const void* data, size_t size, char out[65]);
 
 rsf_dump_result rsf_dump_poll_code(double threshold, uint32_t poll_ms, uint32_t timeout_ms,
                                    uint32_t required_stable, double* last_entropy);

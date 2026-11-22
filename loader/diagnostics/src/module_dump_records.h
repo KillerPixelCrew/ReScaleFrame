@@ -16,4 +16,31 @@ typedef struct rsf_module_entry {
 
 typedef void (*rsf_dump_stream_write)(void* stream, const unsigned char* data, size_t size);
 
+typedef struct rsf_section_digest {
+    int valid;
+    uint64_t dumped_size;
+    uint64_t readable_bytes;
+    double entropy;
+    char sha256[65];
+} rsf_section_digest;
+
+typedef struct rsf_dump_image_info {
+    const unsigned char* base;
+    const wchar_t* path;
+    uint32_t image_size;
+    uint32_t header_size;
+    uint32_t alignment;
+    uint32_t nt_offset;
+    uint32_t sections_offset;
+    uint32_t sections;
+    uint32_t import_directory;
+} rsf_dump_image_info;
+
+typedef struct rsf_dump_image_stats {
+    uint64_t bytes_written;
+    double hash_ms;
+    uint32_t sections_written;
+    uint32_t iat_references;
+} rsf_dump_image_stats;
+
 #endif

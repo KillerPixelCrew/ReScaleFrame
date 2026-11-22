@@ -12,117 +12,15 @@
 #include <string.h>
 #include <wchar.h>
 
-#define RSF_ENTROPY_WINDOW 65536u
-#define RSF_ENTROPY_SAMPLES 16u
+rsf_dump_result rsf_dump_image_write(const rsf_dump_image_info* info, rsf_section_digest* digests,
+                                    rsf_dump_image_stats* stats);
+uint32_t rsf_dump_imports_impl(void* stream, rsf_dump_stream_write write,
+                               const unsigned char* base, uint32_t image_size,
+                               uint32_t directory, const rsf_module_entry* modules, size_t count);
 
-static DWORD align_up(DWORD value, DWORD alignment)
+static void write_bytes(void* stream, const unsigned char* bytes, size_t count)
 {
-    if (alignment == 0) {
-        return value;
-    }
-    return (value + alignment - 1u) & ~(alignment - 1u);
-}
-
-static int compare_rva(const void* left, const void* right);
-
-/* Collect the address-table slot of every import, so code can be checked for references to them.
-   The shipped AC7 file contains no such reference anywhere, because its code is ciphertext. A
-   dump that contains them is decrypted; one that does not is not, whatever its entropy says. */
-static DWORD* collect_iat_slots(const unsigned char* base, const IMAGE_NT_HEADERS64* headers,
-                                size_t* count)
-{
-    *count = 0;
-    const IMAGE_DATA_DIRECTORY* directory =
-        &headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-    if (directory->VirtualAddress == 0) {
-        return NULL;
-    }
-
-    size_t capacity = 256;
-    DWORD* slots = (DWORD*)malloc(capacity * sizeof(DWORD));
-    if (!slots) {
-        return NULL;
-    }
-    const IMAGE_IMPORT_DESCRIPTOR* descriptor =
-        (const IMAGE_IMPORT_DESCRIPTOR*)(base + directory->VirtualAddress);
-    for (; descriptor->Name != 0; ++descriptor) {
-        const DWORD names_rva = descriptor->OriginalFirstThunk ? descriptor->OriginalFirstThunk
-                                                               : descriptor->FirstThunk;
-        if (names_rva == 0 || descriptor->FirstThunk == 0) {
-            continue;
-        }
-        const ULONGLONG* names = (const ULONGLONG*)(base + names_rva);
-        for (size_t slot = 0; names[slot] != 0; ++slot) {
-            if (*count == capacity) {
-                capacity *= 2;
-                DWORD* grown = (DWORD*)realloc(slots, capacity * sizeof(DWORD));
-                if (!grown) {
-                    free(slots);
-                    *count = 0;
-                    return NULL;
-                }
-                slots = grown;
-            }
-            slots[(*count)++] = descriptor->FirstThunk + (DWORD)(slot * sizeof(ULONGLONG));
-        }
-    }
-    qsort(slots, *count, sizeof(DWORD), compare_rva);
-    return slots;
-}
-
-static int compare_rva(const void* left, const void* right)
-{
-    const DWORD a = *(const DWORD*)left;
-    const DWORD b = *(const DWORD*)right;
-    return a < b ? -1 : (a > b ? 1 : 0);
-}
-
-static int slot_index(const DWORD* slots, size_t count, DWORD rva)
-{
-    const DWORD* found = (const DWORD*)bsearch(&rva, slots, count, sizeof(DWORD), compare_rva);
-    return found ? (int)(found - slots) : -1;
-}
-
-/* Count rip-relative calls and jumps through the import table inside one code range. This is a
-   byte scan, not a disassembly, but requiring the target to be an exact import slot keeps false
-   positives negligible. */
-static uint32_t count_iat_references(const unsigned char* code, size_t size, DWORD code_rva,
-                                     const DWORD* slots, size_t slot_count, uint32_t* hits)
-{
-    if (!slots || slot_count == 0 || size < 6) {
-        return 0;
-    }
-    uint32_t total = 0;
-    for (size_t offset = 0; offset + 6 <= size; ++offset) {
-        if (code[offset] != 0xFF) {
-            continue;
-        }
-        if (code[offset + 1] != 0x15 && code[offset + 1] != 0x25) {
-            continue;
-        }
-        int32_t displacement;
-        memcpy(&displacement, code + offset + 2, sizeof(displacement));
-        const DWORD target = (DWORD)(code_rva + (DWORD)offset + 6u + (DWORD)displacement);
-        const int index = slot_index(slots, slot_count, target);
-        if (index >= 0) {
-            ++total;
-            if (hits) {
-                ++hits[index];
-            }
-        }
-    }
-    return total;
-}
-
-static const rsf_module_entry* module_for(const rsf_module_entry* entries, size_t count,
-                                          const unsigned char* address)
-{
-    for (size_t index = 0; index < count; ++index) {
-        if (address >= entries[index].base && address < entries[index].base + entries[index].size) {
-            return &entries[index];
-        }
-    }
-    return NULL;
+    fwrite(bytes, 1, count, (FILE*)stream);
 }
 
 /* Format a fixed-point number without going through the CRT's float formatting, which follows
@@ -135,63 +33,6 @@ static void write_json_number(FILE* stream, double value)
     }
     const long long scaled = (long long)(value * 10000.0 + 0.5);
     fprintf(stream, "%lld.%04lld", scaled / 10000, scaled % 10000);
-}
-
-static void describe_imports(FILE* stream, const unsigned char* base,
-                             const IMAGE_NT_HEADERS64* headers, const rsf_module_entry* modules,
-                             size_t module_count, uint32_t* described)
-{
-    *described = 0;
-    const IMAGE_DATA_DIRECTORY* directory =
-        &headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-    if (directory->VirtualAddress == 0 || directory->Size == 0) {
-        return;
-    }
-
-    const IMAGE_IMPORT_DESCRIPTOR* descriptor =
-        (const IMAGE_IMPORT_DESCRIPTOR*)(base + directory->VirtualAddress);
-    int first = 1;
-    for (; descriptor->Name != 0; ++descriptor) {
-        const char* library = (const char*)(base + descriptor->Name);
-        const DWORD names_rva = descriptor->OriginalFirstThunk ? descriptor->OriginalFirstThunk
-                                                               : descriptor->FirstThunk;
-        if (names_rva == 0 || descriptor->FirstThunk == 0) {
-            continue;
-        }
-        const ULONGLONG* names = (const ULONGLONG*)(base + names_rva);
-        const ULONGLONG* values = (const ULONGLONG*)(base + descriptor->FirstThunk);
-        for (size_t slot = 0; names[slot] != 0; ++slot) {
-            fprintf(stream, "%s\n    {\"dll\": \"", first ? "" : ",");
-            first = 0;
-            rsf_json_ascii(stream, library, 260);
-            fputs("\", ", stream);
-
-            if (names[slot] & IMAGE_ORDINAL_FLAG64) {
-                fprintf(stream, "\"ordinal\": %llu", (unsigned long long)(names[slot] & 0xFFFFu));
-            } else {
-                const IMAGE_IMPORT_BY_NAME* by_name =
-                    (const IMAGE_IMPORT_BY_NAME*)(base + (DWORD)names[slot]);
-                fputs("\"name\": \"", stream);
-                rsf_json_ascii(stream, by_name->Name, 260);
-                fputc('"', stream);
-            }
-
-            const DWORD slot_rva =
-                descriptor->FirstThunk + (DWORD)(slot * sizeof(ULONGLONG));
-            fprintf(stream, ", \"slot_rva\": \"0x%lx\", \"value\": \"0x%llx\"",
-                    (unsigned long)slot_rva, (unsigned long long)values[slot]);
-
-            const rsf_module_entry* owner =
-                module_for(modules, module_count, (const unsigned char*)(uintptr_t)values[slot]);
-            if (owner) {
-                fputs(", \"resolves_into\": \"", stream);
-                rsf_json_wide(stream, owner->path);
-                fputc('"', stream);
-            }
-            fputc('}', stream);
-            ++(*described);
-        }
-    }
 }
 
 static rsf_dump_result write_sidecar(const wchar_t* path, const unsigned char* base,
@@ -254,7 +95,13 @@ static rsf_dump_result write_sidecar(const wchar_t* path, const unsigned char* b
     fputs("\n  ],\n", stream);
 
     fputs("  \"imports\": [", stream);
-    describe_imports(stream, base, headers, modules, module_count, &report->imports_described);
+    const IMAGE_DATA_DIRECTORY* imports =
+        &headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (imports->Size != 0) {
+        report->imports_described = rsf_dump_imports_impl(
+            stream, write_bytes, base, headers->OptionalHeader.SizeOfImage,
+            imports->VirtualAddress, modules, module_count);
+    }
     fputs("\n  ],\n", stream);
 
     const double structured = rsf_dump_now_ms();
@@ -332,7 +179,8 @@ rsf_dump_result rsf_dump_module(const void* module_base, const rsf_dump_options*
     }
 
     wchar_t module_path[MAX_PATH];
-    if (GetModuleFileNameW((HMODULE)(void*)base, module_path, MAX_PATH) == 0) {
+    const DWORD path_length = GetModuleFileNameW((HMODULE)(void*)base, module_path, MAX_PATH);
+    if (path_length == 0 || path_length >= MAX_PATH) {
         wcscpy(module_path, L"<unknown>");
     }
     const wchar_t* leaf = wcsrchr(module_path, L'\\');
@@ -354,126 +202,34 @@ rsf_dump_result rsf_dump_module(const void* module_base, const rsf_dump_options*
 
     wchar_t dump_path[MAX_PATH * 2];
     wchar_t sidecar_path[MAX_PATH * 2];
-    _snwprintf(dump_path, MAX_PATH * 2, L"%s\\%s.dump", directory, name);
-    _snwprintf(sidecar_path, MAX_PATH * 2, L"%s\\%s.dump.json", directory, name);
-
-    const DWORD alignment = headers->OptionalHeader.SectionAlignment;
-    const DWORD header_size = align_up(headers->OptionalHeader.SizeOfHeaders, alignment);
-    unsigned char* header_copy = (unsigned char*)malloc(header_size);
-    if (!header_copy) {
-        return RSF_DUMP_ERROR_WRITE_FAILED;
+    const int dump_length = _snwprintf(dump_path, MAX_PATH * 2, L"%s\\%s.dump", directory, name);
+    const int sidecar_length =
+        _snwprintf(sidecar_path, MAX_PATH * 2, L"%s\\%s.dump.json", directory, name);
+    if (dump_length < 0 || sidecar_length < 0 ||
+        dump_length >= MAX_PATH * 2 || sidecar_length >= MAX_PATH * 2) {
+        return RSF_DUMP_ERROR_INVALID_ARGUMENT;
     }
-    rsf_dump_read_guarded(base, header_copy, header_size);
 
-    IMAGE_NT_HEADERS64* copied_headers =
-        (IMAGE_NT_HEADERS64*)(header_copy + ((const IMAGE_DOS_HEADER*)header_copy)->e_lfanew);
-    IMAGE_SECTION_HEADER* copied_sections = IMAGE_FIRST_SECTION(copied_headers);
     const IMAGE_SECTION_HEADER* sections = IMAGE_FIRST_SECTION(headers);
-
-    /* Point every section at its own virtual address so file offset equals RVA. */
-    for (WORD index = 0; index < headers->FileHeader.NumberOfSections; ++index) {
-        DWORD size = sections[index].Misc.VirtualSize;
-        if (size == 0) {
-            size = sections[index].SizeOfRawData;
-        }
-        copied_sections[index].PointerToRawData = sections[index].VirtualAddress;
-        copied_sections[index].SizeOfRawData = align_up(size, alignment);
-        /* These are file offsets into a layout that no longer exists. */
-        copied_sections[index].PointerToRelocations = 0;
-        copied_sections[index].PointerToLinenumbers = 0;
-        copied_sections[index].NumberOfRelocations = 0;
-        copied_sections[index].NumberOfLinenumbers = 0;
-        if (copied_sections[index].Characteristics & IMAGE_SCN_CNT_UNINITIALIZED_DATA) {
-            /* The section has real bytes in the dump even if it had none in the original file. */
-            copied_sections[index].Characteristics &= ~(DWORD)IMAGE_SCN_CNT_UNINITIALIZED_DATA;
-            copied_sections[index].Characteristics |= IMAGE_SCN_CNT_INITIALIZED_DATA;
-        }
-    }
-
-    copied_headers->OptionalHeader.FileAlignment = alignment;
-    copied_headers->OptionalHeader.SizeOfHeaders = header_size;
-    /* Record where the image actually lives, so an analysis tool's addresses match the process. */
-    copied_headers->OptionalHeader.ImageBase = (ULONGLONG)(uintptr_t)base;
-    copied_headers->OptionalHeader.DllCharacteristics &=
-        (WORD)~IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE;
-    copied_headers->OptionalHeader.CheckSum = 0;
-    /* The certificate directory is a file offset rather than an RVA, so after this relayout it
-       would point at unrelated bytes. */
-    copied_headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].VirtualAddress = 0;
-    copied_headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].Size = 0;
-
-    size_t slot_count = 0;
-    DWORD* slots = collect_iat_slots(base, headers, &slot_count);
-
-    FILE* stream = _wfopen(dump_path, L"wb");
-    if (!stream) {
-        free(header_copy);
-        return RSF_DUMP_ERROR_WRITE_FAILED;
-    }
-    size_t written = fwrite(header_copy, 1, header_size, stream);
-    free(header_copy);
-
-    unsigned char* buffer = NULL;
-    size_t buffer_size = 0;
-    rsf_section_digest* digests = (rsf_section_digest*)calloc(
-        headers->FileHeader.NumberOfSections ? headers->FileHeader.NumberOfSections : 1u,
-        sizeof(rsf_section_digest));
-    double hash_ms = 0.0;
-    for (WORD index = 0; index < headers->FileHeader.NumberOfSections; ++index) {
-        DWORD size = sections[index].Misc.VirtualSize;
-        if (size == 0) {
-            size = sections[index].SizeOfRawData;
-        }
-        if (size == 0) {
-            continue;
-        }
-        if (size > buffer_size) {
-            unsigned char* grown = (unsigned char*)realloc(buffer, size);
-            if (!grown) {
-                free(buffer);
-                free(digests);
-                free(slots);
-                fclose(stream);
-                return RSF_DUMP_ERROR_WRITE_FAILED;
-            }
-            buffer = grown;
-            buffer_size = size;
-        }
-        const size_t readable_bytes =
-            rsf_dump_read_guarded(base + sections[index].VirtualAddress, buffer, size);
-        if (digests) {
-            const double hash_started = rsf_dump_now_ms();
-            digests[index].valid = 1;
-            digests[index].dumped_size = size;
-            digests[index].readable_bytes = readable_bytes;
-            digests[index].entropy =
-                rsf_sampled_entropy(buffer, size, RSF_ENTROPY_WINDOW, RSF_ENTROPY_SAMPLES);
-            rsf_sha256_hex(buffer, size, digests[index].sha256);
-            hash_ms += rsf_dump_now_ms() - hash_started;
-        }
-        if (sections[index].Characteristics & IMAGE_SCN_MEM_EXECUTE) {
-            local.iat_references += count_iat_references(
-                buffer, size, sections[index].VirtualAddress, slots, slot_count, NULL);
-        }
-        if (fseek(stream, (long)sections[index].VirtualAddress, SEEK_SET) != 0) {
-            free(buffer);
-            free(digests);
-            free(slots);
-            fclose(stream);
-            return RSF_DUMP_ERROR_WRITE_FAILED;
-        }
-        written += fwrite(buffer, 1, size, stream);
-        ++local.sections_written;
-    }
-    free(buffer);
-    free(slots);
-    const int failed = ferror(stream);
-    fclose(stream);
-    if (failed) {
+    const rsf_dump_image_info info = {
+        base, dump_path, headers->OptionalHeader.SizeOfImage, headers->OptionalHeader.SizeOfHeaders,
+        headers->OptionalHeader.SectionAlignment,
+        (uint32_t)((const unsigned char*)headers - base),
+        (uint32_t)((const unsigned char*)sections - base),
+        headers->FileHeader.NumberOfSections,
+        headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress,
+    };
+    rsf_section_digest* digests =
+        (rsf_section_digest*)calloc(info.sections ? info.sections : 1u, sizeof(rsf_section_digest));
+    rsf_dump_image_stats stats = {0};
+    const rsf_dump_result image = rsf_dump_image_write(&info, digests, &stats);
+    if (image != RSF_DUMP_OK) {
         free(digests);
-        return RSF_DUMP_ERROR_WRITE_FAILED;
+        return image;
     }
-    local.bytes_written = (uint64_t)written;
+    local.sections_written = stats.sections_written;
+    local.iat_references = stats.iat_references;
+    local.bytes_written = stats.bytes_written;
 
     rsf_module_entry* modules =
         (rsf_module_entry*)calloc(RSF_MAX_MODULES, sizeof(rsf_module_entry));
@@ -484,7 +240,7 @@ rsf_dump_result rsf_dump_module(const void* module_base, const rsf_dump_options*
     local.modules_listed = (uint32_t)module_count;
     const rsf_dump_result sidecar =
         write_sidecar(sidecar_path, base, headers, module_path, modules, module_count, options,
-                      digests, hash_ms, started_ms, &local);
+                      digests, stats.hash_ms, started_ms, &local);
     free(modules);
     free(digests);
 

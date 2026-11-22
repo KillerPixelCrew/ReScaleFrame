@@ -21,3 +21,84 @@ const _: () = {
     ["Offset of field: rsf_module_entry::size"]
         [::core::mem::offset_of!(rsf_module_entry, size) - 528usize];
 };
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_section_digest {
+    pub valid: ::core::ffi::c_int,
+    pub dumped_size: u64,
+    pub readable_bytes: u64,
+    pub entropy: f64,
+    pub sha256: [::core::ffi::c_char; 65usize],
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_section_digest"][::core::mem::size_of::<rsf_section_digest>() - 104usize];
+    ["Alignment of rsf_section_digest"][::core::mem::align_of::<rsf_section_digest>() - 8usize];
+    ["Offset of field: rsf_section_digest::valid"]
+        [::core::mem::offset_of!(rsf_section_digest, valid) - 0usize];
+    ["Offset of field: rsf_section_digest::dumped_size"]
+        [::core::mem::offset_of!(rsf_section_digest, dumped_size) - 8usize];
+    ["Offset of field: rsf_section_digest::readable_bytes"]
+        [::core::mem::offset_of!(rsf_section_digest, readable_bytes) - 16usize];
+    ["Offset of field: rsf_section_digest::entropy"]
+        [::core::mem::offset_of!(rsf_section_digest, entropy) - 24usize];
+    ["Offset of field: rsf_section_digest::sha256"]
+        [::core::mem::offset_of!(rsf_section_digest, sha256) - 32usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_dump_image_info {
+    pub base: *const ::core::ffi::c_uchar,
+    pub path: *const wchar_t,
+    pub image_size: u32,
+    pub header_size: u32,
+    pub alignment: u32,
+    pub nt_offset: u32,
+    pub sections_offset: u32,
+    pub sections: u32,
+    pub import_directory: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_dump_image_info"][::core::mem::size_of::<rsf_dump_image_info>() - 48usize];
+    ["Alignment of rsf_dump_image_info"][::core::mem::align_of::<rsf_dump_image_info>() - 8usize];
+    ["Offset of field: rsf_dump_image_info::base"]
+        [::core::mem::offset_of!(rsf_dump_image_info, base) - 0usize];
+    ["Offset of field: rsf_dump_image_info::path"]
+        [::core::mem::offset_of!(rsf_dump_image_info, path) - 8usize];
+    ["Offset of field: rsf_dump_image_info::image_size"]
+        [::core::mem::offset_of!(rsf_dump_image_info, image_size) - 16usize];
+    ["Offset of field: rsf_dump_image_info::header_size"]
+        [::core::mem::offset_of!(rsf_dump_image_info, header_size) - 20usize];
+    ["Offset of field: rsf_dump_image_info::alignment"]
+        [::core::mem::offset_of!(rsf_dump_image_info, alignment) - 24usize];
+    ["Offset of field: rsf_dump_image_info::nt_offset"]
+        [::core::mem::offset_of!(rsf_dump_image_info, nt_offset) - 28usize];
+    ["Offset of field: rsf_dump_image_info::sections_offset"]
+        [::core::mem::offset_of!(rsf_dump_image_info, sections_offset) - 32usize];
+    ["Offset of field: rsf_dump_image_info::sections"]
+        [::core::mem::offset_of!(rsf_dump_image_info, sections) - 36usize];
+    ["Offset of field: rsf_dump_image_info::import_directory"]
+        [::core::mem::offset_of!(rsf_dump_image_info, import_directory) - 40usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_dump_image_stats {
+    pub bytes_written: u64,
+    pub hash_ms: f64,
+    pub sections_written: u32,
+    pub iat_references: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_dump_image_stats"][::core::mem::size_of::<rsf_dump_image_stats>() - 24usize];
+    ["Alignment of rsf_dump_image_stats"][::core::mem::align_of::<rsf_dump_image_stats>() - 8usize];
+    ["Offset of field: rsf_dump_image_stats::bytes_written"]
+        [::core::mem::offset_of!(rsf_dump_image_stats, bytes_written) - 0usize];
+    ["Offset of field: rsf_dump_image_stats::hash_ms"]
+        [::core::mem::offset_of!(rsf_dump_image_stats, hash_ms) - 8usize];
+    ["Offset of field: rsf_dump_image_stats::sections_written"]
+        [::core::mem::offset_of!(rsf_dump_image_stats, sections_written) - 16usize];
+    ["Offset of field: rsf_dump_image_stats::iat_references"]
+        [::core::mem::offset_of!(rsf_dump_image_stats, iat_references) - 20usize];
+};

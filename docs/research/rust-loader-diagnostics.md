@@ -323,6 +323,19 @@ so a region changing after VirtualQuery produces a partial inventory instead of 
 The shared Win32 clock also moved into Rust. The native RTTI writer still provides the
 compiler-specific RTTI evidence.
 
+## Loaded image artifact and import reporting
+
+The Rust module writer now owns raw PE file creation, header relayout, section publication,
+SHA-256 and sampled entropy. The import walker and RIP-relative IAT receipt count share the
+same bounded live-image reader. The file still places each section at its RVA, preserves
+zero-filled unreadable bytes, clears stale file offsets and certificate data, and records the
+runtime base with ASLR disabled in the copied header. SHA-256 uses the same round constants
+and padding as the prior implementation, preserving BCrypt as the independent fixture.
+
+The native entry still validates and copies the public ABI, constructs paths, and calls the
+remaining C sidecar envelope and RTTI producer. The Rust file path rejects an inconsistent
+header or a range outside the image before writing. Longer RVAs use the Rust 64-bit seek API.
+
 ## Inventory at the end of the 82b39a63 continuation
 
 Eleven additional baseline paths have source cutovers. The two public header paths retain
