@@ -42,3 +42,7 @@ dispatch finding. The native window, overlay host and overlay service
 portions remain open. Existing SR and FG native leaves for their other
 consumers, and allocation changes outside the three D08 entry points, were
 outside this source port.
+
+The linked queries and constant assertions compile as C11 via
+`gl_pipeline_contract.c`. Strict MinGW C11 syntax passed. The shared
+reserve-and-initialize operation now serves all three GL entry points.
