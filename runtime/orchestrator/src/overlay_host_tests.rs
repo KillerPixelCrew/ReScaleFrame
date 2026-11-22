@@ -836,7 +836,7 @@ fn the_exported_entry_points_share_one_host() {
         let context = raw(&scene.context);
         let target = raw(&scene.view);
         assert_eq!(
-            rsf_core_overlay_host_draw_target(&p, context, target, 8, 8, &hud, null_mut()),
+            rsf_core_overlay_host_draw_target(&p, context, target, 8, 8, &hud, null_mut(), None),
             0
         );
         drop(held);

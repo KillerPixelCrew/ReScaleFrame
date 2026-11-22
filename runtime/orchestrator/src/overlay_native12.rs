@@ -14,7 +14,8 @@ use crate::overlay_native12_abi::{
     rsf_overlay12_target as Target,
 };
 use crate::overlay_panel::{
-    rsf_core_overlay_panel_open, rsf_core_overlay_panel_release, rsf_core_overlay_panel_retain,
+    elapsed_seconds, rsf_core_overlay_panel_open, rsf_core_overlay_panel_release,
+    rsf_core_overlay_panel_retain,
 };
 use crate::owned_win32_handle;
 use crate::sr_session::has_capacity;
@@ -678,7 +679,7 @@ impl Started {
             unsignalled: None,
             ring: Ring::default(),
             started,
-            previous: started,
+            previous: 0,
             was_visible: false,
             trace_left: 0,
             logger,
@@ -899,7 +900,11 @@ impl Started {
             self.trace_left -= 1;
             self.log(c"Overlay12: input/layout begin");
         }
-        let elapsed = now.saturating_sub(self.previous) as f32 / 1000.0;
+        let elapsed = elapsed_seconds(if self.previous == 0 {
+            0.0
+        } else {
+            now.saturating_sub(self.previous) as f64 / 1000.0
+        });
         let hint_alpha = STARTUP_MS.saturating_sub(active_for).min(STARTUP_FADE_MS) as f32 / 1000.0;
         let mut decided = rsf_overlay_intent {
             struct_size: size_of::<rsf_overlay_intent>() as u32,

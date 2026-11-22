@@ -331,7 +331,13 @@ pub struct rsf_overlay11on12_platform {
             user: *mut ::core::ffi::c_void,
         ) -> ::core::ffi::c_int,
     >,
-    pub visible: ::core::option::Option<unsafe extern "C" fn() -> u32>,
+    pub admit: ::core::option::Option<
+        unsafe extern "C" fn(
+            show_hud: u32,
+            visible: *mut u32,
+            hint: *mut f32,
+        ) -> ::core::ffi::c_int,
+    >,
     pub target: ::core::option::Option<
         unsafe extern "C" fn(
             device: *mut ::core::ffi::c_void,
@@ -351,6 +357,8 @@ pub struct rsf_overlay11on12_platform {
             height: u32,
             arg1: *const rsf_overlay_stats,
             arg2: *mut rsf_overlay_intent,
+            visible: u32,
+            hint: f32,
         ) -> ::core::ffi::c_int,
     >,
     pub release: ::core::option::Option<
@@ -371,8 +379,8 @@ const _: () = {
         [::core::mem::offset_of!(rsf_overlay11on12_platform, window) - 8usize];
     ["Offset of field: rsf_overlay11on12_platform::start"]
         [::core::mem::offset_of!(rsf_overlay11on12_platform, start) - 16usize];
-    ["Offset of field: rsf_overlay11on12_platform::visible"]
-        [::core::mem::offset_of!(rsf_overlay11on12_platform, visible) - 24usize];
+    ["Offset of field: rsf_overlay11on12_platform::admit"]
+        [::core::mem::offset_of!(rsf_overlay11on12_platform, admit) - 24usize];
     ["Offset of field: rsf_overlay11on12_platform::target"]
         [::core::mem::offset_of!(rsf_overlay11on12_platform, target) - 32usize];
     ["Offset of field: rsf_overlay11on12_platform::acquire"]

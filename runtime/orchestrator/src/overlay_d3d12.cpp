@@ -73,12 +73,12 @@ int start(void* device, void* hwnd, rsf_overlay12_log log, void* user) noexcept 
 } catch (...) { return 0; }
 
 int draw(void* context, void* view, uint32_t width, uint32_t height,
-    const rsf_overlay_stats* stats, rsf_overlay_intent* intent) noexcept try {
-    return rsf_overlay_host_draw_target(context, view, width, height, stats, intent);
+    const rsf_overlay_stats* stats, rsf_overlay_intent* intent, uint32_t visible, float hint) noexcept try {
+    return rsf_overlay_host_draw_admitted_target(context, view, width, height, stats, intent, visible, hint);
 } catch (...) { return 0; }
 
 constexpr rsf_overlay11on12_platform platform{
-    create_wrapped_device, window, start, rsf_overlay_host_visible, target, acquire, draw, release,
+    create_wrapped_device, window, start, rsf_overlay_host_admit_target, target, acquire, draw, release,
     [](void* context) { static_cast<ID3D11DeviceContext*>(context)->Flush(); },
     rsf_overlay_host_stop_device,
 };

@@ -379,7 +379,58 @@ unsafe extern "C" fn rsf_overlay_host_draw_target(
     intent: *mut rsf_overlay_intent,
 ) -> i32 {
     unsafe {
-        rsf_core_overlay_host_draw_target(&PLATFORM, context, target, width, height, stats, intent)
+        rsf_core_overlay_host_draw_target(
+            &PLATFORM, context, target, width, height, stats, intent, None,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_overlay_host_admit_target(
+    show_hud: u32,
+    visible: *mut u32,
+    hint: *mut f32,
+) -> i32 {
+    if visible.is_null() || hint.is_null() || !STARTED.load(Ordering::Acquire) {
+        return 0;
+    }
+    let Some(admission) = try_hold().and_then(|host| host.admit_target(&PLATFORM, show_hud != 0))
+    else {
+        return 0;
+    };
+    unsafe {
+        visible.write(u32::from(admission.visible));
+        hint.write(admission.hint);
+    }
+    1
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_overlay_host_draw_admitted_target(
+    context: Handle,
+    target: Handle,
+    width: u32,
+    height: u32,
+    stats: *const rsf_overlay_stats,
+    intent: *mut rsf_overlay_intent,
+    visible: u32,
+    hint: f32,
+) -> i32 {
+    let admission = DrawAdmission {
+        visible: visible != 0,
+        hint,
+    };
+    unsafe {
+        rsf_core_overlay_host_draw_target(
+            &PLATFORM,
+            context,
+            target,
+            width,
+            height,
+            stats,
+            intent,
+            Some(admission),
+        )
     }
 }
 
