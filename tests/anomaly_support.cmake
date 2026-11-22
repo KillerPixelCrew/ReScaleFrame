@@ -1,7 +1,7 @@
 # CPU history/planning contracts only; these tests do not prove game motion output.
 add_executable(rsf_anomaly_temporal_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_temporal_tests.cpp")
 target_include_directories(rsf_anomaly_temporal_test PRIVATE "${PROJECT_SOURCE_DIR}")
-target_link_libraries(rsf_anomaly_temporal_test PRIVATE rsf_build_options)
+target_link_libraries(rsf_anomaly_temporal_test PRIVATE rsf_anomaly_rust rsf_build_options)
 add_test(NAME anomaly_temporal_contract COMMAND rsf_anomaly_temporal_test)
 add_test(NAME anomaly_temporal_unknown_selection COMMAND rsf_anomaly_temporal_test unknown-case)
 set_tests_properties(anomaly_temporal_unknown_selection PROPERTIES WILL_FAIL TRUE)

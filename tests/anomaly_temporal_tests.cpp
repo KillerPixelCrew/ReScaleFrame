@@ -2,6 +2,7 @@
 #include "games/anomaly/temporal/math.h"
 #include "games/anomaly/temporal/history.h"
 #include "games/anomaly/temporal/frame_plan.h"
+#include "games/anomaly/src/sr_jitter.h"
 #include <cmath>
 #include <limits>
 
@@ -60,11 +61,18 @@ TEST(matrix_motion)
         "current-to-previous motion must be -10 pixels for rightward geometry");
     const auto y_motion = pixel_motion({0, 0.4, 0.5, 1}, {0, 0, 0.5, 1}, {100, 50});
     require(y_motion && std::abs(y_motion->y - 10) < 1e-9, "top-left UV Y convention wrong");
-    const auto projection = jitter_projection(Mat4::identity(), {0.25, -0.5}, {100, 50});
-    require(projection.has_value(), "valid jitter rejected");
-    const auto clip = transform(*projection, {0, 0, 0.5, 1});
+    constexpr Extent render{128, 64};
+    constexpr Vec2 jitter{0.25, -0.5};
+    const auto reference = jitter_projection(Mat4::identity(), jitter, render);
+    const auto projection = rsf::anomaly::sr::production_jitter_projection(
+        rsf::anomaly::sr::from_column(Mat4::identity()),
+        static_cast<float>(jitter.x), static_cast<float>(jitter.y), render.width, render.height);
+    require(reference && projection, "valid jitter rejected");
+    const auto column = rsf::anomaly::sr::to_column(*projection);
+    require(column == *reference, "production projection disagreed with the temporal model");
+    const auto clip = transform(column, {0, 0, 0.5, 1});
     require(clip.has_value(), "jitter projection failed");
-    const auto stable = pixel_motion_from_jittered(*clip, {0, 0, 0.5, 1}, {100, 50}, {0.25, -0.5}, {});
+    const auto stable = pixel_motion_from_jittered(*clip, {0, 0, 0.5, 1}, render, jitter, {});
     require(stable && std::abs(stable->x) < 1e-9 && std::abs(stable->y) < 1e-9,
         "jitter-only displacement leaked into geometric motion");
 }

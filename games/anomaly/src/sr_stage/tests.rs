@@ -22,6 +22,7 @@ struct Fake {
     eye_x: f32,
     window_open: bool,
     suppress_swap: bool,
+    spatial_recovery: bool,
     jittered: bool,
     refused: bool,
     driver_enabled: bool,
@@ -205,6 +206,7 @@ extern "C" fn seam(cookie: *mut c_void) -> bool {
         render_height: 720,
         output_width: 1920,
         output_height: 1080,
+        spatial_recovery: fake(|f| f.spatial_recovery),
     };
     // The real controller reaches the Rust seam pass through the host exactly like this.
     unsafe { rsf_anomaly_sr_stage_upscale(cookie, &input) }
@@ -952,6 +954,21 @@ fn overlay_offers_only_present_runtimes_and_a_reachable_default() {
     let stage4 = installed(4, &table);
     assert_eq!(stage4.choices().backends, 0);
     assert!(!stage4.overlay_report(std::ptr::dangling_mut::<c_void>()));
+}
+
+#[test]
+fn sun_camera_recovery_runs_spatial_seam_without_temporal_evaluation() {
+    let table = platform();
+    let driver = installed(5, &table);
+    fake(|f| {
+        f.spatial_recovery = true;
+        f.temporal_ready = true;
+        f.evaluate = true;
+    });
+    driver.prepare(null_mut());
+    calls();
+    driver.seam(null_mut());
+    assert_eq!(calls(), ["controller seam", "count bilinear", "bilinear"]);
 }
 
 #[test]
