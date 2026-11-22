@@ -1279,10 +1279,10 @@ Port the two providers and FSR4 compatibility controls, coordinating the shared 
 - [ ] [runtime/backends/fsr/src/fsr4_compat_core.h](runtime/backends/fsr/src/fsr4_compat_core.h)
 - [x] [runtime/backends/fsr/src/fsr4_compat_platform.h](runtime/backends/fsr/src/fsr4_compat_platform.h)
 - [x] [runtime/backends/fsr/src/fsr_backend.cpp](runtime/backends/fsr/src/fsr_backend.cpp)
-- [ ] [runtime/backends/fsr/src/fsr_generation.cpp](runtime/backends/fsr/src/fsr_generation.cpp)
+- [x] [runtime/backends/fsr/src/fsr_generation.cpp](runtime/backends/fsr/src/fsr_generation.cpp)
 - [x] [runtime/backends/xess/include/rescaleframe/xess_backend.h](runtime/backends/xess/include/rescaleframe/xess_backend.h)
 - [x] [runtime/backends/xess/src/xess_backend.cpp](runtime/backends/xess/src/xess_backend.cpp)
-- [ ] [runtime/backends/xess/src/xess_generation.cpp](runtime/backends/xess/src/xess_generation.cpp)
+- [x] [runtime/backends/xess/src/xess_generation.cpp](runtime/backends/xess/src/xess_generation.cpp)
 
 **Fixtures (1)**
 
