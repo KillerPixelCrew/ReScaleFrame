@@ -26,9 +26,19 @@ def generate(output, header, types, constants, clang_args, extra=(), *, use_core
 
 generate("runtime/backends/fsr/compat/src/abi.rs", "runtime/backends/fsr/src/fsr4_compat_platform.h",
          "rsf_fsr4_compat_.*", "RSF_FSR4_COMPAT_PLATFORM_ABI_VERSION", [])
+frame_records = "rsf_(camera_frame|game_cpu_event)"
+frame_constants = (
+    "RSF_(GAME_CAMERA_ABI_VERSION|GAME_CPU_(FRAME_BEGIN|INPUT_SAMPLE|SIMULATION_BEGIN|"
+    "SIMULATION_END|FRAME_END|INPUT_EVENT|EVENT_VERSION|INPUT_KEYED|INPUT_UNFRAMED)|"
+    "GAME_RENDER_(SR|FINAL_SCENE|RESET|PRIMARY))"
+)
+generate("sdk/game/src/frame_event_abi.rs", "sdk/game/include/rescaleframe/game_api.h",
+         frame_records, frame_constants, ["-Isdk/game/include"])
 generate("sdk/game/src/lib.rs", "sdk/game/include/rescaleframe/game_api.h",
          "rsf_(get_game_plugin_api_fn|frame_record|game_cpu_(source|receipt)_event)", "RSF_.*",
-         ["-Isdk/game/include"], ["--raw-line", "pub mod camera_math;", "--raw-line", "pub mod plugin_session_abi;",
+         ["-Isdk/game/include"], ["--blocklist-type", frame_records, "--blocklist-item", frame_constants,
+          "--raw-line", "mod frame_event_abi;", "--raw-line", "pub use frame_event_abi::*;",
+          "--raw-line", "pub mod camera_math;", "--raw-line", "pub mod plugin_session_abi;",
           "--raw-line", "pub mod shader_patch_abi;", "--raw-line", "pub mod sr_abi;"])
 generate("sdk/game/src/shader_patch_abi.rs", "runtime/shader_patch/include/rescaleframe/shader_patch.h",
          "rsf_(get_shader_patch_api_fn|shader_patch_api|patch_.*)", "RSF_(SHADER_PATCH_VERSION|PATCH_.*)", [],
