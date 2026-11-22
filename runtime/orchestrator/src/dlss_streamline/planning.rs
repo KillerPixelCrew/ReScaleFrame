@@ -10,22 +10,22 @@ const NO_SUPPORTED_ADAPTER: u32 = 6;
 
 #[repr(C)]
 #[derive(Default)]
-struct DriverVersions {
-    required_major: u32,
-    required_minor: u32,
-    detected_major: u32,
-    detected_minor: u32,
+pub(super) struct DriverVersions {
+    pub(super) required_major: u32,
+    pub(super) required_minor: u32,
+    pub(super) detected_major: u32,
+    pub(super) detected_minor: u32,
 }
 
 type GetLuid = unsafe extern "C" fn(Handle, &mut u64) -> i32;
 
 #[repr(C)]
 pub(super) struct Platform {
-    d3d11_luid: GetLuid,
-    device_luid: GetLuid,
-    query_support: unsafe extern "C" fn(Handle, u64, &mut u32) -> i32,
-    requirements: unsafe extern "C" fn(Handle, &mut DriverVersions) -> i32,
-    optimal: unsafe extern "C" fn(Handle, &Dimensions, &mut Optimal) -> i32,
+    pub(super) d3d11_luid: GetLuid,
+    pub(super) device_luid: GetLuid,
+    pub(super) query_support: unsafe extern "C" fn(Handle, u64, &mut u32) -> i32,
+    pub(super) requirements: unsafe extern "C" fn(Handle, &mut DriverVersions) -> i32,
+    pub(super) optimal: unsafe extern "C" fn(Handle, &Dimensions, &mut Optimal) -> i32,
 }
 
 const _: () = {

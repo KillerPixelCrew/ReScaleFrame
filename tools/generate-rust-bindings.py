@@ -1239,9 +1239,11 @@ generate("tests/vulkan-fg/src/dlss_abi.rs", "tests/vulkan-fg/dlss_abi.h",
           "--blocklist-type", "rsf_(frame_record|camera_frame|frame_id|frame_phase|screen_class)",
           "--raw-line", "use rsf_game_sys::rsf_frame_record;", "--with-derive-default"])
 
-generate("runtime/orchestrator/src/streamline_sr/payload_abi.rs",
-         "runtime/backends/dlss/src/streamline_sr_payload.h",
-         "^rsf_sl_sr_.*$", "NOTHING", [], ["--with-derive-default"])
+generate("runtime/orchestrator/src/streamline_sr/records_abi.rs",
+         "runtime/backends/dlss/src/streamline_sr_records.h",
+         "^rsf_sl_sdk_.*$", "NOTHING", [],
+         ["--no-recursive-allowlist", "--with-derive-default",
+          "--raw-line", "use crate::vulkan_streamline_camera::rsf_slvk_sdk_header;"])
 
 generate("tests/vulkan-fg/src/streamline_abi.rs", "tests/vulkan-fg/streamline_abi.h",
          "NOTHING", "NOTHING", [], ["--allowlist-function", "rsf_fixture_sl_.*"])

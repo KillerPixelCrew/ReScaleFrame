@@ -20,7 +20,7 @@ fn sinks() -> MutexGuard<'static, [Option<Sink>; 2]> {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_streamline_log_set(
+pub(crate) extern "C" fn rsf_core_streamline_log_set(
     slot: u32,
     owner: usize,
     log: Log,
@@ -39,7 +39,7 @@ extern "C" fn rsf_core_streamline_log_set(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_streamline_log_clear(slot: u32, owner: usize) {
+pub(crate) extern "C" fn rsf_core_streamline_log_clear(slot: u32, owner: usize) {
     // Stop invoking the sink before returning its context to the caller.
     let _output = Output::enter();
     if let Some(value) = sinks().get_mut(slot as usize)
@@ -50,7 +50,7 @@ extern "C" fn rsf_core_streamline_log_clear(slot: u32, owner: usize) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_streamline_log_emit(
+pub(crate) unsafe extern "C" fn rsf_core_streamline_log_emit(
     slot: u32,
     important: u32,
     text: *const c_char,

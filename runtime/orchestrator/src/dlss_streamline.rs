@@ -2,6 +2,8 @@
 pub(super) mod exports;
 mod frame;
 mod planning;
+#[cfg(not(test))]
+mod sdk;
 
 use crate::com_ref::ComRef;
 use crate::diagnostic_output::Output;

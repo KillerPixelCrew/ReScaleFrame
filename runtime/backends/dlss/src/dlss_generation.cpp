@@ -303,7 +303,7 @@ void report_vendor(rsf_backend_log_fn log, void* user, uint32_t vendor) noexcept
 
 void* load(const wchar_t* path, const rsf_streamline_host_setup* setup) noexcept
 {
-    return rsf::load_interposer(path, setup->require_signature != 0, setup->log, setup->log_user);
+    return rsf_streamline_load_interposer(path, setup->require_signature != 0, setup->log, setup->log_user);
 }
 
 void* allocate(rsf_backend_log_fn log, void* user) noexcept
@@ -798,9 +798,9 @@ const rsf_generation_provider provider{sizeof(provider), create, configure, begi
 }
 
 // Internal to this backend module: shared D3D12 DLSS SR sets this frame's common constants.
-bool rsf_streamline_common_set(rsf_streamline_host* host, uint64_t id, uint32_t viewport, const sl::Constants& constants)
+extern "C" uint32_t rsf_streamline_common_set(rsf_streamline_host* host, uint64_t id, uint32_t viewport, const void* constants)
 {
-    return rsf_core_slhost_common(host, id, viewport, &constants, &platform) != 0;
+    return rsf_core_slhost_common(host, id, viewport, constants, &platform) != 0;
 }
 extern "C" rsf_backend_result rsf_streamline_host_create(const rsf_streamline_host_setup* setup, rsf_streamline_host** out)
 {

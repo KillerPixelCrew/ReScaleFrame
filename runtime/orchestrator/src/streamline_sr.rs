@@ -5,14 +5,66 @@ use std::ffi::c_void;
 use std::ptr::null_mut;
 
 #[cfg(not(test))]
-mod native;
+pub(crate) mod native;
+#[path = "streamline_sr/records_abi.rs"]
+mod records_abi;
+// The typed SDK call tables are compiled out of unit tests, which leaves their constants unused.
+#[cfg_attr(test, allow(dead_code))]
+pub(super) mod sdk;
 
-#[path = "streamline_sr/payload_abi.rs"]
-mod payload_abi;
-pub(super) use payload_abi::{
-    rsf_sl_sr_constants as Constants, rsf_sl_sr_dimensions as Dimensions,
-    rsf_sl_sr_optimal as Optimal, rsf_sl_sr_options as OptionPayload,
-};
+/// DLSS mode and output size handed to the plan query.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Dimensions {
+    pub(super) mode: u32,
+    pub(super) width: u32,
+    pub(super) height: u32,
+}
+
+/// Option values for one viewport, ready to copy into the SDK record.
+#[derive(Clone, Copy, Default)]
+pub(super) struct OptionPayload {
+    pub(super) dimensions: Dimensions,
+    pub(super) presets: [u32; 6],
+    pub(super) hdr: u8,
+    pub(super) auto_exposure: u8,
+    pub(super) alpha: u8,
+}
+
+/// Sizes the SDK reports for one plan query.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Optimal {
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) width_min: u32,
+    pub(super) height_min: u32,
+    pub(super) width_max: u32,
+    pub(super) height_max: u32,
+}
+
+/// Camera and motion constants before they become an SDK record.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Constants {
+    pub(super) view_to_clip: [f32; 16],
+    pub(super) clip_to_view: [f32; 16],
+    pub(super) clip_to_previous: [f32; 16],
+    pub(super) previous_to_clip: [f32; 16],
+    pub(super) jitter: [f32; 2],
+    pub(super) motion_scale: [f32; 2],
+    pub(super) pinhole: [f32; 2],
+    pub(super) position: [f32; 3],
+    pub(super) up: [f32; 3],
+    pub(super) right: [f32; 3],
+    pub(super) forward: [f32; 3],
+    pub(super) near_plane: f32,
+    pub(super) far_plane: f32,
+    pub(super) fov: f32,
+    pub(super) aspect: f32,
+    pub(super) invalid_motion: f32,
+    pub(super) depth_inverted: u8,
+    pub(super) camera_motion: u8,
+    pub(super) motion_3d: u8,
+    pub(super) reset: u8,
+}
 
 fn luid_bits(luid: windows::Win32::Foundation::LUID) -> u64 {
     u64::from(luid.LowPart) | (u64::from(luid.HighPart as u32) << 32)

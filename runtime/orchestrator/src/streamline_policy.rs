@@ -43,7 +43,6 @@ fn perspective_and_orthographic_forward() {
 }
 
 // Windows-style absolute paths accepted by the fixed-search Streamline loader.
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_streamline_absolute_path(path: *const u16) -> u32 {
     if path.is_null() || unsafe { path.read() } == 0 {
         return 0;
@@ -75,16 +74,6 @@ fn streamline_loader_requires_an_absolute_windows_path() {
         );
     }
     assert_eq!(unsafe { rsf_streamline_absolute_path(std::ptr::null()) }, 0);
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_streamline_camera_forward(
-    view_to_world: &[f32; 16],
-    view_to_clip: &[f32; 16],
-    orthographic_sign: f32,
-    forward: &mut [f32; 3],
-) {
-    *forward = camera_forward(view_to_world, view_to_clip, orthographic_sign);
 }
 
 #[test]

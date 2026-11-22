@@ -7,13 +7,8 @@ const NOT_COMPILED: i32 = -3;
 const ULTRA_PERFORMANCE: u32 = 4;
 
 #[cfg(not(test))]
-unsafe extern "C" {
-    fn rsf_dlss_native12_sdk_platform() -> *const Platform;
-}
-
-#[cfg(not(test))]
 fn platform() -> Option<&'static Platform> {
-    unsafe { rsf_dlss_native12_sdk_platform().as_ref() }
+    super::sdk::platform()
 }
 
 #[cfg(test)]

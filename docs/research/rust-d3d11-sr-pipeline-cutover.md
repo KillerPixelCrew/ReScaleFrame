@@ -120,3 +120,61 @@ compiled out. The unmodified D06 generation source also passed SDK-enabled
 syntax against the shared headers. Bindgen 0.72.1 regeneration, Rust 1.94.1
 formatting and locked offline Cargo metadata passed. Build, link, runtime
 and device behavior remain unverified.
+
+## Direct3D SR SDK calls in Rust after `f43a03ae`
+
+Question: can Rust build the Streamline records and call the SDK for both Direct3D SR routes, so
+`dlss_native12.cpp` and `streamline_sr.h` can go and `dlss_streamline.cpp` shrinks to what only
+the vendor C++ headers can answer? The SDK exports are plain C entry points (`SL_API extern "C"`)
+whose C++ references are pointers at the ABI, and the only virtual member in the records, the
+frame token's conversion operator, is never called. Nothing in the call path needs a C++ compiler
+once the record layouts are known, so the answer is yes.
+
+What moved. `streamline_sr/sdk.rs` builds `sl::Preferences`, `Constants`, `DLSSOptions`,
+`DLSSOptimalSettings`, `Resource`, `ResourceTag`, `ViewportHandle`, `AdapterInfo` and
+`FeatureRequirements` and types the entry points. The header, preferences, constants, resource and
+tag records are the Vulkan bridge's `rsf_slvk_sdk_*` records, which describe the same 2.14.1
+layouts; the D3D-only records are in `streamline_sr_records.h` with bindgen output in
+`streamline_sr/records_abi.rs`. `dlss_streamline/sdk.rs` holds the D3D11 and shared-host tables
+and `dlss_native12/sdk.rs` the D3D12 table, replacing the two C++ platform tables. They keep the
+signatures the Rust owners already used, so the session, registration and fixture code did not
+change. The private payload records (`rsf_sl_sr_*`) never crossed a language boundary after this,
+so `streamline_sr_payload.h`, its bindgen output and Codex's unfinished additions to both were
+removed in favour of plain Rust types in `streamline_sr.rs`. `dlss_native12/xm.rs` is the
+scalar transcription of the SSE `XMMatrixInverse` the Fallout 4 adapter already pins, kept as a
+copy so the D3D12 singularity gate keeps bit-identical inverse and determinant values.
+
+Defaults. The D3D11 startup extends the `sl::Preferences` constructor flags
+(`eDisableCLStateTracking | eAllowOTA | eLoadDownloadedPlugins`) with its own two; the D3D12
+registration assigns its flags. The records keep the INVALID_FLOAT lens matrix, the 40.0 relative
+depth separation, the false orthographic, dilated and jittered flags, and the `DLSSOptions`
+defaults for exposure and indicator axes. Both D3D12 `slInit` and the D3D11 `slInit` keep their
+log levels, and the D3D12 path still installs no message callback.
+
+What stays native. `dlss_streamline.cpp` checks every record, GUID, enum and buffer-type value
+Rust copies against the pinned headers with `static_assert`, and `rsf_dlss_sdk_compiled()`
+constructs each SDK record once to confirm the struct versions and defaults Rust writes. The
+SDK path stays unavailable when the headers are absent or the check fails, as `RSF_HAVE_STREAMLINE=0`
+did before. The same file defines `rsf_dlss_verify_runtime_signature`, the vendor's
+`sl::security::verifyEmbeddedSignature`, because `sl_security.h` defines globals and pulls in
+WinTrust and cert parsing it owns. Both are C++ because `sl.h` and `sl_security.h` are C++ only;
+there is no first-party logic left in the file.
+
+Callers. `streamline_load.h` and `streamline_frame.h` are now C declarations. The Rust loader is
+exported as `rsf_streamline_load_interposer` and `dlss_generation.cpp` calls it instead of the
+removed inline C++ loader. `rsf_streamline_common_set` takes an opaque constants record and is
+`extern "C"`; the D06 file changed only in that definition and its loader call. The unused
+`rsf_streamline_camera_forward` export was removed with its inline C++ caller.
+
+Source evidence. The 48 orchestrator resolution errors at this tip (D06, D01 and other chunks) stop
+`cargo check` before type checking, so the changed modules were compiled in a scratch crate that
+includes the real `dlss_streamline`, `dlss_native12`, `streamline_sr`, `streamline_log`,
+`streamline_policy`, `sdk_module`, `sr_session`, `render_abi` and `gl_pipeline_abi` sources with
+stubbed `com_ref`, `input_dump`, `d3d11_d3d12`, `d3d11_present_abi` and `d3d12_sr`.
+`cargo check`, `cargo clippy --lib --tests -D warnings` and 15 unit tests passed there
+(record builders, tag extents and pointers, the DirectXMath inverse, the route fixtures). MSVC
+`/W4 /WX /Zs` passed for `dlss_streamline.cpp`, `dlss_generation.cpp` and `mfg_unlock.cpp` with the
+pinned 2.14.1 headers, and a linked probe of `dlss_streamline.cpp` returned
+`rsf_dlss_sdk_compiled() == 1` and refused an unsigned module. No SDK call was made, no device was
+created and no game was run, so slInit, tagging and evaluation against a real interposer remain
+unverified.

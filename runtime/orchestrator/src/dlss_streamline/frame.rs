@@ -5,10 +5,10 @@ use std::ptr::{from_ref, null};
 
 #[repr(C)]
 pub(super) struct Platform {
-    owned_token: unsafe extern "C" fn(Handle, *const u32) -> Handle,
-    host_token: unsafe extern "C" fn(Handle, u64) -> Handle,
-    owned_constants: unsafe extern "C" fn(Handle, Handle, u32, &Constants) -> i32,
-    host_constants: unsafe extern "C" fn(Handle, u64, u32, &Constants) -> i32,
+    pub(super) owned_token: unsafe extern "C" fn(Handle, *const u32) -> Handle,
+    pub(super) host_token: unsafe extern "C" fn(Handle, u64) -> Handle,
+    pub(super) owned_constants: unsafe extern "C" fn(Handle, Handle, u32, &Constants) -> i32,
+    pub(super) host_constants: unsafe extern "C" fn(Handle, u64, u32, &Constants) -> i32,
 }
 
 const _: () = {

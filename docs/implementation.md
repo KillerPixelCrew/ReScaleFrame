@@ -8293,3 +8293,12 @@ from the private capsule record. Runtime SR binds its capture services at
 admission and uses Rust directly for frame-begin and SR metadata. The
 [standalone source record](research/rust-vulkan-ffx-production-leaves.md#standalone-bridge-and-capture-follow-up-from-818a5ede)
 documents the preserved vendor descriptor and exception boundaries.
+
+### Direct3D DLSS SR SDK calls
+
+Rust now builds the Streamline 2.14.1 records and calls the SDK entry points for D3D11, shared-host
+and native D3D12 DLSS SR. `dlss_native12.cpp` and `streamline_sr.h` are gone; `dlss_streamline.cpp`
+keeps only the layout checks against the pinned headers and the vendor signature call. See the
+[source record](research/rust-d3d11-sr-pipeline-cutover.md#direct3d-sr-sdk-calls-in-rust-after-f43a03ae).
+Verified: scratch-crate type check, clippy and unit tests, and MSVC syntax checks. The tip does not
+build as a whole, and no SDK, device or game run was made.

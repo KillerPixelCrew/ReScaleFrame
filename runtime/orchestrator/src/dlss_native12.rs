@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
 pub(super) mod exports;
+#[cfg(not(test))]
+mod sdk;
+mod xm;
 
 use crate::com_ref::ComRef;
 use crate::gl_pipeline_abi::rsf_dlss_setup as Setup;
@@ -112,7 +115,7 @@ const _: () = {
     assert!(size_of::<Preferences>() == 40);
 };
 
-// C++ owns the Streamline types and SDK calls. The table is static in each consumer.
+// The typed Streamline calls live in sdk.rs, which unit tests do not compile.
 #[repr(C)]
 struct Platform {
     load: unsafe extern "C" fn(*const u16, &Setup) -> Handle,
