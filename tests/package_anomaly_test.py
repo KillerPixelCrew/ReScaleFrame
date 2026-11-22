@@ -75,7 +75,7 @@ class AnomalyPackageTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'pinned SDK'):
                 package.input_plan(args)
         self.assertEqual(len(package.VENDOR_HASHES), 14)
-        self.assertTrue(set(package.ac7.RUNTIME) <= package.VENDOR_HASHES.keys())
+        self.assertTrue(set(package.RUNTIME) <= package.VENDOR_HASHES.keys())
 
     def test_archive_paths(self):
         for name in ('../outside.dll', '/absolute.dll', 'C:/absolute.dll', 'path\\outside.dll', '.', 'path/./file'):

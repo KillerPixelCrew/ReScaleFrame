@@ -18,6 +18,7 @@ SPEC = importlib.util.spec_from_file_location("package_release", ROOT / "tools/p
 package = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = package
 SPEC.loader.exec_module(package)
+import package_common  # noqa: E402  (package-release put tools/ on sys.path)
 
 
 class ReleasePackageTest(unittest.TestCase):
@@ -261,11 +262,12 @@ class ExistingPackagerCompatibilityTest(unittest.TestCase):
         for game in ("AC7", "RDR2", "Anomaly"):
             module = package.load_packager(game)
             with self.subTest(game=game):
-                owner = module if game == "Anomaly" else module if game == "AC7" else module.ac7
+                # Anomaly checks its own tree; the others call package_common.release_identity.
+                owner = module if game == "Anomaly" else package_common
                 with mock.patch.object(owner, "git", return_value=" M source"):
                     with self.assertRaisesRegex(RuntimeError, "Commit"):
                         module.main(["--streamline-root", "unused"])
-                with mock.patch.object(module.ac7 if game != "AC7" else module, "git", return_value="new"):
+                with mock.patch.object(package_common, "git", return_value="new"):
                     with self.assertRaisesRegex(RuntimeError, "commit changed"):
                         module.main(["--streamline-root", "unused"], release_revision="old", game_only=True)
 
