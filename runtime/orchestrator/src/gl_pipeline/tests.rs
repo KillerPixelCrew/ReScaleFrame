@@ -72,6 +72,7 @@ struct World {
     failing_backends: HashSet<u32>,
     created_backends: Vec<u32>,
     fail_texture: Option<usize>,
+    fail_sharpening: bool,
     textures_created: usize,
     resize_refused: bool,
     chain_resize_refused: bool,
@@ -339,7 +340,11 @@ unsafe extern "C" fn sr_evaluate(sr: Handle, _: Handle, pass: *const Pass, slot:
 unsafe extern "C" fn sr_set_sharpening(sr: Handle, options: *const rsf_sharpening_options) -> i32 {
     assert!(sharpening_policy::valid(unsafe { &*options }));
     event(format!("sharpen {}", name(sr)));
-    OK
+    if world(|world| world.fail_sharpening) {
+        FEATURE_FAILED
+    } else {
+        OK
+    }
 }
 unsafe extern "C" fn sr_destroy(sr: Handle) {
     event(format!("destroy {}", name(sr)));
@@ -573,6 +578,22 @@ fn pass(frame: u64) -> Pass {
 }
 
 #[test]
+fn refused_sharpening_keeps_the_previous_surfaces_and_window() {
+    let pipeline = open_pipeline();
+    let options = options(SR_DLSS, 1);
+    let configure = |w, h| unsafe { rsf_gl_pipeline_configure(pipeline, &options, w, h) };
+    assert_eq!(configure(640, 480), OK);
+    let previous = surfaces(pipeline);
+    events();
+    world(|world| world.fail_sharpening = true);
+    assert_eq!(configure(1280, 720), FEATURE_FAILED);
+    assert!(!events().iter().any(|call| call.starts_with("window ")));
+    assert_eq!(surfaces(pipeline).composed, previous.composed);
+    assert_eq!(status(pipeline).sr_result, FEATURE_FAILED);
+    assert_eq!(unsafe { rsf_gl_pipeline_close(pipeline) }, OK);
+}
+
+#[test]
 fn refused_chain_resize_restores_the_published_window_extent() {
     let pipeline = open_pipeline();
     let options = options(SR_DLSS, 1);
@@ -605,9 +626,9 @@ fn rejected_switch_keeps_published_session_and_a_retry_rebuilds() {
         [
             "request fg 1",
             "drain",
+            "sharpen sr1.2",
             "window 1920x1080",
-            "chain 1920x1080",
-            "sharpen sr1.2"
+            "chain 1920x1080"
         ]
     );
     let published = surfaces(pipeline);
@@ -676,14 +697,12 @@ fn rejected_switch_keeps_published_session_and_a_retry_rebuilds() {
         OK
     );
     let switched = events();
-    assert_eq!(switched[0], "drain");
-    assert_eq!(switched[1], "destroy sr1.2");
+    assert_eq!(switched[..3], ["drain", "sharpen sr3.12", "destroy sr1.2"]);
     assert!(
-        switched[2..8]
+        switched[3..9]
             .iter()
             .all(|line| line.starts_with("destroy texture"))
     );
-    assert_eq!(switched.last().map(String::as_str), Some("sharpen sr3.12"));
     assert_eq!(status(pipeline).effective_sr, SR_FSR3);
     assert_eq!((live("sr1."), live("sr3."), live("texture")), (0, 1, 6));
 

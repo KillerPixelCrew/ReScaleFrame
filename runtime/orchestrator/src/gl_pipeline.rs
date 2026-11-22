@@ -434,7 +434,9 @@ impl Pipeline {
         let mut sr = ptr::null_mut();
         let result = unsafe { (p.sr_create)(&setup, &mut sr) };
         let sr = Owned::new(sr, p.sr_destroy);
-        if result == OK {
+        if result == OK && sr.is_none() {
+            (INIT_FAILED, None)
+        } else if result == OK {
             (result, sr)
         } else {
             (result, None)
@@ -489,6 +491,7 @@ impl Pipeline {
         state: &mut State,
         options: &rsf_gl_pipeline_options,
         shape: Shape,
+        sharpening: &rsf_sharpening_options,
     ) -> Result<(u32, Surfaces), i32> {
         let p = self.platform;
         let (selected, sr) = self.select_sr(state, options, shape.width, shape.height)?;
@@ -531,8 +534,15 @@ impl Pipeline {
                 return Err(if result == OK { INIT_FAILED } else { result });
             };
             surfaces.handles[slot] = owned.get();
-            unsafe { (p.gl_texture_get)(owned.get(), &mut surfaces.info[slot]) };
+            let result = unsafe { (p.gl_texture_get)(owned.get(), &mut surfaces.info[slot]) };
+            if result != OK {
+                return Err(result);
+            }
             surfaces.textures.push(owned);
+        }
+        let sharpened = unsafe { (p.sr_set_sharpening)(surfaces.sr.get(), sharpening) };
+        if sharpened != OK {
+            return Err(sharpened);
         }
         if (state.width, state.height) != (shape.width, shape.height) {
             if unsafe { (p.window_resize)(state.window, shape.width, shape.height) } == 0 {
@@ -636,7 +646,7 @@ impl Pipeline {
                 return drained;
             }
         }
-        let (selected, surfaces) = match self.prepare(state, options, shape) {
+        let (selected, surfaces) = match self.prepare(state, options, shape, &sharpening) {
             Ok(prepared) => prepared,
             Err(result) => return result,
         };
@@ -649,9 +659,6 @@ impl Pipeline {
         state.evaluation_result = OK;
         state.evaluated_frame = 0;
         state.frame_view = None;
-        if let Some(active) = &state.active {
-            unsafe { (p.sr_set_sharpening)(active.sr.get(), &sharpening) };
-        }
         state.generation = state.generation.wrapping_add(1);
         OK
     }
