@@ -34,6 +34,17 @@ int rsf_ac7_scope_owner_create(uint64_t session_id, uint32_t capacity,
     rsf_ac7_render_scope_fn state_callback, rsf_ac7_render_scope_fn pass_callback, void* user,
     const rsf_ac7_scope_calls* calls, rsf_ac7_render_scopes** out);
 
+// Copies live engine memory under the native adapter's guarded read.
+typedef bool (*rsf_ac7_scope_read)(void* output, const void* input, size_t size);
+
+bool rsf_ac7_scope_primary_view(rsf_ac7_scope_read read, uint64_t view, uint32_t width,
+    uint32_t height);
+bool rsf_ac7_scope_primary_renderer(rsf_ac7_scope_read read, uint64_t renderer, uint32_t width,
+    uint32_t height);
+// Fills the native view, family, frame, rectangles and mip bias of an initialized scope.
+bool rsf_ac7_scope_primary_facts(rsf_ac7_scope_read read, uint64_t renderer, uint32_t width,
+    uint32_t height, rsf_ac7_render_scope* scope);
+
 #ifdef __cplusplus
 }
 #endif

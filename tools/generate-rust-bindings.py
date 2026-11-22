@@ -228,7 +228,7 @@ generate("games/ac7/src/sites_abi.rs", "games/ac7/src/ac7_sites.h",
           "--raw-line", "use crate::platform_abi::{\n"
           "    rsf_ac7_native_renderer, rsf_ac7_native_renderer_options, rsf_ac7_renderer_log_fn,\n};"])
 generate("games/ac7/src/scope_abi.rs", "games/ac7/src/ac7_scope_owner.h",
-         "rsf_ac7_scope_(lease|calls)", "NOTHING",
+         "rsf_ac7_scope_(lease|calls|read)", "NOTHING",
          ["-Isdk/game/include", "-Igames/ac7/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "use crate::platform_abi::{rsf_ac7_render_scope, rsf_ac7_render_scope_fn};"])
@@ -244,7 +244,7 @@ generate("games/ac7/src/scene_color_abi.rs", "games/ac7/include/rescaleframe/ac7
          ["-Iruntime/graphics/include"],
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]"])
 generate("games/ac7/src/cloud_depth_abi.rs", "games/ac7/src/cloud_depth_platform.h",
-         "rsf_ac7_cloud_depth(_(facts|params|leaves))?", "NOTHING", [],
+         "rsf_ac7_cloud_depth", "NOTHING", [],
          ["--with-derive-default", "--raw-line", "#![allow(dead_code)]"])
 generate("games/minecraft/native/platform_abi.rs", "runtime/orchestrator/include/rescaleframe/gl_pipeline.h",
          "rsf_(gl_pipeline(_(setup|options|surfaces|status))?|"

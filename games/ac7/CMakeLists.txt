@@ -1,5 +1,7 @@
 # The plugin and linked carriers call the same Rust reader through the existing view C ABI.
 rsf_add_rust_static(rsf_ac7_rust rsf_rust_ac7 rsf-ac7 rsf_ac7)
+# TrueSky's Rust D3D11 owner uses the shared System32 shader compiler entry.
+target_link_libraries(rsf_ac7_rust INTERFACE rsf_shader_compiler)
 add_library(rsf_ac7_view INTERFACE)
 target_include_directories(rsf_ac7_view INTERFACE include)
 target_link_libraries(rsf_ac7_view INTERFACE rsf_ac7_rust)
@@ -29,9 +31,9 @@ target_link_libraries(rsf_ac7_ui_rules INTERFACE rsf_ac7_rust)
 add_library(ReScaleFrame::AC7UIRules ALIAS rsf_ac7_ui_rules)
 
 # Capture-derived scene selection stays with the game; graphics supplies only draw observations.
-add_library(rsf_ac7_scene_color STATIC src/scene_color.cpp)
-target_include_directories(rsf_ac7_scene_color PUBLIC include)
-target_link_libraries(rsf_ac7_scene_color PUBLIC ReScaleFrame::Graphics PRIVATE rsf_ac7_rust rsf_build_options)
+add_library(rsf_ac7_scene_color INTERFACE)
+target_include_directories(rsf_ac7_scene_color INTERFACE include)
+target_link_libraries(rsf_ac7_scene_color INTERFACE ReScaleFrame::Graphics rsf_ac7_rust)
 add_library(ReScaleFrame::AC7SceneColor ALIAS rsf_ac7_scene_color)
 
 add_library(rsf_ac7_capture_trampolines STATIC src/motion_capture_trampolines.cpp)
@@ -46,7 +48,7 @@ target_link_libraries(rsf_ac7_motion_capture INTERFACE
     rsf_ac7_rust ReScaleFrame::Graphics)
 add_library(ReScaleFrame::AC7MotionCapture ALIAS rsf_ac7_motion_capture)
 
-add_library(rsf_ac7_render_scope STATIC src/render_scope.cpp src/native_renderer.cpp src/truesky_depth.cpp src/truesky_motion.cpp src/contact_shadow.cpp src/velocity_shader.cpp)
+add_library(rsf_ac7_render_scope STATIC src/render_scope.cpp src/native_renderer.cpp src/velocity_shader.cpp)
 target_include_directories(rsf_ac7_render_scope PUBLIC include)
 target_link_libraries(rsf_ac7_render_scope PUBLIC ReScaleFrame::GameSDK PRIVATE rsf_ac7_view rsf_windows_input_facts minhook rsf_build_options ReScaleFrame::RuntimeCommon)
 # The shader compiler is available without linking the Graphics library.

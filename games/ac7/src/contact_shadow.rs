@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-//! The hash-pinned AC7 contact-shadow rewrite. Native code supplies SHA-256 and owns the
-//! output allocation. The shader facts and operands come from the existing capture evidence.
+//! The hash-pinned AC7 contact-shadow rewrite. The caller owns the output allocation.
+//! The shader facts and operands come from the existing capture evidence.
 use crate::shader_hash::{crc32c, dxbc_checksum, dxbc_digest_bytes};
 use std::ffi::c_void;
 use std::slice;
@@ -64,8 +64,54 @@ const BIASED_START: [u32; 7] = [
 ];
 
 const GROWTH: usize = (PHASE.len() + BIAS.len() + BIASED_START.len() - RAY_START.len()) * 4;
-type Sha256 = unsafe extern "C" fn(*const u8, u32, *mut u8) -> bool;
 type Resize = unsafe extern "C" fn(*mut c_void, usize) -> *mut u8;
+
+#[cfg(windows)]
+fn sha256(input: &[u8]) -> Option<[u8; 32]> {
+    use windows::Win32::Foundation::FreeLibrary;
+    use windows::Win32::System::LibraryLoader::{
+        GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
+    };
+    use windows::core::{BOOL, PCWSTR, s, w};
+
+    type Hash = unsafe extern "system" fn(
+        PCWSTR,
+        u32,
+        *const c_void,
+        *const u8,
+        u32,
+        *mut u8,
+        *mut u32,
+    ) -> BOOL;
+
+    let module =
+        unsafe { LoadLibraryExW(w!("crypt32.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32) }.ok()?;
+    let mut digest = [0; 32];
+    let mut size = digest.len() as u32;
+    let hashed =
+        unsafe { GetProcAddress(module, s!("CryptHashCertificate2")) }.is_some_and(|entry| {
+            let hash = unsafe { std::mem::transmute::<_, Hash>(entry) };
+            unsafe {
+                hash(
+                    w!("SHA256"),
+                    0,
+                    std::ptr::null(),
+                    input.as_ptr(),
+                    input.len() as u32,
+                    digest.as_mut_ptr(),
+                    &mut size,
+                )
+            }
+            .as_bool()
+        });
+    let _ = unsafe { FreeLibrary(module) };
+    (hashed && size == digest.len() as u32).then_some(digest)
+}
+
+#[cfg(not(windows))]
+fn sha256(_: &[u8]) -> Option<[u8; 32]> {
+    None
+}
 
 fn word(data: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes([
@@ -150,10 +196,9 @@ fn rewrite(input: &[u8], output: &mut [u8]) -> bool {
 
 /// The native caller lends the input and, on successful resize, a nonoverlapping output span.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ac7_contact_shadow_correct(
+unsafe extern "C" fn rsf_ac7_contact_shadow_correct(
     bytes: *const u8,
     size: usize,
-    sha256: Sha256,
     resize: Resize,
     user: *mut c_void,
 ) -> i32 {
@@ -164,8 +209,7 @@ unsafe extern "C" fn rsf_core_ac7_contact_shadow_correct(
     if &input[..4] != b"DXBC" || word(input, 24) != ORIGINAL_SIZE as u32 {
         return UNMATCHED;
     }
-    let mut actual = [0; 32];
-    if !unsafe { sha256(bytes, ORIGINAL_SIZE as u32, actual.as_mut_ptr()) } || actual != EXPECTED {
+    if sha256(&input[..ORIGINAL_SIZE]) != Some(EXPECTED) {
         return UNMATCHED;
     }
     if !layout_matches(input) {
@@ -195,7 +239,7 @@ pub(crate) fn container_crc(data: &[u8]) -> u32 {
 
 /// The caller lends the shader bytes, including any engine trailer.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ac7_contact_shadow_crc(bytes: *const u8, size: usize) -> u32 {
+unsafe extern "C" fn rsf_ac7_contact_shadow_crc(bytes: *const u8, size: usize) -> u32 {
     if bytes.is_null() || size < 28 || size > isize::MAX as usize {
         return 0;
     }

@@ -3,9 +3,10 @@
 #include <rescaleframe/ac7_view.h>
 #include <rescaleframe/ac7_memory.h>
 #include "ac7_sites.h"
-#include "truesky_depth.h"
-#include "truesky_motion.h"
+#include "ac7_scope_owner.h"
+#include "cloud_depth_platform.h"
 #include "contact_shadow.h"
+#include "shader_bytes.h"
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <algorithm>
@@ -309,12 +310,9 @@ LRESULT CALLBACK input_message(int code, WPARAM removed, LPARAM argument)
 bool source_primary_renderer(rsf_ac7_native_renderer& self, void* renderer)
 {
     rsf_game_render_config config{};
-    uint64_t views = 0; int32_t count = 0, rect[4]{}; unsigned char capture[3]{};
     return fetch_config(self, config) &&
-        config.output_width && config.output_height && read(uint64_t(uintptr_t(renderer)), 0xb8, views) &&
-        read(uint64_t(uintptr_t(renderer)), 0xc0, count) && count == 1 && read(views, 0x90, rect) &&
-        read(views, 0xc42, capture) && !capture[0] && !capture[1] && !capture[2] &&
-        !rect[0] && !rect[1] && rect[2] == int32_t(config.output_width) && rect[3] == int32_t(config.output_height);
+        rsf_ac7_scope_primary_renderer(copy_memory, uint64_t(uintptr_t(renderer)),
+            config.output_width, config.output_height);
 }
 void bind_renderer(rsf_ac7_native_renderer& self, void* object)
 {
@@ -511,9 +509,10 @@ void* hooked_create_pixel_shader(void* rhi, void* result, const NativeShaderCode
         !copy_memory(&dxbc_size, input.data + offset + 24, 4) || dxbc_size != size_t(input.count) - offset - optional)
         return original(rhi, result, code);
     std::vector<uint8_t> transformed;
-    const auto patched = rsf_ac7_contact_shadow_correct(input.data + offset, size_t(input.count) - offset, transformed);
-    if (patched != rsf_ac7_contact_shadow_result::patched) {
-        if (patched == rsf_ac7_contact_shadow_result::refused && self->contact_reports.fetch_add(1) < 8)
+    const auto patched = rsf_ac7_contact_shadow_correct(input.data + offset, size_t(input.count) - offset,
+        rsf::ac7::resize_shader_bytes, &transformed);
+    if (patched != RSF_AC7_CONTACT_PATCHED) {
+        if (patched == RSF_AC7_CONTACT_REFUSED && self->contact_reports.fetch_add(1) < 8)
             log(*self, "AC7 contact-shadow correction refused: shader fingerprint matched but transform validation failed");
         return original(rhi, result, code);
     }
@@ -1236,20 +1235,9 @@ bool primary_scope(rsf_ac7_native_renderer& self, void* renderer, uint32_t role,
 {
     rsf_game_render_config config{};
     if (!self.active.load() || !fetch_config(self, config) || !config.enabled) return false;
-    uint64_t storage = 0; int32_t count = 0; uint32_t frame = 0;
     scope = {}; scope.struct_size = sizeof(scope); scope.role = role; scope.session_id = self.options.session_id;
-    if (!read(uint64_t(uintptr_t(renderer)), 0xb8, storage) || !read(uint64_t(uintptr_t(renderer)), 0xc0, count) ||
-        count != 1 || !read(storage, 0, scope.family_key) || !read(scope.family_key, 0x68, frame) ||
-        !read(storage, 0x70, scope.render_rect) || !read(storage, 0x80, scope.output_rect) ||
-        !primary_view(storage, config)) return false;
-    scope.view_key = storage; scope.native_frame = frame;
-    // UE4.18 lacks the temporal-upscale material mip policy used by later
-    // renderers. This compatibility policy belongs to the AC7 producer.
-    const auto render_width = scope.render_rect[2] - scope.render_rect[0];
-    const auto output_width = scope.output_rect[2] - scope.output_rect[0];
-    if (render_width > 0 && output_width > 0 && render_width <= output_width)
-        scope.material_texture_mip_bias = std::fmax(std::log2(float(render_width) / float(output_width)) - 0.3f, -2.0f);
-    return true;
+    return rsf_ac7_scope_primary_facts(copy_memory, uint64_t(uintptr_t(renderer)),
+        config.output_width, config.output_height, &scope);
 }
 rsf_ac7_render_ticket* open_translucency(rsf_ac7_native_renderer& self, void* renderer, void* list,
     uint32_t pass, void* scene, PassLease*& out)
@@ -1759,10 +1747,7 @@ void hooked_postprocess(void* owner, void* list, void* view, void* velocity_ref)
 }
 bool primary_view(uint64_t view, const rsf_game_render_config& config)
 {
-    int32_t unconstrained[4]{}; unsigned char capture[3]{};
-    return read(view, 0x90, unconstrained) && read(view, 0xc42, capture) &&
-        !capture[0] && !capture[1] && !capture[2] && unconstrained[0] == 0 && unconstrained[1] == 0 &&
-        unconstrained[2] == int32_t(config.output_width) && unconstrained[3] == int32_t(config.output_height);
+    return rsf_ac7_scope_primary_view(copy_memory, view, config.output_width, config.output_height);
 }
 void prepare_owned_views(void* renderer, const rsf_game_render_config& config)
 {
@@ -2329,7 +2314,8 @@ void STDMETHODCALLTYPE native_cloud_depth_dispatch(ID3D11DeviceContext* context,
             self->cloud_depth_ready.store(false,std::memory_order_release);
         }
         if (!self->cloud_depth_shader && !self->cloud_depth_shader_refused) {
-            if (rsf_ac7_create_truesky_depth_shader(device.Get(),self->cloud_depth_shader.ReleaseAndGetAddressOf())) {
+            self->cloud_depth_shader.Attach(static_cast<ID3D11ComputeShader*>(rsf_ac7_create_truesky_depth_shader(device.Get())));
+            if (self->cloud_depth_shader) {
                 self->cloud_depth_device = device;
                 log(*self,"native TrueSky: one-to-one depth shader compiled; checking native pass bindings");
             } else {
@@ -2442,7 +2428,8 @@ void native_cloud_composite_draw(void* platform, void* device_context, uint32_t 
         self->cloud_depth_device->GetImmediateContext(&context);
     }
     D3D11_VIEWPORT viewport{}; UINT viewports = 1; context->RSGetViewports(&viewports, &viewport);
-    auto* depth = viewports == 1 ? rsf_ac7_cloud_depth_write(self->cloud_motion, context.Get(), viewport) : nullptr;
+    auto* depth = viewports == 1 ? static_cast<ID3D11Texture2D*>(
+        rsf_ac7_cloud_depth_write(&self->cloud_motion, context.Get(), viewport.Width, viewport.Height)) : nullptr;
     const auto reports = self->cloud_motion_reports.fetch_add(1);
     if (!depth) {
         if (reports < 3) log(*self, "native TrueSky cloud motion refused: composite_tile bindings differ from the measured t1/t2/b12 layout");
@@ -2481,7 +2468,7 @@ rsf_ac7_truesky_leaves truesky_leaves(rsf_ac7_native_renderer& self)
     leaves.depth_ready = [](Renderer* renderer) noexcept {
         return renderer->cloud_depth_ready.load(std::memory_order_acquire);
     };
-    leaves.motion_release = [](Renderer* renderer) noexcept { rsf_ac7_cloud_depth_release(renderer->cloud_motion); };
+    leaves.motion_release = [](Renderer* renderer) noexcept { rsf_ac7_cloud_depth_release(&renderer->cloud_motion); };
     leaves.depth_release = [](Renderer* renderer) noexcept {
         renderer->cloud_depth_shader.Reset(); renderer->cloud_depth_device.Reset();
         renderer->cloud_depth_ready.store(false);

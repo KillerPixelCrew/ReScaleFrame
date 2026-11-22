@@ -736,7 +736,18 @@ if(EXISTS "${RSF_NGX_PROBE_INCLUDE}/nvsdk_ngx_params.h")
     target_compile_definitions(rsf_exposure_probe PRIVATE RSF_PROBE_NGX_PARAMS=1)
 endif()
 
-add_executable(rsf_ac7_native_graph_test ac7_native_graph.cpp)
+set(ac7_view_fixture_object "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/rsf_ac7_view_fixture.obj")
+add_custom_command(OUTPUT "${ac7_view_fixture_object}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
+    COMMAND "${ac7_fixture_rustc}" --edition 2024 --target "${ac7_fixture_target}"
+        --crate-name rsf_ac7_view_fixture --crate-type lib --emit obj -C codegen-units=1
+        -C panic=abort -C opt-level=$<IF:$<CONFIG:Debug>,0,3>
+        -o "${ac7_view_fixture_object}" "${CMAKE_CURRENT_SOURCE_DIR}/ac7_view_fixture.rs"
+    DEPENDS ac7_view_fixture.rs
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    VERBATIM)
+set_source_files_properties("${ac7_view_fixture_object}" PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE)
+add_executable(rsf_ac7_native_graph_test ac7_native_graph.cpp "${ac7_view_fixture_object}")
 # native_renderer.cpp calls the rsf-ac7 site, patch, guard, renderer transaction, TrueSky and render
 # scope owners (games/ac7/src/ac7_sites.h, ac7_render_scope.h).
 target_link_libraries(rsf_ac7_native_graph_test PRIVATE ReScaleFrame::AC7RenderScope rsf_ac7_rust rsf_orchestrator minhook rsf_build_options)

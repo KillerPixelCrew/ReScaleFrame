@@ -56,3 +56,10 @@ const _: () = {
     ["Offset of field: rsf_ac7_scope_calls::release"]
         [::core::mem::offset_of!(rsf_ac7_scope_calls, release) - 16usize];
 };
+pub type rsf_ac7_scope_read = ::core::option::Option<
+    unsafe extern "C" fn(
+        output: *mut ::core::ffi::c_void,
+        input: *const ::core::ffi::c_void,
+        size: usize,
+    ) -> bool,
+>;

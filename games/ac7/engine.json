@@ -897,9 +897,17 @@
     "owner": "Crate rsf-ac7 owns the TrueSkyPluginRender_MT.dll patches and relays (truesky.rs): module name, divisor +87F6D, depth relay +C003F, selector +BFF0B, format +BFC09, composite_tile relay +ABC6B with their expected/native/replacement bytes, the mixed_resolution.fxo size and CRC, relay encoding, install order, refusals, full-grid refusal and restore order, on the rsf_ac7_truesky_patches record under cloud_resolution_guard. native_renderer.cpp lends rsf_ac7_truesky_leaves: code reads/writes, module lookup, relay memory, both relay handlers, readiness and D3D11 releases",
     "preserved": "Every RVA, byte, fingerprint and log text (mechanically compared with the removed C++), admission and install order, per-frame motion retry, relay encoding and allocation search, handlers, D3D11 checks, one-to-one depth shader, cloud motion depth, public renderer C ABI, renderer leaves and stop order, carrier links",
     "changed": "Restore holds cloud_resolution_guard and the depth relay reads the full-grid site under it; relay memory and cloud D3D11 resources are released only after all calls are restored and no hook or relay guard is held, else retained for the next stop; an unrestorable selector after a refused depth relay stays owned",
-    "remaining": "Relay handlers and their D3D11 checks, truesky_depth.cpp, truesky_motion.cpp, sky detours, relay memory; other AC7 owners. See evidence",
+    "remaining": "Relay handlers, one-to-one depth binding validation and dispatch, sky detours, and relay memory stay native. The A02 residual source port moved the depth kernel creation and composite-motion depth D3D11 owner to Rust",
     "validation": "Source review only; byte/text comparison script, rustfmt --edition 2024 check, JSON parse, py_compile and git diff --check. bindgen-cli absent, sites_abi.rs hand-mirrored with layout asserts. Not compiled, linked, Cargo-tested, Clippy-checked, CTest-run, deployed or game-tested",
     "evidence": "docs/research/rust-ac7-truesky-relays.md"
+  },
+  "rust_scope_facts_and_scene_effects": {
+    "date": "2026-11-22",
+    "base": "821642ae",
+    "owner": "rsf-ac7 owns the guarded primary view, renderer and translucency scope facts, scene-colour COM references, contact-shadow hash, TrueSky depth kernel creation and composite-motion depth D3D11 dispatch",
+    "remaining": "The compatibility tap has no verified matching native view and family receipt when native activation refuses. The native adapter retains detour and lease ownership, guarded reads and C++ exception leaves",
+    "validation": "Source comparisons, bindgen 0.72.1, Rust 1.94.1 formatting, locked offline Cargo metadata and Git whitespace checks. Linking, fixture and runtime execution pending",
+    "evidence": "docs/research/ac7-render-scope-port-a02.md#residual-source-port-from-821642ae"
   },
   "rust_render_scopes": {
     "date": "2026-11-21",

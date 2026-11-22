@@ -7822,3 +7822,13 @@ their original sharing flags. Header syntax and source caller checks passed.
 
 The shared variadic logger is C11-compatible. It keeps the registered sink,
 512-byte buffer and CRT formatting, with no C++ namespace wrapper.
+### AC7 render scope facts and scene effects (A02)
+
+Rust now collects the primary view facts used by native scopes, owns scene-colour
+COM references and hashes contact-shadow shader bytes through the existing
+System32 export. Rust compiles the TrueSky depth-bounds kernel and owns the
+composite-motion depth dispatch. Compatibility camera and family identity
+remain open pending a producer available when native activation refuses.
+Binding regeneration, formatting, locked metadata and source comparisons
+passed. Linking, fixture execution and game validation remain pending.
+[Source evidence](research/ac7-render-scope-port-a02.md#residual-source-port-from-821642ae).

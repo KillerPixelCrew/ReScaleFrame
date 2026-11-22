@@ -1,9 +1,4 @@
 // SPDX-License-Identifier: MIT
-#include "truesky_depth.h"
-#include <rescaleframe/shader_compile.h>
-
-namespace {
-constexpr char source[] = R"(
 Texture2D<float> SourceDepth : register(t1);
 SamplerState NearestClamp : register(s15);
 RWTexture2D<float2> DepthBounds : register(u0);
@@ -30,11 +25,4 @@ cbuffer MixedResolution : register(b11) {
     // The native texture owner creates a two-channel Texture2D UAV. A single source sample
     // makes the maximum and minimum ray distances equal; float storage retains near geometry.
     DepthBounds[pixel.xy] = float2(normalized,normalized);
-})";
-}
-bool rsf_ac7_create_truesky_depth_shader(ID3D11Device* device, ID3D11ComputeShader** shader)
-{
-    if (!device || !shader) return false;
-    *shader = nullptr;
-    return rsf::compile_compute(device, source, "AC7TrueSkyDepth1", "main", shader);
 }

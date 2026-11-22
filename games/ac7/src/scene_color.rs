@@ -1,26 +1,26 @@
 // SPDX-License-Identifier: MIT
 //! Owns the AC7 capture-derived scene colour watch and its retained recombine layers.
-use crate::scene_color_abi::{
-    RSF_FRAME_TAP_MAX_INPUTS, rsf_ac7_scene_color, rsf_frame_tap_geometry,
-    rsf_frame_tap_target_draw,
-};
+#[cfg(windows)]
+use crate::com_resource::{release, retain};
+#[cfg(windows)]
+use crate::scene_color_abi::{RSF_FRAME_TAP_MAX_INPUTS, rsf_frame_tap_target_draw};
+use crate::scene_color_abi::{rsf_ac7_scene_color, rsf_frame_tap_geometry};
+#[cfg(windows)]
 use crate::ui_abi::{RSF_AC7_FORMAT_B8G8R8A8_UNORM, RSF_AC7_FORMAT_B8G8R8A8_UNORM_SRGB};
 use std::ffi::{c_int, c_void};
-use std::{mem, ptr, slice};
+#[cfg(windows)]
+use std::{ptr, slice};
 
+#[cfg(windows)]
 const R16G16B16A16_FLOAT: u32 = 10;
+#[cfg(windows)]
 const R11G11B10_FLOAT: u32 = 26;
+#[cfg(windows)]
 const R8G8B8A8_UNORM: u32 = 28;
+#[cfg(windows)]
 const R8G8B8A8_UNORM_SRGB: u32 = 29;
 
-#[repr(C)]
-struct ResourceCalls {
-    retain: unsafe extern "C" fn(*mut c_void),
-    release: unsafe extern "C" fn(*mut c_void),
-}
-
-const _: () = assert!(size_of::<ResourceCalls>() == 16);
-
+#[cfg(windows)]
 fn layer_size_fits(width: u32, height: u32, scene_width: u32, scene_height: u32) -> bool {
     if width == 0 || height == 0 || scene_width == 0 || scene_height == 0 {
         return false;
@@ -37,40 +37,40 @@ fn layer_size_fits(width: u32, height: u32, scene_width: u32, scene_height: u32)
     a.abs_diff(b) <= b / 50
 }
 
-fn release_layers(state: &mut rsf_ac7_scene_color, calls: &ResourceCalls) {
+#[cfg(windows)]
+fn release_layers(state: &mut rsf_ac7_scene_color) {
     let count = (state.composed_layer_count as usize).min(state.composed_layers.len());
     for resource in &mut state.composed_layers[..count] {
-        unsafe { (calls.release)(mem::replace(resource, ptr::null_mut())) };
+        unsafe { release(std::mem::replace(resource, ptr::null_mut())) };
     }
     state.composed_layer_count = 0;
 }
 
-fn clear(state: &mut rsf_ac7_scene_color, calls: &ResourceCalls) {
+#[cfg(windows)]
+fn clear(state: &mut rsf_ac7_scene_color) {
     unsafe {
-        (calls.release)(state.source);
-        (calls.release)(state.composed);
+        release(state.source);
+        release(state.composed);
     }
-    release_layers(state, calls);
+    release_layers(state);
     *state = rsf_ac7_scene_color::default();
 }
 
 // Each native call exclusively lends the render-thread state and its retained resources.
+#[cfg(windows)]
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_ac7_scene_color_clear(
-    state: &mut rsf_ac7_scene_color,
-    calls: &ResourceCalls,
-) {
-    clear(state, calls);
+extern "C" fn rsf_ac7_scene_color_clear(state: &mut rsf_ac7_scene_color) {
+    clear(state);
 }
 
+#[cfg(windows)]
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_ac7_scene_color_source(
+extern "C" fn rsf_ac7_scene_color_source(
     state: &mut rsf_ac7_scene_color,
     source: *mut c_void,
     context: *mut c_void,
     width: u32,
     height: u32,
-    calls: &ResourceCalls,
 ) -> c_int {
     if state.source == source
         && state.context == context
@@ -80,8 +80,8 @@ extern "C" fn rsf_core_ac7_scene_color_source(
         return 0;
     }
     // The old source may be the same allocation with a new context or extent.
-    unsafe { (calls.retain)(source) };
-    clear(state, calls);
+    unsafe { retain(source) };
+    clear(state);
     state.source = source;
     state.context = context;
     state.width = width;
@@ -90,6 +90,7 @@ extern "C" fn rsf_core_ac7_scene_color_source(
 }
 
 /// The tap lends a full draw and its borrowed inputs for this call.
+#[cfg(windows)]
 unsafe fn target_draw<'a>(
     draw: *const rsf_frame_tap_target_draw,
 ) -> Option<&'a rsf_frame_tap_target_draw> {
@@ -101,11 +102,11 @@ unsafe fn target_draw<'a>(
     unsafe { draw.as_ref() }
 }
 
+#[cfg(windows)]
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ac7_scene_color_draw(
+unsafe extern "C" fn rsf_ac7_scene_color_draw(
     state: &mut rsf_ac7_scene_color,
     draw: *const rsf_frame_tap_target_draw,
-    calls: &ResourceCalls,
 ) {
     let Some(draw) = (unsafe { target_draw(draw) }) else {
         return;
@@ -177,15 +178,15 @@ unsafe extern "C" fn rsf_core_ac7_scene_color_draw(
 
     if state.composed != draw.render_target {
         unsafe {
-            (calls.retain)(draw.render_target);
-            (calls.release)(state.composed);
+            retain(draw.render_target);
+            release(state.composed);
         }
         state.composed = draw.render_target;
     }
     for &layer in &layers[..count] {
-        unsafe { (calls.retain)(layer) };
+        unsafe { retain(layer) };
     }
-    release_layers(state, calls);
+    release_layers(state);
     state.composed_layers = layers;
     state.composed_layer_count = count as u32;
     state.composed_this_frame = 1;
@@ -203,12 +204,10 @@ extern "C" fn rsf_ac7_scene_color_selected(
     }
 }
 
+#[cfg(windows)]
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_ac7_scene_color_end_frame(
-    state: &mut rsf_ac7_scene_color,
-    calls: &ResourceCalls,
-) {
-    release_layers(state, calls);
+extern "C" fn rsf_ac7_scene_color_end_frame(state: &mut rsf_ac7_scene_color) {
+    release_layers(state);
     state.composed_this_frame = 0;
     state.search_closed = 0;
 }

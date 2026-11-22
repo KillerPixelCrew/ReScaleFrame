@@ -108,3 +108,72 @@ Open review findings:
 
 `3f5527b6` can be applied independently of the later A02 changes. The later changes use
 its AC7 adoption and build on it.
+
+## Residual source port from 821642ae
+
+The native graph and compatibility route have separate producers. In
+`loader/proxy/src/dlss_bridge.c`, successful `rsf_plugin_session_start` sets
+`native_owner` and suppresses compatibility `on_pass` installation. When that
+start refuses, the compatibility draw callbacks remain active. The native graph
+producer in `games/ac7/src/native_renderer.cpp` only publishes stage data from the
+active renderer. Its SR plan checks the graph context's view against the view at
+`hooked_postprocess`, then reads that view's family and native frame. The pixel
+uniform observers in `sites.rs` and `native_renderer.cpp` are diagnostic hooks
+within the same native lifecycle. They cannot provide a compatibility receipt
+when that lifecycle refuses.
+
+The compatibility path's `on_pass` reads the buffer offered by
+`runtime/orchestrator/src/frame_tap.rs`. The frame tap picks a recent PS constant
+buffer of the configured size and retains it for the callback. Its pass index
+counts qualifying tap observations. That index has no join to AC7's native frame,
+view or family. Compatibility `observe_constants` invalidates and repopulates the
+cached camera by buffer identity and extent, which leaves same-allocation reuse
+ambiguous. A genuine receipt requires a producer available in compatibility
+mode, a verified native-to-D3D constant-buffer binding at the scene draw, and a
+generation-aware upload join before recombine. The source reviewed here does not
+establish that chain. The rectangle-versus-camera review finding stays open.
+
+`scope_facts.rs` now owns the guarded reads for a renderer's single primary view
+and the primary translucency scope. It uses the existing native layouts:
+renderer view storage and count at +0xb8/+0xc0, view family at +0, family frame
+at +0x68, render and output rects at +0x70/+0x80, unconstrained rect at +0x90,
+and the three capture flags at +0xc42. Native still supplies the existing
+fault-contained read, current configuration and session, and owns hook timing,
+the lease and its enqueue. The source renderer gate retains its nonzero output
+requirement. The scope's mip bias still uses render/output width and the existing
+-0.3 offset and -2 lower bound. The Rust calculation widens the rectangle
+coordinates before subtraction.
+
+The scene-colour ABI now calls Rust directly. It retains the existing
+capture-derived selection and per-frame association and keeps the old
+retain-before-release order when a replacement includes the same allocation.
+The contact-shadow hash still uses the System32 CryptHashCertificate2 export,
+the same SHA-256 and DXBC guards, and the original rewrite. Rust resolves the
+hash export. The native hook lends its existing vector via the shared fallible
+resize callback and consumes it only when the transform succeeds.
+
+TrueSky's replacement depth-bounds and composite-motion HLSL bodies moved to
+separate source files. Rust uses the same System32 compiler, strict cs_5_0
+profile and entry names. The one-to-one depth relay keeps native binding
+validation and dispatch. For composite motion, Rust reads the actual t1/t2
+SRVs and b12 constants from the same context, checks their descriptors and
+viewport, then writes the viewport-sized R32_FLOAT target. It restores the
+saved CS shader and class instances, t0/t1, u0 and b0/b1. The UAV initial-count
+argument stays null on bind and restore. Device replacement, terminal
+per-device pipeline refusal, retryable target allocation, and callback-owned
+state retirement retain their existing behavior. The returned texture is
+borrowed from that state for the native stage callback. The graph fixture now
+gets its existing synthetic view bytes from a Rust object linked only to the
+fixture.
+
+Newly source-closed PORT paths are `scene_color.cpp`, `contact_shadow.cpp`,
+`truesky_depth.cpp`, `truesky_depth.h`, `truesky_motion.cpp`,
+`truesky_motion.h` and `tests/ac7_view_fixture.h`. The scene-colour,
+contact-shadow and cloud-platform headers still declare the live C boundaries.
+`render_scope.cpp` and `ac7_scope_owner.h` still contain or declare the C++
+exception leaves. The three earlier fixture closures keep their existing C++
+ABI, exception or capture-probe checks.
+
+Validation uses source comparisons, regenerated bindgen 0.72.1 records,
+Rust 1.94.1 formatting, locked offline Cargo metadata, and Git whitespace
+checks. Compilation, linking, fixtures and device execution remain unverified.

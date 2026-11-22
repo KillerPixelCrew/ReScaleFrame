@@ -2,7 +2,7 @@
 // Exercise the private adapter through an independent engine ABI caller and queued executor.
 #define RSF_AC7_GRAPH_TEST 1
 #include "../games/ac7/src/native_renderer.cpp"
-#include "ac7_view_fixture.h"
+extern "C" bool rsf_ac7_graph_fixture_view(float* output, size_t size);
 #include <rescaleframe/native_sr.h>
 #include <wrl/client.h>
 #include <cstdio>
@@ -358,12 +358,9 @@ int main() {
     source.out.pool = uint64_t(uintptr_t(&input)); int32_t internal[2]{2,2}; std::memcpy(source.out.descriptor+0x14, internal, 8);
     auxiliary.out = source.out; tonemap.auxiliary.node = uint64_t(uintptr_t(&auxiliary));
     tonemap.ref.node = uint64_t(uintptr_t(&source)); anti_alias.ref.node = uint64_t(uintptr_t(&tonemap));
-    auto fixture = ac7_fixture::make_view(1, 1, 0.1f, 2, 2, 2, 2);
-    fixture.put(ac7_fixture::kViewToClip+32, {0.125f, -0.25f});
-    fixture.put(ac7_fixture::kTemporalAAJitter, {0.125f, -0.25f, 0, 0});
-    // Complete inverse of the fixture's jittered projection.
-    fixture.put(ac7_fixture::kClipToView+48, {-0.125f, 0.25f});
-    uint64_t cached = uint64_t(uintptr_t(fixture.values.data())), family = uint64_t(uintptr_t(scene.data()));
+    std::array<float, RSF_AC7_VIEW_BUFFER_BYTES / sizeof(float)> fixture{};
+    if (!rsf_ac7_graph_fixture_view(fixture.data(), sizeof(fixture))) return 1;
+    uint64_t cached = uint64_t(uintptr_t(fixture.data())), family = uint64_t(uintptr_t(scene.data()));
     const uint32_t frame = 41; uint64_t state = 0x123456;
     uint64_t old_uniform = uint64_t(uintptr_t(&original_uniform)); std::memcpy(view.data()+0x10, &old_uniform, 8);
     std::memcpy(view.data(), &family, 8); std::memcpy(view.data()+8, &state, 8);

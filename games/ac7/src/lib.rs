@@ -19,8 +19,9 @@
 //!
 //! The rest of the native renderer stays C++ (native_renderer.cpp and the render-scope library):
 //! the five exported renderer calls as wrappers, the renderer object and its fields, MinHook
-//! leaves, module pinning, detours, engine relays, the TrueSky relay handlers with their D3D11
-//! checks and shaders, relay memory, pass leases, SEH reads and protected code writes. plugin.cpp
+//! leaves, module pinning, detours, engine relays, the TrueSky relay handlers, relay memory,
+//! pass leases, SEH reads and protected code writes. Rust owns TrueSky's D3D11 kernels and
+//! composite depth dispatch, scene colour references and the scoped primary-view facts. plugin.cpp
 //! lends its entry points through the
 //! exception-guarded leaf table in ac7_platform.h and keeps the exported
 //! rsf_get_game_plugin_api. The combined carriers call `carrier.rs` for their executable and
@@ -28,6 +29,8 @@
 mod carrier;
 mod cloud_depth;
 mod cloud_depth_abi;
+#[cfg(windows)]
+mod com_resource;
 mod contact_shadow;
 #[path = "../../../runtime/graphics/src/d3d11_observer_layout_abi.rs"]
 mod d3d11_observer_layout_abi;
@@ -48,6 +51,7 @@ mod renderer;
 mod scene_color;
 mod scene_color_abi;
 mod scope_abi;
+mod scope_facts;
 #[path = "../../../runtime/graphics/src/shader_hash.rs"]
 mod shader_hash;
 mod sites;
