@@ -17,7 +17,7 @@ use crate::{
     },
     fg_choice::rsf_fg_choice_get,
     native_cpu::rsf_native_input_receipts_get,
-    native_fg_cpu::rsf_core_native_input_routes_get,
+    native_fg_cpu::{platform::rsf_native_latency_status_get, rsf_core_native_input_routes_get},
 };
 use crate::{settings_store::set_sharpening, sharpening_policy};
 use rsf_game_sys::d3d11_sr_admission_abi::RSF_SR_AUTO;
@@ -57,12 +57,8 @@ pub(super) fn fill_latency_stats(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay_fill_fg_stats(
-    stats: &mut Stats,
-    fg: *const FgStatus,
-    get_latency: unsafe extern "C" fn(*mut rsf_native_latency_status) -> i32,
-) {
-    fill_latency_stats(stats, get_latency, rsf_core_native_input_routes_get);
+unsafe extern "C" fn rsf_overlay_fill_fg_stats(stats: &mut Stats, fg: *const FgStatus) {
+    fill_latency_stats(stats, rsf_native_latency_status_get, rsf_core_native_input_routes_get);
     let choice = rsf_fg_choice_get();
     stats.fg_backend = if rsf_core_d3d11p_has_owner() != 0 {
         rsf_core_d3d11p_backend()

@@ -518,13 +518,13 @@ Port panel and status rendering, overlay device resources and the UI-to-Runtime 
 **Port files (15)**
 
 - [x] [runtime/graphics/include/rescaleframe/overlay_renderer.h](runtime/graphics/include/rescaleframe/overlay_renderer.h)
-- [ ] [runtime/graphics/src/overlay_renderer.cpp](runtime/graphics/src/overlay_renderer.cpp)
+- [x] [runtime/graphics/src/overlay_renderer.cpp](runtime/graphics/src/overlay_renderer.cpp)
 - [x] [runtime/graphics/src/overlay_renderer_platform.h](runtime/graphics/src/overlay_renderer_platform.h)
 - [x] [runtime/orchestrator/include/rescaleframe/overlay_api.h](runtime/orchestrator/include/rescaleframe/overlay_api.h)
 - [x] [runtime/orchestrator/include/rescaleframe/overlay_d3d12.h](runtime/orchestrator/include/rescaleframe/overlay_d3d12.h)
-- [ ] [runtime/orchestrator/include/rescaleframe/overlay_fg_stats.h](runtime/orchestrator/include/rescaleframe/overlay_fg_stats.h)
-- [ ] [runtime/orchestrator/src/overlay_d3d12.cpp](runtime/orchestrator/src/overlay_d3d12.cpp)
-- [ ] [runtime/orchestrator/src/overlay_native12.cpp](runtime/orchestrator/src/overlay_native12.cpp)
+- [x] [runtime/orchestrator/include/rescaleframe/overlay_fg_stats.h](runtime/orchestrator/include/rescaleframe/overlay_fg_stats.h)
+- [x] [runtime/orchestrator/src/overlay_d3d12.cpp](runtime/orchestrator/src/overlay_d3d12.cpp)
+- [x] [runtime/orchestrator/src/overlay_native12.cpp](runtime/orchestrator/src/overlay_native12.cpp)
 - [x] [runtime/orchestrator/src/overlay_native12_platform.h](runtime/orchestrator/src/overlay_native12_platform.h)
 - [x] [runtime/orchestrator/src/overlay_panel.h](runtime/orchestrator/src/overlay_panel.h)
 - [ ] [runtime/orchestrator/src/overlay_platform.cpp](runtime/orchestrator/src/overlay_platform.cpp)
@@ -536,9 +536,9 @@ Port panel and status rendering, overlay device resources and the UI-to-Runtime 
 **Fixtures (5)**
 
 - [x] [tests/overlay_dll_api.cpp](tests/overlay_dll_api.cpp)
-- [ ] [tests/overlay_dll_api_device.cpp](tests/overlay_dll_api_device.cpp)
+- [x] [tests/overlay_dll_api_device.cpp](tests/overlay_dll_api_device.cpp)
 - [x] [tests/overlay_dll_api_no_sr.cpp](tests/overlay_dll_api_no_sr.cpp)
-- [ ] [tests/overlay_native12.cpp](tests/overlay_native12.cpp)
+- [x] [tests/overlay_native12.cpp](tests/overlay_native12.cpp)
 - [x] [tests/overlay_panel_fixture.cpp](tests/overlay_panel_fixture.cpp)
 
 **Rust review findings (23)**

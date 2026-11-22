@@ -17,14 +17,9 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-void rsf_core_overlay_fill_fg_stats(rsf_overlay_stats* stats, const rsf_native_fg_status* fg,
-    int (*latency_status_get)(rsf_native_latency_status*));
+void rsf_overlay_fill_fg_stats(rsf_overlay_stats* stats, const rsf_native_fg_status* fg);
 #ifdef __cplusplus
 }
 #endif
 
-static inline void rsf_overlay_fill_fg_stats(rsf_overlay_stats* stats, const rsf_native_fg_status* fg)
-{
-    rsf_core_overlay_fill_fg_stats(stats, fg, rsf_native_latency_status_get);
-}
 #endif

@@ -17,6 +17,7 @@
 #include <rescaleframe/sharpening_settings.h>
 #include <dxgi1_4.h>
 #include <windows.h>
+#include <bit>
 #include <cstddef>
 
 // Layouts render_host.rs mirrors.
@@ -38,7 +39,7 @@ void* native_object(void* object)
 {
     using Native = int (*)(void*, void**);
     const auto module = GetModuleHandleW(L"sl.interposer.dll");
-    const auto native = module ? reinterpret_cast<Native>(GetProcAddress(module, "slGetNativeInterface")) : nullptr;
+    const auto native = module ? std::bit_cast<Native>(GetProcAddress(module, "slGetNativeInterface")) : nullptr;
     void* result{};
     if (native && !native(object, &result) && result) return result;
     static_cast<IUnknown*>(object)->AddRef();
@@ -73,7 +74,6 @@ int32_t overlay_present(void* device, void* queue, void* chain, const rsf_overla
 {
     return rsf_overlay_d3d12_present(device, queue, chain, stats, intent, log, user);
 }
-void overlay_fill_fg(rsf_overlay_stats* stats, const rsf_native_fg_status* fg) { rsf_overlay_fill_fg_stats(stats, fg); }
 int32_t observer_create(const rsf_d3d12_observer_setup* setup, void** out)
 {
     return rsf_d3d12_observer_create(setup, reinterpret_cast<rsf_d3d12_observer**>(out));
@@ -106,7 +106,7 @@ struct Platform {
     decltype(&overlay_visible) overlay_visible;
     decltype(&overlay_toggle) overlay_toggle;
     decltype(&overlay_present) overlay_present;
-    decltype(&overlay_fill_fg) overlay_fill_fg;
+    decltype(&rsf_overlay_fill_fg_stats) overlay_fill_fg;
     decltype(&observer_create) observer_create;
     decltype(&observer_device) observer_device;
     decltype(&observer_factory) observer_factory;
@@ -120,7 +120,7 @@ constexpr Platform platform{
     registration_create,
     registration_borrow, registration_present,
     present_host, present_has_owner, present_request,
-    present_backend_choices, present_backend, overlay_visible, overlay_toggle, overlay_present, overlay_fill_fg,
+    present_backend_choices, present_backend, overlay_visible, overlay_toggle, overlay_present, rsf_overlay_fill_fg_stats,
     observer_create, observer_device, observer_factory, diagnostics_enable,
 };
 }

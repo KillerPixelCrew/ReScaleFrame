@@ -143,7 +143,7 @@ extern "C" fn rsf_native_latency_present(source: u64, chain: Handle, begin: u32)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_latency_status_get(out: *mut LatencyStatus) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_native_latency_status_get(out: *mut LatencyStatus) -> i32 {
     unsafe { rsf_core_native_latency_status_get(out, &rsf_native_fg_cpu_platform) }
 }
 

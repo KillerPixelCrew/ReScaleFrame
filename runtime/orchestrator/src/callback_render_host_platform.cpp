@@ -42,7 +42,6 @@ int32_t overlay_frame(void* device, void* queue, void* chain, const rsf_overlay_
     return rsf_overlay_d3d12_frame(device, queue, chain, stats, intent, log, user);
 }
 void overlay_stop() { rsf_overlay_d3d12_stop(); }
-void overlay_fill_fg(rsf_overlay_stats* stats, const rsf_native_fg_status* fg) { rsf_overlay_fill_fg_stats(stats, fg); }
 void input_dump_cancel(uint64_t session) { rsf_input_dump_cancel(session); }
 int32_t session_prepare(const rsf_plugin_session_options* options, void** out)
 {
@@ -64,7 +63,7 @@ struct Platform {
     decltype(&present_switch_result) present_switch_result;
     decltype(&overlay_frame) overlay_frame;
     decltype(&overlay_stop) overlay_stop;
-    decltype(&overlay_fill_fg) overlay_fill_fg;
+    decltype(&rsf_overlay_fill_fg_stats) overlay_fill_fg;
     decltype(&input_dump_cancel) input_dump_cancel;
     decltype(&session_prepare) session_prepare;
     decltype(&session_start) session_start;
@@ -77,7 +76,7 @@ constexpr Platform platform{
     depth_domains, dlss_preset_valid,
     fg_choice_save,
     present_host, present_request, present_backend, present_switch_result, overlay_frame, overlay_stop,
-    overlay_fill_fg, input_dump_cancel, session_prepare, session_start, session_quiesce, session_stop,
+    rsf_overlay_fill_fg_stats, input_dump_cancel, session_prepare, session_start, session_quiesce, session_stop,
 };
 }
 

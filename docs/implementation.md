@@ -7992,3 +7992,7 @@ The shared native log exception guard remains. The
 the slot, backbuffer and input ownership and the remaining execution checks.
 Binding, formatting, locked offline metadata and source checks completed.
 Build, fixture and device execution remain pending.
+
+The Rust overlay statistics owner reads the same linked latency status directly.
+The native hosts and embedded carrier call its C entry without an inline
+forwarder. C11 header and C++20 caller syntax checks passed.
