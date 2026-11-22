@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include <stddef.h>
 #include <rescaleframe/native_fg_dlss_vulkan.h>
 #include "../../vulkan/streamline/present-capture.h"
 
@@ -39,16 +40,14 @@ typedef struct rsf_dlss_capture_platform {
     uint64_t (*readbacks)(void*);
     void (*target)(const rsf_sl_present_capture_packet*, rsf_dlss_capture_target*);
     int32_t (*images)(const rsf_sl_present_capture_packet*, uint64_t chain, uint32_t* count, uint64_t* images);
-    uint32_t (*record)(void*, void* commands, const rsf_srvk_image*, const rsf_frame_record*, int32_t generated_index);
+    uint32_t (*record)(void*, void* commands, const rsf_srvk_image*, const rsf_frame_record*, const char* role);
     /* Submits the copy behind the Present's original wait semaphores. */
     int32_t (*submit)(const rsf_sl_present_capture_packet*, void* commands, uint64_t fence);
     /* Zero waits presents without the semaphores the copy already consumed. */
     int32_t (*present)(const rsf_sl_present_capture_packet*, uint32_t waits);
     uint32_t (*flush)(void*);
     void (*failure)(void*, uint64_t source, const char* reason, int32_t result);
-    void (*trace)(void*, const rsf_sl_present_capture_packet*, const rsf_dlss_capture_source* observed, uint32_t found);
-    void (*metadata)(void*, const rsf_sl_present_capture_packet*, const rsf_dlss_capture_source*, uint64_t sequence,
-        int32_t result, uint32_t flush_attempted, uint32_t flushed);
+    void (*append)(void*, const char* file, const uint8_t* line, size_t length);
 } rsf_dlss_capture_platform;
 
 #ifdef __cplusplus

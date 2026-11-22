@@ -21,7 +21,7 @@ namespace {
 using CapturePacket = rsf_sl_present_capture_packet;
 static_assert(sizeof(CapturePacket) == 96 && offsetof(CapturePacket, source_frame) == 48 &&
     offsetof(CapturePacket, queue_family) == 68 && offsetof(CapturePacket, native_wsi_call) == 88);
-static_assert(sizeof(rsf_dlss_capture_platform) == 24 * sizeof(void*));
+static_assert(sizeof(rsf_dlss_capture_platform) == 23 * sizeof(void*));
 static_assert(sizeof(rsf_dlss_capture_target) == 40 && alignof(rsf_dlss_capture_target) == 8 &&
     offsetof(rsf_dlss_capture_target, index) == 8 && offsetof(rsf_dlss_capture_target, height) == 32);
 static_assert(sizeof(VkImage) == sizeof(uint64_t) && alignof(VkImage) == alignof(uint64_t));
@@ -43,9 +43,6 @@ struct CaptureVk {
 };
 CaptureVk& capture_vk(void* native) { return *static_cast<CaptureVk*>(native); }
 const VkPresentInfoKHR& present_info(const CapturePacket& packet) { return *static_cast<const VkPresentInfoKHR*>(packet.present_info); }
-std::string present_role(int32_t generated) {
-    return generated >= 0 ? "fg-generated-present-" + std::to_string(generated) : "fg-real-present";
-}
 
 // Both calls bypass the SDK proxy under its LL2 WSI lease.
 using WsiCall = int32_t (*)(int32_t (*)(void*), void*);
@@ -147,9 +144,9 @@ void target(const CapturePacket* packet, rsf_dlss_capture_target* out) noexcept 
     }
 }
 
-uint32_t record(void* native, void* commands, const rsf_srvk_image* image, const rsf_frame_record* identity, int32_t generated) noexcept try {
+uint32_t record(void* native, void* commands, const rsf_srvk_image* image, const rsf_frame_record* identity, const char* role) noexcept try {
     return capture_vk(native).capture.record(static_cast<VkCommandBuffer>(commands), *image, *identity,
-        present_role(generated).c_str(), identity->flags & RSF_FRAME_FLAG_RESET, false);
+        role, identity->flags & RSF_FRAME_FLAG_RESET, false);
 } catch (...) { return 0; }
 
 int32_t submit(const CapturePacket* packet, void* commands, uint64_t fence) noexcept try {
@@ -174,40 +171,9 @@ void failure(void* native, uint64_t source, const char* reason, int32_t result) 
     std::ofstream(capture_vk(native).directory / "dlss-present-capture-errors.log", std::ios::app) << source << ' ' << reason << ' ' << result << '\n';
 } catch (...) {}
 
-void trace(void* native, const CapturePacket* value, const rsf_dlss_capture_source* observed, uint32_t found) noexcept try {
-    const auto& packet = *value;
-    const auto& sdk = observed->sdk;
-    std::ofstream trace(capture_vk(native).directory / "dlss-present-boundaries.jsonl", std::ios::app);
-    trace << "{\"capture_anchor_frame\":" << observed->record.frame_id
-        << ",\"capture_anchor_session\":" << observed->record.session_id << ",\"sdk_source_frame\":" << packet.source_frame
-        << ",\"sdk_present_frame\":" << packet.present_frame << ",\"sdk_generated_index\":" << packet.generated_index
-        << ",\"boundary_valid\":" << (packet.boundary_valid ? "true" : "false")
-        << ",\"source_found\":" << (found ? "true" : "false")
-        << ",\"configured_on\":" << (observed->configured ? "true" : "false")
-        << ",\"requested_generated_count\":" << observed->generated_count
-        << ",\"sdk_status\":" << sdk.sdk_status << ",\"sdk_result\":" << sdk.sdk_result
-        << ",\"sdk_actual_presents\":" << sdk.presentation.last_present_count
-        << ",\"max_generated\":" << sdk.max_generated_frames << ",\"min_dimension\":" << sdk.min_dimension
-        << ",\"vsync_supported\":" << sdk.vsync_supported << ",\"dynamic_mfg_supported\":" << sdk.dynamic_mfg_supported
-        << ",\"state_sample\":\"previous_sdk_query\"}\n";
-} catch (...) {}
-
-void metadata(void* native, const CapturePacket* value, const rsf_dlss_capture_source* source, uint64_t sequence,
-    int32_t result, uint32_t flush_attempted, uint32_t flushed) noexcept try {
-    const auto& packet = *value;
-    const auto& info = present_info(packet);
-    const auto& identity = source->record;
-    std::ofstream metadata(capture_vk(native).directory / "dlss-present-capture.jsonl", std::ios::app);
-    metadata << "{\"sequence\":" << sequence << ",\"session\":" << identity.session_id << ",\"frame\":" << identity.frame_id
-        << ",\"view\":" << identity.view_id << ",\"resource_generation\":" << identity.resource_generation
-        << ",\"sdk_source_frame\":" << packet.source_frame << ",\"sdk_present_frame\":" << packet.present_frame
-        << ",\"sdk_generated_index\":" << packet.generated_index << ",\"requested_generated_count\":" << source->generated_count
-        << ",\"generated\":" << (packet.generated_index >= 0 ? "true" : "false") << ",\"real_image_index\":" << info.pImageIndices[0]
-        << ",\"real_swapchain\":" << reinterpret_cast<uint64_t>(info.pSwapchains[0]) << ",\"present_result\":" << result
-        << ",\"legacy_flush_attempted\":" << (flush_attempted ? "true" : "false")
-        << ",\"legacy_flush_succeeded\":" << (flushed ? "true" : "false")
-        << ",\"readback_completion_proof\":" << (flush_attempted ? "\"dedicated-capture-fences\"" : "null")
-        << ",\"role\":\"" << present_role(packet.generated_index) << "\",\"fraction_established\":false}\n";
+void append(void* native, const char* file, const uint8_t* line, size_t length) noexcept try {
+    std::ofstream stream(capture_vk(native).directory / file, std::ios::app);
+    stream.write(reinterpret_cast<const char*>(line), static_cast<std::streamsize>(length));
 } catch (...) {}
 
 const rsf_dlss_capture_platform capture_platform{
@@ -242,7 +208,7 @@ const rsf_dlss_capture_platform capture_platform{
     },
     target, wsi_images, record, submit, present,
     [](void* native) -> uint32_t { return capture_vk(native).capture.flush(false); },
-    failure, trace, metadata,
+    failure, append,
 };
 }
 

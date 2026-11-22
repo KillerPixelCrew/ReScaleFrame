@@ -293,19 +293,24 @@ void check_present_capture(const rsf_fgvk_setup& setup) {
         result.open = [](const rsf_fgvk_setup*, void** out) -> rsf_backend_result { *out = synthetic_capture; return RSF_BACKEND_OK; };
         result.wants = [](void*, uint64_t frame) -> uint32_t { return frame == 42; };
         result.readbacks = [](void*) -> uint64_t { return capture_readbacks; };
-        result.record = [](void*, void* commands, const rsf_srvk_image* image, const rsf_frame_record* record, int32_t generated) -> uint32_t {
+        result.record = [](void*, void* commands, const rsf_srvk_image* image, const rsf_frame_record* record, const char* role) -> uint32_t {
             require(commands == capture_commands && image->device == device && image->image == 0x701 &&
                 image->format == VK_FORMAT_B8G8R8A8_UNORM && image->width == 1280 && image->height == 720 &&
-                image->layout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR && image->copy_source && record->frame_id == 42 && generated == 2,
+                image->layout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR && image->copy_source && record->frame_id == 42 &&
+                std::strcmp(role, "fg-generated-present-2") == 0,
                 "readback records the presented real WSI image for the exact source");
             ++capture_readbacks; return 1;
         };
         result.flush = [](void*) -> uint32_t { ++capture_flushes; return 1; };
         result.failure = [](void*, uint64_t, const char* reason, int32_t value) { capture_failure = reason; capture_failure_result = value; };
-        result.trace = [](void*, const rsf_sl_present_capture_packet*, const rsf_dlss_capture_source*, uint32_t) {};
-        result.metadata = [](void*, const rsf_sl_present_capture_packet*, const rsf_dlss_capture_source* source, uint64_t sequence,
-            int32_t value, uint32_t attempted, uint32_t flushed) {
-            require(source->record.frame_id == 42 && sequence == 1 && value == VK_SUBOPTIMAL_KHR && attempted && flushed,
+        result.append = [](void*, const char* file, const uint8_t* bytes, size_t length) {
+            if (std::strcmp(file, "dlss-present-capture.jsonl") != 0) return;
+            const std::string line(reinterpret_cast<const char*>(bytes), length);
+            require(line.find("\"frame\":42,") != std::string::npos &&
+                line.find("\"sequence\":1,") != std::string::npos &&
+                line.find("\"present_result\":" + std::to_string(VK_SUBOPTIMAL_KHR) + ",") != std::string::npos &&
+                line.find("\"legacy_flush_attempted\":true,\"legacy_flush_succeeded\":true,") != std::string::npos &&
+                line.find("\"readback_completion_proof\":\"dedicated-capture-fences\"") != std::string::npos,
                 "metadata keeps the native Present result and completion proof");
             ++capture_metadata;
         };

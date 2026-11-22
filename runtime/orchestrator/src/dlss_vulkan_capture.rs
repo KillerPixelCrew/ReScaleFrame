@@ -11,7 +11,7 @@ use crate::vulkan_fg_abi::{
 use crate::vulkan_sr_abi::rsf_srvk_image as Image;
 use rsf_game_sys::rsf_frame_record as Record;
 use std::collections::BTreeMap;
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, PoisonError};
@@ -93,26 +93,25 @@ pub(crate) struct Platform {
     readbacks: unsafe extern "C" fn(Handle) -> u64,
     target: unsafe extern "C" fn(*const Packet, *mut Target),
     images: unsafe extern "C" fn(*const Packet, u64, *mut u32, *mut u64) -> i32,
-    record: unsafe extern "C" fn(Handle, Handle, *const Image, *const Record, i32) -> u32,
+    record: unsafe extern "C" fn(Handle, Handle, *const Image, *const Record, *const c_char) -> u32,
     // Submits the copy behind the original Present wait semaphores.
     submit: unsafe extern "C" fn(*const Packet, Handle, u64) -> i32,
     // Zero waits presents after the copy fence consumed the original waits.
     present: unsafe extern "C" fn(*const Packet, u32) -> i32,
     flush: unsafe extern "C" fn(Handle) -> u32,
     failure: unsafe extern "C" fn(Handle, u64, *const c_char, i32),
-    trace: unsafe extern "C" fn(Handle, *const Packet, *const Source, u32),
-    metadata: unsafe extern "C" fn(Handle, *const Packet, *const Source, u64, i32, u32, u32),
+    append: unsafe extern "C" fn(Handle, *const c_char, *const u8, usize),
 }
 
 const _: () = {
     assert!(size_of::<Target>() == 40 && align_of::<Target>() == 8);
     assert!(std::mem::offset_of!(Target, index) == 8);
     assert!(std::mem::offset_of!(Target, height) == 32);
-    assert!(size_of::<Platform>() == 24 * size_of::<Handle>());
+    assert!(size_of::<Platform>() == 23 * size_of::<Handle>());
 };
 
 impl Platform {
-    fn present_image(&self, packet: &Packet) -> Result<Image, (&'static CStr, i32)> {
+    fn present_image(&self, packet: &Packet) -> Result<(Image, Target), (&'static CStr, i32)> {
         let mut target = Target::default();
         unsafe { (self.target)(packet, &mut target) };
         if target.usage & TRANSFER_SOURCE == 0
@@ -144,7 +143,7 @@ impl Platform {
         if image == 0 {
             return Err((c"real-images", VK_INITIALIZATION_FAILED));
         }
-        Ok(Image {
+        let image = Image {
             device: packet.device,
             image,
             format: target.format,
@@ -152,7 +151,8 @@ impl Platform {
             height: target.height,
             layout: PRESENT_LAYOUT,
             copy_source: 1,
-        })
+        };
+        Ok((image, target))
     }
 }
 
@@ -205,6 +205,44 @@ impl Drop for Owner {
 }
 
 impl Owner {
+    fn append(&self, file: &CStr, line: &str) {
+        unsafe { (self.ops.append)(self.native, file.as_ptr(), line.as_ptr(), line.len()) };
+    }
+
+    fn trace(&self, packet: &Packet, observed: &Source, found: bool) {
+        let sdk = &observed.sdk;
+        self.append(
+            c"dlss-present-boundaries.jsonl",
+            &format!(
+                concat!(
+                    "{{\"capture_anchor_frame\":{},\"capture_anchor_session\":{},",
+                    "\"sdk_source_frame\":{},\"sdk_present_frame\":{},\"sdk_generated_index\":{},",
+                    "\"boundary_valid\":{},\"source_found\":{},\"configured_on\":{},",
+                    "\"requested_generated_count\":{},\"sdk_status\":{},\"sdk_result\":{},",
+                    "\"sdk_actual_presents\":{},\"max_generated\":{},\"min_dimension\":{},",
+                    "\"vsync_supported\":{},\"dynamic_mfg_supported\":{},",
+                    "\"state_sample\":\"previous_sdk_query\"}}\n",
+                ),
+                observed.record.frame_id,
+                observed.record.session_id,
+                packet.source_frame,
+                packet.present_frame,
+                packet.generated_index,
+                packet.boundary_valid != 0,
+                found,
+                observed.configured != 0,
+                observed.generated_count,
+                sdk.sdk_status,
+                sdk.sdk_result,
+                sdk.presentation.last_present_count,
+                sdk.max_generated_frames,
+                sdk.min_dimension,
+                sdk.vsync_supported,
+                sdk.dynamic_mfg_supported,
+            ),
+        );
+    }
+
     fn failure(&self, source: u64, reason: &CStr, result: i32) {
         unsafe { (self.ops.failure)(self.native, source, reason.as_ptr(), result) };
     }
@@ -278,8 +316,7 @@ impl Owner {
         if let Some(observed) = state.ledger.observed()
             && self.wants(observed.record.frame_id)
         {
-            let found = u32::from(source.is_some());
-            unsafe { (ops.trace)(self.native, packet, observed, found) };
+            self.trace(packet, observed, source.is_some());
         }
         let Some(source) = source.filter(|source| {
             packet.boundary_valid != 0
@@ -289,7 +326,7 @@ impl Owner {
             return original(1);
         };
         let frame = packet.source_frame;
-        let image = match ops.present_image(packet) {
+        let (image, target) = match ops.present_image(packet) {
             Ok(image) => image,
             Err((reason, result)) => {
                 self.failure(frame, reason, result);
@@ -306,15 +343,15 @@ impl Owner {
             return original(1);
         }
         let before = self.readbacks();
-        let recorded = unsafe {
-            (ops.record)(
-                self.native,
-                commands,
-                &image,
-                &source.record,
-                packet.generated_index,
-            )
-        } != 0;
+        let generated = packet.generated_index >= 0;
+        let generated_role = generated.then(|| {
+            CString::new(format!("fg-generated-present-{}", packet.generated_index))
+                .expect("a decimal generated index has no NUL")
+        });
+        let role = generated_role.as_deref().unwrap_or(c"fg-real-present");
+        let recorded =
+            unsafe { (ops.record)(self.native, commands, &image, &source.record, role.as_ptr()) }
+                != 0;
         let result = unsafe { (ops.end)(self.native, commands) };
         if !recorded || result != VK_SUCCESS {
             if self.readbacks() > before {
@@ -358,17 +395,36 @@ impl Owner {
         // Present needs no replacement semaphore or image-index assumption.
         let result = original(0);
         let sequence = state.ledger.next_sequence();
-        unsafe {
-            (ops.metadata)(
-                self.native,
-                packet,
-                &source,
+        self.append(
+            c"dlss-present-capture.jsonl",
+            &format!(
+                concat!(
+                    "{{\"sequence\":{},\"session\":{},\"frame\":{},\"view\":{},",
+                    "\"resource_generation\":{},\"sdk_source_frame\":{},\"sdk_present_frame\":{},",
+                    "\"sdk_generated_index\":{},\"requested_generated_count\":{},\"generated\":{},",
+                    "\"real_image_index\":{},\"real_swapchain\":{},\"present_result\":{},",
+                    "\"legacy_flush_attempted\":{},\"legacy_flush_succeeded\":{},",
+                    "\"readback_completion_proof\":{},\"role\":\"{}\",\"fraction_established\":false}}\n",
+                ),
                 sequence,
+                source.record.session_id,
+                source.record.frame_id,
+                source.record.view_id,
+                source.record.resource_generation,
+                packet.source_frame,
+                packet.present_frame,
+                packet.generated_index,
+                source.generated_count,
+                generated,
+                target.index,
+                target.chain,
                 result,
-                u32::from(ready),
-                u32::from(flushed),
-            )
-        };
+                ready,
+                flushed,
+                if ready { "\"dedicated-capture-fences\"" } else { "null" },
+                role.to_string_lossy(),
+            ),
+        );
         result
     }
 
