@@ -299,7 +299,7 @@ uint32_t adapter_vendor(void* candidate, uint32_t* vendor, void** retained) noex
 
 void report_vendor(rsf_backend_log_fn log, void* user, uint32_t vendor) noexcept
 {
-    rsf::say(log, user, "Streamline host refused: adapter vendor 0x%04x is not NVIDIA", unsigned(vendor));
+    rsf_logf(log, user, "Streamline host refused: adapter vendor 0x%04x is not NVIDIA", unsigned(vendor));
 }
 
 void* load(const wchar_t* path, const rsf_streamline_host_setup* setup) noexcept

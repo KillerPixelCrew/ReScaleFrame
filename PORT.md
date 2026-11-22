@@ -247,7 +247,7 @@ Port settings storage, formatting, hashes and shared utilities. Consolidate sett
 **Port files (6)**
 
 - [x] [runtime/common/include/rescaleframe/capture_names.h](runtime/common/include/rescaleframe/capture_names.h)
-- [ ] [runtime/common/include/rescaleframe/log.h](runtime/common/include/rescaleframe/log.h)
+- [x] [runtime/common/include/rescaleframe/log.h](runtime/common/include/rescaleframe/log.h)
 - [x] [runtime/common/include/rescaleframe/sha256_file.h](runtime/common/include/rescaleframe/sha256_file.h)
 - [x] [runtime/orchestrator/src/render_settings_store.cpp](runtime/orchestrator/src/render_settings_store.cpp)
 - [ ] [runtime/orchestrator/src/render_settings_store.h](runtime/orchestrator/src/render_settings_store.h)
@@ -1006,7 +1006,7 @@ Port swapchain dispatch, presentation synchronization and shared surface ownersh
 - [x] [runtime/presentation/include/rescaleframe/d3d11_present_bridge.h](runtime/presentation/include/rescaleframe/d3d11_present_bridge.h)
 - [x] [runtime/presentation/include/rescaleframe/shared_surface.h](runtime/presentation/include/rescaleframe/shared_surface.h)
 - [ ] [runtime/presentation/src/d3d11_present_bridge.cpp](runtime/presentation/src/d3d11_present_bridge.cpp)
-- [ ] [runtime/presentation/src/d3d11_present_platform.h](runtime/presentation/src/d3d11_present_platform.h)
+- [x] [runtime/presentation/src/d3d11_present_platform.h](runtime/presentation/src/d3d11_present_platform.h)
 - [x] [runtime/presentation/src/shared_surface.cpp](runtime/presentation/src/shared_surface.cpp)
 
 **Fixtures (4)**
@@ -1044,23 +1044,23 @@ Port generic SR setup, legacy bridging and auxiliary reconstruction. Trace the p
 - [x] [runtime/orchestrator/include/rescaleframe/native_sr.h](runtime/orchestrator/include/rescaleframe/native_sr.h)
 - [x] [runtime/orchestrator/include/rescaleframe/sr_bridge.h](runtime/orchestrator/include/rescaleframe/sr_bridge.h)
 - [x] [runtime/orchestrator/include/rescaleframe/sr_session.h](runtime/orchestrator/include/rescaleframe/sr_session.h)
-- [ ] [runtime/orchestrator/src/auxiliary_sr.cpp](runtime/orchestrator/src/auxiliary_sr.cpp)
-- [ ] [runtime/orchestrator/src/auxiliary_sr.h](runtime/orchestrator/src/auxiliary_sr.h)
+- [x] [runtime/orchestrator/src/auxiliary_sr.cpp](runtime/orchestrator/src/auxiliary_sr.cpp)
+- [x] [runtime/orchestrator/src/auxiliary_sr.h](runtime/orchestrator/src/auxiliary_sr.h)
 - [ ] [runtime/orchestrator/src/auxiliary_sr_platform.h](runtime/orchestrator/src/auxiliary_sr_platform.h)
-- [ ] [runtime/orchestrator/src/d3d11_sr_api.cpp](runtime/orchestrator/src/d3d11_sr_api.cpp)
+- [x] [runtime/orchestrator/src/d3d11_sr_api.cpp](runtime/orchestrator/src/d3d11_sr_api.cpp)
 - [ ] [runtime/orchestrator/src/native_sr.cpp](runtime/orchestrator/src/native_sr.cpp)
 - [ ] [runtime/orchestrator/src/native_sr_completion.h](runtime/orchestrator/src/native_sr_completion.h)
-- [ ] [runtime/orchestrator/src/sr_bridge_platform.cpp](runtime/orchestrator/src/sr_bridge_platform.cpp)
-- [ ] [runtime/orchestrator/src/sr_legacy_adapter.cpp](runtime/orchestrator/src/sr_legacy_adapter.cpp)
+- [x] [runtime/orchestrator/src/sr_bridge_platform.cpp](runtime/orchestrator/src/sr_bridge_platform.cpp)
+- [x] [runtime/orchestrator/src/sr_legacy_adapter.cpp](runtime/orchestrator/src/sr_legacy_adapter.cpp)
 - [ ] [runtime/orchestrator/src/sr_legacy_adapter.h](runtime/orchestrator/src/sr_legacy_adapter.h)
-- [ ] [runtime/orchestrator/src/sr_session_backends.cpp](runtime/orchestrator/src/sr_session_backends.cpp)
+- [x] [runtime/orchestrator/src/sr_session_backends.cpp](runtime/orchestrator/src/sr_session_backends.cpp)
 
 **Fixtures (4)**
 
 - [ ] [tests/auxiliary_sr.cpp](tests/auxiliary_sr.cpp)
 - [ ] [tests/sr_backend_switch_device.cpp](tests/sr_backend_switch_device.cpp)
-- [ ] [tests/sr_bridge.cpp](tests/sr_bridge.cpp)
-- [ ] [tests/sr_session.cpp](tests/sr_session.cpp)
+- [x] [tests/sr_bridge.cpp](tests/sr_bridge.cpp)
+- [x] [tests/sr_session.cpp](tests/sr_session.cpp)
 
 **Rust review findings (11)**
 

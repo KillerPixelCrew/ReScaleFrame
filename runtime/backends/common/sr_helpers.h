@@ -39,7 +39,7 @@ inline HMODULE load_module(const wchar_t* path, void (*log)(void*, const char*),
 {
     HMODULE module = LoadLibraryExW(path, nullptr,
         LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!module) say(log, user, "could not load %ls (Windows error %lu)", path, GetLastError());
+    if (!module) rsf_logf(log, user, "could not load %ls (Windows error %lu)", path, GetLastError());
     return module;
 }
 inline HMODULE load_runtime(const rsf_sr_open_desc& desc, const wchar_t* name)

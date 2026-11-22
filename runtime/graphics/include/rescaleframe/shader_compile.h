@@ -40,9 +40,9 @@ inline bool compile_shader(const char* source, size_t length, const char* name, 
         });
     if (result == 0) return true;
     if (result == 1) {
-        say(log, user, "shader %s: d3dcompiler_47 is not available", name);
+        rsf_logf(log, user, "shader %s: d3dcompiler_47 is not available", name);
     } else if (result < 0) {
-        say(log, user, "shader %s (%s): compile failed 0x%08lx %s", name, entry,
+        rsf_logf(log, user, "shader %s (%s): compile failed 0x%08lx %s", name, entry,
             static_cast<unsigned long>(static_cast<uint32_t>(result)), reply.errors.c_str());
     }
     return false;

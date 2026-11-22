@@ -76,7 +76,7 @@ void report_execution(const rsf_game_host_services* host, uintptr_t list,
         static_cast<ID3D11Texture2D*>(pass->depth)->GetDesc(&desc[1]);
         static_cast<ID3D11Texture2D*>(pass->motion)->GetDesc(&desc[2]);
         static_cast<ID3D11Texture2D*>(pass->color_output)->GetDesc(&desc[3]);
-        rsf::say(host->log, host->user,
+        rsf_logf(host->log, host->user,
             "PW GPU temporal list=%p history=%p colour=%ux%u/%u depth=%ux%u/%u motion=%ux%u/%u output=%ux%u/%u camera=%u frame=%llu",
             reinterpret_cast<void*>(list), reinterpret_cast<void*>(uintptr_t(pass->history_key)),
             desc[0].Width, desc[0].Height, unsigned(desc[0].Format),

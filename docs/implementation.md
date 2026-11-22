@@ -7819,3 +7819,6 @@ completed. Builds, lint, fixture execution and device checks remain pending.
 Fallout 4 now compares the executable digest in Rust using the shared nonallocating
 lowercase SHA-256 encoder. The Unity and XeSS raw digest checks call the C ABI with
 their original sharing flags. Header syntax and source caller checks passed.
+
+The shared variadic logger is C11-compatible. It keeps the registered sink,
+512-byte buffer and CRT formatting, with no C++ namespace wrapper.

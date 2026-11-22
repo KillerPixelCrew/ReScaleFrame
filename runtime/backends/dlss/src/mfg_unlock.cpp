@@ -166,7 +166,7 @@ void rsf::MfgUnlock::prime(void* device, const wchar_t* directory, bool require_
     if (!owner_) return;
     const auto maximum = rsf_core_mfg_prime(owner_, &platform, device, directory, uint32_t(require_signature));
     if (maximum) {
-        rsf::say(log, user, "RTX 40 MFG wrapper prepared=%u capacity=%u before plugin initialization",
+        rsf_logf(log, user, "RTX 40 MFG wrapper prepared=%u capacity=%u before plugin initialization",
             unsigned(maximum > 1), maximum);
     }
 #else

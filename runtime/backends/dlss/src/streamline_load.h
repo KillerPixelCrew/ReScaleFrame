@@ -20,11 +20,11 @@ inline HMODULE load_interposer(const wchar_t* path, bool require_signature, rsf_
 {
     // LoadLibraryExW with a search flag refuses a relative path, so name that here instead of a bare error.
     if (!rsf_streamline_absolute_path(path)) {
-        say(log, user, "interposer path is not absolute: %ls", path ? path : L"(null)");
+        rsf_logf(log, user, "interposer path is not absolute: %ls", path ? path : L"(null)");
         return nullptr;
     }
     if (require_signature && !rsf_dlss_verify_runtime_signature(path)) {
-        say(log, user, "interposer at %ls could not be verified as signed", path);
+        rsf_logf(log, user, "interposer at %ls could not be verified as signed", path);
         return nullptr;
     }
     return load_module(path, log, user);

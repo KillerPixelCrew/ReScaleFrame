@@ -79,7 +79,7 @@ const VIEW_HDR: u32 = 3;
 const VIEW_DEPTH: u32 = 4;
 const VIEW_SCALAR: u32 = 5;
 const DUMP_OK: i32 = 0;
-// rsf::say formats into a 512-byte buffer.
+// rsf_logf formats into a 512-byte buffer.
 const LINE_LIMIT: usize = 511;
 
 /* How many evaluates may fail in a row before the pipeline stops asking. Generous enough that a
@@ -474,7 +474,7 @@ impl Pipeline {
         *self.sink.lock().unwrap_or_else(PoisonError::into_inner) = sink;
     }
 
-    // One line through the caller's sink, cut where rsf::say cut it.
+    // One line through the caller's sink, cut where rsf_logf cuts it.
     fn emit(&self, text: &[u8]) {
         let sink = *self.sink.lock().unwrap_or_else(PoisonError::into_inner);
         let Some(log) = sink.log else {

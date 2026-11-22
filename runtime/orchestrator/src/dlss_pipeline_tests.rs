@@ -848,7 +848,7 @@ fn repeated_failures_give_up_until_a_setting_restarts_history() {
     assert_eq!(
         with(|world| world.logs.last().map(String::len)),
         Some(LINE_LIMIT),
-        "cut where rsf::say cut it"
+        "cut where rsf_logf cuts it"
     );
     assert_eq!(run(&pipeline, &frame(&camera, [640, 360])), EVALUATE_FAILED);
     assert_eq!(
