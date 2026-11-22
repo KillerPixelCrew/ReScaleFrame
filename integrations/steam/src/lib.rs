@@ -117,7 +117,6 @@ type Resize1Fn = unsafe extern "system" fn(
 
 type Service = unsafe extern "C" fn(*mut c_void, *mut rsf_d3d11_chain_dispatch) -> i32;
 type ColdOwner = unsafe extern "C" fn() -> bool;
-type ColdOwnerWithUser = unsafe extern "C" fn(*const c_void) -> bool;
 
 unsafe extern "C" {
     fn rsf_steam_dispatch_guard(
@@ -624,7 +623,7 @@ fn prepare(host: &rsf_game_host_services, cold_owner: impl FnOnce() -> bool) -> 
             created += 1;
         }
     }
-    let mut queued = created == HOOK_COUNT && guarded(base);
+    let mut queued = created == HOOK_COUNT;
     if queued {
         for &target in &targets {
             if !unsafe { minhook::queue(target, true) } {
@@ -674,14 +673,4 @@ unsafe extern "C" fn rsf_steam_d3d11_chain_prepare(
     cold_owner: Option<ColdOwner>,
 ) -> bool {
     unsafe { prepare_from_abi(host, || cold_owner.is_some_and(|cold| cold())) }
-}
-
-// Supports the legacy C++ caller with a borrowed context and a no-throw thunk.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_steam_d3d11_chain_prepare_with_user(
-    host: *const rsf_game_host_services,
-    cold_owner: Option<ColdOwnerWithUser>,
-    cold_user: *const c_void,
-) -> bool {
-    unsafe { prepare_from_abi(host, || cold_owner.is_some_and(|cold| cold(cold_user))) }
 }
