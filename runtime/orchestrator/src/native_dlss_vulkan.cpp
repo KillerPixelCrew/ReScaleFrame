@@ -15,6 +15,7 @@
 #include <sl_dlss.h>
 #include <DirectXMath.h>
 #include "../../backends/common/frame_capture_vk.h"
+#include <rescaleframe/capture_names.h>
 namespace {
 const sl::ViewportHandle viewport(1);
 using Image = rsf_vkfg_image;
@@ -29,7 +30,8 @@ struct Native {
     PFun_slSetConstants* constants = nullptr; PFun_slSetTagForFrame* tags = nullptr;
     PFun_slEvaluateFeature* evaluate = nullptr; PFun_slFreeResources* release = nullptr;
     PFun_slDLSSGetOptimalSettings* optimal = nullptr; PFun_slDLSSSetOptions* options = nullptr;
-    rsf::FrameCaptureVk capture{rsf::FrameCaptureVk::Completion::command_retirement};
+    std::unique_ptr<rsf_core_capture_vk, decltype(&rsf_core_capture_vk_destroy)> capture{
+        rsf_core_capture_vk_create(RSF_CAPTURE_VK_COMMAND_RETIREMENT), rsf_core_capture_vk_destroy};
 };
 namespace {
 sl::Resource resource(const Image& image, uint32_t layout) {
@@ -105,8 +107,8 @@ void capture_parameters(void*, const rsf_srvk_frame* input, uint32_t reset) {
 
 void capture_record(void* native, void* commands, const rsf_srvk_image* image,
     const rsf_frame_record* record, const char* role, uint32_t reset) {
-    (void)static_cast<Native*>(native)->capture.record(
-        static_cast<VkCommandBuffer>(commands), *image, *record, role, reset);
+    (void)rsf_core_capture_vk_record(static_cast<Native*>(native)->capture.get(), commands, image,
+        record, role, reset, 1, nullptr, 0);
 }
 int32_t open(const rsf_srvk_setup* setup, void** out) noexcept try {
     auto self = std::make_unique<Native>();
@@ -130,8 +132,8 @@ int32_t prepare(void* native, rsf_vkdlss_commands* commands) noexcept try {
     VkPhysicalDeviceMemoryProperties memory{};
     properties(static_cast<VkPhysicalDevice>(setup->physical_device), &memory);
     self->gpu.memory_types(memory);
-    self->capture.set_provider(0, RSF_SR_DLSS);
-    if (!self->capture.initialize(static_cast<VkDevice>(setup->device), setup->device_proc, memory))
+    rsf_core_capture_vk_provider(self->capture.get(), 0, RSF_SR_DLSS, 0);
+    if (!rsf_core_capture_vk_initialize(self->capture.get(), setup->device, setup->device_proc, &memory))
         return RSF_BACKEND_ERROR_INIT_FAILED;
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
@@ -171,13 +173,13 @@ const rsf_vkdlss_platform rsf::dlss_vk::leaves{
     },
     [](void* native) {
         auto& self = *static_cast<Native*>(native);
-        (void)self.capture.flush();
+        (void)rsf_core_capture_vk_flush(self.capture.get(), 0, nullptr);
         rsf_sharpenvk_host_clear(&self.sharpen);
     },
     [](void* native, void* commands) {
         auto& self = *static_cast<Native*>(native);
         rsf_sharpenvk_host_retire(&self.sharpen, commands);
-        self.capture.retire_commands(static_cast<VkCommandBuffer>(commands));
+        rsf_core_capture_vk_retire(self.capture.get(), commands);
     },
     rsf_dlss_preset_valid,
 };

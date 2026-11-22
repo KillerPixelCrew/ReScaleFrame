@@ -22,7 +22,6 @@ add_library(rsf_orchestrator_core OBJECT
     src/fg12_platform.cpp
     src/native_sr.cpp
     src/native_composition_unload.cpp
-    src/sr12_platform.cpp
     src/gl_pipeline_contract.c
     src/rust_exports.c
     src/callback_render_host_platform.cpp
@@ -134,7 +133,9 @@ add_library(ReScaleFrame::NativeVulkan ALIAS rsf_native_vulkan)
 find_path(RSF_FRAME_DUMP_VULKAN_INCLUDE vulkan/vulkan.h
     HINTS "${RSF_VULKAN_INCLUDE}" "$ENV{VULKAN_SDK}/Include")
 if(RSF_FRAME_DUMP_VULKAN_INCLUDE)
-    target_sources(rsf_native_vulkan PRIVATE src/input_dump_vulkan.cpp)
+    # The C file only carries export directives. Link it as an object in each
+    # consumer so the linker sees the exports before extracting the Rust archive.
+    target_sources(rsf_native_vulkan INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src/input_dump_vulkan_exports.c")
     target_include_directories(rsf_native_vulkan SYSTEM PUBLIC "${RSF_FRAME_DUMP_VULKAN_INCLUDE}")
     target_compile_definitions(rsf_native_vulkan PUBLIC RSF_FRAME_DUMP_VULKAN=1)
 endif()

@@ -693,6 +693,9 @@ pub(super) extern "C" fn rsf_core_capture_vk_create(command_completion: u32) -> 
 }
 
 #[cfg(windows)]
+const _: () = assert!(size_of::<ash::vk::PhysicalDeviceMemoryProperties>() == 520);
+
+#[cfg(windows)]
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_capture_vk_initialize(
     owner: *mut Owner,

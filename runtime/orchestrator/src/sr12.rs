@@ -34,8 +34,7 @@ const NOT_READY: i32 = -8;
 const FEATURE_FAILED: i32 = -9;
 const STALE_RESOURCES: i32 = -10;
 
-// Public backend IDs and the D3D12/DXGI values below are pinned by static_asserts in
-// sr12_platform.cpp.
+// ABI values consumed by the SR planner and normalization pass.
 const SR_NONE: u32 = 0;
 const SR_DLSS: u32 = 1;
 const SR_AUTO: u32 = 7;
@@ -325,7 +324,7 @@ enum Vendor {
 struct Native {
     p: &'static Platform,
     vendor: Vendor,
-    capture: NonNull<c_void>,
+    capture: Handle,
     sharpen: NonNull<c_void>,
 }
 
@@ -338,7 +337,7 @@ impl Drop for Native {
                 Vendor::Dlss(context) => (p.dlss_destroy)(context.as_ptr()),
                 Vendor::Session(session) => (p.session_destroy)(session.as_ptr()),
             }
-            (p.capture_destroy)(self.capture.as_ptr());
+            (p.capture_destroy)(self.capture);
             (p.sharpen_destroy)(self.sharpen.as_ptr());
         }
     }
@@ -401,7 +400,7 @@ pub(crate) struct Sr12 {
 impl Drop for Sr12 {
     fn drop(&mut self) {
         // The caller drained all submitted work before destruction.
-        unsafe { (self.native.p.capture_flush)(self.native.capture.as_ptr(), ALL_SLOTS) };
+        unsafe { (self.native.p.capture_flush)(self.native.capture, ALL_SLOTS) };
     }
 }
 
@@ -612,9 +611,10 @@ unsafe fn create(setup: *const Setup, p: &'static Platform) -> Result<Sr12, i32>
     {
         return Err(INVALID);
     }
-    let capture = NonNull::new(unsafe { (p.capture_create)() }).ok_or(INIT_FAILED)?;
+    // Capture is optional. An allocation failure leaves SR usable and capture unavailable.
+    let capture = unsafe { (p.capture_create)() };
     let Some(sharpen) = NonNull::new(unsafe { (p.sharpen_create)() }) else {
-        unsafe { (p.capture_destroy)(capture.as_ptr()) };
+        unsafe { (p.capture_destroy)(capture) };
         return Err(INIT_FAILED);
     };
     let mut native = Native {
@@ -639,8 +639,7 @@ unsafe fn create(setup: *const Setup, p: &'static Platform) -> Result<Sr12, i32>
     if engine_extents {
         (width, height) = (s.render_width, s.render_height);
     }
-    let normalize_color =
-        s.backend != SR_NONE || unsafe { (p.capture_enabled)(capture.as_ptr()) } != 0;
+    let normalize_color = s.backend != SR_NONE || unsafe { (p.capture_enabled)(capture) } != 0;
     let gpu = unsafe { create_gpu(p, &s, (width, height), normalize_color, external_exposure) }
         .ok_or(INIT_FAILED)?;
     let sharpening = sharpening_policy::defaults();
@@ -685,7 +684,7 @@ impl Sr12 {
     }
 
     fn capture(&self) -> Handle {
-        self.native.capture.as_ptr()
+        self.native.capture
     }
 
     fn say(&self, message: &CStr) {
@@ -1293,13 +1292,13 @@ pub(super) unsafe fn create_for_host(setup: *const Setup, out: *mut *mut Sr12) -
 }
 
 #[cfg(not(test))]
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "rsf_sr12_create")]
 unsafe extern "C" fn rsf_core_sr12_create_native(setup: *const Setup, out: *mut *mut Sr12) -> i32 {
     unsafe { create_for_host(setup, out) }
 }
 
 #[cfg(not(test))]
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "rsf_sr12_create_planned")]
 unsafe extern "C" fn rsf_core_sr12_create_planned_native(
     setup: *const Setup,
     plan: *mut PlanResult,
@@ -1344,7 +1343,7 @@ unsafe extern "C" fn rsf_core_sr12_create(
     }
 }
 
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "rsf_sr12_quality_supported")]
 extern "C" fn rsf_core_sr12_quality_supported(backend: u32, quality: u32) -> u32 {
     u32::from(
         backend <= SR_AUTO
@@ -1460,7 +1459,7 @@ unsafe extern "C" fn rsf_core_sr12_create_planned(
     OK
 }
 
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "rsf_sr12_plan")]
 pub(super) unsafe extern "C" fn rsf_core_sr12_plan(
     owner: *const Sr12,
     width: *mut u32,
@@ -1479,7 +1478,7 @@ pub(super) unsafe extern "C" fn rsf_core_sr12_plan(
     OK
 }
 
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "rsf_sr12_evaluate")]
 pub(super) unsafe extern "C" fn rsf_core_sr12_evaluate(
     owner: *mut Sr12,
     list: Handle,
@@ -1495,7 +1494,7 @@ pub(super) unsafe extern "C" fn rsf_core_sr12_evaluate(
     unsafe { owner.evaluate(list, pass, slot as usize) }
 }
 
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "rsf_sr12_set_sharpening")]
 pub(super) unsafe extern "C" fn rsf_core_sr12_set_sharpening(
     owner: *mut Sr12,
     options: *const rsf_sharpening_options,
@@ -1519,14 +1518,14 @@ pub(super) unsafe extern "C" fn rsf_core_sr12_set_sharpening(
     OK
 }
 
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "rsf_sr12_destroy")]
 pub(super) unsafe extern "C" fn rsf_core_sr12_destroy(owner: *mut Sr12) {
     if !owner.is_null() {
         drop(unsafe { Box::from_raw(owner) });
     }
 }
 
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "rsf_sr12_present")]
 pub(super) unsafe extern "C" fn rsf_core_sr12_present(
     owner: *mut Sr12,
     swapchain: Handle,
@@ -1548,7 +1547,7 @@ pub(super) unsafe extern "C" fn rsf_core_sr12_present(
     }
 }
 
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "rsf_sr12_capture")]
 pub(super) unsafe extern "C" fn rsf_core_sr12_capture(
     owner: *mut Sr12,
     directory: *const c_char,
@@ -1567,7 +1566,7 @@ pub(super) unsafe extern "C" fn rsf_core_sr12_capture(
     }
 }
 
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "rsf_sr12_capture_flush")]
 pub(super) unsafe extern "C" fn rsf_core_sr12_capture_flush(owner: *mut Sr12, slot: u32) -> i32 {
     let Some(owner) = (unsafe { owner.as_ref() }) else {
         return INVALID;
@@ -1582,7 +1581,7 @@ pub(super) unsafe extern "C" fn rsf_core_sr12_capture_flush(owner: *mut Sr12, sl
     }
 }
 
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "rsf_sr12_capture_scene")]
 pub(super) unsafe extern "C" fn rsf_core_sr12_capture_scene(
     owner: *mut Sr12,
     list: Handle,

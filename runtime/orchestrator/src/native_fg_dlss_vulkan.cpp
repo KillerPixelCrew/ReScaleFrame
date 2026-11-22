@@ -34,7 +34,8 @@ struct Native {
     PFun_slFreeResources* release = nullptr;
     PFun_slDLSSGSetOptions* options = nullptr;
     PFun_slDLSSGGetState* state = nullptr;
-    rsf::FrameCaptureVk capture;
+    std::unique_ptr<rsf_core_capture_vk, decltype(&rsf_core_capture_vk_destroy)> capture{
+        rsf_core_capture_vk_create(RSF_CAPTURE_VK_SHARED_SUBMISSION), rsf_core_capture_vk_destroy};
     rsf::DlssPresentCapture present_capture;
 
 };
@@ -164,9 +165,10 @@ rsf_backend_result prepare_chain(void* user, uint32_t* capture_enabled, void** g
     properties(static_cast<VkPhysicalDevice>(graphics.physical_device), &memory);
     if (!self->gpu.load(self->setup, true)) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
     self->gpu.memory_types(memory);
-    self->capture.set_provider(0, RSF_SR_DLSS, true);
-    if (!self->capture.initialize(static_cast<VkDevice>(graphics.device), graphics.device_proc, memory)) return RSF_BACKEND_ERROR_INIT_FAILED;
-    *capture_enabled = self->capture.enabled() ? 1u : 0u;
+    rsf_core_capture_vk_provider(self->capture.get(), 0, RSF_SR_DLSS, 1);
+    if (!rsf_core_capture_vk_initialize(self->capture.get(), graphics.device, graphics.device_proc, &memory))
+        return RSF_BACKEND_ERROR_INIT_FAILED;
+    *capture_enabled = rsf_core_capture_vk_enabled(self->capture.get()) ? 1u : 0u;
     *gpu = self->gpu.get();
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
@@ -191,8 +193,8 @@ constexpr rsf_dlgvk_platform platform{
     [](void* user, void* commands, const rsf_srvk_image* image, const rsf_frame_record* record, uint32_t role, uint64_t group) {
         static constexpr const char* roles[] = {"fg-depth", "fg-motion-uv", "fg-hudless-color"};
         auto& self = *static_cast<Native*>(user);
-        (void)self.capture.record(static_cast<VkCommandBuffer>(commands), *image, *record, roles[role],
-            record->flags & RSF_FRAME_FLAG_RESET, true, nullptr, group);
+        (void)rsf_core_capture_vk_record(self.capture.get(), commands, image,
+            record, roles[role], record->flags & RSF_FRAME_FLAG_RESET, 1, nullptr, group);
     },
     [](void* user, const rsf_frame_record* record, const rsf_dlssgvk_status* status, uint32_t configured) noexcept {
         try {
@@ -201,13 +203,14 @@ constexpr rsf_dlgvk_platform platform{
     },
     [](void* user, uint64_t group, uint32_t complete) noexcept {
         try {
-            auto& capture = static_cast<Native*>(user)->capture;
-            if (complete) capture.complete_group(group); else capture.discard_group(group);
+            auto* capture = static_cast<Native*>(user)->capture.get();
+            if (complete) rsf_core_capture_vk_complete_group(capture, group);
+            else rsf_core_capture_vk_discard_group(capture, group);
         } catch (...) {}
     },
     [](void* user) noexcept {
         auto& self = *static_cast<Native*>(user);
-        (void)self.capture.flush();
+        (void)rsf_core_capture_vk_flush(self.capture.get(), 0, nullptr);
         try { self.present_capture.flush(); } catch (...) {}
     },
     [](void* user) noexcept -> rsf_backend_result {

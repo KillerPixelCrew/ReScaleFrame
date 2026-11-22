@@ -6,9 +6,11 @@ use crate::frame_capture12::native::{
     rsf_fg12_platform_map, rsf_fg12_platform_readback, rsf_fg12_platform_readback_copy,
     rsf_fg12_platform_unmap,
 };
+use crate::frame_capture12::{self as capture, Owner as Capture};
 use crate::native_cpu::rsf_native_cpu_dispatch;
 use crate::render_abi::rsf_generation_provider;
 use rsf_game_sys::frame_policy::rsf_frame_allows_fg;
+use std::sync::atomic::AtomicPtr;
 
 unsafe extern "C" {
     fn rsf_input_dump_fg_prepare(
@@ -16,21 +18,12 @@ unsafe extern "C" {
         frame: *const rsf_fg_frame,
         result: i32,
     );
+    fn rsf_native_latency_ping(window: *mut c_void) -> i32;
     fn rsf_streamline_host_abort(host: *mut c_void, source: u64) -> i32;
     fn rsf_fg12_platform_install(
         setup: *const rsf_d3d11_present_setup,
         explicit_creation: i32,
     ) -> i32;
-    fn rsf_fg12_platform_dump_record(
-        list: *mut c_void,
-        source: *mut c_void,
-        state: u32,
-        record: *const rsf_frame_record,
-        role: *const c_char,
-        slot: u32,
-    );
-    fn rsf_fg12_platform_dump_flush();
-    fn rsf_fg12_platform_dump_submitted(queue: *mut c_void, record: *const rsf_frame_record);
     fn rsf_d3d11_present_queue() -> *mut c_void;
     fn rsf_d3d11_present_source_queue() -> *mut c_void;
     fn rsf_d3d11_present_retire(
@@ -104,9 +97,9 @@ pub(super) static CALLS: rsf_fg12_calls = rsf_fg12_calls {
     readback_copy: Some(readback_copy),
     map: Some(rsf_fg12_platform_map),
     unmap: Some(rsf_fg12_platform_unmap),
-    dump_record: Some(rsf_fg12_platform_dump_record),
-    dump_flush: Some(rsf_fg12_platform_dump_flush),
-    dump_submitted: Some(rsf_fg12_platform_dump_submitted),
+    dump_record: Some(dump_record),
+    dump_flush: Some(dump_flush),
+    dump_submitted: Some(dump_submitted),
     dump_prepare: Some(dump_prepare),
     present_queue: Some(rsf_d3d11_present_queue),
     source_queue: Some(rsf_d3d11_present_source_queue),
@@ -134,3 +127,159 @@ pub(super) static CALLS: rsf_fg12_calls = rsf_fg12_calls {
     dump_complete: Some(rsf_input_dump_complete),
     dump_result: Some(rsf_input_dump_result),
 };
+
+// The native lifetime hooks run at module attach and detach, as the former
+// C++ capture member did. Detach requires a quiescent Runtime.
+static CAPTURE: AtomicPtr<Capture> = AtomicPtr::new(null_mut());
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_fg12_capture_attach() {
+    CAPTURE.store(capture::rsf_core_capture12_create(1), Ordering::Release);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_fg12_capture_detach() {
+    let owner = CAPTURE.swap(null_mut(), Ordering::AcqRel);
+    unsafe { capture::rsf_core_capture12_destroy(owner) };
+}
+
+unsafe extern "C" fn dump_record(
+    list: *mut c_void,
+    source: *mut c_void,
+    state: u32,
+    record: *const rsf_frame_record,
+    role: *const c_char,
+    slot: u32,
+) {
+    unsafe {
+        capture::rsf_core_capture12_record(
+            CAPTURE.load(Ordering::Acquire),
+            list,
+            source,
+            state,
+            record,
+            role,
+            slot,
+            0,
+            u32::MAX,
+            u32::MAX,
+            0.0,
+        );
+    }
+}
+
+unsafe extern "C" fn dump_flush() {
+    unsafe { capture::rsf_core_capture12_flush(CAPTURE.load(Ordering::Acquire), u32::MAX, 1) };
+}
+
+unsafe extern "C" fn dump_submitted(queue: *mut c_void, record: *const rsf_frame_record) {
+    unsafe {
+        capture::rsf_core_capture12_submitted(
+            CAPTURE.load(Ordering::Acquire),
+            queue,
+            u32::MAX,
+            record,
+        );
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg12_install(request: *const rsf_fg12_setup) -> i32 {
+    bind_native_platform();
+    unsafe { rsf_core_fg12_install(request) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg12_install_explicit(request: *const rsf_fg12_setup) -> i32 {
+    bind_native_platform();
+    unsafe { rsf_core_fg12_install_explicit(request) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg12_cpu(event: *const rsf_game_cpu_event) {
+    bind_native_platform();
+    unsafe { rsf_core_fg12_cpu(event) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg12_latency(event: *const rsf_game_latency_event) -> i32 {
+    bind_native_platform();
+    unsafe { rsf_core_fg12_latency(event) }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_fg12_render_begin(session: u64, id: u64) -> i32 {
+    bind_native_platform();
+    rsf_core_fg12_render_begin(session, id)
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg12_capture(
+    list: *mut c_void,
+    record: *const rsf_frame_record,
+    depth: *mut c_void,
+    motion: *mut c_void,
+) {
+    bind_native_platform();
+    unsafe { rsf_core_fg12_capture(list, record, depth, motion) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg12_hudless(list: *mut c_void, pass: *const rsf_game_render_pass) {
+    bind_native_platform();
+    unsafe { rsf_core_fg12_hudless(list, pass) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg12_submitted(session: u64, id: u64) {
+    bind_native_platform();
+    unsafe { rsf_core_fg12_submitted(session, id) }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_fg12_end_session(session: u64) -> i32 {
+    bind_native_platform();
+    rsf_core_fg12_end_session(session)
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg12_window(pass: *const rsf_game_render_pass) {
+    bind_native_platform();
+    unsafe { rsf_core_fg12_window(pass) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg12_status(output: *mut rsf_native_fg_status) -> i32 {
+    bind_native_platform();
+    unsafe { rsf_core_fg12_status(output) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg12_status_try(output: *mut rsf_native_fg_status) -> i32 {
+    bind_native_platform();
+    unsafe { rsf_core_fg12_status_try(output) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg12_options(request: *const rsf_native_fg_options) {
+    bind_native_platform();
+    unsafe { rsf_core_fg12_options(request) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg12_capture_outputs(directory: *const c_char) -> i32 {
+    bind_native_platform();
+    unsafe { rsf_core_fg12_capture_outputs(directory) }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_fg12_cpu_service() -> *const rsf_cpu_session_service {
+    static SERVICE: rsf_cpu_session_service = rsf_cpu_session_service {
+        struct_size: size_of::<rsf_cpu_session_service>() as u32,
+        version: RSF_CPU_SESSION_SERVICE_VERSION,
+        report: Some(rsf_fg12_cpu),
+        ping: Some(rsf_native_latency_ping),
+        execution: None,
+    };
+    &SERVICE
+}

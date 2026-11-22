@@ -9,7 +9,7 @@ extern "C" uint32_t rsf_core_fsr12_native_supported(const rsf_gen12_checks*, voi
 extern "C" const rsf_generation_provider* rsf_generation_fsr()
 {
 #if defined(RSF_HAVE_FFX_FG)
-    return rsf_core_fsr12_native_provider(rsf::generation12_checks(), rsf::FrameCapture12::native_platform());
+    return rsf_core_fsr12_native_provider(rsf::generation12_checks(), rsf_core_capture12_native_platform());
 #else
     return rsf_core_fsr12_native_provider(nullptr, nullptr);
 #endif

@@ -8,7 +8,9 @@
 #include <windows.h>
 #include <vulkan/vulkan.h>
 #include "../../backends/common/frame_capture_vk.h"
+#include <memory>
 #include <cstddef>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -48,7 +50,8 @@ static_assert(VK_IMAGE_USAGE_TRANSFER_SRC_BIT == 1 && VK_FORMAT_R8G8B8A8_UNORM =
 struct CaptureVk {
     rsf_fgvk_setup setup{};
     rsf_sl_set_present_capture registration = nullptr;
-    FrameCaptureVk capture;
+    std::unique_ptr<rsf_core_capture_vk, decltype(&rsf_core_capture_vk_destroy)> capture{
+        rsf_core_capture_vk_create(RSF_CAPTURE_VK_SHARED_SUBMISSION), rsf_core_capture_vk_destroy};
     std::filesystem::path directory;
     rsf_vk_capture_commands* commands = nullptr;
     ~CaptureVk() { rsf_vk_capture_commands_close(commands); }
@@ -75,7 +78,7 @@ int32_t wsi_images(const CapturePacket* packet, uint64_t chain, uint32_t* count,
 rsf_backend_result open_capture(const rsf_fgvk_setup* setup, void** out) noexcept try {
     *out = nullptr;
     auto next = std::make_unique<CaptureVk>();
-    if (!next->capture.enabled()) return RSF_BACKEND_OK;
+    if (!rsf_core_capture_vk_enabled(next->capture.get())) return RSF_BACKEND_OK;
     next->setup = *setup;
     wchar_t directory[32768]{};
     const auto length = GetEnvironmentVariableW(L"RSF_VULKAN_FRAME_CAPTURE_DIR", directory, 32768);
@@ -94,8 +97,9 @@ rsf_backend_result open_capture(const rsf_fgvk_setup* setup, void** out) noexcep
     const auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(graphics.instance_proc(graphics.instance, "vkGetPhysicalDeviceMemoryProperties"));
     if (!properties) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
     VkPhysicalDeviceMemoryProperties memory{}; properties(static_cast<VkPhysicalDevice>(graphics.physical_device), &memory);
-    next->capture.set_provider(0, 1, true);
-    if (!next->capture.initialize(static_cast<VkDevice>(graphics.device), graphics.device_proc, memory)) return RSF_BACKEND_ERROR_INIT_FAILED;
+    rsf_core_capture_vk_provider(next->capture.get(), 0, 1, 1);
+    if (!rsf_core_capture_vk_initialize(next->capture.get(), graphics.device, graphics.device_proc, &memory))
+        return RSF_BACKEND_ERROR_INIT_FAILED;
     *out = next.release();
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
@@ -120,8 +124,8 @@ void target(const CapturePacket* packet, rsf_dlss_capture_target* out) noexcept 
 }
 
 uint32_t record(void* native, void* commands, const rsf_srvk_image* image, const rsf_frame_record* identity, const char* role) noexcept try {
-    return capture_vk(native).capture.record(static_cast<VkCommandBuffer>(commands), *image, *identity,
-        role, identity->flags & RSF_FRAME_FLAG_RESET, false, nullptr, reinterpret_cast<uint64_t>(commands));
+    return rsf_core_capture_vk_record(capture_vk(native).capture.get(), commands, image,
+        identity, role, identity->flags & RSF_FRAME_FLAG_RESET, 0, nullptr, reinterpret_cast<uint64_t>(commands));
 } catch (...) { return 0; }
 
 int32_t submit(const CapturePacket* packet, void* commands, uint64_t fence) noexcept try {
@@ -165,13 +169,13 @@ const rsf_dlss_capture_platform capture_platform{
     [](void* native, uint64_t fence) { rsf_vk_capture_destroy_fence(capture_vk(native).commands, fence); },
     [](void* native, uint64_t fence) { return rsf_vk_capture_reset_fence(capture_vk(native).commands, fence); },
     [](void* native, uint64_t fence, uint64_t timeout) { return rsf_vk_capture_wait_fence(capture_vk(native).commands, fence, timeout); },
-    [](void* native, void* commands) { capture_vk(native).capture.complete_group(reinterpret_cast<uint64_t>(commands)); },
-    [](void* native, uint64_t frame) -> uint32_t { return capture_vk(native).capture.wants(frame); },
+    [](void* native, void* commands) { rsf_core_capture_vk_complete_group(capture_vk(native).capture.get(), reinterpret_cast<uint64_t>(commands)); },
+    [](void* native, uint64_t frame) -> uint32_t { return rsf_core_capture_vk_wants(capture_vk(native).capture.get(), frame); },
     [](void* native) noexcept -> uint64_t {
-        try { return capture_vk(native).capture.pending_count(); } catch (...) { return UINT64_MAX; }
+        try { return rsf_core_capture_vk_pending(capture_vk(native).capture.get()); } catch (...) { return UINT64_MAX; }
     },
     target, wsi_images, record, submit, present,
-    [](void* native) -> uint32_t { return capture_vk(native).capture.flush(false); },
+    [](void* native) -> uint32_t { return rsf_core_capture_vk_flush(capture_vk(native).capture.get(), 0, nullptr); },
     failure, append,
 };
 }

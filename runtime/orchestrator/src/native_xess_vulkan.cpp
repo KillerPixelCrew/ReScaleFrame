@@ -20,6 +20,7 @@ int32_t rsf_core_xessvk_shutdown(const rsf::xess_vk::Ops*);
 #include <cstddef>
 #include <memory>
 #include "../../backends/common/frame_capture_vk.h"
+#include <rescaleframe/capture_names.h>
 #include "sharpening_vulkan.h"
 #include "vulkan_fg_copy.h"
 #include "vulkan_fg_resources_native.h"
@@ -46,7 +47,8 @@ struct Native {
     PFN_vkCmdPipelineBarrier barrier = nullptr;
     PFN_vkCmdCopyImage copy = nullptr;
     // The SR owner retires its readbacks with the command buffer that recorded them.
-    rsf::FrameCaptureVk capture{rsf::FrameCaptureVk::Completion::command_retirement};
+    std::unique_ptr<rsf_core_capture_vk, decltype(&rsf_core_capture_vk_destroy)> capture{
+        rsf_core_capture_vk_create(RSF_CAPTURE_VK_COMMAND_RETIREMENT), rsf_core_capture_vk_destroy};
     rsf_sharpenvk_host sharpen{};
     ~Native() { rsf_sharpenvk_host_destroy(&sharpen); }
 };
@@ -184,7 +186,7 @@ int32_t bind_device(Native* native, const rsf_srvk_setup* setup) noexcept try {
     VkPhysicalDeviceMemoryProperties memory{};
     properties(static_cast<VkPhysicalDevice>(setup->physical_device), &memory);
     native->gpu.memory_types(memory);
-    return native->capture.initialize(native->device, setup->device_proc, memory)
+    return rsf_core_capture_vk_initialize(native->capture.get(), native->device, setup->device_proc, &memory)
         ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INIT_FAILED;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
@@ -210,7 +212,7 @@ int32_t sharpen(Native* native, const rsf_srvk_setup* setup, void* commands, con
 
 void capture_record(Native* native, void* commands, const rsf_srvk_image* image,
     const rsf_frame_record* record, const char* role, uint32_t reset) noexcept {
-    (void)native->capture.record(static_cast<VkCommandBuffer>(commands), *image, *record, role, reset);
+    (void)rsf_core_capture_vk_record(native->capture.get(), commands, image, record, role, reset, 1, nullptr, 0);
 }
 
 void capture_parameters(const rsf_srvk_frame* frame, uint32_t backend, uint32_t reset) noexcept try {
@@ -219,7 +221,7 @@ void capture_parameters(const rsf_srvk_frame* frame, uint32_t backend, uint32_t 
 
 void retire_commands(Native* native, void* commands) noexcept {
     rsf_sharpenvk_host_retire(&native->sharpen, commands);
-    native->capture.retire_commands(static_cast<VkCommandBuffer>(commands));
+    rsf_core_capture_vk_retire(native->capture.get(), commands);
 }
 }
 
@@ -230,9 +232,9 @@ extern const Ops native_ops{
     bind_device, [](Native* native) -> void* { return native->gpu.get(); }, &rsf::vkfg::platform,
     velocity, record_barrier, record_copy, execute, sharpen,
     [](Native* native) noexcept { rsf_sharpenvk_host_clear(&native->sharpen); },
-    [](Native* native, uint64_t provider, uint32_t backend) noexcept { native->capture.set_provider(provider, backend); },
+    [](Native* native, uint64_t provider, uint32_t backend) noexcept { rsf_core_capture_vk_provider(native->capture.get(), provider, backend, 0); },
     capture_record, capture_parameters, retire_commands,
-    [](Native* native) noexcept { (void)native->capture.flush(); },
+    [](Native* native) noexcept { (void)rsf_core_capture_vk_flush(native->capture.get(), 0, nullptr); },
     bind_entries, nullptr,
 };
 }

@@ -890,8 +890,8 @@ generate("runtime/orchestrator/src/gl_pipeline_abi.rs", "runtime/orchestrator/in
           "--with-derive-custom-struct", "rsf_(gl_pipeline_(setup|options|status)|sr12_setup)=Copy,Clone"])
 generate("runtime/orchestrator/src/fg12_abi.rs", "runtime/orchestrator/src/fg12_platform.h",
          "rsf_(fg12_(setup|texture_desc|readback_layout|calls)|d3d11_present_setup|streamline_host|native_latency_frame|"
-         "observer_present(_event)?_fn)",
-         "RSF_(NATIVE_FG_REASON_(NOT_PREPARED|SCENE_UNSUPPORTED|RESET|HUDLESS_MISSING)|UI_MODE_NONE|GAME_LATENCY_(SLEEP|MODE))",
+         "observer_present(_event)?_fn|cpu_session_service)",
+         "RSF_(NATIVE_FG_REASON_(NOT_PREPARED|SCENE_UNSUPPORTED|RESET|HUDLESS_MISSING)|UI_MODE_NONE|GAME_LATENCY_(SLEEP|MODE)|CPU_SESSION_SERVICE_VERSION)",
          ["-include", "rescaleframe/fg_choice.h", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
           "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include", "-Iruntime/presentation/include",
           "-Isdk/game/include"],

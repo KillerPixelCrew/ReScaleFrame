@@ -13,6 +13,7 @@
 #include "vulkan_fg_resources_native.h"
 #include "vulkan_fg_wsi.h"
 #include "../../backends/common/frame_capture_vk.h"
+#include <memory>
 #include "../../vulkan/fsr3/wsi-dispatch.h"
 #include <cstring>
 #include <new>
@@ -49,7 +50,8 @@ struct rsf_ffxgvk_native {
     uint32_t width = 0, height = 0;
     // Each readback must identify a recording that executed, even after a
     // command buffer address is reused. The owner flushes after a full drain.
-    rsf::FrameCaptureVk capture{rsf::FrameCaptureVk::Completion::command_retirement};
+    std::unique_ptr<rsf_core_capture_vk, decltype(&rsf_core_capture_vk_destroy)> capture{
+        rsf_core_capture_vk_create(RSF_CAPTURE_VK_COMMAND_RETIREMENT), rsf_core_capture_vk_destroy};
 };
 namespace {
 // The WSI hooks carry no user pointer. Each borrows the leaf from the Rust
@@ -138,7 +140,7 @@ FfxApiResource resource(const rsf_srvk_image& image) {
 }
 void record_capture(rsf_ffxgvk_native& self, VkCommandBuffer commands, const rsf_srvk_image& image, const rsf_frame_record& record,
     const char* role, uint32_t reset) noexcept try {
-    (void)self.capture.record(commands, image, record, role, reset);
+    (void)rsf_core_capture_vk_record(self.capture.get(), commands, &image, &record, role, reset, 1, nullptr, 0);
 } catch (...) {}
 ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* data, void* userdata) {
     auto* native = static_cast<rsf_ffxgvk_native*>(userdata);
@@ -149,13 +151,14 @@ ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* data, void* userdata) {
     auto result = self.sdk.dispatch(&self.effect, &data->header);
     if (result == FFX_API_RETURN_OK) {
         rsf_core_ffxgvk_note_generated(native);
-        if (self.capture.wants(data->frameID)) for (uint32_t i = 0; i < data->numGeneratedFrames && i < 4; ++i) {
+        if (rsf_core_capture_vk_wants(self.capture.get(), data->frameID)) for (uint32_t i = 0; i < data->numGeneratedFrames && i < 4; ++i) {
             const auto& source = data->outputs[i];
             rsf_srvk_image image{self.setup.graphics.device, handle_value(source.resource),
                 uint32_t(VK_FORMAT_R8G8B8A8_UNORM), source.description.width, source.description.height, VK_IMAGE_LAYOUT_GENERAL, 1};
             // The generated output uses the actual swapchain channel order.
             if (source.description.format == FFX_API_SURFACE_FORMAT_B8G8R8A8_UNORM) image.format = VK_FORMAT_B8G8R8A8_UNORM;
-            (void)self.capture.record(static_cast<VkCommandBuffer>(data->commandList), image, record, "fg-generated-before-ui", data->reset, false);
+            (void)rsf_core_capture_vk_record(self.capture.get(), static_cast<VkCommandBuffer>(data->commandList), &image,
+                &record, "fg-generated-before-ui", data->reset, 0, nullptr, 0);
         }
     }
     return result;
@@ -214,7 +217,7 @@ int32_t load_resources(rsf_ffxgvk_native* self) noexcept try {
 
 int32_t initialize_capture(rsf_ffxgvk_native* self, void** resources) noexcept try {
     const auto& graphics = self->setup.graphics;
-    if (!self->capture.initialize(static_cast<VkDevice>(graphics.device), graphics.device_proc, self->memory_properties))
+    if (!rsf_core_capture_vk_initialize(self->capture.get(), graphics.device, graphics.device_proc, &self->memory_properties))
         return RSF_BACKEND_ERROR_INIT_FAILED;
     *resources = self->gpu.get();
     return RSF_BACKEND_OK;
@@ -290,7 +293,7 @@ int32_t create_effect(rsf_ffxgvk_native* self, uint32_t* has_context) noexcept {
 int32_t query_provider(rsf_ffxgvk_native* self) noexcept {
     ffxQueryGetProviderVersion provider{}; provider.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
     if (self->sdk.query(&self->effect, &provider.header) != FFX_API_RETURN_OK || !provider.versionId) return RSF_BACKEND_ERROR_INIT_FAILED;
-    self->capture.set_provider(provider.versionId, 3, true);
+    rsf_core_capture_vk_provider(self->capture.get(), provider.versionId, 3, 1);
     return RSF_BACKEND_OK;
 }
 int32_t destroy_effect(rsf_ffxgvk_native* self) noexcept {
@@ -374,13 +377,13 @@ int32_t drain(rsf_ffxgvk_native* self) noexcept {
     return RSF_BACKEND_OK;
 }
 void capture_flush(rsf_ffxgvk_native* self) noexcept try {
-    (void)self->capture.flush();
+    (void)rsf_core_capture_vk_flush(self->capture.get(), 0, nullptr);
 } catch (...) {}
 constexpr rsf_ffxgvk_ops operations{
     rsf_vk_sdk_system_loader, open, close_native, set_wsi,
     create_swapchain, query_swapchain, create_effect, query_provider, destroy_effect, destroy_chain, destroy_swapchain,
     images, acquire, prepare, record_barrier, record_copy, configure, present, drain,
-    [](rsf_ffxgvk_native* self, uint64_t frame) -> uint32_t { return self->capture.wants(frame) ? 1u : 0u; },
+    [](rsf_ffxgvk_native* self, uint64_t frame) -> uint32_t { return rsf_core_capture_vk_wants(self->capture.get(), frame) ? 1u : 0u; },
     [](rsf_ffxgvk_native* self, void* commands, const rsf_srvk_image* image, const rsf_frame_record* record, const char* role) {
         record_capture(*self, static_cast<VkCommandBuffer>(commands), *image, *record, role, record->flags & RSF_FRAME_FLAG_RESET);
     },

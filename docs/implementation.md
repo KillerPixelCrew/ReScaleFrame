@@ -7869,8 +7869,12 @@ replacement, and carry SR capture identity through evaluation. The C11 FG12 and
 SR12 ABI fixtures preserve their DLL and embedded registrations. Shared D3D12
 COM ownership and FG setup and frame admission now run in Rust. Rust also
 binds both production platform tables and records the remaining SR12
-normalization commands. Native capture lifetimes and presentation install
-exception handling stay at their existing ABI boundaries. The
+normalization commands. The SR12 and FG12 exports call Rust capture owners
+directly. FG keeps its native module lifetime hook and presentation install
+exception boundary. The Vulkan SDK adapters use opaque Rust readback handles
+and the Vulkan input dump exports resolve directly to Rust.
+[D04 and G07 source evidence](research/rust-capture-native-followup.md#d04-and-g07-capture-ownership-at-6cb0c169)
+records the preserved submission and retirement order. The
 [D04 source record](research/d04-d3d12-host-port.md) lists all five paths and
 the remaining native adapters. Follow-up verification covers source review,
 binding regeneration, pinned formatting and locked offline metadata. Build,

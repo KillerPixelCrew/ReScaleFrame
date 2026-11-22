@@ -2,6 +2,7 @@
 #pragma once
 #include <rescaleframe/native_fg_d3d12.h>
 #include <rescaleframe/native_cpu.h>
+#include <rescaleframe/native_cpu_service.h>
 #include <rescaleframe/input_dump.h>
 #include "../../backends/common/d3d12_readback_layout.h"
 

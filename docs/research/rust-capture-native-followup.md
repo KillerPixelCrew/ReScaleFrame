@@ -59,3 +59,24 @@ Windows once initialization publishes the same static capture service table.
 The Anomaly stage binds the Rust pixel-format lookup through its C signature.
 Strict MinGW C11 syntax and a source comparison of the forwarding names passed.
 Native linking and capture verification remain pending.
+
+## D04 and G07 capture ownership at 6cb0c169
+
+This follows the integrated D04 platform binding at 8a61eba0 and retains the
+shared GameSDK policy from 935757d5. The port checklist paths resolve as
+follows.
+
+| Path | Source evidence |
+| --- | --- |
+| runtime/orchestrator/src/sr12_platform.cpp | Removed. sr12.rs supplies the eleven public SR12 symbols and sr12/native.rs calls the Rust capture owner directly. Per-slot flush uses the caller's slot and ready-only zero. Record keeps ordinal, reset, preview and scale. Final flush precedes vendor, capture and sharpening destruction in their existing order. A missing diagnostic owner leaves SR available. |
+| runtime/orchestrator/src/fg12_platform.cpp | Retains the native presentation install exception handler and two module lifetime calls. fg12/native.rs owns the capture handle and supplies the fourteen FG12 entry points and CPU service. FG records the given slot, signals submission with the exact frame identity across all slots, and flushes with ready-only set. Startup reads capture preferences at module attach, and teardown drops the capture at its original native lifetime boundary. |
+| runtime/backends/common/frame_capture12.h | Contains the opaque platform accessor declaration for the D07 FidelityFX generation gate. frame_capture12.rs keeps the existing completion, device-removal, refusal and retirement paths. FSR still obtains the same Rust table in the SDK-enabled branch. |
+| runtime/backends/common/frame_capture_vk.h | Contains the C ABI for the Rust readback owner. The native DLSS SR, FidelityFX FG and XeSS SR SDK adapters keep command retirement. FSR4 SR, DLSS FG and its dedicated present capture keep shared submission. These adapters now pass the opaque handles directly through that ABI. Existing core-source flags, group identities, exact command retirement, full flush and destructor order remain at their call sites. |
+| runtime/orchestrator/src/input_dump_vulkan.cpp | Removed. input_dump_vulkan.rs defines the four public symbols. input_dump_vulkan_exports.c supplies link-only directives under the existing RSF_FRAME_DUMP_VULKAN_INCLUDE gate, including for embedded consumers. The Vulkan owner still retries timeout and uncertain submission, and allows destruction on terminal device loss. Its setup size of 128 and submit offset of 112 are asserted by vulkan_sr_abi.rs. |
+
+The Vulkan ABI source reproduced byte for byte. FG12 gained the versioned
+CPU-service binding from the existing C declaration. Source comparison
+checked public symbols, vendor gates, capture modes, and the order and
+arguments of record, submit, flush and retirement operations. Rust 1.94.1
+formatting and locked offline Windows Cargo metadata passed. Build, link,
+test, lint and device checks remain pending.

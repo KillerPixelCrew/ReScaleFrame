@@ -8,6 +8,7 @@
 #include "native_fg_dx12_vulkan_platform.h"
 #include "native_sr_fsr4_vulkan_platform.h"
 #include "../../backends/common/frame_capture_vk.h"
+#include <rescaleframe/capture_names.h>
 #include "sharpening_vulkan.h"
 
 struct ID3D12Resource;
@@ -40,7 +41,8 @@ struct Graphics {
     PFN_vkDeviceWaitIdle idle{};
     rsf_sharpenvk_host sharpen{};
     ~Graphics() { rsf_sharpenvk_host_destroy(&sharpen); }
-    rsf::FrameCaptureVk capture;
+    std::unique_ptr<rsf_core_capture_vk, decltype(&rsf_core_capture_vk_destroy)> capture{
+        rsf_core_capture_vk_create(RSF_CAPTURE_VK_SHARED_SUBMISSION), rsf_core_capture_vk_destroy};
 };
 
 int32_t open(const rsf_srvk_setup* setup, void** out) noexcept try {
@@ -86,22 +88,24 @@ int32_t capture_initialize(void* graphics, const rsf_srvk_setup* setup, uint64_t
     auto& native = *static_cast<Graphics*>(graphics);
     VkPhysicalDeviceMemoryProperties memory{};
     native.memory_properties(static_cast<VkPhysicalDevice>(setup->physical_device), &memory);
-    native.capture.set_provider(provider, RSF_SR_FSR4);
-    return native.capture.initialize(native.device, setup->device_proc, memory) ? VK_SUCCESS : VK_ERROR_INITIALIZATION_FAILED;
+    rsf_core_capture_vk_provider(native.capture.get(), provider, RSF_SR_FSR4, 0);
+    return rsf_core_capture_vk_initialize(native.capture.get(), native.device, setup->device_proc, &memory)
+        ? VK_SUCCESS : VK_ERROR_INITIALIZATION_FAILED;
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 
 void capture_begin(const rsf_frame_record* record) { (void)rsf_input_dump_begin_record(record, RSF_SR_FSR4); }
 
 void capture_record(void* graphics, void* commands, const rsf_srvk_image* image, const rsf_frame_record* record,
     const char* role, uint32_t reset) {
-    (void)static_cast<Graphics*>(graphics)->capture.record(static_cast<VkCommandBuffer>(commands), *image, *record, role, reset);
+    (void)rsf_core_capture_vk_record(static_cast<Graphics*>(graphics)->capture.get(), commands, image,
+        record, role, reset, 1, nullptr, 0);
 }
 
 void capture_parameters(const rsf_srvk_frame* frame, uint32_t reset) {
     rsf_capture_sr_parameters(frame->record, RSF_SR_FSR4, frame->motion_scale_x, frame->motion_scale_y, frame->pre_exposure, reset);
 }
 
-int32_t capture_flush(void* graphics) { return static_cast<Graphics*>(graphics)->capture.flush() ? 1 : 0; }
+int32_t capture_flush(void* graphics) { return rsf_core_capture_vk_flush(static_cast<Graphics*>(graphics)->capture.get(), 0, nullptr) ? 1 : 0; }
 
 void transition(void* graphics, void* commands, const rsf_vkfg_barrier* plan) {
     const auto& native = *static_cast<const Graphics*>(graphics);
@@ -131,7 +135,7 @@ void sharpen(void* graphics, const rsf_srvk_setup* setup, void* commands, const 
 
 void retire(void* graphics, void* commands) {
     auto& native = *static_cast<Graphics*>(graphics);
-    native.capture.retire_commands(static_cast<VkCommandBuffer>(commands));
+    rsf_core_capture_vk_retire(native.capture.get(), commands);
     rsf_sharpenvk_host_retire(&native.sharpen, commands);
 }
 void clear_sharpen(void* graphics) { rsf_sharpenvk_host_clear(&static_cast<Graphics*>(graphics)->sharpen); }

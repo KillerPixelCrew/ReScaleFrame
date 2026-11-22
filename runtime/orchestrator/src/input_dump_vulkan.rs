@@ -275,7 +275,7 @@ fn join_result(result: Result<bool, i32>) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_input_dump_vk_create(
+unsafe extern "C" fn rsf_input_dump_vk_create(
     setup: *const Setup,
     out: *mut *mut Mutex<Owner>,
 ) -> i32 {
@@ -316,7 +316,7 @@ unsafe extern "C" fn rsf_core_input_dump_vk_create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_input_dump_vk_snapshot(
+unsafe extern "C" fn rsf_input_dump_vk_snapshot(
     owner: *mut Mutex<Owner>,
     record: *const Record,
     image: *const Image,
@@ -338,7 +338,7 @@ unsafe extern "C" fn rsf_core_input_dump_vk_snapshot(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_input_dump_vk_drain(owner: *mut Mutex<Owner>) -> i32 {
+unsafe extern "C" fn rsf_input_dump_vk_drain(owner: *mut Mutex<Owner>) -> i32 {
     let Some(owner) = (unsafe { owner.as_ref() }) else {
         return 0;
     };
@@ -349,7 +349,7 @@ unsafe extern "C" fn rsf_core_input_dump_vk_drain(owner: *mut Mutex<Owner>) -> i
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_input_dump_vk_destroy(owner: *mut Mutex<Owner>) -> i32 {
+unsafe extern "C" fn rsf_input_dump_vk_destroy(owner: *mut Mutex<Owner>) -> i32 {
     let Some(lock) = (unsafe { owner.as_ref() }) else {
         return 0;
     };

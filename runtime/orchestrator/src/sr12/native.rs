@@ -4,43 +4,42 @@ use crate::d3d11_output_abi::rsf_d3d11_output_srv_format;
 use crate::d3d12_host::sr::*;
 use crate::d3d12_host::{borrow, rsf_core_d3d12_create_uav_texture, rsf_core_d3d12_transition};
 use crate::frame_capture12::native::{rsf_fg12_platform_map, rsf_fg12_platform_unmap};
+use crate::frame_capture12::{self as capture, Owner as Capture};
 use std::mem::ManuallyDrop;
 use windows::Win32::Graphics::{Direct3D12::*, Dxgi::Common::*};
 use windows::core::Interface;
 
+const _: () = {
+    use crate::dxgi_format::{
+        D24_UNORM_S8_UINT, D32_FLOAT, D32_FLOAT_S8X24_UINT, R24_UNORM_X8_TYPELESS, R24G8_TYPELESS,
+        R32_TYPELESS, R32G8X24_TYPELESS, RGBA16_FLOAT, RGBA32_FLOAT,
+    };
+    assert!(RGBA32_FLOAT == DXGI_FORMAT_R32G32B32A32_FLOAT.0 as u32);
+    assert!(RGBA16_FLOAT == DXGI_FORMAT_R16G16B16A16_FLOAT.0 as u32);
+    assert!(RG32_FLOAT == DXGI_FORMAT_R32G32_FLOAT.0 as u32);
+    assert!(R32G8X24_TYPELESS == DXGI_FORMAT_R32G8X24_TYPELESS.0 as u32);
+    assert!(D32_FLOAT_S8X24_UINT == DXGI_FORMAT_D32_FLOAT_S8X24_UINT.0 as u32);
+    assert!(R32_FLOAT_X8X24_TYPELESS == DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS.0 as u32);
+    assert!(R11G11B10_FLOAT == DXGI_FORMAT_R11G11B10_FLOAT.0 as u32);
+    assert!(RG16_FLOAT == DXGI_FORMAT_R16G16_FLOAT.0 as u32);
+    assert!(R32_TYPELESS == DXGI_FORMAT_R32_TYPELESS.0 as u32);
+    assert!(D32_FLOAT == DXGI_FORMAT_D32_FLOAT.0 as u32);
+    assert!(R32_FLOAT == DXGI_FORMAT_R32_FLOAT.0 as u32);
+    assert!(R24G8_TYPELESS == DXGI_FORMAT_R24G8_TYPELESS.0 as u32);
+    assert!(D24_UNORM_S8_UINT == DXGI_FORMAT_D24_UNORM_S8_UINT.0 as u32);
+    assert!(R24_UNORM_X8_TYPELESS == DXGI_FORMAT_R24_UNORM_X8_TYPELESS.0 as u32);
+    assert!(R16_FLOAT == DXGI_FORMAT_R16_FLOAT.0 as u32);
+    assert!(RENDER_TARGET == D3D12_RESOURCE_STATE_RENDER_TARGET.0 as u32);
+    assert!(UNORDERED_ACCESS == D3D12_RESOURCE_STATE_UNORDERED_ACCESS.0 as u32);
+    assert!(SHADER_READ == D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE.0 as u32);
+    assert!(COPY_DEST == D3D12_RESOURCE_STATE_COPY_DEST.0 as u32);
+    assert!(COPY_SOURCE == D3D12_RESOURCE_STATE_COPY_SOURCE.0 as u32);
+    assert!(TEXTURE2D == D3D12_RESOURCE_DIMENSION_TEXTURE2D.0 as u32);
+    assert!(EXPOSURE_UPLOAD_BYTES == D3D12_TEXTURE_DATA_PITCH_ALIGNMENT as u64);
+    assert!(size_of::<PlanResult>() == 24);
+};
+
 unsafe extern "C" {
-    fn rsf_sr12_platform_capture_create() -> Handle;
-    fn rsf_sr12_platform_capture_destroy(capture: Handle);
-    fn rsf_sr12_platform_capture_enabled(capture: Handle) -> i32;
-    fn rsf_sr12_platform_capture_configure(
-        capture: Handle,
-        directory: *const c_char,
-        first: u64,
-        frames: u32,
-    ) -> i32;
-    fn rsf_sr12_platform_capture_flush(capture: Handle, slot: u32) -> i32;
-    fn rsf_sr12_platform_capture_record(
-        capture: Handle,
-        list: Handle,
-        source: Handle,
-        state: u32,
-        record: *const rsf_frame_record,
-        role: *const c_char,
-        slot: u32,
-        ordinal: u32,
-        reset: u32,
-        preview: u32,
-    ) -> i32;
-    fn rsf_sr12_platform_capture_event(
-        capture: Handle,
-        record: *const rsf_frame_record,
-        name: *const c_char,
-        sequence: u64,
-        reset: u32,
-        result: i32,
-    ) -> i32;
-    fn rsf_sr12_platform_capture_wants(capture: Handle, frame: u64) -> i32;
-    fn rsf_sr12_platform_capture_force_reset(capture: Handle, frame: u64) -> i32;
     fn rsf_dlss_native12_create(
         device: Handle,
         setup: *const rsf_dlss_setup,
@@ -150,15 +149,15 @@ pub(super) static PLATFORM: Platform = Platform {
     map: rsf_fg12_platform_map,
     unmap: rsf_fg12_platform_unmap,
     depth_domains: crate::d3d12_host::pass_depth_domains,
-    capture_create: rsf_sr12_platform_capture_create,
-    capture_destroy: rsf_sr12_platform_capture_destroy,
-    capture_enabled: rsf_sr12_platform_capture_enabled,
-    capture_configure: rsf_sr12_platform_capture_configure,
-    capture_flush: rsf_sr12_platform_capture_flush,
-    capture_record: rsf_sr12_platform_capture_record,
-    capture_event: rsf_sr12_platform_capture_event,
-    capture_wants: rsf_sr12_platform_capture_wants,
-    capture_force_reset: rsf_sr12_platform_capture_force_reset,
+    capture_create,
+    capture_destroy,
+    capture_enabled,
+    capture_configure,
+    capture_flush,
+    capture_record,
+    capture_event,
+    capture_wants,
+    capture_force_reset,
     sharpen_create: rsf_sharpen12_host_create,
     sharpen_destroy: rsf_sharpen12_host_destroy,
     sharpen_run: rsf_sharpen12_host_run,
@@ -382,4 +381,89 @@ unsafe extern "C" fn copy_motion_tile(
 
 extern "C" fn fg_bind() {
     crate::fg12::bind_native_platform();
+}
+
+extern "C" fn capture_create() -> Handle {
+    capture::rsf_core_capture12_create(1).cast()
+}
+
+unsafe extern "C" fn capture_destroy(owner: Handle) {
+    unsafe { capture::rsf_core_capture12_destroy(owner.cast::<Capture>()) };
+}
+
+unsafe extern "C" fn capture_enabled(owner: Handle) -> i32 {
+    unsafe { capture::rsf_core_capture12_enabled(owner.cast::<Capture>()) }
+}
+
+unsafe extern "C" fn capture_configure(
+    owner: Handle,
+    directory: *const c_char,
+    first: u64,
+    frames: u32,
+) -> i32 {
+    unsafe {
+        capture::rsf_core_capture12_configure(owner.cast::<Capture>(), directory, first, frames)
+    }
+}
+
+unsafe extern "C" fn capture_flush(owner: Handle, slot: u32) -> i32 {
+    unsafe { capture::rsf_core_capture12_flush(owner.cast::<Capture>(), slot, 0) }
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn capture_record(
+    owner: Handle,
+    list: Handle,
+    source: Handle,
+    state: u32,
+    record: *const rsf_frame_record,
+    role: *const c_char,
+    slot: u32,
+    ordinal: u32,
+    reset: u32,
+    preview: u32,
+) -> i32 {
+    unsafe {
+        capture::rsf_core_capture12_record(
+            owner.cast::<Capture>(),
+            list,
+            source,
+            state,
+            record,
+            role,
+            slot,
+            ordinal,
+            reset,
+            preview,
+            0.0,
+        )
+    }
+}
+
+unsafe extern "C" fn capture_event(
+    owner: Handle,
+    record: *const rsf_frame_record,
+    name: *const c_char,
+    sequence: u64,
+    reset: u32,
+    result: i32,
+) -> i32 {
+    unsafe {
+        capture::rsf_core_capture12_event(
+            owner.cast::<Capture>(),
+            record,
+            name,
+            sequence,
+            reset,
+            result,
+        )
+    }
+}
+
+unsafe extern "C" fn capture_wants(owner: Handle, frame: u64) -> i32 {
+    unsafe { capture::rsf_core_capture12_wants(owner.cast::<Capture>(), frame) }
+}
+
+unsafe extern "C" fn capture_force_reset(owner: Handle, frame: u64) -> i32 {
+    unsafe { capture::rsf_core_capture12_force_reset(owner.cast::<Capture>(), frame) }
 }

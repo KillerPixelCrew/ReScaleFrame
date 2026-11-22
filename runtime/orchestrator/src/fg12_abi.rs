@@ -17,6 +17,7 @@ pub const RSF_NATIVE_FG_REASON_NOT_PREPARED: u32 = 2;
 pub const RSF_NATIVE_FG_REASON_SCENE_UNSUPPORTED: u32 = 4;
 pub const RSF_NATIVE_FG_REASON_RESET: u32 = 5;
 pub const RSF_NATIVE_FG_REASON_HUDLESS_MISSING: u32 = 8;
+pub const RSF_CPU_SESSION_SERVICE_VERSION: u32 = 1;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_streamline_host {
@@ -247,6 +248,36 @@ const _: () = {
         [::core::mem::offset_of!(rsf_native_latency_frame, failed) - 36usize];
     ["Offset of field: rsf_native_latency_frame::completed"]
         [::core::mem::offset_of!(rsf_native_latency_frame, completed) - 40usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_cpu_session_service {
+    pub struct_size: u32,
+    pub version: u32,
+    pub report: ::core::option::Option<unsafe extern "C" fn(arg1: *const rsf_game_cpu_event)>,
+    pub ping: ::core::option::Option<
+        unsafe extern "C" fn(window: *mut ::core::ffi::c_void) -> ::core::ffi::c_int,
+    >,
+    pub execution: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *const rsf_game_render_pass, begin: u32) -> i32,
+    >,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_cpu_session_service"]
+        [::core::mem::size_of::<rsf_cpu_session_service>() - 32usize];
+    ["Alignment of rsf_cpu_session_service"]
+        [::core::mem::align_of::<rsf_cpu_session_service>() - 8usize];
+    ["Offset of field: rsf_cpu_session_service::struct_size"]
+        [::core::mem::offset_of!(rsf_cpu_session_service, struct_size) - 0usize];
+    ["Offset of field: rsf_cpu_session_service::version"]
+        [::core::mem::offset_of!(rsf_cpu_session_service, version) - 4usize];
+    ["Offset of field: rsf_cpu_session_service::report"]
+        [::core::mem::offset_of!(rsf_cpu_session_service, report) - 8usize];
+    ["Offset of field: rsf_cpu_session_service::ping"]
+        [::core::mem::offset_of!(rsf_cpu_session_service, ping) - 16usize];
+    ["Offset of field: rsf_cpu_session_service::execution"]
+        [::core::mem::offset_of!(rsf_cpu_session_service, execution) - 24usize];
 };
 #[repr(C)]
 #[derive(Copy, Clone)]

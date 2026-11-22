@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
-//! Shared first-party D3D12 readback owner behind `rsf::FrameCapture12`.
+//! Shared first-party D3D12 readback owner.
 //!
 //! Rust owns configuration, admission, pending identity, slot and fence
 //! completion, retirement, core ticket refusal and publishing, and the
-//! readback buffer, source and fence leases. The C++ façade supplies typed
-//! D3D12/Win32 leaves and the public symbol forwards.
+//! readback buffer, source and fence leases. Native operations live in the D3D12 module.
 use crate::capture_names::CaptureName;
 use crate::capture_pixels::Pixels;
 use crate::com_ref::ComRef;
@@ -540,7 +539,7 @@ extern "C" fn rsf_core_capture12_native_platform() -> *const Platform {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_capture12_create(environment: u32) -> *mut Owner {
+pub(super) extern "C" fn rsf_core_capture12_create(environment: u32) -> *mut Owner {
     let owner = if environment != 0 {
         Owner::from_environment(&native::PLATFORM)
     } else {
@@ -550,19 +549,19 @@ extern "C" fn rsf_core_capture12_create(environment: u32) -> *mut Owner {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_capture12_destroy(owner: *mut Owner) {
+pub(super) unsafe extern "C" fn rsf_core_capture12_destroy(owner: *mut Owner) {
     if !owner.is_null() {
         drop(unsafe { Box::from_raw(owner) });
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_capture12_enabled(owner: *const Owner) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_capture12_enabled(owner: *const Owner) -> i32 {
     i32::from(unsafe { self::owner(owner) }.is_some_and(|owner| owner.enabled()))
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_capture12_configure(
+pub(super) unsafe extern "C" fn rsf_core_capture12_configure(
     owner: *const Owner,
     path: *const c_char,
     first: u64,
@@ -575,12 +574,15 @@ unsafe extern "C" fn rsf_core_capture12_configure(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_capture12_wants(owner: *const Owner, frame: u64) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_capture12_wants(owner: *const Owner, frame: u64) -> i32 {
     i32::from(unsafe { self::owner(owner) }.is_some_and(|owner| owner.wants(frame)))
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_capture12_force_reset(owner: *const Owner, frame: u64) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_capture12_force_reset(
+    owner: *const Owner,
+    frame: u64,
+) -> i32 {
     i32::from(unsafe { self::owner(owner) }.is_some_and(|owner| {
         let state = owner.lock();
         state.reset_sr && state.legacy.wants(frame)
@@ -588,7 +590,7 @@ unsafe extern "C" fn rsf_core_capture12_force_reset(owner: *const Owner, frame: 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_capture12_event(
+pub(super) unsafe extern "C" fn rsf_core_capture12_event(
     owner: *const Owner,
     identity: *const Record,
     name: *const c_char,
@@ -610,7 +612,7 @@ unsafe extern "C" fn rsf_core_capture12_event(
 
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
-unsafe extern "C" fn rsf_core_capture12_record(
+pub(super) unsafe extern "C" fn rsf_core_capture12_record(
     owner: *const Owner,
     list: Handle,
     source: Handle,
@@ -645,7 +647,7 @@ unsafe extern "C" fn rsf_core_capture12_record(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_capture12_flush(
+pub(super) unsafe extern "C" fn rsf_core_capture12_flush(
     owner: *const Owner,
     slot: u32,
     ready_only: u32,
@@ -657,7 +659,7 @@ unsafe extern "C" fn rsf_core_capture12_flush(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_capture12_submitted(
+pub(super) unsafe extern "C" fn rsf_core_capture12_submitted(
     owner: *const Owner,
     queue: Handle,
     slot: u32,
