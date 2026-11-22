@@ -9,8 +9,6 @@
 use crate::com_ref::ComRef;
 use crate::graphics_d3d11::rsf_call_native_log;
 use crate::overlay_panel::{LoadError, PanelEntries, elapsed_seconds};
-#[cfg(test)]
-use crate::sys::rsf_overlay_host_panel;
 use crate::sys::{RSF_OVERLAY_ABI_VERSION, rsf_overlay, rsf_overlay_draw_data, rsf_overlay_input};
 use crate::sys::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};
 use std::ffi::{CString, c_char, c_void};
@@ -20,16 +18,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 
 type Handle = *mut c_void;
-
-// Keep the fixture's injected raw loader and its original refusal cases.
-#[cfg(test)]
-const RSF_OVERLAY_HOST_PANEL_LOADED: i32 = 0;
-#[cfg(test)]
-const RSF_OVERLAY_HOST_PANEL_NO_PATH: i32 = 1;
-#[cfg(test)]
-const RSF_OVERLAY_HOST_PANEL_NOT_LOADED: i32 = 2;
-#[cfg(test)]
-const RSF_OVERLAY_HOST_PANEL_MISSING_EXPORTS: i32 = 3;
 
 type Log = Option<unsafe extern "C" fn(user: *mut c_void, message: *const c_char)>;
 #[derive(Default, Copy, Clone)]
@@ -55,7 +43,7 @@ impl Default for Targets {
 #[derive(Copy, Clone)]
 struct Platform {
     #[cfg(test)]
-    load_panel: unsafe extern "C" fn(out: *mut rsf_overlay_host_panel, error: *mut u32) -> u32,
+    load_panel: fn() -> Result<PanelEntries, LoadError>,
     chain_device: unsafe extern "C" fn(chain: *mut c_void, device: *mut *mut c_void) -> i32,
     chain_buffer: unsafe extern "C" fn(chain: *mut c_void, texture: *mut *mut c_void) -> i32,
     chain_window: unsafe extern "C" fn(chain: *mut c_void) -> *mut c_void,
@@ -275,23 +263,7 @@ impl Host {
             #[cfg(not(test))]
             let loaded = crate::overlay_panel::open_panel().map(|panel| panel.publish());
             #[cfg(test)]
-            let loaded = {
-                let mut api = rsf_overlay_host_panel::default();
-                let mut error = 0;
-                let status = unsafe { (_platform.load_panel)(&mut api, &mut error) } as i32;
-                match status {
-                    RSF_OVERLAY_HOST_PANEL_LOADED => {
-                        PanelEntries::admit(api).ok_or(LoadError::MissingExports)
-                    }
-                    RSF_OVERLAY_HOST_PANEL_NO_PATH => Err(LoadError::NoPath),
-                    RSF_OVERLAY_HOST_PANEL_NOT_LOADED => Err(LoadError::CouldNotLoad(error)),
-                    RSF_OVERLAY_HOST_PANEL_MISSING_EXPORTS => Err(LoadError::MissingExports),
-                    _ => {
-                        say("overlay: the panel DLL loader returned an unknown status");
-                        return None;
-                    }
-                }
-            };
+            let loaded = (_platform.load_panel)();
             match loaded {
                 Ok(entries) => self.api = Some(entries),
                 Err(LoadError::NoPath) => say("overlay: cannot work out where the panel DLL is"),

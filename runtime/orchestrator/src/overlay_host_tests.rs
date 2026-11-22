@@ -134,23 +134,27 @@ unsafe extern "C" fn textures_to_free(_: *mut rsf_overlay, ids: *mut u64, capaci
     count
 }
 
-unsafe extern "C" fn load_panel(out: *mut rsf_overlay_host_panel, error: *mut u32) -> u32 {
+// The fake loader's outcomes, as World::load.
+const RSF_OVERLAY_HOST_PANEL_LOADED: i32 = 0;
+const RSF_OVERLAY_HOST_PANEL_NO_PATH: i32 = 1;
+const RSF_OVERLAY_HOST_PANEL_NOT_LOADED: i32 = 2;
+const RSF_OVERLAY_HOST_PANEL_MISSING_EXPORTS: i32 = 3;
+
+fn load_panel() -> Result<PanelEntries, LoadError> {
     call("load");
     let (status, code) = world(|world| (world.load, world.load_error));
-    if status == RSF_OVERLAY_HOST_PANEL_LOADED as u32 {
-        unsafe {
-            out.write(rsf_overlay_host_panel {
-                create: Some(create),
-                destroy: Some(destroy),
-                frame: Some(frame),
-                texture_updates: Some(texture_updates),
-                textures_to_free: Some(textures_to_free),
-            })
-        };
-    } else {
-        unsafe { error.write(code) };
+    match status as i32 {
+        RSF_OVERLAY_HOST_PANEL_LOADED => Ok(PanelEntries {
+            create,
+            destroy,
+            frame,
+            texture_updates,
+            textures_to_free,
+        }),
+        RSF_OVERLAY_HOST_PANEL_NOT_LOADED => Err(LoadError::CouldNotLoad(code)),
+        RSF_OVERLAY_HOST_PANEL_NO_PATH => Err(LoadError::NoPath),
+        _ => Err(LoadError::MissingExports),
     }
-    status
 }
 unsafe extern "C" fn chain_device(_: Handle, device: *mut Handle) -> i32 {
     call("chain_device");

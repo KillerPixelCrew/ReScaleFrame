@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The production entry points live in `native`, which unit tests do not build.
 #![cfg_attr(test, allow(dead_code))]
-use crate::sys::{rsf_overlay, rsf_overlay_draw_data, rsf_overlay_host_panel, rsf_overlay_input};
+use crate::sys::{rsf_overlay, rsf_overlay_draw_data, rsf_overlay_input};
 use crate::sys::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};
 use std::ffi::{CStr, c_void};
 use std::ptr::null_mut;
@@ -64,18 +64,6 @@ pub(super) struct PanelEntries {
     pub textures_to_free: unsafe extern "C" fn(*mut rsf_overlay, *mut u64, u32) -> u32,
 }
 
-impl PanelEntries {
-    pub(super) fn admit(panel: rsf_overlay_host_panel) -> Option<Self> {
-        Some(Self {
-            create: panel.create?,
-            destroy: panel.destroy?,
-            frame: panel.frame?,
-            texture_updates: panel.texture_updates?,
-            textures_to_free: panel.textures_to_free?,
-        })
-    }
-}
-
 pub(super) enum LoadError {
     NoPath,
     CouldNotLoad(u32),
@@ -119,48 +107,20 @@ fn panel_path() -> Option<Vec<u16>> {
     (path.len() <= PATH_CAPACITY).then_some(path)
 }
 
-fn exports(module: HMODULE) -> rsf_overlay_host_panel {
+fn exports(module: HMODULE) -> Option<PanelEntries> {
+    type Export = unsafe extern "system" fn() -> isize;
     let get = |name: &CStr| unsafe { GetProcAddress(module, name.as_ptr().cast()) };
     // The panel's five C exports have the signatures declared in overlay.h.
     unsafe {
-        rsf_overlay_host_panel {
-            create: std::mem::transmute::<
-                std::option::Option<unsafe extern "system" fn() -> isize>,
-                std::option::Option<unsafe extern "C" fn(u32) -> *mut crate::sys::rsf_overlay>,
-            >(get(c"rsf_overlay_create")),
-            destroy: std::mem::transmute::<
-                std::option::Option<unsafe extern "system" fn() -> isize>,
-                std::option::Option<unsafe extern "C" fn(*mut crate::sys::rsf_overlay)>,
-            >(get(c"rsf_overlay_destroy")),
-            frame: std::mem::transmute::<
-                std::option::Option<unsafe extern "system" fn() -> isize>,
-                std::option::Option<
-                    unsafe extern "C" fn(
-                        *mut crate::sys::rsf_overlay,
-                        *const crate::sys::rsf_overlay_input,
-                        *const crate::sys::rsf_overlay_stats,
-                        *mut crate::sys::rsf_overlay_draw_data,
-                        *mut crate::sys::rsf_overlay_intent,
-                    ) -> i32,
-                >,
-            >(get(c"rsf_overlay_frame")),
-            texture_updates: std::mem::transmute::<
-                std::option::Option<unsafe extern "system" fn() -> isize>,
-                std::option::Option<
-                    unsafe extern "C" fn(
-                        *mut crate::sys::rsf_overlay,
-                        *mut crate::sys::rsf_overlay_texture_update,
-                        u32,
-                    ) -> u32,
-                >,
-            >(get(c"rsf_overlay_texture_updates")),
-            textures_to_free: std::mem::transmute::<
-                std::option::Option<unsafe extern "system" fn() -> isize>,
-                std::option::Option<
-                    unsafe extern "C" fn(*mut crate::sys::rsf_overlay, *mut u64, u32) -> u32,
-                >,
-            >(get(c"rsf_overlay_textures_to_free")),
-        }
+        Some(PanelEntries {
+            create: std::mem::transmute::<Export, _>(get(c"rsf_overlay_create")?),
+            destroy: std::mem::transmute::<Export, _>(get(c"rsf_overlay_destroy")?),
+            frame: std::mem::transmute::<Export, _>(get(c"rsf_overlay_frame")?),
+            texture_updates: std::mem::transmute::<Export, _>(get(c"rsf_overlay_texture_updates")?),
+            textures_to_free: std::mem::transmute::<Export, _>(get(
+                c"rsf_overlay_textures_to_free",
+            )?),
+        })
     }
 }
 
@@ -170,7 +130,7 @@ pub(super) fn open_panel() -> Result<OpenPanel, LoadError> {
     if module.is_null() {
         return Err(LoadError::CouldNotLoad(unsafe { GetLastError() }));
     }
-    let Some(entries) = PanelEntries::admit(exports(module)) else {
+    let Some(entries) = exports(module) else {
         unsafe { FreeLibrary(module) };
         return Err(LoadError::MissingExports);
     };
