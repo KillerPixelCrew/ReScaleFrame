@@ -163,7 +163,8 @@ target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE bcrypt dxguid d3dcompile
 # first-person rule, the mip bias delta and the published motion/SR state on the CPU; the Stage 3 swap cases (projection
 # and bias restore on every exit path) live in anomaly_sr_swap_contract. The device fixture runs the unchanged core
 # motion PS writer with production b13 bytes and jitter (77 when no D3D11 device exists). None of them runs game code.
-add_executable(rsf_anomaly_sr_jitter_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_jitter.cpp")
+add_executable(rsf_anomaly_sr_jitter_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_jitter.c")
+set_target_properties(rsf_anomaly_sr_jitter_test PROPERTIES LINKER_LANGUAGE CXX)
 target_include_directories(rsf_anomaly_sr_jitter_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
 target_link_libraries(rsf_anomaly_sr_jitter_test PRIVATE rsf_anomaly_rust rsf_build_options)
 add_test(NAME anomaly_sr_jitter_contract COMMAND rsf_anomaly_sr_jitter_test)

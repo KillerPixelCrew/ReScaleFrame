@@ -2024,10 +2024,10 @@ Port motion draw hooks, target ownership and foliage history. Use the draw and d
 - [x] [games/anomaly/src/motion_d3d11.cpp](games/anomaly/src/motion_d3d11.cpp)
 - [x] [games/anomaly/src/motion_d3d11.h](games/anomaly/src/motion_d3d11.h)
 - [x] [games/anomaly/src/motion_device_platform.h](games/anomaly/src/motion_device_platform.h)
-- [ ] [games/anomaly/src/motion_foliage.cpp](games/anomaly/src/motion_foliage.cpp)
-- [ ] [games/anomaly/src/motion_foliage.h](games/anomaly/src/motion_foliage.h)
-- [ ] [games/anomaly/src/motion_history.h](games/anomaly/src/motion_history.h)
-- [ ] [games/anomaly/src/motion_policy.h](games/anomaly/src/motion_policy.h)
+- [x] [games/anomaly/src/motion_foliage.cpp](games/anomaly/src/motion_foliage.cpp)
+- [x] [games/anomaly/src/motion_foliage.h](games/anomaly/src/motion_foliage.h)
+- [x] [games/anomaly/src/motion_history.h](games/anomaly/src/motion_history.h)
+- [x] [games/anomaly/src/motion_policy.h](games/anomaly/src/motion_policy.h)
 - [ ] [games/anomaly/src/motion_profile.h](games/anomaly/src/motion_profile.h)
 - [ ] [games/anomaly/src/motion_stage.cpp](games/anomaly/src/motion_stage.cpp)
 - [ ] [games/anomaly/src/motion_stage.h](games/anomaly/src/motion_stage.h)
@@ -2039,7 +2039,7 @@ Port motion draw hooks, target ownership and foliage history. Use the draw and d
 **Fixtures (8)**
 
 - [x] [tests/anomaly_foliage_shader_device.cpp](tests/anomaly_foliage_shader_device.cpp)
-- [ ] [tests/anomaly_motion_contract.cpp](tests/anomaly_motion_contract.cpp)
+- [x] [tests/anomaly_motion_contract.cpp](tests/anomaly_motion_contract.cpp)
 - [ ] [tests/anomaly_motion_device.cpp](tests/anomaly_motion_device.cpp)
 - [ ] [tests/anomaly_motion_far_device.cpp](tests/anomaly_motion_far_device.cpp)
 - [ ] [tests/anomaly_motion_hooks_native.cpp](tests/anomaly_motion_hooks_native.cpp) (native detour fixture driver)
@@ -2204,7 +2204,7 @@ Port swap ownership, projection jitter, temporal history and tonemap routing. Ad
 **Fixtures (6)**
 
 - [ ] [tests/anomaly_sr_jitter_reference.h](tests/anomaly_sr_jitter_reference.h) (independent native projection oracle)
-- [ ] [tests/anomaly_sr_jitter.cpp](tests/anomaly_sr_jitter.cpp)
+- [x] [tests/anomaly_sr_jitter.cpp](tests/anomaly_sr_jitter.cpp)
 - [x] [tests/anomaly_sr_jitter_device.cpp](tests/anomaly_sr_jitter_device.cpp)
 - [ ] [tests/anomaly_sr_swap.cpp](tests/anomaly_sr_swap.cpp)
 - [ ] [tests/anomaly_sr_temporal_device.cpp](tests/anomaly_sr_temporal_device.cpp)
