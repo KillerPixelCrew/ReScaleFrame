@@ -3,7 +3,7 @@
 use super::*;
 use rsf_game_sys::{RSF_GAME_RENDER_SR, rsf_game_render_pass, rsf_result};
 use std::mem::MaybeUninit;
-use std::ptr::{self, null};
+use std::ptr;
 use std::slice;
 
 mod lifecycle;
