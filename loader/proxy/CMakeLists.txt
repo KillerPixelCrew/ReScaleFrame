@@ -1,8 +1,7 @@
 # Research carrier DLL. Its file name is the mechanism, so it is deliberately not ReScaleFrame.*.
 add_library(rsf_proxy_dinput8 SHARED
     src/dinput8_proxy.c
-    src/dlss_bridge.c
-    src/preferences.c)
+    src/dlss_bridge.c)
 target_link_libraries(rsf_proxy_dinput8 PRIVATE
     ReScaleFrame::LoaderDiagnostics
     ReScaleFrame::Graphics
@@ -57,7 +56,7 @@ endif()
 
 # AC7's validated carrier keeps the DirectInput ABI and original entry path. The generic
 # version shim has a different ordinal contract and can evolve independently.
-add_library(rsf_proxy_ac7 SHARED src/dinput8_proxy.c src/dlss_bridge.c src/preferences.c)
+add_library(rsf_proxy_ac7 SHARED src/dinput8_proxy.c src/dlss_bridge.c)
 get_target_property(rsf_ac7_proxy_links rsf_proxy_dinput8 LINK_LIBRARIES)
 target_link_libraries(rsf_proxy_ac7 PRIVATE ${rsf_ac7_proxy_links})
 target_compile_definitions(rsf_proxy_ac7 PRIVATE _CRT_SECURE_NO_WARNINGS rsf_ac7_proxy_process_event=DllMain)

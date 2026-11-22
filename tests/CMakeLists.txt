@@ -344,7 +344,7 @@ add_custom_command(OUTPUT "${ac7_session_object}"
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     VERBATIM)
 set_source_files_properties("${ac7_session_object}" PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE)
-add_executable(rsf_ac7_session ac7_session.c "${ac7_session_object}" ../loader/proxy/src/preferences.c)
+add_executable(rsf_ac7_session ac7_session.c "${ac7_session_object}")
 set_target_properties(rsf_ac7_session PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_ac7_session PRIVATE ReScaleFrame::AC7SceneColor ReScaleFrame::GraphicsLeaves rsf_build_options)
 add_test(NAME ac7_session COMMAND rsf_ac7_session)

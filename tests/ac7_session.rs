@@ -22,20 +22,6 @@ unsafe extern "C" {
     ) -> f32;
     fn rsf_ac7_translucency_scale(render_percent: u32, target_percent: u32) -> f32;
     fn rsf_ac7_separate_translucency_draw(draw: *const rsf_frame_tap_target_draw) -> c_int;
-    fn rsf_preferences_read(path: *const u16, enabled: *mut u32, quality: *mut u32);
-    fn rsf_preferences_write(path: *const u16, enabled: u32, quality: u32) -> c_int;
-}
-
-unsafe extern "system" {
-    fn GetTempPathW(capacity: u32, path: *mut u16) -> u32;
-    fn GetTempFileNameW(path: *const u16, prefix: *const u16, unique: u32, file: *mut u16) -> u32;
-    fn WritePrivateProfileStringW(
-        section: *const u16,
-        key: *const u16,
-        value: *const u16,
-        path: *const u16,
-    ) -> c_int;
-    fn DeleteFileW(path: *const u16) -> c_int;
 }
 
 fn check_startup() {
@@ -132,70 +118,9 @@ fn check_geometry() {
     assert_eq!(unsafe { rsf_ac7_separate_translucency_draw(&draw) }, 0);
 }
 
-const MAX_PATH: usize = 260;
-struct TemporaryFile([u16; MAX_PATH]);
-
-impl Drop for TemporaryFile {
-    fn drop(&mut self) {
-        unsafe { DeleteFileW(self.0.as_ptr()) };
-    }
-}
-
-fn wide(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain([0]).collect()
-}
-
-fn check_preferences() {
-    let mut directory = [0; MAX_PATH];
-    let mut file = [0; MAX_PATH];
-    let length = unsafe { GetTempPathW(MAX_PATH as u32, directory.as_mut_ptr()) } as usize;
-    assert!((1..MAX_PATH).contains(&length));
-    assert_ne!(
-        unsafe {
-            GetTempFileNameW(
-                directory.as_ptr(),
-                wide("rsf").as_ptr(),
-                0,
-                file.as_mut_ptr(),
-            )
-        },
-        0
-    );
-    let file = TemporaryFile(file);
-    let path = file.0.as_ptr();
-    let (mut enabled, mut quality) = (1, 3);
-    unsafe { rsf_preferences_read(path, &mut enabled, &mut quality) };
-    assert_eq!((enabled, quality), (1, 3));
-    for preset in 0..=4 {
-        assert_ne!(
-            unsafe { rsf_preferences_write(path, preset % 2, preset) },
-            0
-        );
-        (enabled, quality) = (9, 9);
-        unsafe { rsf_preferences_read(path, &mut enabled, &mut quality) };
-        assert_eq!((enabled, quality), (preset % 2, preset));
-    }
-    assert_ne!(
-        unsafe {
-            WritePrivateProfileStringW(
-                wide("Rendering").as_ptr(),
-                wide("Quality").as_ptr(),
-                wide("99").as_ptr(),
-                path,
-            )
-        },
-        0
-    );
-    quality = 3;
-    unsafe { rsf_preferences_read(path, &mut enabled, &mut quality) };
-    assert_eq!(quality, 3);
-    assert_eq!(unsafe { rsf_preferences_write(path, 1, 5) }, 0);
-}
-
 #[unsafe(no_mangle)]
 extern "C" fn rsf_ac7_session_fixture() -> c_int {
     check_startup();
     check_geometry();
-    check_preferences();
     0
 }

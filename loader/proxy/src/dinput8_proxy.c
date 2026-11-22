@@ -20,7 +20,6 @@
 
 #include "dlss_bridge.h"
 #include "overlay_host.h"
-#include "preferences.h"
 #include "../../../runtime/orchestrator/src/render_settings_store.h"
 #include <rescaleframe/fg_choice.h>
 
@@ -1359,9 +1358,24 @@ static unsigned long action_reinsert_depth_policy(void)
     return read_number("RSF_REINSERT_DEPTH", 0);
 }
 
+/* The user-owned profile keeps Enabled (0/1) and Quality (0-4); a missing or out-of-range value
+   leaves the configured default in place. */
+static void load_preferences(void)
+{
+    const uint32_t enabled = rsf_settings_store_read_integer(preference_path, L"Rendering", "Enabled", 2);
+    const uint32_t quality = rsf_settings_store_read_integer(preference_path, L"Rendering", "Quality", 5);
+    if (enabled <= 1) {
+        preferred_enabled = enabled;
+    }
+    if (quality <= 4) {
+        preferred_quality = quality;
+    }
+}
+
 static void save_preferences(void)
 {
-    if (!rsf_preferences_write(preference_path, preferred_enabled, preferred_quality)) {
+    if (rsf_settings_store_write_integer(preference_path, L"Rendering", "Quality", preferred_quality) != RSF_OK ||
+        rsf_settings_store_write_integer(preference_path, L"Rendering", "Enabled", preferred_enabled) != RSF_OK) {
         note("settings: could not save preferences; the current session still uses them");
     }
 }
@@ -1450,7 +1464,7 @@ static void register_overlay_actions(void)
     if (preferred_quality > 4) {
         preferred_quality = 3;
     }
-    rsf_preferences_read(preference_path, &preferred_enabled, &preferred_quality);
+    load_preferences();
     rsf_bridge_set_actions(&actions);
     {
         uint32_t preset = rsf_settings_store_read_dlss_preset(preference_path, L"Rendering",
