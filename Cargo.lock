@@ -489,6 +489,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsf-overlay-fixtures"
+version = "0.1.2"
+dependencies = [
+ "windows",
+]
+
+[[package]]
 name = "rsf-project-wingman"
 version = "0.1.2"
 dependencies = [

@@ -421,6 +421,13 @@ generate("runtime/orchestrator/src/overlay_native12_abi.rs", "runtime/orchestrat
          ["--no-recursive-allowlist", "--raw-line",
           "use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};",
           "--raw-line", "use crate::overlay_host_abi::rsf_overlay_input;"])
+generate("tests/overlay/src/abi.rs", "loader/proxy/src/overlay_host.h",
+         "rsf_(overlay_(input(_options|_counters)?|intent|stats)|observer_options)",
+         "RSF_(OVERLAY_(INPUT_[A-Z_]+|MOUSE_LEFT)|OBSERVER_(ABI_VERSION|OK|ERROR_NO_DEVICE))",
+         ["-include", "rescaleframe/overlay_input.h", "-include", "rescaleframe/d3d11_observer.h",
+          "-Iui/overlay/include", "-Iruntime/graphics/include"],
+         ["--allowlist-function", "rsf_(overlay_(input_(install|uninstall|visible|poll_toggle|set_visible|collect|counters_get)|host_(start|present|visible|stop))|observer_(install|uninstall|acquire_device))",
+          "--with-derive-default", "--raw-line", "#![allow(dead_code)]"])
 generate("runtime/orchestrator/src/overlay_host_abi.rs", "runtime/orchestrator/src/overlay_panel.h",
          "rsf_overlay(_result|_input(_options|_log_fn)?|_draw_data|_vertex|_draw_call|_host_panel)?",
          "RSF_OVERLAY_(ABI_VERSION|INPUT_ABI_VERSION|HOST_PANEL_.*)",

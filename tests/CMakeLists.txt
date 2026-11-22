@@ -362,14 +362,19 @@ target_link_libraries(rsf_overlay_panel_fixture PRIVATE ReScaleFrame::Graphics r
 # Exported by property rather than by dllexport on each definition: the header declares the
 # functions plainly, and MSVC refuses a definition whose linkage differs from its declaration.
 set_target_properties(rsf_overlay_panel_fixture PROPERTIES PREFIX "" WINDOWS_EXPORT_ALL_SYMBOLS ON)
-add_executable(rsf_overlay_host overlay_host.cpp)
+rsf_add_rust_static(rsf_overlay_fixtures_rust rsf_rust_overlay_fixtures
+    rsf-overlay-fixtures rsf_overlay_fixtures)
+add_executable(rsf_overlay_host overlay/main.c)
+target_compile_definitions(rsf_overlay_host PRIVATE RSF_OVERLAY_FIXTURE=rsf_test_overlay_host)
+target_link_libraries(rsf_overlay_host PRIVATE rsf_overlay_fixtures_rust rsf_orchestrator_rust
+    ReScaleFrame::Graphics rsf_build_options)
 
-add_executable(rsf_overlay_hotkey overlay_hotkey.cpp)
-target_link_libraries(rsf_overlay_hotkey PRIVATE ReScaleFrame::Graphics minhook rsf_build_options)
+add_executable(rsf_overlay_hotkey overlay/main.c)
+target_compile_definitions(rsf_overlay_hotkey PRIVATE RSF_OVERLAY_FIXTURE=rsf_test_overlay_hotkey)
+target_link_libraries(rsf_overlay_hotkey PRIVATE rsf_overlay_fixtures_rust rsf_orchestrator_rust
+    ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME overlay_hotkey COMMAND rsf_overlay_hotkey)
 set_tests_properties(overlay_hotkey PROPERTIES TIMEOUT 30)
-target_link_libraries(rsf_overlay_host PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options)
-target_compile_definitions(rsf_overlay_host PRIVATE _CRT_SECURE_NO_WARNINGS)
 add_dependencies(rsf_overlay_host rsf_overlay_panel_fixture)
 add_test(NAME overlay_host COMMAND rsf_overlay_host "$<TARGET_FILE_NAME:rsf_overlay_panel_fixture>")
 set_tests_properties(overlay_host PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77

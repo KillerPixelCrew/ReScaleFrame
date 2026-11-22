@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "ui/overlay",
+  "tests/overlay",
   "runtime/backends/rsf-upscaler",
   "runtime/backends/fsr/compat",
   "runtime/vulkan/ngx",

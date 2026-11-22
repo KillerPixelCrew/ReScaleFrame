@@ -1,0 +1,105 @@
+// SPDX-License-Identifier: MIT
+#![cfg(all(windows, not(test)))]
+
+mod abi;
+mod host;
+mod hotkey;
+
+use std::ffi::c_void;
+use windows::{
+    Win32::{
+        Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
+        System::LibraryLoader::GetModuleHandleW,
+        UI::WindowsAndMessaging::{
+            CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, SendMessageW,
+            UnregisterClassW, WINDOW_EX_STYLE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+        },
+    },
+    core::PCWSTR,
+};
+
+fn require(condition: bool, message: &str) {
+    if !condition {
+        eprintln!("FAIL: {message}");
+        std::process::exit(1);
+    }
+}
+
+fn check<T, E: std::fmt::Debug>(result: Result<T, E>, message: &str) -> T {
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("FAIL: {message}: {error:?}");
+            std::process::exit(1);
+        }
+    }
+}
+
+struct Window {
+    hwnd: HWND,
+    class: PCWSTR,
+    instance: HINSTANCE,
+}
+
+impl Window {
+    // Each fixture creates its own hidden window and leaves foreground focus alone.
+    fn new(class: PCWSTR, width: i32, height: i32) -> Self {
+        let module = check(unsafe { GetModuleHandleW(PCWSTR::null()) }, "get module");
+        let instance = HINSTANCE(module.0);
+        let wc = WNDCLASSW {
+            lpfnWndProc: Some(window_proc),
+            hInstance: instance,
+            lpszClassName: class,
+            ..Default::default()
+        };
+        require(unsafe { RegisterClassW(&wc) } != 0, "register window class");
+        let hwnd = check(
+            unsafe {
+                CreateWindowExW(
+                    WINDOW_EX_STYLE(0),
+                    class,
+                    PCWSTR::null(),
+                    WS_OVERLAPPEDWINDOW,
+                    0,
+                    0,
+                    width,
+                    height,
+                    None,
+                    None,
+                    Some(instance),
+                    None,
+                )
+            },
+            "create window",
+        );
+        Self {
+            hwnd,
+            class,
+            instance,
+        }
+    }
+}
+
+impl Drop for Window {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = DestroyWindow(self.hwnd);
+            let _ = UnregisterClassW(self.class, Some(self.instance));
+        }
+    }
+}
+
+unsafe extern "system" fn window_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+}
+
+fn send(hwnd: HWND, message: u32, wparam: usize, lparam: isize) {
+    unsafe { SendMessageW(hwnd, message, Some(WPARAM(wparam)), Some(LPARAM(lparam))) };
+}
+
+type Handle = *mut c_void;
