@@ -1195,7 +1195,6 @@ generate("tests/game-sdk/src/unity_sr_d3d12_abi.rs", "tests/unity_sr_d3d12_abi.h
           "};",
           "--raw-line", "type wchar_t = u16;",
           "--raw-line", "type rsf_backend_result = i32;",
-          "--raw-line", "type rsf_result = i32;",
           "--raw-line", "type rsf_backend_log_fn =\n"
           "    Option<unsafe extern \"C\" fn(*mut ::core::ffi::c_void, *const ::core::ffi::c_char)>;"])
 

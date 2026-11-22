@@ -9,7 +9,7 @@ use std::{
 };
 use windows::{
     Win32::{
-        Foundation::{HANDLE, HINSTANCE, HWND, WAIT_OBJECT_0},
+        Foundation::{HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, WAIT_OBJECT_0, WPARAM},
         Graphics::{
             Direct3D::D3D_FEATURE_LEVEL_12_0,
             Direct3D12::*,
@@ -465,6 +465,15 @@ impl Readback {
     }
 }
 
+unsafe extern "system" fn window_procedure(
+    window: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    unsafe { DefWindowProcW(window, message, wparam, lparam) }
+}
+
 pub(super) struct Window {
     pub hwnd: HWND,
     class: PCWSTR,
@@ -475,7 +484,7 @@ impl Window {
     pub fn new(class: PCWSTR, title: PCWSTR) -> Result<Self> {
         let instance = HINSTANCE(unsafe { GetModuleHandleW(PCWSTR::null()) }?.0);
         let desc = WNDCLASSW {
-            lpfnWndProc: Some(DefWindowProcW),
+            lpfnWndProc: Some(window_procedure),
             hInstance: instance,
             lpszClassName: class,
             ..Default::default()

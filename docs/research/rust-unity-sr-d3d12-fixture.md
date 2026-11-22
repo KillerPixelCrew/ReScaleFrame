@@ -10,7 +10,7 @@ and 77 for unavailable device or provider preparation.
 
 | Replay | Preserved contract |
 | --- | --- |
-| No arguments | Check the 384-byte camera record, 520-byte Unity packet and 72-byte managed API. Reject null SR12 setup and evaluation, and check that create clears its output pointer. No GPU creation on this route. |
+| No arguments | Check the 384-byte camera record, 520-byte Unity packet and 72-byte managed API. Reject null SR12 setup and evaluation, and check that create clears its output pointer. Compare binary16 edge values and the reversed-Z camera against independent frustum coordinates and both inverse products. No GPU creation on this route. |
 | Direct SR12 | Use a feature-level 12.0 D3D12 device and optional non-software vendor selection. Upload the original FP16 HDR colour, reversed depth and zero motion, evaluate the selected provider, submit and join the real queue, then read finite centre RGB on the original thresholds. Backend zero preserves the input-only and native copy path. |
 | Optional SR diagnostics | `RSF_UNITY_GPU_DEBUG` enables and inspects the real debug layer. `RSF_SR_ENGINE_EXTENTS` requests 426×240 using ABI 2. `RSF_SR_TYPELESS_INPUTS` preserves the original resource format substitutions. `RSF_DLSS_TEST_PRESET` validates through the native header helper. `RSF_SR_EXTERNAL_EXPOSURE` still supplies the 1×1 R32F pass texture, with the baseline setup flags. This replay alone does not establish that the provider consumed external exposure. |
 | Shared Streamline | Adopt the real host, acquire and pace source 1, report the original markers and set FG constants on viewport zero using the same SDK token after SR evaluation. Destroy SR before completing the shared token. With Streamline headers absent, the direct SDK constants assertion is omitted as before. |
@@ -19,16 +19,38 @@ and 77 for unavailable device or provider preparation.
 
 Typed Windows COM calls, data upload, recording, fence joins, window ownership and
 scenario policy are in `tests/game-sdk/src/unity_sr_d3d12.rs` and its `gpu.rs` and
-`rdr2.rs` modules. `tests/unity_sr_d3d12.cpp` supplies the native DirectXMath
-projection and half decoding, the inline preset validator, and the C++ Streamline
-SDK call with the actual SDK token and constant types. The Rust bindgen surface
-covers the existing Runtime and GameSDK calls from `tests/unity_sr_d3d12_abi.h`.
+`rdr2.rs` modules. The Windows CRT calls the fixture's C ABI `main` directly from
+the Rust archive. The fixture still uses Windows wide arguments and returns its
+original exit codes. The shared DXGI binary16 decoder and the portable reverse-Z
+camera in `math.rs` replace the two DirectXMath leaves. The matrix check derives
+near and far frustum clip points separately from the matrix constructor, and
+checks inverse multiplication in both orders.
+
+`tests/unity_sr_d3d12_preset.c` is a C11 wrapper for the header-inline preset validator,
+which bindgen cannot call. `tests/unity_sr_d3d12.cpp` stays C++ for one reason: it
+independently calls the Streamline SDK with the actual SDK token and constant types
+(`sl::Constants`, `sl::FrameToken`, `PFun_slSetConstants`). `sl.h` is a C++ header, and a
+hand-mirrored Rust layout would lose the check against the SDK. The Rust bindgen surface
+covers the Runtime and GameSDK calls from `tests/unity_sr_d3d12_abi.h`.
 The tests keep the existing before/after queue and Present callbacks. U02 view
 receipts and production Unity bridges, headers and managed interfaces stay outside
 this fixture change.
 
-Verified at source level with bindgen 0.72.1 on the fixture ABI only, locked offline
-Cargo feature metadata, pinned 1.94.1 formatting and parse-only syntax, and MSVC
-`/Zs` for the C entry and the C++ leaf with and without the real Streamline headers.
-Rust dependency type checking, native linking, CTest, GPU execution and lint remain
-user-owned.
+
+Verification of the follow-up port, based on `9c8fe985`. The fixture had never type-checked.
+The package-only build needed the `windows` crate `std` feature for its COM error
+conversions, and `DefWindowProcW` is a Rust-ABI item that must sit behind an
+`extern "system"` window procedure. The first run of the new matrix check caught a sign error
+in the ported projection depth term: DirectXMath's reversed call gives `near / (far - near)`.
+A `cargo test` unit test now runs the binary16 and projection comparison without a GPU. The
+generated bindings drop the two DirectXMath declarations, and `type rsf_result` is no longer
+emitted because nothing references it. The bindgen 0.72.1 and libclang tools were not
+installed, so the generated file was edited to the output the changed header and generator
+produce, and the next regeneration should confirm it.
+
+Checked: the fixture crate builds and `cargo test` passes with the feature, `cargo clippy`
+reports nothing for it, MSVC `/W4 /WX /Zs` accepts the C leaf and the C++ leaf with and
+without the real Streamline 2.14.1 headers, and the fixture archive plus both leaves link
+with `main` resolved from the archive. The full executable does not link yet: `rsf-rdr2`
+(`games/rdr2`) and `rsf-project-wingman` fail `cargo check --workspace` on the integration
+branch for reasons outside this fixture. GPU replays remain user-owned.

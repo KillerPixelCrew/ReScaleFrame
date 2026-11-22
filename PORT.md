@@ -2814,7 +2814,7 @@ Port the plugin, Runtime setup and configuration from managed entry through sess
 **Fixtures (2)**
 
 - [x] [tests/unity_mono_runtime.cpp](tests/unity_mono_runtime.cpp)
-- [ ] [tests/unity_sr_d3d12.cpp](tests/unity_sr_d3d12.cpp)
+- [ ] [tests/unity_sr_d3d12.cpp](tests/unity_sr_d3d12.cpp) (blocked: the fixture's `rsf_fixture_unity_shared_constants` fills `sl::Constants` and calls `PFun_slSetConstants` with an `sl::FrameToken` from the real Streamline SDK, and `sl.h` is a C++-only header, so the SDK check cannot move to Rust or C11. Everything else is gone: the DirectXMath projection and half decode are Rust in `tests/game-sdk/src/unity_sr_d3d12/math.rs`, the preset validator is the C11 leaf `tests/unity_sr_d3d12_preset.c`, and `main` is exported from the Rust archive)
 
 **Rust review findings (7)**
 

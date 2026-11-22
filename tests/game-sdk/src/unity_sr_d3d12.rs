@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: MIT
+#[allow(dead_code)]
+#[path = "../../../runtime/orchestrator/src/dxgi_format.rs"]
+mod dxgi_format;
 mod gpu;
+mod math;
 mod rdr2;
 
 use crate::unity_sr_d3d12_abi::*;
-use gpu::{COPY_DEST, COPY_SOURCE, Gpu, SHADER_READ};
+use gpu::{COPY_SOURCE, Gpu, SHADER_READ};
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_FG_INPUTS,
     RSF_GAME_RENDER_SR, render_host_abi::rsf_render_host_setup, rsf_camera_frame,
@@ -103,7 +107,13 @@ impl Inputs {
         })
     }
 
-    fn pass(&self, gpu: &Gpu, width: u32, height: u32, backend: u32) -> rsf_game_render_pass {
+    fn pass(
+        &self,
+        gpu: &Gpu,
+        width: u32,
+        height: u32,
+        backend: u32,
+    ) -> Result<rsf_game_render_pass> {
         // The SDK record consists of numeric fields and borrowed pointers.
         let mut pass: rsf_game_render_pass = unsafe { std::mem::zeroed() };
         pass.struct_size = size_of::<rsf_game_render_pass>() as u32;
@@ -129,12 +139,12 @@ impl Inputs {
         pass.camera.render_height = height;
         pass.camera.output_width = WIDTH;
         pass.camera.output_height = HEIGHT;
-        pass.camera.near_plane = 0.1;
-        pass.camera.far_plane = 1000.0;
-        pass.camera.vertical_fov_radians = 1.04719755;
+        pass.camera.near_plane = math::NEAR;
+        pass.camera.far_plane = math::FAR;
+        pass.camera.vertical_fov_radians = math::VERTICAL_FOV;
         pass.camera.depth_inverted = 1;
         pass.camera.frame_time_seconds = 1.0 / 60.0;
-        unsafe { rsf_fixture_unity_camera(&mut pass) };
+        math::set_matrices(&mut pass)?;
         if backend == 0 {
             gpu.barrier(&self.color, SHADER_READ, COPY_SOURCE);
             unsafe { gpu.list.CopyResource(&self.output, &self.color) };
@@ -142,7 +152,7 @@ impl Inputs {
             pass.color_output = ptr::null_mut();
             pass.role = RSF_GAME_RENDER_FG_INPUTS;
         }
-        pass
+        Ok(pass)
     }
 }
 
@@ -387,7 +397,7 @@ fn run(args: &Args) -> Result<i32> {
         "engine input extents changed",
     )?;
     let inputs = Inputs::new(&gpu, width, height)?;
-    let mut pass = inputs.pass(&gpu, width, height, args.backend);
+    let mut pass = inputs.pass(&gpu, width, height, args.backend)?;
     if host.process_latency.is_some() && enabled("RSF_RDR2_COLD_FG") {
         rdr2::cold_generation(&gpu, &host, pass)?;
         return Ok(0);
@@ -430,9 +440,7 @@ fn run(args: &Args) -> Result<i32> {
             rdr2::live_switches(&gpu, &host, &mut pass, &inputs.output, &readback, ini)?;
         }
     }
-    let [r, g, b] = readback
-        .center_rgb()?
-        .map(|half| unsafe { rsf_fixture_unity_half_to_float(half) });
+    let [r, g, b] = readback.center_rgb()?.map(dxgi_format::half_to_f32);
     eprintln!("GPU output center RGB {r:.4} {g:.4} {b:.4}");
     drop(sr);
     if let Some(shared) = shared {
@@ -454,14 +462,17 @@ fn run(args: &Args) -> Result<i32> {
     Ok(0)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_test_unity_sr_d3d12() -> i32 {
+// The C++ linker keeps its standard CRT startup and calls this C ABI main.
+#[cfg_attr(not(test), unsafe(export_name = "main"))]
+extern "C" fn fixture_main(_argc: i32, _argv: *mut *mut c_char) -> i32 {
     crate::run(|| {
         let check_fixture = || -> Result<i32> {
             abi_probe()?;
             let args: Vec<_> = std::env::args_os().skip(1).collect();
             if args.is_empty() {
+                math::check_portable_math()?;
                 println!("PASS: native ABI and null/short setup refusal.");
+                println!("PASS: binary16 and reverse-Z matrix comparison.");
                 return Ok(0);
             }
             let Some(args) = Args::parse(&args) else {

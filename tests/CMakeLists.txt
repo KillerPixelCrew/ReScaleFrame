@@ -106,8 +106,13 @@ set_tests_properties(game_fallout4_plugin_contract PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:rsf_game_fallout4>")
 rsf_add_rust_static(rsf_unity_sr_d3d12_fixture_rust rsf_rust_unity_sr_d3d12_fixture
     rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features unity-sr-d3d12-fixture)
-add_executable(rsf_unity_sr_d3d12_test game-sdk/cpu_fixture_main.c unity_sr_d3d12.cpp)
-target_compile_definitions(rsf_unity_sr_d3d12_test PRIVATE RSF_CPU_FIXTURE=rsf_test_unity_sr_d3d12)
+add_executable(rsf_unity_sr_d3d12_test unity_sr_d3d12_preset.c unity_sr_d3d12.cpp)
+# The toolchain CRT calls the C ABI main from the fixture archive.
+if(MSVC)
+    target_link_options(rsf_unity_sr_d3d12_test PRIVATE "LINKER:/SUBSYSTEM:CONSOLE" "LINKER:/INCLUDE:main")
+elseif(MINGW)
+    target_link_options(rsf_unity_sr_d3d12_test PRIVATE "LINKER:--undefined=main")
+endif()
 target_include_directories(rsf_unity_sr_d3d12_test PRIVATE ../games/unity-mono/include)
 target_link_libraries(rsf_unity_sr_d3d12_test PRIVATE rsf_unity_sr_d3d12_fixture_rust rsf_rdr2_rust rsf_orchestrator rsf_build_options minhook d3d12 dxgi)
 if(EXISTS "${RSF_STREAMLINE_INCLUDE}/sl.h")
@@ -445,7 +450,7 @@ add_test(NAME d3d11_host_contract COMMAND rsf_d3d11_host_test)
 
 add_executable(rsf_resource_roles graphics_fixture_main.c)
 target_compile_definitions(rsf_resource_roles PRIVATE RSF_GRAPHICS_FIXTURE=rsf_resource_roles_fixture)
-target_link_libraries(rsf_resource_roles PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options
+target_link_libraries(rsf_resource_roles PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME resource_roles COMMAND rsf_resource_roles)
 
 add_executable(rsf_motion_decode graphics_fixture_main.c)

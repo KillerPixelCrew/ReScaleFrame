@@ -7,7 +7,6 @@ use rsf_game_sys::{
 };
 type wchar_t = u16;
 type rsf_backend_result = i32;
-type rsf_result = i32;
 type rsf_backend_log_fn =
     Option<unsafe extern "C" fn(*mut ::core::ffi::c_void, *const ::core::ffi::c_char)>;
 
@@ -828,12 +827,6 @@ pub const RSF_FIXTURE_UNITY_INPUT_SAMPLE: rsf_fixture_unity_constants = 6;
 pub type rsf_fixture_unity_constants = ::core::ffi::c_int;
 unsafe extern "C" {
     pub fn rsf_fixture_unity_dlss_preset_valid(preset: u32) -> ::core::ffi::c_int;
-}
-unsafe extern "C" {
-    pub fn rsf_fixture_unity_camera(arg1: *mut rsf_game_render_pass);
-}
-unsafe extern "C" {
-    pub fn rsf_fixture_unity_half_to_float(half: u16) -> f32;
 }
 unsafe extern "C" {
     pub fn rsf_fixture_unity_shared_constants(

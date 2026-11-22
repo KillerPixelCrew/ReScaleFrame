@@ -53,8 +53,10 @@ mod render_host_fixtures;
 mod reservation;
 mod session;
 #[cfg(feature = "unity-sr-d3d12-fixture")]
+#[cfg_attr(test, allow(dead_code))]
 mod unity_sr_d3d12;
 #[cfg(feature = "unity-sr-d3d12-fixture")]
+#[cfg_attr(test, allow(dead_code))]
 mod unity_sr_d3d12_abi;
 #[cfg(feature = "vk-latency-fixtures")]
 mod vk_latency;

@@ -26,8 +26,6 @@ enum rsf_fixture_unity_constants {
 extern "C" {
 #endif
 int rsf_fixture_unity_dlss_preset_valid(uint32_t preset);
-void rsf_fixture_unity_camera(rsf_game_render_pass*);
-float rsf_fixture_unity_half_to_float(uint16_t half);
 /* 0: refused, 1: accepted, 2: Streamline headers were absent at build time. */
 uint32_t rsf_fixture_unity_shared_constants(rsf_streamline_host*, const rsf_game_render_pass*);
 #ifdef __cplusplus
