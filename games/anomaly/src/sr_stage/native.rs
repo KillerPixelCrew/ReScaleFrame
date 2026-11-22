@@ -15,6 +15,7 @@ use crate::ini::rsf_anomaly_sr_ini_text;
 use crate::native_geometry::rsf_anomaly_geometry_active;
 use crate::native_geometry::rsf_anomaly_geometry_set_near;
 use crate::native_geometry::{CONSTANT_BUFFER_DATA, CONSTANT_BUFFER_SIZE, CONSTANT_BUFFER_SLOTS};
+use crate::native_hooks::Site as HookSite;
 use crate::native_observer::rsf_anomaly_observation;
 use crate::native_profile::{PROFILES as NATIVE, Profile as NativeProfile};
 use crate::runtime_module::rsf_anomaly_runtime_set_colour_transport;
@@ -76,7 +77,7 @@ use crate::sys::{
 use rsf_game_sys::rsf_result;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::mem::{MaybeUninit, size_of};
-use std::ptr::{from_ref, null, null_mut};
+use std::ptr::{from_ref, null_mut};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
@@ -104,19 +105,8 @@ pub(crate) struct Native {
     d3d11: unsafe extern "C" fn() -> *const c_void,
 }
 
-/// rsf_anomaly_hook_site (native_hooks.h); the leaf fills `replacement` and `original`.
-#[repr(C)]
-pub(crate) struct HookSite {
-    name: *const c_char,
-    rva: u32,
-    expected: [u8; 16],
-    replacement: Ptr,
-    original: *mut Ptr,
-}
-
 const _: () = {
-    assert!(size_of::<Native>() == 128 && size_of::<HookSite>() == 48);
-    assert!(std::mem::offset_of!(HookSite, original) == 40);
+    assert!(size_of::<Native>() == 128);
     // The seam reads the generic0 CRT the world window swaps.
     assert!(WORLD_TARGETS[0].offset == 0x3a8);
 };
@@ -141,18 +131,6 @@ pub(crate) static BUILDS: [Build; 2] = [
         sr: &SR[1],
     },
 ];
-
-impl Default for HookSite {
-    fn default() -> Self {
-        Self {
-            name: null(),
-            rva: 0,
-            expected: [0; 16],
-            replacement: null_mut(),
-            original: null_mut(),
-        }
-    }
-}
 
 // ---- engine state --------------------------------------------------------------------------------------------------
 static NATIVE_LEAVES: AtomicPtr<Native> = AtomicPtr::new(null_mut());
@@ -814,11 +792,13 @@ unsafe extern "C" fn install_hooks() -> bool {
     };
     let mut sites = DETOURS.map(|index| {
         let site = &build.sr.function_sites[index];
+        // The leaf fills `replacement` and `original`.
         HookSite {
-            name: site.name,
+            _name: site.name,
             rva: site.rva,
             expected: site.expected,
-            ..HookSite::default()
+            replacement: null_mut(),
+            original: null_mut(),
         }
     });
     unsafe {

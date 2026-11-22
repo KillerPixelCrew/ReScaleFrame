@@ -26,12 +26,12 @@ type Apply = unsafe extern "C" fn() -> bool;
 
 #[derive(Clone, Copy)]
 #[repr(C)]
-pub(super) struct Site {
-    pub(super) _name: *const c_char,
-    pub(super) rva: u32,
-    pub(super) expected: [u8; GUARD_BYTES],
-    pub(super) replacement: Address,
-    pub(super) original: *mut Address,
+pub(crate) struct Site {
+    pub(crate) _name: *const c_char,
+    pub(crate) rva: u32,
+    pub(crate) expected: [u8; GUARD_BYTES],
+    pub(crate) replacement: Address,
+    pub(crate) original: *mut Address,
 }
 
 #[derive(Clone, Copy, Default)]
