@@ -1010,7 +1010,7 @@ Port swapchain dispatch, presentation synchronization and shared surface ownersh
 - [ ] [tests/d3d11_present_api.cpp](tests/d3d11_present_api.cpp)
 - [ ] [tests/d3d11_present_bridge.cpp](tests/d3d11_present_bridge.cpp)
 - [ ] [tests/fg_present_bridge.cpp](tests/fg_present_bridge.cpp)
-- [ ] [tests/shared_surface.cpp](tests/shared_surface.cpp)
+- [x] [tests/shared_surface.cpp](tests/shared_surface.cpp)
 
 **Rust review findings (4)**
 
