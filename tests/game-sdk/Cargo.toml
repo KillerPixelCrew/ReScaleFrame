@@ -13,6 +13,7 @@ fg-cpu-fixture = ["windows-sys/Win32_System_Performance", "windows-sys/Win32_Sys
 cpu-fixtures = ["windows-sys/Win32_System_Memory", "windows-sys/Win32_System_SystemInformation"]
 d3d11-host-fixture = []
 plugin-session-fixture = []
+render-host-fixtures = ["windows-sys/Win32_System_Performance", "windows-sys/Win32_System_WindowsProgramming"]
 
 [lib]
 crate-type = ["staticlib"]

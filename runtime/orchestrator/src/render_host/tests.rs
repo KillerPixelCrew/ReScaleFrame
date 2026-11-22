@@ -72,6 +72,7 @@ struct World {
     present_owner: i32,
     present_choices: u32,
     request_result: i32,
+    fg_capture_result: i32,
     fg_status: Option<FgStatus>,
     visible: u32,
     cursor: i32,
@@ -275,8 +276,10 @@ unsafe extern "C" fn fg_status_try(out: *mut FgStatus) -> i32 {
         None => 0,
     }
 }
-unsafe extern "C" fn fg_capture_outputs(_: *const c_char) -> i32 {
-    BACKEND_OK
+unsafe extern "C" fn fg_capture_outputs(directory: *const c_char) -> i32 {
+    let directory = unsafe { std::ffi::CStr::from_ptr(directory) };
+    event(format!("fg capture {}", directory.to_str().unwrap()));
+    with(|world| world.fg_capture_result)
 }
 unsafe extern "C" fn present_host() -> Handle {
     null_mut()
@@ -587,7 +590,8 @@ fn diagnostics_save_live_capture_and_mark_graphics_for_restart() {
         });
     };
     set(OVERLAY_PROBE, 1);
-    assert_eq!(host.set_capture_directory(r"C:\試験".into()), OK);
+    let active_directory = r"C:\試験🚀";
+    assert_eq!(host.set_capture_directory(active_directory.into()), OK);
     set(GRAPHICS_DIAGNOSTICS, 1);
     let state = host.lock();
     let [probe, graphics] = host.diagnostic_options(state.graphics_diagnostics);
@@ -597,10 +601,24 @@ fn diagnostics_save_live_capture_and_mark_graphics_for_restart() {
     drop(state);
     assert_eq!(ini.integer("OverlayProbe"), 1);
     assert_eq!(ini.integer("GraphicsDiagnostics"), 1);
-    assert!(!events().iter().any(|event| event == "diagnostics"));
+    let log = events();
+    assert!(!log.iter().any(|event| event == "diagnostics"));
+    assert!(log.contains(&format!("fg capture {active_directory}")));
+
+    host.lock().capture_update = false;
+    with(|world| world.fg_capture_result = BACKEND_NOT_READY);
+    assert_eq!(host.set_capture_directory(String::new()), BACKEND_NOT_READY);
+    let state = host.lock();
+    assert_eq!(state.capture_directory.to_str().unwrap(), active_directory);
+    assert!(state.capture_enabled);
+    assert!(!state.capture_update);
+    drop(state);
+
+    with(|world| world.fg_capture_result = BACKEND_OK);
     assert_eq!(host.set_capture_directory(String::new()), OK);
     assert!(!host.lock().capture_enabled);
     assert!(host.lock().capture_update);
+    assert_eq!(events(), ["fg capture ", "fg capture "]);
 }
 
 #[test]

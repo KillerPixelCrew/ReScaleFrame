@@ -38,3 +38,38 @@ Commands ran from the worktree with Visual Studio 2026. The build directory was 
 - Built only, not run: `rsf_unity_sr_d3d12_test`, which creates a D3D12 device and drives this host.
 
 Unverified: real D3D12 submission, fence and observer behavior, vendor evaluation through this host, the shared overlay on a device, the RDR2 adapter and any game. The full `eng/verify.ps1` suite was not run.
+
+## C02 follow-up on the saved Unicode base
+
+At `3665aef0`, both D3D12 hosts owned their state in Rust but routed SR12,
+FG12 and their Win32 and COM operations through host-specific C++ tables.
+They now call the sibling Rust SR12 and FG12 owners directly. SR12 creation
+uses the same static provider platform as the native API. Each public host
+entry binds the existing FG12 platform before publishing any callbacks.
+The Rust Win32 and COM leaves preserve the returned device references,
+DIRECT queue test, auto-reset fence event, shared fence wait, and DXGI
+Present count. The smaller C++ tables carry the remaining native service
+and SDK edges, including Streamline registration and native object lookup,
+the observer and overlay entry points, plugin sessions, and C header helpers.
+
+The native host, callback host, frontend, window and link C headers still
+define the public wire contracts. The native host setup now has a generated
+Rust binding shared by the runtime and the fixture. The callback host's v1
+and v2 setup, generation callbacks, retirement ordering and exports retain
+their existing contracts. Native-window scene lookup was already direct on
+this base.
+
+The four old C++ fixture bodies now run from Rust via the existing CTest
+entries and small C mains. The callback and frontend fixtures retain both
+DLL and embedded linkage. The native window case keeps its fake canonical
+IUnknown, reference accounting, thread-local scope, exact scene matching,
+and real QPC checks. The render links case retains the DLL record checks
+alongside the existing Rust concurrency and generation fixtures. The
+render-host unit fixture checks that an FG capture refusal preserves an
+active supplementary-character path and that an accepted clear rearms SR
+capture. The shared saved-row transaction continues to own profile rollback.
+
+Pinned Rust 1.94.1 formatting, bindgen 0.72.1 reproduction of five C02
+binding outputs, locked offline Cargo metadata with all features, and
+changed-source whitespace checks passed. These are source checks. Runtime
+linking, all fixture execution and device behavior remain pending.

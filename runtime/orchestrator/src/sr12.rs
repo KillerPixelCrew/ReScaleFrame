@@ -1284,6 +1284,16 @@ impl Sr12 {
     }
 }
 
+#[cfg(not(test))]
+unsafe extern "C" {
+    fn rsf_sr12_platform_table() -> &'static Platform;
+}
+
+#[cfg(not(test))]
+pub(super) unsafe fn create_for_host(setup: *const Setup, out: *mut *mut Sr12) -> i32 {
+    unsafe { rsf_core_sr12_create(setup, out, rsf_sr12_platform_table()) }
+}
+
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_sr12_create(
     setup: *const Setup,
@@ -1429,7 +1439,7 @@ unsafe extern "C" fn rsf_core_sr12_create_planned(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sr12_plan(
+pub(super) unsafe extern "C" fn rsf_core_sr12_plan(
     owner: *const Sr12,
     width: *mut u32,
     height: *mut u32,
@@ -1448,7 +1458,7 @@ unsafe extern "C" fn rsf_core_sr12_plan(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sr12_evaluate(
+pub(super) unsafe extern "C" fn rsf_core_sr12_evaluate(
     owner: *mut Sr12,
     list: Handle,
     pass: *const Pass,
@@ -1464,7 +1474,7 @@ unsafe extern "C" fn rsf_core_sr12_evaluate(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sr12_set_sharpening(
+pub(super) unsafe extern "C" fn rsf_core_sr12_set_sharpening(
     owner: *mut Sr12,
     options: *const rsf_sharpening_options,
 ) -> i32 {
@@ -1488,14 +1498,14 @@ unsafe extern "C" fn rsf_core_sr12_set_sharpening(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sr12_destroy(owner: *mut Sr12) {
+pub(super) unsafe extern "C" fn rsf_core_sr12_destroy(owner: *mut Sr12) {
     if !owner.is_null() {
         drop(unsafe { Box::from_raw(owner) });
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sr12_present(
+pub(super) unsafe extern "C" fn rsf_core_sr12_present(
     owner: *mut Sr12,
     swapchain: Handle,
     sync_interval: u32,
@@ -1517,7 +1527,7 @@ unsafe extern "C" fn rsf_core_sr12_present(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sr12_capture(
+pub(super) unsafe extern "C" fn rsf_core_sr12_capture(
     owner: *mut Sr12,
     directory: *const c_char,
     first_frame: u64,
@@ -1536,7 +1546,7 @@ unsafe extern "C" fn rsf_core_sr12_capture(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sr12_capture_flush(owner: *mut Sr12, slot: u32) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_sr12_capture_flush(owner: *mut Sr12, slot: u32) -> i32 {
     let Some(owner) = (unsafe { owner.as_ref() }) else {
         return INVALID;
     };
@@ -1551,7 +1561,7 @@ unsafe extern "C" fn rsf_core_sr12_capture_flush(owner: *mut Sr12, slot: u32) ->
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sr12_capture_scene(
+pub(super) unsafe extern "C" fn rsf_core_sr12_capture_scene(
     owner: *mut Sr12,
     list: Handle,
     pass: *const Pass,

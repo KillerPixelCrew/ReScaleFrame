@@ -920,3 +920,19 @@ generate("runtime/orchestrator/src/dlss_pipeline_layer_abi.rs",
           "-Iruntime/presentation/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist", "--raw-line",
           "use crate::render_abi::rsf_pipeline_camera_frame;"])
+
+generate("sdk/game/src/render_host_abi.rs", "runtime/orchestrator/include/rescaleframe/render_host.h",
+         "rsf_render_host_setup", "RSF_RENDER_HOST_(ABI_VERSION|ENGINE_PRESENTATION|OWNS_PRESENTATION)",
+         ["-Isdk/game/include", "-Iruntime/orchestrator/include"],
+         ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "type wchar_t = u16;"])
+
+generate("tests/game-sdk/src/render_host_fixture_abi.rs", "tests/game-sdk/render_host_fixture_abi.h",
+         "rsf_(render_(settings|status|links?)|native_present_record|observer_present_event)",
+         "RSF_(RENDER_(FRONTEND_ABI_VERSION|LINK_ABI_VERSION)|SR_(AUTO|DLSS|FSR3|FSR4|SPATIAL|XESS))",
+         ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
+          "-Iruntime/graphics/include", "-Iruntime/presentation/include", "-Iruntime/backends/dlss/include"],
+         ["--no-recursive-allowlist", "--with-derive-default",
+          "--allowlist-function", "rsf_(callback_host_(start|stop)|native_scene_(pass|reset|texture_binding)|"
+          "native_window_(scope|match|present|last_present|reset)|render_(host_create|settings_(get|apply)|status_get|links_.*))",
+          "--raw-line", "use rsf_game_sys::{rsf_game_host_services, rsf_game_render_pass, callback_host_abi::rsf_callback_host_setup, render_host_abi::rsf_render_host_setup};",
+          "--raw-line", "type rsf_backend_result = i32;"])

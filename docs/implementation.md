@@ -7912,3 +7912,14 @@ The D3D11 host and shared overlay now apply the same Rust sharpening projection.
 The settings header contains only the shared C declarations, and the embedded
 carrier still uses the original persistence entries. C11 and C++ syntax checks
 passed.
+
+### D3D12 render host native calls and fixtures
+
+Both D3D12 hosts now call the Rust SR12 and FG12 owners directly. Shared
+Rust Win32 and COM code handles device and adapter lookup, fence operations
+and Present counts. Rust owns the callback-host, native-window, frontend
+and render-link fixture bodies, with the existing CTest link routes.
+The [C02 source record](research/rust-render-host-cutover.md#c02-follow-up-on-the-saved-unicode-base)
+lists the native service edges and saved capture refusal coverage. Binding,
+formatting, locked offline metadata and source checks completed. Build and
+fixture execution remain pending.

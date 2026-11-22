@@ -273,6 +273,10 @@ mod render_abi;
 #[cfg(windows)]
 mod render_host;
 #[cfg(windows)]
+mod render_host_methods;
+#[cfg(all(windows, not(test)))]
+mod render_host_native;
+#[cfg(windows)]
 mod render_links;
 #[cfg(windows)]
 mod resource_roles;

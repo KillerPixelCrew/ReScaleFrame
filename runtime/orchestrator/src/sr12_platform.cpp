@@ -261,6 +261,8 @@ rsf_backend_result rsf_core_sr12_capture_scene(rsf_sr12*, void*, const rsf_game_
 
 // The public entries stay native so the Runtime DLL and every embedded consumer keep the same
 // exported names and decorations.
+extern "C" const Platform* rsf_sr12_platform_table() { return &platform; }
+
 extern "C" rsf_backend_result rsf_sr12_create(const rsf_sr12_setup* setup, rsf_sr12** out)
 {
     return rsf_core_sr12_create(setup, out, &platform);

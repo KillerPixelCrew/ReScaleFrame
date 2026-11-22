@@ -45,6 +45,10 @@ mod plugin_session_fixture;
 #[allow(dead_code, unused_imports)]
 #[path = "../../../runtime/orchestrator/src/render_abi.rs"]
 mod render_abi;
+#[cfg(feature = "render-host-fixtures")]
+mod render_host_fixture_abi;
+#[cfg(feature = "render-host-fixtures")]
+mod render_host_fixtures;
 #[cfg(feature = "cpu-fixtures")]
 mod reservation;
 mod session;

@@ -4,7 +4,7 @@
 //! Rust owns admission, host and control state, SR backend resolution, settings translation and
 //! commit, SR context lifetime, recording slots, fence retirement, scene and Present matching,
 //! the frontend status and overlay routing. render_host_platform.cpp supplies one call per
-//! D3D12, DXGI, SR12, DLSS registration, FG12, presentation bridge, overlay or observer operation
+//! DLSS registration, presentation bridge, overlay or observer operation
 //! through its static leaf table. Settings keys and text belong to settings_store.rs,
 //! SR vendor selection to rsf_gpu_select_sr_backend and FG provider admission to fg_choice.rs.
 use crate::com_ref::ComRef;
@@ -28,11 +28,16 @@ use crate::render_abi::{
     rsf_native_fg_options as FgOptions, rsf_native_fg_status as FgStatus,
     rsf_render_settings as Settings, rsf_sharpening_options as Sharpening,
 };
+use crate::render_host_methods::Adapter;
 use crate::settings_store::{
     read_settings_and_fg_mode, rsf_settings_store_read_layout, rsf_settings_store_write,
     rsf_settings_store_write_layout, set_sharpening, sharpening_of,
 };
 use crate::sharpening_policy;
+use rsf_game_sys::render_host_abi::{
+    RSF_RENDER_HOST_ABI_VERSION as HOST_ABI_VERSION,
+    RSF_RENDER_HOST_ENGINE_PRESENTATION as ENGINE_PRESENTATION, rsf_render_host_setup as Setup,
+};
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_RESET,
     RSF_GAME_RENDER_WINDOW, rsf_game_cpu_event as CpuEvent, rsf_game_host_services as Services,
@@ -69,8 +74,6 @@ const NATIVE_REFUSED: i32 = -5;
 const BACKEND_OK: i32 = 0;
 const BACKEND_NOT_READY: i32 = -8;
 
-const HOST_ABI_VERSION: u32 = 1;
-const ENGINE_PRESENTATION: u32 = 1;
 const SR_NONE: u32 = 0;
 const SR_DLSS: u32 = 1;
 const SR_XESS: u32 = 5;
@@ -112,83 +115,75 @@ const DEFAULTS: Settings = Settings {
     ..unsafe { std::mem::zeroed() }
 };
 
-/// render_host.h's rsf_render_host_setup; render_host_platform.cpp asserts the layout.
-#[repr(C)]
-pub(crate) struct Setup {
-    struct_size: u32,
-    abi_version: u32,
-    configuration_path: *const u16,
-    runtime_directory: *const u16,
-    configuration_section: *const u16,
-    presentation_owner: u32,
-    sr_backend_choices: u32,
-    engine_type: u32,
-    application_id: u32,
-    engine_version_utf8: *const c_char,
-    project_id_utf8: *const c_char,
-    depth_inverted: u32,
-    units_to_meters: f32,
-    ui_mode: u32,
-    accept_window: WindowFn,
-    user: *mut c_void,
-}
-
-const _: () = {
-    assert!(size_of::<Setup>() == 96 && std::mem::offset_of!(Setup, presentation_owner) == 32);
-    assert!(
-        std::mem::offset_of!(Setup, accept_window) == 80 && std::mem::offset_of!(Setup, user) == 88
-    );
-};
-
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub(crate) struct Adapter {
-    vendor: u32,
-    device: u32,
-    software: u32,
-}
-
 // Field order matches `Platform` in render_host_platform.cpp. Returned COM interfaces carry
 // one reference for the caller; arguments are borrowed for the call.
 #[repr(C)]
 pub(crate) struct Platform {
     struct_size: u32,
+    #[cfg(test)]
     tick: unsafe extern "C" fn() -> u64,
+    #[cfg(test)]
     foreground: unsafe extern "C" fn() -> u32,
+    #[cfg(test)]
     hide_cursor: unsafe extern "C" fn() -> i32,
+    #[cfg(test)]
     list_device: unsafe extern "C" fn(Handle) -> Handle,
+    #[cfg(test)]
     queue_device: unsafe extern "C" fn(Handle) -> Handle,
+    #[cfg(test)]
     queue_direct: unsafe extern "C" fn(Handle) -> i32,
+    #[cfg(test)]
     create_fence: unsafe extern "C" fn(Handle) -> Handle,
+    #[cfg(test)]
     fence_completed: unsafe extern "C" fn(Handle) -> u64,
     // 1 completed, 0 no wait event, -1 failed or timed out.
+    #[cfg(test)]
     fence_wait: unsafe extern "C" fn(Handle, u64, u32) -> i32,
+    #[cfg(test)]
     queue_signal: unsafe extern "C" fn(Handle, Handle, u64) -> i32,
+    #[cfg(test)]
     adapter: unsafe extern "C" fn(Handle, *mut Adapter) -> i32,
     native_object: unsafe extern "C" fn(Handle) -> Handle,
     depth_domains: unsafe extern "C" fn(*const Pass) -> u32,
     dlss_preset_valid: unsafe extern "C" fn(u32) -> u32,
     fg_default_backend: unsafe extern "C" fn(u32, u32) -> u32,
+    #[cfg(test)]
     sr12_create: unsafe extern "C" fn(*const SrSetup, *mut Handle) -> i32,
+    #[cfg(test)]
     sr12_destroy: unsafe extern "C" fn(Handle),
+    #[cfg(test)]
     sr12_evaluate: unsafe extern "C" fn(Handle, Handle, *const Pass, u32) -> i32,
+    #[cfg(test)]
     sr12_set_sharpening: unsafe extern "C" fn(Handle, *const Sharpening) -> i32,
+    #[cfg(test)]
     sr12_present: unsafe extern "C" fn(Handle, Handle, u32, u32, u32) -> i32,
+    #[cfg(test)]
     sr12_capture: unsafe extern "C" fn(Handle, *const c_char, u64, u32) -> i32,
+    #[cfg(test)]
     sr12_capture_flush: unsafe extern "C" fn(Handle, u32) -> i32,
+    #[cfg(test)]
     sr12_capture_scene: unsafe extern "C" fn(Handle, Handle, *const Pass, u32) -> i32,
     registration_create: unsafe extern "C" fn(Handle, *const DlssSetup, *mut Handle) -> i32,
     // Borrows the engine's loaded sl.interposer.dll.
     registration_borrow: unsafe extern "C" fn(Handle, *const DlssSetup, *mut Handle) -> i32,
     registration_present: unsafe extern "C" fn(Handle, Handle, u32, u32, u32) -> i32,
+    #[cfg(test)]
     fg_install: unsafe extern "C" fn(*const FgSetup) -> i32,
+    #[cfg(test)]
     fg_options: unsafe extern "C" fn(*const FgOptions),
+    #[cfg(test)]
     fg_latency: unsafe extern "C" fn(*const LatencyEvent) -> i32,
+    #[cfg(test)]
     fg_cpu: unsafe extern "C" fn(*const CpuEvent),
+    #[cfg(test)]
     fg_submitted: unsafe extern "C" fn(u64, u64),
+    #[cfg(test)]
     fg_hudless: unsafe extern "C" fn(Handle, *const Pass),
+    #[cfg(test)]
     fg_window: unsafe extern "C" fn(*const Pass),
+    #[cfg(test)]
     fg_status_try: unsafe extern "C" fn(*mut FgStatus) -> i32,
+    #[cfg(test)]
     fg_capture_outputs: unsafe extern "C" fn(*const c_char) -> i32,
     present_host: unsafe extern "C" fn() -> Handle,
     present_has_owner: unsafe extern "C" fn() -> i32,
@@ -211,6 +206,61 @@ pub(crate) struct Platform {
     observer_device: unsafe extern "C" fn(Handle, Handle) -> i32,
     observer_factory: unsafe extern "C" fn(Handle, Handle) -> i32,
     diagnostics_enable: unsafe extern "C" fn(LogFn, Handle) -> i32,
+}
+
+crate::render_host_methods::impl_host_methods! {
+    fn tick() -> u64 { crate::render_host_native::tick() }
+    fn list_device(list: Handle) -> Handle { crate::render_host_native::child_device(list) }
+    fn queue_device(queue: Handle) -> Handle { crate::render_host_native::child_device(queue) }
+    fn adapter(device: Handle, out: *mut Adapter) -> i32 {
+        crate::render_host_native::adapter(device, out)
+    }
+    fn foreground() -> u32 { crate::render_host_native::foreground() }
+    fn hide_cursor() -> i32 { crate::render_host_native::hide_cursor() }
+    fn queue_direct(queue: Handle) -> i32 { crate::render_host_native::queue_direct(queue) }
+    fn create_fence(device: Handle) -> Handle { crate::render_host_native::create_fence(device) }
+    fn fence_completed(fence: Handle) -> u64 { crate::render_host_native::fence_completed(fence) }
+    fn fence_wait(fence: Handle, value: u64, timeout: u32) -> i32 {
+        crate::render_host_native::fence_wait(fence, value, timeout)
+    }
+    fn queue_signal(queue: Handle, fence: Handle, value: u64) -> i32 {
+        crate::render_host_native::queue_signal(queue, fence, value)
+    }
+    fn sr12_create(setup: *const SrSetup, out: *mut Handle) -> i32 {
+        crate::sr12::create_for_host(setup, out.cast())
+    }
+    fn sr12_destroy(context: Handle) { crate::sr12::rsf_core_sr12_destroy(context.cast()) }
+    fn sr12_evaluate(context: Handle, commands: Handle, pass: *const Pass, slot: u32) -> i32 {
+        crate::sr12::rsf_core_sr12_evaluate(context.cast(), commands, pass, slot)
+    }
+    fn sr12_set_sharpening(context: Handle, options: *const Sharpening) -> i32 {
+        crate::sr12::rsf_core_sr12_set_sharpening(context.cast(), options)
+    }
+    fn sr12_present(context: Handle, chain: Handle, interval: u32, flags: u32, begin: u32) -> i32 {
+        crate::sr12::rsf_core_sr12_present(context.cast(), chain, interval, flags, begin)
+    }
+    fn sr12_capture(context: Handle, path: *const c_char, first_frame: u64, frames: u32) -> i32 {
+        crate::sr12::rsf_core_sr12_capture(context.cast(), path, first_frame, frames)
+    }
+    fn sr12_capture_flush(context: Handle, slot: u32) -> i32 {
+        crate::sr12::rsf_core_sr12_capture_flush(context.cast(), slot)
+    }
+    fn sr12_capture_scene(context: Handle, commands: Handle, pass: *const Pass, slot: u32) -> i32 {
+        crate::sr12::rsf_core_sr12_capture_scene(context.cast(), commands, pass, slot)
+    }
+    fn fg_install(setup: *const FgSetup) -> i32 { crate::fg12::rsf_core_fg12_install(setup) }
+    fn fg_options(options: *const FgOptions) { crate::fg12::rsf_core_fg12_options(options) }
+    fn fg_latency(event: *const LatencyEvent) -> i32 { crate::fg12::rsf_core_fg12_latency(event) }
+    fn fg_cpu(event: *const CpuEvent) { crate::fg12::rsf_core_fg12_cpu(event) }
+    fn fg_submitted(session: u64, source: u64) { crate::fg12::rsf_core_fg12_submitted(session, source) }
+    fn fg_hudless(commands: Handle, pass: *const Pass) {
+        crate::fg12::rsf_core_fg12_hudless(commands, pass)
+    }
+    fn fg_window(pass: *const Pass) { crate::fg12::rsf_core_fg12_window(pass) }
+    fn fg_status_try(output: *mut FgStatus) -> i32 { crate::fg12::rsf_core_fg12_status_try(output) }
+    fn fg_capture_outputs(directory: *const c_char) -> i32 {
+        crate::fg12::rsf_core_fg12_capture_outputs(directory)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -498,7 +548,7 @@ impl Host {
     fn adapter(&self, s: &State) -> Option<Adapter> {
         let device = s.device.as_ref()?;
         let mut adapter = Adapter::default();
-        (unsafe { (self.p.adapter)(device.as_ptr(), &mut adapter) } != 0).then_some(adapter)
+        (unsafe { self.p.adapter(device.as_ptr(), &mut adapter) } != 0).then_some(adapter)
     }
 
     fn resolve_backend(&self, s: &State) -> u32 {
@@ -525,7 +575,7 @@ impl Host {
     // Applies the saved settings at most once per second, or at once after a commit.
     fn poll(&self, s: &mut State) {
         let p = self.p;
-        let now = unsafe { (p.tick)() };
+        let now = unsafe { p.tick() };
         if now < s.poll_tick {
             return;
         }
@@ -534,7 +584,7 @@ impl Host {
         s.settings = values;
         s.sharpening = sharpening_of(&values, &sharpening_policy::defaults());
         if !s.context.is_null() {
-            let _ = unsafe { (p.sr12_set_sharpening)(s.context, &s.sharpening) };
+            let _ = unsafe { p.sr12_set_sharpening(s.context, &s.sharpening) };
         }
         s.enabled = values.sr_enabled != 0;
         s.requested_backend = values.sr_backend;
@@ -556,7 +606,7 @@ impl Host {
             frame_limit_us: values.frame_limit_us,
             debug: 0,
         };
-        unsafe { (p.fg_options)(&options) };
+        unsafe { p.fg_options(&options) };
         let mut desired = values.fg_backend;
         if desired == RSF_FG_BACKEND_AUTO && s.device.is_some() {
             let vendor = self.adapter(s).map_or(0, |adapter| adapter.vendor);
@@ -587,7 +637,7 @@ impl Host {
     }
 
     fn completed(&self, fence: &ComRef) -> Option<u64> {
-        let completed = unsafe { (self.p.fence_completed)(fence.as_ptr()) };
+        let completed = unsafe { self.p.fence_completed(fence.as_ptr()) };
         if completed == u64::MAX {
             self.poisoned.store(true, Ordering::Relaxed);
             None
@@ -609,7 +659,7 @@ impl Host {
         if completed >= value {
             return true;
         }
-        match unsafe { (self.p.fence_wait)(fence.as_ptr(), value, FENCE_TIMEOUT_MS) } {
+        match unsafe { self.p.fence_wait(fence.as_ptr(), value, FENCE_TIMEOUT_MS) } {
             0 => false,
             result if result > 0 => self.completed(fence).is_some_and(|done| done >= value),
             _ => {
@@ -641,7 +691,7 @@ impl Host {
                 && completed >= slot.fence_value
             {
                 slot.capture_retired =
-                    unsafe { (self.p.sr12_capture_flush)(s.context, index as u32) == BACKEND_OK };
+                    unsafe { self.p.sr12_capture_flush(s.context, index as u32) == BACKEND_OK };
             }
         }
     }
@@ -717,16 +767,16 @@ impl Host {
         // Retire this SR feature's resources after GPU completion. Its registration remains
         // alive for native evaluation and for a later SR context on the same device.
         if !s.context.is_null() {
-            unsafe { (p.sr12_destroy)(s.context) };
+            unsafe { p.sr12_destroy(s.context) };
             s.context = null_mut();
         }
         let mut replacement = null_mut();
-        let result = unsafe { (p.sr12_create)(&setup, &mut replacement) };
+        let result = unsafe { p.sr12_create(&setup, &mut replacement) };
         if result != BACKEND_OK {
             return result;
         }
         s.context = replacement;
-        let _ = unsafe { (p.sr12_set_sharpening)(s.context, &s.sharpening) };
+        let _ = unsafe { p.sr12_set_sharpening(s.context, &s.sharpening) };
         s.capture_update = s.capture_enabled;
         s.key = key;
         s.reset = true;
@@ -760,11 +810,11 @@ impl Host {
             s.reset = true;
             return NOT_READY;
         }
-        let Some(owner) = (unsafe { ComRef::from_owned((p.list_device)(commands)) }) else {
+        let Some(owner) = (unsafe { ComRef::from_owned(p.list_device(commands)) }) else {
             return NOT_READY;
         };
         if s.device.is_none() {
-            let Some(fence) = (unsafe { ComRef::from_owned((p.create_fence)(owner.as_ptr())) })
+            let Some(fence) = (unsafe { ComRef::from_owned(p.create_fence(owner.as_ptr())) })
             else {
                 return NOT_READY;
             };
@@ -835,7 +885,7 @@ impl Host {
             native_frame: pass.native_frame,
         };
         self.observed_commands[index].store(commands, Ordering::Release);
-        let result = unsafe { (p.sr12_evaluate)(s.context, commands, &copied, index as u32) };
+        let result = unsafe { p.sr12_evaluate(s.context, commands, &copied, index as u32) };
         s.reset = result != BACKEND_OK;
         if result != s.last_result {
             self.log(&format!(
@@ -901,7 +951,7 @@ impl Host {
         }
         s.fence_value += 1;
         let value = s.fence_value;
-        if unsafe { (p.queue_signal)(native_queue, fence, value) } == 0 {
+        if unsafe { p.queue_signal(native_queue, fence, value) } == 0 {
             self.poisoned.store(true, Ordering::Relaxed);
             self.log("Native renderer SR queue fence signal failed; GPU resources remain pinned.");
             return;
@@ -917,7 +967,7 @@ impl Host {
             let scene = &mut s.scenes[(frame % SCENES as u64) as usize];
             if scene.frame == frame && scene.recording == recording {
                 scene.submitted = true;
-                unsafe { (p.fg_submitted)(scene.session, scene.source) };
+                unsafe { p.fg_submitted(scene.session, scene.source) };
             }
         }
     }
@@ -938,8 +988,10 @@ impl Host {
         }) else {
             return;
         };
-        let result =
-            unsafe { (self.p.sr12_capture_scene)(s.context, commands, pass, index as u32) };
+        let result = unsafe {
+            self.p
+                .sr12_capture_scene(s.context, commands, pass, index as u32)
+        };
         s.scenes[(pass.native_frame % SCENES as u64) as usize] = Scene {
             session: pass.session_id,
             frame: pass.native_frame,
@@ -950,7 +1002,7 @@ impl Host {
             captured: result == BACKEND_OK,
         };
         if pass.source_frame_id != 0 {
-            unsafe { (self.p.fg_hudless)(commands, pass) };
+            unsafe { self.p.fg_hudless(commands, pass) };
         }
     }
 
@@ -966,7 +1018,7 @@ impl Host {
             && scene.surface == pass.scene_surface as usize
             && scene.submitted;
         if matched && pass.source_frame_id != 0 && scene.source == pass.source_frame_id {
-            unsafe { (self.p.fg_window)(pass) };
+            unsafe { self.p.fg_window(pass) };
         }
         let report = s.scene_reports < 8;
         s.scene_reports += 1;
@@ -999,7 +1051,7 @@ impl Host {
             if !s.dlss_registration.is_null() {
                 (p.registration_present)(s.dlss_registration, swapchain, interval, flags, begin)
             } else if !s.context.is_null() {
-                (p.sr12_present)(s.context, swapchain, interval, flags, begin)
+                p.sr12_present(s.context, swapchain, interval, flags, begin)
             } else {
                 BACKEND_OK
             }
@@ -1051,7 +1103,7 @@ impl Host {
             requested_generated: values.generated_frames,
             effective_generated: fg.vendor.effective_generated_frames,
             max_generated: fg.vendor.max_generated_frames,
-            foreground: unsafe { (p.foreground)() },
+            foreground: unsafe { p.foreground() },
             latency_requested: values.latency,
             latency_effective: fg.vendor.effective_reflex,
             renderer_reason: s.renderer_reason,
@@ -1117,12 +1169,12 @@ impl Host {
 
     fn status_get(&self) -> Result<Status, i32> {
         let mut fg = Self::empty_fg();
-        if unsafe { (self.p.fg_status_try)(&mut fg) } == 0 && self.fg_installed() {
+        if unsafe { self.p.fg_status_try(&mut fg) } == 0 && self.fg_installed() {
             return Err(BUSY);
         }
         let mut state = self.try_lock().ok_or(BUSY)?;
         let values = state.settings;
-        let now = unsafe { (self.p.tick)() };
+        let now = unsafe { self.p.tick() };
         Ok(self.status(&mut state, &values, &fg, now))
     }
 
@@ -1170,7 +1222,10 @@ impl Host {
         } else {
             (c"".as_ptr(), 0)
         };
-        let result = unsafe { (self.p.sr12_capture)(state.context, path, first_frame, frames) };
+        let result = unsafe {
+            self.p
+                .sr12_capture(state.context, path, first_frame, frames)
+        };
         if result == BACKEND_OK {
             state.capture_update = false;
         }
@@ -1264,7 +1319,7 @@ impl Host {
                 self.log("Native renderer overlay probe: opening shared panel.");
                 let mut attempts = 0u32;
                 let count = loop {
-                    let count = unsafe { (p.hide_cursor)() };
+                    let count = unsafe { p.hide_cursor() };
                     attempts += 1;
                     if count < 0 || attempts >= 512 {
                         break count;
@@ -1320,16 +1375,16 @@ impl Host {
         let Some(queue) = queue else {
             return;
         };
-        let Some(device) = (unsafe { ComRef::from_owned((p.queue_device)(queue.as_ptr())) }) else {
+        let Some(device) = (unsafe { ComRef::from_owned(p.queue_device(queue.as_ptr())) }) else {
             return;
         };
         let mut fresh = Self::empty_fg();
-        let fg_fresh = unsafe { (p.fg_status_try)(&mut fresh) } != 0;
+        let fg_fresh = unsafe { p.fg_status_try(&mut fresh) } != 0;
         // One published snapshot serves both status and panel settings.
         if let Some(mut state) = self.try_lock() {
             let values = state.settings;
             if fg_fresh || !self.fg_installed() {
-                let now = unsafe { (p.tick)() };
+                let now = unsafe { p.tick() };
                 STATUS.set(self.status(&mut state, &values, &fresh, now));
             }
             PREFS.set(Some(values));
@@ -1570,7 +1625,7 @@ unsafe extern "C" fn render_pass(
 }
 
 unsafe extern "C" fn cpu_event(user: *mut c_void, event: *const CpuEvent) {
-    unsafe { (host_from(user).p.fg_cpu)(event) };
+    unsafe { host_from(user).p.fg_cpu(event) };
 }
 
 unsafe extern "C" fn process_latency(user: *mut c_void, event: *const LatencyEvent) -> i32 {
@@ -1586,7 +1641,7 @@ unsafe extern "C" fn process_latency(user: *mut c_void, event: *const LatencyEve
         host.poll(&mut s);
     }
     let result = if host.fg_installed() {
-        unsafe { (host.p.fg_latency)(event) }
+        unsafe { host.p.fg_latency(event) }
     } else {
         BACKEND_NOT_READY
     };
@@ -1613,7 +1668,7 @@ unsafe extern "C" fn render_feedback(user: *mut c_void, event: *const Feedback) 
     let event = unsafe { &*event };
     let mut s = host.lock();
     s.renderer_reason = event.reason;
-    s.feedback_tick = unsafe { (host.p.tick)() };
+    s.feedback_tick = unsafe { host.p.tick() };
     if event.native_frame != 0 {
         s.native_frame = event.native_frame;
     }
@@ -1744,7 +1799,7 @@ fn install(host: &Host, setup: &Setup) -> i32 {
         fg.log = Some(backend_log);
         fg.user = host.user();
         fg.accept_window = Some(accept_window);
-        let installed = unsafe { (p.fg_install)(&fg) } == BACKEND_OK;
+        let installed = unsafe { p.fg_install(&fg) } == BACKEND_OK;
         host.fg_installed.store(installed, Ordering::Release);
     } else {
         let observed = ObserverSetup {
@@ -1765,7 +1820,7 @@ fn install(host: &Host, setup: &Setup) -> i32 {
     {
         let state = host.lock();
         if host.fg_installed() && state.capture_enabled {
-            let _ = unsafe { (p.fg_capture_outputs)(state.capture_directory.as_ptr()) };
+            let _ = unsafe { p.fg_capture_outputs(state.capture_directory.as_ptr()) };
         }
     }
     host.log(if host.engine_streamline {
@@ -1880,7 +1935,7 @@ impl Host {
             return BUSY;
         };
         if self.fg_installed() {
-            let result = unsafe { (self.p.fg_capture_outputs)(directory.as_ptr()) };
+            let result = unsafe { self.p.fg_capture_outputs(directory.as_ptr()) };
             if result != OK {
                 return result;
             }
@@ -1900,6 +1955,7 @@ unsafe extern "C" {
 #[cfg(not(test))]
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_render_host_create(setup: *const Setup, services: *mut Services) -> i32 {
+    crate::fg12::bind_native_platform();
     let platform = unsafe { rsf_render_host_platform() };
     assert_eq!(platform.struct_size as usize, size_of::<Platform>());
     unsafe { create(setup, services, platform) }
@@ -1922,7 +1978,7 @@ unsafe extern "C" fn rsf_render_host_graphics(user: *mut c_void, queue: Handle) 
     let Some(host) = published(user) else {
         return INVALID;
     };
-    if !host.engine_streamline || queue.is_null() || unsafe { (host.p.queue_direct)(queue) } == 0 {
+    if !host.engine_streamline || queue.is_null() || unsafe { host.p.queue_direct(queue) } == 0 {
         return INVALID;
     }
     host.lock().overlay_queue = retain(queue);

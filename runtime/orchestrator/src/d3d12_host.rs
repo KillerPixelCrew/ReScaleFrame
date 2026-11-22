@@ -201,7 +201,7 @@ pub(super) unsafe extern "C" fn rsf_core_d3d12_create_uav_texture(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_d3d12_wait_native_fence(
+pub(super) unsafe extern "C" fn rsf_core_d3d12_wait_native_fence(
     fence: Raw,
     value: u64,
     event: Raw,

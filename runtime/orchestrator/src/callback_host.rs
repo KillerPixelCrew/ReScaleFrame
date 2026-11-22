@@ -5,8 +5,8 @@
 //! plugin, probe, saved SR choice and engine identity. Rust owns admission, the refusal codes,
 //! the plugin lifecycle order, host state, renderer configuration, scene and submission
 //! matching, SR context lifetime, callback recording slots, settings and overlay control.
-//! callback_render_host_platform.cpp supplies one call per D3D12, DXGI, SR12, FG12, presentation
-//! bridge, overlay, input dump or plugin session operation and keeps the two exported entries.
+//! callback_render_host_platform.cpp supplies one call per presentation
+//! bridge, overlay, input dump or plugin session operation.
 //! Settings keys belong to settings_store.rs, SR vendor selection to rsf_gpu_select_sr_backend.
 //! The adapter's only policy input is `set_engine_spatial`, which learns whether the engine
 //! upscales spatially itself, never the vendor.
@@ -22,6 +22,7 @@ use crate::render_abi::{
     RSF_DLSS_ABI_VERSION, rsf_native_fg_options as FgOptions, rsf_native_fg_status as FgStatus,
     rsf_sharpening_options as Sharpening,
 };
+use crate::render_host_methods::{Adapter, ResourceDesc};
 use crate::settings_store::{
     rsf_settings_store_read_layout, rsf_settings_store_write_layout,
     rsf_settings_store_write_sharpening, write_dlss_preset,
@@ -75,48 +76,47 @@ const SECTION: PCWSTR = w!("Rendering");
 const LOG_ACCESS: u32 = 4;
 const LOG_SHARE: u32 = 3;
 
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub(crate) struct Adapter {
-    vendor: u32,
-    device: u32,
-    software: u32,
-}
-
-/// The fields of a D3D12_RESOURCE_DESC the first refusal reports.
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub(crate) struct ResourceDesc {
-    width: u64,
-    height: u32,
-    format: u32,
-    samples: u32,
-}
-
 // Field order matches `Platform` in callback_render_host_platform.cpp. Returned COM interfaces
 // carry one reference for the caller; arguments are borrowed for the call. The plugin session and
 // FG choice entries are the public ones, passed here so contract tests can substitute them.
 #[repr(C)]
 pub(crate) struct Platform {
     struct_size: u32,
+    #[cfg(test)]
     tick: unsafe extern "C" fn() -> u64,
+    #[cfg(test)]
     list_device: unsafe extern "C" fn(Handle) -> Handle,
+    #[cfg(test)]
     queue_device: unsafe extern "C" fn(Handle) -> Handle,
+    #[cfg(test)]
     adapter: unsafe extern "C" fn(Handle, *mut Adapter) -> i32,
+    #[cfg(test)]
     last_present_count: unsafe extern "C" fn(Handle, *mut u32) -> i32,
+    #[cfg(test)]
     resource_desc: unsafe extern "C" fn(Handle, *mut ResourceDesc),
     depth_domains: unsafe extern "C" fn(*const Pass) -> u32,
     dlss_preset_valid: unsafe extern "C" fn(u32) -> u32,
+    #[cfg(test)]
     sr12_create: unsafe extern "C" fn(*const SrSetup, *mut Handle) -> i32,
+    #[cfg(test)]
     sr12_plan: unsafe extern "C" fn(Handle, *mut u32, *mut u32) -> i32,
+    #[cfg(test)]
     sr12_destroy: unsafe extern "C" fn(Handle),
+    #[cfg(test)]
     sr12_evaluate: unsafe extern "C" fn(Handle, Handle, *const Pass, u32) -> i32,
+    #[cfg(test)]
     sr12_set_sharpening: unsafe extern "C" fn(Handle, *const Sharpening) -> i32,
+    #[cfg(test)]
     fg_cpu: unsafe extern "C" fn(*const CpuEvent),
+    #[cfg(test)]
     fg_submitted: unsafe extern "C" fn(u64, u64),
+    #[cfg(test)]
     fg_hudless: unsafe extern "C" fn(Handle, *const Pass),
+    #[cfg(test)]
     fg_window: unsafe extern "C" fn(*const Pass),
+    #[cfg(test)]
     fg_status: unsafe extern "C" fn(*mut FgStatus) -> i32,
+    #[cfg(test)]
     fg_options: unsafe extern "C" fn(*const FgOptions),
     fg_choice_save: unsafe extern "C" fn(u32) -> i32,
     present_host: unsafe extern "C" fn() -> Handle,
@@ -139,6 +139,42 @@ pub(crate) struct Platform {
     session_start: unsafe extern "C" fn(Handle) -> i32,
     session_quiesce: unsafe extern "C" fn(Handle) -> i32,
     session_stop: unsafe extern "C" fn(Handle) -> i32,
+}
+
+crate::render_host_methods::impl_host_methods! {
+    fn tick() -> u64 { crate::render_host_native::tick() }
+    fn list_device(list: Handle) -> Handle { crate::render_host_native::child_device(list) }
+    fn queue_device(queue: Handle) -> Handle { crate::render_host_native::child_device(queue) }
+    fn adapter(device: Handle, out: *mut Adapter) -> i32 {
+        crate::render_host_native::adapter(device, out)
+    }
+    fn last_present_count(chain: Handle, out: *mut u32) -> i32 {
+        crate::render_host_native::last_present_count(chain, out)
+    }
+    fn resource_desc(resource: Handle, out: *mut ResourceDesc) {
+        crate::render_host_native::resource_desc(resource, out)
+    }
+    fn sr12_create(setup: *const SrSetup, out: *mut Handle) -> i32 {
+        crate::sr12::create_for_host(setup, out.cast())
+    }
+    fn sr12_plan(context: Handle, width: *mut u32, height: *mut u32) -> i32 {
+        crate::sr12::rsf_core_sr12_plan(context.cast(), width, height)
+    }
+    fn sr12_destroy(context: Handle) { crate::sr12::rsf_core_sr12_destroy(context.cast()) }
+    fn sr12_evaluate(context: Handle, commands: Handle, pass: *const Pass, slot: u32) -> i32 {
+        crate::sr12::rsf_core_sr12_evaluate(context.cast(), commands, pass, slot)
+    }
+    fn sr12_set_sharpening(context: Handle, options: *const Sharpening) -> i32 {
+        crate::sr12::rsf_core_sr12_set_sharpening(context.cast(), options)
+    }
+    fn fg_options(options: *const FgOptions) { crate::fg12::rsf_core_fg12_options(options) }
+    fn fg_cpu(event: *const CpuEvent) { crate::fg12::rsf_core_fg12_cpu(event) }
+    fn fg_submitted(session: u64, source: u64) { crate::fg12::rsf_core_fg12_submitted(session, source) }
+    fn fg_hudless(commands: Handle, pass: *const Pass) {
+        crate::fg12::rsf_core_fg12_hudless(commands, pass)
+    }
+    fn fg_window(pass: *const Pass) { crate::fg12::rsf_core_fg12_window(pass) }
+    fn fg_status(output: *mut FgStatus) -> i32 { crate::fg12::rsf_core_fg12_status(output) }
 }
 
 struct State {
@@ -320,7 +356,7 @@ impl Host {
 
     fn destroy(&self, context: &mut Handle) {
         if !context.is_null() {
-            unsafe { (self.p.sr12_destroy)(*context) };
+            unsafe { self.p.sr12_destroy(*context) };
             *context = null_mut();
         }
     }
@@ -347,12 +383,12 @@ impl Host {
                     | RSF_GAME_RENDER_FINAL_SCENE
                     | RSF_GAME_RENDER_SUBMISSION
             ) {
-                unsafe { (p.fg_submitted)(pass.session_id, pass.source_frame_id) };
+                unsafe { p.fg_submitted(pass.session_id, pass.source_frame_id) };
             }
             return;
         }
         match pass.role {
-            RSF_GAME_RENDER_FINAL_SCENE => unsafe { (p.fg_hudless)(commands, pass) },
+            RSF_GAME_RENDER_FINAL_SCENE => unsafe { p.fg_hudless(commands, pass) },
             RSF_GAME_RENDER_WINDOW => self.window(commands, pass),
             RSF_GAME_RENDER_SR | RSF_GAME_RENDER_FG_INPUTS => {
                 let mut state = self.lock();
@@ -367,8 +403,8 @@ impl Host {
         let p = self.p;
         let mut guard = self.lock();
         let s = &mut *guard;
-        unsafe { (p.fg_window)(pass) };
-        let Some(device) = (unsafe { ComRef::from_owned((p.queue_device)(queue)) }) else {
+        unsafe { p.fg_window(pass) };
+        let Some(device) = (unsafe { ComRef::from_owned(p.queue_device(queue)) }) else {
             return;
         };
         if s.save_pending {
@@ -443,7 +479,7 @@ impl Host {
         s.overlay_frames += 1;
         stats.frames_presented = s.overlay_frames as u32;
         let mut presented = 0u32;
-        if unsafe { (p.last_present_count)(pass.swapchain, &mut presented) } != 0 {
+        if unsafe { p.last_present_count(pass.swapchain, &mut presented) } != 0 {
             stats.application_presented_frames = u64::from(presented);
         }
         let (mut now, mut frequency) = (0i64, 0i64);
@@ -457,7 +493,7 @@ impl Host {
             struct_size: size_of::<FgStatus>() as u32,
             ..unsafe { std::mem::zeroed() }
         };
-        let have_fg = unsafe { (p.fg_status)(&mut fg) } != 0;
+        let have_fg = unsafe { p.fg_status(&mut fg) } != 0;
         if have_fg && !s.loaded_frame_limit {
             s.loaded_frame_limit = true;
             let limit = unsafe {
@@ -470,7 +506,7 @@ impl Host {
             };
             if limit != fg.requested.frame_limit_us {
                 fg.requested.frame_limit_us = limit;
-                unsafe { (p.fg_options)(&fg.requested) };
+                unsafe { p.fg_options(&fg.requested) };
             }
         }
         unsafe { (p.overlay_fill_fg)(&mut stats, if have_fg { &fg } else { null() }) };
@@ -544,7 +580,7 @@ impl Host {
                     self.log("Could not save the frame limit; keeping the active limit.");
                 }
             }
-            unsafe { (p.fg_options)(fg) };
+            unsafe { p.fg_options(fg) };
         }
         if intent.performance_hud_changed != 0 {
             s.show_performance = intent.performance_hud != 0;
@@ -570,7 +606,7 @@ impl Host {
             {
                 s.sharpening = requested;
                 if !s.sr.is_null() {
-                    let _ = unsafe { (p.sr12_set_sharpening)(s.sr, &s.sharpening) };
+                    let _ = unsafe { p.sr12_set_sharpening(s.sr, &s.sharpening) };
                 }
             } else {
                 self.log("Could not save sharpening settings; previous values retained.");
@@ -683,8 +719,7 @@ impl Host {
                 || s.input_height != camera.render_height
             {
                 self.destroy(&mut s.inputs);
-                let Some(device) = (unsafe { ComRef::from_owned((p.list_device)(commands)) })
-                else {
+                let Some(device) = (unsafe { ComRef::from_owned(p.list_device(commands)) }) else {
                     return;
                 };
                 let setup = SrSetup {
@@ -699,14 +734,14 @@ impl Host {
                     user: self.user(),
                     ..SrSetup::default()
                 };
-                if unsafe { (p.sr12_create)(&setup, &mut s.inputs) } != BACKEND_OK {
+                if unsafe { p.sr12_create(&setup, &mut s.inputs) } != BACKEND_OK {
                     return;
                 }
                 s.input_width = setup.render_width;
                 s.input_height = setup.render_height;
             }
             if let Some(slot) = s.command_lists.bind(commands) {
-                let _ = unsafe { (p.sr12_evaluate)(s.inputs, commands, pass, slot) };
+                let _ = unsafe { p.sr12_evaluate(s.inputs, commands, pass, slot) };
             }
             return;
         }
@@ -716,13 +751,13 @@ impl Host {
         let Some(slot) = s.command_lists.bind(commands) else {
             return;
         };
-        let now = unsafe { (p.tick)() };
+        let now = unsafe { p.tick() };
         if now >= s.sharpening_poll {
             s.sharpening_poll = now.saturating_add(SHARPENING_POLL_MS);
             s.sharpening = self.read_sharpening();
-            let _ = unsafe { (p.sr12_set_sharpening)(s.sr, &s.sharpening) };
+            let _ = unsafe { p.sr12_set_sharpening(s.sr, &s.sharpening) };
         }
-        let result = unsafe { (p.sr12_evaluate)(s.sr, commands, pass, slot) };
+        let result = unsafe { p.sr12_evaluate(s.sr, commands, pass, slot) };
         if result != BACKEND_OK && s.refused == 0 {
             let resources = [pass.color_input, pass.depth, pass.motion, pass.color_output];
             for (index, &resource) in resources.iter().enumerate() {
@@ -730,7 +765,7 @@ impl Host {
                     continue;
                 }
                 let mut desc = ResourceDesc::default();
-                unsafe { (p.resource_desc)(resource, &mut desc) };
+                unsafe { p.resource_desc(resource, &mut desc) };
                 self.log(&format!(
                     "SR input {index}: {}x{} format={} samples={}; camera={}x{} plan={}x{}",
                     desc.width,
@@ -784,8 +819,8 @@ impl Host {
         };
         if s.automatic {
             let mut adapter = Adapter::default();
-            let identified = unsafe { ComRef::from_owned((p.list_device)(commands)) }
-                .is_some_and(|device| unsafe { (p.adapter)(device.as_ptr(), &mut adapter) } != 0);
+            let identified = unsafe { ComRef::from_owned(p.list_device(commands)) }
+                .is_some_and(|device| unsafe { p.adapter(device.as_ptr(), &mut adapter) } != 0);
             if !identified {
                 s.last_result = BACKEND_NOT_SUPPORTED;
                 self.log("Automatic SR refused: owning D3D12 adapter could not be identified.");
@@ -828,7 +863,7 @@ impl Host {
             self.log("Engine spatial upscaling plan accepted.");
             return true;
         }
-        let Some(device) = (unsafe { ComRef::from_owned((p.list_device)(commands)) }) else {
+        let Some(device) = (unsafe { ComRef::from_owned(p.list_device(commands)) }) else {
             return false;
         };
         let setup = SrSetup {
@@ -863,18 +898,18 @@ impl Host {
             },
             ..SrSetup::default()
         };
-        let created = unsafe { (p.sr12_create)(&setup, &mut s.sr) };
+        let created = unsafe { p.sr12_create(&setup, &mut s.sr) };
         drop(device);
         s.last_result = created;
         if created == BACKEND_OK {
-            let now = unsafe { (p.tick)() };
+            let now = unsafe { p.tick() };
             if now >= s.sharpening_poll {
                 s.sharpening = self.read_sharpening();
                 s.sharpening_poll = now.saturating_add(SHARPENING_POLL_MS);
             }
-            let _ = unsafe { (p.sr12_set_sharpening)(s.sr, &s.sharpening) };
+            let _ = unsafe { p.sr12_set_sharpening(s.sr, &s.sharpening) };
             let _ =
-                unsafe { (p.sr12_plan)(s.sr, &mut s.plan.render_width, &mut s.plan.render_height) };
+                unsafe { p.sr12_plan(s.sr, &mut s.plan.render_width, &mut s.plan.render_height) };
             s.plan.enabled = 1;
         }
         self.log(&format!(
@@ -918,7 +953,7 @@ unsafe extern "C" fn render(owner: *mut c_void, commands: Handle, pass: *const P
 }
 
 unsafe extern "C" fn cpu_event(owner: *mut c_void, event: *const CpuEvent) {
-    unsafe { (host_from(owner).p.fg_cpu)(event) };
+    unsafe { host_from(owner).p.fg_cpu(event) };
 }
 
 // Admission and host construction, before any plugin is loaded. Err is the public refusal code:
@@ -1071,7 +1106,7 @@ unsafe fn start(setup: *const Setup, p: &'static Platform) -> u32 {
         services: Services {
             struct_size: size_of::<Services>() as u32,
             abi_version: RSF_GAME_ABI_VERSION,
-            session_id: unsafe { (p.tick)() }.wrapping_add(1),
+            session_id: unsafe { p.tick() }.wrapping_add(1),
             log: Some(log),
             render_pass: Some(render),
             render_config: Some(configuration),
@@ -1136,7 +1171,10 @@ unsafe extern "C" {
 #[cfg(not(test))]
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_callback_host_start(setup: *const Setup) -> u32 {
-    unsafe { start(setup, rsf_callback_host_platform()) }
+    crate::fg12::bind_native_platform();
+    let platform = unsafe { rsf_callback_host_platform() };
+    assert_eq!(platform.struct_size as usize, size_of::<Platform>());
+    unsafe { start(setup, platform) }
 }
 
 #[unsafe(no_mangle)]

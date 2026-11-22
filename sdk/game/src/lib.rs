@@ -19,6 +19,7 @@ pub mod presentation_result;
 pub mod profile_text;
 pub mod recording_slots;
 mod render_config;
+pub mod render_host_abi;
 mod render_pass;
 pub mod sampling;
 pub mod session;

@@ -32,6 +32,15 @@ use std::sync::OnceLock;
 
 static PLATFORM: OnceLock<&'static rsf_fg12_calls> = OnceLock::new();
 
+#[cfg(not(test))]
+pub(super) fn bind_native_platform() {
+    unsafe extern "C" {
+        fn rsf_fg12_platform_bind();
+    }
+    // The native binder publishes the same static platform used by the exported FG12 API.
+    unsafe { rsf_fg12_platform_bind() };
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_fg12_bind_platform(platform: &'static rsf_fg12_calls) {
     assert_eq!(platform.struct_size as usize, size_of::<rsf_fg12_calls>());
@@ -415,7 +424,7 @@ unsafe fn install(request: *const rsf_fg12_setup, explicit: bool) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fg12_install(request: *const rsf_fg12_setup) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_fg12_install(request: *const rsf_fg12_setup) -> i32 {
     unsafe { install(request, false) }
 }
 
@@ -470,14 +479,14 @@ unsafe extern "C" fn cpu_fact(_: *mut c_void, event: *const rsf_game_cpu_event) 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fg12_cpu(event: *const rsf_game_cpu_event) {
+pub(super) unsafe extern "C" fn rsf_core_fg12_cpu(event: *const rsf_game_cpu_event) {
     if unsafe { native!(has_owner()) } != 0 {
         unsafe { native!(cpu_dispatch(event, Some(cpu_fact), null_mut())) };
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fg12_latency(event: *const rsf_game_latency_event) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_fg12_latency(event: *const rsf_game_latency_event) -> i32 {
     let Some(event) = (unsafe { checked(event) }).filter(|event| event.session_id != 0) else {
         return INVALID;
     };
@@ -649,7 +658,10 @@ pub(crate) unsafe fn handoff_inputs(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fg12_hudless(list: *mut c_void, pass: *const rsf_game_render_pass) {
+pub(super) unsafe extern "C" fn rsf_core_fg12_hudless(
+    list: *mut c_void,
+    pass: *const rsf_game_render_pass,
+) {
     let Some(pass) = (unsafe { checked(pass) }) else {
         return;
     };
@@ -714,7 +726,7 @@ unsafe extern "C" fn rsf_core_fg12_hudless(list: *mut c_void, pass: *const rsf_g
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fg12_window(pass: *const rsf_game_render_pass) {
+pub(super) unsafe extern "C" fn rsf_core_fg12_window(pass: *const rsf_game_render_pass) {
     let Some(pass) = (unsafe { checked(pass) }) else {
         return;
     };
@@ -732,7 +744,7 @@ unsafe extern "C" fn rsf_core_fg12_window(pass: *const rsf_game_render_pass) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_fg12_submitted(session: u64, id: u64) {
+pub(super) unsafe extern "C" fn rsf_core_fg12_submitted(session: u64, id: u64) {
     if id == 0 {
         return;
     }
@@ -1254,17 +1266,17 @@ unsafe fn status_snapshot(output: *mut rsf_native_fg_status, wait: bool) -> i32 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fg12_status(output: *mut rsf_native_fg_status) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_fg12_status(output: *mut rsf_native_fg_status) -> i32 {
     unsafe { status_snapshot(output, true) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fg12_status_try(output: *mut rsf_native_fg_status) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_fg12_status_try(output: *mut rsf_native_fg_status) -> i32 {
     unsafe { status_snapshot(output, false) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fg12_options(request: *const rsf_native_fg_options) {
+pub(super) unsafe extern "C" fn rsf_core_fg12_options(request: *const rsf_native_fg_options) {
     let Some(request) = (unsafe { checked(request) }) else {
         return;
     };
@@ -1276,7 +1288,7 @@ unsafe extern "C" fn rsf_core_fg12_options(request: *const rsf_native_fg_options
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fg12_capture_outputs(directory: *const c_char) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_fg12_capture_outputs(directory: *const c_char) -> i32 {
     if directory.is_null() {
         return INVALID;
     }
