@@ -4,8 +4,7 @@
 use super::{EngineRecord, NativeRecordCounts, ROOT_NAMES, RootRecord, observe_velocity, records};
 use crate::motion_capture_observations::PublicationObservations;
 use crate::motion_capture_session::{
-    CaptureInterval, capture_prefix, is_current, rsf_ac7_capture_fail,
-    is_sampled, say, say_path,
+    CaptureInterval, capture_prefix, is_current, is_sampled, rsf_ac7_capture_fail, say, say_path,
 };
 use std::ffi::CStr;
 use std::fmt::{self, Write as _};
@@ -426,10 +425,7 @@ impl<'a> Publisher<'a> {
     }
 }
 
-pub(crate) fn publish_checkpoint(
-    write: WriteFile,
-    capture: CaptureInterval,
-) {
+pub(crate) fn publish_checkpoint(write: WriteFile, capture: CaptureInterval) {
     if !is_sampled(capture.interval) {
         return;
     }
@@ -465,11 +461,7 @@ pub(crate) fn publish_checkpoint(
     }
 }
 
-pub(crate) fn publish_finish(
-    capture: CaptureInterval,
-    write: WriteFile,
-    stats: fn() -> Stats,
-) {
+pub(crate) fn publish_finish(capture: CaptureInterval, write: WriteFile, stats: fn() -> Stats) {
     let Some(prefix) = capture_prefix(capture.session) else {
         rsf_ac7_capture_fail(capture);
         return;

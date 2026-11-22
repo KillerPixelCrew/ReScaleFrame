@@ -222,10 +222,7 @@ fn remove_roots(effects: &RootHookEffects) -> bool {
     removed
 }
 
-fn install_engine(
-    base: *mut u8,
-    effects: &RootHookEffects,
-) -> RootInstall {
+fn install_engine(base: *mut u8, effects: &RootHookEffects) -> RootInstall {
     let mut engine = lock(&ENGINE);
     if let Some(status) = engine.status() {
         return status;

@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 use super::observations;
-use crate::motion_capture_session::{
-    CaptureInterval, capture_enabled, rsf_ac7_capture_fail,
-};
+use crate::motion_capture_session::{CaptureInterval, capture_enabled, rsf_ac7_capture_fail};
 use crate::velocity_container::borrowed;
 use std::collections::HashMap;
 use std::ffi::c_void;

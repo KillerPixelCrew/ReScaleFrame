@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::{Geometry, GeometryStream, GeometryVsBuffer, record_geometry};
-use crate::motion_capture_observations::geometry::{
-    geometry_read, plan_geometry,
-};
+use crate::motion_capture_observations::geometry::{geometry_read, plan_geometry};
 use crate::motion_capture_records::{
     draws::gpu::{queued_draw, tick},
     geometry_scope, store_blob,

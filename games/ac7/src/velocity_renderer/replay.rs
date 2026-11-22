@@ -104,7 +104,8 @@ pub(crate) unsafe extern "C" fn rsf_ac7_velocity_commit(
 ) -> i32 {
     let _lease = lock(&REPLAY);
     // The queued renderer lends the pass; only its leading size is read before admission.
-    if pass.is_null() || unsafe { (*pass).struct_size as usize } < size_of::<rsf_game_render_pass>() {
+    if pass.is_null() || unsafe { (*pass).struct_size as usize } < size_of::<rsf_game_render_pass>()
+    {
         return 0;
     }
     let (Some(renderer), Some(context)) = (

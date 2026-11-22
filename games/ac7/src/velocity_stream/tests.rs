@@ -219,7 +219,8 @@ fn parameters_pack_viewport_jitter_cutoff_and_history() {
 #[test]
 fn parameters_need_one_viewport_of_positive_extent() {
     let scope = scope();
-    let call = |viewports, rect: [f32; 4]| draw_parameters(&scope, viewports, rect, true, 0).is_some();
+    let call =
+        |viewports, rect: [f32; 4]| draw_parameters(&scope, viewports, rect, true, 0).is_some();
     assert!(call(1, [0.0, 0.0, 8.0, 8.0]));
     assert!(!call(0, [0.0, 0.0, 8.0, 8.0]));
     assert!(!call(2, [0.0, 0.0, 8.0, 8.0]));

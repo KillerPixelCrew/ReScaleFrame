@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: MIT
 use super::{Draw, DrawInput, record_draw};
 use crate::motion_capture_observations::{
-    colour::{
-        LightingDraw, is_cloud_composite, take_lighting_after,
-    },
+    colour::{LightingDraw, is_cloud_composite, take_lighting_after},
     shader_facts,
 };
 use crate::motion_capture_records::{
-    draws::{BoundView, DrawTarget, QueuedDraw, gpu::*, can_record_draw},
+    draws::{BoundView, DrawTarget, QueuedDraw, can_record_draw, gpu::*},
     root_scope,
 };
 use crate::motion_capture_session::{

@@ -236,10 +236,7 @@ fn write_dispatch(out: &mut Bytes, interval: u32, d: &Dispatch) -> fmt::Result {
     out.write_char('}')
 }
 
-fn record_dispatch(
-    capture: CaptureInterval,
-    dispatch: &Dispatch,
-) -> bool {
+fn record_dispatch(capture: CaptureInterval, dispatch: &Dispatch) -> bool {
     let mut row = Bytes::default();
     write_dispatch(&mut row, capture.interval, dispatch).is_ok()
         && commit(capture, row) != Commit::Failed

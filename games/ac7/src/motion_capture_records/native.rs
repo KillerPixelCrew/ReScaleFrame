@@ -4,9 +4,7 @@
 
 use super::*;
 use crate::motion_capture_session::native::checkpoint_native;
-use crate::motion_capture_session::{
-    rsf_ac7_capture_fail, rsf_ac7_capture_sample, is_sampled,
-};
+use crate::motion_capture_session::{is_sampled, rsf_ac7_capture_fail, rsf_ac7_capture_sample};
 use crate::sys::rsf_ac7_read_memory;
 use std::ptr::from_mut;
 use windows::Win32::System::Performance::QueryPerformanceCounter;

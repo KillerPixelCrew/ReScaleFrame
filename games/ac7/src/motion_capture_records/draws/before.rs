@@ -127,11 +127,7 @@ fn write_before(
     out.write_char('}')
 }
 
-fn record_before_draw(
-    capture: CaptureInterval,
-    plan: &BeforeDrawPlan,
-    draw: &BeforeDraw,
-) -> bool {
+fn record_before_draw(capture: CaptureInterval, plan: &BeforeDrawPlan, draw: &BeforeDraw) -> bool {
     let mut row = Bytes::default();
     if write_before(&mut row, capture.interval, plan, draw).is_err() {
         return false;

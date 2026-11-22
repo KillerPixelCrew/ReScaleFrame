@@ -8,9 +8,7 @@ use crate::motion_capture_observations::colour::{
 };
 use crate::motion_capture_observations::shader_facts;
 use crate::motion_capture_records::root_hooks::current_command_address;
-use crate::motion_capture_records::{
-    queued_scope, root_scope, store_blob,
-};
+use crate::motion_capture_records::{queued_scope, root_scope, store_blob};
 use crate::motion_capture_session::{
     CaptureInterval, rsf_ac7_capture_fail, rsf_ac7_capture_sample,
 };

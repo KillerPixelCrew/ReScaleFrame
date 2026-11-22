@@ -22,7 +22,6 @@ pub(super) struct GeometryReads {
     particle_candidates: [HashSet<(u32, usize)>; 3],
 }
 
-
 /// An admitted draw's layout, bucket and the slots whose buffers it may read.
 pub(crate) struct GeometryPlan {
     pub(crate) layout: LayoutSnapshot,
@@ -126,11 +125,7 @@ pub(crate) fn plan_geometry(
     }))
 }
 
-pub(crate) fn geometry_read(
-    capture: CaptureInterval,
-    bucket: u32,
-    reserve: bool,
-) -> bool {
+pub(crate) fn geometry_read(capture: CaptureInterval, bucket: u32, reserve: bool) -> bool {
     let mut observations = observations();
     let geometry = &mut observations.geometry;
     if geometry.sample != Some(capture) || CaptureInterval::load() != capture {

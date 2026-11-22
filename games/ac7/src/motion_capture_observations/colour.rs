@@ -142,18 +142,12 @@ fn begin_lighting_pair(capture: CaptureInterval) -> bool {
     true
 }
 
-pub(crate) fn take_lighting_after(
-    capture: CaptureInterval,
-    draw: &LightingDraw,
-) -> bool {
+pub(crate) fn take_lighting_after(capture: CaptureInterval, draw: &LightingDraw) -> bool {
     let before = LIGHTING_BEFORE.take();
     capture.active() && CaptureInterval::load() == capture && before == Some((capture, *draw))
 }
 
-pub(crate) fn colour_snapshot_available(
-    capture: CaptureInterval,
-    lighting: bool,
-) -> bool {
+pub(crate) fn colour_snapshot_available(capture: CaptureInterval, lighting: bool) -> bool {
     observations().colour.available(capture, lighting)
 }
 

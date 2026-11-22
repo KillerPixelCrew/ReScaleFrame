@@ -2,8 +2,7 @@
 //! Platform effects for the F9 present-relative scheduler.
 
 use super::{
-    CaptureEffects, CaptureInterval, CaptureStamp, Stats, failure_count,
-    present, shutdown,
+    CaptureEffects, CaptureInterval, CaptureStamp, Stats, failure_count, present, shutdown,
 };
 use crate::motion_capture_records::artifacts::publish_checkpoint;
 use crate::motion_capture_records::draws::gpu::set_sample;

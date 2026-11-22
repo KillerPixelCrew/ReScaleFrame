@@ -154,11 +154,7 @@ fn write_geometry(
     out.write_char('}')
 }
 
-fn record_geometry(
-    capture: CaptureInterval,
-    plan: &GeometryPlan,
-    draw: &Geometry,
-) -> bool {
+fn record_geometry(capture: CaptureInterval, plan: &GeometryPlan, draw: &Geometry) -> bool {
     let mut row = Bytes::default();
     write_geometry(&mut row, capture.interval, plan, draw).is_ok()
         && commit(capture, row) != super::Commit::Failed

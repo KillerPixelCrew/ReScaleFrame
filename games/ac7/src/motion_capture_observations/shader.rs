@@ -32,7 +32,13 @@ fn disassemble_constants(bytes: &[u8]) -> u32 {
     let mut code = None;
     if let Some(disassemble) = disassembler()
         && unsafe {
-            disassemble(bytes.as_ptr().cast(), bytes.len(), 0, PCSTR::null(), &mut code)
+            disassemble(
+                bytes.as_ptr().cast(),
+                bytes.len(),
+                0,
+                PCSTR::null(),
+                &mut code,
+            )
         }
         .is_ok()
         && let Some(code) = code
@@ -54,9 +60,7 @@ unsafe extern "C" fn rsf_ac7_motion_capture_shader(
     size: u32,
 ) {
     // The observer carries live shader bytecode for this creation callback.
-    if !unsafe {
-        observe_shader(shader, stage, bytes, size, Some(disassemble_constants))
-    } {
+    if !unsafe { observe_shader(shader, stage, bytes, size, Some(disassemble_constants)) } {
         rsf_ac7_capture_fail(CaptureInterval::load());
     }
 }

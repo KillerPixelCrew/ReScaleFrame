@@ -454,11 +454,7 @@ fn associate_command(root: &mut RootRecord, command: u64, execute: u64) -> Comma
     }
 }
 
-pub(crate) fn queued_scope(
-    command: u64,
-    execute: u64,
-    observed: bool,
-) -> QueuedScope {
+pub(crate) fn queued_scope(command: u64, execute: u64, observed: bool) -> QueuedScope {
     let mut scope = QueuedScope::default();
     if observed
         && let Some(found) = records()

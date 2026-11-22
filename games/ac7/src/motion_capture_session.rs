@@ -153,7 +153,8 @@ pub(super) struct CaptureStamp {
 }
 
 // C passes the interval by value (motion_capture_trampolines.c).
-const _: () = assert!(size_of::<CaptureInterval>() == 8 && offset_of!(CaptureInterval, interval) == 4);
+const _: () =
+    assert!(size_of::<CaptureInterval>() == 8 && offset_of!(CaptureInterval, interval) == 4);
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_ac7_motion_capture_configure(
