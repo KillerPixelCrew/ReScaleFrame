@@ -35,6 +35,10 @@ D3D11 now retains its owned Streamline session and refuses further SDK
 calls if shutdown fails. The interposer signature check was restored
 in `14dcc896`, repairing the preprocessor branches for both build
 configurations and the enabled SDK callers.
+The public D3D11 pipeline stop reports its existing Streamline failure
+code on that refusal. It still releases pipeline resources and clears
+the caller's log sink. Startup rollback keeps its original error and
+logs any shutdown failure. These paths were checked in source.
 
 At `97c2738f`, bindgen 0.72.1 regenerated all 61 entries in the binding
 generator. The 10 Anomaly files matched directly. The AC7 sites and Unity

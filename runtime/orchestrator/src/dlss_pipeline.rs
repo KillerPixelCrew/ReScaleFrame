@@ -621,7 +621,7 @@ impl Pipeline {
 
     // Undo whatever is held, in the reverse of the order it was acquired. Safe at any point in a
     // partially completed start, which is what its failure paths rely on.
-    unsafe fn tear_down(&self, p: &P, owned: &mut Owned) {
+    unsafe fn tear_down(&self, p: &P, owned: &mut Owned) -> i32 {
         // Close surface admission before the release callback clears the published configuration.
         self.shared().running = false;
         unsafe {
@@ -655,14 +655,19 @@ impl Pipeline {
         self.release_layer(owned);
         unsafe { rsf_sr_legacy_destroy(owned.alternate) };
         owned.alternate = null_mut();
+        let mut shutdown = OK;
         if owned.streamline_loaded {
             self.say("shutting streamline down");
             // Frees the DLSS feature's own resources first. Streamline's shutdown does this too,
             // but the order matters when the caller's device is about to go.
-            unsafe {
+            shutdown = unsafe {
                 (p.release_resources)();
                 (p.release_viewport)(LAYER_VIEWPORT);
-                (p.shutdown)();
+                (p.shutdown)()
+            };
+            if shutdown != OK {
+                self.say(format!("streamline shutdown failed (result {shutdown})"));
+                shutdown = STREAMLINE_FAILED;
             }
             owned.streamline_loaded = false;
         }
@@ -684,6 +689,7 @@ impl Pipeline {
         shared.supported = false;
         shared.dump = None;
         shared.layer = Counters::default();
+        shutdown
     }
 
     pub(super) unsafe fn start(&self, p: &P, device: Raw, setup: *const Setup) -> i32 {
@@ -2158,8 +2164,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
             return NOT_RUNNING;
         }
         self.say("stopping: releasing pipeline resources");
-        unsafe { self.tear_down(p, o) };
-        OK
+        unsafe { self.tear_down(p, o) }
     }
 }
 
