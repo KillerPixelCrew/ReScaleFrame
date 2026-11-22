@@ -24,6 +24,7 @@ pub(crate) mod fsr_abi;
 
 use disabled::DISABLED_PROVIDER;
 mod fsr;
+pub(crate) use fsr::rsf_generation_fsr4_supported;
 mod xess;
 
 fn chain_description(

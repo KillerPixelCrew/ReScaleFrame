@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <rescaleframe/fsr_backend.h>
-#include <rescaleframe/xess_backend.h>
+#include <rescaleframe/backend.h>
 #include <stdbool.h>
 #include <stdio.h>
 

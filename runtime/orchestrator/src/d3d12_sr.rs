@@ -15,6 +15,8 @@ use std::ptr::null_mut;
 pub(crate) use rsf_fsr4_compat::{ffx_abi, ffx_resource};
 mod fsr;
 mod legacy;
+#[cfg(not(test))]
+pub(crate) use legacy::{rsf_fsr_managed_sr_provider, rsf_xess_sr_provider};
 mod xess;
 
 type Raw = *mut c_void;

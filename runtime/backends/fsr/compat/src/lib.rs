@@ -289,10 +289,23 @@ pub unsafe fn acquire_logged(
     }
     lease
 }
+/// Takes the INT8 lease for a D3D12 device, matching its adapter first (the D3D12 SR backend).
+///
+/// # Safety
+/// The caller keeps the module and device alive for the call.
+#[cfg(windows)]
+pub unsafe fn acquire_for_device(
+    module: *mut c_void,
+    device: *mut c_void,
+    log: LogFn,
+    user: *mut c_void,
+) -> *const CompatLease {
+    unsafe { dx12::acquire_device(module, device, log, user) }
+}
+
 /// # Safety
 /// A non-null reference must come from acquire and be released exactly once.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rsf_fsr4_compat_release(lease: *const CompatLease) {
+pub unsafe fn rsf_fsr4_compat_release(lease: *const CompatLease) {
     if !lease.is_null() {
         drop(unsafe { Arc::from_raw(lease.cast::<Lease>()) });
     }

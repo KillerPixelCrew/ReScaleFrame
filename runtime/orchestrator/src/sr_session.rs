@@ -135,10 +135,7 @@ pub(super) unsafe extern "C" fn rsf_core_validate_sr_frame(frame: *const rsf_sr_
 }
 
 #[cfg(not(test))]
-unsafe extern "C" {
-    fn rsf_fsr_managed_sr_provider() -> *const rsf_sr_provider;
-    fn rsf_xess_sr_provider() -> *const rsf_sr_provider;
-}
+use crate::d3d12_sr::{rsf_fsr_managed_sr_provider, rsf_xess_sr_provider};
 
 #[cfg(not(test))]
 #[unsafe(no_mangle)]

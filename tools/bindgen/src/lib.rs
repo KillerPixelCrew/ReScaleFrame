@@ -25,8 +25,6 @@ pub const PUBLIC_INCLUDE_DIRS: &[&str] = &[
     "runtime/presentation/include",
     "runtime/contract/include",
     "runtime/backends/dlss/include",
-    "runtime/backends/fsr/include",
-    "runtime/backends/xess/include",
     "runtime/common/include",
     "runtime/shader_patch/include",
     "ui/overlay/include",

@@ -365,8 +365,7 @@ static OPS: Ops = Ops {
     drain,
 };
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_xeg12_native_provider(compiled: u32) -> *const Provider {
+fn rsf_core_xeg12_native_provider(compiled: u32) -> *const Provider {
     static NATIVE_PROVIDER: Provider = Provider {
         create: Some(create),
         ..PROVIDER
@@ -380,4 +379,10 @@ extern "C" fn rsf_core_xeg12_native_provider(compiled: u32) -> *const Provider {
 
 unsafe extern "C" fn create(setup: *const Setup, out: *mut Raw, chain: *mut Raw) -> i32 {
     unsafe { rsf_core_xeg12_create(&OPS, setup, out, chain) }
+}
+
+// The xess-fg feature is CMake's XeSS-FG header detection (runtime/orchestrator/CMakeLists.txt).
+#[unsafe(no_mangle)]
+extern "C" fn rsf_generation_xess() -> *const Provider {
+    rsf_core_xeg12_native_provider(u32::from(cfg!(feature = "xess-fg")))
 }

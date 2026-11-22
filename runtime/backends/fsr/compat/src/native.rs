@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::{dx12::*, *};
+use super::*;
 use windows::{
     Win32::{
         Foundation::HMODULE,
@@ -50,16 +50,4 @@ pub(super) unsafe fn enable_hook(target: *mut c_void, detour: CapabilityFn) -> *
     }
     unsafe { MH_RemoveHook(target) };
     ptr::null_mut()
-}
-
-/// The D3D12 SR backend's lease entry (fsr_backend.c): resolves the device's
-/// adapter before admission.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4_compat_acquire_native_device(
-    module: *mut c_void,
-    device: *mut c_void,
-    log: LogFn,
-    user: *mut c_void,
-) -> *const CompatLease {
-    unsafe { acquire_device(module, device, log, user) }
 }

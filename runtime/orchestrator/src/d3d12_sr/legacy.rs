@@ -8,7 +8,6 @@ use crate::sys::{
     rsf_sr_provider as Sr,
 };
 use crate::sys::{rsf_fg_provider as Fg, rsf_fg_swapchain_result as FgResult};
-use std::sync::OnceLock;
 
 const AMD: u32 = 3;
 const INTEL: u32 = 2;
@@ -172,10 +171,7 @@ unsafe extern "C" fn fsr_open_managed(desc: *const Open, out: *mut Raw) -> i32 {
         Ok(desc) => desc,
         Err(result) => return result,
     };
-    let Some(compatibility) = FSR_COMPATIBILITY.get() else {
-        return NOT_COMPILED;
-    };
-    fsr::open(desc, out, compatibility)
+    fsr::open(desc, out)
 }
 
 unsafe extern "C" fn fsr_open(desc: *const Open, out: *mut Raw) -> i32 {
@@ -197,33 +193,53 @@ unsafe extern "C" fn xess_open(desc: *const Open, out: *mut Raw) -> i32 {
     }
 }
 
-static FSR_COMPATIBILITY: OnceLock<fsr::CompatibilityOps> = OnceLock::new();
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_d3d12_fsr_sr_provider(
-    managed: u32,
-    acquire: Option<fsr::Acquire>,
-    release: Option<fsr::Release>,
-) -> *const Sr {
+// CMake's vendor-header detection reaches this crate as Cargo features
+// (runtime/orchestrator/CMakeLists.txt). Without the SDK headers each provider
+// still exists and reports NOT_COMPILED.
+fn fsr_sr_provider(managed: bool) -> *const Sr {
     static DISABLED: Sr = absent_sr::<true>();
     static DIRECT: Sr = compiled_sr::<true>(fsr_open);
     static MANAGED: Sr = compiled_sr::<true>(fsr_open_managed);
-    let Some((acquire, release)) = acquire.zip(release) else {
-        return &DISABLED;
-    };
-    let _ = FSR_COMPATIBILITY.set(fsr::CompatibilityOps { acquire, release });
-    if managed != 0 { &MANAGED } else { &DIRECT }
+    if !cfg!(feature = "ffx") {
+        &DISABLED
+    } else if managed {
+        &MANAGED
+    } else {
+        &DIRECT
+    }
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_d3d12_xess_sr_provider(compiled: u32) -> *const Sr {
+extern "C" fn rsf_fsr_sr_provider() -> *const Sr {
+    fsr_sr_provider(false)
+}
+
+#[unsafe(no_mangle)]
+pub(crate) extern "C" fn rsf_fsr_managed_sr_provider() -> *const Sr {
+    fsr_sr_provider(true)
+}
+
+#[unsafe(no_mangle)]
+pub(crate) extern "C" fn rsf_xess_sr_provider() -> *const Sr {
+    rsf_core_d3d12_xess_sr_provider(u32::from(cfg!(feature = "xess")))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_fsr_fg_provider() -> *const Fg {
+    rsf_core_d3d12_legacy_fg_provider(1, u32::from(cfg!(feature = "ffx")))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_xess_fg_provider() -> *const Fg {
+    rsf_core_d3d12_legacy_fg_provider(0, u32::from(cfg!(feature = "xess")))
+}
+fn rsf_core_d3d12_xess_sr_provider(compiled: u32) -> *const Sr {
     static DISABLED: Sr = absent_sr::<false>();
     static ENABLED: Sr = compiled_sr::<false>(xess_open);
     if compiled != 0 { &ENABLED } else { &DISABLED }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_d3d12_legacy_fg_provider(fsr: u32, compiled: u32) -> *const Fg {
+fn rsf_core_d3d12_legacy_fg_provider(fsr: u32, compiled: u32) -> *const Fg {
     static FSR_DISABLED: Fg = legacy_fg::<true, false, NOT_COMPILED>();
     static XESS_DISABLED: Fg = legacy_fg::<false, false, NOT_COMPILED>();
     static FSR_ENABLED: Fg = legacy_fg::<true, true, NOT_READY>();

@@ -104,8 +104,6 @@ fn native_leaf(name: &str, files: &[&str], defines: &[&str]) {
             "../presentation/include",
             "../presentation/src",
             "../backends/dlss/include",
-            "../backends/fsr/include",
-            "../backends/xess/include",
             "../contract/include",
             "../common/include",
             "../../sdk/game/include",
@@ -141,22 +139,6 @@ fn native_leaves() {
         "rsf_presentation",
         &["../presentation/src/d3d11_present_bridge.c"],
         &["RSF_STREAMLINE_HOST_BUILD"],
-    );
-    native_leaf(
-        "rsf_fsr",
-        &[
-            "../backends/fsr/src/fsr_backend.c",
-            "../backends/fsr/src/fsr_generation.c",
-        ],
-        &[],
-    );
-    native_leaf(
-        "rsf_xess",
-        &[
-            "../backends/xess/src/xess_backend.c",
-            "../backends/xess/src/xess_generation.c",
-        ],
-        &[],
     );
 }
 

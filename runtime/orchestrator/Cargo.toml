@@ -22,6 +22,13 @@ rsf-runtime-submission = { path = "../graphics/submission" }
 [features]
 # Fixture exports called only by the ctest executables; the shipping archive is built without them.
 test-fixtures = []
+# CMake's vendor-header detection (runtime/orchestrator/CMakeLists.txt): the D3D12 FidelityFX SR and
+# legacy FG, FidelityFX FG, XeSS SR and legacy FG, and XeSS-FG providers. Without one, its provider
+# reports NOT_COMPILED.
+ffx = []
+ffx-fg = []
+xess = []
+xess-fg = []
 
 [dev-dependencies]
 rsf-graphics = { path = "../graphics/rust", features = ["test-support"] }

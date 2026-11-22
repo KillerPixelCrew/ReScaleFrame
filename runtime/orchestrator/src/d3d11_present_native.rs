@@ -26,10 +26,11 @@ use crate::sys::{
     rsf_streamline_host_create, rsf_streamline_host_destroy, rsf_streamline_host_setup,
 };
 
+use crate::d3d12_generation::rsf_generation_fsr4_supported;
+
 unsafe extern "C" {
     fn rsf_d3d11p_default_backend(vendor: u32, software: u32) -> u32;
     fn rsf_d3d11p_original_create() -> Option<GuardedCreate>;
-    fn rsf_generation_fsr4_supported(device: Raw, directory: *const c_char) -> u32;
     fn rsf_d3d11p_unwrap_guarded(host: Raw, proxy: Raw) -> Raw;
     fn rsf_d3d11p_streamline_graphics(host: Raw, graphics: *mut rsf_streamline_graphics) -> i32;
 }

@@ -29,9 +29,11 @@ endfunction()
 
 rsf_have(RSF_HAVE_VULKAN "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
 rsf_have(RSF_HAVE_STREAMLINE "${RSF_STREAMLINE_INCLUDE}/sl.h")
+rsf_have(RSF_HAVE_XESS "${RSF_XESS_INCLUDE}/xess/xess.h")
 rsf_have(RSF_HAVE_XESS_VK "${RSF_XESS_INCLUDE}/xess/xess_vk.h")
 rsf_have(RSF_HAVE_XESS_FG "${RSF_XESS_INCLUDE}/xess_fg/xefg_swapchain_d3d12.h" "${RSF_XESS_INCLUDE}/xell/xell_d3d12.h")
 rsf_have(RSF_HAVE_FFX_VK "${RSF_FFX_VK_INCLUDE}/ffx_api/vk/ffx_api_vk.h")
+rsf_have(RSF_HAVE_FFX "${RSF_FFX_INCLUDE}/ffx_api.h")
 rsf_have(RSF_HAVE_FFX_FG "${RSF_FFX_INCLUDE}/../../framegeneration/include/ffx_framegeneration.h")
 rsf_have(RSF_HAVE_FFX_DX12_FG "${RSF_FFX_INCLUDE}/dx12/ffx_api_dx12.h"
     "${RSF_FFX_INCLUDE}/../../framegeneration/include/ffx_framegeneration.h")

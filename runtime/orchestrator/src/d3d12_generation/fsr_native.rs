@@ -448,8 +448,7 @@ unsafe extern "C" fn present_facts(raw: Raw, out: *mut PresentFacts) {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr12_native_supported(
+unsafe fn rsf_core_fsr12_native_supported(
     compiled: u32,
     device: Raw,
     directory: *const c_char,
@@ -490,8 +489,7 @@ static OPS: Ops = Ops {
     present_count,
 };
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_fsr12_native_provider(compiled: u32) -> *const Provider {
+fn rsf_core_fsr12_native_provider(compiled: u32) -> *const Provider {
     static NATIVE_PROVIDER: Provider = Provider {
         create: Some(create),
         ..PROVIDER
@@ -505,4 +503,22 @@ extern "C" fn rsf_core_fsr12_native_provider(compiled: u32) -> *const Provider {
 
 unsafe extern "C" fn create(setup: *const Setup, out: *mut Raw, chain: *mut Raw) -> i32 {
     unsafe { rsf_core_fsr12_create(&OPS, setup, out, chain) }
+}
+
+// The ffx-fg feature is CMake's frame-generation header detection (runtime/orchestrator/CMakeLists.txt).
+#[unsafe(no_mangle)]
+extern "C" fn rsf_generation_fsr() -> *const Provider {
+    rsf_core_fsr12_native_provider(u32::from(cfg!(feature = "ffx-fg")))
+}
+
+/// # Safety
+/// `device` is null or a live ID3D12Device; `directory` is null or NUL-terminated UTF-8.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_generation_fsr4_supported(
+    device: Raw,
+    directory: *const c_char,
+) -> u32 {
+    unsafe {
+        rsf_core_fsr12_native_supported(u32::from(cfg!(feature = "ffx-fg")), device, directory)
+    }
 }

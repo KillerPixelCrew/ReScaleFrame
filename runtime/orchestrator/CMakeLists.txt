@@ -8,11 +8,6 @@ add_library(rsf_frame_dump INTERFACE)
 target_include_directories(rsf_frame_dump INTERFACE include "${CMAKE_SOURCE_DIR}/runtime/backends/dlss/include")
 target_link_libraries(rsf_frame_dump INTERFACE ReScaleFrame::Graphics ReScaleFrame::Contract ReScaleFrame::GameSDK ReScaleFrame::RuntimeCommon)
 add_library(ReScaleFrame::FrameDump ALIAS rsf_frame_dump)
-# Readback helpers in the backend libraries share the same capture owner as the host.
-foreach(rsf_dump_backend rsf_fsr rsf_xess)
-    target_link_libraries(${rsf_dump_backend} PRIVATE ReScaleFrame::FrameDump)
-    target_compile_definitions(${rsf_dump_backend} PRIVATE RSF_FRAME_DUMP_STATIC)
-endforeach()
 
 # The CPU fact dispatcher is implemented in the Rust core; this target carries its headers and archive.
 add_library(rsf_native_cpu INTERFACE)
@@ -40,13 +35,22 @@ add_library(rsf_orchestrator_core OBJECT
 target_include_directories(rsf_orchestrator_core PUBLIC include)
 target_compile_definitions(rsf_orchestrator_core PUBLIC RSF_RUNTIME_BUILD)
 target_link_libraries(rsf_orchestrator_core PUBLIC rsf_native_cpu rsf_runtime_leaves)
-rsf_add_rust_static(rsf_orchestrator_rust rsf_rust_core rsf-orchestrator rsf_orchestrator)
+# The vendor headers cmake/vendor.cmake found select the D3D12 FidelityFX and XeSS providers.
+set(rsf_orchestrator_features)
+foreach(rsf_vendor "FFX;ffx" "FFX_FG;ffx-fg" "XESS;xess" "XESS_FG;xess-fg")
+    list(GET rsf_vendor 0 rsf_vendor_flag)
+    list(GET rsf_vendor 1 rsf_vendor_feature)
+    if(RSF_HAVE_${rsf_vendor_flag})
+        list(APPEND rsf_orchestrator_features --features ${rsf_vendor_feature})
+    endif()
+endforeach()
+rsf_add_rust_static(rsf_orchestrator_rust rsf_rust_core rsf-orchestrator rsf_orchestrator ${rsf_orchestrator_features})
 if(BUILD_TESTING)
     # The same crate with the test-fixtures feature adds the fixture exports the ctest executables call. A test
     # target that sets RSF_ORCHESTRATOR_FIXTURES links this archive wherever the shipping one is named, so the
     # Runtime and the carriers never contain a fixture.
     rsf_add_rust_static(rsf_orchestrator_fixture_rust rsf_rust_core_fixtures rsf-orchestrator rsf_orchestrator
-        --features test-fixtures)
+        --features test-fixtures ${rsf_orchestrator_features})
     get_target_property(rsf_orchestrator_libs rsf_orchestrator_rust INTERFACE_LINK_LIBRARIES)
     get_target_property(rsf_orchestrator_fixture_libs rsf_orchestrator_fixture_rust INTERFACE_LINK_LIBRARIES)
     list(POP_FRONT rsf_orchestrator_libs rsf_orchestrator_archive)

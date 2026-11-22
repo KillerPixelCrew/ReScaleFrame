@@ -8,15 +8,6 @@ use super::ffx_abi::*;
 
 const FFX_OK: u32 = FFX_API_RETURN_OK as u32;
 
-pub(super) type Acquire =
-    unsafe extern "C" fn(Raw, Raw, crate::sys::rsf_backend_log_fn, Raw) -> *const c_void;
-pub(super) type Release = unsafe extern "C" fn(*const c_void);
-
-pub(super) struct CompatibilityOps {
-    pub acquire: Acquire,
-    pub release: Release,
-}
-
 struct Sdk {
     create: PfnFfxCreateContext,
     destroy: PfnFfxDestroyContext,
@@ -27,7 +18,7 @@ struct Sdk {
 }
 
 impl Sdk {
-    fn open(desc: &Open, ops: &CompatibilityOps) -> Result<Self, i32> {
+    fn open(desc: &Open) -> Result<Self, i32> {
         let module = load_runtime(desc, "amd_fidelityfx_upscaler_dx12.dll").ok_or(LOAD_FAILED)?;
         let [create, destroy, query, dispatch] =
             crate::sdk_module::FFX_CONTEXT_EXPORTS.map(|name| module.symbol(name));
@@ -38,12 +29,10 @@ impl Sdk {
             return Err(MISSING_ENTRY_POINT);
         }
         let compatibility = if desc.fsr_major == 4 {
-            let handle =
-                unsafe { (ops.acquire)(module.as_ptr(), desc.device, desc.log, desc.log_user) };
-            NonNull::new(handle.cast_mut()).map(|handle| Compatibility {
-                handle,
-                release: ops.release,
-            })
+            let handle = unsafe {
+                rsf_fsr4_compat::acquire_for_device(module.as_ptr(), desc.device, desc.log, desc.log_user)
+            };
+            NonNull::new(handle.cast_mut()).map(|handle| Compatibility { handle })
         } else {
             None
         };
@@ -98,13 +87,12 @@ fn header(kind: u32) -> ffxApiHeader {
 }
 
 struct Compatibility {
-    handle: NonNull<c_void>,
-    release: unsafe extern "C" fn(*const c_void),
+    handle: NonNull<rsf_fsr4_compat::CompatLease>,
 }
 
 impl Drop for Compatibility {
     fn drop(&mut self) {
-        unsafe { (self.release)(self.handle.as_ptr()) };
+        unsafe { rsf_fsr4_compat::rsf_fsr4_compat_release(self.handle.as_ptr()) };
     }
 }
 
@@ -116,14 +104,14 @@ pub(super) struct Owner {
 }
 
 impl Owner {
-    fn open(desc: &Open, ops: &CompatibilityOps) -> Result<(Backend, Version), i32> {
+    fn open(desc: &Open) -> Result<(Backend, Version), i32> {
         // The SDK may retain the chained descriptions until context destruction.
         let description = crate::allocate_handle(CreateDescription::default());
         if description.is_null() {
             return Err(INIT_FAILED);
         }
         let description = unsafe { Box::from_raw(description) };
-        let sdk = Sdk::open(desc, ops)?;
+        let sdk = Sdk::open(desc)?;
         let mut owner = Self {
             sdk,
             description,
@@ -337,9 +325,9 @@ impl Drop for Owner {
     }
 }
 
-pub(super) fn open(desc: &Open, out: *mut Raw, ops: &CompatibilityOps) -> i32 {
+pub(super) fn open(desc: &Open, out: *mut Raw) -> i32 {
     if !(2..=4).contains(&desc.fsr_major) {
         return INVALID_ARGUMENT;
     }
-    open_session(desc, out, |_| Owner::open(desc, ops))
+    open_session(desc, out, |_| Owner::open(desc))
 }
