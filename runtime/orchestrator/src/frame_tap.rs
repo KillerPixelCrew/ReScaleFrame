@@ -1377,6 +1377,19 @@ fn bind_override(platform: &Platform, context: Handle, encoded: u32, buffer: Han
 }
 
 // Bind stand-in constant buffers for this draw if the override asks. After the divert declined.
+fn bound_constant(context: Handle, index: usize) -> Option<ComRef> {
+    type GetBuffers = unsafe extern "system" fn(Handle, u32, u32, *mut Handle);
+    // Windows SDK ID3D11DeviceContext VS, PS, GS, HS and DS GetConstantBuffers entries.
+    const GET_CONSTANTS: [usize; 5] = [72, 77, 81, 100, 104];
+    let get: GetBuffers =
+        unsafe { std::mem::transmute(slot(context, GET_CONSTANTS[index / STAGE_CONSTANTS])) };
+    let mut buffer = null_mut();
+    unsafe {
+        get(context, (index % STAGE_CONSTANTS) as u32, 1, &mut buffer);
+        ComRef::from_owned(buffer)
+    }
+}
+
 fn begin_constant_override(
     platform: &Platform,
     render: &mut Render,
@@ -1401,13 +1414,6 @@ fn begin_constant_override(
     let mut inputs = [ZERO_INPUT; MAX_INPUTS];
     let mut facts = divert_facts(render, indexed, elements, &mut inputs);
     stage_constants(platform, context, &mut facts);
-    let bound = [
-        facts.vertex_constants,
-        facts.pixel_constants,
-        facts.geometry_constants,
-        facts.hull_constants,
-        facts.domain_constants,
-    ];
     let mut slots = [0u32; CONSTANT_SLOTS];
     let mut buffers = [null_mut(); CONSTANT_SLOTS];
     let asked = unsafe {
@@ -1431,10 +1437,10 @@ fn begin_constant_override(
             continue;
         }
         used[index] = true;
-        let original = bound[index / STAGE_CONSTANTS][index % STAGE_CONSTANTS];
         state.slots[state.count] = slot;
-        state.originals[state.count] =
-            (!original.is_null()).then(|| unsafe { ComRef::retain(original) });
+        // Query the actual slot after the callback. The getter returns the reference
+        // that keeps the original live through the replacement binding and draw.
+        state.originals[state.count] = bound_constant(context, index);
         bind_override(platform, context, slot, buffer);
         state.count += 1;
     }
