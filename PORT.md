@@ -403,6 +403,9 @@ for, so the cuts are repeated helpers, forwarding layers and C-shaped signatures
 - Kept, `fallout4/render_hooks/*`: the `Leaves` and `NativeRecoveryLeaves` tables. Their other half is
   `render_hooks.c` in the same archive, so they are C-to-Rust seams; dropping them means rewriting that leaf
   and every render-seam fixture, which belongs to a tested change.
+- Kept, `fallout4/lib.rs` MinHook status constants and `enable_hook`/`disable_hook`: `rsf_windows::minhook`
+  would replace them, but it needs a new `rsf-windows` dependency and public strict `enable`/`remove`, which
+  is an integrations/windows change (S1.8 + S3.3 + S4).
 - Kept, Skyrim `session.rs` `subsystems` module: it is the narrow `cfg(test)` seam the lifecycle tests use.
 - Kept, Skyrim `sources_*` functions: they scope the store lock, whose guard must drop before the host
   callback that receives the result; calling the methods inline would hold it across the callback.
