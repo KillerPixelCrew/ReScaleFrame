@@ -6,6 +6,7 @@
  * Build the shim with the adjacent build.sh or build.ps1.
  */
 #include "vulkanstory_ngx.h"
+#include "entries.h"
 
 #include <stddef.h>
 #include <string.h>
@@ -27,28 +28,8 @@
 
 /* ------------------------------------------------------------------ loading */
 
-/* Private ABI, matching NgxEntries in src/lib.rs. Missing symbols stay null. */
-struct vulkanstory_ngx_entries
-{
-    void *init_project_id;
-    void *shutdown1;
-    void *get_capability_params;
-    void *allocate_params;
-    void *destroy_params;
-    void *feature_requirements;
-    void *instance_extensions;
-    void *device_extensions;
-    void *create_feature;
-    void *create_feature1;
-    void *evaluate_feature;
-    void *release_feature;
-};
-
-extern const struct vulkanstory_ngx_entries *rsf_vulkanstory_ngx_get_entries(void);
-extern const char *rsf_vulkanstory_ngx_load_error(void);
-
 /// @brief Resolves an exported function in the borrowed native runtime module.
-void *rsf_vulkanstory_ngx_symbol(void *module, const char *name)
+void *rsf_vk_ngx_symbol(void *module, const char *name)
 {
 #if defined(_WIN32)
     return (void *)GetProcAddress((vulkanstory_module)module, name);
@@ -125,7 +106,7 @@ static vulkanstory_module vulkanstory_load_windows_runtime(void)
 #endif
 
 /* Rust supplies a writable 512-byte buffer for any native loader error. */
-void *rsf_vulkanstory_ngx_open(char *error, size_t capacity)
+void *rsf_vk_ngx_open(char *error, size_t capacity)
 {
 #if defined(_WIN32)
     vulkanstory_module runtime = vulkanstory_load_windows_runtime();
@@ -139,7 +120,7 @@ void *rsf_vulkanstory_ngx_open(char *error, size_t capacity)
 
 /* Every wrapper starts with this: no runtime, no symbol, no call. */
 #define VULKANSTORY_NGX_REQUIRE(field)                                                      \
-    const struct vulkanstory_ngx_entries *ngx = rsf_vulkanstory_ngx_get_entries();             \
+    const struct rsf_vk_ngx_entries *ngx = rsf_vk_ngx_get_entries();             \
     if (ngx == NULL) return VULKANSTORY_NGX_RESULT_RUNTIME_MISSING;                          \
     if (ngx->field == NULL) return VULKANSTORY_NGX_RESULT_ENTRY_POINT_MISSING;
 
@@ -168,11 +149,11 @@ uint32_t VulkanStoryNgx_Version(void) { return VULKANSTORY_NGX_SHIM_VERSION; }
 
 const char *VulkanStoryNgx_RuntimeName(void) { return VULKANSTORY_NGX_RUNTIME; }
 
-const char *VulkanStoryNgx_LastLoadError(void) { return rsf_vulkanstory_ngx_load_error(); }
+const char *VulkanStoryNgx_LastLoadError(void) { return rsf_vk_ngx_load_error(); }
 
 VulkanStoryNgxResult VulkanStoryNgx_LoadRuntime(void)
 {
-    return rsf_vulkanstory_ngx_get_entries() != NULL ? NGX_SUCCESS : VULKANSTORY_NGX_RESULT_RUNTIME_MISSING;
+    return rsf_vk_ngx_get_entries() != NULL ? NGX_SUCCESS : VULKANSTORY_NGX_RESULT_RUNTIME_MISSING;
 }
 
 /* ----------------------------------------------------------------- lifetime */

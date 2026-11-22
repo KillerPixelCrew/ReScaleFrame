@@ -18,6 +18,8 @@ $source = Join-Path $PSScriptRoot 'vulkanstory_ngx.c'
 $inputs = @(
     $source
     (Join-Path $PSScriptRoot 'vulkanstory_ngx.h')
+    (Join-Path $PSScriptRoot 'entries.h')
+    (Join-Path $PSScriptRoot 'build.rs')
     (Join-Path $PSScriptRoot 'src/lib.rs')
     (Join-Path $PSScriptRoot 'Cargo.toml')
     (Join-Path $workspace 'Cargo.toml')

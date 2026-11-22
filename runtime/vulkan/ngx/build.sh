@@ -42,7 +42,7 @@ cc="${CC:-cc}"
 target="$out/$name"
 if [ -f "$target" ]; then
     fresh=1
-    for input in "$src" "$here/vulkanstory_ngx.h" "$here/src/lib.rs" "$here/Cargo.toml" \
+    for input in "$src" "$here/vulkanstory_ngx.h" "$here/entries.h" "$here/build.rs" "$here/src/lib.rs" "$here/Cargo.toml" \
             "$workspace/Cargo.toml" "$workspace/Cargo.lock" "$workspace/rust-toolchain.toml" "$here/build.sh"; do
         if [ ! -f "$input" ] || [ ! "$target" -nt "$input" ]; then
             fresh=0

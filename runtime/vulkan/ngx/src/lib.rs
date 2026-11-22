@@ -5,22 +5,7 @@ use std::sync::OnceLock;
 
 const LOAD_ERROR_CAPACITY: usize = 512;
 
-// Matches struct vulkanstory_ngx_entries in vulkanstory_ngx.c.
-#[repr(C)]
-struct NgxEntries {
-    init_project_id: *mut c_void,
-    shutdown1: *mut c_void,
-    get_capability_params: *mut c_void,
-    allocate_params: *mut c_void,
-    destroy_params: *mut c_void,
-    feature_requirements: *mut c_void,
-    instance_extensions: *mut c_void,
-    device_extensions: *mut c_void,
-    create_feature: *mut c_void,
-    create_feature1: *mut c_void,
-    evaluate_feature: *mut c_void,
-    release_feature: *mut c_void,
-}
+include!(concat!(env!("OUT_DIR"), "/entries.rs"));
 
 struct LoadedRuntime {
     _module: *mut c_void,
@@ -41,21 +26,21 @@ struct LoadState {
 static LOAD_STATE: OnceLock<LoadState> = OnceLock::new();
 
 unsafe extern "C" {
-    fn rsf_vulkanstory_ngx_open(error: *mut c_char, capacity: usize) -> *mut c_void;
-    fn rsf_vulkanstory_ngx_symbol(module: *mut c_void, name: *const c_char) -> *mut c_void;
+    fn rsf_vk_ngx_open(error: *mut c_char, capacity: usize) -> *mut c_void;
+    fn rsf_vk_ngx_symbol(module: *mut c_void, name: *const c_char) -> *mut c_void;
 }
 
 impl LoadState {
     fn load() -> Self {
         let mut error = [0; LOAD_ERROR_CAPACITY];
         // SAFETY: The native loader writes within this buffer and terminates any diagnostic.
-        let module = unsafe { rsf_vulkanstory_ngx_open(error.as_mut_ptr(), error.len()) };
+        let module = unsafe { rsf_vk_ngx_open(error.as_mut_ptr(), error.len()) };
         let runtime = if module.is_null() {
             None
         } else {
             let symbol = |name: &CStr| {
                 // SAFETY: The loader returned a live module and the name is NUL-terminated.
-                unsafe { rsf_vulkanstory_ngx_symbol(module, name.as_ptr()) }
+                unsafe { rsf_vk_ngx_symbol(module, name.as_ptr()) }
             };
             Some(LoadedRuntime {
                 _module: module,
@@ -84,7 +69,7 @@ impl LoadState {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_vulkanstory_ngx_get_entries() -> *const NgxEntries {
+extern "C" fn rsf_vk_ngx_get_entries() -> *const NgxEntries {
     LOAD_STATE
         .get_or_init(LoadState::load)
         .runtime
@@ -93,7 +78,7 @@ extern "C" fn rsf_vulkanstory_ngx_get_entries() -> *const NgxEntries {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_vulkanstory_ngx_load_error() -> *const c_char {
+extern "C" fn rsf_vk_ngx_load_error() -> *const c_char {
     LOAD_STATE
         .get()
         .map_or(c"".as_ptr(), |state| state.error.as_ptr())
