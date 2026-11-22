@@ -131,3 +131,37 @@ sources 1 to 10 in C++. The rendered-FG fixture retains its external COM
 facade, native per-frame graphics and lease calls, and receipt assertions in
 C++. These paths remain open. This replay was checked by source comparison,
 pinned formatting, bindgen and locked offline Cargo metadata.
+
+## Device scenario replay on `6cb0c169`
+
+- Shared-SR sources 1–10 now run in `d3d11_host_device_sr.rs`. The cold source
+  compares byte-for-byte staging snapshots of the four real textures around
+  RESERVE and verifies the CPU and Streamline token remain absent. Sources 2
+  and 6 exercise reserve, bad-token refusal, seal, temporal result, spatial or
+  temporal finish, and idempotent retirement. Source 6 removes the actual
+  depth pointer to force the refusal. The capture checks use the actual new
+  bundle, source ID, evaluated rectangle and provider resets at 2, 4, 7 and
+  9. Both Quality transitions and the post-Present output report checks
+  retain their original order. Native callbacks carry the real token query,
+  overlay transactions, capture cancellation and application-chain Present.
+- Rendered-FG's per-source frame body now runs in
+  `d3d11_host_device_fg.rs`. The typed D3D11 operations clear the same
+  views, update the same packed R11G11B10 allocation, create the actual
+  backbuffer view and keep it alive through WINDOW end. FRAME and SUBMISSION
+  begin before the input lease, FG_INPUTS closes before SR, and FINAL_SCENE
+  and SUBMISSION end precede the WINDOW and actual application Present.
+  Rust checks unavailable versus refused input capture, the scoped cleanup
+  and rollback, late NO_FG followed by an eligible duplicate, and a malformed
+  depth domain. The per-source assertions still require the actual inner
+  Present to match the outer WINDOW and the outer pre, post and dispatch
+  counters. The CPU and provider receipts still require zero physical input
+  and pacing and require QPC provenance for a tagged rendered source.
+- Both native launchers keep the original application-chain receiver.
+  Their SDK, overlay, swapchain and Win32 callback seams catch C++ exceptions
+  before returning to Rust. D3D11 resource work uses typed Rust calls.
+  Neither production dispatch nor a public Runtime or GameSDK export changed.
+
+The two requested scenario bodies are source-ported. The shared-SR C++
+file still owns setup, final counters and debug checks. The rendered-FG C++
+file still owns setup, the external COM facade, phase-level overlay
+transactions and final disposition. No hardware execution was performed.

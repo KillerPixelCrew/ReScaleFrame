@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
-use rsf_game_sys::{RSF_GAME_CPU_EVENT_VERSION, rsf_game_cpu_event, rsf_game_host_services};
+use rsf_game_sys::{
+    RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_CPU_EVENT_VERSION, rsf_camera_frame, rsf_game_cpu_event,
+    rsf_game_host_services, rsf_game_render_pass,
+};
 use std::ffi::c_void;
 use std::ptr::{copy_nonoverlapping, null_mut};
 use windows::Win32::Graphics::Direct3D11::*;
@@ -9,10 +12,85 @@ use windows::core::Interface;
 
 #[path = "d3d11_host_device_abi.rs"]
 mod abi;
+#[path = "d3d11_host_device_fg.rs"]
+mod fg;
 #[path = "d3d11_host_device_recovery.rs"]
 mod recovery;
+#[path = "d3d11_host_device_sr.rs"]
+mod sr;
 use abi::*;
 
+type Raw = *mut c_void;
+const SCENE_COLOUR: [f32; 4] = [0.25, 0.5, 0.75, 1.0];
+
+fn identity() -> [f32; 16] {
+    let mut matrix = [0.0; 16];
+    for diagonal in [0, 5, 10, 15] {
+        matrix[diagonal] = 1.0;
+    }
+    matrix
+}
+
+fn native_pass(
+    resources: &rsf_d3d11_fixture_resources,
+    session_id: u64,
+    source: u64,
+    render_width: u32,
+    render_height: u32,
+) -> rsf_game_render_pass {
+    let width = resources.width;
+    let height = resources.height;
+    let mut camera = rsf_camera_frame {
+        struct_size: size_of::<rsf_camera_frame>() as u32,
+        abi_version: RSF_GAME_CAMERA_ABI_VERSION,
+        view_to_clip: identity(),
+        clip_to_view: identity(),
+        view_to_world: identity(),
+        world_to_view: identity(),
+        clip_to_previous_clip: identity(),
+        jitter_pixels: [0.0; 2],
+        previous_jitter_pixels: [0.0; 2],
+        render_width,
+        render_height,
+        output_width: width,
+        output_height: height,
+        near_plane: 0.1,
+        far_plane: 1000.0,
+        vertical_fov_radians: 1.2,
+        depth_inverted: 1,
+        motion_jittered: 0,
+        frame_time_seconds: 1.0 / 60.0,
+    };
+    camera.view_to_clip[0] = height as f32 / width as f32;
+    camera.clip_to_view[0] = width as f32 / height as f32;
+    rsf_game_render_pass {
+        struct_size: size_of::<rsf_game_render_pass>() as u32,
+        session_id,
+        source_frame_id: source,
+        submission_id: source,
+        scope_id: source,
+        family_key: 1,
+        view_key: 1,
+        history_key: 1,
+        viewport_key: 1,
+        window_key: 1,
+        rhi_viewport_key: 1,
+        native_frame: source,
+        swapchain: resources.chain,
+        color_input: resources.colour,
+        color_output: resources.output,
+        depth: resources.depth,
+        motion: resources.motion,
+        camera_valid: 1,
+        motion_camera_included: 1,
+        motion_to_uv: [-1.0; 2],
+        previous_clip_to_clip: identity(),
+        render_rect: [0, 0, render_width as i32, render_height as i32],
+        output_rect: [0, 0, width as i32, height as i32],
+        camera,
+        ..unsafe { std::mem::zeroed() }
+    }
+}
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_d3d11_host_fixture_run_phase(
     phase: u32,

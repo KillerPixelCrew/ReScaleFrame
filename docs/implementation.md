@@ -79,6 +79,12 @@ drives the shared-SR resource-only recovery and repeated rendered-FG phases.
 Both device fixtures use typed staging readback for their pixel checks.
 Foreign host callbacks and the remaining native fixture phases stay open.
 
+The D01 device scenario replay moves shared-SR sources 1–10 and the
+rendered-FG per-source frame to Rust. It retains real texture writes and
+readback, the original application-chain receiver, and the ordered SR and
+FG lease assertions. The C++ launchers still own device setup, guarded SDK
+and swapchain calls, and final fixture checks. Source checks only.
+
 Rust owns the D3D11 graphics snapshots, resource and UI device operations,
 sampler changes, and native composition passes. The replay uses the integrated
 Rust output and capture paths. All eight G03 fixture bodies now use Rust. The source

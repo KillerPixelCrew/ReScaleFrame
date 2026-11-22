@@ -18,8 +18,6 @@
 #include <dxgidebug.h>
 #include <DirectXPackedVector.h>
 #include <wrl/client.h>
-#include <cmath>
-#include <algorithm>
 #include <cstdio>
 #include <thread>
 #include <filesystem>
@@ -77,7 +75,6 @@ ComPtr<ID3D11Texture2D> texture(ID3D11Device* device, DXGI_FORMAT format, UINT b
     return result;
 }
 int fail(const char* label) { std::printf("FAIL: %s\n", label); return 1; }
-void identity(float* matrix) { matrix[0] = matrix[5] = matrix[10] = matrix[15] = 1; }
 void dxgi_errors(IDXGIInfoQueue* queue) {
     if (!queue) return;
     const auto count=queue->GetNumStoredMessagesAllowedByRetrievalFilters(diagnostic_all);
@@ -95,9 +92,7 @@ void dxgi_errors(IDXGIInfoQueue* queue) {
         }
     }
 }
-void cpu(const rsf_game_host_services& host, uint64_t source, uint32_t stage) {
-    rsf_d3d11_host_fixture_cpu(&host, source, stage, uint32_t(stage == RSF_GAME_CPU_FRAME_END));
-}
+
 }
 int main(int argc, char** argv) {
     const bool scoped = argc == 3 && std::strcmp(argv[2],"--scoped") == 0;
@@ -362,182 +357,66 @@ int main(int argc, char** argv) {
     UINT active_width = width, active_height = height;
     bool native_reinsertion = false;
     const DirectX::PackedVector::XMFLOAT3PK native_pixel(0.25f, 0.5f, 0.75f), outside_marker(3.0f, 0.0f, 3.0f);
-    std::vector<uint32_t> native_pixels(size_t(width) * height);
-    uint64_t source = 0, captured = 0, sr_evaluated = 0, app_presents = 0;
-    bool failed = false, unavailable = false, occluded = first_present == DXGI_STATUS_OCCLUDED;
+    rsf_d3d11_fixture_fg_state state{};
+    state.occluded = first_present == DXGI_STATUS_OCCLUDED;
+    auto& [source, captured, sr_evaluated, app_presents, failed, unavailable, occluded] = state;
     const auto verify = [&](bool condition, const char* label) {
         if (!condition) { std::printf("FAIL: %s\n", label); failed = true; }
     };
     bool refuse_inputs_late = false, refuse_depth_late = false, exercise_auxiliary_cleanup = false;
+    const rsf_d3d11_fixture_resources resources{
+        &host, device.Get(), context.Get(), chain.Get(), color.Get(), motion.Get(), depth.Get(), output.Get(),
+        color_view.Get(), motion_view.Get(), depth_view.Get(), output_view.Get(), width, height,
+    };
+    struct NativeCalls { const rsf_d3d11_present_api* presentation; const OuterChain* outer; };
+    NativeCalls native_calls{&presentation, outer};
+    const rsf_d3d11_fixture_fg_calls calls{
+        &native_calls,
+        [](void* receiver, void** out) noexcept -> int32_t {
+            try {
+                ComPtr<ID3D11Texture2D> texture;
+                const auto result = static_cast<IDXGISwapChain*>(receiver)->GetBuffer(0, IID_PPV_ARGS(&texture));
+                if (SUCCEEDED(result)) *out = texture.Detach();
+                return result;
+            } catch (...) { return E_FAIL; }
+        },
+        [](void* receiver) noexcept -> int32_t {
+            try { return static_cast<IDXGISwapChain*>(receiver)->Present(0, 0); }
+            catch (...) { return E_FAIL; }
+        },
+        [](void* user) noexcept -> int32_t {
+            try {
+                const auto& api = *static_cast<const NativeCalls*>(user)->presentation;
+                return api.provider() && api.session();
+            } catch (...) { return -1; }
+        },
+        [](void* user) noexcept -> uint32_t {
+            try { return static_cast<const NativeCalls*>(user)->presentation->backend(); }
+            catch (...) { return UINT32_MAX; }
+        },
+        outer ? +[](void* user, uint32_t* pre, uint32_t* post, uint32_t* dispatched) noexcept {
+            const auto& chain = *static_cast<const NativeCalls*>(user)->outer;
+            *pre = chain.pre; *post = chain.post; *dispatched = chain.dispatched;
+        } : nullptr,
+        []() noexcept -> int32_t {
+            try {
+                MSG message{};
+                while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+                    TranslateMessage(&message);
+                    DispatchMessageW(&message);
+                }
+                return RSF_OK;
+            } catch (...) { return RSF_ERROR_NOT_READY; }
+        },
+    };
     auto frame = [&](bool reconstruct, bool primary, bool reset, int expect_capture) {
-        ++source;
-        cpu(host, source, RSF_GAME_CPU_FRAME_BEGIN);
-        cpu(host, source, RSF_GAME_CPU_SIMULATION_END);
-        const float scene_color[]{0.25f, 0.5f, 0.75f, 1}, zero[4]{};
-        if (native_reinsertion) {
-            std::fill(native_pixels.begin(), native_pixels.end(), outside_marker.v);
-            for (UINT row = 0; row < active_height; ++row)
-                std::fill_n(native_pixels.begin() + size_t(row) * width, active_width, native_pixel.v);
-            context->UpdateSubresource(color.Get(), 0, nullptr, native_pixels.data(), width * UINT(sizeof(uint32_t)), 0);
-        } else context->ClearRenderTargetView(color_view.Get(), scene_color);
-        context->ClearRenderTargetView(motion_view.Get(), zero);
-        context->ClearDepthStencilView(depth_view.Get(), D3D11_CLEAR_DEPTH, 0.5f, 0);
-        rsf_game_render_pass pass{}; pass.struct_size = sizeof(pass);
-        pass.session_id = host.session_id; pass.source_frame_id = pass.submission_id = pass.scope_id = source;
-        pass.family_key = pass.view_key = pass.history_key = pass.viewport_key = pass.window_key = pass.rhi_viewport_key = 1;
-        pass.native_frame = source; pass.screen = RSF_SCREEN_GAMEPLAY;
-        pass.flags = RSF_GAME_RENDER_AFTER_SIMULATION | (primary ? RSF_GAME_RENDER_PRIMARY : RSF_GAME_RENDER_NO_FG);
-        if (reset) pass.flags |= RSF_GAME_RENDER_RESET;
-        pass.swapchain = chain.Get(); pass.color_input = color.Get(); pass.color_output = native_reinsertion ? color.Get() : output.Get();
-        pass.depth = depth.Get(); pass.motion = motion.Get(); pass.camera_valid = pass.motion_camera_included = 1;
-        pass.motion_to_uv[0] = pass.motion_to_uv[1] = -1;
-        auto& camera = pass.camera; camera.struct_size = sizeof(camera); camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
-        identity(camera.view_to_clip); identity(camera.clip_to_view); identity(camera.world_to_view);
-        identity(camera.view_to_world); identity(camera.clip_to_previous_clip); identity(pass.previous_clip_to_clip);
-        camera.view_to_clip[0] = float(height) / float(width); camera.clip_to_view[0] = float(width) / float(height);
-        camera.near_plane = 0.1f; camera.far_plane = 1000; camera.vertical_fov_radians = 1.2f;
-        camera.frame_time_seconds = 1.0f / 60; camera.depth_inverted = 1;
-        camera.render_width = active_width; camera.render_height = active_height;
-        camera.output_width = width; camera.output_height = height;
-        pass.render_rect[2] = int32_t(active_width); pass.render_rect[3] = int32_t(active_height);
-        pass.output_rect[2] = int32_t(width); pass.output_rect[3] = int32_t(height);
-        // FRAME precedes every source-owned GPU input and SR callback.
-        pass.role = RSF_GAME_RENDER_FRAME; host.render_pass(host.user, context.Get(), &pass, 1);
-        pass.role = RSF_GAME_RENDER_SUBMISSION; host.render_pass(host.user, context.Get(), &pass, 1);
-        if (scoped) {
-            auto& domains=pass.depth_domains;
-            domains.struct_size=sizeof(domains); domains.version=RSF_DEPTH_DOMAINS_VERSION; domains.domain_count=1;
-            auto& domain=domains.domains[0]; domain.classify_max=domain.viewport_max_depth=1; domain.endpoint_flags=3;
-            domain.viewport_xywh[2]=float(active_width); domain.viewport_xywh[3]=float(active_height);
-            identity(domain.source_clip_to_target_clip);
-        }
-        pass.role = RSF_GAME_RENDER_FG_INPUTS;
-        host.render_pass(host.user, context.Get(), &pass, 1);
-        host.render_pass(host.user, context.Get(), &pass, 0);
-        const bool held = rsf_native_fg_inputs_ready(source) != 0;
-        if (held) ++captured;
-        if (expect_capture > 0 && !held) {
-            if (!presentation.provider() || !presentation.session()) unavailable = true;
-            else { std::puts("FAIL: requested native FG inputs were not retained"); failed = true; }
-        }
-        if (expect_capture == 0 && held) { std::puts("FAIL: FG Off still retained pure FG inputs"); failed = true; }
-        // Match the native adapter: retain inputs before SR can mutate them.
-        auto sr_pass = pass; sr_pass.role = RSF_GAME_RENDER_SR;
-        sr_pass.flags |= RSF_GAME_RENDER_NO_FG; // SR metadata does not grant FG eligibility.
-        if (scoped) sr_pass.depth_domains.domains[0].source_clip_to_target_clip[14]=.125f;
-        rsf_d3d11_auxiliary_surface auxiliary{sizeof(auxiliary),RSF_D3D11_AUXILIARY_COLOUR,motion.Get(),
-            {0,0,float(active_width),float(active_height)},{0,0,int32_t(width),int32_t(height)},{0,0}};
-        auxiliary.flags=RSF_D3D11_AUXILIARY_RESTORE_CONTENTS;
-        const rsf_d3d11_auxiliary_pass auxiliary_request{sizeof(auxiliary_request),RSF_D3D11_HOST_ABI_VERSION,&sr_pass,1,&auxiliary};
-        const auto sr_result = exercise_auxiliary_cleanup ?
-            rsf_d3d11_host_upscale_auxiliaries(host.user,context.Get(),&auxiliary_request) :
-            host.process_upscale(host.user, context.Get(), &sr_pass);
-        if (exercise_auxiliary_cleanup) {
-            const rsf_d3d11_auxiliary_scope cleanup{sizeof(cleanup),RSF_D3D11_HOST_ABI_VERSION,host.session_id,source,1};
-            verify(sr_result==RSF_OK,"warmed auxiliary transaction commits before cleanup checks");
-            auto mismatch=cleanup; ++mismatch.native_frame;
-            verify(rsf_d3d11_host_restore_auxiliaries(host.user,&mismatch)==RSF_ERROR_NOT_READY,
-                "mismatched pending auxiliary scope refuses without releasing ownership");
-            mismatch=cleanup; ++mismatch.view_key;
-            verify(rsf_d3d11_host_restore_auxiliaries(host.user,&mismatch)==RSF_ERROR_NOT_READY,"pending cleanup refuses wrong view");
-            mismatch=cleanup; ++mismatch.session_id;
-            verify(rsf_d3d11_host_restore_auxiliaries(host.user,&mismatch)==RSF_ERROR_NOT_READY,"pending cleanup refuses foreign session");
-            int32_t thread_result=RSF_OK;
-            std::thread other([&] { thread_result=rsf_d3d11_host_restore_auxiliaries(host.user,&cleanup); }); other.join();
-            verify(thread_result==RSF_ERROR_NOT_READY,"pending cleanup refuses foreign thread");
-            verify(rsf_d3d11_host_upscale_auxiliaries(host.user,context.Get(),&auxiliary_request)==RSF_ERROR_BUSY,
-                "refused cleanup leaves the original pending transaction owned");
-            verify(rsf_d3d11_host_restore_auxiliaries(host.user,&cleanup)==RSF_OK &&
-                rsf_d3d11_host_restore_auxiliaries(host.user,&cleanup)==RSF_OK,"successful cleanup and empty repeat acknowledge OK");
-            D3D11_TEXTURE2D_DESC staging_desc{}; output->GetDesc(&staging_desc);
-            staging_desc.Usage=D3D11_USAGE_STAGING; staging_desc.BindFlags=staging_desc.MiscFlags=0;
-            staging_desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
-            ComPtr<ID3D11Texture2D> invalid_mirror;
-            verify(SUCCEEDED(device->CreateTexture2D(&staging_desc,nullptr,&invalid_mirror)),"create unsupported readable mirror for rollback");
-            auto rollback_pass=sr_pass; rollback_pass.color_output_readable=invalid_mirror.Get();
-            auto invalid_request=auxiliary_request; invalid_request.pass=&rollback_pass;
-            verify(rsf_d3d11_host_upscale_auxiliaries(host.user,context.Get(),&invalid_request)!=RSF_OK,
-                "second destination failure rolls back partially prepared auxiliary transaction");
-            verify(rsf_d3d11_host_restore_auxiliaries(host.user,&cleanup)==RSF_OK &&
-                rsf_d3d11_host_restore_auxiliaries(host.user,&cleanup)==RSF_OK,"rolled-back empty cleanup and repeat acknowledge OK");
-        }
-        if (reconstruct && sr_result == RSF_OK) ++sr_evaluated;
-        if (reconstruct && native_reinsertion) verify(sr_result == RSF_OK, "warmed reduced SR must reinsert into native colour allocation");
-        if (refuse_depth_late) {
-            auto malformed=pass; ++malformed.depth_domains.version;
-            host.render_pass(host.user,context.Get(),&malformed,1);
-            host.render_pass(host.user,context.Get(),&malformed,0);
-        }
-        if (refuse_inputs_late) {
-            auto refused = pass; refused.role = RSF_GAME_RENDER_FG_INPUTS; refused.flags |= RSF_GAME_RENDER_NO_FG;
-            host.render_pass(host.user,context.Get(),&refused,1);
-            host.render_pass(host.user,context.Get(),&refused,0);
-            // A subsequent duplicate eligible lease cannot undo the genuine refusal.
-            pass.role = RSF_GAME_RENDER_FG_INPUTS;
-            host.render_pass(host.user,context.Get(),&pass,1);
-            host.render_pass(host.user,context.Get(),&pass,0);
-        }
-        ComPtr<ID3D11Texture2D> backbuffer;
-        if (FAILED(chain->GetBuffer(0, IID_PPV_ARGS(&backbuffer)))) { verify(false, "GetBuffer for final scene"); return; }
-        ComPtr<ID3D11RenderTargetView> backbuffer_view;
-        if (FAILED(device->CreateRenderTargetView(backbuffer.Get(), nullptr, &backbuffer_view))) { verify(false, "CreateRenderTargetView for final scene"); return; }
-        context->ClearRenderTargetView(backbuffer_view.Get(), scene_color);
-        pass.role = RSF_GAME_RENDER_FINAL_SCENE; pass.scene_surface = backbuffer.Get();
-        host.render_pass(host.user, context.Get(), &pass, 1);
-        host.render_pass(host.user, context.Get(), &pass, 0);
-        pass.role = RSF_GAME_RENDER_SUBMISSION; host.render_pass(host.user, context.Get(), &pass, 0);
-        pass.role = RSF_GAME_RENDER_WINDOW; pass.scene_surface = nullptr;
-        host.render_pass(host.user, context.Get(), &pass, 1);
-        const auto result = chain->Present(0, 0); ++app_presents;
-        if (outer) {
-            rsf_native_present_record observed{}; observed.struct_size = sizeof(observed);
-            verify(rsf_native_window_last_present(&observed) && observed.matched && observed.source_frame_id == source,
-                "actual inner Present matches the outer WINDOW canonical identity");
-            verify(outer->pre == app_presents + 1 && outer->post == outer->pre && outer->dispatched == outer->pre,
-                "outer pre/post work survives every source and generation switch");
-        }
-        if (FAILED(result)) { std::printf("FAIL: Present HRESULT=0x%08lx\n", static_cast<unsigned long>(result)); failed = true; }
-        occluded |= result == DXGI_STATUS_OCCLUDED;
-        host.render_pass(host.user, context.Get(), &pass, 0);
-        pass.role = RSF_GAME_RENDER_FRAME; host.render_pass(host.user, context.Get(), &pass, 0);
-        cpu(host, source, RSF_GAME_CPU_FRAME_END);
-        rsf_native_cpu_frame cpu_frame{}; cpu_frame.struct_size = sizeof(cpu_frame);
-        const auto cpu_ok = rsf_native_cpu_read(host.session_id, source, &cpu_frame);
-        if (!cpu_ok || cpu_frame.pacing_qpc || cpu_frame.input_ready_qpc || cpu_frame.timestamps_qpc[RSF_GAME_CPU_INPUT_SAMPLE]) {
-            std::printf("CPU timing failure: source=%llu query=%d pacing_qpc=%llu input_ready_qpc=%llu input_sample_qpc=%llu\n",
-                static_cast<unsigned long long>(source), cpu_ok, static_cast<unsigned long long>(cpu_frame.pacing_qpc),
-                static_cast<unsigned long long>(cpu_frame.input_ready_qpc),
-                static_cast<unsigned long long>(cpu_frame.timestamps_qpc[RSF_GAME_CPU_INPUT_SAMPLE]));
-            verify(cpu_ok != 0, "source CPU snapshot query");
-            verify(!cpu_frame.pacing_qpc, "source CPU pacing QPC must remain zero");
-            verify(!cpu_frame.input_ready_qpc, "source CPU input-ready QPC must remain zero");
-            verify(!cpu_frame.timestamps_qpc[RSF_GAME_CPU_INPUT_SAMPLE], "source CPU physical input sample must remain unknown");
-        }
-        rsf_native_fg_status fg{}; fg.struct_size = sizeof(fg);
-        if (!rsf_native_fg_status_get(&fg)) { verify(false, "per-source FG status query"); return; }
-        std::printf("source=%llu SR=%d held=%u backend=%u reason=%u result=%d tagged=%llu present_callbacks=%llu generated_callbacks=%llu statistics_flags=0x%x vendor_generated_presented=%llu\n",
-            static_cast<unsigned long long>(source), sr_result, held ? 1u : 0u, presentation.backend(), fg.reason,
-            fg.last_result, static_cast<unsigned long long>(fg.tagged_frames),
-            static_cast<unsigned long long>(fg.vendor.present_callbacks), static_cast<unsigned long long>(fg.vendor.generated_callbacks),
-            fg.vendor.valid_statistics, static_cast<unsigned long long>(fg.vendor.generated_presented));
-        std::printf("source_status=%llu provenance=%u input_qpc=%llu source_qpc=%llu frequency=%llu requested_mode=%u generated=%u reflex=%u limit_us=%u effective_mode=%u effective_reflex=%u pacing_owner=%u paced=%llu\n",
-            static_cast<unsigned long long>(fg.source_frame_id), fg.source_provenance,
-            static_cast<unsigned long long>(fg.input_qpc), static_cast<unsigned long long>(fg.source_qpc),
-            static_cast<unsigned long long>(fg.source_qpc_frequency), fg.requested.mode, fg.requested.generated_frames,
-            fg.requested.reflex_mode, fg.requested.frame_limit_us, fg.vendor.effective_mode, fg.vendor.effective_reflex,
-            fg.vendor.pacing_owner, static_cast<unsigned long long>(fg.vendor.latency_paced_frames));
-        verify(!fg.input_qpc, "FG status physical input QPC must remain unknown");
-        verify(!fg.vendor.latency_paced_frames, "provider latency paced count must remain zero");
-        verify(fg.vendor.pacing_owner == RSF_PACING_NONE, "provider pacing owner must be NONE");
-        verify(fg.vendor.effective_reflex == RSF_REFLEX_OFF, "provider effective Reflex must be Off");
-        verify(fg.requested.reflex_mode == RSF_REFLEX_OFF, "requested Reflex must be Off");
-        verify(!fg.requested.frame_limit_us, "requested limiter must be zero");
-        if (fg.source_frame_id == source && fg.tagged_frames) {
-            verify(fg.source_provenance == RSF_FRAME_SOURCE_RENDERED, "tagged current source must declare rendered provenance");
-            verify(fg.source_qpc != 0, "tagged current source must carry native source QPC");
-            verify(fg.source_qpc_frequency != 0, "tagged current source must carry source QPC frequency");
-        }
-        MSG message{}; while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&message); DispatchMessageW(&message); }
+        const rsf_d3d11_fixture_fg_frame request{
+            uint32_t(reconstruct), uint32_t(primary), uint32_t(reset), expect_capture,
+            uint32_t(scoped), uint32_t(native_reinsertion), active_width, active_height,
+            native_pixel.v, outside_marker.v, uint32_t(exercise_auxiliary_cleanup),
+            uint32_t(refuse_inputs_late), uint32_t(refuse_depth_late),
+        };
+        rsf_d3d11_host_fixture_rendered_frame(&resources, &calls, &request, &state);
     };
     const auto phase_frame = [&](uint32_t reconstruct, uint32_t reset,
         int32_t expect_capture, uint32_t cleanup) noexcept -> int32_t {
