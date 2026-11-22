@@ -52,11 +52,13 @@ fn sharpening_payload() {
         "rcas.h",
         "da_rcas.h",
         "da_das.h",
+        "rcas_spirv.h",
+        "da_rcas_spirv.h",
+        "da_das_spirv.h",
         "depth_color.inc",
     ] {
         println!("cargo:rerun-if-changed={directory}/{file}");
     }
-    println!("cargo:rerun-if-changed=src/sharpening_pass_options.h");
     println!("cargo:rerun-if-changed=include/rescaleframe/sharpening_settings.h");
     let mut build = cc::Build::new();
     if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {

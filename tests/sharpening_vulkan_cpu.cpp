@@ -7,7 +7,11 @@
 #ifdef RSF_SHARPENING_VULKAN_HEADER
 #include RSF_SHARPENING_VULKAN_HEADER
 #else
-#include "../runtime/orchestrator/src/sharpening_vulkan.h"
+#include "sharpening_vulkan_support.h"
+#include "../runtime/graphics/src/sharpening/options.h"
+#include "../runtime/graphics/src/sharpening/rcas_spirv.h"
+#include "../runtime/graphics/src/sharpening/da_rcas_spirv.h"
+#include "../runtime/graphics/src/sharpening/da_das_spirv.h"
 #endif
 #include <cstdio>
 #include <cstring>
@@ -270,9 +274,9 @@ void records_exact_pass() {
     auto frame = f.frame(2); frame.exposure = f.image(exposure, VK_FORMAT_R16_SFLOAT, 1, 1);
     require(f.run(7, frame), "depth RCAS recorded");
     require(g.shaders.size() == 3, "three shader modules");
-    require(g.shaders[0].first == rsf::sharpening::rcas_spirv && g.shaders[0].second == sizeof(rsf::sharpening::rcas_spirv) &&
-        g.shaders[1].first == rsf::sharpening::da_rcas_spirv && g.shaders[1].second == sizeof(rsf::sharpening::da_rcas_spirv) &&
-        g.shaders[2].first == rsf::sharpening::da_das_spirv && g.shaders[2].second == sizeof(rsf::sharpening::da_das_spirv), "exact SPIR-V in mode order");
+    require(g.shaders[0].second == sizeof(rsf::sharpening::rcas_spirv) && !std::memcmp(g.shaders[0].first, rsf::sharpening::rcas_spirv, sizeof(rsf::sharpening::rcas_spirv)) &&
+        g.shaders[1].second == sizeof(rsf::sharpening::da_rcas_spirv) && !std::memcmp(g.shaders[1].first, rsf::sharpening::da_rcas_spirv, sizeof(rsf::sharpening::da_rcas_spirv)) &&
+        g.shaders[2].second == sizeof(rsf::sharpening::da_das_spirv) && !std::memcmp(g.shaders[2].first, rsf::sharpening::da_das_spirv, sizeof(rsf::sharpening::da_das_spirv)), "exact SPIR-V in mode order");
     require(f.live("shader") == 0, "shader modules released after pipeline creation");
     for (const auto& entry : g.entries) require(entry == "CSMain", "CSMain entry point");
     require(g.memory_types.size() == 2 && g.memory_types[0] == 1 && g.memory_types[1] == 0, "host-coherent constants, device-local scratch");

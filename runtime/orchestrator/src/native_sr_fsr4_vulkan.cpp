@@ -38,7 +38,8 @@ struct Graphics {
     PFN_vkCmdCopyImage copy{};
     PFN_vkWaitSemaphores wait{};
     PFN_vkDeviceWaitIdle idle{};
-    rsf::sharpening::Vulkan sharpen;
+    rsf_sharpenvk_host sharpen{};
+    ~Graphics() { rsf_sharpenvk_host_destroy(&sharpen); }
     rsf::FrameCaptureVk capture;
 };
 
@@ -123,7 +124,7 @@ int32_t split(const rsf_fsr4vk_handoff* handoff, void* commands, uint64_t timeli
 
 
 void sharpen(void* graphics, const rsf_srvk_setup* setup, void* commands, const rsf_srvk_frame* frame, uint64_t image) noexcept try {
-    (void)static_cast<Graphics*>(graphics)->sharpen.run(*setup, static_cast<VkCommandBuffer>(commands), *frame, reinterpret_cast<VkImage>(image));
+    (void)rsf_sharpenvk_host_run(&static_cast<Graphics*>(graphics)->sharpen, setup, commands, frame, image);
 } catch (...) {
     // A diagnostic callback must not interrupt the shared output handoff.
 }
@@ -131,9 +132,9 @@ void sharpen(void* graphics, const rsf_srvk_setup* setup, void* commands, const 
 void retire(void* graphics, void* commands) {
     auto& native = *static_cast<Graphics*>(graphics);
     native.capture.retire_commands(static_cast<VkCommandBuffer>(commands));
-    native.sharpen.retire(commands);
+    rsf_sharpenvk_host_retire(&native.sharpen, commands);
 }
-void clear_sharpen(void* graphics) { static_cast<Graphics*>(graphics)->sharpen.clear(); }
+void clear_sharpen(void* graphics) { rsf_sharpenvk_host_clear(&static_cast<Graphics*>(graphics)->sharpen); }
 
 int32_t wait(void* graphics, uint64_t timeline, uint64_t value, uint64_t timeout) {
     const auto& native = *static_cast<const Graphics*>(graphics);

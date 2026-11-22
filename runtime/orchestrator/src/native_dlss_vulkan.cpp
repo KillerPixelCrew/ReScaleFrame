@@ -34,7 +34,8 @@ template<class T> T entry(void* module, const char* name) { return reinterpret_c
 }
 #include "sharpening_vulkan.h"
 struct Native {
-    rsf::sharpening::Vulkan sharpen;
+    rsf_sharpenvk_host sharpen{};
+    ~Native() { rsf_sharpenvk_host_destroy(&sharpen); }
     rsf_srvk_setup setup{};
     rsf::vkfg::Device gpu;
     PFun_slSetConstants* constants = nullptr; PFun_slSetTagForFrame* tags = nullptr;
@@ -196,7 +197,7 @@ const rsf_vkdlss_platform rsf::dlss_vk::leaves{
     capture_parameters, capture_record,
     [](void* native, void* commands, const rsf_srvk_frame* input, uint64_t output) {
         auto& self = *static_cast<Native*>(native);
-        (void)self.sharpen.run(self.setup, static_cast<VkCommandBuffer>(commands), *input, reinterpret_cast<VkImage>(output));
+        (void)rsf_sharpenvk_host_run(&self.sharpen, &self.setup, commands, input, output);
     },
     [](void*, uintptr_t, void* native) -> int32_t {
         return static_cast<Native*>(native)->release(sl::kFeatureDLSS, viewport) == sl::Result::eOk ?
@@ -205,11 +206,11 @@ const rsf_vkdlss_platform rsf::dlss_vk::leaves{
     [](void* native) {
         auto& self = *static_cast<Native*>(native);
         (void)self.capture.flush();
-        self.sharpen.clear();
+        rsf_sharpenvk_host_clear(&self.sharpen);
     },
     [](void* native, void* commands) {
         auto& self = *static_cast<Native*>(native);
-        self.sharpen.retire(commands);
+        rsf_sharpenvk_host_retire(&self.sharpen, commands);
         self.capture.retire_commands(static_cast<VkCommandBuffer>(commands));
     },
     rsf_dlss_preset_valid,

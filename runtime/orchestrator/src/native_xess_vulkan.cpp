@@ -61,7 +61,8 @@ struct Native {
     PFN_vkCmdCopyImage copy = nullptr;
     // The SR owner retires its readbacks with the command buffer that recorded them.
     rsf::FrameCaptureVk capture{rsf::FrameCaptureVk::Completion::command_retirement};
-    rsf::sharpening::Vulkan sharpen;
+    rsf_sharpenvk_host sharpen{};
+    ~Native() { rsf_sharpenvk_host_destroy(&sharpen); }
 };
 struct Ops {
     rsf_vk_sdk_loader loader;
@@ -250,7 +251,7 @@ int32_t execute(Native* native, void* commands, const Execute* call) noexcept {
 }
 
 int32_t sharpen(Native* native, const rsf_srvk_setup* setup, void* commands, const rsf_srvk_frame* frame, uint64_t output) noexcept try {
-    return native->sharpen.run(*setup, commands, *frame, reinterpret_cast<VkImage>(output));
+    return rsf_sharpenvk_host_run(&native->sharpen, setup, commands, frame, output) != 0;
 } catch (...) { return 0; }
 
 void capture_record(Native* native, void* commands, const rsf_srvk_image* image,
@@ -263,7 +264,7 @@ void capture_parameters(const rsf_srvk_frame* frame, uint32_t backend, uint32_t 
 } catch (...) {}
 
 void retire_commands(Native* native, void* commands) noexcept {
-    native->sharpen.retire(commands);
+    rsf_sharpenvk_host_retire(&native->sharpen, commands);
     native->capture.retire_commands(static_cast<VkCommandBuffer>(commands));
 }
 }
@@ -274,7 +275,7 @@ extern const Ops native_ops{
     open, [](Native* native) noexcept { delete native; }, create_context, initialize, resolution, destroy_context,
     bind_device, [](Native* native) -> void* { return &native->gpu; }, &rsf::vkfg::platform,
     velocity, record_barrier, record_copy, execute, sharpen,
-    [](Native* native) noexcept { native->sharpen.clear(); },
+    [](Native* native) noexcept { rsf_sharpenvk_host_clear(&native->sharpen); },
     [](Native* native, uint64_t provider, uint32_t backend) noexcept { native->capture.set_provider(provider, backend); },
     capture_record, capture_parameters, retire_commands,
     [](Native* native) noexcept { (void)native->capture.flush(); },

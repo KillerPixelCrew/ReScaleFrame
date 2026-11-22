@@ -4,9 +4,19 @@
 #include "rcas.h"
 #include "da_rcas.h"
 #include "da_das.h"
+#include "rcas_spirv.h"
+#include "da_rcas_spirv.h"
+#include "da_das_spirv.h"
 #include "d3d11.h"
-#include "../../../orchestrator/src/sharpening_pass_options.h"
 #include <cstring>
+
+// Marshal the separate MIT C settings record into the licensed calculator's inputs.
+static rsf::sharpening::Options options_from_request(const rsf_sharpening_options& o)
+{
+    return {static_cast<rsf::sharpening::Mode>(o.mode), o.sharpness, o.mas,
+        o.motion_sharpness, o.motion_threshold, o.motion_scale_limit, o.contrast_enabled,
+        o.contrast, o.depth_scale, o.depth_bias, o.clamp_output, o.debug};
+}
 
 extern "C" const char* rsf_sharpening_hlsl(uint32_t mode)
 {
@@ -16,6 +26,17 @@ extern "C" const char* rsf_sharpening_hlsl(uint32_t mode)
     case Mode::depth_rcas: return da_rcas;
     case Mode::depth_das: return da_das;
     default: return nullptr;
+    }
+}
+
+extern "C" const uint32_t* rsf_sharpening_spirv(uint32_t mode, size_t* words)
+{
+    using namespace rsf::sharpening;
+    switch (static_cast<Mode>(mode)) {
+    case Mode::rcas: *words = sizeof(rcas_spirv) / sizeof(uint32_t); return rcas_spirv;
+    case Mode::depth_rcas: *words = sizeof(da_rcas_spirv) / sizeof(uint32_t); return da_rcas_spirv;
+    case Mode::depth_das: *words = sizeof(da_das_spirv) / sizeof(uint32_t); return da_das_spirv;
+    default: *words = 0; return nullptr;
     }
 }
 

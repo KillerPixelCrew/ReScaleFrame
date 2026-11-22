@@ -141,3 +141,19 @@ Remaining G05 paths with implementation code are
   The existing CTest name and WARP skip behavior remain. It retains disabled
   dispatch checks, HDR and SDR output checks, depth fallback, three command
   slots recorded before submission, and D3D12 debug-layer message checks.
+- `runtime/orchestrator/src/sharpening_vulkan.h` now declares C-only host
+  state and functions. Rust uses typed Vulkan calls for all four providers
+  and owns one fallback log per host, including initial allocation failure.
+  The device binds through the same 31 entry points, writes the six
+  descriptors and records the six barriers, compute dispatch and copy.
+  The generated callback ABI also covers the new C host record.
+- `runtime/orchestrator/src/sharpening_pass_options.h` was removed. The
+  existing payload bridge marshals the C settings record into the licensed
+  calculator. It exposes HLSL and SPIR-V from their original arrays and
+  preserves the original activation and packing logic.
+
+The GPL HLSL, SPIR-V and `options.h` inputs match `82b39a63` byte for byte.
+The calculator and adaptive ramp in `options.h` are upstream-derived
+implementations. Moving them into MIT Rust would require an independently
+specified replacement and parity evidence. The host ports call these
+calculations through the existing GPL-3.0-only compilation boundary.

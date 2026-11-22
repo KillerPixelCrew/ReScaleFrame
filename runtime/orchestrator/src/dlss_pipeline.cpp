@@ -13,7 +13,6 @@
 #include <rescaleframe/colour_fidelity.h>
 #include <rescaleframe/colour_transport.h>
 #include "dlss_pipeline_platform.h"
-#include "sharpening_pass_options.h"
 #include "sr_legacy_adapter.h"
 #include "../../graphics/src/sharpening/d3d11.h"
 #include <rescaleframe/input_dump.h>
@@ -269,8 +268,7 @@ catch (...) {}
 int32_t sharpen(void** pass, void* context, void* output, void* motion, void* depth, void* exposure,
     const rsf_sharpening_options* request, const rsf_dlssp_sharpen_frame* frame) noexcept try
 {
-    const auto options = rsf::sharpening::options_from_request(*request);
-    if (!rsf::sharpening::active(options)) return 1;
+    if (!rsf_sharpening_requested(request)) return 1;
     rsf_sharpen11_frame mapping{};
     mapping.hdr = 1;
     mapping.exposure = 1.0f;

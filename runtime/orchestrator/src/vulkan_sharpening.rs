@@ -3,22 +3,23 @@
 //! XeSS and FSR4 super-resolution services.
 //!
 //! Rust decides admission, the effective filter, slot reuse, device and
-//! pipeline lifetime and retirement. Native leaves in
-//! `sharpening_vulkan.h` resolve Vulkan functions, create and record Vulkan
-//! objects, select the SPIR-V for a mode and pack the shader constants.
+//! pipeline lifetime and retirement. Typed Rust Vulkan calls use the original
+//! SPIR-V and GPU constants supplied by the licensed payload.
+mod native;
 use crate::render_abi::rsf_sharpening_options as Options;
 use crate::sharpening_policy::{FILTERS, effective_mode};
 use crate::vulkan_fg_resources::{ensure_image, rsf_core_vkfg_release_image};
 use crate::vulkan_fg_resources_abi::{rsf_vkfg_image as OwnedImage, rsf_vkfg_platform as ImageOps};
 use crate::vulkan_sharpening_abi::{
-    rsf_sharpenvk_facts as Facts, rsf_sharpenvk_layouts as Layouts, rsf_sharpenvk_pass as Pass,
-    rsf_sharpenvk_platform as Platform, rsf_sharpenvk_uniform as Uniform,
+    rsf_sharpenvk_facts as Facts, rsf_sharpenvk_host as Host, rsf_sharpenvk_layouts as Layouts,
+    rsf_sharpenvk_pass as Pass, rsf_sharpenvk_platform as Platform,
+    rsf_sharpenvk_uniform as Uniform,
 };
 use crate::vulkan_sr::{R32_FLOAT, RGBA16_FLOAT, SHADER_READ, STORAGE_USAGE, TRANSFER_SRC_USAGE};
 use crate::vulkan_sr_abi::{
     rsf_srvk_frame as Frame, rsf_srvk_image as Image, rsf_srvk_setup as Setup,
 };
-use std::ffi::c_void;
+use std::ffi::{c_char, c_void};
 use std::ptr;
 
 const R16_FLOAT: u32 = 76;
@@ -389,3 +390,61 @@ unsafe extern "C" fn rsf_core_sharpenvk_dispatches(owner: *const Owner) -> u64 {
 
 #[cfg(test)]
 mod tests;
+
+unsafe extern "C" {
+    fn rsf_call_native_log(
+        log: crate::render_abi::rsf_backend_log_fn,
+        user: *mut c_void,
+        text: *const c_char,
+    );
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_sharpenvk_host_destroy(host: &mut Host) {
+    unsafe { rsf_core_sharpenvk_destroy(host.owner.cast()) };
+    *host = Host::default();
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_sharpenvk_host_clear(host: &mut Host) {
+    unsafe { rsf_core_sharpenvk_clear(host.owner.cast()) };
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_sharpenvk_host_retire(host: &mut Host, commands: *mut c_void) {
+    unsafe { rsf_core_sharpenvk_retire(host.owner.cast(), commands) };
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_sharpenvk_host_dispatches(host: &Host) -> u64 {
+    unsafe { rsf_core_sharpenvk_dispatches(host.owner.cast()) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_sharpenvk_host_run(
+    host: &mut Host,
+    setup: &Setup,
+    commands: *mut c_void,
+    frame: &Frame,
+    output: u64,
+) -> u32 {
+    if host.owner.is_null() {
+        host.owner = unsafe { rsf_core_sharpenvk_create(native::PLATFORM) }.cast();
+    }
+    let result =
+        unsafe { rsf_core_sharpenvk_record(host.owner.cast(), setup, commands, frame, output) };
+    if result == 0 && host.failure_logged == 0 {
+        host.failure_logged = 1;
+        let text = c"Vulkan sharpening unavailable; retaining vendor output";
+        if frame.log.is_some() {
+            unsafe { rsf_call_native_log(frame.log, frame.log_user, text.as_ptr()) };
+        } else {
+            unsafe {
+                windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringA(
+                    text.as_ptr().cast(),
+                )
+            };
+        }
+    }
+    result
+}

@@ -129,7 +129,8 @@ struct FfxNative {
     PFN_vkCmdCopyImage copy = nullptr;
     VkPhysicalDeviceMemoryProperties memory{};
     rsf::FrameCaptureVk capture{rsf::FrameCaptureVk::Completion::command_retirement};
-    rsf::sharpening::Vulkan sharpen;
+    rsf_sharpenvk_host sharpen{};
+    ~FfxNative() { rsf_sharpenvk_host_destroy(&sharpen); }
 
 };
 
@@ -324,9 +325,9 @@ constexpr Platform native{
         [](FfxNative* owner) { return owner->memory.memoryTypeCount; },
         record_barrier, clear_color_zero, dispatch, record_copy,
         [](FfxNative* owner, const rsf_srvk_setup* setup, void* commands, const rsf_srvk_frame* frame, uint64_t output) -> int32_t {
-            return owner->sharpen.run(*setup, commands, *frame, reinterpret_cast<VkImage>(output));
+            return rsf_sharpenvk_host_run(&owner->sharpen, setup, commands, frame, output) != 0;
         },
-        [](FfxNative* owner) { owner->sharpen.clear(); },
+        [](FfxNative* owner) { rsf_sharpenvk_host_clear(&owner->sharpen); },
         [](FfxNative* owner, uint64_t version, uint32_t backend) { owner->capture.set_provider(version, backend); },
         [](FfxNative* owner, void* commands, const rsf_srvk_image* image,
             const rsf_frame_record* record, const char* role, uint32_t reset) {
@@ -337,7 +338,7 @@ constexpr Platform native{
             rsf_capture_sr_parameters(frame->record, backend, frame->motion_scale_x, frame->motion_scale_y, frame->pre_exposure, reset);
         },
         [](FfxNative* owner, void* commands) {
-            owner->sharpen.retire(commands);
+            rsf_sharpenvk_host_retire(&owner->sharpen, commands);
             owner->capture.retire_commands(static_cast<VkCommandBuffer>(commands));
         },
         [](FfxNative* owner) { (void)owner->capture.flush(); }},

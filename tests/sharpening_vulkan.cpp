@@ -4,7 +4,7 @@
 #include <vulkan/vulkan.h>
 #include <DirectXPackedVector.h>
 #include <rescaleframe/native_latency_vulkan.h>
-#include "../runtime/orchestrator/src/sharpening_vulkan.h"
+#include "sharpening_vulkan_support.h"
 #include <stdexcept>
 #include <vector>
 #include <array>

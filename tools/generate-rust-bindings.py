@@ -456,11 +456,12 @@ generate("runtime/orchestrator/src/vulkan_fg_resources_abi.rs", "runtime/orchest
 generate("runtime/orchestrator/src/d3d11_sharpening_abi.rs", "runtime/graphics/src/sharpening/d3d11.h",
          "rsf_sharpen11_frame", "NOTHING", ["-Iruntime/orchestrator/include"],
          ["--no-recursive-allowlist"])
-generate("runtime/orchestrator/src/vulkan_sharpening_abi.rs", "runtime/orchestrator/src/sharpening_vulkan_core.h",
-         "rsf_sharpenvk_(uniform|layouts|facts|pass|platform)", "NOTHING",
+generate("runtime/orchestrator/src/vulkan_sharpening_abi.rs", "runtime/orchestrator/src/sharpening_vulkan.h",
+         "rsf_sharpenvk_(uniform|layouts|facts|pass|platform|host)", "NOTHING",
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist", "--with-derive-default",
           "--blocklist-type", "rsf_(sharpening_options|vkfg_platform|srvk_(setup|frame))",
+          "--raw-line", "type rsf_sharpenvk = ::core::ffi::c_void;",
           "--raw-line", "use crate::render_abi::rsf_sharpening_options;",
           "--raw-line", "use crate::vulkan_fg_resources_abi::rsf_vkfg_platform;",
           "--raw-line", "use crate::vulkan_sr_abi::{rsf_srvk_frame, rsf_srvk_setup};"])
