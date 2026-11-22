@@ -67,8 +67,7 @@ static SERVICES: Services = Services {
 };
 
 #[cfg(not(test))]
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_sr_legacy_create(
+pub(super) unsafe fn rsf_sr_legacy_create(
     device: *mut c_void,
     width: u32,
     height: u32,
@@ -386,8 +385,7 @@ impl Adapter {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_sr_legacy_select(
+pub(super) unsafe fn rsf_sr_legacy_select(
     adapter: *mut Adapter,
     backend: u32,
     quality: u32,
@@ -425,8 +423,7 @@ pub(super) unsafe fn rsf_sr_legacy_evaluate(
     adapter.evaluate(context, input, submitted, sentinel, sharpness)
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_sr_legacy_warm_up(
+pub(super) unsafe fn rsf_sr_legacy_warm_up(
     adapter: *mut Adapter,
     render_width: u32,
     render_height: u32,
@@ -448,15 +445,13 @@ pub(super) unsafe extern "C" fn rsf_sr_legacy_warm_up(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_sr_legacy_destroy(adapter: *mut Adapter) {
+pub(super) unsafe fn rsf_sr_legacy_destroy(adapter: *mut Adapter) {
     if !adapter.is_null() {
         drop(unsafe { Box::from_raw(adapter) });
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_sr_legacy_fg_inputs(
+pub(super) unsafe fn rsf_sr_legacy_fg_inputs(
     adapter: *const Adapter,
     depth: *mut *mut c_void,
     motion: *mut *mut c_void,

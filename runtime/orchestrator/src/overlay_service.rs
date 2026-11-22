@@ -595,7 +595,7 @@ unsafe extern "C" fn configure(setup: *const rsf_overlay_service_setup) -> i32 {
     unsafe { configure_inner(setup, false) }
 }
 
-#[unsafe(no_mangle)]
+#[cfg(not(test))]
 pub(super) unsafe extern "C" fn rsf_overlay_configure_bound(
     setup: *const rsf_overlay_service_setup,
 ) -> i32 {
@@ -1147,7 +1147,6 @@ unsafe extern "C" fn bound_status(out: *mut FgStatus) -> i32 {
 }
 
 #[cfg(not(test))]
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_overlay_present_bound(
     device: *mut c_void,
     queue: *mut c_void,
@@ -1316,7 +1315,6 @@ unsafe extern "C" fn notify(_chain: *mut c_void, reason: u32) -> i32 {
 }
 
 #[cfg(not(test))]
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_overlay_notify_bound(reason: u32) -> i32 {
     notify_inner(reason, true, || {
         rsf_overlay_d3d12_stop();
