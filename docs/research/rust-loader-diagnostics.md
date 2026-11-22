@@ -300,6 +300,14 @@ SDK vtable probes, fake COM resources, noinline caller anchors, mock payloads an
 provide independent input and pass-through evidence. The native probe returns the actual
 PE image size, linked anchor RVA, dispatch count and availability of WARP.
 
+## Guarded resource description boundary
+
+`loader/census/src/decode_d3d_platform.cpp` is removed. Rust reads the typed Windows SDK
+descriptions and owns field selection, including the dimension-only result when the
+D3D11 Texture2D description faults. The remaining native COM calls use the existing
+SEH boundary in `loader/census/src/d3d_guarded_platform.cpp`. Both languages assert
+the description sizes and alignments used by the transfer.
+
 ## Inventory at the end of the 82b39a63 continuation
 
 Eleven additional baseline paths have source cutovers. The two public header paths retain

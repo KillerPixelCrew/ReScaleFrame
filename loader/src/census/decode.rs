@@ -1,14 +1,22 @@
 // SPDX-License-Identifier: MIT
-use super::decode_abi::{rsf_census_read_resource, rsf_census_resource_desc};
+use super::decode_abi::rsf_census_resource_reads;
 use super::json::{
     rsf_census_json_close, rsf_census_json_hex, rsf_census_json_open, rsf_census_json_raw,
     rsf_census_json_string, rsf_census_json_u64,
 };
 use super::json_abi::rsf_census_json;
 use std::ffi::{c_char, c_void};
+use windows::Win32::Graphics::{
+    Direct3D11::{D3D11_RESOURCE_DIMENSION_TEXTURE2D, D3D11_TEXTURE2D_DESC},
+    Direct3D12::D3D12_RESOURCE_DESC,
+};
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_census_dxgi_format_name(format: u32) -> *const c_char {
+const _: () = {
+    assert!(size_of::<D3D12_RESOURCE_DESC>() == 56 && align_of::<D3D12_RESOURCE_DESC>() == 8);
+    assert!(size_of::<D3D11_TEXTURE2D_DESC>() == 44 && align_of::<D3D11_TEXTURE2D_DESC>() == 4);
+};
+
+pub(super) fn rsf_census_dxgi_format_name(format: u32) -> *const c_char {
     match format {
         0 => c"UNKNOWN",
         1 => c"R32G32B32A32_TYPELESS",
@@ -66,45 +74,96 @@ unsafe extern "C" fn rsf_census_json_resource(
     key: *const c_char,
     resource: *const c_void,
     d3d12: bool,
-    read: rsf_census_read_resource,
+    reads: &rsf_census_resource_reads,
 ) {
     if resource.is_null() {
         unsafe { rsf_census_json_raw(json, key, c"null".as_ptr()) };
         return;
     }
 
-    let mut desc = rsf_census_resource_desc::default();
-    // The callback returns copied facts and contains exceptions from any native COM calls.
-    let readable = read.is_some_and(|read| unsafe { read(resource, &mut desc) });
     unsafe {
         rsf_census_json_open(json, key, b'{' as c_char);
         rsf_census_json_hex(json, c"ptr".as_ptr(), resource as u64);
-        if desc.dimension_read {
-            rsf_census_json_u64(json, c"dimension".as_ptr(), desc.dimension.into());
-        }
-        if desc.texture_read {
-            rsf_census_json_u64(json, c"format".as_ptr(), desc.format.into());
-            rsf_census_json_string(
-                json,
-                c"format_name".as_ptr(),
-                rsf_census_dxgi_format_name(desc.format),
-            );
-            rsf_census_json_u64(json, c"width".as_ptr(), desc.width);
-            rsf_census_json_u64(json, c"height".as_ptr(), desc.height.into());
-            if d3d12 {
-                rsf_census_json_u64(json, c"depth_or_layers".as_ptr(), desc.layers.into());
-                rsf_census_json_u64(json, c"mips".as_ptr(), desc.mips.into());
-                rsf_census_json_u64(json, c"samples".as_ptr(), desc.samples.into());
-                rsf_census_json_hex(json, c"flags".as_ptr(), desc.flags.into());
-            } else {
-                rsf_census_json_u64(json, c"mips".as_ptr(), desc.mips.into());
-                rsf_census_json_u64(json, c"array_size".as_ptr(), desc.layers.into());
-                rsf_census_json_hex(json, c"bind_flags".as_ptr(), desc.flags.into());
-            }
-        }
+        let readable = if d3d12 {
+            describe12(json, resource, reads)
+        } else {
+            describe11(json, resource, reads)
+        };
         if !readable {
             rsf_census_json_raw(json, c"desc_unreadable".as_ptr(), c"true".as_ptr());
         }
         rsf_census_json_close(json, b'}' as c_char);
     }
+}
+
+unsafe fn texture_fields(json: &mut rsf_census_json, format: u32, width: u64, height: u32) {
+    unsafe {
+        rsf_census_json_u64(json, c"format".as_ptr(), format.into());
+        rsf_census_json_string(
+            json,
+            c"format_name".as_ptr(),
+            rsf_census_dxgi_format_name(format),
+        );
+        rsf_census_json_u64(json, c"width".as_ptr(), width);
+        rsf_census_json_u64(json, c"height".as_ptr(), height.into());
+    }
+}
+
+unsafe fn describe12(
+    json: &mut rsf_census_json,
+    resource: *const c_void,
+    reads: &rsf_census_resource_reads,
+) -> bool {
+    let mut desc = D3D12_RESOURCE_DESC::default();
+    if !reads
+        .d3d12_description
+        .is_some_and(|read| unsafe { read(resource, (&raw mut desc).cast()) })
+    {
+        return false;
+    }
+    unsafe {
+        rsf_census_json_u64(json, c"dimension".as_ptr(), desc.Dimension.0 as u32 as u64);
+        texture_fields(json, desc.Format.0 as u32, desc.Width, desc.Height);
+        rsf_census_json_u64(
+            json,
+            c"depth_or_layers".as_ptr(),
+            desc.DepthOrArraySize.into(),
+        );
+        rsf_census_json_u64(json, c"mips".as_ptr(), desc.MipLevels.into());
+        rsf_census_json_u64(json, c"samples".as_ptr(), desc.SampleDesc.Count.into());
+        rsf_census_json_hex(json, c"flags".as_ptr(), desc.Flags.0 as u32 as u64);
+    }
+    true
+}
+
+unsafe fn describe11(
+    json: &mut rsf_census_json,
+    resource: *const c_void,
+    reads: &rsf_census_resource_reads,
+) -> bool {
+    let mut dimension = 0;
+    if !reads
+        .d3d11_dimension
+        .is_some_and(|read| unsafe { read(resource, &mut dimension) })
+    {
+        return false;
+    }
+    unsafe { rsf_census_json_u64(json, c"dimension".as_ptr(), dimension as u32 as u64) };
+    if dimension != D3D11_RESOURCE_DIMENSION_TEXTURE2D.0 {
+        return true;
+    }
+    let mut desc = D3D11_TEXTURE2D_DESC::default();
+    if !reads
+        .d3d11_texture_description
+        .is_some_and(|read| unsafe { read(resource, (&raw mut desc).cast()) })
+    {
+        return false;
+    }
+    unsafe {
+        texture_fields(json, desc.Format.0 as u32, desc.Width.into(), desc.Height);
+        rsf_census_json_u64(json, c"mips".as_ptr(), desc.MipLevels.into());
+        rsf_census_json_u64(json, c"array_size".as_ptr(), desc.ArraySize.into());
+        rsf_census_json_hex(json, c"bind_flags".as_ptr(), desc.BindFlags.into());
+    }
+    true
 }

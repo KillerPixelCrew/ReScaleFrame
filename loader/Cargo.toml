@@ -33,6 +33,7 @@ workspace = true
 
 [target.'cfg(all(windows, target_env = "msvc"))'.dependencies]
 windows = { version = "0.62.2", default-features = false, features = [
+  "Win32_Graphics_Direct3D11",
   "Win32_Graphics_Direct3D12",
   "Win32_Graphics_Dxgi",
   "Win32_Graphics_Dxgi_Common",

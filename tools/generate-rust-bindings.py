@@ -44,8 +44,7 @@ generate("loader/src/diagnostics/memory_abi.rs", "loader/diagnostics/src/module_
 generate("loader/src/census/json_abi.rs", "loader/census/src/json_platform.h",
          "rsf_census_json", "NOTHING", [])
 generate("loader/src/census/decode_abi.rs", "loader/census/src/decode_platform.h",
-         "rsf_census_(resource_desc|read_resource)", "NOTHING", [],
-         ["--with-derive-default"])
+         "rsf_census_resource_reads", "NOTHING", [])
 generate("tests/presentation/src/fixture_device_abi.rs", "tests/presentation/device_fixture_bridge.h",
          "rsf_fg_fixture_inputs", "NOTHING", [])
 generate("tests/presentation/src/d3d11_host_device_abi.rs", "tests/d3d11_host_device_fixture.h",

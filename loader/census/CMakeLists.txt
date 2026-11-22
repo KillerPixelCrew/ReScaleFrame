@@ -8,7 +8,6 @@ endif()
 
 add_library(rsf_vendor_census STATIC
     src/census_platform.cpp
-    src/decode_d3d_platform.cpp
     src/guarded_platform.cpp
     src/hook_platform.cpp
     src/d3d_guarded_platform.cpp)

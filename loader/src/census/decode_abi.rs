@@ -3,49 +3,34 @@
 #![allow(non_camel_case_types)]
 
 #[repr(C)]
-#[derive(Default, Copy, Clone)]
-pub struct rsf_census_resource_desc {
-    pub width: u64,
-    pub height: u32,
-    pub dimension: u32,
-    pub format: u32,
-    pub layers: u32,
-    pub mips: u32,
-    pub samples: u32,
-    pub flags: u32,
-    pub dimension_read: bool,
-    pub texture_read: bool,
+#[derive(Copy, Clone)]
+pub struct rsf_census_resource_reads {
+    pub d3d12_description: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *const ::core::ffi::c_void,
+            output: *mut ::core::ffi::c_void,
+        ) -> bool,
+    >,
+    pub d3d11_dimension: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *const ::core::ffi::c_void, output: *mut i32) -> bool,
+    >,
+    pub d3d11_texture_description: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *const ::core::ffi::c_void,
+            output: *mut ::core::ffi::c_void,
+        ) -> bool,
+    >,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_census_resource_desc"]
-        [::core::mem::size_of::<rsf_census_resource_desc>() - 40usize];
-    ["Alignment of rsf_census_resource_desc"]
-        [::core::mem::align_of::<rsf_census_resource_desc>() - 8usize];
-    ["Offset of field: rsf_census_resource_desc::width"]
-        [::core::mem::offset_of!(rsf_census_resource_desc, width) - 0usize];
-    ["Offset of field: rsf_census_resource_desc::height"]
-        [::core::mem::offset_of!(rsf_census_resource_desc, height) - 8usize];
-    ["Offset of field: rsf_census_resource_desc::dimension"]
-        [::core::mem::offset_of!(rsf_census_resource_desc, dimension) - 12usize];
-    ["Offset of field: rsf_census_resource_desc::format"]
-        [::core::mem::offset_of!(rsf_census_resource_desc, format) - 16usize];
-    ["Offset of field: rsf_census_resource_desc::layers"]
-        [::core::mem::offset_of!(rsf_census_resource_desc, layers) - 20usize];
-    ["Offset of field: rsf_census_resource_desc::mips"]
-        [::core::mem::offset_of!(rsf_census_resource_desc, mips) - 24usize];
-    ["Offset of field: rsf_census_resource_desc::samples"]
-        [::core::mem::offset_of!(rsf_census_resource_desc, samples) - 28usize];
-    ["Offset of field: rsf_census_resource_desc::flags"]
-        [::core::mem::offset_of!(rsf_census_resource_desc, flags) - 32usize];
-    ["Offset of field: rsf_census_resource_desc::dimension_read"]
-        [::core::mem::offset_of!(rsf_census_resource_desc, dimension_read) - 36usize];
-    ["Offset of field: rsf_census_resource_desc::texture_read"]
-        [::core::mem::offset_of!(rsf_census_resource_desc, texture_read) - 37usize];
+    ["Size of rsf_census_resource_reads"]
+        [::core::mem::size_of::<rsf_census_resource_reads>() - 24usize];
+    ["Alignment of rsf_census_resource_reads"]
+        [::core::mem::align_of::<rsf_census_resource_reads>() - 8usize];
+    ["Offset of field: rsf_census_resource_reads::d3d12_description"]
+        [::core::mem::offset_of!(rsf_census_resource_reads, d3d12_description) - 0usize];
+    ["Offset of field: rsf_census_resource_reads::d3d11_dimension"]
+        [::core::mem::offset_of!(rsf_census_resource_reads, d3d11_dimension) - 8usize];
+    ["Offset of field: rsf_census_resource_reads::d3d11_texture_description"]
+        [::core::mem::offset_of!(rsf_census_resource_reads, d3d11_texture_description) - 16usize];
 };
-pub type rsf_census_read_resource = ::core::option::Option<
-    unsafe extern "C" fn(
-        arg1: *const ::core::ffi::c_void,
-        arg2: *mut rsf_census_resource_desc,
-    ) -> bool,
->;

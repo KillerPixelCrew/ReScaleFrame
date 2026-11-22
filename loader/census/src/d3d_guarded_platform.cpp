@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Guarded SDK queries used by the typed Rust DXGI and D3D12 wrappers.
+#include <d3d11.h>
 #include <d3d12.h>
 #include <d3d12sdklayers.h>
 #include <dxgi1_6.h>
@@ -7,6 +8,9 @@
 
 #include "census_internal.h"
 #include "d3d_platform.h"
+
+static_assert(sizeof(D3D12_RESOURCE_DESC) == 56 && alignof(D3D12_RESOURCE_DESC) == 8);
+static_assert(sizeof(D3D11_TEXTURE2D_DESC) == 44 && alignof(D3D11_TEXTURE2D_DESC) == 4);
 
 namespace rsf_census {
 namespace {
@@ -39,6 +43,31 @@ bool swapchain_desc(const void* chain, void* description) noexcept {
         auto* object = static_cast<IDXGISwapChain*>(const_cast<void*>(chain));
         result = object->GetDesc(static_cast<DXGI_SWAP_CHAIN_DESC*>(description));
     }) && SUCCEEDED(result);
+}
+
+bool resource12_desc(const void* resource, void* description) noexcept {
+    if (!vtable_slot(resource, 10)) return false;
+    return guard([&] {
+        auto* object = static_cast<ID3D12Resource*>(const_cast<void*>(resource));
+        *static_cast<D3D12_RESOURCE_DESC*>(description) = object->GetDesc();
+    });
+}
+
+bool resource11_dimension(const void* resource, int32_t* dimension) noexcept {
+    if (!vtable_slot(resource, 10)) return false;
+    return guard([&] {
+        auto* object = static_cast<ID3D11Resource*>(const_cast<void*>(resource));
+        D3D11_RESOURCE_DIMENSION value{};
+        object->GetType(&value);
+        *dimension = static_cast<int32_t>(value);
+    });
+}
+
+bool resource11_desc(const void* resource, void* description) noexcept {
+    return guard([&] {
+        auto* object = static_cast<ID3D11Texture2D*>(const_cast<void*>(resource));
+        object->GetDesc(static_cast<D3D11_TEXTURE2D_DESC*>(description));
+    });
 }
 
 void enable_debug(int32_t* layer, int32_t* dred) noexcept {
@@ -91,6 +120,14 @@ int32_t info_queue(void* device, rsf_census_debug_message callback, uint32_t* co
 }
 
 } // namespace
+
+void describe_d3d_resource(rsf_census_json* json, const char* key, const void* resource,
+                           bool d3d12) noexcept {
+    static const rsf_census_resource_reads reads = {
+        resource12_desc, resource11_dimension, resource11_desc,
+    };
+    rsf_census_json_resource(json, key, resource, d3d12, &reads);
+}
 
 void register_wrappers_d3d(void** table) noexcept {
     static constexpr uint16_t entries[] = {
