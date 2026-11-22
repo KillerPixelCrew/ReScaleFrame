@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::auxiliary_sr_abi::*;
 use crate::com_ref::ComRef;
+use rsf_game_sys::d3d11_host_abi::rsf_d3d11_auxiliary_surface;
 use rsf_game_sys::{rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::c_void;
 use std::ptr;

@@ -87,3 +87,10 @@ pub fn inverse_4x4(input: &[f64; 16]) -> Option<[f64; 16]> {
     }
     Some(output)
 }
+
+/// Checks finite components against an absolute tolerance.
+pub fn finite_matrix_close(a: &[f32; 16], b: &[f32; 16], tolerance: f32) -> bool {
+    a.iter()
+        .zip(b)
+        .all(|(&a, &b)| a.is_finite() && b.is_finite() && (a - b).abs() <= tolerance)
+}

@@ -24,53 +24,6 @@ pub const RSF_AUX_USAGE_DEFAULT: u32 = 0;
 pub const RSF_AUX_PACKED_SUPPORT_MASK: u32 = 16672;
 #[repr(C)]
 #[derive(Copy, Clone)]
-pub struct rsf_d3d11_auxiliary_surface {
-    pub struct_size: u32,
-    pub kind: u32,
-    pub texture: *mut ::core::ffi::c_void,
-    pub source_rect: [f32; 4usize],
-    pub output_rect: [i32; 4usize],
-    pub jitter_pixels: [f32; 2usize],
-    pub name: *const ::core::ffi::c_char,
-    pub source_name: *const ::core::ffi::c_char,
-    pub flags: u32,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_d3d11_auxiliary_surface"]
-        [::core::mem::size_of::<rsf_d3d11_auxiliary_surface>() - 80usize];
-    ["Alignment of rsf_d3d11_auxiliary_surface"]
-        [::core::mem::align_of::<rsf_d3d11_auxiliary_surface>() - 8usize];
-    ["Offset of field: rsf_d3d11_auxiliary_surface::struct_size"]
-        [::core::mem::offset_of!(rsf_d3d11_auxiliary_surface, struct_size) - 0usize];
-    ["Offset of field: rsf_d3d11_auxiliary_surface::kind"]
-        [::core::mem::offset_of!(rsf_d3d11_auxiliary_surface, kind) - 4usize];
-    ["Offset of field: rsf_d3d11_auxiliary_surface::texture"]
-        [::core::mem::offset_of!(rsf_d3d11_auxiliary_surface, texture) - 8usize];
-    ["Offset of field: rsf_d3d11_auxiliary_surface::source_rect"]
-        [::core::mem::offset_of!(rsf_d3d11_auxiliary_surface, source_rect) - 16usize];
-    ["Offset of field: rsf_d3d11_auxiliary_surface::output_rect"]
-        [::core::mem::offset_of!(rsf_d3d11_auxiliary_surface, output_rect) - 32usize];
-    ["Offset of field: rsf_d3d11_auxiliary_surface::jitter_pixels"]
-        [::core::mem::offset_of!(rsf_d3d11_auxiliary_surface, jitter_pixels) - 48usize];
-    ["Offset of field: rsf_d3d11_auxiliary_surface::name"]
-        [::core::mem::offset_of!(rsf_d3d11_auxiliary_surface, name) - 56usize];
-    ["Offset of field: rsf_d3d11_auxiliary_surface::source_name"]
-        [::core::mem::offset_of!(rsf_d3d11_auxiliary_surface, source_name) - 64usize];
-    ["Offset of field: rsf_d3d11_auxiliary_surface::flags"]
-        [::core::mem::offset_of!(rsf_d3d11_auxiliary_surface, flags) - 72usize];
-};
-impl Default for rsf_d3d11_auxiliary_surface {
-    fn default() -> Self {
-        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
-        unsafe {
-            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
-            s.assume_init()
-        }
-    }
-}
-#[repr(C)]
-#[derive(Copy, Clone)]
 pub struct rsf_d3d11_state {
     pub opaque: [u64; 1024usize],
 }

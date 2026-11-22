@@ -4,12 +4,17 @@
 // offsets on the C++ side; the const blocks below assert them here.
 #![allow(non_camel_case_types)]
 
-use crate::auxiliary_sr_abi::{rsf_aux_platform, rsf_d3d11_auxiliary_surface};
+use crate::auxiliary_sr_abi::rsf_aux_platform;
 use crate::fg12_abi::{rsf_d3d11_present_setup, rsf_streamline_host};
 use crate::native_sr_abi::rsf_motion_decode_params;
 use crate::overlay_abi::rsf_overlay_service_setup;
 use crate::render_abi::{rsf_backend_log_fn, rsf_native_fg_options, rsf_render_settings};
 use crate::scene_abi::{rsf_native_present_record, rsf_observer_present_event};
+use rsf_game_sys::d3d11_host_abi::rsf_d3d11_auxiliary_surface;
+pub(crate) use rsf_game_sys::d3d11_host_abi::{
+    rsf_d3d11_auxiliary_pass, rsf_d3d11_auxiliary_scope, rsf_d3d11_host_capture,
+    rsf_d3d11_sampler_bias,
+};
 use rsf_game_sys::{rsf_frame_record, rsf_game_cpu_event, rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::{c_char, c_int, c_void};
 use std::mem::{offset_of, size_of};
@@ -139,38 +144,6 @@ pub(crate) struct rsf_d3d11_capture_control {
 }
 
 #[repr(C)]
-pub(crate) struct rsf_d3d11_host_capture {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub session_id: u64,
-    pub native_frame: u64,
-    pub view_key: u64,
-    pub name: *const c_char,
-    pub description: *const c_char,
-    pub texture: *mut c_void,
-    pub view: u32,
-    pub scale: f32,
-}
-
-#[repr(C)]
-pub(crate) struct rsf_d3d11_auxiliary_pass {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub pass: *const Pass,
-    pub surface_count: u32,
-    pub surfaces: *const Surface,
-}
-
-#[repr(C)]
-pub(crate) struct rsf_d3d11_auxiliary_scope {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub session_id: u64,
-    pub native_frame: u64,
-    pub view_key: u64,
-}
-
-#[repr(C)]
 pub(crate) struct rsf_d3d11_reduced_frame {
     pub struct_size: u32,
     pub abi_version: u32,
@@ -183,17 +156,6 @@ pub(crate) struct rsf_d3d11_reduced_frame {
     pub surfaces: *const Surface,
     pub temporal_result: i32,
     pub result_flags: u32,
-}
-
-#[repr(C)]
-pub(crate) struct rsf_d3d11_sampler_bias {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub session_id: u64,
-    pub samplers: [*mut c_void; 16],
-    pub slot_mask: u32,
-    pub bias: f32,
-    pub applied_mask: u32,
 }
 
 #[repr(C)]
