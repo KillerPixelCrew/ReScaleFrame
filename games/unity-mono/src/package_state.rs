@@ -46,7 +46,7 @@ use rsf_game_sys::{
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicU32, Ordering::SeqCst};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
 /// RSF_BACKEND_OK, a cast macro bindgen does not evaluate; package.cpp asserts it.
 const BACKEND_OK: i32 = 0;
@@ -125,6 +125,8 @@ const fn fresh_status() -> rsf_unity_package_status {
     status
 }
 
+static LEAVES: OnceLock<Leaves> = OnceLock::new();
+
 /// package.cpp's leaves, all present.
 struct Leaves {
     sharpening_valid: unsafe extern "C" fn(*const rsf_sharpening_options) -> u32,
@@ -189,8 +191,6 @@ struct Leaves {
     window_class: unsafe extern "C" fn(*mut c_void) -> u32,
     bridge_load: unsafe extern "C" fn() -> u32,
     bridge_unload: unsafe extern "C" fn(),
-    /// The table itself, package.cpp's constant: the user pointer of a session's host services.
-    table: *const rsf_unity_package_platform,
 }
 
 /// rsf_game_host_services' render callback and render plan, package.cpp's leaves.
@@ -262,7 +262,6 @@ impl Leaves {
             window_class: p.window_class?,
             bridge_load: p.bridge_load?,
             bridge_unload: p.bridge_unload?,
-            table: platform,
         })
     }
 
@@ -780,9 +779,8 @@ unsafe fn struct_size<T>(value: *const T) -> u32 {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_unity_package_configure(
     input: *const rsf_unity_package_settings,
-    platform: *const rsf_unity_package_platform,
 ) -> c_int {
-    let Some(leaves) = (unsafe { Leaves::adopt(platform) }) else {
+    let Some(leaves) = LEAVES.get() else {
         return 0;
     };
     if input.is_null()
@@ -790,7 +788,7 @@ unsafe extern "C" fn rsf_unity_package_configure(
     {
         return 0;
     }
-    c_int::from(PACKAGE.configure(&unsafe { input.read() }, &leaves))
+    c_int::from(PACKAGE.configure(&unsafe { input.read() }, leaves))
 }
 
 /// Accepts a longer structure, as the C++ did, and writes only this version's fields.
@@ -809,11 +807,8 @@ unsafe extern "C" fn rsf_unity_package_settings_get(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_status_get(
-    output: *mut rsf_unity_package_status,
-    platform: *const rsf_unity_package_platform,
-) -> c_int {
-    let Some(leaves) = (unsafe { Leaves::adopt(platform) }) else {
+unsafe extern "C" fn rsf_unity_package_status_get(output: *mut rsf_unity_package_status) -> c_int {
+    let Some(leaves) = LEAVES.get() else {
         return 0;
     };
     if output.is_null()
@@ -821,16 +816,15 @@ unsafe extern "C" fn rsf_unity_package_status_get(
     {
         return 0;
     }
-    unsafe { output.write(PACKAGE.status(&leaves)) };
+    unsafe { output.write(PACKAGE.status(leaves)) };
     1
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_unity_package_frame_counters(
     output: *mut rsf_unity_frame_counters,
-    platform: *const rsf_unity_package_platform,
 ) -> c_int {
-    let Some(leaves) = (unsafe { Leaves::adopt(platform) }) else {
+    let Some(leaves) = LEAVES.get() else {
         return 0;
     };
     if output.is_null()
@@ -838,7 +832,7 @@ unsafe extern "C" fn rsf_unity_package_frame_counters(
     {
         return 0;
     }
-    unsafe { output.write(PACKAGE.frame_counters(&leaves)) };
+    unsafe { output.write(PACKAGE.frame_counters(leaves)) };
     1
 }
 
@@ -853,9 +847,8 @@ unsafe extern "C" fn rsf_unity_package_initialize(
     engine: *const c_char,
     project: *const c_char,
     output: *mut rsf_unity_native_api,
-    platform: *const rsf_unity_package_platform,
 ) -> c_int {
-    let Some(leaves) = (unsafe { Leaves::adopt(platform) }) else {
+    let Some(leaves) = LEAVES.get() else {
         return code::FAILED;
     };
     if runtime.is_null() || engine.is_null() || project.is_null() || output.is_null() {
@@ -869,18 +862,13 @@ unsafe extern "C" fn rsf_unity_package_initialize(
     }
     let text = |value: *const c_char| unsafe { CStr::from_ptr(value) }.to_bytes();
     let identity = Identity::new(text(runtime), text(engine), text(project));
-    match PACKAGE.initialize(&leaves, identity) {
+    match PACKAGE.initialize(leaves, identity) {
         Ok(api) => {
             unsafe { output.write(api) };
             code::STARTED
         }
         Err(result) => result,
     }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_retire(platform: *const rsf_unity_package_platform) -> u32 {
-    u32::from(unsafe { Leaves::adopt(platform) }.is_some_and(|leaves| PACKAGE.retire(&leaves)))
 }
 
 #[unsafe(no_mangle)]
@@ -899,15 +887,14 @@ unsafe extern "C" fn rsf_unity_package_plan(output: *mut rsf_game_render_config)
 unsafe extern "C" fn rsf_unity_package_render(
     commands: *mut c_void,
     pass: *const rsf_game_render_pass,
-    platform: *const rsf_unity_package_platform,
 ) {
-    let Some(leaves) = (unsafe { Leaves::adopt(platform) }) else {
+    let Some(leaves) = LEAVES.get() else {
         return;
     };
     if commands.is_null() || pass.is_null() {
         return;
     }
-    PACKAGE.render(&leaves, commands, unsafe { &*pass });
+    PACKAGE.render(leaves, commands, unsafe { &*pass });
 }
 
 #[unsafe(no_mangle)]
@@ -2188,14 +2175,10 @@ mod tests {
 
     #[test]
     fn exports_check_structure_sizes() {
-        let table = platform();
         let mut settings = DEFAULT_SETTINGS;
         settings.struct_size -= 1;
-        assert_eq!(unsafe { rsf_unity_package_configure(&settings, &table) }, 0);
-        assert_eq!(
-            unsafe { rsf_unity_package_configure(std::ptr::null(), &table) },
-            0
-        );
+        assert_eq!(unsafe { rsf_unity_package_configure(&settings) }, 0);
+        assert_eq!(unsafe { rsf_unity_package_configure(std::ptr::null()) }, 0);
         assert_eq!(unsafe { rsf_unity_package_settings_get(&mut settings) }, 0);
         settings.struct_size += 1;
         settings.abi_version = 1;
@@ -2208,16 +2191,13 @@ mod tests {
             struct_size: 183,
             ..Default::default()
         };
-        assert_eq!(
-            unsafe { rsf_unity_package_status_get(&mut status, &table) },
-            0
-        );
+        assert_eq!(unsafe { rsf_unity_package_status_get(&mut status) }, 0);
         let mut counters = rsf_unity_frame_counters {
             struct_size: 41,
             ..Default::default()
         };
         assert_eq!(
-            unsafe { rsf_unity_package_frame_counters(&mut counters, &table) },
+            unsafe { rsf_unity_package_frame_counters(&mut counters) },
             0
         );
         let mut plan = rsf_game_render_config {
@@ -2230,9 +2210,9 @@ mod tests {
         calls();
         let pass = sr_pass(1, (8, 8), (4, 4));
         unsafe {
-            rsf_unity_package_render(std::ptr::null_mut(), &pass, &table);
-            rsf_unity_package_render(list(1), std::ptr::null(), &table);
-            rsf_unity_package_render(list(1), &pass, std::ptr::null());
+            rsf_unity_package_render(std::ptr::null_mut(), &pass);
+            rsf_unity_package_render(list(1), std::ptr::null());
+            rsf_unity_package_render(list(1), &pass);
         }
         assert!(calls().is_empty());
         let (text, none) = (c"x".as_ptr(), std::ptr::null());
@@ -2241,23 +2221,23 @@ mod tests {
         let output = &raw mut api;
         unsafe {
             assert_eq!(
-                rsf_unity_package_initialize(text, text, text, output, std::ptr::null()),
+                rsf_unity_package_initialize(text, text, text, output),
                 code::FAILED
             );
             assert_eq!(
-                rsf_unity_package_initialize(none, text, text, output, &table),
+                rsf_unity_package_initialize(none, text, text, output),
                 code::FAILED
             );
             assert_eq!(
-                rsf_unity_package_initialize(text, none, text, output, &table),
+                rsf_unity_package_initialize(text, none, text, output),
                 code::FAILED
             );
             assert_eq!(
-                rsf_unity_package_initialize(text, text, none, output, &table),
+                rsf_unity_package_initialize(text, text, none, output),
                 code::FAILED
             );
             assert_eq!(
-                rsf_unity_package_initialize(text, text, text, std::ptr::null_mut(), &table),
+                rsf_unity_package_initialize(text, text, text, std::ptr::null_mut()),
                 code::FAILED
             );
         }

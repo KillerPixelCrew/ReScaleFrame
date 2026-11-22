@@ -58,9 +58,6 @@ std::wstring ini;
 bool editor = false;
 IUnityInterfaces* registry = nullptr;
 IUnityGraphics* graphics = nullptr;
-// The table, defined below; the log, window guard, render callback, window procedure and exports
-// hand it to Rust.
-const rsf_unity_package_platform* leaves() noexcept;
 // The receipt outlives the Rust session. A later subclass can still call us after Unity has
 // unloaded the plugin, so keep a module reference until the owner thread verifies detachment.
 std::atomic<WNDPROC> input_previous{nullptr};
@@ -75,7 +72,7 @@ LRESULT CALLBACK input_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
 {
     ++input_calls;
     const auto previous = input_previous.load();
-    if (input_enabled.load()) rsf_unity_package_window_message(message, lparam, leaves());
+    if (input_enabled.load()) rsf_unity_package_window_message(message, lparam);
     const auto result = CallWindowProcW(previous, hwnd, message, wparam, lparam);
     if (message == WM_NCDESTROY) input_destroyed.store(true);
     --input_calls;
@@ -155,7 +152,7 @@ void timestamp(uint64_t* counter, uint64_t* frequency) noexcept
     *counter = uint64_t(now.QuadPart); *frequency = uint64_t(ticks.QuadPart);
 }
 // rsf_unity_package_platform's log leaves. log is the package log in the Runtime's form.
-void log(void*, const char* text) { rsf_unity_package_log(text, leaves()); }
+void log(void*, const char* text) { rsf_unity_package_log(text); }
 uint32_t local_app_data(wchar_t* output, uint32_t capacity) noexcept
 {
     const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", output, capacity);
@@ -176,7 +173,7 @@ void log_write(void* file, const char* text) noexcept
     }
 }
 // rsf_unity_package_platform::accept_window, generation's window guard; routing.rs decides.
-int accept(void*, void* hwnd) { return rsf_unity_package_accept_window(hwnd, leaves()); }
+int accept(void*, void* hwnd) { return rsf_unity_package_accept_window(hwnd); }
 // rsf_unity_package_platform's window-guard leaves.
 uint32_t window_class(void* hwnd) noexcept
 {
@@ -237,7 +234,7 @@ void render_sr(void* commands, const rsf_game_render_pass* pass);
 // the window, final-scene and submitted passes and admits the SR pass, which runs under the mutex.
 void render(void*, void* commands, const rsf_game_render_pass* original, uint32_t begin)
 {
-    if (rsf_unity_package_route(commands, original, begin, leaves())) render_sr(commands, original);
+    if (rsf_unity_package_route(commands, original, begin)) render_sr(commands, original);
 }
 // rsf_unity_package_platform's render-routing leaves.
 uint32_t preview_present(void* resource, const rsf_game_render_pass* pass, uint32_t common) noexcept try
@@ -326,17 +323,16 @@ constexpr rsf_unity_package_platform platform{
     },
     []() noexcept { rsf_unity_package_bridge_unload(); },
 };
-const rsf_unity_package_platform* leaves() noexcept { return &platform; }
 void render_sr(void* commands, const rsf_game_render_pass* pass)
 {
-    std::lock_guard<std::mutex> lock(guard); rsf_unity_package_render(commands, pass, &platform);
+    std::lock_guard<std::mutex> lock(guard); rsf_unity_package_render(commands, pass);
 }
 // routing.rs keeps the device state: Unity may have destroyed a retained device.
 void UNITY_INTERFACE_API device_event(UnityGfxDeviceEventType type)
 {
     if (type != kUnityGfxDeviceEventInitialize && type != kUnityGfxDeviceEventShutdown) return;
     std::lock_guard<std::mutex> lock(guard);
-    rsf_unity_package_device_event(type == kUnityGfxDeviceEventInitialize ? 1u : 0u, &platform);
+    rsf_unity_package_device_event(type == kUnityGfxDeviceEventInitialize ? 1u : 0u);
 }
 void preload()
 {
@@ -364,12 +360,12 @@ extern "C" __declspec(dllexport) int rsfu_initialize(const char* runtime, const 
 {
     if (!runtime || !engine || !id || !output) return 0;
     std::lock_guard<std::mutex> lock(guard);
-    return rsf_unity_package_initialize(runtime, engine, id, output, &platform);
+    return rsf_unity_package_initialize(runtime, engine, id, output);
 } catch (...) { return 0; }
 
 extern "C" __declspec(dllexport) int rsfu_configure(const rsf_unity_package_settings* input) noexcept try
 {
-    std::lock_guard<std::mutex> lock(guard); return rsf_unity_package_configure(input, &platform);
+    std::lock_guard<std::mutex> lock(guard); return rsf_unity_package_configure(input);
 } catch (...) { return 0; }
 
 extern "C" __declspec(dllexport) int rsfu_settings(rsf_unity_package_settings* output) noexcept try
@@ -385,29 +381,29 @@ extern "C" __declspec(dllexport) int rsfu_surface(uint32_t width, uint32_t heigh
 extern "C" __declspec(dllexport) int rsfu_preview_region(int left, int top, int width, int height, uint32_t visible) noexcept
 {
     const bool configured = rsf_unity_preview_region(left, top, width, height, visible != 0);
-    rsf_unity_package_preview_input(&platform);
+    rsf_unity_package_preview_input();
     return configured ? 1 : 0;
 }
 extern "C" __declspec(dllexport) int rsfu_frame_counters(rsf_unity_frame_counters* output) noexcept
 {
-    return rsf_unity_package_frame_counters(output, &platform);
+    return rsf_unity_package_frame_counters(output);
 }
 
 extern "C" __declspec(dllexport) int rsfu_status(rsf_unity_package_status* output) noexcept try
 {
-    std::lock_guard<std::mutex> lock(guard); return rsf_unity_package_status_get(output, &platform);
+    std::lock_guard<std::mutex> lock(guard); return rsf_unity_package_status_get(output);
 } catch (...) { return 0; }
 
 extern "C" __declspec(dllexport) int rsfu_input(uint64_t frame, uint32_t kinds) noexcept
 {
-    return rsf_unity_package_input(frame, kinds, &platform);
+    return rsf_unity_package_input(frame, kinds);
 }
 
 extern "C" __declspec(dllexport) int rsfu_shutdown() noexcept try
 {
     if (editor) rsf_unity_preview_hide();
     std::lock_guard<std::mutex> lock(guard);
-    return rsf_unity_package_shutdown(&platform) ? 1 : 0;
+    return rsf_unity_package_shutdown() ? 1 : 0;
 } catch (...) { return 0; }
 
 extern "C" void UNITY_INTERFACE_EXPORT UNITY_INTERFACE_API UnityPluginLoad(IUnityInterfaces* interfaces)
@@ -426,7 +422,7 @@ extern "C" void UNITY_INTERFACE_EXPORT UNITY_INTERFACE_API UnityPluginUnload()
 {
     if (graphics) graphics->UnregisterDeviceEventCallback(device_event);
     device_event(kUnityGfxDeviceEventShutdown);
-    rsf_unity_package_unload(&platform);
+    rsf_unity_package_unload();
     std::lock_guard<std::mutex> lock(guard);
     registry = nullptr; graphics = nullptr;
 }

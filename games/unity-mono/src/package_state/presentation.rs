@@ -218,7 +218,10 @@ unsafe extern "C" fn rsf_unity_package_load(
     use windows_sys::core::w;
     const PROFILE_TEXT: usize = 256;
 
-    let Some(leaves) = (unsafe { Leaves::adopt(platform) }) else {
+    let Some(leaves) = super::LEAVES.get().or_else(|| {
+        let adopted = unsafe { Leaves::adopt(platform) }?;
+        Some(super::LEAVES.get_or_init(|| adopted))
+    }) else {
         return;
     };
     let mut log = Vec::new();
@@ -231,23 +234,7 @@ unsafe extern "C" fn rsf_unity_package_load(
             .set_identity(Identity::new(&root, &version, &project));
         log = path_setting(&ini, w!("Log"));
     }
-    PACKAGE.loaded(&leaves, editor != 0, &log);
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_install(platform: *const rsf_unity_package_platform) {
-    if let Some(leaves) = unsafe { Leaves::adopt(platform) } {
-        PACKAGE.install(&leaves);
-    }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_request_generation(
-    platform: *const rsf_unity_package_platform,
-) {
-    if let Some(leaves) = unsafe { Leaves::adopt(platform) } {
-        PACKAGE.request_generation(&leaves);
-    }
+    PACKAGE.loaded(leaves, editor != 0, &log);
 }
 
 #[cfg(test)]
@@ -311,13 +298,5 @@ mod tests {
                 "P"
             ]
         );
-    }
-
-    #[test]
-    fn entries_refuse_an_incomplete_table() {
-        unsafe {
-            rsf_unity_package_install(std::ptr::null());
-            rsf_unity_package_request_generation(std::ptr::null());
-        }
     }
 }

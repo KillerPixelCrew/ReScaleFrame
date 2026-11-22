@@ -87,8 +87,7 @@ typedef struct rsf_unity_package_view_setup {
 
 /* package.cpp's typed leaves, all present. No leaf calls back into a rsf_unity_package_* entry
    except the log, render, bridge and Runtime leaves, which may reach rsf_unity_package_log; none
-   may throw. The table is package.cpp's constant: a session's host services carry its address as
-   their user pointer. */
+   may throw. Rust adopts the constant table at plugin load. */
 typedef struct rsf_unity_package_platform {
     /* rsf::sharpening_settings::valid and rsf_dlss_preset_valid are header-inline C/C++. */
     uint32_t (*sharpening_valid)(const rsf_sharpening_options* options);
@@ -201,10 +200,10 @@ extern "C" {
 #endif
 /* The bodies of rsfu_configure, rsfu_settings, rsfu_status, rsfu_frame_counters and
    rsfu_temporal_ready, with the same checks and result codes. */
-int rsf_unity_package_configure(const rsf_unity_package_settings* input, const rsf_unity_package_platform* platform);
+int rsf_unity_package_configure(const rsf_unity_package_settings* input);
 int rsf_unity_package_settings_get(rsf_unity_package_settings* output);
-int rsf_unity_package_status_get(rsf_unity_package_status* output, const rsf_unity_package_platform* platform);
-int rsf_unity_package_frame_counters(rsf_unity_frame_counters* output, const rsf_unity_package_platform* platform);
+int rsf_unity_package_status_get(rsf_unity_package_status* output);
+int rsf_unity_package_frame_counters(rsf_unity_frame_counters* output);
 uint32_t rsf_unity_package_temporal_ready(void);
 
 /* Session lifecycle. initialize retires a started or partially opened session once the bridge has drained and the
@@ -217,10 +216,7 @@ uint32_t rsf_unity_package_temporal_ready(void);
    persisted reconstruction request and writes the bridge's managed API to output (1). Settings
    persist across sessions. */
 int rsf_unity_package_initialize(const char* runtime, const char* engine, const char* project,
-    rsf_unity_native_api* output, const rsf_unity_package_platform* platform);
-/* Managed and Unity device shutdown, serialized with initialize and the SR callback. Non-zero
-   only after Runtime retirement and destruction of the views and bridge have committed. */
-uint32_t rsf_unity_package_retire(const rsf_unity_package_platform* platform);
+    rsf_unity_native_api* output);
 
 /* Render path, under package.cpp's mutex. */
 /* The host render configuration; zero when output is short. */
@@ -231,8 +227,7 @@ int rsf_unity_package_plan(rsf_game_render_config* output);
    creates a missing one (Auto resolved, a failed vendor backend retried as backend 0) and
    evaluates it in the slot bound to commands once the camera is valid and no reconfiguration is
    pending. */
-void rsf_unity_package_render(void* commands, const rsf_game_render_pass* pass,
-    const rsf_unity_package_platform* platform);
+void rsf_unity_package_render(void* commands, const rsf_game_render_pass* pass);
 
 /* Presentation, outside package.cpp's mutex except where a locked export calls it. load runs at
    plugin load, before any session: it stores whether this is the Editor, reads the identity from
@@ -240,15 +235,6 @@ void rsf_unity_package_render(void* commands, const rsf_game_render_pass* pass,
    EngineVersion and ProjectId, opens the [UnitySR] Log path when one is set, and installs
    generation in the player. */
 void rsf_unity_package_load(const wchar_t* ini, uint32_t editor, const rsf_unity_package_platform* platform);
-/* Installs the shared D3D12 generation once per process, with the Auto provider, generation off
-   and runtime switching, when the identity has a root, a version and a project id; a refusal is
-   retried by the next call. Its result is the status's generation result. The player installs
-   at load, the Editor from open. */
-void rsf_unity_package_install(const rsf_unity_package_platform* platform);
-/* The window pass, before its presentation: while the presentation host has an owner, asks it
-   for the stored generation provider unless that one is active, and records the request's
-   result. Auto is resolved for Unity's adapter and kept once it names a provider. */
-void rsf_unity_package_request_generation(const rsf_unity_package_platform* platform);
 /* A renderer bridge failure reported for the rest of the session. */
 void rsf_unity_package_bridge_failed(int32_t result);
 
@@ -262,12 +248,11 @@ void rsf_unity_package_bridge_failed(int32_t result);
    keyed to frame while it is the CPU frame in progress and unframed otherwise.
    preview_input hooks the Editor preview's parent once it exists while no input window is
    hooked. unload restores the input window's procedure and closes the log. */
-void rsf_unity_package_log(const char* text, const rsf_unity_package_platform* platform);
-void* rsf_unity_package_window_message(uint32_t message, intptr_t lparam,
-    const rsf_unity_package_platform* platform);
-int rsf_unity_package_input(uint64_t frame, uint32_t kinds, const rsf_unity_package_platform* platform);
-void rsf_unity_package_preview_input(const rsf_unity_package_platform* platform);
-void rsf_unity_package_unload(const rsf_unity_package_platform* platform);
+void rsf_unity_package_log(const char* text);
+void* rsf_unity_package_window_message(uint32_t message, intptr_t lparam);
+int rsf_unity_package_input(uint64_t frame, uint32_t kinds);
+void rsf_unity_package_preview_input(void);
+void rsf_unity_package_unload(void);
 
 /* Routing (package_state/routing.rs). route is the host render callback's body, outside
    package.cpp's mutex: a null list or pass does nothing; an end reports a non-window pass
@@ -278,9 +263,8 @@ void rsf_unity_package_unload(const rsf_unity_package_platform* platform);
    on the original pass under the mutex. accept_window is the generation window guard: in the
    Editor only the preview's window, under Vulkan only the player's surface, otherwise this
    process's UnityWndClass window or the Vulkan surface. */
-uint32_t rsf_unity_package_route(void* commands, const rsf_game_render_pass* pass, uint32_t begin,
-    const rsf_unity_package_platform* platform);
-int rsf_unity_package_accept_window(void* hwnd, const rsf_unity_package_platform* platform);
+uint32_t rsf_unity_package_route(void* commands, const rsf_game_render_pass* pass, uint32_t begin);
+int rsf_unity_package_accept_window(void* hwnd);
 /* Unity's device lifecycle, under package.cpp's mutex. device_event handles an initialize
    (non-zero) or shutdown event: a waiting device loads the bridge once Unity's interfaces exist;
    a ready one retires the session and unloads the bridge, or is retained for the process when
@@ -288,9 +272,9 @@ int rsf_unity_package_accept_window(void* hwnd, const rsf_unity_package_platform
    body after the preview is hidden: 1 for a waiting device, 0 for a retained one, else the
    retirement's verdict. rsf_unity_package_initialize returns 0 for a retained device and 2 for a
    waiting one before it opens a session. */
-void rsf_unity_package_device_event(uint32_t initialize, const rsf_unity_package_platform* platform);
+void rsf_unity_package_device_event(uint32_t initialize);
 uint32_t rsf_unity_package_device_retained(void);
-uint32_t rsf_unity_package_shutdown(const rsf_unity_package_platform* platform);
+uint32_t rsf_unity_package_shutdown(void);
 #ifdef __cplusplus
 }
 #endif

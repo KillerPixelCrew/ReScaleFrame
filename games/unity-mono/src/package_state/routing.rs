@@ -7,8 +7,7 @@
 //!
 //! No lock here is held across a leaf. The route runs outside package.cpp's mutex, as the C++
 //! callback did; the device lifecycle runs under it, so its state is only stored here.
-use super::{Leaves, PACKAGE, Package};
-use crate::package_abi::rsf_unity_package_platform;
+use super::{LEAVES, Leaves, PACKAGE, Package};
 use rsf_game_sys::{RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_WINDOW, rsf_game_render_pass};
 use std::ffi::{c_int, c_void};
 use std::sync::atomic::Ordering::SeqCst;
@@ -196,34 +195,27 @@ pub(super) unsafe extern "C" fn rsf_unity_package_route(
     commands: *mut c_void,
     pass: *const rsf_game_render_pass,
     begin: u32,
-    platform: *const rsf_unity_package_platform,
 ) -> u32 {
-    let Some(leaves) = (unsafe { Leaves::adopt(platform) }) else {
+    let Some(leaves) = LEAVES.get() else {
         return 0;
     };
     if commands.is_null() || pass.is_null() {
         return 0;
     }
-    u32::from(PACKAGE.route(&leaves, commands, unsafe { &*pass }, begin != 0))
+    u32::from(PACKAGE.route(leaves, commands, unsafe { &*pass }, begin != 0))
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_accept_window(
-    window: *mut c_void,
-    platform: *const rsf_unity_package_platform,
-) -> c_int {
-    unsafe { Leaves::adopt(platform) }.map_or(0, |leaves| {
-        c_int::from(PACKAGE.accept_window(&leaves, window))
+extern "C" fn rsf_unity_package_accept_window(window: *mut c_void) -> c_int {
+    LEAVES.get().map_or(0, |leaves| {
+        c_int::from(PACKAGE.accept_window(leaves, window))
     })
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_device_event(
-    initialize: u32,
-    platform: *const rsf_unity_package_platform,
-) {
-    if let Some(leaves) = unsafe { Leaves::adopt(platform) } {
-        PACKAGE.device_event(&leaves, initialize != 0);
+extern "C" fn rsf_unity_package_device_event(initialize: u32) {
+    if let Some(leaves) = LEAVES.get() {
+        PACKAGE.device_event(leaves, initialize != 0);
     }
 }
 
@@ -233,11 +225,9 @@ extern "C" fn rsf_unity_package_device_retained() -> u32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_shutdown(
-    platform: *const rsf_unity_package_platform,
-) -> u32 {
-    u32::from(match unsafe { Leaves::adopt(platform) } {
-        Some(leaves) => PACKAGE.shutdown(&leaves),
+extern "C" fn rsf_unity_package_shutdown() -> u32 {
+    u32::from(match LEAVES.get() {
+        Some(leaves) => PACKAGE.shutdown(leaves),
         None => PACKAGE.device.load(SeqCst) == DEVICE_WAITING,
     })
 }
@@ -247,26 +237,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn entries_refuse_an_incomplete_table() {
+    fn routes_without_a_loaded_table() {
         let pass: rsf_game_render_pass = unsafe { std::mem::zeroed() };
         unsafe {
             assert_eq!(
-                rsf_unity_package_route(
-                    std::ptr::NonNull::dangling().as_ptr(),
-                    &pass,
-                    1,
-                    std::ptr::null()
-                ),
+                rsf_unity_package_route(std::ptr::NonNull::dangling().as_ptr(), &pass, 1),
                 0
             );
-            assert_eq!(
-                rsf_unity_package_accept_window(std::ptr::null_mut(), std::ptr::null()),
-                0
-            );
-            rsf_unity_package_device_event(1, std::ptr::null());
+            assert_eq!(rsf_unity_package_accept_window(std::ptr::null_mut()), 0);
+            rsf_unity_package_device_event(1);
         }
         // The static package's device is still waiting: shutdown has nothing to retire.
         assert_eq!(rsf_unity_package_device_retained(), 0);
-        assert_eq!(unsafe { rsf_unity_package_shutdown(std::ptr::null()) }, 1);
+        assert_eq!(rsf_unity_package_shutdown(), 1);
     }
 }

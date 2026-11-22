@@ -14,11 +14,10 @@
 //! The log lock is held across the log leaves and the input-window lock across the window leaves;
 //! neither leaf calls back. The message and CPU paths take neither lock, so a message the window
 //! dispatches while it is being hooked cannot wait on the hook.
-use super::{BACKEND_OK, Leaves, PACKAGE, Package};
+use super::{BACKEND_OK, LEAVES, Leaves, PACKAGE, Package};
 use crate::bridge_state::{
     rsf_unity_frames_active, rsf_unity_frames_callback_enter, rsf_unity_frames_callback_leave,
 };
-use crate::package_abi::rsf_unity_package_platform;
 use crate::plugin_abi::rsf_unity_native_api;
 use crate::runtime_config::{PATH_CAPACITY, terminated};
 use rsf_game_sys::{
@@ -280,8 +279,7 @@ impl Package {
 
     /// A new session's services, in the C++ order: the process log, the Editor's install or the
     /// player's input window, the player's Vulkan surface, then the bridge prepared with this
-    /// session's host services. Their user pointer is the platform table, which the log and
-    /// CPU-event services adopt again on each call.
+    /// session's host services.
     pub(super) fn open(&self, leaves: &Leaves) -> bool {
         self.open_process_log(leaves);
         let editor = self.services.editor.load(SeqCst);
@@ -300,7 +298,7 @@ impl Package {
             session_id: leaves.session_seed().wrapping_add(1),
             log: Some(host_log),
             render_pass: Some(leaves.render_pass),
-            user: leaves.table.cast_mut().cast(),
+            user: null_mut(),
             render_config: Some(leaves.render_config),
             cpu_event: Some(host_cpu_event),
             scope_state: None,
@@ -430,87 +428,76 @@ impl Package {
     }
 }
 
-/// rsf_game_host_services::log; user is the platform table.
-unsafe extern "C" fn host_log(user: *mut c_void, text: *const c_char) {
-    unsafe { rsf_unity_package_log(text, user.cast()) }
+/// rsf_game_host_services::log.
+unsafe extern "C" fn host_log(_: *mut c_void, text: *const c_char) {
+    unsafe { rsf_unity_package_log(text) }
 }
 
-/// rsf_game_host_services::cpu_event; user is the platform table.
-unsafe extern "C" fn host_cpu_event(user: *mut c_void, event: *const rsf_game_cpu_event) {
+/// rsf_game_host_services::cpu_event.
+unsafe extern "C" fn host_cpu_event(_: *mut c_void, event: *const rsf_game_cpu_event) {
     if event.is_null() {
         return;
     }
-    if let Some(leaves) = unsafe { Leaves::adopt(user.cast()) } {
-        PACKAGE.cpu_event(&leaves, unsafe { &*event });
+    if let Some(leaves) = LEAVES.get() {
+        PACKAGE.cpu_event(leaves, unsafe { &*event });
     }
 }
 
 /// The package log in every form package.cpp lends it.
 ///
 /// # Safety
-/// `text` is null or NUL-terminated; `platform` is null or package.cpp's table.
+/// `text` is null or NUL-terminated.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_log(
-    text: *const c_char,
-    platform: *const rsf_unity_package_platform,
-) {
+unsafe extern "C" fn rsf_unity_package_log(text: *const c_char) {
     if text.is_null() {
         return;
     }
-    if let Some(leaves) = unsafe { Leaves::adopt(platform) } {
-        PACKAGE.log_text(&leaves, unsafe { CStr::from_ptr(text) });
+    if let Some(leaves) = LEAVES.get() {
+        PACKAGE.log_text(leaves, unsafe { CStr::from_ptr(text) });
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_window_message(
-    message: u32,
-    lparam: isize,
-    platform: *const rsf_unity_package_platform,
-) -> *mut c_void {
-    if let Some(leaves) = unsafe { Leaves::adopt(platform) }
+extern "C" fn rsf_unity_package_window_message(message: u32, lparam: isize) -> *mut c_void {
+    if let Some(leaves) = LEAVES.get()
         && let Some(_callback) = InputCallback::enter()
     {
-        return PACKAGE.window_message(&leaves, message, lparam);
+        return PACKAGE.window_message(leaves, message, lparam);
     }
     PACKAGE.services.previous.load(SeqCst)
 }
 
 /// rsfu_input's checks come first, as they did; nothing is reported for no kinds.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_input(
-    frame: u64,
-    kinds: u32,
-    platform: *const rsf_unity_package_platform,
-) -> c_int {
+extern "C" fn rsf_unity_package_input(frame: u64, kinds: u32) -> c_int {
     if frame == 0 || kinds & !INPUT_KINDS != 0 {
         return BACKEND_INVALID_ARGUMENT;
     }
     if kinds == 0 {
         return BACKEND_OK;
     }
-    match unsafe { Leaves::adopt(platform) } {
+    match LEAVES.get() {
         Some(leaves) => {
             let Some(_callback) = InputCallback::enter() else {
                 return BACKEND_OK;
             };
-            PACKAGE.input(&leaves, frame, kinds)
+            PACKAGE.input(leaves, frame, kinds)
         }
         None => BACKEND_FEATURE_FAILED,
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_preview_input(platform: *const rsf_unity_package_platform) {
-    if let Some(leaves) = unsafe { Leaves::adopt(platform) } {
-        PACKAGE.preview_input(&leaves);
+extern "C" fn rsf_unity_package_preview_input() {
+    if let Some(leaves) = LEAVES.get() {
+        PACKAGE.preview_input(leaves);
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_unload(platform: *const rsf_unity_package_platform) {
-    if let Some(leaves) = unsafe { Leaves::adopt(platform) } {
-        PACKAGE.unload(&leaves);
+extern "C" fn rsf_unity_package_unload() {
+    if let Some(leaves) = LEAVES.get() {
+        PACKAGE.unload(leaves);
     }
 }
 
@@ -521,25 +508,16 @@ mod tests {
     #[test]
     fn rsfu_input_checks_its_arguments_first() {
         unsafe {
-            assert_eq!(
-                rsf_unity_package_input(0, 1, std::ptr::null()),
-                BACKEND_INVALID_ARGUMENT
-            );
-            assert_eq!(
-                rsf_unity_package_input(1, 8, std::ptr::null()),
-                BACKEND_INVALID_ARGUMENT
-            );
-            assert_eq!(rsf_unity_package_input(1, 0, std::ptr::null()), BACKEND_OK);
-            assert_eq!(
-                rsf_unity_package_input(1, 7, std::ptr::null()),
-                BACKEND_FEATURE_FAILED
-            );
+            assert_eq!(rsf_unity_package_input(0, 1), BACKEND_INVALID_ARGUMENT);
+            assert_eq!(rsf_unity_package_input(1, 8), BACKEND_INVALID_ARGUMENT);
+            assert_eq!(rsf_unity_package_input(1, 0), BACKEND_OK);
+            assert_eq!(rsf_unity_package_input(1, 7), BACKEND_FEATURE_FAILED);
             // A null text or table is ignored.
-            rsf_unity_package_log(std::ptr::null(), std::ptr::null());
-            rsf_unity_package_log(c"x".as_ptr(), std::ptr::null());
+            rsf_unity_package_log(std::ptr::null());
+            rsf_unity_package_log(c"x".as_ptr());
             host_cpu_event(null_mut(), std::ptr::null());
-            rsf_unity_package_preview_input(std::ptr::null());
-            rsf_unity_package_unload(std::ptr::null());
+            rsf_unity_package_preview_input();
+            rsf_unity_package_unload();
         }
     }
 }
