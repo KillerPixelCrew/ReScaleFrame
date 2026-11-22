@@ -51,7 +51,7 @@ endif()
 
 if(MSVC)
     add_library(rsf_proxy_wingman SHARED
-        src/wingman_loader.cpp src/xinput_forwarders.asm src/wingman_exports.def)
+        src/wingman_loader.c src/xinput_forwarders.asm src/wingman_exports.def)
     target_link_libraries(rsf_proxy_wingman PRIVATE
         rsf_wingman_rust rsf_loader_rust ReScaleFrame::RuntimeCommon rsf_build_options)
     target_compile_definitions(rsf_proxy_wingman PRIVATE _CRT_SECURE_NO_WARNINGS)

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! The Wingman XInput carrier's optional, process-lived plugin session.
+use crate::windows::{fingerprint, matches_executable, module_path};
 use crate::{AMD64, EXECUTABLE};
 use rsf_game_sys::plugin_session_abi::rsf_plugin_session_options;
 use rsf_game_sys::session::{Probe, host_services, with_session_options};
@@ -10,18 +11,18 @@ use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::ptr::null_mut;
 use std::sync::{Mutex, OnceLock, PoisonError};
-use windows_sys::Win32::Foundation::HMODULE;
+use windows_sys::Win32::Foundation::{CloseHandle, HMODULE};
 use windows_sys::Win32::System::LibraryLoader::{
-    GetModuleFileNameW, GetProcAddress, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+    DisableThreadLibraryCalls, GetProcAddress, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
     LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LoadLibraryExW,
 };
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
+use windows_sys::Win32::System::Threading::CreateThread;
 use windows_sys::Win32::System::WindowsProgramming::GetPrivateProfileIntW;
 use windows_sys::core::{s, w};
 
 type Prepare = unsafe extern "C" fn(*const rsf_plugin_session_options, *mut *mut c_void) -> i32;
 type Start = unsafe extern "C" fn(*mut c_void) -> i32;
-type Fingerprint = unsafe extern "C" fn(*const u16, *mut c_char) -> bool;
 
 static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
 static LOG_WRITE: Mutex<()> = Mutex::new(());
@@ -47,17 +48,6 @@ fn retire(session: &mut Option<Session>) -> i32 {
         *session = None;
     }
     result
-}
-
-fn module_path(module: HMODULE) -> Option<Vec<u16>> {
-    let mut buffer = vec![0; 32768];
-    let len =
-        unsafe { GetModuleFileNameW(module, buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
-    if len == 0 || len >= buffer.len() {
-        return None;
-    }
-    buffer.truncate(len);
-    Some(buffer)
 }
 
 fn path_with(prefix: &[u16], suffix: &str) -> Vec<u16> {
@@ -87,8 +77,22 @@ unsafe extern "C" fn host_log(_: *mut c_void, message: *const c_char) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_wingman_carrier_start(module: HMODULE, fingerprint: Fingerprint) -> u32 {
-    let Some(module_path_utf16) = module_path(module) else {
+unsafe extern "C" fn rsf_wingman_carrier_attach(module: HMODULE) {
+    unsafe { DisableThreadLibraryCalls(module) };
+    let mut executable = [0; 32768];
+    if module_path(null_mut(), &mut executable).is_some_and(matches_executable) {
+        // The worker's entry runs outside loader lock. DllMain never waits for it.
+        let worker =
+            unsafe { CreateThread(std::ptr::null(), 0, Some(startup), module, 0, null_mut()) };
+        if !worker.is_null() {
+            unsafe { CloseHandle(worker) };
+        }
+    }
+}
+
+unsafe extern "system" fn startup(module: *mut c_void) -> u32 {
+    let mut path_buffer = vec![0; 32768];
+    let Some(module_path_utf16) = module_path(module, &mut path_buffer) else {
         return 1;
     };
     let parent_end = module_path_utf16
@@ -150,19 +154,15 @@ unsafe extern "C" fn rsf_wingman_carrier_start(module: HMODULE, fingerprint: Fin
     let quiesce: Start = unsafe { std::mem::transmute(quiesce) };
     let stop: Start = unsafe { std::mem::transmute(stop) };
 
-    let Some(mut executable) = module_path(null_mut()) else {
-        return 1;
-    };
-    executable.push(0);
-    let mut digest = [0 as c_char; 65];
-    if !unsafe { fingerprint(executable.as_ptr(), digest.as_mut_ptr()) } {
+    let mut executable = vec![0; 32768];
+    let Some(digest) = module_path(null_mut(), &mut executable).and_then(fingerprint) else {
         write_log(b"Executable fingerprint could not be read.");
         return 1;
-    }
+    };
     let probe = Probe {
         machine: AMD64,
         executable: EXECUTABLE,
-        sha256: unsafe { CStr::from_ptr(digest.as_ptr()) },
+        sha256: CStr::from_bytes_with_nul(&digest).expect("hex digest is NUL terminated"),
     };
     let plugin_path = path_with(parent, "ReScaleFrame\\ReScaleFrame.Game.ProjectWingman.dll");
     let services = host_services(unsafe { GetTickCount64() }, Some(host_log));

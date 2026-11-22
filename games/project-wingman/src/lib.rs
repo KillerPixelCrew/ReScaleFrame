@@ -5,13 +5,15 @@ mod camera;
 mod carrier;
 mod execution;
 mod observer;
+#[cfg(windows)]
+mod windows;
 
 use rsf_game_sys::session::Probe;
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_detection, rsf_game_hooks_api, rsf_game_info, rsf_game_plugin_api,
     rsf_game_probe, rsf_result,
 };
-use std::ffi::{CStr, c_char};
+use std::ffi::CStr;
 
 const UNKNOWN: rsf_detection = 0;
 const RECOGNIZED: rsf_detection = 1;
@@ -30,27 +32,6 @@ unsafe extern "C" fn detect(probe: *const rsf_game_probe) -> rsf_detection {
     } else {
         UNKNOWN
     }
-}
-
-// The native observer checks the loaded module again before installing its hooks.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_wingman_matches_executable(name: *const u16) -> bool {
-    if name.is_null() {
-        return false;
-    }
-    for (i, expected) in EXECUTABLE.to_bytes_with_nul().iter().enumerate() {
-        // A shorter string mismatches at its terminator before the next read.
-        let value = unsafe { name.add(i).read() };
-        if !u8::try_from(value).is_ok_and(|value| value.eq_ignore_ascii_case(expected)) {
-            return false;
-        }
-    }
-    true
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_wingman_matches_sha256(digest: *const c_char) -> bool {
-    !digest.is_null() && unsafe { CStr::from_ptr(digest) } == SHA256
 }
 
 #[unsafe(no_mangle)]

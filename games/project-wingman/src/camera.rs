@@ -155,12 +155,6 @@ pub(crate) fn read_camera(
     valid
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_wingman_read_camera(
-    view: *const c_void,
-    pass: &mut rsf_game_render_pass,
-    copy: CopyMemory,
-) -> bool {
-    let view = view as usize;
-    read_camera(view, pass, copy, read_jitter(view, copy))
-}
+#[cfg(windows)]
+#[path = "camera_fixture.rs"]
+mod fixture;

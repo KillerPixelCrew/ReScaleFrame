@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Admission and retirement of native temporal graph packets and RHI callbacks.
 use crate::camera::{read, read_camera, read_jitter};
-use crate::observer::{self, CAMERA_CUT, HISTORY, Platform};
+use crate::observer::{self, CAMERA_CUT, Entry, HISTORY, Platform, install_trampoline};
 use rsf_game_sys::{
     RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR, rsf_game_host_services, rsf_game_render_pass,
 };
@@ -9,7 +9,7 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 
 // Install the tracked-allocation destructor before any hook can publish a packet.
@@ -66,7 +66,6 @@ const _: () = {
     assert!(size_of::<TaaParameters>() == 0x50);
 };
 
-#[repr(C)]
 #[derive(Clone, Copy)]
 struct Packet {
     pass: rsf_game_render_pass,
@@ -74,19 +73,14 @@ struct Packet {
     graph: usize,
 }
 
-#[repr(C)]
 #[derive(Clone, Copy)]
 struct Construction {
     parameters: usize,
     packet: Packet,
 }
 
-const _: () =
-    assert!(size_of::<Packet>() == size_of::<rsf_game_render_pass>() + 5 * size_of::<usize>());
-
 struct State {
     sites: [usize; RVAS.len()],
-    created: [bool; RVAS.len()],
     installed: [bool; RVAS.len()],
     // Keyed by the concrete pass inside the graph's tracked allocation.
     pending: HashMap<usize, Packet>,
@@ -122,7 +116,6 @@ unsafe impl Send for State {}
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| {
     Mutex::new(State {
         sites: [0; RVAS.len()],
-        created: [false; RVAS.len()],
         installed: [false; RVAS.len()],
         pending: HashMap::new(),
     })
@@ -130,12 +123,11 @@ static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| {
 static EXECUTING: AtomicU32 = AtomicU32::new(0);
 static QUEUED: AtomicU32 = AtomicU32::new(0);
 static NEXT_LOG: AtomicU64 = AtomicU64::new(0);
+static ORIGINAL: [AtomicUsize; RVAS.len()] = [const { AtomicUsize::new(0) }; RVAS.len()];
 
 thread_local! {
-    // The native TAA detour lends its stack packet during the original call, then restores the
-    // previous pointer with a scope guard even if a nested call or native exception intervenes.
-    static CONSTRUCTION: Cell<*const Packet> = const { Cell::new(ptr::null()) };
-    static COMPUTE: Cell<*const Construction> = const { Cell::new(ptr::null()) };
+    static CONSTRUCTION: Cell<Option<Packet>> = const { Cell::new(None) };
+    static COMPUTE: Cell<Option<Construction>> = const { Cell::new(None) };
 }
 
 fn state() -> MutexGuard<'static, State> {
@@ -158,15 +150,21 @@ pub(crate) fn prepare(platform: &Platform) -> bool {
         }
     }
     state.sites = RVAS.map(|rva| image + rva);
-    for index in 0..RVAS.len() {
-        if !state.created[index] {
-            if !unsafe { (platform.create_execution_hook)(index as u32, state.sites[index]) } {
-                return false;
-            }
-            state.created[index] = true;
-        }
-    }
-    true
+    let detours = [
+        delete_tracked as *const (),
+        add_taa as *const (),
+        add_compute as *const (),
+        setup_pass as *const (),
+        execute_pass as *const (),
+    ];
+    state
+        .sites
+        .into_iter()
+        .zip(detours)
+        .zip(&ORIGINAL)
+        .all(|((site, detour), original)| {
+            install_trampoline(platform, site, detour as usize, original)
+        })
 }
 
 pub(crate) fn start(platform: &Platform) -> bool {
@@ -215,43 +213,11 @@ fn capture(graph: usize, view: usize, parameters: usize, history: usize) -> Opti
     })
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_wingman_exec_enter() {
-    EXECUTING.fetch_add(1, Ordering::AcqRel);
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_wingman_exec_leave() {
-    EXECUTING.fetch_sub(1, Ordering::Release);
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_wingman_exec_taa_begin(
-    graph: usize,
-    view: usize,
-    parameters: usize,
-    history: usize,
-    storage: *mut Packet,
-) -> *const Packet {
-    let current = if let Some(packet) = capture(graph, view, parameters, history) {
-        unsafe { storage.write(packet) };
-        storage.cast_const()
-    } else {
-        ptr::null()
-    };
-    CONSTRUCTION.replace(current)
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_wingman_exec_taa_end(parent: *const Packet) {
-    CONSTRUCTION.set(parent);
-}
-
 fn compute(graph: usize, parameters: usize) -> Option<Construction> {
     if !observer::accepting() {
         return None;
     }
-    let mut packet = unsafe { *CONSTRUCTION.get().as_ref()? };
+    let mut packet = CONSTRUCTION.get()?;
     if packet.graph != graph {
         return None;
     }
@@ -261,29 +227,8 @@ fn compute(graph: usize, parameters: usize) -> Option<Construction> {
     Some(Construction { parameters, packet })
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_wingman_exec_compute_begin(
-    graph: usize,
-    parameters: usize,
-    storage: *mut Construction,
-) -> *const Construction {
-    let current = if let Some(candidate) = compute(graph, parameters) {
-        unsafe { storage.write(candidate) };
-        storage.cast_const()
-    } else {
-        ptr::null()
-    };
-    COMPUTE.replace(current)
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_wingman_exec_compute_end(parent: *const Construction) {
-    COMPUTE.set(parent);
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_wingman_exec_bind_pass(graph: usize, pass: usize) {
-    let Some(candidate) = (unsafe { COMPUTE.get().as_ref() }) else {
+fn bind_pass(graph: usize, pass: usize) {
+    let Some(candidate) = COMPUTE.get() else {
         return;
     };
     let Some(platform) = observer::platform() else {
@@ -315,34 +260,7 @@ fn discard(pending: &mut HashMap<usize, Packet>, owner: usize) {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_wingman_exec_discard(owner: usize) {
-    discard(&mut state().pending, owner);
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_wingman_exec_take(
-    pass: usize,
-    packet: *mut Packet,
-    host: *mut rsf_game_host_services,
-) -> bool {
-    let selected = state().pending.remove(&pass);
-    let Some(mut selected) = selected else {
-        return false;
-    };
-    let Some(services) = observer::active_host() else {
-        return false;
-    };
-    selected.pass.session_id = services.session_id;
-    unsafe {
-        packet.write(selected);
-        host.write(services);
-    }
-    true
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_wingman_exec_reserve() -> bool {
+fn reserve() -> bool {
     observer::accepting()
         && QUEUED
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
@@ -351,13 +269,7 @@ extern "C" fn rsf_wingman_exec_reserve() -> bool {
             .is_ok()
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_wingman_exec_retire() {
-    QUEUED.fetch_sub(1, Ordering::Release);
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_wingman_exec_diagnostic_due(now: u64) -> bool {
+fn diagnostic_due(now: u64) -> bool {
     let previous = NEXT_LOG.load(Ordering::Relaxed);
     now >= previous
         && NEXT_LOG
@@ -370,17 +282,200 @@ extern "C" fn rsf_wingman_exec_diagnostic_due(now: u64) -> bool {
             .is_ok()
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_wingman_exec_report(
-    host: *const rsf_game_host_services,
-    context: *mut c_void,
-    pass: *const rsf_game_render_pass,
-) {
-    if observer::accepting()
-        && let Some(platform) = observer::platform()
-    {
-        unsafe { (platform.report_execution)(host, context, pass) };
+type DeleteTracked = unsafe extern "C-unwind" fn(usize, u32) -> usize;
+type AddTaa = unsafe extern "C-unwind" fn(usize, usize, usize, usize, usize, usize) -> usize;
+type AddCompute = unsafe extern "C-unwind" fn(usize, usize, u8, usize, usize, usize);
+type PassCall = unsafe extern "C-unwind" fn(usize, usize);
+
+// The native originals can unwind through these detours. Keep the counters and nested
+// construction scopes under Drop, and contain optional-consumer exceptions in the native leaf.
+unsafe extern "C-unwind" fn delete_tracked(owner: usize, flags: u32) -> usize {
+    let _entry = Entry::new(&EXECUTING);
+    discard(&mut state().pending, owner);
+    let original: DeleteTracked =
+        unsafe { std::mem::transmute(ORIGINAL[0].load(Ordering::Acquire)) };
+    unsafe { original(owner, flags) }
+}
+
+struct Restore<T: Copy + 'static>(&'static std::thread::LocalKey<Cell<Option<T>>>, Option<T>);
+
+impl<T: Copy + 'static> Drop for Restore<T> {
+    fn drop(&mut self) {
+        self.0.set(self.1);
     }
+}
+
+unsafe extern "C-unwind" fn add_taa(
+    result: usize,
+    graph: usize,
+    view: usize,
+    parameters: usize,
+    previous_history: usize,
+    output_history: usize,
+) -> usize {
+    let _entry = Entry::new(&EXECUTING);
+    let previous = CONSTRUCTION.replace(capture(graph, view, parameters, previous_history));
+    let _restore = Restore(&CONSTRUCTION, previous);
+    let original: AddTaa = unsafe { std::mem::transmute(ORIGINAL[1].load(Ordering::Acquire)) };
+    unsafe {
+        original(
+            result,
+            graph,
+            view,
+            parameters,
+            previous_history,
+            output_history,
+        )
+    }
+}
+
+unsafe extern "C-unwind" fn add_compute(
+    graph: usize,
+    name: usize,
+    flags: u8,
+    shader: usize,
+    parameters: usize,
+    groups: usize,
+) {
+    let _entry = Entry::new(&EXECUTING);
+    let previous = COMPUTE.replace(compute(graph, parameters));
+    let _restore = Restore(&COMPUTE, previous);
+    let original: AddCompute = unsafe { std::mem::transmute(ORIGINAL[2].load(Ordering::Acquire)) };
+    unsafe { original(graph, name, flags, shader, parameters, groups) };
+}
+
+unsafe extern "C-unwind" fn setup_pass(graph: usize, pass: usize) {
+    let _entry = Entry::new(&EXECUTING);
+    let original: PassCall = unsafe { std::mem::transmute(ORIGINAL[3].load(Ordering::Acquire)) };
+    unsafe { original(graph, pass) };
+    bind_pass(graph, pass);
+}
+
+unsafe extern "C-unwind" fn execute_pass(pass: usize, list: usize) {
+    let _entry = Entry::new(&EXECUTING);
+    let command = Command::acquire(pass);
+    let original: PassCall = unsafe { std::mem::transmute(ORIGINAL[4].load(Ordering::Acquire)) };
+    unsafe { original(pass, list) };
+    if let Some(mut command) = command
+        && reserve()
+    {
+        command.reserved = true;
+        let command = Box::into_raw(command);
+        if !unsafe { append(list, command) } {
+            drop(unsafe { Box::from_raw(command) });
+        }
+    }
+}
+
+type CommandFn = unsafe extern "C" fn(*mut Command, usize, usize);
+static COMMAND_VTABLE: [CommandFn; 1] = [run_command];
+
+#[repr(C)]
+struct Command {
+    // Verified UE4.27 FRHICommandBase prefix.
+    vtable: *const CommandFn,
+    next: *mut Command,
+    pass: rsf_game_render_pass,
+    host: rsf_game_host_services,
+    reserved: bool,
+    platform: &'static Platform,
+}
+
+const _: () = assert!(std::mem::offset_of!(Command, next) == 8);
+
+impl Command {
+    fn acquire(pass: usize) -> Option<Box<Self>> {
+        let packet = state().pending.remove(&pass)?;
+        let host = observer::active_host()?;
+        let platform = observer::platform()?;
+        // A failed diagnostic allocation must leave the native pass playable.
+        let raw = unsafe { std::alloc::alloc(std::alloc::Layout::new::<Self>()) }.cast::<Self>();
+        if raw.is_null() {
+            return None;
+        }
+        let mut pass = packet.pass;
+        pass.color_input = ptr::null_mut();
+        pass.depth = ptr::null_mut();
+        pass.motion = ptr::null_mut();
+        pass.color_output = ptr::null_mut();
+        pass.session_id = host.session_id;
+        unsafe {
+            raw.write(Self {
+                vtable: COMMAND_VTABLE.as_ptr(),
+                next: ptr::null_mut(),
+                pass,
+                host,
+                reserved: false,
+                platform,
+            });
+        }
+        let mut command = unsafe { Box::from_raw(raw) };
+        let pass = &mut command.pass;
+        for (out, rdg) in [
+            &mut pass.color_input,
+            &mut pass.depth,
+            &mut pass.motion,
+            &mut pass.color_output,
+        ]
+        .into_iter()
+        .zip(packet.rdg)
+        {
+            *out = unsafe { (platform.acquire_texture)(rdg) };
+            if out.is_null() {
+                return None;
+            }
+        }
+        Some(command)
+    }
+}
+
+impl Drop for Command {
+    fn drop(&mut self) {
+        for texture in [
+            self.pass.color_input,
+            self.pass.depth,
+            self.pass.motion,
+            self.pass.color_output,
+        ] {
+            if !texture.is_null() {
+                unsafe { (self.platform.release_texture)(texture) };
+            }
+        }
+        if self.reserved {
+            QUEUED.fetch_sub(1, Ordering::Release);
+        }
+    }
+}
+
+unsafe extern "C" fn run_command(command: *mut Command, list: usize, _: usize) {
+    let command = unsafe { Box::from_raw(command) };
+    let platform = command.platform;
+    let log = diagnostic_due(unsafe { (platform.tick_count)() });
+    unsafe {
+        (platform.report_execution)(&command.host, list, &command.pass, log);
+    }
+}
+
+unsafe fn append(list: usize, command: *mut Command) -> bool {
+    let copy = unsafe { (*command).platform.copy };
+    let Some(tail): Option<usize> = (unsafe { read(copy, list, 8) }) else {
+        return false;
+    };
+    let Some(count) = (unsafe { read::<u32>(copy, list, 0x14) }).and_then(|n| n.checked_add(1))
+    else {
+        return false;
+    };
+    if unsafe { read::<u8>(copy, list, 0x10) } != Some(0)
+        || unsafe { read::<usize>(copy, tail, 0) } != Some(0)
+    {
+        return false;
+    }
+    unsafe {
+        (tail as *mut *mut Command).write_unaligned(command);
+        ((list + 8) as *mut *mut *mut Command).write_unaligned(&raw mut (*command).next);
+        ((list + 0x14) as *mut u32).write_unaligned(count);
+    }
+    true
 }
 
 #[cfg(test)]
@@ -419,7 +514,6 @@ mod tests {
         }
         let mut state = State {
             sites: RVAS,
-            created: [true; RVAS.len()],
             installed: [false; RVAS.len()],
             pending: HashMap::new(),
         };
