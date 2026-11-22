@@ -243,42 +243,15 @@ int main(int argc, char** argv) {
         // Retain the failed contract result, but still exercise physical creation
         // so the same run discriminates application binds from native DXGI usage.
         if (presentation.is_owner(chain.Get())) return fail("inner owner cannot be admitted before End");
-        rsf_d3d11_chain_dispatch typed{}; typed.struct_size = sizeof(typed); typed.abi_version = RSF_D3D11_HOST_ABI_VERSION;
-        typed.receiver = chain.Get(); typed.method = RSF_D3D11_DISPATCH_RELEASE;
         const auto held_references = chain->AddRef();
-        if (rsf_d3d11_host_dispatch_chain(host.user,&typed) != RSF_OK || !typed.handled ||
-            typed.result.references != held_references-1) return fail("unadmitted Release consumes exactly one reference");
-        for (uint32_t method = RSF_D3D11_DISPATCH_PRESENT; method <= RSF_D3D11_DISPATCH_RESIZE_BUFFERS1; ++method) {
-            typed.method = method; typed.handled = 0;
-            if (rsf_d3d11_host_dispatch_chain(host.user,&typed) != RSF_OK || !typed.handled ||
-                typed.result.hresult != DXGI_ERROR_INVALID_CALL) return fail("known unadmitted method cannot fall through");
-        }
-        rsf_d3d11_present_dispatch refused{sizeof(refused),RSF_D3D11_HOST_ABI_VERSION,chain.Get(),0,0,0,S_OK};
-        if (rsf_d3d11_host_dispatch_present(host.user,&refused) != RSF_OK || !refused.handled ||
-            refused.native_result != DXGI_ERROR_INVALID_CALL) return fail("unadmitted facade remains handled with failure");
-        refused.flags = DXGI_PRESENT_TEST;
-        if (rsf_d3d11_host_dispatch_present(host.user,&refused) != RSF_OK || !refused.handled ||
-            refused.native_result != DXGI_ERROR_INVALID_CALL) return fail("unadmitted TEST cannot fall through to native code");
+        if (rsf_d3d11_host_fixture_check_unadmitted(host.user, chain.Get(), held_references) != 0) return 1;
         auto* inner = chain.Detach();
         outer = new OuterChain(inner,host.user); inner->Release(); chain.Attach(outer);
         void* original_output = chain.Get();
         const rsf_d3d11_native_chain outputs{sizeof(outputs),RSF_D3D11_HOST_ABI_VERSION,device.Get(),context.Get(),&original_output};
         if (rsf_d3d11_host_creation_end(host.user,&scope,&outputs) != RSF_OK || original_output != chain.Get() ||
             !presentation.is_owner(chain.Get()) || !presentation.is_owner(outer->inner.Get())) return fail("canonical outer admission preserves output");
-        rsf_d3d11_present_dispatch alias{sizeof(alias),RSF_D3D11_HOST_ABI_VERSION,outer,0,0,1,123};
-        if (rsf_d3d11_host_dispatch_present(host.user,&alias) != RSF_OK || alias.handled || alias.native_result != 123)
-            return fail("canonical outer alias cannot bypass its own Present work");
-        alias.receiver = reinterpret_cast<void*>(uintptr_t(1)); alias.handled = 1;
-        if (rsf_d3d11_host_dispatch_present(host.user,&alias) != RSF_OK || alias.handled || alias.native_result != 123)
-            return fail("unknown receiver is not dereferenced with a live owner");
-        typed.receiver = outer;
-        const auto outer_refs = outer->refs;
-        for (uint32_t method = RSF_D3D11_DISPATCH_RELEASE; method <= RSF_D3D11_DISPATCH_RESIZE_BUFFERS1; ++method) {
-            typed.method = method; typed.result.references = 123;
-            if (rsf_d3d11_host_dispatch_chain(host.user,&typed) != RSF_OK || typed.handled ||
-                typed.result.references != 123 || outer->refs != outer_refs)
-                return fail("typed dispatch preserves every outer wrapper method and reference");
-        }
+        if (rsf_d3d11_host_fixture_check_outer(host.user, outer, &outer->refs) != 0) return 1;
     }
     // Native startup presents before the first scene. The bridge adopts its chain there.
     const auto first_present = chain->Present(0, 0);
@@ -299,29 +272,7 @@ int main(int argc, char** argv) {
         return fail("bind verified application presentation before source facts");
     if (rsf_d3d11_host_fixture_check_empty_aux(&host, context.Get()) != 0) return 1;
 
-    if (outer) {
-        rsf_d3d11_chain_dispatch typed{}; typed.struct_size = sizeof(typed); typed.abi_version = RSF_D3D11_HOST_ABI_VERSION;
-        typed.receiver = outer->inner.Get(); typed.method = RSF_D3D11_DISPATCH_PRESENT1;
-        DXGI_PRESENT_PARAMETERS dirty{}; dirty.DirtyRectsCount = 1;
-        typed.args.present1.parameters = &dirty;
-        if (rsf_d3d11_host_dispatch_chain(host.user,&typed) != RSF_OK || !typed.handled ||
-            typed.result.hresult != DXGI_ERROR_INVALID_CALL) return fail("Present1 preserves dirty-region refusal");
-        typed.args = {}; typed.method = RSF_D3D11_DISPATCH_RESIZE_BUFFERS;
-        typed.args.resize_buffers.buffer_count = 99;
-        if (rsf_d3d11_host_dispatch_chain(host.user,&typed) != RSF_OK || !typed.handled ||
-            typed.result.hresult != DXGI_ERROR_INVALID_CALL) return fail("ResizeBuffers preserves invalid-count refusal");
-        typed.args = {}; typed.method = RSF_D3D11_DISPATCH_RESIZE_BUFFERS1;
-        const uint32_t node_mask = 1; typed.args.resize_buffers1.node_masks = &node_mask;
-        if (rsf_d3d11_host_dispatch_chain(host.user,&typed) != RSF_OK || !typed.handled ||
-            typed.result.hresult != DXGI_ERROR_INVALID_CALL) return fail("ResizeBuffers1 preserves native-array refusal");
-        typed.args = {}; typed.method = RSF_D3D11_DISPATCH_SET_FULLSCREEN_STATE;
-        if (rsf_d3d11_host_dispatch_chain(host.user,&typed) != RSF_OK || !typed.handled || FAILED(typed.result.hresult))
-            return fail("SetFullscreenState uses the actual physical owner");
-        typed.method = RSF_D3D11_DISPATCH_SET_COLOR_SPACE1;
-        typed.args.color_space.color_space = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
-        if (rsf_d3d11_host_dispatch_chain(host.user,&typed) != RSF_OK || !typed.handled || FAILED(typed.result.hresult))
-            return fail("SetColorSpace1 uses the actual physical owner");
-    }
+    if (outer && rsf_d3d11_host_fixture_check_inner(host.user, outer->inner.Get()) != 0) return 1;
     auto color = texture(device.Get(), DXGI_FORMAT_R11G11B10_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
     auto motion = texture(device.Get(), DXGI_FORMAT_R16G16_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
     auto depth = texture(device.Get(), DXGI_FORMAT_R24G8_TYPELESS, D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE);

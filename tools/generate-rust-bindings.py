@@ -102,8 +102,10 @@ generate("tests/presentation/src/d3d11_host_device_abi.rs", "tests/d3d11_host_de
           "-Iruntime/presentation/include", "-Iruntime/contract/include",
           "-Iruntime/backends/dlss/include"],
          ["--no-recursive-allowlist",
-          "--allowlist-function", "rsf_(d3d11_host_(reduced_frame|set_active|upscale_auxiliaries|restore_auxiliaries|request_capture)|dlss_pipeline_get_status|native_(cpu_read|fg_(status_get|inputs_ready)|window_last_present|latency_status_get))",
-          "--raw-line", "use rsf_game_sys::d3d11_host_abi::{rsf_d3d11_auxiliary_pass, rsf_d3d11_auxiliary_scope};",
+          "--allowlist-function", "rsf_(d3d11_host_(reduced_frame|set_active|upscale_auxiliaries|restore_auxiliaries|request_capture|dispatch_chain|dispatch_present)|dlss_pipeline_get_status|native_(cpu_read|fg_(status_get|inputs_ready)|window_last_present|latency_status_get))",
+          "--raw-line", "use rsf_game_sys::d3d11_chain_abi::rsf_d3d11_chain_dispatch;",
+          "--raw-line", "use rsf_game_sys::d3d11_host_abi::{\n"
+          "    rsf_d3d11_auxiliary_pass, rsf_d3d11_auxiliary_scope, rsf_d3d11_present_dispatch,\n};",
           "--raw-line", "use rsf_game_sys::d3d11_reduced_abi::rsf_d3d11_reduced_frame;",
           "--raw-line", "use rsf_game_sys::rsf_game_host_services;",
           "--raw-line", "use rsf_game_sys::sr_abi::{rsf_dlss_pipeline_result, rsf_dlss_pipeline_status};",

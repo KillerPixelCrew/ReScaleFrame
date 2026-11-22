@@ -191,3 +191,13 @@ transactions and final disposition. No hardware execution was performed.
 This replay preserves the dedicated hardware executables and public Runtime
 and GameSDK exports. Source review and MSVC syntax-only checking are distinct
 from a native build or a device run.
+
+The scoped D01 fixture also runs its typed dispatch probes from Rust using the
+GameSDK records. The probes use the held inner reference before admission,
+the real outer receiver and its live reference count after admission, and the
+exact admitted inner receiver after presentation binding. They preserve the
+unadmitted Release and TEST results, all outer-method output sentinels, and
+the dirty Present1, invalid resize count, native node mask, fullscreen and
+colour-space cases. The C++ facade, constructor-time virtual buffer probes,
+creation-scope output identity check and first native Present remain in place.
+The D02 fixture paths and D03 SR service were outside this replay.

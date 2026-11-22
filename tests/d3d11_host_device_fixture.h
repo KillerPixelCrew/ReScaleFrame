@@ -68,6 +68,9 @@ int32_t rsf_d3d11_host_fixture_rendered_fg(const rsf_d3d11_fixture_resources* re
     const rsf_d3d11_fixture_fg_calls* calls, uint32_t scoped, int32_t first_present,
     uint32_t native_pixel, uint32_t outside_marker);
 int32_t rsf_d3d11_host_fixture_check_empty_aux(const rsf_game_host_services* host, void* context);
+int32_t rsf_d3d11_host_fixture_check_unadmitted(void* user, void* inner, uint32_t held_references);
+int32_t rsf_d3d11_host_fixture_check_outer(void* user, void* outer, const unsigned long* references);
+int32_t rsf_d3d11_host_fixture_check_inner(void* user, void* inner);
 #ifdef __cplusplus
 }
 #endif

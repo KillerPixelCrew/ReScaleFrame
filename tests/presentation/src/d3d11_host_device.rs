@@ -12,6 +12,8 @@ use windows::core::Interface;
 
 #[path = "d3d11_host_device_abi.rs"]
 mod abi;
+#[path = "d3d11_host_device_dispatch.rs"]
+mod dispatch;
 #[path = "d3d11_host_device_fg.rs"]
 mod fg;
 #[path = "d3d11_host_device_recovery.rs"]
