@@ -20,7 +20,8 @@ add_library(ReScaleFrame::AC7View ALIAS rsf_ac7_view)
 # exception leaves (src/ac7_scope_owner.h). Every target that calls that header links
 # rsf_ac7_rust after rsf_ac7_render_scope: this DLL and the render scope, D3D11 present bridge and
 # native graph fixtures. The carriers use the crate through AC7View without pulling render_scope.cpp.
-add_library(rsf_game_ac7 SHARED src/plugin.cpp)
+add_library(rsf_game_ac7 SHARED src/plugin.c)
+set_target_properties(rsf_game_ac7 PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_game_ac7 PRIVATE ReScaleFrame::GameSDK rsf_ac7_view rsf_ac7_render_scope rsf_ac7_rust rsf_build_options)
 set_target_properties(rsf_game_ac7 PROPERTIES OUTPUT_NAME "ReScaleFrame.Game.AC7")
 

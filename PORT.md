@@ -1679,7 +1679,7 @@ Port startup, renderer admission and retirement, including how a refused install
 - [x] [games/ac7/src/ac7_platform.h](games/ac7/src/ac7_platform.h)
 - [x] [games/ac7/src/ac7_sites.h](games/ac7/src/ac7_sites.h)
 - [ ] [games/ac7/src/native_renderer.cpp](games/ac7/src/native_renderer.cpp)
-- [ ] [games/ac7/src/plugin.cpp](games/ac7/src/plugin.cpp)
+- [x] [games/ac7/src/plugin.cpp](games/ac7/src/plugin.cpp)
 
 **Fixtures (2)**
 
