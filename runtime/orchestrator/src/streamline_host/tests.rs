@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use crate::input_receipts::PCL_PING;
+use rsf_game_sys::RSF_GAME_INPUT_CONTROLLER as CONTROLLER;
 use std::cell::{Cell, RefCell};
 
 const PING: u32 = 0xc123;

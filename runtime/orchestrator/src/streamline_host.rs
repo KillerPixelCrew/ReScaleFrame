@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::input_receipts::{CONTROLLER_SAMPLE, streamline_input};
 // The first-party D3D12 Streamline host behind rescaleframe/streamline_host.h. Rust owns its
 // lifetime, interposer admission, feature routing, frame tokens, marker ordering and Reflex/PCL
 // pacing state. The native table holds every typed SDK, COM and Win32 call.
@@ -49,11 +50,8 @@ const REFLEX_ON: u32 = 1;
 // rsf_latency_marker values and the sl::PCLMarker values the native table asserts.
 const PRESENT_END: u32 = 5;
 const INPUT_SAMPLE: u32 = 6;
-const PCL_PING: u32 = 8;
-const CONTROLLER_SAMPLE: u32 = 13;
+
 const REQUIRED_MARKERS: u32 = (1 << (PRESENT_END + 1)) - 1;
-const CONTROLLER: u32 = 4;
-const INPUT_KINDS: u32 = 7;
 
 // sl::MAX_FRAMES_IN_FLIGHT of the pinned SDK, asserted natively.
 const TOKEN_SLOTS: usize = 6;
@@ -735,11 +733,15 @@ unsafe extern "C" fn rsf_core_slhost_input(
 }
 
 fn input_for(host: &Host, id: u64, kinds: u32, message: u32, platform: &Platform) -> i32 {
-    if id == 0 || kinds & !INPUT_KINDS != 0 {
+    if id == 0 {
         return INVALID;
     }
     let mut guard = host.frames();
     let frames = &mut *guard;
+    // The host API accepts physical input independently of an unrelated message.
+    let Some(input) = streamline_input(kinds, message, frames.pcl_message) else {
+        return INVALID;
+    };
     let Some(slot) = frames.slot(id) else {
         return NOT_READY;
     };
@@ -756,14 +758,18 @@ fn input_for(host: &Host, id: u64, kinds: u32, message: u32, platform: &Platform
         frames.marker_calls += 1;
         true
     };
-    if kinds & CONTROLLER != 0 && !frames.tokens[slot].controller_sampled {
-        if !emit(&mut *frames, CONTROLLER_SAMPLE) {
+    if let Some(marker) = input.controller
+        && !frames.tokens[slot].controller_sampled
+    {
+        if !emit(&mut *frames, marker) {
             return FEATURE_FAILED;
         }
         frames.tokens[slot].controller_sampled = true;
     }
-    if message != 0 && message == frames.pcl_message && !frames.tokens[slot].ping_sampled {
-        if !emit(&mut *frames, PCL_PING) {
+    if let Some(marker) = input.ping
+        && !frames.tokens[slot].ping_sampled
+    {
+        if !emit(&mut *frames, marker) {
             return FEATURE_FAILED;
         }
         frames.tokens[slot].ping_sampled = true;
