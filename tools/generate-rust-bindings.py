@@ -67,8 +67,8 @@ generate("runtime/orchestrator/src/resource_roles_abi.rs", "runtime/graphics/inc
          "rsf_(texture_facts|frame_shape|resource_role|role_(table|rule|verdict|confidence))",
          "RSF_ROLE_RULE_.*", [], ["--no-recursive-allowlist"])
 generate("runtime/orchestrator/src/scene_promote_abi.rs", "runtime/graphics/include/rescaleframe/scene_promote.h",
-         "rsf_(promote_(setup|frame_tail|status|log_fn)|frame_tap_(plan|substitution|gate_fn))",
-         "RSF_(PROMOTE_(ABI_VERSION|MAX_(UI|CHAIN)_TARGETS)|FRAME_TAP_MAX_SUBSTITUTIONS)",
+         "rsf_promote_(setup|frame_tail|status|log_fn)",
+         "RSF_PROMOTE_(ABI_VERSION|MAX_(UI|CHAIN)_TARGETS)",
          ["-Iruntime/graphics/include"], ["--no-recursive-allowlist", "--with-derive-default"])
 generate("integrations/steam/src/chain_abi.rs", "integrations/steam/src/d3d11_chain_platform.h",
          "rsf_(steam_chain_(platform|service_fn)|d3d11_chain_dispatch.*)", "RSF_D3D11_(HOST_ABI_VERSION|DISPATCH_.*)",

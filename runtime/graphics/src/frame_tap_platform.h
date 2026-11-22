@@ -256,9 +256,10 @@ void rsf_core_frame_tap_vertex_constants(void* context, uint32_t start, uint32_t
 void rsf_core_frame_tap_pixel_constants(rsf_frame_tap_platform_ref, void* context,
                                         uint32_t start, uint32_t count, void* const* buffers);
 void rsf_core_frame_tap_invalidate(void* context, uint32_t restore);
-void rsf_core_frame_tap_mapped(rsf_frame_tap_platform_ref, void* context, void* resource,
-                               uint32_t subresource, uint32_t kind, void* data);
-void rsf_core_frame_tap_unmapping(rsf_frame_tap_platform_ref, void* context, void* resource);
+int32_t rsf_core_frame_tap_map(rsf_frame_tap_platform_ref, void* context, void* resource,
+                               uint32_t subresource, uint32_t kind, uint32_t flags, void* mapped);
+void rsf_core_frame_tap_unmap(rsf_frame_tap_platform_ref, void* context, void* resource,
+                              uint32_t subresource);
 void rsf_core_frame_tap_dispatch(rsf_frame_tap_platform_ref, void* context, uint32_t x,
                                  uint32_t y, uint32_t z, void* arguments, uint32_t offset);
 void rsf_core_frame_tap_copy(rsf_frame_tap_platform_ref, void* context, void** destination,

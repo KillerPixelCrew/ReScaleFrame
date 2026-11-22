@@ -2,91 +2,9 @@
 
 #![allow(non_camel_case_types)]
 
-pub const RSF_FRAME_TAP_MAX_SUBSTITUTIONS: u32 = 12;
 pub const RSF_PROMOTE_ABI_VERSION: u32 = 7;
 pub const RSF_PROMOTE_MAX_UI_TARGETS: u32 = 4;
 pub const RSF_PROMOTE_MAX_CHAIN_TARGETS: u32 = 2;
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_frame_tap_substitution {
-    pub texture: *mut ::core::ffi::c_void,
-    pub shader_view: *mut ::core::ffi::c_void,
-    pub render_view: *mut ::core::ffi::c_void,
-    pub after_target: *mut ::core::ffi::c_void,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_frame_tap_substitution"]
-        [::core::mem::size_of::<rsf_frame_tap_substitution>() - 32usize];
-    ["Alignment of rsf_frame_tap_substitution"]
-        [::core::mem::align_of::<rsf_frame_tap_substitution>() - 8usize];
-    ["Offset of field: rsf_frame_tap_substitution::texture"]
-        [::core::mem::offset_of!(rsf_frame_tap_substitution, texture) - 0usize];
-    ["Offset of field: rsf_frame_tap_substitution::shader_view"]
-        [::core::mem::offset_of!(rsf_frame_tap_substitution, shader_view) - 8usize];
-    ["Offset of field: rsf_frame_tap_substitution::render_view"]
-        [::core::mem::offset_of!(rsf_frame_tap_substitution, render_view) - 16usize];
-    ["Offset of field: rsf_frame_tap_substitution::after_target"]
-        [::core::mem::offset_of!(rsf_frame_tap_substitution, after_target) - 24usize];
-};
-impl Default for rsf_frame_tap_substitution {
-    fn default() -> Self {
-        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
-        unsafe {
-            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
-            s.assume_init()
-        }
-    }
-}
-pub type rsf_frame_tap_gate_fn = ::core::option::Option<
-    unsafe extern "C" fn(
-        user: *mut ::core::ffi::c_void,
-        context: *mut ::core::ffi::c_void,
-        texture: *mut ::core::ffi::c_void,
-    ) -> ::core::ffi::c_int,
->;
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_frame_tap_plan {
-    pub struct_size: u32,
-    pub count: u32,
-    pub items: [rsf_frame_tap_substitution; 12usize],
-    pub viewport_scale_x: f32,
-    pub viewport_scale_y: f32,
-    pub on_gate: rsf_frame_tap_gate_fn,
-    pub on_gate_user: *mut ::core::ffi::c_void,
-    pub depth_policy: u32,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_frame_tap_plan"][::core::mem::size_of::<rsf_frame_tap_plan>() - 424usize];
-    ["Alignment of rsf_frame_tap_plan"][::core::mem::align_of::<rsf_frame_tap_plan>() - 8usize];
-    ["Offset of field: rsf_frame_tap_plan::struct_size"]
-        [::core::mem::offset_of!(rsf_frame_tap_plan, struct_size) - 0usize];
-    ["Offset of field: rsf_frame_tap_plan::count"]
-        [::core::mem::offset_of!(rsf_frame_tap_plan, count) - 4usize];
-    ["Offset of field: rsf_frame_tap_plan::items"]
-        [::core::mem::offset_of!(rsf_frame_tap_plan, items) - 8usize];
-    ["Offset of field: rsf_frame_tap_plan::viewport_scale_x"]
-        [::core::mem::offset_of!(rsf_frame_tap_plan, viewport_scale_x) - 392usize];
-    ["Offset of field: rsf_frame_tap_plan::viewport_scale_y"]
-        [::core::mem::offset_of!(rsf_frame_tap_plan, viewport_scale_y) - 396usize];
-    ["Offset of field: rsf_frame_tap_plan::on_gate"]
-        [::core::mem::offset_of!(rsf_frame_tap_plan, on_gate) - 400usize];
-    ["Offset of field: rsf_frame_tap_plan::on_gate_user"]
-        [::core::mem::offset_of!(rsf_frame_tap_plan, on_gate_user) - 408usize];
-    ["Offset of field: rsf_frame_tap_plan::depth_policy"]
-        [::core::mem::offset_of!(rsf_frame_tap_plan, depth_policy) - 416usize];
-};
-impl Default for rsf_frame_tap_plan {
-    fn default() -> Self {
-        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
-        unsafe {
-            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
-            s.assume_init()
-        }
-    }
-}
 pub type rsf_promote_log_fn = ::core::option::Option<
     unsafe extern "C" fn(user: *mut ::core::ffi::c_void, message: *const ::core::ffi::c_char),
 >;

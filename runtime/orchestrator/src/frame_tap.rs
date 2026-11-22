@@ -117,6 +117,12 @@ const ZERO_FACTS: rsf_texture_facts = unsafe { zeroed() };
 const ZERO_GEOMETRY: rsf_frame_tap_geometry = unsafe { zeroed() };
 const ZERO_INPUT: rsf_frame_tap_input = unsafe { zeroed() };
 const ZERO_PLAN: rsf_frame_tap_plan = unsafe { zeroed() };
+impl Default for rsf_frame_tap_plan {
+    fn default() -> Self {
+        ZERO_PLAN
+    }
+}
+
 const ZERO_RULE: rsf_role_rule = unsafe { zeroed() };
 const ZERO_OPTIONS: rsf_frame_tap_options = unsafe { zeroed() };
 const ZERO_VIEWPORT: rsf_frame_tap_viewport = unsafe { zeroed() };
@@ -248,7 +254,7 @@ impl Admission {
         }
         OWN.with(|own| own.set(own.get() + 1));
         let admission = Self;
-        TAP.installed.load(SeqCst).then_some(admission)
+        (TAP.installed.load(SeqCst) && observed(context)).then_some(admission)
     }
 
     // Hand the admission to the detour, which returns it through `leave` after forwarding.
@@ -282,6 +288,7 @@ unsafe fn store_fn<F: Copy>(slot: &AtomicPtr<c_void>, value: F) {
 // table was restored still forwards, and a later install reads them from the vtable again.
 struct Hooks {
     vtable: AtomicPtr<Handle>,
+    context: UnsafeCell<Option<ComRef>>,
     sentinel: AtomicPtr<c_void>,
     slots: [AtomicUsize; HOOKS],
     // Null where the hook is not patched.
@@ -290,8 +297,12 @@ struct Hooks {
     refreshes: AtomicU32,
 }
 
+// The control lock serializes writes and drops of the context reference.
+unsafe impl Sync for Hooks {}
+
 static HOOK_TABLE: Hooks = Hooks {
     vtable: AtomicPtr::new(null_mut()),
+    context: UnsafeCell::new(None),
     sentinel: AtomicPtr::new(null_mut()),
     slots: [const { AtomicUsize::new(0) }; HOOKS],
     replacements: [const { AtomicPtr::new(null_mut()) }; HOOKS],
@@ -313,25 +324,24 @@ fn patch(platform: &Platform, vtable: *mut Handle, hook: usize, replacement: Han
 }
 
 // Put back the originals of patched hooks, in the given order.
-fn restore(
-    platform: &Platform,
-    vtable: *mut Handle,
-    hooks: impl Iterator<Item = usize>,
-    forget: bool,
-) {
+fn restore(platform: &Platform, vtable: *mut Handle, hooks: impl Iterator<Item = usize>) -> bool {
+    let mut restored = true;
     for hook in hooks {
-        if HOOK_TABLE.replacements[hook]
-            .swap(null_mut(), AcqRel)
-            .is_null()
-        {
+        if HOOK_TABLE.replacements[hook].load(Acquire).is_null() {
             continue;
         }
         let slot = HOOK_TABLE.slots[hook].load(Relaxed) as u32;
-        unsafe { (platform.patch.unwrap())(vtable, slot, original(hook)) };
-        if forget {
-            HOOK_TABLE.originals[hook].store(null_mut(), Release);
+        if unsafe { (platform.patch.unwrap())(vtable, slot, original(hook)) } != 0 {
+            HOOK_TABLE.replacements[hook].store(null_mut(), Release);
+        } else {
+            restored = false;
         }
     }
+    if restored {
+        HOOK_TABLE.vtable.store(null_mut(), Release);
+        unsafe { *HOOK_TABLE.context.get() = None };
+    }
+    restored
 }
 
 // The Windows runtime rewrites the immediate context's work-submission family of slots after
@@ -342,13 +352,19 @@ fn refresh(platform: &Platform) {
     if !TAP.installed.load(Acquire) {
         return;
     }
+    // Refresh must never wait for a writer, which may be draining this very hook.
+    let _lock = match CONTROL.try_lock() {
+        Ok(lock) => lock,
+        Err(TryLockError::Poisoned(error)) => error.into_inner(),
+        Err(TryLockError::WouldBlock) => return,
+    };
     let vtable = HOOK_TABLE.vtable.load(Relaxed);
-    if vtable.is_null()
-        || unsafe { vtable.add(SLOT_DRAW).read_volatile() } == HOOK_TABLE.sentinel.load(Relaxed)
+    if TAP.installed.load(Acquire)
+        && !vtable.is_null()
+        && unsafe { vtable.add(SLOT_DRAW).read_volatile() } != HOOK_TABLE.sentinel.load(Relaxed)
     {
-        return;
+        refresh_slow(platform, vtable);
     }
-    refresh_slow(platform, vtable);
 }
 
 #[cold]
@@ -432,6 +448,7 @@ struct Tap {
     // Written under the lock, read on the render thread only while `plan_active`, which is set
     // after the plan is written and cleared before it is touched again.
     plan: UnsafeCell<rsf_frame_tap_plan>,
+    plan_views: UnsafeCell<Vec<ComRef>>,
     plan_active: AtomicBool,
     // Moved by every set_plan, so a reader can tell a callback replaced the plan under it.
     plan_generation: AtomicU32,
@@ -453,10 +470,6 @@ struct Tap {
     constant_override: AtomicPtr<c_void>,
     constant_override_user: AtomicPtr<c_void>,
     constant_override_format: AtomicU32,
-    constant_watch: AtomicPtr<c_void>,
-    constant_watch_user: AtomicPtr<c_void>,
-    constant_watch_bytes: AtomicU32,
-    constant_watch_writable: AtomicBool,
     verdict_epoch: AtomicU32,
     // Watched render targets, compared by address and never dereferenced.
     watch: [AtomicPtr<c_void>; WATCH_SLOTS],
@@ -478,6 +491,7 @@ static TAP: Tap = Tap {
         rule_count: 0,
     }),
     plan: UnsafeCell::new(ZERO_PLAN),
+    plan_views: UnsafeCell::new(Vec::new()),
     plan_active: AtomicBool::new(false),
     plan_generation: AtomicU32::new(0),
     gates: [const { AtomicBool::new(false) }; SUBSTITUTIONS],
@@ -509,10 +523,6 @@ static TAP: Tap = Tap {
     constant_override: AtomicPtr::new(null_mut()),
     constant_override_user: AtomicPtr::new(null_mut()),
     constant_override_format: AtomicU32::new(0),
-    constant_watch: AtomicPtr::new(null_mut()),
-    constant_watch_user: AtomicPtr::new(null_mut()),
-    constant_watch_bytes: AtomicU32::new(0),
-    constant_watch_writable: AtomicBool::new(true),
     verdict_epoch: AtomicU32::new(0),
     watch: [const { AtomicPtr::new(null_mut()) }; WATCH_SLOTS],
     watch_budget: [const { AtomicU32::new(0) }; WATCH_SLOTS],
@@ -582,7 +592,7 @@ struct Override {
     active: bool,
     count: usize,
     slots: [u32; CONSTANT_SLOTS],
-    originals: [Handle; CONSTANT_SLOTS],
+    originals: [Option<ComRef>; CONSTANT_SLOTS],
 }
 
 // Render-thread state of the observed context. Reached once the reentry depth says a call is the
@@ -621,7 +631,7 @@ struct Render {
     constant_override: Override,
     divert: Option<rsf_frame_tap_output>,
     // Created once per game blend state; never in a draw beyond the first.
-    patched_blends: Vec<(Handle, ComRef)>,
+    patched_blends: Vec<(Option<ComRef>, ComRef)>,
     // The game's own viewports and scissors, unscaled: the engine sets them per pass, not per
     // target, so a pass into an unreplaced target must get the game's numbers back.
     game_viewports: [rsf_frame_tap_viewport; VIEWPORTS],
@@ -665,7 +675,7 @@ static RENDER: RenderCell = RenderCell(UnsafeCell::new(Render {
         active: false,
         count: 0,
         slots: [0; CONSTANT_SLOTS],
-        originals: [null_mut(); CONSTANT_SLOTS],
+        originals: [const { None }; CONSTANT_SLOTS],
     },
     divert: None,
     patched_blends: Vec::new(),
@@ -682,29 +692,23 @@ unsafe fn render() -> &'static mut Render {
     unsafe { &mut *RENDER.0.get() }
 }
 
-// Constant buffers mapped for writing, held until their Unmap. Apart from `Render` because a
-// nested Unmap clears its entry while the outer hook is still running.
+// A Map and its Unmap belong to a single observed context and installation. Both
+// forwards are admitted, and retirement clears this table before admitting a new install.
 #[derive(Clone, Copy)]
 struct Pending {
+    context: Handle,
     resource: Handle,
     data: Handle,
     bytes: u32,
 }
 
-const NO_PENDING: Pending = Pending {
-    resource: null_mut(),
-    data: null_mut(),
-    bytes: 0,
-};
+// These addresses are only passed to the watch before the matched native Unmap.
+unsafe impl Send for Pending {}
 
-struct PendingCell(UnsafeCell<[Pending; PENDING_MAPS]>);
+static PENDING: Mutex<[Option<Pending>; PENDING_MAPS]> = Mutex::new([None; PENDING_MAPS]);
 
-unsafe impl Sync for PendingCell {}
-
-static PENDING: PendingCell = PendingCell(UnsafeCell::new([NO_PENDING; PENDING_MAPS]));
-
-unsafe fn pending() -> &'static mut [Pending; PENDING_MAPS] {
-    unsafe { &mut *PENDING.0.get() }
+fn pending() -> MutexGuard<'static, [Option<Pending>; PENDING_MAPS]> {
+    PENDING.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 // Biased clones of the game's samplers, keyed by the game's sampler, which is pinned so its
@@ -1095,27 +1099,33 @@ fn divert_facts(
     let mut facts = common_facts(render, indexed, elements);
     facts.vertex_constants = render.geometry.vertex_constants;
     facts.pixel_constants = render.pixel_constants;
+    collect_inputs(render, &mut facts, inputs);
+    facts
+}
+
+fn collect_inputs(
+    render: &Render,
+    draw: &mut rsf_frame_tap_target_draw,
+    inputs: &mut [rsf_frame_tap_input; MAX_INPUTS],
+) {
     let mut used = 0;
     for slot in occupied(render) {
-        let entry = &render.slots[slot];
-        let Some(texture) = &entry.texture else {
-            continue;
-        };
         if used == MAX_INPUTS {
+            draw.inputs_truncated = 1;
             break;
         }
+        let facts = render.slots[slot].facts;
         inputs[used] = rsf_frame_tap_input {
             slot: slot as u32,
-            texture: texture.as_ptr(),
-            width: entry.facts.width,
-            height: entry.facts.height,
-            format: entry.facts.format,
+            texture: slot_texture(render, slot),
+            width: facts.width,
+            height: facts.height,
+            format: facts.format,
         };
         used += 1;
     }
-    facts.input_count = used as u32;
-    facts.inputs = inputs.as_ptr();
-    facts
+    draw.input_count = used as u32;
+    draw.inputs = inputs.as_ptr();
 }
 
 fn refuse_divert(reason: u32) {
@@ -1134,7 +1144,7 @@ fn patched_blend_for(
     if let Some((_, patched)) = render
         .patched_blends
         .iter()
-        .find(|(game, _)| *game == original)
+        .find(|(game, _)| game.as_ref().map_or(null_mut(), ComRef::as_ptr) == original)
     {
         return patched.as_ptr();
     }
@@ -1148,6 +1158,7 @@ fn patched_blend_for(
         return null_mut();
     };
     let raw = patched.as_ptr();
+    let original = (!original.is_null()).then(|| unsafe { ComRef::retain(original) });
     render.patched_blends.push((original, patched));
     bump(BLENDS_PATCHED);
     // Once per distinct state: a write mask without its alpha bit makes every alpha operation
@@ -1420,9 +1431,11 @@ fn begin_constant_override(
             continue;
         }
         used[index] = true;
-        bind_override(platform, context, slot, buffer);
+        let original = bound[index / STAGE_CONSTANTS][index % STAGE_CONSTANTS];
         state.slots[state.count] = slot;
-        state.originals[state.count] = bound[index / STAGE_CONSTANTS][index % STAGE_CONSTANTS];
+        state.originals[state.count] =
+            (!original.is_null()).then(|| unsafe { ComRef::retain(original) });
+        bind_override(platform, context, slot, buffer);
         state.count += 1;
     }
     if state.count == 0 {
@@ -1438,8 +1451,17 @@ fn end_constant_override(platform: &Platform, render: &mut Render, context: Hand
         return;
     }
     let count = state.count;
-    for (&slot, &buffer) in state.slots[..count].iter().zip(&state.originals[..count]) {
-        bind_override(platform, context, slot, buffer);
+    for (&slot, buffer) in state.slots[..count]
+        .iter()
+        .zip(&mut state.originals[..count])
+    {
+        let original = buffer.take();
+        bind_override(
+            platform,
+            context,
+            slot,
+            original.as_ref().map_or(null_mut(), ComRef::as_ptr),
+        );
     }
     state.count = 0;
     state.active = false;
@@ -1518,30 +1540,11 @@ fn consider_target_draw(
     }
 
     let mut inputs = [ZERO_INPUT; MAX_INPUTS];
-    let mut reported = 0;
-    for index in occupied(render) {
-        if reported == MAX_INPUTS {
-            break;
-        }
-        let facts = render.slots[index].facts;
-        inputs[reported] = rsf_frame_tap_input {
-            slot: index as u32,
-            texture: slot_texture(render, index),
-            width: facts.width,
-            height: facts.height,
-            format: facts.format,
-        };
-        reported += 1;
-    }
-    let bound = occupied(render).count();
-
     let mut report = common_facts(render, indexed, elements);
     report.context = context;
     report.watch_index = watch_index as u32;
     report.draw_index = ordinal;
-    report.input_count = reported as u32;
-    report.inputs = inputs.as_ptr();
-    report.inputs_truncated = u32::from(bound > reported);
+    collect_inputs(render, &mut report, &mut inputs);
     // The one fact the shadow cannot supply, asked only on a reported draw.
     let mut viewport = ZERO_VIEWPORT;
     if unsafe { (platform.viewport.unwrap())(context, &mut viewport) } >= 1 {
@@ -1887,6 +1890,9 @@ fn report_geometry(
 fn invalidate_geometry(render: &mut Render) {
     render.geometry_valid = false;
     render.geometry = ZERO_GEOMETRY;
+    render.pixel_shader = null_mut();
+    render.blend_state = null_mut();
+    render.depth_stencil_state = null_mut();
     render.pixel_constants = [null_mut(); STAGE_CONSTANTS];
     render.geometry_depth = null_mut();
     render.depth_bound = false;
@@ -1918,6 +1924,7 @@ fn retire_render() {
         return;
     }
     let render = unsafe { render() };
+    pending().fill(None);
     render.patched_blends.clear();
     invalidate_geometry(render);
     render.shadow_dirty = false;
@@ -1929,7 +1936,44 @@ fn retire_render() {
 // Whether `resource` is a constant buffer the watch wants, and its width. Only a "no" is
 // remembered: a width becomes a memory size the caller copies, and a recycled address must not be
 // taken for it.
-fn watched_buffer(platform: &Platform, render: &mut Render, resource: Handle) -> u32 {
+#[derive(Clone, Copy)]
+enum ConstantCallback {
+    Observer(rsf_frame_tap_constant_observer_fn),
+    Legacy(rsf_frame_tap_constants_fn, bool),
+}
+
+#[derive(Clone, Copy)]
+struct ConstantWatch {
+    callback: ConstantCallback,
+    user: Handle,
+    bytes: u32,
+}
+
+// The callback user address is opaque to the tap and used under a hook admission.
+unsafe impl Send for ConstantWatch {}
+
+static CONSTANT_WATCH: Mutex<Option<ConstantWatch>> = Mutex::new(None);
+
+fn constant_watch() -> MutexGuard<'static, Option<ConstantWatch>> {
+    CONSTANT_WATCH
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
+
+impl ConstantWatch {
+    unsafe fn notify(self, platform: &Platform, resource: Handle, data: *const c_void, bytes: u32) {
+        match self.callback {
+            ConstantCallback::Observer(callback) => unsafe {
+                callback.unwrap()(self.user, resource, data, bytes)
+            },
+            ConstantCallback::Legacy(callback, _) => unsafe {
+                (platform.constants.unwrap())(callback, self.user, resource, data.cast_mut(), bytes)
+            },
+        }
+    }
+}
+
+fn watched_buffer(platform: &Platform, render: &mut Render, resource: Handle, watched: u32) -> u32 {
     let epoch = TAP.verdict_epoch.load(Relaxed);
     let expired = epoch != render.verdict_epoch_seen || {
         render.verdict_lookups += 1;
@@ -1946,7 +1990,6 @@ fn watched_buffer(platform: &Platform, render: &mut Render, resource: Handle) ->
     }
     let mut bind_flags = 0;
     let width = unsafe { (platform.buffer_width.unwrap())(resource, &mut bind_flags) };
-    let watched = TAP.constant_watch_bytes.load(Relaxed);
     let wanted = if watched == 0 {
         width <= 4096
     } else {
@@ -2036,7 +2079,10 @@ unsafe extern "C" fn rsf_core_frame_tap_install(
     let retiring = retiring();
     // A session retired from inside one of its own callbacks still owns the shadow until that
     // hook returns.
-    if TAP.installed.load(SeqCst) || RETIRE_PENDING.load(SeqCst) {
+    if TAP.installed.load(SeqCst)
+        || RETIRE_PENDING.load(SeqCst)
+        || !HOOK_TABLE.vtable.load(Acquire).is_null()
+    {
         return ALREADY_INSTALLED;
     }
     let setup = unsafe { &mut *TAP.setup.get() };
@@ -2055,9 +2101,9 @@ unsafe extern "C" fn rsf_core_frame_tap_install(
         setup.options.view_constant_bytes = 4096;
     }
 
-    // Only the vtable is taken; it serves every context of this runtime, so holding the context
-    // would extend a game object's lifetime for nothing.
+    // Keep the context alive until all writes back to its table have succeeded.
     let vtable = unsafe { *context.cast::<*mut Handle>() };
+    unsafe { *HOOK_TABLE.context.get() = Some(ComRef::retain(context)) };
     HOOK_TABLE.vtable.store(vtable, Relaxed);
     let hooks = unsafe { slice::from_raw_parts(hooks, HOOKS) };
     HOOK_TABLE
@@ -2075,7 +2121,7 @@ unsafe extern "C" fn rsf_core_frame_tap_install(
             HOOK_TABLE.replacements[hook].store(entry.replacement, Release);
             continue;
         }
-        restore(platform, vtable, (0..hook).rev(), true);
+        restore(platform, vtable, (0..hook).rev());
         return PATCH_FAILED;
     }
 
@@ -2102,8 +2148,17 @@ extern "C" fn rsf_core_frame_tap_uninstall(platform: &Platform) -> i32 {
     let Some(lock) = control() else {
         return INVALID;
     };
-    if !TAP.installed.load(SeqCst) {
+    let vtable = HOOK_TABLE.vtable.load(Acquire);
+    if vtable.is_null() {
         return NOT_INSTALLED;
+    }
+    // A previous failed restore left forwarding-only hooks that still need to be removed.
+    if !TAP.installed.load(SeqCst) {
+        return if restore(platform, vtable, 0..HOOKS) {
+            OK
+        } else {
+            PATCH_FAILED
+        };
     }
     // No hook on another thread is admitted from here on: none is using the shadow, a substitute
     // or a biased clone, and none starts until the gate reopens on a session that is gone.
@@ -2117,15 +2172,13 @@ extern "C" fn rsf_core_frame_tap_uninstall(platform: &Platform) -> i32 {
     TAP.divert.armed.store(false, Relaxed);
     TAP.constant_override.store(null_mut(), Relaxed);
     TAP.constant_override_format.store(0, Relaxed);
-    TAP.constant_watch_bytes.store(0, Relaxed);
-    TAP.constant_watch.store(null_mut(), Relaxed);
-    TAP.constant_watch_writable.store(true, Relaxed);
+    *constant_watch() = None;
     TAP.verdict_epoch.fetch_add(1, Relaxed);
     TAP.shadow_needed.store(false, Relaxed);
     // Off before the table goes back, so a hook in flight cannot re-apply it or be admitted. Each
     // slot gets whatever the runtime last had there.
     TAP.installed.store(false, SeqCst);
-    restore(platform, HOOK_TABLE.vtable.load(Relaxed), 0..HOOKS, false);
+    let restored = restore(platform, vtable, 0..HOOKS);
     TAP.divert.layer_target.store(null_mut(), Relaxed);
     TAP.divert.layer_texture.store(null_mut(), Relaxed);
     TAP.divert.verdict.store(null_mut(), Relaxed);
@@ -2148,7 +2201,10 @@ extern "C" fn rsf_core_frame_tap_uninstall(platform: &Platform) -> i32 {
             budget.store(0, Relaxed);
         }
     }
-    unsafe { *TAP.plan.get() = ZERO_PLAN };
+    unsafe {
+        *TAP.plan.get() = ZERO_PLAN;
+        (*TAP.plan_views.get()).clear();
+    }
     TAP.plan_generation.fetch_add(1, SeqCst);
     close_gates();
     // From inside a callback this thread's own hook is still on the stack and retires the shadow
@@ -2156,7 +2212,7 @@ extern "C" fn rsf_core_frame_tap_uninstall(platform: &Platform) -> i32 {
     if !admitted_here() {
         retire_render();
     }
-    OK
+    if restored { OK } else { PATCH_FAILED }
 }
 
 #[unsafe(no_mangle)]
@@ -2242,8 +2298,26 @@ unsafe extern "C" fn rsf_core_frame_tap_set_plan(plan: *const rsf_frame_tap_plan
     let Some(_writer) = drain(lock) else {
         return INVALID;
     };
+    let mut views = Vec::new();
+    if let Some(plan) = &replacement {
+        for item in &plan.items[..plan.count as usize] {
+            for object in [
+                item.texture,
+                item.shader_view,
+                item.render_view,
+                item.after_target,
+            ] {
+                if !object.is_null() {
+                    views.push(unsafe { ComRef::retain(object) });
+                }
+            }
+        }
+    }
     TAP.plan_active.store(false, SeqCst);
-    unsafe { *TAP.plan.get() = replacement.unwrap_or(ZERO_PLAN) };
+    unsafe {
+        *TAP.plan.get() = replacement.unwrap_or(ZERO_PLAN);
+        *TAP.plan_views.get() = views;
+    }
     TAP.plan_generation.fetch_add(1, SeqCst);
     close_gates();
     TAP.target_substituted.store(false, Relaxed);
@@ -2279,21 +2353,37 @@ extern "C" fn rsf_core_frame_tap_set_constant_watch(
     watch: rsf_frame_tap_constants_fn,
     user: Handle,
 ) -> i32 {
-    TAP.constant_watch.store(null_mut(), Release);
-    TAP.constant_watch_user.store(user, Relaxed);
-    TAP.constant_watch_bytes.store(bytes, Relaxed);
-    // What was decided about each buffer was decided for the old width.
+    *constant_watch() = watch.map(|callback| ConstantWatch {
+        callback: ConstantCallback::Legacy(Some(callback), true),
+        user,
+        bytes,
+    });
     TAP.verdict_epoch.fetch_add(1, Relaxed);
-    // A new watch starts as a writer, so the window before its owner says it only reads is the
-    // safe one.
-    TAP.constant_watch_writable.store(true, Relaxed);
-    unsafe { store_fn(&TAP.constant_watch, watch) };
+    OK
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_frame_tap_set_constant_observer(
+    bytes: u32,
+    callback: rsf_frame_tap_constant_observer_fn,
+    user: Handle,
+) -> i32 {
+    *constant_watch() = callback.map(|callback| ConstantWatch {
+        callback: ConstantCallback::Observer(Some(callback)),
+        user,
+        bytes,
+    });
+    TAP.verdict_epoch.fetch_add(1, Relaxed);
     OK
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_frame_tap_set_constant_watch_writable(writable: u32) {
-    TAP.constant_watch_writable.store(writable != 0, Relaxed);
+    if let Some(watch) = constant_watch().as_mut()
+        && let ConstantCallback::Legacy(_, mode) = &mut watch.callback
+    {
+        *mode = writable != 0;
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -2672,12 +2762,12 @@ unsafe fn plan_targets(
 
 // Whether the bound target was replaced, and the viewport put where that needs it. After the
 // binding is forwarded, so the viewport lands on the target it belongs to.
-fn settle_target_substitution(platform: &Platform, render: &Render, context: Handle) {
-    let target = target_texture(render);
-    let substituted = TAP.plan_active.load(SeqCst)
-        && !target.is_null()
-        && render.target_count == 1
-        && !applicable(target, View::Render).is_null();
+fn settle_target_substitution(
+    platform: &Platform,
+    render: &Render,
+    context: Handle,
+    substituted: bool,
+) {
     if substituted == TAP.target_substituted.load(Relaxed) {
         return;
     }
@@ -2746,7 +2836,7 @@ unsafe extern "C" fn rsf_core_frame_tap_targets(
     };
     shadow_target(platform, render, first, resolved);
     unbind_target_reads(render);
-    settle_target_substitution(platform, render, context);
+    settle_target_substitution(platform, render, context, !replacement.is_null());
 }
 
 #[unsafe(no_mangle)]
@@ -3115,75 +3205,98 @@ extern "C" fn rsf_core_frame_tap_invalidate(context: Handle, restore: u32) {
 }
 
 // A constant buffer being filled: remember where, so its contents can be read at Unmap.
+#[repr(C)]
+struct MappedResource {
+    data: Handle,
+    row_pitch: u32,
+    depth_pitch: u32,
+}
+
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_mapped(
+unsafe extern "C" fn rsf_core_frame_tap_map(
     platform: &Platform,
     context: Handle,
     resource: Handle,
     subresource: u32,
     kind: u32,
-    data: Handle,
-) {
-    if TAP.constant_watch.load(Acquire).is_null()
-        || data.is_null()
+    flags: u32,
+    mapped: *mut MappedResource,
+) -> i32 {
+    type Map = unsafe extern "system" fn(Handle, Handle, u32, u32, u32, *mut MappedResource) -> i32;
+    refresh(platform);
+    let admission = Admission::enter(context);
+    let forward: Map = unsafe { std::mem::transmute(original(RSF_FRAME_TAP_HOOK_MAP as usize)) };
+    let result = unsafe { forward(context, resource, subresource, kind, flags, mapped) };
+    refresh(platform);
+    if result < 0
+        || admission.is_none()
+        || mapped.is_null()
         || resource.is_null()
         || kind != MAP_WRITE_DISCARD
         || subresource != 0
         || inside()
     {
-        return;
+        return result;
     }
-    let Some(_admission) = Admission::enter(context) else {
-        return;
+    let data = unsafe { (*mapped).data };
+    if data.is_null() {
+        return result;
+    }
+    let Some(watch) = *constant_watch() else {
+        return result;
     };
-    let bytes = watched_buffer(platform, unsafe { render() }, resource);
-    if bytes == 0 {
-        return;
+    let bytes = watched_buffer(platform, unsafe { render() }, resource, watch.bytes);
+    if bytes != 0 {
+        let mut mappings = pending();
+        let index = mappings
+            .iter()
+            .position(|entry| {
+                entry.is_some_and(|entry| entry.context == context && entry.resource == resource)
+            })
+            .or_else(|| mappings.iter().position(Option::is_none));
+        if let Some(index) = index {
+            mappings[index] = Some(Pending {
+                context,
+                resource,
+                data,
+                bytes,
+            });
+        }
     }
-    if let Some(entry) = unsafe { pending() }
-        .iter_mut()
-        .find(|entry| entry.resource.is_null() || entry.resource == resource)
-    {
-        *entry = Pending {
-            resource,
-            data,
-            bytes,
-        };
-    }
+    result
 }
 
-// Before the Unmap is forwarded, while the mapped memory is still the game's to read.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_unmapping(platform: &Platform, context: Handle, resource: Handle) {
+unsafe extern "C" fn rsf_core_frame_tap_unmap(
+    platform: &Platform,
+    context: Handle,
+    resource: Handle,
+    subresource: u32,
+) {
+    type Unmap = unsafe extern "system" fn(Handle, Handle, u32);
     refresh(platform);
-    if resource.is_null() {
-        return;
+    let admission = Admission::enter(context);
+    let forward: Unmap =
+        unsafe { std::mem::transmute(original(RSF_FRAME_TAP_HOOK_UNMAP as usize)) };
+    if admission.is_some() && subresource == 0 {
+        let entry = pending()
+            .iter_mut()
+            .find(|entry| {
+                entry.is_some_and(|entry| entry.context == context && entry.resource == resource)
+            })
+            .and_then(Option::take);
+        if let Some(entry) = entry
+            && !inside()
+        {
+            let _guard = Reentry::enter();
+            let watch = *constant_watch();
+            if let Some(watch) = watch {
+                unsafe { watch.notify(platform, resource, entry.data, entry.bytes) };
+            }
+        }
     }
-    let Some(_admission) = Admission::enter(context) else {
-        return;
-    };
-    let Some(index) = unsafe { pending() }
-        .iter()
-        .position(|entry| entry.resource == resource)
-    else {
-        return;
-    };
-    let entry = unsafe { pending() }[index];
-    let watch: rsf_frame_tap_constants_fn = unsafe { load_fn(&TAP.constant_watch) };
-    if watch.is_some() && !inside() {
-        let _guard = Reentry::enter();
-        unsafe {
-            (platform.constants.unwrap())(
-                watch,
-                TAP.constant_watch_user.load(Relaxed),
-                resource,
-                entry.data,
-                entry.bytes,
-            )
-        };
-    }
-    unsafe { pending() }
-    [index] = NO_PENDING;
+    unsafe { forward(context, resource, subresource) };
+    refresh(platform);
 }
 
 #[unsafe(no_mangle)]
@@ -3277,9 +3390,7 @@ unsafe extern "C" fn rsf_core_frame_tap_update(
     row_pitch: u32,
     scratch: Handle,
 ) -> *const c_void {
-    let watch: rsf_frame_tap_constants_fn = unsafe { load_fn(&TAP.constant_watch) };
-    if watch.is_none()
-        || inside()
+    if inside()
         || destination.is_null()
         || data.is_null()
         || has_box != 0
@@ -3293,22 +3404,22 @@ unsafe extern "C" fn rsf_core_frame_tap_update(
     let Some(_admission) = Admission::enter(context) else {
         return data;
     };
-    let bytes = watched_buffer(platform, unsafe { render() }, destination);
+    let Some(watch) = *constant_watch() else {
+        return data;
+    };
+    let bytes = watched_buffer(platform, unsafe { render() }, destination, watch.bytes);
     if bytes == 0 || row_pitch > bytes {
         return data;
     }
-    let user = TAP.constant_watch_user.load(Relaxed);
     let _guard = Reentry::enter();
     bump(UPDATES_WATCHED);
-    if !TAP.constant_watch_writable.load(Relaxed) {
-        unsafe {
-            (platform.constants.unwrap())(watch, user, destination, data.cast_mut(), row_pitch)
-        };
+    if !matches!(watch.callback, ConstantCallback::Legacy(_, true)) {
+        unsafe { watch.notify(platform, destination, data, row_pitch) };
         return data;
     }
     unsafe {
         std::ptr::copy_nonoverlapping(data.cast::<u8>(), scratch.cast::<u8>(), row_pitch as usize);
-        (platform.constants.unwrap())(watch, user, destination, scratch, row_pitch);
+        watch.notify(platform, destination, scratch, row_pitch);
     }
     scratch.cast_const()
 }

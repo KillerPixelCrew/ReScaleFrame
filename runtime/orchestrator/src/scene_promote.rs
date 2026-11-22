@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
 use crate::d3d11_output::{CreateBlit, DestroyBlit, DrawBlit, FullscreenBlit};
+use crate::frame_tap_abi::{
+    RSF_FRAME_TAP_MAX_SUBSTITUTIONS, rsf_frame_tap_plan as Plan, rsf_frame_tap_substitution as Item,
+};
 use crate::scene_promote_abi::{
-    RSF_FRAME_TAP_MAX_SUBSTITUTIONS, RSF_PROMOTE_ABI_VERSION, RSF_PROMOTE_MAX_CHAIN_TARGETS,
-    RSF_PROMOTE_MAX_UI_TARGETS, rsf_frame_tap_plan as Plan, rsf_frame_tap_substitution as Item,
+    RSF_PROMOTE_ABI_VERSION, RSF_PROMOTE_MAX_CHAIN_TARGETS, RSF_PROMOTE_MAX_UI_TARGETS,
     rsf_promote_frame_tail as Tail, rsf_promote_log_fn, rsf_promote_setup as Setup,
     rsf_promote_status as Status,
 };
@@ -356,9 +358,8 @@ impl Promote {
             return Err(NOT_SCALED);
         }
 
-        // The caller has already cleared the tap. A refused rebuild leaves no active frame.
+        // Keep the previous frame until all of its replacements have been built.
         let mut state = self.state()?;
-        state.frame = None;
         let frame = self
             .build_frame(tail, &mut state.seed_pass)
             .ok_or(RESOURCE_FAILED)?;

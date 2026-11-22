@@ -715,23 +715,14 @@ HRESULT STDMETHODCALLTYPE hooked_map(ID3D11DeviceContext* context, ID3D11Resourc
                                      UINT subresource, D3D11_MAP kind, UINT flags,
                                      D3D11_MAPPED_SUBRESOURCE* mapped)
 {
-    using Fn = HRESULT(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT, D3D11_MAP,
-                                           UINT, D3D11_MAPPED_SUBRESOURCE*);
-    const HRESULT result =
-        original<Fn>(RSF_FRAME_TAP_HOOK_MAP)(context, resource, subresource, kind, flags, mapped);
-    leave();
-    rsf_core_frame_tap_mapped(&platform, context, resource, subresource, uint32_t(kind),
-                              SUCCEEDED(result) && mapped ? mapped->pData : nullptr);
-    return result;
+    return rsf_core_frame_tap_map(&platform, context, resource, subresource, uint32_t(kind),
+                                  flags, mapped);
 }
 
 void STDMETHODCALLTYPE hooked_unmap(ID3D11DeviceContext* context, ID3D11Resource* resource,
                                     UINT subresource)
 {
-    using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT);
-    rsf_core_frame_tap_unmapping(&platform, context, resource);
-    original<Fn>(RSF_FRAME_TAP_HOOK_UNMAP)(context, resource, subresource);
-    leave();
+    rsf_core_frame_tap_unmap(&platform, context, resource, subresource);
 }
 
 void STDMETHODCALLTYPE hooked_dispatch(ID3D11DeviceContext* context, UINT x, UINT y, UINT z)

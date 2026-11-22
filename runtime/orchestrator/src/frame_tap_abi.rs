@@ -302,6 +302,14 @@ pub type rsf_frame_tap_constants_fn = ::core::option::Option<
         bytes: u32,
     ),
 >;
+pub type rsf_frame_tap_constant_observer_fn = ::core::option::Option<
+    unsafe extern "C" fn(
+        user: *mut ::core::ffi::c_void,
+        buffer: *mut ::core::ffi::c_void,
+        contents: *const ::core::ffi::c_void,
+        bytes: u32,
+    ),
+>;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_frame_tap_substitution {

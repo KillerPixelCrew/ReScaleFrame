@@ -2277,6 +2277,7 @@ static void patch_input_sizes(void* contents, uint32_t bytes)
 
 static void on_view_constants(void* user, void* buffer, const void* contents, uint32_t bytes);
 static void on_constants(void* user, void* buffer, void* contents, uint32_t bytes);
+static void observe_constants(void* user, void* buffer, const void* contents, uint32_t bytes);
 
 /* Whether RSF_MOTION_CAPTURE is on, told by the proxy that reads the setting. */
 static volatile LONG motion_capture_on;
@@ -2286,18 +2287,18 @@ void rsf_bridge_set_motion_capture(int on) { InterlockedExchange(&motion_capture
    feeds the motion capture, so the watch is off unless a capture was asked for. The compatibility
    renderer reads the view's buffer and only the size patch writes, which is what makes the tap
    copy an UpdateSubresource upload before handing it over. */
+static int constant_watch_mode = -1;
+
 static void refresh_constant_watch(void)
 {
-    static int armed = -1;
-    if (InterlockedCompareExchange(&native_owner, 0, 0) && !InterlockedCompareExchange(&motion_capture_on, 0, 0)) {
-        if (armed != 0) rsf_frame_tap_set_constant_watch(0u, NULL, NULL);
-        armed = 0;
-        return;
+    const LONG native = InterlockedCompareExchange(&native_owner, 0, 0);
+    const int mode = !native && bridge.size_patch_target ? 2
+        : (!native || InterlockedCompareExchange(&motion_capture_on, 0, 0) ? 1 : 0);
+    if (mode != constant_watch_mode) {
+        if (mode == 2) rsf_frame_tap_set_constant_watch(0u, on_constants, NULL);
+        else rsf_frame_tap_set_constant_observer(0u, mode == 1 ? observe_constants : NULL, NULL);
+        constant_watch_mode = mode;
     }
-    /* Re-arming drops every cached buffer verdict, so only a change of state does it. */
-    if (armed != 1) rsf_frame_tap_set_constant_watch(0u, on_constants, NULL);
-    armed = 1;
-    rsf_frame_tap_set_constant_watch_writable(!InterlockedCompareExchange(&native_owner, 0, 0) && bridge.size_patch_target != NULL);
 }
 
 /* How the compatibility renderer recognises AC7's input set. First match wins, so the order is
@@ -2318,11 +2319,18 @@ static const rsf_role_table ac7_roles = {
    without its jitter; an upload for a draw into the recombined target has its sizes promoted. */
 static void on_constants(void* user, void* buffer, void* contents, uint32_t bytes)
 {
-    if (InterlockedCompareExchange(&native_owner, 0, 0)) {
-        rsf_ac7_motion_capture_upload(buffer, contents, bytes); return;
-    }
-    if (bridge.size_patch_target && rsf_frame_tap_bound_target() == bridge.size_patch_target) {
+    if (bridge.size_patch_target && rsf_frame_tap_bound_target() == bridge.size_patch_target &&
+        !InterlockedCompareExchange(&native_owner, 0, 0)) {
         patch_input_sizes(contents, bytes);
+    }
+    observe_constants(user, buffer, contents, bytes);
+}
+
+static void observe_constants(void* user, void* buffer, const void* contents, uint32_t bytes)
+{
+    if (InterlockedCompareExchange(&native_owner, 0, 0)) {
+        rsf_ac7_motion_capture_upload(buffer, contents, bytes);
+        return;
     }
     if (bytes == RSF_AC7_VIEW_BUFFER_BYTES) {
         on_view_constants(user, buffer, contents, bytes);
@@ -3606,16 +3614,16 @@ void rsf_bridge_toggle_reinsert(void)
    Separate from the toggle because it is also what a stalled plan needs. Nothing here decides
    whether reinsertion should be on; it only makes the plan describe the frame that is actually
    being drawn now. */
-/* Prepare the replacements for `tail` and hand the tap its plan. On any failure the tap is left
-   with no plan, which is what the caller then repairs. */
+/* Prepare a replacement only after the tap has detached the previous plan. */
 static int apply_tail(const rsf_promote_frame_tail* tail)
 {
     rsf_frame_tap_plan plan;
     rsf_promote_result prepared;
 
-    /* Preparing releases the previous replacements, and the tap must not be left holding views
-       onto textures that are gone. Cleared first; the new plan follows within this call. */
-    rsf_frame_tap_set_plan(NULL);
+    if (rsf_frame_tap_set_plan(NULL) != RSF_FRAME_TAP_OK) {
+        say("reinsert: the frame tap could not detach the active plan");
+        return 0;
+    }
     bridge.size_patch_target = NULL;
     prepared = rsf_promote_prepare(bridge.promote, tail);
     if (prepared == RSF_PROMOTE_ERROR_NOT_SCALED) {
@@ -3827,7 +3835,10 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
     /* No translucent depth replay: the translucency layer renders at output size against the
        reconstruction's promoted scene, so it never needs a depth of another size. */
     tapped = rsf_frame_tap_install(bridge.context, &tap);
-    if (tapped == RSF_FRAME_TAP_OK) refresh_constant_watch();
+    if (tapped == RSF_FRAME_TAP_OK) {
+        constant_watch_mode = -1;
+        refresh_constant_watch();
+    }
 
     if (tapped != RSF_FRAME_TAP_OK) {
         say("dlss bridge: frame tap not installed, result %d", (int)tapped);

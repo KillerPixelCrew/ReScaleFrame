@@ -408,6 +408,14 @@ rsf_frame_tap_result rsf_frame_tap_set_constant_watch(uint32_t bytes, rsf_frame_
    and by every `rsf_frame_tap_set_constant_watch`, so say no after arming, not before. */
 void rsf_frame_tap_set_constant_watch_writable(uint32_t writable);
 
+/* Register a read-only watch in one call, with the same width filter as the writable watch.
+   Contents are borrowed for the callback. A null callback disarms the watch. */
+typedef void (*rsf_frame_tap_constant_observer_fn)(void* user, void* buffer, const void* contents,
+                                                    uint32_t bytes);
+rsf_frame_tap_result rsf_frame_tap_set_constant_observer(uint32_t bytes,
+                                                         rsf_frame_tap_constant_observer_fn fn,
+                                                         void* user);
+
 /* The `ID3D11Texture2D*` behind the render target the game has at output slot 0, as the game bound
    it, or null. Borrowed, not retained; render thread only. This is how a constant watch tells which
    draw an upload belongs to: the engine binds the target, then fills the constants, then draws. */
@@ -649,7 +657,8 @@ rsf_frame_tap_result rsf_frame_tap_install(void* device_context,
    refused with `RSF_FRAME_TAP_ERROR_INVALID_ARGUMENT`, and nothing changes, when another thread is
    inside the hooks or in another install, uninstall or set_plan. When it succeeds there, the hook
    that made the callback still finishes on that thread, so callbacks and their user pointers have
-   to stay valid until it returns. */
+   to stay valid until it returns. If a slot write fails, this returns RSF_FRAME_TAP_ERROR_PATCH_FAILED.
+   Outstanding detours only forward. Retry uninstall to restore them before installing again. */
 rsf_frame_tap_result rsf_frame_tap_uninstall(void);
 
 /* Report the next `limit` draws into `texture`, an `ID3D11Texture2D*`, through `on_target_draw`.
@@ -677,8 +686,8 @@ rsf_frame_tap_result rsf_frame_tap_watch_input(void* texture);
 /* Start substituting, or stop. A null plan clears it and the game's frame goes back to being its
    own; so does uninstalling.
 
-   Every view in the plan has to outlive it, and clearing the plan does not put back a binding that
-   is already in place. Clear it and let a frame pass before releasing anything it named.
+   The tap retains the plan's textures and replacement views on successful publication. The caller
+   keeps them live through this call. Clearing the plan does not change bindings already in place.
 
    Setting a plan changes what the game draws, which nothing else in this module does. It is refused
    unless the plan is complete enough to be coherent: a substitution with a texture and no
