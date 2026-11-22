@@ -3,9 +3,10 @@ rsf_add_rust_static(rsf_d3d11_host_device_fixtures_rust rsf_rust_d3d11_host_devi
     rsf-presentation-fixtures rsf_presentation_fixtures --features d3d11-host-device-fixtures)
 include("${CMAKE_CURRENT_SOURCE_DIR}/d3d11_host_rendered_fg_device.cmake")
 # Explicit regression investigation only: requires a scratch vendor-SDK root and NVIDIA GPU.
-add_executable(rsf_d3d11_host_shared_sr_device EXCLUDE_FROM_ALL d3d11_host_shared_sr_device.cpp)
+add_executable(rsf_d3d11_host_shared_sr_device EXCLUDE_FROM_ALL d3d11_host_shared_sr_device.c)
+set_target_properties(rsf_d3d11_host_shared_sr_device PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_d3d11_host_shared_sr_device PRIVATE
-    rsf_d3d11_host_device_fixtures_rust rsf_orchestrator rsf_build_options d3d11 dxgi)
+    rsf_d3d11_host_device_fixtures_rust rsf_orchestrator rsf_build_options d3d11 dxgi dxguid)
 find_program(RSF_TEST_RUSTC rustc REQUIRED)
 if(MSVC)
     set(rsf_test_rust_target x86_64-pc-windows-msvc)
@@ -631,7 +632,7 @@ target_link_libraries(rsf_fg_c_header PRIVATE ReScaleFrame::DLSS rsf_build_optio
 
 add_executable(rsf_fg_switching_test generation/device_main.c)
 target_compile_definitions(rsf_fg_switching_test PRIVATE RSF_FG_DEVICE_FIXTURE=rsf_test_fg_switching)
-add_executable(rsf_d3d11_present_bridge_test d3d11_present_bridge.cpp)
+add_executable(rsf_d3d11_present_bridge_test d3d11_present_bridge.c)
 add_executable(rsf_fg_present_bridge_test fg_present_bridge.c)
 set_target_properties(rsf_fg_present_bridge_test PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_fg_present_bridge_test PRIVATE rsf_presentation_fixtures_rust rsf_orchestrator_core rsf_build_options)
@@ -641,9 +642,9 @@ add_test(NAME shared_fg_present_bridge COMMAND rsf_fg_present_bridge_test)
 set_tests_properties(shared_fg_present_bridge PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 target_compile_definitions(rsf_d3d11_present_bridge_test PRIVATE RSF_STREAMLINE_HOST_BUILD)
 # The render scope calls other than create are exported by the rsf-ac7 crate (render_scope.rs).
-target_link_libraries(rsf_d3d11_present_bridge_test PRIVATE rsf_presentation_fixtures_rust rsf_orchestrator_core ReScaleFrame::AC7RenderScope rsf_ac7_rust rsf_build_options)
+target_link_libraries(rsf_d3d11_present_bridge_test PRIVATE rsf_presentation_fixtures_rust rsf_orchestrator_core ReScaleFrame::AC7RenderScope rsf_ac7_rust rsf_build_options d3d11 dxgi dxguid)
 # Graphics fixtures must not load game-facing proxy DLLs from the shared artifact directory.
-set_target_properties(rsf_d3d11_present_bridge_test PROPERTIES
+set_target_properties(rsf_d3d11_present_bridge_test PROPERTIES LINKER_LANGUAGE CXX
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/fixtures/fg/$<CONFIG>")
 add_test(NAME d3d11_present_bridge COMMAND rsf_d3d11_present_bridge_test)
 set_tests_properties(d3d11_present_bridge PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)

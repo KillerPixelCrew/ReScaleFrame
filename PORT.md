@@ -140,7 +140,7 @@ A sweep of `git ls-files '*.cpp'` on 2026-11-22 found first-party C++ that the p
 - [x] [games/skyrim-se/src/render_detours.c](games/skyrim-se/src/render_detours.c) (S02; C++ removed, C11 leaf, `__try/__finally` scopes, filter on 0xE06D7363; observer_platform.h and session_platform.h now hold C declarations only)
 - [x] [integrations/steam/src/exception_guards.c](integrations/steam/src/exception_guards.c) (I01; C++ removed, C11 SEH leaf that contains only 0xE06D7363)
 - [x] [runtime/graphics/src/observer_exception_guards.c](runtime/graphics/src/observer_exception_guards.c) (G01; C++ removed, C11 SEH leaf; the three private observer headers now hold C declarations only)
-- [ ] [runtime/orchestrator/src/d3d11_host_foreign.cpp](runtime/orchestrator/src/d3d11_host_foreign.cpp) (D01)
+- [x] [runtime/orchestrator/src/d3d11_host_foreign.c](runtime/orchestrator/src/d3d11_host_foreign.c) (D01; C++ removed; C11 SEH leaf that contains only the MSVC C++ exception code 0xE06D7363, entries that were noexcept without a handler abort on that code)
 - [x] [tests/ac7_render_scope_exceptions.cpp](tests/ac7_render_scope_exceptions.cpp) (A02; the throwing callbacks are C in `tests/ac7_render_scope.c` and raise the MSVC C++ exception code)
 - [ ] [tests/anomaly_motion_contract_main.cpp](tests/anomaly_motion_contract_main.cpp) (N04)
 - [ ] [tests/anomaly_sr_swap_profile.cpp](tests/anomaly_sr_swap_profile.cpp) (N07)
@@ -988,8 +988,8 @@ Port host setup, output admission and reduced-frame handling through the shared 
 **Fixtures (3)**
 
 - [x] [tests/d3d11_host.cpp](tests/d3d11_host.cpp)
-- [ ] [tests/d3d11_host_rendered_fg_device.cpp](tests/d3d11_host_rendered_fg_device.cpp)
-- [ ] [tests/d3d11_host_shared_sr_device.cpp](tests/d3d11_host_shared_sr_device.cpp)
+- [x] [tests/d3d11_host_rendered_fg_device.c](tests/d3d11_host_rendered_fg_device.c) (C++ removed; C11 launcher with the outer-chain COM wrapper as a hand-written vtable, phases and verdicts stay in Rust; shared helpers in `tests/d3d11_host_device_launch.h`)
+- [x] [tests/d3d11_host_shared_sr_device.c](tests/d3d11_host_shared_sr_device.c) (C++ removed; C11 launcher, phases and verdicts stay in Rust)
 
 **Rust review findings (8)**
 
@@ -1027,14 +1027,14 @@ Port swapchain dispatch, presentation synchronization and shared surface ownersh
 - [x] [runtime/presentation/include/rescaleframe/d3d11_chain_dispatch.h](runtime/presentation/include/rescaleframe/d3d11_chain_dispatch.h)
 - [x] [runtime/presentation/include/rescaleframe/d3d11_present_bridge.h](runtime/presentation/include/rescaleframe/d3d11_present_bridge.h)
 - [x] [runtime/presentation/include/rescaleframe/shared_surface.h](runtime/presentation/include/rescaleframe/shared_surface.h)
-- [ ] [runtime/presentation/src/d3d11_present_bridge.cpp](runtime/presentation/src/d3d11_present_bridge.cpp)
+- [x] [runtime/presentation/src/d3d11_present_bridge.c](runtime/presentation/src/d3d11_present_bridge.c) (C++ removed; C11 leaf with the layout `_Static_assert`s, the MinHook and CreateDXGIFactory1 calls, the guarded factory trampolines and the SDK callback table)
 - [x] [runtime/presentation/src/d3d11_present_platform.h](runtime/presentation/src/d3d11_present_platform.h)
 - [x] [runtime/presentation/src/shared_surface.cpp](runtime/presentation/src/shared_surface.cpp)
 
 **Fixtures (4)**
 
 - [x] [tests/d3d11_present_api.cpp](tests/d3d11_present_api.cpp)
-- [ ] [tests/d3d11_present_bridge.cpp](tests/d3d11_present_bridge.cpp)
+- [x] [tests/d3d11_present_bridge.c](tests/d3d11_present_bridge.c) (C++ removed; C11 launcher keeping the AC7 native command list layout, the command execution guard and the D3D11 draw calls, phases and verdicts stay in Rust)
 - [x] [tests/fg_present_bridge.cpp](tests/fg_present_bridge.cpp)
 - [x] [tests/shared_surface.cpp](tests/shared_surface.cpp)
 

@@ -2,7 +2,7 @@
 #
 # Separate from Graphics because it links d3d12, which nothing in the D3D11 path should have to.
 add_library(rsf_presentation STATIC
-    src/d3d11_present_bridge.cpp)
+    src/d3d11_present_bridge.c)
 target_include_directories(rsf_presentation PUBLIC include)
 target_compile_definitions(rsf_presentation PRIVATE RSF_STREAMLINE_HOST_BUILD)
 target_link_libraries(rsf_presentation PRIVATE rsf_build_options opengl32)

@@ -227,3 +227,35 @@ The D02 fixture paths and D03 SR service were outside this replay.
 Source comparison, targeted bindgen, pinned formatting, locked offline
 metadata and MSVC C11/C++20 syntax checks cover this replay. No native
 build or execution was performed.
+
+
+## C11 foreign leaf and device launchers
+
+`d3d11_host_foreign.cpp` is now `d3d11_host_foreign.c`. Every guard that had a
+`catch (...)` keeps its failure value, now behind a structured-exception filter
+on the MSVC C++ exception code `0xE06D7363`, the pattern of
+`plugin_callbacks.c`. Access violations and other faults propagate. The
+entries that were `noexcept` without a handler (`is_owner`, `chain_dispatch`,
+`creation_begin`, `creation_end`) called `std::terminate` on a C++ exception;
+they now call `abort()` on that code instead of letting it unwind into Rust.
+The overlay API record is a static initializer and the observer options are
+zeroed with `memset`. The header already carried C declarations.
+
+The two explicit device fixtures `d3d11_host_shared_sr_device` and
+`d3d11_host_rendered_fg_device` are C11 launchers. They keep the hidden window,
+the INI scratch file, the adapter and device creation, the DXGI debug queue and
+the native D3D12 usage probe. The outer-chain wrapper, a C++ `IDXGISwapChain`
+subclass before, is a hand-written vtable that forwards every method to the
+inner chain and does the same pre/post Present work. `XMConvertHalfToFloat`
+became a local half-to-float decoder, and the two R11G11B10 fixture pixels are
+constants. Both were compared with DirectXMath: all 65536 half values match and
+both packed pixels are identical. The shared helpers are in
+`tests/d3d11_host_device_launch.h`. Rust still owns the phases and verdicts.
+The targets link `dxguid` and link as C++ like the other fixture launchers.
+
+Checked: strict `/W4 /WX /std:c11` compiles of all three files and the MSBuild
+`ClCompile` of `rsf_orchestrator`, `rsf_d3d11_host_shared_sr_device` and
+`rsf_d3d11_host_rendered_fg_device` with the project flags. The exported symbol
+set of `d3d11_host_foreign.c` equals the C++ object's. Link and execution are
+pending while the tip Rust crate does not compile. The device fixtures need an
+NVIDIA device and a scratch SDK root and were not run.

@@ -240,3 +240,33 @@ checked in source. The O02 overlay call remains in the same command
 sequence. Rust 1.94.1 formatting, bindgen 0.72.1 reproduction, locked
 offline Windows metadata and Git whitespace checks passed. Build, lint,
 binary, fixture and device verification remain pending.
+
+
+## C11 bridge leaf and AC7 launcher
+
+`runtime/presentation/src/d3d11_present_bridge.cpp` and
+`tests/d3d11_present_bridge.cpp` are now C11. The remaining work in both was
+C-expressible, so neither needed C++.
+
+The bridge leaf keeps the layout `_Static_assert`s against the DXGI and SDK
+headers, the 72-slot platform table, the MinHook and `CreateDXGIFactory1`
+calls, the two guarded detours and the 33 exported entry points. The exported
+symbol set matches the C++ object apart from the WRL template instantiations.
+`catch (...)` became a structured-exception filter on the MSVC C++ exception
+code `0xE06D7363` in the places that had a handler: the original-factory
+trampoline, `rsf_d3d11p_unwrap_guarded`, the bootstrap factory,
+`create_for_hwnd` and `wrap_native_chain`. Access violations still propagate.
+`IID_IDXGIFactory2` is a local constant, so the leaf needs no `dxguid` import.
+
+The AC7 launcher keeps the native command list layout (32 bytes, `count` at
+0x14, `uid` at 0x18), the per-command execution guard and the D3D11 backbuffer
+draw in one translation unit, as before. The three command types embed the
+`NativeCommand` header first instead of inheriting it. The draw releases its
+backbuffer and render-target view once the frame has been recorded and
+executed. The target links `dxguid` for the `ID3D11Texture2D` IID, and links as
+C++ like the other fixture launchers. Rust still owns the phases and verdicts.
+
+Checked: strict `/W4 /WX /std:c11` compiles of both files, and the MSBuild
+`ClCompile` of `rsf_presentation` and `rsf_d3d11_present_bridge_test` with the
+project flags. Link and CTest are pending while the tip Rust crate does not
+compile.

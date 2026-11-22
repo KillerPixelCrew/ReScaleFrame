@@ -15,7 +15,7 @@ extern "C" {
    Rust IDXGISwapChain4 facade. Its Rust state owns the COM references, and the
    native shim supplies SDK entry points and guarded detour trampolines.
    Native calls can reenter the facade. The Rust mirror in
-   d3d11_present_abi.rs is hand-written; d3d11_present_bridge.cpp asserts the layouts. */
+   d3d11_present_abi.rs is hand-written; d3d11_present_bridge.c asserts the layouts. */
 
 typedef struct rsf_d3d11p_chain rsf_d3d11p_chain;
 typedef struct rsf_d3d11p_physical_lease rsf_d3d11p_physical_lease;
