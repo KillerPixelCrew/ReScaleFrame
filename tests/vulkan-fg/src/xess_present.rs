@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: MIT
-use crate::vulkan_fg_abi::{RSF_FGVK_ABI_VERSION, rsf_fgvk_frame, rsf_fgvk_status};
+use crate::vulkan_fg_abi::{RSF_FGVK_ABI_VERSION, rsf_fgvk_frame, rsf_fgvk_setup, rsf_fgvk_status};
 use crate::vulkan_sr_abi::rsf_srvk_setup;
-use ash::vk::{self, Handle as _};
+use crate::xess_present_gpu::{self as gpu, Queue, Resources};
+use crate::xess_present_options::rsf_xessgvk_options;
+use ash::{
+    Device,
+    vk::{self, Handle as _},
+};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
 };
@@ -10,31 +15,16 @@ use std::{ffi::c_void, mem, ptr::null_mut};
 type Handle = *mut c_void;
 
 unsafe extern "C" {
-    fn rsf_fixture_xess_present_setup(
-        graphics: *const rsf_srvk_setup,
-        family: u32,
-        runtime: *const u16,
-        native: *mut Handle,
+    fn rsf_fixture_xess_window_open(window: *mut Handle) -> i32;
+    fn rsf_fixture_xess_window_pump();
+    fn rsf_fixture_xess_window_close(window: Handle);
+    fn rsf_xessgvk_create(
+        setup: *const rsf_fgvk_setup,
+        options: *const rsf_xessgvk_options,
         owner: *mut Handle,
         chain: *mut u64,
     ) -> i32;
-    fn rsf_fixture_xess_present_resources(native: Handle, owner: Handle, family: u32) -> i32;
-    fn rsf_fixture_xess_present_idle(native: Handle, pump_messages: bool) -> i32;
-    fn rsf_fixture_xess_present_record(
-        native: Handle,
-        frame: u32,
-        index: u32,
-        initialized: bool,
-        command: *mut Handle,
-        inputs: *mut rsf_fgvk_frame,
-    ) -> i32;
-    fn rsf_fixture_xess_present_acquire_semaphore(native: Handle) -> u64;
-    fn rsf_fixture_xess_present_end(native: Handle) -> i32;
-    fn rsf_fixture_xess_present_submit(native: Handle) -> i32;
-    fn rsf_fixture_xess_present_finished_semaphore(native: Handle) -> u64;
-    fn rsf_fixture_xess_present_release_views(native: Handle);
-    fn rsf_fixture_xess_present_release(native: Handle);
-
+    fn rsf_xessgvk_images(owner: Handle, count: *mut u32, images: *mut u64) -> i32;
     fn rsf_xessgvk_enable(owner: Handle, enabled: u32) -> i32;
     fn rsf_xessgvk_sleep(owner: Handle, id: u32) -> i32;
     fn rsf_xessgvk_latency(owner: Handle, id: u32, marker: u32) -> i32;
@@ -96,23 +86,22 @@ struct Receipt {
 }
 
 fn present_frames(
-    native: Handle,
+    device: &Device,
+    queue: vk::Queue,
+    resources: &Resources,
     owner: Handle,
     chain: u64,
-    family: u32,
     receipt: &mut Receipt,
 ) -> Result<(), i32> {
     unsafe {
-        check(rsf_fixture_xess_present_resources(native, owner, family))?;
         check(rsf_xessgvk_enable(owner, 1))?;
-        let acquired = rsf_fixture_xess_present_acquire_semaphore(native);
-        let finished = [vk::Semaphore::from_raw(
-            rsf_fixture_xess_present_finished_semaphore(native),
-        )];
+        let acquired = resources.acquired.as_raw();
+        let finished = [resources.finished];
         let swapchains = [vk::SwapchainKHR::from_raw(chain)];
         let mut initialized_images = [false; 3];
         for frame in 0..12 {
-            check(rsf_fixture_xess_present_idle(native, true))?;
+            rsf_fixture_xess_window_pump();
+            device.device_wait_idle().map_err(vk::Result::as_raw)?;
             let id = frame + 1;
             check(rsf_xessgvk_sleep(owner, id))?;
             for marker in 0..3 {
@@ -137,21 +126,20 @@ fn present_frames(
             inputs.record = &record;
             inputs.motion_scale_x = 640.0;
             inputs.motion_scale_y = 360.0;
-            let mut command = null_mut();
-            check(rsf_fixture_xess_present_record(
-                native,
-                frame,
-                index,
-                *initialized,
-                &mut command,
-                &mut inputs,
-            ))?;
+            let image = index as usize;
+            resources
+                .start_frame(device, frame, image, *initialized)
+                .map_err(vk::Result::as_raw)?;
+            [inputs.depth, inputs.motion, inputs.hudless] = resources.inputs(device, image);
+            let command = resources.commands.as_raw() as Handle;
             let handoff = check(rsf_xessgvk_prepare(owner, command, &inputs))
                 .and_then(|()| check(rsf_xessgvk_hudless(owner, command, &inputs)));
-            let end = rsf_fixture_xess_present_end(native);
+            let end = device.end_command_buffer(resources.commands);
             handoff?;
-            check(end)?;
-            check(rsf_fixture_xess_present_submit(native))?;
+            end.map_err(vk::Result::as_raw)?;
+            resources
+                .submit(device, queue)
+                .map_err(vk::Result::as_raw)?;
             rsf_xessgvk_submitted(owner, &command, 1);
             check(rsf_xessgvk_latency(owner, id, 3))?;
             *initialized = true;
@@ -181,32 +169,79 @@ fn present_frames(
 
 pub(crate) fn run(
     graphics: &rsf_srvk_setup,
+    device: &Device,
     family: u32,
+    memory: vk::PhysicalDeviceMemoryProperties,
     runtime: *const u16,
     retired: &mut bool,
 ) -> i32 {
-    let mut native = null_mut();
+    let mut window = null_mut();
+    let window_result = unsafe { rsf_fixture_xess_window_open(&mut window) };
+    if window_result != 0 {
+        return window_result;
+    }
+    let mut queue = Box::new(Queue {
+        handle: unsafe { device.get_device_queue(family, 0) },
+        submit: device.fp_v1_0().queue_submit,
+    });
     let mut owner = null_mut();
     let mut chain = 0;
-    let created = unsafe {
-        rsf_fixture_xess_present_setup(
-            graphics,
-            family,
-            runtime,
-            &mut native,
-            &mut owner,
-            &mut chain,
+    let swapchain = vk::SwapchainCreateInfoKHR::default()
+        .min_image_count(3)
+        .image_format(gpu::COLOR)
+        .image_color_space(vk::ColorSpaceKHR::SRGB_NONLINEAR)
+        .image_extent(gpu::OUTPUT)
+        .image_array_layers(1)
+        .image_usage(
+            vk::ImageUsageFlags::COLOR_ATTACHMENT
+                | vk::ImageUsageFlags::TRANSFER_DST
+                | vk::ImageUsageFlags::TRANSFER_SRC,
         )
+        .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .present_mode(vk::PresentModeKHR::FIFO);
+    let setup = rsf_fgvk_setup {
+        struct_size: size_of::<rsf_fgvk_setup>() as u32,
+        abi_version: RSF_FGVK_ABI_VERSION,
+        graphics: *graphics,
+        queues: [queue.handle.as_raw() as Handle; 4],
+        queue_family: family,
+        create_info: (&swapchain as *const vk::SwapchainCreateInfoKHR<'_>).cast(),
+        allocator: std::ptr::null(),
+        graphics_submit: Some(gpu::submit),
+        lock_queues: Some(gpu::lock),
+        unlock_queues: Some(gpu::lock),
+        queue_user: (&raw mut *queue).cast(),
     };
-    if native.is_null() {
-        return created;
-    }
+    let options = rsf_xessgvk_options {
+        struct_size: size_of::<rsf_xessgvk_options>() as u32,
+        abi_version: 1,
+        window,
+        timeline_enabled: 1,
+        generated_count: 1,
+        intel_runtime_directory: runtime,
+    };
+    let created = unsafe { rsf_xessgvk_create(&setup, &options, &mut owner, &mut chain) };
+    let mut resources = Resources::default();
     let mut receipt = Receipt {
         completed: 0,
         interpolated: 0,
     };
     let result = check(created)
-        .and_then(|()| present_frames(native, owner, chain, family, &mut receipt))
+        .and_then(|()| {
+            resources
+                .allocate(device, family, &memory)
+                .map_err(vk::Result::as_raw)?;
+            let mut images = [0; 3];
+            let mut count = images.len() as u32;
+            check(unsafe { rsf_xessgvk_images(owner, &mut count, images.as_mut_ptr()) })?;
+            if count != images.len() as u32 || images.contains(&0) {
+                return Err(vk::Result::ERROR_INITIALIZATION_FAILED.as_raw());
+            }
+            resources
+                .attach_images(device, images)
+                .map_err(vk::Result::as_raw)?;
+            present_frames(device, queue.handle, &resources, owner, chain, &mut receipt)
+        })
         .err()
         .unwrap_or(0);
     let drain = if owner.is_null() {
@@ -215,17 +250,19 @@ pub(crate) fn run(
         unsafe { rsf_xessgvk_drain(owner) }
     };
     let release = if drain == 0 {
-        unsafe { rsf_fixture_xess_present_release_views(native) };
+        resources.release_views(device);
         unsafe { rsf_xessgvk_destroy(owner) }
     } else {
         -1
     };
     *retired = drain == 0 && release == 0;
     if *retired {
-        unsafe {
-            rsf_fixture_xess_present_idle(native, false);
-            rsf_fixture_xess_present_release(native);
-        }
+        let _ = unsafe { device.device_wait_idle() };
+        resources.release(device);
+        unsafe { rsf_fixture_xess_window_close(window) };
+    } else {
+        // The owner can still retain the callback user and Vulkan resources.
+        mem::forget(queue);
     }
     println!(
         concat!(

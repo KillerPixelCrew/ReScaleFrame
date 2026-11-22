@@ -147,3 +147,15 @@ test and Clippy verification were outside the requested scope.
 The interop executable now uses a C11 UTF-16 CRT launcher. The existing C++
 Present fixture source keeps the target linker and SDK calls. Strict C11
 syntax and all-feature locked Windows metadata passed. Execution remains open.
+
+## Graphics leaves from `3066e6ad`
+
+The XeSS Present fixture now uses the already-loaded ash device to record,
+submit and retire Vulkan resources. The C++ fixture source handles the HWND
+and message pump. The source-frame semaphore wait still targets TRANSFER,
+signals the same binary semaphore, and reports the command only after queue
+submission. The R32F and RG16F guide values, the moving rectangle and the
+three swapchain image views retain their formats, extents and barriers.
+A failed drain retains the original owner and the heap-stable queue
+callback user. The views retire before the presenter can destroy its
+images. All public bridge and WSI names stay in place.

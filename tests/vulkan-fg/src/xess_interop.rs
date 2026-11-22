@@ -262,7 +262,14 @@ fn exercise(
     );
     let mut retired = release == 0 && bridge_release == 0;
     let present_result = if retired && present {
-        crate::xess_present::run(&setup, gpu.family, runtime, &mut retired)
+        crate::xess_present::run(
+            &setup,
+            &gpu.logical,
+            gpu.family,
+            unsafe { instance.get_physical_device_memory_properties(gpu.physical) },
+            runtime,
+            &mut retired,
+        )
     } else {
         0
     };
