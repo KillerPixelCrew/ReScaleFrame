@@ -197,7 +197,7 @@ foreach(rsf_sr5_client rsf_anomaly_sr_runtime_api_test rsf_anomaly_sr_temporal_d
     else()
         add_executable(${rsf_sr5_client} "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_temporal_device.cpp"
             "${RSF_ANOMALY_SR_SRC}/sr_d3d11.cpp")
-        target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_sr_temporal rsf_anomaly_sr_fixture_rust ReScaleFrame::Graphics d3d11 dxgi d3dcompiler)
+        target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_sr_fixture_rust ReScaleFrame::Graphics d3d11 dxgi)
     endif()
     target_include_directories(${rsf_sr5_client} PRIVATE "${RSF_ANOMALY_SR_SRC}"
         "${PROJECT_SOURCE_DIR}/runtime/backends/dlss/include"

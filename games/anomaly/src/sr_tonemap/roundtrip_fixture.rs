@@ -6,7 +6,7 @@ use super::{
 };
 use std::ffi::c_void;
 
-fn half_to_float(half: u16) -> f32 {
+pub(crate) fn half_to_float(half: u16) -> f32 {
     let sign = u32::from(half & 0x8000) << 16;
     let exponent = u32::from((half >> 10) & 0x1f);
     let mantissa = u32::from(half & 0x3ff);
@@ -23,7 +23,7 @@ fn half_to_float(half: u16) -> f32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_float_to_half(value: f32) -> u16 {
+pub(crate) extern "C" fn rsf_anomaly_sr_float_to_half(value: f32) -> u16 {
     let bits = value.to_bits();
     let sign = ((bits >> 16) & 0x8000) as u16;
     let magnitude = bits & 0x7fff_ffff;
@@ -156,7 +156,7 @@ fn nearest_mapping(pass: &Pass) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_roundtrip_numerics(owner: *mut c_void, run: Run) -> i32 {
+pub(crate) extern "C" fn rsf_anomaly_sr_roundtrip_numerics(owner: *mut c_void, run: Run) -> i32 {
     let pass = Pass { owner, run };
     [every_half, stock_curve, nearest_mapping]
         .into_iter()
@@ -165,17 +165,17 @@ extern "C" fn rsf_anomaly_sr_roundtrip_numerics(owner: *mut c_void, run: Run) ->
 }
 
 #[repr(C)]
-struct UpscaleReadback {
-    input: [u32; 2],
-    output: [u32; 2],
-    source_colour: *const u16,
-    source_position: *const u16,
-    source_distort: *const u8,
-    colour: *const u8,
-    position: *const u8,
-    distort: *const u8,
-    depth: *const u8,
-    twin_depth: *const u8,
+pub(crate) struct UpscaleReadback {
+    pub(crate) input: [u32; 2],
+    pub(crate) output: [u32; 2],
+    pub(crate) source_colour: *const u16,
+    pub(crate) source_position: *const u16,
+    pub(crate) source_distort: *const u8,
+    pub(crate) colour: *const u8,
+    pub(crate) position: *const u8,
+    pub(crate) distort: *const u8,
+    pub(crate) depth: *const u8,
+    pub(crate) twin_depth: *const u8,
 }
 
 const _: () = assert!(size_of::<UpscaleReadback>() == 80);
@@ -195,7 +195,7 @@ fn bilinear([cx, cy]: [f64; 2], [rw, rh]: [usize; 2], sample: impl Fn(usize) -> 
 
 // The device harness validates the size of every span before lending the record.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_upscale_numerics(readback: &UpscaleReadback) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_upscale_numerics(readback: &UpscaleReadback) -> i32 {
     let result = std::panic::catch_unwind(|| {
         let [rw, rh] = readback.input.map(|n| n as usize);
         let [ow, oh] = readback.output.map(|n| n as usize);

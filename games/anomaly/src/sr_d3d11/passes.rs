@@ -183,6 +183,11 @@ impl Drop for SavedState<'_> {
 }
 
 impl Pass {
+    #[cfg(all(windows, feature = "sr-fixtures"))]
+    pub(super) fn temporal_ready(&self) -> bool {
+        self.temporal.is_some()
+    }
+
     pub(super) fn new(
         platform: &'static Platform,
         device: Ptr,
@@ -333,7 +338,7 @@ impl Pass {
         })
     }
 
-    fn run(&self, context: Ptr, kind: u32, views: &DrawViews) -> bool {
+    pub(super) fn run(&self, context: Ptr, kind: u32, views: &DrawViews) -> bool {
         if context.is_null() || !views.output.valid() {
             return false;
         }

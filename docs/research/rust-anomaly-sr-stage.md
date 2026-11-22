@@ -470,3 +470,37 @@ The native swap and temporal planning scenario bodies, native round-trip
 and temporal device scenario bodies, and production engine and graphics
 forwarding still need review for any further Rust migration. This pass did
 not compile, link, run fixtures or use a game or device.
+
+## N06 and N07 device scenarios from 6cb0c169
+
+The prior native specifications were `tests/anomaly_sr_roundtrip.cpp`
+and `tests/anomaly_sr_temporal_device.cpp` at `6cb0c169`. The Rust
+versions continue to run the same stage passes in `sr_d3d11/passes.rs`
+with the stage's platform table, the same System32 compiler and the same
+first-party shaders. C++ supplies the process entry, that table and the
+eight linked Runtime motion decode and resolve calls. The generated
+64-byte private callback table borrows the existing SDK decode parameters
+and regenerates the Runtime resolve record from its public C header.
+
+- `sr_d3d11/roundtrip_device.rs` preserves hardware and WARP admission,
+  every FP16 input pattern, the curve, phase-2 resampling at three ratios,
+  unit-scale identity, D24S8 and stencil readback, descriptor/refusal
+  checks, mixed MRTs, the intentional viewport mismatch diagnostic and the
+  actual slot, blend and viewport restoration checks. The float64
+  comparisons stay independent of the HLSL implementation.
+- `sr_d3d11/temporal_device.rs` and its `decode.rs` and `provider.rs`
+  preserve the hardware-only selection, motion validity and legacy-size
+  cases, the two thin-line camera reconstructions and the independently
+  moving object control, the first-person prepare toggle, the reinsertion
+  curve and the provider cycle. The provider case still compares 24 frames
+  per selection and separately reads the final DLSS call's own submitted
+  motion capture, with valid zero, first-person zero, camera motion and no
+  sentinel assertions. Device startup, readback and temporal ownership
+  share the existing Rust code.
+- The C++ temporal and tonemap fixture facades and native device-acquisition
+  entry are retired. CTest device names, vendor-root routing and skip code
+  77 still apply.
+
+Source comparison, Rust 1.94.1 formatting, bindgen 0.72.1 regeneration,
+locked offline Windows metadata and whitespace checks make up this
+checkpoint. Build, link, fixture and device results remain pending.

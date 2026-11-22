@@ -24,17 +24,20 @@ mod runtime_fixture;
 #[cfg(windows)]
 pub(crate) mod stage_bridge;
 
-#[cfg(all(windows, feature = "fg-fixture", not(test)))]
+#[cfg(all(
+    windows,
+    any(feature = "sr-fixtures", all(feature = "fg-fixture", not(test)))
+))]
 pub(crate) mod fg_fixture;
 
 type Raw = *mut c_void;
 const OK: i32 = 0;
 const STREAMLINE_FAILED: i32 = -5;
 const NOT_SUPPORTED: i32 = -6;
-const DLSS: u32 = 1;
-const FSR3: u32 = 3;
-const FSR4: u32 = 4;
-const XESS: u32 = 5;
+pub(crate) const DLSS: u32 = 1;
+pub(crate) const FSR3: u32 = 3;
+pub(crate) const FSR4: u32 = 4;
+pub(crate) const XESS: u32 = 5;
 // RSF_DLSS_ENGINE_CUSTOM, checked in the native facade.
 const CUSTOM_ENGINE: u32 = 0;
 

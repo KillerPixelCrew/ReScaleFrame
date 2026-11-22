@@ -41,19 +41,19 @@ pub(crate) enum Error {
 }
 
 #[repr(C)]
-struct TwinInput {
-    texture: Ptr,
-    rtv: Ptr,
-    srv: Ptr,
-    uav: Ptr,
-    size: Extent,
-    format: u32,
-    promote: u32,
-    with_uav: u32,
-    world: u32,
+pub(super) struct TwinInput {
+    pub(super) texture: Ptr,
+    pub(super) rtv: Ptr,
+    pub(super) srv: Ptr,
+    pub(super) uav: Ptr,
+    pub(super) size: Extent,
+    pub(super) format: u32,
+    pub(super) promote: u32,
+    pub(super) with_uav: u32,
+    pub(super) world: u32,
 }
 
-struct Target {
+pub(super) struct Target {
     rtv: Option<Lease>,
     srv: Option<Lease>,
     uav: Option<Lease>,
@@ -62,19 +62,19 @@ struct Target {
 }
 
 #[repr(C)]
-struct TargetView {
-    texture: Ptr,
-    rtv: Ptr,
-    srv: Ptr,
-    uav: Ptr,
-    dsv: Ptr,
-    size: Extent,
-    format: u32,
-    descriptor: Texture,
+pub(super) struct TargetView {
+    pub(super) texture: Ptr,
+    pub(super) rtv: Ptr,
+    pub(super) srv: Ptr,
+    pub(super) uav: Ptr,
+    pub(super) dsv: Ptr,
+    pub(super) size: Extent,
+    pub(super) format: u32,
+    pub(super) descriptor: Texture,
 }
 
 impl TargetView {
-    fn fields(&self) -> Fields {
+    pub(super) fn fields(&self) -> Fields {
         Fields {
             surface: self.texture,
             rtv: self.rtv,
@@ -103,7 +103,7 @@ impl Target {
         }
     }
 
-    fn view(&self, descriptor: Texture, format: u32) -> TargetView {
+    pub(super) fn view(&self, descriptor: Texture, format: u32) -> TargetView {
         TargetView {
             texture: self.texture.as_ptr(),
             rtv: pointer(&self.rtv),
@@ -143,9 +143,9 @@ impl Texture {
 }
 
 #[derive(Clone, Copy)]
-struct Device<'a> {
-    platform: &'a Platform,
-    handle: Ptr,
+pub(super) struct Device<'a> {
+    pub(super) platform: &'a Platform,
+    pub(super) handle: Ptr,
 }
 
 impl Device<'_> {
@@ -180,7 +180,7 @@ impl Device<'_> {
             .lease(unsafe { (self.platform.as_texture)(resource) })
     }
 
-    fn twin(self, input: &TwinInput) -> Result<(Target, Texture, u32), Error> {
+    pub(super) fn twin(self, input: &TwinInput) -> Result<(Target, Texture, u32), Error> {
         if input.world != 0 && !input.size.valid() {
             return Err(Error::Shape);
         }
@@ -246,7 +246,7 @@ impl Device<'_> {
         Ok((twin, created, d3d_format))
     }
 
-    fn depth(
+    pub(super) fn depth(
         self,
         engine: Ptr,
         output: Extent,
@@ -275,7 +275,7 @@ impl Device<'_> {
         Ok((twin, desc))
     }
 
-    fn scratch(self, engine: Ptr, render: Extent) -> Result<(Target, Texture), Error> {
+    pub(super) fn scratch(self, engine: Ptr, render: Extent) -> Result<(Target, Texture), Error> {
         if self.handle.is_null() || engine.is_null() || !render.valid() {
             return Err(Error::NotTexture);
         }

@@ -8,7 +8,7 @@
 // sr_stage.cpp provides guarded engine reads, foreign trampolines and the game-owned resource callbacks.
 #[cfg(all(windows, feature = "sr-fixtures"))]
 mod jitter_device;
-mod math;
+pub(crate) mod math;
 
 #[cfg(test)]
 pub(crate) use self::math::jitter_sample;
@@ -64,7 +64,7 @@ const MAX_PATH: usize = 260;
 const STREAMLINE: usize = 0;
 const FIDELITYFX: usize = 1;
 const XESS: usize = 2;
-// Refusal (sr_temporal.h).
+// Temporal driver refusal transport values.
 const REFUSAL_PREPARE: u8 = 2;
 const REFUSAL_REINSERT: u8 = 5;
 const SPATIAL_PATH: u8 = 6;

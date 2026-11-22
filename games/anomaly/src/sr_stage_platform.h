@@ -195,7 +195,7 @@ typedef struct rsf_anomaly_sr_timer {
     bool device;
 } rsf_anomaly_sr_timer;
 
-// TemporalOptions (sr_temporal.h) for Stages 4 and 5. The UTF-8 vendor directories are borrowed for the call.
+// Temporal driver setup for Stages 4 and 5. The UTF-8 vendor directories are borrowed for the call.
 typedef struct rsf_anomaly_sr_driver_config {
     uint32_t stage;
     bool exposure_auto, colour_transport, first_person_zero, require_signature;

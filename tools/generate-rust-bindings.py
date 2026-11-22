@@ -472,6 +472,12 @@ generate("games/anomaly/src/sr_stage_abi.rs", "games/anomaly/src/sr_stage_platfo
           "--raw-line", "pub use crate::sr_swap_abi::rsf_anomaly_swap_counters as rsf_anomaly_sr_swap_counters;",
           "--raw-line", "pub use crate::sr_swap_abi::rsf_anomaly_swap_facts as rsf_anomaly_sr_frame_facts;",
           "--raw-line", "use rsf_game_sys::rsf_camera_frame;"])
+generate("games/anomaly/src/sr_d3d11/temporal_device_abi.rs", "games/anomaly/src/sr_d3d11/temporal_device_platform.h",
+         "rsf_anomaly_temporal_fixture_graphics|rsf_motion_(decode(_setup|_result|_log_fn)?|resolve(_params)?)",
+         "RSF_MOTION_DECODE_ABI_VERSION",
+         ["-Iruntime/graphics/include"],
+         ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]",
+          "--raw-line", "use rsf_game_sys::sr_abi::rsf_motion_decode_params;"])
 generate("games/unity-mono/src/plugin_abi.rs", "games/unity-mono/include/rescaleframe/unity_bridge.h",
          "rsf_unity_native_api", "NOTHING",
          ["-Isdk/game/include", "-Igames/unity-mono/include"],

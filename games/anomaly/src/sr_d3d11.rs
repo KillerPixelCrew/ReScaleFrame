@@ -11,6 +11,10 @@ use targets::{TwinBatch, TwinBatchInfo, allocate_twins};
 
 #[cfg(windows)]
 mod native;
+#[cfg(all(windows, feature = "sr-fixtures"))]
+mod roundtrip_device;
+#[cfg(all(windows, feature = "sr-fixtures"))]
+mod temporal_device;
 #[cfg(windows)]
 pub(crate) use native::texture_format;
 mod passes;

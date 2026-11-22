@@ -7,7 +7,7 @@ type Plan = rsf_anomaly_sr_plan;
 type Sample = rsf_anomaly_sr_jitter_sample;
 type Published = rsf_anomaly_sr_jitter_state;
 type Uv = rsf_anomaly_sr_jitter_uv;
-pub(super) type JitterSequence = rsf_anomaly_sr_jitter_sequence;
+pub(crate) type JitterSequence = rsf_anomaly_sr_jitter_sequence;
 pub(super) type BurstGate = rsf_anomaly_sr_burst_gate;
 pub(super) const DEFAULT_SCALE: f32 = RSF_ANOMALY_SR_DEFAULT_SCALE as f32;
 pub(super) const DEFAULT_MIP_OFFSET: f32 = RSF_ANOMALY_SR_DEFAULT_MIP_OFFSET as f32;
@@ -33,7 +33,7 @@ fn render_extent(output: u32, scale: f32) -> u32 {
     rounded.clamp(minimum_extent(output), output)
 }
 
-pub(super) fn make_plan(ow: u32, oh: u32, scale: f32) -> Option<Plan> {
+pub(crate) fn make_plan(ow: u32, oh: u32, scale: f32) -> Option<Plan> {
     if ow == 0 || oh == 0 {
         return None;
     }
@@ -104,14 +104,14 @@ pub(crate) fn jitter_sample(index: u32, phases: u32) -> Sample {
 }
 
 impl JitterSequence {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             phases: 8,
             ..Self::default()
         }
     }
 
-    pub(super) fn next(
+    pub(crate) fn next(
         &mut self,
         dimensions: [u32; 4],
         generation: u64,
@@ -138,7 +138,7 @@ impl JitterSequence {
     }
 }
 
-pub(super) fn next_jitter(
+pub(crate) fn next_jitter(
     last: &Published,
     scope: bool,
     applied: bool,

@@ -456,7 +456,11 @@ fn viewport(context: &ID3D11DeviceContext, size: Extent) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_set_full_viewport(raw: Ptr, width: u32, height: u32) {
+pub(super) unsafe extern "C" fn rsf_anomaly_sr_set_full_viewport(
+    raw: Ptr,
+    width: u32,
+    height: u32,
+) {
     if let Some(context) = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }
         && width != 0
         && height != 0
