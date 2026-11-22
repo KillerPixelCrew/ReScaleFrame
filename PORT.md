@@ -1700,10 +1700,10 @@ Port scoped render commands, view data, UI, scene colour, contact shadows and Tr
 
 **Port files (15)**
 
-- [ ] [games/ac7/include/rescaleframe/ac7_render_scope.h](games/ac7/include/rescaleframe/ac7_render_scope.h)
+- [x] [games/ac7/include/rescaleframe/ac7_render_scope.h](games/ac7/include/rescaleframe/ac7_render_scope.h)
 - [ ] [games/ac7/include/rescaleframe/ac7_scene_color.h](games/ac7/include/rescaleframe/ac7_scene_color.h)
-- [ ] [games/ac7/include/rescaleframe/ac7_ui_rules.h](games/ac7/include/rescaleframe/ac7_ui_rules.h)
-- [ ] [games/ac7/include/rescaleframe/ac7_view.h](games/ac7/include/rescaleframe/ac7_view.h)
+- [x] [games/ac7/include/rescaleframe/ac7_ui_rules.h](games/ac7/include/rescaleframe/ac7_ui_rules.h)
+- [x] [games/ac7/include/rescaleframe/ac7_view.h](games/ac7/include/rescaleframe/ac7_view.h)
 - [ ] [games/ac7/src/ac7_scope_owner.h](games/ac7/src/ac7_scope_owner.h)
 - [ ] [games/ac7/src/cloud_depth_platform.h](games/ac7/src/cloud_depth_platform.h)
 - [ ] [games/ac7/src/contact_shadow.cpp](games/ac7/src/contact_shadow.cpp)
@@ -1714,7 +1714,7 @@ Port scoped render commands, view data, UI, scene colour, contact shadows and Tr
 - [ ] [games/ac7/src/truesky_depth.h](games/ac7/src/truesky_depth.h)
 - [ ] [games/ac7/src/truesky_motion.cpp](games/ac7/src/truesky_motion.cpp)
 - [ ] [games/ac7/src/truesky_motion.h](games/ac7/src/truesky_motion.h)
-- [ ] [games/ac7/src/ui_rules.cpp](games/ac7/src/ui_rules.cpp)
+- [x] [games/ac7/src/ui_rules.cpp](games/ac7/src/ui_rules.cpp)
 
 **Fixtures (4)**
 
@@ -1727,11 +1727,11 @@ Port scoped render commands, view data, UI, scene colour, contact shadows and Tr
 
 - [ ] **Duplication | Medium | Share fallible allocation for Rust-owned FFI handles.** AC7 allocates and initializes nonzero-sized Scopes and Ticket objects at games/ac7/src/render_scope.rs:286 and :346. Vulkan FSR3 repeats the unsafe allocation at runtime/vulkan/fsr3/owner.rs:331 for swapchains and FG contexts at :640 and :946, returning NonNull instead of a raw pointer. RDR2 capture creation at games/rdr2/src/capture_state.rs:112 uses a third generic implementation at :117 that omits the nonzero-size guard. Current callers allocate concrete nonzero types. Use one small fallible allocation helper returning Option<Box<T>>, with one documented size contract, and convert to raw handles and existing error codes in the owning exports. This removes three separate implementations of the allocator preconditions. [games/ac7/src/render_scope.rs:135](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/render_scope.rs#L135)
 
-- [ ] **Altitude | Medium | Queue point-in-time scope markers in one operation.** retire_renderer_uniforms (native_renderer.cpp:814-822), the native SR submission at line 982 and velocity finalization at line 1716 open and immediately close a leased ticket. No engine work occurs between those calls. Open transfers ownership and increments outstanding, but close can refuse after the first marker was published. These callers then discard the open ticket, preventing idle and lease retirement. Add an enqueue operation for these callers that admits and links both markers together before transferring ownership. Keep separate open/close for scopes spanning genuine engine work. [games/ac7/src/render_scope.rs:380](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/render_scope.rs#L380)
+- [x] **Altitude | Medium | Queue point-in-time scope markers in one operation.** retire_renderer_uniforms (native_renderer.cpp:814-822), the native SR submission at line 982 and velocity finalization at line 1716 open and immediately close a leased ticket. No engine work occurs between those calls. Open transfers ownership and increments outstanding, but close can refuse after the first marker was published. These callers then discard the open ticket, preventing idle and lease retirement. Add an enqueue operation for these callers that admits and links both markers together before transferring ownership. Keep separate open/close for scopes spanning genuine engine work. [games/ac7/src/render_scope.rs:380](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/render_scope.rs#L380)
 
-- [ ] **Altitude | Medium | Bind each queued scope ticket to its originating command list.** The ticket stores its owner and markers but omits the native list used by open. Full-frame begin and end arrive in separate hooks (native_renderer.cpp:575-598) and end supplies its own list. Close accepts any recording list, even though the ticket lifetime assumes that both markers execute in order. Store the recording-list identity in the ticket, validate it on close and preserve the ticket for retirement on mismatch. [games/ac7/src/render_scope.rs:394](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/render_scope.rs#L394)
+- [x] **Altitude | Medium | Bind each queued scope ticket to its originating command list.** The ticket stores its owner and markers but omits the native list used by open. Full-frame begin and end arrive in separate hooks (native_renderer.cpp:575-598) and end supplies its own list. Close accepts any recording list, even though the ticket lifetime assumes that both markers execute in order. Store the recording-list identity in the ticket, validate it on close and preserve the ticket for retirement on mismatch. [games/ac7/src/render_scope.rs:394](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/render_scope.rs#L394)
 
-- [ ] **Altitude | Medium | Track cloud motion relay installation independently of the full-grid transition.** The per-sky-render apply callback returns immediately once cloud resolution is installed or refused. install_motion returns no outcome and may leave its slot empty after a transient allocation or write refusal. If depth installation reaches either terminal state, no later sky render retries the independent composite draw observer, so the renderer can keep running without cloud motion depth. Give motion its own installed, retryable or refused outcome, and use the full-grid state only to gate the depth and resolution work. [games/ac7/src/truesky.rs:353](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/truesky.rs#L353)
+- [x] **Altitude | Medium | Track cloud motion relay installation independently of the full-grid transition.** The per-sky-render apply callback returns immediately once cloud resolution is installed or refused. install_motion returns no outcome and may leave its slot empty after a transient allocation or write refusal. If depth installation reaches either terminal state, no later sky render retries the independent composite draw observer, so the renderer can keep running without cloud motion depth. Give motion its own installed, retryable or refused outcome, and use the full-grid state only to gate the depth and resolution work. [games/ac7/src/truesky.rs:353](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/truesky.rs#L353)
 
 - [ ] **Altitude | Medium | Report a full-target view separately from player-camera identity.** read_view labels a zero-origin view filling its own buffer as is_main_view, and ac7_view.h describes that as the camera the player sees. The compatibility bridge treats it as camera admission at dlss_bridge.c:914, yet lines 2359-2367 document a separate translucency upload passing the same test and previously causing every evaluation to fail. Expose the actual rectangle fact, and have the adapter establish primary-camera identity from the corresponding scene pass, view and family before selecting backend inputs. [games/ac7/src/view.rs:177](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/view.rs#L177)
 
@@ -1739,7 +1739,7 @@ Port scoped render commands, view data, UI, scene colour, contact shadows and Tr
 
 - [ ] **Duplication | Low | Reuse one IEEE CRC-32 implementation for binary fingerprints.** AC7 checks its effect bytes at games/ac7/src/truesky.rs:168 using a slice fold. RDR2 computes the same reflected polynomial, initial value and final complement in games/rdr2/src/capture_state/recordings.rs:180; games/rdr2/src/native_capture.cpp:104 calls that loop for both pixel and vertex shader bytecode. Fixes or faster implementations currently need to preserve identical persisted hash values in two places. Share a pure crc32_ieee(&[u8]) function with the existing checksum utilities, retaining the RDR2 pointer/length contract and AC7 file-size check in their adapters. The existing CRC-32C function uses a different polynomial. [games/ac7/src/truesky.rs:159](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/truesky.rs#L159)
 
-- [ ] **Duplication | Low | Generate the numeric draw and layout classes consumed across the AC7 UI ABI.** The seven draw and four layout result values at games/ac7/src/ui.rs:7 and :15 repeat the cast macros at games/ac7/include/rescaleframe/ac7_ui_rules.h:33 and :72. Although tools/generate-rust-bindings.py:113 requests both families, games/ac7/src/ui_abi.rs:19 emits only their u32 aliases. The classifier returns its private numbers and the native dispatch at loader/proxy/src/dlss_bridge.c:534 switches on the header values; changing one side can silently route a different layout. Express those values as bindgen-readable integer constants while retaining the u32 return ABI, regenerate, and consume the generated constants in the classifiers. [games/ac7/src/ui.rs:7](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/ui.rs#L7)
+- [x] **Duplication | Low | Generate the numeric draw and layout classes consumed across the AC7 UI ABI.** The seven draw and four layout result values at games/ac7/src/ui.rs:7 and :15 repeat the cast macros at games/ac7/include/rescaleframe/ac7_ui_rules.h:33 and :72. Although tools/generate-rust-bindings.py:113 requests both families, games/ac7/src/ui_abi.rs:19 emits only their u32 aliases. The classifier returns its private numbers and the native dispatch at loader/proxy/src/dlss_bridge.c:534 switches on the header values; changing one side can silently route a different layout. Express those values as bindgen-readable integer constants while retaining the u32 return ABI, regenerate, and consume the generated constants in the classifiers. [games/ac7/src/ui.rs:7](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/ui.rs#L7)
 
 <a id="a03"></a>
 
@@ -2400,8 +2400,8 @@ Port ASI startup, attach, settings and Runtime session workers with their input 
 
 **Port files (9)**
 
-- [ ] [games/rdr2/src/asi_entry.cpp](games/rdr2/src/asi_entry.cpp)
-- [ ] [games/rdr2/src/asi_platform.h](games/rdr2/src/asi_platform.h)
+- [x] [games/rdr2/src/asi_entry.cpp](games/rdr2/src/asi_entry.cpp)
+- [x] [games/rdr2/src/asi_platform.h](games/rdr2/src/asi_platform.h)
 - [x] [games/rdr2/src/attach_entry.cpp](games/rdr2/src/attach_entry.cpp)
 - [x] [games/rdr2/src/engine_settings.h](games/rdr2/src/engine_settings.h)
 - [x] [games/rdr2/src/engine_settings_policy.h](games/rdr2/src/engine_settings_policy.h)
@@ -2498,8 +2498,8 @@ Port capture observation, registration, GPU ownership and publication alongside 
 **Port files (5)**
 
 - [ ] [games/rdr2/src/capture_state.h](games/rdr2/src/capture_state.h)
-- [ ] [games/rdr2/src/d3d12_trace.h](games/rdr2/src/d3d12_trace.h)
-- [ ] [games/rdr2/src/diagnostics.h](games/rdr2/src/diagnostics.h)
+- [x] [games/rdr2/src/d3d12_trace.h](games/rdr2/src/d3d12_trace.h)
+- [x] [games/rdr2/src/diagnostics.h](games/rdr2/src/diagnostics.h)
 - [ ] [games/rdr2/src/native_capture.cpp](games/rdr2/src/native_capture.cpp)
 - [ ] [games/rdr2/src/native_capture.h](games/rdr2/src/native_capture.h)
 
