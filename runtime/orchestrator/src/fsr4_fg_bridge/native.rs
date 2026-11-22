@@ -4,14 +4,14 @@
 //! The capsule keeps the provider module, both SDK contexts, the create
 //! descriptors the SDK retains until those contexts are destroyed, the DXGI
 //! swapchain description and the COM references filled by the command
-//! callbacks. The owner in fsr4_fg_bridge.rs reaches it only through the
-//! private platform table and releases it last.
+//! callbacks (commands.rs). The owner in fsr4_fg_bridge.rs reaches it only
+//! through the private platform table and releases it last.
 
 use super::commands::{self, Graphics};
 use super::sdk;
 use super::{
     Bridge, BridgeCreate, BridgeFrame, BridgeInfo, GeneratedFn, Handle, INVALID, Platform,
-    QueueDesc, SwapchainDesc, Version, rsf_core_fsr4fg_create, rsf_core_fsr4fg_probe,
+    SwapchainDesc, Version, rsf_core_fsr4fg_create, rsf_core_fsr4fg_probe,
 };
 use crate::d3d12_generation::fsr_abi::*;
 use crate::d3d12_sr::ffx_abi::{self, *};
@@ -101,6 +101,11 @@ unsafe fn capsule<'a>(native: Handle) -> &'a mut Native {
     unsafe { &mut *native.cast::<Native>() }
 }
 
+/// The graphics slots of a live capsule with no other borrower.
+pub(super) unsafe fn graphics<'a>(native: Handle) -> &'a mut Graphics {
+    unsafe { &mut capsule(native).graphics }
+}
+
 unsafe extern "C" fn allocate(telemetry: Handle, generated: GeneratedFn) -> Handle {
     let native = unsafe { alloc_zeroed(Layout::new::<Native>()) }.cast::<Native>();
     if let Some(native) = unsafe { native.as_mut() } {
@@ -116,53 +121,6 @@ unsafe extern "C" fn release(native: Handle) {
         sdk::release_provider_objects(&owner.graphics, owner.module);
         dealloc(native.cast(), Layout::new::<Native>());
     }
-}
-
-macro_rules! graphics {
-    ($($name:ident => $target:ident($($arg:ident: $ty:ty),*) $(-> $ret:ty)?;)*) => {$(
-        unsafe extern "C" fn $name(native: Handle $(, $arg: $ty)*) $(-> $ret)? {
-            unsafe { commands::$target(&mut capsule(native).graphics $(, $arg)*) }
-        }
-    )*};
-}
-
-graphics! {
-    create_factory => create_factory(flags: u32) -> i32;
-    find_adapter => find_adapter(luid: u64) -> i32;
-    create_device => create_device(level: u32) -> i32;
-    create_allocator => create_allocator(kind: u32) -> i32;
-    create_command_list => create_list(node_mask: u32, kind: u32) -> i32;
-    create_completion_fence => create_completion_fence(value: u64, flags: u32) -> i32;
-    create_event => create_event(manual: u32, initial: u32) -> i32;
-    create_image => shared_image(
-        width: u32, height: u32, format: u32, handle: *mut Handle, resource: *mut Handle
-    ) -> i32;
-    reset_commands => reset_commands() -> i32;
-    close_commands => close_commands() -> i32;
-    shader_read => shader_read(image: Handle, enter: u32);
-    copy_to_backbuffer => copy_to_backbuffer(color: Handle) -> i32;
-    wait_shared => wait_shared(value: u64) -> i32;
-    execute => execute();
-    present => present_dxgi(vsync: u32) -> i32;
-    signal => signal(value: u64, shared: u32) -> i32;
-    wait_local => wait_local(value: u64) -> i32;
-    get_present_count => present_count(count: *mut u32) -> i32;
-    release_chain => release_chain();
-}
-
-unsafe extern "C" fn get_adapter_vendor(native: Handle, vendor: *mut u32) -> i32 {
-    let native = unsafe { capsule(native) };
-    unsafe { commands::get_adapter_vendor(&native.graphics, &mut *vendor) }
-}
-
-unsafe extern "C" fn create_queue(native: Handle, desc: *const QueueDesc) -> i32 {
-    let native = unsafe { capsule(native) };
-    unsafe { commands::create_queue(&mut native.graphics, &*desc) }
-}
-
-unsafe extern "C" fn create_fence(native: Handle, handle: *mut Handle) -> i32 {
-    let native = unsafe { capsule(native) };
-    unsafe { commands::shared_fence(&mut native.graphics, &mut *handle) }
 }
 
 unsafe extern "C" fn load(native: Handle, path: *const u16) -> i32 {
@@ -251,13 +209,7 @@ unsafe extern "C" fn create_swapchain(
     let Some(create) = native.create else {
         return INVALID;
     };
-    unsafe {
-        commands::dxgi_description(
-            &mut native.dxgi_description,
-            &*setup,
-            first_attempt,
-        )
-    };
+    unsafe { commands::dxgi_description(&mut native.dxgi_description, &*setup, first_attempt) };
     native.chain_version.header.type_ = SWAPCHAIN_VERSION_DX12;
     native.chain_version.version = SWAPCHAIN_DX12_VERSION;
     let chain = &mut native.chain_description;
@@ -375,39 +327,39 @@ unsafe extern "C" fn destroy_swapchain(native: Handle) -> i32 {
 static PLATFORM: Platform = Platform {
     allocate,
     release,
-    create_factory,
-    find_adapter,
-    get_adapter_vendor,
-    create_device,
+    create_factory: commands::create_factory,
+    find_adapter: commands::find_adapter,
+    get_adapter_vendor: commands::get_adapter_vendor,
+    create_device: commands::create_device,
     load,
     versions,
     create_generation,
     get_provider,
-    create_queue,
-    create_allocator,
-    create_command_list,
-    create_completion_fence,
-    create_event,
+    create_queue: commands::create_queue,
+    create_allocator: commands::create_allocator,
+    create_command_list: commands::create_command_list,
+    create_completion_fence: commands::create_completion_fence,
+    create_event: commands::create_event,
     objects,
     create_swapchain,
-    create_image,
-    create_fence,
+    create_image: commands::create_image,
+    create_fence: commands::create_fence,
     describe_texture: commands::describe_texture,
-    reset_commands,
-    close_commands,
+    reset_commands: commands::reset_commands,
+    close_commands: commands::close_commands,
     configure,
-    shader_read,
+    shader_read: commands::shader_read,
     prepare,
-    copy_to_backbuffer,
-    wait_shared,
-    execute,
-    present,
+    copy_to_backbuffer: commands::copy_to_backbuffer,
+    wait_shared: commands::wait_shared,
+    execute: commands::execute,
+    present: commands::present,
     wait_presents,
-    signal,
-    wait_local,
-    get_present_count,
+    signal: commands::signal,
+    wait_local: commands::wait_local,
+    get_present_count: commands::get_present_count,
     destroy_generation,
-    release_chain,
+    release_chain: commands::release_chain,
     destroy_swapchain,
 };
 
