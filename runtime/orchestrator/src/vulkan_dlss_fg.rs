@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
+mod wsi;
+
+use self::wsi::Wsi;
 use crate::sr_session::has_capacity;
-use crate::vulkan_dlss_fg_abi::{ChainSupport, Handle, Platform, Sample, SdkCall, Swapchain};
+use crate::vulkan_dlss_fg_abi::{ChainSupport, Handle, Platform, Sample, SdkCall};
 use crate::vulkan_fg_abi::{
     RSF_FGVK_ABI_VERSION, RSF_FGVK_FRAME_SLOTS, rsf_dlssgvk_status as Status,
     rsf_fgvk_frame as Frame, rsf_fgvk_frame_slot as Recording, rsf_fgvk_setup as Setup,
@@ -18,6 +21,7 @@ use crate::vulkan_fg_resources_abi::{
 use crate::vulkan_latency_abi::{rsf_slvk_call, rsf_slvk_callback};
 use crate::vulkan_ownership::Claim;
 use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_image as SourceImage};
+use ash::vk::{self, Handle as _};
 use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record};
 use std::ffi::c_void;
 use std::ptr;
@@ -28,6 +32,7 @@ const OK: i32 = 0;
 const INVALID: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
 const NOT_COMPILED: i32 = -3;
+const MISSING_ENTRY_POINT: i32 = -5;
 const INIT_FAILED: i32 = -6;
 const NOT_SUPPORTED: i32 = -7;
 const NOT_READY: i32 = -8;
@@ -40,7 +45,6 @@ const USAGE_TRANSFER_DST: u32 = 2;
 const R32F: u32 = 100;
 const RG16F: u32 = 83;
 const RGBA8: u32 = 37;
-const BGRA8: u32 = 44;
 const SLOTS: usize = RSF_FGVK_FRAME_SLOTS as usize;
 
 static OCCUPIED: AtomicBool = AtomicBool::new(false);
@@ -69,12 +73,12 @@ enum Inputs {
 }
 
 impl Inputs {
-    fn retire(&mut self, platform: &Platform, native: Handle) -> bool {
+    fn retire(&mut self, wsi: &Wsi) -> bool {
         match *self {
             Self::Retired => return true,
             Self::Unknown => return false,
             Self::Pending { semaphore, value } => {
-                if unsafe { (platform.wait_inputs)(native, semaphore, value) } != OK {
+                if wsi.wait_inputs(semaphore, value) != OK {
                     return false;
                 }
             }
@@ -120,6 +124,7 @@ struct Owner {
     gpu_platform: &'static Gpu,
     native: Handle,
     gpu: Handle,
+    wsi: Option<Wsi>,
     chain: u64,
     backbuffers: u32,
     setup: Setup,
@@ -142,7 +147,7 @@ impl Drop for Owner {
             }
         }
         if self.chain != 0 {
-            unsafe { (self.platform.destroy_chain)(self.native, self.chain) };
+            self.wsi().destroy(self.chain);
         }
         unsafe { (self.platform.close)(self.native) };
     }
@@ -218,7 +223,14 @@ unsafe extern "C" fn record_inputs(module: Handle, token: usize, user: Handle) -
 }
 
 impl Owner {
-    fn create_chain(&mut self) -> i32 {
+    fn wsi(&self) -> &Wsi {
+        self.wsi.as_ref().unwrap()
+    }
+
+    fn create_chain(&mut self, info: &vk::SwapchainCreateInfoKHR<'_>) -> i32 {
+        let Some(wsi) = Wsi::load(&self.setup) else {
+            return MISSING_ENTRY_POINT;
+        };
         let mut support = ChainSupport::default();
         let prepared =
             unsafe { (self.platform.prepare_chain)(self.native, &mut support, &mut self.gpu) };
@@ -240,16 +252,17 @@ impl Owner {
             return NOT_SUPPORTED;
         }
         let usage = required | (support.usage & USAGE_TRANSFER_SRC);
-        let mut chain = 0;
-        let result = unsafe { (self.platform.create_chain)(self.native, usage, &mut chain) };
-        if result != OK || chain == 0 {
+        let Some(chain) = wsi.create(info, usage) else {
             return INIT_FAILED;
-        }
-        // From here on a refused enumeration or capture registration rolls back the chain.
-        self.chain = chain;
-        let enumerated = unsafe {
-            (self.platform.images)(self.native, chain, &mut self.backbuffers, ptr::null_mut())
         };
+        // From here on a refused enumeration or capture registration rolls back the chain.
+        self.wsi = Some(wsi);
+        self.chain = chain;
+        let enumerated =
+            self.wsi
+                .as_ref()
+                .unwrap()
+                .images(chain, &mut self.backbuffers, ptr::null_mut());
         if enumerated != OK || self.backbuffers == 0 {
             return INIT_FAILED;
         }
@@ -357,7 +370,7 @@ impl Owner {
             }
             let slot = &mut self.slots[index];
             if rsf_core_fgvk_can_prepare(&slot.frame) == 0
-                || !slot.inputs.retire(self.platform, self.native)
+                || !slot.inputs.retire(self.wsi.as_ref().unwrap())
             {
                 return NOT_READY;
             }
@@ -480,7 +493,7 @@ impl Owner {
     }
 
     fn present(&mut self, info: *const c_void, source: PresentSource) -> i32 {
-        if info.is_null() || unsafe { (self.platform.valid_present)(self.chain, info) } == 0 {
+        if !unsafe { matches_present(self.chain, info) } {
             return WSI_ERROR;
         }
         let id = source.frame(self.timeline.last_prepared.frame_id);
@@ -513,7 +526,7 @@ impl Owner {
         }
         // The SDK proxy may wait on its presenter. The actual WSI calls take
         // the broker inside the proxy, without an outer host queue lock.
-        let result = unsafe { (self.platform.present)(self.native, info) };
+        let result = self.wsi().present(info);
         let accepted = matches!(result, OK | SUBOPTIMAL);
         if active && accepted {
             let slot = &mut self.slots[index];
@@ -588,7 +601,7 @@ impl Owner {
         let idle = unsafe {
             let user = self.setup.queue_user;
             (self.setup.lock_queues.unwrap())(user);
-            let result = (self.platform.idle)(self.native);
+            let result = self.wsi().idle();
             (self.setup.unlock_queues.unwrap())(user);
             result
         };
@@ -602,7 +615,7 @@ impl Owner {
             if matches!(slot.inputs, Inputs::Unknown) {
                 slot.inputs = Inputs::Retired;
             }
-            if !slot.inputs.retire(self.platform, self.native) {
+            if !slot.inputs.retire(self.wsi.as_ref().unwrap()) {
                 return NOT_READY;
             }
         }
@@ -618,6 +631,34 @@ impl Owner {
 
 fn slot_index(frame: u64) -> usize {
     (frame % SLOTS as u64) as usize
+}
+
+unsafe fn valid_swapchain(info: *const c_void, width: u32, height: u32) -> bool {
+    // A short record with the wrong structure tag can be rejected without
+    // reading the rest of VkSwapchainCreateInfoKHR.
+    if unsafe { info.cast::<vk::StructureType>().read() }
+        != vk::StructureType::SWAPCHAIN_CREATE_INFO_KHR
+    {
+        return false;
+    }
+    let info = unsafe { &*info.cast::<vk::SwapchainCreateInfoKHR<'_>>() };
+    !info.surface.is_null()
+        && info.image_extent.width == width
+        && info.image_extent.height == height
+        && matches!(
+            info.image_format,
+            vk::Format::R8G8B8A8_UNORM | vk::Format::B8G8R8A8_UNORM
+        )
+        && info.image_array_layers == 1
+}
+
+unsafe fn matches_present(chain: u64, info: *const c_void) -> bool {
+    let Some(present) = (unsafe { info.cast::<vk::PresentInfoKHR<'_>>().as_ref() }) else {
+        return false;
+    };
+    present.swapchain_count == 1
+        && !present.p_swapchains.is_null()
+        && unsafe { present.p_swapchains.read() }.as_raw() == chain
 }
 
 #[unsafe(no_mangle)]
@@ -665,16 +706,21 @@ unsafe extern "C" fn rsf_core_dlgvk_create(
     let Some(gpu_platform) = (unsafe { platform.gpu.as_ref() }) else {
         return NOT_COMPILED;
     };
-    let mut description = Swapchain::default();
-    unsafe { (platform.describe)(setup.create_info, &mut description) };
-    if description.has_surface == 0
-        || [description.width, description.height]
-            != [graphics.output_width, graphics.output_height]
-        || !matches!(description.format, RGBA8 | BGRA8)
-        || description.layers != 1
-    {
+    if !unsafe {
+        valid_swapchain(
+            setup.create_info,
+            graphics.output_width,
+            graphics.output_height,
+        )
+    } {
         return INVALID;
     }
+    let create_info = unsafe {
+        setup
+            .create_info
+            .cast::<vk::SwapchainCreateInfoKHR<'_>>()
+            .read()
+    };
     let Some(claim) = Claim::acquire(&OCCUPIED) else {
         return NOT_READY;
     };
@@ -692,6 +738,7 @@ unsafe extern "C" fn rsf_core_dlgvk_create(
         gpu_platform,
         native,
         gpu: ptr::null_mut(),
+        wsi: None,
         chain: 0,
         backbuffers: 0,
         // The C host keeps the allocator and callback contexts alive for this owner.
@@ -727,7 +774,7 @@ unsafe extern "C" fn rsf_core_dlgvk_create(
     {
         return NOT_SUPPORTED;
     }
-    let result = owner.create_chain();
+    let result = owner.create_chain(&create_info);
     if result != OK {
         return result;
     }
@@ -749,7 +796,7 @@ unsafe extern "C" fn rsf_core_dlgvk_images(
     match unsafe { owner.as_ref() } {
         Some(owner) if !count.is_null() => unsafe {
             bounded_swapchain_images(count, images, |count, images| {
-                (owner.platform.images)(owner.native, owner.chain, count, images)
+                owner.wsi().images(owner.chain, count, images)
             })
         },
         _ => WSI_ERROR,
@@ -770,7 +817,9 @@ unsafe extern "C" fn rsf_core_dlgvk_acquire(
     if index.is_null() {
         return WSI_ERROR;
     }
-    unsafe { (owner.platform.acquire)(owner.native, owner.chain, timeout, semaphore, fence, index) }
+    owner
+        .wsi()
+        .acquire(owner.chain, timeout, semaphore, fence, index)
 }
 
 #[unsafe(no_mangle)]

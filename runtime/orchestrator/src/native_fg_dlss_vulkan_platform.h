@@ -21,10 +21,6 @@ struct rsf_dlgvk_sdk_call {
     uint32_t backbuffers;
 };
 
-struct rsf_dlgvk_swapchain {
-    uint32_t width, height, format, layers, has_surface;
-};
-
 struct rsf_dlgvk_chain_support {
     uint32_t usage, capture_enabled;
 };
@@ -34,17 +30,10 @@ struct rsf_vkfg_image_copy;
 
 struct rsf_dlgvk_platform {
     const rsf_vkfg_platform* gpu;
-    void (*describe)(const void*, rsf_dlgvk_swapchain*);
     rsf_backend_result (*open)(const rsf_fgvk_setup*, void**);
     void (*close)(void*);
     rsf_backend_result (*prepare_chain)(void*, rsf_dlgvk_chain_support*, void** gpu);
-    int32_t (*create_chain)(void*, uint32_t usage, uint64_t*);
-    void (*destroy_chain)(void*, uint64_t);
     rsf_backend_result (*start_capture)(void*);
-    int32_t (*images)(void*, uint64_t chain, uint32_t*, uint64_t*);
-    int32_t (*acquire)(void*, uint64_t chain, uint64_t, uint64_t, uint64_t, uint32_t*);
-    uint32_t (*valid_present)(uint64_t chain, const void*);
-    int32_t (*present)(void*, const void*);
     rsf_backend_result (*invoke)(const rsf_slvk_call*);
     rsf_slvk_callback initialize, configure, sample, constants, tag, release;
     void (*barrier)(void*, void*, const rsf_vkfg_barrier*);
@@ -55,8 +44,6 @@ struct rsf_dlgvk_platform {
     void (*flush)(void*);
     rsf_backend_result (*detach_capture)(void*);
     uint64_t (*timeout_epoch)();
-    int32_t (*idle)(void*);
-    int32_t (*wait_inputs)(void*, uint64_t, uint64_t);
 };
 
 extern "C" {

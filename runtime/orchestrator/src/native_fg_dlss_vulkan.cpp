@@ -34,16 +34,9 @@ void on_error(const sl::APIError& error) { rsf_core_dlgvk_report_api_error(stati
 struct Native {
     rsf_fgvk_setup setup{};
     VkSwapchainCreateInfoKHR info{};
-    PFN_vkCreateSwapchainKHR create_chain = nullptr;
-    PFN_vkDestroySwapchainKHR destroy_chain = nullptr;
-    PFN_vkGetSwapchainImagesKHR images = nullptr;
-    PFN_vkAcquireNextImageKHR acquire = nullptr;
-    PFN_vkQueuePresentKHR present = nullptr;
     rsf::vkfg::Device gpu;
     PFN_vkCmdPipelineBarrier barrier = nullptr;
     PFN_vkCmdCopyImage copy = nullptr;
-    PFN_vkDeviceWaitIdle idle = nullptr;
-    PFN_vkWaitSemaphores wait_semaphores = nullptr;
     PFun_slSetConstants* constants = nullptr;
     PFun_slSetTagForFrame* tags = nullptr;
     PFun_slFreeResources* release = nullptr;
@@ -52,13 +45,12 @@ struct Native {
     rsf::FrameCaptureVk capture;
     rsf::DlssPresentCapture present_capture;
 
-    VkDevice device() const { return static_cast<VkDevice>(setup.graphics.device); }
 };
 
 static_assert(sizeof(rsf_dlgvk_sample) == 40);
 static_assert(sizeof(rsf_dlgvk_sdk_call) == 96);
-static_assert(sizeof(rsf_dlgvk_swapchain) == 20 && sizeof(rsf_dlgvk_chain_support) == 8);
-static_assert(sizeof(rsf_dlgvk_platform) == 232);
+static_assert(sizeof(rsf_dlgvk_chain_support) == 8);
+static_assert(sizeof(rsf_dlgvk_platform) == 160);
 static_assert(VK_IMAGE_USAGE_TRANSFER_SRC_BIT == 1 && VK_IMAGE_USAGE_TRANSFER_DST_BIT == 2 &&
     VK_FORMAT_R8G8B8A8_UNORM == 37 && VK_FORMAT_B8G8R8A8_UNORM == 44);
 
@@ -184,16 +176,6 @@ rsf_backend_result release(void*, uintptr_t, void* user) {
     return sdk_result(call, static_cast<Native*>(call.native)->release(sl::kFeatureDLSS_G, viewport));
 }
 
-void describe(const void* create_info, rsf_dlgvk_swapchain* out) noexcept {
-    if (*static_cast<const VkStructureType*>(create_info) != VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR) {
-        *out = {};
-        return;
-    }
-    const auto& info = *static_cast<const VkSwapchainCreateInfoKHR*>(create_info);
-    *out = {info.imageExtent.width, info.imageExtent.height, static_cast<uint32_t>(info.imageFormat),
-        info.imageArrayLayers, info.surface ? 1u : 0u};
-}
-
 rsf_backend_result open(const rsf_fgvk_setup* setup, void** out) noexcept try {
     auto self = std::make_unique<Native>();
     self->setup = *setup;
@@ -206,10 +188,7 @@ rsf_backend_result prepare_chain(void* user, rsf_dlgvk_chain_support* support, v
     auto* self = static_cast<Native*>(user);
     const auto& graphics = self->setup.graphics;
 #define RSF_LOAD(member, function) self->member = reinterpret_cast<PFN_##function>(graphics.device_proc(graphics.device, #function)); if (!self->member) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT
-    RSF_LOAD(create_chain, vkCreateSwapchainKHR); RSF_LOAD(destroy_chain, vkDestroySwapchainKHR);
-    RSF_LOAD(images, vkGetSwapchainImagesKHR); RSF_LOAD(acquire, vkAcquireNextImageKHR); RSF_LOAD(present, vkQueuePresentKHR);
     RSF_LOAD(barrier, vkCmdPipelineBarrier); RSF_LOAD(copy, vkCmdCopyImage);
-    RSF_LOAD(idle, vkDeviceWaitIdle); RSF_LOAD(wait_semaphores, vkWaitSemaphores);
 #undef RSF_LOAD
     auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(graphics.instance_proc(graphics.instance, "vkGetPhysicalDeviceMemoryProperties"));
     if (!properties) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
@@ -228,51 +207,15 @@ rsf_backend_result prepare_chain(void* user, rsf_dlgvk_chain_support* support, v
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
-int32_t create_chain(void* user, uint32_t usage, uint64_t* chain) noexcept {
-    auto& self = *static_cast<Native*>(user);
-    auto info = self.info;
-    info.imageUsage |= usage;
-    // Streamline's LL2 create/destroy hooks acquire their own swapchain mutex.
-    // The outer WSI broker is only for image/acquire/present operations.
-    VkSwapchainKHR created_chain{};
-    const auto result = self.create_chain(self.device(), &info,
-        static_cast<const VkAllocationCallbacks*>(self.setup.allocator), &created_chain);
-    if (result == VK_SUCCESS) *chain = reinterpret_cast<uint64_t>(created_chain);
-    return result;
-}
-
 constexpr rsf_dlgvk_platform platform{
-    &rsf::vkfg::platform, describe, open,
+    &rsf::vkfg::platform, open,
     [](void* user) { delete static_cast<Native*>(user); },
     prepare_chain,
-    create_chain,
-    [](void* user, uint64_t chain) {
-        auto& self = *static_cast<Native*>(user);
-        self.destroy_chain(self.device(), reinterpret_cast<VkSwapchainKHR>(chain),
-            static_cast<const VkAllocationCallbacks*>(self.setup.allocator));
-    },
     [](void* user) noexcept -> rsf_backend_result {
         try {
             auto& self = *static_cast<Native*>(user);
             return self.present_capture.initialize(self.setup);
         } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
-    },
-    [](void* user, uint64_t chain, uint32_t* count, uint64_t* images) -> int32_t {
-        auto& self = *static_cast<Native*>(user);
-        return self.images(self.device(), reinterpret_cast<VkSwapchainKHR>(chain), count, reinterpret_cast<VkImage*>(images));
-    },
-    [](void* user, uint64_t chain, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t* index) -> int32_t {
-        auto& self = *static_cast<Native*>(user);
-        return self.acquire(self.device(), reinterpret_cast<VkSwapchainKHR>(chain), timeout,
-            reinterpret_cast<VkSemaphore>(semaphore), reinterpret_cast<VkFence>(fence), index);
-    },
-    [](uint64_t chain, const void* value) -> uint32_t {
-        const auto& info = *static_cast<const VkPresentInfoKHR*>(value);
-        return info.swapchainCount == 1 && info.pSwapchains && info.pSwapchains[0] == reinterpret_cast<VkSwapchainKHR>(chain);
-    },
-    [](void* user, const void* value) -> int32_t {
-        auto& self = *static_cast<Native*>(user);
-        return self.present(static_cast<VkQueue>(self.setup.queues[0]), static_cast<const VkPresentInfoKHR*>(value));
     },
     rsf_slvk_invoke, initialize, configure, sample, constants, tag, release,
     [](void* user, void* commands, const rsf_vkfg_barrier* plan) {
@@ -308,17 +251,6 @@ constexpr rsf_dlgvk_platform platform{
         catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
     },
     VulkanStorySlWorkerTimeoutEpoch,
-    [](void* user) -> int32_t {
-        auto& self = *static_cast<Native*>(user);
-        return self.idle(self.device());
-    },
-    [](void* user, uint64_t semaphore, uint64_t value) -> int32_t {
-        auto& self = *static_cast<Native*>(user);
-        const auto handle = reinterpret_cast<VkSemaphore>(semaphore);
-        VkSemaphoreWaitInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
-        info.semaphoreCount = 1; info.pSemaphores = &handle; info.pValues = &value;
-        return self.wait_semaphores(self.device(), &info, 15000000000ull);
-    },
 };
 }
 #endif

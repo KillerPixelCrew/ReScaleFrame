@@ -55,18 +55,6 @@ static GPU: Gpu = Gpu {
     submit_fence: Some(submit_fence),
 };
 
-unsafe extern "C" fn describe(_: *const c_void, out: *mut Swapchain) {
-    unsafe {
-        out.write(Swapchain {
-            width: 1280,
-            height: 720,
-            format: BGRA8,
-            layers: 1,
-            has_surface: 1,
-        })
-    };
-}
-
 unsafe extern "C" fn open(setup: *const Setup, out: *mut Handle) -> i32 {
     unsafe { out.write((*setup).queue_user) };
     OK
@@ -91,34 +79,62 @@ unsafe extern "C" fn prepare_chain(
     OK
 }
 
-unsafe extern "C" fn create_chain(_: Handle, _: u32, chain: *mut u64) -> i32 {
-    unsafe { chain.write(3) };
-    OK
+unsafe extern "system" fn create_chain(
+    _: vk::Device,
+    info: *const vk::SwapchainCreateInfoKHR<'_>,
+    _: *const vk::AllocationCallbacks<'_>,
+    chain: *mut vk::SwapchainKHR,
+) -> vk::Result {
+    assert!(
+        unsafe { &*info }
+            .image_usage
+            .contains(vk::ImageUsageFlags::TRANSFER_DST)
+    );
+    unsafe { chain.write(vk::SwapchainKHR::from_raw(3)) };
+    vk::Result::SUCCESS
 }
 
-unsafe extern "C" fn destroy_chain(user: Handle, _: u64) {
-    unsafe { harness(user) }.events.push("destroy chain");
+unsafe extern "system" fn destroy_chain(
+    device: vk::Device,
+    chain: vk::SwapchainKHR,
+    _: *const vk::AllocationCallbacks<'_>,
+) {
+    assert_eq!(chain.as_raw(), 3);
+    unsafe { harness(device.as_raw() as Handle) }
+        .events
+        .push("destroy chain");
 }
 
 unsafe extern "C" fn start_capture(_: Handle) -> i32 {
     OK
 }
 
-unsafe extern "C" fn images(_: Handle, _: u64, count: *mut u32, _: *mut u64) -> i32 {
+unsafe extern "system" fn images(
+    _: vk::Device,
+    _: vk::SwapchainKHR,
+    count: *mut u32,
+    _: *mut vk::Image,
+) -> vk::Result {
     unsafe { count.write(3) };
-    OK
+    vk::Result::SUCCESS
 }
 
-unsafe extern "C" fn acquire(_: Handle, _: u64, _: u64, _: u64, _: u64, _: *mut u32) -> i32 {
-    WSI_ERROR
+unsafe extern "system" fn acquire(
+    _: vk::Device,
+    _: vk::SwapchainKHR,
+    _: u64,
+    _: vk::Semaphore,
+    _: vk::Fence,
+    _: *mut u32,
+) -> vk::Result {
+    vk::Result::ERROR_INITIALIZATION_FAILED
 }
 
-unsafe extern "C" fn valid_present(chain: u64, _: *const c_void) -> u32 {
-    u32::from(chain == 3)
-}
-
-unsafe extern "C" fn present(user: Handle, _: *const c_void) -> i32 {
-    unsafe { harness(user) }.present_result
+unsafe extern "system" fn present(
+    queue: vk::Queue,
+    _: *const vk::PresentInfoKHR<'_>,
+) -> vk::Result {
+    vk::Result::from_raw(unsafe { harness(queue.as_raw() as Handle) }.present_result)
 }
 
 unsafe extern "C" fn worker(call: *const rsf_slvk_call) -> i32 {
@@ -185,19 +201,50 @@ unsafe extern "C" fn detach(user: Handle) -> i32 {
 unsafe extern "C" fn epoch() -> u64 {
     0
 }
-unsafe extern "C" fn idle(user: Handle) -> i32 {
-    unsafe { harness(user) }.events.push("idle");
-    OK
+unsafe extern "system" fn idle(device: vk::Device) -> vk::Result {
+    unsafe { harness(device.as_raw() as Handle) }
+        .events
+        .push("idle");
+    vk::Result::SUCCESS
 }
-unsafe extern "C" fn wait_inputs(user: Handle, semaphore: u64, value: u64) -> i32 {
-    let test = unsafe { harness(user) };
+unsafe extern "system" fn wait_inputs(
+    device: vk::Device,
+    info: *const vk::SemaphoreWaitInfo<'_>,
+    timeout: u64,
+) -> vk::Result {
+    let test = unsafe { harness(device.as_raw() as Handle) };
+    let info = unsafe { &*info };
+    assert_eq!(info.semaphore_count, 1);
+    assert_eq!(timeout, 15_000_000_000);
+    let semaphore = unsafe { info.p_semaphores.read() }.as_raw();
+    let value = unsafe { info.p_values.read() };
     assert_eq!((semaphore, value), (7, test.sdk_value));
     test.events.push("wait SDK");
-    OK
+    vk::Result::SUCCESS
 }
 unsafe extern "C" fn lock(_: Handle) {}
-unsafe extern "C" fn proc(_: Handle, _: *const std::ffi::c_char) -> Option<unsafe extern "C" fn()> {
-    None
+unsafe extern "C" fn proc(
+    _: Handle,
+    name: *const std::ffi::c_char,
+) -> Option<unsafe extern "C" fn()> {
+    let name = unsafe { std::ffi::CStr::from_ptr(name) };
+    macro_rules! entry {
+        ($ty:ident, $call:ident) => {
+            Some(unsafe { std::mem::transmute::<vk::$ty, unsafe extern "C" fn()>($call) })
+        };
+    }
+    match name {
+        name if name == c"vkCreateSwapchainKHR" => entry!(PFN_vkCreateSwapchainKHR, create_chain),
+        name if name == c"vkDestroySwapchainKHR" => {
+            entry!(PFN_vkDestroySwapchainKHR, destroy_chain)
+        }
+        name if name == c"vkGetSwapchainImagesKHR" => entry!(PFN_vkGetSwapchainImagesKHR, images),
+        name if name == c"vkAcquireNextImageKHR" => entry!(PFN_vkAcquireNextImageKHR, acquire),
+        name if name == c"vkQueuePresentKHR" => entry!(PFN_vkQueuePresentKHR, present),
+        name if name == c"vkDeviceWaitIdle" => entry!(PFN_vkDeviceWaitIdle, idle),
+        name if name == c"vkWaitSemaphores" => entry!(PFN_vkWaitSemaphores, wait_inputs),
+        _ => None,
+    }
 }
 unsafe extern "C" fn queue_submit(_: Handle, _: u32, _: *const c_void, _: u64) -> i32 {
     OK
@@ -205,17 +252,10 @@ unsafe extern "C" fn queue_submit(_: Handle, _: u32, _: *const c_void, _: u64) -
 
 const PLATFORM: Platform = Platform {
     gpu: &GPU,
-    describe,
     open,
     close,
     prepare_chain,
-    create_chain,
-    destroy_chain,
     start_capture,
-    images,
-    acquire,
-    valid_present,
-    present,
     invoke: worker,
     initialize: Some(sdk_initialize),
     configure: Some(sdk_configure),
@@ -231,8 +271,6 @@ const PLATFORM: Platform = Platform {
     flush,
     detach_capture: detach,
     timeout_epoch: epoch,
-    idle,
-    wait_inputs,
 };
 
 fn create(test: &mut Harness) -> *mut Owner {
@@ -244,13 +282,21 @@ fn create(test: &mut Harness) -> *mut Owner {
     graphics.abi_version = RSF_SRVK_ABI_VERSION;
     graphics.instance = ptr::without_provenance_mut(1);
     graphics.physical_device = graphics.instance;
-    graphics.device = graphics.instance;
+    graphics.device = ptr::from_mut(test).cast();
     graphics.instance_proc = Some(proc);
     graphics.device_proc = Some(proc);
     graphics.output_width = 1280;
     graphics.output_height = 720;
     setup.queues[0] = graphics.device;
-    setup.create_info = graphics.device;
+    let create_info = vk::SwapchainCreateInfoKHR::default()
+        .surface(vk::SurfaceKHR::from_raw(1))
+        .image_extent(vk::Extent2D {
+            width: 1280,
+            height: 720,
+        })
+        .image_format(vk::Format::B8G8R8A8_UNORM)
+        .image_array_layers(1);
+    setup.create_info = ptr::from_ref(&create_info).cast();
     setup.queue_user = ptr::from_mut(test).cast();
     setup.graphics_submit = Some(queue_submit);
     setup.lock_queues = Some(lock);
@@ -293,7 +339,9 @@ fn submission_proof_and_refused_teardown_keep_the_owner_live() {
     let owner = create(&mut test);
     let commands = ptr::without_provenance_mut(100);
     let foreign = ptr::without_provenance_mut(101);
-    let info = ptr::without_provenance(102);
+    let chains = [vk::SwapchainKHR::from_raw(3)];
+    let present_info = vk::PresentInfoKHR::default().swapchains(&chains);
+    let info = ptr::from_ref(&present_info).cast();
     recorded(unsafe { &mut *owner }, 1, commands);
     unsafe { rsf_core_dlgvk_submitted(owner, &foreign, 1) };
     assert_eq!(unsafe { rsf_core_dlgvk_destroy(owner) }, NOT_READY);
