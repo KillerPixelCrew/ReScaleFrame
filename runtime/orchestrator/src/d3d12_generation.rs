@@ -24,8 +24,9 @@ pub(crate) mod fsr_abi;
 
 use disabled::DISABLED_PROVIDER;
 mod fsr;
-pub(crate) use fsr::rsf_generation_fsr4_supported;
+pub(crate) use fsr::{rsf_generation_fsr, rsf_generation_fsr4_supported};
 mod xess;
+pub(crate) use xess::rsf_generation_xess;
 
 pub(crate) fn chain_description(
     desc: &crate::sys::rsf_fg_swapchain_desc,

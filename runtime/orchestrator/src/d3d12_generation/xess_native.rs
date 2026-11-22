@@ -383,6 +383,6 @@ unsafe extern "C" fn create(setup: *const Setup, out: *mut Raw, chain: *mut Raw)
 
 // The xess-fg feature is CMake's XeSS-FG header detection (runtime/orchestrator/CMakeLists.txt).
 #[unsafe(no_mangle)]
-extern "C" fn rsf_generation_xess() -> *const Provider {
+pub(crate) extern "C" fn rsf_generation_xess() -> *const Provider {
     rsf_core_xeg12_native_provider(u32::from(cfg!(feature = "xess-fg")))
 }

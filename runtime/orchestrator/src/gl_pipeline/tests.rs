@@ -439,10 +439,10 @@ pub(super) unsafe extern "C" fn cpu_read(
 pub(super) unsafe extern "C" fn latency_completed(_: u64) -> c_int {
     0
 }
-pub(super) unsafe extern "C" fn latency_end_session(_: u64) {
+pub(super) extern "C" fn latency_end_session(_: u64) {
     event("latency end".into());
 }
-pub(super) unsafe extern "C" fn dump_cancel(_: u64) {
+pub(super) extern "C" fn dump_cancel(_: u64) {
     event("dump cancel".into());
 }
 

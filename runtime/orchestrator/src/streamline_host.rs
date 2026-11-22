@@ -23,9 +23,17 @@ use windows_sys::Win32::Foundation::FARPROC;
 
 mod generation;
 mod native;
-pub(crate) use native::{common_set, drain, rsf_streamline_host_token, shared};
+pub(crate) use native::{
+    common_set, drain, rsf_generation_dlss, rsf_streamline_host_graphics, rsf_streamline_host_token,
+    shared,
+};
 #[cfg(not(test))]
-pub(crate) use native::rsf_streamline_host_abort;
+pub(crate) use native::{
+    rsf_streamline_host_abort, rsf_streamline_host_acquire, rsf_streamline_host_generation_load,
+    rsf_streamline_host_input, rsf_streamline_host_latency_status,
+    rsf_streamline_host_marker, rsf_streamline_host_present_common, rsf_streamline_host_reflex,
+    rsf_streamline_host_sleep,
+};
 mod startup;
 #[cfg(test)]
 mod tests;

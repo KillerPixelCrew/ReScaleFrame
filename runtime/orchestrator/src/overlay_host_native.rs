@@ -213,7 +213,7 @@ pub(crate) unsafe extern "C" fn rsf_overlay_host_start(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_overlay_host_start_device(
+pub(crate) unsafe extern "C" fn rsf_overlay_host_start_device(
     device: Handle,
     window: Handle,
     log: Log,
@@ -239,7 +239,7 @@ unsafe extern "C" fn rsf_overlay_host_draw_target(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_overlay_host_admit_target(
+pub(crate) unsafe extern "C" fn rsf_overlay_host_admit_target(
     show_hud: u32,
     visible: *mut u32,
     hint: *mut f32,
@@ -259,7 +259,7 @@ unsafe extern "C" fn rsf_overlay_host_admit_target(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_overlay_host_draw_admitted_target(
+pub(crate) unsafe extern "C" fn rsf_overlay_host_draw_admitted_target(
     context: Handle,
     target: Handle,
     width: u32,
@@ -328,6 +328,6 @@ pub(crate) extern "C" fn rsf_overlay_host_stop() {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_overlay_host_stop_device(device: Handle) {
+pub(crate) extern "C" fn rsf_overlay_host_stop_device(device: Handle) {
     rsf_core_overlay_host_stop_device(&PLATFORM, device);
 }

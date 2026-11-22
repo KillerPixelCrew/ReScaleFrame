@@ -28,11 +28,12 @@ use crate::sys::{
 
 use crate::d3d12_generation::rsf_generation_fsr4_supported;
 
-// The SEH-guarded native calls in d3d11_present_bridge.c, and the Streamline host's graphics.
+use crate::streamline_host::rsf_streamline_host_graphics;
+
+// The SEH-guarded native calls in d3d11_present_bridge.c.
 unsafe extern "C" {
     fn rsf_d3d11p_original_create() -> Option<GuardedCreate>;
     fn rsf_d3d11p_unwrap_guarded(host: Raw, proxy: Raw) -> Raw;
-    fn rsf_streamline_host_graphics(host: Raw, graphics: *mut rsf_streamline_graphics) -> i32;
 }
 
 #[derive(Default)]
@@ -299,7 +300,7 @@ pub(super) unsafe extern "C" fn resolve_graphics(facade: Raw) -> i32 {
     let s = unsafe { state_mut(facade) };
     let adapter = s.adapter.take();
     if !s.host.is_null() {
-        return if unsafe { rsf_streamline_host_graphics(s.host, &mut s.graphics) } == 0 {
+        return if unsafe { rsf_streamline_host_graphics(s.host.cast(), &mut s.graphics) } == 0 {
             S_OK
         } else {
             E_FAIL

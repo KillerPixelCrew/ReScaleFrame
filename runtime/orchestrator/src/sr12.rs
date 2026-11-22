@@ -14,7 +14,7 @@ use crate::sr_session::checked;
 use crate::sync::lock;
 use crate::sys::*;
 use crate::sys::{RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_NONE};
-use crate::sys::{rsf_dlss_setup, rsf_sr12_setup as Setup};
+use crate::sys::rsf_sr12_setup as Setup;
 use rsf_game_sys::backend_result::{
     ABI_MISMATCH, FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, NOT_READY, OK, STALE_RESOURCES,
 };
@@ -243,8 +243,8 @@ impl Drop for Native {
         unsafe {
             match self.vendor {
                 Vendor::None => {}
-                Vendor::Dlss(context) => native::dlss_destroy(context.as_ptr()),
-                Vendor::Session(session) => native::session_destroy(session.as_ptr()),
+                Vendor::Dlss(context) => native::dlss_destroy(context.as_ptr().cast()),
+                Vendor::Session(session) => native::session_destroy(session.as_ptr().cast()),
             }
             native::capture_destroy(self.capture);
             native::sharpen_destroy(self.sharpen.as_ptr());
@@ -356,14 +356,15 @@ unsafe fn open_vendor(
     if setup.backend == RSF_SR_DLSS {
         // DLSS reads its setup from the caller's own structure.
         let dlss = unsafe { ptr::addr_of!((*caller).dlss) };
-        let mut context = ptr::null_mut();
+        let mut context: Handle = ptr::null_mut();
+        let out = ptr::from_mut(&mut context).cast();
         let mut result = unsafe {
             if abi2 && !setup.dlss_registration.is_null() {
-                native::dlss_create_registered(device, dlss, setup.dlss_registration, &mut context)
+                native::dlss_create_registered(device, dlss, setup.dlss_registration.cast(), out)
             } else if !setup.streamline_host.is_null() {
-                native::dlss_create_shared(device, dlss, setup.streamline_host, &mut context)
+                native::dlss_create_shared(device, dlss, setup.streamline_host, out)
             } else {
-                native::dlss_create(device, dlss, &mut context)
+                native::dlss_create(device, dlss, out)
             }
         };
         let vendor = NonNull::new(context).map_or(Vendor::None, Vendor::Dlss);
@@ -371,7 +372,7 @@ unsafe fn open_vendor(
         if result == OK {
             result = unsafe {
                 native::dlss_plan(
-                    context,
+                    context.cast(),
                     setup.output_width,
                     setup.output_height,
                     setup.quality,
@@ -381,7 +382,7 @@ unsafe fn open_vendor(
             };
         }
         if result == OK {
-            unsafe { native::dlss_set_sdr(context, setup.input_sdr) };
+            unsafe { native::dlss_set_sdr(context.cast(), setup.input_sdr) };
         }
         return (vendor, result, width, height);
     }
@@ -405,17 +406,18 @@ unsafe fn open_vendor(
     alternate.fsr3_directory_utf8 = setup.fsr3_directory_utf8;
     alternate.fsr4_directory_utf8 = setup.fsr4_directory_utf8;
     alternate.xess_directory_utf8 = setup.xess_directory_utf8;
-    let mut session = ptr::null_mut();
-    let mut result = unsafe { native::session_create(&alternate, &mut session) };
+    let mut session: Handle = ptr::null_mut();
+    let mut result =
+        unsafe { native::session_create(&alternate, ptr::from_mut(&mut session).cast()) };
     let vendor = NonNull::new(session).map_or(Vendor::None, Vendor::Session);
     if result == OK {
-        result = unsafe { native::session_select(session, setup.backend, setup.quality, 0) };
+        result = unsafe { native::session_select(session.cast(), setup.backend, setup.quality, 0) };
     }
     let (mut width, mut height) = (0, 0);
     if result == OK {
         let mut status: rsf_sr_session_status = unsafe { std::mem::zeroed() };
         status.struct_size = size_of::<rsf_sr_session_status>() as u32;
-        result = unsafe { native::session_get_status(session, &mut status) };
+        result = unsafe { native::session_get_status(session.cast_const().cast(), &mut status) };
         (width, height) = (status.render_width, status.render_height);
     }
     (vendor, result, width, height)
@@ -889,17 +891,17 @@ impl Sr12 {
             Vendor::None => OK,
             Vendor::Dlss(context) if !pass.native_frame_context.is_null() => unsafe {
                 native::dlss_evaluate_borrowed(
-                    context.as_ptr(),
+                    context.as_ptr().cast(),
                     list,
                     frame,
                     pass.native_frame_context,
                 )
             },
             Vendor::Dlss(context) => unsafe {
-                native::dlss_evaluate(context.as_ptr(), list, frame)
+                native::dlss_evaluate(context.as_ptr().cast(), list, frame)
             },
             Vendor::Session(session) => unsafe {
-                native::session_evaluate(session.as_ptr(), list, frame)
+                native::session_evaluate(session.as_ptr().cast(), list, frame)
             },
         }
     }
@@ -1407,7 +1409,7 @@ pub(super) unsafe extern "C" fn rsf_core_sr12_present(
     }
     match owner.native.vendor {
         Vendor::Dlss(context) => unsafe {
-            native::dlss_present(context.as_ptr(), swapchain, sync_interval, flags, begin)
+            native::dlss_present(context.as_ptr().cast(), swapchain, sync_interval, flags, begin)
         },
         _ => OK,
     }

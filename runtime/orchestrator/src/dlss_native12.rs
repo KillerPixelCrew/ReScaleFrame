@@ -349,7 +349,7 @@ fn independent_viewports_do_not_alias_or_wrap_to_reserved_ids() {
     assert_eq!(reserve_viewport(&next), None);
 }
 
-struct Context {
+pub(crate) struct Context {
     registration: Arc<DeviceRegistration>,
     quality: AtomicU32,
     preset: u32,

@@ -4,6 +4,7 @@
 // ownership, ordering, history and handoff policy only.
 use super::*;
 use crate::com_ref::test::{Fake as ComHeader, release};
+use crate::sys::rsf_dlss_setup;
 use std::cell::{Cell, RefCell};
 
 // Read only through the COM calls in com_ref.cpp.
@@ -202,7 +203,7 @@ pub(super) unsafe extern "C" fn session_select(
     OK
 }
 pub(super) unsafe extern "C" fn session_get_status(
-    _: Handle,
+    _: *const c_void,
     status: *mut rsf_sr_session_status,
 ) -> i32 {
     let (width, height) = with(|world| world.plan);

@@ -39,7 +39,7 @@ extern "C" fn rsf_input_dump_request() {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_input_dump_cancel(session: u64) {
+pub(crate) extern "C" fn rsf_input_dump_cancel(session: u64) {
     owner(|owner| {
         if owner.capture.as_ref().is_some_and(|capture| {
             session == 0 || capture.session() == 0 || capture.session() == session
@@ -276,7 +276,7 @@ extern "C" fn rsf_input_dump_gpu_ready(_: u64, _: *const c_char, _: u32, _: *mut
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_input_dump_texture_record(
+pub(crate) unsafe extern "C" fn rsf_input_dump_texture_record(
     context: *mut c_void,
     input: *const rsf_frame_record,
     name: *const c_char,
@@ -366,7 +366,7 @@ pub(crate) unsafe extern "C" fn rsf_input_dump_named_texture(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_input_dump_pass_metadata(input: *const rsf_game_render_pass) {
+pub(crate) unsafe extern "C" fn rsf_input_dump_pass_metadata(input: *const rsf_game_render_pass) {
     let Some(pass) = (unsafe { checked(input) }) else {
         return;
     };
@@ -426,7 +426,7 @@ pub(crate) unsafe extern "C" fn rsf_input_dump_result(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_input_dump_sr_frame(
+pub(crate) unsafe extern "C" fn rsf_input_dump_sr_frame(
     input: *const rsf_sr_frame,
     backend: u32,
     input_sdr: u32,

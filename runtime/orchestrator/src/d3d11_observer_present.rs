@@ -183,7 +183,7 @@ pub(super) unsafe fn present(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_observer_notify_application_present(event: *const Event) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_observer_notify_application_present(event: *const Event) -> i32 {
     unsafe {
         application_present(event, |chain| {
             update_presenter(chain, None, &rsf_observer11_present_platform)

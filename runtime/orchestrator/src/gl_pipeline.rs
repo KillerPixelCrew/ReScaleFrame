@@ -778,10 +778,8 @@ impl Pipeline {
             state.sharing = ptr::null_mut();
             state.device = ptr::null_mut();
             state.queue = ptr::null_mut();
-            unsafe {
-                native::latency_end_session(self.session);
-                native::dump_cancel(self.session);
-            }
+            native::latency_end_session(self.session);
+            native::dump_cancel(self.session);
         }
         self.shared.window.store(ptr::null_mut(), Ordering::Release);
         self.shared.detach_log();

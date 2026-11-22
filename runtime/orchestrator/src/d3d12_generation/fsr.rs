@@ -2,7 +2,7 @@
 use rsf_game_sys::backend_result::MISSING_ENTRY_POINT;
 #[path = "fsr_native.rs"]
 mod native;
-pub(crate) use native::rsf_generation_fsr4_supported;
+pub(crate) use native::{rsf_generation_fsr, rsf_generation_fsr4_supported};
 
 use super::*;
 use crate::com_ref;

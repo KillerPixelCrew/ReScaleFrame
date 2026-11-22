@@ -66,38 +66,20 @@ mod leaf {
     use super::{Event as rsf_observer_present_event, Raw};
     pub(super) use super::{device::verify_outer, dxgi::*, gpu::*, native::*};
     pub(super) use crate::shared_surface::rsf_shared_surface_native_platform as shared_surface_platform;
-    // The observer and Streamline host owners, linked from their own modules.
-    unsafe extern "C" {
-        fn rsf_observer_notify_application_present(event: *mut rsf_observer_present_event) -> i32;
-        fn rsf_streamline_host_reflex(host: Raw, mode: u32, limit: u32) -> i32;
-        #[link_name = "rsf_streamline_host_sleep"]
-        pub(super) fn host_sleep(host: Raw, id: u64) -> i32;
-        #[link_name = "rsf_streamline_host_marker"]
-        pub(super) fn host_marker(host: Raw, id: u64, marker: u32, controller: u32) -> i32;
-        #[link_name = "rsf_streamline_host_acquire"]
-        pub(super) fn host_acquire(host: Raw, id: u64) -> i32;
-        #[link_name = "rsf_streamline_host_input"]
-        pub(super) fn host_input(host: Raw, id: u64, kinds: u32, message: u32) -> i32;
-        #[link_name = "rsf_streamline_host_abort"]
-        pub(super) fn host_abort(host: Raw, id: u64) -> i32;
-        #[link_name = "rsf_streamline_host_generation_load"]
-        pub(super) fn host_generation_load(host: Raw, enabled: u32) -> i32;
-        #[link_name = "rsf_streamline_host_present_common"]
-        pub(super) fn host_present_common(
-            host: Raw,
-            chain: Raw,
-            sync: u32,
-            flags: u32,
-            begin: u32,
-        ) -> i32;
-    }
+    pub(super) use crate::streamline_host::{
+        rsf_streamline_host_abort as host_abort, rsf_streamline_host_acquire as host_acquire,
+        rsf_streamline_host_generation_load as host_generation_load,
+        rsf_streamline_host_input as host_input, rsf_streamline_host_marker as host_marker,
+        rsf_streamline_host_present_common as host_present_common,
+        rsf_streamline_host_sleep as host_sleep,
+    };
 
     pub(super) unsafe fn observer_present(event: *mut rsf_observer_present_event) {
-        unsafe { rsf_observer_notify_application_present(event) };
+        unsafe { crate::d3d11_observer_present::rsf_observer_notify_application_present(event) };
     }
 
     pub(super) unsafe fn host_reflex_off(host: Raw) -> i32 {
-        unsafe { rsf_streamline_host_reflex(host, super::RSF_REFLEX_OFF, 0) }
+        unsafe { crate::streamline_host::rsf_streamline_host_reflex(host.cast(), super::RSF_REFLEX_OFF, 0) }
     }
 }
 #[cfg(test)]
@@ -185,22 +167,17 @@ pub(crate) fn family(backend: u32) -> Option<u32> {
     }
 }
 
-unsafe extern "C" {
-    fn rsf_generation_dlss() -> *const Provider;
-    fn rsf_generation_fsr() -> *const Provider;
-    fn rsf_generation_xess() -> *const Provider;
-}
+use crate::d3d12_generation::{rsf_generation_fsr, rsf_generation_xess};
+use crate::streamline_host::rsf_generation_dlss;
 
 /// The SDK provider table of a family.
 #[cfg_attr(test, allow(dead_code))]
 unsafe fn provider_table(family: u32) -> *const Provider {
-    unsafe {
-        match family {
-            FAMILY_DLSS => rsf_generation_dlss(),
-            FAMILY_FIDELITYFX => rsf_generation_fsr(),
-            FAMILY_XESS => rsf_generation_xess(),
-            _ => ptr::null(),
-        }
+    match family {
+        FAMILY_DLSS => rsf_generation_dlss(),
+        FAMILY_FIDELITYFX => rsf_generation_fsr(),
+        FAMILY_XESS => rsf_generation_xess(),
+        _ => ptr::null(),
     }
 }
 
@@ -1116,7 +1093,7 @@ impl Owner {
         let host = self.host();
         if !host.is_null()
             && ACTIVE_BACKEND.load(Ordering::SeqCst) != DLSS
-            && unsafe { leaf::host_generation_load(host, 0) } != OK
+            && unsafe { leaf::host_generation_load(host.cast(), 0) } != OK
         {
             self.physical_creation
                 .store(PhysicalCreation::Pending as u8, Ordering::Release);
@@ -1644,7 +1621,7 @@ impl Owner {
         let host = self.host();
         if !host.is_null() {
             let _ = unsafe { leaf::host_reflex_off(host) };
-            result = unsafe { leaf::host_generation_load(host, u32::from(backend == DLSS)) };
+            result = unsafe { leaf::host_generation_load(host.cast(), u32::from(backend == DLSS)) };
         }
         if result == OK {
             result = self.create_physical(backend);
@@ -1653,7 +1630,7 @@ impl Owner {
         if result != OK {
             effective = previous;
             if !host.is_null() {
-                let _ = unsafe { leaf::host_generation_load(host, u32::from(previous == DLSS)) };
+                let _ = unsafe { leaf::host_generation_load(host.cast(), u32::from(previous == DLSS)) };
             }
             if self.create_physical(previous) != OK {
                 effective = 0;
@@ -1762,7 +1739,7 @@ impl Owner {
         }
         let host = self.host();
         let common = !host.is_null() && ACTIVE_BACKEND.load(Ordering::SeqCst) != DLSS;
-        if common && unsafe { leaf::host_present_common(host, chain, sync, flags, 1) } != OK {
+        if common && unsafe { leaf::host_present_common(host.cast(), chain, sync, flags, 1) } != OK {
             log("presentation bridge: shared Streamline common Present begin refused");
             return E_FAIL;
         }
@@ -1775,7 +1752,7 @@ impl Owner {
         self.receipt("vendor-present-enter", S_OK);
         let result = unsafe { leaf::physical_present(chain, sync, flags) };
         self.receipt("vendor-present-done", result);
-        if common && unsafe { leaf::host_present_common(host, chain, sync, flags, 0) } != OK {
+        if common && unsafe { leaf::host_present_common(host.cast(), chain, sync, flags, 0) } != OK {
             log("presentation bridge: shared Streamline common Present end refused");
         }
         if debug {
@@ -3178,7 +3155,7 @@ pub(crate) unsafe extern "C" fn rsf_d3d11_present_begin(id: u64, out: *mut u64) 
                 *out = generation();
             }
             if HOST_PACED.load(Ordering::SeqCst) {
-                return leaf::host_sleep(lease.host, id);
+                return leaf::host_sleep(lease.host.cast(), id);
             }
             match lease
                 .context()
@@ -3213,7 +3190,7 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_pace(
                 return INVALID_ARGUMENT;
             }
             match owner {
-                RSF_PACING_REFLEX if !lease.host.is_null() => leaf::host_sleep(lease.host, id),
+                RSF_PACING_REFLEX if !lease.host.is_null() => leaf::host_sleep(lease.host.cast(), id),
                 RSF_PACING_REFLEX => NOT_READY,
                 RSF_PACING_XELL => lease
                     .context()
@@ -3241,7 +3218,7 @@ pub(crate) unsafe extern "C" fn rsf_d3d11_present_marker(
             let host = if lease.host.is_null() {
                 OK
             } else {
-                leaf::host_marker(lease.host, id, marker, controller)
+                leaf::host_marker(lease.host.cast(), id, marker, controller)
             };
             if host != OK || HOST_PACED.load(Ordering::SeqCst) {
                 return host;
@@ -3264,7 +3241,7 @@ pub(crate) unsafe extern "C" fn rsf_d3d11_present_acquire(id: u64) -> i32 {
             if lease.host.is_null() {
                 OK
             } else {
-                leaf::host_acquire(lease.host, id)
+                leaf::host_acquire(lease.host.cast(), id)
             }
         })
     }
@@ -3282,7 +3259,7 @@ pub(crate) unsafe extern "C" fn rsf_d3d11_present_receipt(
             if expected != generation() || lease.host.is_null() {
                 NOT_READY
             } else {
-                leaf::host_input(lease.host, id, kinds, message)
+                leaf::host_input(lease.host.cast(), id, kinds, message)
             }
         })
     }
@@ -3295,7 +3272,7 @@ pub(crate) unsafe extern "C" fn rsf_d3d11_present_input(id: u64, kinds: u32, mes
             let result = if lease.host.is_null() {
                 OK
             } else {
-                leaf::host_input(lease.host, id, kinds, message)
+                leaf::host_input(lease.host.cast(), id, kinds, message)
             };
             if result != OK || HOST_PACED.load(Ordering::SeqCst) || kinds == 0 {
                 return result;
@@ -3320,7 +3297,7 @@ pub(crate) unsafe extern "C" fn rsf_d3d11_present_abort(id: u64) -> i32 {
             let host = if lease.host.is_null() {
                 OK
             } else {
-                leaf::host_abort(lease.host, id)
+                leaf::host_abort(lease.host.cast(), id)
             };
             if HOST_PACED.load(Ordering::SeqCst) {
                 return host;

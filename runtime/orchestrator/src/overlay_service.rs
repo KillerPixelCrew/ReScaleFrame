@@ -39,9 +39,9 @@ use windows_sys::Win32::{
     UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId},
 };
 
+use crate::d3d11_present::rsf_d3d11_present_provider;
+
 unsafe extern "C" {
-    // The native presentation bridge supplies its SDK-backed provider table.
-    fn rsf_d3d11_present_provider() -> *const crate::sys::rsf_generation_provider;
     #[cfg(not(test))]
     fn rsf_observer_install_guarded(options: *const rsf_observer_options) -> i32;
 }

@@ -66,17 +66,7 @@ const AUX_DEPTH_STENCIL: u32 = 0;
 const AUX_COLOUR: u32 = 1;
 const AUX_RESTORE_CONTENTS: u32 = 1;
 
-unsafe extern "C" {
-    fn rsf_sampler_bias_create() -> Raw;
-    fn rsf_sampler_bias_apply(
-        handle: Raw,
-        context: Raw,
-        baselines: *const Raw,
-        slot_mask: u32,
-        bias: f32,
-        applied_mask: *mut u32,
-    ) -> i32;
-}
+use crate::sampler_bias::{rsf_sampler_bias_apply, rsf_sampler_bias_create};
 
 fn current_thread() -> u32 {
     unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() }
@@ -2737,11 +2727,11 @@ unsafe extern "C" fn rsf_d3d11_host_bind_sampler_bias(
         return NOT_READY;
     }
     if g.sampler_bias.is_null() {
-        g.sampler_bias = unsafe { rsf_sampler_bias_create() };
+        g.sampler_bias = rsf_sampler_bias_create().cast();
     }
     let applied = unsafe {
         rsf_sampler_bias_apply(
-            g.sampler_bias,
+            g.sampler_bias.cast(),
             context,
             request.samplers.as_ptr(),
             request.slot_mask,

@@ -38,86 +38,25 @@ const _: () = {
 };
 
 // The owner's leaves, by the names sr12.rs calls them; sr12/tests.rs fakes the same names.
-unsafe extern "C" {
-    #[link_name = "rsf_dlss_native12_create"]
-    pub(super) fn dlss_create(
-        device: Handle,
-        setup: *const rsf_dlss_setup,
-        out: *mut Handle,
-    ) -> i32;
-    #[link_name = "rsf_dlss_native12_create_shared"]
-    pub(super) fn dlss_create_shared(
-        device: Handle,
-        setup: *const rsf_dlss_setup,
-        host: Handle,
-        out: *mut Handle,
-    ) -> i32;
-    #[link_name = "rsf_dlss_native12_create_registered"]
-    pub(super) fn dlss_create_registered(
-        device: Handle,
-        setup: *const rsf_dlss_setup,
-        registration: Handle,
-        out: *mut Handle,
-    ) -> i32;
-    #[link_name = "rsf_dlss_native12_plan"]
-    pub(super) fn dlss_plan(
-        context: Handle,
-        width: u32,
-        height: u32,
-        quality: u32,
-        render_width: *mut u32,
-        render_height: *mut u32,
-    ) -> i32;
-    #[link_name = "rsf_dlss_native12_set_sdr"]
-    pub(super) fn dlss_set_sdr(context: Handle, sdr: u32);
-    #[link_name = "rsf_dlss_native12_evaluate"]
-    pub(super) fn dlss_evaluate(context: Handle, list: Handle, frame: *const rsf_sr_frame) -> i32;
-    #[link_name = "rsf_dlss_native12_evaluate_borrowed"]
-    pub(super) fn dlss_evaluate_borrowed(
-        context: Handle,
-        list: Handle,
-        frame: *const rsf_sr_frame,
-        latency_token: Handle,
-    ) -> i32;
-    #[link_name = "rsf_dlss_native12_present"]
-    pub(super) fn dlss_present(
-        context: Handle,
-        chain: Handle,
-        sync_interval: u32,
-        flags: u32,
-        begin: u32,
-    ) -> i32;
-    #[link_name = "rsf_dlss_native12_destroy"]
-    pub(super) fn dlss_destroy(context: Handle);
-    #[link_name = "rsf_sr_session_create"]
-    pub(super) fn session_create(setup: *const rsf_sr_session_setup, out: *mut Handle) -> i32;
-    #[link_name = "rsf_sr_session_select"]
-    pub(super) fn session_select(session: Handle, backend: u32, quality: u32, version: u64) -> i32;
-    #[link_name = "rsf_sr_session_get_status"]
-    pub(super) fn session_get_status(session: Handle, status: *mut rsf_sr_session_status) -> i32;
-    #[link_name = "rsf_sr_session_evaluate"]
-    pub(super) fn session_evaluate(
-        session: Handle,
-        list: Handle,
-        frame: *const rsf_sr_frame,
-    ) -> i32;
-    #[link_name = "rsf_sr_session_destroy"]
-    pub(super) fn session_destroy(session: Handle);
-    #[link_name = "rsf_input_dump_begin_record"]
-    pub(super) fn dump_begin_record(record: *const rsf_frame_record, backend: u32) -> i32;
-    #[link_name = "rsf_input_dump_pass_metadata"]
-    pub(super) fn dump_pass_metadata(pass: *const Pass);
-    #[link_name = "rsf_input_dump_sr_frame"]
-    pub(super) fn dump_sr_frame(frame: *const rsf_sr_frame, backend: u32, sdr: u32);
-    #[link_name = "rsf_input_dump_result"]
-    pub(super) fn dump_result(
-        record: *const rsf_frame_record,
-        stage: *const c_char,
-        backend: u32,
-        result: i32,
-    );
-}
-
+pub(super) use crate::dlss_native12::exports::{
+    rsf_dlss_native12_create as dlss_create,
+    rsf_dlss_native12_create_registered as dlss_create_registered,
+    rsf_dlss_native12_create_shared as dlss_create_shared,
+    rsf_dlss_native12_destroy as dlss_destroy, rsf_dlss_native12_evaluate as dlss_evaluate,
+    rsf_dlss_native12_evaluate_borrowed as dlss_evaluate_borrowed,
+    rsf_dlss_native12_plan as dlss_plan, rsf_dlss_native12_present as dlss_present,
+    rsf_dlss_native12_set_sdr as dlss_set_sdr,
+};
+pub(super) use crate::input_dump::abi::{
+    rsf_input_dump_begin_record as dump_begin_record,
+    rsf_input_dump_pass_metadata as dump_pass_metadata, rsf_input_dump_result as dump_result,
+    rsf_input_dump_sr_frame as dump_sr_frame,
+};
+pub(super) use crate::sr_session::{
+    rsf_sr_session_create as session_create, rsf_sr_session_destroy as session_destroy,
+    rsf_sr_session_evaluate as session_evaluate, rsf_sr_session_get_status as session_get_status,
+    rsf_sr_session_select as session_select,
+};
 pub(super) use crate::d3d12_host::pass_depth_domains as depth_domains;
 pub(super) use crate::d3d12_host::rsf_core_d3d12_create_uav_texture as create_texture;
 pub(super) use crate::d3d12_host::rsf_core_d3d12_transition as transition;

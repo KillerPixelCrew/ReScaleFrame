@@ -21,7 +21,8 @@ pub(super) use super::window::{
 pub(super) use crate::d3d11_present::{
     rsf_d3d11_present_backend as present_backend,
     rsf_d3d11_present_backend_choices as present_backend_choices,
-    rsf_d3d11_present_host as present_host, rsf_d3d11_present_request as present_request,
+    rsf_d3d11_present_abort as present_abort, rsf_d3d11_present_host as present_host,
+    rsf_d3d11_present_is_owner as present_is_owner, rsf_d3d11_present_request as present_request,
     rsf_d3d11_present_switch_result as present_switch_result,
 };
 pub(super) use crate::fg_choice::rsf_fg_default_backend as fg_default_backend;
@@ -36,21 +37,10 @@ pub(super) use crate::overlay_service::{
     rsf_overlay_present_bound as overlay_present,
 };
 
-unsafe extern "C" {
-    #[link_name = "rsf_d3d11_present_is_owner"]
-    pub(super) fn present_is_owner(chain: Handle) -> c_int;
-    #[link_name = "rsf_d3d11_present_abort"]
-    pub(super) fn present_abort(frame: u64) -> i32;
-    fn rsf_streamline_host_latency_status(
-        host: Handle,
-        status: *mut rsf_streamline_latency_status,
-    ) -> i32;
-    fn rsf_native_latency_frame_get(out: *mut rsf_native_latency_frame) -> c_int;
-    #[link_name = "rsf_native_latency_end_session"]
-    pub(super) fn latency_end_session(session: u64);
-    #[link_name = "rsf_input_dump_cancel"]
-    pub(super) fn dump_cancel(session: u64);
-}
+pub(super) use crate::input_dump::abi::rsf_input_dump_cancel as dump_cancel;
+pub(super) use crate::native_fg_cpu::platform::rsf_native_latency_end_session as latency_end_session;
+use crate::native_fg_cpu::platform::rsf_native_latency_frame_get;
+use crate::streamline_host::rsf_streamline_host_latency_status;
 
 pub(super) unsafe extern "C" fn dlss_preset_valid(preset: u32) -> c_int {
     c_int::from(crate::streamline_sr::preset_valid(preset))
@@ -91,7 +81,7 @@ pub(super) unsafe extern "C" fn pcl_message() -> u32 {
     let mut status: rsf_streamline_latency_status = unsafe { std::mem::zeroed() };
     status.struct_size = size_of::<rsf_streamline_latency_status>() as u32;
     let host = present::rsf_d3d11_present_host();
-    if unsafe { rsf_streamline_host_latency_status(host, &mut status) } == OK {
+    if unsafe { rsf_streamline_host_latency_status(host.cast(), &mut status) } == OK {
         status.pcl_message_id
     } else {
         0

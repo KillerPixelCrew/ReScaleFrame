@@ -244,26 +244,10 @@ unsafe extern "C" fn release(interop: Handle, wrapped: Handle) {
     };
 }
 
-unsafe extern "C" {
-    fn rsf_overlay_host_start_device(
-        device: Handle,
-        window: Handle,
-        log: OverlayLog,
-        user: Handle,
-    ) -> i32;
-    fn rsf_overlay_host_admit_target(hud: u32, visible: *mut u32, hint: *mut f32) -> i32;
-    fn rsf_overlay_host_draw_admitted_target(
-        context: Handle,
-        view: Handle,
-        width: u32,
-        height: u32,
-        stats: *const rsf_overlay_stats,
-        intent: *mut rsf_overlay_intent,
-        visible: u32,
-        hint: f32,
-    ) -> i32;
-    fn rsf_overlay_host_stop_device(device: Handle);
-}
+use crate::overlay_host::native::{
+    rsf_overlay_host_admit_target, rsf_overlay_host_draw_admitted_target,
+    rsf_overlay_host_start_device, rsf_overlay_host_stop_device,
+};
 
 const PLATFORM: Platform = Platform {
     create: create_wrapped_device,

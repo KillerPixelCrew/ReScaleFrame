@@ -506,7 +506,7 @@ unsafe extern "C" fn create(setup: *const Setup, out: *mut Raw, chain: *mut Raw)
 
 // The ffx-fg feature is CMake's frame-generation header detection (runtime/orchestrator/CMakeLists.txt).
 #[unsafe(no_mangle)]
-extern "C" fn rsf_generation_fsr() -> *const Provider {
+pub(crate) extern "C" fn rsf_generation_fsr() -> *const Provider {
     rsf_core_fsr12_native_provider(u32::from(cfg!(feature = "ffx-fg")))
 }
 

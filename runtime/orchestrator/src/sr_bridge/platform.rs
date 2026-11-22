@@ -18,7 +18,6 @@ use crate::sr_session::{
     rsf_sr_session_get_status, rsf_sr_session_select, rsf_sr_session_set_auto_exposure,
     rsf_sr_session_warm_up,
 };
-use std::ffi::c_char;
 use std::ptr::null_mut;
 use windows::Win32::Graphics::{
     Direct3D::D3D_FEATURE_LEVEL_11_0,
@@ -37,29 +36,11 @@ const _: () = {
     assert!(STATE_SHADER_RESOURCE == D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE.0 as u32);
 };
 
-unsafe extern "C" {
-    fn rsf_input_dump_poll();
-    fn rsf_input_dump_requested() -> i32;
-    fn rsf_input_dump_begin_record(record: *const rsf_frame_record, backend: u32) -> i32;
-    #[link_name = "rsf_input_dump_wants"]
-    pub(super) fn dump_wants(record: *const rsf_frame_record) -> i32;
-    fn rsf_input_dump_sr_frame(frame: *const rsf_sr_frame, backend: u32, sdr: u32);
-    fn rsf_input_dump_result(
-        record: *const rsf_frame_record,
-        stage: *const c_char,
-        backend: u32,
-        result: i32,
-    );
-    fn rsf_input_dump_texture_record(
-        context: Handle,
-        record: *const rsf_frame_record,
-        name: *const c_char,
-        description: *const c_char,
-        texture: Handle,
-        view: u32,
-        scale: f32,
-    ) -> i32;
-}
+pub(super) use crate::input_dump::abi::rsf_input_dump_wants as dump_wants;
+use crate::input_dump::abi::{
+    rsf_input_dump_begin_record, rsf_input_dump_poll, rsf_input_dump_requested,
+    rsf_input_dump_result, rsf_input_dump_sr_frame, rsf_input_dump_texture_record,
+};
 
 pub(super) unsafe extern "C" fn session_create(
     setup: *const rsf_sr_session_setup,
@@ -261,10 +242,8 @@ pub(super) unsafe extern "C" fn fence_destroy(fence: Handle) {
     unsafe { rsf_shared_fence_destroy(fence.cast()) };
 }
 pub(super) unsafe extern "C" fn dump_poll_requested() -> i32 {
-    unsafe {
-        rsf_input_dump_poll();
-        rsf_input_dump_requested()
-    }
+    rsf_input_dump_poll();
+    rsf_input_dump_requested()
 }
 const RAW: u32 = 0;
 const HDR: u32 = 3;

@@ -937,7 +937,7 @@ static PROVIDER: Provider = Provider {
 };
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_generation_dlss() -> *const Provider {
+pub(crate) extern "C" fn rsf_generation_dlss() -> *const Provider {
     &PROVIDER
 }
 
@@ -995,24 +995,14 @@ unsafe fn host_native<'a>(host: *mut Host) -> Option<&'a mut Native> {
     unsafe { native.cast::<Native>().as_mut() }
 }
 
-#[repr(C)]
-struct Graphics {
-    struct_size: u32,
-    device: Handle,
-    queue: Handle,
-    factory: Handle,
-    native_device: Handle,
-    native_queue: Handle,
-}
-
-const _: () = assert!(size_of::<Graphics>() == 48);
+use crate::d3d11_present_abi::rsf_streamline_graphics as Graphics;
 
 fn raw<T: Interface>(object: &Option<T>) -> Handle {
     object.as_ref().map_or(null_mut(), Interface::as_raw)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_streamline_host_graphics(host: *mut Host, out: *mut Graphics) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_streamline_host_graphics(host: *mut Host, out: *mut Graphics) -> i32 {
     if host.is_null() || !unsafe { has_capacity(out) } {
         return INVALID;
     }
@@ -1082,17 +1072,17 @@ unsafe extern "C" fn rsf_streamline_host_begin(host: *mut Host, id: u64) -> i32 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_streamline_host_acquire(host: *mut Host, id: u64) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_streamline_host_acquire(host: *mut Host, id: u64) -> i32 {
     unsafe { rsf_core_slhost_acquire(host, id, &PLATFORM) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_streamline_host_sleep(host: *mut Host, id: u64) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_streamline_host_sleep(host: *mut Host, id: u64) -> i32 {
     unsafe { rsf_core_slhost_sleep(host, id, &PLATFORM) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_streamline_host_marker(
+pub(crate) unsafe extern "C" fn rsf_streamline_host_marker(
     host: *mut Host,
     id: u64,
     marker: u32,
@@ -1146,7 +1136,7 @@ static COMMON_PRESENT: CommonPresent = CommonPresent {
 };
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_streamline_host_present_common(
+pub(crate) unsafe extern "C" fn rsf_streamline_host_present_common(
     host: *mut Host,
     chain: Handle,
     interval: u32,
@@ -1162,7 +1152,7 @@ unsafe extern "C" fn rsf_streamline_host_presented(host: *mut Host, id: u64) -> 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_streamline_host_input(
+pub(crate) unsafe extern "C" fn rsf_streamline_host_input(
     host: *mut Host,
     id: u64,
     kinds: u32,
@@ -1172,12 +1162,12 @@ unsafe extern "C" fn rsf_streamline_host_input(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_streamline_host_reflex(host: *mut Host, mode: u32, limit: u32) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_streamline_host_reflex(host: *mut Host, mode: u32, limit: u32) -> i32 {
     unsafe { rsf_core_slhost_reflex(host, mode, limit, &PLATFORM) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_streamline_host_latency_status(
+pub(crate) unsafe extern "C" fn rsf_streamline_host_latency_status(
     host: *mut Host,
     out: *mut LatencyStatus,
 ) -> i32 {
@@ -1196,7 +1186,7 @@ unsafe extern "C" fn rsf_streamline_host_upgrade_chain(host: *mut Host, chain: *
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_streamline_host_generation_load(host: *mut Host, enabled: u32) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_streamline_host_generation_load(host: *mut Host, enabled: u32) -> i32 {
     unsafe { rsf_core_slhost_generation_load(host, enabled, &PLATFORM) }
 }
 

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #[path = "xess_native.rs"]
 mod native;
+pub(crate) use native::rsf_generation_xess;
 
 use super::*;
 use crate::com_ref;

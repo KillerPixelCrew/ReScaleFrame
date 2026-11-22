@@ -153,13 +153,13 @@ struct Owner {
     device: IUnknown,
 }
 
-struct SamplerBias {
+pub(crate) struct SamplerBias {
     cache: Cache<IUnknown>,
     owner: Option<Owner>,
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_sampler_bias_create() -> *mut SamplerBias {
+pub(crate) extern "C" fn rsf_sampler_bias_create() -> *mut SamplerBias {
     crate::allocate_handle(SamplerBias {
         cache: Cache::new(),
         owner: None,
@@ -175,7 +175,7 @@ unsafe extern "C" fn rsf_sampler_bias_destroy(handle: *mut SamplerBias) {
 
 // The facade provides exclusive access, live COM pointers and SLOT_COUNT borrowed baselines.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sampler_bias_apply(
+pub(crate) unsafe extern "C" fn rsf_sampler_bias_apply(
     handle: *mut SamplerBias,
     context: *mut c_void,
     baselines: *const *mut c_void,
