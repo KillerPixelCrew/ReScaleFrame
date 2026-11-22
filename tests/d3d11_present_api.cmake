@@ -1,4 +1,3 @@
-# Include at the end of the root build (or from tests/CMakeLists.txt).
 # Keep these clients free of OrchestratorCore and its public RSF_RUNTIME_BUILD define.
 rsf_add_rust_static(rsf_presentation_api_fixtures_rust rsf_rust_presentation_api_fixtures
     rsf-presentation-api-fixtures rsf_presentation_api_fixtures)

@@ -5,7 +5,6 @@ add_executable(rsf_d3d11_host_rendered_fg_device EXCLUDE_FROM_ALL
 set_target_properties(rsf_d3d11_host_rendered_fg_device PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_d3d11_host_rendered_fg_device PRIVATE
     rsf_d3d11_host_device_fixtures_rust rsf_orchestrator rsf_build_options d3d11 d3d12 dxgi dxguid)
-# Coordinator integration: include this file from tests/CMakeLists.txt.
 # cmake --build build/windows-x64 --config Release --target rsf_d3d11_host_rendered_fg_device
 # build/windows-x64/bin/Release/rsf_d3d11_host_rendered_fg_device.exe <scratch-root>
 # Scratch root must contain streamline/ and fidelityfx/ with matching SDK files.

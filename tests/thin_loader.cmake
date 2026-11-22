@@ -1,4 +1,4 @@
-# Include from the root after add_subdirectory(loader/proxy), or use thin_loader_inject.cmake.
+# Include from tests/CMakeLists.txt after add_subdirectory(loader/proxy).
 include_guard(GLOBAL)
 rsf_add_rust_static(rsf_loader_fixtures_rust rsf_rust_loader_fixtures
     rsf-loader-fixtures rsf_loader_fixtures)
