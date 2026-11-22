@@ -25,8 +25,11 @@ use std::ffi::{c_char, c_void};
 use std::ptr;
 use std::slice;
 
-pub(super) const INVALID: i32 = -13001;
-pub(super) const ABI_MISMATCH: i32 = -13002;
+// Argument and ABI errors share the channel with VkResult values, so they take the FSR4-FG
+// bridge's codes, which vulkan_fg maps to backend codes (and folds into a feature failure for XeSS).
+pub(super) use crate::sys::{
+    RSF_FSR4FG_ABI_MISMATCH as ABI_MISMATCH, RSF_FSR4FG_INVALID_ARGUMENT as INVALID,
+};
 pub(super) const NOT_READY: i32 = 1;
 const INCOMPLETE: i32 = 5;
 const OUT_OF_MEMORY: i32 = -1;

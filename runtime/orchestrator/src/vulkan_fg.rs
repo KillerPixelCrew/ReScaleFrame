@@ -12,14 +12,15 @@ use std::ffi::c_void;
 use std::ptr::{self, addr_of, addr_of_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 
-const OK: i32 = 0;
-const INVALID: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
-const NOT_COMPILED: i32 = -3;
-const INIT_FAILED: i32 = -6;
-const NOT_SUPPORTED: i32 = -7;
-const NOT_READY: i32 = -8;
-const FEATURE_FAILED: i32 = -9;
+use ::rsf_vk_xess_fg::bridge_abi::{
+    RSF_XESS_BRIDGE_ABI_MISMATCH, RSF_XESS_BRIDGE_INVALID_ARGUMENT,
+};
+use rsf_game_sys::backend_result::{
+    ABI_MISMATCH, FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT as INVALID, NOT_COMPILED,
+    NOT_READY, NOT_SUPPORTED, OK,
+};
+
+/// `VK_ERROR_INITIALIZATION_FAILED`, the WSI entries' failure.
 const WSI_INITIALIZATION_FAILED: i32 = -3;
 
 const DLSS: u32 = 1;
@@ -27,15 +28,18 @@ const FFX: u32 = 3;
 const FSR4: u32 = 4;
 const XESS: u32 = 5;
 
-// Factory guards use this as well, while keeping C++ exceptions on their side
+// The FSR4 and XeSS providers report VkResult values and their bridge's own codes in one channel;
+// the bridge codes sit outside the VkResult range because backend codes overlap it (-1, -2 and -7
+// are also VkResult errors). This is the one place they become backend codes, every other failure
+// a feature failure. Factory guards use this as well, while keeping C++ exceptions on their side
 // of the ABI and preserving the separate initialization failure for throws.
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_fgvk_provider_result(backend: u32, result: i32) -> i32 {
     match (backend, result) {
         (_, OK) => OK,
-        (FSR4, -13001) | (XESS, -10001) => INVALID,
-        (FSR4, -13002) | (XESS, -10002) => ABI_MISMATCH,
-        (FSR4, -13003) => NOT_SUPPORTED,
+        (FSR4, RSF_FSR4FG_INVALID_ARGUMENT) | (XESS, RSF_XESS_BRIDGE_INVALID_ARGUMENT) => INVALID,
+        (FSR4, RSF_FSR4FG_ABI_MISMATCH) | (XESS, RSF_XESS_BRIDGE_ABI_MISMATCH) => ABI_MISMATCH,
+        (FSR4, RSF_FSR4FG_NOT_SUPPORTED) => NOT_SUPPORTED,
         (FSR4 | XESS, _) => FEATURE_FAILED,
         _ => result,
     }
