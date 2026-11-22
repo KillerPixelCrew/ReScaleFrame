@@ -30,7 +30,10 @@ try {
     Invoke-Checked cmake @('--build', '--preset', $preset)
     Invoke-Checked ctest @('--preset', $preset)
     Invoke-Checked cargo @('fmt', '--all', '--', '--check')
+    # Features are additive. The default pass lints the not(feature) code; the all-features pass lints
+    # the shipping plugin entries (native-entry, mono-plugin) and every fixture feature.
     Invoke-Checked cargo @('clippy', '--workspace', '--all-targets', '--locked', '--', '-D', 'warnings')
+    Invoke-Checked cargo @('clippy', '--workspace', '--all-targets', '--all-features', '--locked', '--', '-D', 'warnings')
 }
 finally {
     Pop-Location
