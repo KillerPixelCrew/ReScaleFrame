@@ -132,7 +132,7 @@ pub(super) fn present(
         ..Default::default()
     };
     unsafe {
-        (pipeline.platform.overlay_present)(
+        native::overlay_present(
             state.device,
             state.queue,
             chain,
@@ -250,7 +250,7 @@ unsafe extern "C" fn rsf_gl_pipeline_settings_open(
             option_changed: Some(option_changed),
             option_label: None,
         };
-        if unsafe { (pipeline.platform.overlay_configure)(&setup) } != OK {
+        if unsafe { native::overlay_configure(&setup) } != OK {
             return INIT_FAILED;
         }
         state.overlay = true;

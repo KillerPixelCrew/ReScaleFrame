@@ -2,8 +2,8 @@
 // OpenGL pipeline: GL scene surfaces shared with a D3D12 device, a native SR session and a DXGI
 // child window whose presentation the FG owner intercepts. This owner decides session and frame
 // identity, surface and SR session lifetime, configuration admission, SR backend switching and
-// fallback, the FG provider request and teardown order. The linked platform connects the runtime
-// owners. Graphics work stays on the caller's GL context and graphics thread.
+// fallback, the FG provider request and teardown order. `native` (linked.rs; fakes under test)
+// connects the runtime owners. Graphics work stays on the caller's GL context and graphics thread.
 use crate::com_ref::ComRef;
 use crate::owned_handle::OwnedHandle as Owned;
 use crate::sharpening_policy;
@@ -15,7 +15,7 @@ use crate::sys::{
     RSF_DLSS_ABI_VERSION, RSF_FG_BACKEND_AUTO, RSF_FG_OFF, RSF_REFLEX_OFF, rsf_backend_log_fn,
     rsf_native_fg_options, rsf_native_fg_status, rsf_sharpening_options,
 };
-use crate::sys::{RSF_OVERLAY_NOTIFY_DEVICE_RESET, rsf_overlay_service_setup};
+use crate::sys::RSF_OVERLAY_NOTIFY_DEVICE_RESET;
 use crate::sys::{
     RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_FSR2, RSF_SR_FSR3, RSF_SR_FSR4, RSF_SR_NONE, RSF_SR_SPATIAL,
     RSF_SR_XESS,
@@ -39,6 +39,8 @@ use std::sync::{Mutex, MutexGuard, TryLockError};
 mod dxgi;
 #[cfg(not(test))]
 mod linked;
+#[cfg(not(test))]
+use linked as native;
 mod settings;
 mod window;
 
@@ -76,83 +78,21 @@ const SR_SURFACES: u32 = 4;
 type Handle = *mut c_void;
 type Log = rsf_backend_log_fn;
 
-// Production and synthetic owners share this Rust-only dispatch table.
-pub(crate) struct Platform {
-    gl_open: unsafe extern "C" fn(Log, Handle, *mut Handle) -> i32,
-    gl_graphics: unsafe extern "C" fn(Handle, *mut Handle, *mut Handle) -> i32,
-    gl_texture_create: unsafe extern "C" fn(Handle, u32, u32, u32, *mut Handle) -> i32,
-    gl_texture_get: unsafe extern "C" fn(Handle, *mut rsf_gl_texture_info) -> i32,
-    gl_texture_destroy: unsafe extern "C" fn(Handle),
-    gl_begin: unsafe extern "C" fn(Handle, u32, *const Handle, *mut Handle, *mut u32) -> i32,
-    gl_submit: unsafe extern "C" fn(Handle, u32, *const Handle) -> i32,
-    gl_drain: unsafe extern "C" fn(Handle) -> i32,
-    gl_close: unsafe extern "C" fn(Handle) -> i32,
-    window_valid: unsafe extern "C" fn(Handle) -> c_int,
-    window_create: unsafe extern "C" fn(Handle) -> Handle,
-    window_destroy: unsafe extern "C" fn(Handle) -> c_int,
-    window_child_of: unsafe extern "C" fn(Handle, Handle) -> c_int,
-    window_resize: unsafe extern "C" fn(Handle, u32, u32) -> c_int,
-    window_show: unsafe extern "C" fn(Handle),
-    chain_create: unsafe extern "C" fn(Handle, Handle, u32, u32, *mut Handle) -> i32,
-    chain_associate: unsafe extern "C" fn(Handle, Handle),
-    chain_resize: unsafe extern "C" fn(Handle, u32, u32, u32, u32) -> i32,
-    chain_back_buffer: unsafe extern "C" fn(Handle) -> Handle,
-    chain_present: unsafe extern "C" fn(Handle, u32) -> i32,
-    adapter_identity: unsafe extern "C" fn(Handle, *mut u32, *mut u32) -> c_int,
-    transition: unsafe extern "C" fn(Handle, Handle, u32, u32),
-    copy_resource: unsafe extern "C" fn(Handle, Handle, Handle),
-    sr_create: unsafe extern "C" fn(*const rsf_sr12_setup, *mut Handle) -> i32,
-    sr_plan: unsafe extern "C" fn(Handle, *mut u32, *mut u32) -> i32,
-    sr_evaluate: unsafe extern "C" fn(Handle, Handle, *const Pass, u32) -> i32,
-    sr_set_sharpening: unsafe extern "C" fn(Handle, *const rsf_sharpening_options) -> i32,
-    sr_destroy: unsafe extern "C" fn(Handle),
-    fg_install: unsafe extern "C" fn(*const rsf_fg12_setup) -> i32,
-    fg_options: unsafe extern "C" fn(*const rsf_native_fg_options),
-    fg_cpu: unsafe extern "C" fn(*const rsf_game_cpu_event),
-    fg_hudless: unsafe extern "C" fn(Handle, *const Pass),
-    fg_submitted: unsafe extern "C" fn(u64, u64),
-    fg_window: unsafe extern "C" fn(*const Pass),
-    fg_status: unsafe extern "C" fn(*mut rsf_native_fg_status) -> c_int,
-    present_host: unsafe extern "C" fn() -> Handle,
-    present_is_owner: unsafe extern "C" fn(Handle) -> c_int,
-    present_backend: unsafe extern "C" fn() -> u32,
-    present_backend_choices: unsafe extern "C" fn() -> u32,
-    present_request: unsafe extern "C" fn(u32) -> i32,
-    present_switch_result: unsafe extern "C" fn() -> i32,
-    present_abort: unsafe extern "C" fn(u64) -> i32,
-    pcl_message: unsafe extern "C" fn() -> u32,
-    cpu_read: unsafe extern "C" fn(u64, u64, *mut rsf_native_cpu_frame) -> c_int,
-    latency_completed: unsafe extern "C" fn(u64) -> c_int,
-    latency_end_session: unsafe extern "C" fn(u64),
-    dump_cancel: unsafe extern "C" fn(u64),
-    // Header-inline contract predicates, single-sourced in the published headers.
-    dlss_preset_valid: unsafe extern "C" fn(u32) -> c_int,
-    fg_default_backend: unsafe extern "C" fn(u32, u32) -> u32,
-    depth_domains_requested: unsafe extern "C" fn(*const Pass) -> u32,
-    overlay_configure: unsafe extern "C" fn(*const rsf_overlay_service_setup) -> i32,
-    overlay_present:
-        unsafe extern "C" fn(Handle, Handle, Handle, Handle, Handle, Log, Handle) -> i32,
-    overlay_notify: unsafe extern "C" fn(u32) -> i32,
+fn depth_domains_requested(pass: &Pass) -> bool {
+    unsafe { native::depth_domains_requested(pass) != 0 }
 }
 
-impl Platform {
-    fn depth_domains_requested(&self, pass: &Pass) -> bool {
-        unsafe { (self.depth_domains_requested)(pass) != 0 }
-    }
-
-    fn valid_options(&self, options: &rsf_gl_pipeline_options, width: u32, height: u32) -> bool {
-        width != 0
-            && height != 0
-            && options.sr_backend <= RSF_SR_AUTO
-            && options.sr_backend != RSF_SR_SPATIAL
-            && options.quality <= MAX_QUALITY
-            && unsafe { (self.dlss_preset_valid)(options.dlss_preset) } != 0
-            && options.generation.struct_size as usize >= size_of::<rsf_native_fg_options>()
-            && (options.sharpening.struct_size == 0
-                || sharpening_policy::valid(&options.sharpening))
-    }
+fn valid_options(options: &rsf_gl_pipeline_options, width: u32, height: u32) -> bool {
+    width != 0
+        && height != 0
+        && options.sr_backend <= RSF_SR_AUTO
+        && options.sr_backend != RSF_SR_SPATIAL
+        && options.quality <= MAX_QUALITY
+        && unsafe { native::dlss_preset_valid(options.dlss_preset) } != 0
+        && options.generation.struct_size as usize >= size_of::<rsf_native_fg_options>()
+        && (options.sharpening.struct_size == 0
+            || sharpening_policy::valid(&options.sharpening))
 }
-
 fn failed(result: i32) -> bool {
     result < 0
 }
@@ -284,7 +224,6 @@ impl State {
 }
 
 pub(crate) struct Pipeline {
-    platform: &'static Platform,
     shared: &'static Shared,
     session: u64,
     own_window: bool,
@@ -390,7 +329,6 @@ impl Pipeline {
         width: u32,
         height: u32,
     ) -> (i32, Option<Owned>) {
-        let p = self.platform;
         let shared = self.shared;
         let user = ptr::from_ref(shared).cast_mut().cast::<c_void>();
         let setup = rsf_sr12_setup {
@@ -425,7 +363,7 @@ impl Pipeline {
             user,
             render_width: 0,
             render_height: 0,
-            streamline_host: unsafe { (p.present_host)() },
+            streamline_host: native::present_host(),
             // OpenGL scenes are SDR.
             input_sdr: 1,
             engine_input_extents: 0,
@@ -433,8 +371,8 @@ impl Pipeline {
             dlss_registration: ptr::null_mut(),
         };
         let mut sr = ptr::null_mut();
-        let result = unsafe { (p.sr_create)(&setup, &mut sr) };
-        let sr = Owned::new(sr, p.sr_destroy);
+        let result = unsafe { native::sr_create(&setup, &mut sr) };
+        let sr = Owned::new(sr, native::sr_destroy);
         if result == OK && sr.is_none() {
             (INIT_FAILED, None)
         } else if result == OK {
@@ -457,7 +395,7 @@ impl Pipeline {
         let (mut result, mut sr) = (INVALID_ARGUMENT, None);
         if selected == RSF_SR_AUTO {
             let (mut vendor, mut software) = (0, 0);
-            unsafe { (self.platform.adapter_identity)(state.device, &mut vendor, &mut software) };
+            unsafe { native::adapter_identity(state.device, &mut vendor, &mut software) };
             let mut choices = SR_CHOICES;
             loop {
                 let candidate = crate::rsf_gpu_select_sr_backend(vendor, software, choices);
@@ -494,10 +432,9 @@ impl Pipeline {
         shape: Shape,
         sharpening: &rsf_sharpening_options,
     ) -> Result<(u32, Surfaces), i32> {
-        let p = self.platform;
         let (selected, sr) = self.select_sr(state, options, shape.width, shape.height)?;
         let (mut render_width, mut render_height) = (0, 0);
-        let planned = unsafe { (p.sr_plan)(sr.get(), &mut render_width, &mut render_height) };
+        let planned = unsafe { native::sr_plan(sr.get(), &mut render_width, &mut render_height) };
         if planned != OK {
             return Err(planned);
         }
@@ -522,7 +459,7 @@ impl Pipeline {
             };
             let mut texture = ptr::null_mut();
             let result = unsafe {
-                (p.gl_texture_create)(
+                native::gl_texture_create(
                     state.sharing,
                     width,
                     height,
@@ -530,30 +467,30 @@ impl Pipeline {
                     &mut texture,
                 )
             };
-            let owned = Owned::new(texture, p.gl_texture_destroy);
+            let owned = Owned::new(texture, native::gl_texture_destroy);
             let Some(owned) = owned.filter(|_| result == OK) else {
                 return Err(if result == OK { INIT_FAILED } else { result });
             };
             surfaces.handles[slot] = owned.get();
-            let result = unsafe { (p.gl_texture_get)(owned.get(), &mut surfaces.info[slot]) };
+            let result = unsafe { native::gl_texture_get(owned.get(), &mut surfaces.info[slot]) };
             if result != OK {
                 return Err(result);
             }
             surfaces.textures.push(owned);
         }
-        let sharpened = unsafe { (p.sr_set_sharpening)(surfaces.sr.get(), sharpening) };
+        let sharpened = unsafe { native::sr_set_sharpening(surfaces.sr.get(), sharpening) };
         if sharpened != OK {
             return Err(sharpened);
         }
         if (state.width, state.height) != (shape.width, shape.height) {
-            if unsafe { (p.window_resize)(state.window, shape.width, shape.height) } == 0 {
+            if native::window_resize(state.window, shape.width, shape.height) == 0 {
                 self.log("OpenGL: event-thread window resize refused.");
                 self.restore_window(state);
                 return Err(FEATURE_FAILED);
             }
             let chain = state.chain.as_ref().map_or(ptr::null_mut(), ComRef::as_ptr);
             let resized = unsafe {
-                (p.chain_resize)(
+                native::chain_resize(
                     chain,
                     CHAIN_BUFFERS,
                     shape.width,
@@ -581,22 +518,21 @@ impl Pipeline {
             (window::INITIAL_EXTENT, window::INITIAL_EXTENT)
         };
         state.window_dirty =
-            unsafe { (self.platform.window_resize)(state.window, width, height) } == 0;
+            native::window_resize(state.window, width, height) == 0;
     }
 
     fn request_fg(&self, state: &mut State, requested: u32) {
-        let p = self.platform;
         let mut backend = requested;
         if backend == RSF_FG_BACKEND_AUTO {
             let (mut vendor, mut software) = (0, 0);
-            unsafe { (p.adapter_identity)(state.device, &mut vendor, &mut software) };
+            unsafe { native::adapter_identity(state.device, &mut vendor, &mut software) };
             backend = crate::fg_choice::rsf_fg_select_auto_backend(
-                unsafe { (p.fg_default_backend)(vendor, software) },
-                unsafe { (p.present_backend_choices)() },
+                native::fg_default_backend(vendor, software),
+                native::present_backend_choices(),
             );
         }
-        if backend != unsafe { (p.present_backend)() } {
-            state.status.fg_switch_result = unsafe { (p.present_request)(backend) };
+        if backend != native::present_backend() {
+            state.status.fg_switch_result = native::present_request(backend);
         }
     }
 
@@ -607,7 +543,6 @@ impl Pipeline {
         width: u32,
         height: u32,
     ) -> i32 {
-        let p = self.platform;
         let shape = Shape {
             width,
             height,
@@ -618,12 +553,12 @@ impl Pipeline {
         state.status.requested_sr = options.sr_backend;
         state.status.requested_fg = options.fg_backend;
         if state.overlay {
-            let drained = unsafe { (p.gl_drain)(state.sharing) };
+            let drained = unsafe { native::gl_drain(state.sharing) };
             if drained != OK {
                 return drained;
             }
         } else {
-            unsafe { (p.fg_options)(&options.generation) };
+            unsafe { native::fg_options(&options.generation) };
             self.request_fg(state, options.fg_backend);
         }
         let sharpening = if options.sharpening.struct_size != 0 {
@@ -639,10 +574,10 @@ impl Pipeline {
         }
         if let Some(active) = state.active.as_ref().filter(|active| active.shape == shape) {
             state.status.sr_result = active.selection_result;
-            return unsafe { (p.sr_set_sharpening)(active.sr.get(), &sharpening) };
+            return unsafe { native::sr_set_sharpening(active.sr.get(), &sharpening) };
         }
         if !state.overlay {
-            let drained = unsafe { (p.gl_drain)(state.sharing) };
+            let drained = unsafe { native::gl_drain(state.sharing) };
             if drained != OK {
                 return drained;
             }
@@ -672,11 +607,10 @@ impl Pipeline {
         handles: &[Handle],
         record: impl FnOnce(Handle, u32) -> i32,
     ) -> Result<i32, i32> {
-        let p = self.platform;
         let (mut commands, mut slot) = (ptr::null_mut(), 0);
         let count = handles.len() as u32;
         let begun = unsafe {
-            (p.gl_begin)(
+            native::gl_begin(
                 state.sharing,
                 count,
                 handles.as_ptr(),
@@ -688,7 +622,7 @@ impl Pipeline {
             return Err(begun);
         }
         let result = record(commands, slot);
-        let submitted = unsafe { (p.gl_submit)(state.sharing, count, handles.as_ptr()) };
+        let submitted = unsafe { native::gl_submit(state.sharing, count, handles.as_ptr()) };
         if submitted != OK {
             return Err(submitted);
         }
@@ -696,11 +630,10 @@ impl Pipeline {
     }
 
     fn evaluate(&self, state: &mut State, input: &Pass) -> i32 {
-        let p = self.platform;
         let Some(active) = state.active.as_ref() else {
             return INVALID_ARGUMENT;
         };
-        if p.depth_domains_requested(input) {
+        if depth_domains_requested(input) {
             return INVALID_ARGUMENT;
         }
         let mut pass = *input;
@@ -720,11 +653,11 @@ impl Pipeline {
         let handles = &active.handles[..SR_SURFACES as usize];
         let result = self.transaction(state, handles, |list, slot| {
             for i in SCENE..=OUTPUT {
-                unsafe { (p.transition)(list, active.resource(i), STATE_COMMON, target(i)) };
+                unsafe { native::transition(list, active.resource(i), STATE_COMMON, target(i)) };
             }
-            let result = unsafe { (p.sr_evaluate)(active.sr.get(), list, &pass, slot) };
+            let result = unsafe { native::sr_evaluate(active.sr.get(), list, &pass, slot) };
             for i in SCENE..=OUTPUT {
-                unsafe { (p.transition)(list, active.resource(i), target(i), STATE_COMMON) };
+                unsafe { native::transition(list, active.resource(i), target(i), STATE_COMMON) };
             }
             result
         });
@@ -732,7 +665,7 @@ impl Pipeline {
             Ok(result) => result,
             Err(result) => return result,
         };
-        unsafe { (p.fg_submitted)(self.session, pass.source_frame_id) };
+        unsafe { native::fg_submitted(self.session, pass.source_frame_id) };
         state.evaluation_result = result;
         state.record_view(&pass);
         if result == OK && state.status.effective_sr != RSF_SR_NONE {
@@ -743,25 +676,24 @@ impl Pipeline {
     }
 
     fn hudless(&self, state: &mut State, input: &Pass) -> i32 {
-        let p = self.platform;
         let Some(active) = state.active.as_ref() else {
             return INVALID_ARGUMENT;
         };
-        if p.depth_domains_requested(input) {
+        if depth_domains_requested(input) {
             return INVALID_ARGUMENT;
         }
         let mut pass = *input;
         pass.session_id = self.session;
         pass.color_input = active.resource(HUDLESS);
         let result = self.transaction(state, &active.handles[HUDLESS..=HUDLESS], |list, _| {
-            unsafe { (p.transition)(list, pass.color_input, STATE_COMMON, STATE_RENDER_TARGET) };
-            unsafe { (p.fg_hudless)(list, &pass) };
-            unsafe { (p.transition)(list, pass.color_input, STATE_RENDER_TARGET, STATE_COMMON) };
+            unsafe { native::transition(list, pass.color_input, STATE_COMMON, STATE_RENDER_TARGET) };
+            unsafe { native::fg_hudless(list, &pass) };
+            unsafe { native::transition(list, pass.color_input, STATE_RENDER_TARGET, STATE_COMMON) };
             OK
         });
         match result {
             Ok(_) => {
-                unsafe { (p.fg_submitted)(self.session, pass.source_frame_id) };
+                unsafe { native::fg_submitted(self.session, pass.source_frame_id) };
                 state.record_view(&pass);
                 OK
             }
@@ -770,7 +702,6 @@ impl Pipeline {
     }
 
     fn present(&self, state: &mut State, frame: u64, vsync: u32) -> i32 {
-        let p = self.platform;
         let view = match state.frame_view {
             Some((captured, None)) if captured == frame => return INVALID_ARGUMENT,
             Some((captured, Some(view))) if captured == frame => view,
@@ -779,18 +710,18 @@ impl Pipeline {
         let (Some(active), Some(chain)) = (state.active.as_ref(), state.chain.as_ref()) else {
             return INVALID_ARGUMENT;
         };
-        let Some(buffer) = (unsafe { ComRef::from_owned((p.chain_back_buffer)(chain.as_ptr())) })
+        let Some(buffer) = (unsafe { ComRef::from_owned(native::chain_back_buffer(chain.as_ptr())) })
         else {
             return FEATURE_FAILED;
         };
         let composed = active.resource(COMPOSED);
         let copied = self.transaction(state, &active.handles[COMPOSED..=COMPOSED], |list, _| {
             unsafe {
-                (p.transition)(list, composed, STATE_COMMON, STATE_COPY_SOURCE);
-                (p.transition)(list, buffer.as_ptr(), STATE_PRESENT, STATE_COPY_DEST);
-                (p.copy_resource)(list, buffer.as_ptr(), composed);
-                (p.transition)(list, buffer.as_ptr(), STATE_COPY_DEST, STATE_PRESENT);
-                (p.transition)(list, composed, STATE_COPY_SOURCE, STATE_COMMON);
+                native::transition(list, composed, STATE_COMMON, STATE_COPY_SOURCE);
+                native::transition(list, buffer.as_ptr(), STATE_PRESENT, STATE_COPY_DEST);
+                native::copy_resource(list, buffer.as_ptr(), composed);
+                native::transition(list, buffer.as_ptr(), STATE_COPY_DEST, STATE_PRESENT);
+                native::transition(list, composed, STATE_COPY_SOURCE, STATE_COMMON);
             }
             OK
         });
@@ -807,32 +738,31 @@ impl Pipeline {
         window.source_frame_id = frame;
         window.view_key = view;
         window.swapchain = chain.as_ptr();
-        unsafe { (p.fg_window)(&window) };
-        let presented = unsafe { (p.chain_present)(chain.as_ptr(), u32::from(vsync != 0)) };
+        unsafe { native::fg_window(&window) };
+        let presented = unsafe { native::chain_present(chain.as_ptr(), u32::from(vsync != 0)) };
         drop(buffer);
         if failed(presented) {
             return FEATURE_FAILED;
         }
         if !state.shown {
-            unsafe { (p.window_show)(state.window) };
+            native::window_show(state.window);
             state.shown = true;
         }
         OK
     }
 
     fn close(&self, state: &mut State) -> i32 {
-        let p = self.platform;
         self.ready.store(false, Ordering::Release);
         if state.closed {
             return OK;
         }
         if state.chain.is_some() {
-            let drained = unsafe { (p.gl_drain)(state.sharing) };
+            let drained = unsafe { native::gl_drain(state.sharing) };
             if drained != OK {
                 return drained;
             }
             if state.overlay {
-                if unsafe { (p.overlay_notify)(RSF_OVERLAY_NOTIFY_DEVICE_RESET) } != OK {
+                if native::overlay_notify(RSF_OVERLAY_NOTIFY_DEVICE_RESET) != OK {
                     return NOT_READY;
                 }
                 state.overlay = false;
@@ -842,7 +772,7 @@ impl Pipeline {
             state.chain = None;
         }
         if !state.sharing.is_null() {
-            let closed = unsafe { (p.gl_close)(state.sharing) };
+            let closed = unsafe { native::gl_close(state.sharing) };
             if closed != OK {
                 return closed;
             }
@@ -850,15 +780,15 @@ impl Pipeline {
             state.device = ptr::null_mut();
             state.queue = ptr::null_mut();
             unsafe {
-                (p.latency_end_session)(self.session);
-                (p.dump_cancel)(self.session);
+                native::latency_end_session(self.session);
+                native::dump_cancel(self.session);
             }
         }
         self.shared.window.store(ptr::null_mut(), Ordering::Release);
         self.shared.detach_log();
         if self.own_window
             && !state.window.is_null()
-            && unsafe { (p.window_destroy)(state.window) } == 0
+            && native::window_destroy(state.window) == 0
         {
             return FEATURE_FAILED;
         }
@@ -895,7 +825,6 @@ impl Pipeline {
     }
 
     fn input(&self, frame: u64, kinds: u32, message: u32) -> i32 {
-        let p = self.platform;
         if kinds & !7 != 0 || (kinds == 0 && message == 0) {
             return INVALID_ARGUMENT;
         }
@@ -904,8 +833,8 @@ impl Pipeline {
             // Input belongs to an open CPU frame. A closed SDK token is never reused.
             let mut facts: rsf_native_cpu_frame = unsafe { std::mem::zeroed() };
             facts.struct_size = size_of::<rsf_native_cpu_frame>() as u32;
-            let known = unsafe { (p.cpu_read)(self.session, frame, &mut facts) } != 0;
-            if !known || facts.ended != 0 || unsafe { (p.latency_completed)(frame) } != 0 {
+            let known = unsafe { native::cpu_read(self.session, frame, &mut facts) } != 0;
+            if !known || facts.ended != 0 || unsafe { native::latency_completed(frame) } != 0 {
                 return NOT_READY;
             }
         } else {
@@ -916,18 +845,13 @@ impl Pipeline {
             };
         }
         let event = self.cpu_event(RSF_GAME_CPU_INPUT_EVENT, frame, kinds, message, flags);
-        unsafe { (p.fg_cpu)(&event) };
+        unsafe { native::fg_cpu(&event) };
         OK
     }
 }
 
-fn open(
-    setup: &rsf_gl_pipeline_setup,
-    platform: &'static Platform,
-    cleanup: &mut Option<Pipeline>,
-) -> Result<Pipeline, i32> {
-    let p = platform;
-    if unsafe { (p.window_valid)(setup.hwnd) } == 0
+fn open(setup: &rsf_gl_pipeline_setup, cleanup: &mut Option<Pipeline>) -> Result<Pipeline, i32> {
+    if native::window_valid(setup.hwnd) == 0
         || setup.runtime_directory_utf8.is_null()
         || setup.engine_version_utf8.is_null()
         || setup.project_id_utf8.is_null()
@@ -966,7 +890,7 @@ fn open(
     let shared = reused.unwrap_or_else(|| guard.as_ref().unwrap().get());
     let user = ptr::from_ref(shared).cast_mut().cast();
     let mut sharing = ptr::null_mut();
-    let result = unsafe { (p.gl_open)(Some(hook_log), user, &mut sharing) };
+    let result = unsafe { native::gl_open(Some(hook_log), user, &mut sharing) };
     if result != OK {
         if let Some(shared) = reused {
             shared.detach_log();
@@ -975,13 +899,13 @@ fn open(
         return Err(result);
     }
     let (mut device, mut queue) = (ptr::null_mut(), ptr::null_mut());
-    let graphics = unsafe { (p.gl_graphics)(sharing, &mut device, &mut queue) };
+    let graphics = unsafe { native::gl_graphics(sharing, &mut device, &mut queue) };
     // Once WGL has presented even a loading screen, DXGI creation on that HWND returns
     // E_ACCESSDENIED. A child gives the native chain its own compositor surface while GLFW keeps
     // the original context, events and window lifecycle.
     let own_window = setup.presentation_hwnd.is_null();
     let window = if own_window {
-        unsafe { (p.window_create)(setup.hwnd) }
+        native::window_create(setup.hwnd)
     } else {
         setup.presentation_hwnd
     };
@@ -1017,7 +941,6 @@ fn open(
     // FG can retain its logger before publishing whether the installation succeeded.
     let shared = reused.unwrap_or_else(|| guard.unwrap().keep());
     let mut pipeline = Pipeline {
-        platform,
         shared,
         session: session_seed(),
         own_window,
@@ -1049,14 +972,14 @@ fn open(
         reject_open(pipeline, cleanup);
         return Err(graphics);
     }
-    if window.is_null() || unsafe { (p.window_child_of)(window, setup.hwnd) } == 0 {
+    if window.is_null() || native::window_child_of(window, setup.hwnd) == 0 {
         shared.log("OpenGL: presentation child must belong to the parent event thread.");
         reject_open(pipeline, cleanup);
         return Err(INIT_FAILED);
     }
     shared.window.store(window, Ordering::Release);
     if reused.is_none() {
-        let result = unsafe { (p.fg_install)(&fg) };
+        let result = unsafe { native::fg_install(&fg) };
         if result != OK {
             reject_open(pipeline, cleanup);
             return Err(result);
@@ -1065,11 +988,11 @@ fn open(
     }
     let mut chain = ptr::null_mut();
     let created =
-        unsafe { (p.chain_create)(queue, window, CHAIN_BUFFERS, CHAIN_FORMAT, &mut chain) };
+        unsafe { native::chain_create(queue, window, CHAIN_BUFFERS, CHAIN_FORMAT, &mut chain) };
     let chain = unsafe { ComRef::from_owned(chain) };
     let owner = chain
         .as_ref()
-        .map_or(0, |chain| unsafe { (p.present_is_owner)(chain.as_ptr()) });
+        .map_or(0, |chain| unsafe { native::present_is_owner(chain.as_ptr()) });
     if failed(created) || owner == 0 {
         shared.log(&format!(
             "OpenGL: DXGI creation result=0x{:08x}, intercepted={}",
@@ -1081,7 +1004,7 @@ fn open(
         return Err(INIT_FAILED);
     }
     let chain = chain.expect("created chain");
-    unsafe { (p.chain_associate)(chain.as_ptr(), window) };
+    unsafe { native::chain_associate(chain.as_ptr(), window) };
     let state = pipeline.state.get_mut().unwrap();
     state.chain = Some(chain);
     state.retry_registration = false;
@@ -1106,19 +1029,10 @@ fn reject_open(pipeline: Pipeline, cleanup: &mut Option<Pipeline>) {
 
 /// # Safety
 /// `setup` is null or readable for its `struct_size`; `out` is null or writable.
-#[cfg(not(test))]
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_gl_pipeline_open(
     setup: *const rsf_gl_pipeline_setup,
     out: *mut *mut Pipeline,
-) -> i32 {
-    unsafe { open_handle(setup, out, &linked::PLATFORM) }
-}
-
-unsafe fn open_handle(
-    setup: *const rsf_gl_pipeline_setup,
-    out: *mut *mut Pipeline,
-    platform: &'static Platform,
 ) -> i32 {
     if out.is_null() {
         return INVALID_ARGUMENT;
@@ -1129,7 +1043,7 @@ unsafe fn open_handle(
     };
     crate::initialize_handle(unsafe { &mut *out }, INIT_FAILED, || {
         let mut cleanup = None;
-        match open(&setup, platform, &mut cleanup) {
+        match open(&setup, &mut cleanup) {
             Ok(pipeline) => (OK, Some(pipeline)),
             Err(result) => (result, cleanup),
         }
@@ -1164,7 +1078,7 @@ unsafe extern "C" fn rsf_gl_pipeline_configure(
         return INVALID_ARGUMENT;
     };
     let valid = unsafe { pipeline.as_ref() }
-        .is_some_and(|pipeline| pipeline.platform.valid_options(&options, width, height));
+        .is_some_and(|_| valid_options(&options, width, height));
     if !valid {
         return INVALID_ARGUMENT;
     }
@@ -1173,7 +1087,7 @@ unsafe extern "C" fn rsf_gl_pipeline_configure(
         if result != OK {
             state.status.sr_result = result;
         } else if state.overlay {
-            unsafe { (pipeline.platform.fg_options)(&options.generation) };
+            unsafe { native::fg_options(&options.generation) };
             pipeline.request_fg(state, options.fg_backend);
         }
         result
@@ -1220,7 +1134,7 @@ unsafe extern "C" fn rsf_gl_pipeline_cpu(pipeline: *mut Pipeline, frame: u64, st
         return;
     };
     let event = pipeline.cpu_event(stage, frame, 0, 0, RSF_GAME_CPU_INPUT_KEYED);
-    unsafe { (pipeline.platform.fg_cpu)(&event) };
+    unsafe { native::fg_cpu(&event) };
 }
 
 /// Input consumer on the CPU frame owner, or an unframed window message from the event thread.
@@ -1244,7 +1158,7 @@ unsafe extern "C" fn rsf_gl_pipeline_input(
 unsafe extern "C" fn rsf_gl_pipeline_pcl_message(pipeline: *mut Pipeline) -> u32 {
     match unsafe { pipeline.as_ref() } {
         Some(pipeline) if pipeline.ready.load(Ordering::Acquire) => unsafe {
-            (pipeline.platform.pcl_message)()
+            native::pcl_message()
         },
         _ => 0,
     }
@@ -1254,7 +1168,7 @@ unsafe extern "C" fn rsf_gl_pipeline_pcl_message(pipeline: *mut Pipeline) -> u32
 unsafe extern "C" fn rsf_gl_pipeline_abort(pipeline: *mut Pipeline, frame: u64) -> i32 {
     match unsafe { pipeline.as_ref() } {
         Some(pipeline) if frame != 0 && pipeline.ready.load(Ordering::Acquire) => unsafe {
-            (pipeline.platform.present_abort)(frame)
+            native::present_abort(frame)
         },
         Some(_) if frame != 0 => NOT_READY,
         _ => INVALID_ARGUMENT,
@@ -1310,17 +1224,16 @@ unsafe extern "C" fn rsf_gl_pipeline_status_get(
     if !pipeline.ready.load(Ordering::Acquire) && !state.closed {
         return NOT_READY;
     }
-    let p = pipeline.platform;
     let mut status = state.status;
     if status.sr_result == OK {
         status.sr_result = state.evaluation_result;
     }
     drop(state);
     status.struct_size = size_of::<rsf_gl_pipeline_status>() as u32;
-    status.effective_fg = unsafe { (p.present_backend)() };
-    status.fg_switch_result = unsafe { (p.present_switch_result)() };
+    status.effective_fg = native::present_backend();
+    status.fg_switch_result = native::present_switch_result();
     status.generation.struct_size = size_of::<rsf_native_fg_status>() as u32;
-    unsafe { (p.fg_status)(&mut status.generation) };
+    unsafe { native::fg_status(&mut status.generation) };
     unsafe { out.write(status) };
     OK
 }
@@ -1340,3 +1253,5 @@ unsafe extern "C" fn rsf_gl_pipeline_close(pipeline: *mut Pipeline) -> i32 {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+use tests::native;
