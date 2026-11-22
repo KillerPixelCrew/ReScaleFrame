@@ -26,8 +26,16 @@
 #endif
 
 namespace {
-using rsf::ac7::copy_memory;
-using rsf::ac7::read;
+// Preserve the typed call sites while the guarded reads use a C boundary.
+constexpr auto copy_memory = rsf_ac7_copy_memory;
+template<class T> bool read(uint64_t base, size_t offset, T& output)
+{
+    return rsf_ac7_read_memory(&output, uintptr_t(base), offset, sizeof(T));
+}
+template<class T> bool read(const void* base, size_t offset, T& output)
+{
+    return read(uintptr_t(base), offset, output);
+}
 using Process = void(*)(void*, void*);
 // MinHook state of one hooked entry site. The site's RVA, expected bytes and pass role are owned
 // by the Rust crate (sites.rs) and reached through ac7_sites.h.

@@ -45,6 +45,11 @@ graph fixture delegates its hook table and temporal patch cases to Rust and
 still drives the independent engine ABI and WARP path from C++.
 [A01 follow-up evidence](research/rust-ac7-a01.md#startup-lifecycle-and-fixture-follow-up)
 
+A01 moves capture memory, MinHook and file effects behind C declarations
+and replays native camera, particle and TrueSky fixture data from Rust.
+The native graph still executes the UE vtables and WARP resource path.
+[A01 boundary evidence](research/rust-ac7-a01.md#guarded-memory-hook-effects-and-native-graph-replays)
+
 G04 moves D3D11 colour, motion, depth and fullscreen passes and six fixture bodies to Rust.
 Source comparison covers the public C signatures, exact shader bytes and fixture wiring. The
 standalone exposure probe uses Rust for Streamline, NGX hook lifecycle and raw dump sequencing.

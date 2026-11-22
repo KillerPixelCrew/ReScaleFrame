@@ -1,29 +1,24 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use crate::capture_platform_abi::{
+    rsf_ac7_capture_initialize_minhook, rsf_ac7_capture_install_engine_batch,
+    rsf_ac7_capture_install_root_batch, rsf_ac7_capture_remove_hook_batch, rsf_ac7_copy_memory,
+};
 use crate::motion_capture_session::{rsf_ac7_capture_enabled, say};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::core::PCWSTR;
 
 unsafe extern "C" {
-    fn rsf_ac7_capture_read_memory(
-        destination: *mut c_void,
-        source: *const c_void,
-        size: usize,
-    ) -> bool;
-    fn rsf_ac7_capture_initialize_minhook() -> bool;
-    fn rsf_ac7_capture_install_root_batch(targets: *mut *mut c_void, count: u32) -> bool;
-    fn rsf_ac7_capture_install_engine_batch(targets: *mut *mut c_void, count: u32) -> bool;
-    fn rsf_ac7_capture_remove_hook_batch(targets: *mut *mut c_void, count: u32);
     fn rsf_ac7_capture_end_session();
 }
 
 const ROOT_EFFECTS: RootHookEffects = RootHookEffects {
-    copy: rsf_ac7_capture_read_memory,
+    copy: rsf_ac7_copy_memory,
     install: rsf_ac7_capture_install_root_batch,
     remove: rsf_ac7_capture_remove_hook_batch,
 };
 const ENGINE_EFFECTS: RootHookEffects = RootHookEffects {
-    copy: rsf_ac7_capture_read_memory,
+    copy: rsf_ac7_copy_memory,
     install: rsf_ac7_capture_install_engine_batch,
     remove: rsf_ac7_capture_remove_hook_batch,
 };

@@ -5,6 +5,7 @@
 
 pub const RSF_AC7_SITE_BYTES: u32 = 16;
 pub const RSF_AC7_VELOCITY_PATCHES: u32 = 3;
+pub const RSF_AC7_RELAY_BYTES: u32 = 7;
 pub type rsf_ac7_renderer_log_fn = ::core::option::Option<
     unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: *const ::core::ffi::c_char),
 >;
@@ -97,3 +98,59 @@ unsafe extern "C" {
         leaves: *const rsf_ac7_code_leaves,
     ) -> bool;
 }
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_ac7_call_relay {
+    pub call: *mut ::core::ffi::c_uchar,
+    pub slot: *mut ::core::ffi::c_void,
+    pub native: [::core::ffi::c_uchar; 7usize],
+    pub relayed: [::core::ffi::c_uchar; 7usize],
+    pub size: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_ac7_call_relay"][::core::mem::size_of::<rsf_ac7_call_relay>() - 40usize];
+    ["Alignment of rsf_ac7_call_relay"][::core::mem::align_of::<rsf_ac7_call_relay>() - 8usize];
+    ["Offset of field: rsf_ac7_call_relay::call"]
+        [::core::mem::offset_of!(rsf_ac7_call_relay, call) - 0usize];
+    ["Offset of field: rsf_ac7_call_relay::slot"]
+        [::core::mem::offset_of!(rsf_ac7_call_relay, slot) - 8usize];
+    ["Offset of field: rsf_ac7_call_relay::native"]
+        [::core::mem::offset_of!(rsf_ac7_call_relay, native) - 16usize];
+    ["Offset of field: rsf_ac7_call_relay::relayed"]
+        [::core::mem::offset_of!(rsf_ac7_call_relay, relayed) - 23usize];
+    ["Offset of field: rsf_ac7_call_relay::size"]
+        [::core::mem::offset_of!(rsf_ac7_call_relay, size) - 32usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_ac7_truesky_patches {
+    pub resolution_site: *mut ::core::ffi::c_uchar,
+    pub depth_branch: *mut ::core::ffi::c_uchar,
+    pub depth_format_site: *mut ::core::ffi::c_uchar,
+    pub depth_call: rsf_ac7_call_relay,
+    pub motion_call: rsf_ac7_call_relay,
+    pub resolution_refused: bool,
+    pub motion_refused: bool,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_ac7_truesky_patches"]
+        [::core::mem::size_of::<rsf_ac7_truesky_patches>() - 112usize];
+    ["Alignment of rsf_ac7_truesky_patches"]
+        [::core::mem::align_of::<rsf_ac7_truesky_patches>() - 8usize];
+    ["Offset of field: rsf_ac7_truesky_patches::resolution_site"]
+        [::core::mem::offset_of!(rsf_ac7_truesky_patches, resolution_site) - 0usize];
+    ["Offset of field: rsf_ac7_truesky_patches::depth_branch"]
+        [::core::mem::offset_of!(rsf_ac7_truesky_patches, depth_branch) - 8usize];
+    ["Offset of field: rsf_ac7_truesky_patches::depth_format_site"]
+        [::core::mem::offset_of!(rsf_ac7_truesky_patches, depth_format_site) - 16usize];
+    ["Offset of field: rsf_ac7_truesky_patches::depth_call"]
+        [::core::mem::offset_of!(rsf_ac7_truesky_patches, depth_call) - 24usize];
+    ["Offset of field: rsf_ac7_truesky_patches::motion_call"]
+        [::core::mem::offset_of!(rsf_ac7_truesky_patches, motion_call) - 64usize];
+    ["Offset of field: rsf_ac7_truesky_patches::resolution_refused"]
+        [::core::mem::offset_of!(rsf_ac7_truesky_patches, resolution_refused) - 104usize];
+    ["Offset of field: rsf_ac7_truesky_patches::motion_refused"]
+        [::core::mem::offset_of!(rsf_ac7_truesky_patches, motion_refused) - 105usize];
+};

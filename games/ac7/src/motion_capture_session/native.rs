@@ -5,6 +5,7 @@ use super::{
     CaptureEffects, CaptureInterval, CaptureStamp, Stats, rsf_ac7_capture_failures,
     rsf_ac7_capture_present, rsf_ac7_capture_shutdown,
 };
+use crate::capture_platform_abi::rsf_ac7_capture_write_file;
 use crate::motion_capture_records::artifacts::rsf_ac7_capture_publish_checkpoint;
 use std::ffi::{c_char, c_void};
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
@@ -20,7 +21,6 @@ unsafe extern "C" {
     fn rsf_ac7_capture_engine_installed() -> bool;
     fn rsf_ac7_capture_current_command_address() -> *const c_void;
     fn rsf_ac7_capture_set_sample(enabled: bool);
-    fn rsf_ac7_capture_write_file(path: *const c_char, data: *const u8, size: usize) -> bool;
 }
 
 unsafe extern "C" fn poll(chain: *mut c_void, pressed: *mut bool) -> bool {

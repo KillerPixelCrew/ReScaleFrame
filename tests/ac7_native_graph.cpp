@@ -2,6 +2,7 @@
 // Exercise the private adapter through an independent engine ABI caller and queued executor.
 #define RSF_AC7_GRAPH_TEST 1
 #include "../games/ac7/src/native_renderer.cpp"
+#include "ac7_graph_replay.h"
 extern "C" bool rsf_ac7_graph_fixture_view(float* output, size_t size);
 extern "C" bool rsf_ac7_graph_fixture_velocity_patches(
     unsigned char* image, size_t size, const rsf_ac7_code_leaves* leaves);
@@ -169,93 +170,47 @@ void original_context(void* raw_context, void* raw_root) {
 int main() {
     using namespace harness;
     {
-        // Exercise the actual camera classifier through independent copies of its native ABI.
-        auto* module=static_cast<unsigned char*>(VirtualAlloc(nullptr,0x3cd0000,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE));
-        check(module!=nullptr,"allocate native class-cache fixture");
+        // Only this native leaf switches the module observed by the production classifier.
+        constexpr size_t module_size = 0x3cd0000;
+        auto* module = static_cast<unsigned char*>(VirtualAlloc(nullptr, module_size,
+            MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+        check(module != nullptr, "allocate native class-cache fixture");
         if (module) {
-            std::array<unsigned char,0x728> engine_data{};std::array<unsigned char,0x90> client{};
-            std::array<unsigned char,0xf8> world{};std::array<unsigned char,0x48> instance{};std::array<unsigned char,0x38> player{};
-            std::array<unsigned char,0x408> controller{};std::array<unsigned char,0xe18> pawn{};std::array<unsigned char,0x1ca0> camera{};
-            std::array<unsigned char,0x308> level{};std::array<unsigned char,0x4f0> settings{};std::array<unsigned char,0x18> target_actor{};
-            std::array<unsigned char,0xa0> plane_class{},camera_class{};uint64_t plane_base=uint64_t(uintptr_t(plane_class.data()+0x88)),camera_base=uint64_t(uintptr_t(camera_class.data()+0x88));
-            auto put=[](auto* bytes,size_t offset,const auto& value){std::memcpy(bytes+offset,&value,sizeof(value));};
-            auto pointer=[](auto& bytes){return uint64_t(uintptr_t(bytes.data()));};
-            const uint64_t engine_pointer=pointer(engine_data),player_pointer=pointer(player);
-            put(module,0x3cbbc28,engine_pointer);put(module,0x3a84660,pointer(plane_class));put(module,0x3cc0150,pointer(camera_class));
-            put(plane_class.data(),0x88,uint64_t(uintptr_t(&plane_base)));put(camera_class.data(),0x88,uint64_t(uintptr_t(&camera_base)));
-            put(engine_data.data(),0x720,pointer(client));put(client.data(),0x80,pointer(world));put(client.data(),0x88,pointer(instance));
-            put(instance.data(),0x38,uint64_t(uintptr_t(&player_pointer)));const int32_t one=1;put(instance.data(),0x40,one);
-            put(player.data(),0x30,pointer(controller));put(controller.data(),0x370,pointer(pawn));put(controller.data(),0x400,pointer(camera));
-            put(world.data(),0x30,pointer(level));put(level.data(),0x300,pointer(settings));put(pawn.data(),0x10,pointer(plane_class));
-            pawn[0xe12]=1;put(camera.data(),0xfb0,pointer(pawn));test_module=module;
-            uint32_t reset=0,why=0;uint64_t owner=0;
-            check(render_screen(reset,why,owner)==RSF_SCREEN_FLIGHT,"normal possessed-plane view remains flight");
-            put(target_actor.data(),0x10,pointer(camera_class));put(camera.data(),0xfb0,pointer(target_actor));pawn[0xe12]=0;
-            check(render_screen(reset,why,owner)==RSF_SCREEN_REPLAY && owner==pointer(target_actor),"rendered cinematic camera is eligible without pawn camera input");
-            camera[0x1c99]=4;reset=0;check(render_screen(reset,why,owner)==RSF_SCREEN_REPLAY && reset==1,"native cinematic cuts retain temporal reset");
-            const uint64_t pending=pointer(target_actor);put(camera.data(),0x15a0,pending);check(render_screen(reset,why,owner)==RSF_SCREEN_UNKNOWN,"pending camera transition still refuses FG");
-            const uint64_t zero=0;put(camera.data(),0x15a0,zero);put(settings.data(),0x4e8,pointer(player));check(render_screen(reset,why,owner)==RSF_SCREEN_UNKNOWN,"paused cinematics still refuse FG");
-            put(settings.data(),0x4e8,zero);put(pawn.data(),0x10,zero);check(render_screen(reset,why,owner)==RSF_SCREEN_UNKNOWN,"generic camera without mission plane does not become gameplay");
-            test_module=nullptr;VirtualFree(module,0,MEM_RELEASE);
+            const auto classify = [](uint32_t* reset, uint32_t* why, uint64_t* owner) noexcept {
+                return render_screen(*reset, *why, *owner);
+            };
+            test_module = module;
+            rsf_ac7_graph_replay_camera(module, module_size, classify, check);
+            test_module = nullptr;
+            VirtualFree(module, 0, MEM_RELEASE);
         }
     }
     {
-        std::array<unsigned char,0x160> source{};
-        std::array<unsigned char,0xa0> fill{};
-        std::array<unsigned char,512> particles{};
-        std::array<unsigned char,1600> vertices{};
-        auto put=[](auto& bytes,size_t offset,const auto& value){std::memcpy(bytes.data()+offset,&value,sizeof(value));};
-        const int32_t active=2,particle_stride=256,payload=128,sheets=2,count=20,vertex_stride=80;
-        const uint64_t particle_pointer=uint64_t(uintptr_t(particles.data())),vertex_pointer=uint64_t(uintptr_t(vertices.data()));
-        put(source,0x44,active);put(source,0x48,particle_stride);put(source,0x60,particle_pointer);put(source,0x12c,payload);put(source,0x154,sheets);
-        put(fill,0x88,count);put(fill,0x8c,vertex_stride);put(fill,0x90,vertex_pointer);
-        const uint32_t first=(3u<<20)|55u,second=(12u<<20)|99u;const int32_t two=2,four=4;
-        put(particles,0x5c,first);put(particles,256+0x5c,second);put(particles,128+0x58,two);put(particles,256+128+0x58,four);
-        for (size_t i=0;i<vertices.size();++i) vertices[i]=static_cast<unsigned char>(i);
-        const auto native=vertices;
-        check(tag_beam_vertices(source.data(),fill.data()),"tag exact native beam ranges across particles and sheets");
-        for (uint32_t i=0;i<20;++i) {
-            const uint32_t beam=i<8 ? 0u : 1u,pairs=beam ? 3u : 2u,start=beam ? 8u : 0u;
-            const uint32_t point=(i-start)/2,sheet=point/pairs,sample=point%pairs,counter=beam ? second : first;
-            uint32_t a=0,b=0,c=0;
-            std::memcpy(&a,vertices.data()+i*80+12,4);std::memcpy(&b,vertices.data()+i*80+28,4);std::memcpy(&c,vertices.data()+i*80+44,4);
-            check(a==normal_tag(counter|((sheet&3)<<26)) && b==normal_tag(counter|((sheet>>2)<<26)) && c==normal_tag(sample|((pairs-1)<<12)),
-                "beam counter/sheet/sample tag follows producer ordering");
-            for (uint32_t byte=0;byte<80;++byte) if (byte<12 || byte>=16 && byte<28 || byte>=32 && byte<44 || byte>=48)
-                check(vertices[i*80+byte]==native[i*80+byte],"beam tagging preserves all native geometry/material fields");
-        }
-        const int32_t wrong=19;put(fill,0x88,wrong);
-        check(!tag_beam_vertices(source.data(),fill.data()),"mismatched native beam count refuses partial identity writes");
-        float invalid=1;std::memcpy(&invalid,vertices.data()+44,4);check(invalid==0,"refused beam fill invalidates stale pooled tags");
-        put(fill,0x88,count);rsf_ac7_native_renderer owner;owner.active=true;installed.store(&owner);
-        sites[hook_beam_no_noise].original=sites[hook_beam_noise].original=sites[hook_beam_interpolated_noise].original=reinterpret_cast<void*>(&beam_original);
-        check(hooked_beam_fill<hook_beam_no_noise>(source.data(),fill.data())==0x1234 &&
-            hooked_beam_fill<hook_beam_noise>(source.data(),fill.data())==0x1234 &&
-            hooked_beam_fill<hook_beam_interpolated_noise>(source.data(),fill.data())==0x1234 && beam_calls==3,
-            "all native beam producer detours preserve the original call and return");
-        installed.store(nullptr);
-        // A new trail head must not rename surviving points or segments. Follow the copied
-        // native linked-particle payload, including interpolation between two stable counters.
-        std::array<unsigned char,0x150> trail_source{};
-        const int32_t trail_count=8,trail_payload=128;const uint16_t particle_indices[]{0,1};
-        const uint64_t index_pointer=uint64_t(uintptr_t(particle_indices));
-        put(trail_source,0x64,active);put(trail_source,0x68,particle_stride);put(trail_source,0x80,particle_pointer);
-        put(trail_source,0x88,index_pointer);put(trail_source,0x138,trail_payload);put(fill,0x88,trail_count);
-        const uint32_t head=0x40000001u,tail=0x20003fffu;const int32_t three=3;
-        put(particles,128,head);put(particles,256+128,tail);put(particles,256+128+0x1c,three);
-        check(tag_trail_vertices(trail_source.data(),fill.data(),1),"tag linked trail endpoints and interpolated parent pairs");
-        uint32_t raw=0;std::memcpy(&raw,vertices.data()+2*80+12,4);
-        check(raw==normal_tag(second|(1u<<28)),"trail interpolated point retains current particle counter");
-        std::memcpy(&raw,vertices.data()+2*80+28,4);check(raw==normal_tag(first),"trail interpolation identifies its prior linked particle");
-        std::memcpy(&raw,vertices.data()+2*80+44,4);check(raw==normal_tag(2u|(3u<<12)),"trail sample fraction follows native reverse interpolation loop");
-        put(particles,256+128,head);
-        check(!tag_trail_vertices(trail_source.data(),fill.data(),2),"cyclic trail payload refuses identity production");
-        put(particles,256+128,tail);installed.store(&owner);
-        sites[hook_ribbon_fill].original=sites[hook_anim_trail_fill].original=reinterpret_cast<void*>(&beam_original);
-        check(hooked_beam_fill<hook_ribbon_fill>(trail_source.data(),fill.data())==0x1234 &&
-            hooked_beam_fill<hook_anim_trail_fill>(trail_source.data(),fill.data())==0x1234 && beam_calls==5,
-            "native ribbon/animated-trail detours preserve original calls and returns");
-        installed.store(nullptr);
+        rsf_ac7_native_renderer owner;
+        owner.active = true;
+        const rsf_ac7_graph_particle_replay replay{
+            &owner, check, tag_beam_vertices, tag_trail_vertices,
+            [](void* owner, void* source, void* fill) noexcept {
+                installed.store(static_cast<rsf_ac7_native_renderer*>(owner));
+                sites[hook_beam_no_noise].original = sites[hook_beam_noise].original =
+                    sites[hook_beam_interpolated_noise].original = reinterpret_cast<void*>(&beam_original);
+                const bool forwarded = hooked_beam_fill<hook_beam_no_noise>(source, fill) == 0x1234 &&
+                    hooked_beam_fill<hook_beam_noise>(source, fill) == 0x1234 &&
+                    hooked_beam_fill<hook_beam_interpolated_noise>(source, fill) == 0x1234 && beam_calls == 3;
+                installed.store(nullptr);
+                return forwarded;
+            },
+            [](void* owner, void* source, void* fill) noexcept {
+                installed.store(static_cast<rsf_ac7_native_renderer*>(owner));
+                sites[hook_ribbon_fill].original = sites[hook_anim_trail_fill].original =
+                    reinterpret_cast<void*>(&beam_original);
+                const bool forwarded = hooked_beam_fill<hook_ribbon_fill>(source, fill) == 0x1234 &&
+                    hooked_beam_fill<hook_anim_trail_fill>(source, fill) == 0x1234 && beam_calls == 5;
+                installed.store(nullptr);
+                return forwarded;
+            },
+        };
+        rsf_ac7_graph_replay_particles(&replay);
     }
     {
         // Exercise the actual native producer hook and its queued RHI command. References must
@@ -430,23 +385,16 @@ int main() {
     auto* plugin = static_cast<unsigned char*>(VirtualAlloc(nullptr, 0xd0000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     check(plugin != nullptr, "allocate a TrueSky code image");
     if (plugin) {
-        const unsigned char before[]{0x49,0x8b,0x8e,0x28,0x02,0x00,0x00,0x45,0x8b,0xc4,0x49,0x8b,0xd7,0x48,0x8b,0x01};
-        const unsigned char draw[]{0xff,0x90,0x30,0x01,0x00,0x00,0x49,0x8b,0x9e,0x60,0x02,0x00,0x00,0x48,0x8d,0x0d};
-        auto* call = plugin + 0xabc6b;
-        std::memcpy(call - sizeof(before), before, sizeof(before)); std::memcpy(call, draw, sizeof(draw));
-        rsf_ac7_native_renderer truesky_owner;
+        rsf_ac7_native_renderer owner;
+        const auto apply = [](void* raw) noexcept {
+            apply_cloud_resolution_patch(*static_cast<rsf_ac7_native_renderer*>(raw));
+        };
+        const auto restore = [](void* raw) noexcept {
+            return restore_truesky(*static_cast<rsf_ac7_native_renderer*>(raw));
+        };
         test_truesky_module = plugin;
-        apply_cloud_resolution_patch(truesky_owner);
-        const auto& owned = truesky_owner.truesky;
-        check(owned.resolution_refused && !owned.depth_call.slot && !owned.depth_branch && owned.motion_call.call == call,
-            "depth route refuses without its code and effect; the composite relay installs");
-        check(call[0] == 0xff && call[1] == 0x15 && std::memcmp(call + 6, draw + 6, sizeof(draw) - 6) == 0,
-            "relay call is patched in over six bytes");
-        int32_t relative = 0; std::memcpy(&relative, call + 2, 4);
-        void* target = nullptr; std::memcpy(&target, call + 6 + relative, sizeof(target));
-        check(target == reinterpret_cast<void*>(&native_cloud_composite_draw), "relay slot holds the handler");
-        check(restore_truesky(truesky_owner) && std::memcmp(call, draw, sizeof(draw)) == 0 &&
-            !owned.motion_call.call && !owned.motion_call.slot, "restore puts back the native call and releases the slot");
+        rsf_ac7_graph_replay_truesky(plugin, 0xd0000, &owner, &owner.truesky,
+            reinterpret_cast<void*>(&native_cloud_composite_draw), apply, restore, check);
         test_truesky_module = nullptr;
         VirtualFree(plugin, 0, MEM_RELEASE);
     }

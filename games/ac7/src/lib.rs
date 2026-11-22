@@ -21,6 +21,8 @@
 //! publishes the guarded native leaf snapshot in ac7_platform.h and keeps the exported
 //! rsf_get_game_plugin_api. The combined carriers call `carrier.rs` for their executable and
 //! window identifiers, GameSDK probe and decrypted patch policy through ac7_carrier.h.
+#[cfg(windows)]
+mod capture_platform_abi;
 mod carrier;
 mod carrier_abi;
 mod cloud_depth;

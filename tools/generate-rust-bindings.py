@@ -366,6 +366,11 @@ generate("games/fallout4/src/cpu_abi.rs", "games/fallout4/src/cpu_events_platfor
          ["-Isdk/game/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
           "--with-derive-custom-struct", "rsf_fallout4_cpu_identity=Debug,PartialEq,Eq"])
+generate("games/ac7/src/capture_platform_abi.rs", "games/ac7/src/ac7_capture_io.h",
+         "NOTHING", "NOTHING", ["-Igames/ac7/include",
+          "-include", "rescaleframe/ac7_memory.h", "-include", "rescaleframe/ac7_hooks.h"],
+         ["--allowlist-function",
+          "rsf_ac7_(copy_memory|read_memory|capture_(write_file|initialize_minhook|(install_(root|engine)|remove_hook)_batch))"])
 generate("games/ac7/src/carrier_abi.rs", "games/ac7/include/rescaleframe/ac7_carrier.h",
          "rsf_ac7_carrier_(leaves|patch_fn)", "RSF_AC7_(CARRIER_.*|JITTER_RELAY_.*)",
          ["-Isdk/game/include"],
@@ -392,11 +397,15 @@ generate("games/ac7/src/scope_abi.rs", "games/ac7/src/ac7_scope_owner.h",
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "use crate::platform_abi::{rsf_ac7_render_scope, rsf_ac7_render_scope_fn};"])
 generate("tests/ac7_graph_patch_abi.rs", "games/ac7/src/ac7_sites.h",
-         "rsf_ac7_(code_(leaves|patch|patches)|renderer_log_fn)",
-         "RSF_AC7_(SITE_BYTES|VELOCITY_PATCHES)",
+         "rsf_ac7_(code_(leaves|patch|patches)|renderer_log_fn|call_relay|truesky_patches)",
+         "RSF_AC7_(SITE_BYTES|VELOCITY_PATCHES|RELAY_BYTES)",
          ["-Isdk/game/include", "-Igames/ac7/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
           "--allowlist-function", "rsf_ac7_velocity_(patch|apply|restore)"])
+generate("tests/ac7_graph_replay_abi.rs", "tests/ac7_graph_replay.h",
+         "rsf_ac7_graph_(particle_replay|check_fn|screen_fn|sky_(apply|restore)_fn)",
+         "RSF_SCREEN_(UNKNOWN|FLIGHT|REPLAY)",
+         ["-Isdk/game/include"])
 generate("games/ac7/src/view_abi.rs", "games/ac7/include/rescaleframe/ac7_view.h",
          "rsf_ac7_view(_result)?", "RSF_AC7_VIEW_.*", [],
          ["--with-derive-default", "--raw-line", "#![allow(dead_code)]"])

@@ -115,3 +115,64 @@ detours and caller checks, carrier exports and linkage, shared D3D11 host and
 the A02 view owner against the base. Rust 1.94.1 formatting, bindgen 0.72.1
 regeneration, locked offline Windows metadata and whitespace checks passed.
 Compile, link, fixture, device and game verification remain pending.
+
+## Guarded memory, hook effects and native graph replays
+
+This source replay starts from `f4871e47` with the camera paths from
+`7249a2a1` and `89723680` present. It uses the matching Steam 9855922
+evidence in [engine.json](../../games/ac7/engine.json) and the
+[native hook map](ue418-hook-map.md). No executable or device was sampled
+for this follow-up.
+
+- `games/ac7/include/rescaleframe/ac7_memory.h` and
+  `games/ac7/src/ac7_memory.c` expose one guarded C copy and a checked
+  base-plus-offset read. The MSVC leaf keeps `__try` around the same
+  `memcpy`. The fallback retains the committed, unguarded single-region
+  check and checks the remaining range without wrapping. It still cannot
+  protect against concurrent page changes. The native renderer retains its
+  typed read adapters. The capture records and root hook preflight call
+  the same C copy through `games/ac7/src/capture_platform_abi.rs`.
+- `games/ac7/include/rescaleframe/ac7_hooks.h` and
+  `games/ac7/src/ac7_hooks.c` provide C MinHook effects for the existing
+  Rust batch order and rollback in `games/ac7/src/hook_batch.rs`. Capture
+  accepts the same MinHook status codes. The six root and three engine
+  detour bindings and their typed originals remain in
+  `games/ac7/src/motion_capture_trampolines.cpp`, which also retains C++
+  scope restoration on foreign unwind and the SEH-guarded typed
+  graph-output getter. The guarded root and engine site tables, the
+  queued RHI current-command proof and native renderer detours are
+  identical to the source base.
+- `games/ac7/src/ac7_capture_io.c` and `games/ac7/src/ac7_capture_io.h`
+  supply the file effect to `games/ac7/src/motion_capture_session/native.rs`.
+  The effect still uses the narrow CRT path, binary write, short-write
+  check and close result. Rust retains the F9 session and artifact policy.
+- `tests/ac7_graph_replay.rs` owns three scripted fixture replays under
+  the existing native graph CTest entry. Camera replay seeds GEngine at
+  `0x3cbbc28` and the two class caches at `0x3a84660` and `0x3cc0150`.
+  It checks possessed-plane flight, rendered cinematic owner, cut,
+  pending transition, pause and missing mission plane. Particle replay
+  checks the two beams, both sheets, tag ordering and untouched vertex
+  fields, refused count and invalidated tags, trail interpolation and
+  cyclic refusal. The exact three beam and two trail originals still
+  execute through typed C++ detours. TrueSky replay seeds the existing
+  call window at `0xabc6b`, checks depth refusal and the six-byte composite
+  relay, resolves its handler slot and checks the native bytes and owner
+  after restore.
+- `tests/ac7_native_graph.cpp` still executes the private UE graph
+  vtable caller, graph registration, native visibility and AA work,
+  WARP clear/readback, delayed RHI execution with the original frame
+  identity, guard lifetime and COM/pool lease retirement. It lends the
+  three new replays the real classifier, typed detours and TrueSky
+  apply/restore leaves. The native A02 view owner and the carrier and
+  frame-tap G02 compatibility path, including recombine camera admission,
+  match the base. See the [camera provenance trace](ac7-frame-tap-constant-provenance.md).
+
+`tools/generate-rust-bindings.py` regenerates the private capture
+bindings and `tests/ac7_graph_replay_abi.rs` and
+`tests/ac7_graph_patch_abi.rs`. Source comparison checked native detour
+bodies and bindings, camera offsets, TrueSky call bytes, the WARP graph
+path and both camera owners. MSVC x64 `/Zs /W4 /WX` parsed all three C
+leaves, both edited C++ production units and the graph fixture. Rust
+1.94.1 formatting, targeted bindgen 0.72.1 reproduction, locked offline
+Windows Cargo metadata and whitespace checks passed. Compile, link and
+runtime fixture verification remain pending.

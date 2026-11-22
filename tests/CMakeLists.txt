@@ -777,7 +777,7 @@ add_custom_command(OUTPUT "${ac7_view_fixture_object}"
         --crate-name rsf_ac7_view_fixture --crate-type lib --emit obj -C codegen-units=1
         -C panic=abort -C opt-level=$<IF:$<CONFIG:Debug>,0,3>
         -o "${ac7_view_fixture_object}" "${CMAKE_CURRENT_SOURCE_DIR}/ac7_view_fixture.rs"
-    DEPENDS ac7_view_fixture.rs ac7_graph_patch_abi.rs
+    DEPENDS ac7_view_fixture.rs ac7_graph_patch_abi.rs ac7_graph_replay.rs ac7_graph_replay_abi.rs
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     VERBATIM)
 set_source_files_properties("${ac7_view_fixture_object}" PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE)

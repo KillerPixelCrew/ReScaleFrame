@@ -3,6 +3,7 @@
 //! reads go through the guarded platform copy.
 
 use super::*;
+use crate::capture_platform_abi::rsf_ac7_read_memory;
 use crate::motion_capture_session::{
     rsf_ac7_capture_fail, rsf_ac7_capture_sample, rsf_ac7_capture_sampled,
 };
@@ -11,11 +12,6 @@ use windows::Win32::System::Performance::QueryPerformanceCounter;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 
 unsafe extern "C" {
-    fn rsf_ac7_capture_read_memory(
-        destination: *mut c_void,
-        source: *const c_void,
-        size: usize,
-    ) -> bool;
     fn rsf_ac7_capture_checkpoint_native(capture: CaptureInterval);
     fn rsf_ac7_capture_get_graph_output(
         getter: u64,
@@ -32,14 +28,14 @@ fn tick() -> u64 {
 }
 
 fn read<T>(base: u64, offset: usize, destination: &mut T) -> bool {
-    base != 0
-        && unsafe {
-            rsf_ac7_capture_read_memory(
-                from_mut(destination).cast(),
-                (base as usize).wrapping_add(offset) as *const c_void,
-                size_of::<T>(),
-            )
-        }
+    unsafe {
+        rsf_ac7_read_memory(
+            from_mut(destination).cast(),
+            base as usize,
+            offset,
+            size_of::<T>(),
+        )
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -118,8 +114,7 @@ fn capture_blob<const N: usize>(base: u64, capture: CaptureInterval) -> u32 {
         return 0;
     }
     bytes.resize(N, 0);
-    let source = base as usize as *const c_void;
-    if base == 0 || !unsafe { rsf_ac7_capture_read_memory(bytes.as_mut_ptr().cast(), source, N) } {
+    if !unsafe { rsf_ac7_read_memory(bytes.as_mut_ptr().cast(), base as usize, 0, N) } {
         return 0;
     }
     store_blob(capture, &bytes).unwrap_or_else(|| {

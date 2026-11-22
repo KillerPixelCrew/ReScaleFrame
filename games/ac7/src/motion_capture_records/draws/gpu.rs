@@ -2,6 +2,7 @@
 //! Typed COM access for synchronous AC7 capture observations.
 
 use super::{BoundConstant, BoundView, Dispatch, QueuedDraw, Resource};
+use crate::capture_platform_abi::rsf_ac7_copy_memory;
 use crate::motion_capture_graphics_abi::*;
 use crate::motion_capture_observations::buffers::*;
 use crate::motion_capture_observations::colour::{
@@ -24,11 +25,6 @@ use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::core::Interface;
 
 unsafe extern "C" {
-    fn rsf_ac7_capture_read_memory(
-        destination: *mut c_void,
-        source: *const c_void,
-        size: usize,
-    ) -> bool;
     fn rsf_ac7_capture_current_command_address() -> *const c_void;
 }
 
@@ -329,6 +325,5 @@ unsafe extern "C" fn dispatch(
 }
 
 fn read_u64(source: *const c_void, value: &mut u64) -> bool {
-    !source.is_null()
-        && unsafe { rsf_ac7_capture_read_memory(std::ptr::from_mut(value).cast(), source, 8) }
+    !source.is_null() && unsafe { rsf_ac7_copy_memory(std::ptr::from_mut(value).cast(), source, 8) }
 }

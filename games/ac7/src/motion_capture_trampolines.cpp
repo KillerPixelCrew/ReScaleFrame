@@ -3,7 +3,7 @@
 #include <rescaleframe/ac7_memory.h>
 #include <rescaleframe/ac7_motion_capture.h>
 #include <cstddef>
-#include <cstdio>
+#include <windows.h>
 #include <iterator>
 
 // The Rust record assertions document the sizes and lifetimes of this inline storage. Only
@@ -38,11 +38,6 @@ NativeRootScope rsf_ac7_capture_enter_root(const RootRecord*);
 void rsf_ac7_capture_restore_root(const NativeRootScope*);
 }
 
-extern "C" bool rsf_ac7_capture_read_memory(void* destination, const void* source, size_t size)
-{
-    return rsf::ac7::copy_memory(destination, source, size);
-}
-
 extern "C" bool rsf_ac7_capture_get_graph_output(uint64_t getter, uint64_t node, uint32_t index, uint64_t* output)
 {
     using GetOutput = void*(*)(void*, uint32_t);
@@ -56,14 +51,6 @@ extern "C" bool rsf_ac7_capture_get_graph_output(uint64_t getter, uint64_t node,
 #if defined(_MSC_VER)
     } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 #endif
-}
-
-extern "C" bool rsf_ac7_capture_write_file(const char* path, const unsigned char* data, size_t bytes) noexcept
-{
-    FILE* file = std::fopen(path, "wb");
-    if (!file) return false;
-    const bool ok = bytes == 0 || std::fwrite(data, 1, bytes, file) == bytes;
-    return std::fclose(file) == 0 && ok;
 }
 
 namespace {
@@ -90,7 +77,7 @@ struct RootScope {
 
 bool copy_previous(float* destination, const float* source) noexcept
 {
-    return rsf_ac7_capture_read_memory(destination, source, 16 * sizeof(float));
+    return rsf_ac7_copy_memory(destination, source, 16 * sizeof(float));
 }
 
 bool hooked_history(void* cache, void* primitive, float* previous)
@@ -177,7 +164,7 @@ bool install_root_hooks(void** targets, uint32_t count)
         reinterpret_cast<void**>(&original_widget_prepare), reinterpret_cast<void**>(&original_widget_queue),
         reinterpret_cast<void**>(&original_add_temporal), reinterpret_cast<void**>(&original_temporal_process),
         reinterpret_cast<void**>(&original_graph_process)};
-    return count == std::size(detours) && rsf::ac7::install_hooks(targets, detours, originals, count);
+    return count == std::size(detours) && rsf_ac7_capture_install_hooks(targets, detours, originals, count);
 }
 
 bool install_engine_hooks(void** targets, uint32_t count)
@@ -186,16 +173,10 @@ bool install_engine_hooks(void** targets, uint32_t count)
         reinterpret_cast<void*>(&hooked_history)};
     void** originals[] = {reinterpret_cast<void**>(&original_should), reinterpret_cast<void**>(&original_has),
         reinterpret_cast<void**>(&original_history)};
-    return count == std::size(detours) && rsf::ac7::install_hooks(targets, detours, originals, count);
+    return count == std::size(detours) && rsf_ac7_capture_install_hooks(targets, detours, originals, count);
 }
 
 } // namespace
-
-extern "C" bool rsf_ac7_capture_initialize_minhook()
-{
-    const auto init = MH_Initialize();
-    return init == MH_OK || init == MH_ERROR_ALREADY_INITIALIZED;
-}
 
 extern "C" bool rsf_ac7_capture_install_root_batch(void** targets, uint32_t count)
 {
@@ -205,9 +186,4 @@ extern "C" bool rsf_ac7_capture_install_root_batch(void** targets, uint32_t coun
 extern "C" bool rsf_ac7_capture_install_engine_batch(void** targets, uint32_t count)
 {
     return install_engine_hooks(targets, count);
-}
-
-extern "C" void rsf_ac7_capture_remove_hook_batch(void** targets, uint32_t count)
-{
-    rsf::ac7::remove_hooks(targets, count);
 }

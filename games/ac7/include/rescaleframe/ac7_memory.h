@@ -1,37 +1,17 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
-/* Reads of live engine memory that must fail soft. Internal to the AC7 module. */
-#include <windows.h>
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
-namespace rsf::ac7 {
-/* No C++ objects in the SEH scope. These are live engine arguments, but a mismatched layout must
-   produce an unreadable record rather than a second fault inside diagnostic code. Without MSVC
-   there is no __try, so the range is checked with VirtualQuery instead (not race-free, but the
-   readers only ever see committed engine pages). */
-inline bool copy_memory(void* output, const void* input, size_t size)
-{
-    if (!output || !input) return false;
-#if defined(_MSC_VER)
-    __try { std::memcpy(output, input, size); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-#else
-    MEMORY_BASIC_INFORMATION m{};
-    if (!VirtualQuery(input, &m, sizeof(m)) || m.State != MEM_COMMIT ||
-        (m.Protect & (PAGE_NOACCESS | PAGE_GUARD)) ||
-        uintptr_t(input) + size > uintptr_t(m.BaseAddress) + m.RegionSize) return false;
-    std::memcpy(output, input, size); return true;
+#ifdef __cplusplus
+extern "C" {
 #endif
+
+/* Copies live AC7 engine bytes under the platform's guarded memory read. */
+bool rsf_ac7_copy_memory(void* output, const void* input, size_t size);
+bool rsf_ac7_read_memory(void* output, uintptr_t base, size_t offset, size_t size);
+
+#ifdef __cplusplus
 }
-/* T at base + offset. A null base reads nothing. */
-template<class T> bool read(const void* base, size_t offset, T& output)
-{
-    return base && copy_memory(&output, static_cast<const unsigned char*>(base) + offset, sizeof(T));
-}
-template<class T> bool read(uint64_t base, size_t offset, T& output)
-{
-    return base && copy_memory(&output, reinterpret_cast<const void*>(uintptr_t(base) + offset), sizeof(T));
-}
-}
+#endif
