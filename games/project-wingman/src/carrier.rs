@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! The Wingman XInput carrier's optional, process-lived plugin session.
 use crate::{AMD64, EXECUTABLE};
-use rsf_game_sys::plugin_session_abi::{
-    RSF_PLUGIN_SESSION_ABI_VERSION, rsf_plugin_session_options,
-};
-use rsf_game_sys::{RSF_GAME_ABI_VERSION, rsf_game_host_services, rsf_game_probe};
+use rsf_game_sys::plugin_session_abi::rsf_plugin_session_options;
+use rsf_game_sys::session::{Probe, host_services, with_session_options};
 use std::ffi::{CStr, OsString, c_char, c_void};
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -161,29 +159,17 @@ unsafe extern "C" fn rsf_wingman_carrier_start(module: HMODULE, fingerprint: Fin
         write_log(b"Executable fingerprint could not be read.");
         return 1;
     }
-    let probe = rsf_game_probe {
-        struct_size: size_of::<rsf_game_probe>() as u32,
-        pe_machine: AMD64,
-        reserved: 0,
-        executable_name_utf8: EXECUTABLE.as_ptr(),
-        sha256_hex: digest.as_ptr(),
+    let probe = Probe {
+        machine: AMD64,
+        executable: EXECUTABLE,
+        sha256: unsafe { CStr::from_ptr(digest.as_ptr()) },
     };
     let plugin_path = path_with(parent, "ReScaleFrame\\ReScaleFrame.Game.ProjectWingman.dll");
-    // Absent services are null. The Runtime takes a copy before prepare returns.
-    let mut services: rsf_game_host_services = unsafe { std::mem::zeroed() };
-    services.struct_size = size_of::<rsf_game_host_services>() as u32;
-    services.abi_version = RSF_GAME_ABI_VERSION;
-    services.session_id = unsafe { GetTickCount64() }.saturating_add(1);
-    services.log = Some(host_log);
-    let options = rsf_plugin_session_options {
-        struct_size: size_of::<rsf_plugin_session_options>() as u32,
-        abi_version: RSF_PLUGIN_SESSION_ABI_VERSION,
-        plugin_path: plugin_path.as_ptr(),
-        probe: &probe,
-        services,
-    };
+    let services = host_services(unsafe { GetTickCount64() }, Some(host_log));
     let mut session = null_mut();
-    let prepared = unsafe { prepare(&options, &mut session) } as u32;
+    let prepared = with_session_options(&plugin_path, probe, &services, |options| unsafe {
+        prepare(options, &mut session)
+    }) as u32;
     write_log(format!("Project Wingman observer prepare result={prepared}").as_bytes());
     if let Some(handle) = std::ptr::NonNull::new(session) {
         *owner = Some(Session {
