@@ -41,12 +41,37 @@ or private graphics-table call.
 ## Bindings and evidence
 
 The ash tarball SHA-256 was checked against the Windows dependency entry in
-`Cargo.lock`. Its typed descriptors and function names were compared to the
-installed Vulkan SDK 1.4.357. The private graphics table uses 30 pointer slots,
+`Cargo.lock`. Source checks matched all 31 distinct typed procedures to the
+installed Vulkan SDK 1.4.357 and ash. Locked Windows Cargo metadata resolved,
+and Git whitespace checks passed. The private graphics table uses 30 pointer slots,
 the importer table uses four, FSR4 embeds both and holds 43 pointers overall,
 and XeSS continues to borrow its tables. The importer platform, shared image
 and callback records retain their generated layouts. There is no public game
 ABI or Vulkan setup version change.
+
+## V03 checklist disposition
+
+The source changes close these review findings:
+
+- **Resolve Vulkan dispatch where the typed function pointers live.**
+  The importer and FG dispatch bind each named procedure to its Rust type.
+- **Validate Vulkan image descriptors through the existing shared predicate.**
+  DX12 FG, DLSS-G and native FidelityFX use the Vulkan SR predicate.
+- **Resize retired FG guide images independently of the presentation swapchain.**
+  The importer validates and releases the drained pair and prepare rebuilds it.
+- **Derive Vulkan FG capture group IDs in the recording ledger.**
+  The recording type calculates IDs for both capture paths.
+- **Use the committed timeline values to identify first-use images.**
+  The presentation owner uses zero timeline values for first use.
+
+The port removed `runtime/orchestrator/src/native_dx12_vulkan_interop.cpp`
+and `tests/native_dx12_vulkan_interop.cpp`. The remaining interop headers
+`runtime/orchestrator/src/native_dx12_vulkan_interop.h`,
+`runtime/orchestrator/src/native_dx12_vulkan_platform.h`, and
+`runtime/orchestrator/src/native_fg_dx12_vulkan_platform.h` carry the C ABI
+declarations and fixed ABI data.
+
+## Fixtures and remaining native code
 
 The former native interop contract fixture lives in Rust tests. Fake typed
 Vulkan callbacks cover missing dispatch, timeline import, mismatched memory

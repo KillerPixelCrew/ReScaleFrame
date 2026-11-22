@@ -1223,6 +1223,14 @@ Vulkan result and submit records. The new fixture checks the refusal
 and maximum-wait paths. Builds, fixtures and live checks remain open.
 [Present admission and waits](research/rust-vulkan-dx12-copy-plan.md#present-admission-and-waits)
 
+The common Vulkan-to-D3D12 importer and FG graphics leaves call typed
+Vulkan procedures from Rust. FSR4 and XeSS wait for the consumer timeline
+and Vulkan source fences before replacing depth and motion on a render
+extent change. The existing capture adapter and shared C++ device fixture
+remain. Source checks compared the Vulkan names and private table layouts,
+and locked Windows metadata resolved. Compile, link, fixture and device
+checks remain open. [Vulkan D3D12 interop](research/rust-vulkan-dx12-interop.md)
+
 The standalone FSR3 bridge now binds the SDK and owns the SR, FG and
 swapchain transactions in Rust. It keeps the active FG and swapchain
 paired through disable, drain, UI clear and checked retirement.

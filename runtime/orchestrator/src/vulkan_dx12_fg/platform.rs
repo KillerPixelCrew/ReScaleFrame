@@ -124,9 +124,9 @@ unsafe extern "C" fn rsf_dx12gvk_capture(platform: Handle) -> Handle {
     unsafe { (*platform.cast::<Platform>()).capture }
 }
 
-fn raw_result<T: vk::Handle>(result: vk::Result, value: T, out: &mut u64) -> i32 {
+unsafe fn raw_result<T: vk::Handle>(result: vk::Result, value: T, out: *mut u64) -> i32 {
     if result == vk::Result::SUCCESS {
-        *out = value.as_raw();
+        unsafe { out.write(value.as_raw()) };
     }
     result.as_raw()
 }
@@ -227,7 +227,7 @@ unsafe extern "C" fn create_image(
     let result = unsafe {
         (dispatch_for(platform).create_image)(platform.device(), &info, ptr::null(), &mut image)
     };
-    raw_result(result, image, unsafe { &mut *output })
+    unsafe { raw_result(result, image, output) }
 }
 
 unsafe extern "C" fn image_requirements(
@@ -263,7 +263,7 @@ unsafe extern "C" fn allocate_memory(
     let result = unsafe {
         (dispatch_for(platform).allocate)(platform.device(), &info, ptr::null(), &mut memory)
     };
-    raw_result(result, memory, unsafe { &mut *output })
+    unsafe { raw_result(result, memory, output) }
 }
 
 unsafe extern "C" fn bind_image(platform: Handle, image: u64, memory: u64) -> i32 {
@@ -310,7 +310,7 @@ unsafe extern "C" fn create_pool(platform: Handle, output: *mut u64) -> i32 {
     let result = unsafe {
         (dispatch_for(platform).create_pool)(platform.device(), &info, ptr::null(), &mut pool)
     };
-    raw_result(result, pool, unsafe { &mut *output })
+    unsafe { raw_result(result, pool, output) }
 }
 
 unsafe extern "C" fn destroy_pool(platform: Handle, pool: u64) {
@@ -334,7 +334,7 @@ unsafe extern "C" fn allocate_commands(platform: Handle, pool: u64, output: *mut
     let result =
         unsafe { (dispatch_for(platform).allocate_commands)(platform.device(), &info, &mut list) };
     if result == vk::Result::SUCCESS {
-        unsafe { output.write(ptr::without_provenance_mut(list.as_raw() as usize)) };
+        unsafe { output.write(ptr::with_exposed_provenance_mut(list.as_raw() as usize)) };
     }
     result.as_raw()
 }
@@ -526,7 +526,7 @@ unsafe extern "C" fn create_fence(platform: Handle, output: *mut u64) -> i32 {
             &mut fence,
         )
     };
-    raw_result(result, fence, unsafe { &mut *output })
+    unsafe { raw_result(result, fence, output) }
 }
 
 unsafe extern "C" fn mark_submit(platform: Handle, fence: u64) -> i32 {
