@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-// Native leaves of ReScaleFrame.Game.AC7.dll. Exact-build identity, the GameSDK table and the
-// renderer lifecycle are owned by the Rust crate rsf-ac7 (src/lib.rs, src/lifecycle.rs). This
-// file keeps the exported entry point and lends the guarded native leaf snapshot.
+// Native leaves of ReScaleFrame.Game.AC7.dll. Exact-build identity, the GameSDK table, the
+// renderer lifecycle and the native renderer are owned by the Rust crate rsf-ac7 (src/lib.rs,
+// src/lifecycle.rs, src/native_renderer.rs). This file keeps the exported entry point, binds the
+// native renderer's call table and lends the renderer leaf snapshot.
 #include "ac7_platform.h"
 #include "ac7_sites.h"
 
@@ -23,5 +24,7 @@ static const rsf_ac7_platform platform = {rsf_ac7_get_renderer_leaves};
 __declspec(dllexport) rsf_result rsf_get_game_plugin_api(
     uint32_t requested_abi, rsf_game_plugin_api* api)
 {
+    // Only this DLL lends the native renderer's MinHook, input fact, scope and factory calls.
+    rsf_ac7_native_renderer_bind(&rsf_ac7_native_calls_table);
     return rsf_ac7_publish_api(requested_abi, api, &platform);
 }

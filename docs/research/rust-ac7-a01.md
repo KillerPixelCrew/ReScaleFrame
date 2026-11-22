@@ -176,3 +176,10 @@ leaves, both edited C++ production units and the graph fixture. Rust
 1.94.1 formatting, targeted bindgen 0.72.1 reproduction, locked offline
 Windows Cargo metadata and whitespace checks passed. Compile, link and
 runtime fixture verification remain pending.
+
+## Native renderer port
+
+The renderer object, detours, engine relays, pass leases and TrueSky relay handlers moved from
+`native_renderer.cpp` to `games/ac7/src/native_renderer.rs`, and `tests/ac7_native_graph.cpp`
+became a Rust fixture with a C11 launcher. Layout, retained native leaves, behaviour notes and
+checks are in [the native renderer note](rust-ac7-native-renderer.md).

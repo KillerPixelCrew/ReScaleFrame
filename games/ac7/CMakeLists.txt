@@ -4,21 +4,24 @@ if(BUILD_TESTING)
 else()
     rsf_add_rust_static(rsf_ac7_rust rsf_rust_ac7 rsf-ac7 rsf_ac7)
 endif()
-# TrueSky's Rust D3D11 owner uses the shared System32 shader compiler entry.
-target_link_libraries(rsf_ac7_rust INTERFACE rsf_shader_compiler)
+# TrueSky's Rust D3D11 owner uses the shared System32 shader compiler entry. The crate's guarded
+# engine reads are the SEH leaf rsf_ac7_memory, so every consumer of the archive links it.
+target_link_libraries(rsf_ac7_rust INTERFACE rsf_shader_compiler rsf_ac7_memory)
 add_library(rsf_ac7_view INTERFACE)
 target_include_directories(rsf_ac7_view INTERFACE include)
 target_link_libraries(rsf_ac7_view INTERFACE rsf_ac7_rust)
 add_library(ReScaleFrame::AC7View ALIAS rsf_ac7_view)
 
 # Exact-build identity, the GameSDK table and the renderer lifecycle are the Rust crate rsf-ac7
-# (src/lib.rs, src/lifecycle.rs). plugin.cpp keeps the export and lends the guarded native
-# renderer entry points through src/ac7_platform.h. The crate also owns the native renderer's
-# code sites, patch transactions, hook guards, its prepare/start/quiesce/stop transaction and the
-# TrueSky patches and relays (src/sites.rs, patches.rs, guards.rs, renderer.rs, truesky.rs),
-# which native_renderer.cpp calls through
-# src/ac7_sites.h with its native leaves, so the Rust archive follows the render scope
-# on the link line. Only this DLL and the native graph fixture pull native_renderer.cpp.
+# (src/lib.rs, src/lifecycle.rs). plugin.c keeps the export and lends the renderer leaf snapshot
+# through src/ac7_platform.h. The crate also owns the native renderer: its code sites, patch
+# transactions, hook guards, prepare/start/quiesce/stop transaction, TrueSky patches and relays
+# (src/sites.rs, patches.rs, guards.rs, renderer.rs, truesky.rs) and the renderer object, detours
+# and pass leases (src/native_renderer.rs). That module reaches MinHook, the Windows input facts,
+# the render scope C create call and the shader factory leaf only through the call table of
+# src/native_renderer_platform.c (in the render scope library), which plugin.c and the native graph
+# fixture bind at run time, so no other archive consumer needs those libraries. Only this DLL and
+# the native graph fixture call the native renderer.
 # The crate also owns the queued render scopes (src/render_scope.rs) and exports
 # ac7_render_scope.h except its two C create calls, which pass the C11 SEH exception leaves
 # of render_scope_entry.c (src/ac7_scope_owner.h). Every target that calls that header links
@@ -58,7 +61,7 @@ target_link_libraries(rsf_ac7_motion_capture INTERFACE
     rsf_ac7_rust ReScaleFrame::Graphics)
 add_library(ReScaleFrame::AC7MotionCapture ALIAS rsf_ac7_motion_capture)
 
-add_library(rsf_ac7_render_scope STATIC src/render_scope_entry.c src/native_renderer.cpp)
+add_library(rsf_ac7_render_scope STATIC src/render_scope_entry.c src/native_renderer_platform.c)
 target_include_directories(rsf_ac7_render_scope PUBLIC include)
 target_link_libraries(rsf_ac7_render_scope PUBLIC ReScaleFrame::GameSDK PRIVATE rsf_ac7_view rsf_ac7_memory rsf_windows_input_facts minhook rsf_build_options ReScaleFrame::RuntimeCommon)
 # The shader compiler is available without linking the Graphics library.

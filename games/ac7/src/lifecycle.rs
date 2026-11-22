@@ -4,7 +4,7 @@
 //! One lock guards the native renderer handle, the transition flag, the activation flag and the
 //! status reason. A transition marks the lifecycle busy, calls its native leaf outside the lock
 //! and publishes the outcome under the lock again, exactly as the former plugin.cpp did. The
-//! native renderer (native_renderer.cpp) verifies its bytes, owns every hook and reports native
+//! native renderer (native_renderer.rs) verifies its bytes, owns every hook and reports native
 //! facts; vendor, SR, FG and pacing decisions stay in the Runtime.
 use crate::platform_abi::{rsf_ac7_native_renderer, rsf_ac7_native_renderer_options};
 use crate::{RSF_ERROR_BUSY, RSF_ERROR_NATIVE_REFUSED, RSF_ERROR_NOT_READY, RSF_OK, Threw};

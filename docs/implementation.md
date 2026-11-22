@@ -62,6 +62,11 @@ and replays native camera, particle and TrueSky fixture data from Rust.
 The native graph still executes the UE vtables and WARP resource path.
 [A01 boundary evidence](research/rust-ac7-a01.md#guarded-memory-hook-effects-and-native-graph-replays)
 
+The AC7 native renderer and its graph fixture are Rust. One C11 leaf contains the shader factory's
+C++ exception, and plugin.c binds a MinHook, input and scope call table at run time. The game DLL
+link and the real fixture wait for the tip build; a stubbed probe of the fixture passed on WARP.
+[A01 native renderer](research/rust-ac7-native-renderer.md)
+
 G04 moves D3D11 colour, motion, depth and fullscreen passes and six fixture bodies to Rust.
 Source comparison covers the public C signatures, exact shader bytes and fixture wiring. The
 standalone exposure probe uses Rust for Streamline, NGX hook lifecycle and raw dump sequencing.

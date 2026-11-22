@@ -13,13 +13,13 @@
 //! the history and stream modules own their decisions, and the commit module owns admission
 //! and reports. The D3D11 replay allocates and submits under the shared binding-state lease.
 //!
-//! The rest of the native renderer stays C++ (native_renderer.cpp and the render-scope library):
-//! the renderer object and its fields, MinHook leaves, module pinning, detours, engine relays,
-//! the TrueSky relay handlers, relay memory,
-//! pass leases, SEH reads and protected code writes. Rust owns TrueSky's D3D11 kernels and
-//! composite depth dispatch, scene colour references and the scoped primary-view facts. plugin.cpp
-//! publishes the guarded native leaf snapshot in ac7_platform.h and keeps the exported
-//! rsf_get_game_plugin_api. The combined carriers call `carrier.rs` for their executable and
+//! The renderer object and its fields, MinHook leaves, module pinning, detours, engine relays,
+//! the TrueSky relay handlers, relay memory and pass leases are `native_renderer.rs`. Native code
+//! keeps the SEH-guarded reads (ac7_memory.c), the shader factory exception leaf
+//! (native_renderer_platform.c) and the render scopes' C create calls and C++ exception leaves.
+//! Rust owns TrueSky's D3D11 kernels and composite depth dispatch, scene colour references and the
+//! scoped primary-view facts. plugin.c publishes the native leaf snapshot in ac7_platform.h and
+//! keeps the exported rsf_get_game_plugin_api. The combined carriers call `carrier.rs` for their executable and
 //! window identifiers, GameSDK probe and decrypted patch policy through ac7_carrier.h.
 #[cfg(windows)]
 mod capture_platform_abi;
@@ -43,6 +43,8 @@ mod motion_capture_graphics_abi;
 mod motion_capture_observations;
 mod motion_capture_records;
 mod motion_capture_session;
+#[cfg(windows)]
+mod native_renderer;
 mod patches;
 mod platform_abi;
 mod render_scope;
@@ -113,7 +115,7 @@ const RECOGNIZED: rsf_detection = 1;
 const AMD64: u16 = 0x8664;
 
 // The only recognized build. Every RVA and expected byte in sites.rs, patches.rs and
-// native_renderer.cpp belongs to it.
+// native_renderer.rs belongs to it.
 const EXECUTABLE: &CStr = c"Ace7Game.exe";
 const EXECUTABLE_SHA256: &CStr =
     c"c7da97f5f8a807d4f1264adbb074146fcffe9bdc2ffa98791b822cd28e558f4f";

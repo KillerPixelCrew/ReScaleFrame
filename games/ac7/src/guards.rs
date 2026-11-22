@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Hook body guards of the native renderer.
 //!
-//! Every detour in native_renderer.cpp counts itself in and out so stop can tell when no thread
+//! Every detour in native_renderer.rs counts itself in and out so stop can tell when no thread
 //! is inside the module: entry guards before hooks are disabled, entry and outer guards after.
 //! Each thread keeps to one cache-line slot, so counting does not bounce a shared line between
 //! the game, render and RHI threads; the slots are summed only on the stop and failure paths.
@@ -47,14 +47,14 @@ fn counter(kind: u32) -> Option<&'static AtomicU32> {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_guard_enter(kind: u32) {
+pub(crate) extern "C" fn rsf_ac7_guard_enter(kind: u32) {
     if let Some(count) = counter(kind) {
         count.fetch_add(1, Ordering::Relaxed);
     }
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_guard_leave(kind: u32) {
+pub(crate) extern "C" fn rsf_ac7_guard_leave(kind: u32) {
     if let Some(count) = counter(kind) {
         count.fetch_sub(1, Ordering::Release);
     }

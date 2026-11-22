@@ -2,8 +2,8 @@
 //! Exact-build code sites of Ace7Game.exe (SHA-256 c7da97f5...58f4f) that the native renderer
 //! hooks or depends on, and the admission that verifies them before any hook is made.
 //!
-//! native_renderer.cpp keeps MinHook, the detours, the original pointers and the SEH-guarded
-//! reads and protected code writes; it lends the reads and writes through `rsf_ac7_code_leaves`.
+//! native_renderer.rs keeps MinHook, the detours and the original pointers, and lends the guarded
+//! reads and protected code writes through `rsf_ac7_code_leaves`.
 //! The renderer verifies post-patch depth gates installed by the carrier. The research for these
 //! sites is in docs/research/ue418-hook-map.md and games/ac7/engine.json.
 use crate::sites_abi::{
@@ -148,7 +148,7 @@ impl Gate {
     }
 }
 
-/// Hooked entry sites, indexed by native_renderer.cpp's Hook enum.
+/// Hooked entry sites, indexed by native_renderer.rs's `hook` constants.
 #[rustfmt::skip]
 pub(crate) static HOOK_SITES: [Site; RSF_AC7_HOOK_SITE_COUNT as usize] = [
     Site::new(0x10b0220, b"\x40\x55\x53\x56\x57\x41\x55\x41\x57\x48\x8d\x6c\x24\xb8\x48\x81"), // 0 process_tonemap

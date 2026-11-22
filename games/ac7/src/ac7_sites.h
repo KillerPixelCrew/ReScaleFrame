@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Internal boundary between native_renderer.cpp and the Rust owner of the exact-build code sites,
-// the renderer transaction and the TrueSky plugin patches (sites.rs, patches.rs, guards.rs,
-// renderer.rs, truesky.rs in the rsf-ac7 crate). Not a DLL ABI: both sides link into ReScaleFrame.Game.AC7.dll and the native graph
-// fixture. tools/generate-rust-bindings.py generates src/sites_abi.rs from this header.
+// C declarations only: the internal boundary between the native renderer (native_renderer.rs) and
+// the owners of the exact-build code sites, the renderer transaction and the TrueSky plugin patches
+// (sites.rs, patches.rs, guards.rs, renderer.rs, truesky.rs), all in the rsf-ac7 crate, and the
+// export plugin.c reaches. Not a DLL ABI: everything links into ReScaleFrame.Game.AC7.dll and the
+// native graph fixture. tools/generate-rust-bindings.py generates src/sites_abi.rs from this header.
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -13,7 +14,7 @@
 extern "C" {
 #endif
 
-// Hooked entry sites, in the order of native_renderer.cpp's Hook enum. The first
+// Hooked entry sites, in the order of native_renderer.rs's hook constants. The first
 // RSF_AC7_PROCESS_HOOKS are the reviewed graph pass Process functions and carry a pass role.
 #define RSF_AC7_HOOK_SITE_COUNT 65u
 #define RSF_AC7_PROCESS_HOOKS 6u
@@ -84,7 +85,7 @@ bool rsf_ac7_engine_patches_apply(rsf_ac7_code_patches* patches, unsigned char* 
 // Retirement: temporal velocity, then scene precision. False, logged, keeps the renderer.
 bool rsf_ac7_engine_patches_restore(rsf_ac7_code_patches* patches, const rsf_ac7_code_leaves* leaves);
 
-// Native leaves of the renderer transaction (renderer.rs), lent by native_renderer.cpp for one
+// Native leaves of the renderer transaction (renderer.rs), lent by native_renderer.rs for one
 // call. The renderer object and its fields, MinHook, module pinning, the render scopes, the input
 // hook, the controller facts and the TrueSky lock stay native; the Rust owner decides when each
 // runs. Every entry is required. None of them throws.
@@ -198,6 +199,34 @@ bool rsf_ac7_truesky_restore(rsf_ac7_truesky_patches* patches, const rsf_ac7_tru
 
 // Creates a per-call snapshot, including the loaded image base. False means acquisition threw.
 bool rsf_ac7_get_renderer_leaves(rsf_ac7_renderer_leaves* out);
+
+// Native calls of the native renderer, bound at run time by plugin.c and the native graph fixture
+// so that MinHook, the Windows input facts, the render scope create call and the shader factory
+// leaf stay off the link line of every other rsf-ac7 consumer. native_renderer_platform.c defines
+// the table. Every entry is required.
+typedef struct rsf_ac7_native_calls {
+    // MinHook, returning MH_STATUS.
+    int32_t (*hook_initialize)(void);
+    int32_t (*hook_create)(void* target, void* detour, void** original);
+    int32_t (*hook_enable)(void* target);
+    int32_t (*hook_disable)(void* target);
+    int32_t (*hook_remove)(void* target);
+    // rsf_win32_input_kind and the XInput facts (integrations/windows).
+    uint32_t (*input_kind)(uint32_t message, intptr_t lparam);
+    void (*controller_install)(void (*callback)(void));
+    void (*controller_disable)(void);
+    bool (*controller_remove)(void);
+    // rsf_ac7_render_scopes_create_passes; `out` receives the rsf_ac7_render_scopes.
+    int (*scopes_create)(uint64_t session_id, uint32_t capacity, rsf_ac7_render_scope_fn state_callback,
+        rsf_ac7_render_scope_fn pass_callback, void* user, void** out);
+    // Calls the engine factory create, a void* (*)(void* rhi, void* result, const void* code),
+    // into created. A C++ exception from it returns false.
+    bool (*shader_factory)(void* create, void* rhi, void* result, const void* code, void** created);
+} rsf_ac7_native_calls;
+
+extern const rsf_ac7_native_calls rsf_ac7_native_calls_table;
+// Binds the table before any renderer leaf is used. The table must outlive the module.
+void rsf_ac7_native_renderer_bind(const rsf_ac7_native_calls* calls);
 
 #ifdef __cplusplus
 }

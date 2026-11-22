@@ -3,7 +3,8 @@
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
 use crate::platform_abi::{
-    rsf_ac7_native_renderer, rsf_ac7_native_renderer_options, rsf_ac7_renderer_log_fn,
+    rsf_ac7_native_renderer, rsf_ac7_native_renderer_options, rsf_ac7_render_scope_fn,
+    rsf_ac7_renderer_log_fn,
 };
 
 pub const RSF_AC7_ROLE_SR: u32 = 1;
@@ -336,4 +337,74 @@ const _: () = {
         [::core::mem::offset_of!(rsf_ac7_truesky_leaves, motion_release) - 88usize];
     ["Offset of field: rsf_ac7_truesky_leaves::depth_release"]
         [::core::mem::offset_of!(rsf_ac7_truesky_leaves, depth_release) - 96usize];
+};
+#[repr(C)]
+pub struct rsf_ac7_native_calls {
+    pub hook_initialize: ::core::option::Option<unsafe extern "C" fn() -> i32>,
+    pub hook_create: ::core::option::Option<
+        unsafe extern "C" fn(
+            target: *mut ::core::ffi::c_void,
+            detour: *mut ::core::ffi::c_void,
+            original: *mut *mut ::core::ffi::c_void,
+        ) -> i32,
+    >,
+    pub hook_enable:
+        ::core::option::Option<unsafe extern "C" fn(target: *mut ::core::ffi::c_void) -> i32>,
+    pub hook_disable:
+        ::core::option::Option<unsafe extern "C" fn(target: *mut ::core::ffi::c_void) -> i32>,
+    pub hook_remove:
+        ::core::option::Option<unsafe extern "C" fn(target: *mut ::core::ffi::c_void) -> i32>,
+    pub input_kind:
+        ::core::option::Option<unsafe extern "C" fn(message: u32, lparam: isize) -> u32>,
+    pub controller_install: ::core::option::Option<
+        unsafe extern "C" fn(callback: ::core::option::Option<unsafe extern "C" fn()>),
+    >,
+    pub controller_disable: ::core::option::Option<unsafe extern "C" fn()>,
+    pub controller_remove: ::core::option::Option<unsafe extern "C" fn() -> bool>,
+    pub scopes_create: ::core::option::Option<
+        unsafe extern "C" fn(
+            session_id: u64,
+            capacity: u32,
+            state_callback: rsf_ac7_render_scope_fn,
+            pass_callback: rsf_ac7_render_scope_fn,
+            user: *mut ::core::ffi::c_void,
+            out: *mut *mut ::core::ffi::c_void,
+        ) -> ::core::ffi::c_int,
+    >,
+    pub shader_factory: ::core::option::Option<
+        unsafe extern "C" fn(
+            create: *mut ::core::ffi::c_void,
+            rhi: *mut ::core::ffi::c_void,
+            result: *mut ::core::ffi::c_void,
+            code: *const ::core::ffi::c_void,
+            created: *mut *mut ::core::ffi::c_void,
+        ) -> bool,
+    >,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_ac7_native_calls"][::core::mem::size_of::<rsf_ac7_native_calls>() - 88usize];
+    ["Alignment of rsf_ac7_native_calls"][::core::mem::align_of::<rsf_ac7_native_calls>() - 8usize];
+    ["Offset of field: rsf_ac7_native_calls::hook_initialize"]
+        [::core::mem::offset_of!(rsf_ac7_native_calls, hook_initialize) - 0usize];
+    ["Offset of field: rsf_ac7_native_calls::hook_create"]
+        [::core::mem::offset_of!(rsf_ac7_native_calls, hook_create) - 8usize];
+    ["Offset of field: rsf_ac7_native_calls::hook_enable"]
+        [::core::mem::offset_of!(rsf_ac7_native_calls, hook_enable) - 16usize];
+    ["Offset of field: rsf_ac7_native_calls::hook_disable"]
+        [::core::mem::offset_of!(rsf_ac7_native_calls, hook_disable) - 24usize];
+    ["Offset of field: rsf_ac7_native_calls::hook_remove"]
+        [::core::mem::offset_of!(rsf_ac7_native_calls, hook_remove) - 32usize];
+    ["Offset of field: rsf_ac7_native_calls::input_kind"]
+        [::core::mem::offset_of!(rsf_ac7_native_calls, input_kind) - 40usize];
+    ["Offset of field: rsf_ac7_native_calls::controller_install"]
+        [::core::mem::offset_of!(rsf_ac7_native_calls, controller_install) - 48usize];
+    ["Offset of field: rsf_ac7_native_calls::controller_disable"]
+        [::core::mem::offset_of!(rsf_ac7_native_calls, controller_disable) - 56usize];
+    ["Offset of field: rsf_ac7_native_calls::controller_remove"]
+        [::core::mem::offset_of!(rsf_ac7_native_calls, controller_remove) - 64usize];
+    ["Offset of field: rsf_ac7_native_calls::scopes_create"]
+        [::core::mem::offset_of!(rsf_ac7_native_calls, scopes_create) - 72usize];
+    ["Offset of field: rsf_ac7_native_calls::shader_factory"]
+        [::core::mem::offset_of!(rsf_ac7_native_calls, shader_factory) - 80usize];
 };

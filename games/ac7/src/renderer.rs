@@ -2,7 +2,7 @@
 //! The native renderer transaction behind the five calls of ac7_native_renderer.h: prepare,
 //! start, is_active, quiesce and stop.
 //!
-//! native_renderer.cpp keeps the five exported calls as wrappers and lends the native leaves
+//! native_renderer.rs (formerly native_renderer.cpp) lends the native leaves
 //! (`rsf_ac7_renderer_leaves`): the renderer object and its fields, MinHook, module pinning, the
 //! render scopes, the input hook, the controller facts and the TrueSky restore, which takes the
 //! renderer's cloud resolution lock and calls truesky.rs. This module decides their order and

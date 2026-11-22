@@ -5,12 +5,12 @@
 //!
 //! The sites belong to TrueSkyPluginRender_MT.dll (SHA-256 c6c58ea3...1004d0, 1,711,616 bytes)
 //! with mixed_resolution.fxo (45,263 bytes, CRC-32 78881ef3). Every RVA, byte and log text was
-//! moved unchanged from native_renderer.cpp. Research: docs/research/ue418-hook-map.md,
+//! moved unchanged from the former native_renderer.cpp. Research: docs/research/ue418-hook-map.md,
 //! .agents/skills/truesky-render-integration/references/ac7-depth.md and
 //! docs/research/rust-ac7-truesky-relays.md.
 //!
 //! The ownership record (`rsf_ac7_truesky_patches`) lives in the native renderer. Only this module
-//! changes it, always under the renderer's cloud resolution lock. native_renderer.cpp keeps the
+//! changes it, always under the renderer's cloud resolution lock. native_renderer/sky.rs keeps the
 //! relay handlers with their D3D11 binding checks and one-to-one depth shader, the module lookup,
 //! the relay memory and the protected code writes, and lends them through
 //! `rsf_ac7_truesky_leaves`.

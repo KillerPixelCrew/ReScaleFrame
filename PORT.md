@@ -1692,12 +1692,12 @@ Port startup, renderer admission and retirement, including how a refused install
 - [x] [games/ac7/include/rescaleframe/ac7_native_renderer.h](games/ac7/include/rescaleframe/ac7_native_renderer.h)
 - [x] [games/ac7/src/ac7_platform.h](games/ac7/src/ac7_platform.h)
 - [x] [games/ac7/src/ac7_sites.h](games/ac7/src/ac7_sites.h)
-- [ ] [games/ac7/src/native_renderer.cpp](games/ac7/src/native_renderer.cpp)
+- [x] [games/ac7/src/native_renderer.cpp](games/ac7/src/native_renderer.cpp) (Rust `native_renderer.rs` and `native_renderer/`; C11 leaf `native_renderer_platform.c`)
 - [x] [games/ac7/src/plugin.cpp](games/ac7/src/plugin.cpp)
 
 **Fixtures (2)**
 
-- [ ] [tests/ac7_native_graph.cpp](tests/ac7_native_graph.cpp)
+- [x] [tests/ac7_native_graph.cpp](tests/ac7_native_graph.cpp) (Rust `tests/ac7_native_graph.rs`, C11 launcher `tests/ac7_native_graph.c`)
 - [x] [tests/ac7_session.cpp](tests/ac7_session.cpp)
 
 **Rust review findings (9)**

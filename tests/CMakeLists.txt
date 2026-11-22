@@ -815,9 +815,11 @@ add_custom_command(OUTPUT "${ac7_view_fixture_object}"
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     VERBATIM)
 set_source_files_properties("${ac7_view_fixture_object}" PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE)
-add_executable(rsf_ac7_native_graph_test ac7_native_graph.cpp "${ac7_view_fixture_object}")
-# native_renderer.cpp calls the rsf-ac7 site, patch, guard, renderer transaction, TrueSky and render
-# scope owners (games/ac7/src/ac7_sites.h, ac7_render_scope.h).
+# The C launcher hands the replay helpers above, rsf_native_sr_evaluate, the render scope create
+# call and the native renderer's call table to the Rust fixture (ac7_native_graph.rs), which the
+# rsf-ac7 crate builds with its warp-fixture feature beside games/ac7/src/native_renderer.rs.
+add_executable(rsf_ac7_native_graph_test ac7_native_graph.c "${ac7_view_fixture_object}")
+set_target_properties(rsf_ac7_native_graph_test PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_ac7_native_graph_test PRIVATE ReScaleFrame::AC7RenderScope rsf_ac7_rust rsf_orchestrator minhook rsf_build_options)
 add_test(NAME ac7_native_graph COMMAND rsf_ac7_native_graph_test)
 set_tests_properties(ac7_native_graph PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
