@@ -1,5 +1,11 @@
 # Implementation tracker
 
+The Unity package now routes render callbacks, admits preview and
+generation windows, and handles device events in Rust. The managed
+exports matched in source, and pinned binding regeneration matched the
+private callback table. Build, Editor and player checks remain open.
+[Unity migration](rust-migration.md#remaining-integration-ports)
+
 The shared Vulkan-to-D3D12 FG paths now admit swapchain extensions and
 select vsync in Rust. The FSR4 state fixture uses the current graphics
 callback table. Build, fixture and device checks remain open.
