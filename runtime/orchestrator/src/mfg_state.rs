@@ -305,8 +305,7 @@ fn try_update() -> Option<MutexGuard<'static, ()>> {
     crate::sync::try_lock(&UPDATE)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_core_mfg_create() -> *mut Owner {
+pub(crate) fn rsf_core_mfg_create() -> *mut Owner {
     crate::allocate_handle(Owner(Mutex::new(State::new())))
 }
 
@@ -379,8 +378,7 @@ pub(crate) unsafe fn rsf_core_mfg_prime(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_mfg_prepare(
+pub(crate) unsafe fn rsf_core_mfg_prepare(
     owner: &Owner,
     device: Handle,
     get_state: Handle,
@@ -452,8 +450,7 @@ pub(crate) unsafe extern "C" fn rsf_core_mfg_prepare(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_mfg_status(
+pub(crate) unsafe fn rsf_core_mfg_status(
     owner: *const Owner,
     status: &mut u32,
     maximum: &mut u32,
@@ -468,15 +465,13 @@ pub(crate) unsafe extern "C" fn rsf_core_mfg_status(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_mfg_release(owner: *const Owner) {
+pub(crate) unsafe fn rsf_core_mfg_release(owner: *const Owner) {
     if let Some(owner) = unsafe { owner.as_ref() } {
         owner.release();
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_mfg_destroy(owner: *mut Owner) {
+pub(crate) unsafe fn rsf_core_mfg_destroy(owner: *mut Owner) {
     if !owner.is_null() {
         let owner = unsafe { Box::from_raw(owner) };
         owner.release();

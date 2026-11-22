@@ -23,7 +23,6 @@ unsafe fn device(child: *mut c_void) -> Option<ID3D12Device> {
     device
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_d3d12_fence_completed(fence: *mut c_void) -> u64 {
     let Some(fence) = (unsafe { ID3D12Fence::from_raw_borrowed(&fence) }) else {
         return u64::MAX;
