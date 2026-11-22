@@ -74,8 +74,6 @@ struct World {
     request_result: i32,
     fg_capture_result: i32,
     fg_status: Option<FgStatus>,
-    visible: u32,
-    cursor: i32,
     intent: Option<Intent>,
     stats: Option<Stats>,
     observer_result: i32,
@@ -88,7 +86,6 @@ thread_local! {
         wait_result: 1,
         vendor: 0x10de,
         present_choices: (1 << 1) | (1 << 3),
-        cursor: 3,
         ..World::default()
     });
 }
@@ -111,12 +108,6 @@ unsafe extern "C" fn tick() -> u64 {
 }
 unsafe extern "C" fn foreground() -> u32 {
     1
-}
-unsafe extern "C" fn hide_cursor() -> i32 {
-    with(|world| {
-        world.cursor -= 1;
-        world.cursor
-    })
 }
 unsafe extern "C" fn device_of(child: Handle) -> Handle {
     let device = object(child).device;
@@ -297,12 +288,6 @@ unsafe extern "C" fn present_backend_choices() -> u32 {
 unsafe extern "C" fn present_backend() -> u32 {
     0
 }
-unsafe extern "C" fn overlay_visible() -> u32 {
-    with(|world| world.visible)
-}
-unsafe extern "C" fn overlay_toggle() {
-    with(|world| world.visible ^= 1);
-}
 unsafe extern "C" fn overlay_present(
     _: Handle,
     queue: Handle,
@@ -345,7 +330,6 @@ unsafe extern "C" fn diagnostics_enable(_: LogFn, _: Handle) -> i32 {
 static PLATFORM: Platform = Platform {
     tick,
     foreground,
-    hide_cursor,
     list_device: device_of,
     queue_device: device_of,
     queue_direct,
@@ -383,8 +367,6 @@ static PLATFORM: Platform = Platform {
     present_request,
     present_backend_choices,
     present_backend,
-    overlay_visible,
-    overlay_toggle,
     overlay_present,
     overlay_fill_fg,
     observer_create,
@@ -588,17 +570,14 @@ fn diagnostics_save_live_capture_and_mark_graphics_for_restart() {
             ..Intent::default()
         });
     };
-    set(OVERLAY_PROBE, 1);
     let active_directory = r"C:\試験🚀";
     assert_eq!(host.set_capture_directory(active_directory.into()), OK);
     set(GRAPHICS_DIAGNOSTICS, 1);
     let state = host.lock();
-    let [probe, graphics] = host.diagnostic_options(state.graphics_diagnostics);
-    assert_eq!((probe.value, graphics.value), (1, 1));
-    assert_eq!((probe.restart, graphics.restart), (0, 1));
+    let [graphics] = host.diagnostic_options(state.graphics_diagnostics);
+    assert_eq!((graphics.value, graphics.restart), (1, 1));
     assert!(state.capture_update);
     drop(state);
-    assert_eq!(ini.integer("OverlayProbe"), 1);
     assert_eq!(ini.integer("GraphicsDiagnostics"), 1);
     let log = events();
     assert!(!log.iter().any(|event| event == "diagnostics"));
@@ -633,7 +612,6 @@ fn quality_follows_the_actual_input_ratio() {
 #[test]
 fn install_reads_one_shot_requests_and_owns_fg_or_observer() {
     let ini = Temporary::new("install");
-    ini.write("OverlayProbe", "1");
     ini.write("GraphicsDiagnostics", "1");
     ini.write("SRCaptureDirectory", "C:\\captures");
     let installed = host(&ini, 0);
@@ -642,14 +620,11 @@ fn install_reads_one_shot_requests_and_owns_fg_or_observer() {
     assert!(log.contains(&"fg install mode=0 switching=1".to_string()));
     assert!(has_event(&log, "log Shared FG presentation installed"));
     assert!(installed.fg_installed());
-    assert!(installed.probe.lock().unwrap().enabled);
     assert_eq!(
         installed.lock().capture_directory.to_str().unwrap(),
         "C:\\captures"
     );
     assert!(installed.fsr.to_str().unwrap().ends_with("/fidelityfx"));
-    // The probe belongs to this process only.
-    assert_eq!(ini.integer("OverlayProbe"), 0);
 
     let engine = host(&ini, ENGINE_PRESENTATION);
     let log = events();
@@ -1066,39 +1041,6 @@ fn overlay_routes_the_panel_through_one_settings_commit() {
     ));
     assert_eq!(ini.integer("SRQuality"), 2);
     assert_eq!(refs(queue), 2);
-}
-
-#[test]
-fn overlay_probe_opens_hides_cursor_and_closes() {
-    let ini = Temporary::new("probe");
-    ini.write("OverlayProbe", "1");
-    let host = host(&ini, 0);
-    events();
-    host.overlay_probe(59);
-    assert_eq!(with(|world| world.visible), 0);
-    host.overlay_probe(60);
-    let log = events();
-    assert!(has_event(
-        &log,
-        "log Native renderer overlay probe: opening shared panel."
-    ));
-    assert!(has_event(
-        &log,
-        "log Native renderer overlay probe: game-style cursor hide loop returned negative."
-    ));
-    assert_eq!(with(|world| world.cursor), -1);
-    host.overlay_probe(179);
-    assert!(has_event(
-        &events(),
-        "log Native renderer overlay probe present=179"
-    ));
-    host.overlay_probe(180);
-    assert!(has_event(
-        &events(),
-        "log Native renderer overlay probe: full panel survived"
-    ));
-    assert_eq!(with(|world| world.visible), 0);
-    assert_eq!(host.probe.lock().unwrap().phase, 2);
 }
 
 #[test]

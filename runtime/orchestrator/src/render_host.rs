@@ -83,8 +83,7 @@ const PRESENT_TEST: u32 = 1;
 const SLOTS: usize = 3;
 const SCENES: usize = 64;
 const CAPTURE_PATH: usize = 32768;
-const OVERLAY_PROBE: usize = 0;
-const GRAPHICS_DIAGNOSTICS: usize = 1;
+const GRAPHICS_DIAGNOSTICS: usize = 0;
 const FENCE_TIMEOUT_MS: u32 = 15000;
 // Present-ratio quality index: native, quality, balanced, performance, ultra performance.
 const QUALITY_RATIOS: [f32; 5] = [1.0, 1.5, 1.72, 2.0, 3.0];
@@ -127,7 +126,6 @@ static PLATFORM: Platform = Platform;
 struct Platform {
     tick: unsafe extern "C" fn() -> u64,
     foreground: unsafe extern "C" fn() -> u32,
-    hide_cursor: unsafe extern "C" fn() -> i32,
     list_device: unsafe extern "C" fn(Handle) -> Handle,
     queue_device: unsafe extern "C" fn(Handle) -> Handle,
     queue_direct: unsafe extern "C" fn(Handle) -> i32,
@@ -167,8 +165,6 @@ struct Platform {
     present_request: unsafe extern "C" fn(u32) -> i32,
     present_backend_choices: unsafe extern "C" fn() -> u32,
     present_backend: unsafe extern "C" fn() -> u32,
-    overlay_visible: unsafe extern "C" fn() -> u32,
-    overlay_toggle: unsafe extern "C" fn(),
     overlay_present: unsafe extern "C" fn(
         Handle,
         Handle,
@@ -193,7 +189,6 @@ crate::render_host_methods::impl_host_methods! {
         unsafe { crate::render_host_native::adapter(device, out) }
     }
     fn foreground() -> u32 { unsafe { crate::render_host_native::foreground() } }
-    fn hide_cursor() -> i32 { unsafe { crate::render_host_native::hide_cursor() } }
     fn queue_direct(queue: Handle) -> i32 { unsafe { crate::render_host_native::queue_direct(queue) } }
     fn create_fence(device: Handle) -> Handle { unsafe { crate::render_host_native::create_fence(device) } }
     fn fence_completed(fence: Handle) -> u64 { unsafe { crate::render_host_native::fence_completed(fence) } }
@@ -275,8 +270,6 @@ crate::render_host_methods::impl_host_methods! {
     }
     fn present_has_owner() -> i32 { crate::d3d11_present::rsf_core_d3d11p_has_owner() }
     fn present_backend_choices() -> u32 { crate::d3d11_present::rsf_core_d3d11p_backend_choices() }
-    fn overlay_visible() -> u32 { crate::overlay_native12::native::rsf_overlay_native12_visible() }
-    fn overlay_toggle() { crate::overlay_native12::native::rsf_overlay_native12_toggle() }
     fn overlay_present(
         device: Handle,
         queue: Handle,
@@ -388,18 +381,9 @@ struct State {
     last_dispatch: i32,
 }
 
-#[derive(Default)]
-struct Probe {
-    enabled: bool,
-    phase: u32,
-    start: u64,
-}
-
 pub(crate) struct Host {
     p: &'static Platform,
     state: Mutex<State>,
-    // Touched only from the overlay on the Present path.
-    probe: Mutex<Probe>,
     ini: Vec<u16>,
     section: Vec<u16>,
     session: u64,
@@ -1274,31 +1258,25 @@ impl Host {
         }
     }
 
-    fn diagnostic_options(&self, graphics: bool) -> [HostOption; 2] {
-        let probe = self
-            .probe
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .enabled;
-        let toggle = |label: &'static std::ffi::CStr, value: bool, restart: bool| HostOption {
-            label: label.as_ptr(),
+    fn diagnostic_options(&self, graphics: bool) -> [HostOption; 1] {
+        [HostOption {
+            label: c"D3D12 validation and DRED".as_ptr(),
             kind: RSF_OVERLAY_HOST_OPTION_TOGGLE,
-            value: i32::from(value),
+            value: i32::from(graphics),
             minimum: 0,
             maximum: 1,
             step: 1,
             divisor: 1,
-            restart: u32::from(restart),
+            restart: 1,
             reserved: 0,
-        };
-        [
-            toggle(c"One-shot overlay probe", probe, false),
-            toggle(c"D3D12 validation and DRED", graphics, true),
-        ]
+        }]
     }
 
     fn diagnostic_intent(&self, intent: &Intent) {
-        if intent.host_option_changed == 0 || !(0..=1).contains(&intent.host_option_value) {
+        if intent.host_option_changed == 0
+            || intent.host_option_index as usize != GRAPHICS_DIAGNOSTICS
+            || !(0..=1).contains(&intent.host_option_value)
+        {
             return;
         }
         let Some(mut state) = self.try_lock() else {
@@ -1306,91 +1284,20 @@ impl Host {
             return;
         };
         let enabled = intent.host_option_value != 0;
-        let toggle = if enabled { w!("1") } else { w!("0") };
-        let (key, value) = match intent.host_option_index as usize {
-            OVERLAY_PROBE => (w!("OverlayProbe"), toggle),
-            GRAPHICS_DIAGNOSTICS => (w!("GraphicsDiagnostics"), toggle),
-            _ => return,
-        };
+        let value = if enabled { w!("1") } else { w!("0") };
         if unsafe {
-            WritePrivateProfileStringW(self.section.as_ptr(), key, value, self.ini.as_ptr())
+            WritePrivateProfileStringW(
+                self.section.as_ptr(),
+                w!("GraphicsDiagnostics"),
+                value,
+                self.ini.as_ptr(),
+            )
         } == 0
         {
             self.log("Could not save the diagnostic setting.");
             return;
         }
-        match intent.host_option_index as usize {
-            OVERLAY_PROBE => {
-                let mut probe = self.probe.lock().unwrap_or_else(PoisonError::into_inner);
-                if !enabled && probe.phase == 1 && unsafe { self.p.overlay_visible() } != 0 {
-                    unsafe { self.p.overlay_toggle() };
-                }
-                *probe = Probe {
-                    enabled,
-                    ..Probe::default()
-                };
-            }
-            GRAPHICS_DIAGNOSTICS => state.graphics_diagnostics = enabled,
-            _ => unreachable!(),
-        }
-    }
-
-    fn overlay_probe(&self, application_presents: u64) {
-        let p = self.p;
-        let mut probe = self.probe.lock().unwrap_or_else(PoisonError::into_inner);
-        if !probe.enabled {
-            return;
-        }
-        if probe.phase == 0 && application_presents >= 60 {
-            if unsafe { p.overlay_visible() } == 0 {
-                unsafe { p.overlay_toggle() };
-            }
-            if unsafe { p.overlay_visible() } != 0 {
-                probe.phase = 1;
-                if unsafe {
-                    WritePrivateProfileStringW(
-                        self.section.as_ptr(),
-                        w!("OverlayProbe"),
-                        w!("0"),
-                        self.ini.as_ptr(),
-                    )
-                } == 0
-                {
-                    self.log("Could not clear the one-shot overlay probe setting.");
-                }
-                probe.start = application_presents;
-                self.log("Native renderer overlay probe: opening shared panel.");
-                let mut attempts = 0u32;
-                let count = loop {
-                    let count = unsafe { p.hide_cursor() };
-                    attempts += 1;
-                    if count < 0 || attempts >= 512 {
-                        break count;
-                    }
-                };
-                if count >= 0 {
-                    probe.phase = 3;
-                    probe.enabled = false;
-                    self.log(
-                        "Native renderer overlay probe FAILED: cursor hide loop did not terminate.",
-                    );
-                } else {
-                    self.log("Native renderer overlay probe: game-style cursor hide loop returned negative.");
-                }
-            }
-        } else if probe.phase == 1 && application_presents.wrapping_sub(probe.start) >= 120 {
-            probe.phase = 2;
-            probe.enabled = false;
-            if unsafe { p.overlay_visible() } != 0 {
-                unsafe { p.overlay_toggle() };
-            }
-            self.log("Native renderer overlay probe: full panel survived 120 application Presents; closed.");
-        }
-        if probe.phase == 1 {
-            self.log(&format!(
-                "Native renderer overlay probe present={application_presents}"
-            ));
-        }
+        state.graphics_diagnostics = enabled;
     }
 
     fn overlay(&self, chain: Handle) {
@@ -1437,7 +1344,6 @@ impl Host {
         }
         let status = STATUS.get();
         let fg = FG.get();
-        self.overlay_probe(status.application_presents);
         let Some(mut prefs) = PREFS.get() else {
             return;
         };
@@ -1721,9 +1627,6 @@ unsafe extern "C" fn render_feedback(user: *mut c_void, event: *const Feedback) 
 unsafe fn describe(setup: &Setup, services: &Services, p: &'static Platform) -> Host {
     let ini = unsafe { wide_copy(setup.configuration_path) };
     let section = unsafe { wide_copy(setup.configuration_section) };
-    let probe =
-        unsafe { GetPrivateProfileIntW(section.as_ptr(), w!("OverlayProbe"), 0, ini.as_ptr()) }
-            != 0;
     let mut capture = vec![0u16; CAPTURE_PATH];
     let length = unsafe {
         GetPrivateProfileStringW(
@@ -1754,10 +1657,6 @@ unsafe fn describe(setup: &Setup, services: &Services, p: &'static Platform) -> 
     let host = Host {
         p,
         state: Mutex::new(State::new()),
-        probe: Mutex::new(Probe {
-            enabled: probe,
-            ..Probe::default()
-        }),
         ini,
         section,
         session: services.session_id,
@@ -1798,21 +1697,8 @@ unsafe fn describe(setup: &Setup, services: &Services, p: &'static Platform) -> 
 // final: every callback receives it as its user.
 fn install(host: &Host, setup: &Setup) -> i32 {
     let p = host.p;
-    let ini = host.ini.as_ptr();
-    let section = host.section.as_ptr();
     if host.lock().graphics_diagnostics {
         let _ = unsafe { p.diagnostics_enable(Some(backend_log), host.user()) };
-    }
-    // A diagnostic request belongs to this one process, never the next game launch.
-    let probe = host
-        .probe
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .enabled;
-    if probe
-        && unsafe { WritePrivateProfileStringW(section, w!("OverlayProbe"), w!("0"), ini) } == 0
-    {
-        host.log("Could not clear the one-shot overlay probe setting.");
     }
     if !host.engine_streamline {
         let mut fg: FgSetup = unsafe { std::mem::zeroed() };
@@ -2000,13 +1886,13 @@ unsafe extern "C" fn rsf_render_host_create(setup: *const Setup, services: *mut 
 #[cfg(not(test))]
 #[unsafe(no_mangle)]
 extern "C" fn rsf_render_overlay_visible() -> u32 {
-    unsafe { PLATFORM.overlay_visible() }
+    crate::overlay_native12::native::rsf_overlay_native12_visible()
 }
 
 #[cfg(not(test))]
 #[unsafe(no_mangle)]
 extern "C" fn rsf_render_overlay_toggle() {
-    unsafe { PLATFORM.overlay_toggle() };
+    crate::overlay_native12::native::rsf_overlay_native12_toggle();
 }
 
 #[unsafe(no_mangle)]

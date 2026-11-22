@@ -25,7 +25,7 @@ use windows_sys::Win32::{
         SystemInformation::GetTickCount64,
         Threading::{CreateEventW, GetCurrentProcessId},
     },
-    UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId, ShowCursor},
+    UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId},
 };
 use windows_sys::core::w;
 
@@ -69,10 +69,6 @@ pub(super) unsafe fn foreground() -> u32 {
         GetWindowThreadProcessId(GetForegroundWindow(), &mut owner);
         u32::from(owner == GetCurrentProcessId())
     }
-}
-
-pub(super) unsafe fn hide_cursor() -> i32 {
-    unsafe { ShowCursor(0) }
 }
 
 pub(super) unsafe fn child_device(child: Handle) -> Handle {
