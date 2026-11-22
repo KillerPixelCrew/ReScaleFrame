@@ -5,7 +5,6 @@ use super::*;
 mod abi;
 use abi::*;
 use std::ffi::CStr;
-use std::sync::OnceLock;
 use windows::Win32::{
     Foundation::HANDLE,
     Graphics::{Direct3D12::*, Dxgi::*},
@@ -97,8 +96,6 @@ impl Sdk {
         })
     }
 }
-
-static OPS: OnceLock<Ops> = OnceLock::new();
 
 unsafe extern "C" fn resolve(_: &Setup, fg: Raw, xell: Raw, out: &mut Raw) -> i32 {
     let sdk = match Sdk::resolve(fg, xell) {
@@ -347,45 +344,46 @@ unsafe extern "C" fn present_status(bindings: Raw, context: Raw, out: *mut Prese
     result
 }
 
+static OPS: Ops = Ops {
+    check: &admission::NATIVE_CHECKS,
+    resolve,
+    close,
+    create_fg,
+    create_xell,
+    destroy_fg,
+    destroy_xell,
+    max_count,
+    bind_xell,
+    version,
+    create_chain,
+    compose,
+    count,
+    enabled,
+    sleep_mode,
+    sleep,
+    marker,
+    present_id,
+    tag,
+    constants,
+    present_status,
+    create_fence,
+    create_event,
+    drain,
+};
+
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xeg12_native_provider(checks: *const Checks) -> *const Provider {
+extern "C" fn rsf_core_xeg12_native_provider(compiled: u32) -> *const Provider {
     static NATIVE_PROVIDER: Provider = Provider {
         create: Some(create),
         ..PROVIDER
     };
-    let Some(checks) = (unsafe { checks.as_ref() }) else {
-        return &DISABLED_PROVIDER;
-    };
-    OPS.get_or_init(|| Ops {
-        check: checks,
-        resolve,
-        close,
-        create_fg,
-        create_xell,
-        destroy_fg,
-        destroy_xell,
-        max_count,
-        bind_xell,
-        version,
-        create_chain,
-        compose,
-        count,
-        enabled,
-        sleep_mode,
-        sleep,
-        marker,
-        present_id,
-        tag,
-        constants,
-        present_status,
-        create_fence,
-        create_event,
-        drain,
-    });
-    &NATIVE_PROVIDER
+    if compiled == 0 {
+        &DISABLED_PROVIDER
+    } else {
+        &NATIVE_PROVIDER
+    }
 }
 
 unsafe extern "C" fn create(setup: *const Setup, out: *mut Raw, chain: *mut Raw) -> i32 {
-    // The native table is published only after its operation table is set.
-    unsafe { rsf_core_xeg12_create(OPS.get().unwrap(), setup, out, chain) }
+    unsafe { rsf_core_xeg12_create(&OPS, setup, out, chain) }
 }

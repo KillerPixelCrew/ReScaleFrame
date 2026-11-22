@@ -533,9 +533,13 @@ unsafe fn text<'a>(value: *const c_char) -> Option<&'a CStr> {
     (!value.is_null()).then(|| unsafe { CStr::from_ptr(value) })
 }
 
+pub(super) const fn native_platform() -> &'static Platform {
+    &native::PLATFORM
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_capture12_native_platform() -> *const Platform {
-    &native::PLATFORM
+    native_platform()
 }
 
 #[unsafe(no_mangle)]

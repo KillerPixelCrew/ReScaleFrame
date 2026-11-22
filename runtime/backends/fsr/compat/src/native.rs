@@ -21,29 +21,6 @@ unsafe extern "system" {
     fn MH_RemoveHook(target: *mut c_void) -> i32;
 }
 
-unsafe extern "C" {
-    fn rsf_common_sha256_file(path: *const u16, sharing: u32, digest: *mut u8) -> u32;
-}
-
-unsafe extern "C" fn module_digest(
-    module: *mut c_void,
-    sizes: *const u32,
-    size_count: usize,
-    size: *mut u32,
-    digest: *mut u8,
-) -> bool {
-    unsafe {
-        rsf_fsr4_compat_module_digest(
-            module,
-            sizes,
-            size_count,
-            size,
-            digest,
-            rsf_common_sha256_file,
-        )
-    }
-}
-
 unsafe extern "C" fn create_hook(
     target: *mut c_void,
     detour: rsf_fsr4_compat_capability_fn,
@@ -92,7 +69,7 @@ static PLATFORM: rsf_fsr4_compat_platform = rsf_fsr4_compat_platform {
     device_supports_int8: Some(rsf_fsr4_compat_device_supports_int8),
     retain_device: Some(rsf_fsr4_compat_retain_device),
     release_device: Some(rsf_fsr4_compat_release_device),
-    module_digest: Some(module_digest),
+    module_digest: Some(rsf_fsr4_compat_module_digest),
     match_entry: Some(rsf_fsr4_compat_match_entry),
     create_hook: Some(create_hook),
     enable_hook: Some(enable_hook),
@@ -116,5 +93,5 @@ unsafe extern "C" fn rsf_fsr4_compat_acquire_native_device(
     log: rsf_fsr4_compat_log_fn,
     user: *mut c_void,
 ) -> *const rsf_fsr4_compat_lease {
-    unsafe { rsf_fsr4_compat_acquire_device(&PLATFORM, module, device, log, user) }
+    unsafe { acquire_device(&PLATFORM, module, device, log, user) }
 }

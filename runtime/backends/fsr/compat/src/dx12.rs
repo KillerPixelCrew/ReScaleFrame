@@ -49,8 +49,8 @@ pub(super) unsafe extern "C" fn rsf_fsr4_compat_release_device(device: *mut c_vo
     drop(unsafe { ID3D12Device::from_raw(device) });
 }
 
-pub(super) unsafe extern "C" fn rsf_fsr4_compat_acquire_device(
-    platform: *const rsf_fsr4_compat_platform,
+pub(super) unsafe fn acquire_device(
+    platform: &rsf_fsr4_compat_platform,
     module: *mut c_void,
     device: *mut c_void,
     log: rsf_fsr4_compat_log_fn,

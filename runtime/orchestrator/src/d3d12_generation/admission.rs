@@ -247,16 +247,17 @@ unsafe extern "C" fn load_library(setup: &Setup, name: *const u16) -> Raw {
     module
 }
 
+pub(super) static NATIVE_CHECKS: Checks = Checks {
+    setup: check_setup,
+    frame: rsf_core_fg12_frame,
+    command: rsf_core_fg12_command,
+    streamline_loaded: rsf_core_fg12_streamline_loaded,
+    load_library,
+};
+
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_fg12_generation_checks() -> *const Checks {
-    static CHECKS: Checks = Checks {
-        setup: check_setup,
-        frame: rsf_core_fg12_frame,
-        command: rsf_core_fg12_command,
-        streamline_loaded: rsf_core_fg12_streamline_loaded,
-        load_library,
-    };
-    &CHECKS
+    &NATIVE_CHECKS
 }
 
 #[unsafe(no_mangle)]

@@ -6,7 +6,6 @@ use crate::d3d12_sr::{ffx_abi::*, ffx_resource};
 use abi::*;
 use std::cell::UnsafeCell;
 use std::mem::ManuallyDrop;
-use std::sync::OnceLock;
 use windows::{
     Win32::Graphics::{
         Direct3D12::*,
@@ -58,7 +57,6 @@ static SDK: SdkApi = SdkApi {
         FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION_PATCH,
     ],
 };
-static OPS: OnceLock<Ops> = OnceLock::new();
 
 fn header(kind: u32) -> ffxApiHeader {
     ffxApiHeader {
@@ -456,14 +454,12 @@ unsafe extern "C" fn present_facts(raw: Raw, out: *mut PresentFacts) {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr12_native_supported(
-    checks: *const Checks,
+    compiled: u32,
     device: Raw,
     directory: *const c_char,
 ) -> u32 {
-    let Some(checks) = (unsafe { checks.as_ref() }) else {
-        return 0;
-    };
-    if device.is_null() || directory.is_null() || unsafe { directory.read() } == 0 {
+    if compiled == 0 || device.is_null() || directory.is_null() || unsafe { directory.read() } == 0
+    {
         return 0;
     }
     // The capability query uses only the runtime directory, device and separate FG major.
@@ -471,49 +467,46 @@ unsafe extern "C" fn rsf_core_fsr12_native_supported(
     setup.runtime_directory_utf8 = directory;
     setup.chain.d3d12_device = device;
     setup.feature_major = 4;
-    rsf_core_fsr12_probe(checks, &setup, probe_versions)
+    rsf_core_fsr12_probe(&admission::NATIVE_CHECKS, &setup, probe_versions)
 }
 
+static OPS: Ops = Ops {
+    check: &admission::NATIVE_CHECKS,
+    capture: crate::frame_capture12::native_platform(),
+    sdk: &SDK,
+    resolve,
+    close,
+    bind,
+    versions,
+    surface_format,
+    create_generation,
+    provider_version,
+    create_chain,
+    destroy_context,
+    wait,
+    chain_extent,
+    whole_texture,
+    configure,
+    prepare,
+    generate,
+    present_facts,
+    copy,
+    present_count,
+};
+
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr12_native_provider(
-    checks: *const Checks,
-    capture: *const CapturePlatform,
-) -> *const Provider {
+extern "C" fn rsf_core_fsr12_native_provider(compiled: u32) -> *const Provider {
     static NATIVE_PROVIDER: Provider = Provider {
         create: Some(create),
         ..PROVIDER
     };
-    let (Some(checks), Some(capture)) = (unsafe { checks.as_ref() }, unsafe { capture.as_ref() })
-    else {
-        return &DISABLED_PROVIDER;
-    };
-    OPS.get_or_init(|| Ops {
-        check: checks,
-        capture,
-        sdk: &SDK,
-        resolve,
-        close,
-        bind,
-        versions,
-        surface_format,
-        create_generation,
-        provider_version,
-        create_chain,
-        destroy_context,
-        wait,
-        chain_extent,
-        whole_texture,
-        configure,
-        prepare,
-        generate,
-        present_facts,
-        copy,
-        present_count,
-    });
-    &NATIVE_PROVIDER
+    if compiled == 0 {
+        &DISABLED_PROVIDER
+    } else {
+        &NATIVE_PROVIDER
+    }
 }
 
 unsafe extern "C" fn create(setup: *const Setup, out: *mut Raw, chain: *mut Raw) -> i32 {
-    // The native table is published only after its operation table is set.
-    unsafe { rsf_core_fsr12_create(OPS.get().unwrap(), setup, out, chain) }
+    unsafe { rsf_core_fsr12_create(&OPS, setup, out, chain) }
 }

@@ -12,7 +12,9 @@ use windows::{
     core::PCWSTR,
 };
 
-type HashFile = unsafe extern "C" fn(*const u16, u32, *mut u8) -> u32;
+unsafe extern "C" {
+    fn rsf_common_sha256_file(path: *const u16, sharing: u32, digest: *mut u8) -> u32;
+}
 
 pub(super) unsafe extern "C" fn rsf_fsr4_compat_module_digest(
     module: *mut c_void,
@@ -20,7 +22,6 @@ pub(super) unsafe extern "C" fn rsf_fsr4_compat_module_digest(
     size_count: usize,
     size: *mut u32,
     digest: *mut u8,
-    hash: HashFile,
 ) -> bool {
     const CAPACITY: usize = 32768;
     let mut path = Vec::new();
@@ -48,7 +49,7 @@ pub(super) unsafe extern "C" fn rsf_fsr4_compat_module_digest(
     let file_size = attributes.nFileSizeLow;
     let allowed = unsafe { slice::from_raw_parts(sizes, size_count) };
     if !allowed.contains(&file_size)
-        || unsafe { hash(path.as_ptr(), FILE_SHARE_READ.0, digest) } == 0
+        || unsafe { rsf_common_sha256_file(path.as_ptr(), FILE_SHARE_READ.0, digest) } == 0
     {
         return false;
     }

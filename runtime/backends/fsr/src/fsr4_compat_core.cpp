@@ -2,9 +2,6 @@
 #include "fsr4_compat_core.h"
 #include <utility>
 
-extern "C" const rsf_fsr4_compat_lease* rsf_fsr4_compat_acquire_native_adapter(
-    void* module, void* adapter, void* device, Fsr4Log log, void* user);
-
 namespace {
 using NativeLease = std::unique_ptr<const rsf_fsr4_compat_lease, decltype(&rsf_fsr4_compat_release)>;
 }
