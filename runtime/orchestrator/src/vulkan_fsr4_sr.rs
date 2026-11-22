@@ -4,6 +4,7 @@ use crate::dx12_vulkan_interop::{Owner as Interop, checked};
 use crate::dx12_vulkan_interop_abi::rsf_dx12vk_shared_image;
 use crate::sharpening_policy;
 use crate::sr_session::has_capacity;
+use crate::vulkan_external_copy::{self, Barrier, FAMILY_EXTERNAL, FAMILY_IGNORED, Transfer};
 use crate::vulkan_sr::{
     GENERAL, R32_FLOAT, RG16_FLOAT, RGBA16_FLOAT, SAMPLED_USAGE, SHADER_READ, SHARPENING_VENDOR,
     STORAGE_USAGE, TRANSFER_DST, valid_frame_record, valid_image,
@@ -70,14 +71,6 @@ pub(super) mod directory {
         wide.push(0);
         Ok(wide)
     }
-}
-
-#[repr(u32)]
-#[derive(Copy, Clone)]
-enum QueueTransfer {
-    Local,
-    AcquireExternal,
-    ReleaseExternal,
 }
 
 struct Graphics {
@@ -225,25 +218,8 @@ impl Owner {
             )
     }
 
-    fn transition(
-        &self,
-        commands: Handle,
-        image: u64,
-        before: u32,
-        after: u32,
-        transfer: QueueTransfer,
-    ) {
-        unsafe {
-            (self.ops().transition.unwrap())(
-                self.graphics.handle,
-                commands,
-                image,
-                before,
-                after,
-                self.handoff.queue_family,
-                transfer as u32,
-            )
-        };
+    fn transition(&self, commands: Handle, barrier: &Barrier) {
+        unsafe { (self.ops().transition.unwrap())(self.graphics.handle, commands, barrier) };
     }
 
     fn copy(&self, commands: Handle, source: u64, target: u64, [width, height]: [u32; 2]) {
@@ -280,43 +256,53 @@ impl Owner {
         images: &[SharedImage; 4],
         reset: u32,
     ) {
-        use QueueTransfer::{AcquireExternal, Local, ReleaseExternal};
         unsafe { (self.ops().capture_begin.unwrap())(record) };
         self.capture(commands, &frame.color, record, c"sr-source-jittered", reset);
         self.capture(commands, &frame.color, record, c"sr-linear-color", reset);
         self.capture(commands, &frame.depth, record, c"sr-depth", reset);
         self.capture(commands, &frame.motion, record, c"sr-motion-uv", reset);
         let initialized = self.history.done != 0;
-        let (prior_layout, ownership) = if initialized {
-            (GENERAL, AcquireExternal)
-        } else {
-            (UNDEFINED, Local)
-        };
+        let family = self.handoff.queue_family;
         for (source, target) in [frame.color, frame.depth, frame.motion]
             .into_iter()
             .zip(images)
         {
-            self.transition(commands, source.image, SHADER_READ, TRANSFER_SRC, Local);
-            self.transition(
-                commands,
-                target.image,
-                prior_layout,
-                TRANSFER_DST,
-                ownership,
+            let transfer = Transfer {
+                source: source.image,
+                target: target.image,
+                source_extent: self.render,
+                target_extent: self.render,
+            };
+            let plan = vulkan_external_copy::plan(
+                transfer,
+                source.layout,
+                family,
+                initialized,
+                FAMILY_IGNORED,
             );
-            self.copy(commands, source.image, target.image, self.render);
-            self.transition(commands, source.image, TRANSFER_SRC, SHADER_READ, Local);
-            self.transition(
+            for barrier in &plan.before {
+                self.transition(commands, barrier);
+            }
+            self.copy(
                 commands,
-                target.image,
-                TRANSFER_DST,
-                GENERAL,
-                ReleaseExternal,
+                plan.transfer.source,
+                plan.transfer.target,
+                plan.transfer.target_extent,
             );
+            for barrier in &plan.after {
+                self.transition(commands, barrier);
+            }
         }
         if !initialized {
-            self.transition(commands, images[3].image, UNDEFINED, GENERAL, Local);
-            self.transition(commands, images[3].image, GENERAL, GENERAL, ReleaseExternal);
+            let output = images[3].image;
+            self.transition(
+                commands,
+                &Barrier::new(output, UNDEFINED, GENERAL, FAMILY_IGNORED, FAMILY_IGNORED),
+            );
+            self.transition(
+                commands,
+                &Barrier::new(output, GENERAL, GENERAL, family, FAMILY_EXTERNAL),
+            );
         }
     }
 
@@ -328,8 +314,11 @@ impl Owner {
         output: SharedImage,
         reset: u32,
     ) {
-        use QueueTransfer::{AcquireExternal, Local, ReleaseExternal};
-        self.transition(commands, output.image, GENERAL, GENERAL, AcquireExternal);
+        let family = self.handoff.queue_family;
+        self.transition(
+            commands,
+            &Barrier::new(output.image, GENERAL, GENERAL, FAMILY_EXTERNAL, family),
+        );
         unsafe {
             (self.ops().sharpen.unwrap())(
                 self.graphics.handle,
@@ -339,7 +328,16 @@ impl Owner {
                 output.image,
             )
         };
-        self.transition(commands, output.image, GENERAL, TRANSFER_SRC, Local);
+        self.transition(
+            commands,
+            &Barrier::new(
+                output.image,
+                GENERAL,
+                TRANSFER_SRC,
+                FAMILY_IGNORED,
+                FAMILY_IGNORED,
+            ),
+        );
         self.copy(commands, output.image, frame.output.image, self.output());
         // The engine allocation is a transfer destination. Capture the matching
         // copy source while it is owned by this Vulkan continuation.
@@ -356,10 +354,7 @@ impl Owner {
         self.capture(commands, &captured, record, c"sr-output-linear", reset);
         self.transition(
             commands,
-            output.image,
-            TRANSFER_SRC,
-            GENERAL,
-            ReleaseExternal,
+            &Barrier::new(output.image, TRANSFER_SRC, GENERAL, family, FAMILY_EXTERNAL),
         );
     }
 

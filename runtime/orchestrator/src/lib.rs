@@ -286,6 +286,8 @@ mod vulkan_dlss_sr_abi;
 #[cfg(windows)]
 mod vulkan_dx12_fg;
 #[cfg(windows)]
+mod vulkan_external_copy;
+#[cfg(windows)]
 mod vulkan_ffx_fg;
 #[cfg(windows)]
 mod vulkan_fg;

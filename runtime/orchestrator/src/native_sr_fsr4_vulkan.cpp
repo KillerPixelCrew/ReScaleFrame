@@ -4,6 +4,7 @@
 #include <vulkan/vulkan.h>
 #include <memory>
 #include <new>
+#include "native_fg_dx12_vulkan_platform.h"
 #include "native_sr_fsr4_vulkan_platform.h"
 #include "../../backends/common/frame_capture_vk.h"
 #include "sharpening_vulkan.h"
@@ -29,8 +30,6 @@ static_assert(VK_IMAGE_LAYOUT_UNDEFINED == 0 && VK_IMAGE_LAYOUT_GENERAL == 1 &&
     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL == 7 && VK_IMAGE_USAGE_SAMPLED_BIT == 4 && VK_IMAGE_USAGE_STORAGE_BIT == 8);
 
 namespace {
-enum Transfer : uint32_t { local, acquire_external, release_external };
-
 struct Graphics {
     VkDevice device{};
     PFN_vkGetPhysicalDeviceMemoryProperties memory_properties{};
@@ -102,21 +101,19 @@ void capture_parameters(const rsf_srvk_frame* frame, uint32_t reset) {
 
 int32_t capture_flush(void* graphics) { return static_cast<Graphics*>(graphics)->capture.flush() ? 1 : 0; }
 
-void transition(void* graphics, void* commands, uint64_t image, uint32_t before, uint32_t after,
-    uint32_t queue_family, uint32_t transfer) {
+void transition(void* graphics, void* commands, const rsf_dx12gvk_barrier* plan) {
     const auto& native = *static_cast<const Graphics*>(graphics);
     VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-    barrier.srcAccessMask = before == VK_IMAGE_LAYOUT_UNDEFINED || transfer == acquire_external ? 0 : VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    barrier.dstAccessMask = transfer == release_external ? 0 : VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    barrier.oldLayout = static_cast<VkImageLayout>(before);
-    barrier.newLayout = static_cast<VkImageLayout>(after);
-    barrier.srcQueueFamilyIndex = transfer == acquire_external ? VK_QUEUE_FAMILY_EXTERNAL : queue_family;
-    barrier.dstQueueFamilyIndex = transfer == release_external ? VK_QUEUE_FAMILY_EXTERNAL : queue_family;
-    if (transfer == local) barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = reinterpret_cast<VkImage>(image);
+    barrier.srcAccessMask = plan->source_access;
+    barrier.dstAccessMask = plan->target_access;
+    barrier.oldLayout = static_cast<VkImageLayout>(plan->old_layout);
+    barrier.newLayout = static_cast<VkImageLayout>(plan->new_layout);
+    barrier.srcQueueFamilyIndex = plan->source_family;
+    barrier.dstQueueFamilyIndex = plan->target_family;
+    barrier.image = reinterpret_cast<VkImage>(plan->image);
     barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    native.barrier(static_cast<VkCommandBuffer>(commands), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+    native.barrier(static_cast<VkCommandBuffer>(commands), plan->source_stages,
+        plan->target_stages, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 }
 
 void copy(void* graphics, void* commands, uint64_t src, uint64_t dst, uint32_t width, uint32_t height) {

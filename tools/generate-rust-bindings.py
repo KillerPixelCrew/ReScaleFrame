@@ -292,6 +292,7 @@ generate("runtime/orchestrator/src/vulkan_fsr4_sr_abi.rs", "runtime/orchestrator
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist",
           "--raw-line", "use super::bridge_abi::{rsf_fsr4_bridge_create, rsf_fsr4_bridge_frame, rsf_fsr4_bridge_info};",
+          "--raw-line", "use crate::vulkan_external_copy::Barrier as rsf_dx12gvk_barrier;",
           "--raw-line", "use crate::dx12_vulkan_interop_abi::rsf_dx12vk_platform;",
           "--raw-line", "use crate::render_abi::rsf_sharpening_options;",
           "--raw-line", "use crate::vulkan_sr_abi::{rsf_fsr4vk_handoff, rsf_srvk_frame, rsf_srvk_image, rsf_srvk_setup};",

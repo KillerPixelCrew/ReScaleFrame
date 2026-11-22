@@ -3,6 +3,9 @@ use crate::allocate_handle;
 use crate::dx12_vulkan_interop::Lookup;
 use crate::dx12_vulkan_interop_abi::rsf_dx12vk_shared_image as SharedImage;
 use crate::sr_session::has_capacity;
+use crate::vulkan_external_copy::{
+    self, ALL_COMMANDS, Barrier, FAMILY_EXTERNAL, GENERAL, TRANSFER_DST, Transfer, UNDEFINED,
+};
 use crate::vulkan_fg_abi::{
     RSF_FGVK_ABI_VERSION, RSF_FGVK_FRAME_SLOTS, rsf_fgvk_frame as Frame,
     rsf_fgvk_frame_slot as Recording, rsf_fgvk_setup as Setup, rsf_fgvk_status as Status,
@@ -38,15 +41,6 @@ const BGRA8: u32 = 44;
 const RG16F: u32 = 83;
 const R32F: u32 = 100;
 const SHADER_READ: u32 = 5;
-const UNDEFINED_LAYOUT: u32 = 0;
-const GENERAL_LAYOUT: u32 = 1;
-const TRANSFER_SRC_LAYOUT: u32 = 6;
-const TRANSFER_DST_LAYOUT: u32 = 7;
-const FAMILY_IGNORED: u32 = !0;
-const FAMILY_EXTERNAL: u32 = !1;
-// VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT.
-const MEMORY_ACCESS: u32 = 0x8000 | 0x1_0000;
-const ALL_COMMANDS: u32 = 0x1_0000;
 const BLIT_SRC: u32 = 0x400;
 const BLIT_DST: u32 = 0x800;
 const SRGB_NONLINEAR: u32 = 0;
@@ -315,34 +309,7 @@ const _: () = {
     assert!(size_of::<PresentSubmit>() == 368);
     assert!(std::mem::offset_of!(PresentSubmit, values) == 144);
     assert!(std::mem::offset_of!(PresentSubmit, signal) == 352);
-    assert!(size_of::<Barrier>() == 40);
-    assert!(size_of::<Transfer>() == 32);
 };
-
-/// One single-subresource colour image barrier recorded by the native leaf.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Barrier {
-    image: u64,
-    old_layout: u32,
-    new_layout: u32,
-    source_family: u32,
-    target_family: u32,
-    source_access: u32,
-    target_access: u32,
-    source_stages: u32,
-    target_stages: u32,
-}
-
-/// Source and target of one single-subresource colour copy or blit.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Transfer {
-    source: u64,
-    target: u64,
-    source_extent: [u32; 2],
-    target_extent: [u32; 2],
-}
 
 /// One recorded command of a planned transfer, in submission order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -353,95 +320,39 @@ enum Step {
     Clear(u64),
 }
 
-// External acquires and undefined contents have no prior access to make
-// visible; an external release leaves visibility to the importing queue.
-fn barrier(image: u64, before: u32, after: u32, source_family: u32, target_family: u32) -> Step {
-    Step::Barrier(Barrier {
-        image,
-        old_layout: before,
-        new_layout: after,
-        source_family,
-        target_family,
-        source_access: if before == UNDEFINED_LAYOUT || source_family == FAMILY_EXTERNAL {
-            0
-        } else {
-            MEMORY_ACCESS
-        },
-        target_access: if target_family == FAMILY_EXTERNAL {
-            0
-        } else {
-            MEMORY_ACCESS
-        },
-        source_stages: ALL_COMMANDS,
-        target_stages: ALL_COMMANDS,
-    })
-}
-
-// The producer image stays on its queue and returns to its layout. The shared
-// image is acquired from the D3D12 side once it holds content, otherwise its
-// undefined contents are discarded, and it is always released back as GENERAL.
-// Matching formats copy; a format conversion uses a nearest-filtered blit.
 fn copy_steps(family: u32, source: &Image, target: &SharedImage, initialized: bool) -> [Step; 5] {
-    let (target_layout, acquire_family) = if initialized {
-        (GENERAL_LAYOUT, FAMILY_EXTERNAL)
-    } else {
-        (UNDEFINED_LAYOUT, family)
-    };
     let transfer = Transfer {
         source: source.image,
         target: target.image,
         source_extent: [source.width, source.height],
         target_extent: [target.width, target.height],
     };
+    let plan = vulkan_external_copy::plan(transfer, source.layout, family, initialized, family);
     [
-        barrier(
-            source.image,
-            source.layout,
-            TRANSFER_SRC_LAYOUT,
-            FAMILY_IGNORED,
-            FAMILY_IGNORED,
-        ),
-        barrier(
-            target.image,
-            target_layout,
-            TRANSFER_DST_LAYOUT,
-            acquire_family,
-            family,
-        ),
+        Step::Barrier(plan.before[0]),
+        Step::Barrier(plan.before[1]),
         if source.format == target.format {
-            Step::Copy(transfer)
+            Step::Copy(plan.transfer)
         } else {
-            Step::Blit(transfer)
+            Step::Blit(plan.transfer)
         },
-        barrier(
-            source.image,
-            TRANSFER_SRC_LAYOUT,
-            source.layout,
-            FAMILY_IGNORED,
-            FAMILY_IGNORED,
-        ),
-        barrier(
-            target.image,
-            TRANSFER_DST_LAYOUT,
-            GENERAL_LAYOUT,
-            family,
-            FAMILY_EXTERNAL,
-        ),
+        Step::Barrier(plan.after[0]),
+        Step::Barrier(plan.after[1]),
     ]
 }
 
 // A cleared placeholder discards its contents and is released like a copy target.
 fn clear_steps(family: u32, image: u64) -> [Step; 3] {
     [
-        barrier(image, UNDEFINED_LAYOUT, TRANSFER_DST_LAYOUT, family, family),
+        Step::Barrier(Barrier::new(image, UNDEFINED, TRANSFER_DST, family, family)),
         Step::Clear(image),
-        barrier(
+        Step::Barrier(Barrier::new(
             image,
-            TRANSFER_DST_LAYOUT,
-            GENERAL_LAYOUT,
+            TRANSFER_DST,
+            GENERAL,
             family,
             FAMILY_EXTERNAL,
-        ),
+        )),
     ]
 }
 

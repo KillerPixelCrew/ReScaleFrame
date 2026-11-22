@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Exercise the linked Rust owner with synthetic graphics and SDK leaves.
 #include "../runtime/orchestrator/src/native_sr_fsr4_vulkan_platform.h"
+#include "../runtime/orchestrator/src/native_fg_dx12_vulkan_platform.h"
 #include <windows.h>
 #include <vulkan/vulkan.h>
 #include <array>
@@ -20,7 +21,7 @@ constexpr auto storage_sampled = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAM
 constexpr uint32_t formats[] = {VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R32_SFLOAT, VK_FORMAT_R16G16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT};
 const auto producer = fake(1), resumed = fake(2), device = fake(3);
 const auto bridge = fake<rsf_fsr4_bridge>(4);
-struct Barrier { void* commands; uint64_t image; uint32_t before, after, transfer; };
+struct Barrier { void* commands; rsf_dx12gvk_barrier plan; };
 struct Copy { void* commands; uint64_t src, dst; };
 struct Record { void* commands; uint64_t image; std::string_view role; uint32_t reset; };
 enum class Step { wait, idle, prepare, flush, clear, image, memory, com, timeline, importer, bridge, graphics };
@@ -130,9 +131,10 @@ const rsf_fsr4vk_platform platform{
     },
     [](const rsf_srvk_frame*, uint32_t reset) { CHECK(calls.dispatches.back().reset == reset); },
     [](void*) -> int32_t { calls.retirement.push_back(Step::flush); return calls.flush_error ? 0 : 1; },
-    [](void*, void* commands, uint64_t image, uint32_t before, uint32_t after, uint32_t queue_family, uint32_t transfer) {
-        CHECK(queue_family == family);
-        calls.barriers.push_back({commands, image, before, after, transfer});
+    [](void*, void* commands, const rsf_dx12gvk_barrier* plan) {
+        CHECK(plan->source_stages == VK_PIPELINE_STAGE_ALL_COMMANDS_BIT &&
+            plan->target_stages == VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+        calls.barriers.push_back({commands, *plan});
     },
     [](void*, void* commands, uint64_t source, uint64_t target, uint32_t width, uint32_t height) {
         CHECK(width == (commands == producer ? render_width : output_width));
@@ -159,8 +161,9 @@ const rsf_fsr4vk_platform platform{
     [](void*, const auto*, void* commands, const auto*, uint64_t image) {
         CHECK(commands == resumed && image == 103);
         const auto& acquire = calls.barriers.back();
-        CHECK(acquire.commands == resumed && acquire.image == image && acquire.transfer == 1 &&
-            acquire.before == VK_IMAGE_LAYOUT_GENERAL && acquire.after == VK_IMAGE_LAYOUT_GENERAL);
+        CHECK(acquire.commands == resumed && acquire.plan.image == image &&
+            acquire.plan.source_family == VK_QUEUE_FAMILY_EXTERNAL && acquire.plan.target_family == family &&
+            acquire.plan.old_layout == VK_IMAGE_LAYOUT_GENERAL && acquire.plan.new_layout == VK_IMAGE_LAYOUT_GENERAL);
         ++calls.sharpened;
     },
     [](void*, void* commands) { CHECK(commands == resumed); ++calls.retires; },
@@ -243,7 +246,9 @@ void evaluate_and_retire() {
     CHECK(calls.captures.size() == 5 && calls.captures.back().commands == resumed &&
         calls.captures.back().role == "sr-output-linear" && calls.captures.back().image == 103);
     for (const auto& capture : calls.captures) CHECK(capture.reset == 1);
-    CHECK(calls.barriers[1].transfer == 0 && calls.barriers[1].before == VK_IMAGE_LAYOUT_UNDEFINED);
+    const auto& first_target = calls.barriers[1].plan;
+    CHECK(first_target.source_family == VK_QUEUE_FAMILY_IGNORED && first_target.target_family == VK_QUEUE_FAMILY_IGNORED &&
+        first_target.old_layout == VK_IMAGE_LAYOUT_UNDEFINED && first_target.source_access == 0);
     ++fixture.record.frame_id;
     CHECK(fixture.evaluate() == VK_NOT_READY && fixture.next == producer && calls.splits.size() == 1);
     fixture.submitted();
@@ -260,7 +265,9 @@ void evaluate_and_retire() {
     const auto barriers_before = calls.barriers.size();
     CHECK(fixture.evaluate() == 71 && fixture.next == resumed && calls.dispatches.back().reset == 0);
     CHECK((calls.splits.back() == std::array<uint64_t, 3>{2, 3, 4}));
-    CHECK(calls.barriers[barriers_before + 1].transfer == 1 && calls.barriers[barriers_before + 1].before == VK_IMAGE_LAYOUT_GENERAL);
+    const auto& next_target = calls.barriers[barriers_before + 1].plan;
+    CHECK(next_target.source_family == VK_QUEUE_FAMILY_EXTERNAL && next_target.target_family == family &&
+        next_target.old_layout == VK_IMAGE_LAYOUT_GENERAL && next_target.source_access == 0);
     CHECK(calls.sharpened == 1 && calls.copies.size() == 7 && calls.captures.size() == 9);
     fixture.submitted();
 
