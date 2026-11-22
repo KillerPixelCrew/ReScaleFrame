@@ -13,12 +13,8 @@ static void* engine_depth_view(uint32_t rva)
     return view;
 }
 
-/* Rust owns metadata and producer receipts. The private layout stays fixed. */
 static const rsf_anomaly_fg_platform platform = {
-    sizeof(rsf_anomaly_fg_platform),
-    NULL, NULL, 0.0f,
     engine_depth_view,
-    NULL, NULL,
     {rsf_d3d11_state_save, rsf_d3d11_state_restore},
 };
 

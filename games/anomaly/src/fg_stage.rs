@@ -109,7 +109,8 @@ struct EngineBindings {
 
 impl EngineBindings {
     unsafe fn bind(platform: *const Platform) -> Option<Self> {
-        let platform = unsafe { full_table(platform) }?;
+        // The C leaf's static table.
+        let platform = unsafe { platform.as_ref() }?;
         Some(Self {
             state_scope: StateScope::bind(platform.state_scope)?,
             engine_depth_view: platform.engine_depth_view?,
@@ -120,13 +121,6 @@ impl EngineBindings {
     }
 }
 
-// All callers supply a readable size prefix. No full reference is formed for a short table.
-unsafe fn full_table<'a, T>(table: *const T) -> Option<&'a T> {
-    if table.is_null() || unsafe { table.cast::<u32>().read() } < size_of::<T>() as u32 {
-        return None;
-    }
-    Some(unsafe { &*table })
-}
 
 struct Tables {
     present: PresentBindings,

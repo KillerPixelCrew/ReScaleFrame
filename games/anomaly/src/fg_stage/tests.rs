@@ -424,13 +424,7 @@ fn missing_hudless_backbuffer_cannot_advance_fg_history() {
     // This mock never falls back to SR-off input dispatch. Only the borrowed Runtime data and the
     // synthetic immediate-context/backbuffer leases cross the production stage boundary.
     let platform = Platform {
-        struct_size: size_of::<Platform>() as u32,
-        engine_version: ptr::null(),
-        project_id: ptr::null(),
-        units_to_meters: 0.0,
         engine_depth_view: Some(no_depth),
-        sr_owns_depth: None,
-        motion_target: None,
         state_scope: crate::fg_inputs::tests::STATE_SCOPE,
     };
     assert!(unsafe { EngineBindings::bind(&platform) }.is_some());
@@ -443,7 +437,6 @@ fn missing_hudless_backbuffer_cannot_advance_fg_history() {
         }
         .is_none()
     );
-    assert!(unsafe { EngineBindings::bind(ptr::from_ref(&4_u32).cast()) }.is_none());
     assert!(
         unsafe {
             EngineBindings::bind(&Platform {

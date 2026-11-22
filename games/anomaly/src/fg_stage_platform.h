@@ -27,16 +27,10 @@ typedef struct rsf_anomaly_fg_state_scope {
     void (*restore)(void*, rsf_d3d11_state*);
 } rsf_anomaly_fg_state_scope;
 
+// The C leaves the FG stage needs: the guarded HW.pBaseZB read and the Runtime's D3D11 state scope.
 typedef struct rsf_anomaly_fg_platform {
-    uint32_t struct_size;
-    // Immutable engine metadata shared with the SR owner.
-    const char* engine_version;
-    const char* project_id;
-    float units_to_meters;
     // Selected from the fingerprinted profile. Returns a borrowed depth view.
     void* (*engine_depth_view)(uint32_t rva);
-    bool (*sr_owns_depth)(uint32_t native_frame);
-    rsf_anomaly_motion_frame_target (*motion_target)(void);
     rsf_anomaly_fg_state_scope state_scope;
 } rsf_anomaly_fg_platform;
 

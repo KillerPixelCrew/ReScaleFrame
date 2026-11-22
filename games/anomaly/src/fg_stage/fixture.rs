@@ -11,6 +11,14 @@ use crate::sys::*;
 #[path = "fixture_device.rs"]
 mod device;
 
+// The C test supplies a readable size prefix. No full reference is formed for a short table.
+unsafe fn full_table<'a, T>(table: *const T) -> Option<&'a T> {
+    if table.is_null() || unsafe { table.cast::<u32>().read() } < size_of::<T>() as u32 {
+        return None;
+    }
+    Some(unsafe { &*table })
+}
+
 struct Checks(u32);
 
 impl Checks {
