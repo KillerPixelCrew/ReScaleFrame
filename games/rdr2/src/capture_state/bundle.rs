@@ -223,29 +223,27 @@ unsafe fn write_bundle(snapshot: &Snapshot, bundle: &Bundle) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capture_state::{
-        rsf_rdr2_capture_arm, rsf_rdr2_capture_can_arm, rsf_rdr2_capture_request, timeout,
-    };
+    use crate::capture_state::{arm, can_arm, request, timeout};
     use std::ptr::null_mut;
 
     #[test]
     fn detaching_metadata_holds_admission_until_the_matching_sequence_finishes() {
         let owner = Capture::new();
-        rsf_rdr2_capture_request(&owner);
+        request(&owner);
         unsafe {
-            rsf_rdr2_capture_arm(&owner, 0, null_mut(), &Default::default());
+            arm(&owner, 0, null_mut(), &Default::default());
             (*owner.recordings.get()).draws.push(Draw::default());
             assert!(timeout(&owner, 5001));
-            rsf_rdr2_capture_request(&owner);
+            request(&owner);
             assert!(take_bundle(&owner));
             assert!((*owner.recordings.get()).draws.is_empty());
             let snapshot = (*owner.ready.get()).bundle.take().unwrap();
             assert_eq!(snapshot.draws.len(), 1);
-            assert!(!rsf_rdr2_capture_can_arm(&owner));
+            assert!(!can_arm(&owner));
             super::super::mark_published(&owner, snapshot.progress.sequence + 1);
-            assert!(!rsf_rdr2_capture_can_arm(&owner));
+            assert!(!can_arm(&owner));
             super::super::mark_published(&owner, snapshot.progress.sequence);
-            assert!(rsf_rdr2_capture_can_arm(&owner));
+            assert!(can_arm(&owner));
         }
     }
 }

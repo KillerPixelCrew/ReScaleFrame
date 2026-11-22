@@ -93,8 +93,7 @@ impl Image {
 }
 
 /// The caller lends the directory array, known role string and mapped pixels for this call.
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_write_image(
+pub(super) unsafe fn write_image(
     image: &Image,
     directory: *const u16,
     directory_len: usize,

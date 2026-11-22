@@ -86,8 +86,7 @@ const _: () = {
 };
 
 /// The native caller transfers the retained readback buffer and a process-lived leaf table.
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_rdr2_capture_gpu_adopt(
+pub(super) fn gpu_adopt(
     leases: &mut ReadbackLeases,
     buffer: *mut c_void,
     ops: &'static Ops,
@@ -119,11 +118,7 @@ fn replace(slot: &mut Option<NonNull<c_void>>, ops: &Ops, object: Option<NonNull
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_rdr2_capture_gpu_bind_fence(
-    leases: &mut ReadbackLeases,
-    fence: *mut c_void,
-) {
+pub(super) fn gpu_bind_fence(leases: &mut ReadbackLeases, fence: *mut c_void) {
     let Some(ops) = leases.ops else { return };
     let fence = NonNull::new(fence);
     replace(&mut leases.fence, ops, fence);
@@ -135,7 +130,7 @@ pub(super) extern "C" fn rsf_rdr2_capture_gpu_bind_fence(
 
 impl Drop for ReadbackLeases {
     fn drop(&mut self) {
-        rsf_rdr2_capture_gpu_bind_fence(self, ptr::null_mut());
+        gpu_bind_fence(self, ptr::null_mut());
         bind_queue(self, ptr::null_mut());
         if let (Some(ops), Some(buffer)) = (self.ops.take(), self.buffer.take()) {
             unsafe { (ops.release)(buffer.as_ptr()) };
@@ -198,8 +193,7 @@ pub(super) unsafe fn signal(
 
 /// The native caller lends the admitted swapchain and exact buffer count under the capture mutex.
 /// Keep any successful acquisitions local until the entire batch exists.
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_gpu_arm_backbuffers(
+pub(super) unsafe fn gpu_arm_backbuffers(
     owner: &Capture,
     swapchain: *mut c_void,
     count: u32,
@@ -235,11 +229,7 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_gpu_arm_backbuffers(
     true
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_gpu_accepts_target(
-    owner: &Capture,
-    target: *mut c_void,
-) -> bool {
+pub(super) unsafe fn gpu_accepts_target(owner: &Capture, target: *mut c_void) -> bool {
     let gpu = unsafe { &*owner.gpu.get() };
     NonNull::new(target).is_some_and(|target| {
         gpu.backbuffers
@@ -258,11 +248,7 @@ pub(super) unsafe fn select_target(owner: &Capture, target: *mut c_void) {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_gpu_selected(
-    owner: &Capture,
-    swapchain: *mut c_void,
-) -> *mut c_void {
+pub(super) unsafe fn gpu_selected(owner: &Capture, swapchain: *mut c_void) -> *mut c_void {
     unsafe { &*owner.gpu.get() }
         .backbuffers
         .as_ref()

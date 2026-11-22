@@ -2,6 +2,8 @@
 //! Capture admission, limits, and publication. The observation mutex guards
 //! ledger operations and orders them with the graphics objects. Request and fast admission
 //! queries are atomic. The NGX wrapper nesting is tracked on the calling thread.
+// Unit tests compile the owner without the native detours that call most of it.
+#![cfg_attr(test, allow(dead_code))]
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -45,7 +47,6 @@ const SAVE_DRAW: u32 = 1;
 const KEEP_TAIL: u32 = 2;
 
 #[cfg(windows)]
-#[cfg_attr(test, allow(dead_code))]
 struct Progress {
     sequence: u32,
     draws: u32,
@@ -135,52 +136,47 @@ fn try_entry<V: Default>(map: &mut HashMap<usize, V>, key: usize) -> Option<&mut
     Some(map.entry(key).or_default())
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_rdr2_capture_request(owner: &Capture) {
+fn request(owner: &Capture) {
     owner.pending.store(true, Ordering::Release);
 }
 
 /// The poll thread lends the NUL-terminated request filename for the duration of the call.
 #[cfg(all(windows, not(test)))]
-unsafe fn poll_request(owner: &Capture, request: *const u16) {
+unsafe fn poll_request(owner: &Capture, request_file: *const u16) {
     use crate::diagnostics::{capture_key_down, capture_key_pressed, foreground};
     use windows_sys::Win32::Storage::FileSystem::DeleteFileW;
 
     let down = capture_key_down();
     let was_down = owner.key_down.swap(down, Ordering::Relaxed);
     if capture_key_pressed(was_down, down, foreground()) {
-        rsf_rdr2_capture_request(owner);
+        request(owner);
     }
-    if unsafe { DeleteFileW(request) } != 0 {
-        rsf_rdr2_capture_request(owner);
+    if unsafe { DeleteFileW(request_file) } != 0 {
+        request(owner);
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_rdr2_capture_active(owner: &Capture) -> bool {
+fn active(owner: &Capture) -> bool {
     owner.active.load(Ordering::Acquire)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_rdr2_capture_has_inputs(owner: &Capture) -> bool {
+fn has_inputs(owner: &Capture) -> bool {
     owner.inputs_remaining.load(Ordering::Acquire) != 0
 }
 
 unsafe fn drained(owner: &Capture, ledger: &Ledger) -> bool {
     unsafe { &*owner.shots.get() }.pending.is_empty()
-        && !rsf_rdr2_capture_active(owner)
-        && !rsf_rdr2_capture_has_inputs(owner)
+        && !active(owner)
+        && !has_inputs(owner)
         && ledger.inputs_in_flight == 0
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_can_arm(owner: &Capture) -> bool {
+unsafe fn can_arm(owner: &Capture) -> bool {
     let ledger = unsafe { &*owner.ledger.get() };
     owner.pending.load(Ordering::Acquire) && !ledger.dirty && unsafe { drained(owner, ledger) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_arm(
+unsafe fn arm(
     owner: &Capture,
     tick: u64,
     swapchain_identity: *mut c_void,
@@ -202,8 +198,7 @@ unsafe extern "C" fn rsf_rdr2_capture_arm(
     owner.active.store(true, Ordering::Release);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_rdr2_capture_end_draws(owner: &Capture) {
+fn end_draws(owner: &Capture) {
     owner.active.store(false, Ordering::Release);
 }
 
@@ -212,9 +207,9 @@ unsafe fn timeout(owner: &Capture, tick: u64) -> bool {
     let ledger = unsafe { &mut *owner.ledger.get() };
     if ledger.dirty
         && tick.wrapping_sub(ledger.started) > CAPTURE_TIMEOUT_MS
-        && (rsf_rdr2_capture_active(owner) || rsf_rdr2_capture_has_inputs(owner))
+        && (active(owner) || has_inputs(owner))
     {
-        rsf_rdr2_capture_end_draws(owner);
+        end_draws(owner);
         owner.inputs_remaining.store(0, Ordering::Release);
         ledger.timed_out = true;
         return true;
@@ -272,36 +267,34 @@ mod tests {
         let owner = Capture::new();
         let list = without_provenance_mut(1);
         let feature = without_provenance_mut(2);
-        rsf_rdr2_capture_request(&owner);
+        request(&owner);
         unsafe {
-            assert!(rsf_rdr2_capture_can_arm(&owner));
-            rsf_rdr2_capture_arm(&owner, 100, null_mut(), &PresentationDesc::default());
-            metadata::rsf_rdr2_capture_record_feature(&owner, feature, &0);
-            assert!(metadata::rsf_rdr2_capture_track_evaluation(false));
+            assert!(can_arm(&owner));
+            arm(&owner, 100, null_mut(), &PresentationDesc::default());
+            metadata::record_feature(&owner, feature, &0);
+            assert!(metadata::track_evaluation(false));
             let mut input = metadata::InputId::default();
-            assert!(metadata::rsf_rdr2_capture_begin_input(
-                &owner, list, feature, &mut input
-            ));
-            assert!(metadata::rsf_rdr2_capture_commit_input(&owner));
-            assert!(!metadata::rsf_rdr2_capture_track_evaluation(false));
-            assert!(!metadata::rsf_rdr2_capture_track_evaluation(true));
-            rsf_rdr2_capture_request(&owner);
+            assert!(metadata::begin_input(&owner, list, feature, &mut input));
+            assert!(metadata::commit_input(&owner));
+            assert!(!metadata::track_evaluation(false));
+            assert!(!metadata::track_evaluation(true));
+            request(&owner);
             assert!(!timeout(&owner, 5100));
             assert!(timeout(&owner, 5101));
             assert!(!can_publish(&owner));
-            assert!(metadata::rsf_rdr2_capture_track_evaluation(true));
-            assert!(!metadata::rsf_rdr2_capture_track_evaluation(false));
-            assert!(!metadata::rsf_rdr2_capture_track_evaluation(true));
-            metadata::rsf_rdr2_capture_finish_input(&owner);
+            assert!(metadata::track_evaluation(true));
+            assert!(!metadata::track_evaluation(false));
+            assert!(!metadata::track_evaluation(true));
+            metadata::finish_input(&owner);
             (&mut *owner.shots.get())
                 .pending
                 .push(shots::Shot::default());
             assert!(!can_publish(&owner));
             (&mut *owner.shots.get()).pending.clear();
             assert!(can_publish(&owner));
-            assert!(!rsf_rdr2_capture_can_arm(&owner));
+            assert!(!can_arm(&owner));
             mark_published(&owner, 1);
-            assert!(rsf_rdr2_capture_can_arm(&owner));
+            assert!(can_arm(&owner));
         }
     }
 
@@ -309,7 +302,7 @@ mod tests {
     fn last_allocated_draw_is_retained_and_metadata_is_bounded() {
         let owner = Capture::new();
         unsafe {
-            rsf_rdr2_capture_arm(&owner, 0, null_mut(), &PresentationDesc::default());
+            arm(&owner, 0, null_mut(), &PresentationDesc::default());
             for _ in 0..MAX_DRAW_COPIES - 1 {
                 assert_eq!(commit_draw(&owner), SAVE_DRAW);
             }

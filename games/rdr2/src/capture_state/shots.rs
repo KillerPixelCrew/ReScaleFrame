@@ -3,8 +3,8 @@
 #[cfg(any(windows, test))]
 use super::gpu_leases::{Gpu, take_idle};
 use super::gpu_leases::{
-    NO_SIGNAL_NEEDED, Ops, ReadbackLeases, SIGNAL_ACCEPTED, Signal, bind_queue,
-    rsf_rdr2_capture_gpu_bind_fence, select_target, signal,
+    NO_SIGNAL_NEEDED, Ops, ReadbackLeases, SIGNAL_ACCEPTED, Signal, bind_queue, gpu_bind_fence,
+    select_target, signal,
 };
 use super::metadata::{InputId, RESOURCE_COUNT, RESOURCE_ROLES};
 use super::recordings::{
@@ -12,10 +12,7 @@ use super::recordings::{
     discard_submission, fence_readback, reuse_readback, snapshot_submission, stamp_copy,
     submit_readback,
 };
-use super::{
-    Capture, INPUT_FRAMES, KEEP_TAIL, MAX_DRAW_COPIES, SAVE_DRAW, commit_draw,
-    rsf_rdr2_capture_active,
-};
+use super::{Capture, INPUT_FRAMES, KEEP_TAIL, MAX_DRAW_COPIES, SAVE_DRAW, active, commit_draw};
 use std::cell::RefCell;
 #[cfg(all(windows, not(test)))]
 use std::ffi::c_char;
@@ -106,13 +103,12 @@ impl Default for Shot {
     }
 }
 
-pub(super) type Completed = unsafe extern "C" fn(*mut c_void) -> u64;
+pub(super) type Completed = unsafe fn(*mut c_void) -> u64;
 #[cfg(any(windows, test))]
-pub(super) type DeviceRemoved = unsafe extern "C" fn(*mut c_void) -> bool;
-type Copy =
-    unsafe extern "C" fn(*mut c_void, *mut c_void, u32, &mut ReadbackLeases, &mut Image) -> bool;
+pub(super) type DeviceRemoved = unsafe fn(*mut c_void) -> bool;
+type Copy = unsafe fn(*mut c_void, *mut c_void, u32, &mut ReadbackLeases, &mut Image) -> bool;
 #[cfg(all(windows, not(test)))]
-pub(super) type WriteImage = unsafe extern "C" fn(&ReadbackLeases, &Image, *const c_char) -> bool;
+pub(super) type WriteImage = unsafe fn(&ReadbackLeases, &Image, *const c_char) -> bool;
 
 impl Shot {
     fn completed(&self, sample: Completed) -> u64 {
@@ -188,8 +184,7 @@ unsafe fn untracked_submit(owner: &Capture, count: u32, lists: *const *mut c_voi
 
 /// Under the native capture mutex, put the lease in pending before the native copy can
 /// record any commands. A refused copy can drop the new slot immediately.
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_input_shot(
+pub(super) unsafe fn input_shot(
     owner: &Capture,
     id: &InputId,
     role: u32,
@@ -223,8 +218,7 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_input_shot(
 
 /// The caller stays on the render thread and records the stack at the native draw site
 /// when this returns SAVE_EVENT. A draw with overflowing metadata can still record its copy.
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_draw_shot(
+pub(super) unsafe fn draw_shot(
     owner: &Capture,
     list: *mut c_void,
     resource: *mut c_void,
@@ -282,8 +276,7 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_draw_shot(
 
 /// Claim only the pending shots proved by the snapshot taken immediately before the
 /// original queue call. An in-flight claim keeps that shot pending and unavailable for reuse.
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_before_submit(
+pub(super) unsafe fn before_submit(
     owner: &Capture,
     queue: *mut c_void,
     count: u32,
@@ -319,12 +312,7 @@ unsafe fn claim_submission(
 
 /// The native submission stack pairs the same queue and receipt after the original call.
 /// A successful signal also covers older unfenced receipts already submitted to that queue.
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_after_submit(
-    owner: &Capture,
-    queue: *mut c_void,
-    ops: &Ops,
-) -> u32 {
+pub(super) unsafe fn after_submit(owner: &Capture, queue: *mut c_void, ops: &Ops) -> u32 {
     // Release the TLS borrow before signalling: the native leaf can reenter the observer.
     let call = QUEUE_CALLS.with_borrow_mut(|calls| {
         if calls.refused != 0 {
@@ -373,15 +361,14 @@ unsafe fn finish_submission(
     if result == SIGNAL_ACCEPTED {
         for shot in pending {
             if fence_readback(&mut shot.receipt, queue, proof.value) {
-                rsf_rdr2_capture_gpu_bind_fence(&mut shot.leases, proof.fence);
+                gpu_bind_fence(&mut shot.leases, proof.fence);
             }
         }
     }
     result
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_pending_count(owner: &Capture) -> usize {
+pub(super) unsafe fn pending_count(owner: &Capture) -> usize {
     unsafe { &*owner.shots.get() }.pending.len()
 }
 
@@ -393,7 +380,7 @@ pub(super) unsafe fn collect_ready(
     sample: Completed,
     removed: DeviceRemoved,
 ) -> Option<Gpu> {
-    if rsf_rdr2_capture_active(owner) {
+    if active(owner) {
         return None;
     }
     let pending = &mut unsafe { &mut *owner.shots.get() }.pending;
@@ -474,8 +461,8 @@ pub(super) unsafe fn drop_ready(owner: &Capture) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::gpu_leases::rsf_rdr2_capture_gpu_adopt;
-    use super::super::recordings::rsf_rdr2_capture_reset_list;
+    use super::super::gpu_leases::gpu_adopt;
+    use super::super::recordings::reset_list;
     use super::*;
     use std::ptr::without_provenance_mut;
 
@@ -489,13 +476,13 @@ mod tests {
     unsafe extern "C" fn no_buffer(_: *mut c_void, _: u32) -> *mut c_void {
         ptr::null_mut()
     }
-    unsafe extern "C" fn completed(_: *mut c_void) -> u64 {
+    unsafe fn completed(_: *mut c_void) -> u64 {
         u64::MAX
     }
-    unsafe extern "C" fn device_live(_: *mut c_void) -> bool {
+    unsafe fn device_live(_: *mut c_void) -> bool {
         false
     }
-    unsafe extern "C" fn device_removed(_: *mut c_void) -> bool {
+    unsafe fn device_removed(_: *mut c_void) -> bool {
         true
     }
 
@@ -515,9 +502,9 @@ mod tests {
             assert!(!submission.is_null());
             assert!(claim_readback(&*submission, &mut pending[0].receipt));
             untracked_submit(&owner, 1, [other].as_ptr());
-            rsf_rdr2_capture_reset_list(&owner, list, ptr::null_mut());
+            reset_list(&owner, list, ptr::null_mut());
             assert!(collect_ready(&owner, completed, device_live).is_none());
-            assert_eq!(rsf_rdr2_capture_pending_count(&owner), 2);
+            assert_eq!(pending_count(&owner), 2);
             assert_eq!(ready_count(&owner), 0);
             assert_eq!((*owner.ledger.get()).readbacks_unavailable, 1);
             drop(Box::from_raw(submission));
@@ -536,19 +523,15 @@ mod tests {
         };
         let owner = Capture::new();
         let mut shot = Shot::default();
-        assert!(rsf_rdr2_capture_gpu_adopt(
-            &mut shot.leases,
-            without_provenance_mut(1),
-            &OPS
-        ));
-        rsf_rdr2_capture_gpu_bind_fence(&mut shot.leases, without_provenance_mut(2));
+        assert!(gpu_adopt(&mut shot.leases, without_provenance_mut(1), &OPS));
+        gpu_bind_fence(&mut shot.leases, without_provenance_mut(2));
         shot.receipt.fence_value = 1;
         unsafe {
             (*owner.shots.get()).pending.push(shot);
             assert!(collect_ready(&owner, completed, device_live).is_none());
-            assert_eq!(rsf_rdr2_capture_pending_count(&owner), 1);
+            assert_eq!(pending_count(&owner), 1);
             assert!(collect_ready(&owner, completed, device_removed).is_none());
-            assert_eq!(rsf_rdr2_capture_pending_count(&owner), 0);
+            assert_eq!(pending_count(&owner), 0);
             assert_eq!(ready_count(&owner), 0);
             assert_eq!((*owner.ledger.get()).readbacks_unavailable, 1);
             drop_ready(&owner);

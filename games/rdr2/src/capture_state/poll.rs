@@ -12,7 +12,7 @@ use std::sync::atomic::Ordering;
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 use windows_sys::Win32::System::Threading::{GetCurrentProcessId, Sleep};
 
-unsafe extern "C" fn write(
+unsafe fn write(
     leases: &super::gpu_leases::ReadbackLeases,
     image: &shots::Image,
     role: *const c_char,
@@ -20,7 +20,7 @@ unsafe extern "C" fn write(
     let state = owner();
     let mut result = 0;
     let saved = unsafe {
-        d3d12::rsf_rdr2_capture_d3d12_write(
+        d3d12::d3d12_write(
             leases,
             image,
             state.directory.as_ptr(),
@@ -60,11 +60,7 @@ pub(super) unsafe extern "system" fn worker(state: *mut c_void) -> u32 {
             let expired =
                 unsafe { timeout(capture, GetTickCount64()) }.then(|| state.progress().sequence);
             let retired = unsafe {
-                shots::collect_ready(
-                    capture,
-                    d3d12::rsf_rdr2_capture_d3d12_completed,
-                    d3d12::rsf_rdr2_capture_d3d12_removed,
-                )
+                shots::collect_ready(capture, d3d12::d3d12_completed, d3d12::d3d12_removed)
             };
             (expired, retired)
         };

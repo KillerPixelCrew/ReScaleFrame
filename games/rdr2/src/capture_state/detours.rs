@@ -1,17 +1,14 @@
 // SPDX-License-Identifier: MIT
 //! Typed D3D12/DXGI observations. Originals retain ordering and return ownership.
+use super::active;
 use super::d3d12::*;
-use super::gpu_leases::{self, ReadbackLeases, rsf_rdr2_capture_gpu_accepts_target};
+use super::gpu_leases::{self, ReadbackLeases, gpu_accepts_target};
 use super::hooks;
 use super::install::owner;
 use super::metadata::*;
-use super::pipeline::{rsf_rdr2_capture_graphics_facts, rsf_rdr2_capture_stream_facts};
+use super::pipeline::{graphics_facts, stream_facts};
 use super::recordings::*;
-use super::rsf_rdr2_capture_active;
-use super::shots::{
-    self, Image, rsf_rdr2_capture_after_submit, rsf_rdr2_capture_before_submit,
-    rsf_rdr2_capture_draw_shot, rsf_rdr2_capture_pending_count,
-};
+use super::shots::{self, Image, draw_shot, pending_count};
 use crate::{
     camera_probe::rsf_rdr2_camera_request,
     layout,
@@ -164,7 +161,7 @@ impl Drop for Scope {
     }
 }
 
-pub(super) unsafe extern "C" fn copy_resource(
+pub(super) unsafe fn copy_resource(
     list: Raw,
     resource: Raw,
     before: u32,
@@ -174,9 +171,7 @@ pub(super) unsafe extern "C" fn copy_resource(
     let _scope = Scope::enter(&COPYING);
     let state = owner();
     let mut allocation = 0;
-    if !unsafe {
-        rsf_rdr2_capture_d3d12_copy(list, resource, before, leases, image, &mut allocation)
-    } {
+    if !unsafe { d3d12_copy(list, resource, before, leases, image, &mut allocation) } {
         if allocation != 0 {
             state.log(format_args!(
                 "readback allocation failed hr={:08x}",
@@ -196,7 +191,7 @@ fn pipeline(pso: Raw, facts: Option<&Pipeline>) {
     let state = owner();
     let _guard = lock(&state.observations);
     unsafe {
-        rsf_rdr2_capture_record_pipeline(
+        record_pipeline(
             &state.capture,
             pso,
             facts.map_or(null(), std::ptr::from_ref),
@@ -223,16 +218,16 @@ pso_detour!(
     create_pso,
     CreatePso,
     D3D12_GRAPHICS_PIPELINE_STATE_DESC,
-    rsf_rdr2_capture_graphics_facts
+    graphics_facts
 );
-pso_detour!(load_pso, LoadPso, D3D12_GRAPHICS_PIPELINE_STATE_DESC, rsf_rdr2_capture_graphics_facts, name: PCWSTR);
+pso_detour!(load_pso, LoadPso, D3D12_GRAPHICS_PIPELINE_STATE_DESC, graphics_facts, name: PCWSTR);
 pso_detour!(
     create_stream,
     CreateStreamPso,
     D3D12_PIPELINE_STATE_STREAM_DESC,
-    rsf_rdr2_capture_stream_facts
+    stream_facts
 );
-pso_detour!(load_stream, LoadStreamPso, D3D12_PIPELINE_STATE_STREAM_DESC, rsf_rdr2_capture_stream_facts, name: PCWSTR);
+pso_detour!(load_stream, LoadStreamPso, D3D12_PIPELINE_STATE_STREAM_DESC, stream_facts, name: PCWSTR);
 
 unsafe extern "system" fn create_library(
     this: Raw,
@@ -267,7 +262,7 @@ unsafe extern "system" fn create_rtv(
     unsafe { original::<Original>(Role::CreateRtv)(this, resource, desc, handle) };
     let state = owner();
     let _guard = lock(&state.observations);
-    unsafe { rsf_rdr2_capture_record_rtv(&state.capture, handle.ptr, resource) };
+    unsafe { record_rtv(&state.capture, handle.ptr, resource) };
 }
 
 fn initial(hr: HRESULT, out: Out, before: D3D12_RESOURCE_STATES) {
@@ -276,7 +271,7 @@ fn initial(hr: HRESULT, out: Out, before: D3D12_RESOURCE_STATES) {
     {
         let state = owner();
         let _guard = lock(&state.observations);
-        unsafe { rsf_rdr2_capture_initial_state(&state.capture, resource, before.0 as u32) };
+        unsafe { initial_state(&state.capture, resource, before.0 as u32) };
     }
 }
 
@@ -347,7 +342,7 @@ unsafe extern "system" fn barriers(list: Raw, count: u32, items: *const D3D12_RE
             D3D12_RESOURCE_BARRIER_TYPE_TRANSITION => unsafe {
                 let t = &barrier.Anonymous.Transition;
                 let resource = t.pResource.as_ref().map_or(null_mut(), Interface::as_raw);
-                rsf_rdr2_capture_transition(
+                transition(
                     &state.capture,
                     list,
                     resource,
@@ -363,7 +358,7 @@ unsafe extern "system" fn barriers(list: Raw, count: u32, items: *const D3D12_RE
                     .pResourceAfter
                     .as_ref()
                     .map_or(null_mut(), Interface::as_raw);
-                rsf_rdr2_capture_alias(&state.capture, list, resource);
+                alias(&state.capture, list, resource);
             },
             _ => {}
         }
@@ -376,7 +371,7 @@ unsafe extern "system" fn reset(list: Raw, allocator: Raw, pso: Raw) -> HRESULT 
     if hr.is_ok() {
         let state = owner();
         let _guard = lock(&state.observations);
-        unsafe { rsf_rdr2_capture_reset_list(&state.capture, list, pso) };
+        unsafe { reset_list(&state.capture, list, pso) };
     }
     hr
 }
@@ -386,7 +381,7 @@ unsafe extern "system" fn set_pso(list: Raw, pso: Raw) {
     unsafe { original::<Original>(Role::SetPso)(list, pso) };
     let state = owner();
     let _guard = lock(&state.observations);
-    unsafe { rsf_rdr2_capture_bind_pipeline(&state.capture, list, pso) };
+    unsafe { bind_pipeline(&state.capture, list, pso) };
 }
 
 unsafe extern "system" fn set_rtv(
@@ -412,7 +407,7 @@ unsafe extern "system" fn set_rtv(
         .map_or(null(), |h| std::ptr::from_ref(&h.ptr));
     let state = owner();
     let _guard = lock(&state.observations);
-    unsafe { rsf_rdr2_capture_bind_rtv(&state.capture, list, first) };
+    unsafe { bind_rtv(&state.capture, list, first) };
 }
 
 // Pack the two counts into rdx, using r8 for the original caller. Preserve r9
@@ -466,14 +461,14 @@ unsafe extern "system" fn draw_indexed_bridge(
 #[inline(never)]
 fn snapshot(list: Raw, vertices: u32, instances: u32, caller: u64) {
     let state = owner();
-    if !rsf_rdr2_capture_active(&state.capture) {
+    if !active(&state.capture) {
         return;
     }
     let guard = lock(&state.observations);
     let mut binding = DrawBinding::default();
-    if !rsf_rdr2_capture_active(&state.capture)
-        || !unsafe { rsf_rdr2_capture_get_draw_binding(&state.capture, list, &mut binding) }
-        || !unsafe { rsf_rdr2_capture_gpu_accepts_target(&state.capture, binding.target) }
+    if !active(&state.capture)
+        || !unsafe { get_draw_binding(&state.capture, list, &mut binding) }
+        || !unsafe { gpu_accepts_target(&state.capture, binding.target) }
     {
         return;
     }
@@ -488,13 +483,13 @@ fn snapshot(list: Raw, vertices: u32, instances: u32, caller: u64) {
         ..Draw::default()
     };
     let failed = match unsafe {
-        rsf_rdr2_capture_draw_shot(
+        draw_shot(
             &state.capture,
             list,
             binding.target,
             D3D12_RESOURCE_STATE_RENDER_TARGET.0 as u32,
             copy_resource,
-            rsf_rdr2_capture_d3d12_completed,
+            d3d12_completed,
             &mut draw,
         )
     } {
@@ -508,7 +503,7 @@ fn snapshot(list: Raw, vertices: u32, instances: u32, caller: u64) {
                     null_mut(),
                 )
             });
-            !unsafe { rsf_rdr2_capture_record_draw(&state.capture, &draw) }
+            !unsafe { record_draw(&state.capture, &draw) }
         }
         _ => false,
     };
@@ -543,7 +538,7 @@ unsafe extern "system" fn create_list(
         bind(Role::SetRtv, list, set_rtv as _);
         let state = owner();
         let _guard = lock(&state.observations);
-        unsafe { rsf_rdr2_capture_reset_list(&state.capture, list, pso) };
+        unsafe { reset_list(&state.capture, list, pso) };
     }
     hr
 }
@@ -572,7 +567,7 @@ pub(super) unsafe extern "C" fn color_space_set(chain: Raw, space: u32) {
     let key = unsafe { identity(chain) };
     let state = owner();
     let _guard = lock(&state.observations);
-    unsafe { rsf_rdr2_capture_record_color_space(&state.capture, key, space) };
+    unsafe { record_color_space(&state.capture, key, space) };
 }
 
 unsafe extern "system" fn set_hdr(
@@ -589,7 +584,7 @@ unsafe extern "system" fn set_hdr(
         let state = owner();
         let _guard = lock(&state.observations);
         unsafe {
-            rsf_rdr2_capture_record_hdr(
+            record_hdr(
                 &state.capture,
                 key,
                 kind.0 as u32,
@@ -611,23 +606,21 @@ pub(super) unsafe extern "C" fn swapchain_created(chain: Raw) {
         let key = unsafe { identity(chain) };
         let state = owner();
         let _guard = lock(&state.observations);
-        unsafe { rsf_rdr2_capture_reset_presentation(&state.capture, key) };
+        unsafe { reset_presentation(&state.capture, key) };
     }
 }
 
 pub(super) unsafe extern "C" fn before_submit(queue: Raw, count: u32, lists: *const Raw) {
     let state = owner();
     let _guard = lock(&state.observations);
-    unsafe { rsf_rdr2_capture_before_submit(&state.capture, queue, count, lists) };
+    unsafe { shots::before_submit(&state.capture, queue, count, lists) };
 }
 
 pub(super) unsafe extern "C" fn after_submit(queue: Raw, _: u32, _: *const Raw) {
     let state = owner();
     let result = {
         let _guard = lock(&state.observations);
-        unsafe {
-            rsf_rdr2_capture_after_submit(&state.capture, queue, rsf_rdr2_capture_d3d12_ops())
-        }
+        unsafe { shots::after_submit(&state.capture, queue, d3d12_ops()) }
     };
     let message = match result {
         gpu_leases::NO_SIGNAL_NEEDED | gpu_leases::SIGNAL_ACCEPTED => return,
@@ -654,12 +647,11 @@ pub(super) unsafe extern "C" fn before_present(chain: Raw) {
             return;
         }
         let mut completed = null_mut();
-        let armed =
-            unsafe { rsf_rdr2_capture_d3d12_present(&state.capture, chain, &mut completed) };
+        let armed = unsafe { d3d12_present(&state.capture, chain, &mut completed) };
         if armed && !state.fixture {
             rsf_rdr2_camera_request();
         }
-        let pending = unsafe { rsf_rdr2_capture_pending_count(&state.capture) };
+        let pending = unsafe { pending_count(&state.capture) };
         (armed, completed, state.progress(), pending)
     };
     if !completed.is_null() {

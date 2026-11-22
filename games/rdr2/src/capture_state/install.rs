@@ -163,7 +163,7 @@ pub(super) fn arm_fixture(chain: *mut c_void) {
     let state = owner();
     let _guard = lock(&state.observations);
     state.selected_chain.store(chain, Ordering::Release);
-    super::rsf_rdr2_capture_request(&state.capture);
+    super::request(&state.capture);
 }
 
 #[cfg(feature = "capture-fixture")]

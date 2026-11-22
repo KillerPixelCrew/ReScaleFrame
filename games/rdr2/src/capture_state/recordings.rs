@@ -202,12 +202,7 @@ pub(super) unsafe fn hash_shader(bytes: *const u8, length: usize, out: &mut u32)
 
 // All of these calls run under g->mutex. Resource and command-list addresses are identities.
 // The observation maps do not own COM references.
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_record_pipeline(
-    owner: &Capture,
-    pso: *mut c_void,
-    facts: *const Pipeline,
-) {
+pub(super) unsafe fn record_pipeline(owner: &Capture, pso: *mut c_void, facts: *const Pipeline) {
     let recordings = unsafe { &mut *owner.recordings.get() };
     let key = pso as usize;
     let Some(facts) = (unsafe { facts.as_ref() }) else {
@@ -220,12 +215,7 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_record_pipeline(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_record_rtv(
-    owner: &Capture,
-    handle: usize,
-    resource: *mut c_void,
-) {
+pub(super) unsafe fn record_rtv(owner: &Capture, handle: usize, resource: *mut c_void) {
     let recordings = unsafe { &mut *owner.recordings.get() };
     if resource.is_null() {
         recordings.rtvs.remove(&handle);
@@ -234,12 +224,7 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_record_rtv(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_bind_rtv(
-    owner: &Capture,
-    list: *mut c_void,
-    handle: *const usize,
-) {
+pub(super) unsafe fn bind_rtv(owner: &Capture, list: *mut c_void, handle: *const usize) {
     let recordings = unsafe { &mut *owner.recordings.get() };
     // Resolve the first view at bind time. A later descriptor write does not retarget the list.
     let target = unsafe { handle.as_ref() }
@@ -251,20 +236,14 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_bind_rtv(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_bind_pipeline(
-    owner: &Capture,
-    list: *mut c_void,
-    pso: *mut c_void,
-) {
+pub(super) unsafe fn bind_pipeline(owner: &Capture, list: *mut c_void, pso: *mut c_void) {
     let recordings = unsafe { &mut *owner.recordings.get() };
     if let Some(recording) = try_entry(&mut recordings.lists, list as usize) {
         recording.pso = pso as usize;
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_get_draw_binding(
+pub(super) unsafe fn get_draw_binding(
     owner: &Capture,
     list: *mut c_void,
     out: &mut DrawBinding,
@@ -286,8 +265,7 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_get_draw_binding(
     true
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_record_draw(owner: &Capture, draw: &Draw) -> bool {
+pub(super) unsafe fn record_draw(owner: &Capture, draw: &Draw) -> bool {
     let recordings = unsafe { &mut *owner.recordings.get() };
     let draws = &mut recordings.draws;
     if draws.len() >= MAX_DRAW_METADATA || draws.try_reserve(1).is_err() {
@@ -297,20 +275,14 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_record_draw(owner: &Capture, dr
     true
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_initial_state(
-    owner: &Capture,
-    resource: *mut c_void,
-    state: u32,
-) {
+pub(super) unsafe fn initial_state(owner: &Capture, resource: *mut c_void, state: u32) {
     let recordings = unsafe { &mut *owner.recordings.get() };
     if let Some(value) = try_entry(&mut recordings.submitted, resource as usize) {
         *value = state;
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_transition(
+pub(super) unsafe fn transition(
     owner: &Capture,
     list: *mut c_void,
     resource: *mut c_void,
@@ -328,12 +300,7 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_transition(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_alias(
-    owner: &Capture,
-    list: *mut c_void,
-    resource: *mut c_void,
-) {
+pub(super) unsafe fn alias(owner: &Capture, list: *mut c_void, resource: *mut c_void) {
     let recordings = unsafe { &mut *owner.recordings.get() };
     if !resource.is_null() {
         recordings.record(list as usize, resource as usize, UNKNOWN);
@@ -345,12 +312,7 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_alias(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_reset_list(
-    owner: &Capture,
-    list: *mut c_void,
-    pso: *mut c_void,
-) {
+pub(super) unsafe fn reset_list(owner: &Capture, list: *mut c_void, pso: *mut c_void) {
     let recordings = unsafe { &mut *owner.recordings.get() };
     if let Some(recording) = try_entry(&mut recordings.lists, list as usize) {
         unsafe { super::shots::discard_reset(owner, list, recording.generation) };
@@ -362,8 +324,7 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_reset_list(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_resource_state(
+pub(super) unsafe fn resource_state(
     owner: &Capture,
     list: *mut c_void,
     resource: *mut c_void,
@@ -483,21 +444,15 @@ mod tests {
         let list = without_provenance_mut(1);
         let resource = without_provenance_mut(2);
         unsafe {
-            rsf_rdr2_capture_initial_state(&owner, resource, 4);
-            rsf_rdr2_capture_transition(&owner, list, resource, 1, 8, false);
-            assert_eq!(rsf_rdr2_capture_resource_state(&owner, list, resource), 4);
-            rsf_rdr2_capture_transition(&owner, list, resource, 0, 8, true);
-            assert_eq!(
-                rsf_rdr2_capture_resource_state(&owner, list, resource),
-                UNKNOWN
-            );
-            rsf_rdr2_capture_transition(&owner, list, resource, u32::MAX, 8, false);
-            assert_eq!(rsf_rdr2_capture_resource_state(&owner, list, resource), 8);
-            rsf_rdr2_capture_alias(&owner, list, resource);
-            assert_eq!(
-                rsf_rdr2_capture_resource_state(&owner, list, resource),
-                UNKNOWN
-            );
+            initial_state(&owner, resource, 4);
+            transition(&owner, list, resource, 1, 8, false);
+            assert_eq!(resource_state(&owner, list, resource), 4);
+            transition(&owner, list, resource, 0, 8, true);
+            assert_eq!(resource_state(&owner, list, resource), UNKNOWN);
+            transition(&owner, list, resource, u32::MAX, 8, false);
+            assert_eq!(resource_state(&owner, list, resource), 8);
+            alias(&owner, list, resource);
+            assert_eq!(resource_state(&owner, list, resource), UNKNOWN);
         }
     }
 
@@ -505,36 +460,27 @@ mod tests {
     fn wildcard_alias_invalidates_earlier_lists_and_preserves_later_transitions() {
         let owner = Capture::new();
         let earlier = without_provenance_mut(1);
-        let alias = without_provenance_mut(2);
+        let aliased = without_provenance_mut(2);
         let later = without_provenance_mut(3);
         let unrelated_list = without_provenance_mut(4);
         let a = without_provenance_mut(5);
         let b = without_provenance_mut(6);
         let c = without_provenance_mut(7);
         unsafe {
-            rsf_rdr2_capture_initial_state(&owner, a, 4);
-            rsf_rdr2_capture_transition(&owner, earlier, b, 0, 8, false);
-            rsf_rdr2_capture_transition(&owner, alias, a, 0, 8, false);
-            rsf_rdr2_capture_alias(&owner, alias, null_mut());
-            assert_eq!(rsf_rdr2_capture_resource_state(&owner, alias, a), UNKNOWN);
-            rsf_rdr2_capture_transition(&owner, alias, c, 0, 16, false);
-            rsf_rdr2_capture_transition(&owner, later, b, 0, 32, false);
-            let submission = snapshot_submission(&owner, 3, [earlier, alias, later].as_ptr());
+            initial_state(&owner, a, 4);
+            transition(&owner, earlier, b, 0, 8, false);
+            transition(&owner, aliased, a, 0, 8, false);
+            alias(&owner, aliased, null_mut());
+            assert_eq!(resource_state(&owner, aliased, a), UNKNOWN);
+            transition(&owner, aliased, c, 0, 16, false);
+            transition(&owner, later, b, 0, 32, false);
+            let submission = snapshot_submission(&owner, 3, [earlier, aliased, later].as_ptr());
             assert!(!submission.is_null());
             apply_submission(&owner, submission);
             discard_submission(submission);
-            assert_eq!(
-                rsf_rdr2_capture_resource_state(&owner, unrelated_list, a),
-                UNKNOWN
-            );
-            assert_eq!(
-                rsf_rdr2_capture_resource_state(&owner, unrelated_list, b),
-                32
-            );
-            assert_eq!(
-                rsf_rdr2_capture_resource_state(&owner, unrelated_list, c),
-                16
-            );
+            assert_eq!(resource_state(&owner, unrelated_list, a), UNKNOWN);
+            assert_eq!(resource_state(&owner, unrelated_list, b), 32);
+            assert_eq!(resource_state(&owner, unrelated_list, c), 16);
         }
     }
 
@@ -551,22 +497,14 @@ mod tests {
             pipeline_known: false,
         };
         unsafe {
-            rsf_rdr2_capture_record_rtv(&owner, 4, resource);
-            rsf_rdr2_capture_bind_rtv(&owner, list, &4);
-            rsf_rdr2_capture_bind_pipeline(&owner, list, pso);
-            rsf_rdr2_capture_record_pipeline(&owner, pso, &Pipeline::default());
-            assert!(rsf_rdr2_capture_get_draw_binding(
-                &owner,
-                list,
-                &mut binding
-            ));
+            record_rtv(&owner, 4, resource);
+            bind_rtv(&owner, list, &4);
+            bind_pipeline(&owner, list, pso);
+            record_pipeline(&owner, pso, &Pipeline::default());
+            assert!(get_draw_binding(&owner, list, &mut binding));
             assert!(binding.pipeline_known);
-            rsf_rdr2_capture_record_pipeline(&owner, pso, std::ptr::null());
-            assert!(rsf_rdr2_capture_get_draw_binding(
-                &owner,
-                list,
-                &mut binding
-            ));
+            record_pipeline(&owner, pso, std::ptr::null());
+            assert!(get_draw_binding(&owner, list, &mut binding));
             assert!(!binding.pipeline_known);
             assert_eq!(binding.pso, 3);
             assert_eq!(binding.target, resource);
@@ -580,25 +518,22 @@ mod tests {
         let resource = without_provenance_mut(2);
         let other_list = without_provenance_mut(3);
         unsafe {
-            rsf_rdr2_capture_reset_list(&owner, list, null_mut());
-            rsf_rdr2_capture_transition(&owner, list, resource, 0, 8, false);
+            reset_list(&owner, list, null_mut());
+            transition(&owner, list, resource, 0, 8, false);
             let mut readback = Readback::default();
             stamp_copy(&owner, list, &mut readback);
             let batch = [list];
             let receipt = snapshot_submission(&owner, 1, batch.as_ptr());
             assert!(!receipt.is_null());
-            rsf_rdr2_capture_reset_list(&owner, list, null_mut());
-            rsf_rdr2_capture_transition(&owner, list, resource, 0, 16, false);
+            reset_list(&owner, list, null_mut());
+            transition(&owner, list, resource, 0, 16, false);
             let mut later = Readback::default();
             stamp_copy(&owner, list, &mut later);
             assert!(claim_readback(&*receipt, &mut readback));
             assert!(!claim_readback(&*receipt, &mut later));
             assert_eq!(apply_submission(&owner, receipt), 1);
-            assert_eq!(
-                rsf_rdr2_capture_resource_state(&owner, other_list, resource),
-                8
-            );
-            assert_eq!(rsf_rdr2_capture_resource_state(&owner, list, resource), 16);
+            assert_eq!(resource_state(&owner, other_list, resource), 8);
+            assert_eq!(resource_state(&owner, list, resource), 16);
             discard_submission(receipt);
         }
     }

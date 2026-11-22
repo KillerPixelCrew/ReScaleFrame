@@ -1,16 +1,12 @@
 // SPDX-License-Identifier: MIT
 //! Win32 graphics leaves for leased capture copies and completion.
-use super::artifacts::rsf_rdr2_capture_write_image;
+use super::artifacts::write_image;
 use super::gpu_leases::{
-    Ops, ReadbackLeases, rsf_rdr2_capture_gpu_adopt, rsf_rdr2_capture_gpu_arm_backbuffers,
-    rsf_rdr2_capture_gpu_bind_fence, rsf_rdr2_capture_gpu_selected,
+    Ops, ReadbackLeases, gpu_adopt, gpu_arm_backbuffers, gpu_bind_fence, gpu_selected,
 };
 use super::metadata::PresentationDesc;
 use super::shots::Image;
-use super::{
-    Capture, rsf_rdr2_capture_active, rsf_rdr2_capture_arm, rsf_rdr2_capture_can_arm,
-    rsf_rdr2_capture_end_draws,
-};
+use super::{Capture, active, arm, can_arm, end_draws};
 use std::ffi::{c_char, c_void};
 use std::mem::ManuallyDrop;
 use std::ptr::null_mut;
@@ -29,8 +25,7 @@ static GPU_OPS: Ops = Ops {
     get_buffer,
 };
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_rdr2_capture_d3d12_ops() -> &'static Ops {
+pub(super) fn d3d12_ops() -> &'static Ops {
     &GPU_OPS
 }
 
@@ -73,14 +68,12 @@ unsafe extern "C" fn get_buffer(chain: *mut c_void, index: u32) -> *mut c_void {
         .map_or_else(null_mut, Interface::into_raw)
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_d3d12_completed(fence: *mut c_void) -> u64 {
+pub(super) unsafe fn d3d12_completed(fence: *mut c_void) -> u64 {
     unsafe { ID3D12Fence::from_raw_borrowed(&fence) }
         .map_or(0, |fence| unsafe { fence.GetCompletedValue() })
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_d3d12_removed(buffer: *mut c_void) -> bool {
+pub(super) unsafe fn d3d12_removed(buffer: *mut c_void) -> bool {
     unsafe { ID3D12Resource::from_raw_borrowed(&buffer) }
         .and_then(|buffer| unsafe { device(buffer) })
         .is_some_and(|device| unsafe { device.GetDeviceRemovedReason() }.is_err())
@@ -119,8 +112,7 @@ unsafe fn barrier(
 
 /// The native caller suppresses its reentrant barrier and allocation observers
 /// while recording a capture copy. The Rust shot owns the returned buffer.
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_d3d12_copy(
+pub(super) unsafe fn d3d12_copy(
     list: *mut c_void,
     source: *mut c_void,
     state: u32,
@@ -215,14 +207,14 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_d3d12_copy(
         let Some(buffer) = buffer else {
             return false;
         };
-        if !rsf_rdr2_capture_gpu_adopt(leases, buffer.into_raw(), &GPU_OPS) {
+        if !gpu_adopt(leases, buffer.into_raw(), &GPU_OPS) {
             return false;
         }
     }
     let Some(buffer) = leases.buffer else {
         return false;
     };
-    rsf_rdr2_capture_gpu_bind_fence(leases, null_mut());
+    gpu_bind_fence(leases, null_mut());
     let before = D3D12_RESOURCE_STATES(state as i32);
     unsafe {
         barrier(list, source, before, D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -254,8 +246,7 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_d3d12_copy(
 }
 
 /// The worker calls this only after completion has admitted the shot for mapping.
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_d3d12_write(
+pub(super) unsafe fn d3d12_write(
     leases: &ReadbackLeases,
     image: &Image,
     directory: *const u16,
@@ -284,7 +275,7 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_d3d12_write(
         return false;
     }
     let saved = unsafe {
-        rsf_rdr2_capture_write_image(
+        write_image(
             image,
             directory,
             directory_len,
@@ -299,8 +290,7 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_d3d12_write(
 }
 
 /// The native observer has verified the presenting owner and holds the capture mutex.
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_d3d12_present(
+pub(super) unsafe fn d3d12_present(
     owner: &Capture,
     chain: *mut c_void,
     completed_target: &mut *mut c_void,
@@ -308,18 +298,18 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_d3d12_present(
     let Some(swapchain) = (unsafe { IDXGISwapChain::from_raw_borrowed(&chain) }) else {
         return false;
     };
-    let selected = unsafe { rsf_rdr2_capture_gpu_selected(owner, chain) };
-    if rsf_rdr2_capture_active(owner)
+    let selected = unsafe { gpu_selected(owner, chain) };
+    if active(owner)
         && !selected.is_null()
         && swapchain.cast::<IDXGISwapChain3>().is_ok_and(|swapchain| {
             unsafe { swapchain.GetBuffer::<ID3D12Resource>(swapchain.GetCurrentBackBufferIndex()) }
                 .is_ok_and(|current| current.as_raw() == selected)
         })
     {
-        rsf_rdr2_capture_end_draws(owner);
+        end_draws(owner);
         *completed_target = selected;
     }
-    if !unsafe { rsf_rdr2_capture_can_arm(owner) } {
+    if !unsafe { can_arm(owner) } {
         return false;
     }
     let Ok(desc) = (unsafe { swapchain.GetDesc() }) else {
@@ -327,7 +317,7 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_d3d12_present(
     };
     let identity = swapchain.cast::<IUnknown>().ok();
     let identity = identity.as_ref().map_or(chain, Interface::as_raw);
-    if !unsafe { rsf_rdr2_capture_gpu_arm_backbuffers(owner, chain, desc.BufferCount, &GPU_OPS) } {
+    if !unsafe { gpu_arm_backbuffers(owner, chain, desc.BufferCount, &GPU_OPS) } {
         return false;
     }
     let descriptor = PresentationDesc {
@@ -335,6 +325,6 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_d3d12_present(
         width: desc.BufferDesc.Width,
         height: desc.BufferDesc.Height,
     };
-    unsafe { rsf_rdr2_capture_arm(owner, GetTickCount64(), identity, &descriptor) };
+    unsafe { arm(owner, GetTickCount64(), identity, &descriptor) };
     true
 }

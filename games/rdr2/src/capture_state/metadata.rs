@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Presentation snapshots and the NGX observations belonging to one admitted capture.
-use super::{Capture, rsf_rdr2_capture_has_inputs, try_entry};
+use super::{Capture, has_inputs, try_entry};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::{CStr, c_char, c_void};
@@ -185,22 +185,13 @@ impl Metadata {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_reset_presentation(
-    owner: &Capture,
-    identity: *mut c_void,
-) {
+pub(super) unsafe fn reset_presentation(owner: &Capture, identity: *mut c_void) {
     unsafe { &mut *owner.metadata.get() }
         .swapchains
         .remove(&identity.addr());
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_record_color_space(
-    owner: &Capture,
-    identity: *mut c_void,
-    color_space: u32,
-) {
+pub(super) unsafe fn record_color_space(owner: &Capture, identity: *mut c_void, color_space: u32) {
     if let Some(details) = try_entry(
         &mut unsafe { &mut *owner.metadata.get() }.swapchains,
         identity.addr(),
@@ -211,8 +202,7 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_record_color_space(
 
 /// DXGI lends bytes for the successful SetHDRMetaData call. The metadata type is recorded
 /// even when the payload is empty or exceeds the capture's bound.
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_record_hdr(
+pub(super) unsafe fn record_hdr(
     owner: &Capture,
     identity: *mut c_void,
     kind: u32,
@@ -238,12 +228,7 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_record_hdr(
 
 /// A successful release or a new creation without verified SR flags invalidates an old handle.
 /// A pointer to zero flags records a known feature.
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_record_feature(
-    owner: &Capture,
-    handle: *mut c_void,
-    flags: *const u32,
-) {
+pub(super) unsafe fn record_feature(owner: &Capture, handle: *mut c_void, flags: *const u32) {
     let features = &mut unsafe { &mut *owner.metadata.get() }.features;
     let handle = handle.addr();
     if let Some(&flags) = unsafe { flags.as_ref() } {
@@ -276,8 +261,7 @@ thread_local! {
 
 /// The census calls both phases with the same arguments on the same thread. Count even
 /// skipped calls so a nested exit cannot complete an outer capture on the same list.
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_rdr2_capture_track_evaluation(ending: bool) -> bool {
+pub(super) fn track_evaluation(ending: bool) -> bool {
     EVALUATION.with(|thread| {
         let mut evaluation = thread.get();
         let eligible = if ending {
@@ -300,15 +284,14 @@ pub(super) extern "C" fn rsf_rdr2_capture_track_evaluation(ending: bool) -> bool
     })
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_begin_input(
+pub(super) unsafe fn begin_input(
     owner: &Capture,
     list: *mut c_void,
     handle: *mut c_void,
     id: &mut InputId,
 ) -> bool {
     let ledger = unsafe { &mut *owner.ledger.get() };
-    if list.is_null() || !ledger.dirty || !rsf_rdr2_capture_has_inputs(owner) {
+    if list.is_null() || !ledger.dirty || !has_inputs(owner) {
         return false;
     }
     EVALUATION.with(|thread| {
@@ -355,8 +338,7 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_begin_input(
 
 /// Commit only after native recording of the input copies. A refused recording leaves the
 /// slot available while preserving the reserved index of any copies already recorded.
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_commit_input(owner: &Capture) -> bool {
+pub(super) unsafe fn commit_input(owner: &Capture) -> bool {
     EVALUATION.with(|thread| {
         let mut evaluation = thread.get();
         let Some(input) = evaluation.active.as_mut() else {
@@ -381,8 +363,7 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_commit_input(owner: &Capture) -
     })
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_finish_input(owner: &Capture) {
+pub(super) unsafe fn finish_input(owner: &Capture) {
     EVALUATION.with(|thread| {
         let mut evaluation = thread.get();
         let Some(input) = evaluation
@@ -407,8 +388,7 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_finish_input(owner: &Capture) {
 }
 
 /// The native observer lends a full readable camera sample or null if its read failed.
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_input_camera(
+pub(super) unsafe fn input_camera(
     owner: &Capture,
     id: &InputId,
     facts: &CameraFacts,
@@ -422,8 +402,7 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_input_camera(
 
 type ReadScalar = unsafe extern "C" fn(*const c_void, *const c_char, bool, &mut f64) -> bool;
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_input_scalars(
+pub(super) unsafe fn input_scalars(
     owner: &Capture,
     id: &InputId,
     parameters: *const c_void,
@@ -439,8 +418,7 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_input_scalars(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_input_resource_refused(
+pub(super) unsafe fn input_resource_refused(
     owner: &Capture,
     id: &InputId,
     role: u32,
@@ -460,8 +438,7 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_input_resource_refused(
 
 /// Preserve the exact native result even when the list recording no longer qualifies
 /// for an output copy. The caller finishes the reservation after the copy attempt.
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_rdr2_capture_input_result(
+pub(super) unsafe fn input_result(
     owner: &Capture,
     list: *mut c_void,
     result: u64,

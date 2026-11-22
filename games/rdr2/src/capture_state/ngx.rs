@@ -3,9 +3,9 @@
 use super::detours::copy_resource;
 use super::install::{Native, owner};
 use super::metadata::*;
-use super::recordings::rsf_rdr2_capture_resource_state;
-use super::shots::{self, rsf_rdr2_capture_input_shot};
-use super::{Capture, rsf_rdr2_capture_has_inputs};
+use super::recordings::resource_state;
+use super::shots::{self, input_shot};
+use super::{Capture, has_inputs};
 use crate::{
     layout,
     platform::{lock, worker_tls_slots},
@@ -70,7 +70,7 @@ fn camera(state: &Native, input: &InputId) {
             .then_some(bytes)
         });
     unsafe {
-        rsf_rdr2_capture_input_camera(
+        input_camera(
             &state.capture,
             input,
             &facts,
@@ -115,17 +115,15 @@ fn resource(
         .filter(|resource| !resource.is_null());
     let Some(resource) = resource else {
         if required {
-            unsafe { rsf_rdr2_capture_input_resource_refused(capture, input, role, true) };
+            unsafe { input_resource_refused(capture, input, role, true) };
         }
         return true;
     };
-    let before = unsafe { rsf_rdr2_capture_resource_state(capture, list, resource) };
-    match unsafe {
-        rsf_rdr2_capture_input_shot(capture, input, role, list, resource, before, copy_resource)
-    } {
+    let before = unsafe { resource_state(capture, list, resource) };
+    match unsafe { input_shot(capture, input, role, list, resource, before, copy_resource) } {
         shots::NO_SLOT => false,
         shots::REFUSED => {
-            unsafe { rsf_rdr2_capture_input_resource_refused(capture, input, role, false) };
+            unsafe { input_resource_refused(capture, input, role, false) };
             true
         }
         _ => true,
@@ -148,7 +146,7 @@ pub(super) unsafe extern "C" fn created(
     let state = owner();
     let _guard = lock(&state.observations);
     unsafe {
-        rsf_rdr2_capture_record_feature(
+        record_feature(
             &state.capture,
             handle,
             flags.as_ref().map_or(null(), std::ptr::from_ref),
@@ -159,7 +157,7 @@ pub(super) unsafe extern "C" fn created(
 pub(super) unsafe extern "C" fn released(handle: *mut c_void) {
     let state = owner();
     let _guard = lock(&state.observations);
-    unsafe { rsf_rdr2_capture_record_feature(&state.capture, handle, null()) };
+    unsafe { record_feature(&state.capture, handle, null()) };
 }
 
 pub(super) unsafe extern "C" fn evaluate(
@@ -169,22 +167,22 @@ pub(super) unsafe extern "C" fn evaluate(
     phase: u32,
     result: u64,
 ) {
-    if !rsf_rdr2_capture_track_evaluation(phase != 0) {
+    if !track_evaluation(phase != 0) {
         return;
     }
     let state = owner();
     let capture = &state.capture;
-    if phase == 0 && (list.is_null() || !rsf_rdr2_capture_has_inputs(capture)) {
+    if phase == 0 && (list.is_null() || !has_inputs(capture)) {
         return;
     }
     let guard = lock(&state.observations);
     let mut input = InputId::default();
     let no_slot = if phase == 0 {
-        if !unsafe { rsf_rdr2_capture_begin_input(capture, list, handle, &mut input) } {
+        if !unsafe { begin_input(capture, list, handle, &mut input) } {
             return;
         }
         camera(state, &input);
-        unsafe { rsf_rdr2_capture_input_scalars(capture, &input, parameters, read_scalar) };
+        unsafe { input_scalars(capture, &input, parameters, read_scalar) };
         let copied = [
             (0, c"Color", true),
             (1, c"Depth", true),
@@ -195,14 +193,14 @@ pub(super) unsafe extern "C" fn evaluate(
         .all(|(role, key, required)| {
             resource(capture, list, parameters, &input, role, key, required)
         });
-        if !copied || !unsafe { rsf_rdr2_capture_commit_input(capture) } {
-            unsafe { rsf_rdr2_capture_finish_input(capture) };
+        if !copied || !unsafe { commit_input(capture) } {
+            unsafe { finish_input(capture) };
         }
         !copied
     } else {
-        let matched = unsafe { rsf_rdr2_capture_input_result(capture, list, result, &mut input) };
+        let matched = unsafe { input_result(capture, list, result, &mut input) };
         let copied = !matched || resource(capture, list, parameters, &input, 4, c"Output", true);
-        unsafe { rsf_rdr2_capture_finish_input(capture) };
+        unsafe { finish_input(capture) };
         !copied
     };
     drop(guard);
