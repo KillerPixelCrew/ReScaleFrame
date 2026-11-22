@@ -15,17 +15,13 @@ use rsf_game_sys::{
     RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_CPU_INPUT_KEYED, RSF_GAME_CPU_INPUT_UNFRAMED,
     RSF_GAME_CPU_RENDER_SKIPPED, RSF_GAME_INPUT_CONTROLLER, RSF_GAME_INPUT_KEYBOARD,
     RSF_GAME_INPUT_MOUSE, RSF_GAME_RENDER_AFTER_SIMULATION, RSF_GAME_RENDER_NO_FG,
-    RSF_GAME_RENDER_PRIMARY, rsf_game_cpu_event, rsf_game_cpu_source_event, rsf_game_render_pass,
-    rsf_screen_class,
+    RSF_GAME_RENDER_PRIMARY, RSF_SCREEN_GAMEPLAY as SCREEN_GAMEPLAY,
+    RSF_SCREEN_LOADING as SCREEN_LOADING, RSF_SCREEN_MENU as SCREEN_MENU,
+    RSF_SCREEN_UNKNOWN as SCREEN_UNKNOWN, rsf_game_cpu_event, rsf_game_cpu_source_event,
+    rsf_game_render_pass, rsf_screen_class,
 };
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU64, Ordering};
-
-// The GameSDK Rust header mirror omits the cast-valued C screen constants.
-const SCREEN_UNKNOWN: rsf_screen_class = 0;
-const SCREEN_MENU: rsf_screen_class = 1;
-const SCREEN_LOADING: rsf_screen_class = 7;
-const SCREEN_GAMEPLAY: rsf_screen_class = 8;
 
 const WORLD_RETURN: usize = 0x65_6e32;
 const UI: usize = 0x219_e5c0;
@@ -475,28 +471,26 @@ fn cpu_event(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn rsf_skyrim_cpu_frame_event(
-    out: &mut rsf_game_cpu_event,
     state: &RenderState,
     stage: u32,
     session: u64,
     source: u64,
     qpc: u64,
     frequency: u64,
-) {
+) -> rsf_game_cpu_event {
     let mut flags = RSF_GAME_CPU_INPUT_KEYED;
     if stage == RSF_GAME_CPU_FRAME_END && !state.render_entered {
         flags |= RSF_GAME_CPU_RENDER_SKIPPED;
     }
-    *out = rsf_game_cpu_event {
+    rsf_game_cpu_event {
         render_expected: state.primary_count,
         flags,
         ..cpu_event(stage, session, source, qpc, frequency)
-    };
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn rsf_skyrim_cpu_source_event(
-    out: &mut rsf_game_cpu_source_event,
     stage: u32,
     session: u64,
     source: u64,
@@ -508,8 +502,8 @@ pub(crate) fn rsf_skyrim_cpu_source_event(
     kinds: u32,
     reason: u32,
     poll_begin: u64,
-) {
-    *out = rsf_game_cpu_source_event {
+) -> rsf_game_cpu_source_event {
+    rsf_game_cpu_source_event {
         header: rsf_game_cpu_event {
             struct_size: size_of::<rsf_game_cpu_source_event>() as u32,
             event_version: RSF_GAME_CPU_EVENT_VERSION_SOURCE,
@@ -522,21 +516,20 @@ pub(crate) fn rsf_skyrim_cpu_source_event(
         reason,
         reserved: 0,
         poll_begin_qpc: poll_begin,
-    };
+    }
 }
 
 pub(crate) fn rsf_skyrim_cpu_input_event(
-    out: &mut rsf_game_cpu_event,
     session: u64,
     kinds: u32,
     qpc: u64,
     frequency: u64,
-) {
-    *out = rsf_game_cpu_event {
+) -> rsf_game_cpu_event {
+    rsf_game_cpu_event {
         input_kind: kinds,
         flags: RSF_GAME_CPU_INPUT_UNFRAMED,
         ..cpu_event(RSF_GAME_CPU_INPUT_EVENT, session, 0, qpc, frequency)
-    };
+    }
 }
 
 type ReadNative = unsafe extern "C" fn(usize, *mut c_void, usize) -> bool;

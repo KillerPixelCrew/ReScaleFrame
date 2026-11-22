@@ -123,9 +123,7 @@ fn frame_event(frame: NonNull<Frame>, stage: u32) {
         if host.cpu_event.is_none() {
             return;
         }
-        let mut event = unsafe { std::mem::zeroed::<rsf_game_cpu_event>() };
-        rsf_skyrim_cpu_frame_event(
-            &mut event,
+        let event = rsf_skyrim_cpu_frame_event(
             &frame.render,
             stage,
             host.session_id,
@@ -154,9 +152,7 @@ fn source_event(
     if host.cpu_event.is_none() || source == 0 {
         return;
     }
-    let mut event = unsafe { std::mem::zeroed::<rsf_game_cpu_source_event>() };
-    rsf_skyrim_cpu_source_event(
-        &mut event,
+    let event = rsf_skyrim_cpu_source_event(
         stage,
         host.session_id,
         source,
@@ -215,12 +211,10 @@ fn begin_frame(main: usize) -> Receipt {
     // Only a sampled late poll whose native job joined normally can be adopted.
     let mut reservation = Reservation::EMPTY;
     rsf_skyrim_sources_adopt(&mut reservation, services.host.session_id, JOBS.retired());
-    let mut queued_move = false;
+    let mut queued = None;
     let (source, entry_readable) = if reservation.source != 0 {
-        (
-            reservation.source,
-            rsf_skyrim_cpu_queued_move(&mut queued_move),
-        )
+        queued = queued_move();
+        (reservation.source, queued.is_some())
     } else {
         abort(
             services,
@@ -238,7 +232,7 @@ fn begin_frame(main: usize) -> Receipt {
         main,
         reservation,
         entry_readable,
-        queued_move,
+        queued_move: queued == Some(true),
         refusal: 0,
     })
 }
@@ -305,8 +299,7 @@ fn begin_submit(caller: usize) -> Receipt {
                 (frame.services, frame.source, frame.reservation.source != 0)
             };
             if adopted {
-                let mut free_camera = false;
-                let camera_readable = rsf_skyrim_cpu_free_camera(&mut free_camera);
+                let free_camera = free_camera();
                 // The normal-simulation branch has passed the pause/freeze decision.
                 // Refuse a bind if a consumer ran earlier or a queued-move/free-camera
                 // path can bypass the verified PlayerCharacter update envelope.
@@ -314,13 +307,13 @@ fn begin_submit(caller: usize) -> Receipt {
                     let frame = unsafe { frame.as_mut() };
                     let input = &frame.input;
                     frame.refusal = rsf_skyrim_bind_refusal(
-                        frame.entry_readable && camera_readable,
+                        frame.entry_readable && free_camera.is_some(),
                         frame.queued_move,
                         input.player_update_calls != 0
                             || input.movement_calls != 0
                             || input.camera_updates != 0
                             || input.player_camera_updates != 0,
-                        free_camera,
+                        free_camera == Some(true),
                     );
                     frame.refusal
                 };
@@ -569,8 +562,7 @@ fn begin_dispatch(manager: usize, list: usize) -> Receipt {
         cpu_hooks::services()
             .filter(|_| kinds != 0)
             .inspect(|services| {
-                rsf_skyrim_cpu_input_event(
-                    &mut event,
+                event = rsf_skyrim_cpu_input_event(
                     services.host.session_id,
                     kinds,
                     qpc(),

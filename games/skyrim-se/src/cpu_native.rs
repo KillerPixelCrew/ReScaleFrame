@@ -90,7 +90,7 @@ pub(crate) fn rsf_skyrim_cpu_camera_consumes(address: usize) -> bool {
     platform::get().is_some_and(|p| address.checked_add(0xe0).and_then(|at| byte(p, at)) == Some(0))
 }
 
-fn queued_move() -> Option<bool> {
+pub(crate) fn queued_move() -> Option<bool> {
     let p = platform::get()?;
     let player = singleton(p, p.main_module(), PLAYER)?;
     let flags = byte(p, player.checked_add(0xbec)?)?;
@@ -98,27 +98,11 @@ fn queued_move() -> Option<bool> {
     Some(flags & 0x40 != 0 || pending != 0)
 }
 
-pub(crate) fn rsf_skyrim_cpu_queued_move(queued: &mut bool) -> bool {
-    let Some(value) = queued_move() else {
-        return false;
-    };
-    *queued = value;
-    true
-}
-
-fn free_camera() -> Option<bool> {
+pub(crate) fn free_camera() -> Option<bool> {
     let p = platform::get()?;
     let camera = singleton(p, p.main_module(), PLAYER_CAMERA)?;
     let state = p.read_usize(camera.checked_add(0x28)?)?;
     let free = p.read_usize(camera.checked_add(0xd0)?)?;
     // The matched engine compares both pointers, including when both are null.
     Some(state == free)
-}
-
-pub(crate) fn rsf_skyrim_cpu_free_camera(active: &mut bool) -> bool {
-    let Some(value) = free_camera() else {
-        return false;
-    };
-    *active = value;
-    true
 }
