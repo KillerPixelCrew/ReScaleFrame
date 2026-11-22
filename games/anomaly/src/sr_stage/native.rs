@@ -50,23 +50,12 @@ use crate::sr_profile::{
     SITE_SET_P, SITE_SUN_CASCADES, WORLD_TARGETS, rsf_anomaly_sr_engine_layout,
 };
 use crate::sr_reconstruction::rsf_anomaly_sr_correct_position_constant;
-use crate::sr_swap::rsf_anomaly_swap_combine_end;
-use crate::sr_swap::rsf_anomaly_swap_create_scoped;
-use crate::sr_swap::rsf_anomaly_swap_frame_end;
-use crate::sr_swap::rsf_anomaly_swap_position_constant;
-use crate::sr_swap::rsf_anomaly_swap_prepare;
-use crate::sr_swap::rsf_anomaly_swap_prepared;
-use crate::sr_swap::rsf_anomaly_swap_rm_near;
-use crate::sr_swap::rsf_anomaly_swap_set_enabled;
-use crate::sr_swap::rsf_anomaly_swap_shutdown;
-use crate::sr_swap::rsf_anomaly_swap_sun_begin;
-use crate::sr_swap::rsf_anomaly_swap_sun_end;
-use crate::sr_swap::rsf_anomaly_swap_view_of;
-use crate::sr_swap::{Handle, rsf_anomaly_swap_close_stale};
+use crate::sr_swap::{self as swap_owner, Handle};
+
 use crate::sys::{RSF_ANOMALY_OBSERVATION_ABI, rsf_anomaly_native_observation};
 use crate::sys::{
     RSF_ANOMALY_SWAP_MAKE_CREATED, RSF_ANOMALY_SWAP_MAKE_FAILED, RSF_ANOMALY_SWAP_SLOT_COUNT,
-    rsf_anomaly_swap_counters, rsf_anomaly_swap_platform, rsf_anomaly_swap_request,
+    rsf_anomaly_swap_counters, rsf_anomaly_swap_request,
     rsf_anomaly_swap_twins, rsf_anomaly_swap_view,
 };
 use crate::sys::{
@@ -193,8 +182,20 @@ fn address(rva: u32) -> Ptr {
 
 fn swap() -> *mut Handle {
     *SWAP.get_or_init(|| {
-        rsf_anomaly_swap_create_scoped(Some(rsf_anomaly_sr_engine_layout()), Some(&SWAP_PLATFORM.0))
-            as usize
+        swap_owner::create(
+            rsf_anomaly_sr_engine_layout(),
+            swap_owner::Platform {
+                user: null_mut(),
+                read: swap_read,
+                write: swap_write,
+                make_twins,
+                drop_twins,
+                set_viewport,
+                upload_projection,
+                set_mip_bias,
+                correct_position_constant,
+            },
+        ) as usize
     }) as *mut Handle
 }
 
@@ -226,24 +227,6 @@ impl TwinLog {
 }
 
 // ---- the swap owner's host -----------------------------------------------------------------------------------------
-struct SyncSwapPlatform(rsf_anomaly_swap_platform);
-// SAFETY: the record holds only function pointers and a null user.
-unsafe impl Sync for SyncSwapPlatform {}
-
-static SWAP_PLATFORM: SyncSwapPlatform = SyncSwapPlatform(rsf_anomaly_swap_platform {
-    user: null_mut(),
-    read: Some(swap_read),
-    write: Some(swap_write),
-    make_twins: Some(make_twins),
-    drop_twins: Some(drop_twins),
-    // The production seam passes a scoped operation directly to the Rust owner.
-    round_trip: None,
-    upscale: None,
-    set_viewport: Some(set_viewport),
-    upload_projection: Some(upload_projection),
-    set_mip_bias: Some(set_mip_bias),
-    correct_position_constant: Some(correct_position_constant),
-});
 
 unsafe extern "C" fn swap_read(_: Ptr, address: *const c_void, output: Ptr, size: usize) -> bool {
     unsafe { (native().copy)(output, address, size) }
@@ -580,7 +563,7 @@ unsafe extern "C" fn build_sha256() -> *const c_char {
 }
 
 unsafe extern "C" fn close_stale() {
-    rsf_anomaly_swap_close_stale(swap());
+    swap_owner::close_stale(swap());
 }
 
 unsafe extern "C" fn prepare(
@@ -593,13 +576,13 @@ unsafe extern "C" fn prepare(
         user,
     };
     let previous = TWIN_LOG.swap(&raw mut call_log, Ordering::AcqRel);
-    let prepared = rsf_anomaly_swap_prepare(swap(), unsafe { facts.as_ref() });
+    let prepared = swap_owner::prepare(swap(), unsafe { facts.as_ref() });
     TWIN_LOG.store(previous, Ordering::Release);
     prepared
 }
 
 unsafe extern "C" fn prepared() {
-    rsf_anomaly_swap_prepared(swap());
+    swap_owner::prepared(swap());
 }
 
 unsafe extern "C" fn swap_handle() -> Ptr {
@@ -607,35 +590,35 @@ unsafe extern "C" fn swap_handle() -> Ptr {
 }
 
 unsafe extern "C" fn combine_end() {
-    rsf_anomaly_swap_combine_end(swap());
+    swap_owner::combine_end(swap());
 }
 
 unsafe extern "C" fn frame_end() {
-    rsf_anomaly_swap_frame_end(swap());
+    swap_owner::frame_end(swap());
 }
 
 unsafe extern "C" fn rm_near() {
-    rsf_anomaly_swap_rm_near(swap());
+    swap_owner::rm_near(swap());
 }
 
 unsafe extern "C" fn sun_begin() -> bool {
-    rsf_anomaly_swap_sun_begin(swap())
+    swap_owner::sun_begin(swap())
 }
 
 unsafe extern "C" fn sun_end(suspended: bool) {
-    rsf_anomaly_swap_sun_end(swap(), suspended);
+    swap_owner::sun_end(swap(), suspended);
 }
 
 unsafe extern "C" fn position_setup(constant: Ptr) {
-    rsf_anomaly_swap_position_constant(swap(), constant);
+    swap_owner::position_constant(swap(), constant);
 }
 
 unsafe extern "C" fn shutdown() -> bool {
-    rsf_anomaly_swap_shutdown(swap())
+    swap_owner::shutdown(swap())
 }
 
 unsafe extern "C" fn set_swap_enabled(enabled: bool) {
-    rsf_anomaly_swap_set_enabled(swap(), enabled);
+    swap_owner::set_enabled(swap(), enabled);
 }
 
 unsafe extern "C" fn controller(out: *mut rsf_anomaly_sr_controller) {
@@ -646,7 +629,7 @@ unsafe extern "C" fn controller(out: *mut rsf_anomaly_sr_controller) {
             ..Default::default()
         }
     } else {
-        unsafe { *rsf_anomaly_swap_view_of(handle) }
+        unsafe { *swap_owner::view_of(handle) }
     };
     unsafe {
         out.write(rsf_anomaly_sr_controller {
@@ -670,7 +653,7 @@ unsafe extern "C" fn swap_counters(out: *mut rsf_anomaly_sr_swap_counters) {
     let counters = if handle.is_null() {
         rsf_anomaly_swap_counters::default()
     } else {
-        unsafe { (*rsf_anomaly_swap_view_of(handle)).counters }
+        unsafe { (*swap_owner::view_of(handle)).counters }
     };
     unsafe { out.write(counters) };
 }

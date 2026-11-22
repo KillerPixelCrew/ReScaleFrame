@@ -14,7 +14,7 @@ use crate::sys::{
 fn blur_only() {
     let c = Case::new(true);
     assert!(c.prepare(&c.facts()) && c.seam());
-    rsf_anomaly_swap_combine_end(c.swap);
+    crate::sr_swap::combine_end(c.swap);
     assert!(c.stock() && c.view().counters.seams_without_window == 0);
 }
 
@@ -22,7 +22,7 @@ fn blur_only() {
 fn combine_without_seam() {
     let c = Case::new(true);
     assert!(c.prepare(&c.facts()));
-    rsf_anomaly_swap_combine_end(c.swap);
+    crate::sr_swap::combine_end(c.swap);
     assert!(c.stock() && !c.view().refusal.is_null());
     assert_eq!((c.restored(COMBINE), c.host().round_trips), (1, 0));
     assert!(!c.prepare(&c.facts()) && c.skipped(OFF) == 1 && c.stock());
@@ -34,7 +34,7 @@ fn stale_prepare() {
     assert!(c.prepare(&c.facts()) && c.prepare(&c.facts()));
     assert!(c.restored(STALE) == 1 && c.twin_installed(0) && c.twin_installed(1));
     assert!(c.seam() && c.stock() && c.prepare(&c.facts()));
-    rsf_anomaly_swap_close_stale(c.swap);
+    crate::sr_swap::close_stale(c.swap);
     assert!(c.stock() && c.restored(STALE) == 2 && !c.view().open);
 }
 
@@ -42,16 +42,16 @@ fn stale_prepare() {
 fn frame_end_open() {
     let c = Case::new(true);
     assert!(c.prepare(&c.facts()));
-    rsf_anomaly_swap_frame_end(c.swap);
+    crate::sr_swap::frame_end(c.swap);
     assert!(c.stock() && !c.view().refusal.is_null() && c.restored(FRAME_END) == 1);
 }
 
 #[cfg_attr(test, test)]
 fn shutdown_open() {
     let c = Case::new(true);
-    assert!(c.prepare(&c.facts()) && rsf_anomaly_swap_shutdown(c.swap));
+    assert!(c.prepare(&c.facts()) && crate::sr_swap::shutdown(c.swap));
     assert!(c.stock() && !c.view().open && c.host().drops == 1 && c.restored(SHUTDOWN) == 1);
-    assert!(rsf_anomaly_swap_shutdown(c.swap) && c.stock() && c.host().drops == 1);
+    assert!(crate::sr_swap::shutdown(c.swap) && c.stock() && c.host().drops == 1);
 }
 
 fn check_ineligible(world: bool) {
@@ -63,8 +63,8 @@ fn check_ineligible(world: bool) {
     facts.msaa = true;
     assert!(!c.prepare(&facts) && c.stock() && c.skipped(MSAA) == 1);
     assert!(!c.seam());
-    rsf_anomaly_swap_combine_end(c.swap);
-    rsf_anomaly_swap_frame_end(c.swap);
+    crate::sr_swap::combine_end(c.swap);
+    crate::sr_swap::frame_end(c.swap);
     assert!(
         c.stock()
             && c.view().refusal.is_null()
@@ -72,9 +72,9 @@ fn check_ineligible(world: bool) {
             && c.host().viewports.is_empty()
     );
     facts.msaa = false;
-    rsf_anomaly_swap_set_enabled(c.swap, false);
+    crate::sr_swap::set_enabled(c.swap, false);
     assert!(!c.prepare(&facts) && c.stock() && c.skipped(OFF) == 1);
-    rsf_anomaly_swap_set_enabled(c.swap, true);
+    crate::sr_swap::set_enabled(c.swap, true);
     assert!(c.prepare(&facts) && c.seam() && c.stock());
 }
 
@@ -239,17 +239,6 @@ fn reset_resize() {
     );
 }
 
-#[cfg_attr(test, test)]
-fn names() {
-    let name = |pointer| unsafe { CStr::from_ptr(pointer) }.to_bytes();
-    assert_eq!(name(rsf_anomaly_swap_skip_name(SCOPE)), b"scope");
-    assert_eq!(
-        name(rsf_anomaly_swap_skip_name(RSF_ANOMALY_SWAP_SKIP_COUNT)),
-        b"unknown"
-    );
-    assert_eq!(name(rsf_anomaly_swap_skip_name(DEPTH)), b"depth");
-    assert_eq!(name(rsf_anomaly_swap_restore_name(FRAME_END)), b"frame_end");
-}
 
 fn globals(c: &Case, width: u32, height: u32) {
     let tw = c.view().twins;
@@ -290,12 +279,12 @@ fn stage2_normal() {
         (request.engine_dsv as usize, request.output_width),
         (c.original.base_zb, 1920)
     );
-    rsf_anomaly_swap_prepared(c.swap);
+    crate::sr_swap::prepared(c.swap);
     assert_eq!(c.host().viewports, [(1286, 724)]);
     put(&mut c.engine().target, 0x8, 1286u32);
     put(&mut c.engine().target, 0xc, 724u32);
     c.engine().backend.fill(0x5a);
-    rsf_anomaly_swap_rm_near(c.swap);
+    crate::sr_swap::rm_near(c.swap);
     assert!(c.seam() && c.stock() && c.before_draw_stock() && c.texture_cache_cleared());
     assert_eq!(get::<usize>(&c.engine().backend, 0x5c8), 0);
     let views = c.host().seam_views.unwrap();
@@ -308,13 +297,13 @@ fn stage2_normal() {
     }
     assert_eq!(c.host().viewports, [(1286, 724), (1920, 1080)]);
     assert!(!c.seam());
-    rsf_anomaly_swap_combine_end(c.swap);
-    rsf_anomaly_swap_frame_end(c.swap);
+    crate::sr_swap::combine_end(c.swap);
+    crate::sr_swap::frame_end(c.swap);
     for _ in 0..3 {
         assert!(c.prepare(&c.facts2()));
-        rsf_anomaly_swap_prepared(c.swap);
+        crate::sr_swap::prepared(c.swap);
         assert!(c.seam() && c.stock());
-        rsf_anomaly_swap_combine_end(c.swap);
+        crate::sr_swap::combine_end(c.swap);
     }
     let n = c.view().counters;
     assert_eq!(
@@ -329,7 +318,7 @@ fn stage2_normal() {
         ),
         (1, 4, 4, 4, 8, 1, 4)
     );
-    assert!(rsf_anomaly_swap_shutdown(c.swap) && c.stock() && c.host().drops == 1);
+    assert!(crate::sr_swap::shutdown(c.swap) && c.stock() && c.host().drops == 1);
 }
 
 // Row and column index two matrices and the axes together.
@@ -412,10 +401,10 @@ fn stage2_layout() {
 
 fn close(c: &Case, reason: u32) {
     match reason {
-        COMBINE => rsf_anomaly_swap_combine_end(c.swap),
-        FRAME_END => rsf_anomaly_swap_frame_end(c.swap),
-        STALE => rsf_anomaly_swap_close_stale(c.swap),
-        SHUTDOWN => assert!(rsf_anomaly_swap_shutdown(c.swap)),
+        COMBINE => crate::sr_swap::combine_end(c.swap),
+        FRAME_END => crate::sr_swap::frame_end(c.swap),
+        STALE => crate::sr_swap::close_stale(c.swap),
+        SHUTDOWN => assert!(crate::sr_swap::shutdown(c.swap)),
         _ => unreachable!(),
     }
 }
@@ -426,7 +415,7 @@ fn stage2_exits() {
         let c = Case::new(true);
         assert!(c.prepare(&c.facts2()));
         if reason == COMBINE {
-            rsf_anomaly_swap_prepared(c.swap);
+            crate::sr_swap::prepared(c.swap);
             put(&mut c.engine().target, 0x8, 1286u32);
         }
         close(&c, reason);
@@ -553,7 +542,7 @@ fn stage2_lifecycle() {
     c.host().make_result = RSF_ANOMALY_SWAP_MAKE_CREATED;
     assert!(c.prepare(&c.facts_at_scale(0.7)) && c.host().makes == 9 && c.seam() && c.stock());
     assert!(
-        rsf_anomaly_swap_shutdown(c.swap)
+        crate::sr_swap::shutdown(c.swap)
             && c.stock()
             && c.view().counters.twin_drops == c.host().drops as u64
     );
@@ -578,21 +567,21 @@ fn stage3_normal() {
     assert!((c.engine().sampler_bias - expected_bias).abs() < 1e-6);
     assert_eq!(c.view().window_mip_bias, c.engine().sampler_bias);
     let hud = first_person(&c);
-    rsf_anomaly_swap_rm_near(c.swap);
+    crate::sr_swap::rm_near(c.swap);
     let jittered_hud = (c.engine().project, c.engine().full);
     assert_ne!(jittered_hud.0, hud);
-    rsf_anomaly_swap_rm_near(c.swap);
+    crate::sr_swap::rm_near(c.swap);
     assert_eq!((c.engine().project, c.engine().full), jittered_hud);
     (c.engine().project, c.engine().full) = main;
-    rsf_anomaly_swap_rm_near(c.swap);
+    crate::sr_swap::rm_near(c.swap);
     let mut foreign = hud;
     foreign[8] = 0.01;
     c.engine().project = foreign;
-    rsf_anomaly_swap_rm_near(c.swap);
+    crate::sr_swap::rm_near(c.swap);
     assert_eq!(c.engine().project, foreign);
     for _ in 0..5 {
         first_person(&c);
-        rsf_anomaly_swap_rm_near(c.swap);
+        crate::sr_swap::rm_near(c.swap);
         assert_eq!((c.engine().project, c.engine().full), jittered_hud);
         (c.engine().project, c.engine().full) = main;
     }
@@ -608,7 +597,7 @@ fn stage3_normal() {
         (1, 6, 2, 1, 9)
     );
     assert!(c.seam() && c.stock() && c.view().refusal.is_null());
-    rsf_anomaly_swap_rm_near(c.swap);
+    crate::sr_swap::rm_near(c.swap);
     assert_eq!(c.view().counters.rm_near_in_window, 9);
     let n = c.view().counters;
     assert_eq!(
@@ -624,7 +613,7 @@ fn stage3_normal() {
         );
         assert!(c.seam() && c.stock());
     }
-    assert!(rsf_anomaly_swap_shutdown(c.swap) && c.stock());
+    assert!(crate::sr_swap::shutdown(c.swap) && c.stock());
 }
 
 #[cfg_attr(test, test)]
@@ -633,10 +622,10 @@ fn stage3_exits() {
         let c = Case::new(true);
         let facts = c.facts3(0.25, -1. / 6.);
         assert!(c.prepare(&facts));
-        rsf_anomaly_swap_prepared(c.swap);
+        crate::sr_swap::prepared(c.swap);
         let main = (c.engine().project, c.engine().full);
         first_person(&c);
-        rsf_anomaly_swap_rm_near(c.swap);
+        crate::sr_swap::rm_near(c.swap);
         (c.engine().project, c.engine().full) = main;
         let uploads = c.host().upload_calls;
         close(&c, reason);
@@ -711,12 +700,12 @@ fn stage3_foreign_ineligible() {
     assert!(!c.prepare(&facts) && !c.view().jitter_applied);
     first_person(&c);
     c.rebase();
-    rsf_anomaly_swap_rm_near(c.swap);
+    crate::sr_swap::rm_near(c.swap);
     facts.scope = false;
     facts.msaa = true;
     assert!(!c.prepare(&facts));
-    rsf_anomaly_swap_rm_near(c.swap);
-    rsf_anomaly_swap_set_enabled(c.swap, false);
+    crate::sr_swap::rm_near(c.swap);
+    crate::sr_swap::set_enabled(c.swap, false);
     assert!(!c.prepare(&c.facts3(0.25, 0.1)));
     assert!(
         c.stock()
@@ -731,7 +720,7 @@ fn stage3_foreign_ineligible() {
     };
     assert!(c.prepare(&facts) && !c.view().jitter_applied && c.view().mip_bias_applied);
     let hud = first_person(&c);
-    rsf_anomaly_swap_rm_near(c.swap);
+    crate::sr_swap::rm_near(c.swap);
     assert_eq!(c.engine().project, hud);
     assert_eq!(c.view().counters.fp_jittered, 0);
     (c.engine().project, c.engine().full) = (c.original.project, c.original.full);
@@ -777,7 +766,7 @@ fn stage3_sun_cascades() {
         let sample = crate::sr_stage::math::jitter_sample(index, 18);
         assert!(c.prepare(&c.facts3(sample.x, sample.y)));
         let current = *c.engine();
-        let token = rsf_anomaly_swap_sun_begin(c.swap);
+        let token = crate::sr_swap::sun_begin(c.swap);
         assert!(token);
         for _ in 0..3 {
             assert_eq!(
@@ -787,17 +776,17 @@ fn stage3_sun_cascades() {
             assert!(unsafe {
                 upload_projection(c.host.cast(), (&raw const c.engine().project).cast())
             });
-            rsf_anomaly_swap_rm_near(c.swap);
+            crate::sr_swap::rm_near(c.swap);
             assert_eq!(
                 (c.engine().project, c.engine().full),
                 (c.original.project, c.original.full)
             );
         }
-        let nested = rsf_anomaly_swap_sun_begin(c.swap);
+        let nested = crate::sr_swap::sun_begin(c.swap);
         assert!(!nested);
-        rsf_anomaly_swap_sun_end(c.swap, nested);
+        crate::sr_swap::sun_end(c.swap, nested);
         assert_eq!(c.engine().project, c.original.project);
-        rsf_anomaly_swap_sun_end(c.swap, token);
+        crate::sr_swap::sun_end(c.swap, token);
         assert!(*c.engine() == current);
         assert_eq!(c.host().uploads.last(), Some(&current.project));
         let n = c.view().counters;
@@ -811,7 +800,7 @@ fn stage3_sun_cascades() {
         let c = Case::new(true);
         let mut facts = c.facts3(0.25, 0.1);
         if mode == 0 {
-            rsf_anomaly_swap_set_enabled(c.swap, false);
+            crate::sr_swap::set_enabled(c.swap, false);
         }
         if mode == 1 {
             facts.scope = true;
@@ -822,9 +811,9 @@ fn stage3_sun_cascades() {
         c.prepare(&facts);
         let before = *c.engine();
         let counts = (c.host().writes, c.host().upload_calls);
-        let token = rsf_anomaly_swap_sun_begin(c.swap);
+        let token = crate::sr_swap::sun_begin(c.swap);
         assert!(!token);
-        rsf_anomaly_swap_sun_end(c.swap, token);
+        crate::sr_swap::sun_end(c.swap, token);
         assert!(*c.engine() == before);
         assert_eq!((c.host().writes, c.host().upload_calls), counts);
         let n = c.view().counters;
@@ -832,15 +821,15 @@ fn stage3_sun_cascades() {
             (n.sun_calls, n.sun_unjittered, n.sun_restored, n.sun_refused),
             (1, 0, 0, 0)
         );
-        assert!(rsf_anomaly_swap_shutdown(c.swap) && c.stock());
+        assert!(crate::sr_swap::shutdown(c.swap) && c.stock());
     }
     stage3_sun_rollback();
     let c = Case::new(true);
     assert!(c.prepare(&c.facts3(0.25, 0.1)));
-    let token = rsf_anomaly_swap_sun_begin(c.swap);
-    assert!(token && rsf_anomaly_swap_shutdown(c.swap));
+    let token = crate::sr_swap::sun_begin(c.swap);
+    assert!(token && crate::sr_swap::shutdown(c.swap));
     let uploads = c.host().upload_calls;
-    rsf_anomaly_swap_sun_end(c.swap, token);
+    crate::sr_swap::sun_end(c.swap, token);
     assert!(
         c.stock() && c.host().upload_calls == uploads && c.view().counters.foreign_changes == 0
     );
@@ -852,14 +841,14 @@ fn stage3_sun_rollback() {
     for failure in 0..5 {
         let c = Case::new(true);
         assert!(c.prepare(&c.facts3(0.25, -1. / 6.)));
-        rsf_anomaly_swap_prepared(c.swap);
+        crate::sr_swap::prepared(c.swap);
         put(&mut c.engine().target, 0x8, 1286u32);
         put(&mut c.engine().target, 0xc, 724u32);
         if failure < 2 {
             let at = c.host().writes + failure;
             c.host().fail_write_at = Some(at);
         }
-        let token = rsf_anomaly_swap_sun_begin(c.swap);
+        let token = crate::sr_swap::sun_begin(c.swap);
         assert_eq!(token, failure >= 2);
         if (2..4).contains(&failure) {
             let at = c.host().writes + failure - 2;
@@ -868,7 +857,7 @@ fn stage3_sun_rollback() {
             let at = c.host().upload_calls;
             c.host().fail_upload_at = Some(at);
         }
-        rsf_anomaly_swap_sun_end(c.swap, token);
+        crate::sr_swap::sun_end(c.swap, token);
         assert!(c.view().open && !c.view().refusal.is_null() && c.host().viewports.len() == 1);
         assert!(c.seam() && c.host().upscales == 1 && c.host().recovery_inputs.is_some());
         assert!(c.stock() && !c.view().open && !c.view().refusal.is_null());
@@ -884,18 +873,18 @@ fn stage3_position_reconstruction() {
     let c = Case::new(true);
     let mut byte = 0u8;
     let constant = (&raw mut byte).cast();
-    let position = |c: &Case| rsf_anomaly_swap_position_constant(c.swap, constant);
+    let position = |c: &Case| crate::sr_swap::position_constant(c.swap, constant);
     position(&c);
     assert!(c.view().counters.position_stock == 1 && c.host().positions.is_empty());
     assert!(c.prepare(&c.facts3(0.25, 0.1)));
     position(&c);
     assert_eq!(c.host().constant, constant);
     assert_eq!(c.host().positions, [(0.25, 0.1)]);
-    let token = rsf_anomaly_swap_sun_begin(c.swap);
+    let token = crate::sr_swap::sun_begin(c.swap);
     assert!(token);
     position(&c);
     assert_eq!(c.view().counters.position_corrected, 2);
-    rsf_anomaly_swap_sun_end(c.swap, token);
+    crate::sr_swap::sun_end(c.swap, token);
     assert!(c.seam());
     position(&c);
     assert!(c.view().counters.position_stock == 2 && c.host().positions.len() == 2 && c.stock());
@@ -909,19 +898,19 @@ fn stage3_position_reconstruction() {
             facts.scope = true;
         }
         if mode == 2 {
-            rsf_anomaly_swap_set_enabled(c.swap, false);
+            crate::sr_swap::set_enabled(c.swap, false);
         }
         c.prepare(&facts);
         position(&c);
         assert!(c.view().counters.position_stock == 1 && c.host().positions.is_empty());
-        assert!(rsf_anomaly_swap_shutdown(c.swap) && c.stock());
+        assert!(crate::sr_swap::shutdown(c.swap) && c.stock());
     }
     let c = Case::new(true);
     assert!(c.prepare(&c.facts3(0.25, 0.1)));
     c.host().refuse_position = true;
     position(&c);
     assert!(c.view().counters.position_refused == 1 && !c.view().refusal.is_null());
-    assert!(rsf_anomaly_swap_shutdown(c.swap) && c.stock());
+    assert!(crate::sr_swap::shutdown(c.swap) && c.stock());
 }
 
 #[cfg(all(windows, feature = "sr-fixtures"))]

@@ -561,9 +561,8 @@ record in the former order. `rsf_anomaly_sr_depth_rva` is a Rust export.
 Behaviour notes. The swap owner is created on first use instead of at DLL
 static initialization, and neither it nor the D3D11 resource owner is freed at
 DLL detach. The former C++ static destructors only freed memory there
-(`rsf_anomaly_swap_destroy` drops the box; the resource owner already refused
-to drop live twins), so nothing reaches the engine either way. A leaf table
-with the wrong `struct_size` is refused instead of registered. The C++-era
+(the swap handle is a plain box; the resource owner already refused to drop live
+twins), so nothing reaches the engine either way. The C++-era
 `rsf_anomaly_sr_configure` and `rsf_anomaly_sr_install` entries are removed;
 the first one also duplicated the `#[no_mangle]` Rust symbol of the same name
 in `sr_temporal.rs`.

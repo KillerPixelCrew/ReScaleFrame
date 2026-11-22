@@ -608,7 +608,6 @@ const fn engine_layout() -> SwapLayout {
         i += 1;
     }
     SwapLayout {
-        struct_size: size_of::<SwapLayout>() as u32,
         crt_surface: CRT_SURFACE_OFFSET,
         crt_rtv: CRT_RTV_OFFSET,
         crt_dsv: CRT_DSV_OFFSET,

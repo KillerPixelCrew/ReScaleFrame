@@ -31,7 +31,6 @@ const TEXTURE_RANGES: [(u32, u32); 6] = [
 
 fn layout() -> Layout {
     Layout {
-        struct_size: size_of::<Layout>() as u32,
         crt_surface: 0x10,
         crt_rtv: 0x18,
         crt_dsv: 0x20,
@@ -376,16 +375,14 @@ struct Case {
 fn callbacks(host: *mut Host) -> Platform {
     Platform {
         user: host.cast(),
-        read: Some(read),
-        write: Some(write),
-        make_twins: Some(make_twins),
-        drop_twins: Some(drop_twins),
-        round_trip: Some(round_trip),
-        upscale: Some(upscale),
-        set_viewport: Some(set_viewport),
-        upload_projection: Some(upload_projection),
-        set_mip_bias: Some(set_mip_bias),
-        correct_position_constant: Some(correct_position_constant),
+        read,
+        write,
+        make_twins,
+        drop_twins,
+        set_viewport,
+        upload_projection,
+        set_mip_bias,
+        correct_position_constant,
     }
 }
 
@@ -393,7 +390,7 @@ impl Drop for Case {
     fn drop(&mut self) {
         // Each pointer came from Box::into_raw in Case::new.
         unsafe {
-            rsf_anomaly_swap_destroy(self.swap);
+            crate::sr_swap::destroy(self.swap);
             drop(Box::from_raw(self.host));
             drop(Box::from_raw(self.engine));
         }
@@ -452,10 +449,9 @@ impl Case {
             engine,
             ..Host::default()
         }));
-        let platform = callbacks(host);
-        let swap = rsf_anomaly_swap_create(Some(&layout()), Some(&platform));
+        let swap = create(&layout(), callbacks(host));
         assert!(!swap.is_null());
-        unsafe { (*host).published = rsf_anomaly_swap_view_of(swap) };
+        unsafe { (*host).published = crate::sr_swap::view_of(swap) };
         let case = Self {
             engine,
             host,
@@ -463,7 +459,7 @@ impl Case {
             original: *e,
             size: [1920, 1080],
         };
-        rsf_anomaly_swap_set_enabled(case.swap, true);
+        crate::sr_swap::set_enabled(case.swap, true);
         case
     }
 
@@ -482,7 +478,7 @@ impl Case {
     }
 
     fn view(&self) -> View {
-        unsafe { *rsf_anomaly_swap_view_of(self.swap) }
+        unsafe { *crate::sr_swap::view_of(self.swap) }
     }
 
     /// Every engine byte except RCache, whose texture and constant caches each exchange clears on purpose.
@@ -546,11 +542,19 @@ impl Case {
     }
 
     fn prepare(&self, facts: &Facts) -> bool {
-        rsf_anomaly_swap_prepare(self.swap, Some(facts))
+        crate::sr_swap::prepare(self.swap, Some(facts))
     }
 
+    // The seam operation the stage lends, here the fake host's passes.
     fn seam(&self) -> bool {
-        rsf_anomaly_swap_seam(self.swap)
+        let user = self.host.cast();
+        // The fake engine and host outlive the handle.
+        unsafe {
+            run_seam(self.swap, |pass| match pass {
+                SeamPass::RoundTrip(twin, engine) => round_trip(user, twin, engine),
+                SeamPass::Upscale(inputs) => upscale(user, inputs),
+            })
+        }
     }
 
     fn resize(&mut self, [width, height]: [u32; 2], half: bool) {
@@ -720,9 +724,9 @@ fn stage1_window_swaps_and_restores_engine_bytes() {
             get::<usize>(&c.original.crt[slot], 0x10)
         );
     }
-    rsf_anomaly_swap_prepared(c.swap);
+    crate::sr_swap::prepared(c.swap);
     assert!(c.host().viewports.is_empty());
-    rsf_anomaly_swap_rm_near(c.swap);
+    crate::sr_swap::rm_near(c.swap);
     c.engine().backend.fill(0x5a);
     assert!(c.seam());
     assert!(c.stock() && !c.view().open && c.host().round_trips == 1);
@@ -735,9 +739,9 @@ fn stage1_window_swaps_and_restores_engine_bytes() {
     );
     assert_eq!(refs[3].rtv, get::<*mut c_void>(&c.original.crt[0], 0x18));
     assert!(!c.seam());
-    rsf_anomaly_swap_combine_end(c.swap);
-    rsf_anomaly_swap_frame_end(c.swap);
-    rsf_anomaly_swap_rm_near(c.swap);
+    crate::sr_swap::combine_end(c.swap);
+    crate::sr_swap::frame_end(c.swap);
+    crate::sr_swap::rm_near(c.swap);
     assert!(c.stock() && c.view().refusal.is_null());
     let n = c.view().counters;
     assert_eq!(
@@ -755,7 +759,7 @@ fn stage1_window_swaps_and_restores_engine_bytes() {
     assert_eq!((c.host().makes, c.view().counters.swapped), (1, 4));
     let request = c.host().request.unwrap();
     assert!(request.stage == 1 && request.spec[0].promote && !request.spec[2].present);
-    rsf_anomaly_swap_shutdown(c.swap);
+    crate::sr_swap::shutdown(c.swap);
     assert!(c.stock() && c.host().drops == 1);
 }
 
@@ -763,7 +767,7 @@ fn stage1_window_swaps_and_restores_engine_bytes() {
 fn upscale_can_read_the_published_twin_generation_during_the_seam() {
     let c = Case::new(true);
     assert!(c.prepare(&c.facts2()));
-    rsf_anomaly_swap_prepared(c.swap);
+    crate::sr_swap::prepared(c.swap);
     let generation = c.view().counters.twin_generations;
     assert!(generation > 0);
     assert!(c.seam());
@@ -792,27 +796,27 @@ fn stage3_window_jitters_main_and_first_person_once() {
         (643.0, 362.0)
     );
     assert!((0..SLOTS).all(|slot| c.twin_installed(slot)));
-    rsf_anomaly_swap_prepared(c.swap);
+    crate::sr_swap::prepared(c.swap);
     assert_eq!(c.host().viewports, [(1286, 724)]);
     // A first-person site rebuilds the projection and calls rmNear: jittered once, never twice.
     let saved = (c.engine().project, c.engine().full);
     let hud = perspective(0.9, 1920.0 / 1080.0, 0.05);
     c.engine().project = hud;
     c.engine().full = engine_mul(&hud, &VIEW);
-    rsf_anomaly_swap_rm_near(c.swap);
+    crate::sr_swap::rm_near(c.swap);
     let hud_jittered = jitter_projection(&hud, x, y, 1286, 724).unwrap();
     assert_eq!(c.engine().project, hud_jittered);
-    rsf_anomaly_swap_rm_near(c.swap);
+    crate::sr_swap::rm_near(c.swap);
     assert_eq!(c.host().uploads.len(), 2);
     (c.engine().project, c.engine().full) = saved;
-    rsf_anomaly_swap_rm_near(c.swap);
+    crate::sr_swap::rm_near(c.swap);
     let n = c.view().counters;
     assert_eq!(
         (n.fp_jittered, n.fp_already, n.rm_near_in_window),
         (1, 2, 3)
     );
     // The deferred position constant receives the window's raster jitter.
-    rsf_anomaly_swap_position_constant(c.swap, null_mut());
+    crate::sr_swap::position_constant(c.swap, null_mut());
     assert_eq!(c.host().positions, [(x, y)]);
     assert!(c.seam());
     assert!(c.stock() && c.host().uploads.last() == Some(&main));
@@ -827,17 +831,17 @@ fn sun_cascades_borrow_the_unjittered_camera() {
     let (main, full) = (c.engine().project, c.engine().full);
     assert!(c.prepare(&c.facts3(0.25, 0.1)));
     let (jittered, jittered_full) = (c.engine().project, c.engine().full);
-    let token = rsf_anomaly_swap_sun_begin(c.swap);
+    let token = crate::sr_swap::sun_begin(c.swap);
     assert!(token);
     assert_eq!((c.engine().project, c.engine().full), (main, full));
     // Reentrant draws neither re-jitter nor take a second token.
-    rsf_anomaly_swap_rm_near(c.swap);
+    crate::sr_swap::rm_near(c.swap);
     assert_eq!(c.engine().project, main);
-    let nested = rsf_anomaly_swap_sun_begin(c.swap);
+    let nested = crate::sr_swap::sun_begin(c.swap);
     assert!(!nested);
-    rsf_anomaly_swap_sun_end(c.swap, nested);
+    crate::sr_swap::sun_end(c.swap, nested);
     assert_eq!(c.engine().project, main);
-    rsf_anomaly_swap_sun_end(c.swap, token);
+    crate::sr_swap::sun_end(c.swap, token);
     assert_eq!(
         (c.engine().project, c.engine().full),
         (jittered, jittered_full)
@@ -851,10 +855,10 @@ fn sun_cascades_borrow_the_unjittered_camera() {
     assert!(c.seam() && c.stock() && c.view().refusal.is_null());
     // Quiesce during the wrapped call invalidates the token.
     assert!(c.prepare(&c.facts3(0.25, 0.1)));
-    let token = rsf_anomaly_swap_sun_begin(c.swap);
-    rsf_anomaly_swap_shutdown(c.swap);
+    let token = crate::sr_swap::sun_begin(c.swap);
+    crate::sr_swap::shutdown(c.swap);
     let uploads = c.host().upload_calls;
-    rsf_anomaly_swap_sun_end(c.swap, token);
+    crate::sr_swap::sun_end(c.swap, token);
     assert!(c.stock() && c.host().upload_calls == uploads);
 }
 
@@ -872,7 +876,7 @@ fn failed_first_person_jitter_restores_the_camera_and_uploaded_projection() {
         } else {
             c.host().fail_write_at = Some(c.host().writes + 1);
         }
-        rsf_anomaly_swap_rm_near(c.swap);
+        crate::sr_swap::rm_near(c.swap);
         assert_eq!((c.engine().project, c.engine().full), (hud, full));
         assert_eq!(c.host().uploads.last(), Some(&hud));
         assert_eq!(c.view().counters.fp_jittered, 0);
@@ -892,18 +896,18 @@ fn pending_camera_and_sampler_restoration_retains_twins_until_quiesce_retries() 
     c.host().refuse_bias = true;
     assert!(!c.seam());
     assert_eq!(c.host().upscales, 0);
-    assert!(!rsf_anomaly_swap_shutdown(c.swap));
+    assert!(!crate::sr_swap::shutdown(c.swap));
     assert_eq!(c.host().drops, 0);
 
     // Another H1 cannot erase the pending camera or sampler snapshot.
     assert!(!c.prepare(&facts));
     c.host().fail_address = null_mut();
-    assert!(!rsf_anomaly_swap_shutdown(c.swap));
+    assert!(!crate::sr_swap::shutdown(c.swap));
     assert_eq!((c.engine().project, c.engine().full), saved);
     assert_eq!(c.host().drops, 0);
 
     c.host().refuse_bias = false;
-    assert!(rsf_anomaly_swap_shutdown(c.swap));
+    assert!(crate::sr_swap::shutdown(c.swap));
     assert_eq!(c.engine().sampler_bias, 0.25);
     assert_eq!(c.host().drops, 1);
     assert_eq!(
@@ -917,15 +921,15 @@ fn sun_refusal_returns_the_frame_to_output_size() {
     for failure in 0..3 {
         let c = Case::new(true);
         assert!(c.prepare(&c.facts3(0.25, 0.1)));
-        rsf_anomaly_swap_prepared(c.swap);
+        crate::sr_swap::prepared(c.swap);
         // u_setrt inside the window set CRenderTarget::dwWidth/dwHeight to the twin size.
         put(&mut c.engine().target, 0x8, 1286u32);
         put(&mut c.engine().target, 0xc, 724u32);
         let token = if failure == 0 {
             c.host().fail_write_at = Some(c.host().writes);
-            rsf_anomaly_swap_sun_begin(c.swap)
+            crate::sr_swap::sun_begin(c.swap)
         } else {
-            let token = rsf_anomaly_swap_sun_begin(c.swap);
+            let token = crate::sr_swap::sun_begin(c.swap);
             assert!(token);
             if failure == 1 {
                 c.host().fail_write_at = Some(c.host().writes);
@@ -934,7 +938,7 @@ fn sun_refusal_returns_the_frame_to_output_size() {
             }
             token
         };
-        rsf_anomaly_swap_sun_end(c.swap, token);
+        crate::sr_swap::sun_end(c.swap, token);
         assert!(c.view().open && !c.view().refusal.is_null());
         assert_eq!(c.host().viewports, [(1286, 724)]);
         assert!(c.seam());
@@ -962,11 +966,11 @@ fn scope_frames_stay_stock() {
     };
     assert!(!c.prepare(&facts));
     let writes = c.host().writes;
-    assert!(!rsf_anomaly_swap_sun_begin(c.swap));
-    rsf_anomaly_swap_rm_near(c.swap);
-    rsf_anomaly_swap_position_constant(c.swap, null_mut());
+    assert!(!crate::sr_swap::sun_begin(c.swap));
+    crate::sr_swap::rm_near(c.swap);
+    crate::sr_swap::position_constant(c.swap, null_mut());
     assert!(!c.seam());
-    rsf_anomaly_swap_combine_end(c.swap);
+    crate::sr_swap::combine_end(c.swap);
     assert!(c.stock() && c.host().writes == writes && c.host().makes == 0);
     let n = c.view().counters;
     assert_eq!(n.skipped[RSF_ANOMALY_SWAP_SKIP_SCOPE as usize], 1);
@@ -1037,11 +1041,11 @@ fn cache_readback_refusal_keeps_twins_until_the_range_is_clear() {
         .wrapping_add(offset as usize)
         .cast();
     assert!(!c.seam());
-    assert!(!rsf_anomaly_swap_shutdown(c.swap));
+    assert!(!crate::sr_swap::shutdown(c.swap));
     assert_eq!((c.host().drops, c.host().upscales), (0, 0));
 
     c.host().ignore_write_address = null_mut();
-    assert!(rsf_anomaly_swap_shutdown(c.swap));
+    assert!(crate::sr_swap::shutdown(c.swap));
     assert!(c.stock() && c.texture_cache_cleared());
     assert_eq!(c.host().drops, 1);
 }
@@ -1066,7 +1070,7 @@ fn a_failed_restore_keeps_twins_until_shutdown_can_verify_the_fields() {
             c.view().counters.restores,
             [0; RSF_ANOMALY_SWAP_RESTORE_COUNT as usize]
         );
-        assert!(!rsf_anomaly_swap_shutdown(c.swap));
+        assert!(!crate::sr_swap::shutdown(c.swap));
         assert_eq!((c.host().drops, c.host().upscales), (0, 0));
         assert!(!c.prepare(&c.facts2()));
         c.host().fail_address = null_mut();
@@ -1074,81 +1078,34 @@ fn a_failed_restore_keeps_twins_until_shutdown_can_verify_the_fields() {
             let (offset, _, _, _) = WORLD[GENERIC0];
             let saved = get::<usize>(&c.engine().target, offset);
             put(&mut c.engine().target, offset, 0usize);
-            assert!(!rsf_anomaly_swap_shutdown(c.swap));
+            assert!(!crate::sr_swap::shutdown(c.swap));
             assert_eq!(c.host().drops, 0);
             put(&mut c.engine().target, offset, saved);
         }
-        assert!(rsf_anomaly_swap_shutdown(c.swap));
+        assert!(crate::sr_swap::shutdown(c.swap));
         assert!(c.stock());
         assert_eq!(c.host().drops, 1);
         assert_eq!(
             c.view().counters.restores[RSF_ANOMALY_SWAP_RESTORE_SEAM as usize],
             1
         );
-        assert!(rsf_anomaly_swap_shutdown(c.swap));
+        assert!(crate::sr_swap::shutdown(c.swap));
         assert_eq!(c.host().drops, 1);
     }
 }
 
 #[cfg_attr(test, test)]
 fn layout_and_platform_are_checked_at_creation() {
-    let short = Layout {
-        struct_size: 8,
-        ..layout()
-    };
+    let mut wide = layout();
+    wide.backend_textures[0].count = MAX_CACHE_SLOTS + 1;
     let c = Case::new(true);
-    let platform = callbacks(c.host);
-    assert!(rsf_anomaly_swap_create(Some(&short), Some(&platform)).is_null());
-    assert!(rsf_anomaly_swap_create_scoped(Some(&short), Some(&platform)).is_null());
-    for incomplete in [
-        Platform {
-            read: None,
-            ..platform
-        },
-        Platform {
-            write: None,
-            ..platform
-        },
-        Platform {
-            make_twins: None,
-            ..platform
-        },
-        Platform {
-            drop_twins: None,
-            ..platform
-        },
-        Platform {
-            set_viewport: None,
-            ..platform
-        },
-        Platform {
-            upload_projection: None,
-            ..platform
-        },
-        Platform {
-            set_mip_bias: None,
-            ..platform
-        },
-        Platform {
-            correct_position_constant: None,
-            ..platform
-        },
-    ] {
-        assert!(rsf_anomaly_swap_create(Some(&layout()), Some(&incomplete)).is_null());
-        assert!(rsf_anomaly_swap_create_scoped(Some(&layout()), Some(&incomplete)).is_null());
-    }
-    let scoped = Platform {
-        round_trip: None,
-        upscale: None,
-        ..platform
-    };
-    assert!(rsf_anomaly_swap_create(Some(&layout()), Some(&scoped)).is_null());
-    let swap = rsf_anomaly_swap_create_scoped(Some(&layout()), Some(&scoped));
+    assert!(create(&wide, callbacks(c.host)).is_null());
+    let swap = create(&layout(), callbacks(c.host));
     assert!(!swap.is_null());
-    rsf_anomaly_swap_set_enabled(swap, true);
-    assert!(rsf_anomaly_swap_prepare(swap, Some(&c.facts())));
+    crate::sr_swap::set_enabled(swap, true);
+    assert!(crate::sr_swap::prepare(swap, Some(&c.facts())));
     let mut drawn = false;
-    // The fixture keeps the fake engine and the scoped handle live through the call.
+    // The fixture keeps the fake engine and the handle live through the call.
     assert!(unsafe {
         run_seam(swap, |pass| {
             assert!(matches!(pass, SeamPass::RoundTrip(_, _)));
@@ -1158,23 +1115,7 @@ fn layout_and_platform_are_checked_at_creation() {
         })
     });
     assert!(drawn && c.host().round_trips == 0);
-    assert!(rsf_anomaly_swap_shutdown(swap));
-    unsafe { rsf_anomaly_swap_destroy(swap) };
-    assert!(rsf_anomaly_swap_create(None, None).is_null());
-    assert!(!rsf_anomaly_swap_prepare(null_mut(), Some(&c.facts())));
-    let name = |text: *const c_char| unsafe { CStr::from_ptr(text) }.to_bytes();
-    assert_eq!(
-        name(rsf_anomaly_swap_skip_name(RSF_ANOMALY_SWAP_SKIP_DEPTH)),
-        b"depth"
-    );
-    assert_eq!(
-        name(rsf_anomaly_swap_skip_name(RSF_ANOMALY_SWAP_SKIP_COUNT)),
-        b"unknown"
-    );
-    assert_eq!(
-        name(rsf_anomaly_swap_restore_name(
-            RSF_ANOMALY_SWAP_RESTORE_FRAME_END
-        )),
-        b"frame_end"
-    );
+    assert!(crate::sr_swap::shutdown(swap));
+    unsafe { crate::sr_swap::destroy(swap) };
+    assert!(!crate::sr_swap::prepare(null_mut(), Some(&c.facts())));
 }

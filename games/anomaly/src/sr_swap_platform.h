@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Private ABI between the native SR world-window leaf (sr_stage.cpp) and the Rust swap owner (sr_swap.rs).
-// tools/generate-rust-bindings.py generates sr_swap_abi.rs from this header; sr_swap.h names the world slots of the
-// same structures. Engine addresses are opaque here: every engine read and write goes through the platform's guarded
-// copies, and every D3D or engine call through its callbacks.
+// Records of the Rust swap owner (sr_swap.rs) that the SR stage leaves (sr_stage_platform.h) and the D3D11 host
+// share; build.rs binds them. sr_swap.h names the world slots of the same structures. Engine addresses are opaque
+// here: every engine read and write goes through the owner's guarded copies.
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -148,7 +147,6 @@ typedef struct rsf_anomaly_swap_range {
 } rsf_anomaly_swap_range;
 
 typedef struct rsf_anomaly_swap_layout {
-    uint32_t struct_size;
     uint32_t crt_surface, crt_rtv, crt_dsv, crt_uav, crt_texture, crt_width, crt_height, crt_format;
     uint32_t texture_surface, texture_desc_cache, texture_desc, texture_srv;
     uint32_t target_width, target_height;   // CRenderTarget::dwWidth/dwHeight
@@ -159,24 +157,6 @@ typedef struct rsf_anomaly_swap_layout {
     rsf_anomaly_swap_world_target world[RSF_ANOMALY_SWAP_SLOT_COUNT];   // in slot order
     uint32_t absent[RSF_ANOMALY_SWAP_ABSENT_COUNT];   // CRenderTarget slots that must be null in a Stage 2 window
 } rsf_anomaly_swap_layout;
-
-// Native leaf callbacks. read/write are guarded copies of engine memory. The rest are the D3D11 and engine calls the
-// owner sequences: twin creation and release, the seam passes, the viewport, R_xforms::set_P, SetMipLODBias and the
-// deferred position constant correction.
-typedef struct rsf_anomaly_swap_platform {
-    void* user;
-    bool (*read)(void* user, const void* address, void* output, size_t size);
-    bool (*write)(void* user, void* address, const void* input, size_t size);
-    uint32_t (*make_twins)(void* user, const rsf_anomaly_swap_request* request, rsf_anomaly_swap_twins* twins);
-    void (*drop_twins)(void* user);
-    bool (*round_trip)(void* user, const rsf_anomaly_swap_fields* twin, const rsf_anomaly_swap_fields* engine);
-    bool (*upscale)(void* user, const rsf_anomaly_swap_upscale* inputs);
-    void (*set_viewport)(void* user, uint32_t width, uint32_t height);
-    bool (*upload_projection)(void* user, const void* matrix);
-    bool (*set_mip_bias)(void* user, float value);
-    // 0: clean refusal, 1: corrected, 2: incomplete rollback.
-    uint32_t (*correct_position_constant)(void* user, void* constant, float x, float y);
-} rsf_anomaly_swap_platform;
 
 // What the native leaf reads between calls. Owned by the swap handle and updated by every call.
 typedef struct rsf_anomaly_swap_view {
@@ -190,32 +170,3 @@ typedef struct rsf_anomaly_swap_view {
     float window_mip_bias, saved_mip_bias;
 } rsf_anomaly_swap_view;
 
-typedef struct rsf_anomaly_swap rsf_anomaly_swap;
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-// Null for a short layout or a platform with a missing callback. The platform and its user outlive the handle.
-rsf_anomaly_swap* rsf_anomaly_swap_create(const rsf_anomaly_swap_layout*, const rsf_anomaly_swap_platform*);
-// The stage supplies the seam operation in Rust, so round_trip and upscale may be null.
-rsf_anomaly_swap* rsf_anomaly_swap_create_scoped(const rsf_anomaly_swap_layout*, const rsf_anomaly_swap_platform*);
-// Shutdown must succeed before normal unload. Destroy alone does not retire retained twins.
-void rsf_anomaly_swap_destroy(rsf_anomaly_swap*);
-const rsf_anomaly_swap_view* rsf_anomaly_swap_view_of(const rsf_anomaly_swap*);
-void rsf_anomaly_swap_set_enabled(rsf_anomaly_swap*, bool enabled);
-void rsf_anomaly_swap_close_stale(rsf_anomaly_swap*);
-bool rsf_anomaly_swap_prepare(rsf_anomaly_swap*, const rsf_anomaly_swap_facts*);
-void rsf_anomaly_swap_prepared(rsf_anomaly_swap*);
-bool rsf_anomaly_swap_seam(rsf_anomaly_swap*);
-void rsf_anomaly_swap_combine_end(rsf_anomaly_swap*);
-void rsf_anomaly_swap_frame_end(rsf_anomaly_swap*);
-void rsf_anomaly_swap_rm_near(rsf_anomaly_swap*);
-bool rsf_anomaly_swap_sun_begin(rsf_anomaly_swap*);
-void rsf_anomaly_swap_sun_end(rsf_anomaly_swap*, bool suspended);
-void rsf_anomaly_swap_position_constant(rsf_anomaly_swap*, void* constant);
-bool rsf_anomaly_swap_shutdown(rsf_anomaly_swap*);
-const char* rsf_anomaly_swap_skip_name(uint32_t);
-const char* rsf_anomaly_swap_restore_name(uint32_t);
-#ifdef __cplusplus
-}
-#endif

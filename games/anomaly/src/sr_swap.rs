@@ -7,11 +7,11 @@
 //! sampler mip bias. Every exit path restores them.
 //!
 //! This owner decides eligibility, keys the twins and sequences each transaction. The native leaf performs every
-//! guarded engine copy, the D3D11 work and the engine calls through `rsf_anomaly_swap_platform`. All calls arrive on
+//! guarded engine copy, the D3D11 work and the engine calls through `Platform`. All calls arrive on
 //! the engine render thread under the SR stage guard.
 
 use crate::sys::*;
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{CStr, c_void};
 use std::ptr::{null, null_mut};
 
 type Fields = rsf_anomaly_swap_fields;
@@ -21,51 +21,23 @@ type Spec = rsf_anomaly_swap_spec;
 type Request = rsf_anomaly_swap_request;
 type Twins = rsf_anomaly_swap_twins;
 type Layout = rsf_anomaly_swap_layout;
-type Platform = rsf_anomaly_swap_platform;
 type View = rsf_anomaly_swap_view;
-type RoundTrip = unsafe extern "C" fn(*mut c_void, *const Fields, *const Fields) -> bool;
-type Upscale = unsafe extern "C" fn(*mut c_void, *const rsf_anomaly_swap_upscale) -> bool;
 
-struct SwapCallbacks {
-    user: *mut c_void,
-    read: unsafe extern "C" fn(*mut c_void, *const c_void, *mut c_void, usize) -> bool,
-    write: unsafe extern "C" fn(*mut c_void, *mut c_void, *const c_void, usize) -> bool,
-    make_twins: unsafe extern "C" fn(*mut c_void, *const Request, *mut Twins) -> u32,
-    drop_twins: unsafe extern "C" fn(*mut c_void),
-    set_viewport: unsafe extern "C" fn(*mut c_void, u32, u32),
-    upload_projection: unsafe extern "C" fn(*mut c_void, *const c_void) -> bool,
-    set_mip_bias: unsafe extern "C" fn(*mut c_void, f32) -> bool,
-    correct_position_constant: unsafe extern "C" fn(*mut c_void, *mut c_void, f32, f32) -> u32,
-}
-
-impl SwapCallbacks {
-    fn admit(platform: &Platform) -> Option<Self> {
-        Some(Self {
-            user: platform.user,
-            read: platform.read?,
-            write: platform.write?,
-            make_twins: platform.make_twins?,
-            drop_twins: platform.drop_twins?,
-            set_viewport: platform.set_viewport?,
-            upload_projection: platform.upload_projection?,
-            set_mip_bias: platform.set_mip_bias?,
-            correct_position_constant: platform.correct_position_constant?,
-        })
-    }
-}
-
+/// The host's callbacks. read/write are guarded copies of engine memory; the rest are the D3D11 and engine calls the
+/// owner sequences: twin creation and release, the viewport, R_xforms::set_P, SetMipLODBias and the deferred
+/// position constant correction (0: clean refusal, 1: corrected, 2: incomplete rollback). The seam passes are the
+/// operation run_seam lends.
 #[derive(Clone, Copy)]
-struct NativeSeam {
-    round_trip: RoundTrip,
-    upscale: Upscale,
-}
-
-unsafe extern "C" fn no_round_trip(_: *mut c_void, _: *const Fields, _: *const Fields) -> bool {
-    false
-}
-
-unsafe extern "C" fn no_upscale(_: *mut c_void, _: *const rsf_anomaly_swap_upscale) -> bool {
-    false
+pub(crate) struct Platform {
+    pub user: *mut c_void,
+    pub read: unsafe extern "C" fn(*mut c_void, *const c_void, *mut c_void, usize) -> bool,
+    pub write: unsafe extern "C" fn(*mut c_void, *mut c_void, *const c_void, usize) -> bool,
+    pub make_twins: unsafe extern "C" fn(*mut c_void, *const Request, *mut Twins) -> u32,
+    pub drop_twins: unsafe extern "C" fn(*mut c_void),
+    pub set_viewport: unsafe extern "C" fn(*mut c_void, u32, u32),
+    pub upload_projection: unsafe extern "C" fn(*mut c_void, *const c_void) -> bool,
+    pub set_mip_bias: unsafe extern "C" fn(*mut c_void, f32) -> bool,
+    pub correct_position_constant: unsafe extern "C" fn(*mut c_void, *mut c_void, f32, f32) -> u32,
 }
 /// X-Ray Fmatrix bytes: row-major storage, row vectors (clip = v * M).
 type Matrix = [f32; 16];
@@ -78,16 +50,6 @@ const GENERIC1: usize = 5;
 const POINTER: u32 = size_of::<*mut c_void>() as u32;
 const MAX_CACHE_SLOTS: u32 = 16;
 
-const SKIP_NAMES: [&CStr; RSF_ANOMALY_SWAP_SKIP_COUNT as usize] =
-    [c"off", c"scope", c"msaa", c"layout", c"twins", c"depth"];
-const RESTORE_NAMES: [&CStr; RSF_ANOMALY_SWAP_RESTORE_COUNT as usize] = [
-    c"seam",
-    c"combine_end",
-    c"stale_prepare",
-    c"shutdown",
-    c"rollback",
-    c"frame_end",
-];
 
 /// An engine address or a pointer value read from engine memory. The native leaf validates every access.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -302,8 +264,7 @@ impl RestoreState {
 struct Swap {
     view: View,
     layout: Layout,
-    platform: SwapCallbacks,
-    native_seam: NativeSeam,
+    platform: Platform,
     enabled: bool,
     have_twins: bool,
     key: TwinKey,
@@ -318,7 +279,7 @@ struct Swap {
 }
 
 impl Swap {
-    fn new(layout: Layout, platform: SwapCallbacks, native_seam: NativeSeam) -> Self {
+    fn new(layout: Layout, platform: Platform) -> Self {
         Self {
             view: View {
                 stage: 1,
@@ -326,7 +287,6 @@ impl Swap {
             },
             layout,
             platform,
-            native_seam,
             enabled: false,
             have_twins: false,
             key: TwinKey::default(),
@@ -1403,14 +1363,6 @@ impl Swap {
     }
 }
 
-fn layout_valid(layout: &Layout) -> bool {
-    layout.struct_size as usize >= size_of::<Layout>()
-        && layout
-            .backend_textures
-            .iter()
-            .all(|range| range.count <= MAX_CACHE_SLOTS)
-}
-
 pub(crate) enum SeamPass<'a> {
     RoundTrip(&'a Fields, &'a Fields),
     Upscale(&'a rsf_anomaly_swap_upscale),
@@ -1425,7 +1377,7 @@ fn with<R>(handle: *mut Handle, fallback: R, call: impl FnOnce(&mut Swap) -> R) 
     if handle.is_null() {
         return fallback;
     }
-    // Only borrow the mutable owner. The native seam may read the disjoint
+    // Only borrow the mutable owner. The seam operation may read the disjoint
     // published view while this call is executing.
     let swap = unsafe { &mut (*handle).swap };
     let result = call(swap);
@@ -1434,66 +1386,30 @@ fn with<R>(handle: *mut Handle, fallback: R, call: impl FnOnce(&mut Swap) -> R) 
     result
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_swap_create(
-    layout: Option<&Layout>,
-    platform: Option<&Platform>,
-) -> *mut Handle {
-    let Some(platform) = platform else {
+/// Null for a layout whose backend texture ranges exceed the cleared span. The platform's user outlives the handle.
+pub(crate) fn create(layout: &Layout, platform: Platform) -> *mut Handle {
+    if layout
+        .backend_textures
+        .iter()
+        .any(|range| range.count > MAX_CACHE_SLOTS)
+    {
         return null_mut();
-    };
-    let (Some(round_trip), Some(upscale)) = (platform.round_trip, platform.upscale) else {
-        return null_mut();
-    };
-    create(
-        layout,
-        platform,
-        NativeSeam {
-            round_trip,
-            upscale,
-        },
-    )
-}
-
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_swap_create_scoped(
-    layout: Option<&Layout>,
-    platform: Option<&Platform>,
-) -> *mut Handle {
-    let Some(platform) = platform else {
-        return null_mut();
-    };
-    // Production passes a Rust operation to run_seam. If called through the
-    // native entry, keep the previous draw refusal for each omitted callback.
-    let native_seam = NativeSeam {
-        round_trip: platform.round_trip.unwrap_or(no_round_trip),
-        upscale: platform.upscale.unwrap_or(no_upscale),
-    };
-    create(layout, platform, native_seam)
-}
-
-fn create(layout: Option<&Layout>, platform: &Platform, native_seam: NativeSeam) -> *mut Handle {
-    let Some(layout) = layout.filter(|layout| layout_valid(layout)) else {
-        return null_mut();
-    };
-    let Some(platform) = SwapCallbacks::admit(platform) else {
-        return null_mut();
-    };
-    let swap = Swap::new(*layout, platform, native_seam);
+    }
+    let swap = Swap::new(*layout, platform);
     let published = swap.view;
     Box::into_raw(Box::new(Handle { swap, published }))
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_swap_destroy(swap: *mut Handle) {
+/// Shutdown must succeed before normal unload. Destroy alone does not retire retained twins.
+#[cfg(any(test, all(windows, feature = "sr-fixtures")))]
+pub(crate) unsafe fn destroy(swap: *mut Handle) {
     if !swap.is_null() {
-        // The facade destroys its handle once, after shutdown restored the engine.
         drop(unsafe { Box::from_raw(swap) });
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_anomaly_swap_view_of(swap: *const Handle) -> *const View {
+/// What the stage reads between calls; owned by the handle and updated by every call.
+pub(crate) unsafe fn view_of(swap: *const Handle) -> *const View {
     if swap.is_null() {
         null()
     } else {
@@ -1501,101 +1417,56 @@ pub(crate) unsafe extern "C" fn rsf_anomaly_swap_view_of(swap: *const Handle) ->
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_swap_set_enabled(swap: *mut Handle, enabled: bool) {
+pub(crate) fn set_enabled(swap: *mut Handle, enabled: bool) {
     with(swap, (), |swap| swap.enabled = enabled);
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_swap_close_stale(swap: *mut Handle) {
+pub(crate) fn close_stale(swap: *mut Handle) {
     with(swap, (), Swap::close_stale);
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_swap_prepare(
-    swap: *mut Handle,
-    facts: Option<&Facts>,
-) -> bool {
+pub(crate) fn prepare(swap: *mut Handle, facts: Option<&Facts>) -> bool {
     let Some(facts) = facts else {
         return false;
     };
     with(swap, false, |swap| swap.prepare(facts))
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_swap_prepared(swap: *mut Handle) {
+pub(crate) fn prepared(swap: *mut Handle) {
     with(swap, (), Swap::prepared);
 }
 
-// The stage lock keeps the native controller and its handle live throughout the call.
+// The stage lock keeps the controller and its handle live throughout the call.
 pub(crate) unsafe fn run_seam(swap: *mut Handle, run: impl FnOnce(SeamPass<'_>) -> bool) -> bool {
     with(swap, false, |swap| swap.seam(run))
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_swap_seam(swap: *mut Handle) -> bool {
-    with(swap, false, |swap| {
-        let user = swap.platform.user;
-        let native = swap.native_seam;
-        swap.seam(|pass| match pass {
-            SeamPass::RoundTrip(twin, engine) => unsafe { (native.round_trip)(user, twin, engine) },
-            SeamPass::Upscale(inputs) => unsafe { (native.upscale)(user, inputs) },
-        })
-    })
-}
-
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_swap_combine_end(swap: *mut Handle) {
+pub(crate) fn combine_end(swap: *mut Handle) {
     with(swap, (), Swap::combine_end);
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_swap_frame_end(swap: *mut Handle) {
+pub(crate) fn frame_end(swap: *mut Handle) {
     with(swap, (), Swap::frame_end);
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_swap_rm_near(swap: *mut Handle) {
+pub(crate) fn rm_near(swap: *mut Handle) {
     with(swap, (), Swap::rm_near);
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_swap_sun_begin(swap: *mut Handle) -> bool {
+pub(crate) fn sun_begin(swap: *mut Handle) -> bool {
     with(swap, false, Swap::sun_begin)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_swap_sun_end(swap: *mut Handle, suspended: bool) {
+pub(crate) fn sun_end(swap: *mut Handle, suspended: bool) {
     with(swap, (), |swap| swap.sun_end(suspended));
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_swap_position_constant(
-    swap: *mut Handle,
-    constant: *mut c_void,
-) {
+pub(crate) fn position_constant(swap: *mut Handle, constant: *mut c_void) {
     with(swap, (), |swap| swap.position_constant(constant));
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_swap_shutdown(swap: *mut Handle) -> bool {
+pub(crate) fn shutdown(swap: *mut Handle) -> bool {
     with(swap, true, Swap::shutdown)
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_swap_skip_name(skip: u32) -> *const c_char {
-    SKIP_NAMES
-        .get(skip as usize)
-        .map_or(c"unknown", |name| name)
-        .as_ptr()
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_swap_restore_name(restore: u32) -> *const c_char {
-    RESTORE_NAMES
-        .get(restore as usize)
-        .map_or(c"unknown", |name| name)
-        .as_ptr()
 }
 
 #[cfg(any(test, all(windows, feature = "sr-fixtures")))]

@@ -10,7 +10,6 @@ fn profile(native: &Layout) {
         };
     }
     equal!(
-        struct_size,
         crt_surface,
         crt_rtv,
         crt_dsv,
@@ -60,7 +59,7 @@ fn independent_jitter() {
         );
         let main = (c.engine().project, c.engine().full);
         let hud = first_person(&c);
-        rsf_anomaly_swap_rm_near(c.swap);
+        crate::sr_swap::rm_near(c.swap);
         assert_eq!((c.engine().project, c.engine().full), expected(&hud));
         (c.engine().project, c.engine().full) = main;
         assert!(c.seam() && c.stock());
@@ -95,7 +94,6 @@ unsafe extern "C" fn rsf_anomaly_sr_swap_fixture(
         ("foreign_change", foreign_change),
         ("round_trip_failure", round_trip_failure),
         ("reset_resize", reset_resize),
-        ("names", names),
         ("stage2_normal", stage2_normal),
         ("stage2_optional_odd", stage2_optional_odd),
         ("stage2_layout", stage2_layout),
