@@ -455,6 +455,47 @@ impl Default for rsf_sl_present_capture_packet {
         }
     }
 }
+pub type rsf_sl_present_capture_callback = ::core::option::Option<
+    unsafe extern "C" fn(
+        user: *mut ::core::ffi::c_void,
+        arg1: *const rsf_sl_present_capture_packet,
+    ) -> i32,
+>;
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_sl_present_capture_registration {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub device: *mut ::core::ffi::c_void,
+    pub callback: rsf_sl_present_capture_callback,
+    pub user: *mut ::core::ffi::c_void,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_sl_present_capture_registration"]
+        [::core::mem::size_of::<rsf_sl_present_capture_registration>() - 32usize];
+    ["Alignment of rsf_sl_present_capture_registration"]
+        [::core::mem::align_of::<rsf_sl_present_capture_registration>() - 8usize];
+    ["Offset of field: rsf_sl_present_capture_registration::struct_size"]
+        [::core::mem::offset_of!(rsf_sl_present_capture_registration, struct_size) - 0usize];
+    ["Offset of field: rsf_sl_present_capture_registration::abi_version"]
+        [::core::mem::offset_of!(rsf_sl_present_capture_registration, abi_version) - 4usize];
+    ["Offset of field: rsf_sl_present_capture_registration::device"]
+        [::core::mem::offset_of!(rsf_sl_present_capture_registration, device) - 8usize];
+    ["Offset of field: rsf_sl_present_capture_registration::callback"]
+        [::core::mem::offset_of!(rsf_sl_present_capture_registration, callback) - 16usize];
+    ["Offset of field: rsf_sl_present_capture_registration::user"]
+        [::core::mem::offset_of!(rsf_sl_present_capture_registration, user) - 24usize];
+};
+impl Default for rsf_sl_present_capture_registration {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_dlss_capture {
@@ -707,6 +748,9 @@ impl Default for rsf_dlss_fixture_capture_state {
     }
 }
 unsafe extern "C" {
+    pub fn rsf_fixture_dlss_locked() -> u32;
+}
+unsafe extern "C" {
     pub fn rsf_fixture_dlss_state() -> *mut rsf_dlss_fixture_state;
 }
 unsafe extern "C" {
@@ -749,6 +793,48 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     pub fn rsf_fixture_dlss_capture_call(arg1: *const rsf_sl_present_capture_packet) -> i32;
+}
+unsafe extern "C" {
+    pub fn rsf_fixture_dlss_capture_calls_init(arg1: *mut rsf_dlss_fixture_capture_calls);
+}
+unsafe extern "C" {
+    pub fn rsf_fixture_dlss_register_capture(
+        arg1: *const rsf_sl_present_capture_registration,
+    ) -> i32;
+}
+unsafe extern "C" {
+    pub fn rsf_fixture_dlss_record(
+        arg1: *mut ::core::ffi::c_void,
+        arg2: *mut ::core::ffi::c_void,
+        arg3: *const rsf_srvk_image,
+        arg4: *const rsf_frame_record,
+        arg5: *const ::core::ffi::c_char,
+    ) -> u32;
+}
+unsafe extern "C" {
+    pub fn rsf_fixture_dlss_readbacks(arg1: *mut ::core::ffi::c_void) -> u64;
+}
+unsafe extern "C" {
+    pub fn rsf_fixture_dlss_flush(arg1: *mut ::core::ffi::c_void) -> u32;
+}
+unsafe extern "C" {
+    pub fn rsf_fixture_dlss_failure(
+        arg1: *mut ::core::ffi::c_void,
+        arg2: u64,
+        arg3: *const ::core::ffi::c_char,
+        arg4: i32,
+    );
+}
+unsafe extern "C" {
+    pub fn rsf_fixture_dlss_append(
+        arg1: *mut ::core::ffi::c_void,
+        arg2: *const ::core::ffi::c_char,
+        arg3: *const u8,
+        arg4: usize,
+    );
+}
+unsafe extern "C" {
+    pub fn rsf_fixture_dlss_reset_waited_fence();
 }
 unsafe extern "C" {
     pub fn rsf_fixture_dlss_run() -> i32;

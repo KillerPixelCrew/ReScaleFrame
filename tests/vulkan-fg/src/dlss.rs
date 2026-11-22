@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+mod vulkan;
+
 use crate::dlss_abi::*;
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record};

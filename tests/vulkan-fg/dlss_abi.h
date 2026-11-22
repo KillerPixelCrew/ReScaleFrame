@@ -43,6 +43,7 @@ typedef struct rsf_dlss_fixture_capture_state {
 #ifdef __cplusplus
 extern "C" {
 #endif
+uint32_t rsf_fixture_dlss_locked(void);
 rsf_dlss_fixture_state* rsf_fixture_dlss_state(void);
 rsf_vk_function rsf_fixture_dlss_proc(void*, const char*);
 int32_t rsf_fixture_dlss_submit(void*, uint32_t, const void*, uint64_t);
@@ -52,6 +53,14 @@ rsf_backend_result rsf_fixture_dlss_create(enum rsf_dlss_fixture_variant, const 
 int32_t rsf_fixture_dlss_capture_open(const rsf_fgvk_setup*, rsf_dlss_capture**, rsf_dlss_fixture_capture_calls*);
 void rsf_fixture_dlss_capture_state(rsf_dlss_fixture_capture_state*);
 int32_t rsf_fixture_dlss_capture_call(const rsf_sl_present_capture_packet*);
+void rsf_fixture_dlss_capture_calls_init(rsf_dlss_fixture_capture_calls*);
+int32_t rsf_fixture_dlss_register_capture(const rsf_sl_present_capture_registration*);
+uint32_t rsf_fixture_dlss_record(void*, void*, const rsf_srvk_image*, const rsf_frame_record*, const char*);
+uint64_t rsf_fixture_dlss_readbacks(void*);
+uint32_t rsf_fixture_dlss_flush(void*);
+void rsf_fixture_dlss_failure(void*, uint64_t, const char*, int32_t);
+void rsf_fixture_dlss_append(void*, const char*, const uint8_t*, size_t);
+void rsf_fixture_dlss_reset_waited_fence(void);
 int32_t rsf_fixture_dlss_run(void);
 #ifdef __cplusplus
 }
