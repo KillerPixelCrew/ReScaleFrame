@@ -262,11 +262,8 @@ impl Owner {
         let record = unsafe { &*frame.record };
         let far = record.camera.far_plane;
         let far = if far > 0.0 { far } else { f32::MAX };
-        let sharpness = if frame.sharpness.is_finite() {
-            frame.sharpness.clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
+        let (enable_sharpening, sharpness) =
+            crate::sharpening_policy::ffx_sharpening(frame.sharpness);
         let read = FFX_API_RESOURCE_STATE_COMPUTE_READ;
         let data = ffxDispatchDescUpscale {
             header: header(RSF_FFX_DISPATCH_UPSCALE as u32),
@@ -300,7 +297,7 @@ impl Owner {
             frameTimeDelta: record.frame_time_ms,
             preExposure: frame.pre_exposure,
             reset: frame.reset != 0,
-            enableSharpening: sharpness > 0.0,
+            enableSharpening: enable_sharpening,
             sharpness,
             cameraNear: record.camera.near_plane,
             cameraFar: far,

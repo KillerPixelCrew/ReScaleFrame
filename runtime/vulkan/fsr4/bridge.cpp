@@ -358,7 +358,7 @@ int32_t Record(rsf_fsr4sr_native* native, const rsf_fsr4sr_dispatch* frame) {
     ffxDispatchDescUpscale upscale{};
     upscale.header.type = FFX_API_DISPATCH_DESC_TYPE_UPSCALE;
     upscale.commandList = native->commands;
-    rsf::ffx_sharpening(upscale, frame->sharpness);
+    rsf_ffx_sharpening(frame->sharpness, &upscale.enableSharpening, &upscale.sharpness);
     upscale.color = ffxApiGetResourceDX12(color, FFX_API_RESOURCE_STATE_COMPUTE_READ);
     upscale.depth = ffxApiGetResourceDX12(depth, FFX_API_RESOURCE_STATE_COMPUTE_READ);
     upscale.motionVectors = ffxApiGetResourceDX12(motion, FFX_API_RESOURCE_STATE_COMPUTE_READ);

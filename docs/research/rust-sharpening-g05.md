@@ -87,6 +87,10 @@ Build, test, Clippy and device validation are user-owned.
   contract with generated Rust layout assertions. The C++ lifetime facade in
   `runtime/graphics/src/sharpening/d3d12.h` still serves the D3D12 host and
   fixture.
+- `runtime/backends/common/sharpening.h` now declares the Rust FidelityFX
+  dispatch normalizer. Both Vulkan dispatch adapters write directly into the
+  SDK descriptor fields. Native D3D12 FFX calls the same Rust logic and the
+  settings fixture still inspects the real SDK descriptor when available.
 
 These conclusions come from source comparison, regenerated bindings and
 pinned formatting. The C++ shader payloads and GPL options header were

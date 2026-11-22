@@ -95,6 +95,20 @@ pub(crate) fn vendor_sharpness(o: &Options, backend: u32) -> f32 {
     }
 }
 
+pub(crate) fn ffx_sharpening(request: f32) -> (bool, f32) {
+    let amount = if request.is_finite() {
+        request.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (amount > 0.0, amount)
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_ffx_sharpening(request: f32, enabled: &mut bool, amount: &mut f32) {
+    (*enabled, *amount) = ffx_sharpening(request);
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn rsf_sharpening_core_defaults() -> Options {
     defaults()
