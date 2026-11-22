@@ -259,3 +259,49 @@ Cargo metadata, the native profile projection check and
 `anomaly_sr_hook_bridge.cpp`. The profile records and N03, N04 and
 N06/N07 production files were unchanged. Linking, fixture execution
 and device or game validation remain open.
+
+## Native identity, bootstrap and fixture follow-up from `f4871e47`
+
+`games/anomaly/src/build_profile.h` now holds typed native stage
+references and the metadata those callers consume. The extra
+`build_identities` array, wide executable names, unused C++
+`find_build` overloads, and `build_identity.h` ABI record were
+removed. The bootstrap binding no longer carries that identity
+type. Startup and plugin admission continue to use the canonical
+Rust profiles. The generated native projection retains both names,
+digests, image sizes, guard banks and all recorded RVAs.
+
+`games/anomaly/src/bootstrap/native.rs` owns CInput image and
+counter selection, DirectInput receipt publication, overlay
+options and the FG overlay sink. The C++ leaf in
+`bootstrap_platform.cpp` supplies the existing typed CInput
+trampoline, SEH copy and compare-exchange, MinHook operations and
+the native stage adapters. The input flight destructor and original
+call order stay unchanged.
+
+The independent profile contract in
+`games/anomaly/src/fixture_profile/contract.rs` now uses the
+production matcher with pinned Standard and AVX fingerprints.
+It retains ordinary and uppercase matches, crossed names and
+digests, an unrelated renderer name, a short digest, a non-ASCII
+name and empty inputs. Its C++ fixture still lends the native stage
+records for independent consistency and guard checks.
+
+`games/anomaly/src/sr_stage/hook_fixture.rs` now owns selection and
+launcher order for the Standard and AVX SR hook cases. It runs the
+real rmNear scenario before the guarded refusal cases and returns
+their combined status. `tests/anomaly_sr_hook_bridge.cpp` retains
+the compiler-emitted target, typed original invocation, real hook
+installation and native fixture projection. The separate
+`tests/anomaly_native_hook_leaves.cpp` still lends its real native
+functions and stage banks to the Rust fixture.
+
+Targeted bootstrap binding regeneration, Rust 1.94.1 formatting,
+locked offline metadata, projection comparison and
+`git diff --check` passed. MSVC 18 `/Zs` with `/W4 /WX` passed for
+the bootstrap platform, observer platform, profile fixture, SR
+hook bridge, native hook leaves and geometry hook host. Source
+comparison against `f4871e47` confirmed the pinned Rust records,
+generated guard data, native observer actors and SEH leaves. N04
+and N05 owners were untouched. Linking, fixture replays and game
+or device validation remain open.

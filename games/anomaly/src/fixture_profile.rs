@@ -8,7 +8,10 @@ use std::slice;
 mod contract;
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_test_anomaly_select_build(argc: i32, argv: *const *const c_char) -> usize {
+pub(crate) unsafe extern "C" fn rsf_test_anomaly_select_build(
+    argc: i32,
+    argv: *const *const c_char,
+) -> usize {
     if argc <= 1 {
         return 0;
     }

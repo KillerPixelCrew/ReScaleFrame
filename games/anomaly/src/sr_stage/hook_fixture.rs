@@ -331,7 +331,33 @@ impl Fixture<'_> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_hook_refusals(profile: &Profile, host: &Calls) -> i32 {
+unsafe extern "C" fn rsf_test_anomaly_sr_hooks(
+    argc: i32,
+    argv: *const *const c_char,
+    project: unsafe extern "C" fn(usize, *mut Profile) -> *const Calls,
+    exercise_near: extern "C" fn() -> i32,
+) -> i32 {
+    let result = std::panic::catch_unwind(|| {
+        let build = unsafe { crate::fixture_profile::rsf_test_anomaly_select_build(argc, argv) };
+        let identity = &crate::native_profile::PROFILES[build];
+        println!(
+            "build profile: {} ({})",
+            identity.label.to_string_lossy(),
+            identity.executable.to_string_lossy()
+        );
+        let mut profile = std::mem::MaybeUninit::uninit();
+        // The native fixture binds the selected stage profile and lends its calls.
+        let host = unsafe { project(build, profile.as_mut_ptr()).as_ref() }
+            .expect("native SR fixture calls");
+        let profile = unsafe { profile.assume_init() };
+        let failures = exercise_near() + guard_refusals(&profile, host);
+        println!("{failures} failure(s)");
+        i32::from(failures != 0)
+    });
+    result.unwrap_or(1)
+}
+
+fn guard_refusals(profile: &Profile, host: &Calls) -> i32 {
     let result = std::panic::catch_unwind(|| {
         // The native executable lends immutable production profile records for this call.
         let mut fixture = unsafe {
@@ -347,59 +373,6 @@ unsafe extern "C" fn rsf_anomaly_sr_hook_refusals(profile: &Profile, host: &Call
             }
         };
         fixture.exercise(profile.image_size);
-    });
-    i32::from(result.is_err())
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_build_selection_fixture(
-    identities: &[crate::BuildIdentity; 2],
-) -> i32 {
-    let result = std::panic::catch_unwind(|| {
-        let standard = unsafe { CStr::from_ptr(identities[0].sha256) }
-            .to_str()
-            .unwrap();
-        let avx = unsafe { CStr::from_ptr(identities[1].sha256) }
-            .to_str()
-            .unwrap();
-        let cases = [
-            ("AnomalyDX11.exe", standard, Some(0)),
-            (
-                "anomalydx11.exe",
-                "C857B6F49D32C62245611B26106862A773185533856E8B858A7D7E849ED2FB4E",
-                Some(0),
-            ),
-            ("AnomalyDX11AVX.exe", avx, Some(1)),
-            (
-                "ANOMALYDX11AVX.EXE",
-                "2032ACFC041E215508692EF4079EF504C7BBABF1793D5668084099F734B92F12",
-                Some(1),
-            ),
-            ("AnomalyDX11AVX.exe", standard, None),
-            ("AnomalyDX11.exe", avx, None),
-            ("AnomalyDX10AVX.exe", avx, None),
-            ("AnomalyDX11.exe", &standard[..63], None),
-            ("AnomalyDX11\u{c4}.exe", standard, None),
-            ("", "", None),
-        ];
-        for (name, hash, expected) in cases {
-            let wide: Vec<_> = name.encode_utf16().collect();
-            let index = unsafe {
-                crate::rsf_anomaly_match_build_wide(
-                    identities.as_ptr(),
-                    identities.len(),
-                    wide.as_ptr(),
-                    wide.len(),
-                    hash.as_ptr().cast(),
-                    hash.len(),
-                )
-            };
-            assert_eq!(
-                index,
-                expected.unwrap_or(usize::MAX),
-                "profile for {name:?}"
-            );
-        }
     });
     i32::from(result.is_err())
 }

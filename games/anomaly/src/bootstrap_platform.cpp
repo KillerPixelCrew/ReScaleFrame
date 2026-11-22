@@ -10,10 +10,19 @@
 #include "sr_stage.h"
 #include <windows.h>
 
+extern "C" {
+bool rsf_anomaly_bootstrap_install_input(void*, size_t, void*, rsf_anomaly_input_exchange,
+    rsf_anomaly_input_read, const char**) noexcept;
+void rsf_anomaly_bootstrap_publish_input_observer() noexcept;
+bool rsf_anomaly_bootstrap_start_overlay(void*, const wchar_t*, rsf_game_log_fn,
+    const rsf::anomaly::HookOps*) noexcept;
+void rsf_anomaly_bootstrap_set_overlay_sink() noexcept;
+}
+
 namespace {
 using namespace rsf::anomaly;
 
-static_assert(sizeof(wchar_t) == 2 && sizeof(rsf_anomaly_build_identity) == 16);
+static_assert(sizeof(wchar_t) == 2);
 static_assert(sizeof(rsf_anomaly_bootstrap_platform) == 72 &&
     offsetof(rsf_anomaly_bootstrap_platform, input_hook) == 48);
 
@@ -22,7 +31,7 @@ void __fastcall input_frame(void* self) {
     struct Flight {
         uint32_t ticket;
         ~Flight() { rsf_anomaly_input_frame_exit(ticket); }
-    } flight{rsf_anomaly_input_frame_begin(guarded_copy, fg::input_begin)};
+    } flight{rsf_anomaly_input_frame_begin(guarded_copy, rsf_anomaly_fg_stage_input_begin)};
     reinterpret_cast<InputFrame>(rsf_anomaly_slot_original(RSF_ANOMALY_INPUT_SLOT))(self);
 }
 
@@ -34,36 +43,19 @@ constexpr rsf_anomaly_bootstrap_platform leaves{
     [](const wchar_t* ini, bool configure, void* runtime, size_t build, rsf_game_log_fn log) noexcept {
         return fg::configure_ini(ini, configure, static_cast<HMODULE>(runtime), build_profiles[build], log);
     },
-    []() noexcept { return fg::installed(); },
+    rsf_anomaly_fg_installed,
     [](const char** reason) noexcept {
         return rsf_anomaly_overlay_install_default_input(&hook_ops, reason);
     },
-    []() noexcept {
-        rsf_anomaly_overlay_set_input_observer([](uint8_t kind) noexcept {
-            rsf_anomaly_input_received(kind, fg::input_received);
-        });
-    },
+    rsf_anomaly_bootstrap_publish_input_observer,
     [](void* image, size_t build, const char** reason) noexcept {
-        const auto& profile = build_profiles[build];
-        const auto checked = guard_image(static_cast<std::byte*>(image), profile.image_size());
-        return rsf_anomaly_input_install(&checked, build, profile.native->device_frame_rva,
-            reinterpret_cast<void*>(&input_frame), compare_slot, reason);
+        return rsf_anomaly_bootstrap_install_input(image, build, reinterpret_cast<void*>(&input_frame),
+            compare_slot, guarded_copy, reason);
     },
     [](void* runtime, const wchar_t* ini, rsf_game_log_fn log) noexcept {
-        rsf_anomaly_overlay_options options{};
-        options.runtime = runtime;
-        options.configuration = ini;
-        options.log = log;
-        options.install_hooks = 1;
-        const char* reason = nullptr;
-        const auto status = rsf_anomaly_overlay_start(&options, &hook_ops, &reason);
-        return status == RSF_ANOMALY_OVERLAY_STARTED || status == RSF_ANOMALY_OVERLAY_ALREADY_STARTED;
+        return rsf_anomaly_bootstrap_start_overlay(runtime, ini, log, &hook_ops);
     },
-    []() noexcept {
-        fg::set_overlay_sink([](void* user, IDXGISwapChain* chain) noexcept {
-            rsf_anomaly_overlay_present(user, chain);
-        });
-    },
+    rsf_anomaly_bootstrap_set_overlay_sink,
 };
 }
 

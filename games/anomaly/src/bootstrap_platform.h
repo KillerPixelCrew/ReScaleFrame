@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-#include "build_identity.h"
 #include <rescaleframe/game_api.h>
 #include <stdbool.h>
 #include <stddef.h>

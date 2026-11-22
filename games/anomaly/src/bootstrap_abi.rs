@@ -3,23 +3,6 @@
 #![allow(non_camel_case_types)]
 use rsf_game_sys::rsf_game_log_fn;
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_anomaly_build_identity {
-    pub executable: *const ::core::ffi::c_char,
-    pub sha256: *const ::core::ffi::c_char,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_anomaly_build_identity"]
-        [::core::mem::size_of::<rsf_anomaly_build_identity>() - 16usize];
-    ["Alignment of rsf_anomaly_build_identity"]
-        [::core::mem::align_of::<rsf_anomaly_build_identity>() - 8usize];
-    ["Offset of field: rsf_anomaly_build_identity::executable"]
-        [::core::mem::offset_of!(rsf_anomaly_build_identity, executable) - 0usize];
-    ["Offset of field: rsf_anomaly_build_identity::sha256"]
-        [::core::mem::offset_of!(rsf_anomaly_build_identity, sha256) - 8usize];
-};
 pub type wchar_t = ::core::ffi::c_ushort;
 #[repr(C)]
 #[derive(Copy, Clone)]

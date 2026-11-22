@@ -24,7 +24,7 @@ mod fg_policy;
 mod fg_stage;
 #[cfg(windows)]
 mod fg_stage_abi;
-#[cfg(all(windows, not(feature = "native-entry")))]
+#[cfg(all(windows, any(not(feature = "native-entry"), feature = "sr-fixtures")))]
 mod fixture_profile;
 mod frame_dump;
 mod geometry_registry;
@@ -92,8 +92,8 @@ use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_detect_game_fn, rsf_game_hooks_api, rsf_game_info,
     rsf_game_plugin_api,
 };
-use std::ffi::{CStr, c_char};
-use std::slice;
+#[cfg(all(windows, feature = "native-entry"))]
+use std::ffi::CStr;
 
 #[cfg(all(windows, feature = "native-entry"))]
 const UNKNOWN: u32 = 0;
@@ -103,69 +103,6 @@ const INVALID_ARGUMENT: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
 const AMD64: u16 = 0x8664;
 const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
-
-use bootstrap_abi::rsf_anomaly_build_identity as BuildIdentity;
-
-fn match_build(builds: &[BuildIdentity], executable: &[u8], sha256: &[u8]) -> Option<usize> {
-    builds.iter().position(|build| {
-        // The native profile table supplies immutable, NUL-terminated strings.
-        let name = unsafe { CStr::from_ptr(build.executable) };
-        let hash = unsafe { CStr::from_ptr(build.sha256) };
-        name.to_bytes().eq_ignore_ascii_case(executable)
-            && hash.to_bytes().eq_ignore_ascii_case(sha256)
-    })
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_match_build(
-    builds: *const BuildIdentity,
-    count: usize,
-    executable: *const c_char,
-    executable_len: usize,
-    sha256: *const c_char,
-    sha256_len: usize,
-) -> usize {
-    if executable_len == 0 || sha256_len != 64 {
-        return usize::MAX;
-    }
-    // This private entry borrows spans from the native adapter's build lookup.
-    let builds = unsafe { slice::from_raw_parts(builds, count) };
-    let executable = unsafe { slice::from_raw_parts(executable.cast(), executable_len) };
-    let sha256 = unsafe { slice::from_raw_parts(sha256.cast(), sha256_len) };
-    match_build(builds, executable, sha256).unwrap_or(usize::MAX)
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_match_build_wide(
-    builds: *const BuildIdentity,
-    count: usize,
-    executable: *const u16,
-    executable_len: usize,
-    sha256: *const c_char,
-    sha256_len: usize,
-) -> usize {
-    let mut ascii = [0u8; 63];
-    if !(1..=ascii.len()).contains(&executable_len) || sha256_len != 64 {
-        return usize::MAX;
-    }
-    let executable = unsafe { slice::from_raw_parts(executable, executable_len) };
-    for (&unit, output) in executable.iter().zip(&mut ascii) {
-        if !(1..=0x7f).contains(&unit) {
-            return usize::MAX;
-        }
-        *output = unit as u8;
-    }
-    unsafe {
-        rsf_anomaly_match_build(
-            builds,
-            count,
-            ascii.as_ptr().cast(),
-            executable_len,
-            sha256,
-            sha256_len,
-        )
-    }
-}
 
 #[cfg(all(windows, feature = "native-entry"))]
 unsafe fn rsf_anomaly_detect(probe: *const rsf_game_probe) -> u32 {

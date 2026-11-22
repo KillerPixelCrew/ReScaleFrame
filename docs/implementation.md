@@ -1214,6 +1214,12 @@ still supply typed targets and stage profile records. Source and
 syntax checks passed. Linking and fixture execution remain open.
 [Profile fixture and observer reporting](research/rust-anomaly-startup-n01.md#independent-profile-fixture-and-observer-reporting-from-b5a7434c)
 
+Anomaly uses the canonical Rust matcher for the independent build
+selection fixture as well as runtime admission. Rust now supplies
+the bootstrap input and overlay setup and runs the SR hook fixture
+sequence. Native engine calls and fault boundaries remain in C++.
+[Native identity and bootstrap follow-up](research/rust-anomaly-startup-n01.md#native-identity-bootstrap-and-fixture-follow-up-from-f4871e47)
+
 ## Rust orchestrator and first Anomaly port
 
 Anomaly's Rust geometry owner now reads and interprets draw-time producer

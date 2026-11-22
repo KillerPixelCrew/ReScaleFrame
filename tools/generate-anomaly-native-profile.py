@@ -35,7 +35,6 @@ def project(source):
             f'// ---- {display} 1.5.3 DX11 ({exe}) ----',
             f'inline constexpr char {label}_label[] = "{label}";',
             f'inline constexpr char {label}_executable[] = "{exe}";',
-            f'inline constexpr wchar_t {label}_executable_wide[] = L"{exe}";',
             f'inline constexpr char {hash_name}[] = "{digest}";',
             f'inline constexpr std::array<UniqueGuard, {len(guards)}> native_{label}_unique{{{{',
         ])

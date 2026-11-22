@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Native harness for the Rust SR refusal fixture. The rmNear case owns a real
 // MinHook detour and calls the fixture target through the engine's Windows ABI.
-#include "anomaly_build_select.h"
+#include "build_profile.h"
 #include "native_geometry.h"
 #include "native_hooks.h"
 #include "sr_stage.h"
@@ -106,19 +106,21 @@ const FixtureCalls fixture_calls{
         return sr::current_jitter().applied;
     },
 };
-}
 
-extern "C" int32_t rsf_anomaly_sr_hook_refusals(const FixtureProfile*, const FixtureCalls*) noexcept;
-
-int main(int argc, char** argv) {
-    B = &testing::selected_build(argc, argv);
-    testing::announce(*B);
-    auto failures = exercise_near_slot();
+const FixtureCalls* project(size_t build, FixtureProfile* out) noexcept {
+    if (build >= build_profiles.size()) return nullptr;
+    B = &build_profiles[build];
     const auto& sr = *B->sr;
-    const FixtureProfile profile{sr.sr_function_sites.data(), sr.sr_unique_guards.data(), sr.sr_unique_guards.size(),
+    *out = {sr.sr_function_sites.data(), sr.sr_unique_guards.data(), sr.sr_unique_guards.size(),
         sr.sr_call_sites.data(), sr.sr_first_person_sites.data(), sr.reconstruction_guards.data(),
         sr.ssao_set_viewport_code, sr.ssao_set_viewport_rva, B->image_size()};
-    failures += rsf_anomaly_sr_hook_refusals(&profile, &fixture_calls);
-    std::printf("%d failure(s)\n", failures);
-    return failures ? 1 : 0;
+    return &fixture_calls;
+}
+}
+
+extern "C" int32_t rsf_test_anomaly_sr_hooks(int, const char* const*,
+    const FixtureCalls* (*)(size_t, FixtureProfile*) noexcept, int (*)()) noexcept;
+
+int main(int argc, char** argv) {
+    return rsf_test_anomaly_sr_hooks(argc, argv, project, exercise_near_slot);
 }

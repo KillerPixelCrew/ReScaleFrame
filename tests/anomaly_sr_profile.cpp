@@ -84,10 +84,9 @@ static_assert(sr::backend_texture_list_offset + 24 == sr::backend_textures_ps_of
 static_assert(sr::xforms_project_offset == sr::xforms_view_offset + 64);
 }
 
-extern "C" int rsf_test_anomaly_profile_contract(const Profile*, const rsf::anomaly::sr::TargetSlot*, size_t,
-    const rsf_anomaly_build_identity*) noexcept;
+extern "C" int rsf_test_anomaly_profile_contract(const Profile*, const rsf::anomaly::sr::TargetSlot*, size_t) noexcept;
 
 int main() {
     return rsf_test_anomaly_profile_contract(profiles.data(), rsf::anomaly::sr::target_slots.data(),
-        rsf::anomaly::sr::target_slots.size(), rsf::anomaly::build_identities.data());
+        rsf::anomaly::sr::target_slots.size());
 }

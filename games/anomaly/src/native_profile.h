@@ -46,7 +46,6 @@ struct NativeProfile {
 // ---- Standard 1.5.3 DX11 (AnomalyDX11.exe) ----
 inline constexpr char standard_label[] = "standard";
 inline constexpr char standard_executable[] = "AnomalyDX11.exe";
-inline constexpr wchar_t standard_executable_wide[] = L"AnomalyDX11.exe";
 inline constexpr char dx11_hash[] = "c857b6f49d32c62245611b26106862a773185533856e8b858a7d7e849ed2fb4e";
 inline constexpr std::array<UniqueGuard, 2> native_standard_unique{{
     {"CRender::Render", 0x8977c0, "488bc44889480853565741544155415641574881ec20"},
@@ -73,7 +72,6 @@ inline constexpr NativeProfile native_standard{
 // ---- AVX 1.5.3 DX11 (AnomalyDX11AVX.exe) ----
 inline constexpr char avx_label[] = "avx";
 inline constexpr char avx_executable[] = "AnomalyDX11AVX.exe";
-inline constexpr wchar_t avx_executable_wide[] = L"AnomalyDX11AVX.exe";
 inline constexpr char avx_hash[] = "2032acfc041e215508692ef4079ef504c7bbabf1793d5668084099f734b92f12";
 inline constexpr std::array<UniqueGuard, 2> native_avx_unique{{
     {"CRender::Render", 0x88d420, "488bc44889480853565741544155415641574881ec50"},

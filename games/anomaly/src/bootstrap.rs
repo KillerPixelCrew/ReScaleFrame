@@ -4,6 +4,9 @@
 //! already loaded and starts Observe through the Runtime's stable plugin-session C ABI. This module owns the step
 //! order, refusals, retry state and adapter log. The native platform table supplies the typed stage calls.
 
+#[cfg(feature = "native-entry")]
+mod native;
+
 use crate::AMD64;
 use crate::bootstrap_abi::rsf_anomaly_bootstrap_platform as Leaves;
 use crate::executable::{running_build, with_verified_build};

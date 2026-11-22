@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 //! Consistency checks on the stage profiles lent by the native fixture.
-use crate::BuildIdentity;
 use crate::engine_guards::{NativeSite, UniqueGuard};
 use std::ffi::{CStr, c_char, c_void};
 use std::slice;
@@ -70,8 +69,30 @@ const _: () = {
     assert!(size_of::<FirstPersonSite>() == 24 && size_of::<TargetSlot>() == 16);
 };
 
-unsafe extern "C" {
-    fn rsf_anomaly_sr_build_selection_fixture(identities: &[BuildIdentity; 2]) -> i32;
+fn check_build_selection() {
+    // Independent fingerprints pinned by the two executable evidence records.
+    const STANDARD: &str = "C857B6F49D32C62245611B26106862A773185533856E8B858A7D7E849ED2FB4E";
+    const AVX: &str = "2032ACFC041E215508692EF4079EF504C7BBABF1793D5668084099F734B92F12";
+    let standard = STANDARD.to_ascii_lowercase();
+    let avx = AVX.to_ascii_lowercase();
+    for (name, hash, expected) in [
+        ("AnomalyDX11.exe", standard.as_str(), Some(0)),
+        ("anomalydx11.exe", STANDARD, Some(0)),
+        ("AnomalyDX11AVX.exe", avx.as_str(), Some(1)),
+        ("ANOMALYDX11AVX.EXE", AVX, Some(1)),
+        ("AnomalyDX11AVX.exe", STANDARD, None),
+        ("AnomalyDX11.exe", AVX, None),
+        ("AnomalyDX10AVX.exe", AVX, None),
+        ("AnomalyDX11.exe", &STANDARD[..63], None),
+        ("AnomalyDX11\u{c4}.exe", STANDARD, None),
+        ("", "", None),
+    ] {
+        assert_eq!(
+            crate::native_profile::find(name.as_bytes(), hash.as_bytes()),
+            expected,
+            "profile for {name:?}"
+        );
+    }
 }
 
 fn byte(hex: &[u8]) -> Option<u8> {
@@ -309,16 +330,15 @@ unsafe extern "C" fn rsf_test_anomaly_profile_contract(
     profiles: &[Profile; 2],
     slots: *const TargetSlot,
     slot_count: usize,
-    identities: &[BuildIdentity; 2],
 ) -> i32 {
     let result = std::panic::catch_unwind(|| {
         // The native fixture supplies these statically bounded profile arrays.
         check_profiles(profiles, unsafe {
             slice::from_raw_parts(slots, slot_count)
         });
-        let failures = unsafe { rsf_anomaly_sr_build_selection_fixture(identities) };
-        println!("{failures} failure(s)");
-        i32::from(failures != 0)
+        check_build_selection();
+        println!("0 failure(s)");
+        0
     });
     result.unwrap_or(1)
 }
