@@ -330,7 +330,7 @@ fn finish_balances_submission_then_window_then_frame_and_resets() {
     rsf_fallout4_render_begin_scope(&LEAVES, &RECOVERY);
     let _ = events();
     with(|fake| {
-        fake.pass = crate::copy_pass(&fake.frame);
+        fake.pass = fake.frame;
         fake.pass.role = RSF_GAME_RENDER_WINDOW;
         fake.pass.flags &= !RSF_GAME_RENDER_NO_FG;
         fake.frame.flags &= !RSF_GAME_RENDER_NO_FG;

@@ -18,7 +18,7 @@ use super::recovery::{self, Leaves as RecoveryLeaves};
 pub(super) use crate::render_records::NativeRenderOwner as Owner;
 use crate::resolution::is_busy as resolution_busy;
 use crate::resolution_stages::RSF_FALLOUT4_STAGE_SOURCE_RETIRED as SOURCE_RETIRED;
-use crate::{RSF_ERROR_NOT_READY, RSF_OK, copy_pass, image};
+use crate::{RSF_ERROR_NOT_READY, RSF_OK, image};
 use rsf_game_sys::{
     RSF_GAME_RENDER_FRAME, RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_SUBMISSION, rsf_game_render_pass,
     rsf_result,
@@ -123,7 +123,7 @@ fn begin(scope: &Leaves, recovery: &RecoveryLeaves) -> bool {
     };
     let world = scope.world();
     // SAFETY: the World names its FRAME pass; the FRAME is built in place, as before.
-    let mut frame = copy_pass(unsafe { &*world.frame_pass });
+    let mut frame = unsafe { *world.frame_pass };
     frame.struct_size = size_of::<rsf_game_render_pass>() as u32;
     publication::identify(&mut frame, &world.cpu);
     frame.role = RSF_GAME_RENDER_FRAME;
@@ -136,7 +136,7 @@ fn begin(scope: &Leaves, recovery: &RecoveryLeaves) -> bool {
     frame.rhi_viewport_key = owner.window as u64;
     frame.pass_key = (image() + FRAME_PASS) as u64;
     frame.swapchain = owner.chain as *mut c_void;
-    let mut submission = copy_pass(&frame);
+    let mut submission = frame;
     submission.role = RSF_GAME_RENDER_SUBMISSION;
     // SAFETY: the World names its FRAME and SUBMISSION passes. The callbacks receive the World
     // fields themselves.

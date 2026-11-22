@@ -69,7 +69,7 @@ pub(super) struct Leaves {
     diagnostic: unsafe extern "C" fn(*const c_char),
 }
 
-const _: () = assert!(size_of::<Leaves>() == 8 * size_of::<usize>());
+const _: () = assert!(size_of::<Leaves>() == usize::BITS as usize);
 
 impl Leaves {
     fn world(&self) -> World {

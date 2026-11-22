@@ -32,7 +32,7 @@ use windows_sys::core::{s, w};
 const ENGINE_VERSION: &CStr = c"1.11.240.0";
 const PROJECT_ID: &CStr = c"8b91a3c1-3ce2-4c66-a35c-42d2074da9fe";
 // 117/8192 exactly: the f32 the native literal 0.01428222656f produced.
-const UNITS_TO_METERS: f32 = 0.014_282_226_562_5;
+const UNITS_TO_METERS: f32 = 0.014_282_227;
 // Reduction requires the independently negotiated recovery export. Older runtimes retain the
 // standard Native control and native raster.
 const QUALITY_WITH_REDUCTION: u32 = 0x1f;
@@ -336,7 +336,7 @@ fn run(entry: impl FnOnce(&mut Session, &Ops) -> Result<rsf_result, Threw>) -> r
         return RSF_ERROR_NOT_READY;
     };
     let mut session = session();
-    entry(&mut *session, ops).unwrap_or(RSF_ERROR_NOT_READY)
+    entry(&mut session, ops).unwrap_or(RSF_ERROR_NOT_READY)
 }
 
 pub(crate) unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> rsf_result {

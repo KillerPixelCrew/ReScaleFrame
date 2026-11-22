@@ -789,7 +789,7 @@ fn source_fact(fact: &Pending, stage: u32, reason: u32) -> bool {
     let index = stage.wrapping_sub(RSF_GAME_CPU_SOURCE_RESERVE) as usize;
     if host.services.log.is_some()
         && index < SOURCE_RECEIPTS.len()
-        && (SOURCE_RECEIPTS[index].fetch_add(1, SeqCst) < 8 || fact.source % 128 == 0)
+        && (SOURCE_RECEIPTS[index].fetch_add(1, SeqCst) < 8 || fact.source.is_multiple_of(128))
         && SOURCE_RECEIPT_BUDGET.fetch_add(1, SeqCst) < 64
     {
         log(

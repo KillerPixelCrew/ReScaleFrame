@@ -24,7 +24,7 @@ pub(super) struct NativeLease {
 }
 
 const _: () = {
-    assert!(size_of::<TransferredLease>() == 8 * size_of::<usize>());
+    assert!(size_of::<TransferredLease>() == usize::BITS as usize);
     assert!(std::mem::offset_of!(TransferredLease, textures) == 16);
 };
 
