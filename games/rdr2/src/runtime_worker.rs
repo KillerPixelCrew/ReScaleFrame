@@ -2,7 +2,7 @@
 //! The ASI and explicit attach worker share renderer setup and plugin session admission.
 use crate::sys::{
     RSF_RENDER_HOST_ABI_VERSION, RSF_RENDER_HOST_OWNS_PRESENTATION, RSF_UI_MODE_BACKBUFFER_HUDLESS,
-    rsf_rdr2_fingerprint_fn, rsf_rdr2_runtime_leaves, rsf_render_host_setup,
+    rsf_rdr2_fingerprint_fn, rsf_render_host_setup,
 };
 use crate::{OK, asi, engine_settings, layout, script_input};
 use rsf_game_sys::rsf_game_host_services;
@@ -52,51 +52,58 @@ fn register_startup_options(runtime: HMODULE, scope: *mut c_void, path: *const u
         restart: 1,
         ..Default::default()
     };
-    let text = |key: &CStr, label: &CStr, max_text_length| rsf_overlay_saved_option {
-        label_utf8: label.as_ptr(),
-        key_utf8: key.as_ptr(),
-        max_text_length,
-        kind: RSF_OVERLAY_SAVED_TEXT,
-        restart: 1,
-        ..Default::default()
-    };
-    let rows = [
+    #[cfg_attr(not(feature = "research"), expect(unused_mut))]
+    let mut rows = vec![
         toggle(c"Enable", c"Enable renderer integration", 1),
         toggle(c"ForceD3D12", c"Force Direct3D 12", 1),
-        toggle(c"NativeCapture", c"Native GPU capture", 0),
-        toggle(c"CameraProbe", c"Camera probe", 0),
-        text(
-            c"CameraProbeDirectory",
-            c"Camera and native capture directory",
-            195,
-        ),
-        toggle(c"CameraReference", c"Camera reference capture", 0),
-        text(c"CameraReferenceLibrary", c"Camera reference library", 259),
-        toggle(c"FrameProbe", c"Frame probe", 0),
-        text(c"FrameProbeLibrary", c"Frame probe library", 259),
-        text(c"FrameProbePrefix", c"Frame probe prefix", 259),
-        toggle(c"Census", c"Vendor census", 0),
-        text(c"CensusDirectory", c"Census directory", 259),
-        rsf_overlay_saved_option {
-            label_utf8: c"Census flags".as_ptr(),
-            key_utf8: c"CensusFlags".as_ptr(),
-            kind: RSF_OVERLAY_SAVED_NUMBER,
-            restart: 1,
-            maximum: 127,
-            step: 1,
-            divisor: 1,
-            ..Default::default()
-        },
-        toggle(c"TraceD3D12", c"Trace Direct3D 12", 0),
-        toggle(c"NativeSettingsProbe", c"Native settings probe", 0),
-        text(
-            c"NativeSettingsProbePath",
-            c"Native settings probe path",
-            RSF_OVERLAY_SAVED_TEXT_LIMIT,
-        ),
-        toggle(c"DumpModule", c"Dump the executable module", 0),
-        text(c"DumpDirectory", c"Module dump directory", 259),
     ];
+    // The remaining keys are read only by research builds.
+    #[cfg(feature = "research")]
+    {
+        let text = |key: &CStr, label: &CStr, max_text_length| rsf_overlay_saved_option {
+            label_utf8: label.as_ptr(),
+            key_utf8: key.as_ptr(),
+            max_text_length,
+            kind: RSF_OVERLAY_SAVED_TEXT,
+            restart: 1,
+            ..Default::default()
+        };
+        rows.extend([
+            toggle(c"NativeCapture", c"Native GPU capture", 0),
+            toggle(c"CameraProbe", c"Camera probe", 0),
+            text(
+                c"CameraProbeDirectory",
+                c"Camera and native capture directory",
+                195,
+            ),
+            toggle(c"CameraReference", c"Camera reference capture", 0),
+            text(c"CameraReferenceLibrary", c"Camera reference library", 259),
+            toggle(c"FrameProbe", c"Frame probe", 0),
+            text(c"FrameProbeLibrary", c"Frame probe library", 259),
+            text(c"FrameProbePrefix", c"Frame probe prefix", 259),
+            toggle(c"Census", c"Vendor census", 0),
+            text(c"CensusDirectory", c"Census directory", 259),
+            rsf_overlay_saved_option {
+                label_utf8: c"Census flags".as_ptr(),
+                key_utf8: c"CensusFlags".as_ptr(),
+                kind: RSF_OVERLAY_SAVED_NUMBER,
+                restart: 1,
+                maximum: 127,
+                step: 1,
+                divisor: 1,
+                ..Default::default()
+            },
+            toggle(c"TraceD3D12", c"Trace Direct3D 12", 0),
+            toggle(c"NativeSettingsProbe", c"Native settings probe", 0),
+            text(
+                c"NativeSettingsProbePath",
+                c"Native settings probe path",
+                RSF_OVERLAY_SAVED_TEXT_LIMIT,
+            ),
+            toggle(c"DumpModule", c"Dump the executable module", 0),
+            text(c"DumpDirectory", c"Module dump directory", 259),
+        ]);
+    }
     let setup = rsf_overlay_saved_setup {
         struct_size: size_of::<rsf_overlay_saved_setup>() as u32,
         abi_version: RSF_OVERLAY_SAVED_OPTIONS_ABI_VERSION,
@@ -326,16 +333,7 @@ fn log_refusal(prefix: &str, refusal: Refusal) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_rdr2_asi_start_runtime(
-    module: HMODULE,
-    leaves: *const rsf_rdr2_runtime_leaves,
-) -> u32 {
-    let Some(leaves) = (unsafe { leaves.as_ref() }) else {
-        return 1;
-    };
-    let Some(fingerprint) = leaves.fingerprint else {
-        return 1;
-    };
+pub(crate) fn asi_start_runtime(module: HMODULE, fingerprint: Fingerprint) -> u32 {
     let Some((root, config)) =
         unsafe { module_path(module) }.and_then(|path| asi::deployment(path.units()))
     else {
@@ -348,8 +346,9 @@ pub(crate) unsafe extern "C" fn rsf_rdr2_asi_start_runtime(
     let directory = &directory[..directory.len() - 1];
     LOG.set_path(&append_path(directory, "rdr2.log"));
     log("RDR2 ASI entry started.");
-    unsafe { asi::rsf_rdr2_asi_report_startup(Some(rsf_rdr2_runtime_log), null_mut()) };
-    if let Some(diagnostics) = leaves.diagnostics {
+    asi::report_startup();
+    #[cfg(feature = "research")]
+    {
         let modules_path = append_path(directory, "rdr2-modules.log");
         let dump_directory =
             if unsafe { GetPrivateProfileIntW(w!("RDR2"), w!("DumpModule"), 0, config.as_ptr()) }
@@ -363,7 +362,7 @@ pub(crate) unsafe extern "C" fn rsf_rdr2_asi_start_runtime(
                 None
             };
         unsafe {
-            diagnostics(
+            asi::start_diagnostics(
                 modules_path.as_ptr(),
                 dump_directory.as_ref().map_or(null(), |path| path.as_ptr()),
             )
@@ -408,9 +407,7 @@ pub(crate) unsafe extern "C" fn rsf_rdr2_asi_start_runtime(
             "RDR2 ScriptHook input guard unavailable; shared overlay still uses its window input hook.",
         );
     }
-    unsafe {
-        engine_settings::rsf_rdr2_report_engine_settings(Some(rsf_rdr2_runtime_log), null_mut())
-    };
+    engine_settings::report();
     result.map_or_else(|refusal| log_refusal("RDR2 ASI", refusal) as u32, |()| 0)
 }
 

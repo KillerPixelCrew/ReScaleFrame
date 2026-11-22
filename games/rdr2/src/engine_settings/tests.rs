@@ -30,14 +30,6 @@ fn dlss_choice_follows_the_capability_list() {
     assert_eq!(dlss_choice(&[5, 6, 2, 1, 0, 3, 4, 7], 1), None);
     assert_eq!(dlss_choice(&active, 5), None);
     assert_eq!(dlss_choice(&[5, 6], 1), None);
-    assert_eq!(
-        unsafe { rsf_rdr2_dlss_choice_abi(ptr::null(), 6, 1) },
-        u32::MAX
-    );
-    assert_eq!(
-        unsafe { rsf_rdr2_dlss_choice_abi(active.as_ptr(), 6, 3) },
-        4
-    );
 }
 
 #[test]
@@ -98,16 +90,13 @@ fn pin_refuses_other_objects_unchanged() {
         NVIDIA,
         DEFAULT_QUALITY
     ));
-    assert!(!unsafe {
-        rsf_rdr2_pin_engine_settings_abi(ptr::null_mut(), collection::BYTES, NVIDIA, 2)
-    });
 }
 
 #[test]
 fn refresh_rationals_stay_storable() {
     // Measured Arc B370 panel: 120 Hz is 31550000/262912, which RAGE saved as 262144/262144.
     let (mut n, mut d) = (31_550_000, 262_912);
-    assert!(unsafe { rsf_rdr2_storable_refresh_abi(&mut n, &mut d, 120) });
+    assert!(storable_refresh(&mut n, &mut d, 120));
     assert_eq!((n, d), (12000, 100));
     (n, d) = (REFRESH_LIMIT, REFRESH_LIMIT);
     assert!(storable_refresh(&mut n, &mut d, 120));
@@ -122,7 +111,6 @@ fn refresh_rationals_stay_storable() {
     }
     (n, d) = (400_000, 0);
     assert!(!storable_refresh(&mut n, &mut d, 120));
-    assert!(!unsafe { rsf_rdr2_storable_refresh_abi(ptr::null_mut(), &mut d, 120) });
 }
 
 #[test]
@@ -143,7 +131,7 @@ fn failed_dxgi_query_can_retry_the_same_index() {
 }
 
 #[test]
-fn exported_pin_writes_the_measured_collection_offsets() {
+fn pin_writes_the_measured_collection_offsets() {
     // Keep this layout fixture independent of the Rust offset constants.
     let mut data = [0x5a; 0x180];
     data[0x178..0x17a].copy_from_slice(&37u16.to_le_bytes());
@@ -151,8 +139,6 @@ fn exported_pin_writes_the_measured_collection_offsets() {
     for (offset, value) in [(0xe8, 3), (0xec, 1), (0xf4, 0), (0x15c, 1)] {
         put(&mut expected, offset, value);
     }
-    assert!(unsafe {
-        rsf_rdr2_pin_engine_settings_abi(data.as_mut_ptr().cast(), data.len(), 0x10de, 2)
-    });
+    assert!(pin(&mut data, 0x10de, 2));
     assert_eq!(data, expected);
 }

@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Opt-in camera capture at the native upscaler boundary and its separate fiber reference.
-use crate::asi::{self, AsiPlatform, DiagnosticHook, DiagnosticInstall, install_diagnostic_hooks};
+use crate::asi::{DiagnosticHook, DiagnosticInstall, install_diagnostic_hooks};
 use crate::layout::{self, FRAME_COUNTER, TLS_INDEX, block, camera_probe};
-use crate::platform::{lock, trampoline, worker_tls_slots};
+use crate::platform::{self, lock, read_bytes, read_value, trampoline, worker_tls_slots};
 use crate::script_input::ScriptHook;
-use rsf_minhook_sys::MH_EnableHook;
 use std::ffi::{OsString, c_void};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -92,14 +91,10 @@ fn timestamp() -> u64 {
     qpc as u64
 }
 
-fn read_bytes(address: usize, bytes: &mut [u8]) -> bool {
-    unsafe { crate::platform::read_process_memory(address, bytes.as_mut_ptr().cast(), bytes.len()) }
-}
-
 impl Snapshot {
-    fn read_worker(&mut self, platform: &AsiPlatform, image: usize) {
-        self.frame_counter = platform.read_value(image + FRAME_COUNTER).unwrap_or(0);
-        let Some(index) = platform.read_value::<u32>(image + TLS_INDEX) else {
+    fn read_worker(&mut self, image: usize) {
+        self.frame_counter = read_value(image + FRAME_COUNTER).unwrap_or(0);
+        let Some(index) = read_value::<u32>(image + TLS_INDEX) else {
             self.tls_index = u32::MAX;
             return;
         };
@@ -109,22 +104,15 @@ impl Snapshot {
             return;
         }
         let offset = self.tls_index as usize * size_of::<usize>();
-        let Some(block) = platform
-            .read_value::<usize>(slots.wrapping_add(offset))
-            .filter(|&block| block != 0)
+        let Some(block) =
+            read_value::<usize>(slots.wrapping_add(offset)).filter(|&block| block != 0)
         else {
             return;
         };
         self.tls_block = block as u64;
-        self.view = platform
-            .read_value(block.wrapping_add(block::VIEW))
-            .unwrap_or(0);
-        self.draw_context = platform
-            .read_value(block.wrapping_add(block::DRAW))
-            .unwrap_or(0);
-        self.job = platform
-            .read_value(block.wrapping_add(camera_probe::JOB))
-            .unwrap_or(0);
+        self.view = read_value(block.wrapping_add(block::VIEW)).unwrap_or(0);
+        self.draw_context = read_value(block.wrapping_add(block::DRAW)).unwrap_or(0);
+        self.job = read_value(block.wrapping_add(camera_probe::JOB)).unwrap_or(0);
         read_bytes(self.job as usize, &mut self.job_bytes);
         self.valid_view = u32::from(read_bytes(self.view as usize, &mut self.view_bytes));
     }
@@ -172,15 +160,7 @@ unsafe extern "C" fn dlss_capture(
     unsafe { trampoline::<Upscale>(&DLSS).is_some_and(|native| native(ctx, params, option)) }
 }
 
-unsafe extern "C" fn enable(target: usize) -> i32 {
-    unsafe { MH_EnableHook(target as *mut c_void) }
-}
-
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_rdr2_install_camera_probe(directory: *const u16) -> bool {
-    let Some(platform) = asi::platform() else {
-        return false;
-    };
     let hooks = [
         DiagnosticHook::new(fsr_hook as *const c_void, FSR.as_ptr()),
         DiagnosticHook::new(dlss_hook as *const c_void, DLSS.as_ptr()),
@@ -192,27 +172,18 @@ pub(crate) unsafe extern "C" fn rsf_rdr2_install_camera_probe(directory: *const 
     if probe.is_some() {
         return false;
     }
-    let image = unsafe { asi::main_module() };
-    let Some((_, signature, timestamp, size)) = asi::pe_header(image) else {
-        return false;
-    };
-    if signature != asi::PE_SIGNATURE
-        || timestamp != layout::IMAGE_TIMESTAMP
-        || size != layout::IMAGE_SIZE
-    {
+    let image = unsafe { platform::main_module() };
+    if platform::image_facts(image).is_none_or(|facts| {
+        facts.timestamp != layout::IMAGE_TIMESTAMP || facts.image_size != layout::IMAGE_SIZE
+    }) {
         return false;
     }
-    let installed = match install_diagnostic_hooks(
-        platform,
-        image,
-        [camera_probe::FSR, camera_probe::DLSS],
-        &hooks,
-        enable,
-    ) {
-        DiagnosticInstall::Installed => true,
-        DiagnosticInstall::Refused => return false,
-        DiagnosticInstall::Retained => false,
-    };
+    let installed =
+        match install_diagnostic_hooks(image, [camera_probe::FSR, camera_probe::DLSS], &hooks) {
+            DiagnosticInstall::Installed => true,
+            DiagnosticInstall::Refused => return false,
+            DiagnosticInstall::Retained => false,
+        };
     let directory = PathBuf::from(OsString::from_wide(directory));
     *probe = Some(Probe {
         request: directory.join("camera.request"),
@@ -227,17 +198,13 @@ pub(crate) unsafe extern "C" fn rsf_rdr2_install_camera_probe(directory: *const 
     installed
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_rdr2_camera_request() {
+pub(crate) fn rsf_rdr2_camera_request() {
     if let Some(probe) = lock(&PROBE).as_mut() {
         probe.request();
     }
 }
 
 fn capture(provider: u32, context: *const c_void, parameters: *const c_void, caller: usize) {
-    let Some(platform) = asi::platform() else {
-        return;
-    };
     let mut probe = lock(&PROBE);
     let Some(probe) = probe.as_mut().filter(|probe| probe.installed) else {
         return;
@@ -267,14 +234,12 @@ fn capture(provider: u32, context: *const c_void, parameters: *const c_void, cal
     record.context = context as u64;
     record.parameters = parameters as u64;
     record.return_rva = (caller as u64).wrapping_sub(record.image_base);
-    record.read_worker(platform, probe.image);
+    record.read_worker(probe.image);
     record.valid_parameters =
         u32::from(read_bytes(parameters as usize, &mut record.parameter_bytes));
-    if let Some(colour) = platform
-        .read_value::<usize>(parameters as usize)
-        .filter(|&colour| colour != 0)
+    if let Some(colour) = read_value::<usize>(parameters as usize).filter(|&colour| colour != 0)
         && let Some([width, height]) =
-            platform.read_value::<[u16; 2]>(colour.wrapping_add(camera_probe::COLOUR_EXTENT))
+            read_value::<[u16; 2]>(colour.wrapping_add(camera_probe::COLOUR_EXTENT))
     {
         record.render_width = u32::from(width);
         record.render_height = u32::from(height);
@@ -323,7 +288,7 @@ fn reference_sample(script: &ScriptHook) -> Option<([f32; 3], [f32; 3], f32)> {
 }
 
 extern "C" fn script_reference() {
-    let (Some(script), Some(platform)) = (REFERENCE.get(), asi::platform()) else {
+    let Some(script) = REFERENCE.get() else {
         return;
     };
     loop {
@@ -335,9 +300,7 @@ extern "C" fn script_reference() {
             && let Some(([px, py, pz], [rx, ry, rz], fov)) = reference_sample(script)
         {
             let qpc = timestamp();
-            let frame = platform
-                .read_value::<u32>(image + FRAME_COUNTER)
-                .unwrap_or(0);
+            let frame = read_value::<u32>(image + FRAME_COUNTER).unwrap_or(0);
             let thread = unsafe { GetCurrentThreadId() };
             let process = unsafe { GetCurrentProcessId() };
             let path = directory.join(format!("script-{process}-{capture:03}.jsonl"));
@@ -352,7 +315,6 @@ extern "C" fn script_reference() {
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_rdr2_install_camera_reference(
     instance: HMODULE,
     library: *const u16,

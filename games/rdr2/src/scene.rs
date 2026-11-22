@@ -9,7 +9,9 @@ use crate::layout::{
     NATIVE_TEXTURE_RVA, OUTPUT, OUTPUT_CALLS, OUTPUT_RETURNS, SLEEP, TLS_INDEX, block, call_target,
     draw,
 };
-use crate::platform::{self, Platform, ResourceFacts, Retained, Scope, lock, trampoline};
+use crate::platform::{
+    self, ResourceFacts, Retained, Scope, lock, read_bytes, read_pointer, read_value, trampoline,
+};
 use rsf_game_sys::{
     RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_CPU_INPUT_KEYED,
     RSF_GAME_CPU_INPUT_UNFRAMED, RSF_GAME_CPU_WINDOW_MESSAGE, RSF_GAME_INPUT_CONTROLLER,
@@ -110,29 +112,25 @@ fn slot<T>(items: &mut [T], frame: u64) -> &mut T {
 }
 
 /// The per-thread render block's `field` and the native frame counter it belongs to.
-pub(crate) fn render_block(
-    platform: &Platform,
-    image: usize,
-    field: usize,
-) -> Option<(usize, u64)> {
-    let index = platform.read_value::<u32>(image.wrapping_add(TLS_INDEX))?;
+pub(crate) fn render_block(image: usize, field: usize) -> Option<(usize, u64)> {
+    let index = read_value::<u32>(image.wrapping_add(TLS_INDEX))?;
     if index >= block::TLS_LIMIT {
         return None;
     }
     let slots = unsafe { platform::worker_tls_slots() };
-    let block = platform.read_pointer(slots.wrapping_add(index as usize * size_of::<usize>()))?;
-    let value = platform.read_pointer(block.wrapping_add(field))?;
-    let flags = platform.read_value::<u32>(block.wrapping_add(block::FLAGS))?;
+    let block = read_pointer(slots.wrapping_add(index as usize * size_of::<usize>()))?;
+    let value = read_pointer(block.wrapping_add(field))?;
+    let flags = read_value::<u32>(block.wrapping_add(block::FLAGS))?;
     let counter = if flags & block::INDIRECT_COUNTER != 0 {
-        let pointer = platform.read_pointer(image.wrapping_add(FRAME_COUNTER_POINTER))?;
-        platform.read_value::<u32>(pointer)?
+        let pointer = read_pointer(image.wrapping_add(FRAME_COUNTER_POINTER))?;
+        read_value::<u32>(pointer)?
     } else {
-        platform.read_value::<u32>(image.wrapping_add(FRAME_COUNTER))?
+        read_value::<u32>(image.wrapping_add(FRAME_COUNTER))?
     };
     (value != 0 && counter != 0).then_some((value, u64::from(counter)))
 }
 
-fn latency(platform: &Platform, kind: u32, frame: u64) -> bool {
+fn latency(kind: u32, frame: u64) -> bool {
     if !ACTIVE.load(Ordering::SeqCst) {
         return false;
     }
@@ -140,10 +138,10 @@ fn latency(platform: &Platform, kind: u32, frame: u64) -> bool {
     if host.0.process_latency.is_none() {
         return false;
     }
-    host.latency(kind, frame, platform.qpc()).unwrap_or(false)
+    host.latency(kind, frame, platform::qpc()).unwrap_or(false)
 }
 
-fn received_input(platform: &Platform, kind: u32, message: u32) {
+fn received_input(kind: u32, message: u32) {
     if !ACTIVE.load(Ordering::SeqCst) {
         return;
     }
@@ -152,7 +150,7 @@ fn received_input(platform: &Platform, kind: u32, message: u32) {
         return;
     }
     let source = INPUT_SOURCE.load(Ordering::SeqCst);
-    let (now, frequency) = platform.qpc();
+    let (now, frequency) = platform::qpc();
     let mut flags = RSF_GAME_CPU_INPUT_KEYED;
     if message != 0 {
         flags |= RSF_GAME_CPU_WINDOW_MESSAGE;
@@ -178,18 +176,14 @@ fn received_input(platform: &Platform, kind: u32, message: u32) {
 /// A window message removed by the game's input thread, classified by the native leaf.
 unsafe extern "C" fn received_message(kind: u32, message: u32) {
     let _scope = Scope::enter(&READERS);
-    if let Some(platform) = platform::get() {
-        received_input(platform, kind, message);
-    }
+    received_input(kind, message);
 }
 
 /// A successful public XInput read.
 unsafe extern "C" fn controller_received() {
     let _scope = Scope::enter(&READERS);
-    if INPUT_SOURCE.load(Ordering::SeqCst) != 0
-        && let Some(platform) = platform::get()
-    {
-        received_input(platform, RSF_GAME_INPUT_CONTROLLER, 0);
+    if INPUT_SOURCE.load(Ordering::SeqCst) != 0 {
+        received_input(RSF_GAME_INPUT_CONTROLLER, 0);
     }
 }
 
@@ -200,17 +194,15 @@ fn input_thread(frame: u64) {
 
 unsafe extern "C" fn sleep() -> bool {
     let _scope = Scope::enter(&READERS);
-    if let Some(platform) = platform::get() {
-        let image = IMAGE.load(Ordering::SeqCst);
-        // Same producer as the game's INPUT_SAMPLE caller at abcfea: direct counter + 1.
-        if let Some(current) = platform.read_value::<u32>(image.wrapping_add(FRAME_COUNTER)) {
-            let frame = u64::from(current.wrapping_add(1));
-            if ACTIVE.load(Ordering::SeqCst) {
-                input_thread(frame);
-            }
-            if latency(platform, RSF_GAME_LATENCY_SLEEP, frame) {
-                return true;
-            }
+    let image = IMAGE.load(Ordering::SeqCst);
+    // Same producer as the game's INPUT_SAMPLE caller at abcfea: direct counter + 1.
+    if let Some(current) = read_value::<u32>(image.wrapping_add(FRAME_COUNTER)) {
+        let frame = u64::from(current.wrapping_add(1));
+        if ACTIVE.load(Ordering::SeqCst) {
+            input_thread(frame);
+        }
+        if latency(RSF_GAME_LATENCY_SLEEP, frame) {
+            return true;
         }
     }
     match unsafe { trampoline::<SleepFn>(&ORIGINAL_SLEEP) } {
@@ -221,9 +213,7 @@ unsafe extern "C" fn sleep() -> bool {
 
 unsafe extern "C" fn mode(device: *mut c_void, parameters: *const c_void) -> i32 {
     let _scope = Scope::enter(&READERS);
-    if let Some(platform) = platform::get()
-        && latency(platform, RSF_GAME_LATENCY_MODE, 0)
-    {
+    if latency(RSF_GAME_LATENCY_MODE, 0) {
         return 0;
     }
     match unsafe { trampoline::<ModeFn>(&ORIGINAL_MODE) } {
@@ -262,20 +252,20 @@ struct BlitTarget {
     frame: u64,
 }
 
-fn blit_target(platform: &Platform, image: usize) -> Option<BlitTarget> {
-    let (draw_context, frame) = render_block(platform, image, block::DRAW)?;
-    let commands = platform.read_pointer(draw_context.wrapping_add(draw::COMMANDS))?;
-    let count = platform.read_value::<u32>(draw_context.wrapping_add(draw::COLOR_COUNT))?;
+fn blit_target(image: usize) -> Option<BlitTarget> {
+    let (draw_context, frame) = render_block(image, block::DRAW)?;
+    let commands = read_pointer(draw_context.wrapping_add(draw::COMMANDS))?;
+    let count = read_value::<u32>(draw_context.wrapping_add(draw::COLOR_COUNT))?;
     if count != 1 {
         return None;
     }
-    let view = platform.read_pointer(draw_context.wrapping_add(draw::COLOR_VIEWS))?;
-    let slice = platform.read_value::<u32>(view.wrapping_add(draw::VIEW_SLICE))?;
+    let view = read_pointer(draw_context.wrapping_add(draw::COLOR_VIEWS))?;
+    let slice = read_value::<u32>(view.wrapping_add(draw::VIEW_SLICE))?;
     if (slice >> 4) & 15 != 0 {
         return None;
     }
-    let texture = platform.read_pointer(view.wrapping_add(draw::VIEW_TEXTURE))?;
-    let resource = platform.read_pointer(texture.wrapping_add(draw::TEXTURE_RESOURCE))?;
+    let texture = read_pointer(view.wrapping_add(draw::VIEW_TEXTURE))?;
+    let resource = read_pointer(texture.wrapping_add(draw::TEXTURE_RESOURCE))?;
     Some(BlitTarget {
         commands,
         resource,
@@ -317,13 +307,13 @@ pub(crate) unsafe extern "C" fn rsf_rdr2_blit_detour(
 }
 
 fn completed_scene(image: usize) {
-    let (Some(platform), Some(host)) = (platform::get(), HOST.get()) else {
+    let Some(host) = HOST.get() else {
         return;
     };
     if host.0.render_pass.is_none() {
         return;
     }
-    let Some(target) = blit_target(platform, image) else {
+    let Some(target) = blit_target(image) else {
         return;
     };
     let (chain, mut pass) = {
@@ -347,18 +337,15 @@ fn completed_scene(image: usize) {
     }
     let mut surface = None;
     for index in 0..buffers {
-        let candidate = Retained {
-            platform,
-            object: unsafe { platform::swapchain_buffer(chain, index) },
-        };
-        if !candidate.object.is_null() && candidate.object as usize == target.resource {
+        let candidate = Retained(unsafe { platform::swapchain_buffer(chain, index) });
+        if !candidate.0.is_null() && candidate.0 as usize == target.resource {
             surface = Some(candidate);
             break;
         }
     }
     let Some(surface) = surface else { return };
     let mut facts = ResourceFacts::default();
-    if !unsafe { platform::resource_facts(surface.object, &mut facts) }
+    if !unsafe { platform::resource_facts(surface.0, &mut facts) }
         || facts.width != u64::from(pass.camera.output_width)
         || facts.height != pass.camera.output_height
         || facts.samples != 1
@@ -383,8 +370,8 @@ fn completed_scene(image: usize) {
         pass.source_frame_id = saved.pass.source_frame_id;
     }
     pass.role = RSF_GAME_RENDER_FINAL_SCENE;
-    pass.color_input = surface.object;
-    pass.scene_surface = surface.object;
+    pass.color_input = surface.0;
+    pass.scene_surface = surface.0;
     pass.swapchain = chain;
     pass.window_key = window;
     host.render_pass(target.commands as *mut c_void, &pass, 0);
@@ -401,7 +388,6 @@ pub(crate) struct PresentReceipt {
 }
 
 pub(crate) fn before_present(
-    platform: &Platform,
     chain: *mut c_void,
     flags: u32,
     generation: u32,
@@ -411,14 +397,11 @@ pub(crate) fn before_present(
         return None; // DXGI_PRESENT_TEST does not present a buffer.
     }
     let index = unsafe { platform::back_buffer_index(chain) };
-    let buffer = Retained {
-        platform,
-        object: unsafe { platform::swapchain_buffer(chain, index) },
-    };
-    (!buffer.object.is_null()).then_some(PresentReceipt {
+    let buffer = Retained(unsafe { platform::swapchain_buffer(chain, index) });
+    (!buffer.0.is_null()).then_some(PresentReceipt {
         chain: chain as usize,
         index,
-        surface: buffer.object as usize,
+        surface: buffer.0 as usize,
         generation,
     })
 }
@@ -449,9 +432,7 @@ fn window_pass(
 
 unsafe extern "C" fn marker(kind: u32, frame: u64) -> bool {
     let _scope = Scope::enter(&READERS);
-    let platform = platform::get();
-    let handled =
-        kind <= LAST_MARKER && platform.is_some_and(|platform| latency(platform, kind, frame));
+    let handled = kind <= LAST_MARKER && latency(kind, frame);
     if kind == INPUT_SAMPLE {
         let _ = INPUT_SOURCE.compare_exchange(frame, 0, Ordering::SeqCst, Ordering::SeqCst);
     }
@@ -466,7 +447,7 @@ unsafe extern "C" fn marker(kind: u32, frame: u64) -> bool {
     if kind == PRESENT_END
         && let Some(receipt) = PRESENT_RECEIPT.take()
         && ACTIVE.load(Ordering::SeqCst)
-        && let (Some(platform), Some(host)) = (platform, HOST.get())
+        && let Some(host) = HOST.get()
         && host.0.render_pass.is_some()
     {
         let pass = {
@@ -476,13 +457,10 @@ unsafe extern "C" fn marker(kind: u32, frame: u64) -> bool {
         };
         if let Some(mut pass) = pass {
             let chain = receipt.chain as *mut c_void;
-            let presented = Retained {
-                platform,
-                object: unsafe { platform::swapchain_buffer(chain, receipt.index) },
-            };
-            if presented.object as usize == receipt.surface {
+            let presented = Retained(unsafe { platform::swapchain_buffer(chain, receipt.index) });
+            if presented.0 as usize == receipt.surface {
                 pass.swapchain = chain;
-                pass.scene_surface = presented.object;
+                pass.scene_surface = presented.0;
                 host.render_pass(ptr::null_mut(), &pass, 1);
             }
         }
@@ -533,46 +511,40 @@ fn hooks() -> [Hook; 5] {
     ]
 }
 
-fn bytes_match(platform: &Platform, image: usize) -> bool {
-    let mut texture = [0; NATIVE_TEXTURE.len()];
+fn bytes_match(image: usize) -> bool {
     [&BLIT, &MARKER, &OUTPUT, &SLEEP, &MODE]
         .iter()
-        .all(|site| platform.matches(image.wrapping_add(site.rva), &site.expected))
-        && platform.read_bytes(image.wrapping_add(NATIVE_TEXTURE_RVA), &mut texture)
-        && texture == NATIVE_TEXTURE
+        .all(|site| platform::matches(image.wrapping_add(site.rva), &site.expected))
+        && platform::matches(image.wrapping_add(NATIVE_TEXTURE_RVA), &NATIVE_TEXTURE)
 }
 
-fn output_callers_match(platform: &Platform, image: usize) -> bool {
+fn output_callers_match(image: usize) -> bool {
     OUTPUT_CALLS.iter().all(|&site| {
         let mut call = [0; 5];
-        platform.read_bytes(image.wrapping_add(site), &mut call)
+        read_bytes(image.wrapping_add(site), &mut call)
             && call_target(site, &call) == Some(OUTPUT.rva)
     })
 }
 
-pub(crate) fn prepare(
-    platform: &Platform,
-    image: usize,
-    services: &rsf_game_host_services,
-) -> bool {
+pub(crate) fn prepare(image: usize, services: &rsf_game_host_services) -> bool {
     if PREPARED.load(Ordering::SeqCst) || image == 0 || services.render_pass.is_none() {
         return false;
     }
     IMAGE.store(image, Ordering::SeqCst);
     let host = Host(*services);
-    if !bytes_match(platform, image) {
+    if !bytes_match(image) {
         host.log("RDR2 scene producer refused: native blit/marker/texture bytes differ.");
         return false;
     }
-    if !output_callers_match(platform, image) {
+    if !output_callers_match(image) {
         host.log("RDR2 scene producer refused: postfx output callers differ.");
         return false;
     }
     let hooks = hooks();
     for (index, hook) in hooks.iter().enumerate() {
-        if !platform.create(image.wrapping_add(hook.rva), hook.detour, hook.original) {
+        if !platform::create(image.wrapping_add(hook.rva), hook.detour, hook.original) {
             for created in hooks[..index].iter().rev() {
-                platform.remove(image.wrapping_add(created.rva));
+                platform::remove(image.wrapping_add(created.rva));
             }
             return false;
         }
@@ -584,9 +556,6 @@ pub(crate) fn prepare(
 }
 
 pub(crate) fn start() -> bool {
-    let Some(platform) = platform::get() else {
-        return false;
-    };
     if !PREPARED.load(Ordering::SeqCst) {
         return false;
     }
@@ -595,22 +564,19 @@ pub(crate) fn start() -> bool {
     // The blit is enabled last so a completed scene is never produced without its frame markers.
     let enabled = [OUTPUT.rva, MARKER.rva, SLEEP.rva, MODE.rva, BLIT.rva]
         .iter()
-        .all(|&rva| platform.enable(image.wrapping_add(rva)));
+        .all(|&rva| platform::enable(image.wrapping_add(rva)));
     if enabled {
         return true;
     }
     ACTIVE.store(false, Ordering::SeqCst);
     for rva in [MARKER.rva, OUTPUT.rva, SLEEP.rva, MODE.rva] {
-        platform.disable(image.wrapping_add(rva));
+        platform::disable(image.wrapping_add(rva));
     }
     false
 }
 
 pub(crate) fn quiesce() -> bool {
     ACTIVE.store(false, Ordering::SeqCst);
-    if platform::get().is_none() {
-        return READERS.load(Ordering::SeqCst) == 0;
-    }
     unsafe { platform::input_disable() };
     READERS.load(Ordering::SeqCst) == 0 && unsafe { platform::input_idle() }
 }
@@ -619,9 +585,6 @@ pub(crate) fn stop() -> bool {
     if !PREPARED.load(Ordering::SeqCst) {
         return true;
     }
-    let Some(platform) = platform::get() else {
-        return false;
-    };
     if ACTIVE.load(Ordering::SeqCst) {
         return false;
     }
@@ -631,10 +594,10 @@ pub(crate) fn stop() -> bool {
     let sites =
         [BLIT.rva, MARKER.rva, OUTPUT.rva, SLEEP.rva, MODE.rva].map(|rva| image.wrapping_add(rva));
     if !unsafe { platform::input_unhook() }
-        || !sites.iter().all(|&site| platform.disable(site))
+        || !sites.iter().all(|&site| platform::disable(site))
         || READERS.load(Ordering::SeqCst) != 0
         || !unsafe { platform::input_idle() && platform::input_remove() }
-        || !sites.into_iter().all(|site| platform.remove(site))
+        || !sites.into_iter().all(platform::remove)
     {
         return false;
     }

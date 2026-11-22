@@ -12,7 +12,6 @@ use std::{
 use windows_sys::Win32::System::{
     LibraryLoader::*,
     Memory::{PAGE_READWRITE, VirtualProtect},
-    Performance::{QueryPerformanceCounter, QueryPerformanceFrequency},
 };
 use windows_sys::core::GUID;
 
@@ -340,31 +339,9 @@ pub(crate) unsafe extern "C" fn export_address(module: usize, name: *const c_cha
     }
     unsafe { GetProcAddress(module as _, name.cast()).map_or(0, |entry| entry as usize) }
 }
-pub(crate) unsafe extern "C" fn qpc(now: *mut u64, frequency: *mut u64) {
-    let (mut counter, mut rate) = (0, 0);
-    unsafe {
-        QueryPerformanceCounter(&mut counter);
-        QueryPerformanceFrequency(&mut rate);
-        now.write(counter as u64);
-        frequency.write(rate as u64);
-    }
-}
 pub(crate) unsafe extern "C" fn initialize() -> bool {
-    matches!(unsafe { MH_Initialize() }, 0 | 1)
-}
-pub(crate) unsafe extern "C" fn create(
-    target: usize,
-    detour: *const c_void,
-    original: *mut *mut c_void,
-) -> bool {
-    unsafe { MH_CreateHook(target as _, detour.cast_mut(), original) == 0 }
-}
-pub(crate) unsafe extern "C" fn enable(target: usize) -> bool {
-    unsafe { MH_EnableHook(target as _) == 0 }
-}
-pub(crate) unsafe extern "C" fn disable(target: usize) -> bool {
-    matches!(unsafe { MH_DisableHook(target as _) }, 0 | 4 | 6)
-}
-pub(crate) unsafe extern "C" fn remove(target: usize) -> bool {
-    matches!(unsafe { MH_RemoveHook(target as _) }, 0 | 4)
+    matches!(
+        unsafe { MH_Initialize() },
+        MH_OK | MH_ERROR_ALREADY_INITIALIZED
+    )
 }

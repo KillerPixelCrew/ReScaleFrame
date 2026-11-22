@@ -4,13 +4,15 @@
 //! carrier, the native marker mode stays on, and a saved refresh rate stays storable. RSF's quality
 //! preference arrives from the ScriptHook fiber and is applied through the engine's own graphics
 //! reconfiguration. RSF settings and other graphics settings are never changed here.
-use crate::asi::{self, AsiPlatform, MH_ERROR_ALREADY_INITIALIZED, MH_OK};
+use crate::asi;
 use crate::layout::asi::{self as site, collection, manager};
-use crate::platform::trampoline;
-use rsf_game_sys::rsf_game_log_fn;
-use std::ffi::{c_char, c_void};
+use crate::platform::{self, trampoline};
+use crate::runtime_worker::log as write_log;
+use rsf_minhook_sys::{MH_ApplyQueued, MH_OK, MH_QueueEnableHook};
+use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 
 pub(crate) const NVIDIA: u32 = 0x10de;
 /// DLSS renderer modes per RSF quality (Native, Quality, Balanced, Performance, Ultra Performance).
@@ -126,7 +128,6 @@ type MethodFn = unsafe extern "C" fn(*mut c_void);
 type OptimalFn = unsafe extern "C" fn(*const u32, *mut c_void);
 type DimensionsFn = unsafe extern "C" fn(*mut u32, *mut u32, u32, u32, u32);
 type RefreshFn = unsafe extern "C" fn();
-type LogFn = unsafe extern "C" fn(*mut c_void, *const c_char);
 
 static ORIGINAL_COPY: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 static ORIGINAL_LOAD: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
@@ -147,26 +148,21 @@ static REFRESH_FIXES: AtomicU32 = AtomicU32::new(0);
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 /// Set once by the first quality tick that pinned the pending owner.
 static PENDING_INITIALIZED: AtomicBool = AtomicBool::new(false);
-static LOGGER: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
-static LOGGER_USER: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
+/// Set once the worker opened the ASI log; hooks run under the loader lock before that.
+static LOGGING: AtomicBool = AtomicBool::new(false);
 
 fn requested_quality() -> u32 {
     SELECTION.load(Ordering::SeqCst) as u32
 }
 
-/// Logs through the ASI writer once the worker announced it, outside the loader lock.
 fn log(message: &str) {
-    let pointer = LOGGER.load(Ordering::Acquire);
-    if pointer.is_null() {
-        return;
+    if LOGGING.load(Ordering::Acquire) {
+        write_log(message);
     }
-    // LOGGER only ever holds a `LogFn` stored by `rsf_rdr2_report_engine_settings`.
-    let log = unsafe { std::mem::transmute::<*mut c_void, LogFn>(pointer) };
-    rsf_game_sys::log_guarded(Some(log), LOGGER_USER.load(Ordering::Acquire), message);
 }
 
 fn logging() -> bool {
-    !LOGGER.load(Ordering::Acquire).is_null()
+    LOGGING.load(Ordering::Acquire)
 }
 
 /// # Safety
@@ -194,13 +190,7 @@ type Collection = [u8; collection::BYTES];
 
 fn snapshot(object: *mut u8) -> Option<Collection> {
     let mut current = [0; collection::BYTES];
-    if !unsafe {
-        crate::platform::read_process_memory(
-            object as usize,
-            current.as_mut_ptr().cast(),
-            current.len(),
-        )
-    } {
+    if !platform::read_bytes(object as usize, &mut current) {
         return None;
     }
     let version = u16::from_le_bytes([
@@ -223,10 +213,6 @@ fn collection_vendor(current: &Collection) -> u32 {
 /// # Safety
 /// `object` points at a live settings collection of at least `collection::BYTES`.
 unsafe fn own(object: *mut u8) {
-    if asi::platform().is_none() {
-        FAILURES.fetch_add(1, Ordering::SeqCst);
-        return;
-    }
     let Some(current) = snapshot(object) else {
         FAILURES.fetch_add(1, Ordering::SeqCst);
         return;
@@ -385,9 +371,6 @@ unsafe extern "C" fn refresh_dimensions() {
     if let Some(native) = unsafe { trampoline::<RefreshFn>(&ORIGINAL_REFRESH) } {
         unsafe { native() };
     }
-    if asi::platform().is_none() {
-        return;
-    }
     if !logging() {
         return;
     }
@@ -398,7 +381,7 @@ unsafe extern "C" fn refresh_dimensions() {
             image.add(site::RENDER_OUTPUT),
         )
     };
-    let thread = unsafe { asi::current_thread() };
+    let thread = unsafe { GetCurrentThreadId() };
     let message = unsafe {
         format!(
             "RDR2 renderer dimensions refreshed: quality={} input={}x{} output={}x{} thread={thread}.",
@@ -484,9 +467,7 @@ unsafe fn pin_pending(manager_object: *mut c_void, quality: u32) -> bool {
 unsafe extern "C" fn reconfigure(manager_object: *mut c_void) {
     // Also covers stock Apply: native Off or another native quality cannot replace the RSF
     // carrier when the game consumes its pending settings.
-    let pinned =
-        asi::platform().is_some() && unsafe { pin_pending(manager_object, requested_quality()) };
-    if !pinned {
+    if !unsafe { pin_pending(manager_object, requested_quality()) } {
         FAILURES.fetch_add(1, Ordering::SeqCst);
     }
     if let Some(native) = unsafe { trampoline::<MethodFn>(&ORIGINAL_RECONFIGURE) } {
@@ -502,7 +483,7 @@ struct Hook {
 
 /// Installs the seven settings hooks after exact-image decryption, before native settings load.
 /// Every entry and engine function is checked first; any refusal leaves no hook behind.
-pub(crate) fn install(platform: &AsiPlatform, configured_quality: u32) -> bool {
+pub(crate) fn install(configured_quality: u32) -> bool {
     if INSTALLED.load(Ordering::SeqCst) {
         return true;
     }
@@ -515,7 +496,7 @@ pub(crate) fn install(platform: &AsiPlatform, configured_quality: u32) -> bool {
         ((u32::MAX as u64) << 32) | u64::from(quality),
         Ordering::SeqCst,
     );
-    let image = unsafe { asi::main_module() };
+    let image = unsafe { platform::main_module() };
     IMAGE.store(image, Ordering::Release);
     let hooks = [
         Hook {
@@ -556,44 +537,41 @@ pub(crate) fn install(platform: &AsiPlatform, configured_quality: u32) -> bool {
     ];
     if !hooks
         .iter()
-        .all(|hook| platform.matches(image + hook.site.rva, &hook.site.expected))
+        .all(|hook| platform::matches(image + hook.site.rva, &hook.site.expected))
     {
         return false;
     }
     if ![site::MANAGER, site::OWNER, site::FIND]
         .iter()
-        .all(|function| platform.matches(image + function.rva, function.expected))
+        .all(|function| platform::matches(image + function.rva, function.expected))
     {
         return false;
     }
-    let initialized = unsafe { asi::hook_initialize() };
-    if initialized != MH_OK && initialized != MH_ERROR_ALREADY_INITIALIZED {
+    if !unsafe { platform::hook_initialize() } {
         return false;
     }
     let remove = |hooks: &[Hook]| {
         for hook in hooks {
-            unsafe { asi::hook_remove(image + hook.site.rva) };
+            platform::remove(image + hook.site.rva);
         }
     };
     for (created, hook) in hooks.iter().enumerate() {
-        let mut native = ptr::null_mut();
-        if unsafe { asi::hook_create(image + hook.site.rva, hook.detour, &mut native) } != MH_OK {
+        if !platform::create(image + hook.site.rva, hook.detour, hook.original) {
             remove(&hooks[..created]);
             return false;
         }
-        hook.original.store(native, Ordering::Release);
     }
     if hooks
         .iter()
-        .any(|hook| unsafe { asi::hook_queue_enable(image + hook.site.rva) } != MH_OK)
+        .any(|hook| unsafe { MH_QueueEnableHook((image + hook.site.rva) as _) } != MH_OK)
     {
         remove(&hooks[..]);
         return false;
     }
-    let installed = unsafe { asi::hook_apply_queued() } == MH_OK;
+    let installed = unsafe { MH_ApplyQueued() } == MH_OK;
     if !installed {
         for hook in &hooks {
-            unsafe { asi::hook_disable(image + hook.site.rva) };
+            platform::disable(image + hook.site.rva);
         }
         remove(&hooks[..]);
     }
@@ -603,12 +581,8 @@ pub(crate) fn install(platform: &AsiPlatform, configured_quality: u32) -> bool {
 
 /// RSF's quality preference from the registered ScriptHook game fiber, never the presentation or
 /// job workers. A change pins the pending owner and requests the engine's own reconfiguration.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_rdr2_engine_quality_tick(quality: u32) {
+pub(crate) unsafe fn quality_tick(quality: u32) {
     if !INSTALLED.load(Ordering::SeqCst) || quality > QUALITY_LIMIT {
-        return;
-    }
-    if asi::platform().is_none() {
         return;
     }
     let changed = requested_quality() != quality;
@@ -651,15 +625,9 @@ pub(crate) unsafe extern "C" fn rsf_rdr2_engine_quality_tick(quality: u32) {
     }
 }
 
-/// Announces the ownership state and keeps `log` for later engine-settings messages.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_rdr2_report_engine_settings(
-    log_fn: rsf_game_log_fn,
-    user: *mut c_void,
-) {
-    let Some(writer) = log_fn else { return };
-    LOGGER_USER.store(user, Ordering::Release);
-    LOGGER.store(writer as *mut c_void, Ordering::Release);
+/// Announces the ownership state and opens the log for later engine-settings messages.
+pub(crate) fn report() {
+    LOGGING.store(true, Ordering::Release);
     let cached = ADAPTER.load(Ordering::SeqCst);
     log(&format!(
         "RDR2 engine settings ownership {}: copy+{:x}/load+{:x}/apply+{:x}; adapter={} vendor={:x} overrides={} refused={}; RSF overlay owns SR/latency.",
@@ -676,42 +644,6 @@ pub(crate) unsafe extern "C" fn rsf_rdr2_report_engine_settings(
         OVERRIDES.load(Ordering::SeqCst),
         FAILURES.load(Ordering::SeqCst),
     ));
-}
-
-/// C ABI of the pure policy for the native engine-settings fixture.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_dlss_choice_abi(modes: *const u32, count: u32, quality: u32) -> u32 {
-    if modes.is_null() || count == 0 || count as usize > manager::DLSS_CHOICE_LIMIT {
-        return u32::MAX;
-    }
-    let modes = unsafe { std::slice::from_raw_parts(modes, count as usize) };
-    dlss_choice(modes, quality).unwrap_or(u32::MAX)
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_pin_engine_settings_abi(
-    collection: *mut c_void,
-    bytes: usize,
-    vendor: u32,
-    quality: u32,
-) -> bool {
-    if collection.is_null() {
-        return false;
-    }
-    let collection = unsafe { std::slice::from_raw_parts_mut(collection.cast::<u8>(), bytes) };
-    pin(collection, vendor, quality)
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_storable_refresh_abi(
-    numerator: *mut u32,
-    denominator: *mut u32,
-    desktop_hz: u32,
-) -> bool {
-    if numerator.is_null() || denominator.is_null() {
-        return false;
-    }
-    unsafe { storable_refresh(&mut *numerator, &mut *denominator, desktop_hz) }
 }
 
 #[cfg(test)]

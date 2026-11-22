@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Optional ScriptHook input guard and engine settings poll on the registered game fiber.
 use crate::OK;
-use crate::engine_settings::rsf_rdr2_engine_quality_tick;
+use crate::engine_settings::quality_tick;
 use crate::runtime_worker::{append_path, log};
 use crate::sys::{RSF_RENDER_FRONTEND_ABI_VERSION, rsf_render_settings};
 use rsf_game_sys::win32::typed_export;
@@ -104,7 +104,7 @@ extern "C" fn script() {
             preferences.struct_size = size_of::<rsf_render_settings>() as u32;
             preferences.abi_version = RSF_RENDER_FRONTEND_ABI_VERSION;
             if unsafe { settings_get(&mut preferences) } == OK {
-                unsafe { rsf_rdr2_engine_quality_tick(preferences.sr_quality) };
+                unsafe { quality_tick(preferences.sr_quality) };
             }
         }
         if foreground_owned() {

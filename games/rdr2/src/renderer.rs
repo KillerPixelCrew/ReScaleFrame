@@ -11,7 +11,8 @@ use crate::layout::{
     view,
 };
 use crate::platform::{
-    self, ImageFacts, Platform, ResourceFacts, Scope, image_facts, lock, trampoline,
+    self, ImageFacts, ResourceFacts, Scope, image_facts, lock, matches, read_bytes, read_pointer,
+    read_value, trampoline,
 };
 use crate::scene;
 use crate::{BUSY, NATIVE_REFUSED, NOT_READY, OK};
@@ -205,8 +206,7 @@ impl FsrDescription {
     }
 }
 
-struct Context<'a> {
-    platform: &'a Platform,
+struct Context {
     host: Host,
     image: usize,
 }
@@ -273,33 +273,29 @@ fn unsupported(request: &Request, d: &Evaluation) -> bool {
 
 /// The worker view, native frame and frame time, when the NGX feature was created depth-inverted.
 fn sample(ctx: &Context, flags: u32, camera: &mut [u8; view::BYTES]) -> Option<(usize, u64, f32)> {
-    let (view_address, frame) = scene::render_block(ctx.platform, ctx.image, block::VIEW)?;
-    if !ctx.platform.read_bytes(view_address, camera) {
+    let (view_address, frame) = scene::render_block(ctx.image, block::VIEW)?;
+    if !read_bytes(view_address, camera) {
         return None;
     }
-    let dt = ctx
-        .platform
-        .read_value::<f32>(ctx.image.wrapping_add(FRAME_TIME))?;
+    let dt = read_value::<f32>(ctx.image.wrapping_add(FRAME_TIME))?;
     let valid = dt.is_finite() && dt > 0.0 && dt <= 1.0 && flags & NGX_DEPTH_INVERTED != 0;
     valid.then_some((view_address, frame, dt))
 }
 
 fn process(ctx: &Context, request: &Request, d: &Evaluation, history: &mut History) -> bool {
     let host = &ctx.host;
-    let (Some(process_upscale), true) = (host.0.process_upscale, host.0.submit.is_some()) else {
+    let process_upscale = host
+        .0
+        .process_upscale
+        .filter(|_| host.0.submit.is_some() && ACTIVE.load(Ordering::SeqCst))
+        .filter(|_| !unsupported(request, d));
+    let Some(process_upscale) = process_upscale else {
         return refusal(
             host,
             RSF_GAME_RENDER_FEEDBACK_INPUT_UNSUPPORTED,
             "RDR2 SR native fallback: unsupported evaluation descriptor or inactive host.",
         );
     };
-    if !ACTIVE.load(Ordering::SeqCst) || unsupported(request, d) {
-        return refusal(
-            host,
-            RSF_GAME_RENDER_FEEDBACK_INPUT_UNSUPPORTED,
-            "RDR2 SR native fallback: unsupported evaluation descriptor or inactive host.",
-        );
-    }
     if d.origins.iter().any(|&origin| origin != 0) {
         return refusal(
             host,
@@ -307,7 +303,7 @@ fn process(ctx: &Context, request: &Request, d: &Evaluation, history: &mut Histo
             "RDR2 SR native fallback: nonzero input/output subrect origin.",
         );
     }
-    let active_swapchain = ctx.platform.read_pointer(ctx.image.wrapping_add(SWAPCHAIN));
+    let active_swapchain = read_pointer(ctx.image.wrapping_add(SWAPCHAIN));
     let generation = {
         let observers = lock(&OBSERVERS);
         (active_swapchain == Some(observers.swapchain.active) && observers.ready())
@@ -417,7 +413,6 @@ fn sr_pass(
     pass.pass_key = frame;
     pass.native_frame = frame;
     pass.scope_id = view_address as u64;
-    pass.resource_generation = 1;
     pass.flags = RSF_GAME_RENDER_PRIMARY | if reset { RSF_GAME_RENDER_RESET } else { 0 };
     pass.render_rect[2] = d.width as i32;
     pass.render_rect[3] = d.height as i32;
@@ -449,9 +444,9 @@ fn sr_pass(
 }
 
 /// The installed NGX parameter interface's `GetI` for the feature's creation flags.
-fn feature_flags(platform: &Platform, parameters: *mut c_void) -> Option<u32> {
-    let table = platform.read_pointer(parameters as usize)?;
-    let entry = platform.read_pointer(table.wrapping_add(NGX_GET_INT_SLOT * size_of::<usize>()))?;
+fn feature_flags(parameters: *mut c_void) -> Option<u32> {
+    let table = read_pointer(parameters as usize)?;
+    let entry = read_pointer(table.wrapping_add(NGX_GET_INT_SLOT * size_of::<usize>()))?;
     if entry == 0 {
         return None;
     }
@@ -462,9 +457,8 @@ fn feature_flags(platform: &Platform, parameters: *mut c_void) -> Option<u32> {
     (result == NGX_SUCCESS).then_some(value as u32)
 }
 
-fn context(platform: &'static Platform) -> Option<Context<'static>> {
+fn context() -> Option<Context> {
     Some(Context {
-        platform,
         host: HOST.get()?,
         image: IMAGE.load(Ordering::SeqCst),
     })
@@ -480,7 +474,7 @@ unsafe extern "C" fn evaluate(
     let Some(native) = (unsafe { trampoline::<EvaluateFn>(&ORIGINAL_EVALUATE) }) else {
         return NGX_FAIL;
     };
-    let ctx = platform::get().and_then(context);
+    let ctx = context();
     let mut descriptor = Evaluation::default();
     let copied = ctx.is_some() && {
         !pointer.is_null()
@@ -497,7 +491,7 @@ unsafe extern "C" fn evaluate(
     };
     let mut histories = lock(&EVALUATIONS);
     let history = histories.entry(feature as usize).or_default();
-    let request = feature_flags(ctx.platform, parameters).map(|flags| Request {
+    let request = feature_flags(parameters).map(|flags| Request {
         list,
         feature: feature as usize,
         flags,
@@ -564,7 +558,7 @@ pub(crate) unsafe extern "C" fn rsf_rdr2_fsr_dispatch_detour(
     let Some(native) = (unsafe { trampoline::<FsrDispatchFn>(&ORIGINAL_FSR) }) else {
         return NO_TRAMPOLINE;
     };
-    let Some(ctx) = platform::get().and_then(context) else {
+    let Some(ctx) = context() else {
         return unsafe { native(context_pointer, pointer) };
     };
     report_fsr_caller(&ctx, caller);
@@ -573,7 +567,7 @@ pub(crate) unsafe extern "C" fn rsf_rdr2_fsr_dispatch_detour(
         return unsafe { native(context_pointer, pointer) };
     };
     let mut copy = FsrDescription([0; fsr::FULL_DESCRIPTION_BYTES]);
-    let copied = ctx.platform.read_bytes(pointer as usize, &mut copy.0);
+    let copied = read_bytes(pointer as usize, &mut copy.0);
     if copied && let Some(flags) = feature.flags {
         let prefix = copy.0[..fsr::DESCRIPTION_BYTES]
             .try_into()
@@ -615,8 +609,7 @@ unsafe extern "C" fn fsr_create(context_pointer: *mut c_void, description: *cons
     let _callback = Scope::enter(&CALLBACKS);
     let key = context_pointer as usize;
     lock(&FSR_CONTEXTS).remove(&key);
-    let fields =
-        platform::get().and_then(|platform| platform.read_value::<[u32; 5]>(description as usize));
+    let fields = read_value::<[u32; 5]>(description as usize);
     let result = match unsafe { trampoline::<FsrCreateFn>(&ORIGINAL_FSR_CREATE) } {
         Some(native) => unsafe { native(context_pointer, description) },
         None => NO_TRAMPOLINE,
@@ -701,9 +694,9 @@ unsafe extern "system" fn present(owner: *mut c_void, interval: u32, flags: u32)
     if let Some((user, present)) = report {
         unsafe { present(user, owner, interval, flags, 1) };
     }
-    let receipt = platform::get()
-        .filter(|_| active)
-        .and_then(|platform| scene::before_present(platform, owner, flags, generation));
+    let receipt = active
+        .then(|| scene::before_present(owner, flags, generation))
+        .flatten();
     let result = unsafe { native(owner, interval, flags) };
     let observed = {
         let mut observers = lock(&OBSERVERS);
@@ -754,13 +747,10 @@ pub(crate) unsafe extern "C" fn rsf_rdr2_pop_detour(
     };
     if game_submit
         && ACTIVE.load(Ordering::SeqCst)
-        && let Some(ctx) = platform::get().and_then(context)
+        && let Some(ctx) = context()
     {
-        let queue = ctx.platform.read_pointer(record as usize).unwrap_or(0);
-        let swapchain = ctx
-            .platform
-            .read_pointer(image.wrapping_add(SWAPCHAIN))
-            .unwrap_or(0);
+        let queue = read_pointer(record as usize).unwrap_or(0);
+        let swapchain = read_pointer(image.wrapping_add(SWAPCHAIN)).unwrap_or(0);
         select_observers(&ctx.host, queue, swapchain);
     }
     result
@@ -768,7 +758,7 @@ pub(crate) unsafe extern "C" fn rsf_rdr2_pop_detour(
 
 /// The FSR2 dispatch export, or the reason the route is refused. A refusal leaves native FSR2
 /// untouched; the route is independent of the DLSS route.
-fn find_fsr_export(platform: &Platform, host: &Host, image: usize) -> Result<usize, &'static str> {
+fn find_fsr_export(host: &Host, image: usize) -> Result<usize, &'static str> {
     let module = unsafe { platform::module_handle(fsr::MODULE.as_ptr()) };
     if module == 0 {
         return Err("ffx_fsr2_api_x64.dll is not loaded");
@@ -783,19 +773,17 @@ fn find_fsr_export(platform: &Platform, host: &Host, image: usize) -> Result<usi
         );
     }
     let entry = unsafe { platform::export_address(module, fsr::DISPATCH.as_ptr()) };
-    if entry != module.wrapping_add(fsr::DISPATCH_RVA)
-        || !platform.matches(entry, &fsr::DISPATCH_BYTES)
-    {
+    if entry != module.wrapping_add(fsr::DISPATCH_RVA) || !matches(entry, &fsr::DISPATCH_BYTES) {
         return Err("ffxFsr2ContextDispatch is not at +3c70 with the expected entry bytes");
     }
     let create = unsafe { platform::export_address(module, fsr::CREATE.as_ptr()) };
     if create == module.wrapping_add(fsr::CREATE_RVA)
-        && platform.matches(create, &fsr::CREATE_BYTES)
-        && platform.create(create, fsr_create as *const c_void, &ORIGINAL_FSR_CREATE)
+        && matches(create, &fsr::CREATE_BYTES)
+        && platform::create(create, fsr_create as *const c_void, &ORIGINAL_FSR_CREATE)
     {
         FSR_CREATE_EXPORT.store(create, Ordering::SeqCst);
     }
-    let resolves = platform.read_pointer(image.wrapping_add(FSR_IMPORT)) == Some(entry);
+    let resolves = read_pointer(image.wrapping_add(FSR_IMPORT)) == Some(entry);
     host.log(&format!(
         "RDR2 FSR2 import slot +6032a98 {} ffx_fsr2_api_x64.dll!ffxFsr2ContextDispatch.",
         if resolves {
@@ -815,9 +803,6 @@ pub(crate) fn prepare(services: &rsf_game_host_services) -> i32 {
     {
         return NOT_READY;
     }
-    let Some(platform) = platform::get() else {
-        return NOT_READY;
-    };
     let image = unsafe { platform::main_module() };
     IMAGE.store(image, Ordering::SeqCst);
     let expected = ImageFacts {
@@ -827,8 +812,8 @@ pub(crate) fn prepare(services: &rsf_game_host_services) -> i32 {
     if image_facts(image) != Some(expected) {
         return NOT_READY;
     }
-    if !platform.matches(image.wrapping_add(EVALUATE.rva), &EVALUATE.expected)
-        || !platform.matches(image.wrapping_add(POP.rva), &POP.expected)
+    if !matches(image.wrapping_add(EVALUATE.rva), &EVALUATE.expected)
+        || !matches(image.wrapping_add(POP.rva), &POP.expected)
     {
         return NATIVE_REFUSED;
     }
@@ -837,25 +822,25 @@ pub(crate) fn prepare(services: &rsf_game_host_services) -> i32 {
     }
     let host = Host(*services);
     let evaluate_site = image.wrapping_add(EVALUATE.rva);
-    if !platform.create(evaluate_site, evaluate as *const c_void, &ORIGINAL_EVALUATE) {
+    if !platform::create(evaluate_site, evaluate as *const c_void, &ORIGINAL_EVALUATE) {
         return NATIVE_REFUSED;
     }
-    if !platform.create(
+    if !platform::create(
         image.wrapping_add(POP.rva),
         platform::pop_detour as *const c_void,
         &ORIGINAL_POP,
     ) {
-        platform.remove(evaluate_site);
+        platform::remove(evaluate_site);
         return NATIVE_REFUSED;
     }
     HOST.set(Some(*services));
     PREPARED.store(true, Ordering::SeqCst);
-    if !scene::prepare(platform, image, services) {
+    if !scene::prepare(image, services) {
         host.log("RDR2 completed-scene producer unavailable; SR remains available.");
     }
-    let refused = match find_fsr_export(platform, &host, image) {
+    let refused = match find_fsr_export(&host, image) {
         Ok(entry)
-            if platform.create(
+            if platform::create(
                 entry,
                 platform::fsr_dispatch_detour as *const c_void,
                 &ORIGINAL_FSR,
@@ -877,21 +862,18 @@ pub(crate) fn prepare(services: &rsf_game_host_services) -> i32 {
 }
 
 pub(crate) fn start() -> i32 {
-    let Some(platform) = platform::get() else {
-        return NOT_READY;
-    };
     if !PREPARED.load(Ordering::SeqCst) {
         return NOT_READY;
     }
     let image = IMAGE.load(Ordering::SeqCst);
     let pop_site = image.wrapping_add(POP.rva);
-    if !platform.enable(pop_site) {
+    if !platform::enable(pop_site) {
         return NATIVE_REFUSED;
     }
     ACTIVE.store(true, Ordering::SeqCst);
-    if !platform.enable(image.wrapping_add(EVALUATE.rva)) {
+    if !platform::enable(image.wrapping_add(EVALUATE.rva)) {
         ACTIVE.store(false, Ordering::SeqCst);
-        platform.disable(pop_site);
+        platform::disable(pop_site);
         return NATIVE_REFUSED;
     }
     let host = HOST.get();
@@ -904,8 +886,8 @@ pub(crate) fn start() -> i32 {
     let fsr_create_export = FSR_CREATE_EXPORT.load(Ordering::SeqCst);
     let fsr = fsr_export != 0
         && fsr_create_export != 0
-        && platform.enable(fsr_create_export)
-        && platform.enable(fsr_export);
+        && platform::enable(fsr_create_export)
+        && platform::enable(fsr_export);
     if fsr_export != 0 && !fsr {
         log(
             "RDR2 FSR2 input route refused: export detour could not be enabled. Native FSR2 is retained.",
@@ -939,9 +921,6 @@ pub(crate) fn stop() -> i32 {
     if !PREPARED.load(Ordering::SeqCst) {
         return OK;
     }
-    let Some(platform) = platform::get() else {
-        return BUSY;
-    };
     {
         // A live observer table pins the module; process teardown owns it.
         let observers = lock(&OBSERVERS);
@@ -963,9 +942,9 @@ pub(crate) fn stop() -> i32 {
     ]
     .into_iter()
     .filter(|&site| site != 0);
-    if !sites.clone().all(|site| platform.disable(site))
+    if !sites.clone().all(platform::disable)
         || CALLBACKS.load(Ordering::SeqCst) != 0
-        || !sites.all(|site| platform.remove(site))
+        || !sites.all(platform::remove)
     {
         return BUSY;
     }

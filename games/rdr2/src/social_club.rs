@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! Keep RAGE's supplied backbuffer index when Social Club records into RAGE's command list.
 //! The guarded renderer bytes and continuation addresses are from rdr2-renderer.md.
-use crate::asi::{self, AsiPlatform, MH_ERROR_ALREADY_INITIALIZED, MH_OK};
+use crate::asi::status_text;
 use crate::layout::{asi::SOCIAL_CLUB_DISPATCHER, social_club as profile};
-use crate::platform::{lock, trampoline};
+use crate::platform::{self, lock, read_value, trampoline};
 use crate::runtime_worker::log;
-use rsf_minhook_sys::MH_EnableHook;
+use rsf_minhook_sys::{
+    MH_CreateHook, MH_ERROR_ENABLED, MH_ERROR_MEMORY_PROTECT, MH_EnableHook, MH_OK,
+};
 use std::ffi::c_void;
 use std::ptr::{self, null, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
@@ -21,38 +23,29 @@ use windows_sys::Win32::System::Memory::{
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 use windows_sys::core::w;
 
-// The native leaf asserts these status values against the pinned MinHook header.
-#[cfg_attr(test, allow(dead_code))]
-const MH_ERROR_ENABLED: i32 = 5;
-#[cfg_attr(test, allow(dead_code))]
-const MH_ERROR_MEMORY_PROTECT: i32 = 10;
-
-#[cfg_attr(test, allow(dead_code))]
 type CurrentIndex = unsafe extern "C" fn(*mut c_void, *mut u32) -> bool;
-#[cfg_attr(test, allow(dead_code))]
 type Dispatch = unsafe extern "C" fn(*mut c_void) -> usize;
-#[cfg_attr(test, allow(dead_code))]
 type Render =
     unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut c_void, u32) -> usize;
 
-#[cfg_attr(test, allow(dead_code))]
 struct Options {
     current_index: CurrentIndex,
     trace: bool,
 }
 
-#[cfg_attr(test, allow(dead_code))]
 static ORIGINAL_DISPATCH: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
-#[cfg_attr(test, allow(dead_code))]
 static ORIGINAL_RENDER: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+static OPTIONS: OnceLock<Options> = OnceLock::new();
+static ATTEMPTED: Mutex<bool> = Mutex::new(false);
+static REPAIRED: AtomicBool = AtomicBool::new(false);
+static OBSERVED: AtomicU32 = AtomicU32::new(0);
+static MISMATCHED: AtomicU32 = AtomicU32::new(0);
 
-#[cfg_attr(test, allow(dead_code))]
 unsafe extern "C" fn dispatch(context: *mut c_void) -> usize {
     observe_dispatch();
     unsafe { trampoline::<Dispatch>(&ORIGINAL_DISPATCH).map_or(0, |native| native(context)) }
 }
 
-#[cfg_attr(test, allow(dead_code))]
 unsafe extern "C" fn trace_render(
     renderer: *mut c_void,
     draws: *mut c_void,
@@ -67,45 +60,25 @@ unsafe extern "C" fn trace_render(
     }
 }
 
-#[cfg_attr(test, allow(dead_code))]
+/// Publishes the trampoline inside MH_CreateHook, before a separate census caller can enable it.
 fn create(target: usize, detour: *const c_void, original: &AtomicPtr<c_void>) -> i32 {
-    // Publish the trampoline inside MH_CreateHook before a separate census caller can enable it.
-    unsafe { asi::hook_create(target, detour, original.as_ptr()) }
+    unsafe { MH_CreateHook(target as _, detour.cast_mut(), original.as_ptr()) }
 }
 
-#[cfg_attr(test, allow(dead_code))]
 fn enable(target: usize) -> i32 {
-    unsafe { MH_EnableHook(target as *mut c_void) }
+    unsafe { MH_EnableHook(target as _) }
 }
 
-#[cfg_attr(test, allow(dead_code))]
-static OPTIONS: OnceLock<Options> = OnceLock::new();
-#[cfg_attr(test, allow(dead_code))]
-static ATTEMPTED: Mutex<bool> = Mutex::new(false);
-#[cfg_attr(test, allow(dead_code))]
-static REPAIRED: AtomicBool = AtomicBool::new(false);
-#[cfg_attr(test, allow(dead_code))]
-static OBSERVED: AtomicU32 = AtomicU32::new(0);
-#[cfg_attr(test, allow(dead_code))]
-static MISMATCHED: AtomicU32 = AtomicU32::new(0);
-
-#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn install(current_index: CurrentIndex, trace: bool) -> bool {
-    let Some(asi) = asi::platform() else {
-        return false;
-    };
-    let image = unsafe { asi::main_module() };
+    let image = unsafe { platform::main_module() };
     let Some(site) = image
         .checked_add(SOCIAL_CLUB_DISPATCHER as usize)
         .filter(|_| image != 0)
     else {
         return false;
     };
-    if !asi.matches(site, &profile::DISPATCH_BYTES) {
-        return false;
-    }
-    let initialized = unsafe { asi::hook_initialize() };
-    if initialized != MH_OK && initialized != MH_ERROR_ALREADY_INITIALIZED {
+    if !platform::matches(site, &profile::DISPATCH_BYTES) || !unsafe { platform::hook_initialize() }
+    {
         return false;
     }
     if OPTIONS
@@ -120,17 +93,13 @@ pub(crate) fn install(current_index: CurrentIndex, trace: bool) -> bool {
     create(site, dispatch as *const c_void, &ORIGINAL_DISPATCH) == MH_OK && enable(site) == MH_OK
 }
 
-#[cfg_attr(test, allow(dead_code))]
-fn renderer_matches(asi: &AsiPlatform, base: usize) -> bool {
-    asi::pe_header(base).is_some_and(|(_, signature, timestamp, size)| {
-        signature == asi::PE_SIGNATURE
-            && timestamp == profile::IMAGE_TIMESTAMP
-            && size == profile::IMAGE_SIZE
-    }) && asi.matches(base + profile::GATE, &profile::GATE_BYTES)
-        && asi.matches(base + profile::ENTRY, &profile::ENTRY_BYTES)
+fn renderer_matches(base: usize) -> bool {
+    platform::image_facts(base).is_some_and(|facts| {
+        facts.timestamp == profile::IMAGE_TIMESTAMP && facts.image_size == profile::IMAGE_SIZE
+    }) && platform::matches(base + profile::GATE, &profile::GATE_BYTES)
+        && platform::matches(base + profile::ENTRY, &profile::ENTRY_BYTES)
 }
 
-#[cfg_attr(test, allow(dead_code))]
 fn relay(base: usize) -> [u8; 43] {
     let mut code = profile::RELAY;
     let continuation = ((base + profile::AFTER_COMPARISON) as u64).to_le_bytes();
@@ -139,9 +108,8 @@ fn relay(base: usize) -> [u8; 43] {
     code
 }
 
-#[cfg_attr(test, allow(dead_code))]
 fn observe_dispatch() {
-    let (Some(asi), Some(options)) = (asi::platform(), OPTIONS.get()) else {
+    let Some(options) = OPTIONS.get() else {
         return;
     };
     let mut attempted = lock(&ATTEMPTED);
@@ -161,7 +129,7 @@ fn observe_dispatch() {
     }
     *attempted = true;
     let base = module as usize;
-    if !renderer_matches(asi, base) {
+    if !renderer_matches(base) {
         log(
             "Social Club backbuffer fix refused: unsupported renderer image or modified instructions.",
         );
@@ -185,7 +153,7 @@ fn observe_dispatch() {
     let mut status = MH_ERROR_MEMORY_PROTECT;
     let mut registered = false;
     if published {
-        status = unsafe { asi::hook_create(target, page, null_mut()) };
+        status = unsafe { MH_CreateHook(target as _, page, null_mut()) };
         if status == MH_OK {
             registered = true;
             status = enable(target);
@@ -195,14 +163,14 @@ fn observe_dispatch() {
     REPAIRED.store(repaired, Ordering::Release);
     log(format!(
         "Social Club backbuffer fix at renderer RVA 0x4b89: {}",
-        asi.status_text(status)
+        status_text(status)
     ));
     if !repaired {
         if registered {
             // Census can enable hooks concurrently. A registered gate remains process-lived
             // after a refused enable so an already entered callback cannot jump to freed code.
-            unsafe { asi::hook_disable(target) };
-            unsafe { asi::hook_remove(target) };
+            platform::disable(target);
+            platform::remove(target);
         } else {
             unsafe { VirtualFree(page, 0, MEM_RELEASE) };
         }
@@ -214,28 +182,19 @@ fn observe_dispatch() {
         if status == MH_OK {
             status = enable(target);
         }
-        log(format!(
-            "Social Club frame trace: {}",
-            asi.status_text(status)
-        ));
+        log(format!("Social Club frame trace: {}", status_text(status)));
     }
 }
 
-#[cfg_attr(test, allow(dead_code))]
 fn observe_trace(renderer: *const c_void, list: *const c_void, index: u32) {
-    let (Some(asi), Some(options)) = (asi::platform(), OPTIONS.get()) else {
+    let Some(options) = OPTIONS.get() else {
         return;
     };
     let renderer = renderer as usize;
-    let swapchain = asi
-        .read_value::<usize>(renderer.wrapping_add(profile::SWAPCHAIN))
-        .unwrap_or(0);
+    let swapchain = read_value::<usize>(renderer.wrapping_add(profile::SWAPCHAIN)).unwrap_or(0);
     let mut current = index;
     let queries_current = swapchain != 0
-        && asi
-            .read_value::<u8>(renderer.wrapping_add(profile::QUERY_CURRENT_INDEX))
-            .unwrap_or(0)
-            != 0
+        && read_value::<u8>(renderer.wrapping_add(profile::QUERY_CURRENT_INDEX)).unwrap_or(0) != 0
         && unsafe { (options.current_index)(swapchain as *mut c_void, &mut current) };
     let call = OBSERVED.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
     let mismatch = !list.is_null() && queries_current && current != index;

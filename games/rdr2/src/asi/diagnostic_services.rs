@@ -47,7 +47,7 @@ pub(crate) unsafe extern "C" fn install_census(directory: *const u16, flags: u32
     result
 }
 
-pub(super) unsafe extern "C" fn start_diagnostics(modules: *const u16, dumps: *const u16) {
+pub(crate) unsafe extern "C" fn start_diagnostics(modules: *const u16, dumps: *const u16) {
     const LEAVES: DiagnosticsLeaves = DiagnosticsLeaves {
         measure,
         dump,

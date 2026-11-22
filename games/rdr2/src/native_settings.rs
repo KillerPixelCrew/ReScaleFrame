@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Opt-in, bounded settings evidence collection. The detours never change native data.
-use crate::asi::{self, DiagnosticHook, DiagnosticInstall, install_diagnostic_hooks};
+use crate::asi::{DiagnosticHook, DiagnosticInstall, install_diagnostic_hooks};
 use crate::layout::settings_probe::{BIND, GETTER_SLOT, KEYS, METADATA_KEY, READ};
-use crate::platform::lock;
+use crate::platform::{self, lock, read_bytes, read_value};
 use crate::runtime_worker::log;
-use rsf_minhook_sys::MH_EnableHook;
 use std::ffi::{OsString, c_void};
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -12,6 +11,7 @@ use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 
 struct Probe {
     output: PathBuf,
@@ -51,14 +51,7 @@ unsafe extern "C" fn read(
     value(path, source, kind, destination, flags);
 }
 
-unsafe extern "C" fn enable(target: usize) -> i32 {
-    unsafe { MH_EnableHook(target as _) }
-}
-
 pub(crate) fn install(path: &[u16]) -> bool {
-    let Some(platform) = asi::platform() else {
-        return false;
-    };
     let path = path.strip_suffix(&[0]).unwrap_or(path);
     let hooks = [
         DiagnosticHook::new(bind as *const c_void, &raw mut BIND_ORIGINAL),
@@ -68,13 +61,11 @@ pub(crate) fn install(path: &[u16]) -> bool {
     if path.is_empty() || probe.is_some() {
         return false;
     }
-    let image = unsafe { asi::main_module() };
-    let Some((_, facts)) =
-        crate::platform::image_header(crate::platform::read_process_memory, image)
-    else {
+    let image = unsafe { platform::main_module() };
+    let Some(facts) = platform::image_facts(image) else {
         return false;
     };
-    let installed = match install_diagnostic_hooks(platform, image, [BIND, READ], &hooks, enable) {
+    let installed = match install_diagnostic_hooks(image, [BIND, READ], &hooks) {
         DiagnosticInstall::Installed => true,
         DiagnosticInstall::Refused => return false,
         DiagnosticInstall::Retained => false,
@@ -119,11 +110,7 @@ impl Probe {
 fn hex_bytes(address: usize, size: usize) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut source = [0u8; 256];
-    if size > source.len()
-        || !unsafe {
-            crate::platform::read_process_memory(address, source.as_mut_ptr().cast(), size)
-        }
-    {
+    if size > source.len() || !read_bytes(address, &mut source[..size]) {
         return String::from("null");
     }
     let mut text = String::with_capacity(size * 2 + 2);
@@ -140,14 +127,9 @@ fn row(destination: *const c_void, context: *const c_void, metadata: *const c_vo
     if !ARMED.load(Ordering::Acquire) {
         return;
     }
-    let Some(platform) = asi::platform() else {
-        return;
-    };
     let destination = destination as usize;
     let metadata = metadata as usize;
-    let key = platform
-        .read_value::<u32>(metadata.wrapping_add(METADATA_KEY))
-        .unwrap_or(0);
+    let key = read_value::<u32>(metadata.wrapping_add(METADATA_KEY)).unwrap_or(0);
     if !KEYS.contains(&key) {
         return;
     }
@@ -163,8 +145,8 @@ fn row(destination: *const c_void, context: *const c_void, metadata: *const c_vo
     else {
         return;
     };
-    let table = platform.read_value::<usize>(destination);
-    let thread = unsafe { asi::current_thread() };
+    let table = read_value::<usize>(destination);
+    let thread = unsafe { GetCurrentThreadId() };
     let (rva, table_address) = probe.address_fields(table);
     let destination_bytes = hex_bytes(destination, 128);
     let context = hex_bytes(context as usize, 128);
@@ -186,9 +168,6 @@ fn value(
     if !ARMED.load(Ordering::Acquire) {
         return;
     }
-    let Some(platform) = asi::platform() else {
-        return;
-    };
     let mut probe = lock(&PROBE);
     let Some(probe) = probe.as_mut().filter(|probe| probe.values < 32) else {
         return;
@@ -202,12 +181,12 @@ fn value(
         return;
     };
     let source = source as usize;
-    let table = platform.read_value::<usize>(source);
+    let table = read_value::<usize>(source);
     let getter = table
         .filter(|&address| address != 0)
         .and_then(|address| address.checked_add(GETTER_SLOT))
-        .and_then(|address| platform.read_value::<usize>(address));
-    let thread = unsafe { asi::current_thread() };
+        .and_then(read_value::<usize>);
+    let thread = unsafe { GetCurrentThreadId() };
     let (rva, table_address) = probe.address_fields(table);
     let (getter_rva, getter_address) = probe.address_fields(getter);
     let path = hex_bytes(path as usize, 128);

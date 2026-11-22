@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! Win32 ASI admission and the engine settings call adapters.
+//! The ASI's C link services, startup worker thread and the engine settings call adapters.
 #[cfg(feature = "research")]
 #[path = "diagnostic_services.rs"]
 mod diagnostic_services;
@@ -8,34 +8,28 @@ mod diagnostic_services;
 pub(crate) use crate::camera_probe::rsf_rdr2_install_camera_probe as camera_probe;
 #[cfg(feature = "research")]
 pub(crate) use crate::d3d12_trace::install as d3d12_trace;
-use crate::runtime_worker::rsf_rdr2_asi_start_runtime;
+use crate::runtime_worker::asi_start_runtime;
 use crate::sys::rsf_rdr2_asi_services;
-use crate::sys::rsf_rdr2_runtime_leaves;
 #[cfg(all(feature = "capture-fixture", not(test)))]
 pub(crate) use crate::sys::{RSF_CENSUS_ABI_VERSION, rsf_census_options};
 #[cfg(feature = "research")]
 pub(crate) use diagnostic_services::install_census as census;
 #[cfg(feature = "research")]
-use diagnostic_services::{install_frame_probe, start_diagnostics};
-use rsf_minhook_sys::*;
+use diagnostic_services::install_frame_probe;
+#[cfg(feature = "research")]
+pub(crate) use diagnostic_services::start_diagnostics;
 use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use std::sync::OnceLock;
 use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
 use windows_sys::Win32::Foundation::{CloseHandle, HMODULE};
 use windows_sys::Win32::Graphics::Gdi::{DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplaySettingsW};
-use windows_sys::Win32::System::LibraryLoader::{
-    DisableThreadLibraryCalls, GetModuleFileNameW, GetModuleHandleW,
-};
-use windows_sys::Win32::System::Threading::{CreateThread, GetCurrentThreadId};
-use windows_sys::Win32::System::WindowsProgramming::GetPrivateProfileIntW;
-#[cfg(feature = "research")]
-use windows_sys::Win32::System::WindowsProgramming::GetPrivateProfileStringW;
+use windows_sys::Win32::System::LibraryLoader::DisableThreadLibraryCalls;
+use windows_sys::Win32::System::Threading::CreateThread;
 
 struct Startup {
     module: usize,
     services: rsf_rdr2_asi_services,
-    runtime: rsf_rdr2_runtime_leaves,
 }
 
 static STARTUP: OnceLock<Startup> = OnceLock::new();
@@ -48,19 +42,12 @@ unsafe extern "C" fn rsf_rdr2_asi_process_attach(
     let startup = Startup {
         module: module as usize,
         services: *services,
-        runtime: rsf_rdr2_runtime_leaves {
-            fingerprint: services.fingerprint,
-            #[cfg(feature = "research")]
-            diagnostics: Some(start_diagnostics),
-            #[cfg(not(feature = "research"))]
-            diagnostics: None,
-        },
     };
     if STARTUP.set(startup).is_ok() {
         unsafe {
             DisableThreadLibraryCalls(module);
-            super::attach_process();
         }
+        super::attach(module);
     }
 }
 
@@ -115,11 +102,10 @@ unsafe extern "system" fn worker(_: *mut c_void) -> u32 {
     let Some(startup) = STARTUP.get() else {
         return 1;
     };
-    unsafe { rsf_rdr2_asi_start_runtime(startup.module as HMODULE, &startup.runtime) }
-}
-
-pub(crate) unsafe extern "C" fn main_module() -> usize {
-    unsafe { GetModuleHandleW(null()) as usize }
+    let Some(fingerprint) = startup.services.fingerprint else {
+        return 1;
+    };
+    asi_start_runtime(startup.module as HMODULE, fingerprint)
 }
 
 pub(crate) unsafe extern "C" fn adapter_vendor(index: u32) -> u32 {
@@ -129,71 +115,6 @@ pub(crate) unsafe extern "C" fn adapter_vendor(index: u32) -> u32 {
             .and_then(|adapter| adapter.GetDesc1())
             .map_or(0, |description| description.VendorId)
     }
-}
-
-pub(crate) unsafe extern "C" fn executable_path(out: *mut u16, capacity: u32) -> u32 {
-    unsafe { GetModuleFileNameW(null_mut(), out, capacity) }
-}
-
-pub(crate) unsafe extern "C" fn module_path(out: *mut u16, capacity: u32) -> u32 {
-    let Some(startup) = STARTUP.get() else {
-        return 0;
-    };
-    unsafe { GetModuleFileNameW(startup.module as HMODULE, out, capacity) }
-}
-
-pub(crate) unsafe extern "C" fn current_thread() -> u32 {
-    unsafe { GetCurrentThreadId() }
-}
-
-pub(crate) unsafe extern "C" fn profile_int(
-    path: *const u16,
-    section: *const u16,
-    key: *const u16,
-    fallback: i32,
-) -> u32 {
-    unsafe { GetPrivateProfileIntW(section, key, fallback, path) as u32 }
-}
-
-#[cfg(feature = "research")]
-pub(crate) unsafe extern "C" fn profile_string(
-    path: *const u16,
-    section: *const u16,
-    key: *const u16,
-    out: *mut u16,
-    capacity: u32,
-) -> u32 {
-    unsafe {
-        GetPrivateProfileStringW(section, key, windows_sys::core::w!(""), out, capacity, path)
-    }
-}
-
-pub(crate) unsafe extern "C" fn hook_initialize() -> i32 {
-    unsafe { MH_Initialize() }
-}
-
-pub(crate) unsafe extern "C" fn hook_create(
-    target: usize,
-    detour: *const c_void,
-    original: *mut *mut c_void,
-) -> i32 {
-    unsafe { MH_CreateHook(target as _, detour.cast_mut(), original) }
-}
-
-pub(crate) unsafe extern "C" fn hook_queue_enable(target: usize) -> i32 {
-    unsafe { MH_QueueEnableHook(target as _) }
-}
-
-pub(crate) unsafe extern "C" fn hook_apply_queued() -> i32 {
-    unsafe { MH_ApplyQueued() }
-}
-
-pub(crate) unsafe extern "C" fn hook_disable(target: usize) -> i32 {
-    unsafe { MH_DisableHook(target as _) }
-}
-
-pub(crate) unsafe extern "C" fn hook_remove(target: usize) -> i32 {
-    unsafe { MH_RemoveHook(target as _) }
 }
 
 pub(crate) unsafe extern "C" fn desktop_refresh() -> u32 {

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Opt-in observation of native RDR2 D3D12 results.
-use crate::asi::{self, MH_ERROR_ALREADY_INITIALIZED, MH_OK};
 use crate::diagnostics::path_units;
-use rsf_minhook_sys::MH_EnableHook;
+use rsf_minhook_sys::{
+    MH_CreateHook, MH_ERROR_ALREADY_INITIALIZED, MH_EnableHook, MH_Initialize, MH_OK,
+};
 use std::arch::naked_asm;
 use std::ffi::{OsString, c_void};
 use std::fs::OpenOptions;
@@ -17,7 +18,6 @@ use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 
 const STACK_LIMIT: usize = 24;
-const MH_ERROR_NOT_INITIALIZED: i32 = 2;
 
 type CheckResult = unsafe extern "C" fn(i32) -> i32;
 static mut ORIGINAL: *mut c_void = null_mut();
@@ -31,14 +31,11 @@ static TRACE: Mutex<Option<Trace>> = Mutex::new(None);
 
 /// The caller lends the expected target and a terminated path.
 pub(crate) unsafe extern "C" fn install(target: usize, image_size: u32, path: *const u16) -> i32 {
-    if asi::platform().is_none() {
-        return MH_ERROR_NOT_INITIALIZED;
-    }
-    let initialized = unsafe { asi::hook_initialize() };
+    let initialized = unsafe { MH_Initialize() };
     if initialized != MH_OK && initialized != MH_ERROR_ALREADY_INITIALIZED {
         return initialized;
     }
-    let created = unsafe { asi::hook_create(target, detour as *const c_void, &raw mut ORIGINAL) };
+    let created = unsafe { MH_CreateHook(target as _, detour as *mut c_void, &raw mut ORIGINAL) };
     if created != MH_OK {
         return created;
     }
