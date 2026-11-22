@@ -1,112 +1,26 @@
 // SPDX-License-Identifier: MIT
 //! Pass assembly and route decisions of the Unity package's D3D11 bridge
-//! (integrations/unity/native/bridge.cpp, boundary `d3d11_pass.h`).
+//! (bridge_d3d11.rs).
 //!
-//! For each render event that took a packet, `rsf_unity_d3d11_plan_pass` chooses the route from
+//! For each render event that took a packet, the plan chooses the route from
 //! the event offset (reconstruction, window, Editor preview window or HUD-less scene), assembles
 //! the host render pass from the packet, and lists which shared surface each input is copied into
 //! and the D3D12 state the pass uses it in. `shared_format` chooses the shared surface format for
-//! a surface slot and its source description. `rsf_unity_d3d11_apply_change` applies a pending
+//! a surface slot and its source description. `apply_pending_change` applies a pending
 //! engine policy change to a reconstruction pass once every submission has completed, and
-//! `rsf_unity_d3d11_retire` decides whether a submission whose queue work went out is retired or
+//! `retire_submission` decides whether a submission whose queue work went out is retired or
 //! stops the adapter.
 //!
-//! bridge.cpp keeps every typed D3D11, D3D12 and DXGI call in its original order: the
-//! `QueryInterface` of the packet textures, the swapchain buffer, the surface copies, the fence
-//! signals and waits, the barriers it records with the states planned here, list execution, the
-//! output copy and the render-pass calls. D3D11, direct D3D12 and Vulkan share the scalar pass.
-//! Direct D3D12 binds packet resources and supplies camera-valid FG inputs on inputs-only probes.
+//! D3D11, direct D3D12 and Vulkan share scalar pass fields. Direct D3D12 binds packet
+//! resources and supplies camera-valid FG inputs on inputs-only probes.
 use crate::bridge_abi::{
-    RSF_UNITY_PACKET_INPUTS_ONLY, RSF_UNITY_PACKET_PROBE, RSF_UNITY_PACKET_RESET,
-    RSF_UNITY_PREVIEW_SOURCE_COMMON, rsf_unity_packet,
+    RSF_UNITY_PACKET_INPUTS_ONLY, RSF_UNITY_PACKET_PROBE, RSF_UNITY_PACKET_RESET, rsf_unity_packet,
 };
-use crate::bridge_interop::D3D11;
-use crate::bridge_state::{
-    rsf_unity_frames_activate, rsf_unity_frames_pending_change, rsf_unity_frames_settle_change,
-};
-use crate::d3d11_state::wait_completion;
-use rsf_game_sys::{
-    RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_RECONFIGURE,
-    RSF_GAME_RENDER_SR, RSF_GAME_RENDER_WINDOW, rsf_game_render_pass,
-};
-
-// Offsets in the bridge's reserved event range (ReserveEventIDRange(3)). The managed package
-// issues the reconstruction packet on EventId, the window packet on EventId + 1 and the HUD-less
-// packet on EventId + 2.
-const EVENT_RECONSTRUCT: u32 = 0;
-pub(super) const EVENT_WINDOW: u32 = 1;
-const EVENT_HUDLESS: u32 = 2;
-
-// Routes, as d3d11_pass.h defines them.
-const ROUTE_NONE: u32 = 0;
-const ROUTE_WINDOW: u32 = 1;
-const ROUTE_PREVIEW: u32 = 2;
-const ROUTE_RECONSTRUCT: u32 = 3;
-const ROUTE_HUDLESS: u32 = 4;
-
-// rsf_unity_d3d11_retire results, as d3d11_pass.h defines them.
-const RETIRED: u32 = 0;
-const HANDBACK_FAILED: u32 = 1;
-const SIGNAL_FAILED: u32 = 2;
+use rsf_game_sys::{RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_SR, rsf_game_render_pass};
 
 /// RSF_SCREEN_FLIGHT, a cast macro bindgen does not evaluate. The package's SR pass replaces it
 /// from its gameplay setting (package_state.rs).
 const SCREEN_FLIGHT: u32 = 4;
-
-/// Shared surface slots of the graphics record (d3d11_state.rs): colour, depth, motion and output
-/// keep their packet order, then the HUD-less scene and the Editor preview source.
-const SURFACE_DEPTH: u32 = 1;
-const SURFACE_MOTION: u32 = 2;
-const SURFACE_HUDLESS: u32 = 4;
-const SURFACE_PREVIEW: u32 = 5;
-
-// D3D12_RESOURCE_STATES values. bridge.cpp asserts them. Every planned state starts and ends the
-// pass in D3D12_RESOURCE_STATE_COMMON (0).
-const STATE_RENDER_TARGET: u32 = 0x4;
-const STATE_NON_PIXEL_SHADER_RESOURCE: u32 = 0x40;
-const STATE_COPY_DEST: u32 = 0x400;
-
-// DXGI_FORMAT values. bridge.cpp asserts them.
-const R16G16B16A16_TYPELESS: u32 = 9;
-const R16G16B16A16_FLOAT: u32 = 10;
-const R8G8B8A8_TYPELESS: u32 = 27;
-const R8G8B8A8_UNORM: u32 = 28;
-const R8G8B8A8_UNORM_SRGB: u32 = 29;
-const R16G16_TYPELESS: u32 = 33;
-const R16G16_FLOAT: u32 = 34;
-const R32_TYPELESS: u32 = 39;
-const D32_FLOAT: u32 = 40;
-const R32_FLOAT: u32 = 41;
-const B8G8R8A8_UNORM: u32 = 87;
-const B8G8R8A8_TYPELESS: u32 = 90;
-const B8G8R8A8_UNORM_SRGB: u32 = 91;
-
-/// The plan of one render event. `pass` carries no resources and no swapchain: bridge.cpp fills
-/// them from the typed calls.
-#[repr(C)]
-#[derive(Clone, Copy)]
-#[allow(dead_code)] // bridge.cpp reads the surface plan and the flags.
-pub(crate) struct PassPlan {
-    route: u32,
-    /// HUD-less without a packet colour: the colour is buffer 0 of Unity's swapchain.
-    swapchain_color: u32,
-    /// The output surface is copied back into the packet's output after the hand-back.
-    copy_back: u32,
-    /// A pending policy change may apply to this pass.
-    reconfigurable: u32,
-    /// The shared surface slot each input (colour, depth, motion, output) is copied into.
-    surfaces: [u32; 4],
-    /// The D3D12 state each input surface is in while the pass records.
-    states: [u32; 4],
-    pub(super) pass: rsf_game_render_pass,
-}
-
-const _: () = assert!(
-    std::mem::offset_of!(PassPlan, surfaces) == 16
-        && std::mem::offset_of!(PassPlan, states) == 32
-        && std::mem::offset_of!(PassPlan, pass) == 48
-        && size_of::<PassPlan>() == 48 + size_of::<rsf_game_render_pass>()
-);
 
 /// The C++ `make_pass`: one SR pass for the packet's view, frame and camera. A probe packet
 /// carries camera constants only, so its camera is not valid for reconstruction.
@@ -147,183 +61,274 @@ unsafe extern "C" fn rsf_unity_build_scalar_pass(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_build_d3d12_pass(
-    packet: *const rsf_unity_packet,
-    output: *mut rsf_game_render_pass,
-) {
-    let (Some(packet), Some(output)) = (unsafe { (packet.as_ref(), output.as_mut()) }) else {
-        return;
-    };
-    *output = base_pass(packet);
-    output.color_input = packet.color;
-    output.color_output = packet.output;
-    output.depth = packet.depth;
-    output.motion = packet.motion;
+pub(crate) fn build_d3d12_pass(packet: &rsf_unity_packet) -> rsf_game_render_pass {
+    let mut pass = base_pass(packet);
+    pass.color_input = packet.color;
+    pass.color_output = packet.output;
+    pass.depth = packet.depth;
+    pass.motion = packet.motion;
     if packet.flags & RSF_UNITY_PACKET_INPUTS_ONLY != 0 {
-        output.role = RSF_GAME_RENDER_FG_INPUTS;
-        output.camera_valid = 1;
+        pass.role = RSF_GAME_RENDER_FG_INPUTS;
+        pass.camera_valid = 1;
     }
+    pass
 }
 
-/// The route and pass for event `offset` in the reserved range. `editor` is the package running
-/// in the Unity Editor, whose window pass presents a copy of the packet colour instead of the
-/// engine swapchain.
-pub(super) fn plan(offset: u32, packet: &rsf_unity_packet, editor: bool) -> PassPlan {
-    let mut plan = PassPlan {
-        route: ROUTE_NONE,
-        swapchain_color: 0,
-        copy_back: 0,
-        reconfigurable: 0,
-        surfaces: [0, SURFACE_DEPTH, SURFACE_MOTION, 3],
-        states: [0; 4],
-        pass: base_pass(packet),
+#[cfg(any(test, all(windows, not(feature = "mono-plugin"))))]
+mod d3d11 {
+    use super::{base_pass, rsf_game_render_pass, rsf_unity_packet};
+    use crate::bridge_abi::RSF_UNITY_PREVIEW_SOURCE_COMMON;
+    #[cfg(all(windows, not(feature = "mono-plugin")))]
+    use crate::bridge_interop::D3D11;
+    #[cfg(all(windows, not(feature = "mono-plugin")))]
+    use crate::bridge_state::{
+        rsf_unity_frames_activate, rsf_unity_frames_pending_change, rsf_unity_frames_settle_change,
     };
-    match offset {
-        EVENT_RECONSTRUCT => {
-            plan.route = ROUTE_RECONSTRUCT;
-            plan.copy_back = 1;
-            plan.reconfigurable = 1;
-            plan.states = [
-                STATE_NON_PIXEL_SHADER_RESOURCE,
-                STATE_NON_PIXEL_SHADER_RESOURCE,
-                STATE_NON_PIXEL_SHADER_RESOURCE,
-                STATE_COPY_DEST,
-            ];
-        }
-        EVENT_WINDOW => {
-            plan.pass.role = RSF_GAME_RENDER_WINDOW;
-            if editor && !packet.color.is_null() {
-                plan.route = ROUTE_PREVIEW;
-                plan.surfaces[0] = SURFACE_PREVIEW;
-                plan.pass.flags |= RSF_UNITY_PREVIEW_SOURCE_COMMON;
-            } else {
-                plan.route = ROUTE_WINDOW;
+    #[cfg(all(windows, not(feature = "mono-plugin")))]
+    use crate::d3d11_state::wait_completion;
+    use rsf_game_sys::{
+        RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_WINDOW,
+    };
+
+    // Offsets in the bridge's reserved event range (ReserveEventIDRange(3)). The managed package
+    // issues the reconstruction packet on EventId, the window packet on EventId + 1 and the HUD-less
+    // packet on EventId + 2.
+    pub(super) const EVENT_RECONSTRUCT: u32 = 0;
+    pub(crate) const EVENT_WINDOW: u32 = 1;
+    pub(super) const EVENT_HUDLESS: u32 = 2;
+
+    // D3D11 pass routes.
+    pub(crate) const ROUTE_NONE: u32 = 0;
+    pub(crate) const ROUTE_WINDOW: u32 = 1;
+    pub(crate) const ROUTE_PREVIEW: u32 = 2;
+    pub(super) const ROUTE_RECONSTRUCT: u32 = 3;
+    pub(super) const ROUTE_HUDLESS: u32 = 4;
+
+    // Submission retirement results.
+    pub(crate) const RETIRED: u32 = 0;
+    pub(crate) const HANDBACK_FAILED: u32 = 1;
+    pub(super) const SIGNAL_FAILED: u32 = 2;
+
+    /// Shared surface slots of the graphics record (d3d11_state.rs): colour, depth, motion and output
+    /// keep their packet order, then the HUD-less scene and the Editor preview source.
+    pub(super) const SURFACE_DEPTH: u32 = 1;
+    pub(super) const SURFACE_MOTION: u32 = 2;
+    pub(super) const SURFACE_HUDLESS: u32 = 4;
+    pub(super) const SURFACE_PREVIEW: u32 = 5;
+
+    // D3D12_RESOURCE_STATES values. Every planned state starts and ends the
+    // pass in D3D12_RESOURCE_STATE_COMMON (0).
+    pub(super) const STATE_RENDER_TARGET: u32 = 0x4;
+    pub(super) const STATE_NON_PIXEL_SHADER_RESOURCE: u32 = 0x40;
+    pub(super) const STATE_COPY_DEST: u32 = 0x400;
+
+    // DXGI_FORMAT values.
+    pub(super) const R16G16B16A16_TYPELESS: u32 = 9;
+    pub(super) const R16G16B16A16_FLOAT: u32 = 10;
+    pub(super) const R8G8B8A8_TYPELESS: u32 = 27;
+    pub(super) const R8G8B8A8_UNORM: u32 = 28;
+    pub(super) const R8G8B8A8_UNORM_SRGB: u32 = 29;
+    pub(super) const R16G16_TYPELESS: u32 = 33;
+    pub(super) const R16G16_FLOAT: u32 = 34;
+    pub(super) const R32_TYPELESS: u32 = 39;
+    pub(super) const D32_FLOAT: u32 = 40;
+    pub(super) const R32_FLOAT: u32 = 41;
+    pub(super) const B8G8R8A8_UNORM: u32 = 87;
+    pub(super) const B8G8R8A8_TYPELESS: u32 = 90;
+    pub(super) const B8G8R8A8_UNORM_SRGB: u32 = 91;
+
+    #[cfg(windows)]
+    const _: () = {
+        use windows::Win32::Graphics::{Direct3D12::*, Dxgi::Common::*};
+        assert!(STATE_RENDER_TARGET == D3D12_RESOURCE_STATE_RENDER_TARGET.0 as u32);
+        assert!(
+            STATE_NON_PIXEL_SHADER_RESOURCE
+                == D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE.0 as u32
+        );
+        assert!(STATE_COPY_DEST == D3D12_RESOURCE_STATE_COPY_DEST.0 as u32);
+        assert!(R16G16B16A16_TYPELESS == DXGI_FORMAT_R16G16B16A16_TYPELESS.0 as u32);
+        assert!(R16G16B16A16_FLOAT == DXGI_FORMAT_R16G16B16A16_FLOAT.0 as u32);
+        assert!(R8G8B8A8_TYPELESS == DXGI_FORMAT_R8G8B8A8_TYPELESS.0 as u32);
+        assert!(R8G8B8A8_UNORM == DXGI_FORMAT_R8G8B8A8_UNORM.0 as u32);
+        assert!(R8G8B8A8_UNORM_SRGB == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB.0 as u32);
+        assert!(R16G16_TYPELESS == DXGI_FORMAT_R16G16_TYPELESS.0 as u32);
+        assert!(R16G16_FLOAT == DXGI_FORMAT_R16G16_FLOAT.0 as u32);
+        assert!(R32_TYPELESS == DXGI_FORMAT_R32_TYPELESS.0 as u32);
+        assert!(D32_FLOAT == DXGI_FORMAT_D32_FLOAT.0 as u32);
+        assert!(R32_FLOAT == DXGI_FORMAT_R32_FLOAT.0 as u32);
+        assert!(B8G8R8A8_UNORM == DXGI_FORMAT_B8G8R8A8_UNORM.0 as u32);
+        assert!(B8G8R8A8_TYPELESS == DXGI_FORMAT_B8G8R8A8_TYPELESS.0 as u32);
+        assert!(B8G8R8A8_UNORM_SRGB == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB.0 as u32);
+    };
+
+    /// The plan of one render event. The recording path fills its native resources.
+    pub(crate) struct PassPlan {
+        pub(crate) route: u32,
+        /// HUD-less without a packet colour: the colour is buffer 0 of Unity's swapchain.
+        pub(crate) swapchain_color: u32,
+        /// The output surface is copied back into the packet's output after the hand-back.
+        pub(crate) copy_back: u32,
+        /// A pending policy change may apply to this pass.
+        pub(super) reconfigurable: u32,
+        /// The shared surface slot each input (colour, depth, motion, output) is copied into.
+        pub(crate) surfaces: [u32; 4],
+        /// The D3D12 state each input surface is in while the pass records.
+        pub(crate) states: [u32; 4],
+        pub(crate) pass: rsf_game_render_pass,
+    }
+
+    /// The route and pass for event `offset` in the reserved range. `editor` is the package running
+    /// in the Unity Editor, whose window pass presents a copy of the packet colour instead of the
+    /// engine swapchain.
+    pub(crate) fn plan(offset: u32, packet: &rsf_unity_packet, editor: bool) -> PassPlan {
+        let mut plan = PassPlan {
+            route: ROUTE_NONE,
+            swapchain_color: 0,
+            copy_back: 0,
+            reconfigurable: 0,
+            surfaces: [0, SURFACE_DEPTH, SURFACE_MOTION, 3],
+            states: [0; 4],
+            pass: base_pass(packet),
+        };
+        match offset {
+            EVENT_RECONSTRUCT => {
+                plan.route = ROUTE_RECONSTRUCT;
+                plan.copy_back = 1;
+                plan.reconfigurable = 1;
+                plan.states = [
+                    STATE_NON_PIXEL_SHADER_RESOURCE,
+                    STATE_NON_PIXEL_SHADER_RESOURCE,
+                    STATE_NON_PIXEL_SHADER_RESOURCE,
+                    STATE_COPY_DEST,
+                ];
             }
+            EVENT_WINDOW => {
+                plan.pass.role = RSF_GAME_RENDER_WINDOW;
+                if editor && !packet.color.is_null() {
+                    plan.route = ROUTE_PREVIEW;
+                    plan.surfaces[0] = SURFACE_PREVIEW;
+                    plan.pass.flags |= RSF_UNITY_PREVIEW_SOURCE_COMMON;
+                } else {
+                    plan.route = ROUTE_WINDOW;
+                }
+            }
+            EVENT_HUDLESS => {
+                plan.route = ROUTE_HUDLESS;
+                plan.swapchain_color = u32::from(packet.color.is_null());
+                plan.surfaces = [SURFACE_HUDLESS; 4];
+                plan.states = [STATE_RENDER_TARGET; 4];
+                plan.pass.role = RSF_GAME_RENDER_FINAL_SCENE;
+            }
+            _ => {}
         }
-        EVENT_HUDLESS => {
-            plan.route = ROUTE_HUDLESS;
-            plan.swapchain_color = u32::from(packet.color.is_null());
-            plan.surfaces = [SURFACE_HUDLESS; 4];
-            plan.states = [STATE_RENDER_TARGET; 4];
-            plan.pass.role = RSF_GAME_RENDER_FINAL_SCENE;
+        plan
+    }
+
+    /// The shared surface format for slot `index` copied from a source of `source` format: depth is
+    /// R32_FLOAT and motion R16G16_FLOAT, typeless and sRGB colour formats take their linear typed
+    /// view, any other format is kept.
+    pub(crate) fn shared_format(index: u32, source: u32) -> Option<u32> {
+        match index {
+            SURFACE_DEPTH => {
+                matches!(source, R32_TYPELESS | D32_FLOAT | R32_FLOAT).then_some(R32_FLOAT)
+            }
+            SURFACE_MOTION => {
+                matches!(source, R16G16_TYPELESS | R16G16_FLOAT).then_some(R16G16_FLOAT)
+            }
+            _ => Some(match source {
+                R16G16B16A16_TYPELESS => R16G16B16A16_FLOAT,
+                R8G8B8A8_TYPELESS | R8G8B8A8_UNORM_SRGB => R8G8B8A8_UNORM,
+                B8G8R8A8_TYPELESS | B8G8R8A8_UNORM_SRGB => B8G8R8A8_UNORM,
+                format => format,
+            }),
         }
-        _ => {}
     }
-    plan
-}
 
-/// The shared surface format for slot `index` copied from a source of `source` format: depth is
-/// R32_FLOAT and motion R16G16_FLOAT, typeless and sRGB colour formats take their linear typed
-/// view, any other format is kept.
-pub(crate) fn shared_format(index: u32, source: u32) -> Option<u32> {
-    match index {
-        SURFACE_DEPTH => {
-            matches!(source, R32_TYPELESS | D32_FLOAT | R32_FLOAT).then_some(R32_FLOAT)
+    /// A pending policy change applies on a reconstruction once every submission completed: read the
+    /// pending generation, wait for the last completion value handed out, settle that generation and
+    /// mark the pass. False when the wait refused; the change stays pending and the pass is dropped.
+    pub(super) fn apply_change(
+        plan: &mut PassPlan,
+        pending: impl FnOnce() -> Option<u32>,
+        wait: impl FnOnce() -> bool,
+        settle: impl FnOnce(u32),
+    ) -> bool {
+        if plan.reconfigurable == 0 {
+            return true;
         }
-        SURFACE_MOTION => matches!(source, R16G16_TYPELESS | R16G16_FLOAT).then_some(R16G16_FLOAT),
-        _ => Some(match source {
-            R16G16B16A16_TYPELESS => R16G16B16A16_FLOAT,
-            R8G8B8A8_TYPELESS | R8G8B8A8_UNORM_SRGB => R8G8B8A8_UNORM,
-            B8G8R8A8_TYPELESS | B8G8R8A8_UNORM_SRGB => B8G8R8A8_UNORM,
-            format => format,
-        }),
+        let Some(generation) = pending() else {
+            return true;
+        };
+        if !wait() {
+            return false;
+        }
+        settle(generation);
+        plan.pass.flags |= RSF_GAME_RENDER_RECONFIGURE;
+        plan.pass.camera_valid = 0;
+        true
     }
-}
 
-/// A pending policy change applies on a reconstruction once every submission completed: read the
-/// pending generation, wait for the last completion value handed out, settle that generation and
-/// mark the pass. False when the wait refused; the change stays pending and the pass is dropped.
-fn apply_change(
-    plan: &mut PassPlan,
-    pending: impl FnOnce() -> Option<u32>,
-    wait: impl FnOnce() -> bool,
-    settle: impl FnOnce(u32),
-) -> bool {
-    if plan.reconfigurable == 0 {
-        return true;
+    /// A submission whose queue work went out. `signalled` is the completion signal on the bridge's
+    /// fence, which the native side publishes even when the D3D11 hand-back refused, so release still
+    /// waits for the work. Either failure stops the adapter.
+    pub(super) fn retire(signalled: bool, handed_back: bool) -> u32 {
+        if !signalled {
+            SIGNAL_FAILED
+        } else if !handed_back {
+            HANDBACK_FAILED
+        } else {
+            RETIRED
+        }
     }
-    let Some(generation) = pending() else {
-        return true;
-    };
-    if !wait() {
-        return false;
-    }
-    settle(generation);
-    plan.pass.flags |= RSF_GAME_RENDER_RECONFIGURE;
-    plan.pass.camera_valid = 0;
-    true
-}
 
-/// A submission whose queue work went out. `signalled` is the completion signal on the bridge's
-/// fence, which the native side publishes even when the D3D11 hand-back refused, so release still
-/// waits for the work. Either failure stops the adapter.
-fn retire(signalled: bool, handed_back: bool) -> u32 {
-    if !signalled {
-        SIGNAL_FAILED
-    } else if !handed_back {
-        HANDBACK_FAILED
-    } else {
-        RETIRED
+    /// The caller holds a frame callback, which keeps the graphics record published for the wait.
+    #[cfg(all(windows, not(feature = "mono-plugin")))]
+    pub(crate) fn apply_pending_change(plan: &mut PassPlan) -> bool {
+        apply_change(
+            plan,
+            || {
+                let mut generation = 0;
+                (unsafe { rsf_unity_frames_pending_change(&mut generation) } != 0)
+                    .then_some(generation)
+            },
+            || {
+                let submitted = D3D11.lock().submitted();
+                wait_completion(submitted)
+            },
+            |generation| {
+                rsf_unity_frames_settle_change(generation);
+            },
+        )
     }
-}
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_d3d11_plan_pass(
-    offset: u32,
-    packet: *const rsf_unity_packet,
-    editor: bool,
-    output: *mut PassPlan,
-) -> bool {
-    let Some(packet) = (unsafe { packet.as_ref() }) else {
-        return false;
-    };
-    if output.is_null() {
-        return false;
+    #[cfg(all(windows, not(feature = "mono-plugin")))]
+    pub(crate) fn retire_submission(signalled: bool, handed_back: bool) -> u32 {
+        let verdict = retire(signalled, handed_back);
+        if verdict != RETIRED {
+            rsf_unity_frames_activate(0);
+        }
+        verdict
     }
-    let planned = plan(offset, packet, editor);
-    if planned.route == ROUTE_NONE {
-        return false;
-    }
-    unsafe { output.write(planned) };
-    true
-}
-
-/// The caller holds a frame callback, which keeps the graphics record published for the wait.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_d3d11_apply_change(plan: *mut PassPlan) -> bool {
-    let Some(plan) = (unsafe { plan.as_mut() }) else {
-        return false;
-    };
-    apply_change(
-        plan,
-        || {
-            let mut generation = 0;
-            (unsafe { rsf_unity_frames_pending_change(&mut generation) } != 0).then_some(generation)
-        },
-        || {
-            let submitted = D3D11.lock().submitted();
-            wait_completion(submitted)
-        },
-        |generation| {
-            rsf_unity_frames_settle_change(generation);
-        },
-    )
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_d3d11_retire(signalled: bool, handed_back: bool) -> u32 {
-    let verdict = retire(signalled, handed_back);
-    if verdict != RETIRED {
-        rsf_unity_frames_activate(0);
-    }
-    verdict
 }
 
 #[cfg(test)]
+pub(crate) use d3d11::EVENT_WINDOW;
+#[cfg(all(windows, not(feature = "mono-plugin")))]
+pub(crate) use d3d11::{
+    HANDBACK_FAILED, PassPlan, RETIRED, ROUTE_NONE, ROUTE_PREVIEW, ROUTE_WINDOW,
+    apply_pending_change, retire_submission,
+};
+#[cfg(any(test, all(windows, not(feature = "mono-plugin"))))]
+pub(crate) use d3d11::{plan, shared_format};
+#[cfg(test)]
 mod tests {
+    use super::d3d11::*;
     use super::*;
-    use rsf_game_sys::rsf_camera_frame;
+    use crate::bridge_abi::RSF_UNITY_PREVIEW_SOURCE_COMMON;
+    use rsf_game_sys::{
+        RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_WINDOW,
+        rsf_camera_frame,
+    };
     use std::ffi::c_void;
     use std::ptr;
 
@@ -450,21 +455,16 @@ mod tests {
     fn events_outside_the_range_plan_nothing() {
         assert_eq!(plan(3, &packet(), false).route, ROUTE_NONE);
         assert_eq!(plan(u32::MAX, &packet(), false).route, ROUTE_NONE);
-        let mut output = plan(0, &packet(), false);
-        assert!(!unsafe { rsf_unity_d3d11_plan_pass(3, &packet(), false, &mut output) });
-        assert!(!unsafe { rsf_unity_d3d11_plan_pass(0, ptr::null(), false, &mut output) });
-        assert!(!unsafe { rsf_unity_d3d11_plan_pass(0, &packet(), false, ptr::null_mut()) });
-        assert!(!unsafe { rsf_unity_d3d11_apply_change(ptr::null_mut()) });
     }
 
     #[test]
     fn direct_d3d12_accepts_camera_data_for_inputs_only_probes() {
         let mut packet = packet();
         packet.flags = RSF_UNITY_PACKET_PROBE | RSF_UNITY_PACKET_INPUTS_ONLY;
-        let mut pass = base_pass(&packet);
-        assert_eq!(pass.camera_valid, 0);
-        assert!(pass.motion.is_null());
-        unsafe { rsf_unity_build_d3d12_pass(&packet, &mut pass) };
+        let base = base_pass(&packet);
+        assert_eq!(base.camera_valid, 0);
+        assert!(base.motion.is_null());
+        let pass = build_d3d12_pass(&packet);
         assert_eq!(pass.role, RSF_GAME_RENDER_FG_INPUTS);
         assert_eq!(pass.camera_valid, 1);
         assert_eq!(pass.motion, packet.motion);

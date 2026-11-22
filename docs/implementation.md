@@ -127,6 +127,13 @@ rejects incompatible copy inputs. Source checks, pinned formatting and
 targeted binding regeneration passed. Build, fixture and device results
 remain open. [Unity bridge evidence](research/rust-unity-bridge-submission.md)
 
+Unity's Direct3D bridges now use Rust for typed device and command ownership,
+packet COM references, recording and submission. Unity's native SDK calls
+still supply the recording list, queue and frame-fence facts. Pinned formatting,
+bindings, locked offline metadata and source comparisons passed. Build,
+fixture and device results remain open.
+[Direct3D bridge evidence](research/rust-unity-d3d-typed-bridge.md)
+
 The shared Vulkan-to-D3D12 FG paths now admit swapchain extensions and
 select vsync in Rust. The FSR4 state fixture uses the current graphics
 callback table. Build, fixture and device checks remain open.

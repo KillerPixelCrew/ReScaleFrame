@@ -4,9 +4,14 @@
 #![cfg(any(windows, test))]
 
 mod bridge_abi;
+#[cfg(windows)]
+mod bridge_d3d12;
+#[cfg(windows)]
+mod bridge_d3d12_abi;
 mod bridge_interop;
 mod bridge_state;
 mod d3d11_pass;
+#[cfg(any(test, all(windows, not(feature = "mono-plugin"))))]
 mod d3d11_state;
 mod device_creation;
 mod generation;
@@ -26,6 +31,8 @@ mod runtime_abi;
 mod runtime_config;
 #[cfg(all(windows, feature = "mono-plugin"))]
 mod runtime_setup;
+#[cfg(all(windows, not(feature = "mono-plugin")))]
+mod shared_surface_abi;
 #[cfg(any(test, all(windows, feature = "mono-plugin")))]
 mod startup_policy;
 mod vulkan_handles;

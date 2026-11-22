@@ -400,6 +400,12 @@ generate("games/unity-mono/src/bridge_abi.rs", "games/unity-mono/src/bridge_stat
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "use rsf_game_sys::rsf_camera_frame;",
           "--with-derive-custom-struct", "rsf_unity_packet=Copy,Clone"])
+generate("games/unity-mono/src/bridge_d3d12_abi.rs", "games/unity-mono/src/bridge_d3d12.h",
+         "rsf_unity_d3d12_engine", "NOTHING", ["-Isdk/game/include", "-Igames/unity-mono/include"])
+generate("games/unity-mono/src/shared_surface_abi.rs", "runtime/presentation/include/rescaleframe/shared_surface.h",
+         "rsf_shared_.*", "RSF_SHARED_SURFACE_ABI_VERSION", [],
+         ["--allowlist-function",
+          "rsf_shared_(surface_(create|destroy|d3d11|d3d12)|fence_(create|destroy|d3d11|d3d12))"])
 generate("games/unity-mono/src/vulkan_handles.rs", "games/unity-mono/src/vulkan_state.h",
          "rsf_unity_vulkan_(device|command|image)_handles", "NOTHING",
          ["-Igames/unity-mono/include", "-Isdk/game/include"],

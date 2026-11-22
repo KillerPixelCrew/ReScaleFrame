@@ -15,7 +15,7 @@
 //! change gate and the submission's retirement verdict are `d3d11_pass.rs`. Its change gate
 //! waits through this record's wait leaf (`wait_completion`).
 //!
-//! bridge.cpp keeps Unity interface access and the typed COM calls as leaves, which run outside
+//! The bridge takes Unity device and swapchain facts from C++. Its Rust COM calls run outside
 //! the state mutex. Its frame callbacks (`bridge_state.rs`) are the admission that keeps a
 //! borrowed view alive: the package closes callback admission before it closes this owner. Inside
 //! a callback, the surface lease lends the surface table to one holder, so a surface view stays
@@ -36,10 +36,14 @@ use std::ffi::c_void;
 use std::ptr;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+#[cfg(all(windows, not(feature = "mono-plugin")))]
+#[path = "bridge_d3d11.rs"]
+mod graphics;
+
 const SLOTS: usize = RSF_UNITY_FRAMES_SLOTS as usize;
 /// Colour, depth, motion, output, the HUD-less scene and the Editor preview source.
 const SURFACES: usize = 6;
-// Initialization results, as d3d11_state.h defines them.
+// Initialization results.
 const DEVICE_BUSY: u32 = 0;
 const DEVICE_FAILED: u32 = 1;
 const DEVICE_READY: u32 = 2;
@@ -386,8 +390,7 @@ fn retired(ring: &SubmissionHandle, completed: u64, shared: u64) -> bool {
     ring.drained(completed) && ring.copy_drained(shared)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_d3d11_initialize(
+unsafe fn rsf_unity_d3d11_initialize(
     services: *const rsf_game_host_services,
     ops: *const DeviceOps,
     view: *mut DeviceHandles,
@@ -424,8 +427,8 @@ unsafe extern "C" fn rsf_unity_d3d11_initialize(
     DEVICE_READY
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_d3d11_device_view(view: *mut DeviceHandles) -> bool {
+#[cfg(test)]
+unsafe fn rsf_unity_d3d11_device_view(view: *mut DeviceHandles) -> bool {
     if view.is_null() {
         return false;
     }
@@ -436,8 +439,7 @@ unsafe extern "C" fn rsf_unity_d3d11_device_view(view: *mut DeviceHandles) -> bo
     true
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_d3d11_command_slot(index: u32, view: *mut CommandSlot) -> bool {
+unsafe fn rsf_unity_d3d11_command_slot(index: u32, view: *mut CommandSlot) -> bool {
     if view.is_null() {
         return false;
     }
@@ -448,13 +450,12 @@ unsafe extern "C" fn rsf_unity_d3d11_command_slot(index: u32, view: *mut Command
     true
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_d3d11_surfaces_begin() -> bool {
+fn rsf_unity_d3d11_surfaces_begin() -> bool {
     lock().begin_surfaces()
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_d3d11_surfaces_end() {
+#[cfg(all(windows, not(feature = "mono-plugin")))]
+fn rsf_unity_d3d11_surfaces_end() {
     lock().end_surfaces();
 }
 
@@ -529,8 +530,7 @@ fn prepare_surface(
 }
 
 /// The shared format is chosen from the slot and the source format (`d3d11_pass::shared_format`).
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_d3d11_prepare_surface(
+unsafe fn rsf_unity_d3d11_prepare_surface(
     index: u32,
     services: *const rsf_game_host_services,
     width: u32,
@@ -559,6 +559,7 @@ unsafe extern "C" fn rsf_unity_d3d11_prepare_surface(
 
 /// A frame callback's wait for the completion fence to reach `value`, through the record's wait
 /// leaf outside the state mutex. The callback keeps the record published. False without one.
+#[cfg(all(windows, not(feature = "mono-plugin")))]
 pub(crate) fn wait_completion(value: u64) -> bool {
     let Some((handles, ops)) = lock().waiter() else {
         return false;

@@ -1,17 +1,14 @@
 // SPDX-License-Identifier: MIT
-// Typed Unity and D3D12 calls for the Mono plugin and the Unity package. Rust owns frame state,
-// packet leases, pass fields and CPU stage facts. The native leaf retains typed graphics
-// references through Unity's frame fence and reports list recording and queue submission.
+// Unity SDK registration and Win32 input observations for the shared D3D12 bridge.
 #include "bridge.h"
+#include "bridge_d3d12.h"
 #include <rescaleframe/sha256_file.h>
 #include <windows.h>
 #include <d3d12.h>
 #include <dxgi1_4.h>
-#include <wrl/client.h>
 #include <array>
 #include <atomic>
 #include <cstring>
-#include <cstdio>
 #include <mutex>
 #if RSF_HAVE_UNITY_NATIVE
 #include <IUnityGraphics.h>
@@ -22,32 +19,13 @@ extern "C" void rsf_unity_package_sr_slot_reset(uint32_t bridge, void* commands,
 #endif
 
 namespace {
-using Microsoft::WRL::ComPtr;
-using Leases = std::array<ComPtr<ID3D12Resource>, 4>;
-struct Commands {
-    ComPtr<ID3D12CommandAllocator> allocator;
-    ComPtr<ID3D12GraphicsCommandList> list;
-    Leases leases;
-};
 // Orders host preparation and shutdown with packet publication.
 std::mutex guard;
-#if RSF_HAVE_UNITY_NATIVE
-struct RenderEventScope {
-    const bool entered = rsf_unity_frames_begin_d3d12_event();
-    ~RenderEventScope() { if (entered) rsf_unity_frames_end_d3d12_event(); }
-};
-#endif
 rsf_game_host_services services{};
-void retain_texture(void* texture) { static_cast<ID3D12Resource*>(texture)->AddRef(); }
-void release_texture(void* texture) { static_cast<ID3D12Resource*>(texture)->Release(); }
-constexpr rsf_unity_texture_ops texture_ops{retain_texture, release_texture};
-std::array<Commands, RSF_UNITY_FRAMES_SLOTS> commands;
-ComPtr<ID3D12Fence> fence;
+constexpr rsf_unity_texture_ops texture_ops{rsf_unity_retain_texture, rsf_unity_release_texture};
 std::atomic<uint32_t> refusals{0};
 int event_id = 0;
 bool active() { return rsf_unity_frames_active() != 0; }
-// Unity's frame-fence completion, or 0 without a fence: every recorded submission is then pending.
-uint64_t completed() { return fence ? fence->GetCompletedValue() : 0; }
 #if RSF_HAVE_UNITY_NATIVE
 IUnityGraphics* graphics = nullptr;
 IUnityGraphicsD3D12v7* unity = nullptr;
@@ -80,19 +58,39 @@ void configure_graphics()
     event.ensureActiveRenderTextureIsBound = true;
     unity->ConfigureEvent(event_id + 2, &event);
 }
+// Unity's versioned C++ interface and its resource-state record stay at the SDK boundary.
+static_assert(sizeof(rsf_unity_d3d12_engine) == 8 * sizeof(void*));
+constexpr rsf_unity_d3d12_engine engine{
+    []() -> void* { return unity ? unity->GetDevice() : nullptr; },
+    []() -> void* { return unity->GetCommandQueue(); },
+    []() -> void* { return unity->GetSwapChain(); },
+    []() -> void* { return unity->GetFrameFence(); },
+    []() -> uint64_t { return unity->GetNextFrameFenceValue(); },
+    []() -> void* {
+        UnityGraphicsD3D12RecordingState recording{};
+        return unity->CommandRecordingState(&recording) ? recording.commandList : nullptr;
+    },
+    [](void* list, uint32_t count, void* const* resources, const int32_t* states) -> uint64_t {
+        std::array<UnityGraphicsD3D12ResourceState, 4> native{};
+        for (uint32_t i = 0; i < count; ++i) {
+            const auto state = static_cast<D3D12_RESOURCE_STATES>(states[i]);
+            native[i] = {static_cast<ID3D12Resource*>(resources[i]), state, state};
+        }
+        return unity->ExecuteCommandList(static_cast<ID3D12GraphicsCommandList*>(list),
+            static_cast<int>(count), native.data());
+    },
+#if defined(RSF_UNITY_PACKAGE_BRIDGE)
+    rsf_unity_package_sr_slot_reset,
+#else
+    nullptr,
+#endif
+};
 #endif
 
 void log(const char* message)
 {
     if (services.log) services.log(services.user, message);
 }
-#if RSF_HAVE_UNITY_NATIVE
-rsf_unity_source_submission source_of(const rsf_game_render_pass& pass)
-{
-    return {pass.session_id, pass.source_frame_id, pass.view_key};
-}
-
-#endif
 int config(uint32_t width, uint32_t height, rsf_unity_config* output)
 {
     rsf_unity_frame_callback call;
@@ -112,100 +110,7 @@ void __stdcall render(int id, void* address) noexcept try
     rsf_unity_taken_packet entry{address};
     if (!entry.taken) return;
 #if RSF_HAVE_UNITY_NATIVE
-    Leases resources;
-    RenderEventScope render_scope;
-    if (!render_scope.entered || !active() || !unity || !services.render_pass) return;
-    ID3D12Device* device = unity->GetDevice();
-    if (!device) return;
-    if (id == event_id + 2 && (entry.packet.flags & RSF_UNITY_PACKET_HUDLESS)) {
-        if (!fence) fence = unity->GetFrameFence();
-        const auto completion = unity->GetNextFrameFenceValue();
-        if (!fence || !completion || completion == UINT64_MAX || completed() == UINT64_MAX) return;
-        UnityGraphicsD3D12RecordingState recording{};
-        if (!unity->CommandRecordingState(&recording) || !recording.commandList) {
-            if (++refusals <= 3) log("Unity pre-UI capture refused: no current recording list.");
-            return;
-        }
-        if (!entry.packet.color) {
-            ComPtr<IDXGISwapChain3> chain;
-            auto* owned = unity->GetSwapChain();
-            if (!owned || FAILED(owned->QueryInterface(IID_PPV_ARGS(&chain))) ||
-                FAILED(chain->GetBuffer(chain->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&resources[0])))) return;
-            entry.packet.color = resources[0].Get();
-        }
-        rsf_game_render_pass pass{}; rsf_unity_build_d3d12_pass(&entry.packet, &pass);
-        pass.role = RSF_GAME_RENDER_FINAL_SCENE;
-        const auto recorded = source_of(pass);
-        if (!rsf_unity_frames_can_record_source(&recorded)) return;
-        services.render_pass(services.user, recording.commandList, &pass, 1);
-        rsf_unity_frames_record_source(&recorded, completion);
-        static uint32_t reports = 0;
-        if (reports++ < 3) {
-            const auto source = static_cast<ID3D12Resource*>(entry.packet.color)->GetDesc();
-            char text[160]; std::snprintf(text, sizeof(text), "Unity pre-UI copy recorded on engine list: format=%u %llux%u", source.Format, source.Width, source.Height);
-            log(text);
-        }
-        return;
-    }
-    if (id == event_id + 1 && (entry.packet.flags & RSF_UNITY_PACKET_WINDOW)) {
-        rsf_game_render_pass pass{}; rsf_unity_build_d3d12_pass(&entry.packet, &pass);
-        pass.role = RSF_GAME_RENDER_WINDOW; pass.swapchain = unity->GetSwapChain();
-        auto* queue = unity->GetCommandQueue();
-        // This configured event synchronizes workers, flushes Unity's command lists,
-        // and grants exclusive queue access. Recording and worker tickets precede it.
-        rsf_unity_frames_flush_sources(&services, queue, &pass);
-        services.render_pass(services.user, queue, &pass, 1);
-        return;
-    }
-    if (!fence) fence = unity->GetFrameFence();
-    if (!fence) return;
-    const bool hudless = (entry.packet.flags & RSF_UNITY_PACKET_HUDLESS) != 0;
-    // Extent and policy changes wait for the ring; a busy slot leaves the queued spatial fallback.
-    rsf_unity_frame_admission admission{};
-    if (!rsf_unity_frames_admit_frame(&entry.packet, completed(), &admission)) return;
-    auto& slot = commands[admission.slot];
-    slot.leases = {};
-    if (!slot.allocator || !slot.list) {
-        ComPtr<ID3D12CommandAllocator> allocator;
-        ComPtr<ID3D12GraphicsCommandList> list;
-        if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator))) ||
-            FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&list))) ||
-            FAILED(list->Close())) return;
-        slot.allocator = std::move(allocator); slot.list = std::move(list);
-    }
-    ComPtr<ID3D12Device> owner;
-    if (FAILED(slot.allocator->GetDevice(IID_PPV_ARGS(&owner))) || owner.Get() != device) {
-        rsf_unity_frames_activate(0); log("Unity D3D12 device changed; adapter requires a drained restart."); return;
-    }
-    if (FAILED(slot.allocator->Reset()) || FAILED(slot.list->Reset(slot.allocator.Get(), nullptr))) return;
-#if defined(RSF_UNITY_PACKAGE_BRIDGE)
-    // Admission checked Unity's prior submission fence. A successful reset also proves discard
-    // of a preceding recording that never reached ExecuteCommandList.
-    rsf_unity_package_sr_slot_reset(12, slot.list.Get(), admission.slot);
-#endif
-    rsf_game_render_pass pass{}; rsf_unity_build_d3d12_pass(&entry.packet, &pass);
-    if (hudless) pass.role = RSF_GAME_RENDER_FINAL_SCENE;
-    if (!rsf_unity_frames_dispatch_d3d12(&services, slot.list.Get(), &pass, admission.pending_generation)) {
-        (void)slot.list->Close();
-        return;
-    }
-    if (FAILED(slot.list->Close())) return;
-    // The packet lease covers recording. These references extend through GPU completion.
-    void* textures[] = {entry.packet.color, entry.packet.depth, entry.packet.motion, entry.packet.output};
-    for (size_t i = 0; i < resources.size(); ++i)
-        resources[i] = static_cast<ID3D12Resource*>(textures[i]);
-    std::array<UnityGraphicsD3D12ResourceState, 4> states{};
-    int count = 0;
-    for (size_t i = 0; i < 4; ++i) if (resources[i]) {
-        auto state = hudless ? D3D12_RESOURCE_STATE_RENDER_TARGET : i == 3 ? D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-        states[static_cast<size_t>(count++)] = {resources[i].Get(), state, state};
-    }
-    slot.leases = std::move(resources);
-    const auto complete = unity->ExecuteCommandList(slot.list.Get(), count, states.data());
-    // Missing completion proof stops the bridge and keeps the command allocator owned.
-    const auto source = source_of(pass);
-    if (!rsf_unity_frames_submitted(&admission, complete, &source))
-        log("Unity D3D12 submission could not be tracked; adapter stopped and remains owned.");
+    rsf_unity_d3d12_render_packet(&engine, &services, static_cast<uint32_t>(id - event_id), &entry.packet);
 #else
     (void)entry;
 #endif
@@ -285,7 +190,7 @@ bool rsf_unity_d3d12_try_close() noexcept
 {
     std::lock_guard<std::mutex> lock(guard);
     if (!rsf_unity_frames_try_close()) return false;
-    const auto value = completed();
+    const auto value = rsf_unity_d3d12_completed();
     return rsf_unity_frames_drained(value) != 0;
 }
 #else
@@ -297,14 +202,14 @@ extern "C" uint32_t rsf_unity_mono_prepare(const rsf_game_host_services* host, r
 extern "C" uint32_t rsf_unity_mono_try_close() noexcept
 {
     std::lock_guard<std::mutex> lock(guard);
-    return rsf_unity_frames_try_close_completed(completed()) != 0;
+    return rsf_unity_frames_try_close_completed(rsf_unity_d3d12_completed()) != 0;
 }
 #endif
 void rsf_unity_bridge_release() noexcept
 {
     std::lock_guard<std::mutex> lock(guard);
     if (message_hook) {UnhookWindowsHookEx(message_hook);message_hook=nullptr;} input_source.store(0);
-    commands = {}; fence.Reset(); services = {};
+    rsf_unity_d3d12_release_graphics(); services = {};
     rsf_unity_frames_release();
 }
 #ifndef RSF_UNITY_PACKAGE_BRIDGE

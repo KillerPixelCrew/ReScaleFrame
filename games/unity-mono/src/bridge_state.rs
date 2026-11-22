@@ -771,7 +771,7 @@ pub(crate) extern "C" fn rsf_unity_frames_settle_change(generation: u32) -> u32 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_frames_admit_frame(
+pub(crate) unsafe extern "C" fn rsf_unity_frames_admit_frame(
     packet: *const rsf_unity_packet,
     completed: u64,
     admission: *mut rsf_unity_frame_admission,
@@ -790,7 +790,7 @@ unsafe extern "C" fn rsf_unity_frames_admit_frame(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_frames_submitted(
+pub(crate) unsafe extern "C" fn rsf_unity_frames_submitted(
     admission: *const rsf_unity_frame_admission,
     complete: u64,
     source: *const rsf_unity_source_submission,
@@ -809,14 +809,14 @@ unsafe extern "C" fn rsf_unity_frames_submitted(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_frames_can_record_source(
+pub(crate) unsafe extern "C" fn rsf_unity_frames_can_record_source(
     source: *const rsf_unity_source_submission,
 ) -> u32 {
     u32::from(unsafe { source.as_ref() }.is_some_and(|source| lock().can_record_source(source)))
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_frames_record_source(
+pub(crate) unsafe extern "C" fn rsf_unity_frames_record_source(
     source: *const rsf_unity_source_submission,
     inline_fence: u64,
 ) {
@@ -830,7 +830,7 @@ unsafe extern "C" fn rsf_unity_frames_record_source(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_frames_flush_sources(
+pub(crate) unsafe extern "C" fn rsf_unity_frames_flush_sources(
     services: *const rsf_game_host_services,
     queue: *mut c_void,
     window: *const rsf_game_render_pass,
@@ -858,7 +858,7 @@ unsafe extern "C" fn rsf_unity_frames_flush_sources(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_frames_dispatch_d3d12(
+pub(crate) unsafe extern "C" fn rsf_unity_frames_dispatch_d3d12(
     services: *const rsf_game_host_services,
     commands: *mut c_void,
     pass: *mut rsf_game_render_pass,
@@ -900,14 +900,14 @@ unsafe extern "C" fn rsf_unity_mono_drained_generation(generation: *mut u32) -> 
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_frames_begin_d3d12_event() -> bool {
+pub(crate) extern "C" fn rsf_unity_frames_begin_d3d12_event() -> bool {
     D3D12_RECORDING
         .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
         .is_ok()
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_frames_end_d3d12_event() {
+pub(crate) extern "C" fn rsf_unity_frames_end_d3d12_event() {
     D3D12_RECORDING.store(false, Ordering::Release);
 }
 
@@ -957,6 +957,24 @@ extern "C" fn rsf_unity_frames_release() {
     MANAGED_STAGE.store(0, Ordering::SeqCst);
     for lease in leases.into_iter().flatten() {
         lease.end();
+    }
+}
+
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_retain_texture(texture: *mut c_void) {
+    use windows::core::{IUnknown, Interface};
+    if let Some(resource) = unsafe { IUnknown::from_raw_borrowed(&texture) } {
+        let _ = resource.clone().into_raw();
+    }
+}
+
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_release_texture(texture: *mut c_void) {
+    use windows::core::{IUnknown, Interface};
+    if !texture.is_null() {
+        drop(unsafe { IUnknown::from_raw(texture) });
     }
 }
 

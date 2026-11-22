@@ -6,9 +6,9 @@
    bridge_abi.rs from this header.
 
    Rust owns packet admission and storage, the policy generation, frame admission into the
-   command ring, source-submission bookkeeping and retirement. bridge.cpp keeps the Unity
-   interfaces, D3D12 objects, resource leases, render-pass calls and CPU input events.
-   Fence values are Unity frame-fence completions read by bridge.cpp; 0 means no fence.
+   command ring, source-submission bookkeeping and retirement. bridge_d3d12.rs reads
+   Unity's frame fence and owns the recording objects and resource leases. bridge.cpp
+   supplies Unity SDK calls and CPU input observations.
 
    The Unity package's D3D11 and Vulkan bridge (integrations/unity/native/bridge.cpp) uses the
    same activity, managed stage, callbacks, packet store, policy and config. D3D11 and D3D12
@@ -17,7 +17,7 @@
 #include <stdbool.h>
 #include <rescaleframe/unity_bridge.h>
 
-/* Packet storage and source-submission ring sizes. bridge.cpp sizes its lease arrays to match. */
+/* Packet storage, graphics command slots and source-submission ring sizes. */
 #define RSF_UNITY_FRAMES_PACKETS 32u
 #define RSF_UNITY_FRAMES_SLOTS 3u
 #define RSF_UNITY_FRAMES_SOURCES 8u
@@ -38,8 +38,6 @@ extern "C" {
 #endif
 /* Builds all common frame, view and camera fields, with no native resources. */
 void rsf_unity_build_scalar_pass(const rsf_unity_packet* packet, rsf_game_render_pass* output);
-/* Direct D3D12 binds native resources and makes an inputs-only probe camera-valid. */
-void rsf_unity_build_d3d12_pass(const rsf_unity_packet* packet, rsf_game_render_pass* output);
 /* Producer state. Inactive bridges refuse packets, frames and CPU events. */
 void rsf_unity_frames_activate(uint32_t enabled);
 uint32_t rsf_unity_frames_active(void);
@@ -51,11 +49,13 @@ uint32_t rsf_unity_frames_managed_stage(void);
    which Unity hands back to the render event as identity only, and its slot for the caller's
    leases; NULL when inactive, invalid or full. */
 void* rsf_unity_frames_admit_packet(const rsf_unity_packet* packet, uint64_t session_id, uint32_t* slot);
-/* Typed leaves retain and release each non-null native resource pointer. */
+/* Retain and release each non-null native resource pointer. */
 typedef struct rsf_unity_texture_ops {
     void (*retain)(void*);
     void (*release)(void*);
 } rsf_unity_texture_ops;
+void rsf_unity_retain_texture(void* texture);
+void rsf_unity_release_texture(void* texture);
 void* rsf_unity_frames_admit_leased_packet(const rsf_unity_packet* packet, uint64_t session_id,
     const rsf_unity_texture_ops* ops);
 /* Reports a stage using the producer's real QPC observation. The caller holds a frame callback. */
