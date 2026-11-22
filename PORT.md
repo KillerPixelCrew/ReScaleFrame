@@ -1254,8 +1254,8 @@ Port the two providers and FSR4 compatibility controls, coordinating the shared 
 
 - [ ] [runtime/backends/fsr/include/rescaleframe/fsr_backend.h](runtime/backends/fsr/include/rescaleframe/fsr_backend.h)
 - [ ] [runtime/backends/fsr/src/ffx_version.h](runtime/backends/fsr/src/ffx_version.h)
-- [ ] [runtime/backends/fsr/src/fsr4_compat.cpp](runtime/backends/fsr/src/fsr4_compat.cpp)
-- [ ] [runtime/backends/fsr/src/fsr4_compat.h](runtime/backends/fsr/src/fsr4_compat.h)
+- [x] [runtime/backends/fsr/src/fsr4_compat.cpp](runtime/backends/fsr/src/fsr4_compat.cpp)
+- [x] [runtime/backends/fsr/src/fsr4_compat.h](runtime/backends/fsr/src/fsr4_compat.h)
 - [ ] [runtime/backends/fsr/src/fsr4_compat_core.cpp](runtime/backends/fsr/src/fsr4_compat_core.cpp)
 - [ ] [runtime/backends/fsr/src/fsr4_compat_core.h](runtime/backends/fsr/src/fsr4_compat_core.h)
 - [ ] [runtime/backends/fsr/src/fsr4_compat_platform.h](runtime/backends/fsr/src/fsr4_compat_platform.h)
