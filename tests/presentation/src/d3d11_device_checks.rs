@@ -272,7 +272,8 @@ pub(super) unsafe extern "C" fn rsf_d3d11_fixture_borderless(chain: Raw, window:
         cbSize: size_of::<MONITORINFO>() as u32,
         ..Default::default()
     };
-    unsafe {
+    // The window is only sized from the result; a failed query leaves an empty rectangle.
+    let _ = unsafe {
         GetMonitorInfoW(
             MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY),
             &mut monitor,

@@ -187,7 +187,7 @@ impl Mode {
         let class = s!("_XRAY_FIXTURE");
         let xray = WNDCLASSA {
             hInstance: instance,
-            lpfnWndProc: Some(DefWindowProcA),
+            lpfnWndProc: Some(default_window_procedure),
             lpszClassName: class,
             ..Default::default()
         };
@@ -582,4 +582,14 @@ unsafe extern "C" fn rsf_d3d11_fixture_main(
     native: &rsf_ac7_fixture_calls,
 ) -> i32 {
     unsafe { run(args(argc, argv), native) }.unwrap_or_else(|status| status)
+}
+
+// The windows crate wraps DefWindowProcA in a Rust function; the class needs the system ABI.
+unsafe extern "system" fn default_window_procedure(
+    window: windows::Win32::Foundation::HWND,
+    message: u32,
+    wparam: windows::Win32::Foundation::WPARAM,
+    lparam: windows::Win32::Foundation::LPARAM,
+) -> windows::Win32::Foundation::LRESULT {
+    unsafe { DefWindowProcA(window, message, wparam, lparam) }
 }

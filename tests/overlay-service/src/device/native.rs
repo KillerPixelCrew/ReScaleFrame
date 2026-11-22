@@ -129,7 +129,7 @@ impl Graphics {
         let module = unsafe { GetModuleHandleW(PCWSTR::null()) }.map_err(StartError::Window)?;
         let instance = HINSTANCE(module.0);
         let class = WNDCLASSW {
-            lpfnWndProc: Some(DefWindowProcW),
+            lpfnWndProc: Some(default_window_procedure),
             hInstance: instance,
             lpszClassName: CLASS,
             ..Default::default()
@@ -210,4 +210,14 @@ impl Graphics {
         run(&chain.ok_or(E_POINTER)?);
         Ok(())
     }
+}
+
+// The windows crate wraps DefWindowProcW in a Rust function; the class needs the system ABI.
+unsafe extern "system" fn default_window_procedure(
+    window: windows::Win32::Foundation::HWND,
+    message: u32,
+    wparam: windows::Win32::Foundation::WPARAM,
+    lparam: windows::Win32::Foundation::LPARAM,
+) -> windows::Win32::Foundation::LRESULT {
+    unsafe { DefWindowProcW(window, message, wparam, lparam) }
 }

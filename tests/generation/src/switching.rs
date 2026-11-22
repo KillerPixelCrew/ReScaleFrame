@@ -161,7 +161,7 @@ unsafe extern "C" fn rsf_test_fg_switching(argc: c_int, argv: *const *const c_ch
             std::process::exit(SKIP);
         }
         if result != OK
-            || !unsafe { device::disabled_present(host.borrowed) }.is_some_and(|hr| hr >= 0)
+            || unsafe { device::disabled_present(host.borrowed) }.is_none_or(|hr| hr < 0)
         {
             std::process::exit(1);
         }

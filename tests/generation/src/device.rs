@@ -87,7 +87,7 @@ impl Window {
     pub(super) fn sized(class: PCWSTR, title: PCWSTR, width: i32, height: i32) -> Result<Self> {
         let instance = HINSTANCE(unsafe { GetModuleHandleW(PCWSTR::null())? }.0);
         let wc = WNDCLASSW {
-            lpfnWndProc: Some(DefWindowProcW),
+            lpfnWndProc: Some(default_window_procedure),
             hInstance: instance,
             lpszClassName: class,
             ..Default::default()
@@ -190,4 +190,14 @@ pub(super) unsafe fn disabled_present(chain: Raw) -> Option<i32> {
     let _backbuffer =
         unsafe { swap.GetBuffer::<ID3D12Resource>(swap.GetCurrentBackBufferIndex()) }.ok()?;
     Some(unsafe { swap.Present(0, DXGI_PRESENT(0)) }.0)
+}
+
+// The windows crate wraps DefWindowProcW in a Rust function; the class needs the system ABI.
+unsafe extern "system" fn default_window_procedure(
+    window: windows::Win32::Foundation::HWND,
+    message: u32,
+    wparam: windows::Win32::Foundation::WPARAM,
+    lparam: windows::Win32::Foundation::LPARAM,
+) -> windows::Win32::Foundation::LRESULT {
+    unsafe { DefWindowProcW(window, message, wparam, lparam) }
 }

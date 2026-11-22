@@ -210,7 +210,8 @@ pub(super) unsafe extern "C" fn rsf_d3d11_fixture_proxy_smoke(proxy_path: *const
     else {
         return 1;
     };
-    let suffix = unsafe { w!("\\proxy-smoke-logs").as_wide() };
+    let suffix = w!("\\proxy-smoke-logs");
+    let suffix = unsafe { suffix.as_wide() };
     if leaf + suffix.len() + 1 > logs.len() {
         return 1;
     }

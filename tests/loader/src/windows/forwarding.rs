@@ -59,11 +59,30 @@ extern "C" fn rsf_test_shared_shim_exports() -> i32 {
     type Info = unsafe extern "system" fn(*const u16, u32, u32, *mut c_void) -> BOOL;
     type Query =
         unsafe extern "system" fn(*const c_void, *const u16, *mut *mut c_void, *mut u32) -> BOOL;
-    let size = unsafe { std::mem::transmute::<_, Size>(address(shim, c"GetFileVersionInfoSizeW")) };
-    let original_size =
-        unsafe { std::mem::transmute::<_, Size>(address(original, c"GetFileVersionInfoSizeW")) };
-    let info = unsafe { std::mem::transmute::<_, Info>(address(shim, c"GetFileVersionInfoW")) };
-    let query = unsafe { std::mem::transmute::<_, Query>(address(shim, c"VerQueryValueW")) };
+    let size = unsafe {
+        std::mem::transmute::<unsafe extern "system" fn() -> isize, Size>(address(
+            shim,
+            c"GetFileVersionInfoSizeW",
+        ))
+    };
+    let original_size = unsafe {
+        std::mem::transmute::<unsafe extern "system" fn() -> isize, Size>(address(
+            original,
+            c"GetFileVersionInfoSizeW",
+        ))
+    };
+    let info = unsafe {
+        std::mem::transmute::<unsafe extern "system" fn() -> isize, Info>(address(
+            shim,
+            c"GetFileVersionInfoW",
+        ))
+    };
+    let query = unsafe {
+        std::mem::transmute::<unsafe extern "system" fn() -> isize, Query>(address(
+            shim,
+            c"VerQueryValueW",
+        ))
+    };
     let mut ignored = 0;
     let count = unsafe { size(system_kernel.as_ptr(), &mut ignored) };
     require(
@@ -154,10 +173,16 @@ extern "C" fn rsf_test_xinput_carrier() -> i32 {
     ) else {
         fail("resolve carrier and system state and vibration exports");
     };
-    let state = unsafe { std::mem::transmute::<_, GetState>(state) };
-    let native_state = unsafe { std::mem::transmute::<_, GetState>(native_state) };
-    let vibration = unsafe { std::mem::transmute::<_, SetState>(vibration) };
-    let native_vibration = unsafe { std::mem::transmute::<_, SetState>(native_vibration) };
+    let state =
+        unsafe { std::mem::transmute::<unsafe extern "system" fn() -> isize, GetState>(state) };
+    let native_state = unsafe {
+        std::mem::transmute::<unsafe extern "system" fn() -> isize, GetState>(native_state)
+    };
+    let vibration =
+        unsafe { std::mem::transmute::<unsafe extern "system" fn() -> isize, SetState>(vibration) };
+    let native_vibration = unsafe {
+        std::mem::transmute::<unsafe extern "system" fn() -> isize, SetState>(native_vibration)
+    };
     let mut input = XINPUT_STATE::default();
     let mut output = XINPUT_VIBRATION::default();
     // An invalid user index verifies native forwarding without touching a controller.

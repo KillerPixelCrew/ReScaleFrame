@@ -73,7 +73,10 @@ impl Worker {
         };
         if let Some(name) = name.filter(|_| !thread.is_null()) {
             let set_name = unsafe {
-                transmute::<_, unsafe extern "system" fn(HANDLE, *const u16) -> i32>(name)
+                transmute::<
+                    unsafe extern "system" fn() -> isize,
+                    unsafe extern "system" fn(HANDLE, *const u16) -> i32,
+                >(name)
             };
             unsafe { set_name(thread, w!("rsf-dump-probe-worker")) };
         }

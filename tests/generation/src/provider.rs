@@ -9,6 +9,8 @@ use std::ptr::null_mut;
 use windows::Win32::Graphics::{Direct3D12::*, Dxgi::IDXGIAdapter1};
 use windows::core::{Interface, PCSTR, w};
 
+// An ABI-identical raw-pointer view of exports another module declares with references.
+#[allow(clashing_extern_declarations)]
 unsafe extern "C" {
     fn rsf_streamline_host_create(setup: *const rsf_streamline_host_setup, host: *mut Raw) -> i32;
     fn rsf_streamline_host_graphics(host: Raw, graphics: *mut rsf_streamline_graphics) -> i32;
@@ -281,10 +283,10 @@ unsafe extern "C" fn rsf_test_fg_provider(argc: c_int, argv: *const *const c_cha
     let Some(provider) = provider else { return 1 };
 
     let mut debug: Option<ID3D12Debug> = None;
-    if unsafe { D3D12GetDebugInterface(&mut debug) }.is_ok() {
-        if let Some(debug) = &debug {
-            unsafe { debug.EnableDebugLayer() };
-        }
+    if unsafe { D3D12GetDebugInterface(&mut debug) }.is_ok()
+        && let Some(debug) = &debug
+    {
+        unsafe { debug.EnableDebugLayer() };
     }
     let Ok(factory) = device::factory() else {
         return 1;

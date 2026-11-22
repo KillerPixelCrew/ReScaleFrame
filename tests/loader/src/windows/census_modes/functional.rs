@@ -404,6 +404,7 @@ fn counters(checks: &mut Checks, calls: &rsf_census_counters, rows: &[Value]) {
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn rsf_test_census_functional(
     dir: *const c_char,
     install: Install,

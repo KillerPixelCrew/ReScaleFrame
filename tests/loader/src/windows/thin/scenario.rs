@@ -330,7 +330,7 @@ pub(super) fn startup_test(mode: &str, source: &Path, runtime: &Path, adapter: &
     };
     let thread_mode = unsafe { GetThreadErrorMode() };
     let process_mode = unsafe { GetErrorMode() };
-    let mut output = null_mut();
+    let mut output: *mut std::ffi::c_void = null_mut();
     let pointer = (&raw mut output).expose_provenance();
     environment(w!("RSF_THIN_FIXTURE_EVENTS"), Some(events.as_os_str()));
     environment(
@@ -370,8 +370,12 @@ pub(super) fn startup_test(mode: &str, source: &Path, runtime: &Path, adapter: &
         observed().is_empty(),
         "DllMain never starts configured modules or a background worker",
     );
-    let can_unload =
-        unsafe { std::mem::transmute::<_, Status>(address(carrier, c"DllCanUnloadNow")) };
+    let can_unload = unsafe {
+        std::mem::transmute::<unsafe extern "system" fn() -> isize, Status>(address(
+            carrier,
+            c"DllCanUnloadNow",
+        ))
+    };
     unsafe { can_unload() };
     require(
         observed().is_empty(),

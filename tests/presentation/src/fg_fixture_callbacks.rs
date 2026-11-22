@@ -314,8 +314,11 @@ pub(super) unsafe extern "C" fn rsf_fg_fixture_prepare(
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_fg_fixture_latency(
     user: Raw,
-    event: &rsf_observer_present_event,
+    event: *const rsf_observer_present_event,
 ) {
+    let Some(event) = (unsafe { event.as_ref() }) else {
+        return;
+    };
     let state = unsafe { &*user.cast::<State>() };
     let session = unsafe { rsf_d3d11_present_session() };
     let Some(mark) = provider().and_then(|api| api.marker) else {

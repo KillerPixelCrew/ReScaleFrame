@@ -382,7 +382,7 @@ unsafe extern "C" fn rsf_d3d11_fixture_run_loop(run: &rsf_ac7_loop) -> i32 {
         ..Default::default()
     };
     if unsafe { rsf_observer_get_status(&mut presenter) } != 0
-        || presenter.frames_presented != 12 + frame_count
+        || u64::from(presenter.frames_presented) != 12 + frame_count
     {
         return 1;
     }

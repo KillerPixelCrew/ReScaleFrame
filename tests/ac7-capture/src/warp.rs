@@ -101,7 +101,7 @@ impl Window {
     fn create() -> Test<Self> {
         let instance = HINSTANCE(win(unsafe { GetModuleHandleW(PCWSTR::null()) })?.0);
         let class = WNDCLASSW {
-            lpfnWndProc: Some(DefWindowProcW),
+            lpfnWndProc: Some(default_window_procedure),
             hInstance: instance,
             lpszClassName: CLASS,
             ..Default::default()
@@ -744,3 +744,13 @@ const GS_SOURCE: &str = r#"struct V{float4 p:SV_Position;};[maxvertexcount(3)]vo
 const HS_SOURCE: &str = r#"struct V{float4 p:SV_Position;};struct F{float edge[3]:SV_TessFactor;float inside:SV_InsideTessFactor;};F patch(InputPatch<V,3> v){F f;f.edge[0]=f.edge[1]=f.edge[2]=f.inside=1;return f;}[domain("tri")][partitioning("integer")][outputtopology("triangle_cw")][outputcontrolpoints(3)][patchconstantfunc("patch")]V main(InputPatch<V,3> v,uint id:SV_OutputControlPointID){return v[id];}"#;
 
 const DS_SOURCE: &str = r#"struct V{float4 p:SV_Position;};struct F{float edge[3]:SV_TessFactor;float inside:SV_InsideTessFactor;};[domain("tri")] V main(F f,float3 uv:SV_DomainLocation,const OutputPatch<V,3> v){V o;o.p=v[0].p*uv.x+v[1].p*uv.y+v[2].p*uv.z;return o;}"#;
+
+// The windows crate wraps DefWindowProcW in a Rust function; the class needs the system ABI.
+unsafe extern "system" fn default_window_procedure(
+    window: windows::Win32::Foundation::HWND,
+    message: u32,
+    wparam: windows::Win32::Foundation::WPARAM,
+    lparam: windows::Win32::Foundation::LPARAM,
+) -> windows::Win32::Foundation::LRESULT {
+    unsafe { DefWindowProcW(window, message, wparam, lparam) }
+}

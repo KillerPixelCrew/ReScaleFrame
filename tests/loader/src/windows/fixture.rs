@@ -23,7 +23,7 @@ struct EventPath(UnsafeCell<[u16; PATH_CAPACITY]>);
 unsafe impl Sync for EventPath {}
 static EVENT_PATH: EventPath = EventPath(UnsafeCell::new([0; PATH_CAPACITY]));
 
-fn value<'a>(name: *const u16, output: &'a mut [u16]) -> Option<&'a [u16]> {
+fn value(name: *const u16, output: &mut [u16]) -> Option<&[u16]> {
     let count =
         unsafe { GetEnvironmentVariableW(name, output.as_mut_ptr(), output.len() as u32) } as usize;
     (count != 0 && count < output.len()).then(|| &output[..count])

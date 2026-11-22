@@ -13,5 +13,6 @@ mod leases;
 mod policy;
 mod provider;
 mod session;
+#[allow(dead_code)] // bindgen output
 mod session_abi;
 mod switching;

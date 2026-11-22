@@ -222,6 +222,8 @@ extern "C" fn plain(_: Raw) -> i32 {
     OK
 }
 
+// The callee reads these records through the raw pointer it was given.
+#[allow(unused_assignments)]
 #[unsafe(no_mangle)]
 extern "C" fn rsf_test_fg_session() -> i32 {
     // The public callbacks synchronously observe the same thread's mock provider and host.

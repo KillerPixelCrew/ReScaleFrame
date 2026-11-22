@@ -482,10 +482,10 @@ fn run(args: &[*const c_char]) -> ProbeResult<bool> {
     }
     if ok {
         for i in 0..60 {
-            if i == 59 {
-                if let Some(capture) = &capture {
-                    capture.start(dev);
-                }
+            if i == 59
+                && let Some(capture) = &capture
+            {
+                capture.start(dev);
             }
             frame.reset = u32::from(i == 0);
             frame.frame_index = i + 1;

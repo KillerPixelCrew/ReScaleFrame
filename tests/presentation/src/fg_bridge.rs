@@ -648,7 +648,7 @@ pub(super) unsafe extern "C" fn rsf_fg_bridge_fixture_check_flip(readback: Raw, 
     let Some([r, g, b, a]) = rgba else {
         return -1;
     };
-    let expected = r == if frame % 2 != 0 { 255 } else { 0 };
+    let expected = r == if !frame.is_multiple_of(2) { 255 } else { 0 };
     let matches = expected && (127..=128).contains(&g) && (63..=64).contains(&b) && a == 255;
     if !matches {
         eprintln!("FAIL: DX11 cached-view frame {frame} presented RGBA={r},{g},{b},{a}");

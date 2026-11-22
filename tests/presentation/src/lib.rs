@@ -29,6 +29,7 @@ mod gl_fixture_abi;
 mod gl_pipeline_fixture;
 #[cfg(feature = "gl-device-fixture")]
 mod gl_pipeline_fixture_abi;
+#[allow(dead_code)] // bindgen output
 mod present_fixture_loops_abi;
 mod present_fixture_startup;
 mod present_fixture_time;
