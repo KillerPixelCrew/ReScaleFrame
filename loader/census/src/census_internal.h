@@ -13,6 +13,7 @@
 
 #include "rescaleframe/vendor_census.h"
 #include "decode_platform.h"
+#include "hook_platform.h"
 
 namespace rsf_census {
 
@@ -179,30 +180,19 @@ enum class Fn : uint16_t {
         Count
 };
 
-struct FnDesc {
-    const char* id;
-    const char* api;
-    const char* name;    // export name, may be null
-    const char* modules; // see above
-};
+using FnDesc = rsf_census_hook_desc;
 
 constexpr size_t kFnCount = static_cast<size_t>(Fn::Count);
 extern const FnDesc kFns[kFnCount];
 inline size_t idx(Fn f) noexcept { return static_cast<size_t>(f); }
 
 // ---- Bound originals --------------------------------------------------------------------------
-// g_orig is the function a wrapper forwards to: a MinHook trampoline for a detour, or the real
-// export for a GetProcAddress thunk. g_wrapper is the wrapper's address. g_target is the detoured
-// function for an inline binding and null for a thunk binding.
-extern std::atomic<void*> g_orig[kFnCount];
-extern void* g_wrapper[kFnCount];
-extern std::atomic<void*> g_target[kFnCount];
-
-template <Fn F>
-inline void* orig() noexcept {
-    return g_orig[idx(F)].load(std::memory_order_acquire);
+// The Rust binding owner publishes the MinHook trampoline or resolver original for each wrapper.
+inline void* orig_by(Fn f) noexcept {
+    return rsf_census_hook_original(static_cast<uint16_t>(f));
 }
-inline void* orig_by(Fn f) noexcept { return g_orig[idx(f)].load(std::memory_order_acquire); }
+template <Fn F>
+inline void* orig() noexcept { return orig_by(F); }
 
 // First binding wins. Returns the address to hand back to the game: the wrapper, or `real` when
 // the entry is bound to a different implementation (counted as a conflict) or already detoured.

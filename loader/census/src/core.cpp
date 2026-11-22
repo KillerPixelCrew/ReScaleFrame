@@ -20,10 +20,6 @@ const FnDesc kFns[kFnCount] = {
 #undef X
 };
 
-std::atomic<void*> g_orig[kFnCount];
-void* g_wrapper[kFnCount];
-std::atomic<void*> g_target[kFnCount];
-
 void register_wrappers_vk(void** table) noexcept {
     static constexpr Fn entries[] = {
 #define RSF_CENSUS_VK_MAP(name) Fn::name,

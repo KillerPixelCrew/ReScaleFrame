@@ -73,6 +73,10 @@ generate("loader/src/census/wrapper_abi.rs", "loader/census/src/wrapper_platform
          ["--no-prepend-enum-name", "--blocklist-type", "rsf_census_json",
           "--raw-line", "#![allow(non_upper_case_globals)]",
           "--raw-line", "use super::json_abi::rsf_census_json;"])
+generate("loader/src/census/hook_abi.rs", "loader/census/src/hook_platform.h",
+         "rsf_census_(hook_(desc|platform)|visit_module)",
+         "RSF_CENSUS_FLAG_(D3D12_DEBUG_ONLY|NO_(DXGI|VULKAN|GETPROCADDRESS_HOOK|LOADLIBRARY_HOOK))",
+         ["-Iloader/census/include"])
 generate("tests/loader/src/windows/module_dump_abi.rs",
          "loader/diagnostics/include/rescaleframe/module_dump.h",
          "rsf_dump_(options|report|result)", "RSF_MODULE_DUMP_ABI_VERSION", [],

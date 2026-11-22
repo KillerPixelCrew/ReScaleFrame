@@ -145,3 +145,21 @@ byte spans for its existing stream. The port keeps the bounded line reads, decim
 hex addresses, comments, UTF-8 BOM, skip count and UTF-16 JSON escaping. The schema fixture
 adds a first-record BOM and a non-BMP character to exercise the ported parser. Native module
 list, thread, function and RTTI sidecar sections still need further porting.
+
+## Census hook binding ownership
+
+The branch at `82b39a63` removes `loader/census/src/hooks.cpp`. Rust owns the export lookup
+table, binding and conflict accounting, resolver and loader callbacks, module filtering, patch
+snapshots and JSON hook summary. The MinHook callback table carries the unchanged native export
+descriptors and the four graphics creation roots. The Rust binding path still preserves their
+resolver results to avoid a cached-thunk cycle with an overlay. Last error is restored after
+bookkeeping. Existing detour trampolines stay mapped on shutdown.
+
+The native platform leaf contains the MSVC loader-list walk and MinHook calls. Each loader-list
+read is guarded, and the walk has a traversal bound for calls outside DllMain. A mutex now
+publishes whole hook records and names. A contended fatal-error summary may omit the hook and
+module arrays for that sample instead of waiting on the hook record lock.
+
+Source checks compare resolver entry names, data-file flags, root exclusions, summary keys,
+patch length, and exact descriptor sharing. Builds and the existing DllMain, creation identity,
+Vulkan and injected-overlay fixture runs remain user-owned.

@@ -72,7 +72,7 @@ void with_interface(void* obj, const GUID& iid, F&& fn) noexcept {
 }
 
 void ensure_inline(Fn fn, void* obj, size_t slot, const char* why) noexcept {
-    if (g_orig[idx(fn)].load(std::memory_order_acquire)) return;
+    if (orig_by(fn)) return;
     void* target = vtable_slot(obj, slot);
     if (target && bind_inline(fn, target, why)) hooks_apply();
 }
