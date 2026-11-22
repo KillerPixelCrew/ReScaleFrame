@@ -446,8 +446,7 @@ generate("games/unity-mono/src/package_abi.rs", "integrations/unity/native/packa
           "--raw-line", "use crate::plugin_abi::rsf_unity_native_api;",
           "--raw-line", "use crate::runtime_abi::{rsf_backend_log_fn, rsf_fg12_setup};",
           "--raw-line", "pub use rsf_game_sys::sharpening_abi::rsf_sharpening_options;",
-          "--raw-line", "use rsf_game_sys::{\n"
-          "    rsf_game_cpu_event, rsf_game_host_services, rsf_game_render_pass,\n};",
+          "--raw-line", "use rsf_game_sys::{rsf_game_cpu_event, rsf_game_host_services, rsf_game_render_pass};",
           "--with-derive-custom-struct", "rsf_unity_package_platform=Copy,Clone"])
 generate("tests/engine_sharpening_abi.rs", "integrations/unity/native/package_state.h",
          "rsf_(godot_settings|unity_package_settings|srvk_(frame|image))",

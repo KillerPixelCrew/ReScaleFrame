@@ -7,9 +7,7 @@ type rsf_backend_result = i32;
 use crate::plugin_abi::rsf_unity_native_api;
 use crate::runtime_abi::{rsf_backend_log_fn, rsf_fg12_setup};
 pub use rsf_game_sys::sharpening_abi::rsf_sharpening_options;
-use rsf_game_sys::{
-    rsf_game_cpu_event, rsf_game_host_services, rsf_game_render_pass,
-};
+use rsf_game_sys::{rsf_game_cpu_event, rsf_game_host_services, rsf_game_render_pass};
 
 pub const RSF_SR_NONE: u32 = 0;
 pub const RSF_DLSS_ABI_VERSION: u32 = 5;
