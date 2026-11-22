@@ -2,6 +2,7 @@
 // D3D11 to D3D12 SR bridge: the game's D3D11 device, a D3D12 device on the same adapter, shared
 // surfaces and one shared fence. This owner decides lifetime, cross-API ordering, input leases,
 // GPU retirement and failure policy. The Windows platform supplies the native operations.
+use crate::sys::RSF_SR_NONE;
 use rsf_game_sys::backend_result::{
     ABI_MISMATCH, FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, NOT_READY, NOT_SUPPORTED, OK,
     WRONG_API,
@@ -23,7 +24,6 @@ use std::ptr::{self, NonNull};
 use std::time::Instant;
 
 const API_D3D11: u32 = 1;
-const SR_NONE: u32 = 0;
 
 // DXGI formats and D3D12 states, checked against the Windows bindings in platform.rs.
 const COLOR_FORMAT: u32 = 10; // R16G16B16A16_FLOAT
@@ -501,7 +501,7 @@ impl Bridge {
     }
 
     fn select(&mut self, backend: u32, quality: u32, version_id: u64) -> i32 {
-        if self.faulted && backend != SR_NONE {
+        if self.faulted && backend != RSF_SR_NONE {
             return NOT_READY;
         }
         // Any selection, including none, may close the SDK context the warm-up still uses.

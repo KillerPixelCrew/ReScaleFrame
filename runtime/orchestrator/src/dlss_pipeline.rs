@@ -24,13 +24,13 @@ use crate::sr_legacy::{
     rsf_sr_legacy_select, rsf_sr_legacy_warm_up,
 };
 use crate::sr_session::has_capacity;
-use crate::sys::RSF_DLSS_ABI_VERSION;
 use crate::sys::rsf_dlss_setup;
 use crate::sys::{
     RSF_D3D11_BIND_RENDER_TARGET, RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_FORMAT_RG16_FLOAT,
     RSF_D3D11_FORMAT_RG32_FLOAT, RSF_D3D11_FORMAT_RGBA16_FLOAT, RSF_D3D11_USAGE_DEFAULT,
     rsf_d3d11_texture_desc as TextureDesc,
 };
+use crate::sys::{RSF_DLSS_ABI_VERSION, RSF_SR_DLSS, RSF_SR_NONE, RSF_SR_XESS};
 use crate::sys::{
     RSF_DLSS_PIPELINE_ABI_VERSION as ABI, rsf_dlss_pipeline_frame as Frame,
     rsf_motion_decode_params as DecodeParams,
@@ -63,10 +63,7 @@ pub(super) const FRAME_REFUSED: i32 = -9;
 pub(super) const EVALUATE_FAILED: i32 = -10;
 // rsf_dlss_result: the adapter, driver or OS cannot run DLSS.
 const DLSS_NOT_SUPPORTED: i32 = -7;
-// sr_session.h backend identifiers and dlss.h quality.
-const SR_NONE: u32 = crate::NONE;
-const SR_DLSS: u32 = crate::DLSS;
-const SR_XESS: u32 = crate::XESS;
+// dlss.h quality.
 const QUALITY_NATIVE: u32 = 0;
 // D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION and D3D11_BIND_UNORDERED_ACCESS.
 const MAX_EXTENT: u32 = 16384;
@@ -204,8 +201,8 @@ impl Shared {
                 last_result: OK,
             },
             layer_extent: [0; 2],
-            backend: SR_DLSS,
-            requested_backend: SR_DLSS,
+            backend: RSF_SR_DLSS,
+            requested_backend: RSF_SR_DLSS,
             last_switch_result: 0,
             dump: None,
             reset_pending: false,
@@ -378,7 +375,7 @@ struct Needs {
 }
 
 fn needs_of(backend: u32) -> Needs {
-    let dlss = backend == SR_DLSS;
+    let dlss = backend == RSF_SR_DLSS;
     Needs {
         dense_motion: dlss,
         colour_transport: dlss,
@@ -806,8 +803,8 @@ impl Pipeline {
         owned.layer_given_up = false;
         owned.layer_reported = Reported::default();
         let mut shared = self.shared();
-        shared.backend = SR_DLSS;
-        shared.requested_backend = SR_DLSS;
+        shared.backend = RSF_SR_DLSS;
+        shared.requested_backend = RSF_SR_DLSS;
         shared.last_switch_result = 0;
         shared.supported = false;
         shared.dump = None;
@@ -817,7 +814,7 @@ impl Pipeline {
 
     #[cfg(test)]
     pub(super) unsafe fn start(&self, p: &P, device: Raw, setup: *const Setup) -> i32 {
-        unsafe { self.start_backend(p, device, setup, SR_DLSS) }
+        unsafe { self.start_backend(p, device, setup, RSF_SR_DLSS) }
     }
 
     unsafe fn start_backend(&self, p: &P, device: Raw, setup: *const Setup, backend: u32) -> i32 {
@@ -825,8 +822,8 @@ impl Pipeline {
             return INVALID;
         }
         let setup = unsafe { &*setup };
-        if !(SR_DLSS..=SR_XESS).contains(&backend)
-            || (backend == SR_DLSS
+        if !(RSF_SR_DLSS..=RSF_SR_XESS).contains(&backend)
+            || (backend == RSF_SR_DLSS
                 && (setup.streamline_directory_utf8.is_null()
                     || unsafe { *setup.streamline_directory_utf8 } == 0))
             || setup.output_width == 0
@@ -890,7 +887,7 @@ impl Pipeline {
         owned.device = Some(unsafe { ComRef::retain(device) });
         let [width, height] = [setup.output_width, setup.output_height];
         let mut range = Range::alternate([width, height]);
-        let result = if backend == SR_DLSS {
+        let result = if backend == RSF_SR_DLSS {
             match unsafe { self.prepare_dlss(p, owned, [width, height], setup.quality) } {
                 Ok(plan) => {
                     range = plan;
@@ -1173,7 +1170,7 @@ impl Pipeline {
             dlss.motion_scale_y = 1.0 / rh as f32;
             resolved = true;
         }
-        if backend == SR_DLSS {
+        if backend == RSF_SR_DLSS {
             dlss.motion_scale_x = dlss_motion_scale(dlss.motion_scale_x, motion_in_uv, resolved);
             dlss.motion_scale_y = dlss_motion_scale(dlss.motion_scale_y, motion_in_uv, resolved);
         }
@@ -1234,7 +1231,7 @@ impl Pipeline {
             .sharpening
             .unwrap_or_else(sharpening_policy::defaults);
         let mut submitted = dlss;
-        let evaluated = if backend == SR_DLSS {
+        let evaluated = if backend == RSF_SR_DLSS {
             o.dlss_evaluation_attempted = true;
             unsafe { (p.fg_evaluate)(context, &dlss) }
         } else {
@@ -1258,7 +1255,7 @@ impl Pipeline {
         // alternate backends hand over the adapter's dense inputs.
         if evaluated == 0 {
             let mut generation = dlss;
-            if backend != SR_DLSS
+            if backend != RSF_SR_DLSS
                 && unsafe {
                     rsf_sr_legacy_fg_inputs(
                         o.alternate,
@@ -1535,17 +1532,17 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         backend: u32,
     ) {
         let (mut depth, mut motion) = (dlss.depth, dlss.motion);
-        if backend != SR_DLSS {
+        if backend != RSF_SR_DLSS {
             unsafe { rsf_sr_legacy_fg_inputs(o.alternate, &mut depth, &mut motion) };
         }
         let mapping = rsf_dlssp_sharpen_frame {
             depth_inverted: dlss.depth_inverted,
-            motion_x: if backend == SR_DLSS {
+            motion_x: if backend == RSF_SR_DLSS {
                 frame.render_width as f32 * dlss.motion_scale_x
             } else {
                 1.0
             },
-            motion_y: if backend == SR_DLSS {
+            motion_y: if backend == RSF_SR_DLSS {
                 frame.render_height as f32 * dlss.motion_scale_y
             } else {
                 1.0
@@ -1847,7 +1844,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         else {
             return NOT_RUNNING;
         };
-        if backend != SR_DLSS || o.device.is_none() || !o.streamline_loaded {
+        if backend != RSF_SR_DLSS || o.device.is_none() || !o.streamline_loaded {
             return NOT_RUNNING;
         }
         let (output, motion) = (output.as_ptr(), motion.as_ptr());
@@ -2007,7 +2004,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
             }
             (shared.backend, shared.output)
         };
-        let range = if backend != SR_DLSS {
+        let range = if backend != RSF_SR_DLSS {
             let mut range = Range::alternate(output);
             if unsafe {
                 rsf_sr_legacy_select(
@@ -2076,7 +2073,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         }
         let mut range = Range::alternate([width, height]);
         let mut next_alternate: *mut Adapter = null_mut();
-        if backend == SR_DLSS {
+        if backend == RSF_SR_DLSS {
             range = match unsafe { self.plan_dlss(p, [width, height], quality) } {
                 Ok(plan) => plan,
                 Err(result) => return result,
@@ -2110,7 +2107,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
             unsafe { rsf_sr_legacy_destroy(next_alternate) };
             return RESOURCE_FAILED;
         };
-        if backend == SR_DLSS && o.dlss_evaluation_attempted {
+        if backend == RSF_SR_DLSS && o.dlss_evaluation_attempted {
             if unsafe { (p.release_resources)() } != 0 {
                 return STREAMLINE_FAILED;
             }
@@ -2211,7 +2208,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         if o.device.is_none() || o.output.is_none() {
             return NOT_RUNNING;
         }
-        if !(SR_DLSS..=SR_XESS).contains(&backend) {
+        if !(RSF_SR_DLSS..=RSF_SR_XESS).contains(&backend) {
             return INVALID;
         }
         let (output, quality) = {
@@ -2220,7 +2217,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
             (shared.output, shared.quality)
         };
         let mut range = Range::alternate(output);
-        let result = if backend == SR_DLSS {
+        let result = if backend == RSF_SR_DLSS {
             let was_loaded = o.streamline_loaded;
             let mut result = match unsafe { self.prepare_dlss(p, o, output, quality) } {
                 Ok(plan) => {
@@ -2231,7 +2228,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
             };
             if result == OK && !o.alternate.is_null() {
                 result = unsafe {
-                    rsf_sr_legacy_select(o.alternate, SR_NONE, quality, null_mut(), null_mut())
+                    rsf_sr_legacy_select(o.alternate, RSF_SR_NONE, quality, null_mut(), null_mut())
                 };
             }
             if result != OK && !was_loaded {

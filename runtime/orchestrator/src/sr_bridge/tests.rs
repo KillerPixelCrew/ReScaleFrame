@@ -607,7 +607,7 @@ fn check_signal_retirement(value: u64, signal: &str, flush: bool) {
     assert_eq!(take_events().last().unwrap(), signal);
     assert_eq!(scene.evaluate(), NOT_READY);
 
-    let select_none = || unsafe { rsf_sr_bridge_select(scene.bridge, SR_NONE, 0, 0) };
+    let select_none = || unsafe { rsf_sr_bridge_select(scene.bridge, RSF_SR_NONE, 0, 0) };
     assert_eq!(select_none(), FEATURE_FAILED);
     assert_eq!(take_events(), [signal]);
 
@@ -667,7 +667,7 @@ fn gpu_failure_faults_the_bridge_until_backend_none() {
     );
     take_events();
     assert_eq!(
-        unsafe { rsf_sr_bridge_select(scene.bridge, SR_NONE, 0, 0) },
+        unsafe { rsf_sr_bridge_select(scene.bridge, RSF_SR_NONE, 0, 0) },
         OK
     );
     assert_eq!(take_events(), ["wait fence12 1", "select 0"]);
@@ -777,7 +777,7 @@ fn warm_up_retains_its_resources_until_gpu_completion() {
     );
     assert_eq!(unsafe { rsf_sr_bridge_select(bridge, 3, 0, 0) }, NOT_READY);
     assert_eq!(
-        unsafe { rsf_sr_bridge_select(bridge, SR_NONE, 0, 0) },
+        unsafe { rsf_sr_bridge_select(bridge, RSF_SR_NONE, 0, 0) },
         NOT_READY
     );
     assert_eq!(
@@ -876,7 +876,7 @@ fn device_removal_releases_a_pending_warm_up() {
     take_events();
     world(|world| world.device_ready = false);
     assert_eq!(
-        unsafe { rsf_sr_bridge_select(scene.bridge, SR_NONE, 0, 0) },
+        unsafe { rsf_sr_bridge_select(scene.bridge, RSF_SR_NONE, 0, 0) },
         OK
     );
     assert_eq!(take_events()[..2], ["wait warm fence 1", "close event"]);

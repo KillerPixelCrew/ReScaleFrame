@@ -610,7 +610,7 @@ fn admission_refuses_in_the_native_order() {
         events().is_empty(),
         "nothing is consulted before validation"
     );
-    assert_eq!(describe(&setup(&files, SR_SPATIAL, 5)), 0);
+    assert_eq!(describe(&setup(&files, RSF_SR_SPATIAL, 5)), 0);
     assert_eq!(events(), ["policy 1 5"]);
     let missing = wide("Z:\\rsf-missing-directory\\host.log");
     let unwritable = Setup {
@@ -621,7 +621,7 @@ fn admission_refuses_in_the_native_order() {
     assert!(events().is_empty());
     with(|world| world.policy_ok = false);
     // Auto asks the adapter about native rendering until the adapter is known.
-    assert_eq!(describe(&setup(&files, SR_AUTO, 2)), 8);
+    assert_eq!(describe(&setup(&files, RSF_SR_AUTO, 2)), 8);
     assert_eq!(events(), ["policy 0 2"]);
 }
 
@@ -755,7 +755,7 @@ fn refused_plugins_are_stopped_or_kept_for_retry() {
 fn auto_resolves_from_the_owning_adapter_and_prepares_the_vendor_context() {
     let files = Files::new("auto");
     for (vendor, backend) in [(0x10de, 1), (0x8086, 5), (0x1002, 3)] {
-        let host = host(&files, SR_AUTO, 2);
+        let host = host(&files, RSF_SR_AUTO, 2);
         with(|world| world.vendor = vendor);
         let device = fake(null_mut());
         let list = fake(device);
@@ -796,7 +796,7 @@ fn unidentified_adapters_and_refused_policy_keep_native_rendering() {
     let files = Files::new("native");
     let device = fake(null_mut());
     let list = fake(device);
-    let host = host(&files, SR_AUTO, 1);
+    let host = host(&files, RSF_SR_AUTO, 1);
     with(|world| world.adapter_ok = false);
     run(&host, list, &sr((1920, 1080)), true);
     assert!(events().is_empty());
@@ -811,7 +811,7 @@ fn unidentified_adapters_and_refused_policy_keep_native_rendering() {
             .contains("Automatic SR refused: owning D3D12 adapter could not be identified.")
     );
 
-    let host = self::host(&files, SR_AUTO, 1);
+    let host = self::host(&files, RSF_SR_AUTO, 1);
     with(|world| world.policy_ok = false);
     run(&host, list, &sr((1920, 1080)), true);
     assert_eq!(events(), ["policy 0 1"]);
@@ -831,7 +831,7 @@ fn spatial_upscaling_is_planned_for_the_engine() {
     let files = Files::new("spatial");
     let list = fake(fake(null_mut()));
     for (quality, width, height) in [(0, 900, 500), (2, 902, 502), (5, 905, 505)] {
-        let setup = setup_v2(&files, SR_SPATIAL, quality);
+        let setup = setup_v2(&files, RSF_SR_SPATIAL, quality);
         let host = unsafe { describe(&setup.base, &PLATFORM) }.ok().unwrap();
         events();
         run(&host, list, &sr((1920, 1080)), true);
@@ -854,7 +854,7 @@ fn spatial_upscaling_is_planned_for_the_engine() {
 fn preset_change_waits_for_its_drain_even_during_resize() {
     reset();
     let files = Files::new("preset-drain");
-    let setup = setup_v2(&files, SR_DLSS, 2);
+    let setup = setup_v2(&files, RSF_SR_DLSS, 2);
     let host = unsafe { describe(&setup.base, &PLATFORM) }.ok().unwrap();
     let device = fake(null_mut());
     let queue = fake(device);
@@ -888,7 +888,7 @@ fn preset_change_waits_for_its_drain_even_during_resize() {
 fn quality_five_spatial_accepts_an_enable_only_change() {
     reset();
     let files = Files::new("spatial-enable");
-    let setup = setup_v2(&files, SR_SPATIAL, 5);
+    let setup = setup_v2(&files, RSF_SR_SPATIAL, 5);
     let host = unsafe { describe(&setup.base, &PLATFORM) }.ok().unwrap();
     let device = fake(null_mut());
     let queue = fake(device);
@@ -1241,7 +1241,7 @@ fn provider_changes_respect_policy_and_wait_for_the_flagged_pass() {
         queue,
         Some(Intent {
             backend_changed: 1,
-            backend: SR_SPATIAL,
+            backend: RSF_SR_SPATIAL,
             ..intent()
         }),
     );
@@ -1251,7 +1251,7 @@ fn provider_changes_respect_policy_and_wait_for_the_flagged_pass() {
     for refused in [
         Intent {
             backend_changed: 1,
-            backend: SR_AUTO,
+            backend: RSF_SR_AUTO,
             ..intent()
         },
         Intent {

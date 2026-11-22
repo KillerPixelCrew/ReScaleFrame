@@ -9,6 +9,7 @@ use crate::d3d11_host_reduced::{
     MAX_RESERVED, Products, ProductsFactory, Raw, Ticket, zeroed_pass,
 };
 use crate::native_cpu::{SourcePacket, decode_source_event};
+use crate::sys::RSF_SR_DLSS;
 use crate::sys::rsf_d3d11_present_setup;
 use crate::sys::{
     RSF_FG_OFF, RSF_RENDER_FRONTEND_ABI_VERSION, rsf_native_fg_options, rsf_render_settings,
@@ -41,7 +42,6 @@ const NOT_READY: i32 = -3;
 const BUSY: i32 = -4;
 const NATIVE_REFUSED: i32 = -5;
 const DLSS_OK: i32 = 0;
-const SR_DLSS: u32 = 1;
 const SR_BACKEND_CHOICES: u32 = 0x3e;
 const FG_BACKEND_DLSS: u32 = 1;
 const FG_BACKEND_FSR3: u32 = 3;
@@ -971,7 +971,7 @@ impl Host {
                 g.last_result = unsafe { (p.pipeline_start)(g.device_ptr(), &start) };
                 g.running = g.last_result == OK;
                 g.backend = settings.sr_backend;
-                g.dlss_started = g.running && g.backend == SR_DLSS;
+                g.dlss_started = g.running && g.backend == RSF_SR_DLSS;
                 g.present_result = DLSS_OK;
                 g.quality = settings.sr_quality;
                 g.output_width = width;
@@ -990,7 +990,7 @@ impl Host {
                     g.last_result = unsafe { (p.pipeline_select)(settings.sr_backend) };
                     if g.last_result == OK {
                         g.backend = settings.sr_backend;
-                        g.dlss_started |= g.backend == SR_DLSS;
+                        g.dlss_started |= g.backend == RSF_SR_DLSS;
                         g.reset = true;
                     }
                 }

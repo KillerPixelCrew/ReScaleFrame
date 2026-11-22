@@ -215,7 +215,7 @@ unsafe extern "C" fn overlay_configure(
             struct_size: size_of::<rsf_render_settings>() as u32,
             abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
             sr_enabled: 1,
-            sr_backend: SR_DLSS,
+            sr_backend: RSF_SR_DLSS,
             ..zeroed_settings()
         }
     };

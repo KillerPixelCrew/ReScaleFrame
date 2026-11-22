@@ -574,11 +574,7 @@ unsafe extern "C" fn begin(
     resource.into_raw()
 }
 
-unsafe extern "C" fn install(
-    window: *mut c_void,
-    log: OverlayLog,
-    user: *mut c_void,
-) -> u32 {
+unsafe extern "C" fn install(window: *mut c_void, log: OverlayLog, user: *mut c_void) -> u32 {
     let options = rsf_overlay_input_options {
         struct_size: size_of::<rsf_overlay_input_options>() as u32,
         abi_version: RSF_OVERLAY_INPUT_ABI_VERSION,

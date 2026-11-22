@@ -109,13 +109,13 @@ pub(super) fn present(
     let (Some(settings), Some(active)) = (pipeline.settings.get(), state.active.as_ref()) else {
         return;
     };
-    let active_sr = state.evaluated_frame == frame && state.status.effective_sr != SR_NONE;
+    let active_sr = state.evaluated_frame == frame && state.status.effective_sr != RSF_SR_NONE;
     *settings.report.lock().unwrap() = rsf_overlay_sr_report {
         struct_size: size_of::<rsf_overlay_sr_report>() as u32,
         effective_backend: if active_sr {
             state.status.effective_sr
         } else {
-            SR_NONE
+            RSF_SR_NONE
         },
         effective_quality: active.shape.quality,
         render_width: active.render_width,
@@ -195,11 +195,11 @@ unsafe extern "C" fn rsf_gl_pipeline_settings_open(
         let mut defaults = rsf_render_settings {
             struct_size: size_of::<rsf_render_settings>() as u32,
             abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
-            sr_enabled: u32::from(legacy.sr_backend != SR_NONE),
-            sr_backend: if legacy.sr_backend != SR_NONE {
+            sr_enabled: u32::from(legacy.sr_backend != RSF_SR_NONE),
+            sr_backend: if legacy.sr_backend != RSF_SR_NONE {
                 legacy.sr_backend
             } else {
-                SR_AUTO
+                RSF_SR_AUTO
             },
             sr_quality: legacy.quality,
             dlss_preset: legacy.dlss_preset,
@@ -237,7 +237,7 @@ unsafe extern "C" fn rsf_gl_pipeline_settings_open(
             configuration_path: settings.path.as_ptr(),
             configuration_section: settings.section.as_ptr(),
             defaults,
-            sr_backend_choices: SR_CHOICES | (1 << SR_AUTO),
+            sr_backend_choices: SR_CHOICES | (1 << RSF_SR_AUTO),
             sr_quality_choices: 0x1f,
             fg_backend_choices: RSF_FG_BACKEND_ALL | (1 << RSF_FG_BACKEND_AUTO),
             latency_choices: (1 << (RSF_REFLEX_BOOST + 1)) - 1,
@@ -311,7 +311,7 @@ unsafe extern "C" fn rsf_gl_pipeline_configure_settings(
         sr_backend: if requested.sr_enabled != 0 {
             requested.sr_backend
         } else {
-            SR_NONE
+            RSF_SR_NONE
         },
         quality: requested.sr_quality,
         fg_backend: if requested.fg_enabled != 0 {

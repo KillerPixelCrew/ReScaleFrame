@@ -2,25 +2,22 @@
 //! Package and adapter facts used to select a D3D11 SR provider before startup.
 use crate::d3d11_device_identity::device_vendor;
 use rsf_game_sys::{
-    RSF_D3D11_SR_ADMISSION_ABI_VERSION, RSF_SR_AUTO as AUTO, rsf_d3d11_sr_admission as Admission,
+    RSF_D3D11_SR_ADMISSION_ABI_VERSION, RSF_SR_AUTO as AUTO, RSF_SR_DLSS, RSF_SR_FSR3, RSF_SR_FSR4,
+    RSF_SR_XESS, rsf_d3d11_sr_admission as Admission,
 };
 use std::ffi::CStr;
 use std::path::Path;
 
-const DLSS: u32 = 1;
-const FSR3: u32 = 3;
-const FSR4: u32 = 4;
-const XESS: u32 = 5;
 fn package_mask(has: impl Fn(usize, &str) -> bool) -> u32 {
     let mut offered = 0;
     if has(0, "sl.interposer.dll") && has(0, "nvngx_dlss.dll") {
-        offered |= 1 << DLSS;
+        offered |= 1 << RSF_SR_DLSS;
     }
     if has(1, "amd_fidelityfx_upscaler_dx12.dll") && has(1, "amd_fidelityfx_loader_dx12.dll") {
-        offered |= (1 << FSR3) | (1 << FSR4);
+        offered |= (1 << RSF_SR_FSR3) | (1 << RSF_SR_FSR4);
     }
     if has(2, "libxess.dll") {
-        offered |= 1 << XESS;
+        offered |= 1 << RSF_SR_XESS;
     }
     offered
 }
@@ -78,12 +75,12 @@ mod tests {
     fn packages_and_gpu_preferences_are_independent() {
         let all = package_mask(|_, _| true);
         let xess = package_mask(|index, name| index == 2 && name == "libxess.dll");
-        assert_eq!(xess, 1 << XESS);
-        assert_eq!(select(0x10de, AUTO, all), DLSS);
-        assert_eq!(select(0x1002, AUTO, all), FSR3);
-        assert_eq!(select(0x8086, AUTO, all), XESS);
-        assert_eq!(select(0x1002, FSR4, all), FSR4);
-        assert_eq!(select(0x10de, DLSS, xess), XESS);
-        assert_eq!(select(0x1414, XESS, all), 0);
+        assert_eq!(xess, 1 << RSF_SR_XESS);
+        assert_eq!(select(0x10de, AUTO, all), RSF_SR_DLSS);
+        assert_eq!(select(0x1002, AUTO, all), RSF_SR_FSR3);
+        assert_eq!(select(0x8086, AUTO, all), RSF_SR_XESS);
+        assert_eq!(select(0x1002, RSF_SR_FSR4, all), RSF_SR_FSR4);
+        assert_eq!(select(0x10de, RSF_SR_DLSS, xess), RSF_SR_XESS);
+        assert_eq!(select(0x1414, RSF_SR_XESS, all), 0);
     }
 }

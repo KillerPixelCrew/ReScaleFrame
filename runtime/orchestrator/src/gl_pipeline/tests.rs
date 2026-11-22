@@ -583,7 +583,7 @@ fn pass(frame: u64) -> Pass {
 #[test]
 fn refused_sharpening_keeps_the_previous_surfaces_and_window() {
     let pipeline = open_pipeline();
-    let options = options(SR_DLSS, 1);
+    let options = options(RSF_SR_DLSS, 1);
     let configure = |w, h| unsafe { rsf_gl_pipeline_configure(pipeline, &options, w, h) };
     assert_eq!(configure(640, 480), OK);
     let previous = surfaces(pipeline);
@@ -599,7 +599,7 @@ fn refused_sharpening_keeps_the_previous_surfaces_and_window() {
 #[test]
 fn refused_chain_resize_restores_the_published_window_extent() {
     let pipeline = open_pipeline();
-    let options = options(SR_DLSS, 1);
+    let options = options(RSF_SR_DLSS, 1);
     let configure = |w, h| unsafe { rsf_gl_pipeline_configure(pipeline, &options, w, h) };
     assert_eq!(configure(640, 480), OK);
     let previous = surfaces(pipeline);
@@ -621,7 +621,7 @@ fn refused_chain_resize_restores_the_published_window_extent() {
 #[test]
 fn rejected_switch_keeps_published_session_and_a_retry_rebuilds() {
     let pipeline = open_pipeline();
-    let dlss = options(SR_DLSS, 1);
+    let dlss = options(RSF_SR_DLSS, 1);
     assert_eq!(
         unsafe { rsf_gl_pipeline_configure(pipeline, &dlss, 1920, 1080) },
         OK
@@ -674,7 +674,7 @@ fn rejected_switch_keeps_published_session_and_a_retry_rebuilds() {
         world.present_backend = 1;
         world.fail_texture = Some(world.textures_created + 3);
     });
-    let fsr3 = options(SR_FSR3, 1);
+    let fsr3 = options(RSF_SR_FSR3, 1);
     assert_eq!(
         unsafe { rsf_gl_pipeline_configure(pipeline, &fsr3, 1920, 1080) },
         FEATURE_FAILED
@@ -693,7 +693,7 @@ fn rejected_switch_keeps_published_session_and_a_retry_rebuilds() {
     let failed = status(pipeline);
     assert_eq!(
         (failed.requested_sr, failed.effective_sr, failed.sr_result),
-        (SR_FSR3, SR_DLSS, FEATURE_FAILED)
+        (RSF_SR_FSR3, RSF_SR_DLSS, FEATURE_FAILED)
     );
 
     // The same request is retried rather than treated as already applied.
@@ -708,7 +708,7 @@ fn rejected_switch_keeps_published_session_and_a_retry_rebuilds() {
             .iter()
             .all(|line| line.starts_with("destroy texture"))
     );
-    assert_eq!(status(pipeline).effective_sr, SR_FSR3);
+    assert_eq!(status(pipeline).effective_sr, RSF_SR_FSR3);
     assert_eq!((live("sr1."), live("sr3."), live("texture")), (0, 1, 6));
 
     // Only sharpening changes: no drain and no rebuild.
@@ -723,13 +723,13 @@ fn rejected_switch_keeps_published_session_and_a_retry_rebuilds() {
 #[test]
 fn automatic_selection_keeps_first_created_backend_then_falls_back_to_off() {
     let pipeline = open_pipeline();
-    world(|world| world.failing_backends = [SR_DLSS, SR_FSR3].into());
+    world(|world| world.failing_backends = [RSF_SR_DLSS, RSF_SR_FSR3].into());
     assert_eq!(
-        unsafe { rsf_gl_pipeline_configure(pipeline, &options(SR_AUTO, 1), 1280, 720) },
+        unsafe { rsf_gl_pipeline_configure(pipeline, &options(RSF_SR_AUTO, 1), 1280, 720) },
         OK
     );
     let created = world(|world| std::mem::take(&mut world.created_backends));
-    assert_eq!(created, [SR_DLSS, SR_FSR3, SR_XESS]);
+    assert_eq!(created, [RSF_SR_DLSS, RSF_SR_FSR3, RSF_SR_XESS]);
     let selected = status(pipeline);
     assert_eq!(
         (
@@ -737,16 +737,19 @@ fn automatic_selection_keeps_first_created_backend_then_falls_back_to_off() {
             selected.effective_sr,
             selected.sr_result
         ),
-        (SR_AUTO, SR_XESS, OK)
+        (RSF_SR_AUTO, RSF_SR_XESS, OK)
     );
 
-    world(|world| world.failing_backends = [SR_DLSS, SR_FSR3, SR_XESS].into());
+    world(|world| world.failing_backends = [RSF_SR_DLSS, RSF_SR_FSR3, RSF_SR_XESS].into());
     assert_eq!(
-        unsafe { rsf_gl_pipeline_configure(pipeline, &options(SR_AUTO, 2), 1280, 720) },
+        unsafe { rsf_gl_pipeline_configure(pipeline, &options(RSF_SR_AUTO, 2), 1280, 720) },
         OK
     );
     let created = world(|world| std::mem::take(&mut world.created_backends));
-    assert_eq!(created, [SR_DLSS, SR_FSR3, SR_XESS, SR_NONE]);
+    assert_eq!(
+        created,
+        [RSF_SR_DLSS, RSF_SR_FSR3, RSF_SR_XESS, RSF_SR_NONE]
+    );
     let fallback = status(pipeline);
     assert_eq!(
         (
@@ -754,7 +757,7 @@ fn automatic_selection_keeps_first_created_backend_then_falls_back_to_off() {
             fallback.sr_result,
             fallback.evaluated
         ),
-        (SR_NONE, NOT_READY, 0)
+        (RSF_SR_NONE, NOT_READY, 0)
     );
 
     // Off still evaluates for normalization, but is not counted as SR.
@@ -768,7 +771,7 @@ fn automatic_selection_keeps_first_created_backend_then_falls_back_to_off() {
 fn evaluation_and_presentation_carry_session_frame_identity() {
     let pipeline = open_pipeline();
     assert_eq!(
-        unsafe { rsf_gl_pipeline_configure(pipeline, &options(SR_XESS, 1), 800, 600) },
+        unsafe { rsf_gl_pipeline_configure(pipeline, &options(RSF_SR_XESS, 1), 800, 600) },
         OK
     );
     events();
@@ -842,7 +845,7 @@ fn evaluation_and_presentation_carry_session_frame_identity() {
 fn close_releases_sr_before_surfaces_and_the_presentation_host() {
     let pipeline = open_pipeline();
     assert_eq!(
-        unsafe { rsf_gl_pipeline_configure(pipeline, &options(SR_DLSS, 1), 640, 480) },
+        unsafe { rsf_gl_pipeline_configure(pipeline, &options(RSF_SR_DLSS, 1), 640, 480) },
         OK
     );
     events();
@@ -873,14 +876,14 @@ fn close_releases_sr_before_surfaces_and_the_presentation_host() {
         INVALID_ARGUMENT
     );
     assert_eq!(
-        unsafe { rsf_gl_pipeline_configure(pipeline, &options(SR_DLSS, 1), 640, 480) },
+        unsafe { rsf_gl_pipeline_configure(pipeline, &options(RSF_SR_DLSS, 1), 640, 480) },
         INVALID_ARGUMENT
     );
     assert_eq!(
         unsafe { rsf_gl_pipeline_present(pipeline, 4, 0) },
         INVALID_ARGUMENT
     );
-    assert_eq!(status(pipeline).effective_sr, SR_DLSS);
+    assert_eq!(status(pipeline).effective_sr, RSF_SR_DLSS);
     assert_eq!(unsafe { rsf_gl_pipeline_close(pipeline) }, OK);
     assert!(events().is_empty());
 }
@@ -942,7 +945,7 @@ fn refused_window_destroy_retries_only_the_window() {
 #[test]
 fn failed_close_keeps_graphics_retired_until_cleanup_succeeds() {
     let pipeline = open_pipeline();
-    let options = options(SR_DLSS, 1);
+    let options = options(RSF_SR_DLSS, 1);
     assert_eq!(
         unsafe { rsf_gl_pipeline_configure(pipeline, &options, 640, 480) },
         OK
@@ -1036,11 +1039,11 @@ fn rejected_options_do_not_touch_the_graphics_owner() {
     let pipeline = open_pipeline();
     world(|world| world.refused_preset = Some(7));
     let mut invalid = [
-        options(SR_SPATIAL, 1),
+        options(RSF_SR_SPATIAL, 1),
         options(8, 1),
-        options(SR_DLSS, 6),
-        options(SR_DLSS, 1),
-        options(SR_DLSS, 1),
+        options(RSF_SR_DLSS, 6),
+        options(RSF_SR_DLSS, 1),
+        options(RSF_SR_DLSS, 1),
     ];
     invalid[3].dlss_preset = 7;
     invalid[4].sharpening = sharpening_policy::defaults();
@@ -1052,7 +1055,7 @@ fn rejected_options_do_not_touch_the_graphics_owner() {
         );
     }
     assert_eq!(
-        unsafe { rsf_gl_pipeline_configure(pipeline, &options(SR_DLSS, 1), 0, 480) },
+        unsafe { rsf_gl_pipeline_configure(pipeline, &options(RSF_SR_DLSS, 1), 0, 480) },
         INVALID_ARGUMENT
     );
     assert!(events().is_empty());

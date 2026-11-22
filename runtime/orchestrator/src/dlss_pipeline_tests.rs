@@ -613,7 +613,7 @@ fn start_validates_plans_and_stop_releases_every_lease() {
     );
     assert_eq!(
         (state.output_width, state.output_height, state.backend),
-        (1280, 720, SR_DLSS)
+        (1280, 720, RSF_SR_DLSS)
     );
     assert_eq!(pipeline.set_surface([1280, 720]), 1);
     assert_eq!(pipeline.set_surface([1280, 721]), 0);
@@ -1075,7 +1075,7 @@ fn backend_switches_reuse_the_legacy_owner_and_refusals_keep_the_active_backend(
             state.requested_backend,
             state.last_switch_result
         ),
-        (SR_DLSS, 3, -7)
+        (RSF_SR_DLSS, 3, -7)
     );
     assert_eq!(calls("alternate_create 1280x720 C:\\ffx"), 1);
 
@@ -1140,16 +1140,16 @@ fn backend_switches_reuse_the_legacy_owner_and_refusals_keep_the_active_backend(
         world.plan.render_height_max = 0;
     });
     assert_eq!(
-        unsafe { pipeline.select_backend(&PLATFORM, SR_DLSS, &mut width, &mut height) },
+        unsafe { pipeline.select_backend(&PLATFORM, RSF_SR_DLSS, &mut width, &mut height) },
         OK
     );
     assert_eq!(with(|world| world.calls.clone()), ["plan 1280x720 q1"]);
-    assert_eq!(status(&pipeline).backend, SR_DLSS);
+    assert_eq!(status(&pipeline).backend, RSF_SR_DLSS);
     assert_eq!(run(&pipeline, &frame(&camera, [640, 360])), OK);
     let destroyed = legacy::DESTROYED.get();
     assert_eq!(unsafe { pipeline.stop(&PLATFORM) }, OK);
     assert_eq!(legacy::DESTROYED.get(), destroyed + 1);
-    assert_eq!(status(&pipeline).backend, SR_DLSS);
+    assert_eq!(status(&pipeline).backend, RSF_SR_DLSS);
 }
 
 #[test]
@@ -1289,7 +1289,7 @@ fn alternate_start_skips_streamline_and_can_lazily_switch_to_dlss() {
     assert_eq!(run(&pipeline, &frame), OK);
     let output = pipeline.output_texture();
     assert_eq!(
-        unsafe { pipeline.select_backend(&PLATFORM, SR_DLSS, null_mut(), null_mut()) },
+        unsafe { pipeline.select_backend(&PLATFORM, RSF_SR_DLSS, null_mut(), null_mut()) },
         NOT_SUPPORTED
     );
     assert_eq!(status(&pipeline).backend, 3);
@@ -1297,12 +1297,12 @@ fn alternate_start_skips_streamline_and_can_lazily_switch_to_dlss() {
     assert_eq!(run(&pipeline, &frame), OK);
     with(|world| world.load = 0);
     assert_eq!(
-        unsafe { pipeline.select_backend(&PLATFORM, SR_DLSS, null_mut(), null_mut()) },
+        unsafe { pipeline.select_backend(&PLATFORM, RSF_SR_DLSS, null_mut(), null_mut()) },
         OK
     );
     assert_eq!(
         (status(&pipeline).backend, status(&pipeline).dlss_supported),
-        (SR_DLSS, 1)
+        (RSF_SR_DLSS, 1)
     );
     assert_eq!(pipeline.output_texture(), output);
     assert_eq!(unsafe { pipeline.stop(&PLATFORM) }, OK);

@@ -31,6 +31,7 @@ use crate::sys::{
     rsf_overlay_host_option as HostOption, rsf_overlay_intent as Intent,
     rsf_overlay_stats as Stats, rsf_render_status as Status,
 };
+use crate::sys::{RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_NONE, RSF_SR_XESS};
 use crate::sys::{rsf_dlss_setup as DlssSetup, rsf_sr12_setup as SrSetup};
 #[cfg(not(test))]
 use crate::{d3d12_observer::Observer, dlss_native12::Registration};
@@ -78,10 +79,6 @@ const NATIVE_REFUSED: i32 = -5;
 const BACKEND_OK: i32 = 0;
 const BACKEND_NOT_READY: i32 = -8;
 
-const SR_NONE: u32 = 0;
-const SR_DLSS: u32 = 1;
-const SR_XESS: u32 = 5;
-const SR_AUTO: u32 = 7;
 const PRESENT_TEST: u32 = 1;
 const SLOTS: usize = 3;
 const SCENES: usize = 64;
@@ -107,7 +104,7 @@ const DEFAULTS: Settings = Settings {
     struct_size: size_of::<Settings>() as u32,
     abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
     sr_enabled: 1,
-    sr_backend: SR_AUTO,
+    sr_backend: RSF_SR_AUTO,
     dlss_preset: 0,
     fg_enabled: 0,
     fg_backend: RSF_FG_BACKEND_AUTO,
@@ -518,7 +515,7 @@ impl State {
             serial: 0,
             fence_value: 0,
             backend: 0,
-            requested_backend: SR_AUTO,
+            requested_backend: RSF_SR_AUTO,
             preset: 0,
             sharpening: unsafe { std::mem::zeroed() },
             enabled: true,
@@ -598,7 +595,7 @@ impl Host {
     }
 
     fn resolve_backend(&self, s: &State) -> u32 {
-        if s.requested_backend != SR_AUTO {
+        if s.requested_backend != RSF_SR_AUTO {
             return s.requested_backend;
         }
         let selected = self.automatic_backend.load(Ordering::Relaxed);
@@ -606,7 +603,7 @@ impl Host {
             return selected;
         }
         let Some(adapter) = self.adapter(s) else {
-            return SR_NONE;
+            return RSF_SR_NONE;
         };
         let selected =
             crate::rsf_gpu_select_sr_backend(adapter.vendor, adapter.software, self.sr_choices);
@@ -790,7 +787,7 @@ impl Host {
         };
         setup.streamline_host = unsafe { p.present_host() };
         // The scene is linear floating-point HDR even when the swapchain is SDR.
-        if s.backend == SR_DLSS && setup.streamline_host.is_null() {
+        if s.backend == RSF_SR_DLSS && setup.streamline_host.is_null() {
             if s.dlss_registration.is_null() {
                 let mut registration = null_mut();
                 let registered = unsafe {
@@ -876,7 +873,7 @@ impl Host {
         drop(owner);
         // Auto needs the owning adapter, which is known only once the game records a pass.
         s.backend = self.resolve_backend(s);
-        if !(SR_DLSS..=SR_XESS).contains(&s.backend) || !has(self.sr_choices, s.backend) {
+        if !(RSF_SR_DLSS..=RSF_SR_XESS).contains(&s.backend) || !has(self.sr_choices, s.backend) {
             s.reset = true;
             return NOT_READY;
         }
@@ -1240,7 +1237,7 @@ impl Host {
             || request.sr_quality > 4
             || !(1..=15).contains(&request.generated_frames)
             || unsafe { p.dlss_preset_valid(request.dlss_preset) } == 0
-            || (request.sr_backend != SR_AUTO
+            || (request.sr_backend != RSF_SR_AUTO
                 && (request.sr_backend > 31 || !has(self.sr_choices, request.sr_backend)))
             || !fg_choice::allowed(request.fg_backend, RSF_FG_BACKEND_ALL)
         {
@@ -1452,7 +1449,7 @@ impl Host {
         };
         // Auto is shown as the provider it resolved to. Picking a provider in the panel saves it
         // explicitly.
-        stats.backend = if prefs.sr_backend == SR_AUTO {
+        stats.backend = if prefs.sr_backend == RSF_SR_AUTO {
             self.automatic_backend.load(Ordering::Relaxed)
         } else {
             prefs.sr_backend

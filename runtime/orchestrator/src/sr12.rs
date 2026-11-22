@@ -12,6 +12,7 @@ use crate::dxgi_format::{
 use crate::sharpening_policy;
 use crate::sr_session::checked;
 use crate::sys::*;
+use crate::sys::{RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_NONE};
 use crate::sys::{rsf_dlss_setup, rsf_sr12_setup as Setup};
 use rsf_game_sys::backend_result::{
     ABI_MISMATCH, FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, NOT_READY, OK, STALE_RESOURCES,
@@ -30,9 +31,6 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 mod tests;
 
 // ABI values consumed by the SR planner and normalization pass.
-const SR_NONE: u32 = 0;
-const SR_DLSS: u32 = 1;
-const SR_AUTO: u32 = 7;
 const MAX_QUALITY: u32 = 5;
 const PLAN_ABI_VERSION: u32 = 1;
 
@@ -427,7 +425,7 @@ unsafe fn open_vendor(
     external_exposure: bool,
 ) -> (Vendor, i32, u32, u32) {
     let device = setup.device;
-    if setup.backend == SR_NONE {
+    if setup.backend == RSF_SR_NONE {
         let width = if setup.render_width != 0 {
             setup.render_width
         } else {
@@ -440,7 +438,7 @@ unsafe fn open_vendor(
         };
         return (Vendor::None, OK, width, height);
     }
-    if setup.backend == SR_DLSS {
+    if setup.backend == RSF_SR_DLSS {
         // DLSS reads its setup from the caller's own structure.
         let dlss = unsafe { ptr::addr_of!((*caller).dlss) };
         let mut context = ptr::null_mut();
@@ -537,7 +535,7 @@ unsafe fn create_gpu(
         texture(width, height, R32_FLOAT)?,
         texture(width, height, RG16_FLOAT)?,
     ];
-    let output = if setup.backend != SR_NONE {
+    let output = if setup.backend != RSF_SR_NONE {
         Some(texture(
             setup.output_width,
             setup.output_height,
@@ -549,8 +547,8 @@ unsafe fn create_gpu(
     let (mut exposure, mut exposure_upload) = (None, None);
     if setup.input_sdr != 0
         && !external_exposure
-        && setup.backend != SR_NONE
-        && setup.backend != SR_DLSS
+        && setup.backend != RSF_SR_NONE
+        && setup.backend != RSF_SR_DLSS
     {
         // SDR has no changing pre-exposure. XeSS requires an exposure texture when auto
         // exposure is disabled; feed the actual constant scale, not HDR adaptation.
@@ -623,7 +621,7 @@ unsafe fn create(setup: *const Setup, p: &'static Platform) -> Result<Sr12, i32>
     let (vendor, result, mut width, mut height) =
         unsafe { open_vendor(p, setup, &s, abi2, external_exposure) };
     // A vendor that reports success must hand out its context.
-    let opened = s.backend == SR_NONE || !matches!(vendor, Vendor::None);
+    let opened = s.backend == RSF_SR_NONE || !matches!(vendor, Vendor::None);
     native.vendor = vendor;
     if result != OK {
         return Err(result);
@@ -634,7 +632,7 @@ unsafe fn create(setup: *const Setup, p: &'static Platform) -> Result<Sr12, i32>
     if engine_extents {
         (width, height) = (s.render_width, s.render_height);
     }
-    let normalize_color = s.backend != SR_NONE || unsafe { (p.capture_enabled)(capture) } != 0;
+    let normalize_color = s.backend != RSF_SR_NONE || unsafe { (p.capture_enabled)(capture) } != 0;
     let gpu = unsafe { create_gpu(p, &s, (width, height), normalize_color, external_exposure) }
         .ok_or(INIT_FAILED)?;
     let sharpening = sharpening_policy::defaults();
@@ -727,7 +725,7 @@ impl Sr12 {
                 unsafe { retain(pass.exposure) }.map(|texture| (texture, desc.srv_format));
         }
         let pointers = [pass.color_input, pass.depth, pass.motion, pass.color_output];
-        let checked = |index: usize| index != OUTPUT || self.backend != SR_NONE;
+        let checked = |index: usize| index != OUTPUT || self.backend != RSF_SR_NONE;
         // The resources' descriptions cannot change, and the extents they are checked against
         // are fixed at create, so a set already accepted in this generation needs no second look.
         let cached = state.validated_generation == pass.resource_generation
@@ -1133,7 +1131,7 @@ impl Sr12 {
                 crate::fg12::handoff_inputs(list, &record, normalized[DEPTH], normalized[MOTION]);
             }
         }
-        if result == OK && self.backend != SR_NONE {
+        if result == OK && self.backend != RSF_SR_NONE {
             unsafe { self.sharpen(state, list, &frame, pass, &sharpen, slot) };
         }
         unsafe { self.transition_inputs(list, SHADER_READ, UNORDERED_ACCESS) };
@@ -1141,7 +1139,7 @@ impl Sr12 {
             state.history.frame = 0;
             return result;
         }
-        if self.backend != SR_NONE {
+        if self.backend != RSF_SR_NONE {
             unsafe { self.reinsert(list, pass, &record, frame.reset != 0, slot) };
         }
         state.captured[slot] = Captured { record, list };
@@ -1341,9 +1339,9 @@ unsafe extern "C" fn rsf_core_sr12_create(
 #[unsafe(export_name = "rsf_sr12_quality_supported")]
 extern "C" fn rsf_core_sr12_quality_supported(backend: u32, quality: u32) -> u32 {
     u32::from(
-        backend <= SR_AUTO
+        backend <= RSF_SR_AUTO
             && quality <= MAX_QUALITY
-            && !(backend == SR_DLSS && quality == MAX_QUALITY),
+            && !(backend == RSF_SR_DLSS && quality == MAX_QUALITY),
     )
 }
 
@@ -1384,7 +1382,7 @@ unsafe extern "C" fn rsf_core_sr12_create_planned(
         plan.write(PlanResult {
             struct_size: size_of::<PlanResult>() as u32,
             abi_version: PLAN_ABI_VERSION,
-            backend: SR_NONE,
+            backend: RSF_SR_NONE,
             render_width: 0,
             render_height: 0,
             requested_result: INVALID_ARGUMENT,
@@ -1399,7 +1397,7 @@ unsafe extern "C" fn rsf_core_sr12_create_planned(
         || setup.output_width == 0
         || setup.output_height == 0
         || setup.quality > MAX_QUALITY
-        || (setup.backend > RSF_SR_XESS && setup.backend != SR_AUTO)
+        || (setup.backend > RSF_SR_XESS && setup.backend != RSF_SR_AUTO)
     {
         return INVALID_ARGUMENT;
     }
@@ -1414,7 +1412,7 @@ unsafe extern "C" fn rsf_core_sr12_create_planned(
         return INVALID_ARGUMENT;
     };
     assert_eq!(platform.struct_size as usize, size_of::<Platform>());
-    if setup.backend == SR_AUTO {
+    if setup.backend == RSF_SR_AUTO {
         let (mut vendor, mut software) = (0, 0);
         if unsafe { adapter_identity(setup.device, &mut vendor, &mut software) } == 0 {
             plan.requested_result = NOT_READY;
@@ -1429,10 +1427,10 @@ unsafe extern "C" fn rsf_core_sr12_create_planned(
         }
         Err(result) => {
             plan.requested_result = result;
-            if setup.backend == SR_NONE {
+            if setup.backend == RSF_SR_NONE {
                 return result;
             }
-            setup.backend = SR_NONE;
+            setup.backend = RSF_SR_NONE;
             match unsafe { create_checked(&setup, platform) } {
                 Ok(owner) => owner,
                 Err(result) => return result,

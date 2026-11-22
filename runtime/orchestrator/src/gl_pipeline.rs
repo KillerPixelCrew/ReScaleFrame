@@ -16,6 +16,10 @@ use crate::sys::{
     rsf_native_fg_options, rsf_native_fg_status, rsf_sharpening_options,
 };
 use crate::sys::{RSF_OVERLAY_NOTIFY_DEVICE_RESET, rsf_overlay_service_setup};
+use crate::sys::{
+    RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_FSR2, RSF_SR_FSR3, RSF_SR_FSR4, RSF_SR_NONE, RSF_SR_SPATIAL,
+    RSF_SR_XESS,
+};
 use rsf_game_sys::backend_result::{
     FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, NEEDS_RESTART, NOT_READY, OK,
 };
@@ -39,16 +43,11 @@ mod settings;
 mod window;
 
 // Public SR backend IDs (sr_session.h), checked by the native contract.
-const SR_NONE: u32 = 0;
-const SR_DLSS: u32 = 1;
-const SR_FSR2: u32 = 2;
-const SR_FSR3: u32 = 3;
-const SR_FSR4: u32 = 4;
-const SR_XESS: u32 = 5;
-const SR_SPATIAL: u32 = 6;
-const SR_AUTO: u32 = 7;
-const SR_CHOICES: u32 =
-    (1 << SR_DLSS) | (1 << SR_FSR2) | (1 << SR_FSR3) | (1 << SR_FSR4) | (1 << SR_XESS);
+const SR_CHOICES: u32 = (1 << RSF_SR_DLSS)
+    | (1 << RSF_SR_FSR2)
+    | (1 << RSF_SR_FSR3)
+    | (1 << RSF_SR_FSR4)
+    | (1 << RSF_SR_XESS);
 const MAX_QUALITY: u32 = 5;
 const DLSS_ENGINE_CUSTOM: u32 = 0;
 const SR12_ABI_VERSION: u32 = 1;
@@ -144,8 +143,8 @@ impl Platform {
     fn valid_options(&self, options: &rsf_gl_pipeline_options, width: u32, height: u32) -> bool {
         width != 0
             && height != 0
-            && options.sr_backend <= SR_AUTO
-            && options.sr_backend != SR_SPATIAL
+            && options.sr_backend <= RSF_SR_AUTO
+            && options.sr_backend != RSF_SR_SPATIAL
             && options.quality <= MAX_QUALITY
             && unsafe { (self.dlss_preset_valid)(options.dlss_preset) } != 0
             && options.generation.struct_size as usize >= size_of::<rsf_native_fg_options>()
@@ -456,13 +455,13 @@ impl Pipeline {
     ) -> Result<(u32, Owned), i32> {
         let mut selected = options.sr_backend;
         let (mut result, mut sr) = (INVALID_ARGUMENT, None);
-        if selected == SR_AUTO {
+        if selected == RSF_SR_AUTO {
             let (mut vendor, mut software) = (0, 0);
             unsafe { (self.platform.adapter_identity)(state.device, &mut vendor, &mut software) };
             let mut choices = SR_CHOICES;
             loop {
                 let candidate = crate::rsf_gpu_select_sr_backend(vendor, software, choices);
-                if candidate == SR_NONE {
+                if candidate == RSF_SR_NONE {
                     break;
                 }
                 (result, sr) = self.create_sr(state, candidate, options, width, height);
@@ -477,8 +476,8 @@ impl Pipeline {
         }
         state.status.sr_result = result;
         if sr.is_none() {
-            selected = SR_NONE;
-            (result, sr) = self.create_sr(state, SR_NONE, options, width, height);
+            selected = RSF_SR_NONE;
+            (result, sr) = self.create_sr(state, RSF_SR_NONE, options, width, height);
         }
         match sr {
             Some(sr) if result == OK => Ok((selected, sr)),
@@ -736,7 +735,7 @@ impl Pipeline {
         unsafe { (p.fg_submitted)(self.session, pass.source_frame_id) };
         state.evaluation_result = result;
         state.record_view(&pass);
-        if result == OK && state.status.effective_sr != SR_NONE {
+        if result == OK && state.status.effective_sr != RSF_SR_NONE {
             state.status.evaluated += 1;
             state.evaluated_frame = pass.source_frame_id;
         }

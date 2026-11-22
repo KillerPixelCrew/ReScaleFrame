@@ -111,5 +111,5 @@ unsafe extern "C" fn rsf_dlss_pipeline_stop() -> i32 {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_dlss_pipeline_start(device: Raw, setup: *const Setup) -> i32 {
-    unsafe { rsf_dlss_pipeline_start_backend(device, setup, SR_DLSS) }
+    unsafe { rsf_dlss_pipeline_start_backend(device, setup, RSF_SR_DLSS) }
 }

@@ -666,7 +666,7 @@ fn create_refuses_before_any_platform_call() {
         unsafe { rsf_core_sr12_create(ptr::null(), ptr::null_mut(), &PLATFORM) },
         INVALID_ARGUMENT
     );
-    let valid = scene.setup(SR_NONE, 2, OUTPUT);
+    let valid = scene.setup(RSF_SR_NONE, 2, OUTPUT);
     let cases = [
         (
             Setup {
@@ -738,7 +738,7 @@ fn create_refuses_before_any_platform_call() {
 #[test]
 fn accepted_frame_normalizes_hands_off_and_reinserts_in_order() {
     let scene = Scene::new(RENDER, OUTPUT);
-    let (result, owner) = create_with(&scene.setup(SR_DLSS, 1, OUTPUT));
+    let (result, owner) = create_with(&scene.setup(RSF_SR_DLSS, 1, OUTPUT));
     assert_eq!(result, OK);
     let created = take_events();
     assert!(created.contains(&"dlss-plan 1920x1080 q0".to_owned()));
@@ -813,7 +813,7 @@ fn accepted_frame_normalizes_hands_off_and_reinserts_in_order() {
 #[test]
 fn refused_vendor_evaluation_keeps_engine_output_and_fg_inputs() {
     let scene = Scene::new(RENDER, OUTPUT);
-    let (_, owner) = create_with(&scene.setup(SR_DLSS, 1, OUTPUT));
+    let (_, owner) = create_with(&scene.setup(RSF_SR_DLSS, 1, OUTPUT));
     take_events();
     with(|world| world.vendor_result = FEATURE_FAILED);
     let pass = scene.pass(5, RENDER, OUTPUT);
@@ -866,7 +866,7 @@ fn refused_vendor_evaluation_keeps_engine_output_and_fg_inputs() {
 #[test]
 fn inputs_are_validated_against_extents_formats_and_generation() {
     let scene = Scene::new(RENDER, OUTPUT);
-    let (_, owner) = create_with(&scene.setup(SR_DLSS, 1, OUTPUT));
+    let (_, owner) = create_with(&scene.setup(RSF_SR_DLSS, 1, OUTPUT));
     let mut pass = scene.pass(5, RENDER, OUTPUT);
     pass.motion = scene.depth;
     assert_eq!(
@@ -968,7 +968,7 @@ fn sdr_session_initializes_unit_exposure_once() {
 fn inferred_frame_id_carries_the_same_dump_provenance() {
     let scene = Scene::new(RENDER, OUTPUT);
     // Without a vendor the owner takes its input extent from the setup, defaulting to the output.
-    let mut setup = scene.setup(SR_NONE, 1, OUTPUT);
+    let mut setup = scene.setup(RSF_SR_NONE, 1, OUTPUT);
     (setup.render_width, setup.render_height) = RENDER;
     let (result, owner) = create_with(&setup);
     assert_eq!(result, OK);
@@ -995,7 +995,7 @@ fn inferred_frame_id_carries_the_same_dump_provenance() {
 #[test]
 fn external_exposure_is_validated_and_normalized() {
     let scene = Scene::new(RENDER, OUTPUT);
-    let mut setup = scene.setup(SR_DLSS, 2, OUTPUT);
+    let mut setup = scene.setup(RSF_SR_DLSS, 2, OUTPUT);
     setup.external_exposure = 1;
     let (result, owner) = create_with(&setup);
     assert_eq!(result, OK);
@@ -1031,7 +1031,7 @@ fn external_exposure_is_validated_and_normalized() {
 #[test]
 fn inputs_only_owner_hands_off_without_vendor_or_reinsertion() {
     let scene = Scene::new((16, 16), (16, 16));
-    let (result, owner) = create_with(&scene.setup(SR_NONE, 1, (16, 16)));
+    let (result, owner) = create_with(&scene.setup(RSF_SR_NONE, 1, (16, 16)));
     assert_eq!(result, OK);
     let events = take_events();
     // Colour is not normalized without a vendor or capture.
@@ -1065,7 +1065,7 @@ fn inputs_only_owner_hands_off_without_vendor_or_reinsertion() {
 #[test]
 fn motion_diagnostic_reads_back_after_slot_reuse() {
     let scene = Scene::new(RENDER, OUTPUT);
-    let (_, owner) = create_with(&scene.setup(SR_DLSS, 1, OUTPUT));
+    let (_, owner) = create_with(&scene.setup(RSF_SR_DLSS, 1, OUTPUT));
     take_events();
     let pass = scene.pass(5, RENDER, OUTPUT);
     assert_eq!(
@@ -1091,7 +1091,7 @@ fn motion_diagnostic_reads_back_after_slot_reuse() {
 #[test]
 fn sharpening_refusal_is_reported_once_and_options_are_checked() {
     let scene = Scene::new(RENDER, OUTPUT);
-    let (_, owner) = create_with(&scene.setup(SR_DLSS, 1, OUTPUT));
+    let (_, owner) = create_with(&scene.setup(RSF_SR_DLSS, 1, OUTPUT));
     with(|world| world.sharpen_result = 0);
     for (frame, slot) in [(5, 0), (6, 1)] {
         let pass = scene.pass(frame, RENDER, OUTPUT);

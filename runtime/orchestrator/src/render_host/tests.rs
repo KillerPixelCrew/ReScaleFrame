@@ -689,7 +689,7 @@ fn process_resolves_auto_configures_and_reserves_slots() {
         &"create backend=1 quality=3 960x540->1920x1080 exposure=0 registration=1".to_string()
     ));
     assert!(log.contains(&"evaluate 1 slot=0 reset=1".to_string()));
-    assert_eq!(host.automatic_backend.load(Ordering::Relaxed), SR_DLSS);
+    assert_eq!(host.automatic_backend.load(Ordering::Relaxed), RSF_SR_DLSS);
     // One reference held by the host, one by the fake's creator.
     assert_eq!(refs(device), 2);
 
@@ -827,7 +827,7 @@ fn settings_apply_validates_then_commits_one_section_write() {
     with(|world| world.present_owner = 1);
     events();
     let saved = host.settings_get().unwrap();
-    assert_eq!(saved.sr_backend, SR_AUTO);
+    assert_eq!(saved.sr_backend, RSF_SR_AUTO);
     assert_eq!(saved.fg_backend, RSF_FG_BACKEND_AUTO);
     assert_eq!(saved.sr_quality, 2);
     assert_eq!(saved.sharpening_sharpness, 0.4);
@@ -886,7 +886,7 @@ fn settings_apply_validates_then_commits_one_section_write() {
     with(|world| world.present_owner = 0);
     // Auto for both providers is a valid saved choice.
     let automatic = Settings {
-        sr_backend: SR_AUTO,
+        sr_backend: RSF_SR_AUTO,
         fg_backend: RSF_FG_BACKEND_AUTO,
         ..request
     };
@@ -1016,7 +1016,7 @@ fn overlay_routes_the_panel_through_one_settings_commit() {
     let device = fake("device", null_mut());
     let queue = fake("direct queue", device);
     host.submit(queue, 1, 0, null(), true);
-    host.automatic_backend.store(SR_XESS, Ordering::Relaxed);
+    host.automatic_backend.store(RSF_SR_XESS, Ordering::Relaxed);
     let mut intent = Intent {
         struct_size: size_of::<Intent>() as u32,
         ..Intent::default()
@@ -1033,7 +1033,10 @@ fn overlay_routes_the_panel_through_one_settings_commit() {
     let stats = with(|world| world.stats.take()).unwrap();
     // SR Auto is shown as its resolved provider. FG Auto stays the selected panel choice, which
     // the panel marks without a pending change beside the provider the bridge reports.
-    assert_eq!((stats.backend, stats.requested_backend), (SR_XESS, SR_XESS));
+    assert_eq!(
+        (stats.backend, stats.requested_backend),
+        (RSF_SR_XESS, RSF_SR_XESS)
+    );
     assert_eq!(stats.fg_requested_backend, RSF_FG_BACKEND_AUTO);
     assert_eq!(stats.fg_requested_mode, RSF_FG_FIXED);
     assert_eq!(stats.sharpening_available, 1);

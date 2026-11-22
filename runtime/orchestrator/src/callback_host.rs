@@ -26,6 +26,7 @@ use crate::sys::{
     RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK, RSF_OVERLAY_SR_QUALITY_STANDARD_MASK,
     rsf_overlay_intent as Intent, rsf_overlay_stats as Stats,
 };
+use crate::sys::{RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_NONE, RSF_SR_SPATIAL, RSF_SR_XESS};
 use crate::sys::{rsf_dlss_setup as DlssSetup, rsf_sr12_setup as SrSetup};
 use rsf_game_sys::{
     RSF_CALLBACK_HOST_ABI_VERSION as HOST_ABI_VERSION, RSF_CALLBACK_HOST_ABI_VERSION_V2,
@@ -64,11 +65,6 @@ const OK: i32 = 0;
 const BACKEND_OK: i32 = 0;
 const BACKEND_NOT_SUPPORTED: i32 = -7;
 
-const SR_NONE: u32 = 0;
-const SR_DLSS: u32 = 1;
-const SR_XESS: u32 = 5;
-const SR_SPATIAL: u32 = 6;
-const SR_AUTO: u32 = 7;
 const SHARPENING_POLL_MS: u64 = 1000;
 const SECTION: PCWSTR = w!("Rendering");
 // FILE_APPEND_DATA, and FILE_SHARE_READ | FILE_SHARE_WRITE.
@@ -275,8 +271,8 @@ struct PolicyV2 {
 
 fn quality_choices(backend: u32) -> u32 {
     match backend {
-        SR_DLSS => RSF_OVERLAY_SR_QUALITY_STANDARD_MASK,
-        0..=SR_SPATIAL => RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK,
+        RSF_SR_DLSS => RSF_OVERLAY_SR_QUALITY_STANDARD_MASK,
+        0..=RSF_SR_SPATIAL => RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK,
         _ => 0,
     }
 }
@@ -356,14 +352,18 @@ impl Host {
     // Whether the adapter accepts `backend` at `quality`. It learns only whether the engine
     // upscales spatially itself.
     fn policy(&self, backend: u32, quality: u32) -> bool {
-        unsafe { (self.set_engine_spatial)(u32::from(backend == SR_SPATIAL), quality) != 0 }
+        unsafe { (self.set_engine_spatial)(u32::from(backend == RSF_SR_SPATIAL), quality) != 0 }
     }
 
     fn request_reconfigure(&self, state: &mut State, backend: u32, quality: u32) -> bool {
         if let Some(adapter) = &self.policy_v2 {
             let mut generation = 0;
             if unsafe {
-                (adapter.request)(u32::from(backend == SR_SPATIAL), quality, &mut generation)
+                (adapter.request)(
+                    u32::from(backend == RSF_SR_SPATIAL),
+                    quality,
+                    &mut generation,
+                )
             } == 0
             {
                 return false;
@@ -451,7 +451,7 @@ impl Host {
             backend_name: self
                 .policy_v2
                 .as_ref()
-                .filter(|adapter| s.backend == SR_SPATIAL && !adapter.spatial_name.is_empty())
+                .filter(|adapter| s.backend == RSF_SR_SPATIAL && !adapter.spatial_name.is_empty())
                 .map_or_else(
                     || sr_name(s.backend).as_ptr(),
                     |adapter| adapter.spatial_name.as_ptr(),
@@ -463,7 +463,7 @@ impl Host {
             sr_change_status: s.sr_change_status,
             requested_backend: s.requested_backend,
             quality: s.quality,
-            sharpening_available: u32::from((SR_DLSS..=SR_XESS).contains(&s.backend)),
+            sharpening_available: u32::from((RSF_SR_DLSS..=RSF_SR_XESS).contains(&s.backend)),
             dlss_preset: s.preset,
             dlss_preset_available: 1,
             enabled: u32::from(s.enabled),
@@ -482,7 +482,7 @@ impl Host {
             have_motion: u32::from(s.accepted != 0),
             motion_decoded: u32::from(s.accepted != 0),
             jitter_available: 1,
-            jitter_active: u32::from(s.plan.enabled != 0 && s.backend != SR_SPATIAL),
+            jitter_active: u32::from(s.plan.enabled != 0 && s.backend != RSF_SR_SPATIAL),
             render_scale_percent: s
                 .plan
                 .render_width
@@ -496,9 +496,9 @@ impl Host {
             Some(c"Applying requested configuration after GPU completion")
         } else if s.last_result != 0 {
             Some(c"Provider refused; spatial fallback retained")
-        } else if s.accepted == 0 && s.backend != SR_SPATIAL {
+        } else if s.accepted == 0 && s.backend != RSF_SR_SPATIAL {
             Some(c"Prepared; awaiting an eligible scene evaluation")
-        } else if s.backend == SR_SPATIAL {
+        } else if s.backend == RSF_SR_SPATIAL {
             Some(c"Sharpening unavailable with engine spatial upscaling")
         } else {
             None
@@ -867,11 +867,11 @@ impl Host {
                 s.backend, adapter.vendor, adapter.device
             ));
         }
-        if s.backend == SR_NONE || !s.enabled {
+        if s.backend == RSF_SR_NONE || !s.enabled {
             // Native rendering still supplies generation inputs.
             return true;
         }
-        if s.backend == SR_SPATIAL {
+        if s.backend == RSF_SR_SPATIAL {
             let (mut width, mut height) = (pass.camera.render_width, pass.camera.render_height);
             if let Some(adapter) = &self.policy_v2
                 && unsafe {
@@ -1018,8 +1018,12 @@ unsafe fn describe(setup: *const Setup, p: &'static Platform) -> Result<Host, u3
     {
         return Err(1);
     }
-    let automatic = setup.backend == SR_AUTO;
-    let backend = if automatic { SR_NONE } else { setup.backend };
+    let automatic = setup.backend == RSF_SR_AUTO;
+    let backend = if automatic {
+        RSF_SR_NONE
+    } else {
+        setup.backend
+    };
     let quality = setup.quality;
     if unsafe { p.dlss_preset_valid(setup.dlss_preset) } == 0
         || !accepts_backend_quality(backend, quality)
