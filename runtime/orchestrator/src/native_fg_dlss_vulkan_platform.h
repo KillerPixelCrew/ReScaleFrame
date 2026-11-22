@@ -5,28 +5,40 @@
 #include "vulkan_fg_resources.h"
 #include "../../vulkan/streamline/sdk_fg_options.h"
 
-struct rsf_dlgvk_sample {
+typedef struct rsf_dlgvk_sample {
     uint64_t semaphore, value;
     uint32_t actual_presents, max_generated, status, min_dimension, vsync, dynamic_mfg;
-};
+} rsf_dlgvk_sample;
 
-struct rsf_dlgvk_tag {
+typedef struct rsf_dlgvk_tag {
     const rsf_vkfg_image* image;
     uint32_t kind, lifetime, width, height;
-};
+} rsf_dlgvk_tag;
 
-struct rsf_dlgvk_sdk_call {
+typedef struct rsf_dlgvk_sdk_call {
     void* native;
     int32_t result;
     rsf_dlgvk_sample sample;
     void* commands;
     const rsf_slvk_sdk_constants* camera;
     const rsf_frame_record* record;
-    const rsf_dlgvk_tag* tags; // Two tags for the leased recording.
+    const rsf_dlgvk_tag* tags; /* Two tags for the leased recording. */
     const rsf_slvk_sdk_fg_options* options;
-};
+} rsf_dlgvk_sdk_call;
 
-struct rsf_dlgvk_platform {
+/* Streamline entry points at the start of the native owner. The initialize
+   leaf resolves them; the other SDK leaves call them. Tokens are borrowed
+   sl::FrameToken pointers and the command buffer is the leased recording. */
+typedef struct rsf_dlgvk_sdk {
+    int32_t (*set_constants)(const rsf_slvk_sdk_constants*, const void* token, const rsf_slvk_sdk_viewport*);
+    int32_t (*set_tags)(const void* token, const rsf_slvk_sdk_viewport*, const rsf_slvk_sdk_tag*, uint32_t count,
+                        void* commands);
+    int32_t (*free_resources)(uint32_t feature, const rsf_slvk_sdk_viewport*);
+    int32_t (*set_options)(const rsf_slvk_sdk_viewport*, const rsf_slvk_sdk_fg_options*);
+    int32_t (*get_state)(const rsf_slvk_sdk_viewport*, rsf_slvk_sdk_fg_state*, const rsf_slvk_sdk_fg_options*);
+} rsf_dlgvk_sdk;
+
+typedef struct rsf_dlgvk_platform {
     const rsf_vkfg_platform* gpu;
     rsf_backend_result (*open)(const rsf_fgvk_setup*, void**);
     void (*close)(void*);
@@ -39,10 +51,15 @@ struct rsf_dlgvk_platform {
     void (*capture_group)(void*, uint64_t, uint32_t complete);
     void (*flush)(void*);
     rsf_backend_result (*detach_capture)(void*);
-    uint64_t (*timeout_epoch)();
-};
+    uint64_t (*timeout_epoch)(void);
+} rsf_dlgvk_platform;
 
+#ifdef __cplusplus
 extern "C" {
+#endif
+/* Production Streamline table in native_fg_dlss_vulkan.c; its leaves are Rust
+   (vulkan_dlss_fg/leaves.rs). */
+extern const rsf_dlgvk_platform rsf_dlgvk_leaves;
 void rsf_core_dlgvk_report_api_error(int32_t error);
 rsf_backend_result rsf_core_dlgvk_create(const rsf_dlgvk_platform*, const rsf_fgvk_setup*, rsf_dlssgvk**, uint64_t*);
 int32_t rsf_core_dlgvk_images(rsf_dlssgvk*, uint32_t*, uint64_t*);
@@ -55,4 +72,6 @@ int32_t rsf_core_dlgvk_present(rsf_dlssgvk*, const void*, const rsf_frame_record
 rsf_backend_result rsf_core_dlgvk_status(rsf_dlssgvk*, rsf_dlssgvk_status*);
 rsf_backend_result rsf_core_dlgvk_drain(rsf_dlssgvk*);
 rsf_backend_result rsf_core_dlgvk_destroy(rsf_dlssgvk*);
+#ifdef __cplusplus
 }
+#endif

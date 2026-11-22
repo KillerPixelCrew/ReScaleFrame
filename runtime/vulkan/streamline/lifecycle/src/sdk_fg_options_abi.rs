@@ -122,6 +122,58 @@ impl Default for rsf_slvk_sdk_fg_options {
     }
 }
 #[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_slvk_sdk_fg_state {
+    pub base: rsf_slvk_sdk_header,
+    pub estimated_vram: u64,
+    pub status: u32,
+    pub min_dimension: u32,
+    pub actual_presents: u32,
+    pub max_generated: u32,
+    pub reserved: u8,
+    pub vsync: u8,
+    pub inputs_fence: *mut ::core::ffi::c_void,
+    pub inputs_fence_value: u64,
+    pub dynamic_mfg: u8,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_slvk_sdk_fg_state"][::core::mem::size_of::<rsf_slvk_sdk_fg_state>() - 88usize];
+    ["Alignment of rsf_slvk_sdk_fg_state"]
+        [::core::mem::align_of::<rsf_slvk_sdk_fg_state>() - 8usize];
+    ["Offset of field: rsf_slvk_sdk_fg_state::base"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_state, base) - 0usize];
+    ["Offset of field: rsf_slvk_sdk_fg_state::estimated_vram"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_state, estimated_vram) - 32usize];
+    ["Offset of field: rsf_slvk_sdk_fg_state::status"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_state, status) - 40usize];
+    ["Offset of field: rsf_slvk_sdk_fg_state::min_dimension"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_state, min_dimension) - 44usize];
+    ["Offset of field: rsf_slvk_sdk_fg_state::actual_presents"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_state, actual_presents) - 48usize];
+    ["Offset of field: rsf_slvk_sdk_fg_state::max_generated"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_state, max_generated) - 52usize];
+    ["Offset of field: rsf_slvk_sdk_fg_state::reserved"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_state, reserved) - 56usize];
+    ["Offset of field: rsf_slvk_sdk_fg_state::vsync"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_state, vsync) - 57usize];
+    ["Offset of field: rsf_slvk_sdk_fg_state::inputs_fence"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_state, inputs_fence) - 64usize];
+    ["Offset of field: rsf_slvk_sdk_fg_state::inputs_fence_value"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_state, inputs_fence_value) - 72usize];
+    ["Offset of field: rsf_slvk_sdk_fg_state::dynamic_mfg"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_state, dynamic_mfg) - 80usize];
+};
+impl Default for rsf_slvk_sdk_fg_state {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct rsf_slvk_sdk_fg_sample {
     pub status: u32,

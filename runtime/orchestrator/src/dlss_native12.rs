@@ -2,7 +2,8 @@
 pub(super) mod exports;
 #[cfg(not(test))]
 mod sdk;
-mod xm;
+// Also the Vulkan DLSS SR and DLSS-G singularity gate (vulkan_streamline_camera).
+pub(crate) mod xm;
 
 use crate::com_ref::ComRef;
 use crate::gl_pipeline_abi::rsf_dlss_setup as Setup;

@@ -3,7 +3,7 @@
 #include "vulkan_fg_resources.h"
 #include <rescaleframe/native_sr_vulkan.h>
 #include <rescaleframe/native_streamline_vulkan.h>
-#include "../../vulkan/streamline/sdk_records.h"
+#include "../../vulkan/streamline/sdk_sr_options.h"
 
 typedef struct rsf_vkdlss_images {
     rsf_vkfg_image color, depth, motion, bias, output;
@@ -13,15 +13,6 @@ typedef struct rsf_vkdlss_tag {
     const rsf_vkfg_image* image;
     uint32_t kind, layout, width, height;
 } rsf_vkdlss_tag;
-
-typedef struct rsf_vkdlss_options {
-    rsf_slvk_sdk_header base;
-    uint32_t mode, width, height;
-    float sharpness, pre_exposure, exposure_scale;
-    uint8_t hdr, invert_x, invert_y;
-    uint32_t presets[6];
-    uint8_t auto_exposure, alpha_upscaling;
-} rsf_vkdlss_options;
 
 typedef struct rsf_vkdlss_init {
     void* native;
@@ -51,7 +42,8 @@ typedef struct rsf_vkdlss_platform {
     int32_t (*preset_valid)(uint32_t preset);
 } rsf_vkdlss_platform;
 
-/* The Streamline leaf table, selected by CMake for the Vulkan SR platform. */
+/* The Streamline leaf table in native_dlss_vulkan.c, selected by CMake for the
+   Vulkan SR platform. Its leaves are Rust (vulkan_dlss_sr/leaves.rs). */
 #if defined(RSF_HAVE_STREAMLINE_VK)
 #ifdef __cplusplus
 extern "C" const rsf_vkdlss_platform rsf_vkdlss_native_leaves;

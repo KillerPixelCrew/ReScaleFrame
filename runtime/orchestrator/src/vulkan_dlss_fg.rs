@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+mod leaves;
 #[path = "../../vulkan/streamline/lifecycle/src/sdk_fg_options.rs"]
 pub(super) mod sdk_fg_options;
 mod wsi;

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+mod sdk;
 mod vulkan;
 
 use crate::dlss_abi::*;
@@ -259,6 +260,8 @@ fn verify_present_capture(setup: &rsf_fgvk_setup, record: &rsf_frame_record) {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_fixture_dlss_run() -> i32 {
+    // Capture stays disabled for the provider scenarios.
+    unsafe { std::env::remove_var("RSF_VULKAN_FRAME_CAPTURE_DIR") };
     // Read or mutate the native doubles only between calls into the provider.
     let state = unsafe { rsf_fixture_dlss_state() };
     macro_rules! f {
@@ -600,7 +603,8 @@ extern "C" fn rsf_fixture_dlss_run() -> i32 {
                 expected
             );
             assert!(owner.is_null() && chain_out == 0);
-            assert_eq!(f!(destroyed_chains), destroyed);
+            // A fresh pointer, so the closure holds no borrow of the state.
+            assert_eq!((*rsf_fixture_dlss_state()).destroyed_chains, destroyed);
         };
         f!(max_generated) = 0;
         refused(RSF_DLSS_FIXTURE_NORMAL, FIXTURE_NOT_SUPPORTED, 2);

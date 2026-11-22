@@ -1,8 +1,8 @@
 <#
 .SYNOPSIS
-Compiles the retained Streamline Vulkan bridge with its compiler runtime linked statically.
+Compiles the Streamline Vulkan bridge with its compiler runtime linked statically.
 .DESCRIPTION
-Checks Streamline/Vulkan headers, builds the shared Rust interposer lifecycle owner for Windows GNU, then invokes g++ in C++20 mode with wintrust/advapi32 linkage and builds a sibling temporary DLL. Successful compilation replaces Output; failure removes temporary output and throws. SDK plugin binaries are supplied separately by native bundle preparation.
+Checks Streamline/Vulkan headers, builds the Rust bridge and interposer lifecycle owner for Windows GNU, then links its C11 digest leaf (bridge.c) with gcc and wintrust/advapi32 into a sibling temporary DLL. Successful compilation replaces Output; failure removes temporary output and throws. SDK plugin binaries are supplied separately by native bundle preparation.
 .PARAMETER SdkRoot
 Streamline SDK root containing include/sl.h.
 .PARAMETER Output
@@ -18,11 +18,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$compiler = (Get-Command g++.exe -ErrorAction Stop).Source
+$compiler = (Get-Command gcc.exe -ErrorAction Stop).Source
 $cargo = (Get-Command cargo.exe -ErrorAction Stop).Source
 if (-not $VulkanSdkRoot) { throw 'Specify -VulkanSdkRoot or set VULKAN_SDK.' }
 
-$source = Join-Path $PSScriptRoot 'bridge.cpp'
+$source = Join-Path $PSScriptRoot 'bridge.c'
 $wsiExports = Join-Path $PSScriptRoot 'wsi_exports.def'
 $hostExports = Join-Path $PSScriptRoot '../../../integrations/vulkanstory/native/sl.def'
 $sdk = (Resolve-Path -LiteralPath $SdkRoot).Path
@@ -61,7 +61,7 @@ if ($CorrectedRuntimeDirectory) {
 $objects = Join-Path ([IO.Path]::GetTempPath()) ('VulkanStoryStreamline-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $objects | Out-Null
 try {
-    # The interposer lifecycle is the same Rust crate the Runtime links.
+    # The bridge exports and interposer lifecycle are the same Rust crate the Runtime links.
     $rustTarget = 'x86_64-pc-windows-gnu'
     $rustOutput = Join-Path $objects 'cargo'
     Push-Location -LiteralPath (Join-Path $PSScriptRoot '../../..')
@@ -77,7 +77,7 @@ try {
     @(Get-Content -LiteralPath $wsiExports
       Get-Content -LiteralPath $hostExports | Select-Object -Skip 1) |
         Set-Content -LiteralPath $exports -Encoding ascii
-    & $compiler -std=c++20 -O2 -shared -static -I $include -I $vulkanInclude @correctionArguments $source $exports $rustArchive `
+    & $compiler -std=c11 -O2 -shared -static @correctionArguments $source $exports $rustArchive `
         -o $temporary -lwintrust -ladvapi32 -lntdll -luserenv -lws2_32 -ldbghelp
     if ($LASTEXITCODE -ne 0) { throw 'Streamline bridge compilation failed.' }
     Move-Item -LiteralPath $temporary -Destination $target -Force

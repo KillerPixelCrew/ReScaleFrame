@@ -16,6 +16,24 @@ pub(crate) struct Options {
 
 const _: () = assert!(size_of::<Options>() == 5 * size_of::<u32>());
 
+impl Options {
+    pub(crate) const fn new(
+        count: u32,
+        width: u32,
+        height: u32,
+        format: u32,
+        back_buffers: u32,
+    ) -> Self {
+        Self {
+            count,
+            width,
+            height,
+            format,
+            back_buffers,
+        }
+    }
+}
+
 #[repr(C)]
 pub(crate) struct Platform {
     pub options_bound: unsafe extern "C" fn() -> u32,
@@ -25,7 +43,7 @@ pub(crate) struct Platform {
 
 const _: () = assert!(size_of::<Platform>() == 3 * size_of::<*mut std::ffi::c_void>());
 
-// Checked against sl::Result in the native leaf.
+// sl::Result::eWarnOutOfVRAM, checked in sdk_records_checks.h.
 const OUT_OF_VRAM: i32 = 39;
 
 pub(crate) struct Swapchain {

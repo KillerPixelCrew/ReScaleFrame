@@ -38,6 +38,121 @@ impl Default for rsf_slvk_sdk_header {
         }
     }
 }
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_slvk_sdk_viewport {
+    pub base: rsf_slvk_sdk_header,
+    pub value: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_slvk_sdk_viewport"][::core::mem::size_of::<rsf_slvk_sdk_viewport>() - 40usize];
+    ["Alignment of rsf_slvk_sdk_viewport"]
+        [::core::mem::align_of::<rsf_slvk_sdk_viewport>() - 8usize];
+    ["Offset of field: rsf_slvk_sdk_viewport::base"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_viewport, base) - 0usize];
+    ["Offset of field: rsf_slvk_sdk_viewport::value"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_viewport, value) - 32usize];
+};
+impl Default for rsf_slvk_sdk_viewport {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_slvk_sdk_adapter {
+    pub base: rsf_slvk_sdk_header,
+    pub luid: *mut u8,
+    pub luid_size: u32,
+    pub physical_device: *mut ::core::ffi::c_void,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_slvk_sdk_adapter"][::core::mem::size_of::<rsf_slvk_sdk_adapter>() - 56usize];
+    ["Alignment of rsf_slvk_sdk_adapter"][::core::mem::align_of::<rsf_slvk_sdk_adapter>() - 8usize];
+    ["Offset of field: rsf_slvk_sdk_adapter::base"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_adapter, base) - 0usize];
+    ["Offset of field: rsf_slvk_sdk_adapter::luid"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_adapter, luid) - 32usize];
+    ["Offset of field: rsf_slvk_sdk_adapter::luid_size"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_adapter, luid_size) - 40usize];
+    ["Offset of field: rsf_slvk_sdk_adapter::physical_device"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_adapter, physical_device) - 48usize];
+};
+impl Default for rsf_slvk_sdk_adapter {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_slvk_sdk_reflex_state {
+    pub base: rsf_slvk_sdk_header,
+    pub low_latency_available: u8,
+    pub latency_report_available: u8,
+    pub window_message: u32,
+    pub reports: [u8; 12808usize],
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_slvk_sdk_reflex_state"]
+        [::core::mem::size_of::<rsf_slvk_sdk_reflex_state>() - 12848usize];
+    ["Alignment of rsf_slvk_sdk_reflex_state"]
+        [::core::mem::align_of::<rsf_slvk_sdk_reflex_state>() - 8usize];
+    ["Offset of field: rsf_slvk_sdk_reflex_state::base"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_reflex_state, base) - 0usize];
+    ["Offset of field: rsf_slvk_sdk_reflex_state::low_latency_available"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_reflex_state, low_latency_available) - 32usize];
+    ["Offset of field: rsf_slvk_sdk_reflex_state::latency_report_available"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_reflex_state, latency_report_available) - 33usize];
+    ["Offset of field: rsf_slvk_sdk_reflex_state::window_message"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_reflex_state, window_message) - 36usize];
+    ["Offset of field: rsf_slvk_sdk_reflex_state::reports"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_reflex_state, reports) - 40usize];
+};
+impl Default for rsf_slvk_sdk_reflex_state {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_slvk_sdk_pcl_state {
+    pub base: rsf_slvk_sdk_header,
+    pub window_message: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_slvk_sdk_pcl_state"][::core::mem::size_of::<rsf_slvk_sdk_pcl_state>() - 40usize];
+    ["Alignment of rsf_slvk_sdk_pcl_state"]
+        [::core::mem::align_of::<rsf_slvk_sdk_pcl_state>() - 8usize];
+    ["Offset of field: rsf_slvk_sdk_pcl_state::base"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_pcl_state, base) - 0usize];
+    ["Offset of field: rsf_slvk_sdk_pcl_state::window_message"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_pcl_state, window_message) - 32usize];
+};
+impl Default for rsf_slvk_sdk_pcl_state {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
 pub type rsf_slvk_sdk_log =
     ::core::option::Option<unsafe extern "C" fn(arg1: u32, arg2: *const ::core::ffi::c_char)>;
 #[repr(C)]

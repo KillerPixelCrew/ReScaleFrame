@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Dedicated DLSS-G present capture owner. Rust decides admission, owns the
 // per-queue-family command pools and fences, orders submission and retires
-// the readbacks. The native leaves keep typed Vulkan, WSI, Streamline
-// registration and file formatting.
+// the readbacks. The production leaves for typed Vulkan, WSI, Streamline
+// registration and file output are in leaves.rs.
 use crate::allocate_handle;
 use crate::dlss_vulkan_capture_ledger::{AMBIGUOUS, Ledger};
 use crate::vulkan_fg_abi::{
@@ -478,7 +478,7 @@ unsafe extern "C" fn present(user: Handle, packet: *const Packet) -> i32 {
 // Publishes no owner while capture is disabled. Registration is the last
 // step, so a refused setup never leaves a callback behind.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_capture_open(
+pub(crate) unsafe extern "C" fn rsf_core_dlss_capture_open(
     ops: &'static Platform,
     setup: *const Setup,
     out: *mut *mut Owner,
@@ -516,7 +516,7 @@ unsafe extern "C" fn rsf_core_dlss_capture_open(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_capture_remember(
+pub(crate) unsafe extern "C" fn rsf_core_dlss_capture_remember(
     owner: *const Owner,
     record: *const Record,
     generated_count: u32,
@@ -533,7 +533,7 @@ unsafe extern "C" fn rsf_core_dlss_capture_remember(
 
 // Presenter and GPU must already be drained.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_capture_flush(owner: *const Owner) {
+pub(crate) unsafe extern "C" fn rsf_core_dlss_capture_flush(owner: *const Owner) {
     if let Some(owner) = unsafe { owner.as_ref() } {
         owner.flush();
     }
@@ -541,16 +541,19 @@ unsafe extern "C" fn rsf_core_dlss_capture_flush(owner: *const Owner) {
 
 // Detach keeps the owner alive until close.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_capture_detach(owner: *const Owner) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_core_dlss_capture_detach(owner: *const Owner) -> i32 {
     unsafe { owner.as_ref() }.map_or(OK, Owner::detach)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_capture_close(owner: *mut Owner) {
+pub(crate) unsafe extern "C" fn rsf_core_dlss_capture_close(owner: *mut Owner) {
     if !owner.is_null() {
         drop(unsafe { Box::from_raw(owner) });
     }
 }
+
+#[path = "dlss_vulkan_capture/leaves.rs"]
+pub(crate) mod leaves;
 
 #[cfg(test)]
 #[path = "dlss_vulkan_capture/owner_tests.rs"]

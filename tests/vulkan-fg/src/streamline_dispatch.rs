@@ -6,6 +6,74 @@ use std::{
     ffi::{CStr, c_char},
 };
 
+type Barrier = vk::ImageMemoryBarrier<'static>;
+
+/// The barriers the corrected dispatch records for one requested barrier.
+fn initialized(requested: &Barrier) -> Vec<Barrier> {
+    let mut output = [Barrier::default(); 8];
+    let count = unsafe {
+        rsf_fixture_sl_dispatch_barriers(
+            std::ptr::from_ref(requested).cast(),
+            output.as_mut_ptr().cast(),
+            output.len() as u32,
+        )
+    };
+    output[..count as usize].to_vec()
+}
+
+/// SDK-created images enter their first layout once per mip, layer and
+/// aspect, keep combined depth and stencil aspects together, and keep the
+/// contents of initialized subresources. Formerly sdk-fixes/dispatch-tests.cpp.
+fn first_use_barriers() {
+    let both = vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL;
+    let tracked = || unsafe { rsf_fixture_sl_dispatch_tracked(1) } != 0;
+    unsafe { rsf_fixture_sl_dispatch_fresh(1, 2, 2, both.as_raw()) };
+    let mut requested = Barrier {
+        image: vk::Image::from_raw(1),
+        old_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+        new_layout: vk::ImageLayout::GENERAL,
+        subresource_range: vk::ImageSubresourceRange {
+            aspect_mask: both,
+            base_mip_level: 0,
+            level_count: vk::REMAINING_MIP_LEVELS,
+            base_array_layer: 0,
+            layer_count: vk::REMAINING_ARRAY_LAYERS,
+        },
+        ..Default::default()
+    };
+    let first = initialized(&requested);
+    assert_eq!(first.len(), 4);
+    for barrier in &first {
+        assert!(barrier.old_layout == vk::ImageLayout::UNDEFINED);
+        // Combined aspects stay combined without separateDepthStencilLayouts.
+        assert!(barrier.subresource_range.aspect_mask == both);
+        let range = barrier.subresource_range;
+        assert_eq!((range.level_count, range.layer_count), (1, 1));
+    }
+    assert!(!tracked());
+    requested.old_layout = requested.new_layout;
+    let reused = initialized(&requested);
+    assert!(reused.len() == 1 && reused[0].old_layout == vk::ImageLayout::GENERAL);
+    let color = vk::ImageAspectFlags::COLOR;
+    unsafe { rsf_fixture_sl_dispatch_fresh(1, 2, 1, color.as_raw()) };
+    requested.subresource_range = vk::ImageSubresourceRange {
+        aspect_mask: color,
+        base_mip_level: 1,
+        level_count: 1,
+        base_array_layer: 0,
+        layer_count: 1,
+    };
+    let partial = initialized(&requested);
+    assert!(partial.len() == 1 && partial[0].old_layout == vk::ImageLayout::UNDEFINED);
+    assert!(tracked());
+    let same_mip = initialized(&requested);
+    assert!(same_mip[0].old_layout == requested.old_layout);
+    requested.subresource_range.base_mip_level = 0;
+    let remaining = initialized(&requested);
+    assert!(remaining[0].old_layout == vk::ImageLayout::UNDEFINED);
+    assert!(!tracked());
+}
+
 thread_local! {
     static SEQUENCE: Cell<u32> = const { Cell::new(0) };
 }
@@ -120,6 +188,7 @@ extern "C" fn rsf_fixture_sl_dispatch_run() -> i32 {
         }
         assert_eq!(SEQUENCE.get(), 9);
     }
-    println!("Streamline NGX fill-buffer dependency checks passed");
+    first_use_barriers();
+    println!("Streamline NGX fill-buffer dependency and first-use layout checks passed");
     0
 }

@@ -7,6 +7,7 @@ pub const RSF_SRVK_ABI_VERSION: u32 = 2;
 pub const RSF_FGVK_ABI_VERSION: u32 = 1;
 pub const RSF_DLSSGVK_ABI_VERSION: u32 = 1;
 pub const RSF_SL_PRESENT_CAPTURE_ABI_VERSION: u32 = 1;
+pub const RSF_SLVK_ABI_VERSION: u32 = 1;
 pub type rsf_backend_result = i32;
 pub type rsf_vk_function = ::core::option::Option<unsafe extern "C" fn()>;
 pub type rsf_vk_get_proc = ::core::option::Option<
@@ -496,10 +497,228 @@ impl Default for rsf_sl_present_capture_registration {
         }
     }
 }
+pub type rsf_sl_set_present_capture = ::core::option::Option<
+    unsafe extern "C" fn(arg1: *const rsf_sl_present_capture_registration) -> i32,
+>;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_dlss_capture {
     _unused: [u8; 0],
+}
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_dlss_capture_target {
+    pub chain: u64,
+    pub index: u32,
+    pub selected: u32,
+    pub usage: u32,
+    pub layers: u32,
+    pub format: u32,
+    pub width: u32,
+    pub height: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_dlss_capture_target"]
+        [::core::mem::size_of::<rsf_dlss_capture_target>() - 40usize];
+    ["Alignment of rsf_dlss_capture_target"]
+        [::core::mem::align_of::<rsf_dlss_capture_target>() - 8usize];
+    ["Offset of field: rsf_dlss_capture_target::chain"]
+        [::core::mem::offset_of!(rsf_dlss_capture_target, chain) - 0usize];
+    ["Offset of field: rsf_dlss_capture_target::index"]
+        [::core::mem::offset_of!(rsf_dlss_capture_target, index) - 8usize];
+    ["Offset of field: rsf_dlss_capture_target::selected"]
+        [::core::mem::offset_of!(rsf_dlss_capture_target, selected) - 12usize];
+    ["Offset of field: rsf_dlss_capture_target::usage"]
+        [::core::mem::offset_of!(rsf_dlss_capture_target, usage) - 16usize];
+    ["Offset of field: rsf_dlss_capture_target::layers"]
+        [::core::mem::offset_of!(rsf_dlss_capture_target, layers) - 20usize];
+    ["Offset of field: rsf_dlss_capture_target::format"]
+        [::core::mem::offset_of!(rsf_dlss_capture_target, format) - 24usize];
+    ["Offset of field: rsf_dlss_capture_target::width"]
+        [::core::mem::offset_of!(rsf_dlss_capture_target, width) - 28usize];
+    ["Offset of field: rsf_dlss_capture_target::height"]
+        [::core::mem::offset_of!(rsf_dlss_capture_target, height) - 32usize];
+};
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_dlss_capture_platform {
+    pub open: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *const rsf_fgvk_setup,
+            native: *mut *mut ::core::ffi::c_void,
+        ) -> rsf_backend_result,
+    >,
+    pub close: ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void)>,
+    pub set_callback: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *mut ::core::ffi::c_void,
+            arg2: rsf_sl_present_capture_callback,
+            user: *mut ::core::ffi::c_void,
+        ) -> i32,
+    >,
+    pub create_pool: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *mut ::core::ffi::c_void,
+            queue_family: u32,
+            arg2: *mut u64,
+        ) -> i32,
+    >,
+    pub destroy_pool:
+        ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: u64)>,
+    pub allocate: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *mut ::core::ffi::c_void,
+            pool: u64,
+            commands: *mut *mut ::core::ffi::c_void,
+        ) -> i32,
+    >,
+    pub reset_pool: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: u64) -> i32,
+    >,
+    pub begin: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *mut ::core::ffi::c_void,
+            commands: *mut ::core::ffi::c_void,
+        ) -> i32,
+    >,
+    pub end: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *mut ::core::ffi::c_void,
+            commands: *mut ::core::ffi::c_void,
+        ) -> i32,
+    >,
+    pub create_fence: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: *mut u64) -> i32,
+    >,
+    pub destroy_fence:
+        ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: u64)>,
+    pub reset_fence: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: u64) -> i32,
+    >,
+    pub wait_fence: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: u64, timeout: u64) -> i32,
+    >,
+    pub complete_readback: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, commands: *mut ::core::ffi::c_void),
+    >,
+    pub wants: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, frame: u64) -> u32,
+    >,
+    pub readbacks:
+        ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void) -> u64>,
+    pub target: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *const rsf_sl_present_capture_packet,
+            arg2: *mut rsf_dlss_capture_target,
+        ),
+    >,
+    pub images: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *const rsf_sl_present_capture_packet,
+            chain: u64,
+            count: *mut u32,
+            images: *mut u64,
+        ) -> i32,
+    >,
+    pub record: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *mut ::core::ffi::c_void,
+            commands: *mut ::core::ffi::c_void,
+            arg2: *const rsf_srvk_image,
+            arg3: *const rsf_frame_record,
+            role: *const ::core::ffi::c_char,
+        ) -> u32,
+    >,
+    pub submit: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *const rsf_sl_present_capture_packet,
+            commands: *mut ::core::ffi::c_void,
+            fence: u64,
+        ) -> i32,
+    >,
+    pub present: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *const rsf_sl_present_capture_packet, waits: u32) -> i32,
+    >,
+    pub flush: ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void) -> u32>,
+    pub failure: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *mut ::core::ffi::c_void,
+            source: u64,
+            reason: *const ::core::ffi::c_char,
+            result: i32,
+        ),
+    >,
+    pub append: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *mut ::core::ffi::c_void,
+            file: *const ::core::ffi::c_char,
+            line: *const u8,
+            length: usize,
+        ),
+    >,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_dlss_capture_platform"]
+        [::core::mem::size_of::<rsf_dlss_capture_platform>() - 192usize];
+    ["Alignment of rsf_dlss_capture_platform"]
+        [::core::mem::align_of::<rsf_dlss_capture_platform>() - 8usize];
+    ["Offset of field: rsf_dlss_capture_platform::open"]
+        [::core::mem::offset_of!(rsf_dlss_capture_platform, open) - 0usize];
+    ["Offset of field: rsf_dlss_capture_platform::close"]
+        [::core::mem::offset_of!(rsf_dlss_capture_platform, close) - 8usize];
+    ["Offset of field: rsf_dlss_capture_platform::set_callback"]
+        [::core::mem::offset_of!(rsf_dlss_capture_platform, set_callback) - 16usize];
+    ["Offset of field: rsf_dlss_capture_platform::create_pool"]
+        [::core::mem::offset_of!(rsf_dlss_capture_platform, create_pool) - 24usize];
+    ["Offset of field: rsf_dlss_capture_platform::destroy_pool"]
+        [::core::mem::offset_of!(rsf_dlss_capture_platform, destroy_pool) - 32usize];
+    ["Offset of field: rsf_dlss_capture_platform::allocate"]
+        [::core::mem::offset_of!(rsf_dlss_capture_platform, allocate) - 40usize];
+    ["Offset of field: rsf_dlss_capture_platform::reset_pool"]
+        [::core::mem::offset_of!(rsf_dlss_capture_platform, reset_pool) - 48usize];
+    ["Offset of field: rsf_dlss_capture_platform::begin"]
+        [::core::mem::offset_of!(rsf_dlss_capture_platform, begin) - 56usize];
+    ["Offset of field: rsf_dlss_capture_platform::end"]
+        [::core::mem::offset_of!(rsf_dlss_capture_platform, end) - 64usize];
+    ["Offset of field: rsf_dlss_capture_platform::create_fence"]
+        [::core::mem::offset_of!(rsf_dlss_capture_platform, create_fence) - 72usize];
+    ["Offset of field: rsf_dlss_capture_platform::destroy_fence"]
+        [::core::mem::offset_of!(rsf_dlss_capture_platform, destroy_fence) - 80usize];
+    ["Offset of field: rsf_dlss_capture_platform::reset_fence"]
+        [::core::mem::offset_of!(rsf_dlss_capture_platform, reset_fence) - 88usize];
+    ["Offset of field: rsf_dlss_capture_platform::wait_fence"]
+        [::core::mem::offset_of!(rsf_dlss_capture_platform, wait_fence) - 96usize];
+    ["Offset of field: rsf_dlss_capture_platform::complete_readback"]
+        [::core::mem::offset_of!(rsf_dlss_capture_platform, complete_readback) - 104usize];
+    ["Offset of field: rsf_dlss_capture_platform::wants"]
+        [::core::mem::offset_of!(rsf_dlss_capture_platform, wants) - 112usize];
+    ["Offset of field: rsf_dlss_capture_platform::readbacks"]
+        [::core::mem::offset_of!(rsf_dlss_capture_platform, readbacks) - 120usize];
+    ["Offset of field: rsf_dlss_capture_platform::target"]
+        [::core::mem::offset_of!(rsf_dlss_capture_platform, target) - 128usize];
+    ["Offset of field: rsf_dlss_capture_platform::images"]
+        [::core::mem::offset_of!(rsf_dlss_capture_platform, images) - 136usize];
+    ["Offset of field: rsf_dlss_capture_platform::record"]
+        [::core::mem::offset_of!(rsf_dlss_capture_platform, record) - 144usize];
+    ["Offset of field: rsf_dlss_capture_platform::submit"]
+        [::core::mem::offset_of!(rsf_dlss_capture_platform, submit) - 152usize];
+    ["Offset of field: rsf_dlss_capture_platform::present"]
+        [::core::mem::offset_of!(rsf_dlss_capture_platform, present) - 160usize];
+    ["Offset of field: rsf_dlss_capture_platform::flush"]
+        [::core::mem::offset_of!(rsf_dlss_capture_platform, flush) - 168usize];
+    ["Offset of field: rsf_dlss_capture_platform::failure"]
+        [::core::mem::offset_of!(rsf_dlss_capture_platform, failure) - 176usize];
+    ["Offset of field: rsf_dlss_capture_platform::append"]
+        [::core::mem::offset_of!(rsf_dlss_capture_platform, append) - 184usize];
+};
+unsafe extern "C" {
+    pub fn rsf_core_dlss_capture_open(
+        arg1: *const rsf_dlss_capture_platform,
+        arg2: *const rsf_fgvk_setup,
+        arg3: *mut *mut rsf_dlss_capture,
+    ) -> rsf_backend_result;
 }
 unsafe extern "C" {
     pub fn rsf_core_dlss_capture_remember(
@@ -515,6 +734,856 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     pub fn rsf_core_dlss_capture_close(arg1: *mut rsf_dlss_capture);
+}
+pub type rsf_slvk_callback = ::core::option::Option<
+    unsafe extern "C" fn(
+        sdk_module: *mut ::core::ffi::c_void,
+        frame_token: usize,
+        user: *mut ::core::ffi::c_void,
+    ) -> rsf_backend_result,
+>;
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_slvk_call {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub session_id: u64,
+    pub frame_id: u64,
+    pub callback: rsf_slvk_callback,
+    pub user: *mut ::core::ffi::c_void,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_slvk_call"][::core::mem::size_of::<rsf_slvk_call>() - 40usize];
+    ["Alignment of rsf_slvk_call"][::core::mem::align_of::<rsf_slvk_call>() - 8usize];
+    ["Offset of field: rsf_slvk_call::struct_size"]
+        [::core::mem::offset_of!(rsf_slvk_call, struct_size) - 0usize];
+    ["Offset of field: rsf_slvk_call::abi_version"]
+        [::core::mem::offset_of!(rsf_slvk_call, abi_version) - 4usize];
+    ["Offset of field: rsf_slvk_call::session_id"]
+        [::core::mem::offset_of!(rsf_slvk_call, session_id) - 8usize];
+    ["Offset of field: rsf_slvk_call::frame_id"]
+        [::core::mem::offset_of!(rsf_slvk_call, frame_id) - 16usize];
+    ["Offset of field: rsf_slvk_call::callback"]
+        [::core::mem::offset_of!(rsf_slvk_call, callback) - 24usize];
+    ["Offset of field: rsf_slvk_call::user"]
+        [::core::mem::offset_of!(rsf_slvk_call, user) - 32usize];
+};
+impl Default for rsf_slvk_call {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_vkfg_image {
+    pub image: u64,
+    pub memory: u64,
+    pub view: u64,
+    pub width: u32,
+    pub height: u32,
+    pub format: u32,
+    pub usage: u32,
+    pub initialized: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_vkfg_image"][::core::mem::size_of::<rsf_vkfg_image>() - 48usize];
+    ["Alignment of rsf_vkfg_image"][::core::mem::align_of::<rsf_vkfg_image>() - 8usize];
+    ["Offset of field: rsf_vkfg_image::image"]
+        [::core::mem::offset_of!(rsf_vkfg_image, image) - 0usize];
+    ["Offset of field: rsf_vkfg_image::memory"]
+        [::core::mem::offset_of!(rsf_vkfg_image, memory) - 8usize];
+    ["Offset of field: rsf_vkfg_image::view"]
+        [::core::mem::offset_of!(rsf_vkfg_image, view) - 16usize];
+    ["Offset of field: rsf_vkfg_image::width"]
+        [::core::mem::offset_of!(rsf_vkfg_image, width) - 24usize];
+    ["Offset of field: rsf_vkfg_image::height"]
+        [::core::mem::offset_of!(rsf_vkfg_image, height) - 28usize];
+    ["Offset of field: rsf_vkfg_image::format"]
+        [::core::mem::offset_of!(rsf_vkfg_image, format) - 32usize];
+    ["Offset of field: rsf_vkfg_image::usage"]
+        [::core::mem::offset_of!(rsf_vkfg_image, usage) - 36usize];
+    ["Offset of field: rsf_vkfg_image::initialized"]
+        [::core::mem::offset_of!(rsf_vkfg_image, initialized) - 40usize];
+};
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_vkfg_platform {
+    pub local_memory_types:
+        ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void) -> u32>,
+    pub create_image: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *mut ::core::ffi::c_void,
+            width: u32,
+            height: u32,
+            format: u32,
+            usage: u32,
+            arg2: *mut u64,
+        ) -> i32,
+    >,
+    pub requirements: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *mut ::core::ffi::c_void,
+            image: u64,
+            size: *mut u64,
+            types: *mut u32,
+        ),
+    >,
+    pub allocate: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *mut ::core::ffi::c_void,
+            size: u64,
+            type_: u32,
+            arg2: *mut u64,
+        ) -> i32,
+    >,
+    pub bind: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, image: u64, memory: u64) -> i32,
+    >,
+    pub create_view: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *mut ::core::ffi::c_void,
+            image: u64,
+            format: u32,
+            arg2: *mut u64,
+        ) -> i32,
+    >,
+    pub destroy_view:
+        ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: u64)>,
+    pub destroy_image:
+        ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: u64)>,
+    pub free_memory:
+        ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: u64)>,
+    pub create_fence: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: *mut u64) -> i32,
+    >,
+    pub destroy_fence:
+        ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: u64)>,
+    pub wait_fence: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, fence: u64, timeout_ns: u64) -> i32,
+    >,
+    pub reset_fence: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: u64) -> i32,
+    >,
+    pub submit_fence: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: u64) -> i32,
+    >,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_vkfg_platform"][::core::mem::size_of::<rsf_vkfg_platform>() - 112usize];
+    ["Alignment of rsf_vkfg_platform"][::core::mem::align_of::<rsf_vkfg_platform>() - 8usize];
+    ["Offset of field: rsf_vkfg_platform::local_memory_types"]
+        [::core::mem::offset_of!(rsf_vkfg_platform, local_memory_types) - 0usize];
+    ["Offset of field: rsf_vkfg_platform::create_image"]
+        [::core::mem::offset_of!(rsf_vkfg_platform, create_image) - 8usize];
+    ["Offset of field: rsf_vkfg_platform::requirements"]
+        [::core::mem::offset_of!(rsf_vkfg_platform, requirements) - 16usize];
+    ["Offset of field: rsf_vkfg_platform::allocate"]
+        [::core::mem::offset_of!(rsf_vkfg_platform, allocate) - 24usize];
+    ["Offset of field: rsf_vkfg_platform::bind"]
+        [::core::mem::offset_of!(rsf_vkfg_platform, bind) - 32usize];
+    ["Offset of field: rsf_vkfg_platform::create_view"]
+        [::core::mem::offset_of!(rsf_vkfg_platform, create_view) - 40usize];
+    ["Offset of field: rsf_vkfg_platform::destroy_view"]
+        [::core::mem::offset_of!(rsf_vkfg_platform, destroy_view) - 48usize];
+    ["Offset of field: rsf_vkfg_platform::destroy_image"]
+        [::core::mem::offset_of!(rsf_vkfg_platform, destroy_image) - 56usize];
+    ["Offset of field: rsf_vkfg_platform::free_memory"]
+        [::core::mem::offset_of!(rsf_vkfg_platform, free_memory) - 64usize];
+    ["Offset of field: rsf_vkfg_platform::create_fence"]
+        [::core::mem::offset_of!(rsf_vkfg_platform, create_fence) - 72usize];
+    ["Offset of field: rsf_vkfg_platform::destroy_fence"]
+        [::core::mem::offset_of!(rsf_vkfg_platform, destroy_fence) - 80usize];
+    ["Offset of field: rsf_vkfg_platform::wait_fence"]
+        [::core::mem::offset_of!(rsf_vkfg_platform, wait_fence) - 88usize];
+    ["Offset of field: rsf_vkfg_platform::reset_fence"]
+        [::core::mem::offset_of!(rsf_vkfg_platform, reset_fence) - 96usize];
+    ["Offset of field: rsf_vkfg_platform::submit_fence"]
+        [::core::mem::offset_of!(rsf_vkfg_platform, submit_fence) - 104usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_slvk_sdk_header {
+    pub next: *mut ::core::ffi::c_void,
+    pub type_lo: u32,
+    pub type_mid: u16,
+    pub type_hi: u16,
+    pub type_tail: [u8; 8usize],
+    pub version: usize,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_slvk_sdk_header"][::core::mem::size_of::<rsf_slvk_sdk_header>() - 32usize];
+    ["Alignment of rsf_slvk_sdk_header"][::core::mem::align_of::<rsf_slvk_sdk_header>() - 8usize];
+    ["Offset of field: rsf_slvk_sdk_header::next"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_header, next) - 0usize];
+    ["Offset of field: rsf_slvk_sdk_header::type_lo"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_header, type_lo) - 8usize];
+    ["Offset of field: rsf_slvk_sdk_header::type_mid"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_header, type_mid) - 12usize];
+    ["Offset of field: rsf_slvk_sdk_header::type_hi"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_header, type_hi) - 14usize];
+    ["Offset of field: rsf_slvk_sdk_header::type_tail"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_header, type_tail) - 16usize];
+    ["Offset of field: rsf_slvk_sdk_header::version"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_header, version) - 24usize];
+};
+impl Default for rsf_slvk_sdk_header {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_slvk_sdk_viewport {
+    pub base: rsf_slvk_sdk_header,
+    pub value: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_slvk_sdk_viewport"][::core::mem::size_of::<rsf_slvk_sdk_viewport>() - 40usize];
+    ["Alignment of rsf_slvk_sdk_viewport"]
+        [::core::mem::align_of::<rsf_slvk_sdk_viewport>() - 8usize];
+    ["Offset of field: rsf_slvk_sdk_viewport::base"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_viewport, base) - 0usize];
+    ["Offset of field: rsf_slvk_sdk_viewport::value"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_viewport, value) - 32usize];
+};
+impl Default for rsf_slvk_sdk_viewport {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_slvk_sdk_constants {
+    pub base: rsf_slvk_sdk_header,
+    pub view_to_clip: [f32; 16usize],
+    pub clip_to_view: [f32; 16usize],
+    pub clip_to_lens: [f32; 16usize],
+    pub clip_to_previous: [f32; 16usize],
+    pub previous_to_clip: [f32; 16usize],
+    pub jitter: [f32; 2usize],
+    pub motion_scale: [f32; 2usize],
+    pub pinhole: [f32; 2usize],
+    pub position: [f32; 3usize],
+    pub up: [f32; 3usize],
+    pub right: [f32; 3usize],
+    pub forward: [f32; 3usize],
+    pub near_plane: f32,
+    pub far_plane: f32,
+    pub fov: f32,
+    pub aspect: f32,
+    pub invalid_motion: f32,
+    pub depth_inverted: u8,
+    pub motion_includes_camera: u8,
+    pub motion_3d: u8,
+    pub reset: u8,
+    pub orthographic: u8,
+    pub motion_dilated: u8,
+    pub motion_jittered: u8,
+    pub min_relative_depth_separation: f32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_slvk_sdk_constants"][::core::mem::size_of::<rsf_slvk_sdk_constants>() - 456usize];
+    ["Alignment of rsf_slvk_sdk_constants"]
+        [::core::mem::align_of::<rsf_slvk_sdk_constants>() - 8usize];
+    ["Offset of field: rsf_slvk_sdk_constants::base"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, base) - 0usize];
+    ["Offset of field: rsf_slvk_sdk_constants::view_to_clip"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, view_to_clip) - 32usize];
+    ["Offset of field: rsf_slvk_sdk_constants::clip_to_view"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, clip_to_view) - 96usize];
+    ["Offset of field: rsf_slvk_sdk_constants::clip_to_lens"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, clip_to_lens) - 160usize];
+    ["Offset of field: rsf_slvk_sdk_constants::clip_to_previous"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, clip_to_previous) - 224usize];
+    ["Offset of field: rsf_slvk_sdk_constants::previous_to_clip"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, previous_to_clip) - 288usize];
+    ["Offset of field: rsf_slvk_sdk_constants::jitter"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, jitter) - 352usize];
+    ["Offset of field: rsf_slvk_sdk_constants::motion_scale"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, motion_scale) - 360usize];
+    ["Offset of field: rsf_slvk_sdk_constants::pinhole"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, pinhole) - 368usize];
+    ["Offset of field: rsf_slvk_sdk_constants::position"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, position) - 376usize];
+    ["Offset of field: rsf_slvk_sdk_constants::up"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, up) - 388usize];
+    ["Offset of field: rsf_slvk_sdk_constants::right"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, right) - 400usize];
+    ["Offset of field: rsf_slvk_sdk_constants::forward"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, forward) - 412usize];
+    ["Offset of field: rsf_slvk_sdk_constants::near_plane"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, near_plane) - 424usize];
+    ["Offset of field: rsf_slvk_sdk_constants::far_plane"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, far_plane) - 428usize];
+    ["Offset of field: rsf_slvk_sdk_constants::fov"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, fov) - 432usize];
+    ["Offset of field: rsf_slvk_sdk_constants::aspect"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, aspect) - 436usize];
+    ["Offset of field: rsf_slvk_sdk_constants::invalid_motion"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, invalid_motion) - 440usize];
+    ["Offset of field: rsf_slvk_sdk_constants::depth_inverted"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, depth_inverted) - 444usize];
+    ["Offset of field: rsf_slvk_sdk_constants::motion_includes_camera"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, motion_includes_camera) - 445usize];
+    ["Offset of field: rsf_slvk_sdk_constants::motion_3d"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, motion_3d) - 446usize];
+    ["Offset of field: rsf_slvk_sdk_constants::reset"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, reset) - 447usize];
+    ["Offset of field: rsf_slvk_sdk_constants::orthographic"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, orthographic) - 448usize];
+    ["Offset of field: rsf_slvk_sdk_constants::motion_dilated"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, motion_dilated) - 449usize];
+    ["Offset of field: rsf_slvk_sdk_constants::motion_jittered"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, motion_jittered) - 450usize];
+    ["Offset of field: rsf_slvk_sdk_constants::min_relative_depth_separation"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_constants, min_relative_depth_separation) - 452usize];
+};
+impl Default for rsf_slvk_sdk_constants {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_slvk_sdk_resource {
+    pub base: rsf_slvk_sdk_header,
+    pub type_: u8,
+    pub image: *mut ::core::ffi::c_void,
+    pub memory: *mut ::core::ffi::c_void,
+    pub view: *mut ::core::ffi::c_void,
+    pub layout: u32,
+    pub width: u32,
+    pub height: u32,
+    pub format: u32,
+    pub mips: u32,
+    pub layers: u32,
+    pub address: u64,
+    pub flags: u32,
+    pub usage: u32,
+    pub internal_flags: u16,
+    pub reserved: u16,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_slvk_sdk_resource"][::core::mem::size_of::<rsf_slvk_sdk_resource>() - 112usize];
+    ["Alignment of rsf_slvk_sdk_resource"]
+        [::core::mem::align_of::<rsf_slvk_sdk_resource>() - 8usize];
+    ["Offset of field: rsf_slvk_sdk_resource::base"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, base) - 0usize];
+    ["Offset of field: rsf_slvk_sdk_resource::type_"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, type_) - 32usize];
+    ["Offset of field: rsf_slvk_sdk_resource::image"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, image) - 40usize];
+    ["Offset of field: rsf_slvk_sdk_resource::memory"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, memory) - 48usize];
+    ["Offset of field: rsf_slvk_sdk_resource::view"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, view) - 56usize];
+    ["Offset of field: rsf_slvk_sdk_resource::layout"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, layout) - 64usize];
+    ["Offset of field: rsf_slvk_sdk_resource::width"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, width) - 68usize];
+    ["Offset of field: rsf_slvk_sdk_resource::height"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, height) - 72usize];
+    ["Offset of field: rsf_slvk_sdk_resource::format"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, format) - 76usize];
+    ["Offset of field: rsf_slvk_sdk_resource::mips"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, mips) - 80usize];
+    ["Offset of field: rsf_slvk_sdk_resource::layers"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, layers) - 84usize];
+    ["Offset of field: rsf_slvk_sdk_resource::address"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, address) - 88usize];
+    ["Offset of field: rsf_slvk_sdk_resource::flags"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, flags) - 96usize];
+    ["Offset of field: rsf_slvk_sdk_resource::usage"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, usage) - 100usize];
+    ["Offset of field: rsf_slvk_sdk_resource::internal_flags"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, internal_flags) - 104usize];
+    ["Offset of field: rsf_slvk_sdk_resource::reserved"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, reserved) - 106usize];
+};
+impl Default for rsf_slvk_sdk_resource {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_slvk_sdk_tag {
+    pub base: rsf_slvk_sdk_header,
+    pub resource: *mut ::core::ffi::c_void,
+    pub type_: u32,
+    pub lifecycle: u32,
+    pub top: u32,
+    pub left: u32,
+    pub width: u32,
+    pub height: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_slvk_sdk_tag"][::core::mem::size_of::<rsf_slvk_sdk_tag>() - 64usize];
+    ["Alignment of rsf_slvk_sdk_tag"][::core::mem::align_of::<rsf_slvk_sdk_tag>() - 8usize];
+    ["Offset of field: rsf_slvk_sdk_tag::base"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_tag, base) - 0usize];
+    ["Offset of field: rsf_slvk_sdk_tag::resource"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_tag, resource) - 32usize];
+    ["Offset of field: rsf_slvk_sdk_tag::type_"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_tag, type_) - 40usize];
+    ["Offset of field: rsf_slvk_sdk_tag::lifecycle"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_tag, lifecycle) - 44usize];
+    ["Offset of field: rsf_slvk_sdk_tag::top"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_tag, top) - 48usize];
+    ["Offset of field: rsf_slvk_sdk_tag::left"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_tag, left) - 52usize];
+    ["Offset of field: rsf_slvk_sdk_tag::width"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_tag, width) - 56usize];
+    ["Offset of field: rsf_slvk_sdk_tag::height"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_tag, height) - 60usize];
+};
+impl Default for rsf_slvk_sdk_tag {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_slvk_sdk_fg_options {
+    pub base: rsf_slvk_sdk_header,
+    pub mode: u32,
+    pub generated: u32,
+    pub flags: u32,
+    pub dynamic_width: u32,
+    pub dynamic_height: u32,
+    pub buffers: u32,
+    pub guide_width: u32,
+    pub guide_height: u32,
+    pub color_width: u32,
+    pub color_height: u32,
+    pub color_format: u32,
+    pub motion_format: u32,
+    pub depth_format: u32,
+    pub hudless_format: u32,
+    pub ui_format: u32,
+    pub reserved_callback: ::core::option::Option<unsafe extern "C" fn()>,
+    pub reserved_boolean: u8,
+    pub queue_parallelism: u32,
+    pub ui_recomposition: u8,
+    pub target_rate: f32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_slvk_sdk_fg_options"]
+        [::core::mem::size_of::<rsf_slvk_sdk_fg_options>() - 120usize];
+    ["Alignment of rsf_slvk_sdk_fg_options"]
+        [::core::mem::align_of::<rsf_slvk_sdk_fg_options>() - 8usize];
+    ["Offset of field: rsf_slvk_sdk_fg_options::base"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_options, base) - 0usize];
+    ["Offset of field: rsf_slvk_sdk_fg_options::mode"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_options, mode) - 32usize];
+    ["Offset of field: rsf_slvk_sdk_fg_options::generated"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_options, generated) - 36usize];
+    ["Offset of field: rsf_slvk_sdk_fg_options::flags"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_options, flags) - 40usize];
+    ["Offset of field: rsf_slvk_sdk_fg_options::dynamic_width"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_options, dynamic_width) - 44usize];
+    ["Offset of field: rsf_slvk_sdk_fg_options::dynamic_height"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_options, dynamic_height) - 48usize];
+    ["Offset of field: rsf_slvk_sdk_fg_options::buffers"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_options, buffers) - 52usize];
+    ["Offset of field: rsf_slvk_sdk_fg_options::guide_width"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_options, guide_width) - 56usize];
+    ["Offset of field: rsf_slvk_sdk_fg_options::guide_height"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_options, guide_height) - 60usize];
+    ["Offset of field: rsf_slvk_sdk_fg_options::color_width"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_options, color_width) - 64usize];
+    ["Offset of field: rsf_slvk_sdk_fg_options::color_height"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_options, color_height) - 68usize];
+    ["Offset of field: rsf_slvk_sdk_fg_options::color_format"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_options, color_format) - 72usize];
+    ["Offset of field: rsf_slvk_sdk_fg_options::motion_format"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_options, motion_format) - 76usize];
+    ["Offset of field: rsf_slvk_sdk_fg_options::depth_format"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_options, depth_format) - 80usize];
+    ["Offset of field: rsf_slvk_sdk_fg_options::hudless_format"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_options, hudless_format) - 84usize];
+    ["Offset of field: rsf_slvk_sdk_fg_options::ui_format"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_options, ui_format) - 88usize];
+    ["Offset of field: rsf_slvk_sdk_fg_options::reserved_callback"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_options, reserved_callback) - 96usize];
+    ["Offset of field: rsf_slvk_sdk_fg_options::reserved_boolean"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_options, reserved_boolean) - 104usize];
+    ["Offset of field: rsf_slvk_sdk_fg_options::queue_parallelism"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_options, queue_parallelism) - 108usize];
+    ["Offset of field: rsf_slvk_sdk_fg_options::ui_recomposition"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_options, ui_recomposition) - 112usize];
+    ["Offset of field: rsf_slvk_sdk_fg_options::target_rate"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_options, target_rate) - 116usize];
+};
+impl Default for rsf_slvk_sdk_fg_options {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_slvk_sdk_fg_state {
+    pub base: rsf_slvk_sdk_header,
+    pub estimated_vram: u64,
+    pub status: u32,
+    pub min_dimension: u32,
+    pub actual_presents: u32,
+    pub max_generated: u32,
+    pub reserved: u8,
+    pub vsync: u8,
+    pub inputs_fence: *mut ::core::ffi::c_void,
+    pub inputs_fence_value: u64,
+    pub dynamic_mfg: u8,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_slvk_sdk_fg_state"][::core::mem::size_of::<rsf_slvk_sdk_fg_state>() - 88usize];
+    ["Alignment of rsf_slvk_sdk_fg_state"]
+        [::core::mem::align_of::<rsf_slvk_sdk_fg_state>() - 8usize];
+    ["Offset of field: rsf_slvk_sdk_fg_state::base"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_state, base) - 0usize];
+    ["Offset of field: rsf_slvk_sdk_fg_state::estimated_vram"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_state, estimated_vram) - 32usize];
+    ["Offset of field: rsf_slvk_sdk_fg_state::status"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_state, status) - 40usize];
+    ["Offset of field: rsf_slvk_sdk_fg_state::min_dimension"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_state, min_dimension) - 44usize];
+    ["Offset of field: rsf_slvk_sdk_fg_state::actual_presents"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_state, actual_presents) - 48usize];
+    ["Offset of field: rsf_slvk_sdk_fg_state::max_generated"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_state, max_generated) - 52usize];
+    ["Offset of field: rsf_slvk_sdk_fg_state::reserved"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_state, reserved) - 56usize];
+    ["Offset of field: rsf_slvk_sdk_fg_state::vsync"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_state, vsync) - 57usize];
+    ["Offset of field: rsf_slvk_sdk_fg_state::inputs_fence"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_state, inputs_fence) - 64usize];
+    ["Offset of field: rsf_slvk_sdk_fg_state::inputs_fence_value"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_state, inputs_fence_value) - 72usize];
+    ["Offset of field: rsf_slvk_sdk_fg_state::dynamic_mfg"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_state, dynamic_mfg) - 80usize];
+};
+impl Default for rsf_slvk_sdk_fg_state {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_dlgvk_sample {
+    pub semaphore: u64,
+    pub value: u64,
+    pub actual_presents: u32,
+    pub max_generated: u32,
+    pub status: u32,
+    pub min_dimension: u32,
+    pub vsync: u32,
+    pub dynamic_mfg: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_dlgvk_sample"][::core::mem::size_of::<rsf_dlgvk_sample>() - 40usize];
+    ["Alignment of rsf_dlgvk_sample"][::core::mem::align_of::<rsf_dlgvk_sample>() - 8usize];
+    ["Offset of field: rsf_dlgvk_sample::semaphore"]
+        [::core::mem::offset_of!(rsf_dlgvk_sample, semaphore) - 0usize];
+    ["Offset of field: rsf_dlgvk_sample::value"]
+        [::core::mem::offset_of!(rsf_dlgvk_sample, value) - 8usize];
+    ["Offset of field: rsf_dlgvk_sample::actual_presents"]
+        [::core::mem::offset_of!(rsf_dlgvk_sample, actual_presents) - 16usize];
+    ["Offset of field: rsf_dlgvk_sample::max_generated"]
+        [::core::mem::offset_of!(rsf_dlgvk_sample, max_generated) - 20usize];
+    ["Offset of field: rsf_dlgvk_sample::status"]
+        [::core::mem::offset_of!(rsf_dlgvk_sample, status) - 24usize];
+    ["Offset of field: rsf_dlgvk_sample::min_dimension"]
+        [::core::mem::offset_of!(rsf_dlgvk_sample, min_dimension) - 28usize];
+    ["Offset of field: rsf_dlgvk_sample::vsync"]
+        [::core::mem::offset_of!(rsf_dlgvk_sample, vsync) - 32usize];
+    ["Offset of field: rsf_dlgvk_sample::dynamic_mfg"]
+        [::core::mem::offset_of!(rsf_dlgvk_sample, dynamic_mfg) - 36usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_dlgvk_tag {
+    pub image: *const rsf_vkfg_image,
+    pub kind: u32,
+    pub lifetime: u32,
+    pub width: u32,
+    pub height: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_dlgvk_tag"][::core::mem::size_of::<rsf_dlgvk_tag>() - 24usize];
+    ["Alignment of rsf_dlgvk_tag"][::core::mem::align_of::<rsf_dlgvk_tag>() - 8usize];
+    ["Offset of field: rsf_dlgvk_tag::image"]
+        [::core::mem::offset_of!(rsf_dlgvk_tag, image) - 0usize];
+    ["Offset of field: rsf_dlgvk_tag::kind"][::core::mem::offset_of!(rsf_dlgvk_tag, kind) - 8usize];
+    ["Offset of field: rsf_dlgvk_tag::lifetime"]
+        [::core::mem::offset_of!(rsf_dlgvk_tag, lifetime) - 12usize];
+    ["Offset of field: rsf_dlgvk_tag::width"]
+        [::core::mem::offset_of!(rsf_dlgvk_tag, width) - 16usize];
+    ["Offset of field: rsf_dlgvk_tag::height"]
+        [::core::mem::offset_of!(rsf_dlgvk_tag, height) - 20usize];
+};
+impl Default for rsf_dlgvk_tag {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_dlgvk_sdk_call {
+    pub native: *mut ::core::ffi::c_void,
+    pub result: i32,
+    pub sample: rsf_dlgvk_sample,
+    pub commands: *mut ::core::ffi::c_void,
+    pub camera: *const rsf_slvk_sdk_constants,
+    pub record: *const rsf_frame_record,
+    pub tags: *const rsf_dlgvk_tag,
+    pub options: *const rsf_slvk_sdk_fg_options,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_dlgvk_sdk_call"][::core::mem::size_of::<rsf_dlgvk_sdk_call>() - 96usize];
+    ["Alignment of rsf_dlgvk_sdk_call"][::core::mem::align_of::<rsf_dlgvk_sdk_call>() - 8usize];
+    ["Offset of field: rsf_dlgvk_sdk_call::native"]
+        [::core::mem::offset_of!(rsf_dlgvk_sdk_call, native) - 0usize];
+    ["Offset of field: rsf_dlgvk_sdk_call::result"]
+        [::core::mem::offset_of!(rsf_dlgvk_sdk_call, result) - 8usize];
+    ["Offset of field: rsf_dlgvk_sdk_call::sample"]
+        [::core::mem::offset_of!(rsf_dlgvk_sdk_call, sample) - 16usize];
+    ["Offset of field: rsf_dlgvk_sdk_call::commands"]
+        [::core::mem::offset_of!(rsf_dlgvk_sdk_call, commands) - 56usize];
+    ["Offset of field: rsf_dlgvk_sdk_call::camera"]
+        [::core::mem::offset_of!(rsf_dlgvk_sdk_call, camera) - 64usize];
+    ["Offset of field: rsf_dlgvk_sdk_call::record"]
+        [::core::mem::offset_of!(rsf_dlgvk_sdk_call, record) - 72usize];
+    ["Offset of field: rsf_dlgvk_sdk_call::tags"]
+        [::core::mem::offset_of!(rsf_dlgvk_sdk_call, tags) - 80usize];
+    ["Offset of field: rsf_dlgvk_sdk_call::options"]
+        [::core::mem::offset_of!(rsf_dlgvk_sdk_call, options) - 88usize];
+};
+impl Default for rsf_dlgvk_sdk_call {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_dlgvk_sdk {
+    pub set_constants: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *const rsf_slvk_sdk_constants,
+            token: *const ::core::ffi::c_void,
+            arg2: *const rsf_slvk_sdk_viewport,
+        ) -> i32,
+    >,
+    pub set_tags: ::core::option::Option<
+        unsafe extern "C" fn(
+            token: *const ::core::ffi::c_void,
+            arg1: *const rsf_slvk_sdk_viewport,
+            arg2: *const rsf_slvk_sdk_tag,
+            count: u32,
+            commands: *mut ::core::ffi::c_void,
+        ) -> i32,
+    >,
+    pub free_resources: ::core::option::Option<
+        unsafe extern "C" fn(feature: u32, arg1: *const rsf_slvk_sdk_viewport) -> i32,
+    >,
+    pub set_options: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *const rsf_slvk_sdk_viewport,
+            arg2: *const rsf_slvk_sdk_fg_options,
+        ) -> i32,
+    >,
+    pub get_state: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *const rsf_slvk_sdk_viewport,
+            arg2: *mut rsf_slvk_sdk_fg_state,
+            arg3: *const rsf_slvk_sdk_fg_options,
+        ) -> i32,
+    >,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_dlgvk_sdk"][::core::mem::size_of::<rsf_dlgvk_sdk>() - 40usize];
+    ["Alignment of rsf_dlgvk_sdk"][::core::mem::align_of::<rsf_dlgvk_sdk>() - 8usize];
+    ["Offset of field: rsf_dlgvk_sdk::set_constants"]
+        [::core::mem::offset_of!(rsf_dlgvk_sdk, set_constants) - 0usize];
+    ["Offset of field: rsf_dlgvk_sdk::set_tags"]
+        [::core::mem::offset_of!(rsf_dlgvk_sdk, set_tags) - 8usize];
+    ["Offset of field: rsf_dlgvk_sdk::free_resources"]
+        [::core::mem::offset_of!(rsf_dlgvk_sdk, free_resources) - 16usize];
+    ["Offset of field: rsf_dlgvk_sdk::set_options"]
+        [::core::mem::offset_of!(rsf_dlgvk_sdk, set_options) - 24usize];
+    ["Offset of field: rsf_dlgvk_sdk::get_state"]
+        [::core::mem::offset_of!(rsf_dlgvk_sdk, get_state) - 32usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_dlgvk_platform {
+    pub gpu: *const rsf_vkfg_platform,
+    pub open: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *const rsf_fgvk_setup,
+            arg2: *mut *mut ::core::ffi::c_void,
+        ) -> rsf_backend_result,
+    >,
+    pub close: ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void)>,
+    pub prepare_chain: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *mut ::core::ffi::c_void,
+            capture_enabled: *mut u32,
+            gpu: *mut *mut ::core::ffi::c_void,
+        ) -> rsf_backend_result,
+    >,
+    pub start_capture: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void) -> rsf_backend_result,
+    >,
+    pub invoke: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *const rsf_slvk_call) -> rsf_backend_result,
+    >,
+    pub initialize: rsf_slvk_callback,
+    pub configure: rsf_slvk_callback,
+    pub sample: rsf_slvk_callback,
+    pub constants: rsf_slvk_callback,
+    pub tag: rsf_slvk_callback,
+    pub release: rsf_slvk_callback,
+    pub capture: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *mut ::core::ffi::c_void,
+            arg2: *mut ::core::ffi::c_void,
+            arg3: *const rsf_srvk_image,
+            arg4: *const rsf_frame_record,
+            role: u32,
+            group: u64,
+        ),
+    >,
+    pub remember: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *mut ::core::ffi::c_void,
+            arg2: *const rsf_frame_record,
+            arg3: *const rsf_dlssgvk_status,
+            configured: u32,
+        ),
+    >,
+    pub capture_group: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: u64, complete: u32),
+    >,
+    pub flush: ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void)>,
+    pub detach_capture: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void) -> rsf_backend_result,
+    >,
+    pub timeout_epoch: ::core::option::Option<unsafe extern "C" fn() -> u64>,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_dlgvk_platform"][::core::mem::size_of::<rsf_dlgvk_platform>() - 144usize];
+    ["Alignment of rsf_dlgvk_platform"][::core::mem::align_of::<rsf_dlgvk_platform>() - 8usize];
+    ["Offset of field: rsf_dlgvk_platform::gpu"]
+        [::core::mem::offset_of!(rsf_dlgvk_platform, gpu) - 0usize];
+    ["Offset of field: rsf_dlgvk_platform::open"]
+        [::core::mem::offset_of!(rsf_dlgvk_platform, open) - 8usize];
+    ["Offset of field: rsf_dlgvk_platform::close"]
+        [::core::mem::offset_of!(rsf_dlgvk_platform, close) - 16usize];
+    ["Offset of field: rsf_dlgvk_platform::prepare_chain"]
+        [::core::mem::offset_of!(rsf_dlgvk_platform, prepare_chain) - 24usize];
+    ["Offset of field: rsf_dlgvk_platform::start_capture"]
+        [::core::mem::offset_of!(rsf_dlgvk_platform, start_capture) - 32usize];
+    ["Offset of field: rsf_dlgvk_platform::invoke"]
+        [::core::mem::offset_of!(rsf_dlgvk_platform, invoke) - 40usize];
+    ["Offset of field: rsf_dlgvk_platform::initialize"]
+        [::core::mem::offset_of!(rsf_dlgvk_platform, initialize) - 48usize];
+    ["Offset of field: rsf_dlgvk_platform::configure"]
+        [::core::mem::offset_of!(rsf_dlgvk_platform, configure) - 56usize];
+    ["Offset of field: rsf_dlgvk_platform::sample"]
+        [::core::mem::offset_of!(rsf_dlgvk_platform, sample) - 64usize];
+    ["Offset of field: rsf_dlgvk_platform::constants"]
+        [::core::mem::offset_of!(rsf_dlgvk_platform, constants) - 72usize];
+    ["Offset of field: rsf_dlgvk_platform::tag"]
+        [::core::mem::offset_of!(rsf_dlgvk_platform, tag) - 80usize];
+    ["Offset of field: rsf_dlgvk_platform::release"]
+        [::core::mem::offset_of!(rsf_dlgvk_platform, release) - 88usize];
+    ["Offset of field: rsf_dlgvk_platform::capture"]
+        [::core::mem::offset_of!(rsf_dlgvk_platform, capture) - 96usize];
+    ["Offset of field: rsf_dlgvk_platform::remember"]
+        [::core::mem::offset_of!(rsf_dlgvk_platform, remember) - 104usize];
+    ["Offset of field: rsf_dlgvk_platform::capture_group"]
+        [::core::mem::offset_of!(rsf_dlgvk_platform, capture_group) - 112usize];
+    ["Offset of field: rsf_dlgvk_platform::flush"]
+        [::core::mem::offset_of!(rsf_dlgvk_platform, flush) - 120usize];
+    ["Offset of field: rsf_dlgvk_platform::detach_capture"]
+        [::core::mem::offset_of!(rsf_dlgvk_platform, detach_capture) - 128usize];
+    ["Offset of field: rsf_dlgvk_platform::timeout_epoch"]
+        [::core::mem::offset_of!(rsf_dlgvk_platform, timeout_epoch) - 136usize];
+};
+impl Default for rsf_dlgvk_platform {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+unsafe extern "C" {
+    pub static rsf_dlgvk_leaves: rsf_dlgvk_platform;
+}
+unsafe extern "C" {
+    pub fn rsf_core_dlgvk_create(
+        arg1: *const rsf_dlgvk_platform,
+        arg2: *const rsf_fgvk_setup,
+        arg3: *mut *mut rsf_dlssgvk,
+        arg4: *mut u64,
+    ) -> rsf_backend_result;
 }
 pub const RSF_DLSS_FIXTURE_NORMAL: rsf_dlss_fixture_variant = 0;
 pub const RSF_DLSS_FIXTURE_CAPTURE_REQUIRED: rsf_dlss_fixture_variant = 1;
@@ -772,6 +1841,15 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     pub fn rsf_fixture_dlss_unlock(arg1: *mut ::core::ffi::c_void);
+}
+unsafe extern "C" {
+    pub static rsf_core_dlss_capture_leaves: rsf_dlss_capture_platform;
+}
+unsafe extern "C" {
+    pub fn rsf_core_dlss_capture_native(
+        arg1: *const rsf_fgvk_setup,
+        arg2: rsf_sl_set_present_capture,
+    ) -> *mut ::core::ffi::c_void;
 }
 unsafe extern "C" {
     pub fn rsf_fixture_dlss_create(

@@ -4,6 +4,7 @@
 #include <rescaleframe/native_fg_dlss_vulkan.h>
 #include "results.h"
 #include "../../runtime/orchestrator/src/native_fg_dlss_vulkan_capture_ledger.h"
+#include "../../runtime/orchestrator/src/native_fg_dlss_vulkan_platform.h"
 
 enum rsf_dlss_fixture_variant {
     RSF_DLSS_FIXTURE_NORMAL = 0,
@@ -49,6 +50,10 @@ rsf_vk_function rsf_fixture_dlss_proc(void*, const char*);
 int32_t rsf_fixture_dlss_submit(void*, uint32_t, const void*, uint64_t);
 void rsf_fixture_dlss_lock(void*);
 void rsf_fixture_dlss_unlock(void*);
+/* The Rust present capture leaves, and a capture native with the given
+   registration entry and no file output (dlss_vulkan_capture/leaves.rs). */
+extern const rsf_dlss_capture_platform rsf_core_dlss_capture_leaves;
+void* rsf_core_dlss_capture_native(const rsf_fgvk_setup*, rsf_sl_set_present_capture);
 rsf_backend_result rsf_fixture_dlss_create(enum rsf_dlss_fixture_variant, const rsf_fgvk_setup*, rsf_dlssgvk**, uint64_t*);
 int32_t rsf_fixture_dlss_capture_open(const rsf_fgvk_setup*, rsf_dlss_capture**, rsf_dlss_fixture_capture_calls*);
 void rsf_fixture_dlss_capture_state(rsf_dlss_fixture_capture_state*);

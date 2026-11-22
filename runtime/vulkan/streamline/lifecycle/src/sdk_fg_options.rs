@@ -6,7 +6,25 @@ pub(crate) use abi::rsf_slvk_sdk_fg_options as Packed;
 #[cfg(windows)]
 #[allow(unused_imports)] // The Vulkan Runtime consumes its own present timing sample.
 pub(crate) use abi::rsf_slvk_sdk_fg_sample as Sample;
+#[cfg(windows)]
+pub(crate) use abi::rsf_slvk_sdk_fg_state as State;
 use abi::rsf_slvk_sdk_header;
+
+/// An empty `sl::DLSSGState` v4 for slDLSSGGetState to fill.
+#[cfg(windows)]
+pub(crate) fn state() -> State {
+    State {
+        base: rsf_slvk_sdk_header {
+            next: std::ptr::null_mut(),
+            type_lo: 0xcc8a_c8e1,
+            type_mid: 0xa179,
+            type_hi: 0x44f5,
+            type_tail: [0x97, 0xfa, 0xe7, 0x41, 0x12, 0xf9, 0xbc, 0x61],
+            version: 4,
+        },
+        ..Default::default()
+    }
+}
 
 pub(crate) fn pack(
     count: Option<u32>,

@@ -67,7 +67,7 @@ pub(super) extern "C" fn rsf_core_vkfg_ensure_image(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_vkfg_ensure_image_usage(
+pub(crate) extern "C" fn rsf_core_vkfg_ensure_image_usage(
     platform: &Platform,
     user: *mut c_void,
     current: &mut Image,

@@ -741,11 +741,11 @@ generate("runtime/orchestrator/src/vulkan_sharpening_abi.rs", "runtime/orchestra
           "--raw-line", "use crate::vulkan_fg_resources_abi::rsf_vkfg_platform;",
           "--raw-line", "use crate::vulkan_sr_abi::{rsf_srvk_frame, rsf_srvk_setup};"])
 generate("runtime/vulkan/streamline/lifecycle/src/sdk_fg_options_abi.rs", "runtime/vulkan/streamline/sdk_fg_options.h",
-         "rsf_slvk_sdk_fg_(options|sample)", "NOTHING", [], ["--with-derive-default"])
+         "rsf_slvk_sdk_fg_(options|sample|state)", "NOTHING", [], ["--with-derive-default"])
 generate("runtime/vulkan/streamline/lifecycle/src/sdk_records_abi.rs", "runtime/vulkan/streamline/sdk_records.h",
          "rsf_slvk_(sdk_.*|legacy_.*)", "NOTHING", [], ["--with-derive-default"])
 generate("runtime/orchestrator/src/vulkan_dlss_sr_abi.rs", "runtime/orchestrator/src/native_dlss_vulkan_platform.h",
-         "rsf_vkdlss_(platform|images|tag|options|init)", "NOTHING",
+         "rsf_vkdlss_(platform|images|tag|options|init|optimal)", "NOTHING",
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist", "--with-derive-default",
           "--raw-line", "use crate::vulkan_fg_resources_abi::rsf_vkfg_image;",
@@ -1234,9 +1234,10 @@ generate("tests/vulkan-fg/src/fsr4_state_abi.rs", "runtime/orchestrator/src/nati
           "--raw-line", "use rsf_game_sys::rsf_frame_record;",
           "--with-derive-default"])
 generate("tests/vulkan-fg/src/dlss_abi.rs", "tests/vulkan-fg/dlss_abi.h",
-         "(rsf_dlss_fixture_.*|rsf_fixture_result)", "RSF_(FGVK_ABI_VERSION|SRVK_ABI_VERSION|DLSSGVK_ABI_VERSION|SL_PRESENT_CAPTURE_ABI_VERSION)",
+         "(rsf_dlss_fixture_.*|rsf_fixture_result|rsf_dlgvk_(sdk|sdk_call|platform)|rsf_dlss_capture_platform|rsf_slvk_(call|sdk_resource))",
+         "RSF_(FGVK_ABI_VERSION|SRVK_ABI_VERSION|DLSSGVK_ABI_VERSION|SL_PRESENT_CAPTURE_ABI_VERSION|SLVK_ABI_VERSION)|rsf_(dlgvk_leaves|core_dlss_capture_leaves)",
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Isdk/game/include"],
-         ["--allowlist-function", "rsf_(fixture_dlss_.*|dlssgvk_.*|core_dlss_capture_(remember|detach|close))", "--no-prepend-enum-name",
+         ["--allowlist-function", "rsf_(fixture_dlss_.*|dlssgvk_.*|core_dlgvk_create|core_dlss_capture_(open|native|remember|detach|close))", "--no-prepend-enum-name",
           "--blocklist-type", "rsf_(frame_record|camera_frame|frame_id|frame_phase|screen_class)",
           "--raw-line", "use rsf_game_sys::rsf_frame_record;", "--with-derive-default"])
 

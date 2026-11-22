@@ -7,7 +7,7 @@ use rsf_game_sys::rsf_frame_record;
 use std::{
     cell::{Cell, UnsafeCell},
     ffi::{CStr, c_char},
-    mem, ptr, slice,
+    mem, slice,
 };
 
 const SUCCESS: vk::Result = vk::Result::SUCCESS;
@@ -508,8 +508,13 @@ unsafe extern "system" fn real_submit(
         state.submitted_fence = fence.as_raw() as usize;
         state.commands = unsafe { info.p_command_buffers.read() }.as_raw() as usize;
         state.real_submits += 1;
-        for index in 0..info.wait_semaphore_count as usize {
-            state.stages[index] = unsafe { info.p_wait_dst_stage_mask.add(index).read() }.as_raw();
+        for (index, stage) in state
+            .stages
+            .iter_mut()
+            .enumerate()
+            .take(info.wait_semaphore_count as usize)
+        {
+            *stage = unsafe { info.p_wait_dst_stage_mask.add(index).read() }.as_raw();
         }
     });
     SUCCESS

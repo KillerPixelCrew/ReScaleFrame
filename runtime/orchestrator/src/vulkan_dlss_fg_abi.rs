@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: MIT
 use crate::vulkan_dlss_fg::sdk_fg_options::Packed;
+use crate::vulkan_dlss_fg::sdk_fg_options::State;
 use crate::vulkan_fg_abi::{rsf_dlssgvk_status as Status, rsf_fgvk_setup as Setup};
 use crate::vulkan_fg_resources_abi::{rsf_vkfg_image as Image, rsf_vkfg_platform as Gpu};
 use crate::vulkan_latency_abi::{rsf_slvk_call, rsf_slvk_callback};
 use crate::vulkan_sr_abi::rsf_srvk_image as SourceImage;
-use crate::vulkan_streamline_camera::rsf_slvk_sdk_constants;
+use crate::vulkan_streamline_camera::sdk_api::{
+    FreeResources, GetFgState, SetConstants, SetOptions, SetTagForFrame,
+};
+use crate::vulkan_streamline_camera::{rsf_slvk_sdk_constants, rsf_slvk_sdk_tag};
 use rsf_game_sys::rsf_frame_record as Record;
 use std::ffi::c_void;
 
@@ -45,6 +49,17 @@ pub(super) struct SdkCall {
     pub options: *const Packed,
 }
 
+/// `rsf_dlgvk_sdk`: the Streamline entries at the start of the native owner.
+#[repr(C)]
+#[derive(Default)]
+pub(super) struct Sdk {
+    pub set_constants: Option<SetConstants<rsf_slvk_sdk_constants>>,
+    pub set_tags: Option<SetTagForFrame<rsf_slvk_sdk_tag>>,
+    pub free_resources: Option<FreeResources>,
+    pub set_options: Option<SetOptions<Packed>>,
+    pub get_state: Option<GetFgState<State, Packed>>,
+}
+
 #[repr(C)]
 pub(super) struct Platform {
     pub gpu: *const Gpu,
@@ -74,5 +89,6 @@ const _: () = {
     assert!(std::mem::offset_of!(SdkCall, camera) == 64);
     assert!(std::mem::offset_of!(SdkCall, tags) == 80);
     assert!(std::mem::offset_of!(SdkCall, options) == 88);
+    assert!(size_of::<Sdk>() == 40);
     assert!(size_of::<Platform>() == 144);
 };

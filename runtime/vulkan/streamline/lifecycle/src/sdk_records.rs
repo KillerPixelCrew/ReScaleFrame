@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-//! Data construction for the pinned Streamline 2.14.1 C++ call leaves.
+//! Data construction for the pinned Streamline 2.14.1 call leaves.
+use crate::sdk_api::{RESOURCE, TAG};
 use crate::sdk_camera_defaults;
 use crate::sdk_records_abi::{
     rsf_slvk_legacy_camera, rsf_slvk_legacy_image, rsf_slvk_sdk_constants, rsf_slvk_sdk_header,
@@ -17,24 +18,6 @@ const PREFERENCES: rsf_slvk_sdk_header = rsf_slvk_sdk_header {
     type_mid: 0xbf8e,
     type_hi: 0x432b,
     type_tail: [0x8d, 0xa1, 0x67, 0x16, 0xd8, 0x79, 0xfb, 0x14],
-    version: 1,
-};
-
-const RESOURCE: rsf_slvk_sdk_header = rsf_slvk_sdk_header {
-    next: ptr::null_mut(),
-    type_lo: 0x3a9d_70cf,
-    type_mid: 0x2418,
-    type_hi: 0x4b72,
-    type_tail: [0x83, 0x91, 0x13, 0xf8, 0x72, 0x1c, 0x72, 0x61],
-    version: 1,
-};
-
-const TAG: rsf_slvk_sdk_header = rsf_slvk_sdk_header {
-    next: ptr::null_mut(),
-    type_lo: 0x4c6a_5aad,
-    type_mid: 0xb445,
-    type_hi: 0x496c,
-    type_tail: [0x87, 0xff, 0x1a, 0xf3, 0x84, 0x5b, 0xe6, 0x53],
     version: 1,
 };
 
@@ -93,8 +76,7 @@ pub(crate) fn reflex_options(
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_slvk_pack_pcl_options(thread_id: u32, output: &mut rsf_slvk_sdk_pcl_options) {
+pub(crate) fn rsf_slvk_pack_pcl_options(thread_id: u32, output: &mut rsf_slvk_sdk_pcl_options) {
     *output = rsf_slvk_sdk_pcl_options {
         base: rsf_slvk_sdk_header {
             next: ptr::null_mut(),
@@ -112,8 +94,7 @@ extern "C" fn rsf_slvk_pack_pcl_options(thread_id: u32, output: &mut rsf_slvk_sd
 /// Matrix buffers borrow one live managed frame and are copied into the SDK's
 /// row storage. The managed column-vector representation already has this
 /// linear order when read as Streamline row-vector matrices.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_slvk_pack_legacy_camera(
+pub(crate) unsafe fn rsf_slvk_pack_legacy_camera(
     camera: *const rsf_slvk_legacy_camera,
     output: *mut rsf_slvk_sdk_constants,
 ) -> u32 {
@@ -166,8 +147,7 @@ unsafe extern "C" fn rsf_slvk_pack_legacy_camera(
     1
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_slvk_pack_legacy_tags(
+pub(crate) unsafe fn rsf_slvk_pack_legacy_tags(
     images: *const *const rsf_slvk_legacy_image,
     output: &mut rsf_slvk_sdk_tag_batch,
 ) {
@@ -200,7 +180,7 @@ unsafe extern "C" fn rsf_slvk_pack_legacy_tags(
             tag.width = image.width;
             tag.height = image.height;
         }
-        // The native adapter installs the pointer to its constructed resource.
+        // The bridge installs the pointer to the batch's resource.
         output.tags[index] = tag;
     }
 }

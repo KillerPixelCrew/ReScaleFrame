@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include "sdk_records.h"
+#include "sdk_sr_options.h"
 #include <sl.h>
+#include <sl_dlss.h>
 #include <sl_reflex.h>
 #include <sl_pcl.h>
+#include <type_traits>
+
+/* Native SDK layout assertions for the Rust Streamline callers. sl.h is C++
+   only, so tests/dlss_sr_layout_facts.cpp compiles this header. */
 
 static_assert(sl::kSDKVersion == 0x0002000e0001fedcull);
 static_assert(sl::kFeaturePCL == 4 && sl::kFeatureReflex == 3 &&
@@ -38,6 +44,44 @@ static_assert(uint32_t(sl::ResourceType::eTex2d) == 0 &&
     sl::ResourceLifecycle::eOnlyValidNow == 0 && sl::ResourceLifecycle::eValidUntilPresent == 1);
 static_assert(sl::kBufferTypeDepth == 0 && sl::kBufferTypeMotionVectors == 1 &&
     sl::kBufferTypeHUDLessColor == 2 && sl::kBufferTypeUIColorAndAlpha == 23);
+static_assert(sl::kBufferTypeScalingInputColor == 3 && sl::kBufferTypeScalingOutputColor == 4 &&
+    sl::kBufferTypeBiasCurrentColorHint == 29);
+static_assert(sl::ResourceLifecycle::eValidUntilEvaluate == 2);
+static_assert(int32_t(sl::Result::eOk) == 0 && int32_t(sl::Result::eErrorExceptionHandler) == 24 &&
+    int32_t(sl::Result::eWarnOutOfVRAM) == 39);
+static_assert(uint32_t(sl::LogType::eInfo) == 0 && uint32_t(sl::LogType::eWarn) == 1 &&
+    uint32_t(sl::LogType::eError) == 2);
+static_assert(uint32_t(sl::ReflexMode::eOff) == 0 && uint32_t(sl::ReflexMode::eLowLatency) == 1 &&
+    uint32_t(sl::ReflexMode::eLowLatencyWithBoost) == 2);
+static_assert(sizeof(sl::Result) == sizeof(int32_t) && sizeof(sl::PCLMarker) == sizeof(uint32_t));
+static_assert(sizeof(sl::APIError) == sizeof(int32_t) && offsetof(sl::APIError, vkRes) == 0);
+/* sdk_guard.c calls operator uint32_t through vtable slot 0: the token has a
+   vtable pointer before its base and no other virtual member. */
+static_assert(std::is_polymorphic_v<sl::FrameToken> &&
+    sizeof(sl::FrameToken) == sizeof(void*) + sizeof(sl::BaseStructure));
+static_assert(sizeof(sl::ViewportHandle) == sizeof(rsf_slvk_sdk_viewport) &&
+    alignof(sl::ViewportHandle) == alignof(rsf_slvk_sdk_viewport) &&
+    __is_trivially_copyable(sl::ViewportHandle));
+static_assert(sl::ViewportHandle::s_structType.data1 == 0x171b6435);
+static_assert(sizeof(sl::AdapterInfo) == sizeof(rsf_slvk_sdk_adapter) &&
+    alignof(sl::AdapterInfo) == alignof(rsf_slvk_sdk_adapter));
+static_assert(sl::AdapterInfo::s_structType.data1 == 0x0677315f);
+static_assert(sizeof(sl::ReflexState) == sizeof(rsf_slvk_sdk_reflex_state) &&
+    alignof(sl::ReflexState) == alignof(rsf_slvk_sdk_reflex_state));
+static_assert(sl::ReflexState::s_structType.data1 == 0xf0bb5985);
+static_assert(sizeof(sl::PCLState) == sizeof(rsf_slvk_sdk_pcl_state) &&
+    alignof(sl::PCLState) == alignof(rsf_slvk_sdk_pcl_state));
+static_assert(sl::PCLState::s_structType.data1 == 0xcfa32f9b && sl::PCLState::s_structType.data4[7] == 0xb5);
+static_assert(sizeof(sl::DLSSOptions) == sizeof(rsf_vkdlss_options) &&
+    alignof(sl::DLSSOptions) == alignof(rsf_vkdlss_options) &&
+    __is_trivially_copyable(sl::DLSSOptions));
+static_assert(sl::DLSSOptions::s_structType.data1 == 0x6ac826e4);
+static_assert(sizeof(sl::DLSSOptimalSettings) == sizeof(rsf_vkdlss_optimal) &&
+    alignof(sl::DLSSOptimalSettings) == alignof(rsf_vkdlss_optimal));
+static_assert(sl::DLSSOptimalSettings::s_structType.data1 == 0xef1d0957);
+static_assert(uint32_t(sl::DLSSMode::eDLAA) == 6 && uint32_t(sl::DLSSMode::eMaxQuality) == 3 &&
+    uint32_t(sl::DLSSMode::eBalanced) == 2 && uint32_t(sl::DLSSMode::eMaxPerformance) == 1 &&
+    uint32_t(sl::DLSSMode::eUltraPerformance) == 4);
 
 // The Streamline records inherit a nonempty base. Use the compiler's x64
 // offsetof extension here to catch changes in that layout.
@@ -119,6 +163,33 @@ RSF_SL_OFFSET(ReflexOptions, reflex_options, virtualKey, hotkey);
 RSF_SL_OFFSET(ReflexOptions, reflex_options, idThread, thread_id);
 RSF_SL_OFFSET(PCLOptions, pcl_options, virtualKey, hotkey);
 RSF_SL_OFFSET(PCLOptions, pcl_options, idThread, thread_id);
+RSF_SL_OFFSET(AdapterInfo, adapter, deviceLUID, luid);
+RSF_SL_OFFSET(AdapterInfo, adapter, deviceLUIDSizeInBytes, luid_size);
+RSF_SL_OFFSET(AdapterInfo, adapter, vkPhysicalDevice, physical_device);
+RSF_SL_OFFSET(ReflexState, reflex_state, lowLatencyAvailable, low_latency_available);
+RSF_SL_OFFSET(ReflexState, reflex_state, latencyReportAvailable, latency_report_available);
+RSF_SL_OFFSET(ReflexState, reflex_state, statsWindowMessage, window_message);
+RSF_SL_OFFSET(PCLState, pcl_state, statsWindowMessage, window_message);
+#define RSF_SL_SR(vendor, wire) \
+    static_assert(RSF_SL_FIELD_OFFSET(sl::DLSSOptions, vendor) == RSF_SL_FIELD_OFFSET(rsf_vkdlss_options, wire))
+RSF_SL_SR(mode, mode);
+RSF_SL_SR(outputWidth, width);
+RSF_SL_SR(outputHeight, height);
+RSF_SL_SR(preExposure, pre_exposure);
+RSF_SL_SR(exposureScale, exposure_scale);
+RSF_SL_SR(colorBuffersHDR, hdr);
+RSF_SL_SR(indicatorInvertAxisX, invert_x);
+RSF_SL_SR(indicatorInvertAxisY, invert_y);
+RSF_SL_SR(dlaaPreset, presets);
+static_assert(RSF_SL_FIELD_OFFSET(sl::DLSSOptions, ultraQualityPreset) ==
+    RSF_SL_FIELD_OFFSET(rsf_vkdlss_options, presets) + 5 * sizeof(uint32_t));
+RSF_SL_SR(useAutoExposure, auto_exposure);
+RSF_SL_SR(alphaUpscalingEnabled, alpha_upscaling);
+#undef RSF_SL_SR
+static_assert(RSF_SL_FIELD_OFFSET(sl::DLSSOptimalSettings, optimalRenderWidth) ==
+    RSF_SL_FIELD_OFFSET(rsf_vkdlss_optimal, width) &&
+    RSF_SL_FIELD_OFFSET(sl::DLSSOptimalSettings, optimalRenderHeight) ==
+    RSF_SL_FIELD_OFFSET(rsf_vkdlss_optimal, height));
 static_assert(offsetof(sl::Extent, top) == 0 && offsetof(sl::Extent, left) == 4 &&
     offsetof(sl::Extent, width) == 8 && offsetof(sl::Extent, height) == 12);
 #undef RSF_SL_OFFSET

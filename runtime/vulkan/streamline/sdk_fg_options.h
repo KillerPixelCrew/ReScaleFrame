@@ -2,8 +2,8 @@
 #pragma once
 #include "sdk_records.h"
 
-/* DLSSGOptions v5. The SDK call adapter installs the native error callback
-   after copying this record into a constructed sl::DLSSGOptions. */
+/* DLSSGOptions v5. The SDK call leaf installs its error callback in
+   reserved_callback before passing the record. */
 typedef struct rsf_slvk_sdk_fg_options {
     rsf_slvk_sdk_header base;
     uint32_t mode, generated, flags;
@@ -16,6 +16,17 @@ typedef struct rsf_slvk_sdk_fg_options {
     uint8_t ui_recomposition;
     float target_rate;
 } rsf_slvk_sdk_fg_options;
+
+/* sl::DLSSGState v4, written by slDLSSGGetState. */
+typedef struct rsf_slvk_sdk_fg_state {
+    rsf_slvk_sdk_header base;
+    uint64_t estimated_vram;
+    uint32_t status, min_dimension, actual_presents, max_generated;
+    uint8_t reserved, vsync;
+    void* inputs_fence;
+    uint64_t inputs_fence_value;
+    uint8_t dynamic_mfg;
+} rsf_slvk_sdk_fg_state;
 
 /* Narrow state facts copied from the typed SDK query. */
 typedef struct rsf_slvk_sdk_fg_sample {

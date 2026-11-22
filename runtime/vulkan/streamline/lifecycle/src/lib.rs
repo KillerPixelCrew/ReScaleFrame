@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 //! Lifecycle owner for the Streamline Vulkan interposer.
 //!
-//! `runtime/vulkan/streamline/bridge.cpp` keeps the native `rsf_vk_sl_*` exports, the
-//! typed SDK entry points and the verified-file leaf. This
-//! crate decides when the interposer is admitted, loaded, initialized, shut down
-//! and unloaded, which features slInit loads, and which Vulkan dispatch entry
-//! points stay usable after SDK shutdown. It also owns the legacy bridge's
+//! The crate owns the `rsf_vk_sl_*` exports of the standalone bridge and its
+//! typed SDK calls (`win32/bridge.rs`). `bridge.c` keeps the interposer
+//! digest the build injects, and `sdk_guard.c` the exception containment and
+//! the `sl::FrameToken` virtual call. The crate decides when the interposer is
+//! admitted, loaded, initialized, shut down and unloaded, which features slInit
+//! loads, and which Vulkan dispatch entry points stay usable after SDK shutdown. It also owns the legacy bridge's
 //! DLSS-G options cache, resource state and current borrowed frame token.
 //!
 //! Only Windows links the loader bindings and C entry points. Other hosts build
@@ -20,6 +21,8 @@ mod frame_generation;
 mod frame_token;
 #[cfg(any(windows, test))]
 mod lifecycle;
+#[cfg(any(windows, test))]
+mod sdk_api;
 #[cfg(any(windows, test))]
 mod sdk_camera_defaults;
 #[cfg(windows)]

@@ -11,6 +11,9 @@ license.workspace = true
 [lib]
 crate-type = ["staticlib"]
 
+[build-dependencies]
+cc = "1"
+
 [target.'cfg(windows)'.dependencies]
 ash = { version = "=0.38.0", default-features = false, features = ["std"] }
 windows-sys = { version = "0.61", features = [

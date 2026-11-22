@@ -8,6 +8,103 @@ use crate::vulkan_streamline_camera::{rsf_slvk_sdk_constants, rsf_slvk_sdk_heade
 use rsf_game_sys::rsf_frame_record;
 
 #[repr(C)]
+pub struct rsf_vkdlss_options {
+    pub base: rsf_slvk_sdk_header,
+    pub mode: u32,
+    pub width: u32,
+    pub height: u32,
+    pub sharpness: f32,
+    pub pre_exposure: f32,
+    pub exposure_scale: f32,
+    pub hdr: u8,
+    pub invert_x: u8,
+    pub invert_y: u8,
+    pub presets: [u32; 6usize],
+    pub auto_exposure: u8,
+    pub alpha_upscaling: u8,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_vkdlss_options"][::core::mem::size_of::<rsf_vkdlss_options>() - 88usize];
+    ["Alignment of rsf_vkdlss_options"][::core::mem::align_of::<rsf_vkdlss_options>() - 8usize];
+    ["Offset of field: rsf_vkdlss_options::base"]
+        [::core::mem::offset_of!(rsf_vkdlss_options, base) - 0usize];
+    ["Offset of field: rsf_vkdlss_options::mode"]
+        [::core::mem::offset_of!(rsf_vkdlss_options, mode) - 32usize];
+    ["Offset of field: rsf_vkdlss_options::width"]
+        [::core::mem::offset_of!(rsf_vkdlss_options, width) - 36usize];
+    ["Offset of field: rsf_vkdlss_options::height"]
+        [::core::mem::offset_of!(rsf_vkdlss_options, height) - 40usize];
+    ["Offset of field: rsf_vkdlss_options::sharpness"]
+        [::core::mem::offset_of!(rsf_vkdlss_options, sharpness) - 44usize];
+    ["Offset of field: rsf_vkdlss_options::pre_exposure"]
+        [::core::mem::offset_of!(rsf_vkdlss_options, pre_exposure) - 48usize];
+    ["Offset of field: rsf_vkdlss_options::exposure_scale"]
+        [::core::mem::offset_of!(rsf_vkdlss_options, exposure_scale) - 52usize];
+    ["Offset of field: rsf_vkdlss_options::hdr"]
+        [::core::mem::offset_of!(rsf_vkdlss_options, hdr) - 56usize];
+    ["Offset of field: rsf_vkdlss_options::invert_x"]
+        [::core::mem::offset_of!(rsf_vkdlss_options, invert_x) - 57usize];
+    ["Offset of field: rsf_vkdlss_options::invert_y"]
+        [::core::mem::offset_of!(rsf_vkdlss_options, invert_y) - 58usize];
+    ["Offset of field: rsf_vkdlss_options::presets"]
+        [::core::mem::offset_of!(rsf_vkdlss_options, presets) - 60usize];
+    ["Offset of field: rsf_vkdlss_options::auto_exposure"]
+        [::core::mem::offset_of!(rsf_vkdlss_options, auto_exposure) - 84usize];
+    ["Offset of field: rsf_vkdlss_options::alpha_upscaling"]
+        [::core::mem::offset_of!(rsf_vkdlss_options, alpha_upscaling) - 85usize];
+};
+impl Default for rsf_vkdlss_options {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+pub struct rsf_vkdlss_optimal {
+    pub base: rsf_slvk_sdk_header,
+    pub width: u32,
+    pub height: u32,
+    pub sharpness: f32,
+    pub min_width: u32,
+    pub min_height: u32,
+    pub max_width: u32,
+    pub max_height: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_vkdlss_optimal"][::core::mem::size_of::<rsf_vkdlss_optimal>() - 64usize];
+    ["Alignment of rsf_vkdlss_optimal"][::core::mem::align_of::<rsf_vkdlss_optimal>() - 8usize];
+    ["Offset of field: rsf_vkdlss_optimal::base"]
+        [::core::mem::offset_of!(rsf_vkdlss_optimal, base) - 0usize];
+    ["Offset of field: rsf_vkdlss_optimal::width"]
+        [::core::mem::offset_of!(rsf_vkdlss_optimal, width) - 32usize];
+    ["Offset of field: rsf_vkdlss_optimal::height"]
+        [::core::mem::offset_of!(rsf_vkdlss_optimal, height) - 36usize];
+    ["Offset of field: rsf_vkdlss_optimal::sharpness"]
+        [::core::mem::offset_of!(rsf_vkdlss_optimal, sharpness) - 40usize];
+    ["Offset of field: rsf_vkdlss_optimal::min_width"]
+        [::core::mem::offset_of!(rsf_vkdlss_optimal, min_width) - 44usize];
+    ["Offset of field: rsf_vkdlss_optimal::min_height"]
+        [::core::mem::offset_of!(rsf_vkdlss_optimal, min_height) - 48usize];
+    ["Offset of field: rsf_vkdlss_optimal::max_width"]
+        [::core::mem::offset_of!(rsf_vkdlss_optimal, max_width) - 52usize];
+    ["Offset of field: rsf_vkdlss_optimal::max_height"]
+        [::core::mem::offset_of!(rsf_vkdlss_optimal, max_height) - 56usize];
+};
+impl Default for rsf_vkdlss_optimal {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
 pub struct rsf_vkdlss_images {
     pub color: rsf_vkfg_image,
     pub depth: rsf_vkfg_image,
@@ -64,62 +161,6 @@ const _: () = {
         [::core::mem::offset_of!(rsf_vkdlss_tag, height) - 20usize];
 };
 impl Default for rsf_vkdlss_tag {
-    fn default() -> Self {
-        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
-        unsafe {
-            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
-            s.assume_init()
-        }
-    }
-}
-#[repr(C)]
-pub struct rsf_vkdlss_options {
-    pub base: rsf_slvk_sdk_header,
-    pub mode: u32,
-    pub width: u32,
-    pub height: u32,
-    pub sharpness: f32,
-    pub pre_exposure: f32,
-    pub exposure_scale: f32,
-    pub hdr: u8,
-    pub invert_x: u8,
-    pub invert_y: u8,
-    pub presets: [u32; 6usize],
-    pub auto_exposure: u8,
-    pub alpha_upscaling: u8,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_vkdlss_options"][::core::mem::size_of::<rsf_vkdlss_options>() - 88usize];
-    ["Alignment of rsf_vkdlss_options"][::core::mem::align_of::<rsf_vkdlss_options>() - 8usize];
-    ["Offset of field: rsf_vkdlss_options::base"]
-        [::core::mem::offset_of!(rsf_vkdlss_options, base) - 0usize];
-    ["Offset of field: rsf_vkdlss_options::mode"]
-        [::core::mem::offset_of!(rsf_vkdlss_options, mode) - 32usize];
-    ["Offset of field: rsf_vkdlss_options::width"]
-        [::core::mem::offset_of!(rsf_vkdlss_options, width) - 36usize];
-    ["Offset of field: rsf_vkdlss_options::height"]
-        [::core::mem::offset_of!(rsf_vkdlss_options, height) - 40usize];
-    ["Offset of field: rsf_vkdlss_options::sharpness"]
-        [::core::mem::offset_of!(rsf_vkdlss_options, sharpness) - 44usize];
-    ["Offset of field: rsf_vkdlss_options::pre_exposure"]
-        [::core::mem::offset_of!(rsf_vkdlss_options, pre_exposure) - 48usize];
-    ["Offset of field: rsf_vkdlss_options::exposure_scale"]
-        [::core::mem::offset_of!(rsf_vkdlss_options, exposure_scale) - 52usize];
-    ["Offset of field: rsf_vkdlss_options::hdr"]
-        [::core::mem::offset_of!(rsf_vkdlss_options, hdr) - 56usize];
-    ["Offset of field: rsf_vkdlss_options::invert_x"]
-        [::core::mem::offset_of!(rsf_vkdlss_options, invert_x) - 57usize];
-    ["Offset of field: rsf_vkdlss_options::invert_y"]
-        [::core::mem::offset_of!(rsf_vkdlss_options, invert_y) - 58usize];
-    ["Offset of field: rsf_vkdlss_options::presets"]
-        [::core::mem::offset_of!(rsf_vkdlss_options, presets) - 60usize];
-    ["Offset of field: rsf_vkdlss_options::auto_exposure"]
-        [::core::mem::offset_of!(rsf_vkdlss_options, auto_exposure) - 84usize];
-    ["Offset of field: rsf_vkdlss_options::alpha_upscaling"]
-        [::core::mem::offset_of!(rsf_vkdlss_options, alpha_upscaling) - 85usize];
-};
-impl Default for rsf_vkdlss_options {
     fn default() -> Self {
         let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
         unsafe {

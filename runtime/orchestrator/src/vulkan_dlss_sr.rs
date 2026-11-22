@@ -2,6 +2,7 @@
 use crate::allocate_handle;
 use crate::frame_capture_vk::sr_capture_inputs;
 mod commands;
+mod leaves;
 use self::commands::Dispatch;
 use crate::vulkan_dlss_sr_abi::{
     rsf_vkdlss_images, rsf_vkdlss_init, rsf_vkdlss_options, rsf_vkdlss_platform as Platform,

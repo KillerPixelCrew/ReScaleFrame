@@ -3,8 +3,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Streamline 2.14.1 value records. bridge.cpp checks these against the pinned
-   C++ declarations and copies into constructed objects at the SDK call. */
+/* Streamline 2.14.1 value records. The Rust call leaves pass them by pointer
+   where the C++ declarations take references. sdk_records_checks.h checks them
+   against the pinned C++ declarations. */
 typedef struct rsf_slvk_sdk_header {
     void* next;
     uint32_t type_lo;
@@ -12,6 +13,35 @@ typedef struct rsf_slvk_sdk_header {
     uint8_t type_tail[8];
     size_t version;
 } rsf_slvk_sdk_header;
+
+/* sl::ViewportHandle. */
+typedef struct rsf_slvk_sdk_viewport {
+    rsf_slvk_sdk_header base;
+    uint32_t value;
+} rsf_slvk_sdk_viewport;
+
+/* sl::AdapterInfo. */
+typedef struct rsf_slvk_sdk_adapter {
+    rsf_slvk_sdk_header base;
+    uint8_t* luid;
+    uint32_t luid_size;
+    void* physical_device;
+} rsf_slvk_sdk_adapter;
+
+/* sl::ReflexState v2. The leaf reads the leading facts. The SDK writes the
+   frame reports into the opaque tail. */
+typedef struct rsf_slvk_sdk_reflex_state {
+    rsf_slvk_sdk_header base;
+    uint8_t low_latency_available, latency_report_available;
+    uint32_t window_message;
+    uint8_t reports[12808];
+} rsf_slvk_sdk_reflex_state;
+
+/* sl::PCLState. */
+typedef struct rsf_slvk_sdk_pcl_state {
+    rsf_slvk_sdk_header base;
+    uint32_t window_message;
+} rsf_slvk_sdk_pcl_state;
 
 typedef void (*rsf_slvk_sdk_log)(uint32_t, const char*);
 
@@ -98,13 +128,3 @@ typedef struct rsf_slvk_sdk_tag_batch {
     rsf_slvk_sdk_resource resources[4];
     rsf_slvk_sdk_tag tags[4];
 } rsf_slvk_sdk_tag_batch;
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-uint32_t rsf_slvk_pack_legacy_camera(const rsf_slvk_legacy_camera*, rsf_slvk_sdk_constants*);
-void rsf_slvk_pack_legacy_tags(const rsf_slvk_legacy_image* const*, rsf_slvk_sdk_tag_batch*);
-void rsf_slvk_pack_pcl_options(uint32_t thread_id, rsf_slvk_sdk_pcl_options*);
-#ifdef __cplusplus
-}
-#endif

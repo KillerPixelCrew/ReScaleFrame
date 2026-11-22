@@ -100,7 +100,27 @@ fn frame_tap_callbacks() {
         .compile("rsf_frame_tap_callbacks");
 }
 
+// SEH containment for the Streamline call leaves, under the Runtime's own name
+// so the standalone lifecycle archive can link beside it.
+fn streamline_guard() {
+    println!("cargo:rerun-if-changed=../vulkan/streamline/sdk_guard.c");
+    let mut build = cc::Build::new();
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        build.flags(["/Zl", "/std:c11"]);
+    } else {
+        build.std("c11");
+    }
+    build
+        .define("RSF_SLVK_GUARDED", "rsf_core_slvk_guarded")
+        .define("RSF_SLVK_GUARD_ONLY", None)
+        .warnings_into_errors(true)
+        .file("../vulkan/streamline/sdk_guard.c")
+        .compile("rsf_core_slvk_guard");
+}
+
 fn main() {
+    println!("cargo::rustc-check-cfg=cfg(rsf_streamline_core)");
+    println!("cargo:rustc-cfg=rsf_streamline_core");
     println!("cargo:rerun-if-changed=src/plugin_callbacks.c");
     println!("cargo:rerun-if-changed=src/frame_tap_callbacks.c");
     println!("cargo:rerun-if-changed=../graphics/src/frame_tap_platform.h");
@@ -114,5 +134,6 @@ fn main() {
         sharpening_payload();
         plugin_callbacks();
         frame_tap_callbacks();
+        streamline_guard();
     }
 }

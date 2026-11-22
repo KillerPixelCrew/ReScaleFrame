@@ -60,7 +60,7 @@ fn dot4(v1: Vector, v2: Vector) -> Vector {
 /// `XMMatrixInverse(&determinant, m)` over a row-major matrix. Returns the inverse and the X lane
 /// of the determinant. Like DirectXMath it never refuses: a zero determinant yields infinities or
 /// NaN, and the caller applies its own gate.
-pub(super) fn inverse(values: &[f32; 16]) -> ([f32; 16], f32) {
+pub(crate) fn inverse(values: &[f32; 16]) -> ([f32; 16], f32) {
     let m: Matrix =
         std::array::from_fn(|row| std::array::from_fn(|column| values[row * 4 + column]));
     let temp1 = shuffle(m[0], m[1], [1, 0, 1, 0]);

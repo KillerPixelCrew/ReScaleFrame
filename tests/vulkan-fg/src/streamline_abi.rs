@@ -37,5 +37,18 @@ unsafe extern "C" {
     pub fn rsf_fixture_sl_dispatch_fill() -> usize;
 }
 unsafe extern "C" {
+    pub fn rsf_fixture_sl_dispatch_fresh(image: usize, mips: u32, layers: u32, aspects: u32);
+}
+unsafe extern "C" {
+    pub fn rsf_fixture_sl_dispatch_tracked(image: usize) -> u32;
+}
+unsafe extern "C" {
+    pub fn rsf_fixture_sl_dispatch_barriers(
+        requested: *const ::core::ffi::c_void,
+        output: *mut ::core::ffi::c_void,
+        capacity: u32,
+    ) -> u32;
+}
+unsafe extern "C" {
     pub fn rsf_fixture_sl_dispatch_run() -> i32;
 }

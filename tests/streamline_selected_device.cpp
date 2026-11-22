@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "../runtime/vulkan/streamline/sdk-fixes/selected-device-config.h"
+// Native DLSS-G layout assertions for the Rust Streamline callers.
+#include "../runtime/vulkan/streamline/sdk_fg_options_checks.h"
 #include "vulkan-fg/streamline_abi.h"
 
 static_assert(sl::kFeatureDLSS == 0 && sl::kFeatureDLSS_G == 1000 &&
