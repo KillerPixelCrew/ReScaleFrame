@@ -26,4 +26,24 @@ fn main() {
             "rsf_frame_(has_rendered_source|allows_sr|allows_fg)|rsf_game_depth_domains_requested",
         );
     rsf_bindgen::write(builder, "sys.rs");
+    guard();
+}
+
+/// The guarded host log (src/foreign_guard.c), bundled so every Rust archive that calls
+/// `host_log` carries it.
+fn guard() {
+    println!("cargo::rerun-if-changed=src/foreign_guard.c");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+    let mut build = cc::Build::new();
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        // The linking binary chooses the CRT.
+        build.flags(["/Zl", "/std:c11"]);
+    }
+    build
+        .include("include")
+        .file("src/foreign_guard.c")
+        .warnings_into_errors(true)
+        .compile("rsf_game_foreign_guard");
 }

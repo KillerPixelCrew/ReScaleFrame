@@ -7,6 +7,7 @@ publish.workspace = true
 license.workspace = true
 
 [build-dependencies]
+cc.workspace = true
 rsf-bindgen = { path = "../../tools/bindgen" }
 
 [target."cfg(windows)".dependencies.windows-sys]

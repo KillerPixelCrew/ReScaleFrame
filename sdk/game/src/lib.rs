@@ -54,3 +54,24 @@ pub mod vulkan_extensions;
 pub mod win32;
 pub mod windows_path;
 pub mod xm;
+
+/// Logs `text` through the host's optional log callback behind the shared foreign-exception
+/// guard (`rescaleframe/foreign_guard.h`). Interior NULs are dropped. Returns false when the
+/// callback threw.
+#[cfg(windows)]
+pub fn host_log(host: &rsf_game_host_services, text: &str) -> bool {
+    log_guarded(host.log, host.user, text)
+}
+
+/// `host_log` for a log callback and user pointer held apart from their services table.
+#[cfg(windows)]
+pub fn log_guarded(log: rsf_game_log_fn, user: *mut std::ffi::c_void, text: &str) -> bool {
+    if log.is_none() {
+        return true;
+    }
+    let mut bytes = text.as_bytes().to_vec();
+    bytes.retain(|&byte| byte != 0);
+    // SAFETY: retain removed every interior NUL.
+    let text = unsafe { std::ffi::CString::from_vec_unchecked(bytes) };
+    unsafe { rsf_game_log_guarded(log, user, text.as_ptr()) }
+}
