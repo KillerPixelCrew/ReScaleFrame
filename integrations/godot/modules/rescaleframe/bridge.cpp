@@ -4,6 +4,7 @@
 #include "cpu_facts.h"
 #include "frame.h"
 #include "graph.h"
+#include "host.h"
 #include "primary.h"
 #include "viewport.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_data_rd.h"
@@ -26,7 +27,6 @@
 #include "scene/main/window.h"
 #include "servers/display/display_server.h"
 #include <windows.h>
-#include <atomic>
 #include <cstring>
 
 namespace {
@@ -62,11 +62,10 @@ decltype(&rsfg_render_begin) native_render_begin = nullptr;
 decltype(&rsfg_submitted) native_submitted = nullptr;
 decltype(&rsfg_present) native_present = nullptr;
 decltype(&rsfg_shutdown) native_shutdown = nullptr;
-bool ready = false;
-std::atomic<bool> enabled{false};
-std::atomic<uint32_t> requested_sr{7};
-
-uint64_t session = 0;
+// host.rs keeps the ready, enabled, session and requested SR state and decides the boot,
+// configure, shutdown and status-driven extent order. The leaves below do the engine work.
+HMODULE native_module = nullptr;
+String boot_runtime, boot_id;
 // primary.rs keeps the primary viewport and target identity, the resource generation and the
 // history reset state. The camera matrices of the last recorded SR pass stay here.
 Projection previous_projection;
@@ -103,11 +102,11 @@ void set_render_frame(uint64_t frame, bool gameplay, double seconds);
 // Typed engine callbacks for frame.rs, which owns the lifecycle state and calls these in order.
 uint64_t frame_now_usec() { return OS::get_singleton()->get_ticks_usec(); }
 void report_cpu(uint32_t stage, uint64_t source_frame_id, uint32_t expected, uint32_t kind, uint32_t unframed_input) {
-    if (!ready || !enabled.load()) return;
+    if (!rsf_godot_host_active()) return;
     LARGE_INTEGER now, frequency;
     QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
     rsf_game_cpu_event event;
-    rsf_godot_build_cpu_event(&event, stage, session, source_frame_id, uint64_t(now.QuadPart),
+    rsf_godot_build_cpu_event(&event, stage, rsf_godot_host_session(), source_frame_id, uint64_t(now.QuadPart),
         uint64_t(frequency.QuadPart), expected, kind, unframed_input);
     native_cpu(&event);
 }
@@ -120,18 +119,20 @@ const rsf_godot_frame_callbacks frame_callbacks{frame_now_usec, report_cpu, queu
 void set_primary(RID viewport) {
     rsf_godot_primary_set(viewport.get_id(), RSG::viewport->viewport_get_render_target(viewport).get_id());
 }
-void set_render_frame(uint64_t frame, bool gameplay, double seconds) {
-    rsf_godot_render_frame_begin(frame, gameplay, seconds);
-    native_render_begin(frame);
+// Driver and Godot leaves for host.rs's status-driven extent.
+uint32_t status_extent(rsf_godot_extent *out) {
     rsf_godot_status status{sizeof(status), RSF_GODOT_ABI_VERSION};
-    const uint32_t requested = requested_sr.load();
-    const RID primary_viewport = RID::from_uint64(rsf_godot_primary_viewport());
-    if (rsf_godot_viewport_mode(requested) == RSF_GODOT_VIEWPORT_TEMPORAL &&
-        primary_viewport.is_valid() && native_status(&status) && status.requested_sr == requested &&
-        requested_sr.load() == requested && status.render_width && status.output_width) {
-        RSG::viewport->viewport_set_scaling_3d_scale(primary_viewport,
-            double(status.render_width) / status.output_width);
-    }
+    if (!native_status(&status)) return 0;
+    *out = {status.requested_sr, status.render_width, status.render_height, status.output_width, status.output_height};
+    return 1;
+}
+void render_begin(uint64_t frame) { native_render_begin(frame); }
+void set_scale(uint64_t viewport, double scale) {
+    RSG::viewport->viewport_set_scaling_3d_scale(RID::from_uint64(viewport), scale);
+}
+const rsf_godot_render_callbacks render_callbacks{render_begin, status_extent, set_scale};
+void set_render_frame(uint64_t frame, bool gameplay, double seconds) {
+    rsf_godot_host_render_begin(frame, gameplay, seconds, &render_callbacks);
 }
 void matrix(float *out, const Projection &value) {
     // Godot multiplies column vectors. The SDK uses row vectors, so transpose
@@ -182,7 +183,7 @@ void execute(RenderingDeviceDriver *driver, RenderingDeviceDriver::CommandBuffer
 }
 // Engine facts for primary.rs's admission. Every read is a pure query.
 rsf_godot_render_admission admission(const RenderDataRD *data, uint64_t frame) {
-    rsf_godot_render_admission facts{frame, 0, uint32_t(ready && enabled.load()), 0, 0, RSF_GODOT_DRIVER_OTHER};
+    rsf_godot_render_admission facts{frame, 0, rsf_godot_host_active(), 0, 0, RSF_GODOT_DRIVER_OTHER};
     if (data && data->render_buffers.is_valid()) {
         facts.buffers_valid = 1;
         facts.render_target = data->render_buffers->get_render_target().get_id();
@@ -209,11 +210,22 @@ void ReScaleFrameBridge::_bind_methods() {
     ClassDB::bind_method(D_METHOD("reset_history"), &ReScaleFrameBridge::reset_history);
 }
 void ReScaleFrameBridge::reset_history() { rsf_godot_reset_request(); }
-bool ReScaleFrameBridge::configure(const Dictionary &options, RID viewport) {
-    if (!ready || !viewport.is_valid()) return false;
-    SceneTree *tree = SceneTree::get_singleton();
-    if (!tree || !tree->get_root() || tree->get_root()->get_viewport_rid() != viewport) return false;
+namespace {
+// Godot and driver leaves for host.rs's configure sequence.
+struct ConfigureContext {
+    const Dictionary &options;
+    RID viewport;
     rsf_godot_settings value{sizeof(value), RSF_GODOT_SETTINGS_ABI_VERSION, 7, 1, 0, 7, 0, 1, 0, 0, 1};
+};
+uint32_t configure_is_root(void *context) {
+    const RID viewport = static_cast<ConfigureContext *>(context)->viewport;
+    SceneTree *tree = SceneTree::get_singleton();
+    return tree && tree->get_root() && tree->get_root()->get_viewport_rid() == viewport;
+}
+// Godot's Variant conversions, which differ from the GDExtension's checked integer parser.
+const rsf_godot_settings *configure_parse(void *context) {
+    const Dictionary &options = static_cast<ConfigureContext *>(context)->options;
+    rsf_godot_settings &value = static_cast<ConfigureContext *>(context)->value;
     value.sr_backend = options.get("sr_backend", value.sr_backend);
     value.quality = options.get("quality", value.quality);
     value.dlss_preset = options.get("dlss_preset", value.dlss_preset);
@@ -236,20 +248,34 @@ bool ReScaleFrameBridge::configure(const Dictionary &options, RID viewport) {
     value.latency_mode = options.get("latency_mode", value.latency_mode);
     value.frame_limit_us = options.get("frame_limit_us", value.frame_limit_us);
     value.gameplay = options.get("gameplay", value.gameplay);
-    if (RSFGodot::vulkan_enabled()) native_vk_window(reinterpret_cast<void *>(DisplayServer::get_singleton()->window_get_native_handle(DisplayServerEnums::WINDOW_HANDLE)));
-    if (!native_configure(&value)) return false;
-    requested_sr.store(value.sr_backend);
+    return &value;
+}
+void configure_report_window(void *) {
+    native_vk_window(reinterpret_cast<void *>(DisplayServer::get_singleton()->window_get_native_handle(DisplayServerEnums::WINDOW_HANDLE)));
+}
+uint32_t configure_native(void *, const rsf_godot_settings *settings) { return native_configure(settings) ? 1 : 0; }
+void configure_queue_primary(void *context) {
+    RenderingServer::get_singleton()->call_on_render_thread(callable_mp_static(set_primary).bind(static_cast<ConfigureContext *>(context)->viewport));
+}
+void configure_apply_scaling(void *context, uint32_t mode, float scale) {
+    const RID viewport = static_cast<ConfigureContext *>(context)->viewport;
     RenderingServer *rs = RenderingServer::get_singleton();
-    rs->call_on_render_thread(callable_mp_static(set_primary).bind(viewport));
-    const uint32_t mode = rsf_godot_viewport_mode(value.sr_backend);
     rs->viewport_set_scaling_3d_mode(viewport, mode == RSF_GODOT_VIEWPORT_NATIVE ? RSE::VIEWPORT_SCALING_3D_MODE_BILINEAR :
         mode == RSF_GODOT_VIEWPORT_SPATIAL ? RSE::VIEWPORT_SCALING_3D_MODE_FSR : RSE::VIEWPORT_SCALING_3D_MODE_FSR2);
-    rs->viewport_set_scaling_3d_scale(viewport, rsf_godot_viewport_initial_scale(mode, value.quality));
-    enabled.store(true);
-    return true;
+    rs->viewport_set_scaling_3d_scale(viewport, scale);
+}
+}
+bool ReScaleFrameBridge::configure(const Dictionary &options, RID viewport) {
+    ConfigureContext context{options, viewport};
+    const rsf_godot_configure_facts facts{uint32_t(viewport.is_valid()),
+        uint32_t(OS::get_singleton()->get_current_rendering_driver_name() == "vulkan")};
+    const rsf_godot_configure_callbacks callbacks{&context, configure_is_root, configure_parse,
+        configure_report_window, configure_native, configure_queue_primary, configure_apply_scaling};
+    return rsf_godot_host_configure(&facts, &callbacks) != 0;
 }
 Dictionary ReScaleFrameBridge::get_status() const {
     Dictionary result;
+    const bool ready = rsf_godot_host_ready();
     result["engine_bridge_ready"] = ready;
     rsf_godot_status status{sizeof(status), RSF_GODOT_ABI_VERSION};
     if (!ready || !native_status(&status)) return result;
@@ -269,16 +295,16 @@ Dictionary ReScaleFrameBridge::get_status() const {
     return result;
 }
 
-namespace RSFGodot {
-void boot(bool headless) {
-    if (!GLOBAL_DEF("rescaleframe/enabled", false)) return;
-    if (headless || Engine::get_singleton()->is_editor_hint()) return;
+namespace {
+// Module loader and driver leaves for host.rs's boot.
+uint32_t boot_load() {
     const String library = disk_path(GLOBAL_DEF("rescaleframe/native_library", "res://addons/rescaleframe/bin/ReScaleFrame.Godot.Native.dll"));
-    const String runtime = disk_path(GLOBAL_DEF("rescaleframe/runtime_directory", "res://addons/rescaleframe/runtime"));
-    const String id = GLOBAL_DEF("rescaleframe/project_id", "125d2115-7176-46e1-8806-95b790f01717");
+    boot_runtime = disk_path(GLOBAL_DEF("rescaleframe/runtime_directory", "res://addons/rescaleframe/runtime"));
+    boot_id = GLOBAL_DEF("rescaleframe/project_id", "125d2115-7176-46e1-8806-95b790f01717");
     HMODULE module = LoadLibraryW(reinterpret_cast<const wchar_t *>(library.utf16().get_data()));
-    if (!module) { ERR_PRINT("Cannot load ReScaleFrame's native library: " + library + " (Windows error " + itos(GetLastError()) + ")"); return; }
-#define RSF_RESOLVE(name) native_##name = reinterpret_cast<decltype(native_##name)>(GetProcAddress(module, "rsfg_" #name)); if (!native_##name) return
+    if (!module) { ERR_PRINT("Cannot load ReScaleFrame's native library: " + library + " (Windows error " + itos(GetLastError()) + ")"); return 0; }
+    native_module = module;
+#define RSF_RESOLVE(name) native_##name = reinterpret_cast<decltype(native_##name)>(GetProcAddress(module, "rsfg_" #name)); if (!native_##name) return 0
     RSF_RESOLVE(boot); RSF_RESOLVE(boot_vulkan); RSF_RESOLVE(render_vulkan);
     RSF_RESOLVE(render_vulkan_handoff); RSF_RESOLVE(vk_host_capabilities);
     RSF_RESOLVE(vk_resolver); RSF_RESOLVE(vk_window); RSF_RESOLVE(vk_present_marker); RSF_RESOLVE(vk_native_present); RSF_RESOLVE(vk_wsi_call);
@@ -289,22 +315,49 @@ void boot(bool headless) {
 #undef RSF_RESOLVE
     native_vk_capture_setup = reinterpret_cast<decltype(native_vk_capture_setup)>(GetProcAddress(module, "rsfg_vk_capture_setup"));
     native_vk_capture_release = reinterpret_cast<decltype(native_vk_capture_release)>(GetProcAddress(module, "rsfg_vk_capture_release"));
-    const CharString path_utf8 = runtime.utf8(), id_utf8 = id.utf8();
+    return 1;
+}
+void boot_capabilities(uint32_t flags) { native_vk_host_capabilities(flags); }
+uint32_t boot_start(uint32_t vulkan) {
+    const CharString path_utf8 = boot_runtime.utf8(), id_utf8 = boot_id.utf8();
     const rsf_godot_setup setup{sizeof(setup), RSF_GODOT_ABI_VERSION, path_utf8.get_data(), "4.7.2", id_utf8.get_data(), log, nullptr};
-    native_vk_host_capabilities(RSF_GODOT_VK_GRAPH_HANDOFF);
-    ready = (OS::get_singleton()->get_current_rendering_driver_name() == "vulkan" ? native_boot_vulkan(&setup) : native_boot(&setup)) != 0;
-    if (!ready) ERR_PRINT("ReScaleFrame native host rejected startup; inspect its dependency and initialization diagnostics.");
-    if (ready) {
-        auto attach = reinterpret_cast<decltype(&rsfg_attach_engine)>(GetProcAddress(module, "rsfg_attach_engine"));
-        const rsf_godot_engine_services services{sizeof(services), RSF_GODOT_ABI_VERSION, configure_from_extension, reset_from_extension};
-        if (!attach || !attach(&services)) { ready = false; return; }
-        rsf_godot_status status{sizeof(status), RSF_GODOT_ABI_VERSION}; native_status(&status); session = status.session_id;
+    const bool started = (vulkan ? native_boot_vulkan(&setup) : native_boot(&setup)) != 0;
+    // The native host copies the setup strings; free them as the old stack locals were.
+    boot_runtime = String(); boot_id = String();
+    return started;
+}
+void boot_rejected() { ERR_PRINT("ReScaleFrame native host rejected startup; inspect its dependency and initialization diagnostics."); }
+uint32_t boot_attach() {
+    auto attach = reinterpret_cast<decltype(&rsfg_attach_engine)>(GetProcAddress(native_module, "rsfg_attach_engine"));
+    const rsf_godot_engine_services services{sizeof(services), RSF_GODOT_ABI_VERSION, configure_from_extension, reset_from_extension};
+    return attach && attach(&services);
+}
+uint64_t boot_session() {
+    rsf_godot_status status{sizeof(status), RSF_GODOT_ABI_VERSION}; native_status(&status); return status.session_id;
+}
+// Godot and driver leaves for host.rs's shutdown.
+void shutdown_release_render() {
+    if (auto *rs = RenderingServer::get_singleton()) {
+        rs->call_on_render_thread(callable_mp_static(RSFGodot::release_motion));
+        rs->sync();
     }
 }
-bool create_swapchain(void *factory, void *queue, void *window, const void *description, void **out) {
-    return ready && SUCCEEDED(native_create_swapchain(factory, queue, window, description, out));
+void shutdown_native() { native_shutdown(); }
+const rsf_godot_shutdown_callbacks shutdown_callbacks{shutdown_release_render, shutdown_native};
 }
-bool vulkan_enabled() { return ready && OS::get_singleton()->get_current_rendering_driver_name() == "vulkan"; }
+
+namespace RSFGodot {
+void boot(bool headless) {
+    const bool enabled_setting = GLOBAL_DEF("rescaleframe/enabled", false);
+    const rsf_godot_boot_facts facts{uint32_t(enabled_setting), uint32_t(headless), uint32_t(Engine::get_singleton()->is_editor_hint()),
+        uint32_t(OS::get_singleton()->get_current_rendering_driver_name() == "vulkan")};
+    const rsf_godot_boot_callbacks callbacks{boot_load, boot_capabilities, boot_start, boot_rejected, boot_attach, boot_session};
+    rsf_godot_host_boot(&facts, &callbacks);
+}
+bool create_swapchain(void *factory, void *queue, void *window, const void *description, void **out) {
+    return rsf_godot_host_ready() && SUCCEEDED(native_create_swapchain(factory, queue, window, description, out));
+}
+bool vulkan_enabled() { return rsf_godot_host_ready() && OS::get_singleton()->get_current_rendering_driver_name() == "vulkan"; }
 uint64_t vk_resolver() { return vulkan_enabled() ? reinterpret_cast<uint64_t>(native_vk_resolver()) : 0; }
 bool vk_present_marker(uint64_t window, uint32_t begin) { return vulkan_enabled() && native_vk_present_marker(window, begin); }
 int32_t vk_native_present(uint64_t callback, void* queue, const void* info) {
@@ -327,43 +380,30 @@ int32_t vk_images(void *owner, uint32_t *count, uint64_t *images) { return nativ
 uint32_t vk_image_layout(void *owner) { return native_vk_image_layout(owner); }
 int32_t vk_acquire(void *owner, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t *index) { return native_vk_acquire(owner, timeout, semaphore, fence, index); }
 int32_t vk_present(void *owner, const void *info) { return native_vk_present(owner, info); }
-void vk_recording_begin(void* commands) { if (ready) native_vk_recording_begin(commands); }
-void vk_submitted(void *const *commands, uint32_t count) { if (ready) native_vk_submitted(commands, count); }
+void vk_recording_begin(void* commands) { if (rsf_godot_host_ready()) native_vk_recording_begin(commands); }
+void vk_submitted(void *const *commands, uint32_t count) { if (rsf_godot_host_ready()) native_vk_submitted(commands, count); }
 bool vk_destroy(void *owner) { return native_vk_destroy(owner) == 0; }
 bool vk_drain(void *owner) { return native_vk_drain(owner) == 0; }
-void shutdown() {
-    enabled.store(false);
-    if (auto *rs = RenderingServer::get_singleton()) {
-        rs->call_on_render_thread(callable_mp_static(release_motion));
-        rs->sync();
-    }
-    if (ready) native_shutdown();
-}
+void shutdown() { rsf_godot_host_shutdown(&shutdown_callbacks); }
 void cpu_begin() {
-    if (ready && enabled.load()) rsf_godot_cpu_begin(&frame_callbacks);
+    if (rsf_godot_host_active()) rsf_godot_cpu_begin(&frame_callbacks);
 }
 void cpu_simulation_begin() { rsf_godot_cpu_simulation_begin(&frame_callbacks); }
 void queue_frame(bool present) {
-    if (ready && enabled.load()) rsf_godot_cpu_queue(&frame_callbacks, present ? 1u : 0u);
+    if (rsf_godot_host_active()) rsf_godot_cpu_queue(&frame_callbacks, present ? 1u : 0u);
 }
 void cpu_end() { rsf_godot_cpu_end(&frame_callbacks); }
 void input_event(uint32_t kind) {
-    if (!ready || !enabled.load() || !kind || (kind & ~7u)) return;
+    if (!rsf_godot_host_active() || !kind || (kind & ~7u)) return;
     rsf_godot_cpu_input(&frame_callbacks, kind);
 }
 void render_size(RID target, const Vector2i &output, Vector2i &internal) {
-    if (!rsf_godot_primary_sizing(ready && enabled.load(), target.get_id())) return;
-    const uint32_t requested = requested_sr.load();
-    const uint32_t mode = rsf_godot_viewport_mode(requested);
-    if (mode == RSF_GODOT_VIEWPORT_NATIVE) { internal = output; return; }
-    if (mode == RSF_GODOT_VIEWPORT_SPATIAL) return;
-    rsf_godot_status status{sizeof(status), RSF_GODOT_ABI_VERSION};
-    if (native_status(&status) && status.requested_sr == requested && requested_sr.load() == requested &&
-        status.output_width == uint32_t(output.x) && status.output_height == uint32_t(output.y) && status.render_width && status.render_height)
-        internal = Vector2i(status.render_width, status.render_height);
+    int32_t size[2] = {internal.x, internal.y};
+    rsf_godot_host_render_size(target.get_id(), output.x, output.y, size, status_extent);
+    internal = Vector2i(size[0], size[1]);
 }
 void camera_changed(RID target) {
-    rsf_godot_camera_changed(ready && enabled.load(), target.get_id());
+    rsf_godot_camera_changed(rsf_godot_host_active(), target.get_id());
 }
 void upscale(const RenderDataRD *data, double) {
     rsf_godot_render_frame frame;
@@ -378,7 +418,7 @@ void upscale(const RenderDataRD *data, double) {
     const RenderSceneDataRD *scene = data->scene_data;
     rsf_game_render_pass pass{};
     pass.struct_size = sizeof(pass); pass.role = RSF_GAME_RENDER_SR;
-    pass.session_id = session; pass.source_frame_id = pass.native_frame = frame.source_frame_id;
+    pass.session_id = rsf_godot_host_session(); pass.source_frame_id = pass.native_frame = frame.source_frame_id;
     pass.view_key = pass.history_key = pass.viewport_key = rb->get_render_target().get_id();
     pass.flags = RSF_GAME_RENDER_PRIMARY;
     const Vector2i internal = rb->get_internal_size();
@@ -478,6 +518,6 @@ void hudless(const RenderDataRD *data) {
     }
     rd->driver_callback_add(execute, packet, VectorView<RD::CallbackResource>(&resource, 1));
 }
-void submitted(void *queue, void *const *commands, uint32_t count) { if (ready && enabled.load()) native_submitted(queue, commands, count); }
-void present(void *chain) { if (ready && enabled.load()) native_present(chain); }
+void submitted(void *queue, void *const *commands, uint32_t count) { if (rsf_godot_host_active()) native_submitted(queue, commands, count); }
+void present(void *chain) { if (rsf_godot_host_active()) native_present(chain); }
 }

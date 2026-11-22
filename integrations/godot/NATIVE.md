@@ -531,13 +531,17 @@ exported players, NVIDIA, Intel, AMD and software-device runs, and the visual ha
 2. `effect.cpp` keeps no owner state after the seventh slice. Its class registration, callback
    contract, typed scene reads, readback compute pass and Dictionary keys are godot-cpp leaves.
    Residual: the readback's extent check against a velocity override (see that slice).
-3. The SCons engine module's C++ still holds the status-based extent updates, the camera
-   matrices and the previous camera they and the camera jump distance come from, motion resolve
-   and the direct Dictionary option parser in `ReScaleFrameBridge::configure`. CPU frame
+3. The SCons engine module's C++ still holds the camera matrices and the previous camera they
+   and the camera jump distance come from, the SR and final-scene pass and packet construction,
+   motion resolve (`motion.cpp`), the Vulkan graph scope (`graph.cpp`), the D3D12 and Vulkan
+   driver patches (`d3d12.cpp`, `vulkan.cpp`), and the direct Dictionary option parser, now a
+   `configure` leaf. Boot, configure and shutdown order, the ready, enabled, session and
+   requested SR state, and the status-driven extent updates are in `host.rs`; CPU frame
    lifecycle and render frame identity are in `frame.rs`; primary viewport and target identity,
-   render admission and the history reset rules are in `primary.rs` (see below). Native callbacks supply CPU facts to the Rust record builder before
-   passing them to `window.rs` through `rsfg_cpu`. The window handle passed to `rsfg_vk_window`
-   and each Vulkan surface's `rescaleframe_window` are engine module facts too.
+   render admission and the history reset rules are in `primary.rs` (see below). Native
+   callbacks supply CPU facts to the Rust record builder before passing them to `window.rs`
+   through `rsfg_cpu`. The window handle passed to `rsfg_vk_window` and each Vulkan surface's
+   `rescaleframe_window` are engine module facts too.
 4. The addon (`settings.gd`, `controller.gd`, `csharp/ReScaleFrame.cs`) keeps its own option
    defaults for the Inspector resource.
 5. D3D12 residue in the `runtime.cpp` leaves: the fixed SR context inputs (setup ABI 1 planning,
@@ -749,6 +753,81 @@ repository root, and `primary.rs` is listed as an explicit source dependency bes
 `cpu_facts.rs`; `primary.h` is reached by the C++ scanner. Not run: SCons compilation and
 linkage, the `-Dwarnings` Rust object build, symbol checks, Clippy, Cargo tests, CTest, editor and
 exported player runs, and a live capture of the trigger order above.
+
+## Engine module host lifecycle
+
+Relative to RSF `97c2738f`, `host.rs` in the same private SCons object owns the engine module's
+host lifecycle that `bridge.cpp` kept in globals and function bodies: the `ready`, `enabled`,
+session and requested SR state, the boot admission and order, the `configure` sequence, the
+shutdown order, and the status-driven extent updates at the queued render begin and at the
+patched viewport sizing hook. `host.h` declares the private C linkage and asserts the record
+layouts, the graph handoff capability value and the `rsf_godot_settings` prefix Rust reads
+(`sr_backend` at 8, `quality` at 12). Nothing new is exported from the Godot executable or the
+native DLL; every `rsfg_*` call, its arguments, `api.h`, the patch sites in
+`eng/patch-godot.py` and the `ReScaleFrame` singleton's methods are unchanged.
+
+The C++ keeps the typed leaves, and Rust decides when each runs:
+
+- Godot: the project setting reads (`GLOBAL_DEF`, still in the same order and only after
+  admission for the three path settings), the editor hint, the rendering driver names, the scene
+  tree root check, the Dictionary parse with Godot's Variant conversions and the old defaults,
+  `call_on_render_thread(set_primary)`, the scaling mode mapping (Native to bilinear, Spatial to
+  FSR, others to FSR2) and both scaling setters, the render thread motion release and `sync`.
+- Module loader: `LoadLibraryW`, its logged failure, the required export resolution with the
+  same early refusal, the two optional capture exports, and `rsfg_attach_engine` with the
+  engine services.
+- Driver: `rsfg_vk_host_capabilities`, `rsfg_boot_vulkan` or `rsfg_boot` with the same setup,
+  `rsfg_vk_window`, `rsfg_configure`, `rsfg_status` (session, or the five extent fields),
+  `rsfg_render_begin` and `rsfg_shutdown`.
+
+Preserved, compared line by line with `97c2738f`:
+
+- Boot: nothing when `rescaleframe/enabled` is false, the display driver is the null driver or
+  the editor runs; otherwise load and resolve, the graph handoff capability, the driver-selected
+  start, `ready` from its result, the rejection log, attach (a refusal clears `ready`), then the
+  session from status, zero when status refuses.
+- Configure: refused while not ready, for an invalid viewport or one that is not the root
+  viewport; then parse, the main window report on Vulkan, `rsfg_configure` (a refusal returns
+  false with nothing else changed), the requested SR, the queued primary, the mode and initial
+  scale from `viewport.rs`, and `enabled` last.
+- Shutdown: `enabled` cleared, the motion release on the render thread and `sync` when the
+  rendering server exists, then `rsfg_shutdown` only while ready. `ready` stays set.
+- Render begin: the `frame.rs` store, `rsfg_render_begin`, then for a temporal request, a
+  primary viewport, accepted status reporting the same request, a request still current and
+  nonzero render and output widths, the scale `render_width / output_width` in double precision,
+  narrowed by Godot's float setter.
+- Sizing: the `primary.rs` sizing admission with ready and enabled; Native uses the output size,
+  Spatial keeps Godot's size, others use the reported render size when status accepts, reports
+  the same request, the request is still current, both output axes match and both render axes
+  are nonzero.
+- Every other `ready` or `ready && enabled` gate in `bridge.cpp` now reads
+  `rsf_godot_host_ready` or `rsf_godot_host_active`, which short-circuits the same way.
+
+Intentional differences: the editor hint and boot driver name are read before the decision
+instead of after the setting check and the load, and the configure Vulkan fact (the OS driver
+name) is read before the ready check. All are pure queries. The root check, parse and window
+report now run through leaves in the old order. `ERR_PRINT` names `boot_load` or
+`boot_rejected` instead of `boot` as its function. The runtime directory and project id live in
+module strings between the load and start leaves, and are cleared after the start, as the old
+stack locals were freed at the end of `boot`. `ready` and the session are relaxed atomics where
+the C++ used plain globals written once by the main thread; `enabled` and the requested SR keep
+sequentially consistent operations.
+
+This is a source port with no new experiment. Checks: rustfmt 1.11.0 `--edition 2024 --check`
+of the object's crate root (the pinned 1.94.1 toolchain is not installed), locked offline Cargo
+metadata and `git diff --check`. `host.rs` is listed as an explicit SCons source dependency. Not
+run: SCons compilation and linkage, the `-Dwarnings` Rust object build, symbol checks, Clippy,
+Cargo tests, CTest, editor and exported player runs on D3D12 and Vulkan, and a live boot,
+configure, resize and shutdown sequence.
+
+Remaining in the engine module after this slice: the SR pass construction in `upscale` (camera
+matrices, jitter, the previous camera and projection, the camera jump distance input, the
+Vulkan image descriptions) and the final-scene pass in `hudless`, `motion.cpp`'s resolve pass,
+`graph.cpp`'s graph scope, and the `d3d12.cpp` and `vulkan.cpp` driver patch leaves. These are
+Godot rendering device and driver calls with little policy; moving the pass record assembly
+would need a Rust mirror of `rsf_game_render_pass` and the camera record, which this module does
+not have yet. The direct singleton parser stays a C++ leaf until a compatibility review decides
+whether it should share `extension.rs`'s checked parser.
 
 ## Build requirements
 
