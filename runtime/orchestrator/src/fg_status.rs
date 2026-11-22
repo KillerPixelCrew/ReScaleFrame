@@ -106,7 +106,8 @@ pub(crate) fn coherent(
 mod tests {
     use super::*;
     use crate::sys::RSF_FG_FIXED;
-    use crate::sys::{RSF_NFG_RESULT_FEATURE_FAILED, RSF_NFG_STAT_LATENCY_AVAILABLE};
+    use crate::sys::RSF_FG_STAT_LATENCY_AVAILABLE;
+    use rsf_game_sys::backend_result::FEATURE_FAILED;
 
     // Ported from tests/fg_status_snapshot.cpp with the C bridges it called.
     #[test]
@@ -121,7 +122,7 @@ mod tests {
         pending.vendor.configured_mode = RSF_FG_FIXED;
         pending.vendor.active = 0;
         pending.vendor.total_presented = 100;
-        pending.vendor.valid_statistics = RSF_NFG_STAT_LATENCY_AVAILABLE;
+        pending.vendor.valid_statistics = RSF_FG_STAT_LATENCY_AVAILABLE;
         let mut completed = pending;
         let completed_generation = 7;
         completed.source_frame_id = 10;
@@ -150,7 +151,7 @@ mod tests {
         assert_eq!(status.vendor.generated_callbacks, 106);
         assert!(status.vendor.max_generated_frames == 4 && status.vendor.version_id == 99);
         assert_ne!(
-            status.vendor.valid_statistics & RSF_NFG_STAT_LATENCY_AVAILABLE,
+            status.vendor.valid_statistics & RSF_FG_STAT_LATENCY_AVAILABLE,
             0
         );
         // A pending provider query cannot replace completed activity, but capabilities stay live.
@@ -167,7 +168,7 @@ mod tests {
             assert_eq!(status.source_frame_id, 11);
         }
         pending.reason = 0;
-        pending.last_result = RSF_NFG_RESULT_FEATURE_FAILED;
+        pending.last_result = FEATURE_FAILED;
         assert_eq!(view(&pending, &completed, 7, true, true).vendor.active, 0);
         pending.last_result = 0;
         assert_eq!(view(&pending, &completed, 7, true, false).vendor.active, 0);

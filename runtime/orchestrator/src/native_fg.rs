@@ -30,6 +30,7 @@ use crate::sys::{
     RSF_NATIVE_SCENE_PRESENT_SAMPLED, rsf_native_scene_identity as SceneIdentity,
     rsf_observer_present_event as PresentEvent,
 };
+use rsf_game_sys::backend_result::{FEATURE_FAILED, NOT_READY, OK};
 use rsf_game_sys::{
     RSF_FRAME_SOURCE_INPUT, RSF_FRAME_SOURCE_RENDERED, RSF_GAME_CAMERA_ABI_VERSION,
     RSF_GAME_CPU_INPUT_SAMPLE, RSF_GAME_CPU_INPUT_SUBSTITUTE, RSF_GAME_FRAME_ABI_VERSION,
@@ -41,6 +42,11 @@ use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
+use windows::Win32::Graphics::Direct3D12::{
+    D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+    D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+};
+use windows::Win32::Graphics::Dxgi::{Common::*, DXGI_PRESENT_TEST};
 
 mod platform;
 
@@ -48,14 +54,35 @@ use platform::NATIVE_PLATFORM;
 
 type Handle = *mut c_void;
 
-const OK: i32 = RSF_NFG_RESULT_OK as i32;
-const NOT_READY: i32 = RSF_NFG_RESULT_NOT_READY;
-const FEATURE_FAILED: i32 = RSF_NFG_RESULT_FEATURE_FAILED;
 const SLOT_COUNT: usize = 6;
 const PASS_SIZE: u32 = size_of::<Pass>() as u32;
-const COMMON: u32 = RSF_NFG_STATE_COMMON;
-const READ: u32 = RSF_NFG_STATE_NON_PIXEL_SHADER_RESOURCE;
-const UAV: u32 = RSF_NFG_STATE_UNORDERED_ACCESS;
+const COMMON: u32 = D3D12_RESOURCE_STATE_COMMON.0 as u32;
+const READ: u32 = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE.0 as u32;
+const UAV: u32 = D3D12_RESOURCE_STATE_UNORDERED_ACCESS.0 as u32;
+const PRESENT: u32 = D3D12_RESOURCE_STATE_PRESENT.0 as u32;
+const RGBA16_FLOAT: u32 = DXGI_FORMAT_R16G16B16A16_FLOAT.0 as u32;
+const RG32_FLOAT: u32 = DXGI_FORMAT_R32G32_FLOAT.0 as u32;
+const RGB10A2_UNORM: u32 = DXGI_FORMAT_R10G10B10A2_UNORM.0 as u32;
+const RGBA8_UNORM: u32 = DXGI_FORMAT_R8G8B8A8_UNORM.0 as u32;
+const RGBA8_UNORM_SRGB: u32 = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB.0 as u32;
+const RG16_FLOAT: u32 = DXGI_FORMAT_R16G16_FLOAT.0 as u32;
+const R32_FLOAT: u32 = DXGI_FORMAT_R32_FLOAT.0 as u32;
+const BGRA8_UNORM: u32 = DXGI_FORMAT_B8G8R8A8_UNORM.0 as u32;
+const BGRA8_UNORM_SRGB: u32 = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB.0 as u32;
+// texture_dump.h and game_frame.h spell these as cast macros, which bindgen drops.
+const DUMP_VIEW_RAW: u32 = 0;
+const DUMP_VIEW_DEPTH: u32 = 4;
+const DUMP_VIEW_DENSE_MOTION: u32 = 7;
+const PHASE_UI_COMPLETE: u32 = 5;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct TextureInfo {
+    width: u32,
+    height: u32,
+    format: u32,
+    samples: u32,
+}
 // Surfaces per slot: colour, depth, motion, exposure, SR output staging.
 const COLOR: usize = 0;
 const DEPTH: usize = 1;
@@ -97,10 +124,8 @@ struct Platform {
         unsafe extern "C" fn(context: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
     query_texture:
         unsafe extern "C" fn(object: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
-    texture_info: unsafe extern "C" fn(
-        texture: *mut ::core::ffi::c_void,
-        out: *mut rsf_nfg_texture_info,
-    ) -> i32,
+    texture_info:
+        unsafe extern "C" fn(texture: *mut ::core::ffi::c_void, out: *mut TextureInfo) -> i32,
     create_event: unsafe extern "C" fn() -> *mut ::core::ffi::c_void,
     close_event: unsafe extern "C" fn(event: *mut ::core::ffi::c_void),
     fence_create: unsafe extern "C" fn(
@@ -516,7 +541,7 @@ struct Slot {
     motion_format: u32,
     // Optional translucency hints, each shaped like its own source.
     hints: [Option<Surface>; 5],
-    hint_desc: [rsf_nfg_texture_info; 5],
+    hint_desc: [TextureInfo; 5],
     pass: Pass,
     prepared: bool,
     wait_ticks: u64,
@@ -687,8 +712,8 @@ fn try_slot(source: u64) -> Option<MutexGuard<'static, Slot>> {
     }
 }
 
-fn texture_info(p: &Platform, texture: Handle) -> rsf_nfg_texture_info {
-    let mut info: rsf_nfg_texture_info = empty();
+fn texture_info(p: &Platform, texture: Handle) -> TextureInfo {
+    let mut info: TextureInfo = empty();
     call!(p, texture_info, texture, &mut info);
     info
 }
@@ -786,7 +811,7 @@ fn resources(
         return false;
     }
     let motion = texture_info(p, frame.motion);
-    if motion.format != RSF_NFG_FORMAT_RG16_FLOAT && motion.format != RSF_NFG_FORMAT_RG32_FLOAT {
+    if motion.format != RG16_FLOAT && motion.format != RG32_FLOAT {
         return false;
     }
     if slot.width != frame.render_width
@@ -801,7 +826,7 @@ fn resources(
         slot.width = 0;
         slot.height = 0;
         let (width, height) = (frame.render_width, frame.render_height);
-        slot.surfaces[DEPTH] = device.surface(p, width, height, RSF_NFG_FORMAT_R32_FLOAT);
+        slot.surfaces[DEPTH] = device.surface(p, width, height, R32_FLOAT);
         if slot.surfaces[DEPTH].is_none() {
             return false;
         }
@@ -820,18 +845,13 @@ fn resources(
         return true;
     }
     let shapes = [
-        (
-            COLOR,
-            frame.render_width,
-            frame.render_height,
-            RSF_NFG_FORMAT_RGBA16_FLOAT,
-        ),
-        (EXPOSURE, 1, 1, RSF_NFG_FORMAT_R32_FLOAT),
+        (COLOR, frame.render_width, frame.render_height, RGBA16_FLOAT),
+        (EXPOSURE, 1, 1, R32_FLOAT),
         (
             STAGING,
             frame.output_width,
             frame.output_height,
-            RSF_NFG_FORMAT_RGBA16_FLOAT,
+            RGBA16_FLOAT,
         ),
     ];
     for (surface, width, height, format) in shapes {
@@ -847,7 +867,7 @@ fn resources(
             device.device12,
             frame.output_width,
             frame.output_height,
-            RSF_NFG_FORMAT_RGBA16_FLOAT
+            RGBA16_FLOAT
         ))
     };
     slot.output.is_some()
@@ -857,12 +877,12 @@ fn resources(
 fn hudless_format(format: u32) -> bool {
     matches!(
         format,
-        RSF_NFG_FORMAT_RGBA8_UNORM
-            | RSF_NFG_FORMAT_RGBA8_UNORM_SRGB
-            | RSF_NFG_FORMAT_BGRA8_UNORM
-            | RSF_NFG_FORMAT_BGRA8_UNORM_SRGB
-            | RSF_NFG_FORMAT_RGB10A2_UNORM
-            | RSF_NFG_FORMAT_RGBA16_FLOAT
+        RGBA8_UNORM
+            | RGBA8_UNORM_SRGB
+            | BGRA8_UNORM
+            | BGRA8_UNORM_SRGB
+            | RGB10A2_UNORM
+            | RGBA16_FLOAT
     )
 }
 
@@ -940,7 +960,7 @@ pub(super) unsafe extern "C" fn rsf_native_fg_status_get(status: *mut NativeStat
         out.vendor.effective_reflex = RSF_REFLEX_OFF;
         out.vendor.low_latency_available = 0;
         out.vendor.latency_paced_frames = 0;
-        out.vendor.valid_statistics &= !RSF_NFG_STAT_LATENCY_AVAILABLE;
+        out.vendor.valid_statistics &= !RSF_FG_STAT_LATENCY_AVAILABLE;
     }
     unsafe { status.write(out) };
     1
@@ -1169,7 +1189,7 @@ unsafe extern "C" fn rsf_native_fg_evaluate(context: Handle, frame: *const DlssF
     let started = now_qpc();
     let host = call!(p, present_host);
     if host.is_null() {
-        call!(p, dump_sr, context, frame, RSF_NFG_SR_DLSS);
+        call!(p, dump_sr, context, frame, RSF_SR_DLSS);
         return call!(p, dlss_evaluate, context, frame);
     }
     let scene = read_scene();
@@ -1246,7 +1266,7 @@ unsafe extern "C" fn rsf_native_fg_evaluate(context: Handle, frame: *const DlssF
         }
         settings.was_generating = generating;
     }
-    call!(p, dump_sr, context, &translated, RSF_NFG_SR_DLSS);
+    call!(p, dump_sr, context, &translated, RSF_SR_DLSS);
     let context4 = device.context.as_ptr();
     let inputs = [frame.color_in, frame.depth, frame.motion, frame.exposure];
     let mut targets = [ptr::null_mut(); 4];
@@ -1511,7 +1531,7 @@ pub(super) unsafe extern "C" fn rsf_native_fg_prepare(
     let no_pacer = status.pacing_owner == RSF_PACING_NONE
         && options.reflex_mode == RSF_REFLEX_OFF
         && options.frame_limit_us == 0
-        && (backend == RSF_NFG_FG_BACKEND_FSR3 || backend == RSF_NFG_FG_BACKEND_FSR4);
+        && (backend == RSF_FG_BACKEND_FSR3 || backend == RSF_FG_BACKEND_FSR4);
     let rendered = rendered_source();
     let generation = call!(p, present_generation);
     let mut submitted = false;
@@ -1765,7 +1785,7 @@ pub(super) unsafe extern "C" fn rsf_native_fg_prepare(
         record.source_qpc = owner.source_qpc;
         record.source_qpc_frequency = owner.source_frequency;
     }
-    record.phase = RSF_NFG_PHASE_UI_COMPLETE;
+    record.phase = PHASE_UI_COMPLETE;
     record.screen = selected.pass.screen;
     record.render_width = selected.width;
     record.render_height = selected.height;
@@ -1814,7 +1834,7 @@ pub(super) unsafe extern "C" fn rsf_native_fg_prepare(
         target.generation = selected.generation;
         target.width = width;
         target.height = height;
-        target.state = if i == 0 { RSF_NFG_STATE_PRESENT } else { READ };
+        target.state = if i == 0 { PRESENT } else { READ };
         if i != 0 {
             call!(p, transition, list, native_resources[i], COMMON, READ);
         }
@@ -1981,7 +2001,7 @@ pub(super) unsafe extern "C" fn rsf_native_fg_present(event: *const PresentEvent
         return;
     };
     let p = &NATIVE_PLATFORM;
-    if event.flags & RSF_NFG_PRESENT_TEST != 0 || call!(p, present_has_owner) == 0 {
+    if event.flags & DXGI_PRESENT_TEST.0 != 0 || call!(p, present_has_owner) == 0 {
         return;
     }
     if event.completed == 0 {
@@ -2088,16 +2108,16 @@ unsafe extern "C" fn rsf_native_fg_dump_inputs(
         (
             d3d11(&slot.surfaces[DEPTH]),
             "_fg_depth",
-            RSF_NFG_DUMP_VIEW_DEPTH,
+            DUMP_VIEW_DEPTH,
             1.0,
         ),
         (
             d3d11(&slot.surfaces[MOTION]),
             "_fg_motion",
-            RSF_NFG_DUMP_VIEW_DENSE_MOTION,
+            DUMP_VIEW_DENSE_MOTION,
             8.0,
         ),
-        (hudless, "_fg_hudless", RSF_NFG_DUMP_VIEW_RAW, 1.0),
+        (hudless, "_fg_hudless", DUMP_VIEW_RAW, 1.0),
     ];
     let mut written = 0;
     for (texture, suffix, view, scale) in items {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::{DlssFrame, Handle, Log, Pass, Platform, Provider, rsf_fg_frame};
+use super::{DlssFrame, Handle, Log, Pass, Platform, Provider, TextureInfo, rsf_fg_frame};
 use crate::d3d11_d3d12::*;
 use crate::d3d11_present::{rsf_core_d3d11p_graphics, rsf_core_d3d11p_host};
 use crate::d3d11_present_abi::rsf_streamline_graphics;
@@ -15,34 +15,10 @@ use crate::sys::*;
 use rsf_game_sys::rsf_frame_allows_fg;
 use std::ffi::c_char;
 use std::ptr::null_mut;
-use windows::Win32::Graphics::{
-    Direct3D11::{
-        D3D11_TEXTURE2D_DESC, ID3D11DeviceContext, ID3D11DeviceContext4, ID3D11Texture2D,
-    },
-    Direct3D12::*,
-    Dxgi::{Common::*, DXGI_PRESENT_TEST},
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11_TEXTURE2D_DESC, ID3D11DeviceContext, ID3D11DeviceContext4, ID3D11Texture2D,
 };
 use windows::core::{IUnknown, Interface};
-
-const _: () = {
-    assert!(RSF_NFG_FORMAT_RGBA16_FLOAT == DXGI_FORMAT_R16G16B16A16_FLOAT.0 as u32);
-    assert!(RSF_NFG_FORMAT_RG32_FLOAT == DXGI_FORMAT_R32G32_FLOAT.0 as u32);
-    assert!(RSF_NFG_FORMAT_RGB10A2_UNORM == DXGI_FORMAT_R10G10B10A2_UNORM.0 as u32);
-    assert!(RSF_NFG_FORMAT_RGBA8_UNORM == DXGI_FORMAT_R8G8B8A8_UNORM.0 as u32);
-    assert!(RSF_NFG_FORMAT_RGBA8_UNORM_SRGB == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB.0 as u32);
-    assert!(RSF_NFG_FORMAT_RG16_FLOAT == DXGI_FORMAT_R16G16_FLOAT.0 as u32);
-    assert!(RSF_NFG_FORMAT_R32_FLOAT == DXGI_FORMAT_R32_FLOAT.0 as u32);
-    assert!(RSF_NFG_FORMAT_BGRA8_UNORM == DXGI_FORMAT_B8G8R8A8_UNORM.0 as u32);
-    assert!(RSF_NFG_FORMAT_BGRA8_UNORM_SRGB == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB.0 as u32);
-    assert!(RSF_NFG_STATE_COMMON == D3D12_RESOURCE_STATE_COMMON.0 as u32);
-    assert!(RSF_NFG_STATE_PRESENT == D3D12_RESOURCE_STATE_PRESENT.0 as u32);
-    assert!(RSF_NFG_STATE_UNORDERED_ACCESS == D3D12_RESOURCE_STATE_UNORDERED_ACCESS.0 as u32);
-    assert!(
-        RSF_NFG_STATE_NON_PIXEL_SHADER_RESOURCE
-            == D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE.0 as u32
-    );
-    assert!(RSF_NFG_PRESENT_TEST == DXGI_PRESENT_TEST.0);
-};
 
 unsafe extern "C" {
     fn rsf_d3d11_present_has_owner() -> i32;
@@ -154,11 +130,11 @@ unsafe extern "C" fn context_device(context: Handle) -> Handle {
         .map_or(null_mut(), Interface::into_raw)
 }
 
-unsafe extern "C" fn texture_info(texture: Handle, out: *mut rsf_nfg_texture_info) -> i32 {
+unsafe extern "C" fn texture_info(texture: Handle, out: *mut TextureInfo) -> i32 {
     let mut desc = D3D11_TEXTURE2D_DESC::default();
     unsafe {
         borrow::<ID3D11Texture2D>(&texture).GetDesc(&mut desc);
-        out.write(rsf_nfg_texture_info {
+        out.write(TextureInfo {
             width: desc.Width,
             height: desc.Height,
             format: desc.Format.0 as u32,
