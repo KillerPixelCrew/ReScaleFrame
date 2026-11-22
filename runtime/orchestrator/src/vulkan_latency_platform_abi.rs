@@ -2,7 +2,7 @@
 
 #![allow(non_camel_case_types)]
 use crate::vulkan_fg_abi::{rsf_fgvk, rsf_fgvk_latency_status};
-use crate::vulkan_latency_abi::rsf_slvk_call;
+use crate::vulkan_latency_abi::rsf_slvk_callback;
 type rsf_backend_result = i32;
 
 pub type rsf_vk_wsi_call =
@@ -59,16 +59,16 @@ pub struct rsf_vk_streamline_calls {
             arg3: u32,
             arg4: u32,
             arg5: u32,
-            arg6: *mut i32,
         ) -> i32,
     >,
     pub shutdown: ::core::option::Option<unsafe extern "C" fn() -> i32>,
     pub module: ::core::option::Option<unsafe extern "C" fn() -> *mut ::core::ffi::c_void>,
     pub invoke: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *const rsf_slvk_call,
+            arg1: rsf_slvk_callback,
             arg2: *mut ::core::ffi::c_void,
             arg3: usize,
+            arg4: *mut ::core::ffi::c_void,
         ) -> i32,
     >,
     pub set_interval: ::core::option::Option<unsafe extern "C" fn(arg1: i32, arg2: u32) -> i32>,

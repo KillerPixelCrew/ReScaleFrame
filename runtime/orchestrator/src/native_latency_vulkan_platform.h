@@ -20,10 +20,10 @@ typedef struct rsf_vk_pcl_calls {
     int32_t (*reflex)(uint32_t*, uint32_t*);
 } rsf_vk_pcl_calls;
 typedef struct rsf_vk_streamline_calls {
-    int32_t (*initialize)(const uint16_t*, const char*, uint32_t, uint32_t, uint32_t, int32_t*);
+    int32_t (*initialize)(const uint16_t*, const char*, uint32_t, uint32_t, uint32_t);
     int32_t (*shutdown)(void);
     void* (*module)(void);
-    int32_t (*invoke)(const rsf_slvk_call*, void*, uintptr_t);
+    int32_t (*invoke)(rsf_slvk_callback, void*, uintptr_t, void*);
     int32_t (*set_interval)(int32_t, uint32_t);
     int32_t (*sleep)(void);
     rsf_vk_token_calls tokens;
@@ -37,6 +37,12 @@ typedef struct rsf_vk_latency_platform {
     rsf_backend_result (*marker)(rsf_fgvk*, uint64_t, uint32_t);
     rsf_backend_result (*status)(rsf_fgvk*, rsf_fgvk_latency_status*);
 } rsf_vk_latency_platform;
+
+#ifdef __cplusplus
+int32_t rsf_sllatency_invoke_checked(rsf_slvk_callback, void*, uintptr_t, void*) noexcept;
+#else
+int32_t rsf_sllatency_invoke_checked(rsf_slvk_callback, void*, uintptr_t, void*);
+#endif
 
 rsf_backend_result rsf_core_latencyvk_initialize(const rsf_vk_latency_platform*, const rsf_latencyvk_setup*);
 rsf_backend_result rsf_core_slvk_initialize(const rsf_vk_latency_platform*, const rsf_slvk_setup*);

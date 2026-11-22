@@ -55,3 +55,32 @@ exercise an AMD device.
 Verification used Rust 1.94.1 formatting, scoped bindgen 0.72.1
 regeneration, locked offline Cargo metadata and source comparisons.
 Build and fixture execution were outside this replay.
+
+## Native leaf replay from fb27ab2f
+
+The D3D Anti-Lag owner now reserves the Rust handle before allocating the
+typed SDK storage. Rust selects the DX11 or DX12 leaf, interprets the raw
+HRESULT, and writes the FSR presentation record to the borrowed swap chain.
+The record keeps the pinned GUID, the original DX12 SDK context address,
+the enabled byte at offset 8 and the 16-byte x64 size. The
+`FrameInterpolationSwapchainDX12.cpp` consumer reads those fields before
+Present. Rust calls the SDK end marker after a successful private-data
+write and only when the original attachment condition holds. The update,
+marker and rebind locks retain their previous order. The C++ leaf keeps
+the typed allocation, inline vendor calls and typed cleanup, including
+symbol resolution internal to those vendor headers.
+
+Streamline initialization now uses the neutral
+`rsf_vk_sl_initialize_features` export directly. The bridge enters the
+Rust lifecycle, and its native `lifecycleInit` already catches exceptions
+at `slInit`. The remaining C++ body in
+`native_latency_streamline_exceptions.cpp` is necessary for borrowed
+host callbacks that may enter throwing C++ code. Rust validates and
+resolves the callback, user, SDK module and checked frame token within
+the existing lease. The catch boundary invokes that resolved callback
+and returns the existing feature-failure result if it throws.
+
+Scoped bindgen regeneration and the source comparison covered the private
+tables. MSVC syntax-only checks covered both optional-SDK variants and
+the callback exception leaf. No link, fixture execution or device result
+is claimed.

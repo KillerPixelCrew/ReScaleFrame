@@ -4,6 +4,7 @@
 #include "native_latency_vulkan_platform.h"
 
 #if defined(RSF_HAVE_STREAMLINE_VK)
+int32_t rsf_vk_sl_initialize_features(const wchar_t*, const char*, uint32_t, uint32_t, uint32_t);
 void* rsf_vk_sl_module(void);
 int rsf_vk_sl_shutdown_checked(void);
 rsf_vk_function rsf_vk_sl_get_instance_proc_addr(void*, const char*);
@@ -20,11 +21,8 @@ int rsf_vk_sl_marker_for_token(uintptr_t, uint32_t);
 int rsf_vk_sl_queue_present_synchronized(uintptr_t, void*, const void*);
 int rsf_vk_sl_vulkan_wsi_call(rsf_vk_wsi_call, void*);
 int rsf_vk_sl_without_dlss_g(rsf_vk_wsi_call, void*);
-int32_t rsf_sllatency_initialize_checked(const uint16_t*, const char*, uint32_t, uint32_t, uint32_t, int32_t*);
-int32_t rsf_sllatency_invoke_checked(const rsf_slvk_call*, void*, uintptr_t);
-
 static const rsf_vk_streamline_calls streamline = {
-    rsf_sllatency_initialize_checked, rsf_vk_sl_shutdown_checked, rsf_vk_sl_module, rsf_sllatency_invoke_checked,
+    rsf_vk_sl_initialize_features, rsf_vk_sl_shutdown_checked, rsf_vk_sl_module, rsf_sllatency_invoke_checked,
     rsf_vk_sl_set_reflex_interval, rsf_vk_sl_reflex_sleep,
     {rsf_vk_sl_begin_frame_checked, rsf_vk_sl_current_frame_token, rsf_vk_sl_token_matches,
         rsf_vk_sl_marker_for_token},

@@ -204,20 +204,17 @@ fn initialize(
     }
     wide.extend(directory.encode_utf16());
     wide.push(0);
-    let mut result = 0;
-    let bridge = unsafe {
+    // The bridge enters the Rust lifecycle directly. Its foreign SDK calls
+    // already contain exceptions at the native call site.
+    let result = unsafe {
         (sdk.initialize.unwrap())(
             wide.as_ptr(),
             project,
             1,
             u32::from(features & RSF_SLVK_DLSS_FG != 0),
             u32::from(features & RSF_SLVK_DLSS_SR != 0),
-            &mut result,
         )
     };
-    if bridge != OK {
-        return bridge;
-    }
     if result != OK {
         rsf_core_latencyvk_sdk_result(result, 0);
         return LOAD_FAILED;
@@ -275,7 +272,10 @@ unsafe extern "C" fn rsf_core_slvk_invoke(platform: &Platform, call: *const rsf_
     if request.abi_version != RSF_SLVK_ABI_VERSION {
         return ABI_MISMATCH;
     }
-    if request.callback.is_none() || (request.session_id == 0) != (request.frame_id == 0) {
+    let Some(callback) = request.callback else {
+        return INVALID;
+    };
+    if (request.session_id == 0) != (request.frame_id == 0) {
         return INVALID;
     }
     let host = HOST.lock().unwrap();
@@ -296,7 +296,7 @@ unsafe extern "C" fn rsf_core_slvk_invoke(platform: &Platform, call: *const rsf_
     if module.is_null() {
         return NOT_READY;
     }
-    unsafe { (sdk.invoke.unwrap())(call, module, token) }
+    unsafe { (sdk.invoke.unwrap())(Some(callback), module, token, request.user) }
 }
 
 fn options(platform: &Platform, settings: Option<(u32, u32)>) -> i32 {

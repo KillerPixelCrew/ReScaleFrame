@@ -621,7 +621,7 @@ generate("runtime/orchestrator/src/vulkan_latency_platform_abi.rs", "runtime/orc
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist",
           "--raw-line", "use crate::vulkan_fg_abi::{rsf_fgvk, rsf_fgvk_latency_status};",
-          "--raw-line", "use crate::vulkan_latency_abi::rsf_slvk_call;",
+          "--raw-line", "use crate::vulkan_latency_abi::rsf_slvk_callback;",
           "--raw-line", "type rsf_backend_result = i32;"])
 generate("runtime/orchestrator/src/dx12_vulkan_interop_abi.rs", "runtime/orchestrator/src/native_dx12_vulkan_platform.h",
          "rsf_dx12vk_(platform|shared_image|interop_callbacks)", "RSF_DX12VK_INTEROP_.*",
@@ -679,9 +679,12 @@ generate("runtime/orchestrator/src/cpu_abi.rs", "runtime/orchestrator/include/re
          "rsf_native_(cpu_(frame|counters|reservation|reservation_counters)|input_receipts)",
          "RSF_NATIVE_CPU_(RESERVATION_.*|DEPENDENCY_.*|PRESENT_.*)",
          ["-Iruntime/orchestrator/include", "-Isdk/game/include"])
+generate("runtime/orchestrator/src/latency_antilag_native_abi.rs", "runtime/orchestrator/src/latency_antilag.h",
+         "AntiLagNativeOps", "NOTHING", [], ["--no-recursive-allowlist"])
 generate("tests/game-sdk/src/antilag_abi.rs", "runtime/orchestrator/src/latency_antilag.h",
          "AntiLag(Callbacks|Context|State)", "NOTHING", [],
-         ["--allowlist-function", "rsf_core_antilag_.*", "--with-derive-default"])
+         ["--allowlist-function", "rsf_core_antilag_(create|destroy|bind|pace|end_render|state|reset_sources)",
+          "--with-derive-default"])
 generate("tests/game-sdk/src/cpu_calls.rs", "runtime/orchestrator/include/rescaleframe/native_cpu.h",
          "NOTHING", "NOTHING", ["-Iruntime/orchestrator/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist",

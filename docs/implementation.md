@@ -1,5 +1,12 @@
 # Implementation tracker
 
+C05 moves D3D Anti-Lag API selection, result handling and FSR
+swap-chain tagging to the Rust owner. The inline SDK calls retain their
+typed C++ leaf. Streamline initialization now uses the neutral bridge
+export directly, and borrowed callbacks retain their C++ exception guard.
+Pinned source, syntax and binding checks passed. Native link and runtime
+validation are pending. [C05 native leaf evidence](research/rust-c05-native-fixtures.md#native-leaf-replay-from-fb27ab2f)
+
 C01 moves the shared frame and depth-domain predicates to GameSDK and the
 FG provider queries to the Runtime's Rust choice owner. Native plugin
 exception guards and the throwing fixture remain in C++. Source checks
