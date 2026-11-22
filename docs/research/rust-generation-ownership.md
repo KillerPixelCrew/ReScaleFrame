@@ -54,12 +54,17 @@ The choice fixture still calls the C inline SDK reference for default FG
 preference. SR policy retains both DLL and embedded coverage. Assembly still
 calls the DLL, and its motion-sign check now exercises the Rust runtime helper.
 
-The remaining C++ implementation in runtime/orchestrator/src/native_fg_platform.cpp
-is the platform leaf table for shared surfaces, fences and D3D12 helper calls.
-The C05 platform in runtime/orchestrator/src/native_fg.cpp continues to bridge
-DXGI adapter discovery, Streamline and presentation callbacks.
-runtime/orchestrator/src/fg_session_platform.cpp calls the SDK's inline policy
-predicates shared with native backend callers.
+The follow-up removes runtime/orchestrator/src/native_fg_platform.cpp and
+runtime/orchestrator/src/fg_session_platform.cpp. The graphics table now has
+required Rust function types at construction. The platform module keeps the
+existing shared-surface service, paired command allocation, closed initial
+command list, texture layout, full-resource barrier order, 10-second fence wait,
+and exact C calls to the presentation bridge and frame dump services. Failed
+COM outputs retain an owner until release. The session's C ABI entry and fence
+query are Rust. The small runtime/orchestrator/src/fg_frame_policy.c leaf uses
+the GameSDK's original inline admission predicates, which native backends also
+use. The C05 platform in runtime/orchestrator/src/native_fg.cpp continues to
+bridge DXGI adapter discovery, Streamline and presentation callbacks.
 
 - tests/d3d11_fg_api.cpp retains independent C++ DLL import and typed callback
   identity checks alongside the separate C11 import fixture.

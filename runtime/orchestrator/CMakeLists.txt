@@ -20,7 +20,6 @@ target_link_libraries(rsf_native_cpu INTERFACE ReScaleFrame::GameSDK)
 
 add_library(rsf_orchestrator_core OBJECT
     src/native_fg.cpp
-    src/native_fg_platform.cpp
     src/fg12_platform.cpp
     src/native_sr.cpp
     src/native_composition_unload.cpp
@@ -32,7 +31,7 @@ add_library(rsf_orchestrator_core OBJECT
     src/overlay_d3d12.cpp
     src/overlay_platform.cpp
     src/overlay_native12.cpp
-    src/fg_session_platform.cpp
+    src/fg_frame_policy.c
     src/sr_session_backends.cpp
     src/sr_bridge_platform.cpp
     src/sr_legacy_adapter.cpp

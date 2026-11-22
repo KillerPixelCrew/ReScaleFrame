@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::fg_leases::{FenceState, Retirement};
+use crate::fg_leases::{FenceState, Retirement, rsf_d3d12_fence_completed};
 use crate::frame_sequencer::Ledger;
 use crate::render_abi::*;
 use crate::sr_session::has_capacity;
@@ -19,13 +19,13 @@ const NOT_READY: i32 = -8;
 const FEATURE_FAILED: i32 = -9;
 
 type FenceCompleted = unsafe extern "C" fn(*mut c_void) -> u64;
-type FramePredicate = unsafe extern "C" fn(*const rsf_frame_record) -> i32;
+unsafe extern "C" {
+    pub(super) fn rsf_core_frame_allows_fg(frame: *const rsf_frame_record) -> i32;
+    fn rsf_core_frame_has_rendered_source(frame: *const rsf_frame_record) -> i32;
+}
 
 struct Session {
     host: Host,
-    completed: FenceCompleted,
-    allows_fg: FramePredicate,
-    rendered_source: FramePredicate,
     // The switching thread takes the state out while draining the host and
     // changing chains. A caller arriving during the transition gets NOT_READY.
     state: Mutex<Option<State>>,
@@ -260,7 +260,7 @@ impl Session {
             }
         }
         if let Some(ref current) = state.active {
-            let result = current.retired(self.completed);
+            let result = current.retired(rsf_d3d12_fence_completed);
             if result != 0 {
                 return result;
             }
@@ -302,12 +302,9 @@ impl Session {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fg_session_create(
+unsafe extern "C" fn rsf_fg_session_create(
     host: *const rsf_fg_host,
     out: *mut *mut Session,
-    completed: FenceCompleted,
-    allows_fg: FramePredicate,
-    rendered_source: FramePredicate,
 ) -> i32 {
     if out.is_null() || !unsafe { has_capacity(host) } {
         return INVALID;
@@ -326,9 +323,6 @@ unsafe extern "C" fn rsf_core_fg_session_create(
     };
     let session = crate::allocate_handle(Session {
         host,
-        completed,
-        allows_fg,
-        rendered_source,
         state: Mutex::new(Some(State {
             active: None,
             ledger: Ledger::new(8),
@@ -501,7 +495,7 @@ unsafe extern "C" fn rsf_fg_session_prepare(
         if provenance != record.source_provenance {
             return INVALID;
         }
-        let interpolate = if unsafe { (session.allows_fg)(record) } == 0
+        let interpolate = if unsafe { rsf_core_frame_allows_fg(record) } == 0
             || record.flags & (RSF_FRAME_FLAG_RESET | RSF_FRAME_FLAG_AMBIGUOUS_ID) != 0
         {
             0
@@ -509,7 +503,9 @@ unsafe extern "C" fn rsf_fg_session_prepare(
             unsafe { (*frame).interpolate }
         };
         if provenance == RSF_FRAME_SOURCE_RENDERED {
-            if unsafe { (session.rendered_source)(record) } == 0 || record.source_qpc != timestamp {
+            if unsafe { rsf_core_frame_has_rendered_source(record) } == 0
+                || record.source_qpc != timestamp
+            {
                 return INVALID;
             }
         } else if interpolate != 0 && record.input_qpc != timestamp {

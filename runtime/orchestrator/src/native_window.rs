@@ -147,7 +147,7 @@ unsafe fn match_window(swapchain: *mut c_void) -> Option<rsf_game_render_pass> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_window_match(
+pub(super) unsafe extern "C" fn rsf_native_window_match(
     swapchain: *mut c_void,
     pass: *mut rsf_game_render_pass,
 ) -> i32 {

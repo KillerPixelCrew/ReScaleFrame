@@ -148,3 +148,5 @@ RSF_EXPORT(rsf_native_fg_present)
 RSF_EXPORT(rsf_native_fg_window_end)
 RSF_EXPORT(rsf_native_fg_inputs_ready)
 RSF_EXPORT(rsf_native_fg_dump_inputs)
+
+RSF_EXPORT(rsf_fg_session_create)

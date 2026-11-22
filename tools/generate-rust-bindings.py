@@ -645,17 +645,11 @@ generate("runtime/orchestrator/src/d3d11_fg_api_abi.rs", "runtime/orchestrator/i
           "--raw-line", "use crate::scene_abi::rsf_observer_present_event;",
           "--raw-line", "use rsf_game_sys::{rsf_game_cpu_event, rsf_game_render_pass};"])
 generate("runtime/orchestrator/src/native_fg_abi.rs", "runtime/orchestrator/src/native_fg_platform.h",
-         "rsf_nfg_(platform|texture_info)",
-         "RSF_NFG_(FORMAT_.*|STATE_.*|PHASE_.*|DUMP_VIEW_.*|SR_.*|FG_BACKEND_.*|STAT_.*|PRESENT_.*|RESULT_.*)",
+         "rsf_(nfg_texture_info|named_frame_dump(_report|_log_fn)?)",
+         "RSF_(NFG_(FORMAT_.*|STATE_.*|PHASE_.*|DUMP_VIEW_.*|SR_.*|FG_BACKEND_.*|STAT_.*|PRESENT_.*|RESULT_.*)|NAMED_FRAME_DUMP_ABI_VERSION)",
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/backends/dlss/include",
           "-Iruntime/graphics/include", "-Iruntime/presentation/include", "-Isdk/game/include"],
-         ["--no-recursive-allowlist",
-          "--raw-line", "use crate::native_fg_cpu_abi::rsf_nfg_cpu_platform;",
-          "--raw-line", "use crate::render_abi::{\n"
-                        "    rsf_backend_log_fn, rsf_dlss_frame, rsf_fg_frame, rsf_generation_provider,\n"
-                        "};",
-          "--raw-line", "use crate::scene_abi::rsf_native_scene_identity;",
-          "--raw-line", "use rsf_game_sys::{rsf_frame_record, rsf_game_render_pass};"])
+         ["--no-recursive-allowlist"])
 generate("runtime/orchestrator/src/native_fg_cpu_abi.rs", "runtime/orchestrator/src/native_fg_cpu_platform.h",
          "rsf_(nfg_cpu_platform|d3d11_present_status|streamline_latency_status|native_latency_window)",
          "RSF_(NFG_CPU_.*|PRESENT_STATUS_VERSION|SL_PROFILE_PCL|PACING_ANTILAG2)",

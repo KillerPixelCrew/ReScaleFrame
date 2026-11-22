@@ -2,8 +2,8 @@
 // Graphics-side owner of D3D11 frame generation through the D3D12 presentation bridge: the shared
 // transfer device and fence, per-source input slots, the scene depth/motion capture and SR evaluation
 // that fill them, HUD-less copies, provider admission at Prepare, retirement, Present observation and
-// window-end sequencing, and the requested/observed FG status. native_fg_platform.cpp supplies one call
-// per COM, SDK or frame-dump operation. native_fg_cpu.rs owns CPU pacing and latency markers.
+// window-end sequencing, and the requested/observed FG status. The platform module owns native
+// calls. native_fg_cpu.rs owns CPU pacing and latency markers.
 use crate::com_ref::ComRef;
 use crate::cpu_abi::{
     RSF_NATIVE_CPU_PRESENT_RETURNED, RSF_NATIVE_CPU_RESERVATION_BOUND,
@@ -42,6 +42,10 @@ use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
+
+mod platform;
+
+use platform::NATIVE_PLATFORM;
 
 type Handle = *mut c_void;
 
@@ -224,63 +228,6 @@ struct Platform {
         log: rsf_backend_log_fn,
         log_user: *mut ::core::ffi::c_void,
     ) -> i32,
-}
-
-impl Platform {
-    fn checked(raw: &'static rsf_nfg_platform) -> Option<Self> {
-        Some(Self {
-            cpu: unsafe { raw.cpu.as_ref()? },
-            present_has_owner: raw.present_has_owner?,
-            present_is_owner: raw.present_is_owner?,
-            present_host: raw.present_host?,
-            present_provider: raw.present_provider?,
-            present_session: raw.present_session?,
-            present_backend: raw.present_backend?,
-            present_generation: raw.present_generation?,
-            present_graphics: raw.present_graphics?,
-            present_retire: raw.present_retire?,
-            present_abort: raw.present_abort?,
-            host_token: raw.host_token?,
-            window_match: raw.window_match?,
-            scene_for_window: raw.scene_for_window?,
-            scene_present_path: raw.scene_present_path?,
-            allows_fg: raw.allows_fg?,
-            context_device: raw.context_device?,
-            query_context4: raw.query_context4?,
-            query_texture: raw.query_texture?,
-            texture_info: raw.texture_info?,
-            create_event: raw.create_event?,
-            close_event: raw.close_event?,
-            fence_create: raw.fence_create?,
-            fence_d3d11: raw.fence_d3d11?,
-            fence_d3d12: raw.fence_d3d12?,
-            surface_create: raw.surface_create?,
-            surface_destroy: raw.surface_destroy?,
-            surface_d3d11: raw.surface_d3d11?,
-            surface_d3d12: raw.surface_d3d12?,
-            fence_completed: raw.fence_completed?,
-            wait_fence: raw.wait_fence?,
-            flush: raw.flush?,
-            copy_resource: raw.copy_resource?,
-            context_signal: raw.context_signal?,
-            context_wait: raw.context_wait?,
-            create_commands: raw.create_commands?,
-            create_output: raw.create_output?,
-            reset_commands: raw.reset_commands?,
-            close_commands: raw.close_commands?,
-            execute: raw.execute?,
-            transition: raw.transition?,
-            copy_transitioned: raw.copy_transitioned?,
-            queue_signal: raw.queue_signal?,
-            queue_wait: raw.queue_wait?,
-            dlss_evaluate: raw.dlss_evaluate?,
-            dlss_evaluate_shared: raw.dlss_evaluate_shared?,
-            dump_sr: raw.dump_sr?,
-            dump_fg: raw.dump_fg?,
-            dump_fg_prepare: raw.dump_fg_prepare?,
-            dump_named: raw.dump_named?,
-        })
-    }
 }
 
 macro_rules! call {
@@ -938,16 +885,6 @@ fn depth_domains_bytes(pass: &Pass) -> &[u8] {
     unsafe { std::slice::from_raw_parts(ptr::from_ref(domains).cast::<u8>(), size_of_val(domains)) }
 }
 
-fn platform() -> Option<&'static Platform> {
-    unsafe extern "C" {
-        static rsf_native_fg_platform: rsf_nfg_platform;
-    }
-    static CHECKED: std::sync::OnceLock<Option<Platform>> = std::sync::OnceLock::new();
-    CHECKED
-        .get_or_init(|| Platform::checked(unsafe { &rsf_native_fg_platform }))
-        .as_ref()
-}
-
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_native_fg_options_set(options: *const Options) {
     if options.is_null() || unsafe { options.cast::<u32>().read() } < size_of::<Options>() as u32 {
@@ -975,9 +912,7 @@ unsafe extern "C" fn rsf_native_fg_set_log(log: Log, user: Handle) {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_native_fg_status_get(status: *mut NativeStatus) -> i32 {
-    let Some(p) = platform() else {
-        return 0;
-    };
+    let p = &NATIVE_PLATFORM;
     if status.is_null() || unsafe { status.cast::<u32>().read() } < size_of::<NativeStatus>() as u32
     {
         return 0;
@@ -1027,9 +962,7 @@ unsafe extern "C" fn rsf_native_fg_status_get(status: *mut NativeStatus) -> i32 
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_native_fg_scene(pass: *const Pass) {
-    let Some(p) = platform() else {
-        return;
-    };
+    let p = &NATIVE_PLATFORM;
     unsafe { set_scene(pass, |pass| refuse_held_inputs(p, pass)) };
 }
 
@@ -1056,7 +989,7 @@ unsafe extern "C" fn rsf_native_fg_capture_scoped(
     {
         return;
     }
-    let Some(p) = platform() else { return };
+    let p = &NATIVE_PLATFORM;
     with_capture_scene(
         unsafe { &*identity },
         |pass| refuse_held_inputs(p, pass),
@@ -1066,9 +999,10 @@ unsafe extern "C" fn rsf_native_fg_capture_scoped(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_native_fg_final(context: Handle, pass: *const Pass) {
-    let (Some(p), Some(pass)) = (platform(), unsafe { pass.as_ref() }) else {
+    let Some(pass) = (unsafe { pass.as_ref() }) else {
         return;
     };
+    let p = &NATIVE_PLATFORM;
     if context.is_null()
         || pass.scene_surface.is_null()
         || pass.source_frame_id == 0
@@ -1158,9 +1092,7 @@ unsafe extern "C" fn rsf_native_fg_final(context: Handle, pass: *const Pass) {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_native_fg_capture(context: Handle, frame: *const DlssFrame) {
-    let Some(p) = platform() else {
-        return;
-    };
+    let p = &NATIVE_PLATFORM;
     capture(p, context, frame);
 }
 
@@ -1247,9 +1179,7 @@ fn capture(p: &Platform, context: Handle, frame: *const DlssFrame) {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_native_fg_evaluate(context: Handle, frame: *const DlssFrame) -> i32 {
-    let Some(p) = platform() else {
-        return NOT_READY;
-    };
+    let p = &NATIVE_PLATFORM;
     let started = now_qpc();
     let host = call!(p, present_host);
     if host.is_null() {
@@ -1563,9 +1493,7 @@ unsafe extern "C" fn rsf_native_fg_prepare(
     session: Handle,
     sync: u32,
 ) {
-    let Some(p) = platform() else {
-        return;
-    };
+    let p = &NATIVE_PLATFORM;
     TAGGED.set(None);
     let mut window: Pass = empty();
     window.struct_size = PASS_SIZE;
@@ -1939,9 +1867,7 @@ unsafe extern "C" fn rsf_native_fg_prepare(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_native_fg_retire(_user: Handle, session: Handle) {
-    let Some(p) = platform() else {
-        return;
-    };
+    let p = &NATIVE_PLATFORM;
     let provider = unsafe { call!(p, present_provider).as_ref() };
     let Some(provider) = provider.filter(|_| !session.is_null()) else {
         // No provider is left to read the inputs, but they are still in the read state.
@@ -2073,9 +1999,10 @@ unsafe extern "C" fn rsf_native_fg_retire(_user: Handle, session: Handle) {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_native_fg_present(event: *const PresentEvent) {
-    let (Some(p), Some(event)) = (platform(), unsafe { event.as_ref() }) else {
+    let Some(event) = (unsafe { event.as_ref() }) else {
         return;
     };
+    let p = &NATIVE_PLATFORM;
     if event.flags & RSF_NFG_PRESENT_TEST != 0 || call!(p, present_has_owner) == 0 {
         return;
     }
@@ -2114,9 +2041,7 @@ unsafe extern "C" fn rsf_native_fg_present(event: *const PresentEvent) {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_native_fg_window_end(pass: *const Pass) {
-    let Some(p) = platform() else {
-        return;
-    };
+    let p = &NATIVE_PLATFORM;
     if pass.is_null() || unsafe { pass.cast::<u32>().read() } < PASS_SIZE {
         return;
     }
@@ -2160,9 +2085,7 @@ unsafe extern "C" fn rsf_native_fg_dump_inputs(
     directory: *const c_char,
     prefix: *const c_char,
 ) -> i32 {
-    let Some(p) = platform() else {
-        return 0;
-    };
+    let p = &NATIVE_PLATFORM;
     if context.is_null()
         || source == 0
         || directory.is_null()

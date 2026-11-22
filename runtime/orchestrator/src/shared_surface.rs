@@ -171,7 +171,7 @@ extern "C" fn rsf_shared_surface_native_platform() -> *const Platform {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_shared_surface_create(
+pub(super) unsafe extern "C" fn rsf_shared_surface_create(
     device11: Handle,
     device12: Handle,
     setup: *const SurfaceSetup,
@@ -181,7 +181,7 @@ unsafe extern "C" fn rsf_shared_surface_create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_shared_fence_create(
+pub(super) unsafe extern "C" fn rsf_shared_fence_create(
     device11: Handle,
     device12: Handle,
     log: Log,
@@ -199,7 +199,7 @@ pub(super) struct Surface {
     handle: OwnedHandle,
 }
 
-struct Fence {
+pub(super) struct Fence {
     fence12: Option<ComRef>,
     fence11: ComRef,
     handle: OwnedHandle,
@@ -451,19 +451,19 @@ unsafe fn shared_fence_create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_shared_surface_destroy(surface: *mut Surface) {
+pub(super) unsafe extern "C" fn rsf_shared_surface_destroy(surface: *mut Surface) {
     if !surface.is_null() {
         drop(unsafe { Box::from_raw(surface) });
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_shared_surface_d3d11(surface: *const Surface) -> Handle {
+pub(super) unsafe extern "C" fn rsf_shared_surface_d3d11(surface: *const Surface) -> Handle {
     unsafe { surface.as_ref() }.map_or(null_mut(), |surface| surface.texture11.as_ptr())
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_shared_surface_d3d12(surface: *const Surface) -> Handle {
+pub(super) unsafe extern "C" fn rsf_shared_surface_d3d12(surface: *const Surface) -> Handle {
     unsafe { surface.as_ref() }
         .and_then(|surface| surface.texture12.as_ref())
         .map_or(null_mut(), ComRef::as_ptr)
@@ -477,19 +477,19 @@ unsafe extern "C" fn rsf_shared_surface_target(surface: *const Surface) -> Handl
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_shared_fence_destroy(fence: *mut Fence) {
+pub(super) unsafe extern "C" fn rsf_shared_fence_destroy(fence: *mut Fence) {
     if !fence.is_null() {
         drop(unsafe { Box::from_raw(fence) });
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_shared_fence_d3d11(fence: *const Fence) -> Handle {
+pub(super) unsafe extern "C" fn rsf_shared_fence_d3d11(fence: *const Fence) -> Handle {
     unsafe { fence.as_ref() }.map_or(null_mut(), |fence| fence.fence11.as_ptr())
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_shared_fence_d3d12(fence: *const Fence) -> Handle {
+pub(super) unsafe extern "C" fn rsf_shared_fence_d3d12(fence: *const Fence) -> Handle {
     unsafe { fence.as_ref() }
         .and_then(|fence| fence.fence12.as_ref())
         .map_or(null_mut(), ComRef::as_ptr)
