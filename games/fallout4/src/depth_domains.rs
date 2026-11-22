@@ -1136,7 +1136,8 @@ fn same_raster(a: &Snapshot, b: &Snapshot) -> bool {
         && keys(a) == keys(b)
 }
 
-fn verify() -> bool {
+/// Checks the expected bytes of every native site the snapshot depends on.
+pub(crate) fn verify() -> bool {
     let okay = guard(0x21f38b0, b"\x48\x89\x5c\x24\x08\x48\x89\x6c\x24\x10")
         && guard(0x21f9f69, b"\xe8\x42\x91\xff\xff")
         && guard(0x21f9f73, b"\xe8\x38\x99\xff\xff")
@@ -1531,12 +1532,6 @@ fn make(
         return refused(Stage::Source, &confirmed, report, None);
     }
     Some(result)
-}
-
-/// Checks the expected bytes of every native site the snapshot depends on.
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_fallout4_depth_verify() -> bool {
-    verify()
 }
 
 /// Owner and producer raster only, sampled twice. Never temporal admission.

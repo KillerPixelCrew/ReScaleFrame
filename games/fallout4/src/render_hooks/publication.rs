@@ -15,7 +15,7 @@
 use super::World;
 use super::recovery::{self, Leaves as RecoveryLeaves};
 use crate::render_inputs;
-use crate::resolution::rsf_fallout4_resolution_inputs;
+use crate::resolution::inputs_match as resolution_inputs_match;
 use crate::screen::NativeScreen as Screen;
 use crate::sys::rsf_fallout4_cpu_identity as CpuIdentity;
 use crate::sys::{NativeAuxiliaryInputs as AuxiliaryInputs, NativePublicationInputs as Inputs};
@@ -259,7 +259,7 @@ pub(super) fn emit_sr(leaves: &Leaves, recovery: &RecoveryLeaves) -> SrOutcome {
     identify(&mut pass, &world.cpu);
     pass.role = RSF_GAME_RENDER_SR;
     pass.pass_key = (image() + SR_PASS) as u64;
-    if !rsf_fallout4_resolution_inputs(&pass) {
+    if !resolution_inputs_match(&pass) {
         leaves.diagnostic(
             c"Fallout4 SR refused: actual producer LTRB crop/camera/output extents disagree.",
         );

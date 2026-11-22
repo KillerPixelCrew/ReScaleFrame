@@ -186,11 +186,6 @@ pub(crate) fn admit_build() -> Option<ExactBuild> {
     (hashed && digest == *EXECUTABLE_SHA256.to_bytes()).then_some(ExactBuild(()))
 }
 
-// Called by independent native reader verification outside the preparation transaction.
-pub(crate) fn verify_executable() -> bool {
-    admit_build().is_some()
-}
-
 pub(crate) fn preflight() -> bool {
     !ENABLED.load(Ordering::Acquire)
         && ENTERED.load(Ordering::Acquire) == 0

@@ -141,8 +141,7 @@ fn matches<const N: usize>(base: usize, rva: usize, expected: &[u8; N]) -> bool 
     read::<[u8; N]>(base + rva).as_ref() == Some(expected)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_fallout4_verify_screen_queries() -> bool {
+pub(crate) fn verify_queries() -> bool {
     VERIFIED_IMAGE.store(0, Ordering::Release);
     let base = image();
     let valid = base != 0

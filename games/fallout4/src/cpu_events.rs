@@ -2915,7 +2915,7 @@ fn cpu_source_is_current(expected: &CpuIdentity) -> bool {
 
 /// Called once by the primary render producer inside the active Swap scope. Supplies a
 /// render-pass association, never an ExecuteCommandLists fact.
-fn begin_render() -> bool {
+pub(crate) fn begin_render() -> bool {
     if !swap_scope()
         || IDENTITY.get().source == 0
         || SOURCE_INVALID.get()
@@ -3068,11 +3068,6 @@ pub(crate) unsafe extern "C" fn rsf_fallout4_cpu_current_identity(
     if let Some(out) = unsafe { out.as_mut() } {
         *out = current_identity();
     }
-}
-
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_fallout4_cpu_begin_render() -> bool {
-    begin_render()
 }
 
 /// # Safety

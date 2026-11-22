@@ -392,26 +392,6 @@ pub(crate) fn motion_to_uv(raster: &CameraRaster) -> Option<[f32; 2]> {
     raster_transform(raster).map(|affine| [-affine[0], -affine[5]])
 }
 
-/// Native previous-minus-current UV to current-minus-previous crop UV.
-///
-/// # Safety
-/// `raster` is readable; a non-null `output` holds 2 floats.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_camera_motion_to_uv(
-    raster: *const CameraRaster,
-    output: *mut [f32; 2],
-) -> bool {
-    if output.is_null() {
-        return false;
-    }
-    unsafe { output.write([0.0; 2]) };
-    let Some(scale) = (unsafe { raster.as_ref() }).and_then(motion_to_uv) else {
-        return false;
-    };
-    unsafe { output.write(scale) };
-    true
-}
-
 #[cfg(test)]
 #[path = "camera/tests.rs"]
 mod tests;

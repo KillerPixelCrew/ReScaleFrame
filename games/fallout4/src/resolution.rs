@@ -924,8 +924,7 @@ fn collect_shadow(scope: &Scope, receipt: &mut Receipt) -> Option<()> {
     Some(())
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_fallout4_resolution_verify() -> bool {
+pub(crate) fn verify() -> bool {
     let base = image();
     fn guard<const N: usize>(base: usize, rva: usize, expected: &[u8; N]) -> bool {
         read::<[u8; N]>(base + rva).as_ref() == Some(expected)
@@ -967,8 +966,7 @@ pub(crate) extern "C" fn rsf_fallout4_resolution_verify() -> bool {
         && guard(base, VIEWPORT_UNIT, &1.0_f32.to_le_bytes())
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_fallout4_resolution_inputs(pass: &rsf_game_render_pass) -> bool {
+pub(crate) fn inputs_match(pass: &rsf_game_render_pass) -> bool {
     let [left, top, right, bottom] = pass.render_rect;
     let [output_left, output_top, output_right, output_bottom] = pass.output_rect;
     pass.camera_valid != 0

@@ -23,12 +23,12 @@ use crate::build_layout::{
     RENDERER_CHAIN, RENDERER_CONTEXT, RENDERER_DEVICE, RENDERER_OBJECT, RENDERER_POINTER,
     RENDERER_WINDOW,
 };
-use crate::cpu_events::{rsf_fallout4_cpu_begin_render, rsf_fallout4_cpu_render_source_is_current};
+use crate::cpu_events::{
+    begin_render as cpu_begin_render, rsf_fallout4_cpu_render_source_is_current,
+};
 use crate::creation::{ExactBuild, accept_window};
-use crate::depth_domains::rsf_fallout4_depth_verify;
 use crate::render_inputs::verify_for_build;
-use crate::resolution::{is_busy as resolution_busy, rsf_fallout4_resolution_verify};
-use crate::screen::rsf_fallout4_verify_screen_queries;
+use crate::resolution::is_busy as resolution_busy;
 use crate::sys::rsf_fallout4_cpu_identity as CpuIdentity;
 use crate::sys::{
     NativeRenderExports as RenderExports, NativeRenderScopeKey as ScopeKey, NativeWorld as World,
@@ -264,9 +264,9 @@ pub(crate) fn verify() -> bool {
     HOOKS
         .iter()
         .all(|hook| crate::matches_bytes::<32>(base + hook.rva, hook.entry))
-        && rsf_fallout4_resolution_verify()
-        && rsf_fallout4_verify_screen_queries()
-        && rsf_fallout4_depth_verify()
+        && crate::resolution::verify()
+        && crate::screen::verify_queries()
+        && crate::depth_domains::verify()
         && read::<usize>(base + TAA_VTABLE + TAA_SLOT * size_of::<usize>())
             == Some(base + HOOKS[TAA_HOOK].rva)
         && PRODUCER_CALLS
@@ -519,7 +519,7 @@ extern "C" fn rsf_fallout4_render_admit_world(
             crate::resolution::retry_retired(image());
             !resolution_busy()
         }
-        && rsf_fallout4_cpu_begin_render()
+        && cpu_begin_render()
 }
 
 // Capture is diagnostic and independent of temporal and FG admission. The native

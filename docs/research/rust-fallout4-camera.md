@@ -11,7 +11,7 @@ and [fallout4-native-inputs-20261116.md](fallout4-native-inputs-20261116.md).
 | Former C++ | Rust | Owns |
 | --- | --- | --- |
 | `camera_raster_transform` | `raster_transform` | LTRB crop admission, finite and positive native viewport, crop NDC affine |
-| `camera_motion_to_uv` | `rsf_fallout4_camera_motion_to_uv` | output cleared first, negated affine scale |
+| `camera_motion_to_uv` | `motion_to_uv` | output cleared first, negated affine scale |
 | `camera_depth_domain_forward` | `depth_domain_forward` | f64 clip-box forward-W bound with one D24 step, `> 1e-6` admission, bound kept on refusal |
 | `camera_composed_view_depth` | `composed_view_depth` | output cleared before inputs are read, exact forward-perspective form, both inverses required |
 | `camera_frame` | `frame` | projection recovery from rotation-only V and unjittered VP, 0.0005 relative cache tolerance, jitter from the actual projection in actual raster units, 2 px jitter limit, crop composition, origin-relative world/view, reprojection and history |

@@ -171,8 +171,7 @@ fn motion_units_and_depth_bound() {
         xywh: [0.75, 1.25, 99.2, 79.6],
         crop: [1, 1, 100, 81],
     };
-    let mut motion = [0.0; 2];
-    assert!(unsafe { rsf_fallout4_camera_motion_to_uv(&raster, &mut motion) });
+    let motion = motion_to_uv(&raster).expect("motion scale");
     assert!(close((-4.0 / 99.2) * motion[0], 4.0 / 99.0, 1e-4));
     assert!(close((3.0 / 79.6) * motion[1], -3.0 / 80.0, 1e-4));
 
@@ -206,9 +205,6 @@ fn motion_units_and_depth_bound() {
     assert!(!depth_domain_forward(&domain, 0.01, &mut bound) && bound.minimum > 0.0);
     domain[15] = f32::INFINITY;
     assert!(!depth_domain_forward(&domain, 0.01, &mut bound));
-    motion = [1.0; 2];
-    assert!(!unsafe { rsf_fallout4_camera_motion_to_uv(std::ptr::null(), &mut motion) });
-    assert_eq!(motion, [0.0; 2]);
 }
 
 fn perspective(x: f32, y: f32, near: f32, far: f32) -> Flat {
