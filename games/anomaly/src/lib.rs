@@ -32,7 +32,7 @@ mod fg_inputs;
 mod fg_policy;
 #[cfg(windows)]
 mod fg_stage;
-#[cfg(all(windows, any(not(feature = "native-entry"), feature = "sr-fixtures")))]
+#[cfg(all(windows, feature = "sr-fixtures"))]
 mod fixture_profile;
 mod frame_dump;
 #[cfg(windows)]
