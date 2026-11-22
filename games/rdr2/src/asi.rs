@@ -27,6 +27,13 @@ pub(crate) struct DiagnosticHook {
     original: *mut *mut c_void,
 }
 
+#[cfg(windows)]
+impl DiagnosticHook {
+    pub(crate) const fn new(detour: *const c_void, original: *mut *mut c_void) -> Self {
+        Self { detour, original }
+    }
+}
+
 const _: () = assert!(size_of::<DiagnosticHook>() == 2 * size_of::<usize>());
 
 pub(crate) enum DiagnosticInstall {

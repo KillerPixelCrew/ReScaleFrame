@@ -2,13 +2,14 @@
 //! Opt-in camera capture at the native upscaler boundary and its separate fiber reference.
 use crate::asi::{self, AsiPlatform, DiagnosticHook, DiagnosticInstall, install_diagnostic_hooks};
 use crate::layout::{self, FRAME_COUNTER, TLS_INDEX, block, camera_probe};
-use crate::platform::lock;
+use crate::platform::{lock, minhook::MH_EnableHook, trampoline, worker_tls_slots};
 use crate::script_input::ScriptHook;
 use std::ffi::{OsString, c_void};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicPtr;
 use std::sync::{Mutex, OnceLock};
 use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::System::LibraryLoader::LoadLibraryW;
@@ -95,19 +96,14 @@ fn read_bytes(platform: &AsiPlatform, address: usize, bytes: &mut [u8]) -> bool 
 }
 
 impl Snapshot {
-    fn read_worker(
-        &mut self,
-        platform: &AsiPlatform,
-        image: usize,
-        thread_slots: unsafe extern "C" fn() -> usize,
-    ) {
+    fn read_worker(&mut self, platform: &AsiPlatform, image: usize) {
         self.frame_counter = platform.read_value(image + FRAME_COUNTER).unwrap_or(0);
         let Some(index) = platform.read_value::<u32>(image + TLS_INDEX) else {
             self.tls_index = u32::MAX;
             return;
         };
         self.tls_index = index;
-        let slots = unsafe { thread_slots() };
+        let slots = unsafe { worker_tls_slots() };
         if slots == 0 || index >= block::TLS_LIMIT {
             return;
         }
@@ -143,15 +139,55 @@ impl Snapshot {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_camera_install(
-    directory: *const u16,
-    hooks: *const [DiagnosticHook; 2],
-    enable: unsafe extern "C" fn(usize) -> i32,
+type Upscale = unsafe extern "C" fn(*mut c_void, *mut c_void, bool) -> bool;
+static FSR: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+static DLSS: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+
+// The fourth Windows x64 argument is r9, while [rsp] is the original caller.
+// Tail jumps leave the argument area, caller return address and unwind layout intact.
+#[unsafe(naked)]
+unsafe extern "C" fn fsr_hook(_: *mut c_void, _: *mut c_void, _: bool) -> bool {
+    std::arch::naked_asm!("mov r9, [rsp]", "jmp {}", sym fsr_capture);
+}
+
+#[unsafe(naked)]
+unsafe extern "C" fn dlss_hook(_: *mut c_void, _: *mut c_void, _: bool) -> bool {
+    std::arch::naked_asm!("mov r9, [rsp]", "jmp {}", sym dlss_capture);
+}
+
+unsafe extern "C" fn fsr_capture(
+    ctx: *mut c_void,
+    params: *mut c_void,
+    option: bool,
+    caller: usize,
 ) -> bool {
-    let (Some(platform), Some(hooks)) = (asi::platform(), unsafe { hooks.as_ref() }) else {
+    capture(2, ctx, params, caller);
+    unsafe { trampoline::<Upscale>(&FSR).is_some_and(|native| native(ctx, params, option)) }
+}
+
+unsafe extern "C" fn dlss_capture(
+    ctx: *mut c_void,
+    params: *mut c_void,
+    option: bool,
+    caller: usize,
+) -> bool {
+    capture(1, ctx, params, caller);
+    unsafe { trampoline::<Upscale>(&DLSS).is_some_and(|native| native(ctx, params, option)) }
+}
+
+unsafe extern "C" fn enable(target: usize) -> i32 {
+    unsafe { MH_EnableHook(target as *mut c_void) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_rdr2_install_camera_probe(directory: *const u16) -> bool {
+    let Some(platform) = asi::platform() else {
         return false;
     };
+    let hooks = [
+        DiagnosticHook::new(fsr_hook as *const c_void, FSR.as_ptr()),
+        DiagnosticHook::new(dlss_hook as *const c_void, DLSS.as_ptr()),
+    ];
     if directory.is_null() {
         return false;
     }
@@ -177,7 +213,7 @@ unsafe extern "C" fn rsf_rdr2_camera_install(
         platform,
         image,
         [camera_probe::FSR, camera_probe::DLSS],
-        hooks,
+        &hooks,
         enable,
     ) {
         DiagnosticInstall::Installed => true,
@@ -207,14 +243,7 @@ pub(crate) extern "C" fn rsf_rdr2_camera_request() {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_rdr2_camera_capture(
-    provider: u32,
-    context: *const c_void,
-    parameters: *const c_void,
-    caller: *const c_void,
-    thread_slots: unsafe extern "C" fn() -> usize,
-) {
+fn capture(provider: u32, context: *const c_void, parameters: *const c_void, caller: usize) {
     let Some(platform) = asi::platform() else {
         return;
     };
@@ -247,7 +276,7 @@ extern "C" fn rsf_rdr2_camera_capture(
     record.context = context as u64;
     record.parameters = parameters as u64;
     record.return_rva = (caller as u64).wrapping_sub(record.image_base);
-    record.read_worker(platform, probe.image, thread_slots);
+    record.read_worker(platform, probe.image);
     record.valid_parameters = u32::from(read_bytes(
         platform,
         parameters as usize,
@@ -333,7 +362,10 @@ extern "C" fn script_reference() {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_camera_reference(instance: HMODULE, library: *const u16) -> bool {
+unsafe extern "C" fn rsf_rdr2_install_camera_reference(
+    instance: HMODULE,
+    library: *const u16,
+) -> bool {
     if instance.is_null()
         || library.is_null()
         || !lock(&PROBE).as_ref().is_some_and(|probe| probe.installed)
