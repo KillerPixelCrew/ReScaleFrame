@@ -3,7 +3,6 @@ use super::entropy::{entropy, sampled};
 use super::memory::{MemoryCache, read, read_guarded, readable_extent};
 use super::names::escape_unit;
 use super::sections::{Stream, rsf_dump_now_ms};
-use super::sha256;
 use crate::sys::{rsf_dump_image_info, rsf_dump_image_stats, rsf_module_entry, rsf_section_digest};
 use std::ffi::OsString;
 use std::fmt::Write as _;
@@ -307,7 +306,7 @@ pub(super) unsafe fn dump_image(
                 entropy: sampled(len, ENTROPY_WINDOW, ENTROPY_SAMPLES, |offset, length| {
                     entropy(&buffer[offset..offset + length])
                 }),
-                sha256: sha256::hex(buffer).map(|byte| byte as std::ffi::c_char),
+                sha256: sha256_text(buffer),
             };
             unsafe { digests.add(index).write(digest) };
             stats.hash_ms += rsf_dump_now_ms() - started;
@@ -324,6 +323,18 @@ pub(super) unsafe fn dump_image(
     }
     file.flush().ok()?;
     Some(stats)
+}
+
+/// Lowercase hex SHA-256, NUL terminated for the C record; empty when the hash cannot be taken.
+fn sha256_text(bytes: &[u8]) -> [std::ffi::c_char; 65] {
+    let mut text = [0; 65];
+    for (slot, digit) in text
+        .iter_mut()
+        .zip(rsf_windows::sha256_hex(bytes).unwrap_or([0; 64]))
+    {
+        *slot = digit as std::ffi::c_char;
+    }
+    text
 }
 
 pub(super) unsafe fn write_imports(

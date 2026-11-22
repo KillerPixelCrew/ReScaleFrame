@@ -8,5 +8,4 @@ mod memory;
 mod names;
 mod rtti;
 mod sections;
-mod sha256;
 mod sidecar;
