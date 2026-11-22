@@ -1,5 +1,12 @@
 # Implementation tracker
 
+The active migration build candidate is `9f53f1b0`. It includes the
+Rust Godot SR and final-scene records and the merged Streamline,
+FidelityFX, Vulkan and Unity batches. Pinned formatting, locked offline
+metadata and the source public header and carrier definition comparison
+passed. Binary ABI, fixture, device and game results are pending.
+[Candidate checks](rust-migration.md#candidate-9f53f1b0)
+
 The Unity package now routes render callbacks, admits preview and
 generation windows, and handles device events in Rust. The managed
 exports matched in source, and pinned binding regeneration matched the

@@ -11,6 +11,26 @@ reuse the established C ABI, frame events and resource leases.
 Defer standalone cleanup while a coherent candidate awaits verification.
 The integration scope and acceptance criteria below still apply.
 
+### Candidate `9f53f1b0`
+
+This source revision includes the merged Streamline signature and
+shutdown fixes, both D3D12 FidelityFX frame-generation batches, the
+shared Vulkan DX12 swapchain policy and repaired FSR4 state fixture,
+Unity package routing and device lifecycle, and Godot host lifecycle
+and render-pass records. Pinned workspace and SCons-module formatting,
+locked offline Windows metadata, whitespace, and the tracked public
+header and carrier definition comparison passed. These are source checks.
+
+| Evidence | Required on this candidate |
+| --- | --- |
+| Build and binary ABI | Build matching SDK configurations and compare named PE exports, ordinals and carrier forwarders. Cover Runtime DLL and embedded core consumers and Anomaly's by-name Runtime linkage. Build the Godot SCons object and Unity native package as separate consumers. |
+| Focused fixtures | Record the candidate revision, configuration and features with each result. Include session lifetime, Anomaly hook and input contracts, the FSR4 Vulkan state fixture and enabled and disabled provider contracts. |
+| Device | Record provider switching, failure fallback and resource retirement on the affected native paths independently of synthetic fixtures. |
+| Anomaly game | Compare Standard and AVX with the pinned C++ adapter evidence. Record rendering, presentation, held input, overlay handoff, provider fallback, resize and explicit plugin retirement on both profiles. |
+
+Build and test execution belongs to the user. Earlier evidence retains
+its original revision and scope. [C++ baseline](research/rust-anomaly-cpp-baseline.md)
+
 The next acceptance checks use one candidate revision and feature
 set. Compare the Runtime DLL and linked consumers' exports and
 linkage, then record focused fixtures and device behavior separately.
@@ -82,7 +102,7 @@ Runtime. Preserve the supported paths, feature refusals and package names.
 | Unity Mono and Unity package | Mono loader, plugin lifecycle, Runtime setup, package services, per-view D3D12 SR, presentation and input, D3D11 and Vulkan graphics, commands, shared surfaces and queued texture leases, D3D11 render-pass planning, Editor preview resources, Vulkan resolver state and checked package retirement are in Rust. Package render routing, preview admission, window checks and device events moved in `2eae8ede`. All ten package C exports matched in source, and bindgen 0.72.1 with pinned formatting matched the 55-slot table. Device, editor and player lifetime checks remain open. |
 | Steam, Fallout 4 and Skyrim SE | The shared Steam chain and both games' cold creation, identity, session lifecycle, camera math, screen and CPU event ownership are in Rust. Skyrim also owns its renderer observations, pre-HDR producers, presentation, resolution, auxiliaries and Community Shaders handover in Rust. Fallout 4's producer resolution, World and Present admission, render-input selection, render hook lifecycle, reduced-render recovery, SR/HUD-less publication, render scopes, imagespace and TAA, and viewport, dynamic-resolution and prepass decisions are in Rust. Verify producer identity, recovery and presentation in game. |
 | AC7 | The game DLL's GameSDK, native site admission, scene and velocity patches, renderer transaction, TrueSky, queued scopes, view buffer, UI, scene colour, contact-shadow rewrite, velocity shaders, variants, history, stream and commit planning, and per-device velocity renderer lifetime are in Rust. F9 scheduling, root registration, draw, dispatch, geometry and before-draw records and carrier startup admission are also in Rust. Native GPU reads and artifact I/O retain their existing boundaries. |
-| Godot | The native control, D3D12 and Vulkan sessions and SR contexts, D3D12 submission ledger, window and input routing, Vulkan creation, Auto provider routing and compositor diagnostics are in Rust. The private engine object owns viewport mode and identity, reset and render admission, CPU event records, the CPU frame lifecycle, render frame identity, and host boot, configuration, shutdown and viewport extent policy. SCons linkage and GDExtension, editor and player checks remain open. [Host lifecycle evidence](../integrations/godot/NATIVE.md#engine-module-host-lifecycle) |
+| Godot | The native control, D3D12 and Vulkan sessions and SR contexts, D3D12 submission ledger, window and input routing, Vulkan creation, Auto provider routing and compositor diagnostics are in Rust. The private engine object owns viewport mode and identity, reset and render admission, CPU event records, the CPU frame lifecycle, render frame identity, host boot, configuration, shutdown and viewport extent policy, and SR and final-scene pass records. Camera matrix math and driver calls remain native. SCons linkage and GDExtension, editor and player checks remain open. [Pass record evidence](../integrations/godot/NATIVE.md#engine-module-sr-and-final-scene-pass-records) |
 | Minecraft | The native session, surface, message observer, frame packets, settings and status are in Rust. The Java mod, typed JNI marshaling and linked Runtime entry points retain their existing contracts. |
 
 Merge coherent ownership changes to the migration branch and remove their
