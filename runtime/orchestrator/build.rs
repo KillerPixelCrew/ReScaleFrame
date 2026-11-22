@@ -43,6 +43,30 @@ fn shader_patch_parser() {
         .compile("rsf_patch_json");
 }
 
+fn sharpening_payload() {
+    let directory = "../graphics/src/sharpening";
+    for file in [
+        "pass_payload.cpp",
+        "options.h",
+        "rcas.h",
+        "da_rcas.h",
+        "da_das.h",
+        "depth_color.inc",
+    ] {
+        println!("cargo:rerun-if-changed={directory}/{file}");
+    }
+    let mut build = cc::Build::new();
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        build.flags(["/EHsc", "/Zl"]);
+    }
+    build
+        .cpp(true)
+        .std("c++17")
+        .warnings_into_errors(true)
+        .file(format!("{directory}/pass_payload.cpp"))
+        .compile("rsf_sharpening_payload");
+}
+
 fn main() {
     let sources = [
         "src/plugin_callbacks.cpp",
@@ -63,6 +87,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../../sdk/game/include");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         shader_patch_parser();
+        sharpening_payload();
         let mut build = cc::Build::new();
         if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
             // The final CMake or Cargo binary selects its CRT, including Debug.

@@ -67,3 +67,28 @@ Verification was limited to source checks, formatting with Rust 1.94.1 and
 bindings regenerated with bindgen 0.72.1. Comparing the GPL files to the baseline
 showed the original shader and host constant-mapping content was preserved.
 Build, test, Clippy and device validation are user-owned.
+
+## Follow-up from `726c5e18`
+
+- `tests/engine_sharpening.cpp` was replaced by `tests/engine_sharpening.rs`.
+  CTest retains the Godot and Unity target gates, DLL paths and test name.
+  Bindgen supplies the two engine settings layouts and the Vulkan SR frame
+  assertions. The fixture still round-trips all five modes through the actual
+  DLL exports and verifies that rejected requests preserve the settings.
+- `runtime/graphics/src/sharpening/d3d12.cpp` was removed. The Rust host uses
+  typed D3D12 interfaces to create the root signature, pipelines, per-slot
+  descriptors and scratch texture, and to record and copy the result. The
+  output transitions from UAV to shader-read to copy destination and back to
+  UAV, and scratch returns to UAV. The engine still owns command submission
+  and slot retirement. Shader compilation calls the Rust G06 compiler with
+  the same source, entry, profile and flags. The GPL payload bridge only
+  returns the original HLSL text and packs the original constant layout.
+- `runtime/graphics/src/sharpening/d3d12_platform.h` is now a single-call C
+  contract with generated Rust layout assertions. The C++ lifetime facade in
+  `runtime/graphics/src/sharpening/d3d12.h` still serves the D3D12 host and
+  fixture.
+
+These conclusions come from source comparison, regenerated bindings and
+pinned formatting. The C++ shader payloads and GPL options header were
+compared against the follow-up baseline without differences. Compilation and
+fixture execution remain pending.
