@@ -366,6 +366,47 @@ Tracked Markdown is 6,387 KB; `docs/` is 5.55 MB. The C++-to-Rust port is narrat
 - [x] **DOC-D7.7 `docs/current-status.md` (185 lines) is a dated diary** ("16 November", "15 November", "End-of-day checkpoint, 25 October") that duplicates `implementation.md:4603-5600`. Keep: a table of built / synthetic / game / device per integration (the DOC-D3 table), dated paragraphs dropped. Confidence: m. **Status (reduce-rb-docs):** Not done. Only the ABI table was corrected; the dated paragraphs record acceptance results AGENTS.md requires. **Follow-up:** Done. `docs/current-status.md` opens with one table of the latest recorded acceptance per integration (Fallout 4, Skyrim SE, Anomaly, Godot, Unity); the 25 October end-of-day paragraph, the 7 October documentation-check paragraph and the long Godot prose are dropped (the tracker keeps the restart checkpoint).
 - [x] **OV-J + S-docs Stale comments and README sections in the runtime area.** `runtime/backends/README.md:23-47` (AC7 motion notes, Wine notes) is research, not a backends README; move to `docs/research/`. `runtime/vulkan/README.md:21-30` is current (the managed host module `runtime/managed/ReScaleFrame.Vulkan` exists). The contradictions in `runtime/backends/README.md:5,15` and the `dlss_streamline.cpp` citations are in X6. Keep: one home for the AC7 and Wine notes. Confidence: m. **Status (reduce-rb-docs):** Done. The AC7 motion, Streamline and Wine notes moved from `runtime/backends/README.md` to `docs/research/dlss-backend-notes.md`.
 
+### Round 2: games/fallout4 and games/skyrim-se
+
+Logic-level review of both adapters, module by module. Most of the code is exact-build native admission
+(RVAs, expected bytes, owner and camera proofs, refusal receipts), which is the evidence the adapters exist
+for, so the cuts are repeated helpers, forwarding layers and C-shaped signatures, not admission checks.
+
+- `fallout4/lib.rs`: owns the one guarded `load`, `guard` (rva plus expected bytes, any length), `bits` and
+  `same_object`; `matches_bytes::<N>` is gone.
+- `fallout4/depth_domains.rs`, `render_inputs.rs`, `resolution.rs`, `screen.rs`, `render_hooks.rs`,
+  `cpu_events/native.rs`: deleted their private copies of those helpers (three `load`, six byte comparers,
+  two `bits`, two `same_object`); `depth_domains` reuses `camera::above` instead of its own copy.
+  `cpu_events` and `native.rs` now call the shared `load` (address first), so every module reads engine
+  memory the same way.
+- `fallout4/creation.rs`, `session.rs`, `render_hooks.rs`, `render_inputs.rs`, `cpu_events.rs`: `ExactBuild`
+  was a unit struct passed as an ignored argument through four `prepare` functions; `admit_build` returns
+  `bool`. `render_hooks::prepare` repeated the guard walk `session::prepare` had just run, and
+  `render_inputs::verify` took an always-true closure; both are gone.
+- `fallout4/render_hooks/recovery.rs`, `publication.rs`, `imagespace.rs`: `Leaves::report_text` duplicated
+  `Leaves::report`.
+- Fallout 4 comments: about twenty that narrated the C++ port (stack lease, value-initialized record, MSVC `%p`
+  history) now state the behaviour or are removed; same for three in Skyrim `session.rs`.
+- `skyrim-se/cpu_sources.rs`, `cpu_events.rs`, `cpu_policy.rs`: the `rsf_skyrim_jobs_*`, `_epochs_*` and
+  `_poll_*` functions only forwarded to `JOBS`, `EPOCHS` or one `PollScope` field, so `cpu_events` calls those
+  directly. The event builders, `queued_move`, `free_camera`, `sources_reserve/adopt/owned/release` and
+  `worker_counts` return values instead of filling caller-owned out records. The four redeclared
+  `SCREEN_*` constants use `rsf_game_sys::RSF_SCREEN_*`.
+- `skyrim-se/platform.rs`, `cpu_events.rs`, `CMakeLists.txt`, `build.rs`: the SEH `rsf_skyrim_guarded_read` leaf
+  duplicated `rsf_game_sys::win32::read_process` (same signature); Rust and the CPU input-kind reader use the
+  SDK function and `guarded_read.c` left the adapter. Finishes the Skyrim part of S3.3 + S6 + GO-B5; the file
+  stays because the `skyrim_input` ctest executable links it directly (`tests/CMakeLists.txt`).
+- Kept, `fallout4/cpu_events.rs`: the native-cycle, gate, downstream and poll receipts and their bit
+  bookkeeping (`Terms`, `PhaseChecks`, `predicate_bits`, `first_seen`). Their only reader is the log, but
+  `engine.json` names them as the pending live attribution of the CPU refusal predicate, so they have a
+  consumer until that run is done.
+- Kept, `fallout4/render_hooks/*`: the `Leaves` and `NativeRecoveryLeaves` tables. Their other half is
+  `render_hooks.c` in the same archive, so they are C-to-Rust seams; dropping them means rewriting that leaf
+  and every render-seam fixture, which belongs to a tested change.
+- Kept, Skyrim `session.rs` `subsystems` module: it is the narrow `cfg(test)` seam the lifecycle tests use.
+- Kept, Skyrim `sources_*` functions: they scope the store lock, whose guard must drop before the host
+  callback that receives the result; calling the methods inline would hold it across the callback.
+
 ## Scope
 
 - **375 C++ implementation files**, including 168 under `tests/`. All have the `.cpp` suffix in this revision.
