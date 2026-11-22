@@ -577,26 +577,34 @@ impl Dispatcher {
                 if pending.message_id == 0 && pending.input_kind == 0 {
                     continue;
                 }
-                if pending.session_id == event.session_id
-                    && (pending.message_id == state.ping_message
-                        || (pending.input_kind != 0 && pending.flags & UNFRAMED != 0))
-                    && pending.qpc_frequency == event.qpc_frequency
+                if pending.session_id != event.session_id
+                    || pending.qpc_frequency != event.qpc_frequency
                 {
-                    if pending.timestamp_qpc > event.timestamp_qpc {
-                        continue;
-                    }
-                    if event.timestamp_qpc - pending.timestamp_qpc <= event.qpc_frequency / 4 {
-                        let mut message = *pending;
-                        message.source_frame_id = event.source_frame_id;
-                        if message.flags & UNFRAMED == 0 {
-                            message.timestamp_qpc = event.timestamp_qpc;
-                        }
-                        ready[count] = message;
-                        count += 1;
-                    } else {
+                    // The receipt belongs to a different session or clock.
+                    *pending = EMPTY_EVENT;
+                    continue;
+                }
+                let Some(age) = event.timestamp_qpc.checked_sub(pending.timestamp_qpc) else {
+                    continue;
+                };
+                let eligible = pending.message_id == state.ping_message
+                    || (pending.input_kind != 0 && pending.flags & UNFRAMED != 0);
+                if age > event.qpc_frequency / 4 {
+                    if eligible {
                         state.totals.expired_messages =
                             state.totals.expired_messages.wrapping_add(1);
                     }
+                } else if eligible {
+                    let mut message = *pending;
+                    message.source_frame_id = event.source_frame_id;
+                    if message.flags & UNFRAMED == 0 {
+                        message.timestamp_qpc = event.timestamp_qpc;
+                    }
+                    ready[count] = message;
+                    count += 1;
+                } else {
+                    // Registration can arrive before the next eligible frame.
+                    continue;
                 }
                 *pending = EMPTY_EVENT;
             }
