@@ -61,7 +61,7 @@ typedef struct rsf_anomaly_swap_target {
 typedef struct rsf_anomaly_swap_facts {
     void* render_target;              // CRenderTarget* passed to phase_scene_prepare
     void* backend;                    // &RCache, for the texture-slot cache invalidation; null skips it
-    uint64_t device;                  // HW.pDevice identity
+    void* device;                     // HW.pDevice identity
     uint64_t generation;              // reset generation (native observer)
     uint32_t device_width, device_height;   // Device.dwWidth/dwHeight at H1: the output size
     bool scope, msaa;

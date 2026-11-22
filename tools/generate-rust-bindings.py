@@ -205,11 +205,12 @@ generate("games/anomaly/src/sr_swap_abi.rs", "games/anomaly/src/sr_swap_platform
          "RSF_ANOMALY_SWAP_.*", [],
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]"])
 generate("games/anomaly/src/sr_stage_abi.rs", "games/anomaly/src/sr_stage_platform.h",
-         "rsf_anomaly_sr_(log|settings|stage_(config|platform)|driver_config|jitter_(state|sample|uv|sequence)|burst_(gate|verdict)|plan|frame_(facts|reads)|controller|"
-         "swap_counters|camera|pass(_inputs)?|planes|pose|reset_facts|motion_target|timer|choices)",
+         "rsf_anomaly_sr_(log|settings|stage_(config|platform)|driver_config|jitter_(state|sample|uv|sequence)|burst_(gate|verdict)|plan|frame_reads|controller|"
+         "camera|pass(_inputs)?|planes|pose|reset_facts|motion_target|timer|choices)",
          "RSF_ANOMALY_SR_.*", [],
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "use crate::sr_d3d11::DrawViews as rsf_sr_draw_views;",
+          "--raw-line", "pub use crate::sr_swap_abi::{rsf_anomaly_swap_facts as rsf_anomaly_sr_frame_facts, rsf_anomaly_swap_counters as rsf_anomaly_sr_swap_counters};",
           "--raw-line", "use rsf_game_sys::rsf_camera_frame;"])
 generate("games/unity-mono/src/plugin_abi.rs", "games/unity-mono/src/plugin_platform.h",
          "rsf_unity_(native_api|plugin_platform)", "NOTHING",

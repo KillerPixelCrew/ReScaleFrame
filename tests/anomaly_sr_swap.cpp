@@ -109,7 +109,7 @@ struct Engine {
         put<float>(viewport.data(), ssao_viewport_width_offset, w);
         put<float>(viewport.data(), ssao_viewport_height_offset, h);
     }
-    FrameFacts facts() { return {target.data(), backend.data(), 0x1234, 0, width, height, false, false}; }
+    FrameFacts facts() { return {target.data(), backend.data(), reinterpret_cast<void*>(uintptr_t{0x1234}), 0, width, height, false, false}; }
     FrameFacts facts2(float scale = 0.67f) {
         auto f = facts();
         ScalePlan plan{};
@@ -507,7 +507,7 @@ void reset_and_resize() {
     c.rebase();
     CHECK(c.controller.prepare(facts) && c.controller.seam() && c.stock() && c.host.makes == 4);
     // The device changes (a new device after a full restart).
-    facts.device = 0x5678;
+    facts.device = reinterpret_cast<void*>(uintptr_t{0x5678});
     CHECK(c.controller.prepare(facts) && c.controller.seam() && c.stock() && c.host.makes == 5);
 }
 

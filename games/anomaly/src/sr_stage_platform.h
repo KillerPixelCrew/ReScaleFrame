@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "sr_swap_platform.h"
 
 struct rsf_camera_frame;
 struct rsf_game_render_pass;
@@ -104,27 +105,7 @@ void rsf_anomaly_sr_burst_interrupted(rsf_anomaly_sr_burst_gate*);
 #endif
 
 // FrameFacts (sr_swap.h). Rust fills admission, sizes, jitter and bias from the native reads.
-typedef struct rsf_anomaly_sr_frame_facts {
-    void* render_target;
-    void* backend;
-    uint64_t device, generation;
-    uint32_t device_width, device_height;
-    bool scope, msaa;
-    uint32_t stage, render_width, render_height;
-    void* device_size;
-    void* base_zb;
-    void* base_rt;
-    void* ssao_viewport;
-    void* ssao_viewport_guard;
-    bool jitter;
-    float jitter_x, jitter_y;
-    void* device_view;
-    void* device_project;
-    void* device_full_transform;
-    bool mip_bias;
-    float mip_bias_delta;
-    void* sampler_bias;
-} rsf_anomaly_sr_frame_facts;
+typedef rsf_anomaly_swap_facts rsf_anomaly_sr_frame_facts;
 
 typedef struct rsf_anomaly_sr_frame_reads {
     rsf_anomaly_sr_frame_facts facts;
@@ -141,20 +122,7 @@ typedef struct rsf_anomaly_sr_controller {
     const char* refusal;
 } rsf_anomaly_sr_controller;
 
-#define RSF_ANOMALY_SR_SKIPS 6
-#define RSF_ANOMALY_SR_RESTORES 6
-// SwapCounters (sr_swap.h), copied field by field. Skip and Restore keep their enum order.
-typedef struct rsf_anomaly_sr_swap_counters {
-    uint64_t prepares, eligible, swapped, seams, seams_without_window, round_trips, round_trip_failures;
-    uint64_t combine_ends, rm_near_in_window, twin_generations, twin_drops, foreign_changes, write_faults;
-    uint64_t allocation_failures, viewports, ssao_viewport_swaps;
-    uint64_t jittered, jitter_invalid, fp_jittered, fp_already, fp_foreign, projection_restores;
-    uint64_t mip_applied, mip_restored, mip_unchanged;
-    uint64_t sun_calls, sun_unjittered, sun_restored, sun_refused;
-    uint64_t position_corrected, position_stock, position_refused;
-    uint64_t skipped[RSF_ANOMALY_SR_SKIPS];
-    uint64_t restores[RSF_ANOMALY_SR_RESTORES];
-} rsf_anomaly_sr_swap_counters;
+typedef rsf_anomaly_swap_counters rsf_anomaly_sr_swap_counters;
 
 // Device.mView and the unjittered Device.mProject (row-vector engine matrices) at a main-view H1.
 typedef struct rsf_anomaly_sr_camera {

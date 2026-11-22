@@ -436,7 +436,7 @@ impl Case {
         Facts {
             render_target: (&raw mut (unsafe { &mut *e }).target).cast(),
             backend: (&raw mut (unsafe { &mut *e }).backend).cast(),
-            device: 0x1234,
+            device: std::ptr::without_provenance_mut(0x1234),
             device_width: 1920,
             device_height: 1080,
             ..Facts::default()

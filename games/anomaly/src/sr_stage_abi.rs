@@ -3,6 +3,7 @@
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
 use crate::sr_d3d11::DrawViews as rsf_sr_draw_views;
+pub use crate::sr_swap_abi::{rsf_anomaly_swap_facts as rsf_anomaly_sr_frame_facts, rsf_anomaly_swap_counters as rsf_anomaly_sr_swap_counters};
 use rsf_game_sys::rsf_camera_frame;
 
 pub const RSF_ANOMALY_SR_MIN_SCALE: f64 = 0.33;
@@ -12,8 +13,6 @@ pub const RSF_ANOMALY_SR_MIN_MIP_OFFSET: f64 = -2.0;
 pub const RSF_ANOMALY_SR_MAX_MIP_OFFSET: f64 = 1.0;
 pub const RSF_ANOMALY_SR_DEFAULT_MIP_OFFSET: f64 = 0.0;
 pub const RSF_ANOMALY_SR_BURST_SETTLE: u32 = 30;
-pub const RSF_ANOMALY_SR_SKIPS: u32 = 6;
-pub const RSF_ANOMALY_SR_RESTORES: u32 = 6;
 pub const RSF_ANOMALY_SR_MAIN_VIEW_KEY: u32 = 1;
 pub const RSF_ANOMALY_SR_MOTION_TO_UV: f64 = 1.0;
 pub const RSF_ANOMALY_SR_MOTION_CAMERA_INCLUDED: u32 = 0;
@@ -328,102 +327,6 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_sr_burst_verdict, discard) - 1usize];
 };
 #[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_anomaly_sr_frame_facts {
-    pub render_target: *mut ::core::ffi::c_void,
-    pub backend: *mut ::core::ffi::c_void,
-    pub device: u64,
-    pub generation: u64,
-    pub device_width: u32,
-    pub device_height: u32,
-    pub scope: bool,
-    pub msaa: bool,
-    pub stage: u32,
-    pub render_width: u32,
-    pub render_height: u32,
-    pub device_size: *mut ::core::ffi::c_void,
-    pub base_zb: *mut ::core::ffi::c_void,
-    pub base_rt: *mut ::core::ffi::c_void,
-    pub ssao_viewport: *mut ::core::ffi::c_void,
-    pub ssao_viewport_guard: *mut ::core::ffi::c_void,
-    pub jitter: bool,
-    pub jitter_x: f32,
-    pub jitter_y: f32,
-    pub device_view: *mut ::core::ffi::c_void,
-    pub device_project: *mut ::core::ffi::c_void,
-    pub device_full_transform: *mut ::core::ffi::c_void,
-    pub mip_bias: bool,
-    pub mip_bias_delta: f32,
-    pub sampler_bias: *mut ::core::ffi::c_void,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_anomaly_sr_frame_facts"]
-        [::core::mem::size_of::<rsf_anomaly_sr_frame_facts>() - 152usize];
-    ["Alignment of rsf_anomaly_sr_frame_facts"]
-        [::core::mem::align_of::<rsf_anomaly_sr_frame_facts>() - 8usize];
-    ["Offset of field: rsf_anomaly_sr_frame_facts::render_target"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_frame_facts, render_target) - 0usize];
-    ["Offset of field: rsf_anomaly_sr_frame_facts::backend"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_frame_facts, backend) - 8usize];
-    ["Offset of field: rsf_anomaly_sr_frame_facts::device"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_frame_facts, device) - 16usize];
-    ["Offset of field: rsf_anomaly_sr_frame_facts::generation"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_frame_facts, generation) - 24usize];
-    ["Offset of field: rsf_anomaly_sr_frame_facts::device_width"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_frame_facts, device_width) - 32usize];
-    ["Offset of field: rsf_anomaly_sr_frame_facts::device_height"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_frame_facts, device_height) - 36usize];
-    ["Offset of field: rsf_anomaly_sr_frame_facts::scope"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_frame_facts, scope) - 40usize];
-    ["Offset of field: rsf_anomaly_sr_frame_facts::msaa"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_frame_facts, msaa) - 41usize];
-    ["Offset of field: rsf_anomaly_sr_frame_facts::stage"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_frame_facts, stage) - 44usize];
-    ["Offset of field: rsf_anomaly_sr_frame_facts::render_width"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_frame_facts, render_width) - 48usize];
-    ["Offset of field: rsf_anomaly_sr_frame_facts::render_height"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_frame_facts, render_height) - 52usize];
-    ["Offset of field: rsf_anomaly_sr_frame_facts::device_size"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_frame_facts, device_size) - 56usize];
-    ["Offset of field: rsf_anomaly_sr_frame_facts::base_zb"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_frame_facts, base_zb) - 64usize];
-    ["Offset of field: rsf_anomaly_sr_frame_facts::base_rt"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_frame_facts, base_rt) - 72usize];
-    ["Offset of field: rsf_anomaly_sr_frame_facts::ssao_viewport"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_frame_facts, ssao_viewport) - 80usize];
-    ["Offset of field: rsf_anomaly_sr_frame_facts::ssao_viewport_guard"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_frame_facts, ssao_viewport_guard) - 88usize];
-    ["Offset of field: rsf_anomaly_sr_frame_facts::jitter"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_frame_facts, jitter) - 96usize];
-    ["Offset of field: rsf_anomaly_sr_frame_facts::jitter_x"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_frame_facts, jitter_x) - 100usize];
-    ["Offset of field: rsf_anomaly_sr_frame_facts::jitter_y"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_frame_facts, jitter_y) - 104usize];
-    ["Offset of field: rsf_anomaly_sr_frame_facts::device_view"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_frame_facts, device_view) - 112usize];
-    ["Offset of field: rsf_anomaly_sr_frame_facts::device_project"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_frame_facts, device_project) - 120usize];
-    ["Offset of field: rsf_anomaly_sr_frame_facts::device_full_transform"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_frame_facts, device_full_transform) - 128usize];
-    ["Offset of field: rsf_anomaly_sr_frame_facts::mip_bias"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_frame_facts, mip_bias) - 136usize];
-    ["Offset of field: rsf_anomaly_sr_frame_facts::mip_bias_delta"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_frame_facts, mip_bias_delta) - 140usize];
-    ["Offset of field: rsf_anomaly_sr_frame_facts::sampler_bias"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_frame_facts, sampler_bias) - 144usize];
-};
-impl Default for rsf_anomaly_sr_frame_facts {
-    fn default() -> Self {
-        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
-        unsafe {
-            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
-            s.assume_init()
-        }
-    }
-}
-#[repr(C)]
-#[derive(Copy, Clone)]
 pub struct rsf_anomaly_sr_frame_reads {
     pub facts: rsf_anomaly_sr_frame_facts,
     pub render_view: u32,
@@ -510,119 +413,6 @@ impl Default for rsf_anomaly_sr_controller {
         }
     }
 }
-#[repr(C)]
-#[derive(Default, Copy, Clone)]
-pub struct rsf_anomaly_sr_swap_counters {
-    pub prepares: u64,
-    pub eligible: u64,
-    pub swapped: u64,
-    pub seams: u64,
-    pub seams_without_window: u64,
-    pub round_trips: u64,
-    pub round_trip_failures: u64,
-    pub combine_ends: u64,
-    pub rm_near_in_window: u64,
-    pub twin_generations: u64,
-    pub twin_drops: u64,
-    pub foreign_changes: u64,
-    pub write_faults: u64,
-    pub allocation_failures: u64,
-    pub viewports: u64,
-    pub ssao_viewport_swaps: u64,
-    pub jittered: u64,
-    pub jitter_invalid: u64,
-    pub fp_jittered: u64,
-    pub fp_already: u64,
-    pub fp_foreign: u64,
-    pub projection_restores: u64,
-    pub mip_applied: u64,
-    pub mip_restored: u64,
-    pub mip_unchanged: u64,
-    pub sun_calls: u64,
-    pub sun_unjittered: u64,
-    pub sun_restored: u64,
-    pub sun_refused: u64,
-    pub position_corrected: u64,
-    pub position_stock: u64,
-    pub position_refused: u64,
-    pub skipped: [u64; 6usize],
-    pub restores: [u64; 6usize],
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_anomaly_sr_swap_counters"]
-        [::core::mem::size_of::<rsf_anomaly_sr_swap_counters>() - 352usize];
-    ["Alignment of rsf_anomaly_sr_swap_counters"]
-        [::core::mem::align_of::<rsf_anomaly_sr_swap_counters>() - 8usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::prepares"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, prepares) - 0usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::eligible"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, eligible) - 8usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::swapped"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, swapped) - 16usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::seams"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, seams) - 24usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::seams_without_window"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, seams_without_window) - 32usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::round_trips"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, round_trips) - 40usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::round_trip_failures"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, round_trip_failures) - 48usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::combine_ends"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, combine_ends) - 56usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::rm_near_in_window"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, rm_near_in_window) - 64usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::twin_generations"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, twin_generations) - 72usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::twin_drops"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, twin_drops) - 80usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::foreign_changes"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, foreign_changes) - 88usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::write_faults"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, write_faults) - 96usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::allocation_failures"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, allocation_failures) - 104usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::viewports"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, viewports) - 112usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::ssao_viewport_swaps"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, ssao_viewport_swaps) - 120usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::jittered"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, jittered) - 128usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::jitter_invalid"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, jitter_invalid) - 136usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::fp_jittered"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, fp_jittered) - 144usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::fp_already"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, fp_already) - 152usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::fp_foreign"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, fp_foreign) - 160usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::projection_restores"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, projection_restores) - 168usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::mip_applied"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, mip_applied) - 176usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::mip_restored"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, mip_restored) - 184usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::mip_unchanged"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, mip_unchanged) - 192usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::sun_calls"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, sun_calls) - 200usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::sun_unjittered"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, sun_unjittered) - 208usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::sun_restored"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, sun_restored) - 216usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::sun_refused"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, sun_refused) - 224usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::position_corrected"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, position_corrected) - 232usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::position_stock"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, position_stock) - 240usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::position_refused"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, position_refused) - 248usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::skipped"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, skipped) - 256usize];
-    ["Offset of field: rsf_anomaly_sr_swap_counters::restores"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_swap_counters, restores) - 304usize];
-};
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct rsf_anomaly_sr_camera {

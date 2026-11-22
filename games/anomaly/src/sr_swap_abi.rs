@@ -116,7 +116,7 @@ impl Default for rsf_anomaly_swap_target {
 pub struct rsf_anomaly_swap_facts {
     pub render_target: *mut ::core::ffi::c_void,
     pub backend: *mut ::core::ffi::c_void,
-    pub device: u64,
+    pub device: *mut ::core::ffi::c_void,
     pub generation: u64,
     pub device_width: u32,
     pub device_height: u32,

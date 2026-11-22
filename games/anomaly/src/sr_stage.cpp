@@ -92,8 +92,6 @@ static_assert(sizeof(SrGuardProfile) == 120 && offsetof(SrGuardProfile, unique) 
 extern "C" const char* rsf_anomaly_sr_guard_failure(const rsf_anomaly_guard_image*,
     const SrGuardProfile*, bool world_window, bool temporal) noexcept;
 
-static_assert(static_cast<std::size_t>(Skip::Count) == RSF_ANOMALY_SR_SKIPS &&
-    static_cast<std::size_t>(Restore::Count) == RSF_ANOMALY_SR_RESTORES);
 static_assert(static_cast<uint8_t>(Refusal::Prepare) == 2 && static_cast<uint8_t>(Refusal::Reinsert) == 5);
 static_assert(DXGI_FORMAT_R16G16B16A16_FLOAT == 10 && RSF_DUMP_VIEW_HDR == 3 && RSF_DUMP_VIEW_DEPTH == 4 &&
     RSF_DUMP_VIEW_DENSE_MOTION == 7 && RSF_PHASE_RENDER_SUBMIT == 2 && RSF_SCREEN_UNKNOWN == 0);
@@ -409,36 +407,10 @@ const rsf_anomaly_sr_stage_platform platform{
     .build_sha256 = []() -> const char* { return build ? build->sha256 : ""; },
     .close_stale = [] { controller.close_stale(); },
     .prepare = [](const rsf_anomaly_sr_frame_facts* in, rsf_anomaly_sr_log log, void* user) {
-        FrameFacts facts{};
-        facts.render_target = static_cast<std::byte*>(in->render_target);
-        facts.backend = static_cast<std::byte*>(in->backend);
-        facts.device = in->device;
-        facts.generation = in->generation;
-        facts.device_width = in->device_width;
-        facts.device_height = in->device_height;
-        facts.scope = in->scope;
-        facts.msaa = in->msaa;
-        facts.stage = in->stage;
-        facts.render_width = in->render_width;
-        facts.render_height = in->render_height;
-        facts.device_size = static_cast<std::byte*>(in->device_size);
-        facts.base_zb = static_cast<std::byte*>(in->base_zb);
-        facts.base_rt = static_cast<std::byte*>(in->base_rt);
-        facts.ssao_viewport = static_cast<std::byte*>(in->ssao_viewport);
-        facts.ssao_viewport_guard = static_cast<std::byte*>(in->ssao_viewport_guard);
-        facts.jitter = in->jitter;
-        facts.jitter_x = in->jitter_x;
-        facts.jitter_y = in->jitter_y;
-        facts.device_view = static_cast<std::byte*>(in->device_view);
-        facts.device_project = static_cast<std::byte*>(in->device_project);
-        facts.device_full_transform = static_cast<std::byte*>(in->device_full_transform);
-        facts.mip_bias = in->mip_bias;
-        facts.mip_bias_delta = in->mip_bias_delta;
-        facts.sampler_bias = static_cast<std::byte*>(in->sampler_bias);
         const TwinLog call_log{log, user};
         const auto* previous = host.twin_log;
         host.twin_log = &call_log;
-        const bool prepared = controller.prepare(facts);
+        const bool prepared = controller.prepare(*in);
         host.twin_log = previous;
         return prepared;
     },
@@ -462,16 +434,7 @@ const rsf_anomaly_sr_stage_platform platform{
             controller.stage(), controller.render_width(), controller.render_height(), controller.window_mip_bias(),
             controller.saved_mip_bias(), controller.twin_generation(), controller.refusal()};
     },
-    .swap_counters = [](rsf_anomaly_sr_swap_counters* out) {
-        const auto& c = controller.counters();
-        *out = {c.prepares, c.eligible, c.swapped, c.seams, c.seams_without_window, c.round_trips, c.round_trip_failures,
-            c.combine_ends, c.rm_near_in_window, c.twin_generations, c.twin_drops, c.foreign_changes, c.write_faults,
-            c.allocation_failures, c.viewports, c.ssao_viewport_swaps, c.jittered, c.jitter_invalid, c.fp_jittered,
-            c.fp_already, c.fp_foreign, c.projection_restores, c.mip_applied, c.mip_restored, c.mip_unchanged, c.sun_calls,
-            c.sun_unjittered, c.sun_restored, c.sun_refused, c.position_corrected, c.position_stock, c.position_refused};
-        std::copy(std::begin(c.skipped), std::end(c.skipped), out->skipped);
-        std::copy(std::begin(c.restores), std::end(c.restores), out->restores);
-    },
+    .swap_counters = [](rsf_anomaly_sr_swap_counters* out) { *out = controller.counters(); },
     .timer_retain_device = [](void* device) {
         static_cast<ID3D11Device*>(device)->AddRef();
         return device;
