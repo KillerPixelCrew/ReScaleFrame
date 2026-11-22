@@ -1,8 +1,15 @@
-"""Regenerate the FSR4 Vulkan SR SDK descriptor projection."""
+"""Regenerate the FSR4 Vulkan SR SDK descriptor projection.
+
+Stays committed: the FidelityFX SDK checkout is not part of the repository. Pass --check to
+compare the committed output instead of writing it.
+"""
 import os
 from pathlib import Path
 import subprocess
 import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
+from committed_bindings import emit, finish  # noqa: E402
 
 sdk = Path(sys.argv[1]).resolve()
 revision = subprocess.check_output(["git", "-C", sdk, "rev-parse", "HEAD"], text=True).strip()
@@ -27,4 +34,5 @@ result = subprocess.check_output([
     "--", "-x", "c++", "--target=x86_64-pc-windows-msvc",
     "-include", "stddef.h", "-I" + str(include / "api/include"),
 ])
-Path(__file__).with_name("sdk_abi.rs").write_bytes(result.replace(b"\r\n", b"\n"))
+emit(Path(__file__).with_name("sdk_abi.rs"), result)
+finish()

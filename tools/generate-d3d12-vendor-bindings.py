@@ -1,13 +1,21 @@
-"""Regenerate D3D12 vendor ABI records from the repository-pinned SDK headers."""
+"""Regenerate D3D12 vendor ABI records from the repository-pinned SDK headers.
+
+Stays committed: the XeSS, FidelityFX and NVAPI headers live in the gitignored vendor/ checkout.
+Pass --check to compare the committed outputs instead of writing them.
+"""
 import argparse
 import os
 import subprocess
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from committed_bindings import emit, finish  # noqa: E402
 
 
 def generate(bindgen, header, pattern, output, aliases, clang_args, constants='NOTHING', *, recursive=False):
-    subprocess.run([
-        bindgen, str(header), "--output", str(output), "--allowlist-type", pattern,
+    emit(output, subprocess.check_output([
+        bindgen, str(header), "--allowlist-type", pattern,
         "--allowlist-var", constants, *([] if recursive else ["--no-recursive-allowlist"]),
         "--no-prepend-enum-name", "--with-derive-default",
         "--no-derive-debug", "--no-doc-comments", "--use-core",
@@ -16,8 +24,7 @@ def generate(bindgen, header, pattern, output, aliases, clang_args, constants='N
         *[item for alias in aliases for item in ("--raw-line", alias)],
         "--", "--target=x86_64-pc-windows-msvc", "-DCINTERFACE", "-include", "stdbool.h",
         *clang_args,
-    ], check=True)
-    output.write_bytes(output.read_bytes().replace(b"\r\n", b"\n"))
+    ]))
 
 
 def main():
@@ -39,6 +46,7 @@ def main():
                  ["#![allow(non_upper_case_globals, clippy::useless_transmute)]"],
                  ["-include", "sal.h"],
                  recursive=True)
+        finish()
         return
 
     aliases = [f"type ID3D12{name} = ::core::ffi::c_void;"
@@ -93,6 +101,7 @@ def main():
               *[f"type {name} = ::core::ffi::c_void;" for name in ("IDXGISwapChain4", "IDXGIFactory", "ID3D12CommandQueue")]],
              [f"-I{api}", f"-I{args.fidelityfx / 'framegeneration/include'}"],
              r"FFX_FRAMEGENERATION(_SWAPCHAIN_DX12)?_VERSION_(MAJOR|MINOR|PATCH)")
+    finish()
 
 
 if __name__ == "__main__":

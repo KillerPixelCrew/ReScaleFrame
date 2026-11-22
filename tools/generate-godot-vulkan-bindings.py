@@ -1,11 +1,19 @@
-"""Generate the typed Godot creation ABI from the pinned engine Vulkan headers."""
+"""Generate the typed Godot creation ABI from the pinned engine Vulkan headers.
+
+Stays committed: the Godot engine checkout is not part of the repository. Pass --check to compare
+the committed output instead of writing it.
+"""
 
 import argparse
 import os
 import re
 import subprocess
 from pathlib import Path
+import sys
 from tempfile import TemporaryDirectory
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from committed_bindings import emit, finish  # noqa: E402
 
 root = Path(__file__).resolve().parents[1]
 bindgen = os.environ.get("BINDGEN", "bindgen")
@@ -96,7 +104,7 @@ with TemporaryDirectory() as directory:
              "--blocklist-type", "^rsf_(frame_record|game_render_pass|sharpening_options)$",
              "--raw-line", "#![allow(non_camel_case_types, non_snake_case, dead_code)]",
              "--raw-line", "#![allow(non_upper_case_globals)]",
-             "--raw-line", "use rsf_game_sys::sharpening_abi::rsf_sharpening_options;",
+             "--raw-line", "use rsf_game_sys::rsf_sharpening_options;",
              "--raw-line", "use rsf_game_sys::{rsf_frame_record, rsf_game_render_pass};",
              "--raw-line", "pub type VkStructureType = ::core::ffi::c_int;", "--use-core",
              "--no-doc-comments", "--no-derive-debug", "--with-derive-default", *extra,
@@ -113,4 +121,5 @@ with TemporaryDirectory() as directory:
     uncopied = re.findall(r"^#\[repr\(C\)\]\n(?!#\[derive\([^)]*Copy)(?:#\[.*\]\n)*pub struct (\w+) \{",
                           plain, re.M)
     output = generate("--with-derive-custom-struct", f"^({'|'.join(uncopied)})$=Copy,Clone")
-(root / "integrations/godot/native/vulkan/creation/abi.rs").write_bytes(output.replace(b"\r\n", b"\n"))
+emit(root / "integrations/godot/native/vulkan/creation/abi.rs", output)
+finish()
