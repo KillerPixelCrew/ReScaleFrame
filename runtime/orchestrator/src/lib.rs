@@ -152,6 +152,8 @@ mod frame_assembly;
 #[cfg(windows)]
 mod frame_capture12;
 mod frame_capture_vk;
+#[cfg(windows)]
+mod frame_limit;
 mod frame_sequencer;
 #[cfg(windows)]
 mod frame_tap;

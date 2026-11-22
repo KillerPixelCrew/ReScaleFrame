@@ -1438,6 +1438,7 @@ impl Host {
         stats.fg_requested_generated = prefs.generated_frames;
         stats.reflex_requested_mode = prefs.latency;
         stats.frame_limit_us = prefs.frame_limit_us;
+        stats.display_refresh_mhz = crate::frame_limit::pacing_refresh_mhz();
         let options = self.diagnostic_options(capture, graphics);
         stats.host_options = options.as_ptr();
         stats.host_option_count = options.len() as u32;

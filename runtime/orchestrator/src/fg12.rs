@@ -923,6 +923,11 @@ unsafe extern "C" fn prepare(
     let valid = !list.is_null() && !buffer.is_null() && cpu_allows_fg(frame, timing, generation);
     let reason = eligibility(slot, view, valid, needs_hudless);
     let options = owner.options;
+    unsafe { crate::frame_limit::observe_pacing_display(options.frame_limit_us, chain) };
+    let mut effective = capability;
+    if reason != 0 {
+        crate::fg_status::deactivate(&mut effective);
+    }
     let mut request = rsf_fg_options {
         struct_size: size_of::<rsf_fg_options>() as u32,
         abi_version: RSF_FG_ABI_VERSION,
@@ -940,10 +945,12 @@ unsafe extern "C" fn prepare(
         } else {
             RSF_REFLEX_OFF
         },
-        frame_limit_us: if matches!(capability.pacing_owner, RSF_PACING_XELL | RSF_PACING_REFLEX) {
-            options.frame_limit_us
-        } else {
-            0
+        frame_limit_us: match capability.pacing_owner {
+            RSF_PACING_REFLEX => crate::frame_limit::reflex_interval(options.frame_limit_us, 1),
+            RSF_PACING_XELL => {
+                crate::frame_limit::application_interval(options.frame_limit_us, &effective)
+            }
+            _ => 0,
         },
     };
     let result = unsafe { configure(context, &request) };

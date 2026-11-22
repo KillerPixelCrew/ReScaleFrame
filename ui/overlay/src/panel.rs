@@ -1330,8 +1330,7 @@ fn latency_toggle(
     }
 }
 
-/// Reflex's own limiter. The value is rendered frames, so generation multiplies it. The panel
-/// receives the pointer only: the value is stepped, never typed.
+/// Fixed caps count rendered frames. VRR is a policy resolved by the pacing owner.
 fn frame_limit(
     ui: &mut Ui,
     generation: &GenerationStats,
@@ -1340,23 +1339,13 @@ fn frame_limit(
 ) {
     heading(ui, "Frame limit");
     let usable = generation.reflex_available;
-    let presents = if generation.requested_mode != 0 {
-        f64::from(generation.requested_generated.max(1) + 1)
-    } else {
-        1.0
-    };
-    let refresh_us = if generation.display_refresh_mhz > 0 {
-        1.0e9 / f64::from(generation.display_refresh_mhz)
-    } else {
-        0.0
-    };
     let stored = generation.frame_limit_us;
-    let fps = if stored == 0 {
+    let vrr = stored == crate::abi::RSF_OVERLAY_FRAME_LIMIT_VRR;
+    let fps = if stored == 0 || vrr {
         0.0
     } else {
         1.0e6 / f64::from(stored)
     };
-    let mut requested: Option<f64> = None;
 
     let (commit, rects) = ui
         .add_enabled_ui(usable, |ui| {
@@ -1380,7 +1369,11 @@ fn frame_limit(
                 },
                 |value| {
                     if value < 1.0 {
-                        "Off".to_owned()
+                        if vrr {
+                            "VRR".to_owned()
+                        } else {
+                            "Off".to_owned()
+                        }
                     } else {
                         format!("{value:.1} fps")
                     }
@@ -1389,26 +1382,27 @@ fn frame_limit(
         })
         .inner;
     controls.frame_limit = rects.map(Some);
-    if let Some(value) = commit {
-        requested = Some(if value < 1.0 { 0.0 } else { 1.0e6 / value });
-    }
+    let requested = commit.map(|fps| {
+        if fps < 1.0 {
+            0
+        } else {
+            (1.0e6 / fps).round() as u32
+        }
+    });
 
-    // The cap OptiScaler calculates for VRR: presented frames 0.3 ms slower than the refresh
-    // interval, here converted to the rendered frames this limit counts.
-    let vrr = presents * (refresh_us + 300.0);
-    let presets: [(&str, f64, bool); 5] = [
-        ("30", 1.0e6 / 30.0, true),
-        ("40", 1.0e6 / 40.0, true),
-        ("60", 1.0e6 / 60.0, true),
-        ("VRR", vrr, refresh_us > 0.0),
-        ("Off", 0.0, true),
+    let presets = [
+        ("30", 33_333),
+        ("40", 25_000),
+        ("60", 16_667),
+        ("VRR", crate::abi::RSF_OVERLAY_FRAME_LIMIT_VRR),
+        ("Off", 0),
     ];
     let items: Vec<Segment> = presets
         .iter()
-        .map(|(label, interval, enabled)| Segment {
+        .map(|(label, interval)| Segment {
             label: (*label).to_owned(),
-            enabled: usable && *enabled,
-            mark: if *enabled && stored == interval.round() as u32 {
+            enabled: usable,
+            mark: if stored == *interval {
                 Mark::On
             } else {
                 Mark::Off
@@ -1417,32 +1411,25 @@ fn frame_limit(
         .collect();
     let (chosen, rects) = segments(ui, "frame-limit-presets", &items);
     store(&mut controls.frame_limit_preset, &rects);
-    if let Some(index) = chosen {
-        requested = Some(presets[index].1);
+    if let Some(interval) = chosen.map(|index| presets[index].1).or(requested)
+        && interval != stored
+    {
+        intent.frame_limit_changed = true;
+        intent.frame_limit_us = interval;
     }
-    if let Some(interval) = requested {
-        // Saturating float to integer conversion; the range above keeps it small.
-        let interval = interval.round() as u32;
-        if interval != stored {
-            intent.frame_limit_changed = true;
-            intent.frame_limit_us = interval;
-        }
-    }
-    let line = if stored == 0 {
-        if refresh_us > 0.0 {
+    let line = if vrr {
+        if generation.display_refresh_mhz != 0 {
             format!(
-                "Limits rendered frames, before generation. VRR caps presented frames just under {:.0} Hz.",
-                1.0e6 / refresh_us
+                "VRR tracks the {:.0} Hz display.",
+                f64::from(generation.display_refresh_mhz) / 1000.0
             )
         } else {
-            "Limits rendered frames, before generation.".to_owned()
+            "VRR waits for output refresh information.".to_owned()
         }
+    } else if stored == 0 {
+        "Limits rendered frames, before generation.".to_owned()
     } else {
-        let rendered = 1.0e6 / f64::from(stored);
-        format!(
-            "{rendered:.1} fps rendered, up to {:.1} presented",
-            rendered * presents
-        )
+        format!("{fps:.1} fps rendered")
     };
     note(ui, line, MUTED);
 }
@@ -2381,6 +2368,7 @@ impl HudCache {
             };
             let limit = match detail.limit_us {
                 0 => "off".to_owned(),
+                crate::abi::RSF_OVERLAY_FRAME_LIMIT_VRR => "VRR".to_owned(),
                 interval => format!("{:.0} fps", 1.0e6 / f64::from(interval)),
             };
             rows.push(("SR", sr));

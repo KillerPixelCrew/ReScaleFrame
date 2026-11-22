@@ -758,6 +758,43 @@ mod tests {
     }
 
     #[test]
+    fn vrr_preset_sends_a_policy_instead_of_a_requested_multiplier() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.generation.available = true;
+        stats.generation.reflex_available = true;
+        stats.generation.requested_mode = 1;
+        stats.generation.requested_generated = 3;
+        stats.generation.display_refresh_mhz = 120_000;
+        on_tab(&mut overlay, Tab::Frames);
+        settle(&mut overlay, &stats);
+        let point = overlay
+            .controls()
+            .fg_enabled
+            .expect("frame controls")
+            .center();
+        overlay.frame(
+            &FrameInput {
+                mouse: [point.x, point.y],
+                scroll_delta: -600.0,
+                ..visible_input()
+            },
+            &stats,
+        );
+        for _ in 0..30 {
+            idle_frame(&mut overlay, &stats);
+        }
+
+        let target = overlay.controls().frame_limit_preset[3].expect("VRR preset");
+        let [_, release] = click(&mut overlay, &stats, target);
+        assert!(release.frame_limit_changed);
+        assert_eq!(
+            release.frame_limit_us,
+            crate::abi::RSF_OVERLAY_FRAME_LIMIT_VRR
+        );
+    }
+
+    #[test]
     fn automatic_fg_provider_keeps_the_resolved_provider_usable() {
         let mut overlay = Overlay::new();
         let mut stats = stats_with_backend();

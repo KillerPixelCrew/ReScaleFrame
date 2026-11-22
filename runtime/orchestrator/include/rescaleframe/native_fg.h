@@ -11,7 +11,8 @@ extern "C" {
 typedef struct rsf_native_fg_options {
     uint32_t struct_size;
     /* frame_limit_us is the minimum interval between rendered frames, before generation.
-       Zero is unlimited. */
+       Zero is unlimited. 2147483647 requests the VRR policy; the owner resolves
+       it from the presenting display and the provider's effective generation. */
     uint32_t mode, generated_frames, reflex_mode, frame_limit_us, debug;
 } rsf_native_fg_options;
 /* rsf_native_fg_status::reason, also shown by the overlay panel. Zero means nothing is deferred.

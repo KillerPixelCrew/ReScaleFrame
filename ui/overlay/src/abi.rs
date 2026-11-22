@@ -51,7 +51,10 @@ pub use wire::rsf_overlay_host_option as RsfOverlayHostOption;
 pub use wire::rsf_overlay_intent as RsfOverlayIntent;
 /// The frame status record defined in overlay.h.
 pub use wire::rsf_overlay_stats as RsfOverlayStats;
-pub(crate) use wire::{RSF_OVERLAY_SR_CHANGE_REFUSED, RSF_OVERLAY_SR_QUALITY_STANDARD_MASK};
+pub(crate) use wire::{
+    RSF_OVERLAY_FRAME_LIMIT_VRR, RSF_OVERLAY_SR_CHANGE_REFUSED,
+    RSF_OVERLAY_SR_QUALITY_STANDARD_MASK,
+};
 
 /// One frame of input, in physical pixels. Mirrors `rsf_overlay_input`.
 #[repr(C)]

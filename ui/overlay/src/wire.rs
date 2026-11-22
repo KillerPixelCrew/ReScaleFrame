@@ -10,6 +10,7 @@ pub const RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK: u32 = 63;
 pub const RSF_OVERLAY_SR_CHANGE_APPLIED: u32 = 1;
 pub const RSF_OVERLAY_SR_CHANGE_PENDING: u32 = 2;
 pub const RSF_OVERLAY_SR_CHANGE_REFUSED: u32 = 3;
+pub const RSF_OVERLAY_FRAME_LIMIT_VRR: u32 = 2147483647;
 pub type rsf_overlay_quality = u32;
 #[repr(C)]
 #[derive(Copy, Clone)]

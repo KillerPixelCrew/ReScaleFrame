@@ -1253,6 +1253,7 @@ unsafe extern "C" fn rsf_core_native_fg_prepare(
     let mut final_scene: SceneIdentity = empty();
     final_scene.struct_size = size_of::<SceneIdentity>() as u32;
     let options = requested();
+    unsafe { crate::frame_limit::observe_pacing_display(options.frame_limit_us, chain) };
     let provider = unsafe { call!(p, present_provider).as_ref() };
     let Some(provider) = provider.filter(|_| !session.is_null()) else {
         let mut settings = lock(&SETTINGS);
@@ -1406,6 +1407,10 @@ unsafe extern "C" fn rsf_core_native_fg_prepare(
             1
         };
     let paced = status.pacing_owner != RSF_PACING_NONE;
+    let mut effective = status;
+    if !valid {
+        crate::fg_status::deactivate(&mut effective);
+    }
     let mut configured = rsf_fg_options {
         struct_size: size_of::<rsf_fg_options>() as u32,
         abi_version: RSF_FG_ABI_VERSION,
@@ -1417,10 +1422,12 @@ unsafe extern "C" fn rsf_core_native_fg_prepare(
         } else {
             RSF_REFLEX_OFF
         },
-        frame_limit_us: if paced {
-            options.frame_limit_us / presents_per_frame
-        } else {
-            0
+        frame_limit_us: match status.pacing_owner {
+            RSF_PACING_REFLEX => {
+                crate::frame_limit::reflex_interval(options.frame_limit_us, presents_per_frame)
+            }
+            RSF_PACING_NONE => 0,
+            _ => crate::frame_limit::application_interval(options.frame_limit_us, &effective),
         },
     };
     // Options are owner-thread calls. The provider handles transition-only SDK option updates.

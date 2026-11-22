@@ -59,6 +59,8 @@ typedef uint32_t rsf_overlay_quality;
 #define RSF_OVERLAY_SR_CHANGE_APPLIED 1u
 #define RSF_OVERLAY_SR_CHANGE_PENDING 2u
 #define RSF_OVERLAY_SR_CHANGE_REFUSED 3u
+/* Stored in FrameLimitUs to request display-relative pacing. */
+#define RSF_OVERLAY_FRAME_LIMIT_VRR 2147483647u
 
 /* What the overlay is told about the session, once per frame.
 
@@ -234,7 +236,8 @@ typedef struct rsf_overlay_intent {
     uint32_t fg_changed, fg_mode, fg_generated;
     uint32_t reflex_changed, reflex_mode;
     uint32_t performance_hud_changed, performance_hud;
-    /* ABI 8. */
+    /* ABI 8. A fixed rendered-frame interval in microseconds, zero for Off,
+       or RSF_OVERLAY_FRAME_LIMIT_VRR for a display-relative limit. */
     uint32_t frame_limit_changed, frame_limit_us;
     uint32_t fg_backend_changed, fg_backend;
     uint32_t dlss_preset_changed, dlss_preset;

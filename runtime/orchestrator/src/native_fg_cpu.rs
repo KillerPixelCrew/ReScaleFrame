@@ -552,7 +552,8 @@ fn select_pacer(p: &Platform, id: u64, mode: u32, limit: u32) -> Selection {
 
     // Anti-Lag Update can delay the CPU. Its context borrows the driver while
     // the older frame's marker takes a separate shared borrow.
-    let anti_paced = anti.is_some_and(|anti| anti.pace(id, mode, limit, other) != 0);
+    let app_interval = crate::frame_limit::application_interval(limit, &state);
+    let anti_paced = anti.is_some_and(|anti| anti.pace(id, mode, app_interval, other) != 0);
     if owner == RSF_PACING_ANTILAG2 && anti.is_none_or(|anti| anti.state().available == 0) {
         owner = RSF_PACING_NONE;
     }
@@ -568,7 +569,11 @@ fn select_pacer(p: &Platform, id: u64, mode: u32, limit: u32) -> Selection {
             } else {
                 1
             };
-            (host as usize, mode, limit / presents)
+            (
+                host as usize,
+                mode,
+                crate::frame_limit::reflex_interval(limit, presents),
+            )
         } else {
             (host as usize, RSF_REFLEX_OFF, 0)
         };
