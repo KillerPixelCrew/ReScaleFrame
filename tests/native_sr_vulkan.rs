@@ -21,17 +21,15 @@ use std::{
     ffi::{CStr, CString, c_char, c_void},
     ptr,
 };
-use windows_sys::Win32::Foundation::{FreeLibrary, HMODULE};
-use windows_sys::Win32::System::LibraryLoader::{
-    GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
-};
+use vulkan_gpu::{Library, NO_LOADER};
 
 #[path = "native_sr_fsr4_vulkan.rs"]
 mod fsr4;
+#[path = "vulkan_gpu.rs"]
+mod vulkan_gpu;
 
 type Handle = *mut c_void;
-const NO_LOADER: &str = "Vulkan loader unavailable";
-const NO_DEVICE: &str = "enumerate GPUs";
+
 const W: usize = 320;
 const H: usize = 180;
 const PIXELS: usize = W * H * 4;
@@ -72,38 +70,6 @@ struct Calls {
 
 const _: () = assert!(size_of::<Calls>() == 16 * size_of::<usize>());
 
-struct Library(HMODULE);
-impl Drop for Library {
-    fn drop(&mut self) {
-        unsafe { FreeLibrary(self.0) };
-    }
-}
-
-fn entry(streamline: rsf_vk_get_proc) -> TestResult<(Library, ash::Entry)> {
-    let path = crate::settings_store::wide("vulkan-1.dll");
-    let module =
-        unsafe { LoadLibraryExW(path.as_ptr(), ptr::null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32) };
-    if module.is_null() {
-        return Err(NO_LOADER.into());
-    }
-    let library = Library(module);
-    let proc = unsafe { GetProcAddress(module, c"vkGetInstanceProcAddr".as_ptr().cast()) }
-        .ok_or("missing vkGetInstanceProcAddr")?;
-    let get_instance_proc_addr = unsafe {
-        std::mem::transmute::<unsafe extern "system" fn() -> isize, vk::PFN_vkGetInstanceProcAddr>(
-            proc,
-        )
-    };
-    let get_instance_proc_addr = streamline.map_or(get_instance_proc_addr, |proc| unsafe {
-        std::mem::transmute::<_, vk::PFN_vkGetInstanceProcAddr>(proc)
-    });
-    let entry = unsafe {
-        ash::Entry::from_static_fn(ash::StaticFn {
-            get_instance_proc_addr,
-        })
-    };
-    Ok((library, entry))
-}
 
 struct Gpu {
     session: Option<Session>,
@@ -134,7 +100,7 @@ impl Gpu {
         session: Option<Session>,
         application: &CStr,
     ) -> TestResult<Self> {
-        let (library, entry) = entry(streamline)?;
+        let (library, entry) = vulkan_gpu::entry(streamline)?;
         let app = vk::ApplicationInfo::default()
             .application_name(application)
             .api_version(vk::API_VERSION_1_2);
@@ -163,49 +129,14 @@ impl Gpu {
     }
 
     fn open_device(&mut self, streamline: bool) -> TestResult {
-        let devices =
-            unsafe { self.instance.enumerate_physical_devices() }.map_err(|_| NO_DEVICE)?;
-        let first = *devices.first().ok_or(NO_DEVICE)?;
-        let physical = devices
-            .into_iter()
-            .find(|&candidate| {
-                unsafe { self.instance.get_physical_device_properties(candidate) }.device_type
-                    == vk::PhysicalDeviceType::DISCRETE_GPU
-            })
-            .unwrap_or(first);
+        let swapchain = [ash::khr::swapchain::NAME.as_ptr()];
+        let (physical, device, family) = vulkan_gpu::create_device(
+            &self.instance,
+            "Vulkan SR fixture",
+            if streamline { &swapchain } else { &[] },
+        )?;
         self.physical = physical;
-        let properties = unsafe { self.instance.get_physical_device_properties(physical) };
-        let name = unsafe { CStr::from_ptr(properties.device_name.as_ptr()) };
-        println!("Vulkan SR fixture GPU: {}", name.to_string_lossy());
-        let flags = vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE;
-        let families = unsafe {
-            self.instance
-                .get_physical_device_queue_family_properties(physical)
-        };
-        let family = families
-            .iter()
-            .position(|entry| entry.queue_flags.contains(flags))
-            .ok_or("graphics and compute queue family")? as u32;
-        let mut v12 = vk::PhysicalDeviceVulkan12Features::default();
-        let mut v11 = vk::PhysicalDeviceVulkan11Features::default();
-        let mut features = vk::PhysicalDeviceFeatures2::default()
-            .push_next(&mut v12)
-            .push_next(&mut v11);
-        unsafe {
-            self.instance
-                .get_physical_device_features2(physical, &mut features)
-        };
-        let queues = [vk::DeviceQueueCreateInfo::default()
-            .queue_family_index(family)
-            .queue_priorities(&[1.0])];
-        let extensions = [ash::khr::swapchain::NAME.as_ptr()];
-        let mut info = vk::DeviceCreateInfo::default()
-            .push_next(&mut features)
-            .queue_create_infos(&queues);
-        if streamline {
-            info = info.enabled_extension_names(&extensions);
-        }
-        self.device = Some(unsafe { self.instance.create_device(physical, &info, None) }?);
+        self.device = Some(device);
         let device = self.device.as_ref().ok_or("null Vulkan device")?;
         self.queue = unsafe { device.get_device_queue(family, 0) };
         self.memory = unsafe {
@@ -241,20 +172,7 @@ impl Gpu {
         req: vk::MemoryRequirements,
         flags: vk::MemoryPropertyFlags,
     ) -> TestResult<vk::DeviceMemory> {
-        let memory = self
-            .memory
-            .memory_types
-            .iter()
-            .take(self.memory.memory_type_count as usize)
-            .enumerate()
-            .position(|(i, ty)| {
-                req.memory_type_bits & (1 << i) != 0 && ty.property_flags.contains(flags)
-            })
-            .ok_or("Vulkan memory type")? as u32;
-        let info = vk::MemoryAllocateInfo::default()
-            .allocation_size(req.size)
-            .memory_type_index(memory);
-        Ok(unsafe { self.device().allocate_memory(&info, None) }?)
+        vulkan_gpu::allocate(self.device(), &self.memory, req, flags)
     }
 
     fn image(
