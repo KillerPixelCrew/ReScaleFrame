@@ -224,7 +224,6 @@ fn prepare_plan(
     sequence: u64,
     reset: bool,
     meters: f32,
-    forward_sign: f32,
 ) -> PreparePlan {
     let camera = &record.camera;
     let world = &camera.view_to_world;
@@ -247,7 +246,7 @@ fn prepare_plan(
         position: row(12),
         right: row(0),
         up: row(4),
-        forward: row(8).map(|value| forward_sign * value),
+        forward: crate::streamline_policy::camera_forward(world, &camera.view_to_clip, 1.0),
     }
 }
 
@@ -617,13 +616,6 @@ impl Session for Fsr {
             return NOT_READY;
         }
         let reset = before.order.reset_for(record);
-        // Perspective W follows view Z. A right-handed projection looks down
-        // negative Z; a positive-Z view basis remains positive.
-        let forward_sign = if record.camera.view_to_clip[11] < 0.0 {
-            -1.0
-        } else {
-            1.0
-        };
         let sequence = self.sequence.get();
         let plan = prepare_plan(
             command,
@@ -632,7 +624,6 @@ impl Session for Fsr {
             sequence,
             reset,
             self.view_space_to_meters,
-            forward_sign,
         );
         let dispatched =
             unsafe { (self.ops.prepare)(self.sdk.raw, self.generation.load(Relaxed), &plan) };
@@ -973,7 +964,8 @@ mod tests {
         record.camera.view_to_world = std::array::from_fn(|index| index as f32);
         record.render_width = 1280;
         record.camera.jitter_pixels = [0.25, -0.5];
-        let plan = prepare_plan(null_mut(), &frame, &record, 9, true, 0.01, -1.0);
+        record.camera.view_to_clip[11] = -1.0;
+        let plan = prepare_plan(null_mut(), &frame, &record, 9, true, 0.01);
         assert_eq!(plan.right, [0.0, 1.0, 2.0]);
         assert_eq!(plan.up, [4.0, 5.0, 6.0]);
         assert_eq!(plan.forward, [-8.0, -9.0, -10.0]);
