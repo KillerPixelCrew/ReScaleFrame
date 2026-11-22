@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use rsf_game_sys::rsf_game_host_services;
+use rsf_game_sys::{
+    RSF_ERROR_ABI_MISMATCH as ABI_MISMATCH, RSF_GAME_ABI_VERSION,
+    RSF_GAME_RECOGNIZED as RECOGNIZED, RSF_GAME_UNKNOWN as UNKNOWN, rsf_game_host_services,
+};
 use std::ptr;
 
 fn probe(executable: &CStr, sha256: &CStr) -> rsf_game_probe {

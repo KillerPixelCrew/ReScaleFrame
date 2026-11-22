@@ -21,11 +21,10 @@ use windows_sys::Win32::System::LibraryLoader::{
     GetModuleFileNameW, GetModuleHandleExW,
 };
 
-pub(crate) use rsf_game_sys::{
-    RSF_ERROR_ABI_MISMATCH as ABI_MISMATCH, RSF_ERROR_INVALID_ARGUMENT as INVALID_ARGUMENT,
-    RSF_OK as OK,
+use rsf_game_sys::{
+    RSF_ERROR_BUSY as BUSY, RSF_ERROR_INVALID_ARGUMENT as INVALID_ARGUMENT,
+    RSF_ERROR_NOT_READY as NOT_READY, RSF_OK as OK,
 };
-use rsf_game_sys::{RSF_ERROR_BUSY as BUSY, RSF_ERROR_NOT_READY as NOT_READY};
 
 /// Managed helper stages reported through the bridge (Bootstrap.cs).
 const MANAGED_INSTALLED: u32 = 2;
@@ -225,6 +224,7 @@ pub(crate) unsafe extern "C" fn status(out: *mut rsf_game_renderer_status) -> rs
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rsf_game_sys::RSF_ERROR_ABI_MISMATCH as ABI_MISMATCH;
 
     #[test]
     fn helper_sits_beside_the_plugin() {

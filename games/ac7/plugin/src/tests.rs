@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use rsf_ac7::AMD64;
+use rsf_game_sys::{
+    RSF_ERROR_ABI_MISMATCH, RSF_GAME_ABI_VERSION, RSF_GAME_RECOGNIZED as RECOGNIZED,
+    RSF_GAME_UNKNOWN as UNKNOWN,
+};
 use std::ptr::{null, null_mut};
 
 fn probe(machine: u16, executable: &CStr, digest: &CStr) -> rsf_game_probe {

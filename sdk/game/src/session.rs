@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! Sized GameSDK records shared by native plugin carriers and exact-build detectors.
-use crate::{RSF_GAME_ABI_VERSION, rsf_game_host_services, rsf_game_log_fn, rsf_game_probe};
+use crate::ffi_util::has_capacity;
+use crate::{
+    RSF_ERROR_ABI_MISMATCH, RSF_ERROR_INVALID_ARGUMENT, RSF_GAME_ABI_VERSION, RSF_GAME_RECOGNIZED,
+    RSF_GAME_UNKNOWN, RSF_OK, rsf_detection, rsf_game_hooks_api, rsf_game_host_services,
+    rsf_game_info, rsf_game_log_fn, rsf_game_plugin_api, rsf_game_probe, rsf_result,
+};
 use crate::{RSF_PLUGIN_SESSION_ABI_VERSION, rsf_plugin_session_options};
 use core::ffi::CStr;
 
@@ -46,6 +51,56 @@ impl<'a> Probe<'a> {
                 .to_bytes()
                 .eq_ignore_ascii_case(sha256.to_bytes())
     }
+
+    /// The `detect` entry of a plugin: `RSF_GAME_RECOGNIZED` when `raw` is a full probe of an
+    /// AMD64 image for which `recognizes` accepts the executable name and SHA-256.
+    ///
+    /// # Safety
+    /// As for [`Probe::from_raw`].
+    pub unsafe fn detect(
+        raw: *const rsf_game_probe,
+        recognizes: impl FnOnce(Probe<'_>) -> bool,
+    ) -> rsf_detection {
+        match unsafe { Self::from_raw(raw) } {
+            Some(probe) if probe.machine == PE_MACHINE_AMD64 && recognizes(probe) => {
+                RSF_GAME_RECOGNIZED
+            }
+            _ => RSF_GAME_UNKNOWN,
+        }
+    }
+}
+
+const PE_MACHINE_AMD64: u16 = 0x8664;
+
+/// The body of a plugin's exported `rsf_get_game_plugin_api`: checks the caller's table size and
+/// ABI version, then writes the table.
+///
+/// # Safety
+/// `out` is null or points to the caller's writable sized API table; a short one may contain only
+/// its size.
+pub unsafe fn publish_api(
+    requested_abi: u32,
+    out: *mut rsf_game_plugin_api,
+    info: rsf_game_info,
+    detect: unsafe extern "C" fn(*const rsf_game_probe) -> rsf_detection,
+    hooks: rsf_game_hooks_api,
+) -> rsf_result {
+    if !unsafe { has_capacity(out.cast_const()) } {
+        return RSF_ERROR_INVALID_ARGUMENT;
+    }
+    if requested_abi != RSF_GAME_ABI_VERSION {
+        return RSF_ERROR_ABI_MISMATCH;
+    }
+    unsafe {
+        out.write(rsf_game_plugin_api {
+            struct_size: size_of::<rsf_game_plugin_api>() as u32,
+            abi_version: RSF_GAME_ABI_VERSION,
+            info,
+            detect: Some(detect),
+            hooks,
+        })
+    };
+    RSF_OK
 }
 
 /// Initializes sized host services with only session identity and logging.
@@ -106,5 +161,23 @@ mod tests {
         assert!(probe.matches(c"game.EXE", c"abc"));
         raw.sha256_hex = null();
         assert!(unsafe { Probe::from_raw(&raw) }.is_none());
+    }
+
+    #[test]
+    fn detect_needs_amd64_and_an_accepted_build() {
+        let mut raw = rsf_game_probe {
+            struct_size: size_of::<rsf_game_probe>() as u32,
+            pe_machine: 0x8664,
+            reserved: 0,
+            executable_name_utf8: c"Game.exe".as_ptr(),
+            sha256_hex: c"ABC".as_ptr(),
+        };
+        let accepts = |probe: Probe<'_>| probe.matches(c"game.EXE", c"abc");
+        assert_eq!(unsafe { Probe::detect(&raw, accepts) }, RSF_GAME_RECOGNIZED);
+        raw.pe_machine = 0x14c;
+        assert_eq!(unsafe { Probe::detect(&raw, accepts) }, RSF_GAME_UNKNOWN);
+        raw.pe_machine = 0x8664;
+        assert_eq!(unsafe { Probe::detect(&raw, |_| false) }, RSF_GAME_UNKNOWN);
+        assert_eq!(unsafe { Probe::detect(null(), accepts) }, RSF_GAME_UNKNOWN);
     }
 }
