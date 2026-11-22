@@ -429,18 +429,18 @@ Move the API census, static scan and diagnostic capture behind the loader's Rust
 
 **Port files (16)**
 
-- [ ] [loader/census/include/rescaleframe/census_d3d12_observer.h](loader/census/include/rescaleframe/census_d3d12_observer.h)
-- [ ] [loader/census/include/rescaleframe/vendor_census.h](loader/census/include/rescaleframe/vendor_census.h)
-- [ ] [loader/census/src/census_internal.h](loader/census/src/census_internal.h)
-- [ ] [loader/census/src/core.cpp](loader/census/src/core.cpp)
+- [x] [loader/census/include/rescaleframe/census_d3d12_observer.h](loader/census/include/rescaleframe/census_d3d12_observer.h)
+- [x] [loader/census/include/rescaleframe/vendor_census.h](loader/census/include/rescaleframe/vendor_census.h)
+- [x] [loader/census/src/census_internal.h](loader/census/src/census_internal.h)
+- [x] [loader/census/src/core.cpp](loader/census/src/core.cpp)
 - [x] [loader/census/src/decode.cpp](loader/census/src/decode.cpp)
-- [ ] [loader/census/src/hooks.cpp](loader/census/src/hooks.cpp)
+- [x] [loader/census/src/hooks.cpp](loader/census/src/hooks.cpp)
 - [x] [loader/census/src/static_scan.cpp](loader/census/src/static_scan.cpp)
-- [ ] [loader/census/src/wrap_d3d.cpp](loader/census/src/wrap_d3d.cpp)
-- [ ] [loader/census/src/wrap_fsr.cpp](loader/census/src/wrap_fsr.cpp)
-- [ ] [loader/census/src/wrap_generic.h](loader/census/src/wrap_generic.h)
-- [ ] [loader/census/src/wrap_misc.cpp](loader/census/src/wrap_misc.cpp)
-- [ ] [loader/census/src/wrap_ngx.cpp](loader/census/src/wrap_ngx.cpp)
+- [x] [loader/census/src/wrap_d3d.cpp](loader/census/src/wrap_d3d.cpp)
+- [x] [loader/census/src/wrap_fsr.cpp](loader/census/src/wrap_fsr.cpp)
+- [x] [loader/census/src/wrap_generic.h](loader/census/src/wrap_generic.h)
+- [x] [loader/census/src/wrap_misc.cpp](loader/census/src/wrap_misc.cpp)
+- [x] [loader/census/src/wrap_ngx.cpp](loader/census/src/wrap_ngx.cpp)
 - [x] [loader/census/src/wrap_vk.cpp](loader/census/src/wrap_vk.cpp)
 - [x] [loader/diagnostics/include/rescaleframe/frame_capture.h](loader/diagnostics/include/rescaleframe/frame_capture.h)
 - [ ] [loader/diagnostics/include/rescaleframe/module_dump.h](loader/diagnostics/include/rescaleframe/module_dump.h)
@@ -448,8 +448,12 @@ Move the API census, static scan and diagnostic capture behind the loader's Rust
 
 - [ ] [loader/census/src/decode_d3d_platform.cpp](loader/census/src/decode_d3d_platform.cpp) (introduced D3D resource query leaf)
 - [x] [tests/loader/vendor_census_ngx_platform.cpp](tests/loader/vendor_census_ngx_platform.cpp) (introduced SDK fixture leaf)
+- [ ] [loader/census/src/census_platform.cpp](loader/census/src/census_platform.cpp) (native startup and vendor boundary)
+- [ ] [loader/census/src/hook_platform.cpp](loader/census/src/hook_platform.cpp) (native MinHook and loader facts)
+- [ ] [loader/census/src/guarded_platform.cpp](loader/census/src/guarded_platform.cpp) (guarded native call and record leaves)
+- [ ] [loader/census/src/d3d_guarded_platform.cpp](loader/census/src/d3d_guarded_platform.cpp) (guarded DXGI and D3D12 calls)
 
-**Fixtures (8)**
+**Fixtures (9)**
 
 - [x] [tests/census_present_coexistence.cpp](tests/census_present_coexistence.cpp)
 - [ ] [tests/loader/module_dump_rtti_fixture.cpp](tests/loader/module_dump_rtti_fixture.cpp) (native RTTI specimen)
@@ -457,7 +461,8 @@ Move the API census, static scan and diagnostic capture behind the loader's Rust
 - [ ] [tests/vendor_census.cpp](tests/vendor_census.cpp)
 - [x] [tests/vendor_census_asi.cpp](tests/vendor_census_asi.cpp)
 - [x] [tests/vendor_census_fixture.cpp](tests/vendor_census_fixture.cpp)
-- [ ] [tests/vendor_census_layouts.cpp](tests/vendor_census_layouts.cpp)
+- [ ] [tests/loader/vendor_layout_facts.cpp](tests/loader/vendor_layout_facts.cpp) (native SDK layout evidence)
+- [x] [tests/vendor_census_layouts.cpp](tests/vendor_census_layouts.cpp)
 - [x] [tests/vendor_census_ngx_params.h](tests/vendor_census_ngx_params.h)
 
 <a id="o01"></a>
