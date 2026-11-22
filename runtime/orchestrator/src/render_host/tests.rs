@@ -4,6 +4,9 @@
 // establish admission, settings, slot, fence, scene, status and overlay routing policy only.
 use super::*;
 use std::cell::RefCell;
+use windows_sys::Win32::System::WindowsProgramming::{
+    GetPrivateProfileIntW, WritePrivateProfileStringW,
+};
 
 #[allow(dead_code)]
 #[repr(C)]

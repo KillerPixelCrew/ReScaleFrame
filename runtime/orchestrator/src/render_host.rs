@@ -14,7 +14,7 @@ use crate::overlay_settings::{
 use crate::present_rates::Rates;
 use crate::render_host_methods::Adapter;
 use crate::settings_store::{
-    read_settings_and_fg_mode, rsf_settings_store_read_layout, rsf_settings_store_write,
+    self, read_settings_and_fg_mode, rsf_settings_store_read_layout, rsf_settings_store_write,
     rsf_settings_store_write_layout, set_sharpening, sharpening_of,
 };
 use crate::sharpening_policy;
@@ -55,9 +55,7 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
-use windows_sys::Win32::System::WindowsProgramming::{
-    GetPrivateProfileIntW, GetPrivateProfileStringW, WritePrivateProfileStringW,
-};
+use windows_sys::Win32::System::WindowsProgramming::GetPrivateProfileStringW;
 use windows_sys::core::w;
 
 #[cfg(test)]
@@ -1277,15 +1275,14 @@ impl Host {
             return;
         };
         let enabled = intent.host_option_value != 0;
-        let value = if enabled { w!("1") } else { w!("0") };
         if unsafe {
-            WritePrivateProfileStringW(
-                self.section.as_ptr(),
-                w!("GraphicsDiagnostics"),
-                value,
+            settings_store::rsf_settings_store_write_integer(
                 self.ini.as_ptr(),
+                self.section.as_ptr(),
+                c"GraphicsDiagnostics".as_ptr(),
+                u32::from(enabled),
             )
-        } == 0
+        } != OK
         {
             self.log("Could not save the diagnostic setting.");
             return;
@@ -1635,7 +1632,12 @@ unsafe fn describe(setup: &Setup, services: &Services, p: &'static Platform) -> 
     let capture = rsf_game_sys::profile_text::decode(capture);
     let capture_enabled = !capture.is_empty();
     let graphics_diagnostics = unsafe {
-        GetPrivateProfileIntW(section.as_ptr(), w!("GraphicsDiagnostics"), 0, ini.as_ptr())
+        settings_store::rsf_settings_store_read_integer(
+            ini.as_ptr(),
+            section.as_ptr(),
+            c"GraphicsDiagnostics".as_ptr(),
+            0,
+        )
     } != 0;
     let root = utf8(&unsafe { wide_copy(setup.runtime_directory) });
     let streamline = format!("{root}/streamline");

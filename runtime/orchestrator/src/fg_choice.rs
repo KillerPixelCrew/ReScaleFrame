@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::settings_store::{rsf_settings_store_read_integer, rsf_settings_store_write_integer};
 use crate::sys::{
     RSF_FG_BACKEND_ALL as PROVIDERS, RSF_FG_BACKEND_AUTO as AUTO, rsf_fg_choice as Choice,
 };
@@ -9,13 +10,10 @@ use crate::sys::{
 use rsf_game_sys::backend_result::{FEATURE_FAILED, NOT_SUPPORTED};
 use std::ffi::{CStr, c_int};
 use std::sync::Mutex;
-use windows_sys::Win32::System::WindowsProgramming::{
-    GetPrivateProfileIntW, WritePrivateProfileStringW,
-};
 use windows_sys::core::{PCWSTR, w};
 
 const SECTION: PCWSTR = w!("Rendering");
-const KEY: PCWSTR = w!("FrameGeneration");
+const KEY_UTF8: &CStr = c"FrameGeneration";
 
 #[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_fg_default_backend(vendor: u32, software: u32) -> u32 {
@@ -139,7 +137,7 @@ unsafe extern "C" fn rsf_fg_choice_start(path: PCWSTR, fallback: u32, choices: u
         settings
             .path
             .extend_from_slice(unsafe { std::slice::from_raw_parts(path, length + 1) });
-        unsafe { GetPrivateProfileIntW(SECTION, KEY, fallback as i32, path) as u32 }
+        unsafe { rsf_settings_store_read_integer(path, SECTION, KEY_UTF8.as_ptr(), fallback) }
     };
     let choices = choices | 1;
     let backend = [saved, fallback]
@@ -162,10 +160,14 @@ pub(super) extern "C" fn rsf_fg_choice_save(backend: u32) -> i32 {
     } else if settings.path.is_empty() {
         FEATURE_FAILED
     } else {
-        let value = [u16::from(b'0') + backend as u16, 0];
         if unsafe {
-            WritePrivateProfileStringW(SECTION, KEY, value.as_ptr(), settings.path.as_ptr())
-        } == 0
+            rsf_settings_store_write_integer(
+                settings.path.as_ptr(),
+                SECTION,
+                KEY_UTF8.as_ptr(),
+                backend,
+            )
+        } != 0
         {
             FEATURE_FAILED
         } else {
