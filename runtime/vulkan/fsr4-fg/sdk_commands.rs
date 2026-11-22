@@ -1,14 +1,172 @@
 // SPDX-License-Identifier: MIT
-use super::{Handle, SwapchainDesc, Texture, dx12};
+use super::{Handle, QueueDesc, SwapchainDesc, Texture, dx12};
 use crate::d3d12_host::rsf_core_d3d12_copy_transitioned;
-use windows::Win32::Graphics::{
-    Direct3D12::*,
-    Dxgi::{
-        Common::*, DXGI_PRESENT, DXGI_SCALING, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT, DXGI_USAGE,
-        IDXGISwapChain4,
+use windows::Win32::{
+    Foundation::LUID,
+    Graphics::{
+        Direct3D::D3D_FEATURE_LEVEL,
+        Direct3D12::*,
+        Dxgi::{
+            Common::*, CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_PRESENT, DXGI_SCALING,
+            DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT, DXGI_USAGE, IDXGIAdapter1, IDXGIFactory4,
+            IDXGISwapChain4,
+        },
     },
 };
 use windows::core::{BOOL, Interface};
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4fg_create_factory(flags: u32, out: &mut Handle) -> i32 {
+    dx12::store_interface(
+        unsafe { CreateDXGIFactory2::<IDXGIFactory4>(DXGI_CREATE_FACTORY_FLAGS(flags)) },
+        out,
+    )
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4fg_find_adapter(
+    factory: Handle,
+    luid: u64,
+    out: &mut Handle,
+) -> i32 {
+    let factory: &IDXGIFactory4 = unsafe { dx12::borrow(&factory) };
+    let luid = LUID {
+        LowPart: luid as u32,
+        HighPart: (luid >> 32) as i32,
+    };
+    dx12::store_interface(
+        unsafe { factory.EnumAdapterByLuid::<IDXGIAdapter1>(luid) },
+        out,
+    )
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4fg_get_adapter_vendor(adapter: Handle, vendor: &mut u32) -> i32 {
+    let adapter: &IDXGIAdapter1 = unsafe { dx12::borrow(&adapter) };
+    dx12::status(unsafe { adapter.GetDesc1() }.map(|desc| *vendor = desc.VendorId))
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4fg_create_device(
+    adapter: Handle,
+    level: u32,
+    out: &mut Handle,
+) -> i32 {
+    unsafe { dx12::create_device(adapter, D3D_FEATURE_LEVEL(level as i32), out) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4fg_create_event(
+    manual: u32,
+    initial: u32,
+    out: &mut Handle,
+) -> i32 {
+    use windows_sys::Win32::{Foundation::GetLastError, System::Threading::CreateEventW};
+    *out = unsafe {
+        CreateEventW(
+            core::ptr::null(),
+            i32::from(manual != 0),
+            i32::from(initial != 0),
+            core::ptr::null(),
+        )
+    };
+    if out.is_null() {
+        windows::core::HRESULT::from_win32(unsafe { GetLastError() }).0
+    } else {
+        0
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4fg_create_queue(
+    device: Handle,
+    desc: &QueueDesc,
+    out: &mut Handle,
+) -> i32 {
+    let device: &ID3D12Device = unsafe { dx12::borrow(&device) };
+    let desc = D3D12_COMMAND_QUEUE_DESC {
+        Type: D3D12_COMMAND_LIST_TYPE(desc.list_type as i32),
+        Priority: desc.priority,
+        Flags: D3D12_COMMAND_QUEUE_FLAGS(desc.flags as i32),
+        NodeMask: desc.node_mask,
+    };
+    dx12::store_interface(
+        unsafe { device.CreateCommandQueue::<ID3D12CommandQueue>(&desc) },
+        out,
+    )
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4fg_create_allocator(
+    device: Handle,
+    kind: u32,
+    out: &mut Handle,
+) -> i32 {
+    let device: &ID3D12Device = unsafe { dx12::borrow(&device) };
+    let kind = D3D12_COMMAND_LIST_TYPE(kind as i32);
+    dx12::store_interface(
+        unsafe { device.CreateCommandAllocator::<ID3D12CommandAllocator>(kind) },
+        out,
+    )
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4fg_create_list(
+    device: Handle,
+    allocator: Handle,
+    node_mask: u32,
+    kind: u32,
+    out: &mut Handle,
+) -> i32 {
+    let device = unsafe { dx12::borrow(&device) };
+    let allocator = unsafe { dx12::borrow(&allocator) };
+    dx12::store_interface(
+        dx12::create_list(
+            device,
+            allocator,
+            node_mask,
+            D3D12_COMMAND_LIST_TYPE(kind as i32),
+        ),
+        out,
+    )
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4fg_create_completion_fence(
+    device: Handle,
+    value: u64,
+    flags: u32,
+    out: &mut Handle,
+) -> i32 {
+    let device: &ID3D12Device = unsafe { dx12::borrow(&device) };
+    let result =
+        unsafe { device.CreateFence::<ID3D12Fence>(value, D3D12_FENCE_FLAGS(flags as i32)) };
+    dx12::store_interface(result, out)
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4fg_shared_fence(
+    device: Handle,
+    fence: &mut Handle,
+    handle: &mut Handle,
+) -> i32 {
+    unsafe { dx12::create_shared_fence(device, fence, handle) }
+}
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn RsfFsr4FgReleaseImage(image: Handle) {
+    unsafe { dx12::release_image(image) };
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4fg_reset_commands(commands: Handle, allocator: Handle) -> i32 {
+    dx12::status(unsafe { dx12::reset_commands(dx12::borrow(&commands), allocator) })
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4fg_close_commands(commands: Handle) -> i32 {
+    dx12::status(unsafe { dx12::borrow::<ID3D12GraphicsCommandList>(&commands).Close() })
+}
 
 const _: () = {
     assert!(size_of::<DXGI_SWAP_CHAIN_DESC1>() == 48);

@@ -4,7 +4,6 @@ use super::{
     Context, DEPTH_INFINITE, DEPTH_INVERTED, Dispatch, FAILED, Handle, MAX_VERSIONS,
     MOTION_JITTERED, Version, ffx_version,
 };
-use core::ffi::c_char;
 use core::ptr;
 
 #[path = "sdk_abi.rs"]
@@ -68,8 +67,8 @@ unsafe extern "C" fn rsf_core_fsr4sr_sdk_versions(
 unsafe extern "C" fn rsf_core_fsr4sr_sdk_provider(
     query: PfnFfxQuery,
     effect: *mut ffxContext,
-    id: *mut u64,
-    name: *mut *const c_char,
+    output: *mut Version,
+    parsed: *mut u32,
 ) -> i32 {
     let Some(query) = query else { return FAILED };
     let mut desc = ffxQueryGetProviderVersion {
@@ -81,9 +80,11 @@ unsafe extern "C" fn rsf_core_fsr4sr_sdk_provider(
     };
     let result = unsafe { query(effect, &raw mut desc.header) } as i32;
     if result == 0 {
+        let (version, numeric) =
+            unsafe { ffx_version::parse_sdk(desc.versionId, desc.versionName) };
         unsafe {
-            id.write(desc.versionId);
-            name.write(desc.versionName);
+            output.write(version);
+            parsed.write(u32::from(numeric));
         }
     }
     result

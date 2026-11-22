@@ -24,7 +24,7 @@
 #include "bridge_platform.h"
 
 extern "C" int32_t rsf_core_fsr4sr_sdk_versions(PfnFfxQuery, void*, rsf_ffx_version*, uint64_t*);
-extern "C" int32_t rsf_core_fsr4sr_sdk_provider(PfnFfxQuery, ffxContext*, uint64_t*, const char**);
+extern "C" int32_t rsf_core_fsr4sr_sdk_provider(PfnFfxQuery, ffxContext*, rsf_ffx_version*, uint32_t*);
 extern "C" int32_t rsf_core_fsr4sr_sdk_create(PfnFfxCreateContext, ffxContext*, ffxApiHeader*, uint32_t,
     const rsf_fsr4sr_context*);
 extern "C" int32_t rsf_core_fsr4sr_sdk_plan(PfnFfxQuery, ffxContext*, uint32_t, uint32_t, uint32_t,
@@ -34,6 +34,14 @@ extern "C" int32_t rsf_core_fsr4sr_record(void*, void*, const rsf_fsr4sr_dispatc
     PfnFfxDispatch, DescribeResource);
 extern "C" int32_t rsf_core_fsr4sr_shared_image(void*, uint32_t, uint32_t, uint32_t, uint32_t,
     void**, void**);
+extern "C" int32_t rsf_core_fsr4sr_find_adapter(uint64_t, void**, void**, uint32_t*);
+extern "C" int32_t rsf_core_fsr4sr_create_device(void*, void**, void**);
+extern "C" int32_t rsf_core_fsr4sr_create_commands(void*, rsf_fsr4sr_command_objects*);
+extern "C" uint64_t rsf_core_fsr4sr_completed(void*);
+extern "C" int32_t rsf_core_fsr4sr_wait_event(void*, void*, uint64_t, uint32_t);
+extern "C" int32_t rsf_core_fsr4sr_shared_fence(void*, void**, void**);
+extern "C" void rsf_core_fsr4sr_describe(void*, rsf_fsr4sr_texture*);
+extern "C" void rsf_core_fsr4sr_release_image(void*);
 extern "C" void rsf_core_fsr4sr_execute(void*, void*);
 extern "C" int32_t rsf_core_fsr4sr_queue_fence(void*, void*, uint64_t, uint32_t);
 
@@ -88,8 +96,6 @@ struct rsf_fsr4sr_native {
 namespace {
 constexpr uint32_t kAllocators = 3;
 
-int32_t Result(HRESULT hr) { return FAILED(hr) ? static_cast<int32_t>(hr) : 0; }
-
 rsf_fsr4sr_native* Allocate() { return new (std::nothrow) rsf_fsr4sr_native(); }
 
 /// @brief Frees COM owners, the event, the module and the capsule in the previous checked-destruction order.
@@ -123,34 +129,21 @@ uint32_t Objects(const rsf_fsr4sr_native* native) {
 /// @brief Creates the DXGI factory and retains the adapter whose LUID matches the Vulkan device.
 /// @return Zero with its PCI vendor, -5 when no adapter matches, or an HRESULT.
 int32_t FindAdapter(rsf_fsr4sr_native* native, uint64_t luid, uint32_t* vendor) {
-    HRESULT hr = CreateDXGIFactory2(0, IID_PPV_ARGS(&native->factory));
-    if (FAILED(hr)) return static_cast<int32_t>(hr);
-    for (UINT index = 0; ; ++index) {
-        IDXGIAdapter1* candidate{};
-        hr = native->factory->EnumAdapters1(index, &candidate);
-        if (hr == DXGI_ERROR_NOT_FOUND) return -5;
-        if (FAILED(hr)) return static_cast<int32_t>(hr);
-        DXGI_ADAPTER_DESC1 description{};
-        hr = candidate->GetDesc1(&description);
-        if (FAILED(hr)) { Release(candidate); return static_cast<int32_t>(hr); }
-        uint64_t candidateLuid{};
-        std::memcpy(&candidateLuid, &description.AdapterLuid, sizeof(candidateLuid));
-        if (candidateLuid == luid) {
-            native->adapter = candidate;
-            *vendor = description.VendorId;
-            return 0;
-        }
-        candidate->Release();
-    }
+    void* factory = nullptr;
+    void* adapter = nullptr;
+    const int32_t code = rsf_core_fsr4sr_find_adapter(luid, &factory, &adapter, vendor);
+    native->factory = static_cast<IDXGIFactory4*>(factory);
+    native->adapter = static_cast<IDXGIAdapter1*>(adapter);
+    return code;
 }
 
 int32_t CreateDevice(rsf_fsr4sr_native* native) {
-    HRESULT hr = D3D12CreateDevice(native->adapter, D3D_FEATURE_LEVEL_12_0,
-        IID_PPV_ARGS(&native->device));
-    if (FAILED(hr)) return static_cast<int32_t>(hr);
-    D3D12_COMMAND_QUEUE_DESC queue{};
-    queue.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-    return Result(native->device->CreateCommandQueue(&queue, IID_PPV_ARGS(&native->queue)));
+    void* device = nullptr;
+    void* queue = nullptr;
+    const int32_t code = rsf_core_fsr4sr_create_device(native->adapter, &device, &queue);
+    native->device = static_cast<ID3D12Device*>(device);
+    native->queue = static_cast<ID3D12CommandQueue*>(queue);
+    return code;
 }
 
 /// @brief Writes the directory of the module containing this bridge, with its trailing separator.
@@ -214,30 +207,19 @@ int32_t CreateContext(rsf_fsr4sr_native* native, const rsf_fsr4sr_context* setup
 /// @details The shared parse reports family 0 both for "0.x.y" and for labels without that shape, so
 /// `parsed` carries the previous IsFsr4Name sscanf result separately.
 int32_t Provider(rsf_fsr4sr_native* native, rsf_ffx_version* out, uint32_t* parsed) {
-    uint64_t id{};
-    const char* name{};
-    const auto result = rsf_core_fsr4sr_sdk_provider(native->query, &native->effect, &id, &name);
-    if (result) return result;
-    *parsed = rsf_fsr4_parse_version(id, name, out) ? 1u : 0u;
-    return 0;
+    return rsf_core_fsr4sr_sdk_provider(native->query, &native->effect, out, parsed);
 }
 
 /// @brief Creates the local completion fence, its event (-10 on failure), three allocators and a closed list.
 int32_t CreateCommands(rsf_fsr4sr_native* native) {
-    HRESULT hr = native->device->CreateFence(0, D3D12_FENCE_FLAG_NONE,
-        IID_PPV_ARGS(&native->completionFence));
-    if (FAILED(hr)) return static_cast<int32_t>(hr);
-    native->completionEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-    if (!native->completionEvent) return -10;
-    for (auto*& allocator : native->allocators) {
-        hr = native->device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
-            IID_PPV_ARGS(&allocator));
-        if (FAILED(hr)) return static_cast<int32_t>(hr);
-    }
-    hr = native->device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
-        native->allocators[0], nullptr, IID_PPV_ARGS(&native->commands));
-    if (FAILED(hr)) return static_cast<int32_t>(hr);
-    return Result(native->commands->Close());
+    rsf_fsr4sr_command_objects objects{};
+    const int32_t result = rsf_core_fsr4sr_create_commands(native->device, &objects);
+    native->completionFence = static_cast<ID3D12Fence*>(objects.completion);
+    native->completionEvent = objects.event;
+    for (uint32_t slot = 0; slot < kAllocators; ++slot)
+        native->allocators[slot] = static_cast<ID3D12CommandAllocator*>(objects.allocators[slot]);
+    native->commands = static_cast<ID3D12GraphicsCommandList*>(objects.list);
+    return result;
 }
 
 int32_t Plan(rsf_fsr4sr_native* native, uint32_t quality, uint32_t displayWidth,
@@ -254,32 +236,17 @@ int32_t CreateImage(rsf_fsr4sr_native* native, uint32_t width, uint32_t height, 
 
 /// @brief Creates or reuses the capsule-owned shared fence and exports a new NT handle.
 int32_t CreateFence(rsf_fsr4sr_native* native, void** handle) {
-    if (!native->sharedFence) {
-        HRESULT hr = native->device->CreateFence(0, D3D12_FENCE_FLAG_SHARED,
-            IID_PPV_ARGS(&native->sharedFence));
-        if (FAILED(hr)) return static_cast<int32_t>(hr);
-    }
-    HANDLE shared{};
-    const int32_t result = Result(native->device->CreateSharedHandle(native->sharedFence,
-        nullptr, GENERIC_ALL, nullptr, &shared));
-    *handle = shared;
+    void* fence = native->sharedFence;
+    const int32_t result = rsf_core_fsr4sr_shared_fence(native->device, &fence, handle);
+    native->sharedFence = static_cast<ID3D12Fence*>(fence);
     return result;
 }
 
-void Describe(void* resource, rsf_fsr4sr_texture* texture) {
-    const auto desc = static_cast<ID3D12Resource*>(resource)->GetDesc();
-    texture->width = desc.Width;
-    texture->height = desc.Height;
-    texture->format = static_cast<uint32_t>(desc.Format);
-}
-
-uint64_t Completed(rsf_fsr4sr_native* native) { return native->completionFence->GetCompletedValue(); }
+uint64_t Completed(rsf_fsr4sr_native* native) { return rsf_core_fsr4sr_completed(native->completionFence); }
 
 /// @return Zero when the event fired, an HRESULT when it could not be armed, or -2 on timeout.
 int32_t WaitEvent(rsf_fsr4sr_native* native, uint64_t value, uint32_t milliseconds) {
-    HRESULT hr = native->completionFence->SetEventOnCompletion(value, native->completionEvent);
-    if (FAILED(hr)) return static_cast<int32_t>(hr);
-    return WaitForSingleObject(native->completionEvent, milliseconds) == WAIT_OBJECT_0 ? 0 : -2;
+    return rsf_core_fsr4sr_wait_event(native->completionFence, native->completionEvent, value, milliseconds);
 }
 
 void DescribeResourceForSdk(void* resource, uint32_t state, FfxApiResource* out) {
@@ -319,7 +286,7 @@ constexpr rsf_fsr4sr_platform kPlatform{
     sizeof(rsf_fsr4sr_platform), RSF_FSR4SR_PLATFORM_ABI_VERSION,
     Allocate, ReleaseNative, Objects, FindAdapter, CreateDevice, OwnDirectory, Load,
     AcquireCompatibility, ReleaseCompatibility, Versions, CreateContext, Provider, CreateCommands,
-    Plan, CreateImage, CreateFence, Describe, Completed, WaitEvent, Record, WaitShared, Execute,
+    Plan, CreateImage, CreateFence, rsf_core_fsr4sr_describe, Completed, WaitEvent, Record, WaitShared, Execute,
     Signal, DestroyContext,
 };
 }
@@ -422,7 +389,7 @@ extern "C" RSF_FSR4_BRIDGE_API int VulkanStoryFsr4CreateSharedImage(
 /// @brief Releases the caller-owned DX12 image reference; a null reference is accepted.
 /// @details This does not wait. Vulkan import users and DX12 queue users must already be complete.
 extern "C" RSF_FSR4_BRIDGE_API void VulkanStoryFsr4ReleaseImage(ID3D12Resource* resource) {
-    Release(resource);
+    rsf_core_fsr4sr_release_image(resource);
 }
 
 /// @brief Creates or reuses the runtime-owned DX12 shared fence and exports a new NT handle.

@@ -19,6 +19,7 @@ mod completion;
 use completion::next_local_completion;
 #[path = "../../vulkan/fsr4-fg/sdk_commands.rs"]
 mod commands;
+pub(super) use commands::RsfFsr4FgReleaseImage;
 #[path = "../../vulkan/dx12_bridge_commands.rs"]
 mod dx12;
 #[path = "../../vulkan/fsr4-fg/sdk.rs"]
@@ -819,7 +820,7 @@ unsafe extern "C" fn RsfFsr4FgStart(bridge: *mut Bridge, window: Handle) -> i32 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn RsfFsr4FgCreateImage(
+pub(super) unsafe extern "C" fn RsfFsr4FgCreateImage(
     bridge: Handle,
     width: u32,
     height: u32,
@@ -850,7 +851,7 @@ unsafe extern "C" fn RsfFsr4FgCreateImage(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn RsfFsr4FgCreateFence(bridge: Handle, handle: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn RsfFsr4FgCreateFence(bridge: Handle, handle: *mut Handle) -> i32 {
     if handle.is_null() {
         return INVALID;
     }

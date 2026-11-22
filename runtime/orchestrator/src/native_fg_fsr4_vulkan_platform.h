@@ -20,6 +20,8 @@ struct rsf_fsr4gvk_ops {
     rsf_dx12gvk_ops graphics;
 };
 
+extern "C" int32_t rsf_fsr4gvk_interop_create(const rsf_srvk_setup*, rsf_fsr4fg_bridge*, uint64_t, uint32_t,
+    rsf_dx12vk_interop**);
 extern "C" int32_t rsf_core_fsr4gvk_probe(const rsf_fsr4gvk_ops*, const rsf_srvk_setup*, rsf_fsr4fg_info*);
 extern "C" int32_t rsf_core_fsr4gvk_create(const rsf_fsr4gvk_ops*, const rsf_fgvk_setup*, const rsf_fsr4gvk_options*,
     rsf_fsr4gvk**, uint64_t*);

@@ -4,7 +4,11 @@ use core::{ffi::c_void, mem::ManuallyDrop};
 use windows::{
     Win32::{
         Foundation::{E_POINTER, GENERIC_ALL},
-        Graphics::{Direct3D12::*, Dxgi::Common::*},
+        Graphics::{
+            Direct3D::D3D_FEATURE_LEVEL,
+            Direct3D12::*,
+            Dxgi::{Common::*, IDXGIAdapter1},
+        },
     },
     core::{Interface, PCWSTR, Result},
 };
@@ -17,6 +21,69 @@ pub(super) unsafe fn borrow<T: Interface>(raw: &Handle) -> &T {
 
 pub(super) fn status(result: Result<()>) -> i32 {
     result.map_or_else(|error| error.code().0, |()| 0)
+}
+
+pub(super) fn store_interface<T: Interface>(result: Result<T>, output: &mut Handle) -> i32 {
+    status(result.map(|owned| *output = owned.into_raw()))
+}
+
+pub(super) unsafe fn create_device(
+    adapter: Handle,
+    feature_level: D3D_FEATURE_LEVEL,
+    output: &mut Handle,
+) -> i32 {
+    let adapter: &IDXGIAdapter1 = unsafe { borrow(&adapter) };
+    let mut device: Option<ID3D12Device> = None;
+    let code = status(unsafe { D3D12CreateDevice(adapter, feature_level, &mut device) });
+    if let Some(device) = device {
+        *output = device.into_raw();
+    }
+    code
+}
+
+pub(super) fn create_list(
+    device: &ID3D12Device,
+    allocator: &ID3D12CommandAllocator,
+    node_mask: u32,
+    kind: D3D12_COMMAND_LIST_TYPE,
+) -> Result<ID3D12GraphicsCommandList> {
+    unsafe { device.CreateCommandList(node_mask, kind, allocator, None) }
+}
+
+pub(super) unsafe fn release_image(image: Handle) {
+    if !image.is_null() {
+        drop(unsafe { ID3D12Resource::from_raw(image) });
+    }
+}
+
+pub(super) unsafe fn create_shared_fence(
+    device: Handle,
+    owned_fence: &mut Handle,
+    handle: &mut Handle,
+) -> i32 {
+    let device: &ID3D12Device = unsafe { borrow(&device) };
+    if owned_fence.is_null() {
+        let result = unsafe { device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_SHARED) };
+        match result {
+            Ok(fence) => *owned_fence = fence.into_raw(),
+            Err(error) => return error.code().0,
+        }
+    }
+    // The capsule retains this reference even if exporting its NT handle fails.
+    let fence: &ID3D12Fence = unsafe { borrow(owned_fence) };
+    status(
+        unsafe { device.CreateSharedHandle(fence, None, GENERIC_ALL.0, PCWSTR::null()) }
+            .map(|exported| *handle = exported.0),
+    )
+}
+
+pub(super) unsafe fn reset_commands(
+    list: &ID3D12GraphicsCommandList,
+    allocator: Handle,
+) -> Result<()> {
+    let allocator: &ID3D12CommandAllocator = unsafe { borrow(&allocator) };
+    unsafe { allocator.Reset()? };
+    unsafe { list.Reset(allocator, None) }
 }
 
 pub(super) fn create_shared_texture(

@@ -8085,3 +8085,11 @@ its exception guard. The [source record](research/overlay-direct-admission.md)
 covers the unchanged native-window, C02, D08 and saved rollback paths.
 Binding reproduction, pinned formatting and locked offline metadata passed.
 Build, fixture and device execution remain pending.
+### FidelityFX Vulkan production leaves
+
+Rust now owns the FSR4 Vulkan SR graphics callbacks and uses the shared G07
+capture owner. The SR and FG DXGI/D3D12 setup and shared fence calls use typed
+Windows interfaces. The [V05 production source record](research/rust-vulkan-ffx-production-leaves.md)
+lists the SDK and exception boundaries and the unchanged fixture and receipt
+inputs. Pinned binding regeneration, formatting and locked offline metadata
+passed. Build, fixture and device validation remain pending.

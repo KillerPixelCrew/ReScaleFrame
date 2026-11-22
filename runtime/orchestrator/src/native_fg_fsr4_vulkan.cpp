@@ -6,17 +6,11 @@ static_assert(sizeof(rsf_fsr4gvk_ops) == 43 * sizeof(void*) && sizeof(rsf_fsr4gv
     sizeof(rsf_fsr4fg_frame) == 80 && sizeof(rsf_fsr4fg_present_status) == 32);
 
 namespace {
-int32_t interop_create(const rsf_srvk_setup* setup, rsf_fsr4fg_bridge* bridge, uint64_t luid,
-    uint32_t timeline_enabled, rsf_dx12vk_interop** output) {
-    const rsf_dx12vk_interop_callbacks callbacks{sizeof(callbacks), 1, luid,
-        bridge, RsfFsr4FgCreateImage, RsfFsr4FgReleaseImage, RsfFsr4FgCreateFence};
-    return rsf_dx12vk_interop_create(setup, &callbacks, timeline_enabled, output);
-}
 const rsf_fsr4gvk_ops& operations() {
     static const rsf_fsr4gvk_ops value{
         RsfFsr4FgProbe, RsfFsr4FgCreate, RsfFsr4FgInfo, RsfFsr4FgStart,
         RsfFsr4FgPresent, RsfFsr4FgDrain, RsfFsr4FgPrepareDestroy, RsfFsr4FgDestroy,
-        interop_create, rsf_dx12gvk_interop, *rsf_dx12gvk_graphics(),
+        rsf_fsr4gvk_interop_create, rsf_dx12gvk_interop, *rsf_dx12gvk_graphics(),
     };
     return value;
 }

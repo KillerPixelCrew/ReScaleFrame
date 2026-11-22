@@ -7,7 +7,6 @@
 #include <dxgi1_6.h>
 #include <ffx_framegeneration.h>
 #include <dx12/ffx_api_framegeneration_dx12.h>
-#include <cstring>
 #include <new>
 #include "bridge_platform.h"
 #include "../../backends/common/d3d12_helpers.h"
@@ -18,6 +17,18 @@ static_assert(sizeof(DXGI_SWAP_CHAIN_DESC1) == 48 &&
     offsetof(DXGI_SWAP_CHAIN_DESC1, SwapEffect) == 36);
 
 extern "C" int32_t rsf_core_fsr4fg_shared_image(void*, uint32_t, uint32_t, uint32_t, void**, void**);
+extern "C" int32_t rsf_core_fsr4fg_create_factory(uint32_t, void**);
+extern "C" int32_t rsf_core_fsr4fg_find_adapter(void*, uint64_t, void**);
+extern "C" int32_t rsf_core_fsr4fg_get_adapter_vendor(void*, uint32_t*);
+extern "C" int32_t rsf_core_fsr4fg_create_device(void*, uint32_t, void**);
+extern "C" int32_t rsf_core_fsr4fg_create_event(uint32_t, uint32_t, void**);
+extern "C" int32_t rsf_core_fsr4fg_create_queue(void*, const rsf_fsr4fg_queue_desc*, void**);
+extern "C" int32_t rsf_core_fsr4fg_create_allocator(void*, uint32_t, void**);
+extern "C" int32_t rsf_core_fsr4fg_create_list(void*, void*, uint32_t, uint32_t, void**);
+extern "C" int32_t rsf_core_fsr4fg_create_completion_fence(void*, uint64_t, uint32_t, void**);
+extern "C" int32_t rsf_core_fsr4fg_shared_fence(void*, void**, void**);
+extern "C" int32_t rsf_core_fsr4fg_reset_commands(void*, void*);
+extern "C" int32_t rsf_core_fsr4fg_close_commands(void*);
 extern "C" void rsf_core_fsr4fg_describe_texture(void*, rsf_fsr4fg_texture*);
 extern "C" void rsf_core_fsr4fg_shader_read(void*, void*, uint32_t);
 extern "C" int32_t rsf_core_fsr4fg_copy_to_backbuffer(void*, void*, void*);
@@ -96,8 +107,6 @@ static_assert(D3D_FEATURE_LEVEL_12_0 == 0xc000 && D3D12_COMMAND_LIST_TYPE_DIRECT
 static_assert(DXGI_USAGE_RENDER_TARGET_OUTPUT == 0x20 && DXGI_SCALING_STRETCH == 0 &&
     DXGI_SWAP_EFFECT_FLIP_DISCARD == 4 && DXGI_ALPHA_MODE_UNSPECIFIED == 0);
 
-int32_t result(HRESULT hr) { return FAILED(hr) ? hr : 0; }
-
 template<class T> void release(T*& value) {
     if (value) {
         value->Release();
@@ -128,26 +137,28 @@ void release_native(Native* self) {
     delete self;
 }
 
+template<class T, class Call, class... Args>
+int32_t create_interface(T*& slot, Call call, Args... args) {
+    void* object = nullptr;
+    const int32_t code = call(args..., &object);
+    slot = static_cast<T*>(object);
+    return code;
+}
+
 int32_t create_factory(Native* self, uint32_t flags) {
-    return result(CreateDXGIFactory2(flags, IID_PPV_ARGS(&self->factory)));
+    return create_interface(self->factory, rsf_core_fsr4fg_create_factory, flags);
 }
 
 int32_t find_adapter(Native* self, uint64_t adapter_luid) {
-    LUID luid{};
-    std::memcpy(&luid, &adapter_luid, sizeof(luid));
-    return result(self->factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&self->adapter)));
+    return create_interface(self->adapter, rsf_core_fsr4fg_find_adapter, self->factory, adapter_luid);
 }
 
 int32_t get_adapter_vendor(Native* self, uint32_t* vendor) {
-    DXGI_ADAPTER_DESC1 desc{};
-    const HRESULT hr = self->adapter->GetDesc1(&desc);
-    if (SUCCEEDED(hr)) *vendor = desc.VendorId;
-    return result(hr);
+    return rsf_core_fsr4fg_get_adapter_vendor(self->adapter, vendor);
 }
 
 int32_t create_device(Native* self, uint32_t feature_level) {
-    return result(D3D12CreateDevice(self->adapter, static_cast<D3D_FEATURE_LEVEL>(feature_level),
-        IID_PPV_ARGS(&self->device)));
+    return create_interface(self->device, rsf_core_fsr4fg_create_device, self->adapter, feature_level);
 }
 
 int32_t load(Native* self, const uint16_t* path) {
@@ -180,32 +191,25 @@ int32_t get_provider(Native* self, uint64_t* actual) {
 }
 
 int32_t create_queue(Native* self, const rsf_fsr4fg_queue_desc* setup) {
-    D3D12_COMMAND_QUEUE_DESC queue{};
-    queue.Type = static_cast<D3D12_COMMAND_LIST_TYPE>(setup->list_type);
-    queue.Priority = setup->priority;
-    queue.Flags = static_cast<D3D12_COMMAND_QUEUE_FLAGS>(setup->flags);
-    queue.NodeMask = setup->node_mask;
-    return result(self->device->CreateCommandQueue(&queue, IID_PPV_ARGS(&self->queue)));
+    return create_interface(self->queue, rsf_core_fsr4fg_create_queue, self->device, setup);
 }
 
 int32_t create_allocator(Native* self, uint32_t list_type) {
-    return result(self->device->CreateCommandAllocator(static_cast<D3D12_COMMAND_LIST_TYPE>(list_type),
-        IID_PPV_ARGS(&self->allocator)));
+    return create_interface(self->allocator, rsf_core_fsr4fg_create_allocator, self->device, list_type);
 }
 
 int32_t create_command_list(Native* self, uint32_t node_mask, uint32_t list_type) {
-    return result(self->device->CreateCommandList(node_mask, static_cast<D3D12_COMMAND_LIST_TYPE>(list_type),
-        self->allocator, nullptr, IID_PPV_ARGS(&self->commands)));
+    return create_interface(self->commands, rsf_core_fsr4fg_create_list, self->device, self->allocator, node_mask,
+        list_type);
 }
 
 int32_t create_completion_fence(Native* self, uint64_t initial_value, uint32_t flags) {
-    return result(self->device->CreateFence(initial_value, static_cast<D3D12_FENCE_FLAGS>(flags),
-        IID_PPV_ARGS(&self->completion)));
+    return create_interface(self->completion, rsf_core_fsr4fg_create_completion_fence, self->device, initial_value,
+        flags);
 }
 
 int32_t create_event(Native* self, uint32_t manual_reset, uint32_t initial_state) {
-    self->event = CreateEventW(nullptr, manual_reset != 0, initial_state != 0, nullptr);
-    return self->event ? 0 : HRESULT_FROM_WIN32(GetLastError());
+    return rsf_core_fsr4fg_create_event(manual_reset, initial_state, &self->event);
 }
 
 uint32_t objects(Native* self) {
@@ -240,18 +244,17 @@ int32_t create_image(Native* self, uint32_t width, uint32_t height, uint32_t for
 }
 
 int32_t create_fence(Native* self, void** handle) {
-    const HRESULT hr = self->device->CreateFence(0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(&self->shared));
-    if (FAILED(hr)) return hr;
-    return self->device->CreateSharedHandle(self->shared, nullptr, GENERIC_ALL, nullptr, handle);
+    void* fence = self->shared;
+    const int32_t result = rsf_core_fsr4fg_shared_fence(self->device, &fence, handle);
+    self->shared = static_cast<ID3D12Fence*>(fence);
+    return result;
 }
-
 
 int32_t reset_commands(Native* self) {
-    const HRESULT hr = self->allocator->Reset();
-    return FAILED(hr) ? hr : result(self->commands->Reset(self->allocator, nullptr));
+    return rsf_core_fsr4fg_reset_commands(self->commands, self->allocator);
 }
 
-int32_t close_commands(Native* self) { return result(self->commands->Close()); }
+int32_t close_commands(Native* self) { return rsf_core_fsr4fg_close_commands(self->commands); }
 
 ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* desc, void* user) {
     auto* self = static_cast<Native*>(user);
@@ -329,7 +332,4 @@ extern "C" int32_t RsfFsr4FgProbe(uint64_t luid, const uint16_t* directory, rsf_
 }
 extern "C" int32_t RsfFsr4FgCreate(const rsf_fsr4fg_create* setup, rsf_fsr4fg_bridge** output) {
     return rsf_core_fsr4fg_create(&platform, setup, output);
-}
-extern "C" void RsfFsr4FgReleaseImage(void* resource) {
-    if (resource) static_cast<ID3D12Resource*>(resource)->Release();
 }

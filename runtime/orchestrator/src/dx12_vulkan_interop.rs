@@ -345,7 +345,7 @@ impl Drop for Owner {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dx12vk_interop_create(
+pub(super) unsafe extern "C" fn rsf_dx12vk_interop_create(
     setup: *const rsf_srvk_setup,
     callbacks: *const Callbacks,
     timeline_enabled: u32,

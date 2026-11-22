@@ -1,8 +1,171 @@
 // SPDX-License-Identifier: MIT
 use super::{Dispatch, Handle, abi::*, dx12, rsf_core_fsr4sr_sdk_dispatch};
-use windows::Win32::Graphics::{Direct3D12::*, Dxgi::Common::*};
+use windows::{
+    Win32::{
+        Foundation::{HANDLE, WAIT_OBJECT_0},
+        Graphics::{
+            Direct3D::D3D_FEATURE_LEVEL_12_0,
+            Direct3D12::*,
+            Dxgi::{
+                Common::*, CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_ERROR_NOT_FOUND,
+                IDXGIFactory4,
+            },
+        },
+        System::Threading::{CreateEventW, WaitForSingleObject},
+    },
+    core::{Interface, PCWSTR},
+};
 
 type Describe = unsafe extern "C" fn(Handle, u32, *mut FfxApiResource);
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4sr_find_adapter(
+    luid: u64,
+    factory_out: &mut Handle,
+    adapter_out: &mut Handle,
+    vendor: &mut u32,
+) -> i32 {
+    let factory = match unsafe { CreateDXGIFactory2::<IDXGIFactory4>(DXGI_CREATE_FACTORY_FLAGS(0)) }
+    {
+        Ok(factory) => factory,
+        Err(error) => return error.code().0,
+    };
+    *factory_out = factory.into_raw();
+    let factory: &IDXGIFactory4 = unsafe { dx12::borrow(factory_out) };
+    let mut index = 0_u32;
+    loop {
+        let adapter = match unsafe { factory.EnumAdapters1(index) } {
+            Ok(adapter) => adapter,
+            Err(error) if error.code() == DXGI_ERROR_NOT_FOUND => return -5,
+            Err(error) => return error.code().0,
+        };
+        let description = match unsafe { adapter.GetDesc1() } {
+            Ok(description) => description,
+            Err(error) => return error.code().0,
+        };
+        let id = (u64::from(description.AdapterLuid.HighPart as u32) << 32)
+            | u64::from(description.AdapterLuid.LowPart);
+        if id == luid {
+            *adapter_out = adapter.into_raw();
+            *vendor = description.VendorId;
+            return 0;
+        }
+        index = index.wrapping_add(1);
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4sr_create_device(
+    adapter: Handle,
+    device_out: &mut Handle,
+    queue_out: &mut Handle,
+) -> i32 {
+    let code = unsafe { dx12::create_device(adapter, D3D_FEATURE_LEVEL_12_0, device_out) };
+    if code != 0 {
+        return code;
+    }
+    let device: &ID3D12Device = unsafe { dx12::borrow(device_out) };
+    let queue = D3D12_COMMAND_QUEUE_DESC {
+        Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+        ..Default::default()
+    };
+    dx12::store_interface(
+        unsafe { device.CreateCommandQueue::<ID3D12CommandQueue>(&queue) },
+        queue_out,
+    )
+}
+
+const ALLOCATORS: usize = 3;
+
+#[repr(C)]
+struct CommandObjects {
+    completion: Handle,
+    event: Handle,
+    allocators: [Handle; ALLOCATORS],
+    list: Handle,
+}
+
+const _: () = assert!(size_of::<CommandObjects>() == 6 * size_of::<Handle>());
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4sr_create_commands(
+    device: Handle,
+    out: &mut CommandObjects,
+) -> i32 {
+    let device: &ID3D12Device = unsafe { dx12::borrow(&device) };
+    let fence = unsafe { device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) };
+    let code = dx12::store_interface(fence, &mut out.completion);
+    if code != 0 {
+        return code;
+    }
+    let Ok(event) = (unsafe { CreateEventW(None, false, false, PCWSTR::null()) }) else {
+        return -10;
+    };
+    out.event = event.0;
+    let kind = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    for output in &mut out.allocators {
+        let allocator = unsafe { device.CreateCommandAllocator::<ID3D12CommandAllocator>(kind) };
+        let code = dx12::store_interface(allocator, output);
+        if code != 0 {
+            return code;
+        }
+    }
+    let allocator = unsafe { dx12::borrow(&out.allocators[0]) };
+    match dx12::create_list(device, allocator, 0, kind) {
+        Ok(list) => {
+            let result = unsafe { list.Close() };
+            out.list = list.into_raw();
+            dx12::status(result)
+        }
+        Err(error) => error.code().0,
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4sr_completed(fence: Handle) -> u64 {
+    unsafe { dx12::borrow::<ID3D12Fence>(&fence).GetCompletedValue() }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4sr_wait_event(
+    fence: Handle,
+    event: Handle,
+    value: u64,
+    milliseconds: u32,
+) -> i32 {
+    let fence: &ID3D12Fence = unsafe { dx12::borrow(&fence) };
+    let event = HANDLE(event);
+    if let Err(error) = unsafe { fence.SetEventOnCompletion(value, event) } {
+        return error.code().0;
+    }
+    if unsafe { WaitForSingleObject(event, milliseconds) } == WAIT_OBJECT_0 {
+        0
+    } else {
+        -2
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4sr_shared_fence(
+    device: Handle,
+    fence: &mut Handle,
+    handle: &mut Handle,
+) -> i32 {
+    unsafe { dx12::create_shared_fence(device, fence, handle) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4sr_release_image(image: Handle) {
+    unsafe { dx12::release_image(image) };
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4sr_describe(image: Handle, output: &mut super::super::Texture) {
+    let desc = unsafe { dx12::borrow::<ID3D12Resource>(&image).GetDesc() };
+    output.width = desc.Width;
+    output.height = desc.Height;
+    output.format = desc.Format.0 as u32;
+}
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr4sr_shared_image(
@@ -54,8 +217,7 @@ unsafe extern "C" fn rsf_core_fsr4sr_record(
 ) -> i32 {
     let Some(dispatch) = dispatch else { return -1 };
     let list: &ID3D12GraphicsCommandList = unsafe { dx12::borrow(&commands) };
-    let allocator: &ID3D12CommandAllocator = unsafe { dx12::borrow(&allocator) };
-    if let Err(error) = unsafe { allocator.Reset().and_then(|()| list.Reset(allocator, None)) } {
+    if let Err(error) = unsafe { dx12::reset_commands(list, allocator) } {
         return error.code().0;
     }
     const COMMON: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_COMMON;

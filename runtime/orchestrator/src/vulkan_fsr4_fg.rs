@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MIT
+use crate::dx12_vulkan_interop::{self, Owner as Importer};
+use crate::dx12_vulkan_interop_abi::{
+    RSF_DX12VK_INTEROP_ABI_VERSION, rsf_dx12vk_interop_callbacks as ImportCallbacks,
+};
 use crate::fsr4_fg_bridge::{
-    BRIDGE_ABI, BridgeCreate, BridgeFrame, BridgeInfo, BridgeStatus, UNSUPPORTED,
+    BRIDGE_ABI, BridgeCreate, BridgeFrame, BridgeInfo, BridgeStatus, RsfFsr4FgCreateFence,
+    RsfFsr4FgCreateImage, RsfFsr4FgReleaseImage, UNSUPPORTED,
 };
 use crate::sr_session::has_capacity;
 use crate::vulkan_dx12_fg::{self as shared, *};
@@ -42,6 +47,26 @@ const _: () = {
     assert!(size_of::<Options>() == 24);
     assert!(size_of::<Ops>() == 43 * size_of::<Handle>());
 };
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fsr4gvk_interop_create(
+    setup: *const Graphics,
+    bridge: Handle,
+    luid: u64,
+    enabled: u32,
+    output: *mut *mut Importer,
+) -> i32 {
+    let callbacks = ImportCallbacks {
+        struct_size: size_of::<ImportCallbacks>() as u32,
+        abi_version: RSF_DX12VK_INTEROP_ABI_VERSION,
+        adapter_luid: luid,
+        user: bridge,
+        create_image: Some(RsfFsr4FgCreateImage),
+        release_image: Some(RsfFsr4FgReleaseImage),
+        create_fence: Some(RsfFsr4FgCreateFence),
+    };
+    unsafe { dx12_vulkan_interop::rsf_dx12vk_interop_create(setup, &callbacks, enabled, output) }
+}
 
 type Owner = shared::Owner<Fsr4>;
 

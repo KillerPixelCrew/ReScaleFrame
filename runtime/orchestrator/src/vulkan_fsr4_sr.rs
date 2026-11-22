@@ -24,6 +24,8 @@ use bridge_abi::{
     rsf_fsr4_bridge_frame as BridgeFrame, rsf_fsr4_bridge_info as Info,
 };
 
+#[path = "vulkan_fsr4_sr/graphics.rs"]
+mod graphics;
 #[path = "vulkan_fsr4_sr_abi.rs"]
 mod platform_abi;
 #[path = "vulkan_fsr4_sr/state_fixture.rs"]

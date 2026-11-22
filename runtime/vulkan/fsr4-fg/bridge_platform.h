@@ -33,7 +33,7 @@ struct rsf_fsr4fg_native;
 extern "C" {
 typedef void (*rsf_fsr4fg_generated_fn)(void*, int32_t result, uint32_t count);
 
-// Native owners and retained SDK descriptors stay behind the opaque handle.
+// The capsule retains SDK descriptors and the COM references filled by Rust.
 // The setup descriptions are borrowed for the call. The table and callback are valid until release.
 struct rsf_fsr4fg_platform {
     rsf_fsr4fg_native* (*allocate)(void* telemetry, rsf_fsr4fg_generated_fn);

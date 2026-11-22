@@ -5,8 +5,9 @@
 
 // Private Windows x64 C ABI between the native FSR 4 leaves and the Rust owner
 // in owner.rs. Rust owns validation, provider policy, fence sequencing and
-// checked retirement. The native capsule keeps typed COM, FidelityFX, Vulkan
-// and INT8 compatibility objects. The host serializes every call on one bridge.
+// checked retirement and command recording. The native capsule retains the
+// SDK and INT8 compatibility objects and the COM references returned by Rust.
+// The host serializes every call on one bridge.
 
 inline constexpr uint32_t RSF_FSR4SR_PLATFORM_ABI_VERSION = 1;
 
@@ -58,6 +59,15 @@ struct rsf_fsr4sr_context {
 struct rsf_fsr4sr_texture {
     uint64_t width;
     uint32_t height, format; // DXGI_FORMAT
+};
+
+// Partially populated on failure. The receiving capsule owns every returned
+// COM reference and event, including those created before a later refusal.
+struct rsf_fsr4sr_command_objects {
+    void* completion;
+    void* event;
+    void* allocators[3];
+    void* list;
 };
 
 // One validated FidelityFX dispatch recorded on allocator `slot`.
@@ -122,6 +132,7 @@ static_assert(sizeof(VulkanStoryFsr4Frame) == 96 && offsetof(VulkanStoryFsr4Fram
 static_assert(sizeof(rsf_fsr4sr_request) == 40 && offsetof(rsf_fsr4sr_request, flags) == 32);
 static_assert(sizeof(rsf_fsr4sr_context) == 32 && offsetof(rsf_fsr4sr_context, flags) == 24);
 static_assert(sizeof(rsf_fsr4sr_texture) == 16 && offsetof(rsf_fsr4sr_texture, format) == 12);
+static_assert(sizeof(rsf_fsr4sr_command_objects) == 6 * sizeof(void*));
 static_assert(sizeof(rsf_fsr4sr_dispatch) == 96 && offsetof(rsf_fsr4sr_dispatch, render_width) == 32 &&
     offsetof(rsf_fsr4sr_dispatch, frame_time_ms) == 64 && offsetof(rsf_fsr4sr_dispatch, reset) == 88);
 static_assert(sizeof(rsf_fsr4sr_platform) == 8 + 24 * sizeof(void*) &&

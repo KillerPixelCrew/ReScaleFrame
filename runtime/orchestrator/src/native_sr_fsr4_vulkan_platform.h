@@ -38,6 +38,22 @@ typedef struct rsf_fsr4vk_platform {
 #ifdef __cplusplus
 extern "C" {
 #endif
+// Typed Vulkan and G07 capture callbacks implemented by the Rust graphics owner.
+int32_t rsf_fsr4vk_graphics_open(const rsf_srvk_setup*, const rsf_vk_function (*entries)[5], void**);
+void rsf_fsr4vk_graphics_close(void*);
+int32_t rsf_fsr4vk_capture_initialize(void*, const rsf_srvk_setup*, uint64_t);
+void rsf_fsr4vk_capture_begin(const rsf_frame_record*);
+void rsf_fsr4vk_capture_record(void*, void*, const rsf_srvk_image*, const rsf_frame_record*, const char*, uint32_t);
+void rsf_fsr4vk_capture_parameters(const rsf_srvk_frame*, uint32_t);
+int32_t rsf_fsr4vk_capture_flush(void*);
+void rsf_fsr4vk_graphics_transition(void*, void*, const struct rsf_vkfg_barrier*);
+void rsf_fsr4vk_graphics_copy(void*, void*, uint64_t, uint64_t, uint32_t, uint32_t);
+void rsf_fsr4vk_graphics_sharpen(void*, const rsf_srvk_setup*, void*, const rsf_srvk_frame*, uint64_t);
+void rsf_fsr4vk_graphics_retire(void*, void*);
+void rsf_fsr4vk_graphics_clear_sharpen(void*);
+int32_t rsf_fsr4vk_graphics_wait(void*, uint64_t, uint64_t, uint64_t);
+int32_t rsf_fsr4vk_graphics_idle(void*);
+
 int32_t rsf_core_fsr4vk_create(const rsf_fsr4vk_platform*, const rsf_srvk_setup*, const rsf_fsr4vk_handoff*, rsf_fsr4vk**);
 #ifdef __cplusplus
 }
