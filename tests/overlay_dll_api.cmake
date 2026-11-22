@@ -4,6 +4,9 @@ add_executable(rsf_overlay_dll_api_test "${CMAKE_CURRENT_LIST_DIR}/overlay_dll_a
 add_executable(rsf_overlay_dll_api_c11 "${CMAKE_CURRENT_LIST_DIR}/overlay_dll_api_c11.c")
 add_executable(rsf_overlay_dll_api_device "${CMAKE_CURRENT_LIST_DIR}/overlay_dll_api_device.cpp")
 add_executable(rsf_overlay_dll_api_no_sr "${CMAKE_CURRENT_LIST_DIR}/overlay_dll_api_no_sr.cpp")
+rsf_add_rust_static(rsf_overlay_service_fixtures_rust rsf_rust_overlay_service_fixtures
+    rsf-overlay-service-fixtures rsf_overlay_service_fixtures)
+target_link_libraries(rsf_overlay_dll_api_no_sr PRIVATE rsf_overlay_service_fixtures_rust)
 set_target_properties(rsf_overlay_dll_api_c11 PROPERTIES
     C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 foreach(client rsf_overlay_dll_api_test rsf_overlay_dll_api_c11 rsf_overlay_dll_api_device rsf_overlay_dll_api_no_sr)
