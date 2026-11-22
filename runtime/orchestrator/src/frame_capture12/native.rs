@@ -16,6 +16,7 @@ use {
 
 mod xess;
 
+#[cfg_attr(test, allow(dead_code))]
 fn allocate(source: &ID3D12Resource, single_slice: bool) -> Option<(ID3D12Resource, Layout)> {
     let desc = unsafe { source.GetDesc() };
     if desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D
@@ -89,6 +90,7 @@ fn readback_buffer(device: &ID3D12Device, bytes: u64) -> Option<ID3D12Resource> 
     buffer
 }
 
+#[cfg_attr(test, allow(dead_code))]
 unsafe fn allocate_raw(source: Handle, out: *mut Layout, single_slice: bool) -> Handle {
     let Some((buffer, layout)) = (unsafe { ID3D12Resource::from_raw_borrowed(&source) })
         .and_then(|source| allocate(source, single_slice))
@@ -104,6 +106,7 @@ pub(super) unsafe extern "C" fn allocate_capture(source: Handle, out: *mut Layou
     unsafe { allocate_raw(source, out, true) }
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) unsafe extern "C" fn rsf_fg12_platform_readback(
     source: Handle,
     out: *mut Layout,
@@ -140,6 +143,7 @@ fn transition(
     unsafe { commands.ResourceBarrier(&[barrier]) };
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) unsafe extern "C" fn rsf_fg12_platform_readback_copy(
     list: Handle,
     source: Handle,
@@ -187,6 +191,7 @@ pub(crate) unsafe extern "C" fn rsf_fg12_platform_readback_copy(
     transition(commands, source, copy, before);
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) unsafe extern "C" fn rsf_fg12_platform_map(buffer: Handle, bytes: u64) -> *const u8 {
     let Some(buffer) = (unsafe { ID3D12Resource::from_raw_borrowed(&buffer) }) else {
         return ptr::null();

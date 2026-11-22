@@ -153,17 +153,17 @@ pub(crate) unsafe extern "C" fn rsf_native_fg_submission(pass: *const Pass, begi
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_native_latency_graphics(api: u32) {
+pub(crate) extern "C" fn rsf_native_latency_graphics(api: u32) {
     rsf_core_native_latency_graphics(api);
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_native_latency_render(source: u64, begin: u32) {
+pub(crate) extern "C" fn rsf_native_latency_render(source: u64, begin: u32) {
     latency_render(source, begin, &NATIVE_PLATFORM);
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_native_latency_present(source: u64, chain: Handle, begin: u32) {
+pub(crate) extern "C" fn rsf_native_latency_present(source: u64, chain: Handle, begin: u32) {
     observe_latency_present(source, chain, begin, &NATIVE_PLATFORM);
 }
 
@@ -173,7 +173,7 @@ pub(crate) unsafe extern "C" fn rsf_native_latency_status_get(out: *mut LatencyS
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_latency_frame_get(out: *mut LatencyFrame) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_native_latency_frame_get(out: *mut LatencyFrame) -> i32 {
     unsafe { rsf_core_native_latency_frame_get(out) }
 }
 
@@ -193,7 +193,7 @@ unsafe extern "C" fn rsf_native_input_routes_get(out: *mut Routes) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_native_latency_ping(window: Handle) -> i32 {
+pub(crate) extern "C" fn rsf_native_latency_ping(window: Handle) -> i32 {
     latency_ping(window, &NATIVE_PLATFORM)
 }
 
@@ -203,6 +203,6 @@ extern "C" fn rsf_native_latency_retire(session: u64, through: u64) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_native_latency_end_session(session: u64) {
+pub(crate) extern "C" fn rsf_native_latency_end_session(session: u64) {
     latency_end_session(session, &NATIVE_PLATFORM);
 }

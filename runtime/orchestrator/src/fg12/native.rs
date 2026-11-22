@@ -1,142 +1,72 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::d3d12_host::fg::*;
-use crate::d3d12_host::pass_depth_domains;
-use crate::frame_capture12::native::{
-    rsf_fg12_platform_map, rsf_fg12_platform_readback, rsf_fg12_platform_readback_copy,
-    rsf_fg12_platform_unmap,
-};
 use crate::frame_capture12::{self as capture, Owner as Capture};
-use crate::native_cpu::rsf_native_cpu_dispatch;
 use rsf_game_sys::rsf_frame_allows_fg;
 use std::sync::atomic::AtomicPtr;
 
-unsafe extern "C" {
-    fn rsf_input_dump_fg_prepare(
-        pass: *const rsf_game_render_pass,
-        frame: *const rsf_fg_frame,
-        result: i32,
-    );
-    fn rsf_native_latency_ping(window: *mut c_void) -> i32;
-    fn rsf_streamline_host_abort(host: *mut c_void, source: u64) -> i32;
-    fn rsf_d3d11_present_install(setup: *const rsf_d3d11_present_setup) -> i32;
-    fn rsf_d3d11_present_prepare(setup: *const rsf_d3d11_present_setup) -> i32;
-    fn rsf_d3d11_present_queue() -> *mut c_void;
-    fn rsf_d3d11_present_source_queue() -> *mut c_void;
-    fn rsf_d3d11_present_retire(
-        provider_session: *mut c_void,
-        list: *mut c_void,
-        fence: *mut *mut c_void,
-        value: *mut u64,
-    ) -> i32;
-    fn rsf_d3d11_present_is_owner(chain: *mut c_void) -> i32;
-    fn rsf_d3d11_present_has_owner() -> i32;
-    fn rsf_d3d11_present_provider() -> *const rsf_generation_provider;
-    fn rsf_d3d11_present_backend() -> u32;
-    fn rsf_d3d11_present_generation() -> u64;
-    fn rsf_native_fg_set_log(log: rsf_backend_log_fn, user: *mut c_void);
-    fn rsf_native_fg_options_set(options: *const rsf_native_fg_options);
-    fn rsf_native_fg_cpu(event: *const rsf_game_cpu_event);
-    fn rsf_native_latency_status_get(status: *mut rsf_native_latency_status) -> i32;
-    fn rsf_native_latency_frame_get(frame: *mut rsf_native_latency_frame) -> i32;
-    fn rsf_native_latency_graphics(api: u32);
-    fn rsf_native_latency_render(source: u64, begin: u32);
-    fn rsf_native_latency_present(source: u64, chain: *mut c_void, begin: u32);
-    fn rsf_native_latency_end_session(session: u64);
-    fn rsf_input_dump_poll();
-    fn rsf_input_dump_begin_record(record: *const rsf_frame_record, backend: u32) -> i32;
-    fn rsf_input_dump_current(record: *mut rsf_frame_record) -> i32;
-    fn rsf_input_dump_requested() -> i32;
-    fn rsf_input_dump_complete(record: *const rsf_frame_record, result: i32);
-    fn rsf_input_dump_result(
-        record: *const rsf_frame_record,
-        stage: *const c_char,
-        backend: u32,
-        result: i32,
-    );
-}
+// The linked native calls `native!` reaches by name. Unit tests do not build this module.
+pub(super) use crate::d3d11_present::{
+    rsf_d3d11_present_backend as present_backend,
+    rsf_d3d11_present_generation as present_generation,
+    rsf_d3d11_present_has_owner as has_owner, rsf_d3d11_present_is_owner as is_owner,
+    rsf_d3d11_present_provider as present_provider, rsf_d3d11_present_queue as present_queue,
+    rsf_d3d11_present_retire as present_retire,
+    rsf_d3d11_present_source_queue as source_queue,
+};
+pub(super) use crate::d3d12_host::fg::{
+    rsf_fg12_platform_buffer_index as buffer_index, rsf_fg12_platform_copy as copy,
+    rsf_fg12_platform_fence as fence, rsf_fg12_platform_signal as signal,
+    rsf_fg12_platform_texture as texture, rsf_fg12_platform_texture_desc as texture_desc,
+    rsf_fg12_platform_transition as transition,
+};
+pub(super) use crate::d3d12_host::pass_depth_domains as depth_domains;
+pub(super) use crate::frame_capture12::native::{
+    rsf_fg12_platform_map as map, rsf_fg12_platform_readback as readback,
+    rsf_fg12_platform_readback_copy as readback_copy, rsf_fg12_platform_unmap as unmap,
+};
+pub(super) use crate::input_dump::abi::{
+    rsf_input_dump_begin_record as dump_begin_record, rsf_input_dump_complete as dump_complete,
+    rsf_input_dump_current as dump_current, rsf_input_dump_poll as dump_poll,
+    rsf_input_dump_requested as dump_requested, rsf_input_dump_result as dump_result,
+};
+use crate::input_dump::rsf_input_dump_fg_prepare;
+pub(super) use crate::native_cpu::rsf_native_cpu_dispatch as cpu_dispatch;
+pub(super) use crate::native_fg::{
+    rsf_native_fg_options_set as fg_options_set, rsf_native_fg_set_log as fg_set_log,
+};
+use crate::native_fg_cpu::platform::rsf_native_latency_ping;
+pub(super) use crate::native_fg_cpu::platform::{
+    rsf_native_fg_cpu as fg_cpu, rsf_native_latency_end_session as latency_end_session,
+    rsf_native_latency_frame_get as latency_frame_get,
+    rsf_native_latency_graphics as latency_graphics,
+    rsf_native_latency_present as latency_present, rsf_native_latency_render as latency_render,
+    rsf_native_latency_status_get as latency_status_get,
+};
 
-unsafe extern "C" fn allows_fg(record: *const rsf_frame_record) -> u32 {
+pub(super) unsafe fn allows_fg(record: *const rsf_frame_record) -> u32 {
     unsafe { rsf_frame_allows_fg(record) as u32 }
 }
 
-unsafe extern "C" fn dump_prepare(frame: *const rsf_fg_frame, result: i32) {
+pub(super) unsafe fn dump_prepare(frame: *const rsf_fg_frame, result: i32) {
     unsafe { rsf_input_dump_fg_prepare(std::ptr::null(), frame, result) };
 }
 
 // Explicit creation only prepares the bridge. Both entries are non-unwinding
-// Rust behind thin C shims, and their native hook callbacks contain their own
-// exceptions, so no foreign unwind can reach this frame.
-unsafe extern "C" fn present_install(setup: *const rsf_d3d11_present_setup, explicit: i32) -> i32 {
+// Rust, and their native hook callbacks contain their own exceptions, so no
+// foreign unwind can reach this frame.
+pub(super) unsafe fn install(setup: *const rsf_d3d11_present_setup, explicit: i32) -> i32 {
     unsafe {
         if explicit != 0 {
-            rsf_d3d11_present_prepare(setup)
+            crate::d3d11_present::rsf_d3d11_present_prepare(setup)
         } else {
-            rsf_d3d11_present_install(setup)
+            crate::d3d11_present::rsf_d3d11_present_install(setup)
         }
     }
 }
 
-unsafe extern "C" fn host_abort(host: *mut rsf_streamline_host, source: u64) -> i32 {
-    unsafe { rsf_streamline_host_abort(host.cast(), source) }
+pub(super) unsafe fn host_abort(host: *mut rsf_streamline_host, source: u64) -> i32 {
+    unsafe { crate::streamline_host::rsf_streamline_host_abort(host.cast(), source) }
 }
-
-unsafe extern "C" fn readback_copy(
-    list: *mut c_void,
-    source: *mut c_void,
-    state: u32,
-    buffer: *mut c_void,
-    layout: *const rsf_fg12_readback_layout,
-) {
-    unsafe { rsf_fg12_platform_readback_copy(list, source, state, buffer, layout) };
-}
-
-pub(super) static CALLS: Platform = Platform {
-    buffer_index: rsf_fg12_platform_buffer_index,
-    install: present_install,
-    allows_fg,
-    depth_domains: pass_depth_domains,
-    texture_desc: rsf_fg12_platform_texture_desc,
-    texture: rsf_fg12_platform_texture,
-    copy: rsf_fg12_platform_copy,
-    transition: rsf_fg12_platform_transition,
-    fence: rsf_fg12_platform_fence,
-    signal: rsf_fg12_platform_signal,
-    readback: rsf_fg12_platform_readback,
-    readback_copy,
-    map: rsf_fg12_platform_map,
-    unmap: rsf_fg12_platform_unmap,
-    dump_record,
-    dump_flush,
-    dump_submitted,
-    dump_prepare,
-    present_queue: rsf_d3d11_present_queue,
-    source_queue: rsf_d3d11_present_source_queue,
-    present_retire: rsf_d3d11_present_retire,
-    is_owner: rsf_d3d11_present_is_owner,
-    has_owner: rsf_d3d11_present_has_owner,
-    present_provider: rsf_d3d11_present_provider,
-    present_backend: rsf_d3d11_present_backend,
-    present_generation: rsf_d3d11_present_generation,
-    host_abort,
-    fg_set_log: rsf_native_fg_set_log,
-    fg_options_set: rsf_native_fg_options_set,
-    fg_cpu: rsf_native_fg_cpu,
-    latency_status_get: rsf_native_latency_status_get,
-    latency_frame_get: rsf_native_latency_frame_get,
-    latency_graphics: rsf_native_latency_graphics,
-    latency_render: rsf_native_latency_render,
-    latency_present: rsf_native_latency_present,
-    latency_end_session: rsf_native_latency_end_session,
-    cpu_dispatch: rsf_native_cpu_dispatch,
-    dump_poll: rsf_input_dump_poll,
-    dump_begin_record: rsf_input_dump_begin_record,
-    dump_current: rsf_input_dump_current,
-    dump_requested: rsf_input_dump_requested,
-    dump_complete: rsf_input_dump_complete,
-    dump_result: rsf_input_dump_result,
-};
-
 // The native lifetime hooks run at module attach and detach, as the former
 // C++ capture member did. Detach requires a quiescent Runtime.
 static CAPTURE: AtomicPtr<Capture> = AtomicPtr::new(null_mut());
@@ -152,7 +82,7 @@ extern "C" fn rsf_fg12_capture_detach() {
     unsafe { capture::rsf_core_capture12_destroy(owner) };
 }
 
-unsafe extern "C" fn dump_record(
+pub(super) unsafe fn dump_record(
     list: *mut c_void,
     source: *mut c_void,
     state: u32,
@@ -177,11 +107,11 @@ unsafe extern "C" fn dump_record(
     }
 }
 
-unsafe extern "C" fn dump_flush() {
+pub(super) unsafe fn dump_flush() {
     unsafe { capture::rsf_core_capture12_flush(CAPTURE.load(Ordering::Acquire), u32::MAX, 1) };
 }
 
-unsafe extern "C" fn dump_submitted(queue: *mut c_void, record: *const rsf_frame_record) {
+pub(super) unsafe fn dump_submitted(queue: *mut c_void, record: *const rsf_frame_record) {
     unsafe {
         capture::rsf_core_capture12_submitted(
             CAPTURE.load(Ordering::Acquire),

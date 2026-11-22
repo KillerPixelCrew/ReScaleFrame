@@ -214,6 +214,7 @@ extern "C" fn rsf_fsr_sr_provider() -> *const Sr {
     fsr_sr_provider(false)
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) extern "C" fn rsf_fsr_managed_sr_provider() -> *const Sr {
     fsr_sr_provider(true)
 }

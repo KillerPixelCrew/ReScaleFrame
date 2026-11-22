@@ -18,6 +18,7 @@ pub(super) unsafe fn borrow<T: Interface>(raw: &Raw) -> &T {
 }
 
 // Adopt the output before interpreting the HRESULT so a partial result is released.
+#[cfg_attr(test, allow(dead_code))]
 fn receive<T: Interface>(call: impl FnOnce(&GUID, *mut Raw) -> HRESULT) -> Option<T> {
     let mut raw = null_mut();
     let status = call(&T::IID, &mut raw);
@@ -35,6 +36,7 @@ pub(super) fn owned_by(child: &ID3D12DeviceChild, device: *const c_void) -> bool
     device_of(child).is_some_and(|owner| owner.as_raw().cast_const() == device)
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(super) fn committed_resource(
     device: &ID3D12Device,
     heap_type: D3D12_HEAP_TYPE,
@@ -91,6 +93,7 @@ fn transition(
     }
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(super) unsafe extern "C" fn rsf_core_d3d12_transition(
     list: Raw,
     resource: Raw,
@@ -168,6 +171,7 @@ pub(super) unsafe extern "C" fn rsf_core_d3d12_create_uav_texture(
     )
 }
 
+#[cfg(not(test))]
 pub(super) mod fg;
 // Called only by sr12's native platform, which unit tests do not build.
 #[cfg(not(test))]

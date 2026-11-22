@@ -48,6 +48,8 @@ mod dxgi;
 mod facade;
 #[path = "d3d11_present_factory.rs"]
 mod factory;
+#[cfg(not(test))]
+pub(crate) use factory::rsf_d3d11_present_install;
 #[cfg_attr(test, allow(dead_code))]
 #[path = "d3d11_present_gpu.rs"]
 mod gpu;

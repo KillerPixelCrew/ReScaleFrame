@@ -50,7 +50,7 @@ extern "C" fn rsf_input_dump_cancel(session: u64) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_input_dump_poll() {
+pub(crate) extern "C" fn rsf_input_dump_poll() {
     let now = clock();
     owner(|owner| owner.poll(&now));
 }
@@ -106,7 +106,7 @@ pub(crate) extern "C" fn rsf_input_dump_wants_frame(frame: u64) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_input_dump_current(output: *mut rsf_frame_record) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_input_dump_current(output: *mut rsf_frame_record) -> i32 {
     let Some(selected) = owner(|owner| owner.capture.as_ref().and_then(|capture| capture.record))
     else {
         return 0;
@@ -121,7 +121,7 @@ unsafe extern "C" fn rsf_input_dump_current(output: *mut rsf_frame_record) -> i3
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_input_dump_requested() -> i32 {
+pub(crate) extern "C" fn rsf_input_dump_requested() -> i32 {
     i32::from(owner(|owner| owner.capture.is_some()))
 }
 
@@ -247,7 +247,7 @@ pub(crate) unsafe extern "C" fn rsf_input_dump_pixels(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_input_dump_complete(input: *const rsf_frame_record, result: i32) {
+pub(crate) unsafe extern "C" fn rsf_input_dump_complete(input: *const rsf_frame_record, result: i32) {
     if let Some(frame) = unsafe { record(input) } {
         owner(|owner| {
             if owner
@@ -391,7 +391,7 @@ unsafe extern "C" fn rsf_input_dump_pass_metadata(input: *const rsf_game_render_
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_input_dump_result(
+pub(crate) unsafe extern "C" fn rsf_input_dump_result(
     input: *const rsf_frame_record,
     stage: *const c_char,
     backend: u32,

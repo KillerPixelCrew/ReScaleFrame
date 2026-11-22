@@ -1102,7 +1102,7 @@ unsafe extern "C" fn rsf_streamline_host_marker(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_streamline_host_abort(host: *mut Host, id: u64) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_streamline_host_abort(host: *mut Host, id: u64) -> i32 {
     unsafe { rsf_core_slhost_abort(host, id) }
 }
 

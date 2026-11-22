@@ -148,8 +148,12 @@ mod wide;
 mod diagnostic_preferences;
 #[cfg(windows)]
 use rsf_fsr4_compat::ffx_version;
-#[cfg(windows)]
+#[cfg(all(windows, not(test)))]
 mod fg12;
+// Unit tests reach only the FG12 retirement policy; the owner calls native leaves.
+#[cfg(all(windows, test))]
+#[path = "fg12/retirement.rs"]
+mod fg12_retirement;
 #[cfg(windows)]
 mod fg_choice;
 #[cfg(windows)]
@@ -217,6 +221,8 @@ mod overlay_panel;
 #[cfg(windows)]
 mod overlay_pointer;
 #[cfg(windows)]
+// Reached only from the overlay host's native leaves, which unit tests replace.
+#[cfg(not(test))]
 mod overlay_renderer11;
 #[cfg(windows)]
 mod overlay_saved;
