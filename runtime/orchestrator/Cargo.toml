@@ -14,7 +14,11 @@ crate-type = ["staticlib", "rlib"]
 rsf-fsr4-compat = { path = "../backends/fsr/compat" }
 rsf-game-sys = { path = "../../sdk/game" }
 rsf-streamline-vk = { path = "../vulkan/streamline/lifecycle" }
+rsf-graphics = { path = "../graphics/rust" }
 rsf-runtime-submission = { path = "../graphics/submission" }
+
+[dev-dependencies]
+rsf-graphics = { path = "../graphics/rust", features = ["test-support"] }
 
 [build-dependencies]
 cc = "1"

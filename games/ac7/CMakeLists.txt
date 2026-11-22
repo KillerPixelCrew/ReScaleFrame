@@ -5,7 +5,9 @@ else()
     rsf_add_rust_static(rsf_ac7_rust rsf_rust_ac7 rsf-ac7 rsf_ac7)
 endif()
 # TrueSky's Rust D3D11 owner uses the shared System32 shader compiler entry. The crate's guarded
-# engine reads are the SEH leaf rsf_ac7_memory, so every consumer of the archive links it.
+# engine reads are the SEH leaf rsf_ac7_memory, so every consumer of the archive links it. The D3D11
+# leaves it calls come from ReScaleFrame::GraphicsLeaves or, in carriers and fixtures that link the
+# Runtime archive, from that archive; each binary links exactly one of the two.
 target_link_libraries(rsf_ac7_rust INTERFACE rsf_shader_compiler rsf_ac7_memory)
 add_library(rsf_ac7_view INTERFACE)
 target_include_directories(rsf_ac7_view INTERFACE include)
@@ -29,7 +31,8 @@ add_library(ReScaleFrame::AC7View ALIAS rsf_ac7_view)
 # native graph fixtures. The carriers use the crate through AC7View without pulling render_scope_entry.c.
 add_library(rsf_game_ac7 SHARED src/plugin.c)
 set_target_properties(rsf_game_ac7 PROPERTIES LINKER_LANGUAGE CXX)
-target_link_libraries(rsf_game_ac7 PRIVATE ReScaleFrame::GameSDK rsf_ac7_view rsf_ac7_render_scope rsf_ac7_rust rsf_build_options)
+target_link_libraries(rsf_game_ac7 PRIVATE ReScaleFrame::GameSDK rsf_ac7_view rsf_ac7_render_scope rsf_ac7_rust
+    ReScaleFrame::GraphicsLeaves rsf_build_options)
 set_target_properties(rsf_game_ac7 PROPERTIES OUTPUT_NAME "ReScaleFrame.Game.AC7")
 
 # The Rust UI rules classify frame-tap facts and check the captured shader fingerprint.

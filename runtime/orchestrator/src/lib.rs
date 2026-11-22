@@ -11,6 +11,7 @@
 pub mod sys {
     // rsf-fsr4-compat's module carries the public SDK bindings too.
     pub use rsf_fsr4_compat::sys::*;
+    pub use rsf_graphics::sys::*;
     pub use rsf_streamline_vk::sys::*;
     include!(concat!(env!("OUT_DIR"), "/sys.rs"));
 }
@@ -20,16 +21,16 @@ mod auxiliary_sr;
 #[cfg(windows)]
 mod callback_host;
 mod capture_metadata;
-mod capture_names;
-mod capture_pixels;
+use rsf_graphics::capture_names;
+use rsf_graphics::capture_pixels;
 #[cfg(test)]
 mod capture_test_sink;
 #[cfg(windows)]
 mod colour_d3d11;
 #[cfg(windows)]
-mod com_ref;
+use rsf_graphics::com_ref;
 #[cfg(windows)]
-mod constant_buffer_read;
+use rsf_graphics::constant_buffer_read;
 #[cfg(windows)]
 mod constant_twins;
 #[cfg(windows)]
@@ -59,7 +60,7 @@ mod d3d11_observer_present;
 #[cfg(windows)]
 mod d3d11_output;
 #[cfg(windows)]
-mod d3d11_output_platform;
+use rsf_graphics::d3d11_output_platform;
 #[cfg(windows)]
 mod d3d11_present;
 #[cfg(windows)]
@@ -70,8 +71,6 @@ mod d3d11_sharpening;
 mod d3d11_sr_admission;
 #[cfg(all(windows, not(test)))]
 mod d3d11_sr_api;
-#[cfg(windows)]
-mod d3d11_state;
 #[cfg(windows)]
 mod d3d12_fence;
 #[cfg(windows)]
@@ -112,7 +111,7 @@ mod dx12_vulkan_platform;
 #[path = "../../graphics/src/dxbc_chunks.rs"]
 mod dxbc_chunks;
 #[cfg(windows)]
-mod dxgi_format;
+use rsf_graphics::dxgi_format;
 #[cfg(windows)]
 mod graphics_d3d11;
 #[cfg(windows)]
@@ -176,7 +175,7 @@ mod frame_capture_vk;
 mod frame_limit;
 mod frame_sequencer;
 #[cfg(windows)]
-mod frame_tap;
+use rsf_graphics::frame_tap;
 #[cfg(windows)]
 mod fsr4_fg_bridge;
 #[cfg(windows)]
@@ -250,7 +249,7 @@ mod render_host_native;
 #[cfg(windows)]
 mod render_links;
 #[cfg(windows)]
-mod resource_roles;
+use rsf_graphics::resource_roles;
 #[cfg(windows)]
 mod sampler_bias;
 #[cfg(windows)]
@@ -291,7 +290,7 @@ mod streamline_sr;
 #[cfg(all(windows, test))]
 mod temporary_ini;
 #[cfg(windows)]
-mod texture_dump;
+use rsf_graphics::texture_dump;
 #[cfg(windows)]
 mod ui_identify;
 #[cfg(windows)]

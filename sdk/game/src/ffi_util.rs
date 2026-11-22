@@ -26,3 +26,19 @@ pub const fn ascii_wide<const N: usize>(text: &[u8]) -> [u16; N] {
     }
     wide
 }
+
+/// A sized ABI record: non-null and its leading `struct_size` covers `T`.
+///
+/// # Safety
+/// A non-null `value` must point to a readable record whose first field is its `u32` size.
+pub unsafe fn has_capacity<T>(value: *const T) -> bool {
+    !value.is_null() && (unsafe { value.cast::<u32>().read() } as usize) >= size_of::<T>()
+}
+
+/// The record behind `value` when [`has_capacity`] admits it.
+///
+/// # Safety
+/// As for [`has_capacity`]; the record must also be suitably aligned for `T` and live for `'a`.
+pub unsafe fn checked<'a, T>(value: *const T) -> Option<&'a T> {
+    unsafe { has_capacity(value) }.then(|| unsafe { &*value })
+}

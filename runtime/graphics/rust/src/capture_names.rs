@@ -2,13 +2,13 @@
 use std::ffi::{CStr, CString};
 use std::io::Write as _;
 
-pub(super) const HDR: u32 = 3;
-pub(super) const DEPTH: u32 = 4;
-pub(super) const SCALAR: u32 = 5;
-pub(super) const ALPHA: u32 = 6;
-pub(super) const DENSE_MOTION: u32 = 7;
+pub const HDR: u32 = 3;
+pub const DEPTH: u32 = 4;
+pub const SCALAR: u32 = 5;
+pub const ALPHA: u32 = 6;
+pub const DENSE_MOTION: u32 = 7;
 
-pub(super) struct CaptureName {
+pub struct CaptureName {
     pub name: CString,
     pub view: u32,
     pub scale: f32,
@@ -21,7 +21,7 @@ fn contains(text: &[u8], word: &[u8]) -> bool {
 impl CaptureName {
     // The capacity includes the terminator. Preserve the caller's role bytes
     // even when they do not form valid UTF-8.
-    pub(super) fn for_role(role: &CStr, ordinal: u32, capacity: usize) -> Option<Self> {
+    pub fn for_role(role: &CStr, ordinal: u32, capacity: usize) -> Option<Self> {
         let role = role.to_bytes();
         let stem: &[u8] = match role {
             b"sr-linear-color" => b"sr_color",

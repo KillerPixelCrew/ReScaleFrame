@@ -93,7 +93,7 @@ around `rsf_promote_finish` without touching the plan. That path never waits.
 
 ## Foreign callback containment
 
-The callbacks supplied by C++ clients are invoked from `runtime/orchestrator/src/frame_tap_callbacks.c`, a C11 leaf
+The callbacks supplied by C++ clients are invoked from `runtime/graphics/src/frame_tap_callbacks.c`, a C11 leaf
 that contains MSVC C++ exceptions with structured exception handling. See [leaf closure](rust-core-leaves-closure.md).
 
 ## Limits

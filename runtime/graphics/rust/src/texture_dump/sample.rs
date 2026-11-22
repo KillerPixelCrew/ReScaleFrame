@@ -5,7 +5,7 @@ use crate::dxgi_format::{
     R32G8X24_TYPELESS, half_to_f32,
 };
 
-use crate::input_dump::{DECODED_MOTION, ENCODED_MOTION, MotionEncoding};
+use crate::dump_options::{DECODED_MOTION, ENCODED_MOTION, MotionEncoding};
 
 const DECODED_SENTINEL_THRESHOLD: f32 = -100.0;
 

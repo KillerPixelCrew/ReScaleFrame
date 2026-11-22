@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 // DXGI format values shared by the Direct3D paths.
-pub(super) const RGBA32_FLOAT: u32 = 2;
-pub(super) const RGBA16_FLOAT: u32 = 10;
-pub(super) const R32G8X24_TYPELESS: u32 = 19;
-pub(super) const D32_FLOAT_S8X24_UINT: u32 = 20;
-pub(super) const R32_TYPELESS: u32 = 39;
-pub(super) const D32_FLOAT: u32 = 40;
-pub(super) const R24G8_TYPELESS: u32 = 44;
-pub(super) const D24_UNORM_S8_UINT: u32 = 45;
-pub(super) const R24_UNORM_X8_TYPELESS: u32 = 46;
+pub const RGBA32_FLOAT: u32 = 2;
+pub const RGBA16_FLOAT: u32 = 10;
+pub const R32G8X24_TYPELESS: u32 = 19;
+pub const D32_FLOAT_S8X24_UINT: u32 = 20;
+pub const R32_TYPELESS: u32 = 39;
+pub const D32_FLOAT: u32 = 40;
+pub const R24G8_TYPELESS: u32 = 44;
+pub const D24_UNORM_S8_UINT: u32 = 45;
+pub const R24_UNORM_X8_TYPELESS: u32 = 46;
 
-pub(super) fn half_to_f32(half: u16) -> f32 {
+pub fn half_to_f32(half: u16) -> f32 {
     let sign = u32::from(half & 0x8000) << 16;
     let exponent = u32::from((half >> 10) & 0x1f);
     let mantissa = u32::from(half & 0x3ff);

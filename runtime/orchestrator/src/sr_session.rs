@@ -58,14 +58,8 @@ pub(crate) fn valid_unit_scale(units_to_meters: f32) -> bool {
 }
 
 // A caller may provide only the size field when reporting a short structure.
-pub(crate) unsafe fn has_capacity<T>(value: *const T) -> bool {
-    !value.is_null() && (unsafe { value.cast::<u32>().read() } as usize) >= size_of::<T>()
-}
-
-// The caller supplies a suitably aligned, readable record with its size at offset zero.
-pub(crate) unsafe fn checked<'a, T>(value: *const T) -> Option<&'a T> {
-    unsafe { has_capacity(value) }.then(|| unsafe { &*value })
-}
+// The sized-record checks are shared with rsf-graphics through the SDK.
+pub(crate) use rsf_game_sys::ffi_util::{checked, has_capacity};
 
 // Shared wire validation for direct provider calls, sessions and the D3D11 bridge.
 #[unsafe(no_mangle)]

@@ -3,14 +3,14 @@
 use std::ffi::c_void;
 
 #[repr(C)]
-pub(super) struct Pixels {
-    pub(super) struct_size: u32,
-    pub(super) width: u32,
-    pub(super) height: u32,
-    pub(super) format: u32,
-    pub(super) row_pitch: u32,
-    pub(super) data_size: u64,
-    pub(super) data: *const c_void,
+pub struct Pixels {
+    pub struct_size: u32,
+    pub width: u32,
+    pub height: u32,
+    pub format: u32,
+    pub row_pitch: u32,
+    pub data_size: u64,
+    pub data: *const c_void,
 }
 
 const _: () = {

@@ -85,21 +85,6 @@ fn plugin_callbacks() {
         .compile("rsf_plugin_callbacks");
 }
 
-fn frame_tap_callbacks() {
-    // C leaf: contains foreign C++ exceptions raised by borrowed frame-tap callbacks.
-    let mut build = cc::Build::new();
-    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
-        build.flags(["/Zl", "/std:c11"]);
-    }
-    build
-        .include("../../sdk/game/include")
-        .include("../graphics/include")
-        .define("WIN32_LEAN_AND_MEAN", None)
-        .warnings_into_errors(true)
-        .file("src/frame_tap_callbacks.c")
-        .compile("rsf_frame_tap_callbacks");
-}
-
 // SEH containment for the Streamline call leaves, under the Runtime's own name
 // so the standalone lifecycle archive can link beside it.
 fn streamline_guard() {
@@ -119,13 +104,12 @@ fn streamline_guard() {
 }
 
 /// Binds the private Runtime headers that only this crate and its test crates read. The public
-/// headers come from rsf-game-sys, the FSR 4 ones from rsf-fsr4-compat and the Streamline records
-/// from rsf-streamline-vk.
+/// headers come from rsf-game-sys, the FSR 4 ones from rsf-fsr4-compat, the Streamline records
+/// from rsf-streamline-vk and the D3D11 output and frame-tap platform headers from rsf-graphics.
 fn bindings() {
     const HEADERS: &[&str] = &[
         "runtime/orchestrator/src/auxiliary_sr_platform.h",
         "runtime/orchestrator/src/d3d11_host_foreign.h",
-        "runtime/orchestrator/src/d3d11_output_platform.h",
         "runtime/orchestrator/src/fg12_platform.h",
         "runtime/orchestrator/src/latency_antilag.h",
         "runtime/orchestrator/src/native_dlss_vulkan_platform.h",
@@ -146,7 +130,6 @@ fn bindings() {
         "runtime/orchestrator/src/vulkan_fg_resources.h",
         "runtime/orchestrator/src/vulkan_fg_copy_abi.h",
         "runtime/orchestrator/src/vulkan_fg_frames.h",
-        "runtime/graphics/src/frame_tap_platform.h",
         "runtime/graphics/src/sharpening/d3d11.h",
         "runtime/backends/dlss/src/streamline_generation_records.h",
         "runtime/backends/dlss/src/streamline_sr_records.h",
@@ -174,7 +157,15 @@ fn bindings() {
             "runtime/vulkan/fsr4-fg",
             "tests/native_sr_fsr4_vulkan_fixture.h",
         ],
-        &["runtime/backends/fsr/src", "runtime/vulkan/fsr4", "runtime/vulkan/streamline"], &[],
+        &[
+            "runtime/backends/fsr/src",
+            "runtime/vulkan/fsr4",
+            "runtime/vulkan/streamline",
+            // rsf-graphics owns the D3D11 output and frame-tap platform headers.
+            "runtime/orchestrator/src/d3d11_output_platform.h",
+            "runtime/graphics/src/frame_tap_platform.h",
+        ],
+        &[],
     )
     .parse_callbacks(Box::new(rsf_bindgen::Derives(derives)))
     // The Vulkan FSR 4 owner stays an untyped handle on the Rust side, as before.
@@ -192,9 +183,6 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(rsf_streamline_core)");
     println!("cargo:rustc-cfg=rsf_streamline_core");
     println!("cargo:rerun-if-changed=src/plugin_callbacks.c");
-    println!("cargo:rerun-if-changed=src/frame_tap_callbacks.c");
-    println!("cargo:rerun-if-changed=../graphics/src/frame_tap_platform.h");
-    println!("cargo:rerun-if-changed=../graphics/include/rescaleframe/frame_tap.h");
     println!("cargo:rerun-if-changed=src/d3d11_output_platform.h");
     println!("cargo:rerun-if-changed=../graphics/include/rescaleframe/d3d11_state.h");
     println!("cargo:rerun-if-changed=../graphics/include/rescaleframe/srv_format.h");
@@ -203,7 +191,6 @@ fn main() {
         shader_patch_parser();
         sharpening_payload();
         plugin_callbacks();
-        frame_tap_callbacks();
         streamline_guard();
     }
 }

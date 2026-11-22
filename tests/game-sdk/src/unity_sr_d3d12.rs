@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #[allow(dead_code)]
-#[path = "../../../runtime/orchestrator/src/dxgi_format.rs"]
+#[path = "../../../runtime/graphics/rust/src/dxgi_format.rs"]
 mod dxgi_format;
 mod gpu;
 mod math;

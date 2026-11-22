@@ -12,7 +12,6 @@ use crate::sys::{
 use std::ffi::c_void;
 use std::ptr;
 use std::ptr::NonNull;
-use std::sync::Mutex;
 
 pub(super) type CreateBlit = unsafe extern "C" fn(*mut c_void) -> *mut rsf_fullscreen_pass;
 pub(super) type DrawBlit = unsafe extern "C" fn(
@@ -110,65 +109,7 @@ impl Drop for FullscreenBlit {
     }
 }
 
-pub(super) type SaveBindings = unsafe extern "C" fn(*mut c_void, *mut rsf_d3d11_state) -> u32;
-pub(super) type RestoreBindings = unsafe extern "C" fn(*mut c_void, *mut rsf_d3d11_state);
-
-pub(super) struct SavedBindings {
-    context: *mut c_void,
-    saved: rsf_d3d11_state,
-    restore: RestoreBindings,
-}
-
-impl SavedBindings {
-    pub(super) unsafe fn new(
-        context: *mut c_void,
-        save: SaveBindings,
-        restore: RestoreBindings,
-    ) -> Option<Self> {
-        let mut saved = rsf_d3d11_state::default();
-        if unsafe { save(context, &mut saved) } == 0 {
-            return None;
-        }
-        Some(Self {
-            context,
-            saved,
-            restore,
-        })
-    }
-}
-
-impl Drop for SavedBindings {
-    fn drop(&mut self) {
-        unsafe { (self.restore)(self.context, &mut self.saved) };
-    }
-}
-
-pub(super) unsafe fn texture_desc(texture: *mut c_void) -> rsf_d3d11_texture_desc {
-    let mut desc = rsf_d3d11_texture_desc::default();
-    unsafe { rsf_d3d11_output_texture_desc(texture, &mut desc) };
-    desc
-}
-
-// A non-null child must be a live ID3D11DeviceChild interface.
-pub(super) unsafe fn same_device(device: *mut c_void, child: *mut c_void) -> bool {
-    !child.is_null()
-        && unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(child)) }
-            .is_some_and(|owner| owner.as_ptr() == device)
-}
-
-pub(super) struct GraphicsCache<T>(Mutex<Option<T>>);
-
-impl<T> GraphicsCache<T> {
-    pub(super) const fn new(state: T) -> Self {
-        Self(Mutex::new(Some(state)))
-    }
-
-    pub(super) fn with<R>(&self, run: impl FnOnce(&mut T) -> R) -> Option<R> {
-        // The supplied stream belongs to one graphics execution owner. During
-        // that owner's operation, refuse reentry without holding a driver-call lock.
-        let mut state = self.0.lock().ok()?.take()?;
-        let result = run(&mut state);
-        *self.0.lock().ok()? = Some(state);
-        Some(result)
-    }
-}
+// The shared D3D11 helpers live in rsf-graphics with the adapter-facing leaves.
+pub(super) use rsf_graphics::d3d11_output::{
+    GraphicsCache, SavedBindings, same_device, texture_desc,
+};

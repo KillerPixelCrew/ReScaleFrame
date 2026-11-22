@@ -15,6 +15,7 @@ members = [
   "runtime/vulkan/ngx",
   "runtime/vulkan/streamline/lifecycle",
   "runtime/common",
+  "runtime/graphics/rust",
   "runtime/graphics/submission",
   "runtime/orchestrator",
   "runtime/shader_patch/compiler",

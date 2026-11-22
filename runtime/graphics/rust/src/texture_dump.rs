@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
-use crate::input_dump::{
-    ENCODED_MOTION, Log, MAX_IMAGE_BYTES, MotionEncoding, MotionTextureOptions, Pixels,
-    TextureOptions,
+use crate::capture_pixels::Pixels;
+use crate::dump_options::{
+    ENCODED_MOTION, Log, MAX_IMAGE_BYTES, MotionEncoding, MotionTextureOptions, TextureOptions,
 };
-use crate::sr_session::checked;
+use rsf_game_sys::ffi_util::checked;
 use std::ffi::{CStr, CString, c_void};
 use std::fs::File;
 use std::io::{BufWriter, Write as _};
@@ -64,15 +64,17 @@ fn source_bytes(row_pitch: u32, height: u32, row_bytes: u64) -> Option<u64> {
     (u64::from(row_pitch) * u64::from(height.checked_sub(1)?)).checked_add(row_bytes)
 }
 
-pub(super) struct PackedRows<'a> {
+pub struct PackedRows<'a> {
     pixels: &'a Pixels,
     pitch: u32,
 }
 
 impl<'a> PackedRows<'a> {
+    /// # Safety
+    ///
     /// The caller lends initialized, readable payload bytes for each row, with
     /// the lifetime and byte capacity described by the pixel descriptor.
-    pub(super) unsafe fn new(pixels: &'a Pixels, pixel_bytes: u32) -> Option<Self> {
+    pub unsafe fn new(pixels: &'a Pixels, pixel_bytes: u32) -> Option<Self> {
         let pitch = pixels.width.checked_mul(pixel_bytes)?;
         if pixels.data.is_null() || pitch == 0 || pixels.row_pitch < pitch {
             return None;
@@ -81,15 +83,15 @@ impl<'a> PackedRows<'a> {
         (bytes <= pixels.data_size && bytes <= isize::MAX as u64).then_some(Self { pixels, pitch })
     }
 
-    pub(super) fn pitch(&self) -> u32 {
+    pub fn pitch(&self) -> u32 {
         self.pitch
     }
 
-    pub(super) fn packed_size(&self) -> u64 {
+    pub fn packed_size(&self) -> u64 {
         u64::from(self.pitch) * u64::from(self.pixels.height)
     }
 
-    pub(super) fn iter(&self) -> impl Iterator<Item = &'a [u8]> {
+    pub fn iter(&self) -> impl Iterator<Item = &'a [u8]> {
         let pixels = self.pixels;
         let pitch = self.pitch as usize;
         (0..pixels.height).map(move |y| {
@@ -100,7 +102,7 @@ impl<'a> PackedRows<'a> {
     }
 }
 
-pub(super) fn pixel_bytes(format: u32) -> u32 {
+pub fn pixel_bytes(format: u32) -> u32 {
     Format::from_dxgi(format).map_or(0, Format::bytes)
 }
 

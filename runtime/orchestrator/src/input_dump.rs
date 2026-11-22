@@ -16,6 +16,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
 pub(super) use crate::capture_pixels::Pixels;
+pub(super) use rsf_graphics::dump_options::{
+    DECODED_MOTION, ENCODED_MOTION, Log, MAX_IMAGE_BYTES, MotionEncoding, MotionTextureOptions,
+    TextureOptions,
+};
 pub(super) mod abi;
 mod legacy;
 mod metadata;
@@ -25,11 +29,8 @@ const INVALID: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
 const WRITE_FAILED: i32 = -6;
 const RAW: u32 = 0;
-pub(super) const ENCODED_MOTION: u32 = 1;
-pub(super) const DECODED_MOTION: u32 = 2;
 const D3D11: u32 = 1;
 const MAX_IMAGES: usize = 96;
-pub(super) const MAX_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -73,57 +74,6 @@ impl Encoding {
 }
 
 #[repr(C)]
-pub(super) struct TextureOptions {
-    struct_size: u32,
-    pub(super) abi_version: u32,
-    pub(super) prefix: *const c_char,
-    pub(super) view: u32,
-    pub(super) scale: f32,
-    pub(super) log: rsf_backend_log_fn,
-    pub(super) log_user: *mut c_void,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(super) struct MotionEncoding {
-    pub scale: [f32; 2],
-    pub bias: [f32; 2],
-    pub zero_x_unwritten: u32,
-}
-
-#[repr(C)]
-pub(super) struct MotionTextureOptions {
-    pub base: TextureOptions,
-    pub motion: MotionEncoding,
-}
-
-impl MotionTextureOptions {
-    pub(super) const ABI_VERSION: u32 = 3;
-
-    pub(super) fn new(mut base: TextureOptions, motion: MotionEncoding) -> Self {
-        base.struct_size = size_of::<Self>() as u32;
-        base.abi_version = Self::ABI_VERSION;
-        Self { base, motion }
-    }
-}
-
-impl TextureOptions {
-    pub(super) const ABI_VERSION: u32 = 2;
-
-    pub(super) fn new(prefix: &CStr, view: u32, scale: f32, log: Log) -> Self {
-        Self {
-            struct_size: size_of::<Self>() as u32,
-            abi_version: Self::ABI_VERSION,
-            prefix: prefix.as_ptr(),
-            view,
-            scale,
-            log: log.callback,
-            log_user: log.user as *mut c_void,
-        }
-    }
-}
-
-#[repr(C)]
 struct NamedRequest {
     struct_size: u32,
     abi_version: u32,
@@ -147,30 +97,6 @@ fn clock() -> Clock {
     let mut facts = Clock::default();
     native::read_clock(&mut facts);
     facts
-}
-
-#[derive(Clone, Copy, Default)]
-pub(super) struct Log {
-    callback: rsf_backend_log_fn,
-    // An opaque caller-supplied token. Rust never dereferences it.
-    user: usize,
-}
-
-impl Log {
-    pub(super) fn new(callback: rsf_backend_log_fn, user: *mut c_void) -> Self {
-        Self {
-            callback,
-            user: user as usize,
-        }
-    }
-
-    pub(super) fn say(self, text: &str) {
-        if let Some(callback) = self.callback
-            && let Ok(message) = CString::new(text)
-        {
-            unsafe { callback(self.user as *mut c_void, message.as_ptr()) };
-        }
-    }
 }
 
 #[derive(Clone, Copy, Default)]

@@ -15,7 +15,10 @@ const MAP_FAILED: i32 = -5;
 const FOREIGN_DEVICE: i32 = -6;
 
 // COM slots and descriptors verified against the C vtables in Windows SDK 10.0.26100.0 d3d11.h.
-pub(super) unsafe fn slot(object: Handle, index: usize) -> Handle {
+/// # Safety
+///
+/// `object` must be a live COM interface whose vtable has more than `index` slots.
+pub unsafe fn slot(object: Handle, index: usize) -> Handle {
     let table = unsafe { *object.cast::<*const Handle>() };
     unsafe { *table.add(index) }
 }
@@ -33,8 +36,8 @@ struct BufferDesc {
 
 #[repr(C)]
 #[derive(Default)]
-pub(super) struct MappedResource {
-    pub(super) data: Handle,
+pub struct MappedResource {
+    pub data: Handle,
     row_pitch: u32,
     depth_pitch: u32,
 }
@@ -44,9 +47,9 @@ const _: () = {
     assert!(size_of::<MappedResource>() == size_of::<Handle>() + 8);
 };
 
-pub(super) const MAP_WRITE_DISCARD: u32 = 4;
+pub const MAP_WRITE_DISCARD: u32 = 4;
 const MAP_READ: u32 = 1;
-pub(super) const USAGE_DYNAMIC: u32 = 2;
+pub const USAGE_DYNAMIC: u32 = 2;
 const USAGE_STAGING: u32 = 3;
 const BIND_CONSTANT_BUFFER: u32 = 4;
 const CPU_ACCESS_WRITE: u32 = 0x10000;
@@ -72,7 +75,10 @@ unsafe fn create_buffer(device: Handle, desc: &BufferDesc) -> Option<ComRef> {
     unsafe { ComRef::from_owned(buffer) }
 }
 
-pub(super) unsafe fn make_dynamic(device: Handle, bytes: u32) -> Option<ComRef> {
+/// # Safety
+///
+/// `device` must be a live `ID3D11Device`.
+pub unsafe fn make_dynamic(device: Handle, bytes: u32) -> Option<ComRef> {
     unsafe {
         create_buffer(
             device,
@@ -87,7 +93,10 @@ pub(super) unsafe fn make_dynamic(device: Handle, bytes: u32) -> Option<ComRef> 
     }
 }
 
-pub(super) unsafe fn resource_buffer_info(buffer: Handle) -> Option<(u32, u32, u32)> {
+/// # Safety
+///
+/// `buffer` must be a live `ID3D11Resource`.
+pub unsafe fn resource_buffer_info(buffer: Handle) -> Option<(u32, u32, u32)> {
     type GetType = unsafe extern "system" fn(Handle, *mut u32);
     let get_type: GetType = unsafe { std::mem::transmute(slot(buffer, 7)) };
     let mut dimension = 0;
@@ -99,14 +108,16 @@ pub(super) unsafe fn resource_buffer_info(buffer: Handle) -> Option<(u32, u32, u
     Some((desc.byte_width, desc.bind_flags, desc.usage))
 }
 
-pub(super) unsafe fn constant_size(buffer: Handle, bytes: u32) -> bool {
+/// # Safety
+///
+/// `buffer` must be a live `ID3D11Buffer`.
+pub unsafe fn constant_size(buffer: Handle, bytes: u32) -> bool {
     let desc = unsafe { buffer_desc(buffer) };
     desc.byte_width == bytes && desc.bind_flags & BIND_CONSTANT_BUFFER != 0
 }
 
-pub(super) type Map =
-    unsafe extern "system" fn(Handle, Handle, u32, u32, u32, *mut MappedResource) -> i32;
-pub(super) type Unmap = unsafe extern "system" fn(Handle, Handle, u32);
+pub type Map = unsafe extern "system" fn(Handle, Handle, u32, u32, u32, *mut MappedResource) -> i32;
+pub type Unmap = unsafe extern "system" fn(Handle, Handle, u32);
 
 unsafe fn map(context: Handle, buffer: Handle, kind: u32) -> Option<MappedResource> {
     let map: Map = unsafe { std::mem::transmute(slot(context, 14)) };
@@ -119,12 +130,11 @@ unsafe fn unmap(context: Handle, buffer: Handle) {
     unsafe { unmap(context, buffer, 0) };
 }
 
-pub(super) unsafe fn upload(
-    context: Handle,
-    buffer: Handle,
-    contents: *const c_void,
-    bytes: u32,
-) -> bool {
+/// # Safety
+///
+/// `context` must be a live `ID3D11DeviceContext`, `buffer` a dynamic buffer of its device and
+/// `contents` readable for `bytes` bytes, which must fit the buffer.
+pub unsafe fn upload(context: Handle, buffer: Handle, contents: *const c_void, bytes: u32) -> bool {
     let Some(mapped) = (unsafe { map(context, buffer, MAP_WRITE_DISCARD) }) else {
         return false;
     };

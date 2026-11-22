@@ -14,7 +14,7 @@ endforeach()
 target_include_directories(rsf_game_anomaly PRIVATE "${PROJECT_SOURCE_DIR}/runtime/orchestrator/include")
 target_link_libraries(rsf_game_anomaly PRIVATE rsf_anomaly_plugin_rust ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::RuntimeCommon minhook rsf_build_options)
 # Stage 1 uses only the generic immediate-context state scope (d3d11_state) and the texture-dump view enum header.
-target_link_libraries(rsf_game_anomaly PRIVATE ReScaleFrame::Graphics d3d11)
+target_link_libraries(rsf_game_anomaly PRIVATE ReScaleFrame::Graphics ReScaleFrame::GraphicsLeaves d3d11)
 set_target_properties(rsf_game_anomaly PROPERTIES OUTPUT_NAME "ReScaleFrame.Game.Anomaly")
 # The C detour leaves retire their scopes during a C++ unwind: __finally under MSVC, cleanup handlers under GCC.
 target_compile_options(rsf_game_anomaly PRIVATE $<$<AND:$<COMPILE_LANGUAGE:C>,$<NOT:$<C_COMPILER_ID:MSVC>>>:-fexceptions>)

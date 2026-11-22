@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT */
-#include "../../graphics/src/frame_tap_platform.h"
+#include "frame_tap_platform.h"
 
 /* Frame-tap callbacks can be supplied by C++ clients, and an exception that unwinds into the Rust
    frame tap is undefined. MSVC raises a C++ throw as structured exception 0xE06D7363, so this C leaf

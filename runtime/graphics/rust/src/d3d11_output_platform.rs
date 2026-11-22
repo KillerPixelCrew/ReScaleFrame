@@ -17,8 +17,11 @@ unsafe extern "C" fn rsf_d3d11_output_query_texture(resource: Raw) -> Raw {
         .map_or(null_mut(), Interface::into_raw)
 }
 
+/// # Safety
+///
+/// `child` is null or a live `ID3D11DeviceChild`; the caller owns the returned device.
 #[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_d3d11_output_child_device(child: Raw) -> Raw {
+pub unsafe extern "C" fn rsf_d3d11_output_child_device(child: Raw) -> Raw {
     unsafe { ID3D11DeviceChild::from_raw_borrowed(&child) }
         .and_then(|child| unsafe { child.GetDevice().ok() })
         .map_or(null_mut(), Interface::into_raw)
@@ -97,8 +100,12 @@ unsafe extern "C" fn rsf_d3d11_output_create_srv(device: Raw, texture: Raw, form
     result.map_or(null_mut(), Interface::into_raw)
 }
 
+/// # Safety
+///
+/// `device` must be a live `ID3D11Device` and `texture` a live resource of it; the caller owns
+/// the returned view.
 #[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_d3d11_output_create_rtv(device: Raw, texture: Raw) -> Raw {
+pub unsafe extern "C" fn rsf_d3d11_output_create_rtv(device: Raw, texture: Raw) -> Raw {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&device).unwrap() };
     let texture = unsafe { ID3D11Resource::from_raw_borrowed(&texture).unwrap() };
     let mut result = None;
@@ -113,7 +120,7 @@ extern "C" fn rsf_d3d11_output_srv_format(format: u32) -> u32 {
     srv_format(DXGI_FORMAT(format as i32)).0 as u32
 }
 
-pub(crate) fn srv_format(format: DXGI_FORMAT) -> DXGI_FORMAT {
+pub fn srv_format(format: DXGI_FORMAT) -> DXGI_FORMAT {
     match format {
         DXGI_FORMAT_R32G8X24_TYPELESS | DXGI_FORMAT_D32_FLOAT_S8X24_UINT => {
             DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS
@@ -134,14 +141,20 @@ pub(crate) fn srv_format(format: DXGI_FORMAT) -> DXGI_FORMAT {
     }
 }
 
+/// # Safety
+///
+/// `device` must be a live `ID3D11Device`.
 #[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_d3d11_output_device_ok(device: Raw) -> u32 {
+pub unsafe extern "C" fn rsf_d3d11_output_device_ok(device: Raw) -> u32 {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&device).unwrap() };
     unsafe { device.GetDeviceRemovedReason().is_ok() as u32 }
 }
 
+/// # Safety
+///
+/// `context` must be a live `ID3D11DeviceContext`.
 #[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_d3d11_output_is_immediate(context: Raw) -> u32 {
+pub unsafe extern "C" fn rsf_d3d11_output_is_immediate(context: Raw) -> u32 {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&context).unwrap() };
     unsafe { (context.GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE) as u32 }
 }

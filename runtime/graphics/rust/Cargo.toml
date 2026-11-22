@@ -1,0 +1,43 @@
+[package]
+name = "rsf-graphics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# The D3D11 leaves game adapters link through ReScaleFrame::Graphics. The Runtime embeds the same
+# crate as an rlib, so a binary links either this archive or the Runtime's, never both.
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[features]
+# Fake COM objects for dependents' unit tests; never enabled by a CMake build.
+test-support = []
+
+[dependencies]
+rsf-game-sys = { path = "../../../sdk/game" }
+
+[target."cfg(windows)".dependencies]
+windows = { version = "0.62.2", default-features = false, features = [
+  "std",
+  "Win32_Foundation",
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_Graphics_Imaging",
+  "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+] }
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_Memory",
+] }
+
+[build-dependencies]
+cc = "1"
+rsf-bindgen = { path = "../../../tools/bindgen" }
+
+[lints]
+workspace = true

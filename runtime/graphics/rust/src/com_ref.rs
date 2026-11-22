@@ -5,7 +5,11 @@ use std::ptr::{NonNull, null_mut};
 use windows::core::{HRESULT, IUnknown, IUnknown_Vtbl, Interface};
 
 /// Borrow the generated vtable for a live interface of type `I`.
-pub(super) unsafe fn vtable<'a, I: Interface + 'a>(object: &'a *mut c_void) -> &'a I::Vtable {
+///
+/// # Safety
+///
+/// `object` must hold a live COM interface of type `I`.
+pub unsafe fn vtable<'a, I: Interface + 'a>(object: &'a *mut c_void) -> &'a I::Vtable {
     unsafe { I::from_raw_borrowed(object) }
         .expect("live COM interface")
         .vtable()
@@ -15,22 +19,32 @@ pub(super) unsafe fn vtable<'a, I: Interface + 'a>(object: &'a *mut c_void) -> &
 // a retained reference to this type without incrementing it again.
 // Transparent, so Option<ComRef> is a nullable interface pointer in C structures.
 #[repr(transparent)]
-pub(super) struct ComRef(pub(super) NonNull<c_void>);
+pub struct ComRef(pub NonNull<c_void>);
 
 impl ComRef {
-    pub(super) unsafe fn from_owned(object: *mut c_void) -> Option<Self> {
+    /// # Safety
+    ///
+    /// `object` is null or a live COM interface whose reference the caller transfers.
+    pub unsafe fn from_owned(object: *mut c_void) -> Option<Self> {
         NonNull::new(object).map(Self)
     }
 
-    pub(super) unsafe fn identity(object: *mut c_void) -> Option<Self> {
+    /// # Safety
+    ///
+    /// `object` is null or a live COM interface.
+    pub unsafe fn identity(object: *mut c_void) -> Option<Self> {
         let object = unsafe { IUnknown::from_raw_borrowed(&object) }?;
         let mut identity = null_mut();
         let result = unsafe { object.query(&IUnknown::IID, &mut identity) };
         unsafe { Self::from_result(result, identity) }
     }
 
-    // Every non-null slot transfers one reference, including partial results.
-    pub(super) unsafe fn adopt_all<const N: usize>(objects: [*mut c_void; N]) -> Option<[Self; N]> {
+    /// Every non-null slot transfers one reference, including partial results.
+    ///
+    /// # Safety
+    ///
+    /// Each slot is null or a live COM interface whose reference the caller transfers.
+    pub unsafe fn adopt_all<const N: usize>(objects: [*mut c_void; N]) -> Option<[Self; N]> {
         let resources = objects.map(|object| unsafe { Self::from_owned(object) });
         if resources.iter().any(Option::is_none) {
             return None;
@@ -38,17 +52,21 @@ impl ComRef {
         Some(resources.map(Option::unwrap))
     }
 
-    // An output reference belongs to the caller even if the COM method reports failure.
-    pub(super) unsafe fn from_result(status: HRESULT, object: *mut c_void) -> Option<Self> {
+    /// An output reference belongs to the caller even if the COM method reports failure.
+    ///
+    /// # Safety
+    ///
+    /// `object` is null or a live COM interface whose reference the caller transfers.
+    pub unsafe fn from_result(status: HRESULT, object: *mut c_void) -> Option<Self> {
         let owned = unsafe { Self::from_owned(object) };
         if status.is_ok() { owned } else { None }
     }
 
-    pub(super) fn as_ptr(&self) -> *mut c_void {
+    pub fn as_ptr(&self) -> *mut c_void {
         self.0.as_ptr()
     }
 
-    pub(super) fn into_raw(self) -> *mut c_void {
+    pub fn into_raw(self) -> *mut c_void {
         let raw = self.as_ptr();
         std::mem::forget(self);
         raw
@@ -58,7 +76,10 @@ impl ComRef {
         unsafe { *raw.cast::<*const IUnknown_Vtbl>() }
     }
 
-    pub(super) unsafe fn retain(object: *mut c_void) -> Self {
+    /// # Safety
+    ///
+    /// `object` must be a live COM interface; the result holds one more reference.
+    pub unsafe fn retain(object: *mut c_void) -> Self {
         let object = NonNull::new(object).expect("live COM interface");
         let raw = object.as_ptr();
         // Read only the invoked slot. Test doubles need not implement QueryInterface.
@@ -130,8 +151,9 @@ unsafe extern "C" fn rsf_swapchain_back_buffer(swapchain: *mut c_void) -> *mut c
     unsafe { ComRef::from_result(status, buffer) }.map_or(std::ptr::null_mut(), ComRef::into_raw)
 }
 
-#[cfg(test)]
-pub(crate) mod test {
+// Fake COM objects for unit tests here and in the Runtime (its dev-dependency enables the feature).
+#[cfg(any(test, feature = "test-support"))]
+pub mod test {
     use std::cell::Cell;
     use std::ffi::c_void;
     use std::ptr;
@@ -145,13 +167,16 @@ pub(crate) mod test {
     }
 
     #[repr(C)]
-    pub(crate) struct Fake {
+    pub struct Fake {
         vtable: &'static Vtable,
-        pub(crate) refs: Cell<u32>,
+        pub refs: Cell<u32>,
         last_release: Option<unsafe fn(*mut Fake)>,
     }
 
-    pub(crate) unsafe extern "system" fn add_ref(object: *mut Fake) -> u32 {
+    /// # Safety
+    ///
+    /// `object` must point to a live `Fake`.
+    pub unsafe extern "system" fn add_ref(object: *mut Fake) -> u32 {
         let refs = unsafe { &(*object).refs };
         refs.set(refs.get() + 1);
         refs.get()
@@ -168,7 +193,10 @@ pub(crate) mod test {
         0x8000_4002_u32 as i32
     }
 
-    pub(crate) unsafe extern "system" fn release(object: *mut Fake) -> u32 {
+    /// # Safety
+    ///
+    /// `object` must point to a live `Fake`.
+    pub unsafe extern "system" fn release(object: *mut Fake) -> u32 {
         let refs = unsafe { &(*object).refs };
         let count = refs
             .get()
@@ -189,12 +217,14 @@ pub(crate) mod test {
         release,
     };
 
+    // Each fake is built explicitly with its release hook; a Default would hide that choice.
+    #[allow(clippy::new_without_default)]
     impl Fake {
-        pub(crate) fn new() -> Self {
+        pub fn new() -> Self {
             Self::with_last_release(None)
         }
 
-        pub(crate) fn with_last_release(last_release: Option<unsafe fn(*mut Self)>) -> Self {
+        pub fn with_last_release(last_release: Option<unsafe fn(*mut Self)>) -> Self {
             Self {
                 vtable: &VTABLE,
                 refs: Cell::new(1),
@@ -203,11 +233,11 @@ pub(crate) mod test {
         }
     }
 
-    pub(crate) fn fake() -> Box<Fake> {
+    pub fn fake() -> Box<Fake> {
         Box::new(Fake::new())
     }
 
-    pub(crate) fn raw(object: &Fake) -> *mut c_void {
+    pub fn raw(object: &Fake) -> *mut c_void {
         ptr::from_ref(object).cast_mut().cast()
     }
 

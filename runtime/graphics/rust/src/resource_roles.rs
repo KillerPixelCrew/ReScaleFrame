@@ -9,6 +9,7 @@ use crate::sys::{
     RSF_ROLE_RULE_RENDER_SIZED, rsf_frame_shape as Shape, rsf_role_rule as Rule,
     rsf_role_table as Table, rsf_role_verdict as Verdict, rsf_texture_facts as Facts,
 };
+use rsf_game_sys::ffi_util::has_capacity;
 
 const UNKNOWN: u32 = 0;
 const CONFIDENT: u32 = 0;
@@ -114,11 +115,7 @@ unsafe extern "C" fn rsf_classify_texture(
 }
 
 // The first rule a texture matches, for owners that hold a copied rule table.
-pub(crate) fn matching_rule<'a>(
-    rules: &'a [Rule],
-    facts: &Facts,
-    shape: &Shape,
-) -> Option<&'a Rule> {
+pub fn matching_rule<'a>(rules: &'a [Rule], facts: &Facts, shape: &Shape) -> Option<&'a Rule> {
     // Zero samples or slices denote the default. Zero mips requests a full chain.
     if facts.sample_count > 1 || facts.mip_levels != 1 || facts.array_size > 1 {
         return None;
@@ -127,7 +124,7 @@ pub(crate) fn matching_rule<'a>(
 }
 
 /// A match possible only because of the wider range needs corroboration in the bound set.
-pub(crate) fn rule_confidence(rule: &Rule, facts: &Facts, shape: &Shape) -> u32 {
+pub fn rule_confidence(rule: &Rule, facts: &Facts, shape: &Shape) -> u32 {
     if rule.flags & RSF_ROLE_RULE_RENDER_RANGE != 0
         && (shape.render_width == 0 || shape.render_height == 0)
         && (facts.width < shape.output_width / 2 || facts.height < shape.output_height / 2)
