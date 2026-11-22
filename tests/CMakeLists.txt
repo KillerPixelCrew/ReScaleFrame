@@ -523,7 +523,24 @@ if(RSF_DOTNET_EXECUTABLE)
         set_tests_properties(unity_input_facts_contract PROPERTIES TIMEOUT 120)
     endif()
 endif()
-add_executable(rsf_godot_graph_handoff_test godot_graph_handoff.cpp)
+find_program(RSF_RUSTC rustc REQUIRED)
+if(MSVC)
+    set(godot_graph_rust_target x86_64-pc-windows-msvc)
+else()
+    set(godot_graph_rust_target x86_64-pc-windows-gnu)
+endif()
+set(godot_module "${PROJECT_SOURCE_DIR}/integrations/godot/modules/rescaleframe")
+set(godot_graph_object "${CMAKE_CURRENT_BINARY_DIR}/godot_graph_module${CMAKE_CXX_OUTPUT_EXTENSION}")
+add_custom_command(OUTPUT "${godot_graph_object}"
+    COMMAND "${RSF_RUSTC}" --edition=2024 --crate-type=lib --emit=obj --target ${godot_graph_rust_target}
+        -Cpanic=abort -Copt-level=2 -Ccodegen-units=1 -Dwarnings "${godot_module}/viewport.rs" -o "${godot_graph_object}"
+    DEPENDS "${godot_module}/viewport.rs" "${godot_module}/cpu_facts.rs" "${godot_module}/frame.rs"
+        "${godot_module}/graph.rs" "${godot_module}/host.rs" "${godot_module}/pass.rs" "${godot_module}/primary.rs"
+        "${PROJECT_SOURCE_DIR}/sdk/game/src/frame_event_abi.rs" "${PROJECT_SOURCE_DIR}/rust-toolchain.toml"
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    VERBATIM)
+set_source_files_properties("${godot_graph_object}" PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
+add_executable(rsf_godot_graph_handoff_test godot_graph_handoff.cpp "${godot_graph_object}")
 target_include_directories(rsf_godot_graph_handoff_test PRIVATE godot_graph_stubs ../integrations/godot/native ../runtime/orchestrator/include)
 target_link_libraries(rsf_godot_graph_handoff_test PRIVATE ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_build_options)
 add_test(NAME godot_graph_handoff_contract COMMAND rsf_godot_graph_handoff_test)
