@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
+use crate::d3d11_device_identity::identity as device_identity;
 use crate::d3d11_observer_abi::{rsf_dump_log_fn, rsf_observer_options, rsf_observer_status};
 use crate::d3d11_observer_hooks::rsf_core_observer11_installed;
 use crate::d3d11_observer_present::{frames, rsf_core_observer11_present_size};
 use crate::sr_session::has_capacity;
+use std::collections::VecDeque;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::fmt::Write;
 use std::fs;
@@ -14,6 +16,8 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 mod dump;
 use dump::{DumpPlatform, DumpSettings};
 
+use windows::core::{IUnknown, Interface};
+
 type Handle = *mut c_void;
 type Immediate = unsafe extern "C" fn(Handle) -> Handle;
 const OK: i32 = 0;
@@ -21,6 +25,7 @@ const INVALID: i32 = -1;
 const NOT_READY: i32 = -6;
 const CONSTANT_BUFFER: u32 = 0x4;
 const RENDER_TARGET: u32 = 0x20;
+const CANDIDATE_LIMIT: usize = 4;
 const CONSTANT_LIMIT: usize = 16;
 const HISTOGRAM_LIMIT: usize = 128;
 
@@ -50,9 +55,15 @@ struct Constant {
     buffer: ComRef,
 }
 
-struct Retained {
+struct Resources {
+    identity: IUnknown,
     textures: Vec<ComRef>,
     constants: Vec<Constant>,
+}
+
+struct Retained {
+    candidates: VecDeque<Resources>,
+    identity: Option<IUnknown>,
     context: Option<ComRef>,
     device: Option<ComRef>,
 }
@@ -60,12 +71,61 @@ struct Retained {
 impl Retained {
     const fn new() -> Self {
         Self {
-            textures: Vec::new(),
-            constants: Vec::new(),
+            candidates: VecDeque::new(),
+            identity: None,
             context: None,
             device: None,
         }
     }
+
+    fn selected(&self) -> Option<&Resources> {
+        let identity = self.identity.as_ref()?;
+        self.candidates
+            .iter()
+            .find(|entry| same_identity(&entry.identity, identity))
+    }
+
+    unsafe fn record(
+        &mut self,
+        device: Handle,
+        identity: &IUnknown,
+    ) -> (Option<&mut Resources>, Option<Resources>) {
+        if PRESENTING_DEVICE.load(Ordering::Relaxed)
+            && !self
+                .identity
+                .as_ref()
+                .is_some_and(|selected| same_identity(selected, identity))
+        {
+            return (None, None);
+        }
+        if self.device.is_none() {
+            self.device = Some(unsafe { ComRef::retain(device) });
+            self.identity = Some(identity.clone());
+        }
+        let mut retired = None;
+        let entry = if let Some(index) = self
+            .candidates
+            .iter()
+            .position(|entry| same_identity(&entry.identity, identity))
+        {
+            self.candidates.remove(index).expect("candidate index")
+        } else {
+            if self.candidates.len() == CANDIDATE_LIMIT {
+                retired = self.candidates.pop_front();
+            }
+            Resources {
+                identity: identity.clone(),
+                textures: Vec::new(),
+                constants: Vec::new(),
+            }
+        };
+        self.candidates.push_back(entry);
+        (self.candidates.back_mut(), retired)
+    }
+}
+
+fn same_identity(first: &IUnknown, second: &IUnknown) -> bool {
+    first.as_raw() == second.as_raw()
 }
 
 struct Capture {
@@ -134,27 +194,29 @@ pub(super) unsafe fn record_texture(
     format: u32,
     bindings: u32,
 ) {
+    let identity = unsafe { device_identity(device) };
     let mut state = lock();
     state.textures_created = state.textures_created.wrapping_add(1);
     let filter = state.filter;
     if bindings & RENDER_TARGET == 0
         || (filter.format != 0 && filter.format != format)
         || width < filter.minimum_width
-        || state.retained.textures.len() >= filter.capacity as usize
     {
         return;
     }
-    state
-        .retained
-        .textures
-        .push(unsafe { ComRef::retain(texture) });
-    state
-        .retained
-        .device
-        .get_or_insert_with(|| unsafe { ComRef::retain(device) });
+    let Some(identity) = identity else { return };
+    let (resources, retired) = unsafe { state.retained.record(device, &identity) };
+    if let Some(resources) = resources
+        && resources.textures.len() < filter.capacity as usize
+    {
+        resources.textures.push(unsafe { ComRef::retain(texture) });
+    }
+    drop(state);
+    drop(retired);
 }
 
 pub(super) unsafe fn record_buffer(device: Handle, buffer: Handle, bytes: u32, bindings: u32) {
+    let identity = unsafe { device_identity(device) };
     let mut state = lock();
     let filter = state.filter;
     if filter.constant_max == 0 || bindings & CONSTANT_BUFFER == 0 {
@@ -165,33 +227,39 @@ pub(super) unsafe fn record_buffer(device: Handle, buffer: Handle, bytes: u32, b
     } else if state.sizes.len() < HISTOGRAM_LIMIT {
         state.sizes.push((bytes, 1));
     }
+    let Some(identity) = identity else { return };
+    let (resources, retired) = unsafe { state.retained.record(device, &identity) };
+    let mut matched = false;
     let mut previous = None;
-    if bytes >= filter.constant_min && bytes <= filter.constant_max {
-        let buffers = &mut state.retained.constants;
+    if let Some(resources) = resources
+        && bytes >= filter.constant_min
+        && bytes <= filter.constant_max
+    {
+        let buffers = &mut resources.constants;
         if let Some(entry) = buffers.iter_mut().find(|entry| entry.bytes == bytes) {
             previous = Some(std::mem::replace(&mut entry.buffer, unsafe {
                 ComRef::retain(buffer)
             }));
-            state.constant_matches = state.constant_matches.wrapping_add(1);
+            matched = true;
         } else if buffers.len() < CONSTANT_LIMIT {
             buffers.push(Constant {
                 bytes,
                 buffer: unsafe { ComRef::retain(buffer) },
             });
-            state.constant_matches = state.constant_matches.wrapping_add(1);
+            matched = true;
         }
     }
-    state
-        .retained
-        .device
-        .get_or_insert_with(|| unsafe { ComRef::retain(device) });
+    if matched {
+        state.constant_matches = state.constant_matches.wrapping_add(1);
+    }
     drop(state);
     drop(previous);
+    drop(retired);
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer11_needs_presenting_device() -> i32 {
-    i32::from(!PRESENTING_DEVICE.load(Ordering::Acquire))
+extern "C" fn rsf_core_observer11_needs_presenter() -> i32 {
+    i32::from(!PRESENTING_DEVICE.load(Ordering::Acquire) || REQUESTED.load(Ordering::Acquire))
 }
 
 #[unsafe(no_mangle)]
@@ -199,23 +267,40 @@ unsafe extern "C" fn rsf_core_observer11_adopt_device(incoming: Handle) -> Handl
     let Some(incoming) = (unsafe { ComRef::from_owned(incoming) }) else {
         return ptr::null_mut();
     };
-    let (old, context) = {
+    let Some(identity) = (unsafe { device_identity(incoming.as_ptr()) }) else {
+        return ptr::null_mut();
+    };
+    let (old, context, old_identity, discarded) = {
         let mut state = lock();
-        if PRESENTING_DEVICE.swap(true, Ordering::AcqRel)
-            || state
-                .retained
-                .device
-                .as_ref()
-                .is_some_and(|device| device.as_ptr() == incoming.as_ptr())
-        {
+        if PRESENTING_DEVICE.swap(true, Ordering::AcqRel) {
             return ptr::null_mut();
         }
-        (
-            state.retained.device.replace(incoming),
-            state.retained.context.take(),
-        )
+        let retained = &mut state.retained;
+        let mut discarded = std::mem::take(&mut retained.candidates);
+        if let Some(index) = discarded
+            .iter()
+            .position(|entry| same_identity(&entry.identity, &identity))
+        {
+            retained
+                .candidates
+                .push_back(discarded.remove(index).expect("candidate index"));
+        }
+        let (old, context, old_identity) = if retained
+            .identity
+            .as_ref()
+            .is_some_and(|old| same_identity(old, &identity))
+        {
+            (None, None, None)
+        } else {
+            (
+                retained.device.replace(incoming),
+                retained.context.take(),
+                retained.identity.replace(identity),
+            )
+        };
+        (old, context, old_identity, discarded)
     };
-    drop(context);
+    drop((context, old_identity, discarded));
     old.map_or(ptr::null_mut(), ComRef::into_raw)
 }
 
@@ -286,7 +371,7 @@ unsafe extern "C" fn rsf_core_observer11_acquire_device(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_observer11_status(out: *mut rsf_observer_status) -> i32 {
+unsafe extern "C" fn rsf_observer_get_status(out: *mut rsf_observer_status) -> i32 {
     if !unsafe { has_capacity(out) } {
         return INVALID;
     }
@@ -297,7 +382,10 @@ unsafe extern "C" fn rsf_core_observer11_status(out: *mut rsf_observer_status) -
         installed: rsf_core_observer11_installed() as u32,
         have_device: state.retained.device.is_some().into(),
         frames_presented: frames(),
-        textures_matched: state.retained.textures.len() as u32,
+        textures_matched: state
+            .retained
+            .selected()
+            .map_or(0, |entry| entry.textures.len() as u32),
         textures_created: state.textures_created,
         present_width: (size >> 32) as u32,
         present_height: size as u32,
@@ -312,7 +400,7 @@ unsafe extern "C" fn rsf_core_observer11_status(out: *mut rsf_observer_status) -
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_observer11_request_dump(prefix: *const c_char, view: u32) -> i32 {
+unsafe extern "C" fn rsf_observer_request_dump(prefix: *const c_char, view: u32) -> i32 {
     if prefix.is_null() {
         return INVALID;
     }
@@ -330,12 +418,24 @@ unsafe extern "C" fn rsf_core_observer11_request_dump(prefix: *const c_char, vie
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer11_dump(platform: &DumpPlatform) {
+unsafe extern "C" fn rsf_core_observer11_dump(presenter: Handle, platform: &DumpPlatform) {
     if !REQUESTED.load(Ordering::Acquire) {
         return;
     }
+    let Some(presenter) = (unsafe { device_identity(presenter) }) else {
+        return;
+    };
     let (request, settings, device, context, textures, buffers) = {
         let mut state = lock();
+        if !PRESENTING_DEVICE.load(Ordering::Relaxed)
+            || !state
+                .retained
+                .identity
+                .as_ref()
+                .is_some_and(|selected| same_identity(selected, &presenter))
+        {
+            return;
+        }
         let Some(device) = state.retained.device.clone() else {
             return;
         };
@@ -348,8 +448,14 @@ extern "C" fn rsf_core_observer11_dump(platform: &DumpPlatform) {
             state.dump_settings,
             device,
             state.retained.context.clone(),
-            state.retained.textures.clone(),
-            state.retained.constants.clone(),
+            state
+                .retained
+                .selected()
+                .map_or_else(Vec::new, |entry| entry.textures.clone()),
+            state
+                .retained
+                .selected()
+                .map_or_else(Vec::new, |entry| entry.constants.clone()),
         )
     };
     let context = resolve_context(&device, context, platform.immediate);
@@ -368,7 +474,7 @@ extern "C" fn rsf_core_observer11_dump(platform: &DumpPlatform) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_observer11_write_buffer_sizes(path: *const c_char) -> i32 {
+unsafe extern "C" fn rsf_observer_write_buffer_sizes(path: *const c_char) -> i32 {
     if path.is_null() {
         return INVALID;
     }

@@ -124,7 +124,8 @@ typedef struct rsf_observer_options {
     /* Ignore anything narrower than this, which filters out the small targets that share a
        format with the one being looked for. */
     uint32_t minimum_width;
-    /* Upper bound on retained textures, so a misconfigured filter cannot hold the whole frame. */
+    /* Retained texture limit per device. Before the first Present the observer keeps
+       candidates for up to four recently observed devices. Present selects one inventory. */
     uint32_t capacity;
     /* Retain the most recent constant buffer of each distinct size in this range, so the view
        uniform data can be found and its layout checked against what engine source predicts.

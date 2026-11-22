@@ -2,6 +2,8 @@
 //! Exact Community Shaders 1.9.1 profile and Skyrim HDR caller provenance.
 
 mod initializer;
+#[path = "../../../runtime/common/src/pe32_plus.rs"]
+mod pe32_plus;
 
 use std::cell::Cell;
 use std::ffi::c_void;
@@ -12,8 +14,6 @@ const SHA256: &[u8; 64] = b"10ba95e6b1cd6b675ce74d1d681fae41e667bdd8b7b5ba8c362e
 const TIMESTAMP: u32 = 0x6ab5_1a9f;
 const IMAGE_SIZE: u32 = 0x144_b000;
 const MAX_IMAGE_BYTES: usize = 128 * 1024 * 1024;
-const NT_HEADERS: usize = 264;
-const SECTION: usize = 40;
 const SECTION_EXECUTE: u32 = 0x2000_0000;
 
 const CONFIGURE: usize = 0x3a_4b30;
@@ -82,58 +82,18 @@ fn read_native<const N: usize>(read: Read, address: usize) -> Option<[u8; N]> {
     unsafe { read(address, bytes.as_mut_ptr().cast(), N) }.then_some(bytes)
 }
 
-fn part(bytes: &[u8], start: usize, count: usize) -> Option<&[u8]> {
-    bytes.get(start..start.checked_add(count)?)
-}
-
-fn u16_at(bytes: &[u8], offset: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(part(bytes, offset, 2)?.try_into().ok()?))
-}
-
-fn u32_at(bytes: &[u8], offset: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(part(bytes, offset, 4)?.try_into().ok()?))
-}
-
 fn validate(image: &[u8]) -> Option<()> {
-    let dos = part(image, 0, 64)?;
-    if u16_at(dos, 0)? != 0x5a4d {
-        return None;
-    }
-    let nt = usize::try_from(i32::from_le_bytes(dos[0x3c..0x40].try_into().ok()?)).ok()?;
-    let header = part(image, nt, NT_HEADERS)?;
-    let count = usize::from(u16_at(header, 6)?);
-    if u32_at(header, 0)? != 0x0000_4550
-        || u16_at(header, 4)? != 0x8664
-        || u32_at(header, 8)? != TIMESTAMP
-        || u16_at(header, 20)? != 240
-        || u16_at(header, 24)? != 0x20b
-        || u32_at(header, 80)? != IMAGE_SIZE
-        || !(1..=96).contains(&count)
+    let image = pe32_plus::Pe32Plus::parse(image)?;
+    if image.timestamp() != TIMESTAMP
+        || image.optional_size() != 240
+        || image.image_size()? != IMAGE_SIZE
+        || !(1..=96).contains(&image.section_count())
     {
         return None;
     }
-    let sections = part(image, nt.checked_add(NT_HEADERS)?, count * SECTION)?;
     for (rva, expected) in &GUARDS {
-        let mut found = false;
-        for section in sections.chunks_exact(SECTION) {
-            let address = u32_at(section, 12)? as usize;
-            let size = u32_at(section, 16)? as usize;
-            let Some(delta) = rva.checked_sub(address) else {
-                continue;
-            };
-            if delta > size || expected.len() > size - delta {
-                continue;
-            }
-            let raw = (u32_at(section, 20)? as usize).checked_add(delta)?;
-            if part(image, raw, expected.len())? != expected
-                || u32_at(section, 36)? & SECTION_EXECUTE == 0
-            {
-                return None;
-            }
-            found = true;
-            break;
-        }
-        if !found {
+        let (bytes, characteristics) = image.span(*rva, expected.len())?;
+        if bytes != expected || characteristics & SECTION_EXECUTE == 0 {
             return None;
         }
     }

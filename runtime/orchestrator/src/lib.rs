@@ -24,6 +24,8 @@ mod cpu_abi;
 #[cfg(windows)]
 mod cpu_reservations;
 #[cfg(windows)]
+mod d3d11_device_identity;
+#[cfg(windows)]
 mod d3d11_host;
 #[cfg(windows)]
 mod d3d11_host_abi;

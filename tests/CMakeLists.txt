@@ -121,7 +121,8 @@ target_compile_definitions(rsf_orchestrator_domains PRIVATE RSF_FIXTURE_ENTRY=rs
 target_link_libraries(rsf_orchestrator_domains PRIVATE rsf_game_sdk_fixtures_rust rsf_build_options)
 add_dependencies(rsf_orchestrator_domains rsf_orchestrator rsf_game_unity_mono)
 add_test(NAME orchestrator_domain_contract COMMAND rsf_orchestrator_domains)
-add_executable(rsf_d3d12_observer_test d3d12_observer.cpp)
+add_executable(rsf_d3d12_observer_test d3d12_observer.c)
+set_target_properties(rsf_d3d12_observer_test PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_d3d12_observer_test PRIVATE ReScaleFrame::Graphics rsf_build_options d3d12)
 add_test(NAME d3d12_observer_contract COMMAND rsf_d3d12_observer_test)
 add_executable(rsf_exposure_normalization_test exposure_normalization_main.c)
@@ -417,7 +418,8 @@ target_link_libraries(rsf_scene_promote PRIVATE rsf_orchestrator_rust ReScaleFra
 add_test(NAME scene_promote COMMAND rsf_scene_promote)
 set_tests_properties(scene_promote PROPERTIES TIMEOUT 120)
 
-add_executable(rsf_d3d11_observer d3d11_observer.cpp)
+add_executable(rsf_d3d11_observer d3d11_observer.c)
+set_target_properties(rsf_d3d11_observer PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_d3d11_observer PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME d3d11_observer COMMAND rsf_d3d11_observer "${CMAKE_CURRENT_BINARY_DIR}")
 # These touch a graphics runtime and patch vtables, so a deadlock is a plausible failure. Fail in

@@ -5,7 +5,6 @@
 #include <d3d12sdklayers.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
-#include <MinHook.h>
 #include <array>
 #include <utility>
 
@@ -17,7 +16,6 @@ using Device = HRESULT (STDMETHODCALLTYPE*)(ID3D12Device*, const D3D12_COMMAND_Q
 using Queue = void (STDMETHODCALLTYPE*)(ID3D12CommandQueue*, UINT, ID3D12CommandList* const*);
 using Present = HRESULT (STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT);
 constexpr size_t capacity = RSF_OBSERVER12_CAPACITY;
-static_assert(sizeof(rsf_observer12_hooks) == 4 * sizeof(void*));
 static_assert(sizeof(rsf_observer12_attachment) == 7 * sizeof(void*));
 static_assert(RSF_OBSERVER12_FACTORY == 0 && RSF_OBSERVER12_DEVICE == 1 && RSF_OBSERVER12_QUEUE == 2 &&
     RSF_OBSERVER12_CHAIN == 3 && D3D12_COMMAND_LIST_TYPE_DIRECT == 0);
@@ -25,17 +23,6 @@ static_assert(sizeof(rsf_observer12_breadcrumb) == 40 && offsetof(rsf_observer12
 static_assert(sizeof(rsf_observer12_diagnostic_setup) == 5 * sizeof(void*) &&
     sizeof(rsf_observer12_removal) == 7 * sizeof(void*));
 static_assert(D3D12_MESSAGE_SEVERITY_ERROR == 1 && D3D12_MESSAGE_SEVERITY_WARNING == 2);
-constexpr rsf_observer12_hooks hooks{
-    []() -> int32_t {
-        const auto status = MH_Initialize();
-        return status == MH_OK || status == MH_ERROR_ALREADY_INITIALIZED;
-    },
-    [](void* target, void* detour, void** original) -> int32_t {
-        return MH_CreateHook(target, detour, original) == MH_OK;
-    },
-    [](void* target) -> int32_t { return MH_EnableHook(target) == MH_OK; },
-    [](void* target) { (void)MH_RemoveHook(target); },
-};
 void CALLBACK debug_message(D3D12_MESSAGE_CATEGORY, D3D12_MESSAGE_SEVERITY severity,
     D3D12_MESSAGE_ID id, LPCSTR description, void*)
 {
@@ -181,13 +168,13 @@ int32_t bind_interface(uint32_t kind, void* object, size_t slot) noexcept try
     const auto indices = std::make_index_sequence<capacity>{};
     switch (kind) {
     case RSF_OBSERVER12_FACTORY:
-        return rsf_core_observer12_bind(kind, target, factory_wrappers(indices).data(), &hooks);
+        return rsf_core_observer12_bind(kind, target, factory_wrappers(indices).data());
     case RSF_OBSERVER12_DEVICE:
-        return rsf_core_observer12_bind(kind, target, device_wrappers(indices).data(), &hooks);
+        return rsf_core_observer12_bind(kind, target, device_wrappers(indices).data());
     case RSF_OBSERVER12_QUEUE:
-        return rsf_core_observer12_bind(kind, target, queue_wrappers(indices).data(), &hooks);
+        return rsf_core_observer12_bind(kind, target, queue_wrappers(indices).data());
     case RSF_OBSERVER12_CHAIN:
-        return rsf_core_observer12_bind(kind, target, present_wrappers(indices).data(), &hooks);
+        return rsf_core_observer12_bind(kind, target, present_wrappers(indices).data());
     default:
         return 0;
     }
@@ -218,10 +205,6 @@ const rsf_observer12_attachment attachment{
     query_interface<IDXGIFactory2>, query_interface<ID3D12Device>, query_interface<ID3D12CommandQueue>,
     queue_type, bind_interface, register_debug, describe_window,
 };
-}
-extern "C" int32_t rsf_d3d12_observer_create(const rsf_d3d12_observer_setup* setup, rsf_d3d12_observer** out)
-{
-    return rsf_core_observer12_create(setup, out, &hooks);
 }
 extern "C" int32_t rsf_d3d12_observer_device(rsf_d3d12_observer* observer, void* pointer)
 {

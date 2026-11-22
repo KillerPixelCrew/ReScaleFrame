@@ -16,12 +16,9 @@ struct rsf_observer11_dump_ops {
 };
 
 extern "C" {
-int32_t rsf_core_observer11_needs_presenting_device(void);
+int32_t rsf_core_observer11_needs_presenter(void);
 /* Consumes the presenting device reference and transfers the replaced one, if any. */
 void* rsf_core_observer11_adopt_device(void* device);
 int32_t rsf_core_observer11_acquire_device(void** device, void** context, rsf_observer11_immediate);
-int32_t rsf_core_observer11_status(rsf_observer_status*);
-int32_t rsf_core_observer11_request_dump(const char* prefix, uint32_t view);
-void rsf_core_observer11_dump(const rsf_observer11_dump_ops*);
-int32_t rsf_core_observer11_write_buffer_sizes(const char* path);
+void rsf_core_observer11_dump(void* presenting_device, const rsf_observer11_dump_ops*);
 }

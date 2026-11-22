@@ -9,6 +9,7 @@ use std::ffi::c_void;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Mutex, MutexGuard, TryLockError};
+use windows_sys::Win32::System::Memory::{PAGE_EXECUTE_READWRITE, VirtualProtect};
 
 type Handle = *mut c_void;
 const TEXTURE: usize = 0;
@@ -181,6 +182,42 @@ impl Hooks {
         ACTIVE.store(true, Ordering::Release);
         OK
     }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_graphics_replace_vtable_slot(
+    address: *mut Handle,
+    expected: Handle,
+    replacement: Handle,
+) -> i32 {
+    let mut protection = 0;
+    if unsafe {
+        VirtualProtect(
+            address.cast(),
+            size_of::<Handle>(),
+            PAGE_EXECUTE_READWRITE,
+            &mut protection,
+        )
+    } == 0
+    {
+        return 0;
+    }
+    // The aligned slot belongs to a live table. Keep the expected-value check and
+    // the write in one operation so a third-party replacement wins on contention.
+    let slot = unsafe { AtomicPtr::from_ptr(address) };
+    let changed = slot
+        .compare_exchange(expected, replacement, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok();
+    let mut restored = 0;
+    unsafe {
+        VirtualProtect(
+            address.cast(),
+            size_of::<Handle>(),
+            protection,
+            &mut restored,
+        )
+    };
+    i32::from(changed)
 }
 
 #[unsafe(no_mangle)]

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+#define COBJMACROS
 // Install the observer, then behave like a game: create a device, allocate targets, present.
 // The observer must notice the matching target, ignore the others, and leave rendering working.
 
@@ -7,57 +9,57 @@
 #include <windows.h>
 
 #include <d3d11.h>
+#include <stdbool.h>
 
-#include <cstdio>
-#include <cstdint>
-#include <cstring>
-#include <string>
-#include <vector>
+#include <stdio.h>
+#include <stdint.h>
+#include <string.h>
 
-namespace {
+static bool passed = true;
 
-bool passed = true;
-
-void check(bool condition, const char* message)
+static void check(bool condition, const char* message)
 {
     if (!condition) {
-        std::fprintf(stderr, "%s\n", message);
+        fprintf(stderr, "%s\n", message);
         passed = false;
     }
 }
 
 // This test drives a graphics runtime and patches vtables, so a hang is a realistic failure.
 // Announcing each stage means a stall says where it stalled instead of nothing at all.
-void stage(const char* what)
+static void stage(const char* what)
 {
-    std::fprintf(stderr, "[stage] %s\n", what);
-    std::fflush(stderr);
+    fprintf(stderr, "[stage] %s\n", what);
+    fflush(stderr);
 }
 
 // The dump runs inside a present, where a failure is a crashed game and nothing else. Its progress
 // lines are the only account of how far it got, so the sink is part of what this test covers.
-std::vector<std::string> log_lines;
+static char log_lines[256][512];
+static size_t log_count;
 
 // What the creation callbacks saw. The observer reports pipeline objects as the game builds them,
 // which is what turns a pointer into a name for the rest of the run; these record that the
 // translation out of D3D11's descriptors is faithful, since everything downstream trusts it.
-struct SeenLayout {
+typedef struct SeenLayout {
     void* layout;
     uint32_t copied;
     uint32_t count;
     rsf_observer_layout_element elements[RSF_OBSERVER_MAX_LAYOUT_ELEMENTS];
-};
-std::vector<SeenLayout> seen_layouts;
+} SeenLayout;
+static SeenLayout seen_layouts[256];
+static size_t layouts_count;
 
-struct SeenShader {
+typedef struct SeenShader {
     void* shader;
     uint32_t stage;
     uint32_t bytes;
     bool had_bytecode;
-};
-std::vector<SeenShader> seen_shaders;
+} SeenShader;
+static SeenShader seen_shaders[256];
+static size_t shaders_count;
 
-struct SeenTexture {
+typedef struct SeenTexture {
     void* texture;
     uint32_t width;
     uint32_t height;
@@ -66,59 +68,69 @@ struct SeenTexture {
     uint32_t array_size;
     uint32_t sample_count;
     uint32_t bind_flags;
-};
-std::vector<SeenTexture> seen_textures;
+} SeenTexture;
+static SeenTexture seen_textures[256];
+static size_t textures_count;
 
-void on_layout(void* user, void* layout, const rsf_observer_layout_element* elements,
+static void on_layout(void* user, void* layout, const rsf_observer_layout_element* elements,
                uint32_t copied, uint32_t count)
 {
     (void)user;
-    SeenLayout record{};
+    SeenLayout record = {0};
     record.layout = layout;
     record.copied = copied;
     record.count = count;
     for (uint32_t index = 0; index < copied && index < RSF_OBSERVER_MAX_LAYOUT_ELEMENTS; ++index) {
         record.elements[index] = elements[index];
     }
-    seen_layouts.push_back(record);
+    check(layouts_count < 256, "Layout record storage exhausted.");
+    if (layouts_count < 256) seen_layouts[layouts_count++] = record;
 }
 
-void on_shader(void* user, void* shader, uint32_t stage, const void* bytecode, uint32_t bytes)
+static void on_shader(void* user, void* shader, uint32_t stage, const void* bytecode, uint32_t bytes)
 {
     (void)user;
-    seen_shaders.push_back({shader, stage, bytes, bytecode != nullptr});
+    check(shaders_count < 256, "Shader record storage exhausted.");
+    if (shaders_count < 256) {
+        seen_shaders[shaders_count++] = (SeenShader){shader, stage, bytes, bytecode != NULL};
+    }
 }
 
-void on_texture(void* user, void* texture, uint32_t width, uint32_t height, uint32_t format,
+static void on_texture(void* user, void* texture, uint32_t width, uint32_t height, uint32_t format,
                 uint32_t mip_levels, uint32_t array_size, uint32_t sample_count,
                 uint32_t bind_flags, uint32_t misc_flags)
 {
     (void)user;
     (void)misc_flags;
-    seen_textures.push_back(
-        {texture, width, height, format, mip_levels, array_size, sample_count, bind_flags});
+    check(textures_count < 256, "Texture record storage exhausted.");
+    if (textures_count < 256) {
+        seen_textures[textures_count++] =
+            (SeenTexture){texture, width, height, format, mip_levels, array_size, sample_count, bind_flags};
+    }
 }
 
-using compile_fn = HRESULT(WINAPI*)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO*, void*, LPCSTR,
+typedef HRESULT(WINAPI* compile_fn)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO*, void*, LPCSTR,
                                     LPCSTR, UINT, UINT, ID3DBlob**, ID3DBlob**);
 
 // Loaded rather than linked, as elsewhere in this tree, so nothing here needs the compiler import
 // library to build.
-compile_fn load_compiler()
+static compile_fn load_compiler(void)
 {
     const HMODULE module =
-        LoadLibraryExW(L"d3dcompiler_47.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        LoadLibraryExW(L"d3dcompiler_47.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (!module) {
-        return nullptr;
+        return NULL;
     }
-    return reinterpret_cast<compile_fn>(
-        reinterpret_cast<void*>(GetProcAddress(module, "D3DCompile")));
+    const FARPROC address = GetProcAddress(module, "D3DCompile");
+    compile_fn compile = NULL;
+    memcpy(&compile, &address, sizeof(compile));
+    return compile;
 }
 
 // A vertex shader whose input signature is Slate's, so a real input layout can be created against
 // it. D3D11 validates a layout against a shader signature, which is why this has to compile rather
 // than being a made up blob. The semantics do not matter; the declaration does.
-const char* const layout_probe_source =
+static const char* const layout_probe_source =
     "struct VSIn {\n"
     "  float4 texcoords : ATTRIBUTE0;\n"
     "  float2 material  : ATTRIBUTE1;\n"
@@ -132,50 +144,86 @@ const char* const layout_probe_source =
     "}\n"
     "float4 PSMain() : SV_Target { return float4(1, 1, 1, 1); }\n";
 
-void collect(void* user, const char* message)
+static void collect(void* user, const char* message)
 {
     (void)user;
-    log_lines.emplace_back(message);
+    check(log_count < 256, "Log record storage exhausted.");
+    if (log_count < 256) {
+        snprintf(log_lines[log_count++], sizeof(log_lines[0]), "%s", message);
+    }
 }
 
-bool logged(const char* fragment)
+static bool logged(const char* fragment)
 {
-    for (const std::string& line : log_lines) {
-        if (line.find(fragment) != std::string::npos) {
+    for (size_t index = 0; index < log_count; ++index) {
+        if (strstr(log_lines[index], fragment) != NULL) {
             return true;
         }
     }
     return false;
 }
 
-HWND make_window()
+static HWND make_window(void)
 {
-    WNDCLASSEXW window_class{};
+    WNDCLASSEXW window_class = {0};
     window_class.cbSize = sizeof(window_class);
     window_class.lpfnWndProc = DefWindowProcW;
-    window_class.hInstance = GetModuleHandleW(nullptr);
+    window_class.hInstance = GetModuleHandleW(NULL);
     window_class.lpszClassName = L"RsfObserverTest";
     RegisterClassExW(&window_class);
     return CreateWindowExW(0, window_class.lpszClassName, L"", WS_OVERLAPPEDWINDOW, 0, 0, 64, 64,
-                           nullptr, nullptr, window_class.hInstance, nullptr);
+                           NULL, NULL, window_class.hInstance, NULL);
 }
 
-} // namespace
+static ID3D11Texture2D* make_target(ID3D11Device* owner, DXGI_FORMAT format, UINT width, UINT height) {
+    D3D11_TEXTURE2D_DESC desc = {0};
+    desc.Width = width;
+    desc.Height = height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = format;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    ID3D11Texture2D* texture = NULL;
+    ID3D11Device_CreateTexture2D(owner, &desc, NULL, &texture);
+    return texture;
+}
+
+static const SeenTexture* find_texture(void* texture)
+{
+    for (size_t index = 0; index < textures_count; ++index) {
+        if (seen_textures[index].texture == texture) return &seen_textures[index];
+    }
+    return NULL;
+}
+
+static ID3D11Buffer* make_constant_buffer(ID3D11Device* device, UINT bytes, const void* payload) {
+    D3D11_BUFFER_DESC desc = {0};
+    desc.ByteWidth = bytes;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    D3D11_SUBRESOURCE_DATA initial = {0};
+    initial.pSysMem = payload;
+    ID3D11Buffer* buffer = NULL;
+    ID3D11Device_CreateBuffer(device, &desc, payload ? &initial : NULL, &buffer);
+    return buffer;
+}
 
 int main(int argc, char* argv[])
 {
     if (argc != 2) {
-        std::fprintf(stderr, "usage: d3d11_observer <output directory>\n");
+        fprintf(stderr, "usage: d3d11_observer <output directory>\n");
         return 2;
     }
 
     stage("validating arguments");
-    rsf_observer_options options{};
+    rsf_observer_options options = {0};
     options.struct_size = sizeof(options);
     options.abi_version = RSF_OBSERVER_ABI_VERSION;
     options.format = DXGI_FORMAT_R16G16_UNORM;
     options.minimum_width = 64;
-    options.capacity = 8;
+    options.capacity = 1;
     options.constant_buffer_min_bytes = 2640;  // stock 4.18 view uniform size
     options.constant_buffer_max_bytes = 2640;
     options.log = collect;
@@ -201,7 +249,7 @@ int main(int argc, char* argv[])
     stage("installing observer (creates a dummy device and swap chain)");
     const rsf_observer_result installed = rsf_observer_install(&options);
     if (installed == RSF_OBSERVER_ERROR_NO_DEVICE) {
-        std::fprintf(stderr, "no D3D11 device available, skipping\n");
+        fprintf(stderr, "no D3D11 device available, skipping\n");
         return 0;
     }
     check(installed == RSF_OBSERVER_OK, "Installing the observer must succeed.");
@@ -211,9 +259,9 @@ int main(int argc, char* argv[])
     // From here on, act like the game: a fresh device the observer never saw created.
     stage("creating test window");
     HWND window = make_window();
-    check(window != nullptr, "The test window must be created.");
+    check(window != NULL, "The test window must be created.");
 
-    DXGI_SWAP_CHAIN_DESC swap{};
+    DXGI_SWAP_CHAIN_DESC swap = {0};
     swap.BufferCount = 1;
     swap.BufferDesc.Width = 256;
     swap.BufferDesc.Height = 128;
@@ -224,16 +272,18 @@ int main(int argc, char* argv[])
     swap.Windowed = TRUE;
 
     stage("creating test device and swap chain");
-    IDXGISwapChain* swapchain = nullptr;
-    ID3D11Device* device = nullptr;
-    ID3D11DeviceContext* context = nullptr;
+    IDXGISwapChain* swapchain = NULL;
+    ID3D11Device* device = NULL;
+    ID3D11DeviceContext* context = NULL;
     const D3D_FEATURE_LEVEL wanted[] = {D3D_FEATURE_LEVEL_11_0};
-    D3D_FEATURE_LEVEL obtained{};
-    HRESULT created = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0,
+    D3D_FEATURE_LEVEL obtained = {0};
+    D3D_DRIVER_TYPE driver = D3D_DRIVER_TYPE_HARDWARE;
+    HRESULT created = D3D11CreateDeviceAndSwapChain(NULL, driver, NULL, 0,
                                                     wanted, 1, D3D11_SDK_VERSION, &swap,
                                                     &swapchain, &device, &obtained, &context);
     if (FAILED(created)) {
-        created = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, wanted,
+        driver = D3D_DRIVER_TYPE_WARP;
+        created = D3D11CreateDeviceAndSwapChain(NULL, driver, NULL, 0, wanted,
                                                 1, D3D11_SDK_VERSION, &swap, &swapchain, &device,
                                                 &obtained, &context);
     }
@@ -242,26 +292,18 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    auto make_target = [&](DXGI_FORMAT format, UINT width, UINT height) {
-        D3D11_TEXTURE2D_DESC desc{};
-        desc.Width = width;
-        desc.Height = height;
-        desc.MipLevels = 1;
-        desc.ArraySize = 1;
-        desc.Format = format;
-        desc.SampleDesc.Count = 1;
-        desc.Usage = D3D11_USAGE_DEFAULT;
-        desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-        ID3D11Texture2D* texture = nullptr;
-        device->CreateTexture2D(&desc, nullptr, &texture);
-        return texture;
-    };
+    ID3D11Device* helper = NULL;
+    check(SUCCEEDED(D3D11CreateDevice(NULL, driver, NULL, 0, wanted, 1,
+        D3D11_SDK_VERSION, &helper, NULL, NULL)), "The helper device must be created.");
+    if (!helper) return 1;
+    ID3D11Texture2D* foreign_target = make_target(helper, DXGI_FORMAT_R16G16_UNORM, 128, 64);
+    check(foreign_target != NULL, "The helper target must fill its own texture inventory.");
 
-    // One match, and three that must be ignored for three different reasons.
+    // One match, plus resources that must be ignored for different reasons.
     stage("creating targets");
-    ID3D11Texture2D* match = make_target(DXGI_FORMAT_R16G16_UNORM, 256, 128);
-    ID3D11Texture2D* wrong_format = make_target(DXGI_FORMAT_R8G8B8A8_UNORM, 256, 128);
-    ID3D11Texture2D* too_small = make_target(DXGI_FORMAT_R16G16_UNORM, 32, 16);
+    ID3D11Texture2D* match = make_target(device, DXGI_FORMAT_R16G16_UNORM, 256, 128);
+    ID3D11Texture2D* wrong_format = make_target(device, DXGI_FORMAT_R8G8B8A8_UNORM, 256, 128);
+    ID3D11Texture2D* too_small = make_target(device, DXGI_FORMAT_R16G16_UNORM, 32, 16);
     check(match && wrong_format && too_small, "The test targets must be created.");
 
     stage("creation callbacks");
@@ -270,24 +312,16 @@ int main(int argc, char* argv[])
         // texture is for is a question the caller answers, and it cannot answer it about a texture
         // it was never told about. `too_small` and `wrong_format` are both filtered out above and
         // both must still have been reported.
-        auto find_texture = [](void* texture) -> const SeenTexture* {
-            for (const SeenTexture& seen : seen_textures) {
-                if (seen.texture == texture) {
-                    return &seen;
-                }
-            }
-            return nullptr;
-        };
         const SeenTexture* reported = find_texture(match);
-        check(reported != nullptr, "A created texture must be reported.");
-        check(find_texture(wrong_format) != nullptr,
+        check(reported != NULL, "A created texture must be reported.");
+        check(find_texture(wrong_format) != NULL,
               "A texture the dump filter rejects on format must still be reported.");
-        check(find_texture(too_small) != nullptr,
+        check(find_texture(too_small) != NULL,
               "A texture the dump filter rejects on size must still be reported.");
         if (reported) {
             check(reported->width == 256 && reported->height == 128,
                   "The reported size must be the descriptor's.");
-            check(reported->format == static_cast<uint32_t>(DXGI_FORMAT_R16G16_UNORM),
+            check(reported->format == (uint32_t)DXGI_FORMAT_R16G16_UNORM,
                   "The reported format must be the descriptor's.");
             check(reported->mip_levels == 1 && reported->array_size == 1 &&
                       reported->sample_count == 1,
@@ -300,25 +334,25 @@ int main(int argc, char* argv[])
 
         const compile_fn compile = load_compiler();
         if (!compile) {
-            std::fprintf(stderr, "d3dcompiler_47.dll is not available, skipping the layout and "
+            fprintf(stderr, "d3dcompiler_47.dll is not available, skipping the layout and "
                                  "shader callbacks\n");
         } else {
-            ID3DBlob* vertex_code = nullptr;
-            ID3DBlob* pixel_code = nullptr;
-            ID3DBlob* errors = nullptr;
+            ID3DBlob* vertex_code = NULL;
+            ID3DBlob* pixel_code = NULL;
+            ID3DBlob* errors = NULL;
             HRESULT compiled =
-                compile(layout_probe_source, std::strlen(layout_probe_source), "observer_test",
-                        nullptr, nullptr, "VSMain", "vs_5_0", 0, 0, &vertex_code, &errors);
+                compile(layout_probe_source, strlen(layout_probe_source), "observer_test",
+                        NULL, NULL, "VSMain", "vs_5_0", 0, 0, &vertex_code, &errors);
             if (errors) {
-                errors->Release();
-                errors = nullptr;
+                ID3D10Blob_Release(errors);
+                errors = NULL;
             }
             check(SUCCEEDED(compiled) && vertex_code, "The probe vertex shader must compile.");
-            compiled = compile(layout_probe_source, std::strlen(layout_probe_source),
-                               "observer_test", nullptr, nullptr, "PSMain", "ps_5_0", 0, 0,
+            compiled = compile(layout_probe_source, strlen(layout_probe_source),
+                               "observer_test", NULL, NULL, "PSMain", "ps_5_0", 0, 0,
                                &pixel_code, &errors);
             if (errors) {
-                errors->Release();
+                ID3D10Blob_Release(errors);
             }
             check(SUCCEEDED(compiled) && pixel_code, "The probe pixel shader must compile.");
 
@@ -338,14 +372,15 @@ int main(int argc, char* argv[])
                     {"ATTRIBUTE", 4, DXGI_FORMAT_R16G16_UINT, 0, 36, D3D11_INPUT_PER_VERTEX_DATA,
                      0},
                 };
-                ID3D11InputLayout* layout = nullptr;
-                const HRESULT made = device->CreateInputLayout(
-                    slate, 5, vertex_code->GetBufferPointer(), vertex_code->GetBufferSize(),
+                ID3D11InputLayout* layout = NULL;
+                const HRESULT made = ID3D11Device_CreateInputLayout(device,
+                    slate, 5, ID3D10Blob_GetBufferPointer(vertex_code), ID3D10Blob_GetBufferSize(vertex_code),
                     &layout);
                 check(SUCCEEDED(made) && layout, "The probe input layout must be created.");
                 if (layout) {
                     bool found = false;
-                    for (const SeenLayout& seen : seen_layouts) {
+                    for (size_t index = 0; index < layouts_count; ++index) {
+                        const SeenLayout seen = seen_layouts[index];
                         if (seen.layout != layout) {
                             continue;
                         }
@@ -354,7 +389,7 @@ int main(int argc, char* argv[])
                               "All five elements must be reported.");
                         check(seen.elements[4].semantic_index == 4 &&
                                   seen.elements[4].format ==
-                                      static_cast<uint32_t>(DXGI_FORMAT_R16G16_UINT) &&
+                                      (uint32_t)DXGI_FORMAT_R16G16_UINT &&
                                   seen.elements[4].input_slot == 0 &&
                                   seen.elements[4].byte_offset == 36 &&
                                   seen.elements[4].per_instance == 0,
@@ -364,23 +399,24 @@ int main(int argc, char* argv[])
                               "Offsets must not be renumbered.");
                     }
                     check(found, "Creating an input layout must reach the callback.");
-                    layout->Release();
+                    ID3D11InputLayout_Release(layout);
                 }
 
-                ID3D11PixelShader* pixel = nullptr;
-                device->CreatePixelShader(pixel_code->GetBufferPointer(),
-                                          pixel_code->GetBufferSize(), nullptr, &pixel);
-                check(pixel != nullptr, "The probe pixel shader must be created.");
+                ID3D11PixelShader* pixel = NULL;
+                ID3D11Device_CreatePixelShader(device, ID3D10Blob_GetBufferPointer(pixel_code),
+                                          ID3D10Blob_GetBufferSize(pixel_code), NULL, &pixel);
+                check(pixel != NULL, "The probe pixel shader must be created.");
                 if (pixel) {
                     bool found = false;
-                    for (const SeenShader& seen : seen_shaders) {
+                    for (size_t index = 0; index < shaders_count; ++index) {
+                        const SeenShader seen = seen_shaders[index];
                         if (seen.shader != pixel) {
                             continue;
                         }
                         found = true;
                         check(seen.stage == RSF_OBSERVER_STAGE_PIXEL,
                               "A pixel shader must be reported as one.");
-                        check(seen.had_bytecode && seen.bytes == pixel_code->GetBufferSize(),
+                        check(seen.had_bytecode && seen.bytes == ID3D10Blob_GetBufferSize(pixel_code),
                               "The bytecode must arrive whole, because hashing it is the caller's "
                               "job and a truncated blob hashes to a plausible wrong answer.");
                     }
@@ -397,13 +433,14 @@ int main(int argc, char* argv[])
                 // a quirk of the test: it is the reason nothing downstream may key a registry on a
                 // pointer without evicting on reuse, and it happened within a few lines of one
                 // another rather than over a long session.
-                ID3D11VertexShader* vertex = nullptr;
-                device->CreateVertexShader(vertex_code->GetBufferPointer(),
-                                           vertex_code->GetBufferSize(), nullptr, &vertex);
-                check(vertex != nullptr, "The probe vertex shader must be created.");
+                ID3D11VertexShader* vertex = NULL;
+                ID3D11Device_CreateVertexShader(device, ID3D10Blob_GetBufferPointer(vertex_code),
+                                           ID3D10Blob_GetBufferSize(vertex_code), NULL, &vertex);
+                check(vertex != NULL, "The probe vertex shader must be created.");
                 if (vertex) {
                     bool found = false;
-                    for (const SeenShader& seen : seen_shaders) {
+                    for (size_t index = 0; index < shaders_count; ++index) {
+                        const SeenShader seen = seen_shaders[index];
                         if (seen.shader != vertex) {
                             continue;
                         }
@@ -411,26 +448,26 @@ int main(int argc, char* argv[])
                         check(seen.stage == RSF_OBSERVER_STAGE_VERTEX,
                               "A vertex shader must be reported as one: the two stages share a "
                               "callback and only this field separates them.");
-                        check(seen.bytes == vertex_code->GetBufferSize(),
+                        check(seen.bytes == ID3D10Blob_GetBufferSize(vertex_code),
                               "The vertex bytecode must arrive whole.");
                     }
                     check(found, "Creating a vertex shader must reach the callback.");
-                    vertex->Release();
+                    ID3D11VertexShader_Release(vertex);
                 }
                 if (pixel) {
-                    pixel->Release();
+                    ID3D11PixelShader_Release(pixel);
                 }
             }
             if (vertex_code) {
-                vertex_code->Release();
+                ID3D10Blob_Release(vertex_code);
             }
             if (pixel_code) {
-                pixel_code->Release();
+                ID3D10Blob_Release(pixel_code);
             }
         }
     }
 
-    D3D11_TEXTURE2D_DESC staging{};
+    D3D11_TEXTURE2D_DESC staging = {0};
     staging.Width = 256;
     staging.Height = 128;
     staging.MipLevels = 1;
@@ -439,60 +476,63 @@ int main(int argc, char* argv[])
     staging.SampleDesc.Count = 1;
     staging.Usage = D3D11_USAGE_STAGING;
     staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-    ID3D11Texture2D* not_a_target = nullptr;
-    device->CreateTexture2D(&staging, nullptr, &not_a_target);
+    ID3D11Texture2D* not_a_target = NULL;
+    ID3D11Device_CreateTexture2D(device, &staging, NULL, &not_a_target);
 
     // A constant buffer of the size the view uniform data occupies, with a recognisable payload,
     // plus one of a different size that must be ignored.
     stage("creating constant buffers");
-    std::vector<float> constants(2640 / sizeof(float), 0.0f);
+    float constants[2640 / sizeof(float)] = {0};
     constants[0] = 1.5f;
     constants[1] = -2.25f;
     constants[(2640 / sizeof(float)) - 1] = 9.75f;
 
-    auto make_constant_buffer = [&](UINT bytes, const void* payload) {
-        D3D11_BUFFER_DESC desc{};
-        desc.ByteWidth = bytes;
-        desc.Usage = D3D11_USAGE_DEFAULT;
-        desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-        D3D11_SUBRESOURCE_DATA initial{};
-        initial.pSysMem = payload;
-        ID3D11Buffer* buffer = nullptr;
-        device->CreateBuffer(&desc, payload ? &initial : nullptr, &buffer);
-        return buffer;
-    };
-
-    std::vector<float> decoy(512 / sizeof(float), 3.0f);
-    ID3D11Buffer* wrong_size = make_constant_buffer(512, decoy.data());
-    ID3D11Buffer* view_like = make_constant_buffer(2640, constants.data());
-    check(view_like != nullptr, "The view sized constant buffer must be created.");
+    float decoy[512 / sizeof(float)];
+    for (size_t index = 0; index < 512 / sizeof(float); ++index) decoy[index] = 3.0f;
+    ID3D11Buffer* wrong_size = make_constant_buffer(device, 512, decoy);
+    ID3D11Buffer* view_like = make_constant_buffer(device, 2640, constants);
+    check(view_like != NULL, "The view sized constant buffer must be created.");
 
     stage("presenting");
-    check(SUCCEEDED(swapchain->Present(0, 0)), "Presenting must still work with hooks installed.");
-    check(SUCCEEDED(swapchain->Present(0, 0)), "Presenting must keep working.");
+    check(SUCCEEDED(IDXGISwapChain_Present(swapchain, 0, 0)), "Presenting must still work with hooks installed.");
+    check(SUCCEEDED(IDXGISwapChain_Present(swapchain, 0, 0)), "Presenting must keep working.");
 
     stage("reading status");
-    rsf_observer_status status{};
+    rsf_observer_status status = {0};
     status.struct_size = sizeof(status);
     check(rsf_observer_get_status(&status) == RSF_OBSERVER_OK, "Status must be readable.");
     check(status.installed == 1u, "Status must report the observer as installed.");
     check(status.frames_presented >= 2u, "Both presents must be counted.");
     check(status.have_device == 1u, "A device must have been acquired.");
     check(status.textures_created >= 4u, "Every created texture must be counted.");
-    // The filter is the point: one of the four qualifies.
+    // The selected device has one matching target, even though the helper matched first.
     check(status.textures_matched == 1u, "Exactly the matching target must be retained.");
     check(status.present_width == 256u && status.present_height == 128u,
           "The presented size must be recorded from the swap chain.");
 
+    void* selected_device = NULL;
+    check(rsf_observer_acquire_device(&selected_device, NULL) == RSF_OBSERVER_OK &&
+              selected_device == device,
+          "The first real Present must select the swap chain's device.");
+    if (selected_device) ID3D11Device_Release((ID3D11Device*)selected_device);
+
+    D3D11_BUFFER_DESC foreign_desc = {0};
+    foreign_desc.ByteWidth = 2640;
+    foreign_desc.Usage = D3D11_USAGE_DEFAULT;
+    foreign_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    ID3D11Buffer* foreign_constant = NULL;
+    check(SUCCEEDED(ID3D11Device_CreateBuffer(helper, &foreign_desc, NULL, &foreign_constant)),
+          "A helper buffer of the same size must leave the presenting buffer intact.");
+
     char prefix[1024];
-    std::snprintf(prefix, sizeof(prefix), "%s\\observed", argv[1]);
+    snprintf(prefix, sizeof(prefix), "%s\\observed", argv[1]);
     stage("requesting dump");
     check(rsf_observer_request_dump(prefix, RSF_DUMP_VIEW_VELOCITY) == RSF_OBSERVER_OK,
           "Requesting a dump must succeed.");
     // The request is carried out inside a present, so one more present performs it.
-    check(SUCCEEDED(swapchain->Present(0, 0)), "Presenting must carry out the dump.");
+    check(SUCCEEDED(IDXGISwapChain_Present(swapchain, 0, 0)), "Presenting must carry out the dump.");
 
-    rsf_observer_status after{};
+    rsf_observer_status after = {0};
     after.struct_size = sizeof(after);
     check(rsf_observer_get_status(&after) == RSF_OBSERVER_OK, "Status must be readable.");
     check(after.dumps_completed == 1u, "The dump must have run inside the present.");
@@ -510,21 +550,23 @@ int main(int argc, char* argv[])
     // The decode has to reach the game's own targets, not only a test's made up values, so the
     // dump path runs it and writes the result beside the raw one.
     char decoded_path[1024];
-    std::snprintf(decoded_path, sizeof(decoded_path), "%s\\observed_0_decoded.tga", argv[1]);
-    if (std::FILE* stream = std::fopen(decoded_path, "rb")) {
-        std::fclose(stream);
+    snprintf(decoded_path, sizeof(decoded_path), "%s\\observed_0_decoded.tga", argv[1]);
+    FILE* stream = fopen(decoded_path, "rb");
+    if (stream) {
+        fclose(stream);
     } else if (logged("motion decode unavailable")) {
-        std::fprintf(stderr, "no shader compiler here, decode skipped\n");
+        fprintf(stderr, "no shader compiler here, decode skipped\n");
     } else {
         check(false, "A decoded motion dump must be written beside the raw one.");
     }
 
     char constants_path[1024];
-    std::snprintf(constants_path, sizeof(constants_path), "%s\\observed_cb2640.bin", argv[1]);
-    if (std::FILE* stream = std::fopen(constants_path, "rb")) {
-        std::vector<float> read_back(2640 / sizeof(float), 0.0f);
-        const size_t got = std::fread(read_back.data(), 1, 2640, stream);
-        std::fclose(stream);
+    snprintf(constants_path, sizeof(constants_path), "%s\\observed_cb2640.bin", argv[1]);
+    stream = fopen(constants_path, "rb");
+    if (stream) {
+        float read_back[2640 / sizeof(float)] = {0};
+        const size_t got = fread(read_back, 1, 2640, stream);
+        fclose(stream);
         check(got == 2640, "The dumped file must hold the whole buffer.");
         check(read_back[0] == 1.5f && read_back[1] == -2.25f &&
                   read_back[(2640 / sizeof(float)) - 1] == 9.75f,
@@ -534,7 +576,7 @@ int main(int argc, char* argv[])
     }
 
     char sizes_path[1024];
-    std::snprintf(sizes_path, sizeof(sizes_path), "%s\\sizes.csv", argv[1]);
+    snprintf(sizes_path, sizeof(sizes_path), "%s\\sizes.csv", argv[1]);
     check(rsf_observer_write_buffer_sizes(sizes_path) == RSF_OBSERVER_OK,
           "Writing the size histogram must succeed.");
     check(after.distinct_buffer_sizes >= 2u,
@@ -545,17 +587,20 @@ int main(int argc, char* argv[])
     check(rsf_observer_uninstall() == RSF_OBSERVER_ERROR_NOT_READY,
           "Uninstalling twice must be refused.");
     // Presenting after the vtable is restored proves the entries were put back intact.
-    check(SUCCEEDED(swapchain->Present(0, 0)), "Presenting must work after uninstalling.");
+    check(SUCCEEDED(IDXGISwapChain_Present(swapchain, 0, 0)), "Presenting must work after uninstalling.");
 
-    if (view_like) view_like->Release();
-    if (wrong_size) wrong_size->Release();
-    if (not_a_target) not_a_target->Release();
-    if (too_small) too_small->Release();
-    if (wrong_format) wrong_format->Release();
-    if (match) match->Release();
-    if (context) context->Release();
-    swapchain->Release();
-    device->Release();
+    if (foreign_constant) ID3D11Buffer_Release(foreign_constant);
+    if (foreign_target) ID3D11Texture2D_Release(foreign_target);
+    ID3D11Device_Release(helper);
+    if (view_like) ID3D11Buffer_Release(view_like);
+    if (wrong_size) ID3D11Buffer_Release(wrong_size);
+    if (not_a_target) ID3D11Texture2D_Release(not_a_target);
+    if (too_small) ID3D11Texture2D_Release(too_small);
+    if (wrong_format) ID3D11Texture2D_Release(wrong_format);
+    if (match) ID3D11Texture2D_Release(match);
+    if (context) ID3D11DeviceContext_Release(context);
+    IDXGISwapChain_Release(swapchain);
+    ID3D11Device_Release(device);
     DestroyWindow(window);
     return passed ? 0 : 1;
 }

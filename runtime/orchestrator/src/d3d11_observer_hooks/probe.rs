@@ -8,6 +8,9 @@ type Table = *mut Handle;
 
 const HARDWARE: u32 = 1;
 const WARP: u32 = 5;
+const DEVICE_SLOTS: usize = 19;
+const CHAIN_SLOTS: usize = 9;
+const CHAIN1_SLOTS: usize = 23;
 
 #[repr(C)]
 struct Description {
@@ -53,7 +56,7 @@ struct Platform {
     destroy_window: unsafe extern "C" fn(Handle),
     create: unsafe extern "C" fn(Handle, u32, &Description, &mut Attempt),
     query_chain1: unsafe extern "C" fn(Handle, &mut Handle, &mut i32) -> u32,
-    vtable: unsafe extern "C" fn(Handle) -> Table,
+    vtable: unsafe extern "C" fn(Handle, usize) -> Table,
 }
 
 const _: () = {
@@ -105,8 +108,8 @@ fn probe(platform: &Platform, window: Handle) -> Option<Tables> {
     };
     let device_object = objects.device.as_ref()?.as_ptr();
     let chain_object = objects.chain.as_ref()?.as_ptr();
-    let device = unsafe { (platform.vtable)(device_object) };
-    let chain = unsafe { (platform.vtable)(chain_object) };
+    let device = unsafe { (platform.vtable)(device_object, DEVICE_SLOTS) };
+    let chain = unsafe { (platform.vtable)(chain_object, CHAIN_SLOTS) };
     if device.is_null() || chain.is_null() {
         return None;
     }
@@ -119,7 +122,7 @@ fn probe(platform: &Platform, window: Handle) -> Option<Tables> {
     let chain1 = extended
         .filter(|_| result >= 0)
         .map_or(null_mut(), |extended| unsafe {
-            (platform.vtable)(extended.as_ptr())
+            (platform.vtable)(extended.as_ptr(), CHAIN1_SLOTS)
         });
     Some(Tables {
         device,
@@ -159,6 +162,7 @@ mod tests {
         drivers: Vec<u32>,
         throw_in_hardware: bool,
         windows_destroyed: u32,
+        resident_device: bool,
     }
 
     impl Fixture {
@@ -171,6 +175,7 @@ mod tests {
                 drivers: Vec::new(),
                 throw_in_hardware: false,
                 windows_destroyed: 0,
+                resident_device: true,
             }
         }
 
@@ -249,8 +254,19 @@ mod tests {
         1
     }
 
-    unsafe extern "C" fn vtable(object: Handle) -> Table {
-        object.cast()
+    unsafe extern "C" fn vtable(object: Handle, slot_count: usize) -> Table {
+        FIXTURE.with_borrow(|fixture| {
+            let (expected, resident) = if object == raw(&fixture.device) {
+                (DEVICE_SLOTS, fixture.resident_device)
+            } else if object == raw(&fixture.chain) {
+                (CHAIN_SLOTS, true)
+            } else {
+                assert_eq!(object, raw(&fixture.extended));
+                (CHAIN1_SLOTS, true)
+            };
+            assert_eq!(slot_count, expected);
+            if resident { object.cast() } else { null_mut() }
+        })
     }
 
     static PLATFORM: Platform = Platform {
@@ -260,6 +276,25 @@ mod tests {
         query_chain1,
         vtable,
     };
+
+    #[test]
+    fn probe_refuses_unverified_device_table() {
+        FIXTURE.with_borrow_mut(|fixture| {
+            *fixture = Fixture::new();
+            fixture.resident_device = false;
+        });
+        let mut tables = Tables {
+            device: null_mut(),
+            chain: null_mut(),
+            chain1: null_mut(),
+        };
+        assert_eq!(rsf_core_observer11_probe(&PLATFORM, &mut tables), 0);
+        assert!(tables.device.is_null());
+        FIXTURE.with_borrow(|fixture| {
+            assert_eq!(fixture.windows_destroyed, 1);
+            assert_eq!(fixture.refs(), [1; 4]);
+        });
+    }
 
     #[test]
     fn probe_releases_partial_hardware_results_before_retry_or_exception_return() {

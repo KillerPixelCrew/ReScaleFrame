@@ -89,6 +89,12 @@ static_assert(RSF_TEXTURE_DUMP_ABI_VERSION == 2 && RSF_DUMP_VIEW_DECODED_MOTION 
 static_assert(RSF_OBSERVER_ERROR_ALREADY_INSTALLED == -3 && RSF_OBSERVER_ERROR_PATCH_FAILED == -5);
 static_assert(sizeof(rsf_observer11_slot) == 2 * sizeof(void*) && sizeof(rsf_observer11_hook_ops) == 4 * sizeof(void*));
 static_assert(RSF_OBSERVER11_STAGE_BASE + stage_shader_count == RSF_OBSERVER11_SLOT_COUNT);
+static_assert(slot_create_buffer < 19 && slot_create_texture2d < 19 && slot_create_input_layout < 19 &&
+    slot_present < 9 && slot_present1 < 23);
+static_assert([] {
+    for (const auto slot : stage_shader_slots) if (slot >= 19) return false;
+    return true;
+}());
 
 template<class Fn> Fn original(size_t slot) noexcept
 {
@@ -259,13 +265,14 @@ void update_presenter(IDXGISwapChain* swapchain)
             }
         }
     }
-    if (rsf_core_observer11_needs_presenting_device()) {
+    if (rsf_core_observer11_needs_presenter()) {
         // A device reached this way covers the case where every texture predates installation.
         Microsoft::WRL::ComPtr<ID3D11Device> device;
         if (SUCCEEDED(swapchain->GetDevice(IID_PPV_ARGS(&device))) && device) {
             auto* presenting = device.Get();
+            presenting->AddRef();
             Microsoft::WRL::ComPtr<ID3D11Device> previous;
-            previous.Attach(static_cast<ID3D11Device*>(rsf_core_observer11_adopt_device(device.Detach())));
+            previous.Attach(static_cast<ID3D11Device*>(rsf_core_observer11_adopt_device(presenting)));
             if (previous && rsf_core_observer11_logging()) {
                 char message[256];
                 std::snprintf(message, sizeof(message),
@@ -274,9 +281,9 @@ void update_presenter(IDXGISwapChain* swapchain)
                     static_cast<void*>(presenting), static_cast<void*>(previous.Get()));
                 rsf_core_observer11_log(message);
             }
+            rsf_core_observer11_dump(presenting, &dump_ops);
         }
     }
-    rsf_core_observer11_dump(&dump_ops);
 }
 
 static_assert(DXGI_PRESENT_TEST == 1 && S_OK == 0);
@@ -738,17 +745,6 @@ int32_t try_present_detour(void* user, uint32_t method) noexcept try
     return 0;
 } catch (...) { return 0; }
 
-int32_t replace_slot(void** address, void* expected, void* replacement) noexcept
-{
-    DWORD protection = 0;
-    if (!VirtualProtect(address, sizeof(void*), PAGE_EXECUTE_READWRITE, &protection)) return 0;
-    const auto previous = InterlockedCompareExchangePointer(
-        reinterpret_cast<void* volatile*>(address), replacement, expected);
-    DWORD restored = 0;
-    VirtualProtect(address, sizeof(void*), protection, &restored);
-    return previous == expected;
-}
-
 int32_t remove_present_detour(void* target) noexcept
 {
     const auto disabled = MH_DisableHook(target);
@@ -760,13 +756,12 @@ int32_t remove_present_detour(void* target) noexcept
 
 constexpr rsf_observer11_hook_ops hook_ops{
     [](void** address) { return *reinterpret_cast<void* volatile*>(address); },
-    replace_slot,
+    rsf_graphics_replace_vtable_slot,
     try_present_detour,
     remove_present_detour,
 };
 
-// The Rust probe owns the temporary window and COM references. Only the
-// vtable addresses outlive them.
+// The Rust probe owns the temporary window and COM references.
 static_assert(D3D_DRIVER_TYPE_HARDWARE == 1 && D3D_DRIVER_TYPE_WARP == 5 &&
     D3D_FEATURE_LEVEL_11_0 == 0xb000 && DXGI_FORMAT_R8G8B8A8_UNORM == 28 &&
     DXGI_USAGE_RENDER_TARGET_OUTPUT == 0x20);
@@ -820,12 +815,35 @@ uint32_t probe_chain1(void* chain, void** extended, int32_t* result) noexcept tr
     return 1;
 } catch (...) { return 0; }
 
+// Drivers and wrappers can supply an object-local table. Require readable image storage
+// and pin its module before releasing the interface whose table was queried.
+void** resident_probe_vtable(void* object, size_t slot_count) noexcept
+{
+    auto** table = *reinterpret_cast<void***>(object);
+    MEMORY_BASIC_INFORMATION info{};
+    if (!table || VirtualQuery(table, &info, sizeof(info)) != sizeof(info) ||
+        info.Type != MEM_IMAGE || info.State != MEM_COMMIT ||
+        (info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0 || (info.Protect & 0xff) == PAGE_EXECUTE) {
+        return nullptr;
+    }
+    const auto offset = reinterpret_cast<uintptr_t>(table) - reinterpret_cast<uintptr_t>(info.BaseAddress);
+    if (offset > info.RegionSize || slot_count * sizeof(void*) > info.RegionSize - offset) {
+        return nullptr;
+    }
+    HMODULE module{};
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+            reinterpret_cast<LPCWSTR>(table), &module) || module != info.AllocationBase) {
+        return nullptr;
+    }
+    return table;
+}
+
 constexpr rsf_observer11_probe_ops probe_ops{
     probe_window,
     [](void* window) { DestroyWindow(static_cast<HWND>(window)); },
     probe_create,
     probe_chain1,
-    [](void* object) { return *reinterpret_cast<void***>(object); },
+    resident_probe_vtable,
 };
 
 int32_t probe_hooks(void* user, rsf_observer11_slot* slots, uint32_t* has_present1) noexcept try
@@ -876,23 +894,7 @@ extern "C" rsf_observer_result rsf_observer_acquire_device(void** device_out, vo
     return rsf_core_observer11_acquire_device(device_out, context_out, capture_immediate);
 }
 
-extern "C" rsf_observer_result rsf_observer_get_status(rsf_observer_status* status)
-{
-    return rsf_core_observer11_status(status);
-}
 extern "C" rsf_observer_result rsf_observer_notify_application_present(const rsf_observer_present_event* event)
 {
     return rsf_core_observer11_application_present(event, present_ops.update);
-}
-
-
-extern "C" rsf_observer_result rsf_observer_request_dump(const char* output_prefix_utf8,
-                                                        uint32_t view)
-{
-    return rsf_core_observer11_request_dump(output_prefix_utf8, view);
-}
-
-extern "C" rsf_observer_result rsf_observer_write_buffer_sizes(const char* output_path_utf8)
-{
-    return rsf_core_observer11_write_buffer_sizes(output_path_utf8);
 }

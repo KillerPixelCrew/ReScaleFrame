@@ -26,20 +26,20 @@ pub(crate) struct ObserverSetup {
     pub swapchain: Option<unsafe extern "C" fn(Handle, Handle, Handle, Handle)>,
 }
 
-#[repr(C)]
-struct Hooks {
-    initialize: unsafe extern "C" fn() -> i32,
-    create: unsafe extern "C" fn(Handle, Handle, *mut Handle) -> i32,
-    enable: unsafe extern "C" fn(Handle) -> i32,
-    remove: unsafe extern "C" fn(Handle),
+// MinHook.h v1.3.4. The graphics target links the same MinHook instance as D3D11.
+unsafe extern "system" {
+    fn MH_Initialize() -> i32;
+    fn MH_CreateHook(target: Handle, detour: Handle, original: *mut Handle) -> i32;
+    fn MH_EnableHook(target: Handle) -> i32;
+    fn MH_RemoveHook(target: Handle) -> i32;
 }
 
-const _: () = {
-    assert!(
-        size_of::<ObserverSetup>() == 48 && std::mem::offset_of!(ObserverSetup, swapchain) == 40
-    );
-    assert!(size_of::<Hooks>() == 4 * size_of::<Handle>());
-};
+const MH_OK: i32 = 0;
+const MH_ERROR_ALREADY_INITIALIZED: i32 = 1;
+
+const _: () = assert!(
+    size_of::<ObserverSetup>() == 48 && std::mem::offset_of!(ObserverSetup, swapchain) == 40
+);
 
 struct Observer {
     setup: ObserverSetup,
@@ -88,10 +88,9 @@ thread_local! {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_observer12_create(
+unsafe extern "C" fn rsf_d3d12_observer_create(
     setup: *const ObserverSetup,
     out: *mut *mut Observer,
-    hooks: &Hooks,
 ) -> i32 {
     if out.is_null() || !unsafe { has_capacity(setup) } {
         return -1;
@@ -105,7 +104,10 @@ unsafe extern "C" fn rsf_core_observer12_create(
     if OBSERVER.get().is_some() {
         return -2;
     }
-    if unsafe { (hooks.initialize)() } == 0 {
+    if !matches!(
+        unsafe { MH_Initialize() },
+        MH_OK | MH_ERROR_ALREADY_INITIALIZED
+    ) {
         return -3;
     }
     let observer = OBSERVER.get_or_init(|| Observer {
@@ -121,7 +123,6 @@ unsafe extern "C" fn rsf_core_observer12_bind(
     kind: u32,
     target: Handle,
     wrappers: &[Handle; CAPACITY],
-    hooks: &Hooks,
 ) -> i32 {
     let Some(bindings) = BINDINGS.get(kind as usize) else {
         return 0;
@@ -144,16 +145,16 @@ unsafe extern "C" fn rsf_core_observer12_bind(
         return 0;
     };
     let mut original = ptr::null_mut();
-    if unsafe { (hooks.create)(target, wrapper, &mut original) } == 0 {
+    if unsafe { MH_CreateHook(target, wrapper, &mut original) } != MH_OK {
         return 0;
     }
     // A detour can run as soon as the native patch is enabled.
     entry.target.store(target, Ordering::Relaxed);
     entry.original.store(original, Ordering::Release);
-    if unsafe { (hooks.enable)(target) } != 0 {
+    if unsafe { MH_EnableHook(target) } == MH_OK {
         return 1;
     }
-    unsafe { (hooks.remove)(target) };
+    unsafe { MH_RemoveHook(target) };
     entry.original.store(ptr::null_mut(), Ordering::Release);
     entry.target.store(ptr::null_mut(), Ordering::Relaxed);
     0

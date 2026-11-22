@@ -25,7 +25,7 @@ struct rsf_observer11_probe_ops {
     void (*destroy_window)(void*);
     void (*create)(void* window, uint32_t driver, const rsf_observer11_probe_desc*, rsf_observer11_probe_attempt*);
     uint32_t (*query_chain1)(void*, void** owned, int32_t* result);
-    void** (*vtable)(void*);
+    void** (*vtable)(void*, size_t slot_count);
 };
 struct rsf_observer_options;
 struct rsf_observer11_callbacks;
@@ -43,6 +43,7 @@ int32_t rsf_core_observer11_install(const rsf_observer_options*, const rsf_obser
     void* user, RsfObserver11Probe, const rsf_observer11_hook_ops*);
 int32_t rsf_core_observer11_uninstall_hooks(const rsf_observer11_hook_ops*);
 int32_t rsf_core_observer11_installed(void);
+int32_t rsf_graphics_replace_vtable_slot(void** address, void* expected, void* replacement);
 void* rsf_core_observer11_original(size_t slot);
 void* rsf_core_observer11_forward(uint32_t method, uint32_t nested);
 void rsf_core_observer11_publish_route(uint32_t method, void* target, void* chain, void* genuine);

@@ -11,12 +11,6 @@ enum {
     RSF_OBSERVER12_CAPACITY = 8
 };
 
-struct rsf_observer12_hooks {
-    int32_t (*initialize)(void);
-    int32_t (*create)(void* target, void* detour, void** original);
-    int32_t (*enable)(void* target);
-    void (*remove)(void* target);
-};
 struct rsf_observer12_attachment {
     int32_t (*query_factory)(void*, void**);
     int32_t (*query_device)(void*, void**);
@@ -55,10 +49,7 @@ struct rsf_observer12_removal {
 };
 
 extern "C" {
-int32_t rsf_core_observer12_create(const rsf_d3d12_observer_setup*, rsf_d3d12_observer**,
-    const rsf_observer12_hooks*);
-int32_t rsf_core_observer12_bind(uint32_t kind, void* target, void* const* wrappers,
-    const rsf_observer12_hooks*);
+int32_t rsf_core_observer12_bind(uint32_t kind, void* target, void* const* wrappers);
 void* rsf_core_observer12_original(uint32_t kind, size_t index);
 int32_t rsf_core_observer12_enter(uint32_t kind);
 void rsf_core_observer12_leave(uint32_t kind);

@@ -1,22 +1,21 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
-/* Internal to rsf_graphics: replace one COM vtable slot, remembering what was there. */
-#include <windows.h>
 #include <cstddef>
+#include <cstdint>
+
+extern "C" int32_t rsf_graphics_replace_vtable_slot(void** address, void* expected, void* replacement);
 
 namespace rsf {
 inline bool patch_slot(void** vtable, size_t index, void* replacement, void** previous)
 {
-    DWORD protection = 0;
-    if (!VirtualProtect(&vtable[index], sizeof(void*), PAGE_EXECUTE_READWRITE, &protection)) {
+    auto** address = vtable + index;
+    void* original = *reinterpret_cast<void* volatile*>(address);
+    if (!rsf_graphics_replace_vtable_slot(address, original, replacement)) {
         return false;
     }
     if (previous) {
-        *previous = vtable[index];
+        *previous = original;
     }
-    vtable[index] = replacement;
-    DWORD restored = 0;
-    VirtualProtect(&vtable[index], sizeof(void*), protection, &restored);
     return true;
 }
 }
