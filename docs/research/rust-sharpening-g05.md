@@ -181,3 +181,12 @@ header-only fallback defaults for targets without Runtime linkage. The
 Runtime's validation and normalization are already in Rust.
 `sharpening_vulkan_core.h` remains a C declaration file for generated
 records and private Rust symbols.
+
+Source verification used pinned Rust 1.94.1 formatting, reproducible
+bindgen 0.72.1 regeneration of the Vulkan record, and
+`cargo metadata --locked --offline`. The Vulkan comparison matched all
+31 device lookups plus the instance memory-properties lookup with the
+Rust fixture fakes. The CTest names and entry points were checked against
+the source tree. The worktree retained the existing Cargo dependency
+graph and the native Vulkan capability gates. No builds, test runs,
+Clippy runs or device execution were performed for this follow-up.
