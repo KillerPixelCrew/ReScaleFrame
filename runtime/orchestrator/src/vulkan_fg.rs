@@ -19,12 +19,27 @@ const NOT_COMPILED: i32 = -3;
 const INIT_FAILED: i32 = -6;
 const NOT_SUPPORTED: i32 = -7;
 const NOT_READY: i32 = -8;
+const FEATURE_FAILED: i32 = -9;
 const WSI_INITIALIZATION_FAILED: i32 = -3;
 
 const DLSS: u32 = 1;
 const FFX: u32 = 3;
 const FSR4: u32 = 4;
 const XESS: u32 = 5;
+
+// Factory guards use this as well, while keeping C++ exceptions on their side
+// of the ABI and preserving the separate initialization failure for throws.
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_fgvk_provider_result(backend: u32, result: i32) -> i32 {
+    match (backend, result) {
+        (_, OK) => OK,
+        (FSR4, -13001) | (XESS, -10001) => INVALID,
+        (FSR4, -13002) | (XESS, -10002) => ABI_MISMATCH,
+        (FSR4, -13003) => NOT_SUPPORTED,
+        (FSR4 | XESS, _) => FEATURE_FAILED,
+        _ => result,
+    }
+}
 
 static OCCUPIED: AtomicBool = AtomicBool::new(false);
 // Primary admission allows at most one retained, partially created owner.
@@ -42,6 +57,10 @@ struct Owner {
 }
 
 impl Owner {
+    fn result(&self, result: i32) -> i32 {
+        rsf_core_fgvk_provider_result(self.backend, result)
+    }
+
     fn set_options(&self, enabled: u32, count: u32) -> i32 {
         if enabled > 1 || count == 0 {
             return INVALID;
@@ -50,7 +69,7 @@ impl Owner {
             return NOT_SUPPORTED;
         }
         let enable = self.provider.enable.expect("provider enable callback");
-        let result = unsafe { enable(self.context, enabled, count) };
+        let result = self.result(unsafe { enable(self.context, enabled, count) });
         if result == OK {
             self.generated_count.store(count, Ordering::Relaxed);
         }
@@ -111,7 +130,14 @@ unsafe fn admit(
             return Err(ABI_MISMATCH);
         }
     }
-    let provider = unsafe { platform.providers[backend as usize].as_ref() }.ok_or(NOT_COMPILED)?;
+    let registered = match backend {
+        DLSS => platform.dlss,
+        FFX => platform.ffx,
+        FSR4 => platform.fsr4,
+        XESS => platform.xess,
+        _ => unreachable!("validated provider ID"),
+    };
+    let provider = unsafe { registered.as_ref() }.ok_or(NOT_COMPILED)?;
     if matches!(backend, FSR4 | XESS) {
         let host = unsafe { host.as_ref() }.ok_or(INVALID)?;
         if host.window.is_null() || host.timeline_enabled != 1 {
@@ -205,7 +231,7 @@ unsafe extern "C" fn rsf_core_fgvk_create(
         }
 
         let destroy = provider.destroy.expect("provider destroy callback");
-        let cleanup = unsafe { destroy(context) };
+        let cleanup = rsf_core_fgvk_provider_result(backend, unsafe { destroy(context) });
         if cleanup == OK {
             unsafe { drop(Box::from_raw(owner)) };
             return result;
@@ -339,8 +365,8 @@ unsafe extern "C" fn rsf_fgvk_latency_options(
     owner
         .provider
         .latency_options
-        .map_or(NOT_SUPPORTED, |call| unsafe {
-            call(owner.context, mode, minimum_interval_us)
+        .map_or(NOT_SUPPORTED, |call| {
+            owner.result(unsafe { call(owner.context, mode, minimum_interval_us) })
         })
 }
 
@@ -356,10 +382,9 @@ unsafe extern "C" fn rsf_fgvk_latency_sleep(handle: *mut rsf_fgvk, frame: u64) -
     if frame == 0 {
         return INVALID;
     }
-    owner
-        .provider
-        .latency_sleep
-        .map_or(NOT_SUPPORTED, |call| unsafe { call(owner.context, frame) })
+    owner.provider.latency_sleep.map_or(NOT_SUPPORTED, |call| {
+        owner.result(unsafe { call(owner.context, frame) })
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -378,12 +403,9 @@ unsafe extern "C" fn rsf_fgvk_latency_marker(
     if frame == 0 || marker > 6 {
         return INVALID;
     }
-    owner
-        .provider
-        .latency_marker
-        .map_or(NOT_SUPPORTED, |call| unsafe {
-            call(owner.context, frame, marker)
-        })
+    owner.provider.latency_marker.map_or(NOT_SUPPORTED, |call| {
+        owner.result(unsafe { call(owner.context, frame, marker) })
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -401,10 +423,9 @@ unsafe extern "C" fn rsf_fgvk_latency_get_status(
     if unsafe { (*status).abi_version } != RSF_FGVK_LATENCY_ABI_VERSION {
         return ABI_MISMATCH;
     }
-    owner
-        .provider
-        .latency_status
-        .map_or(NOT_SUPPORTED, |call| unsafe { call(owner.context, status) })
+    owner.provider.latency_status.map_or(NOT_SUPPORTED, |call| {
+        owner.result(unsafe { call(owner.context, status) })
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -418,7 +439,7 @@ unsafe extern "C" fn rsf_fgvk_prepare(
         Err(result) => return result,
     };
     let call = owner.provider.prepare.expect("provider prepare callback");
-    unsafe { call(owner.context, commands, frame) }
+    owner.result(unsafe { call(owner.context, commands, frame) })
 }
 
 #[unsafe(no_mangle)]
@@ -432,7 +453,7 @@ unsafe extern "C" fn rsf_fgvk_hudless(
         Err(result) => return result,
     };
     let call = owner.provider.hudless.expect("provider HUD-less callback");
-    unsafe { call(owner.context, commands, frame) }
+    owner.result(unsafe { call(owner.context, commands, frame) })
 }
 
 #[unsafe(no_mangle)]
@@ -497,7 +518,7 @@ unsafe extern "C" fn rsf_fgvk_get_status(
         return ABI_MISMATCH;
     }
     let call = owner.provider.status.expect("provider status callback");
-    unsafe { call(owner.context, status) }
+    owner.result(unsafe { call(owner.context, status) })
 }
 
 #[unsafe(no_mangle)]
@@ -510,7 +531,7 @@ unsafe extern "C" fn rsf_fgvk_drain(handle: *mut rsf_fgvk) -> i32 {
         Err(error) => return error,
     };
     let drain = owner.provider.drain.expect("provider drain callback");
-    unsafe { drain(owner.context) }
+    owner.result(unsafe { drain(owner.context) })
 }
 
 #[unsafe(no_mangle)]
@@ -523,7 +544,7 @@ unsafe extern "C" fn rsf_fgvk_destroy(handle: *mut rsf_fgvk) -> i32 {
         Err(error) => return error,
     };
     let destroy = owner.provider.destroy.expect("provider destroy callback");
-    let result = unsafe { destroy(owner.context) };
+    let result = owner.result(unsafe { destroy(owner.context) });
     if result == OK {
         operation.destroyed();
         if is_cleanup_only(handle) {

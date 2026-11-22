@@ -1,4 +1,135 @@
 // SPDX-License-Identifier: MIT
+
+// The corrected SDK header still owns its registration and forwards to these
+// typed fake Vulkan entry points. All calls in this fixture are synchronous.
+mod drivers {
+    use super::Counts;
+    use ash::vk::{self, Handle};
+    use std::sync::Mutex;
+
+    static COUNTS: Mutex<Counts> = Mutex::new(Counts {
+        native_creates: 0,
+        native_destroys: 0,
+        host_creates: 0,
+        host_destroys: 0,
+        native_presents: 0,
+        host_presents: 0,
+        host_acquires: 0,
+        host_images: 0,
+    });
+
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn rsf_fixture_wsi_counts(out: *mut Counts) {
+        unsafe { out.write(*COUNTS.lock().unwrap()) };
+    }
+
+    #[unsafe(no_mangle)]
+    unsafe extern "system" fn rsf_fixture_host_create(
+        device: vk::Device,
+        _: *const vk::SwapchainCreateInfoKHR<'_>,
+        _: *const vk::AllocationCallbacks<'_>,
+        chain: *mut vk::SwapchainKHR,
+    ) -> vk::Result {
+        assert_eq!(device.as_raw(), 1, "host create device identity");
+        COUNTS.lock().unwrap().host_creates += 1;
+        unsafe { chain.write(vk::SwapchainKHR::from_raw(10)) };
+        vk::Result::SUCCESS
+    }
+
+    #[unsafe(no_mangle)]
+    extern "system" fn rsf_fixture_host_destroy(
+        device: vk::Device,
+        _: vk::SwapchainKHR,
+        _: *const vk::AllocationCallbacks<'_>,
+    ) {
+        assert_eq!(device.as_raw(), 1, "host destroy device identity");
+        COUNTS.lock().unwrap().host_destroys += 1;
+    }
+
+    #[unsafe(no_mangle)]
+    extern "system" fn rsf_fixture_host_present(
+        _: vk::Queue,
+        _: *const vk::PresentInfoKHR<'_>,
+    ) -> vk::Result {
+        COUNTS.lock().unwrap().host_presents += 1;
+        vk::Result::SUCCESS
+    }
+
+    #[unsafe(no_mangle)]
+    extern "system" fn rsf_fixture_host_acquire(
+        _: vk::Device,
+        _: vk::SwapchainKHR,
+        _: u64,
+        _: vk::Semaphore,
+        _: vk::Fence,
+        _: *mut u32,
+    ) -> vk::Result {
+        COUNTS.lock().unwrap().host_acquires += 1;
+        vk::Result::SUCCESS
+    }
+
+    #[unsafe(no_mangle)]
+    extern "system" fn rsf_fixture_host_images(
+        _: vk::Device,
+        _: vk::SwapchainKHR,
+        _: *mut u32,
+        _: *mut vk::Image,
+    ) -> vk::Result {
+        COUNTS.lock().unwrap().host_images += 1;
+        vk::Result::SUCCESS
+    }
+
+    #[unsafe(no_mangle)]
+    extern "system" fn vkCreateSwapchainKHR(
+        _: vk::Device,
+        _: *const vk::SwapchainCreateInfoKHR<'_>,
+        _: *const vk::AllocationCallbacks<'_>,
+        _: *mut vk::SwapchainKHR,
+    ) -> vk::Result {
+        COUNTS.lock().unwrap().native_creates += 1;
+        vk::Result::SUCCESS
+    }
+
+    #[unsafe(no_mangle)]
+    extern "system" fn vkDestroySwapchainKHR(
+        _: vk::Device,
+        _: vk::SwapchainKHR,
+        _: *const vk::AllocationCallbacks<'_>,
+    ) {
+        COUNTS.lock().unwrap().native_destroys += 1;
+    }
+
+    #[unsafe(no_mangle)]
+    extern "system" fn vkQueuePresentKHR(
+        _: vk::Queue,
+        _: *const vk::PresentInfoKHR<'_>,
+    ) -> vk::Result {
+        COUNTS.lock().unwrap().native_presents += 1;
+        vk::Result::SUCCESS
+    }
+
+    #[unsafe(no_mangle)]
+    extern "system" fn vkAcquireNextImageKHR(
+        _: vk::Device,
+        _: vk::SwapchainKHR,
+        _: u64,
+        _: vk::Semaphore,
+        _: vk::Fence,
+        _: *mut u32,
+    ) -> vk::Result {
+        vk::Result::SUCCESS
+    }
+
+    #[unsafe(no_mangle)]
+    extern "system" fn vkGetSwapchainImagesKHR(
+        _: vk::Device,
+        _: vk::SwapchainKHR,
+        _: *mut u32,
+        _: *mut vk::Image,
+    ) -> vk::Result {
+        vk::Result::SUCCESS
+    }
+}
 use crate::wsi_abi::{rsf_wsi_fixture_calls as Calls, rsf_wsi_fixture_counts as Counts};
 use std::mem::MaybeUninit;
 

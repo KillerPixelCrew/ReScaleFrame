@@ -559,6 +559,7 @@ unsafe extern "C" {
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct rsf_ffx_fixture_state {
+    pub next: u64,
     pub resets: u32,
     pub submits: u32,
     pub waits: u32,
@@ -595,79 +596,82 @@ pub struct rsf_ffx_fixture_state {
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_ffx_fixture_state"][::core::mem::size_of::<rsf_ffx_fixture_state>() - 112usize];
+    ["Size of rsf_ffx_fixture_state"][::core::mem::size_of::<rsf_ffx_fixture_state>() - 120usize];
     ["Alignment of rsf_ffx_fixture_state"]
         [::core::mem::align_of::<rsf_ffx_fixture_state>() - 8usize];
+    ["Offset of field: rsf_ffx_fixture_state::next"]
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, next) - 0usize];
     ["Offset of field: rsf_ffx_fixture_state::resets"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, resets) - 0usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, resets) - 8usize];
     ["Offset of field: rsf_ffx_fixture_state::submits"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, submits) - 4usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, submits) - 12usize];
     ["Offset of field: rsf_ffx_fixture_state::waits"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, waits) - 8usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, waits) - 16usize];
     ["Offset of field: rsf_ffx_fixture_state::copies"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, copies) - 12usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, copies) - 20usize];
     ["Offset of field: rsf_ffx_fixture_state::sdk_records"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, sdk_records) - 16usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, sdk_records) - 24usize];
     ["Offset of field: rsf_ffx_fixture_state::generated"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, generated) - 20usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, generated) - 28usize];
     ["Offset of field: rsf_ffx_fixture_state::configurations"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, configurations) - 24usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, configurations) - 32usize];
     ["Offset of field: rsf_ffx_fixture_state::activations"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, activations) - 28usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, activations) - 36usize];
     ["Offset of field: rsf_ffx_fixture_state::present_calls"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, present_calls) - 32usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, present_calls) - 40usize];
     ["Offset of field: rsf_ffx_fixture_state::drains"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, drains) - 36usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, drains) - 44usize];
     ["Offset of field: rsf_ffx_fixture_state::idles"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, idles) - 40usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, idles) - 48usize];
     ["Offset of field: rsf_ffx_fixture_state::locks"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, locks) - 44usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, locks) - 52usize];
     ["Offset of field: rsf_ffx_fixture_state::unlocks"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, unlocks) - 48usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, unlocks) - 56usize];
     ["Offset of field: rsf_ffx_fixture_state::effects_destroyed"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, effects_destroyed) - 52usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, effects_destroyed) - 60usize];
     ["Offset of field: rsf_ffx_fixture_state::swapchains_destroyed"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, swapchains_destroyed) - 56usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, swapchains_destroyed) - 64usize];
     ["Offset of field: rsf_ffx_fixture_state::chains_destroyed"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, chains_destroyed) - 60usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, chains_destroyed) - 68usize];
     ["Offset of field: rsf_ffx_fixture_state::destroyed_images"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, destroyed_images) - 64usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, destroyed_images) - 72usize];
     ["Offset of field: rsf_ffx_fixture_state::freed_memories"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, freed_memories) - 68usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, freed_memories) - 76usize];
     ["Offset of field: rsf_ffx_fixture_state::destroyed_fences"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, destroyed_fences) - 72usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, destroyed_fences) - 80usize];
     ["Offset of field: rsf_ffx_fixture_state::reject_prepare"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, reject_prepare) - 76usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, reject_prepare) - 84usize];
     ["Offset of field: rsf_ffx_fixture_state::reject_wait"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, reject_wait) - 77usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, reject_wait) - 85usize];
     ["Offset of field: rsf_ffx_fixture_state::reject_bind"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, reject_bind) - 78usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, reject_bind) - 86usize];
     ["Offset of field: rsf_ffx_fixture_state::reject_drain"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, reject_drain) - 79usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, reject_drain) - 87usize];
     ["Offset of field: rsf_ffx_fixture_state::reject_effect_destroy"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, reject_effect_destroy) - 80usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, reject_effect_destroy) - 88usize];
     ["Offset of field: rsf_ffx_fixture_state::reject_swapchain_destroy"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, reject_swapchain_destroy) - 81usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, reject_swapchain_destroy) - 89usize];
     ["Offset of field: rsf_ffx_fixture_state::reject_generate"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, reject_generate) - 82usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, reject_generate) - 90usize];
     ["Offset of field: rsf_ffx_fixture_state::check_reset"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, check_reset) - 83usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, check_reset) - 91usize];
     ["Offset of field: rsf_ffx_fixture_state::expected_reset"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, expected_reset) - 84usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, expected_reset) - 92usize];
     ["Offset of field: rsf_ffx_fixture_state::enabled"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, enabled) - 85usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, enabled) - 93usize];
     ["Offset of field: rsf_ffx_fixture_state::reject_submit"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, reject_submit) - 86usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, reject_submit) - 94usize];
     ["Offset of field: rsf_ffx_fixture_state::configured_frame"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, configured_frame) - 88usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, configured_frame) - 96usize];
     ["Offset of field: rsf_ffx_fixture_state::generated_frame"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, generated_frame) - 96usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, generated_frame) - 104usize];
     ["Offset of field: rsf_ffx_fixture_state::present_result"]
-        [::core::mem::offset_of!(rsf_ffx_fixture_state, present_result) - 104usize];
+        [::core::mem::offset_of!(rsf_ffx_fixture_state, present_result) - 112usize];
 };
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_wsi_route_fixture_state {
+    pub owner: *mut rsf_ffxgvk,
     pub presents: u32,
     pub creates: u32,
     pub destroys: u32,
@@ -685,35 +689,37 @@ pub struct rsf_wsi_route_fixture_state {
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_wsi_route_fixture_state"]
-        [::core::mem::size_of::<rsf_wsi_route_fixture_state>() - 56usize];
+        [::core::mem::size_of::<rsf_wsi_route_fixture_state>() - 64usize];
     ["Alignment of rsf_wsi_route_fixture_state"]
         [::core::mem::align_of::<rsf_wsi_route_fixture_state>() - 8usize];
+    ["Offset of field: rsf_wsi_route_fixture_state::owner"]
+        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, owner) - 0usize];
     ["Offset of field: rsf_wsi_route_fixture_state::presents"]
-        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, presents) - 0usize];
+        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, presents) - 8usize];
     ["Offset of field: rsf_wsi_route_fixture_state::creates"]
-        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, creates) - 4usize];
+        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, creates) - 12usize];
     ["Offset of field: rsf_wsi_route_fixture_state::destroys"]
-        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, destroys) - 8usize];
+        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, destroys) - 16usize];
     ["Offset of field: rsf_wsi_route_fixture_state::acquires"]
-        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, acquires) - 12usize];
+        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, acquires) - 20usize];
     ["Offset of field: rsf_wsi_route_fixture_state::enumerations"]
-        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, enumerations) - 16usize];
+        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, enumerations) - 24usize];
     ["Offset of field: rsf_wsi_route_fixture_state::lookups"]
-        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, lookups) - 20usize];
+        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, lookups) - 28usize];
     ["Offset of field: rsf_wsi_route_fixture_state::unregistered"]
-        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, unregistered) - 24usize];
+        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, unregistered) - 32usize];
     ["Offset of field: rsf_wsi_route_fixture_state::registered"]
-        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, registered) - 28usize];
+        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, registered) - 36usize];
     ["Offset of field: rsf_wsi_route_fixture_state::destroy_inside"]
-        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, destroy_inside) - 32usize];
+        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, destroy_inside) - 40usize];
     ["Offset of field: rsf_wsi_route_fixture_state::refuse_unregister"]
-        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, refuse_unregister) - 33usize];
+        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, refuse_unregister) - 41usize];
     ["Offset of field: rsf_wsi_route_fixture_state::destroyed_inside"]
-        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, destroyed_inside) - 36usize];
+        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, destroyed_inside) - 44usize];
     ["Offset of field: rsf_wsi_route_fixture_state::created_inside"]
-        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, created_inside) - 40usize];
+        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, created_inside) - 48usize];
     ["Offset of field: rsf_wsi_route_fixture_state::routed_inside"]
-        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, routed_inside) - 48usize];
+        [::core::mem::offset_of!(rsf_wsi_route_fixture_state, routed_inside) - 56usize];
 };
 impl Default for rsf_wsi_route_fixture_state {
     fn default() -> Self {
@@ -728,7 +734,36 @@ unsafe extern "C" {
     pub fn rsf_fixture_ffx_state() -> *mut rsf_ffx_fixture_state;
 }
 unsafe extern "C" {
+    pub fn rsf_fixture_ffx_lookup(
+        arg1: *mut ::core::ffi::c_void,
+        arg2: *const ::core::ffi::c_char,
+    ) -> rsf_vk_function;
+}
+unsafe extern "C" {
+    pub fn rsf_fixture_ffx_submit(
+        arg1: *mut ::core::ffi::c_void,
+        arg2: u32,
+        arg3: *const ::core::ffi::c_void,
+        arg4: u64,
+    ) -> i32;
+}
+unsafe extern "C" {
+    pub fn rsf_fixture_ffx_lock(arg1: *mut ::core::ffi::c_void);
+}
+unsafe extern "C" {
+    pub fn rsf_fixture_ffx_unlock(arg1: *mut ::core::ffi::c_void);
+}
+unsafe extern "C" {
     pub fn rsf_fixture_wsi_route_state() -> *mut rsf_wsi_route_fixture_state;
+}
+unsafe extern "C" {
+    pub fn rsf_fixture_wsi_lookup(
+        arg1: *mut ::core::ffi::c_void,
+        arg2: *const ::core::ffi::c_char,
+    ) -> rsf_vk_function;
+}
+unsafe extern "C" {
+    pub fn rsf_fixture_wsi_entry(arg1: *const ::core::ffi::c_char) -> rsf_vk_function;
 }
 unsafe extern "C" {
     pub fn rsf_fixture_ffx_start(route: bool, arg1: *mut *mut rsf_ffxgvk, arg2: *mut u64) -> i32;

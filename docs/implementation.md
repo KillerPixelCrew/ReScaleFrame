@@ -3923,6 +3923,11 @@ submission and WSI route CPU fixtures. The fixtures keep their existing
 CTest names and retain SDK-facing callback fakes in C++.
 [Vulkan FG CPU fixture audit](research/rust-vulkan-fg-cpu-fixtures.md)
 
+Rust now selects the registered Vulkan FG provider, normalizes provider
+status codes and runs the common FidelityFX queue and resolver steps.
+The Vulkan CPU fixtures also use Rust test doubles at their SDK boundaries.
+[Shared WSI follow-up](research/rust-vulkan-fg-wsi-follow-up.md)
+
 The FidelityFX generation callback now reads the exact configured frame
 record from the Rust WSI route. Rust publishes the record only after SDK
 configure succeeds and counts only successful dispatches. The native callback

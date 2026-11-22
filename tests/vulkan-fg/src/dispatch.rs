@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::dispatch_abi::*;
+use crate::dispatch_drivers::{block_sleep, fixture_state, initialize, release_sleep, wait_sleep};
 use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record};
 use std::ptr;
 
@@ -42,11 +43,11 @@ fn verify_sleep_borrow(owner: *mut rsf_fgvk) {
     struct ReleaseSleep;
     impl Drop for ReleaseSleep {
         fn drop(&mut self) {
-            unsafe { rsf_fixture_release_sleep() };
+            release_sleep();
         }
     }
 
-    unsafe { rsf_fixture_block_sleep() };
+    block_sleep();
     let address = owner as usize;
     std::thread::scope(|scope| {
         let sleeping = scope.spawn(move || {
@@ -61,10 +62,7 @@ fn verify_sleep_borrow(owner: *mut rsf_fgvk) {
             );
         });
         let release = ReleaseSleep;
-        assert!(
-            unsafe { rsf_fixture_wait_sleep() },
-            "provider sleep entered"
-        );
+        assert!(wait_sleep(), "provider sleep entered");
         assert_eq!(unsafe { rsf_fgvk_drain(owner) }, FIXTURE_NOT_READY);
         assert_eq!(unsafe { rsf_fgvk_destroy(owner) }, FIXTURE_NOT_READY);
         assert!(
@@ -78,8 +76,9 @@ fn verify_sleep_borrow(owner: *mut rsf_fgvk) {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
-    // The C++ fake owns this process-local record. Access it only between provider calls.
-    let fixture = unsafe { rsf_fixture_dispatch_state() };
+    // Access the fixture record only between provider calls.
+    initialize();
+    let fixture = fixture_state();
     macro_rules! f {
         ($field:ident) => {
             (*fixture).$field

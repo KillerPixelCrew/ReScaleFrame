@@ -6,6 +6,7 @@
 #include "../../runtime/orchestrator/src/vulkan_fg_resources.h"
 
 typedef struct rsf_ffx_fixture_state {
+    uint64_t next;
     uint32_t resets, submits, waits, copies, sdk_records, generated;
     uint32_t configurations, activations, present_calls, drains, idles, locks, unlocks;
     uint32_t effects_destroyed, swapchains_destroyed, chains_destroyed;
@@ -17,6 +18,7 @@ typedef struct rsf_ffx_fixture_state {
 } rsf_ffx_fixture_state;
 
 typedef struct rsf_wsi_route_fixture_state {
+    rsf_ffxgvk* owner;
     uint32_t presents, creates, destroys, acquires, enumerations, lookups, unregistered, registered;
     bool destroy_inside, refuse_unregister;
     int32_t destroyed_inside, created_inside;
@@ -27,7 +29,13 @@ typedef struct rsf_wsi_route_fixture_state {
 extern "C" {
 #endif
 rsf_ffx_fixture_state* rsf_fixture_ffx_state(void);
+rsf_vk_function rsf_fixture_ffx_lookup(void*, const char*);
+int32_t rsf_fixture_ffx_submit(void*, uint32_t, const void*, uint64_t);
+void rsf_fixture_ffx_lock(void*);
+void rsf_fixture_ffx_unlock(void*);
 rsf_wsi_route_fixture_state* rsf_fixture_wsi_route_state(void);
+rsf_vk_function rsf_fixture_wsi_lookup(void*, const char*);
+rsf_vk_function rsf_fixture_wsi_entry(const char*);
 int32_t rsf_fixture_ffx_start(bool route, rsf_ffxgvk**, uint64_t*);
 void* rsf_fixture_ffx_native(void);
 void* rsf_fixture_ffx_routed(void);

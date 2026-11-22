@@ -1018,13 +1018,18 @@ generate("tests/vulkan-fg/src/wsi_abi.rs", "tests/vulkan-fg/wsi_abi.h",
          "rsf_wsi_fixture_(counts|calls)", "NOTHING", [])
 
 for fixture in ("dispatch", "ffx"):
-    symbols = (r"rsf_(fgvk_.*|core_fgvk_presentation_.*|fixture_(dispatch_state|block_sleep|wait_sleep|release_sleep))"
+    symbols = (r"rsf_(fgvk_.*|core_fgvk_presentation_.*)"
                if fixture == "dispatch" else
                r"rsf_(ffxgvk_.*|fixture_(ffx|wsi)_.*|core_vkfg_(ensure_image|release_image))")
     generate(f"tests/vulkan-fg/src/{fixture}_abi.rs", f"tests/vulkan-fg/{fixture}_abi.h",
-             "rsf_fixture_result", "RSF_(FGVK_.*|SRVK_ABI_VERSION|FSR4FG_NOT_SUPPORTED)",
+             "rsf_fixture_result|rsf_(dispatch_fixture_state|ffxgvk|dlssgvk(_status)?|fsr4gvk(_options)?|xessgvk(_options)?)",
+             "RSF_(FGVK_.*|SRVK_ABI_VERSION|FSR4FG_NOT_SUPPORTED|DLSSGVK_ABI_VERSION)",
              ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Isdk/game/include",
-              *(["-x", "c++", "-std=c++17", "-Wno-pragma-once-outside-header"] if fixture == "ffx" else [])],
+              "-x", "c++", "-std=c++17", "-Wno-pragma-once-outside-header",
+              *(["-include", "runtime/orchestrator/src/native_fg_ffx_vulkan.h",
+                 "-include", "runtime/orchestrator/include/rescaleframe/native_fg_dlss_vulkan.h",
+                 "-include", "runtime/orchestrator/src/native_fg_fsr4_vulkan.h",
+                 "-include", "runtime/orchestrator/src/native_fg_xess_vulkan.h"] if fixture == "dispatch" else [])],
              ["--allowlist-function", symbols, "--blocklist-function", "rsf_fixture_.*_run",
               "--blocklist-type", "rsf_frame_record",
               "--raw-line", "#![allow(dead_code)]",

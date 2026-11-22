@@ -13,47 +13,21 @@ extern "C" int32_t rsf_latencyvk_queue_present(rsf_vk_function call, void* queue
     return reinterpret_cast<PFN_vkQueuePresentKHR>(call)(static_cast<VkQueue>(queue), static_cast<const VkPresentInfoKHR*>(info));
 }
 
+extern "C" {
+VkResult VKAPI_PTR rsf_fixture_ffx_images(VkDevice, VkSwapchainKHR, uint32_t*, VkImage*);
+VkResult VKAPI_PTR rsf_fixture_ffx_acquire(VkDevice, VkSwapchainKHR, uint64_t, VkSemaphore, VkFence, uint32_t*);
+uint64_t rsf_fixture_ffx_present_count(VkSwapchainKHR);
+}
+
 namespace fake {
 inline void require(bool value, const char* text) { if (!value) { std::fprintf(stderr, "%s\n", text); std::exit(1); } }
 template<class T> T id(uint64_t value) { return reinterpret_cast<T>(static_cast<uintptr_t>(value)); }
 
 struct State : rsf_ffx_fixture_state {
-    uint64_t next = 100;
     FfxApiFrameGenerationDispatchFunc callback = nullptr;
     void* context = nullptr;
     rsf_ffxgvk_native* native = nullptr;
-} state;
-
-VkResult VKAPI_PTR create_fence(VkDevice, const VkFenceCreateInfo*, const VkAllocationCallbacks*, VkFence* out) {
-    *out = id<VkFence>(++state.next); return VK_SUCCESS;
-}
-void VKAPI_PTR destroy_fence(VkDevice, VkFence, const VkAllocationCallbacks*) { ++state.destroyed_fences; }
-VkResult VKAPI_PTR reset_fences(VkDevice, uint32_t count, const VkFence* fence) {
-    require(count == 1 && *fence, "reset has a real completion identity"); ++state.resets; return VK_SUCCESS;
-}
-VkResult VKAPI_PTR wait_fences(VkDevice, uint32_t count, const VkFence* fence, VkBool32, uint64_t timeout) {
-    require(count == 1 && *fence && timeout == 15000000000ull, "wait observes the earlier completion before reset");
-    ++state.waits; return state.reject_wait ? VK_TIMEOUT : VK_SUCCESS;
-}
-int32_t submit(void*, uint32_t count, const void* commands, uint64_t fence) {
-    require(!count && !commands && fence, "fences are queued after successful host submissions"); ++state.submits; return state.reject_submit ? VK_ERROR_DEVICE_LOST : VK_SUCCESS;
-}
-void lock(void*) { ++state.locks; }
-void unlock(void*) { ++state.unlocks; }
-VkResult VKAPI_PTR create_image(VkDevice, const VkImageCreateInfo*, const VkAllocationCallbacks*, VkImage* out) {
-    *out = id<VkImage>(++state.next); return VK_SUCCESS;
-}
-void VKAPI_PTR destroy_image(VkDevice, VkImage, const VkAllocationCallbacks*) { ++state.destroyed_images; }
-void VKAPI_PTR requirements(VkDevice, VkImage, VkMemoryRequirements* out) { out->size = 4096; out->memoryTypeBits = 1; }
-VkResult VKAPI_PTR allocate(VkDevice, const VkMemoryAllocateInfo*, const VkAllocationCallbacks*, VkDeviceMemory* out) {
-    *out = id<VkDeviceMemory>(++state.next); return VK_SUCCESS;
-}
-void VKAPI_PTR free_memory(VkDevice, VkDeviceMemory, const VkAllocationCallbacks*) { ++state.freed_memories; }
-VkResult VKAPI_PTR bind(VkDevice, VkImage, VkDeviceMemory, VkDeviceSize) { return state.reject_bind ? VK_ERROR_UNKNOWN : VK_SUCCESS; }
-void VKAPI_PTR barrier(VkCommandBuffer, VkPipelineStageFlags, VkPipelineStageFlags, VkDependencyFlags, uint32_t, const VkMemoryBarrier*,
-    uint32_t, const VkBufferMemoryBarrier*, uint32_t, const VkImageMemoryBarrier*) {}
-void VKAPI_PTR copy(VkCommandBuffer, VkImage, VkImageLayout, VkImage, VkImageLayout, uint32_t, const VkImageCopy*) { ++state.copies; }
-VkResult VKAPI_PTR idle(VkDevice) { ++state.idles; return VK_SUCCESS; }
+} state{};
 
 ffxReturnCode_t dispatch(ffxContext* context, const ffxDispatchDescHeader* header) {
     switch (header->type) {
@@ -114,18 +88,9 @@ VkResult VKAPI_PTR present(VkQueue queue, const VkPresentInfoKHR*) {
     }
     return VkResult(state.present_result);
 }
-VkResult VKAPI_PTR swapchain_images(VkDevice, VkSwapchainKHR chain, uint32_t* count, VkImage* images) {
-    require(chain == state.native->chain, "images come from the owned chain");
-    // Match the pinned SDK bug: the fill call does not update an oversized count.
-    if (!images) *count = 3;
-    else for (uint32_t i = 0; i < *count && i < 3; ++i) images[i] = id<VkImage>(1000 + i);
-    return *count < 3 ? VK_INCOMPLETE : VK_SUCCESS;
-}
-VkResult VKAPI_PTR acquire(VkDevice, VkSwapchainKHR, uint64_t, VkSemaphore, VkFence, uint32_t* index) { *index = 1; return VK_SUCCESS; }
 void VKAPI_PTR destroy_chain(VkDevice, VkSwapchainKHR chain, const VkAllocationCallbacks*, void* context) {
     require(chain && context == state.native->swapchain, "chain destroyed with its swapchain context"); ++state.chains_destroyed;
 }
-uint64_t present_count(VkSwapchainKHR) { return state.present_calls; }
 
 // The leaf the Rust WSI route lends to a hook on the fixture device, or null.
 inline rsf_ffxgvk_native* routed() {
@@ -141,22 +106,11 @@ int32_t open(const rsf_fgvk_setup* setup, void*, uint32_t width, uint32_t height
     auto* self = new rsf_ffxgvk_native{};
     self->setup = *setup; self->width = width; self->height = height;
     self->sdk.destroy = destroy_context; self->sdk.dispatch = dispatch; self->configure = configure;
-    self->barrier = barrier; self->copy = copy; self->idle = idle;
-    self->setup.graphics.device_proc = [](void*, const char* name) -> rsf_vk_function {
-#define RSF_TEST_PROC(symbol, callback) if (!std::strcmp(name, #symbol)) return reinterpret_cast<rsf_vk_function>(callback)
-        RSF_TEST_PROC(vkCreateImage, create_image);
-        RSF_TEST_PROC(vkDestroyImage, destroy_image);
-        RSF_TEST_PROC(vkGetImageMemoryRequirements, requirements);
-        RSF_TEST_PROC(vkAllocateMemory, allocate);
-        RSF_TEST_PROC(vkFreeMemory, free_memory);
-        RSF_TEST_PROC(vkBindImageMemory, bind);
-        RSF_TEST_PROC(vkCreateFence, create_fence);
-        RSF_TEST_PROC(vkDestroyFence, destroy_fence);
-        RSF_TEST_PROC(vkResetFences, reset_fences);
-        RSF_TEST_PROC(vkWaitForFences, wait_fences);
-#undef RSF_TEST_PROC
-        return nullptr;
-    };
+    const auto device = setup->graphics.device;
+    self->barrier = reinterpret_cast<PFN_vkCmdPipelineBarrier>(rsf_fixture_ffx_lookup(device, "vkCmdPipelineBarrier"));
+    self->copy = reinterpret_cast<PFN_vkCmdCopyImage>(rsf_fixture_ffx_lookup(device, "vkCmdCopyImage"));
+    self->idle = reinterpret_cast<PFN_vkDeviceWaitIdle>(rsf_fixture_ffx_lookup(device, "vkDeviceWaitIdle"));
+    self->setup.graphics.device_proc = rsf_fixture_ffx_lookup;
     require(self->gpu.load(self->setup, false), "fake Vulkan device entries loaded");
     VkPhysicalDeviceMemoryProperties memory{};
     memory.memoryTypeCount = 1;
@@ -172,9 +126,9 @@ int32_t create_swapchain(rsf_ffxgvk_native* self, uint64_t* chain, uint32_t* has
 }
 int32_t query_swapchain(rsf_ffxgvk_native* self) {
     auto& functions = self->functions;
-    functions.pOutQueuePresentKHR = present; functions.pOutGetSwapchainImagesKHR = swapchain_images;
-    functions.pOutAcquireNextImageKHR = acquire; functions.pOutDestroySwapchainFFXAPI = destroy_chain;
-    functions.pOutGetLastPresentCountFFXAPI = present_count;
+    functions.pOutQueuePresentKHR = present; functions.pOutGetSwapchainImagesKHR = rsf_fixture_ffx_images;
+    functions.pOutAcquireNextImageKHR = rsf_fixture_ffx_acquire; functions.pOutDestroySwapchainFFXAPI = destroy_chain;
+    functions.pOutGetLastPresentCountFFXAPI = rsf_fixture_ffx_present_count;
     return RSF_BACKEND_OK;
 }
 int32_t create_effect(rsf_ffxgvk_native* self, uint32_t* has_context) {
@@ -206,7 +160,7 @@ struct Setup {
         graphics.device_proc = graphics.instance_proc; graphics.runtime_directory_utf8 = "C:\\fake";
         graphics.depth_inverted = 1;
         for (uint32_t i = 0; i < 4; ++i) value.queues[i] = id<void*>(20 + i);
-        value.create_info = &info; value.graphics_submit = submit; value.lock_queues = lock; value.unlock_queues = unlock;
+        value.create_info = &info; value.graphics_submit = rsf_fixture_ffx_submit; value.lock_queues = rsf_fixture_ffx_lock; value.unlock_queues = rsf_fixture_ffx_unlock;
     }
 };
 

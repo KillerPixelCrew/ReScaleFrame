@@ -1,13 +1,70 @@
 // SPDX-License-Identifier: MIT
+use crate::vulkan_dispatch::promoted_device_proc_alias;
+use crate::vulkan_fg_abi::rsf_fgvk_setup;
 use crate::vulkan_latency_platform_abi::{
     rsf_vk_synchronized_present, rsf_vk_wsi_call, rsf_vk_wsi_scope,
 };
 use crate::vulkan_sr_abi::{rsf_vk_function, rsf_vk_get_proc};
 use crate::vulkan_timing::{timing_begin, timing_end};
 use ash::vk::{self, Handle};
-use std::ffi::{c_char, c_void};
+use std::ffi::{CStr, c_char, c_void};
 
 const INIT_FAILED: i32 = vk::Result::ERROR_INITIALIZATION_FAILED.as_raw();
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_vkfg_device_proc(
+    lookup: unsafe extern "C" fn(
+        rsf_vk_get_proc,
+        *mut c_void,
+        *const c_char,
+        *mut rsf_vk_function,
+    ) -> i32,
+    resolve: rsf_vk_get_proc,
+    device: *mut c_void,
+    name: *const c_char,
+    entry: *mut rsf_vk_function,
+) -> i32 {
+    let result = unsafe { lookup(resolve, device, name, entry) };
+    if result == 0
+        && unsafe { (*entry).is_none() }
+        && !name.is_null()
+        && let Some(alias) = promoted_device_proc_alias(unsafe { CStr::from_ptr(name) })
+    {
+        return unsafe { lookup(resolve, device, alias.as_ptr(), entry) };
+    }
+    result
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_vkfg_graphics_submit(
+    setup: &rsf_fgvk_setup,
+    count: u32,
+    submits: *const vk::SubmitInfo<'_>,
+    fence: vk::Fence,
+) -> vk::Result {
+    let submit = setup
+        .graphics_submit
+        .expect("validated graphics submit callback");
+    vk::Result::from_raw(unsafe { submit(setup.queue_user, count, submits.cast(), fence.as_raw()) })
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_vkfg_drain(
+    setup: &rsf_fgvk_setup,
+    wait_for_presents: Callback,
+    user: *mut c_void,
+    idle: vk::PFN_vkDeviceWaitIdle,
+) -> i32 {
+    const NOT_READY: i32 = -8;
+    let lock = setup.lock_queues.expect("validated queue lock");
+    let unlock = setup.unlock_queues.expect("validated queue unlock");
+    unsafe { lock(setup.queue_user) };
+    let ready = unsafe { wait_for_presents(user) } == 0
+        && unsafe { idle(vk::Device::from_raw(setup.graphics.device as usize as u64)) }
+            == vk::Result::SUCCESS;
+    unsafe { unlock(setup.queue_user) };
+    if ready { 0 } else { NOT_READY }
+}
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_slvk_without_dlssg(

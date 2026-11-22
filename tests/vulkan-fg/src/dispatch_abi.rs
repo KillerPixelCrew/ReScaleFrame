@@ -8,6 +8,7 @@ pub const RSF_SRVK_ABI_VERSION: u32 = 2;
 pub const RSF_FGVK_ABI_VERSION: u32 = 1;
 pub const RSF_FGVK_HOST_ABI_VERSION: u32 = 1;
 pub const RSF_FGVK_LATENCY_ABI_VERSION: u32 = 1;
+pub const RSF_DLSSGVK_ABI_VERSION: u32 = 1;
 pub const RSF_FSR4FG_NOT_SUPPORTED: i32 = -13003;
 pub type rsf_frame_id = u64;
 pub type rsf_frame_phase = u32;
@@ -521,6 +522,137 @@ unsafe extern "C" {
 unsafe extern "C" {
     pub fn rsf_fgvk_destroy(arg1: *mut rsf_fgvk) -> rsf_backend_result;
 }
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_ffxgvk {
+    _unused: [u8; 0],
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_dlssgvk {
+    _unused: [u8; 0],
+}
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_dlssgvk_status {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub presentation: rsf_fgvk_status,
+    pub requested_generated_frames: u32,
+    pub max_generated_frames: u32,
+    pub sdk_status: u32,
+    pub min_dimension: u32,
+    pub vsync_supported: u32,
+    pub dynamic_mfg_supported: u32,
+    pub sdk_result: i32,
+    pub asynchronous_present_result: i32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_dlssgvk_status"][::core::mem::size_of::<rsf_dlssgvk_status>() - 104usize];
+    ["Alignment of rsf_dlssgvk_status"][::core::mem::align_of::<rsf_dlssgvk_status>() - 8usize];
+    ["Offset of field: rsf_dlssgvk_status::struct_size"]
+        [::core::mem::offset_of!(rsf_dlssgvk_status, struct_size) - 0usize];
+    ["Offset of field: rsf_dlssgvk_status::abi_version"]
+        [::core::mem::offset_of!(rsf_dlssgvk_status, abi_version) - 4usize];
+    ["Offset of field: rsf_dlssgvk_status::presentation"]
+        [::core::mem::offset_of!(rsf_dlssgvk_status, presentation) - 8usize];
+    ["Offset of field: rsf_dlssgvk_status::requested_generated_frames"]
+        [::core::mem::offset_of!(rsf_dlssgvk_status, requested_generated_frames) - 72usize];
+    ["Offset of field: rsf_dlssgvk_status::max_generated_frames"]
+        [::core::mem::offset_of!(rsf_dlssgvk_status, max_generated_frames) - 76usize];
+    ["Offset of field: rsf_dlssgvk_status::sdk_status"]
+        [::core::mem::offset_of!(rsf_dlssgvk_status, sdk_status) - 80usize];
+    ["Offset of field: rsf_dlssgvk_status::min_dimension"]
+        [::core::mem::offset_of!(rsf_dlssgvk_status, min_dimension) - 84usize];
+    ["Offset of field: rsf_dlssgvk_status::vsync_supported"]
+        [::core::mem::offset_of!(rsf_dlssgvk_status, vsync_supported) - 88usize];
+    ["Offset of field: rsf_dlssgvk_status::dynamic_mfg_supported"]
+        [::core::mem::offset_of!(rsf_dlssgvk_status, dynamic_mfg_supported) - 92usize];
+    ["Offset of field: rsf_dlssgvk_status::sdk_result"]
+        [::core::mem::offset_of!(rsf_dlssgvk_status, sdk_result) - 96usize];
+    ["Offset of field: rsf_dlssgvk_status::asynchronous_present_result"]
+        [::core::mem::offset_of!(rsf_dlssgvk_status, asynchronous_present_result) - 100usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_fsr4gvk {
+    _unused: [u8; 0],
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_fsr4gvk_options {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub window: *mut ::core::ffi::c_void,
+    pub timeline_enabled: u32,
+    pub generated_count: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_fsr4gvk_options"][::core::mem::size_of::<rsf_fsr4gvk_options>() - 24usize];
+    ["Alignment of rsf_fsr4gvk_options"][::core::mem::align_of::<rsf_fsr4gvk_options>() - 8usize];
+    ["Offset of field: rsf_fsr4gvk_options::struct_size"]
+        [::core::mem::offset_of!(rsf_fsr4gvk_options, struct_size) - 0usize];
+    ["Offset of field: rsf_fsr4gvk_options::abi_version"]
+        [::core::mem::offset_of!(rsf_fsr4gvk_options, abi_version) - 4usize];
+    ["Offset of field: rsf_fsr4gvk_options::window"]
+        [::core::mem::offset_of!(rsf_fsr4gvk_options, window) - 8usize];
+    ["Offset of field: rsf_fsr4gvk_options::timeline_enabled"]
+        [::core::mem::offset_of!(rsf_fsr4gvk_options, timeline_enabled) - 16usize];
+    ["Offset of field: rsf_fsr4gvk_options::generated_count"]
+        [::core::mem::offset_of!(rsf_fsr4gvk_options, generated_count) - 20usize];
+};
+impl Default for rsf_fsr4gvk_options {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_xessgvk {
+    _unused: [u8; 0],
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_xessgvk_options {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub window: *mut ::core::ffi::c_void,
+    pub timeline_enabled: u32,
+    pub generated_count: u32,
+    pub intel_runtime_directory: *const u16,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_xessgvk_options"][::core::mem::size_of::<rsf_xessgvk_options>() - 32usize];
+    ["Alignment of rsf_xessgvk_options"][::core::mem::align_of::<rsf_xessgvk_options>() - 8usize];
+    ["Offset of field: rsf_xessgvk_options::struct_size"]
+        [::core::mem::offset_of!(rsf_xessgvk_options, struct_size) - 0usize];
+    ["Offset of field: rsf_xessgvk_options::abi_version"]
+        [::core::mem::offset_of!(rsf_xessgvk_options, abi_version) - 4usize];
+    ["Offset of field: rsf_xessgvk_options::window"]
+        [::core::mem::offset_of!(rsf_xessgvk_options, window) - 8usize];
+    ["Offset of field: rsf_xessgvk_options::timeline_enabled"]
+        [::core::mem::offset_of!(rsf_xessgvk_options, timeline_enabled) - 16usize];
+    ["Offset of field: rsf_xessgvk_options::generated_count"]
+        [::core::mem::offset_of!(rsf_xessgvk_options, generated_count) - 20usize];
+    ["Offset of field: rsf_xessgvk_options::intel_runtime_directory"]
+        [::core::mem::offset_of!(rsf_xessgvk_options, intel_runtime_directory) - 24usize];
+};
+impl Default for rsf_xessgvk_options {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
 pub const FIXTURE_OK: rsf_fixture_result = 0;
 pub const FIXTURE_INVALID_ARGUMENT: rsf_fixture_result = -1;
 pub const FIXTURE_ABI_MISMATCH: rsf_fixture_result = -2;
@@ -630,16 +762,4 @@ impl Default for rsf_dispatch_fixture_state {
             s.assume_init()
         }
     }
-}
-unsafe extern "C" {
-    pub fn rsf_fixture_dispatch_state() -> *mut rsf_dispatch_fixture_state;
-}
-unsafe extern "C" {
-    pub fn rsf_fixture_block_sleep();
-}
-unsafe extern "C" {
-    pub fn rsf_fixture_wait_sleep() -> bool;
-}
-unsafe extern "C" {
-    pub fn rsf_fixture_release_sleep();
 }

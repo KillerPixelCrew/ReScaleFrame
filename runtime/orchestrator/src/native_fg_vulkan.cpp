@@ -27,8 +27,6 @@ static_assert(sizeof(rsf_ffxgvk_swapchain) == 32 && sizeof(rsf_ffxgvk_ops) == 27
 static_assert(sizeof(rsf_ffxgvk_open_ops) == 10 * sizeof(void*) &&
     sizeof(rsf_ffxgvk_core_entries) == 8 * sizeof(void*) && sizeof(rsf_ffxgvk_wsi_entries) == 6 * sizeof(void*));
 
-extern "C" const char* rsf_core_vk_promoted_device_proc_alias(const char* name);
-
 struct rsf_ffxgvk_native {
     rsf_fgvk_setup setup{};
     rsf_vkffx_exports sdk;
@@ -103,31 +101,27 @@ VkResult VKAPI_PTR serialized_present(VkQueue queue, const VkPresentInfoKHR* inf
     rsf_core_vk_timing_end("native_present_total", 0, start);
     return result;
 }
-// Keep both host loader calls in this native leaf. Rust selects the alias after a miss.
-PFN_vkVoidFunction device_proc_for(const rsf_ffxgvk_native& self, VkDevice device, const char* name) {
-    auto proc = self.setup.graphics.device_proc;
-    auto value = proc(device, name);
-    if (!value) {
-        if (const auto* alias = rsf_core_vk_promoted_device_proc_alias(name)) value = proc(device, alias);
-    }
-    return reinterpret_cast<PFN_vkVoidFunction>(value);
+int32_t resolve_device(rsf_vk_get_proc resolve, void* device, const char* name, rsf_vk_function* out) noexcept try {
+    *out = resolve(device, name);
+    return RSF_BACKEND_OK;
+} catch (...) {
+    return RSF_BACKEND_ERROR_INIT_FAILED;
 }
 // SDK backend vkDeviceProcAddr, also without a user pointer.
 PFN_vkVoidFunction VKAPI_PTR device_proc(VkDevice device, const char* name) {
     const Borrow borrow(device);
-    return borrow.self ? device_proc_for(*borrow.self, device, name) : nullptr;
+    if (!borrow.self) return nullptr;
+    rsf_vk_function entry = nullptr;
+    const auto resolve = borrow.self->setup.graphics.device_proc;
+    const auto result = rsf_core_vkfg_device_proc(resolve_device, resolve, device, name, &entry);
+    return result == RSF_BACKEND_OK ? reinterpret_cast<PFN_vkVoidFunction>(entry) : nullptr;
 }
 // SDK game-queue submit function, also without a user pointer.
 VkResult graphics_submit(uint32_t count, const VkSubmitInfo* submits, VkFence fence) {
     const Borrow borrow(nullptr, 0);
     auto* self = borrow.self;
-    return self ? VkResult(self->setup.graphics_submit(self->setup.queue_user, count, submits, reinterpret_cast<uint64_t>(fence))) : VK_ERROR_DEVICE_LOST;
+    return self ? rsf_core_vkfg_graphics_submit(&self->setup, count, submits, fence) : VK_ERROR_DEVICE_LOST;
 }
-struct QueueLock {
-    rsf_ffxgvk_native& self;
-    explicit QueueLock(rsf_ffxgvk_native& value) : self(value) { self.setup.lock_queues(self.setup.queue_user); }
-    ~QueueLock() { self.setup.unlock_queues(self.setup.queue_user); }
-};
 template<class T> T handle(uint64_t value) { return reinterpret_cast<T>(static_cast<uintptr_t>(value)); }
 template<class T> uint64_t handle_value(T value) { return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(value)); }
 FfxApiResource resource(const rsf_srvk_image& image) {
@@ -177,13 +171,12 @@ rsf_ffxgvk_native* allocate_native(const rsf_fgvk_setup* setup, uint32_t width, 
 void close_native(rsf_ffxgvk_native* self) noexcept { delete self; }
 
 int32_t lookup_device(rsf_ffxgvk_native* self, const char* name, uint32_t aliases,
-    rsf_vk_function* out) noexcept try {
+    rsf_vk_function* out) noexcept {
     const auto& graphics = self->setup.graphics;
-    *out = aliases
-        ? reinterpret_cast<rsf_vk_function>(device_proc_for(*self, static_cast<VkDevice>(graphics.device), name))
-        : graphics.device_proc(graphics.device, name);
-    return RSF_BACKEND_OK;
-} catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
+    return aliases
+        ? rsf_core_vkfg_device_proc(resolve_device, graphics.device_proc, graphics.device, name, out)
+        : resolve_device(graphics.device_proc, graphics.device, name, out);
+}
 
 int32_t lookup_instance(rsf_ffxgvk_native* self, const char* name, rsf_vk_function* out) noexcept try {
     const auto& graphics = self->setup.graphics;
@@ -370,11 +363,12 @@ int32_t present(rsf_ffxgvk_native* self, const void* info, uint64_t frame, uint6
     return result;
 }
 int32_t drain(rsf_ffxgvk_native* self) noexcept {
-    QueueLock lock(*self);
-    ffxDispatchDescFrameGenerationSwapChainWaitForPresentsVK wait{}; wait.header.type = FFX_API_DISPATCH_DESC_TYPE_FGSWAPCHAIN_WAIT_FOR_PRESENTS_VK;
-    if (self->sdk.dispatch(&self->swapchain, &wait.header) != FFX_API_RETURN_OK || self->idle(static_cast<VkDevice>(self->setup.graphics.device)) != VK_SUCCESS)
-        return RSF_BACKEND_ERROR_NOT_READY;
-    return RSF_BACKEND_OK;
+    return rsf_core_vkfg_drain(&self->setup, [](void* user) noexcept -> int32_t {
+        auto* native = static_cast<rsf_ffxgvk_native*>(user);
+        ffxDispatchDescFrameGenerationSwapChainWaitForPresentsVK wait{};
+        wait.header.type = FFX_API_DISPATCH_DESC_TYPE_FGSWAPCHAIN_WAIT_FOR_PRESENTS_VK;
+        return int32_t(native->sdk.dispatch(&native->swapchain, &wait.header));
+    }, self, self->idle);
 }
 void capture_flush(rsf_ffxgvk_native* self) noexcept try {
     (void)rsf_core_capture_vk_flush(self->capture.get(), 0, nullptr);

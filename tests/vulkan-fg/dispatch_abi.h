@@ -20,10 +20,6 @@ typedef struct rsf_dispatch_fixture_state {
 #ifdef __cplusplus
 extern "C" {
 #endif
-rsf_dispatch_fixture_state* rsf_fixture_dispatch_state(void);
-void rsf_fixture_block_sleep(void);
-bool rsf_fixture_wait_sleep(void);
-void rsf_fixture_release_sleep(void);
 int rsf_fixture_vulkan_dispatch_run(bool fsr4, bool xess);
 #ifdef __cplusplus
 }

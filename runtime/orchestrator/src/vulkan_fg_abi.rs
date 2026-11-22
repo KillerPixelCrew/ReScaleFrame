@@ -491,12 +491,21 @@ const _: () = {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_fgvk_platform {
-    pub providers: [*const rsf_fgvk_provider; 6usize],
+    pub dlss: *const rsf_fgvk_provider,
+    pub ffx: *const rsf_fgvk_provider,
+    pub fsr4: *const rsf_fgvk_provider,
+    pub xess: *const rsf_fgvk_provider,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_fgvk_platform"][::core::mem::size_of::<rsf_fgvk_platform>() - 48usize];
+    ["Size of rsf_fgvk_platform"][::core::mem::size_of::<rsf_fgvk_platform>() - 32usize];
     ["Alignment of rsf_fgvk_platform"][::core::mem::align_of::<rsf_fgvk_platform>() - 8usize];
-    ["Offset of field: rsf_fgvk_platform::providers"]
-        [::core::mem::offset_of!(rsf_fgvk_platform, providers) - 0usize];
+    ["Offset of field: rsf_fgvk_platform::dlss"]
+        [::core::mem::offset_of!(rsf_fgvk_platform, dlss) - 0usize];
+    ["Offset of field: rsf_fgvk_platform::ffx"]
+        [::core::mem::offset_of!(rsf_fgvk_platform, ffx) - 8usize];
+    ["Offset of field: rsf_fgvk_platform::fsr4"]
+        [::core::mem::offset_of!(rsf_fgvk_platform, fsr4) - 16usize];
+    ["Offset of field: rsf_fgvk_platform::xess"]
+        [::core::mem::offset_of!(rsf_fgvk_platform, xess) - 24usize];
 };

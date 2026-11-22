@@ -33,25 +33,24 @@ RSF_EXPORT(rsf_fgvk_destroy)
 
 namespace {
 constexpr int32_t wsi_initialization_failed = -3;
-constexpr int32_t unchanged(int32_t result) { return result; }
 
 // Adapt the typed provider pointer without reinterpreting any function pointer.
-template <auto Function, auto Map = unchanged, int32_t Failure = RSF_BACKEND_ERROR_FEATURE_FAILED>
+template <auto Function, int32_t Failure = RSF_BACKEND_ERROR_FEATURE_FAILED>
 struct Call;
 
 template <typename Owner, typename Result, typename... Args, Result (*Function)(Owner*, Args...),
-    auto Map, int32_t Failure>
-struct Call<Function, Map, Failure> {
+    int32_t Failure>
+struct Call<Function, Failure> {
     static Result invoke(void* owner, Args... args) noexcept try {
         if constexpr (std::is_void_v<Result>) Function(static_cast<Owner*>(owner), args...);
-        else return Map(Function(static_cast<Owner*>(owner), args...));
+        else return Function(static_cast<Owner*>(owner), args...);
     } catch (...) {
         if constexpr (!std::is_void_v<Result>) return Failure;
     }
 };
 
 template <auto Function>
-constexpr auto wsi_call = Call<Function, unchanged, wsi_initialization_failed>::invoke;
+constexpr auto wsi_call = Call<Function, wsi_initialization_failed>::invoke;
 
 template <typename Owner, uint32_t (*Max)(const Owner*)>
 rsf_backend_result max_generated(void* owner, uint32_t* count) noexcept try {
@@ -111,55 +110,38 @@ constexpr rsf_fgvk_provider ffx_provider{
 };
 
 #if defined(RSF_HAVE_FSR4_FG_VK)
-rsf_backend_result fsr4_result(int32_t result) {
-    switch (result) {
-    case 0: return RSF_BACKEND_OK;
-    case RSF_FSR4FG_INVALID_ARGUMENT: return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    case RSF_FSR4FG_ABI_MISMATCH: return RSF_BACKEND_ERROR_ABI_MISMATCH;
-    case RSF_FSR4FG_NOT_SUPPORTED: return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    default: return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    }
-}
 constexpr rsf_fgvk_provider fsr4_provider{
     [](const rsf_fgvk_setup* setup, const rsf_fgvk_host_options* host, uint32_t count, void** out, uint64_t* chain) {
         const rsf_fsr4gvk_options options{sizeof(options), 1, host->window, host->timeline_enabled, count};
-        return create_provider<rsf_fsr4gvk>(out, [&](auto** owner) { return fsr4_result(rsf_fsr4gvk_create(setup, &options, owner, chain)); });
+        return create_provider<rsf_fsr4gvk>(out, [&](auto** owner) { return rsf_core_fgvk_provider_result(4, rsf_fsr4gvk_create(setup, &options, owner, chain)); });
     },
-    Call<rsf_fsr4gvk_enable_options, fsr4_result>::invoke, wsi_call<rsf_fsr4gvk_images>, wsi_call<rsf_fsr4gvk_acquire>, nullptr,
+    Call<rsf_fsr4gvk_enable_options>::invoke, wsi_call<rsf_fsr4gvk_images>, wsi_call<rsf_fsr4gvk_acquire>, nullptr,
     max_generated<rsf_fsr4gvk, rsf_fsr4gvk_max_generated>,
-    Call<rsf_fsr4gvk_prepare, fsr4_result>::invoke, Call<rsf_fsr4gvk_hudless, fsr4_result>::invoke, Call<rsf_fsr4gvk_submitted>::invoke,
-    wsi_call<rsf_fsr4gvk_present>, wsi_call<rsf_fsr4gvk_present_source>, Call<rsf_fsr4gvk_status, fsr4_result>::invoke,
-    Call<rsf_fsr4gvk_drain, fsr4_result>::invoke, Call<rsf_fsr4gvk_destroy, fsr4_result>::invoke,
+    Call<rsf_fsr4gvk_prepare>::invoke, Call<rsf_fsr4gvk_hudless>::invoke, Call<rsf_fsr4gvk_submitted>::invoke,
+    wsi_call<rsf_fsr4gvk_present>, wsi_call<rsf_fsr4gvk_present_source>, Call<rsf_fsr4gvk_status>::invoke,
+    Call<rsf_fsr4gvk_drain>::invoke, Call<rsf_fsr4gvk_destroy>::invoke,
     nullptr, nullptr, nullptr, nullptr,
 };
 #endif
 
 #if defined(RSF_HAVE_XESS_FG_VK)
-rsf_backend_result xess_result(int32_t result) {
-    switch (result) {
-    case 0: return RSF_BACKEND_OK;
-    case -10001: return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    case -10002: return RSF_BACKEND_ERROR_ABI_MISMATCH;
-    default: return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    }
-}
 constexpr rsf_fgvk_provider xess_provider{
     [](const rsf_fgvk_setup* setup, const rsf_fgvk_host_options* host, uint32_t count, void** out, uint64_t* chain) {
         const rsf_xessgvk_options options{sizeof(options), 1, host->window, host->timeline_enabled, count, host->intel_runtime_directory};
-        return create_provider<rsf_xessgvk>(out, [&](auto** owner) { return xess_result(rsf_xessgvk_create(setup, &options, owner, chain)); });
+        return create_provider<rsf_xessgvk>(out, [&](auto** owner) { return rsf_core_fgvk_provider_result(5, rsf_xessgvk_create(setup, &options, owner, chain)); });
     },
-    Call<rsf_xessgvk_enable_options, xess_result>::invoke, wsi_call<rsf_xessgvk_images>, wsi_call<rsf_xessgvk_acquire>, nullptr,
+    Call<rsf_xessgvk_enable_options>::invoke, wsi_call<rsf_xessgvk_images>, wsi_call<rsf_xessgvk_acquire>, nullptr,
     max_generated<rsf_xessgvk, rsf_xessgvk_max_generated>,
-    Call<rsf_xessgvk_prepare, xess_result>::invoke, Call<rsf_xessgvk_hudless, xess_result>::invoke, Call<rsf_xessgvk_submitted>::invoke,
-    wsi_call<rsf_xessgvk_present>, wsi_call<rsf_xessgvk_present_source>, Call<rsf_xessgvk_status, xess_result>::invoke,
-    Call<rsf_xessgvk_drain, xess_result>::invoke, Call<rsf_xessgvk_destroy, xess_result>::invoke,
-    Call<rsf_xessgvk_latency_options, xess_result>::invoke, Call<rsf_xessgvk_sleep, xess_result>::invoke,
-    Call<rsf_xessgvk_latency, xess_result>::invoke, Call<rsf_xessgvk_latency_status, xess_result>::invoke,
+    Call<rsf_xessgvk_prepare>::invoke, Call<rsf_xessgvk_hudless>::invoke, Call<rsf_xessgvk_submitted>::invoke,
+    wsi_call<rsf_xessgvk_present>, wsi_call<rsf_xessgvk_present_source>, Call<rsf_xessgvk_status>::invoke,
+    Call<rsf_xessgvk_drain>::invoke, Call<rsf_xessgvk_destroy>::invoke,
+    Call<rsf_xessgvk_latency_options>::invoke, Call<rsf_xessgvk_sleep>::invoke,
+    Call<rsf_xessgvk_latency>::invoke, Call<rsf_xessgvk_latency_status>::invoke,
 };
 #endif
 
 constexpr rsf_fgvk_platform platform{
-    {nullptr, &dlss_provider, nullptr, &ffx_provider,
+    &dlss_provider, &ffx_provider,
 #if defined(RSF_HAVE_FSR4_FG_VK)
         &fsr4_provider,
 #else
@@ -170,7 +152,6 @@ constexpr rsf_fgvk_platform platform{
 #else
         nullptr,
 #endif
-    },
 };
 }
 

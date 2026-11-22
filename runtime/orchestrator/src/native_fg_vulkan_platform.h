@@ -2,8 +2,8 @@
 #pragma once
 #include <rescaleframe/native_fg_vulkan.h>
 
-/* Private adapters. Status-returning callbacks translate provider errors to
-   rsf_backend_result. WSI calls preserve VkResult as returned by the provider. */
+/* Private adapters. Operational callbacks return the provider result for Rust to normalize.
+   Factory callbacks return rsf_backend_result. WSI calls preserve VkResult as returned by the provider. */
 typedef struct rsf_fgvk_provider {
     rsf_backend_result (*create)(const rsf_fgvk_setup*, const rsf_fgvk_host_options*, uint32_t, void**, uint64_t*);
     rsf_backend_result (*enable)(void*, uint32_t, uint32_t);
@@ -26,12 +26,13 @@ typedef struct rsf_fgvk_provider {
 } rsf_fgvk_provider;
 
 typedef struct rsf_fgvk_platform {
-    const rsf_fgvk_provider* providers[6]; /* Indexed by the public FG backend ID. */
+    const rsf_fgvk_provider *dlss, *ffx, *fsr4, *xess;
 } rsf_fgvk_platform;
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+rsf_backend_result rsf_core_fgvk_provider_result(uint32_t backend, int32_t result);
 rsf_backend_result rsf_core_fgvk_create(const rsf_fgvk_platform*, const rsf_fgvk_setup*, uint32_t backend,
     uint32_t count, const rsf_fgvk_host_options*, rsf_fgvk**, uint64_t*);
 #ifdef __cplusplus

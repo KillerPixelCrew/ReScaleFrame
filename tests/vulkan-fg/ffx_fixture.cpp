@@ -7,7 +7,6 @@
 using namespace fake;
 
 namespace route {
-rsf_ffxgvk* owner = nullptr;
 rsf_wsi_route_fixture_state fixture{};
 
 int32_t refused_second_owner() {
@@ -17,31 +16,6 @@ int32_t refused_second_owner() {
     const auto result = rsf_core_ffxgvk_create_native(&table, &setup.value, &second, &chain);
     require(!second && !chain, "a refused owner returns no handle");
     return result;
-}
-VkResult VKAPI_PTR present(VkQueue queue, const VkPresentInfoKHR*) {
-    require(queue == id<VkQueue>(22), "the hook forwards the SDK's present queue");
-    ++fixture.presents;
-    if (fixture.destroy_inside) {
-        // The host destroys the owner while this hook is inside its forwarded call.
-        fixture.destroyed_inside = rsf_ffxgvk_destroy(owner);
-        fixture.routed_inside = routed();
-        fixture.created_inside = refused_second_owner();
-    }
-    return VK_SUBOPTIMAL_KHR;
-}
-VkResult VKAPI_PTR create(VkDevice, const VkSwapchainCreateInfoKHR*, const VkAllocationCallbacks*, VkSwapchainKHR* chain) {
-    *chain = id<VkSwapchainKHR>(40); ++fixture.creates; return VK_SUCCESS;
-}
-void VKAPI_PTR destroy(VkDevice, VkSwapchainKHR chain, const VkAllocationCallbacks*) {
-    require(chain == id<VkSwapchainKHR>(40), "the hook forwards the destroyed chain"); ++fixture.destroys;
-}
-VkResult VKAPI_PTR acquire(VkDevice, VkSwapchainKHR, uint64_t, VkSemaphore, VkFence, uint32_t* index) {
-    *index = 2; ++fixture.acquires; return VK_SUCCESS;
-}
-VkResult VKAPI_PTR images(VkDevice, VkSwapchainKHR, uint32_t* count, VkImage*) { *count = 3; ++fixture.enumerations; return VK_INCOMPLETE; }
-rsf_vk_function lookup(void*, const char* name) {
-    ++fixture.lookups;
-    return std::strcmp(name, "vkBindImageMemory2") == 0 ? reinterpret_cast<rsf_vk_function>(&images) : nullptr;
 }
 int32_t wsi(const rsf_ffx_wsi_dispatch* setup) {
     require(setup && setup->struct_size == sizeof(*setup) && setup->abi_version == 2 && setup->device == id<VkDevice>(1),
@@ -65,8 +39,12 @@ int32_t open(const rsf_fgvk_setup* setup, void* module, uint32_t width, uint32_t
     const auto result = fake::open(setup, module, width, height, out, resources);
     if (result != RSF_BACKEND_OK) return result;
     auto* native = *out;
-    native->native_present = present; native->native_create = create; native->native_destroy = destroy;
-    native->native_acquire = acquire; native->native_images = images; native->setup.graphics.device_proc = lookup;
+    native->native_present = reinterpret_cast<PFN_vkQueuePresentKHR>(rsf_fixture_wsi_entry("vkQueuePresentKHR"));
+    native->native_create = reinterpret_cast<PFN_vkCreateSwapchainKHR>(rsf_fixture_wsi_entry("vkCreateSwapchainKHR"));
+    native->native_destroy = reinterpret_cast<PFN_vkDestroySwapchainKHR>(rsf_fixture_wsi_entry("vkDestroySwapchainKHR"));
+    native->native_acquire = reinterpret_cast<PFN_vkAcquireNextImageKHR>(rsf_fixture_wsi_entry("vkAcquireNextImageKHR"));
+    native->native_images = reinterpret_cast<PFN_vkGetSwapchainImagesKHR>(rsf_fixture_wsi_entry("vkGetSwapchainImagesKHR"));
+    native->setup.graphics.device_proc = rsf_fixture_wsi_lookup;
     native->wsi_dispatch = wsi;
     return RSF_BACKEND_OK;
 }
@@ -85,7 +63,7 @@ extern "C" int32_t rsf_fixture_ffx_start(bool routed_fixture, rsf_ffxgvk** out, 
         return table;
     }();
     const auto result = rsf_core_ffxgvk_create_native(routed_fixture ? &routed_ops : &ordinary, &setup.value, out, chain);
-    if (routed_fixture && result == RSF_BACKEND_OK) route::owner = *out;
+    if (routed_fixture && result == RSF_BACKEND_OK) route::fixture.owner = *out;
     return result;
 }
 extern "C" void* rsf_fixture_ffx_native() { return state.native; }
@@ -122,7 +100,7 @@ extern "C" int32_t rsf_fixture_wsi_present(uint64_t queue) {
 extern "C" int32_t rsf_fixture_wsi_device_proc(uint64_t device) {
     const auto proc = device_proc(id<VkDevice>(device), "vkBindImageMemory2KHR");
     if (!proc) return 0;
-    return proc == reinterpret_cast<PFN_vkVoidFunction>(&route::images) ? 1 : -1;
+    return proc == reinterpret_cast<PFN_vkVoidFunction>(rsf_fixture_wsi_entry("vkGetSwapchainImagesKHR")) ? 1 : -1;
 }
 extern "C" int32_t rsf_fixture_wsi_graphics_submit(uint64_t fence) {
     return graphics_submit(0, nullptr, id<VkFence>(fence));
@@ -131,5 +109,6 @@ int main(int argc, char** argv) {
     if (argc != 2) return 1;
     SetEnvironmentVariableW(L"RSF_VULKAN_FRAME_CAPTURE_DIR", nullptr);
     SetEnvironmentVariableW(L"RSF_VULKAN_TIMING_FILE", nullptr);
+    state.next = 100;
     return rsf_fixture_ffx_run(uint32_t(std::strtoul(argv[1], nullptr, 10)));
 }
