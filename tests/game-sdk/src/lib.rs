@@ -15,6 +15,10 @@ mod cpu_abi;
 mod cpu_calls;
 #[cfg(feature = "cpu-fixtures")]
 mod cpu_events;
+#[cfg(feature = "d3d11-host-fixture")]
+mod d3d11_host;
+#[cfg(feature = "d3d11-host-fixture")]
+mod d3d11_host_calls;
 mod domains;
 #[cfg(feature = "cpu-fixtures")]
 mod input_receipts;

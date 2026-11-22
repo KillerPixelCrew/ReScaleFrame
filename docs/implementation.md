@@ -40,6 +40,13 @@ provider through the D05 pipeline entry. Overlay admission and device checks
 are pending.
 [D3D11 host port evidence](research/rust-d3d11-host-admission.md)
 
+The residual D3D11 replay moves host COM, DXGI and INI calls to typed Rust and
+shares generated public host records with the Rust DLL contract fixture. Both
+hardware fixtures share Rust CPU event and texture allocation leaves.
+Shared-SR also uses Rust for staging readback. The native hardware scenarios
+and the host's native callback table remain. This replay has source and binding
+checks only.
+
 Rust owns the D3D11 graphics snapshots, resource and UI device operations,
 sampler changes, and native composition passes. The replay uses the integrated
 Rust output and capture paths. All eight G03 fixture bodies now use Rust. The source

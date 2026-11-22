@@ -59,3 +59,36 @@ presentation, SR pipeline operations, and capture callbacks. The public and
 private headers describe live C contracts. The three native fixtures still use
 the DLL import surface or their hardware SDK and presentation harnesses.
 Their port remains pending.
+
+## Residual replay on `84a8b9eb`
+
+- The production host table now uses typed Rust implementations for COM identity
+  and Release, the D3D11 immediate context, DXGI adapter vendor and swapchain
+  queries, the diagnostic Present address, and INI access. The old C++ calls
+  in `d3d11_host.cpp` supply the comparison. Borrowed receivers stay borrowed,
+  successful COM queries transfer one owned reference, and Release returns
+  the original count. The adapter vendor query is shared with package admission.
+- `sdk/game/src/d3d11_host_abi.rs` now generates the remaining public Present,
+  presentation binding and capture-control records from `d3d11_host.h`.
+  Runtime and fixture use the same records. The C contract launcher still
+  compiles the public layouts and exercises the two C-inline frame predicates.
+  The Rust contract fixture links the production Runtime exports and carries
+  the old setup, cold-host, recovery, capture and dispatch assertions, including
+  refusal of unreadable receivers and C04's scoped and unidentified FG leases.
+- Both hardware fixtures now share Rust texture allocation and CPU event
+  construction. The rendered-FG fixture still declares render expectation only
+  at frame end, and the shared-SR fixture leaves that field clear. Shared-SR
+  auxiliary snapshots use a Rust staging map and pack rows using the reported
+  pitch. The existing C++ scenarios and diagnostic checks remain hardware
+  fixture port work.
+- D05 provider startup still forwards the requested backend in the host
+  callback. Anomaly's package and device admission, Steam's tagged dispatch
+  ABI, the exact native chain continuation, and C04 FG callbacks and lease
+  decisions remain as integrated at the base.
+
+The C++ host still publishes the create entry and the native callback table,
+including exception containment for callbacks into C++. The private platform
+header still defines that table. The output platform header still supplies
+bindgen input and the C leaves used by the native SR pipeline. The Rust contract
+body and public host ABI are source-ported. The two hardware fixture bodies
+are partial ports. No hardware behavior was verified in this replay.

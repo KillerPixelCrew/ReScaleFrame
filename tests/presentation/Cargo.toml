@@ -6,6 +6,9 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 
+[features]
+d3d11-host-device-fixtures = ["windows/Win32_System_Performance"]
+
 [lib]
 crate-type = ["staticlib"]
 

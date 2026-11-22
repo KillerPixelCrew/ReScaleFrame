@@ -2,6 +2,7 @@
 // Explicit device regression: <scratch runtime root with streamline/>. Hidden window,
 // real shared DLSS evaluation, FG Off. Never uses or changes a game installation.
 #include <rescaleframe/d3d11_host.h>
+#include "d3d11_host_device_fixture.h"
 #include <rescaleframe/dlss_pipeline.h>
 #include <rescaleframe/d3d11_present_api.h>
 #include <rescaleframe/native_fg.h>
@@ -32,34 +33,23 @@ constexpr UINT width = 960, height = 540;
 void log(void*, const char* message) { std::printf("%s\n", message); }
 int accept(void*, void* candidate) { return candidate == window; }
 ComPtr<ID3D11Texture2D> texture(ID3D11Device* device, DXGI_FORMAT format, UINT bindings) {
-    D3D11_TEXTURE2D_DESC desc{width, height, 1, 1, format, {1, 0}, D3D11_USAGE_DEFAULT, bindings, 0, 0};
     ComPtr<ID3D11Texture2D> result;
-    (void)device->CreateTexture2D(&desc, nullptr, &result);
+    result.Attach(static_cast<ID3D11Texture2D*>(
+        rsf_d3d11_host_fixture_texture(device, width, height, uint32_t(format), bindings)));
     return result;
 }
 std::vector<unsigned char> contents(ID3D11Device* device, ID3D11DeviceContext* context,
     ID3D11Texture2D* source, UINT stride) {
     D3D11_TEXTURE2D_DESC descriptor{}; source->GetDesc(&descriptor);
-    descriptor.Usage=D3D11_USAGE_STAGING; descriptor.BindFlags=descriptor.MiscFlags=0;
-    descriptor.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
-    ComPtr<ID3D11Texture2D> staging;
-    if (FAILED(device->CreateTexture2D(&descriptor,nullptr,&staging))) return {};
-    context->CopyResource(staging.Get(),source);
-    D3D11_MAPPED_SUBRESOURCE mapped{};
-    if (FAILED(context->Map(staging.Get(),0,D3D11_MAP_READ,0,&mapped))) return {};
-    const size_t row_bytes=size_t(descriptor.Width)*stride;
-    std::vector<unsigned char> bytes(row_bytes*descriptor.Height);
-    for (UINT y=0;y<descriptor.Height;++y) std::memcpy(bytes.data()+size_t(y)*row_bytes,
-        static_cast<const unsigned char*>(mapped.pData)+size_t(y)*mapped.RowPitch,row_bytes);
-    context->Unmap(staging.Get(),0); return bytes;
+    const size_t row_bytes = size_t(descriptor.Width) * stride;
+    std::vector<unsigned char> bytes(row_bytes * descriptor.Height);
+    if (!rsf_d3d11_host_fixture_read_texture(device, context, source, stride, bytes.data(), bytes.size()))
+        return {};
+    return bytes;
 }
 void identity(float* matrix) { matrix[0] = matrix[5] = matrix[10] = matrix[15] = 1; }
 void cpu(const rsf_game_host_services& host, uint64_t source, uint32_t stage) {
-    LARGE_INTEGER now{}, frequency{}; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
-    rsf_game_cpu_event event{}; event.struct_size = sizeof(event); event.event_version = RSF_GAME_CPU_EVENT_VERSION;
-    event.stage = stage; event.session_id = host.session_id; event.source_frame_id = source;
-    event.timestamp_qpc = uint64_t(now.QuadPart); event.qpc_frequency = uint64_t(frequency.QuadPart);
-    host.cpu_event(host.user, &event);
+    rsf_d3d11_host_fixture_cpu(&host, source, stage, 0);
 }
 }
 int main(int argc, char** argv) {

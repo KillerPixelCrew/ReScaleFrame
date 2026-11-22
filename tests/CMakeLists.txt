@@ -1,8 +1,11 @@
 add_library(rsf_sdk_c_header OBJECT sdk_c_header.c)
+rsf_add_rust_static(rsf_d3d11_host_device_fixtures_rust rsf_rust_d3d11_host_device_fixtures
+    rsf-presentation-fixtures rsf_presentation_fixtures --features d3d11-host-device-fixtures)
 include("${CMAKE_CURRENT_SOURCE_DIR}/d3d11_host_rendered_fg_device.cmake")
 # Explicit regression investigation only: requires a scratch vendor-SDK root and NVIDIA GPU.
 add_executable(rsf_d3d11_host_shared_sr_device EXCLUDE_FROM_ALL d3d11_host_shared_sr_device.cpp)
-target_link_libraries(rsf_d3d11_host_shared_sr_device PRIVATE rsf_orchestrator rsf_build_options d3d11 dxgi)
+target_link_libraries(rsf_d3d11_host_shared_sr_device PRIVATE
+    rsf_d3d11_host_device_fixtures_rust rsf_orchestrator rsf_build_options d3d11 dxgi)
 find_program(RSF_TEST_RUSTC rustc REQUIRED)
 if(MSVC)
     set(rsf_test_rust_target x86_64-pc-windows-msvc)
@@ -400,9 +403,13 @@ target_link_libraries(rsf_sampler_bias PRIVATE rsf_orchestrator_rust ReScaleFram
 add_test(NAME sampler_bias_device COMMAND rsf_sampler_bias)
 set_tests_properties(sampler_bias_device PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
 
-add_executable(rsf_d3d11_host_test d3d11_host.cpp d3d11_host_c_header.c)
+rsf_add_rust_static(rsf_d3d11_host_fixture_rust rsf_rust_d3d11_host_fixture
+    rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features d3d11-host-fixture)
+add_executable(rsf_d3d11_host_test d3d11_host_c_header.c)
+set_target_properties(rsf_d3d11_host_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON
+    LINKER_LANGUAGE CXX)
 target_include_directories(rsf_d3d11_host_test PRIVATE "$<TARGET_PROPERTY:rsf_orchestrator,INTERFACE_INCLUDE_DIRECTORIES>")
-target_link_libraries(rsf_d3d11_host_test PRIVATE "$<TARGET_LINKER_FILE:rsf_orchestrator>" rsf_build_options)
+target_link_libraries(rsf_d3d11_host_test PRIVATE rsf_d3d11_host_fixture_rust "$<TARGET_LINKER_FILE:rsf_orchestrator>" rsf_build_options)
 add_dependencies(rsf_d3d11_host_test rsf_orchestrator)
 add_test(NAME d3d11_host_contract COMMAND rsf_d3d11_host_test)
 

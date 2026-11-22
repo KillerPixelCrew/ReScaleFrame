@@ -4,6 +4,7 @@
 // Exit 77 means prerequisites/hidden presentation prevented a generation receipt;
 // exit 1 means a contract failure; exit 0 requires observed FSR generated callbacks.
 #include <rescaleframe/d3d11_host.h>
+#include "d3d11_host_device_fixture.h"
 #include <rescaleframe/dlss_pipeline.h>
 #include <rescaleframe/d3d11_present_api.h>
 #include <rescaleframe/native_fg.h>
@@ -70,9 +71,9 @@ constexpr GUID diagnostic_all{0xe48ae283,0xda80,0x490b,{0x87,0xe6,0x43,0xe9,0xa9
 void log(void*, const char* message) { std::printf("%s\n", message); }
 int accept(void*, void* candidate) { return candidate == window; }
 ComPtr<ID3D11Texture2D> texture(ID3D11Device* device, DXGI_FORMAT format, UINT bindings) {
-    D3D11_TEXTURE2D_DESC desc{width, height, 1, 1, format, {1, 0}, D3D11_USAGE_DEFAULT, bindings, 0, 0};
     ComPtr<ID3D11Texture2D> result;
-    (void)device->CreateTexture2D(&desc, nullptr, &result);
+    result.Attach(static_cast<ID3D11Texture2D*>(
+        rsf_d3d11_host_fixture_texture(device, width, height, uint32_t(format), bindings)));
     return result;
 }
 int fail(const char* label) { std::printf("FAIL: %s\n", label); return 1; }
@@ -95,12 +96,7 @@ void dxgi_errors(IDXGIInfoQueue* queue) {
     }
 }
 void cpu(const rsf_game_host_services& host, uint64_t source, uint32_t stage) {
-    LARGE_INTEGER now{}, frequency{}; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
-    rsf_game_cpu_event event{}; event.struct_size = sizeof(event); event.event_version = RSF_GAME_CPU_EVENT_VERSION;
-    event.stage = stage; event.session_id = host.session_id; event.source_frame_id = source;
-    event.timestamp_qpc = uint64_t(now.QuadPart); event.qpc_frequency = uint64_t(frequency.QuadPart);
-    if (stage == RSF_GAME_CPU_FRAME_END) event.render_expected = 1;
-    host.cpu_event(host.user, &event);
+    rsf_d3d11_host_fixture_cpu(&host, source, stage, uint32_t(stage == RSF_GAME_CPU_FRAME_END));
 }
 }
 int main(int argc, char** argv) {

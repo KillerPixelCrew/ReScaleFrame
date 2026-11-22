@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! Package and adapter facts used to select a D3D11 SR provider before startup.
+use crate::d3d11_host_platform::device_vendor;
 use rsf_game_sys::d3d11_sr_admission_abi::{
     RSF_D3D11_SR_ADMISSION_ABI_VERSION, RSF_SR_AUTO as AUTO, rsf_d3d11_sr_admission as Admission,
 };
 use std::ffi::CStr;
 use std::path::Path;
-use windows::Win32::Graphics::Direct3D11::ID3D11Device;
-use windows::Win32::Graphics::Dxgi::IDXGIDevice;
-use windows::core::Interface;
 
 const DLSS: u32 = 1;
 const FSR3: u32 = 3;
@@ -61,17 +59,14 @@ unsafe extern "C" fn rsf_d3d11_sr_admit(request: *mut Admission) -> i32 {
     }) & request.backend_choices;
     request.offered_backends = concrete | (u32::from(concrete != 0) << AUTO);
     request.selected_backend = 0;
-    let Some(device) = (unsafe { ID3D11Device::from_raw_borrowed(&request.device) }) else {
+    if request.device.is_null() {
         request.selected_backend = if concrete != 0 { AUTO } else { 0 };
         return 0;
-    };
-    let Ok(desc) = device
-        .cast::<IDXGIDevice>()
-        .and_then(|dxgi| unsafe { dxgi.GetAdapter()?.GetDesc() })
-    else {
+    }
+    let Some(vendor) = (unsafe { device_vendor(request.device) }) else {
         return -3;
     };
-    request.selected_backend = select(desc.VendorId, request.requested_backend, concrete);
+    request.selected_backend = select(vendor, request.requested_backend, concrete);
     0
 }
 

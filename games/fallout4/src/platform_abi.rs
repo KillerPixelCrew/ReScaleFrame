@@ -6,8 +6,8 @@ type wchar_t = u16;
 pub use rsf_game_sys::d3d11_host_abi::{
     rsf_d3d11_creation_scope, rsf_d3d11_host_setup, rsf_d3d11_native_chain,
 };
-pub use rsf_game_sys::sr_abi::rsf_motion_decode_params;
 use rsf_game_sys::rsf_game_host_services;
+pub use rsf_game_sys::sr_abi::rsf_motion_decode_params;
 
 pub const RSF_D3D11_HOST_ABI_VERSION: u32 = 8;
 pub const RSF_D3D11_HOST_CAP_FG_INPUTS: u32 = 1;

@@ -19,6 +19,19 @@ extern "C" {
    Entries never throw. Returned COM objects carry one reference. The Rust
    mirror in d3d11_host_abi.rs is hand-written and checked by the size
    assertions in d3d11_host.cpp. */
+/* Implemented in d3d11_host_platform.rs. */
+int32_t rsf_d3d11h_same_object(void*, void*);
+void* rsf_d3d11h_immediate_context(void*);
+int32_t rsf_d3d11h_device_vendor(void*, uint32_t*);
+void* rsf_d3d11h_chain_device(void*);
+void* rsf_d3d11h_chain_window(void*);
+void* rsf_d3d11h_chain_buffer(void*);
+void* rsf_d3d11h_com_identity(void*);
+void* rsf_d3d11h_chain_present(void*);
+uint32_t rsf_d3d11h_com_release(void*);
+int32_t rsf_d3d11h_ini_read(const wchar_t*, const wchar_t*, const wchar_t*, int32_t);
+int32_t rsf_d3d11h_ini_write(const wchar_t*, const wchar_t*, const wchar_t*, const wchar_t*);
+
 typedef struct rsf_d3d11h_strings {
     const char *streamline, *fidelityfx, *xess, *captures;
     const char *identity, *fingerprint, *engine_version, *project;

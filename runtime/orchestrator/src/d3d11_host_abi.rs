@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
-// Hand-written mirrors of rescaleframe/d3d11_host.h and the private
-// d3d11_host_platform.h table. d3d11_host.cpp asserts the same sizes and
-// offsets on the C++ side; the const blocks below assert them here.
+// Public host records come from the generated SDK bindings.
+// d3d11_host.cpp also asserts the layout of the private platform table.
 #![allow(non_camel_case_types)]
 
 use crate::auxiliary_sr_abi::rsf_aux_platform;
@@ -13,19 +12,16 @@ use crate::scene_abi::{rsf_native_present_record, rsf_observer_present_event};
 pub(crate) use rsf_game_sys::d3d11_chain_abi::*;
 use rsf_game_sys::d3d11_host_abi::rsf_d3d11_auxiliary_surface;
 pub(crate) use rsf_game_sys::d3d11_host_abi::{
-    rsf_d3d11_auxiliary_pass, rsf_d3d11_auxiliary_scope, rsf_d3d11_creation_scope,
-    rsf_d3d11_host_capture, rsf_d3d11_host_setup, rsf_d3d11_native_chain, rsf_d3d11_sampler_bias,
+    RSF_D3D11_CAPTURE_CONTROL_VERSION, RSF_D3D11_CAPTURE_FAILURES, RSF_D3D11_CAPTURE_SEQUENCE,
+    RSF_D3D11_HOST_CAP_FG_INPUTS, RSF_D3D11_HOST_CAP_INPUT_TIMELINE,
+    RSF_D3D11_HOST_CAP_RENDERED_SOURCE, rsf_d3d11_auxiliary_pass, rsf_d3d11_auxiliary_scope,
+    rsf_d3d11_capture_control, rsf_d3d11_creation_scope, rsf_d3d11_host_capture,
+    rsf_d3d11_host_setup, rsf_d3d11_native_chain, rsf_d3d11_present_dispatch,
+    rsf_d3d11_presentation_binding, rsf_d3d11_sampler_bias,
 };
 use rsf_game_sys::{rsf_frame_record, rsf_game_cpu_event, rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::{c_char, c_int, c_void};
 use std::mem::{offset_of, size_of};
-
-pub(crate) const RSF_D3D11_HOST_CAP_FG_INPUTS: u32 = 1;
-pub(crate) const RSF_D3D11_HOST_CAP_INPUT_TIMELINE: u32 = 2;
-pub(crate) const RSF_D3D11_HOST_CAP_RENDERED_SOURCE: u32 = 4;
-pub(crate) const RSF_D3D11_CAPTURE_CONTROL_VERSION: u32 = 1;
-pub(crate) const RSF_D3D11_CAPTURE_SEQUENCE: u32 = 1;
-pub(crate) const RSF_D3D11_CAPTURE_FAILURES: u32 = 2;
 
 pub(crate) use rsf_game_sys::d3d11_reduced_abi::{
     RSF_D3D11_REDUCED_CANCEL, RSF_D3D11_REDUCED_CANCELLED, RSF_D3D11_REDUCED_CLEANUP_PENDING,
@@ -43,32 +39,6 @@ pub(crate) type Pass = rsf_game_render_pass;
 pub(crate) type Surface = rsf_d3d11_auxiliary_surface;
 pub(crate) type PresentEvent =
     Option<unsafe extern "C" fn(*mut c_void, *const rsf_observer_present_event)>;
-
-#[repr(C)]
-pub(crate) struct rsf_d3d11_present_dispatch {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub receiver: *mut c_void,
-    pub sync_interval: u32,
-    pub flags: u32,
-    pub handled: u32,
-    pub native_result: i32,
-}
-
-#[repr(C)]
-pub(crate) struct rsf_d3d11_presentation_binding {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub swapchain: *mut c_void,
-}
-
-#[repr(C)]
-pub(crate) struct rsf_d3d11_capture_control {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub operation: u32,
-    pub value: u32,
-}
 
 #[repr(C)]
 pub(crate) struct rsf_d3d11h_strings {

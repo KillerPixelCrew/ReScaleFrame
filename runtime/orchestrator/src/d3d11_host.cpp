@@ -16,9 +16,7 @@
 #include "render_settings_store.h"
 #include "native_sr_completion.h"
 #include <windows.h>
-#include <d3d11.h>
 #include <dxgi.h>
-#include <wrl/client.h>
 #include <cstddef>
 
 extern "C" {
@@ -27,9 +25,7 @@ int32_t rsf_core_d3d11_host_create(const rsf_d3d11h_platform*, const rsf_d3d11_h
 }
 
 namespace {
-using Microsoft::WRL::ComPtr;
-
-// Layouts mirrored by hand in d3d11_host_abi.rs.
+// Public wire layouts also checked by the generated Rust SDK bindings.
 static_assert(sizeof(rsf_d3d11_host_setup) == 168 && offsetof(rsf_d3d11_host_setup, depth_far_plane) == 160 && offsetof(rsf_d3d11_host_setup, engine_type) == 48 &&
     offsetof(rsf_d3d11_host_setup, units_to_meters) == 72 && offsetof(rsf_d3d11_host_setup, motion) == 80 &&
     offsetof(rsf_d3d11_host_setup, quality_choices) == 128 && offsetof(rsf_d3d11_host_setup, accept_window) == 136 &&
@@ -47,6 +43,7 @@ static_assert(sizeof(rsf_d3d11_reduced_frame) == 56 && offsetof(rsf_d3d11_reduce
     offsetof(rsf_d3d11_reduced_frame, temporal_result) == 48);
 static_assert(sizeof(rsf_d3d11_sampler_bias) == 160 && offsetof(rsf_d3d11_sampler_bias, slot_mask) == 144 &&
     offsetof(rsf_d3d11_sampler_bias, applied_mask) == 152);
+// Private table layouts mirrored in d3d11_host_abi.rs.
 static_assert(sizeof(rsf_d3d11h_strings) == 64 &&
     sizeof(rsf_d3d11h_pipeline_start) == 48 && sizeof(rsf_d3d11h_pipeline_status) == 20);
 static_assert(sizeof(rsf_d3d11h_platform) == 68 * sizeof(void*) &&
@@ -67,54 +64,6 @@ static_assert(RSF_FG_BACKEND_DLSS == 1 && RSF_FG_BACKEND_FSR3 == 3 && RSF_FG_BAC
     RSF_REFLEX_BOOST == 2);
 
 rsf_overlay_api overlay{sizeof(rsf_overlay_api), RSF_OVERLAY_API_VERSION};
-
-int32_t same_object(void* left, void* right) noexcept
-{
-    if (!left || !right) return 0;
-    ComPtr<IUnknown> a, b;
-    return SUCCEEDED(static_cast<IUnknown*>(left)->QueryInterface(IID_PPV_ARGS(&a))) &&
-        SUCCEEDED(static_cast<IUnknown*>(right)->QueryInterface(IID_PPV_ARGS(&b))) && a.Get() == b.Get();
-}
-
-void* child_device(void* child) noexcept
-{
-    return child ? rsf_d3d11_output_child_device(child) : nullptr;
-}
-
-void* immediate_context(void* device) noexcept
-{
-    if (!device) return nullptr;
-    ID3D11DeviceContext* context{};
-    static_cast<ID3D11Device*>(device)->GetImmediateContext(&context);
-    return context;
-}
-
-int32_t device_vendor(void* device, uint32_t* vendor) noexcept
-{
-    ComPtr<IDXGIDevice> dxgi; ComPtr<IDXGIAdapter> adapter; DXGI_ADAPTER_DESC desc{};
-    if (FAILED(static_cast<ID3D11Device*>(device)->QueryInterface(IID_PPV_ARGS(&dxgi))) ||
-        FAILED(dxgi->GetAdapter(&adapter)) || FAILED(adapter->GetDesc(&desc))) return 0;
-    *vendor = desc.VendorId;
-    return 1;
-}
-
-void* chain_device(void* chain) noexcept
-{
-    ID3D11Device* device{};
-    return SUCCEEDED(static_cast<IDXGISwapChain*>(chain)->GetDevice(IID_PPV_ARGS(&device))) ? device : nullptr;
-}
-
-void* chain_window(void* chain) noexcept
-{
-    DXGI_SWAP_CHAIN_DESC desc{};
-    return chain && SUCCEEDED(static_cast<IDXGISwapChain*>(chain)->GetDesc(&desc)) ? desc.OutputWindow : nullptr;
-}
-
-void* chain_buffer(void* chain) noexcept
-{
-    ID3D11Texture2D* buffer{};
-    return chain && SUCCEEDED(static_cast<IDXGISwapChain*>(chain)->GetBuffer(0, IID_PPV_ARGS(&buffer))) ? buffer : nullptr;
-}
 
 int present_install(const rsf_d3d11_present_setup* setup) noexcept try
 {
@@ -159,18 +108,6 @@ int32_t wrap_native(void* device, void* native_chain, void** facade) noexcept tr
 {
     return rsf_d3d11_present_wrap_native_chain(device, native_chain, facade);
 } catch (...) { return E_FAIL; }
-
-void* com_identity(void* object) noexcept
-{
-    IUnknown* identity{};
-    return SUCCEEDED(static_cast<IUnknown*>(object)->QueryInterface(IID_PPV_ARGS(&identity))) ? identity : nullptr;
-}
-
-// IDXGISwapChain::Present is vtable slot 8: IUnknown 0-2, IDXGIObject 3-6,
-// IDXGIDeviceSubObject 7. The address is only logged.
-void* chain_present(void* chain) noexcept { return (*static_cast<void***>(chain))[8]; }
-
-uint32_t com_release(void* object) noexcept { return static_cast<IUnknown*>(object)->Release(); }
 
 void fg_frame(const rsf_game_render_pass* pass, uint32_t begin) noexcept { rsf_native_fg_frame(pass, begin); }
 void fg_submission(const rsf_game_render_pass* pass, uint32_t begin) noexcept { rsf_native_fg_submission(pass, begin); }
@@ -311,27 +248,18 @@ void overlay_present(void* chain) noexcept try
 } catch (...) {}
 void overlay_poll_toggle() noexcept try { rsf_overlay_input_poll_toggle(); } catch (...) {}
 
-int32_t ini_read(const wchar_t* path, const wchar_t* section, const wchar_t* key, int32_t fallback) noexcept
-{
-    return int32_t(GetPrivateProfileIntW(section, key, fallback, path));
-}
-int32_t ini_write(const wchar_t* path, const wchar_t* section, const wchar_t* key, const wchar_t* value) noexcept
-{
-    return WritePrivateProfileStringW(section, key, value, path) != 0;
-}
-
 const rsf_d3d11h_platform& platform()
 {
     static const rsf_d3d11h_platform table{
-        .same_object = same_object,
-        .child_device = child_device,
+        .same_object = rsf_d3d11h_same_object,
+        .child_device = rsf_d3d11_output_child_device,
         .is_immediate = rsf_d3d11_output_is_immediate,
         .device_ok = rsf_d3d11_output_device_ok,
-        .immediate_context = immediate_context,
-        .device_vendor = device_vendor,
-        .chain_device = chain_device,
-        .chain_window = chain_window,
-        .chain_buffer = chain_buffer,
+        .immediate_context = rsf_d3d11h_immediate_context,
+        .device_vendor = rsf_d3d11h_device_vendor,
+        .chain_device = rsf_d3d11h_chain_device,
+        .chain_window = rsf_d3d11h_chain_window,
+        .chain_buffer = rsf_d3d11h_chain_buffer,
         .present_install = present_install,
         .present_prepare = present_prepare,
         .present_install_scoped = present_install_scoped,
@@ -347,9 +275,9 @@ const rsf_d3d11h_platform& platform()
         .creation_begin = creation_begin,
         .creation_end = creation_end,
         .wrap_native = wrap_native,
-        .com_identity = com_identity,
-        .chain_present = chain_present,
-        .com_release = com_release,
+        .com_identity = rsf_d3d11h_com_identity,
+        .chain_present = rsf_d3d11h_chain_present,
+        .com_release = rsf_d3d11h_com_release,
         .fg_frame = fg_frame,
         .fg_submission = fg_submission,
         .fg_final = fg_final,
@@ -388,8 +316,8 @@ const rsf_d3d11h_platform& platform()
         .overlay_configure = overlay_configure,
         .overlay_present = overlay_present,
         .overlay_poll_toggle = overlay_poll_toggle,
-        .ini_read = ini_read,
-        .ini_write = ini_write,
+        .ini_read = rsf_d3d11h_ini_read,
+        .ini_write = rsf_d3d11h_ini_write,
         .auxiliary = rsf_auxiliary_sr_platform(),
     };
     return table;

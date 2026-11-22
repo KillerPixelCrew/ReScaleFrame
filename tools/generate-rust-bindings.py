@@ -204,8 +204,8 @@ generate("games/fallout4/src/platform_abi.rs", "games/fallout4/src/fallout4_plat
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]", "--raw-line", "type wchar_t = u16;",
           "--raw-line", "pub use rsf_game_sys::d3d11_host_abi::{\n"
           "    rsf_d3d11_creation_scope, rsf_d3d11_host_setup, rsf_d3d11_native_chain,\n};",
-          "--raw-line", "pub use rsf_game_sys::sr_abi::rsf_motion_decode_params;",
-          "--raw-line", "use rsf_game_sys::rsf_game_host_services;"])
+          "--raw-line", "use rsf_game_sys::rsf_game_host_services;",
+          "--raw-line", "pub use rsf_game_sys::sr_abi::rsf_motion_decode_params;"])
 generate("games/fallout4/src/cpu_abi.rs", "games/fallout4/src/cpu_events_platform.h",
          "rsf_fallout4_cpu_(identity|scope)", "RSF_FALLOUT4_CPU_(HOOK_.*|SCOPE_WORDS)",
          ["-Isdk/game/include"],
@@ -541,8 +541,8 @@ generate("runtime/orchestrator/src/d3d11_output_abi.rs", "runtime/orchestrator/s
          ["--with-derive-default", "--no-copy", "rsf_d3d11_state",
           "--allowlist-function", "rsf_d3d11_output_.*"])
 generate("sdk/game/src/d3d11_host_abi.rs", "runtime/orchestrator/include/rescaleframe/d3d11_host.h",
-         "rsf_d3d11_(auxiliary_(surface|pass|scope)|host_capture|sampler_bias|host_setup|creation_scope|native_chain)",
-         "RSF_D3D11_AUXILIARY_.*",
+         "rsf_d3d11_(auxiliary_(surface|pass|scope)|host_capture|sampler_bias|host_setup|creation_scope|native_chain|present_dispatch|presentation_binding|capture_control)",
+         "RSF_D3D11_(AUXILIARY_.*|HOST_CAP_.*|CAPTURE_.*)",
          ["-Iruntime/orchestrator/include", "-Iruntime/graphics/include",
           "-Iruntime/presentation/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist", "--with-derive-default",
@@ -551,6 +551,19 @@ generate("sdk/game/src/d3d11_host_abi.rs", "runtime/orchestrator/include/rescale
           "--raw-line", "use crate::sr_abi::rsf_motion_decode_params;",
           "--with-derive-custom-struct", "rsf_d3d11_host_setup=Copy,Clone",
           "--raw-line", "mod upstream;", "--raw-line", "pub use upstream::same_upstream_identity;"])
+generate("tests/game-sdk/src/d3d11_host_calls.rs", "runtime/orchestrator/include/rescaleframe/d3d11_host.h",
+         "NOTHING", "NOTHING",
+         ["-include", "rescaleframe/native_sr.h", "-include", "rescaleframe/native_fg.h",
+          "-Iruntime/orchestrator/include", "-Iruntime/graphics/include",
+          "-Iruntime/presentation/include", "-Iruntime/backends/dlss/include",
+          "-Iruntime/contract/include", "-Isdk/game/include"],
+         ["--no-recursive-allowlist",
+          "--allowlist-function", "rsf_(d3d11_host_(create|set_active|dispatch_chain|dispatch_present|creation_begin|creation_end|wrap_native_swapchain|bind_presentation|request_capture|capture_control|capture_texture|restore_auxiliaries|reduced_frame)|native_fg_(scene|scene_swap|bind_source)|native_sr_capture_fg)",
+          "--raw-line", "use rsf_game_sys::d3d11_chain_abi::rsf_d3d11_chain_dispatch;",
+          "--raw-line", "use rsf_game_sys::d3d11_host_abi::*;",
+          "--raw-line", "use rsf_game_sys::d3d11_reduced_abi::rsf_d3d11_reduced_frame;",
+          "--raw-line", "use rsf_game_sys::sr_abi::rsf_motion_decode_params;",
+          "--raw-line", "use rsf_game_sys::{rsf_game_host_services, rsf_game_render_pass};"])
 generate("runtime/orchestrator/src/auxiliary_sr_abi.rs", "runtime/orchestrator/src/auxiliary_sr_platform.h",
          "rsf_(aux_platform|depth_scale_(setup|frame))",
          "RSF_(AUX_.*|DEPTH_SCALE_(ABI_VERSION|OK))",

@@ -7,6 +7,12 @@ use crate::sr_abi::rsf_motion_decode_params;
 mod upstream;
 pub use upstream::same_upstream_identity;
 
+pub const RSF_D3D11_HOST_CAP_FG_INPUTS: u32 = 1;
+pub const RSF_D3D11_HOST_CAP_INPUT_TIMELINE: u32 = 2;
+pub const RSF_D3D11_HOST_CAP_RENDERED_SOURCE: u32 = 4;
+pub const RSF_D3D11_CAPTURE_CONTROL_VERSION: u32 = 1;
+pub const RSF_D3D11_CAPTURE_SEQUENCE: u32 = 1;
+pub const RSF_D3D11_CAPTURE_FAILURES: u32 = 2;
 pub const RSF_D3D11_AUXILIARY_DEPTH_STENCIL: u32 = 0;
 pub const RSF_D3D11_AUXILIARY_COLOUR: u32 = 1;
 pub const RSF_D3D11_AUXILIARY_RESTORE_CONTENTS: u32 = 1;
@@ -95,6 +101,47 @@ impl Default for rsf_d3d11_host_setup {
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
+pub struct rsf_d3d11_present_dispatch {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub receiver: *mut ::core::ffi::c_void,
+    pub sync_interval: u32,
+    pub flags: u32,
+    pub handled: u32,
+    pub native_result: i32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_d3d11_present_dispatch"]
+        [::core::mem::size_of::<rsf_d3d11_present_dispatch>() - 32usize];
+    ["Alignment of rsf_d3d11_present_dispatch"]
+        [::core::mem::align_of::<rsf_d3d11_present_dispatch>() - 8usize];
+    ["Offset of field: rsf_d3d11_present_dispatch::struct_size"]
+        [::core::mem::offset_of!(rsf_d3d11_present_dispatch, struct_size) - 0usize];
+    ["Offset of field: rsf_d3d11_present_dispatch::abi_version"]
+        [::core::mem::offset_of!(rsf_d3d11_present_dispatch, abi_version) - 4usize];
+    ["Offset of field: rsf_d3d11_present_dispatch::receiver"]
+        [::core::mem::offset_of!(rsf_d3d11_present_dispatch, receiver) - 8usize];
+    ["Offset of field: rsf_d3d11_present_dispatch::sync_interval"]
+        [::core::mem::offset_of!(rsf_d3d11_present_dispatch, sync_interval) - 16usize];
+    ["Offset of field: rsf_d3d11_present_dispatch::flags"]
+        [::core::mem::offset_of!(rsf_d3d11_present_dispatch, flags) - 20usize];
+    ["Offset of field: rsf_d3d11_present_dispatch::handled"]
+        [::core::mem::offset_of!(rsf_d3d11_present_dispatch, handled) - 24usize];
+    ["Offset of field: rsf_d3d11_present_dispatch::native_result"]
+        [::core::mem::offset_of!(rsf_d3d11_present_dispatch, native_result) - 28usize];
+};
+impl Default for rsf_d3d11_present_dispatch {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub struct rsf_d3d11_native_chain {
     pub struct_size: u32,
     pub abi_version: u32,
@@ -159,6 +206,58 @@ impl Default for rsf_d3d11_creation_scope {
         }
     }
 }
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_d3d11_presentation_binding {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub swapchain: *mut ::core::ffi::c_void,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_d3d11_presentation_binding"]
+        [::core::mem::size_of::<rsf_d3d11_presentation_binding>() - 16usize];
+    ["Alignment of rsf_d3d11_presentation_binding"]
+        [::core::mem::align_of::<rsf_d3d11_presentation_binding>() - 8usize];
+    ["Offset of field: rsf_d3d11_presentation_binding::struct_size"]
+        [::core::mem::offset_of!(rsf_d3d11_presentation_binding, struct_size) - 0usize];
+    ["Offset of field: rsf_d3d11_presentation_binding::abi_version"]
+        [::core::mem::offset_of!(rsf_d3d11_presentation_binding, abi_version) - 4usize];
+    ["Offset of field: rsf_d3d11_presentation_binding::swapchain"]
+        [::core::mem::offset_of!(rsf_d3d11_presentation_binding, swapchain) - 8usize];
+};
+impl Default for rsf_d3d11_presentation_binding {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_d3d11_capture_control {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub operation: u32,
+    pub value: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_d3d11_capture_control"]
+        [::core::mem::size_of::<rsf_d3d11_capture_control>() - 16usize];
+    ["Alignment of rsf_d3d11_capture_control"]
+        [::core::mem::align_of::<rsf_d3d11_capture_control>() - 4usize];
+    ["Offset of field: rsf_d3d11_capture_control::struct_size"]
+        [::core::mem::offset_of!(rsf_d3d11_capture_control, struct_size) - 0usize];
+    ["Offset of field: rsf_d3d11_capture_control::abi_version"]
+        [::core::mem::offset_of!(rsf_d3d11_capture_control, abi_version) - 4usize];
+    ["Offset of field: rsf_d3d11_capture_control::operation"]
+        [::core::mem::offset_of!(rsf_d3d11_capture_control, operation) - 8usize];
+    ["Offset of field: rsf_d3d11_capture_control::value"]
+        [::core::mem::offset_of!(rsf_d3d11_capture_control, value) - 12usize];
+};
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_d3d11_host_capture {

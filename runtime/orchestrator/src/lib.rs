@@ -30,6 +30,8 @@ mod d3d11_host;
 #[cfg(windows)]
 mod d3d11_host_abi;
 #[cfg(windows)]
+mod d3d11_host_platform;
+#[cfg(windows)]
 mod d3d11_host_reduced;
 #[cfg(windows)]
 mod d3d11_observer_abi;
