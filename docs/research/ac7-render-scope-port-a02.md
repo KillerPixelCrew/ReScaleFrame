@@ -188,3 +188,49 @@ contract for the three Rust implementations in `cloud_depth/d3d11.rs`.
 
 Strict C11 syntax checks passed for the launcher and the cloud header, including a
 56-byte state layout assertion. Linking and fixture execution remain pending.
+
+## Compatibility camera admission at b5a7434c
+
+The question is whether the compatibility route can verify that its camera
+belongs to the scene the player sees. This source pass reuses the AC7 executable,
+decrypted image and UE 4.18.3 revision recorded in the
+[native ownership reference](../../.agents/skills/ue418-render-integration/references/ac7-native-ownership.md).
+It traces the active callback branches and their resource lifetimes. The
+[existing pixel-bind research](ac7-native-renderer-refactor-20261001.md)
+establishes the RHI pixel uniform setter and slot argument, but its
+null-binding diagnostic does not establish a compatibility camera producer.
+
+| Source boundary | Facts available to the compatibility consumer |
+| --- | --- |
+| `view.rs::read_view` | `fills_target` describes a zero-origin view matching its own recorded buffer extent. Projection and jitter checks validate the decoded data. A full-target capture or translucency view can also satisfy them. |
+| `dlss_bridge.c::rsf_bridge_start` and the native renderer | Successful plugin activation sets `native_owner` and omits the compatibility pass callback. In compatibility mode that callback remains installed, but the native SR producer in `hooked_postprocess`/`make_plan` requires an active renderer. That producer matches the graph context's view key and reads its family and native frame. The native diagnostic uniform hooks also require activation. |
+| `frame_tap.rs` pixel constants and reconstruction pass callbacks | The retained PS buffer is a recent changed binding selected by byte width. The tap reports it with the compatible scene/depth/motion signature and context. The pass index is the tap's observation counter. There is no native session/source frame, view/family or proven camera slot in this record. |
+| `frame_tap.rs` and `frame_tap/detours.rs` upload callbacks | The installed context admits qualifying whole-subresource zero-index `UpdateSubresource`/`UpdateSubresource1` calls and paired zero-index `WRITE_DISCARD` Map/Unmap. The callback carries the resource, bytes and user pointer, with no write serial or native identity. Boxed updates, unmatched mappings and resource copies do not produce upload records. `ClearState` and non-restoring command-list execution can drop tap binding observations without notifying the bridge's retained upload candidate. |
+| `dlss_bridge.c::on_gate` | Recombine runs before the later reconstruction input observation. It can only use a current Present interval upload to a previously observed buffer, with a compatible extent. The composite gate can keep the latest candidate for a lens, direction and distance check. These are compatibility heuristics. They cannot establish the native producer of an upload. |
+
+The bridge now names rectangle refusals and camera candidates accordingly.
+It invalidates the upload when the observed context, scene/depth/motion/exposure
+set, View buffer or decoded extent changes. Recombine uses it only on that
+context with the active reinsertion plan's scene-colour source. The composite
+gate also checks that association before updating its continuity sample.
+An unrelated cached camera can no longer veto recombine when that association fails.
+Present, successful plan replacement, detach and shutdown clear the candidate.
+The existing continuity check can still postpone a gate for a later candidate.
+When association or backend evaluation fails, the recombine gate still calls
+`rsf_promote_seed` with reconstruction disabled and keeps the game's colour as
+its source. The composite and Present compatibility routes and native activation
+still use their existing entry points.
+
+The remaining join needs a producer available when native activation refuses,
+with native session/source frame, view and family identity established at the
+scene pass. It must associate those facts with the exact D3D11 context, bound
+shader stage and slot and buffer used by that draw, then account for the
+buffer's write generation through recombine, including bypassed writes,
+command-list execution and invalidation. The pinned source provides neither
+this compatibility producer nor an upload generation that can validate it.
+Pointer retention and the stricter compatibility association do not resolve
+same-allocation reuse. PORT line 1754 remains open.
+
+Validation is source-only. Strict MinGW C11 syntax passed for the bridge.
+Targeted bindgen reproduction, pinned formatting, locked offline Cargo metadata
+and Git whitespace checks cover this change. Runtime behavior remains unverified.

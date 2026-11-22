@@ -170,7 +170,7 @@ static struct {
        failing quietly. Every one of these has been the answer at some point in this project. */
     unsigned long passes;
     unsigned long view_read_failures;
-    unsigned long not_main_view;
+    unsigned long view_rectangle_refusals;
     unsigned long no_jitter;
     unsigned long evaluated;
     unsigned long refused;
@@ -266,19 +266,18 @@ static struct {
     rsf_pipeline_camera_frame held_camera;
     unsigned long held_width;
     unsigned long held_height;
-    /* The recombine route evaluates before this frame's qualifying pass has happened, so it works
-       from the textures the last pass named, which are the same pooled targets every frame, and
-       from this frame's upload to the buffer identified by that scene pass. */
+    /* Recombine runs before this frame's qualifying tap observation. It uses the previously
+       observed texture set and a candidate camera decoded from that set's view-buffer upload.
+       Pooled D3D addresses do not identify a native view or family. */
     void* last_depth;
     void* last_motion;
     void* last_exposure;
+    void* scene_view_context; /* Compared only during the frame tap's installation. */
     void* scene_view_constants;
     uint32_t scene_view_width;
     uint32_t scene_view_height;
-    rsf_pipeline_camera_frame upload_camera;
-    unsigned long upload_width;
-    unsigned long upload_height;
-    int upload_camera_valid;
+    rsf_pipeline_camera_frame compat_upload_camera;
+    int compat_upload_camera_valid;
     /* Which route the plan takes. The recombine exists on screens with separate translucency, the
        briefing among them, and not on every menu; a plan waiting for a recombine that never comes
        never evaluates. So the route follows the frame: the recombine route while its gate opens,
@@ -312,14 +311,10 @@ static struct {
     unsigned long briefing_capture_wait;
     unsigned long briefing_capture_draws;
     unsigned long briefing_shader_bytes;
-    /* Which recombine is the main view's. The briefing renders the scene more than once a frame
-       (three qualifying passes a frame against one on the menus), and every render binds a
-       recombined target; the pool hands them the same allocation, so the gate opens at the first.
-       The main view is the one whose tonemap writes the composite, and the pass right before that
-       is its temporal pass, so its camera is the reference: the recombine whose camera continues
-       it is the one to reconstruct at, and the others are declined and asked again. */
-    rsf_pipeline_camera_frame main_camera_ref;
-    int main_camera_ref_valid;
+    /* Candidate observed before the composite gate. Continuity helps reject unrelated
+       recombines when the pool reuses the same allocation within a frame. */
+    rsf_pipeline_camera_frame composite_camera_sample;
+    int composite_camera_sample_valid;
     unsigned long gates_declined_camera;
     unsigned long gate_decisions_logged;
     unsigned long layer_draws_untwinned;
@@ -333,7 +328,7 @@ static struct {
     void* size_patch_target;
     unsigned long size_uploads_patched;
     unsigned long sizes_patched;
-    /* The main view's render size from the last qualifying pass, kept past the frame, for the
+    /* The observed render size from the last qualifying pass, kept past the frame, for the
        jitter gate's main-view test. Written by one thread, read by another, a word at a time. */
     volatile LONG view_width;
     volatile LONG view_height;
@@ -889,8 +884,6 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
     unsigned char view_bytes[RSF_AC7_VIEW_BUFFER_BYTES];
     rsf_ac7_view view;
     rsf_pipeline_camera_frame camera;
-    rsf_dlss_pipeline_frame frame;
-    rsf_dlss_pipeline_result result;
 
     (void)user;
     if (InterlockedCompareExchange(&native_owner, 0, 0) || !bridge.started || !pass || !pass->view_constants) {
@@ -912,17 +905,16 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
         return;
     }
 
-    /* The tap identifies the scene input set. The view still has to cover its own target and fit
-       the scene pass's pooled motion extent. */
+    /* These are rectangle checks against the candidate's own target and the observed motion
+       allocation. They carry no player-camera identity. */
     if (!view.fills_target || view.view_width > pass->render_width ||
         view.view_height > pass->render_height) {
-        ++bridge.not_main_view;
+        ++bridge.view_rectangle_refusals;
         return;
     }
-    /* The main view's size for the jitter stub, taken here, before the jitter check. Taken only
-       from evaluated passes it deadlocked: the first pass after F8 came before the render scale
-       applied, the stub learned 1600x900, refused the real 800x452 main view its jitter, and no
-       pass was ever evaluated again to correct it. */
+    /* Update the jitter stub's candidate extent before checking jitter. The first pass after F8
+       can still be full size, so waiting for an evaluation would leave the stub stuck at that
+       size and prevent jitter on the next reduced pass. */
     InterlockedExchange(&bridge.view_width, (LONG)pass->render_width);
     InterlockedExchange(&bridge.view_height, (LONG)pass->render_height);
     if (!view.has_jitter) {
@@ -950,15 +942,20 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
     }
 
     fill_camera(&view, &camera);
-    if (bridge.scene_view_constants != pass->view_constants ||
+    if (bridge.scene_view_context != pass->context || bridge.scene_color != pass->scene_color ||
+        bridge.last_depth != pass->depth || bridge.last_motion != pass->motion ||
+        bridge.last_exposure != pass->exposure || bridge.scene_view_constants != pass->view_constants ||
         bridge.scene_view_width != view.view_width || bridge.scene_view_height != view.view_height) {
+        bridge.compat_upload_camera_valid = 0;
+    }
+    if (bridge.scene_view_constants != pass->view_constants) {
         rsf_resource_retain(pass->view_constants);
         rsf_resource_release(bridge.scene_view_constants);
         bridge.scene_view_constants = pass->view_constants;
-        bridge.scene_view_width = view.view_width;
-        bridge.scene_view_height = view.view_height;
-        bridge.upload_camera_valid = 0;
     }
+    bridge.scene_view_context = pass->context;
+    bridge.scene_view_width = view.view_width;
+    bridge.scene_view_height = view.view_height;
 
     /* Held rather than evaluated. The camera is a plain structure and is copied; the textures are
        borrowed for this callback only, so keeping them past it means taking a reference. One set
@@ -1007,8 +1004,6 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
         bridge.scene_color = pass->scene_color;
         rsf_resource_retain(bridge.scene_color);
     }
-    (void)frame;
-    (void)result;
 }
 
 /* How many geometry draws are described in full before the counters take over.
@@ -1923,16 +1918,26 @@ static void evaluate_held(void* context)
    The price of being here rather than at Present is that the game is midway through its frame and
    will not rebind what it believes is still bound. Streamline says it does not restore state, so
    the whole pipeline is saved and put back around the evaluate. */
-/* Evaluate at the recombine: scene colour is finished and translucency is not in it yet.
+/* Only use the upload with its observed input set and the active plan's scene colour. The tap
+   scopes uploads to its installed context. This route has no native view or content receipt. */
+static int compatibility_scene_matches_plan(void* context)
+{
+    return context == bridge.scene_view_context &&
+           bridge.last_tail_valid && bridge.last_tail.scene_color == bridge.scene_color;
+}
 
-   The qualifying pass comes later in the frame, so this takes the textures the last pass named and
-   this frame's camera from the main view's upload. Returns whether an evaluation happened. */
+static int recombine_camera_available(void* context)
+{
+    return bridge.compat_upload_camera_valid && compatibility_scene_matches_plan(context);
+}
+
+/* Evaluate with the candidate camera, or let the gate seed from native colour. */
 static int evaluate_at_recombine(void* context)
 {
     rsf_dlss_pipeline_frame frame;
     rsf_dlss_pipeline_result result;
-    if (!bridge.upload_camera_valid || !bridge.scene_color || !bridge.last_depth ||
-        !bridge.last_motion || bridge.upload_width == 0 || bridge.upload_height == 0) {
+    if (!recombine_camera_available(context) || !bridge.scene_color || !bridge.last_depth ||
+        !bridge.last_motion || bridge.scene_view_width == 0 || bridge.scene_view_height == 0) {
         ++bridge.refused;
         return 0;
     }
@@ -1943,9 +1948,9 @@ static int evaluate_at_recombine(void* context)
     frame.depth = bridge.last_depth;
     frame.game_motion = bridge.last_motion;
     frame.exposure = bridge.last_exposure;
-    frame.render_width = (uint32_t)bridge.upload_width;
-    frame.render_height = (uint32_t)bridge.upload_height;
-    frame.camera = &bridge.upload_camera;
+    frame.render_width = bridge.scene_view_width;
+    frame.render_height = bridge.scene_view_height;
+    frame.camera = &bridge.compat_upload_camera;
     result = rsf_dlss_pipeline_on_frame(context, &frame);
     bridge.last_result = (long)result;
     if (result != RSF_DLSS_PIPELINE_OK) {
@@ -1956,9 +1961,8 @@ static int evaluate_at_recombine(void* context)
     return 1;
 }
 
-/* Whether `candidate` is the main view's camera a frame on from `reference`: the same lens, looking
-   the same way to within a few degrees, from nearby. A camera turns a degree or two a frame at the
-   fastest and moves metres, not the tens of metres between a scene and a capture of it. */
+/* A plausibility check against the prior composite sample using lens, direction and distance.
+   It can reject a candidate and cannot establish which engine view produced it. */
 static int camera_continues(const rsf_pipeline_camera_frame* candidate, const rsf_pipeline_camera_frame* reference)
 {
     float dot = 0.0f;
@@ -1987,16 +1991,17 @@ static void log_gate_decision(const char* verdict)
         return;
     }
     ++bridge.gate_decisions_logged;
-    say("recombine gate %s: camera at %.0f %.0f %.0f looking %.2f %.2f %.2f fov %.3f; the main "
-        "view's %s at %.0f %.0f %.0f looking %.2f %.2f %.2f fov %.3f",
-        verdict, bridge.upload_camera.camera_position[0], bridge.upload_camera.camera_position[1],
-        bridge.upload_camera.camera_position[2], bridge.upload_camera.camera_forward[0],
-        bridge.upload_camera.camera_forward[1], bridge.upload_camera.camera_forward[2],
-        bridge.upload_camera.vertical_fov, bridge.main_camera_ref_valid ? "was" : "is unknown, so",
-        bridge.main_camera_ref.camera_position[0], bridge.main_camera_ref.camera_position[1],
-        bridge.main_camera_ref.camera_position[2], bridge.main_camera_ref.camera_forward[0],
-        bridge.main_camera_ref.camera_forward[1], bridge.main_camera_ref.camera_forward[2],
-        bridge.main_camera_ref.vertical_fov);
+    say("recombine gate %s: candidate camera at %.0f %.0f %.0f looking %.2f %.2f %.2f fov %.3f; "
+        "composite sample %s at %.0f %.0f %.0f looking %.2f %.2f %.2f fov %.3f",
+        verdict, bridge.compat_upload_camera.camera_position[0], bridge.compat_upload_camera.camera_position[1],
+        bridge.compat_upload_camera.camera_position[2], bridge.compat_upload_camera.camera_forward[0],
+        bridge.compat_upload_camera.camera_forward[1], bridge.compat_upload_camera.camera_forward[2],
+        bridge.compat_upload_camera.vertical_fov,
+        bridge.composite_camera_sample_valid ? "was" : "unavailable, cached values",
+        bridge.composite_camera_sample.camera_position[0], bridge.composite_camera_sample.camera_position[1],
+        bridge.composite_camera_sample.camera_position[2], bridge.composite_camera_sample.camera_forward[0],
+        bridge.composite_camera_sample.camera_forward[1], bridge.composite_camera_sample.camera_forward[2],
+        bridge.composite_camera_sample.vertical_fov);
 }
 
 /* CopyResource through the game's context, for two textures of one size and format. */
@@ -2099,8 +2104,8 @@ static int on_gate(void* user, void* context, void* texture)
                    texture);
         if (texture && texture == bridge.composite) {
             /* The tonemap's gate: temporal AA wrote the scratch target, and scene colour gets the
-               recombined result instead. The pass just before this is the main view's temporal
-               pass, so its camera is next frame's reference. */
+               recombined result instead. Keep the latest qualifying camera as the continuity
+               sample for the next recombine. */
             if (!rsf_d3d11_state_save(context, &state)) {
                 return 1;
             }
@@ -2111,21 +2116,20 @@ static int on_gate(void* user, void* context, void* texture)
                 rsf_promote_get_stand_ins(bridge.promote, &scene_stand_in, &composed_stand_in);
                 route_dump(context, composed_stand_in, "recombined");
                 say("route dump: frame %lu camera jitter %.3f %.3f px", bridge.route_dump_frame,
-                    bridge.upload_camera.jitter_pixels[0], bridge.upload_camera.jitter_pixels[1]);
+                    bridge.compat_upload_camera.jitter_pixels[0], bridge.compat_upload_camera.jitter_pixels[1]);
             }
             rsf_d3d11_state_restore(context, &state);
             ++bridge.finishes;
-            if (bridge.have_held) {
-                bridge.main_camera_ref = bridge.held_camera;
-                bridge.main_camera_ref_valid = 1;
+            if (bridge.have_held && compatibility_scene_matches_plan(context)) {
+                bridge.composite_camera_sample = bridge.held_camera;
+                bridge.composite_camera_sample_valid = 1;
             }
             return 1;
         }
-        /* The recombine's gate. Only the main view's, judged by its camera continuing the
-           reference; any other render's is declined and the gate asked again at the next. Without
-           a reference, the first is taken and the composite gate establishes one. */
-        if (bridge.main_camera_ref_valid && bridge.upload_camera_valid &&
-            !camera_continues(&bridge.upload_camera, &bridge.main_camera_ref)) {
+        /* A continuity failure leaves the gate open for the next recombine. A missing or
+           mismatched upload still opens this gate and seeds with native colour. */
+        if (bridge.composite_camera_sample_valid && recombine_camera_available(context) &&
+            !camera_continues(&bridge.compat_upload_camera, &bridge.composite_camera_sample)) {
             ++bridge.gates_declined_camera;
             log_gate_decision("declined");
             gate_trace("recombine declined", texture);
@@ -2354,7 +2358,7 @@ static void observe_constants(void* user, void* buffer, const void* contents, ui
     if (bytes == RSF_AC7_VIEW_BUFFER_BYTES) {
         on_view_constants(user, buffer, contents, bytes);
     } else {
-        if (buffer == bridge.scene_view_constants) bridge.upload_camera_valid = 0;
+        if (buffer == bridge.scene_view_constants) bridge.compat_upload_camera_valid = 0;
         if (view_twins) rsf_constant_twins_forget(view_twins, buffer);
     }
     rsf_ac7_motion_capture_upload(buffer, contents, bytes);
@@ -2370,7 +2374,7 @@ static void on_view_constants(void* user, void* buffer, const void* contents, ui
     {
         rsf_ac7_view view;
         const int scene_upload = buffer && buffer == bridge.scene_view_constants;
-        if (scene_upload) bridge.upload_camera_valid = 0;
+        if (scene_upload) bridge.compat_upload_camera_valid = 0;
         memset(&view, 0, sizeof(view));
         view.struct_size = sizeof(view);
         if (rsf_ac7_view_read(contents, bytes, RSF_AC7_VIEW_ABI_VERSION, &view) ==
@@ -2384,10 +2388,8 @@ static void on_view_constants(void* user, void* buffer, const void* contents, ui
             }
             if (scene_upload && view.view_width == bridge.scene_view_width &&
                 view.view_height == bridge.scene_view_height) {
-                fill_camera(&view, &bridge.upload_camera);
-                bridge.upload_width = view.view_width;
-                bridge.upload_height = view.view_height;
-                bridge.upload_camera_valid = 1;
+                fill_camera(&view, &bridge.compat_upload_camera);
+                bridge.compat_upload_camera_valid = 1;
             }
         }
     }
@@ -2743,8 +2745,8 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
         stats->refusal_reason = "no pass has bound the reconstruction inputs yet";
     } else if (bridge.no_jitter > 0 && bridge.evaluated == 0) {
         stats->refusal_reason = "Waiting for valid temporal inputs";
-    } else if (bridge.not_main_view > 0 && bridge.evaluated == 0) {
-        stats->refusal_reason = "the view read was not the main view";
+    } else if (bridge.view_rectangle_refusals > 0 && bridge.evaluated == 0) {
+        stats->refusal_reason = "the view rectangle did not fit the scene inputs";
     }
 
     memset(&tap, 0, sizeof(tap));
@@ -3205,7 +3207,8 @@ static int drain_shutdown(void)
     release_held();
     rsf_resource_release(bridge.scene_view_constants);
     bridge.scene_view_constants = NULL;
-    bridge.upload_camera_valid = 0;
+    bridge.scene_view_context = NULL;
+    bridge.compat_upload_camera_valid = 0;
     rsf_ac7_velocity_release();
     rsf_dlss_pipeline_stop(); bridge.started = 0;
     rsf_input_dump_cancel(0);
@@ -3286,7 +3289,7 @@ static void on_present(void* user, void* swapchain)
         composite_ui(swapchain);
     }
 
-    bridge.upload_camera_valid = 0;
+    bridge.compat_upload_camera_valid = 0;
     if (bridge.route_dump_frames) {
         /* The frame as presented, last of the set: what the player sees. */
         void* buffer = rsf_swapchain_back_buffer(swapchain);
@@ -3561,6 +3564,7 @@ static void stop_reinsert(void)
     bridge.size_patch_target = NULL;
     refresh_constant_watch();
     bridge.last_tail_valid = 0;
+    bridge.compat_upload_camera_valid = 0;
     rsf_frame_tap_end_frame();
     bridge.reinsert_on = 0;
     say("reinsert: off, the game draws its own frame again");
@@ -3749,11 +3753,12 @@ static int install_reinsert_plan(void)
     }
     bridge.last_tail = tail;
     bridge.last_tail_valid = 1;
+    bridge.compat_upload_camera_valid = 0;
     /* A fresh plan describes its first frames' passes and gate decisions, so a log of a screen
        says what that screen renders. */
     bridge.frames_described = 0;
     bridge.gate_decisions_logged = 0;
-    bridge.main_camera_ref_valid = 0;
+    bridge.composite_camera_sample_valid = 0;
     bridge.gate_trace_left = 6;
     /* The stall detector measures from here, so a fresh plan is never mistaken for a stalled one
        just because the previous plan's redirects are still the last thing counted. */
@@ -4028,9 +4033,9 @@ void rsf_bridge_report(void)
             (unsigned long)tap.exposure_seen);
     }
 
-    say("bridge: %lu passes, %lu view reads failed, %lu not the main view, %lu without jitter, "
+    say("bridge: %lu passes, %lu view reads failed, %lu incompatible view rectangles, %lu without jitter, "
         "%lu evaluated, %lu refused, last result %ld",
-        bridge.passes, bridge.view_read_failures, bridge.not_main_view, bridge.no_jitter,
+        bridge.passes, bridge.view_read_failures, bridge.view_rectangle_refusals, bridge.no_jitter,
         bridge.evaluated, bridge.refused, bridge.last_result);
 
     /* Whether the frame's tail was ever described. Zero draws with a watch that was set is a
@@ -4057,7 +4062,7 @@ void rsf_bridge_report(void)
         say("reinsert: %lu recombined results put into scene colour for the tonemap, %lu copies "
             "redirected between stand-ins, %lu copies with one side promoted, %lu uploads for the "
             "recombine had %lu size constants promoted, %lu constant uploads watched, %lu "
-            "recombine gates declined as another render's camera, %lu plans restored after a "
+            "recombine gates declined by camera continuity, %lu plans restored after a "
             "failed rebuild",
             bridge.finishes, (unsigned long)tap.copies_redirected,
             (unsigned long)tap.copies_mismatched, bridge.size_uploads_patched,
