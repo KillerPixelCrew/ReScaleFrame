@@ -6,7 +6,7 @@ use core::{
     mem::{offset_of, size_of},
 };
 
-use crate::{frame, host};
+use crate::{frame, host, packet_abi::rsf_godot_present_calls};
 
 const FEATURE_NOT_PRESENT: i32 = -8;
 
@@ -79,41 +79,71 @@ pub unsafe extern "C" fn rsf_godot_execution_present(receipt: *const ExecutionRe
     unsafe { (*receipt).submitted }
 }
 
-#[repr(C)]
-pub struct MixedPresentCalls {
-    fan_out: unsafe extern "C" fn(context: *mut c_void) -> i32,
-    present: unsafe extern "C" fn(context: *mut c_void, index: u32) -> i32,
-}
-
 /// # Safety
-/// `calls` and `context` must remain valid until the batch returns. `count` is the number
-/// of valid chains and result slots in the borrowed present request.
+/// The native present request, all chain and result slots, and every callback must
+/// remain valid until this call returns. All callbacks must be nonnull.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rsf_godot_present_mixed(
-    calls: *const MixedPresentCalls,
+pub unsafe extern "C" fn rsf_godot_present_batch(
+    calls: *const rsf_godot_present_calls,
     context: *mut c_void,
     count: u32,
     has_extensions: u32,
     submitted: u32,
 ) -> i32 {
-    if has_extensions != 0 {
-        return FEATURE_NOT_PRESENT;
-    }
     let calls = unsafe { &*calls };
-    if submitted == 0 {
-        // Consume the batch's binary waits once before distributing each chain's signal.
-        let result = unsafe { (calls.fan_out)(context) };
-        if result != 0 {
-            return result;
+    let proxy_at = unsafe { calls.proxy_at.unwrap_unchecked() };
+    let mut proxy = false;
+    for index in 0..count {
+        proxy |= unsafe { proxy_at(context, index) != 0 };
+    }
+    if proxy && count != 1 {
+        unsafe { calls.trace_mixed.unwrap_unchecked()(context) };
+        if has_extensions != 0 {
+            return FEATURE_NOT_PRESENT;
         }
+        if submitted == 0 {
+            // Consume the batch's binary waits once before distributing each chain's signal.
+            let result = unsafe { calls.fan_out.unwrap_unchecked()(context) };
+            if result != 0 {
+                return result;
+            }
+        }
+
+        let present_item = unsafe { calls.present_item.unwrap_unchecked() };
+        let mut result = 0;
+        for index in 0..count {
+            let item = unsafe { present_item(context, index) };
+            if item != 0 {
+                result = item;
+            }
+        }
+        return result;
     }
 
-    let mut result = 0;
+    // Native batches report the first surface whose real receipt admits a marker.
+    // A one-chain proxy uses the same scope around its direct native host call.
+    let window_at = unsafe { calls.window_at.unwrap_unchecked() };
+    let marker = unsafe { calls.marker.unwrap_unchecked() };
+    let mut marked_window = 0;
     for index in 0..count {
-        let item = unsafe { (calls.present)(context, index) };
-        if item != 0 {
-            result = item;
+        let mut window = 0;
+        if unsafe { window_at(context, index, &mut window) != 0 && marker(window, 1) != 0 }
+            && window != 0
+        {
+            marked_window = window;
+            break;
         }
+    }
+    let present = unsafe {
+        if proxy {
+            calls.proxy_batch.unwrap_unchecked()
+        } else {
+            calls.native_batch.unwrap_unchecked()
+        }
+    };
+    let result = unsafe { present(context) };
+    if marked_window != 0 {
+        unsafe { marker(marked_window, 0) };
     }
     result
 }

@@ -324,3 +324,29 @@ pub struct rsf_godot_swapchain_calls {
         ) -> u32,
     >,
 }
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_godot_present_calls {
+    pub proxy_at: ::core::option::Option<
+        unsafe extern "C" fn(context: *mut ::core::ffi::c_void, index: u32) -> u32,
+    >,
+    pub window_at: ::core::option::Option<
+        unsafe extern "C" fn(
+            context: *mut ::core::ffi::c_void,
+            index: u32,
+            window: *mut u64,
+        ) -> u32,
+    >,
+    pub marker: ::core::option::Option<unsafe extern "C" fn(window: u64, begin: u32) -> u32>,
+    pub native_batch:
+        ::core::option::Option<unsafe extern "C" fn(context: *mut ::core::ffi::c_void) -> i32>,
+    pub proxy_batch:
+        ::core::option::Option<unsafe extern "C" fn(context: *mut ::core::ffi::c_void) -> i32>,
+    pub trace_mixed:
+        ::core::option::Option<unsafe extern "C" fn(context: *mut ::core::ffi::c_void)>,
+    pub fan_out:
+        ::core::option::Option<unsafe extern "C" fn(context: *mut ::core::ffi::c_void) -> i32>,
+    pub present_item: ::core::option::Option<
+        unsafe extern "C" fn(context: *mut ::core::ffi::c_void, index: u32) -> i32,
+    >,
+}

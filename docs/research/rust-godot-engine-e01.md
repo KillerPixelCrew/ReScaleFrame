@@ -104,3 +104,19 @@ color, depth and resolved motion and target-sized output. Final scene queries
 only its target-sized color. The D3D12 path keeps its queue and native texture
 queries, transition flush and command cache invalidation. Callback declarations
 remain in Godot and lease the same four resources in the same order.
+
+`present.rs` now selects native, single-proxy and mixed Vulkan batches through
+the generated `packet.h` table. A native batch still selects the first surface
+whose execution receipt admits a marker. A single proxy forwards the original
+request and a mixed batch preserves the extension refusal, optional wait fan-out,
+chain order and last non-success result. `vulkan.cpp` still builds the exact
+`VkSubmitInfo` and per-chain `VkPresentInfoKHR`, updates `pResults` and brackets
+each mixed item after its typed request is ready. `VulkanExecutionScope` retains
+thread-local receipt ownership from the pinned `RenderingDevice::_execute_frame`
+through the final queue/fence submit and the later Present. The patch anchors and
+submit event sites are the same as listed above.
+
+Checks cover the in-memory pinned source plan, Rust 1.94.1 formatting,
+bindgen 0.72.1 regeneration, locked offline Cargo metadata and a C++ syntax-only
+check of the graph seam. Compilation and linking of the Godot module, fixture
+execution and device behavior remain unverified.

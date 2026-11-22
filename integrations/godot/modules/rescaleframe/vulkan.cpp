@@ -8,14 +8,8 @@
 #include <stddef.h>
 
 namespace RSFGodot {
-struct MixedPresentCalls {
-    int32_t (*fan_out)(void *context);
-    int32_t (*present)(void *context, uint32_t index);
-};
 static_assert(VK_ERROR_FEATURE_NOT_PRESENT == -8);
 static_assert(sizeof(ExecutionReceipt) == 40 && offsetof(ExecutionReceipt, submitted) == 32);
-extern "C" int32_t rsf_godot_present_mixed(const MixedPresentCalls *calls, void *context,
-        uint32_t count, uint32_t has_extensions, uint32_t submitted);
 extern "C" void rsf_godot_execution_start(ExecutionReceipt *receipt, uint64_t queue, uint64_t fence,
         uint32_t supported);
 extern "C" uint32_t rsf_godot_execution_submit(ExecutionReceipt *receipt, uint64_t queue, uint64_t fence,
@@ -136,92 +130,110 @@ VkResult RenderingDeviceDriverVulkan::rescaleframe_acquire(void *opaque_chain, u
     }, &lease));
 }
 VkResult RenderingDeviceDriverVulkan::rescaleframe_present(CommandQueueID queue_id, const VkPresentInfoKHR *info, VectorView<SwapChainID> chains, bool submitted) {
-    struct PresentScope {
+    // Keep the item marker inside the lifetime of its one-chain native request.
+    struct ItemMarker {
         uint64_t window = 0;
-        void admit(RenderingContextDriver::SurfaceID id) {
-            if (window) return;
+        explicit ItemMarker(RenderingContextDriver::SurfaceID id) {
             const auto *surface = reinterpret_cast<const RenderingContextDriverVulkan::Surface *>(id);
             if (surface && RSFGodot::VulkanExecutionScope::present(surface->rescaleframe_window, true))
                 window = surface->rescaleframe_window;
         }
-        ~PresentScope() { if (window) RSFGodot::VulkanExecutionScope::present(window, false); }
+        ~ItemMarker() { if (window) RSFGodot::VulkanExecutionScope::present(window, false); }
     };
-    auto *queue = reinterpret_cast<CommandQueue *>(queue_id.id);
-    if (chains.size() == 1) {
-        auto *chain = reinterpret_cast<SwapChain *>(chains[0].id);
-        if (chain->rescaleframe_owner) {
-            PresentScope scope;
-            scope.admit(chain->surface);
-            return VkResult(RSFGodot::vk_present(chain->rescaleframe_owner, info));
+    struct Context {
+        RenderingDeviceDriverVulkan &driver;
+        CommandQueueID queue_id;
+        const VkPresentInfoKHR &info;
+        const VectorView<SwapChainID> &chains;
+        bool submitted;
+
+        const SwapChain *chain(uint32_t index) const {
+            return reinterpret_cast<const SwapChain *>(chains[index].id);
         }
-    }
-    bool has_proxy = false;
-    for (uint32_t i = 0; i < chains.size(); ++i) has_proxy |= reinterpret_cast<SwapChain *>(chains[i].id)->rescaleframe_owner != nullptr;
-    auto graphics = queue_families[queue->queue_family][queue->queue_index].queue;
-    if (has_proxy) {
-        if (OS::get_singleton()->has_environment("RSF_GODOT_WSI_TRACE")) {
-            static uint32_t diagnostics = 0;
-            if (diagnostics++ < 3) {
-                print_line(vformat("RSF WSI mixed: submitted=%d chains=%d waits=%d", int(submitted), chains.size(), info->waitSemaphoreCount));
-                for (uint32_t i = 0; i < info->waitSemaphoreCount; ++i) print_line(vformat("RSF WSI wait=%d", uint64_t(info->pWaitSemaphores[i])));
-                for (uint32_t i = 0; i < chains.size(); ++i) {
-                    const auto *chain = reinterpret_cast<SwapChain *>(chains[i].id);
-                    print_line(vformat("RSF WSI chain=%d proxy=%d image=%d semaphore=%d", uint64_t(chain->vk_swapchain), int(chain->rescaleframe_owner != nullptr),
-                        chain->image_index, uint64_t(chain->present_semaphores[chain->image_index])));
+        VkQueue graphics() const {
+            const auto *queue = reinterpret_cast<const CommandQueue *>(queue_id.id);
+            return driver.queue_families[queue->queue_family][queue->queue_index].queue;
+        }
+        uint64_t native_present() const {
+            return reinterpret_cast<uint64_t>(driver.device_functions.QueuePresentKHR);
+        }
+    } context{*this, queue_id, *info, chains, submitted};
+    static constexpr rsf_godot_present_calls calls{
+        [](void *opaque, uint32_t index) -> uint32_t {
+            return static_cast<const Context *>(opaque)->chain(index)->rescaleframe_owner != nullptr;
+        },
+        [](void *opaque, uint32_t index, uint64_t *window) -> uint32_t {
+            const auto id = static_cast<const Context *>(opaque)->chain(index)->surface;
+            const auto *surface = reinterpret_cast<const RenderingContextDriverVulkan::Surface *>(id);
+            if (!surface) return 0;
+            *window = surface->rescaleframe_window;
+            return 1;
+        },
+        [](uint64_t window, uint32_t begin) -> uint32_t {
+            return RSFGodot::VulkanExecutionScope::present(window, begin != 0);
+        },
+        [](void *opaque) -> int32_t {
+            const auto &batch = *static_cast<const Context *>(opaque);
+            return RSFGodot::vk_native_present(batch.native_present(), batch.graphics(), &batch.info);
+        },
+        [](void *opaque) -> int32_t {
+            const auto &batch = *static_cast<const Context *>(opaque);
+            return RSFGodot::vk_present(batch.chain(0)->rescaleframe_owner, &batch.info);
+        },
+        [](void *opaque) {
+            const auto &batch = *static_cast<const Context *>(opaque);
+            const auto &chains = batch.chains;
+            const auto *info = &batch.info;
+            const bool submitted = batch.submitted;
+            if (OS::get_singleton()->has_environment("RSF_GODOT_WSI_TRACE")) {
+                static uint32_t diagnostics = 0;
+                if (diagnostics++ < 3) {
+                    print_line(vformat("RSF WSI mixed: submitted=%d chains=%d waits=%d", int(submitted), chains.size(), info->waitSemaphoreCount));
+                    for (uint32_t i = 0; i < info->waitSemaphoreCount; ++i) print_line(vformat("RSF WSI wait=%d", uint64_t(info->pWaitSemaphores[i])));
+                    for (uint32_t i = 0; i < chains.size(); ++i) {
+                        const auto *chain = reinterpret_cast<SwapChain *>(chains[i].id);
+                        print_line(vformat("RSF WSI chain=%d proxy=%d image=%d semaphore=%d", uint64_t(chain->vk_swapchain), int(chain->rescaleframe_owner != nullptr),
+                            chain->image_index, uint64_t(chain->present_semaphores[chain->image_index])));
+                    }
                 }
             }
-        }
-        struct Context {
-            VkQueue graphics;
-            const VkPresentInfoKHR &info;
-            const VectorView<SwapChainID> &chains;
-            uint64_t native_present;
-        } context{graphics, *info, chains, reinterpret_cast<uint64_t>(device_functions.QueuePresentKHR)};
-        static constexpr RSFGodot::MixedPresentCalls calls{
-            [](void *opaque) -> int32_t {
-                const auto &batch = *static_cast<const Context *>(opaque);
-                LocalVector<VkPipelineStageFlags> stages;
-                stages.resize(batch.info.waitSemaphoreCount);
-                for (uint32_t i = 0; i < stages.size(); ++i) stages[i] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-                LocalVector<VkSemaphore> signals;
-                for (uint32_t i = 0; i < batch.chains.size(); ++i) {
-                    const auto *chain = reinterpret_cast<SwapChain *>(batch.chains[i].id);
-                    signals.push_back(chain->present_semaphores[chain->image_index]);
-                }
-                VkSubmitInfo submit{};
-                submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-                submit.waitSemaphoreCount = batch.info.waitSemaphoreCount;
-                submit.pWaitSemaphores = batch.info.pWaitSemaphores;
-                submit.pWaitDstStageMask = stages.ptr();
-                submit.signalSemaphoreCount = signals.size();
-                submit.pSignalSemaphores = signals.ptr();
-                return vkQueueSubmit(batch.graphics, 1, &submit, VK_NULL_HANDLE);
-            },
-            [](void *opaque, uint32_t index) -> int32_t {
-                const auto &batch = *static_cast<const Context *>(opaque);
-                const auto *chain = reinterpret_cast<SwapChain *>(batch.chains[index].id);
-                VkPresentInfoKHR one = batch.info;
-                one.swapchainCount = one.waitSemaphoreCount = 1;
-                one.pSwapchains = &chain->vk_swapchain;
-                one.pImageIndices = &chain->image_index;
-                one.pWaitSemaphores = &chain->present_semaphores[chain->image_index];
-                one.pResults = batch.info.pResults ? &batch.info.pResults[index] : nullptr;
-                PresentScope scope;
-                scope.admit(chain->surface);
-                const auto item = chain->rescaleframe_owner ? VkResult(RSFGodot::vk_present(chain->rescaleframe_owner, &one)) :
-                    VkResult(RSFGodot::vk_native_present(batch.native_present, batch.graphics, &one));
-                if (one.pResults) *one.pResults = item;
-                return item;
-            },
-        };
-        return VkResult(RSFGodot::rsf_godot_present_mixed(&calls, &context, chains.size(), info->pNext != nullptr, submitted));
-    }
-    PresentScope scope;
-    for (uint32_t i = 0; i < chains.size(); ++i) {
-        const auto *chain = reinterpret_cast<const SwapChain *>(chains[i].id);
-        scope.admit(chain->surface);
-    }
-    return VkResult(RSFGodot::vk_native_present(reinterpret_cast<uint64_t>(device_functions.QueuePresentKHR), graphics, info));
+        },
+        [](void *opaque) -> int32_t {
+            const auto &batch = *static_cast<const Context *>(opaque);
+            LocalVector<VkPipelineStageFlags> stages;
+            stages.resize(batch.info.waitSemaphoreCount);
+            for (uint32_t i = 0; i < stages.size(); ++i) stages[i] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+            LocalVector<VkSemaphore> signals;
+            for (uint32_t i = 0; i < batch.chains.size(); ++i) {
+                const auto *chain = batch.chain(i);
+                signals.push_back(chain->present_semaphores[chain->image_index]);
+            }
+            VkSubmitInfo submit{};
+            submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            submit.waitSemaphoreCount = batch.info.waitSemaphoreCount;
+            submit.pWaitSemaphores = batch.info.pWaitSemaphores;
+            submit.pWaitDstStageMask = stages.ptr();
+            submit.signalSemaphoreCount = signals.size();
+            submit.pSignalSemaphores = signals.ptr();
+            return vkQueueSubmit(batch.graphics(), 1, &submit, VK_NULL_HANDLE);
+        },
+        [](void *opaque, uint32_t index) -> int32_t {
+            const auto &batch = *static_cast<const Context *>(opaque);
+            const auto *chain = batch.chain(index);
+            VkPresentInfoKHR one = batch.info;
+            one.swapchainCount = one.waitSemaphoreCount = 1;
+            one.pSwapchains = &chain->vk_swapchain;
+            one.pImageIndices = &chain->image_index;
+            one.pWaitSemaphores = &chain->present_semaphores[chain->image_index];
+            one.pResults = batch.info.pResults ? &batch.info.pResults[index] : nullptr;
+            ItemMarker marker(chain->surface);
+            const auto item = chain->rescaleframe_owner ? VkResult(RSFGodot::vk_present(chain->rescaleframe_owner, &one)) :
+                VkResult(RSFGodot::vk_native_present(batch.native_present(), batch.graphics(), &one));
+            if (one.pResults) *one.pResults = item;
+            return item;
+        },
+    };
+    return VkResult(rsf_godot_present_batch(&calls, &context, chains.size(), info->pNext != nullptr, submitted));
 }
 
 void *RenderingDeviceDriverVulkan::rescaleframe_begin(CommandBufferID id) {

@@ -11,7 +11,7 @@ if subprocess.check_output([bindgen, "--version"], text=True).strip() != "bindge
 
 bindings = subprocess.check_output([
     bindgen, str(module / "packet.h"),
-    "--allowlist-type", "rsf_(godot_(packet_sources|driver_packet|packet_calls|swapchain_calls)|fgvk_setup)",
+    "--allowlist-type", "rsf_(godot_(packet_sources|driver_packet|packet_calls|swapchain_calls|present_calls)|fgvk_setup)",
     "--allowlist-var", "RSF_((GODOT|FGVK|SRVK)_ABI_VERSION|GODOT_CHAIN_.*)",
     "--blocklist-type", "rsf_camera_frame",
     "--raw-line", "#![allow(non_camel_case_types, dead_code)]",

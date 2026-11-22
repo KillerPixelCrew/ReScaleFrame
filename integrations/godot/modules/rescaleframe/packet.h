@@ -35,6 +35,17 @@ typedef struct rsf_godot_swapchain_calls {
     uint32_t (*create)(const void *setup, void **owner, uint64_t *chain);
 } rsf_godot_swapchain_calls;
 
+typedef struct rsf_godot_present_calls {
+    uint32_t (*proxy_at)(void *context, uint32_t index);
+    uint32_t (*window_at)(void *context, uint32_t index, uint64_t *window);
+    uint32_t (*marker)(uint64_t window, uint32_t begin);
+    int32_t (*native_batch)(void *context);
+    int32_t (*proxy_batch)(void *context);
+    void (*trace_mixed)(void *context);
+    int32_t (*fan_out)(void *context);
+    int32_t (*present_item)(void *context, uint32_t index);
+} rsf_godot_present_calls;
+
 #define RSF_GODOT_CHAIN_SKIPPED 0u
 #define RSF_GODOT_CHAIN_REFUSED 1u
 #define RSF_GODOT_CHAIN_CREATED 2u
@@ -48,6 +59,8 @@ extern "C" void rsf_godot_packet_execute(const rsf_godot_driver_packet *packet,
         const rsf_godot_packet_calls *calls, void *context);
 extern "C" uint32_t rsf_godot_swapchain_setup(rsf_fgvk_setup *setup,
         const rsf_godot_swapchain_calls *calls, void *context, void **owner, uint64_t *chain);
+extern "C" int32_t rsf_godot_present_batch(const rsf_godot_present_calls *calls, void *context,
+        uint32_t count, uint32_t has_extensions, uint32_t submitted);
 extern "C" void rsf_godot_execution_pass(uint32_t role, uint64_t session, uint64_t source, uint64_t window,
         rsf_game_render_pass *out);
 #endif
