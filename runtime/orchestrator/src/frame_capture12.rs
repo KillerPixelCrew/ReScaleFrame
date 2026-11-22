@@ -672,7 +672,7 @@ unsafe extern "C" fn rsf_core_capture12_abandon(owner: *const Owner, slot: u32) 
 // Public capture readers use the same owner as the embedded backends without
 // the environment-driven capture window.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump12_create(out: *mut *mut Owner) -> i32 {
+unsafe extern "C" fn rsf_input_dump12_create(out: *mut *mut Owner) -> i32 {
     if out.is_null() {
         return INVALID;
     }
@@ -683,7 +683,7 @@ unsafe extern "C" fn rsf_core_dump12_create(out: *mut *mut Owner) -> i32 {
 
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
-unsafe extern "C" fn rsf_core_dump12_record(
+unsafe extern "C" fn rsf_input_dump12_record(
     owner: *const Owner,
     list: Handle,
     source: Handle,
@@ -728,7 +728,7 @@ unsafe extern "C" fn rsf_core_dump12_record(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump12_submitted(
+unsafe extern "C" fn rsf_input_dump12_submitted(
     owner: *const Owner,
     queue: Handle,
     slot: u32,
@@ -746,7 +746,7 @@ unsafe extern "C" fn rsf_core_dump12_submitted(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump12_poll(owner: *const Owner) -> i32 {
+unsafe extern "C" fn rsf_input_dump12_poll(owner: *const Owner) -> i32 {
     let Some(owner) = (unsafe { self::owner(owner) }) else {
         return INVALID;
     };
@@ -758,12 +758,12 @@ unsafe extern "C" fn rsf_core_dump12_poll(owner: *const Owner) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump12_abandon(owner: *const Owner, slot: u32) {
+unsafe extern "C" fn rsf_input_dump12_abandon(owner: *const Owner, slot: u32) {
     unsafe { rsf_core_capture12_abandon(owner, slot) };
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump12_destroy(owner: *mut Owner) -> i32 {
+unsafe extern "C" fn rsf_input_dump12_destroy(owner: *mut Owner) -> i32 {
     let Some(capture) = (unsafe { self::owner(owner) }) else {
         return OK;
     };

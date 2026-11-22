@@ -3,7 +3,7 @@ use super::*;
 use crate::texture_dump::{PackedRows, pixel_bytes};
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_configure(
+unsafe extern "C" fn rsf_input_dump_configure(
     directory: *const c_char,
     game: *const c_char,
     hash: *const c_char,
@@ -27,7 +27,7 @@ unsafe extern "C" fn rsf_core_dump_configure(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_dump_request() {
+extern "C" fn rsf_input_dump_request() {
     let now = clock();
     owner(|owner| {
         if owner.directory.is_none() {
@@ -38,7 +38,7 @@ extern "C" fn rsf_core_dump_request() {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_dump_cancel(session: u64) {
+extern "C" fn rsf_input_dump_cancel(session: u64) {
     owner(|owner| {
         if owner.capture.as_ref().is_some_and(|capture| {
             session == 0 || capture.session() == 0 || capture.session() == session
@@ -49,13 +49,13 @@ extern "C" fn rsf_core_dump_cancel(session: u64) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_dump_poll() {
+extern "C" fn rsf_input_dump_poll() {
     let now = clock();
     owner(|owner| owner.poll(&now));
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_dump_begin_record(
+pub(crate) unsafe extern "C" fn rsf_input_dump_begin_record(
     input: *const rsf_frame_record,
     backend: u32,
 ) -> i32 {
@@ -82,7 +82,7 @@ pub(crate) unsafe extern "C" fn rsf_core_dump_begin_record(
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_dump_wants(input: *const rsf_frame_record) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_input_dump_wants(input: *const rsf_frame_record) -> i32 {
     i32::from(unsafe { record(input) }.is_some_and(|frame| {
         owner(|owner| {
             owner
@@ -94,7 +94,7 @@ pub(crate) unsafe extern "C" fn rsf_core_dump_wants(input: *const rsf_frame_reco
 }
 
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_core_dump_wants_frame(frame: u64) -> i32 {
+pub(crate) extern "C" fn rsf_input_dump_wants_frame(frame: u64) -> i32 {
     i32::from(owner(|owner| {
         owner
             .capture
@@ -105,7 +105,7 @@ pub(crate) extern "C" fn rsf_core_dump_wants_frame(frame: u64) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_current(output: *mut rsf_frame_record) -> i32 {
+unsafe extern "C" fn rsf_input_dump_current(output: *mut rsf_frame_record) -> i32 {
     let Some(selected) = owner(|owner| owner.capture.as_ref().and_then(|capture| capture.record))
     else {
         return 0;
@@ -120,12 +120,12 @@ unsafe extern "C" fn rsf_core_dump_current(output: *mut rsf_frame_record) -> i32
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_dump_requested() -> i32 {
+extern "C" fn rsf_input_dump_requested() -> i32 {
     i32::from(owner(|owner| owner.capture.is_some()))
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_dump_reserve(
+pub(crate) unsafe extern "C" fn rsf_input_dump_reserve(
     input: *const rsf_frame_record,
     name: *const c_char,
     description: *const c_char,
@@ -160,7 +160,7 @@ pub(crate) unsafe extern "C" fn rsf_core_dump_reserve(
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_dump_failed(
+pub(crate) unsafe extern "C" fn rsf_input_dump_failed(
     ticket: u64,
     name: *const c_char,
     result: i32,
@@ -189,7 +189,7 @@ pub(crate) unsafe extern "C" fn rsf_core_dump_failed(
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_dump_pixels(
+pub(crate) unsafe extern "C" fn rsf_input_dump_pixels(
     ticket: u64,
     name: *const c_char,
     input: *const Pixels,
@@ -246,7 +246,7 @@ pub(crate) unsafe extern "C" fn rsf_core_dump_pixels(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_complete(input: *const rsf_frame_record, result: i32) {
+unsafe extern "C" fn rsf_input_dump_complete(input: *const rsf_frame_record, result: i32) {
     if let Some(frame) = unsafe { record(input) } {
         owner(|owner| {
             if owner
@@ -262,20 +262,20 @@ unsafe extern "C" fn rsf_core_dump_complete(input: *const rsf_frame_record, resu
 
 // Preserve the native entry points. A frame record cannot identify a submitted batch.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_dump_gpu_submission(_: *const rsf_frame_record) -> u64 {
+extern "C" fn rsf_input_dump_gpu_submission(_: *const rsf_frame_record) -> u64 {
     0
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_dump_gpu_completed(_: u64, _: u32, _: *mut c_void) {}
+extern "C" fn rsf_input_dump_gpu_completed(_: u64, _: u32, _: *mut c_void) {}
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_dump_gpu_ready(_: u64, _: *const c_char, _: u32, _: *mut c_void) -> i32 {
+extern "C" fn rsf_input_dump_gpu_ready(_: u64, _: *const c_char, _: u32, _: *mut c_void) -> i32 {
     0
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_texture_record(
+unsafe extern "C" fn rsf_input_dump_texture_record(
     context: *mut c_void,
     input: *const rsf_frame_record,
     name: *const c_char,
@@ -302,7 +302,7 @@ unsafe extern "C" fn rsf_core_dump_texture_record(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_named_texture(
+unsafe extern "C" fn rsf_input_dump_named_texture(
     context: *mut c_void,
     source: *mut c_void,
     request: *const NamedRequest,
@@ -365,7 +365,7 @@ unsafe extern "C" fn rsf_core_dump_named_texture(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_pass_metadata(input: *const rsf_game_render_pass) {
+unsafe extern "C" fn rsf_input_dump_pass_metadata(input: *const rsf_game_render_pass) {
     let Some(pass) = (unsafe { checked(input) }) else {
         return;
     };
@@ -390,7 +390,7 @@ unsafe extern "C" fn rsf_core_dump_pass_metadata(input: *const rsf_game_render_p
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_result(
+unsafe extern "C" fn rsf_input_dump_result(
     input: *const rsf_frame_record,
     stage: *const c_char,
     backend: u32,
@@ -425,7 +425,7 @@ unsafe extern "C" fn rsf_core_dump_result(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_sr_frame(
+unsafe extern "C" fn rsf_input_dump_sr_frame(
     input: *const rsf_sr_frame,
     backend: u32,
     input_sdr: u32,
@@ -457,7 +457,7 @@ fn publish_sr_parameters(
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_dump_capture_sr_parameters(
+pub(crate) unsafe extern "C" fn rsf_capture_sr_parameters(
     input: *const rsf_frame_record,
     backend: u32,
     motion_x: f32,

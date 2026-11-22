@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
-use super::{Clock, Encoding, INVALID, Pixels, Surface, TextureOptions};
+use super::{Clock, Encoding, Pixels, Surface, TextureOptions};
 use rsf_game_sys::rsf_game_depth_domains;
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::OnceLock;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_DEVICE_CONTEXT_IMMEDIATE, D3D11_TEXTURE2D_DESC, ID3D11DeviceContext, ID3D11Predicate,
     ID3D11Texture2D,
@@ -75,23 +74,28 @@ pub(super) unsafe fn backbuffer(chain: *mut c_void) -> *mut c_void {
 
 type Handle = *mut c_void;
 
-#[repr(C)]
-struct Services {
-    struct_size: u32,
-    hash: unsafe extern "C" fn(*const u16, u32, *mut u8) -> u32,
-    raw: unsafe extern "C" fn(Handle, Handle, Handle, *const TextureOptions) -> i32,
-    png: unsafe extern "C" fn(Handle, Handle, Handle, *const TextureOptions, Handle) -> i32,
-    pixels_png: unsafe extern "C" fn(*const Pixels, *const TextureOptions, Handle) -> i32,
-    depth_domains_requested: unsafe extern "C" fn(*const rsf_game_depth_domains) -> u32,
-}
-
-const _: () = assert!(size_of::<Services>() == 48);
-static SERVICES: OnceLock<&'static Services> = OnceLock::new();
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_dump_bind_services(services: &'static Services) {
-    assert_eq!(services.struct_size as usize, size_of::<Services>());
-    let _ = SERVICES.set(services);
+// The common file hasher and the D3D11 texture encoders, from the native archives the Runtime
+// links beside this crate.
+unsafe extern "C" {
+    fn rsf_common_sha256_file(path: *const u16, share: u32, digest: *mut u8) -> u32;
+    fn rsf_dump_texture_bytes(
+        device: Handle,
+        context: Handle,
+        texture: Handle,
+        options: *const TextureOptions,
+    ) -> i32;
+    fn rsf_dump_texture_png(
+        device: Handle,
+        context: Handle,
+        texture: Handle,
+        options: *const TextureOptions,
+        report: Handle,
+    ) -> i32;
+    fn rsf_dump_pixels_png(
+        pixels: *const Pixels,
+        options: *const TextureOptions,
+        report: Handle,
+    ) -> i32;
 }
 
 pub(super) fn executable_hash(path: &[u16]) -> String {
@@ -99,13 +103,14 @@ pub(super) fn executable_hash(path: &[u16]) -> String {
         FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
     };
     let mut digest = [0; 32];
-    if !SERVICES.get().is_some_and(|services| unsafe {
-        (services.hash)(
+    if unsafe {
+        rsf_common_sha256_file(
             path.as_ptr(),
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             digest.as_mut_ptr(),
-        ) != 0
-    }) {
+        )
+    } == 0
+    {
         return String::new();
     }
     use std::fmt::Write as _;
@@ -117,8 +122,8 @@ pub(super) fn executable_hash(path: &[u16]) -> String {
 }
 
 pub(super) unsafe fn depth_domains_requested(value: *const rsf_game_depth_domains) -> u32 {
-    SERVICES.get().map_or(0, |services| unsafe {
-        (services.depth_domains_requested)(value)
+    unsafe { value.as_ref() }.map_or(0, |value| {
+        u32::from(rsf_game_sys::depth_domains_requested(value))
     })
 }
 
@@ -149,9 +154,7 @@ pub(super) unsafe fn encode_texture(
     include_raw: u32,
     result: &mut Encoding,
 ) {
-    let (Some(services), Some(immediate)) = (SERVICES.get(), unsafe {
-        ID3D11DeviceContext::from_raw_borrowed(&context)
-    }) else {
+    let Some(immediate) = (unsafe { ID3D11DeviceContext::from_raw_borrowed(&context) }) else {
         return;
     };
     let Ok(device) = (unsafe { immediate.GetDevice() }) else {
@@ -167,14 +170,13 @@ pub(super) unsafe fn encode_texture(
         immediate.GetPredication(Some(&mut predicate.saved), Some(&mut predicate.value));
         immediate.SetPredication(None::<&ID3D11Predicate>, false);
         if include_raw != 0 {
-            result.raw = (services.raw)(device.as_raw(), context, source, options);
+            result.raw = rsf_dump_texture_bytes(device.as_raw(), context, source, options);
         }
-        result.preview = (services.png)(device.as_raw(), context, source, options, ptr::null_mut());
+        result.preview =
+            rsf_dump_texture_png(device.as_raw(), context, source, options, ptr::null_mut());
     }
 }
 
 pub(super) unsafe fn preview_pixels(pixels: *const Pixels, options: *const TextureOptions) -> i32 {
-    SERVICES.get().map_or(INVALID, |services| unsafe {
-        (services.pixels_png)(pixels, options, ptr::null_mut())
-    })
+    unsafe { rsf_dump_pixels_png(pixels, options, ptr::null_mut()) }
 }

@@ -2,7 +2,7 @@
 use super::{Handle, Layout, Platform, SUBMITTED};
 use crate::d3d12_fence::rsf_core_d3d12_wait_fence;
 use crate::input_dump::abi::{
-    rsf_core_dump_failed, rsf_core_dump_pixels, rsf_core_dump_reserve, rsf_core_dump_wants,
+    rsf_input_dump_failed, rsf_input_dump_pixels, rsf_input_dump_reserve, rsf_input_dump_wants,
 };
 use std::mem::ManuallyDrop;
 use std::ptr;
@@ -273,8 +273,8 @@ pub(super) static PLATFORM: Platform = Platform {
     signal,
     completed,
     drain,
-    wants: rsf_core_dump_wants,
-    reserve: rsf_core_dump_reserve,
-    failed: rsf_core_dump_failed,
-    pixels: rsf_core_dump_pixels,
+    wants: rsf_input_dump_wants,
+    reserve: rsf_input_dump_reserve,
+    failed: rsf_input_dump_failed,
+    pixels: rsf_input_dump_pixels,
 };

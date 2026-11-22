@@ -136,11 +136,6 @@ fn native_leaves() {
         ],
         &["RSF_RUNTIME_BUILD", "RSF_STREAMLINE_HOST_BUILD"],
     );
-    native_leaf(
-        "rsf_frame_dump",
-        &["src/input_dump.c"],
-        &["RSF_RUNTIME_BUILD"],
-    );
     native_leaf("rsf_graphics", &["../graphics/src/texture_dump.c"], &[]);
     native_leaf(
         "rsf_presentation",

@@ -12,7 +12,7 @@ unsafe fn capture_batch(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_pass(
+unsafe extern "C" fn rsf_input_dump_pass(
     context: *mut c_void,
     input: *const rsf_game_render_pass,
     begin: u32,
@@ -113,7 +113,7 @@ unsafe extern "C" fn rsf_core_dump_pass(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_texture(
+unsafe extern "C" fn rsf_input_dump_texture(
     context: *mut c_void,
     name: *const c_char,
     description: *const c_char,
@@ -136,14 +136,14 @@ unsafe extern "C" fn rsf_core_dump_texture(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_dump_active() -> i32 {
+extern "C" fn rsf_input_dump_active() -> i32 {
     i32::from(owner(|owner| {
         owner.capture.as_ref().is_some_and(|capture| capture.in_sr)
     }))
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_sr(
+unsafe extern "C" fn rsf_input_dump_sr(
     context: *mut c_void,
     input: *const rsf_dlss_frame,
     backend: u32,
@@ -224,7 +224,7 @@ unsafe extern "C" fn rsf_core_dump_sr(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_dump_sr_result(result: i32) {
+extern "C" fn rsf_input_dump_sr_result(result: i32) {
     owner(|owner| {
         if let Some(capture) = owner.capture.as_mut().filter(|capture| capture.in_sr) {
             capture.sr_result = Some(result);
@@ -233,7 +233,7 @@ extern "C" fn rsf_core_dump_sr_result(result: i32) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_fg(
+unsafe extern "C" fn rsf_input_dump_fg(
     context: *mut c_void,
     pass: *const rsf_game_render_pass,
     input: *const rsf_dlss_frame,
@@ -274,7 +274,7 @@ unsafe extern "C" fn rsf_core_dump_fg(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_fg_prepare(
+unsafe extern "C" fn rsf_input_dump_fg_prepare(
     pass: *const rsf_game_render_pass,
     input: *const rsf_fg_frame,
     result: i32,
@@ -308,7 +308,7 @@ unsafe extern "C" fn rsf_core_dump_fg_prepare(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_present(
+unsafe extern "C" fn rsf_input_dump_present(
     chain: *mut c_void,
     context: *mut c_void,
     input: *const rsf_game_render_pass,
@@ -355,7 +355,7 @@ unsafe extern "C" fn rsf_core_dump_present(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_presented(input: *const rsf_game_render_pass, result: i32) {
+unsafe extern "C" fn rsf_input_dump_presented(input: *const rsf_game_render_pass, result: i32) {
     let Some(pass) = (unsafe { checked(input) }) else {
         return;
     };

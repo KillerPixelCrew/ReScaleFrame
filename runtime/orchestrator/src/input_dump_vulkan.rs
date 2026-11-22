@@ -6,7 +6,7 @@ use crate::frame_capture_vk::{
     rsf_core_capture_vk_flush, rsf_core_capture_vk_pending, rsf_core_capture_vk_ready,
     rsf_core_capture_vk_record,
 };
-use crate::input_dump::abi::rsf_core_dump_wants;
+use crate::input_dump::abi::rsf_input_dump_wants;
 use crate::sr_session::has_capacity;
 use crate::sys::{
     RSF_SRVK_ABI_VERSION, rsf_input_dump_vk_setup as Setup, rsf_srvk_image as Image,
@@ -328,7 +328,7 @@ unsafe extern "C" fn rsf_input_dump_vk_snapshot(
     let Ok(mut owner) = owner.try_lock() else {
         return NOT_READY;
     };
-    if unsafe { rsf_core_dump_wants(record) } == 0 {
+    if unsafe { rsf_input_dump_wants(record) } == 0 {
         return 0;
     }
     owner.snapshot(record, unsafe { &*image }, name)

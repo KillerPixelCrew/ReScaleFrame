@@ -783,8 +783,7 @@ unsafe fn capture_texture(
     owner(|owner| owner.finish_image(&work, result))
 }
 
-/// The GameSDK depth-domain predicate for native callers: the capture services in input_dump.c
-/// and the DLL export. It is defined here, not in rsf-game-sys, so a binary that links several
+/// The GameSDK depth-domain predicate for native callers and the DLL export. It is defined here, not in rsf-game-sys, so a binary that links several
 /// Rust archives defines it once.
 ///
 /// # Safety

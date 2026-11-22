@@ -2,10 +2,11 @@
 # and directly into the research proxy, which is what actually gets loaded into the game today.
 # Compiling it twice, or requiring the runtime DLL beside the game executable before anything works,
 # would both be worse.
-add_library(rsf_frame_dump STATIC src/input_dump.c)
-target_include_directories(rsf_frame_dump PUBLIC include "${CMAKE_SOURCE_DIR}/runtime/backends/dlss/include")
-target_compile_definitions(rsf_frame_dump PRIVATE RSF_RUNTIME_BUILD)
-target_link_libraries(rsf_frame_dump PUBLIC ReScaleFrame::Graphics ReScaleFrame::Contract ReScaleFrame::GameSDK ReScaleFrame::RuntimeCommon PRIVATE rsf_build_options)
+# The capture readers (rsf_input_dump*) are Rust exports in the Runtime archive; this target carries
+# their headers and that archive.
+add_library(rsf_frame_dump INTERFACE)
+target_include_directories(rsf_frame_dump INTERFACE include "${CMAKE_SOURCE_DIR}/runtime/backends/dlss/include")
+target_link_libraries(rsf_frame_dump INTERFACE ReScaleFrame::Graphics ReScaleFrame::Contract ReScaleFrame::GameSDK ReScaleFrame::RuntimeCommon)
 add_library(ReScaleFrame::FrameDump ALIAS rsf_frame_dump)
 # Readback helpers in the backend libraries share the same capture owner as the host.
 foreach(rsf_dump_backend rsf_fsr rsf_xess)
@@ -58,7 +59,7 @@ endif()
 target_link_libraries(rsf_orchestrator_rust INTERFACE minhook rsf_runtime_leaves version)
 target_link_libraries(rsf_orchestrator_core PUBLIC rsf_orchestrator_rust)
 target_link_libraries(rsf_native_cpu INTERFACE rsf_orchestrator_rust)
-target_link_libraries(rsf_frame_dump PRIVATE rsf_orchestrator_rust)
+target_link_libraries(rsf_frame_dump INTERFACE rsf_orchestrator_rust)
 target_compile_definitions(rsf_orchestrator_core PRIVATE RSF_STREAMLINE_HOST_BUILD)
 # Public because the orchestrator's own headers name a backend's frame structure and the decode
 # pass's parameters.
