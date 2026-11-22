@@ -4,7 +4,6 @@
 #include "input_ownership.h"
 #include <windows.h>
 #include <atomic>
-#include <cstring>
 #include <cstdio>
 #if defined(_MSC_VER)
 #include <intrin.h>
@@ -39,6 +38,7 @@ static_assert(sizeof(CpuServices) == sizeof(rsf_game_host_services) + 8 &&
 static_assert(sizeof(CpuStartRefusal) == 16);
 }
 extern "C" {
+bool rsf_skyrim_guarded_read(uintptr_t, void*, size_t) noexcept;
 bool rsf_skyrim_cpu_manager_state(ManagerState*) noexcept;
 bool rsf_skyrim_cpu_is_input_manager(uintptr_t) noexcept;
 bool rsf_skyrim_cpu_is_player_controls(uintptr_t) noexcept;
@@ -296,19 +296,6 @@ const CpuDetours cpu_detours{sizeof(CpuDetours), 1, {
 
 template<class Function> Function continuation(HookIndex index) noexcept {
     return reinterpret_cast<Function>(rsf_skyrim_cpu_original(index));
-}
-bool copy_input(void* out, const void* pointer, size_t size) noexcept {
-#if defined(_MSC_VER)
-    __try { std::memcpy(out, pointer, size); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-#else
-    MEMORY_BASIC_INFORMATION memory{};
-    const auto address = uintptr_t(pointer);
-    if (!VirtualQuery(pointer, &memory, sizeof(memory)) || memory.State != MEM_COMMIT ||
-        (memory.Protect & (PAGE_NOACCESS | PAGE_GUARD)) || address + size < address ||
-        address + size > uintptr_t(memory.BaseAddress) + memory.RegionSize) return false;
-    std::memcpy(out, pointer, size); return true;
-#endif
 }
 uint32_t jobs_submit()
 {
@@ -756,9 +743,7 @@ void cpu_render_diagnostic(const char* stage, const rsf_game_render_pass& pass) 
     try { frame.services.host.log(frame.services.host.user, message); } catch (...) {}
 }
 uint32_t cpu_input_kinds(const void* list) noexcept {
-    return rsf_skyrim_cpu_input_kinds(uintptr_t(list), [](uintptr_t address, void* out, size_t size) noexcept {
-        return copy_input(out, reinterpret_cast<const void*>(address), size);
-    });
+    return rsf_skyrim_cpu_input_kinds(uintptr_t(list), rsf_skyrim_guarded_read);
 }
 bool cpu_input_consumption(CpuInputConsumption& result) noexcept {
     result = {};

@@ -11,7 +11,6 @@
 #include <windows.h>
 #include <d3d11.h>
 #include <cstddef>
-#include <cstring>
 #if defined(_MSC_VER)
 #include <intrin.h>
 #endif
@@ -29,19 +28,6 @@ static_assert(sizeof(rsf_skyrim_creation_call) == 136 && offsetof(rsf_skyrim_cre
     offsetof(rsf_skyrim_creation_call, outputs) == 104);
 static_assert(sizeof(rsf_skyrim_creation_platform) == 16 + 6 * sizeof(void*) &&
     offsetof(rsf_skyrim_creation_platform, create_detour) == 16 + sizeof(void*));
-
-bool read(uintptr_t address, void* destination, size_t size) noexcept {
-#if defined(_MSC_VER)
-    __try { std::memcpy(destination, reinterpret_cast<const void*>(address), size); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-#else
-    MEMORY_BASIC_INFORMATION memory{};
-    if (!VirtualQuery(reinterpret_cast<void*>(address), &memory, sizeof(memory)) || memory.State != MEM_COMMIT ||
-        (memory.Protect & (PAGE_NOACCESS | PAGE_GUARD)) || address + size < address ||
-        address + size > uintptr_t(memory.BaseAddress) + memory.RegionSize) return false;
-    std::memcpy(destination, reinterpret_cast<const void*>(address), size); return true;
-#endif
-}
 
 HRESULT WINAPI create(IDXGIAdapter* adapter, D3D_DRIVER_TYPE driver, HMODULE software, UINT flags,
     const D3D_FEATURE_LEVEL* levels, UINT level_count, UINT sdk, const DXGI_SWAP_CHAIN_DESC* description,
@@ -76,7 +62,7 @@ HRESULT WINAPI create(IDXGIAdapter* adapter, D3D_DRIVER_TYPE driver, HMODULE sof
 
 const rsf_skyrim_creation_platform platform{
     sizeof(rsf_skyrim_creation_platform), RSF_SKYRIM_CREATION_PLATFORM_VERSION, RSF_D3D11_HOST_ABI_VERSION, 0,
-    [](uintptr_t address, void* out, size_t size) noexcept { return out && read(address, out, size); },
+    rsf_skyrim_guarded_read,
     reinterpret_cast<const void*>(&create),
     [](const rsf_game_host_services* host, const char* message) noexcept {
         if (host && host->log) try { host->log(host->user, message); } catch (...) {}
