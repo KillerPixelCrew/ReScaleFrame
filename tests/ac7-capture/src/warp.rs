@@ -2,17 +2,17 @@
 //! The public AC7 capture ABI, observed through WARP and a hidden swap chain.
 
 use rsf_ac7::sys::*;
+use rsf_test_support::Window;
 use std::ffi::{CStr, CString, OsString, c_char, c_void};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicU32, Ordering};
-use windows::Win32::Foundation::{HINSTANCE, HMODULE, HWND};
+use windows::Win32::Foundation::{HMODULE, HWND};
 use windows::Win32::Globalization::{CP_ACP, MultiByteToWideChar, WideCharToMultiByte};
 use windows::Win32::Graphics::Direct3D::{Fxc::D3DCompile, *};
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::{Common::*, *};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{BOOL, Interface, PCSTR, PCWSTR, s, w};
 
@@ -88,59 +88,10 @@ fn from_narrow(path: &CStr) -> Test<PathBuf> {
     Ok(PathBuf::from(OsString::from_wide(&wide)))
 }
 
-struct Window {
-    handle: HWND,
-    instance: HINSTANCE,
-}
-
 const CLASS: PCWSTR = w!("RSF_MotionCaptureTest");
 
-impl Window {
-    fn create() -> Test<Self> {
-        let instance = HINSTANCE(win(unsafe { GetModuleHandleW(PCWSTR::null()) })?.0);
-        let class = WNDCLASSW {
-            lpfnWndProc: Some(default_window_procedure),
-            hInstance: instance,
-            lpszClassName: CLASS,
-            ..Default::default()
-        };
-        require(
-            unsafe { RegisterClassW(&class) } != 0,
-            "Register the capture fixture window",
-        )?;
-        let mut window = Self {
-            handle: HWND::default(),
-            instance,
-        };
-        window.handle = win(unsafe {
-            CreateWindowExW(
-                WINDOW_EX_STYLE(0),
-                CLASS,
-                w!(""),
-                WS_OVERLAPPED,
-                0,
-                0,
-                32,
-                32,
-                None,
-                None,
-                Some(instance),
-                None,
-            )
-        })?;
-        Ok(window)
-    }
-}
-
-impl Drop for Window {
-    fn drop(&mut self) {
-        unsafe {
-            if !self.handle.0.is_null() {
-                let _ = DestroyWindow(self.handle);
-            }
-            let _ = UnregisterClassW(CLASS, Some(self.instance));
-        }
-    }
+fn hidden_window() -> Test<Window> {
+    win(Window::new(CLASS, w!(""), WS_OVERLAPPED, 32, 32))
 }
 
 #[derive(Default)]
@@ -284,7 +235,7 @@ fn run() -> Test<i32> {
         on_layout: Some(layout_seen),
         ..Default::default()
     };
-    let window = Window::create()?;
+    let window = hidden_window()?;
     // Keep the actual device and its bindings alive until the hooks retire.
     let device_keepalive;
     let mut hooks = Hooks::default();
@@ -742,13 +693,3 @@ const GS_SOURCE: &str = r#"struct V{float4 p:SV_Position;};[maxvertexcount(3)]vo
 const HS_SOURCE: &str = r#"struct V{float4 p:SV_Position;};struct F{float edge[3]:SV_TessFactor;float inside:SV_InsideTessFactor;};F patch(InputPatch<V,3> v){F f;f.edge[0]=f.edge[1]=f.edge[2]=f.inside=1;return f;}[domain("tri")][partitioning("integer")][outputtopology("triangle_cw")][outputcontrolpoints(3)][patchconstantfunc("patch")]V main(InputPatch<V,3> v,uint id:SV_OutputControlPointID){return v[id];}"#;
 
 const DS_SOURCE: &str = r#"struct V{float4 p:SV_Position;};struct F{float edge[3]:SV_TessFactor;float inside:SV_InsideTessFactor;};[domain("tri")] V main(F f,float3 uv:SV_DomainLocation,const OutputPatch<V,3> v){V o;o.p=v[0].p*uv.x+v[1].p*uv.y+v[2].p*uv.z;return o;}"#;
-
-// The windows crate wraps DefWindowProcW in a Rust function; the class needs the system ABI.
-unsafe extern "system" fn default_window_procedure(
-    window: windows::Win32::Foundation::HWND,
-    message: u32,
-    wparam: windows::Win32::Foundation::WPARAM,
-    lparam: windows::Win32::Foundation::LPARAM,
-) -> windows::Win32::Foundation::LRESULT {
-    unsafe { DefWindowProcW(window, message, wparam, lparam) }
-}

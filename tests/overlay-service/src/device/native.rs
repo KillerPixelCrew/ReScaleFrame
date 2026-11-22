@@ -20,13 +20,14 @@ use windows::{
         },
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, MSG, PM_REMOVE,
-            PeekMessageW, RegisterClassW, TranslateMessage, WINDOW_EX_STYLE, WNDCLASSW,
-            WS_OVERLAPPEDWINDOW,
+            CreateWindowExW, DestroyWindow, DispatchMessageW, MSG, PM_REMOVE, PeekMessageW,
+            RegisterClassW, TranslateMessage, WINDOW_EX_STYLE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
         },
     },
     core::{BOOL, Interface, PCWSTR, w},
 };
+
+use rsf_test_support::default_window_procedure;
 
 const CLASS: PCWSTR = w!("RsfOverlayDllApiFixture");
 struct Window(HWND);
@@ -210,14 +211,4 @@ impl Graphics {
         run(&chain.ok_or(E_POINTER)?);
         Ok(())
     }
-}
-
-// The windows crate wraps DefWindowProcW in a Rust function; the class needs the system ABI.
-unsafe extern "system" fn default_window_procedure(
-    window: windows::Win32::Foundation::HWND,
-    message: u32,
-    wparam: windows::Win32::Foundation::WPARAM,
-    lparam: windows::Win32::Foundation::LPARAM,
-) -> windows::Win32::Foundation::LRESULT {
-    unsafe { DefWindowProcW(window, message, wparam, lparam) }
 }

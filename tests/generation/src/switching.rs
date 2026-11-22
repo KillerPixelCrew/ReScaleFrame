@@ -7,6 +7,7 @@ use crate::session::{
 use crate::sys::*;
 use std::ffi::{c_char, c_int};
 use std::ptr::{from_mut, null, null_mut};
+use windows::Win32::UI::WindowsAndMessaging::WS_OVERLAPPEDWINDOW;
 use windows::Win32::{
     Foundation::HWND,
     Graphics::{
@@ -109,7 +110,13 @@ unsafe extern "C" fn rsf_test_fg_switching(argc: c_int, argv: *const *const c_ch
     let Ok(fence) = (unsafe { device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) }) else {
         return 1;
     };
-    let Ok(window) = Window::new(w!("RSFFGSwitching"), w!("FG owner switching fixture")) else {
+    let Ok(window) = Window::new(
+        w!("RSFFGSwitching"),
+        w!("FG owner switching fixture"),
+        WS_OVERLAPPEDWINDOW,
+        WIDTH as i32,
+        HEIGHT as i32,
+    ) else {
         return 1;
     };
     let mut host = Host {

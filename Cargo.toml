@@ -3,6 +3,7 @@ members = [
   "ui/overlay",
   "tests/overlay",
   "tests/overlay-service",
+  "tests/support",
   "tests/capture",
   "tests/presentation",
   "tests/presentation/api",

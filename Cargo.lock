@@ -577,6 +577,7 @@ dependencies = [
  "rsf-orchestrator",
  "rsf-runtime-common",
  "rsf-shader-compiler",
+ "rsf-test-support",
  "windows",
 ]
 
@@ -671,6 +672,7 @@ version = "0.1.2"
 dependencies = [
  "rsf-bindgen",
  "rsf-game-sys",
+ "rsf-test-support",
  "windows",
  "windows-sys",
 ]
@@ -767,6 +769,7 @@ name = "rsf-overlay-service-fixtures"
 version = "0.1.2"
 dependencies = [
  "rsf-game-sys",
+ "rsf-test-support",
  "windows",
 ]
 
@@ -786,6 +789,7 @@ dependencies = [
  "rsf-bindgen",
  "rsf-game-sys",
  "rsf-orchestrator",
+ "rsf-test-support",
  "windows",
 ]
 
@@ -858,6 +862,13 @@ dependencies = [
  "cc",
  "rsf-bindgen",
  "windows-sys",
+]
+
+[[package]]
+name = "rsf-test-support"
+version = "0.1.2"
+dependencies = [
+ "windows",
 ]
 
 [[package]]

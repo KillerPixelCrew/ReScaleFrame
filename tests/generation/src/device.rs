@@ -4,17 +4,13 @@ use crate::sys::*;
 use std::ffi::{c_char, c_int, c_ulong};
 use std::ptr::null_mut;
 use windows::Win32::{
-    Foundation::{CloseHandle, HINSTANCE, HWND, WAIT_OBJECT_0},
+    Foundation::{CloseHandle, HWND, WAIT_OBJECT_0},
     Graphics::{
         Direct3D::D3D_FEATURE_LEVEL_11_0,
         Direct3D12::*,
         Dxgi::{Common::DXGI_FORMAT_R8G8B8A8_UNORM, *},
     },
-    System::{
-        LibraryLoader::GetModuleHandleW,
-        Threading::{CreateEventW, WaitForSingleObject},
-    },
-    UI::WindowsAndMessaging::*,
+    System::Threading::{CreateEventW, WaitForSingleObject},
 };
 use windows::core::{Interface, PCWSTR, Result};
 
@@ -73,66 +69,7 @@ pub(super) fn device_and_queue(
     Ok((device, queue))
 }
 
-pub(super) struct Window {
-    pub(super) handle: HWND,
-    class: PCWSTR,
-    instance: HINSTANCE,
-}
-
-impl Window {
-    pub(super) fn new(class: PCWSTR, title: PCWSTR) -> Result<Self> {
-        Self::sized(class, title, WIDTH as i32, HEIGHT as i32)
-    }
-
-    pub(super) fn sized(class: PCWSTR, title: PCWSTR, width: i32, height: i32) -> Result<Self> {
-        let instance = HINSTANCE(unsafe { GetModuleHandleW(PCWSTR::null())? }.0);
-        let wc = WNDCLASSW {
-            lpfnWndProc: Some(default_window_procedure),
-            hInstance: instance,
-            lpszClassName: class,
-            ..Default::default()
-        };
-        if unsafe { RegisterClassW(&wc) } == 0 {
-            return Err(windows::core::Error::from_thread());
-        }
-        let handle = match unsafe {
-            CreateWindowExW(
-                WINDOW_EX_STYLE(0),
-                class,
-                title,
-                WS_OVERLAPPEDWINDOW,
-                0,
-                0,
-                width,
-                height,
-                None,
-                None,
-                Some(instance),
-                None,
-            )
-        } {
-            Ok(handle) => handle,
-            Err(error) => {
-                let _ = unsafe { UnregisterClassW(class, Some(instance)) };
-                return Err(error);
-            }
-        };
-        Ok(Self {
-            handle,
-            class,
-            instance,
-        })
-    }
-}
-
-impl Drop for Window {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = DestroyWindow(self.handle);
-            let _ = UnregisterClassW(self.class, Some(self.instance));
-        }
-    }
-}
+pub(super) use rsf_test_support::Window;
 
 pub(super) fn drain(queue: &ID3D12CommandQueue, fence: &ID3D12Fence, value: u64) -> bool {
     let Ok(event) = (unsafe { CreateEventW(None, false, false, PCWSTR::null()) }) else {
@@ -190,14 +127,4 @@ pub(super) unsafe fn disabled_present(chain: Raw) -> Option<i32> {
     let _backbuffer =
         unsafe { swap.GetBuffer::<ID3D12Resource>(swap.GetCurrentBackBufferIndex()) }.ok()?;
     Some(unsafe { swap.Present(0, DXGI_PRESENT(0)) }.0)
-}
-
-// The windows crate wraps DefWindowProcW in a Rust function; the class needs the system ABI.
-unsafe extern "system" fn default_window_procedure(
-    window: windows::Win32::Foundation::HWND,
-    message: u32,
-    wparam: windows::Win32::Foundation::WPARAM,
-    lparam: windows::Win32::Foundation::LPARAM,
-) -> windows::Win32::Foundation::LRESULT {
-    unsafe { DefWindowProcW(window, message, wparam, lparam) }
 }

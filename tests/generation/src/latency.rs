@@ -13,6 +13,7 @@ use windows::Win32::Graphics::{
     Dxgi::{Common::DXGI_FORMAT_R8G8B8A8_UNORM, *},
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_SPACE};
+use windows::Win32::UI::WindowsAndMessaging::WS_OVERLAPPEDWINDOW;
 use windows::core::{Interface, w};
 
 unsafe extern "C" {
@@ -97,9 +98,10 @@ fn render(host: Raw, profile: u32) -> Result<(), i32> {
     let device = unsafe { ID3D12Device::from_raw_borrowed(&graphics.device) }.ok_or(1)?;
     let queue = unsafe { ID3D12CommandQueue::from_raw_borrowed(&graphics.queue) }.ok_or(1)?;
     let factory = unsafe { IDXGIFactory2::from_raw_borrowed(&graphics.factory) }.ok_or(1)?;
-    let window = Window::sized(
+    let window = Window::new(
         w!("RSFLatencyFixture"),
         w!("Latency service fixture"),
+        WS_OVERLAPPEDWINDOW,
         256,
         256,
     )

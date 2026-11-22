@@ -28,6 +28,7 @@ workspace = true
 [target."cfg(windows)".dependencies]
 rsf-ac7 = { path = "../../games/ac7" }
 rsf-game-sys = { path = "../../sdk/game" }
+rsf-test-support = { path = "../support" }
 rsf-orchestrator = { path = "../../runtime/orchestrator" }
 windows = { workspace = true, features = [
   "Win32_Graphics_Direct3D",

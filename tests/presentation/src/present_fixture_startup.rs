@@ -3,6 +3,7 @@
 use crate::fixture_device::{
     rsf_present_fixture_adapter, rsf_present_fixture_device11, rsf_present_fixture_device12,
 };
+use rsf_test_support::default_window_procedure;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::null_mut;
 use windows::Win32::Foundation::{HINSTANCE, HWND};
@@ -130,14 +131,4 @@ pub(super) fn show(window: HWND, foreground: bool) {
     if foreground {
         let _ = unsafe { SetForegroundWindow(window) };
     }
-}
-
-// The windows crate wraps DefWindowProcW in a Rust function; the class needs the system ABI.
-unsafe extern "system" fn default_window_procedure(
-    window: windows::Win32::Foundation::HWND,
-    message: u32,
-    wparam: windows::Win32::Foundation::WPARAM,
-    lparam: windows::Win32::Foundation::LPARAM,
-) -> windows::Win32::Foundation::LRESULT {
-    unsafe { DefWindowProcW(window, message, wparam, lparam) }
 }

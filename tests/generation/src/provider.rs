@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::device::{self, SKIP, Window};
+use crate::device::{self, HEIGHT, SKIP, WIDTH, Window};
 use crate::session::{OK, Raw};
 use crate::sys::rsf_fg_retirement;
 use crate::sys::*;
@@ -7,6 +7,7 @@ use std::ffi::{CStr, c_char, c_int};
 use std::mem::MaybeUninit;
 use std::ptr::null_mut;
 use windows::Win32::Graphics::{Direct3D12::*, Dxgi::IDXGIAdapter1};
+use windows::Win32::UI::WindowsAndMessaging::WS_OVERLAPPEDWINDOW;
 use windows::core::{Interface, PCSTR, w};
 
 // An ABI-identical raw-pointer view of exports another module declares with references.
@@ -319,7 +320,13 @@ unsafe extern "C" fn rsf_test_fg_provider(argc: c_int, argv: *const *const c_cha
         std::process::exit(1)
     };
     let debug_log = DebugLog::register(native_device);
-    let Ok(window) = Window::new(w!("RSFFGFixture"), w!("FG lifecycle fixture")) else {
+    let Ok(window) = Window::new(
+        w!("RSFFGFixture"),
+        w!("FG lifecycle fixture"),
+        WS_OVERLAPPEDWINDOW,
+        WIDTH as i32,
+        HEIGHT as i32,
+    ) else {
         drop(debug_log);
         let _ = owner.finish();
         return 1;

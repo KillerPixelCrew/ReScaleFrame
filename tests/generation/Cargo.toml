@@ -17,6 +17,7 @@ workspace = true
 
 [target."cfg(windows)".dependencies]
 rsf-game-sys = { path = "../../sdk/game" }
+rsf-test-support = { path = "../support" }
 windows = { workspace = true, features = [
   "Win32_Graphics_Direct3D",
   "Win32_Graphics_Direct3D12",
