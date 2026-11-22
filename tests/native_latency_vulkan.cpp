@@ -70,8 +70,10 @@ int VulkanStorySlSetReflexInterval(int mode, uint32_t interval) {
     require((mode==1 && interval==12345) || (xell_mode==1 && mode==0 && interval==0), "one selected owner and microsecond interval preserved");
     ++options;return 0;
 }
-int VulkanStorySlBeginFrame(uint32_t frame) {
-    sdk_tokens[cursor] = frame; current = reinterpret_cast<uintptr_t>(&sdk_tokens[cursor]); cursor = (cursor + 1) % sdk_tokens.size(); return 0;
+int rsf_vk_sl_begin_frame_checked(uint32_t frame, uintptr_t* token) {
+    sdk_tokens[cursor] = frame; current = reinterpret_cast<uintptr_t>(&sdk_tokens[cursor]); cursor = (cursor + 1) % sdk_tokens.size();
+    *token = current;
+    return 0;
 }
 uintptr_t VulkanStorySlCurrentFrameToken() { return current; }
 int VulkanStorySlTokenMatches(uintptr_t token, uint32_t index) { return token && *reinterpret_cast<uint32_t*>(token) == index; }

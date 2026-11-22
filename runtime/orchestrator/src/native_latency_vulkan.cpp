@@ -66,7 +66,7 @@ int VulkanStorySlBindPcl();
 uint32_t VulkanStorySlPclWindowMessage();
 int VulkanStorySlGetReflexState(uint32_t*, uint32_t*);
 int VulkanStorySlSetReflexInterval(int, uint32_t);
-int VulkanStorySlBeginFrame(uint32_t);
+int rsf_vk_sl_begin_frame_checked(uint32_t, uintptr_t*);
 uintptr_t VulkanStorySlCurrentFrameToken();
 int VulkanStorySlTokenMatches(uintptr_t, uint32_t);
 int VulkanStorySlReflexSleep();
@@ -99,11 +99,10 @@ constexpr rsf_vk_streamline_calls streamline{
     initialize, VulkanStorySlShutdownChecked, VulkanStorySlModule, invoke, pace,
     {
         [](uint32_t index) -> uintptr_t {
-            // The Rust host holds its guard for both calls. The bridge owns the
-            // current pointer, and the host ledger associates it with a source.
-            const auto result = VulkanStorySlBeginFrame(index);
+            uintptr_t token{};
+            const auto result = rsf_vk_sl_begin_frame_checked(index, &token);
             rsf_core_latencyvk_sdk_result(result, 0);
-            return result==0 ? VulkanStorySlCurrentFrameToken() : 0;
+            return result == 0 ? token : 0;
         },
         VulkanStorySlCurrentFrameToken,
         VulkanStorySlTokenMatches,
