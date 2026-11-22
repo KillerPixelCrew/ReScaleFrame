@@ -809,6 +809,7 @@ version = "0.1.2"
 dependencies = [
  "rsf-bindgen",
  "rsf-game-sys",
+ "rsf-minhook-sys",
  "rsf-windows",
  "windows",
  "windows-sys",

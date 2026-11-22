@@ -29,33 +29,6 @@ pub(crate) unsafe extern "C" fn worker_tls_slots() -> usize {
     slots
 }
 
-#[cfg(windows)]
-pub(crate) mod minhook {
-    use std::ffi::c_void;
-
-    #[cfg(not(test))]
-    unsafe extern "system" {
-        pub(crate) fn MH_Initialize() -> i32;
-        pub(crate) fn MH_DisableHook(target: *mut c_void) -> i32;
-        pub(crate) fn MH_RemoveHook(target: *mut c_void) -> i32;
-        pub(crate) fn MH_CreateHook(
-            target: *mut c_void,
-            detour: *mut c_void,
-            original: *mut *mut c_void,
-        ) -> i32;
-        pub(crate) fn MH_EnableHook(target: *mut c_void) -> i32;
-        pub(crate) fn MH_QueueEnableHook(target: *mut c_void) -> i32;
-        pub(crate) fn MH_ApplyQueued() -> i32;
-        pub(crate) fn MH_StatusToString(status: i32) -> *const std::ffi::c_char;
-    }
-
-    #[cfg(test)]
-    #[allow(non_snake_case)]
-    pub(crate) unsafe extern "system" fn MH_EnableHook(_: *mut c_void) -> i32 {
-        2 // MH_ERROR_NOT_INITIALIZED. Cargo unit tests never install native hooks.
-    }
-}
-
 /// Hook callbacks must not unwind; a poisoned lock keeps its last consistent state.
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)

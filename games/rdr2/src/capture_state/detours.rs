@@ -9,11 +9,7 @@ use super::metadata::*;
 use super::pipeline::{graphics_facts, stream_facts};
 use super::recordings::*;
 use super::shots::{self, Image, draw_shot, pending_count};
-use crate::{
-    camera_probe::rsf_rdr2_camera_request,
-    layout,
-    platform::{lock, minhook},
-};
+use crate::{camera_probe::rsf_rdr2_camera_request, layout, platform::lock};
 use std::{
     arch::naked_asm,
     cell::Cell,
@@ -91,16 +87,16 @@ unsafe extern "C" fn target(object: Raw, slot: u32) -> Raw {
     unsafe { object.cast::<*const Raw>().read().add(slot as usize).read() }
 }
 unsafe extern "C" fn create(target: Raw, replacement: *const c_void, original: Out) -> i32 {
-    unsafe { minhook::MH_CreateHook(target, replacement.cast_mut(), original) }
+    unsafe { rsf_minhook_sys::MH_CreateHook(target, replacement.cast_mut(), original) }
 }
 unsafe extern "C" fn enable(target: Raw) -> i32 {
-    unsafe { minhook::MH_EnableHook(target) }
+    unsafe { rsf_minhook_sys::MH_EnableHook(target) }
 }
 unsafe extern "C" fn hook_report(slot: u32, target: Raw, result: i32) {
     let status = if result == hooks::DIFFERENT_TARGET {
         c"unobserved vtable target"
     } else {
-        let raw = unsafe { minhook::MH_StatusToString(result) };
+        let raw = unsafe { rsf_minhook_sys::MH_StatusToString(result) };
         if raw.is_null() {
             c"unknown"
         } else {

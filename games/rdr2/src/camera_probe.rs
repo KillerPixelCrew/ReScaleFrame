@@ -2,8 +2,9 @@
 //! Opt-in camera capture at the native upscaler boundary and its separate fiber reference.
 use crate::asi::{self, AsiPlatform, DiagnosticHook, DiagnosticInstall, install_diagnostic_hooks};
 use crate::layout::{self, FRAME_COUNTER, TLS_INDEX, block, camera_probe};
-use crate::platform::{lock, minhook::MH_EnableHook, trampoline, worker_tls_slots};
+use crate::platform::{lock, trampoline, worker_tls_slots};
 use crate::script_input::ScriptHook;
+use rsf_minhook_sys::MH_EnableHook;
 use std::ffi::{OsString, c_void};
 use std::fs::{self, OpenOptions};
 use std::io::Write;

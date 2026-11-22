@@ -2,7 +2,7 @@
 //! Opt-in observation of native RDR2 D3D12 results.
 use crate::asi::{self, MH_ERROR_ALREADY_INITIALIZED, MH_OK};
 use crate::diagnostics::path_units;
-use crate::platform::minhook::MH_EnableHook;
+use rsf_minhook_sys::MH_EnableHook;
 use std::arch::naked_asm;
 use std::ffi::{OsString, c_void};
 use std::fs::OpenOptions;

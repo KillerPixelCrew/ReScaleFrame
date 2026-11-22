@@ -2,8 +2,9 @@
 //! Opt-in, bounded settings evidence collection. The detours never change native data.
 use crate::asi::{self, AsiPlatform, DiagnosticHook, DiagnosticInstall, install_diagnostic_hooks};
 use crate::layout::settings_probe::{BIND, GETTER_SLOT, KEYS, METADATA_KEY, READ};
-use crate::platform::{lock, minhook::MH_EnableHook};
+use crate::platform::lock;
 use crate::runtime_worker::log;
+use rsf_minhook_sys::MH_EnableHook;
 use std::ffi::{OsString, c_void};
 use std::fs::OpenOptions;
 use std::io::Write;

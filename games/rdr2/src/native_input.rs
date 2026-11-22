@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Observes dequeued window messages and successful public XInput reads.
-use super::{Scope, lock, minhook::*, trampoline};
+use super::{Scope, lock, trampoline};
+use rsf_minhook_sys::*;
 use rsf_windows::rsf_win32_input_kind;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};

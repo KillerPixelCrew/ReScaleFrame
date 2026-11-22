@@ -17,6 +17,7 @@ capture-fixture = ["windows/Win32_Graphics_Direct3D_Fxc"]
 rsf-game-sys = { path = "../../sdk/game" }
 
 [target."cfg(windows)".dependencies]
+rsf-minhook-sys = { path = "../../third_party/minhook" }
 rsf-windows = { path = "../../integrations/windows" }
 
 [target."cfg(windows)".dependencies.windows]

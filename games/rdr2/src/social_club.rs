@@ -3,8 +3,9 @@
 //! The guarded renderer bytes and continuation addresses are from rdr2-renderer.md.
 use crate::asi::{self, AsiPlatform, MH_ERROR_ALREADY_INITIALIZED, MH_OK};
 use crate::layout::{asi::SOCIAL_CLUB_DISPATCHER, social_club as profile};
-use crate::platform::{lock, minhook::MH_EnableHook, trampoline};
+use crate::platform::{lock, trampoline};
 use crate::runtime_worker::log;
+use rsf_minhook_sys::MH_EnableHook;
 use std::ffi::c_void;
 use std::ptr::{self, null, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};

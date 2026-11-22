@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Windows x64 leaves for the renderer. COM layouts follow Windows SDK 10.0.26100.0.
-use super::minhook::*;
 use super::{PLATFORM_VERSION, Platform, ResourceFacts, worker_tls_slots};
 use crate::{renderer, scene};
+use rsf_minhook_sys::*;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::{
     arch::naked_asm,
