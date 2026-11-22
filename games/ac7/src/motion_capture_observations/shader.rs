@@ -47,8 +47,9 @@ unsafe extern "C" fn rsf_ac7_motion_capture_shader(
     size: u32,
 ) {
     // The observer carries live shader bytecode for this creation callback.
-    if !unsafe { rsf_ac7_capture_observe_shader(shader, stage, bytes, size, disassemble_constants) }
-    {
+    if !unsafe {
+        rsf_ac7_capture_observe_shader(shader, stage, bytes, size, Some(disassemble_constants))
+    } {
         rsf_ac7_capture_fail(CaptureInterval::load());
     }
 }

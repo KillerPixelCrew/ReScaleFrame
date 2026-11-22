@@ -7,7 +7,8 @@ use crate::velocity_stage::{
     next_register, rewrite_helper, signature, stage, write_stage,
 };
 use crate::velocity_tokens::{
-    DCL_TEMPS, Instruction, MAX_TEMPS, OperandEdit, append_words, rewrite_operands, temp_count,
+    DCL_TEMPS, Instruction, MAX_TEMPS, OperandEdit, OperandView, append_words, rewrite_operands,
+    temp_count,
 };
 use std::collections::BTreeMap;
 
@@ -512,6 +513,11 @@ fn domain_injection(
             }
         })
     })
+}
+
+fn rebase_temp(operand: &OperandView, base: u32) -> Option<OperandEdit> {
+    let reg = base.checked_add(operand.direct_register()?)?;
+    (reg < MAX_TEMPS).then_some(OperandEdit::register(TEMP, reg))
 }
 
 fn evaluate_domain(

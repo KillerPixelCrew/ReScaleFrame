@@ -165,6 +165,7 @@ const _: () = {
         [::core::mem::offset_of!(rsf_game_depth_domains, domains) - 32usize];
 };
 #[repr(C)]
+#[derive(Copy, Clone)]
 pub struct rsf_game_render_pass {
     pub struct_size: u32,
     pub role: u32,

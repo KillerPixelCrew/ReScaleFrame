@@ -265,6 +265,8 @@ generate("sdk/game/src/lib.rs", "sdk/game/include/rescaleframe/game_api.h",
          "rsf_(get_game_plugin_api_fn|frame_record|game_cpu_(source|receipt)_event)", "RSF_.*",
          ["-Isdk/game/include"], ["--blocklist-type", frame_records, "--blocklist-item", frame_constants,
           "--blocklist-type", frame_types, "--blocklist-item", frame_values,
+          # Its rsf_camera_frame field is blocklisted, so bindgen cannot infer the derive itself.
+          "--with-derive-custom-struct", "rsf_game_render_pass=Copy,Clone",
           "--raw-line", "mod frame_abi;",
           "--raw-line", "pub use frame_abi::*;",
           "--raw-line", "mod frame_event_abi;",

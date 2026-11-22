@@ -12,7 +12,7 @@ use crate::motion_capture_session::{CaptureInterval, rsf_ac7_capture_current};
 use rsf_game_sys::rsf_game_render_pass;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{CStr, c_char};
 use std::mem::{offset_of, size_of};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicU64, Ordering};

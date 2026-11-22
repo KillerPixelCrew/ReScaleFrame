@@ -278,7 +278,7 @@ fn beam_classification_separates_variants_for_the_same_layout() {
 
 #[test]
 fn builder_leases_payload_across_replacement() {
-    let mut cache = observed();
+    let cache = observed();
     let bytes = cache.sources[&VS].bytes.as_ptr();
     let state = Mutex::new(cache);
     let draw = request([VS, PS, 0, 0, 0], 0, 0);
@@ -367,12 +367,7 @@ fn reset_discards_slots_and_late_results() {
 
 #[test]
 fn ffi_rejects_null_arguments() {
-    // Every call returns before it touches the process cache.
-    unsafe {
-        rsf_ac7_velocity_layout_seen(null_mut(), null(), 0, 0);
-        assert_eq!(
-            rsf_ac7_velocity_admit_variant(null(), null_mut(), None, null_mut()),
-            NO_VARIANT
-        );
-    }
+    // The call returns before it touches the process cache. Variant admission is Rust-only
+    // (`admit_variant`), so it has no null-pointer FFI entry left to probe.
+    unsafe { rsf_ac7_velocity_layout_seen(null_mut(), null(), 0, 0) };
 }
