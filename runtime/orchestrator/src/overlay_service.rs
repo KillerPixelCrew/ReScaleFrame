@@ -23,6 +23,7 @@ use crate::overlay_wrapped12::native::{
 };
 use crate::sharpening_policy;
 use crate::streamline_sr::preset_valid;
+use crate::wide::copy_nul as copy_wide;
 #[cfg(not(test))]
 use crate::{
     overlay_input::rsf_overlay_input_poll_toggle,
@@ -68,7 +69,6 @@ use std::{
     ffi::{CStr, CString, c_char, c_void},
     ops::RangeInclusive,
     ptr::{null, null_mut},
-    slice,
     sync::{
         LazyLock, Mutex, MutexGuard, OnceLock,
         atomic::{AtomicBool, AtomicU8, Ordering},
@@ -261,14 +261,6 @@ struct Config {
 }
 
 // The setup contract supplies terminated Windows paths. Keep their original code units.
-unsafe fn copy_wide(text: *const u16) -> Vec<u16> {
-    let mut length = 0;
-    while unsafe { *text.add(length) } != 0 {
-        length += 1;
-    }
-    unsafe { slice::from_raw_parts(text, length + 1) }.to_vec()
-}
-
 impl Config {
     unsafe fn read_setup(setup: &rsf_overlay_service_setup) -> Result<(Self, Sharpening), i32> {
         if setup.option_count > RSF_OVERLAY_SERVICE_OPTION_LIMIT

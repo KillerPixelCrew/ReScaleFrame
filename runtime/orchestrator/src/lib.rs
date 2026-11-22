@@ -140,6 +140,8 @@ mod native_reinsert;
 #[cfg(windows)]
 mod native_translucency;
 mod owned_handle;
+mod sync;
+mod wide;
 
 #[allow(clippy::duplicate_mod)] // Shared with another crate or module through #[path].
 #[cfg(windows)]

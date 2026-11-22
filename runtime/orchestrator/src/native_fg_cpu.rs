@@ -14,6 +14,7 @@ use crate::native_cpu::{
 };
 use crate::native_fg::{now_qpc, requested};
 use crate::sr_session::has_capacity;
+use crate::sync::lock;
 use crate::sys::rsf_native_latency_frame as LatencyFrame;
 use crate::sys::*;
 use crate::sys::{
@@ -28,7 +29,7 @@ use std::cell::Cell;
 use std::ffi::c_void;
 use std::mem::zeroed;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{LazyLock, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{LazyLock, Mutex, OnceLock};
 
 pub(crate) struct Platform {
     has_owner: unsafe extern "C" fn() -> i32,
@@ -132,10 +133,6 @@ fn owned_window_thread(p: &Platform, key: u64) -> u32 {
         || win32::owned_window_thread(key),
         |thread| unsafe { thread(key) },
     )
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]

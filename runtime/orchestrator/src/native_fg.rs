@@ -12,6 +12,7 @@ use crate::native_cpu::{
     rsf_native_cpu_reservation_read,
 };
 use crate::native_fg_cpu::{self as cpu_owner, Failure, Frame as CpuOwner};
+use crate::sync::lock;
 use crate::sys::*;
 use crate::sys::{
     RSF_FG_ABI_VERSION, RSF_FG_DYNAMIC, RSF_FG_FIXED, RSF_FG_OFF, RSF_PACING_NONE,
@@ -41,7 +42,7 @@ use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
+use std::sync::{Mutex, MutexGuard, TryLockError};
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
     D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
@@ -95,10 +96,6 @@ macro_rules! call {
         let result = unsafe { platform::$f($($a),*) };
         result
     }};
-}
-
-fn lock<T>(value: &Mutex<T>) -> MutexGuard<'_, T> {
-    value.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 pub(crate) fn now_qpc() -> u64 {

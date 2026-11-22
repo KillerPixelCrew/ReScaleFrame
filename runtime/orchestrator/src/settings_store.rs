@@ -9,6 +9,7 @@ use crate::sys::{
     RSF_RENDER_FRONTEND_ABI_VERSION, RSF_SHARPENING_ABI_VERSION, rsf_render_settings as Settings,
     rsf_sharpening_options as Sharpening,
 };
+pub(crate) use crate::wide::from_str as wide;
 use std::ffi::{CStr, c_char};
 use std::ptr::null;
 use std::sync::Mutex;
@@ -119,10 +120,6 @@ fields! {
         "DAClampOutput" => clamp_output / sharpening_clamp_output: integer,
         "SharpeningDebug" => debug / sharpening_debug: integer,
     }
-}
-
-pub(crate) fn wide(text: &str) -> Vec<u16> {
-    text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 unsafe extern "C" {

@@ -20,6 +20,8 @@ use crate::sys::{
     rsf_overlay_service_option, rsf_overlay_service_setup, rsf_overlay_sr_report,
 };
 use crate::sys::{rsf_native_present_record, rsf_observer_present_event};
+use crate::wide::copy_nul as wide_copy;
+use crate::wide::from_str as wide;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_GAME_ABI_VERSION,
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_EVENT_VERSION_SOURCE,
@@ -75,20 +77,6 @@ unsafe extern "C" {
 
 fn current_thread() -> u32 {
     unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() }
-}
-
-fn wide(text: &str) -> Vec<u16> {
-    text.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-unsafe fn wide_copy(text: *const u16) -> Vec<u16> {
-    let mut length = 0;
-    while unsafe { *text.add(length) } != 0 {
-        length += 1;
-    }
-    let mut copy = unsafe { std::slice::from_raw_parts(text, length) }.to_vec();
-    copy.push(0);
-    copy
 }
 
 fn set_reason(report: &mut rsf_overlay_sr_report, text: &str) {

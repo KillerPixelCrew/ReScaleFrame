@@ -11,6 +11,7 @@ use crate::dxgi_format::{
 };
 use crate::sharpening_policy;
 use crate::sr_session::checked;
+use crate::sync::lock;
 use crate::sys::*;
 use crate::sys::{RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_NONE};
 use crate::sys::{rsf_dlss_setup, rsf_sr12_setup as Setup};
@@ -25,7 +26,7 @@ use rsf_game_sys::{
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::{MaybeUninit, offset_of};
 use std::ptr::{self, NonNull};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::Mutex;
 
 #[cfg(test)]
 mod tests;
@@ -180,10 +181,6 @@ pub(crate) struct Platform {
     dump_pass_metadata: unsafe extern "C" fn(*const Pass),
     dump_sr_frame: unsafe extern "C" fn(*const rsf_sr_frame, u32, u32),
     dump_result: unsafe extern "C" fn(*const rsf_frame_record, *const c_char, u32, i32),
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 unsafe fn retain(object: Handle) -> Option<ComRef> {

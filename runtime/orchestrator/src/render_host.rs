@@ -33,6 +33,7 @@ use crate::sys::{
 };
 use crate::sys::{RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_NONE, RSF_SR_XESS};
 use crate::sys::{rsf_dlss_setup as DlssSetup, rsf_sr12_setup as SrSetup};
+use crate::wide::copy_nul as wide_copy;
 #[cfg(not(test))]
 use crate::{d3d12_observer::Observer, dlss_native12::Registration};
 use rsf_game_sys::{
@@ -426,14 +427,6 @@ fn has(mask: u32, bit: u32) -> bool {
 }
 
 // Terminated UTF-16 copy of a terminated wide string.
-unsafe fn wide_copy(text: *const u16) -> Vec<u16> {
-    let mut length = 0;
-    while unsafe { *text.add(length) } != 0 {
-        length += 1;
-    }
-    unsafe { std::slice::from_raw_parts(text, length + 1) }.to_vec()
-}
-
 fn utf8(text: &[u16]) -> String {
     let end = text.iter().position(|&c| c == 0).unwrap_or(text.len());
     String::from_utf16_lossy(&text[..end])

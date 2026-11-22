@@ -28,6 +28,7 @@ use crate::sys::{
 };
 use crate::sys::{RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_NONE, RSF_SR_SPATIAL, RSF_SR_XESS};
 use crate::sys::{rsf_dlss_setup as DlssSetup, rsf_sr12_setup as SrSetup};
+use crate::wide::copy_nul as wide_copy;
 use rsf_game_sys::{
     RSF_CALLBACK_HOST_ABI_VERSION as HOST_ABI_VERSION, RSF_CALLBACK_HOST_ABI_VERSION_V2,
     RSF_GAME_ABI_VERSION, RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_FINAL_SCENE,
@@ -295,14 +296,6 @@ fn try_lifecycle() -> Option<MutexGuard<'static, Published>> {
         Err(TryLockError::Poisoned(error)) => Some(error.into_inner()),
         Err(TryLockError::WouldBlock) => None,
     }
-}
-
-unsafe fn wide_copy(text: *const u16) -> Vec<u16> {
-    let mut length = 0;
-    while unsafe { *text.add(length) } != 0 {
-        length += 1;
-    }
-    unsafe { std::slice::from_raw_parts(text, length + 1) }.to_vec()
 }
 
 unsafe fn c_copy(text: *const c_char) -> CString {

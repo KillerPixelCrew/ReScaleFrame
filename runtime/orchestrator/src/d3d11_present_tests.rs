@@ -8,6 +8,7 @@ use crate::sys::{RSF_FG_FIXED, rsf_fg_frame};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ptr::null;
+use std::sync::MutexGuard;
 
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 

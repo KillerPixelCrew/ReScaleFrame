@@ -14,6 +14,7 @@ use crate::sys::{
     RSF_OVERLAY_SR_INPUT_DEPTH, RSF_OVERLAY_SR_INPUT_MOTION, rsf_overlay_service_option,
     rsf_overlay_service_setup, rsf_overlay_sr_report,
 };
+use crate::wide::copy_nul as wide;
 use std::os::windows::ffi::OsStringExt;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, AtomicU64};
@@ -34,11 +35,6 @@ fn interval(fps: u32) -> u32 {
 
 fn mode(enabled: bool) -> u32 {
     if enabled { RSF_FG_FIXED } else { RSF_FG_OFF }
-}
-
-unsafe fn wide(text: *const u16) -> Vec<u16> {
-    let length = (0..).find(|&i| unsafe { *text.add(i) == 0 }).unwrap();
-    unsafe { std::slice::from_raw_parts(text, length + 1) }.to_vec()
 }
 
 fn binding(user: Handle) -> &'static Pipeline {

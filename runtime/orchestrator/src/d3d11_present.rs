@@ -15,6 +15,7 @@ use crate::fg_choice::known;
 use crate::fg_choice::rsf_fg_select_auto_backend;
 use crate::shared_surface::{self, Surface, SurfaceSetup};
 use crate::sr_session::{has_capacity, valid_unit_scale};
+use crate::sync::lock;
 use crate::sys::rsf_d3d11_present_status as PresentStatus;
 use crate::sys::rsf_observer_present_event as Event;
 use crate::sys::{
@@ -33,7 +34,7 @@ use std::ptr::{self, NonNull, null_mut};
 use std::sync::atomic::{
     AtomicBool, AtomicI32, AtomicPtr, AtomicU8, AtomicU32, AtomicU64, Ordering,
 };
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, TryLockError};
+use std::sync::{Arc, Mutex, PoisonError, RwLock, TryLockError};
 
 #[path = "d3d11_present_device.rs"]
 mod device;
@@ -134,10 +135,6 @@ pub(crate) fn family(backend: u32) -> Option<u32> {
 #[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_fg_provider_family(backend: u32) -> u32 {
     family(backend).unwrap_or(0)
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 fn hex(value: *const c_void) -> String {

@@ -18,6 +18,7 @@ mod reflection;
 mod tests;
 
 use crate::sr_session::has_capacity;
+use crate::sync::lock;
 use crate::sys::{
     RSF_PATCH_ABI, RSF_PATCH_ANCHOR, RSF_PATCH_ARGUMENT, RSF_PATCH_COMPILE, RSF_PATCH_FORMAT,
     RSF_PATCH_HASH, RSF_PATCH_INTERNAL, RSF_PATCH_OK, RSF_PATCH_ORIGINAL, RSF_PATCH_REFLECTION,
@@ -32,8 +33,8 @@ use std::ffi::{CString, c_char, c_void};
 use std::os::windows::ffi::OsStringExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard};
 use std::{fs, ptr};
 use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::Security::Cryptography::{
@@ -133,12 +134,6 @@ unsafe fn record<'a, T>(value: *mut T) -> Result<&'a mut T, i32> {
         return Err(ABI);
     }
     Ok(unsafe { &mut *value })
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Runs an entry point body, reporting a panic as an internal failure.
