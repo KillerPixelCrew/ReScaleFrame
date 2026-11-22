@@ -41,3 +41,39 @@ identical-code folding and incremental linker thunks.
 The port was checked by source comparison, generated x64 layout assertions, pinned Bindgen
 0.72.1, pinned Rust 1.94.1 formatting, locked offline Cargo metadata, and Git whitespace checks.
 Builds, lint, fixture execution and game or device verification are user-owned.
+
+## L02 inventory
+
+Five checklist paths have source cutovers.
+
+- `loader/census/src/decode.cpp`, replaced by Rust decoding and the guarded COM leaf.
+- `loader/census/src/static_scan.cpp`, replaced by the Rust scan worker body.
+- `loader/diagnostics/include/rescaleframe/frame_capture.h`, the retained C contract for the
+  Rust capture state and optional RenderDoc connector.
+- `tests/vendor_census_asi.cpp`, replaced by Rust fixture behavior and the native attach stub.
+- `tests/vendor_census_fixture.cpp`, replaced by Rust fixture behavior and the native NGX and
+  loader-lock leaves.
+
+The census core, internal contract and module-dump internal contract are partially ported.
+Eighteen checklist paths remain open.
+
+- `loader/census/include/rescaleframe/census_d3d12_observer.h`
+- `loader/census/include/rescaleframe/vendor_census.h`
+- `loader/census/src/census_internal.h`
+- `loader/census/src/core.cpp`
+- `loader/census/src/hooks.cpp`
+- `loader/census/src/wrap_d3d.cpp`
+- `loader/census/src/wrap_fsr.cpp`
+- `loader/census/src/wrap_generic.h`
+- `loader/census/src/wrap_misc.cpp`
+- `loader/census/src/wrap_ngx.cpp`
+- `loader/census/src/wrap_vk.cpp`
+- `loader/diagnostics/include/rescaleframe/module_dump.h`
+- `loader/diagnostics/src/module_dump_internal.h`
+- `tests/census_present_coexistence.cpp`
+- `tests/module_dump_v2.cpp`
+- `tests/vendor_census.cpp`
+- `tests/vendor_census_layouts.cpp`
+- `tests/vendor_census_ngx_params.h`
+
+L02 has no numbered Rust findings.

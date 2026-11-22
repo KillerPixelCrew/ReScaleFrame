@@ -9,6 +9,8 @@
 
 #include "census_internal.h"
 
+extern "C" void rsf_census_static_scan(void (*add)(const char*, const char*, uint64_t, uint64_t));
+
 namespace rsf_census {
 
 const FnDesc kFns[kFnCount] = {
@@ -552,8 +554,6 @@ void flush_all_locked(bool summary) noexcept {
 
 // The static scan reads the whole main image, which takes seconds for a large game, so it runs on
 // its own thread and never delays the writer.
-extern "C" void rsf_census_static_scan(void (*add)(const char*, const char*, uint64_t, uint64_t));
-
 DWORD WINAPI scan_main(void*) noexcept {
     const uint64_t start = now_us();
     rsf_census_static_scan([](const char* vendor, const char* what, uint64_t rva, uint64_t function) {

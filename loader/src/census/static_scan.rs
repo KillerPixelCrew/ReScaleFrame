@@ -38,7 +38,7 @@ impl Needle {
 
     fn match_at(&self, bytes: &[u8], offset: usize) -> Option<String> {
         let step = if self.wide { 2 } else { 1 };
-        if offset % step != 0 || bytes[offset] != self.text.as_bytes()[0] {
+        if !offset.is_multiple_of(step) || bytes[offset] != self.text.as_bytes()[0] {
             return None;
         }
         let tail = bytes.get(offset..)?;
