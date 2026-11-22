@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use std::ffi::c_char;
 use std::panic::catch_unwind;
 
 fn profile(native: &Layout) {

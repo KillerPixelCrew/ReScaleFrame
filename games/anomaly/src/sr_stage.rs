@@ -66,8 +66,6 @@ const MAX_PATH: usize = 260;
 #[cfg(test)]
 const STREAMLINE: usize = 0;
 #[cfg(test)]
-const FIDELITYFX: usize = 1;
-#[cfg(test)]
 const XESS: usize = 2;
 // Temporal driver refusal transport values.
 const REFUSAL_PREPARE: u8 = 2;
