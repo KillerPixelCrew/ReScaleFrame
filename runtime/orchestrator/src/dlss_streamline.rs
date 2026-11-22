@@ -13,9 +13,7 @@ use crate::com_ref;
 use crate::diagnostic_output::Output;
 use crate::sdk_module::{SdkModule, wide_path};
 use crate::sr_session::has_capacity;
-use crate::streamline_log::{
-    rsf_core_streamline_log_clear, rsf_core_streamline_log_emit, rsf_core_streamline_log_set,
-};
+use crate::streamline_log;
 use crate::streamline_sdk::{
     self as sdk, DEFAULT_PREFERENCE_FLAGS, DlssOptimal, DlssOptions, Entries, FEATURE_COMMON,
     FEATURE_DLSS, LOG_ERROR, LOG_LEVEL_DEFAULT, LOG_WARN, PREFERENCE_FRAME_TAGGING,
@@ -39,23 +37,18 @@ const OPTIMAL: u32 = 1;
 const OPTIONS: u32 = 2;
 const LEGACY_SR_LOG: u32 = 0;
 
-unsafe extern "C" fn emit(log: Log, user: Handle, text: *const c_char) {
-    if let Some(log) = log {
-        unsafe { log(user, text) };
-    }
-}
 
 fn say(text: &str) {
     if let Ok(text) = CString::new(text) {
-        unsafe { rsf_core_streamline_log_emit(LEGACY_SR_LOG, 1, text.as_ptr(), emit) };
+        unsafe { streamline_log::emit(LEGACY_SR_LOG, true, text.as_ptr()) };
     }
 }
 
 fn set_log(log: Log, user: Handle) {
     if log.is_some() {
-        rsf_core_streamline_log_set(LEGACY_SR_LOG, 0, log, user, 0);
+        streamline_log::set(LEGACY_SR_LOG, 0, log, user, false);
     } else {
-        rsf_core_streamline_log_clear(LEGACY_SR_LOG, 0);
+        streamline_log::clear(LEGACY_SR_LOG, 0);
     }
 }
 
@@ -257,7 +250,7 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        rsf_core_streamline_log_clear(LEGACY_SR_LOG, 0);
+        streamline_log::clear(LEGACY_SR_LOG, 0);
     }
 }
 
@@ -407,7 +400,7 @@ unsafe fn rsf_core_dlss_streamline_share_host(host: Handle, log: Log, user: Hand
     let entries = match require_entries(shared.entries, false) {
         Ok(entries) => entries,
         Err(result) => {
-            rsf_core_streamline_log_clear(LEGACY_SR_LOG, 0);
+            streamline_log::clear(LEGACY_SR_LOG, 0);
             return result;
         }
     };
@@ -418,7 +411,7 @@ unsafe fn rsf_core_dlss_streamline_share_host(host: Handle, log: Log, user: Hand
     } {
         Ok(features) if features.bits() == OPTIMAL | OPTIONS => features,
         result => {
-            rsf_core_streamline_log_clear(LEGACY_SR_LOG, 0);
+            streamline_log::clear(LEGACY_SR_LOG, 0);
             return match result {
                 Err(FEATURE_FAILED) => INIT_FAILED,
                 Err(result) => result,

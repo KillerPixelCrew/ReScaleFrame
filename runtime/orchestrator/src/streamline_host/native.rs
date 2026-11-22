@@ -13,9 +13,7 @@ use super::*;
 use crate::mfg_state::{self, Owner as Mfg};
 use crate::reflex_audit::{rsf_reflex_audit_start, rsf_reflex_audit_stop, rsf_reflex_driver_sleep};
 use crate::streamline_generation_records as records;
-use crate::streamline_log::{
-    rsf_core_streamline_log_clear, rsf_core_streamline_log_emit, rsf_core_streamline_log_set,
-};
+use crate::streamline_log;
 use crate::streamline_sdk::{self as sdk, Entries};
 use crate::sys::{
     rsf_fg_options as Options, rsf_generation_provider as Provider,
@@ -164,15 +162,10 @@ unsafe fn native<'a>(native: Handle) -> &'a mut Native {
     unsafe { &mut *native.cast::<Native>() }
 }
 
-unsafe extern "C" fn emit(log: Log, user: Handle, text: *const c_char) {
-    if let Some(log) = log {
-        unsafe { log(user, text) };
-    }
-}
 
 unsafe extern "C" fn message(kind: u32, text: *const c_char) {
-    let important = u32::from(kind == sdk::LOG_ERROR || kind == sdk::LOG_WARN);
-    unsafe { rsf_core_streamline_log_emit(LOG_SLOT, important, text, emit) };
+    let important = kind == sdk::LOG_ERROR || kind == sdk::LOG_WARN;
+    unsafe { streamline_log::emit(LOG_SLOT, important, text) };
 }
 
 fn say(log: Log, user: Handle, text: &str) {
@@ -260,12 +253,12 @@ unsafe extern "C" fn init(handle: Handle, request: &InitPreferences) -> u32 {
     host.directory = request.directory;
     host.paths[0] = host.directory;
     let show_console = request.show_console != 0;
-    rsf_core_streamline_log_set(
+    streamline_log::set(
         LOG_SLOT,
         handle as usize,
         host.log,
         host.log_user,
-        u32::from(show_console),
+        show_console,
     );
     let preferences = sdk::Preferences {
         base: sdk::PREFERENCES,
@@ -484,7 +477,7 @@ unsafe extern "C" fn dispose(handle: Handle) {
         unsafe { core(host.core().shutdown)() };
     }
     unsafe { mfg_state::rsf_core_mfg_release(host.mfg) };
-    rsf_core_streamline_log_clear(LOG_SLOT, handle as usize);
+    streamline_log::clear(LOG_SLOT, handle as usize);
     unsafe { mfg_state::rsf_core_mfg_destroy(host.mfg) };
 }
 
