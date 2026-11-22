@@ -57,7 +57,7 @@ mod code {
     /// The previous session still owns GPU work or Runtime tokens.
     pub(super) const BUSY: i32 = 2;
 }
-/// The status and frame-counter versions the C++ wrote; the latency status request version.
+/// The status and frame-counter versions, and the latency status request version.
 const STATUS_ABI_VERSION: u32 = 1;
 const FRAME_COUNTERS_ABI_VERSION: u32 = 1;
 const LATENCY_STATUS_VERSION: u32 = 1;
@@ -203,8 +203,7 @@ impl Leaves {
     fn fg_options(&self, options: &rsf_native_fg_options) {
         unsafe { (self.fg_options)(options) }
     }
-    /// The Runtime's generation status; zero-filled apart from struct_size when it has none, as
-    /// the C++ never read the result.
+    /// The Runtime's generation status; zero-filled apart from struct_size when it has none.
     fn fg_status(&self) -> rsf_native_fg_status {
         let mut status = rsf_native_fg_status {
             struct_size: size_of::<rsf_native_fg_status>() as u32,
@@ -262,7 +261,7 @@ impl Leaves {
         unsafe { (self.sharpening_defaults)(&mut defaults) };
         defaults
     }
-    /// The C++ never read the result.
+    /// The result is not read.
     fn sr_set_sharpening(&self, sr: *mut rsf_sr12, options: &rsf_sharpening_options) {
         unsafe { (self.sr_set_sharpening)(sr, options) };
     }
@@ -438,8 +437,8 @@ pub(crate) extern "C" fn rsf_unity_package_sr_ring_retired(epoch: u64) {
     }
 }
 
-/// Everything the C++ range-checked, in its order: the sharpening and preset leaves are only
-/// called once the fields before them passed.
+/// The settings range checks, in order: the sharpening and preset leaves are only called once
+/// the fields before them passed.
 fn acceptable(input: &rsf_unity_package_settings, leaves: &Leaves) -> bool {
     input.abi_version == RSF_UNITY_SETTINGS_ABI_VERSION
         && input.sr_backend <= RSF_SR_AUTO
@@ -519,8 +518,8 @@ impl Package {
         true
     }
 
-    /// The stored status merged with the Runtime's generation and latency status. The merge is
-    /// kept, as the C++ kept it. Leaves are called in the original C++ order: generation status, present
+    /// The stored status merged with the Runtime's generation and latency status. Leaves are called
+    /// in order: generation status, present
     /// backend, provider-switch result, latency status.
     fn status(&self, leaves: &Leaves) -> rsf_unity_package_status {
         let fg = leaves.fg_status();
@@ -680,7 +679,7 @@ impl Package {
         self.temporal_ready.store(false, SeqCst);
     }
 
-    /// The SR pass of package.c's render callback, in the original C++ order: settings are read once,
+    /// The SR pass of the render callback: settings are read once,
     /// a reconfiguring pass releases every view, a view whose extents no longer fit is
     /// destroyed, a missing one is created, and evaluation waits for a valid camera, the end of
     /// a pending reconfiguration and a recording slot.
@@ -830,7 +829,7 @@ unsafe extern "C" fn rsf_unity_package_configure(
     c_int::from(PACKAGE.configure(&unsafe { input.read() }, leaves))
 }
 
-/// Accepts a longer structure, as the C++ did, and writes only this version's fields.
+/// Accepts a longer structure and writes only this version's fields.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_unity_package_settings_get(
     output: *mut rsf_unity_package_settings,
@@ -1519,7 +1518,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_match_the_cpp() {
+    fn defaults() {
         let package = Package::new();
         let state = package.lock();
         let s = state.settings;
@@ -2382,7 +2381,7 @@ mod tests {
     }
 
     #[test]
-    fn the_render_callback_routes_each_pass_in_the_cpp_order() {
+    fn the_render_callback_routes_each_pass() {
         use rsf_game_sys::{
             RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_SR, RSF_GAME_RENDER_WINDOW,
         };

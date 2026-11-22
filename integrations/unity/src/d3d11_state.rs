@@ -15,17 +15,11 @@
 //! change gate and the submission's retirement verdict are `d3d11_pass.rs`. Its change gate
 //! waits through this record's wait leaf (`wait_completion`).
 //!
-//! The bridge takes Unity device and swapchain facts from C++. Its Rust COM calls run outside
+//! The bridge takes Unity device and swapchain facts from the C leaf. Its Rust COM calls run outside
 //! the state mutex. Its frame callbacks (`bridge_state.rs`) are the admission that keeps a
 //! borrowed view alive: the package closes callback admission before it closes this owner. Inside
 //! a callback, the surface lease lends the surface table to one holder, so a surface view stays
 //! valid until the holder ends its lease and close refuses while it is held.
-//!
-//! The C++ kept these objects as unguarded globals. It created the command slots lazily on the
-//! render thread, kept partial objects after a failed creation until release, let the package's
-//! graphics lookup copy the D3D12 device and queue without any admission, replaced surfaces
-//! without any hold on the views a frame had already taken, and kept the queued packets' texture
-//! references in a native array beside the Rust store.
 use crate::bridge_interop::D3D11;
 use crate::d3d11_pass::shared_format;
 use crate::device_creation::{Claim, Creation};
@@ -137,8 +131,8 @@ const _: () = assert!(size_of::<DeviceOps>() == 9 * size_of::<usize>());
 /// The fence readers and the view they read, copied out for a check outside the state mutex.
 type Proof = (DeviceHandles, DeviceOps);
 
-/// The source texture description a surface was created for. The C++ compared the same three
-/// fields of `D3D11_TEXTURE2D_DESC`; the shared format derived from them is not part of the key.
+/// The source texture description a surface was created for: three fields of
+/// `D3D11_TEXTURE2D_DESC`. The shared format derived from them is not part of the key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SurfaceKey {
     width: u32,
@@ -185,8 +179,8 @@ impl SharedDevice {
 
 impl Drop for SharedDevice {
     fn drop(&mut self) {
-        // Surfaces first, while the devices they were created on are still referenced, as the C++
-        // release did. Then the lists, which reference their allocators and the device.
+        // Surfaces first, while the devices they were created on are still referenced.
+        // Then the lists, which reference their allocators and the device.
         for surface in self.surfaces.iter().flatten() {
             unsafe { (self.ops.destroy_surface)(surface.handle) };
         }
@@ -380,7 +374,7 @@ impl State {
     }
 }
 
-/// The checked close's verdict, in the C++ order: a completion read of UINT64_MAX is device
+/// The checked close's verdict: a completion read of UINT64_MAX is device
 /// removal, the ring must have reached its last completion and the last D3D11 copy its fence.
 fn retired(ring: &SubmissionHandle, completed: u64, shared: u64) -> bool {
     let ring = ring.lock();
@@ -482,7 +476,7 @@ fn prepare_surface(
         )
     };
     if !accepted || created.is_null() {
-        // The previous surface stays published, as the C++ kept it.
+        // The previous surface stays published.
         unsafe { (ops.destroy_surface)(created) };
         return None;
     }

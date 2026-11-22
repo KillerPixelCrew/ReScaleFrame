@@ -76,7 +76,7 @@ impl Package {
         self.services.editor.load(SeqCst)
     }
 
-    /// The render callback in the C++ order. An end reports every pass but the window's as
+    /// The render callback. An end reports every pass but the window's as
     /// submitted. The window pass asks for the generation provider, then presents the Editor
     /// preview or hands the pass to generation; the final scene is generation's HUD-less image.
     /// Any other pass is SR: the Editor preview is prepared first and true runs the SR pass on
@@ -114,7 +114,7 @@ impl Package {
             || leaves.preview_prepare(pass.camera.output_width, pass.camera.output_height)
     }
 
-    /// Every refusal counts toward the budget, as the C++ static did; one with a texture within
+    /// Every refusal counts toward the budget; one with a texture within
     /// the first four is logged with the texture's and camera's extents.
     fn preview_refused(&self, leaves: &Leaves, shown: bool, pass: &rsf_game_render_pass) {
         if shown

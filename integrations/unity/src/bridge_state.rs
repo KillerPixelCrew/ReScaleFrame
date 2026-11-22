@@ -12,11 +12,10 @@
 //! D3D11 and Vulkan each borrow a Runtime submission ring through `bridge_interop.rs`.
 //!
 //! The D3D11 and D3D12 routes retain native textures at admission and hold the packet
-//! through its callback. The C++ leaves supply AddRef and Release. Vulkan carries borrowed
+//! through its callback. The texture ops supply AddRef and Release. Vulkan carries borrowed
 //! image identities and returns its packet slot when taken.
 //!
-//! A fence completion of 0 stands for "no fence": every recorded submission is then in flight,
-//! as the C++ check `complete && (!fence || completed < complete)` had it.
+//! A fence completion of 0 stands for "no fence": every recorded submission is then in flight.
 use crate::sys::{
     RSF_UNITY_BRIDGE_ABI_VERSION, RSF_UNITY_FRAMES_PACKETS, RSF_UNITY_FRAMES_SLOTS,
     RSF_UNITY_FRAMES_SOURCES, RSF_UNITY_PACKET_HUDLESS, RSF_UNITY_PACKET_INPUTS_ONLY,

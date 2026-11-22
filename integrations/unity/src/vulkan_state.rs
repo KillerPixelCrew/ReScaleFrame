@@ -824,7 +824,7 @@ fn presentation() -> MutexGuard<'static, Presentation> {
     PRESENTATION.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// The presentation once no lease is held. Waits as the C++ mutex did.
+/// The presentation once no lease is held.
 fn unleased() -> MutexGuard<'static, Presentation> {
     let mut presentation = presentation();
     while presentation.leased {

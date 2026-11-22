@@ -36,7 +36,7 @@ fn text(bytes: &[u8]) -> CString {
 }
 
 impl Identity {
-    /// The directories under the SDK root as the C++ made them, also for an empty root.
+    /// The directories under the SDK root, also for an empty root.
     pub(super) fn new(root: &[u8], version: &[u8], project: &[u8]) -> Self {
         let root = text(root);
         let vendors = VendorPaths::new(&root);
@@ -167,7 +167,7 @@ impl Package {
         self.lock().status.fg_result = result;
     }
 
-    /// The window pass's request, in the C++ order: nothing without a presentation owner, the
+    /// The window pass's request: nothing without a presentation owner, the
     /// stored provider with Auto resolved for Unity's adapter (nothing while it cannot be read),
     /// nothing while that provider is active, else the request, whose result is recorded.
     pub(super) fn request_generation(&self, leaves: &Leaves) {
@@ -240,7 +240,7 @@ mod tests {
             assert_eq!(value.to_str().unwrap(), expected);
         }
         assert!(identity.installable());
-        // An empty root still names its directories, as the C++ paths() did.
+        // An empty root still names its directories.
         let rootless = Identity::new(b"", b"1", b"p");
         assert_eq!(rootless.fsr.to_str().unwrap(), "/fidelityfx");
         assert!(!rootless.installable());

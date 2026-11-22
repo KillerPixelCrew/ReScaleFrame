@@ -7,7 +7,7 @@
 const SLASH: u16 = b'/' as u16;
 const BACKSLASH: u16 = b'\\' as u16;
 const COLON: u16 = b':' as u16;
-/// Path buffers match the 32768-character limit of the replaced C++.
+/// The path buffer limit, in characters.
 pub const PATH_CAPACITY: usize = 32768;
 
 fn separator(unit: &u16) -> bool {
@@ -109,7 +109,7 @@ mod platform {
         }
     }
 
-    /// GetPrivateProfileIntW as the C++ read it: the INT result taken as UINT.
+    /// GetPrivateProfileIntW with its INT result taken as UINT.
     pub fn profile_int(section: PCWSTR, name: PCWSTR, default: u32, file: PCWSTR) -> u32 {
         (unsafe { GetPrivateProfileIntW(section, name, default as i32, file) }) as u32
     }
@@ -223,7 +223,7 @@ mod tests {
     }
 
     #[test]
-    fn names_and_text_convert_like_the_cpp() {
+    fn names_and_text_convert() {
         assert_eq!(
             file_name(&wide("C:\\Game/DragNWash.exe")),
             wide("DragNWash.exe")

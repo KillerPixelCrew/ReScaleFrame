@@ -261,7 +261,7 @@ impl Package {
         leaves.log_write(*file, text);
     }
 
-    /// A new session's services, in the C++ order: the process log, the Editor's install or the
+    /// A new session's services, in order: the process log, the Editor's install or the
     /// player's input window, the player's Vulkan surface, then the bridge prepared with this
     /// session's host services.
     pub(super) fn open(&self, leaves: &Leaves) -> bool {
@@ -292,7 +292,7 @@ impl Package {
             process_latency: None,
             render_feedback: None,
         };
-        // The bridge writes into the stored API, as it wrote into the C++ global.
+        // The bridge writes into the stored API.
         let mut api = self.services.api();
         let prepared = leaves.bridge_prepare(&services, &mut api);
         lock(&self.services.api).0 = api;
