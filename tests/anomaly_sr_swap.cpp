@@ -789,9 +789,9 @@ void stage2_write_faults() {
     CHECK(probe.controller.prepare(probe.engine.facts2()));
     // 9 slots x 11 field writes, Device width/height, HW.pBaseZB, HW.pBaseRT, the viewport pair, then the caches.
     constexpr int exchange_writes = int(slot_count) * 11 + 2 + 1 + 1 + 1;
-    constexpr int cache_writes = 1 + int(backend_textures_ps_count + backend_textures_vs_count + 4 * backend_textures_stage_count) + 1;
+    constexpr int cache_writes = 1 + 6 + 1;
     CHECK(probe.host.write_count == exchange_writes + cache_writes);
-    for (int at = 0; at < exchange_writes; ++at) {
+    for (int at = 0; at < exchange_writes + cache_writes; ++at) {
         Case c;
         c.engine.init_viewport(960.0f, 540.0f);
         c.rebase();
@@ -800,11 +800,6 @@ void stage2_write_faults() {
         CHECK(c.stock() && c.controller.refused() && restores(c.controller, Restore::Rollback) == 1 && !c.controller.window_open());
         CHECK(c.host.viewports.empty());
     }
-    // A failed cache invalidation keeps the window (the fields are consistent) but refuses the next frames.
-    Case c;
-    c.host.fail_write_at = exchange_writes - 1;   // guard unset: no viewport pair, so this is the first invalidation write
-    CHECK(c.controller.prepare(c.engine.facts2()) && c.controller.refused() && c.controller.counters().write_faults == 1);
-    CHECK(c.controller.seam() && c.stock());
 }
 
 void stage2_lifecycle() {

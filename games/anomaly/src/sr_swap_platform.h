@@ -208,7 +208,7 @@ void rsf_anomaly_swap_rm_near(rsf_anomaly_swap*);
 bool rsf_anomaly_swap_sun_begin(rsf_anomaly_swap*);
 void rsf_anomaly_swap_sun_end(rsf_anomaly_swap*, bool suspended);
 void rsf_anomaly_swap_position_constant(rsf_anomaly_swap*, void* constant);
-void rsf_anomaly_swap_shutdown(rsf_anomaly_swap*);
+bool rsf_anomaly_swap_shutdown(rsf_anomaly_swap*);
 const char* rsf_anomaly_swap_skip_name(uint32_t);
 const char* rsf_anomaly_swap_restore_name(uint32_t);
 #ifdef __cplusplus

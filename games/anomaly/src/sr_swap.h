@@ -159,7 +159,7 @@ public:
     float window_mip_bias() const noexcept { return view_->window_mip_bias; }
     float saved_mip_bias() const noexcept { return view_->saved_mip_bias; }
     // Restore if open, then drop the twins. Safe at any time on the render thread.
-    void shutdown() noexcept;
+    bool shutdown() noexcept;
     bool window_open() const noexcept { return view_->open; }
     bool refused() const noexcept { return view_->refusal != nullptr; }
     const char* refusal() const noexcept { return view_->refusal; }

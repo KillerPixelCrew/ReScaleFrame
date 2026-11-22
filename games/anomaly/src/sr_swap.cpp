@@ -116,5 +116,5 @@ void SwapController::rm_near() noexcept { rsf_anomaly_swap_rm_near(state_); }
 bool SwapController::sun_cascades_begin() noexcept { return rsf_anomaly_swap_sun_begin(state_); }
 void SwapController::sun_cascades_end(bool suspended) noexcept { rsf_anomaly_swap_sun_end(state_, suspended); }
 void SwapController::position_constant_setup(void* constant) noexcept { rsf_anomaly_swap_position_constant(state_, constant); }
-void SwapController::shutdown() noexcept { rsf_anomaly_swap_shutdown(state_); }
+bool SwapController::shutdown() noexcept { return rsf_anomaly_swap_shutdown(state_); }
 }

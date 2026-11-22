@@ -141,6 +141,7 @@ fn get<T: Copy>(bytes: &[u8], offset: u32) -> T {
 struct Host {
     writes: usize,
     fail_write_at: Option<usize>,
+    fail_address: *mut c_void,
     upload_calls: usize,
     fail_upload_at: Option<usize>,
     uploads: Vec<Matrix>,
@@ -185,7 +186,7 @@ unsafe extern "C" fn write(
     let host = host(user);
     let index = host.writes;
     host.writes += 1;
-    if address.is_null() || host.fail_write_at == Some(index) {
+    if address.is_null() || host.fail_address == address || host.fail_write_at == Some(index) {
         return false;
     }
     // Test addresses point into the boxed fake engine.
@@ -777,10 +778,10 @@ fn a_failed_exchange_rolls_every_write_back() {
     probe.engine().guard = 1;
     assert!(probe.prepare(&probe.facts2()));
     // 9 slots of 11 field writes, Device width and height, HW.pBaseZB, HW.pBaseRT and the viewport pair, then the
-    // texture list, 84 texture slots and the constant table.
+    // texture list, six texture ranges and the constant table.
     let exchange = SLOTS * 11 + 5;
-    assert_eq!(probe.host().writes, exchange + 86);
-    for at in 0..exchange {
+    assert_eq!(probe.host().writes, exchange + 8);
+    for at in 0..exchange + 8 {
         let mut c = Case::new(true);
         c.engine().guard = 1;
         c.rebase();
@@ -795,6 +796,42 @@ fn a_failed_exchange_rolls_every_write_back() {
             1
         );
         assert!(c.host().viewports.is_empty());
+    }
+}
+
+#[test]
+fn a_failed_restore_keeps_twins_until_shutdown_can_verify_the_fields() {
+    for global in [false, true] {
+        let c = Case::new(true);
+        assert!(c.prepare(&c.facts2()));
+        let address = if global {
+            (&raw mut c.engine().base_zb).cast()
+        } else {
+            c.engine().crt[GENERIC0]
+                .as_mut_ptr()
+                .wrapping_add(layout().crt_surface as usize)
+                .cast()
+        };
+        c.host().fail_address = address;
+        assert!(!c.seam());
+        assert!(!c.view().open && !c.stock());
+        assert_eq!(
+            c.view().counters.restores,
+            [0; RSF_ANOMALY_SWAP_RESTORE_COUNT as usize]
+        );
+        assert!(!rsf_anomaly_swap_shutdown(c.swap));
+        assert_eq!((c.host().drops, c.host().upscales), (0, 0));
+        assert!(!c.prepare(&c.facts2()));
+        c.host().fail_address = null_mut();
+        assert!(rsf_anomaly_swap_shutdown(c.swap));
+        assert!(c.stock());
+        assert_eq!(c.host().drops, 1);
+        assert_eq!(
+            c.view().counters.restores[RSF_ANOMALY_SWAP_RESTORE_SEAM as usize],
+            1
+        );
+        assert!(rsf_anomaly_swap_shutdown(c.swap));
+        assert_eq!(c.host().drops, 1);
     }
 }
 

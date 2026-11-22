@@ -32,6 +32,7 @@ const GENERIC0: usize = 0;
 const POSITION: usize = 2;
 const GENERIC1: usize = 5;
 const POINTER: u32 = size_of::<*mut c_void>() as u32;
+const MAX_CACHE_SLOTS: u32 = 16;
 
 const SKIP_NAMES: [&CStr; RSF_ANOMALY_SWAP_SKIP_COUNT as usize] =
     [c"off", c"scope", c"msaa", c"layout", c"twins", c"depth"];
@@ -233,6 +234,21 @@ struct Bias {
     window: f32,
 }
 
+#[derive(Default)]
+struct RestoreState {
+    targets: u16,
+    globals: bool,
+    caches: bool,
+    reason: u32,
+    engine_ran: bool,
+}
+
+impl RestoreState {
+    fn pending(&self) -> bool {
+        self.targets != 0 || self.globals || self.caches
+    }
+}
+
 struct Swap {
     view: View,
     layout: Layout,
@@ -246,6 +262,7 @@ struct Swap {
     globals: Globals,
     projection: Projection,
     bias: Bias,
+    restore_state: RestoreState,
 }
 
 impl Swap {
@@ -266,6 +283,7 @@ impl Swap {
             globals: Globals::default(),
             projection: Projection::default(),
             bias: Bias::default(),
+            restore_state: RestoreState::default(),
         }
     }
 
@@ -566,15 +584,26 @@ impl Swap {
     /// change. Clearing T and every per-stage CTexture* slot forces the next set_Textures to bind the new SRVs.
     /// Stage 2 changes Device.dwWidth/dwHeight, which the screen_res and pos_decompression_params binders read when
     /// set_Constants processes a table; clearing ctable makes the next set_Element re-run every binder.
-    fn invalidate_caches(&mut self) {
+    fn invalidate_caches(&mut self) -> bool {
         if self.backend.is_null() {
-            return;
+            return true;
         }
         let null = Addr::default();
+        let zeros = [0u8; (MAX_CACHE_SLOTS * POINTER) as usize];
         let mut ok = self.write(self.backend.at(self.layout.backend_texture_list), &null);
         for range in self.layout.backend_textures {
-            for slot in 0..range.count {
-                ok = self.write(self.backend.at(range.offset + slot * POINTER), &null) && ok;
+            if range.count != 0 {
+                let len = (range.count * POINTER) as usize;
+                let write = self.platform.write.expect("validated platform");
+                // Only the verified pointer array is cleared, leaving adjacent RCache fields alone.
+                ok = unsafe {
+                    write(
+                        self.platform.user,
+                        self.backend.at(range.offset).0,
+                        zeros.as_ptr().cast(),
+                        len,
+                    )
+                } && ok;
             }
         }
         if self.view.stage == 2 {
@@ -583,10 +612,11 @@ impl Swap {
         if !ok {
             self.fault(c"RCache caches could not be invalidated.");
         }
+        ok
     }
 
     fn release_twins(&mut self) {
-        if !self.have_twins {
+        if !self.have_twins || self.restore_state.pending() {
             return;
         }
         if let Some(drop_twins) = self.platform.drop_twins {
@@ -639,7 +669,7 @@ impl Swap {
     /// `checked`: compare the window's values before restoring (not on a rollback, which may have written part of
     /// them). `engine_ran`: the engine has drawn inside the window, so the values it derived from the window are
     /// replaced with output-size ones too.
-    fn restore_globals(&mut self, checked: bool, engine_ran: bool) {
+    fn restore_globals(&mut self, checked: bool, engine_ran: bool) -> bool {
         let g = self.globals;
         let mut size = [0u32; 2];
         if checked
@@ -656,13 +686,14 @@ impl Swap {
         if checked && self.read(g.base_rt, &mut rt) && rt.0 != self.view.twins.base_rt {
             self.foreign(c"HW.pBaseRT changed inside the world window.");
         }
-        let mut ok = self.write(g.device_size, &[g.width, g.height])
-            && self.write(g.base_zb, &g.zb)
-            && self.write(g.base_rt, &g.rt);
+        let mut ok = self.write_verified(g.device_size, &[g.width, g.height])
+            & self.write_verified(g.base_zb, &g.zb)
+            & self.write_verified(g.base_rt, &g.rt);
         let viewport = g.viewport.at(self.layout.ssao_viewport_width);
         if g.viewport_swapped {
-            ok = self.write(viewport, &g.viewport_size) && ok;
-            self.globals.viewport_swapped = false;
+            let restored = self.write_verified(viewport, &g.viewport_size);
+            self.globals.viewport_swapped = !restored;
+            ok &= restored;
         } else if engine_ran
             && !g.viewport.is_null()
             && !g.viewport_guard_was_set
@@ -670,18 +701,23 @@ impl Swap {
         {
             // The first SSAO call of the process happened inside the window and stored render/2: store what stock
             // would have stored.
-            ok = self.write(viewport, &[g.width as f32 * 0.5, g.height as f32 * 0.5]) && ok;
+            ok &= self.write_verified(viewport, &[g.width as f32 * 0.5, g.height as f32 * 0.5]);
         }
         // CRenderTarget::dwWidth/dwHeight follow the last u_setrt (a render-size twin): make rmNear/rmNormal and the
         // next viewport describe the output again.
         if engine_ran && !self.render_target.is_null() {
-            ok = self.write(self.render_target.at(self.layout.target_width), &g.width)
-                && self.write(self.render_target.at(self.layout.target_height), &g.height)
-                && ok;
+            ok &= self.write_verified(self.render_target.at(self.layout.target_width), &g.width)
+                & self.write_verified(self.render_target.at(self.layout.target_height), &g.height);
         }
         if !ok {
             self.fault(c"An engine global could not be restored.");
         }
+        ok
+    }
+
+    fn write_verified<T: Plain + PartialEq>(&self, address: Addr, value: &T) -> bool {
+        let mut current = *value;
+        self.write(address, value) && self.read(address, &mut current) && current == *value
     }
 
     fn open_temporal(&mut self, facts: &Facts) -> bool {
@@ -813,36 +849,54 @@ impl Swap {
 
     /// `engine_ran` applies only to a rollback: false when the exchange itself failed in H1's prologue, true when a
     /// refusal closes the window after the engine has drawn into it.
-    fn restore(&mut self, reason: u32, engine_ran: bool) {
-        if !self.view.open {
-            return;
+    fn restore(&mut self, reason: u32, engine_ran: bool) -> bool {
+        let closing = std::mem::take(&mut self.view.open);
+        if closing {
+            self.restore_state.reason = reason;
+            self.restore_state.engine_ran =
+                reason != RSF_ANOMALY_SWAP_RESTORE_ROLLBACK || engine_ran;
+            self.restore_state.caches = true;
+            self.restore_temporal(reason);
+        } else if !self.restore_state.pending() {
+            return true;
         }
-        self.restore_temporal(reason);
-        let checked = reason != RSF_ANOMALY_SWAP_RESTORE_ROLLBACK;
+        let checked = closing && reason != RSF_ANOMALY_SWAP_RESTORE_ROLLBACK;
         for slot in 0..self.slots() {
             let target = self.view.engine[slot];
-            if !target.present {
+            let bit = 1 << slot;
+            if self.restore_state.targets & bit == 0 {
                 continue;
             }
             // Inside the window nothing but the engine's own binds should touch these fields. A different value means
             // something replaced them (surface_set on a twinned texture): restore anyway and refuse further swaps.
             let mut current = Fields::default();
-            if self.load(&target, &mut current)
+            if checked
+                && self.load(&target, &mut current)
                 && !same_fields(&current, &self.view.twins.targets[slot])
-                && checked
             {
                 self.foreign(c"A twinned engine field changed inside the world window.");
             }
-            if !self.store(&target, &target.fields) {
+            if self.store(&target, &target.fields)
+                && self.load(&target, &mut current)
+                && same_fields(&current, &target.fields)
+            {
+                self.restore_state.targets &= !bit;
+            } else {
                 self.fault(c"An engine field write failed while restoring.");
             }
         }
-        if self.view.stage == 2 {
-            self.restore_globals(checked, checked || engine_ran);
+        if self.restore_state.globals {
+            self.restore_state.globals =
+                !self.restore_globals(checked, self.restore_state.engine_ran);
         }
-        self.view.open = false;
-        self.invalidate_caches();
-        self.view.counters.restores[reason as usize] += 1;
+        // If an engine reference is still live, invalidate again after the retry:
+        // the engine may have cached the same twin in the meantime.
+        self.restore_state.caches = !self.invalidate_caches();
+        if self.restore_state.pending() {
+            return false;
+        }
+        self.view.counters.restores[self.restore_state.reason as usize] += 1;
+        true
     }
 
     /// Restores after the engine has drawn into the window and puts the viewport back to output size, like every
@@ -1016,10 +1070,12 @@ impl Swap {
             }
             let target = self.view.engine[slot];
             if target.present {
+                self.restore_state.targets |= 1 << slot;
                 written = self.store(&target, &self.view.twins.targets[slot]);
             }
         }
         if written && stage2 {
+            self.restore_state.globals = true;
             written = self.open_globals();
         }
         if !written {
@@ -1027,7 +1083,10 @@ impl Swap {
             self.restore(RSF_ANOMALY_SWAP_RESTORE_ROLLBACK, false);
             return false;
         }
-        self.invalidate_caches();
+        if !self.invalidate_caches() {
+            self.restore(RSF_ANOMALY_SWAP_RESTORE_ROLLBACK, false);
+            return false;
+        }
         if stage2 && !self.open_temporal(facts) {
             self.fault(c"The Stage 3 projection or mip bias could not be applied.");
             self.restore(RSF_ANOMALY_SWAP_RESTORE_ROLLBACK, false);
@@ -1051,7 +1110,12 @@ impl Swap {
             return false;
         }
         self.view.counters.seams += 1;
-        self.restore(RSF_ANOMALY_SWAP_RESTORE_SEAM, false);
+        if !self.restore(RSF_ANOMALY_SWAP_RESTORE_SEAM, false) {
+            if self.view.stage == 2 {
+                self.set_viewport(self.view.output_width, self.view.output_height);
+            }
+            return false;
+        }
         self.view.counters.round_trips += 1;
         let ok = if self.view.stage == 1 {
             let twin = &raw const self.view.twins.targets[GENERIC0];
@@ -1235,15 +1299,22 @@ impl Swap {
         self.view.counters.fp_jittered += 1;
     }
 
-    fn shutdown(&mut self) {
-        self.restore(RSF_ANOMALY_SWAP_RESTORE_SHUTDOWN, false);
+    fn shutdown(&mut self) -> bool {
+        if !self.restore(RSF_ANOMALY_SWAP_RESTORE_SHUTDOWN, false) {
+            return false;
+        }
         self.release_twins();
         self.failed_key = None;
+        true
     }
 }
 
 fn layout_valid(layout: &Layout) -> bool {
     layout.struct_size as usize >= size_of::<Layout>()
+        && layout
+            .backend_textures
+            .iter()
+            .all(|range| range.count <= MAX_CACHE_SLOTS)
 }
 
 fn platform_valid(platform: &Platform) -> bool {
@@ -1369,8 +1440,8 @@ extern "C" fn rsf_anomaly_swap_position_constant(swap: *mut Handle, constant: *m
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_swap_shutdown(swap: *mut Handle) {
-    with(swap, (), Swap::shutdown);
+extern "C" fn rsf_anomaly_swap_shutdown(swap: *mut Handle) -> bool {
+    with(swap, true, Swap::shutdown)
 }
 
 #[unsafe(no_mangle)]
