@@ -6,7 +6,7 @@ use std::path::Path;
 use std::ptr;
 use windows_sys::Win32::Security::Cryptography::{
     BCRYPT_HASH_HANDLE, BCRYPT_SHA256_ALG_HANDLE, BCryptCreateHash, BCryptDestroyHash,
-    BCryptFinishHash, BCryptHashData,
+    BCryptFinishHash, BCryptHash, BCryptHashData,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
@@ -58,13 +58,36 @@ pub fn sha256_file(path: &Path) -> Option<[u8; 32]> {
     (status >= 0).then_some(digest)
 }
 
-/// Lowercase hex of sha256_file, NUL terminated for the C sha256_hex fields.
-pub fn sha256_file_hex(path: &Path) -> Option<[u8; 65]> {
+fn hex(digest: [u8; 32]) -> [u8; 64] {
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    let digest = sha256_file(path)?;
-    let mut hex = [0; 65];
+    let mut hex = [0; 64];
     for (digits, byte) in hex.as_chunks_mut::<2>().0.iter_mut().zip(digest) {
         *digits = [HEX[usize::from(byte >> 4)], HEX[usize::from(byte & 15)]];
     }
-    Some(hex)
+    hex
+}
+
+/// Lowercase hex of sha256_file, NUL terminated for the C sha256_hex fields.
+pub fn sha256_file_hex(path: &Path) -> Option<[u8; 65]> {
+    let mut text = [0; 65];
+    text[..64].copy_from_slice(&hex(sha256_file(path)?));
+    Some(text)
+}
+
+/// Lowercase hex SHA-256 of a byte slice (no NUL).
+pub fn sha256_hex(bytes: &[u8]) -> Option<[u8; 64]> {
+    let len = u32::try_from(bytes.len()).ok()?;
+    let mut digest = [0; 32];
+    let status = unsafe {
+        BCryptHash(
+            BCRYPT_SHA256_ALG_HANDLE,
+            ptr::null(),
+            0,
+            bytes.as_ptr(),
+            len,
+            digest.as_mut_ptr(),
+            digest.len() as u32,
+        )
+    };
+    (status >= 0).then(|| hex(digest))
 }

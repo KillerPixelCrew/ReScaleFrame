@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::digest::sha256;
+use rsf_windows::sha256_hex;
 use crate::motion_profile::SHADER_OBJECT_OFFSET;
 use crate::shader_family::{FAMILY_COUNT, NO_FAMILY, diagnostic_family_name};
 use crate::shader_loader::{
@@ -662,7 +662,7 @@ impl Stage {
                 return;
             }
         };
-        let Some(hash) = sha256(&frame.source) else {
+        let Some(hash) = sha256_hex(&frame.source) else {
             return;
         };
         let Some(entry) = pack.entry(&hash) else {

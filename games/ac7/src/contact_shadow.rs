@@ -22,10 +22,7 @@ const UNMATCHED: i32 = RSF_AC7_CONTACT_UNMATCHED as i32;
 const PATCHED: i32 = RSF_AC7_CONTACT_PATCHED as i32;
 const REFUSED: i32 = RSF_AC7_CONTACT_REFUSED as i32;
 
-const EXPECTED: [u8; 32] = [
-    0x60, 0xa2, 0xca, 0x61, 0xe5, 0xd8, 0x3b, 0x85, 0x3f, 0x69, 0x2e, 0xe8, 0xc0, 0xbc, 0x35, 0x80,
-    0xea, 0x46, 0xb8, 0xe3, 0x3d, 0x72, 0xc6, 0x44, 0x94, 0x9e, 0x5f, 0x37, 0xc1, 0x06, 0x0a, 0x12,
-];
+const EXPECTED: &[u8; 64] = b"60a2ca61e5d83b853f692ee8c0bc3580ea46b8e33d72c644949e5f37c1060a12";
 
 const NOISE: [u32; 10] = [
     0x0a00000f, 0x00100012, 1, 0x00101046, 2, 0x00004002, 0x3d897143, 0x3bbf4590, 0, 0,
@@ -68,54 +65,6 @@ const BIASED_START: [u32; 7] = [
 ];
 
 const GROWTH: usize = (PHASE.len() + BIAS.len() + BIASED_START.len() - RAY_START.len()) * 4;
-
-#[cfg(windows)]
-fn sha256(input: &[u8]) -> Option<[u8; 32]> {
-    use windows::Win32::Foundation::FreeLibrary;
-    use windows::Win32::System::LibraryLoader::{
-        GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
-    };
-    use windows::core::{BOOL, PCWSTR, s, w};
-
-    type Hash = unsafe extern "system" fn(
-        PCWSTR,
-        u32,
-        *const c_void,
-        *const u8,
-        u32,
-        *mut u8,
-        *mut u32,
-    ) -> BOOL;
-
-    let module =
-        unsafe { LoadLibraryExW(w!("crypt32.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32) }.ok()?;
-    let mut digest = [0; 32];
-    let mut size = digest.len() as u32;
-    let hashed =
-        unsafe { GetProcAddress(module, s!("CryptHashCertificate2")) }.is_some_and(|entry| {
-            let hash =
-                unsafe { std::mem::transmute::<unsafe extern "system" fn() -> isize, Hash>(entry) };
-            unsafe {
-                hash(
-                    w!("SHA256"),
-                    0,
-                    std::ptr::null(),
-                    input.as_ptr(),
-                    input.len() as u32,
-                    digest.as_mut_ptr(),
-                    &mut size,
-                )
-            }
-            .as_bool()
-        });
-    let _ = unsafe { FreeLibrary(module) };
-    (hashed && size == digest.len() as u32).then_some(digest)
-}
-
-#[cfg(not(windows))]
-fn sha256(_: &[u8]) -> Option<[u8; 32]> {
-    None
-}
 
 fn word(data: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes([
@@ -218,7 +167,7 @@ unsafe extern "C" fn rsf_ac7_contact_shadow_correct(
     if &input[..4] != b"DXBC" || word(input, 24) != ORIGINAL_SIZE as u32 {
         return UNMATCHED;
     }
-    if sha256(&input[..ORIGINAL_SIZE]) != Some(EXPECTED) {
+    if rsf_windows::sha256_hex(&input[..ORIGINAL_SIZE]).as_ref() != Some(EXPECTED) {
         return UNMATCHED;
     }
     if !layout_matches(input) {

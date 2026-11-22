@@ -20,8 +20,6 @@ mod bootstrap;
 mod camera;
 #[cfg(windows)]
 mod capture_clock;
-#[cfg(windows)]
-mod digest;
 mod engine_guards;
 #[cfg(windows)]
 mod engine_slots;

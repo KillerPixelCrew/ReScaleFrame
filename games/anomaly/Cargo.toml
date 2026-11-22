@@ -35,6 +35,7 @@ sr-fixtures = ["windows/Win32_Graphics_Dxgi"]
 rsf-game-sys = { path = "../../sdk/game" }
 
 [target."cfg(windows)".dependencies]
+rsf-windows = { path = "../../integrations/windows" }
 rsf-shader-compiler = { path = "../../runtime/shader_patch/compiler" }
 windows = { workspace = true, features = [
   "Win32_Graphics_Direct3D",

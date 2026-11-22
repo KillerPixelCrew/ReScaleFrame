@@ -567,6 +567,7 @@ dependencies = [
  "rsf-graphics",
  "rsf-minhook-sys",
  "rsf-shader-compiler",
+ "rsf-windows",
  "windows",
 ]
 
@@ -588,6 +589,7 @@ dependencies = [
  "rsf-bindgen",
  "rsf-game-sys",
  "rsf-shader-compiler",
+ "rsf-windows",
  "windows",
  "windows-sys",
 ]

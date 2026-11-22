@@ -8,7 +8,7 @@ mod window_input;
 mod xinput_facts;
 
 #[cfg(windows)]
-pub use digest::{sha256_file, sha256_file_hex};
+pub use digest::{sha256_file, sha256_file_hex, sha256_hex};
 
 pub use window_input::classify_window_message;
 #[cfg(windows)]

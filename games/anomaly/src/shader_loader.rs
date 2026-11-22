@@ -9,7 +9,7 @@ mod manifest;
 mod reflection;
 mod runtime_pack;
 
-use crate::digest::sha256;
+use rsf_windows::sha256_hex;
 pub(crate) use crate::sys::{
     rsf_anomaly_engine_include_ops as EngineIncludeOps,
     rsf_anomaly_engine_shader_profile as EngineShaderProfile,
@@ -97,13 +97,13 @@ unsafe fn rsf_anomaly_shader_match_request(
     source: Bytes,
     target: Bytes,
 ) -> Option<&Entry> {
-    let hash = sha256(unsafe { source.as_slice() })?;
+    let hash = sha256_hex(unsafe { source.as_slice() })?;
     let entry = manifest?.find(&hash)?;
     (unsafe { target.as_slice() }.first() == Some(&entry.stage)).then_some(entry)
 }
 
 fn cache_key(request: &Request, id: &Identity) -> Option<[u8; 64]> {
-    let stock_hash = sha256(unsafe { request.bytecode.as_slice() })?;
+    let stock_hash = sha256_hex(unsafe { request.bytecode.as_slice() })?;
     let flags = request.flags.to_string();
     let mut key = b"rsf-anomaly-motion-variant 1\n".to_vec();
     for field in [
@@ -124,7 +124,7 @@ fn cache_key(request: &Request, id: &Identity) -> Option<[u8; 64]> {
         key.extend_from_slice(unsafe { define.value.as_slice() });
         key.push(b'\n');
     }
-    sha256(&key)
+    sha256_hex(&key)
 }
 
 unsafe fn rsf_anomaly_shader_skin_mode(defines: Span<Define>) -> i32 {
@@ -275,7 +275,7 @@ fn prepare_tree<R>(
                 fs::read(root_path).ok()
             })
             .filter(|bytes| {
-                sha256(bytes).is_some_and(|hash| hash.as_slice() == unsafe { id.motion.as_slice() })
+                sha256_hex(bytes).is_some_and(|hash| hash.as_slice() == unsafe { id.motion.as_slice() })
             })
             .ok_or_else(|| {
                 TreeResult::refused(

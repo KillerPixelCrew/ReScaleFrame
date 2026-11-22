@@ -24,6 +24,7 @@ cc.workspace = true
 rsf-bindgen = { path = "../../tools/bindgen" }
 
 [target."cfg(windows)".dependencies]
+rsf-windows = { path = "../../integrations/windows" }
 windows = { workspace = true, features = [
   "Win32_Graphics_Direct3D_Fxc",
   "Win32_Graphics_Direct3D11",

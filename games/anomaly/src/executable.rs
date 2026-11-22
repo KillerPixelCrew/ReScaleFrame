@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-use crate::digest::sha256_file;
 use crate::native_profile::{PROFILES, find};
 use rsf_game_sys::win32::module_path;
 use std::cell::Cell;
@@ -24,8 +23,8 @@ pub(crate) fn running_build() -> Result<usize, &'static CStr> {
                     .any(|build| build.executable.to_bytes().eq_ignore_ascii_case(name.as_bytes()))
         })
         .ok_or(c"Native sites belong to the profiled DX11 executables (standard or AVX), not this process.")?;
-    sha256_file(path)
-        .and_then(|hash| find(name.as_bytes(), &hash))
+    rsf_windows::sha256_file_hex(path)
+        .and_then(|hash| find(name.as_bytes(), &hash[..64]))
         .ok_or(c"Running executable SHA-256 does not match a guarded native profile.")
 }
 

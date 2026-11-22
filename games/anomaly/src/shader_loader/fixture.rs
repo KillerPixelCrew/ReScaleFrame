@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 fn digest(bytes: &[u8]) -> String {
-    String::from_utf8(sha256(bytes).expect("fixture digest").to_vec()).expect("ASCII digest")
+    String::from_utf8(sha256_hex(bytes).expect("fixture digest").to_vec()).expect("ASCII digest")
 }
 
 fn manifest_header(digit: char) -> String {
@@ -377,7 +377,7 @@ fn loader_contract() {
     );
     let sub_manifest = parse(sub_meta.as_bytes()).unwrap();
     let sub_id = sub_manifest
-        .find(&sha256(sub_source).unwrap())
+        .find(&sha256_hex(sub_source).unwrap())
         .unwrap()
         .identity(sub_manifest.namespace());
     let sub = request(b"vs_5_0", sub_source, &[], &defines);
