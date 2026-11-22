@@ -23,13 +23,4 @@ enum class Profile : uint32_t
     V310916 = 6,
 };
 
-inline bool IsSupportedProvider(HMODULE module, const wchar_t* path) noexcept
-{
-    return rsf_mfg_supported_provider(module, path) != 0;
-}
-
-inline bool IsSupportedRetainedProvider(HMODULE module) noexcept
-{
-    return rsf_mfg_retained_provider(module) != 0;
-}
 }

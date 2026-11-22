@@ -77,7 +77,7 @@ inline bool Ready(HMODULE module) noexcept {
     return false;
 }
 inline Result Patch(HMODULE module, bool verifiedAdaAdapter) noexcept {
-    if (!verifiedAdaAdapter || !dlssg_provider_policy::IsSupportedRetainedProvider(module)) return {};
+    if (!verifiedAdaAdapter || rsf_mfg_retained_provider(module) == 0) return {};
     // Retention establishes module lifetime before scanning or publishing. No
     // filename, sibling version, cached base address or UI maximum admits it.
     std::lock_guard lock(gMutex);

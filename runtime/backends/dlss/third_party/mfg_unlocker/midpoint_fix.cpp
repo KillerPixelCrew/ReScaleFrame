@@ -1105,7 +1105,7 @@ bool PatchProvider(HMODULE module, const wchar_t* suppliedPath) noexcept
             static_cast<unsigned>(failure), path && *path ? path : L"(unknown)");
         return false;
     };
-    if (!dlssg_provider_policy::IsSupportedProvider(pinned, path))
+    if (rsf_mfg_supported_provider(pinned, path) == 0)
         return fail(Failure::eProviderVersion);
     const TemporalProviderProfile* const profile =
         ProfileForPath(path);

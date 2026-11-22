@@ -1230,13 +1230,13 @@ Port generation, latency instrumentation and bundled compatibility handling with
 - [ ] [runtime/backends/dlss/src/reflex_audit.cpp](runtime/backends/dlss/src/reflex_audit.cpp)
 - [ ] [runtime/backends/dlss/src/reflex_audit.h](runtime/backends/dlss/src/reflex_audit.h)
 - [ ] [runtime/backends/dlss/src/streamline_diagnostics.h](runtime/backends/dlss/src/streamline_diagnostics.h)
-- [ ] [runtime/backends/dlss/third_party/mfg_unlocker/dlssg_provider_policy.cpp](runtime/backends/dlss/third_party/mfg_unlocker/dlssg_provider_policy.cpp)
-- [ ] [runtime/backends/dlss/third_party/mfg_unlocker/dlssg_provider_policy.h](runtime/backends/dlss/third_party/mfg_unlocker/dlssg_provider_policy.h)
+- [x] [runtime/backends/dlss/third_party/mfg_unlocker/dlssg_provider_policy.cpp](runtime/backends/dlss/third_party/mfg_unlocker/dlssg_provider_policy.cpp)
+- [x] [runtime/backends/dlss/third_party/mfg_unlocker/dlssg_provider_policy.h](runtime/backends/dlss/third_party/mfg_unlocker/dlssg_provider_policy.h)
 - [ ] [runtime/backends/dlss/third_party/mfg_unlocker/midpoint_fix.cpp](runtime/backends/dlss/third_party/mfg_unlocker/midpoint_fix.cpp)
 - [ ] [runtime/backends/dlss/third_party/mfg_unlocker/midpoint_fix.h](runtime/backends/dlss/third_party/mfg_unlocker/midpoint_fix.h)
 - [ ] [runtime/backends/dlss/third_party/mfg_unlocker/ngx_mfg_gate.h](runtime/backends/dlss/third_party/mfg_unlocker/ngx_mfg_gate.h)
 - [ ] [runtime/backends/dlss/third_party/mfg_unlocker/protected_pointer.h](runtime/backends/dlss/third_party/mfg_unlocker/protected_pointer.h)
-- [ ] [runtime/backends/dlss/third_party/mfg_unlocker/universal_wrapper_profile.h](runtime/backends/dlss/third_party/mfg_unlocker/universal_wrapper_profile.h)
+- [x] [runtime/backends/dlss/third_party/mfg_unlocker/universal_wrapper_profile.h](runtime/backends/dlss/third_party/mfg_unlocker/universal_wrapper_profile.h)
 
 **Fixtures (1)**
 

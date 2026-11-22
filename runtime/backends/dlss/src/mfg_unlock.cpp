@@ -46,7 +46,7 @@ uint32_t prepare_provider(void* module, uint32_t maximum, char* report)
     wchar_t path[32768]{};
     const auto length = GetModuleFileNameW(provider, path, DWORD(std::size(path)));
     const bool identified = length != 0 && length < std::size(path) &&
-        dlssg_provider_policy::IsSupportedProvider(provider, path);
+        rsf_mfg_supported_provider(provider, path) != 0;
     const bool temporal = identified && midpoint_fix::PatchProvider(provider, path);
     const auto gate = temporal ? ngx_mfg_gate::Patch(provider, true) : ngx_mfg_gate::Result{};
     if (length >= std::size(path)) path[0] = L'\0';
