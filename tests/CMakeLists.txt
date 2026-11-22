@@ -1033,10 +1033,9 @@ if(EXISTS "${RSF_XESS_INCLUDE}/xell/xell_d3d12.h" AND
    EXISTS "${RSF_XESS_INCLUDE}/xess_fg/xefg_swapchain_d3d12.h")
     rsf_add_rust_static(rsf_xell_fixture_rust rsf_rust_xell_fixture
         rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features xell-fixture)
-    add_executable(rsf_xell_sleep_concurrency xell_sleep_concurrency.cpp)
-    target_compile_definitions(rsf_xell_sleep_concurrency PRIVATE RSF_HAVE_XESS_FG=1)
-    target_include_directories(rsf_xell_sleep_concurrency SYSTEM PRIVATE "${RSF_XESS_INCLUDE}")
-    target_link_libraries(rsf_xell_sleep_concurrency PRIVATE rsf_xell_fixture_rust rsf_orchestrator_rust ReScaleFrame::Contract ReScaleFrame::RuntimeCommon rsf_build_options d3d11 d3d12 dxgi)
+    add_executable(rsf_xell_sleep_concurrency game-sdk/cpu_fixture_main.c)
+    target_compile_definitions(rsf_xell_sleep_concurrency PRIVATE RSF_CPU_FIXTURE=rsf_xell_fixture_run)
+    target_link_libraries(rsf_xell_sleep_concurrency PRIVATE rsf_xell_fixture_rust rsf_orchestrator_rust rsf_build_options)
     add_test(NAME xell_sleep_concurrency_contract COMMAND rsf_xell_sleep_concurrency)
     set_tests_properties(xell_sleep_concurrency_contract PROPERTIES TIMEOUT 10)
 endif()

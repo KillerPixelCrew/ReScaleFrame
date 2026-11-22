@@ -41,7 +41,7 @@ mod input_receipts;
 mod native_fg_cpu_abi;
 #[cfg(feature = "plugin-session-fixture")]
 mod plugin_session_fixture;
-#[cfg(feature = "fg-cpu-fixture")]
+#[cfg(any(feature = "fg-cpu-fixture", feature = "xell-fixture"))]
 #[allow(dead_code, unused_imports)]
 #[path = "../../../runtime/orchestrator/src/render_abi.rs"]
 mod render_abi;
@@ -59,6 +59,8 @@ mod vk_latency;
 mod vk_latency_calls;
 #[cfg(feature = "xell-fixture")]
 mod xell;
+#[cfg(feature = "xell-fixture")]
+mod xell_abi;
 
 use std::ffi::{CStr, OsStr};
 use std::os::windows::ffi::OsStrExt;
