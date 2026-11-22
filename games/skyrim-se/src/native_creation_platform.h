@@ -38,9 +38,6 @@ typedef struct rsf_skyrim_creation_call {
 // Detour entry points (src/lib.rs). The Rust session (src/session.rs) registers the platform and
 // prepares, starts, quiesces and stops the creation owner. Opens the call's lease and returns the original routine. leave is mandatory after enter, on
 // return or unwind; it closes any Runtime scope and restores the native last error.
-#ifdef __cplusplus
-bool rsf_skyrim_guarded_read(uintptr_t address, void* output, size_t size) noexcept;
-#endif
 void* rsf_skyrim_creation_enter(rsf_skyrim_creation_call* call);
 void rsf_skyrim_creation_leave(rsf_skyrim_creation_call* call);
 

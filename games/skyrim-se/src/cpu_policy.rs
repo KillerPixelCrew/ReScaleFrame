@@ -185,7 +185,7 @@ pub(crate) fn rsf_skyrim_cpu_record_consumer(
         Consumer::PlayerCamera => &mut state.player_camera_updates,
     };
     *count = count.wrapping_add(1);
-    if !cpu_sources::unchanged(*stamp)
+    if !cpu_sources::EPOCHS.unchanged(*stamp)
         || (state.consumed.generation != 0 && state.consumed.generation != stamp.generation)
     {
         state.ambiguous = true;

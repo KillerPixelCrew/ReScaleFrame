@@ -14,7 +14,7 @@ pub(crate) struct JobTicket {
     pub(crate) manager: usize,
 }
 
-struct NativeJobs {
+pub(crate) struct NativeJobs {
     state: AtomicU64,
     next: AtomicU64,
     source: AtomicU64,
@@ -53,7 +53,13 @@ impl NativeJobs {
             .compare_exchange(expected, Self::PUBLISHING, SeqCst, SeqCst)
     }
 
-    fn publish(&self, manager: usize, source: u64, session: u64, native_idle: bool) -> JobTicket {
+    pub(crate) fn publish(
+        &self,
+        manager: usize,
+        source: u64,
+        session: u64,
+        native_idle: bool,
+    ) -> JobTicket {
         if manager == 0 || source == 0 || session == 0 {
             return JobTicket::default();
         }
@@ -88,7 +94,7 @@ impl NativeJobs {
         }
     }
 
-    fn snapshot(&self) -> JobTicket {
+    pub(crate) fn snapshot(&self) -> JobTicket {
         let generation = self.state.load(SeqCst);
         if generation < Self::GENERATION_STRIDE {
             return JobTicket::default();
@@ -106,12 +112,12 @@ impl NativeJobs {
         }
     }
 
-    fn matches(&self, ticket: JobTicket) -> bool {
+    pub(crate) fn matches(&self, ticket: JobTicket) -> bool {
         let current = self.snapshot();
         ticket.generation != 0 && current == ticket
     }
 
-    fn retire(&self, ticket: JobTicket) -> bool {
+    pub(crate) fn retire(&self, ticket: JobTicket) -> bool {
         if !self.matches(ticket)
             || self
                 .state
@@ -124,9 +130,13 @@ impl NativeJobs {
         true
     }
 
-    fn invalidate(&self) {
+    pub(crate) fn invalidate(&self) {
         self.state.store(Self::POISONED, SeqCst);
         self.retired.store(0, SeqCst);
+    }
+
+    pub(crate) fn retired(&self) -> u64 {
+        self.retired.load(SeqCst)
     }
 
     // The native owner verifies that publishing and observing hooks have drained.
@@ -151,7 +161,7 @@ pub(crate) struct PollTicket {
     exclusive: bool,
 }
 
-struct InputEpochs {
+pub(crate) struct InputEpochs {
     publication: Mutex<()>,
     next: AtomicU64,
     revision: AtomicU64,
@@ -174,7 +184,7 @@ impl InputEpochs {
         }
     }
 
-    fn begin_poll(&self) -> PollTicket {
+    pub(crate) fn begin_poll(&self) -> PollTicket {
         let _guard = self
             .publication
             .lock()
@@ -192,7 +202,7 @@ impl InputEpochs {
         }
     }
 
-    fn end_poll(&self, poll: PollTicket, produced: bool) {
+    pub(crate) fn end_poll(&self, poll: PollTicket, produced: bool) {
         self.publish_poll(poll, produced, || {});
     }
 
@@ -224,7 +234,7 @@ impl InputEpochs {
             && poll.conflicts == self.conflicts.load(SeqCst)
     }
 
-    fn invalidate(&self) {
+    pub(crate) fn invalidate(&self) {
         let _guard = self
             .publication
             .lock()
@@ -235,17 +245,17 @@ impl InputEpochs {
         self.end_write();
     }
 
-    fn begin_write(&self) {
+    pub(crate) fn begin_write(&self) {
         self.writers.fetch_add(1, SeqCst);
         self.revision.fetch_add(1, SeqCst);
     }
 
-    fn end_write(&self) {
+    pub(crate) fn end_write(&self) {
         self.revision.fetch_add(1, SeqCst);
         self.writers.fetch_sub(1, SeqCst);
     }
 
-    fn snapshot(&self) -> Stamp {
+    pub(crate) fn snapshot(&self) -> Stamp {
         let stamp = Stamp {
             revision: self.revision.load(SeqCst),
             generation: self.completed.load(SeqCst),
@@ -257,65 +267,15 @@ impl InputEpochs {
         }
     }
 
-    fn unchanged(&self, stamp: Stamp) -> bool {
+    pub(crate) fn unchanged(&self, stamp: Stamp) -> bool {
         stamp.generation != 0
             && self.writers.load(SeqCst) == 0
             && self.revision.load(SeqCst) == stamp.revision
     }
 }
 
-static JOBS: NativeJobs = NativeJobs::new();
-static EPOCHS: InputEpochs = InputEpochs::new();
-
-pub(crate) fn rsf_skyrim_jobs_publish(
-    out: &mut JobTicket,
-    manager: usize,
-    source: u64,
-    session: u64,
-    native_idle: bool,
-) {
-    *out = JOBS.publish(manager, source, session, native_idle);
-}
-
-pub(crate) fn rsf_skyrim_jobs_snapshot(out: &mut JobTicket) {
-    *out = JOBS.snapshot();
-}
-
-pub(crate) fn rsf_skyrim_jobs_matches(ticket: &JobTicket) -> bool {
-    JOBS.matches(*ticket)
-}
-
-pub(crate) fn rsf_skyrim_jobs_retire(ticket: &JobTicket) -> bool {
-    JOBS.retire(*ticket)
-}
-
-pub(crate) fn rsf_skyrim_jobs_retired() -> u64 {
-    JOBS.retired.load(SeqCst)
-}
-
-pub(crate) fn rsf_skyrim_jobs_invalidate() {
-    JOBS.invalidate();
-}
-
-pub(crate) fn rsf_skyrim_epochs_snapshot(out: &mut Stamp) {
-    *out = EPOCHS.snapshot();
-}
-
-pub(crate) fn rsf_skyrim_epochs_begin_write() {
-    EPOCHS.begin_write();
-}
-
-pub(crate) fn rsf_skyrim_epochs_end_write() {
-    EPOCHS.end_write();
-}
-
-pub(crate) fn rsf_skyrim_epochs_invalidate() {
-    EPOCHS.invalidate();
-}
-
-pub(crate) fn unchanged(stamp: Stamp) -> bool {
-    EPOCHS.unchanged(stamp)
-}
+pub(crate) static JOBS: NativeJobs = NativeJobs::new();
+pub(crate) static EPOCHS: InputEpochs = InputEpochs::new();
 
 #[repr(u32)]
 #[derive(Clone, Copy)]
@@ -342,27 +302,6 @@ pub(crate) struct PollProvenance {
     pub(crate) job_generation: u64,
     pub(crate) submitting_source: u64,
     pub(crate) poll_generation: u64,
-}
-
-pub(crate) fn rsf_skyrim_poll_begin(scope: &mut PollScope, manager: usize) {
-    *scope = PollScope {
-        ticket: EPOCHS.begin_poll(),
-        manager,
-        produced: false,
-        kinds: 0,
-    };
-}
-
-pub(crate) fn rsf_skyrim_poll_end(scope: &PollScope, nested: bool) {
-    EPOCHS.end_poll(scope.ticket, scope.produced && !nested);
-}
-
-pub(crate) fn rsf_skyrim_poll_record_kinds(scope: &mut PollScope, kinds: u32) {
-    scope.kinds |= kinds;
-}
-
-pub(crate) fn rsf_skyrim_poll_sink_produced(scope: &mut PollScope) {
-    scope.produced = true;
 }
 
 pub(crate) fn rsf_skyrim_poll_provenance(

@@ -69,11 +69,6 @@ mod native {
     }
 
     unsafe extern "C" {
-        pub(super) fn rsf_skyrim_guarded_read(
-            address: usize,
-            out: *mut c_void,
-            size: usize,
-        ) -> bool;
         pub(super) fn rsf_skyrim_creation_begin_guarded(
             service: usize,
             user: *mut c_void,
@@ -140,7 +135,7 @@ impl Platform {
     }
 
     pub(crate) fn read(&self, address: usize, out: &mut [u8]) -> bool {
-        unsafe { native::rsf_skyrim_guarded_read(address, out.as_mut_ptr().cast(), out.len()) }
+        unsafe { rsf_game_sys::win32::read_process(address, out.as_mut_ptr().cast(), out.len()) }
     }
 
     pub(crate) fn read_u32(&self, address: usize) -> Option<u32> {

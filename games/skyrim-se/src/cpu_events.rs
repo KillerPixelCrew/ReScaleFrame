@@ -19,7 +19,6 @@ const JOIN_RETURN: usize = 0x659334;
 const NAMED_POLL_RETURN: usize = 0xebc248;
 
 unsafe extern "C" {
-    fn rsf_skyrim_guarded_read(address: usize, out: *mut std::ffi::c_void, size: usize) -> bool;
     fn rsf_skyrim_query_menus(
         open: usize,
         frozen: usize,
@@ -194,15 +193,11 @@ fn release(source: u64) -> Reservation {
 }
 
 fn job() -> JobTicket {
-    let mut ticket = JobTicket::EMPTY;
-    rsf_skyrim_jobs_snapshot(&mut ticket);
-    ticket
+    JOBS.snapshot()
 }
 
 fn stamp() -> Stamp {
-    let mut stamp = Stamp::default();
-    rsf_skyrim_epochs_snapshot(&mut stamp);
-    stamp
+    EPOCHS.snapshot()
 }
 
 #[unsafe(no_mangle)]
@@ -219,11 +214,7 @@ fn begin_frame(main: usize) -> Receipt {
     };
     // Only a sampled late poll whose native job joined normally can be adopted.
     let mut reservation = Reservation::EMPTY;
-    rsf_skyrim_sources_adopt(
-        &mut reservation,
-        services.host.session_id,
-        rsf_skyrim_jobs_retired(),
-    );
+    rsf_skyrim_sources_adopt(&mut reservation, services.host.session_id, JOBS.retired());
     let mut queued_move = false;
     let (source, entry_readable) = if reservation.source != 0 {
         (
@@ -352,16 +343,10 @@ fn begin_submit(caller: usize) -> Receipt {
             }
             frame_event(frame, RSF_GAME_CPU_SIMULATION_BEGIN);
             // The original wakes the worker after setting both mode1 fields.
-            rsf_skyrim_jobs_publish(
-                &mut ticket,
-                before.manager,
-                source,
-                services.host.session_id,
-                true,
-            );
+            ticket = JOBS.publish(before.manager, source, services.host.session_id, true);
             unsafe { frame.as_mut().jobs = ticket };
         } else if FRAME.get().is_some() || job().generation != 0 {
-            rsf_skyrim_jobs_invalidate();
+            JOBS.invalidate();
         }
     }
     Receipt::Jobs {
@@ -383,7 +368,7 @@ fn begin_join(caller: usize) -> Receipt {
             && before.manager == ticket.manager
             && before.requested <= 1
             && before.running == 1
-            && rsf_skyrim_jobs_matches(&ticket)
+            && JOBS.matches(ticket)
     });
     Receipt::Jobs {
         before,
@@ -409,7 +394,7 @@ fn finish_jobs(
                 || after.requested != 1
                 || after.running != 1)
         {
-            rsf_skyrim_jobs_invalidate();
+            JOBS.invalidate();
         }
     } else if owns_wait {
         // WAIT_OBJECT_0
@@ -420,12 +405,12 @@ fn finish_jobs(
             && after.requested == 0
             && after.running == 0
         {
-            rsf_skyrim_jobs_retire(ticket);
+            JOBS.retire(*ticket);
         } else {
-            rsf_skyrim_jobs_invalidate();
+            JOBS.invalidate();
         }
     } else if active() && job().generation != 0 {
-        rsf_skyrim_jobs_invalidate();
+        JOBS.invalidate();
     }
 }
 
@@ -543,7 +528,10 @@ fn prepare_poll(mut poll: NonNull<Poll>) {
 
 fn finish_poll(poll: &mut Poll, returned: bool) {
     POLL.set(poll.previous);
-    rsf_skyrim_poll_end(&poll.scope, !returned || poll.previous.is_some());
+    EPOCHS.end_poll(
+        poll.scope.ticket,
+        poll.scope.produced && returned && poll.previous.is_none(),
+    );
     let Some(services) = poll.services.filter(|_| poll.reserved != 0) else {
         return;
     };
@@ -577,7 +565,7 @@ fn finish_poll(poll: &mut Poll, returned: bool) {
 fn begin_dispatch(manager: usize, list: usize) -> Receipt {
     let mut event = unsafe { std::mem::zeroed::<rsf_game_cpu_event>() };
     let services = if active() && rsf_skyrim_cpu_is_input_manager(manager) {
-        let kinds = rsf_skyrim_cpu_input_kinds(list, rsf_skyrim_guarded_read);
+        let kinds = rsf_skyrim_cpu_input_kinds(list, rsf_game_sys::win32::read_process);
         cpu_hooks::services()
             .filter(|_| kinds != 0)
             .inspect(|services| {
@@ -597,7 +585,7 @@ fn begin_dispatch(manager: usize, list: usize) -> Receipt {
         .filter(|scope| unsafe { scope.as_ref().manager } == manager);
     let previous = DISPATCHED_LIST.replace(selected.map_or(0, |_| list));
     if let Some(mut scope) = selected.filter(|_| list != 0) {
-        rsf_skyrim_poll_record_kinds(unsafe { scope.as_mut() }, event.input_kind);
+        unsafe { scope.as_mut() }.kinds |= event.input_kind;
     }
     Receipt::Dispatch {
         previous,
@@ -777,24 +765,24 @@ unsafe extern "C" fn rsf_skyrim_cpu_before(
     let (owner, argument, caller) = unsafe { ((*call).owner, (*call).argument, (*call).caller) };
     let state = match index {
         RSF_SKYRIM_CPU_TICK => begin_frame(owner),
-        RSF_SKYRIM_CPU_POLL => {
-            let mut scope = PollScope::default();
-            rsf_skyrim_poll_begin(&mut scope, owner);
-            Receipt::Poll(Poll {
-                scope,
-                previous: POLL.get(),
-                services: None,
-                reserved: 0,
-                begin: 0,
-            })
-        }
+        RSF_SKYRIM_CPU_POLL => Receipt::Poll(Poll {
+            scope: PollScope {
+                ticket: EPOCHS.begin_poll(),
+                manager: owner,
+                ..PollScope::default()
+            },
+            previous: POLL.get(),
+            services: None,
+            reserved: 0,
+            begin: 0,
+        }),
         RSF_SKYRIM_CPU_RENDER => begin_render(owner, unsafe { &mut *pass }),
         RSF_SKYRIM_CPU_WORLD => begin_world(owner, caller, argument as u32, unsafe { &mut *pass }),
         RSF_SKYRIM_CPU_DISPATCH => begin_dispatch(owner, argument),
         RSF_SKYRIM_CPU_CONTROLS => {
-            rsf_skyrim_epochs_begin_write();
+            EPOCHS.begin_write();
             if matching_poll(argument).is_none() {
-                rsf_skyrim_epochs_invalidate();
+                EPOCHS.invalidate();
             }
             Receipt::Controls
         }
@@ -879,14 +867,14 @@ unsafe extern "C" fn rsf_skyrim_cpu_after(
         Receipt::Controls => {
             if !returned {
                 // The native writer may have changed controls before unwinding.
-                rsf_skyrim_epochs_invalidate();
+                EPOCHS.invalidate();
             } else if active()
                 && let Some(mut scope) = matching_poll(argument)
                 && rsf_skyrim_cpu_is_player_controls(owner)
             {
-                rsf_skyrim_poll_sink_produced(unsafe { scope.as_mut() });
+                unsafe { scope.as_mut() }.produced = true;
             }
-            rsf_skyrim_epochs_end_write();
+            EPOCHS.end_write();
         }
         Receipt::Jobs {
             before,

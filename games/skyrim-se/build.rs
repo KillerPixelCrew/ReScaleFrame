@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: MIT
-//! Compiles the native leaves (detours, guarded reads and exception boundaries) for the
+//! Compiles the native leaves (detours and exception boundaries) for the
 //! executables Cargo links (unit tests). The archive is linked without bundling, so the staticlib
 //! CMake links never carries it: CMake compiles the same files as rsf_skyrim_se_native.
-const LEAVES: [&str; 5] = [
+const LEAVES: [&str; 4] = [
     "src/render_detours.c",
     "src/native_creation.c",
     "src/compatibility.c",
     "src/cpu_events.c",
-    "src/guarded_read.c",
 ];
 
 fn main() {
