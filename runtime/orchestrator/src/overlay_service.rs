@@ -7,6 +7,7 @@ use crate::{
     fg_status,
     native_cpu::rsf_native_input_receipts_get,
     overlay_abi::*,
+    overlay_settings::{apply_settings_intent, fill_sharpening_stats, settings_changed, sr_name},
     present_rates::Rates,
     render_abi::{
         RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO, RSF_FG_FIXED, RSF_FG_OFF,
@@ -633,57 +634,6 @@ fn apply(config: &Config, request: impl FnOnce(Settings) -> Settings, origin: &s
     result
 }
 
-fn settings_intent(mut value: Settings, intent: &rsf_overlay_intent) -> Settings {
-    if intent.sharpening_changed != 0 {
-        value.sharpening_mode = intent.sharpening_mode;
-        value.sharpening_sharpness = intent.sharpening_sharpness;
-        value.sharpening_mas = intent.sharpening_mas;
-        value.sharpening_motion_sharpness = intent.sharpening_motion_sharpness;
-        value.sharpening_motion_threshold = intent.sharpening_motion_threshold;
-        value.sharpening_motion_scale_limit = intent.sharpening_motion_scale_limit;
-        value.sharpening_contrast_enabled = intent.sharpening_contrast_enabled;
-        value.sharpening_contrast = intent.sharpening_contrast;
-        value.sharpening_depth_scale = intent.sharpening_depth_scale;
-        value.sharpening_depth_bias = intent.sharpening_depth_bias;
-        value.sharpening_clamp_output = intent.sharpening_clamp_output;
-        value.sharpening_debug = intent.sharpening_debug;
-    }
-    if intent.backend_changed != 0 {
-        value.sr_backend = intent.backend;
-    }
-    if intent.enabled_changed != 0 {
-        value.sr_enabled = u32::from(intent.enabled != 0);
-    }
-    if intent.quality_changed != 0 {
-        value.sr_quality = intent.quality;
-    }
-    if intent.dlss_preset_changed != 0 {
-        value.dlss_preset = intent.dlss_preset;
-    }
-    if intent.fg_backend_changed != 0 {
-        value.fg_enabled = u32::from(intent.fg_backend != 0);
-        if intent.fg_backend != 0 {
-            value.fg_backend = intent.fg_backend;
-        }
-    }
-    if intent.fg_changed != 0 {
-        value.fg_enabled = u32::from(intent.fg_mode != RSF_FG_OFF);
-        if intent.fg_generated != 0 {
-            value.generated_frames = intent.fg_generated;
-        }
-    }
-    if intent.reflex_changed != 0 {
-        value.latency = intent.reflex_mode;
-    }
-    if intent.frame_limit_changed != 0 {
-        value.frame_limit_us = intent.frame_limit_us;
-    }
-    if intent.performance_hud_changed != 0 {
-        value.status_overlay = u32::from(intent.performance_hud != 0);
-    }
-    value
-}
-
 impl Sample {
     // The provider and session are borrowed on the Present owner until its drained boundary.
     fn read(config: &Config) -> Self {
@@ -739,18 +689,6 @@ impl Sample {
     }
 }
 
-fn sr_name(backend: u32) -> &'static CStr {
-    match backend {
-        RSF_SR_DLSS => c"DLSS",
-        RSF_SR_FSR2 => c"FSR2",
-        RSF_SR_FSR3 => c"FSR3",
-        RSF_SR_FSR4 => c"FSR4",
-        RSF_SR_XESS => c"XeSS",
-        RSF_SR_SPATIAL => c"Spatial",
-        _ => c"None",
-    }
-}
-
 fn dimension(reported: u32, chain: u32) -> u32 {
     if reported != 0 { reported } else { chain }
 }
@@ -786,7 +724,7 @@ impl State {
         if let Some(text) = self.description(config, false) {
             copy_reason(reason, text);
         }
-        rsf_overlay_stats {
+        let mut stats = rsf_overlay_stats {
             struct_size: abi_size::<rsf_overlay_stats>(),
             backend_loaded: 1,
             backend_supported: u32::from(sr_active),
@@ -873,21 +811,14 @@ impl State {
                 null()
             },
             sharpening_available: u32::from(config.sr_choices != 0),
-            sharpening_mode: settings.sharpening_mode,
-            sharpening_sharpness: settings.sharpening_sharpness,
-            sharpening_mas: settings.sharpening_mas,
-            sharpening_motion_sharpness: settings.sharpening_motion_sharpness,
-            sharpening_motion_threshold: settings.sharpening_motion_threshold,
-            sharpening_motion_scale_limit: settings.sharpening_motion_scale_limit,
-            sharpening_contrast_enabled: settings.sharpening_contrast_enabled,
-            sharpening_contrast: settings.sharpening_contrast,
-            sharpening_depth_scale: settings.sharpening_depth_scale,
-            sharpening_depth_bias: settings.sharpening_depth_bias,
-            sharpening_clamp_output: settings.sharpening_clamp_output,
-            sharpening_debug: settings.sharpening_debug,
             ui_preferences: self.ui_preferences,
             ..Default::default()
-        }
+        };
+        fill_sharpening_stats(
+            &mut stats,
+            &sharpening_of(settings, &sharpening_policy::defaults()),
+        );
+        stats
     }
 
     fn status(&self, config: &Config, foreground: u32) -> Status {
@@ -1089,18 +1020,15 @@ fn apply_intent(config: &Config, intent: &rsf_overlay_intent) {
             ));
         }
     }
-    if intent.sharpening_changed != 0
-        || intent.backend_changed != 0
-        || intent.enabled_changed != 0
-        || intent.quality_changed != 0
-        || intent.dlss_preset_changed != 0
-        || intent.fg_backend_changed != 0
-        || intent.fg_changed != 0
-        || intent.reflex_changed != 0
-        || intent.frame_limit_changed != 0
-        || intent.performance_hud_changed != 0
-    {
-        let result = apply(config, |current| settings_intent(current, intent), "panel");
+    if settings_changed(intent) {
+        let result = apply(
+            config,
+            |mut current| {
+                apply_settings_intent(&mut current, intent);
+                current
+            },
+            "panel",
+        );
         state().panel_apply_result = result;
         if result != OK {
             config.callbacks.say(format_args!(

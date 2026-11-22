@@ -17,6 +17,10 @@ use crate::overlay_abi::{
     RSF_NATIVE_FG_REASON_SCENE_UNSUPPORTED, RSF_OVERLAY_FG_RUNTIME_SWITCH, RSF_REFLEX_ON,
     rsf_overlay_intent as Intent, rsf_overlay_stats as Stats, rsf_render_status as Status,
 };
+use crate::overlay_settings::{
+    apply_settings_intent, fill_sharpening_stats, settings_changed, sr_name,
+};
+use crate::present_rates::Rates;
 use crate::render_abi::{
     RSF_DLSS_ABI_VERSION, RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO, RSF_FG_FIXED, RSF_FG_OFF,
     RSF_FG_STAT_TOTAL_PRESENTED, RSF_RENDER_FRONTEND_ABI_VERSION,
@@ -1261,23 +1265,16 @@ impl Host {
         } else {
             prefs.sr_backend
         };
+        stats.backend_name = sr_name(stats.backend).as_ptr();
         stats.requested_backend = stats.backend;
         stats.enabled = prefs.sr_enabled;
         stats.quality = quality;
         stats.sr_backend_choices = self.sr_choices;
         stats.sharpening_available = 1;
-        stats.sharpening_mode = prefs.sharpening_mode;
-        stats.sharpening_sharpness = prefs.sharpening_sharpness;
-        stats.sharpening_mas = prefs.sharpening_mas;
-        stats.sharpening_motion_sharpness = prefs.sharpening_motion_sharpness;
-        stats.sharpening_motion_threshold = prefs.sharpening_motion_threshold;
-        stats.sharpening_motion_scale_limit = prefs.sharpening_motion_scale_limit;
-        stats.sharpening_contrast_enabled = prefs.sharpening_contrast_enabled;
-        stats.sharpening_contrast = prefs.sharpening_contrast;
-        stats.sharpening_depth_scale = prefs.sharpening_depth_scale;
-        stats.sharpening_depth_bias = prefs.sharpening_depth_bias;
-        stats.sharpening_clamp_output = prefs.sharpening_clamp_output;
-        stats.sharpening_debug = prefs.sharpening_debug;
+        fill_sharpening_stats(
+            &mut stats,
+            &sharpening_of(&prefs, &sharpening_policy::defaults()),
+        );
         stats.have_depth = u32::from(status.sr_effective_backend != 0);
         stats.dlss_preset = prefs.dlss_preset;
         stats.dlss_preset_available = 1;
@@ -1357,9 +1354,10 @@ impl Host {
                 self.log("RSF overlay: panel layout applied for this session; the save failed.");
             }
         }
-        if !apply_intent(&mut prefs, &intent, &sharpening_policy::defaults()) {
+        if !settings_changed(&intent) {
             return;
         }
+        apply_settings_intent(&mut prefs, &intent);
         if self.settings_apply(&prefs) == OK {
             PREFS.set(Some(prefs));
         } else {
@@ -1368,77 +1366,7 @@ impl Host {
     }
 }
 
-// Applies the panel's requested changes to `prefs`. Returns whether anything changed.
-fn apply_intent(prefs: &mut Settings, intent: &Intent, base: &Sharpening) -> bool {
-    let mut changed = false;
-    if intent.sharpening_changed != 0 {
-        let requested = Sharpening {
-            mode: intent.sharpening_mode,
-            sharpness: intent.sharpening_sharpness,
-            mas: intent.sharpening_mas,
-            motion_sharpness: intent.sharpening_motion_sharpness,
-            motion_threshold: intent.sharpening_motion_threshold,
-            motion_scale_limit: intent.sharpening_motion_scale_limit,
-            contrast_enabled: intent.sharpening_contrast_enabled,
-            contrast: intent.sharpening_contrast,
-            depth_scale: intent.sharpening_depth_scale,
-            depth_bias: intent.sharpening_depth_bias,
-            clamp_output: intent.sharpening_clamp_output,
-            debug: intent.sharpening_debug,
-            ..*base
-        };
-        set_sharpening(prefs, &requested);
-        changed = true;
-    }
-    if intent.backend_changed != 0 {
-        prefs.sr_backend = intent.backend;
-        changed = true;
-    }
-    if intent.enabled_changed != 0 {
-        prefs.sr_enabled = intent.enabled;
-        changed = true;
-    }
-    if intent.quality_changed != 0 {
-        prefs.sr_quality = intent.quality;
-        changed = true;
-    }
-    if intent.dlss_preset_changed != 0 {
-        prefs.dlss_preset = intent.dlss_preset;
-        changed = true;
-    }
-    if intent.fg_backend_changed != 0 {
-        if intent.fg_backend == 0 {
-            prefs.fg_enabled = 0;
-        } else {
-            prefs.fg_backend = intent.fg_backend;
-            prefs.fg_enabled = 1;
-        }
-        changed = true;
-    }
-    if intent.fg_changed != 0 {
-        prefs.fg_enabled = u32::from(intent.fg_mode != RSF_FG_OFF);
-        if intent.fg_generated != 0 {
-            prefs.generated_frames = intent.fg_generated;
-        }
-        changed = true;
-    }
-    if intent.reflex_changed != 0 {
-        prefs.latency = intent.reflex_mode;
-        changed = true;
-    }
-    if intent.frame_limit_changed != 0 {
-        prefs.frame_limit_us = intent.frame_limit_us;
-        changed = true;
-    }
-    if intent.performance_hud_changed != 0 {
-        prefs.status_overlay = intent.performance_hud;
-        changed = true;
-    }
-    changed
-}
-
-// Service callbacks. `user` is the host published by create.
-
+// Service callbacks use the published host as their user pointer.
 unsafe extern "C" fn process(user: *mut c_void, commands: Handle, pass: *const Pass) -> i32 {
     let host = host_from(user);
     let result = host.process(commands, pass);

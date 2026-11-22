@@ -87,7 +87,8 @@ generate("sdk/game/src/lib.rs", "sdk/game/include/rescaleframe/game_api.h",
           "--raw-line", "pub mod vendor_paths;",
           "--raw-line", "#[cfg(windows)]",
           "--raw-line", "pub mod win32;",
-          "--raw-line", "pub mod windows_path;"])
+          "--raw-line", "pub mod windows_path;",
+          "--raw-line", "pub mod recording_slots;"])
 generate("sdk/game/src/callback_host_abi.rs", "runtime/orchestrator/include/rescaleframe/callback_render_host.h",
          "rsf_callback_host_setup(_v2)?", "RSF_CALLBACK_HOST_ABI_VERSION(_V2)?",
          ["-Isdk/game/include", "-Iruntime/orchestrator/include"],

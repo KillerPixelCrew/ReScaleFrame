@@ -8,6 +8,7 @@
 //! evaluation and release against the stored settings through package.cpp's typed leaves; this
 //! module holds the table and its rules, and never touches a context itself.
 use crate::package_abi::rsf_sr12;
+use rsf_game_sys::recording_slots::RecordingSlots;
 use std::ffi::c_void;
 use std::ptr::null_mut;
 
@@ -30,7 +31,7 @@ pub(crate) struct View {
     pub(crate) render: (u32, u32),
     /// The backend the context was made with; zero is the spatial or native path.
     pub(crate) backend: u32,
-    lists: [*mut c_void; SLOTS],
+    lists: RecordingSlots,
     last_seen: u64,
     uses: Vec<Recording>,
     unproved: bool,
@@ -42,7 +43,7 @@ impl View {
         output: (0, 0),
         render: (0, 0),
         backend: 0,
-        lists: [null_mut(); SLOTS],
+        lists: RecordingSlots::EMPTY,
         last_seen: 0,
         uses: Vec::new(),
         unproved: false,
@@ -68,16 +69,7 @@ impl View {
     /// The slot already bound to this command list, else the first free one, now bound to it.
     /// None once three other lists hold every slot. commands is never null.
     pub(crate) fn slot(&mut self, commands: *mut c_void) -> Option<u32> {
-        let index = self
-            .lists
-            .iter()
-            .position(|&list| list == commands)
-            .or_else(|| {
-                let free = self.lists.iter().position(|list| list.is_null())?;
-                self.lists[free] = commands;
-                Some(free)
-            })?;
-        Some(index as u32)
+        self.lists.bind(commands)
     }
 
     pub(super) fn seen(&mut self, source: u64) {

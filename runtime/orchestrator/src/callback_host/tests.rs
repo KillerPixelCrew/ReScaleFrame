@@ -58,6 +58,7 @@ fn refs(handle: Handle) -> u32 {
 }
 
 struct World {
+    refused_preset: Option<u32>,
     events: Vec<String>,
     now: u64,
     vendor: u32,
@@ -93,6 +94,7 @@ impl Default for World {
             vendor: 0x10de,
             adapter_ok: true,
             policy_ok: true,
+            refused_preset: None,
             drained_generation: 0,
             create_result: BACKEND_OK,
             evaluate_result: BACKEND_OK,
@@ -178,7 +180,7 @@ unsafe extern "C" fn depth_domains(pass: *const Pass) -> u32 {
     unsafe { (*pass).depth_domains.domain_count }
 }
 unsafe extern "C" fn dlss_preset_valid(preset: u32) -> u32 {
-    u32::from(preset <= 15)
+    u32::from(with(|world| world.refused_preset != Some(preset)))
 }
 unsafe extern "C" fn sr12_create(setup: *const SrSetup, out: *mut Handle) -> i32 {
     let setup = unsafe { &*setup };
@@ -626,7 +628,8 @@ fn admission_refuses_in_the_native_order() {
     for setup in &refused {
         assert_eq!(describe(setup), 1);
     }
-    for (backend, quality, preset) in [(1, 1, 16), (8, 1, 0), (3, 6, 0), (1, 5, 0)] {
+    with(|world| world.refused_preset = Some(7));
+    for (backend, quality, preset) in [(1, 1, 7), (8, 1, 0), (3, 6, 0), (1, 5, 0)] {
         let invalid = Setup {
             dlss_preset: preset,
             ..setup(&files, backend, quality)

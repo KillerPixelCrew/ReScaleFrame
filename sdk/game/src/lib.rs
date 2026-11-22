@@ -22,6 +22,7 @@ pub mod vendor_paths;
 #[cfg(windows)]
 pub mod win32;
 pub mod windows_path;
+pub mod recording_slots;
 
 pub const RSF_SCREEN_UNKNOWN: u32 = 0;
 pub const RSF_SCREEN_MENU: u32 = 1;

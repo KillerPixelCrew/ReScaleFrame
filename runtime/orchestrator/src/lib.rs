@@ -213,6 +213,8 @@ mod overlay_renderer11;
 #[cfg(windows)]
 mod overlay_service;
 #[cfg(windows)]
+mod overlay_settings;
+#[cfg(windows)]
 mod overlay_visibility;
 #[cfg(windows)]
 mod overlay_window;

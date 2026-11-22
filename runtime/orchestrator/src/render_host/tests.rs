@@ -60,6 +60,7 @@ fn refs(handle: Handle) -> u32 {
 
 #[derive(Default)]
 struct World {
+    refused_preset: Option<u32>,
     events: Vec<String>,
     now: u64,
     completed: u64,
@@ -163,7 +164,7 @@ unsafe extern "C" fn depth_domains(_: *const Pass) -> u32 {
     0
 }
 unsafe extern "C" fn dlss_preset_valid(preset: u32) -> u32 {
-    u32::from(preset <= 15)
+    u32::from(with(|world| world.refused_preset != Some(preset)))
 }
 unsafe extern "C" fn fg_default_backend(vendor: u32, _: u32) -> u32 {
     if vendor == 0x10de { 1 } else { 3 }
@@ -784,13 +785,14 @@ fn settings_apply_validates_then_commits_one_section_write() {
     assert_eq!(saved.sr_quality, 2);
     assert_eq!(saved.sharpening_sharpness, 0.4);
     let before = ini.contents();
+    with(|world| world.refused_preset = Some(7));
     for change in [
         |s: &mut Settings| s.sr_enabled = 2,
         |s: &mut Settings| s.latency = 3,
         |s: &mut Settings| s.sr_quality = 5,
         |s: &mut Settings| s.generated_frames = 0,
         |s: &mut Settings| s.generated_frames = 16,
-        |s: &mut Settings| s.dlss_preset = 16,
+        |s: &mut Settings| s.dlss_preset = 7,
         |s: &mut Settings| s.sr_backend = 4,
         |s: &mut Settings| s.sr_backend = 40,
         |s: &mut Settings| s.fg_backend = 0,
