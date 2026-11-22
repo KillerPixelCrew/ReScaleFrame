@@ -7,11 +7,6 @@ unsafe extern "C" fn create(setup: *const Setup, out: *mut Raw, chain: *mut Raw)
     if result == OK { NOT_COMPILED } else { result }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_fg12_disabled_provider() -> *const Provider {
-    &DISABLED_PROVIDER
-}
-
 extern "C" fn configure(_: Raw, _: *const Options) -> i32 {
     NOT_COMPILED
 }

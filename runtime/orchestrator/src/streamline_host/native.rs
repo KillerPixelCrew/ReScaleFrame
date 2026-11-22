@@ -29,7 +29,7 @@ use windows::Win32::Graphics::Direct3D12::{
     D3D12CreateDevice, ID3D12CommandQueue, ID3D12Device, ID3D12Fence,
 };
 use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_SWAP_CHAIN_DESC1, IDXGIAdapter,
+    CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, IDXGIAdapter,
     IDXGIFactory2, IDXGIOutput, IDXGISwapChain1, IDXGISwapChain4,
 };
 use windows::core::{IUnknown, Interface};
@@ -40,17 +40,9 @@ const LOG_SLOT: u32 = 1; // RSF_STREAMLINE_LOG_D3D12_HOST
 const DRAIN_TIMEOUT_MS: u32 = 10_000;
 const PCL_OPTIONS: u32 = 128;
 
-unsafe extern "C" {
-    // The shared FG12 admission leaves in d3d12_generation.
-    fn rsf_core_fg12_setup_header(
-        setup: *const GenerationSetup,
-        out: *mut Handle,
-        chain: *mut Handle,
-    ) -> i32;
-    fn rsf_core_fg12_frame(frame: *const Frame, device: Handle) -> i32;
-    fn rsf_core_fg12_command(command: Handle, device: Handle) -> i32;
-    fn rsf_core_fg12_chain_description(desc: &ChainDesc, out: *mut DXGI_SWAP_CHAIN_DESC1);
-}
+use crate::d3d12_generation::admission::{
+    rsf_core_fg12_command, rsf_core_fg12_frame, rsf_core_fg12_setup_header,
+};
 
 /// A required core entry. Startup binds the table only with every one of them resolved.
 fn core<T>(entry: Option<T>) -> T {
@@ -703,8 +695,7 @@ unsafe fn upgrade_chain(host: &Native, chain: &mut Handle) -> i32 {
 // Returns one owned, upgraded IDXGISwapChain4 reference.
 unsafe extern "C" fn chain(handle: Handle, desc: &ChainDesc, out: &mut Handle) -> i32 {
     let host = unsafe { native(handle) };
-    let mut description = DXGI_SWAP_CHAIN_DESC1::default();
-    unsafe { rsf_core_fg12_chain_description(desc, &mut description) };
+    let description = crate::d3d12_generation::chain_description(desc);
     let (Some(factory), Some(queue)) = (host.factory.as_ref(), host.queue.as_ref()) else {
         return INIT_FAILED;
     };

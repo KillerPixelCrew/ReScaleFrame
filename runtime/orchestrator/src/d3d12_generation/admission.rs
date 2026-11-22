@@ -48,8 +48,7 @@ unsafe extern "C" fn rsf_core_fg12_setup(setup: *const Setup) -> i32 {
     OK
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fg12_command(command: Raw, device: Raw) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_core_fg12_command(command: Raw, device: Raw) -> i32 {
     let Some(list) = (unsafe { ID3D12GraphicsCommandList::from_raw_borrowed(&command) }) else {
         return INVALID_ARGUMENT;
     };
@@ -101,8 +100,7 @@ fn frame_resource(
     Ok(())
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fg12_frame(frame: *const Frame, device: Raw) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_core_fg12_frame(frame: *const Frame, device: Raw) -> i32 {
     if !unsafe { sized(frame) } {
         return INVALID_ARGUMENT;
     }
@@ -189,8 +187,7 @@ extern "C" fn rsf_core_fg12_streamline_loaded() -> u32 {
     u32::from(!unsafe { GetModuleHandleW(w!("sl.dlss_g.dll").as_ptr()) }.is_null())
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fg12_setup_header(
+pub(crate) unsafe extern "C" fn rsf_core_fg12_setup_header(
     setup: *const Setup,
     out: *mut Raw,
     chain: *mut Raw,
@@ -253,16 +250,3 @@ pub(super) static NATIVE_CHECKS: Checks = Checks {
     streamline_loaded: rsf_core_fg12_streamline_loaded,
     load_library,
 };
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_fg12_generation_checks() -> *const Checks {
-    &NATIVE_CHECKS
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fg12_chain_description(
-    desc: &rsf_fg_swapchain_desc,
-    out: *mut windows::Win32::Graphics::Dxgi::DXGI_SWAP_CHAIN_DESC1,
-) {
-    unsafe { out.write(chain_description(desc)) };
-}

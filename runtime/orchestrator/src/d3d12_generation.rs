@@ -16,7 +16,7 @@ use std::fmt::Arguments;
 use std::ptr::null_mut;
 use std::sync::Mutex;
 
-mod admission;
+pub(crate) mod admission;
 mod disabled;
 /// The pinned FidelityFX frame-generation records, shared with the FSR4 Vulkan FG bridge.
 #[allow(clippy::upper_case_acronyms)] // bindgen output keeps the SDK's Win32 names.
@@ -27,7 +27,7 @@ mod fsr;
 pub(crate) use fsr::rsf_generation_fsr4_supported;
 mod xess;
 
-fn chain_description(
+pub(crate) fn chain_description(
     desc: &crate::sys::rsf_fg_swapchain_desc,
 ) -> windows::Win32::Graphics::Dxgi::DXGI_SWAP_CHAIN_DESC1 {
     use windows::Win32::Graphics::Dxgi::{Common::*, *};
