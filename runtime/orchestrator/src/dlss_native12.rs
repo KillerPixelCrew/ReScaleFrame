@@ -21,6 +21,7 @@ const ABI_MISMATCH: i32 = -2;
 const LOAD_FAILED: i32 = -4;
 const MISSING_ENTRY: i32 = -5;
 const INIT_FAILED: i32 = -6;
+const NOT_SUPPORTED: i32 = -7;
 const NOT_READY: i32 = -8;
 const FEATURE_FAILED: i32 = -9;
 const QUALITY: u32 = 1;
@@ -45,11 +46,7 @@ type FeatureLookup = unsafe extern "C" fn(Handle, u32, *const c_char, &mut Handl
 
 /// Resolve against the interposer held by the registration. The native leaf binds typed entries
 /// only after every required address is present.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_native12_core_entries(
-    module: Handle,
-    entries: &mut CoreEntries,
-) -> i32 {
+unsafe fn core_entries(module: Handle, entries: &mut CoreEntries) -> i32 {
     for (entry, name) in entries.iter_mut().zip(CORE_NAMES) {
         *entry = unsafe { GetProcAddress(module, name.as_ptr().cast()) }
             .map_or(null_mut(), |function| function as *const () as Handle);
@@ -61,8 +58,7 @@ unsafe extern "C" fn rsf_core_dlss_native12_core_entries(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_native12_feature_entries(
+unsafe fn feature_entries(
     native: Handle,
     owns_present: u32,
     lookup: FeatureLookup,
@@ -97,16 +93,47 @@ unsafe extern "C" fn rsf_core_dlss_native12_feature_entries(
     )
 }
 
+#[repr(C)]
+struct Preferences {
+    flags: u64,
+    engine_version: *const c_char,
+    project_id: *const c_char,
+    engine: u32,
+    application_id: u32,
+    render_api: u32,
+    feature: u32,
+}
+
+#[repr(C)]
+struct Constants<'a> {
+    frame: &'a Frame,
+    previous_to_current: [f32; 16],
+    motion_scale: [f32; 2],
+    forward: [f32; 3],
+    aspect: f32,
+    invalid_motion: f32,
+}
+
+const _: () = {
+    assert!(size_of::<Preferences>() == 40);
+    assert!(size_of::<Constants>() == 104);
+    assert!(std::mem::offset_of!(Constants, aspect) == 92);
+};
+
 // C++ owns the Streamline types and SDK calls. The table is static in each consumer.
 #[repr(C)]
 struct Platform {
     load: unsafe extern "C" fn(*const u16, &Setup) -> Handle,
     verify: unsafe extern "C" fn(*const u16) -> bool,
     shared_module: unsafe extern "C" fn(Handle, Handle, &mut Handle) -> i32,
-    resolve: unsafe extern "C" fn(Handle, *const u16, &mut Handle) -> i32,
-    init: unsafe extern "C" fn(Handle, &Setup) -> i32,
+    allocate: unsafe extern "C" fn(*const u16) -> Handle,
+    bind_core: unsafe extern "C" fn(Handle, &CoreEntries),
+    init: unsafe extern "C" fn(Handle, &Preferences) -> i32,
     set_device: unsafe extern "C" fn(Handle, Handle) -> i32,
-    configure: unsafe extern "C" fn(Handle, Handle, &Setup, u32) -> i32,
+    support: unsafe extern "C" fn(Handle, Handle, &mut u32) -> i32,
+    lookup_feature: FeatureLookup,
+    bind_features: unsafe extern "C" fn(Handle, &FeatureEntries, u32),
+    report_support: unsafe extern "C" fn(&Setup, u32) -> i32,
     shutdown: unsafe extern "C" fn(Handle),
     close: unsafe extern "C" fn(Handle),
     present: unsafe extern "C" fn(Handle, Handle, u32, u32, u32) -> i32,
@@ -114,13 +141,14 @@ struct Platform {
     validate: unsafe extern "C" fn(Handle, *const Frame) -> i32,
     token: unsafe extern "C" fn(Handle, u32, &mut Handle) -> i32,
     shared_token: unsafe extern "C" fn(Handle, u64) -> Handle,
-    constants: unsafe extern "C" fn(Handle, Handle, u32, &Frame) -> i32,
+    inverse: unsafe extern "C" fn(&[f32; 16], &mut [f32; 16]) -> f32,
+    constants: unsafe extern "C" fn(Handle, Handle, u32, &Constants) -> i32,
     options: unsafe extern "C" fn(Handle, u32, &Options) -> i32,
     dispatch: unsafe extern "C" fn(Handle, Handle, u32, Handle, &TagBatch) -> i32,
     free_viewport: unsafe extern "C" fn(Handle, u32),
 }
 
-const _: () = assert!(size_of::<Platform>() == 18 * size_of::<Handle>());
+const _: () = assert!(size_of::<Platform>() == 23 * size_of::<Handle>());
 
 enum Route {
     Owned,
@@ -236,15 +264,15 @@ impl DeviceRegistration {
         let interposer = unsafe { wide_path(setup.interposer_path_utf8) }.ok_or(INVALID)?;
         let directory = unsafe { wide_path(setup.plugin_directory_utf8) }.ok_or(INVALID)?;
         let (resolved, lease) = route.module(platform, device, setup, &interposer, module)?;
-        let mut native = null_mut();
-        let result = unsafe { (platform.resolve)(resolved, directory.as_ptr(), &mut native) };
+        let native =
+            NonNull::new(unsafe { (platform.allocate)(directory.as_ptr()) }).ok_or(INIT_FAILED)?;
+        let mut entries = [null_mut(); CORE_NAMES.len()];
+        let result = unsafe { core_entries(resolved, &mut entries) };
         if result != OK {
-            if !native.is_null() {
-                unsafe { (platform.close)(native) };
-            }
+            unsafe { (platform.close)(native.as_ptr()) };
             return Err(result);
         }
-        let native = NonNull::new(native).ok_or(INIT_FAILED)?;
+        unsafe { (platform.bind_core)(native.as_ptr(), &entries) };
         let mut registration = Self {
             platform,
             native,
@@ -256,7 +284,16 @@ impl DeviceRegistration {
         };
         let owned = matches!(registration.route, Route::Owned);
         if owned {
-            let result = unsafe { (platform.init)(native.as_ptr(), setup) };
+            let preferences = Preferences {
+                flags: (1 << 2) | (1 << 7),
+                engine_version: setup.engine_version_utf8,
+                project_id: setup.project_id_utf8,
+                engine: if setup.engine == 2 { 2 } else { 0 },
+                application_id: setup.application_id,
+                render_api: 1,
+                feature: 0,
+            };
+            let result = unsafe { (platform.init)(native.as_ptr(), &preferences) };
             if result != OK {
                 return Err(result);
             }
@@ -266,9 +303,32 @@ impl DeviceRegistration {
                 return Err(result);
             }
         }
-        let result = unsafe { (platform.configure)(native.as_ptr(), device, setup, owned.into()) };
+        let mut support = 0;
+        let result = unsafe { (platform.support)(native.as_ptr(), device, &mut support) };
         if result != OK {
             return Err(result);
+        }
+        if support == 0 {
+            let mut features = [null_mut(); 4];
+            let result = unsafe {
+                feature_entries(
+                    native.as_ptr(),
+                    owned.into(),
+                    platform.lookup_feature,
+                    &mut features,
+                )
+            };
+            if result != OK {
+                return Err(result);
+            }
+            unsafe { (platform.bind_features)(native.as_ptr(), &features, owned.into()) };
+        }
+        let result = unsafe { (platform.report_support)(setup, support) };
+        if result != OK {
+            return Err(result);
+        }
+        if support != 0 {
+            return Err(NOT_SUPPORTED);
         }
         Ok(Arc::new(registration))
     }
@@ -499,7 +559,30 @@ unsafe extern "C" fn rsf_core_dlss_native12_evaluate(
     };
     let native = registration.native.as_ptr();
     let viewport = registration.route.viewport();
-    let constants = unsafe { (platform.constants)(native, token, viewport, frame) };
+    let camera = &record.camera;
+    let mut previous_to_current = [0.0; 16];
+    let determinant =
+        unsafe { (platform.inverse)(&camera.clip_to_previous_clip, &mut previous_to_current) };
+    if !determinant.is_finite() || determinant.abs() < 1e-12 {
+        return INVALID;
+    }
+    let sign = if camera.view_to_clip[11] > 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
+    let constants = Constants {
+        frame,
+        previous_to_current,
+        motion_scale: [
+            1.0 / record.render_width as f32,
+            1.0 / record.render_height as f32,
+        ],
+        forward: [8, 9, 10].map(|index| sign * camera.view_to_world[index]),
+        aspect: record.output_width as f32 / record.output_height as f32,
+        invalid_motion: f32::MAX,
+    };
+    let constants = unsafe { (platform.constants)(native, token, viewport, &constants) };
     if constants != OK {
         return constants;
     }

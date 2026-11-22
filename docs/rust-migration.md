@@ -20,8 +20,10 @@ resize and plugin retirement. The user owns build and test execution.
 
 Native D3D12 DLSS now shares Rust tag assembly and frame options with
 the D3D11 entry, including the existing route differences. Native
-D3D12 startup policy and camera constants remain separate source
-work. Previous build and game results retain their recorded scope.
+D3D12 startup now resolves the core and feature entries in Rust,
+which also decides adapter support and frame constants. Typed
+entry binding, the SDK calls and the DirectXMath inverse stay native.
+Previous build and game results retain their recorded scope.
 
 ## Remaining integration ports
 

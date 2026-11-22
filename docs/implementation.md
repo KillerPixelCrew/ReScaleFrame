@@ -8,6 +8,12 @@ public declarations match in source. Current-candidate builds and
 runtime checks remain open.
 [Current verification priorities](rust-migration.md#fast-path-to-a-verified-candidate)
 
+Native D3D12 DLSS now owns startup admission and the frame constants
+plan in Rust. Source checks matched the owned and borrowed feature
+routes and the public declarations. The native inverse still uses
+DirectXMath with the same determinant threshold. Builds and runtime
+checks remain open.
+
 The shared overlay input owner now routes window messages in Rust.
 Native leaves read Windows contact and mouse facts and forward the
 message. Source comparison matched key and button release pairing,
