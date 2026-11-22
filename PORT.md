@@ -1671,12 +1671,12 @@ Port startup, renderer admission and retirement, including how a refused install
 
 **Port files (8)**
 
-- [ ] [games/ac7/include/rescaleframe/ac7_carrier.h](games/ac7/include/rescaleframe/ac7_carrier.h)
+- [x] [games/ac7/include/rescaleframe/ac7_carrier.h](games/ac7/include/rescaleframe/ac7_carrier.h)
 - [ ] [games/ac7/include/rescaleframe/ac7_hooks.h](games/ac7/include/rescaleframe/ac7_hooks.h)
 - [ ] [games/ac7/include/rescaleframe/ac7_memory.h](games/ac7/include/rescaleframe/ac7_memory.h)
-- [ ] [games/ac7/include/rescaleframe/ac7_native_renderer.h](games/ac7/include/rescaleframe/ac7_native_renderer.h)
-- [ ] [games/ac7/src/ac7_platform.h](games/ac7/src/ac7_platform.h)
-- [ ] [games/ac7/src/ac7_sites.h](games/ac7/src/ac7_sites.h)
+- [x] [games/ac7/include/rescaleframe/ac7_native_renderer.h](games/ac7/include/rescaleframe/ac7_native_renderer.h)
+- [x] [games/ac7/src/ac7_platform.h](games/ac7/src/ac7_platform.h)
+- [x] [games/ac7/src/ac7_sites.h](games/ac7/src/ac7_sites.h)
 - [ ] [games/ac7/src/native_renderer.cpp](games/ac7/src/native_renderer.cpp)
 - [ ] [games/ac7/src/plugin.cpp](games/ac7/src/plugin.cpp)
 
