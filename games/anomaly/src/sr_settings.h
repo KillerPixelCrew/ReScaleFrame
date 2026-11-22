@@ -13,13 +13,8 @@ static_assert(adapter_backends == ((1u << backend_dlss) | (1u << backend_fsr3) |
 inline constexpr uint32_t adapter_qualities = RSF_ANOMALY_SR_ADAPTER_QUALITIES;
 inline constexpr bool adapter_backend(uint32_t backend) noexcept { return backend < 32 && (adapter_backends >> backend) & 1u; }
 inline constexpr bool adapter_quality(uint32_t quality) noexcept { return quality < 32 && (adapter_qualities >> quality) & 1u; }
-struct SrSettings {
-    bool enabled{true};
-    uint32_t backend{backend_dlss};
-    uint32_t quality{1};   // Quality
-    uint32_t preset{};     // DLSSPreset: the user's choice, forwarded unchanged (0 = the DLSS default)
-    bool operator==(const SrSettings&) const = default;
-};
+using SrSettings = rsf_anomaly_sr_settings;
+inline constexpr SrSettings default_sr_settings{true, backend_dlss, 1, 0};
 // A request the adapter cannot apply keeps the current value for that field.
 inline SrSettings sanitize(const SrSettings& wanted, const SrSettings& current) noexcept {
     SrSettings out = wanted;

@@ -279,7 +279,6 @@ JitterState to_native(const rsf_anomaly_sr_jitter_state& s) noexcept {
     out.scope = s.scope; out.applied = s.applied; out.previous_applied = s.previous_applied; out.reset = s.reset;
     return out;
 }
-SrSettings to_native(const rsf_anomaly_sr_settings& s) noexcept { return {s.enabled, s.backend, s.quality, s.preset}; }
 // ---- guards and hooks -----------------------------------------------------------------------------------------------
 // The original can re-enter draw callbacks, so the stage lock is held only while changing the camera.
 // Scope cleanup also restores the camera if an engine C++ exception leaves the original.
@@ -509,9 +508,11 @@ const rsf_anomaly_sr_stage_platform platform{
     .driver_count_bilinear = [] { driver.count_bilinear(); },
     .driver_count_prepared = [](bool missing) { driver.count_prepared(missing); },
     .driver_stop = [] { driver.stop(); },
-    .driver_report = [](rsf_anomaly_sr_log emit, void* user) { driver.report(emit, user); },
+    .driver_report = [](bool exposure_auto, bool first_person_zero, rsf_anomaly_sr_log emit, void* user) {
+        driver.report(exposure_auto, first_person_zero, emit, user);
+    },
     .driver_overlay_report = [](void* report) { (void)driver.overlay_report(*static_cast<rsf_overlay_sr_report*>(report)); },
-    .driver_request = [](const rsf_anomaly_sr_settings* settings) { driver.request(to_native(*settings)); },
+    .driver_request = [](const rsf_anomaly_sr_settings* settings) { driver.request(*settings); },
     .verify_guards = [](void* module, uint32_t image_size, const void* selected, bool world_window, bool temporal) -> const char* {
         const auto& profile = *static_cast<const BuildProfile*>(selected)->sr;
         const auto& sites = profile.sr_function_sites;

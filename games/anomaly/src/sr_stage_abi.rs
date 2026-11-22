@@ -35,7 +35,7 @@ pub type rsf_anomaly_sr_log = ::core::option::Option<
     unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: *const ::core::ffi::c_char),
 >;
 #[repr(C)]
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, PartialEq, Eq)]
 pub struct rsf_anomaly_sr_settings {
     pub enabled: bool,
     pub backend: u32,
@@ -867,7 +867,12 @@ pub struct rsf_anomaly_sr_stage_platform {
     pub driver_count_prepared: ::core::option::Option<unsafe extern "C" fn(motion_missing: bool)>,
     pub driver_stop: ::core::option::Option<unsafe extern "C" fn()>,
     pub driver_report: ::core::option::Option<
-        unsafe extern "C" fn(arg1: rsf_anomaly_sr_log, arg2: *mut ::core::ffi::c_void),
+        unsafe extern "C" fn(
+            exposure_auto: bool,
+            first_person_zero: bool,
+            arg1: rsf_anomaly_sr_log,
+            arg2: *mut ::core::ffi::c_void,
+        ),
     >,
     pub driver_overlay_report:
         ::core::option::Option<unsafe extern "C" fn(report: *mut ::core::ffi::c_void)>,

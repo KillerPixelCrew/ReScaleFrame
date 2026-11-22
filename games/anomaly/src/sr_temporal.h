@@ -34,7 +34,7 @@ struct TemporalOptions {
     bool first_person_zero{true};        // SRFirstPersonZero: unwritten first-person pixels get zero motion
     std::string streamline, fidelityfx, xess;   // UTF-8 vendor runtime directories
     bool require_signature{};            // SRRequireSignature: refuse an unsigned sl.interposer.dll
-    SrSettings initial{};                // SR, SRBackend, SRQuality, DLSSPreset from the INI before the overlay starts
+    SrSettings initial = default_sr_settings;                // SR, SRBackend, SRQuality, DLSSPreset from the INI before the overlay starts
 };
 
 // Why a Stage 5 frame did not reach a successful evaluation.
@@ -66,7 +66,7 @@ struct TemporalCounters {
 struct TemporalStatusData {
     bool bound{}, running{};
     rsf_dlss_pipeline_status pipeline{};
-    SrSettings applied{}, requested{};
+    SrSettings applied = default_sr_settings, requested = default_sr_settings;
     int32_t start_result{}, select_result{}, quality_result{};
     bool last_evaluated{};
     uint32_t last_backend{}, last_render_width{}, last_render_height{}, last_output_width{}, last_output_height{};
@@ -128,7 +128,7 @@ public:
     TemporalStatus status() const noexcept;
     TemporalCounters counters() const noexcept;
     // Two log lines for the observer's periodic report (deltas since the last call, and the pipeline state).
-    void report(void (*emit)(void*, const char*), void* user) noexcept;
+    void report(bool exposure_auto, bool first_person_zero, rsf_game_log_fn emit, void* user) noexcept;
 
 private:
     struct LogSink {

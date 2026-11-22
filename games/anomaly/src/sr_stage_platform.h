@@ -275,7 +275,7 @@ typedef struct rsf_anomaly_sr_stage_platform {
     void (*driver_count_bilinear)(void);
     void (*driver_count_prepared)(bool motion_missing);
     void (*driver_stop)(void);
-    void (*driver_report)(rsf_anomaly_sr_log, void*);
+    void (*driver_report)(bool exposure_auto, bool first_person_zero, rsf_anomaly_sr_log, void*);
     void (*driver_overlay_report)(void* report);
     void (*driver_request)(const rsf_anomaly_sr_settings*);
     // Install and quiesce.

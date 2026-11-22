@@ -477,6 +477,7 @@ fn platform() -> Box<Platform> {
         driver_count_bilinear: Some(driver_count_bilinear),
         driver_count_prepared: Some(driver_count_prepared),
         driver_stop: Some(driver_stop),
+        driver_report: Some(crate::sr_temporal::report_fixture),
         hooks_created: Some(hooks_created),
         set_engine: Some(set_engine),
         install_hooks: Some(install_hooks),
@@ -951,6 +952,28 @@ fn overlay_offers_only_present_runtimes_and_a_reachable_default() {
     let stage4 = installed(4, &table);
     assert_eq!(stage4.choices().backends, 0);
     assert!(!stage4.overlay_report(std::ptr::dangling_mut::<c_void>()));
+}
+
+#[test]
+fn report_uses_live_exposure_and_first_person_options() {
+    let table = platform();
+    let driver = installed(5, &table);
+    let pipeline_report = || {
+        let mut result = String::new();
+        driver.report(&mut |line| {
+            if line.starts_with("Anomaly SR stage 5 pipeline") {
+                result = line.to_owned();
+            }
+        });
+        result
+    };
+    driver.set_option(RSF_ANOMALY_SR_OPTION_EXPOSURE_AUTO, 0);
+    driver.set_option(RSF_ANOMALY_SR_OPTION_FIRST_PERSON_ZERO, 1);
+    assert!(pipeline_report().contains("exposure=constant(1.0) first_person_zero=1"));
+    driver.set_option(RSF_ANOMALY_SR_OPTION_EXPOSURE_AUTO, 1);
+    assert!(pipeline_report().contains("exposure=auto first_person_zero=1"));
+    driver.set_option(RSF_ANOMALY_SR_OPTION_FIRST_PERSON_ZERO, 0);
+    assert!(pipeline_report().contains("exposure=auto first_person_zero=0"));
 }
 
 #[test]

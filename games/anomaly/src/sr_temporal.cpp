@@ -50,7 +50,7 @@ void rsf_anomaly_sr_stop(TemporalState*) noexcept;
 void rsf_anomaly_sr_status(const TemporalState*, TemporalStatusData*) noexcept;
 void rsf_anomaly_sr_counters(const TemporalState*, TemporalCounters*) noexcept;
 void rsf_anomaly_sr_overlay_report(const TemporalState*, rsf_overlay_sr_report*) noexcept;
-void rsf_anomaly_sr_report(TemporalState*, rsf_game_log_fn, void*) noexcept;
+void rsf_anomaly_sr_report(TemporalState*, bool, bool, rsf_game_log_fn, void*) noexcept;
 void rsf_anomaly_sr_start_refusal(int32_t, char*, std::size_t) noexcept;
 }
 
@@ -63,9 +63,8 @@ void TemporalDriver::LogSink::call(void* user, const char* message) noexcept {
 }
 
 void TemporalDriver::configure(const TemporalOptions& options, rsf_game_log_fn log, void* user) noexcept {
-    const auto& initial = options.initial;
     const rsf_anomaly_sr_driver_config config{options.stage, options.exposure_auto, options.colour_transport,
-        options.first_person_zero, options.require_signature, {initial.enabled, initial.backend, initial.quality, initial.preset},
+        options.first_person_zero, options.require_signature, options.initial,
         options.streamline.c_str(), options.fidelityfx.c_str(), options.xess.c_str()};
     configure(config, log, user);
 }
@@ -140,10 +139,10 @@ bool TemporalDriver::overlay_report(rsf_overlay_sr_report& report) const noexcep
     rsf_anomaly_sr_overlay_report(state_, &report);
     return true;
 }
-void TemporalDriver::report(rsf_game_log_fn emit, void* user) noexcept {
+void TemporalDriver::report(bool exposure_auto, bool first_person_zero, rsf_game_log_fn emit, void* user) noexcept {
     if (!emit) return;
     LogSink sink{emit, user};
-    rsf_anomaly_sr_report(state_, &LogSink::call, &sink);
+    rsf_anomaly_sr_report(state_, exposure_auto, first_person_zero, &LogSink::call, &sink);
 }
 
 std::string start_refusal_reason(int32_t result) {

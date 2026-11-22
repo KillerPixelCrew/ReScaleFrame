@@ -2571,6 +2571,8 @@ impl Stage {
             leaf!(
                 p,
                 driver_report(
+                    self.live.exposure_auto.load(Ordering::Relaxed),
+                    self.live.first_person_zero.load(Ordering::Relaxed),
                     Some(forward_line),
                     (&mut target as *mut &mut dyn FnMut(&str)).cast()
                 )

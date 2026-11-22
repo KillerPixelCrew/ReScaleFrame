@@ -6,6 +6,7 @@ use crate::sr_stage_abi::{
     RSF_ANOMALY_SR_ENGINE_VERSION, RSF_ANOMALY_SR_MOTION_SENTINEL,
     RSF_ANOMALY_SR_MOTION_VALIDITY_CHANNEL, RSF_ANOMALY_SR_MOTION_VALIDITY_THRESHOLD,
     RSF_ANOMALY_SR_PROJECT_ID, RSF_ANOMALY_SR_VIEW_SPACE_TO_METERS, rsf_anomaly_sr_driver_config,
+    rsf_anomaly_sr_settings,
 };
 use rsf_game_sys::sr_abi::*;
 use rsf_game_sys::{rsf_camera_frame, rsf_game_log_fn};
@@ -140,25 +141,14 @@ fn query_api(
     }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct Settings {
-    enabled: bool,
-    backend: u32,
-    quality: u32,
-    preset: u32,
-}
+type Settings = rsf_anomaly_sr_settings;
 
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            backend: DLSS,
-            quality: 1,
-            preset: 0,
-        }
-    }
-}
+const DEFAULT_SETTINGS: Settings = Settings {
+    enabled: true,
+    backend: DLSS,
+    quality: 1,
+    preset: 0,
+};
 
 impl Settings {
     fn admitted(self, current: Self, backends: u32, qualities: u32) -> Self {
@@ -245,8 +235,8 @@ impl Default for Status {
             bound: false,
             running: false,
             pipeline: fresh_pipeline_status(),
-            applied: Settings::default(),
-            requested: Settings::default(),
+            applied: DEFAULT_SETTINGS,
+            requested: DEFAULT_SETTINGS,
             start_result: OK,
             select_result: OK,
             quality_result: OK,
@@ -290,8 +280,6 @@ const _: () = {
 #[derive(Default)]
 struct Published {
     stage: u32,
-    exposure_auto: bool,
-    first_person_zero: bool,
     backends: u32,
     qualities: u32,
     status: Status,
@@ -705,6 +693,7 @@ extern "C" fn rsf_anomaly_sr_create() -> *mut Driver {
                 first: true,
                 ..ResetFacts::default()
             },
+            applied: DEFAULT_SETTINGS,
             ..RenderState::default()
         }),
         published: Mutex::default(),
@@ -751,18 +740,12 @@ unsafe extern "C" fn rsf_anomaly_sr_configure(
 
     let mut published = driver.published();
     published.stage = options.stage;
-    published.exposure_auto = options.exposure_auto;
-    published.first_person_zero = options.first_person_zero;
     published.backends = RSF_ANOMALY_SR_ADAPTER_BACKENDS;
     published.qualities = RSF_ANOMALY_SR_ADAPTER_QUALITIES;
-    let initial = options.initial;
-    published.status.requested = Settings {
-        enabled: initial.enabled,
-        backend: initial.backend,
-        quality: initial.quality,
-        preset: initial.preset,
-    }
-    .admitted(Settings::default(), published.backends, published.qualities);
+    published.status.requested =
+        options
+            .initial
+            .admitted(DEFAULT_SETTINGS, published.backends, published.qualities);
 }
 
 #[unsafe(no_mangle)]
@@ -1115,19 +1098,18 @@ unsafe extern "C" fn rsf_anomaly_sr_start_refusal(result: i32, out: *mut c_char,
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_report(driver: &Driver, log: rsf_game_log_fn, user: Raw) {
-    let (stage, exposure_auto, first_person_zero, status, now, old) = {
+extern "C" fn rsf_anomaly_sr_report(
+    driver: &Driver,
+    exposure_auto: bool,
+    first_person_zero: bool,
+    log: rsf_game_log_fn,
+    user: Raw,
+) {
+    let (stage, status, now, old) = {
         let mut published = driver.published();
         let now = published.counters;
         let old = std::mem::replace(&mut published.reported, now);
-        (
-            published.stage,
-            published.exposure_auto,
-            published.first_person_zero,
-            published.status,
-            now,
-            old,
-        )
+        (published.stage, published.status, now, old)
     };
     let delta = |current: u64, previous: u64| current.wrapping_sub(previous);
     let evaluated = |backend: u32| {
@@ -1239,4 +1221,21 @@ extern "C" fn rsf_anomaly_sr_report(driver: &Driver, log: rsf_game_log_fn, user:
             ),
         );
     }
+}
+
+#[cfg(test)]
+pub(super) extern "C" fn report_fixture(
+    exposure_auto: bool,
+    first_person_zero: bool,
+    log: rsf_game_log_fn,
+    user: Raw,
+) {
+    let driver = Driver {
+        render: UnsafeCell::new(RenderState::default()),
+        published: Mutex::new(Published {
+            stage: 5,
+            ..Published::default()
+        }),
+    };
+    rsf_anomaly_sr_report(&driver, exposure_auto, first_person_zero, log, user);
 }
