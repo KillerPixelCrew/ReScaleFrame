@@ -9,6 +9,7 @@
 //             (zero_means_unwritten, no validity) show why that rule cannot be used for this motion target.
 //   prepare   UpscalePass::prepare and ::reinsert (shaders/sr/rsf_sr_upscale.hlsl): f^-1 of the FP16 twin, the motion
 //             mapping with the first-person rule on and off, and the stock curve applied to a reconstruction.
+//             The expected colour and UNORM8 values come from the Rust CPU oracle behind sr_tonemap.h.
 //   provider  <vendor root> (or RSF_SR_VENDOR_ROOT): the package layout <root>/{streamline,fidelityfx,xess}. The adapter's
 //             TemporalDriver binds the Runtime's rsf_get_d3d11_sr_api by name (as a carrier-loaded adapter does), starts
 //             the shared pipeline on an NVIDIA adapter at the first boundary, and each backend (DLSS, FSR3, FSR4, XeSS)

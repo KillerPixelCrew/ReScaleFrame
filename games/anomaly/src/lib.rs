@@ -59,6 +59,7 @@ mod sr_stage_abi;
 mod sr_swap;
 mod sr_swap_abi;
 mod sr_temporal;
+mod sr_tonemap;
 
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_detect_game_fn, rsf_game_hooks_api, rsf_game_info,

@@ -683,8 +683,6 @@ impl RenderState {
     }
 }
 
-type SetTransport = Option<unsafe extern "C" fn(u32)>;
-
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_sr_create() -> *mut Driver {
     Box::into_raw(Box::new(Driver {
@@ -747,6 +745,34 @@ unsafe extern "C" fn rsf_anomaly_sr_configure(
             .initial
             .admitted(DEFAULT_SETTINGS, published.backends, published.qualities);
 }
+
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_sr_session_id() -> u64 {
+    let mut counter = 0;
+    // Same session source as the native facade. Force a nonzero ID even if QPC fails.
+    unsafe { windows_sys::Win32::System::Performance::QueryPerformanceCounter(&mut counter) };
+    counter as u64 | 1
+}
+
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_sr_bind_runtime(driver: &Driver, runtime: Raw) -> bool {
+    use crate::runtime_module::export;
+
+    // The carrier keeps the borrowed Runtime module mapped for the adapter session.
+    let query: rsf_get_d3d11_sr_api_fn =
+        unsafe { export(runtime, c"rsf_get_d3d11_sr_api".to_bytes_with_nul()) };
+    let set_transport = unsafe {
+        export::<unsafe extern "C" fn(u32)>(
+            runtime,
+            c"rsf_dlss_pipeline_set_colour_transport".to_bytes_with_nul(),
+        )
+    };
+    unsafe { rsf_anomaly_sr_bind(driver, query, set_transport, rsf_anomaly_sr_session_id()) }
+}
+
+type SetTransport = Option<unsafe extern "C" fn(u32)>;
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_sr_bind(

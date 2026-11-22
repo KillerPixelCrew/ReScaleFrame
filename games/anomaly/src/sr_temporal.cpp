@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #include "sr_temporal.h"
-#include "runtime_module.h"
 #include "sr_plan.h"
 #include <d3d11.h>
 
@@ -10,20 +9,12 @@ static_assert(backend_dlss == RSF_SR_DLSS && backend_fsr3 == RSF_SR_FSR3 &&
 static_assert(motion_validity_channel == 2, "the core motion target stores validity in Z");
 static_assert(RSF_DLSS_ENGINE_CUSTOM == 0);
 namespace {
-using SetTransport = void (*)(uint32_t);
-
 static_assert(sizeof(rsf_d3d11_sr_api) == 112 && offsetof(rsf_d3d11_sr_api, start) == 16 &&
     offsetof(rsf_d3d11_sr_api, set_sharpening) == 104);
 static_assert(sizeof(SrSettings) == 16 && offsetof(SrSettings, backend) == 4);
 static_assert(sizeof(TemporalStatusData) == 288 &&
     offsetof(TemporalStatusData, reason_utf8) == 188);
 static_assert(sizeof(TemporalCounters) == 424);
-
-uint64_t session_id() noexcept {
-    LARGE_INTEGER qpc{};
-    QueryPerformanceCounter(&qpc);
-    return static_cast<uint64_t>(qpc.QuadPart) | 1u;
-}
 
 }
 
@@ -32,7 +23,8 @@ TemporalState* rsf_anomaly_sr_create() noexcept;
 void rsf_anomaly_sr_destroy(TemporalState*) noexcept;
 ApiStatus rsf_anomaly_sr_query(rsf_get_d3d11_sr_api_fn, rsf_d3d11_sr_api*, const char**) noexcept;
 void rsf_anomaly_sr_configure(TemporalState*, const rsf_anomaly_sr_driver_config*, rsf_game_log_fn, void*) noexcept;
-bool rsf_anomaly_sr_bind(TemporalState*, rsf_get_d3d11_sr_api_fn, SetTransport, uint64_t) noexcept;
+bool rsf_anomaly_sr_bind_runtime(TemporalState*, HMODULE) noexcept;
+uint64_t rsf_anomaly_sr_session_id() noexcept;
 bool rsf_anomaly_sr_bind_table(TemporalState*, const rsf_d3d11_sr_api*, uint64_t) noexcept;
 void rsf_anomaly_sr_request(TemporalState*, const SrSettings*) noexcept;
 bool rsf_anomaly_sr_enabled(const TemporalState*) noexcept;
@@ -79,15 +71,10 @@ ApiStatus bind_sr_api(rsf_get_d3d11_sr_api_fn query, rsf_d3d11_sr_api& out, cons
 }
 
 bool TemporalDriver::bind(HMODULE runtime) noexcept {
-    const auto lookup = [runtime](const char* name) -> void* {
-        return reinterpret_cast<void*>(rsf_anomaly_runtime_symbol(runtime, name));
-    };
-    return rsf_anomaly_sr_bind(state_,
-        reinterpret_cast<rsf_get_d3d11_sr_api_fn>(lookup(RSF_D3D11_SR_API_ENTRY_POINT)),
-        reinterpret_cast<SetTransport>(lookup("rsf_dlss_pipeline_set_colour_transport")), session_id());
+    return rsf_anomaly_sr_bind_runtime(state_, runtime);
 }
 bool TemporalDriver::bind_table(const rsf_d3d11_sr_api& table) noexcept {
-    return rsf_anomaly_sr_bind_table(state_, &table, session_id());
+    return rsf_anomaly_sr_bind_table(state_, &table, rsf_anomaly_sr_session_id());
 }
 void TemporalDriver::request(const SrSettings& settings) noexcept { rsf_anomaly_sr_request(state_, &settings); }
 bool TemporalDriver::enabled() const noexcept { return rsf_anomaly_sr_enabled(state_); }
