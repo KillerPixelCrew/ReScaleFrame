@@ -474,39 +474,7 @@ static void start_observer(void)
        starts as soon as the game has a device, and the bridge would otherwise have nowhere to
        speak until the backend was started. */
     rsf_bridge_set_log(observer_note, NULL);
-    {
-        char prefix[MAX_PATH * 2];
-        if (read_text("RSF_BRIEFING_CAPTURE_PREFIX", prefix, sizeof(prefix))) {
-            rsf_bridge_set_briefing_capture(prefix);
-        }
-    }
     register_overlay_actions();
-
-    /* Naming the game's pipeline objects, so a run can say which draws are the interface. On by
-       default because it changes nothing and the answer is what the next milestone needs; the
-       hooks are only patched when something asks for them, so turning it off costs the game
-       nothing at all. */
-    if (read_number("RSF_UI_CLASSIFY", 1) != 0) {
-        char forced[512];
-        char skipped[512];
-        if (!read_text("RSF_UI_SHADER_FORCE", forced, sizeof(forced))) {
-            forced[0] = '\0';
-        }
-        if (!read_text("RSF_UI_SHADER_SKIP", skipped, sizeof(skipped))) {
-            skipped[0] = '\0';
-        }
-        rsf_bridge_name_shaders(forced, skipped);
-        rsf_bridge_set_ui_encoding((int)read_number("RSF_UI_ENCODE", 1));
-        if (rsf_bridge_identify_ui()) {
-            options.on_layout = rsf_bridge_layout_hook();
-            options.on_shader = rsf_bridge_shader_hook();
-            options.on_texture = rsf_bridge_texture_hook();
-            note("ui classification on; converter targets are confirmed by what draws into them, "
-                 "not by their shape");
-        } else {
-            note("ui classification could not start; nothing will be classified this run");
-        }
-    }
 
     if (motion_capture) {
         options.on_shader = rsf_bridge_shader_hook();
@@ -625,45 +593,6 @@ static int build_jitter_stub(DWORD rva)
     jitter_patch.stub_last_denied = (volatile LONG*)(void*)(stub + RSF_AC7_JITTER_RELAY_LAST_DENIED);
     FlushInstructionCache(GetCurrentProcess(), stub, 0x1000);
     return 1;
-}
-
-/* Keep the stub's main-view size in step with the reconstruction, on the render thread. */
-static void update_jitter_render_extent(void)
-{
-    unsigned long width = 0;
-    unsigned long height = 0;
-    if (!jitter_patch.stub) {
-        return;
-    }
-    rsf_bridge_view_size(&width, &height);
-    /* Every second, what the stub decided since the last time, so a run can say which views were
-       jittered and which were not, and at what size the ones turned away came. */
-    {
-        static int ticks = 0;
-        static LONG last_allowed = 0;
-        static LONG last_denied = 0;
-        if (++ticks >= 20) {
-            const LONG allowed = *jitter_patch.stub_allowed;
-            const LONG denied = *jitter_patch.stub_denied;
-            ticks = 0;
-            if (allowed != last_allowed || denied != last_denied) {
-                note("jitter stub: %ld views jittered, %ld turned away, last turned away at %ld "
-                     "wide or high",
-                     allowed - last_allowed, denied - last_denied,
-                     (long)*jitter_patch.stub_last_denied);
-                last_allowed = allowed;
-                last_denied = denied;
-            }
-        }
-    }
-    if ((LONG)width != *jitter_patch.stub_width || (LONG)height != *jitter_patch.stub_height) {
-        InterlockedExchange(jitter_patch.stub_width, (LONG)width);
-        InterlockedExchange(jitter_patch.stub_height, (LONG)height);
-        if (width != 0) {
-            note("jitter: compatibility extent %lux%lu; the game's temporal AA keeps its own jitter", width,
-                 height);
-        }
-    }
 }
 
 /* Write the gate open or closed. Idempotent, and announced on every transition: a jitter that
@@ -1149,9 +1078,6 @@ static void start_dlss_at_extent(uint32_t width, uint32_t height)
     rsf_bridge_set_sdk_directories(fsr_directories[0], fsr_directories[1], fsr_directories[2], xess_directory);
     rsf_bridge_start(directory, width, height, preferred_quality, observer_note,
                      NULL);
-    /* Interface panels drawn with a jittered view are moved back by that view's own jitter. */
-    rsf_bridge_set_unjitter((int)read_number("RSF_UI_UNJITTER", 1));
-    rsf_bridge_set_translucency_unjitter((int)read_number("RSF_TRANSLUCENCY_UNJITTER", 1));
     rsf_bridge_report();
 }
 
@@ -1164,41 +1090,6 @@ static void start_dlss(void)
         start_dlss_at_extent(width, height);
     } else {
         note("no presented size yet, so DLSS cannot be told what to output");
-    }
-}
-
-/* Put the render scale back when the game takes it away.
-
-   Loading a mission re-applies the game's own graphics settings, which sets the screen percentage
-   back to 100 and leaves a backend reconstructing from the presented size. That is antialiasing
-   rather than upscaling and it does not look like a fault: the picture is clean and sharp precisely
-   because nothing was reconstructed from less. A mission was watched that way and read as a
-   successful upscale, which is why this is not a key press.
-
-   Nothing here has to detect anything. `rsf_console_set_float` writes only where it finds the value
-   it was told to expect, so asking it to replace 100 with our scale does exactly nothing while the
-   scale is already ours, and restores it the moment the game puts 100 back. Silent in the ordinary
-   case, and it says so on the rare occasion it acts. */
-static void keep_render_scale(void)
-{
-    uint32_t offset = 0;
-    if (!requested_scale_percent) {
-        return;
-    }
-    /* What was last asked for, from the panel or a DLSS preset, over the settings file, so a
-       mission load puts back the scale that was chosen rather than the one the run started with. */
-    const float value = requested_scale_percent
-                            ? (float)requested_scale_percent
-                            : (float)read_number("RSF_SCREEN_PERCENTAGE", 50);
-    if (value >= 100.0f) {
-        return;
-    }
-    if (rsf_console_set_float("r.ScreenPercentage", 100.0f, value,
-                              read_number("RSF_CONSOLE_SINGLETON_RVA", 0x3a8b290),
-                              read_number("RSF_CONSOLE_FIND_SLOT", 0x90), &offset) == RSF_DUMP_OK) {
-        note("the game had reset the render scale, put back to %d", (int)value);
-        set_jitter_sequence_length(value, offset);
-        set_separate_translucency_scale();
     }
 }
 
@@ -1347,17 +1238,6 @@ static unsigned long action_capture_count(void)
 #endif
 }
 
-/* What reinsertion does when a promoted target meets the game's render resolution depth.
-
-   0 drops the depth, so the pass draws without its depth test. 1 forwards both, which is an invalid
-   pair and draws nothing. 2 leaves the target alone, so the pass draws into a texture nothing reads.
-   All three are wrong; dropping is the only one that keeps the pixels, so it is the default. A
-   setting rather than a constant so all three can be compared in one run. */
-static unsigned long action_reinsert_depth_policy(void)
-{
-    return read_number("RSF_REINSERT_DEPTH", 0);
-}
-
 /* The user-owned profile keeps Enabled (0/1) and Quality (0-4); a missing or out-of-range value
    leaves the configured default in place. */
 static void load_preferences(void)
@@ -1421,25 +1301,12 @@ static int action_save_frame_limit(uint32_t interval_or_policy)
         preference_path, L"Rendering", "FrameLimitUs", interval_or_policy) == RSF_OK;
 }
 
-static void action_maintain_renderer(void)
-{
-    static ULONGLONG last_check;
-    if (rsf_bridge_native_owned()) return;
-    update_jitter_render_extent();
-    const ULONGLONG now = GetTickCount64();
-    if (now - last_check >= 500) {
-        last_check = now;
-        keep_render_scale();
-    }
-}
-
 static void register_overlay_actions(void)
 {
     rsf_bridge_actions actions;
     memset(&actions, 0, sizeof(actions));
     actions.start_backend = start_dlss;
     actions.start_backend_at_extent = start_dlss_at_extent;
-    actions.reinsert_depth_policy = action_reinsert_depth_policy;
     actions.set_render_scale = action_set_render_scale;
     actions.trigger_dump = action_trigger_dump;
     actions.trigger_capture = action_trigger_capture;
@@ -1453,7 +1320,6 @@ static void register_overlay_actions(void)
     actions.save_dlss_preset = action_save_dlss_preset;
     actions.save_sharpening = action_save_sharpening;
     actions.save_enabled = action_save_enabled;
-    actions.maintain_renderer = action_maintain_renderer;
     actions.read_host_options = read_startup_options;
     actions.save_host_option = save_startup_option;
     actions.save_frame_limit = action_save_frame_limit;

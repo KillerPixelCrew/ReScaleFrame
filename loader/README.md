@@ -93,9 +93,6 @@ post-process graph. Do not apply this flat AC7 configuration format to Unity's `
 | `RSF_VIEW_CB_MIN`, `RSF_VIEW_CB_MAX` | `1024`, `8192` bytes |
 | `RSF_RENDERDOC_DLL` | Explicit Windows RenderDoc DLL path |
 | `RSF_CAPTURE_PREFIX` | RenderDoc output prefix |
-| `RSF_UI_CLASSIFY` | `1`; name pipeline objects as the game creates them and classify the draws made from them. Reports through the `ui:` lines and changes nothing |
-| `RSF_UI_SHADER_FORCE`, `RSF_UI_SHADER_SKIP` | hex hash lists naming shaders the rules got wrong, in either direction. The hashes are printed by the `ui draw:` trace lines |
-| `RSF_UI_ENCODE` | `1`; which transfer function the composite applies to the extracted interface. `0` none, `1` sRGB, `2` gamma 2.2 |
 | `RSF_ENABLE_JITTER` | Default `1`; `0` off; `1` patches the AA gate but opens it only while a reconstruction runs; `2` opens it from decryption to exit, which is what every result before this used |
 | `RSF_JITTER_RVA` | Default address `0x112b1f3` |
 | `RSF_TRANSLUCENT_VELOCITY` | `0`; set `1` to let translucent draws reach the velocity pass |
@@ -115,14 +112,12 @@ post-process graph. Do not apply this flat AC7 configuration format to Unity's `
 | `RSF_FULL_TRANSLUCENCY` | `1`; patches the separate translucency halving out and carries the scale as a rewritable immediate |
 | `RSF_FULL_TRANSLUCENCY_RVA` | Default address `0x10be329` |
 | `RSF_TRANSLUCENCY_TARGET` | `100`; percent of output, independent of the scene preset. `0` explicitly matches the scene |
-| `RSF_TRANSLUCENCY_UNJITTER` | `1`; unjitter VS/PS and bypass layer DLSS. `0` retains the experimental 1:1 temporal route |
 | `RSF_TRANSLUCENCY_SCALE` | `0`; a direct multiplier in percent overriding the target |
-| `RSF_REINSERT_DEPTH` | `0`; what reinsertion does when a promoted target meets the game's render-resolution depth: drop, keep, refuse |
 
 The keys the [representation plan](../docs/representation-plan.md) introduces (`RSF_UI_*`, `RSF_POLICY_*`, `RSF_PRESENTATION`, `RSF_FG*`, `RSF_SR_VENDOR`, vendor runtime directories) are documented here as each milestone lands, not before.
 
-Quality selection derives input dimensions from the selected SDK. Native mode sizes the renderer
-through engine-owned views; compatibility mode applies the planned percentage. `RSF_SCREEN_PERCENTAGE`
+Quality selection derives input dimensions from the selected SDK and sizes the renderer
+through engine-owned views. A refused native activation leaves the game running without SR. `RSF_SCREEN_PERCENTAGE`
 is a legacy diagnostic override, not a second independent consumer quality setting.
 
 ## Startup and diagnostics

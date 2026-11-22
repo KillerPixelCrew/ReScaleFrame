@@ -36,27 +36,11 @@ void rsf_bridge_report(void);
 /* Ask for the next evaluated frame's output to be written out. */
 void rsf_bridge_request_dump(const char* prefix);
 
-/* Show the reconstruction over the game's own frame, or stop showing it.
-
-   The counters say it ran and a dumped frame says the geometry is right, but the faults that matter
-   most in an upscaler are temporal: ghosting, a smear behind a moving object, a motion vector whose
-   sign is inverted. None of those exist in a still image. This is how they get looked at, and it is
-   a debug view: the image is ungraded scene colour with no interface on it. */
-void rsf_bridge_toggle_display(void);
-
-/* Put the reconstruction back into the game's own frame, or stop.
-
-   This is the real path rather than the debug view above: the scene is reconstructed before the
-   game's tonemap, the game grades it and composites its own interface onto it at output resolution,
-   and its final upscale becomes a copy. It needs the frame's tail to have been identified, which
-   takes the first few frames after the backend starts.
-
-   Off until asked for, because it changes what the game draws. */
-void rsf_bridge_toggle_reinsert(void);
-
 /* The Present callback the observer should be given, so the display above has a place to draw. */
 rsf_observer_present_fn rsf_bridge_present_hook(void);
 rsf_observer_present_event_fn rsf_bridge_present_event_hook(void);
+/* Hands each created shader to the motion capture. */
+rsf_observer_shader_fn rsf_bridge_shader_hook(void);
 /* Last presenting extent reported by the observer. Width zero means no presenting size yet. */
 int rsf_bridge_present_extent(uint32_t* width, uint32_t* height);
 
@@ -68,16 +52,9 @@ int rsf_bridge_present_extent(uint32_t* width, uint32_t* height);
 #define RSF_AC7_PROJECT_ID "a3ed1f08-3542-4698-b85c-e1a9908e861a"
 
 /* Ask for an action to run on the render thread at the next present, rather than on the caller's.
-
-   For the hotkey worker. Starting the backend, toggling reinsertion and arming extraction create
-   resources and touch the game's immediate context, which is not thread safe, and doing it from
-   the worker while the game was inside Present crashed the NVIDIA driver on the first Windows run
-   where F8 actually reached the proxy. The panel already applies its intents at the present; this
-   puts the keys on the same footing. Several requests may be combined; each runs once. */
+   For the hotkey worker: starting the backend creates resources and touches the game's immediate
+   context, which is not thread safe. */
 #define RSF_BRIDGE_REQUEST_START 0x1u
-#define RSF_BRIDGE_REQUEST_DISPLAY 0x2u
-#define RSF_BRIDGE_REQUEST_REINSERT 0x4u
-#define RSF_BRIDGE_REQUEST_EXTRACT 0x8u
 void rsf_bridge_request(unsigned long requests);
 
 /* Where this speaks, set at install rather than at F8.
@@ -87,60 +64,6 @@ void rsf_bridge_request(unsigned long requests);
    has a device so that it can be opened to see that nothing is running. Without this it would be
    silent, and would not come up at all. */
 void rsf_bridge_set_log(rsf_bridge_log_fn log, void* log_user);
-
-/* Start naming the game's pipeline objects and classifying the draws made from them.
-
-   This changes no pixel. It answers which draws on a screen are the interface, by which producer,
-   and how many looked like it and matched no rule, which is the number that decides whether
-   diverting them is safe to attempt. Returns zero if the registry could not be created, in which
-   case nothing is classified and the run says so.
-
-   There is deliberately no expected size here. The first run asked for textures shaped like a
-   converter target at 1920x1080 and matched over a hundred and eighty of them, and also found Slate
-   drawing into a 1920x3304 target that no such list would have contained. A converter target is
-   confirmed by watching Slate write into it instead.
-
-   Call before installing the observer: the three hooks below have to be in its options, because
-   what an object is can only be learned as the game creates it. */
-/* Name shaders by hash, in either direction, from a settings file.
- *
- * The escape hatch for a run where the rules are wrong about one draw and a rebuild is too slow.
- * Both are hex lists, separated by anything; null or empty means none. Forced wins over every rule,
- * skipped loses to none.
- *
- * The hashes to name come from the `ui draw:` trace lines, which print them for exactly this
- * reason: a shader's pointer means nothing once the process exits, and its hash is the only stable
- * name it has. */
-void rsf_bridge_name_shaders(const char* forced, const char* skipped);
-
-/* Which transfer function the composite applies to the layer: 0 none, 1 sRGB, 2 gamma 2.2.
- *
- * The layer holds what AC7's interface target held, which the trace shows is linear in a plain
- * UNORM view, while the back buffer holds colour the game has already transformed for display.
- * Compositing one onto the other untransformed is what made the extracted interface arrive dark.
- *
- * Which curve is correct is not something the graphics API records, and the two differ visibly in
- * the shadows, so this exists to tell them apart in one run rather than by argument. */
-void rsf_bridge_set_ui_encoding(int encoding);
-
-int rsf_bridge_identify_ui(void);
-
-/* Start extracting the interface: divert the draws the classifier names into a layer at `width` by
-   `height`, and composite that layer back over the finished frame at present.
-
-   This is the first thing in the project that changes the picture on purpose. What it is for is the
-   only route that can sharpen an interface AC7 rasterizes at a fixed size and then draws into the
-   scene as geometry, and the composite is the same premultiplied arithmetic every frame generation
-   SDK will later ask for, so the picture we make and the picture a vendor makes cannot drift.
-
-   Needs classification running. Returns zero and says why if the layer or the compositor could not
-   be built; both are refused together, because a layer with no compositor would take the interface
-   out of the frame and never put it back. */
-int rsf_bridge_extract_ui(unsigned long width, unsigned long height);
-
-rsf_observer_layout_fn rsf_bridge_layout_hook(void);
-rsf_observer_shader_fn rsf_bridge_shader_hook(void);
-rsf_observer_texture_fn rsf_bridge_texture_hook(void);
 
 /* What the overlay can ask for that this file does not own.
 
@@ -160,16 +83,6 @@ typedef struct rsf_bridge_actions {
     void (*trigger_capture)(void);
     unsigned long (*capture_count)(void);
     unsigned long (*render_scale_percent)(void);
-    /* How many indices this frame's separate translucency draws carried, reported once per frame.
-       The carrier owns what to do about it: the resolution that layer renders at is a patched
-       immediate over there, and the thresholds are settings, so this reports and does not decide.
-       Called from the present hook, on the render thread, like the rest of these. */
-    void (*translucent_geometry)(unsigned long indices);
-    /* What reinsertion should do when a promoted target meets the game's render resolution depth:
-       0 drop the depth, 1 forward both, 2 leave the target alone. Read when the plan is built, so a
-       change takes effect on the next F6. Null means drop, which is the only one of the three that
-       keeps the pixels. */
-    unsigned long (*reinsert_depth_policy)(void);
     /* The engine's temporal jitter, which on this game is ours: AC7 runs no temporal AA, so a
        patched gate is what makes the projection move at all. Opening it where nothing resolves the
        offset shows as a shimmer, and the front end is where that shows, because it holds still.
@@ -190,7 +103,6 @@ typedef struct rsf_bridge_actions {
     void (*save_dlss_preset)(unsigned long preset);
     void (*save_sharpening)(const rsf_sharpening_options*);
     void (*save_enabled)(unsigned long enabled);
-    void (*maintain_renderer)(void);
     uint32_t (*read_host_options)(struct rsf_overlay_host_option* options, uint32_t capacity);
     int (*save_host_option)(uint32_t index, int32_t value);
     int (*save_frame_limit)(uint32_t interval_or_policy);
@@ -202,9 +114,6 @@ void rsf_bridge_set_enabled(int enabled);
 int rsf_bridge_select_dlss_preset(unsigned long preset);
 int rsf_bridge_select_sharpening(const rsf_sharpening_options*);
 int rsf_bridge_select_quality(unsigned long quality);
-/* Optional bounded research capture, armed before shader creation. Empty disables it. */
-void rsf_bridge_set_briefing_capture(const char* prefix);
-
 void rsf_bridge_set_sdk_directories(const char* fsr2, const char* fsr3, const char* fsr4, const char* xess);
 int rsf_bridge_running(void);
 /* Tells the bridge whether the motion capture is configured, so the constant watch it needs stays armed. */
@@ -212,16 +121,5 @@ void rsf_bridge_set_motion_capture(int on);
 /* Request from a frontend thread. The graphics owner quiesces native producers and keeps the
    backend/device alive until queued plugin work has drained; no work runs under DllMain. */
 void rsf_bridge_request_shutdown(void);
-
-/* The main view's render size as the last evaluated pass carried it, zero before the first. This is
-   the view the reconstruction resolves, and the only one that may be jittered. */
-void rsf_bridge_view_size(unsigned long* width, unsigned long* height);
-
-/* Whether the interface draws of the main view are moved back by the frame's jitter. Off by
-   default while under test. Takes effect once the backend has started. */
-void rsf_bridge_set_unjitter(int on);
-/* Unjitter separate translucency and bypass its temporal integration. Zero selects the existing
-   jittered 1:1 integration for comparison. Resolution is controlled independently by the carrier. */
-void rsf_bridge_set_translucency_unjitter(int on);
 
 #endif /* RSF_DLSS_BRIDGE_H */
