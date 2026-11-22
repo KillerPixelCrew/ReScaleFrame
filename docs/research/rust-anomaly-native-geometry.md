@@ -140,3 +140,50 @@ profile layout and all 16 private slots. The geometry fixture now
 distinguishes an unreadable borrowed hierarchy from a malformed owned
 one. Pinned formatting, locked Windows Cargo metadata and whitespace
 passed. The fixture and game checks remain unrun.
+
+## Geometry reads and palette transfer
+
+The N03 pass compared the geometry path at `8adf010b` with the existing
+Standard and AVX evidence above. Rust now checks address arithmetic and
+interprets phase, viewport activity and delay, device frame, world,
+skeleton mode, bone count and instances, and progressive tree LOD.
+Native code lends four selected RVAs and guards copies. Phase fallback,
+active-view predicate, world sample timing, supported skin modes,
+palette layout tag and bone order match the prior path.
+
+The C++ snapshot owner lends its vector once. Rust reads up to 64
+native matrices per callback, validates every affine transform and
+writes into the exclusive destination span. At the 1,024-bone limit
+this is 16 read calls and one storage loan. The finish call clears
+all bones and the layout tag on a failed read, invalid affine lane
+or allocation refusal. The copied world remains available. Geometry
+and motion share the row-to-column transpose and widening operation.
+The geometry-only affine check remains separate from motion camera
+conversion. The geometry, motion and SR readers share the nullable
+empty slice helper with profile and draw-callback borrow lengths.
+
+The native hook fixture covers a 65-bone copy and rejection with a bad
+matrix at index 64 on both profiles. The mixed geometry fixture checks
+a wrapping instance range, and the Rust cases cover the maximum batch
+count, late read refusal, visual lookup and the 19 classification
+vectors moved from the native harness. The fixture-only retirement
+queue adapter moved out of the production compilation unit.
+
+The native leaves still have concrete callers. The geometry detours
+invoke C++ member trampolines and pin Rust's scope storage in native
+RAII guards, including engine unwinding. The copy leaf catches
+inaccessible engine memory with SEH on MSVC. The profile tables are
+still consumed through the shared C++ build profile by geometry,
+SR and the evidence tooling. The snapshot bridge lends the existing
+C++ optional world and vector to the native motion-stage caller.
+The registry and retirement headers expose the native fixture and
+callback records, and keep C++ exceptions on the native side.
+The native fixtures still cover the actual MinHook trampolines,
+platform memory and C++ snapshot/history bridge.
+
+Source checks compared the nine private callback slots, the two
+writer slots and the unchanged Standard and AVX profile bytes.
+Pinned Rust 1.94.1 formatting, locked offline Windows Cargo metadata,
+an unchanged bindgen 0.72.1 geometry registry regeneration and Git
+whitespace checks passed. Build, lint, tests, fixtures and device or
+moving-game acceptance remain user-owned.

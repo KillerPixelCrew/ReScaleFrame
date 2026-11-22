@@ -43,9 +43,7 @@ impl DrawFacts {
 }
 
 fn engine_matrix(matrix: &[f32; 16]) -> Mat4 {
-    let mut result = MaybeUninit::uninit();
-    rsf_anomaly_motion_from_engine(matrix, &mut result);
-    unsafe { result.assume_init() }
+    Mat4(from_engine_matrix(matrix))
 }
 
 fn camera(p: &Platform) -> Option<CameraSample> {

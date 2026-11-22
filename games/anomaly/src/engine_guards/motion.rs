@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::{Image, NativeSite, UniqueGuard};
+use crate::ffi::borrow_span;
 use std::ffi::c_char;
 use std::{ptr, slice};
 
@@ -47,11 +48,7 @@ unsafe extern "C" fn rsf_anomaly_motion_guard_failure(
     image: &Image,
     profile: &Profile<'_>,
 ) -> *const c_char {
-    let unique = if profile.unique_count == 0 {
-        &[]
-    } else {
-        unsafe { slice::from_raw_parts(profile.unique, profile.unique_count) }
-    };
+    let unique = unsafe { borrow_span(profile.unique, profile.unique_count) };
     let hex = |rva, code| unsafe { image.matches_hex_guard(rva, code) };
     // Detour entries first: the 16 expected bytes, then any unique prefix at the same RVA.
     for site in profile.sites {

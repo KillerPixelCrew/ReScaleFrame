@@ -11,6 +11,7 @@ mod engine_guards;
 mod engine_slots;
 #[cfg(windows)]
 mod executable;
+mod ffi;
 #[cfg(any(windows, test))]
 mod fg_inputs;
 #[cfg(any(windows, test))]

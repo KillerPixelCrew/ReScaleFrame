@@ -977,6 +977,13 @@ and remains unrun. Build and live observer verification remain open.
 
 ## Rust orchestrator and first Anomaly port
 
+Anomaly's Rust geometry owner now reads and interprets draw-time producer
+facts using the selected profile's offsets and a guarded native copy.
+Skinned snapshots borrow storage for bounded reads of up to 64 matrices
+at a time. A failed read or invalid transform discards the whole palette.
+The geometry fixtures and live checks remain unrun.
+[Geometry reads and palette transfer](research/rust-anomaly-native-geometry.md#geometry-reads-and-palette-transfer)
+
 Anomaly's Rust geometry owner now distinguishes owned and borrowed
 child ranges before model reuse and retirement. The selected profile
 and guarded memory reads remain native. The expanded geometry fixture

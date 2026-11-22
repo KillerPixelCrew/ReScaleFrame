@@ -2,6 +2,7 @@
 #pragma once
 #include "geometry_registry_platform.h"
 #include "native_profile.h"
+#include "../temporal/math.h"
 
 // Private adapter ABI. Engine addresses are opaque to Rust. Only the platform
 // leaves access the engine's memory or trampoline tables.
@@ -21,9 +22,9 @@ struct rsf_anomaly_geometry_hierarchy {
     uint32_t children_offset;
     bool (*read)(void*, const void*, size_t) noexcept;
 };
-struct rsf_anomaly_geometry_view_sample { uint32_t frame; uint8_t active, delay; };
-struct rsf_anomaly_geometry_palette { uintptr_t instances; uint64_t layout; uint32_t count; uint16_t mode; };
-struct rsf_anomaly_geometry_matrix { double values[16]; };
+struct rsf_anomaly_geometry_layout { uint32_t phase, viewport, frame, world; };
+struct rsf_anomaly_geometry_native_matrix { float values[16]; };
+using rsf_anomaly_geometry_matrix = rsf::anomaly::temporal::Mat4;
 
 struct rsf_anomaly_geometry_context {
     rsf_anomaly_geometry_context* previous;
@@ -57,8 +58,9 @@ struct rsf_anomaly_geometry_callback {
     void (*invoke)(rsf_anomaly_geometry_fn, uintptr_t, const void*) noexcept;
 };
 struct rsf_anomaly_geometry_writer {
-    bool (*begin)(void*, const rsf_anomaly_geometry_visual*, const rsf_anomaly_geometry_matrix*, uint32_t) noexcept;
-    void (*bone)(void*, uint32_t, const rsf_anomaly_geometry_matrix*) noexcept;
+    // Lends count initialized elements until finish. Null declines palette storage.
+    rsf_anomaly_geometry_matrix* (*begin)(void*, const rsf_anomaly_geometry_visual*,
+        const rsf_anomaly_geometry_matrix*, uint32_t count) noexcept;
     const void* (*finish)(void*, uint64_t) noexcept;
 };
 // The selected build's immutable guard facts. Each pointer borrows a static profile table, and read is the guarded
@@ -80,16 +82,9 @@ struct rsf_anomaly_geometry_platform {
     bool (*enable)() noexcept;
     bool (*disable)() noexcept;
     rsf_anomaly_geometry_hierarchy (*hierarchy)(rsf_anomaly_geometry_engine) noexcept;
-    bool (*pointer)(uintptr_t, uintptr_t*) noexcept;
-    uint8_t (*pass)(rsf_anomaly_geometry_engine) noexcept;
-    bool (*view)(rsf_anomaly_geometry_engine, rsf_anomaly_geometry_view_sample*) noexcept;
-    uintptr_t (*world)(rsf_anomaly_geometry_engine) noexcept;
-    bool (*matrix)(uintptr_t, float*) noexcept;
-    bool (*skin_mode)(uintptr_t, uint16_t*) noexcept;
-    bool (*palette)(uintptr_t, rsf_anomaly_geometry_palette*) noexcept;
-    uintptr_t (*bone_instances)(uintptr_t) noexcept;
-    bool (*bone)(uintptr_t, uint32_t, float*) noexcept;
-    int64_t (*tree_lod)(uintptr_t) noexcept;
+    rsf_anomaly_geometry_layout (*layout)(rsf_anomaly_geometry_engine) noexcept;
+    bool (*read)(void*, const void*, size_t) noexcept;
+    bool (*bones)(uintptr_t, uint32_t first, uint32_t count, rsf_anomaly_geometry_native_matrix*) noexcept;
 };
 
 struct rsf_anomaly_geometry_stats {
@@ -123,6 +118,7 @@ void rsf_anomaly_geometry_factory_leave();
 void rsf_anomaly_geometry_model_return(const rsf_anomaly_geometry_platform*, uintptr_t owner, uintptr_t visual);
 void rsf_anomaly_geometry_model_delete(const rsf_anomaly_geometry_platform*, uintptr_t owner, uintptr_t reference);
 uint8_t rsf_anomaly_geometry_view(const rsf_anomaly_geometry_platform*, rsf_anomaly_geometry_engine);
+bool rsf_anomaly_geometry_read_world(const rsf_anomaly_geometry_platform*, float* out);
 void rsf_anomaly_geometry_context_enter(rsf_anomaly_geometry_context*, uint8_t view, uint8_t domain, bool inherit);
 bool rsf_anomaly_geometry_render_enter(const rsf_anomaly_geometry_platform*, rsf_anomaly_geometry_context*);
 bool rsf_anomaly_geometry_hud_enter(rsf_anomaly_geometry_context*);

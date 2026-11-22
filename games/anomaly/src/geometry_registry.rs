@@ -9,6 +9,9 @@ use std::ffi::c_void;
 use std::mem;
 use std::sync::Mutex;
 
+#[cfg(test)]
+mod tests;
+
 pub(crate) type IdentityRegistry = Mutex<Registry>;
 pub(crate) type RetirementQueue = Mutex<Queue>;
 
@@ -166,8 +169,7 @@ pub(crate) unsafe extern "C" fn rsf_anomaly_geometry_retire_all(
     unsafe { deliver(keys, retired, user) }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_geometry_classify(draw: &Draw) -> i32 {
+pub(crate) fn classify(draw: &Draw) -> i32 {
     if draw.pass == RSF_ANOMALY_PASS_SHADOW {
         return RSF_ANOMALY_DRAW_IGNORED_SHADOW;
     }

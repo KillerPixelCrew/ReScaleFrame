@@ -65,17 +65,6 @@ enum class DrawVerdict : std::uint8_t {
     IdentifiedFoliage = RSF_ANOMALY_DRAW_IDENTIFIED_FOLIAGE,
     Count = RSF_ANOMALY_DRAW_COUNT,
 };
-struct DrawFacts {
-    DrawPass pass{};
-    VisualType type{};
-    VisualLookup lookup{};
-    bool capturing{true};       // Capture enabled and not inside a model factory.
-    bool world_readable{};
-    bool world_identity{};
-    bool foliage_identity{};    // geometry_enable_foliage_identity(): an unregistered tree is identified by address.
-};
-// Pure classification. Only the unregistered rigid, non-shadow path depends on the world matrix.
-DrawVerdict classify_draw(const DrawFacts&) noexcept;
 const char* pass_name(DrawPass) noexcept;
 const char* visual_type_name(VisualType) noexcept;
 const char* verdict_name(DrawVerdict) noexcept;

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::{Image, NativeSite, UniqueGuard, rsf_anomaly_guard_first_person};
+use crate::ffi::borrow_span;
 use std::ffi::c_char;
-use std::{ptr, slice};
+use std::ptr;
 
 #[repr(C)]
 struct FirstPersonSite {
@@ -54,11 +55,7 @@ unsafe extern "C" fn rsf_anomaly_sr_guard_failure(
     if world_window && !unsafe { image.matches_hex_guard(profile.ssao_rva, profile.ssao_code) } {
         return c"set_viewport (r4_rendertarget_phase_ssao.cpp:3)".as_ptr();
     }
-    let unique = if profile.unique_count == 0 {
-        &[]
-    } else {
-        unsafe { slice::from_raw_parts(profile.unique, profile.unique_count) }
-    };
+    let unique = unsafe { borrow_span(profile.unique, profile.unique_count) };
     if temporal {
         // Stage 3 calls set_P and SetMipLODBias and requires all six rmNear producers.
         for guard in unique {

@@ -10,6 +10,7 @@ mod stage;
 #[cfg(any(windows, test))]
 mod window;
 
+use crate::ffi::borrow_span;
 use crate::geometry_registry_abi::rsf_anomaly_geometry_key as InstanceKey;
 use crate::shader_family::{CORE_MODEL, CORE_STATIC, FOLIAGE_DETAIL, FOLIAGE_TREE};
 #[cfg(windows)]
@@ -18,7 +19,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, btree_map::Entry};
 use std::ffi::c_char;
 use std::mem::MaybeUninit;
-use std::{ptr, slice};
+use std::ptr;
 
 #[derive(Clone, Copy, Default, PartialEq)]
 #[repr(transparent)]
@@ -262,16 +263,6 @@ struct Snapshot<'a> {
     bones: Cow<'a, [Mat4]>,
     deformation: Option<(u64, Cow<'a, [[f64; 4]]>)>,
     detail: Option<f64>,
-}
-
-// Empty native spans may carry null. Nonempty spans in this private ABI are
-// guaranteed by the native caller to be aligned, initialized and live.
-unsafe fn borrow_span<'a, T>(data: *const T, count: usize) -> &'a [T] {
-    if count == 0 {
-        &[]
-    } else {
-        unsafe { slice::from_raw_parts(data, count) }
-    }
 }
 
 impl Snapshot<'_> {
@@ -807,10 +798,12 @@ extern "C" fn rsf_anomaly_motion_remove_jitter(
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_motion_from_engine(values: &[f32; 16], out: &mut MaybeUninit<Mat4>) {
-    // Transpose native row-vector Fmatrix bytes for column-vector shader math.
-    out.write(Mat4(std::array::from_fn(|i| {
-        f64::from(values[i % 4 * 4 + i / 4])
-    })));
+    out.write(Mat4(from_engine_matrix(values)));
+}
+
+/// Transposes a native row-vector Fmatrix for column-vector shader math.
+pub(crate) fn from_engine_matrix(values: &[f32; 16]) -> [f64; 16] {
+    std::array::from_fn(|i| f64::from(values[i % 4 * 4 + i / 4]))
 }
 
 #[unsafe(no_mangle)]

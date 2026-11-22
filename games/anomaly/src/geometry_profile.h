@@ -65,10 +65,8 @@ inline constexpr std::uint32_t detail_batch_instances = 61;
 inline constexpr std::uint32_t skeleton_st_offset = 160;
 inline constexpr std::uint32_t skeleton_pm_offset = 208;
 inline constexpr std::uint32_t hierarchy_children_offset = 96;
-inline constexpr std::uint32_t bone_instances_offset = 208; // CKinematics+128 IKinematics +0x50.
 inline constexpr std::uint32_t bone_instance_stride = 168;
 inline constexpr std::uint32_t render_transform_offset = 64;
-inline constexpr std::uint64_t sbones_palette_layout = 0x53424f4e45530001ULL; // Verified three float4 columns per bone.
 
 // ---- Standard 1.5.3 DX11 (AnomalyDX11.exe) -------------------------------------------------------------------------
 inline constexpr std::array<UniqueGuard, 9> geometry_standard_unique{{
