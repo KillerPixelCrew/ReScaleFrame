@@ -957,7 +957,7 @@ Port host setup, output admission and reduced-frame handling through the shared 
 
 **Port files (5)**
 
-- [ ] [runtime/orchestrator/include/rescaleframe/d3d11_host.h](runtime/orchestrator/include/rescaleframe/d3d11_host.h)
+- [x] [runtime/orchestrator/include/rescaleframe/d3d11_host.h](runtime/orchestrator/include/rescaleframe/d3d11_host.h)
 - [ ] [runtime/orchestrator/src/d3d11_host.cpp](runtime/orchestrator/src/d3d11_host.cpp)
 - [ ] [runtime/orchestrator/src/d3d11_host_platform.h](runtime/orchestrator/src/d3d11_host_platform.h)
 - [x] [runtime/orchestrator/src/d3d11_output_platform.cpp](runtime/orchestrator/src/d3d11_output_platform.cpp)
@@ -965,7 +965,7 @@ Port host setup, output admission and reduced-frame handling through the shared 
 
 **Fixtures (3)**
 
-- [ ] [tests/d3d11_host.cpp](tests/d3d11_host.cpp)
+- [x] [tests/d3d11_host.cpp](tests/d3d11_host.cpp)
 - [ ] [tests/d3d11_host_rendered_fg_device.cpp](tests/d3d11_host_rendered_fg_device.cpp)
 - [ ] [tests/d3d11_host_shared_sr_device.cpp](tests/d3d11_host_shared_sr_device.cpp)
 
@@ -2890,9 +2890,9 @@ Port resolver, shared surfaces, presentation and their retirement. Account for e
 **Port files (4)**
 
 - [x] [games/unity-mono/src/vulkan_resolver.h](games/unity-mono/src/vulkan_resolver.h)
-- [ ] [games/unity-mono/src/vulkan_state.h](games/unity-mono/src/vulkan_state.h)
+- [x] [games/unity-mono/src/vulkan_state.h](games/unity-mono/src/vulkan_state.h)
 - [ ] [integrations/unity/native/vulkan_bridge.cpp](integrations/unity/native/vulkan_bridge.cpp)
-- [ ] [integrations/unity/native/vulkan_bridge.h](integrations/unity/native/vulkan_bridge.h)
+- [x] [integrations/unity/native/vulkan_bridge.h](integrations/unity/native/vulkan_bridge.h)
 
 **Rust review findings (7)**
 
