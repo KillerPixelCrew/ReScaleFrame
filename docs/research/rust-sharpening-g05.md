@@ -129,3 +129,15 @@ Remaining G05 paths with implementation code are
 `runtime/orchestrator/src/sharpening_vulkan.h`,
 `tests/sharpening_d3d12.cpp`, `tests/sharpening_settings.cpp`,
 `tests/sharpening_vulkan.cpp` and `tests/sharpening_vulkan_cpu.cpp`.
+
+## Follow-up from `82b39a63`
+
+- `runtime/graphics/src/sharpening/d3d12.h` was removed. SR12's existing
+  callback slots now call the Rust D3D12 host directly through
+  `runtime/graphics/src/sharpening/d3d12_platform.h`. The GPL payload still
+  owns both activation checks and the constant layout. The production
+  options, command list, resource order and retirement contract are retained.
+- `tests/sharpening_d3d12.cpp` was replaced by `tests/sharpening_d3d12.rs`.
+  The existing CTest name and WARP skip behavior remain. It retains disabled
+  dispatch checks, HDR and SDR output checks, depth fallback, three command
+  slots recorded before submission, and D3D12 debug-layer message checks.

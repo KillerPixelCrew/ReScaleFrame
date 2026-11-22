@@ -456,8 +456,6 @@ generate("runtime/orchestrator/src/vulkan_fg_resources_abi.rs", "runtime/orchest
 generate("runtime/orchestrator/src/d3d11_sharpening_abi.rs", "runtime/graphics/src/sharpening/d3d11.h",
          "rsf_sharpen11_frame", "NOTHING", ["-Iruntime/orchestrator/include"],
          ["--no-recursive-allowlist"])
-generate("runtime/orchestrator/src/d3d12_sharpening_abi.rs", "runtime/graphics/src/sharpening/d3d12_platform.h",
-         "rsf_sharpen12_call", "NOTHING", [], ["--no-recursive-allowlist"])
 generate("runtime/orchestrator/src/vulkan_sharpening_abi.rs", "runtime/orchestrator/src/sharpening_vulkan_core.h",
          "rsf_sharpenvk_(uniform|layouts|facts|pass|platform)", "NOTHING",
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Isdk/game/include"],

@@ -941,7 +941,8 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/vendor/fidelityfx/Kits/FidelityFX/upscalers/inclu
 endif()
 add_test(NAME sharpening_settings COMMAND rsf_sharpening_settings_test)
 
-add_executable(rsf_sharpening_d3d12_test sharpening_d3d12.cpp)
+add_executable(rsf_sharpening_d3d12_test graphics_fixture_main.c)
+target_compile_definitions(rsf_sharpening_d3d12_test PRIVATE RSF_GRAPHICS_FIXTURE=rsf_sharpening_d3d12_fixture)
 target_link_libraries(rsf_sharpening_d3d12_test PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME sharpening_d3d12 COMMAND rsf_sharpening_d3d12_test)
 set_tests_properties(sharpening_d3d12 PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)

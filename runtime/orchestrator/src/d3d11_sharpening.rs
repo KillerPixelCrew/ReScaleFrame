@@ -31,7 +31,7 @@ const UAV_SLOTS: usize = 8;
 
 unsafe extern "C" {
     fn rsf_sharpening_hlsl(mode: u32) -> *const c_char;
-    fn rsf_sharpen11_active(options: &Options) -> u32;
+    pub(super) fn rsf_sharpen11_active(options: &Options) -> u32;
     pub(super) fn rsf_sharpen11_pack(
         options: &Options,
         frame: &Frame,

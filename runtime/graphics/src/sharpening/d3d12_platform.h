@@ -1,25 +1,17 @@
-// SPDX-License-Identifier: MIT
+/* SPDX-License-Identifier: MIT */
 #pragma once
-#include <stdint.h>
-
-// Private call from the D3D12 sharpening facade into Rust.
-typedef struct rsf_sharpen12 rsf_sharpen12;
-
-typedef struct rsf_sharpen12_call {
-    void* commands;
-    void* textures[4]; // Output, motion, depth, exposure.
-    const void* options; // Sanitized native Options, borrowed for this call.
-    const void* frame;   // Native Frame, borrowed for this call.
-    uint32_t mode, slot;
-} rsf_sharpen12_call;
+#include <rescaleframe/sharpening_settings.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-// The caller serializes access and retires a recording before reusing its slot.
-uint32_t rsf_core_sharpen12_run(rsf_sharpen12**, const rsf_sharpen12_call*);
-uint64_t rsf_core_sharpen12_dispatches(const rsf_sharpen12*);
-void rsf_core_sharpen12_destroy(rsf_sharpen12*);
+/* The caller retires a slot before reuse and drains all slots before destruction.
+   Output enters and leaves in UAV state. Optional inputs remain shader-readable. */
+void* rsf_sharpen12_host_create(void);
+void rsf_sharpen12_host_destroy(void*);
+int32_t rsf_sharpen12_host_run(void* owner, void* commands, void* output, void* motion,
+    void* depth, void* exposure, const rsf_sharpening_options*, uint32_t hdr,
+    uint32_t depth_inverted, float near_plane, float far_plane, uint32_t slot);
 #ifdef __cplusplus
 }
 #endif

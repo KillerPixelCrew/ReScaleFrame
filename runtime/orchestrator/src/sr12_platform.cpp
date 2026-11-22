@@ -9,9 +9,8 @@
 #include <rescaleframe/srv_format.h>
 #include "../../backends/common/d3d12_helpers.h"
 #include "../../backends/common/frame_capture12.h"
-#include "../../graphics/src/sharpening/d3d12.h"
+#include "../../graphics/src/sharpening/d3d12_platform.h"
 #include "fg12_platform.h"
-#include "sharpening_pass_options.h"
 #include <windows.h>
 #include <d3d12.h>
 #include <dxgi1_4.h>
@@ -291,22 +290,6 @@ int capture_force_reset(void* capture, uint64_t frame)
     return static_cast<rsf::FrameCapture12*>(capture)->force_sr_history_reset(frame);
 }
 
-void* sharpen_create() { return new (std::nothrow) rsf::sharpening::D3D12(); }
-void sharpen_destroy(void* pass) { delete static_cast<rsf::sharpening::D3D12*>(pass); }
-// One when the options are inactive or the pass was recorded, zero when an active pass refused.
-int sharpen_run(void* pass, void* list, void* output, void* motion, void* depth, void* exposure,
-    const rsf_sharpening_options* sharpen, uint32_t hdr, uint32_t depth_inverted, float near_plane, float far_plane,
-    uint32_t slot) try
-{
-    const auto options = rsf::sharpening::options_from_request(*sharpen);
-    if (!rsf::sharpening::active(options)) return 1;
-    rsf::sharpening::Frame mapping{};
-    mapping.hdr = hdr != 0; mapping.depth_inverted = depth_inverted;
-    mapping.near_plane = near_plane; mapping.far_plane = far_plane;
-    return static_cast<rsf::sharpening::D3D12*>(pass)->run(static_cast<ID3D12GraphicsCommandList*>(list),
-        static_cast<ID3D12Resource*>(output), static_cast<ID3D12Resource*>(motion), static_cast<ID3D12Resource*>(depth),
-        static_cast<ID3D12Resource*>(exposure), options, mapping, slot);
-} catch (...) { return 0; }
 
 // The shared frame generation owner binds its platform table before the Rust handoff.
 void fg_bind() { rsf_fg12_platform_bind(); }
@@ -356,9 +339,9 @@ struct Platform {
     decltype(&capture_event) capture_event;
     decltype(&capture_wants) capture_wants;
     decltype(&capture_force_reset) capture_force_reset;
-    decltype(&sharpen_create) sharpen_create;
-    decltype(&sharpen_destroy) sharpen_destroy;
-    decltype(&sharpen_run) sharpen_run;
+    decltype(&rsf_sharpen12_host_create) sharpen_create;
+    decltype(&rsf_sharpen12_host_destroy) sharpen_destroy;
+    decltype(&rsf_sharpen12_host_run) sharpen_run;
     decltype(&rsf_input_dump_begin_record) dump_begin_record;
     decltype(&rsf_input_dump_pass_metadata) dump_pass_metadata;
     decltype(&rsf_input_dump_sr_frame) dump_sr_frame;
@@ -377,7 +360,7 @@ constexpr Platform platform{
     describe, owned_by, write_srv, write_uav, dispatch, transition, copy_region, copy_unit_exposure,
     copy_motion_tile, map, unmap, depth_domains, capture_create, capture_destroy, capture_enabled,
     capture_configure, capture_flush, capture_record, capture_event, capture_wants, capture_force_reset,
-    sharpen_create, sharpen_destroy, sharpen_run,
+    rsf_sharpen12_host_create, rsf_sharpen12_host_destroy, rsf_sharpen12_host_run,
     rsf_input_dump_begin_record, rsf_input_dump_pass_metadata, rsf_input_dump_sr_frame, rsf_input_dump_result,
     fg_bind,
 };

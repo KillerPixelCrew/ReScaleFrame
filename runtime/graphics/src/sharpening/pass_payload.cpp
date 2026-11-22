@@ -19,11 +19,10 @@ extern "C" const char* rsf_sharpening_hlsl(uint32_t mode)
     }
 }
 
-extern "C" void rsf_sharpening_pack(const void* options, const void* facts,
+static void pack(const rsf::sharpening::Options& options, rsf::sharpening::Frame frame,
     const uint32_t* extent, uint32_t exposure_texture, uint32_t mode, uint32_t* packed)
 {
     using namespace rsf::sharpening;
-    auto frame = *static_cast<const Frame*>(facts);
     frame.width = extent[0];
     frame.height = extent[1];
     frame.motion_width = extent[2];
@@ -31,7 +30,7 @@ extern "C" void rsf_sharpening_pack(const void* options, const void* facts,
     frame.depth_width = extent[4];
     frame.depth_height = extent[5];
     frame.exposure_texture = exposure_texture;
-    const auto data = constants(*static_cast<const Options*>(options), frame, static_cast<Mode>(mode));
+    const auto data = constants(options, frame, static_cast<Mode>(mode));
     std::memcpy(packed, &data, sizeof(data));
 }
 
@@ -39,6 +38,12 @@ extern "C" uint32_t rsf_sharpen11_active(const rsf_sharpening_options* request)
 {
     using namespace rsf::sharpening;
     return active(sanitize(options_from_request(*request))) ? 1u : 0u;
+}
+
+extern "C" uint32_t rsf_sharpening_requested(const rsf_sharpening_options* request)
+{
+    using namespace rsf::sharpening;
+    return active(options_from_request(*request)) ? 1u : 0u;
 }
 
 extern "C" void rsf_sharpen11_pack(const rsf_sharpening_options* request,
@@ -56,7 +61,7 @@ extern "C" void rsf_sharpen11_pack(const rsf_sharpening_options* request,
     frame.exposure = facts->exposure;
     frame.motion_x = facts->motion_x;
     frame.motion_y = facts->motion_y;
-    rsf_sharpening_pack(&options, &frame, extent, exposure_texture, mode, packed);
+    pack(options, frame, extent, exposure_texture, mode, packed);
 }
 
 extern "C" float rsf_sharpen11_adaptive(const rsf_sharpening_options* request, float base, float motion)

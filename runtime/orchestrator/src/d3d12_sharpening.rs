@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::d3d11_output_abi::rsf_d3d11_output_srv_format;
+use crate::d3d11_sharpening::{Frame, rsf_sharpen11_active, rsf_sharpen11_pack};
+use crate::render_abi::rsf_sharpening_options as Options;
 use crate::sharpening_policy::{FILTERS, effective_mode};
 use rsf_shader_compiler::{Compiler, Request, blob_bytes, compile};
 use std::ffi::{CStr, c_char, c_void};
@@ -10,24 +12,13 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::Interface;
 
-#[path = "d3d12_sharpening_abi.rs"]
-mod abi;
-use abi::rsf_sharpen12_call as Call;
-
 const SLOT_COUNT: usize = 3;
 const GROUP_EDGE: u32 = 16;
 const CONSTANT_WORDS: usize = 32;
 
 unsafe extern "C" {
     fn rsf_sharpening_hlsl(mode: u32) -> *const c_char;
-    fn rsf_sharpening_pack(
-        options: *const c_void,
-        frame: *const c_void,
-        extent: *const u32,
-        exposure_texture: u32,
-        mode: u32,
-        packed: *mut u32,
-    );
+    fn rsf_sharpening_requested(options: &Options) -> u32;
 }
 
 #[derive(Default)]
@@ -37,7 +28,7 @@ struct Slot {
 }
 
 #[derive(Default)]
-struct Sharpen12 {
+pub(super) struct Sharpen12 {
     slots: [Slot; SLOT_COUNT],
     pipelines: [Option<ID3D12PipelineState>; FILTERS.len()],
     root: Option<ID3D12RootSignature>,
@@ -196,7 +187,7 @@ fn scratch_key(desc: &D3D12_RESOURCE_DESC) -> (u64, u32, DXGI_FORMAT) {
     (desc.Width, desc.Height, desc.Format)
 }
 
-fn transition(
+pub(super) fn transition(
     resource: &ID3D12Resource,
     from: D3D12_RESOURCE_STATES,
     to: D3D12_RESOURCE_STATES,
@@ -266,143 +257,198 @@ fn write_descriptors(
     unsafe { device.CreateUnorderedAccessView(scratch, None::<&ID3D12Resource>, Some(&desc), cpu) };
 }
 
-fn record(owner: &mut *mut Sharpen12, call: &Call) -> Option<()> {
-    let slot_index = call.slot as usize;
-    if slot_index >= SLOT_COUNT || call.options.is_null() || call.frame.is_null() {
-        return None;
+impl Sharpen12 {
+    pub(super) fn dispatches(&self) -> u64 {
+        self.dispatches
     }
-    // The facade lends typed, live resources for the duration of recording.
-    let commands = unsafe { ID3D12GraphicsCommandList::from_raw_borrowed(&call.commands) }?;
-    let resources = call
-        .textures
-        .each_ref()
-        .map(|raw| unsafe { ID3D12Resource::from_raw_borrowed(raw) });
-    let [Some(output), _, depth, exposure] = resources else {
-        return None;
-    };
-    let device = device_of(commands)?;
-    let mut descriptions = [D3D12_RESOURCE_DESC::default(); 4];
-    for (resource, desc) in resources.into_iter().zip(&mut descriptions) {
-        if let Some(resource) = resource {
-            if device_of(resource)? != device {
-                return None;
-            }
-            *desc = unsafe { resource.GetDesc() };
-            if !shader_readable(desc) {
-                return None;
+
+    pub(super) fn run(
+        &mut self,
+        commands: *mut c_void,
+        textures: [*mut c_void; 4],
+        options: &Options,
+        frame: &Frame,
+        slot: u32,
+    ) -> bool {
+        (unsafe { rsf_sharpen11_active(options) }) == 0
+            || self
+                .record(commands, textures, options, frame, slot)
+                .is_some()
+    }
+
+    fn record(
+        &mut self,
+        commands: *mut c_void,
+        textures: [*mut c_void; 4],
+        options: &Options,
+        frame: &Frame,
+        slot: u32,
+    ) -> Option<()> {
+        let slot_index = slot as usize;
+        if slot_index >= SLOT_COUNT {
+            return None;
+        }
+        // The facade lends typed, live resources for the duration of recording.
+        let commands = unsafe { ID3D12GraphicsCommandList::from_raw_borrowed(&commands) }?;
+        let resources = textures
+            .each_ref()
+            .map(|raw| unsafe { ID3D12Resource::from_raw_borrowed(raw) });
+        let [Some(output), _, depth, exposure] = resources else {
+            return None;
+        };
+        let device = device_of(commands)?;
+        let mut descriptions = [D3D12_RESOURCE_DESC::default(); 4];
+        for (resource, desc) in resources.into_iter().zip(&mut descriptions) {
+            if let Some(resource) = resource {
+                if device_of(resource)? != device {
+                    return None;
+                }
+                *desc = unsafe { resource.GetDesc() };
+                if !shader_readable(desc) {
+                    return None;
+                }
             }
         }
-    }
-    let [target, motion_desc, depth_desc, exposure_desc] = descriptions;
-    if !matches!(
-        target.Format,
-        DXGI_FORMAT_R16G16B16A16_FLOAT | DXGI_FORMAT_R32G32B32A32_FLOAT
-    ) || (exposure.is_some() && (exposure_desc.Width != 1 || exposure_desc.Height != 1))
-    {
-        return None;
-    }
-    let mode = effective_mode(call.mode, depth.is_some())?;
-    let selected = FILTERS.iter().position(|&filter| filter == mode)?;
-    if owner.is_null() {
-        *owner = crate::allocate_handle(Sharpen12::default());
-    }
-    let owner = unsafe { owner.as_mut() }?;
-    if *owner.device.get_or_insert_with(|| device.clone()) != device {
-        return None;
-    }
-    if owner.root.is_none() {
-        owner.root = Some(create_root(&device)?);
-    }
-    let root = owner.root.as_ref()?;
-    for (pipeline, filter) in owner.pipelines.iter_mut().zip(FILTERS) {
-        if pipeline.is_none() {
-            *pipeline = Some(create_pipeline(&device, root, filter)?);
+        let [target, motion_desc, depth_desc, exposure_desc] = descriptions;
+        if !matches!(
+            target.Format,
+            DXGI_FORMAT_R16G16B16A16_FLOAT | DXGI_FORMAT_R32G32B32A32_FLOAT
+        ) || (exposure.is_some() && (exposure_desc.Width != 1 || exposure_desc.Height != 1))
+        {
+            return None;
         }
-    }
-    let pipeline = owner.pipelines[selected].as_ref()?;
-    let slot = &mut owner.slots[slot_index];
-    if slot.heap.is_none() {
-        slot.heap = Some(create_heap(&device)?);
-    }
-    let heap = slot.heap.as_ref()?;
-    if slot
-        .scratch
-        .as_ref()
-        .is_none_or(|scratch| scratch_key(&unsafe { scratch.GetDesc() }) != scratch_key(&target))
-    {
-        // Allocate first so a refused resize leaves the retired slot available.
-        slot.scratch = Some(create_scratch(&device, &target)?);
-    }
-    let scratch = slot.scratch.as_ref()?;
+        let mode = effective_mode(options.mode, depth.is_some())?;
+        let selected = FILTERS.iter().position(|&filter| filter == mode)?;
+        if *self.device.get_or_insert_with(|| device.clone()) != device {
+            return None;
+        }
+        if self.root.is_none() {
+            self.root = Some(create_root(&device)?);
+        }
+        let root = self.root.as_ref()?;
+        for (pipeline, filter) in self.pipelines.iter_mut().zip(FILTERS) {
+            if pipeline.is_none() {
+                *pipeline = Some(create_pipeline(&device, root, filter)?);
+            }
+        }
+        let pipeline = self.pipelines[selected].as_ref()?;
+        let slot = &mut self.slots[slot_index];
+        if slot.heap.is_none() {
+            slot.heap = Some(create_heap(&device)?);
+        }
+        let heap = slot.heap.as_ref()?;
+        if slot.scratch.as_ref().is_none_or(|scratch| {
+            scratch_key(&unsafe { scratch.GetDesc() }) != scratch_key(&target)
+        }) {
+            // Allocate first so a refused resize leaves the retired slot available.
+            slot.scratch = Some(create_scratch(&device, &target)?);
+        }
+        let scratch = slot.scratch.as_ref()?;
 
-    let extent = [
-        target.Width as u32,
-        target.Height,
-        motion_desc.Width as u32,
-        motion_desc.Height,
-        depth_desc.Width as u32,
-        depth_desc.Height,
-    ];
-    let mut constants = [0; CONSTANT_WORDS];
-    unsafe {
-        rsf_sharpening_pack(
-            call.options,
-            call.frame,
-            extent.as_ptr(),
-            u32::from(exposure.is_some()),
-            mode,
-            constants.as_mut_ptr(),
-        );
+        let extent = [
+            target.Width as u32,
+            target.Height,
+            motion_desc.Width as u32,
+            motion_desc.Height,
+            depth_desc.Width as u32,
+            depth_desc.Height,
+        ];
+        let mut constants = [0; CONSTANT_WORDS];
+        unsafe {
+            rsf_sharpen11_pack(
+                options,
+                frame,
+                extent.as_ptr(),
+                u32::from(exposure.is_some()),
+                mode,
+                constants.as_mut_ptr(),
+            );
+        }
+        write_descriptors(&device, heap, scratch, resources, &descriptions);
+        let uav = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        let read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        let copy_src = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        let copy_dst = D3D12_RESOURCE_STATE_COPY_DEST;
+        unsafe {
+            commands.ResourceBarrier(&[transition(output, uav, read)]);
+            commands.SetDescriptorHeaps(std::slice::from_ref(&slot.heap));
+            commands.SetComputeRootSignature(root);
+            commands.SetComputeRootDescriptorTable(0, heap.GetGPUDescriptorHandleForHeapStart());
+            commands.SetComputeRoot32BitConstants(
+                1,
+                CONSTANT_WORDS as u32,
+                constants.as_ptr().cast(),
+                0,
+            );
+            commands.SetPipelineState(pipeline);
+            commands.Dispatch(
+                extent[0].div_ceil(GROUP_EDGE),
+                extent[1].div_ceil(GROUP_EDGE),
+                1,
+            );
+            commands.ResourceBarrier(&[
+                transition(scratch, uav, copy_src),
+                transition(output, read, copy_dst),
+            ]);
+            commands.CopyResource(output, scratch);
+            commands.ResourceBarrier(&[
+                transition(output, copy_dst, uav),
+                transition(scratch, copy_src, uav),
+            ]);
+        }
+        self.dispatches = self.dispatches.wrapping_add(1);
+        Some(())
     }
-    write_descriptors(&device, heap, scratch, resources, &descriptions);
-    let uav = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    let read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-    let copy_src = D3D12_RESOURCE_STATE_COPY_SOURCE;
-    let copy_dst = D3D12_RESOURCE_STATE_COPY_DEST;
-    unsafe {
-        commands.ResourceBarrier(&[transition(output, uav, read)]);
-        commands.SetDescriptorHeaps(std::slice::from_ref(&slot.heap));
-        commands.SetComputeRootSignature(root);
-        commands.SetComputeRootDescriptorTable(0, heap.GetGPUDescriptorHandleForHeapStart());
-        commands.SetComputeRoot32BitConstants(
-            1,
-            CONSTANT_WORDS as u32,
-            constants.as_ptr().cast(),
-            0,
-        );
-        commands.SetPipelineState(pipeline);
-        commands.Dispatch(
-            extent[0].div_ceil(GROUP_EDGE),
-            extent[1].div_ceil(GROUP_EDGE),
-            1,
-        );
-        commands.ResourceBarrier(&[
-            transition(scratch, uav, copy_src),
-            transition(output, read, copy_dst),
-        ]);
-        commands.CopyResource(output, scratch);
-        commands.ResourceBarrier(&[
-            transition(output, copy_dst, uav),
-            transition(scratch, copy_src, uav),
-        ]);
-    }
-    owner.dispatches = owner.dispatches.wrapping_add(1);
-    Some(())
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_sharpen12_run(owner: &mut *mut Sharpen12, call: &Call) -> u32 {
-    u32::from(record(owner, call).is_some())
+extern "C" fn rsf_sharpen12_host_create() -> *mut c_void {
+    crate::allocate_handle(Sharpen12::default()).cast()
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sharpen12_dispatches(owner: *const Sharpen12) -> u64 {
-    unsafe { owner.as_ref() }.map_or(0, |owner| owner.dispatches)
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sharpen12_destroy(owner: *mut Sharpen12) {
+unsafe extern "C" fn rsf_sharpen12_host_destroy(owner: *mut Sharpen12) {
     if !owner.is_null() {
         drop(unsafe { Box::from_raw(owner) });
     }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_sharpen12_host_run(
+    owner: *mut Sharpen12,
+    commands: *mut c_void,
+    output: *mut c_void,
+    motion: *mut c_void,
+    depth: *mut c_void,
+    exposure: *mut c_void,
+    options: &Options,
+    hdr: u32,
+    depth_inverted: u32,
+    near_plane: f32,
+    far_plane: f32,
+    slot: u32,
+) -> i32 {
+    if unsafe { rsf_sharpening_requested(options) } == 0 {
+        return 1;
+    }
+    let Some(owner) = (unsafe { owner.as_mut() }) else {
+        return 0;
+    };
+    let frame = Frame {
+        depth_linear: 0,
+        depth_inverted,
+        hdr: u32::from(hdr != 0),
+        near_plane,
+        far_plane,
+        exposure: 1.0,
+        motion_x: 1.0,
+        motion_y: 1.0,
+    };
+    i32::from(owner.run(
+        commands,
+        [output, motion, depth, exposure],
+        options,
+        &frame,
+        slot,
+    ))
 }

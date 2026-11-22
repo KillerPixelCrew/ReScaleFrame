@@ -29,6 +29,8 @@ mod resource_roles;
 mod sampler_bias;
 #[path = "sharpening.rs"]
 mod sharpening;
+#[path = "sharpening_d3d12.rs"]
+mod sharpening_d3d12;
 #[path = "ui_layer.rs"]
 mod ui_layer;
 
