@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! GameSDK identity and the exact-build admission of the native observers.
 use crate::layout::{END, JITTER, PROCESS, PROCESS_CALL, RESET, RESOLUTION, UPLOAD, VIEWPORT};
-use crate::platform::{self, Platform};
+use crate::platform;
 use crate::session::{self, Leaves};
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_detection, rsf_game_hooks_api, rsf_game_info, rsf_game_plugin_api,
@@ -55,7 +55,6 @@ extern "C" fn rsf_skyrim_executable_sha256() -> *const c_char {
 unsafe extern "C" fn rsf_skyrim_observer_admit(
     path: *const u16,
     length: usize,
-    platform: *const Platform,
     sampling: Guard,
     presentation_inputs: Guard,
     out: *mut ObserverTargets,
@@ -66,7 +65,7 @@ unsafe extern "C" fn rsf_skyrim_observer_admit(
     if !executable(unsafe { slice::from_raw_parts(path, length) }) {
         return 0;
     }
-    let Some(platform) = (unsafe { platform::inspect(platform) }) else {
+    let Some(platform) = platform::get() else {
         return 0;
     };
     let base = platform.main_module();

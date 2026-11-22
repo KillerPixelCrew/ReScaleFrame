@@ -9,7 +9,7 @@ use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
-pub(crate) const PLATFORM_VERSION: u32 = 1;
+pub(crate) const PLATFORM_VERSION: u32 = 2;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -95,8 +95,6 @@ impl CreationCall {
     }
 }
 
-pub(crate) type ColdOwnerFn = unsafe extern "C" fn() -> bool;
-
 #[repr(C)]
 pub(crate) struct Platform {
     _struct_size: u32,
@@ -130,8 +128,6 @@ pub(crate) struct Platform {
         outputs: *const NativeChain,
     ) -> i32,
     render_allowed: unsafe extern "C" fn() -> bool,
-    steam_prepare:
-        unsafe extern "C" fn(host: *const rsf_game_host_services, cold_owner: ColdOwnerFn) -> bool,
 }
 
 const _: () = {
@@ -143,9 +139,8 @@ const _: () = {
     assert!(std::mem::offset_of!(CreationCall, owner) == 56);
     assert!(std::mem::offset_of!(CreationCall, scope) == 80);
     assert!(std::mem::offset_of!(CreationCall, outputs) == 104);
-    assert!(size_of::<Platform>() == 16 + 18 * size_of::<usize>());
+    assert!(size_of::<Platform>() == 16 + 17 * size_of::<usize>());
     assert!(std::mem::offset_of!(Platform, create_detour) == 16 + 12 * size_of::<usize>());
-    assert!(std::mem::offset_of!(Platform, steam_prepare) == 16 + 17 * size_of::<usize>());
 };
 
 // The native table is a constant with static storage in the adapter DLL.
@@ -177,9 +172,20 @@ pub(crate) unsafe fn inspect(platform: *const Platform) -> Option<&'static Platf
 /// # Safety
 /// Same contract as `inspect`.
 pub(crate) unsafe fn register(platform: *const Platform) -> Option<&'static Platform> {
+    let published = PLATFORM.load(Ordering::Acquire);
+    if !published.is_null() {
+        return (published == platform.cast_mut()).then(|| unsafe { &*published });
+    }
     let table = unsafe { inspect(platform) }?;
-    PLATFORM.store(platform.cast_mut(), Ordering::Release);
-    Some(table)
+    match PLATFORM.compare_exchange(
+        ptr::null_mut(),
+        platform.cast_mut(),
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    ) {
+        Ok(_) => Some(table),
+        Err(published) => (published == platform.cast_mut()).then_some(table),
+    }
 }
 
 pub(crate) fn get() -> Option<&'static Platform> {
@@ -304,10 +310,6 @@ impl Platform {
 
     pub(crate) fn render_allowed(&self) -> bool {
         unsafe { (self.render_allowed)() }
-    }
-
-    pub(crate) fn steam_prepare(&self, host: &rsf_game_host_services, cold: ColdOwnerFn) -> bool {
-        unsafe { (self.steam_prepare)(host, cold) }
     }
 }
 

@@ -40,9 +40,8 @@ static_assert(sizeof(CpuStartRefusal) == 16);
 }
 extern "C" {
 bool rsf_skyrim_cpu_rust_bind(const rsf_game_host_services*) noexcept;
-bool rsf_skyrim_cpu_rust_prepare(const rsf_skyrim_creation_platform*,
-    const CpuHookLeaves*) noexcept;
-bool rsf_skyrim_cpu_rust_start(const rsf_skyrim_creation_platform*, const CpuHookLeaves*, CpuStartRefusal*) noexcept;
+bool rsf_skyrim_cpu_rust_prepare(const CpuHookLeaves*) noexcept;
+bool rsf_skyrim_cpu_rust_start(const CpuHookLeaves*, CpuStartRefusal*) noexcept;
 void rsf_skyrim_cpu_rust_quiesce() noexcept;
 bool rsf_skyrim_cpu_rust_disable(const CpuHookLeaves*) noexcept;
 bool rsf_skyrim_cpu_rust_stop(const CpuHookLeaves*) noexcept;
@@ -758,19 +757,19 @@ uintptr_t render(void* main)
 }
 }
 
-bool cpu_prepare(const rsf_skyrim_creation_platform* platform)
+bool cpu_prepare()
 {
-    return rsf_skyrim_cpu_rust_prepare(platform, &cpu_hook_leaves);
+    return rsf_skyrim_cpu_rust_prepare(&cpu_hook_leaves);
 }
 bool cpu_bind(const rsf_game_host_services& host)
 {
     return rsf_skyrim_cpu_rust_bind(&host);
 }
 
-bool cpu_start(const rsf_skyrim_creation_platform* platform)
+bool cpu_start()
 {
     CpuStartRefusal refusal{};
-    if (rsf_skyrim_cpu_rust_start(platform, &cpu_hook_leaves, &refusal)) return true;
+    if (rsf_skyrim_cpu_rust_start(&cpu_hook_leaves, &refusal)) return true;
     const auto services = cpu_services();
     if (services.host.log) {
         char message[180]{};

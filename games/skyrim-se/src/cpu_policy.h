@@ -4,8 +4,6 @@
 #include "screen_classification.h"
 #include <cstddef>
 
-struct rsf_skyrim_creation_platform;
-
 // Private records on the native detour's stack. Rust owns their transitions.
 struct rsf_skyrim_cpu_render_state {
     uint64_t scope{};
@@ -29,7 +27,6 @@ void rsf_skyrim_cpu_record_consumer(rsf_skyrim_cpu_frame_input*, const rsf::skyr
     rsf::skyrim::CpuConsumer, bool mapped) noexcept;
 bool rsf_skyrim_cpu_consumption_proven(const rsf_skyrim_cpu_frame_input*) noexcept;
 uint64_t rsf_skyrim_cpu_next_source() noexcept;
-uint32_t rsf_skyrim_cpu_bad_screen_query(const rsf_skyrim_creation_platform*, uintptr_t base) noexcept;
 rsf_screen_class rsf_skyrim_cpu_screen(uintptr_t main, bool primary, rsf_skyrim_cpu_menus) noexcept;
 struct rsf_skyrim_cpu_render_receipt {
     uint64_t scope;

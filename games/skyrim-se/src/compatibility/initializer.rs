@@ -197,12 +197,11 @@ fn arm(platform: &Platform, leaves: &Leaves) -> Result<(), &'static CStr> {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_skyrim_cs_checkpoint(
-    platform: *const Platform,
     leaves: &Leaves,
     withdraw: Option<Withdraw>,
     refusal: &mut *const c_char,
 ) -> bool {
-    let Some(platform) = (unsafe { platform::inspect(platform) }) else {
+    let Some(platform) = platform::get() else {
         return false;
     };
     {
@@ -388,12 +387,8 @@ fn initialize(platform: &Platform, leaves: &Leaves, skse: *const c_void) -> bool
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_cs_initialize(
-    platform: *const Platform,
-    leaves: &Leaves,
-    skse: *const c_void,
-) -> bool {
-    let Some(platform) = (unsafe { platform::inspect(platform) }) else {
+unsafe extern "C" fn rsf_skyrim_cs_initialize(leaves: &Leaves, skse: *const c_void) -> bool {
+    let Some(platform) = platform::get() else {
         return false;
     };
     initialize(platform, leaves, skse)

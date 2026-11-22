@@ -160,7 +160,7 @@ int32_t admit_observers()
     wchar_t path[32768]{};
     const auto length = GetModuleFileNameW(nullptr, path, 32768);
     rsf_skyrim_observer_targets sites{};
-    const auto result = rsf_skyrim_observer_admit(path, length, rsf::skyrim::creation_platform(),
+    const auto result = rsf_skyrim_observer_admit(path, length,
         []() noexcept -> int32_t { return rsf_skyrim_sampling_guard(rsf::skyrim::creation_platform()); },
         []() noexcept -> int32_t { return rsf_skyrim_presentation_guard(rsf::skyrim::creation_platform()); }, &sites);
     if (result == 1) {
@@ -237,9 +237,9 @@ bool subsystem(uint32_t operation, const rsf_game_host_services* services, int32
         rsf_skyrim_reset_render_observations();
         flag(true);
         break;
-    case RSF_SKYRIM_CPU_PREPARE: flag(cpu_prepare(creation_platform())); break;
+    case RSF_SKYRIM_CPU_PREPARE: flag(cpu_prepare()); break;
     case RSF_SKYRIM_CPU_BIND: flag(services && cpu_bind(*services)); break;
-    case RSF_SKYRIM_CPU_START: flag(cpu_start(creation_platform())); break;
+    case RSF_SKYRIM_CPU_START: flag(cpu_start()); break;
     case RSF_SKYRIM_CPU_QUIESCE: cpu_quiesce(); flag(true); break;
     case RSF_SKYRIM_CPU_DISABLE: flag(cpu_disable()); break;
     case RSF_SKYRIM_CPU_STOP: flag(cpu_stop()); break;

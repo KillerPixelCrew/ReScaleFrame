@@ -162,6 +162,26 @@ fn guard(platform: &Platform) -> Result<usize, &'static CStr> {
     creation_caller(platform)
 }
 
+#[cfg(not(test))]
+unsafe extern "C" {
+    fn rsf_steam_d3d11_chain_prepare(
+        host: *const rsf_game_host_services,
+        cold_owner: Option<unsafe extern "C" fn() -> bool>,
+    ) -> bool;
+}
+
+fn prepare_steam(host: &rsf_game_host_services) -> bool {
+    // Observer preparation initialized MinHook. Steam borrows the callback and retains the
+    // process-lived Runtime dispatch used by this session.
+    #[cfg(not(test))]
+    return unsafe { rsf_steam_d3d11_chain_prepare(host, Some(cold_owner)) };
+    #[cfg(test)]
+    {
+        let _ = host;
+        false
+    }
+}
+
 /// The game's renderer owner is absent or has no device yet.
 fn cold(platform: &Platform) -> bool {
     before_device(platform.main_module(), |address| {
@@ -170,6 +190,7 @@ fn cold(platform: &Platform) -> bool {
 }
 
 /// Cold-owner callback for the Steam facade, which may call it again on a later prepare.
+#[cfg(not(test))]
 unsafe extern "C" fn cold_owner() -> bool {
     platform::get().is_some_and(cold)
 }
@@ -182,7 +203,7 @@ pub(crate) fn prepare(platform: &Platform, host: &rsf_game_host_services) -> boo
         platform.log(host, refusal);
         return false;
     }
-    if !cold(platform) || !platform.steam_prepare(host, cold_owner) {
+    if !cold(platform) || !prepare_steam(host) {
         return false;
     }
     let runtime = platform.module_handle(RUNTIME_MODULE);
@@ -292,7 +313,7 @@ fn owned_call(
         .copy_from_slice(&description[DESCRIPTION_WINDOW..DESCRIPTION_WINDOW + size_of::<usize>()]);
     (usize::from_le_bytes(output_window) == window
         && platform.render_allowed()
-        && platform.steam_prepare(services, cold_owner))
+        && prepare_steam(services))
     .then_some((owner, window))
 }
 

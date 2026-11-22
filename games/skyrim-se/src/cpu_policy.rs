@@ -220,15 +220,7 @@ impl NativeScreen {
 type MenuQueries =
     unsafe extern "C" fn(usize, usize, usize, usize, usize, &mut ScreenFacts) -> bool;
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_skyrim_cpu_bad_screen_query(
-    table: *const Platform,
-    base: usize,
-) -> u32 {
-    // The upstream CPU prepare runs before session registration of this same platform.
-    let Some(platform) = (unsafe { platform::inspect(table) }) else {
-        return MENU_OPEN as u32;
-    };
+pub(crate) fn bad_screen_query(platform: &Platform, base: usize) -> u32 {
     MENU_QUERIES
         .iter()
         .find(|(rva, bytes)| !platform.matches(base + rva, bytes))

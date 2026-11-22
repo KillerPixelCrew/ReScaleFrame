@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #include "compatibility.h"
-#include "observer_platform.h"
 #include "postprocess_platform.h"
 #include <rescaleframe/sha256_file.h>
 #include <MinHook.h>
@@ -37,10 +36,10 @@ struct rsf_skyrim_cs_leaves {
 
 bool rsf_skyrim_cs_hash_matches(const char*, size_t) noexcept;
 bool rsf_skyrim_cs_profile(const unsigned char*, size_t, uintptr_t, ProfileRead) noexcept;
-bool rsf_skyrim_cs_checkpoint(const rsf_skyrim_creation_platform*, const rsf_skyrim_cs_leaves*, Withdraw, const char**) noexcept;
+bool rsf_skyrim_cs_checkpoint(const rsf_skyrim_cs_leaves*, Withdraw, const char**) noexcept;
 uintptr_t rsf_skyrim_cs_original(uint32_t slot) noexcept;
 uintptr_t rsf_skyrim_cs_resolved(const rsf_skyrim_cs_leaves*, uintptr_t module, const char*, uintptr_t result) noexcept;
-bool rsf_skyrim_cs_initialize(const rsf_skyrim_creation_platform*, const rsf_skyrim_cs_leaves*, const void*) noexcept;
+bool rsf_skyrim_cs_initialize(const rsf_skyrim_cs_leaves*, const void*) noexcept;
 uintptr_t rsf_skyrim_cs_excluded_byte(uintptr_t feature) noexcept;
 bool rsf_skyrim_cs_render_allowed(const rsf_skyrim_cs_leaves*) noexcept;
 const char* rsf_skyrim_cs_status(const rsf_skyrim_cs_leaves*) noexcept;
@@ -105,7 +104,7 @@ FARPROC WINAPI resolve(HMODULE module, LPCSTR name)
 
 bool initialize(const void* skse) noexcept
 {
-    return rsf_skyrim_cs_initialize(creation_platform(), &leaves, skse);
+    return rsf_skyrim_cs_initialize(&leaves, skse);
 }
 
 void configure(void* feature, void* json)
@@ -174,7 +173,7 @@ const rsf_skyrim_cs_leaves leaves{
 
 bool compatibility_checkpoint(const char*& refusal, void (*withdraw)() noexcept) noexcept
 {
-    return rsf_skyrim_cs_checkpoint(creation_platform(), &leaves, withdraw, &refusal);
+    return rsf_skyrim_cs_checkpoint(&leaves, withdraw, &refusal);
 }
 
 bool compatibility_render_allowed() noexcept { return rsf_skyrim_cs_render_allowed(&leaves); }

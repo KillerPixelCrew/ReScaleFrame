@@ -2,7 +2,7 @@
 //! Admission and lifetime of the 13 CPU producer hooks for Skyrim SE 1.7.104.0.
 //! Native detours keep the engine ABI, caller addresses and original calls on their own frames.
 
-use crate::cpu_policy::rsf_skyrim_cpu_bad_screen_query;
+use crate::cpu_policy::bad_screen_query;
 use crate::cpu_sources::rsf_skyrim_cpu_clear_proof;
 use crate::hook_set::HookSet;
 use crate::platform::{self, Platform};
@@ -174,7 +174,7 @@ fn target(base: usize, index: usize) -> usize {
     base + HOOKS[index].0 as usize
 }
 
-fn admission(table: *const Platform, platform: &Platform, base: usize) -> Result<(), StartRefusal> {
+fn admission(platform: &Platform, base: usize) -> Result<(), StartRefusal> {
     let named_slot = base.checked_add(NAMED_CALLBACK_SLOT as usize);
     let named_poll = base.checked_add(NAMED_POLL as usize);
     if base == 0
@@ -183,8 +183,7 @@ fn admission(table: *const Platform, platform: &Platform, base: usize) -> Result
     {
         return Err(StartRefusal::new(c"named callback", NAMED_CALLBACK_SLOT, 0));
     }
-    // SAFETY: the caller checked the table. The named slot is above both screen query RVAs.
-    let screen_rva = unsafe { rsf_skyrim_cpu_bad_screen_query(table, base) };
+    let screen_rva = bad_screen_query(platform, base);
     if screen_rva != 0 {
         return Err(StartRefusal::new(c"screen query bytes", screen_rva, 0));
     }
@@ -215,12 +214,12 @@ impl Control {
         });
     }
 
-    fn prepare(&mut self, table: *const Platform, platform: &Platform, leaves: &Leaves) -> bool {
+    fn prepare(&mut self, platform: &Platform, leaves: &Leaves) -> bool {
         if rsf_skyrim_cpu_active() || rsf_skyrim_cpu_rust_busy() || !self.hooks.is_disabled() {
             return false;
         }
         let base = platform.main_module();
-        if admission(table, platform, base).is_err() {
+        if admission(platform, base).is_err() {
             return false;
         }
 
@@ -256,12 +255,7 @@ impl Control {
         true
     }
 
-    fn start(
-        &mut self,
-        table: *const Platform,
-        platform: &Platform,
-        leaves: &Leaves,
-    ) -> Result<(), StartRefusal> {
+    fn start(&mut self, platform: &Platform, leaves: &Leaves) -> Result<(), StartRefusal> {
         if rsf_skyrim_cpu_active() || rsf_skyrim_cpu_rust_busy() {
             return Err(StartRefusal::new(c"active or entered", 0, 0));
         }
@@ -279,7 +273,7 @@ impl Control {
         {
             return Err(StartRefusal::new(c"hook state", 0, 0));
         }
-        admission(table, platform, base)?;
+        admission(platform, base)?;
 
         rsf_skyrim_cpu_clear_proof(true);
         if let Err((index, status)) = self
@@ -313,14 +307,14 @@ fn valid(leaves: &Leaves) -> bool {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_cpu_rust_prepare(table: *const Platform, leaves: &Leaves) -> bool {
-    let Some(platform) = (unsafe { platform::inspect(table) }).filter(|_| valid(leaves)) else {
+unsafe extern "C" fn rsf_skyrim_cpu_rust_prepare(leaves: &Leaves) -> bool {
+    let Some(platform) = platform::get().filter(|_| valid(leaves)) else {
         return false;
     };
     CONTROL
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .prepare(table, platform, leaves)
+        .prepare(platform, leaves)
 }
 
 #[unsafe(no_mangle)]
@@ -338,18 +332,17 @@ extern "C" fn rsf_skyrim_cpu_rust_bind(host: &rsf_game_host_services) -> bool {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_skyrim_cpu_rust_start(
-    table: *const Platform,
     leaves: &Leaves,
     refusal: &mut StartRefusal,
 ) -> bool {
-    let Some(platform) = (unsafe { platform::inspect(table) }).filter(|_| valid(leaves)) else {
+    let Some(platform) = platform::get().filter(|_| valid(leaves)) else {
         *refusal = StartRefusal::new(c"hook state", 0, 0);
         return false;
     };
     match CONTROL
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .start(table, platform, leaves)
+        .start(platform, leaves)
     {
         Ok(()) => true,
         Err(reason) => {

@@ -3,13 +3,12 @@
 // (src/creation.rs, src/layout.rs) owns the guarded thunk and route profiles, the cold-owner
 // rule, admission order, Runtime scope transaction, refusals and messages. This file keeps the
 // fault-guarded read, Win32 module/memory/last-error calls, MinHook, exception guards around host
-// and Runtime callbacks, the Community Shaders gate, the shared Steam facade and the detour that
+// and Runtime callbacks, the Community Shaders gate, and the detour that
 // captures the native return address and calls the original on its own frame.
 #include "native_creation_platform.h"
 #include "observer_platform.h"
 #include "compatibility.h"
 #include <rescaleframe/sha256_file.h>
-#include <rescaleframe/steam_d3d11_chain.h>
 #include <MinHook.h>
 #include <windows.h>
 #include <d3d11.h>
@@ -33,9 +32,8 @@ static_assert(sizeof(rsf_d3d11_creation_scope) == 24 && sizeof(rsf_d3d11_native_
 static_assert(sizeof(rsf_skyrim_creation_call) == 136 && offsetof(rsf_skyrim_creation_call, native_result) == 48 &&
     offsetof(rsf_skyrim_creation_call, owner) == 56 && offsetof(rsf_skyrim_creation_call, scope) == 80 &&
     offsetof(rsf_skyrim_creation_call, outputs) == 104);
-static_assert(sizeof(rsf_skyrim_creation_platform) == 16 + 18 * sizeof(void*) &&
-    offsetof(rsf_skyrim_creation_platform, create_detour) == 16 + 12 * sizeof(void*) &&
-    offsetof(rsf_skyrim_creation_platform, steam_prepare) == 16 + 17 * sizeof(void*));
+static_assert(sizeof(rsf_skyrim_creation_platform) == 16 + 17 * sizeof(void*) &&
+    offsetof(rsf_skyrim_creation_platform, create_detour) == 16 + 12 * sizeof(void*));
 
 bool read(uintptr_t address, void* destination, size_t size) noexcept {
 #if defined(_MSC_VER)
@@ -143,9 +141,6 @@ const rsf_skyrim_creation_platform platform{
         return status;
     },
     []() noexcept { return compatibility_render_allowed(); },
-    [](const rsf_game_host_services* host, bool (*cold_owner)(void)) noexcept {
-        return host && rsf::steam::prepare_d3d11_chain(*host, cold_owner);
-    },
 };
 }
 

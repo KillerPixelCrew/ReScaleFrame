@@ -277,7 +277,7 @@ pub(crate) unsafe fn publish(leaves: *const Leaves) -> bool {
         return false;
     }
     let table = unsafe { &*leaves };
-    if table.observers.is_null() || unsafe { platform::inspect(table.platform) }.is_none() {
+    if table.observers.is_null() || unsafe { platform::register(table.platform) }.is_none() {
         return false;
     }
     LEAVES.store(leaves.cast_mut(), Ordering::Release);
@@ -573,8 +573,7 @@ impl Session {
             self.bound_upstream = *host;
         }
         let services = self.services;
-        let created = unsafe { platform::register(leaves.platform) }
-            .is_some_and(|platform| creation::prepare(platform, &services));
+        let created = creation::prepare(platform, &services);
         if !created {
             self.reason = CREATION_REFUSED.as_ptr();
             leaves.log(&services, self.reason)?;

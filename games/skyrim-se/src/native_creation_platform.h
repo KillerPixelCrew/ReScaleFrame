@@ -16,7 +16,7 @@
 extern "C" {
 #endif
 
-#define RSF_SKYRIM_CREATION_PLATFORM_VERSION 1u
+#define RSF_SKYRIM_CREATION_PLATFORM_VERSION 2u
 
 // VirtualQuery facts for one address.
 typedef struct rsf_skyrim_memory_region {
@@ -78,8 +78,6 @@ typedef struct rsf_skyrim_creation_platform {
         const rsf_d3d11_native_chain* outputs);
     // The Community Shaders compatibility gate (compatibility.cpp).
     bool (*render_allowed)(void);
-    // The shared Steam overlay facade, rsf::steam::prepare_d3d11_chain.
-    bool (*steam_prepare)(const rsf_game_host_services* host, bool (*cold_owner)(void));
 } rsf_skyrim_creation_platform;
 
 // Detour entry points (src/lib.rs). The Rust session (src/session.rs) registers the platform and
