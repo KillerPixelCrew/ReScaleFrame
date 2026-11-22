@@ -72,10 +72,17 @@ Scene and window matching share the same IUnknown identity query. The query
 and scene GetBuffer operations release any non-null failure output and retain
 only copied identity values in the registry.
 
-- tests/d3d11_fg_api.cpp retains independent C++ DLL import and typed callback
-  identity checks alongside the separate C11 import fixture.
-- tests/fg_session.cpp retains the public ABI session host and provider mocks and
-  adds refusals before and after Prepare.
+- tests/d3d11_fg_api.cpp moved to tests/generation/src/dll.rs. The C entry
+  imports only the Runtime DLL and supplies canonical DLL callback addresses
+  for the typed identity checks. The separate C11 import fixture still
+  compiles against the public header. The Rust fixture preserves refusal bytes,
+  oversized table tails, CPU ordering and reservation coverage, malformed
+  capture refusal and separate presentation table ownership.
+- tests/fg_session.cpp moved to tests/generation/src/session.rs. The mock
+  provider and host still drive the public DLL session and sequencer exports.
+  The fixture retains re-entrant quiesce and resume, provider rejection before
+  and after Prepare, reserved and failed retirement, plain fallback, rendered
+  source marker handling and slot reuse at the u64 boundary.
 - tests/fg_leases_faults.cpp and tests/fg_leases.cpp moved to
   tests/generation/src/leases.rs. The synthetic COM objects use slots derived
   from the Windows bindings and cover removal on either fence, successful

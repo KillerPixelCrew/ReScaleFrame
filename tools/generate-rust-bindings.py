@@ -747,3 +747,28 @@ generate("tests/capture/src/abi.rs", "tests/capture/capture_fixture_abi.h",
          ["--no-recursive-allowlist", "--with-derive-default", "--no-prepend-enum-name",
           "--allowlist-function", "rsf_(input_dump.*|dump_texture.*|dump_pixels_png|native_window_(scope|reset))",
           "--raw-line", "use rsf_game_sys::{rsf_frame_record, rsf_game_render_pass};"])
+
+generate("tests/generation/src/session_abi.rs", "tests/generation/session_abi.h",
+         "rsf_(fg_(host|session_status|swapchain_desc|frame|options|status|mode)|generation_(setup|provider)|"
+         "sequence_state|backend_(resource|result|log_fn)|gfx_api|lifetime|ui_mode|latency_(mode|marker)|"
+         "pacing_owner|reflex_mode|streamline_(host_setup|graphics))",
+         "RSF_(FG_ABI_VERSION|FG_(OFF|FIXED|DYNAMIC)|FG_BACKEND_(DLSS|FSR3|XESS)|BACKEND_ABI_VERSION|"
+         "PACING_(NONE|REFLEX)|REFLEX_(ON|OFF)|UI_MODE_NONE|STREAMLINE_HOST_ABI_VERSION|SL_PROFILE_DLSS_FG)",
+         ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/backends/dlss/include",
+          "-Iruntime/graphics/include", "-Iruntime/presentation/include", "-Isdk/game/include"],
+         ["--no-recursive-allowlist",
+          "--raw-line", "use crate::abi::rsf_fg_retirement;",
+          "--raw-line", "use rsf_game_sys::rsf_frame_record;"])
+
+generate("tests/generation/src/dll_abi.rs", "tests/generation/dll_abi.h",
+         "rsf_(d3d11_(fg_(api|inputs)|present_api)|get_d3d11_(fg|present)_api_fn|fg_fixture_imports|"
+         "native_(fg_(options|status)|cpu_frame)|observer_present_event)",
+         "RSF_D3D11_(FG_(API|INPUTS)_VERSION|PRESENT_API_VERSION)",
+         ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/backends/dlss/include",
+          "-Iruntime/graphics/include", "-Iruntime/presentation/include", "-Isdk/game/include"],
+         ["--no-recursive-allowlist",
+          "--raw-line", "use crate::session_abi::{rsf_backend_log_fn, rsf_fg_status, rsf_generation_provider, rsf_latency_marker, rsf_streamline_graphics};",
+          "--raw-line", "use rsf_game_sys::{rsf_game_cpu_event, rsf_game_render_pass};",
+          "--raw-line", "type rsf_result = i32;",
+          "--raw-line", "type rsf_streamline_host = ::core::ffi::c_void;",
+          "--raw-line", "type rsf_d3d11_present_setup = ::core::ffi::c_void;"])

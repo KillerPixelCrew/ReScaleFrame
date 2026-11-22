@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: MIT
-#[cfg(windows)]
+#![cfg(all(windows, not(test)))]
+
 mod abi;
-#[cfg(windows)]
+
 mod assembly;
-#[cfg(windows)]
+
 mod choice;
-#[cfg(windows)]
+
 mod leases;
-#[cfg(windows)]
+
+mod dll;
+mod dll_abi;
 mod policy;
+mod session;
+mod session_abi;

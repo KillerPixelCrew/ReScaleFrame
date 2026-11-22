@@ -493,6 +493,7 @@ dependencies = [
 name = "rsf-generation-fixtures"
 version = "0.1.2"
 dependencies = [
+ "rsf-game-sys",
  "windows",
  "windows-sys",
 ]

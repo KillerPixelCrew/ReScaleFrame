@@ -36,6 +36,8 @@ target_include_directories(rsf_native_window_test PRIVATE
 target_link_libraries(rsf_native_window_test PRIVATE "$<TARGET_LINKER_FILE:rsf_orchestrator>" rsf_build_options)
 add_dependencies(rsf_native_window_test rsf_orchestrator)
 add_test(NAME native_window_contract COMMAND rsf_native_window_test)
+rsf_add_rust_static(rsf_generation_fixtures_rust rsf_rust_generation_fixtures
+    rsf-generation-fixtures rsf_generation_fixtures)
 include("${CMAKE_CURRENT_SOURCE_DIR}/d3d11_fg_api.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/overlay_dll_api.cmake")
 rsf_add_rust_static(rsf_cpu_fixtures_rust rsf_rust_cpu_fixtures
@@ -130,8 +132,6 @@ add_test(NAME d3d12_observer_contract COMMAND rsf_d3d12_observer_test)
 add_executable(rsf_exposure_normalization_test exposure_normalization_main.c)
 target_link_libraries(rsf_exposure_normalization_test PRIVATE rsf_orchestrator ReScaleFrame::Graphics rsf_build_options d3d12 dxgi)
 add_test(NAME native_exposure_normalization COMMAND rsf_exposure_normalization_test)
-rsf_add_rust_static(rsf_generation_fixtures_rust rsf_rust_generation_fixtures
-    rsf-generation-fixtures rsf_generation_fixtures)
 add_executable(rsf_gpu_policy_test generation/main.c)
 target_compile_definitions(rsf_gpu_policy_test PRIVATE RSF_GENERATION_FIXTURE=rsf_test_gpu_policy)
 target_link_libraries(rsf_gpu_policy_test PRIVATE rsf_generation_fixtures_rust rsf_orchestrator rsf_build_options)
@@ -546,8 +546,9 @@ target_link_libraries(rsf_sr_pipeline_test PRIVATE rsf_orchestrator rsf_build_op
 add_test(NAME sr_pipeline COMMAND rsf_sr_pipeline_test)
 set_tests_properties(sr_pipeline PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 
-add_executable(rsf_fg_session_test fg_session.cpp)
-target_link_libraries(rsf_fg_session_test PRIVATE rsf_orchestrator rsf_build_options)
+add_executable(rsf_fg_session_test generation/main.c)
+target_compile_definitions(rsf_fg_session_test PRIVATE RSF_GENERATION_FIXTURE=rsf_test_fg_session)
+target_link_libraries(rsf_fg_session_test PRIVATE rsf_generation_fixtures_rust rsf_orchestrator rsf_build_options)
 add_test(NAME fg_session COMMAND rsf_fg_session_test)
 set_tests_properties(fg_session PROPERTIES TIMEOUT 30)
 
