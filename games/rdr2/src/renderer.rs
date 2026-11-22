@@ -23,6 +23,7 @@ use rsf_game_sys::{
     RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR,
     rsf_game_host_services, rsf_game_render_pass, rsf_game_renderer_status,
 };
+use rsf_game_sys::{RSF_SCREEN_FLIGHT, RSF_SCREEN_UNKNOWN};
 use std::collections::BTreeMap;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
@@ -39,8 +40,6 @@ type FsrCreateFn = unsafe extern "C" fn(*mut c_void, *const c_void) -> i32;
 type NgxGetIntFn = unsafe extern "C" fn(*mut c_void, *const c_char, *mut i32) -> u32;
 
 /// RSF_SCREEN_UNKNOWN and RSF_SCREEN_FLIGHT from game_frame.h.
-const SCREEN_UNKNOWN: u32 = 0;
-const SCREEN_FLIGHT: u32 = 4;
 /// Returned only if a detour runs without its trampoline, which MinHook never allows.
 const NO_TRAMPOLINE: i32 = i32::MIN;
 const FSR_CREATE_REPORTS: u32 = 4;
@@ -442,9 +441,9 @@ fn sr_pass(
     pass.camera_valid = 1;
     pass.source_frame_id = source;
     pass.screen = if source != 0 {
-        SCREEN_FLIGHT
+        RSF_SCREEN_FLIGHT
     } else {
-        SCREEN_UNKNOWN
+        RSF_SCREEN_UNKNOWN
     };
     if source == 0 {
         pass.flags |= RSF_GAME_RENDER_NO_FG;

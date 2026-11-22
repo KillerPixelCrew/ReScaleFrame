@@ -45,6 +45,7 @@ use rsf_game_sys::{
     RSF_GAME_RENDER_RECONFIGURE, rsf_camera_frame, rsf_game_cpu_event, rsf_game_host_services,
     rsf_game_render_config, rsf_game_render_pass,
 };
+use rsf_game_sys::{RSF_SCREEN_FLIGHT, RSF_SCREEN_MENU};
 use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::ptr::null_mut;
@@ -55,8 +56,6 @@ use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 const BACKEND_OK: i32 = 0;
 /// RSF_SCREEN_MENU and RSF_SCREEN_FLIGHT, cast macros; package.cpp asserts them. The stored
 /// gameplay flag picks the screen class of every SR pass.
-const SCREEN_MENU: u32 = 1;
-const SCREEN_FLIGHT: u32 = 4;
 /// rsfu_initialize's results, part of the managed contract (ReScaleFrameRuntime.Apply).
 mod code {
     pub(super) const FAILED: i32 = 0;
@@ -770,9 +769,9 @@ impl Package {
         let settings = self.lock().settings;
         let mut pass = *original;
         pass.screen = if settings.gameplay != 0 {
-            SCREEN_FLIGHT
+            RSF_SCREEN_FLIGHT
         } else {
-            SCREEN_MENU
+            RSF_SCREEN_MENU
         };
         if pass.flags & RSF_GAME_RENDER_RECONFIGURE != 0 {
             self.reconfigured();

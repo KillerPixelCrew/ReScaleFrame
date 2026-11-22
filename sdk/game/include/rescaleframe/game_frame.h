@@ -55,15 +55,15 @@ typedef uint32_t rsf_frame_phase;
  * UNKNOWN is not a failure and not a default to act on. A policy that treats unknown as flight will
  * eventually interpolate a cutscene, so the safe reading of unknown is the conservative one. */
 typedef uint32_t rsf_screen_class;
-#define RSF_SCREEN_UNKNOWN ((rsf_screen_class)0)
-#define RSF_SCREEN_MENU ((rsf_screen_class)1)
-#define RSF_SCREEN_BRIEFING ((rsf_screen_class)2)
-#define RSF_SCREEN_HANGAR ((rsf_screen_class)3)
-#define RSF_SCREEN_FLIGHT ((rsf_screen_class)4)
-#define RSF_SCREEN_REPLAY ((rsf_screen_class)5)
-#define RSF_SCREEN_VIDEO ((rsf_screen_class)6)
-#define RSF_SCREEN_LOADING ((rsf_screen_class)7)
-#define RSF_SCREEN_GAMEPLAY ((rsf_screen_class)8)
+#define RSF_SCREEN_UNKNOWN 0u
+#define RSF_SCREEN_MENU 1u
+#define RSF_SCREEN_BRIEFING 2u
+#define RSF_SCREEN_HANGAR 3u
+#define RSF_SCREEN_FLIGHT 4u
+#define RSF_SCREEN_REPLAY 5u
+#define RSF_SCREEN_VIDEO 6u
+#define RSF_SCREEN_LOADING 7u
+#define RSF_SCREEN_GAMEPLAY 8u
 
 /* Latency markers, numbered as XeLL numbers them so the common case is a pass-through. Streamline's
    PCL uses different values and the backend maps them; putting the mapping there rather than here

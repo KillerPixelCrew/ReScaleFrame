@@ -21,6 +21,15 @@ pub mod callback_host_abi;
 pub mod vendor_paths;
 
 pub const RSF_GAME_FRAME_ABI_VERSION: u32 = 2;
+pub const RSF_SCREEN_UNKNOWN: u32 = 0;
+pub const RSF_SCREEN_MENU: u32 = 1;
+pub const RSF_SCREEN_BRIEFING: u32 = 2;
+pub const RSF_SCREEN_HANGAR: u32 = 3;
+pub const RSF_SCREEN_FLIGHT: u32 = 4;
+pub const RSF_SCREEN_REPLAY: u32 = 5;
+pub const RSF_SCREEN_VIDEO: u32 = 6;
+pub const RSF_SCREEN_LOADING: u32 = 7;
+pub const RSF_SCREEN_GAMEPLAY: u32 = 8;
 pub const RSF_FRAME_FLAG_RESET: u32 = 1;
 pub const RSF_FRAME_FLAG_NO_SR: u32 = 2;
 pub const RSF_FRAME_FLAG_NO_FG: u32 = 4;
