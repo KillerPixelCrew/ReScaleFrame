@@ -17,6 +17,7 @@ use crate::vulkan_fg_resources_abi::{
     rsf_vkfg_fences as Fences, rsf_vkfg_image as Image, rsf_vkfg_platform as Gpu,
 };
 use crate::vulkan_latency_abi::{rsf_slvk_call, rsf_slvk_callback};
+use crate::vulkan_ownership::Claim;
 use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_image as SourceImage};
 use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record};
 use std::ffi::c_void;
@@ -55,23 +56,6 @@ extern "C" fn rsf_core_dlgvk_report_api_error(error: i32) {
 
 fn take_api_error() -> i32 {
     API_ERROR.swap(0, Ordering::SeqCst)
-}
-
-struct Claim;
-
-impl Claim {
-    fn take() -> Option<Self> {
-        OCCUPIED
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .ok()
-            .map(|_| Self)
-    }
-}
-
-impl Drop for Claim {
-    fn drop(&mut self) {
-        OCCUPIED.store(false, Ordering::Release);
-    }
 }
 
 #[derive(Default)]
@@ -695,7 +679,7 @@ unsafe extern "C" fn rsf_core_dlgvk_create(
     {
         return INVALID;
     }
-    let Some(claim) = Claim::take() else {
+    let Some(claim) = Claim::acquire(&OCCUPIED) else {
         return NOT_READY;
     };
     let mut native = ptr::null_mut();

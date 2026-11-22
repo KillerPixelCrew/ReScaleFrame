@@ -312,6 +312,8 @@ mod vulkan_latency_abi;
 #[cfg(windows)]
 mod vulkan_latency_frames;
 #[cfg(windows)]
+mod vulkan_ownership;
+#[cfg(windows)]
 mod vulkan_pcl;
 #[cfg(windows)]
 mod vulkan_presentation;

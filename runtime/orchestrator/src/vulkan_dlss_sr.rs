@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 use crate::allocate_handle;
+use crate::frame_capture_vk::sr_capture_inputs;
 use crate::vulkan_dlss_sr_abi::{rsf_vkdlss_images, rsf_vkdlss_platform as Platform};
 use crate::vulkan_latency_abi::{RSF_SLVK_ABI_VERSION, rsf_slvk_call, rsf_slvk_callback};
+use crate::vulkan_ownership::Claim;
 use crate::vulkan_sr::{
     GENERAL, History, R32_FLOAT, RG16_FLOAT, RGBA16_FLOAT, SAMPLED_USAGE, STORAGE_USAGE,
     TRANSFER_DST_USAGE, TRANSFER_SRC_USAGE,
@@ -10,7 +12,7 @@ use crate::vulkan_sr_abi::{rsf_srvk_frame, rsf_srvk_image, rsf_srvk_setup};
 use rsf_game_sys::rsf_frame_record;
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 const INVALID: i32 = -1;
 const INIT_FAILED: i32 = -6;
@@ -39,23 +41,6 @@ impl rsf_slvk_call {
 }
 
 static OCCUPIED: AtomicBool = AtomicBool::new(false);
-
-struct Claim;
-
-impl Claim {
-    fn acquire() -> Option<Self> {
-        OCCUPIED
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .ok()
-            .map(|_| Self)
-    }
-}
-
-impl Drop for Claim {
-    fn drop(&mut self) {
-        OCCUPIED.store(false, Ordering::Release);
-    }
-}
 
 pub(super) struct Owner {
     _claim: Claim,
@@ -216,13 +201,10 @@ unsafe extern "C" fn evaluate(_: *mut c_void, token: usize, user: *mut c_void) -
     }
     unsafe { (platform.capture_parameters.unwrap())(native, *input, reset) };
     let capture = platform.capture_record.unwrap();
-    for (image, role) in [
-        (&input.color, c"sr-source-jittered"),
-        (&input.color, c"sr-linear-color"),
-        (&input.depth, c"sr-depth"),
-        (&input.motion, c"sr-motion-uv"),
-        (&input.bias_current_color, c"sr-bias-mask"),
-    ] {
+    for (image, role) in sr_capture_inputs(input)
+        .into_iter()
+        .chain([(&input.bias_current_color, c"sr-bias-mask")])
+    {
         if image.image != 0 {
             unsafe { capture(native, *commands, image, record, role.as_ptr(), reset) };
         }
@@ -258,7 +240,7 @@ impl Owner {
         platform: &'static Platform,
         setup: &rsf_srvk_setup,
     ) -> Result<Box<Self>, i32> {
-        let claim = Claim::acquire().ok_or(NOT_READY)?;
+        let claim = Claim::acquire(&OCCUPIED).ok_or(NOT_READY)?;
         let raw = allocate_handle(Self {
             _claim: claim,
             platform,

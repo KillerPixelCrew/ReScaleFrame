@@ -6,7 +6,7 @@
 //! façade supplies narrow leaves for Vulkan buffer, memory, event and command
 //! calls and the existing input dump C ABI.
 use crate::capture_names::CaptureName;
-use crate::vulkan_sr_abi::rsf_srvk_image as Image;
+use crate::vulkan_sr_abi::{rsf_srvk_frame as Frame, rsf_srvk_image as Image};
 use rsf_game_sys::rsf_frame_record as Record;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::fmt::Write as _;
@@ -16,6 +16,15 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 type Handle = *mut c_void;
+
+pub(super) fn sr_capture_inputs(frame: &Frame) -> [(&Image, &'static CStr); 4] {
+    [
+        (&frame.color, c"sr-source-jittered"),
+        (&frame.color, c"sr-linear-color"),
+        (&frame.depth, c"sr-depth"),
+        (&frame.motion, c"sr-motion-uv"),
+    ]
+}
 
 const UNSUPPORTED_FORMAT: i32 = -3;
 const STAGING_FAILED: i32 = -4;
