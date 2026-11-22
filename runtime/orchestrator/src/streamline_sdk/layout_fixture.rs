@@ -4,13 +4,13 @@
 //! objects and reports the SDK's own numbers; this fixture holds the expectations. It covers the
 //! struct types and versions in every record header, the defaults Rust leaves in place, and each
 //! enum and buffer-type value the SR code carries as a literal.
-use super::super::{
-    COLOR_BEFORE_TRANSPARENCY, COLOR_IN, COLOR_OUT, DEPTH, EXPOSURE, MOTION,
+use super::*;
+use crate::streamline_sr::{
+    BIAS_CURRENT_COLOR, COLOR_BEFORE_TRANSPARENCY, COLOR_IN, COLOR_OUT, DEPTH, EXPOSURE, MOTION,
     NON_PIXEL_SHADER_RESOURCE, ONLY_VALID_NOW, TRANSPARENCY_HINT, TRANSPARENCY_LAYER,
     UNORDERED_ACCESS, dlss_mode,
 };
-use super::*;
-use crate::vulkan_streamline_camera::rsf_slvk_sdk_preferences;
+use crate::sys::rsf_slvk_sdk_viewport as Viewport;
 use std::mem::offset_of;
 
 const PREFERENCES_KIND: u32 = 0;
@@ -101,7 +101,7 @@ fn expected_values() -> Vec<(&'static str, u64)> {
         ("kBufferTypeTransparencyHint", u64::from(TRANSPARENCY_HINT)),
         (
             "kBufferTypeBiasCurrentColorHint",
-            u64::from(super::super::BIAS_CURRENT_COLOR),
+            u64::from(BIAS_CURRENT_COLOR),
         ),
         (
             "kBufferTypeColorBeforeTransparency",
@@ -187,29 +187,22 @@ unsafe extern "C" fn rsf_fixture_dlss_sr_layout(facts: &Facts) -> i32 {
         &mut report,
         "Preferences",
         &preferences,
-        &rsf_slvk_sdk_preferences {
+        &Preferences {
             base: PREFERENCES,
             ..Default::default()
         },
     );
     report.check(
-        read::<u64>(&preferences, offset_of!(rsf_slvk_sdk_preferences, flags))
-            == DEFAULT_PREFERENCE_FLAGS
-            && read::<u32>(
-                &preferences,
-                offset_of!(rsf_slvk_sdk_preferences, log_level),
-            ) == LOG_LEVEL_DEFAULT
-            && read::<u8>(
-                &preferences,
-                offset_of!(rsf_slvk_sdk_preferences, show_console),
-            ) == 0,
+        read::<u64>(&preferences, offset_of!(Preferences, flags)) == DEFAULT_PREFERENCE_FLAGS
+            && read::<u32>(&preferences, offset_of!(Preferences, log_level)) == LOG_LEVEL_DEFAULT
+            && read::<u8>(&preferences, offset_of!(Preferences, show_console)) == 0,
         || "Preferences: default flags, log level or console flag differ".to_owned(),
     );
 
     let constants_native = native_default(facts, CONSTANTS_KIND);
-    let constants = constants(&Constants::default());
+    let constants = constants(&crate::streamline_sr::Constants::default());
     check_record(&mut report, "Constants", &constants_native, &constants);
-    let lens = offset_of!(SdkConstants, clip_to_lens);
+    let lens = offset_of!(Constants, clip_to_lens);
     report.check(
         constants_native[lens..lens + size_of::<[f32; 16]>()]
             == bytes_of(&constants.clip_to_lens)[..],
@@ -218,17 +211,17 @@ unsafe extern "C" fn rsf_fixture_dlss_sr_layout(facts: &Facts) -> i32 {
     for (name, offset, rust) in [
         (
             "orthographicProjection",
-            offset_of!(SdkConstants, orthographic),
+            offset_of!(Constants, orthographic),
             constants.orthographic,
         ),
         (
             "motionVectorsDilated",
-            offset_of!(SdkConstants, motion_dilated),
+            offset_of!(Constants, motion_dilated),
             constants.motion_dilated,
         ),
         (
             "motionVectorsJittered",
-            offset_of!(SdkConstants, motion_jittered),
+            offset_of!(Constants, motion_jittered),
             constants.motion_jittered,
         ),
     ] {
@@ -239,13 +232,13 @@ unsafe extern "C" fn rsf_fixture_dlss_sr_layout(facts: &Facts) -> i32 {
     report.check(
         read::<f32>(
             &constants_native,
-            offset_of!(SdkConstants, min_relative_depth_separation),
+            offset_of!(Constants, min_relative_depth_separation),
         ) == constants.min_relative_depth_separation,
         || "Constants: minRelativeLinearDepthObjectSeparation default differs".to_owned(),
     );
 
     let options_native = native_default(facts, OPTIONS_KIND);
-    let options = plan_options(&Dimensions::default());
+    let options = plan_options(&crate::streamline_sr::Dimensions::default());
     check_record(&mut report, "DLSSOptions", &options_native, &options);
     report.check(
         read::<f32>(&options_native, offset_of!(DlssOptions, sharpness)) == options.sharpness
@@ -254,15 +247,14 @@ unsafe extern "C" fn rsf_fixture_dlss_sr_layout(facts: &Facts) -> i32 {
             && read::<f32>(&options_native, offset_of!(DlssOptions, exposure_scale))
                 == options.exposure_scale
             && read::<u8>(&options_native, offset_of!(DlssOptions, hdr)) == options.hdr
-            && read::<u8>(&options_native, offset_of!(DlssOptions, invert_axis_x))
-                == options.invert_axis_x
-            && read::<u8>(&options_native, offset_of!(DlssOptions, invert_axis_y))
-                == options.invert_axis_y
+            && read::<u8>(&options_native, offset_of!(DlssOptions, invert_x)) == options.invert_x
+            && read::<u8>(&options_native, offset_of!(DlssOptions, invert_y)) == options.invert_y
             && read::<[u32; 6]>(&options_native, offset_of!(DlssOptions, presets))
                 == options.presets
             && read::<u8>(&options_native, offset_of!(DlssOptions, auto_exposure))
                 == options.auto_exposure
-            && read::<u8>(&options_native, offset_of!(DlssOptions, alpha)) == options.alpha,
+            && read::<u8>(&options_native, offset_of!(DlssOptions, alpha_upscaling))
+                == options.alpha_upscaling,
         || "DLSSOptions: a default Rust leaves in place differs".to_owned(),
     );
 
@@ -294,9 +286,10 @@ unsafe extern "C" fn rsf_fixture_dlss_sr_layout(facts: &Facts) -> i32 {
     );
 
     let mut tags = TagRecords::new();
-    let mut batch = TagBatch::d3d12(&unsafe { std::mem::zeroed() }, &unsafe {
-        std::mem::zeroed()
-    });
+    let mut batch =
+        crate::streamline_sr::TagBatch::d3d12(&unsafe { std::mem::zeroed() }, &unsafe {
+            std::mem::zeroed()
+        });
     batch.count = 1;
     tags.fill(&batch);
     let resource_native = native_default(facts, RESOURCE_KIND);

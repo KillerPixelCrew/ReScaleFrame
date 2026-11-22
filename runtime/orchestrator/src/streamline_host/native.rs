@@ -12,15 +12,16 @@ use super::generation::{
 use super::*;
 use crate::mfg_state::{self, Owner as Mfg};
 use crate::reflex_audit::{rsf_reflex_audit_start, rsf_reflex_audit_stop, rsf_reflex_driver_sleep};
-use crate::streamline_generation_records::{
-    self as records, REFLEX_SAMPLES, rsf_slhost_reflex_sample as Sample, rsf_slhost_tag as Tag,
-    rsf_slhost_version as Version,
+use crate::streamline_generation_records as records;
+use crate::streamline_log::{
+    rsf_core_streamline_log_clear, rsf_core_streamline_log_emit, rsf_core_streamline_log_set,
 };
-use crate::streamline_sdk::{self as sdk, api};
+use crate::streamline_sdk::{self as sdk, Entries};
 use crate::sys::{
     rsf_fg_options as Options, rsf_generation_provider as Provider,
     rsf_generation_setup as GenerationSetup,
 };
+use rsf_streamline_vk::sdk_api;
 use std::mem::transmute;
 use std::ptr::null;
 use windows::Win32::Foundation::HWND;
@@ -35,7 +36,6 @@ use windows::Win32::Graphics::Dxgi::{
 };
 use windows::core::{IUnknown, Interface};
 use windows_sys::Win32::Foundation::CloseHandle;
-use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::CreateEventW;
 
 const LOG_SLOT: u32 = 1; // RSF_STREAMLINE_LOG_D3D12_HOST
@@ -52,40 +52,11 @@ unsafe extern "C" {
     fn rsf_core_fg12_frame(frame: *const Frame, device: Handle) -> i32;
     fn rsf_core_fg12_command(command: Handle, device: Handle) -> i32;
     fn rsf_core_fg12_chain_description(desc: &ChainDesc, out: *mut DXGI_SWAP_CHAIN_DESC1);
-    fn rsf_core_vk_sdk_unload(module: Handle);
-    fn rsf_core_streamline_log_set(slot: u32, owner: usize, log: Log, user: Handle, verbose: u32);
-    fn rsf_core_streamline_log_clear(slot: u32, owner: usize);
-    fn rsf_core_streamline_log_emit(
-        slot: u32,
-        important: u32,
-        text: *const c_char,
-        emit: records::Emit,
-    );
-    // The shared fixed-search interposer loader in streamline_sr.
-    fn rsf_streamline_load_interposer(
-        path: *const u16,
-        require_signature: u32,
-        log: Log,
-        user: Handle,
-    ) -> Handle;
-    // Streamline's embedded-signature check (streamline_sr/signature.rs).
-    fn rsf_dlss_sdk_verify_signature(path: *const u16) -> bool;
 }
 
-/// The required core entry points, bound together from the interposer.
-struct Core {
-    init: api::Init,
-    shutdown: api::Shutdown,
-    upgrade: api::Upgrade,
-    native: api::Native,
-    set_device: api::SetDevice,
-    supported: api::Supported,
-    function: api::Function,
-    version: api::FeatureVersionFn,
-    loaded: api::Loaded,
-    new_token: api::NewToken,
-    constants: api::SetConstants,
-    tags: api::SetTags,
+/// A required core entry. Startup binds the table only with every one of them resolved.
+fn core<T>(entry: Option<T>) -> T {
+    entry.expect("required Streamline entry")
 }
 
 /// The typed SDK, COM and Win32 state of one host.
@@ -101,20 +72,20 @@ struct Native {
     // Borrowed from the owner until shutdown, as is the plugin path array.
     directory: *const u16,
     paths: [*const u16; 1],
-    core: Option<Core>,
-    get_state: Option<api::GetState>,
-    set_options: Option<api::SetOptions>,
-    reflex_options: Option<api::ReflexSetOptions>,
-    reflex_state: Option<api::ReflexGetState>,
-    sleep: Option<api::Sleep>,
-    pcl_marker: Option<api::PclMarker>,
-    pcl_options: Option<api::PclSetOptions>,
-    pcl_state: Option<api::PclGetState>,
+    core: Option<Entries>,
+    get_state: Option<sdk_api::GetFgState<sdk::DlssgState, sdk::FgOptions>>,
+    set_options: Option<sdk_api::SetOptions<sdk::FgOptions>>,
+    reflex_options: Option<sdk_api::Apply<sdk::ReflexOptions>>,
+    reflex_state: Option<sdk_api::Read<sdk::ReflexState>>,
+    sleep: Option<sdk_api::ReflexSleep>,
+    pcl_marker: Option<sdk_api::PclSetMarker>,
+    pcl_options: Option<sdk_api::Apply<sdk::PclOptions>>,
+    pcl_state: Option<sdk_api::Read<sdk::PclState>>,
     mfg: *mut Mfg,
 }
 
 impl Native {
-    fn core(&self) -> &Core {
+    fn core(&self) -> &Entries {
         self.core.as_ref().expect("bound Streamline core")
     }
 
@@ -136,14 +107,16 @@ impl Native {
     /// One feature function, or None when the SDK refuses or returns null.
     unsafe fn feature(&self, id: u32, name: *const c_char) -> Option<Handle> {
         let mut pointer = null_mut();
-        let found = unsafe { (self.core().function)(id, name, &mut pointer) } == sdk::OK;
+        let function = core(self.core().get_feature_function);
+        let found = unsafe { function(id, name, &mut pointer) } == sdk::OK;
         (found && !pointer.is_null()).then_some(pointer)
     }
 
     /// Borrowed native alias, valid through the supplied proxy object's lifetime.
     unsafe fn alias(&self, proxy: Handle) -> Handle {
         let mut native = null_mut();
-        if unsafe { (self.core().native)(proxy, &mut native) } != sdk::OK || native.is_null() {
+        let native_interface = core(self.core().get_native_interface);
+        if unsafe { native_interface(proxy, &mut native) } != sdk::OK || native.is_null() {
             return null_mut();
         }
         drop(unsafe { IUnknown::from_raw(native) });
@@ -157,7 +130,7 @@ impl Native {
         };
         let raw = original.into_raw();
         let mut upgraded = raw;
-        if unsafe { (self.core().upgrade)(&mut upgraded) } != sdk::OK {
+        if unsafe { core(self.core().upgrade_interface)(&mut upgraded) } != sdk::OK {
             drop(unsafe { T::from_raw(raw) });
             return 0;
         }
@@ -169,7 +142,8 @@ impl Native {
     unsafe fn retain_native<T: Interface>(&self, proxy: &Option<T>) -> Option<T> {
         let mut native = null_mut();
         let proxy = proxy.as_ref().map_or(null_mut(), Interface::as_raw);
-        if unsafe { (self.core().native)(proxy, &mut native) } != sdk::OK || native.is_null() {
+        let native_interface = core(self.core().get_native_interface);
+        if unsafe { native_interface(proxy, &mut native) } != sdk::OK || native.is_null() {
             return None;
         }
         Some(unsafe { T::from_raw(native) })
@@ -212,35 +186,10 @@ struct Ring(Box<sdk::ReflexState>);
 unsafe impl Send for Ring {}
 static RING_STATE: Mutex<Option<Ring>> = Mutex::new(None);
 
-fn samples(state: &sdk::ReflexState) -> [Sample; REFLEX_SAMPLES] {
-    std::array::from_fn(|i| {
-        let r = &state.reports[i];
-        Sample {
-            id: r.frame_id,
-            simulation_start: r.simulation_start,
-            simulation_end: r.simulation_end,
-            submit_start: r.submit_start,
-            submit_end: r.submit_end,
-            present_start: r.present_start,
-            present_end: r.present_end,
-            driver_start: r.driver_start,
-            driver_end: r.driver_end,
-            queue_start: r.queue_start,
-            queue_end: r.queue_end,
-            gpu_start: r.gpu_start,
-            gpu_end: r.gpu_end,
-            gpu_active: r.gpu_active_us,
-            gpu_frame: r.gpu_frame_us,
-            cross_adapter_copy: state.reports2[i].cross_adapter_copy_us,
-        }
-    })
-}
-
 // Startup leaves.
 
 unsafe extern "C" fn interposer_loaded() -> u32 {
-    let name: Vec<u16> = "sl.interposer.dll".encode_utf16().chain([0]).collect();
-    u32::from(!unsafe { GetModuleHandleW(name.as_ptr()) }.is_null())
+    sdk::interposer_loaded().into()
 }
 
 unsafe extern "C" fn adapter_vendor(
@@ -271,9 +220,8 @@ unsafe extern "C" fn report_vendor(log: Log, user: Handle, vendor: u32) {
 }
 
 unsafe extern "C" fn load(path: *const u16, setup: &Setup) -> Handle {
-    unsafe {
-        rsf_streamline_load_interposer(path, setup.require_signature, setup.log, setup.log_user)
-    }
+    let log = crate::input_dump::Log::new(setup.log, setup.log_user);
+    unsafe { sdk::load_interposer(path, setup.require_signature != 0, &log) }
 }
 
 unsafe extern "C" fn allocate(log: Log, user: Handle) -> Handle {
@@ -302,38 +250,9 @@ unsafe extern "C" fn allocate(log: Log, user: Handle) -> Handle {
     crate::allocate_handle(native).cast()
 }
 
-unsafe extern "C" fn bind_required(handle: Handle, entries: &[Handle; startup::ENTRY_NAMES.len()]) {
-    let [
-        init,
-        shutdown,
-        upgrade,
-        native_interface,
-        set_device,
-        supported,
-        function,
-        version,
-        loaded,
-        new_token,
-        constants,
-        tags,
-    ] = *entries;
-    // Each address was resolved by name from the interposer and is nonnull.
-    unsafe {
-        native(handle).core = Some(Core {
-            init: transmute::<Handle, api::Init>(init),
-            shutdown: transmute::<Handle, api::Shutdown>(shutdown),
-            upgrade: transmute::<Handle, api::Upgrade>(upgrade),
-            native: transmute::<Handle, api::Native>(native_interface),
-            set_device: transmute::<Handle, api::SetDevice>(set_device),
-            supported: transmute::<Handle, api::Supported>(supported),
-            function: transmute::<Handle, api::Function>(function),
-            version: transmute::<Handle, api::FeatureVersionFn>(version),
-            loaded: transmute::<Handle, api::Loaded>(loaded),
-            new_token: transmute::<Handle, api::NewToken>(new_token),
-            constants: transmute::<Handle, api::SetConstants>(constants),
-            tags: transmute::<Handle, api::SetTags>(tags),
-        });
-    }
+unsafe extern "C" fn bind_required(handle: Handle, entries: &Entries) {
+    // Startup checked that every required entry was resolved.
+    unsafe { native(handle).core = Some(*entries) };
 }
 
 unsafe extern "C" fn init(handle: Handle, request: &InitPreferences) -> u32 {
@@ -341,22 +260,20 @@ unsafe extern "C" fn init(handle: Handle, request: &InitPreferences) -> u32 {
     host.directory = request.directory;
     host.paths[0] = host.directory;
     let show_console = request.show_console != 0;
-    unsafe {
-        rsf_core_streamline_log_set(
-            LOG_SLOT,
-            handle as usize,
-            host.log,
-            host.log_user,
-            u32::from(show_console),
-        )
-    };
+    rsf_core_streamline_log_set(
+        LOG_SLOT,
+        handle as usize,
+        host.log,
+        host.log_user,
+        u32::from(show_console),
+    );
     let preferences = sdk::Preferences {
         base: sdk::PREFERENCES,
         show_console: u8::from(show_console),
         log_level: request.log_level,
         plugin_paths: host.paths.as_mut_ptr(),
         num_plugin_paths: 1,
-        log: Some(message as api::Log),
+        log: Some(message),
         flags: request.flags,
         features: request.features,
         num_features: request.feature_count,
@@ -366,7 +283,7 @@ unsafe extern "C" fn init(handle: Handle, request: &InitPreferences) -> u32 {
         render_api: request.render_api,
         ..Default::default()
     };
-    host.initialized = unsafe { (host.core().init)(&preferences, sdk::SDK_VERSION) } == sdk::OK;
+    host.initialized = unsafe { core(host.core().init)(&preferences, sdk::SDK_VERSION) } == sdk::OK;
     host.initialized.into()
 }
 
@@ -388,7 +305,7 @@ unsafe extern "C" fn create_device(handle: Handle, adapter: Handle) -> u32 {
 
 unsafe fn prime(host: &Native, device: Handle, require_signature: u32) {
     let verify: mfg_state::VerifySignature =
-        (require_signature != 0).then_some(rsf_dlss_sdk_verify_signature);
+        (require_signature != 0).then_some(rsf_streamline_vk::admission::nvidia_signed);
     if let Some(mfg) = unsafe { host.mfg.as_ref() } {
         unsafe {
             mfg_state::rsf_core_mfg_prime(
@@ -446,7 +363,7 @@ unsafe extern "C" fn start_audit(handle: Handle) {
 unsafe extern "C" fn register_device(handle: Handle) -> u32 {
     let host = unsafe { native(handle) };
     let device = host.device.as_ref().map_or(null_mut(), Interface::as_raw);
-    u32::from(unsafe { (host.core().set_device)(device) } == sdk::OK)
+    u32::from(unsafe { core(host.core().set_d3d_device)(device) } == sdk::OK)
 }
 
 unsafe extern "C" fn create_factory(handle: Handle) -> u32 {
@@ -525,20 +442,14 @@ unsafe extern "C" fn resolve_feature(
     };
     unsafe {
         match entry {
-            GET_STATE => host.get_state = Some(transmute::<Handle, api::GetState>(pointer)),
-            SET_OPTIONS => host.set_options = Some(transmute::<Handle, api::SetOptions>(pointer)),
-            REFLEX_OPTIONS => {
-                host.reflex_options = Some(transmute::<Handle, api::ReflexSetOptions>(pointer));
-            }
-            REFLEX_STATE => {
-                host.reflex_state = Some(transmute::<Handle, api::ReflexGetState>(pointer));
-            }
-            SLEEP => host.sleep = Some(transmute::<Handle, api::Sleep>(pointer)),
-            PCL_MARKER => host.pcl_marker = Some(transmute::<Handle, api::PclMarker>(pointer)),
-            PCL_STATE => host.pcl_state = Some(transmute::<Handle, api::PclGetState>(pointer)),
-            PCL_OPTIONS => {
-                host.pcl_options = Some(transmute::<Handle, api::PclSetOptions>(pointer));
-            }
+            GET_STATE => host.get_state = sdk_api::function(pointer),
+            SET_OPTIONS => host.set_options = sdk_api::function(pointer),
+            REFLEX_OPTIONS => host.reflex_options = sdk_api::function(pointer),
+            REFLEX_STATE => host.reflex_state = sdk_api::function(pointer),
+            SLEEP => host.sleep = sdk_api::function(pointer),
+            PCL_MARKER => host.pcl_marker = sdk_api::function(pointer),
+            PCL_STATE => host.pcl_state = sdk_api::function(pointer),
+            PCL_OPTIONS => host.pcl_options = sdk_api::function(pointer),
             _ => return 0,
         }
     }
@@ -552,7 +463,8 @@ unsafe extern "C" fn prepare_mfg(handle: Handle) {
 unsafe extern "C" fn pcl_defaults(handle: Handle) {
     let host = unsafe { native(handle) };
     let mut options = sdk::PclOptions::default();
-    records::rsf_slhost_pack_pcl(&mut options);
+    // eUsePingMessage with no marker thread.
+    sdk::pcl_options(0, &mut options);
     if let Some(set) = host.pcl_options {
         unsafe { set(&options) };
     }
@@ -569,20 +481,21 @@ unsafe extern "C" fn dispose(handle: Handle) {
     host.device = None;
     host.native_device = None;
     if host.initialized {
-        unsafe { (host.core().shutdown)() };
+        unsafe { core(host.core().shutdown)() };
     }
     unsafe { mfg_state::rsf_core_mfg_release(host.mfg) };
-    unsafe { rsf_core_streamline_log_clear(LOG_SLOT, handle as usize) };
+    rsf_core_streamline_log_clear(LOG_SLOT, handle as usize);
     unsafe { mfg_state::rsf_core_mfg_destroy(host.mfg) };
 }
 
 unsafe extern "C" fn token(handle: Handle, index: u32, out: &mut Handle) -> i32 {
     let host = unsafe { native(handle) };
-    let mut token = null_mut();
-    if unsafe { (host.core().new_token)(&mut token, &index) } != sdk::OK || token.is_null() {
+    let mut token = null();
+    let new_token = core(host.core().get_new_frame_token);
+    if unsafe { new_token(&mut token, &index) } != sdk::OK || token.is_null() {
         return FEATURE_FAILED;
     }
-    *out = token;
+    *out = token.cast_mut();
     OK
 }
 
@@ -609,8 +522,8 @@ unsafe extern "C" fn common(
     constants: *const c_void,
 ) -> i32 {
     let host = unsafe { native(handle) };
-    let viewport = sdk::ViewportHandle::new(viewport);
-    let set = unsafe { (host.core().constants)(constants.cast(), token, &viewport) };
+    let viewport = sdk::viewport(viewport);
+    let set = unsafe { core(host.core().set_constants)(constants.cast(), token, &viewport) };
     if set == sdk::OK { OK } else { FEATURE_FAILED }
 }
 
@@ -621,23 +534,22 @@ unsafe extern "C" fn reflex_state(
     out: &mut Reflex,
 ) -> i32 {
     let host = unsafe { native(handle) };
-    let mut state = sdk::ReflexState::new();
+    let mut state = sdk::reflex_state();
     match host.reflex_state {
-        Some(get) if unsafe { get(&mut state) } == sdk::OK => {}
+        Some(get) if unsafe { get(&mut *state) } == sdk::OK => {}
         _ => return FEATURE_FAILED,
     }
-    out.low_latency_available = state.low_latency_available.into();
-    out.latency_report_available = state.latency_report_available.into();
+    out.low_latency_available = u32::from(state.low_latency_available != 0);
+    out.latency_report_available = u32::from(state.latency_report_available != 0);
     if report == 0 || host.log.is_none() {
         return OK;
     }
-    records::rsf_slhost_reflex_summary(
-        &samples(&state),
+    records::reflex_summary(
+        &state,
         inputs,
-        state.latency_report_available.into(),
+        out.latency_report_available,
         host.log,
         host.log_user,
-        emit,
     );
     host.report_driver_sleep();
     OK
@@ -645,20 +557,18 @@ unsafe extern "C" fn reflex_state(
 
 unsafe extern "C" fn reflex_options(handle: Handle, mode: u32, limit: u32) -> i32 {
     let host = unsafe { native(handle) };
-    let mut options = sdk::ReflexOptions::default();
-    records::rsf_slhost_pack_reflex(mode, limit, &mut options);
+    let options = records::pack_reflex(mode, limit);
     match host.reflex_options {
         Some(set) if unsafe { set(&options) } == sdk::OK => {}
         _ => return FEATURE_FAILED,
     }
     if host.log.is_some() {
-        records::rsf_slhost_report_reflex_options(
+        records::report_reflex_options(
             mode,
             limit,
             options.optimize_markers.into(),
             host.log,
             host.log_user,
-            emit,
         );
         host.report_driver_sleep();
     }
@@ -667,10 +577,10 @@ unsafe extern "C" fn reflex_options(handle: Handle, mode: u32, limit: u32) -> i3
 
 unsafe extern "C" fn pcl_message(handle: Handle, out: &mut u32) -> i32 {
     let host = unsafe { native(handle) };
-    let mut state = sdk::PclState::new();
+    let mut state = sdk::pcl_state();
     match host.pcl_state {
         Some(get) if unsafe { get(&mut state) } == sdk::OK => {
-            *out = state.stats_window_message;
+            *out = state.window_message;
             OK
         }
         _ => FEATURE_FAILED,
@@ -687,9 +597,11 @@ unsafe extern "C" fn driver_sleep(handle: Handle) {
 unsafe extern "C" fn ring_capture(handle: Handle) -> u32 {
     let host = unsafe { native(handle) };
     let mut ring = RING_STATE.lock().unwrap();
-    let state = &mut ring.insert(Ring(sdk::ReflexState::new())).0;
+    let state = &mut ring.insert(Ring(sdk::reflex_state())).0;
     match host.reflex_state {
-        Some(get) => u32::from(unsafe { get(state) } == sdk::OK && state.latency_report_available),
+        Some(get) => u32::from(
+            unsafe { get(&mut **state) } == sdk::OK && state.latency_report_available != 0,
+        ),
         None => 0,
     }
 }
@@ -703,16 +615,8 @@ unsafe extern "C" fn ring_write(handle: Handle, reason: *const c_char, source: u
     let Some(Ring(state)) = ring.as_ref() else {
         return;
     };
-    unsafe {
-        records::rsf_slhost_reflex_ring(
-            &samples(state),
-            reason,
-            source,
-            host.log,
-            host.log_user,
-            emit,
-        )
-    };
+    let reason = unsafe { CStr::from_ptr(reason) };
+    records::reflex_ring(state, reason, source, host.log, host.log_user);
 }
 
 // FEATURE_FAILED means the plugin state did not change. Any other result reports the
@@ -727,7 +631,8 @@ unsafe extern "C" fn generation_load(
     if enabled != 0 {
         unsafe { prime(host, host.native_device_raw(), require_signature) };
     }
-    if unsafe { (host.core().loaded)(sdk::FEATURE_DLSS_G, enabled != 0) } != sdk::OK {
+    let loaded = core(host.core().set_feature_loaded);
+    if unsafe { loaded(sdk::FEATURE_DLSS_G, enabled != 0) } != sdk::OK {
         return FEATURE_FAILED;
     }
     host.get_state = None;
@@ -737,11 +642,11 @@ unsafe extern "C" fn generation_load(
         || unsafe {
             host.get_state = host
                 .feature(sdk::FEATURE_DLSS_G, c"slDLSSGGetState".as_ptr())
-                .map(|entry| transmute::<Handle, api::GetState>(entry));
+                .and_then(|entry| sdk_api::function(entry));
             host.get_state.is_some() && {
                 host.set_options = host
                     .feature(sdk::FEATURE_DLSS_G, c"slDLSSGSetOptions".as_ptr())
-                    .map(|entry| transmute::<Handle, api::SetOptions>(entry));
+                    .and_then(|entry| sdk_api::function(entry));
                 host.set_options.is_some()
             }
         };
@@ -767,31 +672,25 @@ unsafe extern "C" fn support(handle: Handle, log: Log, user: Handle) -> i32 {
     let Some(device) = host.native_device.as_ref() else {
         return NOT_SUPPORTED;
     };
-    let mut luid = unsafe { device.GetAdapterLuid() };
-    let info = sdk::AdapterInfo::new((&raw mut luid).cast(), size_of_val(&luid) as u32);
-    let fg = unsafe { (host.core().supported)(sdk::FEATURE_DLSS_G, &info) };
-    let reflex = unsafe { (host.core().supported)(sdk::FEATURE_REFLEX, &info) };
+    let mut luid = crate::streamline_sr::luid_bits(unsafe { device.GetAdapterLuid() });
+    let info = sdk::adapter(&mut luid);
+    let supported = core(host.core().is_feature_supported);
+    let fg = unsafe { supported(sdk::FEATURE_DLSS_G, &info) };
+    let reflex = unsafe { supported(sdk::FEATURE_REFLEX, &info) };
     if fg == sdk::OK && reflex == sdk::OK {
         return OK;
     }
-    records::rsf_slhost_report_support(fg as u32, reflex as u32, log, user, emit);
+    records::report_support(fg as u32, reflex as u32, log, user);
     NOT_SUPPORTED
 }
 
 unsafe extern "C" fn version(handle: Handle, status: &mut Status) {
     let host = unsafe { native(handle) };
-    let mut version = sdk::FeatureVersion::new();
-    let found = unsafe { (host.core().version)(sdk::FEATURE_DLSS_G, &mut version) } == sdk::OK
-        && version.ngx.present();
-    let record = found.then_some(Version {
-        ngx: [version.ngx.major, version.ngx.minor, version.ngx.build],
-        streamline: [
-            version.streamline.major,
-            version.streamline.minor,
-            version.streamline.build,
-        ],
-    });
-    records::rsf_slhost_format_version(record.as_ref(), status);
+    let mut version = sdk::feature_version();
+    let get = core(host.core().get_feature_version);
+    let found = unsafe { get(sdk::FEATURE_DLSS_G, &mut version) } == sdk::OK
+        && sdk::version_present(&version.ngx);
+    records::format_version(found.then_some(&version), status);
 }
 
 /// Recognizes an already upgraded factory-created interface, else upgrades the owned one.
@@ -801,7 +700,7 @@ unsafe fn upgrade_chain(host: &Native, chain: &mut Handle) -> i32 {
         return FEATURE_FAILED;
     }
     let upgraded = native != *chain;
-    if upgraded || unsafe { (host.core().upgrade)(chain) } == sdk::OK {
+    if upgraded || unsafe { core(host.core().upgrade_interface)(chain) } == sdk::OK {
         OK
     } else {
         FEATURE_FAILED
@@ -843,15 +742,13 @@ unsafe extern "C" fn chain(handle: Handle, desc: &ChainDesc, out: &mut Handle) -
 
 unsafe extern "C" fn options(handle: Handle, request: &Request) -> i32 {
     let host = unsafe { native(handle) };
-    let mut options = sdk::FgOptions::default();
-    records::rsf_slhost_pack_options(
+    let options = records::pack_options(
         request.mode,
         request.frames,
         request.ui_recomposition,
         request.dynamic_target_fps,
-        &mut options,
     );
-    let viewport = sdk::ViewportHandle::new(0);
+    let viewport = sdk::viewport(0);
     match host.set_options {
         Some(set) if unsafe { set(&viewport, &options) } == sdk::OK => OK,
         _ => FEATURE_FAILED,
@@ -860,8 +757,7 @@ unsafe extern "C" fn options(handle: Handle, request: &Request) -> i32 {
 
 // sl::DLSSGOptions{}: mode eOff with the SDK member defaults.
 fn disabled_options() -> sdk::FgOptions {
-    let mut options = sdk::FgOptions::default();
-    records::rsf_slhost_pack_options(0, 1, 0, 0.0, &mut options);
+    let mut options = records::pack_options(0, 1, 0, 0.0);
     options.flags = 0;
     options
 }
@@ -869,28 +765,28 @@ fn disabled_options() -> sdk::FgOptions {
 unsafe extern "C" fn off(handle: Handle) {
     let host = unsafe { native(handle) };
     if let Some(set) = host.set_options {
-        let viewport = sdk::ViewportHandle::new(0);
+        let viewport = sdk::viewport(0);
         unsafe { set(&viewport, &disabled_options()) };
     }
 }
 
 unsafe extern "C" fn observe(handle: Handle, out: &mut Observed) -> i32 {
     let host = unsafe { native(handle) };
-    let mut state = sdk::DlssgState::new();
-    let viewport = sdk::ViewportHandle::new(0);
+    let mut state = sdk::dlssg_state();
+    let viewport = sdk::viewport(0);
     match host.get_state {
         Some(get) if unsafe { get(&viewport, &mut state, null()) } == sdk::OK => {}
         _ => return FEATURE_FAILED,
     }
-    out.max_generated_frames = state.generated_max;
-    out.dynamic_supported = u32::from(state.dynamic_supported == sdk::TRUE);
-    out.vsync_supported = u32::from(state.vsync_available == sdk::TRUE);
-    out.min_dimension = state.min_width_or_height;
+    out.max_generated_frames = state.max_generated;
+    out.dynamic_supported = u32::from(state.dynamic_mfg == sdk::TRUE);
+    out.vsync_supported = u32::from(state.vsync == sdk::TRUE);
+    out.min_dimension = state.min_dimension;
     out.status = state.status as i32;
     unsafe { mfg_state::rsf_core_mfg_status(host.mfg, &mut out.mfg_status, &mut out.mfg_maximum) };
-    out.presented = state.presented.into();
-    out.fence = state.fence;
-    out.fence_value = state.fence_value;
+    out.presented = state.actual_presents.into();
+    out.fence = state.inputs_fence;
+    out.fence_value = state.inputs_fence_value;
     OK
 }
 
@@ -916,8 +812,7 @@ unsafe extern "C" fn constants(
     apply: u32,
 ) -> i32 {
     let host = unsafe { native(handle) };
-    let mut constants = sdk::Constants::default();
-    unsafe { records::rsf_slhost_pack_fg_camera(frame, reset, &mut constants) };
+    let mut constants = unsafe { records::pack_fg_camera(frame, reset) };
     constants.previous_to_clip = sdk::full_invert(&constants.clip_to_previous);
     if !constants
         .previous_to_clip
@@ -926,8 +821,10 @@ unsafe extern "C" fn constants(
     {
         return INVALID;
     }
-    let viewport = sdk::ViewportHandle::new(0);
-    if apply != 0 && unsafe { (host.core().constants)(&constants, token, &viewport) } != sdk::OK {
+    let viewport = sdk::viewport(0);
+    if apply != 0
+        && unsafe { core(host.core().set_constants)(&constants, token, &viewport) } != sdk::OK
+    {
         return FEATURE_FAILED;
     }
     OK
@@ -935,28 +832,15 @@ unsafe extern "C" fn constants(
 
 unsafe extern "C" fn tags(handle: Handle, token: Handle, command: Handle, frame: &Frame) -> i32 {
     let host = unsafe { native(handle) };
-    let mut planned = [Tag {
-        resource: null_mut(),
-        state: 0,
-        kind: 0,
-        top: 0,
-        left: 0,
-        width: 0,
-        height: 0,
-    }; 5];
-    let count = records::rsf_slhost_plan_tags(frame, &mut planned) as usize;
+    let (planned, count) = records::plan_tags(frame);
     let mut resources: [sdk::Resource; 5] =
         std::array::from_fn(|i| sdk::texture(planned[i].resource, planned[i].state));
     let tags: [sdk::ResourceTag; 5] = std::array::from_fn(|i| {
-        let tag = &planned[i];
-        sdk::tag(
-            &raw mut resources[i],
-            tag.kind,
-            [tag.top, tag.left, tag.width, tag.height],
-        )
+        sdk::tag(&raw mut resources[i], planned[i].kind, planned[i].extent)
     });
-    let viewport = sdk::ViewportHandle::new(0);
-    let set = unsafe { (host.core().tags)(token, &viewport, tags.as_ptr(), count as u32, command) };
+    let viewport = sdk::viewport(0);
+    let set_tags = core(host.core().set_tag_for_frame);
+    let set = unsafe { set_tags(token, &viewport, tags.as_ptr(), count, command) };
     if set == sdk::OK { OK } else { FEATURE_FAILED }
 }
 
@@ -966,7 +850,7 @@ static STARTUP: Startup = Startup {
     adapter_vendor,
     report_vendor,
     load,
-    unload: rsf_core_vk_sdk_unload,
+    unload: crate::sdk_module::rsf_core_vk_sdk_unload,
     allocate,
     bind_required,
     init,
@@ -1073,15 +957,32 @@ extern "C" fn rsf_generation_dlss() -> *const Provider {
     &PROVIDER
 }
 
-// Internal to the DLSS backend: shared D3D12 DLSS SR sets this frame's common constants.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_streamline_common_set(
+/// Shared D3D11 DLSS SR sets this frame's common constants.
+pub(crate) unsafe fn common_set(
     host: *mut Host,
     id: u64,
     viewport: u32,
-    constants: *const c_void,
-) -> u32 {
-    u32::from(unsafe { rsf_core_slhost_common(host, id, viewport, constants, &PLATFORM) } != 0)
+    constants: &sdk::Constants,
+) -> bool {
+    let constants = std::ptr::from_ref(constants).cast();
+    unsafe { rsf_core_slhost_common(host, id, viewport, constants, &PLATFORM) != 0 }
+}
+
+/// What an SR route borrows from a live host: its interposer, entry table and native device.
+pub(crate) struct Shared {
+    pub(crate) module: Handle,
+    pub(crate) entries: Entries,
+    pub(crate) native_device: Handle,
+}
+
+/// The session a live host lends to DLSS SR. None for a null or unopened host.
+pub(crate) unsafe fn shared(host: *mut Host) -> Option<Shared> {
+    let native = unsafe { host_native(host) }?;
+    Some(Shared {
+        module: unsafe { rsf_core_slhost_module(host) },
+        entries: *native.core.as_ref()?,
+        native_device: raw(&native.native_device),
+    })
 }
 
 // Public host entry points (rescaleframe/streamline_host.h).
@@ -1150,6 +1051,11 @@ unsafe extern "C" fn rsf_streamline_host_module(host: *mut Host) -> Handle {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_streamline_host_drain(host: *mut Host) -> i32 {
+    unsafe { drain(host) }
+}
+
+/// Waits for the host's proxy queue to finish its submitted work.
+pub(crate) unsafe fn drain(host: *mut Host) -> i32 {
     let Some(native) = (unsafe { host_native(host) }) else {
         return INVALID;
     };
@@ -1228,7 +1134,7 @@ unsafe extern "C" fn rsf_streamline_host_retire_through(host: *mut Host, id: u64
 
 unsafe extern "C" fn resolve_common(handle: Handle, entries: &mut [Handle; 2]) -> u32 {
     let host = unsafe { native(handle) };
-    let function = host.core().function;
+    let function = core(host.core().get_feature_function);
     let [before, after] = entries;
     u32::from(
         unsafe { function(sdk::FEATURE_COMMON, c"slHookPresent".as_ptr(), before) } == sdk::OK
@@ -1238,14 +1144,14 @@ unsafe extern "C" fn resolve_common(handle: Handle, entries: &mut [Handle; 2]) -
 }
 
 unsafe extern "C" fn common_before(entry: Handle, chain: Handle, interval: u32, flags: u32) -> u32 {
-    let hook = unsafe { transmute::<Handle, api::HookPresent>(entry) };
+    let hook = unsafe { transmute::<Handle, sdk::HookPresent>(entry) };
     let mut skip = false;
     let result = unsafe { hook(chain, interval, flags, &mut skip) };
     u32::from(result >= 0 && !skip)
 }
 
 unsafe extern "C" fn common_after(entry: Handle, flags: u32) -> u32 {
-    let hook = unsafe { transmute::<Handle, api::HookAfterPresent>(entry) };
+    let hook = unsafe { transmute::<Handle, sdk::HookAfterPresent>(entry) };
     u32::from(unsafe { hook(flags) } >= 0)
 }
 

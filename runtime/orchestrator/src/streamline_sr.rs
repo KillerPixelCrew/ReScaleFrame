@@ -4,14 +4,6 @@ use rsf_game_sys::rsf_frame_record as Record;
 use std::ffi::c_void;
 use std::ptr::null_mut;
 
-// The SDK loader entries serve the D3D11/D3D12 SR APIs, which unit tests do not build.
-#[cfg_attr(test, allow(dead_code))]
-pub(crate) mod native;
-pub(crate) mod signature;
-// The typed SDK call tables are compiled out of unit tests, which leaves their constants unused.
-#[cfg_attr(test, allow(dead_code))]
-pub(super) mod sdk;
-
 /// DLSS mode and output size handed to the plan query.
 #[derive(Clone, Copy, Default)]
 pub(super) struct Dimensions {
@@ -28,17 +20,6 @@ pub(super) struct OptionPayload {
     pub(super) hdr: u8,
     pub(super) auto_exposure: u8,
     pub(super) alpha: u8,
-}
-
-/// Sizes the SDK reports for one plan query.
-#[derive(Clone, Copy, Default)]
-pub(super) struct Optimal {
-    pub(super) width: u32,
-    pub(super) height: u32,
-    pub(super) width_min: u32,
-    pub(super) height_min: u32,
-    pub(super) width_max: u32,
-    pub(super) height_max: u32,
 }
 
 /// Camera and motion constants before they become an SDK record.
@@ -66,7 +47,7 @@ pub(super) struct Constants {
     pub(super) reset: u8,
 }
 
-fn luid_bits(luid: windows::Win32::Foundation::LUID) -> u64 {
+pub(super) fn luid_bits(luid: windows::Win32::Foundation::LUID) -> u64 {
     u64::from(luid.LowPart) | (u64::from(luid.HighPart as u32) << 32)
 }
 
@@ -75,9 +56,30 @@ pub(super) unsafe fn d3d12_luid(device: Handle) -> u64 {
     luid_bits(unsafe { crate::d3d11_d3d12::borrow::<ID3D12Device>(&device).GetAdapterLuid() })
 }
 
+/// The adapter LUID of a D3D11 device, or None when DXGI does not report it.
+pub(super) unsafe fn d3d11_luid(device: Handle) -> Option<u64> {
+    use windows::Win32::Graphics::Direct3D11::ID3D11Device;
+    use windows::Win32::Graphics::Dxgi::IDXGIDevice;
+    use windows::core::Interface;
+    let device = unsafe { crate::d3d11_d3d12::borrow::<ID3D11Device>(&device) };
+    let description = device
+        .cast::<IDXGIDevice>()
+        .and_then(|dxgi| unsafe { dxgi.GetAdapter()?.GetDesc() })
+        .ok()?;
+    Some(luid_bits(description.AdapterLuid))
+}
+
+/// Checks a native D3D12 frame and its resources against the registered device.
+pub(super) unsafe fn validate_d3d12(device: Handle, frame: *const Frame12) -> i32 {
+    let result = unsafe { crate::sr_session::rsf_core_validate_sr_frame(frame) };
+    if result != rsf_game_sys::backend_result::OK {
+        return result;
+    }
+    crate::d3d12_sr::validate_resources(device, unsafe { &*frame })
+}
+
 type Handle = *mut c_void;
 
-#[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct Options {
     pub(super) mode: u32,
@@ -122,30 +124,29 @@ pub(super) fn dlss_mode(quality: u32) -> u32 {
     [6, 3, 2, 1, 4].get(quality as usize).copied().unwrap_or(0)
 }
 
-const MAX_TAGS: usize = 9;
-const ONLY_VALID_NOW: u32 = 0;
-const NON_PIXEL_SHADER_RESOURCE: u32 = 0x40;
-const UNORDERED_ACCESS: u32 = 0x08;
+pub(super) const MAX_TAGS: usize = 9;
+pub(super) const ONLY_VALID_NOW: u32 = 0;
+pub(super) const NON_PIXEL_SHADER_RESOURCE: u32 = 0x40;
+pub(super) const UNORDERED_ACCESS: u32 = 0x08;
 
 // Streamline buffer types checked against the native SDK headers.
-const COLOR_IN: u32 = 3;
-const COLOR_OUT: u32 = 4;
-const DEPTH: u32 = 0;
-const MOTION: u32 = 1;
-const EXPOSURE: u32 = 13;
-const TRANSPARENCY_HINT: u32 = 27;
-const BIAS_CURRENT_COLOR: u32 = 29;
-const COLOR_BEFORE_TRANSPARENCY: u32 = 40;
-const TRANSPARENCY_LAYER: u32 = 51;
+pub(super) const COLOR_IN: u32 = 3;
+pub(super) const COLOR_OUT: u32 = 4;
+pub(super) const DEPTH: u32 = 0;
+pub(super) const MOTION: u32 = 1;
+pub(super) const EXPOSURE: u32 = 13;
+pub(super) const TRANSPARENCY_HINT: u32 = 27;
+pub(super) const BIAS_CURRENT_COLOR: u32 = 29;
+pub(super) const COLOR_BEFORE_TRANSPARENCY: u32 = 40;
+pub(super) const TRANSPARENCY_LAYER: u32 = 51;
 
-#[repr(C)]
 #[derive(Clone, Copy)]
-struct Tag {
-    texture: Handle,
-    kind: u32,
-    state: u32,
-    size: [u32; 2],
-    has_extent: u32,
+pub(super) struct Tag {
+    pub(super) texture: Handle,
+    pub(super) kind: u32,
+    pub(super) state: u32,
+    pub(super) size: [u32; 2],
+    pub(super) has_extent: bool,
 }
 
 impl Tag {
@@ -157,23 +158,16 @@ impl Tag {
             kind,
             state,
             size,
-            has_extent: 1,
+            has_extent: true,
         }
     }
 }
 
-#[repr(C)]
 pub(super) struct TagBatch {
-    count: u32,
-    lifecycle: u32,
-    entries: [Tag; MAX_TAGS],
+    pub(super) count: u32,
+    pub(super) lifecycle: u32,
+    pub(super) entries: [Tag; MAX_TAGS],
 }
-
-const _: () = {
-    assert!(size_of::<Tag>() == 32);
-    assert!(size_of::<TagBatch>() == 296);
-    assert!(std::mem::offset_of!(TagBatch, entries) == 8);
-};
 
 impl TagBatch {
     pub(super) fn d3d11(frame: &Frame11, shared: bool) -> Self {
@@ -221,7 +215,7 @@ impl TagBatch {
         let read = NON_PIXEL_SHADER_RESOURCE;
         let mut exposure = Tag::new(frame.exposure.resource, EXPOSURE, read, [0, 0]);
         // Native D3D12 uses the full exposure resource with no explicit extent.
-        exposure.has_extent = 0;
+        exposure.has_extent = false;
         let mut entries = [Tag::EMPTY; MAX_TAGS];
         entries[..5].copy_from_slice(&[
             Tag::new(frame.color.resource, COLOR_IN, read, render),
@@ -264,7 +258,7 @@ fn native_d3d12_keeps_output_after_motion_and_uses_the_full_exposure_resource() 
     );
     assert_eq!(
         (tags.entries[4].has_extent, tags.entries[4].state),
-        (0, 0x40)
+        (false, 0x40)
     );
 }
 

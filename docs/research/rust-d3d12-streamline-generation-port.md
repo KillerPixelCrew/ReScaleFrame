@@ -139,6 +139,14 @@ startup table, the 24-entry platform table, the DLSS-G provider, the 22 public
 are deleted. The interposer load and the MFG prime use the Rust `rsf_streamline_load_interposer`
 and `rsf_dlss_sdk_verify_signature` from `streamline_sr`.
 
+Update (D22, 2026-11-22): the hand-written records above moved to the shared
+`sdk_records.h` set (checked by `sdk_records_checks.h`), `streamline_sdk::api` became the shared
+`rsf_streamline_vk::sdk_api::Entries` table, `streamline_generation_records.rs` builds those
+records in plain Rust instead of through `rsf_slhost_*` C records, the load and signature check are
+`streamline_sdk::load_interposer` and `rsf_streamline_vk::admission::nvidia_signed`, and
+`rsf_streamline_common_set` is the crate function `streamline_host::common_set`. See the D22
+section of `rust-d3d11-sr-pipeline-cutover.md`.
+
 Verification on `3e9e0c7d`: the tip does not compile `rsf-orchestrator` or configure CMake
 (`tests/CMakeLists.txt:451`). With this change, `cargo check` reports the same 150 error
 lines as the tip, `cargo clippy --all-targets -D warnings` reports none in the touched files,

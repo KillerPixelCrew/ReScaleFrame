@@ -92,8 +92,6 @@ fn device_query(directory: &str) -> bool {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_fixture_dlss_backend() -> i32 {
-    let compiled = rsf_dlss_available() != 0;
-    eprintln!("streamline headers compiled in: {compiled}");
     let mut passed = true;
     let mut check = |condition: bool, message: &str| {
         if !condition {
@@ -124,8 +122,7 @@ extern "C" fn rsf_fixture_dlss_backend() -> i32 {
         "Null device",
     );
     check(
-        unsafe { rsf_dlss_query_support(&mut support()) }
-            == if compiled { NOT_READY } else { NOT_COMPILED },
+        unsafe { rsf_dlss_query_support(&mut support()) } == NOT_READY,
         "Support queried before load",
     );
     let sentinel = dangling_mut::<u8>().cast();
@@ -142,40 +139,32 @@ extern "C" fn rsf_fixture_dlss_backend() -> i32 {
         "Incompatible frame ABI",
     );
     frame.abi_version -= 1;
-    if compiled {
+    check(
+        unsafe { rsf_dlss_evaluate(sentinel, &frame) } == INVALID_ARGUMENT,
+        "Missing required resources",
+    );
+    frame.color_in = sentinel;
+    frame.color_out = sentinel;
+    frame.depth = sentinel;
+    frame.motion = sentinel;
+    for viewport in [2, 7] {
+        frame.viewport = viewport;
         check(
-            unsafe { rsf_dlss_evaluate(sentinel, &frame) } == INVALID_ARGUMENT,
-            "Missing required resources",
-        );
-        frame.color_in = sentinel;
-        frame.color_out = sentinel;
-        frame.depth = sentinel;
-        frame.motion = sentinel;
-        for viewport in [2, 7] {
-            frame.viewport = viewport;
-            check(
-                unsafe { rsf_dlss_evaluate(sentinel, &frame) } == INVALID_ARGUMENT
-                    && unsafe { rsf_dlss_release_viewport(viewport) } == INVALID_ARGUMENT,
-                "Unsupported viewport",
-            );
-        }
-        check(
-            unsafe { rsf_dlss_load(&setup) } == LOAD_FAILED,
-            "Missing interposer",
-        );
-        setup.require_signature = 1;
-        check(
-            unsafe { rsf_dlss_load(&setup) } == LOAD_FAILED,
-            "Unverifiable signature",
-        );
-    } else {
-        check(
-            unsafe { rsf_dlss_load(&setup) } == NOT_COMPILED,
-            "SDK-free load",
+            unsafe { rsf_dlss_evaluate(sentinel, &frame) } == INVALID_ARGUMENT
+                && unsafe { rsf_dlss_release_viewport(viewport) } == INVALID_ARGUMENT,
+            "Unsupported viewport",
         );
     }
-    if compiled
-        && let Ok(directory) = std::env::var("RSF_STREAMLINE_BIN")
+    check(
+        unsafe { rsf_dlss_load(&setup) } == LOAD_FAILED,
+        "Missing interposer",
+    );
+    setup.require_signature = 1;
+    check(
+        unsafe { rsf_dlss_load(&setup) } == LOAD_FAILED,
+        "Unverifiable signature",
+    );
+    if let Ok(directory) = std::env::var("RSF_STREAMLINE_BIN")
         && !directory.is_empty()
     {
         passed &= device_query(&directory);

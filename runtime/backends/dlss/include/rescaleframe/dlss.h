@@ -5,15 +5,9 @@
    means loading `sl.interposer.dll`, tagging four or five resources, providing per frame camera
    constants, and asking it to evaluate.
 
-   This header is the whole contract. Everything behind it compiles against NVIDIA's C++ headers,
-   whose structures are versioned, GUID tagged, and in one case abstract with a virtual operator.
-   Transcribing those layouts by hand into another language is a silent corruption waiting to
-   happen, so the vendor side stays where the vendor's own headers define it, and this narrow C
-   surface is what the rest of the project sees.
-
-   The Streamline SDK is not in this repository. Fetch it into `vendor/streamline/` per
-   docs/dependencies.md. Without it these entry points still exist and report
-   RSF_DLSS_ERROR_NOT_COMPILED, so a checkout that does not have it still builds and tests. */
+   This header is the whole contract. The Rust owner behind it builds the Streamline records from
+   runtime/vulkan/streamline/sdk_records.h, which tests/dlss_sr_layout_facts.cpp checks against
+   NVIDIA's C++ headers, and calls the interposer it loads at run time. */
 
 #ifndef RSF_DLSS_H
 #define RSF_DLSS_H
@@ -40,8 +34,6 @@ typedef int32_t rsf_dlss_result;
 #define RSF_DLSS_OK ((rsf_dlss_result)0)
 #define RSF_DLSS_ERROR_INVALID_ARGUMENT ((rsf_dlss_result)-1)
 #define RSF_DLSS_ERROR_ABI_MISMATCH ((rsf_dlss_result)-2)
-/* Built without the Streamline headers present. Not a runtime failure: this build never had the
-   code in it. */
 #define RSF_DLSS_ERROR_NOT_COMPILED ((rsf_dlss_result)-3)
 /* `sl.interposer.dll` could not be loaded from the path given, or failed signature verification. */
 #define RSF_DLSS_ERROR_LOAD_FAILED ((rsf_dlss_result)-4)
@@ -271,9 +263,6 @@ rsf_dlss_result rsf_dlss_release_viewport(uint32_t viewport);
 /* Shut Streamline down and unload the interposer. Must happen before the game's device goes. */
 rsf_dlss_result rsf_dlss_shutdown(void);
 
-/* Whether this build has the Streamline headers compiled in at all. Reported rather than assumed,
-   so a caller can say "not built with DLSS support" instead of "DLSS failed". */
-uint32_t rsf_dlss_available(void);
 
 #ifdef __cplusplus
 } /* extern "C" */

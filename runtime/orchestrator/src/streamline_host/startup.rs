@@ -1,38 +1,36 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::com_ref;
+use crate::streamline_sdk::{
+    Entries, FEATURE_DLSS as DLSS, FEATURE_DLSS_G as DLSS_G, FEATURE_PCL as PCL,
+    FEATURE_REFLEX as REFLEX, LOG_LEVEL_DEFAULT as LOG_DEFAULT, PREFERENCE_FRAME_TAGGING,
+    PREFERENCE_MANUAL_HOOKING, RENDER_API_D3D12 as D3D12,
+};
 use windows::core::IUnknown;
 
 const NVIDIA_VENDOR: u32 = 0x10de;
 const DIRECT_QUEUE: u32 = 0;
 
-// Streamline feature IDs and preference values, asserted against the native headers.
-const DLSS: u32 = 0;
-const REFLEX: u32 = 3;
-const PCL: u32 = 4;
-const DLSS_G: u32 = 1000;
+// `PreferenceFlags::eDisableDebugText` and `LogLevel::eVerbose`.
 const DISABLE_DEBUG_TEXT: u64 = 1 << 1;
-const USE_MANUAL_HOOKING: u64 = 1 << 2;
-const USE_FRAME_BASED_RESOURCE_TAGGING: u64 = 1 << 7;
-const D3D12: u32 = 1;
-const LOG_DEFAULT: u32 = 1;
 const LOG_VERBOSE: u32 = 2;
 const PCL_OPTIONS: u32 = 128;
 
-pub(super) const ENTRY_NAMES: [&CStr; 12] = [
-    c"slInit",
-    c"slShutdown",
-    c"slUpgradeInterface",
-    c"slGetNativeInterface",
-    c"slSetD3DDevice",
-    c"slIsFeatureSupported",
-    c"slGetFeatureFunction",
-    c"slGetFeatureVersion",
-    c"slSetFeatureLoaded",
-    c"slGetNewFrameToken",
-    c"slSetConstants",
-    c"slSetTagForFrame",
-];
+/// Whether the interposer exports every core entry the host calls.
+fn has_required(entries: &Entries) -> bool {
+    entries.init.is_some()
+        && entries.shutdown.is_some()
+        && entries.upgrade_interface.is_some()
+        && entries.get_native_interface.is_some()
+        && entries.set_d3d_device.is_some()
+        && entries.is_feature_supported.is_some()
+        && entries.get_feature_function.is_some()
+        && entries.get_feature_version.is_some()
+        && entries.set_feature_loaded.is_some()
+        && entries.get_new_frame_token.is_some()
+        && entries.set_constants.is_some()
+        && entries.set_tag_for_frame.is_some()
+}
 
 pub(super) struct FeatureList {
     ids: [u32; 4],
@@ -95,14 +93,17 @@ impl Startup {
         refused_queue_device: &mut Option<IUnknown>,
         mut symbol: impl FnMut(&CStr) -> FARPROC,
     ) -> Result<(), i32> {
-        let mut entries = [null_mut(); ENTRY_NAMES.len()];
-        for (entry, name) in entries.iter_mut().zip(ENTRY_NAMES) {
-            let address = symbol(name).ok_or(MISSING_ENTRY)?;
-            *entry = address as *const () as Handle;
+        let entries = unsafe {
+            Entries::resolve_with(|name| {
+                symbol(name).map_or(null_mut(), |address| address as *const () as Handle)
+            })
+        };
+        if !has_required(&entries) {
+            return Err(MISSING_ENTRY);
         }
         unsafe { (self.bind_required)(native, &entries) };
 
-        let mut flags = USE_MANUAL_HOOKING | USE_FRAME_BASED_RESOURCE_TAGGING;
+        let mut flags = PREFERENCE_MANUAL_HOOKING | PREFERENCE_FRAME_TAGGING;
         let log_level = if host.development_runtime {
             LOG_VERBOSE
         } else {

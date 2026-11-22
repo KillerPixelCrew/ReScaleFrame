@@ -2,19 +2,8 @@
 use super::*;
 use crate::sr_session::has_capacity;
 use crate::streamline_sr::preset_valid;
-use rsf_game_sys::backend_result::NOT_COMPILED;
 
 const ULTRA_PERFORMANCE: u32 = 4;
-
-#[cfg(not(test))]
-fn platform() -> Option<&'static Platform> {
-    super::sdk::platform()
-}
-
-#[cfg(test)]
-fn platform() -> Option<&'static Platform> {
-    None
-}
 
 unsafe fn validate_setup(device: Handle, setup: *const Setup) -> Result<(), i32> {
     if device.is_null() || !unsafe { has_capacity(setup) } {
@@ -48,9 +37,7 @@ unsafe fn register(
     if let Err(result) = unsafe { validate_setup(device, setup) } {
         return result;
     }
-    platform().map_or(NOT_COMPILED, |p| unsafe {
-        rsf_core_dlss_native12_register(device, &*setup, module, out, p)
-    })
+    unsafe { rsf_core_dlss_native12_register(device, &*setup, module, out) }
 }
 
 #[unsafe(no_mangle)]
@@ -86,7 +73,7 @@ unsafe extern "C" fn rsf_dlss_native12_create_registered(
         return INVALID_ARGUMENT;
     };
     *out = null_mut();
-    if !unsafe { has_capacity(setup) } || registration.is_null() || platform().is_none() {
+    if !unsafe { has_capacity(setup) } || registration.is_null() {
         return INVALID_ARGUMENT;
     }
     let setup = unsafe { &*setup };
@@ -104,24 +91,16 @@ pub(crate) unsafe extern "C" fn rsf_dlss_native12_registration_present(
     flags: u32,
     begin: u32,
 ) -> i32 {
-    if registration.is_null() || swapchain.is_null() || platform().is_none() {
+    if registration.is_null() || swapchain.is_null() {
         return INVALID_ARGUMENT;
     }
-    unsafe {
-        rsf_core_dlss_native12_registration_present(
-            &*registration,
-            swapchain,
-            interval,
-            flags,
-            begin,
-        )
-    }
+    unsafe { (*registration).0.present(swapchain, interval, flags, begin) }
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_dlss_native12_registration_destroy(registration: *mut Registration) {
-    if platform().is_some() {
-        unsafe { rsf_core_dlss_native12_registration_destroy(registration) };
+    if !registration.is_null() {
+        drop(unsafe { Box::from_raw(registration) });
     }
 }
 
@@ -148,9 +127,7 @@ unsafe extern "C" fn rsf_dlss_native12_create_shared(
     if let Err(result) = unsafe { validate_setup(device, setup) } {
         return result;
     }
-    platform().map_or(NOT_COMPILED, |p| unsafe {
-        rsf_core_dlss_native12_create(device, &*setup, host, out, p)
-    })
+    unsafe { rsf_core_dlss_native12_create(device, &*setup, host, out) }
 }
 
 #[unsafe(no_mangle)]
@@ -171,7 +148,7 @@ unsafe extern "C" fn rsf_dlss_native12_plan(
     {
         return INVALID_ARGUMENT;
     }
-    platform().map_or(NOT_COMPILED, |_| unsafe {
+    unsafe {
         rsf_core_dlss_native12_plan(
             &*context,
             width,
@@ -180,7 +157,7 @@ unsafe extern "C" fn rsf_dlss_native12_plan(
             render_width,
             render_height,
         )
-    })
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -192,9 +169,7 @@ unsafe extern "C" fn rsf_dlss_native12_evaluate(
     if context.is_null() || list.is_null() {
         return INVALID_ARGUMENT;
     }
-    platform().map_or(NOT_COMPILED, |_| unsafe {
-        rsf_core_dlss_native12_evaluate(&*context, list, frame, null_mut())
-    })
+    unsafe { rsf_core_dlss_native12_evaluate(&*context, list, frame, null_mut()) }
 }
 
 #[unsafe(no_mangle)]
@@ -204,7 +179,7 @@ unsafe extern "C" fn rsf_dlss_native12_evaluate_borrowed(
     frame: *const Frame,
     token: Handle,
 ) -> i32 {
-    if context.is_null() || list.is_null() || token.is_null() || platform().is_none() {
+    if context.is_null() || list.is_null() || token.is_null() {
         return INVALID_ARGUMENT;
     }
     unsafe { rsf_core_dlss_native12_evaluate(&*context, list, frame, token) }
@@ -212,15 +187,15 @@ unsafe extern "C" fn rsf_dlss_native12_evaluate_borrowed(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_dlss_native12_destroy(context: *mut Context) {
-    if platform().is_some() {
-        unsafe { rsf_core_dlss_native12_destroy(context) };
+    if !context.is_null() {
+        drop(unsafe { Box::from_raw(context) });
     }
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_dlss_native12_set_sdr(context: *mut Context, sdr: u32) {
-    if !context.is_null() && platform().is_some() {
-        rsf_core_dlss_native12_set_sdr(unsafe { &*context }, sdr);
+    if !context.is_null() {
+        unsafe { &*context }.sdr.store(sdr != 0, Ordering::Relaxed);
     }
 }
 
@@ -235,7 +210,9 @@ unsafe extern "C" fn rsf_dlss_native12_present(
     if context.is_null() || swapchain.is_null() {
         return INVALID_ARGUMENT;
     }
-    platform().map_or(NOT_COMPILED, |_| unsafe {
-        rsf_core_dlss_native12_present(&*context, swapchain, interval, flags, begin)
-    })
+    unsafe {
+        (*context)
+            .registration
+            .present(swapchain, interval, flags, begin)
+    }
 }

@@ -37,9 +37,8 @@ mod midpoint;
 mod provider;
 
 type Handle = *mut c_void;
-// The SDK host lends Streamline's embedded-signature check, which stays with
-// the vendor header (`streamline_sr/signature.rs`).
-pub(crate) type VerifySignature = Option<unsafe extern "C" fn(*const u16) -> bool>;
+// The SDK host lends the NVIDIA signature check (`rsf_streamline_vk::admission`).
+pub(crate) type VerifySignature = Option<unsafe fn(*const u16) -> bool>;
 
 const NOT_APPLICABLE: u32 = 0;
 const READY: u32 = 1;
@@ -360,8 +359,7 @@ unsafe fn prime(
 }
 
 // A null verifier means the host does not require a signed wrapper.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_mfg_prime(
+pub(crate) unsafe fn rsf_core_mfg_prime(
     owner: &Owner,
     device: Handle,
     directory: *const u16,

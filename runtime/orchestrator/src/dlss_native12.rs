@@ -1,148 +1,72 @@
 // SPDX-License-Identifier: MIT
+//! DLSS SR on a native D3D12 device. A registration owns the Streamline session when no other
+//! owner exists, borrows the D3D12 Streamline host's session when one is given, or borrows the
+//! interposer the engine loaded; contexts share it. The record layouts are checked against the
+//! vendor headers in the `dlss_sr_layout` test (`tests/dlss_sr_layout_facts.cpp`).
 use rsf_game_sys::backend_result::{
     ABI_MISMATCH, FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, LOAD_FAILED, MISSING_ENTRY_POINT,
-    NOT_READY, NOT_SUPPORTED, OK,
+    NOT_READY, NOT_SUPPORTED, OK, WRONG_API,
 };
 pub(super) mod exports;
-#[cfg(not(test))]
-mod sdk;
 // Also the Vulkan DLSS SR and DLSS-G singularity gate (vulkan_streamline_camera).
 pub(crate) use rsf_game_sys::xm;
 
 use crate::com_ref;
 use crate::sdk_module::{SdkModule, wide_path};
-use crate::streamline_sr::sdk::{
-    FEATURE_DLSS, PREFERENCE_FRAME_TAGGING, PREFERENCE_MANUAL_HOOKING, RENDER_API_D3D12,
+use crate::streamline_sdk::{
+    self as sdk, DlssOptimal, DlssOptions, Entries, FEATURE_COMMON, FEATURE_DLSS,
+    LOG_LEVEL_DEFAULT, PREFERENCE_FRAME_TAGGING, PREFERENCE_MANUAL_HOOKING, PREFERENCES,
+    Preferences, RENDER_API_D3D12, RESULT_OK, SDK_VERSION, TagRecords, viewport,
 };
-use crate::streamline_sr::{
-    Constants, Dimensions, Optimal, OptionPayload, Options, TagBatch, dimensions, dlss_mode,
-};
+use crate::streamline_sr::{Constants, Options, TagBatch, dimensions, dlss_mode};
 use crate::sys::rsf_dlss_setup as Setup;
 use crate::sys::{RSF_DLSS_ABI_VERSION, rsf_sr_frame as Frame};
-use std::ffi::{CStr, c_char, c_void};
+use rsf_streamline_vk::sdk_api::{self, GetOptimalSettings, SetOptions};
+use std::ffi::{CStr, c_void};
 use std::ptr::{NonNull, null_mut};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use windows::core::{IUnknown, Interface};
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GetModuleFileNameW, GetModuleHandleExW,
-    GetModuleHandleW, GetProcAddress,
 };
-use windows_sys::core::w;
 
 type Handle = *mut c_void;
 const QUALITY: u32 = 1;
-const DLSS_FEATURE: u32 = 0;
-const COMMON_FEATURE: u32 = 1;
 
-const CORE_NAMES: [&CStr; 10] = [
-    c"slInit",
-    c"slSetD3DDevice",
-    c"slIsFeatureSupported",
-    c"slGetFeatureFunction",
-    c"slShutdown",
-    c"slGetNewFrameToken",
-    c"slSetConstants",
-    c"slSetTagForFrame",
-    c"slEvaluateFeature",
-    c"slFreeResources",
-];
-type CoreEntries = [Handle; CORE_NAMES.len()];
-type FeatureEntries = [Handle; 4];
-type FeatureLookup = unsafe extern "C" fn(Handle, u32, *const c_char, &mut Handle) -> i32;
-
-/// Resolve against the interposer held by the registration. The native leaf binds typed entries
-/// only after every required address is present.
-unsafe fn core_entries(module: Handle, entries: &mut CoreEntries) -> i32 {
-    for (entry, name) in entries.iter_mut().zip(CORE_NAMES) {
-        *entry = unsafe { GetProcAddress(module, name.as_ptr().cast()) }
-            .map_or(null_mut(), |function| function as *const () as Handle);
-    }
-    if entries.iter().any(|entry| entry.is_null()) {
-        MISSING_ENTRY_POINT
-    } else {
-        OK
-    }
+/// Whether every core entry the registration calls was resolved.
+fn has_core(entries: &Entries) -> bool {
+    entries.init.is_some()
+        && entries.set_d3d_device.is_some()
+        && entries.is_feature_supported.is_some()
+        && entries.get_feature_function.is_some()
+        && entries.shutdown.is_some()
+        && entries.get_new_frame_token.is_some()
+        && entries.set_constants.is_some()
+        && entries.set_tag_for_frame.is_some()
+        && entries.evaluate_feature.is_some()
+        && entries.free_resources.is_some()
 }
 
-unsafe fn feature_entries(
-    native: Handle,
-    owns_present: u32,
-    lookup: FeatureLookup,
-    entries: &mut FeatureEntries,
-) -> i32 {
-    let resolve_pair = |group, names: [&CStr; 2], slots: &mut [Handle]| {
-        for (name, address) in names.into_iter().zip(slots.iter_mut()) {
-            let result = unsafe { lookup(native, group, name.as_ptr(), address) };
-            if result != OK {
-                return result;
-            }
-        }
-        if slots.iter().any(|entry| entry.is_null()) {
-            MISSING_ENTRY_POINT
-        } else {
-            OK
-        }
-    };
-    let (dlss, present) = entries.split_at_mut(2);
-    let result = resolve_pair(
-        DLSS_FEATURE,
-        [c"slDLSSGetOptimalSettings", c"slDLSSSetOptions"],
-        dlss,
-    );
-    if result != OK || owns_present == 0 {
-        return result;
-    }
-    resolve_pair(
-        COMMON_FEATURE,
-        [c"slHookPresent", c"slHookAfterPresent"],
-        present,
-    )
-}
-
-#[repr(C)]
-struct Preferences {
-    flags: u64,
-    engine_version: *const c_char,
-    project_id: *const c_char,
-    engine: u32,
-    application_id: u32,
-    render_api: u32,
+/// Two feature functions of `feature`. A refusal or a null address is a missing entry point.
+unsafe fn feature_pair(
+    entries: &Entries,
     feature: u32,
+    names: [&CStr; 2],
+) -> Result<[Handle; 2], i32> {
+    let get = entries.get_feature_function.ok_or(INIT_FAILED)?;
+    let mut addresses = [null_mut(); 2];
+    for (name, address) in names.into_iter().zip(&mut addresses) {
+        if unsafe { get(feature, name.as_ptr(), address) } != RESULT_OK {
+            return Err(MISSING_ENTRY_POINT);
+        }
+    }
+    if addresses.iter().any(|address| address.is_null()) {
+        Err(MISSING_ENTRY_POINT)
+    } else {
+        Ok(addresses)
+    }
 }
-
-const _: () = {
-    assert!(size_of::<Preferences>() == 40);
-};
-
-// The typed Streamline calls live in sdk.rs, which unit tests do not compile.
-#[repr(C)]
-struct Platform {
-    load: unsafe extern "C" fn(*const u16, &Setup) -> Handle,
-    verify: unsafe extern "C" fn(*const u16) -> bool,
-    shared_module: unsafe extern "C" fn(Handle, Handle, &mut Handle) -> i32,
-    allocate: unsafe extern "C" fn(*const u16) -> Handle,
-    bind_core: unsafe extern "C" fn(Handle, &CoreEntries),
-    init: unsafe extern "C" fn(Handle, &Preferences) -> i32,
-    set_device: unsafe extern "C" fn(Handle, Handle) -> i32,
-    support: unsafe extern "C" fn(Handle, u64, &mut u32) -> i32,
-    lookup_feature: FeatureLookup,
-    bind_features: unsafe extern "C" fn(Handle, &FeatureEntries, u32),
-    shutdown: unsafe extern "C" fn(Handle) -> i32,
-    close: unsafe extern "C" fn(Handle),
-    present: unsafe extern "C" fn(Handle, Handle, u32, u32, u32) -> i32,
-    plan: unsafe extern "C" fn(Handle, &Dimensions, &mut Optimal) -> i32,
-    validate: unsafe extern "C" fn(Handle, *const Frame) -> i32,
-    token: unsafe extern "C" fn(Handle, u32, &mut Handle) -> i32,
-    shared_token: unsafe extern "C" fn(Handle, u64) -> Handle,
-    inverse: unsafe extern "C" fn(&[f32; 16], &mut [f32; 16]) -> f32,
-    constants: unsafe extern "C" fn(Handle, Handle, u32, &Constants) -> i32,
-    options: unsafe extern "C" fn(Handle, u32, &OptionPayload) -> i32,
-    dispatch: unsafe extern "C" fn(Handle, Handle, u32, Handle, &TagBatch) -> i32,
-    free_viewport: unsafe extern "C" fn(Handle, u32),
-}
-
-const _: () = assert!(size_of::<Platform>() == 22 * size_of::<Handle>());
 
 enum Route {
     Owned,
@@ -151,36 +75,40 @@ enum Route {
 }
 
 impl Route {
+    /// The interposer and its entries: loaded here, borrowed from the host, or held from the
+    /// engine's module.
     fn module(
         &self,
-        platform: &Platform,
         device: Handle,
         setup: &Setup,
         interposer: &[u16],
         engine_module: Handle,
-    ) -> Result<(Handle, Option<SdkModule>), i32> {
+    ) -> Result<(Entries, Option<SdkModule>), i32> {
+        let verified = |path: *const u16| {
+            setup.require_signature == 0
+                || unsafe { rsf_streamline_vk::admission::nvidia_signed(path) }
+        };
         match *self {
             Self::Owned => {
-                let handle = unsafe { (platform.load)(interposer.as_ptr(), setup) };
-                let lease = SdkModule::adopt_system(handle).ok_or(LOAD_FAILED)?;
-                Ok((handle, Some(lease)))
+                let log = crate::input_dump::Log::new(setup.log, setup.log_user);
+                let lease = SdkModule::adopt_system(unsafe {
+                    sdk::load_interposer(interposer.as_ptr(), setup.require_signature != 0, &log)
+                })
+                .ok_or(LOAD_FAILED)?;
+                Ok((unsafe { Entries::resolve(lease.as_ptr()) }, Some(lease)))
             }
             Self::Shared(host) => {
-                if setup.require_signature != 0
-                    && !unsafe { (platform.verify)(interposer.as_ptr()) }
-                {
+                if !verified(interposer.as_ptr()) {
                     return Err(LOAD_FAILED);
                 }
-                let mut module = null_mut();
-                let result =
-                    unsafe { (platform.shared_module)(device, host.as_ptr(), &mut module) };
-                if result != OK {
-                    return Err(result);
-                }
-                if module.is_null() {
+                let shared = unsafe { crate::streamline_host::shared(host.as_ptr().cast()) };
+                let Some(shared) = shared.filter(|shared| shared.native_device == device) else {
+                    return Err(WRONG_API);
+                };
+                if shared.module.is_null() {
                     return Err(LOAD_FAILED);
                 }
-                Ok((module, None))
+                Ok((shared.entries, None))
             }
             Self::BorrowedEngine => {
                 let mut held = null_mut();
@@ -201,29 +129,34 @@ impl Route {
                 let mut path = vec![0; 32768];
                 let length =
                     unsafe { GetModuleFileNameW(held, path.as_mut_ptr(), path.len() as u32) };
-                if length == 0
-                    || length as usize >= path.len()
-                    || (setup.require_signature != 0
-                        && !unsafe { (platform.verify)(path.as_ptr()) })
-                {
+                if length == 0 || length as usize >= path.len() || !verified(path.as_ptr()) {
                     return Err(LOAD_FAILED);
                 }
-                Ok((held, Some(lease)))
+                Ok((unsafe { Entries::resolve(held) }, Some(lease)))
             }
         }
     }
 }
 
-struct RegistrationResources {
-    device: IUnknown,
-    _module: Option<SdkModule>,
-    // The typed Streamline preferences borrow the directory through SDK shutdown.
+/// What slInit borrows from the registration through SDK shutdown.
+struct InitStrings {
+    plugin_paths: [*const u16; 1],
+    feature: u32,
     _directory: Vec<u16>,
 }
 
+struct RegistrationResources {
+    device: IUnknown,
+    _module: Option<SdkModule>,
+    _strings: Box<InitStrings>,
+}
+
 struct DeviceRegistration {
-    platform: &'static Platform,
-    native: NonNull<c_void>,
+    entries: Entries,
+    optimal: Option<GetOptimalSettings<DlssOptions, DlssOptimal>>,
+    options: Option<SetOptions<DlssOptions>>,
+    // slHookPresent and slHookAfterPresent, resolved only on the owned route.
+    present: Option<[Handle; 2]>,
     route: Route,
     initialized: bool,
     resources: Option<RegistrationResources>,
@@ -244,7 +177,6 @@ impl DeviceRegistration {
     }
 
     unsafe fn open(
-        platform: &'static Platform,
         device: Handle,
         setup: &Setup,
         host: Handle,
@@ -257,77 +189,87 @@ impl DeviceRegistration {
         } else {
             Route::BorrowedEngine
         };
-        if matches!(route, Route::Owned)
-            && !unsafe { GetModuleHandleW(w!("sl.interposer.dll")) }.is_null()
-        {
+        if matches!(route, Route::Owned) && sdk::interposer_loaded() {
             return Err(NOT_READY);
         }
         let interposer =
             unsafe { wide_path(setup.interposer_path_utf8) }.ok_or(INVALID_ARGUMENT)?;
         let directory =
             unsafe { wide_path(setup.plugin_directory_utf8) }.ok_or(INVALID_ARGUMENT)?;
-        let (resolved, lease) = route.module(platform, device, setup, &interposer, module)?;
-        let native =
-            NonNull::new(unsafe { (platform.allocate)(directory.as_ptr()) }).ok_or(INIT_FAILED)?;
-        let mut entries = [null_mut(); CORE_NAMES.len()];
-        let result = unsafe { core_entries(resolved, &mut entries) };
-        if result != OK {
-            unsafe { (platform.close)(native.as_ptr()) };
-            return Err(result);
+        let (entries, lease) = route.module(device, setup, &interposer, module)?;
+        if !has_core(&entries) {
+            return Err(MISSING_ENTRY_POINT);
         }
-        unsafe { (platform.bind_core)(native.as_ptr(), &entries) };
+        let mut strings = Box::new(InitStrings {
+            plugin_paths: [directory.as_ptr()],
+            feature: FEATURE_DLSS,
+            _directory: directory,
+        });
+        let plugin_paths = strings.plugin_paths.as_mut_ptr();
+        let feature = &raw const strings.feature;
+        let owned = matches!(route, Route::Owned);
         let mut registration = Self {
-            platform,
-            native,
+            entries,
+            optimal: None,
+            options: None,
+            present: None,
             route,
             initialized: false,
             resources: Some(RegistrationResources {
                 device: unsafe { com_ref::retain(device) },
                 _module: lease,
-                _directory: directory,
+                _strings: strings,
             }),
         };
-        let owned = matches!(registration.route, Route::Owned);
         if owned {
             let preferences = Preferences {
+                base: PREFERENCES,
+                log_level: LOG_LEVEL_DEFAULT,
+                plugin_paths,
+                num_plugin_paths: 1,
                 flags: PREFERENCE_MANUAL_HOOKING | PREFERENCE_FRAME_TAGGING,
-                engine_version: setup.engine_version_utf8,
-                project_id: setup.project_id_utf8,
-                engine: crate::streamline_policy::engine_type(setup.engine),
+                features: feature,
+                num_features: 1,
                 application_id: setup.application_id,
+                engine: crate::streamline_policy::engine_type(setup.engine),
+                engine_version: setup.engine_version_utf8,
+                project: setup.project_id_utf8,
                 render_api: RENDER_API_D3D12,
-                feature: FEATURE_DLSS,
+                ..Default::default()
             };
-            let result = unsafe { (platform.init)(native.as_ptr(), &preferences) };
-            if result != OK {
-                return Err(result);
+            let init = entries.init.expect("core entry");
+            if unsafe { init(&preferences, SDK_VERSION) } != RESULT_OK {
+                return Err(INIT_FAILED);
             }
             registration.initialized = true;
-            let result = unsafe { (platform.set_device)(native.as_ptr(), device) };
-            if result != OK {
-                return Err(result);
+            let set_device = entries.set_d3d_device.expect("core entry");
+            if unsafe { set_device(device) } != RESULT_OK {
+                return Err(INIT_FAILED);
             }
         }
-        let mut support = 0;
-        let device_luid = unsafe { crate::streamline_sr::d3d12_luid(device) };
-        let result = unsafe { (platform.support)(native.as_ptr(), device_luid, &mut support) };
-        if result != OK {
-            return Err(result);
-        }
+        let mut luid = unsafe { crate::streamline_sr::d3d12_luid(device) };
+        let adapter = sdk::adapter(&mut luid);
+        let supported = entries.is_feature_supported.expect("core entry");
+        let support = unsafe { supported(FEATURE_DLSS, &adapter) } as u32;
         if support == 0 {
-            let mut features = [null_mut(); 4];
-            let result = unsafe {
-                feature_entries(
-                    native.as_ptr(),
-                    owned.into(),
-                    platform.lookup_feature,
-                    &mut features,
+            let [optimal, options] = unsafe {
+                feature_pair(
+                    &entries,
+                    FEATURE_DLSS,
+                    [c"slDLSSGetOptimalSettings", c"slDLSSSetOptions"],
                 )
-            };
-            if result != OK {
-                return Err(result);
+            }?;
+            registration.optimal = unsafe { sdk_api::function(optimal) };
+            registration.options = unsafe { sdk_api::function(options) };
+            if owned {
+                registration.present = Some(unsafe {
+                    feature_pair(
+                        &entries,
+                        FEATURE_COMMON,
+                        [c"slHookPresent", c"slHookAfterPresent"],
+                    )
+                }?);
             }
-            unsafe { (platform.bind_features)(native.as_ptr(), &features, owned.into()) };
         }
         let log = crate::input_dump::Log::new(setup.log, setup.log_user);
         if support != 0 {
@@ -342,9 +284,16 @@ impl DeviceRegistration {
 
     unsafe fn present(&self, swapchain: Handle, interval: u32, flags: u32, begin: u32) -> i32 {
         match self.route {
-            Route::Owned => unsafe {
-                (self.platform.present)(self.native.as_ptr(), swapchain, interval, flags, begin)
-            },
+            Route::Owned => {
+                let Some(entries) = self.present else {
+                    return FEATURE_FAILED;
+                };
+                if unsafe { sdk::hook_present(entries, swapchain, interval, flags, begin != 0) } {
+                    OK
+                } else {
+                    FEATURE_FAILED
+                }
+            }
             Route::Shared(_) | Route::BorrowedEngine => OK,
         }
     }
@@ -352,16 +301,17 @@ impl DeviceRegistration {
     unsafe fn token(&self, frame_id: u64, engine_token: Handle) -> Result<NonNull<c_void>, i32> {
         let token = match self.route {
             Route::BorrowedEngine => engine_token,
-            Route::Shared(host) => unsafe { (self.platform.shared_token)(host.as_ptr(), frame_id) },
+            Route::Shared(host) => unsafe {
+                crate::streamline_host::rsf_core_slhost_token(host.as_ptr().cast(), frame_id)
+            },
             Route::Owned => {
-                let mut token = null_mut();
-                let result = unsafe {
-                    (self.platform.token)(self.native.as_ptr(), frame_id as u32, &mut token)
-                };
-                if result != OK {
-                    return Err(result);
+                let token = self.entries.get_new_frame_token.expect("core entry");
+                let mut frame = std::ptr::null();
+                let index = frame_id as u32;
+                if unsafe { token(&mut frame, &index) } != RESULT_OK {
+                    return Err(FEATURE_FAILED);
                 }
-                token
+                frame.cast_mut()
             }
         };
         NonNull::new(token).ok_or(NOT_READY)
@@ -370,15 +320,11 @@ impl DeviceRegistration {
 
 impl Drop for DeviceRegistration {
     fn drop(&mut self) {
-        let native = self.native.as_ptr();
-        unsafe {
-            if self.initialized && (self.platform.shutdown)(native) != OK {
-                // Shutdown can fail after partial teardown. With a void public
-                // destroy entry, retain the SDK and its dependencies for the process.
-                std::mem::forget(self.resources.take());
-                return;
-            }
-            (self.platform.close)(native);
+        if self.initialized && unsafe { self.entries.shutdown.expect("core entry")() } != RESULT_OK
+        {
+            // Shutdown can fail after partial teardown. With a void public
+            // destroy entry, retain the SDK and its dependencies for the process.
+            std::mem::forget(self.resources.take());
         }
     }
 }
@@ -428,10 +374,13 @@ impl Context {
 impl Drop for Context {
     fn drop(&mut self) {
         if *self.used_viewport.get_mut() {
-            let registration = &self.registration;
-            unsafe {
-                (registration.platform.free_viewport)(registration.native.as_ptr(), self.viewport);
-            }
+            let free = self
+                .registration
+                .entries
+                .free_resources
+                .expect("core entry");
+            // Teardown has no way to report a failed release.
+            let _ = unsafe { free(FEATURE_DLSS, &viewport(self.viewport)) };
         }
     }
 }
@@ -454,9 +403,8 @@ unsafe fn rsf_core_dlss_native12_create(
     setup: &Setup,
     host: Handle,
     out: &mut *mut Context,
-    platform: &'static Platform,
 ) -> i32 {
-    match unsafe { DeviceRegistration::open(platform, device, setup, host, null_mut()) } {
+    match unsafe { DeviceRegistration::open(device, setup, host, null_mut()) } {
         Ok(registration) => publish_context(registration, setup.preset, out),
         Err(result) => result,
     }
@@ -467,9 +415,8 @@ unsafe fn rsf_core_dlss_native12_register(
     setup: &Setup,
     module: Handle,
     out: &mut *mut Registration,
-    platform: &'static Platform,
 ) -> i32 {
-    match unsafe { DeviceRegistration::open(platform, device, setup, null_mut(), module) } {
+    match unsafe { DeviceRegistration::open(device, setup, null_mut(), module) } {
         Ok(registration) => {
             *out = crate::allocate_handle(Registration(registration));
             if (*out).is_null() { INIT_FAILED } else { OK }
@@ -493,36 +440,6 @@ fn rsf_core_dlss_native12_create_registered(
     publish_context(Arc::clone(&registration.0), setup.preset, out)
 }
 
-unsafe fn rsf_core_dlss_native12_registration_present(
-    registration: &Registration,
-    swapchain: Handle,
-    interval: u32,
-    flags: u32,
-    begin: u32,
-) -> i32 {
-    unsafe { registration.0.present(swapchain, interval, flags, begin) }
-}
-
-unsafe fn rsf_core_dlss_native12_registration_destroy(registration: *mut Registration) {
-    if !registration.is_null() {
-        drop(unsafe { Box::from_raw(registration) });
-    }
-}
-
-unsafe fn rsf_core_dlss_native12_present(
-    context: &Context,
-    swapchain: Handle,
-    interval: u32,
-    flags: u32,
-    begin: u32,
-) -> i32 {
-    unsafe {
-        context
-            .registration
-            .present(swapchain, interval, flags, begin)
-    }
-}
-
 unsafe fn rsf_core_dlss_native12_plan(
     context: &Context,
     width: u32,
@@ -531,19 +448,15 @@ unsafe fn rsf_core_dlss_native12_plan(
     render_width: *mut u32,
     render_height: *mut u32,
 ) -> i32 {
-    let registration = &context.registration;
-    let mut optimal = Optimal::default();
-    let result = unsafe {
-        (registration.platform.plan)(
-            registration.native.as_ptr(),
-            &dimensions(quality, width, height),
-            &mut optimal,
-        )
+    let Some(optimal) = context.registration.optimal else {
+        return FEATURE_FAILED;
     };
-    let (planned_width, planned_height) = (optimal.width, optimal.height);
-    if result != OK {
-        return result;
+    let options = sdk::plan_options(&dimensions(quality, width, height));
+    let mut settings = sdk::dlss_optimal();
+    if unsafe { optimal(&options, &mut settings) } != RESULT_OK {
+        return FEATURE_FAILED;
     }
+    let (planned_width, planned_height) = (settings.width, settings.height);
     if planned_width == 0 || planned_height == 0 {
         return FEATURE_FAILED;
     }
@@ -565,8 +478,7 @@ unsafe fn rsf_core_dlss_native12_evaluate(
     if !engine_token.is_null() && !matches!(registration.route, Route::BorrowedEngine) {
         return INVALID_ARGUMENT;
     }
-    let platform = registration.platform;
-    let validated = unsafe { (platform.validate)(registration.device(), frame) };
+    let validated = unsafe { crate::streamline_sr::validate_d3d12(registration.device(), frame) };
     if validated != OK {
         return validated;
     }
@@ -574,15 +486,14 @@ unsafe fn rsf_core_dlss_native12_evaluate(
     let record = unsafe { &*frame.record };
     let frame_id = record.frame_id;
     let token = match unsafe { registration.token(frame_id, engine_token) } {
-        Ok(token) => token.as_ptr(),
+        Ok(token) => token.as_ptr().cast_const(),
         Err(result) => return result,
     };
-    let native = registration.native.as_ptr();
-    let viewport = context.viewport;
+    let entries = &registration.entries;
+    let viewport = viewport(context.viewport);
     let camera = &record.camera;
-    let mut previous_to_current = [0.0; 16];
-    let determinant =
-        unsafe { (platform.inverse)(&camera.clip_to_previous_clip, &mut previous_to_current) };
+    // The determinant and inverse follow DirectXMath so the SR singularity gate keeps its numerics.
+    let (inverted, determinant) = xm::inverse(&xm::load(&camera.clip_to_previous_clip));
     if !determinant.is_finite() || determinant.abs() < 1e-12 {
         return INVALID_ARGUMENT;
     }
@@ -590,7 +501,7 @@ unsafe fn rsf_core_dlss_native12_evaluate(
         view_to_clip: camera.view_to_clip,
         clip_to_view: camera.clip_to_view,
         clip_to_previous: camera.clip_to_previous_clip,
-        previous_to_clip: previous_to_current,
+        previous_to_clip: xm::flatten(&inverted),
         jitter: [frame.jitter_x, frame.jitter_y],
         motion_scale: [
             1.0 / record.render_width as f32,
@@ -615,9 +526,11 @@ unsafe fn rsf_core_dlss_native12_evaluate(
         motion_3d: 0,
         reset: u8::from(frame.reset != 0),
     };
-    let constants = unsafe { (platform.constants)(native, token, viewport, &constants) };
-    if constants != OK {
-        return constants;
+    // The record's motionVectorsJittered stays eFalse: the evaluation path supplies unjittered vectors.
+    let constants = sdk::constants(&constants);
+    let set_constants = entries.set_constants.expect("core entry");
+    if unsafe { set_constants(&constants, token, &viewport) } != RESULT_OK {
+        return FEATURE_FAILED;
     }
     // From the first feature options call onward, this context can have SDK viewport state.
     context.used_viewport.store(true, Ordering::Relaxed);
@@ -631,20 +544,24 @@ unsafe fn rsf_core_dlss_native12_evaluate(
         alpha: 0,
         preset: context.preset,
     };
-    let result = unsafe { (platform.options)(native, viewport, &options.payload()) };
-    if result != OK {
-        return result;
+    let Some(set_options) = registration.options else {
+        return FEATURE_FAILED;
+    };
+    if unsafe { set_options(&viewport, &sdk::options(&options.payload())) } != RESULT_OK {
+        return FEATURE_FAILED;
     }
-    let tags = TagBatch::d3d12(frame, record);
-    unsafe { (platform.dispatch)(native, token, viewport, list, &tags) }
-}
-
-unsafe fn rsf_core_dlss_native12_destroy(context: *mut Context) {
-    if !context.is_null() {
-        drop(unsafe { Box::from_raw(context) });
+    let mut tags = TagRecords::new();
+    tags.fill(&TagBatch::d3d12(frame, record));
+    let (tags, count) = tags.tags();
+    let set_tags = entries.set_tag_for_frame.expect("core entry");
+    if unsafe { set_tags(token, &viewport, tags, count, list) } != RESULT_OK {
+        return FEATURE_FAILED;
     }
-}
-
-fn rsf_core_dlss_native12_set_sdr(context: &Context, sdr: u32) {
-    context.sdr.store(sdr != 0, Ordering::Relaxed);
+    let inputs = [&raw const viewport.base];
+    let evaluate = entries.evaluate_feature.expect("core entry");
+    if unsafe { evaluate(FEATURE_DLSS, token, inputs.as_ptr(), 1, list) } == RESULT_OK {
+        OK
+    } else {
+        FEATURE_FAILED
+    }
 }

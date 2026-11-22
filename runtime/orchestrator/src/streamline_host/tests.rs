@@ -32,7 +32,7 @@ unsafe extern "C" fn allocate(_: Log, _: Handle) -> Handle {
     STARTUP.with_borrow_mut(|calls| calls.push("allocate"));
     std::ptr::without_provenance_mut(0x2000)
 }
-unsafe extern "C" fn bind_required(native: Handle, _: &[Handle; startup::ENTRY_NAMES.len()]) {
+unsafe extern "C" fn bind_required(native: Handle, _: &crate::streamline_sdk::Entries) {
     assert_eq!(native.addr(), 0x2000);
     STARTUP.with_borrow_mut(|calls| calls.push("bind"));
 }
@@ -230,12 +230,22 @@ fn failed_init_disposes_native_state_before_unloading_the_module() {
     };
     assert_eq!(result, Err(INIT_FAILED));
     assert!(host.is_null());
-    assert!(
-        looked_up
-            .iter()
-            .map(CString::as_c_str)
-            .eq(startup::ENTRY_NAMES)
-    );
+    for required in [
+        c"slInit",
+        c"slShutdown",
+        c"slUpgradeInterface",
+        c"slGetNativeInterface",
+        c"slSetD3DDevice",
+        c"slIsFeatureSupported",
+        c"slGetFeatureFunction",
+        c"slGetFeatureVersion",
+        c"slSetFeatureLoaded",
+        c"slGetNewFrameToken",
+        c"slSetConstants",
+        c"slSetTagForFrame",
+    ] {
+        assert!(looked_up.iter().any(|name| name.as_c_str() == required));
+    }
     assert_eq!(
         STARTUP.with_borrow_mut(std::mem::take),
         ["load", "allocate", "bind", "init", "dispose", "unload"]

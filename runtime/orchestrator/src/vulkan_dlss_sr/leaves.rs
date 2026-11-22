@@ -26,13 +26,12 @@ use crate::vulkan_sharpening::{
     rsf_sharpenvk_host_run,
 };
 use crate::vulkan_streamline_camera::sdk_api::{
-    self, EvaluateFeature, FEATURE_DLSS, FreeResources, GetFeatureFunction, GetOptimalSettings,
-    IsFeatureSupported, OK as SDK_OK, SetConstants, SetOptions, SetTagForFrame,
-    VALID_UNTIL_EVALUATE, guarded,
+    self, EvaluateFeature, FEATURE_DLSS, FreeResources, GetOptimalSettings, OK as SDK_OK,
+    SetConstants, SetOptions, SetTagForFrame, VALID_UNTIL_EVALUATE, guarded,
 };
 use crate::vulkan_streamline_camera::{
-    image_resource, resource_tag, rsf_slvk_sdk_constants, rsf_slvk_sdk_header,
-    rsf_slvk_sdk_resource, rsf_slvk_sdk_tag, with_previous_to_clip,
+    image_resource, resource_tag, rsf_slvk_sdk_constants, rsf_slvk_sdk_resource, rsf_slvk_sdk_tag,
+    with_previous_to_clip,
 };
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::backend_result::{
@@ -87,14 +86,7 @@ fn feature_result(result: i32) -> i32 {
 
 fn optimal_settings() -> Optimal {
     Optimal {
-        base: rsf_slvk_sdk_header {
-            next: ptr::null_mut(),
-            type_lo: 0xef1d_0957,
-            type_mid: 0xfd58,
-            type_hi: 0x4df7,
-            type_tail: [0xb5, 0x04, 0x8b, 0x69, 0xd8, 0xaa, 0x6b, 0x76],
-            version: 1,
-        },
+        base: sdk_api::DLSS_OPTIMAL,
         ..Default::default()
     }
 }
@@ -128,14 +120,14 @@ unsafe extern "C" fn rsf_core_vkdlss_sdk_initialize(
     let init = unsafe { &mut *user.cast::<Init>() };
     let native = native(init.native);
     let sdk = &mut native.sdk;
-    let supported =
-        unsafe { sdk_api::export::<IsFeatureSupported>(module, c"slIsFeatureSupported") };
-    let feature = unsafe { sdk_api::export::<GetFeatureFunction>(module, c"slGetFeatureFunction") };
-    sdk.set_constants = unsafe { sdk_api::export(module, c"slSetConstants") };
-    sdk.set_tags = unsafe { sdk_api::export(module, c"slSetTagForFrame") };
-    sdk.evaluate = unsafe { sdk_api::export(module, c"slEvaluateFeature") };
-    sdk.free_resources = unsafe { sdk_api::export(module, c"slFreeResources") };
-    let (Some(supported), Some(feature)) = (supported, feature) else {
+    let entries = unsafe { sdk_api::Entries::resolve(module) };
+    sdk.set_constants = entries.set_constants;
+    sdk.set_tags = entries.set_tag_for_frame;
+    sdk.evaluate = entries.evaluate_feature;
+    sdk.free_resources = entries.free_resources;
+    let (Some(supported), Some(feature)) =
+        (entries.is_feature_supported, entries.get_feature_function)
+    else {
         return MISSING_ENTRY_POINT;
     };
     if sdk.set_constants.is_none()

@@ -22,6 +22,7 @@ use windows_sys::Win32::Foundation::FARPROC;
 
 mod generation;
 mod native;
+pub(crate) use native::{common_set, drain, shared};
 mod startup;
 #[cfg(test)]
 mod tests;
@@ -120,7 +121,7 @@ struct Startup {
     load: unsafe extern "C" fn(*const u16, &Setup) -> Handle,
     unload: unsafe extern "C" fn(Handle),
     allocate: unsafe extern "C" fn(Log, Handle) -> Handle,
-    bind_required: unsafe extern "C" fn(Handle, &[Handle; startup::ENTRY_NAMES.len()]),
+    bind_required: unsafe extern "C" fn(Handle, &crate::streamline_sdk::Entries),
     init: unsafe extern "C" fn(Handle, &InitPreferences) -> u32,
     borrow_device: unsafe extern "C" fn(Handle, Handle),
     create_device: unsafe extern "C" fn(Handle, Handle) -> u32,
@@ -491,8 +492,8 @@ unsafe extern "C" fn rsf_core_slhost_module(host: *const Host) -> Handle {
         .map_or(null_mut(), SdkModule::as_ptr)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_slhost_token(host: *mut Host, id: u64) -> Handle {
+/// The SDK token of source frame `id`, or null.
+pub(crate) unsafe fn rsf_core_slhost_token(host: *mut Host, id: u64) -> Handle {
     let Some(host) = (unsafe { host.as_ref() }) else {
         return null_mut();
     };

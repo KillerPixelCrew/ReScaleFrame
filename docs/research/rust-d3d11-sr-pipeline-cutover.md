@@ -228,3 +228,48 @@ passed 19 tests, including the signature tests against the shipped interposer an
 comparison with the facts translation unit linked in, and `cargo clippy --lib --tests -D warnings`
 had no finding in the changed modules. The full CMake configure still fails at the tip's
 `tests/CMakeLists.txt`, so the `dlss_sr_layout` executable itself and `ctest` did not run.
+
+### One Streamline owner set for the D3D paths (D22, 2026-11-22)
+
+Question: the D3D11 SR session, the D3D12 SR registration and the D3D12 FG/Reflex host each
+resolved the interposer with their own name list and fn-pointer table, built the same `sl::`
+records from their own mirrors and admitted the module with their own copies of the
+"already loaded" check. Can they share one of each without changing what a game sees?
+
+What changed. The records are one set: `runtime/vulkan/streamline/sdk_records.h` gained
+`sl::Version`, `FeatureVersion`, `FeatureRequirements`, `ReflexReport`, `ReflexReport2` and the
+full `ReflexState`, checked by `sdk_records_checks.h` in the `dlss_sr_layout` test; the D3D SR
+options use the existing `sdk_sr_options.h` records. `streamline_sr_records.h`,
+`streamline_generation_records.h` and the hand-written records in `streamline_sdk.rs` are deleted.
+The entry points are one table, `rsf_streamline_vk::sdk_api::Entries`, resolved once from a module;
+each owner checks the subset it calls. `streamline_sdk.rs` is the orchestrator's one SDK module
+(records, builders, the fixed-search `load_interposer` and `interposer_loaded`). The D3D11 and
+D3D12 SR owners call the SDK directly: the `Platform`, `Startup`, `frame::Platform` and
+`planning::Platform` tables, their boxed `Native` leaf state, `dlss_native12/sdk.rs`,
+`dlss_streamline/{sdk,frame,planning}.rs`, `streamline_sr/{native,sdk}.rs` and the
+`NOT_COMPILED` branches (unreachable in every build) are gone, with `rsf_dlss_available`, which only
+a fixture called. When a D3D12 host exists, SR borrows its session through
+`streamline_host::shared` (module, entry table and native device) instead of resolving the host's
+module again. Admission is one module, `rsf_streamline_vk::admission`, with the two requirements:
+NVIDIA's key (`nvidia_signed`, the former `streamline_sr/signature.rs`) for the D3D owners and the
+pinned digest read through the held handle (`open_by_digest`, the former `win32/verified.rs`) for
+the Vulkan lifecycle.
+
+What did not change. The D3D12 host stays the D3D12 FG/Reflex owner and keeps its test-seam tables
+(OC-C2). The SR-only routes still initialize Streamline themselves when no host exists: the host
+creates or adopts a D3D12 device and queue and upgrades them through `slUpgradeInterface`, so it
+cannot register a game's D3D11 device, and registering a D3D12 game's device through it would hand
+the game a proxy device. Initialization order, the refusal over an already loaded interposer, the
+borrowed-host path, logging and every result code are those of the replaced tables.
+
+Intentional differences. Every owner resolves all sixteen core names, not only the ones it
+requires; `GetProcAddress` has no side effect, and a missing required entry fails at the same
+point with the same code (the D3D11 owner still names the first missing one). The D3D calls go
+through the table's `extern "C-unwind"` pointers instead of `extern "C"` ones, so a foreign
+exception from the SDK unwinds through the Rust frames instead of being undefined behaviour; no
+call is newly guarded. The Vulkan digest admission now loads `WinVerifyTrust` from System32 on
+first use like the signature check, instead of importing `wintrust.dll` at load time.
+
+Checks. `cargo check` of rsf-orchestrator (with and without `test-fixtures`, and its test build)
+and of rsf-streamline-vk's test build passed. Nothing was built with CMake, no test ran and no game
+was started; the full verification runs after integration.

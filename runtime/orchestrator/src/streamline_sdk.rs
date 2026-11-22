@@ -1,101 +1,82 @@
 // SPDX-License-Identifier: MIT
-//! Rust mirrors of the pinned Streamline 2.14.1 records the D3D12 hosts pass to the SDK.
+//! The pinned Streamline 2.14.1 SDK as the D3D owners call it.
 //!
 //! `sl.h` is a C++ header, but the interposer and its feature plugins export every entry point
-//! with C linkage, and the references in their signatures are pointers on Windows x64. Each
-//! record repeats the SDK's versioned header (`next`, GUID, `size_t` version) and member order.
-//! The layout assertions repeat the sizes and offsets MSVC reports for the 2.14.1 declarations;
-//! `sl::Boolean` is one byte and `sl::Result` an `int`.
-#![allow(dead_code)]
+//! with C linkage, and the references in their signatures are pointers on Windows x64. The records
+//! are the ones rsf-streamline-vk generates from `sdk_records.h`, `sdk_sr_options.h` and
+//! `sdk_fg_options.h`, which `sdk_records_checks.h` and `sdk_fg_options_checks.h` check against
+//! the SDK declarations (compiled by `tests/dlss_sr_layout_facts.cpp`); the entry points are its
+//! one table, [`Entries`]. Every D3D owner loads the interposer through [`load_interposer`].
+#[cfg(all(feature = "test-fixtures", not(test)))]
+mod layout_fixture;
 
-use std::ffi::{c_char, c_void};
-use std::mem::{offset_of, size_of};
+use crate::streamline_sr::{Constants as Camera, Dimensions, MAX_TAGS, OptionPayload, TagBatch};
+use std::ffi::c_void;
 use std::ptr::null_mut;
+use windows::core::PCWSTR;
 
-use rsf_streamline_vk::sdk_camera_defaults;
-
-pub(crate) use crate::sys::rsf_slvk_sdk_fg_options as FgOptions;
-pub(crate) use crate::sys::rsf_slvk_sdk_header as FgHeader;
 pub(crate) use crate::sys::{
-    rsf_slvk_sdk_constants as Constants, rsf_slvk_sdk_header as Header,
-    rsf_slvk_sdk_pcl_options as PclOptions, rsf_slvk_sdk_preferences as Preferences,
-    rsf_slvk_sdk_reflex_options as ReflexOptions, rsf_slvk_sdk_resource as Resource,
-    rsf_slvk_sdk_tag as ResourceTag,
+    rsf_slvk_sdk_adapter as AdapterInfo, rsf_slvk_sdk_constants as Constants,
+    rsf_slvk_sdk_feature_version as FeatureVersion, rsf_slvk_sdk_fg_options as FgOptions,
+    rsf_slvk_sdk_fg_state as DlssgState, rsf_slvk_sdk_header as Header,
+    rsf_slvk_sdk_pcl_options as PclOptions, rsf_slvk_sdk_pcl_state as PclState,
+    rsf_slvk_sdk_preferences as Preferences, rsf_slvk_sdk_reflex_options as ReflexOptions,
+    rsf_slvk_sdk_reflex_state as ReflexState, rsf_slvk_sdk_requirements as Requirements,
+    rsf_slvk_sdk_resource as Resource, rsf_slvk_sdk_tag as ResourceTag,
+    rsf_slvk_sdk_version as Version, rsf_vkdlss_optimal as DlssOptimal,
+    rsf_vkdlss_options as DlssOptions,
 };
-pub(crate) use sdk_camera_defaults::constants as default_constants;
+pub(crate) use rsf_streamline_vk::sdk_api::{
+    DLSS_OPTIMAL, DLSS_OPTIONS, Entries, FEATURE_COMMON, FEATURE_DLSS, FEATURE_DLSS_G, FEATURE_PCL,
+    FEATURE_REFLEX, HookAfterPresent, HookPresent, OK, PCL_STATE, PREFERENCES, REFLEX_STATE,
+    RESOURCE, SDK_VERSION, TAG, header, viewport,
+};
+pub(crate) use rsf_streamline_vk::sdk_camera_defaults::constants as default_constants;
+pub(crate) use rsf_streamline_vk::sdk_fg_options::{pack as fg_options, state as dlssg_state};
+pub(crate) use rsf_streamline_vk::sdk_records::{
+    reflex_options, rsf_slvk_pack_pcl_options as pcl_options,
+};
 
-/// `sl::kSDKVersion` of the pinned headers.
-pub(crate) const SDK_VERSION: u64 = 0x0002_000e_0001_fedc;
-pub(crate) const OK: i32 = 0;
+type Handle = *mut c_void;
+
+/// `sl::Result::eOk`, as the SR callers compare it.
+pub(crate) const RESULT_OK: i32 = OK;
 pub(crate) const TRUE: u8 = 1;
-
-// Feature IDs.
-pub(crate) const FEATURE_DLSS_G: u32 = 1000;
-pub(crate) const FEATURE_REFLEX: u32 = 3;
-pub(crate) const FEATURE_COMMON: u32 = u32::MAX;
-
-// sl::LogType::eWarn and eError.
+/// `PreferenceFlags::eUseManualHooking` and `eUseFrameBasedResourceTagging`.
+pub(crate) const PREFERENCE_MANUAL_HOOKING: u64 = 1 << 2;
+pub(crate) const PREFERENCE_FRAME_TAGGING: u64 = 1 << 7;
+/// `PreferenceFlags::eDisableCLStateTracking | eAllowOTA | eLoadDownloadedPlugins`, the defaults of
+/// an `sl::Preferences` that the D3D11 startup extends with its own flags.
+pub(crate) const DEFAULT_PREFERENCE_FLAGS: u64 = (1 << 0) | (1 << 3) | (1 << 6);
+/// `RenderAPI::eD3D11` and `eD3D12`, and `LogLevel::eDefault`.
+pub(crate) const RENDER_API_D3D11: u32 = 0;
+pub(crate) const RENDER_API_D3D12: u32 = 1;
+pub(crate) const LOG_LEVEL_DEFAULT: u32 = 1;
+/// `Result::eErrorDriverOutOfDate`, `eErrorOSOutOfDate` and `eErrorNoSupportedAdapterFound`.
+pub(crate) const RESULT_DRIVER_OUT_OF_DATE: u32 = 2;
+pub(crate) const RESULT_OS_OUT_OF_DATE: u32 = 3;
+pub(crate) const RESULT_NO_SUPPORTED_ADAPTER: u32 = 6;
+/// `LogType::eWarn` and `LogType::eError`.
 pub(crate) const LOG_WARN: u32 = 1;
 pub(crate) const LOG_ERROR: u32 = 2;
-
 /// `sl::EngineType::eCount`.
 pub(crate) const ENGINE_COUNT: u32 = 3;
 /// `sl::ResourceLifecycle::eValidUntilPresent`.
 pub(crate) const VALID_UNTIL_PRESENT: u32 = 1;
-/// `sl::kReflexFrameReportCount`.
-pub(crate) const REFLEX_REPORTS: usize = 64;
 
-const fn header(
-    type_lo: u32,
-    type_mid: u16,
-    type_hi: u16,
-    type_tail: [u8; 8],
-    version: usize,
-) -> Header {
-    Header {
-        next: null_mut(),
-        type_lo,
-        type_mid,
-        type_hi,
-        type_tail,
-        version,
-    }
-}
-
-pub(crate) const PREFERENCES: Header = header(
-    0x1ca1_0965,
-    0xbf8e,
-    0x432b,
-    [0x8d, 0xa1, 0x67, 0x16, 0xd8, 0x79, 0xfb, 0x14],
-    1,
+const REQUIREMENTS: Header = header(
+    0x6671_4097,
+    0xac6d,
+    0x4bc6,
+    [0x89, 0x15, 0x1e, 0x0f, 0x55, 0xa6, 0xb6, 0x1f],
+    2,
 );
-pub(crate) const RESOURCE: Header = header(
-    0x3a9d_70cf,
-    0x2418,
-    0x4b72,
-    [0x83, 0x91, 0x13, 0xf8, 0x72, 0x1c, 0x72, 0x61],
+const FEATURE_VERSION: Header = header(
+    0x6d5b_51f0,
+    0x076b,
+    0x486d,
+    [0x99, 0x95, 0x5a, 0x56, 0x10, 0x43, 0xf5, 0xc1],
     1,
-);
-pub(crate) const TAG: Header = header(
-    0x4c6a_5aad,
-    0xb445,
-    0x496c,
-    [0x87, 0xff, 0x1a, 0xf3, 0x84, 0x5b, 0xe6, 0x53],
-    1,
-);
-const VIEWPORT: Header = header(
-    0x171b_6435,
-    0x9b3c,
-    0x4fc8,
-    [0x99, 0x94, 0xfb, 0xe5, 0x25, 0x69, 0xaa, 0xa4],
-    1,
-);
-const DLSSG_STATE: Header = header(
-    0xcc8a_c8e1,
-    0xa179,
-    0x44f5,
-    [0x97, 0xfa, 0xe7, 0x41, 0x12, 0xf9, 0xbc, 0x61],
-    4,
 );
 const REFLEX_REPORT: Header = header(
     0x0d56_9b37,
@@ -111,235 +92,181 @@ const REFLEX_REPORT2: Header = header(
     [0x89, 0x9d, 0xb4, 0x9f, 0x63, 0x3c, 0x56, 0xc2],
     1,
 );
-const REFLEX_STATE: Header = header(
-    0xf0bb_5985,
-    0xdaf9,
-    0x4728,
-    [0xb2, 0xfd, 0xae, 0x80, 0xa2, 0xbd, 0x79, 0x89],
-    2,
-);
-const PCL_STATE: Header = header(
-    0xcfa3_2f9b,
-    0x023c,
-    0x420e,
-    [0x90, 0x56, 0x68, 0x32, 0xb7, 0x4f, 0x89, 0xb5],
-    1,
-);
-const FEATURE_VERSION: Header = header(
-    0x6d5b_51f0,
-    0x076b,
-    0x486d,
-    [0x99, 0x95, 0x5a, 0x56, 0x10, 0x43, 0xf5, 0xc1],
-    1,
-);
-const ADAPTER_INFO: Header = header(
-    0x0677_315f,
-    0xa746,
-    0x4492,
-    [0x9f, 0x42, 0xcb, 0x61, 0x42, 0xc9, 0xc3, 0xd4],
-    1,
-);
 
-/// `sl::ViewportHandle`.
-#[repr(C)]
-pub(crate) struct ViewportHandle {
-    base: Header,
-    value: u32,
+/// Whether a Streamline interposer is already loaded in this process. Its owner holds the SDK and
+/// its device registration.
+pub(crate) fn interposer_loaded() -> bool {
+    !unsafe {
+        windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(windows_sys::core::w!(
+            "sl.interposer.dll"
+        ))
+    }
+    .is_null()
 }
 
-impl ViewportHandle {
-    pub(crate) const fn new(value: u32) -> Self {
-        Self {
-            base: VIEWPORT,
-            value,
+/// Loads `sl.interposer.dll` from an absolute path, after the NVIDIA signature check when one is
+/// required, and returns the module or null. This puts a signed NVIDIA module into a game
+/// process, so the path alone never decides which module answers: every D3D owner uses the same
+/// fixed search. The caller adopts the module with `SdkModule::adopt_system`.
+pub(crate) unsafe fn load_interposer(
+    path: *const u16,
+    require_signature: bool,
+    log: &crate::input_dump::Log,
+) -> Handle {
+    let path_text = || {
+        if path.is_null() {
+            "(null)".to_owned()
+        } else {
+            unsafe { PCWSTR(path).to_string() }.unwrap_or_else(|_| "(invalid UTF-16)".to_owned())
         }
+    };
+    if unsafe { crate::streamline_policy::rsf_streamline_absolute_path(path) } == 0 {
+        log.say(&format!("interposer path is not absolute: {}", path_text()));
+        return null_mut();
+    }
+    if require_signature && !unsafe { rsf_streamline_vk::admission::nvidia_signed(path) } {
+        log.say(&format!(
+            "interposer at {} could not be verified as signed",
+            path_text()
+        ));
+        return null_mut();
+    }
+    let (module, error) = unsafe { crate::sdk_module::load_absolute_library(path) };
+    if module.is_null() {
+        log.say(&format!(
+            "could not load {} (Windows error {error})",
+            path_text()
+        ));
+    }
+    module
+}
+
+/// Calls `slHookPresent` (begin) or `slHookAfterPresent`. Succeeds only when the hook succeeded
+/// and did not ask to skip the Present.
+pub(crate) unsafe fn hook_present(
+    [before, after]: [Handle; 2],
+    swapchain: Handle,
+    interval: u32,
+    flags: u32,
+    begin: bool,
+) -> bool {
+    let mut skip = false;
+    let result = if begin {
+        let before = unsafe { std::mem::transmute::<Handle, HookPresent>(before) };
+        unsafe { before(swapchain, interval, flags, &mut skip) }
+    } else {
+        let after = unsafe { std::mem::transmute::<Handle, HookAfterPresent>(after) };
+        unsafe { after(flags) }
+    };
+    result >= 0 && !skip
+}
+
+/// An adapter naming its LUID, which must stay alive for the call.
+pub(crate) fn adapter(luid: &mut u64) -> AdapterInfo {
+    AdapterInfo {
+        luid: std::ptr::from_mut(luid).cast(),
+        luid_size: size_of::<u64>() as u32,
+        ..rsf_streamline_vk::sdk_api::adapter(null_mut())
     }
 }
 
-/// `sl::Version`.
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub(crate) struct Version {
-    pub(crate) major: u32,
-    pub(crate) minor: u32,
-    pub(crate) build: u32,
-}
-
-impl Version {
-    /// `sl::Version::operator bool`.
-    pub(crate) fn present(&self) -> bool {
-        self.major != 0 || self.minor != 0 || self.build != 0
+pub(crate) fn requirements() -> Requirements {
+    Requirements {
+        base: REQUIREMENTS,
+        ..Default::default()
     }
 }
 
-/// `sl::FeatureVersion`.
-#[repr(C)]
-pub(crate) struct FeatureVersion {
-    base: Header,
-    pub(crate) streamline: Version,
-    pub(crate) ngx: Version,
-}
-
-impl FeatureVersion {
-    pub(crate) fn new() -> Self {
-        Self {
-            base: FEATURE_VERSION,
-            streamline: Version::default(),
-            ngx: Version::default(),
-        }
+pub(crate) fn feature_version() -> FeatureVersion {
+    FeatureVersion {
+        base: FEATURE_VERSION,
+        ..Default::default()
     }
 }
 
-/// `sl::AdapterInfo`.
-#[repr(C)]
-pub(crate) struct AdapterInfo {
-    base: Header,
-    pub(crate) luid: *mut u8,
-    pub(crate) luid_size: u32,
-    pub(crate) vk_physical_device: *mut c_void,
+/// `sl::Version::operator bool`.
+pub(crate) fn version_present(version: &Version) -> bool {
+    version.major != 0 || version.minor != 0 || version.build != 0
 }
 
-impl AdapterInfo {
-    pub(crate) fn new(luid: *mut u8, luid_size: u32) -> Self {
-        Self {
-            base: ADAPTER_INFO,
-            luid,
-            luid_size,
-            vk_physical_device: null_mut(),
-        }
+/// An `sl::ReflexState` as its constructor leaves it: every nested report carries its header.
+/// The state answer leaves them intact.
+pub(crate) fn reflex_state() -> Box<ReflexState> {
+    let mut state: Box<ReflexState> = Box::default();
+    state.base = REFLEX_STATE;
+    for report in &mut state.reports {
+        report.base = REFLEX_REPORT;
+    }
+    for report in &mut state.reports2 {
+        report.base = REFLEX_REPORT2;
+    }
+    state
+}
+
+pub(crate) fn pcl_state() -> PclState {
+    PclState {
+        base: PCL_STATE,
+        window_message: 0,
     }
 }
 
-/// `sl::DLSSGState`, structure version 4.
-#[repr(C)]
-pub(crate) struct DlssgState {
-    base: Header,
-    pub(crate) estimated_vram: u64,
-    pub(crate) status: u32,
-    pub(crate) min_width_or_height: u32,
-    pub(crate) presented: u32,
-    pub(crate) generated_max: u32,
-    reserved4: u8,
-    pub(crate) vsync_available: u8,
-    pub(crate) fence: *mut c_void,
-    pub(crate) fence_value: u64,
-    pub(crate) dynamic_supported: u8,
-}
-
-impl DlssgState {
-    pub(crate) fn new() -> Self {
-        Self {
-            base: DLSSG_STATE,
-            estimated_vram: 0,
-            status: 0,
-            min_width_or_height: 0,
-            presented: 0,
-            generated_max: 0,
-            reserved4: 0,
-            vsync_available: 0,
-            fence: null_mut(),
-            fence_value: 0,
-            dynamic_supported: 0,
-        }
+pub(crate) fn dlss_optimal() -> DlssOptimal {
+    DlssOptimal {
+        base: DLSS_OPTIMAL,
+        ..Default::default()
     }
 }
 
-/// `sl::ReflexReport`.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(crate) struct ReflexReport {
-    base: Header,
-    pub(crate) frame_id: u64,
-    pub(crate) input_sample: u64,
-    pub(crate) simulation_start: u64,
-    pub(crate) simulation_end: u64,
-    pub(crate) submit_start: u64,
-    pub(crate) submit_end: u64,
-    pub(crate) present_start: u64,
-    pub(crate) present_end: u64,
-    pub(crate) driver_start: u64,
-    pub(crate) driver_end: u64,
-    pub(crate) queue_start: u64,
-    pub(crate) queue_end: u64,
-    pub(crate) gpu_start: u64,
-    pub(crate) gpu_end: u64,
-    pub(crate) gpu_active_us: u32,
-    pub(crate) gpu_frame_us: u32,
-}
-
-/// `sl::ReflexReport2`.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(crate) struct ReflexReport2 {
-    base: Header,
-    pub(crate) camera_constructed: u64,
-    pub(crate) cross_adapter_copy_us: u32,
-}
-
-/// `sl::ReflexState`, structure version 2.
-#[repr(C)]
-pub(crate) struct ReflexState {
-    base: Header,
-    pub(crate) low_latency_available: bool,
-    pub(crate) latency_report_available: bool,
-    pub(crate) stats_window_message: u32,
-    pub(crate) reports: [ReflexReport; REFLEX_REPORTS],
-    pub(crate) flash_indicator_driver_controlled: bool,
-    pub(crate) reports2: [ReflexReport2; REFLEX_REPORTS],
-}
-
-// The SDK constructors fill every nested report header. The state answer leaves them intact.
-impl ReflexState {
-    pub(crate) fn new() -> Box<Self> {
-        let report = ReflexReport {
-            base: REFLEX_REPORT,
-            frame_id: 0,
-            input_sample: 0,
-            simulation_start: 0,
-            simulation_end: 0,
-            submit_start: 0,
-            submit_end: 0,
-            present_start: 0,
-            present_end: 0,
-            driver_start: 0,
-            driver_end: 0,
-            queue_start: 0,
-            queue_end: 0,
-            gpu_start: 0,
-            gpu_end: 0,
-            gpu_active_us: 0,
-            gpu_frame_us: 0,
-        };
-        let report2 = ReflexReport2 {
-            base: REFLEX_REPORT2,
-            camera_constructed: 0,
-            cross_adapter_copy_us: 0,
-        };
-        Box::new(Self {
-            base: REFLEX_STATE,
-            low_latency_available: false,
-            latency_report_available: false,
-            stats_window_message: 0,
-            reports: [report; REFLEX_REPORTS],
-            flash_indicator_driver_controlled: false,
-            reports2: [report2; REFLEX_REPORTS],
-        })
+/// The constructor defaults of `sl::DLSSOptions` with the requested mode and output size.
+pub(crate) fn plan_options(dimensions: &Dimensions) -> DlssOptions {
+    DlssOptions {
+        base: DLSS_OPTIONS,
+        mode: dimensions.mode,
+        width: dimensions.width,
+        height: dimensions.height,
+        sharpness: 0.0,
+        pre_exposure: 1.0,
+        exposure_scale: 1.0,
+        // colorBuffersHDR defaults to eTrue.
+        hdr: 1,
+        ..Default::default()
     }
 }
 
-/// `sl::PCLState`.
-#[repr(C)]
-pub(crate) struct PclState {
-    base: Header,
-    pub(crate) stats_window_message: u32,
+pub(crate) fn options(input: &OptionPayload) -> DlssOptions {
+    DlssOptions {
+        presets: input.presets,
+        hdr: u8::from(input.hdr != 0),
+        auto_exposure: u8::from(input.auto_exposure != 0),
+        alpha_upscaling: u8::from(input.alpha != 0),
+        ..plan_options(&input.dimensions)
+    }
 }
 
-impl PclState {
-    pub(crate) fn new() -> Self {
-        Self {
-            base: PCL_STATE,
-            stats_window_message: 0,
-        }
+/// The constructor defaults of `sl::Constants` overlaid with the camera and motion values.
+pub(crate) fn constants(input: &Camera) -> Constants {
+    Constants {
+        view_to_clip: input.view_to_clip,
+        clip_to_view: input.clip_to_view,
+        clip_to_previous: input.clip_to_previous,
+        previous_to_clip: input.previous_to_clip,
+        jitter: input.jitter,
+        motion_scale: input.motion_scale,
+        pinhole: input.pinhole,
+        position: input.position,
+        up: input.up,
+        right: input.right,
+        forward: input.forward,
+        near_plane: input.near_plane,
+        far_plane: input.far_plane,
+        fov: input.fov,
+        aspect: input.aspect,
+        invalid_motion: input.invalid_motion,
+        depth_inverted: input.depth_inverted,
+        motion_includes_camera: input.camera_motion,
+        motion_3d: input.motion_3d,
+        reset: input.reset,
+        ..default_constants()
     }
 }
 
@@ -354,7 +281,7 @@ pub(crate) fn texture(native: *mut c_void, state: u32) -> Resource {
     }
 }
 
-/// `sl::ResourceTag(resource, type, lifecycle, &extent)`.
+/// `sl::ResourceTag(resource, type, eValidUntilPresent, &extent)`.
 pub(crate) fn tag(resource: *mut Resource, kind: u32, extent: [u32; 4]) -> ResourceTag {
     let [top, left, width, height] = extent;
     ResourceTag {
@@ -366,6 +293,51 @@ pub(crate) fn tag(resource: *mut Resource, kind: u32, extent: [u32; 4]) -> Resou
         left,
         width,
         height,
+    }
+}
+
+/// Resource and tag records for one slSetTagForFrame call. `fill` points each tag at its resource,
+/// so build the value where it will stay for the call.
+pub(crate) struct TagRecords {
+    resources: [Resource; MAX_TAGS],
+    tags: [ResourceTag; MAX_TAGS],
+    count: u32,
+}
+
+impl TagRecords {
+    pub(crate) fn new() -> Self {
+        Self {
+            resources: Default::default(),
+            tags: Default::default(),
+            count: 0,
+        }
+    }
+
+    pub(crate) fn fill(&mut self, batch: &TagBatch) {
+        let count = (batch.count as usize).min(MAX_TAGS);
+        self.count = count as u32;
+        for (index, entry) in batch.entries[..count].iter().enumerate() {
+            self.resources[index] = texture(entry.texture, entry.state);
+            let (width, height) = if entry.has_extent {
+                (entry.size[0], entry.size[1])
+            } else {
+                (0, 0)
+            };
+            self.tags[index] = ResourceTag {
+                base: TAG,
+                resource: std::ptr::from_mut(&mut self.resources[index]).cast(),
+                type_: entry.kind,
+                lifecycle: batch.lifecycle,
+                top: 0,
+                left: 0,
+                width,
+                height,
+            };
+        }
+    }
+
+    pub(crate) fn tags(&self) -> (*const ResourceTag, u32) {
+        (self.tags.as_ptr(), self.count)
     }
 }
 
@@ -447,88 +419,10 @@ pub(crate) fn full_invert(m: &[f32; 16]) -> [f32; 16] {
     r
 }
 
-/// The C-linkage Streamline entry points the D3D12 host binds, with `sl::` references as pointers.
-pub(crate) mod api {
-    use super::*;
-    type Handle = *mut c_void;
-
-    pub(crate) type Init = unsafe extern "C" fn(&Preferences, u64) -> i32;
-    pub(crate) type Shutdown = unsafe extern "C" fn() -> i32;
-    pub(crate) type Upgrade = unsafe extern "C" fn(*mut Handle) -> i32;
-    pub(crate) type Native = unsafe extern "C" fn(Handle, *mut Handle) -> i32;
-    pub(crate) type SetDevice = unsafe extern "C" fn(Handle) -> i32;
-    pub(crate) type Supported = unsafe extern "C" fn(u32, &AdapterInfo) -> i32;
-    pub(crate) type Function = unsafe extern "C" fn(u32, *const c_char, *mut Handle) -> i32;
-    pub(crate) type FeatureVersionFn = unsafe extern "C" fn(u32, &mut FeatureVersion) -> i32;
-    pub(crate) type Loaded = unsafe extern "C" fn(u32, bool) -> i32;
-    pub(crate) type NewToken = unsafe extern "C" fn(*mut Handle, *const u32) -> i32;
-    pub(crate) type SetConstants =
-        unsafe extern "C" fn(*const Constants, Handle, &ViewportHandle) -> i32;
-    pub(crate) type SetTags =
-        unsafe extern "C" fn(Handle, &ViewportHandle, *const ResourceTag, u32, Handle) -> i32;
-    pub(crate) type GetState =
-        unsafe extern "C" fn(&ViewportHandle, &mut DlssgState, *const FgOptions) -> i32;
-    pub(crate) type SetOptions = unsafe extern "C" fn(&ViewportHandle, &FgOptions) -> i32;
-    pub(crate) type ReflexSetOptions = unsafe extern "C" fn(&ReflexOptions) -> i32;
-    pub(crate) type ReflexGetState = unsafe extern "C" fn(&mut ReflexState) -> i32;
-    pub(crate) type Sleep = unsafe extern "C" fn(Handle) -> i32;
-    pub(crate) type PclMarker = unsafe extern "C" fn(u32, Handle) -> i32;
-    pub(crate) type PclSetOptions = unsafe extern "C" fn(&PclOptions) -> i32;
-    pub(crate) type PclGetState = unsafe extern "C" fn(&mut PclState) -> i32;
-    pub(crate) type Log = unsafe extern "C" fn(u32, *const c_char);
-    /// `slHookPresent`: `HRESULT(IDXGISwapChain*, UINT, UINT, bool& skip)`.
-    pub(crate) type HookPresent = unsafe extern "C" fn(Handle, u32, u32, &mut bool) -> i32;
-    /// `slHookAfterPresent`: `HRESULT(UINT)`.
-    pub(crate) type HookAfterPresent = unsafe extern "C" fn(u32) -> i32;
-}
-
-const _: () = {
-    assert!(size_of::<Header>() == 32);
-    assert!(size_of::<FgHeader>() == 32);
-    assert!(size_of::<ViewportHandle>() == 40);
-    assert!(offset_of!(ViewportHandle, value) == 32);
-    assert!(size_of::<Version>() == 12);
-    assert!(size_of::<FeatureVersion>() == 56);
-    assert!(offset_of!(FeatureVersion, streamline) == 32);
-    assert!(offset_of!(FeatureVersion, ngx) == 44);
-    assert!(size_of::<AdapterInfo>() == 56);
-    assert!(offset_of!(AdapterInfo, luid) == 32);
-    assert!(offset_of!(AdapterInfo, luid_size) == 40);
-    assert!(offset_of!(AdapterInfo, vk_physical_device) == 48);
-    assert!(size_of::<DlssgState>() == 88);
-    assert!(offset_of!(DlssgState, estimated_vram) == 32);
-    assert!(offset_of!(DlssgState, status) == 40);
-    assert!(offset_of!(DlssgState, min_width_or_height) == 44);
-    assert!(offset_of!(DlssgState, presented) == 48);
-    assert!(offset_of!(DlssgState, generated_max) == 52);
-    assert!(offset_of!(DlssgState, reserved4) == 56);
-    assert!(offset_of!(DlssgState, vsync_available) == 57);
-    assert!(offset_of!(DlssgState, fence) == 64);
-    assert!(offset_of!(DlssgState, fence_value) == 72);
-    assert!(offset_of!(DlssgState, dynamic_supported) == 80);
-    assert!(size_of::<ReflexReport>() == 152);
-    assert!(offset_of!(ReflexReport, frame_id) == 32);
-    assert!(offset_of!(ReflexReport, gpu_end) == 136);
-    assert!(offset_of!(ReflexReport, gpu_active_us) == 144);
-    assert!(size_of::<ReflexReport2>() == 48);
-    assert!(offset_of!(ReflexReport2, cross_adapter_copy_us) == 40);
-    assert!(offset_of!(ReflexState, low_latency_available) == 32);
-    assert!(offset_of!(ReflexState, latency_report_available) == 33);
-    assert!(offset_of!(ReflexState, stats_window_message) == 36);
-    assert!(offset_of!(ReflexState, reports) == 40);
-    assert!(offset_of!(ReflexState, flash_indicator_driver_controlled) == 9768);
-    assert!(offset_of!(ReflexState, reports2) == 9776);
-    assert!(size_of::<ReflexState>() == 12848);
-    assert!(size_of::<PclState>() == 40);
-    assert!(offset_of!(PclState, stats_window_message) == 32);
-    // Preferences, Constants, Resource, ResourceTag, the FG, Reflex and PCL options carry their
-    // own generated assertions, which runtime/vulkan/streamline/sdk_records_checks.h and
-    // sdk_fg_options_checks.h compare against the SDK declarations.
-};
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::streamline_sr::Options;
 
     #[test]
     fn full_invert_matches_the_sdk_helper() {
@@ -552,11 +446,99 @@ mod tests {
 
     #[test]
     fn report_headers_match_the_sdk_constructors() {
-        let state = ReflexState::new();
+        let state = reflex_state();
         assert_eq!(state.base.version, 2);
         assert_eq!(state.reports[63].base.type_lo, 0x0d56_9b37);
         assert_eq!(state.reports2[0].base.type_lo, 0x68bb_0632);
-        assert_eq!(ViewportHandle::new(0).base.type_lo, 0x171b_6435);
-        assert_eq!(DlssgState::new().base.version, 4);
+        assert_eq!(viewport(0).base.type_lo, 0x171b_6435);
+        assert_eq!(dlssg_state().base.version, 4);
+    }
+
+    #[test]
+    fn constants_keep_unspecified_sdk_defaults() {
+        let mut input = Camera::default();
+        input.view_to_clip[3] = 2.0;
+        input.reset = 1;
+        input.camera_motion = 1;
+        let record = constants(&input);
+        assert_eq!(record.base.version, 2);
+        assert_eq!(record.view_to_clip[3], 2.0);
+        assert_eq!((record.reset, record.motion_includes_camera), (1, 1));
+        assert_eq!(record.clip_to_lens, [f32::MAX; 16]);
+        assert_eq!(
+            (
+                record.orthographic,
+                record.motion_dilated,
+                record.motion_jittered
+            ),
+            (0, 0, 0)
+        );
+        assert_eq!(record.min_relative_depth_separation, 40.0);
+    }
+
+    #[test]
+    fn option_records_copy_modes_presets_and_flags() {
+        let options = Options {
+            mode: 3,
+            width: 1920,
+            height: 1080,
+            hdr: 0,
+            auto_exposure: 1,
+            alpha: 1,
+            preset: 11,
+        };
+        let record = super::options(&options.payload());
+        assert_eq!(record.base.version, 3);
+        assert_eq!((record.mode, record.width, record.height), (3, 1920, 1080));
+        assert_eq!(record.presets, [11; 6]);
+        assert_eq!(
+            (record.hdr, record.auto_exposure, record.alpha_upscaling),
+            (0, 1, 1)
+        );
+        assert_eq!((record.pre_exposure, record.exposure_scale), (1.0, 1.0));
+        let plan = plan_options(&Dimensions {
+            mode: 6,
+            width: 8,
+            height: 9,
+        });
+        assert_eq!((plan.hdr, plan.presets, plan.auto_exposure), (1, [0; 6], 0));
+    }
+
+    #[test]
+    fn tag_records_point_at_their_resources_and_keep_extents() {
+        let mut batch = TagBatch::d3d11(&unsafe { std::mem::zeroed() }, false);
+        batch.count = 2;
+        batch.entries[0].texture = std::ptr::without_provenance_mut(8);
+        batch.entries[0].kind = 3;
+        batch.entries[0].state = 0x40;
+        batch.entries[0].size = [640, 360];
+        batch.entries[1].texture = std::ptr::without_provenance_mut(16);
+        batch.entries[1].kind = 13;
+        batch.entries[1].has_extent = false;
+        let mut records = TagRecords::new();
+        records.fill(&batch);
+        let (tags, count) = records.tags();
+        assert_eq!(count, 2);
+        let tags = unsafe { std::slice::from_raw_parts(tags, 2) };
+        let resource = unsafe { &*tags[0].resource.cast::<Resource>() };
+        assert_eq!(
+            (resource.image.addr(), resource.layout, resource.type_),
+            (8, 0x40, 0)
+        );
+        assert_eq!(
+            (tags[0].type_, tags[0].width, tags[0].height),
+            (3, 640, 360)
+        );
+        assert_eq!((tags[1].width, tags[1].height), (0, 0));
+        assert_eq!(tags[1].lifecycle, 0);
+    }
+
+    #[test]
+    fn viewport_and_adapter_records_carry_their_payloads() {
+        assert_eq!(viewport(7).value, 7);
+        let mut luid = 0x1234_u64;
+        let adapter = adapter(&mut luid);
+        assert_eq!(adapter.luid_size, 8);
+        assert_eq!(unsafe { adapter.luid.cast::<u64>().read() }, 0x1234);
     }
 }
