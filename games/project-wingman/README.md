@@ -5,8 +5,9 @@ SR, FG, latency and VR processing remain unimplemented. The observer build and
 research notes below document development work only.
 
 The Windows x64 plugin recognizes the researched executable, exposes the game-plugin ABI (`sdk/game/include/rescaleframe/game_api.h`) and
-observes the native temporal graph. Its dedicated XInput carrier is deployed and the desktop
-observer is game-tested. GPU resource leases, upscaling, HUD separation, frame generation,
+observes the native temporal graph. Its dedicated XInput carrier was removed with the withdrawn
+preview; the generic `rsf_proxy_plugin` carrier is the one XInput carrier. GPU resource leases,
+upscaling, HUD separation, frame generation,
 latency and VR processing remain unimplemented.
 
 | Item | Value |
@@ -29,15 +30,6 @@ fingerprint before creating a disabled hook. A different process or modified ent
 `quiesce` stops publication and `stop` disables the hook, returning `BUSY` while calls retain
 host services. The module and its trampolines are pinned for process lifetime, keeping late
 native entries safe after disable. Rendering readiness remains zero.
-
-The dedicated `rsf_proxy_wingman` target produces `wingman/bin/Release/xinput1_3.dll` under the
-build directory. It forwards the system DLL's names and ordinals, including Wingman's imports
-2/3. Place it beside the shipping executable, and the runtime/plugin DLLs in a `ReScaleFrame`
-subdirectory with `rescaleframe_overlay.dll`. The worker opens the shared settings store and
-writes `ReScaleFrame/project-wingman.log` outside the loader lock. In the D3D11 game window,
-press Insert and use **Advanced → Observe native temporal passes** to save the
-`[ProjectWingman] ObserveNative` choice in `ReScaleFrame.ini`. It takes effect after a restart.
-The shared panel can open with the temporal observer disabled.
 
 Construction records contain copied view/history keys, jitter, rectangles and opaque RDG
 references. They are sampled once per history owner per second and on rectangle changes.

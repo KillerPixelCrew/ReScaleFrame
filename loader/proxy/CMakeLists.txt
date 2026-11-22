@@ -22,7 +22,7 @@ set_target_properties(rsf_proxy_dinput8 PROPERTIES OUTPUT_NAME "dinput8" PREFIX 
 add_dependencies(rsf_proxy_dinput8 rsf_game_ac7)
 if(MSVC)
     add_library(rsf_proxy_plugin SHARED
-        src/plugin_carrier.c src/xinput_forwarders.asm src/wingman_exports.def)
+        src/plugin_carrier.c src/xinput_forwarders.asm src/xinput_exports.def)
     target_link_libraries(rsf_proxy_plugin PRIVATE
         rsf_loader_rust bcrypt rsf_build_options)
     foreach(config Debug Release RelWithDebInfo MinSizeRel)
@@ -49,21 +49,6 @@ if(MSVC)
         "/MAP:$<TARGET_FILE_DIR:rsf_proxy_dinput8>/dinput8.map")
 endif()
 
-if(MSVC)
-    add_library(rsf_proxy_wingman SHARED
-        src/wingman_loader.c src/xinput_forwarders.asm src/wingman_exports.def)
-    target_link_libraries(rsf_proxy_wingman PRIVATE
-        rsf_wingman_rust rsf_loader_rust ReScaleFrame::RuntimeCommon rsf_build_options)
-    target_compile_definitions(rsf_proxy_wingman PRIVATE _CRT_SECURE_NO_WARNINGS)
-    foreach(config Debug Release RelWithDebInfo MinSizeRel)
-        file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/rsf_proxy_wingman.dir/${config}/src")
-    endforeach()
-    set_target_properties(rsf_proxy_wingman PROPERTIES OUTPUT_NAME "xinput1_3" PREFIX ""
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/wingman/bin/$<CONFIG>"
-        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/wingman/lib/$<CONFIG>"
-        PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/wingman/bin/$<CONFIG>")
-    add_dependencies(rsf_proxy_wingman rsf_orchestrator rsf_game_project_wingman)
-endif()
 if(NOT MSVC)
     # Existing cross-build carrier retains its AC7 entry until the x64 assembler forwarding
     # surface is ported. The shared Windows/MSVC binary contains both carrier export surfaces.
