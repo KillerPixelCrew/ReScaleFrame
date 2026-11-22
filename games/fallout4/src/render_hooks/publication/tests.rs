@@ -156,7 +156,11 @@ unsafe extern "C" fn notify(pass: *const rsf_game_render_pass, context: *mut c_v
     if context as usize != CONTEXT {
         event("foreign_context", 0);
     }
-    let role = unsafe { (*pass).role };
+    let pass = unsafe { &*pass };
+    let role = pass.role;
+    if role == RSF_GAME_RENDER_FINAL_SCENE && pass.scene_surface as usize != TEXTURE {
+        event("foreign_framebuffer_texture", 0);
+    }
     event(
         match role {
             RSF_GAME_RENDER_FG_INPUTS => "fg_inputs",
@@ -222,18 +226,32 @@ unsafe extern "C" fn end_output() -> bool {
     event("end_output", 0);
     true
 }
-unsafe extern "C" fn read_framebuffer(lease: *mut c_void, out: &mut Framebuffer) -> bool {
-    event("read_framebuffer", lease as usize as u32);
-    out.context = CONTEXT as *mut c_void;
-    out.chain = CHAIN as *mut c_void;
-    out.texture = TEXTURE as *mut c_void;
-    out.native_frame = with(|fake| fake.framebuffer_frame);
-    out.window_key = WINDOW_KEY;
-    out.extent = [1920, 1080, 1];
-    with(|fake| fake.framebuffer_acquired)
+struct FakeFramebufferLease;
+
+impl Drop for FakeFramebufferLease {
+    fn drop(&mut self) {
+        event("release_framebuffer", 0);
+    }
 }
-unsafe extern "C" fn publish_window(lease: *const c_void, window: *const rsf_game_render_pass) {
-    event("publish_window", lease as usize as u32);
+
+fn acquire_framebuffer() -> (bool, Framebuffer, FakeFramebufferLease) {
+    event("read_framebuffer", TEXTURE as u32);
+    let frame = Framebuffer {
+        context: CONTEXT as *mut c_void,
+        chain: CHAIN as *mut c_void,
+        texture: TEXTURE as *mut c_void,
+        native_frame: with(|fake| fake.framebuffer_frame),
+        window_key: WINDOW_KEY,
+        extent: [1920, 1080, 1],
+    };
+    (
+        with(|fake| fake.framebuffer_acquired),
+        frame,
+        FakeFramebufferLease,
+    )
+}
+unsafe extern "C" fn publish_window(texture: *mut c_void, window: *const rsf_game_render_pass) {
+    event("publish_window", texture as usize as u32);
     with(|fake| {
         fake.pass = unsafe { *window };
         fake.window_open = true;
@@ -261,7 +279,6 @@ const LEAVES: Leaves = Leaves {
     same_texture,
     reconstruct,
     end_output,
-    read_framebuffer,
     publish_window,
 };
 
@@ -366,7 +383,7 @@ fn hudless_opens_window_after_final_scene() {
     install(1, 1);
     assert_eq!(emit_sr(&LEAVES, &RECOVERY), SrOutcome::Published);
     let _ = events();
-    emit_hudless(&LEAVES, &RECOVERY, TEXTURE as *mut c_void);
+    emit_hudless_with(&LEAVES, &RECOVERY, acquire_framebuffer);
     assert_eq!(
         events(),
         [
@@ -376,6 +393,7 @@ fn hudless_opens_window_after_final_scene() {
             ("final_scene", 0),
             ("publish_window", TEXTURE as u32),
             ("window", 1),
+            ("release_framebuffer", 0),
         ]
     );
     with(|fake| {
@@ -392,8 +410,14 @@ fn hudless_refuses_a_foreign_framebuffer_without_callbacks() {
     assert_eq!(emit_sr(&LEAVES, &RECOVERY), SrOutcome::Published);
     let _ = events();
     with(|fake| fake.framebuffer_frame = 6);
-    emit_hudless(&LEAVES, &RECOVERY, TEXTURE as *mut c_void);
-    assert_eq!(events(), [("read_framebuffer", TEXTURE as u32)]);
+    emit_hudless_with(&LEAVES, &RECOVERY, acquire_framebuffer);
+    assert_eq!(
+        events(),
+        [
+            ("read_framebuffer", TEXTURE as u32),
+            ("release_framebuffer", 0)
+        ]
+    );
     assert!(with(|fake| !fake.window_open));
 }
 
@@ -406,12 +430,13 @@ fn hudless_reports_partial_facts_from_the_refused_read() {
         fake.framebuffer_frame = 9;
         fake.framebuffer_acquired = false;
     });
-    emit_hudless(&LEAVES, &RECOVERY, TEXTURE as *mut c_void);
+    emit_hudless_with(&LEAVES, &RECOVERY, acquire_framebuffer);
     assert_eq!(
         events(),
         [
             ("read_framebuffer", TEXTURE as u32),
-            ("partial_framebuffer_receipt", 1)
+            ("partial_framebuffer_receipt", 1),
+            ("release_framebuffer", 0),
         ]
     );
     assert!(with(|fake| !fake.window_open));

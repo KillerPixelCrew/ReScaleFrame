@@ -1,25 +1,15 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 // Private boundary between the Rust resolution owner and typed native calls in resolution.cpp.
-#include "cpu_events_platform.h"
-#include "resolution.h"
+#include "render_records.h"
+#include <rescaleframe/game_renderer.h>
 #include <cstddef>
 
 namespace rsf::fallout4 {
-using ResolutionReserve = bool (*)(const rsf_game_render_pass&);
-using ResolutionReport = void (*)(const char*);
+struct NativeDepthSnapshot;
 
-struct NativeResolutionReceipt {
-    const char* stage;
-    uintptr_t geometry[3];
-    float input_ratio[2], ratio[2], raster[6];
-    uint32_t frame, dirty;
-    int32_t result;
-    uint8_t viewport, active, partial;
-    bool evaluation, published, input, output, changed, scalars, owner, shadow;
-    uint32_t actual_count, actual_read;
-    float actual_raster[6];
-};
+using ResolutionReserve = bool (*)(const rsf_game_render_pass*);
+using ResolutionReport = void (*)(const char*);
 
 static_assert(sizeof(NativeOutputOwner) == 40 && offsetof(NativeOutputOwner, triangles) == 16);
 static_assert(sizeof(NativeResolutionReceipt) == 128 && offsetof(NativeResolutionReceipt, input_ratio) == 32 &&
@@ -27,7 +17,8 @@ static_assert(sizeof(NativeResolutionReceipt) == 128 && offsetof(NativeResolutio
     offsetof(NativeResolutionReceipt, actual_count) == 96);
 
 extern "C" {
-bool rsf_fallout4_resolution_inputs(const rsf_game_render_pass*) noexcept;
+bool rsf_fallout4_resolution_reconfigure(const rsf_game_host_services*, void* context,
+    const rsf_game_render_pass* planning) noexcept;
 bool rsf_fallout4_resolution_configure(const rsf_game_host_services*,
     const rsf_game_render_pass*, void*, ResolutionReserve) noexcept;
 bool rsf_fallout4_resolution_preflight(const rsf_game_render_pass*,

@@ -2,10 +2,7 @@
 // Receipt formatting and transfer of the Rust input lease into the native World.
 #include "render_inputs.h"
 #include "render_inputs_platform.h"
-#include <windows.h>
-#include <atomic>
 #include <cstdio>
-#include <cstring>
 #include <utility>
 
 namespace rsf::fallout4 {
@@ -157,20 +154,4 @@ bool read_native_raster_inputs(NativeInputs& output, const rsf_game_render_pass&
     output=std::move(result); return true;
 } catch (...) { return false; }
 
-bool read_native_framebuffer(NativeFramebuffer& output, void (*report)(const char*)) noexcept try {
-    output={};
-    NativeInputLease lease;
-    NativeFramebufferFacts facts{};
-    if (!rsf_fallout4_inputs_read_framebuffer(&lease,report,&facts)) return false;
-    NativeFramebuffer result;
-    result.context.Attach(std::exchange(lease.context, nullptr));
-    result.chain.Attach(std::exchange(lease.chain, nullptr));
-    result.texture.Attach(std::exchange(lease.textures[native_input_colour], nullptr));
-    result.native_frame=facts.native_frame; result.window_key=facts.window_key;
-    output=std::move(result); return true;
-} catch (...) {
-    static std::atomic_flag reported=ATOMIC_FLAG_INIT;
-    if (report && !reported.test_and_set(std::memory_order_relaxed)) try { report("Fallout4 framebuffer stage=exception"); } catch (...) {}
-    return false;
-}
 }

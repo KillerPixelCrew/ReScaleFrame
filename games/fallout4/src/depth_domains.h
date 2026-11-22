@@ -59,14 +59,4 @@ bool rsf_fallout4_depth_make(const NativeDepthSnapshot*,
     NativeDepthReport) noexcept;
 }
 
-inline bool native_raster_snapshot_current(const NativeDepthSnapshot& snapshot) noexcept {
-    return rsf_fallout4_depth_raster_current(&snapshot);
-}
-// Describes scalar depth at the composed raster samples, not spatial reprojection.
-// Failure leaves output all zero; caller must refuse mapping rather than use raw depth.
-inline bool make_native_depth_domains(const NativeDepthSnapshot& snapshot, const CpuIdentity& cpu,
-    const rsf_game_render_pass& pass, rsf_game_depth_domains& output,
-    void (*report)(const char*) = nullptr) noexcept {
-    return rsf_fallout4_depth_make(&snapshot, &cpu, &pass, &output, report);
-}
 }

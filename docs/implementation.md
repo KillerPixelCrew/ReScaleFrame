@@ -349,6 +349,12 @@ ABI checks and fixture, device and game runs for these ports remain open.
   moved to Rust and the native padding fixture calls the production comparator. The changes
   are source-checked and await build, fixtures and game or device validation.
   [F02 input ownership and resolution retirement](research/rust-fallout4-f02.md)
+- The F02/F03 follow-up keeps the HUDless and recovery-capture framebuffer
+  acquisition in typed Rust leases, links the native render lifecycle directly
+  and generates the shared screen, depth and resolution records. Native
+  unwind guards and the post-Swap scope sequence remain in place. Source
+  checks passed. Build, link, fixture and runtime verification remain open.
+  [Typed framebuffer and linked render boundaries](research/rust-fallout4-render-hooks.md#typed-framebuffer-and-linked-render-boundaries)
 - AC7's Rust F9 path admits geometry reads and writes the existing JSONL
   schema. The velocity owner admits commit targets and applies the
   existing profile and log limits. D3D11 readback, blob deduplication,

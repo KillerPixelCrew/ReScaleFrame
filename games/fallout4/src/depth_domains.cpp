@@ -1,14 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Keep the native diagnostic callback guard and receipt formatting.
 #include "depth_domains.h"
+#include "render_records.h"
 #include <cstdio>
 
 namespace rsf::fallout4 {
-struct NativeDepthMathFailure {
-    uint32_t index{};
-    float actual{}, expected{}, relative_error{};
-    double w[4]{}, minimum_w{}, range{};
-};
 static_assert(sizeof(NativeDepthMathFailure) == 64 && offsetof(NativeDepthMathFailure, w) == 16 &&
     offsetof(NativeDepthMathFailure, range) == 56);
 

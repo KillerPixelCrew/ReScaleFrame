@@ -36,7 +36,7 @@ use std::ffi::{CStr, c_void};
 use std::mem::offset_of;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::core::{s, w};
 
@@ -318,72 +318,21 @@ struct RenderExports {
     capture_requested: *mut c_void,
 }
 
-type CreateHook = unsafe extern "C" fn(u32, *mut c_void) -> bool;
 unsafe extern "system" {
     fn MH_QueueEnableHook(target: *mut c_void) -> i32;
     fn MH_QueueDisableHook(target: *mut c_void) -> i32;
     fn MH_ApplyQueued() -> i32;
 }
-type Query = unsafe extern "C" fn() -> bool;
-type BindExports = unsafe extern "C" fn(&RenderExports);
-type BindHost = unsafe extern "C" fn(&rsf_game_host_services);
 
-/// NativeRenderHookLeaves.
-#[repr(C)]
-struct NativeLeaves {
-    create_hook: Option<CreateHook>,
-    remove_hook: Option<CreateHook>,
-    scopes_busy: Option<Query>,
-    bind_exports: Option<BindExports>,
-    bind_host: Option<BindHost>,
+unsafe extern "C" {
+    fn rsf_fallout4_render_create_hook(hook: u32, target: *mut c_void) -> bool;
+    fn rsf_fallout4_render_remove_hook(hook: u32, target: *mut c_void) -> bool;
+    fn rsf_fallout4_render_scopes_busy() -> bool;
+    fn rsf_fallout4_render_bind_exports(exports: &RenderExports);
+    fn rsf_fallout4_render_bind_host(services: &rsf_game_host_services);
 }
 
-const _: () = {
-    assert!(size_of::<RenderExports>() == 5 * size_of::<usize>());
-    assert!(size_of::<NativeLeaves>() == 5 * size_of::<usize>());
-};
-
-/// The complete leaf table.
-struct Leaves {
-    create_hook: CreateHook,
-    remove_hook: CreateHook,
-    scopes_busy: Query,
-    bind_exports: BindExports,
-    bind_host: BindHost,
-}
-
-static LEAVES: OnceLock<Leaves> = OnceLock::new();
-
-fn leaves() -> Option<&'static Leaves> {
-    LEAVES.get()
-}
-
-/// Binds the render hook leaves for the process.
-///
-/// # Safety
-/// A nonnull `table` is a NativeRenderHookLeaves table whose leaves live for the process.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_render_publish(table: *const NativeLeaves) -> bool {
-    let Some(table) = (unsafe { table.as_ref() }) else {
-        return false;
-    };
-    let complete = || {
-        Some(Leaves {
-            create_hook: table.create_hook?,
-            remove_hook: table.remove_hook?,
-            scopes_busy: table.scopes_busy?,
-            bind_exports: table.bind_exports?,
-            bind_host: table.bind_host?,
-        })
-    };
-    match complete() {
-        Some(leaves) => {
-            let _ = LEAVES.get_or_init(|| leaves);
-            true
-        }
-        None => false,
-    }
-}
+const _: () = assert!(size_of::<RenderExports>() == 5 * size_of::<usize>());
 
 #[derive(Clone, Copy)]
 struct Host(rsf_game_host_services);
@@ -425,18 +374,13 @@ extern "C" fn rsf_fallout4_render_live() -> bool {
 /// A detour in flight, an open WINDOW, FRAME or auxiliary scope, an owned recovery token, or
 /// pending resolution ownership.
 pub(crate) fn busy() -> bool {
-    leaves().is_some_and(|leaves| unsafe { (leaves.scopes_busy)() })
-        || recovery::owned()
-        || resolution_busy()
+    (unsafe { rsf_fallout4_render_scopes_busy() }) || recovery::owned() || resolution_busy()
 }
 
 /// Checks the guards and the synchronous services, negotiates the Runtime exports and creates
 /// every missing detour disabled. A creation failure removes the hooks this call created, in
 /// reverse order; a removal MinHook refuses keeps its record and trampoline.
 pub(crate) fn prepare(ops: &Ops, services: &rsf_game_host_services, build: &ExactBuild) -> bool {
-    let Some(leaves) = leaves() else {
-        return false;
-    };
     if live()
         || busy()
         || services.process_upscale.is_none()
@@ -457,7 +401,7 @@ pub(crate) fn prepare(ops: &Ops, services: &rsf_game_host_services, build: &Exac
         capture_texture: export(s!("rsf_d3d11_host_capture_texture")),
         capture_requested: export(s!("rsf_input_dump_requested")),
     };
-    unsafe { (leaves.bind_exports)(&exports) };
+    unsafe { rsf_fallout4_render_bind_exports(&exports) };
     // Independent export negotiation. An older runtime retains native raster.
     if exports.upscale_auxiliaries.is_null()
         || exports.restore_auxiliaries.is_null()
@@ -472,7 +416,7 @@ pub(crate) fn prepare(ops: &Ops, services: &rsf_game_host_services, build: &Exac
         if created[index] {
             continue;
         }
-        if unsafe { (leaves.create_hook)(index as u32, target(hook)) } {
+        if unsafe { rsf_fallout4_render_create_hook(index as u32, target(hook)) } {
             created[index] = true;
             added[count] = index;
             count += 1;
@@ -481,7 +425,7 @@ pub(crate) fn prepare(ops: &Ops, services: &rsf_game_host_services, build: &Exac
         while count != 0 {
             count -= 1;
             let index = added[count];
-            if unsafe { (leaves.remove_hook)(index as u32, target(&HOOKS[index])) } {
+            if unsafe { rsf_fallout4_render_remove_hook(index as u32, target(&HOOKS[index])) } {
                 created[index] = false;
             } else {
                 report(
@@ -493,14 +437,14 @@ pub(crate) fn prepare(ops: &Ops, services: &rsf_game_host_services, build: &Exac
         return false;
     }
     HOST.lock().unwrap_or_else(PoisonError::into_inner).0 = *services;
-    unsafe { (leaves.bind_host)(services) };
+    unsafe { rsf_fallout4_render_bind_host(services) };
     true
 }
 
 /// Rechecks the guards, queues every created detour, sets live and applies the queue. A missing
 /// record or a refused queue or apply clears live and queues every created detour disabled.
 pub(crate) fn start(ops: &Ops) -> bool {
-    if leaves().is_none() || busy() || !verify() {
+    if busy() || !verify() {
         return false;
     }
     let created = created();
@@ -623,6 +567,63 @@ extern "C" fn rsf_fallout4_render_admit_world(
             !resolution_busy()
         }
         && rsf_fallout4_cpu_begin_render()
+}
+
+// Capture is diagnostic and independent of temporal and FG admission. The native
+// leaves contain exceptions from the two Runtime exports.
+#[unsafe(no_mangle)]
+extern "C" fn rsf_fallout4_render_capture_recovery(
+    snapshot: *const crate::depth_domains::Snapshot,
+    facts: unsafe extern "C" fn(&mut World),
+    report: crate::render_inputs::Report,
+    requested: unsafe extern "C" fn() -> bool,
+    capture: unsafe extern "C" fn(
+        *mut c_void,
+        &rsf_game_sys::d3d11_host_abi::rsf_d3d11_host_capture,
+    ),
+) {
+    use rsf_game_sys::d3d11_chain_abi::RSF_D3D11_HOST_ABI_VERSION;
+    use rsf_game_sys::d3d11_host_abi::rsf_d3d11_host_capture;
+    use windows::core::Interface;
+
+    if !recovery::committed()
+        || !unsafe { requested() }
+        || !unsafe { snapshot.as_ref() }.is_some_and(crate::depth_domains::raster_current)
+    {
+        return;
+    }
+    let Some(frame) = crate::render_inputs::acquire_framebuffer(report) else {
+        return;
+    };
+    let world = World::read(facts);
+    // SAFETY: the callback reports the current thread's FRAME record.
+    let basis = unsafe { *world.frame_pass };
+    if frame.native_frame != basis.native_frame
+        || frame.window_key != basis.window_key
+        || frame.context.as_raw() != world.context
+        || !unsafe {
+            crate::d3d11::rsf_fallout4_render_same_object(frame.chain.as_raw(), world.chain)
+        }
+    {
+        return;
+    }
+    // The identity comparison can call native COM. Read the current receipt facts
+    // at the same point as the former native capture before invoking the export.
+    let world = World::read(facts);
+    let basis = unsafe { *world.frame_pass };
+    let request = rsf_d3d11_host_capture {
+        struct_size: size_of::<rsf_d3d11_host_capture>() as u32,
+        abi_version: RSF_D3D11_HOST_ABI_VERSION,
+        session_id: world.cpu.session,
+        native_frame: basis.native_frame,
+        view_key: basis.view_key,
+        name: c"recovery_native_output".as_ptr(),
+        description: c"Native framebuffer before Present after reduced rendering; no temporal or FG admission implied".as_ptr(),
+        texture: frame.texture.as_raw(),
+        view: 0,
+        scale: 1.0,
+    };
+    unsafe { capture(frame.context.as_raw(), &request) };
 }
 
 #[unsafe(no_mangle)]

@@ -16,6 +16,12 @@ use crate::camera::{self, CameraRaster, NativeCamera};
 use crate::creation;
 use crate::d3d11::same_native;
 use crate::depth_domains::{self, Snapshot};
+use crate::render_records::{
+    native_input_colour as SLOT_COLOUR, native_input_depth as SLOT_DEPTH,
+    native_input_motion as SLOT_MOTION, native_input_no_slot as NO_SLOT,
+    native_input_pipboy as SLOT_PIPBOY, native_input_refraction_normals as SLOT_REFRACTION_NORMALS,
+    native_input_vats as SLOT_VATS,
+};
 use crate::{Plain, image, read};
 use rsf_game_sys::RSF_SCREEN_UNKNOWN;
 use rsf_game_sys::{
@@ -24,9 +30,11 @@ use rsf_game_sys::{
 use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_void};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use windows::Win32::Graphics::Direct3D11::{ID3D11DeviceContext, ID3D11Texture2D};
+use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
 
 type Flat = [f32; 16];
-type Report = Option<unsafe extern "C" fn(*const c_char)>;
+pub(crate) type Report = Option<unsafe extern "C" fn(*const c_char)>;
 
 const STATE_RVA: usize = 0x3d871a0;
 const TARGETS_RVA: usize = 0x2f4d750;
@@ -44,15 +52,6 @@ const DXGI_FORMAT_R24G8_TYPELESS: u32 = 44;
 const DXGI_FORMAT_R24_UNORM_X8_TYPELESS: u32 = 46;
 const D3D11_SRV_DIMENSION_TEXTURE2D: u32 = 4;
 const D3D11_RTV_DIMENSION_TEXTURE2D: u32 = 4;
-
-// render_inputs_platform.h lease slots.
-const SLOT_COLOUR: u32 = 0;
-const SLOT_MOTION: u32 = 1;
-const SLOT_DEPTH: u32 = 2;
-const SLOT_REFRACTION_NORMALS: u32 = 3;
-const SLOT_PIPBOY: u32 = 4;
-const SLOT_VATS: u32 = 5;
-const NO_SLOT: u32 = u32::MAX;
 
 static VERIFIED: AtomicBool = AtomicBool::new(false);
 static REPORTED: AtomicU64 = AtomicU64::new(0);
@@ -222,12 +221,13 @@ struct FramebufferReceipt {
     rtv_mip: u32,
 }
 
-/// render_inputs_platform.h `NativeFramebufferFacts`: the accepted framebuffer identity.
-#[repr(C)]
-#[allow(dead_code)] // read by the C++ wrapper
-struct FramebufferFacts {
-    native_frame: u64,
-    window_key: u64,
+pub(crate) struct FramebufferLease {
+    // Match the native lease's release order.
+    pub(crate) texture: ID3D11Texture2D,
+    pub(crate) chain: IDXGISwapChain,
+    pub(crate) context: ID3D11DeviceContext,
+    pub(crate) native_frame: u64,
+    pub(crate) window_key: u64,
 }
 
 unsafe extern "C" {
@@ -275,7 +275,6 @@ const _: () = {
     assert!(offset_of!(FramebufferReceipt, target_texture) == 280);
     assert!(offset_of!(FramebufferReceipt, platform) == 304);
     assert!(offset_of!(FramebufferReceipt, rtv_mip) == 340);
-    assert!(size_of::<FramebufferFacts>() == 16);
 };
 
 const NO_CAMERA: NativeCamera = NativeCamera {
@@ -1650,43 +1649,26 @@ unsafe extern "C" fn rsf_fallout4_inputs_read_raster(
     }
 }
 
-/// The framebuffer reader. `output` is cleared first and written only on admission.
-///
-/// # Safety
-/// `transferred` points to the caller's empty lease
-/// and `output` writable.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_inputs_read_framebuffer(
-    transferred: *mut native::TransferredLease,
-    report: Report,
-    output: *mut FramebufferFacts,
-) -> bool {
-    let Some(output) = (unsafe { output.as_mut() }) else {
-        return false;
-    };
-    *output = FramebufferFacts {
-        native_frame: 0,
-        window_key: 0,
-    };
-    if transferred.is_null() {
-        return false;
-    }
+/// Own the accepted framebuffer directly for the duration of the render seam.
+pub(crate) fn acquire_framebuffer(report: Report) -> Option<FramebufferLease> {
     let mut receipt = FramebufferReceipt::default();
     let mut owner_failure = Stage::Owner;
     let mut lease = native::NativeLease::default();
     match read_framebuffer(&mut lease, &mut receipt, &mut owner_failure) {
         Ok(()) => {
             framebuffer_receipt(report, Framebuffer::Accepted, owner_failure, &receipt);
-            *output = FramebufferFacts {
+            let (context, chain, texture) = lease.into_framebuffer()?;
+            Some(FramebufferLease {
+                context,
+                chain,
+                texture,
                 native_frame: u64::from(receipt.before.frame),
                 window_key: receipt.before.window as u64,
-            };
-            unsafe { transferred.write(lease.transfer()) };
-            true
+            })
         }
         Err(stage) => {
             framebuffer_receipt(report, stage, owner_failure, &receipt);
-            false
+            None
         }
     }
 }

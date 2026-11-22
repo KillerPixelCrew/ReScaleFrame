@@ -7,10 +7,11 @@
 // (render_hooks/scope.rs), the imagespace, Effects and TAA seams (render_hooks/imagespace.rs) and
 // the viewport, dynamic-resolution and prepass seams (render_hooks/producer.rs). Not a DLL ABI.
 #include "cpu_events_platform.h"
-#include "resolution.h"
+#include "render_records.h"
 #include <cstddef>
 
 struct rsf_d3d11_reduced_frame;
+struct rsf_d3d11_host_capture;
 struct rsf_d3d11_auxiliary_surface;
 
 namespace rsf::fallout4 {
@@ -37,26 +38,16 @@ struct NativeRenderExports {
     void* capture_requested;
 };
 
-// Leaves the Rust lifecycle cannot express without MinHook or the C++ callback state. Constant
-// for the process. Original engine functions are never called from Rust.
-struct NativeRenderHookLeaves {
-    // MH_CreateHook with the hook's detour, writing its typed trampoline.
-    bool (*create_hook)(uint32_t hook, void* target) noexcept;
-    // MH_RemoveHook; clears the typed trampoline only when removal succeeded.
-    bool (*remove_hook)(uint32_t hook, void* target) noexcept;
-    // Any detour in flight or any WINDOW, FRAME or auxiliary scope open. Rust adds owned
-    // recovery tokens and the resolution owner.
-    bool (*scopes_busy)() noexcept;
-    // Replace the callbacks' Runtime exports and host services.
-    void (*bind_exports)(const NativeRenderExports*) noexcept;
-    void (*bind_host)(const rsf_game_host_services*) noexcept;
-};
-
 static_assert(sizeof(NativeRenderExports) == 5 * sizeof(void*));
-static_assert(sizeof(NativeRenderHookLeaves) == 5 * sizeof(void*));
 
-// The process-lived leaf table of render_hooks.cpp.
-const NativeRenderHookLeaves* render_hook_leaves() noexcept;
+extern "C" {
+// The typed detours and trampoline slots stay on the native side.
+bool rsf_fallout4_render_create_hook(uint32_t hook, void* target) noexcept;
+bool rsf_fallout4_render_remove_hook(uint32_t hook, void* target) noexcept;
+bool rsf_fallout4_render_scopes_busy() noexcept;
+void rsf_fallout4_render_bind_exports(const NativeRenderExports*) noexcept;
+void rsf_fallout4_render_bind_host(const rsf_game_host_services*) noexcept;
+}
 
 struct NativeWorldAdmission {
     uintptr_t caller;
@@ -152,11 +143,9 @@ static_assert(sizeof(NativeRecoveryLeaves) == 15 * sizeof(void*));
 
 // SR and HUDless publication (render_hooks/publication.rs). Rust owns the admission, refusals,
 // pass identity and roles, the SR-off decision, the screen verdict, the callback order and the
-// output resolution calls. C++ keeps the typed native reads, COM identity, the SR input and
-// HUDless framebuffer leases, the engine depth and screen readers, the guarded Runtime calls and
-// the World fields. Rust also uses the recovery leaves' report, refuse, same_source and resolve.
-struct NativeScreen;
-struct NativeFramebuffer;
+// output resolution calls. C++ keeps the World fields, SR references and guarded
+// Runtime calls. Rust owns the HUDless framebuffer through the WINDOW handoff.
+struct NativeDepthSnapshot;
 struct NativePublicationInputs {
     const rsf_game_render_pass* pass;
     void* context;
@@ -167,13 +156,6 @@ struct NativeAuxiliaryInputs {
     float raster[4];
 };
 static_assert(sizeof(NativeAuxiliaryInputs) == 56 && offsetof(NativeAuxiliaryInputs, raster) == 40);
-struct NativePublicationFramebuffer {
-    void* context;
-    void* chain;
-    void* texture;
-    uint64_t native_frame, window_key;
-    uint32_t extent[3];
-};
 struct NativePublicationLeaves {
     void (*world)(NativeWorld*) noexcept;
     // The shared bounded diagnostic receipt.
@@ -206,15 +188,11 @@ struct NativePublicationLeaves {
     bool (*same_texture)(void*, void*) noexcept;
     int32_t (*reconstruct)(const rsf_game_render_pass*, const rsf_d3d11_auxiliary_surface*, uint32_t) noexcept;
     bool (*end_output)() noexcept;
-    // Acquire in the viewport detour's stack lease and return that read's facts, including on refusal.
-    bool (*read_framebuffer)(NativeFramebuffer*, NativePublicationFramebuffer*) noexcept;
-    // Retain the final colour from that lease and open WINDOW.
-    void (*publish_window)(const NativeFramebuffer*, const rsf_game_render_pass* window) noexcept;
+    // Retain the exact acquired texture and open WINDOW.
+    void (*publish_window)(void* texture, const rsf_game_render_pass* window) noexcept;
 };
 static_assert(sizeof(NativePublicationInputs) == 3 * sizeof(void*));
-static_assert(sizeof(NativePublicationFramebuffer) == 56 &&
-    offsetof(NativePublicationFramebuffer, native_frame) == 24);
-static_assert(sizeof(NativePublicationLeaves) == 22 * sizeof(void*));
+static_assert(sizeof(NativePublicationLeaves) == 21 * sizeof(void*));
 
 // FRAME, SUBMISSION and WINDOW scope (render_hooks/scope.rs). Rust owns the before/after owner
 // lease verdict, the FRAME pass identity and keys, FRAME then SUBMISSION begin, the balanced
@@ -234,7 +212,6 @@ extern "C" bool rsf_fallout4_render_same_object(void*, void*) noexcept;
 extern "C" bool rsf_fallout4_render_check_owner(void*, void*, uintptr_t device, uintptr_t window) noexcept;
 extern "C" bool rsf_fallout4_render_auxiliary_depth(void*) noexcept;
 extern "C" bool rsf_fallout4_render_auxiliary_colour(void*, void*, uint32_t width, uint32_t height) noexcept;
-extern "C" void rsf_fallout4_render_framebuffer_extent(void*, uint32_t (*)[3]) noexcept;
 
 struct NativeScopeLeaves {
     void (*world)(NativeWorld*) noexcept;
@@ -313,7 +290,6 @@ static_assert(sizeof(NativeImagespaceLeaves) == 8 * sizeof(void*));
 // prepass counter and its guard, the typed screen, owner, resolution and depth reads, and the
 // World fields and snapshots. Rust also uses the recovery leaves' refuse and same_source, and the
 // publication leaves for the HUDless seam.
-struct NativeDepthSnapshot;
 // The World source before the original prepass and its selection, held across the original.
 struct NativePrepassCall {
     rsf_fallout4_cpu_identity identity;
@@ -349,8 +325,6 @@ static_assert(sizeof(NativePrepassCall) == 48 && offsetof(NativePrepassCall, sel
 static_assert(sizeof(NativeProducerLeaves) == 13 * sizeof(void*));
 
 extern "C" {
-// Binds the leaves. The table must be complete and live for the process.
-bool rsf_fallout4_render_publish(const NativeRenderHookLeaves*) noexcept;
 // The adapter's render callbacks are live: set by start once every hook is queued, cleared by
 // quiesce, stop and a failed start.
 bool rsf_fallout4_render_live() noexcept;
@@ -364,7 +338,9 @@ bool rsf_fallout4_recovery_reserve(const NativeRecoveryLeaves*, const rsf_game_r
 // The calling thread's token, zero when none is owned. The SR seam SEALs before any temporal
 // reader and FINISHes as it returns; the imagespace and Effects exits RETIRE in Rust.
 uint64_t rsf_fallout4_recovery_token() noexcept;
-bool rsf_fallout4_recovery_committed() noexcept;
+void rsf_fallout4_render_capture_recovery(const NativeDepthSnapshot*, void (*facts)(NativeWorld*) noexcept,
+    void (*report)(const char*), bool (*requested)() noexcept,
+    void (*capture)(void*, const rsf_d3d11_host_capture*) noexcept) noexcept;
 // Clear with the World; called only where the World resets without a token.
 void rsf_fallout4_recovery_reset() noexcept;
 // Select a verified imagespace call and enter imagespace before the original. True asks the
@@ -385,7 +361,7 @@ bool rsf_fallout4_render_gate_taa(const NativeImagespaceLeaves*, const NativeRec
 // After the original viewport selector store: the owned full-output selector write on the native
 // targets, then the HUDless receipt and seam after the live HUDless selection.
 void rsf_fallout4_render_after_viewport(const NativeProducerLeaves*, const NativePublicationLeaves*,
-    const NativeRecoveryLeaves*, uintptr_t caller, uintptr_t manager, bool enabled, NativeFramebuffer*) noexcept;
+    const NativeRecoveryLeaves*, uintptr_t caller, uintptr_t manager, bool enabled) noexcept;
 // Before the original DR writer: depth invalidation on an open FRAME.
 void rsf_fallout4_render_before_dynamic_resolution(const NativeProducerLeaves*) noexcept;
 // After the original DR writer: the overlap refusal and transfer, then the configuration admission.

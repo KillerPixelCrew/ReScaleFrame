@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
-// C++ exception guards and the render bridge used by the Rust GameSDK export.
+// C++ exception guards used by the Rust adapter.
 #include "fallout4_platform.h"
-#include "render_hooks_platform.h"
 #include <d3d11.h>
 #include <cstddef>
 
@@ -40,10 +39,6 @@ extern "C" bool rsf_fallout4_native_creation_end(rsf_fallout4_creation_end_fn en
 extern "C" bool rsf_fallout4_native_bind_presentation(rsf_fallout4_bind_presentation_fn bind, void* user, const rsf_d3d11_presentation_binding* binding,
         int32_t* result) noexcept {
     return guarded([&] { *result = bind ? bind(user, binding) : RSF_ERROR_NOT_READY; });
-}
-
-extern "C" void rsf_fallout4_publish_render_boundary() noexcept {
-    (void)rsf::fallout4::rsf_fallout4_render_publish(rsf::fallout4::render_hook_leaves());
 }
 
 // Enforce the original native exception boundary before an exception can reach Rust.

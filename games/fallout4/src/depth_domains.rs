@@ -23,6 +23,7 @@ use crate::camera::{self, CameraDepthBound, CameraRaster};
 use crate::cpu_abi::rsf_fallout4_cpu_identity;
 use crate::cpu_events::{current_identity, render_source_is_current};
 use crate::d3d11::same_native;
+use crate::render_records::rsf_fallout4_NativeDepthMathFailure as MathFailure;
 use crate::{Plain, image, read};
 use rsf_game_sys::{
     RSF_DEPTH_DOMAIN_INCLUDE_MAX, RSF_DEPTH_DOMAIN_INCLUDE_MIN, RSF_DEPTH_DOMAINS_VERSION,
@@ -176,20 +177,6 @@ struct ViewFacts {
     dimension: u32,
     most_detailed_mip: u32,
     mip_levels: u32,
-}
-
-/// depth_domains.cpp `NativeDepthMathFailure`: the largest projection error and the last
-/// forward-W bound, printed by the refusal leaf.
-#[repr(C)]
-#[allow(dead_code)] // the W fields are read by the C++ receipt leaf
-struct MathFailure {
-    index: u32,
-    actual: f32,
-    expected: f32,
-    relative_error: f32,
-    w: [f64; 4],
-    minimum_w: f64,
-    range: f64,
 }
 
 unsafe extern "C" {

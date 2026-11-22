@@ -3,7 +3,7 @@
 #include "render_hooks_platform.h"
 #include "cpu_events_platform.h"
 #include "render_inputs.h"
-#include "resolution.h"
+#include "resolution_platform.h"
 #include "screen.h"
 #include "depth_domains.h"
 #include <rescaleframe/d3d11_host.h>
@@ -102,7 +102,6 @@ bool drain_auxiliaries() noexcept {
 // verdict; these read the World, compare COM identity, hold the leases and guard the Runtime.
 static_assert(sizeof(rsf_d3d11_reduced_frame)==56 && offsetof(rsf_d3d11_reduced_frame,result_flags)==52);
 static_assert(sizeof(rsf_d3d11_auxiliary_surface)==80 && offsetof(rsf_d3d11_auxiliary_surface,flags)==72);
-static_assert(sizeof(NativeOutputOwner)==40);
 void read_world(NativeWorld* out) noexcept {
     *out={world.cpu,&world.pass,&world.frame_pass,&world.submission_pass,
         &world.screen_basis,world.context.Get(),world.chain.Get(),host.process_upscale!=nullptr,
@@ -145,12 +144,9 @@ void recovery_lease(uint32_t slot, NativeRecoveryLease* lease) noexcept {
     *lease={&inputs.pass,inputs.context.Get(),{inputs.depth.Get(),inputs.motion.Get(),inputs.pipboy.Get(),
         inputs.vats.Get(),inputs.refraction_normals.Get()}};
 }
-bool recovery_preflight(const rsf_game_render_pass* pass, void* context, NativeOutputOwner* owner) noexcept {
-    return preflight_output_resolution(*pass,context,owner);
-}
-bool recovery_raster_current() noexcept { return native_raster_snapshot_current(world.raster_snapshot); }
+bool recovery_raster_current() noexcept { return rsf_fallout4_depth_raster_current(&world.raster_snapshot); }
 bool recovery_begin_output() noexcept {
-    return begin_output_resolution(world.raster_snapshot,world.recovery_inputs.pass);
+    return rsf_fallout4_resolution_begin_output(&world.raster_snapshot,&world.recovery_inputs.pass);
 }
 bool recovery_reduce(rsf_d3d11_reduced_frame* request, int32_t* result) noexcept {
     if (!reduced_frame || !world.recovery_inputs.context) return false;
@@ -161,11 +157,11 @@ bool recovery_reduce(rsf_d3d11_reduced_frame* request, int32_t* result) noexcept
 }
 constexpr NativeRecoveryLeaves recovery_leaves{report, recovery_refuse, read_world, recovery_same_source,
     recovery_resolve, recovery_read_raster, recovery_same_resources, recovery_adopt, recovery_discard,
-    recovery_release, recovery_lease, recovery_preflight, recovery_raster_current, recovery_begin_output,
+    recovery_release, recovery_lease, rsf_fallout4_resolution_preflight, recovery_raster_current, recovery_begin_output,
     recovery_reduce};
 bool recovery_owned() noexcept { return rsf_fallout4_recovery_token()!=0; }
-bool reserve_recovery(const rsf_game_render_pass& planned) noexcept {
-    return rsf_fallout4_recovery_reserve(&recovery_leaves,&planned);
+bool reserve_recovery(const rsf_game_render_pass* planned) noexcept {
+    return rsf_fallout4_recovery_reserve(&recovery_leaves,planned);
 }
 bool publication_auxiliary_inputs(NativeAuxiliaryInputs* out) noexcept {
     const auto& inputs=world.sr_inputs;
@@ -202,9 +198,8 @@ int32_t publication_reconstruct(const rsf_game_render_pass* pass, const rsf_d3d1
     return RSF_ERROR_NOT_READY;
 }
 // SR and HUDless publication leaves (render_hooks_platform.h). Rust (render_hooks/publication.rs)
-// sequences both seams and decides every refusal; these read the World, hold the SR input and
-// HUDless framebuffer leases, compare COM identity and guard the Runtime calls.
-static_assert(sizeof(NativeScreen)==24 && offsetof(NativeScreen,camera_state)==16);
+// sequences both seams. These leaves hold the SR input and retained WINDOW references
+// in the native World and guard Runtime calls.
 bool publication_read_inputs() noexcept {
     world.sr_inputs={};
     return read_native_inputs(world.sr_inputs,report,&world.depth_snapshot);
@@ -217,11 +212,10 @@ bool publication_same_recovery_resources() noexcept {
     return same_resources(world.sr_inputs,world.recovery_inputs,false);
 }
 bool publication_depth_domains(rsf_game_render_pass* pass) noexcept {
-    return make_native_depth_domains(world.depth_snapshot,world.cpu,*pass,pass->depth_domains,report);
+    return rsf_fallout4_depth_make(&world.depth_snapshot,&world.cpu,pass,&pass->depth_domains,report);
 }
 bool publication_plan(const rsf_game_render_pass* planning) noexcept {
-    try { (void)host.process_upscale(host.user,world.sr_inputs.context.Get(),planning); } catch (...) { return false; }
-    return true;
+    return rsf_fallout4_resolution_reconfigure(&host,world.sr_inputs.context.Get(),planning);
 }
 int32_t publication_render_config(rsf_game_render_config* config) noexcept {
     try { return host.render_config && host.render_config(host.user,config) ? 1 : 0; } catch (...) { return -1; }
@@ -231,7 +225,7 @@ void publication_retain_inputs(const rsf_game_render_pass* basis) noexcept {
     world.screen_basis=*basis;
 }
 void publication_classify(bool first, NativeScreen* current, NativeScreen* leased) noexcept {
-    *current=classify_native_screen(world.cpu,world.screen_basis,true);
+    rsf_fallout4_screen_classify(&world.cpu,&world.screen_basis,true,current);
     if (first) world.screen=*current;
     *leased=world.screen;
 }
@@ -245,20 +239,14 @@ void publication_publish_inputs(const rsf_game_render_pass* scalar) noexcept {
     world.inputs=true;
 }
 bool publication_begin_output(const rsf_game_render_pass* pass) noexcept {
-    return begin_output_resolution(world.depth_snapshot,*pass);
+    return rsf_fallout4_resolution_begin_output(&world.depth_snapshot,pass);
 }
 void publication_report_state(uint32_t stage, const rsf_game_render_pass* pass, void* context, bool published,
     int32_t result) noexcept {
-    report_resolution_state(stage,*pass,context,published,result,report);
+    rsf_fallout4_resolution_report(stage,pass,context,published,result,report);
 }
-bool publication_read_framebuffer(NativeFramebuffer* lease, NativePublicationFramebuffer* out) noexcept {
-    const bool acquired=read_native_framebuffer(*lease,report);
-    *out={lease->context.Get(),lease->chain.Get(),lease->texture.Get(),lease->native_frame,lease->window_key,{}};
-    rsf_fallout4_render_framebuffer_extent(lease->texture.Get(),&out->extent);
-    return acquired;
-}
-void publication_publish_window(const NativeFramebuffer* lease, const rsf_game_render_pass* window) noexcept {
-    world.final_colour=lease->texture;
+void publication_publish_window(void* texture, const rsf_game_render_pass* window) noexcept {
+    world.final_colour=static_cast<ID3D11Texture2D*>(texture);
     world.pass=*window;
     world.window_open=true;
     windows.fetch_add(1,std::memory_order_acq_rel);
@@ -268,7 +256,7 @@ constexpr NativePublicationLeaves publication_leaves{read_world, diagnostic, pub
     publication_plan, publication_render_config, publication_retain_inputs, publication_classify,
     publication_notify, publication_publish_inputs, publication_begin_output, publication_report_state,
     publication_auxiliary_inputs, publication_auxiliary_colour, publication_same_texture,
-    publication_reconstruct, end_output_resolution, publication_read_framebuffer, publication_publish_window};
+    publication_reconstruct, rsf_fallout4_resolution_end_output, publication_publish_window};
 // FRAME, SUBMISSION and WINDOW scope leaves (render_hooks_platform.h). Rust (render_hooks/scope.rs)
 // decides the owner lease verdict, the FRAME identity and the begin and close order; these read
 // the native owner, compare COM identity, hold the Context and chain leases and keep the counters.
@@ -290,7 +278,7 @@ void scope_close_frame() noexcept { world.frame_open=false; frames.fetch_sub(1,s
 void scope_reset() noexcept { world={}; }
 constexpr NativeScopeLeaves scope_leaves{read_world, rsf_fallout4_render_read_owner, scope_lease_owner, scope_adopt_owner,
     scope_discard_owner, scope_open_frame, scope_open_submission, scope_close_submission, scope_close_window,
-    scope_close_frame, drain_auxiliaries, finish_resolution_source, scope_reset, publication_notify, diagnostic,
+    scope_close_frame, drain_auxiliaries, rsf_fallout4_resolution_finish_source, scope_reset, publication_notify, diagnostic,
     publication_report_state};
 // Imagespace, Effects and TAA leaves (render_hooks_platform.h). Rust (render_hooks/imagespace.rs)
 // selects the calls and sequences entry, the SR seam, retirement, drain, output resolution and
@@ -298,7 +286,7 @@ constexpr NativeScopeLeaves scope_leaves{read_world, rsf_fallout4_render_read_ow
 void imagespace_enter() noexcept { world.in_imagespace=true; }
 void imagespace_leave() noexcept { world.in_imagespace=world.published=world.full_output_resolved=false; }
 constexpr NativeImagespaceLeaves imagespace_leaves{read_world, imagespace_enter, imagespace_leave,
-    rsf_fallout4_render_read_manager, drain_auxiliaries, end_output_resolution, publication_report_state, diagnostic};
+    rsf_fallout4_render_read_manager, drain_auxiliaries, rsf_fallout4_resolution_end_output, publication_report_state, diagnostic};
 // Viewport, DR and prepass leaves (render_hooks_platform.h). Rust (render_hooks/producer.rs)
 // selects the calls and sequences the selector write, the HUDless seam, the DR admission and the
 // prepass capture; these read the World, call the typed screen, owner, resolution and depth
@@ -311,10 +299,12 @@ void producer_interrupt_depth(bool interrupted) noexcept { world.depth_interrupt
 void producer_refuse_raster() noexcept { world.raster_refused=world.refused=true; }
 uint32_t producer_screen_refusals() noexcept {
     const rsf_game_render_pass candidate{};
-    return classify_native_screen(world.cpu,candidate,true).refusals;
+    NativeScreen screen{};
+    rsf_fallout4_screen_classify(&world.cpu,&candidate,true,&screen);
+    return screen.refusals;
 }
 bool producer_configure() noexcept {
-    return configure_native_resolution(host,world.frame_pass,world.context.Get(),reserve_recovery);
+    return rsf_fallout4_resolution_configure(&host,&world.frame_pass,world.context.Get(),reserve_recovery);
 }
 // The raster capture does not establish temporal admission. The depth capture uses
 // the ABI identity recorded across the admitted original prepass call.
@@ -326,7 +316,7 @@ bool producer_capture_depth(const rsf_fallout4_cpu_identity* identity, NativeDep
 }
 void producer_adopt_depth(const NativeDepthSnapshot* snapshot) noexcept { world.depth_snapshot=*snapshot; }
 constexpr NativeProducerLeaves producer_leaves{read_world, producer_invalidate, producer_interrupt_depth,
-    producer_refuse_raster, native_resolution_write, producer_screen_refusals, rsf_fallout4_render_read_owner,
+    producer_refuse_raster, rsf_fallout4_resolution_native_dr, producer_screen_refusals, rsf_fallout4_render_read_owner,
     producer_configure, producer_capture_raster, producer_capture_depth, producer_adopt_depth,
     publication_report_state, diagnostic};
 void observe_viewport(void* manager, bool enabled) {
@@ -339,11 +329,8 @@ void observe_viewport(void* manager, bool enabled) {
     viewport(manager, enabled);
     const auto error = GetLastError();
     // Rust follows the native intent with the owned selector and runs the HUDless seam.
-    {
-        NativeFramebuffer framebuffer{};
-        rsf_fallout4_render_after_viewport(&producer_leaves,&publication_leaves,&recovery_leaves,caller,
-            uintptr_t(manager),enabled,&framebuffer);
-    }
+    rsf_fallout4_render_after_viewport(&producer_leaves,&publication_leaves,&recovery_leaves,caller,
+        uintptr_t(manager),enabled);
     SetLastError(error);
 }
 void observe_world_begin() {
@@ -459,25 +446,12 @@ bool observe_taa(void* effect) {
     SetLastError(error);
     return active;
 }
-void capture_recovery_output() noexcept try {
-    // Preserve failed reduced-frame output for diagnostics independently of
-    // temporal/FG admission. The runtime rechecks the exact capture identity.
-    if (rsf_fallout4_recovery_committed() && capture_texture && capture_requested &&
-        capture_requested() && native_raster_snapshot_current(world.raster_snapshot)) {
-        NativeFramebuffer observed;
-        if (read_native_framebuffer(observed,report) && observed.native_frame==world.frame_pass.native_frame &&
-            observed.window_key==world.frame_pass.window_key && observed.context.Get()==world.context.Get() &&
-            rsf_fallout4_render_same_object(observed.chain.Get(),world.chain.Get())) {
-            rsf_d3d11_host_capture capture{};
-            capture.struct_size=sizeof(capture); capture.abi_version=RSF_D3D11_HOST_ABI_VERSION;
-            capture.session_id=world.cpu.session; capture.native_frame=world.frame_pass.native_frame;
-            capture.view_key=world.frame_pass.view_key; capture.texture=observed.texture.Get();
-            capture.name="recovery_native_output";
-            capture.description="Native framebuffer before Present after reduced rendering; no temporal or FG admission implied";
-            capture.view=0; capture.scale=1;
-            (void)capture_texture(host.user,observed.context.Get(),&capture);
-        }
-    }
+bool recovery_capture_requested() noexcept try {
+    return capture_texture && capture_requested && capture_requested();
+} catch (...) { return false; }
+
+void recovery_capture(void* context, const rsf_d3d11_host_capture* capture) noexcept try {
+    (void)capture_texture(host.user,context,capture);
 } catch (...) {}
 bool revalidate_present_screen() noexcept {
     if (world.inputs) rsf_fallout4_render_screen_facts(&publication_leaves,&recovery_leaves,&world.pass,false);
@@ -507,7 +481,9 @@ void observe_native_present(void* renderer) {
         &leased);
     if (matched!=NativePresentMatch::unrelated) {
         const auto cpu=world.cpu;
-        if (matched==NativePresentMatch::matched) capture_recovery_output();
+        if (matched==NativePresentMatch::matched)
+            rsf_fallout4_render_capture_recovery(&world.raster_snapshot,read_world,
+                report,recovery_capture_requested,recovery_capture);
         switch (rsf_fallout4_render_admit_present(matched,host.session_id,&cpu,revalidate_present_screen)) {
         case NativePresentAdmission::complete: {
             rsf_fallout4_render_close_submission(&scope_leaves);
@@ -545,29 +521,27 @@ const std::array<void**, RenderHookCount> originals{
     reinterpret_cast<void**>(&native_present), reinterpret_cast<void**>(&world_begin),
     reinterpret_cast<void**>(&viewport), reinterpret_cast<void**>(&imagespace),
     reinterpret_cast<void**>(&effects), reinterpret_cast<void**>(&taa_active)};
-bool create_hook(uint32_t hook, void* target) noexcept {
+}
+extern "C" bool rsf_fallout4_render_create_hook(uint32_t hook, void* target) noexcept {
     return hook < detours.size() && MH_CreateHook(target, detours[hook], originals[hook]) == MH_OK;
 }
-bool remove_hook(uint32_t hook, void* target) noexcept {
+extern "C" bool rsf_fallout4_render_remove_hook(uint32_t hook, void* target) noexcept {
     if (hook >= originals.size() || MH_RemoveHook(target) != MH_OK) return false;
     *originals[hook] = nullptr;
     return true;
 }
 // The C++ half of busy; Rust adds the resolution owner.
-bool scopes_busy() noexcept {
+extern "C" bool rsf_fallout4_render_scopes_busy() noexcept {
     return entered.load(std::memory_order_acquire) || windows.load(std::memory_order_acquire) || frames.load(std::memory_order_acquire) || auxiliaries.load(std::memory_order_acquire);
 }
-void bind_exports(const NativeRenderExports* exports) noexcept {
+extern "C" void rsf_fallout4_render_bind_exports(const NativeRenderExports* exports) noexcept {
     upscale_auxiliaries=reinterpret_cast<decltype(upscale_auxiliaries)>(exports->upscale_auxiliaries);
     restore_auxiliaries=reinterpret_cast<decltype(restore_auxiliaries)>(exports->restore_auxiliaries);
     reduced_frame=reinterpret_cast<decltype(reduced_frame)>(exports->reduced_frame);
     capture_texture=reinterpret_cast<decltype(capture_texture)>(exports->capture_texture);
     capture_requested=reinterpret_cast<CaptureRequested>(exports->capture_requested);
 }
-void bind_host(const rsf_game_host_services* services) noexcept { host = *services; }
-constexpr NativeRenderHookLeaves leaves{create_hook, remove_hook, scopes_busy, bind_exports, bind_host};
-}
-const NativeRenderHookLeaves* render_hook_leaves() noexcept { return &leaves; }
+extern "C" void rsf_fallout4_render_bind_host(const rsf_game_host_services* services) noexcept { host = *services; }
 // Rust (render_hooks/scope.rs) sequences the post-Swap scope end.
 void finish_render_scope() noexcept {
     rsf_fallout4_render_finish_scope(&scope_leaves,&recovery_leaves);

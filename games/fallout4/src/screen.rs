@@ -3,6 +3,7 @@
 
 use crate::cpu_abi::rsf_fallout4_cpu_identity;
 use crate::cpu_events::rsf_fallout4_cpu_render_source_is_current;
+pub(crate) use crate::render_records::rsf_fallout4_NativeScreen as NativeScreen;
 use crate::{image, read};
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_AFTER_SIMULATION, RSF_GAME_RENDER_PRIMARY,
@@ -115,16 +116,6 @@ const MENUS: [MenuQuery; 6] = [
         fact: 32,
     },
 ];
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(crate) struct NativeScreen {
-    pub(crate) screen: u32,
-    pub(crate) facts: u32,
-    pub(crate) refusals: u32,
-    pub(crate) camera_index: u32,
-    pub(crate) camera_state: usize,
-}
 
 impl NativeScreen {
     pub(crate) const EMPTY: Self = Self::refused(0);

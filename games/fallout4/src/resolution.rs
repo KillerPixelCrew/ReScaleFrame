@@ -7,6 +7,8 @@ use crate::build_layout::{
 use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;
 use crate::cpu_events::{current_identity, render_source_is_current};
 use crate::depth_domains::{self, Snapshot};
+pub(crate) use crate::render_records::rsf_fallout4_NativeOutputOwner as OutputOwner;
+use crate::render_records::rsf_fallout4_NativeResolutionReceipt as Receipt;
 use crate::screen::{NativeScreen, WORLD_LEASE_INVALID, rsf_fallout4_screen_classify};
 use crate::{Plain, image, read};
 use rsf_game_sys::{
@@ -18,6 +20,7 @@ use std::ffi::{c_char, c_void};
 use std::sync::atomic::{AtomicU32, Ordering};
 use windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext;
 use windows::core::Interface;
+use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
 use windows_sys::Win32::System::{
     Diagnostics::Debug::WriteProcessMemory, Threading::GetCurrentProcess,
 };
@@ -62,40 +65,6 @@ fn screen_refusals(source: &CpuIdentity) -> u32 {
     let mut screen = NativeScreen::EMPTY;
     rsf_fallout4_screen_classify(source, &candidate, true, &mut screen);
     screen.refusals
-}
-
-#[repr(C)]
-struct Receipt {
-    stage: *const c_char,
-    geometry: [usize; 3],
-    input_ratio: [f32; 2],
-    ratio: [f32; 2],
-    raster: [f32; 6],
-    frame: u32,
-    dirty: u32,
-    result: i32,
-    viewport: u8,
-    active: u8,
-    partial: u8,
-    evaluation: bool,
-    published: bool,
-    input: bool,
-    output: bool,
-    changed: bool,
-    scalars: bool,
-    owner: bool,
-    shadow: bool,
-    actual_count: u32,
-    actual_read: u32,
-    actual_raster: [f32; 6],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct OutputOwner {
-    context: u64,
-    manager: u64,
-    triangles: [u64; 3],
 }
 
 impl OutputOwner {
@@ -1045,6 +1014,21 @@ pub(crate) fn refused() -> bool {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fallout4_resolution_report(
+    stage: u32,
+    pass: *const rsf_game_render_pass,
+    context: *mut c_void,
+    published: bool,
+    result: i32,
+    report: Report,
+) {
+    let error = unsafe { GetLastError() };
+    // The guarded C++ receipt leaf contains foreign exceptions. Restore the
+    // caller's error after all receipt work, including early-refusal paths.
+    unsafe { report_state(stage, pass, context, published, result, report) };
+    unsafe { SetLastError(error) };
+}
+
+unsafe fn report_state(
     stage: u32,
     pass: *const rsf_game_render_pass,
     context: *mut c_void,

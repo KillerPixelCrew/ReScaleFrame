@@ -12,10 +12,12 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
 use windows::core::Interface;
 
+const TEXTURE_SLOTS: usize = crate::render_records::native_input_slot_count as usize;
+
 /// Candidate references stay in Rust until a reader admits its pass.
 #[derive(Default)]
 pub(super) struct NativeLease {
-    textures: [Option<ID3D11Texture2D>; 6],
+    textures: [Option<ID3D11Texture2D>; TEXTURE_SLOTS],
     chain: Option<IDXGISwapChain>,
     context: Option<ID3D11DeviceContext>,
 }
@@ -25,7 +27,7 @@ pub(super) struct NativeLease {
 pub(super) struct TransferredLease {
     context: *mut c_void,
     chain: *mut c_void,
-    textures: [*mut c_void; 6],
+    textures: [*mut c_void; TEXTURE_SLOTS],
 }
 
 const _: () = {
@@ -34,6 +36,13 @@ const _: () = {
 };
 
 impl NativeLease {
+    pub(super) fn into_framebuffer(
+        mut self,
+    ) -> Option<(ID3D11DeviceContext, IDXGISwapChain, ID3D11Texture2D)> {
+        let texture = self.textures[super::SLOT_COLOUR as usize].take()?;
+        Some((self.context.take()?, self.chain.take()?, texture))
+    }
+
     pub(super) fn transfer(self) -> TransferredLease {
         fn raw<T: Interface>(owned: Option<T>) -> *mut c_void {
             owned.map_or(std::ptr::null_mut(), Interface::into_raw)

@@ -488,8 +488,7 @@ extern "C" fn rsf_fallout4_recovery_token() -> u64 {
 }
 
 /// The calling thread's reservation was committed before its first ratio write.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_recovery_committed() -> bool {
+pub(super) fn committed() -> bool {
     state().committed
 }
 

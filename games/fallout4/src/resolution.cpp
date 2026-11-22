@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: MIT
 #include "resolution_platform.h"
-#include "depth_domains.h"
-#include <windows.h>
 #include <cstdio>
 
 namespace rsf::fallout4 {
@@ -15,7 +13,7 @@ extern "C" bool rsf_fallout4_resolution_config(const rsf_game_host_services* hos
 } catch (...) { return false; }
 
 extern "C" bool rsf_fallout4_resolution_reserve(ResolutionReserve reserve, const rsf_game_render_pass* planning) noexcept try {
-    return reserve(*planning);
+    return reserve(planning);
 } catch (...) { return false; }
 
 extern "C" void rsf_fallout4_resolution_report_receipt(ResolutionReport report, const rsf_game_render_pass* pass, void* context,
@@ -40,33 +38,4 @@ extern "C" void rsf_fallout4_resolution_report_receipt(ResolutionReport report, 
         pass->camera.render_width, pass->camera.render_height, pass->camera.output_width, pass->camera.output_height, context);
     report(text);
 } catch (...) {}
-
-void report_resolution_state(uint32_t stage, const rsf_game_render_pass& pass, void* context,
-    bool published, int32_t result, ResolutionReport report) noexcept {
-    struct Restore { DWORD error; ~Restore() { SetLastError(error); } } restore{GetLastError()};
-    rsf_fallout4_resolution_report(stage, &pass, context,
-        published, result, report);
-}
-
-bool native_resolution_inputs(const rsf_game_render_pass& pass) noexcept {
-    return rsf_fallout4_resolution_inputs(&pass);
-}
-
-bool configure_native_resolution(const rsf_game_host_services& host, const rsf_game_render_pass& frame,
-    void* context, ResolutionReserve reserve) noexcept {
-    return rsf_fallout4_resolution_configure(&host, &frame, context, reserve);
-}
-
-bool preflight_output_resolution(const rsf_game_render_pass& pass, void* context,
-    NativeOutputOwner* output) noexcept {
-    return rsf_fallout4_resolution_preflight(&pass, context, output);
-}
-
-bool begin_output_resolution(const NativeDepthSnapshot& snapshot, const rsf_game_render_pass& pass) noexcept {
-    return rsf_fallout4_resolution_begin_output(&snapshot, &pass);
-}
-
-bool native_resolution_write() noexcept { return rsf_fallout4_resolution_native_dr(); }
-bool end_output_resolution() noexcept { return rsf_fallout4_resolution_end_output(); }
-bool finish_resolution_source() noexcept { return rsf_fallout4_resolution_finish_source(); }
 }

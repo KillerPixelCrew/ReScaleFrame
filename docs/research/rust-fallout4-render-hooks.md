@@ -510,3 +510,59 @@ Rust. The layout, formatting, generated bindings and locked offline dependency
 metadata are source checks. Workspace-wide rustfmt also flags the baseline import order
 in the generated Fallout 4 platform bindings. Native build, linkage, tests and game evidence
 remain open.
+
+
+## Typed framebuffer and linked render boundaries
+
+This source pass starts at `0251a81a` and compares the current adapter against
+the recorded Fallout 4 AE 1.11.240.0 executable in
+[engine metadata](../../games/fallout4/engine.json). The exact-build entry
+bytes, call descriptors, owner cells and native render order remain the
+evidence for the port. The comparison used the existing adapter and recorded
+native observations. It adds no executable or active shader observations.
+
+- `render_inputs.rs` and `render_inputs/native.rs` own the accepted
+  FrameBuffer0 Context, outer chain and RTV texture as typed references.
+  [The input audit](fallout4-native-inputs-20261116.md#hudless-refusal-attribution-16-november-2026)
+  identifies logical slot 0 through the map at `0x2f4d750 + 0xdf4` and the
+  physical record at RendererData `+ 0xa58 + index * 0x30`. The renderer,
+  map and target rereads still precede acquisition. The input receipts keep
+  their native formatting and guarded log callbacks. The temporary lease
+  drops texture, chain and Context in the previous native order.
+- `render_hooks/publication.rs` takes that acquisition after the guarded
+  viewport return at `0x21fa2ca`. It checks frame, window, Context, chain and
+  output extent, holds the same texture through FINAL_SCENE begin/end and
+  WINDOW begin, and passes it to the native WINDOW owner for retention through
+  Swap. The viewport detour restores the original LastError after the Rust
+  lease drops. The publication fixtures record the final texture, the
+  submission of each pass, and release on acceptance and refusal. A
+  partial acquisition receipt still comes from the acquisition that was
+  refused. See the [render evidence](fallout4-render-integration-20261116.md).
+- `render_hooks.rs` uses the same acquisition for committed-recovery capture
+  at the matched outer Present return `0xc335ec`. It checks the request and
+  raster snapshot before acquiring, compares the fresh FRAME and Context,
+  checks canonical chain identity, then reads the live FRAME and CPU identity
+  for the diagnostic request. The native export guards contain exceptions from
+  the capture request and submission. The Present detour still closes
+  SUBMISSION before the original and retires its CPU phase from the C++ scope
+  guard. The post-Swap finish order remains in `render_hooks/scope.rs`.
+- `render_hooks.cpp` and `render_hooks_platform.h` link hook create/remove,
+  busy and binding operations directly. The guards and reverse rollback remain
+  in Rust. Native trampoline slots and originals remain in C++, where the
+  World, prepass, imagespace and Present guards still run during real unwind.
+  The native LastError saves around original calls retain their positions.
+- `render_records.h` defines the screen result, renderer input slot order,
+  depth math receipt, resolution receipt and output-owner record used by both
+  languages. `render_records.rs` is generated with bindgen 0.72.1. The depth
+  snapshot and resolution entry points are called directly where no additional
+  native handling is needed. `resolution.rs` saves and restores LastError around
+  the complete receipt operation, including refusal paths. Native resolution
+  planning and publication planning share the guarded reconfigure leaf.
+  Pending ratio, selector and shadow ownership still follow the existing
+  same-frame and advanced-frame retirement rules.
+
+The native World still retains the temporal and raster input references,
+WINDOW ownership, native trampolines and guards around throwing calls. Pinned
+Rust 1.94.1 formatting, targeted bindgen regeneration, locked offline Cargo
+metadata and Git whitespace checks cover this pass. Build, link, fixture,
+device and game validation remain open.

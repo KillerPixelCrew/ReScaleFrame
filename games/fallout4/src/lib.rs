@@ -28,6 +28,7 @@ mod dpi;
 mod platform_abi;
 mod render_hooks;
 mod render_inputs;
+mod render_records;
 mod resolution;
 mod resolution_stages;
 mod screen;
@@ -128,7 +129,6 @@ unsafe extern "C" {
         binding: *const rsf_d3d11_presentation_binding,
         result: *mut i32,
     ) -> bool;
-    fn rsf_fallout4_publish_render_boundary();
 }
 
 static OPS: OnceLock<Ops> = OnceLock::new();
@@ -350,10 +350,6 @@ unsafe extern "C" fn rsf_get_game_plugin_api(
     requested_abi: u32,
     out: *mut rsf_game_plugin_api,
 ) -> rsf_result {
-    // SAFETY: these linked leaves publish immutable process-lived callbacks.
-    unsafe {
-        rsf_fallout4_publish_render_boundary();
-    }
     if out.is_null()
         || unsafe { out.cast::<u32>().read() } < size_of::<rsf_game_plugin_api>() as u32
     {

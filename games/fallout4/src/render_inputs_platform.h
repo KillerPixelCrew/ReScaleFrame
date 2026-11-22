@@ -4,6 +4,7 @@
 // owner (render_inputs.rs). Not a DLL ABI: both sides link into ReScaleFrame.Game.Fallout4.dll.
 // render_inputs.rs mirrors every structure here and asserts the same layout.
 #include "depth_domains.h"
+#include "render_records.h"
 #include <rescaleframe/game_renderer.h>
 #include <cstddef>
 
@@ -37,13 +38,6 @@ static_assert(offsetof(NativeCamera, jitter_ndc) == 280);
 static_assert(sizeof(CameraRaster) == 32 && offsetof(CameraRaster, crop) == 16);
 
 using NativeInputReport = void (*)(const char*);
-
-// Texture slots of the reader lease. Slot 0 also holds the framebuffer texture.
-enum NativeInputSlot : uint32_t {
-    native_input_colour, native_input_motion, native_input_depth,
-    native_input_refraction_normals, native_input_pipboy, native_input_vats,
-    native_input_slot_count, native_input_no_slot = 0xffffffffu
-};
 
 struct NativeInputSwapFacts {
     uint64_t window{};
@@ -86,10 +80,6 @@ struct NativeFramebufferReceipt {
     uint32_t width{}, height{}, mip_levels{}, array_size{}, sample_count{}, format{};
     uint32_t rtv_dimension{}, rtv_mip{};
 };
-struct NativeFramebufferFacts {
-    uint64_t native_frame{}, window_key{};
-};
-
 // The readers transfer an owned reference for each nonnull slot.
 // lease is the caller's NativeInputLease (render_inputs.cpp); it holds typed COM references until
 // the wrapper moves them into its output or discards them.
@@ -101,10 +91,7 @@ bool rsf_fallout4_inputs_read(NativeInputLease* lease,
     NativeInputReport, const NativeDepthSnapshot* producer, rsf_game_render_pass*) noexcept;
 bool rsf_fallout4_inputs_read_raster(NativeInputLease* lease,
     const rsf_game_render_pass* frame, const NativeDepthSnapshot* producer, rsf_game_render_pass*) noexcept;
-bool rsf_fallout4_inputs_read_framebuffer(NativeInputLease* lease, NativeInputReport,
-    NativeFramebufferFacts*) noexcept;
 }
-
 static_assert(sizeof(detail::NativeState) == 128 && offsetof(detail::NativeState, frame) == 56 &&
     offsetof(detail::NativeState, ratio) == 92 && offsetof(detail::NativeState, viewport) == 100 &&
     offsetof(detail::NativeState, delta_seconds) == 116 && offsetof(detail::NativeState, default_viewport) == 120 &&
@@ -122,5 +109,4 @@ static_assert(sizeof(NativeInputHistoryReceipt) == 96 && offsetof(NativeInputHis
 static_assert(sizeof(NativeFramebufferReceipt) == 344 && offsetof(NativeFramebufferReceipt, swap) == 256 &&
     offsetof(NativeFramebufferReceipt, target_texture) == 280 && offsetof(NativeFramebufferReceipt, platform) == 304 &&
     offsetof(NativeFramebufferReceipt, rtv_mip) == 340);
-static_assert(sizeof(NativeFramebufferFacts) == 16);
 }

@@ -272,7 +272,6 @@ extern "C" fn rsf_fallout4_render_after_viewport(
     caller: usize,
     manager: usize,
     enabled: bool,
-    framebuffer: *mut c_void,
 ) {
     after_viewport(
         leaves,
@@ -281,7 +280,7 @@ extern "C" fn rsf_fallout4_render_after_viewport(
         manager,
         enabled,
         resolution::native_viewport,
-        || publication::emit_hudless(publication, recovery, framebuffer),
+        || publication::emit_hudless(publication, recovery),
     )
 }
 

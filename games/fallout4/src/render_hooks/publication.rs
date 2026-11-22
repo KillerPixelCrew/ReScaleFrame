@@ -8,13 +8,14 @@
 //! producer comparisons, the pass identity and role, the SR-off decision, the screen verdict, the
 //! FG_INPUTS, FINAL_SCENE and WINDOW callback order, the scalar identity kept after FG input
 //! publication, the scoped output resolution calls and their receipts. render_hooks.cpp keeps the
-//! typed native reads, COM identity and leases, the engine depth and screen readers, the Runtime
-//! calls with their exception guards and the World fields (NativePublicationLeaves in
+//! SR input references, engine depth and screen reads, Runtime exception guards and
+//! the World fields (NativePublicationLeaves in
 //! render_hooks_platform.h). See docs/research/rust-fallout4-render-hooks.md.
 
 use super::World;
 use super::recovery::{self, Leaves as RecoveryLeaves};
 use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;
+use crate::render_inputs;
 use crate::resolution::rsf_fallout4_resolution_inputs;
 use crate::resolution_stages::{
     RSF_FALLOUT4_STAGE_EVALUATED as EVALUATED, RSF_FALLOUT4_STAGE_OUTPUT_READY as OUTPUT_READY,
@@ -31,14 +32,12 @@ use rsf_game_sys::{
     RSF_GAME_RENDER_SR, RSF_GAME_RENDER_WINDOW, rsf_game_render_config, rsf_game_render_pass,
     rsf_result,
 };
+use rsf_game_sys::{RSF_SCREEN_GAMEPLAY as SCREEN_GAMEPLAY, RSF_SCREEN_UNKNOWN as SCREEN_UNKNOWN};
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::offset_of;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicU32, Ordering};
-
-// game_frame.h screen classes.
-const SCREEN_UNKNOWN: u32 = 0;
-const SCREEN_GAMEPLAY: u32 = 8;
+use windows::core::Interface;
 
 // The Effects call inside imagespace whose return is the SR pass key.
 const SR_PASS: usize = super::EFFECTS_CALL.0;
@@ -60,9 +59,8 @@ struct AuxiliaryInputs {
     raster: [f32; 4],
 }
 
-/// NativePublicationFramebuffer: borrowed facts of the HUDless framebuffer lease, which may be
-/// partly filled when the read failed.
-#[repr(C)]
+/// Facts from the same framebuffer acquisition that owns the texture.
+#[derive(Default)]
 struct Framebuffer {
     context: *mut c_void,
     chain: *mut c_void,
@@ -76,7 +74,6 @@ const _: () = {
     assert!(size_of::<CpuIdentity>() == 40);
     assert!(size_of::<Inputs>() == 3 * size_of::<usize>());
     assert!(size_of::<AuxiliaryInputs>() == 56 && offset_of!(AuxiliaryInputs, raster) == 40);
-    assert!(size_of::<Framebuffer>() == 56 && offset_of!(Framebuffer, native_frame) == 24);
 };
 
 /// NativePublicationLeaves, constant for the process. Every leaf acts on the calling thread's
@@ -114,13 +111,11 @@ pub(super) struct Leaves {
     reconstruct:
         unsafe extern "C" fn(*const rsf_game_render_pass, *const Surface, u32) -> rsf_result,
     end_output: unsafe extern "C" fn() -> bool,
-    // Acquire in the caller's native stack lease and return the facts of that exact read.
-    read_framebuffer: unsafe extern "C" fn(*mut c_void, &mut Framebuffer) -> bool,
     // Retain the final colour from that lease and open WINDOW.
-    publish_window: unsafe extern "C" fn(*const c_void, *const rsf_game_render_pass),
+    publish_window: unsafe extern "C" fn(*mut c_void, *const rsf_game_render_pass),
 }
 
-const _: () = assert!(size_of::<Leaves>() == 22 * size_of::<usize>());
+const _: () = assert!(size_of::<Leaves>() == 21 * size_of::<usize>());
 
 impl Leaves {
     fn world(&self) -> World {
@@ -461,21 +456,35 @@ fn pointer(value: usize) -> String {
     format!("{value:016X}")
 }
 
-/// The HUDless seam after the native HUDless viewport selection (producer.rs).
-pub(super) fn emit_hudless(leaves: &Leaves, recovery: &RecoveryLeaves, lease: *mut c_void) {
+/// The HUDless seam after the native HUDless viewport selection.
+pub(super) fn emit_hudless(leaves: &Leaves, recovery: &RecoveryLeaves) {
+    emit_hudless_with(leaves, recovery, || {
+        let lease = render_inputs::acquire_framebuffer(Some(recovery.report));
+        let frame = lease
+            .as_ref()
+            .map_or_else(Framebuffer::default, |lease| Framebuffer {
+                context: lease.context.as_raw(),
+                chain: lease.chain.as_raw(),
+                texture: lease.texture.as_raw(),
+                native_frame: lease.native_frame,
+                window_key: lease.window_key,
+                extent: crate::d3d11::framebuffer_extent(&lease.texture),
+            });
+        (lease.is_some(), frame, lease)
+    });
+}
+
+fn emit_hudless_with<Lease>(
+    leaves: &Leaves,
+    recovery: &RecoveryLeaves,
+    acquire: impl FnOnce() -> (bool, Framebuffer, Lease),
+) {
     let world = leaves.world();
     if !world.in_imagespace || !world.inputs || world.window_open || !recovery.same_source() {
         return;
     }
-    let mut frame = Framebuffer {
-        context: null_mut(),
-        chain: null_mut(),
-        texture: null_mut(),
-        native_frame: 0,
-        window_key: 0,
-        extent: [0; 3],
-    };
-    let acquired = unsafe { (leaves.read_framebuffer)(lease, &mut frame) };
+    // Retain the acquisition through both FINAL_SCENE callbacks and the WINDOW handoff.
+    let (acquired, frame, _lease) = acquire();
     // The first refusal of each stage, naming the framebuffer and the retained identities.
     let refuse = |stage: u32, name: &str| {
         let bit = 1u32 << stage;
@@ -544,7 +553,7 @@ pub(super) fn emit_hudless(leaves: &Leaves, recovery: &RecoveryLeaves, lease: *m
     window.role = RSF_GAME_RENDER_WINDOW;
     window.swapchain = world.chain;
     window.scene_surface = null_mut();
-    unsafe { (leaves.publish_window)(lease, &window) };
+    unsafe { (leaves.publish_window)(frame.texture, &window) };
     let world = leaves.world();
     // SAFETY: the World names its pass, now the open WINDOW.
     leaves.notify(unsafe { &*world.pass }, world.context, 1);

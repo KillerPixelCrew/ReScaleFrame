@@ -57,7 +57,10 @@ pub(crate) fn viewport(context: &ID3D11DeviceContext) -> (u32, u32, [f32; 6]) {
 // The World and candidate leases remain owned by the C++ shell.
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_render_same_object(a: *mut c_void, b: *mut c_void) -> bool {
+pub(crate) unsafe extern "C" fn rsf_fallout4_render_same_object(
+    a: *mut c_void,
+    b: *mut c_void,
+) -> bool {
     if a.is_null() || b.is_null() {
         return false;
     }
@@ -112,15 +115,9 @@ fn texture_desc(texture: &ID3D11Texture2D) -> D3D11_TEXTURE2D_DESC {
     description
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_render_framebuffer_extent(
-    texture: *mut c_void,
-    extent: &mut [u32; 3],
-) {
-    *extent = unsafe { ID3D11Texture2D::from_raw_borrowed(&texture) }.map_or([0; 3], |texture| {
-        let desc = texture_desc(texture);
-        [desc.Width, desc.Height, desc.SampleDesc.Count]
-    });
+pub(crate) fn framebuffer_extent(texture: &ID3D11Texture2D) -> [u32; 3] {
+    let desc = texture_desc(texture);
+    [desc.Width, desc.Height, desc.SampleDesc.Count]
 }
 
 #[unsafe(no_mangle)]
