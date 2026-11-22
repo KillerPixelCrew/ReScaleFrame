@@ -15,9 +15,9 @@ if subprocess.check_output([bindgen, "--version"], text=True).strip() != "bindge
 include = sdk / "Kits" / "FidelityFX"
 result = subprocess.check_output([
     bindgen, str(include / "upscalers/include/ffx_upscale.h"),
-    "--allowlist-type", "PfnFfx(CreateContext|Query)|ffxQuery(DescGetVersions|GetProviderVersion)|"
+    "--allowlist-type", "PfnFfx(CreateContext|Dispatch|Query)|ffxQuery(DescGetVersions|GetProviderVersion)|"
     "ffxOverrideVersion|ffx(CreateContextDescUpscale(Version)?|DispatchDescUpscale|"
-    "QueryDescUpscaleGetRenderResolutionFromQualityMode)|FfxApiCreateContextUpscaleFlags",
+    "QueryDescUpscaleGetRenderResolutionFromQualityMode)|FfxApiCreateContextUpscaleFlags|FfxApiResourceState",
     "--allowlist-var", "FFX_API_.*DESC_TYPE_(UPSCALE(_VERSION|_GETRENDERRESOLUTIONFROMQUALITYMODE)?|"
     "GET_VERSIONS|GET_PROVIDER_VERSION|OVERRIDE_VERSION)",
     "--no-prepend-enum-name", "--with-derive-default", "--no-derive-debug", "--no-doc-comments",

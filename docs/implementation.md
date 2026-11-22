@@ -7946,3 +7946,13 @@ The [C02 source record](research/rust-render-host-cutover.md#c02-follow-up-on-th
 lists the native service edges and saved capture refusal coverage. Binding,
 formatting, locked offline metadata and source checks completed. Build and
 fixture execution remain pending.
+### FidelityFX Vulkan bridge follow-up
+
+Rust owns FSR4 Vulkan SDK dispatch and queue leaves, shared texture allocation
+and the synthetic SR and DX12 FG bridge state fixture bodies. The linked SR
+fixture delegates its public ABI checks to Rust. The native SDK-owned
+descriptors, remaining platform leaves and retained device scenarios are
+listed in the [V05 source record](research/rust-vulkan-ffx-residual-port.md).
+Pinned binding generation, formatting and locked offline metadata completed.
+Compilation, linking, fixture execution, lint and device verification remain
+pending.

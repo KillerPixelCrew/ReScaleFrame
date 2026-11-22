@@ -29,7 +29,16 @@ extern "C" int32_t rsf_core_fsr4sr_sdk_create(PfnFfxCreateContext, ffxContext*, 
     const rsf_fsr4sr_context*);
 extern "C" int32_t rsf_core_fsr4sr_sdk_plan(PfnFfxQuery, ffxContext*, uint32_t, uint32_t, uint32_t,
     uint32_t*, uint32_t*);
-extern "C" void rsf_core_fsr4sr_sdk_dispatch(const rsf_fsr4sr_dispatch*, void*, ffxDispatchDescUpscale*);
+using DescribeResource = void (*)(void*, uint32_t, FfxApiResource*);
+extern "C" int32_t rsf_core_fsr4sr_record(void*, void*, const rsf_fsr4sr_dispatch*, ffxContext*,
+    PfnFfxDispatch, DescribeResource);
+extern "C" int32_t rsf_core_fsr4sr_shared_image(void*, uint32_t, uint32_t, uint32_t, uint32_t,
+    void**, void**);
+extern "C" void rsf_core_fsr4sr_execute(void*, void*);
+extern "C" int32_t rsf_core_fsr4sr_queue_fence(void*, void*, uint64_t, uint32_t);
+
+static_assert(VK_FORMAT_R16G16B16A16_SFLOAT == 97 && VK_FORMAT_R16G16_SFLOAT == 83 &&
+    VK_FORMAT_R32_SFLOAT == 100 && VK_FORMAT_D32_SFLOAT == 126);
 
 static_assert(FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE == 0x10000 &&
     FFX_API_DISPATCH_DESC_TYPE_UPSCALE == 0x10001 &&
@@ -242,39 +251,7 @@ int32_t Plan(rsf_fsr4sr_native* native, uint32_t quality, uint32_t displayWidth,
 /// @details Rust has validated the arguments and cleared both outputs. The caller owns the handle and the resource.
 int32_t CreateImage(rsf_fsr4sr_native* native, uint32_t width, uint32_t height, uint32_t vkFormat,
     uint32_t writable, void** handle, void** resource) {
-    DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
-    D3D12_RESOURCE_FLAGS flags = D3D12_RESOURCE_FLAG_NONE;
-    switch (static_cast<VkFormat>(vkFormat)) {
-        case VK_FORMAT_R16G16B16A16_SFLOAT: format = DXGI_FORMAT_R16G16B16A16_FLOAT; break;
-        case VK_FORMAT_R16G16_SFLOAT: format = DXGI_FORMAT_R16G16_FLOAT; break;
-        case VK_FORMAT_R32_SFLOAT: format = DXGI_FORMAT_R32_FLOAT; break;
-        case VK_FORMAT_D32_SFLOAT:
-            format = DXGI_FORMAT_D32_FLOAT;
-            flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-            break;
-        default: return -2;
-    }
-    if (writable) {
-        if (flags != D3D12_RESOURCE_FLAG_NONE) return -3;
-        flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-    }
-    D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-    D3D12_RESOURCE_DESC desc{};
-    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    desc.Width = width; desc.Height = height;
-    desc.DepthOrArraySize = 1; desc.MipLevels = 1;
-    desc.Format = format; desc.SampleDesc.Count = 1;
-    desc.Flags = flags;
-    ID3D12Resource* image{};
-    HRESULT hr = native->device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_SHARED,
-        &desc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&image));
-    if (FAILED(hr)) return static_cast<int32_t>(hr);
-    HANDLE shared{};
-    hr = native->device->CreateSharedHandle(image, nullptr, GENERIC_ALL, nullptr, &shared);
-    if (FAILED(hr)) { Release(image); return static_cast<int32_t>(hr); }
-    *handle = shared;
-    *resource = image;
-    return 0;
+    return rsf_core_fsr4sr_shared_image(native->device, width, height, vkFormat, writable, handle, resource);
 }
 
 /// @brief Creates or reuses the capsule-owned shared fence and exports a new NT handle.
@@ -307,69 +284,26 @@ int32_t WaitEvent(rsf_fsr4sr_native* native, uint64_t value, uint32_t millisecon
     return WaitForSingleObject(native->completionEvent, milliseconds) == WAIT_OBJECT_0 ? 0 : -2;
 }
 
-/// @brief Records an all-subresource DX12 state transition on the borrowed command list.
-void Transition(ID3D12GraphicsCommandList* commands, ID3D12Resource* resource,
-    D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
-    D3D12_RESOURCE_BARRIER barrier{};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition.pResource = resource;
-    barrier.Transition.StateBefore = before;
-    barrier.Transition.StateAfter = after;
-    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    commands->ResourceBarrier(1, &barrier);
+void DescribeResourceForSdk(void* resource, uint32_t state, FfxApiResource* out) {
+    *out = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(resource), state);
 }
 
-/// @brief Records one reconstruction on the allocator Rust has proven idle and closes the list.
-/// @details Shared images enter and leave COMMON. An SDK failure closes the list and returns its code.
 int32_t Record(rsf_fsr4sr_native* native, const rsf_fsr4sr_dispatch* frame) {
     if (frame->slot >= kAllocators) return -1;
-    ID3D12CommandAllocator* allocator = native->allocators[frame->slot];
-    HRESULT hr = allocator->Reset();
-    if (FAILED(hr)) return static_cast<int32_t>(hr);
-    hr = native->commands->Reset(allocator, nullptr);
-    if (FAILED(hr)) return static_cast<int32_t>(hr);
-    auto* color = static_cast<ID3D12Resource*>(frame->color);
-    auto* depth = static_cast<ID3D12Resource*>(frame->depth);
-    auto* motion = static_cast<ID3D12Resource*>(frame->motion);
-    auto* output = static_cast<ID3D12Resource*>(frame->output);
-    constexpr auto read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-    Transition(native->commands, color, D3D12_RESOURCE_STATE_COMMON, read);
-    Transition(native->commands, depth, D3D12_RESOURCE_STATE_COMMON, read);
-    Transition(native->commands, motion, D3D12_RESOURCE_STATE_COMMON, read);
-    Transition(native->commands, output, D3D12_RESOURCE_STATE_COMMON,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    ffxDispatchDescUpscale upscale{};
-    rsf_core_fsr4sr_sdk_dispatch(frame, native->commands, &upscale);
-    upscale.color = ffxApiGetResourceDX12(color, FFX_API_RESOURCE_STATE_COMPUTE_READ);
-    upscale.depth = ffxApiGetResourceDX12(depth, FFX_API_RESOURCE_STATE_COMPUTE_READ);
-    upscale.motionVectors = ffxApiGetResourceDX12(motion, FFX_API_RESOURCE_STATE_COMPUTE_READ);
-    upscale.output = ffxApiGetResourceDX12(output, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
-    const auto code = static_cast<int32_t>(native->dispatch(&native->effect, &upscale.header));
-    if (code != 0) {
-        native->commands->Close();
-        return code;
-    }
-    Transition(native->commands, color, read, D3D12_RESOURCE_STATE_COMMON);
-    Transition(native->commands, depth, read, D3D12_RESOURCE_STATE_COMMON);
-    Transition(native->commands, motion, read, D3D12_RESOURCE_STATE_COMMON);
-    Transition(native->commands, output, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-        D3D12_RESOURCE_STATE_COMMON);
-    return Result(native->commands->Close());
+    return rsf_core_fsr4sr_record(native->commands, native->allocators[frame->slot], frame,
+        &native->effect, native->dispatch, DescribeResourceForSdk);
 }
 
 int32_t WaitShared(rsf_fsr4sr_native* native, uint64_t value) {
-    return Result(native->queue->Wait(native->sharedFence, value));
+    return rsf_core_fsr4sr_queue_fence(native->queue, native->sharedFence, value, 0);
 }
 
 void Execute(rsf_fsr4sr_native* native) {
-    ID3D12CommandList* lists[] = {native->commands};
-    native->queue->ExecuteCommandLists(1, lists);
+    rsf_core_fsr4sr_execute(native->queue, native->commands);
 }
 
 int32_t Signal(rsf_fsr4sr_native* native, uint64_t value, uint32_t shared) {
-    ID3D12Fence* fence = shared ? native->sharedFence : native->completionFence;
-    if (!fence) return static_cast<int32_t>(E_POINTER);
-    return Result(native->queue->Signal(fence, value));
+    return rsf_core_fsr4sr_queue_fence(native->queue, shared ? native->sharedFence : native->completionFence, value, 1);
 }
 
 /// @brief Destroys the SDK consumer; -1 when the context exists without its destroy export.

@@ -16,6 +16,19 @@ const FG_CREATE: u32 = 0x20001;
 const FG_CONFIGURE: u32 = 0x20002;
 const FG_PREPARE_V2: u32 = 0x2000c;
 const FG_VERSION: u32 = 0x2000e;
+const SWAPCHAIN_WAIT_PRESENTS: u32 = 0x30007;
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4fg_sdk_wait_presents(
+    dispatch: PfnFfxDispatch,
+    context: *mut ffxContext,
+) -> i32 {
+    let Some(dispatch) = dispatch else {
+        return INVALID;
+    };
+    let wait = header(SWAPCHAIN_WAIT_PRESENTS);
+    unsafe { dispatch(context, &wait) as i32 }
+}
 
 fn header(type_: u32) -> ffxApiHeader {
     ffxApiHeader {
@@ -118,6 +131,8 @@ unsafe extern "C" fn rsf_core_fsr4fg_sdk_generation(
     }
 }
 
+type DescribeResource = unsafe extern "C" fn(Handle, u32, *mut FfxApiResource);
+
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr4fg_sdk_configure(
     swapchain: Handle,
@@ -127,9 +142,15 @@ unsafe extern "C" fn rsf_core_fsr4fg_sdk_configure(
     enabled: u32,
     generate: FfxApiFrameGenerationDispatchFunc,
     context: Handle,
-    output: *mut ffxConfigureDescFrameGeneration,
-) {
-    let desc = ffxConfigureDescFrameGeneration {
+    effect: *mut ffxContext,
+    configure: PfnFfxConfigure,
+    hudless: Handle,
+    describe: DescribeResource,
+) -> i32 {
+    let Some(configure) = configure else {
+        return INVALID;
+    };
+    let mut desc = ffxConfigureDescFrameGeneration {
         header: header(FG_CONFIGURE),
         swapChain: swapchain,
         frameID: sequence,
@@ -144,7 +165,16 @@ unsafe extern "C" fn rsf_core_fsr4fg_sdk_configure(
         },
         ..Default::default()
     };
-    unsafe { output.write(desc) };
+    if enabled != 0 {
+        unsafe {
+            describe(
+                hudless,
+                FFX_API_RESOURCE_STATE_COMPUTE_READ as u32,
+                &mut desc.HUDLessColor,
+            )
+        };
+    }
+    unsafe { configure(effect, &raw const desc.header) as i32 }
 }
 
 /// Queries the provider selected by the SDK on the live effect.
@@ -211,17 +241,29 @@ fn prepare(
     }
 }
 
-/// Writes the complete descriptor into a typed native call slot. The native
-/// leaf fills the command list and the resource descriptions sourced from COM.
+/// Records the frame preparation on the command list loaned by the capsule.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr4fg_sdk_prepare(
     frame: &BridgeFrame,
     sequence: u64,
     reset: u32,
-    output: *mut ffxDispatchDescFrameGenerationPrepareV2,
-) {
+    commands: Handle,
+    effect: *mut ffxContext,
+    dispatch: PfnFfxDispatch,
+    describe: DescribeResource,
+) -> i32 {
+    let Some(dispatch) = dispatch else {
+        return INVALID;
+    };
     let record = unsafe { &*frame.record };
-    unsafe { output.write(prepare(frame, record, sequence, reset != 0)) };
+    let mut desc = prepare(frame, record, sequence, reset != 0);
+    desc.commandList = commands;
+    let read = FFX_API_RESOURCE_STATE_COMPUTE_READ as u32;
+    unsafe {
+        describe(frame.depth, read, &mut desc.depth);
+        describe(frame.motion, read, &mut desc.motionVectors);
+        dispatch(effect, &raw const desc.header) as i32
+    }
 }
 
 #[cfg(test)]
@@ -355,8 +397,7 @@ mod tests {
             motion_scale_y: 240.0,
             ..unsafe { std::mem::zeroed() }
         };
-        let mut desc = ffxDispatchDescFrameGenerationPrepareV2::default();
-        unsafe { rsf_core_fsr4fg_sdk_prepare(&frame, 70, 0, &mut desc) };
+        let desc = prepare(&frame, &record, 70, false);
         assert_eq!(desc.header.type_, u64::from(FG_PREPARE_V2));
         assert!(desc.frameID == 70 && !desc.reset);
         assert_eq!([desc.renderSize.width, desc.renderSize.height], [426, 240]);
@@ -381,7 +422,7 @@ mod tests {
         );
         record.camera.view_to_clip[11] = 1.0;
         frame.record = &raw const record;
-        unsafe { rsf_core_fsr4fg_sdk_prepare(&frame, 71, 1, &mut desc) };
+        let desc = prepare(&frame, &record, 71, true);
         assert_eq!(desc.frameID, 71);
         assert!(desc.reset && desc.cameraForward[2] == 1.0);
         frame.struct_size -= 1;

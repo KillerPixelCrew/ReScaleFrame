@@ -38,14 +38,11 @@ void transition(const rsf_fixture::Device& device, VkCommandBuffer commands, VkI
 }
 }
 
+extern "C" int32_t rsf_fixture_fsr4sr_public_abi(
+    int32_t (*create)(const rsf_fsr4_bridge_create*, rsf_fsr4_bridge**));
+
 int wmain(int argc, wchar_t** argv) {
-    rsf_fsr4_bridge* rejected = reinterpret_cast<rsf_fsr4_bridge*>(1);
-    rsf_fsr4_bridge_create invalid{sizeof(invalid) - 1, 1};
-    if (RsfFsr4BridgeCreate(&invalid, &rejected) != RSF_FSR4_BRIDGE_INVALID_ARGUMENT || rejected) return 1;
-    invalid.struct_size = sizeof(invalid); invalid.abi_version = 2;
-    if (RsfFsr4BridgeCreate(&invalid, &rejected) != RSF_FSR4_BRIDGE_ABI_MISMATCH || rejected) return 2;
-    invalid.abi_version = 1; invalid.runtime_directory = reinterpret_cast<const uint16_t*>(L"relative");
-    if (RsfFsr4BridgeCreate(&invalid, &rejected) != RSF_FSR4_BRIDGE_INVALID_ARGUMENT || rejected) return 3;
+    if (const int32_t contract = rsf_fixture_fsr4sr_public_abi(RsfFsr4BridgeCreate)) return contract;
     if (argc == 1) { std::puts("{\"contract_checks\":\"passed\",\"device_test\":false}"); return 0; }
     if (argc != 3 || std::wcscmp(argv[1], L"--device")) return 4;
     rsf_fixture::Device device;

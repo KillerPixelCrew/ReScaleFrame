@@ -26,6 +26,8 @@ use bridge_abi::{
 
 #[path = "vulkan_fsr4_sr_abi.rs"]
 mod platform_abi;
+#[path = "vulkan_fsr4_sr/state_fixture.rs"]
+mod state_fixture;
 use platform_abi::rsf_fsr4vk_platform as Platform;
 
 type Handle = *mut c_void;

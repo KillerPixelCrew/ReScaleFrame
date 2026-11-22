@@ -126,12 +126,37 @@ impl Default for ffxQueryGetProviderVersion {
         }
     }
 }
+pub type PfnFfxConfigure = ::core::option::Option<
+    unsafe extern "C" fn(
+        context: *mut ffxContext,
+        desc: *const ffxConfigureDescHeader,
+    ) -> ffxReturnCode_t,
+>;
 pub type PfnFfxQuery = ::core::option::Option<
     unsafe extern "C" fn(
         context: *mut ffxContext,
         desc: *mut ffxQueryDescHeader,
     ) -> ffxReturnCode_t,
 >;
+pub type PfnFfxDispatch = ::core::option::Option<
+    unsafe extern "C" fn(
+        context: *mut ffxContext,
+        desc: *const ffxDispatchDescHeader,
+    ) -> ffxReturnCode_t,
+>;
+pub const FFX_API_RESOURCE_STATE_COMMON: FfxApiResourceState = 1;
+pub const FFX_API_RESOURCE_STATE_UNORDERED_ACCESS: FfxApiResourceState = 2;
+pub const FFX_API_RESOURCE_STATE_COMPUTE_READ: FfxApiResourceState = 4;
+pub const FFX_API_RESOURCE_STATE_PIXEL_READ: FfxApiResourceState = 8;
+pub const FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ: FfxApiResourceState = 12;
+pub const FFX_API_RESOURCE_STATE_COPY_SRC: FfxApiResourceState = 16;
+pub const FFX_API_RESOURCE_STATE_COPY_DEST: FfxApiResourceState = 32;
+pub const FFX_API_RESOURCE_STATE_GENERIC_READ: FfxApiResourceState = 20;
+pub const FFX_API_RESOURCE_STATE_INDIRECT_ARGUMENT: FfxApiResourceState = 64;
+pub const FFX_API_RESOURCE_STATE_PRESENT: FfxApiResourceState = 128;
+pub const FFX_API_RESOURCE_STATE_RENDER_TARGET: FfxApiResourceState = 256;
+pub const FFX_API_RESOURCE_STATE_DEPTH_ATTACHMENT: FfxApiResourceState = 512;
+pub type FfxApiResourceState = ::core::ffi::c_int;
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct FfxApiDimensions2D {

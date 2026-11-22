@@ -17,8 +17,14 @@ use std::sync::atomic::{AtomicI32, AtomicU64, Ordering::SeqCst};
 #[path = "../../vulkan/fsr4/completion.rs"]
 mod completion;
 use completion::next_local_completion;
+#[path = "../../vulkan/fsr4-fg/sdk_commands.rs"]
+mod commands;
+#[path = "../../vulkan/dx12_bridge_commands.rs"]
+mod dx12;
 #[path = "../../vulkan/fsr4-fg/sdk.rs"]
 mod sdk;
+#[path = "fsr4_fg_bridge/state_fixture.rs"]
+mod state_fixture;
 #[path = "../../vulkan/timeline_pair.rs"]
 mod timeline_pair;
 

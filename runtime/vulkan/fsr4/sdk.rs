@@ -11,6 +11,13 @@ use core::ptr;
 mod abi;
 use abi::*;
 
+#[cfg(windows)]
+#[path = "sdk_commands.rs"]
+mod commands;
+#[cfg(windows)]
+#[path = "../dx12_bridge_commands.rs"]
+mod dx12;
+
 // Function-like FidelityFX macros are checked against both native headers.
 const UPSCALE_CREATE: u32 = 0x10000;
 const UPSCALE_DISPATCH: u32 = 0x10001;

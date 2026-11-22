@@ -15,10 +15,10 @@ if subprocess.check_output([bindgen, "--version"], text=True).strip() != "bindge
 include = sdk / "Kits" / "FidelityFX"
 result = subprocess.check_output([
     bindgen, str(include / "framegeneration/include/ffx_framegeneration.h"),
-    "--allowlist-type", "PfnFfxQuery|ffxQueryDescGetVersions|ffxQueryGetProviderVersion|"
+    "--allowlist-type", "PfnFfx(Query|Dispatch|Configure)|ffxQueryDescGetVersions|ffxQueryGetProviderVersion|"
     "ffxDispatchDescFrameGenerationPrepareV2|ffxOverrideVersion|"
     "ffxCreateContextDescFrameGeneration(Version)?|ffxConfigureDescFrameGeneration|"
-    "FfxApiCreateContextFramegenerationFlags",
+    "FfxApiCreateContextFramegenerationFlags|FfxApiResourceState",
     "--allowlist-var", "FFX_API_QUERY_DESC_TYPE_GET_(VERSIONS|PROVIDER_VERSION)|"
     "FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION(_VERSION)?|"
     "FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION|FFX_API_DESC_TYPE_OVERRIDE_VERSION|"

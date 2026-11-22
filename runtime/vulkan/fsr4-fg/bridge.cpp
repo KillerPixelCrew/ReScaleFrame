@@ -12,16 +12,35 @@
 #include "bridge_platform.h"
 #include "../../backends/common/d3d12_helpers.h"
 
+extern "C" void rsf_core_fsr4fg_dxgi_description(DXGI_SWAP_CHAIN_DESC1*, const rsf_fsr4fg_swapchain_desc*, uint32_t);
+static_assert(sizeof(DXGI_SWAP_CHAIN_DESC1) == 48 &&
+    offsetof(DXGI_SWAP_CHAIN_DESC1, SampleDesc) == 16 &&
+    offsetof(DXGI_SWAP_CHAIN_DESC1, SwapEffect) == 36);
+
+extern "C" int32_t rsf_core_fsr4fg_shared_image(void*, uint32_t, uint32_t, uint32_t, void**, void**);
+extern "C" void rsf_core_fsr4fg_describe_texture(void*, rsf_fsr4fg_texture*);
+extern "C" void rsf_core_fsr4fg_shader_read(void*, void*, uint32_t);
+extern "C" int32_t rsf_core_fsr4fg_copy_to_backbuffer(void*, void*, void*);
+extern "C" void rsf_core_fsr4fg_execute(void*, void*);
+extern "C" int32_t rsf_core_fsr4fg_queue_fence(void*, void*, uint64_t, uint32_t);
+extern "C" int32_t rsf_core_fsr4fg_present_dxgi(void*, uint32_t);
+extern "C" int32_t rsf_core_fsr4fg_present_count(void*, uint32_t*);
+extern "C" int32_t rsf_core_fsr4fg_sdk_wait_presents(PfnFfxDispatch, ffxContext*);
+
+static_assert(FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_WAIT_FOR_PRESENTS_DX12 == 0x30007 &&
+    sizeof(ffxDispatchDescFrameGenerationSwapChainWaitForPresentsDX12) == sizeof(ffxApiHeader));
+
 extern "C" int32_t rsf_core_fsr4fg_sdk_versions(PfnFfxQuery, void*, rsf_ffx_version*, uint64_t*);
 extern "C" int32_t rsf_core_fsr4fg_sdk_provider(PfnFfxQuery, ffxContext*, uint64_t*);
-extern "C" void rsf_core_fsr4fg_sdk_prepare(const rsf_fsr4fg_frame*, uint64_t, uint32_t,
-    ffxDispatchDescFrameGenerationPrepareV2*);
+using DescribeResource = void (*)(void*, uint32_t, FfxApiResource*);
+extern "C" int32_t rsf_core_fsr4fg_sdk_prepare(const rsf_fsr4fg_frame*, uint64_t, uint32_t,
+    void*, ffxContext*, PfnFfxDispatch, DescribeResource);
 
 extern "C" void rsf_core_fsr4fg_sdk_generation(const rsf_fsr4fg_create*, uint64_t, uint32_t, uint32_t,
     ffxApiHeader*, ffxOverrideVersion*, ffxCreateContextDescFrameGenerationVersion*,
     ffxCreateContextDescFrameGeneration*);
-extern "C" void rsf_core_fsr4fg_sdk_configure(void*, uint64_t, uint32_t, uint32_t, uint32_t,
-    FfxApiFrameGenerationDispatchFunc, void*, ffxConfigureDescFrameGeneration*);
+extern "C" int32_t rsf_core_fsr4fg_sdk_configure(void*, uint64_t, uint32_t, uint32_t, uint32_t,
+    FfxApiFrameGenerationDispatchFunc, void*, ffxContext*, PfnFfxConfigure, void*, DescribeResource);
 
 static_assert(FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION == 0x20001 &&
     FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION == 0x20002 &&
@@ -202,20 +221,7 @@ uint32_t objects(Native* self) {
 
 int32_t create_swapchain(Native* self, void* window, const rsf_fsr4fg_swapchain_desc* setup, uint32_t first_attempt) {
     auto& desc = self->dxgi_description;
-    if (first_attempt) {
-        desc.Stereo = setup->stereo != 0;
-        desc.SampleDesc.Quality = setup->sample_quality;
-        desc.Scaling = static_cast<DXGI_SCALING>(setup->scaling);
-        desc.AlphaMode = static_cast<DXGI_ALPHA_MODE>(setup->alpha_mode);
-        desc.Flags = setup->flags;
-    }
-    desc.Width = setup->width;
-    desc.Height = setup->height;
-    desc.Format = static_cast<DXGI_FORMAT>(setup->format);
-    desc.SampleDesc.Count = setup->sample_count;
-    desc.BufferUsage = setup->buffer_usage;
-    desc.BufferCount = setup->buffer_count;
-    desc.SwapEffect = static_cast<DXGI_SWAP_EFFECT>(setup->swap_effect);
+    rsf_core_fsr4fg_dxgi_description(&desc, setup, first_attempt);
     self->chain_version.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_VERSION_DX12;
     self->chain_version.version = FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION;
     auto& create = self->chain_description;
@@ -230,26 +236,7 @@ int32_t create_swapchain(Native* self, void* window, const rsf_fsr4fg_swapchain_
 }
 
 int32_t create_image(Native* self, uint32_t width, uint32_t height, uint32_t format, void** handle, void** resource) {
-    D3D12_HEAP_PROPERTIES heap{};
-    heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-    D3D12_RESOURCE_DESC desc{};
-    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    desc.Width = width;
-    desc.Height = height;
-    desc.DepthOrArraySize = desc.MipLevels = 1;
-    desc.Format = static_cast<DXGI_FORMAT>(format);
-    desc.SampleDesc.Count = 1;
-    ID3D12Resource* image{};
-    HRESULT hr = self->device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_SHARED, &desc,
-        D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&image));
-    if (FAILED(hr)) return hr;
-    hr = self->device->CreateSharedHandle(image, nullptr, GENERIC_ALL, nullptr, handle);
-    if (FAILED(hr)) {
-        image->Release();
-        return hr;
-    }
-    *resource = image;
-    return 0;
+    return rsf_core_fsr4fg_shared_image(self->device, width, height, format, handle, resource);
 }
 
 int32_t create_fence(Native* self, void** handle) {
@@ -258,11 +245,6 @@ int32_t create_fence(Native* self, void** handle) {
     return self->device->CreateSharedHandle(self->shared, nullptr, GENERIC_ALL, nullptr, handle);
 }
 
-void describe_texture(void* resource, rsf_fsr4fg_texture* out) {
-    const auto desc = static_cast<ID3D12Resource*>(resource)->GetDesc();
-    *out = {desc.Width, desc.Height, static_cast<uint32_t>(desc.Format), static_cast<uint32_t>(desc.Dimension),
-        desc.DepthOrArraySize, desc.SampleDesc.Count};
-}
 
 int32_t reset_commands(Native* self) {
     const HRESULT hr = self->allocator->Reset();
@@ -279,73 +261,49 @@ ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* desc, void* user) {
     return code;
 }
 
+void describe_resource(void* resource, uint32_t state, FfxApiResource* out) {
+    *out = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(resource), state);
+}
+
 int32_t configure(Native* self, uint64_t sequence, uint32_t width, uint32_t height, uint32_t enabled, void* hudless) {
-    ffxConfigureDescFrameGeneration config{};
-    rsf_core_fsr4fg_sdk_configure(self->chain, sequence, width, height, enabled, generate, self, &config);
-    if (enabled) {
-        config.HUDLessColor = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(hudless), FFX_API_RESOURCE_STATE_COMPUTE_READ);
-    }
-    return static_cast<int32_t>(self->configure(&self->generation, &config.header));
+    return rsf_core_fsr4fg_sdk_configure(self->chain, sequence, width, height, enabled, generate, self,
+        &self->generation, self->configure, hudless, describe_resource);
 }
 
 void shader_read(Native* self, void* resource, uint32_t enter) {
-    constexpr auto read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-    constexpr auto common = D3D12_RESOURCE_STATE_COMMON;
-    rsf::transition(self->commands, static_cast<ID3D12Resource*>(resource), enter ? common : read, enter ? read : common);
+    rsf_core_fsr4fg_shader_read(self->commands, resource, enter);
 }
 
 int32_t prepare(Native* self, const rsf_fsr4fg_frame* frame, uint64_t sequence, uint32_t reset) {
-    ffxDispatchDescFrameGenerationPrepareV2 desc{};
-    rsf_core_fsr4fg_sdk_prepare(frame, sequence, reset, &desc);
-    desc.commandList = self->commands;
-    desc.depth = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(frame->depth), FFX_API_RESOURCE_STATE_COMPUTE_READ);
-    desc.motionVectors = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(frame->motion), FFX_API_RESOURCE_STATE_COMPUTE_READ);
-    return static_cast<int32_t>(self->dispatch(&self->generation, &desc.header));
+    return rsf_core_fsr4fg_sdk_prepare(frame, sequence, reset, self->commands, &self->generation,
+        self->dispatch, describe_resource);
 }
 
 int32_t copy_to_backbuffer(Native* self, void* color) {
-    ID3D12Resource* backbuffer{};
-    const HRESULT hr = self->chain->GetBuffer(self->chain->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&backbuffer));
-    if (FAILED(hr)) return hr;
-    rsf::copy_transitioned(self->commands, backbuffer, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_PRESENT,
-        static_cast<ID3D12Resource*>(color), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON);
-    backbuffer->Release();
-    return 0;
+    return rsf_core_fsr4fg_copy_to_backbuffer(self->commands, self->chain, color);
 }
 
-int32_t wait_shared(Native* self, uint64_t value) { return result(self->queue->Wait(self->shared, value)); }
+int32_t wait_shared(Native* self, uint64_t value) { return rsf_core_fsr4fg_queue_fence(self->queue, self->shared, value, 0); }
 
 void execute(Native* self) {
-    ID3D12CommandList* lists[] = {self->commands};
-    self->queue->ExecuteCommandLists(1, lists);
+    rsf_core_fsr4fg_execute(self->queue, self->commands);
 }
 
-int32_t present(Native* self, uint32_t vsync) { return result(self->chain->Present(vsync, 0)); }
+int32_t present(Native* self, uint32_t vsync) { return rsf_core_fsr4fg_present_dxgi(self->chain, vsync); }
 
 int32_t wait_presents(Native* self) {
-    ffxDispatchDescFrameGenerationSwapChainWaitForPresentsDX12 wait{};
-    wait.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_WAIT_FOR_PRESENTS_DX12;
-    return static_cast<int32_t>(self->dispatch(&self->swapchain, &wait.header));
+    return rsf_core_fsr4fg_sdk_wait_presents(self->dispatch, &self->swapchain);
 }
 
 int32_t signal(Native* self, uint64_t value, uint32_t shared) {
-    return result(self->queue->Signal(shared ? self->shared : self->completion, value));
+    return rsf_core_fsr4fg_queue_fence(self->queue, shared ? self->shared : self->completion, value, 1);
 }
 
 int32_t wait_local(Native* self, uint64_t value) {
-    uint64_t completed = self->completion->GetCompletedValue();
-    if (completed == UINT64_MAX) return DXGI_ERROR_DEVICE_REMOVED;
-    if (completed >= value) return 0;
-    const HRESULT hr = self->completion->SetEventOnCompletion(value, self->event);
-    if (FAILED(hr)) return hr;
-    if (WaitForSingleObject(self->event, 10000) != WAIT_OBJECT_0) return HRESULT_FROM_WIN32(WAIT_TIMEOUT);
-    // A retry can consume an event from an earlier wait that timed out.
-    completed = self->completion->GetCompletedValue();
-    if (completed == UINT64_MAX) return DXGI_ERROR_DEVICE_REMOVED;
-    return completed >= value ? 0 : HRESULT_FROM_WIN32(WAIT_TIMEOUT);
+    return rsf::wait_fence(self->completion, value, self->event);
 }
 
-int32_t get_present_count(Native* self, uint32_t* count) { return result(self->chain->GetLastPresentCount(count)); }
+int32_t get_present_count(Native* self, uint32_t* count) { return rsf_core_fsr4fg_present_count(self->chain, count); }
 
 int32_t destroy_context(Native* self, ffxContext& context) {
     const auto code = self->destroy(&context, nullptr);
@@ -360,7 +318,7 @@ const rsf_fsr4fg_platform platform{
     allocate, release_native, create_factory, find_adapter, get_adapter_vendor, create_device,
     load, versions, create_generation, get_provider, create_queue, create_allocator,
     create_command_list, create_completion_fence, create_event, objects, create_swapchain,
-    create_image, create_fence, describe_texture, reset_commands,
+    create_image, create_fence, rsf_core_fsr4fg_describe_texture, reset_commands,
     close_commands, configure, shader_read, prepare, copy_to_backbuffer, wait_shared, execute, present,
     wait_presents, signal, wait_local, get_present_count, destroy_generation, release_chain, destroy_swapchain,
 };
