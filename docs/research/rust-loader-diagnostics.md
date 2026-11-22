@@ -270,6 +270,16 @@ through the original LoadLibraryW path, checks the four early exports and verifi
 resolver pointers after post-load. The shared C++ functional, budget, Vulkan, FidelityFX and
 DllMain modes still need porting.
 
+## Budget and DllMain fixture modes
+
+The continuation at `031aa9ac` moves the budget and DllMain scenarios and their JSON
+record assertions into Rust. The fixture still uses the native noinline import callers
+for the 5,000 jitter calls and two FSR2 dispatches. The ASI remains a real DLL loaded via
+LoadLibraryW with the FSR2 DLL already mapped by the executable's static import.
+The assertions retain the byte and counter limits, dropped-record accounting, site totals,
+accepted dispatch layout and caller module. The JSON parser dependency is scoped to the
+Windows MSVC fixture crate.
+
 ## Inventory at the end of the 82b39a63 continuation
 
 Eleven additional baseline paths have source cutovers. The two public header paths retain

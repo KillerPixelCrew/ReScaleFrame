@@ -32,6 +32,9 @@
 #include "vendor_census_ngx_params.h"
 
 extern "C" {
+int rsf_test_census_budget(const char*, decltype(&rsf_census_install), decltype(&rsf_census_flush),
+                           decltype(&rsf_census_get_counters), decltype(&rsf_census_shutdown), int (*)(int));
+int rsf_test_census_dllmain(const char*, void (*)(int*));
 int rsf_test_census_creation(const char*, decltype(&rsf_census_install), decltype(&rsf_census_shutdown));
 __declspec(dllimport) int ffxFsr2ContextDispatch(void* context, const void* desc);
 __declspec(dllimport) int ffxFsr2GetJitterOffset(float* x, float* y, int index, int phase_count);
@@ -1231,56 +1234,6 @@ int functional(const std::string& dir) {
     return g_failures ? 1 : 0;
 }
 
-int budget(const std::string& dir) {
-    rsf_census_options opt{};
-    opt.struct_size = sizeof(opt);
-    opt.abi_version = RSF_CENSUS_ABI_VERSION;
-    opt.output_dir_utf8 = dir.c_str();
-    opt.byte_budget = 40000;
-    opt.full_record_cap = 1000000;
-    opt.sample_interval = 1;
-    opt.summary_period_ms = 50;
-    opt.flags = RSF_CENSUS_FLAG_NO_STATIC_SCAN | RSF_CENSUS_FLAG_NO_DXGI | RSF_CENSUS_FLAG_NO_VULKAN;
-    CHECK(rsf_census_install(&opt) == RSF_CENSUS_OK);
-
-    for (int i = 0; i < 5000; ++i) {
-        CHECK(jitter_noise(i) == 0);
-    }
-    CHECK(rsf_census_flush() == RSF_CENSUS_OK);
-
-    rsf_census_counters c{sizeof(c), RSF_CENSUS_ABI_VERSION};
-    CHECK(rsf_census_get_counters(&c) == RSF_CENSUS_OK);
-    const std::string text = read_file(dir + "\\census.jsonl");
-    CHECK(text.size() <= 40000);
-    CHECK(c.bytes_written == text.size());
-    CHECK(c.bytes_written > 30000); // the budget was actually used
-    CHECK(c.calls_seen >= 5000);
-    CHECK(c.records_dropped_budget + c.records_dropped_queue > 0);
-    CHECK(c.records_dropped_size == 0);
-    CHECK(c.records_written + c.records_dropped_budget == c.records_queued);
-
-    int bad_lines = 0;
-    const std::vector<Json> all = read_records(dir + "\\census.jsonl", bad_lines);
-    CHECK(bad_lines == 0);
-
-    // The summary still counts every call although most records were dropped.
-    Json summary;
-    CHECK(parse_json(read_file(dir + "\\census-summary.json"), summary));
-    double counted = 0;
-    for (const Json& s : summary.get("sites")->a) {
-        if (s.get("function")->is("ffxFsr2GetJitterOffset")) counted += s.get("count")->n;
-    }
-    CHECK(counted == 5000);
-    CHECK(summary.at({"budget", "exhausted"}) && summary.at({"budget", "exhausted"})->b);
-    CHECK(summary.at({"budget", "bytes_written"})->n <= 40000);
-
-    CHECK(rsf_census_shutdown() == RSF_CENSUS_OK);
-    std::printf("vendor_census budget: %d failure(s), %llu bytes written, %llu records dropped\n", g_failures,
-                static_cast<unsigned long long>(c.bytes_written),
-                static_cast<unsigned long long>(c.records_dropped_budget + c.records_dropped_queue));
-    return g_failures ? 1 : 0;
-}
-
 // Vulkan entry points reached through vkGetInstanceProcAddr and vkGetDeviceProcAddr, and the
 // Streamline feature functions handed out by slGetFeatureFunction. Structures are built from the
 // Vulkan and Streamline offsets that tests/vendor_census_layouts.cpp checks against the headers.
@@ -1774,47 +1727,13 @@ int ffx_mode(const std::string& dir) {
     return g_failures ? 1 : 0;
 }
 
-int dllmain_mode(const std::string& dir) {
-    SetEnvironmentVariableA("RSF_CENSUS_OUT", dir.c_str());
-    // The fsr2 fixture is a static import of this executable, so it is already mapped when the
-    // plugin installs the census from DllMain: the already-loaded-module scan runs under the lock.
-    HMODULE asi = load_fixture(L"rsf_census_asi.dll");
-    CHECK(asi != nullptr);
-    if (!asi) return 1;
-    auto result = proc<int (*)()>(asi, "asi_install_result");
-    auto flush = proc<int (*)()>(asi, "asi_flush");
-    auto counters = proc<int (*)(rsf_census_counters*)>(asi, "asi_counters");
-    auto shutdown = proc<int (*)()>(asi, "asi_shutdown");
-    CHECK(result && flush && counters && shutdown);
-    if (!(result && flush && counters && shutdown)) return 1;
-    CHECK(result() == RSF_CENSUS_OK);
-
+// Keep the two calls through the native import and its original noinline caller.
+void dispatch_twice(int* results) {
     Frame frame;
-    Fsr2Dispatch d;
-    make_dispatch(d, frame);
-    CHECK(dispatch_site(&d) == 0x1234ABCD);
-    CHECK(dispatch_site(&d) == 0x1234ABCD);
-    CHECK(flush() == RSF_CENSUS_OK);
-
-    rsf_census_counters c{sizeof(c), RSF_CENSUS_ABI_VERSION};
-    CHECK(counters(&c) == RSF_CENSUS_OK);
-    CHECK(c.hooks_installed > 0 && c.modules_hooked > 0);
-    int bad_lines = 0;
-    const std::vector<Json> all = read_records(dir + "\\census.jsonl", bad_lines);
-    CHECK(bad_lines == 0);
-    auto recs = by_fn(all, "ffxFsr2ContextDispatch");
-    CHECK(recs.size() == 2);
-    if (!recs.empty()) {
-        CHECK(recs[0]->at({"args", "layout_check"})->is("ok"));
-        CHECK(recs[0]->get("module")->is(exe_basename().c_str()));
-    }
-    Json summary;
-    CHECK(parse_json(read_file(dir + "\\census-summary.json"), summary));
-    const Json* mods = summary.get("modules_hooked");
-    CHECK(mods && mods->has_string("ffx_fsr2_api_x64.dll"));
-    CHECK(shutdown() == RSF_CENSUS_OK);
-    std::printf("vendor_census dllmain: %d failure(s)\n", g_failures);
-    return g_failures ? 1 : 0;
+    Fsr2Dispatch description;
+    make_dispatch(description, frame);
+    results[0] = dispatch_site(&description);
+    results[1] = dispatch_site(&description);
 }
 
 } // namespace
@@ -1826,10 +1745,11 @@ int main(int argc, char** argv) {
     }
     const std::string mode = argv[1];
     if (mode == "functional") return functional(argv[2]);
-    if (mode == "budget") return budget(argv[2]);
+    if (mode == "budget") return rsf_test_census_budget(argv[2], rsf_census_install, rsf_census_flush,
+                                                           rsf_census_get_counters, rsf_census_shutdown, jitter_noise);
     if (mode == "vulkan") return vulkan_mode(argv[2]);
     if (mode == "ffx") return ffx_mode(argv[2]);
-    if (mode == "dllmain") return dllmain_mode(argv[2]);
+    if (mode == "dllmain") return rsf_test_census_dllmain(argv[2], dispatch_twice);
     if (mode == "creation") return rsf_test_census_creation(argv[2], rsf_census_install, rsf_census_shutdown);
     return 2;
 }

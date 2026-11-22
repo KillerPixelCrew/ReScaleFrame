@@ -2,6 +2,8 @@
 #[cfg(target_env = "msvc")]
 mod census_creation;
 #[cfg(target_env = "msvc")]
+mod census_modes;
+#[cfg(target_env = "msvc")]
 mod census_present;
 mod fixture;
 mod forwarding;

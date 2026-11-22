@@ -29,6 +29,7 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [target.'cfg(all(windows, target_env = "msvc"))'.dependencies]
+serde_json = "=1.0.154"
 windows = { version = "0.62.2", default-features = false, features = [
   "Win32_Graphics_Direct3D",
   "Win32_Graphics_Direct3D12",
