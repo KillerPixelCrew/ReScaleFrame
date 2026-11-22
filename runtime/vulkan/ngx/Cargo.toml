@@ -7,9 +7,17 @@ publish.workspace = true
 license.workspace = true
 
 [lib]
-crate-type = ["staticlib"]
-# The standalone C shim supplies the native loader symbols at link time.
-test = false
+crate-type = ["cdylib"]
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Storage_FileSystem",
+    "Win32_System_LibraryLoader",
+    "Win32_System_SystemInformation",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [lints]
 workspace = true

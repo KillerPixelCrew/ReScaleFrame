@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-Builds the NGX caller shim and its Rust loader into VulkanStoryNgx.dll.
+Builds the Rust NGX caller module into VulkanStoryNgx.dll.
 .DESCRIPTION
-Uses Cargo for x86_64-pc-windows-gnu and links the archive with gcc.exe or cc.exe.
+Uses Cargo for x86_64-pc-windows-gnu.
 Reuses a target newer than the build inputs. A failed build throws and preserves
-the previous DLL. The caller-frame-preserving compiler flag remains required.
+the previous DLL.
 .PARAMETER OutputDirectory
 Destination directory for VulkanStoryNgx.dll; created if needed.
 #>
@@ -14,13 +14,11 @@ $ErrorActionPreference = 'Stop'
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 $target = Join-Path $output 'VulkanStoryNgx.dll'
 $workspace = Join-Path $PSScriptRoot '../../..'
-$source = Join-Path $PSScriptRoot 'vulkanstory_ngx.c'
 $inputs = @(
-    $source
     (Join-Path $PSScriptRoot 'vulkanstory_ngx.h')
-    (Join-Path $PSScriptRoot 'entries.h')
-    (Join-Path $PSScriptRoot 'build.rs')
     (Join-Path $PSScriptRoot 'src/lib.rs')
+    (Join-Path $PSScriptRoot 'src/loader.rs')
+    (Join-Path $PSScriptRoot 'src/parameters.rs')
     (Join-Path $PSScriptRoot 'Cargo.toml')
     (Join-Path $workspace 'Cargo.toml')
     (Join-Path $workspace 'Cargo.lock')
@@ -36,11 +34,6 @@ if (Test-Path -LiteralPath $target -PathType Leaf) {
     if (-not $stale) { return }
 }
 
-$compiler = Get-Command gcc.exe -ErrorAction SilentlyContinue
-if (-not $compiler) { $compiler = Get-Command cc.exe -ErrorAction SilentlyContinue }
-if (-not $compiler) {
-    throw 'No C compiler found; VulkanStoryNgx.dll was not built.'
-}
 $cargo = (Get-Command cargo.exe -ErrorAction Stop).Source
 
 $scratch = Join-Path $output ('.vulkanstory-ngx-' + [Guid]::NewGuid().ToString('N'))
@@ -57,11 +50,7 @@ try {
         Pop-Location
     }
 
-    $rustArchive = Join-Path $rustOutput "$rustTarget/release/librsf_vulkanstory_ngx.a"
-    $temporary = Join-Path $scratch 'VulkanStoryNgx.dll'
-    $libraries = @('-ladvapi32', '-lntdll', '-luserenv', '-lws2_32', '-ldbghelp')
-    & $compiler.Source -std=c99 -O2 -fno-optimize-sibling-calls -shared $source $rustArchive -o $temporary @libraries
-    if ($LASTEXITCODE -ne 0) { throw 'The VulkanStory NGX bridge failed to link.' }
+    $temporary = Join-Path $rustOutput "$rustTarget/release/rsf_vulkanstory_ngx.dll"
     Move-Item -LiteralPath $temporary -Destination $target -Force
 }
 finally {

@@ -12,8 +12,8 @@
  *  - Nothing here throws, aborts or dereferences a null handle. Every entry
  *    point returns an NVSDK_NGX_Result; the shim adds its own codes for
  *    "runtime not present" and "entry point missing".
- *  - The NGX runtime is dlopen()ed at first use and every entry point is
- *    dlsym()ed, so this file builds and loads on machines with no NVIDIA
+ *  - The Rust module dynamically loads NGX at first use and resolves its entry
+ *    points, so the shim loads on machines with no NVIDIA
  *    driver and carries no link-time dependency on one.
  *  - Structs are never redeclared here. Everything NGX reads through a pointer
  *    (NVSDK_NGX_FeatureCommonInfo, NVSDK_NGX_FeatureDiscoveryInfo,

@@ -589,6 +589,10 @@ dependencies = [
 [[package]]
 name = "rsf-vulkanstory-ngx"
 version = "0.1.2"
+dependencies = [
+ "libc",
+ "windows-sys",
+]
 
 [[package]]
 name = "rsf-windows"

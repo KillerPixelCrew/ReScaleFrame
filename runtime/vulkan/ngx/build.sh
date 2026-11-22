@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Builds VulkanStory's NGX shim and its Rust loader.
+# Builds the Rust NGX caller module.
 #
 #   build.sh <output directory>
 #
-# CC selects one compiler executable, default cc. The output name is
+# The output name is
 # VulkanStoryNgx.dll on MinGW/MSYS/Cygwin and libVulkanStoryNgx.so otherwise.
 # A target newer than the build inputs is reused. Missing arguments exit 2.
 # Missing tools or a failed build exit 0 and preserve any previous library.
@@ -18,31 +18,28 @@ fi
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 0
 workspace="$(cd "$here/../../.." && pwd)" || exit 0
-src="$here/vulkanstory_ngx.c"
-
 rust_args=()
 rust_release=release
-libs=()
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
         name="VulkanStoryNgx.dll"
         rust_target=x86_64-pc-windows-gnu
         rust_args=(--target "$rust_target")
         rust_release="$rust_target/release"
-        libs=(-ladvapi32 -lntdll -luserenv -lws2_32 -ldbghelp)
+        artifact=rsf_vulkanstory_ngx.dll
         ;;
     Linux)
         name="libVulkanStoryNgx.so"
-        libs=(-Wl,--exclude-libs,librsf_vulkanstory_ngx.a -Wl,--no-undefined -ldl -lpthread -lm -lrt -lutil)
+        artifact=librsf_vulkanstory_ngx.so
         ;;
-    *) name="libVulkanStoryNgx.so" ;;
+    Darwin) name="libVulkanStoryNgx.so"; artifact=librsf_vulkanstory_ngx.dylib ;;
+    *) name="libVulkanStoryNgx.so"; artifact=librsf_vulkanstory_ngx.so ;;
 esac
 
-cc="${CC:-cc}"
 target="$out/$name"
 if [ -f "$target" ]; then
     fresh=1
-    for input in "$src" "$here/vulkanstory_ngx.h" "$here/entries.h" "$here/build.rs" "$here/src/lib.rs" "$here/Cargo.toml" \
+    for input in "$here/vulkanstory_ngx.h" "$here/src/lib.rs" "$here/src/loader.rs" "$here/src/parameters.rs" "$here/Cargo.toml" \
             "$workspace/Cargo.toml" "$workspace/Cargo.lock" "$workspace/rust-toolchain.toml" "$here/build.sh"; do
         if [ ! -f "$input" ] || [ ! "$target" -nt "$input" ]; then
             fresh=0
@@ -59,9 +56,6 @@ skip_build() {
     exit 0
 }
 
-if ! command -v "$cc" >/dev/null 2>&1; then
-    skip_build "no C compiler ($cc) on this host"
-fi
 if ! command -v cargo >/dev/null 2>&1; then
     skip_build "no Cargo on this host"
 fi
@@ -72,19 +66,9 @@ scratch="$(mktemp -d "$output/.vulkanstory-ngx.XXXXXXXX")" || exit 0
 trap 'rm -rf -- "$scratch"' EXIT
 if ! (cd "$workspace" && cargo build --locked --release -p rsf-vulkanstory-ngx \
         "${rust_args[@]}" --target-dir "$scratch/cargo"); then
-    skip_build "Rust loader compilation failed"
+    skip_build "Rust caller module build failed"
 fi
-archive="$scratch/cargo/$rust_release/librsf_vulkanstory_ngx.a"
-temporary="$scratch/$name"
-
-# Keep the native caller frame across NGX calls. The wrappers also store
-# forwarded results in a volatile local.
-if ! "$cc" -std=c99 -O2 -fPIC -shared -fvisibility=hidden \
-        -fno-optimize-sibling-calls \
-        -Wall -Wextra -Wno-unused-parameter \
-        "$src" "$archive" -o "$temporary" "${libs[@]}"; then
-    skip_build "$cc failed to link the NGX shim"
-fi
+temporary="$scratch/cargo/$rust_release/$artifact"
 if ! mv -f -- "$temporary" "$target"; then
     skip_build "could not publish the NGX shim"
 fi
