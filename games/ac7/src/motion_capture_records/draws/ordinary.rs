@@ -13,9 +13,9 @@ use crate::motion_capture_session::CaptureInterval;
 use std::fmt::{self, Write as _};
 use std::mem::{offset_of, size_of};
 
-#[cfg(windows)]
+#[cfg(all(windows, not(test)))]
 mod capture;
-#[cfg(windows)]
+#[cfg(all(windows, not(test)))]
 pub(super) use capture::observe;
 
 #[repr(C)]
@@ -35,7 +35,7 @@ struct DrawConstants {
     count: u32,
 }
 
-// Keep this private snapshot in sync with MotionDraw in motion_capture_records.h.
+// Copied observations for the ordinary draw writer.
 #[repr(C)]
 struct Draw {
     root: NativeRootScope,

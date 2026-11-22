@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Admission and lifetime of the optional F9 renderer-root observers.
 
+#[cfg(all(windows, not(test)))]
+mod native;
+
 use crate::sites::{POSTPROCESS_ENTRY, POSTPROCESS_RVA, WIDGET_QUEUE_ENTRY, WIDGET_QUEUE_RVA};
 use std::ffi::c_void;
 use std::mem::{offset_of, size_of};
@@ -37,7 +40,7 @@ struct RootSite {
     native_owned: bool,
 }
 
-// Order matches the typed detour and original arrays in motion_capture.cpp. Short stable
+// Order matches the typed detour and original arrays in motion_capture_trampolines.cpp. Short stable
 // entry sequences omit the security-cookie displacement. MinHook relocates full instructions.
 const ROOT_SITES: [RootSite; 6] = [
     RootSite {
@@ -99,8 +102,8 @@ enum RootInstall {
     PartialTeardown,
 }
 
-// Private ABI mirrored in motion_capture_records.h. The native leaves keep typed trampolines
-// and all MinHook effects, including rollback. The target array is borrowed for each call.
+// The native leaves keep typed trampolines and MinHook effects, including rollback.
+// The target array is borrowed for each call.
 #[repr(C)]
 struct RootHookEffects {
     copy: unsafe extern "C" fn(*mut c_void, *const c_void, usize) -> bool,

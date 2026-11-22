@@ -19,7 +19,6 @@ fn is_contact_light(hash: u32) -> bool {
 }
 
 #[repr(C)]
-#[derive(Default)]
 pub(crate) struct BeforeDrawPlan {
     pub(crate) colour_role: *const c_char,
     pub(crate) loss_role: *const c_char,
@@ -29,6 +28,21 @@ pub(crate) struct BeforeDrawPlan {
     pub(crate) constant_slots: u32,
     pub(crate) ps_hash: u32,
     pub(crate) lighting: u32,
+}
+
+impl Default for BeforeDrawPlan {
+    fn default() -> Self {
+        Self {
+            colour_role: std::ptr::null(),
+            loss_role: std::ptr::null(),
+            input_roles: [std::ptr::null(); 6],
+            input_slots: 0,
+            sampler_slots: 0,
+            constant_slots: 0,
+            ps_hash: 0,
+            lighting: 0,
+        }
+    }
 }
 
 const _: () = {

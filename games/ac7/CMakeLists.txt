@@ -34,7 +34,7 @@ target_include_directories(rsf_ac7_scene_color PUBLIC include)
 target_link_libraries(rsf_ac7_scene_color PUBLIC ReScaleFrame::Graphics PRIVATE rsf_ac7_rust rsf_build_options)
 add_library(ReScaleFrame::AC7SceneColor ALIAS rsf_ac7_scene_color)
 
-add_library(rsf_ac7_motion_capture STATIC src/motion_capture.cpp)
+add_library(rsf_ac7_motion_capture STATIC src/motion_capture_trampolines.cpp)
 target_include_directories(rsf_ac7_motion_capture PUBLIC include)
 target_link_libraries(rsf_ac7_motion_capture PUBLIC ReScaleFrame::GameSDK PRIVATE rsf_ac7_rust ReScaleFrame::Graphics minhook rsf_build_options)
 add_library(ReScaleFrame::AC7MotionCapture ALIAS rsf_ac7_motion_capture)

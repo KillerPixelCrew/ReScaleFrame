@@ -3,7 +3,7 @@
 
 mod before;
 mod geometry;
-#[cfg(windows)]
+#[cfg(all(windows, not(test)))]
 mod gpu;
 mod ordinary;
 
@@ -17,7 +17,7 @@ const MAX_DRAWS: usize = 12000;
 const TEXTURE_2D: u32 = 3;
 const TEXTURE_3D: u32 = 4;
 
-// Private ABI mirrored in motion_capture_records.h. IDs are numeric and never dereferenced.
+// IDs are numeric and never dereferenced by the writers.
 #[repr(C)]
 #[derive(Default)]
 struct QueuedDraw {

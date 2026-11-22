@@ -4,10 +4,11 @@
 
 pub(super) mod artifacts;
 mod draws;
+#[cfg(all(windows, not(test)))]
+mod native;
 mod root_hooks;
 
 use crate::motion_capture_session::{CaptureInterval, rsf_ac7_capture_current};
-use crate::velocity_container::borrowed;
 use rsf_game_sys::rsf_game_render_pass;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -21,10 +22,12 @@ const MAX_ENGINE: usize = 16384;
 const MAX_ROOTS: usize = 2048;
 const MAX_COMMANDS: usize = 16384;
 const MAX_COMMANDS_PER_ROOT: u32 = 4096;
+#[cfg(any(windows, test))]
 const MAX_BLOBS: usize = 4096;
+#[cfg(any(windows, test))]
 const BLOB_BUDGET: usize = 32 * 1024 * 1024;
 
-// Private ABI mirrored in motion_capture_records.h, except VelocityFacts, which is public.
+// VelocityFacts is public. The typed trampolines lend inline storage for engine and root rows.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct VelocityFacts {
@@ -122,6 +125,10 @@ const WIDGET_QUEUE_BEFORE: u32 = 4;
 const MAIN_TEMPORAL_BUILD_BEFORE: u32 = 6;
 const MAIN_TEMPORAL_PROCESS_BEGIN: u32 = 8;
 const GRAPH_PASS_BEGIN: u32 = 10;
+#[cfg(all(windows, not(test)))]
+const RHI_SCOPE_BEGIN: u32 = 12;
+#[cfg(all(windows, not(test)))]
+const RHI_SCOPE_RESTORE: u32 = 13;
 
 const ROOT_NAMES: [&str; 14] = [
     "postprocess_begin",
@@ -190,6 +197,7 @@ const _: () = {
     assert!(size_of::<VelocityFacts>() == 60);
     assert!(size_of::<EngineRecord>() == 264 && offset_of!(EngineRecord, previous) == 200);
     assert!(size_of::<RootRecord>() == 376 && offset_of!(RootRecord, output_name) == 304);
+    assert!(align_of::<EngineRecord>() == 8 && align_of::<RootRecord>() == 8);
     assert!(size_of::<NativeRootScope>() == 16 && size_of::<QueuedScope>() == 40);
     assert!(size_of::<GeometryScope>() == 32);
 };
@@ -207,6 +215,7 @@ struct Records {
     commands: HashMap<u64, Association>,
     draws: Vec<Vec<u8>>,
     blobs: Vec<Vec<u8>>,
+    #[cfg(any(windows, test))]
     blob_bytes: usize,
     engine_dropped: u32,
     roots_dropped: u32,
@@ -619,28 +628,8 @@ pub extern "C" fn rsf_ac7_capture_geometry_scope() -> GeometryScope {
     })
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_capture_store_blob(
-    capture: CaptureInterval,
-    bytes: *const u8,
-    size: usize,
-    id: &mut u32,
-) -> bool {
-    *id = 0;
-    // SAFETY: The D3D or guarded engine read lends its local copy for this call.
-    let Some(bytes) = (unsafe { borrowed(bytes, size) }) else {
-        return size == 0;
-    };
-    match store_blob(capture, bytes) {
-        Some(blob) => {
-            *id = blob;
-            true
-        }
-        None => false,
-    }
-}
-
-fn store_blob(capture: CaptureInterval, bytes: &[u8]) -> Option<u32> {
+#[cfg(any(windows, test))]
+pub(super) fn store_blob(capture: CaptureInterval, bytes: &[u8]) -> Option<u32> {
     let mut records = records();
     if bytes.is_empty() || !rsf_ac7_capture_current(capture.session) {
         return Some(0);
@@ -668,7 +657,10 @@ pub(super) fn reset_records() {
     records.commands.clear();
     records.draws.clear();
     records.blobs.clear();
-    records.blob_bytes = 0;
+    #[cfg(any(windows, test))]
+    {
+        records.blob_bytes = 0;
+    }
     records.engine_dropped = 0;
     records.roots_dropped = 0;
     records.commands_dropped = 0;

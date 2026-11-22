@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! F9 trigger admission, output paths and the Present-relative capture session.
 
+#[cfg(all(windows, not(test)))]
+mod native;
+
 use crate::motion_capture_observations::reset_session_observations;
 use crate::motion_capture_records::artifacts::{Bytes, Stats, WriteFile, publish_finish};
 use crate::motion_capture_records::reset_records;
@@ -99,12 +102,6 @@ pub(super) fn say(message: &CStr) {
             )
         };
     }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_capture_log(message: *const c_char) {
-    // SAFETY: Native supplies a static terminated diagnostic string.
-    say(unsafe { CStr::from_ptr(message) });
 }
 
 pub(super) fn say_path(message: &str, prefix: &CStr, suffix: &str) -> fmt::Result {
@@ -448,14 +445,30 @@ mod tests {
                     ]
                     .concat()
                 );
+                if interval == 0 {
+                    let capture = CaptureInterval::load();
+                    assert_eq!(
+                        crate::motion_capture_records::store_blob(capture, b"constant"),
+                        Some(1)
+                    );
+                    assert_eq!(
+                        crate::motion_capture_records::store_blob(capture, b"constant"),
+                        Some(1)
+                    );
+                }
             } else {
                 assert!(path.to_bytes().is_empty());
             }
         }
-        assert_eq!(
-            WRITES.lock().unwrap().last().unwrap(),
-            &[SESSION_PATH.to_bytes(), b"\\session.json"].concat()
-        );
+        {
+            let writes = WRITES.lock().unwrap();
+            let blob = [SESSION_PATH.to_bytes(), b"\\cb_1.bin"].concat();
+            assert_eq!(writes.iter().filter(|path| **path == blob).count(), 1);
+            assert_eq!(
+                writes.last().unwrap(),
+                &[SESSION_PATH.to_bytes(), b"\\session.json"].concat()
+            );
+        }
         // SAFETY: The fixture supplies the same live effects table for shutdown.
         unsafe { rsf_ac7_capture_shutdown(&effects) };
     }

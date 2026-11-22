@@ -22,7 +22,7 @@ fn disassembler() -> Option<Disassemble> {
                 .ok()?;
         let address = unsafe { GetProcAddress(module, s!("D3DDisassemble")) }?;
         // The System32 export is the SDK's D3DDisassemble entry.
-        Some(unsafe { std::mem::transmute(address) })
+        Some(unsafe { std::mem::transmute::<_, Disassemble>(address) })
     })
 }
 

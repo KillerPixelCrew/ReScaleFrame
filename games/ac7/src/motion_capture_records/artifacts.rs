@@ -262,7 +262,7 @@ impl Drop for Snapshot {
     }
 }
 
-// Private ABI mirrored in motion_capture_records.h.
+// Counters sampled by the capture session after attempting artifact writes.
 #[repr(C)]
 #[derive(Default)]
 pub(crate) struct Stats {
@@ -270,6 +270,23 @@ pub(crate) struct Stats {
     engine_hooks: u32,
     renderer_root_hooks: u32,
     capture_failures: u32,
+}
+
+#[cfg(all(windows, not(test)))]
+impl Stats {
+    pub(crate) fn from_native(
+        qpc_frequency: i64,
+        engine: bool,
+        roots: bool,
+        capture_failures: u32,
+    ) -> Self {
+        Self {
+            qpc_frequency,
+            engine_hooks: u32::from(engine),
+            renderer_root_hooks: u32::from(roots),
+            capture_failures,
+        }
+    }
 }
 
 const _: () = {
@@ -414,7 +431,10 @@ impl<'a> Publisher<'a> {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_publish_checkpoint(write: WriteFile, capture: CaptureInterval) {
+pub(crate) extern "C" fn rsf_ac7_capture_publish_checkpoint(
+    write: WriteFile,
+    capture: CaptureInterval,
+) {
     if !rsf_ac7_capture_sampled(capture.interval) {
         return;
     }

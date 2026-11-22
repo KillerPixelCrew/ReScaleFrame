@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::ffi::c_void;
 use std::mem::{offset_of, size_of};
 
-// Checked against the native DXGI declarations in motion_capture.cpp.
+// DXGI resource formats used in the original AC7 captures.
 const FLOAT4: u32 = 2;
 const FLOAT3: u32 = 6;
 const R16G16_UNORM: u32 = 35;
@@ -29,7 +29,6 @@ pub(crate) enum GeometryAdmission {
     Failed,
 }
 
-// Private ABI mirrored in motion_capture_observations.h.
 #[repr(C)]
 #[derive(Default)]
 pub(crate) struct GeometryPlan {
