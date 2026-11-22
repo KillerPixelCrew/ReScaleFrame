@@ -2,7 +2,7 @@
 #include "motion_stage.h"
 #include "motion_stage_platform.h"
 #include "engine_guards.h"
-#include "geometry_feed.h"
+#include "native_geometry.h"
 #include "native_hooks.h"
 #include "native_memory.h"
 #include "native_observer.h"
@@ -175,12 +175,9 @@ void __fastcall scene_end_hook(void* self) {
     rsf_anomaly_motion_stage_close();
     reinterpret_cast<Unary>(originals[site_phase_scene_end])(self);
 }
-void flush(const geometry::DrawTimeFacts& facts) noexcept {
-    const auto capture = facts.capture ? geometry::snapshot_facts(*facts.capture) : geometry::SnapshotFacts{};
-    const DrawFacts draw{facts.capture ? &capture : nullptr, facts.visual, facts.tree_lod,
-        static_cast<uint8_t>(facts.pass), static_cast<uint8_t>(facts.kind), static_cast<uint8_t>(facts.classification.verdict),
-        facts.view ? static_cast<uint8_t>(*facts.view) : uint8_t{255},
-        facts.domain ? static_cast<uint8_t>(*facts.domain) : uint8_t{255}, facts.in_visual, facts.detail};
+void flush(const rsf_anomaly_geometry_draw_facts* facts) noexcept {
+    const DrawFacts draw{facts->capture, facts->visual, facts->tree_lod, facts->pass, facts->kind, facts->verdict,
+        facts->view, facts->domain, facts->in_visual, facts->detail};
     rsf_anomaly_motion_stage_flush(&draw);
 }
 bool install_hooks(void* module, uint32_t size, const void* profile) noexcept {
@@ -211,9 +208,9 @@ bool position_views(void* target, PositionViews* views) noexcept {
 }
 bool native_frame(uint32_t* frame) noexcept { return read_global(np().device_frame_rva, *frame); }
 bool render_view(uint8_t* out) noexcept {
-    const auto view = geometry::current_render_view(image, *build);
-    if (!view) return false;
-    *out = static_cast<uint8_t>(*view);
+    const auto view = rsf_anomaly_geometry_current_view(image, static_cast<size_t>(build - build_profiles.data()));
+    if (view == RSF_ANOMALY_GEOMETRY_UNSET) return false;
+    *out = view;
     return true;
 }
 uint64_t reset_generation() noexcept {
@@ -251,16 +248,16 @@ const MotionPlatform platform{
     sizeof(MotionPlatform), motion_platform_abi, rsf_anomaly_motion_device_platform_get(), &bind_platform,
     {sr::backend_rt_offset, sr::backend_zb_offset, sr::backend_rt_changed_offset},
     guard_failure,
-    geometry::geometry_hooks_active,
-    [](bool enabled) { geometry::geometry_set_flush_callback(enabled ? flush : nullptr); },
-    geometry::geometry_enable_foliage_identity, install_hooks, [] { return rsf_anomaly_hooks_disable(&hooks); }, [] { return rsf_anomaly_hooks_created(&hooks); },
+    rsf_anomaly_geometry_active,
+    [](bool enabled) { rsf_anomaly_geometry_set_flush(enabled ? flush : nullptr); },
+    rsf_anomaly_geometry_set_foliage, install_hooks, [] { return rsf_anomaly_hooks_disable(&hooks); }, [] { return rsf_anomaly_hooks_created(&hooks); },
     install_draw_hooks, render_target, position_views, native_frame, render_view, reset_generation,
     options_word3, rsf_anomaly_motion_target_facts, backend, hw_context, hw_device,
     rsf_anomaly_motion_clear_target,
     rsf_anomaly_motion_bound_shaders, rsf_anomaly_motion_set_shaders,
     rsf_anomaly_motion_replay_platform_get(),
-    camera, [](float (*world)[16]) { return geometry::read_world_matrix(*world); },
-    geometry::read_vertex_constants, geometry::write_vertex_constants,
+    camera, [](float (*world)[16]) { return rsf_anomaly_geometry_world_matrix(*world); },
+    rsf_anomaly_geometry_read_constants, rsf_anomaly_geometry_write_constants,
     [](void* raw, MotionDrawState* out) {
         rsf_anomaly_motion_viewport(raw, &out->viewport);
         rsf_anomaly_sr_jitter_uv jitter{};

@@ -9,12 +9,14 @@ mod fixture;
 #[cfg(windows)]
 mod fixture_abi;
 mod hook_sites;
+mod profile;
 mod scopes;
 #[cfg(test)]
 mod tests;
 mod vertex_constants;
 
 use crate::engine_guards::read_bytes;
+#[cfg_attr(not(windows), allow(unused_imports))]
 use crate::engine_guards::{Image, Read};
 use crate::geometry_registry::{
     IdentityRegistry, Registry, classify, find, probe_visual, register, retire, take_live,
@@ -42,6 +44,7 @@ const BONE_INSTANCE_STRIDE: usize = 168;
 const BONE_RENDER_TRANSFORM_OFFSET: usize = 64;
 const BONE_INSTANCES_OFFSET: usize = 208; // CKinematics+128 IKinematics +0x50.
 const TREE_PM_LAST_LOD_OFFSET: usize = 0x108;
+const HIERARCHY_CHILDREN_OFFSET: usize = 96; // FHierrarhyVisual child vector, then BOOL bDontDelete.
 const SBONES_PALETTE_LAYOUT: u64 = 0x53424f4e45530001; // Three float4 columns per bone.
 const ENGINE_IDENTITY: [f32; 16] = [
     1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.,
@@ -52,7 +55,7 @@ static CONTROL: Mutex<()> = Mutex::new(());
 static MODELS: Mutex<()> = Mutex::new(());
 static ENGINE: RwLock<Engine> = RwLock::new(Engine {
     module: 0,
-    profile: 0,
+    build: 0,
 });
 static HOOKS: AtomicBool = AtomicBool::new(false);
 static CAPTURE: AtomicBool = AtomicBool::new(false);
@@ -77,22 +80,25 @@ extern "C" fn rsf_anomaly_geometry_binding() -> Engine {
 }
 
 /// Admits the selected build before any detour is written. The image size
-/// comes first, then every layout guard behind the native readers, then every
+/// comes first, then every layout guard behind the native reader, then every
 /// detour entry. Each site also needs its unique prefix where one is profiled.
 fn guard(platform: &Platform, engine: Engine, size: u32) -> bool {
     if engine.module == 0 {
         return false;
     }
-    let profile = unsafe { (platform.guard_profile)(engine) };
-    if size != profile.image_size {
+    let (Some(geometry), Some(image_size)) =
+        (profile::geometry(engine), profile::image_size(engine))
+    else {
+        return false;
+    };
+    if size != image_size {
         return false;
     }
-    let image = Image::new(with_exposed_provenance(engine.module), size, profile.read);
-    let unique = profile.unique();
-    // The native profile lends static NUL-terminated unique guards.
+    let image = Image::new(with_exposed_provenance(engine.module), size, platform.read);
+    // The profile tables are static and their unique guards are NUL-terminated.
     unsafe {
-        image.matches_sites(profile.layout_sites(), unique)
-            && image.matches_sites(profile.sites(), unique)
+        image.matches_sites(geometry.layout_sites, geometry.unique)
+            && image.matches_sites(geometry.sites, geometry.unique)
     }
 }
 
@@ -151,6 +157,8 @@ extern "C" fn rsf_anomaly_geometry_active() -> bool {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_geometry_test_bind(engine: Engine) {
     *ENGINE.write().unwrap() = engine;
+    // The fixture's own detours stand in for the installed hook set.
+    HOOKS.store(true, Ordering::Release);
     CAPTURE.store(true, Ordering::Release);
 }
 
@@ -231,29 +239,28 @@ fn read_pointer(platform: &Platform, address: usize) -> Option<usize> {
 
 fn read_children(
     platform: &Platform,
-    hierarchy: &Hierarchy,
+    vtable_rvas: &[u32; 4],
     module: usize,
     visual: usize,
 ) -> Option<ChildRange> {
     let vtable = read_pointer(platform, visual)?;
     let mut range = ChildRange::default();
-    if !hierarchy
-        .vtable_rvas
+    if !vtable_rvas
         .iter()
         .any(|rva| module.checked_add(*rva as usize) == Some(vtable))
     {
         return Some(range);
     }
-    let address = visual.checked_add(hierarchy.children_offset as usize)?;
+    let address = visual.checked_add(HIERARCHY_CHILDREN_OFFSET)?;
     let size = size_of::<ChildRange>();
-    let borrowed = i32::from_ne_bytes(read_bytes(hierarchy.read, address.checked_add(size)?)?);
+    let borrowed = i32::from_ne_bytes(read_bytes(platform.read, address.checked_add(size)?)?);
     if borrowed != 0 {
         return Some(range);
     }
     // The native vector is three pointer-sized addresses. The profiled layout is asserted
-    // on both sides, and the copy is guarded even when an engine object has gone away.
+    // by the geometry evidence, and the copy is guarded even when an engine object has gone away.
     unsafe {
-        (hierarchy.read)(
+        (platform.read)(
             ptr::from_mut(&mut range).cast(),
             with_exposed_provenance(address),
             size,
@@ -273,11 +280,11 @@ fn visual_tree(platform: &Platform, root: usize) -> Option<Vec<usize>> {
     if engine.module == 0 {
         return Some(tree);
     }
-    let hierarchy = unsafe { (platform.hierarchy)(engine) };
+    let vtables = profile::geometry(engine)?.hierarchy_vtables;
     let mut index = 0;
     while let Some(&visual) = tree.get(index) {
         index += 1;
-        let range = read_children(platform, &hierarchy, engine.module, visual)?;
+        let range = read_children(platform, &vtables, engine.module, visual)?;
         let bytes = range.end.checked_sub(range.first)?;
         let pointer_size = size_of::<usize>();
         if range.capacity < range.end
@@ -368,7 +375,7 @@ extern "C" fn rsf_anomaly_geometry_model_delete(
 }
 
 fn read_pass(platform: &Platform, engine: Engine) -> u8 {
-    let phase = engine_layout(platform, engine)
+    let phase = engine_layout(engine)
         .and_then(|layout| engine.module.checked_add(layout.phase as usize))
         .and_then(|address| read_bytes(platform.read, address))
         .map(u32::from_ne_bytes);
@@ -379,14 +386,17 @@ fn read_pass(platform: &Platform, engine: Engine) -> u8 {
     }
 }
 
-fn engine_layout(platform: &Platform, engine: Engine) -> Option<Layout> {
-    (engine.module != 0).then(|| unsafe { (platform.layout)(engine) })
+fn engine_layout(engine: Engine) -> Option<Layout> {
+    if engine.module == 0 {
+        return None;
+    }
+    profile::layout(engine)
 }
 
-fn world_address(platform: &Platform, engine: Engine) -> Option<usize> {
+fn world_address(engine: Engine) -> Option<usize> {
     engine
         .module
-        .checked_add(engine_layout(platform, engine)?.world as usize)
+        .checked_add(engine_layout(engine)?.world as usize)
 }
 
 fn read_world(platform: &Platform, address: usize) -> Option<NativeMatrix> {
@@ -401,8 +411,7 @@ extern "C" fn rsf_anomaly_geometry_read_world(
     out: &mut MaybeUninit<NativeMatrix>,
 ) -> bool {
     let engine = rsf_anomaly_geometry_binding();
-    let Some(world) =
-        world_address(platform, engine).and_then(|address| read_world(platform, address))
+    let Some(world) = world_address(engine).and_then(|address| read_world(platform, address))
     else {
         return false;
     };
@@ -472,7 +481,7 @@ fn classify_visual(platform: &Platform, visual: &mut Visual) {
     } else {
         rsf_anomaly_geometry_probe::default()
     };
-    let world = world_address(platform, engine).unwrap_or(0);
+    let world = world_address(engine).unwrap_or(0);
     let world_for_classification = (capturing
         && probe.lookup == RSF_ANOMALY_VISUAL_MISSING as u32
         && pass != RSF_ANOMALY_PASS_SHADOW as u8)
@@ -519,10 +528,10 @@ fn live(visual: &Visual) -> bool {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_geometry_borrow_draw() -> *const c_void {
-    // The native stack keeps the visual and its facade alive until the hook returns.
+    // The native stack keeps the visual node alive until the hook returns.
     unsafe { scopes::visual().as_ref() }
         .filter(|visual| live(visual))
-        .map_or(ptr::null(), |visual| visual.facade)
+        .map_or(ptr::null(), |visual| ptr::from_ref(visual).cast())
 }
 
 fn palette(platform: &Platform, visual: &Visual) -> Option<(usize, u32)> {

@@ -21,7 +21,7 @@
 // * phase_scene_begin/end detours: the G-buffer window. The first open of a frame starts the draw-time history
 //   frame (motion.rs), sizes the RGBA16F target to the bound rt_Position texture (so it follows an SR render-
 //   size twin) and clears it to zero.
-// * CBackend::constants.flush (the geometry producer's draw-time site, geometry_set_flush_callback): after every
+// * CBackend::constants.flush (the geometry producer's draw-time site, rsf_anomaly_geometry_set_flush): after every
 //   native upload, keep RTV2 bound across engine binds (motion_target.rs), record the draw's camera and instance
 //   snapshot, and for a G-buffer draw whose VS and PS both have linkable variants upload VS/PS b13 and bind the
 //   variants. A tessellated draw (r4_enable_tessellation: DX11\tess.hs/ds bound) swaps the whole VS+HS+DS+PS chain, with

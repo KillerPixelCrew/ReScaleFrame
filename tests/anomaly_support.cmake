@@ -21,13 +21,13 @@ endif()
 # Geometry identity/lifetime producer. Pure CPU registry, draw scopes and history feed, then real x64
 # detours on fixture functions plus the production guarded install against a synthetic image. No game code runs.
 set(RSF_ANOMALY_GEOMETRY_SOURCES
-    "${PROJECT_SOURCE_DIR}/games/anomaly/src/native_geometry.cpp"
+    "${PROJECT_SOURCE_DIR}/games/anomaly/src/native_geometry_platform.c"
     "${PROJECT_SOURCE_DIR}/games/anomaly/src/native_hooks_platform.c")
-add_executable(rsf_anomaly_geometry_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_geometry_tests.cpp" ${RSF_ANOMALY_GEOMETRY_SOURCES})
+add_executable(rsf_anomaly_geometry_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_geometry_tests.c" ${RSF_ANOMALY_GEOMETRY_SOURCES})
 target_include_directories(rsf_anomaly_geometry_test PRIVATE "${PROJECT_SOURCE_DIR}/games/anomaly/src")
 target_link_libraries(rsf_anomaly_geometry_test PRIVATE rsf_anomaly_sr_fixture_rust minhook rsf_build_options)
 add_test(NAME anomaly_geometry_contract COMMAND rsf_anomaly_geometry_test)
-add_executable(rsf_anomaly_geometry_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_geometry_hooks.cpp" ${RSF_ANOMALY_GEOMETRY_SOURCES})
+add_executable(rsf_anomaly_geometry_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_geometry_hooks.c" ${RSF_ANOMALY_GEOMETRY_SOURCES})
 target_include_directories(rsf_anomaly_geometry_hooks_test PRIVATE "${PROJECT_SOURCE_DIR}/games/anomaly/src")
 target_compile_definitions(rsf_anomaly_geometry_hooks_test PRIVATE RSF_ANOMALY_GEOMETRY_TESTING)
 target_link_libraries(rsf_anomaly_geometry_hooks_test PRIVATE rsf_anomaly_rust minhook rsf_build_options)

@@ -299,3 +299,68 @@ errors passed for the geometry source and both fixtures. Pinned Rust
 1.94.1 formatting, targeted bindgen 0.72.1 with unchanged fixture
 bindings, locked offline Windows metadata and whitespace checks passed.
 Build, link, lint, fixture and game execution remain pending.
+
+## C11 platform leaf and Rust-owned profiles
+
+The final N03 pass at base `1eec093b` removes the last first-party C++ from
+the geometry producer. `native_geometry_platform.c` replaces
+`native_geometry.cpp`, and `native_geometry.h`,
+`native_geometry_platform.h` and the new fixtures are C declarations or C11.
+The former `geometry_feed.h` and `geometry_retirement.h` were inline C++
+adapters over `std::optional` and `std::vector` records. They are deleted,
+together with the C++ `DrawScope`, `DrawContextScope`, `RenderViewScope`,
+`IdentityRegistry` and `DrawCapture` facade, which only the fixtures still
+used.
+
+Profiles. The two geometry banks (17 detour entries, seven layout sites,
+nine unique prefixes, four globals and four hierarchy vtables each) move to
+`geometry_profile.rs`. `tools/generate-anomaly-native-profile.py` projects
+them into the generated block of `geometry_profile.h`, which keeps the C++
+consumers (`build_profile.h`, the SR profile fixture and the evidence
+scripts) on the same text. The Rust data was converted from the previous
+header by script and the generator reproduces the previous table text byte
+for byte. The native leaf no longer sees a profile. It names a build by its
+index, and Rust resolves the guard tables, the hierarchy vtables, the layout
+RVAs, the vertex constant table and the hook records. `Platform` shrinks to
+the hook set callbacks and the two guarded readers (48 bytes), `Engine`
+carries the build index, and `Visual` loses its C++ facade pointer (72
+bytes). `rsf_anomaly_geometry_borrow_draw` returns the visual node itself.
+
+Leaf. The 17 detours keep their order and arguments. Each scope guard is a
+C11 SEH `__try/__finally`, which also runs for the MSVC C++ exception the
+engine raises, so a factory, visual, context, window or detail scope is left
+on unwind exactly as the C++ destructors did. The draw copy is a C record
+(`rsf_anomaly_geometry_snapshot`, the 64-byte layout the motion owner
+already reads) with a heap palette that the flush frame releases. The flush
+callback receives `rsf_anomaly_geometry_draw_facts`, so the motion stage
+converts it field by field. The leaf calls the C hook set API from N01
+(`rsf_anomaly_hooks_install` and friends).
+
+Callers. `motion_stage.cpp` and `sr_stage.cpp` now call the Rust exports
+(`rsf_anomaly_geometry_active`, `_set_flush`, `_set_near`, `_set_foliage`)
+and the leaf entries (`_current_view`, `_world_matrix`, `_read_constants`,
+`_write_constants`) at their geometry call sites, with the build index taken
+from the selected `BuildProfile`. The motion hook and SR hook bridge
+fixtures use the same entries. The two geometry fixtures are C11:
+`tests/anomaly_geometry_hooks.c` keeps the 11 hook scenarios and the guarded
+install lifecycle, and `tests/anomaly_geometry_tests.c` keeps the five
+contract scenarios and feeds the Rust temporal oracle through its C API.
+
+One fixture defect surfaced. The Rust owner reports `rsf_anomaly_geometry_active`
+only after a production install, but the hook fixture drives its own detours.
+`rsf_anomaly_geometry_test_bind` now also marks the hooks active, and the
+guard lifecycle starts from a clean latch so the production install can run.
+
+Checks. A scratch copy of this tree with throwaway fixes for the unrelated
+tip errors (`Platform` ambiguity in the motion stage, a missing import in
+the overlay, the FG host type and one pointer annotation) built the
+`rsf-anomaly` static library, and clippy added no warning. The hook fixture
+passed for Standard and for AVX, and the contract fixture passed, both
+linked from the new C sources with the pinned MinHook sources. The leaf,
+both fixtures, `motion_stage.cpp`, `sr_stage.cpp` and the two bridge
+fixtures also compile with `/W4 /WX`. The Rust unit test binary of this
+crate cannot start at the tip (`STATUS_ENTRYPOINT_NOT_FOUND`, also on the
+base), so the three new profile tests were compile-checked and their facts
+were checked by an equivalent script over the generated header. bindgen was
+not installed, so `fixture_abi.rs` carries the new profile record in the
+generator's format. Device and game acceptance remain open.

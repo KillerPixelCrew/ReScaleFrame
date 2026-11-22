@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Private layouts mirrored in native_geometry_platform.h.
 
-use crate::engine_guards::{NativeSite, Read, UniqueGuard};
-use crate::ffi::borrow_span;
+use crate::engine_guards::Read;
 use crate::geometry_registry::IdentityRegistry;
 use crate::geometry_registry_abi::{
     RSF_ANOMALY_DRAW_COUNT, RSF_ANOMALY_PASS_COUNT, RSF_ANOMALY_TYPE_COUNT,
@@ -25,11 +24,13 @@ pub(crate) const PASSES: usize = RSF_ANOMALY_PASS_COUNT as usize;
 pub(crate) const TYPES: usize = RSF_ANOMALY_TYPE_COUNT as usize;
 pub(crate) const VERDICTS: usize = RSF_ANOMALY_DRAW_COUNT as usize;
 
+/// The mapped executable and the index of its Rust-owned profiles
+/// (`geometry_profile.rs`, `native_profile.rs`). Native code treats both as opaque.
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq)]
 pub(crate) struct Engine {
     pub module: usize,
-    pub profile: usize,
+    pub build: usize,
 }
 
 #[repr(C)]
@@ -40,19 +41,7 @@ pub(crate) struct ChildRange {
     pub capacity: usize,
 }
 
-#[repr(C)]
-pub(crate) struct Hierarchy {
-    pub vtable_rvas: [u32; 4],
-    pub children_offset: u32,
-    pub read: Read,
-}
-
-const _: () = {
-    assert!(size_of::<Hierarchy>() == 32);
-    assert!(std::mem::offset_of!(Hierarchy, read) == 24);
-};
-
-#[repr(C)]
+/// The selected build's engine globals, resolved in Rust from the profile.
 pub(crate) struct Layout {
     pub phase: u32,
     pub viewport: u32,
@@ -82,7 +71,6 @@ pub(crate) struct Window {
 pub(crate) struct Visual {
     pub previous: *mut Visual,
     pub registry: *const IdentityRegistry,
-    pub facade: *const c_void,
     pub key: Key,
     pub world: usize,
     pub skeleton: usize,
@@ -110,8 +98,8 @@ pub(crate) struct Facts {
     pub detail: bool,
 }
 
-// The Windows x64 ABI passes each native const reference as a pointer.
-// The backing C++ objects live through the synchronous callback.
+// The native writer owns the capture and the flush owns the draw facts. Both
+// records live on the native stack through the synchronous callback.
 pub(crate) enum NativeDrawCapture {}
 pub(crate) enum NativeDrawFacts {}
 
@@ -126,45 +114,14 @@ pub(crate) struct Writer {
     pub finish: unsafe extern "C" fn(*mut c_void, u64) -> *const NativeDrawCapture,
 }
 
-/// The selected build's immutable guard facts. Each pointer borrows a static
-/// profile table, and `read` is the guarded engine-memory leaf.
-#[repr(C)]
-pub(crate) struct GuardProfile {
-    pub read: Read,
-    pub layout_sites: *const NativeSite,
-    pub layout_count: usize,
-    pub sites: *const NativeSite,
-    pub site_count: usize,
-    pub unique: *const UniqueGuard,
-    pub unique_count: usize,
-    pub image_size: u32,
-}
-
-// SAFETY for each accessor: the native lender returns pointers and counts of
-// static profile tables, so every borrowed slice lives for the process.
-impl GuardProfile {
-    pub fn layout_sites(&self) -> &[NativeSite] {
-        unsafe { borrow_span(self.layout_sites, self.layout_count) }
-    }
-
-    pub fn sites(&self) -> &[NativeSite] {
-        unsafe { borrow_span(self.sites, self.site_count) }
-    }
-
-    pub fn unique(&self) -> &[UniqueGuard] {
-        unsafe { borrow_span(self.unique, self.unique_count) }
-    }
-}
-
+/// The native hook set and the two guarded engine-memory leaves. Profiles,
+/// layouts and site tables stay in Rust.
 #[repr(C)]
 pub(crate) struct Platform {
-    pub guard_profile: unsafe extern "C" fn(Engine) -> GuardProfile,
     pub created: unsafe extern "C" fn() -> bool,
     pub install: unsafe extern "C" fn(Engine, u32) -> bool,
     pub enable: unsafe extern "C" fn() -> bool,
     pub disable: unsafe extern "C" fn() -> bool,
-    pub hierarchy: unsafe extern "C" fn(Engine) -> Hierarchy,
-    pub layout: unsafe extern "C" fn(Engine) -> Layout,
     pub read: Read,
     pub bones: ReadBones,
 }
@@ -203,18 +160,13 @@ pub(crate) struct Coverage {
 const _: () = {
     assert!(size_of::<Engine>() == 16);
     assert!(size_of::<ChildRange>() == 24);
-    assert!(size_of::<Layout>() == 16);
     assert!(size_of::<Context>() == 16);
     assert!(size_of::<Window>() == 32);
-    assert!(size_of::<Visual>() == 80);
+    assert!(size_of::<Visual>() == 72);
     assert!(size_of::<Facts>() == 32);
     assert!(size_of::<Writer>() == 16);
-    assert!(size_of::<GuardProfile>() == 64);
-    assert!(std::mem::offset_of!(GuardProfile, sites) == 24);
-    assert!(std::mem::offset_of!(GuardProfile, unique) == 40);
-    assert!(std::mem::offset_of!(GuardProfile, image_size) == 56);
-    assert!(size_of::<Platform>() == 72);
-    assert!(std::mem::offset_of!(Platform, bones) == 64);
+    assert!(size_of::<Platform>() == 48);
+    assert!(std::mem::offset_of!(Platform, bones) == 40);
     assert!(size_of::<Stats>() == 40);
     assert!(size_of::<Coverage>() == 1472);
 };

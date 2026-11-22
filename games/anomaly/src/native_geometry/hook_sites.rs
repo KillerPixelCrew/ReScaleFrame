@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-use crate::engine_guards::NativeSite;
+use super::profile;
+use crate::native_geometry_abi::Engine;
 use crate::native_hooks::Site;
 use std::ffi::c_void;
 
@@ -10,19 +11,29 @@ const _: () = {
     assert!(std::mem::offset_of!(Site, original) == 40);
 };
 
+/// Pairs each profiled detour entry of `build` with the native replacement and
+/// the address of the native original slot. The hook set uses those slots after
+/// this call. Refuses an unknown build or a table of the wrong length.
+///
+/// # Safety
+/// `replacements` and `originals` name `count` live entries, and `sites` names
+/// `count` writable records.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_geometry_build_hook_sites(
-    profile: *const NativeSite,
+    build: usize,
     replacements: *const *mut c_void,
     originals: *mut *mut c_void,
     sites: *mut Site,
     count: usize,
-) {
-    // The native geometry owner lends four arrays of the same length. HookSet
-    // uses the native original slots after this call, so store their addresses.
-    let profile = unsafe { std::slice::from_raw_parts(profile, count) };
+) -> bool {
+    let Some(profile) = profile::geometry(Engine { module: 0, build }) else {
+        return false;
+    };
+    if profile.sites.len() != count {
+        return false;
+    }
     let replacements = unsafe { std::slice::from_raw_parts(replacements, count) };
-    for (i, (site, &replacement)) in profile.iter().zip(replacements).enumerate() {
+    for (i, (site, &replacement)) in profile.sites.iter().zip(replacements).enumerate() {
         unsafe {
             sites.add(i).write(Site {
                 _name: site.name,
@@ -33,4 +44,11 @@ unsafe extern "C" fn rsf_anomaly_geometry_build_hook_sites(
             });
         }
     }
+    true
+}
+
+/// The profiled SizeOfImage of uild, or 0 for an unknown build.
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_geometry_image_size(build: usize) -> u32 {
+    profile::image_size(Engine { module: 0, build }).unwrap_or(0)
 }

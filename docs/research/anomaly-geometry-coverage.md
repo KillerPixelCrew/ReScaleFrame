@@ -36,7 +36,7 @@ instance identity. The log cannot split the two; the new counters do.
 
 ## What was added
 
-All in `games/anomaly/src/{native_geometry,geometry_profile,geometry_feed}.*` plus a two-line change to
+All in `games/anomaly/src/{native_geometry.rs,native_geometry_platform.c,geometry_profile.rs}` plus a two-line change to
 `native_observer.cpp`. Every new site is an expected-16-bytes guard installed through `HookSet`, refused on
 mismatch before any byte is written.
 

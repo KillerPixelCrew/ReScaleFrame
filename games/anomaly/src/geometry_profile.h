@@ -66,6 +66,8 @@ inline constexpr std::uint32_t detail_batch_instances = 61;
 inline constexpr std::uint32_t hierarchy_children_offset = 96;
 // Bone instance stride and transform offset are consumed by the Rust palette reader.
 
+// BEGIN GENERATED ANOMALY GEOMETRY PROFILES
+// Generated from geometry_profile.rs by tools/generate-anomaly-native-profile.py.
 // ---- Standard 1.5.3 DX11 (AnomalyDX11.exe) -------------------------------------------------------------------------
 inline constexpr std::array<UniqueGuard, 9> geometry_standard_unique{{
     {"Fvisual::Render", 0x8cff60, "48895c2410555657415641574883ec30488bb9"},
@@ -165,4 +167,6 @@ inline constexpr GeometryProfile geometry_avx{
     .vertex_constant_buffers_rva = 0xd51e78,
     .hierarchy_vtables = {0xb54e90, 0xb51dd8, 0xb5e708, 0xb595d0},
 };
+
+// END GENERATED ANOMALY GEOMETRY PROFILES
 }

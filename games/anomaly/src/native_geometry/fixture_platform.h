@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -20,8 +23,16 @@ typedef struct rsf_test_anomaly_geometry_contract {
     rsf_test_anomaly_geometry_scenario capture, history, coverage, inheritance, sink;
 } rsf_test_anomaly_geometry_contract;
 
+// The selected build's Rust-owned facts: executable identity, image size and the engine globals the fixtures seed.
+typedef struct rsf_test_anomaly_geometry_profile {
+    const char* label;
+    const char* executable;
+    uint32_t image_size, phase, viewport, frame, world, vertex_constants, hierarchy_vtable;
+} rsf_test_anomaly_geometry_profile;
+
 void rsf_test_anomaly_geometry_run_hooks(const rsf_test_anomaly_geometry_hooks*);
 void rsf_test_anomaly_geometry_run_contract(const rsf_test_anomaly_geometry_contract*);
+bool rsf_test_anomaly_geometry_profile_get(size_t build, rsf_test_anomaly_geometry_profile*);
 
 #ifdef __cplusplus
 }

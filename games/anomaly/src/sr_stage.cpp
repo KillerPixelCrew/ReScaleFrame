@@ -139,7 +139,7 @@ const rsf_anomaly_position_platform position_constants{
 // staging texture (USAGE_STAGING, CPU_ACCESS_READ, one mip and layer); these keep the typed context calls.
 static_assert(D3D11_DEVICE_CONTEXT_IMMEDIATE == 0 && D3D11_USAGE_STAGING == 3 && D3D11_CPU_ACCESS_READ == 0x20000);
 static_assert(sizeof(rsf_anomaly_sr_frame_reads) == 168 && offsetof(rsf_anomaly_sr_frame_reads, render_view) == 152);
-static_assert(static_cast<uint32_t>(temporal::ViewId::Scope) == 1 && dx10_msaa_bit == (1u << 14));
+static_assert(RSF_ANOMALY_GEOMETRY_SCOPE == 1 && dx10_msaa_bit == (1u << 14));
 static_assert(sizeof(rsf_anomaly_sr_stage_platform) == 608 &&
     offsetof(rsf_anomaly_sr_stage_platform, immediate_context) == 280 &&
     offsetof(rsf_anomaly_sr_stage_platform, pixel_bytes) == 328 && offsetof(rsf_anomaly_sr_stage_platform, draw_pass) == 336);
@@ -328,9 +328,9 @@ const rsf_anomaly_sr_stage_platform platform{
         if (rsf_anomaly_observation(&observation) == RSF_OK) out->generation = observation.resets;
         read_global(np().device_width_rva, out->device_width);
         read_global(np().device_height_rva, out->device_height);
-        const auto view = geometry::current_render_view(image, *build);
-        reads->view_read = view.has_value();
-        if (view) reads->render_view = static_cast<uint32_t>(*view);
+        const auto view = rsf_anomaly_geometry_current_view(image, static_cast<size_t>(build - build_profiles.data()));
+        reads->view_read = view != RSF_ANOMALY_GEOMETRY_UNSET;
+        if (view != RSF_ANOMALY_GEOMETRY_UNSET) reads->render_view = view;
         reads->options_read = read_global(srp().render_options_word3_rva, reads->options_word3);
         if (world_window) {
             out->device_size = image + np().device_width_rva;
@@ -378,7 +378,7 @@ const rsf_anomaly_sr_stage_platform platform{
         *counter = now.QuadPart;
         *frequency = rate.QuadPart;
     },
-    .geometry_active = [] { return geometry::geometry_hooks_active(); },
+    .geometry_active = [] { return rsf_anomaly_geometry_active(); },
     .build_sha256 = []() -> const char* { return build ? build->sha256 : ""; },
     .close_stale = [] { rsf_anomaly_swap_close_stale(swap.state); },
     .prepare = [](const rsf_anomaly_sr_frame_facts* in, rsf_anomaly_sr_log log, void* user) {
@@ -489,9 +489,9 @@ const rsf_anomaly_sr_stage_platform platform{
         (void)rsf_anomaly_slot_set(RSF_ANOMALY_POSITION_SLOT, false);
         (void)rsf_anomaly_hooks_disable(&hooks);
     },
-    .set_rm_near = [](bool on) { geometry::geometry_set_rm_near_callback(on ? &rm_near_callback : nullptr); },
+    .set_rm_near = [](bool on) { rsf_anomaly_geometry_set_near(on ? &rm_near_callback : nullptr); },
     .remove_hooks = [] {
-        geometry::geometry_set_rm_near_callback(nullptr);
+        rsf_anomaly_geometry_set_near(nullptr);
         const bool restored = rsf_anomaly_slot_set(RSF_ANOMALY_POSITION_SLOT, false);
         const bool disabled = rsf_anomaly_hooks_disable(&hooks);
         return restored && disabled;

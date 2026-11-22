@@ -49,7 +49,7 @@ pub(super) fn leave_factory() {
 }
 
 fn view(platform: &Platform, engine: Engine) -> Option<u8> {
-    let layout = engine_layout(platform, engine)?;
+    let layout = engine_layout(engine)?;
     let viewport = engine.module.checked_add(layout.viewport as usize)?;
     let [active] = read_bytes(platform.read, viewport)?;
     let [delay] = read_bytes(platform.read, viewport.checked_add(1)?)?;

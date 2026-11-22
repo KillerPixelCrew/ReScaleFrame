@@ -29,7 +29,7 @@ bool rsf_anomaly_motion_install_native(void* image, size_t build) RSF_STAGE_NOEX
 // motion/stage.rs.
 bool rsf_anomaly_motion_stage_quiesce(void) RSF_STAGE_NOEXCEPT;
 
-// native_geometry.cpp.
+// native_geometry_platform.c (declared with its other entries in native_geometry.h).
 bool rsf_anomaly_geometry_install_native(void* image, size_t build) RSF_STAGE_NOEXCEPT;
 bool rsf_anomaly_geometry_disable_native(void) RSF_STAGE_NOEXCEPT;
 // Calls `original(self)` inside the render-view scope of the CRender::Render detour. The scope is left on return and

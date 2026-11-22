@@ -234,7 +234,7 @@ were gathered.
 - `temporal_types.h` holds the native draw packet matrix, key and view
   types needed by existing geometry and motion consumers. The native
   geometry fixture keeps its guarded producer reads and forwards copied
-  data through `anomaly_geometry_history.h` and
+  data through the C oracle API (`temporal/fixture_platform.h`) and
   `temporal_fixture/geometry_bridge.rs`. Rust owns the history and
   immutable snapshots, and the C bridge returns only a copied previous
   world matrix and status. The fixture still checks the original live

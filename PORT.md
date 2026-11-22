@@ -1999,18 +1999,18 @@ Port geometry admission, observation and retirement together with their contract
 **Port files (8)**
 
 - [x] [games/anomaly/src/geometry_feed.cpp](games/anomaly/src/geometry_feed.cpp)
-- [ ] [games/anomaly/src/geometry_feed.h](games/anomaly/src/geometry_feed.h)
-- [ ] [games/anomaly/src/geometry_profile.h](games/anomaly/src/geometry_profile.h)
+- [x] [games/anomaly/src/geometry_feed.h](games/anomaly/src/geometry_feed.h) (deleted; the 64-byte capture record is the C `rsf_anomaly_geometry_snapshot` in `native_geometry_platform.h`)
+- [x] [games/anomaly/src/geometry_profile.h](games/anomaly/src/geometry_profile.h) (generated projection from the Rust profile owner `geometry_profile.rs`; the native leaf no longer reads it, and its `constexpr` records remain only for `build_profile.h`, `tests/anomaly_sr_profile.cpp` and the evidence scripts)
 - [x] [games/anomaly/src/geometry_registry_platform.h](games/anomaly/src/geometry_registry_platform.h)
-- [ ] [games/anomaly/src/geometry_retirement.h](games/anomaly/src/geometry_retirement.h)
-- [ ] [games/anomaly/src/native_geometry.cpp](games/anomaly/src/native_geometry.cpp)
-- [ ] [games/anomaly/src/native_geometry.h](games/anomaly/src/native_geometry.h)
-- [ ] [games/anomaly/src/native_geometry_platform.h](games/anomaly/src/native_geometry_platform.h)
+- [x] [games/anomaly/src/geometry_retirement.h](games/anomaly/src/geometry_retirement.h) (deleted; its key adapter had only the removed C++ facade and fixture as callers)
+- [x] [games/anomaly/src/native_geometry.cpp](games/anomaly/src/native_geometry.cpp) (C++ removed; C11 leaf `native_geometry_platform.c`, SEH `__try/__finally` scope guards around the 17 detours)
+- [x] [games/anomaly/src/native_geometry.h](games/anomaly/src/native_geometry.h) (C declarations only)
+- [x] [games/anomaly/src/native_geometry_platform.h](games/anomaly/src/native_geometry_platform.h) (C declarations only)
 
 **Fixtures (2)**
 
-- [ ] [tests/anomaly_geometry_hooks.cpp](tests/anomaly_geometry_hooks.cpp)
-- [ ] [tests/anomaly_geometry_tests.cpp](tests/anomaly_geometry_tests.cpp)
+- [x] [tests/anomaly_geometry_hooks.cpp](tests/anomaly_geometry_hooks.cpp) (C++ removed; C11 fixture `tests/anomaly_geometry_hooks.c`)
+- [x] [tests/anomaly_geometry_tests.cpp](tests/anomaly_geometry_tests.cpp) (C++ removed; C11 fixture `tests/anomaly_geometry_tests.c`, history through the Rust oracle C API)
 
 **Rust review findings (3)**
 

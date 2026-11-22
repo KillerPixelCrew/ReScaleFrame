@@ -33,7 +33,7 @@ extern "C" int32_t rsf_anomaly_sr_hook_near(const NearCalls*, void*) noexcept;
 namespace {
 
 int exercise_near_slot() {
-    const auto sites = geometry::native_geometry_hook_sites(*B);
+    const auto* sites = rsf_anomaly_geometry_hook_sites(static_cast<size_t>(B - build_profiles.data()));
     auto* base = reinterpret_cast<std::byte*>(GetModuleHandleW(nullptr));
     const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
     const auto* pe = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
@@ -47,7 +47,7 @@ int exercise_near_slot() {
     }
     const NearCalls calls{
         near_fixture,
-        [](bool on) { geometry::geometry_set_rm_near_callback(on ? &callback : nullptr); },
+        [](bool on) { rsf_anomaly_geometry_set_near(on ? &callback : nullptr); },
         [](void* owner) { return rsf_anomaly_hooks_disable(static_cast<rsf_anomaly_hook_set*>(owner)); },
         [](int* near_count, int* callbacks, void** seen) {
             *near_count = near_calls;
@@ -56,7 +56,7 @@ int exercise_near_slot() {
         },
     };
     const auto failures = rsf_anomaly_sr_hook_near(&calls, &hooks);
-    geometry::geometry_set_rm_near_callback(nullptr);
+    rsf_anomaly_geometry_set_near(nullptr);
     return failures;
 }
 

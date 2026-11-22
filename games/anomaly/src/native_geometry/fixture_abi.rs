@@ -89,3 +89,41 @@ const _: () = {
     ["Offset of field: rsf_test_anomaly_geometry_contract::sink"]
         [::core::mem::offset_of!(rsf_test_anomaly_geometry_contract, sink) - 64usize];
 };
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_test_anomaly_geometry_profile {
+    pub label: *const ::core::ffi::c_char,
+    pub executable: *const ::core::ffi::c_char,
+    pub image_size: u32,
+    pub phase: u32,
+    pub viewport: u32,
+    pub frame: u32,
+    pub world: u32,
+    pub vertex_constants: u32,
+    pub hierarchy_vtable: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_test_anomaly_geometry_profile"]
+        [::core::mem::size_of::<rsf_test_anomaly_geometry_profile>() - 48usize];
+    ["Alignment of rsf_test_anomaly_geometry_profile"]
+        [::core::mem::align_of::<rsf_test_anomaly_geometry_profile>() - 8usize];
+    ["Offset of field: rsf_test_anomaly_geometry_profile::label"]
+        [::core::mem::offset_of!(rsf_test_anomaly_geometry_profile, label) - 0usize];
+    ["Offset of field: rsf_test_anomaly_geometry_profile::executable"]
+        [::core::mem::offset_of!(rsf_test_anomaly_geometry_profile, executable) - 8usize];
+    ["Offset of field: rsf_test_anomaly_geometry_profile::image_size"]
+        [::core::mem::offset_of!(rsf_test_anomaly_geometry_profile, image_size) - 16usize];
+    ["Offset of field: rsf_test_anomaly_geometry_profile::phase"]
+        [::core::mem::offset_of!(rsf_test_anomaly_geometry_profile, phase) - 20usize];
+    ["Offset of field: rsf_test_anomaly_geometry_profile::viewport"]
+        [::core::mem::offset_of!(rsf_test_anomaly_geometry_profile, viewport) - 24usize];
+    ["Offset of field: rsf_test_anomaly_geometry_profile::frame"]
+        [::core::mem::offset_of!(rsf_test_anomaly_geometry_profile, frame) - 28usize];
+    ["Offset of field: rsf_test_anomaly_geometry_profile::world"]
+        [::core::mem::offset_of!(rsf_test_anomaly_geometry_profile, world) - 32usize];
+    ["Offset of field: rsf_test_anomaly_geometry_profile::vertex_constants"]
+        [::core::mem::offset_of!(rsf_test_anomaly_geometry_profile, vertex_constants) - 36usize];
+    ["Offset of field: rsf_test_anomaly_geometry_profile::hierarchy_vtable"]
+        [::core::mem::offset_of!(rsf_test_anomaly_geometry_profile, hierarchy_vtable) - 40usize];
+};

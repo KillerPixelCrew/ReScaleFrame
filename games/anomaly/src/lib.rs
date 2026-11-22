@@ -27,6 +27,8 @@ mod fg_stage_abi;
 #[cfg(all(windows, any(not(feature = "native-entry"), feature = "sr-fixtures")))]
 mod fixture_profile;
 mod frame_dump;
+#[cfg(windows)]
+mod geometry_profile;
 mod geometry_registry;
 mod geometry_registry_abi;
 #[cfg(windows)]

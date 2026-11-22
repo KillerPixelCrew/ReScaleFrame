@@ -4,12 +4,11 @@
 #include "motion_device_platform.h"
 #include "motion_frame_target.h"
 #include "motion_target_platform.h"
+#include "native_geometry_platform.h"
 #include "shader_frame_layout.h"
 #include <rescaleframe/game_frame.h>
 #include <rescaleframe/texture_dump.h>
 
-
-namespace rsf::anomaly::geometry { struct SnapshotFacts; }
 
 namespace rsf::anomaly::motion {
 using FrameTarget = rsf_anomaly_motion_frame_target;
@@ -19,7 +18,7 @@ using FrameTarget = rsf_anomaly_motion_frame_target;
 struct PositionViews { void* rtv; void* surface; };
 struct TargetFacts { uint32_t width, height, samples, layers; };
 struct DrawFacts {
-    const geometry::SnapshotFacts* capture;
+    const rsf_anomaly_geometry_snapshot* capture;
     uint64_t visual;
     int64_t tree_lod;
     uint8_t pass, kind, verdict, view, domain;
