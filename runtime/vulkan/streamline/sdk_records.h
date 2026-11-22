@@ -33,6 +33,20 @@ typedef struct rsf_slvk_sdk_preferences {
     uint32_t render_api;
 } rsf_slvk_sdk_preferences;
 
+typedef struct rsf_slvk_sdk_reflex_options {
+    rsf_slvk_sdk_header base;
+    uint32_t mode, interval_us;
+    uint8_t optimize_markers;
+    uint16_t hotkey;
+    uint32_t thread_id;
+} rsf_slvk_sdk_reflex_options;
+
+typedef struct rsf_slvk_sdk_pcl_options {
+    rsf_slvk_sdk_header base;
+    int16_t hotkey;
+    uint32_t thread_id;
+} rsf_slvk_sdk_pcl_options;
+
 typedef struct rsf_slvk_sdk_constants {
     rsf_slvk_sdk_header base;
     float view_to_clip[16], clip_to_view[16], clip_to_lens[16];
@@ -90,6 +104,7 @@ extern "C" {
 #endif
 uint32_t rsf_slvk_pack_legacy_camera(const rsf_slvk_legacy_camera*, rsf_slvk_sdk_constants*);
 void rsf_slvk_pack_legacy_tags(const rsf_slvk_legacy_image* const*, rsf_slvk_sdk_tag_batch*);
+void rsf_slvk_pack_pcl_options(uint32_t thread_id, rsf_slvk_sdk_pcl_options*);
 #ifdef __cplusplus
 }
 #endif

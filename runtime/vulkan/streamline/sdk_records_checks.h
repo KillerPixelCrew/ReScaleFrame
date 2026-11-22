@@ -2,6 +2,8 @@
 #pragma once
 #include "sdk_records.h"
 #include <sl.h>
+#include <sl_reflex.h>
+#include <sl_pcl.h>
 
 static_assert(sl::kSDKVersion == 0x0002000e0001fedcull);
 static_assert(sl::kFeaturePCL == 4 && sl::kFeatureReflex == 3 &&
@@ -25,6 +27,13 @@ static_assert(sizeof(sl::Resource) == sizeof(rsf_slvk_sdk_resource) &&
 static_assert(sizeof(sl::ResourceTag) == sizeof(rsf_slvk_sdk_tag) &&
     alignof(sl::ResourceTag) == alignof(rsf_slvk_sdk_tag) &&
     __is_trivially_copyable(sl::ResourceTag));
+static_assert(sizeof(sl::ReflexOptions) == sizeof(rsf_slvk_sdk_reflex_options) &&
+    alignof(sl::ReflexOptions) == alignof(rsf_slvk_sdk_reflex_options) &&
+    __is_trivially_copyable(sl::ReflexOptions));
+static_assert(sizeof(sl::PCLOptions) == sizeof(rsf_slvk_sdk_pcl_options) &&
+    alignof(sl::PCLOptions) == alignof(rsf_slvk_sdk_pcl_options) &&
+    __is_trivially_copyable(sl::PCLOptions));
+static_assert(uint32_t(sl::PCLHotKey::eUsePingMessage) == 0);
 static_assert(uint32_t(sl::ResourceType::eTex2d) == 0 &&
     sl::ResourceLifecycle::eOnlyValidNow == 0 && sl::ResourceLifecycle::eValidUntilPresent == 1);
 static_assert(sl::kBufferTypeDepth == 0 && sl::kBufferTypeMotionVectors == 1 &&
@@ -103,6 +112,13 @@ RSF_SL_OFFSET(ResourceTag, tag, resource, resource);
 RSF_SL_OFFSET(ResourceTag, tag, type, type);
 RSF_SL_OFFSET(ResourceTag, tag, lifecycle, lifecycle);
 RSF_SL_OFFSET(ResourceTag, tag, extent, top);
+RSF_SL_OFFSET(ReflexOptions, reflex_options, mode, mode);
+RSF_SL_OFFSET(ReflexOptions, reflex_options, frameLimitUs, interval_us);
+RSF_SL_OFFSET(ReflexOptions, reflex_options, useMarkersToOptimize, optimize_markers);
+RSF_SL_OFFSET(ReflexOptions, reflex_options, virtualKey, hotkey);
+RSF_SL_OFFSET(ReflexOptions, reflex_options, idThread, thread_id);
+RSF_SL_OFFSET(PCLOptions, pcl_options, virtualKey, hotkey);
+RSF_SL_OFFSET(PCLOptions, pcl_options, idThread, thread_id);
 static_assert(offsetof(sl::Extent, top) == 0 && offsetof(sl::Extent, left) == 4 &&
     offsetof(sl::Extent, width) == 8 && offsetof(sl::Extent, height) == 12);
 #undef RSF_SL_OFFSET

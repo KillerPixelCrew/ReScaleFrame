@@ -18,8 +18,6 @@
 #include "sdk_records_checks.h"
 #include "wsi_abi.h"
 #include "sdk_fg_options_checks.h"
-#include <sl_reflex.h>
-#include <sl_pcl.h>
 
 #if defined(RSF_STREAMLINE_VULKAN_STATIC)
 #define RSF_SL_VK_EXPORT
@@ -68,7 +66,7 @@ int32_t rsf_slvk_fg_set(const RsfSlFgPlatform*, int32_t, const RsfSlFgOptions*);
 int32_t rsf_slvk_fg_disable(const RsfSlFgPlatform*);
 int32_t rsf_slvk_fg_free(const RsfSlFgPlatform*);
 int32_t rsf_slvk_sdk_call(int32_t (*)(void*), void*, int32_t inactive);
-int32_t rsf_slvk_reflex_options(int32_t (*)(uint32_t, uint32_t), int32_t mode, uint32_t limit, uint32_t limitIsFps);
+int32_t rsf_slvk_reflex_options(int32_t (*)(const rsf_slvk_sdk_reflex_options*), int32_t mode, uint32_t limit, uint32_t limitIsFps);
 int32_t rsf_slvk_token_begin(int32_t (*)(uint32_t, uintptr_t*), uint32_t, uintptr_t*);
 uintptr_t rsf_slvk_token_current();
 int32_t rsf_slvk_token_call(uintptr_t, int32_t (*)(uintptr_t, void*), void*, int32_t inactive);
@@ -218,12 +216,10 @@ template<class Call> int32_t callSdk(Call call, int32_t inactive = -1) {
     }, &call, inactive);
 }
 
-int32_t applyReflexOptions(uint32_t mode, uint32_t intervalUs) noexcept try {
+int32_t applyReflexOptions(const rsf_slvk_sdk_reflex_options* request) noexcept try {
     if (!reflexOptions) return -1;
     sl::ReflexOptions options{};
-    options.mode = static_cast<sl::ReflexMode>(mode);
-    options.frameLimitUs = intervalUs;
-    options.idThread = GetCurrentThreadId();
+    std::memcpy(static_cast<void*>(&options), request, sizeof(options));
     return static_cast<int32_t>(reflexOptions(options));
 } catch (...) {
     return static_cast<int32_t>(sl::Result::eErrorExceptionHandler);
@@ -415,8 +411,10 @@ RSF_SL_VK_EXPORT int VulkanStorySlBindPcl() {
         pclState = reinterpret_cast<PFun_slPCLGetState*>(function);
         if (!loadFeature(sl::kFeaturePCL, "slPCLSetOptions", function)) return -3;
         pclOptions = reinterpret_cast<PFun_slPCLSetOptions*>(function);
+        rsf_slvk_sdk_pcl_options packed{};
+        rsf_slvk_pack_pcl_options(GetCurrentThreadId(), &packed);
         sl::PCLOptions options{};
-        options.idThread = GetCurrentThreadId();
+        std::memcpy(static_cast<void*>(&options), &packed, sizeof(options));
         return static_cast<int>(pclOptions(options));
     });
 }

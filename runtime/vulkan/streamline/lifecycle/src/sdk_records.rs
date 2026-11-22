@@ -2,8 +2,8 @@
 //! Data construction for the pinned Streamline 2.14.1 C++ call leaves.
 use crate::sdk_records_abi::{
     rsf_slvk_legacy_camera, rsf_slvk_legacy_image, rsf_slvk_sdk_constants, rsf_slvk_sdk_header,
-    rsf_slvk_sdk_log, rsf_slvk_sdk_preferences, rsf_slvk_sdk_resource, rsf_slvk_sdk_tag,
-    rsf_slvk_sdk_tag_batch,
+    rsf_slvk_sdk_log, rsf_slvk_sdk_pcl_options, rsf_slvk_sdk_preferences,
+    rsf_slvk_sdk_reflex_options, rsf_slvk_sdk_resource, rsf_slvk_sdk_tag, rsf_slvk_sdk_tag_batch,
 };
 use std::ffi::c_char;
 use std::ptr;
@@ -77,6 +77,44 @@ pub(crate) fn preferences(
         render_api: 2, // eVulkan
         ..Default::default()
     }
+}
+
+pub(crate) fn reflex_options(
+    mode: u32,
+    interval_us: u32,
+    thread_id: u32,
+) -> rsf_slvk_sdk_reflex_options {
+    rsf_slvk_sdk_reflex_options {
+        base: rsf_slvk_sdk_header {
+            next: ptr::null_mut(),
+            type_lo: 0xf03a_f81a,
+            type_mid: 0x6d0b,
+            type_hi: 0x4902,
+            type_tail: [0xa6, 0x51, 0xc4, 0x96, 0x5e, 0x21, 0x54, 0x34],
+            version: 1,
+        },
+        mode,
+        interval_us,
+        optimize_markers: 0,
+        hotkey: 0,
+        thread_id,
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_slvk_pack_pcl_options(thread_id: u32, output: &mut rsf_slvk_sdk_pcl_options) {
+    *output = rsf_slvk_sdk_pcl_options {
+        base: rsf_slvk_sdk_header {
+            next: ptr::null_mut(),
+            type_lo: 0xcfa3_2f9b,
+            type_mid: 0x023c,
+            type_hi: 0x420e,
+            type_tail: [0x90, 0x56, 0x68, 0x32, 0xb7, 0x4f, 0x89, 0xb4],
+            version: 1,
+        },
+        hotkey: 0, // eUsePingMessage
+        thread_id,
+    };
 }
 
 /// Matrix buffers borrow one live managed frame and are copied into the SDK's
@@ -188,6 +226,19 @@ unsafe extern "C" fn rsf_slvk_pack_legacy_tags(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn latency_option_records_keep_default_ping_and_caller_thread() {
+        let reflex = reflex_options(2, 8_333, 19);
+        assert_eq!(
+            (reflex.mode, reflex.interval_us, reflex.thread_id),
+            (2, 8_333, 19)
+        );
+        assert_eq!((reflex.optimize_markers, reflex.hotkey), (0, 0));
+        let mut pcl = rsf_slvk_sdk_pcl_options::default();
+        rsf_slvk_pack_pcl_options(23, &mut pcl);
+        assert_eq!((pcl.hotkey, pcl.thread_id), (0, 23));
+    }
 
     #[test]
     fn legacy_camera_keeps_matrix_storage_order_and_streamline_defaults() {

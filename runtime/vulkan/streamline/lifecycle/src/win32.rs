@@ -5,6 +5,8 @@ mod wsi;
 
 use crate::frame_generation::{Options, Platform as FgPlatform};
 use crate::lifecycle::{Lifecycle, Platform, System, feature_mask};
+use crate::sdk_records;
+use crate::sdk_records_abi::rsf_slvk_sdk_reflex_options;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{NonNull, null_mut};
 
@@ -18,6 +20,7 @@ unsafe extern "system" {
     fn CloseHandle(handle: *mut c_void) -> i32;
     fn GetProcAddress(module: *mut c_void, name: *const c_char) -> *mut c_void;
     fn GetModuleHandleW(name: *const u16) -> *mut c_void;
+    fn GetCurrentThreadId() -> u32;
 }
 
 struct Win32;
@@ -141,7 +144,7 @@ unsafe extern "C" fn rsf_slvk_sdk_call(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_slvk_reflex_options(
-    apply: unsafe extern "C" fn(u32, u32) -> i32,
+    apply: unsafe extern "C" fn(&rsf_slvk_sdk_reflex_options) -> i32,
     mode: i32,
     limit: u32,
     limit_is_fps: u32,
@@ -156,7 +159,10 @@ unsafe extern "C" fn rsf_slvk_reflex_options(
     } else {
         1_000_000u32.checked_div(limit).unwrap_or(0)
     };
-    LIFECYCLE.with_sdk(-1, || unsafe { apply(mode, interval) })
+    LIFECYCLE.with_sdk(-1, || {
+        let options = sdk_records::reflex_options(mode, interval, unsafe { GetCurrentThreadId() });
+        unsafe { apply(&options) }
+    })
 }
 
 #[unsafe(no_mangle)]

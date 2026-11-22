@@ -113,6 +113,73 @@ impl Default for rsf_slvk_sdk_preferences {
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
+pub struct rsf_slvk_sdk_reflex_options {
+    pub base: rsf_slvk_sdk_header,
+    pub mode: u32,
+    pub interval_us: u32,
+    pub optimize_markers: u8,
+    pub hotkey: u16,
+    pub thread_id: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_slvk_sdk_reflex_options"]
+        [::core::mem::size_of::<rsf_slvk_sdk_reflex_options>() - 48usize];
+    ["Alignment of rsf_slvk_sdk_reflex_options"]
+        [::core::mem::align_of::<rsf_slvk_sdk_reflex_options>() - 8usize];
+    ["Offset of field: rsf_slvk_sdk_reflex_options::base"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_reflex_options, base) - 0usize];
+    ["Offset of field: rsf_slvk_sdk_reflex_options::mode"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_reflex_options, mode) - 32usize];
+    ["Offset of field: rsf_slvk_sdk_reflex_options::interval_us"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_reflex_options, interval_us) - 36usize];
+    ["Offset of field: rsf_slvk_sdk_reflex_options::optimize_markers"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_reflex_options, optimize_markers) - 40usize];
+    ["Offset of field: rsf_slvk_sdk_reflex_options::hotkey"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_reflex_options, hotkey) - 42usize];
+    ["Offset of field: rsf_slvk_sdk_reflex_options::thread_id"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_reflex_options, thread_id) - 44usize];
+};
+impl Default for rsf_slvk_sdk_reflex_options {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_slvk_sdk_pcl_options {
+    pub base: rsf_slvk_sdk_header,
+    pub hotkey: i16,
+    pub thread_id: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_slvk_sdk_pcl_options"]
+        [::core::mem::size_of::<rsf_slvk_sdk_pcl_options>() - 40usize];
+    ["Alignment of rsf_slvk_sdk_pcl_options"]
+        [::core::mem::align_of::<rsf_slvk_sdk_pcl_options>() - 8usize];
+    ["Offset of field: rsf_slvk_sdk_pcl_options::base"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_pcl_options, base) - 0usize];
+    ["Offset of field: rsf_slvk_sdk_pcl_options::hotkey"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_pcl_options, hotkey) - 32usize];
+    ["Offset of field: rsf_slvk_sdk_pcl_options::thread_id"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_pcl_options, thread_id) - 36usize];
+};
+impl Default for rsf_slvk_sdk_pcl_options {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub struct rsf_slvk_sdk_constants {
     pub base: rsf_slvk_sdk_header,
     pub view_to_clip: [f32; 16usize],
