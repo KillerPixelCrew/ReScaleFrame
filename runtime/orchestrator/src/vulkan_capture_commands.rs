@@ -2,7 +2,7 @@
 use crate::dx12_vulkan_platform::lookup;
 use crate::sys::rsf_srvk_setup as Graphics;
 use ash::vk::{self, Handle as _};
-use std::{ffi::c_void, mem, ptr};
+use std::{mem, ptr};
 
 macro_rules! command_dispatch {
     ($($field:ident: $ty:ident = $name:literal),+ $(,)?) => {
@@ -102,87 +102,4 @@ impl Commands {
     pub(super) fn wait_fence(&self, fence: vk::Fence, timeout: u64) -> vk::Result {
         unsafe { (self.wait_fences)(self.device, 1, &fence, vk::TRUE, timeout) }
     }
-}
-
-// Native Streamline WSI uses the same command and fence operations.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_vk_capture_commands_open(graphics: &Graphics) -> *mut Commands {
-    Commands::load(graphics).map_or(ptr::null_mut(), crate::allocate_handle)
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_vk_capture_commands_close(ops: *mut Commands) {
-    if !ops.is_null() {
-        drop(unsafe { Box::from_raw(ops) });
-    }
-}
-
-fn write<T>(value: Result<T, vk::Result>, out: &mut T) -> i32 {
-    match value {
-        Ok(value) => {
-            *out = value;
-            0
-        }
-        Err(result) => result.as_raw(),
-    }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_vk_capture_create_pool(ops: &Commands, family: u32, out: &mut u64) -> i32 {
-    write(
-        ops.create_pool(family, vk::CommandPoolCreateFlags::TRANSIENT)
-            .map(|pool| pool.as_raw()),
-        out,
-    )
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_vk_capture_destroy_pool(ops: &Commands, pool: u64) {
-    ops.destroy_pool(vk::CommandPool::from_raw(pool));
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_vk_capture_allocate(ops: &Commands, pool: u64, out: &mut *mut c_void) -> i32 {
-    write(
-        ops.allocate(vk::CommandPool::from_raw(pool))
-            .map(|commands| commands.as_raw() as *mut c_void),
-        out,
-    )
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_vk_capture_reset_pool(ops: &Commands, pool: u64) -> i32 {
-    ops.reset_pool(vk::CommandPool::from_raw(pool)).as_raw()
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_vk_capture_begin(ops: &Commands, commands: *mut c_void) -> i32 {
-    ops.begin(vk::CommandBuffer::from_raw(commands as u64))
-        .as_raw()
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_vk_capture_end(ops: &Commands, commands: *mut c_void) -> i32 {
-    ops.end(vk::CommandBuffer::from_raw(commands as u64))
-        .as_raw()
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_vk_capture_create_fence(ops: &Commands, out: &mut u64) -> i32 {
-    write(ops.create_fence().map(|fence| fence.as_raw()), out)
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_vk_capture_destroy_fence(ops: &Commands, fence: u64) {
-    ops.destroy_fence(vk::Fence::from_raw(fence));
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_vk_capture_reset_fence(ops: &Commands, fence: u64) -> i32 {
-    ops.reset_fence(vk::Fence::from_raw(fence)).as_raw()
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_vk_capture_wait_fence(ops: &Commands, fence: u64, timeout: u64) -> i32 {
-    ops.wait_fence(vk::Fence::from_raw(fence), timeout).as_raw()
 }
