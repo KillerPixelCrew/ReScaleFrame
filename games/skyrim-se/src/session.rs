@@ -45,8 +45,6 @@ const COLOUR_TRANSPORT_NATIVE: u32 = 1;
 // pacing, marker mapping and provider admission policy.
 const CAP_FG_INPUTS: u32 = 1;
 const CAP_INPUT_TIMELINE: u32 = 2;
-// DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2.
-const PER_MONITOR_V2: *mut c_void = -4isize as *mut c_void;
 
 const NOT_PREPARED: &CStr = c"Native hooks not prepared; native-resolution SR is experimental; FG and latency remain incomplete.";
 const OBSERVER_REFUSED: &CStr =
@@ -62,8 +60,6 @@ const START_IDENTITY: &CStr =
     c"Skyrim start refused: executable identity or jitter101E360 guard changed before enable.";
 const ACTIVE: &CStr = c"Experimental native-resolution SR active with native temporal fallback; FG and latency ownership remain incomplete.";
 const STOPPED: &CStr = c"Native observer stopped; no host services retained.";
-
-type SetDpi = unsafe extern "system" fn(*mut c_void) -> i32;
 
 /// The subsystems the lifecycle drives, called directly. Unit tests swap in recording fakes
 /// (`tests::subsystems`).
@@ -215,22 +211,21 @@ fn quiesce_subsystems(creation_first: bool) {
     }
 }
 
-/// The per-monitor-v2 startup request, once per process before any observer hook exists.
+/// The per-monitor-v2 startup request, once per process before any observer hook exists. A
+/// request that does not verify is logged; prepare continues as before.
 fn request_dpi(host: &rsf_game_host_services) -> Result<(), Threw> {
-    let platform = &Platform;
-    let user32 = platform.module_handle("user32.dll");
-    let set = platform.export_address(user32, c"SetProcessDpiAwarenessContext");
-    platform.set_last_error(0);
-    // SAFETY: the user32 export has this signature.
-    let accepted =
-        set != 0 && unsafe { std::mem::transmute::<usize, SetDpi>(set)(PER_MONITOR_V2) } != 0;
-    let error = if accepted { 0 } else { platform.last_error() };
+    let startup = rsf_game_sys::dpi::request_per_monitor_v2(true);
     if host.log.is_some() {
         log_text(
             host,
             &format!(
-                "Skyrim DPI startup per-monitor-v2 accepted={} error={error}; window creation must use physical pixels.",
-                u32::from(accepted)
+                "Skyrim DPI startup per-monitor-v2 requested={} accepted={} prior_compatible={} verified={} process_windows={} error={}; window creation must use physical pixels.",
+                u32::from(startup.requested),
+                u32::from(startup.accepted),
+                u32::from(startup.prior_compatible),
+                u32::from(startup.verified),
+                startup.process_windows,
+                startup.error,
             ),
         )?;
     }

@@ -28,6 +28,8 @@ pub mod backend_result;
 pub mod call_header;
 pub mod camera_math;
 pub mod checksum;
+#[cfg(windows)]
+pub mod dpi;
 pub mod ffi_util;
 mod frame_policy;
 pub use frame_policy::*;
