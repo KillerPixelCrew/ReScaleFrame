@@ -18,7 +18,6 @@ int32_t rsf_core_xessvk_shutdown(const rsf::xess_vk::Ops*);
 #include <windows.h>
 #include <xess/xess_vk.h>
 #include <cstddef>
-#include <cstring>
 #include <memory>
 #include "../../backends/common/frame_capture_vk.h"
 #include "sharpening_vulkan.h"
@@ -26,19 +25,6 @@ int32_t rsf_core_xessvk_shutdown(const rsf::xess_vk::Ops*);
 #include "vulkan_fg_resources_native.h"
 
 namespace rsf::xess_vk {
-struct Texture {
-    uint64_t image, view;
-    uint32_t width, height, format;
-};
-struct Init {
-    uint32_t width, height, quality, flags;
-};
-struct Execute {
-    Texture color, depth, motion, output;
-    float jitter[2];
-    float exposure_scale;
-    uint32_t input_width, input_height, reset;
-};
 struct Library {
     decltype(&xessVKGetRequiredInstanceExtensions) instance = nullptr;
     decltype(&xessVKGetRequiredDeviceExtensions) device = nullptr;
@@ -72,12 +58,12 @@ struct Ops {
     int32_t (*instance_requirements)(Library*, uint32_t*, const char* const**, uint32_t*);
     int32_t (*device_extensions)(Library*, void*, void*, uint32_t*, const char* const**);
     int32_t (*device_features)(Library*, void*, void*, void**);
-    int32_t (*version)(Library*, uint16_t*);
+    int32_t (*version)(Library*, xess_version_t*);
     int32_t (*open)(Library*, Native**);
     void (*close)(Native*);
     int32_t (*create_context)(Native*, const rsf_srvk_setup*);
-    int32_t (*initialize)(Native*, const Init*);
-    int32_t (*resolution)(Native*, const Init*, uint32_t*);
+    int32_t (*initialize)(Native*, const xess_vk_init_params_t*);
+    int32_t (*resolution)(Native*, const xess_vk_init_params_t*, xess_2d_t*);
     int32_t (*destroy_context)(Native*);
     int32_t (*bind_device)(Native*, const rsf_srvk_setup*);
     void* (*image_user)(Native*);
@@ -85,7 +71,7 @@ struct Ops {
     int32_t (*velocity)(Native*, float, float);
     void (*barrier)(Native*, void*, const rsf_vkfg_barrier*);
     void (*copy)(Native*, void*, const rsf_vkfg_image_copy*);
-    int32_t (*execute)(Native*, void*, const Execute*);
+    int32_t (*execute)(Native*, void*, const xess_vk_execute_params_t*);
     int32_t (*sharpen)(Native*, const rsf_srvk_setup*, void*, const rsf_srvk_frame*, uint64_t);
     void (*clear_sharpen)(Native*);
     void (*capture_provider)(Native*, uint64_t, uint32_t);
@@ -96,13 +82,15 @@ struct Ops {
     void (*bind_entries)(Library*, const Entries*);
     void* (*lookup)(void*, const char*);
 };
-static_assert(sizeof(Ops) == 31 * sizeof(void*) && sizeof(rsf_xessvk_setup) == 16 && sizeof(Init) == 16);
+static_assert(sizeof(Ops) == 31 * sizeof(void*) && sizeof(rsf_xessvk_setup) == 16);
 static_assert(offsetof(Ops, barrier) == 19 * sizeof(void*) && offsetof(Ops, copy) == 20 * sizeof(void*) &&
     offsetof(Ops, execute) == 21 * sizeof(void*) && offsetof(Ops, sharpen) == 22 * sizeof(void*));
 static_assert(offsetof(Ops, bind_entries) == 29 * sizeof(void*) && offsetof(Ops, lookup) == 30 * sizeof(void*));
 static_assert(sizeof(Entries) == 10 * sizeof(void*));
-static_assert(sizeof(Texture) == 32);
-static_assert(sizeof(Execute) == 152 && offsetof(Execute, reset) == 148);
+static_assert(sizeof(xess_vk_image_view_info) == 48 && offsetof(xess_vk_image_view_info, format) == 36);
+static_assert(sizeof(xess_vk_init_params_t) == 64 && offsetof(xess_vk_init_params_t, qualitySetting) == 8);
+static_assert(sizeof(xess_vk_execute_params_t) == 360 && offsetof(xess_vk_execute_params_t, resetHistory) == 300);
+static_assert(VK_IMAGE_ASPECT_COLOR_BIT == 1);
 // Values mirrored by the Rust owner.
 static_assert(XESS_RESULT_SUCCESS == 0 && XESS_RESULT_ERROR_UNSUPPORTED_DEVICE == -1 &&
     XESS_RESULT_ERROR_UNSUPPORTED_DRIVER == -2 && XESS_RESULT_ERROR_NOT_IMPLEMENTED == -7 &&
@@ -149,11 +137,8 @@ int32_t device_features(Library* sdk, void* instance, void* physical, void** fea
     return sdk->features(static_cast<VkInstance>(instance), static_cast<VkPhysicalDevice>(physical), features);
 }
 
-int32_t version(Library* sdk, uint16_t* out) noexcept {
-    xess_version_t value{};
-    const auto result = sdk->version(&value);
-    out[0] = value.major; out[1] = value.minor; out[2] = value.patch; out[3] = value.reserved;
-    return result;
+int32_t version(Library* sdk, xess_version_t* out) noexcept {
+    return sdk->version(out);
 }
 
 int32_t open(Library* sdk, Native** out) noexcept try {
@@ -169,22 +154,13 @@ int32_t create_context(Native* native, const rsf_srvk_setup* setup) noexcept {
         static_cast<VkPhysicalDevice>(setup->physical_device), native->device, &native->context);
 }
 
-int32_t initialize(Native* native, const Init* call) noexcept {
-    xess_vk_init_params_t init{};
-    init.outputResolution = {call->width, call->height};
-    init.qualitySetting = static_cast<xess_quality_settings_t>(call->quality);
-    init.initFlags = call->flags;
-    return native->sdk->initialize(native->context, &init);
+int32_t initialize(Native* native, const xess_vk_init_params_t* init) noexcept {
+    return native->sdk->initialize(native->context, init);
 }
 
-int32_t resolution(Native* native, const Init* call, uint32_t* out) noexcept {
-    const xess_2d_t output{call->width, call->height};
-    xess_2d_t recommended{}, minimum{}, maximum{};
-    const auto result = native->sdk->resolution(native->context, &output,
-        static_cast<xess_quality_settings_t>(call->quality), &recommended, &minimum, &maximum);
-    const uint32_t values[] = {recommended.x, recommended.y, minimum.x, minimum.y, maximum.x, maximum.y};
-    std::memcpy(out, values, sizeof(values));
-    return result;
+int32_t resolution(Native* native, const xess_vk_init_params_t* init, xess_2d_t* out) noexcept {
+    return native->sdk->resolution(native->context, &init->outputResolution,
+        init->qualitySetting, &out[0], &out[1], &out[2]);
 }
 
 int32_t destroy_context(Native* native) noexcept {
@@ -224,30 +200,8 @@ int32_t velocity(Native* native, float x, float y) noexcept {
     return native->sdk->velocity(native->context, x, y);
 }
 
-xess_vk_image_view_info texture_view(const Texture& texture) noexcept {
-    xess_vk_image_view_info result{};
-    result.image = reinterpret_cast<VkImage>(texture.image);
-    result.imageView = reinterpret_cast<VkImageView>(texture.view);
-    result.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    result.width = texture.width;
-    result.height = texture.height;
-    result.format = static_cast<VkFormat>(texture.format);
-    return result;
-}
-
-int32_t execute(Native* native, void* commands, const Execute* call) noexcept {
-    xess_vk_execute_params_t data{};
-    data.colorTexture = texture_view(call->color);
-    data.depthTexture = texture_view(call->depth);
-    data.velocityTexture = texture_view(call->motion);
-    data.outputTexture = texture_view(call->output);
-    data.jitterOffsetX = call->jitter[0];
-    data.jitterOffsetY = call->jitter[1];
-    data.exposureScale = call->exposure_scale;
-    data.inputWidth = call->input_width;
-    data.inputHeight = call->input_height;
-    data.resetHistory = call->reset;
-    return native->sdk->execute(native->context, static_cast<VkCommandBuffer>(commands), &data);
+int32_t execute(Native* native, void* commands, const xess_vk_execute_params_t* data) noexcept {
+    return native->sdk->execute(native->context, static_cast<VkCommandBuffer>(commands), data);
 }
 
 int32_t sharpen(Native* native, const rsf_srvk_setup* setup, void* commands, const rsf_srvk_frame* frame, uint64_t output) noexcept try {

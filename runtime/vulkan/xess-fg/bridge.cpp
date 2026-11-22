@@ -19,6 +19,15 @@
 #include "session_abi.h"
 #include "diagnostic-capture.h"
 
+static_assert(XEFG_SWAPCHAIN_USE_MAX_SUPPORTED_INTERPOLATED_FRAMES == UINT32_MAX);
+static_assert(sizeof(xefg_swapchain_d3d12_init_params_t) == 72 &&
+    offsetof(xefg_swapchain_d3d12_init_params_t, uiMode) == 64);
+static_assert(sizeof(xefg_swapchain_properties_t) == 40 &&
+    offsetof(xefg_swapchain_properties_t, maxSupportedInterpolations) == 32);
+static_assert(sizeof(xefg_swapchain_frame_constant_data_t) == 152 &&
+    offsetof(xefg_swapchain_frame_constant_data_t, resetHistory) == 144);
+static_assert(sizeof(xefg_swapchain_present_status_t) == 12 && sizeof(xell_sleep_params_t) == 8);
+
 /// @brief Releases a local COM reference and clears its pointer without GPU waiting.
 template<typename T> static void Release(T*& value) {
     if (value) { value->Release(); value = nullptr; }
@@ -110,29 +119,10 @@ struct VulkanStoryXessFg {
     decltype(&xefgSwapChainGetLastPresentStatus) presentStatus = nullptr;
 };
 
-/// @brief Fixed-layout frame resource and camera record shared with the managed XeSS presenter.
-/// @details All resource pointers borrow shared images in COMMON state. readyFenceValue follows Vulkan input copies; doneFenceValue follows queued DX12 copy/tag/present work and must exceed readyFenceValue.
-struct VulkanStoryXessFrame {
-    uint32_t frameId;
-    uint32_t reset;
-    uint32_t vsync;
-    uint32_t reserved;
-    ID3D12Resource* color;
-    ID3D12Resource* depth;
-    ID3D12Resource* motion;
-    ID3D12Resource* hudless;
-    ID3D12Resource* ui;
-    float viewMatrix[16];
-    float projectionMatrix[16];
-    float jitterX, jitterY;
-    float motionScaleX, motionScaleY;
-    uint64_t readyFenceValue;
-    uint64_t doneFenceValue;
-};
 static_assert(sizeof(VulkanStoryXessFrame) == 216 && alignof(VulkanStoryXessFrame) == 8);
 static_assert(offsetof(VulkanStoryXessFrame, color) == 16);
-static_assert(offsetof(VulkanStoryXessFrame, viewMatrix) == 56);
-static_assert(offsetof(VulkanStoryXessFrame, readyFenceValue) == 200);
+static_assert(offsetof(VulkanStoryXessFrame, view) == 56);
+static_assert(offsetof(VulkanStoryXessFrame, ready) == 200);
 static_assert(sizeof(rsf_xess_bridge_frame) == 216 && alignof(rsf_xess_bridge_frame) == 8);
 static_assert(offsetof(rsf_xess_bridge_frame, color) == 24);
 static_assert(offsetof(rsf_xess_bridge_frame, view_matrix) == 56);
@@ -156,7 +146,7 @@ static std::wstring ModulePath() {
 }
 
 // Transfer each loaded module to the session, including on partial failure.
-static int32_t LoadRuntime(VulkanStoryXessFg* value, const uint16_t* directory,
+static int32_t LoadRuntime(const uint16_t* directory,
     rsf_xess_bridge_modules* modules) noexcept try {
     std::wstring base = directory ? reinterpret_cast<const wchar_t*>(directory) : ModulePath();
     if (base.empty()) return -3;
@@ -168,35 +158,30 @@ static int32_t LoadRuntime(VulkanStoryXessFg* value, const uint16_t* directory,
         LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
     modules->xell = xellModule;
     if (!fgModule || !xellModule) return -3;
-#define LOAD(module, field, symbol) value->field = reinterpret_cast<decltype(value->field)>(GetProcAddress(module, #symbol))
-    LOAD(xellModule, createXell, xellD3D12CreateContext);
-    LOAD(xellModule, destroyXell, xellDestroyContext);
-    LOAD(xellModule, setSleepMode, xellSetSleepMode);
-    LOAD(xellModule, sleep, xellSleep);
-    LOAD(xellModule, marker, xellAddMarkerData);
-    LOAD(fgModule, createFg, xefgSwapChainD3D12CreateContext);
-    LOAD(fgModule, destroyFg, xefgSwapChainDestroy);
-    LOAD(fgModule, setLatency, xefgSwapChainSetLatencyReduction);
-    LOAD(fgModule, initSwapchain, xefgSwapChainD3D12InitFromSwapChainDesc);
-    LOAD(fgModule, getSwapchain, xefgSwapChainD3D12GetSwapChainPtr);
-    LOAD(fgModule, setEnabled, xefgSwapChainSetEnabled);
-    LOAD(fgModule, setPresentId, xefgSwapChainSetPresentId);
-    LOAD(fgModule, setInterpolations, xefgSwapChainSetNumInterpolatedFrames);
-    LOAD(fgModule, getProperties, xefgSwapChainGetProperties);
-    LOAD(fgModule, setUi, xefgSwapChainSetUiCompositionState);
-    LOAD(fgModule, tagResource, xefgSwapChainD3D12TagFrameResource);
-    LOAD(fgModule, tagConstants, xefgSwapChainTagFrameConstants);
-    LOAD(fgModule, presentStatus, xefgSwapChainGetLastPresentStatus);
-#undef LOAD
-    return value->createXell && value->destroyXell && value->setSleepMode &&
-        value->sleep && value->marker && value->createFg && value->destroyFg &&
-        value->setLatency && value->initSwapchain && value->getSwapchain &&
-        value->setEnabled && value->setPresentId && value->setInterpolations &&
-        value->getProperties &&
-        value->setUi && value->tagResource && value->tagConstants &&
-        value->presentStatus ? 0 : -3;
+    return 0;
 } catch (...) {
     return -3;
+}
+
+static void BindRuntime(VulkanStoryXessFg* value, const rsf_xess_bridge_sdk_entries* entries) {
+    value->createXell = reinterpret_cast<decltype(value->createXell)>((*entries)[0]);
+    value->destroyXell = reinterpret_cast<decltype(value->destroyXell)>((*entries)[1]);
+    value->setSleepMode = reinterpret_cast<decltype(value->setSleepMode)>((*entries)[2]);
+    value->sleep = reinterpret_cast<decltype(value->sleep)>((*entries)[3]);
+    value->marker = reinterpret_cast<decltype(value->marker)>((*entries)[4]);
+    value->createFg = reinterpret_cast<decltype(value->createFg)>((*entries)[5]);
+    value->destroyFg = reinterpret_cast<decltype(value->destroyFg)>((*entries)[6]);
+    value->setLatency = reinterpret_cast<decltype(value->setLatency)>((*entries)[7]);
+    value->initSwapchain = reinterpret_cast<decltype(value->initSwapchain)>((*entries)[8]);
+    value->getSwapchain = reinterpret_cast<decltype(value->getSwapchain)>((*entries)[9]);
+    value->setEnabled = reinterpret_cast<decltype(value->setEnabled)>((*entries)[10]);
+    value->setPresentId = reinterpret_cast<decltype(value->setPresentId)>((*entries)[11]);
+    value->setInterpolations = reinterpret_cast<decltype(value->setInterpolations)>((*entries)[12]);
+    value->getProperties = reinterpret_cast<decltype(value->getProperties)>((*entries)[13]);
+    value->setUi = reinterpret_cast<decltype(value->setUi)>((*entries)[14]);
+    value->tagResource = reinterpret_cast<decltype(value->tagResource)>((*entries)[15]);
+    value->tagConstants = reinterpret_cast<decltype(value->tagConstants)>((*entries)[16]);
+    value->presentStatus = reinterpret_cast<decltype(value->presentStatus)>((*entries)[17]);
 }
 
 static VulkanStoryXessFg* Allocate(rsf_xess_bridge_session* session, const rsf_xess_timing* timing) noexcept try {
@@ -371,7 +356,7 @@ extern "C" __declspec(dllexport) int VulkanStoryXessFgCreateFromVulkan(
 // The borrowed HWND must be free of other swapchain owners. Per-frame VSync
 // is applied by the native presentation path.
 static int32_t InitSwapchain(VulkanStoryXessFg* value, void* window, uint32_t width,
-    uint32_t height, uint32_t backbufferHudless, uint32_t invertedDepth) {
+    uint32_t height, const xefg_swapchain_d3d12_init_params_t* params) {
     IDXGIFactory5* factory5 = nullptr;
     if (SUCCEEDED(value->factory->QueryInterface(IID_PPV_ARGS(&factory5)))) {
         BOOL supported = FALSE;
@@ -388,20 +373,8 @@ static int32_t InitSwapchain(VulkanStoryXessFg* value, void* window, uint32_t wi
     desc.BufferCount = 3;
     desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     desc.Flags = value->allowTearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
-    xefg_swapchain_d3d12_init_params_t params{};
-    params.maxInterpolatedFrames = XEFG_SWAPCHAIN_USE_MAX_SUPPORTED_INTERPOLATED_FRAMES;
-    params.uiMode = backbufferHudless ? XEFG_SWAPCHAIN_UI_MODE_BACKBUFFER_HUDLESS :
-        XEFG_SWAPCHAIN_UI_MODE_HUDLESS_UITEXTURE;
-    params.initFlags = invertedDepth ? XEFG_SWAPCHAIN_INIT_FLAG_INVERTED_DEPTH : 0;
     return static_cast<int32_t>(value->initSwapchain(value->fg, static_cast<HWND>(window),
-        &desc, nullptr, value->queue, value->factory, &params));
-}
-
-static int32_t QueryLimit(VulkanStoryXessFg* value, uint32_t* maximum) {
-    xefg_swapchain_properties_t properties{};
-    int code = static_cast<int>(value->getProperties(value->fg, &properties));
-    if (code >= 0) *maximum = properties.maxSupportedInterpolations;
-    return code;
+        &desc, nullptr, value->queue, value->factory, params));
 }
 
 static int32_t GetSwapchain(VulkanStoryXessFg* value) {
@@ -716,35 +689,6 @@ static void CopyPresentColor(VulkanStoryXessFg* value, void* backbuffer, void* c
         static_cast<ID3D12Resource*>(color));
 }
 
-static_assert(XEFG_SWAPCHAIN_RES_HUDLESS_COLOR == 0 && XEFG_SWAPCHAIN_RES_DEPTH == 1 &&
-    XEFG_SWAPCHAIN_RES_MOTION_VECTOR == 2 && XEFG_SWAPCHAIN_RES_UI == 3);
-
-static int32_t TagPresentResource(VulkanStoryXessFg* value, void* resource,
-    uint32_t role, uint32_t frameId) {
-    auto* input = static_cast<ID3D12Resource*>(resource);
-    const D3D12_RESOURCE_DESC desc = input->GetDesc();
-    xefg_swapchain_d3d12_resource_data_t data{};
-    data.type = static_cast<xefg_swapchain_resource_type_t>(role);
-    data.validity = XEFG_SWAPCHAIN_RV_ONLY_NOW;
-    data.resourceSize = {static_cast<uint32_t>(desc.Width), desc.Height};
-    data.pResource = input;
-    data.incomingState = D3D12_RESOURCE_STATE_COPY_SOURCE;
-    return static_cast<int32_t>(value->tagResource(value->fg, value->commandList, frameId, &data));
-}
-
-static int32_t TagPresentConstants(VulkanStoryXessFg* value, const VulkanStoryXessFrame* frame) {
-    xefg_swapchain_frame_constant_data_t constants{};
-    std::memcpy(constants.viewMatrix, frame->viewMatrix, sizeof(constants.viewMatrix));
-    std::memcpy(constants.projectionMatrix, frame->projectionMatrix,
-        sizeof(constants.projectionMatrix));
-    constants.jitterOffsetX = frame->jitterX;
-    constants.jitterOffsetY = frame->jitterY;
-    constants.motionVectorScaleX = frame->motionScaleX;
-    constants.motionVectorScaleY = frame->motionScaleY;
-    constants.resetHistory = frame->reset;
-    return static_cast<int32_t>(value->tagConstants(value->fg, frame->frameId, &constants));
-}
-
 static void ExecutePresentCommands(VulkanStoryXessFg* value) {
     ID3D12CommandList* lists[] = {value->commandList};
     value->queue->ExecuteCommandLists(1, lists);
@@ -753,17 +697,6 @@ static void ExecutePresentCommands(VulkanStoryXessFg* value) {
 static int32_t PresentSwapchain(VulkanStoryXessFg* value, uint32_t vsync) {
     const uint32_t flags = !vsync && value->allowTearing ? DXGI_PRESENT_ALLOW_TEARING : 0;
     return static_cast<int32_t>(value->swapchain->Present(vsync ? 1 : 0, flags));
-}
-
-static int32_t ReadPresentStatus(VulkanStoryXessFg* value, rsf_xess_bridge_present_result* output) {
-    xefg_swapchain_present_status_t status{};
-    const int32_t code = static_cast<int32_t>(value->presentStatus(value->fg, &status));
-    if (code >= 0) {
-        output->frames_presented = status.framesPresented;
-        output->fg_result = static_cast<int32_t>(status.frameGenResult);
-        output->fg_enabled = status.isFrameGenEnabled;
-    }
-    return code;
 }
 
 static uint32_t BeginGpuTiming(VulkanStoryXessFg* value, uint32_t slot) {
@@ -807,14 +740,14 @@ static constexpr rsf_xess_bridge_platform Platform{
     .set_latency = [](VulkanStoryXessFg* value) -> int32_t {
         return value->setLatency(value->fg, value->xell);
     },
-    .set_default_sleep_mode = [](VulkanStoryXessFg* value) -> int32_t {
-        xell_sleep_params_t mode{};
-        mode.bLowLatencyMode = 1;
-        return value->setSleepMode(value->xell, &mode);
+    .set_sleep_mode = [](VulkanStoryXessFg* value, const xell_sleep_params_t* mode) -> int32_t {
+        return value->setSleepMode(value->xell, mode);
     },
     .log_create_error = LogCreateError,
     .init_swapchain = InitSwapchain,
-    .query_limit = QueryLimit,
+    .get_properties = [](VulkanStoryXessFg* value, xefg_swapchain_properties_t* properties) -> int32_t {
+        return value->getProperties(value->fg, properties);
+    },
     .get_swapchain = GetSwapchain,
     .enable_ui = [](VulkanStoryXessFg* value) -> int32_t {
         return value->setUi(value->fg, XEFG_SWAPCHAIN_UI_COMPOSITION_STATE_ENABLED);
@@ -848,10 +781,16 @@ static constexpr rsf_xess_bridge_platform Platform{
     .transition_present_resource = TransitionPresentResource,
     .acquire_backbuffer = AcquireBackbuffer,
     .copy_present_color = CopyPresentColor,
-    .tag_present_resource = TagPresentResource,
+    .tag_present_resource = [](VulkanStoryXessFg* value, uint32_t frameId,
+        const xefg_swapchain_d3d12_resource_data_t* data) -> int32_t {
+        return value->tagResource(value->fg, value->commandList, frameId, data);
+    },
     .release_backbuffer = [](void* backbuffer) { static_cast<ID3D12Resource*>(backbuffer)->Release(); },
     .close_commands = [](VulkanStoryXessFg* value) -> int32_t { return value->commandList->Close(); },
-    .tag_constants = TagPresentConstants,
+    .tag_constants = [](VulkanStoryXessFg* value, uint32_t frameId,
+        const xefg_swapchain_frame_constant_data_t* data) -> int32_t {
+        return value->tagConstants(value->fg, frameId, data);
+    },
     .wait_shared = WaitShared,
     .execute = ExecutePresentCommands,
     .set_present_id = [](VulkanStoryXessFg* value, uint32_t frameId) -> int32_t {
@@ -862,7 +801,9 @@ static constexpr rsf_xess_bridge_platform Platform{
     .signal_completion = [](VulkanStoryXessFg* value, uint64_t target) -> int32_t {
         return value->queue->Signal(value->completionFence, target);
     },
-    .read_present_status = ReadPresentStatus,
+    .read_present_status = [](VulkanStoryXessFg* value, xefg_swapchain_present_status_t* status) -> int32_t {
+        return value->presentStatus(value->fg, status);
+    },
     .timing_enabled = []() -> uint32_t { return timing_enabled; },
     .timing_now = TimingNow,
     .timing_frequency = []() -> int64_t { return timing_frequency; },
@@ -887,6 +828,10 @@ static constexpr rsf_xess_bridge_platform Platform{
     .capture_copy = rsf_xess_capture::RecordCopy,
     .capture_map = rsf_xess_capture::MapReadback,
     .capture_unmap = rsf_xess_capture::UnmapReadback,
+    .lookup_export = [](void* module, const char* name) -> void* {
+        return reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(module), name));
+    },
+    .bind_runtime = BindRuntime,
 };
 
 static int CreateContext(uint64_t adapterLuid, const wchar_t* directory, VulkanStoryXessFg** output) {
@@ -928,10 +873,7 @@ extern "C" __declspec(dllexport) int32_t RsfXessBridgePresent(rsf_xess_bridge* v
 extern "C" __declspec(dllexport) int VulkanStoryXessFgSetLatencyMode(VulkanStoryXessFg* value,
     uint32_t minimumIntervalUs, uint32_t enabled) {
     if (!value || !value->xell) return -1;
-    xell_sleep_params_t mode{};
-    mode.minimumIntervalUs = minimumIntervalUs;
-    mode.bLowLatencyMode = enabled ? 1 : 0;
-    return static_cast<int>(value->setSleepMode(value->xell, &mode));
+    return rsf_core_xess_bridge_set_sleep_mode(value->session, minimumIntervalUs, enabled);
 }
 
 /// @brief Invokes XeLL sleep for the supplied frame before host input polling.

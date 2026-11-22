@@ -84,8 +84,20 @@ frame_values = "RSF_(GAME_(FRAME|CAMERA)_ABI_VERSION|FRAME_(FLAG|SOURCE)_.*)"
 generate("sdk/game/src/frame_abi.rs", "sdk/game/include/rescaleframe/game_frame.h",
          frame_types, frame_values, [], ["--raw-line", "#![allow(dead_code)]"])
 generate("runtime/vulkan/xess-fg/bridge_abi.rs", "runtime/vulkan/xess-fg/bridge_api.h",
-         "rsf_xess_bridge_(create|start|frame|present_status)", "RSF_XESS_BRIDGE_.*", [],
-         ["--raw-line", "#![allow(dead_code)]"])
+         "rsf_xess_bridge_(create|start|frame|present_status)|VulkanStoryXessFrame", "RSF_XESS_BRIDGE_.*", [],
+         ["--blocklist-type", "rsf_xess_bridge_legacy_reserved", "--raw-line", "#![allow(dead_code)]",
+          "--raw-line", "type rsf_xess_bridge_legacy_reserved = ::core::mem::MaybeUninit<u32>;"])
+generate("runtime/vulkan/xess-fg/session_records_abi.rs", "runtime/vulkan/xess-fg/session_records.h",
+         "rsf_xess_(capture_desc|bridge_resource_desc|bridge_modules)",
+         "RSF_XESS_BRIDGE_(PLATFORM_ABI_VERSION|ALLOCATOR_COUNT)", [],
+         ["--with-derive-default", "--with-derive-custom-struct", "rsf_xess_bridge_resource_desc=PartialEq,Eq"])
+generate("runtime/orchestrator/src/vulkan_xess_fg_abi.rs", "runtime/orchestrator/src/native_fg_xess_vulkan.h",
+         "rsf_xessgvk_options", "NOTHING",
+         ["-Iruntime/orchestrator/include", "-Isdk/game/include", "-Iruntime/contract/include"])
+generate("runtime/orchestrator/src/vulkan_sr/xess_requirements_abi.rs",
+         "runtime/orchestrator/include/rescaleframe/native_xess_vulkan_requirements.h",
+         "rsf_xessvk_setup", "RSF_XESSVK_REQUIREMENTS_ABI_VERSION",
+         ["-Iruntime/orchestrator/include", "-Isdk/game/include", "-Iruntime/contract/include"])
 frame_records = "rsf_game_cpu_event"
 frame_constants = (
     "RSF_(GAME_CPU_(FRAME_BEGIN|INPUT_SAMPLE|SIMULATION_BEGIN|"

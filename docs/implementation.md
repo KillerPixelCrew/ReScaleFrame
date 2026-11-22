@@ -7853,3 +7853,12 @@ The plugin session fixture DLL builds its callback table and test state in Rust.
 The native detect and prepare thunks still throw after the Rust callbacks return
 so both Runtime entry routes exercise genuine C++ exception containment. Pinned
 formatting, C++ syntax and locked Cargo metadata passed. Execution remains pending.
+### XeSS Vulkan SDK records (V06)
+
+The existing Rust XeSS owners prepare the SR and FG SDK records and the shared
+FG session admits the required XeSS-FG and XeLL exports. Native leaves issue
+the Windows, Vulkan and SDK calls. Generated legacy Present and integrated
+options records retain the wire formats. See the
+[V06 follow-up](research/rust-vulkan-xess-fg-v06.md#sdk-record-and-fixture-follow-up-from-821642ae)
+for the source comparison, fixture coverage and outstanding O02 settings.
+Build, fixture execution and device checks remain pending.

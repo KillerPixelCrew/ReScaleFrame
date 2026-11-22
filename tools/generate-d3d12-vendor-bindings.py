@@ -24,6 +24,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--xess", type=Path, default=root / "vendor/xess/inc")
     parser.add_argument("--fidelityfx", type=Path, default=root / "vendor/fidelityfx/Kits/FidelityFX")
+    parser.add_argument("--vulkan", type=Path, help="Vulkan SDK Include directory for XeSS Vulkan records")
     args = parser.parse_args()
     bindgen = os.environ.get("BINDGEN", "bindgen")
     if subprocess.check_output([bindgen, "--version"], text=True).strip() != "bindgen 0.72.1":
@@ -47,6 +48,15 @@ def main():
               "type IDXGISwapChain = ::core::ffi::c_void;"],
              ["-x", "c++", "-std=c++20", "-include", "d3d12.h", "-include", "dxgi1_5.h",
               "-include", str(args.xess / "xell/xell.h")])
+    if args.vulkan:
+        generate(bindgen, args.xess / "xess/xess_vk.h",
+                 r"_?xess_(vk_(init_params_t|execute_params_t|image_view_info)|2d_t|coord_t|quality_settings_t|version_t)|"
+                 r"VkImageSubresourceRange",
+                 root / "runtime/orchestrator/src/vulkan_sr/xess_sdk_abi.rs",
+                 [f"type Vk{name} = *mut ::core::ffi::c_void;"
+                  for name in ("Image", "ImageView", "DeviceMemory", "PipelineCache")]
+                 + ["type VkFormat = i32;", "type VkImageAspectFlags = u32;"],
+                 ["-x", "c++", "-std=c++20", "-DVK_NO_PROTOTYPES", f"-I{args.vulkan}"])
     api = args.fidelityfx / "api/include"
     generate(bindgen, root / "runtime/backends/fsr/src/ffx_descriptor_types.h",
              r"ffx(ApiHeader|StructType_t|ApiMessage|Context|ReturnCode_t|AllocationCallbacks|Alloc|Dealloc|"

@@ -52,3 +52,34 @@ Verification was source-only. Bindgen CLI 0.72.1 regenerated the touched
 Windows x64 bindings byte for byte. Rust 1.94.1 rustfmt checked the changed Rust
 sources, `git diff --check` passed, and the source list of bridge DLL exports
 was identical. Builds, tests, lint and device execution are user-owned.
+
+## SDK record and fixture follow-up from `821642ae`
+
+This follow-up moved SDK record construction and export admission into the
+existing Rust owners. The comparison used Intel XeSS v3.0.2 headers and
+Vulkan SDK 1.4.357.0 headers. The standalone MinGW build and the Runtime
+include the same `session.rs`. Its SDK records are the generated D3D12
+XeSS-FG and XeLL records used by the regular D3D12 owner.
+[Intel XeSS SDK revision](https://github.com/intel/xess/tree/8fe81bdbbaf00b3c1b733fd0d830c333dc84e6f0/inc)
+
+| Path | Source port and native boundary |
+| --- | --- |
+| Vulkan SR requirements and SDK calls | `native_xess_vulkan_requirements.h` generates the setup and ABI constant. `vulkan_sr/xess.rs` now prepares SDK initialization, image-view and execute records and reads the SDK size and version records. `native_xess_vulkan.cpp` retains typed SDK calls, disabled-export routing, Vulkan recording, capture and sharpening leaves. `native_xess_vulkan.h` selects the typed table or its null disabled form. |
+| Integrated XeSS FG | `native_fg_xess_vulkan.h` generates the integrated options record. `native_fg_xess_vulkan.cpp` adapts COM image and fence handles to the V03 importer. `native_fg_xess_vulkan_present.cpp` binds the V02 WSI marshaller and graphics table to `vulkan_xess_fg.rs`. `native_fg_xess_vulkan_platform.h` declares the native binding and C linkage. |
+| Standalone and integrated FG bridge | `session.rs` resolves five XeLL and thirteen XeSS-FG exports in the original module and order, and rejects an incomplete table before DXGI or SDK startup with the original stage and result. `bridge.cpp` retains wide-path DLL loading, typed slot binding, adapter LUID matching, COM calls, timestamp queries, and SDK callback and logging entry points. The private table moves to ABI 7 and 552 bytes. Bridge ABI 1 and the 216-byte legacy and integrated Present records retain their wire layouts. The legacy record in `bridge_api.h` generates the standalone Rust layout, including the reserved word that may be uninitialized. |
+| FG Present and capture | Rust fills SDK init, property, resource, constant, status and sleep records. It uses UINT32_MAX as the default interpolation sentinel and the calling route's UI mode. Tags use the source texture extent, zero base, ONLY_NOW and COPY_SOURCE, in depth/motion/HUD-less/UI order. Camera matrices, jitter, motion scale and reset use the accepted frame, with SDK frame render time zero. `session_records.h` generates the capture and Present descriptions and the module pair. `capture_api.h` declares the GameSDK capture contract. `diagnostic-capture.h` binds the fingerprint-gated callback table, computes the fingerprint and provides typed readback, copy and map calls. `capture.rs` reads resource role and state at the SDK callback and publishes after the DX12 queue drain. |
+| Fixtures | Rust FG session tests cover the native interop fixture's short, wrong-version and relative-path create checks and place a size-word-only create record at a protected page. `tests/native_fg_xess_vulkan_interop.cpp` retains its public-export smoke and real shared-image/fence exercise. `tests/native_fg_xess_vulkan_present.cpp` retains the Win32 window and two-queue Present exercise. The Rust SR fixture observes the SDK records and `tests/native_xess_vulkan.cpp` checks colour-aspect mip/layer ranges, zero bases and null optional textures through the typed SDK mock. That C++ fixture retains inert SDK/Vulkan setup and the optional device route. |
+
+The SR view records describe the existing maximum-size guide allocations.
+Active dimensions come from the accepted frame record. The baseline called a
+missing `texture(maximum)` method on the shared image record. The port reads
+the extent from the actual allocation through the local view constructor.
+The producer, shaders, copy command order, fence ownership, public exports
+and V02/V03 table layouts follow the existing paths.
+
+The native device fixtures, SDK diagnostic registration and shared editable
+diagnostic settings still need follow-up. The settings work belongs to O02.
+Source checks cover binding regeneration with bindgen 0.72.1, Rust 1.94.1
+formatting, locked offline Windows x64 Cargo metadata, whitespace, bridge
+export names and required symbol order. Build and runtime validation remain
+pending.

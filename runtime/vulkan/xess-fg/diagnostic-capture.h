@@ -11,12 +11,6 @@
    the pending readbacks. These leaves keep the typed SDK callback table, the
    DX12 readback, copy and map calls. */
 
-// Records shared with runtime/vulkan/xess-fg/capture.rs.
-struct rsf_xess_capture_desc {
-    uint64_t width;
-    uint32_t height, dimension, format, depth_or_array_size, mip_levels, sample_count;
-};
-static_assert(sizeof(rsf_xess_capture_desc) == 32);
 static_assert(sizeof(D3D12_PLACED_SUBRESOURCE_FOOTPRINT) == 32 &&
     offsetof(D3D12_PLACED_SUBRESOURCE_FOOTPRINT, Footprint) == 8 && offsetof(D3D12_SUBRESOURCE_FOOTPRINT, RowPitch) == 16);
 static_assert(sizeof(rsf_frame_record) == 480 && alignof(rsf_frame_record) == 8);
@@ -25,7 +19,8 @@ static_assert(offsetof(rsf_frame_record, frame_id) == 8 && offsetof(rsf_frame_re
 extern "C" {
 // Checks the GameSDK record and camera ABI before binding an accepted source.
 int32_t rsf_core_xess_capture_source(rsf_xess_capture_owner*, const rsf_frame_record*, uint32_t);
-void rsf_core_xess_capture_input(rsf_xess_capture_owner*, uint64_t, uint32_t, uint32_t, void*, void*, uint32_t);
+void rsf_core_xess_capture_input(rsf_xess_capture_owner*, uint64_t, uint32_t,
+    const xefg_swapchain_d3d12_resource_data_t*, void*);
 void rsf_core_xess_capture_output(rsf_xess_capture_owner*, uint64_t, uint32_t, void*, void*, uint32_t);
 void rsf_core_xess_capture_before_outputs(rsf_xess_capture_owner*, uint64_t, uint32_t);
 uint64_t rsf_core_xess_capture_callbacks(const rsf_xess_capture_owner*);
@@ -56,16 +51,12 @@ using SetDiagnostics = int (*)(xefg_swapchain_handle_t, const DiagnosticsV2*);
 // The SDK user pointer is the Rust capture owner.
 inline void Input(void* user, uint64_t token, uint32_t kind,
     const xefg_swapchain_d3d12_resource_data_t* data, ID3D12GraphicsCommandList* commands) noexcept {
-    if (user && data)
-        rsf_core_xess_capture_input(static_cast<rsf_xess_capture_owner*>(user), token, kind,
-            kind == XEFG_SWAPCHAIN_RES_BACKBUFFER, data->pResource, commands,
-            static_cast<uint32_t>(data->incomingState));
+    rsf_core_xess_capture_input(static_cast<rsf_xess_capture_owner*>(user), token, kind, data, commands);
 }
 
 inline void Output(void* user, uint64_t token, uint32_t kind,
     ID3D12Resource* resource, ID3D12GraphicsCommandList* commands, uint32_t ordinal) noexcept {
-    if (user && kind == 0)
-        rsf_core_xess_capture_output(static_cast<rsf_xess_capture_owner*>(user), token, kind, resource, commands, ordinal);
+    rsf_core_xess_capture_output(static_cast<rsf_xess_capture_owner*>(user), token, kind, resource, commands, ordinal);
 }
 
 inline void BeforeOutputs(void* user, uint64_t token, ID3D12GraphicsCommandList*, uint32_t count) noexcept {

@@ -2,10 +2,64 @@
 
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
+type rsf_xess_bridge_legacy_reserved = ::core::mem::MaybeUninit<u32>;
 
 pub const RSF_XESS_BRIDGE_ABI_VERSION: u32 = 1;
 pub const RSF_XESS_BRIDGE_INVALID_ARGUMENT: i32 = -10001;
 pub const RSF_XESS_BRIDGE_ABI_MISMATCH: i32 = -10002;
+#[repr(C)]
+pub struct VulkanStoryXessFrame {
+    pub frame_id: u32,
+    pub reset: u32,
+    pub vsync: u32,
+    pub reserved: rsf_xess_bridge_legacy_reserved,
+    pub color: *mut ::core::ffi::c_void,
+    pub depth: *mut ::core::ffi::c_void,
+    pub motion: *mut ::core::ffi::c_void,
+    pub hudless: *mut ::core::ffi::c_void,
+    pub ui: *mut ::core::ffi::c_void,
+    pub view: [f32; 16usize],
+    pub projection: [f32; 16usize],
+    pub jitter: [f32; 2usize],
+    pub motion_scale: [f32; 2usize],
+    pub ready: u64,
+    pub done: u64,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of VulkanStoryXessFrame"][::core::mem::size_of::<VulkanStoryXessFrame>() - 216usize];
+    ["Alignment of VulkanStoryXessFrame"][::core::mem::align_of::<VulkanStoryXessFrame>() - 8usize];
+    ["Offset of field: VulkanStoryXessFrame::frame_id"]
+        [::core::mem::offset_of!(VulkanStoryXessFrame, frame_id) - 0usize];
+    ["Offset of field: VulkanStoryXessFrame::reset"]
+        [::core::mem::offset_of!(VulkanStoryXessFrame, reset) - 4usize];
+    ["Offset of field: VulkanStoryXessFrame::vsync"]
+        [::core::mem::offset_of!(VulkanStoryXessFrame, vsync) - 8usize];
+    ["Offset of field: VulkanStoryXessFrame::reserved"]
+        [::core::mem::offset_of!(VulkanStoryXessFrame, reserved) - 12usize];
+    ["Offset of field: VulkanStoryXessFrame::color"]
+        [::core::mem::offset_of!(VulkanStoryXessFrame, color) - 16usize];
+    ["Offset of field: VulkanStoryXessFrame::depth"]
+        [::core::mem::offset_of!(VulkanStoryXessFrame, depth) - 24usize];
+    ["Offset of field: VulkanStoryXessFrame::motion"]
+        [::core::mem::offset_of!(VulkanStoryXessFrame, motion) - 32usize];
+    ["Offset of field: VulkanStoryXessFrame::hudless"]
+        [::core::mem::offset_of!(VulkanStoryXessFrame, hudless) - 40usize];
+    ["Offset of field: VulkanStoryXessFrame::ui"]
+        [::core::mem::offset_of!(VulkanStoryXessFrame, ui) - 48usize];
+    ["Offset of field: VulkanStoryXessFrame::view"]
+        [::core::mem::offset_of!(VulkanStoryXessFrame, view) - 56usize];
+    ["Offset of field: VulkanStoryXessFrame::projection"]
+        [::core::mem::offset_of!(VulkanStoryXessFrame, projection) - 120usize];
+    ["Offset of field: VulkanStoryXessFrame::jitter"]
+        [::core::mem::offset_of!(VulkanStoryXessFrame, jitter) - 184usize];
+    ["Offset of field: VulkanStoryXessFrame::motion_scale"]
+        [::core::mem::offset_of!(VulkanStoryXessFrame, motion_scale) - 192usize];
+    ["Offset of field: VulkanStoryXessFrame::ready"]
+        [::core::mem::offset_of!(VulkanStoryXessFrame, ready) - 200usize];
+    ["Offset of field: VulkanStoryXessFrame::done"]
+        [::core::mem::offset_of!(VulkanStoryXessFrame, done) - 208usize];
+};
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_xess_bridge_create {

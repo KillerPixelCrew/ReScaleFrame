@@ -14,6 +14,18 @@ use crate::vulkan_fg_resources_abi::{rsf_vkfg_image as OwnedImage, rsf_vkfg_plat
 use std::ffi::CString;
 use std::sync::{Arc, PoisonError};
 
+#[path = "xess_requirements_abi.rs"]
+mod requirements_abi;
+#[path = "xess_sdk_abi.rs"]
+mod sdk_abi;
+use requirements_abi::{
+    RSF_XESSVK_REQUIREMENTS_ABI_VERSION as REQUIREMENTS_ABI_VERSION, rsf_xessvk_setup as XessSetup,
+};
+use sdk_abi::{
+    VkImageSubresourceRange, xess_2d_t, xess_version_t, xess_vk_execute_params_t as XessExecute,
+    xess_vk_image_view_info as XessTexture, xess_vk_init_params_t as XessInit,
+};
+
 const LOAD_FAILED: i32 = -4;
 const MISSING_ENTRY: i32 = -5;
 const FEATURE_FAILED: i32 = -9;
@@ -28,18 +40,17 @@ const XESS_INVERTED_DEPTH: u32 = 1 << 1;
 const XESS_JITTERED_MV: u32 = 1 << 7;
 const XESS_AUTOEXPOSURE: u32 = 1 << 8;
 // RSF quality 0..5: native AA, quality, balanced, performance, ultra performance, ultra quality.
-const XESS_QUALITY: [u32; 6] = [106, 103, 102, 101, 100, 104];
-const REQUIREMENTS_ABI_VERSION: u32 = 1;
+const XESS_QUALITY: [sdk_abi::xess_quality_settings_t; 6] = [
+    sdk_abi::XESS_QUALITY_SETTING_AA,
+    sdk_abi::XESS_QUALITY_SETTING_QUALITY,
+    sdk_abi::XESS_QUALITY_SETTING_BALANCED,
+    sdk_abi::XESS_QUALITY_SETTING_PERFORMANCE,
+    sdk_abi::XESS_QUALITY_SETTING_ULTRA_PERFORMANCE,
+    sdk_abi::XESS_QUALITY_SETTING_ULTRA_QUALITY,
+];
 
 const INPUT_USAGE: u32 = SAMPLED_USAGE | TRANSFER_DST_USAGE;
 const OUTPUT_USAGE: u32 = STORAGE_USAGE | SAMPLED_USAGE | TRANSFER_DST_USAGE | TRANSFER_SRC_USAGE;
-
-#[repr(C)]
-pub(super) struct XessSetup {
-    struct_size: u32,
-    abi_version: u32,
-    runtime_directory_utf8: *const c_char,
-}
 
 type Names = *mut *const *const c_char;
 
@@ -68,12 +79,12 @@ pub(super) struct XessOps {
     instance_requirements: unsafe extern "C" fn(Handle, *mut u32, Names, *mut u32) -> i32,
     device_extensions: unsafe extern "C" fn(Handle, Handle, Handle, *mut u32, Names) -> i32,
     device_features: unsafe extern "C" fn(Handle, Handle, Handle, *mut Handle) -> i32,
-    version: unsafe extern "C" fn(Handle, &mut [u16; 4]) -> i32,
+    version: unsafe extern "C" fn(Handle, &mut xess_version_t) -> i32,
     open: unsafe extern "C" fn(Handle, &mut Handle) -> i32,
     close: unsafe extern "C" fn(Handle),
     create_context: unsafe extern "C" fn(Handle, &Setup) -> i32,
     initialize: unsafe extern "C" fn(Handle, &XessInit) -> i32,
-    resolution: unsafe extern "C" fn(Handle, &XessInit, &mut [u32; 6]) -> i32,
+    resolution: unsafe extern "C" fn(Handle, &XessInit, *mut xess_2d_t) -> i32,
     destroy_context: unsafe extern "C" fn(Handle) -> i32,
     bind_device: unsafe extern "C" fn(Handle, &Setup) -> i32,
     image_user: unsafe extern "C" fn(Handle) -> Handle,
@@ -94,36 +105,6 @@ pub(super) struct XessOps {
     lookup: Option<ExportLookup>,
 }
 
-#[repr(C)]
-pub(super) struct XessInit {
-    width: u32,
-    height: u32,
-    quality: u32,
-    flags: u32,
-}
-
-#[repr(C)]
-pub(super) struct XessTexture {
-    image: u64,
-    view: u64,
-    width: u32,
-    height: u32,
-    format: u32,
-}
-
-#[repr(C)]
-pub(super) struct XessExecute {
-    color: XessTexture,
-    depth: XessTexture,
-    motion: XessTexture,
-    output: XessTexture,
-    jitter: [f32; 2],
-    exposure_scale: f32,
-    input_width: u32,
-    input_height: u32,
-    reset: u32,
-}
-
 const _: () = {
     assert!(size_of::<XessOps>() == 31 * 8);
     assert!(std::mem::offset_of!(XessOps, barrier) == 19 * 8);
@@ -133,10 +114,7 @@ const _: () = {
     assert!(std::mem::offset_of!(XessOps, bind_entries) == 29 * 8);
     assert!(std::mem::offset_of!(XessOps, lookup) == 30 * 8);
     assert!(size_of::<Entries>() == 10 * 8);
-    assert!(size_of::<XessSetup>() == 16 && size_of::<XessInit>() == 16);
-    assert!(size_of::<XessTexture>() == 32);
-    assert!(size_of::<XessExecute>() == 152);
-    assert!(std::mem::offset_of!(XessExecute, reset) == 148);
+    assert!(size_of::<XessSetup>() == 16);
 };
 
 fn sdk(result: i32, failure: i32) -> Result<(), i32> {
@@ -331,11 +309,18 @@ unsafe extern "C" fn rsf_core_xessvk_shutdown(ops: Option<&'static XessOps>) -> 
 
 fn texture(image: &OwnedImage) -> XessTexture {
     XessTexture {
-        image: image.image,
-        view: image.view,
+        image: image.image as Handle,
+        imageView: image.view as Handle,
+        subresourceRange: VkImageSubresourceRange {
+            aspectMask: 1, // VK_IMAGE_ASPECT_COLOR_BIT
+            baseMipLevel: 0,
+            levelCount: 1,
+            baseArrayLayer: 0,
+            layerCount: 1,
+        },
         width: image.width,
         height: image.height,
-        format: image.format,
+        format: image.format as i32,
     }
 }
 
@@ -403,23 +388,22 @@ impl XessOwner {
         // A refused creation can leave a partial context for the cleanup leaf.
         sdk(unsafe { (ops.create_context)(native, &setup) }, INIT_FAILED)?;
         let init = XessInit {
-            width: output[0],
-            height: output[1],
-            quality: XESS_QUALITY[setup.quality as usize],
-            flags: XESS_AUTOEXPOSURE
+            outputResolution: xess_2d_t {
+                x: output[0],
+                y: output[1],
+            },
+            qualitySetting: XESS_QUALITY[setup.quality as usize],
+            initFlags: XESS_AUTOEXPOSURE
                 | (setup.depth_inverted * XESS_INVERTED_DEPTH)
                 | (setup.motion_jittered * XESS_JITTERED_MV),
+            ..Default::default()
         };
         sdk(unsafe { (ops.initialize)(native, &init) }, INIT_FAILED)?;
-        let mut range = [0; 6];
-        if unsafe { (ops.resolution)(native, &init, &mut range) } != XESS_SUCCESS {
+        let mut range = [xess_2d_t::default(); 3];
+        if unsafe { (ops.resolution)(native, &init, range.as_mut_ptr()) } != XESS_SUCCESS {
             return Err(INIT_FAILED);
         }
-        let [plan, minimum, maximum] = [
-            [range[0], range[1]],
-            [range[2], range[3]],
-            [range[4], range[5]],
-        ];
+        let [plan, minimum, maximum] = range.map(|size| [size.x, size.y]);
         if plan.contains(&0)
             || minimum.contains(&0)
             || (0..2).any(|axis| plan[axis] < minimum[axis] || plan[axis] > maximum[axis])
@@ -428,12 +412,17 @@ impl XessOwner {
         }
         (self.plan, self.minimum, self.maximum) = (plan, minimum, maximum);
         check(unsafe { (ops.bind_device)(native, &setup) })?;
-        let mut version = [0; 4];
+        let mut version = xess_version_t::default();
         // A missing version leaves an unidentified provider in capture metadata.
         let _ = unsafe { (ops.version)(self._library.handle, &mut version) };
-        let provider = version
-            .iter()
-            .fold(0u64, |value, &part| (value << 16) | u64::from(part));
+        let provider = [
+            version.major,
+            version.minor,
+            version.patch,
+            version.reserved,
+        ]
+        .into_iter()
+        .fold(0u64, |value, part| (value << 16) | u64::from(part));
         unsafe { (ops.capture_provider)(native, provider, RSF_SR_XESS) };
         // Inputs cover the SDK maximum; each frame names its active subrectangle.
         let image_user = unsafe { (ops.image_user)(native) };
@@ -539,15 +528,17 @@ impl XessOwner {
         let output = [record.output_width, record.output_height];
         let reset = u32::from(self.history.needs_reset(record) || self.active != render);
         let call = XessExecute {
-            color: self.color.texture(self.maximum),
-            depth: self.depth.texture(self.maximum),
-            motion: self.motion.texture(self.maximum),
-            output: texture(&self.output),
-            jitter: record.camera.jitter_pixels,
-            exposure_scale: 1.0 / frame.pre_exposure,
-            input_width: render[0],
-            input_height: render[1],
-            reset,
+            colorTexture: texture(&self.color),
+            depthTexture: texture(&self.depth),
+            velocityTexture: texture(&self.motion),
+            outputTexture: texture(&self.output),
+            jitterOffsetX: record.camera.jitter_pixels[0],
+            jitterOffsetY: record.camera.jitter_pixels[1],
+            exposureScale: 1.0 / frame.pre_exposure,
+            inputWidth: render[0],
+            inputHeight: render[1],
+            resetHistory: reset,
+            ..Default::default()
         };
         if unsafe { (ops.execute)(native, commands, &call) } != XESS_SUCCESS {
             self.history = History::default();

@@ -3,6 +3,8 @@
 #include "../runtime/orchestrator/src/native_xess_vulkan.cpp"
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <initializer_list>
 // The CPU contract must execute its checks in Release as well as Debug.
 #define CHECK(condition) do { if (!(condition)) { \
     std::fprintf(stderr, "XeSS input range contract failed: %s\n", #condition); std::abort(); \
@@ -34,6 +36,16 @@ xess_result_t execute(xess_context_handle_t, VkCommandBuffer, const xess_vk_exec
     CHECK(p->depthTexture.width == 1280 && p->velocityTexture.height == 720);
     CHECK(p->outputTexture.width == 1920 && p->outputTexture.height == 1080);
     CHECK(p->colorTexture.imageView && p->outputTexture.imageView && p->exposureScale == 1);
+    for (const auto* texture : {&p->colorTexture, &p->depthTexture, &p->velocityTexture, &p->outputTexture}) {
+        const auto& range = texture->subresourceRange;
+        CHECK(range.aspectMask == VK_IMAGE_ASPECT_COLOR_BIT && range.baseMipLevel == 0 &&
+            range.levelCount == 1 && range.baseArrayLayer == 0 && range.layerCount == 1);
+    }
+    CHECK(!p->exposureScaleTexture.image && !p->responsivePixelMaskTexture.image);
+    CHECK(p->inputColorBase.x == 0 && p->inputColorBase.y == 0 &&
+        p->inputDepthBase.x == 0 && p->inputDepthBase.y == 0 &&
+        p->inputMotionVectorBase.x == 0 && p->inputMotionVectorBase.y == 0 &&
+        p->outputColorBase.x == 0 && p->outputColorBase.y == 0);
     ++executed; return XESS_RESULT_SUCCESS;
 }
 xess_result_t destroy(xess_context_handle_t context) {

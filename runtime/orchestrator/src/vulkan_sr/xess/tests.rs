@@ -16,7 +16,7 @@ enum Call {
     Features,
     Open,
     Create,
-    Init(u32, u32),
+    Init(i32, u32),
     Bind,
     Provider(u64),
     Allocate(u64, u32, u32, u32),
@@ -189,8 +189,13 @@ pub(in crate::vulkan_sr) static OPS: XessOps = XessOps {
         push(Call::Features);
         XESS_SUCCESS
     }),
-    version: leaf!(|_: Handle, version: &mut [u16; 4]| -> i32 {
-        *version = [2, 1, 3, 4];
+    version: leaf!(|_: Handle, version: &mut xess_version_t| -> i32 {
+        *version = xess_version_t {
+            major: 2,
+            minor: 1,
+            patch: 3,
+            reserved: 4,
+        };
         XESS_SUCCESS
     }),
     open: leaf!(|library: Handle, out: &mut Handle| -> i32 {
@@ -204,11 +209,16 @@ pub(in crate::vulkan_sr) static OPS: XessOps = XessOps {
         XESS_SUCCESS
     }),
     initialize: leaf!(|_: Handle, init: &XessInit| -> i32 {
-        push(Call::Init(init.quality, init.flags));
+        push(Call::Init(init.qualitySetting, init.initFlags));
         XESS_SUCCESS
     }),
-    resolution: leaf!(|_: Handle, _: &XessInit, range: &mut [u32; 6]| -> i32 {
-        *range = edit_state(|fake| fake.range);
+    resolution: leaf!(|_: Handle, _: &XessInit, range: *mut xess_2d_t| -> i32 {
+        let [rx, ry, min_x, min_y, max_x, max_y] = edit_state(|fake| fake.range);
+        unsafe {
+            range.write(xess_2d_t { x: rx, y: ry });
+            range.add(1).write(xess_2d_t { x: min_x, y: min_y });
+            range.add(2).write(xess_2d_t { x: max_x, y: max_y });
+        }
         XESS_SUCCESS
     }),
     destroy_context: leaf!(|_: Handle| -> i32 {
@@ -233,17 +243,27 @@ pub(in crate::vulkan_sr) static OPS: XessOps = XessOps {
     }),
     execute: leaf!(|_: Handle, _: Handle, call: &XessExecute| -> i32 {
         assert_eq!(
-            [call.color.width, call.depth.height, call.motion.width],
+            [
+                call.colorTexture.width,
+                call.depthTexture.height,
+                call.velocityTexture.width
+            ],
             [1280, 720, 1280]
         );
-        assert_eq!([call.color.view, call.output.view], [210, 213]);
-        assert_eq!(call.exposure_scale, 0.5);
+        assert_eq!(
+            [
+                call.colorTexture.imageView as usize,
+                call.outputTexture.imageView as usize
+            ],
+            [210, 213]
+        );
+        assert_eq!(call.exposureScale, 0.5);
         push(Call::Execute(
-            call.input_width,
-            call.input_height,
-            call.output.width,
-            call.output.height,
-            call.reset,
+            call.inputWidth,
+            call.inputHeight,
+            call.outputTexture.width,
+            call.outputTexture.height,
+            call.resetHistory,
         ));
         edit_state(|fake| fake.execute)
     }),

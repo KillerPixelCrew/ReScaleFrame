@@ -13,6 +13,10 @@ use std::sync::atomic::{AtomicI32, Ordering};
 mod bridge_abi;
 #[path = "capture.rs"]
 mod capture;
+#[path = "../../orchestrator/src/d3d12_generation/xess_abi.rs"]
+mod sdk;
+#[path = "session_records_abi.rs"]
+mod session_records_abi;
 #[path = "../timeline_pair.rs"]
 mod timeline_pair;
 #[path = "timing.rs"]
@@ -21,41 +25,21 @@ mod timing;
 use bridge_abi::{
     RSF_XESS_BRIDGE_ABI_MISMATCH as ABI_MISMATCH,
     RSF_XESS_BRIDGE_ABI_VERSION as BRIDGE_ABI_VERSION,
-    RSF_XESS_BRIDGE_INVALID_ARGUMENT as INVALID_ARGUMENT,
+    RSF_XESS_BRIDGE_INVALID_ARGUMENT as INVALID_ARGUMENT, VulkanStoryXessFrame as Frame,
     rsf_xess_bridge_create as IntegratedCreate, rsf_xess_bridge_frame as IntegratedFrame,
     rsf_xess_bridge_present_status as IntegratedStatus, rsf_xess_bridge_start as IntegratedStart,
 };
-use capture::{Capture, Desc, Footprint};
+use capture::{Capture, Footprint};
+use session_records_abi::{
+    RSF_XESS_BRIDGE_ALLOCATOR_COUNT as ALLOCATOR_COUNT,
+    RSF_XESS_BRIDGE_PLATFORM_ABI_VERSION as PLATFORM_ABI_VERSION,
+    rsf_xess_bridge_modules as Modules, rsf_xess_bridge_resource_desc as PresentResourceDesc,
+    rsf_xess_capture_desc as Desc,
+};
 use timing::{Accumulator, Phase as TimingPhase, Report as TimingReport};
 
 type Handle = *mut c_void;
 type Step = unsafe extern "C" fn(Handle) -> i32;
-
-#[repr(C)]
-struct Modules {
-    fg: Handle,
-    xell: Handle,
-}
-
-// Matches VulkanStoryXessFrame and the managed XessPresentationFrame layout.
-#[repr(C)]
-struct Frame {
-    frame_id: u32,
-    reset: u32,
-    vsync: u32,
-    _reserved: MaybeUninit<u32>,
-    color: Handle,
-    depth: Handle,
-    motion: Handle,
-    hudless: Handle,
-    ui: Handle,
-    view: [f32; 16],
-    projection: [f32; 16],
-    jitter: [f32; 2],
-    motion_scale: [f32; 2],
-    ready: u64,
-    done: u64,
-}
 
 impl Frame {
     fn has_resources(&self) -> bool {
@@ -72,7 +56,7 @@ impl From<&IntegratedFrame> for Frame {
             frame_id: frame.frame_id,
             reset: frame.reset,
             vsync: frame.vsync,
-            _reserved: MaybeUninit::zeroed(),
+            reserved: MaybeUninit::zeroed(),
             color: frame.color,
             depth: frame.depth,
             motion: frame.motion,
@@ -88,20 +72,10 @@ impl From<&IntegratedFrame> for Frame {
     }
 }
 
-#[derive(Default)]
-#[repr(C)]
 struct PresentResult {
     frames_presented: u32,
     fg_enabled: u32,
     fg_result: i32,
-}
-
-#[derive(Default, PartialEq, Eq)]
-#[repr(C)]
-struct PresentResourceDesc {
-    width: u64,
-    height: u32,
-    format: u32,
 }
 
 #[repr(C)]
@@ -110,7 +84,7 @@ struct Platform {
     abi_version: u32,
     allocate: unsafe extern "C" fn(*mut Session, *const Accumulator) -> Handle,
     release_native: unsafe extern "C" fn(Handle),
-    load_runtime: unsafe extern "C" fn(Handle, *const u16, *mut Modules) -> i32,
+    load_runtime: unsafe extern "C" fn(*const u16, *mut Modules) -> i32,
     unload_module: unsafe extern "C" fn(Handle),
     create_factory: Step,
     find_adapter: unsafe extern "C" fn(Handle, u64) -> i32,
@@ -119,10 +93,16 @@ struct Platform {
     create_xell: Step,
     create_fg: unsafe extern "C" fn(Handle, Handle) -> i32,
     set_latency: Step,
-    set_default_sleep_mode: Step,
+    set_sleep_mode: unsafe extern "C" fn(Handle, *const sdk::xell_sleep_params_t) -> i32,
     log_create_error: unsafe extern "C" fn(*const c_char, i32, i32),
-    init_swapchain: unsafe extern "C" fn(Handle, Handle, u32, u32, u32, u32) -> i32,
-    query_limit: unsafe extern "C" fn(Handle, *mut u32) -> i32,
+    init_swapchain: unsafe extern "C" fn(
+        Handle,
+        Handle,
+        u32,
+        u32,
+        *const sdk::xefg_swapchain_d3d12_init_params_t,
+    ) -> i32,
+    get_properties: unsafe extern "C" fn(Handle, *mut sdk::xefg_swapchain_properties_t) -> i32,
     get_swapchain: Step,
     enable_ui: Step,
     create_completion_fence: Step,
@@ -146,17 +126,20 @@ struct Platform {
     // Transfers one DXGI backbuffer reference to the session on success.
     acquire_backbuffer: unsafe extern "C" fn(Handle, *mut Handle) -> i32,
     copy_present_color: unsafe extern "C" fn(Handle, Handle, Handle),
-    tag_present_resource: unsafe extern "C" fn(Handle, Handle, u32, u32) -> i32,
+    tag_present_resource:
+        unsafe extern "C" fn(Handle, u32, *const sdk::xefg_swapchain_d3d12_resource_data_t) -> i32,
     release_backbuffer: unsafe extern "C" fn(Handle),
     close_commands: Step,
-    tag_constants: unsafe extern "C" fn(Handle, *const Frame) -> i32,
+    tag_constants:
+        unsafe extern "C" fn(Handle, u32, *const sdk::xefg_swapchain_frame_constant_data_t) -> i32,
     wait_shared: unsafe extern "C" fn(Handle, u64) -> i32,
     execute: unsafe extern "C" fn(Handle),
     set_present_id: unsafe extern "C" fn(Handle, u32) -> i32,
     present: unsafe extern "C" fn(Handle, u32) -> i32,
     signal_done: unsafe extern "C" fn(Handle, u64) -> i32,
     signal_completion: unsafe extern "C" fn(Handle, u64) -> i32,
-    read_present_status: unsafe extern "C" fn(Handle, *mut PresentResult) -> i32,
+    read_present_status:
+        unsafe extern "C" fn(Handle, *mut sdk::xefg_swapchain_present_status_t) -> i32,
     timing_enabled: unsafe extern "C" fn() -> u32,
     timing_now: unsafe extern "C" fn() -> i64,
     timing_frequency: unsafe extern "C" fn() -> i64,
@@ -181,7 +164,33 @@ struct Platform {
     // Lends bytes from a completed readback until capture_unmap.
     capture_map: unsafe extern "C" fn(Handle, u64, *mut *const u8) -> i32,
     capture_unmap: unsafe extern "C" fn(Handle),
+    lookup_export: unsafe extern "C" fn(Handle, *const c_char) -> Handle,
+    bind_runtime: unsafe extern "C" fn(Handle, &SdkEntries),
 }
+
+const XELL_EXPORTS: [&CStr; 5] = [
+    c"xellD3D12CreateContext",
+    c"xellDestroyContext",
+    c"xellSetSleepMode",
+    c"xellSleep",
+    c"xellAddMarkerData",
+];
+const FG_EXPORTS: [&CStr; 13] = [
+    c"xefgSwapChainD3D12CreateContext",
+    c"xefgSwapChainDestroy",
+    c"xefgSwapChainSetLatencyReduction",
+    c"xefgSwapChainD3D12InitFromSwapChainDesc",
+    c"xefgSwapChainD3D12GetSwapChainPtr",
+    c"xefgSwapChainSetEnabled",
+    c"xefgSwapChainSetPresentId",
+    c"xefgSwapChainSetNumInterpolatedFrames",
+    c"xefgSwapChainGetProperties",
+    c"xefgSwapChainSetUiCompositionState",
+    c"xefgSwapChainD3D12TagFrameResource",
+    c"xefgSwapChainTagFrameConstants",
+    c"xefgSwapChainGetLastPresentStatus",
+];
+type SdkEntries = [Handle; XELL_EXPORTS.len() + FG_EXPORTS.len()];
 
 const _: () = {
     assert!(size_of::<Modules>() == 16);
@@ -193,14 +202,13 @@ const _: () = {
     assert!(std::mem::offset_of!(IntegratedFrame, struct_size) == 0);
     assert!(std::mem::offset_of!(IntegratedFrame, abi_version) == 4);
     assert!(std::mem::offset_of!(IntegratedFrame, color) == 24);
-    assert!(size_of::<PresentResult>() == 12);
     assert!(size_of::<PresentResourceDesc>() == 16 && align_of::<PresentResourceDesc>() == 8);
     assert!(std::mem::offset_of!(PresentResourceDesc, height) == 8);
     assert!(std::mem::offset_of!(PresentResourceDesc, format) == 12);
     assert!(size_of::<IntegratedStatus>() == 24);
     assert!(std::mem::offset_of!(IntegratedStatus, struct_size) == 0);
     assert!(std::mem::offset_of!(IntegratedStatus, abi_version) == 4);
-    assert!(size_of::<Platform>() == 536 && align_of::<Platform>() == 8);
+    assert!(size_of::<Platform>() == 552 && align_of::<Platform>() == 8);
     assert!(std::mem::offset_of!(Platform, allocate) == 8);
     assert!(std::mem::offset_of!(Platform, init_swapchain) == 112);
     assert!(std::mem::offset_of!(Platform, find_diagnostics) == 168);
@@ -219,12 +227,13 @@ const _: () = {
     assert!(std::mem::offset_of!(Platform, attach_capture) == 456);
     assert!(std::mem::offset_of!(Platform, capture_footprint) == 488);
     assert!(std::mem::offset_of!(Platform, capture_unmap) == 528);
+    assert!(std::mem::offset_of!(Platform, lookup_export) == 536);
+    assert!(std::mem::offset_of!(Platform, bind_runtime) == 544);
+    assert!(size_of::<SdkEntries>() == 18 * size_of::<Handle>());
 };
 
-const PLATFORM_ABI_VERSION: u32 = 6;
 const WAIT_MS: u32 = 10_000;
 const WAIT_INCOMPLETE: i32 = -3;
-const ALLOCATOR_COUNT: u32 = 3;
 const CAPTURE_FLUSH_FAILED: i32 = -7010;
 const CAPTURE_START_FAILED: i32 = -7011;
 
@@ -237,14 +246,6 @@ const STATE_COMMON: u32 = 0;
 const STATE_PRESENT: u32 = 0;
 const STATE_COPY_DEST: u32 = 0x400;
 const STATE_COPY_SOURCE: u32 = 0x800;
-
-#[repr(u32)]
-enum InputRole {
-    Hudless = 0,
-    Depth = 1,
-    Motion = 2,
-    Ui = 3,
-}
 
 thread_local! {
     static CREATE_STAGE: Cell<&'static CStr> = const { Cell::new(c"not attempted") };
@@ -331,10 +332,22 @@ impl Session {
         let ops = self.platform;
         let native = self.native;
         CREATE_STAGE.set(c"runtime DLL/export loading");
-        let code = unsafe { (ops.load_runtime)(native, directory, &mut self.modules) };
+        let code = unsafe { (ops.load_runtime)(directory, &mut self.modules) };
         if code != 0 {
             return code;
         }
+        let mut entries: SdkEntries = [ptr::null_mut(); XELL_EXPORTS.len() + FG_EXPORTS.len()];
+        let exports = XELL_EXPORTS
+            .into_iter()
+            .map(|name| (self.modules.xell, name))
+            .chain(FG_EXPORTS.into_iter().map(|name| (self.modules.fg, name)));
+        for (address, (module, name)) in entries.iter_mut().zip(exports) {
+            *address = unsafe { (ops.lookup_export)(module, name.as_ptr()) };
+        }
+        if entries.contains(&ptr::null_mut()) {
+            return -3;
+        }
+        unsafe { (ops.bind_runtime)(native, &entries) };
         let code = self.create_step(c"CreateDXGIFactory2", ops.create_factory);
         if code != 0 {
             return code;
@@ -363,7 +376,23 @@ impl Session {
         if code != 0 {
             return code;
         }
-        self.create_step(c"xellSetSleepMode", ops.set_default_sleep_mode)
+        CREATE_STAGE.set(c"xellSetSleepMode");
+        self.set_sleep_mode(0, 1)
+    }
+
+    fn set_sleep_mode(&self, minimum_interval_us: u32, enabled: u32) -> i32 {
+        let mut mode = sdk::xell_sleep_params_t {
+            minimumIntervalUs: minimum_interval_us,
+            ..Default::default()
+        };
+        mode.set_bLowLatencyMode(u32::from(enabled != 0));
+        unsafe { (self.platform.set_sleep_mode)(self.native, &mode) }
+    }
+
+    fn query_limit(&self) -> Result<u32, i32> {
+        let mut properties = sdk::xefg_swapchain_properties_t::default();
+        success(unsafe { (self.platform.get_properties)(self.native, &mut properties) })?;
+        Ok(properties.maxSupportedInterpolations)
     }
 
     fn start(
@@ -382,37 +411,42 @@ impl Session {
         let ops = self.platform;
         let native = self.native;
         if integrated {
-            let mut max = 0;
-            let code = unsafe { (ops.query_limit)(native, &mut max) };
-            if code < 0 {
-                return code;
-            }
+            let max = match self.query_limit() {
+                Ok(max) => max,
+                Err(code) => return code,
+            };
             if generated > max {
                 return unsupported;
             }
         }
         // Once the SDK is given the HWND, a partial start must be retired.
         self.phase = Phase::Starting;
-        let code = unsafe {
-            (ops.init_swapchain)(
-                native,
-                window,
-                width,
-                height,
-                u32::from(integrated),
-                inverted_depth,
-            )
+        let params = sdk::xefg_swapchain_d3d12_init_params_t {
+            maxInterpolatedFrames: u32::MAX,
+            uiMode: if integrated {
+                sdk::XEFG_SWAPCHAIN_UI_MODE_BACKBUFFER_HUDLESS
+            } else {
+                sdk::XEFG_SWAPCHAIN_UI_MODE_HUDLESS_UITEXTURE
+            },
+            initFlags: if inverted_depth != 0 {
+                sdk::XEFG_SWAPCHAIN_INIT_FLAG_INVERTED_DEPTH as u32
+            } else {
+                0
+            },
+            ..Default::default()
         };
+        let code = unsafe { (ops.init_swapchain)(native, window, width, height, &params) };
         if code < 0 {
             return code;
         }
         self.width = width;
         self.height = height;
         self.backbuffer_hudless = integrated;
-        let code = unsafe { (ops.query_limit)(native, &mut self.max_generated) };
-        if code < 0 || self.max_generated == 0 {
-            return if code < 0 { code } else { -4 };
-        }
+        self.max_generated = match self.query_limit() {
+            Ok(0) => return -4,
+            Ok(max) => max,
+            Err(code) => return code,
+        };
         for step in [
             ops.get_swapchain,
             ops.enable_ui,
@@ -574,17 +608,28 @@ impl Session {
         unsafe { (ops.copy_present_color)(native, backbuffer, frame.color) };
 
         for (resource, role) in [
-            (frame.depth, InputRole::Depth),
-            (frame.motion, InputRole::Motion),
-            (frame.hudless, InputRole::Hudless),
-            (frame.ui, InputRole::Ui),
+            (frame.depth, sdk::XEFG_SWAPCHAIN_RES_DEPTH),
+            (frame.motion, sdk::XEFG_SWAPCHAIN_RES_MOTION_VECTOR),
+            (frame.hudless, sdk::XEFG_SWAPCHAIN_RES_HUDLESS_COLOR),
+            (frame.ui, sdk::XEFG_SWAPCHAIN_RES_UI),
         ] {
             if resource.is_null() {
                 continue;
             }
-            let code = unsafe {
-                (ops.tag_present_resource)(native, resource, role as u32, frame.frame_id)
+            let mut desc = PresentResourceDesc::default();
+            unsafe { (ops.describe_present_resource)(resource, &mut desc) };
+            let data = sdk::xefg_swapchain_d3d12_resource_data_t {
+                type_: role,
+                validity: sdk::XEFG_SWAPCHAIN_RV_ONLY_NOW,
+                resourceSize: sdk::xefg_swapchain_2d_t {
+                    x: desc.width as u32,
+                    y: desc.height,
+                },
+                pResource: resource,
+                incomingState: STATE_COPY_SOURCE,
+                ..Default::default()
             };
+            let code = unsafe { (ops.tag_present_resource)(native, frame.frame_id, &data) };
             if code < 0 {
                 unsafe {
                     (ops.close_commands)(native);
@@ -631,7 +676,17 @@ impl Session {
             unsafe { (ops.timestamp_copies)(native, slot, 1) };
         }
         success(unsafe { (ops.close_commands)(native) })?;
-        success(unsafe { (ops.tag_constants)(native, frame) })?;
+        let constants = sdk::xefg_swapchain_frame_constant_data_t {
+            viewMatrix: frame.view,
+            projectionMatrix: frame.projection,
+            jitterOffsetX: frame.jitter[0],
+            jitterOffsetY: frame.jitter[1],
+            motionVectorScaleX: frame.motion_scale[0],
+            motionVectorScaleY: frame.motion_scale[1],
+            resetHistory: frame.reset,
+            frameRenderTime: 0.0,
+        };
+        success(unsafe { (ops.tag_constants)(native, frame.frame_id, &constants) })?;
         let phase_start = self.advance_timing(TimingPhase::Record, phase_start);
 
         success(unsafe { (ops.wait_shared)(native, frame.ready) })?;
@@ -667,9 +722,16 @@ impl Session {
         handoff?;
         retire?;
         presented?;
-        let mut status = PresentResult::default();
+        let mut status = sdk::xefg_swapchain_present_status_t::default();
         success(unsafe { (ops.read_present_status)(native, &mut status) })?;
-        Ok((status, phase_start))
+        Ok((
+            PresentResult {
+                frames_presented: status.framesPresented,
+                fg_enabled: status.isFrameGenEnabled,
+                fg_result: status.frameGenResult,
+            },
+            phase_start,
+        ))
     }
 
     fn recover_handoff(&mut self, frame: &Frame) -> Result<(), i32> {
@@ -1002,6 +1064,15 @@ unsafe extern "C" fn rsf_core_xess_bridge_set_generated_legacy(
 }
 
 #[unsafe(no_mangle)]
+extern "C" fn rsf_core_xess_bridge_set_sleep_mode(
+    owner: &Session,
+    minimum_interval_us: u32,
+    enabled: u32,
+) -> i32 {
+    owner.set_sleep_mode(minimum_interval_us, enabled)
+}
+
+#[unsafe(no_mangle)]
 extern "C" fn rsf_core_xess_bridge_wait_idle(owner: &Session) -> i32 {
     owner.wait(owner.completion_value).err().unwrap_or(0)
 }
@@ -1120,7 +1191,7 @@ mod tests {
     use windows_sys::Win32::System::SystemInformation::{GetSystemInfo, SYSTEM_INFO};
 
     #[test]
-    fn integrated_present_checks_both_headers_before_writing_status() {
+    fn integrated_bridge_rejects_size_word_only_create_and_present_records() {
         let mut system = MaybeUninit::<SYSTEM_INFO>::uninit();
         unsafe { GetSystemInfo(system.as_mut_ptr()) };
         let page = unsafe { system.assume_init() }.dwPageSize as usize;
@@ -1145,6 +1216,11 @@ mod tests {
         let prefix_size = size_of::<u32>() as u32;
         unsafe { prefix.write(prefix_size) };
 
+        let mut rejected = ptr::dangling_mut();
+        let short_create = unsafe {
+            rsf_core_xess_bridge_create_integrated(ptr::null(), prefix.cast(), &mut rejected)
+        };
+
         let mut frame: IntegratedFrame = unsafe { std::mem::zeroed() };
         frame.struct_size = size_of::<IntegratedFrame>() as u32;
         frame.abi_version = BRIDGE_ABI_VERSION;
@@ -1165,6 +1241,8 @@ mod tests {
         let prefix_after = unsafe { prefix.read() };
         unsafe { VirtualFree(pages, 0, MEM_RELEASE) };
 
+        assert_eq!(short_create, INVALID_ARGUMENT);
+        assert!(rejected.is_null());
         assert_eq!(short_frame, INVALID_ARGUMENT);
         assert_eq!(short_status, INVALID_ARGUMENT);
         assert_eq!(prefix_after, prefix_size);
@@ -1183,5 +1261,28 @@ mod tests {
         assert_eq!(status.frames_presented, 7);
         assert_eq!(status.fg_enabled, 1);
         assert_eq!(status.fg_result, -9);
+    }
+
+    #[test]
+    fn integrated_create_checks_version_before_reading_the_runtime_directory() {
+        let relative = [u16::from(b'.'), 0];
+        let mut setup = IntegratedCreate {
+            struct_size: size_of::<IntegratedCreate>() as u32,
+            abi_version: BRIDGE_ABI_VERSION + 1,
+            adapter_luid: 1,
+            runtime_directory: relative.as_ptr(),
+        };
+        for (version, expected) in [
+            (BRIDGE_ABI_VERSION + 1, ABI_MISMATCH),
+            (BRIDGE_ABI_VERSION, INVALID_ARGUMENT),
+        ] {
+            setup.abi_version = version;
+            let mut rejected = ptr::dangling_mut();
+            let result = unsafe {
+                rsf_core_xess_bridge_create_integrated(ptr::null(), &setup, &mut rejected)
+            };
+            assert_eq!(result, expected);
+            assert!(rejected.is_null());
+        }
     }
 }

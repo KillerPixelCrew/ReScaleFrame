@@ -13,6 +13,8 @@
 //! and complete with the bridge queue. It also depends on orchestrator crate
 //! modules that the standalone `rustc` build of the session cannot link.
 
+use super::sdk::{XEFG_SWAPCHAIN_RES_BACKBUFFER, xefg_swapchain_d3d12_resource_data_t};
+use super::session_records_abi::rsf_xess_capture_desc as Desc;
 use super::{Handle, Platform};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
@@ -46,19 +48,6 @@ mod frame_abi;
 use frame_abi::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record,
 };
-
-/// The D3D12_RESOURCE_DESC fields the callback contract and receipt use.
-#[repr(C)]
-#[derive(Default)]
-pub(super) struct Desc {
-    width: u64,
-    height: u32,
-    dimension: u32,
-    format: u32,
-    depth_or_array_size: u32,
-    mip_levels: u32,
-    sample_count: u32,
-}
 
 /// One xess-diagnostic-callbacks.jsonl receipt.
 struct Event {
@@ -703,16 +692,25 @@ unsafe extern "C" fn rsf_core_xess_capture_input(
     capture: *const Capture,
     token: u64,
     kind: u32,
-    backbuffer: u32,
-    resource: Handle,
+    data: *const xefg_swapchain_d3d12_resource_data_t,
     commands: Handle,
-    resource_state: u32,
 ) {
     let Some(capture) = (unsafe { capture.as_ref() }) else {
         return;
     };
-    if capture.config.probe || backbuffer != 0 {
-        capture.observe(token, kind, resource, commands, 0, false, resource_state);
+    let Some(data) = (unsafe { data.as_ref() }) else {
+        return;
+    };
+    if capture.config.probe || kind == XEFG_SWAPCHAIN_RES_BACKBUFFER as u32 {
+        capture.observe(
+            token,
+            kind,
+            data.pResource,
+            commands,
+            0,
+            false,
+            data.incomingState,
+        );
     }
 }
 
@@ -725,7 +723,9 @@ unsafe extern "C" fn rsf_core_xess_capture_output(
     commands: Handle,
     ordinal: u32,
 ) {
-    if let Some(capture) = unsafe { capture.as_ref() } {
+    if kind == 0
+        && let Some(capture) = unsafe { capture.as_ref() }
+    {
         capture.observe(token, kind, resource, commands, ordinal, true, STATE_COMMON);
     }
 }

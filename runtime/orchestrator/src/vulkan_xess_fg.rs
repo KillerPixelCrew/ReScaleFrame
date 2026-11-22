@@ -12,8 +12,11 @@ use crate::vulkan_fg_abi::{
 use crate::vulkan_latency_frames::{Marker, legacy_present_source};
 use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_setup as Graphics};
 use rsf_game_sys::{RSF_FRAME_FLAG_RESET, rsf_frame_record as Record};
+#[path = "vulkan_xess_fg_abi.rs"]
+mod abi;
 #[path = "../../vulkan/xess-fg/bridge_abi.rs"]
 mod bridge_abi;
+use abi::rsf_xessgvk_options as Options;
 use bridge_abi::{
     RSF_XESS_BRIDGE_ABI_MISMATCH as XESS_ABI_MISMATCH, RSF_XESS_BRIDGE_ABI_VERSION as BRIDGE_ABI,
     RSF_XESS_BRIDGE_INVALID_ARGUMENT as XESS_INVALID, rsf_xess_bridge_create as BridgeCreate,
@@ -26,16 +29,6 @@ use std::sync::{Mutex, MutexGuard};
 const ABI: u32 = 1;
 const REQUIRED_MARKERS: u8 = 0b1111;
 const LAST_MARKER: u32 = 6;
-
-#[repr(C)]
-struct Options {
-    struct_size: u32,
-    abi_version: u32,
-    window: Handle,
-    timeline_enabled: u32,
-    generated_count: u32,
-    directory: *const u16,
-}
 
 #[repr(C)]
 struct Ops {
@@ -518,10 +511,13 @@ unsafe extern "C" fn rsf_core_xessgvk_create(
     let Some(swapchain) = shared::describe(unsafe { &*ops.graphics }, setup) else {
         return XESS_INVALID;
     };
-    if !setup_valid(setup, &start) || start.generated_count == 0 || options.directory.is_null() {
+    if !setup_valid(setup, &start)
+        || start.generated_count == 0
+        || options.intel_runtime_directory.is_null()
+    {
         return XESS_INVALID;
     }
-    let vendor = Xess::new(ops, options.directory);
+    let vendor = Xess::new(ops, options.intel_runtime_directory);
     status_result(unsafe {
         shared::create(
             vendor,
