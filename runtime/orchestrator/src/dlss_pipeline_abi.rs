@@ -113,5 +113,5 @@ const _: () = {
     assert!(offset_of!(rsf_dlss_pipeline_layer, width) == 24);
     assert!(offset_of!(rsf_dlss_pipeline_layer, camera) == 32);
     assert!(size_of::<rsf_dlssp_sharpen_frame>() == 20);
-    assert!(size_of::<rsf_dlssp_platform>() == 43 * size_of::<usize>());
+    assert!(size_of::<rsf_dlssp_platform>() == 40 * size_of::<usize>());
 };

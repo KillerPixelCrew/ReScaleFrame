@@ -38,7 +38,7 @@ static_assert(sizeof(rsf_dlss_pipeline_status) == 96 && offsetof(rsf_dlss_pipeli
 static_assert(sizeof(rsf_dlss_pipeline_layer) == 40 && offsetof(rsf_dlss_pipeline_layer, width) == 24 &&
     offsetof(rsf_dlss_pipeline_layer, camera) == 32);
 static_assert(sizeof(rsf_dlssp_sharpen_frame) == 20);
-static_assert(sizeof(rsf_dlssp_platform) == 43 * sizeof(void*));
+static_assert(sizeof(rsf_dlssp_platform) == 40 * sizeof(void*));
 static_assert(sizeof(rsf_dlss_engine) == 4 && sizeof(rsf_dlss_quality) == 4);
 static_assert(RSF_DLSS_PIPELINE_ABI_VERSION == 5u && RSF_FRAME_ASSEMBLY_ABI_VERSION == 1u && RSF_SHARPENING_ABI_VERSION == 1u);
 static_assert(RSF_DLSS_ERROR_NOT_SUPPORTED == -7 && RSF_DLSS_QUALITY_NATIVE == 0 && RSF_SR_NONE == 0 &&
