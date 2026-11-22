@@ -683,6 +683,12 @@ impl Owner {
             return NOT_READY;
         }
         for slot in &mut self.slots {
+            // Failed Present cannot provide a trustworthy input semaphore.
+            // Disabling FG and reaching device idle without a queue timeout
+            // establishes retirement independently of that semaphore.
+            if matches!(slot.inputs, Inputs::Unknown) {
+                slot.inputs = Inputs::Retired;
+            }
             if !slot.inputs.retire(self.platform, self.native) {
                 return NOT_READY;
             }

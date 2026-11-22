@@ -335,13 +335,15 @@ fn submission_proof_and_refused_teardown_keep_the_owner_live() {
         test.present_result
     );
     assert_eq!(unsafe { (*owner).status.presentation.enabled }, 0);
-    assert_eq!(unsafe { rsf_core_dlgvk_destroy(owner) }, NOT_READY);
+    assert_eq!(unsafe { rsf_core_dlgvk_destroy(owner) }, OK);
     // A post-error sample can still contain the previous Present's semaphore.
     assert!(!test.events.contains(&"wait SDK"));
-    assert!(!test.events.contains(&"detach"));
-    assert!(!test.events.contains(&"close"));
-    // Test callbacks have no GPU work. Drop the quarantined synthetic owner.
-    drop(unsafe { Box::from_raw(owner) });
+    assert!(
+        test.events
+            .windows(4)
+            .any(|events| events == ["off", "idle", "flush", "detach"])
+    );
+    assert!(test.events.ends_with(&["destroy chain", "close"]));
 
     let mut test = Harness {
         configure_result: FEATURE_FAILED,
