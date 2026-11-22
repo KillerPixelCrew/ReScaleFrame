@@ -6,10 +6,8 @@ pub(super) use crate::streamline_sdk::{
     ResourceTag as rsf_slvk_sdk_tag,
 };
 use crate::streamline_sdk::{RESOURCE, TAG, default_constants};
-// The Vulkan call leaves' entry types, shared with the standalone bridge. Its
-// viewport and adapter records come from this private copy of the bindings.
-#[path = "../../vulkan/streamline/lifecycle/src/sdk_api.rs"]
-pub(super) mod sdk_api;
+// The Streamline Vulkan call leaves' entry types, owned by rsf-streamline-vk.
+pub(super) use rsf_streamline_vk::sdk_api;
 
 use crate::dlss_native12::xm;
 use crate::sys::rsf_vkfg_image;

@@ -34,12 +34,15 @@ mod frame_generation;
 mod frame_token;
 #[cfg(any(windows, test))]
 mod lifecycle;
+/// Typed Streamline entry points and the guarded SDK call, shared with the Runtime.
 #[cfg(any(windows, test))]
-mod sdk_api;
+pub mod sdk_api;
+/// Default sl::Constants, shared with the Runtime.
 #[cfg(any(windows, test))]
-mod sdk_camera_defaults;
+pub mod sdk_camera_defaults;
+/// DLSS-G options packing, shared with the Runtime.
 #[cfg(windows)]
-mod sdk_fg_options;
+pub mod sdk_fg_options;
 #[cfg(any(windows, test))]
 mod sdk_records;
 #[cfg(windows)]

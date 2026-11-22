@@ -16,7 +16,6 @@ fn main() {
     );
     rsf_bindgen::write(bindings, "sys.rs");
 
-    println!("cargo::rustc-check-cfg=cfg(rsf_streamline_core)");
     println!("cargo:rerun-if-changed=../sdk_guard.c");
     let mut build = cc::Build::new();
     if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {

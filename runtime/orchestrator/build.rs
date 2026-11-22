@@ -160,19 +160,6 @@ fn native_leaves() {
     );
 }
 
-// SEH containment for the Streamline call leaves, under the Runtime's own name
-// so the standalone lifecycle archive can link beside it.
-fn streamline_guard() {
-    println!("cargo:rerun-if-changed=../vulkan/streamline/sdk_guard.c");
-    let mut build = c11();
-    build
-        .define("RSF_SLVK_GUARDED", "rsf_core_slvk_guarded")
-        .define("RSF_SLVK_GUARD_ONLY", None)
-        .warnings_into_errors(true)
-        .file("../vulkan/streamline/sdk_guard.c")
-        .compile("rsf_core_slvk_guard");
-}
-
 /// Binds the private Runtime headers that only this crate and its test crates read. The public
 /// headers come from rsf-game-sys, the FSR 4 ones from rsf-fsr4-compat, the Streamline records
 /// from rsf-streamline-vk and the D3D11 output and frame-tap platform headers from rsf-graphics.
@@ -250,15 +237,12 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         println!("cargo:rustc-link-lib=version");
     }
-    println!("cargo::rustc-check-cfg=cfg(rsf_streamline_core)");
-    println!("cargo:rustc-cfg=rsf_streamline_core");
     println!("cargo:rerun-if-changed=src/plugin_callbacks.c");
     println!("cargo:rerun-if-changed=../../sdk/game/include");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         shader_patch_parser();
         sharpening_payload();
         plugin_callbacks();
-        streamline_guard();
         native_leaves();
     }
 }

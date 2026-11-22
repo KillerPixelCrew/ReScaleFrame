@@ -81,7 +81,7 @@ target_compile_definitions(rsf_native_vulkan PUBLIC RSF_RUNTIME_BUILD)
 target_link_libraries(rsf_native_vulkan PUBLIC ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::FrameDump rsf_native_cpu PRIVATE rsf_build_options)
 if(RSF_HAVE_VULKAN AND RSF_HAVE_FFX_VK)
     target_compile_definitions(rsf_native_vulkan PRIVATE RSF_HAVE_FFX_VK=1)
-    target_link_libraries(rsf_native_vulkan PRIVATE rsf_fsr4_compat_rust)
+    target_link_libraries(rsf_native_vulkan PRIVATE rsf_orchestrator_rust)
     target_compile_definitions(rsf_native_vulkan PUBLIC RSF_VULKAN_SR_ENABLED=1)
     target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}" "${RSF_FFX_VK_INCLUDE}")
 endif()
@@ -104,8 +104,8 @@ if(RSF_HAVE_VULKAN AND RSF_HAVE_FFX_DX12_SR)
     target_sources(rsf_native_vulkan PRIVATE src/native_sr_fsr4_vulkan.c)
     target_compile_definitions(rsf_native_vulkan PUBLIC RSF_VULKAN_FSR4_ENABLED=1)
     target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
-    # The FSR 4 bridge and its exports are Rust in the compatibility archive (runtime/vulkan/fsr4).
-    target_link_libraries(rsf_native_vulkan PRIVATE ReScaleFrame::FSR rsf_fsr4_compat_rust bcrypt d3d12 dxgi)
+    # The FSR 4 bridge and its exports are Rust (rsf-fsr4-compat, inside the Runtime archive).
+    target_link_libraries(rsf_native_vulkan PRIVATE ReScaleFrame::FSR rsf_orchestrator_rust bcrypt d3d12 dxgi)
 endif()
 if(RSF_HAVE_VULKAN AND RSF_HAVE_FFX_DX12_FG)
     # The FSR 4 FG bridge, its platform table and exports are Rust (vulkan_fsr4_fg.rs, runtime/vulkan/fsr4-fg).
@@ -144,9 +144,9 @@ if(RSF_HAVE_VULKAN AND RSF_HAVE_STREAMLINE AND EXISTS "${RSF_STREAMLINE_VK_RUNTI
     target_sources(rsf_native_vulkan PRIVATE ../vulkan/streamline/bridge.c src/native_latency_streamline_exceptions.c)
     target_compile_definitions(rsf_native_vulkan PRIVATE RSF_HAVE_STREAMLINE_VK=1 RSF_STREAMLINE_VULKAN_STATIC=1 "VULKANSTORY_CORRECTED_STREAMLINE_SHA256=${rsf_sl_bytes}")
     target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}" "${RSF_STREAMLINE_INCLUDE}")
-    # The interposer lifecycle is Rust; the standalone bridge links the same crate.
-    rsf_add_rust_static(rsf_streamline_vk_rust rsf_rust_streamline_vk rsf-streamline-vk rsf_streamline_vk)
-    target_link_libraries(rsf_native_vulkan PRIVATE rsf_streamline_vk_rust wintrust advapi32)
+    # The interposer lifecycle is Rust (rsf-streamline-vk, inside the Runtime archive); the standalone
+    # bridge links the same crate.
+    target_link_libraries(rsf_native_vulkan PRIVATE rsf_orchestrator_rust wintrust advapi32)
 endif()
 add_library(ReScaleFrame::NativeVulkan ALIAS rsf_native_vulkan)
 if(RSF_FRAME_DUMP_VULKAN_INCLUDE)

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::sys::{rsf_slvk_sdk_constants, rsf_slvk_sdk_header};
 
-pub(crate) fn constants() -> rsf_slvk_sdk_constants {
+pub fn constants() -> rsf_slvk_sdk_constants {
     rsf_slvk_sdk_constants {
         base: rsf_slvk_sdk_header {
             next: std::ptr::null_mut(),

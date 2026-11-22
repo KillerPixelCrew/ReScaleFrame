@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 mod leaves;
-#[path = "../../vulkan/streamline/lifecycle/src/sdk_fg_options.rs"]
-pub(super) mod sdk_fg_options;
+pub(super) use rsf_streamline_vk::sdk_fg_options;
 mod wsi;
 
 use self::wsi::Wsi;

@@ -12,8 +12,7 @@ use std::ffi::{c_char, c_void};
 use std::mem::{offset_of, size_of};
 use std::ptr::null_mut;
 
-#[path = "../../vulkan/streamline/lifecycle/src/sdk_camera_defaults.rs"]
-mod sdk_camera_defaults;
+use rsf_streamline_vk::sdk_camera_defaults;
 
 pub(crate) use crate::sys::rsf_slvk_sdk_fg_options as FgOptions;
 pub(crate) use crate::sys::rsf_slvk_sdk_header as FgHeader;

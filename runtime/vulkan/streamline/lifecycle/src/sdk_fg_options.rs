@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 
-pub(crate) use crate::sys::rsf_slvk_sdk_fg_options as Packed;
+pub use crate::sys::rsf_slvk_sdk_fg_options as Packed;
 #[cfg(windows)]
 #[allow(unused_imports)] // The Vulkan Runtime consumes its own present timing sample.
-pub(crate) use crate::sys::rsf_slvk_sdk_fg_sample as Sample;
+pub use crate::sys::rsf_slvk_sdk_fg_sample as Sample;
 #[cfg(windows)]
-pub(crate) use crate::sys::rsf_slvk_sdk_fg_state as State;
+pub use crate::sys::rsf_slvk_sdk_fg_state as State;
 use crate::sys::rsf_slvk_sdk_header;
 
 /// An empty `sl::DLSSGState` v4 for slDLSSGGetState to fill.
 #[cfg(windows)]
-pub(crate) fn state() -> State {
+pub fn state() -> State {
     State {
         base: rsf_slvk_sdk_header {
             next: std::ptr::null_mut(),
@@ -24,7 +24,7 @@ pub(crate) fn state() -> State {
     }
 }
 
-pub(crate) fn pack(
+pub fn pack(
     count: Option<u32>,
     width: u32,
     height: u32,
