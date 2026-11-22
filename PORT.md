@@ -1471,7 +1471,7 @@ Port SDK loading, DLSS SR and FG, capture and session lifetime across the Runtim
 - [ ] [runtime/orchestrator/src/native_fg_dlss_vulkan_capture.h](runtime/orchestrator/src/native_fg_dlss_vulkan_capture.h)
 - [ ] [runtime/orchestrator/src/native_fg_dlss_vulkan_capture_ledger.h](runtime/orchestrator/src/native_fg_dlss_vulkan_capture_ledger.h)
 - [ ] [runtime/orchestrator/src/native_fg_dlss_vulkan_platform.h](runtime/orchestrator/src/native_fg_dlss_vulkan_platform.h)
-- [ ] [runtime/vulkan/ngx/vulkanstory_ngx.h](runtime/vulkan/ngx/vulkanstory_ngx.h)
+- [x] [runtime/vulkan/ngx/vulkanstory_ngx.h](runtime/vulkan/ngx/vulkanstory_ngx.h)
 - [ ] [runtime/vulkan/streamline/bridge.cpp](runtime/vulkan/streamline/bridge.cpp)
 - [ ] [runtime/vulkan/streamline/present-capture.h](runtime/vulkan/streamline/present-capture.h)
 - [ ] [runtime/vulkan/streamline/sdk-fixes/ngx-vulkan-dispatch.h](runtime/vulkan/streamline/sdk-fixes/ngx-vulkan-dispatch.h)
