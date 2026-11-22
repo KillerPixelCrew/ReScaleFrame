@@ -5,57 +5,16 @@ use crate::overlay_native12_abi::{
     rsf_overlay11on12_device, rsf_overlay11on12_platform as Platform, rsf_overlay11on12_target,
     rsf_overlay12_log,
 };
-use crate::sdk_module::SdkModule;
 use crate::sr_session::has_capacity;
 use std::ffi::{CStr, c_void};
 use std::ptr;
-use std::sync::{Mutex, OnceLock};
-use windows_sys::Win32::System::{
-    LibraryLoader::{LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW},
-    SystemInformation::GetSystemDirectoryW,
-};
+use std::sync::Mutex;
+#[cfg(not(test))]
+mod native;
 
 const NOT_SUPPORTED: i32 = -7;
 
 type Handle = *mut c_void;
-
-struct SystemEntry {
-    _module: SdkModule,
-    create: unsafe extern "system" fn() -> isize,
-}
-
-// The module and export are immutable and retained for the process lifetime.
-unsafe impl Send for SystemEntry {}
-unsafe impl Sync for SystemEntry {}
-
-impl SystemEntry {
-    fn open() -> Option<Self> {
-        let mut path = vec![0; 260];
-        let length = unsafe { GetSystemDirectoryW(path.as_mut_ptr(), path.len() as u32) } as usize;
-        if length == 0 || length >= path.len() {
-            return None;
-        }
-        path.truncate(length);
-        path.extend("\\d3d11.dll".encode_utf16().chain([0]));
-        let module = SdkModule::adopt_system(unsafe {
-            LoadLibraryExW(path.as_ptr(), ptr::null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32)
-        })?;
-        let create = module.symbol(c"D3D11On12CreateDevice")?;
-        Some(Self {
-            _module: module,
-            create,
-        })
-    }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay11on12_create_proc() -> Handle {
-    static ENTRY: OnceLock<Option<SystemEntry>> = OnceLock::new();
-    ENTRY
-        .get_or_init(SystemEntry::open)
-        .as_ref()
-        .map_or(ptr::null_mut(), |entry| entry.create as *const () as Handle)
-}
 
 struct Binding {
     interop: ComRef,
@@ -113,9 +72,9 @@ struct Frame<'a> {
 
 impl Frame<'_> {
     fn log(&self, message: &CStr) {
-        if let Some(logger) = self.logger {
-            unsafe { logger(self.user, message.as_ptr()) };
-        }
+        unsafe {
+            crate::graphics_d3d11::rsf_call_native_log(self.logger, self.user, message.as_ptr())
+        };
     }
 }
 

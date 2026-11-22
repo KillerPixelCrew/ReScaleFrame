@@ -1,7 +1,6 @@
 rsf_add_rust_static(rsf_shader_compiler rsf_shader_compiler_build rsf-shader-compiler rsf_shader_compiler)
 add_library(rsf_graphics STATIC
     src/texture_dump.c
-    src/overlay_renderer.cpp
     src/d3d11_observer.cpp)
 target_sources(rsf_graphics PRIVATE src/d3d12_observer.cpp)
 # The overlay's C ABI lives with the Rust crate that implements it, because that crate is the side

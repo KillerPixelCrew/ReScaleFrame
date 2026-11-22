@@ -34,6 +34,9 @@ use windows_sys::Win32::{
     },
 };
 
+#[cfg(not(test))]
+pub(crate) mod native;
+
 const SLOTS: usize = 3;
 const TEXTURES: usize = RSF_OVERLAY12_TEXTURE_LIMIT as usize;
 const ATLAS_BATCH: usize = 32;
@@ -512,38 +515,6 @@ struct Renderer {
     frames: [Frame; SLOTS],
 }
 
-// The native leaves read this view while Rust owns its individual references.
-#[repr(C)]
-struct NativeObjects {
-    pixel_shader: Option<ComRef>,
-    vertex_shader: Option<ComRef>,
-    root: Option<ComRef>,
-    queue: Option<ComRef>,
-    device: Option<ComRef>,
-    srv_stride: u32,
-}
-
-const _: () = {
-    assert!(size_of::<NativeObjects>() == 48);
-    assert!(std::mem::offset_of!(NativeObjects, srv_stride) == 40);
-};
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay12_adopt(objects: *mut NativeObjects) -> *mut c_void {
-    // The leaf hands over an owned set and never reads or drops that record afterward.
-    let objects = unsafe { objects.read() };
-    crate::allocate_handle(objects).cast()
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay12_destroy(renderer: *mut c_void) {
-    // Successful adoption yields the sole ownership handle.
-    drop(unsafe { Box::from_raw(renderer.cast::<NativeObjects>()) });
-}
-
-// Only the locked panel uses or releases the native renderer and its frames.
-unsafe impl Send for Renderer {}
-
 impl Renderer {
     // A refusal keeps the complete and partial frames until teardown, after the startup fence.
     fn create_frames(&mut self, platform: &Platform) -> Option<()> {
@@ -685,8 +656,12 @@ impl Started {
     }
 
     fn log(&self, message: &CStr) {
-        if let Some(call) = self.logger {
-            unsafe { call(self.log_user as *mut c_void, message.as_ptr()) };
+        unsafe {
+            crate::graphics_d3d11::rsf_call_native_log(
+                self.logger,
+                self.log_user as *mut c_void,
+                message.as_ptr(),
+            );
         }
     }
 
@@ -801,14 +776,13 @@ unsafe extern "C" fn rsf_core_overlay12_present(
         let Some(started) = Started::initialize(platform, device, queue, chain, logger, user)
         else {
             panel.defer_retry(owner, now);
-            if let Some(log) = logger {
-                unsafe {
-                    log(
-                        user,
-                        c"Native D3D12 overlay initialization failed.".as_ptr(),
-                    )
-                };
-            }
+            unsafe {
+                crate::graphics_d3d11::rsf_call_native_log(
+                    logger,
+                    user,
+                    c"Native D3D12 overlay initialization failed.".as_ptr(),
+                )
+            };
             return 0;
         };
         READY.store(true, Ordering::Release);
@@ -1359,31 +1333,6 @@ mod tests {
             fixture.refs_at_destroy.as_deref(),
             Some(&[1; 4 * SLOTS][..])
         );
-    }
-
-    #[test]
-    fn adopted_native_renderer_owns_one_reference_per_object() {
-        let objects: [Box<Fake>; 5] = std::array::from_fn(|_| fake());
-        let [pixel_shader, vertex_shader, root, queue, device] = objects.each_ref().map(|object| {
-            let pointer = raw(object);
-            unsafe {
-                add_ref(pointer.cast());
-                ComRef::from_owned(pointer)
-            }
-        });
-        let mut source = std::mem::ManuallyDrop::new(NativeObjects {
-            pixel_shader,
-            vertex_shader,
-            root,
-            queue,
-            device,
-            srv_stride: 16,
-        });
-        let renderer = unsafe { rsf_core_overlay12_adopt(&mut *source) };
-        assert!(!renderer.is_null());
-        assert_eq!(objects.each_ref().map(|object| object.refs.get()), [2; 5]);
-        unsafe { rsf_core_overlay12_destroy(renderer) };
-        assert_eq!(objects.each_ref().map(|object| object.refs.get()), [1; 5]);
     }
 
     #[test]

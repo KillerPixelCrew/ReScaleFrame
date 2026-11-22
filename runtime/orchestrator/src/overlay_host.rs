@@ -7,6 +7,7 @@
 // failures and keeps frame time. The native functions only make the
 // loader, COM, input, renderer and Win32 calls.
 use crate::com_ref::ComRef;
+use crate::graphics_d3d11::rsf_call_native_log;
 use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};
 use crate::overlay_host_abi::{
     RSF_OVERLAY_ABI_VERSION, RSF_OVERLAY_HOST_PANEL_LOADED, RSF_OVERLAY_HOST_PANEL_MISSING_EXPORTS,
@@ -164,11 +165,11 @@ fn say(message: impl Display) {
         let logger = LOGGER.lock().unwrap_or_else(PoisonError::into_inner);
         (logger.log, logger.user)
     };
-    let Some(log) = log else {
+    if log.is_none() {
         return;
-    };
+    }
     if let Ok(line) = CString::new(message.to_string()) {
-        unsafe { log(user as Handle, line.as_ptr()) };
+        unsafe { rsf_call_native_log(log, user as Handle, line.as_ptr()) };
     }
 }
 

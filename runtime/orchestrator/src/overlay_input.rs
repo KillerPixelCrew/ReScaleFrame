@@ -569,9 +569,7 @@ unsafe extern "C" fn invoke_log(
     user: *mut c_void,
     message: *const c_char,
 ) {
-    if let Some(log) = log {
-        unsafe { log(user, message) };
-    }
+    unsafe { crate::graphics_d3d11::rsf_call_native_log(log, user, message) };
 }
 
 static WINDOW_PLATFORM: WindowPlatform = WindowPlatform {

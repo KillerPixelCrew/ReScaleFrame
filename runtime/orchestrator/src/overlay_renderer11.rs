@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
+use crate::graphics_d3d11::rsf_call_native_log;
 use crate::overlay_abi::rsf_overlay_texture_update as Update;
 use crate::overlay_geometry::{
     TEXTURE_EDGE, borrowed_draw_slice, draw_clip, patch_fits, valid_indices, valid_texture,
@@ -10,7 +11,7 @@ use crate::overlay_host_abi::{
 };
 use crate::render_abi::rsf_backend_log_fn as LogFn;
 use crate::sr_session::has_capacity;
-use std::ffi::{CString, c_char, c_void};
+use std::ffi::{CString, c_void};
 use std::mem;
 use std::ptr::null_mut;
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
@@ -51,16 +52,12 @@ struct Draw {
     clip: [i32; 4],
 }
 
-unsafe extern "C" {
-    fn rsf_overlay_renderer_log(log: LogFn, user: Handle, message: *const c_char);
-}
-
 impl Setup {
     fn say(&self, text: &str) {
         if self.log.is_some()
             && let Ok(text) = CString::new(text)
         {
-            unsafe { rsf_overlay_renderer_log(self.log, self.log_user, text.as_ptr()) };
+            unsafe { rsf_call_native_log(self.log, self.log_user, text.as_ptr()) };
         }
     }
 }
