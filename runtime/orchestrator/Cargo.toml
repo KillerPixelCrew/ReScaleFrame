@@ -16,6 +16,7 @@ rsf-game-sys = { path = "../../sdk/game" }
 rsf-streamline-vk = { path = "../vulkan/streamline/lifecycle" }
 rsf-graphics = { path = "../graphics/rust" }
 rsf-runtime-submission = { path = "../graphics/submission" }
+rsf-minhook-sys = { path = "../../third_party/minhook" }
 
 [dev-dependencies]
 rsf-graphics = { path = "../graphics/rust", features = ["test-support"] }

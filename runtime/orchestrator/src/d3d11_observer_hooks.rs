@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 mod detours;
-mod hde_abi;
 mod probe;
 mod route;
 

@@ -286,11 +286,7 @@ pub(crate) fn verify_with_inputs(build: &ExactBuild) -> bool {
 // ---------------------------------------------------------------------------------------------
 // Native leaves and lifecycle state.
 
-unsafe extern "system" {
-    fn MH_QueueEnableHook(target: *mut c_void) -> i32;
-    fn MH_QueueDisableHook(target: *mut c_void) -> i32;
-    fn MH_ApplyQueued() -> i32;
-}
+use rsf_minhook_sys::{MH_ApplyQueued, MH_QueueDisableHook, MH_QueueEnableHook};
 
 unsafe extern "C" {
     fn rsf_fallout4_render_report(message: *const std::ffi::c_char);

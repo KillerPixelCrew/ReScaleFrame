@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 //! Selects the outer Present detour and constructs its independent genuine forwarding route.
-use super::hde_abi::{
-    F_DISP32, F_ERROR, F_IMM8, F_IMM16, F_IMM32, F_IMM64, F_MODRM, F_PREFIX_67, F_RELATIVE,
-    hde64_disasm, hde64s,
-};
 use super::{Handle, ROUTES, probe};
 use crate::d3d11_observer_callbacks::snapshot;
 use crate::d3d11_observer_module::ModuleFile;
+use rsf_minhook_sys::hde::{
+    F_DISP32, F_ERROR, F_IMM8, F_IMM16, F_IMM32, F_IMM64, F_MODRM, F_PREFIX_67, F_RELATIVE,
+    hde64_disasm, hde64s,
+};
 use std::ffi::{CString, c_void};
 use std::ptr::{self, null_mut, without_provenance_mut};
 use windows_sys::Win32::{
@@ -36,13 +36,7 @@ const MH_NOT_CREATED: i32 = 4;
 const MH_ENABLED: i32 = 5;
 const MH_DISABLED: i32 = 6;
 
-unsafe extern "system" {
-    fn MH_Initialize() -> i32;
-    fn MH_CreateHook(target: Handle, detour: Handle, original: *mut Handle) -> i32;
-    fn MH_EnableHook(target: Handle) -> i32;
-    fn MH_DisableHook(target: Handle) -> i32;
-    fn MH_RemoveHook(target: Handle) -> i32;
-}
+use rsf_minhook_sys::{MH_CreateHook, MH_DisableHook, MH_EnableHook, MH_Initialize, MH_RemoveHook};
 
 fn module_at(address: usize) -> Option<HMODULE> {
     let mut module = null_mut();

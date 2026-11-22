@@ -586,17 +586,9 @@ mod minhook {
     const ENABLED: i32 = 5;
     const DISABLED: i32 = 6;
 
-    unsafe extern "system" {
-        fn MH_Initialize() -> i32;
-        fn MH_CreateHook(
-            target: *mut c_void,
-            detour: *mut c_void,
-            original: *mut *mut c_void,
-        ) -> i32;
-        fn MH_EnableHook(target: *mut c_void) -> i32;
-        fn MH_DisableHook(target: *mut c_void) -> i32;
-        fn MH_RemoveHook(target: *mut c_void) -> i32;
-    }
+    use rsf_minhook_sys::{
+        MH_CreateHook, MH_DisableHook, MH_EnableHook, MH_Initialize, MH_RemoveHook,
+    };
 
     pub(super) static PLATFORM: HookPlatform = HookPlatform {
         initialize,

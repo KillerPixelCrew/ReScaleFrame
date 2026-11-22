@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! Bindings to the adapter's MinHook instance, initialized and linked by the adapter.
+//! The adapter's MinHook instance, initialized and linked by the adapter.
 use std::ffi::c_void;
 
 const OK: i32 = 0;
@@ -8,16 +8,10 @@ const NOT_CREATED: i32 = 4;
 const ALREADY_ENABLED: i32 = 5;
 const ALREADY_DISABLED: i32 = 6;
 
-unsafe extern "system" {
-    fn MH_Initialize() -> i32;
-    fn MH_CreateHook(target: *mut c_void, detour: *mut c_void, original: *mut *mut c_void) -> i32;
-    fn MH_QueueEnableHook(target: *mut c_void) -> i32;
-    fn MH_QueueDisableHook(target: *mut c_void) -> i32;
-    fn MH_ApplyQueued() -> i32;
-    fn MH_EnableHook(target: *mut c_void) -> i32;
-    fn MH_DisableHook(target: *mut c_void) -> i32;
-    fn MH_RemoveHook(target: *mut c_void) -> i32;
-}
+use rsf_minhook_sys::{
+    MH_ApplyQueued, MH_CreateHook, MH_DisableHook, MH_EnableHook, MH_Initialize,
+    MH_QueueDisableHook, MH_QueueEnableHook, MH_RemoveHook,
+};
 
 /// # Safety
 /// The target and detour must have compatible machine-level calling conventions and lifetimes.

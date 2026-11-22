@@ -33,6 +33,7 @@ members = [
   "integrations/godot",
   "integrations/steam",
   "integrations/windows",
+  "third_party/minhook",
   "tools/exposure_probe",
   "tools/bindgen",
 ]

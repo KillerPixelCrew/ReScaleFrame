@@ -17,13 +17,8 @@ const CAPACITY: usize = 8;
 
 pub(crate) use crate::sys::rsf_d3d12_observer_setup as ObserverSetup;
 
-// MinHook.h v1.3.4. The graphics target links the same MinHook instance as D3D11.
-unsafe extern "system" {
-    fn MH_Initialize() -> i32;
-    fn MH_CreateHook(target: Handle, detour: Handle, original: *mut Handle) -> i32;
-    fn MH_EnableHook(target: Handle) -> i32;
-    fn MH_RemoveHook(target: Handle) -> i32;
-}
+// The graphics target links the same MinHook instance as D3D11.
+use rsf_minhook_sys::{MH_CreateHook, MH_EnableHook, MH_Initialize, MH_RemoveHook};
 
 const MH_OK: i32 = 0;
 const MH_ERROR_ALREADY_INITIALIZED: i32 = 1;
