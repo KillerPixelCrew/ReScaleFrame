@@ -443,7 +443,6 @@ unsafe extern "C" fn rsf_core_dlss_capture_open(
         }),
     });
     if owner.is_null() {
-        unsafe { (ops.close)(native) };
         return INIT_FAILED;
     }
     if unsafe { (ops.register)(native, Some(present), owner.cast()) } != VK_SUCCESS {
