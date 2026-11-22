@@ -5,6 +5,11 @@
 
 bool rsf_rdr2_install_native_capture(const wchar_t* directory) noexcept;
 
+#ifdef RSF_RDR2_CAPTURE_TEST
+void rsf_rdr2_capture_test_arm(void* swapchain) noexcept;
+void rsf_rdr2_capture_test_stop() noexcept;
+#endif
+
 struct rsf_rdr2_capture_state;
 
 struct rsf_rdr2_capture_paths {
@@ -31,6 +36,5 @@ static_assert(offsetof(rsf_rdr2_capture_install_ops, wait_worker) == 8 + 5 * siz
 
 extern "C" {
 bool rsf_rdr2_capture_install(const wchar_t* directory, const rsf_rdr2_capture_install_ops*, bool fixture) noexcept;
-bool rsf_rdr2_capture_fixture_stopping() noexcept;
 void rsf_rdr2_capture_stop_fixture() noexcept;
 }

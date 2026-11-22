@@ -20,8 +20,6 @@
 
 using Microsoft::WRL::ComPtr;
 void rsf_rdr2_request_camera_capture() noexcept {} // No game TLS exists in this fixture.
-void rsf_rdr2_capture_test_arm(void*) noexcept;
-void rsf_rdr2_capture_test_stop() noexcept;
 namespace {
 void check(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
 void hr(HRESULT value, const char* message) { if (FAILED(value)) { std::printf("HRESULT=%08lx\n",static_cast<unsigned long>(value)); throw std::runtime_error(message); } }
@@ -160,10 +158,14 @@ int main(int argc,char** argv) try {
     check(document.find("\"draw_count\":75")!=std::string::npos,"full draw sequence");
     check(document.find("\"index\":3")!=std::string::npos,"four temporal input groups");
     check(document.find("\"write_failed\":false")!=std::string::npos,"complete writes");
+    check(document.find("\"readbacks_unavailable\":0")!=std::string::npos,"complete readback receipts");
     check(document.find("\"capture_timeout\":false")!=std::string::npos,"capture completed without timeout");
     check(document.find("\"color_space_set\":true")!=std::string::npos,"observed color space");
-    check(document.find("\"ps_crc32\":\"00000000\"")==std::string::npos,"stream shader identity captured");
+    check(document.find("\"pipeline_known\":true,\"ps_crc32\":\"")!=std::string::npos &&
+        document.find("\"ps_crc32\":\"00000000\"")==std::string::npos,"stream shader identity captured");
     const auto prefix=L"native-"+std::to_wstring(GetCurrentProcessId())+L"-001-";
+    const auto final_metadata=read(root/(prefix+L"074.json"));
+    check(final_metadata.find("\"pipeline_known\":true")!=std::string::npos,"draw image reports observed pipeline");
     const auto final=read(root/(prefix+L"074.bin"));check(final.size()==256u*48u,"final draw retained past 64");
     if(rgb10){uint32_t packed{};std::memcpy(&packed,final.data(),sizeof(packed));
         check((packed&1023)==256 && ((packed>>10)&1023)==512 && ((packed>>20)&1023)==767 && (packed>>30)==3,"actual final RGB10 pixels");}

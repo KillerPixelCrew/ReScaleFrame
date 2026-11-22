@@ -1,19 +1,25 @@
 // SPDX-License-Identifier: MIT
 //! Pending capture shots and the poller's detached readback batch.
+#[cfg(any(windows, test))]
+use super::gpu_leases::{Gpu, take_idle};
 use super::gpu_leases::{
-    Gpu, NO_SIGNAL_NEEDED, Ops, ReadbackLeases, SIGNAL_ACCEPTED, Signal, bind_queue,
-    rsf_rdr2_capture_gpu_bind_fence, select_target, signal, take_idle,
+    NO_SIGNAL_NEEDED, Ops, ReadbackLeases, SIGNAL_ACCEPTED, Signal, bind_queue,
+    rsf_rdr2_capture_gpu_bind_fence, select_target, signal,
 };
 use super::metadata::{InputId, RESOURCE_COUNT, RESOURCE_ROLES};
 use super::recordings::{
     Draw, Pipeline, Readback, Submission, apply_submission, awaits_fence, claim_readback,
-    fence_readback, reuse_readback, snapshot_submission, stamp_copy, submit_readback,
+    discard_submission, fence_readback, reuse_readback, snapshot_submission, stamp_copy,
+    submit_readback,
 };
 use super::{
     Capture, INPUT_FRAMES, KEEP_TAIL, MAX_DRAW_COPIES, SAVE_DRAW, commit_draw,
     rsf_rdr2_capture_active,
 };
-use std::ffi::{CStr, c_char, c_void};
+use std::cell::RefCell;
+#[cfg(windows)]
+use std::ffi::c_char;
+use std::ffi::{CStr, c_void};
 use std::ptr;
 
 const MAX_PENDING: usize = MAX_DRAW_COPIES as usize + INPUT_FRAMES as usize * RESOURCE_COUNT;
@@ -21,6 +27,29 @@ const REFUSED: u32 = 0;
 const RECORDED: u32 = 1;
 const NO_SLOT: u32 = 2;
 const SAVE_EVENT: u32 = 3;
+const UNPAIRED_SUBMISSION: u32 = 5;
+
+struct QueueCall {
+    queue: *mut c_void,
+    snapshot: *mut Submission,
+}
+
+impl Drop for QueueCall {
+    fn drop(&mut self) {
+        unsafe { discard_submission(self.snapshot) };
+    }
+}
+
+struct QueueCalls {
+    stack: Vec<QueueCall>,
+    refused: usize,
+}
+
+thread_local! {
+    static QUEUE_CALLS: RefCell<QueueCalls> = const { RefCell::new(QueueCalls {
+        stack: Vec::new(), refused: 0,
+    }) };
+}
 
 #[repr(C)]
 #[derive(Default)]
@@ -47,10 +76,12 @@ pub(super) struct Image {
     pub(super) vertices: u32,
     pub(super) instances: u32,
     pub(super) pipeline: Pipeline,
+    pub(super) pipeline_known: bool,
+    pub(super) pso: u64,
 }
 
 const _: () = {
-    assert!(size_of::<Image>() == 160);
+    assert!(size_of::<Image>() == 168);
     assert!(std::mem::offset_of!(Image, pipeline) == 116);
 };
 
@@ -58,6 +89,7 @@ pub(super) struct Shot {
     receipt: Readback,
     leases: ReadbackLeases,
     image: Image,
+    #[cfg_attr(not(windows), allow(dead_code))]
     role: &'static CStr,
     tail: bool,
 }
@@ -74,10 +106,13 @@ impl Default for Shot {
     }
 }
 
-type Completed = unsafe extern "C" fn(*mut c_void) -> u64;
+pub(super) type Completed = unsafe extern "C" fn(*mut c_void) -> u64;
+#[cfg(any(windows, test))]
+pub(super) type DeviceRemoved = unsafe extern "C" fn(*mut c_void) -> bool;
 type Copy =
     unsafe extern "C" fn(*mut c_void, *mut c_void, u32, &mut ReadbackLeases, &mut Image) -> bool;
-type WriteImage = unsafe extern "C" fn(&ReadbackLeases, &Image, *const c_char) -> bool;
+#[cfg(windows)]
+pub(super) type WriteImage = unsafe extern "C" fn(&ReadbackLeases, &Image, *const c_char) -> bool;
 
 impl Shot {
     fn completed(&self, sample: Completed) -> u64 {
@@ -86,6 +121,7 @@ impl Shot {
             .map_or(0, |fence| unsafe { sample(fence.as_ptr()) })
     }
 
+    #[cfg(any(windows, test))]
     fn finish_receipt(&mut self) {
         self.image.list = self.receipt.list.addr() as u64;
         self.image.generation = self.receipt.generation;
@@ -104,9 +140,13 @@ pub(super) struct Shots {
 }
 
 #[derive(Default)]
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
 pub(super) struct Ready {
     shots: Vec<Shot>,
+    failed: Vec<Shot>,
     retired_tail: Option<Shot>,
+    #[cfg(windows)]
+    pub(super) bundle: Option<super::bundle::Snapshot>,
 }
 
 impl Shots {
@@ -116,6 +156,33 @@ impl Shots {
         }
         self.pending.push(shot);
         self.pending.last_mut()
+    }
+}
+
+pub(super) unsafe fn discard_reset(owner: &Capture, list: *mut c_void, generation: u64) {
+    for shot in &mut unsafe { &mut *owner.shots.get() }.pending {
+        if shot.receipt.discarded_by_reset(list, generation) {
+            // Keep the COM release on the poller, outside the graphics mutex.
+            shot.receipt.discarded = true;
+        }
+    }
+}
+
+/// When the original queue call must run without a receipt, its copies cannot be proven
+/// unsubmitted by a subsequent Reset. A confirmed device loss can still retire them.
+unsafe fn untracked_submit(owner: &Capture, count: u32, lists: *const *mut c_void) {
+    if count == 0 {
+        return;
+    }
+    let lists =
+        (!lists.is_null()).then(|| unsafe { std::slice::from_raw_parts(lists, count as usize) });
+    for shot in &mut unsafe { &mut *owner.shots.get() }.pending {
+        if !shot.receipt.discarded
+            && shot.receipt.submission == 0
+            && lists.is_none_or(|lists| lists.contains(&shot.receipt.list))
+        {
+            shot.receipt.untracked = true;
+        }
     }
 }
 
@@ -199,6 +266,8 @@ unsafe extern "C" fn rsf_rdr2_capture_draw_shot(
     shot.image.instances = draw.instances;
     shot.image.caller = draw.caller;
     shot.image.pipeline = draw.pipeline;
+    shot.image.pipeline_known = draw.pipeline_known;
+    shot.image.pso = draw.pso;
     unsafe { select_target(owner, resource) };
     let action = unsafe { commit_draw(owner) };
     shot.tail |= action & KEEP_TAIL != 0;
@@ -216,6 +285,23 @@ unsafe extern "C" fn rsf_rdr2_capture_draw_shot(
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_rdr2_capture_before_submit(
     owner: &Capture,
+    queue: *mut c_void,
+    count: u32,
+    lists: *const *mut c_void,
+) {
+    QUEUE_CALLS.with_borrow_mut(|calls| {
+        if calls.refused != 0 || calls.stack.try_reserve(1).is_err() {
+            calls.refused += 1;
+            unsafe { untracked_submit(owner, count, lists) };
+        } else {
+            let snapshot = unsafe { claim_submission(owner, count, lists) };
+            calls.stack.push(QueueCall { queue, snapshot });
+        }
+    });
+}
+
+unsafe fn claim_submission(
+    owner: &Capture,
     count: u32,
     lists: *const *mut c_void,
 ) -> *mut Submission {
@@ -225,6 +311,8 @@ unsafe extern "C" fn rsf_rdr2_capture_before_submit(
         for shot in pending {
             claim_readback(submission, &mut shot.receipt);
         }
+    } else {
+        unsafe { untracked_submit(owner, count, lists) };
     }
     submission
 }
@@ -233,6 +321,30 @@ unsafe extern "C" fn rsf_rdr2_capture_before_submit(
 /// A successful signal also covers older unfenced receipts already submitted to that queue.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_rdr2_capture_after_submit(
+    owner: &Capture,
+    queue: *mut c_void,
+    ops: &Ops,
+) -> u32 {
+    // Release the TLS borrow before signalling: the native leaf can reenter the observer.
+    let call = QUEUE_CALLS.with_borrow_mut(|calls| {
+        if calls.refused != 0 {
+            calls.refused -= 1;
+            Ok(None)
+        } else if calls.stack.last().is_some_and(|call| call.queue == queue) {
+            Ok(calls.stack.pop())
+        } else {
+            Err(UNPAIRED_SUBMISSION)
+        }
+    });
+    let call = match call {
+        Ok(call) => call,
+        Err(result) => return result,
+    };
+    let snapshot = call.as_ref().map_or(ptr::null_mut(), |call| call.snapshot);
+    unsafe { finish_submission(owner, queue, snapshot, ops) }
+}
+
+unsafe fn finish_submission(
     owner: &Capture,
     queue: *mut c_void,
     submission: *mut Submission,
@@ -275,10 +387,11 @@ unsafe extern "C" fn rsf_rdr2_capture_pending_count(owner: &Capture) -> usize {
 
 /// Only the poller calls this, under the native capture mutex. Transfer completed shots in
 /// pending order. Allocation refusal leaves the current shot pending for the next poll.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_collect_ready(
+#[cfg(any(windows, test))]
+pub(super) unsafe fn collect_ready(
     owner: &Capture,
     sample: Completed,
+    removed: DeviceRemoved,
 ) -> *mut Gpu {
     if rsf_rdr2_capture_active(owner) {
         return ptr::null_mut();
@@ -287,16 +400,34 @@ unsafe extern "C" fn rsf_rdr2_capture_collect_ready(
     let ready = unsafe { &mut *owner.ready.get() };
     let mut index = 0;
     while let Some(shot) = pending.get(index) {
-        if !shot.receipt.is_complete(shot.completed(sample)) {
+        let value = shot.completed(sample);
+        let lost = (value == u64::MAX
+            || (shot.leases.fence.is_none()
+                && (shot.receipt.submission != 0 || shot.receipt.untracked)))
+            && shot
+                .leases
+                .buffer
+                .is_some_and(|buffer| unsafe { removed(buffer.as_ptr()) });
+        let unavailable = shot.receipt.discarded || lost;
+        if !unavailable && !shot.receipt.is_complete(value) {
             index += 1;
             continue;
         }
-        if ready.shots.try_reserve(1).is_err() {
+        let destination = if unavailable {
+            &mut ready.failed
+        } else {
+            &mut ready.shots
+        };
+        if destination.try_reserve(1).is_err() {
             break;
         }
         let mut shot = pending.remove(index);
-        shot.finish_receipt();
-        ready.shots.push(shot);
+        if unavailable {
+            unsafe { (*owner.ledger.get()).readbacks_unavailable += 1 };
+        } else {
+            shot.finish_receipt();
+        }
+        destination.push(shot);
     }
     if pending.is_empty() {
         unsafe { take_idle(owner) }
@@ -306,17 +437,13 @@ unsafe extern "C" fn rsf_rdr2_capture_collect_ready(
 }
 
 // Ready storage belongs to the existing worker. Writing and dropping it run outside the mutex.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_ready_count(owner: &Capture) -> usize {
+#[cfg(any(windows, test))]
+pub(super) unsafe fn ready_count(owner: &Capture) -> usize {
     unsafe { &*owner.ready.get() }.shots.len()
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_write_ready(
-    owner: &Capture,
-    index: usize,
-    write: WriteImage,
-) -> bool {
+#[cfg(windows)]
+pub(super) unsafe fn write_ready(owner: &Capture, index: usize, write: WriteImage) -> bool {
     let ready = unsafe { &*owner.ready.get() };
     ready
         .shots
@@ -337,9 +464,94 @@ pub(super) unsafe fn settle_tail(owner: &Capture, published: bool) {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_drop_ready(owner: &Capture) {
+#[cfg(any(windows, test))]
+pub(super) unsafe fn drop_ready(owner: &Capture) {
     let ready = unsafe { &mut *owner.ready.get() };
     drop(ready.retired_tail.take());
     ready.shots.clear();
+    ready.failed.clear();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::gpu_leases::rsf_rdr2_capture_gpu_adopt;
+    use super::super::recordings::rsf_rdr2_capture_reset_list;
+    use super::*;
+    use std::ptr::without_provenance_mut;
+
+    unsafe extern "C" fn retain_or_release(_: *mut c_void) {}
+    unsafe extern "C" fn no_fence(_: *mut c_void) -> *mut c_void {
+        ptr::null_mut()
+    }
+    unsafe extern "C" fn no_signal(_: *mut c_void, _: *mut c_void, _: u64) -> bool {
+        false
+    }
+    unsafe extern "C" fn no_buffer(_: *mut c_void, _: u32) -> *mut c_void {
+        ptr::null_mut()
+    }
+    unsafe extern "C" fn completed(_: *mut c_void) -> u64 {
+        u64::MAX
+    }
+    unsafe extern "C" fn device_live(_: *mut c_void) -> bool {
+        false
+    }
+    unsafe extern "C" fn device_removed(_: *mut c_void) -> bool {
+        true
+    }
+
+    #[test]
+    fn reset_retires_only_the_unclaimed_generation() {
+        let owner = Capture::new();
+        let list = without_provenance_mut(1);
+        let other = without_provenance_mut(2);
+        unsafe {
+            let pending = &mut (*owner.shots.get()).pending;
+            for list in [list, other, list] {
+                let mut shot = Shot::default();
+                stamp_copy(&owner, list, &mut shot.receipt);
+                pending.push(shot);
+            }
+            let submission = snapshot_submission(&owner, 1, [list].as_ptr());
+            assert!(!submission.is_null());
+            assert!(claim_readback(&*submission, &mut pending[0].receipt));
+            untracked_submit(&owner, 1, [other].as_ptr());
+            rsf_rdr2_capture_reset_list(&owner, list, ptr::null_mut());
+            assert!(collect_ready(&owner, completed, device_live).is_null());
+            assert_eq!(rsf_rdr2_capture_pending_count(&owner), 2);
+            assert_eq!(ready_count(&owner), 0);
+            assert_eq!((*owner.ledger.get()).readbacks_unavailable, 1);
+            drop(Box::from_raw(submission));
+            drop_ready(&owner);
+        }
+    }
+
+    #[test]
+    fn a_removal_sentinel_requires_device_confirmation_and_never_admits_a_mapping() {
+        static OPS: Ops = Ops {
+            retain: retain_or_release,
+            release: retain_or_release,
+            create_fence: no_fence,
+            signal: no_signal,
+            get_buffer: no_buffer,
+        };
+        let owner = Capture::new();
+        let mut shot = Shot::default();
+        assert!(rsf_rdr2_capture_gpu_adopt(
+            &mut shot.leases,
+            without_provenance_mut(1),
+            &OPS
+        ));
+        rsf_rdr2_capture_gpu_bind_fence(&mut shot.leases, without_provenance_mut(2));
+        shot.receipt.fence_value = 1;
+        unsafe {
+            (*owner.shots.get()).pending.push(shot);
+            assert!(collect_ready(&owner, completed, device_live).is_null());
+            assert_eq!(rsf_rdr2_capture_pending_count(&owner), 1);
+            assert!(collect_ready(&owner, completed, device_removed).is_null());
+            assert_eq!(rsf_rdr2_capture_pending_count(&owner), 0);
+            assert_eq!(ready_count(&owner), 0);
+            assert_eq!((*owner.ledger.get()).readbacks_unavailable, 1);
+            drop_ready(&owner);
+        }
+    }
 }

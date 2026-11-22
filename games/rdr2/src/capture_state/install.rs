@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 //! Native capture installation before the census can publish its hooks.
 use super::{Capture, rsf_rdr2_capture_create};
+use crate::diagnostics::{CAPTURE_PATH_CAPACITY, capture_directory};
 use crate::platform::lock;
 use std::ffi::{c_char, c_void};
 use std::ptr::NonNull;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-const MAX_PATH: usize = 260;
-const MAX_DIRECTORY: usize = MAX_PATH - 64;
+const MAX_PATH: usize = CAPTURE_PATH_CAPACITY;
 const INSTALL_VERSION: u32 = 1;
 const FIXTURE_STOP_TIMEOUT_MS: u32 = 5000;
 
@@ -110,12 +110,9 @@ unsafe extern "C" fn rsf_rdr2_capture_install(
     if installed.is_some() {
         return false;
     }
-    let Some(length) =
-        (0..=MAX_DIRECTORY).find(|&index| unsafe { directory.add(index).read() } == 0)
-    else {
+    let Some(directory) = (unsafe { capture_directory(directory) }) else {
         return false;
     };
-    let directory = unsafe { std::slice::from_raw_parts(directory, length) };
     let paths = Paths::new(directory);
     let Some(capture) = NonNull::new(rsf_rdr2_capture_create()) else {
         return false;
@@ -141,8 +138,7 @@ unsafe extern "C" fn rsf_rdr2_capture_install(
     true
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_rdr2_capture_fixture_stopping() -> bool {
+pub(super) fn fixture_stopping() -> bool {
     FIXTURE_STOP.load(Ordering::Acquire)
 }
 

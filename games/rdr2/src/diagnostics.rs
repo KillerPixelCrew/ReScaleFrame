@@ -13,6 +13,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_F10};
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
 
 const MODULE_MARKS_MS: [u32; 5] = [5_000, 15_000, 30_000, 60_000, 120_000];
+pub(crate) const CAPTURE_PATH_CAPACITY: usize = 260;
+const CAPTURE_DIRECTORY_LIMIT: usize = CAPTURE_PATH_CAPACITY - 64;
 
 #[repr(C)]
 #[derive(Default)]
@@ -85,6 +87,15 @@ pub(crate) unsafe fn path_units<'a>(path: *const u16) -> &'a [u16] {
         len += 1;
     }
     unsafe { slice::from_raw_parts(path, len) }
+}
+
+/// The caller lends readable units through the terminator or through the bounded limit.
+pub(crate) unsafe fn capture_directory<'a>(path: *const u16) -> Option<&'a [u16]> {
+    if path.is_null() {
+        return None;
+    }
+    let len = (0..=CAPTURE_DIRECTORY_LIMIT).find(|&i| unsafe { path.add(i).read() == 0 })?;
+    (len != 0).then(|| unsafe { slice::from_raw_parts(path, len) })
 }
 
 fn utf8(text: &[u16]) -> CString {
@@ -162,6 +173,12 @@ pub(crate) fn capture_key_down() -> bool {
     (unsafe { GetAsyncKeyState(i32::from(VK_F10)) }) < 0
 }
 
+pub(crate) fn capture_key_pressed(previous: bool, down: bool, foreground: bool) -> bool {
+    down && !previous && foreground
+}
+
+pub(crate) const FRAME_PROBE_WORKER_NOT_STARTED: i32 = -100;
+
 struct FrameRequests {
     request: Vec<u16>,
     trigger: FrameTrigger,
@@ -172,9 +189,9 @@ unsafe extern "system" fn frame_requests(work: *mut c_void) -> u32 {
     let mut previous_key = false;
     loop {
         unsafe { Sleep(250) };
-        let key = foreground() && capture_key_down();
+        let key = capture_key_down();
         let requested = unsafe { DeleteFileW(work.request.as_ptr()) } != 0;
-        if requested || (key && !previous_key) {
+        if requested || capture_key_pressed(previous_key, key, foreground()) {
             rsf_rdr2_camera_request();
             unsafe { (work.trigger)(1) };
         }
@@ -198,7 +215,36 @@ unsafe extern "C" fn rsf_rdr2_start_frame_probe(
             request: append_path(prefix, ".request"),
             trigger,
         };
-        let _ = unsafe { start(work, frame_requests) };
+        if !unsafe { start(work, frame_requests) } {
+            return FRAME_PROBE_WORKER_NOT_STARTED;
+        }
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CAPTURE_DIRECTORY_LIMIT, capture_directory, capture_key_pressed};
+
+    #[test]
+    fn capture_directory_requires_a_nonempty_bounded_name() {
+        let mut path = [b'a' as u16; CAPTURE_DIRECTORY_LIMIT + 1];
+        unsafe {
+            assert!(capture_directory([0].as_ptr()).is_none());
+            assert!(capture_directory(path.as_ptr()).is_none());
+            path[CAPTURE_DIRECTORY_LIMIT] = 0;
+            assert_eq!(
+                capture_directory(path.as_ptr()).unwrap().len(),
+                CAPTURE_DIRECTORY_LIMIT
+            );
+        }
+    }
+
+    #[test]
+    fn focus_gain_while_f10_is_held_does_not_request_a_capture() {
+        assert!(!capture_key_pressed(false, true, false));
+        assert!(!capture_key_pressed(true, true, true));
+        assert!(!capture_key_pressed(true, false, true));
+        assert!(capture_key_pressed(false, true, true));
+    }
 }

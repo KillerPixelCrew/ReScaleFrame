@@ -25,5 +25,6 @@ static_assert(sizeof(rsf_rdr2_diagnostics_leaves) == 32);
 // Workers copy their paths and retain process-lived native function pointers.
 extern "C" void rsf_rdr2_start_diagnostics(const wchar_t* modules, const wchar_t* dumps,
     const rsf_rdr2_diagnostics_leaves*) noexcept;
+// Returns -100 if initialization succeeds and the request worker fails to start.
 extern "C" int32_t rsf_rdr2_start_frame_probe(const wchar_t* library, const wchar_t* prefix,
     int32_t (*initialise)(const char*, const char*), int32_t (*trigger)(uint32_t)) noexcept;

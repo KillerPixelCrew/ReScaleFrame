@@ -18,26 +18,29 @@ fn input_stem(pid: u32, sequence: u32, index: u32, role: &str) -> String {
     format!("input-{pid}-{sequence:03}-{index:03}-{role}")
 }
 
-impl fmt::Display for Pipeline {
-    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+pub(super) fn pipeline_fields(pipeline: &Pipeline, known: bool) -> impl fmt::Display + '_ {
+    fmt::from_fn(move |out| {
+        if !known {
+            return out.write_str("\"pipeline_known\":false");
+        }
         write!(
             out,
             concat!(
-                "\"ps_crc32\":\"{:08x}\",\"vs_crc32\":\"{:08x}\",\"blend\":{},",
+                "\"pipeline_known\":true,\"ps_crc32\":\"{:08x}\",\"vs_crc32\":\"{:08x}\",\"blend\":{},",
                 "\"src\":{},\"dst\":{},\"op\":{},\"src_alpha\":{},\"dst_alpha\":{},\"op_alpha\":{},\"write_mask\":{}"
             ),
-            self.ps,
-            self.vs,
-            self.blend,
-            self.src,
-            self.dst,
-            self.op,
-            self.src_alpha,
-            self.dst_alpha,
-            self.op_alpha,
-            self.write_mask,
+            pipeline.ps,
+            pipeline.vs,
+            pipeline.blend,
+            pipeline.src,
+            pipeline.dst,
+            pipeline.op,
+            pipeline.src_alpha,
+            pipeline.dst_alpha,
+            pipeline.op_alpha,
+            pipeline.write_mask,
         )
-    }
+    })
 }
 
 impl Image {
@@ -56,7 +59,7 @@ impl Image {
                 "\"role\":\"{}\",\"input_index\":{},\"footprint_format\":{},\"state_before\":{},\"subresource\":{},",
                 "\"command_list\":\"0x{:x}\",\"generation\":{},\"submission\":{},\"queue\":\"0x{:x}\",\"fence_value\":{},",
                 "\"frame_counter_observation\":{},\"tick\":{},\"resource\":\"0x{:x}\",\"caller\":\"0x{:x}\",",
-                "\"vertices\":{},\"instances\":{},{}}}\n"
+                "\"vertices\":{},\"instances\":{},\"pso\":\"0x{:x}\",{}}}\n"
             ),
             self.sequence,
             self.ordinal,
@@ -80,7 +83,8 @@ impl Image {
             self.caller,
             self.vertices,
             self.instances,
-            self.pipeline,
+            self.pso,
+            pipeline_fields(&self.pipeline, self.pipeline_known),
         )
     }
 }
