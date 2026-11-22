@@ -2,8 +2,9 @@
 //! Optional ScriptHook input guard and engine settings poll on the registered game fiber.
 use crate::OK;
 use crate::engine_settings::rsf_rdr2_engine_quality_tick;
-use crate::runtime_worker::{append_path, export, log};
+use crate::runtime_worker::{append_path, log};
 use crate::script_input_abi::{RSF_RENDER_FRONTEND_ABI_VERSION, rsf_render_settings};
+use rsf_game_sys::win32::typed_export;
 use std::sync::OnceLock;
 use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, LoadLibraryW};
@@ -11,7 +12,7 @@ use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_F7};
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
-use windows_sys::core::{s, w};
+use windows_sys::core::w;
 
 const CONTROL_PRESSED: u64 = 0xe258_7f8c_bbd8_7b1d;
 const DISABLE_CONTROL_ACTIONS: u64 = 0x5f4b_6931_816e_599b;
@@ -44,11 +45,11 @@ impl ScriptHook {
         // The names and types match the native ScriptHook exports used by both adapters.
         unsafe {
             Some(Self {
-                register: export(library, s!("?scriptRegister@@YAXPEAUHINSTANCE__@@P6AXXZ@Z"))?,
-                native_init: export(library, s!("?nativeInit@@YAX_K@Z"))?,
-                native_push: export(library, s!("?nativePush64@@YAX_K@Z"))?,
-                native_call: export(library, s!("?nativeCall@@YAPEA_KXZ"))?,
-                wait: export(library, s!("?scriptWait@@YAXK@Z"))?,
+                register: typed_export(library, c"?scriptRegister@@YAXPEAUHINSTANCE__@@P6AXXZ@Z")?,
+                native_init: typed_export(library, c"?nativeInit@@YAX_K@Z")?,
+                native_push: typed_export(library, c"?nativePush64@@YAX_K@Z")?,
+                native_call: typed_export(library, c"?nativeCall@@YAPEA_KXZ")?,
+                wait: typed_export(library, c"?scriptWait@@YAXK@Z")?,
             })
         }
     }
@@ -131,9 +132,9 @@ fn bindings(library: HMODULE, runtime: HMODULE) -> Option<Input> {
     unsafe {
         Some(Input {
             script_hook: ScriptHook::resolve(library)?,
-            visible: export(runtime, s!("rsf_render_overlay_visible"))?,
-            toggle: export(runtime, s!("rsf_render_overlay_toggle"))?,
-            settings_get: export(runtime, s!("rsf_render_settings_get")),
+            visible: typed_export(runtime, c"rsf_render_overlay_visible")?,
+            toggle: typed_export(runtime, c"rsf_render_overlay_toggle")?,
+            settings_get: typed_export(runtime, c"rsf_render_settings_get"),
         })
     }
 }

@@ -9,7 +9,7 @@ use rsf_game_sys::plugin_session_abi::rsf_plugin_session_options;
 use rsf_game_sys::rsf_game_host_services;
 use rsf_game_sys::session::carrier_log::CarrierLog;
 use rsf_game_sys::session::{Probe, host_services, with_session_options};
-use rsf_game_sys::win32::module_path;
+use rsf_game_sys::win32::{module_path, typed_export};
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{null, null_mut};
 use std::sync::OnceLock;
@@ -18,7 +18,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
 };
 use windows_sys::Win32::System::LibraryLoader::{
-    DisableThreadLibraryCalls, GetModuleHandleW, GetProcAddress, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+    DisableThreadLibraryCalls, GetModuleHandleW, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
     LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LoadLibraryExW,
 };
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
@@ -27,7 +27,7 @@ use windows_sys::Win32::System::WindowsProgramming::{
     GetPrivateProfileIntW, GetPrivateProfileStringW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetClassNameW, GetWindowThreadProcessId};
-use windows_sys::core::{PCSTR, PCWSTR, s, w};
+use windows_sys::core::{PCWSTR, w};
 
 type Prepare = unsafe extern "C" fn(*const rsf_plugin_session_options, *mut *mut c_void) -> i32;
 type Start = unsafe extern "C" fn(*mut c_void) -> i32;
@@ -129,12 +129,6 @@ unsafe extern "C" fn rsf_rdr2_fill_runtime_setup(
     }
 }
 
-pub(crate) unsafe fn export<F: Copy>(runtime: HMODULE, name: PCSTR) -> Option<F> {
-    const { assert!(size_of::<F>() == size_of::<usize>()) };
-    let function = unsafe { GetProcAddress(runtime, name) }?;
-    Some(unsafe { std::mem::transmute_copy(&function) })
-}
-
 struct Refusal {
     stage: &'static str,
     result: i32,
@@ -154,10 +148,10 @@ fn run_session(
     };
     let (prepare, start, quiesce, stop): (Prepare, Start, Start, Start) = unsafe {
         (
-            export(runtime, s!("rsf_plugin_session_prepare")).ok_or_else(lifecycle_missing)?,
-            export(runtime, s!("rsf_plugin_session_start")).ok_or_else(lifecycle_missing)?,
-            export(runtime, s!("rsf_plugin_session_quiesce")).ok_or_else(lifecycle_missing)?,
-            export(runtime, s!("rsf_plugin_session_stop")).ok_or_else(lifecycle_missing)?,
+            typed_export(runtime, c"rsf_plugin_session_prepare").ok_or_else(lifecycle_missing)?,
+            typed_export(runtime, c"rsf_plugin_session_start").ok_or_else(lifecycle_missing)?,
+            typed_export(runtime, c"rsf_plugin_session_quiesce").ok_or_else(lifecycle_missing)?,
+            typed_export(runtime, c"rsf_plugin_session_stop").ok_or_else(lifecycle_missing)?,
         )
     };
     let executable = unsafe { module_path(null_mut()) }
@@ -195,7 +189,7 @@ fn run_session(
     let mut services = host_services(unsafe { GetTickCount64() }, Some(rsf_rdr2_runtime_log));
     let host_setup = setup(config.as_ptr(), directory.as_ptr());
     let create =
-        unsafe { export::<Create>(runtime, s!("rsf_render_host_create")) }.ok_or(Refusal {
+        unsafe { typed_export::<Create>(runtime, c"rsf_render_host_create") }.ok_or(Refusal {
             stage: "Runtime host export",
             result: 1,
         })?;
