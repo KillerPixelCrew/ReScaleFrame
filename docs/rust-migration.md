@@ -43,6 +43,14 @@ Rust 1.94.1 formatting. Each of the 99 Runtime Rust export directives had
 one source definition. The tracked GameSDK and Runtime headers and carrier
 definition files matched `2ceec77`. Binary linkage and ABI remain open.
 
+D3D12 FidelityFX frame generation plans context flags, extents and frame
+preparation in Rust as of `3758da6c`. Rust validates the selected
+provider and SDK swapchain and writes the startup records. The native
+leaves retain the typed descriptors, callback frames and DXGI creation.
+Source comparison covered the 19-entry private table and the disabled
+provider. Pinned formatting, locked offline metadata and whitespace
+passed. The new Rust cases and native routes remain unverified by execution.
+
 ## Remaining integration ports
 
 Carry the same Rust ownership and public C ABI through every in-tree game

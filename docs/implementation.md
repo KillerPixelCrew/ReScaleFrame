@@ -1,5 +1,11 @@
 # Implementation tracker
 
+D3D12 FidelityFX frame generation now plans context flags, extents,
+provider admission and per-frame camera constants in Rust. Native code
+retains typed descriptors and SDK calls. Source review matched startup
+and prepare ordering. Builds and device checks remain open.
+[Migration evidence](rust-migration.md#fast-path-to-a-verified-candidate)
+
 The D3D11 Streamline signature check is restored for the shared DLL and
 linked consumers. Owned D3D11 shutdown now retains the session and closes
 SDK admission on failure. Source checks cover both feature branches.
