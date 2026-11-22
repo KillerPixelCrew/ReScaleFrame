@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Public host records come from the generated SDK bindings.
-// d3d11_host.cpp also asserts the layout of the private platform table.
+// The host platform table is Rust-only and can be replaced by fixture calls.
 #![allow(non_camel_case_types)]
 
 use crate::auxiliary_sr_abi::rsf_aux_platform;
@@ -34,6 +34,11 @@ pub(crate) use rsf_game_sys::d3d11_reduced_abi::{
     RSF_D3D11_REDUCED_TEMPORAL, RSF_D3D11_REDUCED_TEMPORAL_ATTEMPTED,
     RSF_D3D11_REDUCED_TEMPORAL_OUTPUT, RSF_D3D11_REDUCED_UNSAFE, rsf_d3d11_reduced_frame,
 };
+
+pub(super) const DUMP_RAW: u32 = 0;
+pub(super) const DUMP_HDR: u32 = 3;
+pub(super) const DUMP_DEPTH: u32 = 4;
+pub(super) const DUMP_DENSE_MOTION: u32 = 7;
 
 pub(crate) type Pass = rsf_game_render_pass;
 pub(crate) type Surface = rsf_d3d11_auxiliary_surface;
@@ -76,7 +81,6 @@ pub(crate) struct rsf_d3d11h_pipeline_status {
 
 type Raw = *mut c_void;
 
-#[repr(C)]
 #[derive(Clone, Copy)]
 pub(crate) struct rsf_d3d11h_platform {
     pub same_object: unsafe extern "C" fn(Raw, Raw) -> i32,
@@ -191,13 +195,4 @@ const _: () = {
     assert!(size_of::<rsf_d3d11_sampler_bias>() == 160);
     assert!(offset_of!(rsf_d3d11_sampler_bias, slot_mask) == 144);
     assert!(offset_of!(rsf_d3d11_sampler_bias, applied_mask) == 152);
-    assert!(size_of::<rsf_d3d11h_strings>() == 64);
-    assert!(size_of::<rsf_d3d11h_pipeline_start>() == 48);
-    assert!(size_of::<rsf_d3d11h_pipeline_status>() == 20);
-    assert!(size_of::<rsf_d3d11h_platform>() == 68 * 8);
-    assert!(offset_of!(rsf_d3d11h_platform, present_install) == 9 * 8);
-    assert!(offset_of!(rsf_d3d11h_platform, fg_options_set) == 17 * 8);
-    assert!(offset_of!(rsf_d3d11h_platform, wrap_native) == 23 * 8);
-    assert!(offset_of!(rsf_d3d11h_platform, com_release) == 26 * 8);
-    assert!(offset_of!(rsf_d3d11h_platform, auxiliary) == 67 * 8);
 };

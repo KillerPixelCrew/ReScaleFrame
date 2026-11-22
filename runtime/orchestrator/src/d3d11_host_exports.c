@@ -2,6 +2,7 @@
 #include <rescaleframe/d3d11_host.h>
 #include "rust_export.h"
 
+RSF_EXPORT(rsf_d3d11_host_create)
 RSF_EXPORT(rsf_d3d11_host_request_capture)
 RSF_EXPORT(rsf_d3d11_host_capture_control)
 RSF_EXPORT(rsf_d3d11_host_set_active)

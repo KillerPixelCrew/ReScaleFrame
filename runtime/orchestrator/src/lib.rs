@@ -31,7 +31,7 @@ mod d3d11_device_identity;
 mod d3d11_host;
 #[cfg(windows)]
 mod d3d11_host_abi;
-#[cfg(windows)]
+#[cfg(all(windows, not(test)))]
 mod d3d11_host_platform;
 #[cfg(windows)]
 mod d3d11_host_reduced;

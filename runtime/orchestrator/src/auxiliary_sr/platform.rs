@@ -209,6 +209,6 @@ static PLATFORM: rsf_aux_platform = rsf_aux_platform {
 };
 
 #[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_auxiliary_sr_platform() -> *const rsf_aux_platform {
+pub(crate) extern "C" fn rsf_auxiliary_sr_platform() -> *const rsf_aux_platform {
     &PLATFORM
 }

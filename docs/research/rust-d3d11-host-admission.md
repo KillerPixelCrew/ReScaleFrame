@@ -201,3 +201,29 @@ the dirty Present1, invalid resize count, native node mask, fullscreen and
 colour-space cases. The C++ facade, constructor-time virtual buffer probes,
 creation-scope output identity check and first native Present remain in place.
 The D02 fixture paths and D03 SR service were outside this replay.
+
+## Linked host platform replay on `cb8a0e0c`
+
+- `d3d11_host_platform.rs` now builds the 68-slot production dispatch table
+  in Rust. The public `rsf_d3d11_host_create` entry is emitted through the
+  same linker export mechanism as the other host entries. Create copies
+  the linked table into the process-lived host. The GameSDK setup, service
+  records, legacy size checks and internal fixture injection stay the same.
+- COM, FG, scene, window, CPU, SR pipeline, sharpening and auxiliary
+  operations bind to their existing Rust owners. Scope Begin and End,
+  native-chain adoption and owned-chain continuation reach the same D02
+  entry points through their prior no-unwind C++ boundaries. The D03
+  checked FG capture and guarded ordered SR entry are unchanged.
+- The host now selects the named colour, optional temporal mask, depth and
+  motion captures in Rust. The native guard still stops the capture
+  sequence on an exception. A normal capture refusal leaves later images
+  eligible, and a direct texture call still returns zero on exception.
+- `d3d11_host.cpp` and `d3d11_host_platform.h` are retired. The smaller
+  `d3d11_host_foreign.cpp` and `d3d11_host_foreign.h` retain only native
+  presentation, observer, capture and overlay boundaries. Bindgen supplies
+  their Rust declarations. The D02 and D03 implementations and both
+  device fixtures are outside this change.
+
+Source comparison, targeted bindgen, pinned formatting, locked offline
+metadata and MSVC C11/C++20 syntax checks cover this replay. No native
+build or execution was performed.

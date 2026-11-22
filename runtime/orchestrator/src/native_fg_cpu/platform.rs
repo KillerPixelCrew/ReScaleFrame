@@ -120,7 +120,7 @@ unsafe extern "C" fn adapter_vendor(raw: Handle) -> u32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_native_fg_rendered_source_set(enabled: u32) {
+pub(crate) extern "C" fn rsf_native_fg_rendered_source_set(enabled: u32) {
     rsf_native_cpu_rendered_source_set(enabled);
 }
 
@@ -145,12 +145,12 @@ pub(crate) unsafe extern "C" fn rsf_native_fg_cpu(event: *const Event) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_fg_frame(pass: *const Pass, begin: u32) {
+pub(crate) unsafe extern "C" fn rsf_native_fg_frame(pass: *const Pass, begin: u32) {
     unsafe { fg_frame(pass, begin, &NATIVE_PLATFORM) };
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_fg_submission(pass: *const Pass, begin: u32) {
+pub(crate) unsafe extern "C" fn rsf_native_fg_submission(pass: *const Pass, begin: u32) {
     unsafe { fg_submission(pass, begin, &NATIVE_PLATFORM) };
 }
 

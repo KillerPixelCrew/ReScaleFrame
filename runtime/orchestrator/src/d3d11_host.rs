@@ -2,11 +2,11 @@
 // Generic D3D11 callback host: session admission, callback leases, presentation
 // installation and binding, SR lifecycle, reduced-frame recovery and status.
 // Every D3D11, DXGI, SDK, overlay and capture call stays behind the private
-// platform table that d3d11_host.cpp supplies with the stable exports.
+// Rust platform table. Native calls cross individually guarded boundaries.
 use crate::com_ref::ComRef;
 use crate::d3d11_host_abi::*;
 use crate::d3d11_host_reduced::{
-    MAX_RESERVED, Products, ProductsFactory, Raw, Ticket, auxiliary_products, zeroed_pass,
+    MAX_RESERVED, Products, ProductsFactory, Raw, Ticket, zeroed_pass,
 };
 use crate::fg12_abi::rsf_d3d11_present_setup;
 use crate::native_cpu::{SourcePacket, decode_source_event};
@@ -55,10 +55,6 @@ const UI_MODE_BACKBUFFER_HUDLESS: u32 = 4;
 const SCREEN_GAMEPLAY: u32 = 8;
 const DXGI_PRESENT_TEST: u32 = 1;
 const SCENE_PRESENT_NONE: u32 = 0;
-const DUMP_RAW: u32 = 0;
-const DUMP_HDR: u32 = 3;
-const DUMP_DEPTH: u32 = 4;
-const DUMP_DENSE_MOTION: u32 = 7;
 const AUX_DEPTH_STENCIL: u32 = 0;
 const AUX_COLOUR: u32 = 1;
 const AUX_RESTORE_CONTENTS: u32 = 1;
@@ -2298,12 +2294,20 @@ unsafe fn admitted<T>(object: *const T, version: u32) -> Result<&'static T, i32>
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_d3d11_host_create(
-    platform: *const rsf_d3d11h_platform,
+#[cfg(not(test))]
+unsafe extern "C" fn rsf_d3d11_host_create(
     setup: *const rsf_d3d11_host_setup,
     services: *mut rsf_game_host_services,
 ) -> i32 {
-    unsafe { create(platform, setup, services, auxiliary_products) }
+    let platform = crate::d3d11_host_platform::linked_platform();
+    unsafe {
+        create(
+            &platform,
+            setup,
+            services,
+            crate::d3d11_host_reduced::auxiliary_products,
+        )
+    }
 }
 
 unsafe fn create(

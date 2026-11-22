@@ -104,6 +104,11 @@ and verdicts to Rust. Shared-SR now owns recovery and the output check in the
 same scenario. The launchers still supply native startup, the external COM
 facade and guarded SDK calls. MSVC syntax-only and source checks passed.
 
+D01's linked host dispatch and create entry now live in Rust. A smaller
+native source retains the presentation, observer, capture and overlay
+guards. The checked D02 and D03 calls keep their existing entry points.
+Source checks and MSVC C11/C++20 syntax checks passed.
+
 Rust owns the D3D11 graphics snapshots, resource and UI device operations,
 sampler changes, and native composition passes. The replay uses the integrated
 Rust output and capture paths. All eight G03 fixture bodies now use Rust. The source

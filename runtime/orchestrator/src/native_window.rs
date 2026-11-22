@@ -92,7 +92,10 @@ unsafe fn has_capacity<T>(descriptor: *const T) -> bool {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_window_scope(pass: *const rsf_game_render_pass, begin: u32) -> i32 {
+pub(super) unsafe extern "C" fn rsf_native_window_scope(
+    pass: *const rsf_game_render_pass,
+    begin: u32,
+) -> i32 {
     if !unsafe { has_capacity(pass) } {
         return 0;
     }
@@ -149,7 +152,9 @@ fn scene_for_window(window: &rsf_game_render_pass) -> Option<rsf_native_scene_id
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_window_present(event: *const rsf_observer_present_event) -> i32 {
+pub(super) unsafe extern "C" fn rsf_native_window_present(
+    event: *const rsf_observer_present_event,
+) -> i32 {
     if !unsafe { has_capacity(event) } {
         return 0;
     }
@@ -245,7 +250,9 @@ unsafe extern "C" fn rsf_native_window_present(event: *const rsf_observer_presen
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_window_last_present(record: *mut rsf_native_present_record) -> i32 {
+pub(super) unsafe extern "C" fn rsf_native_window_last_present(
+    record: *mut rsf_native_present_record,
+) -> i32 {
     if !unsafe { has_capacity(record) } {
         return 0;
     }

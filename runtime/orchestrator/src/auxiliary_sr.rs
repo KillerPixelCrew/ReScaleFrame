@@ -3,6 +3,8 @@
 #[path = "../../../tests/auxiliary_sr.rs"]
 mod fixture;
 mod platform;
+#[cfg(not(test))]
+pub(super) use platform::rsf_auxiliary_sr_platform;
 
 use crate::auxiliary_sr_abi::*;
 use crate::com_ref::ComRef;

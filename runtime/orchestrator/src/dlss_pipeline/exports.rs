@@ -21,7 +21,7 @@ unsafe extern "C" fn rsf_dlss_pipeline_on_frame(context: Raw, frame: *const Fram
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_dlss_pipeline_output_texture() -> Raw {
+pub(crate) extern "C" fn rsf_dlss_pipeline_output_texture() -> Raw {
     PROCESS.output_texture()
 }
 

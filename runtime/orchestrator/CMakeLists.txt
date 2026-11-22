@@ -148,7 +148,7 @@ target_link_libraries(rsf_orchestrator PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,rsf
 target_link_libraries(rsf_orchestrator PRIVATE rsf_build_options)
 set_target_properties(rsf_orchestrator PROPERTIES OUTPUT_NAME "ReScaleFrame.Runtime")
 target_sources(rsf_orchestrator PRIVATE src/d3d11_present_api.c src/dll_exports.c)
-target_sources(rsf_orchestrator PRIVATE src/d3d11_host.cpp src/d3d11_host_exports.c)
+target_sources(rsf_orchestrator PRIVATE src/d3d11_host_foreign.cpp src/d3d11_host_exports.c)
 add_subdirectory(../shader_patch "${CMAKE_CURRENT_BINARY_DIR}/shader_patch")
 
 # Optional AMD driver SDK; the Runtime remains available when it is absent.

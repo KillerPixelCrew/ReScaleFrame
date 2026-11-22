@@ -903,7 +903,7 @@ pub(super) unsafe extern "C" fn rsf_native_fg_options_set(options: *const Option
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_fg_set_log(log: Log, user: Handle) {
+pub(super) unsafe extern "C" fn rsf_native_fg_set_log(log: Log, user: Handle) {
     let mut settings = lock(&SETTINGS);
     settings.log = log;
     settings.log_user = user;
@@ -997,7 +997,7 @@ unsafe extern "C" fn rsf_native_fg_capture_scoped(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_fg_final(context: Handle, pass: *const Pass) {
+pub(super) unsafe extern "C" fn rsf_native_fg_final(context: Handle, pass: *const Pass) {
     let Some(pass) = (unsafe { pass.as_ref() }) else {
         return;
     };
@@ -1473,7 +1473,7 @@ fn provider_configure(provider: &Provider, session: Handle, options: &rsf_fg_opt
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_fg_prepare(
+pub(super) unsafe extern "C" fn rsf_native_fg_prepare(
     _user: Handle,
     chain: Handle,
     _context: Handle,
@@ -1857,7 +1857,7 @@ unsafe extern "C" fn rsf_native_fg_prepare(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_fg_retire(_user: Handle, session: Handle) {
+pub(super) unsafe extern "C" fn rsf_native_fg_retire(_user: Handle, session: Handle) {
     let p = &NATIVE_PLATFORM;
     let provider = unsafe { call!(p, present_provider).as_ref() };
     let Some(provider) = provider.filter(|_| !session.is_null()) else {
