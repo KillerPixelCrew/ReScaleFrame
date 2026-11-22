@@ -18,9 +18,7 @@ use crate::vulkan_fg_resources_abi::{
 };
 use crate::vulkan_latency_abi::{rsf_slvk_call, rsf_slvk_callback};
 use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_image as SourceImage};
-use rsf_game_sys::{
-    RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record,
-};
+use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record};
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -36,13 +34,10 @@ const NOT_READY: i32 = -8;
 const FEATURE_FAILED: i32 = -9;
 
 const WSI_ERROR: i32 = -3;
-const INCOMPLETE: i32 = 5;
 const SUBOPTIMAL: i32 = 1000001003;
 const USAGE_TRANSFER_SRC: u32 = 1;
 const USAGE_TRANSFER_DST: u32 = 2;
 const R32F: u32 = 100;
-// Preserve the C++ admission threshold (3.141593f).
-const MAX_FOV: f32 = f32::from_bits(0x4049_0fdc);
 const RG16F: u32 = 83;
 const RGBA8: u32 = 37;
 const BGRA8: u32 = 44;
@@ -333,38 +328,14 @@ impl Owner {
     }
 
     fn valid_record(&self, record: &Record) -> bool {
-        let c = &record.camera;
         let graphics = &self.setup.graphics;
-        record.session_id != 0
-            && record.frame_id != 0
-            && c.struct_size as usize >= size_of_val(c)
-            && c.abi_version == RSF_GAME_CAMERA_ABI_VERSION
-            && record.render_width > 0
-            && record.render_height > 0
-            && record.render_width <= graphics.output_width
-            && record.render_height <= graphics.output_height
-            && record.output_width == graphics.output_width
-            && record.output_height == graphics.output_height
-            && c.render_width == record.render_width
-            && c.render_height == record.render_height
-            && c.output_width == record.output_width
-            && c.output_height == record.output_height
-            && finite_positive(record.frame_time_ms)
-            && finite_positive(c.near_plane)
-            && c.far_plane.is_finite()
-            && c.far_plane >= 0.0
-            && (graphics.depth_infinite != 0 || c.far_plane > c.near_plane)
-            && finite_positive(c.vertical_fov_radians)
-            && c.vertical_fov_radians < MAX_FOV
-            && c.depth_inverted == graphics.depth_inverted
-            && c.motion_jittered == graphics.motion_jittered
-            && c.jitter_pixels
-                .iter()
-                .chain(&c.view_to_clip)
-                .chain(&c.clip_to_view)
-                .chain(&c.clip_to_previous_clip)
-                .chain(&c.view_to_world)
-                .all(|value| value.is_finite())
+        valid_source_record(
+            record,
+            graphics.output_width,
+            graphics.output_height,
+            graphics.depth_infinite != 0,
+        ) && record.camera.depth_inverted == graphics.depth_inverted
+            && record.camera.motion_jittered == graphics.motion_jittered
     }
 
     fn valid_image(&self, image: &SourceImage, width: u32, height: u32, format: u32) -> bool {
@@ -665,10 +636,6 @@ impl Owner {
     }
 }
 
-fn finite_positive(value: f32) -> bool {
-    value.is_finite() && value > 0.0
-}
-
 fn slot_index(frame: u64) -> usize {
     (frame % SLOTS as u64) as usize
 }
@@ -802,29 +769,9 @@ unsafe extern "C" fn rsf_core_dlgvk_images(
     let (Some(owner), Some(count)) = (unsafe { (owner.as_ref(), count.as_mut()) }) else {
         return WSI_ERROR;
     };
-    let enumerate = owner.platform.images;
-    if images.is_null() {
-        return unsafe { enumerate(owner.native, owner.chain, count, images) };
-    }
-    // The SDK's proxy can refuse an oversized capacity without filling images.
-    let capacity = *count;
-    let mut available = 0;
-    let queried = unsafe { enumerate(owner.native, owner.chain, &mut available, ptr::null_mut()) };
-    if queried != OK {
-        *count = 0;
-        return queried;
-    }
-    *count = capacity.min(available);
-    let filled = unsafe { enumerate(owner.native, owner.chain, count, images) };
-    if *count > capacity || *count > available {
-        *count = 0;
-        return WSI_ERROR;
-    }
-    if filled == OK && capacity < available {
-        INCOMPLETE
-    } else {
-        filled
-    }
+    bounded_swapchain_images(count, images, |count, images| unsafe {
+        (owner.platform.images)(owner.native, owner.chain, count, images)
+    })
 }
 
 #[unsafe(no_mangle)]

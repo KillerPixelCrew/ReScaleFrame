@@ -5,7 +5,7 @@ use crate::vulkan_fg_abi::{
 };
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_RESET,
-    RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
+    RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
 };
 use std::ffi::c_void;
 use std::mem::offset_of;
@@ -13,6 +13,77 @@ use std::{ptr, slice};
 
 const SLOTS: usize = RSF_FGVK_FRAME_SLOTS as usize;
 const FG_VETO: u32 = RSF_FRAME_FLAG_NO_FG | RSF_FRAME_FLAG_AMBIGUOUS_ID;
+
+pub(super) fn valid_source_record(
+    record: &rsf_frame_record,
+    width: u32,
+    height: u32,
+    infinite_depth: bool,
+) -> bool {
+    let camera = &record.camera;
+    let positive = |value: f32| value.is_finite() && value > 0.0;
+    record.abi_version == RSF_GAME_FRAME_ABI_VERSION
+        && record.session_id != 0
+        && record.frame_id != 0
+        && camera.struct_size as usize >= size_of_val(camera)
+        && camera.abi_version == RSF_GAME_CAMERA_ABI_VERSION
+        && (1..=width).contains(&record.render_width)
+        && (1..=height).contains(&record.render_height)
+        && record.output_width == width
+        && record.output_height == height
+        && camera.render_width == record.render_width
+        && camera.render_height == record.render_height
+        && camera.output_width == width
+        && camera.output_height == height
+        && positive(record.frame_time_ms)
+        && positive(camera.near_plane)
+        && camera.far_plane.is_finite()
+        && camera.far_plane >= 0.0
+        && (infinite_depth || camera.far_plane > camera.near_plane)
+        && positive(camera.vertical_fov_radians)
+        && camera.vertical_fov_radians <= std::f32::consts::PI
+        && camera
+            .jitter_pixels
+            .iter()
+            .chain(&camera.view_to_clip)
+            .chain(&camera.clip_to_view)
+            .chain(&camera.clip_to_previous_clip)
+            .chain(&camera.view_to_world)
+            .all(|value| value.is_finite())
+}
+
+pub(super) fn bounded_swapchain_images(
+    count: &mut u32,
+    output: *mut u64,
+    mut enumerate: impl FnMut(&mut u32, *mut u64) -> i32,
+) -> i32 {
+    const SUCCESS: i32 = 0;
+    const INCOMPLETE: i32 = 5;
+    const INITIALIZATION_FAILED: i32 = -3;
+    if output.is_null() {
+        return enumerate(count, output);
+    }
+    // A proxy can leave an oversized capacity unchanged after writing fewer images.
+    let capacity = *count;
+    let mut available = 0;
+    let queried = enumerate(&mut available, ptr::null_mut());
+    if queried != SUCCESS {
+        *count = 0;
+        return queried;
+    }
+    let limit = capacity.min(available);
+    *count = limit;
+    let filled = enumerate(count, output);
+    if *count > limit {
+        *count = 0;
+        return INITIALIZATION_FAILED;
+    }
+    if filled == SUCCESS && capacity < available {
+        INCOMPLETE
+    } else {
+        filled
+    }
+}
 
 pub(super) struct PresentIdentity {
     frame: u64,
@@ -279,6 +350,37 @@ pub(super) extern "C" fn rsf_core_fgvk_presented(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn swapchain_image_enumeration_bounds_the_fill_and_returned_count() {
+        let mut images = [0; 4];
+        let output = images.as_mut_ptr();
+        for (capacity, output, query, fill_count, expected_result, expected_count) in [
+            (0, ptr::null_mut(), 0, None, 0, 2),
+            (4, output, -4, None, -4, 0),
+            (1, output, 0, Some(1), 5, 1),
+            (4, output, 0, Some(2), 0, 2),
+            (4, output, 0, Some(3), -3, 0),
+        ] {
+            let mut count = capacity;
+            let mut filled = false;
+            let result = bounded_swapchain_images(&mut count, output, |count, images| {
+                if images.is_null() {
+                    *count = 2;
+                    query
+                } else {
+                    assert_eq!(*count, capacity.min(2));
+                    *count = fill_count.unwrap();
+                    filled = true;
+                    0
+                }
+            });
+            assert_eq!(
+                (result, count, filled),
+                (expected_result, expected_count, fill_count.is_some())
+            );
+        }
+    }
 
     #[test]
     fn explicit_present_uses_optional_flags_without_requiring_a_full_record() {
