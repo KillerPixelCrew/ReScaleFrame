@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <rescaleframe/d3d11_present_bridge.h>
+#include "presentation/device_fixture_bridge.h"
 #include <rescaleframe/native_fg_d3d12.h>
 #include <rescaleframe/native_sr_d3d12.h>
 #include <rescaleframe/overlay_d3d12.h>
@@ -142,11 +143,7 @@ int main(int argc, char** argv) {
     const uint32_t backend = uint32_t(std::strtoul(argv[1], nullptr, 0));
     const uint32_t vendor = uint32_t(std::strtoul(argv[3], nullptr, 0));
     const bool debug = std::getenv("RSF_UNITY_GPU_DEBUG") != nullptr;
-    if (debug) {
-        ComPtr<ID3D12Debug> layer;
-        if (FAILED(D3D12GetDebugInterface(IID_PPV_ARGS(&layer)))) return 77;
-        layer->EnableDebugLayer();
-    }
+    if (debug && rsf_present_fixture_debug12()) return 77;
     overlay = std::strcmp(argv[4], "12-overlay") == 0;
     mixed = std::strcmp(argv[4], "12-mixed") == 0 || overlay;
     mfg_test = std::strcmp(argv[4], "12-mfg") == 0;
@@ -158,13 +155,8 @@ int main(int argc, char** argv) {
     const bool explicit_creation = std::getenv("RSF_EXPLICIT_SWAPCHAIN") != nullptr;
     if (explicit_creation && !native) return 1;
     ComPtr<IDXGIFactory4> factory; ComPtr<IDXGIAdapter1> adapter;
-    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return 1;
-    for (UINT i = 0;; ++i) {
-        ComPtr<IDXGIAdapter1> candidate; if (factory->EnumAdapters1(i, &candidate) == DXGI_ERROR_NOT_FOUND) break;
-        DXGI_ADAPTER_DESC1 desc{}; candidate->GetDesc1(&desc);
-        if (desc.VendorId == vendor && !(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) { adapter = candidate; break; }
-    }
-    if (!adapter) return 77;
+    if (const auto result = rsf_present_fixture_adapter(vendor, 1,
+        reinterpret_cast<void**>(factory.GetAddressOf()), reinterpret_cast<void**>(adapter.GetAddressOf()))) return result;
     WNDCLASSW wc{}; wc.lpfnWndProc = DefWindowProcW; wc.hInstance = GetModuleHandleW(nullptr); wc.lpszClassName = L"RSFSharedFG";
     if (!RegisterClassW(&wc)) return 1;
     const bool focus_test = mfg_test && std::getenv("RSF_MFG_FOCUS_TEST") != nullptr;
@@ -203,13 +195,12 @@ int main(int argc, char** argv) {
     ComPtr<ID3D12Device> device12; ComPtr<ID3D12CommandQueue> queue;
     IUnknown* producer = nullptr;
     if (native) {
-        if (FAILED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device12)))) return 1;
-        D3D12_COMMAND_QUEUE_DESC desc{}; desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-        if (FAILED(device12->CreateCommandQueue(&desc, IID_PPV_ARGS(&queue)))) return 1;
+        if (rsf_present_fixture_device12(adapter.Get(), reinterpret_cast<void**>(device12.GetAddressOf()),
+            reinterpret_cast<void**>(queue.GetAddressOf()))) return 1;
         producer = queue.Get();
     } else {
-        if (FAILED(D3D11CreateDevice(adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, 0, nullptr, 0,
-            D3D11_SDK_VERSION, &device11, nullptr, &context11))) return 1;
+        if (rsf_present_fixture_device11(adapter.Get(), reinterpret_cast<void**>(device11.GetAddressOf()),
+            reinterpret_cast<void**>(context11.GetAddressOf()))) return 1;
         producer = device11.Get();
     }
     DXGI_SWAP_CHAIN_DESC desc{}; desc.BufferDesc.Width = mixed ? 2560u : 1280u; desc.BufferDesc.Height = mixed ? 1600u : 720u;
@@ -274,37 +265,24 @@ int main(int argc, char** argv) {
         if (rsf_sr12_create(&sr, &dlss_sr) != RSF_BACKEND_OK) return 1;
         std::puts("PASS: native DLSS SR registered before runtime FSR/XeSS switches");
     }
-    D3D12_DESCRIPTOR_HEAP_DESC heaps{}; heaps.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; heaps.NumDescriptors = 2;
-    if (FAILED(gpu->CreateDescriptorHeap(&heaps, IID_PPV_ARGS(&cpu_heap)))) return 1;
-    heaps.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-    if (FAILED(gpu->CreateDescriptorHeap(&heaps, IID_PPV_ARGS(&gpu_heap)))) return 1;
-    stride = gpu->GetDescriptorHandleIncrementSize(heaps.Type);
-    if (hot) {
-        D3D12_DESCRIPTOR_HEAP_DESC desc_color{}; desc_color.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV; desc_color.NumDescriptors = 1;
-        if (FAILED(gpu->CreateDescriptorHeap(&desc_color, IID_PPV_ARGS(&color_heap)))) return 1;
-    }
-    auto cpu = cpu_heap->GetCPUDescriptorHandleForHeapStart(); auto visible = gpu_heap->GetCPUDescriptorHandleForHeapStart();
-    for (auto* target : {std::addressof(depth), std::addressof(motion)}) {
-        D3D12_RESOURCE_DESC texture{}; texture.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        texture.Width = mixed ? 1485u : 1280u; texture.Height = mixed ? 928u : 720u; texture.DepthOrArraySize = texture.MipLevels = 1;
-        texture.SampleDesc.Count = 1; texture.Format = target == std::addressof(depth) ? DXGI_FORMAT_R32_FLOAT : DXGI_FORMAT_R16G16_FLOAT;
-        texture.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-        D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-        if (FAILED(gpu->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &texture, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(target->GetAddressOf())))) return 1;
-        gpu->CreateUnorderedAccessView(target->Get(), nullptr, nullptr, cpu);
-        gpu->CopyDescriptorsSimple(1, visible, cpu, heaps.Type); cpu.ptr += stride; visible.ptr += stride;
-    }
+    static_assert(sizeof(rsf_fg_fixture_inputs) == 48);
+    rsf_fg_fixture_inputs inputs{};
+    if (rsf_fg_bridge_fixture_allocate(gpu, uint32_t(mixed), uint32_t(hot), &inputs)) return 1;
+    cpu_heap.Attach(static_cast<ID3D12DescriptorHeap*>(inputs.cpu_heap));
+    gpu_heap.Attach(static_cast<ID3D12DescriptorHeap*>(inputs.gpu_heap));
+    color_heap.Attach(static_cast<ID3D12DescriptorHeap*>(inputs.color_heap));
+    depth.Attach(static_cast<ID3D12Resource*>(inputs.depth));
+    motion.Attach(static_cast<ID3D12Resource*>(inputs.motion));
+    stride = inputs.stride;
     const auto* api = rsf_d3d11_present_provider(); auto* session = rsf_d3d11_present_session();
     ComPtr<ID3D12Fence> fence; if (FAILED(gpu->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)))) return 1;
     HANDLE done = CreateEventW(nullptr, FALSE, FALSE, nullptr); if (!done) return 1;
     ComPtr<ID3D12CommandAllocator> allocator; ComPtr<ID3D12GraphicsCommandList> source_list;
-    if (service && (FAILED(gpu->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator))) ||
-        FAILED(gpu->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&source_list))) ||
-        FAILED(source_list->Close()))) return 1;
+    if (service && rsf_fg_bridge_fixture_commands(gpu, reinterpret_cast<void**>(allocator.GetAddressOf()),
+        reinterpret_cast<void**>(source_list.GetAddressOf()))) return 1;
     ComPtr<ID3D12CommandAllocator> finish_allocator; ComPtr<ID3D12GraphicsCommandList> finish_list;
-    if (overlay && (FAILED(gpu->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&finish_allocator))) ||
-        FAILED(gpu->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, finish_allocator.Get(), nullptr, IID_PPV_ARGS(&finish_list))) ||
-        FAILED(finish_list->Close()))) return 1;
+    if (overlay && rsf_fg_bridge_fixture_commands(gpu, reinterpret_cast<void**>(finish_allocator.GetAddressOf()),
+        reinterpret_cast<void**>(finish_list.GetAddressOf()))) return 1;
     uint64_t expected_tagged = 0;
     ComPtr<ID3D12Resource> held_buffer;
     if (hot && FAILED(chain->GetBuffer(0, IID_PPV_ARGS(&held_buffer)))) return 1;
@@ -314,15 +292,7 @@ int main(int argc, char** argv) {
     if (hot) queries = std::jthread([held = chain, &bad_queries, &query_count](std::stop_token stop) {
         UINT previous = 0;
         while (!stop.stop_requested()) {
-            BOOL fullscreen = FALSE;
-            const auto result = held->GetFullscreenState(&fullscreen, nullptr);
-            if (FAILED(result) && result != DXGI_ERROR_WAS_STILL_DRAWING) ++bad_queries;
-            UINT count = 0;
-            if (SUCCEEDED(held->GetLastPresentCount(&count))) {
-                if (count < previous) ++bad_queries;
-                previous = count;
-            }
-            DXGI_FRAME_STATISTICS statistics{}; (void)held->GetFrameStatistics(&statistics);
+            bad_queries += rsf_fg_bridge_fixture_query(held.Get(), &previous);
             ++query_count; std::this_thread::yield();
         }
     });
@@ -377,15 +347,13 @@ int main(int argc, char** argv) {
                 rsf_game_cpu_event event{sizeof(event), stage, 1, source_frame(), uint64_t(now.QuadPart), uint64_t(frequency.QuadPart), 0, 0, 0};
                 rsf_fg12_cpu(&event);
             }
-            ComPtr<IDXGISwapChain3> chain3; if (FAILED(chain.As(&chain3))) return 1;
             ComPtr<ID3D12Resource> back;
-            if (FAILED(chain3->GetBuffer(chain3->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&back))) ||
-                FAILED(allocator->Reset()) || FAILED(source_list->Reset(allocator.Get(), nullptr))) return 1;
+            if (rsf_fg_bridge_fixture_source_buffer(chain.Get(), allocator.Get(), source_list.Get(),
+                reinterpret_cast<void**>(back.GetAddressOf()))) return 1;
             // An input refusal must not leak the shared CPU token and stall later frames.
             if (plan.produce_input) prepare(nullptr, nullptr, nullptr, source_list.Get(), back.Get(), nullptr, session, 0);
             if (overlay) barrier(source_list.Get(), back.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
-            if (FAILED(source_list->Close())) return 1;
-            ID3D12CommandList* commands[]{source_list.Get()}; queue->ExecuteCommandLists(1, commands);
+            if (rsf_fg_bridge_fixture_execute(queue.Get(), source_list.Get())) return 1;
             if (plan.submit) rsf_fg12_submitted(1, source_frame());
             rsf_game_render_pass pass{}; pass.struct_size = sizeof(pass); pass.session_id = 1;
             pass.native_frame = pass.source_frame_id = source_frame(); pass.view_key = plan.view; pass.swapchain = chain.Get();
@@ -397,10 +365,9 @@ int main(int argc, char** argv) {
                 stats.show_performance_hud = 1; stats.output_width = 2560; stats.output_height = 1600;
                 rsf_overlay_intent intent{}; intent.struct_size = sizeof(intent);
                 accepted &= rsf_overlay_d3d12_frame(gpu, queue.Get(), chain.Get(), &stats, &intent, log, nullptr) != 0;
-                if (FAILED(finish_allocator->Reset()) || FAILED(finish_list->Reset(finish_allocator.Get(), nullptr))) return 1;
+                if (rsf_fg_bridge_fixture_reset(finish_allocator.Get(), finish_list.Get())) return 1;
                 barrier(finish_list.Get(), back.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-                if (FAILED(finish_list->Close())) return 1;
-                ID3D12CommandList* finished[]{finish_list.Get()}; queue->ExecuteCommandLists(1, finished);
+                if (rsf_fg_bridge_fixture_execute(queue.Get(), finish_list.Get())) return 1;
             }
         } else {
             if (legacy_hot) {
@@ -478,30 +445,12 @@ int main(int argc, char** argv) {
             }
         }
         auto* native_queue = static_cast<ID3D12CommandQueue*>(flip11 ? rsf_d3d11_present_queue() : graphics.queue);
-        if (FAILED(native_queue->Signal(fence.Get(), frame_id)) || FAILED(fence->SetEventOnCompletion(frame_id, done)) ||
-            WaitForSingleObject(done, 10000) != WAIT_OBJECT_0) return 1;
+        if (rsf_fg_bridge_fixture_drain(native_queue, fence.Get(), done, frame_id)) return 1;
         if (flip11) {
-            unsigned char* pixel = nullptr; D3D12_RANGE read{0, 4};
-            if (!flip_readback || FAILED(flip_readback->Map(0, &read, reinterpret_cast<void**>(&pixel)))) return 1;
-            const bool matches = pixel[0] == (frame_id % 2 ? 255 : 0) && pixel[1] >= 127 && pixel[1] <= 128 &&
-                pixel[2] >= 63 && pixel[2] <= 64 && pixel[3] == 255;
-            if (!matches) std::printf("FAIL: DX11 cached-view frame %llu presented RGBA=%u,%u,%u,%u\n",
-                static_cast<unsigned long long>(frame_id), pixel[0], pixel[1], pixel[2], pixel[3]);
-            D3D12_RANGE written{0, 0}; flip_readback->Unmap(0, &written);
-            if (!matches) {
-                ComPtr<ID3D11Resource> resource; cached_rtv->GetResource(&resource);
-                ComPtr<ID3D11Texture2D> source; resource.As(&source);
-                D3D11_TEXTURE2D_DESC staging_desc{}; source->GetDesc(&staging_desc);
-                staging_desc.Usage = D3D11_USAGE_STAGING; staging_desc.BindFlags = staging_desc.MiscFlags = 0; staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-                ComPtr<ID3D11Texture2D> staging;
-                if (SUCCEEDED(device11->CreateTexture2D(&staging_desc, nullptr, &staging))) {
-                    context11->CopyResource(staging.Get(), source.Get()); D3D11_MAPPED_SUBRESOURCE mapped{};
-                    if (SUCCEEDED(context11->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
-                        const auto* input = static_cast<const unsigned char*>(mapped.pData);
-                        std::printf("source RGBA=%u,%u,%u,%u callback=%llu\n", input[0], input[1], input[2], input[3],
-                            static_cast<unsigned long long>(flip_capture_frame)); context11->Unmap(staging.Get(), 0);
-                    }
-                }
+            const auto matched = rsf_fg_bridge_fixture_check_flip(flip_readback.Get(), frame_id);
+            if (matched < 0) return 1;
+            if (!matched) {
+                rsf_d3d11_fixture_flip_source(device11.Get(), context11.Get(), cached_rtv.Get(), flip_capture_frame);
                 return 1;
             }
         }

@@ -3065,6 +3065,13 @@ switch schedule. Native device runners and the remaining vendor and
 factory thunks remain. Source checks are recorded separately from
 build and device verification. [Factory and fixture evidence](research/rust-d3d11-present-cutover.md#factory-and-device-fixture-continuation)
 
+The D02 continuation added typed device and adapter acquisition and
+canonical identity checks. Both linked fixtures now perform their
+device selection and more of their draw, resize, resource and readback
+checks in Rust. Native AC7, vendor, window and overlay runner code
+remains. Build and device evidence is pending.
+[Native device harness evidence](research/rust-d3d11-present-cutover.md#native-device-harness-continuation)
+
 The scoped owner check now queries the caller's live COM receiver for
 its canonical identity and compares that address with the published
 facade. It rechecks publication after the query. The synthetic scoped

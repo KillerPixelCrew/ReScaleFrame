@@ -1,16 +1,23 @@
 // SPDX-License-Identifier: MIT
 //! Typed command recording for the linked FG fixture. The native harness owns
 //! its vendor callbacks and the present and retirement order of those commands.
+use crate::fixture_device_abi::rsf_fg_fixture_inputs as FgInputs;
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, RSF_SCREEN_FLIGHT, rsf_camera_frame,
     rsf_frame_record,
 };
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
-use windows::Win32::Foundation::RECT;
+use windows::Win32::Foundation::{HANDLE, RECT, WAIT_OBJECT_0};
 use windows::Win32::Graphics::Direct3D12::*;
-use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC};
-use windows::core::Interface;
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R32_FLOAT, DXGI_SAMPLE_DESC,
+};
+use windows::Win32::Graphics::Dxgi::{
+    DXGI_ERROR_WAS_STILL_DRAWING, DXGI_FRAME_STATISTICS, IDXGISwapChain, IDXGISwapChain3,
+};
+use windows::Win32::System::Threading::WaitForSingleObject;
+use windows::core::{BOOL, Interface};
 
 type Raw = *mut c_void;
 
@@ -384,4 +391,238 @@ extern "C" fn rsf_fg_bridge_fixture_mfg_count(frame: u64) -> u32 {
         90 => 1,
         _ => 0,
     }
+}
+
+unsafe fn allocate_inputs(
+    device: &ID3D12Device,
+    mixed: bool,
+    hot: bool,
+) -> windows::core::Result<FgInputs> {
+    let mut desc = D3D12_DESCRIPTOR_HEAP_DESC {
+        Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
+        NumDescriptors: 2,
+        ..Default::default()
+    };
+    let cpu: ID3D12DescriptorHeap = unsafe { device.CreateDescriptorHeap(&desc) }?;
+    desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    let gpu: ID3D12DescriptorHeap = unsafe { device.CreateDescriptorHeap(&desc) }?;
+    let stride = unsafe { device.GetDescriptorHandleIncrementSize(desc.Type) };
+    let color: Option<ID3D12DescriptorHeap> = if hot {
+        let desc = D3D12_DESCRIPTOR_HEAP_DESC {
+            Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
+            NumDescriptors: 1,
+            ..Default::default()
+        };
+        Some(unsafe { device.CreateDescriptorHeap(&desc) }?)
+    } else {
+        None
+    };
+    let mut cpu_slot = unsafe { cpu.GetCPUDescriptorHandleForHeapStart() };
+    let mut visible_slot = unsafe { gpu.GetCPUDescriptorHandleForHeapStart() };
+    let heap = D3D12_HEAP_PROPERTIES {
+        Type: D3D12_HEAP_TYPE_DEFAULT,
+        ..Default::default()
+    };
+    let mut resources = [None, None];
+    for (slot, format) in resources
+        .iter_mut()
+        .zip([DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R16G16_FLOAT])
+    {
+        let texture = D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+            Width: if mixed { 1485 } else { 1280 },
+            Height: if mixed { 928 } else { 720 },
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            Format: format,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Flags: D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+            ..Default::default()
+        };
+        unsafe {
+            device.CreateCommittedResource(
+                &heap,
+                D3D12_HEAP_FLAG_NONE,
+                &texture,
+                D3D12_RESOURCE_STATE_COMMON,
+                None,
+                slot,
+            )?;
+            device.CreateUnorderedAccessView(
+                slot.as_ref(),
+                None::<&ID3D12Resource>,
+                None,
+                cpu_slot,
+            );
+            device.CopyDescriptorsSimple(1, visible_slot, cpu_slot, desc.Type);
+        }
+        cpu_slot.ptr += stride as usize;
+        visible_slot.ptr += stride as usize;
+    }
+    let [depth, motion]: [Option<ID3D12Resource>; 2] = resources;
+    let depth = depth.ok_or(windows::Win32::Foundation::E_POINTER)?;
+    let motion = motion.ok_or(windows::Win32::Foundation::E_POINTER)?;
+    Ok(FgInputs {
+        cpu_heap: cpu.into_raw(),
+        gpu_heap: gpu.into_raw(),
+        color_heap: color.map_or(std::ptr::null_mut(), |heap| heap.into_raw()),
+        depth: depth.into_raw(),
+        motion: motion.into_raw(),
+        stride,
+    })
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg_bridge_fixture_allocate(
+    gpu: Raw,
+    mixed: u32,
+    hot: u32,
+    output: *mut FgInputs,
+) -> i32 {
+    let Ok(inputs) =
+        (unsafe { allocate_inputs(borrow::<ID3D12Device>(&gpu), mixed != 0, hot != 0) })
+    else {
+        return 1;
+    };
+    unsafe { output.write(inputs) };
+    0
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg_bridge_fixture_commands(
+    gpu: Raw,
+    allocator: *mut Raw,
+    list: *mut Raw,
+) -> i32 {
+    let device = unsafe { borrow::<ID3D12Device>(&gpu) };
+    let ty = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    let Ok(slot) = (unsafe { device.CreateCommandAllocator::<ID3D12CommandAllocator>(ty) }) else {
+        return 1;
+    };
+    let Ok(commands) = (unsafe {
+        device.CreateCommandList::<_, _, ID3D12GraphicsCommandList>(
+            0,
+            ty,
+            &slot,
+            None::<&ID3D12PipelineState>,
+        )
+    }) else {
+        return 1;
+    };
+    if unsafe { commands.Close() }.is_err() {
+        return 1;
+    }
+    unsafe {
+        allocator.write(slot.into_raw());
+        list.write(commands.into_raw());
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg_bridge_fixture_check_flip(readback: Raw, frame: u64) -> i32 {
+    let Some(readback) = (unsafe { ID3D12Resource::from_raw_borrowed(&readback) }) else {
+        return -1;
+    };
+    let mut pixel = std::ptr::null_mut();
+    if unsafe { readback.Map(0, Some(&D3D12_RANGE { Begin: 0, End: 4 }), Some(&mut pixel)) }
+        .is_err()
+    {
+        return -1;
+    }
+    let rgba = (!pixel.is_null()).then(|| unsafe { pixel.cast::<[u8; 4]>().read() });
+    unsafe { readback.Unmap(0, Some(&D3D12_RANGE { Begin: 0, End: 0 })) };
+    let Some([r, g, b, a]) = rgba else {
+        return -1;
+    };
+    let expected = r == if frame % 2 != 0 { 255 } else { 0 };
+    let matches = expected && (127..=128).contains(&g) && (63..=64).contains(&b) && a == 255;
+    if !matches {
+        eprintln!("FAIL: DX11 cached-view frame {frame} presented RGBA={r},{g},{b},{a}");
+    }
+    i32::from(matches)
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg_bridge_fixture_query(chain: Raw, previous: &mut u32) -> u32 {
+    let chain = unsafe { borrow::<IDXGISwapChain>(&chain) };
+    let mut bad = 0;
+    let mut fullscreen = BOOL(0);
+    if unsafe { chain.GetFullscreenState(Some(&mut fullscreen), None) }
+        .is_err_and(|error| error.code() != DXGI_ERROR_WAS_STILL_DRAWING)
+    {
+        bad += 1;
+    }
+    if let Ok(count) = unsafe { chain.GetLastPresentCount() } {
+        bad += u32::from(count < *previous);
+        *previous = count;
+    }
+    let _ = unsafe { chain.GetFrameStatistics(&mut DXGI_FRAME_STATISTICS::default()) };
+    bad
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg_bridge_fixture_reset(allocator: Raw, commands: Raw) -> i32 {
+    let allocator = unsafe { borrow::<ID3D12CommandAllocator>(&allocator) };
+    let commands = unsafe { borrow::<ID3D12GraphicsCommandList>(&commands) };
+    let reset = unsafe { allocator.Reset() }
+        .and_then(|()| unsafe { commands.Reset(allocator, None::<&ID3D12PipelineState>) });
+    i32::from(reset.is_err())
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg_bridge_fixture_source_buffer(
+    chain: Raw,
+    allocator: Raw,
+    commands: Raw,
+    out: *mut Raw,
+) -> i32 {
+    let chain = unsafe { borrow::<IDXGISwapChain>(&chain) };
+    let Ok(chain) = chain.cast::<IDXGISwapChain3>() else {
+        return 1;
+    };
+    let index = unsafe { chain.GetCurrentBackBufferIndex() };
+    let Ok(back) = (unsafe { chain.GetBuffer::<ID3D12Resource>(index) }) else {
+        return 1;
+    };
+    if unsafe { rsf_fg_bridge_fixture_reset(allocator, commands) } != 0 {
+        return 1;
+    }
+    unsafe { out.write(back.into_raw()) };
+    0
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg_bridge_fixture_execute(queue: Raw, commands: Raw) -> i32 {
+    let list = unsafe { borrow::<ID3D12GraphicsCommandList>(&commands) };
+    if unsafe { list.Close() }.is_err() {
+        return 1;
+    }
+    let bound = unsafe { borrow::<ID3D12CommandQueue>(&queue) };
+    unsafe { (bound.vtable().ExecuteCommandLists)(queue, 1, &commands) };
+    0
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg_bridge_fixture_drain(
+    queue: Raw,
+    fence: Raw,
+    event: Raw,
+    frame: u64,
+) -> i32 {
+    let Some(queue) = (unsafe { ID3D12CommandQueue::from_raw_borrowed(&queue) }) else {
+        return 1;
+    };
+    let fence = unsafe { borrow::<ID3D12Fence>(&fence) };
+    let event = HANDLE(event);
+    if unsafe { queue.Signal(fence, frame) }.is_err()
+        || unsafe { fence.SetEventOnCompletion(frame, event) }.is_err()
+        || unsafe { WaitForSingleObject(event, 10_000) } != WAIT_OBJECT_0
+    {
+        return 1;
+    }
+    0
 }

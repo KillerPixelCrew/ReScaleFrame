@@ -189,3 +189,54 @@ typed DXGI callback signatures and generated marker records. Pinned Rust
 formatting, bindgen 0.72.1 reproduction, locked offline Windows metadata
 and Git whitespace checks ran. Native builds, lint, fixture execution and
 device verification are pending.
+
+
+
+## Native device harness continuation
+
+This batch starts at `d8415c47`. The earlier typed DXGI factory callbacks,
+D3D11/D3D12 synchronization and application swapchain remain in use.
+
+The platform now queries the device from the native D3D12 queue and
+reacquires the D3D11 immediate context and adapter through typed COM.
+D3D12 adapter discovery uses the device's LUID and a Factory4. D3D11 uses
+the source DXGI device's adapter. The native state capsule still keeps
+one reference to each selected device, context and queue, and calls the
+existing provider policy with the resulting vendor and software facts.
+The adoption check verifies the immediate-context type, canonical
+identities and window before scoped publication. The explicit native
+wrapping path still compares the supplied D3D11 device to the chain's
+actual device before retrieving its parent factory.
+
+The two fixtures now use the same typed hardware enumeration while each
+keeps its original factory interface and skip results. The D3D11 proxy
+smoke route retains its DirectInput named and ordinal checks, waits 250 ms,
+and attempts hardware then WARP with no creation flags or explicit
+feature-level list. Selected-adapter D3D11 runs use UNKNOWN driver type
+and no WARP retry. Selected D3D12 runs request feature level 11.0 and a
+direct queue. A failed adapter enumeration or device description now
+returns failure instead of continuing with an unreadable COM output.
+
+The D3D11 fixture's fallback draw, twelve held-buffer resize refusals,
+borderless resize and Present, SR texture creation and red-half readback
+now use typed Rust calls. The FG harness allocates and records the same
+UAV and RTV resources, acquires the logical buffer index, resets and
+submits the source and overlay-finishing command lists, waits on the
+selected queue's fence, checks the cached-view pixel, and samples DXGI
+queries from the same native worker thread. The native runner continues to
+call the production overlay between source execution and the finish
+transition back to PRESENT.
+
+| PORT entry | Disposition |
+| --- | --- |
+| `runtime/presentation/src/d3d11_present_bridge.cpp` | Device discovery, identity and capability checks moved to typed Rust. Keep open for the native state capsule, provider and observer calls, diagnostics and guarded factory/MinHook ABI. |
+| `runtime/presentation/src/d3d11_present_platform.h` | Close as the retained private C boundary. Bindgen matched all 72 callback field names and offsets to the Rust mirror and confirmed the 12-byte device-adapter result. Native callers still consume these declarations. |
+| `tests/d3d11_present_bridge.cpp` | Proxy smoke, adapter and device startup, fallback draw, held-buffer resize, borderless and initial SR GPU checks moved. Keep open for the native AC7 linked callback, frame and teardown harness. |
+| `tests/fg_present_bridge.cpp` | Device startup, resource allocation, command submission, concurrent queries, fence wait and pixel inspection moved. Keep open for the native vendor, overlay and focus-lease runner and its status assertions. |
+
+The previous public wire records, 72-slot platform order,
+`rsf_d3d11_present_create_for_hwnd` and D08 explicit forwarding were
+checked in source. The O02 overlay call remains in the same command
+sequence. Rust 1.94.1 formatting, bindgen 0.72.1 reproduction, locked
+offline Windows metadata and Git whitespace checks passed. Build, lint,
+binary, fixture and device verification remain pending.

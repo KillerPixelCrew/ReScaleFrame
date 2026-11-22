@@ -44,6 +44,8 @@ generate("loader/src/census/json_abi.rs", "loader/census/src/json_platform.h",
 generate("loader/src/census/decode_abi.rs", "loader/census/src/decode_platform.h",
          "rsf_census_(resource_desc|read_resource)", "NOTHING", [],
          ["--with-derive-default"])
+generate("tests/presentation/src/fixture_device_abi.rs", "tests/presentation/device_fixture_bridge.h",
+         "rsf_fg_fixture_inputs", "NOTHING", [])
 generate("tests/presentation/src/d3d11_marker_abi.rs", "tests/presentation/d3d11_marker_bridge.h",
          "rsf_(d3d11_marker_fixture_calls|native_cpu_(frame|counters)|native_latency_frame)",
          "NOTHING", ["-Isdk/game/include", "-Iruntime/orchestrator/include"],

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <rescaleframe/d3d11_present_bridge.h>
 #include "presentation/d3d11_marker_bridge.h"
+#include "presentation/device_fixture_bridge.h"
 #include <rescaleframe/native_fg.h>
 #include <rescaleframe/native_cpu.h>
 #include <rescaleframe/native_scene.h>
@@ -190,33 +191,8 @@ bool status_snapshot_contract() {
 int main(int argc, char** argv) {
     if (!status_snapshot_contract()) return 1;
     if (argc == 2 && std::strcmp(argv[1], "--status-snapshot") == 0) return 0;
-    if (argc == 3 && std::strcmp(argv[1], "--proxy-smoke") == 0) {
-        wchar_t fixture_logs[MAX_PATH]{};
-        const auto path_length = GetModuleFileNameW(nullptr, fixture_logs, MAX_PATH);
-        if (!path_length || path_length >= MAX_PATH) return 1;
-        auto* leaf = std::wcsrchr(fixture_logs, L'\\'); if (!leaf) return 1;
-        const wchar_t suffix[] = L"\\proxy-smoke-logs";
-        if (size_t(leaf - fixture_logs) + sizeof(suffix) / sizeof(wchar_t) > MAX_PATH) return 1;
-        std::memcpy(leaf, suffix, sizeof(suffix));
-        CreateDirectoryW(fixture_logs, nullptr);
-        if (!SetEnvironmentVariableW(L"RSF_DUMP_DIR", fixture_logs)) return 1;
-        const auto proxy = LoadLibraryA(argv[2]);
-        if (!proxy) { std::fprintf(stderr, "proxy load error=%lu\n", GetLastError()); return 1; }
-        const auto direct_input = GetProcAddress(proxy, "DirectInput8Create");
-        if (!direct_input || direct_input != GetProcAddress(proxy, MAKEINTRESOURCEA(1))) return 1;
-        if (GetProcAddress(proxy, "GetFileVersionInfoW")) return 1;
-        Sleep(250); // Let this isolated process exercise the carrier's original observer startup.
-        ComPtr<IDXGIFactory2> factory;
-        ComPtr<ID3D11Device> device; ComPtr<ID3D11DeviceContext> context;
-        if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return 1;
-        if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, nullptr, 0,
-                D3D11_SDK_VERSION, &device, nullptr, &context)) &&
-            FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
-                D3D11_SDK_VERSION, &device, nullptr, &context))) return 1;
-        std::puts("PASS: AC7-only carrier loads, DirectInput ordinal 1 matches, D3D11 observer/device startup succeeds");
-        // Carrier hooks and its worker are process-owned, as in AC7. Do not hot-unload.
-        return 0;
-    }
+    if (argc == 3 && std::strcmp(argv[1], "--proxy-smoke") == 0)
+        return rsf_d3d11_fixture_proxy_smoke(argv[2]);
     if (argc != 3 && argc != 4 && argc != 6) { std::puts("SKIP: supply Streamline directory, adapter vendor ID, optional --enable or --switch FSR-directory XeSS-directory"); return 77; }
     const bool switching_visible = argc == 6 && std::strcmp(argv[3], "--switch-visible") == 0;
     // --borderless: X-Ray's borderless sequence (xray-monolith Device_create.cpp:205) on a window whose swap chain the
@@ -244,24 +220,14 @@ int main(int argc, char** argv) {
     // Anomaly runs system-DPI-aware (its window reports awareness 1 at the system DPI); match it.
     if (borderless_fixture) SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE);
     std::puts("fixture: creating D3D11 graphics");
-    if (GetEnvironmentVariableA("RSF_TEST_D3D12_DEBUG", nullptr, 0)) {
-        ComPtr<ID3D12Debug> debug;
-        if (FAILED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)))) return 1;
-        debug->EnableDebugLayer();
-    }
+    if (GetEnvironmentVariableA("RSF_TEST_D3D12_DEBUG", nullptr, 0) && rsf_present_fixture_debug12()) return 1;
     ComPtr<IDXGIFactory2> factory; ComPtr<IDXGIAdapter1> adapter;
-    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return 1;
     const auto vendor = uint32_t(std::strtoul(argv[2], nullptr, 0));
-    for (UINT i = 0;; ++i) {
-        ComPtr<IDXGIAdapter1> candidate;
-        if (factory->EnumAdapters1(i, &candidate) == DXGI_ERROR_NOT_FOUND) break;
-        DXGI_ADAPTER_DESC1 desc{}; candidate->GetDesc1(&desc);
-        if (desc.VendorId == vendor && !(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) { adapter = candidate; break; }
-    }
-    if (!adapter) return 77;
+    if (const auto result = rsf_present_fixture_adapter(vendor, 0,
+        reinterpret_cast<void**>(factory.GetAddressOf()), reinterpret_cast<void**>(adapter.GetAddressOf()))) return result;
     ComPtr<ID3D11Device> device; ComPtr<ID3D11DeviceContext> context;
-    if (FAILED(D3D11CreateDevice(adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, 0, nullptr, 0,
-        D3D11_SDK_VERSION, &device, nullptr, &context))) return 77;
+    if (rsf_present_fixture_device11(adapter.Get(), reinterpret_cast<void**>(device.GetAddressOf()),
+        reinterpret_cast<void**>(context.GetAddressOf()))) return 77;
     rsf_observer_options observer{}; observer.struct_size = sizeof(observer); observer.abi_version = RSF_OBSERVER_ABI_VERSION;
     observer.format = DXGI_FORMAT_R16G16_FLOAT; // AC7's configured filter excludes the facade backbuffer.
     observer.capacity = 1;
@@ -309,37 +275,12 @@ int main(int argc, char** argv) {
     ComPtr<IDXGISwapChain> chain;
     if (FAILED(factory->CreateSwapChain(device.Get(), &desc, &chain))) return 1;
     if (borderless_fixture) {
-        const auto pump = [] { MSG msg; while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&msg); DispatchMessageW(&msg); } };
-        const auto where = [&](const char* when) {
-            RECT r{}; GetWindowRect(window, &r);
-            std::printf("borderless: %-18s rect %ld,%ld %ldx%ld\n", when, r.left, r.top, r.right - r.left, r.bottom - r.top);
-            return r;
-        };
-        // Application buffers are usable before the first physical Present owner is created.
-        ComPtr<ID3D11Texture2D> buffer;
-        if (FAILED(chain->GetBuffer(0, IID_PPV_ARGS(&buffer)))) return 1;
-        buffer.Reset();
-        pump(); where("after chain");
-        MONITORINFO monitor{sizeof(monitor)};
-        GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY), &monitor);
-        const auto& m = monitor.rcMonitor;
-        SetWindowLongPtrW(window, GWL_STYLE, WS_VISIBLE | WS_POPUP);
-        SetWindowPos(window, HWND_TOP, 0, 0, m.right - m.left, m.bottom - m.top, SWP_FRAMECHANGED);
-        pump(); where("after borderless");
-        if (FAILED(chain->ResizeBuffers(0, 0, 0, DXGI_FORMAT_UNKNOWN, 0)) || FAILED(chain->Present(0, 0))) return 1;
-        Sleep(300); pump();
-        const auto final_rect = where("after present");
-        const bool origin = final_rect.left == 0 && final_rect.top == 0 && final_rect.right - final_rect.left == m.right - m.left;
-        std::puts(origin ? "PASS: borderless window at the monitor origin with the bridge" :
-                           "FAIL: borderless window is not at the monitor origin with the bridge");
+        const auto result = rsf_d3d11_fixture_borderless(chain.Get(), window);
         chain.Reset(); DestroyWindow(window);
-        return origin ? 0 : 1;
+        return result;
     }
     if (!rsf_d3d11_present_host()) {
-        ComPtr<ID3D11Texture2D> buffer; ComPtr<ID3D11RenderTargetView> target;
-        if (FAILED(chain->GetBuffer(0, IID_PPV_ARGS(&buffer))) || FAILED(device->CreateRenderTargetView(buffer.Get(), nullptr, &target))) return 1;
-        const float color[]{0.2f,0.3f,0.4f,1}; context->ClearRenderTargetView(target.Get(), color);
-        if (FAILED(chain->Present(0, 0))) return 1;
+        if (rsf_d3d11_fixture_clear_and_present(device.Get(), context.Get(), chain.Get(), 0)) return 1;
         std::puts("PASS fallback: original D3D11 buffer, draw and Present after FG startup refusal; FG capability skipped"); return 77;
     }
     rsf_streamline_graphics presentation_graphics{}, transfer_graphics{};
@@ -353,18 +294,11 @@ int main(int argc, char** argv) {
     if (rsf_dlss_share_host(rsf_d3d11_present_host(), log_message, nullptr) != RSF_DLSS_OK) return 1;
     rsf_dlss_support support{}; support.struct_size = sizeof(support);
     if (rsf_dlss_query_support(&support) != RSF_DLSS_OK) return 1;
-    ComPtr<ID3D11Texture2D> inputs[4];
-    for (UINT i = 0; i < 4; ++i) {
-        D3D11_TEXTURE2D_DESC texture{}; texture.Width = texture.Height = 512;
-        texture.MipLevels = texture.ArraySize = texture.SampleDesc.Count = 1;
-        texture.Format = i == 1 ? DXGI_FORMAT_R32_FLOAT : i == 2 ? DXGI_FORMAT_R16G16_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT;
-        texture.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-        if (FAILED(device->CreateTexture2D(&texture, nullptr, &inputs[i]))) return 1;
-        ComPtr<ID3D11UnorderedAccessView> view;
-        if (FAILED(device->CreateUnorderedAccessView(inputs[i].Get(), nullptr, &view))) return 1;
-        const float clear[]{i == 1 ? 0.5f : i == 0 ? 0.25f : 0.0f, 0, 0, 1};
-        context->ClearUnorderedAccessViewFloat(view.Get(), clear);
-    }
+    ComPtr<ID3D11Texture2D> inputs[4], hints[5];
+    void* textures[9]{};
+    if (rsf_d3d11_fixture_inputs(device.Get(), context.Get(), textures)) return 1;
+    for (unsigned index = 0; index != 4; ++index) inputs[index].Attach(static_cast<ID3D11Texture2D*>(textures[index]));
+    for (unsigned index = 0; index != 5; ++index) hints[index].Attach(static_cast<ID3D11Texture2D*>(textures[index + 4]));
     rsf_dlss_frame frame{}; frame.struct_size = sizeof(frame); frame.abi_version = RSF_DLSS_ABI_VERSION;
     frame.color_in = inputs[0].Get(); frame.depth = inputs[1].Get(); frame.motion = inputs[2].Get(); frame.color_out = inputs[3].Get();
     frame.render_width = frame.render_height = frame.output_width = frame.output_height = 512;
@@ -376,14 +310,6 @@ int main(int argc, char** argv) {
     frame.prev_clip_to_clip[0] = frame.prev_clip_to_clip[5] = frame.prev_clip_to_clip[10] = frame.prev_clip_to_clip[15] = 1;
     frame.camera_forward[2] = frame.camera_up[1] = frame.camera_right[0] = 1;
     // The translucency hints AC7 sends: opaque-only colour and layer as RGBA16F, three R32 masks.
-    ComPtr<ID3D11Texture2D> hints[5];
-    for (UINT i = 0; i < 5; ++i) {
-        D3D11_TEXTURE2D_DESC texture{}; texture.Width = texture.Height = 512;
-        texture.MipLevels = texture.ArraySize = texture.SampleDesc.Count = 1;
-        texture.Format = i < 2 ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_R32_FLOAT;
-        texture.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-        if (FAILED(device->CreateTexture2D(&texture, nullptr, &hints[i]))) return 1;
-    }
     frame.color_before_transparency = hints[0].Get(); frame.transparency_layer = hints[1].Get();
     frame.reactive_mask = hints[2].Get(); frame.transparency_hint = hints[3].Get(); frame.bias_current_color = hints[4].Get();
     // AC7 runs DLSS on the display-range colour transport with HDR input off (colour_transport.h).
@@ -393,14 +319,7 @@ int main(int argc, char** argv) {
     rsf_native_fg_scene(&pass);
     if (rsf_native_fg_evaluate(context.Get(), &frame) != RSF_DLSS_OK) return 1;
     rsf_native_fg_scene(nullptr);
-    D3D11_TEXTURE2D_DESC staging_desc{}; inputs[3]->GetDesc(&staging_desc);
-    staging_desc.BindFlags = 0; staging_desc.Usage = D3D11_USAGE_STAGING; staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-    ComPtr<ID3D11Texture2D> staging;
-    if (FAILED(device->CreateTexture2D(&staging_desc, nullptr, &staging))) return 1;
-    context->CopyResource(staging.Get(), inputs[3].Get());
-    D3D11_MAPPED_SUBRESOURCE mapped{};
-    if (FAILED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) return 1;
-    const auto sample = *static_cast<const uint16_t*>(mapped.pData); context->Unmap(staging.Get(), 0);
+    const auto sample = rsf_d3d11_fixture_red_half(device.Get(), context.Get(), inputs[3].Get());
     if (!sample || sample >= 0x7c00) return 1;
     std::printf("shared D3D12 SR output red half=%04x, one existing CPU token\n", sample);
     rsf_streamline_host_abort(rsf_d3d11_present_host(), 1);
@@ -408,13 +327,7 @@ int main(int argc, char** argv) {
     ComPtr<IDXGISwapChain4> modern; ComPtr<IUnknown> identity, modern_identity; ComPtr<ID3D11Device> returned_device;
     if (FAILED(chain.As(&modern)) || FAILED(chain.As(&identity)) || FAILED(modern.As(&modern_identity)) ||
         identity.Get() != modern_identity.Get() || FAILED(chain->GetDevice(IID_PPV_ARGS(&returned_device))) || returned_device.Get() != device.Get()) return 1;
-    for (uint32_t i = 0; i < 12; ++i) {
-        ComPtr<ID3D11Texture2D> buffer; ComPtr<ID3D11RenderTargetView> target;
-        if (FAILED(chain->GetBuffer(0, IID_PPV_ARGS(&buffer))) || FAILED(device->CreateRenderTargetView(buffer.Get(), nullptr, &target))) return 1;
-        const float color[]{float(i) / 12, 0.2f, 0.6f, 1}; context->ClearRenderTargetView(target.Get(), color);
-        if (FAILED(chain->Present(i == 0 ? 1u : 0u, 0))) return 1;
-        if (chain->ResizeBuffers(1, 1024, 576, DXGI_FORMAT_UNKNOWN, 0) != DXGI_ERROR_INVALID_CALL) return 1;
-    }
+    if (rsf_d3d11_fixture_clear_and_present(device.Get(), context.Get(), chain.Get(), 1)) return 1;
     rsf_observer_status observed_presenter{}; observed_presenter.struct_size = sizeof(observed_presenter);
     if (!renderer_startup_observed || rsf_observer_get_status(&observed_presenter) != RSF_OBSERVER_OK ||
         observed_presenter.frames_presented != 12 || observed_presenter.present_width != 1280 || observed_presenter.present_height != 720) return 1;
