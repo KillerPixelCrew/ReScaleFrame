@@ -1,7 +1,7 @@
 # Presentation command slot ownership in Rust
 
 This source port starts at `a5867f2f` and follows the [bridge cutover](rust-d3d11-present-cutover.md),
-[buffer cutover](rust-d3d11-present-buffers.md) and [physical chain cutover](rust-d3d11-present-physical.md).
+buffer cutover and physical chain cutover.
 The question was whether the three D3D12 allocator/list pairs that the shared presentation facade
 kept as `Bridge::slots[3]` could become leases of the existing Rust owner, while every D3D12 call,
 the device that creates them, the proxy or native list choice and the teardown order stay as they

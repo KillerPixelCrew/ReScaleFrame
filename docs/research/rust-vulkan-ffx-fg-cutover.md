@@ -10,7 +10,7 @@ builds and CPU contracts. No device, window or game ran.
 
 The SDK source read for this port is the corrected FidelityFX Vulkan checkout at
 `references/godot/fidelityfx-vulkan`, revision `c6efa6bf7f2027b3ec94f28578bb5965eabb9e55`.
-The FSR4 port ([rust-vulkan-fsr4-fg-cutover.md](rust-vulkan-fsr4-fg-cutover.md))
+The FSR4 port (a removed note)
 was the reference for shared ordering.
 
 ## Ownership

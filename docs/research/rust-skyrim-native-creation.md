@@ -487,4 +487,4 @@ unwinding. `cpu_call.h` gained C typedefs for its tagged types and stays usable 
 `render_detours.cpp` is now `render_detours.c` (S02). Its guards filter on the MSVC C++
 exception code 0xE06D7363 so access violations propagate, and the activity lease and TAA
 restore receipt use `__try/__finally`. See
-[port-introduced C++ closure](rust-port-introduced-cpp-closure.md).
+port-introduced C++ closure.

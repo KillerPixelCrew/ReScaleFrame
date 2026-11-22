@@ -7,7 +7,7 @@ burst bookkeeping, options and status. That driver now lives in
 `games/anomaly/src/sr_stage.rs`. `sr_stage.cpp` keeps the native leaves behind
 the private table in `sr_stage_platform.h`. The `sr_stage.h` API, the three DLL
 exports, the profile guards, the hook sites and the shader pack are unchanged.
-[SR seam research](anomaly-sr-seam.md), [Stage 5 driver](rust-anomaly-sr-temporal.md),
+[SR seam research](anomaly-sr-seam.md), Stage 5 driver,
 [C++ baseline](rust-anomaly-cpp-baseline.md)
 
 This change reuses the recorded seam, profile and producer evidence for the

@@ -42,7 +42,7 @@ touch history state, with the behavior at `3856821`:
   the frame after the targets exist. `rsf_ac7_velocity_view_written` and
   `rsf_ac7_velocity_view_committed` set and clear `written`.
 - The commit's logical identity: `rsf_ac7_velocity_view_commit` matches written, frame, view key
-  and family key and returns the slot and extent. [The commit port](rust-ac7-velocity-commit.md)
+  and family key and returns the slot and extent. The commit port
   later replaced this call with `rsf_ac7_velocity_commit_view`, which builds the identity itself.
 - The epoch, starting at 1, and retirement. `rsf_ac7_velocity_history_frame_end` advances it,
   removes models then views whose epoch plus 2 is below it, and reports each retired slot to the
@@ -86,5 +86,5 @@ and game runs are user-owned and not done.
 Capture and stream buffer sizing, indirect argument validation, record counts and packing,
 per-draw parameter packing (rect, jitter, opacity cutoff, history flag and mask), the commit's
 native depth, format and device checks and merge, CPU profiling, the device renderer lifecycle and
-every D3D11 call and HLSL source. [The stream policy port](rust-ac7-velocity-stream.md) later
+every D3D11 call and HLSL source. The stream policy port later
 moved the sizing, indirect range, record counts, packing and parameter packing.

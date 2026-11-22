@@ -1,6 +1,6 @@
 # XeSS Vulkan super-resolution Rust cutover
 
-The baseline is `7dfa446`. This source port moves the XeSS Vulkan SR owner from `native_xess_vulkan.cpp` into the Rust runtime as `vulkan_sr/xess.rs`. It preserves the four public `rsf_xessvk_*` requirement exports, SRVK ABI 2 and the seven `rsf_srvk_*` exports. The question was whether the C++ owner's policy could move without changing public routes, linkage, SDK calls or Vulkan recording. The approach follows the [Vulkan SR cutover](rust-vulkan-sr-cutover.md): Rust holds the handle and decisions, and a private native table performs Windows loader, XeSS SDK and Vulkan calls.
+The baseline is `7dfa446`. This source port moves the XeSS Vulkan SR owner from `native_xess_vulkan.cpp` into the Rust runtime as `vulkan_sr/xess.rs`. It preserves the four public `rsf_xessvk_*` requirement exports, SRVK ABI 2 and the seven `rsf_srvk_*` exports. The question was whether the C++ owner's policy could move without changing public routes, linkage, SDK calls or Vulkan recording. The approach follows the Vulkan SR cutover: Rust holds the handle and decisions, and a private native table performs Windows loader, XeSS SDK and Vulkan calls.
 
 ## Ownership and execution
 

@@ -3,7 +3,7 @@
 D06 uses the existing D3D12 Streamline host and C05 input receipt policy at
 baseline `8adf010b`. No engine producer, shader contract or game acceptance
 changed. The local Streamline contract is documented in the
-[startup port](rust-d3d12-streamline-host-startup.md). D05 owns the shared SR
+startup port. D05 owns the shared SR
 camera and loader helpers. This change preserves their token and constants
 entry points and the public Streamline host ABI 2.
 

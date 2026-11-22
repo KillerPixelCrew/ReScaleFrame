@@ -138,7 +138,7 @@ COM reference lives. The registered diagnostics and observer callbacks keep thei
 Both original implementation paths (`runtime/graphics/src/d3d11_observer.cpp` and
 `runtime/graphics/src/d3d12_observer.cpp`) are retired. Remaining native code is confined to
 `runtime/graphics/src/observer_exception_guards.c` (C11 SEH leaf since the G01 closure, see
-[port-introduced C++ closure](rust-port-introduced-cpp-closure.md)). It holds the D3D11 SDK/proxy and user
+port-introduced C++ closure). It holds the D3D11 SDK/proxy and user
 callback exception guards, the shared overlay's existing `rsf_observer_install_guarded` entry,
 and the D3D12 catch frame. The old observer module bridge header was removed. G02 frame-tap
 callback leases and shared native ABI, including the overlay registration caller and G03

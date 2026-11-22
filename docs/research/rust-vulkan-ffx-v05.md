@@ -1,8 +1,7 @@
 # V05: FidelityFX Vulkan bridges without first-party C++
 
-This note records the V05 close-out on `rust/orchestrator-anomaly`. It follows
-[rust-vulkan-ffx-production-leaves.md](rust-vulkan-ffx-production-leaves.md) and
-[rust-vulkan-ffx-residual-port.md](rust-vulkan-ffx-residual-port.md).
+This note records the V05 close-out on `rust/orchestrator-anomaly`. It follows the production-leaves and residual-port
+notes (removed; see Git history).
 
 ## What moved
 

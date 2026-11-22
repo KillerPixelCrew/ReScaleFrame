@@ -115,7 +115,7 @@ target links `rsf_ac7_rust` after `rsf_ac7_render_scope`:
 `rsf_ac7_render_scope`'s own link interface is unchanged, so the Rust archive stays off the
 carrier link lines.
 
-The later [view reader port](rust-ac7-view.md) adds the Rust archive to both carriers through
+The later view reader port adds the Rust archive to both carriers through
 `ReScaleFrame::AC7View`. The native scope object is still separate and the carriers call no scope
 entry point.
 

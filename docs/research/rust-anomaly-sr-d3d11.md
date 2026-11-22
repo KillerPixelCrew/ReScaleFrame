@@ -5,7 +5,7 @@ hook profiles while moving the Anomaly-specific D3D11 ownership and draw
 sequencing into Rust. The S-B seam still follows the main-view world window
 and precedes the first of sunshafts and blur. The existing Stage and swap
 owners supply the frame, device, source and target facts. [SR seam research](anomaly-sr-seam.md),
-[AVX profile](anomaly-avx-profile.md), [Stage 5 Rust driver](rust-anomaly-sr-temporal.md)
+[AVX profile](anomaly-avx-profile.md), Stage 5 Rust driver
 
 | Path | Resource and shader contract |
 | --- | --- |

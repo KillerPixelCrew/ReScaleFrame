@@ -11,7 +11,7 @@ the production Rust builder. The stored-motion decode reference remains
 available to fixtures that compare the Runtime's GPU decode with CPU values.
 [SR seam evidence](anomaly-sr-seam.md#12-stages-4-and-5-implementation-sr-inputs-and-temporal-sr-at-the-seam),
 [SR stage audit](rust-anomaly-sr-stage.md),
-[SR temporal audit](rust-anomaly-sr-temporal.md)
+SR temporal audit
 
 The guarded reads still take `Device.mView` and the unjittered
 `Device.mProject` at the main-view H1 before raster jitter, for both verified

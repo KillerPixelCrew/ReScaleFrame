@@ -1,8 +1,8 @@
 # AC7 velocity pass and history port
 
 Chunk A05 continues the Rust ownership described in [history](rust-ac7-velocity-history.md),
-[cache](rust-ac7-velocity-pass-cache.md), [stream](rust-ac7-velocity-stream.md) and
-[commit](rust-ac7-velocity-commit.md). The existing AC7 renderer evidence and build scope are in
+[cache](rust-ac7-velocity-pass-cache.md), stream and
+commit. The existing AC7 renderer evidence and build scope are in
 [the velocity investigation](ac7-velocity-20261013.md). The port preserves the native producer,
 pipeline bindings, motion format and output integration described there.
 

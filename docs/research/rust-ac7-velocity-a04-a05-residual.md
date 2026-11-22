@@ -5,7 +5,7 @@ history and variant admission are present in that tree. This pass traced every
 remaining shader output from its DXBC writer to its D3D11 consumer, and the
 replay lease from the scoped draw through commit and retirement. It used source
 evidence from the existing AC7 velocity implementation and its fixtures.
-[A04 stage inventory](rust-ac7-velocity-a04.md)
+A04 stage inventory
 [A05 history and admission inventory](rust-ac7-velocity-pass-a05.md)
 
 | Source | Disposition |

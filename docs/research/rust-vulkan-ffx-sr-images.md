@@ -3,7 +3,7 @@
 This port moves creation, memory-type choice, allocation and binding of the two FidelityFX
 Vulkan SR staging images (the RGBA16F output and the R8 zero mask) from the native `allocate`
 leaf in `runtime/orchestrator/src/native_sr_vulkan.cpp` into `StagingImage::allocate` in
-`runtime/orchestrator/src/vulkan_sr.rs`. It extends the earlier [SR cutover](rust-vulkan-sr-cutover.md).
+`runtime/orchestrator/src/vulkan_sr.rs`. It extends the earlier SR cutover.
 The baseline is `a5867f2f92f9b883b51f6cf93355005d6e20d210`. This is a source comparison; no
 build, test or device run was performed.
 
@@ -140,7 +140,7 @@ dispatch and copy-back, including refusal. Checks for this port were source comp
 pinned Rust 1.94.1 formatting, locked offline Windows Cargo metadata and Git whitespace
 review. Enabled and disabled compilation and linking, binary export checks, Clippy, CPU
 fixtures, Vulkan execution and visual game acceptance remain with the user. The producer and
-shader coverage limits in the [Vulkan SR cutover](rust-vulkan-sr-cutover.md) still apply.
+shader coverage limits in the Vulkan SR cutover still apply.
 
 ## FidelityFX Vulkan SR startup
 

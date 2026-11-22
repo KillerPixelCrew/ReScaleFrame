@@ -1,6 +1,6 @@
 # Unity D3D11 shared surface ownership
 
-The source audit starts at `1eda132`, after the [shared graphics audit](rust-unity-d3d11-shared-device.md)
+The source audit starts at `1eda132`, after the shared graphics audit
 moved the package D3D11 bridge's devices, fences and command slots into one Rust record. The
 question was whether the bridge's six shared surfaces, their key and replacement, and the hold a
 frame keeps on them could join that record without changing the managed, native public or layer

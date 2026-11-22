@@ -7,7 +7,7 @@ submission, the bidirectional timeline, capture retirement and teardown.
 Their existing DX12 bridges still execute the SDK and graphics calls. The
 [original XeSS interop record](godot-xess-fg-interop-20261025.md) covers the
 historical device results and failures. The
-[FSR4 migration](rust-vulkan-fsr4-fg-cutover.md) records the shared mechanism.
+FSR4 migration records the shared mechanism.
 
 ## Producer and queue evidence
 

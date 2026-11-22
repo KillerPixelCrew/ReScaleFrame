@@ -1,7 +1,7 @@
 # AC7 velocity geometry shader assembly
 
 The source port starts from `37dc694`, which includes the Rust vertex
-stage. It uses the existing [DXBC container and operand codecs](rust-ac7-velocity-tokens.md).
+stage. It uses the existing DXBC container and operand codecs.
 The [native producer evidence](ac7-velocity-20261013.md#native-geometry-shader-producer)
 records why the rewrite keeps the position in a temporary and uses each
 emission's ordinal in the history key.
