@@ -443,22 +443,23 @@ Move the API census, static scan and diagnostic capture behind the loader's Rust
 - [x] [loader/census/src/wrap_ngx.cpp](loader/census/src/wrap_ngx.cpp)
 - [x] [loader/census/src/wrap_vk.cpp](loader/census/src/wrap_vk.cpp)
 - [x] [loader/diagnostics/include/rescaleframe/frame_capture.h](loader/diagnostics/include/rescaleframe/frame_capture.h)
-- [ ] [loader/diagnostics/include/rescaleframe/module_dump.h](loader/diagnostics/include/rescaleframe/module_dump.h)
-- [ ] [loader/diagnostics/src/module_dump_internal.h](loader/diagnostics/src/module_dump_internal.h)
+- [x] [loader/diagnostics/include/rescaleframe/module_dump.h](loader/diagnostics/include/rescaleframe/module_dump.h)
+- [x] [loader/diagnostics/src/module_dump_internal.h](loader/diagnostics/src/module_dump_internal.h)
 
-- [ ] [loader/census/src/decode_d3d_platform.cpp](loader/census/src/decode_d3d_platform.cpp) (introduced D3D resource query leaf)
+- [x] [loader/census/src/decode_d3d_platform.cpp](loader/census/src/decode_d3d_platform.cpp) (introduced D3D resource query leaf)
 - [x] [tests/loader/vendor_census_ngx_platform.cpp](tests/loader/vendor_census_ngx_platform.cpp) (introduced SDK fixture leaf)
 - [ ] [loader/census/src/census_platform.cpp](loader/census/src/census_platform.cpp) (native startup and vendor boundary)
 - [ ] [loader/census/src/hook_platform.cpp](loader/census/src/hook_platform.cpp) (native MinHook and loader facts)
 - [ ] [loader/census/src/guarded_platform.cpp](loader/census/src/guarded_platform.cpp) (guarded native call and record leaves)
 - [ ] [loader/census/src/d3d_guarded_platform.cpp](loader/census/src/d3d_guarded_platform.cpp) (guarded DXGI and D3D12 calls)
 
-**Fixtures (9)**
+**Fixtures (10)**
 
+- [ ] [tests/loader/vendor_census_native.cpp](tests/loader/vendor_census_native.cpp) (independent native SDK and WARP fixture facts)
 - [x] [tests/census_present_coexistence.cpp](tests/census_present_coexistence.cpp)
 - [ ] [tests/loader/module_dump_rtti_fixture.cpp](tests/loader/module_dump_rtti_fixture.cpp) (native RTTI specimen)
 - [x] [tests/module_dump_v2.cpp](tests/module_dump_v2.cpp)
-- [ ] [tests/vendor_census.cpp](tests/vendor_census.cpp)
+- [x] [tests/vendor_census.cpp](tests/vendor_census.cpp)
 - [x] [tests/vendor_census_asi.cpp](tests/vendor_census_asi.cpp)
 - [x] [tests/vendor_census_fixture.cpp](tests/vendor_census_fixture.cpp)
 - [ ] [tests/loader/vendor_layout_facts.cpp](tests/loader/vendor_layout_facts.cpp) (native SDK layout evidence)
