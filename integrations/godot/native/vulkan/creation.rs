@@ -1,118 +1,27 @@
 // SPDX-License-Identifier: MIT
-//! The Vulkan creation owner of the Godot session, formerly the state and policy of
-//! `vulkan_creation.cpp`: the underlying resolver and session log the start leaf hands over, the
-//! resolver's routes (`vkCreateInstance`, `vkGetDeviceProcAddr`, `vkCreateDevice` and the
-//! device-level `vkDestroyDevice` are intercepted, every other name is forwarded), the owner
-//! instance, the XeSS instance and device requirements with their fallbacks, the Win32 interop
-//! extensions, the order of the device stages (XeSS, interop, core latency, the native create), the
-//! extension merge, the feature structures the XeSS clone gets before the SDK patches it, every
-//! retry and diagnostic, and the XeSS and interop readiness the session's admission and the
-//! presenter host options read.
-//!
-//! It also keeps the adapter facts of the physical device each created device runs on (vendor ID,
-//! device ID and a CPU device type as software), read through `vkGetPhysicalDeviceProperties` of
-//! the owner instance after the device exists. The session's Auto resolution passes them to the
-//! Runtime's adapter policy; this owner only reads them. Like the owner instance, they describe the
-//! live device and survive a new start; each successful device creation replaces them.
-//!
-//! Vulkan structures stay in the leaves (`VkCreationLeaves`): the chain facts and clones, the
-//! request copies, the XeSS and core latency requirement calls and the Vulkan create and destroy
-//! calls. Requests are passed here as addresses. The core latency requirements stay the Runtime's
-//! (`rsf_latencyvk_require_device`); this owner only orders and retries around them.
-//!
-//! The creation calls come from the engine's loader outside `vulkan.cpp`'s guard, as before. The
-//! flags are atomics and the binding a short lock that is never held across a leaf, so a nested
-//! resolver call cannot deadlock. The start and stop leaves set and clear this state from inside
-//! the session's guarded boot and shutdown.
+//! Intercepts the engine loader, lends device requests to Runtime negotiation and
+//! publishes a receipt for each successful device. The primary swapchain and SR
+//! passes supply their device identity. Resolver callbacks run outside the graphics
+//! guard, and the binding and receipt locks are released before calling the loader.
+
+use crate::platform::vulkan_negotiation::{DeviceNegotiation, extension_list, merge};
 use crate::platform::{
     VK_ROUTE_CREATE_DEVICE, VK_ROUTE_CREATE_INSTANCE, VK_ROUTE_DESTROY_DEVICE,
-    VK_ROUTE_DEVICE_PROC, VK_ROUTE_FORWARD, VK_ROUTE_NONE, VK_SCOPE_DEVICE, VK_STAGE_INTEROP,
-    VK_STAGE_LATENCY, VK_STAGE_XESS, VK_XESS_ENABLED_FEATURES, VK_XESS_FEATURES2,
-    VK_XESS_FLOAT16_INT8, VK_XESS_INTEGER_DOT_PRODUCT, VK_XESS_SCALAR_BLOCK_LAYOUT, VkAdapter,
-    VkChainFacts, VkCreationLeaves, VkDeviceCall, VkDeviceDerive, VkFunction, VkInstanceCall,
-    VkProc, extension_list,
+    VK_ROUTE_DEVICE_PROC, VK_ROUTE_FORWARD, VK_ROUTE_NONE, VK_SCOPE_DEVICE, VkAdapter,
+    VkCreationLeaves, VkDeviceCall, VkFunction, VkInstanceCall, VkProc,
 };
 use rsf_game_sys::rsf_game_log_fn;
+use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 
 const VK_SUCCESS: i32 = 0;
 const VK_ERROR_OUT_OF_HOST_MEMORY: i32 = -1;
 const VK_ERROR_INITIALIZATION_FAILED: i32 = -3;
 const VK_ERROR_EXTENSION_NOT_PRESENT: i32 = -7;
-const VK_ERROR_FEATURE_NOT_PRESENT: i32 = -8;
 const VK_ERROR_INCOMPATIBLE_DRIVER: i32 = -9;
-const BACKEND_OK: i32 = 0;
-
-/// The device extensions the shared Win32 interop (FSR4 SR and FG, XeSS FG) exports and imports
-/// memory and semaphores through. Asked only when the engine enables timeline semaphores.
-const INTEROP_EXTENSIONS: [*const c_char; 2] = [
-    c"VK_KHR_external_memory_win32".as_ptr(),
-    c"VK_KHR_external_semaphore_win32".as_ptr(),
-];
-
-/// A create result for which a refused optional requirement is retried without it.
-fn refused(result: i32) -> bool {
-    result == VK_ERROR_FEATURE_NOT_PRESENT || result == VK_ERROR_EXTENSION_NOT_PRESENT
-}
-
-/// `base` followed by each of `required` it does not name yet, in order; `None` when the list
-/// cannot be allocated, which ends the creation call as the entry point's catch did.
-fn merge(base: &[*const c_char], required: &[*const c_char]) -> Option<Vec<*const c_char>> {
-    let mut list = Vec::new();
-    list.try_reserve(base.len() + required.len()).ok()?;
-    list.extend_from_slice(base);
-    for &name in required {
-        // SAFETY: engine and SDK extension names are NUL-terminated for the creation call.
-        let present = list
-            .iter()
-            .any(|&value| unsafe { CStr::from_ptr(value) == CStr::from_ptr(name) });
-        if !present {
-            list.push(name);
-        }
-    }
-    Some(list)
-}
-
-/// The feature structures the XeSS clone adds before the SDK patches it, or `None` when the
-/// engine's chain must stay as it is and XeSS is unavailable for the device. The SDK otherwise
-/// appends Vulkan 1.2 and 1.3 aggregates, which conflict with the engine's individual promoted
-/// feature structures.
-fn xess_structures(facts: &VkChainFacts) -> Option<u32> {
-    let on = |flag: u32| flag != 0;
-    if !on(facts.cloneable) {
-        return None;
-    }
-    let mut structures = 0;
-    if on(facts.enabled_features) {
-        // pEnabledFeatures and a Features2 in the chain are mutually exclusive.
-        if on(facts.features2) {
-            return None;
-        }
-        structures |= VK_XESS_ENABLED_FEATURES;
-    } else if !on(facts.features2) {
-        structures |= VK_XESS_FEATURES2;
-    }
-    if !on(facts.vulkan12) && !on(facts.float16_int8) {
-        structures |= VK_XESS_FLOAT16_INT8;
-    }
-    if !on(facts.vulkan12) && !on(facts.scalar_block_layout) {
-        structures |= VK_XESS_SCALAR_BLOCK_LAYOUT;
-    }
-    if !on(facts.vulkan13) && !on(facts.integer_dot_product) {
-        structures |= VK_XESS_INTEGER_DOT_PRODUCT;
-    }
-    Some(structures)
-}
-
-/// A device request and its extension list, which this owner built or read for the call.
-#[derive(Clone, Copy)]
-struct Request<'a> {
-    handle: *const c_void,
-    extensions: &'a [*const c_char],
-}
 
 #[derive(Clone, Copy)]
 struct Binding {
@@ -121,16 +30,20 @@ struct Binding {
     log_user: usize,
 }
 
+#[derive(Clone, Copy, Default)]
+pub(super) struct DeviceReceipt {
+    pub(super) xess: bool,
+    pub(super) interop: bool,
+    pub(super) adapter: Option<VkAdapter>,
+}
+
 pub(crate) struct Creation {
     binding: Mutex<Binding>,
     /// The instance `vkCreateInstance` created or `vkCreateDevice` was resolved for.
     owner: AtomicPtr<c_void>,
     prepare_xess: AtomicBool,
-    xess_ready: AtomicBool,
-    interop_ready: AtomicBool,
-    /// The physical device facts of the last device created; `None` before one exists or when
-    /// they could not be read.
-    adapter: Mutex<Option<VkAdapter>>,
+    receipts: Mutex<HashMap<usize, DeviceReceipt>>,
+    render_device: AtomicUsize,
 }
 
 impl Creation {
@@ -143,9 +56,8 @@ impl Creation {
             }),
             owner: AtomicPtr::new(ptr::null_mut()),
             prepare_xess: AtomicBool::new(false),
-            xess_ready: AtomicBool::new(false),
-            interop_ready: AtomicBool::new(false),
-            adapter: Mutex::new(None),
+            receipts: Mutex::new(HashMap::new()),
+            render_device: AtomicUsize::new(0),
         }
     }
 
@@ -172,40 +84,74 @@ impl Creation {
             log_user: log_user as usize,
         };
         self.prepare_xess.store(xess, Ordering::Release);
-        self.xess_ready.store(false, Ordering::Release);
-        self.interop_ready.store(false, Ordering::Release);
+        self.reset_readiness();
         underlying.is_some()
     }
 
     /// The stop leaf retired XeSS. The resolver keeps forwarding for the engine's teardown.
     pub(crate) fn stop(&self) {
         self.prepare_xess.store(false, Ordering::Release);
-        self.xess_ready.store(false, Ordering::Release);
-        self.interop_ready.store(false, Ordering::Release);
+        self.reset_readiness();
+    }
+
+    fn receipts(&self) -> std::sync::MutexGuard<'_, HashMap<usize, DeviceReceipt>> {
+        self.receipts.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn reset_readiness(&self) {
+        self.render_device.store(0, Ordering::Release);
+        for receipt in self.receipts().values_mut() {
+            receipt.xess = false;
+            receipt.interop = false;
+        }
+    }
+
+    pub(crate) fn report_render_device(&self, device: *mut c_void) {
+        self.render_device.store(device.addr(), Ordering::Release);
+    }
+
+    pub(super) fn render_receipt(&self) -> DeviceReceipt {
+        self.device_receipt(self.render_device.load(Ordering::Acquire))
+    }
+
+    pub(super) fn device_receipt(&self, device: usize) -> DeviceReceipt {
+        let receipts = self.receipts();
+        // Before a primary pass or swapchain identifies its device, the sole successful
+        // creation is unambiguous. Multiple candidates require an explicit device report.
+        if device == 0 && receipts.len() == 1 {
+            return receipts.values().next().copied().unwrap_or_default();
+        }
+        #[cfg(test)]
+        if let Some(receipt) = receipts.get(&0) {
+            return *receipt;
+        }
+        receipts.get(&device).copied().unwrap_or_default()
     }
 
     pub(crate) fn xess_ready(&self) -> bool {
-        self.xess_ready.load(Ordering::Acquire)
+        self.render_receipt().xess
     }
 
     pub(crate) fn interop_ready(&self) -> bool {
-        self.interop_ready.load(Ordering::Acquire)
+        self.render_receipt().interop
     }
 
-    /// The physical device facts of the last device created, if they were read.
+    #[cfg(test)]
     pub(crate) fn adapter(&self) -> Option<VkAdapter> {
-        *self.adapter.lock().unwrap_or_else(PoisonError::into_inner)
+        self.render_receipt().adapter
     }
 
     #[cfg(test)]
     pub(crate) fn report_ready(&self, xess: bool, interop: bool) {
-        self.xess_ready.store(xess, Ordering::Release);
-        self.interop_ready.store(interop, Ordering::Release);
+        let mut receipts = self.receipts();
+        let receipt = receipts.entry(0).or_default();
+        receipt.xess = xess;
+        receipt.interop = interop;
     }
 
     #[cfg(test)]
     pub(crate) fn report_adapter(&self, adapter: Option<VkAdapter>) {
-        *self.adapter.lock().unwrap_or_else(PoisonError::into_inner) = adapter;
+        self.receipts().entry(0).or_default().adapter = adapter;
     }
 
     fn diagnostic(&self, message: &CStr) {
@@ -286,7 +232,10 @@ impl Creation {
         let Some(create) = create else {
             return VK_ERROR_INITIALIZATION_FAILED;
         };
-        if call.request.is_null() || call.output.is_null() {
+        if call.request.is_null()
+            || call.output.is_null()
+            || (call.extension_count != 0 && call.extensions.is_null())
+        {
             return VK_ERROR_INITIALIZATION_FAILED;
         }
         // SAFETY: the entry point read the engine's list for the call.
@@ -296,7 +245,7 @@ impl Creation {
         if self.prepare_xess.load(Ordering::Acquire) {
             match leaves.xess_instance_requirements() {
                 Some((names, minimum)) => {
-                    let Some(list) = merge(engine, names) else {
+                    let Some(list) = (unsafe { merge(engine, names) }) else {
                         return VK_ERROR_OUT_OF_HOST_MEMORY;
                     };
                     merged = list;
@@ -328,12 +277,28 @@ impl Creation {
 
     /// The intercepted `vkCreateDevice`. With XeSS prepared, the engine's chain is cloned with the
     /// structures XeSS needs and patched by the SDK; any refusal, of the clone, the SDK or the
-    /// driver's feature or extension check, creates the engine's own request instead. Either way
-    /// the interop stage runs next. A created device's adapter facts replace the previous ones.
+    /// driver's feature or extension check, creates the engine's own request instead. The Runtime
+    /// negotiates optional stages and returns the features accepted for this device.
     pub(crate) fn create_device(&self, leaves: &VkCreationLeaves, call: &VkDeviceCall) -> i32 {
-        let result = self.create_stages(leaves, call);
+        let binding = self.binding();
+        let (result, accepted) = DeviceNegotiation::new(
+            self.owner(),
+            binding.underlying,
+            self.prepare_xess.load(Ordering::Acquire),
+            |message| self.diagnostic(message),
+        )
+        .create(leaves, call);
         if result == VK_SUCCESS {
-            self.read_adapter(leaves, call.physical_device);
+            // SAFETY: a successful create wrote the dispatchable VkDevice handle.
+            let device = unsafe { call.output.cast::<*mut c_void>().read() };
+            if !device.is_null() {
+                let receipt = DeviceReceipt {
+                    xess: accepted.xess,
+                    interop: accepted.interop,
+                    adapter: self.read_adapter(leaves, call.physical_device),
+                };
+                self.receipts().insert(device.addr(), receipt);
+            }
         }
         result
     }
@@ -341,12 +306,15 @@ impl Creation {
     /// `vkGetPhysicalDeviceProperties` of the created device's physical device through the owner
     /// instance. Without the entry point, or when the leaf threw, no facts are kept rather than a
     /// previous device's.
-    fn read_adapter(&self, leaves: &VkCreationLeaves, physical_device: *mut c_void) {
+    fn read_adapter(
+        &self,
+        leaves: &VkCreationLeaves,
+        physical_device: *mut c_void,
+    ) -> Option<VkAdapter> {
         let properties = self.binding().underlying.and_then(|underlying| {
             Self::resolve_with(underlying, self.owner(), c"vkGetPhysicalDeviceProperties")
         });
         let adapter = properties.and_then(|properties| leaves.adapter(properties, physical_device));
-        *self.adapter.lock().unwrap_or_else(PoisonError::into_inner) = adapter;
         let message = match adapter {
             Some(value) => format!(
                 "Vulkan device adapter vendor={:#x} device={:#x} software={}.",
@@ -357,207 +325,7 @@ impl Creation {
         if let Ok(message) = CString::new(message) {
             self.diagnostic(&message);
         }
-    }
-
-    fn create_stages(&self, leaves: &VkCreationLeaves, call: &VkDeviceCall) -> i32 {
-        if call.request.is_null() || call.output.is_null() {
-            return VK_ERROR_INITIALIZATION_FAILED;
-        }
-        // SAFETY: the entry point read the engine's list for the call.
-        let original = Request {
-            handle: call.request,
-            extensions: unsafe { extension_list(call.extensions, call.extension_count) },
-        };
-        self.xess_ready.store(false, Ordering::Release);
-        if !self.prepare_xess.load(Ordering::Acquire) {
-            return self.create_interop(leaves, call, original);
-        }
-        let fallback = || {
-            self.diagnostic(
-                c"XeSS Vulkan requirements unavailable; preserving the original engine device request.",
-            );
-            self.create_interop(leaves, call, original)
-        };
-        let Some(structures) = xess_structures(&leaves.chain_facts(original.handle)) else {
-            return fallback();
-        };
-        let features = match leaves.xess_features(call.call, original.handle, structures) {
-            None => return VK_ERROR_OUT_OF_HOST_MEMORY,
-            Some(features) if features.is_null() => return fallback(),
-            Some(features) => features,
-        };
-        let Some((names, features)) =
-            leaves.xess_device_requirements(self.owner(), call.physical_device, features)
-        else {
-            return fallback();
-        };
-        let Some(merged) = merge(original.extensions, names) else {
-            return VK_ERROR_OUT_OF_HOST_MEMORY;
-        };
-        let derive = VkDeviceDerive {
-            base: original.handle,
-            extensions: merged.as_ptr(),
-            extension_count: merged.len() as u32,
-            replace_next: 1,
-            next: features,
-            clear_enabled_features: 1,
-            reserved: 0,
-        };
-        let handle = leaves.derive_device(call.call, VK_STAGE_XESS, &derive);
-        if handle.is_null() {
-            return VK_ERROR_OUT_OF_HOST_MEMORY;
-        }
-        let request = Request {
-            handle,
-            extensions: &merged,
-        };
-        let result = self.create_interop(leaves, call, request);
-        if refused(result) {
-            return fallback();
-        }
-        if result == VK_SUCCESS {
-            self.xess_ready.store(true, Ordering::Release);
-            self.diagnostic(c"XeSS Vulkan device requirements enabled before device creation.");
-        }
-        result
-    }
-
-    /// The interop stage: when the device lists both Win32 extensions and the request enables
-    /// timeline semaphores, they are added; a refusal retries the request unchanged.
-    fn create_interop(
-        &self,
-        leaves: &VkCreationLeaves,
-        call: &VkDeviceCall,
-        request: Request<'_>,
-    ) -> i32 {
-        self.interop_ready.store(false, Ordering::Release);
-        let enumerate = self.binding().underlying.and_then(|underlying| {
-            Self::resolve_with(
-                underlying,
-                self.owner(),
-                c"vkEnumerateDeviceExtensionProperties",
-            )
-        });
-        let available = enumerate.is_some_and(|enumerate| {
-            leaves.device_extensions(enumerate, call.physical_device, &INTEROP_EXTENSIONS)
-        });
-        if !available || leaves.chain_facts(request.handle).timeline_semaphore == 0 {
-            return self.create_latency(leaves, call, request);
-        }
-        let Some(merged) = merge(request.extensions, &INTEROP_EXTENSIONS) else {
-            return VK_ERROR_OUT_OF_HOST_MEMORY;
-        };
-        let derive = VkDeviceDerive {
-            base: request.handle,
-            extensions: merged.as_ptr(),
-            extension_count: merged.len() as u32,
-            replace_next: 0,
-            next: ptr::null_mut(),
-            clear_enabled_features: 0,
-            reserved: 0,
-        };
-        let handle = leaves.derive_device(call.call, VK_STAGE_INTEROP, &derive);
-        if handle.is_null() {
-            return VK_ERROR_OUT_OF_HOST_MEMORY;
-        }
-        let interop = Request {
-            handle,
-            extensions: &merged,
-        };
-        let result = self.create_latency(leaves, call, interop);
-        if refused(result) {
-            self.diagnostic(
-                c"Vulkan Win32 interop requirements unavailable; retrying the unchanged device request.",
-            );
-            return self.create_latency(leaves, call, request);
-        }
-        if result == VK_SUCCESS {
-            self.interop_ready.store(true, Ordering::Release);
-            self.diagnostic(
-                c"Vulkan Win32 memory/semaphore interop enabled before device creation.",
-            );
-        }
-        result
-    }
-
-    /// The core latency stage and the native create: the Runtime's optional latency extensions
-    /// and features, retried without them when refused, and the created device reported to it.
-    fn create_latency(
-        &self,
-        leaves: &VkCreationLeaves,
-        call: &VkDeviceCall,
-        request: Request<'_>,
-    ) -> i32 {
-        let instance = self.owner();
-        let underlying = self.binding().underlying;
-        let create = underlying
-            .and_then(|underlying| Self::resolve_with(underlying, instance, c"vkCreateDevice"));
-        let Some(create) = create else {
-            return VK_ERROR_INITIALIZATION_FAILED;
-        };
-        let Some(requirements) = leaves.latency_requirements(
-            call.call,
-            instance,
-            call.physical_device,
-            underlying,
-            request.handle,
-        ) else {
-            return VK_ERROR_OUT_OF_HOST_MEMORY;
-        };
-        let merged;
-        let mut actual = request.handle;
-        if requirements.result == BACKEND_OK && requirements.extension_count != 0 {
-            // SAFETY: the Runtime's names stay valid through the synchronous create.
-            let names =
-                unsafe { extension_list(requirements.extensions, requirements.extension_count) };
-            let Some(list) = merge(request.extensions, names) else {
-                return VK_ERROR_OUT_OF_HOST_MEMORY;
-            };
-            merged = list;
-            let derive = VkDeviceDerive {
-                base: request.handle,
-                extensions: merged.as_ptr(),
-                extension_count: merged.len() as u32,
-                replace_next: 1,
-                next: requirements.features,
-                clear_enabled_features: 0,
-                reserved: 0,
-            };
-            actual = leaves.derive_device(call.call, VK_STAGE_LATENCY, &derive);
-            if actual.is_null() {
-                return VK_ERROR_OUT_OF_HOST_MEMORY;
-            }
-        }
-        let mut result = leaves.create_device(
-            create,
-            call.physical_device,
-            actual,
-            call.allocator,
-            call.output,
-        );
-        if actual != request.handle && refused(result) {
-            self.diagnostic(
-                c"Optional core latency device requirements refused; retrying the caller's unchanged request.",
-            );
-            actual = request.handle;
-            result = leaves.create_device(
-                create,
-                call.physical_device,
-                actual,
-                call.allocator,
-                call.output,
-            );
-        }
-        if result == VK_SUCCESS {
-            // SAFETY: a successful create wrote the dispatchable VkDevice handle.
-            let device = unsafe { call.output.cast::<*mut c_void>().read() };
-            if leaves.latency_created(instance, call.physical_device, device, underlying, actual)
-                == BACKEND_OK
-            {
-                self.diagnostic(c"Core Vulkan latency device requirements enabled.");
-            }
-        }
-        result
+        adapter
     }
 
     /// The intercepted `vkDestroyDevice`: the Runtime stops pacing the device first.
@@ -575,6 +343,7 @@ impl Creation {
                 // SAFETY: as resolve_with; device is the engine's for the call.
                 unsafe { get(device, c"vkDestroyDevice".as_ptr()) }
             });
+        self.receipts().remove(&device.addr());
         leaves.latency_destroyed(device);
         if let Some(destroy) = destroy {
             leaves.destroy_device(destroy, device, allocator);

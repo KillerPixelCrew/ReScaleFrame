@@ -28,11 +28,11 @@ use effect::Effect;
 use platform::{
     ABI_VERSION, EFFECT_VERSION, EffectLeaves, EffectStatus, EngineServices, OptionField,
     OptionValue, Platform, SETTINGS_ABI_VERSION, Settings, Setup, Status, VkCreationLeaves,
-    VkDeviceCall, VkFgPass, VkFunction, VkInstanceCall, VkPresentFacts, VkProc, VkSrPass, VkView,
+    VkDeviceCall, VkFunction, VkInstanceCall, VkPresentFacts, VkProc, VkSrPass, VkView,
 };
 use rsf_game_sys::{rsf_game_cpu_event, rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::{CStr, c_char, c_int, c_void};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
 
 static CONTROL: LazyLock<Control> = LazyLock::new(Control::new);
 
@@ -334,34 +334,25 @@ extern "C" fn rsf_godot_vk_presenter_retired() {
     CONTROL.vulkan.presenter_retired();
 }
 
-/// # Safety
-/// `pass` is null or readable and writable.
+/// Callback state is borrowed through this synchronous recording.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_fg_begin(pass: *mut VkFgPass) {
-    // SAFETY: the caller's guarantee.
-    if let Some(pass) = unsafe { pass.as_mut() } {
-        CONTROL.vulkan.fg_begin(pass);
-    }
+extern "C" fn rsf_godot_vk_fg_pass(
+    screen: u32,
+    call: *mut c_void,
+    options: extern "C" fn(*mut c_void, u32, u32) -> i32,
+    record: extern "C" fn(*mut c_void) -> i32,
+) -> i32 {
+    CONTROL.vulkan.fg_pass(
+        screen,
+        !call.is_null(),
+        |enabled, count| options(call, enabled, count),
+        || record(call),
+    )
 }
 
-/// # Safety
-/// `pass` is null or readable.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_fg_admit(pass: *const VkFgPass) -> c_int {
-    // SAFETY: the caller's guarantee.
-    unsafe { pass.as_ref() }
-        .is_some_and(|pass| CONTROL.vulkan.fg_admit(pass))
-        .into()
-}
-
-/// # Safety
-/// `pass` is null or readable.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_fg_recorded(pass: *const VkFgPass, result: i32) {
-    // SAFETY: the caller's guarantee.
-    if let Some(pass) = unsafe { pass.as_ref() } {
-        CONTROL.vulkan.fg_recorded(pass, result);
-    }
+extern "C" fn rsf_godot_vk_render_device(device: *mut c_void) {
+    CONTROL.vulkan.creation().report_render_device(device);
 }
 
 /// The SR section of `rsfg_render_vulkan`, called with the guard held.
@@ -381,42 +372,74 @@ unsafe extern "C" fn rsf_godot_vk_sr_render(
     }
 }
 
-/// # Safety
-/// `context` and `fsr4_context` are null or writable.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_sr_contexts(
-    context: *mut *mut c_void,
-    fsr4_context: *mut *mut c_void,
-) {
-    let (sr, fsr4) = CONTROL.vulkan.sr_contexts();
-    // SAFETY: the caller's guarantee.
-    unsafe {
-        if !context.is_null() {
-            context.write(sr);
-        }
-        if !fsr4_context.is_null() {
-            fsr4_context.write(fsr4);
-        }
-    }
+extern "C" fn rsf_godot_vk_sr_context() -> *mut c_void {
+    CONTROL.vulkan.sr_context()
 }
 
 // The Vulkan creation owner (vulkan/creation.rs), reached from vulkan_creation.cpp without the
 // guard: the start and stop leaves and the resolver's entry points on the engine's thread.
 
-/// The start leaf's underlying resolver, XeSS preparation and session log. Nonzero when the
-/// resolver is installed.
+struct CreationRoutes {
+    create_instance: VkFunction,
+    create_device: VkFunction,
+    destroy_device: VkFunction,
+}
+
+static CREATION_ROUTES: OnceLock<CreationRoutes> = OnceLock::new();
+
+/// The entries are the Vulkan-typed wrappers and live for the mapped module's lifetime.
 #[unsafe(no_mangle)]
 extern "C" fn rsf_godot_vk_creation_begin(
     underlying: Option<VkProc>,
     xess: u32,
     log: rsf_game_log_fn,
     log_user: *mut c_void,
-) -> c_int {
+    create_instance: VkFunction,
+    create_device: VkFunction,
+    destroy_device: VkFunction,
+) -> Option<VkProc> {
+    let _ = CREATION_ROUTES.set(CreationRoutes {
+        create_instance,
+        create_device,
+        destroy_device,
+    });
     CONTROL
         .vulkan
         .creation()
         .begin(underlying, xess != 0, log, log_user)
-        .into()
+        .then_some(vk_instance_proc as VkProc)
+}
+
+unsafe extern "C" fn vk_instance_proc(
+    object: *mut c_void,
+    name: *const c_char,
+) -> Option<VkFunction> {
+    unsafe { vk_resolve(platform::VK_SCOPE_INSTANCE, object, name) }
+}
+
+unsafe extern "C" fn vk_device_proc(
+    object: *mut c_void,
+    name: *const c_char,
+) -> Option<VkFunction> {
+    unsafe { vk_resolve(platform::VK_SCOPE_DEVICE, object, name) }
+}
+
+unsafe fn vk_resolve(scope: u32, object: *mut c_void, name: *const c_char) -> Option<VkFunction> {
+    let entries = CREATION_ROUTES.get()?;
+    let (route, forwarded) = unsafe { CONTROL.vulkan.creation().resolve(scope, object, name) };
+    match route {
+        platform::VK_ROUTE_FORWARD => forwarded,
+        platform::VK_ROUTE_CREATE_INSTANCE => Some(entries.create_instance),
+        platform::VK_ROUTE_CREATE_DEVICE => Some(entries.create_device),
+        platform::VK_ROUTE_DESTROY_DEVICE => Some(entries.destroy_device),
+        platform::VK_ROUTE_DEVICE_PROC => {
+            let proc: VkProc = vk_device_proc;
+            // Vulkan's resolver returns a generic PFN_vkVoidFunction.
+            Some(unsafe { std::mem::transmute::<VkProc, VkFunction>(proc) })
+        }
+        _ => None,
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -433,24 +456,6 @@ extern "C" fn rsf_godot_vk_xess_ready() -> c_int {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_godot_vk_interop_ready() -> c_int {
     CONTROL.vulkan.creation().interop_ready().into()
-}
-
-/// # Safety
-/// `name` is null or NUL-terminated for the call; `forwarded` is null or writable.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_creation_resolve(
-    scope: u32,
-    object: *mut c_void,
-    name: *const c_char,
-    forwarded: *mut Option<VkFunction>,
-) -> u32 {
-    // SAFETY: the caller's guarantee.
-    let (route, function) = unsafe { CONTROL.vulkan.creation().resolve(scope, object, name) };
-    if !forwarded.is_null() {
-        // SAFETY: the caller's guarantee.
-        unsafe { forwarded.write(function) };
-    }
-    route
 }
 
 /// # Safety

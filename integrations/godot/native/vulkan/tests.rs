@@ -367,35 +367,32 @@ fn status_carries_the_latency_overlay() {
     fake::VK_LATENCY.set(None);
 }
 
-fn sr_pass(session: u64, width: u32, height: u32) -> VkFgPass {
-    VkFgPass {
-        role: RENDER_SR,
-        screen: SCREEN_FLIGHT,
-        session_id: session,
-        view_id: 1,
-        render_width: width,
-        render_height: height,
-        ..VkFgPass::default()
-    }
-}
-
 #[test]
 fn fg_runs_only_in_requested_gameplay_on_the_flight_screen() {
     let vulkan = booted();
     fake::VK_FACTS.set(ready());
     fake::VK_PRESENTER_MAX.set(Some(1));
-    let mut pass = sr_pass(42, 1280, 720);
-    vulkan.fg_begin(&mut pass);
-    assert_eq!((pass.enabled, pass.generated_frames), (0, 1));
+    let run = |screen, expected| {
+        assert_eq!(
+            vulkan.fg_pass(
+                screen,
+                true,
+                |enabled, count| {
+                    assert_eq!((enabled, count), (expected, 1));
+                    BACKEND_OK
+                },
+                || BACKEND_OK
+            ),
+            BACKEND_OK
+        );
+    };
+    run(SCREEN_FLIGHT, 0);
     assert_eq!(
         vulkan.configure(&fake::LEAVES, &settings(|s| s.fg_mode = 1)),
         1
     );
-    vulkan.fg_begin(&mut pass);
-    assert_eq!(pass.enabled, 1);
-    pass.screen = 0;
-    vulkan.fg_begin(&mut pass);
-    assert_eq!(pass.enabled, 0);
+    run(SCREEN_FLIGHT, 1);
+    run(0, 0);
     assert_eq!(
         vulkan.configure(
             &fake::LEAVES,
@@ -406,65 +403,31 @@ fn fg_runs_only_in_requested_gameplay_on_the_flight_screen() {
         ),
         1
     );
-    pass.screen = SCREEN_FLIGHT;
-    vulkan.fg_begin(&mut pass);
-    assert_eq!(pass.enabled, 0);
+    run(SCREEN_FLIGHT, 0);
     fake::VK_PRESENTER_MAX.set(None);
 }
 
 #[test]
-fn fixed_guides_retire_on_a_new_plan_and_with_the_presenter() {
+fn sr_plan_changes_leave_the_runtime_presenter_current() {
     let vulkan = booted();
     vulkan.presenter_created(true, FG_FSR4, 1);
-    let value = status(&vulkan);
-    assert_eq!(
-        (
-            value.fg_available,
-            value.fg_backend,
-            value.max_generated_frames
-        ),
-        (1, FG_FSR4, 1)
-    );
-    // The requested provider is FSR3 (Auto): the FSR4 owner must be recreated.
+    assert_eq!(status(&vulkan).fg_available, 1);
     assert!(!vulkan.presenter_current(&fake::LEAVES, FG_FSR4));
     fake::VK_FACTS.set(ready());
-    let request = settings(|s| s.fg_backend = FG_FSR4);
     fake::VK_PROBE.set(1);
-    assert_eq!(vulkan.configure(&fake::LEAVES, &request), 1);
-    assert!(vulkan.presenter_current(&fake::LEAVES, FG_FSR4));
-
-    let mut pass = sr_pass(42, 1280, 720);
-    pass.options_result = BACKEND_OK;
-    pass.backend_valid = 1;
-    pass.backend = FG_FSR4;
-    assert!(vulkan.fg_admit(&pass));
-    vulkan.fg_recorded(&pass, BACKEND_OK);
-    assert_eq!(status(&vulkan).fg_result, BACKEND_OK);
-    // The same plan keeps the guides.
-    assert!(vulkan.fg_admit(&pass));
-    // A settled plan of another size retires them through the WSI owner.
-    let resized = VkFgPass {
-        render_width: 1440,
-        render_height: 810,
-        ..pass
-    };
-    assert!(!vulkan.fg_admit(&resized));
-    assert_eq!(status(&vulkan).fg_result, BACKEND_ERROR_NOT_READY);
-    assert!(!vulkan.presenter_current(&fake::LEAVES, FG_FSR4));
-    // A new SR plan from settings does the same.
-    vulkan.presenter_created(true, FG_FSR4, 1);
-    assert!(vulkan.presenter_current(&fake::LEAVES, FG_FSR4));
-    assert_eq!(
-        vulkan.configure(
-            &fake::LEAVES,
-            &settings(|s| {
-                s.fg_backend = FG_FSR4;
-                s.quality = 3;
-            })
-        ),
-        1
-    );
-    assert!(!vulkan.presenter_current(&fake::LEAVES, FG_FSR4));
+    for quality in [2, 3] {
+        assert_eq!(
+            vulkan.configure(
+                &fake::LEAVES,
+                &settings(|s| {
+                    s.fg_backend = FG_FSR4;
+                    s.quality = quality;
+                })
+            ),
+            1
+        );
+        assert!(vulkan.presenter_current(&fake::LEAVES, FG_FSR4));
+    }
     vulkan.presenter_retired();
     let value = status(&vulkan);
     assert_eq!(
@@ -479,13 +442,19 @@ fn fixed_guides_retire_on_a_new_plan_and_with_the_presenter() {
 }
 
 #[test]
-fn a_refused_enable_reports_its_result() {
+fn fg_result_belongs_to_this_pass_even_when_the_presenter_is_missing() {
     let vulkan = booted();
-    let mut pass = sr_pass(42, 1280, 720);
-    pass.enabled = 1;
-    pass.options_result = -5;
-    pass.backend_valid = 0;
-    assert!(!vulkan.fg_admit(&pass));
+    let run = || vulkan.fg_pass(SCREEN_FLIGHT, true, |_, _| BACKEND_OK, || BACKEND_OK);
+    assert_eq!(run(), BACKEND_OK);
+    assert_eq!(
+        vulkan.fg_pass(SCREEN_FLIGHT, false, |_, _| panic!(), || panic!()),
+        BACKEND_ERROR_NOT_READY
+    );
+    assert_eq!(status(&vulkan).fg_result, BACKEND_ERROR_NOT_READY);
+    assert_eq!(
+        vulkan.fg_pass(SCREEN_FLIGHT, true, |_, _| -5, || panic!()),
+        -5
+    );
     let value = status(&vulkan);
     assert_eq!((value.fg_result, value.generated_frames), (-5, 0));
 }
@@ -725,4 +694,23 @@ fn auto_admission_and_presenter_follow_the_resolved_provider() {
     intel.presenter_created(true, FG_XESS, 1);
     assert!(intel.presenter_current(&fake::LEAVES, FG_XESS));
     fake::VK_PRESENTER_MAX.set(None);
+}
+
+#[test]
+fn reconstruction_key_covers_each_context_setting() {
+    let defaults = default_settings();
+    let key = defaults.reconstruction_key();
+    assert_ne!(
+        settings(|s| s.sr_backend = SR_FSR3).reconstruction_key(),
+        key
+    );
+    let mut changed = defaults;
+    changed.quality ^= 1;
+    assert_ne!(changed.reconstruction_key(), key);
+    changed = defaults;
+    changed.dlss_preset ^= 1;
+    assert_ne!(changed.reconstruction_key(), key);
+    changed = defaults;
+    changed.gameplay ^= 1;
+    assert_eq!(changed.reconstruction_key(), key);
 }

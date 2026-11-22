@@ -341,6 +341,8 @@ mod vulkan_sr;
 #[cfg(windows)]
 mod vulkan_sr_abi;
 #[cfg(windows)]
+mod vulkan_sr_session;
+#[cfg(windows)]
 mod vulkan_sr_split;
 #[cfg(windows)]
 mod vulkan_timing;

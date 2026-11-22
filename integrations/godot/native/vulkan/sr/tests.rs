@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::super::SR_FSR3;
+use super::super::{SR_DLSS, SR_FSR3};
 use super::*;
 use crate::control::default_settings;
 use crate::platform::{Settings, Status, VkAdapter, VkFacts, VkFunction, fake};
@@ -20,6 +20,8 @@ fn reset() {
     fake::VK_NEXT.set(0x7000);
     fake::VK_FALLBACK.set(0);
     fake::VK_THROWS.set(None);
+    fake::VK_SPLIT_OPEN_RESULT.set(0);
+    fake::VK_SPLIT_RECORD.set(true);
     fake::VK_STOP.set(1);
     fake::VK_FACTS.set(VkFacts {
         graph_handoff: 1,
@@ -61,10 +63,6 @@ fn pass(device: usize, output: (u32, u32)) -> VkSrPass {
         source_frame_id: 9,
         render_width: 1280,
         render_height: 720,
-        handoff: 1,
-        split_record: 1,
-        continuation: 1,
-        fsr4_compiled: 1,
     }
 }
 
@@ -77,8 +75,12 @@ fn status(vulkan: &Vulkan) -> Status {
 }
 
 fn handles(vulkan: &Vulkan) -> (u64, u64) {
-    let (sr, fsr4) = vulkan.sr_contexts();
-    (sr.addr() as u64, fsr4.addr() as u64)
+    let session = vulkan.sr_context();
+    if fake::vk_is_split(session) {
+        (0, session.addr() as u64)
+    } else {
+        (session.addr() as u64, 0)
+    }
 }
 
 #[test]
@@ -234,7 +236,7 @@ fn four_refusals_are_logged_per_session() {
 }
 
 #[test]
-fn an_input_refusal_is_logged_before_the_fallback() {
+fn an_input_refusal_is_logged_after_runtime_recovers_output() {
     let vulkan = booted();
     fake::VK_EVALUATED.set(BACKEND_ERROR_INVALID_ARGUMENT);
     assert_eq!(render(&vulkan, &pass(DEVICE, OUTPUT)), 1);
@@ -243,9 +245,9 @@ fn an_input_refusal_is_logged_before_the_fallback() {
         calls[2..],
         [
             ("evaluate", calls[1].1),
+            ("fallback", 0),
             ("dump", u64::from(SR_FSR3)),
             ("log", u64::from(VK_LOG_INPUT_REFUSAL)),
-            ("fallback", 0),
             ("log", u64::from(VK_LOG_REJECTED))
         ]
     );
@@ -295,29 +297,17 @@ fn the_dlss_preset_is_applied_once_after_creation() {
 fn fsr4_needs_its_build_and_the_graph_lease() {
     let vulkan = booted();
     configure(&vulkan, |s| s.sr_backend = SR_FSR4);
-    let missing = VkSrPass {
-        fsr4_compiled: 0,
-        ..pass(DEVICE, OUTPUT)
-    };
-    render(&vulkan, &missing);
-    assert_eq!(status(&vulkan).sr_result, BACKEND_ERROR_NOT_COMPILED);
-    for lease in [
-        VkSrPass {
-            handoff: 0,
-            ..pass(DEVICE, OUTPUT)
-        },
-        VkSrPass {
-            split_record: 0,
-            ..pass(DEVICE, OUTPUT)
-        },
-        VkSrPass {
-            continuation: 0,
-            ..pass(DEVICE, OUTPUT)
-        },
+    for refusal in [
+        -3,
+        BACKEND_ERROR_NOT_READY,
+        BACKEND_ERROR_NOT_READY,
+        BACKEND_ERROR_NOT_READY,
     ] {
-        render(&vulkan, &lease);
-        assert_eq!(status(&vulkan).sr_result, BACKEND_ERROR_NOT_READY);
+        fake::VK_SPLIT_OPEN_RESULT.set(refusal);
+        render(&vulkan, &pass(DEVICE, OUTPUT));
+        assert_eq!(status(&vulkan).sr_result, refusal);
     }
+    fake::VK_SPLIT_OPEN_RESULT.set(0);
     let calls = fake::take_vk_sr_calls();
     assert!(
         calls
@@ -339,27 +329,15 @@ fn fsr4_needs_its_build_and_the_graph_lease() {
         ]
     );
     assert_eq!(status(&vulkan).active_sr, SR_FSR4);
-    // A live context evaluates only with a handoff and a continuation; split_record is not asked.
-    render(
-        &vulkan,
-        &VkSrPass {
-            split_record: 0,
-            ..pass(DEVICE, OUTPUT)
-        },
-    );
-    assert_eq!(fake::take_vk_sr_calls()[1], ("fsr4_evaluate", fsr4));
-    render(
-        &vulkan,
-        &VkSrPass {
-            handoff: 0,
-            continuation: 0,
-            ..pass(DEVICE, OUTPUT)
-        },
-    );
-    // The four refusals above spent the session's log budget.
+    fake::VK_SPLIT_RECORD.set(false);
+    render(&vulkan, &pass(DEVICE, OUTPUT));
     assert_eq!(
         fake::take_vk_sr_calls(),
-        [("fsr4_plan", fsr4), ("fallback", 0)]
+        [
+            ("fsr4_plan", fsr4),
+            ("fallback", 0),
+            ("dump", u64::from(SR_FSR4))
+        ]
     );
     assert_eq!(status(&vulkan).sr_result, BACKEND_ERROR_NOT_READY);
 }
@@ -412,6 +390,29 @@ fn a_leaf_exception_refuses_the_pass_without_a_report() {
 }
 
 #[test]
+fn diagnostic_failures_preserve_fallback_and_evaluation_outcomes() {
+    let vulkan = booted();
+    configure(&vulkan, |settings| settings.sr_backend = SR_FSR3);
+    let input = pass(DEVICE, OUTPUT);
+    fake::VK_EVALUATED.set(BACKEND_ERROR_INVALID_ARGUMENT);
+    fake::VK_THROWS.set(Some("dump"));
+    assert_eq!(render(&vulkan, &input), 1);
+    assert!(fake::take_vk_sr_calls().contains(&("fallback", 0)));
+    assert_eq!(vulkan.status(&fake::LEAVES).0.refused_frames, 1);
+
+    fake::VK_THROWS.set(Some("log"));
+    assert_eq!(render(&vulkan, &input), 1);
+    assert!(fake::take_vk_sr_calls().contains(&("fallback", 0)));
+    assert_eq!(vulkan.status(&fake::LEAVES).0.refused_frames, 2);
+
+    fake::VK_EVALUATED.set(BACKEND_OK);
+    fake::VK_THROWS.set(Some("dump"));
+    assert_eq!(render(&vulkan, &input), 1);
+    assert_eq!(vulkan.status(&fake::LEAVES).0.evaluated_frames, 1);
+    fake::VK_THROWS.set(None);
+}
+
+#[test]
 fn shutdown_retires_the_contexts_between_the_presenter_drain_and_the_stop() {
     let vulkan = booted();
     render(&vulkan, &pass(DEVICE, OUTPUT));
@@ -429,12 +430,7 @@ fn shutdown_retires_the_contexts_between_the_presenter_drain_and_the_stop() {
     assert_eq!(vulkan.shutdown(&fake::LEAVES), 1);
     assert_eq!(
         fake::take_vk_sr_calls(),
-        [
-            ("drain", 1),
-            ("drain", 0),
-            ("idle", DEVICE as u64),
-            ("destroy", context)
-        ]
+        [("drain", 1), ("idle", DEVICE as u64), ("destroy", context)]
     );
     assert_eq!(fake::take_calls(), ["stop", "release"]);
     assert_eq!(handles(&vulkan), (0, 0));

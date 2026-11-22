@@ -89,6 +89,9 @@ thread_local! {
     pub(crate) static VK_DESTROY: Cell<i32> = const { Cell::new(0) };
     /// The next creation: its result and whether it returns a handle.
     pub(crate) static VK_CREATE: Cell<(i32, bool)> = const { Cell::new((0, true)) };
+    static VK_SPLIT_CONTEXTS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+    pub(crate) static VK_SPLIT_OPEN_RESULT: Cell<i32> = const { Cell::new(0) };
+    pub(crate) static VK_SPLIT_RECORD: Cell<bool> = const { Cell::new(true) };
     static VK_CONTEXTS: Cell<usize> = const { Cell::new(0) };
     pub(crate) static VK_PLAN: Cell<(u32, u32)> = const { Cell::new((1280, 720)) };
     pub(crate) static VK_EVALUATED: Cell<i32> = const { Cell::new(0) };
@@ -465,27 +468,24 @@ unsafe extern "C" fn vulkan_device_idle(device: *mut c_void, proc: Option<VkProc
     VK_IDLE.get() * u32::from(proc.is_some())
 }
 
+pub(crate) fn vk_is_split(context: *mut c_void) -> bool {
+    VK_SPLIT_CONTEXTS.with_borrow(|owners| owners.contains(&context.addr()))
+}
+
 unsafe extern "C" fn vulkan_sr_destroy(context: *mut c_void) -> i32 {
-    vk_sr("destroy", context.addr() as u64);
-    VK_DESTROY.get()
-}
-
-unsafe extern "C" fn vulkan_fsr4_destroy(context: *mut c_void) -> i32 {
-    vk_sr("fsr4_destroy", context.addr() as u64);
-    0
-}
-
-fn vk_create(name: &'static str, request: *const VkSrCreate, created: *mut VkSrContext) -> u32 {
-    // SAFETY: the owner passes live records.
-    let (request, created) = unsafe { (&*request, &mut *created) };
-    let completed = vk_sr(name, request.backend.into());
-    let (result, handle) = VK_CREATE.get();
-    if handle {
-        VK_CONTEXTS.set(VK_CONTEXTS.get() + 1);
-        created.handle = ptr::without_provenance_mut(vk_context_handle(VK_CONTEXTS.get()) as usize);
+    vk_sr(
+        if vk_is_split(context) {
+            "fsr4_destroy"
+        } else {
+            "destroy"
+        },
+        context.addr() as u64,
+    );
+    let result = VK_DESTROY.get();
+    if result == 0 {
+        VK_SPLIT_CONTEXTS.with_borrow_mut(|owners| owners.retain(|owner| *owner != context.addr()));
     }
-    created.result = result;
-    completed
+    result
 }
 
 unsafe extern "C" fn vulkan_sr_create(
@@ -493,29 +493,30 @@ unsafe extern "C" fn vulkan_sr_create(
     request: *const VkSrCreate,
     created: *mut VkSrContext,
 ) -> u32 {
-    vk_create("create", request, created)
-}
-
-unsafe extern "C" fn vulkan_fsr4_create(
-    _: *mut c_void,
-    request: *const VkSrCreate,
-    created: *mut VkSrContext,
-) -> u32 {
-    vk_create("fsr4_create", request, created)
-}
-
-unsafe extern "C" fn vulkan_dlss_preset(_: *mut c_void, preset: u32) -> u32 {
-    vk_sr("preset", preset.into())
-}
-
-fn vk_plan(name: &'static str, context: *mut c_void, width: *mut u32, height: *mut u32) -> u32 {
-    let (planned_width, planned_height) = VK_PLAN.get();
-    // SAFETY: the owner passes writable extents.
-    unsafe {
-        width.write(planned_width);
-        height.write(planned_height);
+    // SAFETY: the owner passes live records.
+    let (request, created) = unsafe { (&*request, &mut *created) };
+    let split = request.backend == 4;
+    if split && VK_SPLIT_OPEN_RESULT.get() != 0 {
+        created.result = VK_SPLIT_OPEN_RESULT.get();
+        return 1;
     }
-    vk_sr(name, context.addr() as u64)
+    let completed = vk_sr(
+        if split { "fsr4_create" } else { "create" },
+        request.backend.into(),
+    );
+    let (result, handle) = VK_CREATE.get();
+    if handle {
+        VK_CONTEXTS.set(VK_CONTEXTS.get() + 1);
+        created.handle = ptr::without_provenance_mut(vk_context_handle(VK_CONTEXTS.get()) as usize);
+        if split {
+            VK_SPLIT_CONTEXTS.with_borrow_mut(|owners| owners.push(created.handle.addr()));
+        }
+    }
+    created.result = result;
+    if completed != 0 && result == 0 && request.backend == 1 {
+        vk_sr("preset", request.preset.into());
+    }
+    completed
 }
 
 unsafe extern "C" fn vulkan_sr_plan(
@@ -524,50 +525,61 @@ unsafe extern "C" fn vulkan_sr_plan(
     width: *mut u32,
     height: *mut u32,
 ) -> u32 {
-    vk_plan("plan", context, width, height)
-}
-
-unsafe extern "C" fn vulkan_fsr4_plan(
-    _: *mut c_void,
-    context: *mut c_void,
-    width: *mut u32,
-    height: *mut u32,
-) -> u32 {
-    vk_plan("fsr4_plan", context, width, height)
-}
-
-unsafe extern "C" fn vulkan_sr_evaluate(
-    _: *mut c_void,
-    context: *mut c_void,
-    sharpening: *const Sharpening,
-    result: *mut i32,
-) -> u32 {
-    // SAFETY: the owner passes live records.
+    let (planned_width, planned_height) = VK_PLAN.get();
     unsafe {
-        VK_SHARPENING.set(Some(*sharpening));
-        result.write(VK_EVALUATED.get());
+        width.write(planned_width);
+        height.write(planned_height);
     }
-    vk_sr("evaluate", context.addr() as u64)
+    vk_sr(
+        if vk_is_split(context) {
+            "fsr4_plan"
+        } else {
+            "plan"
+        },
+        context.addr() as u64,
+    )
 }
 
-unsafe extern "C" fn vulkan_fsr4_evaluate(
+unsafe extern "C" fn vulkan_sr_record(
     _: *mut c_void,
     context: *mut c_void,
     _: *const Sharpening,
-    result: *mut i32,
+    provider: *mut i32,
+    output: *mut i32,
     next: *mut *mut c_void,
 ) -> u32 {
-    // SAFETY: the owner passes writable records.
-    unsafe {
-        result.write(VK_EVALUATED.get());
-        next.write(ptr::without_provenance_mut(VK_NEXT.get()));
+    let mut commands = 0x20;
+    if !context.is_null() {
+        let split = vk_is_split(context);
+        let result = if split && !VK_SPLIT_RECORD.get() {
+            -8
+        } else {
+            if vk_sr(
+                if split { "fsr4_evaluate" } else { "evaluate" },
+                context.addr() as u64,
+            ) == 0
+            {
+                return 0;
+            }
+            if split {
+                commands = VK_NEXT.get();
+            }
+            VK_EVALUATED.get()
+        };
+        unsafe { provider.write(result) };
+        if result == 0 {
+            unsafe {
+                output.write(0);
+                next.write(ptr::without_provenance_mut(commands));
+            }
+            return 1;
+        }
     }
-    vk_sr("fsr4_evaluate", context.addr() as u64)
-}
-
-unsafe extern "C" fn vulkan_sr_fallback(_: *mut c_void, result: *mut i32) -> u32 {
-    // SAFETY: the owner passes a writable result.
-    unsafe { result.write(VK_FALLBACK.get()) };
+    unsafe { next.write(ptr::without_provenance_mut(commands)) };
+    if commands == 0 {
+        return 1;
+    }
+    unsafe { output.write(VK_FALLBACK.get()) };
     vk_sr("fallback", 0)
 }
 
@@ -772,15 +784,9 @@ pub(crate) static LEAVES: Platform = Platform {
     vulkan_presenter_drain,
     vulkan_device_idle,
     vulkan_sr_destroy,
-    vulkan_fsr4_destroy,
     vulkan_sr_create,
-    vulkan_fsr4_create,
-    vulkan_dlss_preset,
     vulkan_sr_plan,
-    vulkan_fsr4_plan,
-    vulkan_sr_evaluate,
-    vulkan_fsr4_evaluate,
-    vulkan_sr_fallback,
+    vulkan_sr_record,
     vulkan_sr_log,
     vulkan_sr_dump_result,
     window_identity,

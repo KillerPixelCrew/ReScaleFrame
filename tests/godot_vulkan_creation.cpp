@@ -152,8 +152,8 @@ rsf_godot_vk_function fake_gipa(void* instance, const char* name) {
 PFN_vkCreateDevice begin_device_case(bool enabled = true) {
     device_calls = requirement_calls = 0;
     sdk_failure = false; expect_augmented = enabled; first_device_result = VK_SUCCESS;
-    auto resolver_call = rsf::godot_vk::creation_resolver(fake_gipa, enabled, nullptr, nullptr);
-    require(resolver_call && !rsf::godot_vk::xess_device_ready(), "new resolver clears readiness");
+    auto resolver_call = rsf_godot_vk_creation_resolver(fake_gipa, enabled, nullptr, nullptr);
+    require(resolver_call && !rsf_godot_vk_xess_ready(), "new resolver clears readiness");
     return reinterpret_cast<PFN_vkCreateDevice>(resolver_call(fixture_instance, "vkCreateDevice"));
 }
 }
@@ -197,8 +197,8 @@ extern "C" rsf_backend_result rsf_xessvk_device_requirements(void* instance, voi
 }
 
 int main() {
-    require(!rsf::godot_vk::creation_resolver(nullptr, true, nullptr, nullptr), "null underlying resolver remains unavailable");
-    auto resolver_call = rsf::godot_vk::creation_resolver(fake_gipa, true, nullptr, nullptr);
+    require(!rsf_godot_vk_creation_resolver(nullptr, true, nullptr, nullptr), "null underlying resolver remains unavailable");
+    auto resolver_call = rsf_godot_vk_creation_resolver(fake_gipa, true, nullptr, nullptr);
     require(!resolver_call(nullptr, nullptr), "null function name is rejected");
     require(resolver_call(fixture_instance, "vkFixtureOther") == reinterpret_cast<rsf_godot_vk_function>(unrelated_function) &&
         forwarded_instance == fixture_instance && forwarded_name == "vkFixtureOther", "unrelated resolver calls are forwarded exactly");
@@ -229,12 +229,12 @@ int main() {
         device = VK_NULL_HANDLE;
         return begin_device_case()(fixture_physical, &info, &allocator, &device);
     };
-    require(invoke() == VK_SUCCESS && device == fixture_device && rsf::godot_vk::xess_device_ready(), "prepared individual-feature device is ready");
+    require(invoke() == VK_SUCCESS && device == fixture_device && rsf_godot_vk_xess_ready(), "prepared individual-feature device is ready");
     require(device_calls == 1 && requirement_calls == 1 && !std::memcmp(&info, &original_info, sizeof(info)) &&
         !std::memcmp(&half, &original_half, sizeof(half)) && !std::memcmp(&timeline, &original_timeline, sizeof(timeline)) &&
         !std::memcmp(&enabled, &original_enabled, sizeof(enabled)), "SDK patching never changes caller structures, bits or links");
-    rsf::godot_vk::stop_creation_requirements();
-    require(!rsf::godot_vk::xess_device_ready(), "creation shutdown clears successful device readiness");
+    rsf_godot_vk_creation_stop();
+    require(!rsf_godot_vk_xess_ready(), "creation shutdown clears successful device readiness");
 
     VkPhysicalDeviceFeatures2 existing_root{}; existing_root.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     existing_root.features.shaderClipDistance = VK_TRUE; half.pNext = &existing_root; info.pEnabledFeatures = nullptr;
@@ -255,31 +255,31 @@ int main() {
     VkBaseInStructure unknown{}; unknown.sType = static_cast<VkStructureType>(0x7ffffffe); info.pNext = &unknown;
     auto call = begin_device_case(); expect_augmented = false;
     require(call(fixture_physical, &info, &allocator, &device) == VK_SUCCESS && device_calls == 1 && !requirement_calls &&
-        !rsf::godot_vk::xess_device_ready(), "unknown chain preserves the original request and reports unavailable XeSS");
+        !rsf_godot_vk_xess_ready(), "unknown chain preserves the original request and reports unavailable XeSS");
     info = original_info;
 
     call = begin_device_case(); sdk_failure = true; expect_augmented = false;
     require(call(fixture_physical, &info, &allocator, &device) == VK_SUCCESS && requirement_calls == 1 &&
-        !rsf::godot_vk::xess_device_ready() && !std::memcmp(&enabled, &original_enabled, sizeof(enabled)),
+        !rsf_godot_vk_xess_ready() && !std::memcmp(&enabled, &original_enabled, sizeof(enabled)),
         "SDK refusal after patching a clone falls back without caller mutation");
     for (const auto failure : {VK_ERROR_FEATURE_NOT_PRESENT, VK_ERROR_EXTENSION_NOT_PRESENT}) {
         call = begin_device_case(); first_device_result = failure;
         require(call(fixture_physical, &info, &allocator, &device) == VK_SUCCESS && device_calls == 2 &&
-            !rsf::godot_vk::xess_device_ready(), "unsupported augmented request retries original device request");
+            !rsf_godot_vk_xess_ready(), "unsupported augmented request retries original device request");
     }
     call = begin_device_case(); first_device_result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
     require(call(fixture_physical, &info, &allocator, &device) == VK_ERROR_OUT_OF_DEVICE_MEMORY && device_calls == 1 &&
-        !rsf::godot_vk::xess_device_ready(), "unrelated create-device failure is preserved without retry");
+        !rsf_godot_vk_xess_ready(), "unrelated create-device failure is preserved without retry");
     call = begin_device_case(false);
     require(call(fixture_physical, &info, &allocator, &device) == VK_SUCCESS && !requirement_calls &&
-        !rsf::godot_vk::xess_device_ready(), "disabled XeSS forwards original request directly");
+        !rsf_godot_vk_xess_ready(), "disabled XeSS forwards original request directly");
     external_extensions = true;
     call = begin_device_case();
-    require(call(fixture_physical, &info, &allocator, &device) == VK_SUCCESS && rsf::godot_vk::interop_device_ready() &&
+    require(call(fixture_physical, &info, &allocator, &device) == VK_SUCCESS && rsf_godot_vk_interop_ready() &&
         !std::memcmp(&timeline, &original_timeline, sizeof(timeline)), "interop is prepared before device creation without changing the engine's feature chain");
     external_extensions = false;
-    rsf::godot_vk::stop_creation_requirements();
-    require(!rsf::godot_vk::xess_device_ready() && !rsf::godot_vk::interop_device_ready(), "creation shutdown clears readiness");
+    rsf_godot_vk_creation_stop();
+    require(!rsf_godot_vk_xess_ready() && !rsf_godot_vk_interop_ready(), "creation shutdown clears readiness");
     info=original_info;half=original_half;timeline=original_timeline;enabled=original_enabled;
     amd_case=true;external_extensions=false;
     call=begin_device_case(false);

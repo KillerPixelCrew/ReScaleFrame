@@ -37,6 +37,12 @@ Runtime-owned backend selection for this adapter. Builds, fixtures and
 game acceptance are pending.
 [Anomaly SR checkpoint](research/rust-anomaly-sr-stage.md#n06-source-review-and-port-checkpoint)
 
+Godot Vulkan uses device-keyed capability receipts and one Runtime SR session.
+Each FG pass reports its own outcome. The V03 presenter owns retired guide resizing,
+and the engine retains its exact submission and Present receipts. Source ABI
+comparison and pinned formatting passed. Build, fixture and device checks remain
+open. [Godot Vulkan E03 evidence](research/rust-godot-vulkan-e03.md)
+
 The Unity package now routes render callbacks, admits preview and
 generation windows, and handles device events in Rust. The managed
 exports matched in source, and pinned binding regeneration matched the

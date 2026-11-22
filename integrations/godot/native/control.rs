@@ -296,11 +296,7 @@ impl Control {
         }
         {
             let mut session = self.session();
-            let current = &session.settings;
-            if current.sr_backend != settings.sr_backend
-                || current.quality != settings.quality
-                || current.dlss_preset != settings.dlss_preset
-            {
+            if session.settings.reconstruction_key() != settings.reconstruction_key() {
                 session.generation = session.generation.wrapping_add(1);
             }
             session.settings = *settings;

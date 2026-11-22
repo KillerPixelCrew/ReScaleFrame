@@ -22,7 +22,7 @@
 #include <rescaleframe/native_cpu_service.h>
 #include <stdint.h>
 
-#define RSF_GODOT_PLATFORM_VERSION 8u
+#define RSF_GODOT_PLATFORM_VERSION 9u
 
 /* Mirror of rsf_native_fg_options without its header. */
 typedef struct rsf_godot_fg_options {
@@ -144,20 +144,7 @@ typedef struct rsf_godot_vk_view {
     uint64_t generation, session_id;
     uint32_t fg_backend; /* the requested FG provider, Auto resolved */
     uint32_t output_width, output_height; /* the last SR pass's output */
-    int32_t fg_result;
 } rsf_godot_vk_view;
-
-/* One FG pass through the presenter in rsfg_render_vulkan. */
-typedef struct rsf_godot_vk_fg_pass {
-    uint32_t role, screen;
-    uint64_t session_id;
-    uint32_t view_id, render_width, render_height;
-    /* Filled by rsf_godot_vk_fg_begin: the enable rule and the requested count. */
-    uint32_t enabled, generated_frames;
-    /* Filled by the leaf after rsf_fgvk_enable_options and rsf_fgvk_backend. */
-    int32_t options_result;
-    uint32_t backend_valid, backend;
-} rsf_godot_vk_fg_pass;
 
 /* rsf_fgvk_get_status after a presenter Present. */
 typedef struct rsf_godot_vk_present_facts {
@@ -178,16 +165,12 @@ typedef struct rsf_godot_vk_sr_pass {
     uint32_t output_width, output_height;
     uint64_t source_frame_id;
     uint32_t render_width, render_height;
-    /* The graph lease: a handoff, its split_record, the continuation output. */
-    uint32_t handoff, split_record, continuation;
-    /* Build fact: the FSR4 SR provider is compiled. */
-    uint32_t fsr4_compiled;
 } rsf_godot_vk_sr_pass;
 
 /* The provider and quality of one Vulkan SR context. The leaf adds the packet's device, procs and
    camera depth and motion facts and the provider's runtime directory. */
 typedef struct rsf_godot_vk_sr_create {
-    uint32_t backend, quality;
+    uint32_t backend, quality, preset;
 } rsf_godot_vk_sr_create;
 
 /* The created context, kept by the owner even when result is not RSF_BACKEND_OK. */
@@ -197,37 +180,15 @@ typedef struct rsf_godot_vk_sr_context {
     uint32_t reserved;
 } rsf_godot_vk_sr_context;
 
-/* The Vulkan creation boundary. The creation owner (vulkan/creation.rs) keeps the resolver routes,
-   the stage order XeSS, Win32 interop, core latency, the extension lists, the feature structures
-   XeSS needs added, the retries, the XeSS and interop readiness and the adapter facts of the
-   physical device the last created device runs on, which the session's Auto policy reads. The leaves in
-   vulkan_creation.cpp keep every Vulkan structure: a request is a VkInstanceCreateInfo or
-   VkDeviceCreateInfo, the engine's or one a leaf derived into the call record, and call is the
-   entry point's private record for one creation call. These are not vulkan.cpp's guarded leaves
-   and none takes its guard. */
+/* Vulkan-typed callbacks for the shared Runtime negotiation. Each create lends its original
+   request and any call-local copies for the duration of the loader call. */
 #define RSF_GODOT_VK_CREATION_VERSION 2u
 
-/* rsf_godot_vk_creation_resolve scopes and routes. FORWARD returns the resolved function. */
-#define RSF_GODOT_VK_SCOPE_INSTANCE 0u /* the resolver rsfg_vk_resolver returns */
-#define RSF_GODOT_VK_SCOPE_DEVICE 1u   /* the vkGetDeviceProcAddr that resolver returns */
-#define RSF_GODOT_VK_ROUTE_NONE 0u
-#define RSF_GODOT_VK_ROUTE_FORWARD 1u
-#define RSF_GODOT_VK_ROUTE_CREATE_INSTANCE 2u
-#define RSF_GODOT_VK_ROUTE_DEVICE_PROC 3u
-#define RSF_GODOT_VK_ROUTE_CREATE_DEVICE 4u
-#define RSF_GODOT_VK_ROUTE_DESTROY_DEVICE 5u
-
-/* A device request's pNext chain and pEnabledFeatures, as read. */
+/* Scalar facts from one engine device request. */
 typedef struct rsf_godot_vk_chain_facts {
-    /* At most 64 structures, each of a type the clone copies, none repeated. The presence flags
-       below are read only for such a chain. */
     uint32_t cloneable;
     uint32_t features2, vulkan12, vulkan13, float16_int8, scalar_block_layout, integer_dot_product;
-    uint32_t enabled_features;
-    /* Within the first 64 structures, timelineSemaphore set in the timeline semaphore or the
-       Vulkan 1.2 features. */
-    uint32_t timeline_semaphore;
-    uint32_t reserved;
+    uint32_t enabled_features, timeline_semaphore, reserved;
 } rsf_godot_vk_chain_facts;
 
 /* RSF_GODOT_VK_XESS_*: the structures the XeSS clone adds before the SDK patches it. FEATURES2 is an
@@ -495,25 +456,10 @@ typedef struct rsf_godot_platform {
     /* vkDeviceWaitIdle through device_proc; zero without the entry point or on failure. */
     uint32_t (*vulkan_device_idle)(void* device, rsf_godot_vk_proc device_proc);
     int32_t (*vulkan_sr_destroy)(void* context);
-    /* rsf_fsr4vk_destroy's bridge code; zero is success. */
-    int32_t (*vulkan_fsr4_destroy)(void* context);
-    /* The calls below take the pass's call record. A uint32_t completion of zero means an
-       exception ended the leaf; the owner then refuses the pass as the export's catch did. */
-    /* rsf_srvk_create, and the FSR4 interop context with the pass's handoff and its log. */
     uint32_t (*vulkan_sr_create)(void* call, const rsf_godot_vk_sr_create* request, rsf_godot_vk_sr_context* created);
-    uint32_t (*vulkan_fsr4_create)(void* call, const rsf_godot_vk_sr_create* request, rsf_godot_vk_sr_context* created);
-    uint32_t (*vulkan_dlss_preset)(void* context, uint32_t preset);
-    /* The context's planned input extent; zero when the provider does not answer. */
     uint32_t (*vulkan_sr_plan)(void* call, void* context, uint32_t* width, uint32_t* height);
-    uint32_t (*vulkan_fsr4_plan)(void* call, void* context, uint32_t* width, uint32_t* height);
-    /* The frame from the packet with the owner's sharpening, then the provider evaluate. The FSR4
-       leaf continues the call and the export's continuation on next. */
-    uint32_t (*vulkan_sr_evaluate)(void* call, void* context, const rsf_sharpening_options* sharpening,
-        int32_t* result);
-    uint32_t (*vulkan_fsr4_evaluate)(void* call, void* context, const rsf_sharpening_options* sharpening,
-        int32_t* result, void** next);
-    /* rsf_srvk_spatial_fallback of the call's colour into its output on its current commands. */
-    uint32_t (*vulkan_sr_fallback)(void* call, int32_t* result);
+    uint32_t (*vulkan_sr_record)(void* call, void* context, const rsf_sharpening_options* sharpening,
+        int32_t* provider, int32_t* output, void** next);
     /* One RSF_GODOT_VK_LOG_* message. */
     uint32_t (*vulkan_sr_log)(void* call, uint32_t kind, int32_t provider_result, int32_t fallback_result);
     /* rsf_input_dump_result of the call's record for the "sr" stage. */
@@ -601,15 +547,14 @@ void rsf_godot_vk_presenter_created(uint32_t ready, uint32_t backend, uint32_t m
 int rsf_godot_vk_presenter_current(uint32_t presenter_backend);
 void rsf_godot_vk_presented(const rsf_godot_vk_present_facts* facts);
 void rsf_godot_vk_presenter_retired(void);
-void rsf_godot_vk_fg_begin(rsf_godot_vk_fg_pass* pass);
-/* Nonzero: record the pass. Zero stored the refusal as the FG result. */
-int rsf_godot_vk_fg_admit(const rsf_godot_vk_fg_pass* pass);
-void rsf_godot_vk_fg_recorded(const rsf_godot_vk_fg_pass* pass, int32_t result);
+int32_t rsf_godot_vk_fg_pass(uint32_t screen, void* call,
+    int32_t (*options)(void*, uint32_t, uint32_t), int32_t (*record)(void*));
+void rsf_godot_vk_render_device(void* device);
 /* The SR section of rsfg_render_vulkan: context retirement, creation, plan, evaluate, the spatial
    fallback and the SR accounting. Returns the export's result. */
 int rsf_godot_vk_sr_render(const rsf_godot_platform* platform, const rsf_godot_vk_sr_pass* pass);
 /* The live SR context handles, null when none, for rsfg_vk_recording_begin. */
-void rsf_godot_vk_sr_contexts(void** context, void** fsr4_context);
+void* rsf_godot_vk_sr_context(void);
 /* The primary window rsfg_vk_window last reported since the session's start, or null. */
 void* rsf_godot_vk_primary_window(void);
 
@@ -618,15 +563,15 @@ void* rsf_godot_vk_primary_window(void);
 /* Keeps underlying (Streamline's or the loader's resolver), whether XeSS requirements are
    prepared and the session log, and clears both readiness facts. The adapter facts, like the
    owner instance, describe the live device and survive. Nonzero when underlying is set. */
-int rsf_godot_vk_creation_begin(rsf_godot_vk_proc underlying, uint32_t xess, rsf_game_log_fn log, void* log_user);
-/* Ends XeSS preparation and clears both readiness facts. The resolver keeps forwarding. */
+rsf_godot_vk_proc rsf_godot_vk_creation_begin(rsf_godot_vk_proc underlying, uint32_t xess,
+    rsf_game_log_fn log, void* log_user, rsf_godot_vk_function create_instance,
+    rsf_godot_vk_function create_device, rsf_godot_vk_function destroy_device);
+rsf_godot_vk_proc rsf_godot_vk_creation_resolver(rsf_godot_vk_proc underlying, uint32_t xess,
+    rsf_game_log_fn log, void* log_user);
 void rsf_godot_vk_creation_stop(void);
 /* The last device was created with the XeSS, or the Win32 interop, requirements. */
 int rsf_godot_vk_xess_ready(void);
 int rsf_godot_vk_interop_ready(void);
-/* An RSF_GODOT_VK_ROUTE_*; forwarded receives the function for ROUTE_FORWARD, otherwise null. */
-uint32_t rsf_godot_vk_creation_resolve(uint32_t scope, void* object, const char* name,
-    rsf_godot_vk_function* forwarded);
 /* The VkResult of the intercepted vkCreateInstance, vkCreateDevice. */
 int32_t rsf_godot_vk_create_instance(const rsf_godot_vk_creation_leaves* leaves, const rsf_godot_vk_instance_call* call);
 int32_t rsf_godot_vk_create_device(const rsf_godot_vk_creation_leaves* leaves, const rsf_godot_vk_device_call* call);

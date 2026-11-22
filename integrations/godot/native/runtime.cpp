@@ -51,11 +51,11 @@ static_assert(sizeof(rsf_godot_option_field) == 16 && sizeof(rsf_godot_option_va
 static_assert(offsetof(rsf_godot_platform, vulkan_locked) == 88 &&
     offsetof(rsf_godot_platform, latency_facts) == 176 && offsetof(rsf_godot_platform, d3d12_bind) == 184 &&
     offsetof(rsf_godot_platform, sr_evaluate) == 256 && offsetof(rsf_godot_platform, d3d12_release) == 320 &&
-    offsetof(rsf_godot_platform, vulkan_presenter_drain) == 328 && offsetof(rsf_godot_platform, vulkan_sr_create) == 360 &&
-    offsetof(rsf_godot_platform, vulkan_sr_evaluate) == 400 && offsetof(rsf_godot_platform, vulkan_sr_dump_result) == 432 &&
-    offsetof(rsf_godot_platform, window_identity) == 440 && offsetof(rsf_godot_platform, d3d12_cpu_service) == 480 &&
-    offsetof(rsf_godot_platform, vulkan_present_marker) == 496 &&
-    offsetof(rsf_godot_platform, sr_select_backend) == 504 && sizeof(rsf_godot_platform) == 520);
+    offsetof(rsf_godot_platform, vulkan_presenter_drain) == 328 && offsetof(rsf_godot_platform, vulkan_sr_create) == 352 &&
+    offsetof(rsf_godot_platform, vulkan_sr_record) == 368 && offsetof(rsf_godot_platform, vulkan_sr_dump_result) == 384 &&
+    offsetof(rsf_godot_platform, window_identity) == 392 && offsetof(rsf_godot_platform, d3d12_cpu_service) == 432 &&
+    offsetof(rsf_godot_platform, vulkan_present_marker) == 448 &&
+    offsetof(rsf_godot_platform, sr_select_backend) == 456 && sizeof(rsf_godot_platform) == 472);
 static_assert(sizeof(rsf_godot_window_identity) == 144 && offsetof(rsf_godot_window_identity, class_name) == 16);
 static_assert(sizeof(rsf_game_cpu_event) == 64 && RSF_GAME_CPU_FRAME_BEGIN == 0 && RSF_GAME_CPU_INPUT_EVENT == 5 &&
     RSF_GAME_CPU_EVENT_VERSION == 1 && RSF_GAME_CPU_INPUT_KEYED == 1 && RSF_GAME_CPU_WINDOW_MESSAGE == 4,
@@ -353,8 +353,7 @@ const rsf_godot_platform platform{sizeof(platform), RSF_GODOT_PLATFORM_VERSION, 
     leaf_present_owner, leaf_present_request, leaf_sr_create, leaf_sr_destroy, leaf_sr_evaluate, leaf_sr_refusal_log,
     leaf_capture_sr_begin, leaf_final_scene, leaf_fg_submitted, leaf_render_begin, leaf_present_window,
     leaf_fg_end_session, leaf_d3d12_release, vk::leaf_presenter_drain, vk::leaf_device_idle, vk::leaf_sr_destroy,
-    vk::leaf_fsr4_destroy, vk::leaf_sr_create, vk::leaf_fsr4_create, vk::leaf_dlss_preset, vk::leaf_sr_plan,
-    vk::leaf_fsr4_plan, vk::leaf_sr_evaluate, vk::leaf_fsr4_evaluate, vk::leaf_sr_fallback, vk::leaf_sr_log,
+    vk::leaf_sr_create, vk::leaf_sr_plan, vk::leaf_sr_record, vk::leaf_sr_log,
     vk::leaf_sr_dump_result, leaf_window_identity, leaf_window_procedure_get, leaf_window_procedure_set,
     leaf_window_forward, leaf_query_counter, rsf_fg12_cpu_service, rsf_latencyvk_cpu_service,
     leaf_vulkan_present_marker, leaf_sr_select_backend, leaf_fg_select_backend};
@@ -387,7 +386,7 @@ extern "C" int rsfg_render(void* owning_device, void* owning_queue, void* comman
 
 extern "C" void rsfg_render_begin(uint64_t frame) try
 {
-    if (rsf::godot_vk::booted()) { rsf::godot_vk::render_begin(frame); return; }
+    if (rsf_godot_vk_booted()) { rsf::godot_vk::render_begin(frame); return; }
     if (!booted()) return;
     rsf_godot_d3d12_render_begin(&platform, frame);
 } catch (...) {}
@@ -398,7 +397,7 @@ extern "C" int rsfg_vk_present_marker(uint64_t window, uint32_t begin) {
     return 1;
 }
 extern "C" int rsfg_vk_execution(const rsf_game_render_pass* pass, uint32_t begin) try {
-    if (!rsf::godot_vk::booted() || !pass || pass->struct_size < sizeof(*pass)) return 0;
+    if (!rsf_godot_vk_booted() || !pass || pass->struct_size < sizeof(*pass)) return 0;
     if (pass->role == RSF_GAME_RENDER_FRAME) {
         rsf::godot_vk::render_begin(pass->source_frame_id, true);
         return 1;
@@ -429,6 +428,6 @@ extern "C" int32_t rsfg_vk_foreign_call(rsf_vk_wsi_call callback, void* user) { 
 extern "C" int rsfg_shutdown(void) try
 {
     rsf_godot_window_release(&platform);
-    if (rsf::godot_vk::booted()) return rsf_godot_shutdown_vulkan(&platform);
+    if (rsf_godot_vk_booted()) return rsf_godot_shutdown_vulkan(&platform);
     return rsf_godot_d3d12_shutdown(&platform);
 } catch (...) { return 0; }
