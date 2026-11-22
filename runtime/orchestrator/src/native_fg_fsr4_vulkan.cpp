@@ -2,7 +2,7 @@
 #include <windows.h>
 #include "native_fg_fsr4_vulkan_platform.h"
 
-static_assert(sizeof(rsf_fsr4gvk_ops) == 43 * sizeof(void*) && sizeof(rsf_fsr4gvk_options) == 24 &&
+static_assert(sizeof(rsf_fsr4gvk_ops) == 44 * sizeof(void*) && sizeof(rsf_fsr4gvk_options) == 24 &&
     sizeof(rsf_fsr4fg_create) == 48 && sizeof(rsf_fsr4fg_info) == 32 &&
     sizeof(rsf_fsr4fg_frame) == 80 && sizeof(rsf_fsr4fg_present_status) == 32);
 
@@ -28,14 +28,8 @@ int32_t rsf_fsr4gvk_probe(const rsf_srvk_setup* setup, rsf_fsr4fg_info* out) {
 }
 int32_t rsf_fsr4gvk_create(const rsf_fgvk_setup* setup, const rsf_fsr4gvk_options* options,
     rsf_fsr4gvk** output, uint64_t* chain) {
-    rsf_fsr4gvk_swapchain swapchain{};
-    const rsf_fsr4gvk_swapchain* description = nullptr;
-    if (setup && setup->struct_size >= sizeof(*setup) && setup->abi_version == RSF_FGVK_ABI_VERSION && setup->create_info &&
-        options && options->struct_size >= sizeof(*options) && options->abi_version == 1 && output && chain) {
-        swapchain = rsf_dx12gvk_describe(setup->create_info);
-        description = &swapchain;
-    }
-    return rsf_core_fsr4gvk_create(&operations, setup, options, description, output, chain);
+    // Rust admits the setup before it asks the embedded graphics table to describe create_info.
+    return rsf_core_fsr4gvk_create(&operations, setup, options, output, chain);
 }
 namespace {
 int32_t present(rsf_fsr4gvk* owner, const void* info, const rsf_frame_record* source, uint32_t explicit_source) {

@@ -531,7 +531,6 @@ unsafe extern "C" fn rsf_core_xessgvk_create(
     ops: &'static Ops,
     setup: *const Setup,
     options: *const Options,
-    swapchain: *const Swapchain,
     output: *mut *mut Owner,
     chain: *mut u64,
 ) -> i32 {
@@ -554,7 +553,7 @@ unsafe extern "C" fn rsf_core_xessgvk_create(
         timeline_enabled: options.timeline_enabled,
         generated_count: options.generated_count,
     };
-    let Some(&swapchain) = (unsafe { swapchain.as_ref() }) else {
+    let Some(swapchain) = shared::describe(unsafe { &*ops.graphics }, setup) else {
         return XESS_INVALID;
     };
     if !setup_valid(setup, &start) || start.generated_count == 0 || options.directory.is_null() {

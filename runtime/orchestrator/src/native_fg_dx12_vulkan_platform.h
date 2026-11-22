@@ -6,9 +6,11 @@
 
 struct rsf_dx12gvk_platform;
 using rsf_dx12gvk_dispatch_entries = rsf_vk_function[24];
+// Raw VkSwapchainCreateInfoKHR facts. vulkan_dx12_fg.rs decides extension and present-mode policy.
+// extension_count saturates at 2; extension_type is the first chained sType, or 0 without a chain.
 struct rsf_dx12gvk_swapchain {
     uint32_t width, height, format, usage, color_space, layers, sharing_mode, min_images, flags;
-    uint32_t compatible_extensions, vsync;
+    uint32_t present_mode, extension_count, extension_type;
     uint64_t old_chain;
 };
 struct rsf_dx12gvk_present_info {
@@ -70,6 +72,8 @@ struct rsf_dx12gvk_ops {
     void (*capture_complete)(rsf_dx12gvk_platform*, uint64_t);
     void (*capture_discard)(rsf_dx12gvk_platform*, uint64_t);
     int32_t (*capture_flush)(rsf_dx12gvk_platform*);
+    // Called by Rust after it admits the setup and options and checks create_info.
+    void (*describe)(const void* create_info, rsf_dx12gvk_swapchain*);
 };
 
 struct rsf_dx12gvk_interop_ops {
@@ -82,7 +86,6 @@ constexpr rsf_dx12gvk_interop_ops rsf_dx12gvk_interop{
 };
 extern const rsf_dx12gvk_ops rsf_dx12gvk_graphics;
 
-rsf_dx12gvk_swapchain rsf_dx12gvk_describe(const void* create_info);
 using rsf_dx12gvk_present_fn = int32_t (*)(void*, const rsf_dx12gvk_present_info*, const rsf_frame_record*, uint32_t);
 // Receives the admitted wait count. The caller lends output storage for that many handles.
 using rsf_dx12gvk_read_present_fn = void (*)(const void*, uint32_t, uint64_t*, uint32_t*, uint64_t*);

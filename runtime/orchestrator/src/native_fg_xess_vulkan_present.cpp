@@ -29,14 +29,8 @@ int32_t present(void* owner, const rsf_dx12gvk_present_info* info, const rsf_fra
 
 int32_t rsf_xessgvk_create(const rsf_fgvk_setup* setup, const rsf_xessgvk_options* options,
     rsf_xessgvk** output, uint64_t* chain) {
-    rsf_dx12gvk_swapchain swapchain{};
-    const rsf_dx12gvk_swapchain* description = nullptr;
-    if (setup && setup->struct_size >= sizeof(*setup) && setup->abi_version == RSF_FGVK_ABI_VERSION && setup->create_info &&
-        options && options->struct_size >= sizeof(*options) && options->abi_version == 1 && output && chain) {
-        swapchain = rsf_dx12gvk_describe(setup->create_info);
-        description = &swapchain;
-    }
-    return rsf_core_xessgvk_create(&operations, setup, options, description, output, chain);
+    // Rust admits the setup before it asks the shared graphics table to describe create_info.
+    return rsf_core_xessgvk_create(&operations, setup, options, output, chain);
 }
 
 int32_t rsf_xessgvk_images(rsf_xessgvk* owner, uint32_t* count, uint64_t* output) {

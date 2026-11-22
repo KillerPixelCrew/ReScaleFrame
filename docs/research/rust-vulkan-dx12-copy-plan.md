@@ -141,3 +141,43 @@ the first submit without a timeline wait, and the full binary wait
 list with the prior timeline wait. Source, formatting, locked offline
 metadata and whitespace checks passed. Builds, fixture execution,
 and live provider checks remain open.
+
+## Swapchain admission facts
+
+Compared with `97c2738f`, the shared XeSS and FSR4 Vulkan FG owner
+decides swapchain extension compatibility and present-mode vsync in
+Rust. The native reader now copies raw facts from the borrowed
+`VkSwapchainCreateInfoKHR`: the present mode, the number of chained
+extensions (saturating at 2) and the first chained `sType`. Rust admits
+no extension, or exactly one `VK_STRUCTURE_TYPE_SWAPCHAIN_LATENCY_CREATE_INFO_NV`
+(1000505007), and maps FIFO (2) and FIFO_RELAXED (3) to vsync. Both
+rules match the removed native expressions. The other create-time
+checks, including the old-chain refusal, were already in Rust and are
+unchanged.
+
+The XeSS and FSR4 create wrappers no longer validate the setup and
+options before reading `create_info`. They forward to Rust, which runs
+its existing capacity, ABI and pointer checks, refuses a null
+`create_info` with the same invalid-argument code, and only then calls
+the new `describe` leaf in the shared graphics table. Result codes and
+their order are unchanged: a short or mismatched setup or options
+record still fails before the borrowed create info is read.
+
+The Present wrapper no longer returns early for a null
+`VkPresentInfoKHR`. It reports an empty shape and Rust refuses it with
+`VK_ERROR_INITIALIZATION_FAILED` before the reader runs. The typed
+`pResults` write stays native and is skipped without a present info.
+
+The facts record stays 56 bytes. The shared table grows from 30 to 31
+pointers with `describe` appended, so earlier offsets are unchanged.
+FSR4's embedded table grows from 43 to 44. XeSS still borrows the
+shared table. Native asserts cover the present-mode and `sType` values
+against Vulkan SDK 1.4.357. New Rust tests cover the extension truth
+table, the old-chain refusal, every present mode and the null Present
+refusal. The FSR4 state fixture now supplies a real create info. Its
+graphics table already predated the 30-entry layout, so it still needs
+updating before it can build.
+
+Source comparison, pinned 1.94.1 formatting, locked offline Cargo
+metadata and Git whitespace checks passed. Compile and link, Clippy,
+the Rust and native tests, and live provider checks remain open.

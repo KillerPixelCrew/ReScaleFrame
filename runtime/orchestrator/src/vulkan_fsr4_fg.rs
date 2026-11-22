@@ -40,7 +40,7 @@ struct Ops {
 
 const _: () = {
     assert!(size_of::<Options>() == 24);
-    assert!(size_of::<Ops>() == 43 * size_of::<Handle>());
+    assert!(size_of::<Ops>() == 44 * size_of::<Handle>());
 };
 
 type Owner = shared::Owner<Fsr4>;
@@ -88,7 +88,6 @@ unsafe extern "C" fn rsf_core_fsr4gvk_create(
     ops: &'static Ops,
     setup: *const Setup,
     options: *const Options,
-    swapchain: *const Swapchain,
     output: *mut *mut Owner,
     chain: *mut u64,
 ) -> i32 {
@@ -107,7 +106,7 @@ unsafe extern "C" fn rsf_core_fsr4gvk_create(
         return ABI_MISMATCH;
     }
     let graphics = &setup.graphics;
-    let Some(&swapchain) = (unsafe { swapchain.as_ref() }) else {
+    let Some(swapchain) = shared::describe(&ops.graphics, setup) else {
         return INVALID;
     };
     let options = Start {

@@ -293,6 +293,77 @@ fn present_marshaling_checks_shape_before_reading_borrowed_arrays() {
         (trace.reads.get(), trace.calls.get(), result),
         (2, 2, INCOMPLETE)
     );
+
+    // A missing VkPresentInfoKHR is refused before any read, even with a well-formed shape.
+    input.native = ptr::null();
+    input.has_result = 1;
+    result = 0;
+    assert_eq!(submit(&input, &mut result), INIT_FAILED);
+    assert_eq!(
+        (trace.reads.get(), trace.calls.get(), result),
+        (2, 2, INCOMPLETE)
+    );
+}
+
+fn chain_facts() -> Swapchain {
+    Swapchain {
+        width: 640,
+        height: 360,
+        format: 37,
+        usage: 0x10,
+        color_space: 0,
+        layers: 1,
+        sharing_mode: 0,
+        min_images: 3,
+        flags: 0,
+        present_mode: 2,
+        extension_count: 0,
+        extension_type: 0,
+        old_chain: 0,
+    }
+}
+
+#[test]
+fn swapchain_admits_no_extension_or_only_the_nv_latency_create_info() {
+    const LATENCY_NV: u32 = 1_000_505_007;
+    assert!(chain_facts().supported());
+    let latency = Swapchain {
+        extension_count: 1,
+        extension_type: LATENCY_NV,
+        ..chain_facts()
+    };
+    assert!(latency.supported());
+    for (count, kind) in [(1, 1_000_001_000), (2, LATENCY_NV), (2, 5)] {
+        let chained = Swapchain {
+            extension_count: count,
+            extension_type: kind,
+            ..chain_facts()
+        };
+        assert!(!chained.supported(), "{count} {kind}");
+    }
+    let replacement = Swapchain {
+        old_chain: 0x55,
+        ..chain_facts()
+    };
+    assert!(!replacement.supported());
+    let bgra = Swapchain {
+        format: 44,
+        ..chain_facts()
+    };
+    assert!(bgra.supported());
+}
+
+#[test]
+fn only_fifo_present_modes_request_vsync() {
+    // IMMEDIATE, MAILBOX, FIFO, FIFO_RELAXED, SHARED_DEMAND_REFRESH.
+    for (mode, vsync) in [(0, 0), (1, 0), (2, 1), (3, 1), (1_000_111_000, 0)] {
+        let facts = Swapchain {
+            present_mode: mode,
+            ..chain_facts()
+        };
+        assert_eq!(facts.vsync(), vsync, "{mode}");
+        assert!(facts.supported());
+    }
 }
 
 #[test]
