@@ -102,6 +102,9 @@ mod dxgi_format;
 #[cfg(windows)]
 mod graphics_d3d11;
 #[cfg(windows)]
+#[path = "../../../tests/graphics_fixture.rs"]
+mod graphics_fixture;
+#[cfg(windows)]
 mod mfg_state;
 #[cfg(windows)]
 mod motion_decode;

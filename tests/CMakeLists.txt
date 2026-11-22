@@ -440,12 +440,14 @@ target_include_directories(rsf_sr_session_test PRIVATE ../runtime/orchestrator/i
 target_link_libraries(rsf_sr_session_test PRIVATE rsf_orchestrator_rust ReScaleFrame::Contract ReScaleFrame::RuntimeCommon rsf_build_options)
 add_test(NAME sr_session COMMAND rsf_sr_session_test)
 
-add_executable(rsf_motion_resolve_test motion_resolve.cpp)
+add_executable(rsf_motion_resolve_test graphics_fixture_main.c)
+target_compile_definitions(rsf_motion_resolve_test PRIVATE RSF_GRAPHICS_FIXTURE=rsf_motion_resolve_fixture)
 target_link_libraries(rsf_motion_resolve_test PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME motion_resolve COMMAND rsf_motion_resolve_test)
 set_tests_properties(motion_resolve PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 
-add_executable(rsf_colour_transport_test colour_transport.cpp)
+add_executable(rsf_colour_transport_test graphics_fixture_main.c)
+target_compile_definitions(rsf_colour_transport_test PRIVATE RSF_GRAPHICS_FIXTURE=rsf_colour_transport_fixture)
 target_link_libraries(rsf_colour_transport_test PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME colour_transport COMMAND rsf_colour_transport_test)
 set_tests_properties(colour_transport PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
