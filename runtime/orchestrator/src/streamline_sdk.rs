@@ -120,7 +120,7 @@ pub(crate) unsafe fn load_interposer(
             unsafe { PCWSTR(path).to_string() }.unwrap_or_else(|_| "(invalid UTF-16)".to_owned())
         }
     };
-    if unsafe { crate::streamline_policy::rsf_streamline_absolute_path(path) } == 0 {
+    if !unsafe { rsf_game_sys::windows_path::absolute_wide_path(path, 32767) } {
         log.say(&format!("interposer path is not absolute: {}", path_text()));
         return null_mut();
     }

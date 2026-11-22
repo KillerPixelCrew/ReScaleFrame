@@ -58,10 +58,6 @@ const REQUIRED_MARKERS: u32 = (1 << (PRESENT_END + 1)) - 1;
 // sl::MAX_FRAMES_IN_FLIGHT of the pinned SDK, asserted natively.
 const TOKEN_SLOTS: usize = 6;
 
-const BACKSLASH: u16 = b'\\' as u16;
-const SLASH: u16 = b'/' as u16;
-const COLON: u16 = b':' as u16;
-
 // Feature functions the native table resolved.
 const GET_STATE: u32 = 1;
 const SET_OPTIONS: u32 = 2;
@@ -396,9 +392,7 @@ unsafe fn create_host(
         return Err(INVALID);
     }
     let Some(directory) = (unsafe { wide_path(setup.runtime_directory_utf8) }).filter(|path| {
-        path.len() <= 1024
-            && (path.starts_with(&[BACKSLASH, BACKSLASH])
-                || matches!(path.get(1..3), Some([COLON, SLASH | BACKSLASH])))
+        path.len() <= 1024 && rsf_game_sys::windows_path::absolute_path(path.iter().copied())
     }) else {
         return Err(INVALID);
     };
