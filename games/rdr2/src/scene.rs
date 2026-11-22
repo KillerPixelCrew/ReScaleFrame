@@ -60,6 +60,7 @@ static ORIGINAL_MODE: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 
 thread_local! {
     static OUTPUT_SCOPE: Cell<bool> = const { Cell::new(false) };
+    static PRESENT_RECEIPT: Cell<Option<PresentReceipt>> = const { Cell::new(None) };
 }
 
 #[derive(Clone, Copy)]
@@ -240,6 +241,8 @@ fn forget_resources(pass: &mut rsf_game_render_pass) {
     pass.swapchain = ptr::null_mut();
     pass.scene_surface = ptr::null_mut();
     pass.sampled_texture = ptr::null_mut();
+    pass.native_frame_context = ptr::null_mut();
+    pass.temporal_mask = ptr::null_mut();
 }
 
 /// Entered from the native leaf with the call's return address.
@@ -377,6 +380,9 @@ fn completed_scene(image: usize) {
     }
     {
         let mut state = lock(&STATE);
+        if state.swapchain != chain as usize {
+            return;
+        }
         let saved = slot(&mut state.scenes, target.frame);
         if saved.pass.native_frame != target.frame
             || saved.commands != target.commands
@@ -397,6 +403,59 @@ fn completed_scene(image: usize) {
     host.render_pass(target.commands as *mut c_void, &pass, 0);
 }
 
+/// Thread-local receipt from the same native Present call path as marker4. A stored identity
+/// carries no COM reference across callbacks; marker4 reacquires the exact indexed buffer.
+#[derive(Clone, Copy)]
+pub(crate) struct PresentReceipt {
+    chain: usize,
+    index: u32,
+    surface: usize,
+}
+
+pub(crate) fn before_present(
+    platform: &Platform,
+    chain: *mut c_void,
+    flags: u32,
+) -> Option<PresentReceipt> {
+    PRESENT_RECEIPT.set(None);
+    if flags & 1 != 0 || !ACTIVE.load(Ordering::SeqCst) {
+        return None; // DXGI_PRESENT_TEST does not present a buffer.
+    }
+    let index = unsafe { (platform.back_buffer_index)(chain) };
+    let buffer = Retained {
+        platform,
+        object: unsafe { (platform.swapchain_buffer)(chain, index) },
+    };
+    (!buffer.object.is_null()).then_some(PresentReceipt {
+        chain: chain as usize,
+        index,
+        surface: buffer.object as usize,
+    })
+}
+
+pub(crate) fn after_present(receipt: Option<PresentReceipt>, result: i32) {
+    PRESENT_RECEIPT.set(receipt.filter(|_| result == 0));
+}
+
+fn window_pass(
+    scene: &mut Scene,
+    frame: u64,
+    active: usize,
+    receipt: PresentReceipt,
+) -> Option<rsf_game_render_pass> {
+    if receipt.chain != active
+        || scene.pass.native_frame != frame
+        || scene.surface == 0
+        || scene.surface != receipt.surface
+    {
+        return None;
+    }
+    let mut pass = scene.pass;
+    pass.role = RSF_GAME_RENDER_WINDOW;
+    scene.surface = 0;
+    Some(pass)
+}
+
 unsafe extern "C" fn marker(kind: u32, frame: u64) -> bool {
     let _scope = Scope::enter(&READERS);
     let platform = platform::get();
@@ -405,8 +464,6 @@ unsafe extern "C" fn marker(kind: u32, frame: u64) -> bool {
     if kind == INPUT_SAMPLE {
         let _ = INPUT_SOURCE.compare_exchange(frame, 0, Ordering::SeqCst, Ordering::SeqCst);
     }
-    let host = HOST.get();
-    let mut window = None;
     if ACTIVE.load(Ordering::SeqCst) && frame != 0 && kind <= LAST_MARKER {
         let mut state = lock(&STATE);
         let markers = slot(&mut state.markers, frame);
@@ -414,27 +471,29 @@ unsafe extern "C" fn marker(kind: u32, frame: u64) -> bool {
             *markers = Markers { frame, mask: 0 };
         }
         markers.mask |= 1 << kind;
-        let render_pass = host.is_some_and(|host| host.0.render_pass.is_some());
-        if kind == PRESENT_END && render_pass && state.swapchain != 0 {
-            let swapchain = state.swapchain;
-            let scene = slot(&mut state.scenes, frame);
-            if scene.pass.native_frame == frame && scene.surface != 0 {
-                let mut pass = scene.pass;
-                pass.role = RSF_GAME_RENDER_WINDOW;
-                window = Some((swapchain as *mut c_void, pass));
-            }
-        }
     }
-    if let (Some((chain, mut pass)), Some(platform), Some(host)) = (window, platform, host) {
-        let index = unsafe { (platform.back_buffer_index)(chain) };
-        let presented = Retained {
-            platform,
-            object: unsafe { (platform.swapchain_buffer)(chain, index) },
+    if kind == PRESENT_END
+        && let Some(receipt) = PRESENT_RECEIPT.take()
+        && ACTIVE.load(Ordering::SeqCst)
+        && let (Some(platform), Some(host)) = (platform, HOST.get())
+        && host.0.render_pass.is_some()
+    {
+        let pass = {
+            let mut state = lock(&STATE);
+            let active = state.swapchain;
+            window_pass(slot(&mut state.scenes, frame), frame, active, receipt)
         };
-        if !presented.object.is_null() {
-            pass.swapchain = chain;
-            pass.scene_surface = presented.object;
-            host.render_pass(ptr::null_mut(), &pass, 1);
+        if let Some(mut pass) = pass {
+            let chain = receipt.chain as *mut c_void;
+            let presented = Retained {
+                platform,
+                object: unsafe { (platform.swapchain_buffer)(chain, receipt.index) },
+            };
+            if presented.object as usize == receipt.surface {
+                pass.swapchain = chain;
+                pass.scene_surface = presented.object;
+                host.render_pass(ptr::null_mut(), &pass, 1);
+            }
         }
     }
     if handled {
@@ -619,7 +678,11 @@ fn record_upscale(state: &mut State, commands: usize, pass: &rsf_game_render_pas
 
 /// The swapchain whose Present observer the renderer attached; retained by the renderer.
 pub(crate) fn set_swapchain(swapchain: usize) {
-    lock(&STATE).swapchain = swapchain;
+    let mut state = lock(&STATE);
+    if state.swapchain != swapchain {
+        state.scenes.fill(Scene::EMPTY);
+        state.swapchain = swapchain;
+    }
 }
 
 /// The native frame's source identity once its required markers were all observed.

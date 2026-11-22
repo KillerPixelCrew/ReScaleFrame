@@ -66,3 +66,23 @@ fn ring_slots_wrap_by_frame() {
     *slot(&mut items, 65) = 9;
     assert_eq!(items[1], 9);
 }
+
+#[test]
+fn window_pass_uses_the_buffer_that_present_actually_received() {
+    let mut scene = Scene::EMPTY;
+    scene.pass = pass(70, 70);
+    scene.surface = 0x1000;
+    let mut receipt = PresentReceipt {
+        chain: 0x3333,
+        index: 1,
+        surface: 0x2000,
+    };
+    assert!(window_pass(&mut scene, 70, receipt.chain, receipt).is_none());
+    receipt.index = 0;
+    receipt.surface = 0x1000;
+    let chain = receipt.chain;
+    let window = window_pass(&mut scene, 70, chain, receipt).unwrap();
+    assert_eq!(window.source_frame_id, 70);
+    assert_eq!(window.role, RSF_GAME_RENDER_WINDOW);
+    assert!(window_pass(&mut scene, 70, chain, receipt).is_none());
+}

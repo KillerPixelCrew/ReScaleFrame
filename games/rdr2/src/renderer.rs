@@ -625,10 +625,13 @@ unsafe extern "system" fn present(owner: *mut c_void, interval: u32, flags: u32)
     if let Some((user, present)) = report {
         unsafe { present(user, owner, interval, flags, 1) };
     }
+    let receipt =
+        platform::get().and_then(|platform| scene::before_present(platform, owner, flags));
     let result = match unsafe { trampoline::<PresentFn>(&ORIGINAL_PRESENT) } {
         Some(native) => unsafe { native(owner, interval, flags) },
         None => NO_TRAMPOLINE,
     };
+    scene::after_present(receipt, result);
     if let Some((user, present)) = report {
         unsafe { present(user, owner, interval, flags, 0) };
     }
