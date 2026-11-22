@@ -36,7 +36,7 @@
     "game_test_scope": "Desktop mission: loading, native invocation and readable graph/view/history facts only.",
     "device_tested": false,
     "automatic_loading_implemented": true,
-    "carrier": "xinput1_3.dll, ordinal 2/3 imports, opt-in ObserveNative startup",
+    "carrier": "xinput1_3.dll, ordinal 2/3 imports",
     "prepare_result": "RSF_OK on matching loaded executable and entry; RSF_ERROR_NATIVE_REFUSED otherwise",
     "research": "../../docs/research/project-wingman-renderer.md"
   },
