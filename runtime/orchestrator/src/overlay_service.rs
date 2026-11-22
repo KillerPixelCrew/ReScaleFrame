@@ -21,7 +21,9 @@ use crate::{
         rsf_settings_store_write_layout, set_sharpening, sharpening_of,
     },
 };
-use rsf_game_sys::{RSF_FRAME_SOURCE_RENDERED, rsf_game_log_fn};
+use rsf_game_sys::{
+    RSF_FRAME_SOURCE_RENDERED, d3d11_sr_admission_abi::RSF_SR_AUTO, rsf_game_log_fn,
+};
 use std::{
     ffi::{CStr, CString, c_char, c_void},
     ops::RangeInclusive,
@@ -51,7 +53,8 @@ const KNOWN_SR: u32 = (1 << RSF_SR_DLSS)
     | (1 << RSF_SR_FSR3)
     | (1 << RSF_SR_FSR4)
     | (1 << RSF_SR_XESS)
-    | (1 << RSF_SR_SPATIAL);
+    | (1 << RSF_SR_SPATIAL)
+    | (1 << RSF_SR_AUTO);
 const KNOWN_LATENCY: u32 = (1 << RSF_REFLEX_OFF) | (1 << RSF_REFLEX_ON) | (1 << RSF_REFLEX_BOOST);
 const OPTION_LIMIT: usize = RSF_OVERLAY_SERVICE_OPTION_LIMIT as usize;
 const APPLY_LOG_LIMIT: u32 = 200;

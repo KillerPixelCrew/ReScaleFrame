@@ -3,7 +3,7 @@
 // Rust owns the lifecycle, source identity and view admission, the H1 preparation and S-B seam ordering, the
 // published jitter and main-view camera, the frame dump, burst bookkeeping and the burst readback staging transaction
 // (staging.rs), the configuration (the [Anomaly] keys,
-// the INI path, the vendor directories and their availability, the live panel options), GPU query retirement and the
+// the INI path, the vendor directories, the live panel options), GPU query retirement and the
 // status text.
 // sr_stage.cpp keeps guarded engine reads, trampolines, the SwapController and its D3D11 host, typed INI and file
 // calls, and the TemporalDriver facade over the existing Rust temporal driver
@@ -32,6 +32,9 @@ use crate::sr_swap_abi::{
     RSF_ANOMALY_SWAP_SKIP_OFF, RSF_ANOMALY_SWAP_SKIP_SCOPE, RSF_ANOMALY_SWAP_SKIP_TWINS,
     rsf_anomaly_swap_fields as TargetFields, rsf_anomaly_swap_upscale as UpscaleInputs,
 };
+#[cfg(any(windows, test))]
+use crate::sr_temporal::Admit;
+use rsf_game_sys::d3d11_sr_admission_abi::RSF_SR_AUTO as BACKEND_AUTO;
 use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::io::Write;
@@ -50,11 +53,9 @@ const VIEW_RAW: u32 = 0;
 const VIEW_HDR: u32 = 3;
 const VIEW_DEPTH: u32 = 4;
 const VIEW_DENSE_MOTION: u32 = 7;
+#[cfg(any(windows, test))]
 const BACKEND_DLSS: u32 = 1;
-const BACKEND_FSR3: u32 = 3;
-const BACKEND_FSR4: u32 = 4;
-const BACKEND_XESS: u32 = 5;
-const BACKENDS: u32 = RSF_ANOMALY_SR_ADAPTER_BACKENDS;
+const BACKENDS: u32 = RSF_ANOMALY_SR_ADAPTER_BACKENDS | (1 << BACKEND_AUTO);
 const QUALITIES: u32 = RSF_ANOMALY_SR_ADAPTER_QUALITIES;
 const MAX_PATH: usize = 260;
 // The vendor runtime directories, in Paths::vendors order.
@@ -206,7 +207,7 @@ fn default_config() -> Config {
         cut_degrees: 45.0,
         settings: rsf_anomaly_sr_settings {
             enabled: true,
-            backend: BACKEND_DLSS,
+            backend: BACKEND_AUTO,
             quality: 1,
             preset: 0,
         },
@@ -461,14 +462,14 @@ impl Ini<'_> {
         out.require_signature = self.int(c"SRRequireSignature", 0) != 0;
         // The shared frontend keys the overlay persists in the same section; a value the adapter cannot apply keeps
         // the default (sanitize, sr_settings.h).
-        let backend = self.int(c"SRBackend", BACKEND_DLSS as i32) as u32;
+        let backend = self.int(c"SRBackend", BACKEND_AUTO as i32) as u32;
         let quality = self.int(c"SRQuality", 1) as u32;
         out.settings = rsf_anomaly_sr_settings {
             enabled: self.int(c"SR", 1) != 0,
             backend: if backend < 32 && (BACKENDS >> backend) & 1 != 0 {
                 backend
             } else {
-                BACKEND_DLSS
+                BACKEND_AUTO
             },
             quality: if quality < 32 && (QUALITIES >> quality) & 1 != 0 {
                 quality
@@ -716,10 +717,10 @@ fn units(path: &Path) -> Vec<u16> {
     }
 }
 
-fn wide(path: &Path) -> Vec<u16> {
-    let mut out = units(path);
-    out.push(0);
-    out
+fn vendor_strings(paths: &[PathBuf; 3]) -> [CString; 3] {
+    paths
+        .each_ref()
+        .map(|path| CString::new(path.to_string_lossy().as_bytes()).unwrap_or_default())
 }
 
 // The path UTF-16 units name. Windows keeps unpaired surrogates.
@@ -951,10 +952,7 @@ impl Stage {
         log: rsf_anomaly_sr_log,
         user: *mut c_void,
     ) -> bool {
-        let [streamline, fidelityfx, xess] = paths
-            .vendors
-            .clone()
-            .map(|path| CString::new(path.to_string_lossy().as_bytes()).unwrap_or_default());
+        let [streamline, fidelityfx, xess] = vendor_strings(&paths.vendors);
         let accepted = self.with(|state| {
             if self.active.load(Ordering::Acquire) {
                 return false;
@@ -2709,43 +2707,38 @@ impl Stage {
     }
 
     // ---- the shared overlay -------------------------------------------------------------------------------------
-    pub(crate) fn choices(&self) -> OverlayChoices {
-        let p = self.platform();
-        let (config, vendors) = self.with(|state| (state.config, state.paths.vendors.clone()));
+    #[cfg(windows)]
+    pub(crate) fn choices(&self, runtime: *mut c_void) -> OverlayChoices {
+        // The overlay borrows the same carrier-owned module as the renderer.
+        self.choices_with(unsafe { crate::sr_temporal::admission_export(runtime) })
+    }
+
+    #[cfg(any(windows, test))]
+    fn choices_with(&self, service: Option<Admit>) -> OverlayChoices {
+        let (config, vendors) =
+            self.with(|state| (state.config, vendor_strings(&state.paths.vendors)));
         let mut out = OverlayChoices::default();
-        if config.stage != 5 {
+        let Some(service) = service.filter(|_| config.stage == 5) else {
             return out;
-        }
-        let has = |directory: usize, name: &str| {
-            let path = wide(&vendors[directory].join(name));
-            leaf!(p, file_exists(path.as_ptr()))
         };
-        // Offered when the runtime the backend loads is where the pipeline will look. Whether this GPU runs it is
-        // only known once the pipeline starts; the report says so when it does not.
-        if has(STREAMLINE, "sl.interposer.dll") && has(STREAMLINE, "nvngx_dlss.dll") {
-            out.backends |= 1 << BACKEND_DLSS;
-        }
-        if has(FIDELITYFX, "amd_fidelityfx_upscaler_dx12.dll")
-            && has(FIDELITYFX, "amd_fidelityfx_loader_dx12.dll")
-        {
-            out.backends |= (1 << BACKEND_FSR3) | (1 << BACKEND_FSR4);
-        }
-        if has(XESS, "libxess.dll") {
-            out.backends |= 1 << BACKEND_XESS;
-        }
-        if out.backends == 0 {
+        let Some(result) = crate::sr_temporal::admit(
+            service,
+            vendors.each_ref().map(CString::as_c_str),
+            null_mut(),
+            config.settings.backend,
+        ) else {
+            return out;
+        };
+        if result.offered_backends == 0 {
             return out;
         }
+        out.backends = result.offered_backends;
         let offered = |backend: u32| out.backends.checked_shr(backend).unwrap_or(0) & 1 != 0;
         out.qualities = QUALITIES;
         out.preset = offered(BACKEND_DLSS);
         out.defaults = config.settings;
-        if !offered(out.defaults.backend)
-            && let Some(backend) = [BACKEND_DLSS, BACKEND_XESS, BACKEND_FSR3, BACKEND_FSR4]
-                .into_iter()
-                .find(|&b| offered(b))
-        {
-            out.defaults.backend = backend;
+        if !offered(out.defaults.backend) {
+            out.defaults.backend = result.selected_backend;
         }
         out
     }

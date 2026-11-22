@@ -288,7 +288,6 @@ typedef struct rsf_anomaly_sr_stage_platform {
     bool (*persist_int)(const char* key, int32_t value);
     bool (*persist_text)(const char* key, const char* value);
     void (*apply_colour_transport)(bool);
-    bool (*file_exists)(const uint16_t* path);
     // An accepted configuration: the log the D3D11 host reports through and, for Stages 4 and 5, the TemporalDriver
     // options (null otherwise).
     void (*configured)(rsf_anomaly_sr_log log, void* user, const rsf_anomaly_sr_driver_config* driver);

@@ -2,7 +2,7 @@
 // Native leaves of the SR stage driver. sr_stage.rs owns the lifecycle, view admission, the H1 and seam ordering,
 // jitter and camera publication, capture and burst bookkeeping, the configuration (INI path, vendor directories, live
 // panel options) and status (sr_stage_platform.h). This file keeps the guarded engine reads, the stage hooks and
-// trampolines, the SwapController with its D3D11 host, the vendor file probe and the TemporalDriver facade.
+// trampolines, the SwapController with its D3D11 host, and the TemporalDriver facade.
 #include "sr_stage.h"
 #include "sr_stage_platform.h"
 #include "engine_slots.h"
@@ -139,7 +139,7 @@ EnginePositionConstants position_constants;
 static_assert(D3D11_DEVICE_CONTEXT_IMMEDIATE == 0 && D3D11_USAGE_STAGING == 3 && D3D11_CPU_ACCESS_READ == 0x20000);
 static_assert(sizeof(rsf_anomaly_sr_frame_reads) == 168 && offsetof(rsf_anomaly_sr_frame_reads, render_view) == 152);
 static_assert(static_cast<uint32_t>(temporal::ViewId::Scope) == 1 && dx10_msaa_bit == (1u << 14));
-static_assert(sizeof(rsf_anomaly_sr_stage_platform) == 608 &&
+static_assert(sizeof(rsf_anomaly_sr_stage_platform) == 600 &&
     offsetof(rsf_anomaly_sr_stage_platform, immediate_context) == 280 &&
     offsetof(rsf_anomaly_sr_stage_platform, pixel_bytes) == 328 && offsetof(rsf_anomaly_sr_stage_platform, draw_pass) == 336);
 static_assert(first_person_depth_limit == 0.02f && RSF_SR_ROUND_TRIP == 0 && RSF_SR_UPSCALE == 1 &&
@@ -536,10 +536,6 @@ const rsf_anomaly_sr_stage_platform platform{
     .persist_int = rsf_anomaly_sr_persist_int,
     .persist_text = rsf_anomaly_sr_persist_text,
     .apply_colour_transport = rsf_anomaly_runtime_set_colour_transport,
-    .file_exists = [](const uint16_t* path) {
-        const DWORD attributes = GetFileAttributesW(reinterpret_cast<const wchar_t*>(path));
-        return attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY);
-    },
     .configured = [](rsf_anomaly_sr_log log, void* user, const rsf_anomaly_sr_driver_config* config) {
         if (config) driver.configure(*config, log, user);
     },

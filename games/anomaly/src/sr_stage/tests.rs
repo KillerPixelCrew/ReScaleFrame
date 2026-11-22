@@ -40,7 +40,7 @@ struct Fake {
     refuse_persist: bool,
     passes: Vec<rsf_anomaly_sr_pass>,
     logs: Vec<String>,
-    files: Vec<String>,
+    offered: u32,
 }
 
 thread_local! {
@@ -410,17 +410,19 @@ unsafe extern "C" fn persist_text(key: *const c_char, value: *const c_char) -> b
 extern "C" fn apply_colour_transport(transport: bool) {
     record(format!("transport {transport}"));
 }
-unsafe fn text_at(path: *const u16) -> String {
-    let mut length = 0;
-    while unsafe { path.add(length).read() } != 0 {
-        length += 1;
-    }
-    String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(path, length) })
-}
-unsafe extern "C" fn file_exists(path: *const u16) -> bool {
-    // Path::join separates with '/' off Windows.
-    let path = unsafe { text_at(path) }.replace('/', "\\");
-    fake(|f| f.files.contains(&path))
+unsafe extern "C" fn admit_backend(
+    input: *mut rsf_game_sys::d3d11_sr_admission_abi::rsf_d3d11_sr_admission,
+) -> i32 {
+    let input = unsafe { &mut *input };
+    assert_eq!(input.backend_choices, RSF_ANOMALY_SR_ADAPTER_BACKENDS);
+    assert!(input.device.is_null());
+    input.offered_backends = fake(|f| f.offered);
+    input.selected_backend = if input.offered_backends == 0 {
+        0
+    } else {
+        BACKEND_AUTO
+    };
+    0
 }
 unsafe extern "C" fn configured(
     _: rsf_anomaly_sr_log,
@@ -510,7 +512,6 @@ fn platform() -> Box<Platform> {
         persist_int: Some(persist_int),
         persist_text: Some(persist_text),
         apply_colour_transport: Some(apply_colour_transport),
-        file_exists: Some(file_exists),
         configured: Some(configured),
         ..Default::default()
     })
@@ -676,7 +677,7 @@ fn options_parse_like_the_native_reader() {
     // A backend the adapter cannot run keeps the default; a valid quality is kept.
     assert_eq!(
         (options.settings.backend, options.settings.quality),
-        (BACKEND_DLSS, 4)
+        (BACKEND_AUTO, 4)
     );
     fake(|f| f.ini = vec![("SRScale", "0.67x"), ("SRMipBias", "-5")]);
     assert_eq!(driver.read_scale(ini), (DEFAULT_SCALE, true));
@@ -1106,21 +1107,24 @@ fn refused_stage_three_capture_edits_keep_the_current_burst() {
 }
 
 #[test]
-fn overlay_offers_only_present_runtimes_and_a_reachable_default() {
+fn overlay_uses_the_runtime_mask_and_auto_default() {
+    const XESS: u32 = 5;
     let table = platform();
     let driver = installed(5, &table);
-    fake(|f| {
-        f.files = vec![
-            r"V:\xess\libxess.dll".into(),
-            r"V:\sl\nvngx_dlss.dll".into(),
-        ]
-    });
-    let choices = driver.choices();
-    assert_eq!(choices.backends, 1 << BACKEND_XESS);
+    driver.with(|state| state.config.settings.backend = BACKEND_DLSS);
+    fake(|f| f.offered = (1 << BACKEND_AUTO) | (1 << XESS));
+    let choices = driver.choices_with(Some(admit_backend));
+    assert_eq!(choices.backends, (1 << BACKEND_AUTO) | (1 << XESS));
     assert!(!choices.preset);
-    assert_eq!(choices.defaults.backend, BACKEND_XESS);
+    assert_eq!(choices.defaults.backend, BACKEND_AUTO);
+    driver.with(|state| state.config.settings.backend = XESS);
+    assert_eq!(
+        driver.choices_with(Some(admit_backend)).defaults.backend,
+        XESS
+    );
+    assert_eq!(driver.choices_with(None).backends, 0);
     let stage4 = installed(4, &table);
-    assert_eq!(stage4.choices().backends, 0);
+    assert_eq!(stage4.choices_with(Some(admit_backend)).backends, 0);
     assert!(!stage4.overlay_report(std::ptr::dangling_mut::<c_void>()));
 }
 
@@ -1301,7 +1305,7 @@ fn the_cold_entry_keeps_only_a_selected_configuration() {
     // Below Stage 4 the TemporalDriver gets no options.
     assert_eq!(calls(), ["configured"]);
     assert!(driver.selected() && driver.capture());
-    assert_eq!(driver.choices().backends, 0);
+    assert_eq!(driver.choices_with(Some(admit_backend)).backends, 0);
 }
 
 #[cfg(windows)]
@@ -1313,7 +1317,6 @@ fn vendor_directories_default_beside_the_ini_and_follow_overrides() {
     calls();
     fake(|f| {
         f.ini = vec![("SRStage", "5"), ("SRBackend", "5"), ("SRExposure", "auto")];
-        f.files.clear();
     });
     // The carrier can pass a long-path INI name; the vendor directories must not keep the prefix.
     let ini = units(Path::new(r"\\?\D:\Anomaly 1.5.3\bin\rsf.ini"));
@@ -1325,15 +1328,10 @@ fn vendor_directories_default_beside_the_ini_and_follow_overrides() {
             r"configured stage=5 sl={beside}\streamline ffx={beside}\fidelityfx xess={beside}\xess exposure=true transport=false zero=true signature=false backend=5"
         )]
     );
-    assert_eq!(driver.choices().backends, 0); // no runtime present
-    fake(|f| f.files = vec![format!(r"{beside}\xess\libxess.dll")]);
-    assert_eq!(driver.choices().backends, 1 << BACKEND_XESS);
     // Explicit directories win as plain directories; a UNC long path keeps its server.
     fake(|f| {
         f.ini.push(("SRStreamlineDir", "C:/sl/"));
         f.ini.push(("SRXeSSDir", r"\\?\UNC\server\share\rsf\xess\"));
-        f.files.push(r"C:\sl\sl.interposer.dll".into());
-        f.files.push(r"C:\sl\nvngx_dlss.dll".into());
     });
     assert!(driver.configure_ini(&ini, true, Some(log), null_mut()));
     assert_eq!(
@@ -1342,10 +1340,6 @@ fn vendor_directories_default_beside_the_ini_and_follow_overrides() {
             r"configured stage=5 sl=C:\sl ffx={beside}\fidelityfx xess=\\server\share\rsf\xess exposure=true transport=false zero=true signature=false backend=5"
         )]
     );
-    let choices = driver.choices();
-    assert_eq!(choices.backends, 1 << BACKEND_DLSS);
-    // SRBackend=5 is not offered here, so the panel's default moves to an offered backend.
-    assert_eq!(choices.defaults.backend, BACKEND_DLSS);
 }
 
 #[test]
@@ -1463,56 +1457,44 @@ fn live_options_keep_their_panel_labels_and_ranges() {
     }
 }
 
-// The real Win32 INI and file calls the native leaves make, against a package on disk.
+// The production Win32 INI callbacks, against a package path on disk.
 #[cfg(windows)]
 mod win32 {
     use super::*;
     use crate::ini::{rsf_anomaly_sr_ini_int as ini_int, rsf_anomaly_sr_ini_text as ini_text};
-    use windows_sys::Win32::Storage::FileSystem::{
-        FILE_ATTRIBUTE_DIRECTORY, GetFileAttributesW, INVALID_FILE_ATTRIBUTES,
-    };
-
-    unsafe extern "C" fn file_exists(path: *const u16) -> bool {
-        let attributes = unsafe { GetFileAttributesW(path) };
-        attributes != INVALID_FILE_ATTRIBUTES && attributes & FILE_ATTRIBUTE_DIRECTORY == 0
-    }
-
     #[test]
     fn the_package_beside_a_real_ini_and_an_explicit_directory() {
         let root = std::env::temp_dir().join(format!("rsf-sr-config-{}", std::process::id()));
         let package = root.join("ReScaleFrame");
-        std::fs::create_dir_all(package.join("xess")).unwrap();
-        std::fs::write(package.join("xess").join("libxess.dll"), b"").unwrap();
-        // A directory named like a runtime is not the runtime.
-        std::fs::create_dir_all(package.join("streamline").join("sl.interposer.dll")).unwrap();
-        std::fs::write(package.join("streamline").join("nvngx_dlss.dll"), b"").unwrap();
+        std::fs::create_dir_all(&package).unwrap();
         let ini = root.join("rsf.ini");
         std::fs::write(&ini, "[Anomaly]\r\nSRStage=5\r\n").unwrap();
         let table = Platform {
             ini_int: Some(ini_int),
             ini_text: Some(ini_text),
-            file_exists: Some(file_exists),
             ..Default::default()
         };
         let driver = Stage::new();
         driver.register(&table);
         let path = units(&ini);
         assert!(driver.configure_ini(&path, true, None, null_mut()));
-        assert_eq!(driver.choices().backends, 1 << BACKEND_XESS);
+        driver.with(|state| {
+            assert_eq!(
+                state.paths.vendors,
+                ["streamline", "fidelityfx", "xess"].map(|dir| package.join(dir))
+            )
+        });
         let streamline = root.join("sl");
-        std::fs::create_dir_all(&streamline).unwrap();
-        std::fs::write(streamline.join("sl.interposer.dll"), b"").unwrap();
-        std::fs::write(streamline.join("nvngx_dlss.dll"), b"").unwrap();
         let text = format!(
             "[Anomaly]\r\nSRStage=5\r\nSRStreamlineDir={}/\r\n",
             streamline.display()
         );
         std::fs::write(&ini, text).unwrap();
         assert!(driver.configure_ini(&path, true, None, null_mut()));
-        assert_eq!(
-            driver.choices().backends,
-            (1 << BACKEND_DLSS) | (1 << BACKEND_XESS)
-        );
+        driver.with(|state| {
+            assert_eq!(state.paths.vendors[STREAMLINE], streamline);
+            assert_eq!(state.paths.vendors[XESS], package.join("xess"));
+        });
         let _ = std::fs::remove_dir_all(&root);
     }
 }

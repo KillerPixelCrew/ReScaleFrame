@@ -314,7 +314,7 @@ impl Leaves {
 
 #[derive(Clone, Copy)]
 struct StageControls {
-    sr_choices: fn() -> OverlayChoices,
+    sr_choices: fn(*mut c_void) -> OverlayChoices,
     sr_report: fn(*mut rsf_overlay_sr_report) -> bool,
     sr_request: fn(&rsf_anomaly_sr_settings),
     fg_options: fn() -> Option<Frontend>,
@@ -322,7 +322,7 @@ struct StageControls {
 }
 
 const STAGES: StageControls = StageControls {
-    sr_choices: || STAGE.choices(),
+    sr_choices: |runtime| STAGE.choices(runtime),
     sr_report: |report| STAGE.overlay_report(report.cast()),
     sr_request: |settings| STAGE.request(settings),
     fg_options: fg_stage::overlay_options,
@@ -367,7 +367,7 @@ fn make_setup(
     adapter_options: &[AdapterOption],
     table: &mut Vec<rsf_overlay_service_option>,
 ) -> rsf_overlay_service_setup {
-    let sr = (controls.sr_choices)();
+    let sr = (controls.sr_choices)(options.runtime);
     let fg = (controls.fg_options)();
     let mut setup = rsf_overlay_service_setup {
         struct_size: size_of::<rsf_overlay_service_setup>() as u32,

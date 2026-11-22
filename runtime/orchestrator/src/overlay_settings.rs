@@ -8,6 +8,7 @@ use crate::render_abi::{
     rsf_sharpening_options as Sharpening,
 };
 use crate::{settings_store::set_sharpening, sharpening_policy};
+use rsf_game_sys::d3d11_sr_admission_abi::RSF_SR_AUTO;
 use std::ffi::CStr;
 
 pub(super) fn sr_name(backend: u32) -> &'static CStr {
@@ -18,6 +19,7 @@ pub(super) fn sr_name(backend: u32) -> &'static CStr {
         RSF_SR_FSR4 => c"FSR4",
         RSF_SR_XESS => c"XeSS",
         RSF_SR_SPATIAL => c"Spatial",
+        RSF_SR_AUTO => c"Auto",
         _ => c"Off",
     }
 }

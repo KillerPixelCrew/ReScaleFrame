@@ -4,7 +4,7 @@
 
 namespace rsf::anomaly::sr {
 static_assert(backend_dlss == RSF_SR_DLSS && backend_fsr3 == RSF_SR_FSR3 &&
-    backend_fsr4 == RSF_SR_FSR4 && backend_xess == RSF_SR_XESS);
+    backend_fsr4 == RSF_SR_FSR4 && backend_xess == RSF_SR_XESS && backend_auto == RSF_SR_AUTO);
 static_assert(motion_validity_channel == 2, "the core motion target stores validity in Z");
 static_assert(RSF_DLSS_ENGINE_CUSTOM == 0);
 namespace {

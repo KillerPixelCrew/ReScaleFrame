@@ -6,7 +6,7 @@
 #include <cstdint>
 
 namespace rsf::anomaly::sr {
-inline constexpr uint32_t backend_dlss = 1, backend_fsr3 = 3, backend_fsr4 = 4, backend_xess = 5;   // RSF_SR_*
+inline constexpr uint32_t backend_dlss = 1, backend_fsr3 = 3, backend_fsr4 = 4, backend_xess = 5, backend_auto = 7;   // RSF_SR_*
 using SrSettings = rsf_anomaly_sr_settings;
-inline constexpr SrSettings default_sr_settings{true, backend_dlss, 1, 0};
+inline constexpr SrSettings default_sr_settings{true, backend_auto, 1, 0};
 }

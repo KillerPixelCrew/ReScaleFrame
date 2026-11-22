@@ -67,6 +67,7 @@ const LATENCY_ANTILAG2: u32 = 3;
 const LATENCY_ANTILAG_VULKAN: u32 = 4;
 
 /// Super-resolution backends by ID. The ID is the bit the host's choices mask uses.
+const SR_AUTO: u32 = 7;
 const SR_BACKENDS: [(u32, &str); 7] = [
     (1, "DLSS"),
     (2, "FSR2"),
@@ -74,7 +75,7 @@ const SR_BACKENDS: [(u32, &str); 7] = [
     (4, "FSR4"),
     (5, "XeSS"),
     (6, "FSR1"),
-    (7, "Auto"),
+    (SR_AUTO, "Auto"),
 ];
 
 /// Frame generation providers by ID. Zero is Off, and the ID is the bit in the choices mask.
@@ -263,7 +264,7 @@ pub struct Controls {
     /// The upscaling switch row.
     pub enabled: Option<Rect>,
     /// One control per SR backend, in `SR_BACKENDS` order.
-    pub backend: [Option<Rect>; 7],
+    pub backend: [Option<Rect>; SR_BACKENDS.len()],
     /// Off, DLSS-G, FSR3, FSR4 and XeSS generation choices.
     pub fg_backend: [Option<Rect>; 6],
     /// The frame generation switch row.
@@ -831,7 +832,14 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
 
     heading(ui, "Backend");
     let shown_backend = selection.requested_backend.unwrap_or(stats.backend);
-    let items: Vec<Segment> = SR_BACKENDS
+    // Auto is a policy choice only for hosts which advertise it.
+    let count = if stats.backend_choices & (1 << SR_AUTO) != 0 {
+        SR_BACKENDS.len()
+    } else {
+        SR_BACKENDS.len() - 1
+    };
+    let choices = &SR_BACKENDS[..count];
+    let items: Vec<Segment> = choices
         .iter()
         .filter(|(id, _)| *id != 7 || stats.backend_choices & (1 << id) != 0)
         .map(|(id, name)| Segment {
@@ -849,16 +857,16 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
             },
         })
         .collect();
-    let (chosen, rects) = segments(ui, "sr-backend", &items, items.len());
+    let (chosen, rects) = segments(ui, "sr-backend", &items, count);
     store(&mut controls.backend, &rects);
     if let Some(index) = chosen {
-        let backend = SR_BACKENDS[index].0;
+        let backend = choices[index].0;
         if backend != stats.backend || selection.requested_backend.is_some() {
             intent.backend_changed = true;
             intent.backend = backend;
         }
     }
-    let missing: Vec<&str> = SR_BACKENDS
+    let missing: Vec<&str> = choices
         .iter()
         .filter(|(id, _)| *id != 7 && stats.backend_choices & (1 << id) == 0)
         .map(|(_, name)| *name)
@@ -952,7 +960,7 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
             .map(|(id, label)| Segment {
                 label: (*label).to_owned(),
                 sub: None,
-                enabled: dlss,
+                enabled: dlss || stats.backend == SR_AUTO,
                 mark: if *id == stats.dlss_preset {
                     Mark::On
                 } else {
@@ -973,6 +981,8 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
             ui,
             if dlss {
                 "Requested model; NVIDIA driver overrides may apply. E/F are legacy presets."
+            } else if stats.backend == SR_AUTO {
+                "Applies if Auto selects DLSS."
             } else {
                 "Applies when DLSS is the backend."
             },

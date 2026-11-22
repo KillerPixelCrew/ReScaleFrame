@@ -597,7 +597,7 @@ void render_scene(Device& d, Scene& s, float jx, float jy) {
 
 int provider_case(const std::string& root) {
     Device d;
-    if (!d.create(0x10de, false)) { std::printf("SKIP provider: no NVIDIA D3D11 adapter (the shared pipeline starts only where DLSS is supported)\n"); return 77; }
+    if (!d.create(0x10de, false)) { std::printf("SKIP provider: no NVIDIA D3D11 adapter for the DLSS-first fixture\n"); return 77; }
     // The carrier loads the Runtime before the adapter starts; the adapter finds it by name.
     HMODULE runtime = GetModuleHandleW(L"ReScaleFrame.Runtime.dll");
     if (!runtime) runtime = LoadLibraryW(L"ReScaleFrame.Runtime.dll");

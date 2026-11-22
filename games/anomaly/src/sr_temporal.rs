@@ -8,6 +8,9 @@ use crate::sr_stage_abi::{
     RSF_ANOMALY_SR_PROJECT_ID, RSF_ANOMALY_SR_VIEW_SPACE_TO_METERS, rsf_anomaly_sr_driver_config,
     rsf_anomaly_sr_settings,
 };
+use rsf_game_sys::d3d11_sr_admission_abi::{
+    RSF_D3D11_SR_ADMISSION_ABI_VERSION, RSF_SR_AUTO as AUTO, rsf_d3d11_sr_admission as Admission,
+};
 use rsf_game_sys::sr_abi::*;
 use rsf_game_sys::{rsf_camera_frame, rsf_game_log_fn};
 use std::cell::UnsafeCell;
@@ -34,6 +37,7 @@ fn backend_name(backend: u32) -> &'static str {
         FSR3 => "FSR3",
         FSR4 => "FSR4",
         XESS => "XeSS",
+        AUTO => "Auto",
         _ => "none",
     }
 }
@@ -145,7 +149,7 @@ type Settings = rsf_anomaly_sr_settings;
 
 const DEFAULT_SETTINGS: Settings = Settings {
     enabled: true,
-    backend: DLSS,
+    backend: AUTO,
     quality: 1,
     preset: 0,
 };
@@ -369,6 +373,34 @@ struct StartRequest {
     settings: Settings,
 }
 
+pub(crate) type Admit = unsafe extern "C" fn(*mut Admission) -> i32;
+
+#[cfg(windows)]
+pub(crate) unsafe fn admission_export(runtime: Raw) -> Option<Admit> {
+    unsafe { crate::runtime_module::export(runtime, c"rsf_d3d11_sr_admit".to_bytes_with_nul()) }
+}
+
+pub(crate) fn admit(
+    service: Admit,
+    directories: [&CStr; 3],
+    device: Raw,
+    requested_backend: u32,
+) -> Option<Admission> {
+    let mut request = Admission {
+        struct_size: size_of::<Admission>() as u32,
+        abi_version: RSF_D3D11_SR_ADMISSION_ABI_VERSION,
+        backend_choices: RSF_ANOMALY_SR_ADAPTER_BACKENDS,
+        requested_backend,
+        streamline_directory_utf8: directories[0].as_ptr(),
+        fidelityfx_directory_utf8: directories[1].as_ptr(),
+        xess_directory_utf8: directories[2].as_ptr(),
+        device,
+        ..Default::default()
+    };
+    // All strings and the engine's device are borrowed for this synchronous call.
+    (unsafe { service(&mut request) } == OK).then_some(request)
+}
+
 type StartBackend = unsafe extern "C" fn(Raw, *const rsf_dlss_pipeline_setup, u32) -> i32;
 
 unsafe fn start_selected(
@@ -392,6 +424,8 @@ struct RenderState {
     colour_transport: bool,
     api: Option<rsf_d3d11_sr_api>,
     start_backend: Option<StartBackend>,
+    admit: Option<Admit>,
+    backend_request: Option<(u32, Option<u32>)>,
     device: Raw, // identity only: the running Runtime owns its device reference
     failed_start: Option<StartRequest>,
     applied: Settings,
@@ -440,6 +474,8 @@ impl Driver {
         }
         render.api = result.ok();
         render.start_backend = None;
+        render.admit = None;
+        render.backend_request = None;
         render.session = session;
         render.failed_start = None;
         let mut published = self.published();
@@ -451,13 +487,46 @@ impl Driver {
         result.is_ok()
     }
 
+    fn resolve_backend(render: &RenderState, device: Raw, requested: u32) -> Option<u32> {
+        let Some(service) = render.admit else {
+            // The native fixture binds a legacy table without a Runtime module.
+            return Some(if requested == AUTO { DLSS } else { requested });
+        };
+        let setup = render.setup.as_ref()?;
+        let result = admit(
+            service,
+            [&setup.streamline, &setup.fidelityfx, &setup.xess],
+            device,
+            requested,
+        )?;
+        let backend = result.selected_backend;
+        let offered = RSF_ANOMALY_SR_ADAPTER_BACKENDS & result.offered_backends;
+        (offered.checked_shr(backend).unwrap_or(0) & 1 != 0).then_some(backend)
+    }
+
     fn start(&self, render: &mut RenderState, api: rsf_d3d11_sr_api, request: StartRequest) {
         if render.failed_start == Some(request) {
             return;
         }
         let Some(config) = &render.setup else { return };
         let [ow, oh] = request.output;
-        let wanted = request.settings;
+        let mut wanted = request.settings;
+        let selected = Self::resolve_backend(render, request.device, wanted.backend);
+        render.backend_request = Some((wanted.backend, selected));
+        let Some(selected) = selected else {
+            render.failed_start = Some(request);
+            {
+                let mut published = self.published();
+                published.counters.start_failures += 1;
+                published.status.start_result = NOT_SUPPORTED;
+                published
+                    .status
+                    .reason("SR off: the Runtime admitted no provider on this device");
+            }
+            render.say("Anomaly SR: the Runtime admitted no provider on the engine device; the seam stays bilinear.");
+            return;
+        };
+        wanted.backend = selected;
         let setup = config.for_output(ow, oh, wanted.quality);
         let streamline = config.streamline.to_string_lossy();
         let fidelityfx = config.fidelityfx.to_string_lossy();
@@ -544,10 +613,7 @@ impl Driver {
         if wanted.backend != render.applied.backend {
             let bit = 1 << wanted.backend;
             let name = backend_name(wanted.backend);
-            if wanted.backend != DLSS
-                && render.prepared_backends & bit == 0
-                && render.pending_backend.is_none()
-            {
+            if render.prepared_backends & bit == 0 && render.pending_backend.is_none() {
                 // Let the current Present show the pending backend before blocking at the next boundary.
                 render.pending_backend = Some(wanted.backend);
                 self.published().counters.select_announced += 1;
@@ -611,6 +677,7 @@ impl Driver {
         }
         render.device = null_mut();
         render.pending_backend = None;
+        render.backend_request = None;
         {
             let mut published = self.published();
             published.counters.stops += 1;
@@ -650,6 +717,22 @@ impl Driver {
                 self.start(render, api, request);
             }
         } else {
+            let mut wanted = wanted;
+            let previous = render.backend_request;
+            if !previous.is_some_and(|(request, _)| request == wanted.backend) {
+                let selected = Self::resolve_backend(render, device, wanted.backend);
+                render.backend_request = Some((wanted.backend, selected));
+                if selected.is_none() {
+                    let mut published = self.published();
+                    published.counters.select_failures += 1;
+                    published.status.select_result = NOT_SUPPORTED;
+                }
+            }
+            // A refused setting leaves the running provider available for subsequent frames.
+            wanted.backend = render
+                .backend_request
+                .and_then(|(_, selected)| selected)
+                .unwrap_or(render.applied.backend);
             if render.refused_request != Some(wanted) {
                 render.refused_request = None;
             }
@@ -762,7 +845,7 @@ unsafe extern "C" fn rsf_anomaly_sr_configure(
 
     let mut published = driver.published();
     published.stage = options.stage;
-    published.backends = RSF_ANOMALY_SR_ADAPTER_BACKENDS;
+    published.backends = RSF_ANOMALY_SR_ADAPTER_BACKENDS | (1 << AUTO);
     published.qualities = RSF_ANOMALY_SR_ADAPTER_QUALITIES;
     published.status.requested =
         options
@@ -799,28 +882,23 @@ unsafe extern "C" fn rsf_anomaly_sr_bind_runtime(driver: &Driver, runtime: Raw) 
             c"rsf_dlss_pipeline_start_backend".to_bytes_with_nul(),
         )
     };
-    let bound =
-        unsafe { rsf_anomaly_sr_bind(driver, query, set_transport, rsf_anomaly_sr_session_id()) };
-    if bound {
-        // The same setup lease used to bind the table owns this field.
-        unsafe { (*driver.render.get()).start_backend = start_backend };
-    }
-    bound
-}
-
-type SetTransport = Option<unsafe extern "C" fn(u32)>;
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_bind(
-    driver: &Driver,
-    query: rsf_get_d3d11_sr_api_fn,
-    set_transport: SetTransport,
-    session: u64,
-) -> bool {
-    // The borrow covers only the serialized render state. Logging may read the published state.
+    let admission = unsafe { admission_export(runtime) };
+    let result = query_api(query)
+        .map_err(|(_, reason)| reason)
+        .and_then(|table| {
+            if start_backend.is_some() && admission.is_some() {
+                Ok(table)
+            } else {
+                Err(c"Runtime SR admission or selected-provider startup export missing")
+            }
+        });
+    // Configuration and binding run on the serialized render side.
     let render = unsafe { &mut *driver.render.get() };
-    let result = query_api(query).map_err(|(_, reason)| reason);
-    let bound = driver.bind(render, result, session);
+    let bound = driver.bind(render, result, rsf_anomaly_sr_session_id());
+    if bound {
+        render.start_backend = start_backend;
+        render.admit = admission;
+    }
     if bound && let Some(set_transport) = set_transport {
         unsafe { set_transport(u32::from(render.colour_transport)) };
         render.say(if render.colour_transport {
@@ -1335,6 +1413,55 @@ mod settings_tests {
     }
 
     #[test]
+    fn auto_starts_the_concrete_provider_admitted_for_the_engine_device() {
+        unsafe extern "C" fn admission(input: *mut Admission) -> i32 {
+            let input = unsafe { &mut *input };
+            assert_eq!(input.backend_choices, RSF_ANOMALY_SR_ADAPTER_BACKENDS);
+            assert_eq!(input.requested_backend, AUTO);
+            assert_eq!(input.device.addr(), 0x1200);
+            assert_eq!(
+                unsafe { CStr::from_ptr(input.xess_directory_utf8) },
+                c"vendors/xess"
+            );
+            input.offered_backends = (1 << XESS) | (1 << AUTO);
+            input.selected_backend = XESS;
+            OK
+        }
+        unsafe extern "C" fn start(_: Raw, _: *const rsf_dlss_pipeline_setup, backend: u32) -> i32 {
+            if backend == XESS { OK } else { NOT_SUPPORTED }
+        }
+
+        let driver = Driver {
+            render: UnsafeCell::new(RenderState::default()),
+            published: Mutex::new(Published::default()),
+        };
+        let options = rsf_anomaly_sr_driver_config {
+            stage: 5,
+            initial: DEFAULT_SETTINGS,
+            xess: c"vendors/xess".as_ptr(),
+            ..Default::default()
+        };
+        unsafe { rsf_anomaly_sr_configure(&driver, &options, None, null_mut()) };
+        let render = unsafe { &mut *driver.render.get() };
+        render.admit = Some(admission);
+        render.start_backend = Some(start);
+        let device = std::ptr::without_provenance_mut(0x1200);
+        driver.start(
+            render,
+            rsf_d3d11_sr_api::default(),
+            StartRequest {
+                device,
+                output: [1920, 1080],
+                settings: DEFAULT_SETTINGS,
+            },
+        );
+        assert_eq!(render.device, device);
+        assert_eq!(render.applied.backend, XESS);
+        assert_eq!(render.backend_request, Some((AUTO, Some(XESS))));
+        assert_eq!(driver.published().status.requested.backend, AUTO);
+    }
+
+    #[test]
     fn setting_admission_keeps_the_current_unsupported_fields() {
         let current = Settings {
             enabled: true,
@@ -1345,14 +1472,14 @@ mod settings_tests {
         let admit = |wanted: Settings| {
             wanted.admitted(
                 current,
-                RSF_ANOMALY_SR_ADAPTER_BACKENDS,
+                RSF_ANOMALY_SR_ADAPTER_BACKENDS | (1 << AUTO),
                 RSF_ANOMALY_SR_ADAPTER_QUALITIES,
             )
         };
-        for backend in [DLSS, FSR3, FSR4, XESS] {
+        for backend in [DLSS, FSR3, FSR4, XESS, AUTO] {
             assert_eq!(admit(Settings { backend, ..current }).backend, backend);
         }
-        for backend in [0, 2, 6, 7, 40] {
+        for backend in [0, 2, 6, 40] {
             assert_eq!(admit(Settings { backend, ..current }).backend, XESS);
         }
         for quality in 0..5 {

@@ -208,7 +208,7 @@ void options_from_ini() {
     CHECK(options.stage == 5 && selected());
     CHECK(!options.exposure_auto && options.first_person_zero && options.cut_distance == 4.0f && options.cut_degrees == 45.0f &&
         !options.require_signature && options.capture_count == 16 && !options.colour_transport);
-    CHECK(options.settings.enabled && options.settings.backend == sr::backend_dlss && options.settings.quality == 1 && options.settings.preset == 0);
+    CHECK(options.settings.enabled && options.settings.backend == sr::backend_auto && options.settings.quality == 1 && options.settings.preset == 0);
     WritePrivateProfileStringW(L"Anomaly", L"SRExposure", L"auto", path);
     WritePrivateProfileStringW(L"Anomaly", L"SRFirstPersonZero", L"0", path);
     WritePrivateProfileStringW(L"Anomaly", L"SRCutDistance", L"0.001", path);
@@ -226,7 +226,7 @@ void options_from_ini() {
     CHECK(!options.settings.enabled && options.settings.backend == sr::backend_xess && options.settings.quality == 1 &&
         options.settings.preset == 6);
     WritePrivateProfileStringW(L"Anomaly", L"SRBackend", L"2", path);    // FSR2: not offered by this adapter
-    CHECK(sr::read_options(path).settings.backend == sr::backend_dlss);
+    CHECK(sr::read_options(path).settings.backend == sr::backend_auto);
     WritePrivateProfileStringW(L"Anomaly", L"SRStage", L"4", path);
     CHECK(sr::read_options(path).stage == 4 && selected());
     WritePrivateProfileStringW(L"Anomaly", L"SRStage", L"3", path);

@@ -2,6 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
+pub const RSF_SR_AUTO: u32 = 7;
 pub const RSF_D3D11_SR_ADMISSION_ABI_VERSION: u32 = 1;
 #[repr(C)]
 #[derive(Copy, Clone)]

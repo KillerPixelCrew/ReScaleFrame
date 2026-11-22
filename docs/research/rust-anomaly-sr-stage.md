@@ -298,7 +298,7 @@ they specify another repository directory.
 | `tests/anomaly_sr_hooks.cpp`, `anomaly_sr_runtime_api.cpp`, `anomaly_sr_roundtrip.cpp` | Retained native hook, real Runtime API negotiation and D3D11 device fixtures, respectively. |
 | `tests/anomaly_sr_reconstruction.cpp`, `anomaly_sr_pass.cpp` | Retained native ABI fixtures. Reconstruction coverage includes the new rollback result. The pass fixture keeps the CPU motion oracle and the real Rust pass through the C ABI. |
 
-### Remaining finding
+### Backend admission gap at the first checkpoint
 
 **Let the Runtime choose and default the Anomaly SR backend.** The shared
 D3D11 API's start leaf still calls the DLSS-specific pipeline. In
@@ -319,3 +319,32 @@ constant-correction result were checked on both sides. The C++ and Rust
 temporal counter layouts are declared as 432 bytes after adding the failure
 counter. Git whitespace checks passed. Binding generation, compile, link,
 lint and fixture/device execution were not run for this checkpoint.
+
+
+## Runtime-owned Anomaly SR backend admission
+
+The follow-up starts from `b9e0a480`. The integrated Runtime selected-provider
+entry can start an alternate provider directly. This closes **Let the Runtime
+choose and default the Anomaly SR backend.**
+
+- `games/anomaly/src/sr_stage.rs` and `overlay.rs` pass the three configured
+  package directories, the caller's concrete backend mask and the saved request
+  to `rsf_d3d11_sr_admit` with a null device. The returned mask controls the
+  panel and the service supplies Auto when an explicit request is unavailable.
+  The adapter's vendor filenames, native file probe and fallback order were
+  removed.
+- `games/anomaly/src/sr_temporal.rs` binds admission and selected-provider
+  startup from the carrier-owned Runtime. At the drained boundary the
+  borrowed engine device is supplied to admission. The resolved concrete ID
+  reaches startup or a live switch, and the persisted request retains Auto.
+  Live requests reuse the admitted result for the same request and device.
+  Startup or switch refusal preserves spatial recovery or the active provider
+  as applicable. A Runtime without these exports cannot start Stage 5.
+- The SDK admission binding shares `RSF_SR_AUTO` from `sr_session.h`.
+  `runtime/orchestrator/src/overlay_service.rs` admits the bit, and
+  `ui/overlay/src/panel.rs` offers Auto where the host advertises it.
+  DLSS presets remain editable with Auto when the package offers DLSS.
+- The Rust fixtures trace the pre-device mask and default, the actual device and
+  directory supplied at startup, and the difference between requested Auto and
+  the concrete provider sent to startup. Build, lint, fixture and device
+  execution remain pending.
