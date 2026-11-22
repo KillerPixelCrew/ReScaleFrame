@@ -137,8 +137,8 @@ for this follow-up.
   Rust batch order and rollback in `games/ac7/src/hook_batch.rs`. Capture
   accepts the same MinHook status codes. The six root and three engine
   detour bindings and their typed originals remain in
-  `games/ac7/src/motion_capture_trampolines.cpp`, which also retains C++
-  scope restoration on foreign unwind and the SEH-guarded typed
+  `games/ac7/src/motion_capture_trampolines.c`, a C11 leaf that also keeps
+  `__try`/`__finally` scope restoration on foreign unwind and the SEH-guarded typed
   graph-output getter. The guarded root and engine site tables, the
   queued RHI current-command proof and native renderer detours are
   identical to the source base.

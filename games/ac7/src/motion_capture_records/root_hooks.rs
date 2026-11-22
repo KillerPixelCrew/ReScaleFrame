@@ -40,7 +40,7 @@ struct RootSite {
     native_owned: bool,
 }
 
-// Order matches the typed detour and original arrays in motion_capture_trampolines.cpp. Short stable
+// Order matches the typed detour and original arrays in motion_capture_trampolines.c. Short stable
 // entry sequences omit the security-cookie displacement. MinHook relocates full instructions.
 const ROOT_SITES: [RootSite; 6] = [
     RootSite {

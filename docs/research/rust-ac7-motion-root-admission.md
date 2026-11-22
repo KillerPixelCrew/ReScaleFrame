@@ -33,3 +33,26 @@ MinHook and rollback helper, shutdown order and log text. The queued command/exe
 and session hook-status field still use root availability. Pinned Rust formatting, locked
 offline Windows Cargo metadata and Git whitespace checks passed. Compile and link, Clippy,
 tests, fresh F9 capture, device and game verification, deployment and push remain user-owned.
+
+
+## C11 trampolines at 41f95638
+
+`motion_capture_trampolines.cpp` is now `motion_capture_trampolines.c`. The six root and three
+engine detours, their typed originals and the install order are unchanged. The C++ scope
+destructors became `__try`/`__finally` handlers that restore the engine record pointer and the
+root scope when an original call unwinds. A C++ exception from the engine therefore takes the
+same path. The handlers also run when an outer SEH handler unwinds from a fault, where the
+/EHsc destructors would not have run, which leaves the Rust scope state consistent. The
+graph-output getter keeps its catch-all `__except`. The root detours pass their arguments
+through one `RootCall` record and a switch on the existing kind values, in place of the C++
+lambdas. The widget-queue `float` argument is forwarded unchanged.
+
+Without MSVC the calls run unguarded, as the C++ build compiled them. Checked: strict MSVC
+`/W4 /WX /utf-8 /std:c11` compiles at /Od and /O2, and a MinGW `-std=c11 -Wall -Wextra -Werror`
+syntax check. A scratch executable
+with stub Rust exports installed both batches. It confirmed batch-size refusal, that a C++
+throw from `should` and from widget-queue originals restores the previous engine pointer and
+root scope and propagates to the caller, normal record, fail and inactive paths, `float`
+forwarding, and that the getter returns false for a faulting or null getter. The tip CMake
+configure and the `rsf-ac7` crate do not build, so the capture CTest and Cargo tests were not
+run.

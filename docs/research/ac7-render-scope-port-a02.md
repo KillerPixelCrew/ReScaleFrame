@@ -271,3 +271,37 @@ producer gap recorded in the [G02 provenance audit](ac7-frame-tap-constant-prove
 keeps the camera finding open. Checks covered focused C11/C++ syntax, generated
 ABI layouts, pinned Rust formatting, locked offline metadata and source review.
 Linking, fixture execution and game validation remain pending.
+
+## C11 exception leaves at 41f95638
+
+`render_scope.cpp` is gone. Its three consumer-call leaves (notify, lease resolve, lease
+release) now live beside the two create calls in `render_scope_entry.c`. Each is an SEH
+`__try` whose filter accepts only the MSVC C++ exception code 0xE06D7363, the exceptions
+the former `catch (...)` stopped under /EHsc. Access violations and other faults still
+propagate, as before. The leaf table, its symbol name and the Rust owner are unchanged. Like
+`plugin_callbacks.c`, the leaf refuses to compile without MSVC SEH, since C has no other way to
+stop a foreign C++ exception.
+
+`tests/ac7_render_scope_exceptions.cpp` is gone too. Its three throwing callbacks moved into
+`tests/ac7_render_scope.c` and raise 0xE06D7363 with the MSVC magic parameter, because C
+cannot throw an object. Rust still drives the same 105/0 notification, resolution and release
+checks. The pinned bindgen run uses `--no-doc-comments`, so the comment-only change to
+`ac7_scope_owner.h` leaves `scope_abi.rs` byte-identical.
+
+Checked: strict MSVC `/W4 /WX /utf-8 /std:c11` compiles of `render_scope_entry.c`,
+`motion_capture_trampolines.c` and `tests/ac7_render_scope.c`. A scratch executable linked the
+production objects at /Od and /O2 and confirmed that real C++ throws with destructors return
+false from all three leaves, that pass-through calls are unchanged and that an access violation
+still propagates. The tip does not configure (`tests/CMakeLists.txt:448` is missing a `)`),
+and `rsf-ac7` does not compile at the tip (`rsf_game_render_pass` lost `Copy`), so the CMake
+targets, CTest `ac7_render_scope` and Cargo tests were not run.
+
+The view finding remains open. `fills_target` already reports the rectangle fact, and the
+native SR path already admits the camera by view, family and frame. The compatibility consumers,
+`on_pass` (`loader/proxy/src/dlss_bridge.c:910`) and `on_view_constants` (`:2381`), receive
+only the frame tap's retained pixel-stage buffer (`runtime/orchestrator/src/frame_tap.rs`).
+That buffer carries no native session, frame, view or family. The only producer of those keys
+(`native_renderer.cpp` `hooked_postprocess`/`make_plan`) runs only after native activation
+succeeds, and activation suppresses `on_pass`. Closing the finding needs a G02 frame-tap
+receipt with an upload generation and an AC7 producer that runs in compatibility mode. Its
+bound stage and slot also need game-run evidence.

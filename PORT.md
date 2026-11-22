@@ -141,7 +141,7 @@ A sweep of `git ls-files '*.cpp'` on 2026-11-22 found first-party C++ that the p
 - [x] [integrations/steam/src/exception_guards.c](integrations/steam/src/exception_guards.c) (I01; C++ removed, C11 SEH leaf that contains only 0xE06D7363)
 - [x] [runtime/graphics/src/observer_exception_guards.c](runtime/graphics/src/observer_exception_guards.c) (G01; C++ removed, C11 SEH leaf; the three private observer headers now hold C declarations only)
 - [ ] [runtime/orchestrator/src/d3d11_host_foreign.cpp](runtime/orchestrator/src/d3d11_host_foreign.cpp) (D01)
-- [ ] [tests/ac7_render_scope_exceptions.cpp](tests/ac7_render_scope_exceptions.cpp) (A02)
+- [x] [tests/ac7_render_scope_exceptions.cpp](tests/ac7_render_scope_exceptions.cpp) (A02; the throwing callbacks are C in `tests/ac7_render_scope.c` and raise the MSVC C++ exception code)
 - [ ] [tests/anomaly_motion_contract_main.cpp](tests/anomaly_motion_contract_main.cpp) (N04)
 - [ ] [tests/anomaly_sr_swap_profile.cpp](tests/anomaly_sr_swap_profile.cpp) (N07)
 
@@ -1739,7 +1739,7 @@ Port scoped render commands, view data, UI, scene colour, contact shadows and Tr
 - [x] [games/ac7/src/cloud_depth_platform.h](games/ac7/src/cloud_depth_platform.h)
 - [x] [games/ac7/src/contact_shadow.cpp](games/ac7/src/contact_shadow.cpp)
 - [x] [games/ac7/src/contact_shadow.h](games/ac7/src/contact_shadow.h)
-- [ ] [games/ac7/src/render_scope.cpp](games/ac7/src/render_scope.cpp)
+- [x] [games/ac7/src/render_scope.cpp](games/ac7/src/render_scope.cpp) (deleted; the exception leaves are C11 SEH in `render_scope_entry.c`)
 - [x] [games/ac7/src/scene_color.cpp](games/ac7/src/scene_color.cpp)
 - [x] [games/ac7/src/truesky_depth.cpp](games/ac7/src/truesky_depth.cpp)
 - [x] [games/ac7/src/truesky_depth.h](games/ac7/src/truesky_depth.h)
@@ -1764,7 +1764,7 @@ Port scoped render commands, view data, UI, scene colour, contact shadows and Tr
 
 - [x] **Altitude | Medium | Track cloud motion relay installation independently of the full-grid transition.** The per-sky-render apply callback returns immediately once cloud resolution is installed or refused. install_motion returns no outcome and may leave its slot empty after a transient allocation or write refusal. If depth installation reaches either terminal state, no later sky render retries the independent composite draw observer, so the renderer can keep running without cloud motion depth. Give motion its own installed, retryable or refused outcome, and use the full-grid state only to gate the depth and resolution work. [games/ac7/src/truesky.rs:353](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/truesky.rs#L353)
 
-- [ ] **Altitude | Medium | Report a full-target view separately from player-camera identity.** read_view labels a zero-origin view filling its own buffer as is_main_view, and ac7_view.h describes that as the camera the player sees. The compatibility bridge treats it as camera admission at dlss_bridge.c:914, yet lines 2359-2367 document a separate translucency upload passing the same test and previously causing every evaluation to fail. Expose the actual rectangle fact, and have the adapter establish primary-camera identity from the corresponding scene pass, view and family before selecting backend inputs. [games/ac7/src/view.rs:177](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/view.rs#L177)
+- [ ] **Altitude | Medium | Report a full-target view separately from player-camera identity.** read_view labels a zero-origin view filling its own buffer as is_main_view, and ac7_view.h describes that as the camera the player sees. The compatibility bridge treats it as camera admission at dlss_bridge.c:914, yet lines 2359-2367 document a separate translucency upload passing the same test and previously causing every evaluation to fail. Expose the actual rectangle fact, and have the adapter establish primary-camera identity from the corresponding scene pass, view and family before selecting backend inputs. [games/ac7/src/view.rs:177](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/view.rs#L177) Blocked: the rectangle fact is `fills_target` and the native SR path already admits by view, family and frame. The compatibility callers `on_pass` (loader/proxy/src/dlss_bridge.c:910) and `on_view_constants` (:2381) receive only the frame tap's retained PS buffer (runtime/orchestrator/src/frame_tap.rs), which carries no native session, frame, view or family. Their only producer (`hooked_postprocess`/`make_plan` in native_renderer.cpp) runs only after native activation, which suppresses `on_pass`. Closing this needs a G02 frame-tap receipt with an upload generation and an AC7 producer that runs in compatibility mode, with its stage and slot confirmed in a game run (docs/research/ac7-render-scope-port-a02.md).
 
 - [x] **Duplication | Low | Reuse the compile-time ASCII widening used by the Windows adapters.** TrueSky converts its NUL-terminated module name at games/ac7/src/truesky.rs:40 using the same byte-to-u16 loop that games/ac7/src/carrier.rs:27 uses for DLL, executable and window-class pointers. Godot repeats it at integrations/godot/native/window.rs:29 for a length-delimited class comparison at :108. Share one const helper for ASCII bytes which preserves exactly the input length, including a terminator only when supplied, and keep the names in their owning integrations. This gives all three callers the same ASCII and length contract. [games/ac7/src/truesky.rs:29](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/truesky.rs#L29)
 
@@ -1789,7 +1789,7 @@ Port the F9 capture boundary and reconcile the observation, record, session and 
 - [x] [games/ac7/src/motion_capture_observations.h](games/ac7/src/motion_capture_observations.h)
 - [x] [games/ac7/src/motion_capture_records.h](games/ac7/src/motion_capture_records.h)
 - [x] [games/ac7/src/motion_capture_session.h](games/ac7/src/motion_capture_session.h)
-- [ ] [games/ac7/src/motion_capture_trampolines.cpp](games/ac7/src/motion_capture_trampolines.cpp) (typed Unreal calls, SEH and native callbacks)
+- [x] [games/ac7/src/motion_capture_trampolines.cpp](games/ac7/src/motion_capture_trampolines.cpp) (typed Unreal calls, SEH and native callbacks; now the C11 leaf `motion_capture_trampolines.c` with `__try`/`__finally` scope restoration)
 
 **Fixtures (2)**
 

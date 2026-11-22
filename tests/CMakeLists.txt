@@ -770,8 +770,7 @@ add_test(NAME render_links COMMAND rsf_render_links_test)
 set_tests_properties(render_links PROPERTIES TIMEOUT 120)
 
 rsf_ac7_fixture_object(ac7_scope_fixture_object ac7_render_scope ac7_render_scope_fixture_abi.rs)
-add_executable(rsf_ac7_render_scope_test ac7_render_scope.c ac7_render_scope_exceptions.cpp
-    "${ac7_scope_fixture_object}")
+add_executable(rsf_ac7_render_scope_test ac7_render_scope.c "${ac7_scope_fixture_object}")
 target_link_libraries(rsf_ac7_render_scope_test PRIVATE ReScaleFrame::AC7RenderScope rsf_ac7_rust rsf_build_options)
 add_test(NAME ac7_render_scope COMMAND rsf_ac7_render_scope_test)
 set_tests_properties(ac7_render_scope PROPERTIES TIMEOUT 120)

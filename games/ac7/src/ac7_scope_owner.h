@@ -2,7 +2,7 @@
 #ifndef RSF_AC7_SCOPE_OWNER_H
 #define RSF_AC7_SCOPE_OWNER_H
 
-/* Internal C interface for the Rust scope owner, its C entry points and its C++ exception leaves.
+/* Internal C interface for the Rust scope owner, its C entry points and their exception leaves.
    tools/generate-rust-bindings.py generates src/scope_abi.rs from this header. */
 #include <stdbool.h>
 #include <stddef.h>
@@ -26,7 +26,7 @@ typedef struct rsf_ac7_scope_calls {
     bool (*release)(const rsf_ac7_scope_lease* lease);
 } rsf_ac7_scope_calls;
 
-/* The native callbacks catch C++ exceptions before returning false to Rust. */
+/* render_scope_entry.c: SEH leaves that stop C++ exception code 0xE06D7363 and return false. */
 extern const rsf_ac7_scope_calls rsf_ac7_scope_exception_calls;
 
 // rsf_ac7_render_scopes_create_passes with the exception leaves. A null pass callback is the

@@ -8055,7 +8055,7 @@ graphics diagnostics remain open. See [Unity Mono startup and configuration](res
 
 AC7 capture now records D3D11 resources and serializes observations in Rust. The Rust WARP
 fixture links the same capture ABI and retains the seven shader inputs and schedule. The
-Unreal trampoline and structured exception guards are isolated in `motion_capture_trampolines.cpp`.
+Unreal trampoline and structured exception guards are isolated in the C11 leaf `motion_capture_trampolines.c`.
 
 The D3D12 FidelityFX and XeSS ports move provider resource and swapchain operations and FSR4
 fingerprint admission to Rust. The linked C fixture retains the missing-runtime and

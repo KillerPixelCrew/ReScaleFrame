@@ -1,6 +1,47 @@
 /* SPDX-License-Identifier: MIT */
 #include "ac7_render_scope_fixture.h"
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
+#define RSF_CXX_EXCEPTION_CODE 0xE06D7363UL
+#define RSF_CXX_EXCEPTION_MAGIC 0x19930520UL
+
+/* C cannot throw a C++ object, so the deliberate foreign exceptions raise the MSVC C++ exception
+   code directly. The scope owner's leaves filter on that code, so this exercises the same
+   containment path as a thrown object. */
+static void raise_foreign_exception(void)
+{
+    ULONG_PTR parameters[4] = { RSF_CXX_EXCEPTION_MAGIC, 0, 0, 0 };
+    RaiseException(RSF_CXX_EXCEPTION_CODE, EXCEPTION_NONCONTINUABLE, 4, parameters);
+}
+
+void rsf_ac7_fixture_throwing_pass(void* user, void* list, const rsf_ac7_render_scope* scope,
+    uint32_t begin)
+{
+    (void)user; (void)list; (void)scope; (void)begin;
+    raise_foreign_exception();
+}
+
+void rsf_ac7_fixture_throwing_resolve(void* object, rsf_ac7_render_scope* scope)
+{
+    rsf_ac7_fixture_lease* lease = (rsf_ac7_fixture_lease*)object;
+    ++lease->resolves;
+    if (lease->throw_resolve) raise_foreign_exception();
+    scope->native_frame += 100;
+}
+
+void rsf_ac7_fixture_throwing_release(void* object)
+{
+    ++((rsf_ac7_fixture_lease*)object)->releases;
+    raise_foreign_exception();
+}
+
 /* Construct the caller's records with the public C definition of the scope ABI. */
 int rsf_ac7_fixture_enqueue(rsf_ac7_render_scopes* owner, void* list, rsf_ac7_fixture_lease* lease)
 {

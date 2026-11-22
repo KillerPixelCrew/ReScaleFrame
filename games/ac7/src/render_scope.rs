@@ -10,8 +10,8 @@
 //! render_scope.cpp. Research: docs/research/ac7-native-renderer-refactor-20261001.md,
 //! docs/research/ac7-dlss-fg-20261003.md and docs/research/rust-ac7-render-scopes.md.
 //!
-//! The two C create calls pass `rsf_ac7_scope_calls` from render_scope.cpp, which call consumer
-//! callbacks and lease functions with any C++ exception contained. Everything else is here,
+//! The two C create calls pass `rsf_ac7_scope_calls` from render_scope_entry.c, whose SEH leaves call
+//! consumer callbacks and lease functions with any C++ exception contained. Everything else is here,
 //! including `execute`, the function the engine's command iterator calls.
 use crate::platform_abi::{rsf_ac7_render_scope, rsf_ac7_render_scope_fn};
 use crate::scope_abi::{rsf_ac7_scope_calls, rsf_ac7_scope_lease};
@@ -245,7 +245,7 @@ unsafe extern "C" fn execute(command_list: *mut c_void, command: *mut Command) {
     state.outstanding = state.outstanding.wrapping_sub(1);
 }
 
-/// rsf_ac7_render_scopes_create_passes with the exception leaves of render_scope.cpp.
+/// rsf_ac7_render_scopes_create_passes with the exception leaves of render_scope_entry.c.
 ///
 /// # Safety
 /// `out` is null or writable; `calls` is null or lives as long as the owner.
