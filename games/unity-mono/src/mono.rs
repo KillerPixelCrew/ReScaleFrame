@@ -4,12 +4,13 @@
 //! attachment is ours to detach; a caller's Unity/Mono thread and its current domain are never
 //! touched.
 use crate::plugin_abi::rsf_unity_native_api;
+use rsf_game_sys::win32::typed_export;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::ptr::{self, null_mut};
 use std::sync::{Mutex, PoisonError};
 use std::thread;
 use windows_sys::Win32::Foundation::HMODULE;
-use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::core::w;
 
 type Handle = *mut c_void;
@@ -56,18 +57,18 @@ impl Mono {
     unsafe fn resolve(module: HMODULE) -> Option<Self> {
         unsafe {
             Some(Self {
-                root: export(module, c"mono_get_root_domain")?,
-                domains: export(module, c"mono_domain_foreach")?,
-                domain_name: export(module, c"mono_domain_get_friendly_name")?,
-                attach: export(module, c"mono_thread_attach")?,
-                detach: export(module, c"mono_thread_detach")?,
-                set_domain: export(module, c"mono_domain_set")?,
-                open: export(module, c"mono_domain_assembly_open")?,
-                image: export(module, c"mono_assembly_get_image")?,
-                find_class: export(module, c"mono_class_from_name")?,
-                method: export(module, c"mono_class_get_method_from_name")?,
-                invoke: export(module, c"mono_runtime_invoke")?,
-                unbox: export(module, c"mono_object_unbox")?,
+                root: typed_export(module, c"mono_get_root_domain")?,
+                domains: typed_export(module, c"mono_domain_foreach")?,
+                domain_name: typed_export(module, c"mono_domain_get_friendly_name")?,
+                attach: typed_export(module, c"mono_thread_attach")?,
+                detach: typed_export(module, c"mono_thread_detach")?,
+                set_domain: typed_export(module, c"mono_domain_set")?,
+                open: typed_export(module, c"mono_domain_assembly_open")?,
+                image: typed_export(module, c"mono_assembly_get_image")?,
+                find_class: typed_export(module, c"mono_class_from_name")?,
+                method: typed_export(module, c"mono_class_get_method_from_name")?,
+                invoke: typed_export(module, c"mono_runtime_invoke")?,
+                unbox: typed_export(module, c"mono_object_unbox")?,
             })
         }
     }
@@ -82,13 +83,6 @@ impl Mono {
         let value = unsafe { (self.unbox)(result) };
         !value.is_null() && unsafe { value.cast::<i32>().read() } == 0
     }
-}
-
-/// F must be the named export's C signature.
-unsafe fn export<F: Copy>(module: HMODULE, name: &CStr) -> Option<F> {
-    const { assert!(size_of::<F>() == size_of::<usize>()) };
-    let function = unsafe { GetProcAddress(module, name.as_ptr().cast()) }?;
-    Some(unsafe { std::mem::transmute_copy(&function) })
 }
 
 /// The helper stays loaded after a successful start; this retains what Stop needs.
