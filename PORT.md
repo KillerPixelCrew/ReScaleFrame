@@ -461,7 +461,6 @@ Move the API census, static scan and diagnostic capture behind the loader's Rust
 - [x] [loader/diagnostics/src/module_dump_internal.h](loader/diagnostics/src/module_dump_internal.h)
 
 - [x] [loader/census/src/decode_d3d_platform.cpp](loader/census/src/decode_d3d_platform.cpp) (introduced D3D resource query leaf)
-- [x] [tests/loader/vendor_census_ngx_platform.cpp](tests/loader/vendor_census_ngx_platform.cpp) (introduced SDK fixture leaf)
 - [x] [loader/census/src/census_platform.cpp](loader/census/src/census_platform.cpp) (converted to the C11 leaf `census_platform.c`: native descriptor catalog, vendor tables and guarded NGX and Streamline calls; `census_internal.h` is now a C header)
 - [x] [loader/census/src/hook_platform.cpp](loader/census/src/hook_platform.cpp) (converted to the C11 leaf `hook_platform.c`: MinHook calls and the TEB getter)
 - [x] [loader/census/src/guarded_platform.cpp](loader/census/src/guarded_platform.cpp) (converted to the C11 leaf `guarded_platform.c`: SEH reads, code-pointer and vtable-slot checks; the `guard` lambda helper is gone, each guarded call owns its `__try`)
@@ -470,7 +469,7 @@ Move the API census, static scan and diagnostic capture behind the loader's Rust
 **Fixtures (10)**
 
 - [x] [tests/loader/vendor_census_native.cpp](tests/loader/vendor_census_native.cpp) (converted to `tests/loader/vendor_census_native.c`: C vtable fake resource and token objects, DXGI and D3D12 slots from SDK `*Vtbl` offsets, `CreateThread`, `PUT` payload writes; the remaining C++ is the next entry)
-- [ ] [tests/loader/vendor_census_ngx_platform.cpp](tests/loader/vendor_census_ngx_platform.cpp) (new, blocked: `NVSDK_NGX_Parameter` is a C++ class whose virtual slots follow MSVC overload ordering, so only a C++ compiler can select the Set overload slots; the called probe is `rsf_test_ngx_check_slots` and four typed setters declared in the C header `tests/loader/ngx_param_probe.h`, caller `vendor_census_native.c` run_ngx and check_vtable_slots)
+- [ ] [tests/loader/vendor_census_ngx_platform.cpp](tests/loader/vendor_census_ngx_platform.cpp) (introduced SDK fixture leaf, now the whole of the old fixture driver's C++; blocked: `NVSDK_NGX_Parameter` is a C++ class whose virtual slots follow MSVC overload ordering, so only a C++ compiler can select the Set overload slots; the called probe is `rsf_test_ngx_check_slots` and four typed setters declared in the C header `tests/loader/ngx_param_probe.h`, caller `vendor_census_native.c` run_ngx and check_vtable_slots)
 - [x] [tests/census_present_coexistence.cpp](tests/census_present_coexistence.cpp)
 - [ ] [tests/loader/module_dump_rtti_fixture.cpp](tests/loader/module_dump_rtti_fixture.cpp) (native RTTI specimen; blocked: the `module_dump_v2` test needs a compiler-emitted MSVC RTTI type descriptor, complete object locator and vftable, which only a C++ compiler produces, and the call is `rsf_test_module_dump_v2` with the vftable RVA of a derived class; the file is 25 lines)
 - [x] [tests/module_dump_v2.cpp](tests/module_dump_v2.cpp)
