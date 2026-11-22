@@ -29,6 +29,7 @@
 //! render thread, and it cleared the window frame identity while that thread copied it.
 use crate::bridge_abi::{RSF_UNITY_FRAMES_PACKETS, RSF_UNITY_FRAMES_SLOTS, rsf_unity_packet};
 use crate::bridge_interop::{rsf_unity_interop_drained, rsf_unity_interop_release};
+use crate::device_creation::{Claim, Creation};
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::c_void;
 use std::ptr;
@@ -310,9 +311,7 @@ enum Admission {
 }
 
 struct State {
-    /// Set before invoking the first creation leaf and cleared after publication or rollback.
-    creating: bool,
-    device: Option<SharedDevice>,
+    creation: Creation<SharedDevice>,
     /// A failed step stopped the bridge until release.
     faulted: bool,
     /// Retiring refuses new entries; Closed allows only retirement to access the resources.
@@ -344,8 +343,7 @@ fn lock() -> MutexGuard<'static, State> {
 impl State {
     const fn new() -> Self {
         Self {
-            creating: false,
-            device: None,
+            creation: Creation::new(),
             faulted: false,
             admission: Admission::Open,
             events: [FREE; EVENTS],
@@ -431,12 +429,9 @@ impl State {
         self.entries = self.entries.saturating_sub(1);
     }
 
-    fn claim_device(&mut self) -> bool {
-        if self.admission == Admission::Closed || self.creating || self.device.is_some() {
-            return false;
-        }
-        self.creating = true;
-        true
+    fn claim_device(&mut self) -> Claim<DeviceHandles> {
+        let admitted = self.can_borrow_device();
+        self.creation.claim(admitted, |device| device.handles)
     }
 
     fn can_borrow_device(&self) -> bool {
@@ -457,7 +452,7 @@ impl State {
 
     fn idle(&self) -> bool {
         self.entries == 0
-            && !self.creating
+            && !self.creation.creating
             && !self.partial_submission
             && self.events.iter().all(|event| event.stage == Stage::Free)
     }
@@ -505,7 +500,7 @@ impl State {
 
     fn release(&mut self) {
         debug_assert_eq!(self.admission, Admission::Closed);
-        debug_assert!(self.device.is_none() && self.surface.is_none());
+        debug_assert!(self.creation.device.is_none() && self.surface.is_none());
         debug_assert!(self.images.iter().all(Option::is_none));
         *self = Self {
             admission: Admission::Closed,
@@ -611,37 +606,28 @@ unsafe extern "C" fn rsf_unity_vulkan_initialize(
     if view.is_null() {
         return DEVICE_FAILED;
     }
-    {
-        let mut state = lock();
-        if !state.can_borrow_device() {
-            return DEVICE_BUSY;
-        }
-        if let Some(device) = &state.device {
-            unsafe { view.write(device.handles) };
+    let claim = lock().claim_device();
+    match claim {
+        Claim::Ready(handles) => {
+            unsafe { view.write(handles) };
             return DEVICE_READY;
         }
-        if !state.claim_device() {
-            return DEVICE_BUSY;
-        }
+        Claim::Busy => return DEVICE_BUSY,
+        Claim::Stopped => return DEVICE_FAILED,
+        Claim::Create => {}
     }
 
     let mut device = SharedDevice::new(*ops);
     if !device.prepare(services) {
         drop(device);
-        lock().creating = false;
+        lock().creation.rolled_back(false);
         return DEVICE_FAILED;
     }
     device.epoch = (ops.ring_begin)();
     unsafe { (ops.report_created)(services) };
     let handles = device.handles;
-    {
-        // Only the creator can publish, and close refuses while creating. Swap with the
-        // empty slot so even an old owner could never drop with the state mutex held.
-        let mut pending = Some(device);
-        let mut state = lock();
-        std::mem::swap(&mut state.device, &mut pending);
-        state.creating = false;
-    }
+    let previous = lock().creation.publish(device);
+    drop(previous);
     unsafe { view.write(handles) };
     DEVICE_READY
 }
@@ -653,7 +639,7 @@ unsafe extern "C" fn rsf_unity_vulkan_device_view(view: *mut DeviceHandles) -> b
     if view.is_null() || !state.can_borrow_device() {
         return false;
     }
-    let Some(device) = &state.device else {
+    let Some(device) = &state.creation.device else {
         return false;
     };
     unsafe { view.write(device.handles) };
@@ -668,6 +654,7 @@ unsafe extern "C" fn rsf_unity_vulkan_command_slot(index: u32, view: *mut Comman
         return false;
     }
     let Some(slot) = state
+        .creation
         .device
         .as_ref()
         .and_then(|device| device.slots.get(index as usize))
@@ -684,11 +671,11 @@ fn commands_retired() -> bool {
     let proof = {
         let state = lock();
         if state.admission != Admission::Closed
-            || (state.device.is_none() && state.images.iter().any(Option::is_some))
+            || (state.creation.device.is_none() && state.images.iter().any(Option::is_some))
         {
             return false;
         }
-        state.device.as_ref().map(|device| {
+        state.creation.device.as_ref().map(|device| {
             (
                 device.handles,
                 device.slots.map(|slot| slot.complete),
@@ -719,7 +706,7 @@ fn prepare_image(state: &Mutex<State>, index: usize, key: ImageKey) -> Option<Im
         if !state.open() || state.partial_submission {
             return None;
         }
-        let device = state.device.as_ref()?;
+        let device = state.creation.device.as_ref()?;
         let current = state.images.get(index)?;
         if let Some(image) = current.filter(|image| image.key == key) {
             return Some(image.handles);
@@ -800,7 +787,7 @@ extern "C" fn rsf_unity_vulkan_record_image(index: u32) -> bool {
 unsafe extern "C" fn rsf_unity_vulkan_begin_recording(index: u32, epoch: *mut u64) -> u64 {
     let mut state = lock();
     state.recorded_images = 0;
-    let Some(device) = &mut state.device else {
+    let Some(device) = &mut state.creation.device else {
         return 0;
     };
     let Some(serial) = device.recordings.get_mut(index as usize) else {
@@ -880,7 +867,7 @@ fn release_closed() {
         (
             std::mem::take(&mut state.images),
             state.surface.take(),
-            state.device.take(),
+            state.creation.device.take(),
         )
     };
     if let Some(device) = &mut device {
@@ -924,7 +911,7 @@ unsafe extern "C" fn rsf_unity_vulkan_configure_surface(
         if !state.can_borrow_device() {
             return ptr::null_mut();
         }
-        let Some(device) = &state.device else {
+        let Some(device) = &state.creation.device else {
             return ptr::null_mut();
         };
         (
@@ -1367,7 +1354,11 @@ mod tests {
         extern "C" fn unused_ring_retired(_: u64) {}
 
         let state = Mutex::new(State {
-            device: Some(SharedDevice::new(ops)),
+            creation: {
+                let mut creation = Creation::new();
+                creation.device = Some(SharedDevice::new(ops));
+                creation
+            },
             ..State::new()
         });
         let old = ImageKey {
@@ -1504,15 +1495,19 @@ mod tests {
     }
 
     #[test]
-    fn one_thread_creates_the_device() {
+    fn one_borrower_creates_at_a_time_and_vulkan_can_retry() {
         let mut state = State::new();
-        assert!(state.claim_device());
-        assert!(!state.claim_device());
+        assert!(matches!(state.claim_device(), Claim::Busy));
+        assert!(state.enter());
+        assert!(matches!(state.claim_device(), Claim::Create));
+        assert!(matches!(state.claim_device(), Claim::Busy));
+        state.leave();
         assert!(!state.idle());
         assert!(!state.close());
-        state.creating = false;
+        state.creation.rolled_back(false);
         assert!(state.idle());
-        assert!(state.claim_device());
+        assert!(state.enter());
+        assert!(matches!(state.claim_device(), Claim::Create));
     }
 
     #[test]
@@ -1526,7 +1521,7 @@ mod tests {
         assert!(state.close());
         assert!(!state.close());
         assert!(!state.enter());
-        assert!(!state.claim_device());
+        assert!(matches!(state.claim_device(), Claim::Busy));
         assert!(state.admit_event(&work(1), EVENT_SR, false).is_none());
         assert!(!state.set_window(IDENTITY, &work(1)));
         state.reopen();
@@ -1536,7 +1531,8 @@ mod tests {
         state.release();
         assert!(!state.enter());
         state.reopen();
-        assert!(state.claim_device());
+        assert!(state.enter());
+        assert!(matches!(state.claim_device(), Claim::Create));
     }
 
     // The only test that touches the process-wide state.

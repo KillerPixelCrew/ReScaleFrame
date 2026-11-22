@@ -40,6 +40,7 @@ use crate::bridge_interop::{
 };
 use crate::bridge_state::{LeaseOps, admit_leased_packet};
 use crate::d3d11_pass::shared_format;
+use crate::device_creation::{Claim, Creation};
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::c_void;
 use std::ptr;
@@ -205,14 +206,6 @@ impl Drop for SharedDevice {
     }
 }
 
-/// How a caller of `initialize` proceeds after the state mutex is released.
-#[derive(Debug, PartialEq, Eq)]
-enum Claim {
-    Ready(DeviceHandles),
-    Create,
-    Refused(u32),
-}
-
 /// How `prepare_surface` proceeds after the state mutex is released.
 #[derive(Debug, PartialEq, Eq)]
 enum SurfaceClaim {
@@ -226,11 +219,7 @@ enum SurfaceClaim {
 }
 
 struct State {
-    /// Set before the first creation leaf runs and cleared after publication or rollback.
-    creating: bool,
-    device: Option<SharedDevice>,
-    /// A creation failed: refuse further attempts until release, as the C++ `failed11` did.
-    failed: bool,
+    creation: Creation<SharedDevice>,
     /// The package closed admission. Only retirement may use the record.
     closed: bool,
     /// One frame callback holds the surface table. Only it may borrow or replace a surface.
@@ -257,40 +246,26 @@ fn lock_state(state: &Mutex<State>) -> MutexGuard<'_, State> {
 impl State {
     const fn new() -> Self {
         Self {
-            creating: false,
-            device: None,
-            failed: false,
+            creation: Creation::new(),
             closed: false,
             leased: false,
             borrowed: 0,
         }
     }
 
-    fn claim(&mut self) -> Claim {
-        if self.closed || self.creating {
-            return Claim::Refused(DEVICE_BUSY);
-        }
-        if let Some(device) = &self.device {
-            return Claim::Ready(device.handles);
-        }
-        if self.failed {
-            return Claim::Refused(DEVICE_STOPPED);
-        }
-        self.creating = true;
-        Claim::Create
+    fn claim(&mut self) -> Claim<DeviceHandles> {
+        self.creation.claim(!self.closed, |device| device.handles)
     }
 
-    /// Ends a refused claim after its rollback.
     fn creation_failed(&mut self) {
-        self.creating = false;
-        self.failed = true;
+        self.creation.rolled_back(true);
     }
 
     fn view(&self) -> Option<DeviceHandles> {
         if self.closed {
             return None;
         }
-        self.device.as_ref().map(|device| device.handles)
+        self.creation.device.as_ref().map(|device| device.handles)
     }
 
     /// The published view and its leaves for a frame callback's completion wait.
@@ -298,7 +273,8 @@ impl State {
         if self.closed {
             return None;
         }
-        self.device
+        self.creation
+            .device
             .as_ref()
             .map(|device| (device.handles, device.ops))
     }
@@ -307,12 +283,12 @@ impl State {
         if self.closed {
             return None;
         }
-        self.device.as_ref()?.slots.get(index).copied()
+        self.creation.device.as_ref()?.slots.get(index).copied()
     }
 
     /// Lends the surface table to one frame callback. Refused when closed, unpublished or held.
     fn begin_surfaces(&mut self) -> bool {
-        if self.closed || self.creating || self.leased || self.device.is_none() {
+        if self.closed || self.creation.creating || self.leased || self.creation.device.is_none() {
             return false;
         }
         self.leased = true;
@@ -330,7 +306,7 @@ impl State {
         if !self.leased || self.closed || index >= SURFACES {
             return SurfaceClaim::Refused;
         }
-        let Some(device) = &self.device else {
+        let Some(device) = &self.creation.device else {
             return SurfaceClaim::Refused;
         };
         let current = device.surfaces[index];
@@ -359,6 +335,7 @@ impl State {
             return Err(surface);
         }
         let Some(entry) = self
+            .creation
             .device
             .as_mut()
             .and_then(|device| device.surfaces.get_mut(index))
@@ -373,12 +350,13 @@ impl State {
     /// Closes admission and copies the fence readers. None while a creation is in progress or a
     /// frame callback holds the surface lease.
     fn close(&mut self) -> Option<Option<Proof>> {
-        if self.creating || self.leased {
+        if self.creation.creating || self.leased {
             return None;
         }
         self.closed = true;
         Some(
-            self.device
+            self.creation
+                .device
                 .as_ref()
                 .map(|device| (device.handles, device.ops)),
         )
@@ -386,15 +364,20 @@ impl State {
 
     /// The record to destroy outside the mutex, once closed and not creating.
     fn take_for_release(&mut self) -> Option<Option<SharedDevice>> {
-        if !self.closed || self.creating || self.leased {
+        if !self.closed || self.creation.creating || self.leased {
             return None;
         }
-        Some(self.device.take())
+        Some(self.creation.device.take())
     }
 
     /// Forgets the failure. Admission stays closed until the next package session opens it.
     fn released(&mut self) {
-        debug_assert!(self.closed && !self.creating && !self.leased && self.device.is_none());
+        debug_assert!(
+            self.closed
+                && !self.creation.creating
+                && !self.leased
+                && self.creation.device.is_none()
+        );
         *self = Self {
             closed: true,
             ..Self::new()
@@ -433,7 +416,8 @@ unsafe extern "C" fn rsf_unity_d3d11_initialize(
             unsafe { view.write(handles) };
             return DEVICE_READY;
         }
-        Claim::Refused(result) => return result,
+        Claim::Busy => return DEVICE_BUSY,
+        Claim::Stopped => return DEVICE_STOPPED,
         Claim::Create => {}
     }
 
@@ -445,14 +429,8 @@ unsafe extern "C" fn rsf_unity_d3d11_initialize(
         return DEVICE_FAILED;
     }
     let handles = device.handles;
-    {
-        // Only the claim holder publishes and close refuses while it runs. Swap with the empty
-        // slot so even an old owner could never drop with the state mutex held.
-        let mut pending = Some(device);
-        let mut state = lock();
-        std::mem::swap(&mut state.device, &mut pending);
-        state.creating = false;
-    }
+    let previous = lock().creation.publish(device);
+    drop(previous);
     unsafe { view.write(handles) };
     DEVICE_READY
 }
@@ -507,7 +485,7 @@ fn prepare_surface(
             SurfaceClaim::Refused => return None,
             SurfaceClaim::Create { retire } => retire,
         };
-        let device = state.device.as_ref()?;
+        let device = state.creation.device.as_ref()?;
         (retire, device.handles, device.ops)
     };
     // Every submission that may still read the replaced surface took a completion value no later
@@ -759,7 +737,7 @@ mod tests {
         let mut state = State::new();
         let mut device = SharedDevice::new(OPS);
         assert!(device.prepare(ptr::null()));
-        state.device = Some(device);
+        state.creation.device = Some(device);
         calls();
         Mutex::new(state)
     }
@@ -830,18 +808,17 @@ mod tests {
     fn one_caller_creates_and_a_failure_stops_until_release() {
         let mut state = State::new();
         assert_eq!(state.claim(), Claim::Create);
-        assert_eq!(state.claim(), Claim::Refused(DEVICE_BUSY));
+        assert_eq!(state.claim(), Claim::Busy);
         // Close refuses while a creation runs.
         assert!(state.close().is_none());
         state.creation_failed();
-        assert_eq!(state.claim(), Claim::Refused(DEVICE_STOPPED));
+        assert_eq!(state.claim(), Claim::Stopped);
         assert!(state.view().is_none());
         assert!(state.take_for_release().is_none());
         assert!(state.close().unwrap().is_none());
         assert!(state.take_for_release().unwrap().is_none());
         state.released();
-        assert!(!state.failed);
-        assert_eq!(state.claim(), Claim::Refused(DEVICE_BUSY));
+        assert_eq!(state.claim(), Claim::Busy);
         state.open();
         assert_eq!(state.claim(), Claim::Create);
     }
@@ -853,8 +830,7 @@ mod tests {
         let mut device = SharedDevice::new(OPS);
         assert!(device.prepare(ptr::null()));
         let handles = device.handles;
-        state.device = Some(device);
-        state.creating = false;
+        assert!(state.creation.publish(device).is_none());
         assert_eq!(state.claim(), Claim::Ready(handles));
         assert_eq!(state.view(), Some(handles));
         assert!(state.slot(SLOTS - 1).unwrap().complete());
@@ -865,10 +841,10 @@ mod tests {
         assert!(state.view().is_none());
         assert!(state.waiter().is_none());
         assert!(state.slot(0).is_none());
-        assert_eq!(state.claim(), Claim::Refused(DEVICE_BUSY));
+        assert_eq!(state.claim(), Claim::Busy);
         calls();
         let taken = state.take_for_release().unwrap();
-        assert!(state.device.is_none());
+        assert!(state.creation.device.is_none());
         drop(taken);
         assert_eq!(calls().last(), Some(&"destroy"));
         state.released();
@@ -894,7 +870,12 @@ mod tests {
         assert_eq!(calls(), ["wait", "create_surface", "destroy_surface"]);
         lock_state(&state).end_surfaces();
         assert_eq!(
-            lock_state(&state).device.as_ref().unwrap().surfaces[0],
+            lock_state(&state)
+                .creation
+                .device
+                .as_ref()
+                .unwrap()
+                .surfaces[0],
             Some(Surface {
                 key: key(32),
                 handle: handle(32)
@@ -944,7 +925,7 @@ mod tests {
         assert!(!state.begin_surfaces());
         let mut device = SharedDevice::new(OPS);
         assert!(device.prepare(ptr::null()));
-        state.device = Some(device);
+        state.creation.device = Some(device);
         assert!(state.begin_surfaces());
         assert!(!state.begin_surfaces());
         assert!(state.close().is_none());

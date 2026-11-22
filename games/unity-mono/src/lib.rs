@@ -21,6 +21,7 @@ mod bridge_interop;
 mod bridge_state;
 mod d3d11_pass;
 mod d3d11_state;
+mod device_creation;
 mod generation;
 #[cfg(windows)]
 mod lifecycle;
