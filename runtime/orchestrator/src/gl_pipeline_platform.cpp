@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Win32, DXGI, D3D12, GL sharing, SR, FG and presentation-owner calls for the Rust OpenGL pipeline
-// owner in gl_pipeline.rs. Each leaf performs one platform operation. Session lifecycle, frame
-// identity, resource and cache state, admission, backend switching and fallback are decided in
-// Rust. Returned COM interfaces carry one reference for the caller.
+// ABI adapters for the Rust OpenGL pipeline's vendor and explicit presentation calls.
 #include <rescaleframe/gl_pipeline.h>
 #include <rescaleframe/native_cpu.h>
 #include <rescaleframe/input_dump.h>
@@ -27,11 +24,17 @@ static_assert(D3D12_RESOURCE_STATE_COMMON == 0 && D3D12_RESOURCE_STATE_PRESENT =
 static_assert(DXGI_FORMAT_R8G8B8A8_UNORM == 28);
 
 extern "C" int rsf_core_gl_window_valid(void*);
-extern "C" void* rsf_core_gl_window_create(void*);
-extern "C" int rsf_core_gl_window_destroy(void*);
 extern "C" int rsf_core_gl_window_child_of(void*, void*);
 extern "C" int rsf_core_gl_window_resize(void*, uint32_t, uint32_t);
 extern "C" void rsf_core_gl_window_show(void*);
+
+extern "C" void rsf_core_gl_chain_associate(void*, void*);
+extern "C" int32_t rsf_core_gl_chain_resize(void*, uint32_t, uint32_t, uint32_t, uint32_t);
+extern "C" void* rsf_core_gl_chain_back_buffer(void*);
+extern "C" int32_t rsf_core_gl_chain_present(void*, uint32_t);
+extern "C" int rsf_core_gl_adapter_identity(void*, uint32_t*, uint32_t*);
+extern "C" void rsf_core_gl_transition(void*, void*, uint32_t, uint32_t);
+extern "C" void rsf_core_gl_copy_resource(void*, void*, void*);
 
 namespace {
 int32_t chain_create(void* queue, void* window, uint32_t buffers, uint32_t format, void** out)
@@ -56,53 +59,6 @@ int32_t chain_create(void* queue, void* window, uint32_t buffers, uint32_t forma
     if (SUCCEEDED(result)) *out = chain3.Detach();
     return result;
 }
-void chain_associate(void* chain, void* window)
-{
-    ComPtr<IDXGIFactory2> factory;
-    if (SUCCEEDED(static_cast<IDXGISwapChain3*>(chain)->GetParent(IID_PPV_ARGS(&factory))))
-        factory->MakeWindowAssociation(static_cast<HWND>(window), DXGI_MWA_NO_ALT_ENTER);
-}
-int32_t chain_resize(void* chain, uint32_t buffers, uint32_t width, uint32_t height, uint32_t format)
-{
-    return static_cast<IDXGISwapChain3*>(chain)->ResizeBuffers(buffers, width, height, static_cast<DXGI_FORMAT>(format), 0);
-}
-void* chain_back_buffer(void* chain)
-{
-    const auto swapchain = static_cast<IDXGISwapChain3*>(chain);
-    ID3D12Resource* buffer = nullptr;
-    if (FAILED(swapchain->GetBuffer(swapchain->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&buffer)))) return nullptr;
-    return buffer;
-}
-int32_t chain_present(void* chain, uint32_t interval) { return static_cast<IDXGISwapChain3*>(chain)->Present(interval, 0); }
-
-int adapter_identity(void* device, uint32_t* vendor, uint32_t* software)
-{
-    ComPtr<IDXGIFactory4> factory;
-    ComPtr<IDXGIAdapter1> adapter;
-    DXGI_ADAPTER_DESC1 description{};
-    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) ||
-        FAILED(factory->EnumAdapterByLuid(static_cast<ID3D12Device*>(device)->GetAdapterLuid(), IID_PPV_ARGS(&adapter))) ||
-        FAILED(adapter->GetDesc1(&description)))
-        return 0;
-    *vendor = description.VendorId;
-    *software = (description.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0;
-    return 1;
-}
-
-void transition(void* list, void* resource, uint32_t from, uint32_t to)
-{
-    D3D12_RESOURCE_BARRIER change{};
-    change.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    change.Transition = {static_cast<ID3D12Resource*>(resource), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                         static_cast<D3D12_RESOURCE_STATES>(from), static_cast<D3D12_RESOURCE_STATES>(to)};
-    static_cast<ID3D12GraphicsCommandList*>(list)->ResourceBarrier(1, &change);
-}
-void copy_resource(void* list, void* destination, void* source)
-{
-    static_cast<ID3D12GraphicsCommandList*>(list)->CopyResource(static_cast<ID3D12Resource*>(destination),
-                                                                 static_cast<ID3D12Resource*>(source));
-}
-
 rsf_backend_result gl_open(rsf_backend_log_fn log, void* user, rsf_gl_context** out)
 {
     rsf_gl_setup sharing{sizeof(sharing), 1, nullptr, nullptr, log, user};
@@ -139,19 +95,19 @@ struct Platform {
     decltype(&rsf_gl_drain) gl_drain;
     decltype(&rsf_gl_close) gl_close;
     decltype(&rsf_core_gl_window_valid) window_valid;
-    decltype(&rsf_core_gl_window_create) window_create;
-    decltype(&rsf_core_gl_window_destroy) window_destroy;
+    decltype(&rsf_gl_window_create) window_create;
+    decltype(&rsf_gl_window_destroy) window_destroy;
     decltype(&rsf_core_gl_window_child_of) window_child_of;
     decltype(&rsf_core_gl_window_resize) window_resize;
     decltype(&rsf_core_gl_window_show) window_show;
     decltype(&chain_create) chain_create;
-    decltype(&chain_associate) chain_associate;
-    decltype(&chain_resize) chain_resize;
-    decltype(&chain_back_buffer) chain_back_buffer;
-    decltype(&chain_present) chain_present;
-    decltype(&adapter_identity) adapter_identity;
-    decltype(&transition) transition;
-    decltype(&copy_resource) copy_resource;
+    decltype(&rsf_core_gl_chain_associate) chain_associate;
+    decltype(&rsf_core_gl_chain_resize) chain_resize;
+    decltype(&rsf_core_gl_chain_back_buffer) chain_back_buffer;
+    decltype(&rsf_core_gl_chain_present) chain_present;
+    decltype(&rsf_core_gl_adapter_identity) adapter_identity;
+    decltype(&rsf_core_gl_transition) transition;
+    decltype(&rsf_core_gl_copy_resource) copy_resource;
     decltype(&rsf_sr12_create) sr_create;
     decltype(&rsf_sr12_plan) sr_plan;
     decltype(&rsf_sr12_evaluate) sr_evaluate;
@@ -186,9 +142,9 @@ struct Platform {
 
 constexpr Platform platform{
     gl_open, rsf_gl_graphics, rsf_gl_texture_create, rsf_gl_texture_get, rsf_gl_texture_destroy, rsf_gl_begin,
-    rsf_gl_submit, rsf_gl_drain, rsf_gl_close, rsf_core_gl_window_valid, rsf_core_gl_window_create, rsf_core_gl_window_destroy, rsf_core_gl_window_child_of,
-    rsf_core_gl_window_resize, rsf_core_gl_window_show, chain_create, chain_associate, chain_resize, chain_back_buffer, chain_present,
-    adapter_identity, transition, copy_resource, rsf_sr12_create, rsf_sr12_plan, rsf_sr12_evaluate,
+    rsf_gl_submit, rsf_gl_drain, rsf_gl_close, rsf_core_gl_window_valid, rsf_gl_window_create, rsf_gl_window_destroy, rsf_core_gl_window_child_of,
+    rsf_core_gl_window_resize, rsf_core_gl_window_show, chain_create, rsf_core_gl_chain_associate, rsf_core_gl_chain_resize, rsf_core_gl_chain_back_buffer, rsf_core_gl_chain_present,
+    rsf_core_gl_adapter_identity, rsf_core_gl_transition, rsf_core_gl_copy_resource, rsf_sr12_create, rsf_sr12_plan, rsf_sr12_evaluate,
     rsf_sr12_set_sharpening, rsf_sr12_destroy, rsf_fg12_install_explicit, rsf_fg12_options, rsf_fg12_cpu, rsf_fg12_hudless,
     rsf_fg12_submitted, rsf_fg12_window, rsf_fg12_status, present_host, rsf_d3d11_present_is_owner,
     rsf_d3d11_present_backend, rsf_d3d11_present_backend_choices, rsf_d3d11_present_request,
@@ -200,11 +156,6 @@ constexpr Platform platform{
 }
 
 extern "C" rsf_backend_result rsf_core_gl_pipeline_open(const rsf_gl_pipeline_setup*, rsf_gl_pipeline**, const Platform*);
-
-// Create on the parent window's owning thread. The window procedure and its event-thread routing
-// are platform mechanisms, so these two entries stay native.
-extern "C" void* rsf_gl_window_create(void* parent) { return rsf_core_gl_window_create(parent); }
-extern "C" int rsf_gl_window_destroy(void* window) { return rsf_core_gl_window_destroy(window); }
 
 extern "C" rsf_backend_result rsf_gl_pipeline_open(const rsf_gl_pipeline_setup* setup, rsf_gl_pipeline** out)
 {

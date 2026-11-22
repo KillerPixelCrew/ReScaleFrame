@@ -39,7 +39,7 @@ extern "C" fn rsf_core_gl_window_valid(window: HWND) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_gl_window_create(parent: HWND) -> HWND {
+extern "C" fn rsf_gl_window_create(parent: HWND) -> HWND {
     if unsafe { GetWindowThreadProcessId(parent, null_mut()) != GetCurrentThreadId() } {
         return null_mut();
     }
@@ -72,7 +72,7 @@ fn surface_message(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_gl_window_destroy(window: HWND) -> i32 {
+extern "C" fn rsf_gl_window_destroy(window: HWND) -> i32 {
     i32::from(rsf_core_gl_window_valid(window) == 0 || surface_message(window, DESTROY, 0, 0))
 }
 

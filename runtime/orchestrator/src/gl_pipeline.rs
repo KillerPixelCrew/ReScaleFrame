@@ -28,6 +28,7 @@ use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Mutex, MutexGuard, TryLockError};
 
+mod dxgi;
 mod settings;
 mod window;
 
@@ -492,7 +493,13 @@ impl Pipeline {
         let p = self.platform;
         let (selected, sr) = self.select_sr(state, options, shape.width, shape.height)?;
         let (mut render_width, mut render_height) = (0, 0);
-        unsafe { (p.sr_plan)(sr.get(), &mut render_width, &mut render_height) };
+        let planned = unsafe { (p.sr_plan)(sr.get(), &mut render_width, &mut render_height) };
+        if planned != OK {
+            return Err(planned);
+        }
+        if render_width == 0 || render_height == 0 {
+            return Err(INIT_FAILED);
+        }
         let mut surfaces = Surfaces {
             sr,
             textures: Vec::with_capacity(SURFACES),
