@@ -150,7 +150,7 @@ pub(crate) struct rsf_d3d11h_pipeline_start {
     pub output_width: u32,
     pub output_height: u32,
     pub quality: u32,
-    pub reserved: u32,
+    pub backend: u32,
     pub setup: *const rsf_d3d11_host_setup,
     pub strings: *const rsf_d3d11h_strings,
     pub log: rsf_game_log_fn,

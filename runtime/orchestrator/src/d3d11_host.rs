@@ -234,6 +234,7 @@ struct Graphics {
     logged: u64,
     last_result: i32,
     present_result: i32,
+    dlss_started: bool,
     present_pairs: u64,
     ownership_reports: u32,
     capture_refusal_terms: u32,
@@ -272,6 +273,7 @@ impl Graphics {
             logged: 0,
             last_result: NOT_READY,
             present_result: DLSS_OK,
+            dlss_started: false,
             present_pairs: 0,
             ownership_reports: 0,
             capture_refusal_terms: 0,
@@ -883,7 +885,7 @@ impl Host {
                     output_width: width,
                     output_height: height,
                     quality: settings.sr_quality,
-                    reserved: 0,
+                    backend: settings.sr_backend,
                     setup: &self.setup,
                     strings: &self.strings,
                     log: Some(host_log),
@@ -891,7 +893,9 @@ impl Host {
                 };
                 g.last_result = unsafe { (p.pipeline_start)(g.device_ptr(), &start) };
                 g.running = g.last_result == OK;
-                g.backend = SR_DLSS;
+                g.backend = settings.sr_backend;
+                g.dlss_started = g.running && g.backend == SR_DLSS;
+                g.present_result = DLSS_OK;
                 g.quality = settings.sr_quality;
                 g.output_width = width;
                 g.output_height = height;
@@ -909,6 +913,7 @@ impl Host {
                     g.last_result = unsafe { (p.pipeline_select)(settings.sr_backend) };
                     if g.last_result == OK {
                         g.backend = settings.sr_backend;
+                        g.dlss_started |= g.backend == SR_DLSS;
                         g.reset = true;
                     }
                 }
@@ -1749,7 +1754,7 @@ impl Host {
                 ));
             }
         }
-        if g.running {
+        if g.running && g.dlss_started {
             let result = unsafe {
                 (p.dlss_native_present)(
                     event.swapchain,
