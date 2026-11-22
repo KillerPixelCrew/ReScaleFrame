@@ -124,10 +124,9 @@ if(RSF_HAVE_VULKAN AND RSF_HAVE_XESS_FG)
     target_link_libraries(rsf_native_vulkan PRIVATE rsf_orchestrator_rust d3d12 dxgi dxguid bcrypt)
 endif()
 if(RSF_HAVE_VULKAN AND RSF_HAVE_FFX_DX12_SR)
-    target_sources(rsf_native_vulkan PRIVATE src/native_sr_fsr4_vulkan.c)
     target_compile_definitions(rsf_native_vulkan PUBLIC RSF_VULKAN_FSR4_ENABLED=1)
     target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
-    # The FSR 4 bridge and its exports are Rust (rsf-fsr4-compat, inside the Runtime archive).
+    # The FSR 4 SR owner, its bridge and their exports are Rust (vulkan_fsr4_sr.rs, rsf-fsr4-compat).
     target_link_libraries(rsf_native_vulkan PRIVATE ReScaleFrame::FSR rsf_orchestrator_rust bcrypt d3d12 dxgi)
 endif()
 if(RSF_HAVE_VULKAN AND RSF_HAVE_FFX_DX12_FG)

@@ -116,7 +116,6 @@ fn bindings() {
         "runtime/orchestrator/src/native_fg_vulkan_platform.h",
         "runtime/orchestrator/src/native_fg_xess_vulkan.h",
         "runtime/orchestrator/src/native_latency_vulkan_presentation.h",
-        "runtime/orchestrator/src/native_sr_fsr4_vulkan_platform.h",
         "runtime/orchestrator/src/render_host_foreign.h",
         "runtime/orchestrator/src/sharpening_vulkan_core.h",
         "runtime/orchestrator/src/vulkan_fg_resources.h",

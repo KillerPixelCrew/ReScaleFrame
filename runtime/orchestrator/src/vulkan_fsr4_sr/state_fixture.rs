@@ -357,7 +357,6 @@ const PLATFORM: Platform = Platform {
         });
         0
     }),
-    sharpening_valid: leaf!(|_: *const rsf_sharpening_options| -> i32 { 1 }),
     bridge_sharpness: leaf!(|owner: Handle, amount: f32| -> i32 {
         with(|c| {
             check!(c, owner == BRIDGE);
@@ -576,7 +575,7 @@ impl Fixture {
         }
     }
     fn create(&mut self) -> i32 {
-        unsafe { rsf_core_fsr4vk_create(&PLATFORM, &self.setup, &self.handoff, &mut self.owner) }
+        unsafe { create(&PLATFORM, &self.setup, &self.handoff, &mut self.owner) }
     }
     fn evaluate(&mut self) -> i32 {
         self.frame.record = &raw const self.record;

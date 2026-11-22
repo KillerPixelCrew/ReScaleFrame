@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::{Barrier, Frame, Handle, Image, Record, Setup};
+use super::{Barrier, Frame, Handle, Image, Record, Setup, guarded};
 use crate::frame_capture_vk::{
     Owner as Capture, rsf_core_capture_vk_flush, rsf_core_capture_vk_provider,
     rsf_core_capture_vk_record, rsf_core_capture_vk_retire,
@@ -14,7 +14,8 @@ use crate::vulkan_sharpening::{
     rsf_sharpenvk_host_run,
 };
 use ash::vk::{self, Handle as _};
-use std::ffi::c_char;
+use rsf_game_sys::backend_result::FEATURE_FAILED;
+use std::ffi::{c_char, c_void};
 use std::ptr;
 
 struct Graphics {
@@ -60,36 +61,68 @@ fn command_buffer(commands: Handle) -> vk::CommandBuffer {
     vk::CommandBuffer::from_raw(commands as u64)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4vk_graphics_open(
-    setup: &Setup,
-    entries: &[rsf_vk_function; 5],
-    out: &mut Handle,
-) -> i32 {
-    let Some(graphics) = Graphics::open(setup, entries) else {
+/// The capsule behind a graphics handle from [`open`].
+///
+/// # Safety
+/// `graphics` must be a live handle from [`open`] that no other reference is using.
+unsafe fn capsule<'a>(graphics: Handle) -> &'a mut Graphics {
+    unsafe { &mut *graphics.cast::<Graphics>() }
+}
+
+/// Resolves the five Vulkan commands through the host's procedure callbacks, which may throw,
+/// and opens the capsule.
+pub(super) unsafe extern "C" fn open(setup: *const Setup, out: *mut Handle) -> i32 {
+    let setup = unsafe { &*setup };
+    let (Some(instance_proc), Some(device_proc)) = (setup.instance_proc, setup.device_proc) else {
+        return FEATURE_FAILED;
+    };
+    // The host callbacks, called with the C-unwind ABI so the guard can contain an exception.
+    type Proc = unsafe extern "C" fn(*mut c_void, *const c_char) -> rsf_vk_function;
+    type ProcUnwind = unsafe extern "C-unwind" fn(*mut c_void, *const c_char) -> rsf_vk_function;
+    let [instance_proc, device_proc] = [instance_proc, device_proc]
+        .map(|proc| unsafe { std::mem::transmute::<Proc, ProcUnwind>(proc) });
+    let mut entries: [rsf_vk_function; 5] = [None; 5];
+    let resolved = guarded(|| {
+        entries = unsafe {
+            [
+                instance_proc(
+                    setup.instance,
+                    c"vkGetPhysicalDeviceMemoryProperties".as_ptr(),
+                ),
+                device_proc(setup.device, c"vkCmdPipelineBarrier".as_ptr()),
+                device_proc(setup.device, c"vkCmdCopyImage".as_ptr()),
+                device_proc(setup.device, c"vkWaitSemaphores".as_ptr()),
+                device_proc(setup.device, c"vkDeviceWaitIdle".as_ptr()),
+            ]
+        };
+        0
+    });
+    if resolved != 0 {
+        return resolved;
+    }
+    let Some(graphics) = Graphics::open(setup, &entries) else {
         return vk::Result::ERROR_EXTENSION_NOT_PRESENT.as_raw();
     };
     let graphics = crate::allocate_handle(graphics);
     if graphics.is_null() {
         return super::OUT_OF_HOST_MEMORY;
     }
-    *out = graphics.cast();
+    unsafe { out.write(graphics.cast()) };
     0
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4vk_graphics_close(graphics: *mut Graphics) {
+pub(super) unsafe extern "C" fn close(graphics: Handle) {
     if !graphics.is_null() {
-        drop(unsafe { Box::from_raw(graphics) });
+        drop(unsafe { Box::from_raw(graphics.cast::<Graphics>()) });
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4vk_capture_initialize(
-    graphics: &mut Graphics,
-    setup: &Setup,
+pub(super) unsafe extern "C" fn capture_initialize(
+    graphics: Handle,
+    setup: *const Setup,
     provider: u64,
 ) -> i32 {
+    let (graphics, setup) = unsafe { (capsule(graphics), &*setup) };
     let mut memory = vk::PhysicalDeviceMemoryProperties::default();
     unsafe {
         (graphics.memory_properties)(
@@ -108,13 +141,12 @@ unsafe extern "C" fn rsf_fsr4vk_capture_initialize(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4vk_capture_begin(record: *const Record) {
+pub(super) unsafe extern "C" fn capture_begin(record: *const Record) {
     unsafe { rsf_input_dump_begin_record(record, RSF_SR_FSR4) };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4vk_capture_parameters(frame: &Frame, reset: u32) {
+pub(super) unsafe extern "C" fn capture_parameters(frame: *const Frame, reset: u32) {
+    let frame = unsafe { &*frame };
     unsafe {
         rsf_capture_sr_parameters(
             frame.record,
@@ -127,21 +159,20 @@ unsafe extern "C" fn rsf_fsr4vk_capture_parameters(frame: &Frame, reset: u32) {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4vk_capture_record(
-    graphics: &Graphics,
+pub(super) unsafe extern "C" fn capture_record(
+    graphics: Handle,
     commands: Handle,
-    image: &Image,
-    record: &Record,
+    image: *const Image,
+    record: *const Record,
     role: *const c_char,
     reset: u32,
 ) {
     unsafe {
         rsf_core_capture_vk_record(
-            &graphics.capture,
+            &capsule(graphics).capture,
             commands,
-            image,
-            record,
+            &*image,
+            &*record,
             role,
             reset,
             1,
@@ -151,64 +182,62 @@ unsafe extern "C" fn rsf_fsr4vk_capture_record(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4vk_capture_flush(graphics: &Graphics) -> i32 {
-    unsafe { rsf_core_capture_vk_flush(&graphics.capture, 0, ptr::null_mut()) }
+pub(super) unsafe extern "C" fn capture_flush(graphics: Handle) -> i32 {
+    unsafe { rsf_core_capture_vk_flush(&capsule(graphics).capture, 0, ptr::null_mut()) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4vk_graphics_transition(
-    graphics: &Graphics,
+pub(super) unsafe extern "C" fn transition(
+    graphics: Handle,
     commands: Handle,
-    plan: &Barrier,
+    plan: *const Barrier,
 ) {
-    unsafe { rsf_core_vkfg_record_barrier(graphics.barrier, command_buffer(commands), plan) };
+    let graphics = unsafe { capsule(graphics) };
+    unsafe { rsf_core_vkfg_record_barrier(graphics.barrier, command_buffer(commands), &*plan) };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4vk_graphics_copy(
-    graphics: &Graphics,
+pub(super) unsafe extern "C" fn copy(
+    graphics: Handle,
     commands: Handle,
     source: u64,
     target: u64,
     width: u32,
     height: u32,
 ) {
+    let graphics = unsafe { capsule(graphics) };
     let plan = Copy::transfer(source, target, [width, height]);
     unsafe { rsf_core_vkfg_record_copy(graphics.copy, command_buffer(commands), &plan) };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4vk_graphics_sharpen(
-    graphics: &mut Graphics,
-    setup: &Setup,
+pub(super) unsafe extern "C" fn sharpen(
+    graphics: Handle,
+    setup: *const Setup,
     commands: Handle,
-    frame: &Frame,
+    frame: *const Frame,
     output: u64,
 ) {
-    unsafe { rsf_sharpenvk_host_run(&mut graphics.sharpen, setup, commands, frame, output) };
+    let graphics = unsafe { capsule(graphics) };
+    unsafe { rsf_sharpenvk_host_run(&mut graphics.sharpen, &*setup, commands, &*frame, output) };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4vk_graphics_retire(graphics: &mut Graphics, commands: Handle) {
+pub(super) unsafe extern "C" fn retire(graphics: Handle, commands: Handle) {
+    let graphics = unsafe { capsule(graphics) };
     unsafe {
         rsf_core_capture_vk_retire(&graphics.capture, commands);
         rsf_sharpenvk_host_retire(&mut graphics.sharpen, commands);
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4vk_graphics_clear_sharpen(graphics: &mut Graphics) {
-    unsafe { rsf_sharpenvk_host_clear(&mut graphics.sharpen) };
+pub(super) unsafe extern "C" fn clear_sharpen(graphics: Handle) {
+    unsafe { rsf_sharpenvk_host_clear(&mut capsule(graphics).sharpen) };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4vk_graphics_wait(
-    graphics: &Graphics,
+pub(super) unsafe extern "C" fn wait(
+    graphics: Handle,
     semaphore: u64,
     value: u64,
     timeout: u64,
 ) -> i32 {
+    let graphics = unsafe { capsule(graphics) };
     let semaphores = [vk::Semaphore::from_raw(semaphore)];
     let values = [value];
     let wait = vk::SemaphoreWaitInfo::default()
@@ -217,7 +246,7 @@ unsafe extern "C" fn rsf_fsr4vk_graphics_wait(
     unsafe { (graphics.wait)(graphics.device, &wait, timeout).as_raw() }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4vk_graphics_idle(graphics: &Graphics) -> i32 {
+pub(super) unsafe extern "C" fn idle(graphics: Handle) -> i32 {
+    let graphics = unsafe { capsule(graphics) };
     unsafe { (graphics.idle)(graphics.device).as_raw() }
 }

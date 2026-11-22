@@ -663,6 +663,7 @@ dependencies = [
  "rsf-game-sys",
  "rsf-minhook-sys",
  "rsf-runtime-common",
+ "rsf-streamline-vk",
  "windows",
 ]
 

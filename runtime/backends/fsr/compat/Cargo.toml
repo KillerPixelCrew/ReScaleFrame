@@ -12,6 +12,10 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 rsf-game-sys = { path = "../../../../sdk/game" }
 
+[dev-dependencies]
+# The C guard the Runtime calls the bridge through; the throwing-SDK test uses it.
+rsf-streamline-vk = { path = "../../../vulkan/streamline/lifecycle" }
+
 [build-dependencies]
 rsf-bindgen = { path = "../../../../tools/bindgen" }
 

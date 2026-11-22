@@ -9,7 +9,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-int32_t rsf_fsr4vk_create(const rsf_srvk_setup*, const rsf_fsr4vk_handoff*, rsf_fsr4vk**);
 // For the split dispatcher after Rust has admitted copied setup and handoff records.
 int32_t rsf_fsr4vk_create_admitted(const rsf_srvk_setup*, const rsf_fsr4vk_handoff*, rsf_fsr4vk**);
 int32_t rsf_fsr4vk_plan(const rsf_fsr4vk*, uint32_t*, uint32_t*);

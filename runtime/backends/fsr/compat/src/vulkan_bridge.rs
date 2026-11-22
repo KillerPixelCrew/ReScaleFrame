@@ -235,7 +235,7 @@ unsafe fn check_header(header: *const u32, required: usize) -> i32 {
 
 // The host serializes every call on one bridge. Native owners stay behind
 // `native` until checked destruction releases them.
-struct Session {
+pub struct Session {
     native: Box<Capsule>,
     adapter_luid: u64,
     provider_version: u64,
@@ -607,7 +607,7 @@ unsafe fn create(request: &Request, output: *mut *mut Session) -> i32 {
 
 /// # Safety
 /// `setup` and `output` follow RsfFsr4BridgeCreate.
-unsafe fn create_public(setup: *const BridgeCreate, output: *mut *mut Session) -> i32 {
+pub unsafe fn create_public(setup: *const BridgeCreate, output: *mut *mut Session) -> i32 {
     if output.is_null() {
         return INVALID_ARGUMENT;
     }
@@ -652,7 +652,7 @@ unsafe fn create_public(setup: *const BridgeCreate, output: *mut *mut Session) -
 
 /// # Safety
 /// Non-null pointers must be a live bridge and a writable info structure.
-unsafe fn info(session: *const Session, info: *mut BridgeInfo) -> i32 {
+pub unsafe fn info(session: *const Session, info: *mut BridgeInfo) -> i32 {
     let Some(session) = (unsafe { session.as_ref() }) else {
         return INVALID_ARGUMENT;
     };
@@ -673,7 +673,7 @@ unsafe fn info(session: *const Session, info: *mut BridgeInfo) -> i32 {
 
 /// # Safety
 /// A non-null `session` must be a live bridge.
-unsafe fn sharpness(session: *mut Session, amount: f32) -> i32 {
+pub unsafe fn sharpness(session: *mut Session, amount: f32) -> i32 {
     let Some(session) = (unsafe { session.as_mut() }) else {
         return INVALID_ARGUMENT;
     };
@@ -686,7 +686,7 @@ unsafe fn sharpness(session: *mut Session, amount: f32) -> i32 {
 
 /// # Safety
 /// Non-null pointers must be a live bridge and writable outputs.
-unsafe fn plan(
+pub unsafe fn plan(
     session: *mut Session,
     quality: u32,
     width: *mut u32,
@@ -710,7 +710,7 @@ unsafe fn plan(
 
 /// # Safety
 /// Non-null pointers must be a live bridge and writable outputs.
-unsafe fn create_image(
+pub unsafe fn create_image(
     session: *mut Session,
     width: u32,
     height: u32,
@@ -737,7 +737,7 @@ unsafe fn create_image(
 
 /// # Safety
 /// Non-null pointers must be a live bridge and a writable handle.
-unsafe fn create_fence(
+pub unsafe fn create_fence(
     session: *mut Session,
     handle: *mut Handle,
 ) -> i32 {
@@ -803,7 +803,7 @@ unsafe fn evaluate_legacy(
 
 /// # Safety
 /// Non-null pointers must be a live bridge and a readable frame header.
-unsafe fn evaluate(
+pub unsafe fn evaluate(
     session: *mut Session,
     frame: *const BridgeFrame,
 ) -> i32 {
@@ -862,7 +862,7 @@ unsafe fn wait_idle(session: *mut Session) -> i32 {
 
 /// # Safety
 /// A non-null `session` must be a live bridge.
-unsafe fn prepare_destroy(session: *mut Session) -> i32 {
+pub unsafe fn prepare_destroy(session: *mut Session) -> i32 {
     unsafe { session.as_mut() }.map_or(0, Session::prepare)
 }
 
@@ -873,7 +873,7 @@ unsafe fn prepare_destroy(session: *mut Session) -> i32 {
 ///
 /// # Safety
 /// A non-null `session` must be a live bridge with no other users.
-unsafe fn destroy(session: *mut Session) -> i32 {
+pub unsafe fn destroy(session: *mut Session) -> i32 {
     let Some(owner) = (unsafe { session.as_mut() }) else {
         return 0;
     };
@@ -970,6 +970,52 @@ mod tests {
             );
         }
         assert!(!unsafe { absolute_wide_path(ptr::null(), 32767) });
+    }
+
+    unsafe extern "system" {
+        fn RaiseException(code: u32, flags: u32, count: u32, arguments: *const usize);
+    }
+
+    /// A fake ffxQuery that throws: MSVC raises a C++ throw as SEH code 0xE06D7363.
+    unsafe extern "C-unwind" fn throwing_query(
+        _: *mut crate::ffx_abi::ffxContext,
+        _: *mut crate::ffx_abi::ffxQueryDescHeader,
+    ) -> crate::ffx_abi::ffxReturnCode_t {
+        unsafe { RaiseException(0xE06D_7363, 0, 0, ptr::null()) };
+        0
+    }
+
+    struct Unwound<'a>(&'a mut bool);
+
+    impl Drop for Unwound<'_> {
+        fn drop(&mut self) {
+            *self.0 = true;
+        }
+    }
+
+    #[test]
+    fn the_runtime_guard_contains_an_exception_thrown_by_the_sdk() {
+        // The Runtime calls the bridge through this guard (vulkan_fsr4_sr.rs).
+        const THROWN: i32 = -77;
+        let (mut width, mut height) = (7_u32, 7_u32);
+        let mut unwound = false;
+        let result = rsf_streamline_vk::sdk_api::guarded_or(THROWN, || {
+            let _frame = Unwound(&mut unwound);
+            unsafe {
+                sdk::plan(
+                    Some(throwing_query),
+                    ptr::null_mut(),
+                    2,
+                    1920,
+                    1080,
+                    &mut width,
+                    &mut height,
+                )
+            }
+        });
+        assert_eq!(result, THROWN);
+        // The Rust frames between the guard and the SDK entry ran their cleanup.
+        assert!(unwound);
     }
 
     #[test]

@@ -11,10 +11,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from committed_bindings import bindgen, emit, finish  # noqa: E402
 
 
-def generate(header, pattern, output, aliases, clang_args, constants='NOTHING', *, recursive=False):
+def generate(header, pattern, output, aliases, clang_args, constants='NOTHING', *, recursive=False, extra=()):
     emit(output, bindgen(
         header, "--allowlist-type", pattern,
         "--allowlist-var", constants, *([] if recursive else ["--no-recursive-allowlist"]),
+        *extra,
         "--no-prepend-enum-name", "--with-derive-default",
         "--raw-line", "#![allow(dead_code, non_camel_case_types, non_snake_case)]",
         *[item for alias in aliases for item in ("--raw-line", alias)],
@@ -80,7 +81,10 @@ def main():
              [f"-I{api}", f"-I{args.fidelityfx / 'upscalers/include'}"],
              r"FFX_API_(CREATE_CONTEXT_DESC_TYPE_(BACKEND_DX12|UPSCALE)|DISPATCH_DESC_TYPE_UPSCALE|"
              r"QUERY_DESC_TYPE_(GET_VERSIONS|GET_PROVIDER_VERSION|UPSCALE_GETRENDERRESOLUTIONFROMQUALITYMODE)|"
-             r"DESC_TYPE_OVERRIDE_VERSION)")
+             r"DESC_TYPE_OVERRIDE_VERSION)",
+             # The SDK can throw C++ exceptions; callers contain them with
+             # rsf_streamline_vk::sdk_api::guarded_or, which needs an unwinding ABI.
+             extra=["--override-abi", "C-unwind=PfnFfx(CreateContext|DestroyContext|Query|Dispatch)"])
 
     generate(root / "runtime/backends/fsr/src/ffx_generation_descriptor_types.h",
              r"ffx(CreateContextDescFrameGeneration(Version|SwapChain(ForHwnd|Version)DX12)?|DispatchDescFrameGeneration(PrepareV2)?|"
