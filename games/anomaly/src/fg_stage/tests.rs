@@ -415,19 +415,19 @@ fn missing_hudless_backbuffer_cannot_advance_fg_history() {
     // synthetic immediate-context/backbuffer leases cross the production stage boundary.
     let platform = Platform {
         struct_size: size_of::<Platform>() as u32,
-        engine_version: c"fixture".as_ptr(),
-        project_id: c"fixture".as_ptr(),
-        units_to_meters: 1.0,
+        engine_version: ptr::null(),
+        project_id: ptr::null(),
+        units_to_meters: 0.0,
         engine_depth_view: Some(no_depth),
-        sr_owns_depth: Some(sr_owns_depth),
-        motion_target: Some(no_motion),
+        sr_owns_depth: None,
+        motion_target: None,
         state_scope: crate::fg_inputs::tests::STATE_SCOPE,
     };
     assert!(unsafe { EngineBindings::bind(&platform) }.is_some());
     assert!(
         unsafe {
             EngineBindings::bind(&Platform {
-                motion_target: None,
+                engine_depth_view: None,
                 ..platform
             })
         }
@@ -468,10 +468,15 @@ fn missing_hudless_backbuffer_cannot_advance_fg_history() {
         Log::default(),
     );
     let platform = EngineBindings {
-        immediate_context: immediate,
-        release_interface: release,
-        backbuffer,
-        output_window,
+        graphics: d3d::Graphics {
+            fixture: Some(d3d::Fixture {
+                immediate_context: immediate,
+                release,
+                backbuffer,
+                output_window,
+            }),
+        },
+        sr_owns_depth,
         ..unsafe { EngineBindings::bind(&platform) }.expect("complete fixture bindings")
     };
     let (options, log) = Cold::attempt().expect("configured fixture");
@@ -554,10 +559,6 @@ unsafe extern "C" fn no_depth(_: u32) -> Raw {
     ptr::null_mut()
 }
 
-unsafe extern "C" fn sr_owns_depth(_: u32) -> bool {
+fn sr_owns_depth(_: u32) -> bool {
     true
-}
-
-unsafe extern "C" fn no_motion() -> rsf_anomaly_motion_frame_target {
-    Default::default()
 }

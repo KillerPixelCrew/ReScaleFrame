@@ -36,7 +36,7 @@ pub(super) unsafe extern "C" fn depth_view(_: u32) -> Raw {
     DEPTH_VIEW.get()
 }
 
-pub(super) unsafe extern "C" fn motion_target() -> rsf_anomaly_motion_frame_target {
+pub(super) fn motion_target() -> rsf_anomaly_motion_frame_target {
     MOTION.get()
 }
 

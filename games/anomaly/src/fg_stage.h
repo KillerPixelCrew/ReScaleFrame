@@ -24,7 +24,7 @@
 //   SRStreamlineDir / SRFidelityFXDir / SRXeSSDir   vendor runtimes, shared with SR
 // The shared frontend keys (FG, FGBackend, FGGeneratedFrames, Latency, FrameLimitUs) are also what the overlay saves.
 //
-// Threads: everything except configure/install/status runs on the engine thread, which renders and Presents.
+// The native render and input callbacks run on the engine thread.
 #include "build_profile.h"
 #include "fg_stage_platform.h"
 #include <rescaleframe/game_api.h>
@@ -37,24 +37,21 @@ namespace rsf::anomaly::fg {
 // Cold-start admission uses the exact BuildProfile selected by the native carrier.
 bool configure_ini(const wchar_t* ini, bool apply, HMODULE runtime, const BuildProfile& build,
     rsf_game_log_fn log) noexcept;
-bool installed() noexcept;
 
-// The overlay's Present sink, called from the bridge's before_present with the engine-facing swap chain, after every
-// tag of the frame and before the upload. Set once by the bootstrap after the overlay started.
-void set_overlay_sink(rsf_anomaly_fg_overlay_present sink) noexcept;
-// Native engine facts. A new input update can close a skipped source without observing its
-// simulation end. The Runtime owns pacing, marker mapping and input deduplication.
-void input_begin(uint32_t engine_frame) noexcept;
-void input_received(uint32_t kinds, uint32_t message_id = 0) noexcept;
-// Native boundaries (native_observer_platform.cpp), engine thread.
-void camera(const float* view, const float* projection) noexcept;              // SetCacheXform, after the original
-void render_begin(uint32_t engine_frame, uint32_t width, uint32_t height) noexcept;   // after IRenderDeviceRender::Begin
-void scope_frame() noexcept;                                                    // after RenderToTarget(rtSVP)
-void ui_boundary() noexcept;                                                    // CHUDManager::RenderUI, before it
-void end_before() noexcept;                                                     // before IRenderDeviceRender::End
-void end_after() noexcept;                                                      // after it (Present returned or skipped)
-void device_reset() noexcept;                                                   // CRender::reset_begin
-// Per-window and total counters for the observer's periodic log. Nothing when not installed.
-void report(void (*emit)(void*, const char*), void* user) noexcept;
+// The native bootstrap provides the overlay sink once. The engine-facing
+// swap chain is borrowed during the bridge's before_present callback.
+inline void set_overlay_sink(rsf_anomaly_fg_overlay_present sink) noexcept {
+    rsf_anomaly_fg_set_overlay_sink(sink, nullptr);
+}
 
+inline constexpr auto installed = rsf_anomaly_fg_installed;
+
+// Preserve the bootstrap callback signatures also declared by input_hooks.h.
+// OnFrame still reports input through the guarded native read and unwind boundary.
+inline void input_begin(uint32_t engine_frame) noexcept {
+    rsf_anomaly_fg_stage_input_begin(engine_frame);
+}
+inline void input_received(uint32_t kinds, uint32_t message) noexcept {
+    rsf_anomaly_fg_stage_input_received(kinds, message);
+}
 }

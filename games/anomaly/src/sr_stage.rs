@@ -1183,6 +1183,7 @@ impl Stage {
         self.active.load(Ordering::Acquire)
     }
 
+    #[cfg(windows)]
     fn owns_depth(&self, native_frame: u32) -> bool {
         let stage = self.stage.load(Ordering::Acquire);
         world_window(stage)
@@ -2941,8 +2942,8 @@ extern "C" fn rsf_anomaly_sr_stage_quiesce() -> bool {
 extern "C" fn rsf_anomaly_sr_stage_active() -> bool {
     STAGE.active()
 }
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_stage_owns_depth(native_frame: u32) -> bool {
+#[cfg(windows)]
+pub(crate) fn owns_depth(native_frame: u32) -> bool {
     STAGE.owns_depth(native_frame)
 }
 #[unsafe(no_mangle)]

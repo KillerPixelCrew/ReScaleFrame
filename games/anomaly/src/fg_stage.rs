@@ -18,8 +18,10 @@ use crate::fg_inputs::{Owner as InputPass, Result as InputResult, StateScope};
 use crate::fg_policy::{Counters, Decision, Policy, RSF_ANOMALY_RESET_NONE, RSF_ANOMALY_SKIP_NONE};
 use crate::fg_stage_abi::*;
 use crate::host_log::Log;
-use crate::lease::Lease;
 use crate::motion_frame_target_abi::rsf_anomaly_motion_frame_target;
+use crate::sr_stage_abi::{
+    RSF_ANOMALY_SR_ENGINE_VERSION, RSF_ANOMALY_SR_PROJECT_ID, RSF_ANOMALY_SR_VIEW_SPACE_TO_METERS,
+};
 use rsf_game_sys::*;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
@@ -100,17 +102,10 @@ struct FgBindings {
 
 struct EngineBindings {
     state_scope: StateScope,
-    release_interface: unsafe extern "C" fn(Raw),
-    engine_version: *const c_char,
-    project_id: *const c_char,
-    units_to_meters: f32,
     engine_depth_view: unsafe extern "C" fn(rva: u32) -> *mut c_void,
-    sr_owns_depth: unsafe extern "C" fn(native_frame: u32) -> bool,
-    motion_target: unsafe extern "C" fn() -> rsf_anomaly_motion_frame_target,
-    immediate_context: unsafe extern "C" fn(chain: *mut c_void) -> *mut c_void,
-    backbuffer: unsafe extern "C" fn(chain: *mut c_void) -> *mut c_void,
-    depth_texture: unsafe extern "C" fn(view: *mut c_void) -> *mut c_void,
-    output_window: unsafe extern "C" fn(chain: *mut c_void, window: *mut usize) -> bool,
+    sr_owns_depth: fn(native_frame: u32) -> bool,
+    motion_target: fn() -> rsf_anomaly_motion_frame_target,
+    graphics: d3d::Graphics,
 }
 
 impl EngineBindings {
@@ -118,17 +113,10 @@ impl EngineBindings {
         let platform = unsafe { full_table(platform) }?;
         Some(Self {
             state_scope: StateScope::bind(platform.state_scope)?,
-            release_interface: d3d::release,
-            engine_version: platform.engine_version,
-            project_id: platform.project_id,
-            units_to_meters: platform.units_to_meters,
             engine_depth_view: platform.engine_depth_view?,
-            sr_owns_depth: platform.sr_owns_depth?,
-            motion_target: platform.motion_target?,
-            immediate_context: d3d::immediate_context,
-            backbuffer: d3d::backbuffer,
-            depth_texture: d3d::depth_texture,
-            output_window: d3d::output_window,
+            sr_owns_depth: crate::sr_stage::owns_depth,
+            motion_target: crate::motion::frame_target,
+            graphics: d3d::Graphics::default(),
         })
     }
 }
@@ -382,8 +370,8 @@ struct Stage {
     status: Mutex<Status>,
 }
 
-// SAFETY: the native metadata strings are immutable process-lifetime data.
-// COM leaves are called only on the serialized render thread. Shared state uses locks or atomics.
+// SAFETY: COM access and native engine reads run on the serialized render thread.
+// Shared state uses locks or atomics.
 unsafe impl Send for Stage {}
 unsafe impl Sync for Stage {}
 
@@ -450,15 +438,15 @@ impl Stage {
             backend: frontend.backend,
             max_generated_frames: u32::MAX,
             // X-Ray uses metres and finite, standard depth.
-            units_to_meters: self.platform.units_to_meters,
+            units_to_meters: RSF_ANOMALY_SR_VIEW_SPACE_TO_METERS as f32,
             runtime_switching: 1,
             ui_mode: RSF_UI_MODE_BACKBUFFER_HUDLESS,
             streamline_directory_utf8: options.streamline.as_ptr(),
             fsr3_directory_utf8: options.fidelityfx.as_ptr(),
             fsr4_directory_utf8: options.fidelityfx.as_ptr(),
             xess_directory_utf8: options.xess.as_ptr(),
-            engine_version_utf8: self.platform.engine_version,
-            project_id_utf8: self.platform.project_id,
+            engine_version_utf8: RSF_ANOMALY_SR_ENGINE_VERSION.as_ptr().cast(),
+            project_id_utf8: RSF_ANOMALY_SR_PROJECT_ID.as_ptr().cast(),
             ..Default::default()
         };
         let installed = unsafe {
@@ -533,11 +521,6 @@ impl Stage {
         unsafe { (self.tables.fg.bind_source)(identity.map_or(ptr::null(), ptr::from_ref)) };
     }
 
-    fn lease(&self, object: Raw) -> Option<Lease> {
-        let release = self.platform.release_interface;
-        Lease::new(object, release)
-    }
-
     fn inputs_ready(&self, source: u64) -> bool {
         unsafe { (self.tables.fg.inputs_ready)(source) != 0 }
     }
@@ -550,7 +533,7 @@ impl Stage {
         previous: Option<Camera>,
     ) {
         // A reduced world frame needs the depth supplied by the SR stage.
-        if unsafe { (self.platform.sr_owns_depth)(render.native_frame) } {
+        if (self.platform.sr_owns_depth)(render.native_frame) {
             return;
         }
         let Some(camera) = render.camera else { return };
@@ -570,17 +553,14 @@ impl Stage {
         identity.camera_valid = 1;
 
         let view = unsafe { (self.platform.engine_depth_view)(self.depth_rva) };
-        if view.is_null() {
-            return;
-        }
-        let Some(depth) = self.lease(unsafe { (self.platform.depth_texture)(view) }) else {
+        let Some(depth) = (unsafe { d3d::depth_texture(view) }) else {
             return;
         };
-        let target = unsafe { (self.platform.motion_target)() };
+        let target = (self.platform.motion_target)();
         let motion = render.motion_input(target);
         let [width, height] = render.extent;
         let frame = InputFrame {
-            depth: depth.as_ptr(),
+            depth: windows::core::Interface::as_raw(&depth),
             motion,
             clip_to_previous_clip: identity.camera.clip_to_previous_clip,
             width,
@@ -1025,23 +1005,22 @@ extern "C" fn rsf_anomaly_fg_stage_ui_boundary() {
         stage.engine.lock().unwrap().policy.inputs(false);
         return;
     };
-    let Some(context_lease) = stage.lease(unsafe { (stage.platform.immediate_context)(chain) })
-    else {
+    let Some(context_lease) = (unsafe { stage.platform.graphics.immediate_context(chain) }) else {
         stage.engine.lock().unwrap().policy.inputs(false);
         return;
     };
-    let context = context_lease.as_ptr();
+    let context = context_lease.as_raw();
     let source = sr.source_frame_id;
     if !stage.inputs_ready(source) {
         stage.capture_adapter_inputs(context, sr, render, previous);
     }
     let inputs_ready = stage.inputs_ready(source);
-    let Some(buffer) = stage.lease(unsafe { (stage.platform.backbuffer)(chain) }) else {
+    let Some(buffer) = (unsafe { stage.platform.graphics.backbuffer(chain) }) else {
         stage.engine.lock().unwrap().policy.inputs(false);
         return;
     };
     // The finished world scene, after phase_pp, tracers and scope copy, before CHUDManager::RenderUI.
-    scene.scene_surface = buffer.as_ptr();
+    scene.scene_surface = buffer.as_raw();
     let began = stage.pass(context, &scene, true);
     let ended = stage.pass(context, &scene, false);
     let decision = stage
@@ -1074,10 +1053,9 @@ extern "C" fn rsf_anomaly_fg_stage_end_before() {
     let Some(chain) = stage.live_chain() else {
         return;
     };
-    let mut output = 0;
-    if !unsafe { (stage.platform.output_window)(chain, &mut output) } {
+    let Some(output) = (unsafe { stage.platform.graphics.output_window(chain) }) else {
         return;
-    }
+    };
     window.window_key = output as u64;
     window.rhi_viewport_key = RHI_VIEWPORT;
     window.swapchain = chain;
@@ -1128,8 +1106,8 @@ extern "C" fn rsf_anomaly_fg_stage_device_reset() {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_fg_stage_report(emit: rsf_game_log_fn, user: Raw) {
+#[unsafe(export_name = "rsf_anomaly_fg_stage_report")]
+pub(crate) extern "C" fn report(emit: rsf_game_log_fn, user: Raw) {
     let Some(stage) = installed().filter(|_| emit.is_some()) else {
         return;
     };

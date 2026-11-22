@@ -10,7 +10,6 @@ unsafe extern "C" {
     fn rsf_anomaly_geometry_report(emit: rsf_game_log_fn, user: *mut c_void);
     fn rsf_anomaly_sr_stage_report(emit: rsf_game_log_fn, user: *mut c_void);
     fn rsf_anomaly_motion_stage_report(emit: rsf_game_log_fn, user: *mut c_void);
-    fn rsf_anomaly_fg_stage_report(emit: rsf_game_log_fn, user: *mut c_void);
 }
 
 struct Sink<'a> {
@@ -49,6 +48,6 @@ pub(super) fn stages(session: Session, platform: &Platform) {
     unsafe {
         rsf_anomaly_sr_stage_report(Some(forward), user);
         rsf_anomaly_motion_stage_report(Some(forward), user);
-        rsf_anomaly_fg_stage_report(Some(forward), user);
     }
+    crate::fg_stage::report(Some(forward), user);
 }

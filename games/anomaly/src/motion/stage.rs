@@ -689,13 +689,15 @@ extern "C" fn rsf_anomaly_motion_stage_report(emit: rsf_game_log_fn, user: Raw) 
     }
 }
 
+pub(crate) fn frame_target() -> FrameTarget {
+    STAGE
+        .get()
+        .map_or_else(FrameTarget::default, Stage::frame_target)
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_motion_stage_frame_target(target: &mut MaybeUninit<FrameTarget>) {
-    target.write(
-        STAGE
-            .get()
-            .map_or_else(FrameTarget::default, Stage::frame_target),
-    );
+    target.write(frame_target());
 }
 
 #[unsafe(no_mangle)]

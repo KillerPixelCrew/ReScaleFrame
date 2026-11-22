@@ -22,7 +22,7 @@ use crate::geometry_registry_abi::{
 use crate::native_geometry_abi::{HARDWARE_SKINNED, RIGID, SINGLE_BONE, TREE};
 use crate::shader_family::{CORE_MODEL, CORE_STATIC, FOLIAGE_DETAIL, FOLIAGE_TREE};
 #[cfg(windows)]
-pub(crate) use stage::record_retirement;
+pub(crate) use stage::{frame_target, record_retirement};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, btree_map::Entry};
 use std::ffi::c_char;

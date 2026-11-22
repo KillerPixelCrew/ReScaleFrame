@@ -2,9 +2,6 @@
 //! The original CTest scenarios, through the same Rust stage and Runtime tables as the game.
 use super::options::Settings;
 use super::*;
-use crate::sr_stage_abi::{
-    RSF_ANOMALY_SR_ENGINE_VERSION, RSF_ANOMALY_SR_PROJECT_ID, RSF_ANOMALY_SR_VIEW_SPACE_TO_METERS,
-};
 use std::cell::RefCell;
 use std::slice;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -69,23 +66,16 @@ fn options(backend: Option<u32>, capture_dir: String, vendors: [Vec<u16>; 3]) ->
 }
 
 fn engine_bindings(state_scope: StateScope) -> EngineBindings {
-    unsafe extern "C" fn sr_owns_depth(_: u32) -> bool {
+    fn sr_owns_depth(_: u32) -> bool {
         // The fixture's Temporal driver is separate from the native SR scene owner.
         false
     }
     EngineBindings {
         state_scope,
-        release_interface: d3d::release,
-        engine_version: RSF_ANOMALY_SR_ENGINE_VERSION.as_ptr().cast(),
-        project_id: RSF_ANOMALY_SR_PROJECT_ID.as_ptr().cast(),
-        units_to_meters: RSF_ANOMALY_SR_VIEW_SPACE_TO_METERS as f32,
         engine_depth_view: device::depth_view,
         sr_owns_depth,
         motion_target: device::motion_target,
-        immediate_context: d3d::immediate_context,
-        backbuffer: d3d::backbuffer,
-        depth_texture: d3d::depth_texture,
-        output_window: d3d::output_window,
+        graphics: d3d::Graphics::default(),
     }
 }
 
