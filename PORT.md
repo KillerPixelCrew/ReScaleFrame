@@ -711,19 +711,19 @@ Port state preservation, role selection, UI composition and resource views toget
 - [x] [runtime/orchestrator/src/native_translucency_com.cpp](runtime/orchestrator/src/native_translucency_com.cpp)
 - [x] [runtime/orchestrator/src/sampler_bias_bridge.h](runtime/orchestrator/src/sampler_bias_bridge.h)
 - [x] [runtime/orchestrator/src/sampler_bias_com.cpp](runtime/orchestrator/src/sampler_bias_com.cpp)
-- [ ] [runtime/orchestrator/src/depth_domains_abi.cpp](runtime/orchestrator/src/depth_domains_abi.cpp) (shared SDK predicate thunk)
+- [x] [runtime/orchestrator/src/depth_domains_abi.cpp](runtime/orchestrator/src/depth_domains_abi.cpp) (shared SDK predicate thunk)
 - [ ] [runtime/orchestrator/src/native_composition_unload.cpp](runtime/orchestrator/src/native_composition_unload.cpp) (CRT teardown registration)
 
 **Fixtures (8)**
 
-- [ ] [tests/d3d11_state.cpp](tests/d3d11_state.cpp)
+- [x] [tests/d3d11_state.cpp](tests/d3d11_state.cpp)
 - [x] [tests/native_reinsert.cpp](tests/native_reinsert.cpp)
-- [ ] [tests/native_translucency.cpp](tests/native_translucency.cpp)
-- [ ] [tests/native_translucency_abi.cpp](tests/native_translucency_abi.cpp)
+- [x] [tests/native_translucency.cpp](tests/native_translucency.cpp)
+- [x] [tests/native_translucency_abi.cpp](tests/native_translucency_abi.cpp)
 - [x] [tests/resource_roles.cpp](tests/resource_roles.cpp)
 - [x] [tests/sampler_bias.cpp](tests/sampler_bias.cpp)
 - [x] [tests/ui_identify.cpp](tests/ui_identify.cpp)
-- [ ] [tests/ui_layer.cpp](tests/ui_layer.cpp)
+- [x] [tests/ui_layer.cpp](tests/ui_layer.cpp)
 
 **Rust review findings (6)**
 
@@ -814,30 +814,31 @@ Port host wrappers, options and bindings for sharpening. Track shader provenance
 - [x] [runtime/graphics/src/sharpening/d3d11.cpp](runtime/graphics/src/sharpening/d3d11.cpp)
 - [x] [runtime/graphics/src/sharpening/d3d11.h](runtime/graphics/src/sharpening/d3d11.h)
 - [x] [runtime/graphics/src/sharpening/d3d12.cpp](runtime/graphics/src/sharpening/d3d12.cpp)
-- [ ] [runtime/graphics/src/sharpening/d3d12.h](runtime/graphics/src/sharpening/d3d12.h)
+- [x] [runtime/graphics/src/sharpening/d3d12.h](runtime/graphics/src/sharpening/d3d12.h)
 - [x] [runtime/graphics/src/sharpening/d3d12_platform.h](runtime/graphics/src/sharpening/d3d12_platform.h)
-- [ ] [runtime/graphics/src/sharpening/da_das.h](runtime/graphics/src/sharpening/da_das.h)
-- [ ] [runtime/graphics/src/sharpening/da_das_spirv.h](runtime/graphics/src/sharpening/da_das_spirv.h)
-- [ ] [runtime/graphics/src/sharpening/da_rcas.h](runtime/graphics/src/sharpening/da_rcas.h)
-- [ ] [runtime/graphics/src/sharpening/da_rcas_spirv.h](runtime/graphics/src/sharpening/da_rcas_spirv.h)
-- [ ] [runtime/graphics/src/sharpening/depth_color.inc](runtime/graphics/src/sharpening/depth_color.inc) (C++ raw string containing shared HLSL)
+- [x] [runtime/graphics/src/sharpening/da_das.h](runtime/graphics/src/sharpening/da_das.h) (unchanged licensed shader payload)
+- [x] [runtime/graphics/src/sharpening/da_das_spirv.h](runtime/graphics/src/sharpening/da_das_spirv.h) (unchanged licensed shader payload)
+- [x] [runtime/graphics/src/sharpening/da_rcas.h](runtime/graphics/src/sharpening/da_rcas.h) (unchanged licensed shader payload)
+- [x] [runtime/graphics/src/sharpening/da_rcas_spirv.h](runtime/graphics/src/sharpening/da_rcas_spirv.h) (unchanged licensed shader payload)
+- [x] [runtime/graphics/src/sharpening/depth_color.inc](runtime/graphics/src/sharpening/depth_color.inc) (C++ raw string containing shared HLSL)
 - [ ] [runtime/graphics/src/sharpening/pass_payload.cpp](runtime/graphics/src/sharpening/pass_payload.cpp) (retained GPL shader access and constant packing)
 - [ ] [runtime/graphics/src/sharpening/options.h](runtime/graphics/src/sharpening/options.h)
-- [ ] [runtime/graphics/src/sharpening/rcas.h](runtime/graphics/src/sharpening/rcas.h)
-- [ ] [runtime/graphics/src/sharpening/rcas_spirv.h](runtime/graphics/src/sharpening/rcas_spirv.h)
-- [ ] [runtime/orchestrator/include/rescaleframe/sharpening_settings.h](runtime/orchestrator/include/rescaleframe/sharpening_settings.h)
-- [ ] [runtime/orchestrator/src/sharpening_pass_options.h](runtime/orchestrator/src/sharpening_pass_options.h)
-- [ ] [runtime/orchestrator/src/sharpening_vulkan.h](runtime/orchestrator/src/sharpening_vulkan.h)
-- [ ] [runtime/orchestrator/src/sharpening_vulkan_core.h](runtime/orchestrator/src/sharpening_vulkan_core.h)
+- [x] [runtime/graphics/src/sharpening/rcas.h](runtime/graphics/src/sharpening/rcas.h) (unchanged licensed shader payload)
+- [x] [runtime/graphics/src/sharpening/rcas_spirv.h](runtime/graphics/src/sharpening/rcas_spirv.h) (unchanged licensed shader payload)
+- [x] [runtime/orchestrator/include/rescaleframe/sharpening_settings.h](runtime/orchestrator/include/rescaleframe/sharpening_settings.h)
+- [x] [runtime/orchestrator/src/sharpening_pass_options.h](runtime/orchestrator/src/sharpening_pass_options.h)
+- [x] [runtime/orchestrator/src/sharpening_vulkan.h](runtime/orchestrator/src/sharpening_vulkan.h)
+- [x] [runtime/orchestrator/src/sharpening_vulkan_core.h](runtime/orchestrator/src/sharpening_vulkan_core.h)
 
-**Fixtures (6)**
+**Fixtures (7)**
 
 - [x] [tests/engine_sharpening.cpp](tests/engine_sharpening.cpp)
 - [x] [tests/sharpening.cpp](tests/sharpening.cpp)
-- [ ] [tests/sharpening_d3d12.cpp](tests/sharpening_d3d12.cpp)
-- [ ] [tests/sharpening_settings.cpp](tests/sharpening_settings.cpp)
-- [ ] [tests/sharpening_vulkan.cpp](tests/sharpening_vulkan.cpp)
-- [ ] [tests/sharpening_vulkan_cpu.cpp](tests/sharpening_vulkan_cpu.cpp)
+- [x] [tests/sharpening_d3d12.cpp](tests/sharpening_d3d12.cpp)
+- [ ] [tests/sharpening_settings_native.cpp](tests/sharpening_settings_native.cpp) (SDK descriptor and CRT fixture probes)
+- [x] [tests/sharpening_settings.cpp](tests/sharpening_settings.cpp)
+- [x] [tests/sharpening_vulkan.cpp](tests/sharpening_vulkan.cpp)
+- [x] [tests/sharpening_vulkan_cpu.cpp](tests/sharpening_vulkan_cpu.cpp)
 
 **Rust review findings (4)**
 
@@ -898,23 +899,23 @@ Port input dumps, texture readback, capture metadata and completion; account for
 - [ ] [runtime/backends/common/frame_capture_vk.h](runtime/backends/common/frame_capture_vk.h)
 - [x] [runtime/graphics/include/rescaleframe/texture_dump.h](runtime/graphics/include/rescaleframe/texture_dump.h)
 - [ ] [runtime/graphics/src/texture_dump.cpp](runtime/graphics/src/texture_dump.cpp)
-- [ ] [runtime/graphics/src/texture_dump_platform.h](runtime/graphics/src/texture_dump_platform.h)
+- [x] [runtime/graphics/src/texture_dump_platform.h](runtime/graphics/src/texture_dump_platform.h)
 - [x] [runtime/orchestrator/include/rescaleframe/input_dump.h](runtime/orchestrator/include/rescaleframe/input_dump.h)
 - [x] [runtime/orchestrator/include/rescaleframe/input_dump_d3d12.h](runtime/orchestrator/include/rescaleframe/input_dump_d3d12.h)
 - [x] [runtime/orchestrator/include/rescaleframe/input_dump_vulkan.h](runtime/orchestrator/include/rescaleframe/input_dump_vulkan.h)
 - [x] [runtime/orchestrator/include/rescaleframe/named_frame_dump.h](runtime/orchestrator/include/rescaleframe/named_frame_dump.h)
 - [ ] [runtime/orchestrator/src/input_dump.cpp](runtime/orchestrator/src/input_dump.cpp)
-- [ ] [runtime/orchestrator/src/input_dump_platform.h](runtime/orchestrator/src/input_dump_platform.h)
+- [x] [runtime/orchestrator/src/input_dump_platform.h](runtime/orchestrator/src/input_dump_platform.h)
 - [ ] [runtime/orchestrator/src/input_dump_vulkan.cpp](runtime/orchestrator/src/input_dump_vulkan.cpp)
 
 **Fixtures (6)**
 
-- [ ] [tests/capture_metadata.cpp](tests/capture_metadata.cpp)
-- [ ] [tests/input_dump.cpp](tests/input_dump.cpp)
-- [ ] [tests/input_dump_d3d12.cpp](tests/input_dump_d3d12.cpp)
-- [ ] [tests/input_dump_vulkan.cpp](tests/input_dump_vulkan.cpp)
-- [ ] [tests/input_dump_vulkan_cpu.cpp](tests/input_dump_vulkan_cpu.cpp)
-- [ ] [tests/texture_dump.cpp](tests/texture_dump.cpp)
+- [x] [tests/capture_metadata.cpp](tests/capture_metadata.cpp)
+- [x] [tests/input_dump.cpp](tests/input_dump.cpp)
+- [x] [tests/input_dump_d3d12.cpp](tests/input_dump_d3d12.cpp)
+- [x] [tests/input_dump_vulkan.cpp](tests/input_dump_vulkan.cpp)
+- [x] [tests/input_dump_vulkan_cpu.cpp](tests/input_dump_vulkan_cpu.cpp)
+- [x] [tests/texture_dump.cpp](tests/texture_dump.cpp)
 
 **Rust review findings (13)**
 
@@ -1463,7 +1464,7 @@ Port SDK loading, DLSS SR and FG, capture and session lifetime across the Runtim
 - Capture publication after a submitted command or queue is retired ([G07](#g07), [V02](#v02), [V05](#v05), [V06](#v06)).
 - Shared Vulkan resource state, provider selection and queue retirement ([V01](#v01), [V02](#v02), [V03](#v03), [V05](#v05), [V06](#v06)).
 
-**Port files (17)**
+**Port files (18)**
 
 - [ ] [runtime/orchestrator/include/rescaleframe/native_fg_dlss_vulkan.h](runtime/orchestrator/include/rescaleframe/native_fg_dlss_vulkan.h)
 - [ ] [runtime/orchestrator/include/rescaleframe/native_streamline_vulkan.h](runtime/orchestrator/include/rescaleframe/native_streamline_vulkan.h)
@@ -1475,6 +1476,7 @@ Port SDK loading, DLSS SR and FG, capture and session lifetime across the Runtim
 - [ ] [runtime/orchestrator/src/native_fg_dlss_vulkan_capture_ledger.h](runtime/orchestrator/src/native_fg_dlss_vulkan_capture_ledger.h)
 - [ ] [runtime/orchestrator/src/native_fg_dlss_vulkan_platform.h](runtime/orchestrator/src/native_fg_dlss_vulkan_platform.h)
 - [x] [runtime/vulkan/ngx/vulkanstory_ngx.h](runtime/vulkan/ngx/vulkanstory_ngx.h)
+- [ ] [runtime/vulkan/streamline/sdk_fg_options_checks.h](runtime/vulkan/streamline/sdk_fg_options_checks.h) (native DLSS-G SDK layout assertions)
 - [ ] [runtime/vulkan/streamline/sdk_records_checks.h](runtime/vulkan/streamline/sdk_records_checks.h) (native SDK layout assertions)
 - [ ] [runtime/vulkan/streamline/bridge.cpp](runtime/vulkan/streamline/bridge.cpp)
 - [ ] [runtime/vulkan/streamline/present-capture.h](runtime/vulkan/streamline/present-capture.h)
