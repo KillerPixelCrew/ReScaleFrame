@@ -619,5 +619,41 @@ impl Drop for XessOwner {
     }
 }
 
+/// The production table when CMake found the XeSS Vulkan SDK headers (the xess-vk feature).
+fn native_ops() -> Option<&'static XessOps> {
+    cfg!(feature = "xess-vk").then_some(&native::rsf_xessvk_native_ops)
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_xessvk_initialize(setup: *const XessSetup) -> i32 {
+    unsafe { rsf_core_xessvk_initialize(native_ops(), setup) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_xessvk_instance_requirements(
+    count: *mut u32,
+    names: Names,
+    minimum_api: *mut u32,
+) -> i32 {
+    unsafe { rsf_core_xessvk_instance_requirements(native_ops(), count, names, minimum_api) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_xessvk_device_requirements(
+    instance: Handle,
+    physical: Handle,
+    count: *mut u32,
+    names: Names,
+    features: *mut Handle,
+) -> i32 {
+    unsafe {
+        rsf_core_xessvk_device_requirements(native_ops(), instance, physical, count, names, features)
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_xessvk_shutdown() -> i32 {
+    unsafe { rsf_core_xessvk_shutdown(native_ops()) }
+}
 #[cfg(test)]
 pub(super) mod tests;

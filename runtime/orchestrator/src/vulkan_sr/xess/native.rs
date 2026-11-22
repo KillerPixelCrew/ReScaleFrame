@@ -325,9 +325,10 @@ unsafe extern "C" fn flush_capture(owner: Handle) {
     let _ = unsafe { rsf_core_capture_vk_flush(native(owner).capture, 0, ptr::null_mut()) };
 }
 
-// Selected by native_xess_vulkan.c when the build has the XeSS Vulkan SDK.
+// Selected when the build has the XeSS Vulkan SDK (the xess-vk feature); native_sr_vulkan.c
+// also names it.
 #[unsafe(no_mangle)]
-static rsf_xessvk_native_ops: XessOps = XessOps {
+pub(super) static rsf_xessvk_native_ops: XessOps = XessOps {
     loader: Loader {
         load: rsf_core_vk_sdk_load,
         unload: rsf_core_vk_sdk_unload,

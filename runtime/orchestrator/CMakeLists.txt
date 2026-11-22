@@ -35,8 +35,12 @@ add_library(rsf_orchestrator_core OBJECT
 target_include_directories(rsf_orchestrator_core PUBLIC include)
 target_compile_definitions(rsf_orchestrator_core PUBLIC RSF_RUNTIME_BUILD)
 target_link_libraries(rsf_orchestrator_core PUBLIC rsf_native_cpu rsf_runtime_leaves)
-# The vendor headers cmake/vendor.cmake found select the D3D12 FidelityFX and XeSS providers.
+# The vendor headers cmake/vendor.cmake found select the D3D12 FidelityFX and XeSS providers and the
+# XeSS Vulkan SR table.
 set(rsf_orchestrator_features)
+if(RSF_HAVE_VULKAN AND RSF_HAVE_XESS_VK)
+    list(APPEND rsf_orchestrator_features --features xess-vk)
+endif()
 foreach(rsf_vendor "FFX;ffx" "FFX_FG;ffx-fg" "XESS;xess" "XESS_FG;xess-fg")
     list(GET rsf_vendor 0 rsf_vendor_flag)
     list(GET rsf_vendor 1 rsf_vendor_feature)

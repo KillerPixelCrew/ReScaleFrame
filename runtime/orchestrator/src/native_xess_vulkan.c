@@ -1,9 +1,16 @@
 /* SPDX-License-Identifier: MIT */
-/* XeSS Vulkan SR public exports. Rust (vulkan_sr/xess.rs and xess/native.rs)
-   owns export lookup, the SDK session, typed SDK calls, contexts and teardown.
-   This leaf selects the table for SDK-enabled builds and checks the SDK C
-   layouts and values that the Rust owner mirrors. */
+/* XeSS Vulkan SR SDK layout checks. Rust (vulkan_sr/xess.rs and xess/native.rs)
+   owns the public entry points, export lookup, the SDK session, typed SDK calls,
+   contexts and teardown. This unit checks the SDK C layouts and values that the
+   Rust owner mirrors while those records are hand-written. */
 #include "native_xess_vulkan.h"
+#include "rust_export.h"
+
+/* The public entry points are Rust (vulkan_sr/xess.rs); the Runtime DLL exports them here. */
+RSF_EXPORT(rsf_xessvk_initialize)
+RSF_EXPORT(rsf_xessvk_instance_requirements)
+RSF_EXPORT(rsf_xessvk_device_requirements)
+RSF_EXPORT(rsf_xessvk_shutdown)
 
 #if defined(RSF_HAVE_XESS_VK)
 #define VK_NO_PROTOTYPES
@@ -37,22 +44,3 @@ _Static_assert(VK_IMAGE_LAYOUT_GENERAL == 1 && VK_IMAGE_USAGE_TRANSFER_SRC_BIT =
     VK_IMAGE_USAGE_TRANSFER_DST_BIT == 2 && VK_IMAGE_USAGE_SAMPLED_BIT == 4 && VK_IMAGE_USAGE_STORAGE_BIT == 8,
     "Vulkan layouts and usage");
 #endif
-
-RSF_RUNTIME_API rsf_backend_result rsf_xessvk_initialize(const rsf_xessvk_setup* setup) {
-    return rsf_core_xessvk_initialize(RSF_XESSVK_NATIVE_PLATFORM, setup);
-}
-
-RSF_RUNTIME_API rsf_backend_result rsf_xessvk_instance_requirements(uint32_t* count, const char* const** names,
-    uint32_t* minimum_api) {
-    return rsf_core_xessvk_instance_requirements(RSF_XESSVK_NATIVE_PLATFORM, count, names, minimum_api);
-}
-
-RSF_RUNTIME_API rsf_backend_result rsf_xessvk_device_requirements(void* instance, void* physical,
-    uint32_t* count, const char* const** names, void** features) {
-    return rsf_core_xessvk_device_requirements(RSF_XESSVK_NATIVE_PLATFORM, instance, physical, count, names,
-        features);
-}
-
-RSF_RUNTIME_API rsf_backend_result rsf_xessvk_shutdown(void) {
-    return rsf_core_xessvk_shutdown(RSF_XESSVK_NATIVE_PLATFORM);
-}

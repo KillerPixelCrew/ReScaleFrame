@@ -29,6 +29,8 @@ ffx = []
 ffx-fg = []
 xess = []
 xess-fg = []
+# The XeSS Vulkan SR table, built with the Vulkan and XeSS Vulkan headers.
+xess-vk = []
 
 [dev-dependencies]
 rsf-graphics = { path = "../graphics/rust", features = ["test-support"] }
