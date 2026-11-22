@@ -13,4 +13,3 @@ bool rsf_unity_package_is_editor() noexcept;
 bool rsf_unity_package_bridge_open(bool editor);
 bool rsf_unity_package_bridge_try_close() noexcept;
 void rsf_unity_package_bridge_finish_retirement(bool commit) noexcept;
-#define RSF_UNITY_PREVIEW_SOURCE_COMMON 0x40000000u

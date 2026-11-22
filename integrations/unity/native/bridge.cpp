@@ -57,7 +57,6 @@ static_assert(offsetof(rsf_unity_d3d11_pass_plan, surfaces) == 16, "d3d11_pass.r
 static_assert(offsetof(rsf_unity_d3d11_pass_plan, states) == 32);
 static_assert(offsetof(rsf_unity_d3d11_pass_plan, pass) == 48);
 static_assert(sizeof(rsf_unity_d3d11_pass_plan) == 48 + sizeof(rsf_game_render_pass));
-static_assert(RSF_UNITY_D3D11_PREVIEW_SOURCE_COMMON == RSF_UNITY_PREVIEW_SOURCE_COMMON);
 // The D3D12 states d3d11_pass.rs plans and the DXGI formats it chooses.
 static_assert(D3D12_RESOURCE_STATE_COMMON == 0 && D3D12_RESOURCE_STATE_RENDER_TARGET == 0x4 &&
     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE == 0x40 && D3D12_RESOURCE_STATE_COPY_DEST == 0x400);

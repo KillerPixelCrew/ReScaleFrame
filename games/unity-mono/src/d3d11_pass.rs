@@ -16,7 +16,10 @@
 //! signals and waits, the barriers it records with the states planned here, list execution, the
 //! output copy and the render-pass calls. Vulkan (`vulkan_bridge.cpp`) and the Mono D3D12 bridge
 //! (`games/unity-mono/src/bridge.cpp`) assemble their own passes and do not use this module.
-use crate::bridge_abi::{RSF_UNITY_PACKET_PROBE, RSF_UNITY_PACKET_RESET, rsf_unity_packet};
+use crate::bridge_abi::{
+    RSF_UNITY_PACKET_PROBE, RSF_UNITY_PACKET_RESET, RSF_UNITY_PREVIEW_SOURCE_COMMON,
+    rsf_unity_packet,
+};
 use crate::bridge_interop::rsf_unity_interop_submitted;
 use crate::bridge_state::{
     rsf_unity_frames_activate, rsf_unity_frames_pending_change, rsf_unity_frames_settle_change,
@@ -31,7 +34,7 @@ use rsf_game_sys::{
 // issues the reconstruction packet on EventId, the window packet on EventId + 1 and the HUD-less
 // packet on EventId + 2.
 const EVENT_RECONSTRUCT: u32 = 0;
-const EVENT_WINDOW: u32 = 1;
+pub(super) const EVENT_WINDOW: u32 = 1;
 const EVENT_HUDLESS: u32 = 2;
 
 // Routes, as d3d11_pass.h defines them.
@@ -46,9 +49,6 @@ const RETIRED: u32 = 0;
 const HANDBACK_FAILED: u32 = 1;
 const SIGNAL_FAILED: u32 = 2;
 
-/// RSF_UNITY_PREVIEW_SOURCE_COMMON (integrations/unity/native/package.h): the window pass's colour
-/// is a shared surface in the COMMON state. bridge.cpp asserts the match.
-const PREVIEW_SOURCE_COMMON: u32 = 0x4000_0000;
 /// RSF_SCREEN_FLIGHT, a cast macro bindgen does not evaluate. The package's SR pass replaces it
 /// from its gameplay setting (package_state.rs).
 const SCREEN_FLIGHT: u32 = 4;
@@ -95,7 +95,7 @@ pub(crate) struct PassPlan {
     surfaces: [u32; 4],
     /// The D3D12 state each input surface is in while the pass records.
     states: [u32; 4],
-    pass: rsf_game_render_pass,
+    pub(super) pass: rsf_game_render_pass,
 }
 
 const _: () = assert!(
@@ -136,7 +136,7 @@ fn base_pass(packet: &rsf_unity_packet) -> rsf_game_render_pass {
 /// The route and pass for event `offset` in the reserved range. `editor` is the package running
 /// in the Unity Editor, whose window pass presents a copy of the packet colour instead of the
 /// engine swapchain.
-fn plan(offset: u32, packet: &rsf_unity_packet, editor: bool) -> PassPlan {
+pub(super) fn plan(offset: u32, packet: &rsf_unity_packet, editor: bool) -> PassPlan {
     let mut plan = PassPlan {
         route: ROUTE_NONE,
         swapchain_color: 0,
@@ -163,7 +163,7 @@ fn plan(offset: u32, packet: &rsf_unity_packet, editor: bool) -> PassPlan {
             if editor && !packet.color.is_null() {
                 plan.route = ROUTE_PREVIEW;
                 plan.surfaces[0] = SURFACE_PREVIEW;
-                plan.pass.flags |= PREVIEW_SOURCE_COMMON;
+                plan.pass.flags |= RSF_UNITY_PREVIEW_SOURCE_COMMON;
             } else {
                 plan.route = ROUTE_WINDOW;
             }
@@ -373,11 +373,11 @@ mod tests {
         let player = plan(EVENT_WINDOW, &packet(), false);
         assert_eq!(player.route, ROUTE_WINDOW);
         assert_eq!(player.pass.role, RSF_GAME_RENDER_WINDOW);
-        assert_eq!(player.pass.flags & PREVIEW_SOURCE_COMMON, 0);
+        assert_eq!(player.pass.flags & RSF_UNITY_PREVIEW_SOURCE_COMMON, 0);
         let preview = plan(EVENT_WINDOW, &packet(), true);
         assert_eq!(preview.route, ROUTE_PREVIEW);
         assert_eq!(preview.surfaces[0], SURFACE_PREVIEW);
-        assert_ne!(preview.pass.flags & PREVIEW_SOURCE_COMMON, 0);
+        assert_ne!(preview.pass.flags & RSF_UNITY_PREVIEW_SOURCE_COMMON, 0);
         // The Editor without a colour presents nothing to copy and keeps the plain window pass.
         let mut empty = packet();
         empty.color = ptr::null_mut();

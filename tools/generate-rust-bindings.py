@@ -232,7 +232,7 @@ generate("games/unity-mono/src/plugin_abi.rs", "games/unity-mono/src/plugin_plat
           "--raw-line", "type rsf_unity_packet = ::core::ffi::c_void;"])
 generate("games/unity-mono/src/bridge_abi.rs", "games/unity-mono/src/bridge_state.h",
          "rsf_unity_(packet|config|frame_admission|source_submission)",
-         "RSF_UNITY_(BRIDGE_ABI_VERSION|PACKET_.*|FRAMES_.*)",
+         "RSF_UNITY_(BRIDGE_ABI_VERSION|PACKET_.*|FRAMES_.*|PREVIEW_SOURCE_COMMON)",
          ["-Isdk/game/include", "-Igames/unity-mono/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "use rsf_game_sys::rsf_camera_frame;",

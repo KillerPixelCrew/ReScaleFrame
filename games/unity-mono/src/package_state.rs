@@ -2445,9 +2445,13 @@ mod tests {
         pass.role = RSF_GAME_RENDER_WINDOW;
         assert!(!package.route(&leaves, list(1), &pass, true));
         assert_eq!(calls(), ["owner", "present 0x0 0"]);
-        // RSF_UNITY_PREVIEW_SOURCE_COMMON selects the common source state.
-        pass.color_input = without_provenance_mut(0x50);
-        pass.flags = 0x4000_0000;
+        // Route the D3D11 producer's real Editor plan after its native resource handoff.
+        use crate::{bridge_abi::rsf_unity_packet, d3d11_pass};
+        let mut packet = unsafe { std::mem::zeroed::<rsf_unity_packet>() };
+        packet.camera = pass.camera;
+        packet.color = without_provenance_mut(0x50);
+        let mut pass = d3d11_pass::plan(d3d11_pass::EVENT_WINDOW, &packet, true).pass;
+        pass.color_input = packet.color;
         let logged = "log Editor presentation pending: texture=640x360 format=10 expected=8x6";
         for _ in 0..3 {
             package.route(&leaves, list(1), &pass, true);

@@ -5,6 +5,7 @@
 use rsf_game_sys::rsf_camera_frame;
 
 pub const RSF_UNITY_BRIDGE_ABI_VERSION: u32 = 2;
+pub const RSF_UNITY_PREVIEW_SOURCE_COMMON: u32 = 1073741824;
 pub const RSF_UNITY_PACKET_RESET: u32 = 1;
 pub const RSF_UNITY_PACKET_PROBE: u32 = 2;
 pub const RSF_UNITY_PACKET_WINDOW: u32 = 4;

@@ -5,6 +5,9 @@
 #define RSF_UNITY_BRIDGE_ABI_VERSION 2u
 #define RSF_UNITY_NATIVE_ABI_VERSION 5u
 
+// Package window pass colour resides in a D3D12 COMMON shared surface.
+#define RSF_UNITY_PREVIEW_SOURCE_COMMON 0x40000000u
+
 // rsf_unity_packet::flags. The managed adapter mirrors these in PacketFlags (Native.cs).
 // History restarts at this frame.
 #define RSF_UNITY_PACKET_RESET 1u

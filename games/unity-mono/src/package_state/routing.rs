@@ -8,12 +8,11 @@
 //! No lock here is held across a leaf. The route runs outside package.cpp's mutex, as the C++
 //! callback did; the device lifecycle runs under it, so its state is only stored here.
 use super::{LEAVES, Leaves, PACKAGE, Package};
+use crate::bridge_abi::RSF_UNITY_PREVIEW_SOURCE_COMMON;
 use rsf_game_sys::{RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_WINDOW, rsf_game_render_pass};
 use std::ffi::{c_int, c_void};
 use std::sync::atomic::Ordering::SeqCst;
 
-/// RSF_UNITY_PREVIEW_SOURCE_COMMON, package.h's flag; package.cpp asserts it.
-const PREVIEW_SOURCE_COMMON: u32 = 0x4000_0000;
 /// Editor preview refusals with a texture logged per process.
 const PREVIEW_REPORTS: u32 = 4;
 /// window_class's answers.
@@ -99,7 +98,8 @@ impl Package {
         if pass.role == RSF_GAME_RENDER_WINDOW {
             self.request_generation(leaves);
             if self.editor() {
-                let shown = leaves.preview_present(&pass, pass.flags & PREVIEW_SOURCE_COMMON != 0);
+                let shown = leaves
+                    .preview_present(&pass, pass.flags & RSF_UNITY_PREVIEW_SOURCE_COMMON != 0);
                 self.preview_refused(leaves, shown, &pass);
             } else {
                 leaves.fg_window(&pass);

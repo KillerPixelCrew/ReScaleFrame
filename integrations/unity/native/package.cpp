@@ -36,8 +36,6 @@ extern "C" int rsf_unity_set_engine_spatial(uint32_t, uint32_t) noexcept;
 // package_abi.rs mirrors these layouts and constants.
 static_assert(sizeof(rsf_unity_package_settings) == 100 && sizeof(rsf_unity_package_status) == 184);
 static_assert(sizeof(rsf_unity_frame_counters) == 40 && sizeof(rsf_unity_package_platform) == 432);
-// routing.rs mirrors the preview's source-state flag.
-static_assert(RSF_UNITY_PREVIEW_SOURCE_COMMON == 0x40000000u);
 static_assert(sizeof(rsf_native_fg_status) == 352 && sizeof(rsf_native_latency_status) == 152);
 static_assert(sizeof(rsf_native_fg_options) == 24 && RSF_BACKEND_OK == 0);
 static_assert(RSF_FG_STAT_TOTAL_PRESENTED == 1 && RSF_SR_NONE == 0);

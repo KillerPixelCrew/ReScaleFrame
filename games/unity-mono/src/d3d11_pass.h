@@ -32,9 +32,6 @@
 #define RSF_UNITY_D3D11_HANDBACK_FAILED 1u
 #define RSF_UNITY_D3D11_SIGNAL_FAILED 2u
 
-/* RSF_UNITY_PREVIEW_SOURCE_COMMON (integrations/unity/native/package.h), set on a preview pass. */
-#define RSF_UNITY_D3D11_PREVIEW_SOURCE_COMMON 0x40000000u
-
 #ifdef __cplusplus
 extern "C" {
 #endif
