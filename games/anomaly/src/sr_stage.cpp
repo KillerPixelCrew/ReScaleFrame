@@ -192,7 +192,6 @@ struct Host final : SwapHost {
     Host() = default;
     Host(const Host&) = delete;
     Host& operator=(const Host&) = delete;
-    ~Host() { rsf_anomaly_sr_stage_drop_resources(resources); }
     const rsf_sr_pass* pass() const noexcept { return rsf_anomaly_sr_stage_pass(resources); }
     void* depth_texture() const noexcept { return rsf_anomaly_sr_stage_depth(resources); }
     bool read(const void* address, void* output, std::size_t size) noexcept override { return guarded_copy(output, address, size); }
@@ -456,7 +455,7 @@ const rsf_anomaly_sr_stage_platform platform{
     .sun_begin = [] { return controller.sun_cascades_begin(); },
     .sun_end = [](bool suspended) { controller.sun_cascades_end(suspended); },
     .position_setup = [](void* constant) { controller.position_constant_setup(constant); },
-    .shutdown = [] { controller.shutdown(); },
+    .shutdown = [] { return controller.shutdown(); },
     .set_swap_enabled = [](bool enabled) { controller.set_swap_enabled(enabled); },
     .controller = [](rsf_anomaly_sr_controller* out) {
         *out = {controller.window_open(), controller.refused(), controller.jitter_applied(), controller.mip_bias_applied(),
@@ -500,7 +499,11 @@ const rsf_anomaly_sr_stage_platform platform{
             ticks, sizeof(*ticks), D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK;
     },
     .host_stats = [](uint64_t* bytes, uint64_t* refs) { rsf_anomaly_sr_stage_resource_stats(host.resources, bytes, refs); },
-    .host_reset = [] { rsf_anomaly_sr_stage_reset_pass(host.resources); },
+    // Quiesce reaches this only after the controller confirmed the engine fields were restored.
+    .host_reset = [] {
+        rsf_anomaly_sr_stage_drop_resources(host.resources);
+        host.resources = nullptr;
+    },
     .immediate_context = [](void* context) {
         return static_cast<ID3D11DeviceContext*>(context)->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE;
     },

@@ -961,7 +961,7 @@ pub struct rsf_anomaly_sr_stage_platform {
     pub sun_end: ::core::option::Option<unsafe extern "C" fn(suspended: bool)>,
     pub position_setup:
         ::core::option::Option<unsafe extern "C" fn(constant: *mut ::core::ffi::c_void)>,
-    pub shutdown: ::core::option::Option<unsafe extern "C" fn()>,
+    pub shutdown: ::core::option::Option<unsafe extern "C" fn() -> bool>,
     pub set_swap_enabled: ::core::option::Option<unsafe extern "C" fn(arg1: bool)>,
     pub controller:
         ::core::option::Option<unsafe extern "C" fn(arg1: *mut rsf_anomaly_sr_controller)>,

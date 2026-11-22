@@ -1365,7 +1365,11 @@ impl Stage {
             state.main_state = default_jitter();
             return false;
         }
-        leaf!(p, shutdown());
+        if !leaf!(p, shutdown()) {
+            self.publish(state, default_jitter());
+            state.main_state = default_jitter();
+            return false;
+        }
         state.motion_view = None;
         state.temporal_targets = None;
         state.native_depth_frame = None;

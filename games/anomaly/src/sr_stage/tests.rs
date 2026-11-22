@@ -32,6 +32,7 @@ struct Fake {
     reinsert: bool,
     hooks_created: bool,
     refuse_remove_hooks: bool,
+    refuse_shutdown: bool,
     passes: Vec<rsf_anomaly_sr_pass>,
     logs: Vec<String>,
     files: Vec<String>,
@@ -330,8 +331,9 @@ extern "C" fn close_stale() {
     record("close stale");
     fake(|f| f.window_open = false);
 }
-extern "C" fn shutdown() {
+extern "C" fn shutdown() -> bool {
     record("controller shutdown");
+    !fake(|f| f.refuse_shutdown)
 }
 extern "C" fn driver_stop() {
     record("driver stop");
@@ -679,7 +681,13 @@ fn quiesce_releases_hooks_before_state_and_the_pipeline_before_resources() {
     driver.frame_end();
     assert!(!driver.sun_begin());
     assert!(calls().is_empty());
-    fake(|f| f.refuse_remove_hooks = false);
+    fake(|f| {
+        f.refuse_remove_hooks = false;
+        f.refuse_shutdown = true;
+    });
+    assert!(!driver.quiesce());
+    assert_eq!(calls(), ["remove hooks", "controller shutdown"]);
+    fake(|f| f.refuse_shutdown = false);
     assert!(driver.quiesce());
     let order = calls();
     let at = |name| position(&order, name);

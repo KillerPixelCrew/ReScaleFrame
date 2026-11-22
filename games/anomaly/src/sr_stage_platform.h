@@ -264,7 +264,7 @@ typedef struct rsf_anomaly_sr_stage_platform {
     bool (*sun_begin)(void);
     void (*sun_end)(bool suspended);
     void (*position_setup)(void* constant);
-    void (*shutdown)(void);
+    bool (*shutdown)(void);
     void (*set_swap_enabled)(bool);
     void (*controller)(rsf_anomaly_sr_controller*);
     void (*swap_counters)(rsf_anomaly_sr_swap_counters*);
