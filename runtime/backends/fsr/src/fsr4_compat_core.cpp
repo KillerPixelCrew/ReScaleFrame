@@ -3,9 +3,6 @@
 #include "fsr4_compat_platform.h"
 #include <rescaleframe/sha256_file.h>
 #include <MinHook.h>
-#include <algorithm>
-#include <cstring>
-#include <new>
 #include <utility>
 
 extern "C" uint32_t rsf_fsr4_compat_adapter_vendor(void*);
@@ -15,32 +12,15 @@ extern "C" void rsf_fsr4_compat_release_device(void*);
 extern "C" const rsf_fsr4_compat_lease* rsf_fsr4_compat_acquire_device(
     const rsf_fsr4_compat_platform*, void*, void*, Fsr4Log, void*);
 
+extern "C" bool rsf_fsr4_compat_module_digest(void*, const uint32_t*, size_t, uint32_t*, uint8_t*,
+    decltype(&rsf_common_sha256_file));
+extern "C" void* rsf_fsr4_compat_match_entry(void*, size_t, const uint8_t*, size_t);
+
 namespace {
 bool module_digest(void* module, const uint32_t* sizes, size_t size_count,
     uint32_t* size, uint8_t digest[32])
 {
-    constexpr DWORD capacity = 32768;
-    std::unique_ptr<wchar_t[]> path(new (std::nothrow) wchar_t[capacity]());
-    if (!path) return false;
-    const DWORD length = GetModuleFileNameW(static_cast<HMODULE>(module), path.get(), capacity);
-    if (!length || length >= capacity) return false;
-    WIN32_FILE_ATTRIBUTE_DATA attributes{};
-    if (!GetFileAttributesExW(path.get(), GetFileExInfoStandard, &attributes) || attributes.nFileSizeHigh)
-        return false;
-    const auto file_size = static_cast<uint32_t>(attributes.nFileSizeLow);
-    if (std::find(sizes, sizes + size_count, file_size) == sizes + size_count)
-        return false;
-    unsigned char actual[32]{};
-    if (!rsf::sha256_file(path.get(), actual, FILE_SHARE_READ)) return false;
-    *size = file_size;
-    std::memcpy(digest, actual, sizeof(actual));
-    return true;
-}
-
-void* match_entry(void* module, size_t rva, const uint8_t* expected, size_t length)
-{
-    auto* target = static_cast<unsigned char*>(module) + rva;
-    return std::memcmp(target, expected, length) == 0 ? target : nullptr;
+    return rsf_fsr4_compat_module_digest(module, sizes, size_count, size, digest, rsf_common_sha256_file);
 }
 
 rsf_fsr4_compat_capability_fn create_hook(void* target, rsf_fsr4_compat_capability_fn detour)
@@ -70,7 +50,7 @@ const rsf_fsr4_compat_platform platform{
     sizeof(rsf_fsr4_compat_platform), RSF_FSR4_COMPAT_PLATFORM_ABI_VERSION,
     rsf_fsr4_compat_adapter_vendor, rsf_fsr4_compat_device_supports_int8,
     rsf_fsr4_compat_retain_device, rsf_fsr4_compat_release_device,
-    module_digest, match_entry, create_hook, enable_hook,
+    module_digest, rsf_fsr4_compat_match_entry, create_hook, enable_hook,
 };
 
 using NativeLease = std::unique_ptr<const rsf_fsr4_compat_lease, decltype(&rsf_fsr4_compat_release)>;

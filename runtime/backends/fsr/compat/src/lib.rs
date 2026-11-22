@@ -2,6 +2,8 @@
 mod abi;
 #[cfg(windows)]
 mod dx12;
+#[cfg(windows)]
+mod fingerprint;
 // The orchestrator's stateless FidelityFX provider-version policy.
 #[path = "../../../../orchestrator/src/ffx_version.rs"]
 mod ffx_version;

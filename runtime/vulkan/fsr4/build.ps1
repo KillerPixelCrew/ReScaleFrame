@@ -2,7 +2,7 @@
 .SYNOPSIS
 Compiles the retained FSR4 Vulkan/DX12 bridge DLL.
 .DESCRIPTION
-Builds the shared rsf-fsr4-compat archive (INT8 compatibility and bridge owner) for Windows GNU, compiles MinHook with gcc, and links both with the C++20 bridge through g++. Builds a sibling temporary DLL, replacing Output only after success.
+Builds the INT8, bridge owner and file hashing Rust archives for Windows GNU, compiles MinHook with gcc, and links them with the C++20 bridge through g++. Builds a sibling temporary DLL, replacing Output only after success.
 .PARAMETER SdkRoot
 FidelityFX SDK root containing Kits/FidelityFX/api/include/dx12/ffx_api_dx12.h.
 .PARAMETER Output
@@ -50,13 +50,14 @@ try {
     $rustOutput = Join-Path $objects 'cargo'
     Push-Location -LiteralPath (Join-Path $PSScriptRoot '../../..')
     try {
-        & $cargo build --locked --release -p rsf-fsr4-compat --target $rustTarget --target-dir $rustOutput
+        & $cargo build --locked --release -p rsf-fsr4-compat -p rsf-runtime-common --target $rustTarget --target-dir $rustOutput
         if ($LASTEXITCODE -ne 0) { throw "FSR 4 Rust compatibility compilation failed: $LASTEXITCODE" }
     }
     finally {
         Pop-Location
     }
     $rustArchive = Join-Path $rustOutput "$rustTarget/release/librsf_fsr4_compat.a"
+    $commonArchive = Join-Path $rustOutput "$rustTarget/release/librsf_runtime_common.a"
 
     # hde32.c compiles to an empty object on x64; MinHook stays C, not C++.
     $minHookObjects = @($minHookSources | ForEach-Object {
@@ -69,7 +70,7 @@ try {
     & $compiler -std=c++20 -O2 -shared -static -Wall -Wextra -I (Join-Path $sdk 'Kits/FidelityFX') -I $vulkan `
         -I (Join-Path $minHook 'include') -I (Join-Path $PSScriptRoot '../../backends/fsr/src') -I (Join-Path $PSScriptRoot '../../common/include') `
         (Join-Path $PSScriptRoot 'bridge.cpp') (Join-Path $PSScriptRoot '../../backends/fsr/src/fsr4_compat_core.cpp') $minHookObjects `
-        $rustArchive -o $temporary -ld3d12 -ldxgi -lbcrypt -lntdll -luserenv -lws2_32 -ldbghelp
+        $rustArchive $commonArchive -o $temporary -ld3d12 -ldxgi -lbcrypt -lntdll -luserenv -lws2_32 -ldbghelp
     if ($LASTEXITCODE -ne 0) { throw "FSR 4 bridge compilation failed: $LASTEXITCODE" }
     Move-Item -LiteralPath $temporary -Destination $target -Force
 }
