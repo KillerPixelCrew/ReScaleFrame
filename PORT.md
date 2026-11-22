@@ -2120,20 +2120,22 @@ Port the live SR stage, D3D11 pass and reconstruction, including refusing a fram
 - [x] [games/anomaly/src/sr_plan.h](games/anomaly/src/sr_plan.h)
 - [ ] [games/anomaly/src/sr_profile.h](games/anomaly/src/sr_profile.h)
 - [x] [games/anomaly/src/sr_reconstruction.h](games/anomaly/src/sr_reconstruction.h)
-- [ ] [games/anomaly/src/sr_settings.h](games/anomaly/src/sr_settings.h)
+- [x] [games/anomaly/src/sr_settings.h](games/anomaly/src/sr_settings.h)
 - [ ] [games/anomaly/src/sr_stage.cpp](games/anomaly/src/sr_stage.cpp)
 - [ ] [games/anomaly/src/sr_stage.h](games/anomaly/src/sr_stage.h)
 - [ ] [games/anomaly/src/sr_stage_platform.h](games/anomaly/src/sr_stage_platform.h)
 
-**Fixtures (7)**
+**Fixtures (9)**
 
-- [ ] [tests/anomaly_sr_hooks.cpp](tests/anomaly_sr_hooks.cpp)
+- [ ] [tests/anomaly_sr_hook_bridge.cpp](tests/anomaly_sr_hook_bridge.cpp) (native detour and PE fixture seam)
+- [ ] [tests/anomaly_sr_runtime_api_bridge.cpp](tests/anomaly_sr_runtime_api_bridge.cpp) (actual Runtime import and fixture entry)
+- [x] [tests/anomaly_sr_hooks.cpp](tests/anomaly_sr_hooks.cpp)
 - [x] [tests/anomaly_sr_pass.cpp](tests/anomaly_sr_pass.cpp)
 - [x] [tests/anomaly_sr_plan.cpp](tests/anomaly_sr_plan.cpp)
 - [ ] [tests/anomaly_sr_profile.cpp](tests/anomaly_sr_profile.cpp)
 - [x] [tests/anomaly_sr_reconstruction.cpp](tests/anomaly_sr_reconstruction.cpp)
 - [ ] [tests/anomaly_sr_roundtrip.cpp](tests/anomaly_sr_roundtrip.cpp)
-- [ ] [tests/anomaly_sr_runtime_api.cpp](tests/anomaly_sr_runtime_api.cpp)
+- [x] [tests/anomaly_sr_runtime_api.cpp](tests/anomaly_sr_runtime_api.cpp)
 
 **Rust review findings (18)**
 
@@ -2189,13 +2191,14 @@ Port swap ownership, projection jitter, temporal history and tonemap routing. Ad
 - [ ] [games/anomaly/src/sr_jitter.h](games/anomaly/src/sr_jitter.h)
 - [ ] [games/anomaly/src/sr_swap.cpp](games/anomaly/src/sr_swap.cpp)
 - [ ] [games/anomaly/src/sr_swap.h](games/anomaly/src/sr_swap.h)
-- [ ] [games/anomaly/src/sr_swap_platform.h](games/anomaly/src/sr_swap_platform.h)
+- [x] [games/anomaly/src/sr_swap_platform.h](games/anomaly/src/sr_swap_platform.h)
 - [ ] [games/anomaly/src/sr_temporal.cpp](games/anomaly/src/sr_temporal.cpp)
 - [ ] [games/anomaly/src/sr_temporal.h](games/anomaly/src/sr_temporal.h)
 - [ ] [games/anomaly/src/sr_tonemap.h](games/anomaly/src/sr_tonemap.h)
 
-**Fixtures (5)**
+**Fixtures (6)**
 
+- [ ] [tests/anomaly_sr_jitter_reference.h](tests/anomaly_sr_jitter_reference.h) (independent native projection oracle)
 - [ ] [tests/anomaly_sr_jitter.cpp](tests/anomaly_sr_jitter.cpp)
 - [ ] [tests/anomaly_sr_jitter_device.cpp](tests/anomaly_sr_jitter_device.cpp)
 - [ ] [tests/anomaly_sr_swap.cpp](tests/anomaly_sr_swap.cpp)
