@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+mod dump;
+mod dump_abi;
 mod entropy;
 mod frame_capture;
 mod frame_capture_abi;

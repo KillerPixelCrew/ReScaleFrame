@@ -230,7 +230,7 @@ unsafe fn wide_path(path: *const u16) -> Option<OsString> {
     }))
 }
 
-unsafe fn dump_image(
+pub(super) unsafe fn dump_image(
     info: &rsf_dump_image_info,
     digests: *mut rsf_section_digest,
 ) -> Option<rsf_dump_image_stats> {
@@ -333,19 +333,6 @@ unsafe fn dump_image(
     }
     file.flush().ok()?;
     Some(stats)
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dump_image_write(
-    info: &rsf_dump_image_info,
-    digests: *mut rsf_section_digest,
-    stats: *mut rsf_dump_image_stats,
-) -> i32 {
-    let Some(result) = (unsafe { dump_image(info, digests) }) else {
-        return -4;
-    };
-    unsafe { stats.write(result) };
-    0
 }
 
 #[unsafe(no_mangle)]

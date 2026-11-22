@@ -2,6 +2,8 @@
 
 #![allow(non_camel_case_types)]
 
+pub const RSF_DUMP_MODULE_PATH_UNITS: u32 = 260;
+pub const RSF_MAX_MODULES: u32 = 384;
 pub type wchar_t = ::core::ffi::c_ushort;
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -190,4 +192,24 @@ const _: () = {
         [::core::mem::offset_of!(rsf_dump_sidecar_stats, rtti_classes) - 8usize];
     ["Offset of field: rsf_dump_sidecar_stats::function_starts"]
         [::core::mem::offset_of!(rsf_dump_sidecar_stats, function_starts) - 12usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_dump_module_platform {
+    pub write_sidecar: ::core::option::Option<
+        unsafe extern "C" fn(
+            path: *const wchar_t,
+            arg1: *const rsf_dump_sidecar_info,
+            arg2: *mut rsf_dump_sidecar_stats,
+        ) -> i32,
+    >,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_dump_module_platform"]
+        [::core::mem::size_of::<rsf_dump_module_platform>() - 8usize];
+    ["Alignment of rsf_dump_module_platform"]
+        [::core::mem::align_of::<rsf_dump_module_platform>() - 8usize];
+    ["Offset of field: rsf_dump_module_platform::write_sidecar"]
+        [::core::mem::offset_of!(rsf_dump_module_platform, write_sidecar) - 0usize];
 };

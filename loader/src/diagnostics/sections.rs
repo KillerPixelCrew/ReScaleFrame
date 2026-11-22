@@ -10,7 +10,8 @@ use std::ptr::null_mut;
 use std::slice;
 use windows_sys::Win32::System::{
     Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+        CreateToolhelp32Snapshot, MODULEENTRY32W, Module32FirstW, Module32NextW, TH32CS_SNAPMODULE,
+        TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
     },
     LibraryLoader::{GetModuleHandleW, GetProcAddress},
     Performance::{QueryPerformanceCounter, QueryPerformanceFrequency},
@@ -76,6 +77,47 @@ struct Handle(HANDLE);
 impl Drop for Handle {
     fn drop(&mut self) {
         unsafe { CloseHandle(self.0) };
+    }
+}
+
+#[unsafe(no_mangle)]
+pub(super) unsafe extern "C" fn rsf_dump_collect_modules(
+    entries: *mut rsf_module_entry,
+    capacity: usize,
+    count: &mut usize,
+) {
+    *count = 0;
+    if entries.is_null() || capacity == 0 {
+        return;
+    }
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return;
+    }
+    let snapshot = Handle(snapshot);
+    let mut entry = MODULEENTRY32W {
+        dwSize: size_of::<MODULEENTRY32W>() as u32,
+        ..Default::default()
+    };
+    let mut has_entry = unsafe { Module32FirstW(snapshot.0, &mut entry) } != 0;
+    while has_entry && *count < capacity {
+        let mut path = [0; super::sections_abi::RSF_DUMP_MODULE_PATH_UNITS as usize];
+        let limit = path.len() - 1;
+        let length = entry
+            .szExePath
+            .iter()
+            .take(limit)
+            .position(|&unit| unit == 0)
+            .unwrap_or(limit);
+        path[..length].copy_from_slice(&entry.szExePath[..length]);
+        let module = rsf_module_entry {
+            path,
+            base: entry.modBaseAddr,
+            size: entry.modBaseSize as usize,
+        };
+        unsafe { entries.add(*count).write(module) };
+        *count += 1;
+        has_entry = unsafe { Module32NextW(snapshot.0, &mut entry) } != 0;
     }
 }
 

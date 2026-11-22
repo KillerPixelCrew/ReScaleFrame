@@ -3,14 +3,12 @@
 
 #include "module_dump_internal.h"
 
-#include <tlhelp32.h>
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
 
-const IMAGE_NT_HEADERS64* rsf_dump_nt_headers(const void* base)
+static const IMAGE_NT_HEADERS64* rsf_dump_nt_headers(const void* base)
 {
     const IMAGE_DOS_HEADER* dos = (const IMAGE_DOS_HEADER*)base;
     if (!dos || dos->e_magic != IMAGE_DOS_SIGNATURE) {
@@ -25,34 +23,9 @@ const IMAGE_NT_HEADERS64* rsf_dump_nt_headers(const void* base)
     return headers;
 }
 
-const void* rsf_dump_resolve_base(const void* module_base)
+static const void* rsf_dump_resolve_base(const void* module_base)
 {
     return module_base ? module_base : (const void*)GetModuleHandleW(NULL);
-}
-
-void rsf_dump_collect_modules(rsf_module_entry* entries, size_t capacity, size_t* count)
-{
-    *count = 0;
-    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, 0);
-    if (snapshot == INVALID_HANDLE_VALUE) {
-        return;
-    }
-    MODULEENTRY32W entry;
-    entry.dwSize = sizeof(entry);
-    if (Module32FirstW(snapshot, &entry)) {
-        do {
-            if (*count >= capacity) {
-                break;
-            }
-            rsf_module_entry* target = &entries[*count];
-            wcsncpy(target->path, entry.szExePath, MAX_PATH - 1);
-            target->path[MAX_PATH - 1] = L'\0';
-            target->base = (const unsigned char*)entry.modBaseAddr;
-            target->size = (size_t)entry.modBaseSize;
-            ++(*count);
-        } while (Module32NextW(snapshot, &entry));
-    }
-    CloseHandle(snapshot);
 }
 
 rsf_dump_result rsf_patch_code(uint32_t rva, const uint8_t* bytes, uint32_t count,

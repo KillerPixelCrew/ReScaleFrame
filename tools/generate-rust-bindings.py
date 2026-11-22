@@ -42,7 +42,11 @@ generate("loader/src/diagnostics/frame_capture_abi.rs", "loader/diagnostics/src/
 generate("loader/src/diagnostics/memory_abi.rs", "loader/diagnostics/src/module_dump_memory.h",
          "rsf_mem_cache", "NOTHING", [], ["--with-derive-default"])
 generate("loader/src/diagnostics/sections_abi.rs", "loader/diagnostics/src/module_dump_records.h",
-         "rsf_(module_entry|section_digest|dump_(image|sidecar)_(info|stats))", "NOTHING", [])
+         "rsf_(module_entry|section_digest|dump_((image|sidecar)_(info|stats)|module_platform))",
+         "RSF_(MAX_MODULES|DUMP_MODULE_PATH_UNITS)", [])
+generate("loader/src/diagnostics/dump_abi.rs", "loader/diagnostics/include/rescaleframe/module_dump.h",
+         "rsf_dump_(options|report|result)", "RSF_MODULE_DUMP_(ABI|SCHEMA)_VERSION", [],
+         ["--with-derive-default"])
 generate("loader/src/census/json_abi.rs", "loader/census/src/json_platform.h",
          "rsf_census_json", "NOTHING", [])
 generate("loader/src/census/decode_abi.rs", "loader/census/src/decode_platform.h",

@@ -7,6 +7,7 @@
 
 /* Windows module path storage from MODULEENTRY32W. */
 #define RSF_DUMP_MODULE_PATH_UNITS 260
+#define RSF_MAX_MODULES 384
 
 typedef struct rsf_module_entry {
     wchar_t path[RSF_DUMP_MODULE_PATH_UNITS];
@@ -71,5 +72,9 @@ typedef struct rsf_dump_sidecar_stats {
     uint32_t rtti_classes;
     uint32_t function_starts;
 } rsf_dump_sidecar_stats;
+
+typedef struct rsf_dump_module_platform {
+    int32_t (*write_sidecar)(const wchar_t* path, const rsf_dump_sidecar_info*, rsf_dump_sidecar_stats*);
+} rsf_dump_module_platform;
 
 #endif

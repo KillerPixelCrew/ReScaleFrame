@@ -14,10 +14,6 @@
 #include "module_dump_memory.h"
 #include "module_dump_records.h"
 
-#define RSF_MAX_MODULES 384
-
-const void* rsf_dump_resolve_base(const void* module_base);
-const IMAGE_NT_HEADERS64* rsf_dump_nt_headers(const void* base);
 void rsf_dump_collect_modules(rsf_module_entry* entries, size_t capacity, size_t* count);
 
 double rsf_dump_now_ms(void);

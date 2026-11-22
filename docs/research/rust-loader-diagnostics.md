@@ -343,6 +343,14 @@ CRT stream and calls the native RTTI writer on that stream at the same point in 
 The old sidecar bridge translation unit is gone. The only native JSON helper left belongs to
 RTTI, where it preserves the existing output for native decorated names.
 
+## Dump setup and module inventory
+
+Rust now validates and copies the public options and reports, reads the PE headers,
+constructs the output paths and enumerates native modules. It preserves v1 callers and
+only reads or writes fully covered extension fields. Native engine patch and console
+controls retain their existing code. The dump entry forwards to Rust, and the CRT stream
+bridge retains native RTTI and its original file error reporting.
+
 ## Inventory at the end of the 82b39a63 continuation
 
 Eleven additional baseline paths have source cutovers. The two public header paths retain

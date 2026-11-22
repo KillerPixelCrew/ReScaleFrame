@@ -24,7 +24,7 @@ const WINDOW: usize = 65_536;
 const SAMPLES: usize = 16;
 
 // T must have no invalid bit patterns. Use the PE records from the Windows bindings.
-unsafe fn record<T: Default>(base: usize, offset: usize) -> Option<T> {
+pub(super) unsafe fn record<T: Default>(base: usize, offset: usize) -> Option<T> {
     let address = base.checked_add(offset)?;
     let mut raw = T::default();
     let size = size_of_val(&raw);
@@ -73,7 +73,10 @@ fn executable_span(base: usize) -> Option<(usize, usize)> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_measure_module_code(module: *const c_void, output: *mut f64) -> i32 {
+pub(super) unsafe extern "C" fn rsf_measure_module_code(
+    module: *const c_void,
+    output: *mut f64,
+) -> i32 {
     if output.is_null() {
         return INVALID_ARGUMENT;
     }
