@@ -2,6 +2,7 @@
 // Shared D3D11 frame tap. The Rust detours and platform leaves use the native COM ABI.
 mod detours;
 mod platform;
+pub use detours::rsf_frame_tap_set_sampler_bias;
 
 use crate::com_ref;
 use crate::constant_buffer_read::{MAP_WRITE_DISCARD, Map, MappedResource, Unmap, slot};

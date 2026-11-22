@@ -4,7 +4,8 @@ use crate::d3d11_output_platform::{rsf_d3d11_output_child_device, rsf_d3d11_outp
 #[cfg(not(test))]
 use crate::{
     dlss_pipeline::exports::{
-        rsf_dlss_pipeline_on_frame, rsf_dlss_pipeline_output_texture, rsf_dlss_pipeline_resize_output,
+        rsf_dlss_pipeline_on_frame, rsf_dlss_pipeline_output_texture,
+        rsf_dlss_pipeline_resize_output,
     },
     graphics_d3d11::{rsf_d3d11_state_restore, rsf_d3d11_state_save},
     motion_decode::{
@@ -17,12 +18,12 @@ use crate::{
     },
     native_exposure::rsf_native_scalar_exposure,
     native_fg::{rsf_native_fg_capture, rsf_native_fg_inputs_ready, rsf_native_fg_scene},
+    native_fg_cpu::platform::rsf_native_fg_stage,
     native_regions::{
         rsf_native_regions_depth_valid, rsf_native_regions_prepare,
         rsf_native_regions_temporal_mask,
     },
     native_reinsert::rsf_native_reinsert,
-    native_fg_cpu::platform::rsf_native_fg_stage,
     native_translucency::rsf_native_translucency_take,
 };
 
@@ -248,7 +249,10 @@ pub(crate) unsafe extern "C" fn rsf_native_sr_evaluate_ordered(
 
 #[cfg(not(test))]
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_sr_evaluate(context: *mut c_void, pass: *const Pass) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_native_sr_evaluate(
+    context: *mut c_void,
+    pass: *const Pass,
+) -> i32 {
     unsafe { evaluate(context, pass) }
 }
 
@@ -350,7 +354,9 @@ unsafe fn evaluate(context: *mut c_void, pass: *const Pass) -> i32 {
         frame.bias_mask = bias;
     }
 
-    let result = with_scene(pass, || unsafe { rsf_dlss_pipeline_on_frame(context, &frame) });
+    let result = with_scene(pass, || unsafe {
+        rsf_dlss_pipeline_on_frame(context, &frame)
+    });
     if result != 0 {
         return discard_history(SR, result);
     }
@@ -419,7 +425,11 @@ unsafe fn capture_on_stream(context: Texture, pass: &Pass, motion: &DecodeParams
                 let created =
                     unsafe { rsf_motion_decode_create(device.as_raw(), &setup, &mut decode) };
                 let decode = OwnedHandle::new(
-                    if created == 0 { decode.cast() } else { std::ptr::null_mut() },
+                    if created == 0 {
+                        decode.cast()
+                    } else {
+                        std::ptr::null_mut()
+                    },
                     destroy_decode,
                 )?;
                 let mut resolve = std::ptr::null_mut();
@@ -427,7 +437,11 @@ unsafe fn capture_on_stream(context: Texture, pass: &Pass, motion: &DecodeParams
                     rsf_motion_resolve_create(device.as_raw(), width, height, &mut resolve)
                 };
                 let resolve = OwnedHandle::new(
-                    if created != 0 { resolve.cast() } else { std::ptr::null_mut() },
+                    if created != 0 {
+                        resolve.cast()
+                    } else {
+                        std::ptr::null_mut()
+                    },
                     destroy_resolve,
                 )?;
                 cache.insert(FgInputs {
@@ -546,9 +560,7 @@ unsafe fn capture_validated(context: Texture, pass: &Pass, motion: &DecodeParams
             0,
         )
     };
-    if !unsafe { validate_device(context, pass) }
-        || unsafe { depth_layout(pass) }.is_none()
-    {
+    if !unsafe { validate_device(context, pass) } || unsafe { depth_layout(pass) }.is_none() {
         return INVALID;
     }
     if unsafe { capture_on_stream(context, pass, motion) }.is_some() {

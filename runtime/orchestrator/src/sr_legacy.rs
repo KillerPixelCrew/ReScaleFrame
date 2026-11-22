@@ -43,12 +43,6 @@ struct Services {
 const _: () = assert!(size_of::<Services>() == 14 * size_of::<*const c_void>());
 
 #[cfg(not(test))]
-unsafe extern "C" {
-    fn rsf_input_dump_active() -> i32;
-    fn rsf_input_dump_sr(context: *mut c_void, frame: *const Frame, backend: u32);
-}
-
-#[cfg(not(test))]
 static SERVICES: Services = Services {
     create: crate::sr_bridge::rsf_sr_bridge_create,
     select: crate::sr_bridge::rsf_sr_bridge_select,
@@ -62,8 +56,8 @@ static SERVICES: Services = Services {
     depth: crate::motion_resolve::rsf_motion_resolve_depth,
     motion: crate::motion_resolve::rsf_motion_resolve_motion,
     destroy_resolve: crate::motion_resolve::rsf_motion_resolve_destroy,
-    dump_active: rsf_input_dump_active,
-    dump_frame: rsf_input_dump_sr,
+    dump_active: crate::input_dump::rsf_input_dump_active,
+    dump_frame: crate::input_dump::rsf_input_dump_sr,
 };
 
 #[cfg(not(test))]

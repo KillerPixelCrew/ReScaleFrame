@@ -6,7 +6,7 @@ use crate::graphics_d3d11::{
     constant_buffer, depth_state, pixel_shader, rasterizer, rsf_call_native_log,
     rsf_d3d11_state_restore, shader_with_log, vertex_shader,
 };
-use crate::sys::rsf_d3d11_state;
+use rsf_graphics::d3d11_state::rsf_d3d11_state_save_independent;
 use rsf_shader_compiler::Request;
 use std::ptr;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -15,10 +15,6 @@ use windows::core::IUnknown;
 use windows::core::Interface;
 
 const SHADER: &[u8] = include_bytes!("../../../graphics/shaders/fullscreen_pass.hlsl");
-
-unsafe extern "C" {
-    fn rsf_d3d11_state_save_independent(context: Handle, state: *mut rsf_d3d11_state) -> u32;
-}
 
 fn sampler(device: &ID3D11Device, filter: D3D11_FILTER) -> Option<ID3D11SamplerState> {
     let desc = D3D11_SAMPLER_DESC {

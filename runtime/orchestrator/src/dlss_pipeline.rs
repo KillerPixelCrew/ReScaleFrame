@@ -364,7 +364,6 @@ struct Sink {
     user: usize,
 }
 
-
 fn motion_to_uv(frame: &DlssFrame, already_uv: bool) -> [f32; 2] {
     let [x, y] = [frame.motion_scale_x, frame.motion_scale_y];
     if already_uv {
@@ -503,7 +502,6 @@ impl Pipeline {
         line.push(0);
         unsafe { log(sink.user as Raw, line.as_ptr().cast()) };
     }
-
 
     // Streamline, the decode pass and the dump each take their own sink. All are forwarded to ours
     // with a prefix, so one log carries the whole sequence in the order it happened.
@@ -1165,8 +1163,7 @@ impl Pipeline {
             dlss.motion_scale_x = dlss_motion_scale(dlss.motion_scale_x, motion_in_uv, resolved);
             dlss.motion_scale_y = dlss_motion_scale(dlss.motion_scale_y, motion_in_uv, resolved);
         }
-        let correct_colour =
-            dlss_inputs && self.colour_correction.load(Ordering::Acquire);
+        let correct_colour = dlss_inputs && self.colour_correction.load(Ordering::Acquire);
         if correct_colour && o.fidelity.is_null() {
             if !o.fidelity_failed {
                 o.fidelity = unsafe { (p.fidelity_create)(o.device()) };
@@ -2290,7 +2287,7 @@ extern "C" fn rsf_native_sr_set_surface(width: u32, height: u32) -> i32 {
 mod platform;
 
 #[cfg(not(test))]
-pub(super) mod exports;
+pub(crate) mod exports;
 
 #[cfg(test)]
 #[path = "dlss_pipeline_tests.rs"]

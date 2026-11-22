@@ -405,7 +405,7 @@ unsafe extern "C" fn rsf_frame_tap_install(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_frame_tap_set_sampler_bias(bias: f32) -> i32 {
+pub extern "C" fn rsf_frame_tap_set_sampler_bias(bias: f32) -> i32 {
     rsf_core_frame_tap_set_sampler_bias(bias)
 }
 

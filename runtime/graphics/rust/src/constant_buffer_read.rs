@@ -104,7 +104,7 @@ unsafe fn unmap(context: Handle, buffer: Handle) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_read_constant_buffer(
+pub unsafe extern "C" fn rsf_read_constant_buffer(
     device: Handle,
     context: Handle,
     buffer: Handle,

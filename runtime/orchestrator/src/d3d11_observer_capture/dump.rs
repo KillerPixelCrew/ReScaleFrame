@@ -3,10 +3,16 @@ use super::{Constant, DumpResult, Handle, OK, Request};
 use crate::input_dump::{
     DECODED_MOTION, ENCODED_MOTION, Log, MotionEncoding, MotionTextureOptions, TextureOptions,
 };
+use crate::motion_decode::{
+    Pass, rsf_motion_decode_create, rsf_motion_decode_destroy, rsf_motion_decode_run,
+    rsf_motion_decode_texture,
+};
 use crate::sys::rsf_backend_log_fn;
 use crate::sys::rsf_observer_options;
 use crate::sys::{RSF_MOTION_DECODE_ABI_VERSION, rsf_motion_decode_setup as DecodeSetup};
 use rsf_game_sys::rsf_motion_decode_params as DecodeParams;
+use rsf_graphics::constant_buffer_read::rsf_read_constant_buffer;
+use rsf_graphics::texture_dump::rsf_dump_texture;
 use std::ffi::{CStr, CString};
 use std::fs;
 use std::ptr::{NonNull, null_mut};
@@ -52,32 +58,9 @@ unsafe extern "C" {
         width: &mut u32,
         height: &mut u32,
     ) -> i32;
-    fn rsf_dump_texture(
-        device: Handle,
-        context: Handle,
-        source: Handle,
-        options: *const TextureOptions,
-        info: Handle,
-    ) -> i32;
-    fn rsf_read_constant_buffer(
-        device: Handle,
-        context: Handle,
-        buffer: Handle,
-        out: Handle,
-        bytes: u32,
-    ) -> i32;
-    fn rsf_motion_decode_create(device: Handle, setup: &DecodeSetup, out: &mut Handle) -> i32;
-    fn rsf_motion_decode_run(
-        pass: Handle,
-        context: Handle,
-        source: Handle,
-        params: &DecodeParams,
-    ) -> i32;
-    fn rsf_motion_decode_texture(pass: Handle) -> Handle;
-    fn rsf_motion_decode_destroy(pass: Handle);
 }
 
-struct Decode(NonNull<std::ffi::c_void>);
+struct Decode(NonNull<Pass>);
 
 impl Drop for Decode {
     fn drop(&mut self) {

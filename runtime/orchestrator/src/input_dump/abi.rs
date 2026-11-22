@@ -247,7 +247,10 @@ pub(crate) unsafe extern "C" fn rsf_input_dump_pixels(
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_input_dump_complete(input: *const rsf_frame_record, result: i32) {
+pub(crate) unsafe extern "C" fn rsf_input_dump_complete(
+    input: *const rsf_frame_record,
+    result: i32,
+) {
     if let Some(frame) = unsafe { record(input) } {
         owner(|owner| {
             if owner

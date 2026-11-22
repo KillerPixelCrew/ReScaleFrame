@@ -1,31 +1,18 @@
 // SPDX-License-Identifier: MIT
+use crate::dlss_pipeline::exports::{
+    rsf_dlss_pipeline_get_status, rsf_dlss_pipeline_output_texture, rsf_dlss_pipeline_request_dump,
+    rsf_dlss_pipeline_resize_output, rsf_dlss_pipeline_select_backend,
+    rsf_dlss_pipeline_set_preset, rsf_dlss_pipeline_set_quality, rsf_dlss_pipeline_set_sharpening,
+    rsf_dlss_pipeline_start, rsf_dlss_pipeline_stop,
+};
+use crate::native_sr::rsf_native_sr_evaluate;
 use crate::sr_history::{rsf_core_sr_clear_reset, rsf_core_sr_evaluate, rsf_core_sr_request_reset};
 use crate::sr_session::has_capacity;
-use crate::sys::rsf_dlss_pipeline_set_sharpening;
 use rsf_game_sys::rsf_game_render_pass as Pass;
 use rsf_game_sys::{
     RSF_D3D11_SR_API_VERSION, RSF_DLSS_PIPELINE_ABI_VERSION, rsf_d3d11_sr_api as Api,
-    rsf_dlss_pipeline_setup as Setup, rsf_dlss_pipeline_status as Status,
 };
-use std::ffi::{c_char, c_void};
-
-unsafe extern "C" {
-    fn rsf_dlss_pipeline_start(device: *mut c_void, setup: *const Setup) -> i32;
-    fn rsf_native_sr_evaluate(context: *mut c_void, pass: *const Pass) -> i32;
-    fn rsf_dlss_pipeline_stop() -> i32;
-    fn rsf_dlss_pipeline_get_status(status: *mut Status) -> i32;
-    fn rsf_dlss_pipeline_select_backend(backend: u32, width: *mut u32, height: *mut u32) -> i32;
-    fn rsf_dlss_pipeline_set_quality(quality: u32, width: *mut u32, height: *mut u32) -> i32;
-    fn rsf_dlss_pipeline_set_preset(preset: u32) -> i32;
-    fn rsf_dlss_pipeline_resize_output(
-        width: u32,
-        height: u32,
-        render_width: *mut u32,
-        render_height: *mut u32,
-    ) -> i32;
-    fn rsf_dlss_pipeline_output_texture() -> *mut c_void;
-    fn rsf_dlss_pipeline_request_dump(prefix: *const c_char) -> i32;
-}
+use std::ffi::c_void;
 
 unsafe extern "C" fn evaluate(context: *mut c_void, pass: *const Pass) -> i32 {
     unsafe { rsf_core_sr_evaluate(context, pass, rsf_native_sr_evaluate) }

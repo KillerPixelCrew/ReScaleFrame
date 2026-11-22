@@ -4,7 +4,6 @@ use crate::d3d11_output::{same_device, texture_desc};
 use crate::d3d11_output_platform::rsf_d3d11_output_is_immediate;
 use crate::d3d11_output_platform::srv_format;
 use crate::sys::rsf_backend_log_fn as LogFn;
-use crate::sys::rsf_d3d11_state;
 use rsf_shader_compiler::{Compiler, Request, compile};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::mem::MaybeUninit;
@@ -20,9 +19,10 @@ pub(super) type MakeView = unsafe extern "C" fn(Handle, Handle, u32) -> Handle;
 pub(super) const GROUP_EDGE: u32 = 8;
 const CACHE_IDLE_MS: u64 = 2000;
 
+pub(super) use rsf_graphics::d3d11_state::{rsf_d3d11_state_restore, rsf_d3d11_state_save};
+
 unsafe extern "C" {
-    pub(super) fn rsf_d3d11_state_save(context: Handle, state: *mut rsf_d3d11_state) -> u32;
-    pub(super) fn rsf_d3d11_state_restore(context: Handle, state: *mut rsf_d3d11_state);
+    // plugin_callbacks.c: the guarded host log.
     pub(super) fn rsf_call_native_log(log: LogFn, user: Handle, text: *const c_char);
 }
 

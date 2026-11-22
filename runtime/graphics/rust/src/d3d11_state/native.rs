@@ -475,22 +475,29 @@ const PLATFORM: Platform = Platform {
 };
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_state_save(context: Handle, storage: *mut State) -> u32 {
+pub unsafe extern "C" fn rsf_d3d11_state_save(context: Handle, storage: *mut State) -> u32 {
     unsafe { rsf_core_d3d11_state_save(context, storage, 0, &PLATFORM) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_state_save_independent(context: Handle, storage: *mut State) -> u32 {
+pub unsafe extern "C" fn rsf_d3d11_state_save_independent(
+    context: Handle,
+    storage: *mut State,
+) -> u32 {
     unsafe { rsf_core_d3d11_state_save(context, storage, 1, &PLATFORM) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_state_restore(context: Handle, storage: *mut State) {
+pub unsafe extern "C" fn rsf_d3d11_state_restore(context: Handle, storage: *mut State) {
     unsafe { rsf_core_d3d11_state_restore(context, storage, &PLATFORM) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_copy_resource(context: Handle, destination: Handle, source: Handle) {
+pub unsafe extern "C" fn rsf_d3d11_copy_resource(
+    context: Handle,
+    destination: Handle,
+    source: Handle,
+) {
     if !context.is_null() && !destination.is_null() && !source.is_null() {
         unsafe {
             (vtable::<ID3D11DeviceContext>(&context).CopyResource)(context, destination, source)
@@ -499,7 +506,7 @@ unsafe extern "C" fn rsf_d3d11_copy_resource(context: Handle, destination: Handl
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_create_shader_view(device: Handle, texture: Handle) -> Handle {
+pub unsafe extern "C" fn rsf_d3d11_create_shader_view(device: Handle, texture: Handle) -> Handle {
     if device.is_null() || texture.is_null() {
         return null_mut();
     }

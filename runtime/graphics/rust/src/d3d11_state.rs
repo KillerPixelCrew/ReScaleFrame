@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 // D3D11 binding snapshots and ownership behind rescaleframe/d3d11_state.h.
 mod native;
+pub use native::{
+    rsf_d3d11_copy_resource, rsf_d3d11_create_shader_view, rsf_d3d11_state_restore,
+    rsf_d3d11_state_save, rsf_d3d11_state_save_independent,
+};
 
 use crate::com_ref;
 use crate::sys::rsf_d3d11_state as State;

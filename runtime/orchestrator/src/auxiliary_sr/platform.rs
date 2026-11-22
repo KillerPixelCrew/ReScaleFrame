@@ -6,6 +6,7 @@ use crate::graphics_d3d11::{
     constant_buffer, pixel_shader, rasterizer, rsf_d3d11_state_restore, rsf_d3d11_state_save,
     shader_with_log, vertex_shader,
 };
+use rsf_graphics::d3d11_state::{rsf_d3d11_copy_resource, rsf_d3d11_create_shader_view};
 use rsf_shader_compiler::Request;
 use windows::Win32::Graphics::{
     Direct3D::{D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, Fxc::D3DCOMPILE_ENABLE_STRICTNESS},
@@ -18,11 +19,6 @@ type Raw = *mut c_void;
 const SHADER: &[u8] = include_bytes!("scale.hlsl");
 
 const _: () = assert!(size_of::<AuxDrawConstants>() == 64);
-
-unsafe extern "C" {
-    fn rsf_d3d11_create_shader_view(device: Raw, texture: Raw) -> Raw;
-    fn rsf_d3d11_copy_resource(context: Raw, dst: Raw, src: Raw);
-}
 
 unsafe extern "C" fn immediate_device(context: Raw) -> Raw {
     let context = unsafe { borrow::<ID3D11DeviceContext>(&context) };

@@ -137,7 +137,7 @@ unsafe extern "C" fn rsf_input_dump_texture(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_input_dump_active() -> i32 {
+pub(crate) extern "C" fn rsf_input_dump_active() -> i32 {
     i32::from(owner(|owner| {
         owner.capture.as_ref().is_some_and(|capture| capture.in_sr)
     }))

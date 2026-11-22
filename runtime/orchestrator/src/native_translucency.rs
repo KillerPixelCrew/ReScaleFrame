@@ -22,6 +22,7 @@ use rsf_game_sys::{
     RSF_GAME_RENDER_CLOUD_DEPTH, RSF_GAME_RENDER_MATERIALS, RSF_GAME_RENDER_PRIMARY,
     RSF_GAME_RENDER_TRANSLUCENCY, RSF_GAME_RENDER_TRANSLUCENCY_LAYER, rsf_game_render_pass as Pass,
 };
+use rsf_graphics::frame_tap::rsf_frame_tap_set_sampler_bias;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::Mutex;
@@ -35,10 +36,6 @@ const NONE: Object = ptr::null_mut();
 const COVERAGE_SCALE: f32 = 10.0;
 const MODE_SCENE: u32 = 0;
 const MODE_LAYER: u32 = 1;
-
-unsafe extern "C" {
-    fn rsf_frame_tap_set_sampler_bias(bias: f32) -> i32;
-}
 
 struct Dispatch {
     shader: Object,
@@ -767,7 +764,7 @@ unsafe extern "C" fn rsf_native_translucency_pass(context: Object, pass: *const 
             cloud_depth(context, pass)
         },
         RSF_GAME_RENDER_MATERIALS => {
-            unsafe { rsf_frame_tap_set_sampler_bias(material_bias(pass, begin)) };
+            rsf_frame_tap_set_sampler_bias(material_bias(pass, begin));
         }
         RSF_GAME_RENDER_TRANSLUCENCY
             if pass.flags & RSF_GAME_RENDER_PRIMARY != 0 && !pass.color_input.is_null() =>
@@ -776,11 +773,11 @@ unsafe extern "C" fn rsf_native_translucency_pass(context: Object, pass: *const 
             // end-of-pass masks, on after the opening snapshot. Both are compute
             // work the bias does not touch.
             if !begin {
-                unsafe { rsf_frame_tap_set_sampler_bias(0.0) };
+                rsf_frame_tap_set_sampler_bias(0.0);
             }
             unsafe { translucency(context, pass, begin) };
             if begin {
-                unsafe { rsf_frame_tap_set_sampler_bias(material_bias(pass, true)) };
+                rsf_frame_tap_set_sampler_bias(material_bias(pass, true));
             }
         }
         _ => {}

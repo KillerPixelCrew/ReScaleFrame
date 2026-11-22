@@ -18,7 +18,10 @@ pub(crate) unsafe extern "C" fn rsf_dlss_pipeline_start_backend(
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlss_pipeline_on_frame(context: Raw, frame: *const Frame) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_dlss_pipeline_on_frame(
+    context: Raw,
+    frame: *const Frame,
+) -> i32 {
     unsafe { PROCESS.on_frame(&LEAVES, context, frame) }
 }
 
@@ -28,7 +31,7 @@ pub(crate) extern "C" fn rsf_dlss_pipeline_output_texture() -> Raw {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dlss_pipeline_request_dump(prefix: *const c_char) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_dlss_pipeline_request_dump(prefix: *const c_char) -> i32 {
     unsafe { PROCESS.request_dump(prefix) }
 }
 
@@ -67,7 +70,9 @@ pub(crate) extern "C" fn rsf_dlss_pipeline_set_colour_transport(enabled: u32) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dlss_pipeline_set_sharpening(options: *const Sharpening) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_dlss_pipeline_set_sharpening(
+    options: *const Sharpening,
+) -> i32 {
     unsafe { PROCESS.set_sharpening(options) }
 }
 
@@ -105,11 +110,11 @@ pub(crate) unsafe extern "C" fn rsf_dlss_pipeline_select_backend(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dlss_pipeline_stop() -> i32 {
+pub(crate) unsafe extern "C" fn rsf_dlss_pipeline_stop() -> i32 {
     unsafe { PROCESS.stop(&LEAVES) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dlss_pipeline_start(device: Raw, setup: *const Setup) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_dlss_pipeline_start(device: Raw, setup: *const Setup) -> i32 {
     unsafe { rsf_dlss_pipeline_start_backend(device, setup, RSF_SR_DLSS) }
 }
