@@ -154,13 +154,13 @@ typedef struct rsf_unity_package_platform {
     void (*log_close)(void* file);
     /* The input window. player_window is this process's first UnityWndClass top-level window,
        null when there is none; preview_parent is the Editor preview's parent window, null before
-       it exists. subclass installs package.cpp's window procedure and returns the previous one;
-       restore puts previous back only while package.cpp's procedure is still installed.
+       it exists. subclass returns nonzero on attachment. restore disables reporting and attempts
+       owner-thread detachment, retaining forwarding state and a module reference on refusal.
        raw_input_type reads a WM_INPUT header's dwType; zero when the header cannot be read. */
     void* (*player_window)(void);
     void* (*preview_parent)(void);
-    void* (*subclass)(void* window);
-    void (*restore)(void* window, void* previous);
+    uint32_t (*subclass)(void* window);
+    void (*restore)(void* window);
     uint32_t (*raw_input_type)(intptr_t lparam, uint32_t* type);
     /* QueryPerformanceCounter, then QueryPerformanceFrequency. */
     void (*timestamp)(uint64_t* counter, uint64_t* frequency);
@@ -239,14 +239,12 @@ void rsf_unity_package_bridge_failed(int32_t result);
    debugger and the open log file, one line at a time. window_message reports a message dequeued
    by the hooked input window as an RSF_GAME_CPU_INPUT_EVENT (keyboard and mouse messages, and
    WM_INPUT by its raw device type, carry their kind; any other message kind 0) stamped now and
-   keyed to the CPU frame in progress, and returns the procedure to forward it to (null for
-   DefWindowProcW). input is rsfu_input's body: RSF_BACKEND_ERROR_INVALID_ARGUMENT for frame 0 or
+   keyed to the CPU frame in progress. input is rsfu_input's body: RSF_BACKEND_ERROR_INVALID_ARGUMENT for frame 0 or
    an unknown kind bit, nothing for no kinds, else the kinds reported now as received input,
    keyed to frame while it is the CPU frame in progress and unframed otherwise.
    preview_input hooks the Editor preview's parent once it exists while no input window is
    hooked. unload restores the input window's procedure and closes the log. */
 void rsf_unity_package_log(const char* text);
-void* rsf_unity_package_window_message(uint32_t message, intptr_t lparam);
 int rsf_unity_package_input(uint64_t frame, uint32_t kinds);
 void rsf_unity_package_preview_input(void);
 void rsf_unity_package_unload(void);

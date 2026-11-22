@@ -24,6 +24,8 @@
 mod presentation;
 mod routing;
 mod services;
+#[cfg(windows)]
+mod windows;
 
 use self::presentation::{Identity, Presentation};
 use self::services::Services;
@@ -173,8 +175,8 @@ struct Leaves {
     log_close: unsafe extern "C" fn(*mut c_void),
     player_window: unsafe extern "C" fn() -> *mut c_void,
     preview_parent: unsafe extern "C" fn() -> *mut c_void,
-    subclass: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
-    restore: unsafe extern "C" fn(*mut c_void, *mut c_void),
+    subclass: unsafe extern "C" fn(*mut c_void) -> u32,
+    restore: unsafe extern "C" fn(*mut c_void),
     raw_input_type: unsafe extern "C" fn(isize, *mut u32) -> u32,
     timestamp: unsafe extern "C" fn(*mut u64, *mut u64),
     cpu: unsafe extern "C" fn(*const rsf_game_cpu_event),
@@ -1332,20 +1334,12 @@ mod tests {
         call("parent".into());
         handle(fake().parent)
     }
-    /// The previous procedure is 0x30 above the window.
-    unsafe extern "C" fn subclass(window: *mut c_void) -> *mut c_void {
+    unsafe extern "C" fn subclass(window: *mut c_void) -> u32 {
         call(format!("subclass {:#x}", window as usize));
-        if fake().subclass_accepted {
-            handle(window as usize + 0x30)
-        } else {
-            std::ptr::null_mut()
-        }
+        fake().subclass_accepted.into()
     }
-    unsafe extern "C" fn restore(window: *mut c_void, previous: *mut c_void) {
-        call(format!(
-            "restore {:#x} {:#x}",
-            window as usize, previous as usize
-        ));
+    unsafe extern "C" fn restore(window: *mut c_void) {
+        call(format!("restore {:#x}", window as usize));
     }
     unsafe extern "C" fn raw_input_type(lparam: isize, device: *mut u32) -> u32 {
         call(format!("raw {lparam}"));
@@ -2251,16 +2245,11 @@ mod tests {
             calls(),
             ["player", "subclass 0x20", "surface", "seed", "prepare 42"]
         );
-        // Messages are forwarded to the hooked window's previous procedure.
-        assert_eq!(package.window_message(&leaves, 0x000f, 0), handle(0x50));
-        calls();
         // Unload restores the procedure and closes the log; later lines reach the debugger only.
         package.unload(&leaves);
-        assert_eq!(calls(), ["restore 0x20 0x50", "close 0x10"]);
+        assert_eq!(calls(), ["restore 0x20", "close 0x10"]);
         package.log(&leaves, "late");
         assert_eq!(calls(), ["log late"]);
-        assert!(package.window_message(&leaves, 0x000f, 0).is_null());
-        calls();
         package.unload(&leaves);
         assert!(calls().is_empty());
         // The player has no preview input.
@@ -2353,7 +2342,7 @@ mod tests {
             flags: 0,
         };
         // Outside a frame a keyed message is unframed; any other message carries no kind.
-        assert!(package.window_message(&leaves, 0x0100, 0).is_null());
+        package.window_message(&leaves, 0x0100, 0);
         assert_eq!(calls(), ["cpu 5 42 0 1000/10 1 0x100 21 1"]);
         package.window_message(&leaves, 0x000f, 0);
         assert_eq!(calls(), ["cpu 5 42 0 1000/10 0 0xf 5 1"]);

@@ -24,7 +24,6 @@
 #include <IUnityGraphics.h>
 #include <IUnityGraphicsD3D12.h>
 #include <wrl/client.h>
-#include <atomic>
 #include <mutex>
 #include <string>
 #include <cstring>
@@ -32,6 +31,11 @@
 extern "C" void UNITY_INTERFACE_API rsf_unity_package_bridge_load(IUnityInterfaces*);
 extern "C" void UNITY_INTERFACE_API rsf_unity_package_bridge_unload();
 extern "C" int rsf_unity_set_engine_spatial(uint32_t, uint32_t) noexcept;
+
+extern "C" void* rsf_unity_package_player_window() noexcept;
+extern "C" uint32_t rsf_unity_package_window_class(void* hwnd) noexcept;
+extern "C" uint32_t rsf_unity_package_subclass(void* hwnd) noexcept;
+extern "C" void rsf_unity_package_restore(void* hwnd) noexcept;
 
 // package_abi.rs mirrors these layouts and constants.
 static_assert(sizeof(rsf_unity_package_settings) == 100 && sizeof(rsf_unity_package_status) == 184);
@@ -55,88 +59,6 @@ std::wstring ini;
 bool editor = false;
 IUnityInterfaces* registry = nullptr;
 IUnityGraphics* graphics = nullptr;
-// The receipt outlives the Rust session. A later subclass can still call us after Unity has
-// unloaded the plugin, so keep a module reference until the owner thread verifies detachment.
-std::atomic<WNDPROC> input_previous{nullptr};
-std::atomic<bool> input_enabled{false};
-std::atomic<bool> input_destroyed{false};
-std::atomic<uint32_t> input_calls{0};
-HWND input_window = nullptr;
-DWORD input_owner = 0;
-HMODULE input_module = nullptr;
-
-LRESULT CALLBACK input_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
-{
-    ++input_calls;
-    const auto previous = input_previous.load();
-    if (input_enabled.load()) rsf_unity_package_window_message(message, lparam);
-    const auto result = CallWindowProcW(previous, hwnd, message, wparam, lparam);
-    if (message == WM_NCDESTROY) input_destroyed.store(true);
-    --input_calls;
-    return result;
-}
-// rsf_unity_package_platform's input-window leaves.
-BOOL CALLBACK find_player_window(HWND hwnd, LPARAM found)
-{
-    DWORD process = 0; wchar_t name[64]{}; GetWindowThreadProcessId(hwnd, &process);
-    if (process != GetCurrentProcessId() || !GetClassNameW(hwnd, name, 64) || std::wcscmp(name, L"UnityWndClass") != 0) return TRUE;
-    *reinterpret_cast<HWND*>(found) = hwnd;
-    return FALSE;
-}
-void* player_window() noexcept
-{
-    HWND found = nullptr; EnumWindows(find_player_window, reinterpret_cast<LPARAM>(&found)); return found;
-}
-void* subclass(void* window) noexcept
-{
-    const auto hwnd = static_cast<HWND>(window);
-    const auto owner = GetCurrentThreadId();
-    if (GetWindowThreadProcessId(hwnd, nullptr) != owner) return nullptr;
-    if (input_module) {
-        // A retained chain can still be serving this window. Reuse its receipt on reload.
-        if (!input_destroyed.load()) {
-            if (input_window != hwnd || input_owner != owner) return nullptr;
-            input_enabled.store(true);
-            return reinterpret_cast<void*>(input_previous.load());
-        }
-        if (input_owner != owner || input_calls.load() != 0) return nullptr;
-        FreeLibrary(input_module);
-        input_module = nullptr;
-    }
-    const auto previous = reinterpret_cast<WNDPROC>(GetWindowLongPtrW(hwnd, GWLP_WNDPROC));
-    if (!previous || previous == input_proc) return nullptr;
-    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
-            reinterpret_cast<LPCWSTR>(input_proc), &input_module)) return nullptr;
-    input_previous.store(previous);
-    const auto replaced = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(input_proc));
-    if (!replaced) {
-        FreeLibrary(input_module);
-        input_module = nullptr;
-        return nullptr;
-    }
-    input_previous.store(reinterpret_cast<WNDPROC>(replaced));
-    input_window = hwnd;
-    input_owner = owner;
-    input_destroyed.store(false);
-    input_enabled.store(true);
-    return reinterpret_cast<void*>(replaced);
-}
-void restore(void* window, void*) noexcept
-{
-    input_enabled.store(false);
-    if (!input_module || input_window != window || input_owner != GetCurrentThreadId() ||
-        input_calls.load() != 0) return;
-    if (!input_destroyed.load()) {
-        if (reinterpret_cast<WNDPROC>(GetWindowLongPtrW(input_window, GWLP_WNDPROC)) != input_proc) return;
-        if (SetWindowLongPtrW(input_window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(input_previous.load())) !=
-            reinterpret_cast<LONG_PTR>(input_proc)) return;
-    }
-    input_previous.store(nullptr);
-    input_window = nullptr;
-    input_owner = 0;
-    FreeLibrary(input_module);
-    input_module = nullptr;
-}
 uint32_t raw_input_type(intptr_t lparam, uint32_t* type) noexcept
 {
     RAWINPUTHEADER header{}; UINT bytes = sizeof(header);
@@ -171,14 +93,6 @@ void log_write(void* file, const char* text) noexcept
 }
 // rsf_unity_package_platform::accept_window, generation's window guard; routing.rs decides.
 int accept(void*, void* hwnd) { return rsf_unity_package_accept_window(hwnd); }
-// rsf_unity_package_platform's window-guard leaves.
-uint32_t window_class(void* hwnd) noexcept
-{
-    DWORD process = 0; wchar_t name[64]{};
-    GetWindowThreadProcessId(static_cast<HWND>(hwnd), &process);
-    if (process != GetCurrentProcessId() || !GetClassNameW(static_cast<HWND>(hwnd), name, 64)) return 0;
-    return std::wcscmp(name, L"UnityWndClass") == 0 ? 1u : 2u;
-}
 int configuration(void*, rsf_game_render_config* output)
 {
     if (!output || output->struct_size < sizeof(*output)) return 0;
@@ -293,10 +207,10 @@ constexpr rsf_unity_package_platform platform{
     log_open,
     log_write,
     [](void* file) noexcept { CloseHandle(file); },
-    player_window,
+    rsf_unity_package_player_window,
     []() noexcept { return rsf_unity_preview_parent(); },
-    subclass,
-    restore,
+    rsf_unity_package_subclass,
+    rsf_unity_package_restore,
     raw_input_type,
     timestamp,
     [](const rsf_game_cpu_event* event) noexcept { rsf_fg12_cpu(event); },
@@ -309,7 +223,7 @@ constexpr rsf_unity_package_platform platform{
     [](void* window) noexcept -> uint32_t { return rsf_unity_preview_owns(window) ? 1u : 0u; },
     []() noexcept -> uint32_t { return graphics && graphics->GetRenderer() == kUnityGfxRendererVulkan ? 1u : 0u; },
     [](void* window) noexcept -> uint32_t { return rsf_uvk_owns_window(window) ? 1u : 0u; },
-    window_class,
+    rsf_unity_package_window_class,
     // Under the mutex, which also guards registry.
     []() noexcept -> uint32_t {
         if (!registry) return 0;

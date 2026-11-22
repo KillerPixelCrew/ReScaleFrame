@@ -667,12 +667,9 @@ pub struct rsf_unity_package_platform {
     pub log_close: ::core::option::Option<unsafe extern "C" fn(file: *mut ::core::ffi::c_void)>,
     pub player_window: ::core::option::Option<unsafe extern "C" fn() -> *mut ::core::ffi::c_void>,
     pub preview_parent: ::core::option::Option<unsafe extern "C" fn() -> *mut ::core::ffi::c_void>,
-    pub subclass: ::core::option::Option<
-        unsafe extern "C" fn(window: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
-    >,
-    pub restore: ::core::option::Option<
-        unsafe extern "C" fn(window: *mut ::core::ffi::c_void, previous: *mut ::core::ffi::c_void),
-    >,
+    pub subclass:
+        ::core::option::Option<unsafe extern "C" fn(window: *mut ::core::ffi::c_void) -> u32>,
+    pub restore: ::core::option::Option<unsafe extern "C" fn(window: *mut ::core::ffi::c_void)>,
     pub raw_input_type:
         ::core::option::Option<unsafe extern "C" fn(lparam: isize, type_: *mut u32) -> u32>,
     pub timestamp:

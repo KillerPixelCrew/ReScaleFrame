@@ -28,7 +28,7 @@ use rsf_game_sys::{
 };
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering::SeqCst};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::SeqCst};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 /// RSF_BACKEND_ERROR_INVALID_ARGUMENT and RSF_BACKEND_ERROR_FEATURE_FAILED, cast macros;
@@ -65,7 +65,7 @@ impl Drop for InputCallback {
     }
 }
 
-/// A file, window or window procedure that only package.cpp's leaves interpret.
+/// A file or window that only platform leaves interpret.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) struct Handle(pub(super) *mut c_void);
 // SAFETY: a Win32 handle or procedure address, usable from any thread and never dereferenced
@@ -103,8 +103,6 @@ pub(super) struct Services {
     pub(super) log: Mutex<Handle>,
     /// The hooked input window, NONE until one is found; it stays hooked across sessions.
     pub(super) window: Mutex<Handle>,
-    /// The hooked window's previous procedure, read by every message without the lock.
-    pub(super) previous: AtomicPtr<c_void>,
     /// The CPU frame between its begin and end events, 0 outside one.
     pub(super) input_frame: AtomicU64,
     /// The bridge's API as its last preparation wrote it.
@@ -119,7 +117,6 @@ impl Services {
             editor: AtomicBool::new(false),
             log: Mutex::new(Handle::NONE),
             window: Mutex::new(Handle::NONE),
-            previous: AtomicPtr::new(null_mut()),
             input_frame: AtomicU64::new(0),
             api: Mutex::new(Api(empty_api())),
             session: AtomicU64::new(0),
@@ -211,11 +208,11 @@ impl Leaves {
     fn preview_parent(&self) -> Handle {
         Handle(unsafe { (self.preview_parent)() })
     }
-    fn subclass(&self, window: Handle) -> *mut c_void {
-        unsafe { (self.subclass)(window.0) }
+    fn subclass(&self, window: Handle) -> bool {
+        unsafe { (self.subclass)(window.0) != 0 }
     }
-    fn restore(&self, window: Handle, previous: *mut c_void) {
-        unsafe { (self.restore)(window.0, previous) }
+    fn restore(&self, window: Handle) {
+        unsafe { (self.restore)(window.0) }
     }
     fn raw_input_type(&self, lparam: isize) -> Option<u32> {
         let mut device = 0u32;
@@ -327,9 +324,7 @@ impl Package {
         if found.is_none() {
             return;
         }
-        let previous = leaves.subclass(found);
-        if !previous.is_null() {
-            self.services.previous.store(previous, SeqCst);
+        if leaves.subclass(found) {
             *window = found;
         }
     }
@@ -343,12 +338,10 @@ impl Package {
 
     pub(super) fn stop_window_input(&self, leaves: &Leaves) {
         let mut window = lock(&self.services.window);
-        let previous = self.services.previous.load(SeqCst);
-        if !window.is_none() && !previous.is_null() {
-            leaves.restore(*window, previous);
+        if !window.is_none() {
+            leaves.restore(*window);
         }
         *window = Handle::NONE;
-        self.services.previous.store(null_mut(), SeqCst);
     }
 
     /// A WNDPROC that the platform could not detach keeps its own forwarding receipt.
@@ -376,14 +369,8 @@ impl Package {
     }
 
     /// Every message the input window dequeues, classified by its range and WM_INPUT by its raw
-    /// device. A keyed one outside a CPU frame is unframed. Returns the procedure to forward to.
-    pub(super) fn window_message(
-        &self,
-        leaves: &Leaves,
-        message: u32,
-        lparam: isize,
-    ) -> *mut c_void {
-        let previous = self.services.previous.load(SeqCst);
+    /// device. A keyed one outside a CPU frame is unframed.
+    pub(super) fn window_message(&self, leaves: &Leaves, message: u32, lparam: isize) {
         let mut kind = 0;
         if (WM_KEYFIRST..=WM_KEYLAST).contains(&message) {
             kind = RSF_GAME_INPUT_KEYBOARD;
@@ -407,7 +394,6 @@ impl Package {
             flags |= RSF_GAME_CPU_INPUT_UNFRAMED;
         }
         leaves.cpu(&self.services.received(source, now, kind, message, flags));
-        previous
     }
 
     /// rsfu_input after its argument checks: managed received input, keyed to `frame` while it
@@ -457,14 +443,13 @@ unsafe extern "C" fn rsf_unity_package_log(text: *const c_char) {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_package_window_message(message: u32, lparam: isize) -> *mut c_void {
+#[cfg(windows)]
+pub(super) fn report_window_message(message: u32, lparam: isize) {
     if let Some(leaves) = LEAVES.get()
         && let Some(_callback) = InputCallback::enter()
     {
-        return PACKAGE.window_message(leaves, message, lparam);
+        PACKAGE.window_message(leaves, message, lparam);
     }
-    PACKAGE.services.previous.load(SeqCst)
 }
 
 /// rsfu_input's checks come first, as they did; nothing is reported for no kinds.
