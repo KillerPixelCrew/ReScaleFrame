@@ -36,10 +36,10 @@ The crate owns the plugin policy: recognition and lifecycle validation (`lib.rs`
 RVAs, expected entry bytes and native layouts (`layout.rs`), the worker-view camera decode
 (`camera.rs`), DLSS/FSR2 SR routing, refusals, queue/Present observers and hook lifecycle
 (`renderer.rs`), and the completed-scene producer with its native marker, sleep, mode and input
-facts (`scene.rs`). `src/native_platform.cpp` keeps only typed leaves the crate calls through a
+facts (`scene.rs`). `src/native_platform.rs` keeps only typed leaves the crate calls through a
 table: MinHook, D3D12/DXGI COM calls, ReadProcessMemory, TLS, QPC, window-message and XInput
 observation, and return-address capture. `src/plugin.cpp` exports `rsf_get_game_plugin_api`.
-`src/render_camera.h` declares the crate's camera C ABI for `tests/rdr2_camera.cpp`.
+`tests/rdr2_camera_abi.h` declares the camera C ABI for the native fixture and capture-file CLI.
 [The port note](../../docs/research/rust-rdr2-plugin.md) records what moved, the deliberate
 differences and the remaining work.
 
