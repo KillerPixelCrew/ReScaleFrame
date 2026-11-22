@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Windows loader bindings and the C entry points called by bridge.cpp.
 
+mod verified;
 mod wsi;
 
 use crate::frame_generation::{Options, Platform as FgPlatform};

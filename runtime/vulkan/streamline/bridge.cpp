@@ -8,9 +8,6 @@
 #endif
 #define VK_USE_PLATFORM_WIN32_KHR
 #include <windows.h>
-#include <wintrust.h>
-#include <softpub.h>
-#include <wincrypt.h>
 #include <cstdint>
 #include <atomic>
 #include <cstdio>
@@ -53,6 +50,7 @@ static_assert(static_cast<uint32_t>(sl::ReflexMode::eOff) == 0 &&
     static_cast<uint32_t>(sl::ReflexMode::eLowLatencyWithBoost) == 2);
 
 extern "C" {
+HANDLE rsf_slvk_open_verified(const wchar_t*, const uint8_t*, uint32_t require_signature);
 int32_t rsf_slvk_life_initialize(const RsfSlLifecyclePlatform*, const wchar_t*, const char*,
     uint32_t, uint32_t, uint32_t);
 int32_t rsf_slvk_life_shutdown(const RsfSlLifecyclePlatform*);
@@ -108,42 +106,9 @@ bool loadFeature(sl::Feature feature, const char* name, void*& target) {
     return featureFunction && featureFunction(feature, name, target) == sl::Result::eOk && target;
 }
 
-/// @brief Opens the interposer without write/delete sharing and verifies the build-pinned SHA-256 through that handle.
-/// @details The returned handle keeps the verified file from being written, renamed or deleted; the Rust lifecycle holds it across LoadLibraryExW and closes it afterwards. WinTrust and cryptographic handles are released before returning.
-/// @return The open verified file handle, or INVALID_HANDLE_VALUE when opening or verification fails.
+// Keep the digest injected by the corrected build receipt or the pinned retail
+// digest at the native build boundary. Rust verifies and owns the file handle.
 HANDLE openVerifiedRelease(const wchar_t* path) noexcept {
-    HANDLE input = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ,
-        nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
-    if (input == INVALID_HANDLE_VALUE) return INVALID_HANDLE_VALUE;
-    WINTRUST_FILE_INFO file{};
-    file.cbStruct = sizeof(file);
-    file.pcwszFilePath = path;
-    file.hFile = input;
-    WINTRUST_DATA trust{};
-    trust.cbStruct = sizeof(trust);
-    trust.dwUIChoice = WTD_UI_NONE;
-    trust.fdwRevocationChecks = WTD_REVOKE_NONE;
-    trust.dwUnionChoice = WTD_CHOICE_FILE;
-    trust.pFile = &file;
-    trust.dwStateAction = WTD_STATEACTION_VERIFY;
-    trust.dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL;
-    GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
-    const LONG signature = WinVerifyTrust(nullptr, &action, &trust);
-    (void)signature;
-    trust.dwStateAction = WTD_STATEACTION_CLOSE;
-    WinVerifyTrust(nullptr, &action, &trust);
-    LARGE_INTEGER start{};
-    if (
-#ifndef VULKANSTORY_CORRECTED_STREAMLINE_SHA256
-        signature != ERROR_SUCCESS ||
-#endif
-        !SetFilePointerEx(input, start, nullptr, FILE_BEGIN)) {
-        CloseHandle(input);
-        return INVALID_HANDLE_VALUE;
-    }
-
-    // Source builds embed their own interposer hash. The original release path
-    // additionally requires Authenticode. Neither accepts a different binary.
     constexpr uint8_t expected[32] = {
 #ifdef VULKANSTORY_CORRECTED_STREAMLINE_SHA256
         VULKANSTORY_CORRECTED_STREAMLINE_SHA256
@@ -154,26 +119,11 @@ HANDLE openVerifiedRelease(const wchar_t* path) noexcept {
         0xed, 0x54, 0xef, 0x49, 0x34, 0xe1, 0xea, 0x4c,
 #endif
     };
-    HCRYPTPROV provider{};
-    HCRYPTHASH hash{};
-    uint8_t digest[32]{};
-    DWORD size = sizeof(digest);
-    bool valid = CryptAcquireContextW(&provider, nullptr, nullptr, PROV_RSA_AES, CRYPT_VERIFYCONTEXT) &&
-        CryptCreateHash(provider, CALG_SHA_256, 0, 0, &hash);
-    uint8_t bytes[64 * 1024];
-    DWORD read{};
-    while (valid) {
-        if (!ReadFile(input, bytes, sizeof(bytes), &read, nullptr)) { valid = false; break; }
-        if (read == 0) break;
-        valid = CryptHashData(hash, bytes, read, 0) != FALSE;
-    }
-    if (valid) valid = CryptGetHashParam(hash, HP_HASHVAL, digest, &size, 0) &&
-        size == sizeof(expected) && memcmp(digest, expected, size) == 0;
-    if (hash) CryptDestroyHash(hash);
-    if (provider) CryptReleaseContext(provider, 0);
-    if (valid) return input;
-    CloseHandle(input);
-    return INVALID_HANDLE_VALUE;
+#ifdef VULKANSTORY_CORRECTED_STREAMLINE_SHA256
+    return rsf_slvk_open_verified(path, expected, 0);
+#else
+    return rsf_slvk_open_verified(path, expected, 1);
+#endif
 }
 
 // Called by Streamline's present thread. Keep it lock-free and let the render
