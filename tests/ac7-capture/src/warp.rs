@@ -2,13 +2,13 @@
 //! The public AC7 capture ABI, observed through WARP and a hidden swap chain.
 
 use rsf_ac7::sys::*;
-use rsf_test_support::Window;
+use rsf_test_support::{Window, warp_swapchain};
 use std::ffi::{CStr, CString, OsString, c_char, c_void};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicU32, Ordering};
-use windows::Win32::Foundation::{HMODULE, HWND};
+use windows::Win32::Foundation::HWND;
 use windows::Win32::Globalization::{CP_ACP, MultiByteToWideChar, WideCharToMultiByte};
 use windows::Win32::Graphics::Direct3D::{Fxc::D3DCompile, *};
 use windows::Win32::Graphics::Direct3D11::*;
@@ -137,24 +137,8 @@ fn warp(window: HWND) -> Option<(IDXGISwapChain, ID3D11Device, ID3D11DeviceConte
         Windowed: BOOL(1),
         ..Default::default()
     };
-    let (mut chain, mut device, mut context) = (None, None, None);
-    unsafe {
-        D3D11CreateDeviceAndSwapChain(
-            None::<&IDXGIAdapter>,
-            D3D_DRIVER_TYPE_WARP,
-            HMODULE::default(),
-            D3D11_CREATE_DEVICE_FLAG(0),
-            None,
-            D3D11_SDK_VERSION,
-            Some(&desc),
-            Some(&mut chain),
-            Some(&mut device),
-            None,
-            Some(&mut context),
-        )
-    }
-    .ok()?;
-    Some((chain?, device?, context?))
+    let (device, context, chain) = warp_swapchain(D3D11_CREATE_DEVICE_FLAG(0), &desc).ok()?;
+    Some((chain, device, context))
 }
 
 fn compile(source: &str, profile: PCSTR) -> Test<Vec<u8>> {

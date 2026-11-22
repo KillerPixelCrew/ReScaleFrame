@@ -14,22 +14,11 @@ mod sys {
     include!(concat!(env!("OUT_DIR"), "/sys.rs"));
 }
 
-/// Ends the fixture process at the first failed condition, naming the file and line.
-macro_rules! check {
-    ($condition:expr) => {
-        if !$condition {
-            eprintln!(
-                "check failed at {}:{}: {}",
-                file!(),
-                line!(),
-                stringify!($condition)
-            );
-            std::process::exit(1);
-        }
-    };
-}
+#[macro_use]
+extern crate rsf_test_support;
 
-mod assembly;mod choice;
+mod assembly;
+mod choice;
 mod device;
 mod dll;
 mod latency;

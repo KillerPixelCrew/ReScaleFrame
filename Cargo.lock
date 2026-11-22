@@ -788,6 +788,7 @@ dependencies = [
  "rsf-bindgen",
  "rsf-game-sys",
  "rsf-minhook-sys",
+ "rsf-test-support",
  "windows",
 ]
 

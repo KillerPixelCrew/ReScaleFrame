@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-use super::{Handle, Window, check, require, send};
+use super::{Handle, check, require, send, window};
 use crate::sys::*;
+use rsf_test_support::{d3d11_device, d3d11_swapchain};
 use std::cell::RefCell;
 use std::ffi::{CStr, c_char};
 use std::os::windows::ffi::OsStrExt;
@@ -10,14 +11,13 @@ use std::thread::sleep;
 use std::time::Duration;
 use windows::{
     Win32::{
-        Foundation::{HMODULE, HWND, LPARAM, RECT},
+        Foundation::{HWND, LPARAM, RECT},
         Graphics::{
             Direct3D::D3D_DRIVER_TYPE_HARDWARE,
             Direct3D11::{
                 D3D11_BIND_CONSTANT_BUFFER, D3D11_BUFFER_DESC, D3D11_CPU_ACCESS_READ,
                 D3D11_CREATE_DEVICE_FLAG, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE,
-                D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING, D3D11CreateDevice,
-                D3D11CreateDeviceAndSwapChain, ID3D11DepthStencilView, ID3D11Device,
+                D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING, ID3D11DepthStencilView, ID3D11Device,
                 ID3D11DeviceContext, ID3D11Texture2D,
             },
             Dxgi::{
@@ -26,8 +26,7 @@ use windows::{
                     DXGI_SAMPLE_DESC,
                 },
                 DXGI_PRESENT, DXGI_SWAP_CHAIN_DESC, DXGI_SWAP_CHAIN_FLAG,
-                DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIAdapter,
-                IDXGISwapChain,
+                DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGISwapChain,
             },
         },
         System::LibraryLoader::LoadLibraryW,
@@ -280,24 +279,10 @@ fn panel_path() {
 }
 
 fn make_helper_device() {
-    let mut helper = None;
-    check(
-        unsafe {
-            D3D11CreateDevice(
-                None::<&IDXGIAdapter>,
-                D3D_DRIVER_TYPE_HARDWARE,
-                HMODULE::default(),
-                D3D11_CREATE_DEVICE_FLAG(0),
-                None,
-                D3D11_SDK_VERSION,
-                Some(&mut helper),
-                None,
-                None,
-            )
-        },
+    let (helper, _) = check(
+        d3d11_device(D3D_DRIVER_TYPE_HARDWARE, D3D11_CREATE_DEVICE_FLAG(0), None),
         "create helper device",
     );
-    let helper = helper.expect("helper device");
     let desc = D3D11_BUFFER_DESC {
         ByteWidth: 16,
         BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
@@ -330,30 +315,15 @@ fn presenting_chain(window: HWND) -> (IDXGISwapChain, State) {
         SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
         ..Default::default()
     };
-    let (mut chain, mut device, mut context) = (None, None, None);
-    check(
-        unsafe {
-            D3D11CreateDeviceAndSwapChain(
-                None::<&IDXGIAdapter>,
-                D3D_DRIVER_TYPE_HARDWARE,
-                HMODULE::default(),
-                D3D11_CREATE_DEVICE_FLAG(0),
-                None,
-                D3D11_SDK_VERSION,
-                Some(&desc),
-                Some(&mut chain),
-                Some(&mut device),
-                None,
-                Some(&mut context),
-            )
-        },
+    let (device, context, chain) = check(
+        d3d11_swapchain(D3D_DRIVER_TYPE_HARDWARE, D3D11_CREATE_DEVICE_FLAG(0), &desc),
         "create presenting device and flip chain",
     );
     (
-        chain.expect("swap chain"),
+        chain,
         State {
-            device: device.expect("presenting device"),
-            context: context.expect("immediate context"),
+            device,
+            context,
             frames: 0,
             colored_frames: 0,
         },
@@ -380,8 +350,8 @@ extern "C" fn rsf_test_overlay_host() -> i32 {
     require(installed == 0, "install observer");
     make_helper_device();
 
-    let window = Window::new(w!("RsfOverlayHostTest"), 800, 600);
-    let (chain, state) = presenting_chain(window.hwnd);
+    let window = window(w!("RsfOverlayHostTest"), 800, 600);
+    let (chain, state) = presenting_chain(window.handle);
     STATE.with_borrow_mut(|current| *current = Some(state));
     let colored_frames =
         || STATE.with_borrow(|state| state.as_ref().expect("fixture state").colored_frames);

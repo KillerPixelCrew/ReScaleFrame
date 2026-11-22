@@ -1,22 +1,22 @@
 // SPDX-License-Identifier: MIT
 // Block the real WARP queue, fill all three overlay slots, then allow their fences to complete.
-use super::{Handle, Window, check, require};
+use super::{Handle, check, require, window};
 use crate::sys::{rsf_overlay_intent, rsf_overlay_stats};
+use rsf_test_support::{enable_d3d12_debug_layer, warp_d3d12};
 use std::{ffi::CStr, thread, time::Duration};
 use windows::{
     Win32::{
         Foundation::{HANDLE, WAIT_OBJECT_0},
         Graphics::{
-            Direct3D::D3D_FEATURE_LEVEL_11_0,
             Direct3D12::{
                 D3D12_COMMAND_QUEUE_DESC, D3D12_FENCE_FLAG_NONE, D3D12_MESSAGE,
-                D3D12_MESSAGE_SEVERITY_ERROR, D3D12CreateDevice, D3D12GetDebugInterface,
-                ID3D12CommandQueue, ID3D12Debug, ID3D12Device, ID3D12Fence, ID3D12InfoQueue,
+                D3D12_MESSAGE_SEVERITY_ERROR, ID3D12CommandQueue, ID3D12Device, ID3D12Fence,
+                ID3D12InfoQueue,
             },
             Dxgi::{
                 Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC},
-                CreateDXGIFactory1, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_DISCARD,
-                DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIAdapter, IDXGIFactory4, IDXGIOutput,
+                DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_DISCARD,
+                DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIOutput,
             },
         },
         System::Threading::{CreateEventW, WaitForSingleObject},
@@ -31,17 +31,6 @@ type Present = unsafe extern "C" fn(
     stats: *const rsf_overlay_stats,
     intent: *mut rsf_overlay_intent,
 ) -> i32;
-
-fn debug_device() -> Option<(IDXGIFactory4, ID3D12Device)> {
-    let mut debug: Option<ID3D12Debug> = None;
-    unsafe { D3D12GetDebugInterface(&mut debug) }.ok()?;
-    unsafe { debug?.EnableDebugLayer() };
-    let factory: IDXGIFactory4 = unsafe { CreateDXGIFactory1() }.ok()?;
-    let adapter: IDXGIAdapter = unsafe { factory.EnumWarpAdapter() }.ok()?;
-    let mut device = None;
-    unsafe { D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_11_0, &mut device) }.ok()?;
-    Some((factory, device?))
-}
 
 fn verify_no_debug_errors(device: &ID3D12Device) {
     let info: ID3D12InfoQueue = check(device.cast(), "get D3D12 debug queue");
@@ -77,14 +66,14 @@ extern "C" fn rsf_test_overlay_native12(draw: Present) -> i32 {
     require(args.len() == 2, "pass the deterministic overlay panel DLL");
     // Set before creation of the D3D runtime and its worker threads.
     unsafe { std::env::set_var("RSF_OVERLAY_DLL", args.nth(1).expect("panel DLL path")) };
-    let Some((factory, device)) = debug_device() else {
+    let (true, Ok((factory, device))) = (enable_d3d12_debug_layer(), warp_d3d12()) else {
         return 77;
     };
     let queue: ID3D12CommandQueue = check(
         unsafe { device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC::default()) },
         "create D3D12 queue",
     );
-    let window = Window::new(w!("RSF UI backpressure"), 100, 100);
+    let window = window(w!("RSF UI backpressure"), 100, 100);
     let desc = DXGI_SWAP_CHAIN_DESC1 {
         Width: 80,
         Height: 80,
@@ -100,7 +89,7 @@ extern "C" fn rsf_test_overlay_native12(draw: Present) -> i32 {
     };
     let chain = check(
         unsafe {
-            factory.CreateSwapChainForHwnd(&queue, window.hwnd, &desc, None, None::<&IDXGIOutput>)
+            factory.CreateSwapChainForHwnd(&queue, window.handle, &desc, None, None::<&IDXGIOutput>)
         },
         "create D3D12 swap chain",
     );

@@ -53,7 +53,6 @@ unsafe extern "C" {
     fn rsf_frame_sequencer_destroy(ledger: Raw);
 }
 
-
 #[derive(Clone, Copy, Default)]
 struct Mocks {
     session: Raw,

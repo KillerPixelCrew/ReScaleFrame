@@ -17,6 +17,7 @@ workspace = true
 
 [dependencies]
 rsf-game-sys = { path = "../../sdk/game" }
+rsf-test-support = { path = "../support" }
 
 [target."cfg(windows)".dependencies]
 rsf-minhook-sys = { path = "../../third_party/minhook" }

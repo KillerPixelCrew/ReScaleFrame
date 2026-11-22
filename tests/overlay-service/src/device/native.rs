@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 use windows::{
     Win32::{
-        Foundation::{E_POINTER, HINSTANCE, HMODULE, HWND},
+        Foundation::{E_POINTER, HINSTANCE, HWND},
         Graphics::{
-            Direct3D::{D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP},
+            Direct3D::D3D_DRIVER_TYPE_HARDWARE,
             Direct3D11::{
-                D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDeviceAndSwapChain,
-                ID3D11Device, ID3D11DeviceContext, ID3D11RenderTargetView, ID3D11Texture2D,
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT, ID3D11Device, ID3D11DeviceContext,
+                ID3D11RenderTargetView, ID3D11Texture2D,
             },
             Dxgi::{
                 Common::{
@@ -14,8 +14,8 @@ use windows::{
                     DXGI_SAMPLE_DESC,
                 },
                 DXGI_PRESENT, DXGI_SWAP_CHAIN_DESC, DXGI_SWAP_CHAIN_FLAG,
-                DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIAdapter,
-                IDXGIDevice, IDXGIFactory, IDXGISwapChain,
+                DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice,
+                IDXGIFactory, IDXGISwapChain,
             },
         },
         System::LibraryLoader::GetModuleHandleW,
@@ -27,7 +27,7 @@ use windows::{
     core::{BOOL, Interface, PCWSTR, w},
 };
 
-use rsf_test_support::default_window_procedure;
+use rsf_test_support::{d3d11_swapchain, default_window_procedure, warp_swapchain};
 
 const CLASS: PCWSTR = w!("RsfOverlayDllApiFixture");
 struct Window(HWND);
@@ -86,32 +86,6 @@ fn description(window: HWND, width: u32, height: u32) -> DXGI_SWAP_CHAIN_DESC {
     }
 }
 
-fn create(
-    desc: &DXGI_SWAP_CHAIN_DESC,
-    driver: D3D_DRIVER_TYPE,
-) -> windows::core::Result<(IDXGISwapChain, ID3D11DeviceContext, ID3D11Device)> {
-    let (mut chain, mut device, mut context) = (None, None, None);
-    unsafe {
-        D3D11CreateDeviceAndSwapChain(
-            None::<&IDXGIAdapter>,
-            driver,
-            HMODULE::default(),
-            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-            None,
-            D3D11_SDK_VERSION,
-            Some(desc),
-            Some(&mut chain),
-            Some(&mut device),
-            None,
-            Some(&mut context),
-        )
-    }?;
-    match (chain, context, device) {
-        (Some(chain), Some(context), Some(device)) => Ok((chain, context, device)),
-        _ => Err(E_POINTER.into()),
-    }
-}
-
 pub(super) enum StartError {
     Window(windows::core::Error),
     Device(windows::core::Error),
@@ -139,10 +113,12 @@ impl Graphics {
         let window =
             Window::new(instance, w!("overlay fixture"), 640, 360).map_err(StartError::Window)?;
         let desc = description(window.0, 640, 360);
-        let ((chain, context, device), adapter) = create(&desc, D3D_DRIVER_TYPE_HARDWARE)
-            .map(|objects| (objects, "hardware"))
-            .or_else(|_| create(&desc, D3D_DRIVER_TYPE_WARP).map(|objects| (objects, "WARP")))
-            .map_err(StartError::Device)?;
+        let flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+        let ((device, context, chain), adapter) =
+            d3d11_swapchain(D3D_DRIVER_TYPE_HARDWARE, flags, &desc)
+                .map(|objects| (objects, "hardware"))
+                .or_else(|_| warp_swapchain(flags, &desc).map(|objects| (objects, "WARP")))
+                .map_err(StartError::Device)?;
         println!("D3D11 {adapter} device, hidden 640x360 window");
         Ok(Self {
             chain,

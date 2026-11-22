@@ -6,11 +6,7 @@ use std::mem::{offset_of, size_of};
 use std::ptr::{from_ref, null_mut};
 use windows::Win32::{
     Foundation::{E_NOINTERFACE, S_OK},
-    Graphics::{
-        Direct3D::D3D_FEATURE_LEVEL_11_0,
-        Direct3D12::*,
-        Dxgi::{Common::*, *},
-    },
+    Graphics::{Direct3D12::*, Dxgi::Common::*},
 };
 use windows::core::{GUID, HRESULT, IUnknown_Vtbl, Interface};
 
@@ -39,23 +35,12 @@ unsafe extern "C" {
     fn rsf_fg_leases_abandon_device_lost(lease: Raw) -> i32;
 }
 
-
 fn retirement(fence: Raw, value: u64) -> rsf_fg_retirement {
     rsf_fg_retirement {
         struct_size: size_of::<rsf_fg_retirement>() as u32,
         fence,
         value,
     }
-}
-
-fn warp_device() -> Option<ID3D12Device> {
-    let mut device = None;
-    unsafe {
-        let factory = CreateDXGIFactory2::<IDXGIFactory4>(DXGI_CREATE_FACTORY_FLAGS(0)).ok()?;
-        let adapter = factory.EnumWarpAdapter::<IDXGIAdapter>().ok()?;
-        D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_11_0, &mut device).ok()?;
-    }
-    device
 }
 
 fn make_resource(device: &ID3D12Device) -> ID3D12Resource {
@@ -93,7 +78,7 @@ fn make_resource(device: &ID3D12Device) -> ID3D12Resource {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_test_fg_leases() -> i32 {
-    let Some(device) = warp_device() else {
+    let Ok((_, device)) = rsf_test_support::warp_d3d12() else {
         return 77;
     };
     let resource = make_resource(&device);

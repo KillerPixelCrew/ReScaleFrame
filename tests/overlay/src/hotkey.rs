@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::{Handle, Window, check, require, send};
+use super::{Handle, check, require, send, window};
 use crate::sys::*;
 use rsf_minhook_sys::{MH_CreateHook, MH_DisableHook, MH_EnableHook, MH_Initialize, MH_RemoveHook};
 use std::ptr::null_mut;
@@ -33,7 +33,6 @@ unsafe extern "system" fn foreground_window() -> HWND {
     HWND(FOREGROUND.load(Ordering::Relaxed))
 }
 
-
 fn poll(down: bool) {
     DOWN.store(down, Ordering::Relaxed);
     unsafe { rsf_overlay_input_poll_toggle() };
@@ -45,7 +44,7 @@ fn visible() -> bool {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_test_overlay_hotkey() -> i32 {
-    let window = Window::new(w!("RsfHotkeyFixture"), 64, 64);
+    let window = window(w!("RsfHotkeyFixture"), 64, 64);
     // Replace only this process's focus and key queries.
     require(
         unsafe { MH_Initialize() } == 0,
@@ -73,25 +72,25 @@ extern "C" fn rsf_test_overlay_hotkey() -> i32 {
         ..Default::default()
     };
     require(
-        unsafe { rsf_overlay_input_install(window.hwnd.0, &options) } == 0,
+        unsafe { rsf_overlay_input_install(window.handle.0, &options) } == 0,
         "install on hidden window",
     );
     let insert = usize::from(VK_INSERT.0);
-    FOREGROUND.store(window.hwnd.0, Ordering::Relaxed);
+    FOREGROUND.store(window.handle.0, Ordering::Relaxed);
     poll(false);
     require(!visible(), "poll starts closed");
     poll(true);
     require(visible(), "Insert opens without a window message");
     sleep(Duration::from_millis(280));
     poll(true);
-    send(window.hwnd, WM_KEYDOWN, insert, 1);
+    send(window.handle, WM_KEYDOWN, insert, 1);
     require(
         visible(),
         "held key and delayed message do not toggle twice",
     );
 
     poll(false);
-    send(window.hwnd, WM_KEYUP, insert, 0xc000_0001);
+    send(window.handle, WM_KEYUP, insert, 0xc000_0001);
     poll(true);
     require(!visible(), "second physical edge closes without messages");
     poll(false);
@@ -99,7 +98,7 @@ extern "C" fn rsf_test_overlay_hotkey() -> i32 {
     poll(true);
     sleep(Duration::from_millis(260));
     require(!visible(), "background presses do not open panel");
-    FOREGROUND.store(window.hwnd.0, Ordering::Relaxed);
+    FOREGROUND.store(window.handle.0, Ordering::Relaxed);
     poll(true);
     require(
         !visible(),
@@ -112,13 +111,13 @@ extern "C" fn rsf_test_overlay_hotkey() -> i32 {
     sleep(Duration::from_millis(260));
 
     DOWN.store(true, Ordering::Relaxed);
-    send(window.hwnd, WM_KEYDOWN, insert, 1);
+    send(window.handle, WM_KEYDOWN, insert, 1);
     poll(true);
     require(!visible(), "message-first route and polling share the edge");
-    send(window.hwnd, WM_KEYDOWN, insert, 0x4000_0001);
+    send(window.handle, WM_KEYDOWN, insert, 0x4000_0001);
     require(!visible(), "auto repeat stays closed");
     DOWN.store(false, Ordering::Relaxed);
-    send(window.hwnd, WM_KEYUP, insert, 0xc000_0001);
+    send(window.handle, WM_KEYUP, insert, 0xc000_0001);
     poll(false);
 
     unsafe { rsf_overlay_input_set_visible(1) };
