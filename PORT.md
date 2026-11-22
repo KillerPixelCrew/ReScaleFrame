@@ -1337,15 +1337,15 @@ Port the shared Vulkan SR services, split routes and provider-selection boundari
 - [x] [runtime/orchestrator/include/rescaleframe/native_sr_split_vulkan.h](runtime/orchestrator/include/rescaleframe/native_sr_split_vulkan.h)
 - [x] [runtime/orchestrator/include/rescaleframe/native_sr_vulkan.h](runtime/orchestrator/include/rescaleframe/native_sr_vulkan.h)
 - [x] [runtime/orchestrator/src/native_sr_split_lease.h](runtime/orchestrator/src/native_sr_split_lease.h)
-- [ ] [runtime/orchestrator/src/native_sr_split_vulkan.cpp](runtime/orchestrator/src/native_sr_split_vulkan.cpp)
+- [x] [runtime/orchestrator/src/native_sr_split_vulkan.cpp](runtime/orchestrator/src/native_sr_split_vulkan.cpp)
 - [ ] [runtime/orchestrator/src/native_sr_vulkan.cpp](runtime/orchestrator/src/native_sr_vulkan.cpp)
-- [ ] [runtime/orchestrator/src/native_vulkan_timing.h](runtime/orchestrator/src/native_vulkan_timing.h)
+- [x] [runtime/orchestrator/src/native_vulkan_timing.h](runtime/orchestrator/src/native_vulkan_timing.h)
 - [x] [runtime/orchestrator/src/vulkan_fidelityfx_native.h](runtime/orchestrator/src/vulkan_fidelityfx_native.h)
 - [x] [runtime/orchestrator/src/vulkan_sdk_native.h](runtime/orchestrator/src/vulkan_sdk_native.h)
 
 **Fixtures (4)**
 
-- [ ] [tests/native_sr_split_vulkan.cpp](tests/native_sr_split_vulkan.cpp)
+- [x] [tests/native_sr_split_vulkan.cpp](tests/native_sr_split_vulkan.cpp)
 - [ ] [tests/native_sr_vulkan.cpp](tests/native_sr_vulkan.cpp)
 - [x] [tests/native_sr_xess_range_check.py](tests/native_sr_xess_range_check.py) (writes a C++ contract fixture)
 - [x] [tests/native_vulkan_exports.cpp](tests/native_vulkan_exports.cpp)
@@ -2102,7 +2102,7 @@ Port the live SR stage, D3D11 pass and reconstruction, including refusing a fram
 - [ ] [games/anomaly/src/sr_pass.h](games/anomaly/src/sr_pass.h)
 - [x] [games/anomaly/src/sr_plan.h](games/anomaly/src/sr_plan.h)
 - [ ] [games/anomaly/src/sr_profile.h](games/anomaly/src/sr_profile.h)
-- [ ] [games/anomaly/src/sr_reconstruction.h](games/anomaly/src/sr_reconstruction.h)
+- [x] [games/anomaly/src/sr_reconstruction.h](games/anomaly/src/sr_reconstruction.h)
 - [ ] [games/anomaly/src/sr_settings.h](games/anomaly/src/sr_settings.h)
 - [ ] [games/anomaly/src/sr_stage.cpp](games/anomaly/src/sr_stage.cpp)
 - [ ] [games/anomaly/src/sr_stage.h](games/anomaly/src/sr_stage.h)
@@ -2111,10 +2111,10 @@ Port the live SR stage, D3D11 pass and reconstruction, including refusing a fram
 **Fixtures (7)**
 
 - [ ] [tests/anomaly_sr_hooks.cpp](tests/anomaly_sr_hooks.cpp)
-- [ ] [tests/anomaly_sr_pass.cpp](tests/anomaly_sr_pass.cpp)
+- [x] [tests/anomaly_sr_pass.cpp](tests/anomaly_sr_pass.cpp)
 - [x] [tests/anomaly_sr_plan.cpp](tests/anomaly_sr_plan.cpp)
 - [ ] [tests/anomaly_sr_profile.cpp](tests/anomaly_sr_profile.cpp)
-- [ ] [tests/anomaly_sr_reconstruction.cpp](tests/anomaly_sr_reconstruction.cpp)
+- [x] [tests/anomaly_sr_reconstruction.cpp](tests/anomaly_sr_reconstruction.cpp)
 - [ ] [tests/anomaly_sr_roundtrip.cpp](tests/anomaly_sr_roundtrip.cpp)
 - [ ] [tests/anomaly_sr_runtime_api.cpp](tests/anomaly_sr_runtime_api.cpp)
 
@@ -2134,7 +2134,7 @@ Port the live SR stage, D3D11 pass and reconstruction, including refusing a fram
 
 - [x] **Altitude | Medium | Publish the actual bilinear fallback result.** temporal_seam increments the driver's bilinear count before draw_pass(UPSCALE) returns. A reinsertion refusal also sets the status text to 'bilinear fallback drawn' before attempting that draw. If state capture or the fallback pass fails, the swap owner reports no world image while driver diagnostics report a fallback draw. Submit one fallback outcome including its initiating reason after draw_pass returns and distinguish attempted, succeeded and failed recovery. [games/anomaly/src/sr_stage.rs:1944](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/anomaly/src/sr_stage.rs#L1944)
 
-- [ ] **Boundaries | Medium | Let the Runtime choose and default the Anomaly SR backend.** AGENTS.md Rule 3 gives the orchestrator the choice of SR backend and every other vendor policy. The Anomaly adapter makes that choice itself. Ini::options at sr_stage.rs:479-492 sanitizes the shared SRBackend key with an adapter fallback of DLSS (BACKEND_DLSS) whatever the GPU. Stage::choices at :2572-2610 decides which vendors are offered by probing vendor file names (sl.interposer.dll plus nvngx_dlss.dll, amd_fidelityfx_upscaler_dx12.dll plus amd_fidelityfx_loader_dx12.dll, libxess.dll) in the adapter-resolved vendor directories. When the saved backend is not offered, it substitutes its own order: DLSS, XeSS, FSR3, FSR4. RSF_ANOMALY_SR_ADAPTER_BACKENDS (sr_stage_abi.rs:27 = 58) also leaves out RSF_SR_AUTO. The Runtime already owns this policy in rsf_gpu_select_sr_backend (runtime/orchestrator/src/lib.rs:385): it prefers DLSS on NVIDIA, XeSS on Intel and FSR3 otherwise. Concrete effect: on an AMD GPU with the full vendor package installed, Anomaly Stage 5 defaults to DLSS, which only fails once the pipeline starts, while every Runtime-hosted game picks FSR3. Report the installed vendor directories as facts, offer Auto, and take the default and fallback from the Runtime. [games/anomaly/src/sr_stage.rs:2572](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/anomaly/src/sr_stage.rs#L2572)
+- [x] **Boundaries | Medium | Let the Runtime choose and default the Anomaly SR backend.** AGENTS.md Rule 3 gives the orchestrator the choice of SR backend and every other vendor policy. The Anomaly adapter makes that choice itself. Ini::options at sr_stage.rs:479-492 sanitizes the shared SRBackend key with an adapter fallback of DLSS (BACKEND_DLSS) whatever the GPU. Stage::choices at :2572-2610 decides which vendors are offered by probing vendor file names (sl.interposer.dll plus nvngx_dlss.dll, amd_fidelityfx_upscaler_dx12.dll plus amd_fidelityfx_loader_dx12.dll, libxess.dll) in the adapter-resolved vendor directories. When the saved backend is not offered, it substitutes its own order: DLSS, XeSS, FSR3, FSR4. RSF_ANOMALY_SR_ADAPTER_BACKENDS (sr_stage_abi.rs:27 = 58) also leaves out RSF_SR_AUTO. The Runtime already owns this policy in rsf_gpu_select_sr_backend (runtime/orchestrator/src/lib.rs:385): it prefers DLSS on NVIDIA, XeSS on Intel and FSR3 otherwise. Concrete effect: on an AMD GPU with the full vendor package installed, Anomaly Stage 5 defaults to DLSS, which only fails once the pipeline starts, while every Runtime-hosted game picks FSR3. Report the installed vendor directories as facts, offer Auto, and take the default and fallback from the Runtime. [games/anomaly/src/sr_stage.rs:2572](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/anomaly/src/sr_stage.rs#L2572)
 
 - [x] **Duplication | Medium | Derive the overlay mip-bias range from the SR option bounds.** The SRMipBias parser at games/anomaly/src/sr_stage.rs:431 uses clamp_mip_offset at games/anomaly/src/sr_stage/math.rs:68, whose generated limits are -2.0 and +1.0 at games/anomaly/src/sr_stage_abi.rs:11. The live overlay separately hardcodes minimum=-20, maximum=0 and divisor=10, so a supported +0.5 can be read from the INI but cannot be selected in the panel. Generate the integer panel bounds from the same constants and scale factor, and use that factor for getter/setter conversion. Cover both endpoints and a positive value through the descriptor. [games/anomaly/src/sr_stage.rs:2769](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/anomaly/src/sr_stage.rs#L2769)
 
