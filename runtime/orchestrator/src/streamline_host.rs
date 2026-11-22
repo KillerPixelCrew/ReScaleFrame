@@ -6,6 +6,7 @@ use crate::input_receipts::{CONTROLLER_SAMPLE, streamline_input};
 use crate::diagnostic_output::Output;
 use crate::sdk_module::{SdkModule, wide_path};
 use crate::sr_session::has_capacity;
+pub(crate) use crate::sys::rsf_streamline_host_setup as Setup;
 use crate::sys::rsf_streamline_latency_status as LatencyStatus;
 use crate::sys::{
     RSF_PACING_NONE, RSF_PACING_REFLEX, RSF_REFLEX_BOOST, RSF_REFLEX_OFF,
@@ -67,25 +68,6 @@ const SLEEP: u32 = 16;
 const PCL_MARKER: u32 = 32;
 const PCL_STATE: u32 = 64;
 const GENERATION: u32 = GET_STATE | SET_OPTIONS;
-
-// rsf_streamline_host_setup, ABI 2.
-#[allow(dead_code)]
-#[repr(C)]
-struct Setup {
-    struct_size: u32,
-    abi_version: u32,
-    runtime_directory_utf8: *const c_char,
-    dxgi_adapter: Handle,
-    engine_type: u32,
-    engine_version_utf8: *const c_char,
-    project_id_utf8: *const c_char,
-    require_signature: u32,
-    development_runtime: u32,
-    log: Log,
-    log_user: Handle,
-    profile: u32,
-    load_dlss_sr: u32,
-}
 
 #[repr(C)]
 struct InitPreferences {
@@ -166,11 +148,6 @@ struct Platform {
 }
 
 const _: () = {
-    assert!(size_of::<Setup>() == 80);
-    assert!(offset_of!(Setup, engine_type) == 24);
-    assert!(offset_of!(Setup, engine_version_utf8) == 32);
-    assert!(offset_of!(Setup, log) == 56);
-    assert!(offset_of!(Setup, profile) == 72);
     assert!(size_of::<InitPreferences>() == 64);
     assert!(offset_of!(InitPreferences, flags) == 32);
     assert!(offset_of!(InitPreferences, log_level) == 56);
