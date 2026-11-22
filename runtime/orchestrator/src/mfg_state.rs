@@ -26,6 +26,9 @@ use windows_sys::Win32::{
     },
 };
 
+#[path = "mfg_provider.rs"]
+mod provider;
+
 type Handle = *mut c_void;
 
 const NOT_APPLICABLE: u32 = 0;
@@ -39,13 +42,11 @@ const WRAPPER_PATCH_OFFSET: usize = 7;
 struct Platform {
     supported: unsafe extern "C" fn(Handle) -> u32,
     verify_signature: unsafe extern "C" fn(*const u16) -> u32,
-    wrapper_match: unsafe extern "C" fn(*const u8) -> u32,
     publish_wrapper: unsafe extern "C" fn(Handle) -> u32,
-    is_provider: unsafe extern "C" fn(Handle) -> u32,
     prepare_provider: unsafe extern "C" fn(Handle, u32, &mut [c_char; REPORT_BYTES]) -> u32,
 }
 
-const _: () = assert!(size_of::<Platform>() == 6 * size_of::<Handle>());
+const _: () = assert!(size_of::<Platform>() == 4 * size_of::<Handle>());
 
 struct ModuleImage {
     base: *mut u8,
@@ -88,7 +89,7 @@ impl ModuleImage {
         Some(record)
     }
 
-    fn wrapper_patch(&self, platform: &Platform) -> Option<(Handle, u32)> {
+    fn wrapper_patch(&self) -> Option<(Handle, u32)> {
         let dos: IMAGE_DOS_HEADER = self.record(0)?;
         if dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew <= 0 {
             return None;
@@ -128,14 +129,9 @@ impl ModuleImage {
             section_bytes.resize(size, 0);
             self.read(rva, section_bytes.as_mut_ptr().cast(), size)?;
             for (offset, bytes) in section_bytes.windows(WRAPPER_PATTERN_BYTES).enumerate() {
-                // The pinned wrapper profile starts with MOV EDX, imm32.
-                if bytes[0] != 0xba {
+                let Some(capacity) = wrapper_capacity(bytes) else {
                     continue;
-                }
-                let capacity = unsafe { (platform.wrapper_match)(bytes.as_ptr()) };
-                if capacity == 0 {
-                    continue;
-                }
+                };
                 if found.is_some() {
                     return None;
                 }
@@ -149,9 +145,19 @@ impl ModuleImage {
     }
 }
 
+fn wrapper_capacity(bytes: &[u8]) -> Option<u32> {
+    // MFG-Unlocker 2b52823e universal_wrapper_profile.h.
+    let &[0xba, a, b, c, d, 0x3b, 0xca, x, y, z] = bytes else {
+        return None;
+    };
+    let maximum = u32::from_le_bytes([a, b, c, d]);
+    (matches!(maximum, 1 | 3 | 5) && matches!([x, y, z], [0x0f, 0x42, 0xd1] | [0x90, 0x90, 0x90]))
+        .then_some(maximum)
+}
+
 fn prepare_wrapper(module: &SdkModule, platform: &Platform) -> u32 {
     let Some((address, capacity)) =
-        ModuleImage::new(module).and_then(|image| image.wrapper_patch(platform))
+        ModuleImage::new(module).and_then(|image| image.wrapper_patch())
     else {
         return 1;
     };
@@ -185,7 +191,7 @@ fn retain_module(address: Handle) -> Option<SdkModule> {
     SdkModule::adopt_system(module)
 }
 
-fn find_provider(platform: &Platform) -> Option<SdkModule> {
+fn find_provider() -> Option<SdkModule> {
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, GetCurrentProcessId()) };
     if snapshot == INVALID_HANDLE_VALUE {
         return None;
@@ -199,7 +205,8 @@ fn find_provider(platform: &Platform) -> Option<SdkModule> {
     let mut more = unsafe { Module32FirstW(snapshot.0, &mut entry) };
     while more != 0 {
         if let Some(module) = retain_module(entry.modBaseAddr.cast())
-            && unsafe { (platform.is_provider)(module.as_ptr()) } != 0
+            && module.as_ptr() == entry.modBaseAddr.cast()
+            && provider::implementation(module.as_ptr())
         {
             if found.is_some() {
                 return None;
@@ -336,7 +343,7 @@ unsafe extern "C" fn rsf_core_mfg_prepare(
         if module.as_ptr() != wrapper {
             return false;
         }
-        find_provider(platform).is_some_and(|provider| {
+        find_provider().is_some_and(|provider| {
             (unsafe { (platform.prepare_provider)(provider.as_ptr(), maximum, report) }) != 0
         })
     });

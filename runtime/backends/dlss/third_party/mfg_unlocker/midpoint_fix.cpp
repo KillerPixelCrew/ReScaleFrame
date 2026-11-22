@@ -248,46 +248,21 @@ static_assert([] {
         && SameName(k3109KernelNames[k3109TemporalProfile.outputPullSlot], "OutputPull");
 }(), "310.9.16 is the 310.9 table with BlendCandidatesFGLite at slot 1");
 
-constexpr const TemporalProviderProfile* ProfileForVersion(
-    dlssg_provider_policy::VersionTriplet version) noexcept
+const TemporalProviderProfile* ProfileForPath(const wchar_t* path) noexcept
 {
-    if (version.major == 310
-        && ((version.minor == 1 && version.build == 0)
-            || (version.minor == 2
-                && (version.build == 0 || version.build == 1))
-            || (version.minor == 3 && version.build == 0)))
-        return &kEarlyTemporalProfile;
-    if (version.major == 310
-        && ((version.minor == 4 && version.build == 0)
-            || (version.minor == 5
-                && (version.build == 0 || version.build == 2
-                    || version.build == 3))))
-        return &kLegacySlot11TemporalProfile;
-    if (version.major == 310 && version.minor == 6 && version.build == 0)
-        return &kLegacySlot10TemporalProfile;
-    // 310.9.1 keeps the exact named table and temporal payload contract.
-    // Structural discovery follows the relocated registration table.
-    if (version.major == 310 && version.minor == 9
-        && (version.build == 0 || version.build == 1))
-        return &k3109TemporalProfile;
-    // 310.9.16 (Preset C) keeps the exact 310.9 midpoint payload behind a 26-name table.
-    if (version.major == 310 && version.minor == 9 && version.build == 16)
-        return &k310916TemporalProfile;
-    if (version.major == 310
-        && ((version.minor == 7
-                && (version.build == 0 || version.build == 128
-                    || version.build == 129))
-            || (version.minor == 8 && version.build == 0)))
-        return &kLegacySlot9TemporalProfile;
+    using dlssg_provider_policy::Profile;
+    switch (static_cast<Profile>(rsf_mfg_provider_profile(path)))
+    {
+    case Profile::Early: return &kEarlyTemporalProfile;
+    case Profile::LegacySlot11: return &kLegacySlot11TemporalProfile;
+    case Profile::LegacySlot10: return &kLegacySlot10TemporalProfile;
+    case Profile::LegacySlot9: return &kLegacySlot9TemporalProfile;
+    case Profile::V3109: return &k3109TemporalProfile;
+    case Profile::V310916: return &k310916TemporalProfile;
+    case Profile::Unsupported: return nullptr;
+    }
     return nullptr;
 }
-
-static_assert([] {
-    for (const auto version : dlssg_provider_policy::kSupportedVersions)
-        if (!ProfileForVersion(version)) return false;
-    return ProfileForVersion({0, 0, 0}) == nullptr
-        && ProfileForVersion({310, 9, 2}) == nullptr;
-}(), "Every eligible DLSS-G version needs an explicit Ada temporal profile");
 
 static_assert(kEarlyTemporalProfile.temporalSlot == 12);
 static_assert(kLegacySlot11TemporalProfile.temporalSlot == 11);
@@ -1132,11 +1107,8 @@ bool PatchProvider(HMODULE module, const wchar_t* suppliedPath) noexcept
     };
     if (!dlssg_provider_policy::IsSupportedProvider(pinned, path))
         return fail(Failure::eProviderVersion);
-    dlssg_provider_policy::VersionTriplet providerVersion{};
-    if (!dlssg_provider_policy::ReadProviderVersion(path, providerVersion))
-        return fail(Failure::eProviderVersion);
     const TemporalProviderProfile* const profile =
-        ProfileForVersion(providerVersion);
+        ProfileForPath(path);
     if (!profile)
         return fail(Failure::eProviderVersion);
     const char* const outputSha256 = profile->outputFatbinSha256;

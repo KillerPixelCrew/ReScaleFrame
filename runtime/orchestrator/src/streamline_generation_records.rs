@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! D3D12 FG payloads using the same checked SDK value layouts as Vulkan.
-use crate::render_abi::{RSF_REFLEX_BOOST, rsf_backend_log_fn as Log, rsf_fg_frame};
+use crate::render_abi::{RSF_REFLEX_BOOST, rsf_backend_log_fn as Log, rsf_fg_frame, rsf_fg_status};
 use crate::streamline_policy::camera_forward;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::null_mut;
@@ -16,7 +16,7 @@ mod sdk_fg_options_abi;
 #[path = "../../vulkan/streamline/lifecycle/src/sdk_records_abi.rs"]
 mod sdk_records_abi;
 
-use abi::{rsf_slhost_reflex_sample, rsf_slhost_tag};
+use abi::{rsf_slhost_reflex_sample, rsf_slhost_tag, rsf_slhost_version};
 use sdk_fg_options_abi::rsf_slvk_sdk_fg_options;
 use sdk_records_abi::{
     rsf_slvk_sdk_constants, rsf_slvk_sdk_header, rsf_slvk_sdk_pcl_options,
@@ -26,6 +26,26 @@ use sdk_records_abi::{
 const REFLEX_ON: u32 = 1;
 const REFLEX_SAMPLES: usize = 64;
 type Emit = unsafe extern "C" fn(Log, *mut c_void, *const c_char);
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_slhost_format_version(
+    version: Option<&rsf_slhost_version>,
+    status: &mut rsf_fg_status,
+) {
+    let text = if let Some(version) = version {
+        let [major, minor, build] = version.ngx;
+        let [sl_major, sl_minor, sl_build] = version.streamline;
+        status.version_id = (u64::from(major) << 48) | (u64::from(minor) << 32) | u64::from(build);
+        format!("DLSS-G NGX {major}.{minor}.{build} (SL {sl_major}.{sl_minor}.{sl_build})")
+    } else {
+        String::from("DLSS-G runtime version unavailable")
+    };
+    let len = text.len().min(status.version_name.len() - 1);
+    for (dst, src) in status.version_name[..len].iter_mut().zip(text.bytes()) {
+        *dst = src as c_char;
+    }
+    status.version_name[len] = 0;
+}
 
 fn emit_line(log: Log, user: *mut c_void, emit: Emit, text: String) {
     if let Ok(text) = CString::new(text) {

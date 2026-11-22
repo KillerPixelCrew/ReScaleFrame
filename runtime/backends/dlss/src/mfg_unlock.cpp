@@ -7,7 +7,6 @@
 #if defined(_MSC_VER) && defined(RSF_HAVE_STREAMLINE) && RSF_HAVE_STREAMLINE
 #include "../third_party/mfg_unlocker/midpoint_fix.h"
 #include "../third_party/mfg_unlocker/ngx_mfg_gate.h"
-#include "../third_party/mfg_unlocker/universal_wrapper_profile.h"
 #include <cstring>
 #include <cstdio>
 #include <iterator>
@@ -21,23 +20,6 @@ uint32_t supported(void* device)
 uint32_t verify_signature(const wchar_t* path)
 {
     return rsf_dlss_verify_runtime_signature(path);
-}
-
-uint32_t is_provider(void* module)
-{
-    return dlssg_provider_policy::IsDlssgImplementationModule(static_cast<HMODULE>(module));
-}
-
-static_assert(universal_wrapper_profile::kPatternSize == 10 &&
-    universal_wrapper_profile::kPatchOffset == 7);
-
-uint32_t wrapper_match(const uint8_t* bytes)
-{
-    if (!universal_wrapper_profile::Matches(bytes, universal_wrapper_profile::kPatternSize))
-        return 0;
-    uint32_t capacity = 0;
-    std::memcpy(&capacity, bytes + universal_wrapper_profile::kMaximumOffset, sizeof(capacity));
-    return capacity;
 }
 
 uint32_t publish_wrapper(void* address)
@@ -62,10 +44,12 @@ uint32_t prepare_provider(void* module, uint32_t maximum, char* report)
 {
     const auto provider = static_cast<HMODULE>(module);
     wchar_t path[32768]{};
-    const bool identified = GetModuleFileNameW(provider, path, DWORD(std::size(path))) &&
+    const auto length = GetModuleFileNameW(provider, path, DWORD(std::size(path)));
+    const bool identified = length != 0 && length < std::size(path) &&
         dlssg_provider_policy::IsSupportedProvider(provider, path);
     const bool temporal = identified && midpoint_fix::PatchProvider(provider, path);
     const auto gate = temporal ? ngx_mfg_gate::Patch(provider, true) : ngx_mfg_gate::Result{};
+    if (length >= std::size(path)) path[0] = L'\0';
     std::snprintf(report, 512, "RTX 40 MFG unlock %s: wrapper_capacity=%u temporal=%u gate=%u failure=%u provider=%ls",
         gate.patched ? "ready" : "refused", maximum, unsigned(temporal),
         unsigned(gate.patched), midpoint_fix::FailureCode(), path);
@@ -77,13 +61,11 @@ uint32_t prepare_provider(void* module, uint32_t maximum, char* report)
 struct rsf_mfg_platform {
     uint32_t (*supported)(void*);
     uint32_t (*verify_signature)(const wchar_t*);
-    uint32_t (*wrapper_match)(const uint8_t*);
     uint32_t (*publish_wrapper)(void*);
-    uint32_t (*is_provider)(void*);
     uint32_t (*prepare_provider)(void*, uint32_t, char*);
 };
 
-static_assert(sizeof(rsf_mfg_platform) == 6 * sizeof(void*) && sizeof(wchar_t) == 2);
+static_assert(sizeof(rsf_mfg_platform) == 4 * sizeof(void*) && sizeof(wchar_t) == 2);
 static_assert(RSF_MFG_UNLOCK_NOT_APPLICABLE == 0 && RSF_MFG_UNLOCK_READY == 1 && RSF_MFG_UNLOCK_REFUSED == 2);
 
 extern "C" {
@@ -96,7 +78,7 @@ void rsf_core_mfg_destroy(rsf_mfg_state*);
 }
 
 namespace {
-constexpr rsf_mfg_platform platform{supported, verify_signature, wrapper_match, publish_wrapper, is_provider, prepare_provider};
+constexpr rsf_mfg_platform platform{supported, verify_signature, publish_wrapper, prepare_provider};
 }
 #endif
 

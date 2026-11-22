@@ -91,3 +91,18 @@ const _: () = {
     ["Offset of field: rsf_slhost_reflex_sample::cross_adapter_copy"]
         [::core::mem::offset_of!(rsf_slhost_reflex_sample, cross_adapter_copy) - 112usize];
 };
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_slhost_version {
+    pub ngx: [u32; 3usize],
+    pub streamline: [u32; 3usize],
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_slhost_version"][::core::mem::size_of::<rsf_slhost_version>() - 24usize];
+    ["Alignment of rsf_slhost_version"][::core::mem::align_of::<rsf_slhost_version>() - 4usize];
+    ["Offset of field: rsf_slhost_version::ngx"]
+        [::core::mem::offset_of!(rsf_slhost_version, ngx) - 0usize];
+    ["Offset of field: rsf_slhost_version::streamline"]
+        [::core::mem::offset_of!(rsf_slhost_version, streamline) - 12usize];
+};

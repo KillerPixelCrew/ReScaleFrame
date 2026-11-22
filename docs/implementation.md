@@ -7956,6 +7956,12 @@ the real D3D12 Present and marker contract. The
 the typed call leaves and compatibility bundle that remain native. Formatting,
 regenerated bindings and locked offline metadata were checked. Device and
 runtime verification remain pending.
+
+The residual D06 replay moves wrapper byte recognition, provider version and
+export admission, process-lifetime module retention, and generation version
+formatting to Rust. The source record maps the six native temporal profiles
+and documents the expected-byte publication and SDK leaves that remain in C++.
+
 ### Saved Unicode overlay options
 
 The shared panel now accepts saved Unicode values in ABI 20 while the Runtime

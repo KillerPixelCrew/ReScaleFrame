@@ -44,9 +44,28 @@ The public `streamline_host.h` ABI 2 stays in C and the remaining
 typed SDK calls, output marshaling and public export glue.
 `mfg_unlock.h` retains the C++ lease used by the SDK host and
 `streamline_diagnostics.h` retains the exception boundary shared with D05.
-The complete compatibility bundle listed above still uses its pinned native
-implementation. The D04 host and D05 provider ownership paths were preserved.
+The D04 host and D05 provider ownership paths were preserved.
 
 Verification used pinned Rust 1.94.1 formatting, binding regeneration, locked
 offline Cargo metadata, source inspection and a whitespace check. Runtime
 behavior and device acceptance remain unverified on this change.
+
+## Residual policy replay on `9716068b`
+
+| PORT path | Source disposition |
+| --- | --- |
+| `dlss_generation.cpp` | Partial. Rust formats the provider version ID and display string. The native leaf reads the typed `sl::FeatureVersion`, copies its six version fields, and retains Streamline class construction, COM ownership, SDK calls and the disabled exports. |
+| `mfg_unlock.cpp`, `mfg_unlock.h` | Partial and retained, respectively. Rust recognizes the wrapper profile and identifies candidate providers. The native class still owns the compatibility handle at the SDK host boundary and lends its signature check, Ada device check, expected-byte publication and temporal/provider mutation calls. |
+| `reflex_audit.cpp`, `reflex_audit.h`, `streamline_diagnostics.h` | Retained. The native files supply SDK-typed detours and capture their real caller PCs, use MinHook, and guard log callbacks that may throw. Rust already owns the diagnostic policy and the NVAPI records. |
+| `dlssg_provider_policy.cpp` | Retired. `mfg_provider.rs` checks both exports, reads the embedded Windows version resource, maps all 16 eligible versions to the same native temporal profiles, and owns the 64 process-lifetime module slots. Every cached lookup still checks export identity. A duplicate or full table releases the temporary reference. The native patch caller holds its own provider reference for the operation. |
+| `dlssg_provider_policy.h` | Reduced to the native profile enum and internal C ABI declarations and adapters. |
+| `universal_wrapper_profile.h` | Retired. `mfg_state.rs` checks the same 10 bytes, accepts the same compiled maxima and both exact branch tails, and still refuses ambiguous scans and foreign NOP publication. |
+| `midpoint_fix.cpp`, `midpoint_fix.h` | Partial and retained, respectively. Rust selects the profile. Native code keeps all six payload profiles, hashes, adapter checks, descriptor checks and protection-sensitive mutation. |
+| `ngx_mfg_gate.h`, `protected_pointer.h` | Retained unchanged. Their scans, instruction and pointer writes, cache flush, ownership checks and protection recovery remain together at the native mutation boundary. |
+| `streamline_host.h`, `tests/latency_host.cpp` | Existing dispositions hold. Header remains the public ABI 2. The fixture already routes through the Rust generation crate. |
+
+Source checks compare the wrapper publication leaf, gate and protected publication
+helpers, SDK-disable exports and native ABI class header to the base. The Rust
+provider profile mapping replaces the former C++ presence assertion by deriving
+eligibility from the same selection used at the native boundary. The six native
+profile records and their SDK payload checks retain their original definitions.

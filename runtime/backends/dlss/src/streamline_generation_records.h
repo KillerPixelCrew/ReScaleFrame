@@ -14,3 +14,8 @@ typedef struct rsf_slhost_reflex_sample {
         gpu_start, gpu_end;
     uint32_t gpu_active, gpu_frame, cross_adapter_copy;
 } rsf_slhost_reflex_sample;
+
+typedef struct rsf_slhost_version {
+    uint32_t ngx[3];
+    uint32_t streamline[3];
+} rsf_slhost_version;

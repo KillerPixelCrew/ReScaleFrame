@@ -149,6 +149,7 @@ extern "C" {
 void rsf_slhost_pack_options(uint32_t, uint32_t, uint32_t, float, rsf_slvk_sdk_fg_options*);
 void rsf_slhost_pack_reflex(uint32_t, uint32_t, rsf_slvk_sdk_reflex_options*);
 void rsf_slhost_pack_pcl(rsf_slvk_sdk_pcl_options*);
+void rsf_slhost_format_version(const rsf_slhost_version*, rsf_fg_status*);
 void rsf_slhost_pack_fg_camera(const rsf_fg_frame*, uint32_t, rsf_slvk_sdk_constants*);
 uint32_t rsf_slhost_plan_tags(const rsf_fg_frame*, rsf_slhost_tag*);
 void rsf_slhost_reflex_summary(const rsf_slhost_reflex_sample*, const uint64_t*, uint32_t,
@@ -630,11 +631,12 @@ void version(void* native, rsf_fg_status* status) noexcept
     sl::FeatureVersion version{};
     if (as_native(native).version(sl::kFeatureDLSS_G, version) == sl::Result::eOk && version.versionNGX) {
         const auto& ngx = version.versionNGX;
-        status->version_id = (uint64_t(ngx.major) << 48) | (uint64_t(ngx.minor) << 32) | ngx.build;
-        std::snprintf(status->version_name, sizeof(status->version_name), "DLSS-G NGX %u.%u.%u (SL %u.%u.%u)",
-            ngx.major, ngx.minor, ngx.build, version.versionSL.major, version.versionSL.minor, version.versionSL.build);
+        const auto& streamline = version.versionSL;
+        const rsf_slhost_version record{{ngx.major, ngx.minor, ngx.build},
+            {streamline.major, streamline.minor, streamline.build}};
+        rsf_slhost_format_version(&record, status);
     } else {
-        std::snprintf(status->version_name, sizeof(status->version_name), "DLSS-G runtime version unavailable");
+        rsf_slhost_format_version(nullptr, status);
     }
 }
 

@@ -982,7 +982,7 @@ generate("tests/generation/src/latency_abi.rs",
 
 generate("runtime/orchestrator/src/streamline_generation_records_abi.rs",
          "runtime/backends/dlss/src/streamline_generation_records.h",
-         "rsf_slhost_(tag|reflex_sample)", "NOTHING", [])
+         "rsf_slhost_(tag|reflex_sample|version)", "NOTHING", [])
 
 generate("runtime/orchestrator/src/dlss_pipeline_layer_abi.rs",
          "runtime/orchestrator/include/rescaleframe/dlss_pipeline.h",
