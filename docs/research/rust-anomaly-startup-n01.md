@@ -222,3 +222,40 @@ bindings and the public observation declaration. Targeted bindgen
 Rust 1.94.1 formatting, locked offline Cargo metadata and
 `git diff --check` passed. Build, fixture execution, lint and game
 or device checks remain open.
+
+## Independent profile fixture and observer reporting from `b5a7434c`
+
+`tests/anomaly_sr_profile.cpp` now lends native records to
+`games/anomaly/src/fixture_profile/contract.rs`. Rust independently
+checks image bounds, extended guard prefixes, call opcodes and
+destinations, the SSAO displacement, first-person call order,
+cross-profile facts, build separation and target slots. The fixture
+compares the projected native identity, sites and extended guards
+with the canonical Rust profile. It still runs the existing
+build-selection cases, including the foreign and crossed identities.
+The moved checks now run in the CTest fixture. The C++ CRT and RCache
+layout assertions remain compile-time checks.
+
+`tests/anomaly_build_select.h` delegates label selection and the
+fixture banner to Rust. It retains the native profile references
+needed by the SR and geometry fixture hosts. The native hook fixture
+now borrows the full SR bank and the five selected indices, so Rust
+selects and seeds the sites. The compiler-emitted hook targets and
+SEH copy stay in `tests/anomaly_native_hook_leaves.cpp`.
+
+`games/anomaly/src/native_observer/report.rs` owns the periodic stage
+report order and geometry summary. It calls the existing geometry,
+SR, motion and FG report entries. The native log leaf still contains
+foreign exceptions, and the observer holds its invocation lease
+during delivery. Native hook actors, typed original calls, unwind
+retirement, guarded copies and the public observation ABI stay the
+same.
+
+Targeted bindgen regeneration, Rust 1.94.1 formatting, locked offline
+Cargo metadata, the native profile projection check and
+`git diff --check` passed. MSVC 18 `/Zs` with `/W4 /WX` passed for
+`anomaly_sr_profile.cpp`, `anomaly_native_hook_leaves.cpp`,
+`native_observer_platform.cpp`, `anomaly_geometry_hooks.cpp` and
+`anomaly_sr_hook_bridge.cpp`. The profile records and N03, N04 and
+N06/N07 production files were unchanged. Linking, fixture execution
+and device or game validation remain open.

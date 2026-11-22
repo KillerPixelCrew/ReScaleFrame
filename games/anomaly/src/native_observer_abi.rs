@@ -222,14 +222,11 @@ pub struct rsf_anomaly_observer_platform {
             arg3: *const ::core::ffi::c_char,
         ),
     >,
-    pub report_stages: ::core::option::Option<
-        unsafe extern "C" fn(arg1: rsf_game_log_fn, arg2: *mut ::core::ffi::c_void),
-    >,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_anomaly_observer_platform"]
-        [::core::mem::size_of::<rsf_anomaly_observer_platform>() - 192usize];
+        [::core::mem::size_of::<rsf_anomaly_observer_platform>() - 184usize];
     ["Alignment of rsf_anomaly_observer_platform"]
         [::core::mem::align_of::<rsf_anomaly_observer_platform>() - 8usize];
     ["Offset of field: rsf_anomaly_observer_platform::identify"]
@@ -278,6 +275,4 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_observer_platform, device_reset) - 168usize];
     ["Offset of field: rsf_anomaly_observer_platform::log"]
         [::core::mem::offset_of!(rsf_anomaly_observer_platform, log) - 176usize];
-    ["Offset of field: rsf_anomaly_observer_platform::report_stages"]
-        [::core::mem::offset_of!(rsf_anomaly_observer_platform, report_stages) - 184usize];
 };

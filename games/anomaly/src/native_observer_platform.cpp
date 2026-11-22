@@ -8,7 +8,6 @@
 #include "native_hooks.h"
 #include "native_memory.h"
 #include "sr_stage.h"
-#include <cstdio>
 
 extern "C" {
 const char* rsf_anomaly_observer_identify(rsf_anomaly_observer_engine*, const rsf::anomaly::ImageHeaders*,
@@ -127,30 +126,6 @@ bool read_frame(const rsf_anomaly_observer_engine* engine, rsf_anomaly_observer_
 void log(rsf_game_log_fn emit, void* user, const char* text) noexcept {
     if (emit) try { emit(user, text); } catch (...) {}
 }
-void report_stages(rsf_game_log_fn emit, void* user) noexcept {
-    if (!emit) return;
-    struct Sink { rsf_game_log_fn emit; void* user; } sink{emit, user};
-    const auto forward = [](void* context, const char* text) {
-        const auto& s = *static_cast<Sink*>(context);
-        log(s.emit, s.user, text);
-    };
-    if (geometry::geometry_hooks_active()) {
-        const auto stats = geometry::geometry_stats();
-        char text[384]{};
-        using ull = unsigned long long;
-        std::snprintf(text, sizeof(text),
-            "Anomaly geometry identity registered=%llu retired=%llu draws_identified=%llu draws_unidentified=%llu faults=%llu; no history consumer, motion not established",
-            static_cast<ull>(stats.models_registered), static_cast<ull>(stats.models_retired),
-            static_cast<ull>(stats.draws_identified), static_cast<ull>(stats.draws_unidentified),
-            static_cast<ull>(stats.capture_faults));
-        forward(&sink, text);
-        geometry::geometry_report_coverage(forward, &sink);
-    }
-    sr::report(forward, &sink);
-    motion::report(forward, &sink);
-    rsf_anomaly_fg_stage_report(forward, &sink);
-}
-
 const rsf_anomaly_observer_platform platform{
     identify, enable_hooks, [] { return hooks.disable(); },
     [](const rsf_anomaly_observer_engine* engine) {
@@ -169,7 +144,7 @@ const rsf_anomaly_observer_platform platform{
     },
     motion::quiesce, input::enable, input::disable, input::idle, read_frame, guarded_copy,
     rsf_anomaly_fg_stage_render_begin, sr::frame_end, rsf_anomaly_fg_stage_end_before, rsf_anomaly_fg_stage_end_after,
-    rsf_anomaly_fg_stage_camera, rsf_anomaly_fg_stage_ui_boundary, rsf_anomaly_fg_stage_scope, rsf_anomaly_fg_stage_device_reset, log, report_stages,
+    rsf_anomaly_fg_stage_camera, rsf_anomaly_fg_stage_ui_boundary, rsf_anomaly_fg_stage_scope, rsf_anomaly_fg_stage_device_reset, log,
 };
 }
 }

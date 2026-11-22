@@ -1170,6 +1170,12 @@ profile values and public observation declaration matched the base;
 build and runtime validation remain open.
 [Canonical profiles and native events](research/rust-anomaly-startup-n01.md#canonical-profile-and-native-events-from-0251a81a)
 
+Rust now runs the independent Anomaly profile consistency fixture
+and sequences the observer's stage reports. Native fixture hosts
+still supply typed targets and stage profile records. Source and
+syntax checks passed. Linking and fixture execution remain open.
+[Profile fixture and observer reporting](research/rust-anomaly-startup-n01.md#independent-profile-fixture-and-observer-reporting-from-b5a7434c)
+
 ## Rust orchestrator and first Anomaly port
 
 Anomaly's Rust geometry owner now reads and interprets draw-time producer

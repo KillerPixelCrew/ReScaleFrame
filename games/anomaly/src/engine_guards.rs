@@ -61,7 +61,7 @@ pub(super) const fn site(name: &'static CStr, rva: u32, hex: &[u8; 32]) -> Nativ
 
 #[repr(C)]
 pub(super) struct UniqueGuard {
-    name: *const c_char,
+    pub(super) name: *const c_char,
     pub(super) rva: u32,
     pub(super) expected_hex: *const c_char,
 }

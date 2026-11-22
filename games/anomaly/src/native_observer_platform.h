@@ -69,5 +69,4 @@ typedef struct rsf_anomaly_observer_platform {
     void (*scope_frame)(void);
     void (*device_reset)(void);
     void (*log)(rsf_game_log_fn, void*, const char*);
-    void (*report_stages)(rsf_game_log_fn, void*);
 } rsf_anomaly_observer_platform;

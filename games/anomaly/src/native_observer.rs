@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Lifecycle and facts from the guarded native renderer boundaries.
 
+mod report;
 #[cfg(test)]
 mod tests;
 
@@ -515,7 +516,7 @@ impl Observer {
         )) {
             session.emit(platform, &message);
         }
-        unsafe { (platform.report_stages.unwrap())(session.log, session.user) };
+        report::stages(session, platform);
     }
 
     fn camera(&self, platform: &Platform, view: *const f32, projection: *const f32) {

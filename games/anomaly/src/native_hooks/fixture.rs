@@ -350,7 +350,12 @@ const _: () = {
     assert!(size_of::<FixtureProfile>() == 32);
 };
 
-fn profile_contract(platform: &Platform, profile: &Profile, fixture: &FixtureProfile) {
+fn profile_contract(
+    platform: &Platform,
+    profile: &Profile,
+    fixture: &FixtureProfile,
+    sr_indices: &[usize; 5],
+) {
     println!(
         "Anomaly HookSet profile: {}",
         profile.label.to_string_lossy()
@@ -358,16 +363,17 @@ fn profile_contract(platform: &Platform, profile: &Profile, fixture: &FixturePro
     let size = profile.image_size;
     let image = Image::new(size, PAGE_EXECUTE_READWRITE);
     image.write_headers(size);
-    let count = profile.sites.len() + fixture.banks.iter().map(|bank| bank.count).sum::<usize>();
-    let mut originals = vec![ptr::null_mut(); count];
-    let other_sites = fixture
+    let [motion, sr] = fixture
         .banks
-        .iter()
-        .flat_map(|bank| unsafe { slice::from_raw_parts(bank.sites, bank.count) });
+        .each_ref()
+        .map(|bank| unsafe { slice::from_raw_parts(bank.sites, bank.count) });
+    let count = profile.sites.len() + motion.len() + sr_indices.len();
+    let mut originals = vec![ptr::null_mut(); count];
     let mut sites: Vec<_> = profile
         .sites
         .iter()
-        .chain(other_sites)
+        .chain(motion)
+        .chain(sr_indices.iter().map(|&index| &sr[index]))
         .zip(&mut originals)
         .map(|(site, original)| {
             unsafe {
@@ -412,6 +418,7 @@ unsafe extern "C" fn rsf_test_anomaly_native_hooks(
     untouched: Function,
     profiles: *const FixtureProfile,
     count: usize,
+    sr_indices: &[usize; 5],
 ) -> i32 {
     std::panic::catch_unwind(|| {
         let page = page_size();
@@ -421,7 +428,7 @@ unsafe extern "C" fn rsf_test_anomaly_native_hooks(
         assert_eq!(count, PROFILES.len());
         let fixtures = unsafe { slice::from_raw_parts(profiles, count) };
         for (profile, fixture) in PROFILES.iter().zip(fixtures) {
-            profile_contract(platform, profile, fixture);
+            profile_contract(platform, profile, fixture, sr_indices);
         }
         println!("Anomaly guarded native hooks: PASS");
         0
