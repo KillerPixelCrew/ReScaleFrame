@@ -119,10 +119,18 @@ releases partial allocations on refusal. The typed D3D11 descriptors
 and public C calls are unchanged in source. The device fixture remains
 unrun on this port. [Source comparison](rust-migration.md#native-policy-cutover)
 
-The standalone `rsf_negotiate` contract uses Rust for capability
-selection, preserving the C entry point, record layouts and FG-before-SR
-order. The native contract fixture and its new static link remain unrun.
-See [the Rust migration record](rust-migration.md#native-policy-cutover).
+The fixture-only negotiation policy has been retired. Production SR and FG
+selection stays with the orchestrator. The C backend declarations remain
+available to callers through the header-only Contract target.
+
+Plugin sessions use the generated GameSDK option record and the shared
+Windows path admission helper also used by the FidelityFX and Vulkan timing
+callers. The Rust fixtures cover plugin ABI, DLL and embedded session
+lifetimes, and Runtime export ownership. Native C++ still supplies the
+throwing plugin and the exception guard. The C fixture continues to exercise
+the SDK's inline frame eligibility rules. Pinned formatting, locked offline
+Windows Cargo metadata and source comparisons passed. Builds, fixture
+execution and device checks remain open.
 
 ## Remaining Rust integration ports
 

@@ -17,6 +17,7 @@ pub mod sharpening_abi;
 pub mod sr_abi;
 #[cfg(windows)]
 pub mod win32;
+pub mod windows_path;
 pub mod callback_host_abi;
 pub mod vendor_paths;
 

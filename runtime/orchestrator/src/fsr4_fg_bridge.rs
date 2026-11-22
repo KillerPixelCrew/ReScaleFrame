@@ -5,6 +5,7 @@ use crate::dx12_vulkan_interop::{
 };
 use crate::ffx_version::{self, MAX_VERSIONS, Version};
 use crate::sr_session::has_capacity;
+use rsf_game_sys::windows_path::absolute_wide_path;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION,
     rsf_frame_record as Record,
@@ -678,15 +679,6 @@ fn source_id(record: *const Record) -> Option<u64> {
     Some(unsafe { ptr::addr_of!((*record).frame_id).read() })
 }
 
-unsafe fn absolute(path: *const u16) -> bool {
-    if path.is_null() || unsafe { path.read() } == 0 {
-        return false;
-    }
-    let second = unsafe { path.add(1).read() };
-    (second == u16::from(b':') && matches!(unsafe { path.add(2).read() }, 47 | 92))
-        || (second == u16::from(b'\\') && unsafe { path.read() } == u16::from(b'\\'))
-}
-
 fn provider_path(
     directory: *const u16,
     path: &mut [u16; PROVIDER_PATH_CAPACITY],
@@ -757,7 +749,7 @@ unsafe extern "C" fn rsf_core_fsr4fg_probe(
     info.provider_version = 0;
     info.vendor_id = 0;
     info.max_generated = 0;
-    if luid == 0 || !unsafe { absolute(directory) } {
+    if luid == 0 || !unsafe { absolute_wide_path(directory, MAX_DIRECTORY) } {
         return INVALID;
     }
     let result = Bridge::new(ops, luid).and_then(|mut bridge| {
@@ -782,7 +774,7 @@ unsafe extern "C" fn rsf_core_fsr4fg_create(
         return code;
     }
     let setup = unsafe { &*setup };
-    if !unsafe { absolute(setup.runtime_directory) }
+    if !unsafe { absolute_wide_path(setup.runtime_directory, MAX_DIRECTORY) }
         || setup.adapter_luid == 0
         || setup.width == 0
         || setup.height == 0

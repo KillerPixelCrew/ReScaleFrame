@@ -11,7 +11,7 @@ typedef struct rsf_plugin_session rsf_plugin_session;
 typedef struct rsf_plugin_session_options {
     uint32_t struct_size;
     uint32_t abi_version;
-    const wchar_t* plugin_path;
+    const wchar_t* plugin_path; /* Borrowed NUL-terminated Windows absolute path. */
     const rsf_game_probe* probe;
     rsf_game_host_services services;
 } rsf_plugin_session_options;

@@ -67,12 +67,14 @@ if(RSF_PWSH_EXECUTABLE)
 endif()
 target_link_libraries(rsf_sdk_c_header PRIVATE ReScaleFrame::GameSDK rsf_build_options)
 
-add_executable(rsf_plugin_contract plugin_contract.cpp)
+rsf_add_rust_static(rsf_game_sdk_fixtures_rust rsf_rust_game_sdk_fixtures
+    rsf-game-sdk-fixtures rsf_game_sdk_fixtures)
+add_executable(rsf_plugin_contract game-sdk/contract_main.c)
 
 add_executable(rsf_wingman_camera wingman_camera.c)
 target_link_libraries(rsf_wingman_camera PRIVATE rsf_wingman_rust ReScaleFrame::GameSDK rsf_build_options)
 add_test(NAME wingman_camera_contract COMMAND rsf_wingman_camera)
-target_link_libraries(rsf_plugin_contract PRIVATE ReScaleFrame::GameSDK rsf_build_options)
+target_link_libraries(rsf_plugin_contract PRIVATE rsf_game_sdk_fixtures_rust ReScaleFrame::GameSDK rsf_build_options)
 add_dependencies(rsf_plugin_contract rsf_game_ac7 rsf_game_project_wingman rsf_game_rdr2 rsf_game_unity_mono)
 add_dependencies(rsf_plugin_contract rsf_game_skyrim_se)
 add_dependencies(rsf_plugin_contract rsf_game_fallout4)
@@ -80,7 +82,6 @@ add_test(NAME game_fallout4_plugin_contract COMMAND rsf_plugin_contract
     "$<TARGET_FILE_NAME:rsf_game_fallout4>" fallout4)
 set_tests_properties(game_fallout4_plugin_contract PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:rsf_game_fallout4>")
-target_compile_definitions(rsf_plugin_contract PRIVATE _CRT_SECURE_NO_WARNINGS)
 add_executable(rsf_unity_sr_d3d12_test unity_sr_d3d12.cpp)
 target_include_directories(rsf_unity_sr_d3d12_test PRIVATE ../games/unity-mono/include)
 target_link_libraries(rsf_unity_sr_d3d12_test PRIVATE rsf_rdr2_rust rsf_orchestrator rsf_build_options minhook d3d12 dxgi)
@@ -101,8 +102,9 @@ add_executable(rsf_callback_host_abi_embedded_test callback_host_abi.cpp)
 target_link_libraries(rsf_callback_host_abi_embedded_test PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options)
 add_test(NAME callback_host_abi_embedded COMMAND rsf_callback_host_abi_embedded_test)
 set_tests_properties(callback_host_abi callback_host_abi_embedded PROPERTIES TIMEOUT 30)
-add_executable(rsf_orchestrator_domains orchestrator_domains.cpp)
-target_link_libraries(rsf_orchestrator_domains PRIVATE rsf_build_options)
+add_executable(rsf_orchestrator_domains loader/main.c)
+target_compile_definitions(rsf_orchestrator_domains PRIVATE RSF_FIXTURE_ENTRY=rsf_test_orchestrator_domains)
+target_link_libraries(rsf_orchestrator_domains PRIVATE rsf_game_sdk_fixtures_rust rsf_build_options)
 add_dependencies(rsf_orchestrator_domains rsf_orchestrator rsf_game_unity_mono)
 add_test(NAME orchestrator_domain_contract COMMAND rsf_orchestrator_domains)
 add_executable(rsf_d3d12_observer_test d3d12_observer.cpp)
@@ -119,12 +121,12 @@ target_link_libraries(rsf_gpu_policy_embedded_test PRIVATE ReScaleFrame::Orchest
 add_test(NAME gpu_sr_policy_embedded COMMAND rsf_gpu_policy_embedded_test)
 add_library(rsf_plugin_session_fixture SHARED plugin_session_fixture.cpp)
 target_link_libraries(rsf_plugin_session_fixture PRIVATE ReScaleFrame::GameSDK rsf_build_options)
-add_executable(rsf_plugin_session_test plugin_session.cpp)
-target_link_libraries(rsf_plugin_session_test PRIVATE rsf_orchestrator rsf_build_options)
+add_executable(rsf_plugin_session_test game-sdk/session_main.c)
+target_link_libraries(rsf_plugin_session_test PRIVATE rsf_game_sdk_fixtures_rust rsf_orchestrator rsf_build_options)
 add_dependencies(rsf_plugin_session_test rsf_plugin_session_fixture)
 add_test(NAME plugin_session_lifetime COMMAND rsf_plugin_session_test $<TARGET_FILE:rsf_plugin_session_fixture>)
-add_executable(rsf_plugin_session_embedded_test plugin_session.cpp)
-target_link_libraries(rsf_plugin_session_embedded_test PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options)
+add_executable(rsf_plugin_session_embedded_test game-sdk/session_main.c)
+target_link_libraries(rsf_plugin_session_embedded_test PRIVATE rsf_game_sdk_fixtures_rust ReScaleFrame::OrchestratorCore rsf_build_options)
 add_dependencies(rsf_plugin_session_embedded_test rsf_plugin_session_fixture)
 add_test(NAME plugin_session_lifetime_embedded COMMAND rsf_plugin_session_embedded_test $<TARGET_FILE:rsf_plugin_session_fixture>)
 set_tests_properties(plugin_session_lifetime plugin_session_lifetime_embedded PROPERTIES TIMEOUT 30)
@@ -141,11 +143,6 @@ if(MSVC)
     rsf_add_loader_test(rsf_shared_shim_exports rsf_test_shared_shim_exports)
     add_dependencies(rsf_shared_shim_exports rsf_proxy_dinput8)
     add_test(NAME shared_shim_exports COMMAND rsf_shared_shim_exports "$<TARGET_FILE:rsf_proxy_dinput8>")
-endif()
-if(NOT MSVC)
-    # This test uses wmain, which mingw only selects as the entry point with -municode.
-    target_compile_options(rsf_plugin_contract PRIVATE -municode)
-    target_link_options(rsf_plugin_contract PRIVATE -municode)
 endif()
 # Load the plugin by name from its own directory. That is how it is loaded in practice, and it
 # keeps the test runnable under a cross-build emulator, which cannot take a host path.
@@ -260,12 +257,6 @@ add_test(NAME ui_identify COMMAND rsf_ui_identify)
 add_executable(rsf_fsr_backend fsr_backend.cpp)
 target_link_libraries(rsf_fsr_backend PRIVATE ReScaleFrame::FSR ReScaleFrame::XeSS rsf_build_options)
 add_test(NAME fsr_backend COMMAND rsf_fsr_backend)
-
-# Choosing between three vendors on a machine that has none of them, which is the point of
-# negotiation being a pure function over what each one said it could do.
-add_executable(rsf_negotiate negotiate.cpp)
-target_link_libraries(rsf_negotiate PRIVATE ReScaleFrame::Contract rsf_build_options)
-add_test(NAME negotiate COMMAND rsf_negotiate)
 
 # Whether a D3D11 texture can be opened by a D3D12 device here at all. Skips with 77 and the
 # HRESULTs when the two runtimes disagree, which under Wine is a fact about the environment.

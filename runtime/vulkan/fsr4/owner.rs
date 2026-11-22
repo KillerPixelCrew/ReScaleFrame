@@ -9,6 +9,7 @@
 use crate::ffx_version::{self, MAX_VERSIONS, Version};
 use core::ffi::{CStr, c_void};
 use core::ptr;
+use rsf_game_sys::windows_path::absolute_wide_path;
 use std::alloc::{Layout, alloc};
 
 #[path = "bridge_abi.rs"]
@@ -231,22 +232,6 @@ unsafe fn wide<'a>(text: *const u16) -> &'a [u16] {
         length += 1;
     }
     unsafe { std::slice::from_raw_parts(text, length) }
-}
-
-/// A drive-rooted or UNC directory, checked in the previous C++ read order.
-///
-/// # Safety
-/// A non-null `directory` must be NUL-terminated.
-unsafe fn absolute(directory: *const u16) -> bool {
-    if directory.is_null() {
-        return false;
-    }
-    let at = |index| unsafe { *directory.add(index) };
-    let [colon, back, slash] = [b':', b'\\', b'/'].map(u16::from);
-    if at(0) == 0 {
-        return false;
-    }
-    (at(1) == colon && (at(2) == back || at(2) == slash)) || (at(0) == back && at(1) == back)
 }
 
 fn provider_path(ops: &Platform, directory: *const u16) -> Option<Vec<u16>> {
@@ -719,7 +704,7 @@ unsafe extern "C" fn rsf_core_fsr4sr_create_public(
         return check;
     }
     let setup = unsafe { &*setup };
-    if !unsafe { absolute(setup.runtime_directory) }
+    if !unsafe { absolute_wide_path(setup.runtime_directory, 32767) }
         || setup.reserved != 0
         || setup.depth_inverted > 1
         || setup.depth_infinite > 1
@@ -1086,12 +1071,18 @@ mod tests {
     fn requires_an_absolute_directory() {
         let path = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<_>>();
         for good in ["C:\\Game", "d:/runtime", "\\\\server\\share"] {
-            assert!(unsafe { absolute(path(good).as_ptr()) }, "{good}");
+            assert!(
+                unsafe { absolute_wide_path(path(good).as_ptr(), 32767) },
+                "{good}"
+            );
         }
         for bad in ["", "relative", "C:", "C:relative", "\\single"] {
-            assert!(!unsafe { absolute(path(bad).as_ptr()) }, "{bad}");
+            assert!(
+                !unsafe { absolute_wide_path(path(bad).as_ptr(), 32767) },
+                "{bad}"
+            );
         }
-        assert!(!unsafe { absolute(ptr::null()) });
+        assert!(!unsafe { absolute_wide_path(ptr::null(), 32767) });
     }
 
     #[test]
