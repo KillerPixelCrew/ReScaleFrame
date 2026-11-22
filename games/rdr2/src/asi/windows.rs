@@ -11,6 +11,8 @@ use crate::runtime_worker::rsf_rdr2_asi_start_runtime;
 use crate::runtime_worker_abi::rsf_rdr2_runtime_leaves;
 use diagnostic_services::{install_census, install_frame_probe, start_diagnostics};
 use diagnostics_abi::rsf_rdr2_asi_services;
+#[cfg(feature = "capture-fixture")]
+pub(crate) use diagnostics_abi::{RSF_CENSUS_ABI_VERSION, rsf_census_options};
 use std::ffi::{c_char, c_void};
 use std::ptr::{null, null_mut};
 use std::sync::OnceLock;

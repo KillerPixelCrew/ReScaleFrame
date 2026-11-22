@@ -9,6 +9,9 @@ license.workspace = true
 [lib]
 crate-type = ["staticlib"]
 
+[features]
+capture-fixture = ["windows/Win32_Graphics_Direct3D_Fxc"]
+
 [dependencies]
 rsf-game-sys = { path = "../../sdk/game" }
 

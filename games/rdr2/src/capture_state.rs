@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
-//! Capture admission, limits, and publication. Native capture holds its existing mutex for
-//! ledger operations, ordering state with its graphics objects. Request and fast admission
+//! Capture admission, limits, and publication. The observation mutex guards
+//! ledger operations and orders them with the graphics objects. Request and fast admission
 //! queries are atomic. The NGX wrapper nesting is tracked on the calling thread.
-use rsf_game_sys::ffi_util::try_box;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -14,16 +13,21 @@ mod artifacts;
 mod bundle;
 #[cfg(windows)]
 mod d3d12;
-#[cfg(windows)]
+#[cfg(all(windows, not(test)))]
+mod detours;
+#[cfg(all(windows, feature = "capture-fixture", not(test)))]
 mod fixture;
 mod gpu_leases;
+#[cfg(any(windows, test))]
 mod hooks;
-#[cfg(windows)]
+#[cfg(all(windows, not(test)))]
 mod install;
 mod metadata;
+#[cfg(all(windows, not(test)))]
+mod ngx;
 #[cfg(windows)]
 mod pipeline;
-#[cfg(windows)]
+#[cfg(all(windows, not(test)))]
 mod poll;
 mod recordings;
 mod shots;
@@ -40,7 +44,8 @@ const CAPTURE_TIMEOUT_MS: u64 = 5000;
 const SAVE_DRAW: u32 = 1;
 const KEEP_TAIL: u32 = 2;
 
-#[repr(C)]
+#[cfg(windows)]
+#[cfg_attr(test, allow(dead_code))]
 struct Progress {
     sequence: u32,
     draws: u32,
@@ -52,16 +57,14 @@ struct Progress {
     readbacks_unavailable: u32,
 }
 
-const _: () = assert!(size_of::<Progress>() == 32);
-
 #[derive(Default)]
+#[cfg_attr(not(windows), allow(dead_code))]
 struct Ledger {
     sequence: u32,
     draws: u32,
     written: u32,
     input_index: u32,
     inputs_in_flight: u32,
-    #[cfg_attr(not(any(windows, test)), allow(dead_code))]
     started: u64,
     dirty: bool,
     draw_overflow: bool,
@@ -70,6 +73,7 @@ struct Ledger {
     readbacks_unavailable: u32,
 }
 
+#[cfg(windows)]
 impl Ledger {
     fn progress(&self) -> Progress {
         Progress {
@@ -87,7 +91,7 @@ impl Ledger {
 
 struct Capture {
     pending: AtomicBool,
-    #[cfg(windows)]
+    #[cfg(all(windows, not(test)))]
     key_down: AtomicBool,
     active: AtomicBool,
     inputs_remaining: AtomicU32,
@@ -105,11 +109,12 @@ struct Capture {
 // non-atomic state. The detached ready batch is exclusive to the poll thread.
 unsafe impl Sync for Capture {}
 
+#[cfg(any(windows, test))]
 impl Capture {
     fn new() -> Self {
         Self {
             pending: AtomicBool::new(false),
-            #[cfg(windows)]
+            #[cfg(all(windows, not(test)))]
             key_down: AtomicBool::new(false),
             active: AtomicBool::new(false),
             inputs_remaining: AtomicU32::new(0),
@@ -121,12 +126,6 @@ impl Capture {
             ready: UnsafeCell::new(Ready::default()),
         }
     }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_rdr2_capture_create() -> *mut Capture {
-    // Return null on allocation refusal so the optional probe can decline installation.
-    try_box(Capture::new()).map_or_else(std::ptr::null_mut, Box::into_raw)
 }
 
 fn try_entry<V: Default>(map: &mut HashMap<usize, V>, key: usize) -> Option<&mut V> {
@@ -142,7 +141,7 @@ extern "C" fn rsf_rdr2_capture_request(owner: &Capture) {
 }
 
 /// The poll thread lends the NUL-terminated request filename for the duration of the call.
-#[cfg(windows)]
+#[cfg(all(windows, not(test)))]
 unsafe fn poll_request(owner: &Capture, request: *const u16) {
     use crate::diagnostics::{capture_key_down, capture_key_pressed, foreground};
     use windows_sys::Win32::Storage::FileSystem::DeleteFileW;
@@ -223,11 +222,6 @@ unsafe fn timeout(owner: &Capture, tick: u64) -> bool {
     false
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_progress_get(owner: &Capture, out: &mut Progress) {
-    *out = unsafe { &*owner.ledger.get() }.progress();
-}
-
 unsafe fn commit_draw(owner: &Capture) -> u32 {
     let ledger = unsafe { &mut *owner.ledger.get() };
     let draw_count = unsafe { &*owner.recordings.get() }.draws.len();
@@ -244,7 +238,7 @@ unsafe fn commit_draw(owner: &Capture) -> u32 {
     action
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, not(test)))]
 unsafe fn readback_written(owner: &Capture, success: bool) {
     let ledger = unsafe { &mut *owner.ledger.get() };
     if success {

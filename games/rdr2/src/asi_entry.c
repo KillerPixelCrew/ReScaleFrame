@@ -3,7 +3,7 @@
 #include <rescaleframe/sha256_file.h>
 #include <windows.h>
 
-/* Implemented in the C++ capture bridge and Social Club SEH leaf. */
+/* Capture services and the Social Club SEH leaf. */
 bool rsf_rdr2_install_native_capture(const wchar_t* directory);
 bool rsf_rdr2_social_club_current_index(void* swapchain, uint32_t* index);
 

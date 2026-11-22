@@ -8,6 +8,8 @@
 #[cfg(all(windows, not(test)))]
 #[path = "asi/windows.rs"]
 mod windows;
+#[cfg(all(windows, feature = "capture-fixture", not(test)))]
+pub(crate) use windows::{RSF_CENSUS_ABI_VERSION, rsf_census_options};
 
 use crate::engine_settings;
 use crate::layout::{self, asi};

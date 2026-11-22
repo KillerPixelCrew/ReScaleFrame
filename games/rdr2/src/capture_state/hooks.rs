@@ -1,27 +1,27 @@
 // SPDX-License-Identifier: MIT
-//! Process-lived D3D12 capture detours. Native code calls each original with its typed ABI.
+//! Process-lived D3D12 capture detours. Detours call each original with its typed ABI.
 
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-// Order matches the private rsf_rdr2_capture_hook enum. Slot numbers are D3D12/DXGI vtable slots.
-const SLOTS: [u32; 16] = [
+// Order matches detours::Role and the persisted hook-role mask.
+pub(super) const SLOTS: [u32; 16] = [
     10, 12, 20, 44, 9, 47, 13, 10, 25, 46, 12, 13, 26, 27, 29, 40,
 ];
 const HOOK_COUNT: usize = SLOTS.len();
 const OK: i32 = 0;
 const ALREADY_ENABLED: i32 = 5;
 const UNKNOWN: i32 = -1;
-const DIFFERENT_TARGET: i32 = -2;
+pub(super) const DIFFERENT_TARGET: i32 = -2;
 
 #[repr(C)]
-struct Ops {
-    target: unsafe extern "C" fn(*mut c_void, u32) -> *mut c_void,
-    create: unsafe extern "C" fn(*mut c_void, *const c_void, *mut *mut c_void) -> i32,
-    enable: unsafe extern "C" fn(*mut c_void) -> i32,
-    report: unsafe extern "C" fn(u32, *mut c_void, i32),
+pub(super) struct Ops {
+    pub(super) target: unsafe extern "C" fn(*mut c_void, u32) -> *mut c_void,
+    pub(super) create: unsafe extern "C" fn(*mut c_void, *const c_void, *mut *mut c_void) -> i32,
+    pub(super) enable: unsafe extern "C" fn(*mut c_void) -> i32,
+    pub(super) report: unsafe extern "C" fn(u32, *mut c_void, i32),
 }
 
 const _: () = assert!(size_of::<Ops>() == 32);
@@ -36,7 +36,8 @@ enum Hook {
 }
 
 static HOOKS: Mutex<[Hook; HOOK_COUNT]> = Mutex::new([Hook::Vacant; HOOK_COUNT]);
-static ORIGINALS: [AtomicUsize; HOOK_COUNT] = [const { AtomicUsize::new(0) }; HOOK_COUNT];
+static ORIGINALS: [AtomicPtr<c_void>; HOOK_COUNT] =
+    [const { AtomicPtr::new(ptr::null_mut()) }; HOOK_COUNT];
 static UNOBSERVED_HOOK_ROLES: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(windows)]
@@ -55,11 +56,11 @@ fn hooks() -> MutexGuard<'static, [Hook; HOOK_COUNT]> {
     HOOKS.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_rdr2_capture_hook_original(role: u32) -> usize {
+#[cfg(any(all(windows, not(test)), test))]
+pub(super) fn original(role: u32) -> *mut c_void {
     ORIGINALS
         .get(role as usize)
-        .map_or(0, |slot| slot.load(Ordering::Acquire))
+        .map_or(ptr::null_mut(), |slot| slot.load(Ordering::Acquire))
 }
 
 fn enable(ops: &Ops, role: usize, slot: u32, target: *mut c_void, replacement: *const c_void) {
@@ -78,13 +79,7 @@ fn enable(ops: &Ops, role: usize, slot: u32, target: *mut c_void, replacement: *
 }
 
 /// The caller lends a live COM interface and a process-lived typed detour.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_rdr2_capture_bind_hook(
-    ops: &Ops,
-    role: u32,
-    object: *mut c_void,
-    replacement: *const c_void,
-) {
+pub(super) fn bind(ops: &Ops, role: u32, object: *mut c_void, replacement: *const c_void) {
     let role = role as usize;
     let Some(&slot) = SLOTS.get(role) else { return };
     if object.is_null() || replacement.is_null() {
@@ -139,7 +134,7 @@ extern "C" fn rsf_rdr2_capture_bind_hook(
         return;
     }
     // A detour may be reached as soon as enable publishes the patch.
-    ORIGINALS[role].store(original.addr(), Ordering::Release);
+    ORIGINALS[role].store(original, Ordering::Release);
     enable(ops, role, slot, target, replacement);
 }
 
@@ -167,10 +162,7 @@ mod tests {
     }
 
     unsafe extern "C" fn enable(target: *mut c_void) -> i32 {
-        PUBLISHED_BEFORE_ENABLE.store(
-            rsf_rdr2_capture_hook_original(0) == target.addr(),
-            Ordering::Relaxed,
-        );
+        PUBLISHED_BEFORE_ENABLE.store(original(0) == target, Ordering::Relaxed);
         if ENABLES.fetch_add(1, Ordering::Relaxed) == 0 {
             UNKNOWN
         } else {
@@ -193,21 +185,21 @@ mod tests {
         let other = ptr::from_mut(&mut other).cast();
         let detour = ptr::from_ref(&detour).cast();
 
-        rsf_rdr2_capture_bind_hook(&ops, 0, object, detour);
-        rsf_rdr2_capture_bind_hook(&ops, 0, other, detour);
+        bind(&ops, 0, object, detour);
+        bind(&ops, 0, other, detour);
         assert_eq!(ENABLES.load(Ordering::Relaxed), 1);
         assert_eq!(UNOBSERVED_HOOK_ROLES.load(Ordering::Acquire) & 1, 1);
         UNOBSERVED_HOOK_ROLES.store(0, Ordering::Release);
-        rsf_rdr2_capture_bind_hook(&ops, 0, object, detour);
-        rsf_rdr2_capture_bind_hook(&ops, 0, object, detour);
-        rsf_rdr2_capture_bind_hook(&ops, 0, other, detour);
+        bind(&ops, 0, object, detour);
+        bind(&ops, 0, object, detour);
+        bind(&ops, 0, other, detour);
 
         assert_eq!(CREATES.load(Ordering::Relaxed), 1);
         assert_eq!(ENABLES.load(Ordering::Relaxed), 2);
         assert!(PUBLISHED_BEFORE_ENABLE.load(Ordering::Relaxed));
         assert_eq!(UNOBSERVED_HOOK_ROLES.load(Ordering::Acquire) & 1, 1);
         hooks()[0] = Hook::Vacant;
-        ORIGINALS[0].store(0, Ordering::Release);
+        ORIGINALS[0].store(ptr::null_mut(), Ordering::Release);
         UNOBSERVED_HOOK_ROLES.store(0, Ordering::Release);
     }
 }

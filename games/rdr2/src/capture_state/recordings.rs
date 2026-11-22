@@ -27,16 +27,16 @@ pub(super) struct Pipeline {
 }
 
 #[repr(C)]
-struct DrawBinding {
-    target: *mut c_void,
-    pso: u64,
-    pipeline: Pipeline,
-    pipeline_known: bool,
+#[derive(Default)]
+pub(super) struct DrawBinding {
+    pub(super) target: *mut c_void,
+    pub(super) pso: u64,
+    pub(super) pipeline: Pipeline,
+    pub(super) pipeline_known: bool,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
-#[cfg_attr(test, derive(Default))]
+#[derive(Clone, Copy, Default)]
 pub(super) struct Draw {
     pub(super) ordinal: u32,
     pub(super) frame: u32,
@@ -203,7 +203,7 @@ pub(super) unsafe fn hash_shader(bytes: *const u8, length: usize, out: &mut u32)
 // All of these calls run under g->mutex. Resource and command-list addresses are identities.
 // The observation maps do not own COM references.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_record_pipeline(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_record_pipeline(
     owner: &Capture,
     pso: *mut c_void,
     facts: *const Pipeline,
@@ -221,7 +221,7 @@ unsafe extern "C" fn rsf_rdr2_capture_record_pipeline(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_record_rtv(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_record_rtv(
     owner: &Capture,
     handle: usize,
     resource: *mut c_void,
@@ -235,7 +235,7 @@ unsafe extern "C" fn rsf_rdr2_capture_record_rtv(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_bind_rtv(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_bind_rtv(
     owner: &Capture,
     list: *mut c_void,
     handle: *const usize,
@@ -252,7 +252,7 @@ unsafe extern "C" fn rsf_rdr2_capture_bind_rtv(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_bind_pipeline(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_bind_pipeline(
     owner: &Capture,
     list: *mut c_void,
     pso: *mut c_void,
@@ -264,7 +264,7 @@ unsafe extern "C" fn rsf_rdr2_capture_bind_pipeline(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_get_draw_binding(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_get_draw_binding(
     owner: &Capture,
     list: *mut c_void,
     out: &mut DrawBinding,
@@ -287,7 +287,7 @@ unsafe extern "C" fn rsf_rdr2_capture_get_draw_binding(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_record_draw(owner: &Capture, draw: &Draw) -> bool {
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_record_draw(owner: &Capture, draw: &Draw) -> bool {
     let recordings = unsafe { &mut *owner.recordings.get() };
     let draws = &mut recordings.draws;
     if draws.len() >= MAX_DRAW_METADATA || draws.try_reserve(1).is_err() {
@@ -298,7 +298,7 @@ unsafe extern "C" fn rsf_rdr2_capture_record_draw(owner: &Capture, draw: &Draw) 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_initial_state(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_initial_state(
     owner: &Capture,
     resource: *mut c_void,
     state: u32,
@@ -310,7 +310,7 @@ unsafe extern "C" fn rsf_rdr2_capture_initial_state(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_transition(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_transition(
     owner: &Capture,
     list: *mut c_void,
     resource: *mut c_void,
@@ -329,7 +329,7 @@ unsafe extern "C" fn rsf_rdr2_capture_transition(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_alias(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_alias(
     owner: &Capture,
     list: *mut c_void,
     resource: *mut c_void,
@@ -363,7 +363,7 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_reset_list(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_resource_state(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_resource_state(
     owner: &Capture,
     list: *mut c_void,
     resource: *mut c_void,

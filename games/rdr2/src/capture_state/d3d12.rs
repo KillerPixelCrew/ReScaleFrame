@@ -30,7 +30,7 @@ static GPU_OPS: Ops = Ops {
 };
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_rdr2_capture_d3d12_ops() -> &'static Ops {
+pub(super) extern "C" fn rsf_rdr2_capture_d3d12_ops() -> &'static Ops {
     &GPU_OPS
 }
 
@@ -74,13 +74,13 @@ unsafe extern "C" fn get_buffer(chain: *mut c_void, index: u32) -> *mut c_void {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_d3d12_completed(fence: *mut c_void) -> u64 {
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_d3d12_completed(fence: *mut c_void) -> u64 {
     unsafe { ID3D12Fence::from_raw_borrowed(&fence) }
         .map_or(0, |fence| unsafe { fence.GetCompletedValue() })
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_d3d12_removed(buffer: *mut c_void) -> bool {
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_d3d12_removed(buffer: *mut c_void) -> bool {
     unsafe { ID3D12Resource::from_raw_borrowed(&buffer) }
         .and_then(|buffer| unsafe { device(buffer) })
         .is_some_and(|device| unsafe { device.GetDeviceRemovedReason() }.is_err())
@@ -120,7 +120,7 @@ unsafe fn barrier(
 /// The native caller suppresses its reentrant barrier and allocation observers
 /// while recording a capture copy. The Rust shot owns the returned buffer.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_d3d12_copy(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_d3d12_copy(
     list: *mut c_void,
     source: *mut c_void,
     state: u32,
@@ -254,7 +254,7 @@ unsafe extern "C" fn rsf_rdr2_capture_d3d12_copy(
 
 /// The worker calls this only after completion has admitted the shot for mapping.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_d3d12_write(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_d3d12_write(
     leases: &ReadbackLeases,
     image: &Image,
     directory: *const u16,
@@ -299,7 +299,7 @@ unsafe extern "C" fn rsf_rdr2_capture_d3d12_write(
 
 /// The native observer has verified the presenting owner and holds the capture mutex.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_d3d12_present(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_d3d12_present(
     owner: &Capture,
     chain: *mut c_void,
     completed_target: &mut *mut c_void,

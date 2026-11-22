@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Names and writes completed image readbacks and copied camera records.
+#[cfg(not(test))]
 use super::metadata::InputId;
 use super::recordings::Pipeline;
 use super::shots::Image;
@@ -7,7 +8,9 @@ use std::ffi::{CStr, OsString, c_char};
 use std::fmt;
 use std::fs;
 use std::os::windows::ffi::OsStringExt;
-use std::path::{Path, PathBuf};
+#[cfg(not(test))]
+use std::path::Path;
+use std::path::PathBuf;
 use std::slice;
 
 pub(super) fn output_directory(directory: &[u16]) -> PathBuf {
@@ -125,6 +128,7 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_write_image(
     fs::write(path, image.metadata(role)).is_ok()
 }
 
+#[cfg(not(test))]
 pub(super) fn write_camera(directory: &Path, pid: u32, id: InputId, camera: &[u8]) -> bool {
     let mut path = directory.join(input_stem(pid, id.sequence, id.index, "camera"));
     path.set_extension("bin");

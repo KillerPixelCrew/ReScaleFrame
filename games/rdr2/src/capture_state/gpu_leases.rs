@@ -75,8 +75,8 @@ pub(super) struct Signal {
 }
 
 pub(super) const SIGNAL_ACCEPTED: u32 = 0;
-const CREATE_REFUSED: u32 = 1;
-const SIGNAL_REFUSED: u32 = 2;
+pub(super) const CREATE_REFUSED: u32 = 1;
+pub(super) const SIGNAL_REFUSED: u32 = 2;
 const NO_SLOT: u32 = 3;
 pub(super) const NO_SIGNAL_NEEDED: u32 = 4;
 
@@ -236,7 +236,7 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_gpu_arm_backbuffers(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_gpu_accepts_target(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_gpu_accepts_target(
     owner: &Capture,
     target: *mut c_void,
 ) -> bool {

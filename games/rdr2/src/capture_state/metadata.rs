@@ -8,7 +8,7 @@ use std::ptr::from_ref;
 use std::sync::atomic::Ordering;
 
 const MAX_HDR_BYTES: usize = 1024;
-const CAMERA_BYTES: usize = 0x800;
+pub(super) const CAMERA_BYTES: usize = 0x800;
 const SCALAR_KEYS: [&CStr; 18] = [
     c"Jitter.Offset.X",
     c"Jitter.Offset.Y",
@@ -44,14 +44,14 @@ pub(super) struct PresentationDesc {
 }
 
 #[derive(Clone, Copy)]
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(any(not(windows), test), allow(dead_code))]
 pub(super) struct Hdr {
     pub(super) kind: u32,
     len: usize,
     bytes: [u8; MAX_HDR_BYTES],
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, not(test)))]
 impl Hdr {
     pub(super) fn bytes(&self) -> &[u8] {
         &self.bytes[..self.len]
@@ -65,7 +65,7 @@ pub(super) struct PresentationDetails {
 }
 
 #[derive(Default)]
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(any(not(windows), test), allow(dead_code))]
 pub(super) struct Presentation {
     pub(super) descriptor: PresentationDesc,
     pub(super) details: PresentationDetails,
@@ -102,7 +102,7 @@ enum ResourceRefusal {
     CopyUnavailable,
 }
 
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(any(not(windows), test), allow(dead_code))]
 pub(super) struct Temporal {
     pub(super) id: InputId,
     pub(super) feature_flags: u32,
@@ -115,7 +115,7 @@ pub(super) struct Temporal {
     resources: [Option<ResourceRefusal>; RESOURCE_COUNT],
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, not(test)))]
 impl Temporal {
     pub(super) fn scalars(&self) -> impl Iterator<Item = (&'static str, f64)> + '_ {
         self.scalars
@@ -186,14 +186,17 @@ impl Metadata {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_reset_presentation(owner: &Capture, identity: *mut c_void) {
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_reset_presentation(
+    owner: &Capture,
+    identity: *mut c_void,
+) {
     unsafe { &mut *owner.metadata.get() }
         .swapchains
         .remove(&identity.addr());
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_record_color_space(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_record_color_space(
     owner: &Capture,
     identity: *mut c_void,
     color_space: u32,
@@ -209,7 +212,7 @@ unsafe extern "C" fn rsf_rdr2_capture_record_color_space(
 /// DXGI lends bytes for the successful SetHDRMetaData call. The metadata type is recorded
 /// even when the payload is empty or exceeds the capture's bound.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_record_hdr(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_record_hdr(
     owner: &Capture,
     identity: *mut c_void,
     kind: u32,
@@ -405,7 +408,7 @@ pub(super) unsafe extern "C" fn rsf_rdr2_capture_finish_input(owner: &Capture) {
 
 /// The native observer lends a full readable camera sample or null if its read failed.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_input_camera(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_input_camera(
     owner: &Capture,
     id: &InputId,
     facts: &CameraFacts,
@@ -420,7 +423,7 @@ unsafe extern "C" fn rsf_rdr2_capture_input_camera(
 type ReadScalar = unsafe extern "C" fn(*const c_void, *const c_char, bool, &mut f64) -> bool;
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_input_scalars(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_input_scalars(
     owner: &Capture,
     id: &InputId,
     parameters: *const c_void,
@@ -437,7 +440,7 @@ unsafe extern "C" fn rsf_rdr2_capture_input_scalars(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_input_resource_refused(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_input_resource_refused(
     owner: &Capture,
     id: &InputId,
     role: u32,
@@ -458,7 +461,7 @@ unsafe extern "C" fn rsf_rdr2_capture_input_resource_refused(
 /// Preserve the exact native result even when the list recording no longer qualifies
 /// for an output copy. The caller finishes the reservation after the copy attempt.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_input_result(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_input_result(
     owner: &Capture,
     list: *mut c_void,
     result: u64,

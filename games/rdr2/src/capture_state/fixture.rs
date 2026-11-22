@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: MIT
-//! Validates artifacts from the native WARP/NGX capture driver.
-use super::artifacts::output_directory;
-use crate::diagnostics::path_units;
-use std::ffi::{CStr, c_char};
+//! Artifact checks for the WARP/NGX capture driver.
+mod driver;
+use std::ffi::CStr;
 use std::fs;
 use std::path::Path;
-use std::ptr::null;
 use std::thread::sleep;
 use std::time::Duration;
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
@@ -93,16 +91,7 @@ fn check_images(root: &Path, pid: u32, rgb10: bool) -> Result<(), &'static CStr>
     )
 }
 
-/// The WARP fixture supplies its terminated output directory and format variant.
-/// A non-null result is a process-lived diagnostic string.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_test_verify(
-    directory: *const u16,
-    rgb10: bool,
-) -> *const c_char {
-    let root = output_directory(unsafe { path_units(directory) });
+fn verify(root: &Path, rgb10: bool) -> Result<(), &'static CStr> {
     let pid = unsafe { GetCurrentProcessId() };
-    check_bundle(&root, pid)
-        .and_then(|()| check_images(&root, pid, rgb10))
-        .map_or_else(CStr::as_ptr, |()| null())
+    check_bundle(root, pid).and_then(|()| check_images(root, pid, rgb10))
 }

@@ -1,162 +1,180 @@
 // SPDX-License-Identifier: MIT
-//! Native capture installation before the census can publish its hooks.
-use super::{Capture, rsf_rdr2_capture_create};
-use crate::diagnostics::{CAPTURE_PATH_CAPACITY, capture_directory};
-use crate::platform::lock;
-use std::ffi::{c_char, c_void};
-use std::ptr::NonNull;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
-
-const MAX_PATH: usize = CAPTURE_PATH_CAPACITY;
-const INSTALL_VERSION: u32 = 1;
-const FIXTURE_STOP_TIMEOUT_MS: u32 = 5000;
-
-#[repr(C)]
-struct Paths {
-    directory: [u16; MAX_PATH],
-    request: [u16; MAX_PATH],
-    log: [u16; MAX_PATH],
-}
-
-impl Paths {
-    fn new(directory: &[u16]) -> Self {
-        fn path(directory: &[u16], suffix: &str) -> [u16; MAX_PATH] {
-            let mut path = [0; MAX_PATH];
-            for (slot, unit) in path
-                .iter_mut()
-                .zip(directory.iter().copied().chain(suffix.encode_utf16()))
-            {
-                *slot = unit;
-            }
-            path
-        }
-        Self {
-            directory: path(directory, ""),
-            request: path(directory, "\\native.request"),
-            log: path(directory, "\\native-probe.log"),
-        }
-    }
-}
-
-#[repr(C)]
-struct InstallOps {
-    struct_size: u32,
-    version: u32,
-    create_state: unsafe extern "C" fn(capture: *mut Capture, paths: &Paths) -> bool,
-    discard_state: unsafe extern "C" fn(),
-    start_worker: unsafe extern "C" fn() -> *mut c_void,
-    observe_d3d12: unsafe extern "C" fn(),
-    observe_ngx: unsafe extern "C" fn(),
-    wait_worker: unsafe extern "C" fn(thread: *mut c_void, timeout_ms: u32),
-    close_worker: unsafe extern "C" fn(thread: *mut c_void),
-    report: unsafe extern "C" fn(message: *const c_char),
-}
-
-impl InstallOps {
-    unsafe fn start(&self, capture: NonNull<Capture>, paths: &Paths) -> Option<NonNull<c_void>> {
-        if !unsafe { (self.create_state)(capture.as_ptr(), paths) } {
-            return None;
-        }
-        let thread = NonNull::new(unsafe { (self.start_worker)() });
-        if thread.is_none() {
-            // The worker and census callbacks cannot have reached the prepared native state.
-            unsafe { (self.discard_state)() };
-        }
-        thread
-    }
-}
-
-const _: () = {
-    assert!(size_of::<Paths>() == 3 * 260 * 2);
-    assert!(size_of::<InstallOps>() == 8 + 8 * size_of::<usize>());
-    assert!(std::mem::offset_of!(InstallOps, observe_d3d12) == 8 + 3 * size_of::<usize>());
-    assert!(std::mem::offset_of!(InstallOps, wait_worker) == 8 + 5 * size_of::<usize>());
+//! Process-lived capture owner and registration with the loader census.
+use super::{Capture, Progress, detours, ngx, poll};
+use crate::{
+    diagnostics::capture_directory,
+    platform::{lock, read_process_memory},
 };
+use rsf_game_sys::ffi_util::try_box;
+use std::ffi::{OsString, c_char, c_void};
+use std::io::Write;
+use std::os::windows::ffi::OsStringExt;
+use std::path::PathBuf;
+use std::ptr::null_mut;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use windows_sys::Win32::Foundation::CloseHandle;
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::SystemInformation::GetTickCount64;
+use windows_sys::Win32::System::Threading::CreateThread;
+#[cfg(feature = "capture-fixture")]
+use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
-struct Worker {
-    thread: NonNull<c_void>,
-    ops: &'static InstallOps,
+type Object = unsafe extern "C" fn(*mut c_void);
+type Submission = unsafe extern "C" fn(*mut c_void, u32, *const *mut c_void);
+type ColorSpace = unsafe extern "C" fn(*mut c_void, u32);
+type Feature = unsafe extern "C" fn(*mut c_void, *const c_void, u32);
+type Evaluation = unsafe extern "C" fn(*mut c_void, *mut c_void, *const c_void, u32, u64);
+
+// loader/census/include/rescaleframe/census_d3d12_observer.h
+type ObserveD3d12 =
+    unsafe extern "C" fn(Object, Submission, Submission, Object, Object, ColorSpace);
+type ObserveNgx = unsafe extern "C" fn(Feature, Evaluation, Object);
+pub(super) type ReadNgx =
+    unsafe extern "C" fn(*const c_void, u32, *const c_char, *mut c_void) -> bool;
+
+pub(super) struct Native {
+    pub(super) capture: Capture,
+    pub(super) observations: Mutex<()>,
+    pub(super) directory: Vec<u16>,
+    pub(super) request: Vec<u16>,
+    pub(super) base: usize,
+    pub(super) fixture: bool,
+    pub(super) selected_chain: AtomicPtr<c_void>,
+    pub(super) stop: AtomicBool,
+    pub(super) read_ngx: ReadNgx,
+    log: PathBuf,
 }
 
-// The native leaves may wait on or close this owned Win32 thread handle from any thread.
-unsafe impl Send for Worker {}
+impl Native {
+    pub(super) fn read<T: Copy + Default>(&self, address: usize) -> Option<T> {
+        let mut value = T::default();
+        (!self.fixture
+            && unsafe {
+                read_process_memory(address, (&mut value as *mut T).cast(), size_of::<T>())
+            })
+        .then_some(value)
+    }
 
-enum Installation {
-    Game,
-    Fixture(Option<Worker>),
+    pub(super) fn progress(&self) -> Progress {
+        // Callers hold observations.
+        unsafe { (*self.capture.ledger.get()).progress() }
+    }
+
+    pub(super) fn log(&self, message: std::fmt::Arguments<'_>) {
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.log)
+        {
+            let line = format!("[{}] {message}\n", unsafe { GetTickCount64() });
+            let _ = file.write_all(line.as_bytes());
+        }
+    }
 }
 
-static INSTALLED: Mutex<Option<Installation>> = Mutex::new(None);
-static FIXTURE_STOP: AtomicBool = AtomicBool::new(false);
+static OWNER: AtomicPtr<Native> = AtomicPtr::new(null_mut());
+// The numeric HANDLE can cross threads; only the fixture removes and closes it.
+static FIXTURE_THREAD: Mutex<usize> = Mutex::new(0);
 
-/// The native caller lends a NUL-terminated directory and a process-lived leaf table.
+pub(super) fn owner() -> &'static Native {
+    let owner = OWNER.load(Ordering::Acquire);
+    assert!(!owner.is_null(), "capture registered before publication");
+    unsafe { &*owner }
+}
+
+/// The ASI and fixture lend their linked census and exception-boundary functions.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_install(
+unsafe extern "C" fn rsf_rdr2_capture_start(
     directory: *const u16,
-    ops: *const InstallOps,
     fixture: bool,
+    observe_d3d12: ObserveD3d12,
+    observe_ngx: ObserveNgx,
+    read_ngx: ReadNgx,
 ) -> bool {
-    if directory.is_null() || ops.is_null() {
-        return false;
-    }
-    let header = ops.cast::<u32>();
-    if unsafe { header.read() } < size_of::<InstallOps>() as u32
-        || unsafe { header.add(1).read() } != INSTALL_VERSION
-    {
-        return false;
-    }
-    let mut installed = lock(&INSTALLED);
-    if installed.is_some() {
+    let mut thread = lock(&FIXTURE_THREAD);
+    if !OWNER.load(Ordering::Acquire).is_null() {
         return false;
     }
     let Some(directory) = (unsafe { capture_directory(directory) }) else {
         return false;
     };
-    let paths = Paths::new(directory);
-    let Some(capture) = NonNull::new(rsf_rdr2_capture_create()) else {
+    let root = PathBuf::from(OsString::from_wide(directory));
+    let request = directory
+        .iter()
+        .copied()
+        .chain("\\native.request".encode_utf16())
+        .chain([0])
+        .collect();
+    let Some(state) = try_box(Native {
+        capture: Capture::new(),
+        observations: Mutex::new(()),
+        directory: directory.to_vec(),
+        request,
+        base: unsafe { GetModuleHandleW(std::ptr::null()) } as usize,
+        fixture,
+        selected_chain: AtomicPtr::new(null_mut()),
+        stop: AtomicBool::new(false),
+        read_ngx,
+        log: root.join("native-probe.log"),
+    }) else {
         return false;
     };
-    let ops = unsafe { &*ops };
-    let Some(thread) = (unsafe { ops.start(capture, &paths) }) else {
-        unsafe { drop(Box::from_raw(capture.as_ptr())) };
-        return false;
+    let state = Box::into_raw(state);
+    OWNER.store(state, Ordering::Release);
+    let handle = unsafe {
+        CreateThread(
+            std::ptr::null(),
+            0,
+            Some(poll::worker),
+            state.cast(),
+            0,
+            null_mut(),
+        )
     };
-
-    // Census callbacks and the hooks they install keep both owners for the life of the process.
-    unsafe {
-        (ops.observe_d3d12)();
-        (ops.observe_ngx)();
+    if handle.is_null() {
+        OWNER.store(null_mut(), Ordering::Release);
+        // Census cannot have reached the unpublished hooks.
+        drop(unsafe { Box::from_raw(state) });
+        return false;
     }
-    *installed = Some(if fixture {
-        Installation::Fixture(Some(Worker { thread, ops }))
+    unsafe {
+        observe_d3d12(
+            detours::device_created,
+            detours::before_submit,
+            detours::after_submit,
+            detours::before_present,
+            detours::swapchain_created,
+            detours::color_space_set,
+        );
+        observe_ngx(ngx::created, ngx::evaluate, ngx::released);
+    }
+    if fixture {
+        *thread = handle as usize;
     } else {
-        unsafe { (ops.close_worker)(thread.as_ptr()) };
-        Installation::Game
-    });
-    unsafe { (ops.report)(c"native capture installed".as_ptr()) };
+        unsafe { CloseHandle(handle) };
+    }
+    owner().log(format_args!("native capture installed"));
     true
 }
 
-pub(super) fn fixture_stopping() -> bool {
-    FIXTURE_STOP.load(Ordering::Acquire)
+#[cfg(feature = "capture-fixture")]
+pub(super) fn arm_fixture(chain: *mut c_void) {
+    let state = owner();
+    let _guard = lock(&state.observations);
+    state.selected_chain.store(chain, Ordering::Release);
+    super::rsf_rdr2_capture_request(&state.capture);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_rdr2_capture_stop_fixture() {
-    let worker = {
-        let mut installed = lock(&INSTALLED);
-        let Some(Installation::Fixture(worker)) = installed.as_mut() else {
-            return;
-        };
-        FIXTURE_STOP.store(true, Ordering::Release);
-        worker.take()
-    };
-    if let Some(Worker { thread, ops }) = worker {
-        // The hook owners stay live even if the worker takes longer than the fixture wait.
+#[cfg(feature = "capture-fixture")]
+pub(super) fn stop_fixture() {
+    let handle = std::mem::take(&mut *lock(&FIXTURE_THREAD)) as *mut c_void;
+    if !handle.is_null() {
+        owner().stop.store(true, Ordering::Release);
+        // Keep process-lived callback storage even on a deliberately bounded fixture wait.
         unsafe {
-            (ops.wait_worker)(thread.as_ptr(), FIXTURE_STOP_TIMEOUT_MS);
-            (ops.close_worker)(thread.as_ptr());
+            WaitForSingleObject(handle, 5000);
+            CloseHandle(handle);
         }
     }
 }

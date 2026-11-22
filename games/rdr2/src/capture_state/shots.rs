@@ -17,17 +17,17 @@ use super::{
     rsf_rdr2_capture_active,
 };
 use std::cell::RefCell;
-#[cfg(windows)]
+#[cfg(all(windows, not(test)))]
 use std::ffi::c_char;
 use std::ffi::{CStr, c_void};
 use std::ptr;
 
 const MAX_PENDING: usize = MAX_DRAW_COPIES as usize + INPUT_FRAMES as usize * RESOURCE_COUNT;
-const REFUSED: u32 = 0;
-const RECORDED: u32 = 1;
-const NO_SLOT: u32 = 2;
-const SAVE_EVENT: u32 = 3;
-const UNPAIRED_SUBMISSION: u32 = 5;
+pub(super) const REFUSED: u32 = 0;
+pub(super) const RECORDED: u32 = 1;
+pub(super) const NO_SLOT: u32 = 2;
+pub(super) const SAVE_EVENT: u32 = 3;
+pub(super) const UNPAIRED_SUBMISSION: u32 = 5;
 
 struct QueueCall {
     queue: *mut c_void,
@@ -89,7 +89,7 @@ pub(super) struct Shot {
     receipt: Readback,
     leases: ReadbackLeases,
     image: Image,
-    #[cfg_attr(not(windows), allow(dead_code))]
+    #[cfg_attr(any(not(windows), test), allow(dead_code))]
     role: &'static CStr,
     tail: bool,
 }
@@ -111,7 +111,7 @@ pub(super) type Completed = unsafe extern "C" fn(*mut c_void) -> u64;
 pub(super) type DeviceRemoved = unsafe extern "C" fn(*mut c_void) -> bool;
 type Copy =
     unsafe extern "C" fn(*mut c_void, *mut c_void, u32, &mut ReadbackLeases, &mut Image) -> bool;
-#[cfg(windows)]
+#[cfg(all(windows, not(test)))]
 pub(super) type WriteImage = unsafe extern "C" fn(&ReadbackLeases, &Image, *const c_char) -> bool;
 
 impl Shot {
@@ -189,7 +189,7 @@ unsafe fn untracked_submit(owner: &Capture, count: u32, lists: *const *mut c_voi
 /// Under the native capture mutex, put the lease in pending before the native copy can
 /// record any commands. A refused copy can drop the new slot immediately.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_input_shot(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_input_shot(
     owner: &Capture,
     id: &InputId,
     role: u32,
@@ -224,7 +224,7 @@ unsafe extern "C" fn rsf_rdr2_capture_input_shot(
 /// The caller stays on the render thread and records the stack at the native draw site
 /// when this returns SAVE_EVENT. A draw with overflowing metadata can still record its copy.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_draw_shot(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_draw_shot(
     owner: &Capture,
     list: *mut c_void,
     resource: *mut c_void,
@@ -283,7 +283,7 @@ unsafe extern "C" fn rsf_rdr2_capture_draw_shot(
 /// Claim only the pending shots proved by the snapshot taken immediately before the
 /// original queue call. An in-flight claim keeps that shot pending and unavailable for reuse.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_before_submit(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_before_submit(
     owner: &Capture,
     queue: *mut c_void,
     count: u32,
@@ -320,7 +320,7 @@ unsafe fn claim_submission(
 /// The native submission stack pairs the same queue and receipt after the original call.
 /// A successful signal also covers older unfenced receipts already submitted to that queue.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_after_submit(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_after_submit(
     owner: &Capture,
     queue: *mut c_void,
     ops: &Ops,
@@ -381,7 +381,7 @@ unsafe fn finish_submission(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_pending_count(owner: &Capture) -> usize {
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_pending_count(owner: &Capture) -> usize {
     unsafe { &*owner.shots.get() }.pending.len()
 }
 
@@ -442,7 +442,7 @@ pub(super) unsafe fn ready_count(owner: &Capture) -> usize {
     unsafe { &*owner.ready.get() }.shots.len()
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, not(test)))]
 pub(super) unsafe fn write_ready(owner: &Capture, index: usize, write: WriteImage) -> bool {
     let ready = unsafe { &*owner.ready.get() };
     ready

@@ -30,7 +30,7 @@ unsafe fn shader_facts(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_graphics_facts(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_graphics_facts(
     desc: *const D3D12_GRAPHICS_PIPELINE_STATE_DESC,
     out: &mut Pipeline,
 ) -> bool {
@@ -140,7 +140,7 @@ unsafe fn stream(desc: &D3D12_PIPELINE_STATE_STREAM_DESC) -> Option<Pipeline> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_stream_facts(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_stream_facts(
     desc: *const D3D12_PIPELINE_STATE_STREAM_DESC,
     out: &mut Pipeline,
 ) -> bool {

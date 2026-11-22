@@ -84,3 +84,33 @@ Rust 1.94.1 formatting. The source audit matched 45 native capture entry names, 
 existing pipeline stream tags, and the Windows SDK symbols used by the new leaves.
 Locked offline Cargo metadata and Git whitespace checks passed. Build, lint, tests and
 device captures were left for the user.
+
+## Callback and fixture port from `82b39a63`
+
+The remaining question was which native boundaries were required after the readback port.
+The baseline `native_capture.cpp`, the loader census callback header, and the locally pinned
+`windows` 0.62.2 SDK bindings supply the comparison. No executable or shader was captured
+for this slice and the game addresses are the existing layout values.
+
+| PORT.md path closed | Replacement and source evidence |
+| --- | --- |
+| `games/rdr2/src/native_capture.cpp` | `capture_state/{install,detours,ngx,poll}.rs` own registration, all 16 graphics detours, NGX and camera observations, queue receipts, and the worker. The owner is published before the worker and census callbacks can reach it. A failed thread start withdraws it before registration. |
+| `games/rdr2/src/native_capture.h` | The private install table and fixture controls moved into Rust. The ASI's existing C entry name still binds capture to the loader census. |
+| `games/rdr2/src/capture_state.h` | Observations now flow directly between the Rust owners. The detour definitions pin trampoline signatures and vtable offsets to the generated SDK records. The x64 draw entry gives the original return address to Rust, keeping the register and stack arguments used by both original draw methods. |
+| `tests/rdr2_capture.cpp` | `capture_state/fixture/driver.rs` drives WARP and retains both CTest variants, the stream PSO, four NGX evaluations, 75 draws, post-submission Reset, the Present drain, artifact checks and D3D12 debug validation. It uses a separate `capture-fixture` archive so the shader compiler stays fixture-only. |
+
+`capture_ngx.cpp` catches exceptions from the opaque NGX C++ getters before they reach
+Rust and binds the existing census C functions. `tests/rdr2_capture_ngx.cpp` applies the
+independent C++ NGX fixture declaration when setting test parameters and catches exceptions
+there. `tests/rdr2_capture_main.c` supplies the CRT entry and linked service addresses.
+The retained native functions contain no capture policy or device driver. The ASI settings
+paths are unchanged. Bundle scalars remain finite JSON numbers and now use Rust's
+round-trip decimal representation instead of the CRT's twelve significant digits.
+
+Source checks matched the 16 role slots against the installed SDK vtables and compared the
+fixture SDK names, draw and submission order, and CMake routing with the baseline. Rust 1.94.1
+formatting, locked offline Cargo metadata with `capture-fixture`, and Git whitespace checks
+passed. The fixture reuses the checked-in census options binding, so no generated declaration
+or generator input changed. Compilation, lint, CTest, WARP and game validation remain
+user-owned. Both capture variants previously exceeded the five-second capture budget on
+the Arc B370, and the timeout budget is unchanged.

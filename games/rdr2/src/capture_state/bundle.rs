@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: MIT
 //! The poller publishes detached capture metadata without holding the graphics mutex.
+#[cfg(not(test))]
 use super::artifacts::{output_directory, pipeline_fields, write_camera};
 use super::metadata::{Presentation, Temporal};
 use super::recordings::Draw;
 use super::shots::settle_tail;
 use super::{Capture, Progress, can_publish};
-use std::ffi::c_char;
+#[cfg(not(test))]
 use std::fmt::Write as _;
-use std::{fs, slice, str};
+#[cfg(not(test))]
+use std::{fs, slice};
 
+#[cfg(not(test))]
 pub(super) struct Bundle {
     pub(super) directory: *const u16,
     pub(super) directory_len: usize,
@@ -16,9 +19,16 @@ pub(super) struct Bundle {
     pub(super) pid: u32,
 }
 
-pub(super) type FormatScalar = unsafe extern "C" fn(f64, *mut c_char, usize) -> i32;
-pub(super) type Report = unsafe extern "C" fn(u32, bool, usize, usize, u32);
+#[cfg(not(test))]
+pub(super) struct Published {
+    pub(super) sequence: u32,
+    pub(super) saved: bool,
+    pub(super) inputs: usize,
+    pub(super) draws: usize,
+    pub(super) written: u32,
+}
 
+#[cfg_attr(test, allow(dead_code))]
 pub(super) struct Snapshot {
     progress: Progress,
     presentation: Presentation,
@@ -27,12 +37,14 @@ pub(super) struct Snapshot {
     unobserved_hook_roles: u32,
 }
 
+#[cfg(not(test))]
 fn separator(out: &mut String, index: usize) {
     if index != 0 {
         out.push(',');
     }
 }
 
+#[cfg(not(test))]
 fn write_draw(out: &mut String, draw: &Draw) {
     let _ = write!(
         out,
@@ -58,7 +70,8 @@ fn write_draw(out: &mut String, draw: &Draw) {
     out.push_str("]}");
 }
 
-fn write_temporal(out: &mut String, input: &Temporal, format_scalar: FormatScalar) -> Option<()> {
+#[cfg(not(test))]
+fn write_temporal(out: &mut String, input: &Temporal) {
     let facts = input.facts;
     let _ = write!(
         out,
@@ -83,12 +96,7 @@ fn write_temporal(out: &mut String, input: &Temporal, format_scalar: FormatScala
     );
     for (index, (key, value)) in input.scalars().enumerate() {
         separator(out, index);
-        let _ = write!(out, "\"{key}\":");
-        // Preserve the existing %.12g representation of the finite NGX scalars.
-        let mut number = [0u8; 32];
-        let count = unsafe { format_scalar(value, number.as_mut_ptr().cast(), number.len()) };
-        let count = usize::try_from(count).ok()?;
-        out.push_str(str::from_utf8(number.get(..count)?).ok()?);
+        let _ = write!(out, "\"{key}\":{value}");
     }
     out.push_str("},\"refusals\":[");
     for (index, (prefix, suffix)) in input.refusals().enumerate() {
@@ -96,7 +104,6 @@ fn write_temporal(out: &mut String, input: &Temporal, format_scalar: FormatScala
         let _ = write!(out, "\"{prefix}{suffix}\"");
     }
     out.push_str("]}");
-    Some(())
 }
 
 /// Detach after accounting for ready images. The dirty ledger keeps the next arm out
@@ -119,31 +126,23 @@ pub(super) unsafe fn take_bundle(owner: &Capture) -> bool {
     true
 }
 
-pub(super) unsafe fn publish_bundle(
-    owner: &Capture,
-    bundle: &Bundle,
-    format_scalar: FormatScalar,
-    report: Report,
-) -> u32 {
+#[cfg(not(test))]
+pub(super) unsafe fn publish_bundle(owner: &Capture, bundle: &Bundle) -> Published {
     let snapshot = unsafe { &mut *owner.ready.get() }
         .bundle
         .take()
         .expect("detached bundle");
-    let saved = unsafe { write_bundle(&snapshot, bundle, format_scalar) };
-    let progress = snapshot.progress;
-    unsafe {
-        report(
-            progress.sequence,
-            saved,
-            snapshot.temporal.len(),
-            snapshot.draws.len(),
-            progress.written,
-        );
+    Published {
+        sequence: snapshot.progress.sequence,
+        saved: unsafe { write_bundle(&snapshot, bundle) },
+        inputs: snapshot.temporal.len(),
+        draws: snapshot.draws.len(),
+        written: snapshot.progress.written,
     }
-    progress.sequence
 }
 
-unsafe fn write_bundle(snapshot: &Snapshot, bundle: &Bundle, format_scalar: FormatScalar) -> bool {
+#[cfg(not(test))]
+unsafe fn write_bundle(snapshot: &Snapshot, bundle: &Bundle) -> bool {
     let directory =
         output_directory(unsafe { slice::from_raw_parts(bundle.directory, bundle.directory_len) });
     let mut write_failed = snapshot.progress.write_failed != 0;
@@ -198,9 +197,7 @@ unsafe fn write_bundle(snapshot: &Snapshot, bundle: &Bundle, format_scalar: Form
     );
     for (index, input) in snapshot.temporal.iter().enumerate() {
         separator(&mut out, index);
-        if write_temporal(&mut out, input, format_scalar).is_none() {
-            return false;
-        }
+        write_temporal(&mut out, input);
     }
     out.push_str("],\"draws\":[");
     for (index, draw) in snapshot.draws.iter().enumerate() {
