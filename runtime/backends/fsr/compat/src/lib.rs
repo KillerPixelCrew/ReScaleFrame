@@ -160,7 +160,11 @@ fn install(
         return None;
     };
 
-    let original = unsafe { create_hook(target.as_ptr(), Some(capability)) }?;
+    let Some(original) = (unsafe { create_hook(target.as_ptr(), Some(capability)) }) else {
+        diagnostic.refusal =
+            c"FSR4 INT8 compatibility refused: resident hook creation failed".as_ptr();
+        return None;
+    };
     REGISTRATION
         .write()
         .unwrap_or_else(PoisonError::into_inner)
