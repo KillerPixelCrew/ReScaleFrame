@@ -55,7 +55,7 @@ extern "C" fn rsf_core_dump_poll() {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_begin_record(
+pub(crate) unsafe extern "C" fn rsf_core_dump_begin_record(
     input: *const rsf_frame_record,
     backend: u32,
 ) -> i32 {
@@ -457,7 +457,7 @@ fn publish_sr_parameters(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_capture_sr_parameters(
+pub(crate) unsafe extern "C" fn rsf_core_dump_capture_sr_parameters(
     input: *const rsf_frame_record,
     backend: u32,
     motion_x: f32,

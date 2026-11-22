@@ -70,11 +70,20 @@ unsafe extern "C" fn rsf_core_fsr4fg_load_provider(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr4fg_release_provider_objects(
-    objects: &[Handle; 8],
-    event: Handle,
+    graphics: &super::commands::Graphics,
     module: Handle,
 ) {
-    unsafe { provider_module::release(objects, event, module) };
+    let objects = [
+        graphics.commands,
+        graphics.allocator,
+        graphics.completion,
+        graphics.shared,
+        graphics.queue,
+        graphics.device,
+        graphics.adapter,
+        graphics.factory,
+    ];
+    unsafe { provider_module::release(&objects, graphics.event, module) };
 }
 
 // Bindgen skips the SDK's function-like descriptor macros. The native

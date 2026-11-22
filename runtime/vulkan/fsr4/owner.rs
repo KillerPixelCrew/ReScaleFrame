@@ -3,8 +3,7 @@
 //!
 //! Compiled into the rsf-fsr4-compat archive, which the integrated Runtime and
 //! the standalone VulkanStoryFsr4.dll both link. bridge.cpp keeps the typed
-//! DXGI, D3D12, Vulkan and FidelityFX leaves, the SDK-retained descriptors and
-//! the INT8 compatibility lease behind the table in bridge_platform.h.
+//! FidelityFX descriptor and INT8 compatibility boundaries.
 
 use crate::ffx_version::{self, MAX_VERSIONS, Version};
 use core::ffi::{CStr, c_void};
@@ -26,6 +25,9 @@ use completion::next_local_completion;
 #[cfg(windows)]
 #[path = "sdk.rs"]
 mod sdk;
+#[cfg(windows)]
+#[path = "standalone.rs"]
+mod standalone;
 #[path = "../timeline_pair.rs"]
 mod timeline_pair;
 

@@ -12,7 +12,6 @@
 #include <vulkan/vulkan.h>
 #include <cstdint>
 #include <cstddef>
-#include <cstring>
 #include <memory>
 #include <new>
 #include "api/include/dx12/ffx_api_dx12.h"
@@ -49,6 +48,9 @@ extern "C" void rsf_core_fsr4sr_release_image(void*);
 extern "C" void rsf_core_fsr4sr_execute(void*, void*);
 extern "C" int32_t rsf_core_fsr4sr_queue_fence(void*, void*, uint64_t, uint32_t);
 
+static_assert(sizeof(VkPhysicalDeviceIDProperties) == 64 &&
+    offsetof(VkPhysicalDeviceIDProperties, deviceLUID) == 48 &&
+    offsetof(VkPhysicalDeviceIDProperties, deviceLUIDValid) == 60);
 static_assert(VK_FORMAT_R16G16B16A16_SFLOAT == 97 && VK_FORMAT_R16G16_SFLOAT == 83 &&
     VK_FORMAT_R32_SFLOAT == 100 && VK_FORMAT_D32_SFLOAT == 126);
 
@@ -269,14 +271,7 @@ constexpr rsf_fsr4sr_platform kPlatform{
 /// @details The vendor check is preliminary; NVIDIA/Intel compatibility and signed-provider selection are verified during Create.
 /// @return Zero for an AMD, NVIDIA or Intel Vulkan adapter, otherwise a negative availability code.
 extern "C" RSF_FSR4_BRIDGE_API int rsf_vk_fsr4_probe(VkPhysicalDevice physical) {
-    if (!physical) return -1;
-    HMODULE loader = GetModuleHandleW(L"vulkan-1.dll");
-    auto properties = loader ? reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(
-        GetProcAddress(loader, "vkGetPhysicalDeviceProperties")) : nullptr;
-    if (!properties) return -2;
-    VkPhysicalDeviceProperties info{};
-    properties(physical, &info);
-    return rsf_core_fsr4sr_candidate_vendor(info.vendorID) ? 0 : -3;
+    return rsf_core_fsr4sr_probe_physical(physical);
 }
 
 /// @brief Waits for the most recent tracked submission on this DX12 queue.
@@ -313,20 +308,8 @@ extern "C" RSF_FSR4_BRIDGE_API void rsf_vk_fsr4_destroy(rsf_vk_fsr4* value) {
 extern "C" RSF_FSR4_BRIDGE_API int rsf_vk_fsr4_create(
     VkPhysicalDevice physical, uint32_t renderWidth, uint32_t renderHeight,
     uint32_t displayWidth, uint32_t displayHeight, rsf_vk_fsr4** output) {
-    if (!output) return -1;
-    *output = nullptr;
-    if (!physical) return -1;
-    HMODULE loader = GetModuleHandleW(L"vulkan-1.dll");
-    auto properties = loader ? reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
-        GetProcAddress(loader, "vkGetPhysicalDeviceProperties2")) : nullptr;
-    if (!properties) return -3;
-    VkPhysicalDeviceIDProperties id{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
-    VkPhysicalDeviceProperties2 props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2}; props.pNext = &id;
-    properties(physical, &props);
-    uint64_t luid = 0; std::memcpy(&luid, id.deviceLUID, sizeof(luid));
-    if (!id.deviceLUIDValid) return -4;
-    const rsf_fsr4sr_request request{luid, nullptr, renderWidth, renderHeight, displayWidth, displayHeight, 0};
-    return rsf_core_fsr4sr_create(&kPlatform, &request, output);
+    return rsf_core_fsr4sr_create_physical(&kPlatform, physical, renderWidth, renderHeight, displayWidth,
+        displayHeight, output);
 }
 
 extern "C" RSF_FSR4_BRIDGE_API int32_t RsfFsr4BridgeCreate(const rsf_fsr4_bridge_create* setup,

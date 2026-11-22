@@ -4,6 +4,7 @@ use crate::frame_capture_vk::{
     Owner as Capture, rsf_core_capture_vk_flush, rsf_core_capture_vk_provider,
     rsf_core_capture_vk_record, rsf_core_capture_vk_retire,
 };
+use crate::input_dump::abi::{rsf_core_dump_begin_record, rsf_core_dump_capture_sr_parameters};
 use crate::vulkan_fg_copy::{rsf_core_vkfg_record_barrier, rsf_core_vkfg_record_copy};
 use crate::vulkan_fg_resources_abi::rsf_vkfg_image_copy as Copy;
 use crate::vulkan_sharpening::{
@@ -60,15 +61,7 @@ fn command_buffer(commands: Handle) -> vk::CommandBuffer {
 }
 
 unsafe extern "C" {
-    fn rsf_input_dump_begin_record(record: *const Record, backend: u32) -> i32;
-    fn rsf_capture_sr_parameters(
-        record: *const Record,
-        backend: u32,
-        x: f32,
-        y: f32,
-        exposure: f32,
-        reset: u32,
-    );
+    fn rsf_core_dump_bind_native_services();
 }
 
 #[unsafe(no_mangle)]
@@ -113,6 +106,7 @@ unsafe extern "C" fn rsf_fsr4vk_capture_initialize(
         .capture
         .initialize(setup.device, setup.device_proc, &memory)
     {
+        unsafe { rsf_core_dump_bind_native_services() };
         0
     } else {
         super::INITIALIZATION_FAILED
@@ -121,13 +115,13 @@ unsafe extern "C" fn rsf_fsr4vk_capture_initialize(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fsr4vk_capture_begin(record: *const Record) {
-    unsafe { rsf_input_dump_begin_record(record, RSF_SR_FSR4) };
+    unsafe { rsf_core_dump_begin_record(record, RSF_SR_FSR4) };
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fsr4vk_capture_parameters(frame: &Frame, reset: u32) {
     unsafe {
-        rsf_capture_sr_parameters(
+        rsf_core_dump_capture_sr_parameters(
             frame.record,
             RSF_SR_FSR4,
             frame.motion_scale_x,

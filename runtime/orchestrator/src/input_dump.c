@@ -24,6 +24,12 @@ static void bind_platform(void)
     InitOnceExecuteOnce(&once, bind_services, NULL, NULL);
 }
 
+void rsf_core_dump_bind_native_services(void)
+{
+    /* Rust capture owners bind the same service table at admission. */
+    bind_platform();
+}
+
 void rsf_core_dump_capture_sr_parameters(const rsf_frame_record*, uint32_t,
     float, float, float, uint32_t);
 

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include "bridge_api.h"
+#include "bridge_objects.h"
 #include "../../backends/fsr/src/ffx_version.h"
 
 enum : uint32_t {
@@ -74,10 +75,38 @@ struct rsf_fsr4fg_platform {
     int32_t (*destroy_swapchain)(rsf_fsr4fg_native*);
 };
 
+// Native platform callbacks backed directly by the Rust graphics record.
+int32_t rsf_core_fsr4fg_create_factory(rsf_fsr4fg_native*, uint32_t);
+int32_t rsf_core_fsr4fg_find_adapter(rsf_fsr4fg_native*, uint64_t);
+int32_t rsf_core_fsr4fg_get_adapter_vendor(rsf_fsr4fg_native*, uint32_t*);
+int32_t rsf_core_fsr4fg_create_device(rsf_fsr4fg_native*, uint32_t);
+int32_t rsf_core_fsr4fg_create_event(rsf_fsr4fg_native*, uint32_t, uint32_t);
+int32_t rsf_core_fsr4fg_create_queue(rsf_fsr4fg_native*, const rsf_fsr4fg_queue_desc*);
+int32_t rsf_core_fsr4fg_create_allocator(rsf_fsr4fg_native*, uint32_t);
+int32_t rsf_core_fsr4fg_create_list(rsf_fsr4fg_native*, uint32_t, uint32_t);
+int32_t rsf_core_fsr4fg_create_completion_fence(rsf_fsr4fg_native*, uint64_t, uint32_t);
+int32_t rsf_core_fsr4fg_shared_image(rsf_fsr4fg_native*, uint32_t, uint32_t, uint32_t, void**, void**);
+int32_t rsf_core_fsr4fg_shared_fence(rsf_fsr4fg_native*, void**);
+void rsf_core_fsr4fg_describe_texture(void*, rsf_fsr4fg_texture*);
+int32_t rsf_core_fsr4fg_reset_commands(rsf_fsr4fg_native*);
+int32_t rsf_core_fsr4fg_close_commands(rsf_fsr4fg_native*);
+void rsf_core_fsr4fg_shader_read(rsf_fsr4fg_native*, void*, uint32_t);
+int32_t rsf_core_fsr4fg_copy_to_backbuffer(rsf_fsr4fg_native*, void*);
+int32_t rsf_core_fsr4fg_wait_shared(rsf_fsr4fg_native*, uint64_t);
+void rsf_core_fsr4fg_execute(rsf_fsr4fg_native*);
+int32_t rsf_core_fsr4fg_present_dxgi(rsf_fsr4fg_native*, uint32_t);
+int32_t rsf_core_fsr4fg_signal(rsf_fsr4fg_native*, uint64_t, uint32_t);
+int32_t rsf_core_fsr4fg_wait_local(rsf_fsr4fg_native*, uint64_t);
+int32_t rsf_core_fsr4fg_present_count(rsf_fsr4fg_native*, uint32_t*);
+void rsf_core_fsr4fg_release_chain(rsf_fsr4fg_native*);
+void rsf_core_fsr4fg_release_provider_objects(const rsf_fsr4fg_native_graphics*, void*);
+
 int32_t rsf_core_fsr4fg_probe(const rsf_fsr4fg_platform*, uint64_t, const uint16_t*, rsf_fsr4fg_info*);
 int32_t rsf_core_fsr4fg_create(const rsf_fsr4fg_platform*, const rsf_fsr4fg_create*, rsf_fsr4fg_bridge**);
 }
 
+static_assert(sizeof(rsf_fsr4fg_native_graphics) == 10 * sizeof(void*));
+static_assert(offsetof(rsf_fsr4fg_native_graphics, chain) == 8 * sizeof(void*));
 static_assert(sizeof(rsf_fsr4fg_platform) == 36 * sizeof(void*));
 static_assert(offsetof(rsf_fsr4fg_platform, create_factory) == 2 * sizeof(void*));
 static_assert(offsetof(rsf_fsr4fg_platform, load) == 6 * sizeof(void*));

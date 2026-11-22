@@ -482,6 +482,7 @@ dependencies = [
 name = "rsf-fsr4-compat"
 version = "0.1.2"
 dependencies = [
+ "ash",
  "rsf-game-sys",
  "windows",
 ]

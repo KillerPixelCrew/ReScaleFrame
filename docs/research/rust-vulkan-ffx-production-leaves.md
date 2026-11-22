@@ -52,3 +52,24 @@ Bindgen 0.72.1 reproduced both changed SDK projections at FidelityFX revision
 offline Windows metadata and Git whitespace checks passed. MSVC `/Zs /W4 /WX`
 passed for both native provider binders and the FG bridge, and for both the
 embedded and standalone SR bridges. This was a source-only check.
+
+## Standalone bridge and capture follow-up from 818a5ede
+
+| Source | Disposition |
+| --- | --- |
+| `runtime/vulkan/fsr4/bridge.cpp` and `bridge_platform.h` | The neutral Windows exports keep their signatures and export directives. Rust now borrows the loaded Vulkan module, resolves typed Vulkan device-property calls, reads the vendor and Windows LUID, and constructs the legacy creation request. It preserves the null-pointer, missing-procedure and invalid-LUID results and the retained output owner on failed cleanup. |
+| `runtime/vulkan/fsr4-fg/bridge.cpp`, `bridge_platform.h` and `bridge_objects.h` | The native capsule begins with a bindgen-projected graphics record. The existing platform table binds Rust directly for DXGI and D3D12 creation, event handling, shared resources, command reset and close, barriers, copy, Present and local/shared fence operations. Rust uses the same graphics record for ordered resource release. C++ still owns the vendor descriptor storage, including the typed, stable swapchain output slot. |
+| `runtime/orchestrator/src/vulkan_fsr4_sr/graphics.rs` and G07 capture admission | SR establishes the existing native capture services once at graphics admission, then calls the Rust frame-begin and SR parameter writers directly. The per-frame source record, capture roles, timeline retirement and drained flush still use the same owner and callbacks. The standalone libraries have no input-dump owner. |
+| Retained native code | Lifetime of the SDK descriptor chain and its output slot, FidelityFX resource-description helpers, SDK create/destroy and generation callback adaptation, C++ fault guards, SR compatibility lease and neutral DLL export wrappers. |
+| Standalone FSR3, shared V01/V02, V06, fixtures and `PORT.md` | The source comparison against the base found no changes. |
+
+The FG private projection uses an SDK-independent header. Generating from the
+full native platform header failed because the packaged Clang rejected MSVC's
+`offsetof` expansion inside the existing assertions. Compiling the native
+translation unit still checks the prefix at offset zero and the typed slot and
+table layouts. The targeted bindings reproduced with bindgen 0.72.1. Rust
+1.94.1 formatting and locked offline metadata for Windows MSVC and GNU passed. MSVC
+`/Zs /W4 /WX` passed for embedded and standalone SR, FG and the C11 capture
+service binder. MinGW `-fsyntax-only -Wall -Wextra -Werror` also passed for the
+standalone SR bridge. Compilation, linking and runtime verification remain
+pending.

@@ -8246,3 +8246,10 @@ ports provider module loading, export resolution and Windows resource release
 for both bridges. The same [source record](research/rust-vulkan-ffx-production-leaves.md#module-and-bridge-forwarding-follow-up-from-b5a7434c)
 lists the remaining SDK and fault boundaries. Targeted bindings, pinned
 formatting, locked offline metadata and MSVC syntax checks passed.
+
+The standalone SR compatibility exports now delegate Vulkan device-property
+marshalling to Rust, and the FG bridge binds its graphics callbacks directly
+from the private capsule record. Runtime SR binds its capture services at
+admission and uses Rust directly for frame-begin and SR metadata. The
+[standalone source record](research/rust-vulkan-ffx-production-leaves.md#standalone-bridge-and-capture-follow-up-from-818a5ede)
+documents the preserved vendor descriptor and exception boundaries.

@@ -31,3 +31,17 @@ result = subprocess.check_output([
     "-include", "stddef.h", "-I" + str(include / "api/include"),
 ])
 Path(__file__).with_name("sdk_abi.rs").write_bytes(result.replace(b"\r\n", b"\n"))
+
+
+directory = Path(__file__).resolve().parent
+result = subprocess.check_output([
+    bindgen, str(directory / "bridge_objects.h"),
+    "--allowlist-type", "^rsf_fsr4fg_native_graphics$",
+    "--blocklist-type", "^IDXGISwapChain4$",
+    "--raw-line", "#![allow(non_camel_case_types)]",
+    "--raw-line", "type IDXGISwapChain4 = ::core::ffi::c_void;",
+    "--no-derive-debug", "--no-doc-comments", "--use-core",
+    "--rust-edition", "2024", "--rust-target", "1.85",
+    "--", "-x", "c++", "--target=x86_64-pc-windows-msvc",
+])
+(directory / "bridge_objects_abi.rs").write_bytes(result.replace(b"\r\n", b"\n"))

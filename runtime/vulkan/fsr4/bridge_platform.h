@@ -113,6 +113,9 @@ struct rsf_fsr4sr_platform {
     int32_t (*destroy_context)(rsf_fsr4sr_native*);
 };
 
+int32_t rsf_core_fsr4sr_probe_physical(void*);
+int32_t rsf_core_fsr4sr_create_physical(const rsf_fsr4sr_platform*, void*, uint32_t, uint32_t, uint32_t, uint32_t,
+    rsf_fsr4_bridge**);
 uint32_t rsf_core_fsr4sr_candidate_vendor(uint32_t vendor);
 int32_t rsf_core_fsr4sr_create(const rsf_fsr4sr_platform*, const rsf_fsr4sr_request*, rsf_fsr4_bridge**);
 int32_t rsf_core_fsr4sr_create_public(const rsf_fsr4sr_platform*, const rsf_fsr4_bridge_create*, rsf_fsr4_bridge**);
