@@ -35,7 +35,7 @@ use crate::package_abi::{
     rsf_sr12, rsf_unity_frame_counters, rsf_unity_package_platform, rsf_unity_package_settings,
     rsf_unity_package_status, rsf_unity_package_view_setup,
 };
-use crate::package_views::{View, Views};
+use crate::package_views::{Recording, View, Views};
 use crate::plugin_abi::rsf_unity_native_api;
 use crate::runtime_abi::{
     RSF_FG_BACKEND_AUTO, RSF_FG_BACKEND_DLSS, RSF_FG_BACKEND_FSR3, RSF_FG_BACKEND_FSR4,
@@ -45,9 +45,10 @@ use rsf_game_sys::{
     RSF_GAME_RENDER_RECONFIGURE, rsf_camera_frame, rsf_game_cpu_event, rsf_game_host_services,
     rsf_game_render_config, rsf_game_render_pass,
 };
+use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicU32, Ordering::SeqCst};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicU32, AtomicU64, Ordering::SeqCst};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
 /// RSF_BACKEND_OK, a cast macro bindgen does not evaluate; package.cpp asserts it.
@@ -391,6 +392,61 @@ struct Package {
 }
 
 static PACKAGE: Package = Package::new();
+static NEXT_RING_EPOCH: AtomicU64 = AtomicU64::new(1);
+
+thread_local! {
+    // A bridge publishes the reset on the render thread before it forwards the pass.
+    static RECORDING: Cell<Option<(*mut c_void, Recording)>> = const { Cell::new(None) };
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_package_sr_ring_begin() -> u64 {
+    NEXT_RING_EPOCH
+        .fetch_update(SeqCst, SeqCst, |epoch| epoch.checked_add(1))
+        .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_package_sr_recording(
+    commands: *mut c_void,
+    epoch: u64,
+    slot: u32,
+    serial: u64,
+    retired_through: u64,
+) {
+    RECORDING.set(None);
+    if commands.is_null() || epoch == 0 || slot >= 3 || serial == 0 || retired_through >= serial {
+        return;
+    }
+    if retired_through != 0 {
+        PACKAGE
+            .lock_views()
+            .retire_slot(epoch, slot, retired_through);
+    }
+    RECORDING.set(Some((
+        commands,
+        Recording {
+            epoch,
+            slot,
+            serial,
+        },
+    )));
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_package_sr_ring_retired(epoch: u64) {
+    if epoch != 0 {
+        PACKAGE.lock_views().retire_ring(epoch);
+        RECORDING.with(|record| {
+            if record
+                .get()
+                .is_some_and(|(_, recording)| recording.epoch == epoch)
+            {
+                record.set(None);
+            }
+        });
+    }
+}
 
 /// Everything the C++ range-checked, in its order: the sharpening and preset leaves are only
 /// called once the fields before them passed.
@@ -639,6 +695,10 @@ impl Package {
     /// destroyed, a missing one is created, and evaluation waits for a valid camera, the end of
     /// a pending reconfiguration and a recording slot.
     fn render(&self, leaves: &Leaves, commands: *mut c_void, original: &rsf_game_render_pass) {
+        let recording = RECORDING
+            .take()
+            .filter(|(list, _)| *list == commands)
+            .map(|(_, recording)| recording);
         let mut views = self.lock_views();
         let settings = self.lock().settings;
         let mut pass = *original;
@@ -650,6 +710,11 @@ impl Package {
         if pass.flags & RSF_GAME_RENDER_RECONFIGURE != 0 {
             self.reconfigured();
             destroy_views(&mut views, leaves);
+        }
+        for sr in views.reap(pass.view_key, pass.source_frame_id) {
+            if !sr.is_null() {
+                leaves.sr_destroy(sr);
+            }
         }
         let camera = &pass.camera;
         let view = views.entry(pass.view_key);
@@ -663,15 +728,20 @@ impl Package {
         if view.sr.is_null() {
             match self.create_view(leaves, commands, &settings, camera) {
                 Some(created) => *view = created,
-                None => return,
+                None => {
+                    view.seen(pass.source_frame_id);
+                    return;
+                }
             }
         }
+        view.seen(pass.source_frame_id);
         if pass.camera_valid == 0 || self.lock().pending {
             return;
         }
         let Some(slot) = view.slot(commands) else {
             return;
         };
+        view.record(recording);
         leaves.sr_set_sharpening(view.sr, &leaves.sharpening(&settings.sharpening));
         let result = leaves.sr_evaluate(view.sr, commands, &pass, slot);
         self.evaluated(result, view.backend);

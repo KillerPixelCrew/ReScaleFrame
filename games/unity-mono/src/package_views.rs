@@ -13,8 +13,15 @@ use std::ptr::null_mut;
 
 /// rsf_sr12_evaluate's recording slots.
 const SLOTS: usize = 3;
+const IDLE_SOURCE_FRAMES: u64 = 120;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct Recording {
+    pub(super) epoch: u64,
+    pub(super) slot: u32,
+    pub(super) serial: u64,
+}
+
 pub(crate) struct View {
     /// Null until a context is created.
     pub(crate) sr: *mut rsf_sr12,
@@ -24,6 +31,9 @@ pub(crate) struct View {
     /// The backend the context was made with; zero is the spatial or native path.
     pub(crate) backend: u32,
     lists: [*mut c_void; SLOTS],
+    last_seen: u64,
+    uses: Vec<Recording>,
+    unproved: bool,
 }
 
 impl View {
@@ -33,6 +43,9 @@ impl View {
         render: (0, 0),
         backend: 0,
         lists: [null_mut(); SLOTS],
+        last_seen: 0,
+        uses: Vec::new(),
+        unproved: false,
     };
 
     /// A context made for other output extents no longer fits. A backend-zero context also
@@ -66,10 +79,30 @@ impl View {
             })?;
         Some(index as u32)
     }
+
+    pub(super) fn seen(&mut self, source: u64) {
+        self.last_seen = self.last_seen.max(source);
+    }
+
+    /// Track attempts before evaluation. Even a refusal can have recorded GPU work.
+    pub(super) fn record(&mut self, recording: Option<Recording>) {
+        let Some(recording) = recording else {
+            self.unproved = true;
+            return;
+        };
+        if let Some(last) = self
+            .uses
+            .iter_mut()
+            .find(|used| used.epoch == recording.epoch && used.slot == recording.slot)
+        {
+            last.serial = last.serial.max(recording.serial);
+        } else {
+            self.uses.push(recording);
+        }
+    }
 }
 
-/// The views by Unity view key, in first-use order. A pass's key gets an empty view on first
-/// use, as std::unordered_map::operator[] gave it; views leave the table only all together.
+/// Views by Unity view key in first-use order.
 pub(crate) struct Views(Vec<(u64, View)>);
 
 // SAFETY: the handles are Runtime SR contexts and command-list identities that package.cpp's
@@ -96,6 +129,35 @@ impl Views {
     pub(crate) fn take(&mut self) -> impl Iterator<Item = *mut rsf_sr12> {
         std::mem::take(&mut self.0)
             .into_iter()
+            .map(|(_, view)| view.sr)
+    }
+
+    pub(super) fn retire_slot(&mut self, epoch: u64, slot: u32, through: u64) {
+        for (_, view) in &mut self.0 {
+            view.uses
+                .retain(|used| used.epoch != epoch || used.slot != slot || used.serial > through);
+        }
+    }
+
+    pub(super) fn retire_ring(&mut self, epoch: u64) {
+        for (_, view) in &mut self.0 {
+            view.uses.retain(|used| used.epoch != epoch);
+        }
+    }
+
+    pub(super) fn reap(
+        &mut self,
+        current_key: u64,
+        source: u64,
+    ) -> impl Iterator<Item = *mut rsf_sr12> + '_ {
+        self.0
+            .extract_if(.., move |(key, view)| {
+                *key != current_key
+                    && view.last_seen != 0
+                    && source.saturating_sub(view.last_seen) >= IDLE_SOURCE_FRAMES
+                    && view.uses.is_empty()
+                    && !view.unproved
+            })
             .map(|(_, view)| view.sr)
     }
 }
@@ -147,5 +209,42 @@ mod tests {
             [handle::<rsf_sr12>(0x70), null_mut()]
         );
         assert!(views.entry(7).sr.is_null());
+    }
+
+    #[test]
+    fn idle_camera_contexts_require_proof_for_every_used_slot_and_epoch() {
+        let mut views = Views::new();
+        let old = views.entry(7);
+        old.sr = handle(0x70);
+        old.seen(10);
+        old.record(Some(Recording {
+            epoch: 1,
+            slot: 1,
+            serial: 3,
+        }));
+        old.record(Some(Recording {
+            epoch: 1,
+            slot: 2,
+            serial: 1,
+        }));
+        let unproved = views.entry(8);
+        unproved.sr = handle(0x80);
+        unproved.seen(11);
+        unproved.record(None);
+        let active = views.entry(9);
+        active.sr = handle(0x90);
+        active.seen(100);
+        let now = 10 + IDLE_SOURCE_FRAMES;
+
+        views.retire_slot(2, 1, 100);
+        views.retire_slot(1, 1, 2);
+        assert_eq!(views.reap(9, now).count(), 0);
+        views.retire_slot(1, 1, 3);
+        assert_eq!(views.reap(9, now).count(), 0);
+        views.retire_ring(1);
+        assert_eq!(views.reap(9, now - 1).count(), 0);
+        assert_eq!(views.reap(9, now).collect::<Vec<_>>(), [handle(0x70)]);
+        assert_eq!(views.entry(9).sr, handle(0x90));
+        assert_eq!(views.entry(8).sr, handle(0x80));
     }
 }

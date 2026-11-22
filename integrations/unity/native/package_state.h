@@ -225,6 +225,15 @@ int rsf_unity_package_plan(rsf_game_render_config* output);
    evaluates it in the slot bound to commands once the camera is valid and no reconfiguration is
    pending. */
 void rsf_unity_package_render(void* commands, const rsf_game_render_pass* pass);
+/* Allocate a nonzero epoch for the lifetime of a bridge's command ring. After a successful
+   list reset on the render thread, report the new recording and the prior serial proven
+   complete or discarded before Execute. Serial is monotonically increasing per slot.
+   No retirement is implied by the addresses of the list or fence. A checked full drain
+   may retire the entire epoch once its owner stops recording. */
+uint64_t rsf_unity_package_sr_ring_begin(void);
+void rsf_unity_package_sr_recording(void* commands, uint64_t epoch, uint32_t slot,
+    uint64_t recording, uint64_t retired_through);
+void rsf_unity_package_sr_ring_retired(uint64_t epoch);
 
 /* Presentation, outside package.cpp's mutex except where a locked export calls it. load runs at
    plugin load, before any session: it stores whether this is the Editor, reads the identity from

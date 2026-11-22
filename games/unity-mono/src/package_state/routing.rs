@@ -7,7 +7,7 @@
 //!
 //! No lock here is held across a leaf. The route runs outside package.cpp's mutex, as the C++
 //! callback did; the device lifecycle runs under it, so its state is only stored here.
-use super::{LEAVES, Leaves, PACKAGE, Package};
+use super::{LEAVES, Leaves, PACKAGE, Package, RECORDING};
 use crate::bridge_abi::RSF_UNITY_PREVIEW_SOURCE_COMMON;
 use rsf_game_sys::{RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_WINDOW, rsf_game_render_pass};
 use std::ffi::{c_int, c_void};
@@ -202,7 +202,11 @@ pub(super) unsafe extern "C" fn rsf_unity_package_route(
     if commands.is_null() || pass.is_null() {
         return 0;
     }
-    u32::from(PACKAGE.route(leaves, commands, unsafe { &*pass }, begin != 0))
+    let evaluate = PACKAGE.route(leaves, commands, unsafe { &*pass }, begin != 0);
+    if !evaluate {
+        RECORDING.set(None);
+    }
+    u32::from(evaluate)
 }
 
 #[unsafe(no_mangle)]
