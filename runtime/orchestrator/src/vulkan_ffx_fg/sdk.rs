@@ -74,7 +74,7 @@ use abi::{
     ffxQueryDescSwapchainReplacementFunctionsVK, ffxQueryGetProviderVersion, ffxReturnCode_t,
 };
 
-const MISSING_ENTRY_POINT: i32 = -5;
+use rsf_game_sys::backend_result::MISSING_ENTRY_POINT;
 const SDK_OK: ffxReturnCode_t = FFX_API_RETURN_OK as ffxReturnCode_t;
 const WSI_ABI_VERSION: u32 = 2;
 const SHADER_READ: u32 = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL.as_raw() as u32;

@@ -30,15 +30,10 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 const RSF_DLSSGVK_ABI_VERSION: u32 = 1;
-const OK: i32 = 0;
-const INVALID: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
-const NOT_COMPILED: i32 = -3;
-const MISSING_ENTRY_POINT: i32 = -5;
-const INIT_FAILED: i32 = -6;
-const NOT_SUPPORTED: i32 = -7;
-const NOT_READY: i32 = -8;
-const FEATURE_FAILED: i32 = -9;
+use rsf_game_sys::backend_result::{
+    ABI_MISMATCH, FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT as INVALID, MISSING_ENTRY_POINT,
+    NOT_COMPILED, NOT_READY, NOT_SUPPORTED, OK,
+};
 
 const WSI_ERROR: i32 = -3;
 const SUBOPTIMAL: i32 = 1000001003;
