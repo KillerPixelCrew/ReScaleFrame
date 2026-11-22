@@ -15,3 +15,7 @@ EXPORTS
     rsf_vk_sl_queue_present_synchronized
     rsf_vk_sl_vulkan_wsi_call
     rsf_vk_sl_without_dlss_g
+    rsf_vk_sl_current_frame_token
+    rsf_vk_sl_module
+    rsf_vk_sl_take_present_error
+    rsf_vk_sl_worker_timeout_epoch

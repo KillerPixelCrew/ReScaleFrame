@@ -55,10 +55,7 @@ int32_t rsf_slvk_life_initialize(const RsfSlLifecyclePlatform*, const wchar_t*, 
     uint32_t, uint32_t, uint32_t);
 int32_t rsf_slvk_life_shutdown(const RsfSlLifecyclePlatform*);
 int32_t rsf_slvk_life_unload(const RsfSlLifecyclePlatform*);
-void* rsf_slvk_life_module();
 void rsf_slvk_diagnostic_present_error(int32_t result);
-int32_t rsf_slvk_diagnostic_take_present_error();
-uint64_t rsf_slvk_diagnostic_worker_timeout_epoch();
 void rsf_slvk_log_message(uint32_t kind, const char* message);
 int32_t rsf_slvk_fg_set(const RsfSlFgPlatform*, int32_t, const RsfSlFgOptions*);
 int32_t rsf_slvk_fg_disable(const RsfSlFgPlatform*);
@@ -68,7 +65,6 @@ int32_t rsf_slvk_fg_state_details(int32_t (*)(rsf_slvk_sdk_fg_sample*), uint32_t
 int32_t rsf_slvk_sdk_call(int32_t (*)(void*), void*, int32_t inactive);
 int32_t rsf_slvk_reflex_options(int32_t (*)(const rsf_slvk_sdk_reflex_options*), int32_t mode, uint32_t limit, uint32_t limitIsFps);
 int32_t rsf_slvk_token_begin(int32_t (*)(uint32_t, uintptr_t*), uint32_t, uintptr_t*);
-uintptr_t rsf_slvk_token_current();
 int32_t rsf_slvk_token_call(uintptr_t, int32_t (*)(uintptr_t, void*), void*, int32_t inactive);
 }
 
@@ -265,8 +261,6 @@ RSF_SL_VK_EXPORT int rsf_vk_sl_initialize(const wchar_t* directory, const char* 
     uint32_t loadReflex, uint32_t loadDlssG) {
     return rsf_vk_sl_initialize_features(directory, projectId, loadReflex, loadDlssG, 0);
 }
-RSF_SL_VK_EXPORT void* rsf_vk_sl_module() { return rsf_slvk_life_module(); }
-RSF_SL_VK_EXPORT uint64_t rsf_vk_sl_worker_timeout_epoch() { return rsf_slvk_diagnostic_worker_timeout_epoch(); }
 
 /// @brief Shuts down Streamline and clears SDK function pointers/state while retaining the interposer module.
 /// @details Call after provider work is retired. In-flight token calls return busy and allow retry. Vulkan dispatch pointers can still reference interposer code until Vulkan devices/instances are destroyed. The SDK shutdown result is sticky; a nonzero result refuses later initialization and unload. After success, a later rsf_vk_sl_initialize re-runs slInit.
@@ -397,12 +391,6 @@ RSF_SL_VK_EXPORT int rsf_vk_sl_begin_frame(uint32_t frameIndex) {
     uintptr_t token = 0;
     return rsf_vk_sl_begin_frame_checked(frameIndex, &token);
 }
-/// @brief Returns the borrowed pointer to the most recently acquired SDK frame token.
-/// @details The caller must not free the token and must retain it only within the SDK frame lifetime.
-/// @return Token address, or zero before acquisition/after shutdown.
-RSF_SL_VK_EXPORT uintptr_t rsf_vk_sl_current_frame_token() {
-    return rsf_slvk_token_current();
-}
 RSF_SL_VK_EXPORT int rsf_vk_sl_token_matches(uintptr_t token, uint32_t index) {
     if (!token) return 0;
     return withFrameToken(token, [index](const sl::FrameToken& frame) {
@@ -503,11 +491,6 @@ RSF_SL_VK_EXPORT int rsf_vk_sl_disable_frame_generation_for_release() {
 /// @return SDK result, zero for no resources, or -1 when release prerequisites are missing.
 RSF_SL_VK_EXPORT int rsf_vk_sl_free_frame_generation_resources() {
     return rsf_slvk_fg_free(&fgPlatform);
-}
-/// @brief Atomically consumes the latest recorded asynchronous presentation error.
-/// @return Recorded Vulkan error code, or zero when none is pending.
-RSF_SL_VK_EXPORT int rsf_vk_sl_take_present_error() {
-    return rsf_slvk_diagnostic_take_present_error();
 }
 static int32_t readFgSample(rsf_slvk_sdk_fg_sample* output) noexcept try {
     if (!fgState) return -1;

@@ -63,12 +63,12 @@ extern "C" fn rsf_slvk_diagnostic_present_error(result: i32) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_slvk_diagnostic_take_present_error() -> i32 {
+extern "C" fn rsf_vk_sl_take_present_error() -> i32 {
     LIFECYCLE.diagnostics.take_present_error()
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_slvk_diagnostic_worker_timeout_epoch() -> u64 {
+extern "C" fn rsf_vk_sl_worker_timeout_epoch() -> u64 {
     LIFECYCLE.diagnostics.worker_timeout_epoch()
 }
 
@@ -120,7 +120,7 @@ unsafe extern "C" fn rsf_slvk_life_unload(platform: &Platform) -> i32 {
 
 /// The interposer while the SDK is initialized, otherwise null.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_slvk_life_module() -> *mut c_void {
+extern "C" fn rsf_vk_sl_module() -> *mut c_void {
     LIFECYCLE.module()
 }
 
@@ -246,7 +246,7 @@ unsafe extern "C" fn rsf_slvk_token_begin(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_slvk_token_current() -> usize {
+extern "C" fn rsf_vk_sl_current_frame_token() -> usize {
     LIFECYCLE.frame_token.current()
 }
 
