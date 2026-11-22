@@ -106,17 +106,11 @@ struct DrawSnapshotView {
     bones: PaletteView,
 }
 
-#[repr(C)]
 struct SnapshotInput {
     draw: DrawSnapshotView,
     palette_layout: u64,
-    deformation_constants: *const [f64; 4],
-    deformation_count: usize,
-    deformation_layout: u64,
-    detail: *const f64,
     domain: u8,
     kind: u8,
-    has_deformation: bool,
 }
 
 // The guarded draw capture owns the matrices through the synchronous flush.
@@ -185,13 +179,8 @@ impl GeometrySnapshotFacts {
                 bones,
             },
             palette_layout,
-            deformation_constants: ptr::null(),
-            deformation_count: 0,
-            deformation_layout: 0,
-            detail: ptr::null(),
             domain: self.domain,
             kind,
-            has_deformation: false,
         })
     }
 }
@@ -273,8 +262,6 @@ struct Snapshot<'a> {
     kind: u8,
     palette_layout: u64,
     bones: Cow<'a, [Mat4]>,
-    deformation: Option<(u64, Cow<'a, [[f64; 4]]>)>,
-    detail: Option<f64>,
 }
 
 impl Snapshot<'_> {
@@ -286,12 +273,6 @@ impl Snapshot<'_> {
             bones: Cow::Borrowed(unsafe {
                 borrow_span(input.draw.bones.data, input.draw.bones.count)
             }),
-            deformation: input.has_deformation.then(|| {
-                let values =
-                    unsafe { borrow_span(input.deformation_constants, input.deformation_count) };
-                (input.deformation_layout, Cow::Borrowed(values))
-            }),
-            detail: unsafe { input.detail.as_ref().copied() },
         }
     }
 
@@ -301,10 +282,6 @@ impl Snapshot<'_> {
             kind: self.kind,
             palette_layout: self.palette_layout,
             bones: Cow::Owned(self.bones.into_owned()),
-            deformation: self
-                .deformation
-                .map(|(layout, values)| (layout, Cow::Owned(values.into_owned()))),
-            detail: self.detail,
         }
     }
 
@@ -312,7 +289,6 @@ impl Snapshot<'_> {
         self.kind == current.kind
             && self.palette_layout == current.palette_layout
             && self.bones.len() == current.bones.len()
-            && self.deformation.is_some() == current.deformation.is_some()
     }
 
     fn draw_view(&self) -> DrawSnapshotView {

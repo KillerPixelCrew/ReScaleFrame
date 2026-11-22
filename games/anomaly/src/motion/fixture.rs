@@ -472,8 +472,6 @@ fn snapshot(world: Mat4, bones: &[Mat4]) -> Snapshot<'_> {
         },
         palette_layout: u64::from(u8::from(!bones.is_empty())),
         bones: Cow::Borrowed(bones),
-        deformation: None,
-        detail: None,
     }
 }
 
