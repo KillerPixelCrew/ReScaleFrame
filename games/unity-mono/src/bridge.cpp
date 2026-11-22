@@ -18,6 +18,9 @@
 #include <IUnityGraphics.h>
 #include <IUnityGraphicsD3D12.h>
 #endif
+#if defined(RSF_UNITY_PACKAGE_BRIDGE)
+extern "C" void rsf_unity_package_sr_slot_reset(uint32_t bridge, void* commands, uint32_t slot);
+#endif
 
 namespace {
 using Microsoft::WRL::ComPtr;
@@ -227,6 +230,11 @@ void __stdcall render(int id, void* address) noexcept try
         rsf_unity_frames_activate(0); log("Unity D3D12 device changed; adapter requires a drained restart."); return;
     }
     if (FAILED(slot.allocator->Reset()) || FAILED(slot.list->Reset(slot.allocator.Get(), nullptr))) return;
+#if defined(RSF_UNITY_PACKAGE_BRIDGE)
+    // Admission checked Unity's prior submission fence. A successful reset also proves discard
+    // of a preceding recording that never reached ExecuteCommandList.
+    rsf_unity_package_sr_slot_reset(12, slot.list.Get(), admission.slot);
+#endif
     rsf_game_render_pass pass{}; make_pass(entry.packet, pass);
     if (hudless) pass.role = RSF_GAME_RENDER_FINAL_SCENE;
     if (changing) { pass.flags |= RSF_GAME_RENDER_RECONFIGURE; pass.camera_valid = 0; }

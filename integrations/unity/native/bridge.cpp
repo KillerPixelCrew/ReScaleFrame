@@ -476,7 +476,11 @@ void rsf_unity_package_bridge_finish_retirement(bool commit) noexcept
     if (commit && rsf_unity_package_is_editor()) rsf_unity_preview_release();
     if (vulkan) rsf_unity_vulkan_finish_retirement(commit);
     if (!commit) return;
-    if (renderer == kUnityGfxRendererD3D12) { rsf_unity_d3d12_release(); return; }
+    if (renderer == kUnityGfxRendererD3D12) {
+        rsf_unity_d3d12_release();
+        rsf_unity_package_sr_slots_released(12);
+        return;
+    }
     std::lock_guard<std::mutex> lock(guard);
     // The Vulkan bridge releases the ring itself, only together with the objects that used it.
     // Otherwise the D3D11 record destroys its surfaces, slots, fences, queue and devices, then
