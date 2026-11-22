@@ -5,17 +5,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#ifdef __cplusplus
-#define RSF_FALLOUT4_RENDER_ABI_BEGIN namespace rsf::fallout4 { extern "C" {
-#define RSF_FALLOUT4_RENDER_ABI_END } }
-#define RSF_FALLOUT4_RENDER_NOEXCEPT noexcept
-#define RSF_FALLOUT4_RENDER_ASSERT(condition) static_assert(condition)
-#else
+// The records and callbacks are plain C. The macros stay so the declarations keep their shape.
 #define RSF_FALLOUT4_RENDER_ABI_BEGIN
 #define RSF_FALLOUT4_RENDER_ABI_END
 #define RSF_FALLOUT4_RENDER_NOEXCEPT
 #define RSF_FALLOUT4_RENDER_ASSERT(condition) _Static_assert(condition, #condition)
-#endif
 
 RSF_FALLOUT4_RENDER_ABI_BEGIN
 

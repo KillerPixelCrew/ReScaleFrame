@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! Imagespace, Effects and TAA order with fake leaves standing in for render_hooks.cpp.
+//! Imagespace, Effects and TAA order with fake leaves standing in for render_hooks.c.
 use super::*;
 use crate::render_hooks::recovery::fixtures::IDLE;
 use std::cell::RefCell;

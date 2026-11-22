@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Private boundary between the Rust resolution owner and typed native calls in resolution.cpp.
+// Private boundary between the Rust resolution owner and typed native calls in resolution.c.
 #include "render_records.h"
 #include <rescaleframe/game_renderer.h>
 

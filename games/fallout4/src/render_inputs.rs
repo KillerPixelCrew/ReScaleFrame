@@ -49,7 +49,7 @@ const DELTA_RVA: usize = 0x339f430;
 /// The guarded SR call site the raster pass is keyed by.
 const RASTER_PASS_RVA: usize = 0x21fa283;
 
-// Enumerators compared by value; render_inputs.cpp asserts each against the SDK headers.
+// Enumerators compared by value; render_inputs.c asserts each against the SDK headers.
 const DXGI_FORMAT_R11G11B10_FLOAT: u32 = 26;
 const DXGI_FORMAT_R16G16_FLOAT: u32 = 34;
 const DXGI_FORMAT_R32_TYPELESS: u32 = 39;

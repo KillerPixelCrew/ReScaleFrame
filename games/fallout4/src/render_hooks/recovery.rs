@@ -4,10 +4,10 @@
 //! Rust owns the Runtime reduced-frame token through RESERVE, SEAL, FINISH, RETIRE and CANCEL,
 //! the verdict taken from each host reply, the five-surface recovery plan, the output owner
 //! identity recorded at reservation, the refusal and receipt budgets, and the retention counter
-//! that keeps the render hooks busy while a token is owned. render_hooks.cpp keeps the typed
+//! that keeps the render hooks busy while a token is owned. render_hooks.c keeps the typed
 //! raster reads, COM identity, the held and candidate leases, the guarded Runtime call and the
 //! World flags (NativeRecoveryLeaves in render_hooks_platform.h). The state is per thread, as the
-//! C++ World is. See docs/research/rust-fallout4-render-hooks.md.
+//! native World is. See docs/research/rust-fallout4-render-hooks.md.
 
 pub(super) use crate::render_records::NativeRecoveryLease as Lease;
 use crate::resolution::owns_full_output;

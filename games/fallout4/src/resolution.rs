@@ -1075,7 +1075,7 @@ unsafe extern "C" fn rsf_fallout4_resolution_report(
     report: Report,
 ) {
     let error = unsafe { GetLastError() };
-    // The guarded C++ receipt leaf contains foreign exceptions. Restore the
+    // The guarded C receipt leaf contains foreign exceptions. Restore the
     // caller's error after all receipt work, including early-refusal paths.
     unsafe { report_state(stage, pass, context, published, result, report) };
     unsafe { SetLastError(error) };

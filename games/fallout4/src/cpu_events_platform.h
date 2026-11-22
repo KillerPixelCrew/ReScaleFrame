@@ -1,15 +1,11 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Internal boundary between the Fallout 4 CPU event leaves (cpu_events.cpp) and their Rust owner
+// Internal boundary between the Fallout 4 CPU event leaves (cpu_events.c) and their Rust owner
 // (cpu_events.rs). Not a DLL ABI: both sides link into ReScaleFrame.Game.Fallout4.dll.
 // tools/generate-rust-bindings.py generates src/cpu_abi.rs from this header.
 #include <stdbool.h>
 #include <stdint.h>
 #include <rescaleframe/game_api.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 // The CPU source identity borrowed during the guarded Swap.
 typedef struct rsf_fallout4_cpu_identity {
@@ -41,13 +37,12 @@ typedef struct rsf_fallout4_cpu_scope {
     uint64_t state[RSF_FALLOUT4_CPU_SCOPE_WORDS];
 } rsf_fallout4_cpu_scope;
 
-// Linked native leaves. Delivery takes the Rust owner's validated nonnull callback.
-#ifdef __cplusplus
-void* rsf_fallout4_cpu_detour(uint32_t hook) noexcept;
-void* rsf_fallout4_cpu_peek_thunk(void) noexcept;
-void rsf_fallout4_cpu_finish_render_scope(void) noexcept;
-bool rsf_fallout4_cpu_deliver(rsf_game_cpu_event_fn callback, void* user, const rsf_game_cpu_event* event) noexcept;
-#endif
+// Linked native leaves. Delivery takes the Rust owner's validated nonnull callback. The detours and
+// the message thunk are in cpu_events.c; the post-Swap scope end is in render_hooks.c.
+void* rsf_fallout4_cpu_detour(uint32_t hook);
+void* rsf_fallout4_cpu_peek_thunk(void);
+void rsf_fallout4_cpu_finish_render_scope(void);
+bool rsf_fallout4_cpu_deliver(rsf_game_cpu_event_fn callback, void* user, const rsf_game_cpu_event* event);
 
 // Rust owner entry points.
 void* rsf_fallout4_cpu_original(uint32_t hook);
@@ -68,8 +63,8 @@ void rsf_fallout4_cpu_consume_exit(rsf_fallout4_cpu_scope* scope);
 void rsf_fallout4_cpu_player_controls_enter(uintptr_t caller, void* receiver, void* events,
     rsf_fallout4_cpu_scope* scope);
 void rsf_fallout4_cpu_player_controls_exit(rsf_fallout4_cpu_scope* scope);
-// Swap exit runs after a returned native Swap; leave runs from the shell's destructor on return
-// and on a native unwind and closes the scope.
+// Swap exit runs after a returned native Swap and leave then closes the scope; a native unwind
+// runs cancel instead.
 void rsf_fallout4_cpu_swap_enter(uintptr_t caller, void* main, rsf_fallout4_cpu_scope* scope);
 void rsf_fallout4_cpu_swap_exit(rsf_fallout4_cpu_scope* scope);
 void rsf_fallout4_cpu_swap_leave(rsf_fallout4_cpu_scope* scope);
@@ -94,25 +89,3 @@ bool rsf_fallout4_cpu_render_source_is_current(const rsf_fallout4_cpu_identity* 
 bool rsf_fallout4_cpu_begin_present_phase(const rsf_fallout4_cpu_identity* identity,
     uint64_t native_frame, uint64_t window);
 void rsf_fallout4_cpu_end_present_phase(const rsf_fallout4_cpu_identity* identity);
-
-#ifdef __cplusplus
-}
-
-namespace rsf::fallout4 {
-// The CPU event owner is Rust (cpu_events.rs). Identity is borrowed during the guarded Swap.
-// A proved PlayerControls consumer may adopt a reserved engine-buffer poll source before Swap;
-// a selected mode1 worker can hand one consumed successor through its native post-Swap join to
-// the next ordinary world. Otherwise Swap opens a rendered source. No simulation/GPU stage is
-// implied. Native RAWINPUT, selected removed window messages and delivered gamepad batches are
-// separate unframed receipts. They never assert a physical sample. The executable-local message
-// thunk and its saved continuation stay pinned after stop, including when a later IAT owner
-// retains our address.
-using CpuIdentity = rsf_fallout4_cpu_identity;
-
-inline CpuIdentity current_cpu_identity() noexcept {
-    rsf_fallout4_cpu_identity value{};
-    rsf_fallout4_cpu_current_identity(&value);
-    return value;
-}
-}
-#endif

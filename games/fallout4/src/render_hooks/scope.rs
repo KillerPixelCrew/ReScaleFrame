@@ -5,7 +5,7 @@
 //! at WorldBegin admission, the FRAME pass identity and keys, FRAME then SUBMISSION begin, the
 //! balanced SUBMISSION close before the outer Present or after Swap, NO_FG on refusal, the
 //! WINDOW then FRAME close order, the recovery, auxiliary and resolution continuation after Swap
-//! and the conditional World reset. render_hooks.cpp keeps the typed native owner read, the COM
+//! and the conditional World reset. render_hooks.c keeps the typed native owner read, the COM
 //! identity checks and the Context and chain leases, the scope counters, the guarded auxiliary
 //! and resolution calls, the guarded pass callback, the shared diagnostic budget, the resolution
 //! receipt and the World fields (NativeScopeLeaves in render_hooks_platform.h). Refusal, source

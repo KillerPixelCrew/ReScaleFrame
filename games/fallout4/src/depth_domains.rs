@@ -44,7 +44,7 @@ type ReportFn = unsafe extern "C" fn(*const c_char);
 const GRAPHICS_RVA: usize = 0x3d871a0;
 const TARGETS_RVA: usize = 0x2f4d750;
 
-// Enumerators compared by value; depth_domains.cpp asserts each against the SDK headers.
+// Enumerators compared by value; depth_domains.c asserts each against the SDK headers.
 const DXGI_FORMAT_R24G8_TYPELESS: u32 = 44;
 const DXGI_FORMAT_D24_UNORM_S8_UINT: u32 = 45;
 const DXGI_FORMAT_R24_UNORM_X8_TYPELESS: u32 = 46;

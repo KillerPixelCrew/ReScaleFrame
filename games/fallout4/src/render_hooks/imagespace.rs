@@ -5,7 +5,7 @@
 //! Effects range inside imagespace, the World's imagespace entry, the before and after Effects
 //! sequence around the SR seam (publication.rs), the imagespace exit order of recovery
 //! retirement, auxiliary drain and output resolution with its receipts and refusals, and the TAA
-//! exclusion predicate with its bounded receipt. render_hooks.cpp keeps each typed detour, the
+//! exclusion predicate with its bounded receipt. render_hooks.c keeps each typed detour, the
 //! original calls, the return addresses, the LastError saves and restores, the typed native
 //! manager read, the guarded auxiliary and resolution calls, the shared diagnostic budget, the
 //! resolution receipt, the World fields and the scope guard that runs the imagespace exit when

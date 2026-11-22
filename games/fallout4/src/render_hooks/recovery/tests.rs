@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Retirement of a finished token after the imagespace exit cleared the World's full-output flag,
-//! with fake leaves standing in for render_hooks.cpp.
+//! with fake leaves standing in for render_hooks.c.
 use super::*;
 use crate::{RSF_ERROR_NOT_READY, RSF_OK};
 use rsf_game_sys::{rsf_game_render_pass, rsf_result};

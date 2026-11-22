@@ -8,7 +8,7 @@
 //! overlapping DR refusal and ownership transfer, the DR configuration admission on the current
 //! source, screen and leased owner with its refusal, the nested prepass selection, the snapshot
 //! invalidation and interruption before the original prepass, and the same-source raster and
-//! depth capture after it with its refusal. render_hooks.cpp keeps each typed detour, the
+//! depth capture after it with its refusal. render_hooks.c keeps each typed detour, the
 //! original calls, the return addresses, the LastError saves and restores, the nested prepass
 //! counter and its guard, the typed screen, owner, resolution and depth reads, the World fields
 //! and snapshots (NativeProducerLeaves in render_hooks_platform.h). Refusal and source checks use

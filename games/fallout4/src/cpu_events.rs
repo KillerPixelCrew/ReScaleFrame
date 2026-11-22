@@ -12,8 +12,8 @@
 //! a physical sample.
 //!
 //! The integration reports what the engine did; the Runtime decides pacing, marker meaning and
-//! vendors. cpu_events.cpp keeps the typed detour shells, which call each original engine function
-//! through its MinHook trampoline on their own C++ frames between the entry and exit decisions
+//! vendors. cpu_events.c keeps the typed detour shells, which call each original engine function
+//! through its MinHook trampoline on their own C frames between the entry and exit decisions
 //! here, the guarded host callback and the resident PeekMessageA thunk.
 mod handoff;
 mod native;
@@ -1612,12 +1612,12 @@ fn end_worker_consumer() {
 // ---------------------------------------------------------------------------------------------
 // Detour entry and exit decisions.
 //
-// cpu_events.cpp keeps every native shell. A shell captures its return address and the thread's
+// cpu_events.c keeps every native shell. A shell captures its return address and the thread's
 // last error, calls the entry decision here, restores that error, calls the original through its
-// typed trampoline on its own C++ frame, captures the native last error, calls the exit decision
+// typed trampoline on its own C frame, captures the native last error, calls the exit decision
 // here and restores the native error. No Rust frame is on the stack during an engine call, so a
-// native unwind passes only through the C++ shells. Their destructors retire the entry without
-// observing a successful native return.
+// native C++ unwind passes only through the C shells. Their termination handlers retire the entry
+// without observing a successful native return.
 //
 // The scope is the shell's stack receipt for one call. The entry writes it with its hook tag;
 // the exit consumes it and refuses a receipt of another hook.

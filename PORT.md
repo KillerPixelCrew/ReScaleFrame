@@ -2300,11 +2300,11 @@ Port session creation, CPU event routing and worker handoff. Address the worker 
 
 **Port files (8)**
 
-- [ ] [games/fallout4/src/cpu_events.cpp](games/fallout4/src/cpu_events.cpp)
+- [x] [games/fallout4/src/cpu_events.cpp](games/fallout4/src/cpu_events.cpp) (C++ deleted; the ten detour shells and the PeekMessageA thunk are now the C11 leaf `cpu_events.c`, which runs each exit in a `__finally` and delivers through the shared foreign-exception filter in `native_guard.h`)
 - [x] [games/fallout4/src/cpu_events.h](games/fallout4/src/cpu_events.h)
 - [x] [games/fallout4/src/cpu_events_platform.h](games/fallout4/src/cpu_events_platform.h)
 - [x] [games/fallout4/src/fallout4_platform.h](games/fallout4/src/fallout4_platform.h)
-- [ ] [games/fallout4/src/host_boundary.cpp](games/fallout4/src/host_boundary.cpp) (typed creation call and foreign exception guards)
+- [x] [games/fallout4/src/host_boundary.cpp](games/fallout4/src/host_boundary.cpp) (typed creation call and foreign exception guards; C++ deleted, now the C11 leaf `host_boundary.c` with `__try` guards filtered to the C++ exception code, and the creation call keeps its uncaught noexcept outcome)
 - [x] [games/fallout4/src/native_creation.cpp](games/fallout4/src/native_creation.cpp)
 - [x] [games/fallout4/src/native_creation.h](games/fallout4/src/native_creation.h)
 - [x] [games/fallout4/src/plugin.cpp](games/fallout4/src/plugin.cpp)
@@ -2346,17 +2346,17 @@ Port camera, depth domains, render-input selection and resolution recovery with 
 **Port files (13)**
 
 - [x] [games/fallout4/src/camera.h](games/fallout4/src/camera.h)
-- [ ] [games/fallout4/src/depth_domains.cpp](games/fallout4/src/depth_domains.cpp)
+- [x] [games/fallout4/src/depth_domains.cpp](games/fallout4/src/depth_domains.cpp) (C++ deleted; the receipt formatters are the C11 leaf `depth_domains.c`)
 - [x] [games/fallout4/src/depth_domains.h](games/fallout4/src/depth_domains.h)
 - [x] [games/fallout4/src/depth_domains_platform.h](games/fallout4/src/depth_domains_platform.h)
 - [x] [games/fallout4/src/native_input_state.h](games/fallout4/src/native_input_state.h)
-- [ ] [games/fallout4/src/render_inputs.cpp](games/fallout4/src/render_inputs.cpp)
-- [ ] [games/fallout4/src/render_inputs.h](games/fallout4/src/render_inputs.h)
+- [x] [games/fallout4/src/render_inputs.cpp](games/fallout4/src/render_inputs.cpp) (C++ deleted; the reader receipts, slot accessor and lease transfer are the C11 leaf `render_inputs.c`)
+- [x] [games/fallout4/src/render_inputs.h](games/fallout4/src/render_inputs.h) (only C declarations now: the `NativeInputs` lease holds raw COM pointers and moves through `rsf_fallout4_native_inputs_release` and `_move`)
 - [x] [games/fallout4/src/render_inputs_platform.h](games/fallout4/src/render_inputs_platform.h)
-- [ ] [games/fallout4/src/resolution.cpp](games/fallout4/src/resolution.cpp)
+- [x] [games/fallout4/src/resolution.cpp](games/fallout4/src/resolution.cpp) (C++ deleted; the guarded Runtime calls and the receipt text are the C11 leaf `resolution.c`)
 - [x] [games/fallout4/src/resolution.h](games/fallout4/src/resolution.h)
 - [x] [games/fallout4/src/resolution_platform.h](games/fallout4/src/resolution_platform.h)
-- [ ] [games/fallout4/src/screen.cpp](games/fallout4/src/screen.cpp)
+- [x] [games/fallout4/src/screen.cpp](games/fallout4/src/screen.cpp) (C++ deleted; the two menu query guards are the C11 leaf `screen.c`)
 - [x] [games/fallout4/src/screen.h](games/fallout4/src/screen.h)
 
 **Fixtures (2)**
@@ -2398,7 +2398,7 @@ Port hook lifetime, render scopes, imagespace, publication and rollback in their
 
 **Port files (3)**
 
-- [ ] [games/fallout4/src/render_hooks.cpp](games/fallout4/src/render_hooks.cpp)
+- [x] [games/fallout4/src/render_hooks.cpp](games/fallout4/src/render_hooks.cpp) (C++ deleted; the eight detours, the thread-local World with its COM leases and the guarded Runtime calls are the C11 leaf `render_hooks.c`)
 - [x] [games/fallout4/src/render_hooks.h](games/fallout4/src/render_hooks.h)
 - [x] [games/fallout4/src/render_hooks_platform.h](games/fallout4/src/render_hooks_platform.h)
 

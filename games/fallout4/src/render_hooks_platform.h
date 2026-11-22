@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Private boundary between render_hooks.cpp and its Rust owner (render_hooks.rs): the render hook
+// Private boundary between render_hooks.c and its Rust owner (render_hooks.rs): the render hook
 // lifecycle, the ordinary World and outer Present guards, the reduced-render recovery
 // transaction (render_hooks/recovery.rs), SR and HUDless publication
 // (render_hooks/publication.rs), the FRAME, SUBMISSION and WINDOW scope
@@ -14,7 +14,7 @@ typedef struct rsf_d3d11_auxiliary_surface rsf_d3d11_auxiliary_surface;
 
 RSF_FALLOUT4_RENDER_ABI_BEGIN
 // Detours in creation and enable order. Rust owns each record's RVA, expected entry bytes and
-// created state; render_hooks.cpp owns the typed detour and its typed trampoline.
+// created state; render_hooks.c owns the typed detour and its typed trampoline.
 enum {
     RenderHookDynamicResolution = 0, // void(void*, void*, void*, void*, void*)
     RenderHookPrepass = 1,           // void()
@@ -27,7 +27,7 @@ enum {
     RenderHookCount = 8
 };
 
-// Runtime exports Rust resolved by name, null when absent. C++ keeps them typed for its callbacks.
+// Runtime exports Rust resolved by name, null when absent. C keeps them typed for its callbacks.
 typedef struct NativeRenderExports {
     void* upscale_auxiliaries;
     void* restore_auxiliaries;
@@ -102,7 +102,7 @@ RSF_FALLOUT4_RENDER_ASSERT(sizeof(NativeWorld) == 104 && offsetof(NativeWorld, p
     offsetof(NativeWorld, full_output_resolved) == 102);
 
 // Reduced-render recovery. Rust owns the Runtime reduced-frame token, its verdicts, the surface
-// plan, the reserved output owner, the receipt budgets and the owned-token count. C++ keeps the
+// plan, the reserved output owner, the receipt budgets and the owned-token count. C keeps the
 // typed raster reads, COM identity, the held and candidate leases, the guarded Runtime call and
 // the World flags. Every leaf acts on the calling thread's World.
 enum { RecoverySurfaceCount = 5 };
@@ -145,7 +145,7 @@ RSF_FALLOUT4_RENDER_ASSERT(sizeof(NativeRecoveryLeaves) == 15 * sizeof(void*));
 
 // SR and HUDless publication (render_hooks/publication.rs). Rust owns the admission, refusals,
 // pass identity and roles, the SR-off decision, the screen verdict, the callback order and the
-// output resolution calls. C++ keeps the World fields, SR references and guarded
+// output resolution calls. C keeps the World fields, SR references and guarded
 // Runtime calls. Rust owns the HUDless framebuffer through the WINDOW handoff.
 typedef struct NativePublicationInputs {
     const rsf_game_render_pass* pass;
@@ -199,7 +199,7 @@ RSF_FALLOUT4_RENDER_ASSERT(sizeof(NativePublicationLeaves) == 21 * sizeof(void*)
 // lease verdict, the FRAME pass identity and keys, FRAME then SUBMISSION begin, the balanced
 // SUBMISSION close before Present or after Swap, NO_FG on refusal, the WINDOW then FRAME close
 // order, the recovery, auxiliary and resolution continuation and the conditional World reset.
-// C++ keeps the typed owner read, COM identity and the Context and chain leases, the scope
+// C keeps the typed owner read, COM identity and the Context and chain leases, the scope
 // counters, the guarded auxiliary and resolution calls, the guarded pass callback and receipts and
 // the World fields. Rust also uses the recovery leaves' report, refuse and same_source and retires
 // recovery through them.
@@ -250,7 +250,7 @@ RSF_FALLOUT4_RENDER_ASSERT(sizeof(NativeScopeLeaves) == 16 * sizeof(void*));
 // Imagespace, Effects and TAA seams (render_hooks/imagespace.rs). Rust owns the verified caller
 // and argument selection, the imagespace entry, the before and after Effects sequence around the
 // SR seam, the imagespace exit order of recovery RETIRE, auxiliary drain and output resolution
-// with its receipts and refusals, and the TAA exclusion predicate with its bounded receipt. C++
+// with its receipts and refusals, and the TAA exclusion predicate with its bounded receipt. C
 // keeps the typed detours, the original calls, the return addresses, the LastError saves and
 // restores, the typed native manager read, the guarded auxiliary and resolution calls, the World
 // fields and the scope guard that runs the imagespace exit when the original returns or unwinds.
@@ -286,7 +286,7 @@ RSF_FALLOUT4_RENDER_ASSERT(sizeof(NativeImagespaceLeaves) == 8 * sizeof(void*));
 // after the native viewport intent and its refusal, the HUDless receipt and seam, the depth
 // invalidation before DR, the overlapping DR refusal and transfer, the DR configuration admission
 // on the screen and leased owner with its refusal, the nested prepass selection, invalidation and
-// interruption, and the same-source raster and depth capture with its refusal. C++ keeps the typed
+// interruption, and the same-source raster and depth capture with its refusal. C keeps the typed
 // detours, the original calls, the return addresses, the LastError saves and restores, the nested
 // prepass counter and its guard, the typed screen, owner, resolution and depth reads, and the
 // World fields and snapshots. Rust also uses the recovery leaves' refuse and same_source, and the

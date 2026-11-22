@@ -291,8 +291,8 @@ fn camera_equals(camera: usize, index: usize) -> Option<bool> {
     Some(read::<usize>(slot)? == current)
 }
 
-/// The verified entry points run on the engine callback. The C++ leaves contain
-/// exceptions from the two native menu calls. A mismatched name retains the facts
+/// The verified entry points run on the engine callback. The C leaves contain
+/// foreign C++ exceptions from the two native menu calls. A mismatched name retains the facts
 /// from earlier menus and skips all later calls.
 fn observe(base: usize, ui: usize, camera: usize) -> Option<(u32, Option<u16>)> {
     let mut facts = 0;

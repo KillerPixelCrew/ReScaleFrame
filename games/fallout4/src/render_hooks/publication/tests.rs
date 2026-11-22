@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! SR and HUDless callback order with fake leaves standing in for render_hooks.cpp.
+//! SR and HUDless callback order with fake leaves standing in for render_hooks.c.
 use super::*;
 use crate::render_hooks::recovery::fixtures::IDLE;
 use std::cell::RefCell;

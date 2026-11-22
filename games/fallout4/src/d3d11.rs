@@ -54,7 +54,7 @@ pub(crate) fn viewport(context: &ID3D11DeviceContext) -> (u32, u32, [f32; 6]) {
 }
 
 // These leaves borrow live interfaces for the duration of a native render callback.
-// The World and candidate leases remain owned by the C++ shell.
+// The World and candidate leases remain owned by the C shell.
 
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_fallout4_render_same_object(

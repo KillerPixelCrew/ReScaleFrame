@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! Viewport, DR and prepass order with fake leaves standing in for render_hooks.cpp.
+//! Viewport, DR and prepass order with fake leaves standing in for render_hooks.c.
 use super::*;
 use crate::render_hooks::recovery::fixtures::IDLE;
 use std::cell::RefCell;

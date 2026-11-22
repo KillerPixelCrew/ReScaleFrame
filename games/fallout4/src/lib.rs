@@ -7,7 +7,8 @@
 //! admission, the reduced-render recovery transaction and SR and HUDless publication, and
 //! render-input admission with its camera history and leased passes.
 //!
-//! Native leaves stay in C++ and reach this crate through linked host and CPU functions
+//! Native leaves stay in C11 (host_boundary.c, cpu_events.c, render_hooks.c, render_inputs.c, resolution.c,
+//! screen.c and depth_domains.c) and reach this crate through linked host and CPU functions
 //! (fallout4_platform.h and cpu_events_platform.h), the render hook
 //! leaves (render_hooks_platform.h), and the linked depth-domain and render-input diagnostics:
 //! the typed detour shells with
@@ -71,7 +72,7 @@ const EXECUTABLE_SHA256: &CStr =
 const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
 const PENDING: &CStr = c"Guarded native/reduced SR callbacks; game quality, FG admission and measured latency pending validation.";
 
-/// A native leaf threw; the lifecycle entry reports RSF_ERROR_NOT_READY as the C++ catch did.
+/// A native leaf threw; the lifecycle entry reports RSF_ERROR_NOT_READY as the former native catch did.
 pub(crate) struct Threw;
 
 /// Operations provided by the linked native guards and MinHook.

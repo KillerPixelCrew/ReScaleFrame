@@ -7,7 +7,7 @@
 //! end of the SR step, every refusal and its World refusal, the FRAME/SUBMISSION lease and
 //! producer comparisons, the pass identity and role, the SR-off decision, the screen verdict, the
 //! FG_INPUTS, FINAL_SCENE and WINDOW callback order, the scalar identity kept after FG input
-//! publication, the scoped output resolution calls and their receipts. render_hooks.cpp keeps the
+//! publication, the scoped output resolution calls and their receipts. render_hooks.c keeps the
 //! SR input references, engine depth and screen reads, Runtime exception guards and
 //! the World fields (NativePublicationLeaves in
 //! render_hooks_platform.h). See docs/research/rust-fallout4-render-hooks.md.
