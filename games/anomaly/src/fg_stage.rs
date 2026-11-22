@@ -840,7 +840,10 @@ pub(crate) unsafe fn reload_capture(ini: *const u16) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_fg_set_overlay_sink(sink: rsf_anomaly_fg_overlay_present, user: Raw) {
+pub(crate) extern "C" fn rsf_anomaly_fg_set_overlay_sink(
+    sink: rsf_anomaly_fg_overlay_present,
+    user: Raw,
+) {
     let _ = OVERLAY.set((sink, user as usize));
 }
 
@@ -902,7 +905,7 @@ extern "C" fn rsf_anomaly_fg_stage_input_begin(native_frame: u32) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_fg_stage_input_received(kinds: u32, message: u32) {
+pub(crate) extern "C" fn rsf_anomaly_fg_stage_input_received(kinds: u32, message: u32) {
     let Some(stage) = installed() else { return };
     let (phase, source) = {
         let engine = stage.engine.lock().unwrap();

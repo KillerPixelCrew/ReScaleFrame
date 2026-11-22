@@ -356,7 +356,7 @@ pub(crate) fn motion_decode_params() -> rsf_motion_decode_params {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_motion_decode_params(out: &mut rsf_motion_decode_params) {
+pub(crate) extern "C" fn rsf_anomaly_sr_motion_decode_params(out: &mut rsf_motion_decode_params) {
     *out = motion_decode_params();
 }
 

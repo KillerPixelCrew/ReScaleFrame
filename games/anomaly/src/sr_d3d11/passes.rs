@@ -130,7 +130,7 @@ impl Compiler<'_> {
     }
 }
 
-pub(super) struct Pass {
+pub(crate) struct Pass {
     platform: &'static Platform,
     pub(super) kind: u32,
     vertex: Lease,
@@ -352,12 +352,12 @@ impl Pass {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_temporal_ready(owner: Option<&Pass>) -> u32 {
+pub(crate) extern "C" fn rsf_anomaly_sr_temporal_ready(owner: Option<&Pass>) -> u32 {
     u32::from(owner.is_some_and(|pass| pass.temporal.is_some()))
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_run_pass(
+pub(crate) extern "C" fn rsf_anomaly_sr_run_pass(
     owner: Option<&Pass>,
     context: Ptr,
     kind: u32,

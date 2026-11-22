@@ -10,15 +10,15 @@ use std::ptr::{from_ref, null, null_mut};
 use targets::{TwinBatch, TwinBatchInfo, allocate_twins};
 
 #[cfg(windows)]
-mod native;
+pub(crate) mod native;
 #[cfg(all(windows, feature = "sr-fixtures"))]
 mod roundtrip_device;
 #[cfg(all(windows, feature = "sr-fixtures"))]
 mod temporal_device;
 #[cfg(windows)]
 pub(crate) use native::texture_format;
-mod passes;
-mod targets;
+pub(crate) mod passes;
+pub(crate) mod targets;
 #[cfg(test)]
 mod tests;
 pub(crate) use passes::DrawViews;
@@ -128,7 +128,7 @@ fn pointer(lease: &Option<Lease>) -> Ptr {
 // Serialized by the stage lock. The native SwapHost holds one opaque
 // handle, and a frame may borrow the resulting views until it retires them.
 #[derive(Default)]
-struct StageResources {
+pub(crate) struct StageResources {
     pass: Option<Pass>,
     twins: Option<TwinBatch>,
     twin_bytes: u64,
@@ -136,7 +136,7 @@ struct StageResources {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_stage_make_twins(
+pub(crate) extern "C" fn rsf_anomaly_sr_stage_make_twins(
     handle: &mut *mut StageResources,
     platform: &'static Platform,
     device: Ptr,
@@ -184,7 +184,7 @@ extern "C" fn rsf_anomaly_sr_stage_make_twins(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_stage_retire_twins(
+pub(crate) extern "C" fn rsf_anomaly_sr_stage_retire_twins(
     resources: Option<&mut StageResources>,
     refs: unsafe extern "C" fn(Ptr) -> u32,
 ) {
@@ -194,28 +194,30 @@ extern "C" fn rsf_anomaly_sr_stage_retire_twins(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_stage_reset_pass(resources: Option<&mut StageResources>) {
+pub(crate) extern "C" fn rsf_anomaly_sr_stage_reset_pass(resources: Option<&mut StageResources>) {
     if let Some(resources) = resources {
         resources.pass = None;
     }
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_stage_pass(resources: Option<&StageResources>) -> *const Pass {
+pub(crate) extern "C" fn rsf_anomaly_sr_stage_pass(
+    resources: Option<&StageResources>,
+) -> *const Pass {
     resources
         .and_then(|resources| resources.pass.as_ref())
         .map_or(null(), from_ref)
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_stage_depth(resources: Option<&StageResources>) -> Ptr {
+pub(crate) extern "C" fn rsf_anomaly_sr_stage_depth(resources: Option<&StageResources>) -> Ptr {
     resources
         .and_then(|resources| resources.twins.as_ref())
         .map_or(null_mut(), TwinBatch::depth_texture)
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_stage_resource_stats(
+pub(crate) extern "C" fn rsf_anomaly_sr_stage_resource_stats(
     resources: Option<&StageResources>,
     bytes: &mut u64,
     refs: &mut u64,

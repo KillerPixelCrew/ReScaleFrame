@@ -35,10 +35,7 @@ fn main() {
     let minhook = std::env::var("DEP_MINHOOK_INCLUDE").expect("rsf-minhook-sys include directory");
     leaf(
         "rsf_ac7_capture_trampolines",
-        &[
-            "src/motion_capture_trampolines.c",
-            "src/ac7_hooks.c",
-        ],
+        &["src/motion_capture_trampolines.c", "src/ac7_hooks.c"],
         &["include", "src", "../../sdk/game/include", &minhook],
     );
 }

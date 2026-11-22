@@ -12,7 +12,7 @@ mod foliage;
 #[cfg(all(windows, feature = "motion-hooks-fixture"))]
 mod hook_fixture;
 #[cfg(windows)]
-mod stage;
+pub(crate) mod stage;
 #[cfg(all(windows, feature = "motion-binder-fixture"))]
 pub(crate) use stage::abi::FoliageLayout;
 #[cfg(any(windows, test))]

@@ -192,7 +192,11 @@ impl<'a> Candidate<'a> {
     }
 }
 
-#[cfg(any(test, feature = "motion-binder-fixture", feature = "motion-device-fixture"))]
+#[cfg(any(
+    test,
+    feature = "motion-binder-fixture",
+    feature = "motion-device-fixture"
+))]
 pub(super) fn parse(text: &[u8]) -> Result<Manifest, String> {
     let mut namespace: &[u8] = &[];
     let mut candidate = Candidate::default();

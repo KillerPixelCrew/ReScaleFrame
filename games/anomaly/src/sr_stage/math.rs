@@ -250,27 +250,27 @@ impl BurstGate {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_clamp_mip_offset(value: f32) -> f32 {
+pub(crate) extern "C" fn rsf_anomaly_sr_clamp_mip_offset(value: f32) -> f32 {
     clamp_mip_offset(value)
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_mip_delta(render: u32, output: u32, offset: f32) -> f32 {
+pub(crate) extern "C" fn rsf_anomaly_sr_mip_delta(render: u32, output: u32, offset: f32) -> f32 {
     mip_delta(render, output, offset)
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_phase_count(render: u32, output: u32) -> u32 {
+pub(crate) extern "C" fn rsf_anomaly_sr_phase_count(render: u32, output: u32) -> u32 {
     phase_count(render, output)
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_jitter_sample_at(index: u32, phases: u32) -> Sample {
+pub(crate) extern "C" fn rsf_anomaly_sr_jitter_sample_at(index: u32, phases: u32) -> Sample {
     jitter_sample(index, phases)
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_sequence_next(
+pub(crate) extern "C" fn rsf_anomaly_sr_sequence_next(
     sequence: &mut JitterSequence,
     dimensions: &[u32; 4],
     generation: u64,
@@ -280,7 +280,7 @@ extern "C" fn rsf_anomaly_sr_sequence_next(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_next_jitter(
+pub(crate) extern "C" fn rsf_anomaly_sr_next_jitter(
     last: &Published,
     scope: bool,
     applied: bool,
@@ -294,12 +294,12 @@ extern "C" fn rsf_anomaly_sr_next_jitter(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_jitter_to_uv(state: &Published, out: &mut MaybeUninit<Uv>) {
+pub(crate) extern "C" fn rsf_anomaly_sr_jitter_to_uv(state: &Published, out: &mut MaybeUninit<Uv>) {
     out.write(jitter_to_uv(state));
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_burst_frame(
+pub(crate) extern "C" fn rsf_anomaly_sr_burst_frame(
     gate: &mut BurstGate,
     loading: bool,
     without_world: u64,
@@ -309,7 +309,7 @@ extern "C" fn rsf_anomaly_sr_burst_frame(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_burst_interrupted(gate: &mut BurstGate) {
+pub(crate) extern "C" fn rsf_anomaly_sr_burst_interrupted(gate: &mut BurstGate) {
     gate.interrupted();
 }
 

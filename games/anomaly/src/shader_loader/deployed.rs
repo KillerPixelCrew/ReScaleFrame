@@ -4,10 +4,8 @@
 //! bytecode and prepare its variant from `deployment/motion` through the production tree path.
 use super::d3d::Modules;
 use super::reflection::{Snapshot, reflect, rsf_anomaly_shader_snapshot_keeps_buffer_sizes};
-use super::{
-    Bytes, Define, Manifest, Request, Span, manifest, rsf_anomaly_shader_skin_mode,
-};
 use super::tree::{prepare_tree, rsf_anomaly_shader_match_request};
+use super::{Bytes, Define, Manifest, Request, Span, manifest, rsf_anomaly_shader_skin_mode};
 use rsf_shader_compiler::{Request as CompileRequest, compile};
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, OsString, c_void};

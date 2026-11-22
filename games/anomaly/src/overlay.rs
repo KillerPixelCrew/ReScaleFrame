@@ -468,7 +468,10 @@ fn register_saved_options(runtime: *mut c_void, ini: &[u16], log: &Log) {
     }
     type Register = unsafe extern "C" fn(*mut c_void, *const rsf_overlay_saved_setup) -> i32;
     let Some(register) = (unsafe {
-        rsf_game_sys::win32::typed_export::<Register>(runtime, c"rsf_overlay_saved_options_register")
+        rsf_game_sys::win32::typed_export::<Register>(
+            runtime,
+            c"rsf_overlay_saved_options_register",
+        )
     }) else {
         log.say(format_args!(
             "Anomaly overlay: saved startup controls are unavailable in this Runtime."

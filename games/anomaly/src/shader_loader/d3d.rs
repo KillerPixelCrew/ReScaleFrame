@@ -52,4 +52,3 @@ impl Modules {
         self.reflector.as_ref().map(|export| export.entry)
     }
 }
-

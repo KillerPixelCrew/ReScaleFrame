@@ -1,16 +1,12 @@
 // SPDX-License-Identifier: MIT
 use super::{Platform, Session};
+use crate::motion::stage::rsf_anomaly_motion_stage_report;
+use crate::native_geometry::coverage::rsf_anomaly_geometry_report;
+use crate::native_geometry::coverage::rsf_anomaly_geometry_stats_read;
+use crate::native_geometry::rsf_anomaly_geometry_active;
 use crate::native_geometry_abi::Stats;
-use rsf_game_sys::rsf_game_log_fn;
+use crate::sr_stage::rsf_anomaly_sr_stage_report;
 use std::ffi::{CString, c_char, c_void};
-
-unsafe extern "C" {
-    fn rsf_anomaly_geometry_active() -> bool;
-    fn rsf_anomaly_geometry_stats_read(out: *mut Stats);
-    fn rsf_anomaly_geometry_report(emit: rsf_game_log_fn, user: *mut c_void);
-    fn rsf_anomaly_sr_stage_report(emit: rsf_game_log_fn, user: *mut c_void);
-    fn rsf_anomaly_motion_stage_report(emit: rsf_game_log_fn, user: *mut c_void);
-}
 
 struct Sink<'a> {
     session: Session,
@@ -30,7 +26,7 @@ pub(super) fn stages(session: Session, platform: &Platform) {
     }
     let mut sink = Sink { session, platform };
     let user = std::ptr::from_mut(&mut sink).cast();
-    if unsafe { rsf_anomaly_geometry_active() } {
+    if rsf_anomaly_geometry_active() {
         let mut stats = Stats::default();
         unsafe { rsf_anomaly_geometry_stats_read(&mut stats) };
         if let Ok(text) = CString::new(format!(
@@ -43,7 +39,7 @@ pub(super) fn stages(session: Session, platform: &Platform) {
         )) {
             session.emit(platform, &text);
         }
-        unsafe { rsf_anomaly_geometry_report(Some(forward), user) };
+        rsf_anomaly_geometry_report(Some(forward), user);
     }
     unsafe {
         rsf_anomaly_sr_stage_report(Some(forward), user);

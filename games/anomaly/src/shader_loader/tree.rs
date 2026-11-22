@@ -151,7 +151,8 @@ pub(super) fn prepare_tree<R>(
                 fs::read(root_path).ok()
             })
             .filter(|bytes| {
-                sha256_hex(bytes).is_some_and(|hash| hash.as_slice() == unsafe { id.motion.as_slice() })
+                sha256_hex(bytes)
+                    .is_some_and(|hash| hash.as_slice() == unsafe { id.motion.as_slice() })
             })
             .ok_or_else(|| {
                 TreeResult::refused(

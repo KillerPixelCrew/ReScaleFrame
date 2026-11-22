@@ -1,31 +1,21 @@
 // SPDX-License-Identifier: MIT
 use crate::engine_guards::{Image, Read};
 use crate::engine_slots::Exchange;
+use crate::fg_stage::rsf_anomaly_fg_set_overlay_sink;
+use crate::fg_stage::rsf_anomaly_fg_stage_input_received;
+use crate::input::rsf_anomaly_input_install;
+use crate::input::rsf_anomaly_input_received;
 use crate::native_hooks::HookOps;
 use crate::native_profile::PROFILES;
 use crate::overlay::{rsf_anomaly_overlay_present, rsf_anomaly_overlay_start};
 use crate::overlay_hooks::rsf_anomaly_overlay_set_input_observer;
+use crate::sys::rsf_anomaly_fg_swap_chain;
 use crate::sys::{
     RSF_ANOMALY_OVERLAY_ALREADY_STARTED, RSF_ANOMALY_OVERLAY_STARTED, rsf_anomaly_overlay_options,
 };
-use crate::sys::{rsf_anomaly_fg_overlay_present, rsf_anomaly_fg_swap_chain};
 use rsf_game_sys::rsf_game_log_fn;
 use std::ffi::{c_char, c_void};
 use std::ptr::{null, null_mut};
-
-unsafe extern "C" {
-    fn rsf_anomaly_input_install(
-        image: &Image,
-        build: usize,
-        counter_rva: u32,
-        replacement: *mut c_void,
-        exchange: Exchange,
-        reason: Option<&mut *const c_char>,
-    ) -> bool;
-    fn rsf_anomaly_input_received(kind: u8, emit: unsafe extern "C" fn(u32, u32));
-    fn rsf_anomaly_fg_stage_input_received(kinds: u32, message: u32);
-    fn rsf_anomaly_fg_set_overlay_sink(sink: rsf_anomaly_fg_overlay_present, user: *mut c_void);
-}
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_bootstrap_install_input(
@@ -43,7 +33,7 @@ extern "C" fn rsf_anomaly_bootstrap_install_input(
         return false;
     };
     let image = Image::new(image.cast(), profile.image_size, copy);
-    unsafe {
+    {
         rsf_anomaly_input_install(
             &image,
             build,
@@ -56,7 +46,7 @@ extern "C" fn rsf_anomaly_bootstrap_install_input(
 }
 
 unsafe extern "C" fn input_received(kind: u8) {
-    unsafe { rsf_anomaly_input_received(kind, rsf_anomaly_fg_stage_input_received) };
+    rsf_anomaly_input_received(kind, rsf_anomaly_fg_stage_input_received);
 }
 
 #[unsafe(no_mangle)]
@@ -92,5 +82,5 @@ unsafe extern "C" fn overlay_present(user: *mut c_void, chain: *mut rsf_anomaly_
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_bootstrap_set_overlay_sink() {
-    unsafe { rsf_anomaly_fg_set_overlay_sink(Some(overlay_present), null_mut()) };
+    rsf_anomaly_fg_set_overlay_sink(Some(overlay_present), null_mut());
 }

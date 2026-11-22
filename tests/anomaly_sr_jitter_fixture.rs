@@ -1,4 +1,13 @@
 // SPDX-License-Identifier: MIT
+use crate::sr_stage::math::rsf_anomaly_sr_burst_frame;
+use crate::sr_stage::math::rsf_anomaly_sr_burst_interrupted;
+use crate::sr_stage::math::rsf_anomaly_sr_clamp_mip_offset;
+use crate::sr_stage::math::rsf_anomaly_sr_jitter_sample_at;
+use crate::sr_stage::math::rsf_anomaly_sr_jitter_to_uv;
+use crate::sr_stage::math::rsf_anomaly_sr_mip_delta;
+use crate::sr_stage::math::rsf_anomaly_sr_next_jitter;
+use crate::sr_stage::math::rsf_anomaly_sr_phase_count;
+use crate::sr_stage::math::rsf_anomaly_sr_sequence_next;
 use crate::sr_swap::{engine_mul, jitter_projection};
 use crate::sys::*;
 use rsf_game_sys::sampling::halton_f64 as halton;
@@ -12,39 +21,8 @@ type State = rsf_anomaly_sr_jitter_state;
 type Uv = rsf_anomaly_sr_jitter_uv;
 type Gate = rsf_anomaly_sr_burst_gate;
 
-unsafe extern "C" {
-    fn rsf_anomaly_sr_phase_count(render: u32, output: u32) -> u32;
-    fn rsf_anomaly_sr_jitter_sample_at(index: u32, phases: u32) -> Sample;
-    fn rsf_anomaly_sr_sequence_next(
-        sequence: &mut Sequence,
-        dimensions: &[u32; 4],
-        generation: u64,
-        continuous: bool,
-    ) -> Sample;
-    fn rsf_anomaly_sr_clamp_mip_offset(value: f32) -> f32;
-    fn rsf_anomaly_sr_mip_delta(render: u32, output: u32, offset: f32) -> f32;
-    fn rsf_anomaly_sr_next_jitter(
-        state: &State,
-        scope: bool,
-        applied: bool,
-        sample: &Sample,
-        rw: u32,
-        rh: u32,
-        reset: bool,
-        out: &mut MaybeUninit<State>,
-    );
-    fn rsf_anomaly_sr_jitter_to_uv(state: &State, out: &mut MaybeUninit<Uv>);
-    fn rsf_anomaly_sr_burst_frame(
-        gate: &mut Gate,
-        loading: bool,
-        without_world: u64,
-        taken: bool,
-    ) -> rsf_anomaly_sr_burst_verdict;
-    fn rsf_anomaly_sr_burst_interrupted(gate: &mut Gate);
-}
-
 fn sample(index: u32, phases: u32) -> Sample {
-    unsafe { rsf_anomaly_sr_jitter_sample_at(index, phases) }
+    rsf_anomaly_sr_jitter_sample_at(index, phases)
 }
 
 fn near(actual: f64, expected: f64, tolerance: f64) {
@@ -92,17 +70,14 @@ fn halton_sequence() {
         (100, 1920, 64),
         (1, u32::MAX, 64),
     ] {
-        assert_eq!(
-            unsafe { rsf_anomaly_sr_phase_count(render, output) },
-            expected
-        );
+        assert_eq!(rsf_anomaly_sr_phase_count(render, output), expected);
     }
 }
 
 fn sequence_resets() {
     let mut seq = Sequence::default();
     let world = [1286, 724, 1920, 1080];
-    let next = |s: &mut Sequence, dims, generation, continuous| unsafe {
+    let next = |s: &mut Sequence, dims, generation, continuous| {
         rsf_anomaly_sr_sequence_next(s, &dims, generation, continuous)
     };
     let first = next(&mut seq, world, 0, true);
@@ -244,13 +219,13 @@ fn mip_bias() {
         (1286, 0, 0.0, 0.0),
     ] {
         near(
-            unsafe { rsf_anomaly_sr_mip_delta(rw, ow, offset) }.into(),
+            rsf_anomaly_sr_mip_delta(rw, ow, offset).into(),
             expected,
             1e-6,
         );
     }
     for (offset, expected) in [(-0.75, -0.75), (-9.0, -2.0), (3.0, 1.0)] {
-        assert_eq!(unsafe { rsf_anomaly_sr_clamp_mip_offset(offset) }, expected);
+        assert_eq!(rsf_anomaly_sr_clamp_mip_offset(offset), expected);
     }
 }
 
@@ -263,7 +238,7 @@ fn next_state(
     reset: bool,
 ) -> State {
     let mut out = MaybeUninit::uninit();
-    unsafe {
+    {
         rsf_anomaly_sr_next_jitter(
             state, scope, applied, &sample, extent[0], extent[1], reset, &mut out,
         )
@@ -273,7 +248,7 @@ fn next_state(
 
 fn jitter_uv(state: &State) -> Uv {
     let mut out = MaybeUninit::uninit();
-    unsafe { rsf_anomaly_sr_jitter_to_uv(state, &mut out) };
+    rsf_anomaly_sr_jitter_to_uv(state, &mut out);
     unsafe { out.assume_init() }
 }
 
@@ -339,7 +314,7 @@ fn motion_cancellation() {
     let mut previous = None;
     let mut checked = 0;
     for _ in 0..20 {
-        let sample = unsafe { rsf_anomaly_sr_sequence_next(&mut seq, &[w, h, 1280, 720], 0, true) };
+        let sample = rsf_anomaly_sr_sequence_next(&mut seq, &[w, h, 1280, 720], 0, true);
         state = next_state(&state, false, true, sample, [w, h], seq.reset);
         let projection =
             jitter_projection(&perspective(1280.0 / 720.0), sample.x, sample.y, w, h).unwrap();
@@ -381,7 +356,7 @@ fn burst_gate() {
         settle,
         ..Gate::default()
     };
-    let step = |gate: &mut Gate, loading, without_world, taken| unsafe {
+    let step = |gate: &mut Gate, loading, without_world, taken| {
         let v = rsf_anomaly_sr_burst_frame(gate, loading, without_world, taken);
         (v.capture, v.discard)
     };
@@ -408,7 +383,7 @@ fn burst_gate() {
     for _ in 0..settle {
         step(&mut gate, false, 8, false);
     }
-    unsafe { rsf_anomaly_sr_burst_interrupted(&mut gate) };
+    rsf_anomaly_sr_burst_interrupted(&mut gate);
     assert_eq!((gate.clear, gate.restarts), (0, 3));
     assert_eq!(step(&mut gate, false, 8, false), (false, false));
     let mut quick = Gate {

@@ -8,7 +8,9 @@ use std::slice;
 
 mod lifecycle;
 
-use rsf_game_sys::{RSF_ERROR_ABI_MISMATCH as ABI_MISMATCH, RSF_ERROR_INVALID_ARGUMENT as INVALID_ARGUMENT};
+use rsf_game_sys::{
+    RSF_ERROR_ABI_MISMATCH as ABI_MISMATCH, RSF_ERROR_INVALID_ARGUMENT as INVALID_ARGUMENT,
+};
 const NOT_RUNNING: i32 = -4;
 const TABLE_SIZE: usize = size_of::<rsf_d3d11_sr_api>();
 type Query = unsafe extern "C" fn(*mut rsf_d3d11_sr_api) -> rsf_result;

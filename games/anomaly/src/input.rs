@@ -37,7 +37,7 @@ struct InputProfile {
 
 #[cfg(windows)]
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_input_install(
+pub(crate) extern "C" fn rsf_anomaly_input_install(
     image: &Image,
     build: usize,
     counter_rva: u32,
@@ -177,7 +177,10 @@ fn route(kind: u8) -> u32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_input_received(kind: u8, emit: unsafe extern "C" fn(u32, u32)) {
+pub(crate) extern "C" fn rsf_anomaly_input_received(
+    kind: u8,
+    emit: unsafe extern "C" fn(u32, u32),
+) {
     let kinds = route(kind);
     if kinds != 0 {
         unsafe { emit(kinds, 0) };

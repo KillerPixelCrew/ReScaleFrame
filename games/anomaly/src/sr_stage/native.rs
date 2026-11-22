@@ -5,20 +5,68 @@
 //! and answers every other leaf the stage driver calls. The callbacks run under the Rust stage lock, as the former C++
 //! leaf did; only the trampolines run outside it.
 use super::{Platform, STAGE, rsf_anomaly_sr_stage_configure_ini};
+use crate::adapter_options::rsf_anomaly_sr_persist_int;
+use crate::adapter_options::rsf_anomaly_sr_persist_text;
 use crate::engine_guards::{Image, sr_guard_failure};
+use crate::engine_slots::rsf_anomaly_slot_install;
+use crate::engine_slots::rsf_anomaly_slot_set;
+use crate::ini::rsf_anomaly_sr_ini_int;
+use crate::ini::rsf_anomaly_sr_ini_text;
+use crate::native_geometry::rsf_anomaly_geometry_active;
+use crate::native_geometry::rsf_anomaly_geometry_set_near;
 use crate::native_geometry::{CONSTANT_BUFFER_DATA, CONSTANT_BUFFER_SIZE, CONSTANT_BUFFER_SLOTS};
+use crate::native_observer::rsf_anomaly_observation;
 use crate::native_profile::{PROFILES as NATIVE, Profile as NativeProfile};
+use crate::runtime_module::rsf_anomaly_runtime_set_colour_transport;
+use crate::sr_d3d11::native::rsf_anomaly_sr_context_device;
+use crate::sr_d3d11::native::rsf_anomaly_sr_copy_subresource;
+use crate::sr_d3d11::native::rsf_anomaly_sr_immediate_context;
+use crate::sr_d3d11::native::rsf_anomaly_sr_map_read;
+use crate::sr_d3d11::native::rsf_anomaly_sr_release;
+use crate::sr_d3d11::native::rsf_anomaly_sr_set_full_viewport;
+use crate::sr_d3d11::native::rsf_anomaly_sr_timer_clock;
+use crate::sr_d3d11::native::rsf_anomaly_sr_timer_create_query;
+use crate::sr_d3d11::native::rsf_anomaly_sr_timer_issue;
+use crate::sr_d3d11::native::rsf_anomaly_sr_timer_retain_device;
+use crate::sr_d3d11::native::rsf_anomaly_sr_timer_timestamp;
+use crate::sr_d3d11::native::rsf_anomaly_sr_twin_refs;
+use crate::sr_d3d11::native::rsf_anomaly_sr_unmap;
+use crate::sr_d3d11::native::rsf_anomaly_sr_view_resource;
+use crate::sr_d3d11::passes::rsf_anomaly_sr_run_pass;
+use crate::sr_d3d11::passes::rsf_anomaly_sr_temporal_ready;
+use crate::sr_d3d11::rsf_anomaly_sr_stage_make_twins;
+use crate::sr_d3d11::rsf_anomaly_sr_stage_pass;
+use crate::sr_d3d11::rsf_anomaly_sr_stage_reset_pass;
+use crate::sr_d3d11::rsf_anomaly_sr_stage_resource_stats;
+use crate::sr_d3d11::rsf_anomaly_sr_stage_retire_twins;
+use crate::sr_d3d11::targets::TwinBatchInfo;
+use crate::sr_d3d11::targets::rsf_anomaly_sr_twin_error_name;
+use crate::sr_d3d11::{StageResources, rsf_anomaly_sr_stage_depth};
 use crate::sr_profile::{
     BACKEND_XFORMS_OFFSET, CRT_SURFACE_OFFSET, PROFILES as SR, Profile as SrProfile,
     RENDER_TARGET_OFFSET, SAMPLER_MIP_LOD_BIAS_OFFSET, SITE_PHASE_BLUR, SITE_PHASE_COMBINE,
     SITE_PHASE_SCENE_PREPARE, SITE_PHASE_SUNSHAFTS, SITE_POSITION_SETUP, SITE_SET_MIP_LOD_BIAS,
     SITE_SET_P, SITE_SUN_CASCADES, WORLD_TARGETS, rsf_anomaly_sr_engine_layout,
 };
+use crate::sr_reconstruction::rsf_anomaly_sr_correct_position_constant;
+use crate::sr_swap::rsf_anomaly_swap_combine_end;
+use crate::sr_swap::rsf_anomaly_swap_create_scoped;
+use crate::sr_swap::rsf_anomaly_swap_frame_end;
+use crate::sr_swap::rsf_anomaly_swap_position_constant;
+use crate::sr_swap::rsf_anomaly_swap_prepare;
+use crate::sr_swap::rsf_anomaly_swap_prepared;
+use crate::sr_swap::rsf_anomaly_swap_rm_near;
+use crate::sr_swap::rsf_anomaly_swap_set_enabled;
+use crate::sr_swap::rsf_anomaly_swap_shutdown;
+use crate::sr_swap::rsf_anomaly_swap_sun_begin;
+use crate::sr_swap::rsf_anomaly_swap_sun_end;
+use crate::sr_swap::rsf_anomaly_swap_view_of;
+use crate::sr_swap::{Handle, rsf_anomaly_swap_close_stale};
 use crate::sys::{RSF_ANOMALY_OBSERVATION_ABI, rsf_anomaly_native_observation};
 use crate::sys::{
     RSF_ANOMALY_SWAP_MAKE_CREATED, RSF_ANOMALY_SWAP_MAKE_FAILED, RSF_ANOMALY_SWAP_SLOT_COUNT,
-    rsf_anomaly_swap_counters, rsf_anomaly_swap_layout, rsf_anomaly_swap_platform,
-    rsf_anomaly_swap_request, rsf_anomaly_swap_twins, rsf_anomaly_swap_view,
+    rsf_anomaly_swap_counters, rsf_anomaly_swap_platform, rsf_anomaly_swap_request,
+    rsf_anomaly_swap_twins, rsf_anomaly_swap_view,
 };
 use crate::sys::{
     rsf_anomaly_sr_camera, rsf_anomaly_sr_controller, rsf_anomaly_sr_frame_facts,
@@ -66,43 +114,9 @@ pub(crate) struct HookSite {
     original: *mut Ptr,
 }
 
-/// rsf_sr_twin_batch_info (sr_d3d11_platform.h).
-#[repr(C)]
-#[derive(Default)]
-struct TwinBatchInfo {
-    bytes: u64,
-    made: u32,
-    failed_index: u32,
-    cause: u8,
-    pass_refused: bool,
-}
-
-/// rsf_anomaly_position_layout and rsf_anomaly_position_platform (sr_stage_platform.h).
-#[repr(C)]
-struct PositionLayout {
-    destination: u32,
-    load: u32,
-    buffer_size: u32,
-    buffer_data: u32,
-    buffer_changed: u32,
-    buffer_slots: u32,
-    stage_bits: [u32; 6],
-    stage_shifts: [u32; 6],
-}
-
-#[repr(C)]
-struct PositionPlatform {
-    user: Ptr,
-    read: unsafe extern "C" fn(Ptr, usize, Ptr, usize) -> bool,
-    write: unsafe extern "C" fn(Ptr, usize, *const c_void, usize) -> bool,
-    buffer: unsafe extern "C" fn(Ptr, usize, u32) -> usize,
-}
-
 const _: () = {
     assert!(size_of::<Native>() == 128 && size_of::<HookSite>() == 48);
     assert!(std::mem::offset_of!(HookSite, original) == 40);
-    assert!(size_of::<TwinBatchInfo>() == 24);
-    assert!(size_of::<PositionLayout>() == 72 && size_of::<PositionPlatform>() == 32);
     // The seam reads the generic0 CRT the world window swaps.
     assert!(WORLD_TARGETS[0].offset == 0x3a8);
 };
@@ -128,126 +142,6 @@ pub(crate) static BUILDS: [Build; 2] = [
     },
 ];
 
-// The Rust leaves of the former C++ table, linked by their C names.
-unsafe extern "C" {
-    fn rsf_anomaly_sr_ini_int(ini: *const c_void, key: *const c_char, fallback: i32) -> i32;
-    fn rsf_anomaly_sr_ini_text(
-        ini: *const c_void,
-        key: *const c_char,
-        fallback: *const c_char,
-        out: *mut u16,
-        capacity: u32,
-    ) -> u32;
-    fn rsf_anomaly_sr_persist_int(key: *const c_char, value: i32) -> bool;
-    fn rsf_anomaly_sr_persist_text(key: *const c_char, value: *const c_char) -> bool;
-    fn rsf_anomaly_runtime_set_colour_transport(enabled: bool);
-    fn rsf_anomaly_observation(out: *mut rsf_anomaly_native_observation) -> rsf_result;
-    fn rsf_anomaly_geometry_active() -> bool;
-    fn rsf_anomaly_geometry_set_near(callback: Option<unsafe extern "C" fn(Ptr)>);
-    fn rsf_anomaly_motion_stage_frame_target(out: *mut MotionFrameTarget);
-    fn rsf_anomaly_slot_install(
-        kind: u32,
-        image: *const Image,
-        slot_rva: u32,
-        function_rva: u32,
-        counter_rva: u32,
-        replacement: Ptr,
-        exchange: unsafe extern "C" fn(Ptr, Ptr, Ptr, *mut Ptr) -> bool,
-    ) -> bool;
-    fn rsf_anomaly_slot_set(kind: u32, enabled: bool) -> bool;
-    // D3D11 owners (sr_d3d11.rs and sr_d3d11/native.rs).
-    fn rsf_anomaly_sr_view_resource(view: Ptr) -> Ptr;
-    fn rsf_anomaly_sr_release(object: Ptr);
-    fn rsf_anomaly_sr_set_full_viewport(context: Ptr, width: u32, height: u32);
-    fn rsf_anomaly_sr_twin_refs(object: Ptr) -> u32;
-    fn rsf_anomaly_sr_twin_error_name(cause: u8) -> *const c_char;
-    fn rsf_anomaly_sr_timer_retain_device(device: Ptr) -> Ptr;
-    fn rsf_anomaly_sr_timer_create_query(device: Ptr, disjoint: bool) -> Ptr;
-    fn rsf_anomaly_sr_timer_issue(context: Ptr, query: Ptr, begin: bool);
-    fn rsf_anomaly_sr_timer_clock(
-        context: Ptr,
-        query: Ptr,
-        frequency: *mut u64,
-        disjoint: *mut bool,
-    ) -> i32;
-    fn rsf_anomaly_sr_timer_timestamp(context: Ptr, query: Ptr, ticks: *mut u64) -> i32;
-    fn rsf_anomaly_sr_immediate_context(context: Ptr) -> bool;
-    fn rsf_anomaly_sr_context_device(context: Ptr) -> Ptr;
-    fn rsf_anomaly_sr_copy_subresource(
-        context: Ptr,
-        destination: Ptr,
-        destination_index: u32,
-        source: Ptr,
-        source_index: u32,
-    );
-    fn rsf_anomaly_sr_map_read(
-        context: Ptr,
-        texture: Ptr,
-        subresource: u32,
-        data: *mut *const c_void,
-        row_pitch: *mut u32,
-    ) -> bool;
-    fn rsf_anomaly_sr_unmap(context: Ptr, texture: Ptr, subresource: u32);
-    fn rsf_anomaly_sr_stage_make_twins(
-        resources: *mut Ptr,
-        platform: *const c_void,
-        device: Ptr,
-        request: *const rsf_anomaly_swap_request,
-        out: *mut rsf_anomaly_swap_twins,
-        info: *mut TwinBatchInfo,
-        log: rsf_anomaly_sr_log,
-        user: Ptr,
-    ) -> u32;
-    fn rsf_anomaly_sr_stage_retire_twins(resources: Ptr, refs: unsafe extern "C" fn(Ptr) -> u32);
-    fn rsf_anomaly_sr_stage_reset_pass(resources: Ptr);
-    fn rsf_anomaly_sr_stage_pass(resources: Ptr) -> *const c_void;
-    fn rsf_anomaly_sr_stage_depth(resources: Ptr) -> Ptr;
-    fn rsf_anomaly_sr_stage_resource_stats(resources: Ptr, bytes: *mut u64, refs: *mut u64);
-    fn rsf_anomaly_sr_temporal_ready(pass: *const c_void) -> u32;
-    fn rsf_anomaly_sr_run_pass(
-        pass: *const c_void,
-        context: Ptr,
-        kind: u32,
-        views: *const c_void,
-    ) -> u32;
-    fn rsf_anomaly_sr_correct_position_constant(
-        layout: *const PositionLayout,
-        platform: *const PositionPlatform,
-        constant: usize,
-        x: f32,
-        y: f32,
-    ) -> u32;
-    // The swap owner (sr_swap.rs).
-    fn rsf_anomaly_swap_create_scoped(
-        layout: *const rsf_anomaly_swap_layout,
-        platform: *const rsf_anomaly_swap_platform,
-    ) -> Ptr;
-    fn rsf_anomaly_swap_view_of(swap: Ptr) -> *const rsf_anomaly_swap_view;
-    fn rsf_anomaly_swap_set_enabled(swap: Ptr, enabled: bool);
-    fn rsf_anomaly_swap_close_stale(swap: Ptr);
-    fn rsf_anomaly_swap_prepare(swap: Ptr, facts: *const rsf_anomaly_sr_frame_facts) -> bool;
-    fn rsf_anomaly_swap_prepared(swap: Ptr);
-    fn rsf_anomaly_swap_combine_end(swap: Ptr);
-    fn rsf_anomaly_swap_frame_end(swap: Ptr);
-    fn rsf_anomaly_swap_rm_near(swap: Ptr);
-    fn rsf_anomaly_swap_sun_begin(swap: Ptr) -> bool;
-    fn rsf_anomaly_swap_sun_end(swap: Ptr, suspended: bool);
-    fn rsf_anomaly_swap_position_constant(swap: Ptr, constant: Ptr);
-    fn rsf_anomaly_swap_shutdown(swap: Ptr) -> bool;
-}
-
-/// rsf_anomaly_motion_frame_target (motion_frame_target.h).
-#[repr(C)]
-#[derive(Default)]
-struct MotionFrameTarget {
-    texture: Ptr,
-    width: u32,
-    height: u32,
-    frame: u32,
-    written: bool,
-    main: bool,
-}
-
 impl Default for HookSite {
     fn default() -> Self {
         Self {
@@ -270,7 +164,7 @@ static SET_PROJECTION: AtomicUsize = AtomicUsize::new(0);
 static SET_MIP_BIAS: AtomicUsize = AtomicUsize::new(0);
 static CONSTANT_BUFFER: AtomicUsize = AtomicUsize::new(0);
 // The D3D11 host's resource owner and the swap owner's prepare-time log.
-static RESOURCES: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+static RESOURCES: AtomicPtr<StageResources> = AtomicPtr::new(null_mut());
 static TWIN_LOG: AtomicPtr<TwinLog> = AtomicPtr::new(null_mut());
 static SWAP: OnceLock<usize> = OnceLock::new();
 
@@ -320,13 +214,14 @@ fn address(rva: u32) -> Ptr {
     engine().map_or(null_mut(), |(image, _)| (image + rva as usize) as Ptr)
 }
 
-fn swap() -> Ptr {
-    *SWAP.get_or_init(|| unsafe {
-        rsf_anomaly_swap_create_scoped(rsf_anomaly_sr_engine_layout(), &SWAP_PLATFORM.0) as usize
-    }) as Ptr
+fn swap() -> *mut Handle {
+    *SWAP.get_or_init(|| {
+        rsf_anomaly_swap_create_scoped(Some(rsf_anomaly_sr_engine_layout()), Some(&SWAP_PLATFORM.0))
+            as usize
+    }) as *mut Handle
 }
 
-fn resources() -> Ptr {
+fn resources() -> *mut StageResources {
     RESOURCES.load(Ordering::Acquire)
 }
 
@@ -403,18 +298,16 @@ unsafe extern "C" fn make_twins(
     }
     let mut info = TwinBatchInfo::default();
     let mut handle = resources();
-    let result = unsafe {
-        rsf_anomaly_sr_stage_make_twins(
-            &mut handle,
-            (native().d3d11)(),
-            d3d,
-            request,
-            out,
-            &mut info,
-            log.callback,
-            log.user,
-        )
-    };
+    let result = rsf_anomaly_sr_stage_make_twins(
+        &mut handle,
+        unsafe { &*(native().d3d11)().cast() },
+        d3d,
+        request,
+        unsafe { &mut *out },
+        &mut info,
+        log.callback,
+        log.user,
+    );
     RESOURCES.store(handle, Ordering::Release);
     if info.pass_refused {
         log.say(if request.stage == 1 {
@@ -425,8 +318,8 @@ unsafe extern "C" fn make_twins(
         return result;
     }
     if result != RSF_ANOMALY_SWAP_MAKE_CREATED {
-        let error =
-            unsafe { CStr::from_ptr(rsf_anomaly_sr_twin_error_name(info.cause)) }.to_string_lossy();
+        let error = unsafe { CStr::from_ptr(rsf_anomaly_sr_twin_error_name(info.cause as u8)) }
+            .to_string_lossy();
         let text = if info.failed_index < RSF_ANOMALY_SWAP_SLOT_COUNT {
             let i = info.failed_index as usize;
             let spec = &request.spec[i];
@@ -477,7 +370,7 @@ unsafe extern "C" fn make_twins(
 unsafe extern "C" fn drop_twins(_: Ptr) {
     // Reference counts after our own views are gone. The engine's surface_get() before its generic_temp copy takes
     // references it never releases (stock leaks them on its own targets too), so this is diagnostic only.
-    unsafe { rsf_anomaly_sr_stage_retire_twins(resources(), rsf_anomaly_sr_twin_refs) };
+    rsf_anomaly_sr_stage_retire_twins(unsafe { resources().as_mut() }, rsf_anomaly_sr_twin_refs);
 }
 
 unsafe extern "C" fn set_viewport(_: Ptr, width: u32, height: u32) {
@@ -507,7 +400,7 @@ unsafe extern "C" fn set_mip_bias(_: Ptr, value: f32) -> bool {
 }
 
 // Constant-buffer fields used after the native binder has written the stock vector.
-static POSITION_LAYOUT: PositionLayout = PositionLayout {
+static POSITION_LAYOUT: crate::sr_reconstruction::Layout = crate::sr_reconstruction::Layout {
     destination: 0x10,
     load: 0x14,
     buffer_size: CONSTANT_BUFFER_SIZE,
@@ -518,16 +411,17 @@ static POSITION_LAYOUT: PositionLayout = PositionLayout {
     stage_shifts: [16, 12, 8, 20, 24, 28],
 };
 
-struct SyncPositionPlatform(PositionPlatform);
+struct SyncPositionPlatform(crate::sr_reconstruction::Platform);
 // SAFETY: the record holds only function pointers and a null user.
 unsafe impl Sync for SyncPositionPlatform {}
 
-static POSITION_PLATFORM: SyncPositionPlatform = SyncPositionPlatform(PositionPlatform {
-    user: null_mut(),
-    read: position_read,
-    write: position_write,
-    buffer: position_buffer,
-});
+static POSITION_PLATFORM: SyncPositionPlatform =
+    SyncPositionPlatform(crate::sr_reconstruction::Platform {
+        user: null_mut(),
+        read: position_read,
+        write: position_write,
+        buffer: position_buffer,
+    });
 
 unsafe extern "C" fn position_read(_: Ptr, address: usize, out: Ptr, size: usize) -> bool {
     unsafe { (native().copy)(out, address as *const c_void, size) }
@@ -558,7 +452,7 @@ unsafe extern "C" fn position_buffer(_: Ptr, constant: usize, stage: u32) -> usi
 }
 
 unsafe extern "C" fn correct_position_constant(_: Ptr, constant: Ptr, x: f32, y: f32) -> u32 {
-    unsafe {
+    {
         rsf_anomaly_sr_correct_position_constant(
             &POSITION_LAYOUT,
             &POSITION_PLATFORM.0,
@@ -706,7 +600,7 @@ unsafe extern "C" fn now(counter: *mut i64, frequency: *mut i64) {
 }
 
 unsafe extern "C" fn geometry_active() -> bool {
-    unsafe { rsf_anomaly_geometry_active() }
+    rsf_anomaly_geometry_active()
 }
 
 unsafe extern "C" fn build_sha256() -> *const c_char {
@@ -714,7 +608,7 @@ unsafe extern "C" fn build_sha256() -> *const c_char {
 }
 
 unsafe extern "C" fn close_stale() {
-    unsafe { rsf_anomaly_swap_close_stale(swap()) };
+    rsf_anomaly_swap_close_stale(swap());
 }
 
 unsafe extern "C" fn prepare(
@@ -727,49 +621,49 @@ unsafe extern "C" fn prepare(
         user,
     };
     let previous = TWIN_LOG.swap(&raw mut call_log, Ordering::AcqRel);
-    let prepared = unsafe { rsf_anomaly_swap_prepare(swap(), facts) };
+    let prepared = rsf_anomaly_swap_prepare(swap(), unsafe { facts.as_ref() });
     TWIN_LOG.store(previous, Ordering::Release);
     prepared
 }
 
 unsafe extern "C" fn prepared() {
-    unsafe { rsf_anomaly_swap_prepared(swap()) };
+    rsf_anomaly_swap_prepared(swap());
 }
 
 unsafe extern "C" fn swap_handle() -> Ptr {
-    swap()
+    swap().cast()
 }
 
 unsafe extern "C" fn combine_end() {
-    unsafe { rsf_anomaly_swap_combine_end(swap()) };
+    rsf_anomaly_swap_combine_end(swap());
 }
 
 unsafe extern "C" fn frame_end() {
-    unsafe { rsf_anomaly_swap_frame_end(swap()) };
+    rsf_anomaly_swap_frame_end(swap());
 }
 
 unsafe extern "C" fn rm_near() {
-    unsafe { rsf_anomaly_swap_rm_near(swap()) };
+    rsf_anomaly_swap_rm_near(swap());
 }
 
 unsafe extern "C" fn sun_begin() -> bool {
-    unsafe { rsf_anomaly_swap_sun_begin(swap()) }
+    rsf_anomaly_swap_sun_begin(swap())
 }
 
 unsafe extern "C" fn sun_end(suspended: bool) {
-    unsafe { rsf_anomaly_swap_sun_end(swap(), suspended) };
+    rsf_anomaly_swap_sun_end(swap(), suspended);
 }
 
 unsafe extern "C" fn position_setup(constant: Ptr) {
-    unsafe { rsf_anomaly_swap_position_constant(swap(), constant) };
+    rsf_anomaly_swap_position_constant(swap(), constant);
 }
 
 unsafe extern "C" fn shutdown() -> bool {
-    unsafe { rsf_anomaly_swap_shutdown(swap()) }
+    rsf_anomaly_swap_shutdown(swap())
 }
 
 unsafe extern "C" fn set_swap_enabled(enabled: bool) {
-    unsafe { rsf_anomaly_swap_set_enabled(swap(), enabled) };
+    rsf_anomaly_swap_set_enabled(swap(), enabled);
 }
 
 unsafe extern "C" fn controller(out: *mut rsf_anomaly_sr_controller) {
@@ -810,11 +704,15 @@ unsafe extern "C" fn swap_counters(out: *mut rsf_anomaly_sr_swap_counters) {
 }
 
 unsafe extern "C" fn host_stats(bytes: *mut u64, refs: *mut u64) {
-    unsafe { rsf_anomaly_sr_stage_resource_stats(resources(), bytes, refs) };
+    rsf_anomaly_sr_stage_resource_stats(
+        unsafe { resources().as_ref() },
+        unsafe { &mut *bytes },
+        unsafe { &mut *refs },
+    );
 }
 
 unsafe extern "C" fn host_reset() {
-    unsafe { rsf_anomaly_sr_stage_reset_pass(resources()) };
+    rsf_anomaly_sr_stage_reset_pass(unsafe { resources().as_mut() });
 }
 
 unsafe extern "C" fn pixel_bytes(format: u32) -> u32 {
@@ -822,21 +720,17 @@ unsafe extern "C" fn pixel_bytes(format: u32) -> u32 {
 }
 
 unsafe extern "C" fn draw_pass(kind: u32, views: *const crate::sr_d3d11::DrawViews) -> bool {
-    unsafe {
-        rsf_anomaly_sr_run_pass(
-            rsf_anomaly_sr_stage_pass(resources()),
-            context(),
-            kind,
-            views.cast(),
-        ) != 0
-    }
+    let pass = rsf_anomaly_sr_stage_pass(unsafe { resources().as_ref() });
+    rsf_anomaly_sr_run_pass(unsafe { pass.as_ref() }, context(), kind, unsafe {
+        &*views
+    }) != 0
 }
 
 unsafe extern "C" fn temporal_ready() -> bool {
-    unsafe {
-        rsf_anomaly_sr_temporal_ready(rsf_anomaly_sr_stage_pass(resources())) != 0
-            && !rsf_anomaly_sr_stage_depth(resources()).is_null()
-    }
+    let resources = unsafe { resources().as_ref() };
+    let pass = rsf_anomaly_sr_stage_pass(resources);
+    rsf_anomaly_sr_temporal_ready(unsafe { pass.as_ref() }) != 0
+        && !rsf_anomaly_sr_stage_depth(resources).is_null()
 }
 
 unsafe extern "C" fn temporal_platform() -> *const c_void {
@@ -844,8 +738,7 @@ unsafe extern "C" fn temporal_platform() -> *const c_void {
 }
 
 unsafe extern "C" fn motion_target(out: *mut rsf_anomaly_sr_motion_target) -> bool {
-    let mut target = MotionFrameTarget::default();
-    unsafe { rsf_anomaly_motion_stage_frame_target(&mut target) };
+    let target = crate::motion::stage::frame_target();
     unsafe {
         out.write(rsf_anomaly_sr_motion_target {
             texture: target.texture,
@@ -864,7 +757,7 @@ unsafe extern "C" fn create_motion_view(device: Ptr, texture: Ptr) -> Ptr {
 }
 
 unsafe extern "C" fn depth_texture() -> Ptr {
-    unsafe { rsf_anomaly_sr_stage_depth(resources()) }
+    rsf_anomaly_sr_stage_depth(unsafe { resources().as_ref() })
 }
 
 unsafe extern "C" fn verify_guards(
@@ -948,18 +841,17 @@ unsafe extern "C" fn install_position_slot() -> bool {
     let site = &build.sr.function_sites[SITE_POSITION_SETUP];
     let checked = Image::new(image as *const u8, build.native.image_size, leaves.copy);
     // The slot must hold the profiled function, and the function its guard.
-    checked.matches(site)
-        && unsafe {
-            rsf_anomaly_slot_install(
-                POSITION_SLOT,
-                &checked,
-                build.sr.position_setup_vtable_rva,
-                site.rva,
-                0,
-                leaves.position_setup,
-                leaves.compare_slot,
-            )
-        }
+    checked.matches(site) && {
+        rsf_anomaly_slot_install(
+            POSITION_SLOT,
+            &checked,
+            build.sr.position_setup_vtable_rva,
+            site.rva,
+            0,
+            leaves.position_setup,
+            leaves.compare_slot,
+        )
+    }
 }
 
 unsafe extern "C" fn disable_hooks() {
@@ -974,7 +866,7 @@ unsafe extern "C" fn rm_near_callback(_: Ptr) {
 }
 
 unsafe extern "C" fn set_rm_near(on: bool) {
-    unsafe {
+    {
         rsf_anomaly_geometry_set_near(on.then_some(rm_near_callback as unsafe extern "C" fn(Ptr)))
     };
 }
@@ -989,7 +881,7 @@ unsafe extern "C" fn remove_hooks() -> bool {
 }
 
 unsafe extern "C" fn apply_colour_transport(enabled: bool) {
-    unsafe { rsf_anomaly_runtime_set_colour_transport(enabled) };
+    rsf_anomaly_runtime_set_colour_transport(enabled);
 }
 
 unsafe extern "C" fn guarded_log(log: rsf_anomaly_sr_log, user: Ptr, message: *const c_char) {

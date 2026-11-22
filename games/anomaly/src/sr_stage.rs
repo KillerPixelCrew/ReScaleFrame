@@ -2966,7 +2966,10 @@ extern "C" fn rsf_anomaly_sr_stage_frame_end() {
     STAGE.frame_end();
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_stage_report(emit: rsf_anomaly_sr_log, user: *mut c_void) {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_stage_report(
+    emit: rsf_anomaly_sr_log,
+    user: *mut c_void,
+) {
     let Some(emit) = emit else { return };
     STAGE.report(&mut |text| {
         if let Ok(text) = CString::new(text) {

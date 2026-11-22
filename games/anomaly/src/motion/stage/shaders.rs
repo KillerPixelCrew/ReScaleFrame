@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use rsf_windows::sha256_hex;
 use crate::motion_profile::SHADER_OBJECT_OFFSET;
 use crate::shader_family::{FAMILY_COUNT, NO_FAMILY, diagnostic_family_name};
 use crate::shader_loader::{
@@ -9,6 +8,7 @@ use crate::shader_loader::{
 };
 use crate::shader_loader::{rsf_anomaly_shader_linkable, rsf_anomaly_shader_tess_linkable};
 use rsf_game_sys::{RSF_PATCH_OK, rsf_patch_counters};
+use rsf_windows::sha256_hex;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::Arc;

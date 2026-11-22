@@ -87,7 +87,7 @@ pub(super) static COUNTERS: Counters = Counters {
 };
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_geometry_stats_read(out: *mut Stats) {
+pub(crate) unsafe extern "C" fn rsf_anomaly_geometry_stats_read(out: *mut Stats) {
     let c = &COUNTERS;
     let stats = Stats {
         models_registered: c.models_registered.read(),
@@ -150,7 +150,7 @@ extern "C" fn rsf_anomaly_geometry_verdict_name(verdict: u8) -> *const c_char {
 type Emit = unsafe extern "C" fn(*mut c_void, *const c_char);
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_geometry_report(emit: Option<Emit>, user: *mut c_void) {
+pub(crate) extern "C" fn rsf_anomaly_geometry_report(emit: Option<Emit>, user: *mut c_void) {
     let Some(emit) = emit else { return };
     let line = |message: String| {
         if let Ok(message) = CString::new(message) {

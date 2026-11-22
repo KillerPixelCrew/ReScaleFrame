@@ -104,7 +104,7 @@ fn publish(kind: usize, enabled: bool) {
 }
 
 #[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_anomaly_slot_install(
+pub(crate) extern "C" fn rsf_anomaly_slot_install(
     kind: u32,
     image: &Image,
     slot_rva: u32,
@@ -170,7 +170,7 @@ pub(super) extern "C" fn rsf_anomaly_slot_install(
 }
 
 #[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_anomaly_slot_set(kind: u32, enabled: bool) -> bool {
+pub(crate) extern "C" fn rsf_anomaly_slot_set(kind: u32, enabled: bool) -> bool {
     let kind = kind as usize;
     let mut slots = slots();
     let Some(entry) = slots.get_mut(kind) else {

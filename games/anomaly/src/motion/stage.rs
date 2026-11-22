@@ -702,7 +702,7 @@ extern "C" fn rsf_anomaly_motion_stage_quiesce() -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_stage_report(emit: rsf_game_log_fn, user: Raw) {
+pub(crate) extern "C" fn rsf_anomaly_motion_stage_report(emit: rsf_game_log_fn, user: Raw) {
     if let Some(stage) = STAGE
         .get()
         .filter(|s| s.active.load(Acquire) && emit.is_some())
@@ -721,7 +721,9 @@ pub(crate) fn frame_target() -> FrameTarget {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_stage_frame_target(target: &mut MaybeUninit<FrameTarget>) {
+pub(crate) extern "C" fn rsf_anomaly_motion_stage_frame_target(
+    target: &mut MaybeUninit<FrameTarget>,
+) {
     target.write(frame_target());
 }
 

@@ -8,23 +8,23 @@ type Vector = [f32; 4];
 const VECTOR_BYTES: usize = size_of::<Vector>();
 
 #[repr(C)]
-struct Layout {
-    destination: u32,
-    load: u32,
-    buffer_size: u32,
-    buffer_data: u32,
-    buffer_changed: u32,
-    buffer_slots: u32,
-    stage_bits: [u32; 6],
-    stage_shifts: [u32; 6],
+pub(crate) struct Layout {
+    pub(crate) destination: u32,
+    pub(crate) load: u32,
+    pub(crate) buffer_size: u32,
+    pub(crate) buffer_data: u32,
+    pub(crate) buffer_changed: u32,
+    pub(crate) buffer_slots: u32,
+    pub(crate) stage_bits: [u32; 6],
+    pub(crate) stage_shifts: [u32; 6],
 }
 
 #[repr(C)]
-struct Platform {
-    user: *mut c_void,
-    read: unsafe extern "C" fn(*mut c_void, usize, *mut c_void, usize) -> bool,
-    write: unsafe extern "C" fn(*mut c_void, usize, *const c_void, usize) -> bool,
-    buffer: unsafe extern "C" fn(*mut c_void, usize, u32) -> usize,
+pub(crate) struct Platform {
+    pub(crate) user: *mut c_void,
+    pub(crate) read: unsafe extern "C" fn(*mut c_void, usize, *mut c_void, usize) -> bool,
+    pub(crate) write: unsafe extern "C" fn(*mut c_void, usize, *const c_void, usize) -> bool,
+    pub(crate) buffer: unsafe extern "C" fn(*mut c_void, usize, u32) -> usize,
 }
 
 const _: () = {
@@ -136,7 +136,7 @@ fn prepare_slot(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_correct_position_constant(
+pub(crate) extern "C" fn rsf_anomaly_sr_correct_position_constant(
     layout: &Layout,
     platform: &Platform,
     constant: usize,

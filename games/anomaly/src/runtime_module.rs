@@ -59,7 +59,7 @@ pub(crate) unsafe fn export<F: Copy>(module: HMODULE, name: &[u8]) -> Option<F> 
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_runtime_set_colour_transport(transport: bool) {
+pub(crate) extern "C" fn rsf_anomaly_runtime_set_colour_transport(transport: bool) {
     let runtime = rsf_anomaly_runtime_module();
     let set = unsafe {
         rsf_game_sys::win32::typed_export::<unsafe extern "C" fn(u32)>(

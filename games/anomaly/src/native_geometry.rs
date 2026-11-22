@@ -3,7 +3,7 @@
 //! The native detours bracket calls with stack storage so no engine trampoline
 //! or C++ unwind crosses Rust. Engine reads have separate guarded native leaves.
 
-mod coverage;
+pub(crate) mod coverage;
 #[cfg(all(windows, feature = "sr-fixtures"))]
 mod fixture;
 mod hook_sites;
@@ -151,7 +151,7 @@ extern "C" fn rsf_anomaly_geometry_disable(platform: &Platform) -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_geometry_active() -> bool {
+pub(crate) extern "C" fn rsf_anomaly_geometry_active() -> bool {
     HOOKS.load(Ordering::Acquire) && capturing()
 }
 
@@ -180,7 +180,7 @@ extern "C" fn rsf_anomaly_geometry_set_flush(callback: Option<Flush>) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_geometry_set_near(callback: Option<Near>) {
+pub(crate) extern "C" fn rsf_anomaly_geometry_set_near(callback: Option<Near>) {
     *NEAR.write().unwrap() = callback;
 }
 

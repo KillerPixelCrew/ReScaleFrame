@@ -226,7 +226,7 @@ unsafe extern "C" fn rsf_anomaly_sr_retain(raw: Ptr) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_release(raw: Ptr) {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_release(raw: Ptr) {
     if !raw.is_null() {
         drop(unsafe { IUnknown::from_raw(raw) });
     }
@@ -239,7 +239,7 @@ unsafe extern "C" fn rsf_anomaly_sr_as_texture(raw: Ptr) -> Ptr {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_view_resource(raw: Ptr) -> Ptr {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_view_resource(raw: Ptr) -> Ptr {
     let view = unsafe { ID3D11View::from_raw_borrowed(&raw) }.unwrap();
     owned(unsafe { view.GetResource() }.ok())
 }
@@ -559,7 +559,7 @@ fn viewport(context: &ID3D11DeviceContext, size: Extent) {
 }
 
 #[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_anomaly_sr_set_full_viewport(
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_set_full_viewport(
     raw: Ptr,
     width: u32,
     height: u32,
@@ -598,13 +598,13 @@ unsafe extern "C" fn rsf_anomaly_sr_draw(raw: Ptr, draw: &Draw) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_timer_retain_device(raw: Ptr) -> Ptr {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_timer_retain_device(raw: Ptr) -> Ptr {
     unsafe { rsf_anomaly_sr_retain(raw) };
     raw
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_timer_create_query(raw: Ptr, disjoint: bool) -> Ptr {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_timer_create_query(raw: Ptr, disjoint: bool) -> Ptr {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap();
     let desc = D3D11_QUERY_DESC {
         Query: if disjoint {
@@ -622,7 +622,7 @@ unsafe extern "C" fn rsf_anomaly_sr_timer_create_query(raw: Ptr, disjoint: bool)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_timer_issue(raw: Ptr, query: Ptr, begin: bool) {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_timer_issue(raw: Ptr, query: Ptr, begin: bool) {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
     let query = unsafe { ID3D11Query::from_raw_borrowed(&query) }.unwrap();
     unsafe {
@@ -651,40 +651,46 @@ unsafe fn query_data<T>(raw: Ptr, query: Ptr, data: *mut T) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_timer_clock(
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_timer_clock(
     raw: Ptr,
     query: Ptr,
-    frequency: &mut u64,
-    disjoint: &mut bool,
+    frequency: *mut u64,
+    disjoint: *mut bool,
 ) -> i32 {
     let mut data = D3D11_QUERY_DATA_TIMESTAMP_DISJOINT::default();
     let result = unsafe { query_data(raw, query, &mut data) };
     if result == 0 {
-        *frequency = data.Frequency;
-        *disjoint = data.Disjoint.as_bool();
+        unsafe {
+            frequency.write(data.Frequency);
+            disjoint.write(data.Disjoint.as_bool());
+        }
     }
     result
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_timer_timestamp(raw: Ptr, query: Ptr, ticks: *mut u64) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_timer_timestamp(
+    raw: Ptr,
+    query: Ptr,
+    ticks: *mut u64,
+) -> i32 {
     unsafe { query_data(raw, query, ticks) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_immediate_context(raw: Ptr) -> bool {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_immediate_context(raw: Ptr) -> bool {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
     unsafe { context.GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_context_device(raw: Ptr) -> Ptr {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_context_device(raw: Ptr) -> Ptr {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
     owned(unsafe { context.GetDevice() }.ok())
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_copy_subresource(
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_copy_subresource(
     raw: Ptr,
     destination: Ptr,
     dst_index: u32,
@@ -700,12 +706,12 @@ unsafe extern "C" fn rsf_anomaly_sr_copy_subresource(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_map_read(
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_map_read(
     raw: Ptr,
     texture: Ptr,
     subresource: u32,
-    data: &mut *const c_void,
-    row_pitch: &mut u32,
+    data: *mut *const c_void,
+    row_pitch: *mut u32,
 ) -> bool {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
     let texture = unsafe { ID3D11Resource::from_raw_borrowed(&texture) }.unwrap();
@@ -713,20 +719,22 @@ unsafe extern "C" fn rsf_anomaly_sr_map_read(
     if unsafe { context.Map(texture, subresource, D3D11_MAP_READ, 0, Some(&mut mapped)) }.is_err() {
         return false;
     }
-    *data = mapped.pData.cast_const();
-    *row_pitch = mapped.RowPitch;
+    unsafe {
+        data.write(mapped.pData.cast_const());
+        row_pitch.write(mapped.RowPitch);
+    }
     true
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_unmap(raw: Ptr, texture: Ptr, subresource: u32) {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_unmap(raw: Ptr, texture: Ptr, subresource: u32) {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
     let texture = unsafe { ID3D11Resource::from_raw_borrowed(&texture) }.unwrap();
     unsafe { context.Unmap(texture, subresource) };
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_twin_refs(raw: Ptr) -> u32 {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_twin_refs(raw: Ptr) -> u32 {
     let object = unsafe { IUnknown::from_raw_borrowed(&raw) }.unwrap();
     unsafe {
         (object.vtable().AddRef)(raw);

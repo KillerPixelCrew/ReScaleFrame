@@ -1456,7 +1456,7 @@ extern "C" fn rsf_anomaly_swap_create(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_swap_create_scoped(
+pub(crate) extern "C" fn rsf_anomaly_swap_create_scoped(
     layout: Option<&Layout>,
     platform: Option<&Platform>,
 ) -> *mut Handle {
@@ -1493,7 +1493,7 @@ unsafe extern "C" fn rsf_anomaly_swap_destroy(swap: *mut Handle) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_swap_view_of(swap: *const Handle) -> *const View {
+pub(crate) unsafe extern "C" fn rsf_anomaly_swap_view_of(swap: *const Handle) -> *const View {
     if swap.is_null() {
         null()
     } else {
@@ -1502,17 +1502,20 @@ unsafe extern "C" fn rsf_anomaly_swap_view_of(swap: *const Handle) -> *const Vie
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_swap_set_enabled(swap: *mut Handle, enabled: bool) {
+pub(crate) extern "C" fn rsf_anomaly_swap_set_enabled(swap: *mut Handle, enabled: bool) {
     with(swap, (), |swap| swap.enabled = enabled);
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_swap_close_stale(swap: *mut Handle) {
+pub(crate) extern "C" fn rsf_anomaly_swap_close_stale(swap: *mut Handle) {
     with(swap, (), Swap::close_stale);
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_swap_prepare(swap: *mut Handle, facts: Option<&Facts>) -> bool {
+pub(crate) extern "C" fn rsf_anomaly_swap_prepare(
+    swap: *mut Handle,
+    facts: Option<&Facts>,
+) -> bool {
     let Some(facts) = facts else {
         return false;
     };
@@ -1520,7 +1523,7 @@ extern "C" fn rsf_anomaly_swap_prepare(swap: *mut Handle, facts: Option<&Facts>)
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_swap_prepared(swap: *mut Handle) {
+pub(crate) extern "C" fn rsf_anomaly_swap_prepared(swap: *mut Handle) {
     with(swap, (), Swap::prepared);
 }
 
@@ -1542,37 +1545,40 @@ extern "C" fn rsf_anomaly_swap_seam(swap: *mut Handle) -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_swap_combine_end(swap: *mut Handle) {
+pub(crate) extern "C" fn rsf_anomaly_swap_combine_end(swap: *mut Handle) {
     with(swap, (), Swap::combine_end);
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_swap_frame_end(swap: *mut Handle) {
+pub(crate) extern "C" fn rsf_anomaly_swap_frame_end(swap: *mut Handle) {
     with(swap, (), Swap::frame_end);
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_swap_rm_near(swap: *mut Handle) {
+pub(crate) extern "C" fn rsf_anomaly_swap_rm_near(swap: *mut Handle) {
     with(swap, (), Swap::rm_near);
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_swap_sun_begin(swap: *mut Handle) -> bool {
+pub(crate) extern "C" fn rsf_anomaly_swap_sun_begin(swap: *mut Handle) -> bool {
     with(swap, false, Swap::sun_begin)
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_swap_sun_end(swap: *mut Handle, suspended: bool) {
+pub(crate) extern "C" fn rsf_anomaly_swap_sun_end(swap: *mut Handle, suspended: bool) {
     with(swap, (), |swap| swap.sun_end(suspended));
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_swap_position_constant(swap: *mut Handle, constant: *mut c_void) {
+pub(crate) extern "C" fn rsf_anomaly_swap_position_constant(
+    swap: *mut Handle,
+    constant: *mut c_void,
+) {
     with(swap, (), |swap| swap.position_constant(constant));
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_swap_shutdown(swap: *mut Handle) -> bool {
+pub(crate) extern "C" fn rsf_anomaly_swap_shutdown(swap: *mut Handle) -> bool {
     with(swap, true, Swap::shutdown)
 }
 

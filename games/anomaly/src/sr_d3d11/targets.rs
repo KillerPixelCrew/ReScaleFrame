@@ -42,7 +42,7 @@ pub(crate) enum Error {
 
 // The names the stage log uses for TwinBatchInfo::cause.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_twin_error_name(cause: u8) -> *const std::ffi::c_char {
+pub(crate) extern "C" fn rsf_anomaly_sr_twin_error_name(cause: u8) -> *const std::ffi::c_char {
     const NAMES: [&std::ffi::CStr; 7] = [
         c"none",
         c"not_texture",
@@ -134,7 +134,6 @@ impl Target {
             descriptor,
         }
     }
-
 }
 
 impl Texture {
@@ -309,12 +308,12 @@ pub(super) struct TwinBatch {
 
 #[repr(C)]
 #[derive(Default)]
-pub(super) struct TwinBatchInfo {
-    pub(super) bytes: u64,
-    made: u32,
-    failed_index: u32,
-    cause: Error,
-    pub(super) pass_refused: bool,
+pub(crate) struct TwinBatchInfo {
+    pub(crate) bytes: u64,
+    pub(crate) made: u32,
+    pub(crate) failed_index: u32,
+    pub(crate) cause: Error,
+    pub(crate) pass_refused: bool,
 }
 
 const _: () = {
