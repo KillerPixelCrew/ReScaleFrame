@@ -560,9 +560,9 @@ int main() {
         !owner && !chain_out && destroyed_chains == 4, "zero-image proxy is refused and destroyed before publication");
     backbuffer_count = 3;
     auto capture_required = synthetic;
-    capture_required.prepare_chain = [](void* native, rsf_dlgvk_chain_support* support, void** gpu) {
-        const auto result = platform.prepare_chain(native, support, gpu);
-        if (result == RSF_BACKEND_OK) support->capture_enabled = 1;
+    capture_required.prepare_chain = [](void* native, uint32_t* capture_enabled, void** gpu) {
+        const auto result = platform.prepare_chain(native, capture_enabled, gpu);
+        if (result == RSF_BACKEND_OK) *capture_enabled = 1;
         return result;
     };
     const auto before_usage = chain_creates;

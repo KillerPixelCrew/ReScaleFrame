@@ -18,6 +18,30 @@ pub(super) struct Wsi {
 }
 
 impl Wsi {
+    pub(super) fn surface_usage(setup: &Setup, surface: vk::SurfaceKHR) -> Option<u32> {
+        let graphics = &setup.graphics;
+        let address = lookup(
+            graphics.instance_proc,
+            graphics.instance,
+            c"vkGetPhysicalDeviceSurfaceCapabilitiesKHR",
+        )?;
+        let query = unsafe {
+            mem::transmute::<
+                unsafe extern "C" fn(),
+                vk::PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR,
+            >(address)
+        };
+        let mut capabilities = vk::SurfaceCapabilitiesKHR::default();
+        let result = unsafe {
+            query(
+                vk::PhysicalDevice::from_raw(graphics.physical_device as u64),
+                surface,
+                &mut capabilities,
+            )
+        };
+        (result == vk::Result::SUCCESS).then_some(capabilities.supported_usage_flags.as_raw())
+    }
+
     pub(super) fn load(setup: &Setup) -> Option<Self> {
         let graphics = &setup.graphics;
         macro_rules! entry {

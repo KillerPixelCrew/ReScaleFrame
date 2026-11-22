@@ -5,7 +5,7 @@ mod wsi;
 
 use self::wsi::Wsi;
 use crate::sr_session::has_capacity;
-use crate::vulkan_dlss_fg_abi::{ChainSupport, Handle, Platform, Sample, SdkCall, Tag};
+use crate::vulkan_dlss_fg_abi::{Handle, Platform, Sample, SdkCall, Tag};
 use crate::vulkan_fg_abi::{
     RSF_FGVK_ABI_VERSION, RSF_FGVK_FRAME_SLOTS, rsf_dlssgvk_status as Status,
     rsf_fgvk_frame as Frame, rsf_fgvk_frame_slot as Recording, rsf_fgvk_setup as Setup,
@@ -290,27 +290,31 @@ impl Owner {
         let Some(wsi) = Wsi::load(&self.setup) else {
             return MISSING_ENTRY_POINT;
         };
-        let mut support = ChainSupport::default();
-        let prepared =
-            unsafe { (self.platform.prepare_chain)(self.native, &mut support, &mut self.gpu) };
+        let mut capture_enabled = 0;
+        let prepared = unsafe {
+            (self.platform.prepare_chain)(self.native, &mut capture_enabled, &mut self.gpu)
+        };
         if prepared != OK {
             return prepared;
         }
         if self.gpu.is_null() {
             return INIT_FAILED;
         }
+        let Some(surface_usage) = Wsi::surface_usage(&self.setup, info.surface) else {
+            return NOT_SUPPORTED;
+        };
         // Generated frames need a WSI copy destination. Capture also needs a
         // copy source. Keep source usage when available for capture tooling.
         let required = USAGE_TRANSFER_DST
-            | if support.capture_enabled != 0 {
+            | if capture_enabled != 0 {
                 USAGE_TRANSFER_SRC
             } else {
                 0
             };
-        if support.usage & required != required {
+        if surface_usage & required != required {
             return NOT_SUPPORTED;
         }
-        let usage = required | (support.usage & USAGE_TRANSFER_SRC);
+        let usage = required | (surface_usage & USAGE_TRANSFER_SRC);
         let Some(chain) = wsi.create(info, usage) else {
             return INIT_FAILED;
         };

@@ -66,17 +66,29 @@ unsafe extern "C" fn close(user: Handle) {
 
 unsafe extern "C" fn prepare_chain(
     user: Handle,
-    support: *mut ChainSupport,
+    capture_enabled: *mut u32,
     gpu: *mut Handle,
 ) -> i32 {
     unsafe {
-        support.write(ChainSupport {
-            usage: USAGE_TRANSFER_DST,
-            capture_enabled: 0,
-        });
+        capture_enabled.write(0);
         gpu.write(user);
     }
     OK
+}
+
+unsafe extern "system" fn surface_usage(
+    _: vk::PhysicalDevice,
+    surface: vk::SurfaceKHR,
+    output: *mut vk::SurfaceCapabilitiesKHR,
+) -> vk::Result {
+    assert_eq!(surface.as_raw(), 1);
+    unsafe {
+        output.write(vk::SurfaceCapabilitiesKHR {
+            supported_usage_flags: vk::ImageUsageFlags::TRANSFER_DST,
+            ..Default::default()
+        });
+    }
+    vk::Result::SUCCESS
 }
 
 unsafe extern "system" fn create_chain(
@@ -242,6 +254,9 @@ unsafe extern "C" fn proc(
         };
     }
     match name {
+        name if name == c"vkGetPhysicalDeviceSurfaceCapabilitiesKHR" => {
+            entry!(PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR, surface_usage)
+        }
         name if name == c"vkCreateSwapchainKHR" => entry!(PFN_vkCreateSwapchainKHR, create_chain),
         name if name == c"vkDestroySwapchainKHR" => {
             entry!(PFN_vkDestroySwapchainKHR, destroy_chain)

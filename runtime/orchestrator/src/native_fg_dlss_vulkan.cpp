@@ -26,7 +26,6 @@ void on_error(const sl::APIError& error) { rsf_core_dlgvk_report_api_error(stati
 
 struct Native {
     rsf_fgvk_setup setup{};
-    VkSurfaceKHR surface{};
     rsf::vkfg::Device gpu;
     PFN_vkCmdPipelineBarrier barrier = nullptr;
     PFN_vkCmdCopyImage copy = nullptr;
@@ -46,7 +45,6 @@ static_assert(sizeof(rsf_dlgvk_sdk_call) == 96);
 static_assert(offsetof(rsf_dlgvk_sdk_call, camera) == 64);
 static_assert(offsetof(rsf_dlgvk_sdk_call, tags) == 80);
 static_assert(offsetof(rsf_dlgvk_sdk_call, options) == 88);
-static_assert(sizeof(rsf_dlgvk_chain_support) == 8);
 static_assert(sizeof(rsf_dlgvk_platform) == 160);
 static_assert(VK_IMAGE_USAGE_TRANSFER_SRC_BIT == 1 && VK_IMAGE_USAGE_TRANSFER_DST_BIT == 2 &&
     VK_FORMAT_R8G8B8A8_UNORM == 37 && VK_FORMAT_B8G8R8A8_UNORM == 44);
@@ -150,12 +148,11 @@ rsf_backend_result release(void*, uintptr_t, void* user) {
 rsf_backend_result open(const rsf_fgvk_setup* setup, void** out) noexcept try {
     auto self = std::make_unique<Native>();
     self->setup = *setup;
-    self->surface = static_cast<const VkSwapchainCreateInfoKHR*>(setup->create_info)->surface;
     *out = self.release();
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
-rsf_backend_result prepare_chain(void* user, rsf_dlgvk_chain_support* support, void** gpu) noexcept try {
+rsf_backend_result prepare_chain(void* user, uint32_t* capture_enabled, void** gpu) noexcept try {
     auto* self = static_cast<Native*>(user);
     const auto& graphics = self->setup.graphics;
 #define RSF_LOAD(member, function) self->member = reinterpret_cast<PFN_##function>(graphics.device_proc(graphics.device, #function)); if (!self->member) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT
@@ -169,11 +166,7 @@ rsf_backend_result prepare_chain(void* user, rsf_dlgvk_chain_support* support, v
     self->gpu.memory_types(memory);
     self->capture.set_provider(0, RSF_SR_DLSS, true);
     if (!self->capture.initialize(static_cast<VkDevice>(graphics.device), graphics.device_proc, memory)) return RSF_BACKEND_ERROR_INIT_FAILED;
-    const auto capabilities = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR>(graphics.instance_proc(graphics.instance, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR"));
-    VkSurfaceCapabilitiesKHR supported{};
-    if (!capabilities || capabilities(static_cast<VkPhysicalDevice>(graphics.physical_device), self->surface, &supported) != VK_SUCCESS)
-        return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    *support = {supported.supportedUsageFlags, self->capture.enabled() ? 1u : 0u};
+    *capture_enabled = self->capture.enabled() ? 1u : 0u;
     *gpu = self->gpu.get();
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }

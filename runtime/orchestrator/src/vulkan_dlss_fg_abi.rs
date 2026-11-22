@@ -47,18 +47,11 @@ pub(super) struct SdkCall {
 }
 
 #[repr(C)]
-#[derive(Default)]
-pub(super) struct ChainSupport {
-    pub usage: u32,
-    pub capture_enabled: u32,
-}
-
-#[repr(C)]
 pub(super) struct Platform {
     pub gpu: *const Gpu,
     pub open: unsafe extern "C" fn(*const Setup, *mut Handle) -> i32,
     pub close: unsafe extern "C" fn(Handle),
-    pub prepare_chain: unsafe extern "C" fn(Handle, *mut ChainSupport, *mut Handle) -> i32,
+    pub prepare_chain: unsafe extern "C" fn(Handle, *mut u32, *mut Handle) -> i32,
     pub start_capture: unsafe extern "C" fn(Handle) -> i32,
     pub invoke: unsafe extern "C" fn(*const rsf_slvk_call) -> i32,
     pub initialize: rsf_slvk_callback,
@@ -84,6 +77,5 @@ const _: () = {
     assert!(std::mem::offset_of!(SdkCall, camera) == 64);
     assert!(std::mem::offset_of!(SdkCall, tags) == 80);
     assert!(std::mem::offset_of!(SdkCall, options) == 88);
-    assert!(size_of::<ChainSupport>() == 8);
     assert!(size_of::<Platform>() == 160);
 };
