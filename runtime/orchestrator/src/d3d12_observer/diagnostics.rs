@@ -117,7 +117,7 @@ static REMOVAL_REPORTED: AtomicBool = AtomicBool::new(false);
 static COUNTS: [AtomicU8; MESSAGE_IDS] = [const { AtomicU8::new(0) }; MESSAGE_IDS];
 
 fn sink() -> Option<Sink> {
-    SINK.get().map(|sink| *lock(&sink))
+    SINK.get().map(|sink| *lock(sink))
 }
 
 #[unsafe(no_mangle)]

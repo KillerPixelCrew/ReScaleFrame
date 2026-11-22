@@ -48,20 +48,26 @@ mod elapsed_tests {
 // panel code after a renderer has stopped.
 static PUBLISHED: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
+type Create = unsafe extern "C" fn(u32) -> *mut rsf_overlay;
+type Destroy = unsafe extern "C" fn(*mut rsf_overlay);
+type Frame = unsafe extern "C" fn(
+    *mut rsf_overlay,
+    *const rsf_overlay_input,
+    *const rsf_overlay_stats,
+    *mut rsf_overlay_draw_data,
+    *mut rsf_overlay_intent,
+) -> i32;
+type TextureUpdates =
+    unsafe extern "C" fn(*mut rsf_overlay, *mut rsf_overlay_texture_update, u32) -> u32;
+type TexturesToFree = unsafe extern "C" fn(*mut rsf_overlay, *mut u64, u32) -> u32;
+
 #[derive(Clone, Copy)]
 pub(super) struct PanelEntries {
-    pub create: unsafe extern "C" fn(u32) -> *mut rsf_overlay,
-    pub destroy: unsafe extern "C" fn(*mut rsf_overlay),
-    pub frame: unsafe extern "C" fn(
-        *mut rsf_overlay,
-        *const rsf_overlay_input,
-        *const rsf_overlay_stats,
-        *mut rsf_overlay_draw_data,
-        *mut rsf_overlay_intent,
-    ) -> i32,
-    pub texture_updates:
-        unsafe extern "C" fn(*mut rsf_overlay, *mut rsf_overlay_texture_update, u32) -> u32,
-    pub textures_to_free: unsafe extern "C" fn(*mut rsf_overlay, *mut u64, u32) -> u32,
+    pub create: Create,
+    pub destroy: Destroy,
+    pub frame: Frame,
+    pub texture_updates: TextureUpdates,
+    pub textures_to_free: TexturesToFree,
 }
 
 pub(super) enum LoadError {
@@ -113,11 +119,13 @@ fn exports(module: HMODULE) -> Option<PanelEntries> {
     // The panel's five C exports have the signatures declared in overlay.h.
     unsafe {
         Some(PanelEntries {
-            create: std::mem::transmute::<Export, _>(get(c"rsf_overlay_create")?),
-            destroy: std::mem::transmute::<Export, _>(get(c"rsf_overlay_destroy")?),
-            frame: std::mem::transmute::<Export, _>(get(c"rsf_overlay_frame")?),
-            texture_updates: std::mem::transmute::<Export, _>(get(c"rsf_overlay_texture_updates")?),
-            textures_to_free: std::mem::transmute::<Export, _>(get(
+            create: std::mem::transmute::<Export, Create>(get(c"rsf_overlay_create")?),
+            destroy: std::mem::transmute::<Export, Destroy>(get(c"rsf_overlay_destroy")?),
+            frame: std::mem::transmute::<Export, Frame>(get(c"rsf_overlay_frame")?),
+            texture_updates: std::mem::transmute::<Export, TextureUpdates>(get(
+                c"rsf_overlay_texture_updates",
+            )?),
+            textures_to_free: std::mem::transmute::<Export, TexturesToFree>(get(
                 c"rsf_overlay_textures_to_free",
             )?),
         })

@@ -137,6 +137,7 @@ pub(super) unsafe fn wait_fence(fence: Handle, value: u64, event: Handle) -> i32
     i32::from(unsafe { crate::d3d12_fence::wait_fence(fence, value, event, 10_000) } >= 0)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn dump_named(
     context: Handle,
     texture: Handle,

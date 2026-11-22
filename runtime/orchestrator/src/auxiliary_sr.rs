@@ -1160,7 +1160,7 @@ mod tests {
             immediate_device: retain,
             device_ready: ready,
             describe_texture: describe,
-            create_texture: create_texture,
+            create_texture,
             create_source_view: create_view,
             create_output_view: create_view,
             packed_colour_support: unused_packed_colour_support,

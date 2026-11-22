@@ -73,8 +73,9 @@ pub(super) fn invert(m: &Mat4) -> Mat4 {
         for r in 0..4 {
             if r != c {
                 let f = a[r][c];
-                for k in 0..8 {
-                    a[r][k] -= f * a[c][k];
+                let pivot = a[c];
+                for (value, p) in a[r].iter_mut().zip(pivot) {
+                    *value -= f * p;
                 }
             }
         }

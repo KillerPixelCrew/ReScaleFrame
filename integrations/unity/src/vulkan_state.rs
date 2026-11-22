@@ -1026,7 +1026,9 @@ pub(crate) fn retire_swapchain(
     result
 }
 
-/// What a present interception found for its target.
+/// What a present interception found for its target. It lives for one present call, so the frame
+/// stays inline rather than taking a heap allocation per present.
+#[allow(clippy::large_enum_variant)]
 enum Target {
     /// Another target: forward untouched.
     Other,

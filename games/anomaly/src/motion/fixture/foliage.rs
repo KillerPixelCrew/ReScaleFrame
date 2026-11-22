@@ -331,7 +331,8 @@ pub(super) fn policy() {
     };
     let vp = camera.projection.compose(&camera.view);
     assert!(unsafe { decide_tree(&tree()) }.ok() == Some(vp));
-    let cases: [(HistoryReason, fn(&mut TreeDrawInput)); 10] = [
+    type Case = (HistoryReason, fn(&mut TreeDrawInput));
+    let cases: [Case; 10] = [
         (KindMismatch, |t| t.family = CORE_STATIC),
         (NoVisual, |t| t.in_visual = false),
         (Unidentified, |t| {
@@ -381,7 +382,8 @@ pub(super) fn policy() {
         previous_jitter_v: 0.,
     };
     assert!(unsafe { decide_detail(&detail()) }.ok() == Some(vp));
-    let cases: [(HistoryReason, fn(&mut DetailDrawInput)); 9] = [
+    type DetailCase = (HistoryReason, fn(&mut DetailDrawInput));
+    let cases: [DetailCase; 9] = [
         (KindMismatch, |d| d.family = FOLIAGE_TREE),
         (NoVisual, |d| d.detail_window = false),
         (NoContext, |d| d.context = false),

@@ -141,6 +141,7 @@ pub(super) unsafe fn sdk_versions(
 }
 
 /// Writes the retained generation descriptors in their final native storage.
+#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn sdk_generation(
     setup: &BridgeCreate,
     provider: u64,
@@ -195,6 +196,7 @@ pub(super) unsafe fn sdk_generation(
 
 type DescribeResource = unsafe extern "C" fn(Handle, u32, *mut FfxApiResource);
 
+#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn sdk_configure(
     swapchain: Handle,
     sequence: u64,

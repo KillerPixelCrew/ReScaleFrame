@@ -314,7 +314,6 @@ impl Platform {
                 foreground_process_id: foreground,
                 current_process_id: GetCurrentProcessId(),
                 input_window_visible: u32::from(IsWindowVisible(window) != 0),
-                ..Default::default()
             }
         }
     }
@@ -397,7 +396,6 @@ impl Platform {
                 source_frame_id: fg.source_frame_id,
                 provider_generation: rsf_d3d11_present_generation(),
                 generated_callbacks: fg.vendor.generated_callbacks,
-                ..Default::default()
             }
         }
     }
@@ -420,7 +418,6 @@ impl Platform {
             owner: latency.owner,
             available: latency.available,
             effective_mode: latency.effective_mode,
-            ..Default::default()
         })
     }
 

@@ -544,7 +544,7 @@ fn texture_info(texture: Handle) -> TextureInfo {
 // of any D3D11 write. The vendor's reads have been joined or drained by now.
 fn restore_read_state(device: &Device, slot: &mut Slot) -> bool {
     // A list left open by a failed Close cannot be reset; replace the pair instead.
-    if !slot.retirement.as_ref().is_some_and(|c| reset(c)) {
+    if !slot.retirement.as_ref().is_some_and(reset) {
         slot.retirement = None;
         match create_commands(device) {
             Some(commands) if reset(&commands) => slot.retirement = Some(commands),
@@ -787,7 +787,7 @@ pub(super) unsafe extern "C" fn rsf_native_fg_status_get(status: *mut NativeStat
 
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_native_fg_scene(pass: *const Pass) {
-    unsafe { set_scene(pass, |pass| refuse_held_inputs(pass)) };
+    unsafe { set_scene(pass, refuse_held_inputs) };
 }
 
 fn refuse_held_inputs(pass: &Pass) {
@@ -813,11 +813,9 @@ pub(crate) unsafe extern "C" fn rsf_native_fg_capture_scoped(
     {
         return;
     }
-    with_capture_scene(
-        unsafe { &*identity },
-        |pass| refuse_held_inputs(pass),
-        || capture(context, frame),
-    );
+    with_capture_scene(unsafe { &*identity }, refuse_held_inputs, || {
+        capture(context, frame)
+    });
 }
 
 #[unsafe(no_mangle)]

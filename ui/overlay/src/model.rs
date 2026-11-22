@@ -567,8 +567,10 @@ mod tests {
         assert_eq!(Quality::from_abi(6), None);
         assert_eq!(Quality::from_abi(u32::MAX), None);
 
-        let mut stats = Stats::default();
-        stats.quality_raw = 7;
+        let stats = Stats {
+            quality_raw: 7,
+            ..Stats::default()
+        };
         assert_eq!(stats.quality(), None);
         assert_eq!(stats.quality_raw, 7);
     }

@@ -382,7 +382,8 @@ fn adapter_binding(query: Query) {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_sr_runtime_fixture(selection: *const c_char, query: Query) -> i32 {
-    let cases: [(&str, fn(Query)); 6] = [
+    type Case = (&'static str, fn(Query));
+    let cases: [Case; 6] = [
         ("query", query_contract),
         ("idle", idle_contract),
         ("binding", adapter_binding),

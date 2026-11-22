@@ -134,13 +134,13 @@ fn scope_contract() {
         (outer.swapchain, outer.scope_id)
     );
     assert_eq!((chain.refs, alias.refs), (1, 1));
-    chain.available = false;
+    unsafe { (*chain_ptr).available = false };
     assert_eq!(find(alias_ptr, &mut matched), 0);
     assert_eq!(
         chain.refs, 1,
         "release the observed identity after the owned query fails"
     );
-    chain.available = true;
+    unsafe { (*chain_ptr).available = true };
 
     assert_eq!(begin(&inner), 1);
     assert_eq!(find(chain_ptr, &mut matched), 0);

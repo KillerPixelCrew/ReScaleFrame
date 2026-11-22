@@ -306,7 +306,7 @@ pub fn guarded<F: FnMut() -> i32>(call: F) -> i32 {
 }
 
 /// Runs call, which may enter foreign C++ code through C-unwind calls; a foreign C++ exception
-/// (MSVC SEH code 0xE06D7363) returns 	hrown. Other faults propagate.
+/// (MSVC SEH code 0xE06D7363) returns `thrown`. Other faults propagate.
 pub fn guarded_or<F: FnMut() -> i32>(thrown: i32, mut call: F) -> i32 {
     unsafe extern "C-unwind" fn thunk<F: FnMut() -> i32>(user: *mut c_void) -> i32 {
         unsafe { (*user.cast::<F>())() }

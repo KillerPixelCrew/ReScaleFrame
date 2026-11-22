@@ -291,7 +291,8 @@ fn core_policy() {
     let vp = camera.projection.compose(&camera.view);
     let d = decision(&core_input(&camera));
     assert!(d.reason == Valid && d.flags.draw && !d.flags.palette && d.previous_wvp == vp);
-    let variants: [(HistoryReason, fn(&mut CoreDrawInput)); 6] = [
+    type Variant = (HistoryReason, fn(&mut CoreDrawInput));
+    let variants: [Variant; 6] = [
         (NoVisual, |r| r.in_visual = false),
         (Unidentified, |r| {
             r.verdict = RSF_ANOMALY_DRAW_UNIDENTIFIED_DYNAMIC as u8

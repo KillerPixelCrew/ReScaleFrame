@@ -132,7 +132,7 @@ unsafe extern "C" fn rsf_d3d11_host_fixture_check_inner(user: Raw, inner: Raw) -
     };
     let native_status = |call: &mut rsf_d3d11_chain_dispatch| {
         let status = unsafe { rsf_d3d11_host_dispatch_chain(user, call) };
-        (status == OK && call.handled != 0).then(|| unsafe { call.result.hresult })
+        (status == OK && call.handled != 0).then_some(unsafe { call.result.hresult })
     };
     if native_status(&mut call) != Some(INVALID_CALL) {
         return fail("Present1 preserves dirty-region refusal");
@@ -158,14 +158,14 @@ unsafe extern "C" fn rsf_d3d11_host_fixture_check_inner(user: Raw, inner: Raw) -
     }
     call.args = unsafe { std::mem::zeroed() };
     call.method = RSF_D3D11_DISPATCH_SET_FULLSCREEN_STATE;
-    if !native_status(&mut call).is_some_and(|result| result >= 0) {
+    if native_status(&mut call).is_none_or(|result| result < 0) {
         return fail("SetFullscreenState uses the actual physical owner");
     }
     call.method = RSF_D3D11_DISPATCH_SET_COLOR_SPACE1;
     call.args.color_space = rsf_d3d11_chain_dispatch__bindgen_ty_1__bindgen_ty_5 {
         color_space: DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709.0 as u32,
     };
-    if !native_status(&mut call).is_some_and(|result| result >= 0) {
+    if native_status(&mut call).is_none_or(|result| result < 0) {
         return fail("SetColorSpace1 uses the actual physical owner");
     }
     0

@@ -290,7 +290,11 @@ fn device(runtime: *const u16, present: bool) -> i32 {
         else {
             return (21, true);
         };
-        let get_instance_proc_addr = unsafe { mem::transmute(get_proc) };
+        let get_instance_proc_addr = unsafe {
+            mem::transmute::<unsafe extern "system" fn() -> isize, vk::PFN_vkGetInstanceProcAddr>(
+                get_proc,
+            )
+        };
         INSTANCE_PROC.get_or_init(|| get_instance_proc_addr);
         let entry = unsafe {
             Entry::from_static_fn(StaticFn {

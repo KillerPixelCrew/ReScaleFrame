@@ -238,11 +238,9 @@ fn next_state(
     reset: bool,
 ) -> State {
     let mut out = MaybeUninit::uninit();
-    {
-        rsf_anomaly_sr_next_jitter(
-            state, scope, applied, &sample, extent[0], extent[1], reset, &mut out,
-        )
-    };
+    rsf_anomaly_sr_next_jitter(
+        state, scope, applied, &sample, extent[0], extent[1], reset, &mut out,
+    );
     unsafe { out.assume_init() }
 }
 

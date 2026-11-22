@@ -108,14 +108,14 @@ pub(super) unsafe extern "C" fn rsf_patch_code(
     }
     let target = (base + rva as usize) as *mut u8;
     let count = count as usize;
-    if !expected.is_null() && expected_count != 0 {
-        if expected_count as usize != count
+    if !expected.is_null()
+        && expected_count != 0
+        && (expected_count as usize != count
             || unsafe {
                 slice::from_raw_parts(target, count) != slice::from_raw_parts(expected, count)
-            }
-        {
-            return INVALID_ARGUMENT;
-        }
+            })
+    {
+        return INVALID_ARGUMENT;
     }
     let mut protection = 0;
     if unsafe {

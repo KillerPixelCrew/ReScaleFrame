@@ -39,7 +39,7 @@ fn enable_debug(gl_debug: bool) {
     );
     unsafe {
         if gl_debug && let Some(proc) = gl_proc(s!("glDebugMessageCallback")) {
-            let callback = transmute::<_, Callback>(proc);
+            let callback = transmute::<GlEntry, Callback>(proc);
             glEnable(0x92e0); // GL_DEBUG_OUTPUT
             glEnable(0x8242); // GL_DEBUG_OUTPUT_SYNCHRONOUS
             callback(debug_gl, std::ptr::null());
@@ -52,6 +52,9 @@ fn enable_debug(gl_debug: bool) {
         }
     }
 }
+
+/// What wglGetProcAddress returns for a present entry point.
+type GlEntry = unsafe extern "system" fn() -> isize;
 
 fn gl_proc(name: windows::core::PCSTR) -> windows::Win32::Foundation::PROC {
     // WGL can return sentinel values for unsupported entry points.
@@ -72,7 +75,7 @@ impl Framebuffer {
             ($name:literal, $ty:ty) => {{
                 let proc =
                     gl_proc(s!($name)).ok_or(FixtureError::Fail(concat!("missing ", $name)))?;
-                unsafe { transmute::<_, $ty>(proc) }
+                unsafe { transmute::<GlEntry, $ty>(proc) }
             }};
         }
         let generate = load!(

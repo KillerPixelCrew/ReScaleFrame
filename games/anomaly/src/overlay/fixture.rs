@@ -347,7 +347,6 @@ extern "C" fn rsf_anomaly_overlay_hooks_fixture(
         status: Some(status),
         settings_get: Some(settings_get),
         settings_apply: Some(settings_apply),
-        ..Default::default()
     };
     let options = rsf_anomaly_overlay_options {
         configuration: w!(r"C:\rsf-test\ReScaleFrame.ini"),

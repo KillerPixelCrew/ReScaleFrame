@@ -52,7 +52,7 @@ fn register_startup_options(runtime: HMODULE, scope: *mut c_void, path: *const u
         restart: 1,
         ..Default::default()
     };
-    #[cfg_attr(not(feature = "research"), expect(unused_mut))]
+    #[cfg_attr(not(feature = "research"), expect(unused_mut, clippy::useless_vec))]
     let mut rows = vec![
         toggle(c"Enable", c"Enable renderer integration", 1),
         toggle(c"ForceD3D12", c"Force Direct3D 12", 1),

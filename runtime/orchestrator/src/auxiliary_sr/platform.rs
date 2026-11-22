@@ -163,19 +163,19 @@ unsafe extern "C" fn draw(
     }
 }
 static PLATFORM: AuxPlatform = AuxPlatform {
-    immediate_device: immediate_device,
-    device_ready: device_ready,
-    describe_texture: describe_texture,
-    packed_colour_support: packed_colour_support,
-    create_pipeline: create_pipeline,
-    create_texture: create_texture,
+    immediate_device,
+    device_ready,
+    describe_texture,
+    packed_colour_support,
+    create_pipeline,
+    create_texture,
     create_source_view: rsf_d3d11_create_shader_view,
     create_output_view: rsf_d3d11_output_create_rtv,
     save: rsf_d3d11_state_save,
     restore: rsf_d3d11_state_restore,
-    clear: clear,
+    clear,
     copy: rsf_d3d11_copy_resource,
-    draw: draw,
+    draw,
 };
 
 pub(crate) fn rsf_auxiliary_sr_platform() -> *const AuxPlatform {

@@ -152,6 +152,8 @@ pub(super) unsafe extern "C" fn rsf_sr_session_create(
     }
 }
 
+// Called by the rsf_sr_session_create export and the session fixture, not by unit tests.
+#[cfg_attr(test, allow(dead_code))]
 unsafe fn create(
     setup: *const rsf_sr_session_setup,
     out: *mut *mut Session,

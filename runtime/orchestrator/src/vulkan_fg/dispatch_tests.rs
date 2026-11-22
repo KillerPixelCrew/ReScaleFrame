@@ -1043,9 +1043,12 @@ fn run(platform: &Platform, fsr4: bool, xess: bool) {
             assert!(
                 rsf_fgvk_enable(owner, 1) == FIXTURE_OK
                     && f!(enabled) != 0
-                    && f!(generated_count) == 1
-                    && rsf_fgvk_enable_options(owner, 0, 2) == FIXTURE_NOT_SUPPORTED
-                    && f!(enabled) != 0,
+                    && f!(generated_count) == 1,
+                "FSR4 enable activates count one"
+            );
+            // Separate asserts: each call changes what the fixture reads back.
+            assert!(
+                rsf_fgvk_enable_options(owner, 0, 2) == FIXTURE_NOT_SUPPORTED && f!(enabled) != 0,
                 "FSR4 invalid options retain prior active count-one state"
             );
             f!(calls) = 0;
@@ -1149,13 +1152,16 @@ fn run(platform: &Platform, fsr4: bool, xess: bool) {
                 "explicit XeSS FG remains independent of DLSS SR and preserves requested count"
             );
             assert!(
-                rsf_fgvk_backend(owner, &mut value) == FIXTURE_OK
-                    && value == 5
-                    && rsf_fgvk_image_layout(owner, &mut value) == FIXTURE_OK
-                    && value == 5
-                    && rsf_fgvk_max_generated(owner, &mut value) == FIXTURE_OK
-                    && value == 5,
-                "XeSS owner/layout/native count dispatched"
+                rsf_fgvk_backend(owner, &mut value) == FIXTURE_OK && value == 5,
+                "XeSS owner dispatched"
+            );
+            assert!(
+                rsf_fgvk_image_layout(owner, &mut value) == FIXTURE_OK && value == 5,
+                "XeSS layout dispatched"
+            );
+            assert!(
+                rsf_fgvk_max_generated(owner, &mut value) == FIXTURE_OK && value == 5,
+                "XeSS native count dispatched"
             );
             assert!(
                 create(

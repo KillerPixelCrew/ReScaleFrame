@@ -81,6 +81,8 @@ const DIAGNOSTIC_FRAMES: u32 = 12;
 
 type Handle = *mut c_void;
 
+// Only the rsf_sr12_create_planned export, which unit tests compile out, writes it.
+#[cfg_attr(test, allow(dead_code))]
 #[repr(C)]
 struct PlanResult {
     struct_size: u32,

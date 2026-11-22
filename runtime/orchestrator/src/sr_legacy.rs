@@ -61,6 +61,7 @@ static SERVICES: Services = Services {
 };
 
 #[cfg(not(test))]
+#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn rsf_sr_legacy_create(
     device: *mut c_void,
     width: u32,

@@ -254,7 +254,6 @@ impl Platform {
             owner: latency.owner,
             sleep_calls: latency.sleep_calls,
             marker_calls: latency.marker_calls,
-            ..Default::default()
         })
     }
 
@@ -275,7 +274,6 @@ impl Platform {
             presenter: u32::from(present),
             presenter_backend: backend,
             sdk_shutdown_pending: u32::from(state.shutdown_pending),
-            ..Default::default()
         }
     }
 
