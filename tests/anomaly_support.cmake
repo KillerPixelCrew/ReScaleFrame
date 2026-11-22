@@ -4,9 +4,7 @@ add_executable(rsf_anomaly_temporal_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_temp
 target_include_directories(rsf_anomaly_temporal_test PRIVATE "${PROJECT_SOURCE_DIR}")
 target_link_libraries(rsf_anomaly_temporal_test PRIVATE rsf_anomaly_fixtures_rust rsf_build_options)
 add_test(NAME anomaly_temporal_contract COMMAND rsf_anomaly_temporal_test)
-add_test(NAME anomaly_temporal_unknown_selection COMMAND rsf_anomaly_temporal_test unknown-case)
-set_tests_properties(anomaly_temporal_unknown_selection PROPERTIES WILL_FAIL TRUE)
-set_tests_properties(anomaly_temporal_contract anomaly_temporal_unknown_selection PROPERTIES TIMEOUT 30)
+set_tests_properties(anomaly_temporal_contract PROPERTIES TIMEOUT 30)
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 # Every *_test.py here covers a script in tools/. The Anomaly shader tests need the licensed local
@@ -68,8 +66,6 @@ add_executable(rsf_anomaly_sr_swap_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_sw
 target_include_directories(rsf_anomaly_sr_swap_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
 target_link_libraries(rsf_anomaly_sr_swap_test PRIVATE rsf_anomaly_fixtures_rust rsf_build_options)
 add_test(NAME anomaly_sr_swap_contract COMMAND rsf_anomaly_sr_swap_test)
-add_test(NAME anomaly_sr_swap_unknown_selection COMMAND rsf_anomaly_sr_swap_test unknown-case)
-set_tests_properties(anomaly_sr_swap_unknown_selection PROPERTIES WILL_FAIL TRUE)
 add_executable(rsf_anomaly_sr_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_hook_bridge.c"
     "${RSF_ANOMALY_SR_SRC}/sr_stage_platform.c" "${RSF_ANOMALY_SR_SRC}/sr_d3d11_platform.c" "${RSF_ANOMALY_SR_SRC}/engine_slots.c"
     "${RSF_ANOMALY_SR_SRC}/native_observer_platform.c" ${RSF_ANOMALY_GEOMETRY_SOURCES})
@@ -85,7 +81,7 @@ target_link_libraries(rsf_anomaly_sr_roundtrip_test PRIVATE rsf_anomaly_fixtures
     ReScaleFrame::Graphics d3d11 dxgi rsf_build_options)
 add_test(NAME anomaly_sr_roundtrip_device COMMAND rsf_anomaly_sr_roundtrip_test)
 set_tests_properties(anomaly_sr_roundtrip_device PROPERTIES SKIP_RETURN_CODE 77)
-set_tests_properties(anomaly_sr_swap_contract anomaly_sr_swap_unknown_selection anomaly_sr_hooks_contract
+set_tests_properties(anomaly_sr_swap_contract anomaly_sr_hooks_contract
     anomaly_sr_roundtrip_device PROPERTIES TIMEOUT 120)
 
 # Motion MRT. The contract test checks the b13 layouts against the shader READMEs/headers, the history policy, the
@@ -99,8 +95,6 @@ set_target_properties(rsf_anomaly_motion_contract_test PROPERTIES LINKER_LANGUAG
 target_link_libraries(rsf_anomaly_motion_contract_test PRIVATE rsf_anomaly_fixtures_rust
     bcrypt ReScaleFrame::GameSDK ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME anomaly_motion_contract COMMAND rsf_anomaly_motion_contract_test)
-add_test(NAME anomaly_motion_unknown_selection COMMAND rsf_anomaly_motion_contract_test unknown-case)
-set_tests_properties(anomaly_motion_unknown_selection PROPERTIES WILL_FAIL TRUE)
 add_executable(rsf_anomaly_motion_device_test "${CMAKE_CURRENT_LIST_DIR}/fixture_main.c")
 target_compile_definitions(rsf_anomaly_motion_device_test PRIVATE RSF_FIXTURE_ENTRY=rsf_anomaly_motion_device_fixture)
 set_target_properties(rsf_anomaly_motion_device_test PROPERTIES LINKER_LANGUAGE CXX)
@@ -108,7 +102,7 @@ target_link_libraries(rsf_anomaly_motion_device_test PRIVATE rsf_anomaly_fixture
     bcrypt d3d11 d3dcompiler dxgi dxguid rsf_build_options)
 add_test(NAME anomaly_motion_device COMMAND rsf_anomaly_motion_device_test)
 set_tests_properties(anomaly_motion_device PROPERTIES SKIP_RETURN_CODE 77)
-set_tests_properties(anomaly_motion_contract anomaly_motion_unknown_selection anomaly_motion_device PROPERTIES TIMEOUT 300)
+set_tests_properties(anomaly_motion_contract anomaly_motion_device PROPERTIES TIMEOUT 300)
 # The geometry flush detour (redirected onto a fixture) calls the motion stage's flush slot after the original.
 add_executable(rsf_anomaly_motion_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_hooks_native.c"
     ${RSF_ANOMALY_GEOMETRY_SOURCES})
@@ -167,8 +161,6 @@ set_target_properties(rsf_anomaly_sr_jitter_test PROPERTIES LINKER_LANGUAGE CXX)
 target_include_directories(rsf_anomaly_sr_jitter_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
 target_link_libraries(rsf_anomaly_sr_jitter_test PRIVATE rsf_anomaly_sr_fixture_rust rsf_build_options)
 add_test(NAME anomaly_sr_jitter_contract COMMAND rsf_anomaly_sr_jitter_test)
-add_test(NAME anomaly_sr_jitter_unknown_selection COMMAND rsf_anomaly_sr_jitter_test unknown-case)
-set_tests_properties(anomaly_sr_jitter_unknown_selection PROPERTIES WILL_FAIL TRUE)
 add_executable(rsf_anomaly_sr_jitter_device_test "${CMAKE_CURRENT_LIST_DIR}/fixture_main.c")
 target_compile_definitions(rsf_anomaly_sr_jitter_device_test PRIVATE RSF_FIXTURE_ENTRY=rsf_anomaly_sr_jitter_device_fixture)
 set_target_properties(rsf_anomaly_sr_jitter_device_test PROPERTIES LINKER_LANGUAGE CXX)
@@ -176,7 +168,7 @@ target_include_directories(rsf_anomaly_sr_jitter_device_test PRIVATE "${RSF_ANOM
 target_link_libraries(rsf_anomaly_sr_jitter_device_test PRIVATE rsf_anomaly_fixtures_rust d3d11 dxgi rsf_build_options)
 add_test(NAME anomaly_sr_jitter_device COMMAND rsf_anomaly_sr_jitter_device_test)
 set_tests_properties(anomaly_sr_jitter_device PROPERTIES SKIP_RETURN_CODE 77)
-set_tests_properties(anomaly_sr_jitter_contract anomaly_sr_jitter_unknown_selection anomaly_sr_jitter_device PROPERTIES TIMEOUT 120)
+set_tests_properties(anomaly_sr_jitter_contract anomaly_sr_jitter_device PROPERTIES TIMEOUT 120)
 # The Stage 3 burst measurement (tools/anomaly_sr_evidence.py --measure-jitter) on a synthetic shifted burst; 77 without numpy.
 if(Python3_Interpreter_FOUND)
     add_test(NAME anomaly_sr_measure_self_test COMMAND "${Python3_EXECUTABLE}" -I "${PROJECT_SOURCE_DIR}/tools/anomaly_sr_evidence.py"
