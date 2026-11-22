@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #![cfg(all(windows, not(test)))]
 
+mod fsr4_fg_bridge;
 mod shared_surface_abi;
 
 use shared_surface_abi::*;

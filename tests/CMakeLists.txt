@@ -728,8 +728,14 @@ target_include_directories(rsf_native_fg_vulkan_dispatch_fsr4_test PRIVATE ../ru
 target_link_libraries(rsf_native_fg_vulkan_dispatch_fsr4_test PRIVATE rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_build_options)
 add_test(NAME native_fg_vulkan_dispatch_fsr4_contract COMMAND rsf_native_fg_vulkan_dispatch_fsr4_test)
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_FFX_INCLUDE}/dx12/ffx_api_dx12.h" AND EXISTS "${RSF_FFX_INCLUDE}/../../framegeneration/include/ffx_framegeneration.h")
-    add_executable(rsf_native_fsr4_fg_bridge_test native_fsr4_fg_bridge.cpp)
-    target_link_libraries(rsf_native_fsr4_fg_bridge_test PRIVATE ReScaleFrame::NativeVulkan rsf_build_options dxgi)
+    add_executable(rsf_native_fsr4_fg_bridge_test presentation/fsr4_fg_bridge_main.c)
+    set_target_properties(rsf_native_fsr4_fg_bridge_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON
+        LINKER_LANGUAGE CXX)
+    if(MINGW)
+        target_link_options(rsf_native_fsr4_fg_bridge_test PRIVATE -municode)
+    endif()
+    target_link_libraries(rsf_native_fsr4_fg_bridge_test PRIVATE rsf_presentation_fixtures_rust
+        ReScaleFrame::NativeVulkan rsf_build_options dxgi)
     add_test(NAME native_fsr4_fg_bridge_contract COMMAND rsf_native_fsr4_fg_bridge_test)
     add_executable(rsf_native_fsr4_fg_state_test native_fsr4_fg_state.cpp)
     target_include_directories(rsf_native_fsr4_fg_state_test PRIVATE ../runtime/orchestrator/include)
