@@ -50,7 +50,7 @@ executable's directory (`std::env::current_exe`, which is `GetModuleFileNameW` o
 `rsf_ac7_truesky_leaves` in `ac7_sites.h` (104 bytes) lends: the existing code leaves (SEH read,
 protected write) with the renderer's host log; `module` (`GetModuleHandleW`); `relay_allocate`
 (the unchanged nearby-page search, then the handler stored in the slot) and `relay_release`; the
-two handler addresses; `depth_ready`; `motion_release` (`rsf_ac7_cloud_depth_release`);
+two handler addresses; `depth_ready`; `motion_release` (drops the `CloudDepth` resources);
 `depth_release` (shader and device reset, readiness off). Entry points:
 `rsf_ac7_truesky_apply`, `rsf_ac7_truesky_refuse_full_grid` and `rsf_ac7_truesky_restore`.
 `apply_cloud_resolution_patch` and `restore_truesky` are now lock-and-call wrappers; the

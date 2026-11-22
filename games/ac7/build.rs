@@ -64,7 +64,6 @@ fn bindings() {
     for private in [
         "ac7_scope_owner.h",
         "ac7_sites.h",
-        "cloud_depth_platform.h",
         "contact_shadow.h",
     ] {
         headers.push(format!("games/ac7/src/{private}"));

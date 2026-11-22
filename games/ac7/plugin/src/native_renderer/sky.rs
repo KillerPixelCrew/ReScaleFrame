@@ -4,9 +4,7 @@
 //! (truesky.rs) and the sky render and projection hooks.
 use super::leaves::code_leaves;
 use super::{Guard, Renderer, hook, installed, key, original, primary_view, read, scope};
-use crate::cloud_depth::d3d11::rsf_ac7_cloud_depth_release;
-use crate::cloud_depth::d3d11::rsf_ac7_cloud_depth_write;
-use crate::cloud_depth::d3d11::rsf_ac7_create_truesky_depth_shader;
+use crate::cloud_depth::d3d11::{CloudDepth, depth_shader};
 use crate::sys::rsf_ac7_native_renderer;
 use crate::truesky::{NativePlugin, apply_native, refuse_full_grid_native, restore_native};
 use rsf_game_sys::RSF_GAME_RENDER_CLOUD_DEPTH;
@@ -18,8 +16,7 @@ use windows::Win32::Graphics::Direct3D::D3D_SRV_DIMENSION_TEXTURE2D;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_BUFFER_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_TEXTURE2D_DESC,
     D3D11_UAV_DIMENSION_TEXTURE2D, D3D11_UNORDERED_ACCESS_VIEW_DESC, D3D11_VIEWPORT, ID3D11Buffer,
-    ID3D11ComputeShader, ID3D11DeviceContext, ID3D11ShaderResourceView, ID3D11Texture2D,
-    ID3D11UnorderedAccessView,
+    ID3D11DeviceContext, ID3D11ShaderResourceView, ID3D11Texture2D, ID3D11UnorderedAccessView,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32G32_FLOAT;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -125,13 +122,13 @@ pub(crate) unsafe extern "system" fn native_cloud_depth_dispatch(
             owner.cloud_depth_ready.store(false, Ordering::Release);
         }
         if unsafe { (*cloud).shader.is_none() && !(*cloud).shader_refused } {
-            let created = unsafe { rsf_ac7_create_truesky_depth_shader(device_raw) };
-            if created.is_null() {
+            let created = device.as_ref().and_then(depth_shader);
+            if created.is_none() {
                 unsafe { (*cloud).shader_refused = true };
                 owner.log(c"native TrueSky one-to-one depth shader refused; retaining supported native cloud resolution");
             } else {
                 unsafe {
-                    (*cloud).shader = Some(ID3D11ComputeShader::from_raw(created));
+                    (*cloud).shader = created;
                     (*cloud).device = device.clone();
                 }
                 owner.log(c"native TrueSky: one-to-one depth shader compiled; checking native pass bindings");
@@ -305,25 +302,24 @@ pub(crate) unsafe extern "C" fn native_cloud_composite_draw(
     let mut viewport = D3D11_VIEWPORT::default();
     let mut viewports = 1u32;
     unsafe { context.RSGetViewports(&mut viewports, Some(&mut viewport)) };
-    let depth = if viewports == 1 {
-        unsafe {
-            rsf_ac7_cloud_depth_write(
-                &mut *owner.cloud_motion.get(),
-                context.as_raw(),
+    // The render thread alone uses the cloud motion resources here (Renderer::cloud_motion).
+    let depth = (viewports == 1)
+        .then(|| {
+            crate::cloud_depth::d3d11::write(
+                unsafe { &mut *owner.cloud_motion.get() },
+                &context,
                 viewport.Width,
                 viewport.Height,
             )
-        }
-    } else {
-        null_mut()
-    };
+        })
+        .flatten();
     let reports = owner.cloud_motion_reports.fetch_add(1, Ordering::SeqCst);
-    if depth.is_null() {
+    let Some(depth) = depth else {
         if reports < 3 {
             owner.log(c"native TrueSky cloud motion refused: composite_tile bindings differ from the measured t1/t2/b12 layout");
         }
         return;
-    }
+    };
     let mut pass = scope();
     pass.role = RSF_GAME_RENDER_CLOUD_DEPTH;
     pass.session_id = owner.options.session_id;
@@ -373,9 +369,7 @@ pub(crate) unsafe extern "C" fn depth_ready(renderer: *mut rsf_ac7_native_render
 }
 
 pub(crate) unsafe extern "C" fn motion_release(renderer: *mut rsf_ac7_native_renderer) {
-    unsafe {
-        rsf_ac7_cloud_depth_release(&mut *Renderer::from_handle(renderer).cloud_motion.get())
-    };
+    unsafe { *Renderer::from_handle(renderer).cloud_motion.get() = CloudDepth::default() };
 }
 
 /// Called by truesky.rs with `cloud_lock` held.

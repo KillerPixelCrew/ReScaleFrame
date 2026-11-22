@@ -19,7 +19,6 @@ use crate::render_scope::rsf_ac7_render_scopes_idle;
 use crate::render_scope::rsf_ac7_render_scopes_quiesce;
 use crate::sites::rsf_ac7_hook_role;
 use crate::sites::rsf_ac7_hook_rva;
-use crate::sys::rsf_ac7_cloud_depth;
 use crate::sys::rsf_ac7_scope_lease;
 use crate::sys::{
     RSF_AC7_HOOK_SITE_COUNT, rsf_ac7_code_patches, rsf_ac7_native_calls, rsf_ac7_truesky_patches,
@@ -506,7 +505,7 @@ pub(crate) struct Renderer {
     cloud_depth_binding_refusals: AtomicU32,
     /// Cloud motion depth resources, used by the composite_tile relay on the render thread and
     /// released by the TrueSky restore under `cloud_lock`.
-    cloud_motion: UnsafeCell<rsf_ac7_cloud_depth>,
+    cloud_motion: UnsafeCell<crate::cloud_depth::d3d11::CloudDepth>,
     cloud_motion_reports: AtomicU32,
     /// Scene-precision and temporal velocity patch ownership, changed only by patches.rs.
     patches: UnsafeCell<rsf_ac7_code_patches>,
@@ -551,7 +550,7 @@ impl Renderer {
             cloud_depth_ready: AtomicBool::new(false),
             cloud_depth_dispatches: AtomicU32::new(0),
             cloud_depth_binding_refusals: AtomicU32::new(0),
-            cloud_motion: UnsafeCell::new(unsafe { zeroed() }),
+            cloud_motion: UnsafeCell::default(),
             cloud_motion_reports: AtomicU32::new(0),
             patches: UnsafeCell::new(unsafe { zeroed() }),
             render_thread: AtomicU32::new(0),

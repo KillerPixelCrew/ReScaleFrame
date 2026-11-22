@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::{Facts, Params, plan};
-use crate::com_resource::{release, retain};
-use crate::sys::rsf_ac7_cloud_depth as State;
 use rsf_shader_compiler::{Request, compile_system};
 use std::ffi::{CStr, c_void};
-use std::ptr::{from_ref, null_mut};
+use std::ptr::from_ref;
 use windows::Win32::Graphics::Direct3D::D3D_SRV_DIMENSION_TEXTURE2D;
 use windows::Win32::Graphics::Direct3D::Fxc::D3DCOMPILE_ENABLE_STRICTNESS;
 use windows::Win32::Graphics::Direct3D11::{
@@ -30,20 +28,25 @@ fn compile(device: &ID3D11Device, source: &[u8], name: &CStr) -> Option<ID3D11Co
     unsafe { device.CreateComputeShader(&code, None, Some(&mut shader)) }.ok()?;
     shader
 }
-/// The native effect owns dispatch and bindings. This returns one shader reference.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_ac7_create_truesky_depth_shader(
-    device: *mut c_void,
-) -> *mut c_void {
-    let Some(device) = (unsafe { ID3D11Device::from_raw_borrowed(&device) }) else {
-        return null_mut();
-    };
+/// TrueSky's one-to-one depth-bounds kernel. The native effect owns dispatch and bindings.
+pub(crate) fn depth_shader(device: &ID3D11Device) -> Option<ID3D11ComputeShader> {
     compile(
         device,
         include_bytes!("../truesky_depth_bounds.hlsl"),
         c"AC7TrueSkyDepth1",
     )
-    .map_or(null_mut(), Interface::into_raw)
+}
+
+/// composite_tile's cloud-depth kernel and target, made on its device at its extent.
+#[derive(Default)]
+pub(crate) struct CloudDepth {
+    device: Option<ID3D11Device>,
+    pipeline: Option<(ID3D11ComputeShader, ID3D11Buffer)>,
+    target: Option<(ID3D11Texture2D, ID3D11UnorderedAccessView)>,
+    width: u32,
+    height: u32,
+    /// The kernel failed to build on this device.
+    refused: bool,
 }
 
 fn texture_desc(view: &ID3D11ShaderResourceView) -> Option<D3D11_TEXTURE2D_DESC> {
@@ -106,52 +109,34 @@ fn target(
     Some((texture, view?))
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_cloud_depth_release(state: &mut State) {
-    for resource in [
-        state.view,
-        state.texture,
-        state.constants,
-        state.shader,
-        state.device,
-    ] {
-        unsafe { release(resource) };
-    }
-    *state = State::default();
-}
-
-fn prepare(state: &mut State, device: &ID3D11Device, [width, height]: [u32; 2]) -> Option<()> {
-    if state.device != device.as_raw() {
-        rsf_ac7_cloud_depth_release(state);
-        state.device = device.as_raw();
-        unsafe { retain(state.device) };
+fn prepare(state: &mut CloudDepth, device: &ID3D11Device, [width, height]: [u32; 2]) -> Option<()> {
+    if state.device.as_ref().map(Interface::as_raw) != Some(device.as_raw()) {
+        *state = CloudDepth {
+            device: Some(device.clone()),
+            ..CloudDepth::default()
+        };
     }
     if state.refused {
         return None;
     }
-    if state.shader.is_null() {
+    if state.pipeline.is_none() {
         state.refused = true;
-        let (shader, constants) = pipeline(device)?;
-        state.shader = shader.into_raw();
-        state.constants = constants.into_raw();
+        state.pipeline = Some(pipeline(device)?);
         state.refused = false;
     }
-    if state.texture.is_null() || state.width != width || state.height != height {
-        let (texture, view) = target(device, width, height)?;
-        unsafe {
-            release(state.view);
-            release(state.texture);
-        }
-        state.texture = texture.into_raw();
-        state.view = view.into_raw();
+    if state.target.is_none() || state.width != width || state.height != height {
+        state.target = Some(target(device, width, height)?);
         state.width = width;
         state.height = height;
     }
     Some(())
 }
 
-fn write(
-    state: &mut State,
+/// Writes composite_tile's cloud depth for the bound draw and returns the borrowed target
+/// texture, or None when the bindings differ from the measured layout. `width` and `height` are
+/// the draw's viewport.
+pub(crate) fn write(
+    state: &mut CloudDepth,
     context: &ID3D11DeviceContext,
     width: f32,
     height: f32,
@@ -179,9 +164,8 @@ fn write(
     })?;
     let device = unsafe { context.GetDevice() }.ok()?;
     prepare(state, &device, params.size)?;
-    let constants = unsafe { ID3D11Buffer::from_raw_borrowed(&state.constants) }?;
-    let shader = unsafe { ID3D11ComputeShader::from_raw_borrowed(&state.shader) }?;
-    let view = unsafe { ID3D11UnorderedAccessView::from_raw_borrowed(&state.view) }?;
+    let (shader, constants) = state.pipeline.as_ref()?;
+    let (texture, view) = state.target.as_ref()?;
     let buffers = [Some(hdr), Some(constants.clone())];
     let output = Some(view.clone());
 
@@ -212,19 +196,5 @@ fn write(
         context.CSSetUnorderedAccessViews(0, 1, Some(saved_view.as_ptr()), None);
         context.CSSetConstantBuffers(0, Some(&saved_buffers));
     }
-    Some(state.texture)
-}
-
-/// The adapter lends the immediate context and exclusively lends initialized state.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_ac7_cloud_depth_write(
-    state: &mut State,
-    context: *mut c_void,
-    width: f32,
-    height: f32,
-) -> *mut c_void {
-    let Some(context) = (unsafe { ID3D11DeviceContext::from_raw_borrowed(&context) }) else {
-        return null_mut();
-    };
-    write(state, context, width, height).unwrap_or(null_mut())
+    Some(texture.as_raw())
 }
