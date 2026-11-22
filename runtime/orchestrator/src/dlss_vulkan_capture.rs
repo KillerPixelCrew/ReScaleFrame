@@ -3,15 +3,19 @@
 // per-queue-family command pools and fences, orders submission and retires
 // the readbacks. The production leaves for typed Vulkan, WSI, Streamline
 // registration and file output are in leaves.rs.
-use ash::vk;
 use crate::allocate_handle;
 use crate::dlss_vulkan_capture_ledger::{AMBIGUOUS, Ledger};
+use crate::sys::rsf_dlss_capture_target as Target;
 use crate::sys::rsf_srvk_image as Image;
 use crate::sys::{
     rsf_dlss_capture_source as Source, rsf_dlssgvk_status as SdkStatus, rsf_fgvk_setup as Setup,
 };
+use ash::vk;
 use rsf_game_sys::backend_result::{INIT_FAILED, NOT_READY, OK};
 use rsf_game_sys::rsf_frame_record as Record;
+use rsf_streamline_vk::sys::{
+    RSF_SL_PRESENT_CAPTURE_ABI_VERSION, rsf_sl_present_capture_packet as Packet,
+};
 use std::collections::BTreeMap;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr;
@@ -26,50 +30,9 @@ const RGBA8: u32 = vk::Format::R8G8B8A8_UNORM.as_raw() as u32;
 const BGRA8: u32 = 44;
 const PRESENT_LAYOUT: u32 = vk::ImageLayout::PRESENT_SRC_KHR.as_raw() as u32;
 const WAIT_NS: u64 = 15_000_000_000;
-const PACKET_ABI_VERSION: u32 = 1;
 
 type Handle = *mut c_void;
 type Callback = unsafe extern "C" fn(Handle, *const Packet) -> i32;
-
-// rsf_sl_present_capture_packet from runtime/vulkan/streamline/present-capture.h.
-#[repr(C)]
-pub(crate) struct Packet {
-    struct_size: u32,
-    abi_version: u32,
-    device: Handle,
-    queue: Handle,
-    present_info: *const c_void,
-    swapchain_info: *const c_void,
-    native_present: usize,
-    source_frame: u64,
-    present_frame: u32,
-    generated_index: i32,
-    boundary_valid: u32,
-    queue_family: u32,
-    native_images: usize,
-    native_submit: usize,
-    native_wsi_call: usize,
-}
-
-const _: () = {
-    assert!(size_of::<Packet>() == 96);
-    assert!(std::mem::offset_of!(Packet, source_frame) == 48);
-    assert!(std::mem::offset_of!(Packet, queue_family) == 68);
-    assert!(std::mem::offset_of!(Packet, native_wsi_call) == 88);
-};
-
-#[repr(C)]
-#[derive(Default)]
-struct Target {
-    chain: u64,
-    index: u32,
-    selected: u32,
-    usage: u32,
-    layers: u32,
-    format: u32,
-    width: u32,
-    height: u32,
-}
 
 #[repr(C)]
 pub(crate) struct Platform {
@@ -104,9 +67,6 @@ pub(crate) struct Platform {
 }
 
 const _: () = {
-    assert!(size_of::<Target>() == 40 && align_of::<Target>() == 8);
-    assert!(std::mem::offset_of!(Target, index) == 8);
-    assert!(std::mem::offset_of!(Target, height) == 32);
     assert!(size_of::<Platform>() == 24 * size_of::<Handle>());
 };
 
@@ -459,7 +419,7 @@ unsafe extern "C" fn present(user: Handle, packet: *const Packet) -> i32 {
         return VK_INITIALIZATION_FAILED;
     }
     let packet = unsafe { &*packet };
-    if packet.abi_version != PACKET_ABI_VERSION
+    if packet.abi_version != RSF_SL_PRESENT_CAPTURE_ABI_VERSION
         || packet.device.is_null()
         || packet.queue.is_null()
         || packet.present_info.is_null()

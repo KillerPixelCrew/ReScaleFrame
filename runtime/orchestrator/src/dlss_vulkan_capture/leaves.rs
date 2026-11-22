@@ -3,13 +3,14 @@
 //! capture owner, formerly native_fg_dlss_vulkan_capture.cpp. The owner in
 //! dlss_vulkan_capture.rs decides admission, command and fence lifetime,
 //! submission order and retirement.
-use super::{Callback, Handle, Packet, Platform, Target};
+use super::{Callback, Handle, Packet, Platform};
 use crate::frame_capture_vk::{
     Owner as Capture, rsf_core_capture_vk_complete_group, rsf_core_capture_vk_create,
     rsf_core_capture_vk_destroy, rsf_core_capture_vk_enabled, rsf_core_capture_vk_flush,
     rsf_core_capture_vk_initialize, rsf_core_capture_vk_pending, rsf_core_capture_vk_provider,
     rsf_core_capture_vk_record, rsf_core_capture_vk_wants,
 };
+use crate::sys::rsf_dlss_capture_target as Target;
 use crate::sys::rsf_fgvk_setup as Setup;
 use crate::sys::rsf_srvk_image as Image;
 use crate::vulkan_capture_commands::Commands;
@@ -18,6 +19,9 @@ use rsf_game_sys::backend_result::{
     INIT_FAILED, INVALID_ARGUMENT, MISSING_ENTRY_POINT, NOT_READY, OK,
 };
 use rsf_game_sys::{RSF_FRAME_FLAG_RESET, rsf_frame_record as Record};
+use rsf_streamline_vk::sys::{
+    RSF_SL_PRESENT_CAPTURE_ABI_VERSION, rsf_sl_present_capture_registration as Registration,
+};
 use std::ffi::{CStr, OsString, c_char, c_void};
 use std::fs::OpenOptions;
 use std::io::Write as _;
@@ -27,18 +31,7 @@ use std::ptr;
 use windows_sys::Win32::System::Environment::GetEnvironmentVariableW;
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 
-const ABI_VERSION: u32 = 1;
 const SHARED_SUBMISSION: u32 = 0;
-
-/// `rsf_sl_present_capture_registration`.
-#[repr(C)]
-pub(crate) struct Registration {
-    struct_size: u32,
-    abi_version: u32,
-    device: Handle,
-    callback: Option<Callback>,
-    user: Handle,
-}
 
 /// `rsfSlSetPresentCapture` of the corrected common plugin.
 pub(crate) type Register = unsafe extern "C" fn(*const Registration) -> i32;
@@ -46,7 +39,6 @@ type WsiCallback = unsafe extern "C" fn(*mut c_void) -> i32;
 type WsiCall = unsafe extern "C" fn(WsiCallback, *mut c_void) -> i32;
 
 const _: () = {
-    assert!(size_of::<Registration>() == 32);
     assert!(size_of::<vk::Image>() == size_of::<u64>());
     assert!(vk::ImageUsageFlags::TRANSFER_SRC.as_raw() == 1);
     assert!(vk::Format::R8G8B8A8_UNORM.as_raw() == 37 && vk::Format::B8G8R8A8_UNORM.as_raw() == 44);
@@ -185,7 +177,7 @@ unsafe extern "C" fn register(handle: Handle, callback: Option<Callback>, user: 
     let native = native(handle);
     let registration = Registration {
         struct_size: size_of::<Registration>() as u32,
-        abi_version: ABI_VERSION,
+        abi_version: RSF_SL_PRESENT_CAPTURE_ABI_VERSION,
         device: native.setup.graphics.device,
         callback,
         user,

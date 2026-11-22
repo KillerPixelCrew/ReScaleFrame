@@ -308,7 +308,7 @@ impl Test {
         let fake = ptr::without_provenance(8);
         Packet {
             struct_size: size_of::<Packet>() as u32,
-            abi_version: PACKET_ABI_VERSION,
+            abi_version: RSF_SL_PRESENT_CAPTURE_ABI_VERSION,
             device: self.native(),
             queue: ptr::without_provenance_mut(2),
             present_info: fake,
