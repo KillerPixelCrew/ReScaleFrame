@@ -21,7 +21,8 @@ const LOAD_FAILED: i32 = -4;
 const INIT_FAILED: i32 = -6;
 const NOT_SUPPORTED: i32 = -7;
 const ULTRA_PERFORMANCE: u32 = 4;
-const ULTRA_QUALITY: u32 = 5;
+const FEATURE_FAILED: i32 = -9;
+const MISSING_ENTRY: i32 = -5;
 
 struct Bindings<Lease = ()> {
     raw: Raw,
