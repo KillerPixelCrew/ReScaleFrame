@@ -31,17 +31,7 @@
 #include "census_facts.h"
 
 extern "C" {
-int rsf_test_census_functional(const char*, decltype(&rsf_census_install), decltype(&rsf_census_flush),
-                               decltype(&rsf_census_get_counters), decltype(&rsf_census_shutdown),
-                               int (*)(), int (*)(rsf_test_census_functional_facts*), int (*)());
-int rsf_test_census_budget(const char*, decltype(&rsf_census_install), decltype(&rsf_census_flush),
-                           decltype(&rsf_census_get_counters), decltype(&rsf_census_shutdown), int (*)(int));
-int rsf_test_census_dllmain(const char*, void (*)(int*));
-int rsf_test_census_vulkan(const char*, decltype(&rsf_census_install), decltype(&rsf_census_flush),
-                           decltype(&rsf_census_shutdown), int (*)());
-int rsf_test_census_ffx(const char*, decltype(&rsf_census_install), decltype(&rsf_census_flush),
-                        decltype(&rsf_census_shutdown), int (*)());
-int rsf_test_census_creation(const char*, decltype(&rsf_census_install), decltype(&rsf_census_shutdown));
+int rsf_test_census_main(int argc, char** argv, const rsf_test_census_native* native);
 __declspec(dllimport) int ffxFsr2ContextDispatch(void* context, const void* desc);
 __declspec(dllimport) int ffxFsr2GetJitterOffset(float* x, float* y, int index, int phase_count);
 __declspec(dllimport) float ffxFsr2GetUpscaleRatioFromQualityMode(int mode);
@@ -953,21 +943,10 @@ void dispatch_twice(int* results) {
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc < 3) {
-        std::printf("usage: %s functional|budget <output dir>\n", argv[0]);
-        return 2;
-    }
-    const std::string mode = argv[1];
-    if (mode == "functional") {
-        return rsf_test_census_functional(argv[2], rsf_census_install, rsf_census_flush,
-                                          rsf_census_get_counters, rsf_census_shutdown,
-                                          probe_vtable, probe_functional, probe_after_shutdown);
-    }
-    if (mode == "budget") return rsf_test_census_budget(argv[2], rsf_census_install, rsf_census_flush,
-                                                           rsf_census_get_counters, rsf_census_shutdown, jitter_noise);
-    if (mode == "vulkan") return rsf_test_census_vulkan(argv[2], rsf_census_install, rsf_census_flush, rsf_census_shutdown, probe_vulkan);
-    if (mode == "ffx") return rsf_test_census_ffx(argv[2], rsf_census_install, rsf_census_flush, rsf_census_shutdown, probe_ffx);
-    if (mode == "dllmain") return rsf_test_census_dllmain(argv[2], dispatch_twice);
-    if (mode == "creation") return rsf_test_census_creation(argv[2], rsf_census_install, rsf_census_shutdown);
-    return 2;
+    static const rsf_test_census_native native = {
+        rsf_census_install, rsf_census_flush, rsf_census_get_counters, rsf_census_shutdown,
+        probe_vtable, probe_functional, probe_after_shutdown, jitter_noise, probe_vulkan,
+        probe_ffx, dispatch_twice,
+    };
+    return rsf_test_census_main(argc, argv, &native);
 }

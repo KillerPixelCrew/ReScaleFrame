@@ -13,6 +13,4 @@
 
 #include "module_dump_records.h"
 
-void rsf_dump_collect_modules(rsf_module_entry* entries, size_t capacity, size_t* count);
-
 #endif /* RSF_MODULE_DUMP_INTERNAL_H */

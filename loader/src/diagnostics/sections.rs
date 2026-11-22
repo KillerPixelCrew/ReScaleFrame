@@ -87,19 +87,14 @@ impl Drop for Handle {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_dump_collect_modules(
-    entries: *mut rsf_module_entry,
-    capacity: usize,
-    count: &mut usize,
-) {
-    *count = 0;
-    if entries.is_null() || capacity == 0 {
-        return;
+pub(super) fn collect_modules(entries: &mut [rsf_module_entry]) -> usize {
+    if entries.is_empty() {
+        return 0;
     }
+    let mut count = 0;
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, 0) };
     if snapshot == INVALID_HANDLE_VALUE {
-        return;
+        return 0;
     }
     let snapshot = Handle(snapshot);
     let mut entry = MODULEENTRY32W {
@@ -107,7 +102,7 @@ pub(super) unsafe extern "C" fn rsf_dump_collect_modules(
         ..Default::default()
     };
     let mut has_entry = unsafe { Module32FirstW(snapshot.0, &mut entry) } != 0;
-    while has_entry && *count < capacity {
+    while has_entry && count < entries.len() {
         let mut path = [0; super::sections_abi::RSF_DUMP_MODULE_PATH_UNITS as usize];
         let limit = path.len() - 1;
         let length = entry
@@ -122,10 +117,11 @@ pub(super) unsafe extern "C" fn rsf_dump_collect_modules(
             base: entry.modBaseAddr,
             size: entry.modBaseSize as usize,
         };
-        unsafe { entries.add(*count).write(module) };
-        *count += 1;
+        entries[count] = module;
+        count += 1;
         has_entry = unsafe { Module32NextW(snapshot.0, &mut entry) } != 0;
     }
+    count
 }
 
 fn thread_module(start: u64, modules: &[rsf_module_entry]) -> Option<(&rsf_module_entry, u64)> {

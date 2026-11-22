@@ -5,6 +5,19 @@ use std::fmt::Write;
 use std::{ptr, slice};
 use windows_sys::Win32::Globalization::{CP_UTF8, WideCharToMultiByte};
 
+pub(super) unsafe fn emit_decimal(
+    json: &mut rsf_census_json,
+    key: *const c_char,
+    value: f64,
+    format: unsafe extern "C" fn(*mut rsf_census_json, *const c_char, f64),
+) {
+    if value.is_finite() {
+        unsafe { format(json, key, value) };
+    } else {
+        unsafe { rsf_census_json_raw(json, key, ptr::null()) };
+    }
+}
+
 const HEX: &[u8; 16] = b"0123456789abcdef";
 
 impl rsf_census_json {

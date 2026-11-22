@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 #![allow(non_upper_case_globals)]
-use super::hooks::{rsf_census_hook_bind_thunk, rsf_census_hook_original};
+use super::hooks::{bind_named, rsf_census_hook_bind_thunk, rsf_census_hook_original};
 use super::json::{
-    rsf_census_json_bytes, rsf_census_json_close, rsf_census_json_hex, rsf_census_json_open,
-    rsf_census_json_raw, rsf_census_json_string, rsf_census_json_u64, rsf_census_json_wide,
+    emit_decimal, rsf_census_json_bytes, rsf_census_json_close, rsf_census_json_hex,
+    rsf_census_json_open, rsf_census_json_raw, rsf_census_json_string, rsf_census_json_u64,
+    rsf_census_json_wide,
 };
 use super::json_abi::rsf_census_json;
 use super::misc_abi::*;
@@ -130,7 +131,14 @@ impl Json<'_> {
     }
     fn float(&mut self, key: Option<&CStr>, bytes: &[u8], offset: usize) {
         let value = f64::from(f32::from_bits(u32_at(bytes, offset)));
-        unsafe { platform().decimal.unwrap()(self.0, key.map_or(null(), CStr::as_ptr), value) };
+        unsafe {
+            emit_decimal(
+                self.0,
+                key.map_or(null(), CStr::as_ptr),
+                value,
+                platform().decimal.unwrap(),
+            )
+        };
     }
     fn output(&mut self, key: &CStr, out: u64) {
         if let Some(result) = read::<8>(out, 0) {
@@ -691,11 +699,10 @@ extern "system" fn sl_get_feature(feature_id: u32, name: *const c_char, output: 
             .map(u64::from_le_bytes)
             .filter(|&real| real != 0)
     {
-        unsafe {
-            let wrapper = platform().bind_feature.unwrap()(text.as_ptr().cast(), real as Ptr);
-            if !wrapper.is_null() {
-                platform().write_ptr.unwrap()(output, wrapper);
-            }
+        if let Ok(name) = CStr::from_bytes_until_nul(&text)
+            && let Some(wrapper) = bind_named(c"streamline", name, real as Ptr)
+        {
+            unsafe { platform().write_ptr.unwrap()(output, wrapper) };
         }
     }
     unsafe { rsf_census_call_finish(call, u64::from(result as u32)) };

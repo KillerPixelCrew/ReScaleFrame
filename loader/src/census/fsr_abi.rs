@@ -64,12 +64,17 @@ pub struct rsf_census_fsr_platform {
             arg3: usize,
         ) -> bool,
     >,
+    pub slot: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *const ::core::ffi::c_void,
+            arg2: usize,
+        ) -> *mut ::core::ffi::c_void,
+    >,
     pub resource: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut rsf_census_json,
             key: *const ::core::ffi::c_char,
             arg2: *const ::core::ffi::c_void,
-            require_slot: bool,
         ),
     >,
     pub decimal: ::core::option::Option<
@@ -83,13 +88,15 @@ pub struct rsf_census_fsr_platform {
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_census_fsr_platform"]
-        [::core::mem::size_of::<rsf_census_fsr_platform>() - 24usize];
+        [::core::mem::size_of::<rsf_census_fsr_platform>() - 32usize];
     ["Alignment of rsf_census_fsr_platform"]
         [::core::mem::align_of::<rsf_census_fsr_platform>() - 8usize];
     ["Offset of field: rsf_census_fsr_platform::read"]
         [::core::mem::offset_of!(rsf_census_fsr_platform, read) - 0usize];
+    ["Offset of field: rsf_census_fsr_platform::slot"]
+        [::core::mem::offset_of!(rsf_census_fsr_platform, slot) - 8usize];
     ["Offset of field: rsf_census_fsr_platform::resource"]
-        [::core::mem::offset_of!(rsf_census_fsr_platform, resource) - 8usize];
+        [::core::mem::offset_of!(rsf_census_fsr_platform, resource) - 16usize];
     ["Offset of field: rsf_census_fsr_platform::decimal"]
-        [::core::mem::offset_of!(rsf_census_fsr_platform, decimal) - 16usize];
+        [::core::mem::offset_of!(rsf_census_fsr_platform, decimal) - 24usize];
 };

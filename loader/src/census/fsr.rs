@@ -5,9 +5,9 @@ use super::decode::rsf_census_dxgi_format_name;
 use super::fsr_abi::*;
 use super::hooks::rsf_census_hook_original;
 use super::json::{
-    rsf_census_json_bytes, rsf_census_json_close, rsf_census_json_hex, rsf_census_json_i64,
-    rsf_census_json_open, rsf_census_json_raw, rsf_census_json_string, rsf_census_json_u64,
-    rsf_census_json_wide,
+    emit_decimal, rsf_census_json_bytes, rsf_census_json_close, rsf_census_json_hex,
+    rsf_census_json_i64, rsf_census_json_open, rsf_census_json_raw, rsf_census_json_string,
+    rsf_census_json_u64, rsf_census_json_wide,
 };
 use super::json_abi::rsf_census_json;
 use super::session::{rsf_census_call_begin, rsf_census_call_finish};
@@ -131,7 +131,14 @@ impl Json<'_> {
         self.raw(key, if on { c"true" } else { c"false" });
     }
     fn decimal(&mut self, key: &CStr, value: f32) {
-        unsafe { platform().decimal.unwrap()(self.0, key.as_ptr(), value.into()) };
+        unsafe {
+            emit_decimal(
+                self.0,
+                key.as_ptr(),
+                value.into(),
+                platform().decimal.unwrap(),
+            )
+        };
     }
     fn fields(&mut self, data: &[u8], fields: &[(&CStr, usize)]) {
         for &(key, offset) in fields {
@@ -158,7 +165,12 @@ impl Json<'_> {
         }
     }
     fn resource(&mut self, key: &CStr, address: u64, require_slot: bool) {
-        unsafe { platform().resource.unwrap()(self.0, key.as_ptr(), address as _, require_slot) };
+        if require_slot
+            && (address == 0 || unsafe { platform().slot.unwrap()(address as _, 10) }.is_null())
+        {
+            return;
+        }
+        unsafe { platform().resource.unwrap()(self.0, key.as_ptr(), address as _) };
     }
     fn args(&mut self, args: &[u64]) {
         self.open(Some(c"raw_args"), b'[');

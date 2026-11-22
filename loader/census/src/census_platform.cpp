@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Native wrapper catalog, call records, and the private Rust session entry.
-#include <cmath>
 #include <iterator>
-#include <new>
 
 #include "census_internal.h"
 #include "ngx_platform.h"
@@ -19,52 +17,22 @@ const FnDesc kFns[kFnCount] = {
 };
 
 void put_decimal(rsf_census_json* json, const char* key, double value) noexcept {
-    if (!std::isfinite(value)) {
-        rsf_census_json_raw(json, key, nullptr);
-        return;
-    }
     char text[40];
     std::snprintf(text, sizeof(text), "%.9g", value);
     rsf_census_json_raw(json, key, text);
 }
 
 void register_wrappers_vk(void** table) noexcept {
-    static constexpr Fn entries[] = {
-#define RSF_CENSUS_VK_MAP(name) Fn::name,
+    static constexpr uint16_t entries[] = {
+#define RSF_CENSUS_VK_MAP(name) static_cast<uint16_t>(Fn::name),
         RSF_CENSUS_VK_ENTRIES(RSF_CENSUS_VK_MAP)
 #undef RSF_CENSUS_VK_MAP
     };
     static_assert(std::size(entries) == static_cast<size_t>(RSF_CENSUS_VK_COUNT));
-    static_assert(sizeof(rsf_census_call_state) <= sizeof(rsf_census_call_storage));
-    static_assert(alignof(rsf_census_call_state) <= alignof(rsf_census_call_storage));
-    static const rsf_census_wrapper_services services = {
-        [](uint16_t entry) { return orig_by(entries[entry]); },
-        [](rsf_census_call_storage* storage, uint16_t entry, void* caller) -> rsf_census_json* {
-            auto* call = ::new (static_cast<void*>(storage)) rsf_census_call_state;
-            rsf_census_call_begin(call, static_cast<uint16_t>(entries[entry]), caller);
-            return call->full ? &call->json : nullptr;
-        },
-        [](rsf_census_call_storage* storage, uint64_t result) {
-            auto* call = std::launder(reinterpret_cast<rsf_census_call_state*>(storage));
-            rsf_census_call_finish(call, result);
-        },
-        safe_read,
-        read_arg_string,
-        [](const char* name, void* target) {
-            const Fn fn = lookup_name(name);
-            return fn != Fn::Count && !std::strcmp(kFns[idx(fn)].api, "vulkan") ?
-                bind_thunk(fn, target) : target;
-        },
-        [](void* queue, uint32_t family, uint32_t index) {
-            queue_describe(QueueKind::Vulkan, queue, family, index, 0);
-        },
-        [](void* queue, uint32_t count) { queue_submit(QueueKind::Vulkan, queue, count); },
-        []() { rsf_census_present_enter(false); },
-        rsf_census_present_leave,
-    };
+    static const rsf_census_vk_platform platform = {safe_read, read_arg_string};
     void* wrappers[RSF_CENSUS_VK_COUNT]{};
-    rsf_census_vk_bind(&services, wrappers);
-    for (size_t i = 0; i < std::size(entries); ++i) table[idx(entries[i])] = wrappers[i];
+    rsf_census_vk_bind(&platform, entries, wrappers);
+    for (size_t i = 0; i < std::size(entries); ++i) table[entries[i]] = wrappers[i];
 }
 
 void register_wrappers_ngx(void** table) noexcept {
@@ -82,11 +50,10 @@ void register_wrappers_ngx(void** table) noexcept {
         [](const void* address, uint16_t* text, size_t capacity) {
             return read_arg_wstring(address, reinterpret_cast<wchar_t*>(text), capacity);
         },
-        [](const void* parameters, size_t slot, const char* name, void* output) {
+        [](const void* parameters, size_t slot, const char* name, void* output, int32_t* result) {
             using Getter = int32_t (*)(const void*, const char*, void*);
             auto get = reinterpret_cast<Getter>(vtable_slot(parameters, slot));
-            int32_t result = 0;
-            return get && guard([&] { result = get(parameters, name, output); }) && result == 1;
+            return get && guard([&] { *result = get(parameters, name, output); });
         },
         [](rsf_census_json* state, const char* key, const void* resource, bool d3d12) {
             describe_d3d_resource(state, key, resource, d3d12);
@@ -115,11 +82,6 @@ void register_wrappers_misc(void** table) noexcept {
             return f && guard([&] { *value = f(token); });
         },
         [](void** output, void* value) { guard([&] { *output = value; }); },
-        [](const char* name, void* value) {
-            const Fn found = lookup_name(name);
-            return found != Fn::Count && !std::strcmp(kFns[idx(found)].api, "streamline") ?
-                bind_thunk(found, value) : nullptr;
-        },
         [](rsf_census_json* state, const char* key, const void* p) {
             describe_d3d_resource(state, key, p, true);
         },
@@ -139,24 +101,15 @@ void register_wrappers_fsr(void** table) noexcept {
     static_assert(std::size(entries) == static_cast<size_t>(RSF_FSR_COUNT));
     static const rsf_census_fsr_platform platform = {
         safe_read,
-        [](rsf_census_json* state, const char* key, const void* object, bool require_slot) {
-            if (!require_slot || (object && vtable_slot(object, 10))) {
-                describe_d3d_resource(state, key, object, true);
-            }
+        vtable_slot,
+        [](rsf_census_json* state, const char* key, const void* object) {
+            describe_d3d_resource(state, key, object, true);
         },
         put_decimal,
     };
     void* wrappers[RSF_FSR_COUNT]{};
     rsf_census_fsr_bind(&platform, entries, wrappers);
     for (size_t i = 0; i < std::size(entries); ++i) table[entries[i]] = wrappers[i];
-}
-
-void queue_describe(QueueKind kind, const void* queue, uint32_t a, uint32_t b, uint32_t c) noexcept {
-    if (installed()) rsf_census_stats_queue_describe(static_cast<uint8_t>(kind), queue, a, b, c);
-}
-
-bool queue_submit(QueueKind kind, const void* queue, uint32_t lists) noexcept {
-    return installed() && rsf_census_stats_queue_submit(static_cast<uint8_t>(kind), queue, lists);
 }
 
 } // namespace rsf_census

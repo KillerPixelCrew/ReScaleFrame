@@ -46,7 +46,7 @@ generate("sdk/game/src/d3d11_reduced_abi.rs", "runtime/orchestrator/include/resc
 generate("loader/src/diagnostics/frame_capture_abi.rs", "loader/diagnostics/src/frame_capture_platform.h",
          "rsf_capture_(result|calls|connect)", "NOTHING", ["-Iloader/diagnostics/include"])
 generate("loader/src/diagnostics/sections_abi.rs", "loader/diagnostics/src/module_dump_records.h",
-         "rsf_(module_entry|section_digest|dump_(image|sidecar)_(info|stats))",
+         "rsf_(module_entry|section_digest|dump_((image|sidecar)_(info|stats)|list_stream))",
          "RSF_(MAX_MODULES|DUMP_MODULE_PATH_UNITS)", [])
 generate("loader/src/diagnostics/dump_abi.rs", "loader/diagnostics/include/rescaleframe/module_dump.h",
          "rsf_dump_(options|report|result)", "RSF_MODULE_DUMP_(ABI|SCHEMA)_VERSION", [],
@@ -145,14 +145,14 @@ generate("tests/loader/src/windows/vendor_census_asi_abi.rs",
          "rsf_census_(options|counters)", "RSF_CENSUS_(ABI_VERSION|FLAG_NO_(STATIC_SCAN|DXGI|VULKAN))",
          [], ["--with-derive-default"])
 generate("tests/loader/src/windows/census_facts_abi.rs", "tests/loader/census_facts.h",
-         "rsf_test_census_functional_facts", "NOTHING", [], ["--with-derive-default"])
+         "rsf_test_census_(functional_facts|native)", "NOTHING", ["-Iloader/census/include"],
+         ["--with-derive-default", "--blocklist-type", "rsf_census_(options|counters)",
+          "--raw-line", "use super::vendor_census_asi_abi::{rsf_census_counters, rsf_census_options};"])
 generate("loader/src/census/wrapper_abi.rs", "loader/census/src/wrapper_platform.h",
-         "rsf_census_(vk_entry|call_storage|wrapper_services)", "NOTHING", [],
-         ["--no-prepend-enum-name", "--blocklist-type", "rsf_census_json",
-          "--raw-line", "#![allow(non_upper_case_globals)]",
-          "--raw-line", "use super::json_abi::rsf_census_json;"])
+         "rsf_census_vk_(entry|platform)", "NOTHING", [],
+         ["--no-prepend-enum-name", "--raw-line", "#![allow(non_upper_case_globals)]"])
 generate("loader/src/census/hook_abi.rs", "loader/census/src/hook_platform.h",
-         "rsf_census_(hook_(desc|platform)|visit_module)",
+         "rsf_census_hook_(desc|platform)",
          "RSF_CENSUS_FLAG_(D3D12_DEBUG_ONLY|NO_(DXGI|VULKAN|GETPROCADDRESS_HOOK|LOADLIBRARY_HOOK))",
          ["-Iloader/census/include"])
 generate("loader/src/census/record_abi.rs", "loader/census/src/record_platform.h",

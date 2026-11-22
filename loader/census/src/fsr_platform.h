@@ -31,7 +31,8 @@ typedef enum rsf_census_fsr_entry {
 
 typedef struct rsf_census_fsr_platform {
     bool (*read)(const void*, void*, size_t);
-    void (*resource)(rsf_census_json*, const char* key, const void*, bool require_slot);
+    void* (*slot)(const void*, size_t);
+    void (*resource)(rsf_census_json*, const char* key, const void*);
     void (*decimal)(rsf_census_json*, const char* key, double value);
 } rsf_census_fsr_platform;
 

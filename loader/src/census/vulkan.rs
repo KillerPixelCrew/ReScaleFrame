@@ -1,9 +1,16 @@
 // SPDX-License-Identifier: MIT
+use super::hooks::{bind_named, rsf_census_hook_original};
 use super::json::{
     rsf_census_json_close, rsf_census_json_hex, rsf_census_json_open, rsf_census_json_raw,
     rsf_census_json_string, rsf_census_json_u64,
 };
 use super::json_abi::rsf_census_json;
+use super::session::{rsf_census_active, rsf_census_call_begin, rsf_census_call_finish};
+use super::session_abi::rsf_census_call_state;
+use super::stats::{
+    rsf_census_present_enter, rsf_census_present_leave, rsf_census_stats_queue_describe,
+    rsf_census_stats_queue_submit,
+};
 use super::wrapper_abi::*;
 use std::ffi::{CStr, c_char, c_void};
 use std::marker::PhantomData;
@@ -16,12 +23,23 @@ type Handle = *mut c_void;
 type Info = *const c_void;
 type VkResult = i32;
 type Entry = rsf_census_vk_entry;
-static SERVICES: OnceLock<rsf_census_wrapper_services> = OnceLock::new();
+const COUNT: usize = RSF_CENSUS_VK_COUNT as usize;
+const VULKAN_QUEUE: u8 = 2;
 
-fn services() -> &'static rsf_census_wrapper_services {
+struct Services {
+    platform: rsf_census_vk_platform,
+    entries: [u16; COUNT],
+}
+static SERVICES: OnceLock<Services> = OnceLock::new();
+
+fn services() -> &'static Services {
     SERVICES
         .get()
         .expect("Vulkan wrapper registered without services")
+}
+
+fn id(entry: Entry) -> u16 {
+    services().entries[entry as usize]
 }
 
 // Capture from the actual entry wrapper, before going through another Rust or native call frame.
@@ -35,7 +53,7 @@ macro_rules! caller {
 
 macro_rules! original {
     ($entry:expr, $signature:ty) => {{
-        let ptr = unsafe { services().original.unwrap()($entry as u16) };
+        let ptr = rsf_census_hook_original(id($entry));
         if ptr.is_null() {
             None
         } else {
@@ -45,32 +63,34 @@ macro_rules! original {
 }
 
 struct Call<'a> {
-    storage: *mut rsf_census_call_storage,
-    json: *mut rsf_census_json,
-    _borrow: PhantomData<&'a mut MaybeUninit<rsf_census_call_storage>>,
+    storage: *mut rsf_census_call_state,
+    _borrow: PhantomData<&'a mut MaybeUninit<rsf_census_call_state>>,
 }
 
 impl<'a> Call<'a> {
     fn begin(
-        storage: &'a mut MaybeUninit<rsf_census_call_storage>,
+        storage: &'a mut MaybeUninit<rsf_census_call_state>,
         entry: Entry,
         caller: Handle,
     ) -> Self {
         let storage = storage.as_mut_ptr();
-        let json = unsafe { services().begin.unwrap()(storage, entry as u16, caller) };
+        unsafe { rsf_census_call_begin(storage, id(entry), caller) };
         Self {
             storage,
-            json,
             _borrow: PhantomData,
         }
     }
 
     fn json(&mut self) -> Option<Json<'_>> {
-        unsafe { self.json.as_mut() }.map(Json)
+        unsafe {
+            (*self.storage)
+                .full
+                .then(|| Json(&mut (*self.storage).json))
+        }
     }
 
     fn finish(self, result: u64) {
-        unsafe { services().finish.unwrap()(self.storage, result) };
+        unsafe { rsf_census_call_finish(self.storage, result) };
     }
 }
 
@@ -135,7 +155,8 @@ fn read<const N: usize>(address: Info, offset: usize) -> Option<[u8; N]> {
     }
     let address = base.checked_add(offset)? as Info;
     let mut bytes = [0; N];
-    unsafe { services().read.unwrap()(address, bytes.as_mut_ptr().cast(), N) }.then_some(bytes)
+    unsafe { services().platform.read.unwrap()(address, bytes.as_mut_ptr().cast(), N) }
+        .then_some(bytes)
 }
 
 fn number(bytes: &[u8], offset: usize) -> u32 {
@@ -147,7 +168,9 @@ fn word(bytes: &[u8], offset: usize) -> u64 {
 }
 
 fn read_name(source: Info, output: &mut [u8; 96]) -> bool {
-    unsafe { services().read_string.unwrap()(source, output.as_mut_ptr().cast(), output.len()) }
+    unsafe {
+        services().platform.read_string.unwrap()(source, output.as_mut_ptr().cast(), output.len())
+    }
 }
 
 fn name_list(json: &mut Json<'_>, key: &CStr, names: Info, count: u32) {
@@ -186,7 +209,10 @@ fn proc_addr(entry: Entry, caller: Handle, handle: Handle, name: *const c_char) 
     }
     record.finish(result as u64);
     if !result.is_null() && have_name {
-        unsafe { services().bind_vk.unwrap()(copied_name.as_ptr().cast(), result) }
+        CStr::from_bytes_until_nul(&copied_name)
+            .ok()
+            .and_then(|name| bind_named(c"vulkan", name, result))
+            .unwrap_or(result)
     } else {
         result
     }
@@ -339,7 +365,9 @@ fn get_queue_handle(out: *mut Handle) -> Option<Handle> {
 }
 
 fn describe_queue(queue: Handle, family: u32, index: u32) {
-    unsafe { services().describe_vk_queue.unwrap()(queue, family, index) };
+    if rsf_census_active() {
+        rsf_census_stats_queue_describe(VULKAN_QUEUE, queue, family, index, 0);
+    }
 }
 
 #[inline(never)]
@@ -411,7 +439,9 @@ fn submit(
         json.number(Some(c"signal_semaphores"), signals);
     }
     let result = original.map_or(0, |call| unsafe { call(queue, count, info, fence) });
-    unsafe { services().submit_vk_queue.unwrap()(queue, count) };
+    if rsf_census_active() {
+        rsf_census_stats_queue_submit(VULKAN_QUEUE, queue, count);
+    }
     record.finish(u64::from(result as u32));
     result
 }
@@ -487,7 +517,7 @@ extern "system" fn queue_present(queue: Handle, info: Info) -> VkResult {
     let entry = RSF_CENSUS_VkQueuePresentKHR;
     let caller = caller!();
     let original = original!(entry, unsafe extern "system" fn(Handle, Info) -> VkResult);
-    unsafe { services().present_enter.unwrap()() };
+    rsf_census_present_enter(false);
     let mut storage = MaybeUninit::uninit();
     let mut record = Call::begin(&mut storage, entry, caller);
     if let Some(mut json) = record.json() {
@@ -495,7 +525,7 @@ extern "system" fn queue_present(queue: Handle, info: Info) -> VkResult {
     }
     let result = original.map_or(0, |call| unsafe { call(queue, info) });
     record.finish(u64::from(result as u32));
-    unsafe { services().present_leave.unwrap()() };
+    rsf_census_present_leave();
     result
 }
 
@@ -568,11 +598,15 @@ extern "system" fn create_swapchain(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_census_vk_bind(
-    callbacks: &rsf_census_wrapper_services,
-    wrappers: *mut Handle,
+    platform: &rsf_census_vk_platform,
+    ids: &[u16; COUNT],
+    wrappers: &mut [Handle; COUNT],
 ) {
-    let _ = SERVICES.set(*callbacks);
-    let entries: [(Entry, Handle); RSF_CENSUS_VK_COUNT as usize] = [
+    let _ = SERVICES.set(Services {
+        platform: *platform,
+        entries: *ids,
+    });
+    let entries: [(Entry, Handle); COUNT] = [
         (
             RSF_CENSUS_VkGetInstanceProcAddr,
             get_instance_proc as Handle,
@@ -589,6 +623,6 @@ unsafe extern "C" fn rsf_census_vk_bind(
         (RSF_CENSUS_VkCreateSwapchainKHR, create_swapchain as Handle),
     ];
     for (index, wrapper) in entries {
-        unsafe { wrappers.add(index as usize).write(wrapper) };
+        wrappers[index as usize] = wrapper;
     }
 }

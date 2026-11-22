@@ -403,8 +403,7 @@ fn counters(checks: &mut Checks, calls: &rsf_census_counters, rows: &[Value]) {
     );
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_test_census_functional(
+pub(super) unsafe fn rsf_test_census_functional(
     dir: *const c_char,
     install: Install,
     flush: CensusOp,

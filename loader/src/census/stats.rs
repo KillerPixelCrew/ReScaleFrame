@@ -277,7 +277,7 @@ pub(super) fn rsf_census_stats_present_index() -> u64 {
 thread_local! { static PRESENT_DEPTH: Cell<u32> = const { Cell::new(0) }; }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_census_present_enter(test: bool) -> bool {
+pub(super) extern "C" fn rsf_census_present_enter(test: bool) -> bool {
     let outer = PRESENT_DEPTH
         .try_with(|depth| {
             let old = depth.get();
@@ -292,12 +292,11 @@ extern "C" fn rsf_census_present_enter(test: bool) -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_census_present_leave() {
+pub(super) extern "C" fn rsf_census_present_leave() {
     let _ = PRESENT_DEPTH.try_with(|depth| depth.set(depth.get().wrapping_sub(1)));
 }
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_census_stats_queue_describe(
+pub(super) fn rsf_census_stats_queue_describe(
     kind: u8,
     address: *const c_void,
     a: u32,
@@ -311,12 +310,7 @@ pub(super) extern "C" fn rsf_census_stats_queue_describe(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_census_stats_queue_submit(
-    kind: u8,
-    address: *const c_void,
-    lists: u32,
-) -> bool {
+pub(super) fn rsf_census_stats_queue_submit(kind: u8, address: *const c_void, lists: u32) -> bool {
     let Some(queue) = queue(kind, address as u64) else {
         return false;
     };

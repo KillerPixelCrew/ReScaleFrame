@@ -15,6 +15,13 @@ typedef struct rsf_module_entry {
     size_t size;
 } rsf_module_entry;
 
+typedef struct rsf_dump_list_stream {
+    void* (*open_append)(const wchar_t* path);
+    void (*write_title)(void* stream, const char* label, size_t count);
+    void (*write_leaf)(void* stream, const wchar_t* basename);
+    int32_t (*close)(void* stream);
+} rsf_dump_list_stream;
+
 typedef struct rsf_section_digest {
     int valid;
     uint64_t dumped_size;

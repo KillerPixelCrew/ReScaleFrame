@@ -187,18 +187,6 @@ using FnDesc = rsf_census_hook_desc;
 
 constexpr size_t kFnCount = static_cast<size_t>(Fn::Count);
 extern const FnDesc kFns[kFnCount];
-inline size_t idx(Fn f) noexcept { return static_cast<size_t>(f); }
-
-// ---- Bound originals --------------------------------------------------------------------------
-// The Rust binding owner publishes the MinHook trampoline or resolver original for each wrapper.
-inline void* orig_by(Fn f) noexcept {
-    return rsf_census_hook_original(static_cast<uint16_t>(f));
-}
-// First binding wins. Returns the address to hand back to the game: the wrapper, or `real` when
-// the entry is bound to a different implementation (counted as a conflict) or already detoured.
-void* bind_thunk(Fn fn, void* real) noexcept;
-// Look up an export or API name in the function table. Returns Fn::Count when unknown.
-Fn lookup_name(const char* name) noexcept;
 
 // ---- Safe memory access -----------------------------------------------------------------------
 bool safe_read(const void* src, void* dst, size_t n) noexcept;
@@ -223,13 +211,6 @@ inline bool guard(L&& lambda) noexcept {
     using T = std::remove_reference_t<L>;
     return guarded([](void* c) { (*static_cast<T*>(c))(); }, &lambda);
 }
-
-enum class QueueKind : uint8_t { D3d12 = 1, Vulkan = 2 };
-// Describe a queue once (D3D12: type, priority, flags; Vulkan: family, index, unused).
-void queue_describe(QueueKind kind, const void* queue, uint32_t a, uint32_t b, uint32_t c) noexcept;
-// Count one submission call carrying `lists` command lists or batches. Returns true the first
-// time a queue is seen, so the caller can describe a queue that predates the census.
-bool queue_submit(QueueKind kind, const void* queue, uint32_t lists) noexcept;
 
 inline bool installed() noexcept { return rsf_census_active(); }
 inline uint32_t option_flags() noexcept { return rsf_census_flags(); }

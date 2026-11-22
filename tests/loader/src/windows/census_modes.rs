@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+use super::census_creation::rsf_test_census_creation;
+use super::census_facts_abi::rsf_test_census_native;
 use super::vendor_census_asi_abi::*;
 use super::{named, wide};
 use serde_json::Value;
@@ -17,7 +19,7 @@ type Install = unsafe extern "C" fn(*const rsf_census_options) -> i32;
 type CensusOp = unsafe extern "C" fn() -> i32;
 type Counters = unsafe extern "C" fn(*mut rsf_census_counters) -> i32;
 type Jitter = unsafe extern "C" fn(i32) -> i32;
-type DispatchTwice = unsafe extern "C" fn(*mut [i32; 2]);
+type DispatchTwice = unsafe extern "C" fn(*mut i32);
 type NativeProbe = unsafe extern "C" fn() -> i32;
 
 macro_rules! expect {
@@ -412,8 +414,7 @@ fn payload_mode(
     i32::from(checks.0 != 0)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_test_census_vulkan(
+unsafe fn rsf_test_census_vulkan(
     dir: *const c_char,
     install: Install,
     flush: CensusOp,
@@ -435,8 +436,7 @@ unsafe extern "C" fn rsf_test_census_vulkan(
     )
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_test_census_ffx(
+unsafe fn rsf_test_census_ffx(
     dir: *const c_char,
     install: Install,
     flush: CensusOp,
@@ -454,12 +454,66 @@ unsafe extern "C" fn rsf_test_census_ffx(
     )
 }
 
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_test_census_main(
+    argc: i32,
+    argv: *const *const c_char,
+    native: &rsf_test_census_native,
+) -> i32 {
+    if argc < 3 {
+        let executable = if argc > 0 {
+            unsafe { CStr::from_ptr(*argv) }
+        } else {
+            c"rsf_vendor_census_test"
+        };
+        println!(
+            "usage: {} functional|budget <output dir>",
+            executable.to_string_lossy()
+        );
+        return 2;
+    }
+    let mode = unsafe { CStr::from_ptr(*argv.add(1)) };
+    let dir = unsafe { *argv.add(2) };
+    let install = native.install.unwrap();
+    let flush = native.flush.unwrap();
+    let counters = native.counters.unwrap();
+    let shutdown = native.shutdown.unwrap();
+    unsafe {
+        match mode.to_bytes() {
+            b"functional" => functional::rsf_test_census_functional(
+                dir,
+                install,
+                flush,
+                counters,
+                shutdown,
+                native.check_vtable.unwrap(),
+                native.functional.unwrap(),
+                native.after_shutdown.unwrap(),
+            ),
+            b"budget" => rsf_test_census_budget(
+                dir,
+                install,
+                flush,
+                counters,
+                shutdown,
+                native.jitter.unwrap(),
+            ),
+            b"vulkan" => {
+                rsf_test_census_vulkan(dir, install, flush, shutdown, native.vulkan.unwrap())
+            }
+            b"ffx" => rsf_test_census_ffx(dir, install, flush, shutdown, native.ffx.unwrap()),
+            b"dllmain" => rsf_test_census_dllmain(dir, native.dispatch_twice.unwrap()),
+            b"creation" => rsf_test_census_creation(dir, install, shutdown),
+            _ => 2,
+        }
+    }
+}
+
 unsafe fn directory<'a>(text: *const c_char) -> Option<&'a Path> {
     unsafe { CStr::from_ptr(text) }.to_str().ok().map(Path::new)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_test_census_budget(
+unsafe fn rsf_test_census_budget(
     dir: *const c_char,
     install: Install,
     flush: CensusOp,
@@ -573,8 +627,7 @@ fn load_asi() -> Option<Asi> {
     })
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_test_census_dllmain(dir: *const c_char, dispatch: DispatchTwice) -> i32 {
+unsafe fn rsf_test_census_dllmain(dir: *const c_char, dispatch: DispatchTwice) -> i32 {
     let Some(path) = (unsafe { directory(dir) }) else {
         return 2;
     };
@@ -592,7 +645,7 @@ unsafe extern "C" fn rsf_test_census_dllmain(dir: *const c_char, dispatch: Dispa
         "ASI installs under the loader lock",
     );
     let mut receipts = [0; 2];
-    unsafe { dispatch(&mut receipts) };
+    unsafe { dispatch(receipts.as_mut_ptr()) };
     checks.check(
         receipts == [0x1234_abcd; 2],
         "both native FSR2 dispatch return values survive",

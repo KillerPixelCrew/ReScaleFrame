@@ -25,6 +25,38 @@ const _: () = {
 };
 #[repr(C)]
 #[derive(Copy, Clone)]
+pub struct rsf_dump_list_stream {
+    pub open_append: ::core::option::Option<
+        unsafe extern "C" fn(path: *const wchar_t) -> *mut ::core::ffi::c_void,
+    >,
+    pub write_title: ::core::option::Option<
+        unsafe extern "C" fn(
+            stream: *mut ::core::ffi::c_void,
+            label: *const ::core::ffi::c_char,
+            count: usize,
+        ),
+    >,
+    pub write_leaf: ::core::option::Option<
+        unsafe extern "C" fn(stream: *mut ::core::ffi::c_void, basename: *const wchar_t),
+    >,
+    pub close:
+        ::core::option::Option<unsafe extern "C" fn(stream: *mut ::core::ffi::c_void) -> i32>,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_dump_list_stream"][::core::mem::size_of::<rsf_dump_list_stream>() - 32usize];
+    ["Alignment of rsf_dump_list_stream"][::core::mem::align_of::<rsf_dump_list_stream>() - 8usize];
+    ["Offset of field: rsf_dump_list_stream::open_append"]
+        [::core::mem::offset_of!(rsf_dump_list_stream, open_append) - 0usize];
+    ["Offset of field: rsf_dump_list_stream::write_title"]
+        [::core::mem::offset_of!(rsf_dump_list_stream, write_title) - 8usize];
+    ["Offset of field: rsf_dump_list_stream::write_leaf"]
+        [::core::mem::offset_of!(rsf_dump_list_stream, write_leaf) - 16usize];
+    ["Offset of field: rsf_dump_list_stream::close"]
+        [::core::mem::offset_of!(rsf_dump_list_stream, close) - 24usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub struct rsf_section_digest {
     pub valid: ::core::ffi::c_int,
     pub dumped_size: u64,

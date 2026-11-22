@@ -28,7 +28,6 @@ typedef struct rsf_census_misc_platform {
     bool (*read_wstring)(const void*, uint16_t*, size_t);
     bool (*frame_index)(const void*, uint32_t*);
     void (*write_ptr)(void**, void*);
-    void* (*bind_feature)(const char*, void*);
     void (*d3d_resource)(rsf_census_json*, const char* key, const void*);
     void (*decimal)(rsf_census_json*, const char* key, double value);
 } rsf_census_misc_platform;

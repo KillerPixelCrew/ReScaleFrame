@@ -28,16 +28,15 @@ const _: () = {
     ["Offset of field: rsf_census_hook_desc::modules"]
         [::core::mem::offset_of!(rsf_census_hook_desc, modules) - 24usize];
 };
-pub type rsf_census_visit_module = ::core::option::Option<
-    unsafe extern "C" fn(module: *mut ::core::ffi::c_void, path: *const u16, units: usize),
->;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_census_hook_platform {
     pub entries: *const rsf_census_hook_desc,
-    pub wrappers: *const *mut ::core::ffi::c_void,
     pub count: u16,
     pub graphics_roots: [u16; 4usize],
+    pub initialize: ::core::option::Option<unsafe extern "C" fn() -> ::core::ffi::c_int>,
+    pub register_wrappers:
+        ::core::option::Option<unsafe extern "C" fn(arg1: *mut *mut ::core::ffi::c_void)>,
     pub create_api: ::core::option::Option<
         unsafe extern "C" fn(
             module: *const u16,
@@ -59,7 +58,7 @@ pub struct rsf_census_hook_platform {
     >,
     pub apply: ::core::option::Option<unsafe extern "C" fn()>,
     pub disable: ::core::option::Option<unsafe extern "C" fn()>,
-    pub scan_modules: ::core::option::Option<unsafe extern "C" fn(arg1: rsf_census_visit_module)>,
+    pub current_teb: ::core::option::Option<unsafe extern "C" fn() -> *const ::core::ffi::c_void>,
     pub read: ::core::option::Option<
         unsafe extern "C" fn(
             address: *const ::core::ffi::c_void,
@@ -79,35 +78,37 @@ pub struct rsf_census_hook_platform {
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_census_hook_platform"]
-        [::core::mem::size_of::<rsf_census_hook_platform>() - 112usize];
+        [::core::mem::size_of::<rsf_census_hook_platform>() - 120usize];
     ["Alignment of rsf_census_hook_platform"]
         [::core::mem::align_of::<rsf_census_hook_platform>() - 8usize];
     ["Offset of field: rsf_census_hook_platform::entries"]
         [::core::mem::offset_of!(rsf_census_hook_platform, entries) - 0usize];
-    ["Offset of field: rsf_census_hook_platform::wrappers"]
-        [::core::mem::offset_of!(rsf_census_hook_platform, wrappers) - 8usize];
     ["Offset of field: rsf_census_hook_platform::count"]
-        [::core::mem::offset_of!(rsf_census_hook_platform, count) - 16usize];
+        [::core::mem::offset_of!(rsf_census_hook_platform, count) - 8usize];
     ["Offset of field: rsf_census_hook_platform::graphics_roots"]
-        [::core::mem::offset_of!(rsf_census_hook_platform, graphics_roots) - 18usize];
+        [::core::mem::offset_of!(rsf_census_hook_platform, graphics_roots) - 10usize];
+    ["Offset of field: rsf_census_hook_platform::initialize"]
+        [::core::mem::offset_of!(rsf_census_hook_platform, initialize) - 24usize];
+    ["Offset of field: rsf_census_hook_platform::register_wrappers"]
+        [::core::mem::offset_of!(rsf_census_hook_platform, register_wrappers) - 32usize];
     ["Offset of field: rsf_census_hook_platform::create_api"]
-        [::core::mem::offset_of!(rsf_census_hook_platform, create_api) - 32usize];
+        [::core::mem::offset_of!(rsf_census_hook_platform, create_api) - 40usize];
     ["Offset of field: rsf_census_hook_platform::create"]
-        [::core::mem::offset_of!(rsf_census_hook_platform, create) - 40usize];
+        [::core::mem::offset_of!(rsf_census_hook_platform, create) - 48usize];
     ["Offset of field: rsf_census_hook_platform::remove"]
-        [::core::mem::offset_of!(rsf_census_hook_platform, remove) - 48usize];
+        [::core::mem::offset_of!(rsf_census_hook_platform, remove) - 56usize];
     ["Offset of field: rsf_census_hook_platform::enable"]
-        [::core::mem::offset_of!(rsf_census_hook_platform, enable) - 56usize];
+        [::core::mem::offset_of!(rsf_census_hook_platform, enable) - 64usize];
     ["Offset of field: rsf_census_hook_platform::apply"]
-        [::core::mem::offset_of!(rsf_census_hook_platform, apply) - 64usize];
+        [::core::mem::offset_of!(rsf_census_hook_platform, apply) - 72usize];
     ["Offset of field: rsf_census_hook_platform::disable"]
-        [::core::mem::offset_of!(rsf_census_hook_platform, disable) - 72usize];
-    ["Offset of field: rsf_census_hook_platform::scan_modules"]
-        [::core::mem::offset_of!(rsf_census_hook_platform, scan_modules) - 80usize];
+        [::core::mem::offset_of!(rsf_census_hook_platform, disable) - 80usize];
+    ["Offset of field: rsf_census_hook_platform::current_teb"]
+        [::core::mem::offset_of!(rsf_census_hook_platform, current_teb) - 88usize];
     ["Offset of field: rsf_census_hook_platform::read"]
-        [::core::mem::offset_of!(rsf_census_hook_platform, read) - 88usize];
+        [::core::mem::offset_of!(rsf_census_hook_platform, read) - 96usize];
     ["Offset of field: rsf_census_hook_platform::read_name"]
-        [::core::mem::offset_of!(rsf_census_hook_platform, read_name) - 96usize];
+        [::core::mem::offset_of!(rsf_census_hook_platform, read_name) - 104usize];
     ["Offset of field: rsf_census_hook_platform::active"]
-        [::core::mem::offset_of!(rsf_census_hook_platform, active) - 104usize];
+        [::core::mem::offset_of!(rsf_census_hook_platform, active) - 112usize];
 };

@@ -248,35 +248,35 @@ rsf_dump_result rsf_console_probe(const char* name_utf8, uint32_t singleton_rva,
     return RSF_DUMP_OK;
 }
 
+rsf_dump_result rsf_write_module_list_impl(const char* path, const char* label,
+                                          const rsf_dump_list_stream* native);
+
+static void* module_list_open(const wchar_t* path)
+{
+    return _wfopen(path, L"ab");
+}
+
+static void module_list_title(void* stream, const char* label, size_t count)
+{
+    fprintf((FILE*)stream, "[%s] %llu modules\n", label, (unsigned long long)count);
+}
+
+static void module_list_leaf(void* stream, const wchar_t* basename)
+{
+    fprintf((FILE*)stream, "  %ls\n", basename);
+}
+
+static int32_t module_list_close(void* stream)
+{
+    const int failed = ferror((FILE*)stream);
+    fclose((FILE*)stream);
+    return failed ? RSF_DUMP_ERROR_WRITE_FAILED : RSF_DUMP_OK;
+}
+
 rsf_dump_result rsf_write_module_list(const char* path_utf8, const char* label)
 {
-    if (!path_utf8) {
-        return RSF_DUMP_ERROR_INVALID_ARGUMENT;
-    }
-    wchar_t path[MAX_PATH * 2];
-    if (MultiByteToWideChar(CP_UTF8, 0, path_utf8, -1, path, MAX_PATH * 2) == 0) {
-        return RSF_DUMP_ERROR_INVALID_ARGUMENT;
-    }
-    FILE* stream = _wfopen(path, L"ab");
-    if (!stream) {
-        return RSF_DUMP_ERROR_WRITE_FAILED;
-    }
-
-    rsf_module_entry* modules =
-        (rsf_module_entry*)calloc(RSF_MAX_MODULES, sizeof(rsf_module_entry));
-    if (!modules) {
-        fclose(stream);
-        return RSF_DUMP_ERROR_WRITE_FAILED;
-    }
-    size_t count = 0;
-    rsf_dump_collect_modules(modules, RSF_MAX_MODULES, &count);
-    fprintf(stream, "[%s] %llu modules\n", label ? label : "sample", (unsigned long long)count);
-    for (size_t index = 0; index < count; ++index) {
-        const wchar_t* leaf = wcsrchr(modules[index].path, L'\\');
-        fprintf(stream, "  %ls\n", leaf ? leaf + 1 : modules[index].path);
-    }
-    free(modules);
-    const int failed = ferror(stream);
-    fclose(stream);
-    return failed ? RSF_DUMP_ERROR_WRITE_FAILED : RSF_DUMP_OK;
+    static const rsf_dump_list_stream native = {
+        module_list_open, module_list_title, module_list_leaf, module_list_close,
+    };
+    return rsf_write_module_list_impl(path_utf8, label, &native);
 }

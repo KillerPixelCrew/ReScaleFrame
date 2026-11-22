@@ -68,12 +68,6 @@ pub struct rsf_census_misc_platform {
     pub write_ptr: ::core::option::Option<
         unsafe extern "C" fn(arg1: *mut *mut ::core::ffi::c_void, arg2: *mut ::core::ffi::c_void),
     >,
-    pub bind_feature: ::core::option::Option<
-        unsafe extern "C" fn(
-            arg1: *const ::core::ffi::c_char,
-            arg2: *mut ::core::ffi::c_void,
-        ) -> *mut ::core::ffi::c_void,
-    >,
     pub d3d_resource: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut rsf_census_json,
@@ -92,7 +86,7 @@ pub struct rsf_census_misc_platform {
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_census_misc_platform"]
-        [::core::mem::size_of::<rsf_census_misc_platform>() - 64usize];
+        [::core::mem::size_of::<rsf_census_misc_platform>() - 56usize];
     ["Alignment of rsf_census_misc_platform"]
         [::core::mem::align_of::<rsf_census_misc_platform>() - 8usize];
     ["Offset of field: rsf_census_misc_platform::read"]
@@ -105,10 +99,8 @@ const _: () = {
         [::core::mem::offset_of!(rsf_census_misc_platform, frame_index) - 24usize];
     ["Offset of field: rsf_census_misc_platform::write_ptr"]
         [::core::mem::offset_of!(rsf_census_misc_platform, write_ptr) - 32usize];
-    ["Offset of field: rsf_census_misc_platform::bind_feature"]
-        [::core::mem::offset_of!(rsf_census_misc_platform, bind_feature) - 40usize];
     ["Offset of field: rsf_census_misc_platform::d3d_resource"]
-        [::core::mem::offset_of!(rsf_census_misc_platform, d3d_resource) - 48usize];
+        [::core::mem::offset_of!(rsf_census_misc_platform, d3d_resource) - 40usize];
     ["Offset of field: rsf_census_misc_platform::decimal"]
-        [::core::mem::offset_of!(rsf_census_misc_platform, decimal) - 56usize];
+        [::core::mem::offset_of!(rsf_census_misc_platform, decimal) - 48usize];
 };

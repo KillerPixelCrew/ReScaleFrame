@@ -2,7 +2,7 @@
 use super::dump_abi::*;
 use super::image::dump_image;
 use super::measure::{record, rsf_dump_poll_code, rsf_measure_module_code};
-use super::sections::{Stream, rsf_dump_collect_modules, rsf_dump_now_ms};
+use super::sections::{Stream, collect_modules, rsf_dump_now_ms};
 use super::sections_abi::*;
 use super::sidecar::write_sidecar;
 use std::ffi::{OsString, c_char, c_void};
@@ -124,18 +124,10 @@ fn module_path(base: usize) -> [u16; PATH] {
     output
 }
 
-fn convert(text: *const c_char) -> Option<[u16; PATH]> {
-    let mut output = [0; PATH];
-    let len = unsafe {
-        MultiByteToWideChar(
-            CP_UTF8,
-            0,
-            text.cast(),
-            -1,
-            output.as_mut_ptr(),
-            PATH as i32,
-        )
-    };
+fn convert<const N: usize>(text: *const c_char) -> Option<[u16; N]> {
+    let mut output = [0; N];
+    let len =
+        unsafe { MultiByteToWideChar(CP_UTF8, 0, text.cast(), -1, output.as_mut_ptr(), N as i32) };
     (len > 0).then_some(output)
 }
 
@@ -172,7 +164,7 @@ fn paths(
     options: &rsf_dump_options,
     module: &[u16],
 ) -> Option<([u16; OUTPUT_PATH], [u16; OUTPUT_PATH])> {
-    let directory = convert(options.output_directory_utf8)?;
+    let directory = convert::<PATH>(options.output_directory_utf8)?;
     let directory = unterminated(&directory);
     let explicit;
     let name = if options.output_name_utf8.is_null() {
@@ -183,7 +175,7 @@ fn paths(
             .map_or(0, |i| i + 1);
         &original[begin..]
     } else {
-        explicit = convert(options.output_name_utf8)?;
+        explicit = convert::<PATH>(options.output_name_utf8)?;
         unterminated(&explicit)
     };
     Some((
@@ -272,10 +264,7 @@ unsafe extern "C" fn rsf_dump_module(
     let mut modules = zeroed_vec(RSF_MAX_MODULES as usize, || unsafe {
         std::mem::zeroed::<rsf_module_entry>()
     });
-    let mut module_count = 0;
-    if !modules.is_empty() {
-        unsafe { rsf_dump_collect_modules(modules.as_mut_ptr(), modules.len(), &mut module_count) };
-    }
+    let module_count = collect_modules(&mut modules);
     report.modules_listed = module_count as u32;
     let sidecar = rsf_dump_sidecar_info {
         image: &info,
@@ -345,4 +334,45 @@ unsafe extern "C" fn rsf_dump_when_decrypted(
         unsafe { (&raw mut (*report).code_entropy).write(entropy) };
     }
     result
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_write_module_list_impl(
+    path_utf8: *const c_char,
+    label: *const c_char,
+    native: &rsf_dump_list_stream,
+) -> rsf_dump_result {
+    if path_utf8.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    let Some(path) = convert::<OUTPUT_PATH>(path_utf8) else {
+        return INVALID_ARGUMENT;
+    };
+    let stream = unsafe { native.open_append.unwrap()(path.as_ptr()) };
+    if stream.is_null() {
+        return WRITE_FAILED;
+    }
+    let mut modules = zeroed_vec(RSF_MAX_MODULES as usize, || unsafe {
+        std::mem::zeroed::<rsf_module_entry>()
+    });
+    if modules.is_empty() {
+        unsafe { native.close.unwrap()(stream) };
+        return WRITE_FAILED;
+    }
+    let count = collect_modules(&mut modules);
+    let label = if label.is_null() {
+        c"sample".as_ptr()
+    } else {
+        label
+    };
+    unsafe { native.write_title.unwrap()(stream, label, count) };
+    for module in &modules[..count] {
+        let path = unterminated(&module.path);
+        let begin = path
+            .iter()
+            .rposition(|&unit| unit == u16::from(b'\\'))
+            .map_or(0, |i| i + 1);
+        unsafe { native.write_leaf.unwrap()(stream, module.path[begin..].as_ptr()) };
+    }
+    unsafe { native.close.unwrap()(stream) }
 }

@@ -2,7 +2,6 @@
 
 #![allow(non_camel_case_types)]
 #![allow(non_upper_case_globals)]
-use super::json_abi::rsf_census_json;
 
 pub const RSF_CENSUS_VkGetInstanceProcAddr: rsf_census_vk_entry = 0;
 pub const RSF_CENSUS_VkGetDeviceProcAddr: rsf_census_vk_entry = 1;
@@ -19,33 +18,7 @@ pub const RSF_CENSUS_VK_COUNT: rsf_census_vk_entry = 11;
 pub type rsf_census_vk_entry = ::core::ffi::c_int;
 #[repr(C)]
 #[derive(Copy, Clone)]
-pub struct rsf_census_call_storage {
-    pub words: [u64; 832usize],
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_census_call_storage"]
-        [::core::mem::size_of::<rsf_census_call_storage>() - 6656usize];
-    ["Alignment of rsf_census_call_storage"]
-        [::core::mem::align_of::<rsf_census_call_storage>() - 8usize];
-    ["Offset of field: rsf_census_call_storage::words"]
-        [::core::mem::offset_of!(rsf_census_call_storage, words) - 0usize];
-};
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_census_wrapper_services {
-    pub original:
-        ::core::option::Option<unsafe extern "C" fn(entry: u16) -> *mut ::core::ffi::c_void>,
-    pub begin: ::core::option::Option<
-        unsafe extern "C" fn(
-            arg1: *mut rsf_census_call_storage,
-            entry: u16,
-            caller: *mut ::core::ffi::c_void,
-        ) -> *mut rsf_census_json,
-    >,
-    pub finish: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut rsf_census_call_storage, result: u64),
-    >,
+pub struct rsf_census_vk_platform {
     pub read: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *const ::core::ffi::c_void,
@@ -60,44 +33,14 @@ pub struct rsf_census_wrapper_services {
             arg3: usize,
         ) -> bool,
     >,
-    pub bind_vk: ::core::option::Option<
-        unsafe extern "C" fn(
-            arg1: *const ::core::ffi::c_char,
-            arg2: *mut ::core::ffi::c_void,
-        ) -> *mut ::core::ffi::c_void,
-    >,
-    pub describe_vk_queue: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, family: u32, index: u32),
-    >,
-    pub submit_vk_queue:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, count: u32)>,
-    pub present_enter: ::core::option::Option<unsafe extern "C" fn()>,
-    pub present_leave: ::core::option::Option<unsafe extern "C" fn()>,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_census_wrapper_services"]
-        [::core::mem::size_of::<rsf_census_wrapper_services>() - 80usize];
-    ["Alignment of rsf_census_wrapper_services"]
-        [::core::mem::align_of::<rsf_census_wrapper_services>() - 8usize];
-    ["Offset of field: rsf_census_wrapper_services::original"]
-        [::core::mem::offset_of!(rsf_census_wrapper_services, original) - 0usize];
-    ["Offset of field: rsf_census_wrapper_services::begin"]
-        [::core::mem::offset_of!(rsf_census_wrapper_services, begin) - 8usize];
-    ["Offset of field: rsf_census_wrapper_services::finish"]
-        [::core::mem::offset_of!(rsf_census_wrapper_services, finish) - 16usize];
-    ["Offset of field: rsf_census_wrapper_services::read"]
-        [::core::mem::offset_of!(rsf_census_wrapper_services, read) - 24usize];
-    ["Offset of field: rsf_census_wrapper_services::read_string"]
-        [::core::mem::offset_of!(rsf_census_wrapper_services, read_string) - 32usize];
-    ["Offset of field: rsf_census_wrapper_services::bind_vk"]
-        [::core::mem::offset_of!(rsf_census_wrapper_services, bind_vk) - 40usize];
-    ["Offset of field: rsf_census_wrapper_services::describe_vk_queue"]
-        [::core::mem::offset_of!(rsf_census_wrapper_services, describe_vk_queue) - 48usize];
-    ["Offset of field: rsf_census_wrapper_services::submit_vk_queue"]
-        [::core::mem::offset_of!(rsf_census_wrapper_services, submit_vk_queue) - 56usize];
-    ["Offset of field: rsf_census_wrapper_services::present_enter"]
-        [::core::mem::offset_of!(rsf_census_wrapper_services, present_enter) - 64usize];
-    ["Offset of field: rsf_census_wrapper_services::present_leave"]
-        [::core::mem::offset_of!(rsf_census_wrapper_services, present_leave) - 72usize];
+    ["Size of rsf_census_vk_platform"][::core::mem::size_of::<rsf_census_vk_platform>() - 16usize];
+    ["Alignment of rsf_census_vk_platform"]
+        [::core::mem::align_of::<rsf_census_vk_platform>() - 8usize];
+    ["Offset of field: rsf_census_vk_platform::read"]
+        [::core::mem::offset_of!(rsf_census_vk_platform, read) - 0usize];
+    ["Offset of field: rsf_census_vk_platform::read_string"]
+        [::core::mem::offset_of!(rsf_census_vk_platform, read_string) - 8usize];
 };

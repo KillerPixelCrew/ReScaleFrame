@@ -10,7 +10,7 @@ typedef struct rsf_census_ngx_platform {
     bool (*read)(const void*, void*, size_t);
     bool (*read_string)(const void*, char*, size_t);
     bool (*read_wstring)(const void*, uint16_t*, size_t);
-    bool (*parameter)(const void*, size_t slot, const char* name, void* output);
+    bool (*parameter)(const void*, size_t slot, const char* name, void* output, int32_t* result);
     void (*d3d_resource)(rsf_census_json*, const char* key, const void* resource, bool d3d12);
     void (*decimal)(rsf_census_json*, const char* key, double value);
 } rsf_census_ngx_platform;

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 use super::hooks::rsf_census_hook_original;
 use super::json::{
-    rsf_census_json_close, rsf_census_json_hex, rsf_census_json_i64, rsf_census_json_open,
-    rsf_census_json_raw, rsf_census_json_string, rsf_census_json_u64, rsf_census_json_wide,
+    emit_decimal, rsf_census_json_close, rsf_census_json_hex, rsf_census_json_i64,
+    rsf_census_json_open, rsf_census_json_raw, rsf_census_json_string, rsf_census_json_u64,
+    rsf_census_json_wide,
 };
 use super::json_abi::rsf_census_json;
 use super::ngx_abi::{RSF_CENSUS_NGX_ENTRIES, rsf_census_ngx_platform};
@@ -122,15 +123,17 @@ fn read<const N: usize>(address: u64) -> Option<[u8; N]> {
 
 fn parameter<T: Default>(params: u64, slot: usize, name: &CStr) -> Option<T> {
     let mut out = T::default();
-    unsafe {
+    let mut code = 0;
+    let returned = unsafe {
         services().platform.parameter.unwrap()(
             params as _,
             slot,
             name.as_ptr(),
             (&raw mut out).cast(),
+            &mut code,
         )
-    }
-    .then_some(out)
+    };
+    (returned && code as u32 == SUCCESS).then_some(out)
 }
 
 fn number(params: u64, name: &CStr, prefer_float: bool) -> Option<f64> {
@@ -172,7 +175,14 @@ impl Json<'_> {
     }
     fn scalar(&mut self, params: u64, key: &CStr, prefer_float: bool) {
         if let Some(value) = number(params, key, prefer_float) {
-            unsafe { services().platform.decimal.unwrap()(self.0, key.as_ptr(), value) };
+            unsafe {
+                emit_decimal(
+                    self.0,
+                    key.as_ptr(),
+                    value,
+                    services().platform.decimal.unwrap(),
+                )
+            };
         }
     }
     fn string(&mut self, key: &CStr, address: u64) {

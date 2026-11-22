@@ -30,6 +30,7 @@ pub struct rsf_census_ngx_platform {
             slot: usize,
             name: *const ::core::ffi::c_char,
             output: *mut ::core::ffi::c_void,
+            result: *mut i32,
         ) -> bool,
     >,
     pub d3d_resource: ::core::option::Option<

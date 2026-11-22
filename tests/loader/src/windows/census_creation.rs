@@ -45,8 +45,7 @@ fn check_creation() -> Option<bool> {
     Some(before_post_load && after_post_load)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_test_census_creation(
+pub(super) unsafe fn rsf_test_census_creation(
     directory: *const c_char,
     install: Install,
     shutdown: Shutdown,

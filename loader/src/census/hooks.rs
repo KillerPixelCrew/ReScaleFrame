@@ -9,7 +9,6 @@ use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::transmute;
 use std::ptr::{null, null_mut};
-use std::slice;
 use std::sync::{
     Mutex, OnceLock,
     atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering::*},
@@ -37,10 +36,11 @@ struct Config {
     platform: rsf_census_hook_platform,
     flags: u32,
     names: [u16; ENTRIES],
+    wrappers: [usize; ENTRIES],
 }
 
-// The native descriptor and wrapper arrays are immutable for the process lifetime
-// once installation publishes them. Callback addresses remain valid with the census.
+// The native descriptor array is immutable for the process lifetime. Callback addresses
+// remain valid with the census. The wrapper array is owned by this configuration.
 unsafe impl Send for Config {}
 unsafe impl Sync for Config {}
 static CONFIG: OnceLock<Config> = OnceLock::new();
@@ -133,7 +133,7 @@ fn bytes<'a>(address: *const c_char) -> Option<&'a CStr> {
 
 fn wrapper(cfg: &Config, entry: u16) -> Ptr {
     if entry < cfg.platform.count {
-        unsafe { *cfg.platform.wrappers.add(entry as usize) }
+        cfg.wrappers[entry as usize] as Ptr
     } else {
         null_mut()
     }
@@ -160,6 +160,16 @@ fn lookup(cfg: &Config, name: &CStr) -> u16 {
         }
     }
     UNKNOWN
+}
+
+pub(super) fn bind_named(api: &CStr, name: &CStr, target: Ptr) -> Option<Ptr> {
+    let cfg = CONFIG.get()?;
+    let entry = lookup(cfg, name);
+    let desc = descriptor(cfg, entry)?;
+    if bytes(desc.api) != Some(api) {
+        return None;
+    }
+    Some(rsf_census_hook_bind_thunk(entry, target))
 }
 
 fn enabled(cfg: &Config, entry: u16, desc: &rsf_census_hook_desc) -> bool {
@@ -193,15 +203,13 @@ fn note_hook(entry: u16, detour: bool, status: i32, target: Ptr, module: &[u8]) 
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_census_hook_original(entry: u16) -> Ptr {
+pub(super) fn rsf_census_hook_original(entry: u16) -> Ptr {
     ORIGINALS
         .get(entry as usize)
         .map_or(null_mut(), |original| original.load(Acquire))
 }
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_census_hook_bind_thunk(entry: u16, real: Ptr) -> Ptr {
+pub(super) fn rsf_census_hook_bind_thunk(entry: u16, real: Ptr) -> Ptr {
     let Some(cfg) = CONFIG.get() else { return real };
     let replacement = wrapper(cfg, entry);
     if replacement.is_null() || TARGETS[entry as usize].load(Acquire) == real {
@@ -260,12 +268,7 @@ fn bind_inline(cfg: &Config, entry: u16, target: Ptr, module: &[u8]) -> bool {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_census_hook_bind_inline(
-    entry: u16,
-    target: Ptr,
-    module: *const c_char,
-) -> bool {
+pub(super) fn rsf_census_hook_bind_inline(entry: u16, target: Ptr, module: *const c_char) -> bool {
     CONFIG.get().is_some_and(|cfg| {
         bind_inline(
             cfg,
@@ -274,14 +277,6 @@ pub(super) extern "C" fn rsf_census_hook_bind_inline(
             bytes(module).map_or(b"", CStr::to_bytes),
         )
     })
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_census_hook_lookup(name: *const c_char) -> u16 {
-    CONFIG
-        .get()
-        .zip(bytes(name))
-        .map_or(UNKNOWN, |(cfg, name)| lookup(cfg, name))
 }
 
 fn seen_before(base: usize) -> bool {
@@ -354,11 +349,59 @@ fn hook_module(cfg: &Config, module: HMODULE, path: &[u16]) {
     }
 }
 
-unsafe extern "C" fn visit_module(module: HMODULE, path: *const u16, units: usize) {
-    let Some(cfg) = CONFIG.get() else { return };
-    seen_before(module as usize);
-    let path = unsafe { slice::from_raw_parts(path, units) };
-    hook_module(cfg, module, path);
+fn loader_field<const N: usize>(cfg: &Config, base: usize, offset: usize) -> Option<[u8; N]> {
+    if base == 0 {
+        return None;
+    }
+    let address = base.checked_add(offset)?;
+    let mut field = [0; N];
+    unsafe { cfg.platform.read.unwrap()(address as _, field.as_mut_ptr().cast(), N) }
+        .then_some(field)
+}
+
+fn loader_word(cfg: &Config, base: usize, offset: usize) -> Option<usize> {
+    loader_field::<8>(cfg, base, offset).map(usize::from_le_bytes)
+}
+
+fn scan_modules(cfg: &Config) {
+    // Windows x64 TEB->PEB->Ldr->InLoadOrderModuleList. This walk uses the same
+    // loader list as the native DllMain implementation and never waits for its lock.
+    let teb = unsafe { cfg.platform.current_teb.unwrap()() } as usize;
+    let Some(ldr) = loader_word(cfg, teb, 0x60).and_then(|peb| loader_word(cfg, peb, 0x18)) else {
+        return;
+    };
+    if ldr == 0 {
+        return;
+    }
+    let Some(head) = ldr.checked_add(0x10) else {
+        return;
+    };
+    let Some(mut entry) = loader_word(cfg, head, 0) else {
+        return;
+    };
+    for _ in 0..16_384 {
+        if entry == head {
+            break;
+        }
+        let Some(row) = loader_field::<0x58>(cfg, entry, 0) else {
+            break;
+        };
+        entry = usize::from_le_bytes(row[..8].try_into().unwrap());
+        let module = usize::from_le_bytes(row[0x30..0x38].try_into().unwrap());
+        let length = u16::from_le_bytes(row[0x48..0x4a].try_into().unwrap()) as usize;
+        let source = usize::from_le_bytes(row[0x50..0x58].try_into().unwrap());
+        let mut path = [0u16; MAX_PATH as usize];
+        let units = length / 2;
+        if module == 0 || source == 0 || length % 2 != 0 || units >= path.len() {
+            continue;
+        }
+        let copied =
+            unsafe { cfg.platform.read.unwrap()(source as _, path.as_mut_ptr().cast(), length) };
+        if copied {
+            seen_before(module);
+            hook_module(cfg, module as HMODULE, &path[..units]);
+        }
+    }
 }
 
 fn post_load(module: HMODULE, flags: u32) {
@@ -479,10 +522,16 @@ unsafe extern "C" fn rsf_census_hooks_install(
     value: &rsf_census_hook_platform,
     flags: u32,
 ) -> bool {
+    if usize::from(value.count) >= ENTRIES || unsafe { value.initialize.unwrap()() } != HOOK_OK {
+        return false;
+    }
+    let mut wrappers = [null_mut(); ENTRIES];
+    unsafe { value.register_wrappers.unwrap()(wrappers.as_mut_ptr()) };
     let mut cfg = Config {
         platform: *value,
         flags,
         names: [UNKNOWN; ENTRIES],
+        wrappers: wrappers.map(|wrapper| wrapper as usize),
     };
     for entry in 0..cfg.platform.count {
         if let Some(name) = descriptor(&cfg, entry).and_then(|desc| bytes(desc.name)) {
@@ -523,10 +572,8 @@ unsafe extern "C" fn rsf_census_hooks_install(
             install_api(module, name, hook, slot);
         }
     }
-    unsafe {
-        platform().apply.unwrap()();
-        platform().scan_modules.unwrap()(Some(visit_module));
-    }
+    unsafe { platform().apply.unwrap()() };
+    scan_modules(CONFIG.get().unwrap());
     true
 }
 
@@ -537,8 +584,7 @@ pub(super) fn rsf_census_hooks_remove() {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_census_hooks_apply() {
+pub(super) fn rsf_census_hooks_apply() {
     let Some(cfg) = CONFIG.get() else { return };
     unsafe { cfg.platform.apply.unwrap()() };
     let mut book = book();

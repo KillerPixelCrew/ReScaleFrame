@@ -427,3 +427,45 @@ The dump and decrypted-poll entry points and the buffered sidecar stream now run
 Rust. `module_dump_writer.c` and its private memory-read ABI were removed. The public
 header and size checks remain intact. The legacy module-list text writer and engine
 controls still use the native ABI file.
+
+## Census and module-list ownership
+
+Rust now owns first-binding checks for Vulkan and Streamline, Vulkan record leases and
+queue accounting, the NGX success check, FSR resource admission, and finite-number policy.
+Wrapper signatures and the arguments passed to original functions still match the
+baseline. The Windows x64 loader-list walk keeps the same TEB, PEB, loaded image address
+and counted UTF-16 path. Rust publishes the wrapper table and controls MinHook
+initialization. The native boundary supplies the MinHook calls, TEB identity and guarded
+reads. Rust also dispatches all six fixture modes and owns module-list path handling,
+inventory, default label and basename selection.
+
+### Retained executable paths
+
+- `loader/census/src/census_platform.cpp` retains the C ABI install entry, descriptor
+  catalog and callback registration, guarded NGX and Streamline virtual calls and
+  output-pointer write, SDK resource dispatch and CRT decimal formatting.
+- `loader/census/src/hook_platform.cpp` retains MinHook calls and the native TEB getter.
+- `loader/census/src/guarded_platform.cpp` retains SEH for borrowed memory and foreign
+  calls, including executable vtable validation.
+- `loader/census/src/d3d_guarded_platform.cpp` retains guarded QueryInterface, Release,
+  GetDesc and GetType operations and their registration.
+- `tests/loader/vendor_census_native.cpp` retains independent SDK slot probes,
+  mock payloads, WARP calls, noinline import callers and direct pass-through evidence.
+- `tests/loader/module_dump_rtti_fixture.cpp` retains the real compiler-emitted RTTI specimen.
+- `tests/loader/vendor_layout_facts.cpp` retains facts derived directly from native SDK headers.
+- `loader/diagnostics/src/module_dump.c` retains the existing engine controls and the
+  module-list ABI and CRT append, formatting and close callbacks.
+
+The seven paths open in L02 at `3066e6ad` remain native at these boundaries.
+`module_dump_rtti.c`, `module_dump_writer.c` and the former native memory-read interface are
+removed. Public headers and `PORT.md` are unchanged.
+
+### Source checks
+
+MSVC 19.52 with Windows SDK 10.0.26100.0 accepted the five production native translation
+units listed above and the two native vendor/RTTI fixture sources under `/Zs /W4 /WX`.
+The hook check used the CMake-pinned
+[MinHook header](https://raw.githubusercontent.com/TsudaKageyu/minhook/c3fcafdc10146beb5919319d0683e44e3c30d537/include/MinHook.h).
+The optional vendor-layout source was checked for unchanged content.
+Pinned Rust formatting, targeted bindgen regeneration, locked offline Cargo metadata
+and whitespace checks passed. Compiled and runtime verification remain user-owned.
