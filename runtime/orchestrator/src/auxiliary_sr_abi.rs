@@ -26,11 +26,6 @@ pub const RSF_AUX_USAGE_DEFAULT: u32 = 0;
 pub const RSF_AUX_PACKED_SUPPORT_MASK: u32 = 16672;
 #[repr(C)]
 #[derive(Copy, Clone)]
-pub struct rsf_depth_scale {
-    _unused: [u8; 0],
-}
-#[repr(C)]
-#[derive(Copy, Clone)]
 pub struct rsf_depth_scale_setup {
     pub struct_size: u32,
     pub abi_version: u32,
