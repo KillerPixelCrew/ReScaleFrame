@@ -193,8 +193,7 @@ fn queue(kind: u8, address: u64) -> Option<&'static Queue> {
     None
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_census_stats_init(entries: u16, cap: u32, interval: u32) -> bool {
+pub(super) fn rsf_census_stats_init(entries: u16, cap: u32, interval: u32) -> bool {
     let count = usize::from(entries);
     count <= FUNCTION_CAP
         && SETTINGS
@@ -206,8 +205,7 @@ extern "C" fn rsf_census_stats_init(entries: u16, cap: u32, interval: u32) -> bo
             .is_ok()
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_census_stats_sample(
+pub(super) fn rsf_census_stats_sample(
     entry: u16,
     module: u32,
     rva: u32,
@@ -246,8 +244,7 @@ extern "C" fn rsf_census_stats_sample(
     ordinal < cfg.cap || (cfg.interval != 0 && (ordinal - cfg.cap).is_multiple_of(cfg.interval))
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_census_stats_counts(
+pub(super) fn rsf_census_stats_counts(
     calls: &mut u64,
     present: &mut u64,
     sites: &mut u32,
@@ -260,7 +257,7 @@ extern "C" fn rsf_census_stats_counts(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_census_stats_present() {
+pub(super) extern "C" fn rsf_census_stats_present() {
     let Some(cfg) = SETTINGS.get() else { return };
     for function in &FUNCTIONS[..cfg.count] {
         function.histogram.roll();
@@ -274,12 +271,12 @@ extern "C" fn rsf_census_stats_present() {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_census_stats_present_index() -> u64 {
+pub(super) extern "C" fn rsf_census_stats_present_index() -> u64 {
     PRESENT.load(Relaxed)
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_census_stats_queue_describe(
+pub(super) extern "C" fn rsf_census_stats_queue_describe(
     kind: u8,
     address: *const c_void,
     a: u32,
@@ -294,7 +291,11 @@ extern "C" fn rsf_census_stats_queue_describe(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_census_stats_queue_submit(kind: u8, address: *const c_void, lists: u32) -> bool {
+pub(super) extern "C" fn rsf_census_stats_queue_submit(
+    kind: u8,
+    address: *const c_void,
+    lists: u32,
+) -> bool {
     let Some(queue) = queue(kind, address as u64) else {
         return false;
     };
@@ -343,8 +344,7 @@ fn function_name(desc: &rsf_census_hook_desc) -> *const c_char {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_census_stats_sites(
+pub(super) unsafe fn rsf_census_stats_sites(
     output: &mut rsf_census_json,
     names: &rsf_census_stats_names,
 ) {
@@ -384,8 +384,7 @@ unsafe extern "C" fn rsf_census_stats_sites(
     json.close(b']');
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_census_stats_histograms(
+pub(super) unsafe fn rsf_census_stats_histograms(
     output: &mut rsf_census_json,
     entries: *const rsf_census_hook_desc,
 ) {
@@ -408,8 +407,7 @@ unsafe extern "C" fn rsf_census_stats_histograms(
     json.close(b']');
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_census_stats_queues(output: &mut rsf_census_json) {
+pub(super) fn rsf_census_stats_queues(output: &mut rsf_census_json) {
     let mut json = Json(output);
     json.open(Some(c"queues"), b'[');
     for queue in &QUEUES {

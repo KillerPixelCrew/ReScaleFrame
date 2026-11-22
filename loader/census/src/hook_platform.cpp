@@ -84,7 +84,6 @@ bool hooks_install() noexcept {
     return rsf_census_hooks_install(&platform, option_flags());
 }
 
-void hooks_remove() noexcept { rsf_census_hooks_remove(); }
 void hooks_apply() noexcept { rsf_census_hooks_apply(); }
 void* bind_thunk(Fn fn, void* real) noexcept {
     return rsf_census_hook_bind_thunk(static_cast<uint16_t>(fn), real);
@@ -96,9 +95,4 @@ Fn lookup_name(const char* name) noexcept {
     const uint16_t found = rsf_census_hook_lookup(name);
     return found < kFnCount ? static_cast<Fn>(found) : Fn::Count;
 }
-void hook_counts(uint32_t& installed_count, uint32_t& conflicts, uint32_t& modules) noexcept {
-    rsf_census_hook_counts(&installed_count, &conflicts, &modules);
-}
-void hooks_summary(Json& json) noexcept { rsf_census_hooks_summary(json.state()); }
-
 } // namespace rsf_census

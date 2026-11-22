@@ -15,6 +15,8 @@
 #include "decode_platform.h"
 #include "hook_platform.h"
 #include "record_platform.h"
+#include "session_platform.h"
+#include "stats_platform.h"
 
 namespace rsf_census {
 
@@ -238,70 +240,54 @@ inline bool guard(L&& lambda) noexcept {
 // ---- JSON line builder ------------------------------------------------------------------------
 class Json {
 public:
-    Json(char* buf, size_t cap) noexcept : state_{buf, cap, 0, 0, 0, false} {}
-    bool ok() const noexcept { return !state_.overflow; }
-    size_t size() const noexcept { return state_.length; }
-    rsf_census_json* state() noexcept { return &state_; }
+    explicit Json(rsf_census_json* state) noexcept : state_(state) {}
 
-    void obj(const char* key = nullptr) noexcept { rsf_census_json_open(&state_, key, '{'); }
-    void end_obj() noexcept { rsf_census_json_close(&state_, '}'); }
-    void arr(const char* key = nullptr) noexcept { rsf_census_json_open(&state_, key, '['); }
-    void end_arr() noexcept { rsf_census_json_close(&state_, ']'); }
-    void str(const char* key, const char* v) noexcept { rsf_census_json_string(&state_, key, v); }
+    void obj(const char* key = nullptr) noexcept { rsf_census_json_open(state_, key, '{'); }
+    void end_obj() noexcept { rsf_census_json_close(state_, '}'); }
+    void arr(const char* key = nullptr) noexcept { rsf_census_json_open(state_, key, '['); }
+    void end_arr() noexcept { rsf_census_json_close(state_, ']'); }
+    void str(const char* key, const char* v) noexcept { rsf_census_json_string(state_, key, v); }
     void wstr(const char* key, const wchar_t* v) noexcept {
-        rsf_census_json_wide(&state_, key, reinterpret_cast<const uint16_t*>(v));
+        rsf_census_json_wide(state_, key, reinterpret_cast<const uint16_t*>(v));
     }
-    void u64(const char* key, uint64_t v) noexcept { rsf_census_json_u64(&state_, key, v); }
-    void i64(const char* key, int64_t v) noexcept { rsf_census_json_i64(&state_, key, v); }
-    void hex(const char* key, uint64_t v) noexcept { rsf_census_json_hex(&state_, key, v); }
+    void u64(const char* key, uint64_t v) noexcept { rsf_census_json_u64(state_, key, v); }
+    void i64(const char* key, int64_t v) noexcept { rsf_census_json_i64(state_, key, v); }
+    void hex(const char* key, uint64_t v) noexcept { rsf_census_json_hex(state_, key, v); }
     void f32(const char* key, double v) noexcept;
     void boolean(const char* key, bool v) noexcept { raw(key, v ? "true" : "false"); }
     void null(const char* key) noexcept { raw(key, nullptr); }
     void bytes_hex(const char* key, const void* data, size_t n) noexcept {
-        rsf_census_json_bytes(&state_, key, data, n);
+        rsf_census_json_bytes(state_, key, data, n);
     }
     void raw(const char* key, const char* json_text) noexcept {
-        rsf_census_json_raw(&state_, key, json_text);
+        rsf_census_json_raw(state_, key, json_text);
     }
     void resource(const char* key, const void* resource, bool d3d12,
                   rsf_census_read_resource read) noexcept {
-        rsf_census_json_resource(&state_, key, resource, d3d12, read);
+        rsf_census_json_resource(state_, key, resource, d3d12, read);
     }
 
 private:
-    rsf_census_json state_;
+    rsf_census_json* state_;
 };
 
 // ---- Per-call recording -----------------------------------------------------------------------
-constexpr size_t kBodyMax = RSF_CENSUS_RECORD_BODY_MAX;
-// D3D12 validation can consume more than 16 frames before reaching the game's recording call.
-constexpr uint32_t kStackFrames = RSF_CENSUS_RECORD_STACK_FRAMES;
-
 class Call {
 public:
-    Call(Fn fn, void* return_address) noexcept;
+    Call(Fn fn, void* return_address) noexcept : json_(&state_.json) {
+        rsf_census_call_begin(&state_, static_cast<uint16_t>(fn), return_address);
+    }
     Call(const Call&) = delete;
     Call& operator=(const Call&) = delete;
     // True when this call is written in full. Decode arguments only then.
-    bool full() const noexcept { return full_; }
+    bool full() const noexcept { return state_.full; }
     Json& json() noexcept { return json_; }
     // Queue the record. `ret` is the raw return register.
-    void finish(uint64_t ret) noexcept;
+    void finish(uint64_t ret) noexcept { rsf_census_call_finish(&state_, ret); }
 
 private:
-    Fn fn_;
-    bool full_;
-    uint32_t rva_ = 0;
-    uint32_t tid_ = 0;
-    uint64_t base_ = 0;
-    uint64_t site_ord_ = 0;
-    uint64_t ord_ = 0;
-    uint64_t t_us_ = 0;
-    // Return addresses from the intercepted call's caller outward, captured for full records only.
-    void* stack_[kStackFrames] = {};
-    uint32_t stack_n_ = 0;
+    rsf_census_call_state state_{};
     Json json_;
-    char buf_[kBodyMax];
 };
 
 #define RSF_RETADDR() _ReturnAddress()
@@ -328,10 +314,8 @@ struct PresentScope {
 };
 
 // Static findings (statically linked vendor code), kept for the summary.
-void add_finding(const char* vendor, const char* what, uint64_t rva, uint64_t function_rva) noexcept;
-
-bool installed() noexcept;
-uint32_t option_flags() noexcept;
+inline bool installed() noexcept { return rsf_census_active(); }
+inline uint32_t option_flags() noexcept { return rsf_census_flags(); }
 
 // Hook installation entry points of each translation unit.
 void register_wrappers_d3d(void** table) noexcept;
@@ -342,13 +326,6 @@ void register_wrappers_misc(void** table) noexcept;
 
 // Hook layer (hooks.cpp).
 bool hooks_install() noexcept;
-void hooks_remove() noexcept;
-void hook_counts(uint32_t& installed, uint32_t& conflicts, uint32_t& modules) noexcept;
-// Summary contributions written by the hook layer.
-void hooks_summary(Json& j) noexcept;
-
-// Core services (core.cpp).
-rsf_census_result core_install(const rsf_census_options* opt) noexcept;
 
 // Resource decode helpers (decode_d3d_platform.cpp).
 inline const char* dxgi_format_name(uint32_t format) noexcept {

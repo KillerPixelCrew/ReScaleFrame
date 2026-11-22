@@ -413,8 +413,7 @@ fn report(scan: &Scan, add: Report) {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_census_static_scan(add_finding: Option<Report>) {
+pub(super) extern "C" fn rsf_census_static_scan(add_finding: Option<Report>) {
     let Some(add_finding) = add_finding else {
         return;
     };

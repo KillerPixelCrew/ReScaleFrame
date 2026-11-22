@@ -50,8 +50,7 @@ struct Ring {
 
 static RING: OnceLock<Ring> = OnceLock::new();
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_census_record_init() -> bool {
+pub(super) fn rsf_census_record_init() -> bool {
     let mut slots = Vec::new();
     if slots.try_reserve_exact(SLOTS).is_err() {
         return false;
@@ -72,8 +71,7 @@ extern "C" fn rsf_census_record_init() -> bool {
     .is_ok()
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_census_record_acquire(position: &mut usize) -> *mut rsf_census_queued_record {
+pub(super) fn rsf_census_record_acquire(position: &mut usize) -> *mut rsf_census_queued_record {
     let Some(ring) = RING.get() else {
         return null_mut();
     };
@@ -102,8 +100,7 @@ extern "C" fn rsf_census_record_acquire(position: &mut usize) -> *mut rsf_census
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_census_record_publish(position: usize) {
+pub(super) fn rsf_census_record_publish(position: usize) {
     let ring = RING.get().expect("a published ticket has a live ring");
     ring.slots[position & (SLOTS - 1)]
         .stamp
@@ -182,8 +179,7 @@ unsafe fn write_line(
     unsafe { writer.append.unwrap()(line.as_ptr().cast(), offset) };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_census_record_drain(writer: &rsf_census_record_writer) {
+pub(super) unsafe fn rsf_census_record_drain(writer: &rsf_census_record_writer) {
     let Some(ring) = RING.get() else { return };
     let mut ticket = ring.read.0.load(Relaxed);
     loop {

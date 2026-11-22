@@ -86,6 +86,12 @@ generate("loader/src/census/stats_abi.rs", "loader/census/src/stats_platform.h",
          "rsf_census_(sample|stats_names)", "NOTHING", ["-Iloader/census/include"],
          ["--blocklist-type", "rsf_census_hook_desc",
           "--raw-line", "use super::hook_abi::rsf_census_hook_desc;"])
+generate("loader/src/census/session_abi.rs", "loader/census/src/session_platform.h",
+         "rsf_census_(call_state|core_platform|options|counters|result)",
+         "RSF_CENSUS_(ABI_VERSION|FLAG_NO_STATIC_SCAN)", ["-Iloader/census/include"],
+         ["--blocklist-type", "rsf_census_(hook_desc|json)",
+          "--raw-line", "use super::hook_abi::rsf_census_hook_desc;",
+          "--raw-line", "use super::json_abi::rsf_census_json;"])
 generate("tests/loader/src/windows/module_dump_abi.rs",
          "loader/diagnostics/include/rescaleframe/module_dump.h",
          "rsf_dump_(options|report|result)", "RSF_MODULE_DUMP_ABI_VERSION", [],

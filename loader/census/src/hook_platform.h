@@ -36,14 +36,11 @@ extern "C" {
 #endif
 
 bool rsf_census_hooks_install(const rsf_census_hook_platform*, uint32_t flags);
-void rsf_census_hooks_remove(void);
 void rsf_census_hooks_apply(void);
 void* rsf_census_hook_original(uint16_t entry);
 void* rsf_census_hook_bind_thunk(uint16_t entry, void* real);
 bool rsf_census_hook_bind_inline(uint16_t entry, void* target, const char* module);
 uint16_t rsf_census_hook_lookup(const char* name);
-void rsf_census_hook_counts(uint32_t* installed, uint32_t* conflicts, uint32_t* modules);
-void rsf_census_hooks_summary(rsf_census_json*);
 
 #ifdef __cplusplus
 }

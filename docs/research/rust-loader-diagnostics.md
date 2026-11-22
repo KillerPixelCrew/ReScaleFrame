@@ -176,5 +176,23 @@ draining does not put a full JSONL line on the crash thread's stack.
 The SEH and executable-memory probes live in a separate native platform file. Rust owns
 call-site admission, the sampling cadence, per-function and per-queue histograms, and
 present indexing. The same summary entries keep their original array order, capacities,
-and field names. The C++ census core still owns installation, native writer scheduling,
-module and thread naming, and the on-disk byte budget.
+and field names.
+
+## Census session and file writer
+
+`loader/census/src/core.cpp` is removed. Rust owns the public session behavior, call stack
+records, worker scheduling, module and thread registries, vectored diagnostic callback,
+summary assembly and buffered output. The public `vendor_census.h` ABI and numeric results
+are preserved. The native entry provides the wrapper catalog and hook install callback.
+`census_platform.cpp` also keeps the Vulkan wrapper table and CRT float formatting.
+
+The writer and output buffer are serialized together. Module bases publish in one atomic
+operation and thread names publish under their own tiny lock. A crash record uses a preallocated
+slot, and the fatal handler tries the writer lock within the original attempt limit. Shutdown
+retains worker handles and reports I/O failure if a join times out, so callers can retry.
+Summary publication requires a complete temporary-file write. JSONL write failures retain
+the prior admitted-byte accounting semantics.
+
+Source checks compare the API validation, exported names and struct layout, JSON field inventory,
+worker deadlines, file names and output caps. The remaining native wrapper and SEH leaves
+continue to own borrowed SDK calls.

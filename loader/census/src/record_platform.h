@@ -27,15 +27,4 @@ typedef struct rsf_census_record_writer {
     void (*drop_size)(void);
 } rsf_census_record_writer;
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-bool rsf_census_record_init(void);
-rsf_census_queued_record* rsf_census_record_acquire(size_t* position);
-void rsf_census_record_publish(size_t position);
-/* Drain must have a single consumer. Callbacks and their strings are borrowed. */
-void rsf_census_record_drain(const rsf_census_record_writer*);
-#ifdef __cplusplus
-}
-#endif
 #endif

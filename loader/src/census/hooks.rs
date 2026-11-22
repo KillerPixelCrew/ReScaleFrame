@@ -526,8 +526,7 @@ unsafe extern "C" fn rsf_census_hooks_install(
     true
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_census_hooks_remove() {
+pub(super) fn rsf_census_hooks_remove() {
     if let Some(cfg) = CONFIG.get() {
         // A caller may still hold a trampoline in flight.
         unsafe { cfg.platform.disable.unwrap()() };
@@ -552,15 +551,13 @@ extern "C" fn rsf_census_hooks_apply() {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_census_hook_counts(installed: &mut u32, conflicts: &mut u32, modules: &mut u32) {
+pub(super) fn rsf_census_hook_counts(installed: &mut u32, conflicts: &mut u32, modules: &mut u32) {
     *installed = INSTALLED.load(Relaxed);
     *conflicts = CONFLICTS.load(Relaxed);
     *modules = MODULES.load(Relaxed);
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_census_hooks_summary(json: &mut rsf_census_json) {
+pub(super) unsafe fn rsf_census_hooks_summary(json: &mut rsf_census_json) {
     // The fatal-error writer may reach this while another thread is publishing a hook.
     let book = BOOK.try_lock().ok();
     unsafe {
