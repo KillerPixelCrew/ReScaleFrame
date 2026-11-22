@@ -50,10 +50,6 @@ admitting only after every hook is enabled, and disables admission before teardo
 This is static source and binary evidence. The regression fixtures and game
 execution remain user-run.
 
-Research history: findings, hook addresses and pending statuses below apply to their recorded
-experiments. Later increments can supersede earlier conclusions. See
-[current implementation and validation](../current-status.md) before using this as a feature list.
-
 Investigation: 2 to 3 October 2026. This is static executable, packaged-asset and matched-source
 analysis. No Project Wingman injection, instruction patch, frame capture or device validation
 was performed. The plugin scaffold only recognizes the examined build and refuses activation.

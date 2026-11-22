@@ -1,9 +1,5 @@
 # Shared Unity Mono plugin
 
-Research history: findings, hook addresses and pending statuses below apply to their recorded
-experiments. Later increments can supersede earlier conclusions. See
-[current implementation and validation](../current-status.md) before using this as a feature list.
-
 Direction agreed on 3 October 2026: use a shared Unity Mono plugin, reflection for discovery,
 and Harmony for managed method patches. Drag'n Wash is the first validation case. The initial
 scaffold was followed by implemented Mono/Harmony URP hooks, DX12 SR, shared overlay and FG.

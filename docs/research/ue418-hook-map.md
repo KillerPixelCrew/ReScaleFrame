@@ -10,10 +10,6 @@ scene-precision site and temporal velocity group listed here are now tables in t
 `rsf-ac7` (`games/ac7/src/sites.rs`, `patches.rs`), unchanged; TrueSky plugin sites stay in
 `native_renderer.cpp`. See [the migration note](rust-ac7-native-sites.md).
 
-Research history: findings, hook addresses and pending statuses below apply to their recorded
-experiments. Later increments can supersede earlier conclusions. See
-[current implementation and validation](../current-status.md) before using this as a feature list.
-
 Current status, 2 October: the user accepted the corrected native SR/UI and TrueSky wing/cloud
 path. Historical build-only notes below retain the discovery trail; latest activation and
 validation are in [engine evidence](../../games/ac7/engine.json) and
