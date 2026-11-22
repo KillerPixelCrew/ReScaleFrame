@@ -1,15 +1,12 @@
 // SPDX-License-Identifier: MIT
-#[path = "../../vulkan/streamline/lifecycle/src/sdk_camera_defaults.rs"]
-mod sdk_camera_defaults;
-#[path = "../../vulkan/streamline/lifecycle/src/sdk_records_abi.rs"]
-#[allow(dead_code)] // The other records are consumed by the standalone bridge.
-mod sdk_records_abi;
-
-use rsf_game_sys::rsf_frame_record;
-pub(super) use sdk_records_abi::{
-    rsf_slvk_sdk_constants, rsf_slvk_sdk_header, rsf_slvk_sdk_preferences, rsf_slvk_sdk_resource,
-    rsf_slvk_sdk_tag,
+// The Streamline record mirrors are loaded once, in streamline_sdk.
+use crate::streamline_sdk::default_constants;
+pub(super) use crate::streamline_sdk::{
+    Constants as rsf_slvk_sdk_constants, Header as rsf_slvk_sdk_header,
+    Preferences as rsf_slvk_sdk_preferences, Resource as rsf_slvk_sdk_resource,
+    ResourceTag as rsf_slvk_sdk_tag,
 };
+use rsf_game_sys::rsf_frame_record;
 
 pub(super) fn camera_constants(
     record: &rsf_frame_record,
@@ -44,6 +41,6 @@ pub(super) fn camera_constants(
         depth_inverted: u8::from(camera.depth_inverted != 0),
         motion_jittered: u8::from(camera.motion_jittered != 0),
         reset: u8::from(reset),
-        ..sdk_camera_defaults::constants()
+        ..default_constants()
     }
 }

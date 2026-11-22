@@ -8,7 +8,7 @@ target_compile_definitions(rsf_frame_dump PRIVATE RSF_RUNTIME_BUILD)
 target_link_libraries(rsf_frame_dump PUBLIC ReScaleFrame::Graphics ReScaleFrame::Contract ReScaleFrame::GameSDK ReScaleFrame::RuntimeCommon PRIVATE rsf_build_options)
 add_library(ReScaleFrame::FrameDump ALIAS rsf_frame_dump)
 # Readback helpers in the backend libraries share the same capture owner as the host.
-foreach(rsf_dump_backend rsf_dlss rsf_fsr rsf_xess)
+foreach(rsf_dump_backend rsf_fsr rsf_xess)
     target_link_libraries(${rsf_dump_backend} PRIVATE ReScaleFrame::FrameDump)
     target_compile_definitions(${rsf_dump_backend} PRIVATE RSF_FRAME_DUMP_STATIC)
 endforeach()

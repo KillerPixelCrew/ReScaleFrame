@@ -326,6 +326,7 @@ mod streamline_host;
 mod streamline_log;
 #[cfg(windows)]
 mod streamline_policy;
+mod streamline_sdk;
 #[cfg(windows)]
 mod streamline_sr;
 #[cfg(all(windows, test))]

@@ -38,7 +38,7 @@ mod provider;
 type Handle = *mut c_void;
 // The SDK host lends Streamline's embedded-signature check, which stays with
 // the vendor header in dlss_streamline.cpp.
-type VerifySignature = Option<unsafe extern "C" fn(*const u16) -> bool>;
+pub(crate) type VerifySignature = Option<unsafe extern "C" fn(*const u16) -> bool>;
 
 const NOT_APPLICABLE: u32 = 0;
 const READY: u32 = 1;
@@ -280,7 +280,7 @@ impl State {
     }
 }
 
-struct Owner(Mutex<State>);
+pub(crate) struct Owner(Mutex<State>);
 
 impl Owner {
     fn state(&self) -> MutexGuard<'_, State> {
@@ -310,7 +310,7 @@ fn try_update() -> Option<MutexGuard<'static, ()>> {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_mfg_create() -> *mut Owner {
+pub(crate) extern "C" fn rsf_core_mfg_create() -> *mut Owner {
     crate::allocate_handle(Owner(Mutex::new(State::new())))
 }
 
@@ -364,7 +364,7 @@ unsafe fn prime(
 
 // A null verifier means the host does not require a signed wrapper.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_mfg_prime(
+pub(crate) unsafe extern "C" fn rsf_core_mfg_prime(
     owner: &Owner,
     device: Handle,
     directory: *const u16,
@@ -385,7 +385,7 @@ unsafe extern "C" fn rsf_core_mfg_prime(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_mfg_prepare(
+pub(crate) unsafe extern "C" fn rsf_core_mfg_prepare(
     owner: &Owner,
     device: Handle,
     get_state: Handle,
@@ -458,7 +458,11 @@ unsafe extern "C" fn rsf_core_mfg_prepare(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_mfg_status(owner: *const Owner, status: &mut u32, maximum: &mut u32) {
+pub(crate) unsafe extern "C" fn rsf_core_mfg_status(
+    owner: *const Owner,
+    status: &mut u32,
+    maximum: &mut u32,
+) {
     if let Some(owner) = unsafe { owner.as_ref() } {
         let state = owner.state();
         *status = state.status;
@@ -470,14 +474,14 @@ unsafe extern "C" fn rsf_core_mfg_status(owner: *const Owner, status: &mut u32, 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_mfg_release(owner: *const Owner) {
+pub(crate) unsafe extern "C" fn rsf_core_mfg_release(owner: *const Owner) {
     if let Some(owner) = unsafe { owner.as_ref() } {
         owner.release();
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_mfg_destroy(owner: *mut Owner) {
+pub(crate) unsafe extern "C" fn rsf_core_mfg_destroy(owner: *mut Owner) {
     if !owner.is_null() {
         let owner = unsafe { Box::from_raw(owner) };
         owner.release();

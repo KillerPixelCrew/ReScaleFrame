@@ -301,7 +301,7 @@ fn audit() -> MutexGuard<'static, Audit> {
 // Optional process-lifetime observation. It never changes arguments, return
 // values or hook chains.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_reflex_audit_start(log: Log, user: *mut c_void) {
+pub(crate) unsafe extern "C" fn rsf_reflex_audit_start(log: Log, user: *mut c_void) {
     start(log, user, &MINHOOK);
 }
 
@@ -347,7 +347,7 @@ fn start(log: Log, user: *mut c_void, platform: &Platform) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_reflex_audit_stop() {
+pub(crate) extern "C" fn rsf_reflex_audit_stop() {
     // If the listener calls stop, its own thread already owns the output lock.
     let _output = Output::enter();
     audit().listener = Listener::NONE;
@@ -530,7 +530,11 @@ unsafe fn observe_nvapi(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_reflex_driver_sleep(device: *mut c_void, log: Log, user: *mut c_void) {
+pub(crate) unsafe extern "C" fn rsf_reflex_driver_sleep(
+    device: *mut c_void,
+    log: Log,
+    user: *mut c_void,
+) {
     let mut state = NV_GET_SLEEP_STATUS_PARAMS {
         version: version::<NV_GET_SLEEP_STATUS_PARAMS>(),
         ..Default::default()

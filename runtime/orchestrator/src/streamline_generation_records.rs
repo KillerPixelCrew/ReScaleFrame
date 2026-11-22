@@ -7,28 +7,20 @@ use std::ptr::null_mut;
 
 #[path = "streamline_generation_records_abi.rs"]
 mod abi;
-#[path = "../../vulkan/streamline/lifecycle/src/sdk_camera_defaults.rs"]
-mod sdk_camera_defaults;
-#[allow(dead_code)]
-#[path = "../../vulkan/streamline/lifecycle/src/sdk_fg_options_abi.rs"]
-mod sdk_fg_options_abi;
-#[allow(dead_code)]
-#[path = "../../vulkan/streamline/lifecycle/src/sdk_records_abi.rs"]
-mod sdk_records_abi;
 
-use abi::{rsf_slhost_reflex_sample, rsf_slhost_tag, rsf_slhost_version};
-use sdk_fg_options_abi::rsf_slvk_sdk_fg_options;
-use sdk_records_abi::{
-    rsf_slvk_sdk_constants, rsf_slvk_sdk_header, rsf_slvk_sdk_pcl_options,
-    rsf_slvk_sdk_reflex_options,
+use crate::streamline_sdk::{
+    Constants as rsf_slvk_sdk_constants, FgHeader, FgOptions as rsf_slvk_sdk_fg_options,
+    Header as rsf_slvk_sdk_header, PclOptions as rsf_slvk_sdk_pcl_options,
+    ReflexOptions as rsf_slvk_sdk_reflex_options, default_constants,
 };
+pub(crate) use abi::{rsf_slhost_reflex_sample, rsf_slhost_tag, rsf_slhost_version};
 
 const REFLEX_ON: u32 = 1;
-const REFLEX_SAMPLES: usize = 64;
-type Emit = unsafe extern "C" fn(Log, *mut c_void, *const c_char);
+pub(crate) const REFLEX_SAMPLES: usize = 64;
+pub(crate) type Emit = unsafe extern "C" fn(Log, *mut c_void, *const c_char);
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_slhost_format_version(
+pub(crate) extern "C" fn rsf_slhost_format_version(
     version: Option<&rsf_slhost_version>,
     status: &mut rsf_fg_status,
 ) {
@@ -54,7 +46,7 @@ fn emit_line(log: Log, user: *mut c_void, emit: Emit, text: String) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_slhost_report_support(
+pub(crate) extern "C" fn rsf_slhost_report_support(
     fg: u32,
     reflex: u32,
     log: Log,
@@ -72,7 +64,7 @@ extern "C" fn rsf_slhost_report_support(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_slhost_report_reflex_options(
+pub(crate) extern "C" fn rsf_slhost_report_reflex_options(
     mode: u32,
     limit: u32,
     marker_optimization: u32,
@@ -91,7 +83,7 @@ extern "C" fn rsf_slhost_report_reflex_options(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_slhost_reflex_summary(
+pub(crate) extern "C" fn rsf_slhost_reflex_summary(
     samples: &[rsf_slhost_reflex_sample; REFLEX_SAMPLES],
     inputs: &[u64; 4],
     available: u32,
@@ -132,7 +124,7 @@ extern "C" fn rsf_slhost_reflex_summary(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_slhost_reflex_ring(
+pub(crate) unsafe extern "C" fn rsf_slhost_reflex_ring(
     samples: &[rsf_slhost_reflex_sample; REFLEX_SAMPLES],
     reason: *const c_char,
     source: u64,
@@ -194,7 +186,7 @@ unsafe extern "C" fn rsf_slhost_reflex_ring(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_slhost_pack_options(
+pub(crate) extern "C" fn rsf_slhost_pack_options(
     mode: u32,
     frames: u32,
     ui_recomposition: u32,
@@ -202,7 +194,7 @@ extern "C" fn rsf_slhost_pack_options(
     out: &mut rsf_slvk_sdk_fg_options,
 ) {
     *out = rsf_slvk_sdk_fg_options {
-        base: sdk_fg_options_abi::rsf_slvk_sdk_header {
+        base: FgHeader {
             next: null_mut(),
             type_lo: 0xfac5_f1cb,
             type_mid: 0x2dfd,
@@ -221,7 +213,11 @@ extern "C" fn rsf_slhost_pack_options(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_slhost_pack_reflex(mode: u32, limit: u32, out: &mut rsf_slvk_sdk_reflex_options) {
+pub(crate) extern "C" fn rsf_slhost_pack_reflex(
+    mode: u32,
+    limit: u32,
+    out: &mut rsf_slvk_sdk_reflex_options,
+) {
     *out = rsf_slvk_sdk_reflex_options {
         base: rsf_slvk_sdk_header {
             next: null_mut(),
@@ -242,7 +238,7 @@ extern "C" fn rsf_slhost_pack_reflex(mode: u32, limit: u32, out: &mut rsf_slvk_s
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_slhost_pack_pcl(out: &mut rsf_slvk_sdk_pcl_options) {
+pub(crate) extern "C" fn rsf_slhost_pack_pcl(out: &mut rsf_slvk_sdk_pcl_options) {
     *out = rsf_slvk_sdk_pcl_options {
         base: rsf_slvk_sdk_header {
             next: null_mut(),
@@ -259,7 +255,7 @@ extern "C" fn rsf_slhost_pack_pcl(out: &mut rsf_slvk_sdk_pcl_options) {
 
 // The shared FG validator admitted the frame and its camera before packing.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_slhost_pack_fg_camera(
+pub(crate) unsafe extern "C" fn rsf_slhost_pack_fg_camera(
     frame: &rsf_fg_frame,
     reset: u32,
     out: &mut rsf_slvk_sdk_constants,
@@ -286,12 +282,15 @@ unsafe extern "C" fn rsf_slhost_pack_fg_camera(
         depth_inverted: u8::from(camera.depth_inverted != 0),
         motion_jittered: u8::from(camera.motion_jittered != 0),
         reset: u8::from(reset != 0),
-        ..sdk_camera_defaults::constants()
+        ..default_constants()
     };
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_slhost_plan_tags(frame: &rsf_fg_frame, out: &mut [rsf_slhost_tag; 5]) -> u32 {
+pub(crate) extern "C" fn rsf_slhost_plan_tags(
+    frame: &rsf_fg_frame,
+    out: &mut [rsf_slhost_tag; 5],
+) -> u32 {
     let mut count = 0;
     for (input, kind) in [
         (&frame.backbuffer, 53),

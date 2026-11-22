@@ -24,25 +24,25 @@ const REQUIRED: u32 = GET_STATE | SET_OPTIONS | SLEEP | PCL_MARKER | REFLEX_OPTI
 #[allow(dead_code)]
 #[repr(C)]
 pub(super) struct Request {
-    mode: u32,
-    frames: u32,
-    ui_recomposition: u32,
-    dynamic_target_fps: f32,
+    pub(super) mode: u32,
+    pub(super) frames: u32,
+    pub(super) ui_recomposition: u32,
+    pub(super) dynamic_target_fps: f32,
 }
 
 // One slDLSSGGetState answer plus the compiled MFG allocation limit.
 #[repr(C)]
 pub(super) struct Observed {
-    max_generated_frames: u32,
-    dynamic_supported: u32,
-    vsync_supported: u32,
-    min_dimension: u32,
-    status: i32,
-    mfg_status: u32,
-    mfg_maximum: u32,
-    presented: u64,
-    fence: Handle,
-    fence_value: u64,
+    pub(super) max_generated_frames: u32,
+    pub(super) dynamic_supported: u32,
+    pub(super) vsync_supported: u32,
+    pub(super) min_dimension: u32,
+    pub(super) status: i32,
+    pub(super) mfg_status: u32,
+    pub(super) mfg_maximum: u32,
+    pub(super) presented: u64,
+    pub(super) fence: Handle,
+    pub(super) fence_value: u64,
 }
 
 const _: () = {
@@ -275,7 +275,7 @@ unsafe fn same_text(requested: *const c_char, owned: &[c_char]) -> bool {
 
 // The native entry validated the setup header and cleared both outputs.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_slhost_session_create(
+pub(super) unsafe extern "C" fn rsf_core_slhost_session_create(
     setup: *const GenerationSetup,
     out: *mut Handle,
     chain: *mut Handle,
@@ -388,7 +388,7 @@ unsafe fn session<'a>(pointer: Handle) -> Option<&'a Session> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_slhost_session_configure(
+pub(super) unsafe extern "C" fn rsf_core_slhost_session_configure(
     pointer: Handle,
     options: *const Options,
     platform: &Platform,
@@ -468,7 +468,7 @@ unsafe extern "C" fn rsf_core_slhost_session_configure(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_slhost_session_begin(
+pub(super) unsafe extern "C" fn rsf_core_slhost_session_begin(
     pointer: Handle,
     id: u64,
     platform: &Platform,
@@ -488,7 +488,7 @@ unsafe extern "C" fn rsf_core_slhost_session_begin(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_slhost_session_marker(
+pub(super) unsafe extern "C" fn rsf_core_slhost_session_marker(
     pointer: Handle,
     marker: u32,
     id: u64,
@@ -501,7 +501,7 @@ unsafe extern "C" fn rsf_core_slhost_session_marker(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_slhost_session_prepare(
+pub(super) unsafe extern "C" fn rsf_core_slhost_session_prepare(
     pointer: Handle,
     command: Handle,
     frame: *const Frame,
@@ -611,12 +611,18 @@ unsafe extern "C" fn rsf_core_slhost_session_prepare(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_slhost_session_after(pointer: Handle, platform: &Platform) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_slhost_session_after(
+    pointer: Handle,
+    platform: &Platform,
+) -> i32 {
     unsafe { session(pointer) }.map_or(INVALID, |session| poll(session, platform))
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_slhost_session_status(pointer: Handle, out: *mut Status) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_slhost_session_status(
+    pointer: Handle,
+    out: *mut Status,
+) -> i32 {
     let Some(session) = (unsafe { session(pointer) }) else {
         return INVALID;
     };
@@ -628,7 +634,7 @@ unsafe extern "C" fn rsf_core_slhost_session_status(pointer: Handle, out: *mut S
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_slhost_session_retirement(
+pub(super) unsafe extern "C" fn rsf_core_slhost_session_retirement(
     pointer: Handle,
     out: *mut Retirement,
 ) -> i32 {
@@ -647,7 +653,10 @@ unsafe extern "C" fn rsf_core_slhost_session_retirement(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_slhost_session_destroy(pointer: Handle, platform: &Platform) {
+pub(super) unsafe extern "C" fn rsf_core_slhost_session_destroy(
+    pointer: Handle,
+    platform: &Platform,
+) {
     if !pointer.is_null() {
         release(
             unsafe { Box::from_raw(pointer.cast::<Session>()) },
@@ -657,7 +666,7 @@ unsafe extern "C" fn rsf_core_slhost_session_destroy(pointer: Handle, platform: 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_slhost_session_abort(pointer: Handle, id: u64) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_slhost_session_abort(pointer: Handle, id: u64) -> i32 {
     let Some(session) = (unsafe { session(pointer) }) else {
         return INVALID;
     };

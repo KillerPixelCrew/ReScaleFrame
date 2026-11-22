@@ -115,3 +115,34 @@ the real `mfg_state.rs`, `mfg_*.rs` and `reflex_audit.rs` passed clippy with
 unpatched gate, and the Rust transform reproduced the pinned output SHA-256 `579ACF33...`.
 MSVC `/Zs /W4 /WX` passed for the two headers as C11 and for `dlss_generation.cpp` with
 and without Streamline. Linking, CTest and device runs remain pending.
+
+## D3D12 Streamline host native leaf
+
+`dlss_generation.cpp` is deleted. `streamline_host/native.rs` now implements the 25-entry
+startup table, the 24-entry platform table, the DLSS-G provider, the 22 public
+`rsf_streamline_host_*` entries and `rsf_streamline_common_set`. The Rust owner in
+`streamline_host.rs` is unchanged and still calls every leaf under its own locks.
+
+| Former native piece | Rust replacement |
+| --- | --- |
+| `sl::` records | `streamline_sdk.rs` loads the shared Vulkan record mirrors once and adds `ViewportHandle`, `Version`, `FeatureVersion`, `AdapterInfo`, `DLSSGState` v4, `ReflexReport`, `ReflexReport2`, `ReflexState` v2 and `PCLState`. Each constructor writes the SDK GUID and structure version, including the 128 nested Reflex report headers. Compile-time assertions repeat the MSVC sizes and offsets. A scratch `cl /Zs` check against the pinned 2.14.1 headers confirmed every size, offset, GUID and the enum values used. `vulkan_streamline_camera.rs` and `streamline_generation_records.rs` now take their records from this module, which also removes clippy's duplicate-module error. |
+| `PFun_sl*` | Typed `extern "C"` pointers in `streamline_sdk::api`. Streamline exports these with C linkage, and the `sl::` references are pointers on Windows x64. |
+| `sl::matrixFullInvert` | `streamline_sdk::full_invert`, the same cofactor expansion. A singular input keeps the unscaled cofactors. |
+| `ComPtr` | `Option<ID3D12Device>`, `ID3D12CommandQueue` and `IDXGIFactory2` from the `windows` crate. Upgrade, retain-native and alias keep the original reference transfers. The queue-device check compares interface pointers, as before. |
+| `rsf::MfgUnlock` | A raw `rsf_mfg_state` from `rsf_core_mfg_create`, with direct `rsf_core_mfg_*` calls. Prime passes `rsf_dlss_sdk_verify_signature` only when a signature is required. |
+| `rsf::emit_streamline_log`, `rsf_logf` | The host log called directly, as in the D06 MFG and audit code. |
+| `sl::DLSSGOptions{}` for off | `rsf_slhost_pack_options(off, 1, ...)` with `flags` cleared, which matches the SDK member defaults. |
+| `RSF_HAVE_STREAMLINE` stubs | Removed. The Rust mirrors need no SDK header at build time, which matches the D05 decision that retired `rsf_dlss_sdk_compiled()`. `rsf_dlss` becomes an INTERFACE target for the public headers and the Rust archive. |
+| `__declspec(dllexport)` | `rust_exports.c` exports the 22 host entries from every binary that links `rsf_orchestrator_core`. That includes the Runtime DLL, Godot and the Unity package. |
+
+`mfg_unlock.h`, `reflex_audit.h` and `streamline_diagnostics.h` lost their last includer and
+are deleted. The interposer load and the MFG prime use the Rust `rsf_streamline_load_interposer`
+and `rsf_dlss_sdk_verify_signature` from `streamline_sr`.
+
+Verification on `3e9e0c7d`: the tip does not compile `rsf-orchestrator` or configure CMake
+(`tests/CMakeLists.txt:451`). With this change, `cargo check` reports the same 150 error
+lines as the tip, `cargo clippy --all-targets -D warnings` reports none in the touched files,
+and `cargo fmt --check` passes. A scratch crate including `streamline_sdk.rs` passed clippy
+with `-D warnings` and both of its tests. Bindgen 0.72.1 output is unchanged. MSVC `/Zs /W4
+/WX` passed `rust_exports.c`, and `streamline_frame.h` and `streamline_load.h` as C11. Linking, CTest and device runs remain
+pending.
