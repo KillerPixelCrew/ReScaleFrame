@@ -276,7 +276,7 @@ struct Calls {
     void* depth = nullptr;
     void* hudless = nullptr;
     uint32_t starts = 0, images_destroyed = 0, pools_destroyed = 0, releases = 0, idles = 0;
-    uint32_t cleared = 0, enables = 0;
+    uint32_t cleared = 0, enables = 0, lookups = 0, pending_initialized = 0;
     bool fail_marker = false, fail_start = false, fail_importer_destroy = false;
     std::vector<uint64_t> waits, markers, marked_complete, discarded;
     std::vector<uint32_t> initialized_copies;
@@ -297,6 +297,11 @@ const rsf_vkfg_platform images{
     [](void*, uint64_t image) { CHECK(image); ++calls.images_destroyed; },
     [](void*, uint64_t memory) { CHECK(memory); },
 };
+void resolved_proc() {}
+constexpr uint32_t all_commands = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, general_layout = VK_IMAGE_LAYOUT_GENERAL;
+constexpr uint32_t transfer_dst_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, rgba8 = VK_FORMAT_R8G8B8A8_UNORM, bgra8 = VK_FORMAT_B8G8R8A8_UNORM;
+constexpr uint32_t blit_features = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT;
+VkSwapchainCreateInfoKHR swapchain_info{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
 const rsf_fsr4gvk_ops platform{
     [](const char*, uint16_t* out, int32_t) -> int32_t { out[0] = 'X'; return 2; },
     [](uint64_t, const uint16_t*, auto*) -> int32_t { return 0; },
@@ -318,6 +323,8 @@ const rsf_fsr4gvk_ops platform{
         calls.enables += frame->enabled;
         calls.depth = frame->depth;
         calls.hudless = frame->hudless;
+        // The FIFO swapchain maps to vsync in the Rust admission.
+        CHECK(frame->vsync == 1);
         if (frame->enabled) {
             CHECK(frame->record && frame->motion_scale_x == 320 && frame->motion_scale_y == 180);
             CHECK(frame->depth && frame->motion && frame->hudless && frame->hudless != frame->color);
@@ -346,22 +353,63 @@ const rsf_fsr4gvk_ops platform{
         [](const auto*) -> uint64_t { return completion_timeline; },
         [](auto*, uint32_t drained) -> int32_t { CHECK(drained == 1); return calls.fail_importer_destroy ? injected_error : 0; },
     },
+    // Shared graphics table in rsf_dx12gvk_ops order (31 slots).
     {
         [](const auto*, uint64_t* luid) -> int32_t { *luid = adapter; return 0; },
-        [](const auto*, rsf_fsr4gvk_platform** out) -> int32_t { *out = fake<rsf_fsr4gvk_platform>(3); return 0; },
+        [](const rsf_fgvk_setup* setup) -> rsf_dx12gvk_platform* {
+            CHECK(setup && setup->create_info == &swapchain_info);
+            return fake<rsf_dx12gvk_platform>(3);
+        },
         [](auto*) {},
+        // Rust resolves 22 device entries, then both instance entries, before binding.
+        [](rsf_vk_get_proc get, void* object, const char* name, rsf_vk_function* out) -> int32_t {
+            CHECK(get && object == fake(5) && name && *name);
+            ++calls.lookups;
+            *out = resolved_proc;
+            return 0;
+        },
+        [](auto*, const rsf_dx12gvk_dispatch_entries* entries) {
+            CHECK(calls.lookups == 24);
+            for (const auto entry : *entries) CHECK(entry == resolved_proc);
+        },
+        // Blit admission queries RGBA8, then BGRA8, optimal tiling.
+        [](auto*, uint32_t format) -> uint32_t {
+            CHECK(format == rgba8 || format == bgra8);
+            return blit_features;
+        },
+        [](auto*, const rsf_srvk_setup* graphics) -> int32_t { CHECK(graphics && graphics->device == fake(5)); return 0; },
         [](auto*, uint64_t* pool) -> int32_t { *pool = calls.next_handle++; return 0; },
         [](auto*, uint64_t) { ++calls.pools_destroyed; },
         &images,
         [](auto*, uint64_t, void** list) -> int32_t { *list = fake(calls.next_handle++); return 0; },
         [](auto*, void*) -> int32_t { return 0; },
         [](auto*, void*) -> int32_t { return 0; },
-        [](auto*, void*, const auto*, const auto*, uint32_t initialized) { calls.initialized_copies.push_back(initialized); },
-        [](auto*, void*, const auto*) { ++calls.cleared; },
+        // The target acquire barrier says whether the following copy or blit reuses initialized contents.
+        [](auto*, void* list, const rsf_dx12gvk_barrier* plan) {
+            CHECK(list && plan->image);
+            CHECK(plan->source_stages == all_commands && plan->target_stages == all_commands);
+            if (plan->new_layout == transfer_dst_layout) calls.pending_initialized = plan->old_layout == general_layout;
+        },
+        [](auto*, void* list, const rsf_dx12gvk_transfer* plan) {
+            CHECK(list && plan->source && plan->target);
+            calls.initialized_copies.push_back(calls.pending_initialized);
+        },
+        [](auto*, void* list, const rsf_dx12gvk_transfer* plan) {
+            CHECK(list && plan->source && plan->target);
+            calls.initialized_copies.push_back(calls.pending_initialized);
+        },
+        [](auto*, void* list, uint64_t image) { CHECK(list && image); ++calls.cleared; },
         [](auto*, uint64_t, uint64_t) -> int32_t { return 0; },
-        [](auto*, void*, const rsf_fsr4gvk_present_info* info, uint64_t timeline, uint64_t previous, uint64_t ready) -> int32_t {
-            CHECK(timeline == completion_timeline && previous == calls.last_done && ready == previous + 1);
-            CHECK(info->wait_count == 1 && info->waits[0] == 88);
+        // One binary wait from the fixture Present, then the prior done value on the shared timeline.
+        [](auto*, void* list, const rsf_dx12gvk_present_submit* plan) -> int32_t {
+            CHECK(list && plan->signal == completion_timeline && plan->ready == calls.last_done + 1);
+            CHECK(plan->waits[0] == 88 && plan->values[0] == 0 && plan->stages[0] == all_commands);
+            if (calls.last_done) {
+                CHECK(plan->wait_count == 2 && plan->waits[1] == completion_timeline);
+                CHECK(plan->values[1] == calls.last_done && plan->stages[1] == all_commands);
+            } else {
+                CHECK(plan->wait_count == 1);
+            }
             return 0;
         },
         [](auto*, uint64_t timeline, uint64_t value, uint64_t timeout) -> int32_t {
@@ -381,6 +429,16 @@ const rsf_fsr4gvk_ops platform{
         [](auto*, uint64_t group) { calls.marked_complete.push_back(group); },
         [](auto*, uint64_t group) { calls.discarded.push_back(group); },
         [](auto*) -> int32_t { return 0; },
+        // Fixture copy of the native fact reader; Rust applies the admission policy.
+        [](const void* create_info, rsf_dx12gvk_swapchain* out) {
+            CHECK(create_info == &swapchain_info);
+            const auto& info = *static_cast<const VkSwapchainCreateInfoKHR*>(create_info);
+            CHECK(!info.pNext);
+            *out = {info.imageExtent.width, info.imageExtent.height, static_cast<uint32_t>(info.imageFormat), info.imageUsage,
+                static_cast<uint32_t>(info.imageColorSpace), info.imageArrayLayers, static_cast<uint32_t>(info.imageSharingMode),
+                info.minImageCount, info.flags, static_cast<uint32_t>(info.presentMode), 0, 0,
+                reinterpret_cast<uint64_t>(info.oldSwapchain)};
+        },
     },
 };
 
@@ -397,7 +455,7 @@ rsf_fgvk_setup setup() {
     return s;
 }
 int32_t create(rsf_fsr4gvk** owner, uint64_t* chain) {
-    static VkSwapchainCreateInfoKHR info{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
+    auto& info = swapchain_info;
     info.imageExtent = {640, 360}; info.imageFormat = VK_FORMAT_R8G8B8A8_UNORM;
     info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT; info.imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
     info.imageArrayLayers = 1; info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE; info.minImageCount = 3;
@@ -425,10 +483,29 @@ rsf_fgvk_frame inputs(const rsf_frame_record& record) {
 void present(rsf_fsr4gvk* owner, uint64_t chain, const rsf_frame_record* record, uint64_t expected, uint32_t enabled) {
     uint32_t index = 0;
     CHECK(rsf_core_fsr4gvk_acquire(owner, 100, 1, 0, &index) == 0);
-    const uint64_t wait = 88;
-    int32_t result = 5;
-    const rsf_fsr4gvk_present_info info{chain, index, 1, &wait, &result};
-    CHECK(rsf_core_fsr4gvk_present(owner, &info, record, 1) == 0 && result == 0);
+    // Mirror rsf_dx12gvk_present_marshaled: Rust admits the VkPresentInfoKHR shape, the
+    // reader copies the admitted handles, and only a changed sentinel reaches pResults.
+    const auto semaphore = reinterpret_cast<VkSemaphore>(uint64_t{88});
+    const auto swapchain = reinterpret_cast<VkSwapchainKHR>(chain);
+    VkResult written = VK_INCOMPLETE;
+    VkPresentInfoKHR info{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+    info.waitSemaphoreCount = 1; info.pWaitSemaphores = &semaphore;
+    info.swapchainCount = 1; info.pSwapchains = &swapchain; info.pImageIndices = &index; info.pResults = &written;
+    const rsf_dx12gvk_present_input input{&info, info.swapchainCount, info.waitSemaphoreCount, info.pNext != nullptr,
+        info.pSwapchains && info.pImageIndices, info.pWaitSemaphores != nullptr, info.pResults != nullptr};
+    int32_t result = VK_INCOMPLETE;
+    const int32_t code = rsf_core_dx12gvk_present_marshaled(
+        [](void* context, const rsf_dx12gvk_present_info* admitted, const rsf_frame_record* identity, uint32_t exact) {
+            return rsf_core_fsr4gvk_present(static_cast<rsf_fsr4gvk*>(context), admitted, identity, exact);
+        }, owner, &input,
+        [](const void* native, uint32_t count, uint64_t* chain_out, uint32_t* index_out, uint64_t* waits) {
+            const auto& present_info = *static_cast<const VkPresentInfoKHR*>(native);
+            *chain_out = reinterpret_cast<uint64_t>(present_info.pSwapchains[0]);
+            *index_out = present_info.pImageIndices[0];
+            for (uint32_t i = 0; i < count; ++i) waits[i] = reinterpret_cast<uint64_t>(present_info.pWaitSemaphores[i]);
+        }, record, 1, &result);
+    if (info.pResults && result != VK_INCOMPLETE) info.pResults[0] = static_cast<VkResult>(result);
+    CHECK(code == 0 && result == 0 && written == VK_SUCCESS);
     CHECK(calls.presented == expected);
     rsf_fgvk_status status{sizeof(status), RSF_FGVK_ABI_VERSION};
     CHECK(rsf_core_fsr4gvk_status(owner, &status) == 0 && status.enabled == enabled);
