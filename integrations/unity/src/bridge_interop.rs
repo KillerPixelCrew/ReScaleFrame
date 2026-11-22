@@ -4,6 +4,5 @@
 use crate::sys::RSF_UNITY_FRAMES_SLOTS;
 use rsf_runtime_submission::SubmissionHandle;
 
-#[cfg(any(test, all(windows, not(feature = "mono-plugin"))))]
 pub(crate) static D3D11: SubmissionHandle = SubmissionHandle::new(RSF_UNITY_FRAMES_SLOTS as usize);
 pub(crate) static VULKAN: SubmissionHandle = SubmissionHandle::new(RSF_UNITY_FRAMES_SLOTS as usize);

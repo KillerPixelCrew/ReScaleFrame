@@ -22,9 +22,9 @@ use rsf_game_sys::{RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_SR, rsf_game_rende
 /// from its gameplay setting (package_state.rs).
 const SCREEN_FLIGHT: u32 = 4;
 
-/// The C++ `make_pass`: one SR pass for the packet's view, frame and camera. A probe packet
-/// carries camera constants only, so its camera is not valid for reconstruction.
-fn base_pass(packet: &rsf_unity_packet) -> rsf_game_render_pass {
+/// One SR pass for the packet's view, frame and camera, without native resources or route. A
+/// probe packet carries camera constants only, so its camera is not valid for reconstruction.
+pub(crate) fn base_pass(packet: &rsf_unity_packet) -> rsf_game_render_pass {
     // Every field is an integer, float, pointer or array of them.
     let mut pass: rsf_game_render_pass = unsafe { std::mem::zeroed() };
     pass.struct_size = size_of::<rsf_game_render_pass>() as u32;
@@ -48,17 +48,6 @@ fn base_pass(packet: &rsf_unity_packet) -> rsf_game_render_pass {
     pass.motion_camera_included = 1;
     pass.previous_clip_to_clip = packet.previous_clip_to_clip;
     pass
-}
-
-/// Copies the shared scalar fields. The caller supplies the route and resources.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_build_scalar_pass(
-    packet: *const rsf_unity_packet,
-    output: *mut rsf_game_render_pass,
-) {
-    if let (Some(packet), Some(output)) = unsafe { (packet.as_ref(), output.as_mut()) } {
-        *output = base_pass(packet);
-    }
 }
 
 pub(crate) fn build_d3d12_pass(packet: &rsf_unity_packet) -> rsf_game_render_pass {

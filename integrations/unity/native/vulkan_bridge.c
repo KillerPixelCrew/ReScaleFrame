@@ -2,7 +2,6 @@
 /* Unity's versioned Vulkan interface, the loader hooks handed to the Rust resolver, and the
    exception guards around foreign calls at the Rust boundary (rescaleframe/foreign_guard.h:
    foreign C++ exceptions only; access violations and other faults still propagate). */
-#include "vulkan_bridge.h"
 #include "vulkan_foreign.h"
 #include "vulkan_state.h"
 #include <stddef.h>
@@ -47,6 +46,10 @@ _Static_assert(sizeof(rsf_uvk_engine_image) == 16 && offsetof(rsf_uvk_engine_ima
 _Static_assert(sizeof(VkPresentInfoKHR) == 64 && offsetof(VkPresentInfoKHR, pSwapchains) == 40, "VkPresentInfoKHR");
 _Static_assert(sizeof(rsf_unity_vulkan_device_handles) == 72 && offsetof(rsf_unity_vulkan_device_handles, dispatch) == 64,
     "device handles");
+
+void rsf_uvk_preload(void* interfaces);
+void rsf_unity_package_sdk_bind_vulkan(void* interfaces, int base_event);
+void rsf_unity_package_sdk_unbind_vulkan(void);
 
 static IUnityGraphicsVulkanV2* unity = NULL;
 

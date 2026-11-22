@@ -1,15 +1,26 @@
 // SPDX-License-Identifier: MIT
 //! Package entry points backed by the linked Unity SDK and Runtime shims.
 use super::services::backend_log;
-use super::{BACKEND_OK, PACKAGE, routing, services};
-use crate::bridge_native::package::graphics;
+use super::windows::*;
+use super::{BACKEND_OK, Leaves, PACKAGE, routing, services};
+use crate::bridge_native::package::*;
+use crate::bridge_native::rsf_unity_set_engine_spatial;
+use crate::bridge_state::rsf_unity_frames_activate;
 use crate::generation::RSF_DLSS_ENGINE_UNITY;
-use crate::sys::rsf_d3d11_present_host;
-use crate::sys::rsf_d3d12_window_observer;
+use crate::preview::*;
 use crate::sys::{
-    RSF_DLSS_ABI_VERSION, RSF_SR12_PLAN_ABI_VERSION, rsf_dlss_setup, rsf_sr12,
-    rsf_sr12_plan_result, rsf_sr12_setup, rsf_unity_package_view_setup,
+    RSF_DLSS_ABI_VERSION, RSF_SR12_PLAN_ABI_VERSION, rsf_d3d11_present_backend,
+    rsf_d3d11_present_generation, rsf_d3d11_present_has_owner, rsf_d3d11_present_host,
+    rsf_d3d11_present_request, rsf_d3d11_present_switch_result, rsf_dlss_setup,
+    rsf_fg_default_backend, rsf_fg12_cpu, rsf_fg12_end_session, rsf_fg12_hudless, rsf_fg12_install,
+    rsf_fg12_options, rsf_fg12_status, rsf_fg12_submitted, rsf_fg12_window,
+    rsf_native_latency_status_get, rsf_sharpening_core_defaults, rsf_sharpening_core_valid,
+    rsf_sharpening_options, rsf_sr12, rsf_sr12_create_planned, rsf_sr12_destroy, rsf_sr12_evaluate,
+    rsf_sr12_plan_result, rsf_sr12_quality_supported, rsf_sr12_set_sharpening, rsf_sr12_setup,
+    rsf_unity_package_view_setup,
 };
+use crate::vulkan_state::bridge::rsf_uvk_bridge_owns_window;
+use rsf_windows::rsf_win32_input_kind;
 use std::ffi::{c_int, c_void};
 use std::sync::atomic::Ordering::SeqCst;
 use windows::Win32::Graphics::{
@@ -19,33 +30,80 @@ use windows::Win32::Graphics::{
 use windows::core::Interface;
 
 unsafe extern "C" {
-    // Runtime entries linked from rsf_orchestrator_core. They are Rust and cannot unwind.
-    fn rsf_fg_default_backend(vendor: u32, software: u32) -> u32;
-    fn rsf_sr12_create_planned(
-        setup: *const rsf_sr12_setup,
-        plan: *mut rsf_sr12_plan_result,
-        output: *mut *mut rsf_sr12,
-    ) -> i32;
-    fn rsf_unity_preview_prepare(
-        device: *mut c_void,
-        queue: *mut c_void,
-        width: u32,
-        height: u32,
-        observer: rsf_d3d12_window_observer,
-    ) -> u32;
-    fn rsf_unity_preview_region(
-        left: i32,
-        top: i32,
-        width: i32,
-        height: i32,
-        visible: bool,
-    ) -> bool;
-    fn rsf_unity_preview_hide();
+    // package.c: the pinned dlss_preset.h model mask, and the Unity SDK calls.
+    fn rsf_unity_package_dlss_preset_valid(preset: u32) -> u32;
+    fn rsf_unity_package_renderer_vulkan(graphics: *mut c_void) -> u32;
+}
+
+/// The leaves' production binding: the Runtime's exports, this crate's bridges and Win32 calls,
+/// and package.c's two C leaves. The tests bind fakes instead.
+pub(super) static PRODUCTION: Leaves = Leaves {
+    sharpening_valid,
+    dlss_preset_valid: rsf_unity_package_dlss_preset_valid,
+    set_engine_spatial: rsf_unity_set_engine_spatial,
+    fg_options: rsf_fg12_options,
+    fg_status: rsf_fg12_status,
+    latency_status: rsf_native_latency_status_get,
+    present_backend: rsf_d3d11_present_backend,
+    present_switch_result: rsf_d3d11_present_switch_result,
+    present_generation: rsf_d3d11_present_generation,
+    bridge_activate: rsf_unity_frames_activate,
+    bridge_try_close: rsf_unity_package_bridge_try_close,
+    end_session: rsf_fg12_end_session,
+    sr_quality_supported: rsf_sr12_quality_supported,
+    sr_create: rsf_unity_package_create_view,
+    sharpening_defaults,
+    sr_set_sharpening: rsf_sr12_set_sharpening,
+    sr_evaluate: rsf_sr12_evaluate,
+    sr_destroy: rsf_sr12_destroy,
+    bridge_finish_retirement: rsf_unity_package_bridge_finish_retirement,
+    fg_install: rsf_fg12_install,
+    present_has_owner: rsf_d3d11_present_has_owner,
+    present_request: rsf_d3d11_present_request,
+    fg_default_backend: rsf_unity_package_default_fg,
+    bridge_open: rsf_unity_package_bridge_open,
+    session_seed: rsf_unity_package_session_seed,
+    bridge_prepare: rsf_unity_package_bridge_prepare,
+    local_app_data: rsf_unity_package_local_app_data,
+    create_directory: rsf_unity_package_create_directory,
+    log_open: rsf_unity_package_log_open,
+    log_write: rsf_unity_package_log_write,
+    log_close: rsf_unity_package_log_close,
+    player_window: rsf_unity_package_player_window,
+    preview_parent: rsf_unity_preview_parent,
+    subclass: rsf_unity_package_subclass,
+    restore: rsf_unity_package_restore,
+    input_kind: rsf_win32_input_kind,
+    timestamp: rsf_unity_package_timestamp,
+    cpu: rsf_fg12_cpu,
+    fg_submitted: rsf_fg12_submitted,
+    fg_window: rsf_fg12_window,
+    fg_hudless: rsf_fg12_hudless,
+    preview_present: rsf_unity_preview_present,
+    texture_desc: rsf_unity_package_texture_desc,
+    preview_prepare: rsf_unity_package_prepare_preview,
+    preview_owns: rsf_unity_preview_owns,
+    renderer_vulkan: rsf_unity_package_renderer_vulkan,
+    vulkan_owns: rsf_uvk_bridge_owns_window,
+    window_class: rsf_unity_package_window_class,
+    bridge_load: rsf_unity_package_bridge_load,
+    bridge_unload: rsf_unity_package_bridge_unload,
+};
+
+unsafe extern "C" fn sharpening_valid(options: *const rsf_sharpening_options) -> u32 {
+    let options = unsafe { *options };
+    u32::from(
+        options.struct_size as usize >= size_of::<rsf_sharpening_options>()
+            && unsafe { rsf_sharpening_core_valid(options) } != 0,
+    )
+}
+
+unsafe extern "C" fn sharpening_defaults(output: *mut rsf_sharpening_options) {
+    unsafe { output.write(rsf_sharpening_core_defaults()) };
 }
 
 /// Runs inside the bridge's admitted SR callback and borrows the recording list.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_create_view(
+pub(super) unsafe extern "C" fn rsf_unity_package_create_view(
     commands: *mut c_void,
     view: *mut rsf_unity_package_view_setup,
     result: *mut i32,
@@ -117,8 +175,7 @@ unsafe extern "C" fn rsf_unity_package_create_view(
     1
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_default_fg(backend: *mut u32) -> u32 {
+pub(super) unsafe extern "C" fn rsf_unity_package_default_fg(backend: *mut u32) -> u32 {
     let Some((device, _queue)) = graphics() else {
         return 0;
     };
@@ -135,8 +192,7 @@ unsafe extern "C" fn rsf_unity_package_default_fg(backend: *mut u32) -> u32 {
     1
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_texture_desc(
+pub(super) unsafe extern "C" fn rsf_unity_package_texture_desc(
     resource: *mut c_void,
     width: *mut u64,
     height: *mut u32,
@@ -153,8 +209,7 @@ unsafe extern "C" fn rsf_unity_package_texture_desc(
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_package_prepare_preview(width: u32, height: u32) -> u32 {
+pub(super) extern "C" fn rsf_unity_package_prepare_preview(width: u32, height: u32) -> u32 {
     let Some((device, queue)) = graphics() else {
         return 0;
     };
@@ -177,7 +232,7 @@ extern "C" fn rsf_unity_package_preview_region(
     height: i32,
     visible: u32,
 ) -> c_int {
-    let configured = unsafe { rsf_unity_preview_region(left, top, width, height, visible != 0) };
+    let configured = rsf_unity_preview_region(left, top, width, height, visible != 0);
     services::rsf_unity_package_preview_input();
     c_int::from(configured)
 }
@@ -185,7 +240,7 @@ extern "C" fn rsf_unity_package_preview_region(
 #[unsafe(no_mangle)]
 extern "C" fn rsf_unity_package_shutdown() -> u32 {
     if PACKAGE.services.editor.load(SeqCst) {
-        unsafe { rsf_unity_preview_hide() };
+        rsf_unity_preview_hide();
     }
     u32::from(routing::shutdown())
 }

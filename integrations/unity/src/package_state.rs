@@ -30,8 +30,8 @@ use crate::sys::{
 use crate::sys::{
     RSF_FG_STAT_TOTAL_PRESENTED, RSF_SR_NONE, RSF_UNITY_SETTINGS_ABI_VERSION,
     rsf_native_fg_options, rsf_native_fg_status, rsf_native_latency_status, rsf_sharpening_options,
-    rsf_sr12, rsf_unity_frame_counters, rsf_unity_package_platform, rsf_unity_package_settings,
-    rsf_unity_package_status, rsf_unity_package_view_setup,
+    rsf_sr12, rsf_unity_frame_counters, rsf_unity_package_settings, rsf_unity_package_status,
+    rsf_unity_package_view_setup,
 };
 use rsf_game_sys::{
     RSF_GAME_RENDER_RECONFIGURE, rsf_camera_frame, rsf_game_cpu_event, rsf_game_host_services,
@@ -124,9 +124,9 @@ const fn fresh_status() -> rsf_unity_package_status {
 static OPERATIONS: Mutex<()> = Mutex::new(());
 static UNITY_INTERFACES: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static UNITY_GRAPHICS: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
-static LEAVES: OnceLock<Leaves> = OnceLock::new();
+static LEAVES: OnceLock<&'static Leaves> = OnceLock::new();
 
-/// Package callbacks and native leaves, all present.
+/// Package callbacks and native leaves. Production binds them in native.rs; the tests bind fakes.
 struct Leaves {
     sharpening_valid: unsafe extern "C" fn(*const rsf_sharpening_options) -> u32,
     dlss_preset_valid: unsafe extern "C" fn(u32) -> u32,
@@ -139,7 +139,7 @@ struct Leaves {
     present_generation: unsafe extern "C" fn() -> u64,
     bridge_activate: unsafe extern "C" fn(u32),
     bridge_try_close: unsafe extern "C" fn() -> u32,
-    end_session: unsafe extern "C" fn(u64) -> u32,
+    end_session: unsafe extern "C" fn(u64) -> c_int,
     sr_quality_supported: unsafe extern "C" fn(u32, u32) -> u32,
     sr_create: unsafe extern "C" fn(
         *mut c_void,
@@ -154,7 +154,7 @@ struct Leaves {
     sr_destroy: unsafe extern "C" fn(*mut rsf_sr12),
     bridge_finish_retirement: unsafe extern "C" fn(u32),
     fg_install: unsafe extern "C" fn(*const rsf_fg12_setup) -> i32,
-    present_has_owner: unsafe extern "C" fn() -> u32,
+    present_has_owner: unsafe extern "C" fn() -> c_int,
     present_request: unsafe extern "C" fn(u32) -> i32,
     fg_default_backend: unsafe extern "C" fn(*mut u32) -> u32,
     bridge_open: unsafe extern "C" fn(u32) -> u32,
@@ -179,9 +179,9 @@ struct Leaves {
     preview_present: unsafe extern "C" fn(*mut c_void, *const rsf_game_render_pass, u32) -> u32,
     texture_desc: unsafe extern "C" fn(*mut c_void, *mut u64, *mut u32, *mut u32),
     preview_prepare: unsafe extern "C" fn(u32, u32) -> u32,
-    preview_owns: unsafe extern "C" fn(*mut c_void) -> u32,
+    preview_owns: extern "C" fn(*mut c_void) -> bool,
     renderer_vulkan: unsafe extern "C" fn(*mut c_void) -> u32,
-    vulkan_owns: unsafe extern "C" fn(*mut c_void) -> u32,
+    vulkan_owns: extern "C" fn(*mut c_void) -> bool,
     window_class: unsafe extern "C" fn(*mut c_void) -> u32,
     bridge_load: unsafe extern "C" fn(*mut c_void) -> u32,
     bridge_unload: unsafe extern "C" fn(),
@@ -190,66 +190,6 @@ struct Leaves {
 // SAFETY for every call below: the leaves are package.c's functions and borrow their
 // pointer arguments for the call only.
 impl Leaves {
-    /// The table is package.c's constant; an incomplete one is a build defect.
-    unsafe fn adopt(platform: *const rsf_unity_package_platform) -> Option<Self> {
-        if platform.is_null() {
-            return None;
-        }
-        let p = unsafe { *platform };
-        Some(Self {
-            sharpening_valid: p.sharpening_valid?,
-            dlss_preset_valid: p.dlss_preset_valid?,
-            set_engine_spatial: p.set_engine_spatial?,
-            fg_options: p.fg_options?,
-            fg_status: p.fg_status?,
-            latency_status: p.latency_status?,
-            present_backend: p.present_backend?,
-            present_switch_result: p.present_switch_result?,
-            present_generation: p.present_generation?,
-            bridge_activate: p.bridge_activate?,
-            bridge_try_close: p.bridge_try_close?,
-            end_session: p.end_session?,
-            sr_quality_supported: p.sr_quality_supported?,
-            sr_create: p.sr_create?,
-            sharpening_defaults: p.sharpening_defaults?,
-            sr_set_sharpening: p.sr_set_sharpening?,
-            sr_evaluate: p.sr_evaluate?,
-            sr_destroy: p.sr_destroy?,
-            bridge_finish_retirement: p.bridge_finish_retirement?,
-            fg_install: p.fg_install?,
-            present_has_owner: p.present_has_owner?,
-            present_request: p.present_request?,
-            fg_default_backend: p.fg_default_backend?,
-            bridge_open: p.bridge_open?,
-            session_seed: p.session_seed?,
-            bridge_prepare: p.bridge_prepare?,
-            local_app_data: p.local_app_data?,
-            create_directory: p.create_directory?,
-            log_open: p.log_open?,
-            log_write: p.log_write?,
-            log_close: p.log_close?,
-            player_window: p.player_window?,
-            preview_parent: p.preview_parent?,
-            subclass: p.subclass?,
-            restore: p.restore?,
-            input_kind: p.input_kind?,
-            timestamp: p.timestamp?,
-            cpu: p.cpu?,
-            fg_submitted: p.fg_submitted?,
-            fg_window: p.fg_window?,
-            fg_hudless: p.fg_hudless?,
-            preview_present: p.preview_present?,
-            texture_desc: p.texture_desc?,
-            preview_prepare: p.preview_prepare?,
-            preview_owns: p.preview_owns?,
-            renderer_vulkan: p.renderer_vulkan?,
-            vulkan_owns: p.vulkan_owns?,
-            window_class: p.window_class?,
-            bridge_load: p.bridge_load?,
-            bridge_unload: p.bridge_unload?,
-        })
-    }
-
     fn sharpening_valid(&self, options: &rsf_sharpening_options) -> bool {
         unsafe { (self.sharpening_valid)(options) != 0 }
     }
@@ -426,7 +366,6 @@ fn d3d_ring(bridge: u32) -> Option<MutexGuard<'static, ProducerRing>> {
     Some(owner.lock().unwrap_or_else(PoisonError::into_inner))
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_unity_package_sr_slot_reset(
     bridge: u32,
     commands: *mut c_void,
@@ -437,7 +376,6 @@ pub(crate) extern "C" fn rsf_unity_package_sr_slot_reset(
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_unity_package_sr_slots_released(bridge: u32) {
     if let Some(mut ring) = d3d_ring(bridge) {
         ring.released();
@@ -449,14 +387,12 @@ thread_local! {
     static RECORDING: Cell<Option<(*mut c_void, Recording)>> = const { Cell::new(None) };
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_package_sr_ring_begin() -> u64 {
+pub(crate) extern "C" fn rsf_unity_package_sr_ring_begin() -> u64 {
     NEXT_RING_EPOCH
         .fetch_update(SeqCst, SeqCst, |epoch| epoch.checked_add(1))
         .unwrap_or(0)
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_unity_package_sr_recording(
     commands: *mut c_void,
     epoch: u64,
@@ -488,8 +424,7 @@ pub(super) extern "C" fn rsf_unity_package_sr_recording(
     )));
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_package_sr_ring_retired(epoch: u64) {
+pub(crate) extern "C" fn rsf_unity_package_sr_ring_retired(epoch: u64) {
     if epoch != 0 {
         PACKAGE.lock_views().retire_ring(epoch);
         RECORDING.with(|record| {
@@ -987,7 +922,6 @@ unsafe extern "C" fn render_config(_: *mut c_void, output: *mut rsf_game_render_
     1
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_unity_package_bridge_failed(result: i32) {
     PACKAGE.bridge_failed(result);
 }
@@ -1190,7 +1124,7 @@ mod tests {
         set(|f| f.close_held = f.drained);
         fake().close_held.into()
     }
-    unsafe extern "C" fn end_session(session: u64) -> u32 {
+    unsafe extern "C" fn end_session(session: u64) -> c_int {
         assert!(fake().close_held);
         call(format!("end {session}"));
         fake().ended.into()
@@ -1334,7 +1268,7 @@ mod tests {
         ));
         fake().install_result
     }
-    unsafe extern "C" fn present_has_owner() -> u32 {
+    unsafe extern "C" fn present_has_owner() -> c_int {
         call("owner".into());
         fake().owner.into()
     }
@@ -1502,17 +1436,17 @@ mod tests {
         call(format!("preview prepare {width}x{height}"));
         fake().preview_ready.into()
     }
-    unsafe extern "C" fn preview_owns(window: *mut c_void) -> u32 {
+    extern "C" fn preview_owns(window: *mut c_void) -> bool {
         call(format!("preview owns {:#x}", window as usize));
-        fake().preview_owns.into()
+        fake().preview_owns
     }
     unsafe extern "C" fn renderer_vulkan(_: *mut c_void) -> u32 {
         call("vulkan renderer".into());
         fake().vulkan.into()
     }
-    unsafe extern "C" fn vulkan_owns(window: *mut c_void) -> u32 {
+    extern "C" fn vulkan_owns(window: *mut c_void) -> bool {
         call(format!("surface owns {:#x}", window as usize));
-        fake().surface_owns.into()
+        fake().surface_owns
     }
     unsafe extern "C" fn window_class(window: *mut c_void) -> u32 {
         call(format!("class {:#x}", window as usize));
@@ -1526,85 +1460,62 @@ mod tests {
         call("bridge unload".into());
     }
 
-    /// The table every test adopts, at a fixed address like package.c's constant.
-    static PLATFORM: rsf_unity_package_platform = TABLE;
-    fn platform() -> rsf_unity_package_platform {
-        TABLE
-    }
-    const TABLE: rsf_unity_package_platform = rsf_unity_package_platform {
-        sharpening_valid: Some(sharpening_valid),
-        dlss_preset_valid: Some(dlss_preset_valid),
-        set_engine_spatial: Some(set_engine_spatial),
-        fg_options: Some(fg_options),
-        fg_status: Some(fg_status),
-        latency_status: Some(latency_status),
-        present_backend: Some(present_backend),
-        present_switch_result: Some(present_switch_result),
-        present_generation: Some(present_generation),
-        bridge_activate: Some(bridge_activate),
-        bridge_try_close: Some(bridge_try_close),
-        end_session: Some(end_session),
-        sr_quality_supported: Some(sr_quality_supported),
-        sr_create: Some(sr_create),
-        sharpening_defaults: Some(sharpening_defaults),
-        sr_set_sharpening: Some(sr_set_sharpening),
-        sr_evaluate: Some(sr_evaluate),
-        sr_destroy: Some(sr_destroy),
-        bridge_finish_retirement: Some(bridge_finish_retirement),
-        fg_install: Some(fg_install),
-        present_has_owner: Some(present_has_owner),
-        present_request: Some(present_request),
-        fg_default_backend: Some(fg_default_backend),
-        bridge_open: Some(bridge_open),
-        session_seed: Some(session_seed),
-        bridge_prepare: Some(bridge_prepare),
-        local_app_data: Some(local_app_data),
-        create_directory: Some(create_directory),
-        log_open: Some(log_open),
-        log_write: Some(log_write),
-        log_close: Some(log_close),
-        player_window: Some(player_window),
-        preview_parent: Some(preview_parent),
-        subclass: Some(subclass),
-        restore: Some(restore),
-        input_kind: Some(input_kind),
-        timestamp: Some(timestamp),
-        cpu: Some(cpu),
-        fg_submitted: Some(fg_submitted),
-        fg_window: Some(fg_window),
-        fg_hudless: Some(fg_hudless),
-        preview_present: Some(preview_present),
-        texture_desc: Some(texture_desc),
-        preview_prepare: Some(preview_prepare),
-        preview_owns: Some(preview_owns),
-        renderer_vulkan: Some(renderer_vulkan),
-        vulkan_owns: Some(vulkan_owns),
-        window_class: Some(window_class),
-        bridge_load: Some(bridge_load),
-        bridge_unload: Some(bridge_unload),
-        graphics_interface: None,
-        preload: None,
-        device_callback: None,
-    };
     /// Fresh fakes and an empty call record for this test.
     fn leaves() -> Leaves {
         FAKE.with(|cell| cell.set(READY));
         calls();
-        unsafe { Leaves::adopt(&PLATFORM) }.unwrap()
-    }
-
-    #[test]
-    fn an_incomplete_table_is_refused() {
-        let mut table = platform();
-        table.bridge_finish_retirement = None;
-        assert!(unsafe { Leaves::adopt(&table) }.is_none());
-        let mut table = platform();
-        table.fg_default_backend = None;
-        assert!(unsafe { Leaves::adopt(&table) }.is_none());
-        let mut table = platform();
-        table.bridge_unload = None;
-        assert!(unsafe { Leaves::adopt(&table) }.is_none());
-        assert!(unsafe { Leaves::adopt(std::ptr::null()) }.is_none());
+        Leaves {
+            sharpening_valid,
+            dlss_preset_valid,
+            set_engine_spatial,
+            fg_options,
+            fg_status,
+            latency_status,
+            present_backend,
+            present_switch_result,
+            present_generation,
+            bridge_activate,
+            bridge_try_close,
+            end_session,
+            sr_quality_supported,
+            sr_create,
+            sharpening_defaults,
+            sr_set_sharpening,
+            sr_evaluate,
+            sr_destroy,
+            bridge_finish_retirement,
+            fg_install,
+            present_has_owner,
+            present_request,
+            fg_default_backend,
+            bridge_open,
+            session_seed,
+            bridge_prepare,
+            local_app_data,
+            create_directory,
+            log_open,
+            log_write,
+            log_close,
+            player_window,
+            preview_parent,
+            subclass,
+            restore,
+            input_kind,
+            timestamp,
+            cpu,
+            fg_submitted,
+            fg_window,
+            fg_hudless,
+            preview_present,
+            texture_desc,
+            preview_prepare,
+            preview_owns,
+            renderer_vulkan,
+            vulkan_owns,
+            window_class,
+            bridge_load,
+            bridge_unload,
+        }
     }
 
     #[test]

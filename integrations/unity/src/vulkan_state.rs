@@ -15,7 +15,7 @@
 //! The presentation state outlives a release, because Unity owns the swapchains and the window
 //! stays: Unity's intercepted swapchains (their images and the present-ready semaphores the bridge
 //! created for them), the presentation window's identity, and the presentation lease. The lease is
-//! the one exclusive hold the C++ took as a mutex: present interceptions, swapchain retirement and
+//! the one exclusive hold: present interceptions, swapchain retirement and
 //! the swap chain's creation on the window thread run one at a time, a present keeps it through
 //! the forwarded vkQueuePresentKHR, and retirement keeps it through vkDeviceWaitIdle and the
 //! semaphore destruction, which need host access to the device's queues.
@@ -25,10 +25,6 @@
 //! Callbacks run outside the state mutex.
 //! The orchestrator's Vulkan frame-generation swapchain owners have their own presentation
 //! tables and this crate does not link them, so the registry here is the bridge's own.
-//!
-//! The C++ kept this as unguarded globals. Its release counted only queued render events, so it
-//! could destroy the slots, images and swap chain a present interception was recording into on the
-//! render thread, and it cleared the window frame identity while that thread copied it.
 use crate::bridge_interop::VULKAN;
 use crate::device_creation::{Claim, Creation};
 use crate::sys::{RSF_UNITY_FRAMES_PACKETS, RSF_UNITY_FRAMES_SLOTS, rsf_unity_packet};
@@ -46,27 +42,18 @@ use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 // Unity native headers; unit tests cover the packet state above it.
 #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 #[path = "vulkan_bridge.rs"]
-mod bridge;
+pub(crate) mod bridge;
 
 const EVENTS: usize = RSF_UNITY_FRAMES_PACKETS as usize;
 const SLOTS: usize = RSF_UNITY_FRAMES_SLOTS as usize;
-// Event kinds and initialization results, as vulkan_state.h defines them.
 const EVENT_HUDLESS: u32 = 2;
-const DEVICE_BUSY: u32 = 0;
-const DEVICE_FAILED: u32 = 1;
-const DEVICE_READY: u32 = 2;
 const SHARED_IMAGES: usize = 6;
 
-#[repr(C)]
 #[derive(Clone, Copy)]
 struct Frame {
     packet: rsf_unity_packet,
     services: rsf_game_host_services,
 }
-const _: () = assert!(
-    size_of::<Frame>() == size_of::<rsf_unity_packet>() + size_of::<rsf_game_host_services>()
-        && std::mem::offset_of!(Frame, services) == size_of::<rsf_unity_packet>()
-);
 
 // SAFETY: both C records accept zero integers, floats and null pointers.
 const EMPTY_FRAME: Frame = unsafe { std::mem::zeroed() };
@@ -491,111 +478,41 @@ impl State {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_vulkan_set_window(
-    frame: *const Frame,
+fn publish_window(
+    frame: &Frame,
     instance: u64,
     device: *mut c_void,
     queue: u64,
     parent: *mut c_void,
-) -> u32 {
-    let Some(frame) = (unsafe { frame.as_ref() }) else {
-        return 0;
-    };
+) -> bool {
     let registry = presentation();
     let mut state = lock();
     // A new event supersedes any previous receipt, including when the target changed.
     state.window = None;
     if instance == 0 || device.is_null() || queue == 0 || parent.is_null() {
-        return 0;
+        return false;
     }
     let Some(swapchain) = registry.window_target(instance, device as usize, parent as usize) else {
-        return 0;
+        return false;
     };
-    u32::from(state.set_window(PresentIdentity { queue, swapchain }, frame))
+    state.set_window(PresentIdentity { queue, swapchain }, frame)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_vulkan_admit_event(
-    frame: *const Frame,
-    kind: u32,
-    reconfigure: u32,
-    slot: *mut u32,
-) -> *mut c_void {
-    let Some(frame) = (unsafe { frame.as_ref() }) else {
-        return ptr::null_mut();
-    };
-    if slot.is_null() {
-        return ptr::null_mut();
-    }
-    let mut state = lock();
-    let Some(index) = state.admit_event(frame, kind, reconfigure != 0) else {
-        return ptr::null_mut();
-    };
-    unsafe { slot.write(index as u32) };
-    state.event_address(index)
+enum Device {
+    Ready(DeviceHandles),
+    Busy,
+    Failed,
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_vulkan_start_event(
-    address: *const c_void,
-    frame: *mut Frame,
-    kind: *mut u32,
-    reconfigure: *mut u32,
-    slot: *mut u32,
-) -> u32 {
-    if frame.is_null() || kind.is_null() || reconfigure.is_null() || slot.is_null() {
-        return 0;
-    }
-    let Some((index, stored, event_kind, applies)) = lock().start_event(address) else {
-        return 0;
-    };
-    unsafe {
-        frame.write(stored);
-        kind.write(event_kind);
-        reconfigure.write(u32::from(applies));
-        slot.write(index as u32);
-    }
-    1
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_finish_event(slot: u32) {
-    lock().finish_event(slot as usize);
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_enter() -> u32 {
-    u32::from(lock().enter())
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_leave() {
-    lock().leave();
-}
-
-/// The caller holds an entry or running event. While a claim is active, reentrant callers see
-/// busy and close refuses. All the native creation, reporting and rollback run outside the lock.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_vulkan_initialize(
-    services: *const rsf_game_host_services,
-    ops: *const DeviceOps,
-    view: *mut DeviceHandles,
-) -> u32 {
-    let Some(ops) = (unsafe { ops.as_ref() }) else {
-        return DEVICE_FAILED;
-    };
-    if view.is_null() {
-        return DEVICE_FAILED;
-    }
+/// The shared device for the caller, who holds an entry or running event. While a claim is
+/// active, reentrant callers see busy and close refuses. All the native creation, reporting and
+/// rollback run outside the lock.
+fn initialize_device(services: *const rsf_game_host_services, ops: &DeviceOps) -> Device {
     let claim = lock().claim_device();
     match claim {
-        Claim::Ready(handles) => {
-            unsafe { view.write(handles) };
-            return DEVICE_READY;
-        }
-        Claim::Busy => return DEVICE_BUSY,
-        Claim::Stopped => return DEVICE_FAILED,
+        Claim::Ready(handles) => return Device::Ready(handles),
+        Claim::Busy => return Device::Busy,
+        Claim::Stopped => return Device::Failed,
         Claim::Create => {}
     }
 
@@ -603,48 +520,37 @@ unsafe extern "C" fn rsf_unity_vulkan_initialize(
     if !device.prepare(services) {
         drop(device);
         lock().creation.rolled_back(false);
-        return DEVICE_FAILED;
+        return Device::Failed;
     }
     device.epoch = (ops.ring_begin)();
     unsafe { (ops.report_created)(services) };
     let handles = device.handles;
     let previous = lock().creation.publish(device);
     drop(previous);
-    unsafe { view.write(handles) };
-    DEVICE_READY
+    Device::Ready(handles)
 }
 
-/// Copies a view under admission. The caller must retain the entry through its use or AddRef.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_vulkan_device_view(view: *mut DeviceHandles) -> bool {
+/// A view borrowed under admission. The caller must retain the entry through its use or AddRef.
+fn device_view() -> Option<DeviceHandles> {
     let state = lock();
-    if view.is_null() || !state.can_borrow_device() {
-        return false;
+    if !state.can_borrow_device() {
+        return None;
     }
-    let Some(device) = &state.creation.device else {
-        return false;
-    };
-    unsafe { view.write(device.handles) };
-    true
+    state.creation.device.as_ref().map(|device| device.handles)
 }
 
 /// The caller holds the presentation lease through recording and submission.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_vulkan_command_slot(index: u32, view: *mut CommandSlot) -> bool {
+fn command_slot(index: u32) -> Option<CommandSlot> {
     let state = lock();
-    if view.is_null() || !state.open() || state.partial_submission {
-        return false;
+    if !state.open() || state.partial_submission {
+        return None;
     }
-    let Some(slot) = state
+    state
         .creation
         .device
         .as_ref()
         .and_then(|device| device.slots.get(index as usize))
-    else {
-        return false;
-    };
-    unsafe { view.write(*slot) };
-    true
+        .copied()
 }
 
 /// Fence reads run outside the state mutex. The retirement close and presentation lease keep
@@ -735,31 +641,6 @@ fn prepare_image(state: &Mutex<State>, index: usize, key: ImageKey) -> Option<Im
     Some(handles)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_vulkan_prepare_image(
-    index: u32,
-    width: u32,
-    height: u32,
-    format: u32,
-    dx_format: u32,
-    view: *mut ImageHandles,
-) -> bool {
-    if view.is_null() {
-        return false;
-    }
-    let key = ImageKey {
-        width,
-        height,
-        format,
-        dx_format,
-    };
-    let Some(handles) = prepare_image(&STATE, index as usize, key) else {
-        return false;
-    };
-    unsafe { view.write(handles) };
-    true
-}
-
 #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 pub(super) fn record_image(index: u32) -> bool {
     lock().record_image(index as usize)
@@ -786,33 +667,25 @@ pub(super) fn handback_fenced() {
     lock().handback_fenced();
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_fault() -> u32 {
-    u32::from(lock().fault())
+fn faulted() -> bool {
+    lock().faulted
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_faulted() -> u32 {
-    u32::from(lock().faulted)
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_stop_admission() {
+pub(crate) fn stop_admission() {
     let mut state = lock();
     if state.admission == Admission::Open {
         state.admission = Admission::Retiring;
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_try_close() -> bool {
+pub(crate) fn try_close() -> bool {
     {
         let mut state = lock();
         if state.admission != Admission::Closed && !state.close() {
             return false;
         }
     }
-    if rsf_unity_vulkan_presentation_try_begin() == 0 {
+    if !try_begin_lease() {
         return false;
     }
     if commands_retired() {
@@ -822,16 +695,14 @@ extern "C" fn rsf_unity_vulkan_try_close() -> bool {
     false
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_finish_retirement(commit: bool) {
+pub(crate) fn finish_retirement(commit: bool) {
     if commit {
         release_closed();
     }
     end_lease();
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_open() {
+pub(crate) fn open() {
     lock().reopen();
 }
 
@@ -861,22 +732,13 @@ fn release_closed() {
     lock().release();
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_surface_ready() -> u32 {
-    u32::from(lock().surface.is_some())
+fn surface_ready() -> bool {
+    lock().surface.is_some()
 }
 
 /// An entry keeps the shared device alive and the presentation lease serializes creation,
 /// resize and every use of the borrowed chain. No native operation runs under a state lock.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_vulkan_configure_surface(
-    width: u32,
-    height: u32,
-    ops: *const SurfaceOps,
-) -> *mut c_void {
-    let Some(ops) = (unsafe { ops.as_ref() }) else {
-        return ptr::null_mut();
-    };
+fn configure_surface(width: u32, height: u32, ops: &SurfaceOps) -> *mut c_void {
     let window = presentation().window;
     if window.is_null() {
         return ptr::null_mut();
@@ -933,16 +795,13 @@ struct Swapchain {
 }
 
 /// The presented image of a leased swapchain and the semaphore for forwarding.
-#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[allow(dead_code)]
 struct PresentSource {
     image: u64,
     present_ready: u64,
     width: u32,
     height: u32,
 }
-const _: () = assert!(size_of::<PresentSource>() == 24);
 
 struct Presentation {
     /// The presentation window, created once on the window thread and kept for the process.
@@ -1067,13 +926,11 @@ impl Presentation {
 const VK_SUCCESS: i32 = 0;
 const VK_ERROR_DEVICE_LOST: i32 = -4;
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_set_surface_window(window: *mut c_void) -> u32 {
-    u32::from(presentation().set_window(window))
+fn set_surface_window(window: *mut c_void) -> bool {
+    presentation().set_window(window)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_surface_window() -> *mut c_void {
+fn surface_window() -> *mut c_void {
     presentation().window
 }
 
@@ -1169,57 +1026,46 @@ pub(crate) fn retire_swapchain(
     result
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_vulkan_present_begin(
+/// What a present interception found for its target.
+enum Target {
+    /// Another target: forward untouched.
+    Other,
+    /// The player's own target without a window frame: the native player window stays visible.
+    Native,
+    /// A window frame bound to this target, with the presented image.
+    Window(PresentSource, Frame),
+}
+
+/// Waits for and takes the lease, which the caller always ends with `end_lease`, even for
+/// `Other`. Consumes the window frame bound to the presenting queue and swapchain.
+fn present_begin(
     instance: u64,
     device: *mut c_void,
     queue: u64,
     chain: u64,
     index: u32,
     parent: *mut c_void,
-    source: *mut PresentSource,
-    frame: *mut Frame,
-) -> u32 {
+) -> Target {
     let mut registry = unleased();
     registry.leased = true;
-    if source.is_null() || frame.is_null() {
-        return 0;
-    }
     let Some((swapchain, surface, found)) = registry.source(device as usize, chain, index) else {
-        return 0;
+        return Target::Other;
     };
     if !registry
         .surfaces
         .contains(&(instance, surface, parent as usize))
     {
-        return 0;
+        return Target::Other;
     }
-    let identity = PresentIdentity { queue, swapchain };
-    let receipt = lock().take_window(identity);
-    let Some(receipt) = receipt else {
-        // The native player window should remain visible when the child did not receive a frame.
-        return 2;
-    };
-    unsafe {
-        source.write(found);
-        frame.write(receipt);
+    match lock().take_window(PresentIdentity { queue, swapchain }) {
+        Some(frame) => Target::Window(found, frame),
+        None => Target::Native,
     }
-    1
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_presentation_try_begin() -> u32 {
+fn try_begin_lease() -> bool {
     let mut presentation = presentation();
-    if presentation.leased {
-        return 0;
-    }
-    presentation.leased = true;
-    1
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_presentation_end() {
-    end_lease();
+    !std::mem::replace(&mut presentation.leased, true)
 }
 
 #[cfg(test)]
@@ -1496,64 +1342,6 @@ mod tests {
         assert!(matches!(state.claim_device(), Claim::Create));
     }
 
-    // The only test that touches the process-wide state.
-    #[test]
-    fn exports_check_their_pointers() {
-        let frame = work(21);
-        let mut slot = u32::MAX;
-        let address = unsafe { rsf_unity_vulkan_admit_event(&frame, EVENT_SR, 1, &mut slot) };
-        assert!(!address.is_null());
-        assert_eq!(slot, 0);
-        assert!(
-            unsafe { rsf_unity_vulkan_admit_event(ptr::null(), EVENT_SR, 0, &mut slot) }.is_null()
-        );
-        let (mut out, mut kind, mut reconfigure, mut index) = (EMPTY_FRAME, 9, 9, 9);
-        assert_eq!(
-            unsafe {
-                rsf_unity_vulkan_start_event(
-                    address,
-                    ptr::null_mut(),
-                    &mut kind,
-                    &mut reconfigure,
-                    &mut index,
-                )
-            },
-            0
-        );
-        assert_eq!(
-            unsafe {
-                rsf_unity_vulkan_start_event(
-                    address,
-                    &mut out,
-                    &mut kind,
-                    &mut reconfigure,
-                    &mut index,
-                )
-            },
-            1
-        );
-        assert_eq!(
-            (out.packet.frame_id, kind, reconfigure, index),
-            (21, EVENT_SR, 1, 0)
-        );
-        assert!(!lock().idle());
-        rsf_unity_vulkan_finish_event(index);
-        assert!(lock().idle());
-        assert_eq!(rsf_unity_vulkan_enter(), 1);
-        assert!(!lock().close());
-        rsf_unity_vulkan_leave();
-        assert_eq!(
-            unsafe {
-                rsf_unity_vulkan_set_window(ptr::null(), 0, ptr::null_mut(), 0, ptr::null_mut())
-            },
-            0
-        );
-        assert!(lock().close());
-        lock().release();
-        assert_eq!(rsf_unity_vulkan_enter(), 0);
-        rsf_unity_vulkan_open();
-    }
-
     fn swapchain(chain: u64, count: u64) -> Swapchain {
         Swapchain {
             device: 1,
@@ -1626,26 +1414,13 @@ mod tests {
         let parent = ptr::without_provenance_mut(99);
         register_win32_surface(55, 33, parent);
         assert!(register_swapchain(device, 7, 33, (4, 2), vec![71, 72], vec![81, 82]).is_ok());
-        let mut source = PresentSource::default();
-        let mut frame = EMPTY_FRAME;
         // A present without a receipt still holds the lease while forwarding.
-        assert_eq!(
-            unsafe {
-                rsf_unity_vulkan_present_begin(
-                    55,
-                    device,
-                    42,
-                    7,
-                    1,
-                    parent,
-                    &mut source,
-                    &mut frame,
-                )
-            },
-            2
-        );
-        assert_eq!(rsf_unity_vulkan_presentation_try_begin(), 0);
-        rsf_unity_vulkan_presentation_end();
+        assert!(matches!(
+            present_begin(55, device, 42, 7, 1, parent),
+            Target::Native
+        ));
+        assert!(!try_begin_lease());
+        end_lease();
         let mut retired = Vec::new();
         assert_eq!(
             retire_swapchain(device, 7, || -1, |sem| retired.push(sem)),
@@ -1659,7 +1434,7 @@ mod tests {
                 7,
                 || VK_ERROR_DEVICE_LOST,
                 |sem| {
-                    assert_eq!(rsf_unity_vulkan_presentation_try_begin(), 0);
+                    assert!(!try_begin_lease());
                     retired.push(sem);
                 }
             ),
@@ -1667,7 +1442,7 @@ mod tests {
         );
         assert_eq!(retired, [81, 82]);
         forget_win32_surface(55, 33);
-        assert_eq!(rsf_unity_vulkan_presentation_try_begin(), 1);
-        rsf_unity_vulkan_presentation_end();
+        assert!(try_begin_lease());
+        end_lease();
     }
 }

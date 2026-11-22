@@ -2,16 +2,22 @@
 //! Unity Vulkan frame routing. Foreign dispatch borrows first-party values through vulkan_foreign.h.
 
 use super::*;
+use crate::d3d11_pass::base_pass;
+use crate::package_state::services::{editor, rsf_unity_package_log};
+use crate::package_state::{
+    rsf_unity_package_bridge_failed, rsf_unity_package_sr_ring_begin,
+    rsf_unity_package_sr_ring_retired,
+};
 use crate::sys::*;
 use crate::sys::{RSF_UNITY_PACKET_PROBE, RSF_UNITY_PREVIEW_SOURCE_COMMON};
 use crate::vulkan_platform::{commands::*, surface::*, *};
+use crate::vulkan_resolver;
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::{
     RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_WINDOW,
     rsf_game_render_pass,
 };
-use std::ffi::{CStr, c_char};
-use std::mem::MaybeUninit;
+use std::ffi::CStr;
 use windows::Win32::Graphics::{Direct3D12::*, Dxgi::Common::*};
 use windows::core::Interface;
 use windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringA;
@@ -25,6 +31,7 @@ mod present;
 mod queue;
 #[path = "vulkan_bridge/window.rs"]
 mod window;
+pub(crate) use window::{create_window, rsf_uvk_bridge_owns_window};
 
 const EVENT_WINDOW: u32 = 1;
 // The C backend status values are cast macros.
@@ -34,27 +41,6 @@ const QUEUE_EXCEPTION: &CStr = c"Unity Vulkan queue execution failed; resources 
 const PRESENT_EXCEPTION: &CStr = c"Unity Vulkan present interception failed; the bridge stopped.";
 const SLOT_FAILED: &CStr = c"Unity Vulkan command slot could not be reused; the bridge stopped.";
 const IMAGE_FAILED: &CStr = c"Unity Vulkan shared image creation failed; the bridge stopped.";
-
-unsafe extern "C" {
-    fn rsf_unity_package_bridge_failed(result: i32);
-    fn rsf_unity_package_log(text: *const c_char);
-    fn rsf_unity_package_editor() -> u32;
-    fn rsf_unity_package_sr_ring_begin() -> u64;
-    fn rsf_unity_package_sr_ring_retired(epoch: u64);
-    fn rsf_unity_build_scalar_pass(
-        packet: *const rsf_unity_packet,
-        pass: *mut rsf_game_render_pass,
-    );
-    fn rsf_unity_vk_interop_ready(device: vk::Device, lookup: vk::PFN_vkGetDeviceProcAddr) -> bool;
-}
-
-extern "C" fn ring_begin() -> u64 {
-    unsafe { rsf_unity_package_sr_ring_begin() }
-}
-
-extern "C" fn ring_retired(epoch: u64) {
-    unsafe { rsf_unity_package_sr_ring_retired(epoch) }
-}
 
 fn log(services: *const rsf_game_host_services, message: &CStr) {
     if unsafe { services.as_ref() }.is_some_and(|services| services.log.is_some()) {
@@ -69,11 +55,9 @@ fn log(services: *const rsf_game_host_services, message: &CStr) {
 }
 
 fn fault(result: i32, message: &CStr) {
-    if rsf_unity_vulkan_fault() != 0 {
-        unsafe {
-            rsf_unity_package_bridge_failed(result);
-            rsf_unity_package_log(message.as_ptr());
-        }
+    if lock().fault() {
+        rsf_unity_package_bridge_failed(result);
+        unsafe { rsf_unity_package_log(message.as_ptr()) };
     }
 }
 
@@ -113,7 +97,10 @@ unsafe extern "C" fn rsf_uvk_bridge_create_device(
     };
     let gdpa =
         unsafe { std::mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkGetDeviceProcAddr>(gdpa) };
-    if !unsafe { rsf_unity_vk_interop_ready(vk::Device::from_raw(instance.device), gdpa) } {
+    let lookup = unsafe {
+        std::mem::transmute::<vk::PFN_vkGetDeviceProcAddr, vulkan_resolver::Lookup>(gdpa)
+    };
+    if !vulkan_resolver::interop_ready(instance.device as *mut c_void, lookup) {
         log(
             services,
             c"Unity Vulkan device lacks enabled Win32 external-memory/semaphore extensions.",
@@ -147,8 +134,8 @@ static DEVICE_OPS: DeviceOps = DeviceOps {
     shared_completed: rsf_uvk_gpu_shared_completed,
     drain_images: rsf_uvk_gpu_drain,
     report_created,
-    ring_begin,
-    ring_retired,
+    ring_begin: rsf_unity_package_sr_ring_begin,
+    ring_retired: rsf_unity_package_sr_ring_retired,
 };
 
 static SURFACE_OPS: SurfaceOps = SurfaceOps {
@@ -159,38 +146,38 @@ static SURFACE_OPS: SurfaceOps = SurfaceOps {
     destroy: rsf_uvk_gpu_chain_destroy,
 };
 
-fn initialize(services: *const rsf_game_host_services, graphics: &mut DeviceHandles) -> u32 {
+fn initialize(services: *const rsf_game_host_services) -> Device {
     if !unsafe { rsf_uvk_foreign_available() } {
-        return DEVICE_FAILED;
+        return Device::Failed;
     }
-    unsafe { rsf_unity_vulkan_initialize(services, &DEVICE_OPS, graphics) }
+    initialize_device(services, &DEVICE_OPS)
 }
 
 fn configure_surface(width: u32, height: u32) -> *mut c_void {
-    unsafe { rsf_unity_vulkan_configure_surface(width, height, &SURFACE_OPS) }
+    super::configure_surface(width, height, &SURFACE_OPS)
 }
 
 struct Entry;
 impl Entry {
     fn begin() -> Option<Self> {
-        (rsf_unity_vulkan_enter() != 0).then(|| Self)
+        lock().enter().then_some(Self)
     }
 }
 impl Drop for Entry {
     fn drop(&mut self) {
-        rsf_unity_vulkan_leave();
+        lock().leave();
     }
 }
 
 struct Lease;
 impl Lease {
     fn try_begin() -> Option<Self> {
-        (rsf_unity_vulkan_presentation_try_begin() != 0).then(|| Self)
+        try_begin_lease().then_some(Self)
     }
 }
 impl Drop for Lease {
     fn drop(&mut self) {
-        rsf_unity_vulkan_presentation_end();
+        end_lease();
     }
 }
 
@@ -213,26 +200,21 @@ impl Textures {
     );
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_uvk_bridge_render(
+pub(crate) fn render_event(
     event_id: i32,
     base_event: i32,
-    packet: *const rsf_unity_packet,
-    services: *const rsf_game_host_services,
+    packet: &rsf_unity_packet,
+    services: &rsf_game_host_services,
     reconfigure: bool,
 ) -> bool {
     let Some(_entry) = Entry::begin() else {
         return false;
     };
-    let frame = unsafe {
-        Frame {
-            packet: *packet,
-            services: *services,
-        }
+    let frame = Frame {
+        packet: *packet,
+        services: *services,
     };
-    if !unsafe { rsf_uvk_foreign_available() }
-        || frame.services.render_pass.is_none()
-        || rsf_unity_vulkan_faulted() != 0
+    if !unsafe { rsf_uvk_foreign_available() } || frame.services.render_pass.is_none() || faulted()
     {
         return false;
     }
@@ -241,19 +223,17 @@ unsafe extern "C" fn rsf_uvk_bridge_render(
         Some(2) => EVENT_HUDLESS,
         _ => 0,
     };
-    if kind == EVENT_WINDOW && unsafe { rsf_unity_package_editor() } == 0 {
+    if kind == EVENT_WINDOW && !editor() {
         let Some(instance) = instance() else {
             return false;
         };
-        return unsafe {
-            rsf_unity_vulkan_set_window(
-                &frame,
-                instance.instance,
-                instance.device as *mut c_void,
-                instance.queue,
-                parent(),
-            )
-        } != 0;
+        return publish_window(
+            &frame,
+            instance.instance,
+            instance.device as *mut c_void,
+            instance.queue,
+            parent(),
+        );
     }
     let mut textures = Textures::EMPTY;
     for (index, (texture, view)) in [
@@ -311,7 +291,7 @@ fn instance() -> Option<rsf_uvk_engine_instance> {
 }
 
 fn parent() -> *mut c_void {
-    unsafe { GetParent(rsf_unity_vulkan_surface_window()) }
+    unsafe { GetParent(surface_window()) }
 }
 
 #[unsafe(no_mangle)]
@@ -339,18 +319,13 @@ fn prepare_image(
     format: vk::Format,
     dx_format: DXGI_FORMAT,
 ) -> Option<ImageHandles> {
-    let mut image = ImageHandles::EMPTY;
-    unsafe {
-        rsf_unity_vulkan_prepare_image(
-            index,
-            width,
-            height,
-            format.as_raw() as u32,
-            dx_format.0 as u32,
-            &mut image,
-        )
-    }
-    .then_some(image)
+    let key = ImageKey {
+        width,
+        height,
+        format: format.as_raw() as u32,
+        dx_format: dx_format.0 as u32,
+    };
+    super::prepare_image(&STATE, index as usize, key)
 }
 
 fn prepare_rgba(index: u32, width: u32, height: u32) -> Option<ImageHandles> {
@@ -365,20 +340,8 @@ fn prepare_rgba(index: u32, width: u32, height: u32) -> Option<ImageHandles> {
 
 fn begin(graphics: &DeviceHandles) -> Option<(u32, CommandSlot)> {
     let ring = VULKAN.lock().slot().0 as u32;
-    let mut slot = CommandSlot::EMPTY;
-    unsafe {
-        rsf_unity_vulkan_command_slot(ring, &mut slot) && rsf_uvk_gpu_begin(graphics, &slot, ring)
-    }
-    .then_some((ring, slot))
-}
-
-fn pass(frame: &Frame) -> rsf_game_render_pass {
-    let mut pass = MaybeUninit::uninit();
-    // The producer writes the full scalar pass for every non-null packet.
-    unsafe {
-        rsf_unity_build_scalar_pass(&frame.packet, pass.as_mut_ptr());
-        pass.assume_init()
-    }
+    let slot = command_slot(ring)?;
+    unsafe { rsf_uvk_gpu_begin(graphics, &slot, ring) }.then_some((ring, slot))
 }
 
 fn render(frame: &Frame, target: *mut c_void, pass: &rsf_game_render_pass, phase: u32) -> bool {
@@ -419,26 +382,10 @@ fn barrier(
     unsafe { rsf_uvk_gpu_dx_barrier(slot.commands, resource, before.0, after.0) };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_uvk_bridge_graphics(
-    device: *mut *mut c_void,
-    queue: *mut *mut c_void,
-) -> bool {
-    let Some(_entry) = Entry::begin() else {
-        return false;
-    };
-    let mut view = DeviceHandles::EMPTY;
-    if !unsafe { rsf_unity_vulkan_device_view(&mut view) } {
-        return false;
-    }
-    let native_device = unsafe { ID3D12Device::from_raw_borrowed(&view.device) };
-    let native_queue = unsafe { ID3D12CommandQueue::from_raw_borrowed(&view.queue) };
-    let (Some(native_device), Some(native_queue)) = (native_device, native_queue) else {
-        return false;
-    };
-    unsafe {
-        device.write(native_device.clone().into_raw());
-        queue.write(native_queue.clone().into_raw());
-    }
-    true
+pub(crate) fn graphics() -> Option<(ID3D12Device, ID3D12CommandQueue)> {
+    let _entry = Entry::begin()?;
+    let view = device_view()?;
+    let device = unsafe { ID3D12Device::from_raw_borrowed(&view.device) }?.clone();
+    let queue = unsafe { ID3D12CommandQueue::from_raw_borrowed(&view.queue) }?.clone();
+    Some((device, queue))
 }

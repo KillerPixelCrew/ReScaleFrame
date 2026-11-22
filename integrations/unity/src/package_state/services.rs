@@ -406,7 +406,6 @@ unsafe extern "C" fn host_cpu_event(_: *mut c_void, event: *const rsf_game_cpu_e
 ///
 /// # Safety
 /// `text` is null or NUL-terminated.
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_unity_package_log(text: *const c_char) {
     if text.is_null() {
         return;
@@ -445,16 +444,14 @@ extern "C" fn rsf_unity_package_input(frame: u64, kinds: u32) -> c_int {
     }
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_unity_package_preview_input() {
     if let Some(leaves) = LEAVES.get() {
         PACKAGE.preview_input(leaves);
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_package_editor() -> u32 {
-    u32::from(PACKAGE.services.editor.load(SeqCst))
+pub(crate) fn editor() -> bool {
+    PACKAGE.services.editor.load(SeqCst)
 }
 
 #[cfg(windows)]

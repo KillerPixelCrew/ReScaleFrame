@@ -226,8 +226,7 @@ fn hide() {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_preview_region(
+pub(crate) extern "C" fn rsf_unity_preview_region(
     left: i32,
     top: i32,
     width: i32,
@@ -300,8 +299,7 @@ extern "C" fn rsf_unity_preview_region(
     window.visible
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_preview_parent() -> HWND {
+pub(crate) extern "C" fn rsf_unity_preview_parent() -> HWND {
     let state = state();
     if state.window.live() {
         state.window.parent()
@@ -310,14 +308,12 @@ extern "C" fn rsf_unity_preview_parent() -> HWND {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_preview_owns(child: HWND) -> bool {
+pub(crate) extern "C" fn rsf_unity_preview_owns(child: HWND) -> bool {
     let state = state();
     state.window.child() == child && state.window.live()
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_preview_hide() {
+pub(crate) extern "C" fn rsf_unity_preview_hide() {
     hide();
 }
 
@@ -340,8 +336,7 @@ fn show(generation: u64) {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_preview_prepare(
+pub(crate) unsafe extern "C" fn rsf_unity_preview_prepare(
     device: *mut c_void,
     queue: *mut c_void,
     width: u32,
@@ -369,8 +364,7 @@ unsafe extern "C" fn rsf_unity_preview_prepare(
     )
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_preview_present(
+pub(crate) unsafe extern "C" fn rsf_unity_preview_present(
     texture: *mut c_void,
     pass: *const rsf_game_render_pass,
     common_state: u32,
@@ -392,8 +386,7 @@ unsafe extern "C" fn rsf_unity_preview_present(
     1
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_preview_drained() -> bool {
+pub(crate) extern "C" fn rsf_unity_preview_drained() -> bool {
     try_output().is_some_and(|output| {
         output
             .as_ref()
@@ -401,8 +394,7 @@ extern "C" fn rsf_unity_preview_drained() -> bool {
     })
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_preview_release() {
+pub(crate) extern "C" fn rsf_unity_preview_release() {
     // The package closes bridge admission and proves the drain before committing.
     let mut output = OUTPUT.lock().unwrap_or_else(PoisonError::into_inner);
     if output

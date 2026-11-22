@@ -5,10 +5,10 @@
 //! pass. The identity comes from [UnitySR] when the plugin loads and from rsfu_initialize for each
 //! session. SR views read it for their contexts. Auto uses the Runtime's
 //! rsf_fg_default_backend with the current D3D12 adapter.
-use super::{BACKEND_OK, Leaves, PACKAGE, Package};
+use super::{BACKEND_OK, Leaves, Package};
 use crate::generation::{self, Sources};
 use crate::sys::{RSF_FG_BACKEND_AUTO, RSF_REFLEX_OFF, rsf_fg12_setup, rsf_native_fg_options};
-use crate::sys::{RSF_FG_OFF, rsf_unity_package_platform, rsf_unity_package_view_setup};
+use crate::sys::{RSF_FG_OFF, rsf_unity_package_view_setup};
 use rsf_game_sys::vendor_paths::VendorPaths;
 use std::ffi::CString;
 use std::sync::atomic::{AtomicU32, Ordering::SeqCst};
@@ -194,26 +194,19 @@ impl Package {
 }
 
 /// Plugin load. Reads the identity from [UnitySR]: Runtime resolved like every [UnitySR] path,
-/// EngineVersion and ProjectId as written, at most 255 characters each as the C++ read them.
-/// Then the session services open the [UnitySR] Log path, resolved the same way, and the player
-/// installs generation (services.rs).
-///
-/// # Safety
-/// `platform` is null or package.c's table.
-#[cfg(windows)]
-pub(super) unsafe fn load(platform: *const rsf_unity_package_platform) {
+/// EngineVersion and ProjectId as written, at most 255 characters each. Then the session
+/// services open the [UnitySR] Log path, resolved the same way, and the player installs
+/// generation (services.rs).
+#[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
+pub(super) fn load() {
+    use super::PACKAGE;
     use crate::runtime_config::{Ini, path_setting, string_setting, utf8};
     use windows_sys::core::w;
     const PROFILE_TEXT: usize = 256;
 
     let (editor, ini) = super::windows::startup_paths();
     PACKAGE.services.editor.store(editor, SeqCst);
-    let Some(leaves) = super::LEAVES.get().or_else(|| {
-        let adopted = unsafe { Leaves::adopt(platform) }?;
-        Some(super::LEAVES.get_or_init(|| adopted))
-    }) else {
-        return;
-    };
+    let leaves = super::LEAVES.get_or_init(|| &super::native::PRODUCTION);
     let mut log = Vec::new();
     if let Some(ini) = unsafe { Ini::new(ini.as_ptr()) } {
         let root = utf8(&path_setting(&ini, w!("Runtime")));

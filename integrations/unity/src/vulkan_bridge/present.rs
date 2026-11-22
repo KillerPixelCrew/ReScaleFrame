@@ -27,7 +27,7 @@ impl Present<'_> {
     }
 
     fn admitted(&self) -> Result<i32, &'static CStr> {
-        let window = rsf_unity_vulkan_surface_window();
+        let window = surface_window();
         if window.is_null()
             || !unsafe { rsf_uvk_foreign_available() }
             || self.info.swapchain_count != 1
@@ -43,35 +43,28 @@ impl Present<'_> {
             return self.forward(self.info);
         }
 
-        let mut source = PresentSource::default();
-        let mut frame = MaybeUninit::uninit();
-        let target = unsafe {
-            rsf_unity_vulkan_present_begin(
-                instance.instance,
-                instance.device as *mut c_void,
-                self.queue,
-                (*self.info.p_swapchains).as_raw(),
-                *self.info.p_image_indices,
-                GetParent(window),
-                &mut source,
-                frame.as_mut_ptr(),
-            )
-        };
+        let target = present_begin(
+            instance.instance,
+            instance.device as *mut c_void,
+            self.queue,
+            unsafe { (*self.info.p_swapchains).as_raw() },
+            unsafe { *self.info.p_image_indices },
+            unsafe { GetParent(window) },
+        );
         // present_begin always takes the lease, even without a matching target.
         let _lease = Lease;
-        if target == 0 {
-            return self.forward(self.info);
-        }
-        if target != 1 {
+        let (source, frame) = match target {
+            Target::Other => return self.forward(self.info),
+            Target::Native => return self.native(window),
+            Target::Window(source, frame) => (source, frame),
+        };
+        if frame.services.render_pass.is_none() {
             return self.native(window);
         }
-        let frame = unsafe { frame.assume_init() };
-        let mut graphics = DeviceHandles::EMPTY;
-        if frame.services.render_pass.is_none()
-            || initialize(&frame.services, &mut graphics) != DEVICE_READY
-            || graphics.vk_device != instance.device
-            || graphics.vk_queue != self.queue
-        {
+        let Device::Ready(graphics) = initialize(&frame.services) else {
+            return self.native(window);
+        };
+        if graphics.vk_device != instance.device || graphics.vk_queue != self.queue {
             return self.native(window);
         }
         let chain = configure_surface(source.width, source.height);
@@ -143,7 +136,7 @@ impl Present<'_> {
             D3D12_RESOURCE_STATE_COMMON,
         );
 
-        let mut pass = pass(&frame);
+        let mut pass = base_pass(&frame.packet);
         pass.role = RSF_GAME_RENDER_WINDOW;
         pass.swapchain = chain;
         if !render(&frame, graphics.queue, &pass, 1) {

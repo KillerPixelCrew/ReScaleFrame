@@ -4,6 +4,8 @@
 //! linked into `ReScaleFrame.Unity.Native.dll`. The Mono plugin (`games/unity-mono`) builds the
 //! `mono-plugin` subset (its D3D12 callbacks and the shared frame state) into its own DLL.
 #![cfg(any(windows, test))]
+// The unit-test build leaves out the native bridges that call most of the state modules.
+#![cfg_attr(test, allow(dead_code))]
 
 // The plugins get the Runtime from CMake; unit tests link the crate.
 #[cfg(all(test, windows))]
@@ -27,6 +29,7 @@ pub mod sys {
 
 #[cfg(all(windows, not(test)))]
 mod bridge_d3d12;
+#[cfg(any(test, not(feature = "mono-plugin")))]
 mod bridge_interop;
 // Unity SDK dispatch over the C leaves in native/render_bridge.c, which need the untracked Unity
 // native headers; unit tests cover the packet state and policy it drives.
@@ -34,16 +37,21 @@ mod bridge_interop;
 mod bridge_native;
 pub mod bridge_state;
 mod d3d11_pass;
-#[cfg(any(test, all(windows, not(feature = "mono-plugin"))))]
+#[cfg(any(test, not(feature = "mono-plugin")))]
 mod d3d11_state;
+#[cfg(any(test, not(feature = "mono-plugin")))]
 mod device_creation;
 pub mod generation;
+#[cfg(any(test, not(feature = "mono-plugin")))]
 mod package_state;
+#[cfg(any(test, not(feature = "mono-plugin")))]
 mod package_views;
 #[cfg(all(windows, not(feature = "mono-plugin")))]
 mod preview;
 pub mod runtime_config;
 #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 mod vulkan_platform;
+#[cfg(any(test, not(feature = "mono-plugin")))]
 mod vulkan_resolver;
+#[cfg(any(test, not(feature = "mono-plugin")))]
 mod vulkan_state;

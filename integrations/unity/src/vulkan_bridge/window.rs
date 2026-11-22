@@ -50,9 +50,8 @@ unsafe extern "system" fn find_window(candidate: HWND, result: LPARAM) -> i32 {
     1
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_uvk_bridge_create_window() -> bool {
-    let mut window = rsf_unity_vulkan_surface_window();
+pub(crate) fn create_window() -> bool {
+    let mut window = surface_window();
     if window.is_null() {
         let mut parent: HWND = ptr::null_mut();
         unsafe { EnumWindows(Some(find_window), ptr::from_mut(&mut parent) as LPARAM) };
@@ -89,9 +88,9 @@ extern "C" fn rsf_uvk_bridge_create_window() -> bool {
         if window.is_null() {
             return false;
         }
-        if rsf_unity_vulkan_set_surface_window(window) == 0 {
+        if !set_surface_window(window) {
             unsafe { DestroyWindow(window) };
-            window = rsf_unity_vulkan_surface_window();
+            window = surface_window();
         }
     }
     // Release keeps the child window. Restart recreates the chain on its window thread.
@@ -106,15 +105,14 @@ fn on_window_thread(window: HWND) -> bool {
         && unsafe { GetWindowThreadProcessId(window, ptr::null_mut()) == GetCurrentThreadId() }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_uvk_bridge_owns_window(candidate: *mut c_void) -> bool {
-    let window = rsf_unity_vulkan_surface_window();
+pub(crate) extern "C" fn rsf_uvk_bridge_owns_window(candidate: *mut c_void) -> bool {
+    let window = surface_window();
     !window.is_null() && window == candidate
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_uvk_bridge_update_window(width: u32, height: u32) -> bool {
-    let window = rsf_unity_vulkan_surface_window();
+    let window = surface_window();
     if width == 0 || height == 0 || !on_window_thread(window) {
         return false;
     }
@@ -140,15 +138,14 @@ extern "C" fn rsf_uvk_bridge_update_window(width: u32, height: u32) -> bool {
     let Some(_entry) = Entry::begin() else {
         return false;
     };
-    if rsf_unity_vulkan_surface_ready() != 0 {
+    if surface_ready() {
         return true;
     }
     // Never wait for a Present with the lease on the window thread.
     let Some(_lease) = Lease::try_begin() else {
         return false;
     };
-    let mut graphics = DeviceHandles::EMPTY;
-    rsf_unity_vulkan_surface_ready() != 0
-        || (initialize(ptr::null(), &mut graphics) == DEVICE_READY
+    surface_ready()
+        || (matches!(initialize(ptr::null()), Device::Ready(_))
             && !configure_surface(width, height).is_null())
 }

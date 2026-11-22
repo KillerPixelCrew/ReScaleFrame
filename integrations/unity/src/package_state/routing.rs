@@ -3,17 +3,15 @@
 use super::{
     LEAVES, Leaves, OPERATIONS, PACKAGE, Package, RECORDING, UNITY_GRAPHICS, UNITY_INTERFACES,
 };
-#[cfg(windows)]
+#[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 use super::{presentation, services};
 use crate::sys::RSF_UNITY_PREVIEW_SOURCE_COMMON;
-#[cfg(windows)]
-use crate::sys::rsf_unity_package_platform;
 use crate::sys::{RSF_UNITY_DEVICE_EVENT_INITIALIZE, RSF_UNITY_DEVICE_EVENT_SHUTDOWN};
 use rsf_game_sys::{RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_WINDOW, rsf_game_render_pass};
 use std::ffi::{c_int, c_void};
-#[cfg(windows)]
+#[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 use std::ptr::null_mut;
-#[cfg(windows)]
+#[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 use std::sync::Mutex;
 use std::sync::PoisonError;
 use std::sync::atomic::Ordering::SeqCst;
@@ -54,13 +52,13 @@ impl Leaves {
         unsafe { (self.preview_prepare)(width, height) != 0 }
     }
     fn preview_owns(&self, window: *mut c_void) -> bool {
-        unsafe { (self.preview_owns)(window) != 0 }
+        (self.preview_owns)(window)
     }
     fn renderer_vulkan(&self) -> bool {
         unsafe { (self.renderer_vulkan)(UNITY_GRAPHICS.load(SeqCst)) != 0 }
     }
     fn vulkan_owns(&self, window: *mut c_void) -> bool {
-        unsafe { (self.vulkan_owns)(window) != 0 }
+        (self.vulkan_owns)(window)
     }
     fn window_class(&self, window: *mut c_void) -> u32 {
         unsafe { (self.window_class)(window) }
@@ -256,49 +254,44 @@ pub(super) fn shutdown() -> bool {
 
 // Only the load/unload entries take this lock. Registration can call the device callback,
 // so the package operation lock must be free and the registry already published.
-#[cfg(windows)]
-static REGISTRATION: Mutex<Option<unsafe extern "C" fn(*mut c_void, u32)>> = Mutex::new(None);
+#[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
+static REGISTERED: Mutex<bool> = Mutex::new(false);
 
-#[cfg(windows)]
+// package.c and vulkan_bridge.c: the Unity SDK calls.
+#[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
+unsafe extern "C" {
+    fn rsf_unity_package_graphics_interface(interfaces: *mut c_void) -> *mut c_void;
+    fn rsf_unity_package_device_callback(graphics: *mut c_void, subscribe: u32);
+    fn rsf_uvk_preload(interfaces: *mut c_void);
+}
+
+#[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_plugin_load(
-    platform: *const rsf_unity_package_platform,
-    interfaces: *mut c_void,
-) {
-    let mut registration = REGISTRATION.lock().unwrap_or_else(PoisonError::into_inner);
+unsafe extern "C" fn rsf_unity_package_plugin_load(interfaces: *mut c_void) {
+    let mut registered = REGISTERED.lock().unwrap_or_else(PoisonError::into_inner);
     if PACKAGE.device.load(SeqCst) == DEVICE_RETAINED || !UNITY_INTERFACES.load(SeqCst).is_null() {
         return;
     }
-    let Some(platform_ref) = (unsafe { platform.as_ref() }) else {
-        return;
-    };
-    let (Some(graphics_interface), Some(preload), Some(device_callback)) = (
-        platform_ref.graphics_interface,
-        platform_ref.preload,
-        platform_ref.device_callback,
-    ) else {
-        return;
-    };
     UNITY_INTERFACES.store(interfaces, SeqCst);
-    let graphics = unsafe { graphics_interface(interfaces) };
+    let graphics = unsafe { rsf_unity_package_graphics_interface(interfaces) };
     UNITY_GRAPHICS.store(graphics, SeqCst);
     if !interfaces.is_null() {
-        unsafe { preload(interfaces) };
+        unsafe { rsf_uvk_preload(interfaces) };
     }
-    unsafe { presentation::load(platform) };
+    presentation::load();
     if !graphics.is_null() {
-        *registration = Some(device_callback);
-        unsafe { device_callback(graphics, 1) };
+        *registered = true;
+        unsafe { rsf_unity_package_device_callback(graphics, 1) };
         rsf_unity_package_device_event(RSF_UNITY_DEVICE_EVENT_INITIALIZE);
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 #[unsafe(no_mangle)]
 extern "C" fn rsf_unity_package_plugin_unload() {
-    let mut registration = REGISTRATION.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some(device_callback) = registration.take() {
-        unsafe { device_callback(UNITY_GRAPHICS.load(SeqCst), 0) };
+    let mut registered = REGISTERED.lock().unwrap_or_else(PoisonError::into_inner);
+    if std::mem::take(&mut *registered) {
+        unsafe { rsf_unity_package_device_callback(UNITY_GRAPHICS.load(SeqCst), 0) };
     }
     rsf_unity_package_device_event(RSF_UNITY_DEVICE_EVENT_SHUTDOWN);
     services::unload();

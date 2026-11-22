@@ -393,7 +393,7 @@ extern "C" fn rsf_unity_d3d12_configure_events(package: bool) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_set_engine_spatial(spatial: u32, quality: u32) -> c_int {
+pub(crate) extern "C" fn rsf_unity_set_engine_spatial(spatial: u32, quality: u32) -> c_int {
     rsf_unity_frames_set_policy(spatial, quality)
 }
 

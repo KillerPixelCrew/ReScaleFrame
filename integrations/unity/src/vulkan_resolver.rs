@@ -71,7 +71,7 @@ impl ExtensionProperties {
 }
 
 type Function = unsafe extern "system" fn();
-type Lookup = unsafe extern "system" fn(*mut c_void, *const c_char) -> Option<Function>;
+pub(crate) type Lookup = unsafe extern "system" fn(*mut c_void, *const c_char) -> Option<Function>;
 type Enumerate = unsafe extern "system" fn(
     *mut c_void,
     *const c_char,
@@ -256,8 +256,7 @@ unsafe extern "system" fn get_device_proc(
 }
 
 /// The recorded request short-circuits the lookups, which run in order outside the lock.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_vk_interop_ready(device: *mut c_void, lookup: Lookup) -> bool {
+pub(crate) fn interop_ready(device: *mut c_void, lookup: Lookup) -> bool {
     if device.is_null() {
         return false;
     }

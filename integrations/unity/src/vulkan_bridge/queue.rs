@@ -10,15 +10,14 @@ pub(super) fn execute(
     if frame.services.render_pass.is_none() {
         return Ok(());
     }
-    let mut graphics = DeviceHandles::EMPTY;
-    match initialize(&frame.services, &mut graphics) {
-        DEVICE_BUSY => return Ok(()),
-        DEVICE_READY => {}
-        _ => {
+    let graphics = match initialize(&frame.services) {
+        Device::Ready(graphics) => graphics,
+        Device::Busy => return Ok(()),
+        Device::Failed => {
             fault(INIT_FAILED, c"Unity Vulkan shared device/fence initialization failed; native output remains in place.");
             return Ok(());
         }
-    }
+    };
     let (ring, slot) = begin(&graphics).ok_or(SLOT_FAILED)?;
     if reconfigure && !unsafe { rsf_uvk_gpu_drain(&graphics) } {
         return Err(c"Unity Vulkan GPU drain before reconfiguration failed; the bridge stopped.");
@@ -75,7 +74,7 @@ pub(super) fn execute(
     if !unsafe { rsf_uvk_gpu_upload(&graphics, &slot, ptr::null(), 0) } {
         return Err(c"Unity Vulkan upload submission failed; the bridge stopped.");
     }
-    let mut pass = pass(&frame);
+    let mut pass = base_pass(&frame.packet);
     if reconfigure {
         pass.flags |= RSF_GAME_RENDER_RECONFIGURE;
         pass.camera_valid = 0;
