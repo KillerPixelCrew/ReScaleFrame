@@ -1,8 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include <rescaleframe/d3d11_present_api.h>
 
-namespace {
-constexpr rsf_d3d11_present_api complete{
+static const rsf_d3d11_present_api complete = {
     sizeof(rsf_d3d11_present_api),
     RSF_D3D11_PRESENT_API_VERSION,
     &rsf_d3d11_present_install,
@@ -28,12 +27,12 @@ constexpr rsf_d3d11_present_api complete{
     &rsf_d3d11_present_input,
     &rsf_d3d11_present_abort,
 };
-} // namespace
+_Static_assert(sizeof(rsf_d3d11_present_api) == 184 && RSF_D3D11_PRESENT_API_VERSION == 1,
+    "presentation ABI version and size");
+_Static_assert(RSF_OK == 0 && RSF_ERROR_INVALID_ARGUMENT == -1 && RSF_ERROR_ABI_MISMATCH == -2,
+    "presentation ABI result codes");
+rsf_result rsf_core_d3d11p_get_api(rsf_d3d11_present_api*, const rsf_d3d11_present_api*);
 
-static_assert(sizeof(rsf_d3d11_present_api) == 184 && RSF_D3D11_PRESENT_API_VERSION == 1);
-static_assert(RSF_OK == 0 && RSF_ERROR_INVALID_ARGUMENT == -1 && RSF_ERROR_ABI_MISMATCH == -2);
-extern "C" rsf_result rsf_core_d3d11p_get_api(rsf_d3d11_present_api*, const rsf_d3d11_present_api*);
-
-extern "C" RSF_RUNTIME_API rsf_result rsf_get_d3d11_present_api(rsf_d3d11_present_api* api) {
+RSF_RUNTIME_API rsf_result rsf_get_d3d11_present_api(rsf_d3d11_present_api* api) {
     return rsf_core_d3d11p_get_api(api, &complete);
 }

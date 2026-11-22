@@ -7686,3 +7686,9 @@ fingerprint admission to Rust. The linked C fixture retains the missing-runtime 
 missing-provider checks. Feature selection and validation adapters remain native. Checks covered
 source ABI comparisons, C11 syntax, binding generation and locked Cargo metadata. Builds,
 fixture execution and device validation remain pending.
+
+The Unity Editor preview now holds its presenter and its output lock in Rust. The retained
+package callback catches native Runtime observer exceptions. The D3D11 presentation DLL query
+export and its linked Rust fixture launcher compile as C11, preserving the table and its
+slot signatures. MinGW syntax passed for both C translation units and caught a deliberately
+mismatched slot. Linking and fixture execution remain pending.

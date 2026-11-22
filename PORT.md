@@ -998,7 +998,7 @@ Port swapchain dispatch, presentation synchronization and shared surface ownersh
 **Port files (8)**
 
 - [x] [runtime/orchestrator/include/rescaleframe/d3d11_present_api.h](runtime/orchestrator/include/rescaleframe/d3d11_present_api.h)
-- [ ] [runtime/orchestrator/src/d3d11_present_api.cpp](runtime/orchestrator/src/d3d11_present_api.cpp)
+- [x] [runtime/orchestrator/src/d3d11_present_api.cpp](runtime/orchestrator/src/d3d11_present_api.cpp)
 - [x] [runtime/presentation/include/rescaleframe/d3d11_chain_dispatch.h](runtime/presentation/include/rescaleframe/d3d11_chain_dispatch.h)
 - [x] [runtime/presentation/include/rescaleframe/d3d11_present_bridge.h](runtime/presentation/include/rescaleframe/d3d11_present_bridge.h)
 - [x] [runtime/presentation/include/rescaleframe/shared_surface.h](runtime/presentation/include/rescaleframe/shared_surface.h)
@@ -1008,7 +1008,7 @@ Port swapchain dispatch, presentation synchronization and shared surface ownersh
 
 **Fixtures (4)**
 
-- [ ] [tests/d3d11_present_api.cpp](tests/d3d11_present_api.cpp)
+- [x] [tests/d3d11_present_api.cpp](tests/d3d11_present_api.cpp)
 - [ ] [tests/d3d11_present_bridge.cpp](tests/d3d11_present_bridge.cpp)
 - [ ] [tests/fg_present_bridge.cpp](tests/fg_present_bridge.cpp)
 - [x] [tests/shared_surface.cpp](tests/shared_surface.cpp)
@@ -2911,8 +2911,8 @@ Port preview window and GPU lifetime and make the fixture exercise the productio
 **Port files (3)**
 
 - [x] [games/unity-mono/src/preview_platform.h](games/unity-mono/src/preview_platform.h)
-- [ ] [integrations/unity/native/preview.cpp](integrations/unity/native/preview.cpp)
-- [ ] [integrations/unity/native/preview.h](integrations/unity/native/preview.h)
+- [x] [integrations/unity/native/preview.cpp](integrations/unity/native/preview.cpp)
+- [x] [integrations/unity/native/preview.h](integrations/unity/native/preview.h)
 
 **Rust review findings (3)**
 
