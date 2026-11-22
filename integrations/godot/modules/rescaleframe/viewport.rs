@@ -9,6 +9,7 @@ mod frame_event_abi;
 mod graph;
 mod host;
 mod pass;
+mod present;
 mod primary;
 
 // Settings values from sr_session.h and local mode values from viewport.h.

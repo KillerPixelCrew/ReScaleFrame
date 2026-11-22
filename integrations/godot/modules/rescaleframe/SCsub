@@ -53,6 +53,7 @@ env.modules_sources += env_rsf.CommandNoCache(
         "graph.rs",
         "host.rs",
         "pass.rs",
+        "present.rs",
         "primary.rs",
     ],
     Action(build_viewport_object, "Compiling $SOURCE", varlist=["RSF_RUST_TARGET"]),
