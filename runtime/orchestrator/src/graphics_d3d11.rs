@@ -54,11 +54,16 @@ pub(super) fn shader_code(
     }
     let errors = output.errors.as_deref().unwrap_or_default();
     let errors = errors.split(|&byte| byte == 0).next().unwrap_or_default();
+    let status = if output.status < 0 {
+        output.status as u32
+    } else {
+        0x8000_4005
+    };
     Err(format!(
         "shader {} ({}): compile failed 0x{:08x} {}",
         name.to_string_lossy(),
         entry.to_string_lossy(),
-        output.status as u32,
+        status,
         String::from_utf8_lossy(errors)
     ))
 }
@@ -221,17 +226,13 @@ pub(super) unsafe extern "C" fn source_view(device: Handle, source: Handle, form
     view.map_or(ptr::null_mut(), Interface::into_raw)
 }
 
-pub(super) unsafe extern "C" fn context_matches(device: Handle, context: Handle) -> i32 {
+pub(super) unsafe fn context_matches(device: Handle, context: Handle) -> i32 {
     i32::from(unsafe {
         rsf_d3d11_output_is_immediate(context) != 0 && same_device(device, context)
     })
 }
 
-pub(super) unsafe extern "C" fn describe_source(
-    device: Handle,
-    source: Handle,
-    out: &mut SourceInfo,
-) -> i32 {
+pub(super) unsafe fn describe_source(device: Handle, source: Handle, out: &mut SourceInfo) -> i32 {
     if !unsafe { same_device(device, source) } {
         return 0;
     }
@@ -257,14 +258,12 @@ pub(super) fn prepare_compute(context: &ID3D11DeviceContext) {
 pub(super) fn bind_compute_parameters(
     context: &ID3D11DeviceContext,
     constants: Handle,
-    sampler: Option<Handle>,
+    sampler: Handle,
 ) {
     unsafe {
         let table = context.vtable();
         (table.CSSetConstantBuffers)(context.as_raw(), 0, 1, &constants);
-        if let Some(sampler) = sampler {
-            (table.CSSetSamplers)(context.as_raw(), 0, 1, &sampler);
-        }
+        (table.CSSetSamplers)(context.as_raw(), 0, 1, &sampler);
     }
 }
 

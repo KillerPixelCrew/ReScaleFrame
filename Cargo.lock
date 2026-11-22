@@ -432,6 +432,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsf-exposure-probe"
+version = "0.1.2"
+dependencies = [
+ "windows",
+]
+
+[[package]]
 name = "rsf-fallout4"
 version = "0.1.2"
 dependencies = [

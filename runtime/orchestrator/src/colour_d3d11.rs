@@ -134,11 +134,7 @@ impl Program {
                 0,
             )
         };
-        bind_compute_parameters(
-            context,
-            self.constants.as_raw(),
-            Some(self.sampler.as_raw()),
-        );
+        bind_compute_parameters(context, self.constants.as_raw(), self.sampler.as_raw());
     }
 
     fn dispatch<const N: usize>(

@@ -40,6 +40,15 @@ const _: () = {
     ["Offset of field: rsf_motion_decode_setup::log_user"]
         [::core::mem::offset_of!(rsf_motion_decode_setup, log_user) - 32usize];
 };
+impl Default for rsf_motion_decode_setup {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
 pub type rsf_present_blit_log_fn = ::core::option::Option<
     unsafe extern "C" fn(user: *mut ::core::ffi::c_void, message: *const ::core::ffi::c_char),
 >;
@@ -65,6 +74,80 @@ const _: () = {
     ["Offset of field: rsf_present_blit_setup::log_user"]
         [::core::mem::offset_of!(rsf_present_blit_setup, log_user) - 16usize];
 };
+impl Default for rsf_present_blit_setup {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_depth_replay_detail {
+    pub draw_width: u32,
+    pub draw_height: u32,
+    pub draw_samples: u32,
+    pub dsv_format: u32,
+    pub dsv_dimension: u32,
+    pub dsv_flags: u32,
+    pub source_width: u32,
+    pub source_height: u32,
+    pub source_format: u32,
+    pub source_samples: u32,
+    pub layer: *mut ::core::ffi::c_void,
+    pub source: *mut ::core::ffi::c_void,
+    pub context: *mut ::core::ffi::c_void,
+    pub draws: u32,
+    pub refused: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_depth_replay_detail"]
+        [::core::mem::size_of::<rsf_depth_replay_detail>() - 72usize];
+    ["Alignment of rsf_depth_replay_detail"]
+        [::core::mem::align_of::<rsf_depth_replay_detail>() - 8usize];
+    ["Offset of field: rsf_depth_replay_detail::draw_width"]
+        [::core::mem::offset_of!(rsf_depth_replay_detail, draw_width) - 0usize];
+    ["Offset of field: rsf_depth_replay_detail::draw_height"]
+        [::core::mem::offset_of!(rsf_depth_replay_detail, draw_height) - 4usize];
+    ["Offset of field: rsf_depth_replay_detail::draw_samples"]
+        [::core::mem::offset_of!(rsf_depth_replay_detail, draw_samples) - 8usize];
+    ["Offset of field: rsf_depth_replay_detail::dsv_format"]
+        [::core::mem::offset_of!(rsf_depth_replay_detail, dsv_format) - 12usize];
+    ["Offset of field: rsf_depth_replay_detail::dsv_dimension"]
+        [::core::mem::offset_of!(rsf_depth_replay_detail, dsv_dimension) - 16usize];
+    ["Offset of field: rsf_depth_replay_detail::dsv_flags"]
+        [::core::mem::offset_of!(rsf_depth_replay_detail, dsv_flags) - 20usize];
+    ["Offset of field: rsf_depth_replay_detail::source_width"]
+        [::core::mem::offset_of!(rsf_depth_replay_detail, source_width) - 24usize];
+    ["Offset of field: rsf_depth_replay_detail::source_height"]
+        [::core::mem::offset_of!(rsf_depth_replay_detail, source_height) - 28usize];
+    ["Offset of field: rsf_depth_replay_detail::source_format"]
+        [::core::mem::offset_of!(rsf_depth_replay_detail, source_format) - 32usize];
+    ["Offset of field: rsf_depth_replay_detail::source_samples"]
+        [::core::mem::offset_of!(rsf_depth_replay_detail, source_samples) - 36usize];
+    ["Offset of field: rsf_depth_replay_detail::layer"]
+        [::core::mem::offset_of!(rsf_depth_replay_detail, layer) - 40usize];
+    ["Offset of field: rsf_depth_replay_detail::source"]
+        [::core::mem::offset_of!(rsf_depth_replay_detail, source) - 48usize];
+    ["Offset of field: rsf_depth_replay_detail::context"]
+        [::core::mem::offset_of!(rsf_depth_replay_detail, context) - 56usize];
+    ["Offset of field: rsf_depth_replay_detail::draws"]
+        [::core::mem::offset_of!(rsf_depth_replay_detail, draws) - 64usize];
+    ["Offset of field: rsf_depth_replay_detail::refused"]
+        [::core::mem::offset_of!(rsf_depth_replay_detail, refused) - 68usize];
+};
+impl Default for rsf_depth_replay_detail {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
 pub type rsf_fullscreen_mode = u32;
 pub type rsf_fullscreen_log_fn = ::core::option::Option<
     unsafe extern "C" fn(user: *mut ::core::ffi::c_void, message: *const ::core::ffi::c_char),
@@ -90,8 +173,17 @@ const _: () = {
     ["Offset of field: rsf_fullscreen_setup::log_user"]
         [::core::mem::offset_of!(rsf_fullscreen_setup, log_user) - 16usize];
 };
+impl Default for rsf_fullscreen_setup {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Default, Copy, Clone)]
 pub struct rsf_fullscreen_draw {
     pub struct_size: u32,
     pub mode: rsf_fullscreen_mode,

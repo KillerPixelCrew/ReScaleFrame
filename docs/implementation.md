@@ -7,6 +7,11 @@ fixture and capture hook batch policy moved to Rust. Source checks passed.
 Native build, fixtures and game validation remain pending.
 [A01 scope and checks](research/rust-ac7-a01.md)
 
+G04 moves D3D11 colour, motion, depth and fullscreen passes and six fixture bodies to Rust.
+Source comparison covers the public C signatures, exact shader bytes and fixture wiring. The
+standalone exposure probe keeps its optional SDK calls in native leaves. Native and GPU
+verification remains user-owned. [G04 evidence](research/rust-graphics-passes.md)
+
 The active migration build candidate is `9f53f1b0`. It includes the
 Rust Godot SR and final-scene records and the merged Streamline,
 FidelityFX, Vulkan and Unity batches. Pinned formatting, locked offline

@@ -2,18 +2,17 @@
 use crate::com_ref::ComRef;
 use crate::d3d11_output::SavedBindings;
 use crate::graphics_d3d11::{
-    GROUP_EDGE, Handle, MakeView, SourceInfo, SourceViews, compute_shader, compute_texture,
-    constant_buffer, context_matches, copy_params, describe_source, dispatch_compute,
-    prepare_compute, rsf_d3d11_state_restore, rsf_d3d11_state_save, shader_code, source_view,
+    GROUP_EDGE, Handle, SourceInfo, SourceViews, compute_shader, compute_texture, constant_buffer,
+    context_matches, copy_params, describe_source, dispatch_compute, prepare_compute,
+    rsf_call_native_log, rsf_d3d11_state_restore, rsf_d3d11_state_save, shader_code, source_view,
     target_view,
 };
 use crate::graphics_pass_abi::{
-    RSF_MOTION_DECODE_ABI_VERSION as ABI, rsf_motion_decode_log_fn as LogFn,
-    rsf_motion_decode_setup as Setup,
+    RSF_MOTION_DECODE_ABI_VERSION as ABI, rsf_motion_decode_setup as Setup,
 };
 use crate::sr_session::has_capacity;
 use rsf_game_sys::sr_abi::rsf_motion_decode_params as Params;
-use std::ffi::{CString, c_char, c_void};
+use std::ffi::{CString, c_void};
 use std::ptr::{self, null_mut};
 use std::sync::{Mutex, TryLockError};
 use windows::Win32::Graphics::Direct3D11::{
@@ -48,21 +47,6 @@ struct Constants {
     padding: [u32; 3],
 }
 
-#[repr(C)]
-struct Platform {
-    make: unsafe extern "C" fn(Handle, &Setup, u32, &mut Resources) -> i32,
-    context: unsafe extern "C" fn(Handle, Handle) -> i32,
-    describe: unsafe extern "C" fn(Handle, Handle, &mut SourceInfo) -> i32,
-    source_view: MakeView,
-    dispatch:
-        unsafe extern "C" fn(Handle, &Resources, Handle, *const c_void, usize, u32, u32) -> i32,
-    log: unsafe extern "C" fn(LogFn, Handle, *const c_char),
-}
-
-unsafe extern "C" {
-    fn rsf_call_native_log(log: LogFn, user: Handle, text: *const c_char);
-}
-
 const SHADER: &[u8] = include_bytes!("../../graphics/shaders/motion_decode.hlsl");
 
 impl Setup {
@@ -75,12 +59,7 @@ impl Setup {
     }
 }
 
-unsafe extern "C" fn make_resources(
-    device: Handle,
-    setup: &Setup,
-    bytes: u32,
-    out: &mut Resources,
-) -> i32 {
+unsafe fn make_resources(device: Handle, setup: &Setup, bytes: u32, out: &mut Resources) -> i32 {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&device) }.expect("live device");
     let shader = match shader_code(SHADER, c"motion_decode", c"main", c"cs_5_0", 0) {
         Ok(code) => compute_shader(device, &code),
@@ -121,7 +100,7 @@ unsafe extern "C" fn make_resources(
     OK
 }
 
-unsafe extern "C" fn dispatch(
+unsafe fn dispatch(
     context: Handle,
     resources: &Resources,
     source: Handle,
@@ -165,19 +144,9 @@ unsafe extern "C" fn dispatch(
     1
 }
 
-static PLATFORM: Platform = Platform {
-    make: make_resources,
-    context: context_matches,
-    describe: describe_source,
-    source_view,
-    dispatch,
-    log: rsf_call_native_log,
-};
-
 const _: () = {
     assert!(size_of::<Setup>() == 40);
     assert!(size_of::<Constants>() == 64 && PARAMS_V1 == 36);
-    assert!(size_of::<Platform>() == 6 * size_of::<Handle>());
 };
 
 struct Pass {
@@ -185,17 +154,6 @@ struct Pass {
     resources: [ComRef; 4],
     device: ComRef,
     setup: Setup,
-    platform: &'static Platform,
-}
-
-impl Pass {
-    fn say(&self, message: &str) {
-        if self.setup.log.is_some()
-            && let Ok(message) = CString::new(message)
-        {
-            unsafe { (self.platform.log)(self.setup.log, self.setup.log_user, message.as_ptr()) };
-        }
-    }
 }
 
 fn constants(params: Params, width: u32, height: u32) -> Option<Constants> {
@@ -245,9 +203,8 @@ unsafe extern "C" fn rsf_motion_decode_create(
         return ABI_MISMATCH;
     }
     unsafe { out.write(null_mut()) };
-    let platform = &PLATFORM;
     let mut raw = [null_mut(); 4];
-    let status = unsafe { (platform.make)(device, setup, size_of::<Constants>() as u32, &mut raw) };
+    let status = unsafe { make_resources(device, setup, size_of::<Constants>() as u32, &mut raw) };
     let resources = unsafe { ComRef::adopt_all(raw) };
     if status != OK {
         return status;
@@ -260,12 +217,11 @@ unsafe extern "C" fn rsf_motion_decode_create(
         resources,
         device: unsafe { ComRef::retain(device) },
         setup: *setup,
-        platform,
     });
     let Some(pass) = (unsafe { owner.as_ref() }) else {
         return RESOURCE_FAILED;
     };
-    pass.say(&format!(
+    pass.setup.say(&format!(
         "motion decode ready for {}x{}",
         setup.width, setup.height
     ));
@@ -289,9 +245,8 @@ unsafe extern "C" fn rsf_motion_decode_run(
     let Some(params) = (unsafe { copy_params(params, PARAMS_V1) }) else {
         return INVALID;
     };
-    let platform = pass.platform;
     let device = pass.device.as_ptr();
-    if unsafe { (platform.context)(device, context) } == 0 {
+    if unsafe { context_matches(device, context) } == 0 {
         return SOURCE_MISMATCH;
     }
     let (width, height) = (pass.setup.width, pass.setup.height);
@@ -299,12 +254,12 @@ unsafe extern "C" fn rsf_motion_decode_run(
         return INVALID;
     };
     let mut extent = SourceInfo::default();
-    if unsafe { (platform.describe)(device, texture, &mut extent) } == 0 {
-        pass.say("source belongs to another device");
+    if unsafe { describe_source(device, texture, &mut extent) } == 0 {
+        pass.setup.say("source belongs to another device");
         return SOURCE_MISMATCH;
     }
     if extent.width != width || extent.height != height || !extent.single_surface() {
-        pass.say(&format!(
+        pass.setup.say(&format!(
             "source is {}x{} but this pass was built for {width}x{height}",
             extent.width, extent.height
         ));
@@ -316,14 +271,14 @@ unsafe extern "C" fn rsf_motion_decode_run(
         Err(TryLockError::WouldBlock) => return RESOURCE_FAILED,
     };
     let now = unsafe { GetTickCount64() };
-    let Some(view) = (unsafe { sources.get(device, texture, 0, now, platform.source_view) }) else {
+    let Some(view) = (unsafe { sources.get(device, texture, 0, now, source_view) }) else {
         drop(sources);
-        pass.say("source view could not be created");
+        pass.setup.say("source view could not be created");
         return RESOURCE_FAILED;
     };
     let resources = std::array::from_fn(|i| pass.resources[i].as_ptr());
     if unsafe {
-        (platform.dispatch)(
+        dispatch(
             context,
             &resources,
             view.as_ptr(),

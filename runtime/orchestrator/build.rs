@@ -70,6 +70,7 @@ fn main() {
         }
         build
             .cpp(true)
+            .std("c++20")
             .warnings_into_errors(true)
             .define("WIN32_LEAN_AND_MEAN", None)
             .define("NOMINMAX", None)

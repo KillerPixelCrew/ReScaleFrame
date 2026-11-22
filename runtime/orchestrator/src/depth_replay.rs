@@ -5,6 +5,7 @@ use crate::d3d11_output_abi::rsf_d3d11_output_copy_resource;
 use crate::dxgi_format::{D32_FLOAT_S8X24_UINT, R32G8X24_TYPELESS};
 use crate::frame_tap_abi::rsf_frame_tap_geometry;
 use crate::graphics_d3d11::{rsf_d3d11_depth_state_restore, rsf_d3d11_depth_state_save};
+use crate::graphics_pass_abi::rsf_depth_replay_detail as Detail;
 use std::ffi::c_void;
 use std::ptr::null_mut;
 use std::sync::{Mutex, MutexGuard, TryLockError};
@@ -38,26 +39,6 @@ const TEXTURE: u32 = 6;
 const IDENTITY: u32 = 7;
 const PIPELINE: u32 = 8;
 const VIEWPORT: u32 = 9;
-
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-struct Detail {
-    draw_width: u32,
-    draw_height: u32,
-    draw_samples: u32,
-    dsv_format: u32,
-    dsv_dimension: u32,
-    dsv_flags: u32,
-    source_width: u32,
-    source_height: u32,
-    source_format: u32,
-    source_samples: u32,
-    layer: Handle,
-    source: Handle,
-    context: Handle,
-    draws: u32,
-    refused: u32,
-}
 
 #[repr(C)]
 #[derive(Default)]

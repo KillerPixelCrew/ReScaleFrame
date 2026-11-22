@@ -24,6 +24,7 @@ members = [
   "integrations/godot",
   "integrations/steam",
   "integrations/windows",
+  "tools/exposure_probe",
 ]
 resolver = "3"
 

@@ -2,10 +2,9 @@
 use crate::com_ref::ComRef;
 use crate::d3d11_output::SavedBindings;
 use crate::graphics_d3d11::{
-    GROUP_EDGE, Handle, MakeView, SourceInfo, SourceViews, compute_shader, compute_texture,
-    constant_buffer, context_matches, copy_params, describe_source, dispatch_compute,
-    prepare_compute, rsf_d3d11_state_restore, rsf_d3d11_state_save, shader_code, source_view,
-    target_view,
+    GROUP_EDGE, Handle, SourceInfo, SourceViews, compute_shader, compute_texture, constant_buffer,
+    context_matches, copy_params, describe_source, dispatch_compute, prepare_compute,
+    rsf_d3d11_state_restore, rsf_d3d11_state_save, shader_code, source_view, target_view,
 };
 use crate::render_abi::rsf_motion_resolve_params as Params;
 use std::ffi::c_void;
@@ -36,19 +35,9 @@ struct Constants {
     padding2: [f32; 2],
 }
 
-#[repr(C)]
-struct Platform {
-    make: unsafe extern "C" fn(Handle, u32, u32, u32, &mut Resources) -> i32,
-    context: unsafe extern "C" fn(Handle, Handle) -> i32,
-    describe: unsafe extern "C" fn(Handle, Handle, &mut SourceInfo) -> i32,
-    source_view: MakeView,
-    dispatch:
-        unsafe extern "C" fn(Handle, &Resources, &[Handle; 3], *const c_void, u32, u32) -> i32,
-}
-
 const SHADER: &[u8] = include_bytes!("../../graphics/shaders/motion_resolve.hlsl");
 
-unsafe extern "C" fn make_resources(
+unsafe fn make_resources(
     device: Handle,
     width: u32,
     height: u32,
@@ -81,7 +70,7 @@ unsafe extern "C" fn make_resources(
     1
 }
 
-unsafe extern "C" fn dispatch(
+unsafe fn dispatch(
     context: Handle,
     resources: &Resources,
     sources: &[Handle; 3],
@@ -114,17 +103,8 @@ unsafe extern "C" fn dispatch(
     1
 }
 
-static PLATFORM: Platform = Platform {
-    make: make_resources,
-    context: context_matches,
-    describe: describe_source,
-    source_view,
-    dispatch,
-};
-
 const _: () = {
     assert!(size_of::<Constants>() == 112 && PARAMS_V1 == 96);
-    assert!(size_of::<Platform>() == 5 * size_of::<Handle>());
 };
 
 struct Pass {
@@ -133,13 +113,12 @@ struct Pass {
     device: ComRef,
     width: u32,
     height: u32,
-    platform: &'static Platform,
 }
 
 impl Pass {
     fn source(&self, texture: Handle) -> Option<SourceInfo> {
         let mut info = SourceInfo::default();
-        if unsafe { (self.platform.describe)(self.device.as_ptr(), texture, &mut info) } == 0
+        if unsafe { describe_source(self.device.as_ptr(), texture, &mut info) } == 0
             || !info.single_surface()
             || info.width < self.width
             || info.height < self.height
@@ -185,10 +164,9 @@ unsafe extern "C" fn rsf_motion_resolve_create(
         return 0;
     }
     unsafe { out.write(null_mut()) };
-    let platform = &PLATFORM;
     let mut raw = [null_mut(); 6];
     let status = unsafe {
-        (platform.make)(
+        make_resources(
             device,
             width,
             height,
@@ -209,7 +187,6 @@ unsafe extern "C" fn rsf_motion_resolve_create(
         device: unsafe { ComRef::retain(device) },
         width,
         height,
-        platform,
     });
     unsafe { out.write(pass) };
     i32::from(!pass.is_null())
@@ -235,9 +212,8 @@ unsafe extern "C" fn rsf_motion_resolve_run(
     let Some(mut constants) = constants(&params, pass.width, pass.height) else {
         return 0;
     };
-    let platform = pass.platform;
     let device = pass.device.as_ptr();
-    if unsafe { (platform.context)(device, context) } == 0 {
+    if unsafe { context_matches(device, context) } == 0 {
         return 0;
     }
     let (Some(motion_info), Some(depth_info)) = (pass.source(motion), pass.source(depth)) else {
@@ -259,35 +235,22 @@ unsafe extern "C" fn rsf_motion_resolve_run(
     let now = unsafe { GetTickCount64() };
     // A later lookup may replace a selected cache slot. Own the view
     // through dispatch even when it is no longer in the cache.
-    let Some(motion_view) = (unsafe {
-        sources.get(
-            device,
-            motion,
-            motion_info.view_format,
-            now,
-            platform.source_view,
-        )
-    })
-    .cloned() else {
+    let Some(motion_view) =
+        (unsafe { sources.get(device, motion, motion_info.view_format, now, source_view) })
+            .cloned()
+    else {
         return 0;
     };
-    let Some(depth_view) = (unsafe {
-        sources.get(
-            device,
-            depth,
-            depth_info.view_format,
-            now,
-            platform.source_view,
-        )
-    })
-    .cloned() else {
+    let Some(depth_view) =
+        (unsafe { sources.get(device, depth, depth_info.view_format, now, source_view) }).cloned()
+    else {
         return 0;
     };
     let layer_view = if layer.is_null() {
         None
     } else {
         let Some(view) =
-            (unsafe { sources.get(device, layer, R32_FLOAT, now, platform.source_view) }).cloned()
+            (unsafe { sources.get(device, layer, R32_FLOAT, now, source_view) }).cloned()
         else {
             return 0;
         };
@@ -301,7 +264,7 @@ unsafe extern "C" fn rsf_motion_resolve_run(
     ];
     let resources = std::array::from_fn(|i| pass.resources[i].as_ptr());
     unsafe {
-        (platform.dispatch)(
+        dispatch(
             context,
             &resources,
             &bindings,

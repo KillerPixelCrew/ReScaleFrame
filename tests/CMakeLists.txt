@@ -638,8 +638,9 @@ add_test(NAME ac7_render_scope COMMAND rsf_ac7_render_scope_test)
 set_tests_properties(ac7_render_scope PROPERTIES TIMEOUT 120)
 
 # Explicit hardware experiment, never run by routine CTest verification.
+rsf_add_rust_static(rsf_exposure_probe_rust rsf_exposure_probe_rust_build rsf-exposure-probe rsf_exposure_probe)
 add_executable(rsf_exposure_probe ../tools/exposure-probe.cpp)
-target_link_libraries(rsf_exposure_probe PRIVATE ReScaleFrame::DLSS ReScaleFrame::Graphics minhook rsf_build_options)
+target_link_libraries(rsf_exposure_probe PRIVATE rsf_exposure_probe_rust ReScaleFrame::DLSS ReScaleFrame::Graphics minhook rsf_build_options)
 if(EXISTS "${RSF_RENDERDOC_INCLUDE}/renderdoc_app.h")
     target_include_directories(rsf_exposure_probe SYSTEM PRIVATE "${RSF_RENDERDOC_INCLUDE}")
     target_compile_definitions(rsf_exposure_probe PRIVATE RSF_PROBE_RENDERDOC=1)
