@@ -28,12 +28,18 @@
 
 #include "../../../games/unity-mono/src/vulkan_resolver.h"
 
+// Private package receipt ABI shared with the D3D11 and D3D12 producers.
+extern "C" uint64_t rsf_unity_package_sr_ring_begin(void);
+extern "C" void rsf_unity_package_sr_ring_retired(uint64_t epoch);
+extern "C" void rsf_unity_package_sr_recording(void* commands, uint64_t epoch, uint32_t slot,
+    uint64_t recording, uint64_t retired_through);
+
 static_assert(sizeof(rsf_unity_vulkan_present_source) == 24, "vulkan_state.rs PresentSource");
 static_assert(sizeof(rsf_unity_vulkan_image_handles) == 24);
 static_assert(sizeof(rsf_unity_vulkan_device_handles) == 64);
 static_assert(offsetof(rsf_unity_vulkan_device_handles, vk_device) == 24);
 static_assert(offsetof(rsf_unity_vulkan_device_handles, vk_queue_family) == 56);
-static_assert(sizeof(rsf_unity_vulkan_device_ops) == 12 * sizeof(void*));
+static_assert(sizeof(rsf_unity_vulkan_device_ops) == 14 * sizeof(void*));
 static_assert(sizeof(rsf_unity_vulkan_surface_ops) == 5 * sizeof(void*));
 static_assert(sizeof(rsf_unity_vulkan_command_handles) == 40);
 static_assert(offsetof(rsf_unity_vulkan_command_handles, commands) == 8);
@@ -311,13 +317,13 @@ constexpr rsf_unity_vulkan_device_ops device_ops{
     create_command_slot, destroy_command_slot, create_shared_image, destroy_image,
     command_fence_ready, shared_completed,
     [](const rsf_unity_vulkan_device_handles* shared) noexcept { return drain(DeviceView{*shared}); },
-    report_created,
+    report_created, rsf_unity_package_sr_ring_begin, rsf_unity_package_sr_ring_retired,
 };
 uint32_t initialize(DeviceView& graphics, const rsf_game_host_services* services = nullptr)
 {
     return unity ? rsf_unity_vulkan_initialize(services, &device_ops, &graphics.handles) : RSF_UNITY_VULKAN_DEVICE_FAILED;
 }
-bool begin(const DeviceView& graphics, const SlotView& slot)
+bool begin(const DeviceView& graphics, const SlotView& slot, uint32_t ring)
 {
     const VkFence complete = slot.complete();
     if (vkWaitForFences(graphics.vk_device(), 1, &complete, VK_TRUE, 10000000000ull) != VK_SUCCESS) return false;
@@ -329,7 +335,10 @@ bool begin(const DeviceView& graphics, const SlotView& slot)
     }
     if (FAILED(slot.allocator()->Reset()) || FAILED(slot.commands()->Reset(slot.allocator(), nullptr)))
         return false;
-    rsf_unity_vulkan_begin_recording();
+    uint64_t epoch = 0;
+    const auto serial = rsf_unity_vulkan_begin_recording(ring, &epoch);
+    if (!epoch || !serial) return false;
+    rsf_unity_package_sr_recording(slot.commands(), epoch, ring, serial, serial - 1);
     return true;
 }
 void image_barrier(VkCommandBuffer commands, VkImage image, VkImageLayout before, VkImageLayout after,
@@ -436,7 +445,7 @@ void execute_admitted(const rsf_unity_vulkan_frame& frame, uint32_t kind, uint32
     }
     const uint32_t ring = rsf_unity_interop_slot(nullptr);
     SlotView slot;
-    if (!rsf_unity_vulkan_command_slot(ring, &slot.handles) || !begin(graphics, slot)) {
+    if (!rsf_unity_vulkan_command_slot(ring, &slot.handles) || !begin(graphics, slot, ring)) {
         stop("Unity Vulkan command slot could not be reused; the bridge stopped.");
         return;
     }
@@ -577,7 +586,7 @@ VkResult present_admitted(PFN_vkQueuePresentKHR original_present, VkQueue vk_que
     }
     const uint32_t ring = rsf_unity_interop_slot(nullptr);
     SlotView slot;
-    if (!rsf_unity_vulkan_command_slot(ring, &slot.handles) || !begin(graphics, slot)) {
+    if (!rsf_unity_vulkan_command_slot(ring, &slot.handles) || !begin(graphics, slot, ring)) {
         stop("Unity Vulkan command slot could not be reused; the bridge stopped.");
         return unchanged();
     }

@@ -216,15 +216,19 @@ struct DeviceOps {
     shared_completed: unsafe extern "C" fn(*const DeviceHandles) -> u64,
     drain_images: unsafe extern "C" fn(*const DeviceHandles) -> bool,
     report_created: unsafe extern "C" fn(*const rsf_game_host_services),
+    ring_begin: extern "C" fn() -> u64,
+    ring_retired: extern "C" fn(u64),
 }
 
-const _: () = assert!(size_of::<DeviceOps>() == 12 * size_of::<usize>());
+const _: () = assert!(size_of::<DeviceOps>() == 14 * size_of::<usize>());
 
 struct SharedDevice {
     handles: DeviceHandles,
     ops: DeviceOps,
     pool: u64,
     slots: [CommandSlot; SLOTS],
+    epoch: u64,
+    recordings: [u64; SLOTS],
 }
 
 impl SharedDevice {
@@ -234,6 +238,8 @@ impl SharedDevice {
             ops,
             pool: 0,
             slots: [CommandSlot::EMPTY; SLOTS],
+            epoch: 0,
+            recordings: [0; SLOTS],
         }
     }
 
@@ -625,6 +631,7 @@ unsafe extern "C" fn rsf_unity_vulkan_initialize(
         lock().creating = false;
         return DEVICE_FAILED;
     }
+    device.epoch = (ops.ring_begin)();
     unsafe { (ops.report_created)(services) };
     let handles = device.handles;
     {
@@ -788,9 +795,23 @@ extern "C" fn rsf_unity_vulkan_record_image(index: u32) -> bool {
     lock().record_image(index as usize)
 }
 
+/// Called after the Vulkan slot fence completed and all command buffers and lists reset.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_begin_recording() {
-    lock().recorded_images = 0;
+unsafe extern "C" fn rsf_unity_vulkan_begin_recording(index: u32, epoch: *mut u64) -> u64 {
+    let mut state = lock();
+    state.recorded_images = 0;
+    let Some(device) = &mut state.device else {
+        return 0;
+    };
+    let Some(serial) = device.recordings.get_mut(index as usize) else {
+        return 0;
+    };
+    let Some(next) = serial.checked_add(1) else {
+        return 0;
+    };
+    *serial = next;
+    unsafe { epoch.write(device.epoch) };
+    next
 }
 
 #[unsafe(no_mangle)]
@@ -863,6 +884,9 @@ fn release_closed() {
         )
     };
     if let Some(device) = &mut device {
+        if device.epoch != 0 {
+            (device.ops.ring_retired)(device.epoch);
+        }
         for image in images.into_iter().flatten() {
             unsafe { (device.ops.destroy_image)(&device.handles, &image.handles) };
         }
@@ -1311,6 +1335,8 @@ mod tests {
             shared_completed: unused_pool,
             drain_images: drain,
             report_created: unused_report,
+            ring_begin: unused_ring_begin,
+            ring_retired: unused_ring_retired,
         };
         unsafe extern "C" fn unused_create(
             _: *const rsf_game_host_services,
@@ -1335,6 +1361,10 @@ mod tests {
             false
         }
         unsafe extern "C" fn unused_report(_: *const rsf_game_host_services) {}
+        extern "C" fn unused_ring_begin() -> u64 {
+            0
+        }
+        extern "C" fn unused_ring_retired(_: u64) {}
 
         let state = Mutex::new(State {
             device: Some(SharedDevice::new(ops)),

@@ -96,6 +96,8 @@ typedef struct rsf_unity_vulkan_device_ops {
     uint64_t (*shared_completed)(const rsf_unity_vulkan_device_handles*);
     bool (*drain_images)(const rsf_unity_vulkan_device_handles*);
     void (*report_created)(const rsf_game_host_services*);
+    uint64_t (*ring_begin)(void);
+    void (*ring_retired)(uint64_t epoch);
 } rsf_unity_vulkan_device_ops;
 /* The caller holds an entry or running event. READY lends a view under that hold. Creation is
    exclusive. A failed creation rolls back before making a new claim possible. */
@@ -108,7 +110,7 @@ bool rsf_unity_vulkan_prepare_image(uint32_t index, uint32_t width, uint32_t hei
     uint32_t format, uint32_t dx_format, rsf_unity_vulkan_image_handles* view);
 /* Returns whether the recorded transition can start in GENERAL. */
 bool rsf_unity_vulkan_record_image(uint32_t index);
-void rsf_unity_vulkan_begin_recording(void);
+uint64_t rsf_unity_vulkan_begin_recording(uint32_t index, uint64_t* epoch);
 /* Called only after the native queue accepted the upload or the fenced hand-back. */
 void rsf_unity_vulkan_upload_submitted(void);
 void rsf_unity_vulkan_handback_fenced(void);
