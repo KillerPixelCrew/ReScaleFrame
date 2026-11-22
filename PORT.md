@@ -1498,7 +1498,7 @@ Port SDK loading, DLSS SR and FG, capture and session lifetime across the Runtim
 **Fixtures (5)**
 
 - [ ] [runtime/vulkan/streamline/sdk-fixes/dispatch-tests.cpp](runtime/vulkan/streamline/sdk-fixes/dispatch-tests.cpp)
-- [ ] [tests/native_dlss_vulkan.cpp](tests/native_dlss_vulkan.cpp)
+- [x] [tests/native_dlss_vulkan.cpp](tests/native_dlss_vulkan.cpp)
 - [ ] [tests/native_fg_dlss_vulkan.cpp](tests/native_fg_dlss_vulkan.cpp)
 - [ ] [tests/streamline_selected_device.cpp](tests/streamline_selected_device.cpp)
 - [ ] [tests/streamline_vulkan_dispatch.cpp](tests/streamline_vulkan_dispatch.cpp)
@@ -2020,8 +2020,8 @@ Port motion draw hooks, target ownership and foliage history. Use the draw and d
 
 - [ ] [games/anomaly/src/motion_bridge.cpp](games/anomaly/src/motion_bridge.cpp)
 - [ ] [games/anomaly/src/motion_constants.h](games/anomaly/src/motion_constants.h)
-- [ ] [games/anomaly/src/motion_d3d11.cpp](games/anomaly/src/motion_d3d11.cpp)
-- [ ] [games/anomaly/src/motion_d3d11.h](games/anomaly/src/motion_d3d11.h)
+- [x] [games/anomaly/src/motion_d3d11.cpp](games/anomaly/src/motion_d3d11.cpp)
+- [x] [games/anomaly/src/motion_d3d11.h](games/anomaly/src/motion_d3d11.h)
 - [x] [games/anomaly/src/motion_device_platform.h](games/anomaly/src/motion_device_platform.h)
 - [ ] [games/anomaly/src/motion_foliage.cpp](games/anomaly/src/motion_foliage.cpp)
 - [ ] [games/anomaly/src/motion_foliage.h](games/anomaly/src/motion_foliage.h)
@@ -2084,11 +2084,11 @@ Port shader loading, reflection and interception. Track shader-language assets s
 
 **Port files (9)**
 
-- [ ] [games/anomaly/src/engine_shader_includes.cpp](games/anomaly/src/engine_shader_includes.cpp) (guarded native engine includes)
+- [x] [games/anomaly/src/engine_shader_includes.cpp](games/anomaly/src/engine_shader_includes.cpp) (guarded native engine includes)
 - [x] [games/anomaly/src/runtime_shaders.cpp](games/anomaly/src/runtime_shaders.cpp)
 - [x] [games/anomaly/src/runtime_shaders.h](games/anomaly/src/runtime_shaders.h)
-- [ ] [games/anomaly/src/shader_d3d.cpp](games/anomaly/src/shader_d3d.cpp)
-- [ ] [games/anomaly/src/shader_d3d.h](games/anomaly/src/shader_d3d.h)
+- [x] [games/anomaly/src/shader_d3d.cpp](games/anomaly/src/shader_d3d.cpp)
+- [x] [games/anomaly/src/shader_d3d.h](games/anomaly/src/shader_d3d.h)
 - [ ] [games/anomaly/src/shader_loader.cpp](games/anomaly/src/shader_loader.cpp)
 - [ ] [games/anomaly/src/shader_loader.h](games/anomaly/src/shader_loader.h)
 - [ ] [games/anomaly/src/shader_loader_platform.h](games/anomaly/src/shader_loader_platform.h)
