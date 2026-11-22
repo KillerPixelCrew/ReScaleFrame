@@ -31,6 +31,7 @@
 // keeps native forwarders and the leaves: the device, queue and fence references,
 // the Runtime SR, FG, presentation, CPU event and latency calls, capture, DXGI, Win32 window
 // calls and the linked Runtime. The Vulkan leaves in the table below live in vulkan.cpp.
+static_assert(sizeof(rsf_cpu_session_service) == 32 && offsetof(rsf_cpu_session_service, execution) == 24);
 static_assert(sizeof(rsf_sharpening_options) == 56);
 static_assert(sizeof(rsf_godot_settings) == 100 && offsetof(rsf_godot_settings, sharpening) == 44);
 static_assert(sizeof(rsf_godot_status) == 256 && offsetof(rsf_godot_status, sr_result) == 40 &&
@@ -52,9 +53,9 @@ static_assert(offsetof(rsf_godot_platform, vulkan_locked) == 88 &&
     offsetof(rsf_godot_platform, sr_evaluate) == 256 && offsetof(rsf_godot_platform, d3d12_release) == 320 &&
     offsetof(rsf_godot_platform, vulkan_presenter_drain) == 328 && offsetof(rsf_godot_platform, vulkan_sr_create) == 360 &&
     offsetof(rsf_godot_platform, vulkan_sr_evaluate) == 400 && offsetof(rsf_godot_platform, vulkan_sr_dump_result) == 432 &&
-    offsetof(rsf_godot_platform, window_identity) == 440 && offsetof(rsf_godot_platform, cpu_event) == 480 &&
-    offsetof(rsf_godot_platform, vulkan_present_marker) == 512 &&
-    offsetof(rsf_godot_platform, sr_select_backend) == 520 && sizeof(rsf_godot_platform) == 536);
+    offsetof(rsf_godot_platform, window_identity) == 440 && offsetof(rsf_godot_platform, d3d12_cpu_service) == 480 &&
+    offsetof(rsf_godot_platform, vulkan_present_marker) == 496 &&
+    offsetof(rsf_godot_platform, sr_select_backend) == 504 && sizeof(rsf_godot_platform) == 520);
 static_assert(sizeof(rsf_godot_window_identity) == 144 && offsetof(rsf_godot_window_identity, class_name) == 16);
 static_assert(sizeof(rsf_game_cpu_event) == 64 && RSF_GAME_CPU_FRAME_BEGIN == 0 && RSF_GAME_CPU_INPUT_EVENT == 5 &&
     RSF_GAME_CPU_EVENT_VERSION == 1 && RSF_GAME_CPU_INPUT_KEYED == 1 && RSF_GAME_CPU_WINDOW_MESSAGE == 4,
@@ -185,10 +186,6 @@ void leaf_query_counter(uint64_t* counter, uint64_t* frequency)
     QueryPerformanceCounter(&now); QueryPerformanceFrequency(&rate);
     *counter = static_cast<uint64_t>(now.QuadPart); *frequency = static_cast<uint64_t>(rate.QuadPart);
 }
-void leaf_cpu_event(const rsf_game_cpu_event* event) { rsf_fg12_cpu(event); }
-void leaf_vulkan_cpu_event(const rsf_game_cpu_event* event) { rsf_latencyvk_cpu(event); }
-int32_t leaf_latency_ping(void* window) { return rsf_native_latency_ping(window); }
-int32_t leaf_vulkan_latency_ping(void* window) { return rsf_latencyvk_ping(window); }
 void leaf_vulkan_present_marker(uint32_t begin) { rsf_latencyvk_present(begin); }
 void leaf_fg_facts(rsf_godot_fg_facts* facts)
 {
@@ -359,8 +356,8 @@ const rsf_godot_platform platform{sizeof(platform), RSF_GODOT_PLATFORM_VERSION, 
     vk::leaf_fsr4_destroy, vk::leaf_sr_create, vk::leaf_fsr4_create, vk::leaf_dlss_preset, vk::leaf_sr_plan,
     vk::leaf_fsr4_plan, vk::leaf_sr_evaluate, vk::leaf_fsr4_evaluate, vk::leaf_sr_fallback, vk::leaf_sr_log,
     vk::leaf_sr_dump_result, leaf_window_identity, leaf_window_procedure_get, leaf_window_procedure_set,
-    leaf_window_forward, leaf_query_counter, leaf_cpu_event, leaf_vulkan_cpu_event, leaf_latency_ping,
-    leaf_vulkan_latency_ping, leaf_vulkan_present_marker, leaf_sr_select_backend, leaf_fg_select_backend};
+    leaf_window_forward, leaf_query_counter, rsf_fg12_cpu_service, rsf_latencyvk_cpu_service,
+    leaf_vulkan_present_marker, leaf_sr_select_backend, leaf_fg_select_backend};
 bool booted() { return rsf_godot_booted() != 0; }
 }
 

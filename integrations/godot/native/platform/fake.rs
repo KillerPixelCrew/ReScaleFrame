@@ -675,6 +675,27 @@ unsafe extern "C" fn vulkan_latency_ping(window: *mut c_void) -> i32 {
     2
 }
 
+pub(crate) static D3D12_CPU: super::CpuService = super::CpuService {
+    struct_size: size_of::<super::CpuService>() as u32,
+    version: super::CPU_SERVICE_VERSION,
+    report: cpu_event,
+    ping: latency_ping,
+    execution: None,
+};
+
+pub(crate) static VK_CPU: super::CpuService = super::CpuService {
+    report: vulkan_cpu_event,
+    ping: vulkan_latency_ping,
+    ..D3D12_CPU
+};
+
+unsafe extern "C" fn d3d12_cpu_service() -> *const super::CpuService {
+    &D3D12_CPU
+}
+unsafe extern "C" fn vulkan_cpu_service() -> *const super::CpuService {
+    &VK_CPU
+}
+
 unsafe extern "C" fn vulkan_present_marker(begin: u32) {
     window_call("marker", begin.into());
 }
@@ -756,10 +777,8 @@ pub(crate) static LEAVES: Platform = Platform {
     window_procedure_set,
     window_forward,
     query_counter,
-    cpu_event,
-    vulkan_cpu_event,
-    latency_ping,
-    vulkan_latency_ping,
+    d3d12_cpu_service,
+    vulkan_cpu_service,
     vulkan_present_marker,
     sr_select_backend,
     fg_select_backend,

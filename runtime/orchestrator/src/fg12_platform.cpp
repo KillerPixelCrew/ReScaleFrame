@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <rescaleframe/native_cpu_service.h>
 #include "fg12_platform.h"
 #include "../../backends/common/frame_capture12.h"
 #include <dxgi1_4.h>
@@ -306,4 +307,11 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg12_capture_outputs(const cha
 {
     bind_platform();
     return rsf_core_fg12_capture_outputs(directory);
+}
+
+extern "C" const rsf_cpu_session_service* rsf_fg12_cpu_service()
+{
+    static constexpr rsf_cpu_session_service service{sizeof(service), RSF_CPU_SESSION_SERVICE_VERSION,
+        rsf_fg12_cpu, rsf_native_latency_ping, nullptr};
+    return &service;
 }

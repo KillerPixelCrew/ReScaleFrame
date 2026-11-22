@@ -15,7 +15,7 @@ use rsf_game_sys::{rsf_game_cpu_event, rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::{c_char, c_int, c_void};
 use std::sync::OnceLock;
 
-pub(crate) const PLATFORM_VERSION: u32 = 7;
+pub(crate) const PLATFORM_VERSION: u32 = 8;
 /// `RSF_GODOT_ABI_VERSION`: setup, status, engine services and the Vulkan packet.
 pub(crate) const ABI_VERSION: u32 = 3;
 /// `RSF_GODOT_SETTINGS_ABI_VERSION`.
@@ -815,17 +815,28 @@ pub(crate) struct Platform {
     pub(crate) window_procedure_set: unsafe extern "C" fn(*mut c_void, isize) -> isize,
     pub(crate) window_forward: unsafe extern "C" fn(isize, *mut c_void, u32, usize, isize) -> isize,
     pub(crate) query_counter: unsafe extern "C" fn(*mut u64, *mut u64),
-    pub(crate) cpu_event: unsafe extern "C" fn(*const rsf_game_cpu_event),
-    pub(crate) vulkan_cpu_event: unsafe extern "C" fn(*const rsf_game_cpu_event),
-    pub(crate) latency_ping: unsafe extern "C" fn(*mut c_void) -> i32,
-    pub(crate) vulkan_latency_ping: unsafe extern "C" fn(*mut c_void) -> i32,
+    pub(crate) d3d12_cpu_service: unsafe extern "C" fn() -> *const CpuService,
+    pub(crate) vulkan_cpu_service: unsafe extern "C" fn() -> *const CpuService,
     pub(crate) vulkan_present_marker: unsafe extern "C" fn(u32),
     pub(crate) sr_select_backend: unsafe extern "C" fn(u32, u32, u32) -> u32,
     pub(crate) fg_select_backend: unsafe extern "C" fn(u32, u32, u32) -> u32,
 }
 
+pub(crate) const CPU_SERVICE_VERSION: u32 = 1;
+
+/// Runtime-owned endpoints in native_cpu_service.h.
+#[repr(C)]
+pub(crate) struct CpuService {
+    pub(crate) struct_size: u32,
+    pub(crate) version: u32,
+    pub(crate) report: unsafe extern "C" fn(*const rsf_game_cpu_event),
+    pub(crate) ping: unsafe extern "C" fn(*mut c_void) -> i32,
+    pub(crate) execution: Option<unsafe extern "C" fn(*const rsf_game_render_pass, u32) -> i32>,
+}
+
 const _: () = {
     use std::mem::{offset_of, size_of};
+    assert!(size_of::<CpuService>() == 32 && offset_of!(CpuService, execution) == 24);
     assert!(size_of::<Sharpening>() == 56);
     assert!(size_of::<Settings>() == 100);
     assert!(offset_of!(Settings, sharpening) == 44);
@@ -902,8 +913,8 @@ const _: () = {
     assert!(size_of::<EffectReadback>() == 24 && offset_of!(EffectReadback, groups_y) == 16);
     assert!(size_of::<WindowIdentity>() == 144);
     assert!(offset_of!(WindowIdentity, class_name) == 16);
-    assert!(size_of::<Platform>() == 536);
-    assert!(offset_of!(Platform, sr_select_backend) == 520);
+    assert!(size_of::<Platform>() == 520);
+    assert!(offset_of!(Platform, sr_select_backend) == 504);
     assert!(offset_of!(Platform, vulkan_locked) == 88);
     assert!(offset_of!(Platform, latency_facts) == 176);
     assert!(offset_of!(Platform, d3d12_bind) == 184);
@@ -914,8 +925,8 @@ const _: () = {
     assert!(offset_of!(Platform, vulkan_sr_evaluate) == 400);
     assert!(offset_of!(Platform, vulkan_sr_dump_result) == 432);
     assert!(offset_of!(Platform, window_identity) == 440);
-    assert!(offset_of!(Platform, cpu_event) == 480);
-    assert!(offset_of!(Platform, vulkan_present_marker) == 512);
+    assert!(offset_of!(Platform, d3d12_cpu_service) == 480);
+    assert!(offset_of!(Platform, vulkan_present_marker) == 496);
 };
 
 #[cfg(test)]
@@ -1318,24 +1329,15 @@ impl Platform {
         (counter, frequency)
     }
 
-    /// `rsf_latencyvk_cpu` for a Vulkan session, otherwise `rsf_fg12_cpu`.
-    pub(crate) fn cpu_event(&self, vulkan: bool, event: &rsf_game_cpu_event) {
-        let leaf = if vulkan {
-            self.vulkan_cpu_event
+    /// The session's Runtime-owned endpoint table. It is immutable and lives as long as the DLL.
+    pub(crate) fn cpu_service(&self, vulkan: bool) -> Option<&'static CpuService> {
+        let entry = if vulkan {
+            self.vulkan_cpu_service
         } else {
-            self.cpu_event
+            self.d3d12_cpu_service
         };
-        unsafe { leaf(event) }
-    }
-
-    /// `rsf_latencyvk_ping` for a Vulkan session, otherwise `rsf_native_latency_ping`.
-    pub(crate) fn latency_ping(&self, vulkan: bool, window: *mut c_void) -> c_int {
-        let leaf = if vulkan {
-            self.vulkan_latency_ping
-        } else {
-            self.latency_ping
-        };
-        unsafe { leaf(window) }
+        // SAFETY: the Runtime returns an immutable process-lived record or null.
+        unsafe { crate::checked(entry(), CPU_SERVICE_VERSION) }
     }
 
     /// `rsf_latencyvk_present`.

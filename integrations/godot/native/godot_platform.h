@@ -19,9 +19,10 @@
    creation call, so the creation contract test links them without runtime.cpp. The compositor
    effect's leaves are another (rsf_godot_effect_leaves, effect.cpp), lent with each callback. */
 #include "api.h"
+#include <rescaleframe/native_cpu_service.h>
 #include <stdint.h>
 
-#define RSF_GODOT_PLATFORM_VERSION 7u
+#define RSF_GODOT_PLATFORM_VERSION 8u
 
 /* Mirror of rsf_native_fg_options without its header. */
 typedef struct rsf_godot_fg_options {
@@ -531,12 +532,9 @@ typedef struct rsf_godot_platform {
         intptr_t lparam);
     /* QueryPerformanceCounter and QueryPerformanceFrequency. */
     void (*query_counter)(uint64_t* counter, uint64_t* frequency);
-    /* rsf_fg12_cpu and rsf_latencyvk_cpu. */
-    void (*cpu_event)(const rsf_game_cpu_event* event);
-    void (*vulkan_cpu_event)(const rsf_game_cpu_event* event);
-    /* rsf_native_latency_ping and rsf_latencyvk_ping of window. */
-    int32_t (*latency_ping)(void* window);
-    int32_t (*vulkan_latency_ping)(void* window);
+    /* Endpoints supplied by the Runtime graphics session at setup. */
+    const rsf_cpu_session_service* (*d3d12_cpu_service)(void);
+    const rsf_cpu_session_service* (*vulkan_cpu_service)(void);
     /* rsf_latencyvk_present. */
     void (*vulkan_present_marker)(uint32_t begin);
     /* Version 6. The Runtime's Auto policy for an adapter and the providers a host can serve (bit n

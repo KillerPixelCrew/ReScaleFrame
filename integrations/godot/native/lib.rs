@@ -104,7 +104,13 @@ extern "C" fn rsfg_reset_history() {
 unsafe extern "C" fn rsf_godot_boot(table: *const Platform, setup: *const Setup) -> c_int {
     // SAFETY: the caller's guarantee.
     match unsafe { (leaves(table), checked(setup, ABI_VERSION)) } {
-        (Some(platform), Some(setup)) => CONTROL.boot(platform, setup),
+        (Some(platform), Some(setup)) => {
+            let result = CONTROL.boot(platform, setup);
+            if result != 0 {
+                CONTROL.window.bind_cpu_service(platform.cpu_service(false));
+            }
+            result
+        }
         _ => 0,
     }
 }
@@ -233,7 +239,12 @@ unsafe extern "C" fn rsfg_present(chain: *mut c_void) {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_godot_d3d12_shutdown(table: *const Platform) -> c_int {
     // SAFETY: the caller's guarantee.
-    unsafe { leaves(table) }.map_or(0, |platform| CONTROL.d3d12.shutdown(&CONTROL, platform))
+    let result =
+        unsafe { leaves(table) }.map_or(0, |platform| CONTROL.d3d12.shutdown(&CONTROL, platform));
+    if result != 0 {
+        CONTROL.window.bind_cpu_service(None);
+    }
+    result
 }
 
 // The Vulkan session (vulkan.rs). The exports below other than boot and shutdown are called by
@@ -251,7 +262,13 @@ extern "C" fn rsf_godot_vk_booted() -> c_int {
 unsafe extern "C" fn rsf_godot_boot_vulkan(table: *const Platform, setup: *const Setup) -> c_int {
     // SAFETY: the caller's guarantee.
     match unsafe { (leaves(table), checked(setup, ABI_VERSION)) } {
-        (Some(platform), Some(setup)) => CONTROL.vulkan.boot(platform, setup),
+        (Some(platform), Some(setup)) => {
+            let result = CONTROL.vulkan.boot(platform, setup);
+            if result != 0 {
+                CONTROL.window.bind_cpu_service(platform.cpu_service(true));
+            }
+            result
+        }
         _ => 0,
     }
 }
@@ -261,7 +278,11 @@ unsafe extern "C" fn rsf_godot_boot_vulkan(table: *const Platform, setup: *const
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_godot_shutdown_vulkan(table: *const Platform) -> c_int {
     // SAFETY: the caller's guarantee.
-    unsafe { leaves(table) }.map_or(0, |platform| CONTROL.vulkan.shutdown(platform))
+    let result = unsafe { leaves(table) }.map_or(0, |platform| CONTROL.vulkan.shutdown(platform));
+    if result != 0 {
+        CONTROL.window.bind_cpu_service(None);
+    }
+    result
 }
 
 /// The view with Auto resolved through the table the boot registered. Without one (no boot was
@@ -500,17 +521,13 @@ unsafe extern "C" fn rsf_godot_accept_window(table: *const Platform, window: *mu
 /// stated size.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsfg_cpu(event: *const rsf_game_cpu_event) {
-    let vulkan = CONTROL.vulkan.booted();
-    if !CONTROL.booted() && !vulkan {
-        return;
-    }
     // SAFETY: the caller's guarantee; the record is read only when its size covers it.
     let event = match unsafe { event.cast::<u32>().as_ref() } {
         Some(&size) if size as usize >= size_of::<rsf_game_cpu_event>() => unsafe { &*event },
         _ => return,
     };
     if let Some(platform) = platform::registered() {
-        CONTROL.window.cpu(platform, vulkan, event);
+        CONTROL.window.cpu(platform, event);
     }
 }
 
@@ -529,11 +546,7 @@ unsafe extern "C" fn rsf_godot_window_release(table: *const Platform) {
 /// Request a PCL ping for the admitted window.
 #[unsafe(no_mangle)]
 extern "C" fn rsfg_request_latency_ping() -> c_int {
-    platform::registered().map_or(0, |platform| {
-        CONTROL
-            .window
-            .latency_ping(platform, CONTROL.vulkan.booted())
-    })
+    CONTROL.window.latency_ping()
 }
 
 /// `rsfg_vk_window`: while the Vulkan session is booted, asks the input window admission and

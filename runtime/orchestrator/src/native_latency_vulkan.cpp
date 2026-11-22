@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <rescaleframe/native_cpu_service.h>
 #include <rescaleframe/native_latency_vulkan.h>
 #include <rescaleframe/native_streamline_vulkan.h>
 #include <rescaleframe/native_cpu.h>
@@ -211,4 +212,11 @@ extern "C" int32_t rsf_latencyvk_wsi_call(rsf_vk_wsi_call callback, void* user) 
 #else
     return callback(user);
 #endif
+}
+
+extern "C" const rsf_cpu_session_service* rsf_latencyvk_cpu_service()
+{
+    static constexpr rsf_cpu_session_service service{sizeof(service), RSF_CPU_SESSION_SERVICE_VERSION,
+        rsf_latencyvk_cpu, rsf_latencyvk_ping, rsf_latencyvk_execution};
+    return &service;
 }

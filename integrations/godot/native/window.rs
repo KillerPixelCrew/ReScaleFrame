@@ -10,22 +10,20 @@
 //!   reports each message it receives as an `INPUT_EVENT` with the message ID and forwards it to
 //!   the procedure it replaced, and its restoration at `rsfg_shutdown` only while it is still the
 //!   window's procedure;
-//! - the backend routing of CPU events and PCL pings (the Vulkan latency owner while the Vulkan
-//!   session is booted, otherwise the D3D12 FG owner, as before) and the Vulkan present-marker
-//!   admission (only the admitted window's Present).
+//! - the Runtime CPU service bound at graphics setup, and window admission for Present.
 //!
 //! `runtime.cpp` keeps the typed Win32 and Runtime calls as leaves. What an input event, a ping
 //! or a present marker means, and any pacing, stays with the Runtime (Rule 3): this owner reports
 //! what the window received and when.
-use crate::platform::{self, Platform};
+use crate::platform::{self, CpuService, Platform};
 use rsf_game_sys::{
     RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_INPUT_EVENT,
     RSF_GAME_CPU_INPUT_KEYED, RSF_GAME_CPU_WINDOW_MESSAGE, rsf_game_cpu_event,
 };
 use std::ffi::{c_int, c_void};
 use std::ptr;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
+use std::sync::{Mutex, RwLock};
 
 const fn wide<const N: usize>(text: &[u8; N]) -> [u16; N] {
     let mut out = [0; N];
@@ -54,14 +52,9 @@ unsafe extern "system" fn procedure(
 ) -> isize {
     let control = &*crate::CONTROL;
     match platform::registered() {
-        Some(platform) => control.window.message(
-            platform,
-            control.vulkan.booted(),
-            window,
-            message,
-            wparam,
-            lparam,
-        ),
+        Some(platform) => control
+            .window
+            .message(platform, window, message, wparam, lparam),
         // Not reached: the procedure is attached only through a registered table.
         None => 0,
     }
@@ -83,6 +76,7 @@ pub(crate) struct Window {
     session: AtomicU64,
     /// The procedure `procedure` replaced; nonzero while it is attached.
     previous: Mutex<Vec<(usize, isize)>>,
+    cpu_service: RwLock<Option<&'static CpuService>>,
 }
 
 impl Window {
@@ -91,7 +85,22 @@ impl Window {
             input: AtomicPtr::new(ptr::null_mut()),
             session: AtomicU64::new(0),
             previous: Mutex::new(Vec::new()),
+            cpu_service: RwLock::new(None),
         }
+    }
+
+    pub(crate) fn bind_cpu_service(&self, service: Option<&'static CpuService>) {
+        *self
+            .cpu_service
+            .write()
+            .unwrap_or_else(|err| err.into_inner()) = service;
+    }
+
+    pub(crate) fn cpu_service(&self) -> Option<&'static CpuService> {
+        *self
+            .cpu_service
+            .read()
+            .unwrap_or_else(|err| err.into_inner())
     }
 
     pub(crate) fn input(&self) -> *mut c_void {
@@ -122,12 +131,16 @@ impl Window {
 
     /// `rsfg_cpu` after its boot and record checks: keeps the session, attaches the procedure at a
     /// frame begin, then reports the event to the session's backend.
-    pub(crate) fn cpu(&self, platform: &Platform, vulkan: bool, event: &rsf_game_cpu_event) {
+    pub(crate) fn cpu(&self, platform: &Platform, event: &rsf_game_cpu_event) {
+        let Some(service) = self.cpu_service() else {
+            return;
+        };
         self.session.store(event.session_id, Ordering::Release);
         if event.stage == RSF_GAME_CPU_FRAME_BEGIN {
             self.attach(platform);
         }
-        platform.cpu_event(vulkan, event);
+        // SAFETY: the event is borrowed for the Runtime report. No routing lock is held.
+        unsafe { (service.report)(event) };
     }
 
     /// Replaces the admitted window's procedure once. A failed replacement leaves nothing
@@ -149,7 +162,6 @@ impl Window {
     pub(crate) fn message(
         &self,
         platform: &Platform,
-        vulkan: bool,
         window: *mut c_void,
         message: u32,
         wparam: usize,
@@ -193,7 +205,10 @@ impl Window {
             event_version: RSF_GAME_CPU_EVENT_VERSION,
             flags: RSF_GAME_CPU_INPUT_KEYED | RSF_GAME_CPU_WINDOW_MESSAGE,
         };
-        platform.cpu_event(vulkan, &event);
+        if let Some(service) = self.cpu_service() {
+            // SAFETY: the event is borrowed for the Runtime report.
+            unsafe { (service.report)(&event) };
+        }
         platform.window_forward(previous, window, message, wparam, lparam)
     }
 
@@ -212,8 +227,11 @@ impl Window {
     }
 
     /// `rsfg_request_latency_ping`: the PCL ping for the admitted window, null when none.
-    pub(crate) fn latency_ping(&self, platform: &Platform, vulkan: bool) -> c_int {
-        platform.latency_ping(vulkan, self.input())
+    pub(crate) fn latency_ping(&self) -> c_int {
+        self.cpu_service().map_or(0, |service| {
+            // SAFETY: the window is an opaque handle, including null for an unbound window.
+            unsafe { (service.ping)(self.input()) }
+        })
     }
 
     /// `rsfg_vk_present_marker`: only the booted Vulkan session's admitted window marks its
