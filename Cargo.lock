@@ -500,6 +500,7 @@ dependencies = [
  "ash",
  "cc",
  "rsf-game-sys",
+ "rsf-runtime-submission",
  "rsf-shader-compiler",
  "windows",
  "windows-sys",

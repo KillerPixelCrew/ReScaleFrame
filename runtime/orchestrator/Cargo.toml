@@ -11,6 +11,7 @@ crate-type = ["staticlib"]
 
 [dependencies]
 rsf-game-sys = { path = "../../sdk/game" }
+rsf-runtime-submission = { path = "../graphics/submission" }
 
 [build-dependencies]
 cc = "1"
@@ -24,6 +25,7 @@ rsf-shader-compiler = { path = "../shader_patch/compiler", default-features = fa
 windows = { version = "0.62.2", default-features = false, features = [
   "Win32_Graphics_Direct3D_Fxc",
   "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Direct3D12",
   "Win32_Graphics_Dxgi_Common",
   "Win32_Graphics_Dxgi",
 ] }

@@ -194,13 +194,16 @@ lease stays on the viewport detour's stack. F03 has source and binding
 checks. Build, fixtures and matched game captures remain open.
 [Render hook transactions](research/rust-fallout4-render-hooks.md#render-transaction-contracts)
 
-Unity's Editor preview now owns its device, queue, swapchain and per-slot
-resources in Rust and requires a fresh drain proof before release. The
-Vulkan resolver owner also publishes the interceptor table, selects
+Unity's Editor preview validates its parent and child before admitting
+rendering. Runtime owns the per-output D3D12 copy, swapchain and fence.
+Its fixture injects a signal refusal after execution and checks that
+retirement preserves the recording. Build, fixture and Editor checks
+remain open. [Editor preview](research/rust-unity-preview-resources.md#runtime-presenter-and-editor-window-replacement)
+
+The Unity Vulkan resolver publishes the interceptor table, selects
 device extensions and resolves the swapchain destroy fallback. The
-saved function slots remain process-wide, and retirement still depends
-on reaching the destroy hook. [Editor preview](research/rust-unity-preview-resources.md) ·
-[Vulkan resolver](research/rust-unity-vulkan-resolver.md)
+saved function slots remain process-wide, and retirement depends on the
+destroy hook. [Vulkan resolver](research/rust-unity-vulkan-resolver.md)
 
 AC7's Rust F9 capture owner now writes the cloud and contact-light
 before-draw rows with the existing query and receipt order. Source

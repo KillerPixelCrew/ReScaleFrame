@@ -31,6 +31,7 @@ mod package_abi;
 mod package_state;
 mod package_views;
 mod plugin_abi;
+#[cfg(windows)]
 mod preview;
 mod runtime_abi;
 mod runtime_config;

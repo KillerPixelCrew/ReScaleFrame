@@ -107,3 +107,65 @@ release callers in `bridge.cpp` and the commit path in `package_state.rs`. rustf
 Cargo metadata and staged whitespace checks were run. Native and Rust compilation and linking,
 Clippy, the new unit tests, the Editor preview in a Unity Editor on D3D11 and D3D12, resize,
 device removal, a refused retirement and Editor shutdown timing need user verification.
+
+## Runtime presenter and Editor window replacement
+
+U05 starts at `8adf010b`, with the checked package retirement and shared COMMON-source
+flag in place. The package still passes the original leased window frame through its
+preview callback. Unity's Rust window owner handles enumeration, sizing and visibility.
+It validates the cached parent and child relationship and the child's lifetime token
+before reusing it. A stale pair clears window admission. A failed coordinate conversion
+or position also clears admission and discards the child. A subsequent region update can
+enumerate the replacement parent, and each child gets a new generation.
+
+Runtime's `d3d12_window_presenter.rs` owns the device, direct queue, swapchain, fence
+and three copy slots per output. The sized/versioned static C interface takes a destination
+token and the existing leased render pass. The Windows implementation calls DXGI and D3D12
+through the pinned Windows bindings. The package's remaining `preview.cpp` links that
+interface to Unity's existing callback and serializes its opaque handle through retirement.
+The graphics callback table and managed exports keep their existing layouts.
+
+A new destination makes the previous token ineligible immediately. The presenter retains
+the old chain until the copy fence proves completion, then releases it and creates the new
+chain. On the same destination it waits for completion before resizing. The queue signal
+follows copy execution, before notifying the shared FG host and calling Present. A refused
+signal preserves the slot and its leased source reference, blocks further use, and prevents
+release. A successful Present to a still-current child permits the Editor to show it. The
+unused preview-local frame counter was removed.
+
+The moved CPU fixtures retain the binding, recording and retirement checks. The signal
+fixture now calls the production present path with a refusing signal leaf and asserts the
+slot index, receipt value, retained source and refused release. The recycled-window fixture
+uses the same HWND with a new generation and checks the old-chain wait, stale-token refusal
+and recovery. Source checks covered the existing package routing and bridge close/commit
+sequence, Windows bindings and C target layout. Rust 1.94.1 formatting, locked offline Cargo
+metadata and Git whitespace were checked. Compilation, fixtures, lint, D3D11/D3D12/Vulkan
+Editor operation, reparenting and device removal remain user verification.
+
+### Integration with the Unity bridge port
+
+The reconciliation starts at `d539c0f6`. Editor window handling stays in
+`games/unity-mono/src/preview.rs` and Runtime's only preview presenter is
+`runtime/orchestrator/src/d3d12_window_presenter.rs`. Each output uses the
+shared `SubmissionRing` from `runtime/graphics/submission`. Runtime checks
+the next completion value before executing a copy, records the slot receipt
+before signalling, and advances the ring only on success. Slot reuse,
+resize and replacement all use the shared timeline. The shared completion
+predicate refuses device removal, and the presenter's fault flag also
+refuses retirement if a submitted copy never received a signal.
+
+`a_fault_keeps_every_reference` enters through production `Graphics::present`,
+refuses the first signal and checks that no Present or ring advance follows.
+The fixture reports a completed fence value anyway and verifies the source
+remains retained and the old drain proof cannot authorize release.
+`a_recycled_window_waits_for_the_old_chain_and_refuses_stale_presents`
+checks a new generation for the same HWND. Pending completion and device
+removal both keep the old chain, and a complete copy allows the replacement.
+
+The private package callback ABI and the U02 bridge close and release
+notifications are unchanged. U04's Vulkan recording receipts and COMMON
+flag, the D3D11 preview flag and Unity's existing routing and
+`unity_sr_d3d12_contract` fixture are unchanged. The reconciliation was
+checked with pinned Rust 1.94.1 formatting, locked offline Windows Cargo
+metadata and staged whitespace. Build, fixture execution, lint and device
+verification remain user-owned.

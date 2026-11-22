@@ -60,14 +60,12 @@ The Rust image records now retain the created graphics handles. Native
 recording borrows them under the presentation lease. A failed import
 cleans up its partial image before the existing Rust record can change.
 
-The Editor preview uses the same Rust submission-ring logic with its own fence and slots
-(`preview.rs`). Rust selects the containing editor window, tracks visibility and admits
-graphics preparation and Present. It also owns the preview's references to the lent device
-and queue, its fence and swapchain, and each slot's allocator, list and source texture, and
-releases them only after a drained proof taken since the last submission. Native leaves keep
-window messages, resource copies and the typed D3D12 and DXGI calls. Failed fence creation
-can be retried, and a failed backbuffer lookup leaves the existing command slot closed. The
-port preserves the source pass identity.
+The Editor preview selects and validates the containing Editor window in `preview.rs`.
+The package lends Runtime a destination token and a source with its D3D12 state. Runtime
+owns the per-output swapchain, copy and submission fence. It reports the Present result so
+the Editor can show the current child. A replacement child gets a new token even if Windows
+recycles its handle. Runtime waits for completion before replacing the old swapchain and
+requires a fresh drain proof before releasing the output.
 
 The Runtime setup behind the loader entry `rsf_unity_start` and `rsf_unity_fg_start`,
 `rsf_unity_sr_start` and `rsf_unity_sr_stop` is Rust as well (`runtime_setup.rs`): the
