@@ -21,7 +21,6 @@ use crate::sys::{
     rsf_fsr4_bridge_frame as BridgeFrame, rsf_fsr4_bridge_info as BridgeInfo,
 };
 use crate::dx12_bridge::{self as dx12, can_signal_done, next_local_completion};
-mod commands;
 mod native;
 use native::Capsule;
 mod sdk;

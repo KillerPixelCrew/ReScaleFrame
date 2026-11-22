@@ -9,15 +9,33 @@
 
 use super::{
     BridgeCreate, BridgeFrame, BridgeInfo, Context, DEVICE, Dispatch, EFFECT, EVENT, FAILED,
-    Handle, LOCAL_FENCE, LegacyFrame, QUEUE, SHARED_FENCE, Session, Texture, Version, commands, dx12,
-    sdk, standalone,
+    Handle, LOCAL_FENCE, LegacyFrame, QUEUE, SHARED_FENCE, Session, Texture, Version, dx12, sdk,
+    standalone,
 };
 use crate::CompatLease as Lease;
 use crate::ffx_abi::{
+    FFX_API_RESOURCE_STATE_COMPUTE_READ, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS,
     PfnFfxCreateContext, PfnFfxDestroyContext, PfnFfxDispatch, PfnFfxQuery, ffxApiHeader,
     ffxContext,
 };
+use crate::ffx_resource;
+use ash::vk;
 use core::ptr;
+use windows::{
+    Win32::{
+        Foundation::{HANDLE, WAIT_OBJECT_0},
+        Graphics::{
+            Direct3D::D3D_FEATURE_LEVEL_12_0,
+            Direct3D12::*,
+            Dxgi::{
+                Common::*, CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_ERROR_NOT_FOUND,
+                IDXGIFactory4,
+            },
+        },
+        System::Threading::{CreateEventW, WaitForSingleObject},
+    },
+    core::{Interface, PCWSTR},
+};
 
 // Function-like macros in the pinned FidelityFX 2.4.0 headers.
 const BACKEND_DX12: u64 = 0x2; // FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12
@@ -117,11 +135,50 @@ impl Capsule {
     /// Vulkan device. Returns zero with its PCI vendor, -5 when no adapter
     /// matches, or an HRESULT.
     pub(super) fn find_adapter(&mut self, luid: u64, vendor: &mut u32) -> i32 {
-        commands::find_adapter(luid, &mut self.factory, &mut self.adapter, vendor)
+        let factory =
+            match unsafe { CreateDXGIFactory2::<IDXGIFactory4>(DXGI_CREATE_FACTORY_FLAGS(0)) } {
+                Ok(factory) => factory,
+                Err(error) => return error.code().0,
+            };
+        self.factory = factory.into_raw();
+        let factory: &IDXGIFactory4 = unsafe { dx12::borrow(&self.factory) };
+        let mut index = 0_u32;
+        loop {
+            let adapter = match unsafe { factory.EnumAdapters1(index) } {
+                Ok(adapter) => adapter,
+                Err(error) if error.code() == DXGI_ERROR_NOT_FOUND => return -5,
+                Err(error) => return error.code().0,
+            };
+            let description = match unsafe { adapter.GetDesc1() } {
+                Ok(description) => description,
+                Err(error) => return error.code().0,
+            };
+            let id = (u64::from(description.AdapterLuid.HighPart as u32) << 32)
+                | u64::from(description.AdapterLuid.LowPart);
+            if id == luid {
+                self.adapter = adapter.into_raw();
+                *vendor = description.VendorId;
+                return 0;
+            }
+            index = index.wrapping_add(1);
+        }
     }
 
     pub(super) fn create_device(&mut self) -> i32 {
-        unsafe { commands::create_device(self.adapter, &mut self.device, &mut self.queue) }
+        let code =
+            unsafe { dx12::create_device(self.adapter, D3D_FEATURE_LEVEL_12_0, &mut self.device) };
+        if code != 0 {
+            return code;
+        }
+        let device: &ID3D12Device = unsafe { dx12::borrow(&self.device) };
+        let queue = D3D12_COMMAND_QUEUE_DESC {
+            Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+            ..Default::default()
+        };
+        dx12::store_interface(
+            unsafe { device.CreateCommandQueue::<ID3D12CommandQueue>(&queue) },
+            &mut self.queue,
+        )
     }
 
     /// Loads the signed upscaler from a full NUL-terminated path and resolves its
@@ -187,14 +244,33 @@ impl Capsule {
     /// Creates the local completion fence, its event (-10 on failure), three
     /// allocators and a closed list. Partial results stay owned by the capsule.
     pub(super) fn create_commands(&mut self) -> i32 {
-        unsafe {
-            commands::create_commands(
-                self.device,
-                &mut self.completion_fence,
-                &mut self.completion_event,
-                &mut self.allocators,
-                &mut self.commands,
-            )
+        let device: &ID3D12Device = unsafe { dx12::borrow(&self.device) };
+        let fence = unsafe { device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) };
+        let code = dx12::store_interface(fence, &mut self.completion_fence);
+        if code != 0 {
+            return code;
+        }
+        let Ok(event) = (unsafe { CreateEventW(None, false, false, PCWSTR::null()) }) else {
+            return -10;
+        };
+        self.completion_event = event.0;
+        let kind = D3D12_COMMAND_LIST_TYPE_DIRECT;
+        for output in &mut self.allocators {
+            let allocator =
+                unsafe { device.CreateCommandAllocator::<ID3D12CommandAllocator>(kind) };
+            let code = dx12::store_interface(allocator, output);
+            if code != 0 {
+                return code;
+            }
+        }
+        let allocator = unsafe { dx12::borrow(&self.allocators[0]) };
+        match dx12::create_list(device, allocator, 0, kind) {
+            Ok(list) => {
+                let result = unsafe { list.Close() };
+                self.commands = list.into_raw();
+                dx12::status(result)
+            }
+            Err(error) => error.code().0,
         }
     }
 
@@ -231,29 +307,55 @@ impl Capsule {
         handle: *mut Handle,
         resource: *mut Handle,
     ) -> i32 {
-        unsafe {
-            commands::shared_image(self.device, width, height, vk_format, writable, handle, resource)
+        let (format, mut flags) = match vk_format {
+            VK_RGBA16_FLOAT => (DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE),
+            VK_RG16_FLOAT => (DXGI_FORMAT_R16G16_FLOAT, D3D12_RESOURCE_FLAG_NONE),
+            VK_R32_FLOAT => (DXGI_FORMAT_R32_FLOAT, D3D12_RESOURCE_FLAG_NONE),
+            VK_D32_FLOAT => (
+                DXGI_FORMAT_D32_FLOAT,
+                D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL,
+            ),
+            _ => return -2,
+        };
+        if writable != 0 {
+            if flags != D3D12_RESOURCE_FLAG_NONE {
+                return -3;
+            }
+            flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        }
+        let device = unsafe { dx12::borrow(&self.device) };
+        match dx12::create_shared_texture(device, width, height, format, flags) {
+            Ok((shared, image)) => {
+                unsafe {
+                    handle.write(shared);
+                    resource.write(image);
+                }
+                0
+            }
+            Err(error) => error.code().0,
         }
     }
 
     /// Creates or reuses the capsule-owned shared fence and exports a new NT handle.
     pub(super) fn create_fence(&mut self, handle: *mut Handle) -> i32 {
-        unsafe { commands::shared_fence(self.device, &mut self.shared_fence, &mut *handle) }
+        unsafe { dx12::create_shared_fence(self.device, &mut self.shared_fence, &mut *handle) }
     }
 
     pub(super) fn completed(&self) -> u64 {
-        unsafe { commands::completed(self.completion_fence) }
+        unsafe { dx12::borrow::<ID3D12Fence>(&self.completion_fence).GetCompletedValue() }
     }
 
     /// Zero when the event fired, an HRESULT when it could not be armed, or -2 on timeout.
     pub(super) fn wait_event(&self, value: u64, milliseconds: u32) -> i32 {
-        unsafe {
-            commands::wait_event(
-                self.completion_fence,
-                self.completion_event,
-                value,
-                milliseconds,
-            )
+        let fence: &ID3D12Fence = unsafe { dx12::borrow(&self.completion_fence) };
+        let event = HANDLE(self.completion_event);
+        if let Err(error) = unsafe { fence.SetEventOnCompletion(value, event) } {
+            return error.code().0;
+        }
+        if unsafe { WaitForSingleObject(event, milliseconds) } == WAIT_OBJECT_0 {
+            0
+        } else {
+            -2
         }
     }
 
@@ -261,23 +363,53 @@ impl Capsule {
         let Some(&allocator) = self.allocators.get(frame.slot as usize) else {
             return FAILED;
         };
-        unsafe {
-            commands::record(
-                self.commands,
-                allocator,
-                frame,
-                &mut self.effect,
-                self.dispatch,
-            )
+        let Some(dispatch) = self.dispatch else {
+            return FAILED;
+        };
+        let list: &ID3D12GraphicsCommandList = unsafe { dx12::borrow(&self.commands) };
+        if let Err(error) = unsafe { dx12::reset_commands(list, allocator) } {
+            return error.code().0;
         }
+        const COMMON: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_COMMON;
+        const READ: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        const WRITE: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        let resources = [
+            (frame.color, READ),
+            (frame.depth, READ),
+            (frame.motion, READ),
+            (frame.output, WRITE),
+        ];
+        for (image, state) in &resources {
+            dx12::transition(list, unsafe { dx12::borrow(image) }, COMMON, *state);
+        }
+
+        let mut desc = sdk::dispatch(frame, self.commands);
+        // FidelityFX owns the DXGI format and resource-description conventions.
+        const COMPUTE_READ: u32 = FFX_API_RESOURCE_STATE_COMPUTE_READ as u32;
+        const UNORDERED_ACCESS: u32 = FFX_API_RESOURCE_STATE_UNORDERED_ACCESS as u32;
+        unsafe {
+            desc.color = ffx_resource::describe(frame.color, COMPUTE_READ);
+            desc.depth = ffx_resource::describe(frame.depth, COMPUTE_READ);
+            desc.motionVectors = ffx_resource::describe(frame.motion, COMPUTE_READ);
+            desc.output = ffx_resource::describe(frame.output, UNORDERED_ACCESS);
+        }
+        let code = unsafe { dispatch(&mut self.effect, &raw const desc.header) } as i32;
+        if code != 0 {
+            let _ = unsafe { list.Close() };
+            return code;
+        }
+        for (image, state) in &resources {
+            dx12::transition(list, unsafe { dx12::borrow(image) }, *state, COMMON);
+        }
+        dx12::status(unsafe { list.Close() })
     }
 
     pub(super) fn wait_shared(&self, value: u64) -> i32 {
-        unsafe { commands::queue_fence(self.queue, self.shared_fence, value, false) }
+        unsafe { dx12::queue_fence(self.queue, self.shared_fence, value, false) }
     }
 
     pub(super) fn execute(&self) {
-        unsafe { commands::execute(self.queue, self.commands) };
+        unsafe { dx12::execute(self.queue, self.commands) };
     }
 
     pub(super) fn signal(&self, value: u64, shared: bool) -> i32 {
@@ -286,7 +418,7 @@ impl Capsule {
         } else {
             self.completion_fence
         };
-        unsafe { commands::queue_fence(self.queue, fence, value, true) }
+        unsafe { dx12::queue_fence(self.queue, fence, value, true) }
     }
 
     /// Destroys the SDK consumer: -1 when the context exists without its destroy export.
@@ -307,9 +439,20 @@ impl Capsule {
     }
 }
 
+// The Vulkan formats a caller can import, as their VkFormat values.
+const VK_RGBA16_FLOAT: u32 = vk::Format::R16G16B16A16_SFLOAT.as_raw() as u32;
+const VK_RG16_FLOAT: u32 = vk::Format::R16G16_SFLOAT.as_raw() as u32;
+const VK_R32_FLOAT: u32 = vk::Format::R32_SFLOAT.as_raw() as u32;
+const VK_D32_FLOAT: u32 = vk::Format::D32_SFLOAT.as_raw() as u32;
+
 /// Describes a caller's DX12 image for frame admission.
 pub(super) fn describe(image: Handle) -> Texture {
-    unsafe { commands::describe(image) }
+    let desc = unsafe { dx12::borrow::<ID3D12Resource>(&image).GetDesc() };
+    Texture {
+        width: desc.Width,
+        height: desc.Height,
+        format: desc.Format.0 as u32,
+    }
 }
 
 /// Checks the Vulkan adapter vendor required by this bridge. The check is
@@ -414,7 +557,7 @@ unsafe extern "C" fn rsf_vk_fsr4_create_shared_image(
 /// wait, so Vulkan and DX12 users must already be complete.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_vk_fsr4_release_image(resource: Handle) {
-    unsafe { commands::release_image(resource) };
+    unsafe { dx12::release_image(resource) };
 }
 
 /// Creates or reuses the bridge-owned shared fence and exports a new NT handle
