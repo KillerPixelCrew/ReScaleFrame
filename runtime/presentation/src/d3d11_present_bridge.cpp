@@ -13,7 +13,6 @@
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 #include <MinHook.h>
-#include <atomic>
 #include <cstddef>
 #include <cstdio>
 #include <memory>
@@ -57,7 +56,18 @@ static_assert(RSF_FG_BACKEND_DLSS == 1 && RSF_FG_BACKEND_FSR3 == 3 && RSF_FG_BAC
     RSF_LATENCY_INPUT_SAMPLE == 6 && RSF_UI_MODE_NONE == 1);
 
 extern "C" {
-int32_t rsf_d3d11p_facade_query_interface(void*, const IID*, void**);
+struct rsf_d3d11p_facade_state_ops {
+    void (*describe)(void*, DXGI_SWAP_CHAIN_DESC*);
+    void* (*parent)(void*);
+    void* (*device)(void*);
+    void (*destroy)(void*);
+};
+static_assert(sizeof(rsf_d3d11p_facade_state_ops) == 4 * sizeof(void*));
+void* rsf_d3d11p_facade_create(rsf_d3d11p_chain*, void*, const rsf_d3d11p_facade_state_ops*);
+void* rsf_d3d11p_facade_state(void*);
+rsf_d3d11p_chain* rsf_d3d11p_facade_chain(void*);
+uint32_t rsf_d3d11p_facade_release(void*);
+int32_t rsf_d3d11p_facade_color_space(void*, uint32_t);
 int32_t rsf_d3d11p_facade_present1(rsf_d3d11p_chain*, uint32_t, uint32_t, const DXGI_PRESENT_PARAMETERS*);
 int32_t rsf_d3d11p_facade_resize1(rsf_d3d11p_chain*, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
     const uint32_t*, IUnknown* const*);
@@ -80,7 +90,6 @@ CreateHwnd original_hwnd = nullptr;
 
 const rsf_d3d11_present_setup& settings() { return *rsf_core_d3d11p_settings(); }
 void log(const char* message) { if (settings().log) settings().log(settings().user, message); }
-bool switching() { return settings().runtime_switching != 0; }
 bool same_identity(IUnknown* left, IUnknown* right) {
     if (!left || !right) return false;
     ComPtr<IUnknown> a,b;
@@ -88,23 +97,7 @@ bool same_identity(IUnknown* left, IUnknown* right) {
         SUCCEEDED(right->QueryInterface(IID_PPV_ARGS(&b))) && a.Get() == b.Get();
 }
 
-class PhysicalLease {
-    const rsf_d3d11p_physical_lease* lease = nullptr;
-    void* physical = nullptr;
-    HRESULT result;
-public:
-    explicit PhysicalLease(rsf_d3d11p_chain* chain, bool initialize = false)
-        : result(rsf_core_d3d11p_acquire_physical(chain, initialize ? 1u : 0u, &lease, &physical)) {}
-    ~PhysicalLease() { rsf_core_d3d11p_release_physical(lease); }
-    PhysicalLease(const PhysicalLease&) = delete;
-    PhysicalLease& operator=(const PhysicalLease&) = delete;
-    IDXGISwapChain4* get() const { return static_cast<IDXGISwapChain4*>(physical); }
-    HRESULT status() const { return result; }
-};
-
-struct Bridge final : public IDXGISwapChain4 {
-    std::atomic<ULONG> references{1};
-    rsf_d3d11p_chain* chain;
+struct BridgeState {
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext4> context;
     ComPtr<IDXGIAdapter> adapter;
@@ -120,13 +113,6 @@ struct Bridge final : public IDXGISwapChain4 {
     // where these members were destroyed.
     DXGI_SWAP_CHAIN_DESC description{};
 
-    explicit Bridge(rsf_d3d11p_chain* owner) : chain(owner) {}
-    ~Bridge() { rsf_core_d3d11p_chain_destroy(chain); }
-
-    template<class Call> HRESULT query_physical(Call call) {
-        const PhysicalLease lease(chain, true);
-        return lease.get() ? call(lease.get()) : lease.status();
-    }
     // Streamline's proxy queue takes the proxy list; any other provider queue takes the native
     // list behind it. Null when the host cannot unwrap the list.
     void* provider_list(void* queue, ID3D12GraphicsCommandList* list) {
@@ -140,159 +126,30 @@ struct Bridge final : public IDXGISwapChain4 {
             s.log, s.user, RSF_SL_PROFILE_DLSS_FG, 1};
     }
 
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
-        return rsf_d3d11p_facade_query_interface(static_cast<IDXGISwapChain4*>(this), &iid, out);
-    }
-    ULONG STDMETHODCALLTYPE AddRef() override { return ++references; }
-    ULONG STDMETHODCALLTYPE Release() override {
-        const volatile ULONG result = release_owned(); return result;
-    }
-    __declspec(noinline) ULONG release_owned() {
-        const auto value = --references; if (!value) delete this; return value;
-    }
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID key, UINT bytes, const void* data) override { return query_physical([&](IDXGISwapChain4* c) { return c->SetPrivateData(key, bytes, data); }); }
-    HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID key, const IUnknown* data) override { return query_physical([&](IDXGISwapChain4* c) { return c->SetPrivateDataInterface(key, data); }); }
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID key, UINT* bytes, void* data) override { return query_physical([&](IDXGISwapChain4* c) { return c->GetPrivateData(key, bytes, data); }); }
-    HRESULT STDMETHODCALLTYPE GetParent(REFIID iid, void** out) override { return parent->QueryInterface(iid, out); }
-    HRESULT STDMETHODCALLTYPE GetDevice(REFIID iid, void** out) override { return native12 ? direct_device->QueryInterface(iid, out) : device->QueryInterface(iid, out); }
-    HRESULT STDMETHODCALLTYPE Present(UINT sync, UINT flags) override {
-        // Keep a real call/return boundary: external hook installers may follow
-        // an entry tail jump and otherwise detour the private continuation too.
-        const volatile HRESULT result = present_owned(sync, flags);
-        return result;
-    }
-    // A downstream wrapper continuation must not reenter the detoured virtual entry.
-    __declspec(noinline) HRESULT present_owned(UINT sync, UINT flags) { return rsf_core_d3d11p_present(chain, sync, flags); }
-    HRESULT STDMETHODCALLTYPE GetBuffer(UINT index, REFIID iid, void** out) override {
-        return rsf_core_d3d11p_get_buffer(chain, index, &iid, out);
-    }
-    HRESULT STDMETHODCALLTYPE SetFullscreenState(BOOL enabled, IDXGIOutput* target) override {
-        const volatile HRESULT result = set_fullscreen_owned(enabled,target); return result;
-    }
-    __declspec(noinline) HRESULT set_fullscreen_owned(BOOL enabled, IDXGIOutput* target) {
-        return rsf_core_d3d11p_set_fullscreen(chain, enabled, target);
-    }
-    HRESULT STDMETHODCALLTYPE GetFullscreenState(BOOL* enabled, IDXGIOutput** target) override {
-        if (rsf_core_d3d11p_physical_pending(chain)) {
-            if (!enabled && !target) return E_INVALIDARG;
-            if (enabled) *enabled = !description.Windowed;
-            if (target) *target = nullptr;
-            return S_OK;
-        }
-        return query_physical([&](IDXGISwapChain4* c) { return c->GetFullscreenState(enabled, target); });
-    }
-    HRESULT STDMETHODCALLTYPE GetDesc(DXGI_SWAP_CHAIN_DESC* out) override { if (!out) return E_POINTER; if (native12 && !switching()) return query_physical([&](IDXGISwapChain4* c) { return c->GetDesc(out); }); *out = description; return S_OK; }
-    HRESULT STDMETHODCALLTYPE ResizeBuffers(UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags) override {
-        const volatile HRESULT result = resize_buffers_owned(count,width,height,format,flags); return result;
-    }
-    __declspec(noinline) HRESULT resize_buffers_owned(UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags) {
-        return rsf_core_d3d11p_resize(chain, count, width, height, uint32_t(format), flags);
-    }
-    HRESULT STDMETHODCALLTYPE ResizeTarget(const DXGI_MODE_DESC* desc) override {
-        // The physical chain is created lazily; like every other window call, ResizeTarget creates it first instead of
-        // failing with DXGI_ERROR_WAS_STILL_DRAWING when an engine resizes before its first Present.
-        return query_physical([&](IDXGISwapChain4* c) { return c->ResizeTarget(desc); });
-    }
-    HRESULT STDMETHODCALLTYPE GetContainingOutput(IDXGIOutput** out) override { return query_physical([&](IDXGISwapChain4* c) { return c->GetContainingOutput(out); }); }
-    HRESULT STDMETHODCALLTYPE GetFrameStatistics(DXGI_FRAME_STATISTICS* out) override {
-        const auto result = query_physical([&](IDXGISwapChain4* c) { return c->GetFrameStatistics(out); });
-        if (SUCCEEDED(result) && out && native12 && switching()) out->PresentCount = rsf_core_d3d11p_application_presents(chain);
-        return result;
-    }
-    HRESULT STDMETHODCALLTYPE GetLastPresentCount(UINT* out) override {
-        if ((native12 && switching()) || rsf_core_d3d11p_physical_pending(chain)) {
-            if (!out) return E_POINTER; *out = rsf_core_d3d11p_application_presents(chain); return S_OK;
-        }
-        return query_physical([&](IDXGISwapChain4* c) { return c->GetLastPresentCount(out); });
-    }
-    HRESULT STDMETHODCALLTYPE GetDesc1(DXGI_SWAP_CHAIN_DESC1* out) override {
-        if (!out) return E_POINTER;
-        if (!native12 || switching()) {
-            *out = {description.BufferDesc.Width,description.BufferDesc.Height,description.BufferDesc.Format,FALSE,
-                description.SampleDesc,description.BufferUsage,description.BufferCount,DXGI_SCALING_STRETCH,
-                description.SwapEffect,DXGI_ALPHA_MODE_UNSPECIFIED,description.Flags};
-            return S_OK;
-        }
-        return query_physical([&](IDXGISwapChain4* c) { return c->GetDesc1(out); });
-    }
-    HRESULT STDMETHODCALLTYPE GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC* out) override {
-        if (!out) return E_POINTER;
-        if (!native12 || switching()) {
-            *out = {description.BufferDesc.RefreshRate,description.BufferDesc.ScanlineOrdering,
-                description.BufferDesc.Scaling,description.Windowed};
-            return S_OK;
-        }
-        return query_physical([&](IDXGISwapChain4* c) { return c->GetFullscreenDesc(out); });
-    }
-    HRESULT STDMETHODCALLTYPE GetHwnd(HWND* out) override { if (!out) return E_POINTER; *out = description.OutputWindow; return S_OK; }
-    HRESULT STDMETHODCALLTYPE GetCoreWindow(REFIID, void** out) override { if (out) *out = nullptr; return E_NOINTERFACE; }
-    HRESULT STDMETHODCALLTYPE Present1(UINT sync, UINT flags, const DXGI_PRESENT_PARAMETERS* params) override {
-        const volatile HRESULT result = present1_owned(sync,flags,params); return result;
-    }
-    __declspec(noinline) HRESULT present1_owned(UINT sync, UINT flags, const DXGI_PRESENT_PARAMETERS* params) {
-        return rsf_d3d11p_facade_present1(chain, sync, flags, params);
-    }
-    BOOL STDMETHODCALLTYPE IsTemporaryMonoSupported() override {
-        const PhysicalLease lease(chain);
-        return lease.get() ? lease.get()->IsTemporaryMonoSupported() : FALSE;
-    }
-    HRESULT STDMETHODCALLTYPE GetRestrictToOutput(IDXGIOutput** out) override { return query_physical([&](IDXGISwapChain4* c) { return c->GetRestrictToOutput(out); }); }
-    HRESULT STDMETHODCALLTYPE SetBackgroundColor(const DXGI_RGBA* color) override { return query_physical([&](IDXGISwapChain4* c) { return c->SetBackgroundColor(color); }); }
-    HRESULT STDMETHODCALLTYPE GetBackgroundColor(DXGI_RGBA* color) override { return query_physical([&](IDXGISwapChain4* c) { return c->GetBackgroundColor(color); }); }
-    HRESULT STDMETHODCALLTYPE SetRotation(DXGI_MODE_ROTATION value) override { return query_physical([&](IDXGISwapChain4* c) { return c->SetRotation(value); }); }
-    HRESULT STDMETHODCALLTYPE GetRotation(DXGI_MODE_ROTATION* value) override { return query_physical([&](IDXGISwapChain4* c) { return c->GetRotation(value); }); }
-    HRESULT STDMETHODCALLTYPE SetSourceSize(UINT width, UINT height) override { return query_physical([&](IDXGISwapChain4* c) { return c->SetSourceSize(width, height); }); }
-    HRESULT STDMETHODCALLTYPE GetSourceSize(UINT* width, UINT* height) override { return query_physical([&](IDXGISwapChain4* c) { return c->GetSourceSize(width, height); }); }
-    HRESULT STDMETHODCALLTYPE SetMaximumFrameLatency(UINT value) override {
-        if (native12 && switching()) return rsf_core_d3d11p_set_max_latency(chain, value);
-        return native12 ? query_physical([&](IDXGISwapChain4* c) { return c->SetMaximumFrameLatency(value); }) : DXGI_ERROR_INVALID_CALL;
-    }
-    HRESULT STDMETHODCALLTYPE GetMaximumFrameLatency(UINT* out) override {
-        if (!out) return E_POINTER;
-        if (native12 && switching()) return rsf_core_d3d11p_max_latency(chain, out);
-        if (native12) return query_physical([&](IDXGISwapChain4* c) { return c->GetMaximumFrameLatency(out); });
-        *out = 1; return S_OK;
-    }
-    HANDLE STDMETHODCALLTYPE GetFrameLatencyWaitableObject() override {
-        if (native12 && switching()) {
-            // The application owns this duplicate. Provider replacement must never close
-            // the wait object retained by the engine for the facade's entire lifetime.
-            return rsf_core_d3d11p_duplicate_application_ready(chain);
-        }
-        if (!native12) return nullptr;
-        const PhysicalLease lease(chain);
-        return lease.get() ? lease.get()->GetFrameLatencyWaitableObject() : nullptr;
-    }
-    HRESULT STDMETHODCALLTYPE SetMatrixTransform(const DXGI_MATRIX_3X2_F* value) override { return query_physical([&](IDXGISwapChain4* c) { return c->SetMatrixTransform(value); }); }
-    HRESULT STDMETHODCALLTYPE GetMatrixTransform(DXGI_MATRIX_3X2_F* value) override { return query_physical([&](IDXGISwapChain4* c) { return c->GetMatrixTransform(value); }); }
-    UINT STDMETHODCALLTYPE GetCurrentBackBufferIndex() override {
-        // DX11 retains a view of logical buffer zero across Present. Our shared textures
-        // cannot perform DXGI's automatic backing-resource rotation, so keep that source.
-        if (!native12) return 0;
-        if (switching()) return rsf_core_d3d11p_render_index(chain);
-        const PhysicalLease lease(chain);
-        return lease.get() ? lease.get()->GetCurrentBackBufferIndex() : 0;
-    }
-    HRESULT STDMETHODCALLTYPE CheckColorSpaceSupport(DXGI_COLOR_SPACE_TYPE value, UINT* out) override { return query_physical([&](IDXGISwapChain4* c) { return c->CheckColorSpaceSupport(value, out); }); }
-    HRESULT STDMETHODCALLTYPE SetColorSpace1(DXGI_COLOR_SPACE_TYPE value) override {
-        const volatile HRESULT result = set_color_space_owned(value); return result;
-    }
-    __declspec(noinline) HRESULT set_color_space_owned(DXGI_COLOR_SPACE_TYPE value) {
-        return query_physical([&](IDXGISwapChain4* c) { return c->SetColorSpace1(value); });
-    }
-    HRESULT STDMETHODCALLTYPE ResizeBuffers1(UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags, const UINT* masks, IUnknown* const* queues) override {
-        const volatile HRESULT result = resize_buffers1_owned(count,width,height,format,flags,masks,queues); return result;
-    }
-    __declspec(noinline) HRESULT resize_buffers1_owned(UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags, const UINT* masks, IUnknown* const* queues) {
-        return rsf_d3d11p_facade_resize1(chain, count, width, height, uint32_t(format), flags, masks, queues);
-    }
-    HRESULT STDMETHODCALLTYPE SetHDRMetaData(DXGI_HDR_METADATA_TYPE type, UINT bytes, void* data) override { return query_physical([&](IDXGISwapChain4* c) { return c->SetHDRMetaData(type, bytes, data); }); }
 };
 
-Bridge* as_bridge(void* value) { return static_cast<Bridge*>(static_cast<IDXGISwapChain4*>(value)); }
-void* as_object(Bridge* bridge) { return static_cast<IDXGISwapChain4*>(bridge); }
+BridgeState* as_bridge(void* facade) {
+    return static_cast<BridgeState*>(rsf_d3d11p_facade_state(facade));
+}
 
-// Leaves. Each one is a native step on one facade; none calls back into the Rust owner.
+const rsf_d3d11p_facade_state_ops facade_state_ops{
+    [](void* state, DXGI_SWAP_CHAIN_DESC* out) noexcept {
+        *out = static_cast<const BridgeState*>(state)->description;
+    },
+    [](void* state) noexcept -> void* {
+        return static_cast<const BridgeState*>(state)->parent.Get();
+    },
+    [](void* state) noexcept -> void* {
+        const auto& bridge = *static_cast<const BridgeState*>(state);
+        return bridge.native12 ? static_cast<void*>(bridge.direct_device.Get())
+                               : static_cast<void*>(bridge.device.Get());
+    },
+    [](void* state) noexcept {
+        delete static_cast<BridgeState*>(state);
+    },
+};
+
+// Native device, provider and factory steps for the backing state.
 namespace leaf {
 const rsf_generation_provider* provider_table(uint32_t family) {
     switch (family) {
@@ -328,11 +185,13 @@ int32_t host_present_common(void* host, void* chain, uint32_t sync, uint32_t fla
 }
 
 void* bridge_new(rsf_d3d11p_chain* chain) {
-    auto* bridge = new(std::nothrow) Bridge(chain);
-    return bridge ? as_object(bridge) : nullptr;
+    auto* state = new(std::nothrow) BridgeState;
+    if (!state) return nullptr;
+    auto* facade = rsf_d3d11p_facade_create(chain, state, &facade_state_ops);
+    if (!facade) delete state;
+    return facade;
 }
-void bridge_release_owned(void* b) { as_bridge(b)->release_owned(); }
-rsf_d3d11p_chain* bridge_chain(void* b) { return as_bridge(b)->chain; }
+void bridge_release_owned(void* facade) { rsf_d3d11p_facade_release(facade); }
 void facts(void* b, rsf_d3d11p_facts* out) {
     const auto& self = *as_bridge(b); const auto& d = self.description;
     *out = {d.OutputWindow, d.BufferDesc.Width, d.BufferDesc.Height, uint32_t(d.BufferDesc.Format), d.BufferCount,
@@ -685,7 +544,7 @@ const rsf_d3d11p_platform platform{
     .host_input = leaf::host_input, .host_abort = leaf::host_abort, .host_reflex_off = leaf::host_reflex_off,
     .host_generation_load = leaf::host_generation_load, .host_present_common = leaf::host_present_common,
     .bridge_new = leaf::bridge_new, .bridge_release_owned = leaf::bridge_release_owned,
-    .bridge_chain = leaf::bridge_chain, .facts = leaf::facts,
+    .bridge_chain = rsf_d3d11p_facade_chain, .facts = leaf::facts,
     .init_source = leaf::init_source, .owning_adapter = leaf::owning_adapter, .native_device = leaf::native_device,
     .adopt_host = leaf::adopt_host, .d3d11_device = leaf::d3d11_device, .create_host = leaf::create_host,
     .host = leaf::host, .resolve_graphics = leaf::resolve_graphics, .tearing_supported = leaf::tearing_supported,
@@ -832,32 +691,27 @@ extern "C" int rsf_d3d11_present_dispatch_owned(void* receiver, uint32_t sync, u
     return int(request.handled);
 }
 namespace {
-uint32_t dispatch_release_owned(void* receiver) {
-    return as_bridge(receiver)->release_owned();
-}
-
 int32_t dispatch_invoke_owned(rsf_d3d11_chain_dispatch* request) try {
-    auto* bridge = as_bridge(request->receiver);
+    auto* chain = rsf_d3d11p_facade_chain(request->receiver);
     const auto& args = request->args;
-    // These entry points bypass any detours installed on the public COM vtable.
+    // Call the private continuations directly. The published COM entries may be detoured.
     switch (request->method) {
     case RSF_D3D11_DISPATCH_PRESENT:
-        return bridge->present_owned(args.present.sync_interval, args.present.flags);
+        return rsf_core_d3d11p_present(chain, args.present.sync_interval, args.present.flags);
     case RSF_D3D11_DISPATCH_PRESENT1:
-        return bridge->present1_owned(args.present1.sync_interval, args.present1.flags,
+        return rsf_d3d11p_facade_present1(chain, args.present1.sync_interval, args.present1.flags,
             static_cast<const DXGI_PRESENT_PARAMETERS*>(args.present1.parameters));
     case RSF_D3D11_DISPATCH_SET_FULLSCREEN_STATE:
-        return bridge->set_fullscreen_owned(BOOL(args.fullscreen.fullscreen),
-            static_cast<IDXGIOutput*>(args.fullscreen.target));
+        return rsf_core_d3d11p_set_fullscreen(chain, int32_t(args.fullscreen.fullscreen), args.fullscreen.target);
     case RSF_D3D11_DISPATCH_RESIZE_BUFFERS:
-        return bridge->resize_buffers_owned(args.resize_buffers.buffer_count,
-            args.resize_buffers.width, args.resize_buffers.height, DXGI_FORMAT(args.resize_buffers.format),
+        return rsf_core_d3d11p_resize(chain, args.resize_buffers.buffer_count,
+            args.resize_buffers.width, args.resize_buffers.height, args.resize_buffers.format,
             args.resize_buffers.flags);
     case RSF_D3D11_DISPATCH_SET_COLOR_SPACE1:
-        return bridge->set_color_space_owned(DXGI_COLOR_SPACE_TYPE(args.color_space.color_space));
+        return rsf_d3d11p_facade_color_space(request->receiver, args.color_space.color_space);
     case RSF_D3D11_DISPATCH_RESIZE_BUFFERS1:
-        return bridge->resize_buffers1_owned(args.resize_buffers1.buffer_count,
-            args.resize_buffers1.width, args.resize_buffers1.height, DXGI_FORMAT(args.resize_buffers1.format),
+        return rsf_d3d11p_facade_resize1(chain, args.resize_buffers1.buffer_count,
+            args.resize_buffers1.width, args.resize_buffers1.height, args.resize_buffers1.format,
             args.resize_buffers1.flags, args.resize_buffers1.node_masks,
             reinterpret_cast<IUnknown* const*>(args.resize_buffers1.present_queues));
     default: return E_FAIL;
@@ -868,7 +722,7 @@ int32_t dispatch_invoke_owned(rsf_d3d11_chain_dispatch* request) try {
 } // namespace
 
 extern "C" void rsf_d3d11_chain_dispatch_owned(rsf_d3d11_chain_dispatch* request) {
-    rsf_core_d3d11p_dispatch_owned(request, dispatch_release_owned, dispatch_invoke_owned);
+    rsf_core_d3d11p_dispatch_owned(request, rsf_d3d11p_facade_release, dispatch_invoke_owned);
 }
 extern "C" int rsf_d3d11_present_has_owner() { return rsf_core_d3d11p_has_owner(); }
 extern "C" const rsf_generation_provider* rsf_d3d11_present_provider() { return rsf_core_d3d11p_provider(&platform); }

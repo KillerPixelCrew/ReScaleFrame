@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Shared D3D11/native D3D12 presentation bridge owner. The C++ facade in
-// runtime/presentation keeps the IDXGISwapChain4 object and its native calls.
+// The Rust facade owns the IDXGISwapChain4 object. Native graphics and SDK
+// state are supplied by the bridge platform.
 // This module decides admission and
 // publication, provider switching, frame and slot sequencing, accepted Present,
 // fallback, resize and retirement, status and callback order, and latency routing.
@@ -29,6 +30,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, TryLockError};
 
 #[path = "d3d11_present_dxgi.rs"]
 mod dxgi;
+#[path = "d3d11_present_facade.rs"]
+mod facade;
 
 type Platform = rsf_d3d11p_platform;
 type Graphics = rsf_streamline_graphics;
@@ -2624,7 +2627,8 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_chain_destroy(chain: *mut Chain)
 }
 
 macro_rules! facade {
-    ($name:ident($($arg:ident: $ty:ty),*) -> $ret:ty, $missing:expr, |$owner:ident| $body:expr) => {
+    ($(#[$attr:meta])* $name:ident($($arg:ident: $ty:ty),*) -> $ret:ty, $missing:expr, |$owner:ident| $body:expr) => {
+        $(#[$attr])*
         #[unsafe(no_mangle)]
         pub(crate) unsafe extern "C" fn $name(chain: *mut Chain $(, $arg: $ty)*) -> $ret {
             match unsafe { owner(chain) } {
@@ -2691,16 +2695,19 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_get_buffer(
     unsafe { owner.get_buffer(index, iid, out) }
 }
 facade!(
+    #[inline(never)]
     rsf_core_d3d11p_present(sync: u32, flags: u32) -> i32,
     E_FAIL,
     |o| o.present(sync, flags)
 );
 facade!(
+    #[inline(never)]
     rsf_core_d3d11p_set_fullscreen(fullscreen: i32, target: Raw) -> i32,
     E_FAIL,
     |o| o.set_fullscreen(fullscreen, target)
 );
 facade!(
+    #[inline(never)]
     rsf_core_d3d11p_resize(count: u32, width: u32, height: u32, format: u32, flags: u32) -> i32,
     E_FAIL,
     |o| o.resize(count, width, height, format, flags)

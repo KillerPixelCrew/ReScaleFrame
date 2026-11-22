@@ -11,8 +11,8 @@ extern "C" {
    publication, provider switching, frame and slot sequencing, accepted Present,
    fallback, resize and retirement policy, status and callback ordering, and latency
    routing. Leaves perform native DXGI, D3D12, D3D11, Win32 or SDK steps for the
-   C++ facade, which keeps the IDXGISwapChain4 object ABI. Leaves never throw or
-   call the Rust owner directly. Native calls can reenter the facade. The Rust mirror in
+   Rust IDXGISwapChain4 facade, whose native state owns the SDK and graphics
+   pointers. Leaves do not let exceptions reach Rust. Native calls can reenter the facade. The Rust mirror in
    d3d11_present_abi.rs is hand-written; d3d11_present_bridge.cpp asserts the layouts. */
 
 typedef struct rsf_d3d11p_chain rsf_d3d11p_chain;

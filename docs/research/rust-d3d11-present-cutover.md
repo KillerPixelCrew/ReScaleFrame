@@ -99,3 +99,45 @@ Windows x64 records with bindgen 0.72.1. Pinned Rust 1.94.1 formatting
 and Git whitespace checks passed. The user owns native and Rust build,
 test and lint execution, binary exports, real DXGI and vendor checks,
 and the Minecraft GL preview and resize run.
+
+
+
+## Native facade continuation
+
+From `b9e0a480`, the Rust facade now owns the application's
+`IDXGISwapChain4` identity, all 41 typed vtable entries and the reference
+count. A C++ state capsule still owns WRL pointers, Streamline setup
+and factory detours. It supplies the cached native description,
+parent and device, and is destroyed after final Release drains the
+Rust owner. An allocation refusal leaves the unpublished Rust owner
+with the caller that allocated it.
+
+The public Release, Present, Present1, SetFullscreenState, ResizeBuffers,
+SetColorSpace1 and ResizeBuffers1 slots keep a non-inlined call and volatile
+return load. The Steam wrapper can detour those slots while linked
+dispatch reaches the private continuations directly. A guarded C++ dispatch
+entry still scopes native continuation calls. COM calls through the pinned
+Windows vtables use their HRESULT contract. Binary confirmation of the
+detour entry shapes remains open.
+
+Rust forwards queries under the same physical-chain lease and retains the
+non-initializing behavior of the mono-support, latency waitable handle and
+current-buffer-index getters. The provider still owns the physical chain.
+The application facade retains its synthetic descriptions, native queue
+selection and application indices. No shared Present record or OpenGL
+composition callback changed, and the D08 staged-buffer resize remains on
+the same Rust path.
+
+The shared-surface device fixture now links the production C symbols from
+Rust using records regenerated with bindgen 0.72.1. The CTest name and skip
+code are unchanged. Its small C main checks the independent shared-surface
+header and Windows SDK vtable layout. The Rust body checks the D3D11-only
+export, same-adapter D3D12 import, opened extent and format, fence signal
+round trip, bad arguments and null destroy. It skips if adapter identity
+cannot be established. The synthetic facade case checks identity through
+generated DXGI interfaces and one final native-state destruction.
+
+The factory and provider platform declarations and remaining C++ native
+leaves still serve the live backends. The full D3D11 and FG device harnesses
+still exercise AC7 proxy and vendor-backed paths. Native Windows builds,
+device execution and binary inspection remain user-owned.

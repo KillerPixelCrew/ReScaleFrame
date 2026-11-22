@@ -13,8 +13,7 @@ use windows::Win32::Graphics::Dxgi::{
 };
 use windows::core::{BOOL, GUID, IUnknown, Interface};
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_facade_query_interface(
+pub(super) unsafe fn rsf_d3d11p_facade_query_interface(
     facade: Raw,
     iid: *const GUID,
     out: *mut Raw,
@@ -45,7 +44,8 @@ unsafe extern "C" fn rsf_d3d11p_facade_query_interface(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_facade_present1(
+#[inline(never)]
+pub(super) unsafe extern "C" fn rsf_d3d11p_facade_present1(
     chain: *mut Chain,
     sync: u32,
     flags: u32,
@@ -60,7 +60,8 @@ unsafe extern "C" fn rsf_d3d11p_facade_present1(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_facade_resize1(
+#[inline(never)]
+pub(super) unsafe extern "C" fn rsf_d3d11p_facade_resize1(
     chain: *mut Chain,
     count: u32,
     width: u32,
@@ -77,7 +78,7 @@ unsafe extern "C" fn rsf_d3d11p_facade_resize1(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_query_interface(
+pub(super) unsafe extern "C" fn rsf_d3d11p_native_query_interface(
     receiver: Raw,
     iid: *const c_void,
     out: *mut Raw,
