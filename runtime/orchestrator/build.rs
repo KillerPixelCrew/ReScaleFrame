@@ -74,10 +74,7 @@ fn sharpening_payload() {
 }
 
 fn main() {
-    let sources = [
-        "src/plugin_callbacks.cpp",
-        "src/frame_tap_callbacks.cpp",
-    ];
+    let sources = ["src/plugin_callbacks.cpp", "src/frame_tap_callbacks.cpp"];
     for source in sources {
         println!("cargo:rerun-if-changed={source}");
     }
