@@ -1357,7 +1357,7 @@ Port the shared Vulkan SR services, split routes and provider-selection boundari
 **Fixtures (4)**
 
 - [x] [tests/native_sr_split_vulkan.cpp](tests/native_sr_split_vulkan.cpp)
-- [ ] [tests/native_sr_vulkan.cpp](tests/native_sr_vulkan.cpp)
+- [x] [tests/native_sr_vulkan.cpp](tests/native_sr_vulkan.cpp)
 - [x] [tests/native_sr_xess_range_check.py](tests/native_sr_xess_range_check.py) (writes a C++ contract fixture)
 - [x] [tests/native_vulkan_exports.cpp](tests/native_vulkan_exports.cpp)
 
