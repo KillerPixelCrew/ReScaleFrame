@@ -65,7 +65,7 @@ impl Ini {
     }
 
     fn set_stage(&self, value: u32) {
-        let value: Vec<_> = value.to_string().encode_utf16().chain([0]).collect();
+        let value = rsf_game_sys::ffi_util::wide(&value.to_string());
         assert_ne!(
             unsafe {
                 WritePrivateProfileStringW(

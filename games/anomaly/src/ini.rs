@@ -39,7 +39,7 @@ pub(crate) unsafe fn read_text(
 }
 
 pub(crate) unsafe fn write_int(path: PCWSTR, key: PCWSTR, value: i32) -> bool {
-    let value: Vec<u16> = value.to_string().encode_utf16().chain([0]).collect();
+    let value = rsf_game_sys::ffi_util::wide(&value.to_string());
     unsafe { write_text(path, key, value.as_ptr()) }
 }
 

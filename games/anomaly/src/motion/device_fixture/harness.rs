@@ -661,8 +661,7 @@ impl Shaders {
 
 /// The engine's own compiler, or `None` when it is not installed.
 pub(super) fn engine_compiler(name: &str) -> Option<Deployed> {
-    let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
-    Deployed::load(&wide)
+    Deployed::load(&rsf_game_sys::ffi_util::wide(name))
 }
 
 pub(super) fn report(result: Outcome) -> bool {
