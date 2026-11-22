@@ -105,7 +105,7 @@ int32_t capture_flush(void* graphics) { return static_cast<Graphics*>(graphics)-
 
 void transition(void* graphics, void* commands, const rsf_vkfg_barrier* plan) {
     const auto& native = *static_cast<const Graphics*>(graphics);
-    rsf::vkfg::record_barrier(native.barrier, static_cast<VkCommandBuffer>(commands), *plan);
+    rsf_core_vkfg_record_barrier(native.barrier, static_cast<VkCommandBuffer>(commands), plan);
 }
 
 void copy(void* graphics, void* commands, uint64_t src, uint64_t dst, uint32_t width, uint32_t height) {

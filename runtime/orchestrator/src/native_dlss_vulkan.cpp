@@ -179,11 +179,11 @@ const rsf_vkdlss_platform rsf::dlss_vk::leaves{
     [](void* native) { delete static_cast<Native*>(native); },
     rsf_slvk_invoke,
     [](void* native, Image* image, uint32_t width, uint32_t height, uint32_t format, uint32_t usage) {
-        return rsf_core_vkfg_ensure_image_usage(&rsf::vkfg::platform, &static_cast<Native*>(native)->gpu,
+        return rsf_core_vkfg_ensure_image_usage(&rsf::vkfg::platform, static_cast<Native*>(native)->gpu.get(),
             image, width, height, format, usage, 1);
     },
     [](void* native, Image* image) {
-        rsf_core_vkfg_release_image(&rsf::vkfg::platform, &static_cast<Native*>(native)->gpu, image);
+        rsf_core_vkfg_release_image(&rsf::vkfg::platform, static_cast<Native*>(native)->gpu.get(), image);
     },
     set_constants, set_options,
     tag,

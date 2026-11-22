@@ -686,9 +686,11 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_XESS_VK_INCL
     add_test(NAME native_fg_xess_vulkan_contract COMMAND rsf_native_fg_xess_vulkan_test)
 endif()
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
+    rsf_add_rust_static(rsf_vulkan_fg_fixtures_rust rsf_rust_vulkan_fg_fixtures
+        rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures)
     add_executable(rsf_ffx_vulkan_wsi_dispatch_test ffx_vulkan_wsi_dispatch.cpp)
     target_include_directories(rsf_ffx_vulkan_wsi_dispatch_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
-    target_link_libraries(rsf_ffx_vulkan_wsi_dispatch_test PRIVATE rsf_build_options)
+    target_link_libraries(rsf_ffx_vulkan_wsi_dispatch_test PRIVATE rsf_vulkan_fg_fixtures_rust rsf_build_options)
     add_test(NAME ffx_vulkan_wsi_dispatch COMMAND rsf_ffx_vulkan_wsi_dispatch_test)
     if(EXISTS "${RSF_FFX_VK_INCLUDE}/ffx_api/vk/ffx_api_vk.h")
         add_executable(rsf_native_ffx_vulkan_reset_test native_ffx_vulkan_reset.cpp)

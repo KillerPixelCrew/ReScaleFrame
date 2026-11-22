@@ -153,13 +153,9 @@ int32_t initialize_graphics(FfxNative* native, const rsf_srvk_setup* setup,
     const FfxDeviceEntries* entries, rsf_vk_function memory_properties) noexcept try
 {
     const auto& [create, destroy, requirements, allocate_memory, free_memory, bind, barrier, clear, copy] = *entries;
-    native->device = native->gpu.device = static_cast<VkDevice>(setup->device);
-    native->gpu.create_image = reinterpret_cast<PFN_vkCreateImage>(create);
-    native->gpu.destroy_image = reinterpret_cast<PFN_vkDestroyImage>(destroy);
-    native->gpu.requirements = reinterpret_cast<PFN_vkGetImageMemoryRequirements>(requirements);
-    native->gpu.allocate = reinterpret_cast<PFN_vkAllocateMemory>(allocate_memory);
-    native->gpu.free_memory = reinterpret_cast<PFN_vkFreeMemory>(free_memory);
-    native->gpu.bind = reinterpret_cast<PFN_vkBindImageMemory>(bind);
+    native->device = static_cast<VkDevice>(setup->device);
+    const rsf_vk_function images[]{create, destroy, requirements, allocate_memory, free_memory, bind};
+    if (!native->gpu.bind_images(native->device, images)) return RSF_BACKEND_ERROR_INIT_FAILED;
     native->barrier = reinterpret_cast<PFN_vkCmdPipelineBarrier>(barrier);
     native->clear = reinterpret_cast<PFN_vkCmdClearColorImage>(clear);
     native->copy = reinterpret_cast<PFN_vkCmdCopyImage>(copy);
@@ -247,7 +243,7 @@ catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
 void record_barrier(FfxNative* native, void* commands, const rsf_vkfg_barrier* plan) noexcept
 {
-    rsf::vkfg::record_barrier(native->barrier, static_cast<VkCommandBuffer>(commands), *plan);
+    rsf_core_vkfg_record_barrier(native->barrier, static_cast<VkCommandBuffer>(commands), plan);
 }
 
 void clear_color_zero(FfxNative* native, void* commands, uint64_t image, uint32_t layout) noexcept
@@ -260,7 +256,7 @@ void clear_color_zero(FfxNative* native, void* commands, uint64_t image, uint32_
 
 void record_copy(FfxNative* native, void* commands, const rsf_vkfg_image_copy* plan) noexcept
 {
-    rsf::vkfg::record_copy(native->copy, static_cast<VkCommandBuffer>(commands), *plan);
+    rsf_core_vkfg_record_copy(native->copy, static_cast<VkCommandBuffer>(commands), plan);
 }
 
 FfxApiResource resource(const rsf_srvk_image& image, bool output = false) noexcept
@@ -321,7 +317,7 @@ constexpr Platform native{
     {rsf_vk_sdk_system_loader, allocate, [](FfxNative* owner) { delete owner; }, rsf_vkffx_symbol, bind_sdk,
         call_device_proc, initialize_graphics, versions, create_effect,
         effective_version, destroy_effect, plan,
-        [](FfxNative* owner) -> void* { return &owner->gpu; }, &rsf::vkfg::platform,
+        [](FfxNative* owner) -> void* { return owner->gpu.get(); }, &rsf::vkfg::platform,
         [](FfxNative* owner) { return owner->memory.memoryTypeCount; },
         record_barrier, clear_color_zero, dispatch, record_copy,
         [](FfxNative* owner, const rsf_srvk_setup* setup, void* commands, const rsf_srvk_frame* frame, uint64_t output) -> int32_t {

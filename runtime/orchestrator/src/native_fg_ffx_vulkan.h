@@ -20,8 +20,8 @@ rsf_backend_result rsf_ffxgvk_destroy(rsf_ffxgvk*);
 }
 
 /* Private native leaf for the Rust owner in vulkan_ffx_fg.rs. The leaf keeps
-   the FidelityFX module, SDK contexts, the WSI hook bodies and their
-   marshalling, command recording, capture and timing. Rust decides setup and
+   the FidelityFX module, SDK contexts, WSI hook entry points and capture.
+   Rust executes common Vulkan calls and decides setup and
    swapchain admission, the process-wide WSI route, slot reuse, copy transitions,
    completion evidence, presentation admission and retirement order. Status-returning
    steps report rsf_backend_result; WSI steps return the VkResult unchanged.
@@ -88,6 +88,7 @@ int32_t rsf_core_ffxgvk_open(const rsf_ffxgvk_open_ops*, const rsf_fgvk_setup*, 
 /* A null ops table reports a disabled build after validating the arguments. */
 rsf_backend_result rsf_core_ffxgvk_create(const rsf_ffxgvk_ops*, const rsf_fgvk_setup*, const rsf_ffxgvk_swapchain*,
     rsf_ffxgvk**, uint64_t* chain);
+rsf_backend_result rsf_core_ffxgvk_create_native(const rsf_ffxgvk_ops*, const rsf_fgvk_setup*, rsf_ffxgvk**, uint64_t* chain);
 int32_t rsf_core_ffxgvk_images(rsf_ffxgvk*, uint32_t*, uint64_t*);
 int32_t rsf_core_ffxgvk_acquire(rsf_ffxgvk*, uint64_t, uint64_t, uint64_t, uint32_t*);
 rsf_backend_result rsf_core_ffxgvk_enable(rsf_ffxgvk*, uint32_t);
@@ -95,6 +96,7 @@ rsf_backend_result rsf_core_ffxgvk_prepare(rsf_ffxgvk*, void*, const rsf_fgvk_fr
 rsf_backend_result rsf_core_ffxgvk_hudless(rsf_ffxgvk*, void*, const rsf_fgvk_frame*);
 void rsf_core_ffxgvk_submitted(rsf_ffxgvk*, void* const*, uint32_t);
 int32_t rsf_core_ffxgvk_present(rsf_ffxgvk*, const void* info, uint64_t chain, const rsf_frame_record*, uint32_t explicit_source);
+int32_t rsf_core_ffxgvk_present_native(rsf_ffxgvk*, const void* info, const rsf_frame_record*, uint32_t explicit_source);
 rsf_backend_result rsf_core_ffxgvk_status(rsf_ffxgvk*, rsf_fgvk_status*);
 rsf_backend_result rsf_core_ffxgvk_drain(rsf_ffxgvk*);
 rsf_backend_result rsf_core_ffxgvk_destroy(rsf_ffxgvk*);

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // FidelityFX 3 Vulkan frame-generation owner. The native leaf in
-// native_fg_vulkan.cpp keeps the SDK module, its contexts, the WSI hook bodies
-// and their marshalling, command recording, capture and timing. This owner
+// native_fg_vulkan.cpp keeps the SDK module, its contexts, hook entry points
+// and capture. This owner
 // decides admission, including WSI registration and the process-wide route, slot reuse,
 // copy transitions, completion evidence, presentation admission and retirement order.
 mod startup;
@@ -24,6 +24,7 @@ use crate::vulkan_fg_resources_abi::{
     rsf_vkfg_fences as Fences, rsf_vkfg_image as PrivateImage, rsf_vkfg_platform as Resources,
 };
 use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_image as Image};
+use ash::vk::{self, Handle as _};
 use rsf_game_sys::rsf_frame_record as Record;
 #[cfg(test)]
 use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION};
@@ -53,9 +54,9 @@ const SLOT_COUNT: usize = RSF_FGVK_FRAME_SLOTS as usize;
 
 type Handle = *mut c_void;
 
-/// Facts the native leaf reads from the borrowed VkSwapchainCreateInfoKHR.
+/// Facts read from the borrowed VkSwapchainCreateInfoKHR.
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct Swapchain {
     width: u32,
     height: u32,
@@ -67,6 +68,24 @@ struct Swapchain {
 }
 
 impl Swapchain {
+    unsafe fn read(info: *const c_void) -> Self {
+        if unsafe { info.cast::<vk::StructureType>().read() }
+            != vk::StructureType::SWAPCHAIN_CREATE_INFO_KHR
+        {
+            return Self::default();
+        }
+        let info = unsafe { &*info.cast::<vk::SwapchainCreateInfoKHR<'_>>() };
+        Self {
+            width: info.image_extent.width,
+            height: info.image_extent.height,
+            format: info.image_format.as_raw() as u32,
+            color_space: info.image_color_space.as_raw() as u32,
+            layers: info.image_array_layers,
+            structure_valid: 1,
+            old_chain: info.old_swapchain.as_raw(),
+        }
+    }
+
     fn supported(self) -> bool {
         self.structure_valid != 0
             && self.old_chain == 0
@@ -792,6 +811,34 @@ unsafe fn live<'a>(owner: *mut Owner) -> Option<&'a mut Owner> {
 }
 
 #[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_ffxgvk_create_native(
+    ops: *const Ops,
+    setup: *const Setup,
+    output: *mut *mut Owner,
+    chain: *mut u64,
+) -> i32 {
+    let description = if unsafe { has_capacity(setup) } {
+        let setup = unsafe { &*setup };
+        (setup.abi_version == RSF_FGVK_ABI_VERSION
+            && unsafe { has_capacity(&setup.graphics) }
+            && setup.graphics.abi_version == RSF_SRVK_ABI_VERSION
+            && !setup.create_info.is_null())
+        .then(|| unsafe { Swapchain::read(setup.create_info) })
+    } else {
+        None
+    };
+    unsafe {
+        rsf_core_ffxgvk_create(
+            ops,
+            setup,
+            description.as_ref().map_or(ptr::null(), ptr::from_ref),
+            output,
+            chain,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_ffxgvk_create(
     ops: *const Ops,
     setup: *const Setup,
@@ -966,6 +1013,18 @@ unsafe extern "C" fn rsf_core_ffxgvk_submitted(
     {
         owner.submitted(unsafe { std::slice::from_raw_parts(commands, count as usize) });
     }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_ffxgvk_present_native(
+    owner: *mut Owner,
+    info: *const c_void,
+    source: *const Record,
+    explicit_source: u32,
+) -> i32 {
+    let chain = unsafe { crate::vulkan_fg_wsi::single_present_chain(info) }
+        .map_or(0, |chain| chain.as_raw());
+    unsafe { rsf_core_ffxgvk_present(owner, info, chain, source, explicit_source) }
 }
 
 #[unsafe(no_mangle)]

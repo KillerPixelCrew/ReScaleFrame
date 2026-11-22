@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+mod device;
+
 use crate::vulkan_fg_abi::rsf_fgvk_frame_slot as Slot;
 use crate::vulkan_fg_resources_abi::{
     rsf_vkfg_fences as Fences, rsf_vkfg_image as Image, rsf_vkfg_platform as Platform,

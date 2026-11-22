@@ -10,11 +10,11 @@ int main() {
     auto table = ops();
     auto* self = start(table, setup);
     rsf_ffxgvk* second = nullptr; uint64_t second_chain = 0;
-    require(rsf_core_ffxgvk_create(&table, &setup.value, &setup.swapchain, &second, &second_chain) == RSF_BACKEND_ERROR_NOT_SUPPORTED &&
+    require(rsf_core_ffxgvk_create_native(&table, &setup.value, &second, &second_chain) == RSF_BACKEND_ERROR_NOT_SUPPORTED &&
         !second && !second_chain, "one FFX owner holds the process-wide WSI route");
     require(rsf_ffxgvk_enable(self, 1) == RSF_BACKEND_OK, "FG enabled");
 
-    auto* gpu = &state.native->gpu;
+    auto* gpu = state.native->gpu.get();
     rsf_vkfg_image cached{};
     require(rsf_core_vkfg_ensure_image(&rsf::vkfg::platform, gpu, &cached, 640, 360, VK_FORMAT_R8G8B8A8_UNORM, 0),
         "initial private image is fully bound");

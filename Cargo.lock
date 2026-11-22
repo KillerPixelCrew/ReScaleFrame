@@ -655,6 +655,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsf-vulkan-fg-fixtures"
+version = "0.1.2"
+
+[[package]]
 name = "rsf-vulkanstory-ngx"
 version = "0.1.2"
 dependencies = [

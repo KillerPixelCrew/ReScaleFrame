@@ -174,7 +174,7 @@ rsf_backend_result prepare_chain(void* user, rsf_dlgvk_chain_support* support, v
     if (!capabilities || capabilities(static_cast<VkPhysicalDevice>(graphics.physical_device), self->surface, &supported) != VK_SUCCESS)
         return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     *support = {supported.supportedUsageFlags, self->capture.enabled() ? 1u : 0u};
-    *gpu = &self->gpu;
+    *gpu = self->gpu.get();
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
@@ -190,10 +190,10 @@ constexpr rsf_dlgvk_platform platform{
     },
     rsf_slvk_invoke, initialize, configure, sample, constants, tag, release,
     [](void* user, void* commands, const rsf_vkfg_barrier* plan) {
-        rsf::vkfg::record_barrier(static_cast<Native*>(user)->barrier, static_cast<VkCommandBuffer>(commands), *plan);
+        rsf_core_vkfg_record_barrier(static_cast<Native*>(user)->barrier, static_cast<VkCommandBuffer>(commands), plan);
     },
     [](void* user, void* commands, const rsf_vkfg_image_copy* plan) {
-        rsf::vkfg::record_copy(static_cast<Native*>(user)->copy, static_cast<VkCommandBuffer>(commands), *plan);
+        rsf_core_vkfg_record_copy(static_cast<Native*>(user)->copy, static_cast<VkCommandBuffer>(commands), plan);
     },
     [](void* user, void* commands, const rsf_srvk_image* image, const rsf_frame_record* record, uint32_t role, uint64_t group) {
         static constexpr const char* roles[] = {"fg-depth", "fg-motion-uv", "fg-hudless-color"};

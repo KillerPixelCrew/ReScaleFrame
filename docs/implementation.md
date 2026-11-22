@@ -3757,6 +3757,11 @@ MSVC Release contracts and matched the Runtime and three linked
 export inventories. The callback-retirement regression is synthetic.
 [FidelityFX WSI ownership audit](research/rust-vulkan-ffx-wsi-owner.md)
 
+The shared Vulkan image, fence and command calls and the common WSI forwarding
+now use typed Rust Vulkan records. The corrected SDK dispatch fixture runs its
+assertions in Rust. This revision has source checks only.
+[Shared Vulkan FG dispatch audit](research/rust-vulkan-fg-shared-dispatch.md)
+
 The FidelityFX generation callback now reads the exact configured frame
 record from the Rust WSI route. Rust publishes the record only after SDK
 configure succeeds and counts only successful dispatches. The native callback

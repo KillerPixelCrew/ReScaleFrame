@@ -1,160 +1,53 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include "vulkan_fg_resources.h"
-#include "vulkan_timing_abi.h"
 #include <rescaleframe/native_fg_vulkan.h>
 #include <vulkan/vulkan.h>
 
+struct rsf_vkfg_device;
+extern "C" {
+extern const rsf_vkfg_platform rsf_core_vkfg_platform;
+rsf_vkfg_device* rsf_core_vkfg_load_device(const rsf_srvk_setup*, const rsf_fgvk_setup*, bool with_view);
+rsf_vkfg_device* rsf_core_vkfg_bind_images(void* device, const rsf_vk_function (*entries)[6]);
+void rsf_core_vkfg_device_destroy(rsf_vkfg_device*);
+void rsf_core_vkfg_device_memory(rsf_vkfg_device*, const VkPhysicalDeviceMemoryProperties*);
+void rsf_core_vkfg_device_wait_timing(rsf_vkfg_device*, const char* stage, uint64_t frame);
+}
+
 namespace rsf::vkfg {
-struct Device {
-    VkDevice device{};
-    uint32_t local_types{};
-    int32_t (*graphics_submit)(void*, uint32_t, const void*, uint64_t){};
-    void* queue_user{};
-    const char* wait_label{};
-    uint64_t wait_frame{};
-    PFN_vkCreateImage create_image{};
-    PFN_vkDestroyImage destroy_image{};
-    PFN_vkGetImageMemoryRequirements requirements{};
-    PFN_vkAllocateMemory allocate{};
-    PFN_vkFreeMemory free_memory{};
-    PFN_vkBindImageMemory bind{};
-    PFN_vkCreateImageView create_view{};
-    PFN_vkDestroyImageView destroy_view{};
-    PFN_vkCreateFence create_fence{};
-    PFN_vkDestroyFence destroy_fence{};
-    PFN_vkResetFences reset_fences{};
-    PFN_vkWaitForFences wait_fences{};
+inline constexpr const auto& platform = rsf_core_vkfg_platform;
+
+// Owns the Rust dispatch table. Images and fences are retired by the owner
+// before it closes the native SDK leaf.
+class Device {
+    rsf_vkfg_device* state = nullptr;
+
+    bool replace(rsf_vkfg_device* candidate) {
+        if (!candidate) return false;
+        rsf_core_vkfg_device_destroy(state);
+        state = candidate;
+        return true;
+    }
+
+public:
+    Device() = default;
+    ~Device() { rsf_core_vkfg_device_destroy(state); }
+    Device(const Device&) = delete;
+    Device& operator=(const Device&) = delete;
 
     bool load_images(const rsf_srvk_setup& setup, bool with_view) {
-        device = static_cast<VkDevice>(setup.device);
-#define RSF_VKFG_LOAD(member, name) member = reinterpret_cast<PFN_##name>(setup.device_proc(device, #name)); if (!member) return false
-        RSF_VKFG_LOAD(create_image, vkCreateImage);
-        RSF_VKFG_LOAD(destroy_image, vkDestroyImage);
-        RSF_VKFG_LOAD(requirements, vkGetImageMemoryRequirements);
-        RSF_VKFG_LOAD(allocate, vkAllocateMemory);
-        RSF_VKFG_LOAD(free_memory, vkFreeMemory);
-        RSF_VKFG_LOAD(bind, vkBindImageMemory);
-        if (with_view) {
-            RSF_VKFG_LOAD(create_view, vkCreateImageView);
-            RSF_VKFG_LOAD(destroy_view, vkDestroyImageView);
-        }
-#undef RSF_VKFG_LOAD
-        return true;
+        return replace(rsf_core_vkfg_load_device(&setup, nullptr, with_view));
     }
-
     bool load(const rsf_fgvk_setup& setup, bool with_view) {
-        if (!load_images(setup.graphics, with_view)) return false;
-        graphics_submit = setup.graphics_submit;
-        queue_user = setup.queue_user;
-#define RSF_VKFG_LOAD(member, name) member = reinterpret_cast<PFN_##name>(setup.graphics.device_proc(device, #name)); if (!member) return false
-        RSF_VKFG_LOAD(create_fence, vkCreateFence);
-        RSF_VKFG_LOAD(destroy_fence, vkDestroyFence);
-        RSF_VKFG_LOAD(reset_fences, vkResetFences);
-        RSF_VKFG_LOAD(wait_fences, vkWaitForFences);
-#undef RSF_VKFG_LOAD
-        return true;
+        return replace(rsf_core_vkfg_load_device(&setup.graphics, &setup, with_view));
     }
-
+    bool bind_images(void* device, const rsf_vk_function (&entries)[6]) {
+        return replace(rsf_core_vkfg_bind_images(device, &entries));
+    }
     void memory_types(const VkPhysicalDeviceMemoryProperties& properties) {
-        local_types = 0;
-        for (uint32_t i = 0; i < properties.memoryTypeCount && i < VK_MAX_MEMORY_TYPES; ++i)
-            if (properties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) local_types |= 1u << i;
+        rsf_core_vkfg_device_memory(state, &properties);
     }
-};
-
-inline VkImage image_handle(const rsf_vkfg_image& image) { return reinterpret_cast<VkImage>(image.image); }
-
-inline constexpr rsf_vkfg_platform platform{
-    [](void* user) { return static_cast<Device*>(user)->local_types; },
-    [](void* user, uint32_t width, uint32_t height, uint32_t format, uint32_t usage, uint64_t* out) -> int32_t {
-        const auto& native = *static_cast<Device*>(user);
-        VkImageCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-        info.imageType = VK_IMAGE_TYPE_2D;
-        info.extent = {width, height, 1};
-        info.mipLevels = info.arrayLayers = 1;
-        info.format = static_cast<VkFormat>(format);
-        info.samples = VK_SAMPLE_COUNT_1_BIT;
-        info.tiling = VK_IMAGE_TILING_OPTIMAL;
-        info.usage = usage;
-        VkImage image{};
-        const auto result = native.create_image(native.device, &info, nullptr, &image);
-        *out = reinterpret_cast<uint64_t>(image);
-        return result;
-    },
-    [](void* user, uint64_t image, uint64_t* size, uint32_t* types) {
-        const auto& native = *static_cast<Device*>(user);
-        VkMemoryRequirements required{};
-        native.requirements(native.device, reinterpret_cast<VkImage>(image), &required);
-        *size = required.size;
-        *types = required.memoryTypeBits;
-    },
-    [](void* user, uint64_t size, uint32_t type, uint64_t* out) -> int32_t {
-        const auto& native = *static_cast<Device*>(user);
-        VkMemoryAllocateInfo info{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-        info.allocationSize = size;
-        info.memoryTypeIndex = type;
-        VkDeviceMemory memory{};
-        const auto result = native.allocate(native.device, &info, nullptr, &memory);
-        *out = reinterpret_cast<uint64_t>(memory);
-        return result;
-    },
-    [](void* user, uint64_t image, uint64_t memory) -> int32_t {
-        const auto& native = *static_cast<Device*>(user);
-        return native.bind(native.device, reinterpret_cast<VkImage>(image), reinterpret_cast<VkDeviceMemory>(memory), 0);
-    },
-    [](void* user, uint64_t image, uint32_t format, uint64_t* out) -> int32_t {
-        const auto& native = *static_cast<Device*>(user);
-        VkImageViewCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-        info.image = reinterpret_cast<VkImage>(image);
-        info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        info.format = static_cast<VkFormat>(format);
-        info.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        VkImageView view{};
-        const auto result = native.create_view(native.device, &info, nullptr, &view);
-        *out = reinterpret_cast<uint64_t>(view);
-        return result;
-    },
-    [](void* user, uint64_t view) {
-        const auto& native = *static_cast<Device*>(user);
-        native.destroy_view(native.device, reinterpret_cast<VkImageView>(view), nullptr);
-    },
-    [](void* user, uint64_t image) {
-        const auto& native = *static_cast<Device*>(user);
-        native.destroy_image(native.device, reinterpret_cast<VkImage>(image), nullptr);
-    },
-    [](void* user, uint64_t memory) {
-        const auto& native = *static_cast<Device*>(user);
-        native.free_memory(native.device, reinterpret_cast<VkDeviceMemory>(memory), nullptr);
-    },
-    [](void* user, uint64_t* out) -> int32_t {
-        const auto& native = *static_cast<Device*>(user);
-        VkFenceCreateInfo info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-        VkFence fence{};
-        const auto result = native.create_fence(native.device, &info, nullptr, &fence);
-        *out = reinterpret_cast<uint64_t>(fence);
-        return result;
-    },
-    [](void* user, uint64_t fence) {
-        const auto& native = *static_cast<Device*>(user);
-        native.destroy_fence(native.device, reinterpret_cast<VkFence>(fence), nullptr);
-    },
-    [](void* user, uint64_t fence, uint64_t timeout_ns) -> int32_t {
-        const auto& native = *static_cast<Device*>(user);
-        const auto handle = reinterpret_cast<VkFence>(fence);
-        const auto start = native.wait_label ? rsf_core_vk_timing_begin() : 0;
-        const auto result = native.wait_fences(native.device, 1, &handle, VK_TRUE, timeout_ns);
-        rsf_core_vk_timing_end(native.wait_label, native.wait_frame, start);
-        return result;
-    },
-    [](void* user, uint64_t fence) -> int32_t {
-        const auto& native = *static_cast<Device*>(user);
-        const auto handle = reinterpret_cast<VkFence>(fence);
-        return native.reset_fences(native.device, 1, &handle);
-    },
-    [](void* user, uint64_t fence) {
-        const auto& native = *static_cast<Device*>(user);
-        return native.graphics_submit(native.queue_user, 0, nullptr, fence);
-    },
+    void wait_timing(const char* stage, uint64_t frame) { rsf_core_vkfg_device_wait_timing(state, stage, frame); }
+    void* get() const { return state; }
 };
 }

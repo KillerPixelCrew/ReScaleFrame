@@ -356,6 +356,8 @@ mod vulkan_fg_resources;
 #[cfg(windows)]
 mod vulkan_fg_resources_abi;
 #[cfg(windows)]
+mod vulkan_fg_wsi;
+#[cfg(windows)]
 mod vulkan_fsr4_fg;
 #[cfg(windows)]
 mod vulkan_fsr4_sr;

@@ -802,6 +802,9 @@ generate("tests/generation/src/session_abi.rs", "tests/generation/session_abi.h"
           "--raw-line", "use crate::abi::rsf_fg_retirement;",
           "--raw-line", "use rsf_game_sys::rsf_frame_record;"])
 
+generate("tests/vulkan-fg/src/wsi_abi.rs", "tests/vulkan-fg/wsi_abi.h",
+         "rsf_wsi_fixture_(counts|calls)", "NOTHING", [])
+
 generate("tests/generation/src/dll_abi.rs", "tests/generation/dll_abi.h",
          "rsf_(d3d11_(fg_(api|inputs)|present_api)|get_d3d11_(fg|present)_api_fn|fg_fixture_imports|"
          "native_(fg_(options|status)|cpu_frame)|observer_present_event)",

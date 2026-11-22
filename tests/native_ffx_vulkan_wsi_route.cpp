@@ -18,7 +18,7 @@ int32_t refused_second_owner() {
     Setup setup;
     const auto table = ops();
     rsf_ffxgvk* second = nullptr; uint64_t chain = 0;
-    const auto result = rsf_core_ffxgvk_create(&table, &setup.value, &setup.swapchain, &second, &chain);
+    const auto result = rsf_core_ffxgvk_create_native(&table, &setup.value, &second, &chain);
     require(!second && !chain, "a refused owner returns no handle");
     return result;
 }

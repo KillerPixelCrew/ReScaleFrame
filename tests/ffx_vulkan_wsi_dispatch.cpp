@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define RSF_FFX_WSI_IMPLEMENTATION
 #include "../runtime/vulkan/fsr3/wsi-dispatch.h"
+#include "vulkan-fg/wsi_abi.h"
 #include <cstdio>
 #include <cstdlib>
 namespace {
@@ -23,32 +24,39 @@ extern "C" VKAPI_ATTR VkResult VKAPI_CALL vkQueuePresentKHR(VkQueue, const VkPre
 extern "C" VKAPI_ATTR VkResult VKAPI_CALL vkAcquireNextImageKHR(VkDevice, VkSwapchainKHR, uint64_t, VkSemaphore, VkFence, uint32_t*) { return VK_SUCCESS; }
 extern "C" VKAPI_ATTR VkResult VKAPI_CALL vkGetSwapchainImagesKHR(VkDevice, VkSwapchainKHR, uint32_t*, VkImage*) { return VK_SUCCESS; }
 int main() {
-    require(rsfFfxSetVulkanWsiDispatch(nullptr) == -1, "null dispatch setup");
-    rsf_ffx_wsi_dispatch setup{sizeof(setup) - 1, 2, device, create, destroy, present, acquire, images};
-    require(rsfFfxSetVulkanWsiDispatch(&setup) == -1, "short dispatch setup");
-    setup.struct_size = sizeof(setup); setup.abi_version = 1;
-    require(rsfFfxSetVulkanWsiDispatch(&setup) == -2, "dispatch ABI mismatch");
-    setup.abi_version = 2; setup.destroy = nullptr;
-    require(rsfFfxSetVulkanWsiDispatch(&setup) == -1, "partial owner refused");
-    setup.destroy = destroy;
-    require(rsfFfxSetVulkanWsiDispatch(&setup) == 0, "host dispatch registered");
-    auto foreign = setup; foreign.device = reinterpret_cast<VkDevice>(uintptr_t(2));
-    require(rsfFfxSetVulkanWsiDispatch(&foreign) == -3, "second owner cannot replace live dispatch");
-    VkSwapchainKHR chain{};
-    require(rsf_ffx_wsi::create(device, nullptr, nullptr, &chain) == VK_SUCCESS, "host create forwarded");
-    rsf_ffx_wsi::destroy(device, chain, nullptr);
-    rsf_ffx_wsi::present(device, nullptr, nullptr);
-    rsf_ffx_wsi::acquire(device, chain, UINT64_MAX, VK_NULL_HANDLE, VK_NULL_HANDLE, nullptr);
-    rsf_ffx_wsi::images(device, chain, nullptr, nullptr);
-    require(host_acquires == 1 && host_images == 1, "host acquire and image query route");
-    rsf_ffx_wsi::create(foreign.device, nullptr, nullptr, &chain); rsf_ffx_wsi::destroy(foreign.device, chain, nullptr);
-    require(host_creates == 1 && host_destroys == 1 && native_creates == 1 && native_destroys == 1, "host device route and independent native device");
-    require(host_presents == 1 && native_presents == 0, "host present synchronization callback");
-    setup.create = nullptr; setup.destroy = nullptr; setup.present = nullptr; setup.acquire = nullptr; setup.images = nullptr;
-    require(rsfFfxSetVulkanWsiDispatch(&setup) == 0, "drained owner unregistered");
-    rsf_ffx_wsi::create(device, nullptr, nullptr, &chain); rsf_ffx_wsi::destroy(device, chain, nullptr);
-    require(native_creates == 2 && native_destroys == 2 && host_creates == 1, "unregistered callbacks are never reused");
-    rsf_ffx_wsi::present(device, nullptr, nullptr);
-    require(native_presents == 1 && host_presents == 1, "native present after callback retirement");
-    return 0;
+    const rsf_wsi_fixture_calls calls{
+        [](uint32_t target, uint32_t abi, uint32_t mask, uint32_t short_record) -> int32_t {
+            if (!target) return rsfFfxSetVulkanWsiDispatch(nullptr);
+            const rsf_ffx_wsi_dispatch setup{
+                uint32_t(sizeof(rsf_ffx_wsi_dispatch)) - short_record, abi, reinterpret_cast<VkDevice>(uintptr_t(target)),
+                mask & 1 ? create : nullptr, mask & 2 ? destroy : nullptr, mask & 4 ? present : nullptr,
+                mask & 8 ? acquire : nullptr, mask & 16 ? images : nullptr,
+            };
+            return rsfFfxSetVulkanWsiDispatch(&setup);
+        },
+        [](uint32_t target, uint64_t* output) -> int32_t {
+            auto chain = reinterpret_cast<VkSwapchainKHR>(*output);
+            const auto result = rsf_ffx_wsi::create(reinterpret_cast<VkDevice>(uintptr_t(target)), nullptr, nullptr, &chain);
+            *output = reinterpret_cast<uint64_t>(chain);
+            return result;
+        },
+        [](uint32_t target, uint64_t chain) {
+            rsf_ffx_wsi::destroy(reinterpret_cast<VkDevice>(uintptr_t(target)), reinterpret_cast<VkSwapchainKHR>(chain), nullptr);
+        },
+        [](uint32_t target) -> int32_t {
+            return rsf_ffx_wsi::present(reinterpret_cast<VkDevice>(uintptr_t(target)), nullptr, nullptr);
+        },
+        [](uint32_t target, uint64_t chain) -> int32_t {
+            return rsf_ffx_wsi::acquire(reinterpret_cast<VkDevice>(uintptr_t(target)), reinterpret_cast<VkSwapchainKHR>(chain),
+                UINT64_MAX, VK_NULL_HANDLE, VK_NULL_HANDLE, nullptr);
+        },
+        [](uint32_t target, uint64_t chain) -> int32_t {
+            return rsf_ffx_wsi::images(reinterpret_cast<VkDevice>(uintptr_t(target)), reinterpret_cast<VkSwapchainKHR>(chain), nullptr, nullptr);
+        },
+        [](rsf_wsi_fixture_counts* output) {
+            *output = {native_creates, native_destroys, host_creates, host_destroys,
+                native_presents, host_presents, host_acquires, host_images};
+        },
+    };
+    return rsf_ffx_vulkan_wsi_dispatch_fixture(&calls);
 }

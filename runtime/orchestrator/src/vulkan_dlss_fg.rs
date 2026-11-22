@@ -754,12 +754,8 @@ unsafe fn valid_swapchain(info: *const c_void, width: u32, height: u32) -> bool 
 }
 
 unsafe fn matches_present(chain: u64, info: *const c_void) -> bool {
-    let Some(present) = (unsafe { info.cast::<vk::PresentInfoKHR<'_>>().as_ref() }) else {
-        return false;
-    };
-    present.swapchain_count == 1
-        && !present.p_swapchains.is_null()
-        && unsafe { present.p_swapchains.read() }.as_raw() == chain
+    unsafe { crate::vulkan_fg_wsi::single_present_chain(info) }
+        .is_some_and(|present_chain| present_chain.as_raw() == chain)
 }
 
 #[unsafe(no_mangle)]

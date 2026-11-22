@@ -11,6 +11,7 @@
 #include <ffx_api/vk/ffx_api_vk.h>
 #include "vulkan_fg_copy.h"
 #include "vulkan_fg_resources_native.h"
+#include "vulkan_fg_wsi.h"
 #include "../../backends/common/frame_capture_vk.h"
 #include "../../vulkan/fsr3/wsi-dispatch.h"
 #include <cstring>
@@ -63,77 +64,39 @@ struct Borrow {
 };
 VkResult VKAPI_PTR serialized_create(VkDevice device, const VkSwapchainCreateInfoKHR* info, const VkAllocationCallbacks* allocator, VkSwapchainKHR* chain) {
     const Borrow borrow(device);
-    auto* self = borrow.self;
-    if (!self || !self->native_create) return VK_ERROR_INITIALIZATION_FAILED;
-    struct Lease { PFN_vkCreateSwapchainKHR call; VkDevice device; const VkSwapchainCreateInfoKHR* info; const VkAllocationCallbacks* allocator; VkSwapchainKHR* chain; };
-    Lease lease{self->native_create, device, info, allocator, chain};
-    // Create/destroy hooks take their own LL2 mutex. Suppress only DLSS-G;
-    // never hold an outer WSI mutex across these notification hooks.
-    return VkResult(rsf_slvk_without_dlssg([](void* user) -> int32_t {
-        const auto& value = *static_cast<Lease*>(user); return value.call(value.device, value.info, value.allocator, value.chain);
-    }, &lease));
+    const auto call = borrow.self ? borrow.self->native_create : nullptr;
+    return call ? rsf_core_vkfg_wsi_create(rsf_slvk_without_dlssg, call, device, info, allocator, chain)
+        : VK_ERROR_INITIALIZATION_FAILED;
 }
 void VKAPI_PTR serialized_destroy(VkDevice device, VkSwapchainKHR chain, const VkAllocationCallbacks* allocator) {
     const Borrow borrow(device);
-    auto* self = borrow.self;
-    if (!self || !self->native_destroy) return;
-    struct Lease { PFN_vkDestroySwapchainKHR call; VkDevice device; VkSwapchainKHR chain; const VkAllocationCallbacks* allocator; };
-    Lease lease{self->native_destroy, device, chain, allocator};
-    (void)rsf_slvk_without_dlssg([](void* user) -> int32_t {
-        const auto& value = *static_cast<Lease*>(user); value.call(value.device, value.chain, value.allocator); return VK_SUCCESS;
-    }, &lease);
+    const auto call = borrow.self ? borrow.self->native_destroy : nullptr;
+    if (call) rsf_core_vkfg_wsi_destroy(rsf_slvk_without_dlssg, call, device, chain, allocator);
 }
 VkResult VKAPI_PTR serialized_acquire(VkDevice device, VkSwapchainKHR chain, uint64_t timeout, VkSemaphore semaphore, VkFence fence, uint32_t* index) {
     const auto start = rsf_core_vk_timing_begin();
-    const auto result = [&]() -> VkResult {
+    const auto result = [&]() {
         const Borrow borrow(device);
-        auto* self = borrow.self;
-        if (!self || !self->native_acquire) {
-            return VK_ERROR_INITIALIZATION_FAILED;
-        }
-        struct Lease { PFN_vkAcquireNextImageKHR call; VkDevice device; VkSwapchainKHR chain; uint64_t timeout; VkSemaphore semaphore; VkFence fence; uint32_t* index; };
-        Lease lease{self->native_acquire, device, chain, timeout, semaphore, fence, index};
-        return VkResult(rsf_slvk_without_dlssg([](void* user) -> int32_t {
-            return rsf_latencyvk_wsi_call([](void* data) -> int32_t {
-                const auto& value = *static_cast<Lease*>(data);
-                const auto begin = rsf_core_vk_timing_begin();
-                const auto result = value.call(value.device, value.chain, value.timeout, value.semaphore, value.fence, value.index);
-                rsf_core_vk_timing_end("native_acquire", 0, begin);
-                return result;
-            }, user);
-        }, &lease));
+        const auto call = borrow.self ? borrow.self->native_acquire : nullptr;
+        return call ? rsf_core_vkfg_wsi_acquire(rsf_slvk_without_dlssg, rsf_latencyvk_wsi_call, call, device, chain, timeout, semaphore, fence, index)
+            : VK_ERROR_INITIALIZATION_FAILED;
     }();
     rsf_core_vk_timing_end("native_acquire_total", 0, start);
     return result;
 }
 VkResult VKAPI_PTR serialized_images(VkDevice device, VkSwapchainKHR chain, uint32_t* count, VkImage* images) {
     const Borrow borrow(device);
-    auto* self = borrow.self;
-    if (!self || !self->native_images) return VK_ERROR_INITIALIZATION_FAILED;
-    struct Lease { PFN_vkGetSwapchainImagesKHR call; VkDevice device; VkSwapchainKHR chain; uint32_t* count; VkImage* images; };
-    Lease lease{self->native_images, device, chain, count, images};
-    return VkResult(rsf_slvk_without_dlssg([](void* user) -> int32_t {
-        return rsf_latencyvk_wsi_call([](void* data) -> int32_t {
-            const auto& value = *static_cast<Lease*>(data); return value.call(value.device, value.chain, value.count, value.images);
-        }, user);
-    }, &lease));
+    const auto call = borrow.self ? borrow.self->native_images : nullptr;
+    return call ? rsf_core_vkfg_wsi_images(rsf_slvk_without_dlssg, rsf_latencyvk_wsi_call, call, device, chain, count, images)
+        : VK_ERROR_INITIALIZATION_FAILED;
 }
 VkResult VKAPI_PTR serialized_present(VkQueue queue, const VkPresentInfoKHR* info) {
     const auto start = rsf_core_vk_timing_begin();
-    const auto result = [&]() -> VkResult {
+    const auto result = [&]() {
         const Borrow borrow(nullptr, 0);
-        auto* self = borrow.self;
-        if (!self || !self->native_present) {
-            return VK_ERROR_INITIALIZATION_FAILED;
-        }
-        struct Lease { PFN_vkQueuePresentKHR call; VkQueue queue; const VkPresentInfoKHR* info; } lease{self->native_present, queue, info};
-        return VkResult(rsf_slvk_without_dlssg([](void* user) -> int32_t {
-            const auto& value = *static_cast<Lease*>(user);
-            const auto begin = rsf_core_vk_timing_begin();
-            const auto result = rsf_latencyvk_queue_present(reinterpret_cast<rsf_vk_function>(value.call), value.queue, value.info);
-            rsf_core_vk_timing_end("native_queue_present", 0, begin);
-            return result;
-        }, &lease));
+        const auto call = borrow.self ? borrow.self->native_present : nullptr;
+        return call ? rsf_core_vkfg_wsi_present(rsf_slvk_without_dlssg, rsf_latencyvk_queue_present, call, queue, info)
+            : VK_ERROR_INITIALIZATION_FAILED;
     }();
     rsf_core_vk_timing_end("native_present_total", 0, start);
     return result;
@@ -253,7 +216,7 @@ int32_t initialize_capture(rsf_ffxgvk_native* self, void** resources) noexcept t
     const auto& graphics = self->setup.graphics;
     if (!self->capture.initialize(static_cast<VkDevice>(graphics.device), graphics.device_proc, self->memory_properties))
         return RSF_BACKEND_ERROR_INIT_FAILED;
-    *resources = &self->gpu;
+    *resources = self->gpu.get();
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
@@ -376,10 +339,10 @@ int32_t prepare(rsf_ffxgvk_native* self, void* commands, const rsf_fgvk_frame* f
     return result;
 }
 void record_barrier(rsf_ffxgvk_native* self, void* commands, const rsf_vkfg_barrier* plan) noexcept {
-    rsf::vkfg::record_barrier(self->barrier, static_cast<VkCommandBuffer>(commands), *plan);
+    rsf_core_vkfg_record_barrier(self->barrier, static_cast<VkCommandBuffer>(commands), plan);
 }
 void record_copy(rsf_ffxgvk_native* self, void* commands, const rsf_vkfg_image_copy* plan) noexcept {
-    rsf::vkfg::record_copy(self->copy, static_cast<VkCommandBuffer>(commands), *plan);
+    rsf_core_vkfg_record_copy(self->copy, static_cast<VkCommandBuffer>(commands), plan);
 }
 int32_t configure(rsf_ffxgvk_native* self, uint32_t enabled, uint64_t color, uint64_t frame, const char* stage) noexcept {
     ffxConfigureDescFrameGeneration config{}; config.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
@@ -423,35 +386,14 @@ constexpr rsf_ffxgvk_ops operations{
     },
     capture_flush,
     [](rsf_ffxgvk_native* self, uint64_t frame) {
-        self->gpu.wait_label = frame ? "ffx_slot_fence_wait" : nullptr;
-        self->gpu.wait_frame = frame;
+        self->gpu.wait_timing(frame ? "ffx_slot_fence_wait" : nullptr, frame);
     },
     rsf_core_vk_timing_begin, rsf_core_vk_timing_end, &rsf::vkfg::platform,
 };
-int32_t ffx_present(rsf_ffxgvk* self, const void* info, const rsf_frame_record* source, uint32_t explicit_source) {
-    uint64_t chain = 0;
-    if (info) {
-        const auto& vk = *static_cast<const VkPresentInfoKHR*>(info);
-        if (vk.swapchainCount == 1 && vk.pSwapchains) chain = handle_value(vk.pSwapchains[0]);
-    }
-    return rsf_core_ffxgvk_present(self, info, chain, source, explicit_source);
-}
 }
 
 extern "C" rsf_backend_result rsf_ffxgvk_create(const rsf_fgvk_setup* setup, rsf_ffxgvk** out, uint64_t* chain) {
-    rsf_ffxgvk_swapchain swapchain{};
-    const rsf_ffxgvk_swapchain* description = nullptr;
-    if (setup && setup->struct_size >= sizeof(*setup) && setup->abi_version == RSF_FGVK_ABI_VERSION &&
-        setup->graphics.struct_size >= sizeof(setup->graphics) && setup->graphics.abi_version == RSF_SRVK_ABI_VERSION &&
-        setup->create_info) {
-        if (*static_cast<const VkStructureType*>(setup->create_info) == VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR) {
-            const auto& info = *static_cast<const VkSwapchainCreateInfoKHR*>(setup->create_info);
-            swapchain = {info.imageExtent.width, info.imageExtent.height, uint32_t(info.imageFormat), uint32_t(info.imageColorSpace),
-                info.imageArrayLayers, 1u, handle_value(info.oldSwapchain)};
-        }
-        description = &swapchain;
-    }
-    return rsf_core_ffxgvk_create(&operations, setup, description, out, chain);
+    return rsf_core_ffxgvk_create_native(&operations, setup, out, chain);
 }
 extern "C" int32_t rsf_ffxgvk_images(rsf_ffxgvk* self, uint32_t* count, uint64_t* images) { return rsf_core_ffxgvk_images(self, count, images); }
 extern "C" int32_t rsf_ffxgvk_acquire(rsf_ffxgvk* self, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t* index) {
@@ -465,9 +407,9 @@ extern "C" rsf_backend_result rsf_ffxgvk_hudless(rsf_ffxgvk* self, void* command
     return rsf_core_ffxgvk_hudless(self, commands, frame);
 }
 extern "C" void rsf_ffxgvk_submitted(rsf_ffxgvk* self, void* const* commands, uint32_t count) { rsf_core_ffxgvk_submitted(self, commands, count); }
-extern "C" int32_t rsf_ffxgvk_present(rsf_ffxgvk* self, const void* info) { return ffx_present(self, info, nullptr, 0); }
+extern "C" int32_t rsf_ffxgvk_present(rsf_ffxgvk* self, const void* info) { return rsf_core_ffxgvk_present_native(self, info, nullptr, 0); }
 extern "C" int32_t rsf_ffxgvk_present_source(rsf_ffxgvk* self, const void* info, const rsf_frame_record* source) {
-    return ffx_present(self, info, source, 1);
+    return rsf_core_ffxgvk_present_native(self, info, source, 1);
 }
 extern "C" rsf_backend_result rsf_ffxgvk_get_status(rsf_ffxgvk* self, rsf_fgvk_status* status) { return rsf_core_ffxgvk_status(self, status); }
 extern "C" rsf_backend_result rsf_ffxgvk_drain(rsf_ffxgvk* self) { return rsf_core_ffxgvk_drain(self); }

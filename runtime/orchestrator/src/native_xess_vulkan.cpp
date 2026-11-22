@@ -213,11 +213,11 @@ int32_t bind_device(Native* native, const rsf_srvk_setup* setup) noexcept try {
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
 void record_barrier(Native* native, void* commands, const rsf_vkfg_barrier* plan) noexcept {
-    rsf::vkfg::record_barrier(native->barrier, static_cast<VkCommandBuffer>(commands), *plan);
+    rsf_core_vkfg_record_barrier(native->barrier, static_cast<VkCommandBuffer>(commands), plan);
 }
 
 void record_copy(Native* native, void* commands, const rsf_vkfg_image_copy* plan) noexcept {
-    rsf::vkfg::record_copy(native->copy, static_cast<VkCommandBuffer>(commands), *plan);
+    rsf_core_vkfg_record_copy(native->copy, static_cast<VkCommandBuffer>(commands), plan);
 }
 
 int32_t velocity(Native* native, float x, float y) noexcept {
@@ -273,7 +273,7 @@ extern const Ops native_ops{
     rsf_vk_sdk_system_loader, allocate_table, rsf_core_vk_sdk_pin, [](Library* sdk) noexcept { delete sdk; },
     instance_requirements, device_extensions, device_features, version,
     open, [](Native* native) noexcept { delete native; }, create_context, initialize, resolution, destroy_context,
-    bind_device, [](Native* native) -> void* { return &native->gpu; }, &rsf::vkfg::platform,
+    bind_device, [](Native* native) -> void* { return native->gpu.get(); }, &rsf::vkfg::platform,
     velocity, record_barrier, record_copy, execute, sharpen,
     [](Native* native) noexcept { rsf_sharpenvk_host_clear(&native->sharpen); },
     [](Native* native, uint64_t provider, uint32_t backend) noexcept { native->capture.set_provider(provider, backend); },

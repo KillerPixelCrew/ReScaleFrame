@@ -10,6 +10,7 @@ members = [
   "tests/game-sdk",
   "tests/ac7-capture",
   "tests/generation",
+  "tests/vulkan-fg",
   "runtime/backends/fsr/compat",
   "runtime/vulkan/ngx",
   "runtime/vulkan/streamline/lifecycle",

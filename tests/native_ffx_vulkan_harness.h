@@ -149,12 +149,27 @@ int32_t open(const rsf_fgvk_setup* setup, void*, uint32_t width, uint32_t height
     self->setup = *setup; self->width = width; self->height = height;
     self->sdk.destroy = destroy_context; self->sdk.dispatch = dispatch; self->configure = configure;
     self->barrier = barrier; self->copy = copy; self->idle = idle;
-    auto& gpu = self->gpu;
-    gpu.device = static_cast<VkDevice>(setup->graphics.device); gpu.graphics_submit = setup->graphics_submit; gpu.queue_user = setup->queue_user;
-    gpu.create_fence = create_fence; gpu.destroy_fence = destroy_fence; gpu.reset_fences = reset_fences; gpu.wait_fences = wait_fences;
-    gpu.create_image = create_image; gpu.destroy_image = destroy_image; gpu.requirements = requirements; gpu.allocate = allocate;
-    gpu.free_memory = free_memory; gpu.bind = bind; gpu.local_types = 1;
-    state.native = self; *resources = &self->gpu; *out = self;
+    self->setup.graphics.device_proc = [](void*, const char* name) -> rsf_vk_function {
+#define RSF_TEST_PROC(symbol, callback) if (!std::strcmp(name, #symbol)) return reinterpret_cast<rsf_vk_function>(callback)
+        RSF_TEST_PROC(vkCreateImage, create_image);
+        RSF_TEST_PROC(vkDestroyImage, destroy_image);
+        RSF_TEST_PROC(vkGetImageMemoryRequirements, requirements);
+        RSF_TEST_PROC(vkAllocateMemory, allocate);
+        RSF_TEST_PROC(vkFreeMemory, free_memory);
+        RSF_TEST_PROC(vkBindImageMemory, bind);
+        RSF_TEST_PROC(vkCreateFence, create_fence);
+        RSF_TEST_PROC(vkDestroyFence, destroy_fence);
+        RSF_TEST_PROC(vkResetFences, reset_fences);
+        RSF_TEST_PROC(vkWaitForFences, wait_fences);
+#undef RSF_TEST_PROC
+        return nullptr;
+    };
+    require(self->gpu.load(self->setup, false), "fake Vulkan device entries loaded");
+    VkPhysicalDeviceMemoryProperties memory{};
+    memory.memoryTypeCount = 1;
+    memory.memoryTypes[0].propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    self->gpu.memory_types(memory);
+    state.native = self; *resources = self->gpu.get(); *out = self;
     return RSF_BACKEND_OK;
 }
 int32_t create_swapchain(rsf_ffxgvk_native* self, uint64_t* chain, uint32_t* has_context) {
@@ -186,8 +201,11 @@ inline rsf_ffxgvk_ops ops() {
 struct Setup {
     VkSwapchainCreateInfoKHR info{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
     rsf_fgvk_setup value{sizeof(value), RSF_FGVK_ABI_VERSION};
-    rsf_ffxgvk_swapchain swapchain{640, 360, VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, 1, 1, 0};
     Setup() {
+        info.imageExtent = {640, 360};
+        info.imageFormat = VK_FORMAT_R8G8B8A8_UNORM;
+        info.imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+        info.imageArrayLayers = 1;
         auto& graphics = value.graphics;
         graphics.struct_size = sizeof(graphics); graphics.abi_version = RSF_SRVK_ABI_VERSION;
         graphics.instance = id<void*>(7); graphics.physical_device = id<void*>(8); graphics.device = id<void*>(1);
@@ -224,7 +242,7 @@ inline void complete(rsf_ffxgvk* self, const rsf_frame_record& source, void* pre
 inline rsf_ffxgvk* start(const rsf_ffxgvk_ops& table, Setup& setup) {
     SetEnvironmentVariableW(L"RSF_VULKAN_FRAME_CAPTURE_DIR", nullptr); SetEnvironmentVariableW(L"RSF_VULKAN_TIMING_FILE", nullptr);
     rsf_ffxgvk* self = nullptr; uint64_t chain = 0;
-    require(rsf_core_ffxgvk_create(&table, &setup.value, &setup.swapchain, &self, &chain) == RSF_BACKEND_OK && self && chain == 3,
+    require(rsf_core_ffxgvk_create_native(&table, &setup.value, &self, &chain) == RSF_BACKEND_OK && self && chain == 3,
         "Rust owner admits the swapchain and opens the native leaf");
     return self;
 }
