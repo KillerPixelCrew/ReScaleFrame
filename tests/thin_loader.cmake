@@ -4,7 +4,7 @@ rsf_add_rust_static(rsf_loader_fixtures_rust rsf_rust_loader_fixtures
     rsf-loader-fixtures rsf_loader_fixtures)
 
 function(rsf_add_loader_test target entry)
-    add_executable(${target} "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/loader/main.c")
+    add_executable(${target} "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/fixture_main.c")
     target_compile_definitions(${target} PRIVATE RSF_FIXTURE_ENTRY=${entry})
     target_link_libraries(${target} PRIVATE rsf_loader_fixtures_rust rsf_build_options)
 endfunction()

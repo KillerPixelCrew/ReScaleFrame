@@ -46,7 +46,8 @@ set_tests_properties(anomaly_overlay_hooks_contract PROPERTIES TIMEOUT 60 SKIP_R
 
 # SR Stage 0 site profile: compile-time consistency and runtime build selection. The guards are checked against the installed executable by
 # tools/anomaly_sr_evidence.py --verify, which is not registered here because it needs the game install.
-add_executable(rsf_anomaly_sr_profile_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_profile.c")
+add_executable(rsf_anomaly_sr_profile_test "${CMAKE_CURRENT_LIST_DIR}/fixture_main.c")
+target_compile_definitions(rsf_anomaly_sr_profile_test PRIVATE RSF_FIXTURE_ENTRY=rsf_test_anomaly_profile_contract)
 target_include_directories(rsf_anomaly_sr_profile_test PRIVATE "${PROJECT_SOURCE_DIR}/games/anomaly/src")
 target_link_libraries(rsf_anomaly_sr_profile_test PRIVATE rsf_anomaly_fixtures_rust rsf_build_options)
 add_test(NAME anomaly_sr_profile_contract COMMAND rsf_anomaly_sr_profile_test)
@@ -100,7 +101,8 @@ target_link_libraries(rsf_anomaly_motion_contract_test PRIVATE rsf_anomaly_fixtu
 add_test(NAME anomaly_motion_contract COMMAND rsf_anomaly_motion_contract_test)
 add_test(NAME anomaly_motion_unknown_selection COMMAND rsf_anomaly_motion_contract_test unknown-case)
 set_tests_properties(anomaly_motion_unknown_selection PROPERTIES WILL_FAIL TRUE)
-add_executable(rsf_anomaly_motion_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_device.c")
+add_executable(rsf_anomaly_motion_device_test "${CMAKE_CURRENT_LIST_DIR}/fixture_main.c")
+target_compile_definitions(rsf_anomaly_motion_device_test PRIVATE RSF_FIXTURE_ENTRY=rsf_anomaly_motion_device_fixture)
 set_target_properties(rsf_anomaly_motion_device_test PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_anomaly_motion_device_test PRIVATE rsf_anomaly_fixtures_rust ReScaleFrame::Graphics
     bcrypt d3d11 d3dcompiler dxgi dxguid rsf_build_options)
@@ -137,7 +139,8 @@ add_test(NAME anomaly_motion_tess_device COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR
 set_tests_properties(anomaly_motion_tess_device PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
 # The real VS+HS+DS+PS motion chain of the tessellation pass (local deployment with the dx11/tess roots, NVIDIA adapter
 # preferred; 77 without deployment, d3dcompiler_43 or hardware): a skinned PN/HM mover against the CPU model.
-add_executable(rsf_anomaly_motion_tess_chain_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_tess_chain_device.c")
+add_executable(rsf_anomaly_motion_tess_chain_device_test "${CMAKE_CURRENT_LIST_DIR}/fixture_main.c")
+target_compile_definitions(rsf_anomaly_motion_tess_chain_device_test PRIVATE RSF_FIXTURE_ENTRY=rsf_anomaly_motion_tess_chain_device_fixture)
 set_target_properties(rsf_anomaly_motion_tess_chain_device_test PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_anomaly_motion_tess_chain_device_test PRIVATE rsf_anomaly_fixtures_rust ReScaleFrame::Graphics
     bcrypt d3d11 d3dcompiler dxgi dxguid rsf_build_options)
@@ -145,7 +148,8 @@ add_test(NAME anomaly_motion_tess_chain_device COMMAND rsf_anomaly_motion_tess_c
 set_tests_properties(anomaly_motion_tess_chain_device PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
 # The far (SE_R2_NORMAL_LQ, beyond r__dtex_range) and near (HQ) skinned VS/PS pairs against the CPU model, including a
 # few-pixel mover 100 m away (local deployment, NVIDIA adapter preferred; 77 without deployment, d3dcompiler_43 or hardware).
-add_executable(rsf_anomaly_motion_far_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_far_device.c")
+add_executable(rsf_anomaly_motion_far_device_test "${CMAKE_CURRENT_LIST_DIR}/fixture_main.c")
+target_compile_definitions(rsf_anomaly_motion_far_device_test PRIVATE RSF_FIXTURE_ENTRY=rsf_anomaly_motion_far_device_fixture)
 set_target_properties(rsf_anomaly_motion_far_device_test PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_anomaly_motion_far_device_test PRIVATE rsf_anomaly_fixtures_rust ReScaleFrame::Graphics
     bcrypt d3d11 d3dcompiler dxgi dxguid rsf_build_options)
@@ -165,7 +169,8 @@ target_link_libraries(rsf_anomaly_sr_jitter_test PRIVATE rsf_anomaly_rust rsf_bu
 add_test(NAME anomaly_sr_jitter_contract COMMAND rsf_anomaly_sr_jitter_test)
 add_test(NAME anomaly_sr_jitter_unknown_selection COMMAND rsf_anomaly_sr_jitter_test unknown-case)
 set_tests_properties(anomaly_sr_jitter_unknown_selection PROPERTIES WILL_FAIL TRUE)
-add_executable(rsf_anomaly_sr_jitter_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_jitter_device.c")
+add_executable(rsf_anomaly_sr_jitter_device_test "${CMAKE_CURRENT_LIST_DIR}/fixture_main.c")
+target_compile_definitions(rsf_anomaly_sr_jitter_device_test PRIVATE RSF_FIXTURE_ENTRY=rsf_anomaly_sr_jitter_device_fixture)
 set_target_properties(rsf_anomaly_sr_jitter_device_test PROPERTIES LINKER_LANGUAGE CXX)
 target_include_directories(rsf_anomaly_sr_jitter_device_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
 target_link_libraries(rsf_anomaly_sr_jitter_device_test PRIVATE rsf_anomaly_fixtures_rust d3d11 dxgi rsf_build_options)
@@ -220,7 +225,8 @@ if(RSF_ANOMALY_SR_VENDOR_ROOT AND EXISTS "${RSF_ANOMALY_SR_VENDOR_ROOT}/streamli
     set_tests_properties(anomaly_sr_provider_device PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
 endif()
 # Backend switching through the shared pipeline on hardware (generic runtime behaviour, driven by the same vendor root).
-add_executable(rsf_sr_backend_switch_device_test "${CMAKE_CURRENT_LIST_DIR}/sr_backend_switch_device_main.c")
+add_executable(rsf_sr_backend_switch_device_test "${CMAKE_CURRENT_LIST_DIR}/fixture_main_args.c")
+target_compile_definitions(rsf_sr_backend_switch_device_test PRIVATE RSF_FIXTURE_ENTRY=rsf_sr_backend_switch_fixture)
 # The fixture is in the Runtime archive and loads the Runtime DLL it switches; it links no import library.
 target_link_libraries(rsf_sr_backend_switch_device_test PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options)
 add_dependencies(rsf_sr_backend_switch_device_test rsf_orchestrator)
@@ -264,11 +270,11 @@ target_include_directories(rsf_anomaly_input_hooks_test PRIVATE "${RSF_ANOMALY_S
 target_link_libraries(rsf_anomaly_input_hooks_test PRIVATE rsf_anomaly_fixtures_rust ReScaleFrame::GameSDK rsf_build_options)
 add_test(NAME anomaly_input_hooks_standard_contract COMMAND rsf_anomaly_input_hooks_test standard)
 add_test(NAME anomaly_input_hooks_avx_contract COMMAND rsf_anomaly_input_hooks_test avx)
-add_executable(rsf_latency_event_contract_test "${CMAKE_CURRENT_LIST_DIR}/game-sdk/cpu_fixture_main.c")
+add_executable(rsf_latency_event_contract_test "${CMAKE_CURRENT_LIST_DIR}/fixture_main.c")
 target_link_libraries(rsf_latency_event_contract_test PRIVATE rsf_game_sdk_fixtures_rust rsf_native_cpu rsf_build_options)
-target_compile_definitions(rsf_latency_event_contract_test PRIVATE RSF_CPU_FIXTURE=rsf_latency_events_fixture)
+target_compile_definitions(rsf_latency_event_contract_test PRIVATE RSF_FIXTURE_ENTRY=rsf_latency_events_fixture)
 add_test(NAME latency_input_event_contract COMMAND rsf_latency_event_contract_test)
-add_executable(rsf_latency_antilag_test "${CMAKE_CURRENT_LIST_DIR}/game-sdk/cpu_fixture_main.c")
-target_compile_definitions(rsf_latency_antilag_test PRIVATE RSF_CPU_FIXTURE=rsf_antilag_fixture)
+add_executable(rsf_latency_antilag_test "${CMAKE_CURRENT_LIST_DIR}/fixture_main.c")
+target_compile_definitions(rsf_latency_antilag_test PRIVATE RSF_FIXTURE_ENTRY=rsf_antilag_fixture)
 target_link_libraries(rsf_latency_antilag_test PRIVATE rsf_game_sdk_fixtures_rust rsf_orchestrator_rust rsf_build_options)
 add_test(NAME latency_antilag2_contract COMMAND rsf_latency_antilag_test)

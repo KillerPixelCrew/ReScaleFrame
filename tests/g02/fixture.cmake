@@ -25,6 +25,7 @@ function(rsf_add_g02_fixture target source)
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
         VERBATIM)
     set_source_files_properties("${object}" PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE)
-    add_executable("${target}" "${dir}/fixture_main.c" "${object}")
+    add_executable("${target}" "${dir}/../fixture_main.c" "${object}")
+    target_compile_definitions("${target}" PRIVATE RSF_FIXTURE_ENTRY=rsf_fixture_main)
     set_target_properties("${target}" PROPERTIES LINKER_LANGUAGE CXX)
 endfunction()
