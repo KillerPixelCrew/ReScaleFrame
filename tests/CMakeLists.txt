@@ -50,10 +50,11 @@ add_dependencies(rsf_native_vulkan_exports_test rsf_orchestrator)
 add_test(NAME native_vulkan_dll_exports COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR}
     "${rsf_vulkan_exports_exe}" "$<TARGET_FILE:rsf_orchestrator>")
 # Corpus parity run by hand, documented in runtime/shader_patch/README.md; the device test below is the CTest one.
-add_executable(rsf_shader_patch_test EXCLUDE_FROM_ALL shader_patch_main.c)
+add_executable(rsf_shader_patch_test EXCLUDE_FROM_ALL fixture_main.c)
+target_compile_definitions(rsf_shader_patch_test PRIVATE RSF_FIXTURE_ENTRY=rsf_shader_patch_corpus_main)
 target_link_libraries(rsf_shader_patch_test PRIVATE rsf_shader_patch rsf_build_options)
-add_executable(rsf_shader_patch_device_test shader_patch_main.c)
-target_compile_definitions(rsf_shader_patch_device_test PRIVATE RSF_SHADER_PATCH_DEVICE_FIXTURE)
+add_executable(rsf_shader_patch_device_test fixture_main.c)
+target_compile_definitions(rsf_shader_patch_device_test PRIVATE RSF_FIXTURE_ENTRY=rsf_shader_patch_device_main)
 target_link_libraries(rsf_shader_patch_device_test PRIVATE rsf_shader_patch rsf_build_options)
 add_test(NAME shader_patch_synthetic_device COMMAND rsf_shader_patch_device_test)
 include("${CMAKE_CURRENT_SOURCE_DIR}/d3d11_present_api.cmake")
@@ -1119,3 +1120,19 @@ if(EXISTS "${RSF_XESS_INCLUDE}/xell/xell_d3d12.h" AND
     add_test(NAME xell_sleep_concurrency_contract COMMAND rsf_xell_sleep_concurrency)
     set_tests_properties(xell_sleep_concurrency_contract PROPERTIES TIMEOUT 10)
 endif()
+
+# These executables call the fixture exports of the Rust orchestrator, which only the test-fixtures archive carries
+# (runtime/orchestrator/CMakeLists.txt).
+foreach(rsf_fixture_target
+        rsf_ui_layer rsf_fullscreen_pass rsf_native_reinsert rsf_depth_scale rsf_auxiliary_sr rsf_sampler_bias
+        rsf_resource_roles rsf_motion_decode rsf_d3d11_state rsf_motion_resolve_test rsf_colour_transport_test
+        rsf_sharpening_test rsf_sharpening_d3d12_test rsf_sharpening_vulkan_test rsf_sharpening_vulkan_cpu_test
+        rsf_sharpening_settings_test rsf_exposure_normalization_test rsf_native_vulkan_test rsf_dlss_backend
+        rsf_dlss_sr_layout rsf_sr_session_test rsf_sr_bridge_test rsf_sr_pipeline_test rsf_sr_backend_switch_device_test
+        rsf_shader_patch_test rsf_shader_patch_device_test rsf_native_sr_fsr4_state_test rsf_native_sr_fsr4_vulkan_test
+        rsf_native_fsr4_fg_state_test rsf_native_fg_cpu_test)
+    if(TARGET ${rsf_fixture_target})
+        set_target_properties(${rsf_fixture_target} PROPERTIES RSF_ORCHESTRATOR_FIXTURES ON)
+        add_dependencies(${rsf_fixture_target} rsf_rust_core_fixtures)
+    endif()
+endforeach()

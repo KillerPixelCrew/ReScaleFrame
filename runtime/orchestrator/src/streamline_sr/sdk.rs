@@ -2,7 +2,7 @@
 //! Streamline 2.14.1 records for the Direct3D SR callers. The record layouts are checked against the
 //! pinned SDK headers by `tests/dlss_sr_layout_facts.cpp`; Rust builds them and calls
 //! the SDK entry points through typed function pointers.
-#[cfg(not(test))]
+#[cfg(all(feature = "test-fixtures", not(test)))]
 mod layout_fixture;
 
 use super::{Constants, Dimensions, MAX_TAGS, OptionPayload, TagBatch};

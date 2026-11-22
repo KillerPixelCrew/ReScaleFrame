@@ -2,7 +2,7 @@
 // D3D11 to D3D12 SR bridge: the game's D3D11 device, a D3D12 device on the same adapter, shared
 // surfaces and one shared fence. This owner decides lifetime, cross-API ordering, input leases,
 // GPU retirement and failure policy. The Windows platform supplies the native operations.
-#[cfg(not(test))]
+#[cfg(all(feature = "test-fixtures", not(test)))]
 mod fixture;
 #[cfg(not(test))]
 mod platform;

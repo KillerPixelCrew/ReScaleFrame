@@ -24,7 +24,7 @@ use crate::sys::{
 
 #[path = "vulkan_fsr4_sr/graphics.rs"]
 mod graphics;
-#[path = "vulkan_fsr4_sr/state_fixture.rs"]
+#[cfg(feature = "test-fixtures")]
 mod state_fixture;
 use crate::sys::rsf_fsr4vk_platform as Platform;
 

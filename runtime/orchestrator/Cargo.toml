@@ -19,6 +19,10 @@ rsf-graphics = { path = "../graphics/rust" }
 rsf-minhook-sys = { path = "../../third_party/minhook" }
 rsf-runtime-submission = { path = "../graphics/submission" }
 
+[features]
+# Fixture exports called only by the ctest executables; the shipping archive is built without them.
+test-fixtures = []
+
 [dev-dependencies]
 rsf-graphics = { path = "../graphics/rust", features = ["test-support"] }
 # Unit tests link the common helpers the Runtime DLL gets from its CMake archive.

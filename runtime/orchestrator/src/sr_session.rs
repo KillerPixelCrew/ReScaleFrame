@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::sys::*;
 
+#[cfg(feature = "test-fixtures")]
 mod fixture;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_NO_SR, RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION,

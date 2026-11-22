@@ -111,14 +111,14 @@ mod dlss_vulkan_capture_ledger;
 mod dx12_vulkan_interop;
 #[cfg(windows)]
 mod dx12_vulkan_platform;
-#[cfg(windows)]
+#[cfg(all(windows, any(test, feature = "test-fixtures")))]
 #[path = "../../graphics/src/dxbc_chunks.rs"]
 mod dxbc_chunks;
 #[cfg(windows)]
 use rsf_graphics::dxgi_format;
 #[cfg(windows)]
 mod graphics_d3d11;
-#[cfg(windows)]
+#[cfg(all(windows, feature = "test-fixtures"))]
 #[path = "../../../tests/graphics_fixture.rs"]
 mod graphics_fixture;
 #[cfg(windows)]
@@ -259,6 +259,7 @@ mod sdk_module;
 #[cfg(windows)]
 mod settings_store;
 #[cfg(windows)]
+#[cfg_attr(not(any(test, feature = "test-fixtures")), allow(dead_code))] // only crc32c is production; the DXBC checksum is the synthetic rewrite's
 #[path = "../../graphics/src/shader_hash.rs"]
 mod shader_hash;
 #[cfg(windows)]

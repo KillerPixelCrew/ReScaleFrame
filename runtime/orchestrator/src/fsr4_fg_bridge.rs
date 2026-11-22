@@ -24,7 +24,7 @@ pub(super) use commands::RsfFsr4FgReleaseImage;
 mod dx12;
 #[path = "../../vulkan/fsr4-fg/sdk.rs"]
 mod sdk;
-#[path = "fsr4_fg_bridge/state_fixture.rs"]
+#[cfg(feature = "test-fixtures")]
 mod state_fixture;
 #[allow(clippy::duplicate_mod)] // Shared with another crate or module through #[path].
 #[path = "../../vulkan/timeline_pair.rs"]

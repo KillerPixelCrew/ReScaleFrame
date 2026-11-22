@@ -59,6 +59,7 @@ pub(crate) struct Platform {
 }
 
 impl Platform {
+    #[cfg(feature = "test-fixtures")]
     fn checked(raw: &rsf_nfg_cpu_platform) -> Option<Self> {
         Some(Self {
             has_owner: raw.has_owner?,
@@ -110,6 +111,7 @@ macro_rules! call {
 }
 
 mod diagnostics;
+#[cfg(feature = "test-fixtures")]
 mod fixture_calls;
 mod hitch;
 pub(super) mod platform;

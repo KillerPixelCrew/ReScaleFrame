@@ -41,6 +41,20 @@ target_include_directories(rsf_orchestrator_core PUBLIC include)
 target_compile_definitions(rsf_orchestrator_core PUBLIC RSF_RUNTIME_BUILD)
 target_link_libraries(rsf_orchestrator_core PUBLIC rsf_native_cpu rsf_runtime_leaves)
 rsf_add_rust_static(rsf_orchestrator_rust rsf_rust_core rsf-orchestrator rsf_orchestrator)
+if(BUILD_TESTING)
+    # The same crate with the test-fixtures feature adds the fixture exports the ctest executables call. A test
+    # target that sets RSF_ORCHESTRATOR_FIXTURES links this archive wherever the shipping one is named, so the
+    # Runtime and the carriers never contain a fixture.
+    rsf_add_rust_static(rsf_orchestrator_fixture_rust rsf_rust_core_fixtures rsf-orchestrator rsf_orchestrator
+        --features test-fixtures)
+    get_target_property(rsf_orchestrator_libs rsf_orchestrator_rust INTERFACE_LINK_LIBRARIES)
+    get_target_property(rsf_orchestrator_fixture_libs rsf_orchestrator_fixture_rust INTERFACE_LINK_LIBRARIES)
+    list(POP_FRONT rsf_orchestrator_libs rsf_orchestrator_archive)
+    list(POP_FRONT rsf_orchestrator_fixture_libs rsf_orchestrator_fixture_archive)
+    set_property(TARGET rsf_orchestrator_rust PROPERTY INTERFACE_LINK_LIBRARIES
+        "$<IF:$<BOOL:$<TARGET_PROPERTY:RSF_ORCHESTRATOR_FIXTURES>>,${rsf_orchestrator_fixture_archive},${rsf_orchestrator_archive}>"
+        ${rsf_orchestrator_libs})
+endif()
 # version: the provider version reads in mfg_provider.rs (forwarded by the dinput8 proxy itself).
 target_link_libraries(rsf_orchestrator_rust INTERFACE minhook rsf_runtime_leaves version)
 target_link_libraries(rsf_orchestrator_core PUBLIC rsf_orchestrator_rust)

@@ -259,6 +259,7 @@ fn write_descriptors(
 }
 
 impl Sharpen12 {
+    #[cfg(feature = "test-fixtures")]
     pub(super) fn dispatches(&self) -> u64 {
         self.dispatches
     }

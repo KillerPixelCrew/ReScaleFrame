@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#[cfg(not(test))]
+#[cfg(all(feature = "test-fixtures", not(test)))]
 #[path = "../../../tests/auxiliary_sr.rs"]
 mod fixture;
 mod platform;

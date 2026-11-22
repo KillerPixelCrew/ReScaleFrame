@@ -5,8 +5,9 @@
 //! creation inventory and D3D11 hooks. Sessions own one admitted pack each.
 
 mod d3d11;
+#[cfg(any(test, feature = "test-fixtures"))]
 mod dxbc;
-#[cfg(not(test))]
+#[cfg(all(feature = "test-fixtures", not(test)))]
 mod fixture;
 mod leaf;
 mod pack;

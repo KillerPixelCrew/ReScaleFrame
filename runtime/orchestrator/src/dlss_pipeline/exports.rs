@@ -2,8 +2,10 @@
 use super::platform::LEAVES;
 use super::*;
 
+#[cfg(feature = "test-fixtures")]
 #[path = "../../../../tests/sr_backend_switch_device.rs"]
 mod backend_switch_fixture;
+#[cfg(feature = "test-fixtures")]
 mod fixture;
 
 #[unsafe(no_mangle)]

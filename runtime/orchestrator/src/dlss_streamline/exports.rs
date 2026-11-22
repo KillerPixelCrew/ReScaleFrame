@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 
-#[cfg(not(test))]
+#[cfg(all(feature = "test-fixtures", not(test)))]
 mod fixture;
 
 const NOT_COMPILED: i32 = -3;
