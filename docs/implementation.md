@@ -7841,3 +7841,8 @@ remain open pending a producer available when native activation refuses.
 Binding regeneration, formatting, locked metadata and source comparisons
 passed. Linking, fixture execution and game validation remain pending.
 [Source evidence](research/ac7-render-scope-port-a02.md#residual-source-port-from-821642ae).
+
+The plugin session fixture DLL builds its callback table and test state in Rust.
+The native detect and prepare thunks still throw after the Rust callbacks return
+so both Runtime entry routes exercise genuine C++ exception containment. Pinned
+formatting, C++ syntax and locked Cargo metadata passed. Execution remains pending.

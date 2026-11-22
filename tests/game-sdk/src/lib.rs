@@ -39,6 +39,8 @@ mod input_receipts;
 #[allow(dead_code)]
 #[path = "../../../runtime/orchestrator/src/native_fg_cpu_abi.rs"]
 mod native_fg_cpu_abi;
+#[cfg(feature = "plugin-session-fixture")]
+mod plugin_session_fixture;
 #[cfg(feature = "fg-cpu-fixture")]
 #[allow(dead_code, unused_imports)]
 #[path = "../../../runtime/orchestrator/src/render_abi.rs"]

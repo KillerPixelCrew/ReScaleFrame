@@ -159,13 +159,14 @@ Resolve shared ABI, session, option and provider contract findings at their owne
 - [x] [sdk/game/include/rescaleframe/game_plugin_util.h](sdk/game/include/rescaleframe/game_plugin_util.h)
 - [ ] [sdk/game/include/rescaleframe/game_renderer.h](sdk/game/include/rescaleframe/game_renderer.h)
 
-**Fixtures (5)**
+**Fixtures (6)**
 
 - [x] [tests/negotiate.cpp](tests/negotiate.cpp)
 - [x] [tests/orchestrator_domains.cpp](tests/orchestrator_domains.cpp)
 - [x] [tests/plugin_contract.cpp](tests/plugin_contract.cpp)
 - [x] [tests/plugin_session.cpp](tests/plugin_session.cpp)
-- [ ] [tests/plugin_session_fixture.cpp](tests/plugin_session_fixture.cpp)
+- [x] [tests/plugin_session_fixture.cpp](tests/plugin_session_fixture.cpp)
+- [ ] [tests/plugin_session_fixture_throw.cpp](tests/plugin_session_fixture_throw.cpp) (deliberate foreign exception fixture)
 
 **Rust review findings (3)**
 
