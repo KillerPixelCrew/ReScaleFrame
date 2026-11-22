@@ -41,6 +41,10 @@ extern "C" fn rsf_anomaly_geometry_factory_enter() {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_geometry_factory_leave() {
+    leave_factory();
+}
+
+pub(super) fn leave_factory() {
     FACTORY.set(FACTORY.get() - 1);
 }
 
@@ -159,8 +163,7 @@ unsafe extern "C" fn rsf_anomaly_geometry_window_leave(node: *mut Window) {
     WINDOW.set(unsafe { (*node).previous });
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_geometry_near_enter() {
+pub(super) fn near_enter() {
     let node = WINDOW.get();
     if node.is_null() || !capturing() || unsafe { (*node).near_active } {
         return;
@@ -198,6 +201,10 @@ extern "C" fn rsf_anomaly_geometry_detail_leave() {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_geometry_visual_enter(node: *mut Visual) {
+    unsafe { enter_visual(node) };
+}
+
+pub(super) unsafe fn enter_visual(node: *mut Visual) {
     let (view, domain) = context();
     unsafe {
         (*node).previous = VISUAL.replace(node);

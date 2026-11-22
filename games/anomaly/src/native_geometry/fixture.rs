@@ -63,6 +63,44 @@ extern "C" fn rsf_test_anomaly_geometry_run_contract(contract: &Contract) {
     ]);
 }
 
+// Keep the real typed functions in the native fixture. Each entry names the
+// production slot whose detour should be applied to that fixture function.
+const REDIRECT_SLOTS: [usize; 15] = [0, 2, 3, 4, 6, 7, 10, 11, 12, 13, 14, 15, 8, 9, 16];
+
+fn redirect(
+    image: &Image,
+    base: usize,
+    sites: &[crate::native_hooks::Site],
+    targets: &[*const c_void; 15],
+    out: *mut crate::native_hooks::Site,
+) -> Option<()> {
+    for (i, (&slot, &target)) in REDIRECT_SLOTS.iter().zip(targets).enumerate() {
+        let mut site = *sites.get(slot)?;
+        let rva = u32::try_from(target.addr().checked_sub(base)?).ok()?;
+        site.rva = rva;
+        site.expected = image.copy(rva)?;
+        // The fixture lends one output record for each typed function.
+        unsafe { out.add(i).write(site) };
+    }
+    Some(())
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_test_anomaly_geometry_redirects(
+    base: *const u8,
+    size: u32,
+    read: Read,
+    sites: *const crate::native_hooks::Site,
+    site_count: usize,
+    targets: &[*const c_void; 15],
+    out: *mut crate::native_hooks::Site,
+) -> bool {
+    let image = Image::new(base, size, read);
+    // The profile lender retains the complete site table for this call.
+    let sites = unsafe { std::slice::from_raw_parts(sites, site_count) };
+    redirect(&image, base.addr(), sites, targets, out).is_some()
+}
+
 fn guard_lifecycle(
     image: *mut u8,
     platform: &Platform,

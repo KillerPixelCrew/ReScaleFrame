@@ -263,3 +263,39 @@ with warnings as errors for the geometry source and both fixtures.
 Pinned Rust 1.94.1 formatting, targeted bindgen 0.72.1 regeneration,
 locked offline Windows metadata and whitespace checks passed. Build,
 link, lint, fixtures and device or game execution remain pending.
+
+## Factory lifetime and typed draw sources
+
+The follow-up at base `f4871e47` gives Rust the successful factory exit.
+The Rust owner first leaves the factory scope, then performs the existing
+outermost-return check, retires the previous tree and publishes the new
+generations. Create, child-create and duplicate still call their original
+Microsoft x64 member trampolines from C++. The native stack guard still
+leaves the factory scope on unwind, with no model publication. Model
+deletion still retires before the original pool call. Geometry disable
+and callback retirement retain their existing ordering.
+
+The six native visual trampolines report their typed source to Rust.
+Rust derives the initial rigid, skin or tree kind, applies the verified
+160- and 208-byte CSkeletonX offsets, classifies the draw and links the
+pinned visual node before the native original runs with the same float
+argument. C++ retains the visual frame and pops it during normal or
+exceptional exit. The native rmNear original still runs before the Rust
+owner opens the interval and notifies the registered callback. The
+flush hook still captures before the upload and publishes afterwards.
+
+Rust builds the fifteen fixture redirects from the same native function
+addresses and production slots. It bounds each RVA and copies its
+16-byte prefix through the guarded native leaf. The fixture still
+allocates the PE, calls MinHook and invokes the actual typed targets.
+The guard corruption, release and re-enable sequences are unchanged.
+The exact Standard and AVX guard banks, N01 profile sources and N04
+inline snapshot remain in place.
+
+Source comparisons replayed the six visual-source mappings, the fifteen
+fixture redirects, factory success and unwind ordering, and the unchanged
+guard and integration paths. MSVC syntax-only checks with warnings as
+errors passed for the geometry source and both fixtures. Pinned Rust
+1.94.1 formatting, targeted bindgen 0.72.1 with unchanged fixture
+bindings, locked offline Windows metadata and whitespace checks passed.
+Build, link, lint, fixture and game execution remain pending.

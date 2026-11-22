@@ -95,12 +95,12 @@ class DrawScope {
 public:
     DrawScope(const IdentityRegistry&, std::optional<InstanceKey>, DrawKind, const float*,
         const std::byte* skeleton = nullptr, DrawClassification = {}, std::uint64_t visual = 0) noexcept;
-    DrawScope(void* visual, DrawKind, VisualType, const std::byte* skeleton) noexcept;
+    DrawScope(void* visual, VisualType) noexcept;
     ~DrawScope();
     DrawScope(const DrawScope&) = delete;
     DrawScope& operator=(const DrawScope&) = delete;
 private:
-    void enter() noexcept;
+    void update_identity() noexcept;
     rsf_anomaly_geometry_visual scope_{};
     DrawIdentity identity_{};
 };

@@ -3,6 +3,7 @@
 #include "anomaly_geometry_fixture.h"
 #include "anomaly_build_select.h"
 #include "native_hooks.h"
+#include "native_memory.h"
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -19,6 +20,8 @@
 #define CHECK(x) do { if (!(x)) { std::fprintf(stderr, "%d: %s\n", __LINE__, #x); std::exit(1); } } while (false)
 using namespace rsf::anomaly;
 using namespace rsf::anomaly::geometry;
+extern "C" bool rsf_test_anomaly_geometry_redirects(const std::byte*, std::uint32_t,
+    decltype(&guarded_copy), const HookSite*, std::size_t, void* const (*)[15], HookSite*) noexcept;
 namespace {
 using Create = void*(__fastcall*)(void*, const char*, void*);
 using Duplicate = void*(__fastcall*)(void*, void*);
@@ -279,7 +282,7 @@ int main(int argc, char** argv)
     auto base = reinterpret_cast<std::byte*>(GetModuleHandleW(nullptr));
     const auto dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
     const auto pe = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
-    const std::array<void*, 15> fixtures{reinterpret_cast<void*>(&create_fixture), reinterpret_cast<void*>(&duplicate_fixture),
+    void* const fixtures[15]{reinterpret_cast<void*>(&create_fixture), reinterpret_cast<void*>(&duplicate_fixture),
         reinterpret_cast<void*>(&delete_fixture), reinterpret_cast<void*>(&render_fixture),
         reinterpret_cast<void*>(&skin_st_fixture), reinterpret_cast<void*>(&skin_pm_fixture),
         reinterpret_cast<void*>(&flush_fixture), reinterpret_cast<void*>(&hud_fixture),
@@ -287,15 +290,9 @@ int main(int argc, char** argv)
         reinterpret_cast<void*>(&near_fixture), reinterpret_cast<void*>(&normal_fixture),
         reinterpret_cast<void*>(&tree_st_fixture), reinterpret_cast<void*>(&tree_pm_fixture),
         reinterpret_cast<void*>(&detail_fixture)};
-    const std::array<std::size_t, 15> indexes{0, 2, 3, 4, 6, 7, geometry_site_flush, geometry_site_render_hud,
-        geometry_site_render_sorted, geometry_site_render_emissive, geometry_site_rm_near, geometry_site_rm_normal,
-        8, 9, geometry_site_detail_render};
     std::array<HookSite, 15> redirects;
-    for (std::size_t i = 0; i < redirects.size(); ++i) {
-        redirects[i] = sites[indexes[i]];
-        redirects[i].rva = static_cast<std::uint32_t>(reinterpret_cast<std::byte*>(fixtures[i]) - base);
-        std::memcpy(redirects[i].expected.data(), fixtures[i], 16);
-    }
+    CHECK(rsf_test_anomaly_geometry_redirects(base, pe->OptionalHeader.SizeOfImage, guarded_copy,
+        sites.data(), sites.size(), &fixtures, redirects.data()));
     HookSet hooks;
     CHECK(hooks.install(base, pe->OptionalHeader.SizeOfImage, redirects));
     const auto create = reinterpret_cast<Create>(fixtures[0]);

@@ -1235,6 +1235,12 @@ the exact-profile detour records and transfers staged vertex constants
 through the guarded native leaf. Source and MSVC syntax-only checks
 passed. [Rust fixture orchestration and hook plans](research/rust-anomaly-native-geometry.md#rust-fixture-orchestration-and-hook-plans)
 
+Rust now completes geometry factory lifetimes, selects typed draw
+sources and builds the native fixture redirects through guarded copy.
+The typed native trampolines and stack unwind guards remain in C++.
+Source and MSVC syntax-only checks passed.
+[Factory lifetime and typed draw sources](research/rust-anomaly-native-geometry.md#factory-lifetime-and-typed-draw-sources)
+
 Anomaly's Rust geometry owner now distinguishes owned and borrowed
 child ranges before model reuse and retirement. The selected profile
 and guarded memory reads remain native. The expanded geometry fixture

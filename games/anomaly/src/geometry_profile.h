@@ -62,8 +62,7 @@ inline constexpr std::uint32_t constant_buffer_data_offset = 0x60;   // void* m_
 inline constexpr std::uint32_t tree_pm_last_lod_offset = 0x108;
 // Detail rows live in `float4 array[61*4]`: four rows per instance, row 3 is (sun, sun, sun, hemi).
 inline constexpr std::uint32_t detail_batch_instances = 61;
-inline constexpr std::uint32_t skeleton_st_offset = 160;
-inline constexpr std::uint32_t skeleton_pm_offset = 208;
+// CSkeletonX subobject offsets are consumed by the Rust draw source setup.
 inline constexpr std::uint32_t hierarchy_children_offset = 96;
 // Bone instance stride and transform offset are consumed by the Rust palette reader.
 

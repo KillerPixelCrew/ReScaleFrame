@@ -201,32 +201,43 @@ void observe_draw_facts(DrawTimeFacts& facts, CaptureStorage& capture) noexcept
         static_cast<VisualType>(raw.type), raw.tree_lod, raw.detail};
 }
 
-struct FactoryScope {
+class FactoryScope {
+public:
     FactoryScope() noexcept { rsf_anomaly_geometry_factory_enter(); }
-    ~FactoryScope() { rsf_anomaly_geometry_factory_leave(); }
+    ~FactoryScope() { if (active_) rsf_anomaly_geometry_factory_leave(); }
+
+    void complete(void* owner, void* result) noexcept
+    {
+        active_ = false;
+        rsf_anomaly_geometry_factory_complete(&platform, reinterpret_cast<std::uintptr_t>(owner),
+            reinterpret_cast<std::uintptr_t>(result));
+    }
+
+private:
+    bool active_{true};
 };
 
 void* __fastcall create_hook(void* self, const char* name, void* reader)
 {
-    void* result;
-    { const FactoryScope factory; result = reinterpret_cast<Create>(originals[0])(self, name, reader); }
-    rsf_anomaly_geometry_model_return(&platform, reinterpret_cast<std::uintptr_t>(self), reinterpret_cast<std::uintptr_t>(result));
+    FactoryScope factory;
+    auto* result = reinterpret_cast<Create>(originals[0])(self, name, reader);
+    factory.complete(self, result);
     return result;
 }
 
 void* __fastcall child_hook(void* self, const char* name, void* reader)
 {
-    void* result;
-    { const FactoryScope factory; result = reinterpret_cast<Create>(originals[1])(self, name, reader); }
-    rsf_anomaly_geometry_model_return(&platform, reinterpret_cast<std::uintptr_t>(self), reinterpret_cast<std::uintptr_t>(result));
+    FactoryScope factory;
+    auto* result = reinterpret_cast<Create>(originals[1])(self, name, reader);
+    factory.complete(self, result);
     return result;
 }
 
 void* __fastcall duplicate_hook(void* self, void* source)
 {
-    void* result;
-    { const FactoryScope factory; result = reinterpret_cast<Duplicate>(originals[2])(self, source); }
-    rsf_anomaly_geometry_model_return(&platform, reinterpret_cast<std::uintptr_t>(self), reinterpret_cast<std::uintptr_t>(result));
+    FactoryScope factory;
+    auto* result = reinterpret_cast<Duplicate>(originals[2])(self, source);
+    factory.complete(self, result);
     return result;
 }
 
@@ -236,19 +247,18 @@ void __fastcall delete_hook(void* self, void** reference, std::int32_t discard)
     reinterpret_cast<Delete>(originals[3])(self, reference, discard);
 }
 
-void render_visual(std::size_t index, void* self, float lod, DrawKind kind, VisualType type, std::uint32_t skeleton_offset = 0)
+void render_visual(std::size_t index, void* self, float lod, VisualType type)
 {
-    const auto* skeleton = skeleton_offset ? static_cast<const std::byte*>(self) + skeleton_offset : nullptr;
-    const DrawScope draw(self, kind, type, skeleton);
+    const DrawScope draw(self, type);
     reinterpret_cast<Render>(originals[index])(self, lod);
 }
 
-void __fastcall rigid_hook(void* self, float lod) { render_visual(4, self, lod, DrawKind::Rigid, VisualType::Static); }
-void __fastcall progressive_hook(void* self, float lod) { render_visual(5, self, lod, DrawKind::Rigid, VisualType::Progressive); }
-void __fastcall skeleton_st_hook(void* self, float lod) { render_visual(6, self, lod, DrawKind::HardwareSkinned, VisualType::SkeletonST, skeleton_st_offset); }
-void __fastcall skeleton_pm_hook(void* self, float lod) { render_visual(7, self, lod, DrawKind::HardwareSkinned, VisualType::SkeletonPM, skeleton_pm_offset); }
-void __fastcall tree_st_hook(void* self, float lod) { render_visual(8, self, lod, DrawKind::Tree, VisualType::TreeST); }
-void __fastcall tree_pm_hook(void* self, float lod) { render_visual(9, self, lod, DrawKind::Tree, VisualType::TreePM); }
+void __fastcall rigid_hook(void* self, float lod) { render_visual(4, self, lod, VisualType::Static); }
+void __fastcall progressive_hook(void* self, float lod) { render_visual(5, self, lod, VisualType::Progressive); }
+void __fastcall skeleton_st_hook(void* self, float lod) { render_visual(6, self, lod, VisualType::SkeletonST); }
+void __fastcall skeleton_pm_hook(void* self, float lod) { render_visual(7, self, lod, VisualType::SkeletonPM); }
+void __fastcall tree_st_hook(void* self, float lod) { render_visual(8, self, lod, VisualType::TreeST); }
+void __fastcall tree_pm_hook(void* self, float lod) { render_visual(9, self, lod, VisualType::TreePM); }
 
 void __fastcall flush_hook()
 {
@@ -291,8 +301,7 @@ void __fastcall render_emissive_hook(void* self)
 void __fastcall rm_near_hook(void* self)
 {
     reinterpret_cast<Unary>(originals[geometry_site_rm_near])(self);
-    rsf_anomaly_geometry_near_enter();
-    rsf_anomaly_geometry_publish_near(self);
+    rsf_anomaly_geometry_after_near(self);
 }
 
 void __fastcall rm_normal_hook(void* self)
@@ -344,23 +353,21 @@ DrawScope::DrawScope(const IdentityRegistry& registry, std::optional<InstanceKey
     scope_.pass = static_cast<std::uint8_t>(classification.pass);
     scope_.type = static_cast<std::uint8_t>(classification.type);
     scope_.verdict = static_cast<std::uint8_t>(classification.verdict);
-    enter();
-}
-
-DrawScope::DrawScope(void* visual, DrawKind kind, VisualType type, const std::byte* skeleton) noexcept
-{
-    scope_.visual = reinterpret_cast<std::uintptr_t>(visual);
-    scope_.skeleton = reinterpret_cast<std::uintptr_t>(skeleton);
-    scope_.kind = static_cast<std::uint8_t>(kind);
-    scope_.type = static_cast<std::uint8_t>(type);
-    rsf_anomaly_geometry_classify_visual(&platform, &scope_);
-    enter();
-}
-
-void DrawScope::enter() noexcept
-{
     scope_.facade = &identity_;
     rsf_anomaly_geometry_visual_enter(&scope_);
+    update_identity();
+}
+
+DrawScope::DrawScope(void* visual, VisualType type) noexcept
+{
+    scope_.facade = &identity_;
+    rsf_anomaly_geometry_visual_source_enter(&platform, &scope_, reinterpret_cast<std::uintptr_t>(visual),
+        static_cast<std::uint8_t>(type));
+    update_identity();
+}
+
+void DrawScope::update_identity() noexcept
+{
     identity_ = {{scope_.key.owner, scope_.key.visual, scope_.key.generation}, static_cast<DrawKind>(scope_.kind),
         optional_enum<temporal::ViewId>(scope_.view), optional_enum<temporal::ProjectionDomain>(scope_.domain),
         reinterpret_cast<const float*>(scope_.world), reinterpret_cast<const std::byte*>(scope_.skeleton),

@@ -185,7 +185,8 @@ extern "C" fn rsf_anomaly_geometry_publish_flush(facts: *const NativeDrawFacts) 
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_geometry_publish_near(render: *mut c_void) {
+extern "C" fn rsf_anomaly_geometry_after_near(render: *mut c_void) {
+    scopes::near_enter();
     let callback = *NEAR.read().unwrap();
     if let Some(callback) = callback {
         unsafe { callback(render) };
@@ -317,7 +318,12 @@ fn retire_tree(owner: u64, tree: &[usize]) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_geometry_model_return(platform: &Platform, owner: usize, visual: usize) {
+extern "C" fn rsf_anomaly_geometry_factory_complete(
+    platform: &Platform,
+    owner: usize,
+    visual: usize,
+) {
+    scopes::leave_factory();
     if !capturing() || visual == 0 || scopes::in_factory() {
         return;
     }
@@ -420,8 +426,44 @@ fn affine_matrix(native: &NativeMatrix) -> Option<Matrix> {
     Some(from_engine_matrix(native))
 }
 
+#[repr(u8)]
+#[allow(dead_code)] // The six native render trampolines supply these source tags.
+enum VisualSource {
+    Static = RSF_ANOMALY_TYPE_STATIC as u8,
+    Progressive = RSF_ANOMALY_TYPE_PROGRESSIVE as u8,
+    SkeletonSt = RSF_ANOMALY_TYPE_SKELETON_ST as u8,
+    SkeletonPm = RSF_ANOMALY_TYPE_SKELETON_PM as u8,
+    TreeSt = RSF_ANOMALY_TYPE_TREE_ST as u8,
+    TreePm = RSF_ANOMALY_TYPE_TREE_PM as u8,
+}
+
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_geometry_classify_visual(platform: &Platform, visual: &mut Visual) {
+unsafe extern "C" fn rsf_anomaly_geometry_visual_source_enter(
+    platform: &Platform,
+    node: *mut Visual,
+    address: usize,
+    source: VisualSource,
+) {
+    const SKELETON_ST_OFFSET: usize = 160;
+    const SKELETON_PM_OFFSET: usize = 208;
+    let (kind, offset) = match source {
+        VisualSource::Static | VisualSource::Progressive => (RIGID, None),
+        VisualSource::SkeletonSt => (HARDWARE_SKINNED, Some(SKELETON_ST_OFFSET)),
+        VisualSource::SkeletonPm => (HARDWARE_SKINNED, Some(SKELETON_PM_OFFSET)),
+        VisualSource::TreeSt | VisualSource::TreePm => (TREE, None),
+    };
+    let visual = unsafe { &mut *node };
+    visual.visual = address as u64;
+    visual.skeleton = offset
+        .and_then(|offset| address.checked_add(offset))
+        .unwrap_or(0);
+    visual.kind = kind;
+    visual.visual_type = source as u8;
+    classify_visual(platform, visual);
+    unsafe { scopes::enter_visual(node) };
+}
+
+fn classify_visual(platform: &Platform, visual: &mut Visual) {
     let engine = rsf_anomaly_geometry_binding();
     let pass = read_pass(platform, engine);
     let capturing = capturing() && !scopes::in_factory();
