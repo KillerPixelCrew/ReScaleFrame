@@ -5,7 +5,7 @@ use crate::asi::{self, AsiPlatform, MH_ERROR_ALREADY_INITIALIZED, MH_OK};
 use crate::layout::{asi::SOCIAL_CLUB_DISPATCHER, social_club as profile};
 use crate::platform::lock;
 use crate::runtime_worker::log;
-use std::ffi::{CStr, c_void};
+use std::ffi::c_void;
 use std::ptr::{self, null, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -95,16 +95,6 @@ fn relay(base: usize) -> [u8; 43] {
     code
 }
 
-fn status_text(asi: &AsiPlatform, status: i32) -> String {
-    let text = unsafe { (asi.hook_status)(status) };
-    if text.is_null() {
-        return status.to_string();
-    }
-    unsafe { CStr::from_ptr(text) }
-        .to_string_lossy()
-        .into_owned()
-}
-
 #[unsafe(no_mangle)]
 extern "C" fn rsf_rdr2_social_club_dispatch() {
     let (Some(asi), Some(options)) = (asi::platform(), OPTIONS.get()) else {
@@ -161,7 +151,7 @@ extern "C" fn rsf_rdr2_social_club_dispatch() {
     REPAIRED.store(repaired, Ordering::Release);
     log(format!(
         "Social Club backbuffer fix at renderer RVA 0x4b89: {}",
-        status_text(asi, status)
+        asi.status_text(status)
     ));
     if !repaired {
         if registered {
@@ -182,7 +172,7 @@ extern "C" fn rsf_rdr2_social_club_dispatch() {
         }
         log(format!(
             "Social Club frame trace: {}",
-            status_text(asi, status)
+            asi.status_text(status)
         ));
     }
 }

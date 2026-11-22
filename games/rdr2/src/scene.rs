@@ -202,8 +202,10 @@ unsafe extern "C" fn sleep() -> bool {
         // Same producer as the game's INPUT_SAMPLE caller at abcfea: direct counter + 1.
         if let Some(current) = platform.read_value::<u32>(image.wrapping_add(FRAME_COUNTER)) {
             let frame = u64::from(current.wrapping_add(1));
-            if latency(platform, RSF_GAME_LATENCY_SLEEP, frame) {
+            if ACTIVE.load(Ordering::SeqCst) {
                 input_thread(platform, frame);
+            }
+            if latency(platform, RSF_GAME_LATENCY_SLEEP, frame) {
                 return true;
             }
         }

@@ -102,9 +102,13 @@ impl Snapshot {
         thread_slots: unsafe extern "C" fn() -> usize,
     ) {
         self.frame_counter = platform.read_value(image + FRAME_COUNTER).unwrap_or(0);
-        self.tls_index = platform.read_value(image + TLS_INDEX).unwrap_or(0);
+        let Some(index) = platform.read_value::<u32>(image + TLS_INDEX) else {
+            self.tls_index = u32::MAX;
+            return;
+        };
+        self.tls_index = index;
         let slots = unsafe { thread_slots() };
-        if self.tls_index >= block::TLS_LIMIT {
+        if slots == 0 || index >= block::TLS_LIMIT {
             return;
         }
         let offset = self.tls_index as usize * size_of::<usize>();
@@ -263,7 +267,15 @@ extern "C" fn rsf_rdr2_camera_capture(
         "camera-{process}-{:03}-{:03}.bin",
         record.capture, record.index
     ));
-    let _ = fs::write(output, record.bytes());
+    if let Err(error) = fs::write(&output, record.bytes()) {
+        crate::runtime_worker::log(format!(
+            "RDR2 camera capture stopped after {} saved records: {}: {error}",
+            probe.index,
+            output.display()
+        ));
+        probe.remaining = 0;
+        return;
+    }
     probe.index += 1;
     probe.remaining -= 1;
 }
