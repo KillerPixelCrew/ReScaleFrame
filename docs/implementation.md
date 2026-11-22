@@ -229,10 +229,12 @@ ABI checks and fixture, device and game runs for these ports remain open.
 - Godot's private Rust SCons object assembles CPU event records. The engine
   callbacks still supply the timestamps, frame identity and input kinds.
   [Godot native migration](../integrations/godot/NATIVE.md)
-- Anomaly's existing Rust reflection owner now enumerates signatures,
-  resources and constant buffers through typed D3D leaves. The row order,
-  partial results and dynamic Runtime lookup were compared in source.
-  [Reflection owner](../games/anomaly/src/shader_loader/reflection.rs)
+- Anomaly's Rust reflection owner publishes a complete D3D11 snapshot and
+  refuses unreadable rows. Manifest admission, draw classification, and
+  reports share stable shader-family IDs. The offline tree compiler uses the
+  shared Rust compiler, and the guarded engine include lookup remains tied
+  to the Standard and AVX profiles.
+  [Shader loader port](research/rust-anomaly-shader-loader-n05.md)
 
 The [integration migration scope](rust-migration.md#remaining-integration-ports)
 covers the existing game and engine adapters beyond Anomaly. Project Wingman

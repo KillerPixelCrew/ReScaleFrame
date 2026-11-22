@@ -11,6 +11,7 @@ mod stage;
 mod window;
 
 use crate::geometry_registry_abi::rsf_anomaly_geometry_key as InstanceKey;
+use crate::shader_family::{CORE_MODEL, CORE_STATIC, FOLIAGE_DETAIL, FOLIAGE_TREE};
 #[cfg(windows)]
 pub(crate) use stage::record_retirement;
 use std::borrow::Cow;
@@ -866,11 +867,6 @@ extern "C" fn rsf_anomaly_motion_history_reason_name(reason: u8) -> *const c_cha
         .unwrap_or(c"unknown")
         .as_ptr()
 }
-
-const CORE_STATIC: u8 = 1;
-const CORE_MODEL: u8 = 2;
-const FOLIAGE_TREE: u8 = 4;
-const FOLIAGE_DETAIL: u8 = 5;
 
 const RIGID: u8 = 0;
 const HARDWARE_SKINNED: u8 = 1;

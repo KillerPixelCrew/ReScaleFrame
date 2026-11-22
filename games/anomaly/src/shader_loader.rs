@@ -11,7 +11,7 @@ pub(crate) use manifest::{Entry, Manifest};
 pub(crate) use reflection::Reflection;
 use reflection::{Compatibility, rsf_anomaly_shader_compatible};
 pub(crate) use runtime_pack::RuntimePack;
-use std::ffi::{OsString, c_void};
+use std::ffi::{CStr, OsString, c_char, c_void};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::windows::ffi::OsStringExt;
@@ -89,8 +89,14 @@ unsafe extern "C" fn rsf_anomaly_shader_sha256(bytes: Bytes, out: &mut [u8; 64])
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_shader_stage_matches(target: Bytes, stage: u8) -> bool {
-    unsafe { target.as_slice() }.first() == Some(&stage)
+unsafe extern "C" fn rsf_anomaly_shader_match_request(
+    manifest: Option<&Manifest>,
+    source: Bytes,
+    target: Bytes,
+) -> Option<&Entry> {
+    let hash = sha256(unsafe { source.as_slice() })?;
+    let entry = manifest?.find(&hash)?;
+    (unsafe { target.as_slice() }.first() == Some(&entry.stage)).then_some(entry)
 }
 
 fn cache_key(request: &Request, id: &Identity) -> Option<[u8; 64]> {
@@ -151,6 +157,37 @@ enum Outcome {
     OriginalMismatch = 6,
     MotionCompileFailed = 7,
     ReflectionMismatch = 8,
+}
+
+pub(crate) const OUTCOME_NAMES: [&CStr; 10] = [
+    c"not_allowlisted",
+    c"replaced",
+    c"replaced_from_cache",
+    c"unknown_caller",
+    c"unreadable",
+    c"original_compile_failed",
+    c"original_mismatch",
+    c"motion_compile_failed",
+    c"reflection_mismatch",
+    c"create_failed",
+];
+
+pub(crate) fn outcome_name(value: u8) -> &'static str {
+    outcome_label(value)
+        .to_str()
+        .expect("outcome names are ASCII")
+}
+
+fn outcome_label(value: u8) -> &'static CStr {
+    OUTCOME_NAMES
+        .get(usize::from(value))
+        .copied()
+        .unwrap_or(c"unknown")
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_shader_outcome_name(value: u8) -> *const c_char {
+    outcome_label(value).as_ptr()
 }
 
 type Reflect = unsafe extern "C" fn(*mut c_void, bool, Bytes, *mut Reflection) -> bool;

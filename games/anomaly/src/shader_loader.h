@@ -37,7 +37,11 @@ namespace rsf::anomaly::motion {
 // TessHull/TessDomain: DX11\tess.hs and DX11\tess.ds of X-Ray's G-buffer tessellation pass (uber_deffer.cpp r_TessPass,
 // r4_enable_tessellation): the motion hull stage carries the previous control data, the motion domain stage rebuilds the
 // previous PN patch and writes the previous clip position for the motion PS.
-enum class Family : std::uint8_t { None, CoreStatic, CoreModel, CorePixel, FoliageTree, FoliageDetail, TessHull, TessDomain, Count };
+// Stable byte values shared with shader_family.rs.
+enum class Family : std::uint8_t {
+    None = 0, CoreStatic = 1, CoreModel = 2, CorePixel = 3, FoliageTree = 4,
+    FoliageDetail = 5, TessHull = 6, TessDomain = 7, Count = 8
+};
 const char* family_name(Family) noexcept;
 bool family_is_vertex(Family) noexcept;
 // 'v', 'p', 'h' or 'd' (the first letter of the engine's compile target); 0 for None.
@@ -186,8 +190,6 @@ public:
     using Prepare = std::function<Prepared(const ShaderRequest&, const ManifestEntry&)>;
     ShaderLoader(Manifest, Compiler&, Reflector&, Prepare);
     const Manifest& manifest() const noexcept { return manifest_; }
-    // True when the root source is in the manifest; cheap, so the detour can skip everything else.
-    const ManifestEntry* lookup(std::span<const std::byte> source) const;
     Prepared prepare(const ShaderRequest&);
     std::string cache_key(const ShaderRequest&, const ManifestEntry&) const;
 private:

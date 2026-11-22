@@ -420,6 +420,8 @@ name = "rsf-anomaly"
 version = "0.1.2"
 dependencies = [
  "rsf-game-sys",
+ "rsf-shader-compiler",
+ "windows",
  "windows-sys",
 ]
 

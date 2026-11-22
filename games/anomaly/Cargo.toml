@@ -12,6 +12,13 @@ crate-type = ["staticlib"]
 [dependencies]
 rsf-game-sys = { path = "../../sdk/game" }
 
+[target."cfg(windows)".dependencies]
+rsf-shader-compiler = { path = "../../runtime/shader_patch/compiler", default-features = false }
+windows = { version = "0.62.2", default-features = false, features = [
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D11",
+] }
+
 [target."cfg(windows)".dependencies.windows-sys]
 version = "0.61"
 features = [

@@ -49,6 +49,7 @@ mod overlay_abi;
 mod overlay_hooks;
 #[cfg(windows)]
 mod runtime_module;
+mod shader_family;
 #[cfg(windows)]
 mod shader_loader;
 mod sr_d3d11;

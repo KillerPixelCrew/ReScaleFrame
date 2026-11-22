@@ -104,7 +104,9 @@ void rsf_anomaly_shader_admitted_view(const rsf_anomaly_shader_admitted*, rsf_an
 const rsf_anomaly_shader_entry* rsf_anomaly_shader_admitted_find(const rsf_anomaly_shader_admitted*,
     rsf_anomaly_shader_bytes original);
 bool rsf_anomaly_shader_sha256(rsf_anomaly_shader_bytes, uint8_t (*out)[64]);
-bool rsf_anomaly_shader_stage_matches(rsf_anomaly_shader_bytes, uint8_t);
+const rsf_anomaly_shader_entry* rsf_anomaly_shader_match_request(const rsf_anomaly_shader_admitted*,
+    rsf_anomaly_shader_bytes source, rsf_anomaly_shader_bytes target);
+const char* rsf_anomaly_shader_outcome_name(uint8_t);
 uint8_t rsf_anomaly_shader_frame(const rsf_anomaly_shader_frame_layout*, uintptr_t module, uintptr_t return_address,
     uintptr_t stack, const void* reader, rsf_anomaly_shader_read, void* request, rsf_anomaly_shader_publish);
 uint8_t rsf_anomaly_shader_compatible(uint8_t, const rsf_anomaly_shader_reflection*, const rsf_anomaly_shader_reflection*);
@@ -124,6 +126,10 @@ void rsf_anomaly_shader_finish_runtime(const rsf_anomaly_shader_request*, uint8_
 #include "shader_loader.h"
 #include <cstddef>
 namespace rsf::anomaly::motion {
+static_assert(sizeof(rsf_anomaly_shader_reflection) == 88 &&
+    offsetof(rsf_anomaly_shader_reflection, inputs) == 8 && offsetof(rsf_anomaly_shader_reflection, buffers) == 72);
+static_assert(sizeof(rsf_anomaly_shader_parameter) == 40 && sizeof(rsf_anomaly_shader_variable) == 24 &&
+    sizeof(rsf_anomaly_shader_buffer) == 40 && sizeof(rsf_anomaly_shader_binding) == 40);
 static_assert(sizeof(rsf_anomaly_shader_frame_layout) == 36);
 static_assert(sizeof(rsf_anomaly_shader_request) == 88 && offsetof(rsf_anomaly_shader_request, defines) == 40 &&
     offsetof(rsf_anomaly_shader_request, bytecode) == 72);

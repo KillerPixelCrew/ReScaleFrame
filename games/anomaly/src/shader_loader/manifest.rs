@@ -2,32 +2,9 @@
 //! The admitted motion manifest. Rust owns its rows and the original-source digest index for
 //! both the fixture text form and the Runtime pack form. Native code holds the opaque object.
 use super::Bytes;
+use crate::shader_family::FAMILIES;
 use std::collections::HashSet;
 use std::ffi::{CStr, c_char, c_void};
-
-const FAMILIES: [(&CStr, u8); 8] = [
-    (c"none", 0),
-    (c"core_static", b'v'),
-    (c"core_model", b'v'),
-    (c"core_pixel", b'p'),
-    (c"foliage_tree", b'v'),
-    (c"foliage_detail", b'v'),
-    (c"tess_hull", b'h'),
-    (c"tess_domain", b'd'),
-];
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_shader_family_name(family: u8) -> *const c_char {
-    FAMILIES
-        .get(family as usize)
-        .map_or(c"unknown", |f| f.0)
-        .as_ptr()
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_shader_family_stage(family: u8) -> u8 {
-    FAMILIES.get(family as usize).map_or(0, |f| f.1)
-}
 
 #[repr(C)]
 pub(super) struct Root {
@@ -147,8 +124,8 @@ impl<'a> Candidate<'a> {
         let motion = unsafe { root.motion.as_slice() };
         let name = unsafe { root.name.as_slice() };
         let tag = unsafe { root.tag.as_slice() };
-        let family = FAMILIES.iter().position(|&(label, stage)| {
-            stage != 0 && u32::from(stage) == root.stage && tag == label.to_bytes()
+        let family = FAMILIES.iter().find_map(|&(id, label, stage)| {
+            (stage != 0 && u32::from(stage) == root.stage && tag == label.to_bytes()).then_some(id)
         });
         // Only the fixture opens the root path on disk. Runtime names are engine filesystem keys.
         let Some(family) = family.filter(|_| {
@@ -167,7 +144,7 @@ impl<'a> Candidate<'a> {
             original,
             motion,
             stage: root.stage as u8,
-            family: family as u8,
+            family,
         });
         Ok(())
     }

@@ -44,7 +44,7 @@ impl RuntimePack {
 struct Includer {
     table: *mut c_void,
     open: unsafe extern "C" fn(*mut c_void, *const c_char, *mut *const c_void, *mut u32) -> bool,
-    copy: unsafe extern "C" fn(*mut c_void, *const c_void, usize) -> bool,
+    copy: GuardedCopy,
     close: unsafe extern "C" fn(*mut c_void, *const c_void),
 }
 
@@ -245,16 +245,65 @@ impl RuntimePack {
     }
 }
 
+type GuardedCopy = unsafe extern "C" fn(*mut c_void, *const c_void, usize) -> bool;
+
+fn read_bytes<const N: usize>(read: GuardedCopy, address: usize) -> Option<[u8; N]> {
+    let mut bytes = [0; N];
+    unsafe { read(bytes.as_mut_ptr().cast(), address as *const c_void, N) }.then_some(bytes)
+}
+
+fn includer_table(image: usize, setup_rva: u32, read: GuardedCopy) -> Result<usize, &'static str> {
+    // Standard/AVX share the LEA form and vtable entry prefixes, with distinct profiled RVAs.
+    let instruction = || {
+        let lea = image.checked_add(setup_rva as usize)?.checked_add(6)?;
+        let [0x48, 0x8d, 0x05, a, b, c, d] = read_bytes::<7>(read, lea)? else {
+            return None;
+        };
+        let displacement = i32::from_le_bytes([a, b, c, d]) as isize;
+        lea.checked_add(7)?.checked_add_signed(displacement)
+    };
+    let table = instruction().ok_or("include table instruction")?;
+    let entries = || {
+        let open = usize::from_le_bytes(read_bytes(read, table)?);
+        let close = usize::from_le_bytes(read_bytes(read, table.checked_add(size_of::<usize>())?)?);
+        Some(
+            read_bytes::<9>(read, open)? == [0x40, 0x53, 0x48, 0x81, 0xec, 0x40, 0x02, 0x00, 0x00]
+                && read_bytes::<8>(read, close)?
+                    == [0x48, 0x83, 0xec, 0x28, 0x48, 0x85, 0xd2, 0x74],
+        )
+    };
+    if entries() == Some(true) {
+        Ok(table)
+    } else {
+        Err("engine includer entries")
+    }
+}
+
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_runtime_pack_open(
     pack: *const u16,
     cache: *const u16,
     compiler_name: *const u16,
+    image: usize,
+    setup_rva: u32,
     includer: &Includer,
     error: *mut c_char,
     capacity: usize,
 ) -> *mut RuntimePack {
-    match unsafe { RuntimePack::open(pack, cache, compiler_name, *includer) } {
+    let opened = includer_table(image, setup_rva, includer.copy)
+        .map_err(String::from)
+        .and_then(|table| unsafe {
+            RuntimePack::open(
+                pack,
+                cache,
+                compiler_name,
+                Includer {
+                    table: table as *mut c_void,
+                    ..*includer
+                },
+            )
+        });
+    match opened {
         Ok(pack) => Box::into_raw(Box::new(pack)),
         Err(message) => {
             if !error.is_null() && capacity != 0 {
