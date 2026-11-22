@@ -140,21 +140,24 @@ mod platform {
     /// [UnitySR] `name` from `ini` as written, cut as GetPrivateProfileStringW cuts it for a
     /// buffer of `capacity` characters. Empty when unset.
     pub(crate) fn string_setting(ini: &Ini, name: PCWSTR, capacity: usize) -> Vec<u16> {
-        let mut text = vec![0u16; capacity];
+        let read_capacity = rsf_game_sys::profile_text::read_capacity(capacity);
+        let mut text = vec![0u16; read_capacity];
         let count = unsafe {
             GetPrivateProfileStringW(
                 SECTION,
                 name,
                 w!(""),
                 text.as_mut_ptr(),
-                capacity as u32,
+                read_capacity as u32,
                 ini.as_ptr(),
             )
         } as usize;
-        text.truncate(count.min(capacity));
+        text.truncate(count.min(read_capacity));
         if let Some(end) = text.iter().position(|&unit| unit == 0) {
             text.truncate(end);
         }
+        let mut text = rsf_game_sys::profile_text::decode(text);
+        text.truncate(capacity.saturating_sub(1));
         text
     }
 

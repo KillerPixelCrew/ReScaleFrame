@@ -65,6 +65,10 @@ const MONO: PCWSTR = w!("mono-2.0-bdwgc.dll");
 static FG_STARTED: Mutex<bool> = Mutex::new(false);
 /// [UnitySR] Log, read by the generation start and written by [`log`].
 static LOG_PATH: Mutex<Vec<u16>> = Mutex::new(Vec::new());
+static DIAGNOSTICS_INI: Mutex<Vec<u16>> = Mutex::new(Vec::new());
+
+#[path = "../../../runtime/orchestrator/src/overlay_saved_abi.rs"]
+mod saved_abi;
 
 const ENGINE_VERSION: &CStr = c"6000.3";
 const PROJECT_ID: &CStr = c"57a42c7e-faf0-4bda-a9f9-892870948ac1";
@@ -81,6 +85,82 @@ unsafe extern "C" {
     fn rsf_unity_mono_drained_generation(generation: *mut u32) -> c_int;
     fn rsf_unity_mono_graphics_debug();
     fn rsf_unity_mono_dlss_preset_valid(preset: u32) -> c_int;
+    fn rsf_overlay_saved_options_register(
+        scope: *mut c_void,
+        setup: *const saved_abi::rsf_overlay_saved_setup,
+    ) -> i32;
+    fn rsf_overlay_saved_options_unregister(scope: *mut c_void) -> i32;
+}
+
+unsafe extern "C" fn capture_directory_changed(
+    _: *mut c_void,
+    index: u32,
+    _: *const u16,
+    length: u32,
+) -> i32 {
+    if index != 1 {
+        return -1;
+    }
+    let ini = {
+        let path = DIAGNOSTICS_INI
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if path.is_empty() {
+            return -3;
+        }
+        unsafe { Ini::new(path.as_ptr()) }.expect("registered INI")
+    };
+    // Runtime persisted the value before invoking this callback. Resolve it the
+    // same way as startup, including relative paths and clearing the directory.
+    let path = path_setting(&ini, w!("FGCaptureDirectory"));
+    if length != 0 && path.is_empty() {
+        return -1;
+    }
+    let capture = terminated(utf8(&path));
+    unsafe { rsf_fg12_capture_outputs(capture.as_ptr().cast()) }
+}
+
+fn register_diagnostics(ini: &Ini) {
+    use saved_abi::*;
+    let mut path = DIAGNOSTICS_INI
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let rows = [
+        rsf_overlay_saved_option {
+            label_utf8: c"Graphics debug layer".as_ptr(),
+            key_utf8: c"GraphicsDebug".as_ptr(),
+            kind: RSF_OVERLAY_SAVED_TOGGLE,
+            restart: 1,
+            ..Default::default()
+        },
+        rsf_overlay_saved_option {
+            label_utf8: c"Frame generation capture directory".as_ptr(),
+            key_utf8: c"FGCaptureDirectory".as_ptr(),
+            kind: RSF_OVERLAY_SAVED_TEXT,
+            max_text_length: RSF_OVERLAY_SAVED_TEXT_LIMIT,
+            ..Default::default()
+        },
+    ];
+    let setup = rsf_overlay_saved_setup {
+        struct_size: size_of::<rsf_overlay_saved_setup>() as u32,
+        abi_version: RSF_OVERLAY_SAVED_OPTIONS_ABI_VERSION,
+        configuration_path: ini.as_ptr(),
+        configuration_section: w!("UnitySR"),
+        options: rows.as_ptr(),
+        option_count: rows.len() as u32,
+        apply: Some(capture_directory_changed),
+        ..Default::default()
+    };
+    if unsafe { rsf_overlay_saved_options_register(null_mut(), &setup) } == 0 {
+        *path = terminated(ini.chars().to_vec());
+    } else {
+        unsafe {
+            log(
+                null_mut(),
+                c"Unity graphics diagnostic controls could not be registered.".as_ptr(),
+            )
+        };
+    }
 }
 
 fn guarded(failure: u32, body: impl FnOnce() -> u32) -> u32 {
@@ -297,7 +377,11 @@ fn sr_start(ini: *const u16, identity: &mut Option<Fingerprint>) -> u32 {
         spatial_extent: Some(crate::bridge_state::rsf_unity_mono_spatial_extent),
         spatial_name_utf8: c"FSR1".as_ptr(),
     };
-    unsafe { rsf_callback_host_start((&raw const setup).cast()) }
+    let result = unsafe { rsf_callback_host_start((&raw const setup).cast()) };
+    if result == code::OK {
+        register_diagnostics(&ini);
+    }
+    result
 }
 
 fn mono_loaded() -> bool {
@@ -344,7 +428,26 @@ unsafe extern "system" fn rsf_unity_sr_start(ini: *const u16) -> u32 {
 
 #[unsafe(no_mangle)]
 extern "system" fn rsf_unity_sr_stop(_: *mut c_void) -> u32 {
-    guarded(code::STOP_REFUSED, || unsafe { rsf_callback_host_stop() })
+    guarded(code::STOP_REFUSED, || {
+        let previous = {
+            let mut path = DIAGNOSTICS_INI
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if !path.is_empty() && unsafe { rsf_overlay_saved_options_unregister(null_mut()) } != 0
+            {
+                return code::STOP_REFUSED;
+            }
+            std::mem::take(&mut *path)
+        };
+        let result = unsafe { rsf_callback_host_stop() };
+        if result != code::OK
+            && !previous.is_empty()
+            && let Some(ini) = unsafe { Ini::new(previous.as_ptr()) }
+        {
+            register_diagnostics(&ini);
+        }
+        result
+    })
 }
 
 #[cfg(test)]
