@@ -251,8 +251,11 @@ target_link_libraries(rsf_ac7_velocity_shader_test PRIVATE ReScaleFrame::AC7Rend
 add_test(NAME ac7_velocity_shader COMMAND rsf_ac7_velocity_shader_test)
 set_tests_properties(ac7_velocity_shader PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
-add_executable(rsf_ac7_capture_io ac7_capture_io.cpp)
-target_link_libraries(rsf_ac7_capture_io PRIVATE ReScaleFrame::AC7MotionCapture ReScaleFrame::Graphics rsf_build_options d3dcompiler)
+rsf_add_rust_static(rsf_ac7_capture_fixture_rust rsf_rust_ac7_capture_fixture
+    rsf-ac7-capture-fixture rsf_ac7_capture_fixture)
+add_executable(rsf_ac7_capture_io ac7-capture/src/main.c)
+target_link_libraries(rsf_ac7_capture_io PRIVATE rsf_ac7_capture_fixture_rust
+    ReScaleFrame::AC7MotionCapture ReScaleFrame::Graphics rsf_build_options d3dcompiler)
 add_test(NAME ac7_capture_io COMMAND rsf_ac7_capture_io)
 set_tests_properties(ac7_capture_io PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
