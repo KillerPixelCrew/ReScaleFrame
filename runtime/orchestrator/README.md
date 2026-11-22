@@ -4,18 +4,15 @@ The reusable runtime owns plugin sessions, backend selection, history continuity
 latency services and presentation. Game plugins own detection, hooks, engine conventions and
 reinsertion. Shared SR/FG APIs accept no game signature or private engine address.
 
-| Module | Purpose |
-| --- | --- |
-| `plugin_session` | Exact-build selection and prepare/start/quiesce/stop/status with game ABI 13 |
-| `native_scene`, `native_window`, `native_cpu`, `render_links`, `frame_sequencer` | Associate engine CPU/view/submission/window events and reject mismatched or ambiguous frames |
-| `native_sr`, `native_sr_d3d12`, `sr_session` | Prepare inputs and evaluate SR through D3D11/D3D12 routes |
-| `sr_bridge`, `sr_legacy_adapter`, `dlss_pipeline` | Same-adapter shared transfers and compatibility SR entry points |
-| `native_fg`, `native_fg_d3d12`, `fg_session`, `fg_providers`, `fg_leases`, `fg_choice` | Independent FG providers, drained live replacement, input retirement and saved provider choice |
-| `native_composition`, `native_translucency` | Native composition and translucency inputs |
-| `gpu_policy`, `unity_sr_host`, `overlay_d3d12` | Actual-adapter Auto policy, Unity hosting and shared overlay drawing |
-| `runtime` | DLL version entry point; other services are exported by their own modules |
-| `input_dump`, `input_dump_vulkan`, `FrameDump` | Shared F10/API frame capture, named opaque PNG/raw images, camera metadata and completion tickets |
+The Rust crate `rsf-orchestrator` has one module per service under `src/`, and `include/rescaleframe/` holds
+its public C headers. Start from `src/lib.rs`; the names say what a module owns:
 
+- `plugin_session`: exact-build selection and prepare/start/quiesce/stop/status (the game ABI is the one in `sdk/game/include/rescaleframe/game_api.h`).
+- `native_scene`, `native_window`, `native_cpu`, `render_links`, `frame_sequencer`: associate engine CPU, view, submission and window events and reject mismatched or ambiguous frames.
+- `native_sr`, `sr_session`, `sr_bridge`, `dlss_pipeline` (and the `d3d11_*`, `d3d12_*`, `vulkan_*` hosts): prepare inputs and evaluate SR through the D3D11, D3D12 and Vulkan routes; same-adapter shared transfers.
+- `native_fg`, `fg_session`, `fg_choice` (and the provider modules): independent FG providers, drained live replacement, input retirement and saved provider choice.
+- `native_composition`, `native_translucency`: native composition and translucency inputs.
+- `input_dump`, `input_dump_vulkan`: shared F10/API frame capture, named opaque PNG/raw images, camera metadata and completion tickets.
 Direct SR sessions consume matching frame/view records, pre-tonemap colour, device depth, dense
 previous-minus-current render-pixel motion, jitter and exposure conventions. Callers own resources
 and the graphics thread, and must drain submitted GPU work before switching/destroying sessions.

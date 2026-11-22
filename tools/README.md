@@ -32,3 +32,16 @@ gameplay and UMG code only; the renderer has no reflection data and needs the so
 The procedure these belong to is in [docs/research/methodology.md](../docs/research/methodology.md).
 
 The capture parser groups work by render-target changes. It does not fully track inherited SRV bindings, compute-only passes, or deferred contexts. Treat its read lists as leads for per-draw inspection.
+
+## Other tools
+
+Tools are grouped by name; read a script's header for its arguments.
+
+| Pattern | Purpose |
+| --- | --- |
+| `package-*.py` | Per-game packagers and the one-release builder `package-release.py` ([release procedure](../docs/releases/README.md)) |
+| `analyze-*.py`, `capture-sr-sequence.py`, `pan-game-camera.py`, `send-game-key.py`, `runtime-action.py`, `watch-*` | Capture analysis and live-run helpers that belong to the matching research notes |
+| `generate-*.py`, `committed_bindings.py`, `bindgen/` | Binding and profile generators |
+| `inspect-*.py` | Fingerprint, hook and shader inspection of installed games |
+| `anomaly_*`, `rsf_shader_pack.py` | Anomaly shader tooling ([anomaly_shader_README.md](anomaly_shader_README.md)) |
+| `diagnostics/`, `dump/`, `exposure_probe/`, `rea/`, `ghidra/` | Diagnostic, module-dump, exposure, reverse-engineering and Ghidra helpers |

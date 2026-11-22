@@ -4,9 +4,9 @@
 Moved from Optimum's `native/optimum-fsr4` (revision `386e0d0`).
 
 Build on Windows with `g++`, `gcc`, the repository's pinned Rust toolchain with the
-`x86_64-pc-windows-gnu` target, `VULKAN_SDK` set, and `sdk/minhook` initialized.
-The SDK root defaults to the `sdk/fidelityfx` submodule when built through
-`scripts/build-provider-bridges.ps1`.
+`x86_64-pc-windows-gnu` target, `VULKAN_SDK` set, and a MinHook checkout and the FidelityFX SDK available.
+This repository has no submodules: the VulkanStory host keeps them as its own `sdk/minhook` and
+`sdk/fidelityfx` submodules and passes them with `-MinHookRoot` and `-SdkRoot`.
 
 ```powershell
 ./runtime/vulkan/fsr4/build.ps1 -MinHookRoot <host>/sdk/minhook -SdkRoot <host>/sdk/fidelityfx -Output <dir>/VulkanStoryFsr4.dll

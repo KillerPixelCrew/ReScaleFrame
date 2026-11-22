@@ -40,8 +40,8 @@ identity and observer admission (`src/plugin.rs`), the lifecycle with its
 process-lived Runtime session, DPI startup and subsystem order (`src/session.rs`),
 the observer hook transactions (`src/observers.rs`) and the cold native creation
 root with its Steam Present cooperation (`src/creation.rs`, `src/layout.rs`).
-`src/plugin.cpp` and `src/native_creation.cpp` keep the typed detours, native
-leaves and the C++ render, CPU and compatibility subsystems. See
+`src/plugin.c`, `src/native_creation.c` and `src/render_detours.c` keep the typed detours, native
+leaves and the C render, CPU and compatibility subsystems. See
 [the migration note](../../docs/research/rust-skyrim-native-creation.md) for the
 moved behaviour and the remaining Skyrim owners.
 

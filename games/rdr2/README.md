@@ -51,7 +51,7 @@ write, the D3D12 trace guard and the order in which the startup owners are armed
 ScriptHook quality request. Rust owns the Win32 startup leaves, ASI and research-attach
 workers, settings probe, DXGI adapter discovery and diagnostic adapters. `src/asi_entry.c`
 binds the linked capture and diagnostic services through `asi_platform.h`. The Social Club
-diagnostic calls the borrowed swapchain through the SEH leaf in `social_club_guard.cpp`.
+diagnostic calls the borrowed swapchain through the SEH leaf in `social_club_guard.c`.
 `runtime_setup.h` declares the
 C bridge also used by the Unity D3D12 fixture. The engine-settings vector suite lives in
 `src/engine_settings/tests.rs`.

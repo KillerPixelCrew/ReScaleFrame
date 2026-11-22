@@ -12,8 +12,8 @@ why earlier clean-looking results were regressions. It is specific to the instal
   fingerprints are in [the hook map](../../../../docs/research/ue418-hook-map.md).
 - Runtime implementation: sites, bytes, fingerprint, install, rollback and restore in
   [truesky.rs](../../../../games/ac7/src/truesky.rs); relay handlers and D3D11 checks in
-  [native_renderer.cpp](../../../../games/ac7/src/native_renderer.cpp); the x1 kernel in
-  [truesky_depth.cpp](../../../../games/ac7/src/truesky_depth.cpp).
+  [native_renderer/sky.rs](../../../../games/ac7/src/native_renderer/sky.rs); the x1 kernel in
+  [truesky_depth_bounds.hlsl](../../../../games/ac7/src/truesky_depth_bounds.hlsl).
 - Captures, revisions, precision results and limitations:
   [aircraft/cloud research](../../../../docs/research/ac7-plane-artifacts-20261002.md) and
   [engine evidence](../../../../games/ac7/engine.json).
