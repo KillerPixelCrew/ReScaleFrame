@@ -23,6 +23,13 @@ mod fsr4_state;
 #[cfg(feature = "fsr4-state")]
 #[allow(dead_code)]
 mod fsr4_state_abi;
+#[cfg(any(feature = "streamline-selected", feature = "streamline-dispatch"))]
+#[allow(dead_code)]
+mod streamline_abi;
+#[cfg(feature = "streamline-dispatch")]
+mod streamline_dispatch;
+#[cfg(feature = "streamline-selected")]
+mod streamline_selected;
 #[cfg(feature = "wsi-dispatch")]
 mod wsi;
 #[cfg(feature = "wsi-dispatch")]

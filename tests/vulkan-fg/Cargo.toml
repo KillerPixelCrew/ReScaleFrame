@@ -15,6 +15,8 @@ ffx = ["dep:ash"]
 wsi-dispatch = ["dep:ash"]
 fsr4-state = ["dep:ash"]
 dlss = ["dep:ash"]
+streamline-selected = []
+streamline-dispatch = ["dep:ash"]
 xess-sr = ["dep:ash", "dep:windows-sys"]
 xess-device = [
   "dep:ash", "dep:windows-sys", "windows-sys/Win32_Graphics_Gdi",

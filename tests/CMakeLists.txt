@@ -891,8 +891,10 @@ set_tests_properties(native_xess_vulkan_device PROPERTIES TIMEOUT 120 SKIP_RETUR
 
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
     add_executable(rsf_streamline_vulkan_dispatch_test streamline_vulkan_dispatch.cpp)
+    rsf_add_rust_static(rsf_sl_dispatch_fixture_rust rsf_rust_sl_dispatch_fixture
+        rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures --features streamline-dispatch)
     target_include_directories(rsf_streamline_vulkan_dispatch_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
-    target_link_libraries(rsf_streamline_vulkan_dispatch_test PRIVATE rsf_build_options)
+    target_link_libraries(rsf_streamline_vulkan_dispatch_test PRIVATE rsf_sl_dispatch_fixture_rust rsf_build_options)
     add_test(NAME streamline_vulkan_dispatch_contract COMMAND rsf_streamline_vulkan_dispatch_test)
     add_executable(rsf_native_antilag_vulkan_test game-sdk/cpu_fixture_main.c
         ../runtime/orchestrator/src/native_latency_vulkan.c ../runtime/orchestrator/src/latency_amd_vulkan.c)
@@ -907,9 +909,11 @@ endif()
 
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_STREAMLINE_INCLUDE}/sl.h")
     add_executable(rsf_streamline_selected_device_test streamline_selected_device.cpp)
+    rsf_add_rust_static(rsf_sl_selected_fixture_rust rsf_rust_sl_selected_fixture
+        rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures --features streamline-selected)
     get_filename_component(rsf_streamline_source_root "${RSF_STREAMLINE_INCLUDE}" DIRECTORY)
     target_include_directories(rsf_streamline_selected_device_test SYSTEM PRIVATE "${rsf_streamline_source_root}")
-    target_link_libraries(rsf_streamline_selected_device_test PRIVATE rsf_build_options)
+    target_link_libraries(rsf_streamline_selected_device_test PRIVATE rsf_sl_selected_fixture_rust rsf_build_options)
     add_test(NAME streamline_selected_device_contract COMMAND rsf_streamline_selected_device_test)
     add_executable(rsf_native_fg_dlss_vulkan_test native_fg_dlss_vulkan.cpp)
     rsf_add_rust_static(rsf_dlss_vulkan_fixture_rust rsf_rust_dlss_vulkan_fixture
