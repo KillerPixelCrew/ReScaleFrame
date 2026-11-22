@@ -577,29 +577,34 @@ VkResult present_admitted(PFN_vkQueuePresentKHR original_present, VkQueue vk_que
     if (instance.graphicsQueue != vk_queue) return unchanged();
     // Pair the packet with the native swapchain before creating resources or reporting a source.
     rsf_unity_vulkan_present_source source{};
-    const bool found = rsf_unity_vulkan_present_begin(instance.device, handle_id(vk_queue),
-        handle_id(info->pSwapchains[0]), info->pImageIndices[0], &source, &frame) != 0;
+    const uint32_t target = rsf_unity_vulkan_present_begin(handle_id(instance.instance), instance.device,
+        handle_id(vk_queue), handle_id(info->pSwapchains[0]), info->pImageIndices[0], GetParent(window), &source, &frame);
     PresentationLease lease;
-    if (!found || !frame.services.render_pass ||
+    if (!target) return unchanged();
+    const auto native = [&] {
+        ShowWindowAsync(window, SW_HIDE);
+        return unchanged();
+    };
+    if (target != 1 || !frame.services.render_pass ||
         initialize(graphics, &frame.services) != RSF_UNITY_VULKAN_DEVICE_READY ||
-        graphics.vk_device() != instance.device || graphics.vk_queue() != vk_queue) return unchanged();
+        graphics.vk_device() != instance.device || graphics.vk_queue() != vk_queue) return native();
     auto* chain = static_cast<IDXGISwapChain3*>(rsf_unity_vulkan_configure_surface(source.width, source.height, &surface_ops));
-    if (!chain) return unchanged();
+    if (!chain) return native();
     const VkImage presented = from_id<VkImage>(source.image);
     const VkSemaphore present_ready = from_id<VkSemaphore>(source.present_ready);
     ImageView image;
-    if (!create_image(5, source.width, source.height, VK_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, image)) return unchanged();
+    if (!create_image(5, source.width, source.height, VK_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, image)) return native();
     // Preflight before the upload consumes Unity's present waits.
     ComPtr<ID3D12Resource> buffer;
     if (FAILED(chain->GetBuffer(chain->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&buffer)))) {
         stop("Unity Vulkan swap chain buffer was unavailable; the bridge stopped.");
-        return unchanged();
+        return native();
     }
     const uint32_t ring = rsf_unity_interop_slot(nullptr);
     SlotView slot;
     if (!rsf_unity_vulkan_command_slot(ring, &slot.handles) || !begin(graphics, slot, ring)) {
         stop("Unity Vulkan command slot could not be reused; the bridge stopped.");
-        return unchanged();
+        return native();
     }
     acquire_image(graphics, slot.vk(0), 5, image, false);
     image_barrier(slot.vk(0), presented, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,

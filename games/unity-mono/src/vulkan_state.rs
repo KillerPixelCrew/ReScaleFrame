@@ -1061,13 +1061,14 @@ impl Presentation {
         active.next().is_none().then_some(target.publication)
     }
 
-    fn source(&self, device: usize, chain: u64, index: u32) -> Option<(u64, PresentSource)> {
+    fn source(&self, device: usize, chain: u64, index: u32) -> Option<(u64, u64, PresentSource)> {
         let swapchain = self.swapchains.iter().find(|known| {
             !known.detached && known.active && known.device == device && known.chain == chain
         })?;
         let index = index as usize;
         Some((
             swapchain.publication,
+            swapchain.surface,
             PresentSource {
                 image: *swapchain.images.get(index)?,
                 present_ready: swapchain.present_ready[index],
@@ -1195,10 +1196,12 @@ pub(crate) fn retire_swapchain(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_unity_vulkan_present_begin(
+    instance: u64,
     device: *mut c_void,
     queue: u64,
     chain: u64,
     index: u32,
+    parent: *mut c_void,
     source: *mut PresentSource,
     frame: *mut Frame,
 ) -> u32 {
@@ -1207,11 +1210,20 @@ unsafe extern "C" fn rsf_unity_vulkan_present_begin(
     if source.is_null() || frame.is_null() {
         return 0;
     }
-    let Some((swapchain, found)) = registry.source(device as usize, chain, index) else {
+    let Some((swapchain, surface, found)) = registry.source(device as usize, chain, index) else {
         return 0;
     };
-    let Some(receipt) = lock().take_window(PresentIdentity { queue, swapchain }) else {
+    if !registry
+        .surfaces
+        .contains(&(instance, surface, parent as usize))
+    {
         return 0;
+    }
+    let identity = PresentIdentity { queue, swapchain };
+    let receipt = lock().take_window(identity);
+    let Some(receipt) = receipt else {
+        // The native player window should remain visible when the child did not receive a frame.
+        return 2;
     };
     unsafe {
         source.write(found);
@@ -1596,6 +1608,7 @@ mod tests {
             presentation.source(1, 3, 1),
             Some((
                 1,
+                33,
                 PresentSource {
                     image: 302,
                     present_ready: 3002,
@@ -1635,13 +1648,26 @@ mod tests {
     #[test]
     fn the_presentation_lease_is_exclusive() {
         let device = ptr::without_provenance_mut(1);
+        let parent = ptr::without_provenance_mut(99);
+        register_win32_surface(55, 33, parent);
         assert!(register_swapchain(device, 7, 33, (4, 2), vec![71, 72], vec![81, 82]).is_ok());
         let mut source = PresentSource::default();
         let mut frame = EMPTY_FRAME;
         // A present without a receipt still holds the lease while forwarding.
         assert_eq!(
-            unsafe { rsf_unity_vulkan_present_begin(device, 42, 7, 1, &mut source, &mut frame) },
-            0
+            unsafe {
+                rsf_unity_vulkan_present_begin(
+                    55,
+                    device,
+                    42,
+                    7,
+                    1,
+                    parent,
+                    &mut source,
+                    &mut frame,
+                )
+            },
+            2
         );
         assert_eq!(rsf_unity_vulkan_presentation_try_begin(), 0);
         rsf_unity_vulkan_presentation_end();
@@ -1665,6 +1691,7 @@ mod tests {
             VK_ERROR_DEVICE_LOST
         );
         assert_eq!(retired, [81, 82]);
+        forget_win32_surface(55, 33);
         assert_eq!(rsf_unity_vulkan_presentation_try_begin(), 1);
         rsf_unity_vulkan_presentation_end();
     }

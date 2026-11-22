@@ -161,10 +161,10 @@ typedef struct rsf_unity_vulkan_present_source {
     uint32_t height;
 } rsf_unity_vulkan_present_source;
 /* Waits for and takes the lease, which the caller always ends with
-   rsf_unity_vulkan_presentation_end. Consumes one matching window receipt when the chain and
-   image are published. */
-uint32_t rsf_unity_vulkan_present_begin(void* device, uint64_t queue, uint64_t chain, uint32_t index,
-    rsf_unity_vulkan_present_source* source, rsf_unity_vulkan_frame* frame);
+   rsf_unity_vulkan_presentation_end. Returns 1 and consumes the matching receipt, 2 for the
+   native player target without a receipt, or 0 for another target. */
+uint32_t rsf_unity_vulkan_present_begin(uint64_t instance, void* device, uint64_t queue, uint64_t chain,
+    uint32_t index, void* parent, rsf_unity_vulkan_present_source* source, rsf_unity_vulkan_frame* frame);
 /* Takes the lease without waiting for a surface update or queue callback. */
 uint32_t rsf_unity_vulkan_presentation_try_begin(void);
 void rsf_unity_vulkan_presentation_end(void);
