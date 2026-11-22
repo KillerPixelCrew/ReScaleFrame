@@ -1,11 +1,9 @@
 set(RSF_STREAMLINE_INCLUDE "${CMAKE_SOURCE_DIR}/vendor/streamline/include" CACHE PATH
     "Directory holding Streamline's sl.h")
 
-add_library(rsf_dlss STATIC src/dlss_streamline.cpp src/dlss_generation.cpp src/dlss_native12.cpp src/reflex_audit.cpp src/mfg_unlock.cpp)
-if(MSVC)
-    target_sources(rsf_dlss PRIVATE third_party/mfg_unlocker/midpoint_fix.cpp)
-    target_link_libraries(rsf_dlss PRIVATE bcrypt)
-endif()
+# The RTX 40 MFG compatibility path and the Reflex API audit live in the Rust orchestrator
+# (mfg_state.rs, reflex_audit.rs); mfg_unlock.h and reflex_audit.h declare their C entry points.
+add_library(rsf_dlss STATIC src/dlss_streamline.cpp src/dlss_generation.cpp src/dlss_native12.cpp)
 target_compile_definitions(rsf_dlss PRIVATE RSF_STREAMLINE_HOST_BUILD)
 target_include_directories(rsf_dlss PUBLIC include)
 target_link_libraries(rsf_dlss PRIVATE rsf_build_options)
@@ -29,15 +27,5 @@ else()
 endif()
 
 add_library(ReScaleFrame::DLSS ALIAS rsf_dlss)
-
-# Optional read-only driver diagnostics. Streamline still owns Reflex mode, sleep and markers.
-find_path(RSF_NVAPI_INCLUDE nvapi.h HINTS
-    "${CMAKE_SOURCE_DIR}/vendor/nvapi"
-    "${CMAKE_SOURCE_DIR}/.local/streamline/sdk/external/nvapi")
-if(RSF_NVAPI_INCLUDE)
-    target_link_libraries(rsf_dlss PRIVATE minhook)
-    target_include_directories(rsf_dlss SYSTEM PRIVATE "${RSF_NVAPI_INCLUDE}")
-    target_compile_definitions(rsf_dlss PRIVATE RSF_HAVE_NVAPI_DIAGNOSTICS=1)
-endif()
 
 target_link_libraries(rsf_dlss PRIVATE rsf_orchestrator_rust)

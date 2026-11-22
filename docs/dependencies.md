@@ -114,7 +114,8 @@ Vendor SDKs, reference checkouts, Epic source, and game binaries are kept outsid
 ## Optional local SDKs
 
 The RTX 40 MFG path incorporates selected MIT-licensed MFG-Unlocker sources at
-`2b52823e3769c31cf52d3b368c6963cff8fc5344`, with its notice in
+`2b52823e3769c31cf52d3b368c6963cff8fc5344`, adapted in Rust in the orchestrator's
+`mfg_*.rs` modules, with its notice in
 `runtime/backends/dlss/third_party/mfg_unlocker/LICENSE`. It derives the guarded temporal
 program from the installed NVIDIA runtime in memory. No external GPU cache, Intel-derived
 shader data or MFGUnlocker DLL is included. Distributions using this path must retain the

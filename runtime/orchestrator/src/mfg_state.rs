@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::render_abi::rsf_backend_log_fn as Log;
 use crate::sdk_module::SdkModule;
-use std::ffi::{CString, c_char, c_void};
+use std::ffi::{CStr, CString, c_void};
 use std::ptr::null_mut;
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 use windows_sys::Win32::{
@@ -9,8 +9,8 @@ use windows_sys::Win32::{
     System::{
         Diagnostics::{
             Debug::{
-                IMAGE_NT_HEADERS64, IMAGE_NT_OPTIONAL_HDR64_MAGIC, IMAGE_SCN_MEM_EXECUTE,
-                IMAGE_SECTION_HEADER, ReadProcessMemory,
+                FlushInstructionCache, IMAGE_NT_HEADERS64, IMAGE_NT_OPTIONAL_HDR64_MAGIC,
+                IMAGE_SCN_MEM_EXECUTE, IMAGE_SECTION_HEADER, ReadProcessMemory,
             },
             ToolHelp::{
                 CreateToolhelp32Snapshot, MODULEENTRY32W, Module32FirstW, Module32NextW,
@@ -21,17 +21,24 @@ use windows_sys::Win32::{
             GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GetModuleHandleExW,
             LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LoadLibraryExW,
         },
+        Memory::{PAGE_EXECUTE_READ, PAGE_EXECUTE_WRITECOPY, VirtualProtect},
         ProcessStatus::{K32GetModuleInformation, MODULEINFO},
         SystemServices::{IMAGE_DOS_HEADER, IMAGE_DOS_SIGNATURE, IMAGE_NT_SIGNATURE},
         Threading::{GetCurrentProcess, GetCurrentProcessId},
     },
 };
 
+#[path = "mfg_gate.rs"]
+mod gate;
+#[path = "mfg_midpoint.rs"]
+mod midpoint;
 #[path = "mfg_provider.rs"]
 mod provider;
 
 type Handle = *mut c_void;
-type Emit = unsafe extern "C" fn(Log, Handle, *const c_char);
+// The SDK host lends Streamline's embedded-signature check, which stays with
+// the vendor header in dlss_streamline.cpp.
+type VerifySignature = Option<unsafe extern "C" fn(*const u16) -> bool>;
 
 const NOT_APPLICABLE: u32 = 0;
 const READY: u32 = 1;
@@ -40,25 +47,52 @@ const REPORT_BYTES: usize = 512;
 const WRAPPER_PATTERN_BYTES: usize = 10;
 const WRAPPER_PATCH_OFFSET: usize = 7;
 
-#[repr(C)]
-struct Platform {
-    supported: unsafe extern "C" fn(Handle) -> u32,
-    verify_signature: unsafe extern "C" fn(*const u16) -> u32,
-    publish_wrapper: unsafe extern "C" fn(Handle) -> u32,
-    prepare_provider: unsafe extern "C" fn(Handle, *const u16, &mut ProviderReceipt),
-}
-
-const _: () = assert!(size_of::<Platform>() == 4 * size_of::<Handle>());
-
-#[repr(C)]
-#[derive(Default)]
 struct ProviderReceipt {
-    temporal: u32,
-    gate: u32,
+    temporal: bool,
+    gate: bool,
     failure: u32,
 }
 
-const _: () = assert!(size_of::<ProviderReceipt>() == 12);
+fn emit(log: Log, user: Handle, text: &CStr) {
+    if let Some(log) = log {
+        unsafe { log(user, text.as_ptr()) };
+    }
+}
+
+// The verified temporal program precedes the count/index gate, so the gate
+// never opens a provider that would run the unpatched midpoint kernel.
+fn prepare_provider(module: Handle, path: *const u16) -> ProviderReceipt {
+    let temporal = !path.is_null() && midpoint::patch_provider(module, path);
+    ProviderReceipt {
+        temporal,
+        gate: temporal && gate::patch(module),
+        failure: midpoint::failure_code(),
+    }
+}
+
+// A foreign NOP is not success. Runtime transitions arrive here with the
+// presentation owner drained and no live FG allocation.
+fn publish_wrapper(address: *mut u8) -> bool {
+    const EXPECTED: [u8; 3] = [0x0f, 0x42, 0xd1];
+    const REPLACEMENT: [u8; 3] = [0x90; 3];
+    let site = address.cast::<[u8; 3]>();
+    // The retained wrapper image covers these three bytes.
+    let read = || unsafe { site.read_volatile() };
+    let mut previous = 0;
+    if !gate::protection_matches(address as usize, PAGE_EXECUTE_READ, 3)
+        || read() != EXPECTED
+        || unsafe { VirtualProtect(address.cast(), 3, PAGE_EXECUTE_WRITECOPY, &mut previous) } == 0
+    {
+        return false;
+    }
+    if read() == EXPECTED {
+        unsafe { site.write_volatile(REPLACEMENT) };
+    }
+    unsafe { FlushInstructionCache(GetCurrentProcess(), address.cast(), 3) };
+    let mut ignored = 0;
+    let restored = unsafe { VirtualProtect(address.cast(), 3, previous, &mut ignored) };
+    restored != 0 && read() == REPLACEMENT
+}
 
 struct ModuleImage {
     base: *mut u8,
@@ -101,7 +135,7 @@ impl ModuleImage {
         Some(record)
     }
 
-    fn wrapper_patch(&self) -> Option<(Handle, u32)> {
+    fn wrapper_patch(&self) -> Option<(*mut u8, u32)> {
         let dos: IMAGE_DOS_HEADER = self.record(0)?;
         if dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew <= 0 {
             return None;
@@ -148,7 +182,7 @@ impl ModuleImage {
                     return None;
                 }
                 found = Some((
-                    self.address(rva + offset + WRAPPER_PATCH_OFFSET, 3)?.cast(),
+                    self.address(rva + offset + WRAPPER_PATCH_OFFSET, 3)?,
                     capacity,
                 ));
             }
@@ -167,13 +201,13 @@ fn wrapper_capacity(bytes: &[u8]) -> Option<u32> {
         .then_some(maximum)
 }
 
-fn prepare_wrapper(module: &SdkModule, platform: &Platform) -> u32 {
+fn prepare_wrapper(module: &SdkModule) -> u32 {
     let Some((address, capacity)) =
         ModuleImage::new(module).and_then(|image| image.wrapper_patch())
     else {
         return 1;
     };
-    if capacity > 1 && unsafe { (platform.publish_wrapper)(address) } != 0 {
+    if capacity > 1 && publish_wrapper(address) {
         capacity
     } else {
         1
@@ -282,15 +316,14 @@ extern "C" fn rsf_core_mfg_create() -> *mut Owner {
 
 unsafe fn prime(
     owner: &Owner,
-    platform: &Platform,
     device: Handle,
     directory: *const u16,
-    require_signature: u32,
+    verify_signature: VerifySignature,
 ) -> u32 {
     let Some(_update) = try_update() else {
         return 0;
     };
-    if device.is_null() || unsafe { (platform.supported)(device) } == 0 {
+    if device.is_null() || !unsafe { midpoint::observe_d3d12_device(device) } {
         owner.state().status = NOT_APPLICABLE;
         return 0;
     }
@@ -308,7 +341,9 @@ unsafe fn prime(
         .chain("\\sl.dlss_g.dll".encode_utf16())
         .chain([0])
         .collect();
-    if require_signature != 0 && unsafe { (platform.verify_signature)(path.as_ptr()) } == 0 {
+    if let Some(verify) = verify_signature
+        && !unsafe { verify(path.as_ptr()) }
+    {
         return 0;
     }
     let Some(wrapper) = SdkModule::adopt_system(unsafe {
@@ -320,32 +355,31 @@ unsafe fn prime(
     }) else {
         return 0;
     };
-    let maximum = prepare_wrapper(&wrapper, platform);
+    let maximum = prepare_wrapper(&wrapper);
     let mut state = owner.state();
     state.maximum = maximum;
     state.wrapper = Some(wrapper);
     maximum
 }
 
+// A null verifier means the host does not require a signed wrapper.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_mfg_prime(
     owner: &Owner,
-    platform: &Platform,
     device: Handle,
     directory: *const u16,
-    require_signature: u32,
+    verify_signature: VerifySignature,
     log: Log,
     user: Handle,
-    emit: Emit,
 ) {
-    let maximum = unsafe { prime(owner, platform, device, directory, require_signature) };
+    let maximum = unsafe { prime(owner, device, directory, verify_signature) };
     if maximum != 0 && log.is_some() {
         let prepared = u32::from(maximum > 1);
         let text = CString::new(format!(
             "RTX 40 MFG wrapper prepared={prepared} capacity={maximum} before plugin initialization"
         ));
         if let Ok(text) = text {
-            unsafe { emit(log, user, text.as_ptr()) };
+            emit(log, user, &text);
         }
     }
 }
@@ -353,12 +387,10 @@ unsafe extern "C" fn rsf_core_mfg_prime(
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_mfg_prepare(
     owner: &Owner,
-    platform: &Platform,
     device: Handle,
     get_state: Handle,
     log: Log,
     user: Handle,
-    emit: Emit,
 ) {
     let Some(update) = try_update() else {
         return;
@@ -381,23 +413,17 @@ unsafe extern "C" fn rsf_core_mfg_prepare(
         }
         let provider = find_provider()?;
         let length = provider::module_path(provider.as_ptr(), &mut path).unwrap_or(0);
-        let mut receipt = ProviderReceipt::default();
         let eligible = length != 0
-            && unsafe {
-                provider::rsf_mfg_supported_provider(provider.as_ptr(), path.as_ptr()) != 0
-            };
-        // A null path requests only the native failure receipt.
+            && unsafe { provider::supported_provider(provider.as_ptr(), path.as_ptr()) != 0 };
+        // A null path requests only the current failure receipt.
         let path_ptr = if eligible {
             path.as_ptr()
         } else {
             std::ptr::null()
         };
-        unsafe { (platform.prepare_provider)(provider.as_ptr(), path_ptr, &mut receipt) };
-        Some((length, receipt))
+        Some((length, prepare_provider(provider.as_ptr(), path_ptr)))
     });
-    let prepared = receipt
-        .as_ref()
-        .is_some_and(|(_, receipt)| receipt.gate != 0);
+    let prepared = receipt.as_ref().is_some_and(|(_, receipt)| receipt.gate);
     owner.state().status = if prepared { READY } else { REFUSED };
     drop(update);
     if log.is_none() {
@@ -413,17 +439,21 @@ unsafe extern "C" fn rsf_core_mfg_prepare(
     )) = receipt
     {
         let status = if prepared { "ready" } else { "refused" };
+        let (temporal, gate) = (u32::from(temporal), u32::from(gate));
         let path = String::from_utf16_lossy(&path[..length]);
         let mut text = format!(
             "RTX 40 MFG unlock {status}: wrapper_capacity={maximum} temporal={temporal} gate={gate} failure={failure} provider={path}"
         );
         text.truncate(text.floor_char_boundary(REPORT_BYTES - 1));
         if let Ok(text) = CString::new(text) {
-            unsafe { emit(log, user, text.as_ptr()) };
+            emit(log, user, &text);
         }
     } else {
-        let text = c"RTX 40 MFG unlock refused: wrapper or provider ownership mismatch";
-        unsafe { emit(log, user, text.as_ptr()) };
+        emit(
+            log,
+            user,
+            c"RTX 40 MFG unlock refused: wrapper or provider ownership mismatch",
+        );
     }
 }
 

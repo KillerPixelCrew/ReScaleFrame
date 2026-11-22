@@ -2,12 +2,18 @@
 use crate::diagnostic_output::Output;
 use crate::render_abi::rsf_backend_log_fn as Log;
 use crate::win32_diagnostics::module_location;
-use std::ffi::{CStr, CString, c_char, c_void};
+use std::arch::naked_asm;
+use std::ffi::{CStr, CString, c_void};
+use std::ptr::null_mut;
+use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use windows::core::w;
 use windows_sys::Win32::{
     System::{
-        LibraryLoader::{GetModuleHandleW, GetProcAddress},
+        LibraryLoader::{
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN,
+            GetModuleHandleExW, GetModuleHandleW, GetProcAddress,
+        },
         Threading::{GetCurrentProcessId, GetCurrentThreadId},
     },
     UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId},
@@ -17,12 +23,86 @@ use windows_sys::Win32::{
 mod nvapi;
 use nvapi::*;
 
-type Emit = unsafe extern "C" fn(Log, *mut c_void, *const c_char);
 type Query = unsafe extern "C" fn(u32) -> *mut c_void;
 type SleepStatus = unsafe extern "C" fn(*mut c_void, &mut NV_GET_SLEEP_STATUS_PARAMS) -> i32;
+// NvAPI_D3D_SetSleepMode, SetLatencyMarker, SetReflexSync and
+// NvAPI_D3D12_SetAsyncFrameMarker all take an interface and a versioned record.
+type Entry = unsafe extern "C" fn(*mut c_void, *mut c_void) -> i32;
 const SOURCES: usize = 64;
 const LINE_LIMIT: u32 = 192;
 const HOOKS: usize = 4;
+const NVAPI_NO_IMPLEMENTATION: i32 = -3;
+
+// Record sizes and versions pinned by the bindgen records from nvapi.h.
+const _: () = {
+    assert!(version::<NV_GET_SLEEP_STATUS_PARAMS>() == 0x10088);
+    assert!(version::<NV_SET_SLEEP_MODE_PARAMS>() == 0x1002c);
+    assert!(version::<NV_LATENCY_MARKER_PARAMS>() == 0x10058);
+    assert!(version::<NV_SET_REFLEX_SYNC_PARAMS>() == 0x10030);
+    assert!(version::<NV_ASYNC_FRAME_MARKER_PARAMS>() == 0x10058);
+    assert!(std::mem::offset_of!(NV_GET_SLEEP_STATUS_PARAMS, sleepIntervalUs) == 8);
+    assert!(std::mem::offset_of!(NV_GET_SLEEP_STATUS_PARAMS, dfgFrameTimeTargetUs) == 16);
+    assert!(std::mem::offset_of!(NV_SET_SLEEP_MODE_PARAMS, minimumIntervalUs) == 8);
+    assert!(std::mem::offset_of!(NV_SET_SLEEP_MODE_PARAMS, bUseMinQueueTime) == 13);
+    assert!(std::mem::offset_of!(NV_LATENCY_MARKER_PARAMS, frameID) == 8);
+    assert!(std::mem::offset_of!(NV_LATENCY_MARKER_PARAMS, markerType) == 16);
+    assert!(std::mem::offset_of!(NV_SET_REFLEX_SYNC_PARAMS, vblankIntervalUs) == 8);
+    assert!(std::mem::offset_of!(NV_SET_REFLEX_SYNC_PARAMS, timeInQueueUs) == 12);
+    assert!(std::mem::offset_of!(NV_SET_REFLEX_SYNC_PARAMS, dfgTargetFps) == 24);
+    assert!(std::mem::offset_of!(NV_ASYNC_FRAME_MARKER_PARAMS, frameID) == 8);
+    assert!(std::mem::offset_of!(NV_ASYNC_FRAME_MARKER_PARAMS, markerType) == 16);
+    assert!(std::mem::offset_of!(NV_ASYNC_FRAME_MARKER_PARAMS, presentFrameID) == 24);
+    assert!(std::mem::offset_of!(NV_ASYNC_FRAME_MARKER_PARAMS, vendorInternal) == 32);
+};
+
+unsafe extern "C" {
+    fn MH_Initialize() -> i32;
+    fn MH_CreateHook(target: *mut c_void, detour: *mut c_void, original: *mut *mut c_void) -> i32;
+    fn MH_EnableHook(target: *mut c_void) -> i32;
+    fn MH_DisableHook(target: *mut c_void) -> i32;
+    fn MH_RemoveHook(target: *mut c_void) -> i32;
+}
+
+const MH_OK: i32 = 0;
+const MH_ERROR_ALREADY_INITIALIZED: i32 = 1;
+
+// MinHook writes each trampoline before its hook is enabled.
+static ORIGINALS: [AtomicPtr<c_void>; HOOKS] = [const { AtomicPtr::new(null_mut()) }; HOOKS];
+
+// Each entry passes the actual native caller in r8 and its audit kind in r9.
+// The two-argument NVAPI entries leave both registers and their shadow slots free.
+macro_rules! detour {
+    ($name:ident, $kind:literal) => {
+        #[unsafe(naked)]
+        unsafe extern "C" fn $name(_: *mut c_void, _: *mut c_void) -> i32 {
+            naked_asm!("mov r8, [rsp]", "mov r9d, {kind}", "jmp {observe}", kind = const $kind, observe = sym observe);
+        }
+    };
+}
+
+detour!(observe_mode, 0);
+detour!(observe_marker, 1);
+detour!(observe_sync, 2);
+detour!(observe_async, 3);
+
+const DETOURS: [Entry; HOOKS] = [observe_mode, observe_marker, observe_sync, observe_async];
+
+// Call the original trampoline once, then report what it saw and returned.
+unsafe extern "C" fn observe(
+    object: *mut c_void,
+    params: *mut c_void,
+    caller: usize,
+    kind: u32,
+) -> i32 {
+    let original = ORIGINALS[kind as usize].load(Ordering::Acquire);
+    if original.is_null() {
+        return NVAPI_NO_IMPLEMENTATION;
+    }
+    let original = unsafe { std::mem::transmute::<*mut c_void, Entry>(original) };
+    let result = unsafe { original(object, params) };
+    unsafe { observe_nvapi(kind, caller, object, params, result) };
+    result
+}
 
 // Borrow the module already owned by Streamline. The audit pins installed hook
 // targets and never obtains a second driver loader reference.
@@ -32,32 +112,58 @@ fn query_interface() -> Option<Query> {
         return None;
     }
     let address = unsafe { GetProcAddress(module, c"nvapi_QueryInterface".as_ptr().cast()) }?;
-    Some(unsafe { std::mem::transmute::<_, Query>(address) })
+    Some(unsafe { std::mem::transmute::<unsafe extern "system" fn() -> isize, Query>(address) })
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 struct Hook {
     target: *mut c_void,
     detour: *mut c_void,
     original: *mut *mut c_void,
 }
 
-#[repr(C)]
+// Hook operations stay replaceable so the install order can be tested without a driver.
 struct Platform {
-    describe: unsafe extern "C" fn(&[*mut c_void; HOOKS], &mut [Hook; HOOKS]),
-    initialize: unsafe extern "C" fn() -> u32,
-    create: unsafe extern "C" fn(&Hook) -> u32,
-    pin: unsafe extern "C" fn(*mut c_void) -> u32,
-    enable: unsafe extern "C" fn(*mut c_void) -> u32,
-    disable: unsafe extern "C" fn(*mut c_void),
-    remove: unsafe extern "C" fn(*mut c_void),
+    initialize: unsafe fn() -> bool,
+    create: unsafe fn(&Hook) -> bool,
+    pin: unsafe fn(*mut c_void) -> bool,
+    enable: unsafe fn(*mut c_void) -> bool,
+    disable: unsafe fn(*mut c_void),
+    remove: unsafe fn(*mut c_void),
 }
 
-const _: () = {
-    assert!(size_of::<Hook>() == 3 * size_of::<*mut c_void>());
-    assert!(size_of::<Platform>() == 7 * size_of::<*mut c_void>());
+const MINHOOK: Platform = Platform {
+    initialize: || {
+        let result = unsafe { MH_Initialize() };
+        result == MH_OK || result == MH_ERROR_ALREADY_INITIALIZED
+    },
+    create: |hook| unsafe { MH_CreateHook(hook.target, hook.detour, hook.original) == MH_OK },
+    pin: |address| {
+        let mut module = null_mut();
+        unsafe {
+            GetModuleHandleExW(
+                GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                address.cast(),
+                &mut module,
+            ) != 0
+        }
+    },
+    enable: |target| unsafe { MH_EnableHook(target) == MH_OK },
+    disable: |target| unsafe {
+        MH_DisableHook(target);
+    },
+    remove: |target| unsafe {
+        MH_RemoveHook(target);
+    },
 };
+
+fn describe(targets: [*mut c_void; HOOKS]) -> [Hook; HOOKS] {
+    std::array::from_fn(|index| Hook {
+        target: targets[index],
+        detour: DETOURS[index] as *mut c_void,
+        original: ORIGINALS[index].as_ptr(),
+    })
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Install {
@@ -74,20 +180,23 @@ fn install(platform: &Platform) -> Install {
     };
     let targets =
         [0xac1c_a9e0, 0xd998_4c05, 0xb9f6_faff, 0x13c9_8f73].map(|id| unsafe { query(id) });
-    let mut hooks = [Hook::default(); HOOKS];
-    unsafe { (platform.describe)(&targets, &mut hooks) };
-    if unsafe { (platform.initialize)() } == 0 {
+    install_hooks(platform, &describe(targets))
+}
+
+fn install_hooks(platform: &Platform, hooks: &[Hook; HOOKS]) -> Install {
+    if !unsafe { (platform.initialize)() } {
         return Install::Retry;
     }
     let made = hooks
         .iter()
-        .take_while(|hook| !hook.target.is_null() && unsafe { (platform.create)(hook) } != 0)
+        .take_while(|hook| !hook.target.is_null() && unsafe { (platform.create)(hook) })
         .count();
+    // Pinning the first detour keeps this module, and every detour, resident.
     let pinned = made == HOOKS
         && hooks
             .iter()
-            .all(|hook| unsafe { (platform.pin)(hook.target) } != 0)
-        && unsafe { (platform.pin)(hooks[0].detour) } != 0;
+            .all(|hook| unsafe { (platform.pin)(hook.target) })
+        && unsafe { (platform.pin)(hooks[0].detour) };
     if !pinned {
         for hook in &hooks[..made] {
             unsafe { (platform.remove)(hook.target) };
@@ -96,13 +205,13 @@ fn install(platform: &Platform) -> Install {
     }
     if hooks
         .iter()
-        .all(|hook| unsafe { (platform.enable)(hook.target) } != 0)
+        .all(|hook| unsafe { (platform.enable)(hook.target) })
     {
         return Install::Installed;
     }
     // A failed enable can follow a reachable hook. Leave the pinned original
     // trampolines in place even if every target now disables successfully.
-    for hook in &hooks {
+    for hook in hooks {
         unsafe { (platform.disable)(hook.target) };
     }
     Install::Retained
@@ -117,15 +226,15 @@ struct Listener {
 impl Listener {
     const NONE: Self = Self { log: None, user: 0 };
 
-    fn emit(self, text: &CStr, emit: Emit) {
-        if self.log.is_some() {
-            unsafe { emit(self.log, self.user as *mut c_void, text.as_ptr()) };
+    fn emit(self, text: &CStr) {
+        if let Some(log) = self.log {
+            unsafe { log(self.user as *mut c_void, text.as_ptr()) };
         }
     }
 
-    fn formatted(self, text: String, emit: Emit) {
+    fn formatted(self, text: String) {
         if let Ok(text) = CString::new(text) {
-            self.emit(&text, emit);
+            self.emit(&text);
         }
     }
 }
@@ -189,13 +298,14 @@ fn audit() -> MutexGuard<'static, Audit> {
     AUDIT.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+// Optional process-lifetime observation. It never changes arguments, return
+// values or hook chains.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_reflex_audit_start(
-    log: Log,
-    user: *mut c_void,
-    platform: &Platform,
-    text: Emit,
-) {
+unsafe extern "C" fn rsf_reflex_audit_start(log: Log, user: *mut c_void) {
+    start(log, user, &MINHOOK);
+}
+
+fn start(log: Log, user: *mut c_void, platform: &Platform) {
     let Some(_output) = Output::enter() else {
         return;
     };
@@ -233,17 +343,17 @@ unsafe extern "C" fn rsf_core_reflex_audit_start(
         }
         _ => return,
     };
-    listener.emit(message, text);
+    listener.emit(message);
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_reflex_audit_stop() {
+extern "C" fn rsf_reflex_audit_stop() {
     // If the listener calls stop, its own thread already owns the output lock.
     let _output = Output::enter();
     audit().listener = Listener::NONE;
 }
 
-fn event(source: Source, settings: u64, format: impl FnOnce() -> String, emit: Emit) {
+fn event(source: Source, settings: u64, format: impl FnOnce() -> String) {
     let Some(_output) = Output::enter() else {
         return;
     };
@@ -258,7 +368,7 @@ fn event(source: Source, settings: u64, format: impl FnOnce() -> String, emit: E
         audit.lines += 1;
         audit.listener
     };
-    listener.formatted(format(), emit);
+    listener.formatted(format());
 }
 
 fn sync(mut report: SyncReport, enable: u32, disable: u32) {
@@ -278,7 +388,7 @@ fn sync(mut report: SyncReport, enable: u32, disable: u32) {
     audit.sync = Some(report);
 }
 
-fn report_sync(emit: Emit) {
+fn report_sync() {
     let Some(_output) = Output::enter() else {
         return;
     };
@@ -297,7 +407,7 @@ fn report_sync(emit: Emit) {
             "Reflex API sync caller={origin} device=0x{:x} enabled={enabled} queue_us={} target_us={} vblank_us={} fg={} dfg_max={} dfg_fps={} result={}",
             report.device, report.queue_us, report.target_us, report.vblank_us, report.fg,
             report.dfg_max, report.dfg_fps, report.result,
-        ), emit);
+        ));
     }
 }
 
@@ -319,14 +429,12 @@ unsafe fn params<T>(raw: *const c_void) -> Option<*const T> {
     Some(raw.cast())
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_reflex_nvapi_observe(
+unsafe fn observe_nvapi(
     kind: u32,
     caller: usize,
     object: *mut c_void,
     raw: *const c_void,
     result: i32,
-    emit: Emit,
 ) {
     let source = |kind| Source {
         caller,
@@ -345,23 +453,18 @@ unsafe extern "C" fn rsf_core_reflex_nvapi_observe(
                 | u64::from(p.bLowLatencyBoost) << 1
                 | u64::from(p.bUseMarkersToOptimize) << 2
                 | u64::from(p.bUseMinQueueTime) << 3;
-            event(
-                source(0),
-                settings,
-                || {
-                    format!(
-                        "Reflex API mode caller={} device={object:p} low_latency={} boost={} minimum_us={} marker_opt={} min_queue={} result={result} thread={}",
-                        origin(caller),
-                        p.bLowLatencyMode,
-                        p.bLowLatencyBoost,
-                        p.minimumIntervalUs,
-                        p.bUseMarkersToOptimize,
-                        p.bUseMinQueueTime,
-                        thread(),
-                    )
-                },
-                emit,
-            );
+            event(source(0), settings, || {
+                format!(
+                    "Reflex API mode caller={} device={object:p} low_latency={} boost={} minimum_us={} marker_opt={} min_queue={} result={result} thread={}",
+                    origin(caller),
+                    p.bLowLatencyMode,
+                    p.bLowLatencyBoost,
+                    p.minimumIntervalUs,
+                    p.bUseMarkersToOptimize,
+                    p.bUseMinQueueTime,
+                    thread(),
+                )
+            });
         }
         1 => {
             let Some(p) = (unsafe { params::<NV_LATENCY_MARKER_PARAMS>(raw) }) else {
@@ -370,19 +473,14 @@ unsafe extern "C" fn rsf_core_reflex_nvapi_observe(
             let p = unsafe { &*p };
             let marker = p.markerType as u32;
             let high_bits = p.frameID >> 32;
-            event(
-                source(marker.wrapping_add(1)),
-                high_bits,
-                || {
-                    format!(
-                        "Reflex API marker source caller={} device={object:p} marker={marker} frame={} high_bits={high_bits} result={result} thread={}",
-                        origin(caller),
-                        p.frameID,
-                        thread(),
-                    )
-                },
-                emit,
-            );
+            event(source(marker.wrapping_add(1)), high_bits, || {
+                format!(
+                    "Reflex API marker source caller={} device={object:p} marker={marker} frame={} high_bits={high_bits} result={result} thread={}",
+                    origin(caller),
+                    p.frameID,
+                    thread(),
+                )
+            });
         }
         2 => {
             let Some(p) = (unsafe { params::<NV_SET_REFLEX_SYNC_PARAMS>(raw) }) else {
@@ -425,7 +523,6 @@ unsafe extern "C" fn rsf_core_reflex_nvapi_observe(
                         thread(),
                     )
                 },
-                emit,
             );
         }
         _ => {}
@@ -433,22 +530,16 @@ unsafe extern "C" fn rsf_core_reflex_nvapi_observe(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_reflex_driver_sleep(
-    device: *mut c_void,
-    log: Log,
-    user: *mut c_void,
-    emit: Emit,
-) {
+unsafe extern "C" fn rsf_reflex_driver_sleep(device: *mut c_void, log: Log, user: *mut c_void) {
     let mut state = NV_GET_SLEEP_STATUS_PARAMS {
         version: version::<NV_GET_SLEEP_STATUS_PARAMS>(),
         ..Default::default()
     };
-    let address =
-        query_interface().map_or(std::ptr::null_mut(), |query| unsafe { query(0xaef9_6ca1) });
+    let address = query_interface().map_or(null_mut(), |query| unsafe { query(0xaef9_6ca1) });
     let result = if address.is_null() {
-        -3 // NVAPI_NO_IMPLEMENTATION
+        NVAPI_NO_IMPLEMENTATION
     } else {
-        let status = unsafe { std::mem::transmute::<_, SleepStatus>(address) };
+        let status = unsafe { std::mem::transmute::<*mut c_void, SleepStatus>(address) };
         unsafe { status(device, &mut state) }
     };
     if log.is_some() {
@@ -460,9 +551,9 @@ unsafe extern "C" fn rsf_core_reflex_driver_sleep(
             state.bLowLatencyMode, state.sleepIntervalUs, state.bUseGameSleep, state.bFsVrr,
             state.bCplVsyncOn, state.bFullscreenIFlip, state.fgMultiplier, state.bDfgControl,
             state.dfgFrameTimeTargetUs,
-        ), emit);
+        ));
     }
-    report_sync(emit);
+    report_sync();
 }
 
 #[cfg(test)]
@@ -479,58 +570,47 @@ mod tests {
         STEPS.with_borrow_mut(|steps| steps.push(step));
     }
 
-    unsafe extern "C" fn discover(output: *mut Hook) -> u32 {
-        for index in 0..HOOKS {
-            unsafe {
-                output.add(index).write(Hook {
-                    target: ptr::without_provenance_mut(index + 1),
-                    detour: ptr::without_provenance_mut(index + 5),
-                    original: ptr::null_mut(),
-                });
-            }
+    const RECORDING: Platform = Platform {
+        initialize: || true,
+        create: |_| {
+            record("create");
+            true
+        },
+        pin: |_| {
+            record("pin");
+            true
+        },
+        enable: |target| {
+            record("enable");
+            target.addr() == 1
+        },
+        disable: |_| record("disable"),
+        remove: |_| record("remove"),
+    };
+
+    fn hooks() -> [Hook; HOOKS] {
+        std::array::from_fn(|index| Hook {
+            target: ptr::without_provenance_mut(index + 1),
+            detour: ptr::without_provenance_mut(index + 5),
+            original: ptr::null_mut(),
+        })
+    }
+
+    #[test]
+    fn detours_capture_their_own_original_slots() {
+        let hooks = describe([ptr::without_provenance_mut(9); HOOKS]);
+        for (index, hook) in hooks.iter().enumerate() {
+            assert_eq!(hook.detour, DETOURS[index] as *mut c_void);
+            assert_eq!(hook.original, ORIGINALS[index].as_ptr());
         }
-        1
-    }
-
-    unsafe extern "C" fn initialize() -> u32 {
-        1
-    }
-
-    unsafe extern "C" fn create(_: &Hook) -> u32 {
-        record("create");
-        1
-    }
-
-    unsafe extern "C" fn pin(_: *mut c_void) -> u32 {
-        record("pin");
-        1
-    }
-
-    unsafe extern "C" fn enable(target: *mut c_void) -> u32 {
-        record("enable");
-        u32::from(target.addr() == 1)
-    }
-
-    unsafe extern "C" fn disable(_: *mut c_void) {
-        record("disable");
-    }
-
-    unsafe extern "C" fn remove(_: *mut c_void) {
-        record("remove");
     }
 
     #[test]
     fn partially_exposed_hooks_disable_without_removing_trampolines() {
-        let platform = Platform {
-            discover,
-            initialize,
-            create,
-            pin,
-            enable,
-            disable,
-            remove,
-        };
-        assert!(matches!(install(&platform), Install::Retained));
+        assert!(matches!(
+            install_hooks(&RECORDING, &hooks()),
+            Install::Retained
+        ));
         STEPS.with_borrow(|steps| {
             assert_eq!(
                 *steps,

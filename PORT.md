@@ -1239,17 +1239,17 @@ Port generation, latency instrumentation and bundled compatibility handling with
 
 - [x] [runtime/backends/dlss/include/rescaleframe/streamline_host.h](runtime/backends/dlss/include/rescaleframe/streamline_host.h)
 - [ ] [runtime/backends/dlss/src/dlss_generation.cpp](runtime/backends/dlss/src/dlss_generation.cpp) Still first-party C++. D04 removed its use of the fg_helpers.h and d3d12_helpers.h wrappers only. The Streamline host leaf still uses `sl::` SDK records, feature templates, `sl_matrix_helpers` and `ComPtr` D3D12/DXGI ownership.
-- [ ] [runtime/backends/dlss/src/mfg_unlock.cpp](runtime/backends/dlss/src/mfg_unlock.cpp)
-- [ ] [runtime/backends/dlss/src/mfg_unlock.h](runtime/backends/dlss/src/mfg_unlock.h)
-- [ ] [runtime/backends/dlss/src/reflex_audit.cpp](runtime/backends/dlss/src/reflex_audit.cpp)
-- [ ] [runtime/backends/dlss/src/reflex_audit.h](runtime/backends/dlss/src/reflex_audit.h)
-- [ ] [runtime/backends/dlss/src/streamline_diagnostics.h](runtime/backends/dlss/src/streamline_diagnostics.h)
+- [x] [runtime/backends/dlss/src/mfg_unlock.cpp](runtime/backends/dlss/src/mfg_unlock.cpp) (ported to `mfg_state.rs`; deleted)
+- [ ] [runtime/backends/dlss/src/mfg_unlock.h](runtime/backends/dlss/src/mfg_unlock.h) (C declarations of the Rust owner plus an inline `rsf::MfgUnlock` adapter. Blocked on the D04 caller `dlss_generation.cpp:230` and its `release`, `prime`, `prepare` and `read_status` calls at lines 268, 375, 479, 597, 604 and 691. Remove the adapter when that caller holds an `rsf_mfg_state*` and calls `rsf_core_mfg_*` directly.)
+- [x] [runtime/backends/dlss/src/reflex_audit.cpp](runtime/backends/dlss/src/reflex_audit.cpp) (ported to `reflex_audit.rs`; deleted)
+- [x] [runtime/backends/dlss/src/reflex_audit.h](runtime/backends/dlss/src/reflex_audit.h) (C declarations only)
+- [ ] [runtime/backends/dlss/src/streamline_diagnostics.h](runtime/backends/dlss/src/streamline_diagnostics.h) (no D06 user remains. Blocked on the C++ `rsf::emit_streamline_log` exception guard and `RsfStreamlineEmitLog` alias used by the D04 caller `dlss_generation.cpp:254, 542, 557, 589, 623` and the D05 caller `dlss_streamline.cpp:162`. It can become C declarations once both callers pass the host log directly.)
 - [x] [runtime/backends/dlss/third_party/mfg_unlocker/dlssg_provider_policy.cpp](runtime/backends/dlss/third_party/mfg_unlocker/dlssg_provider_policy.cpp)
 - [x] [runtime/backends/dlss/third_party/mfg_unlocker/dlssg_provider_policy.h](runtime/backends/dlss/third_party/mfg_unlocker/dlssg_provider_policy.h)
-- [ ] [runtime/backends/dlss/third_party/mfg_unlocker/midpoint_fix.cpp](runtime/backends/dlss/third_party/mfg_unlocker/midpoint_fix.cpp)
-- [ ] [runtime/backends/dlss/third_party/mfg_unlocker/midpoint_fix.h](runtime/backends/dlss/third_party/mfg_unlocker/midpoint_fix.h)
-- [ ] [runtime/backends/dlss/third_party/mfg_unlocker/ngx_mfg_gate.h](runtime/backends/dlss/third_party/mfg_unlocker/ngx_mfg_gate.h)
-- [ ] [runtime/backends/dlss/third_party/mfg_unlocker/protected_pointer.h](runtime/backends/dlss/third_party/mfg_unlocker/protected_pointer.h)
+- [x] [runtime/backends/dlss/third_party/mfg_unlocker/midpoint_fix.cpp](runtime/backends/dlss/third_party/mfg_unlocker/midpoint_fix.cpp) (MIT; adapted in `mfg_midpoint.rs`; deleted)
+- [x] [runtime/backends/dlss/third_party/mfg_unlocker/midpoint_fix.h](runtime/backends/dlss/third_party/mfg_unlocker/midpoint_fix.h) (deleted with its implementation)
+- [x] [runtime/backends/dlss/third_party/mfg_unlocker/ngx_mfg_gate.h](runtime/backends/dlss/third_party/mfg_unlocker/ngx_mfg_gate.h) (MIT; adapted in `mfg_gate.rs`; deleted)
+- [x] [runtime/backends/dlss/third_party/mfg_unlocker/protected_pointer.h](runtime/backends/dlss/third_party/mfg_unlocker/protected_pointer.h) (MIT; byte publication in `mfg_gate.rs`, pointer publication in `mfg_midpoint.rs`; deleted)
 - [x] [runtime/backends/dlss/third_party/mfg_unlocker/universal_wrapper_profile.h](runtime/backends/dlss/third_party/mfg_unlocker/universal_wrapper_profile.h)
 
 **Fixtures (1)**

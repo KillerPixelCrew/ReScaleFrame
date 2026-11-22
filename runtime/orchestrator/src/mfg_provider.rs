@@ -103,19 +103,14 @@ unsafe fn version(path: *const u16) -> Option<Version> {
     })
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_mfg_provider_profile(path: *const u16) -> u32 {
+// The midpoint publisher maps this receipt to its pinned payload profile.
+pub(super) unsafe fn provider_profile(path: *const u16) -> u32 {
     unsafe { version(path) }.map_or(Profile::Unsupported, |value| value.profile()) as u32
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_mfg_supported_provider(
-    module: Handle,
-    path: *const u16,
-) -> u32 {
+pub(super) unsafe fn supported_provider(module: Handle, path: *const u16) -> u32 {
     u32::from(
-        implementation(module)
-            && unsafe { rsf_mfg_provider_profile(path) } != Profile::Unsupported as u32,
+        implementation(module) && unsafe { provider_profile(path) } != Profile::Unsupported as u32,
     )
 }
 
@@ -133,7 +128,7 @@ fn retain_supported_provider(module: Handle) -> bool {
     }
     let mut path = [0u16; 32768];
     if module_path(module, &mut path).is_none()
-        || unsafe { rsf_mfg_supported_provider(module, path.as_ptr()) } == 0
+        || unsafe { supported_provider(module, path.as_ptr()) } == 0
     {
         return false;
     }
@@ -159,19 +154,20 @@ pub(super) fn module_path(module: Handle, path: &mut [u16; 32768]) -> Option<usi
     (length != 0 && length < path.len()).then_some(length)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_mfg_retained_provider(module: Handle) -> u32 {
+// The NGX gate requires a process-lifetime reference before it scans or
+// publishes provider code.
+pub(super) fn retained_provider(module: Handle) -> bool {
     if module.is_null() {
-        return 0;
+        return false;
     }
     for slot in &RETAINED {
         let cached = slot.load(Ordering::Acquire);
         if cached == module {
-            return u32::from(implementation(module));
+            return implementation(module);
         }
         if cached.is_null() {
             break;
         }
     }
-    u32::from(retain_supported_provider(module))
+    retain_supported_provider(module)
 }

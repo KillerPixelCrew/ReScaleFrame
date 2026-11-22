@@ -92,3 +92,26 @@ It also checked the native midpoint translation unit. Source comparison covered
 the pinned provider mapping, wrapper publication body, native detour bodies,
 and C++ disable gates. Pinned formatting, targeted binding regeneration and
 locked offline metadata passed. Build, device and runtime checks remain pending.
+
+## Native closure
+
+| PORT path | Source disposition |
+| --- | --- |
+| `mfg_unlock.cpp` | Deleted. `mfg_state.rs` calls the Rust adapter check, wrapper publication and provider preparation directly instead of the native platform table. The wrapper write keeps the exact `0f 42 d1` expectation, refuses a foreign NOP, and restores and rechecks page protection. Streamline's embedded-signature check stays in `dlss_streamline.cpp` beside `sl_security.h`, and the host lends it as a C function pointer only when a signature is required. |
+| `mfg_unlock.h` | Retained. It now declares the Rust owner in C. The inline `rsf::MfgUnlock` adapter remains only because the D04 file `dlss_generation.cpp` still holds that class. |
+| `midpoint_fix.cpp`, `midpoint_fix.h` | Deleted. `mfg_midpoint.rs` keeps the six payload profiles, both kernel tables and their slot assertions, all thirteen failure codes, the CUDA LUID and SM 8.9 admission, the unique registration-table scan, source fatbin and PTX SHA-256, the LZ decoder, the 104-multiply transform, the output SHA-256 and the protected descriptor publication. SEH-guarded copies become `ReadProcessMemory`, and the same-value write that privatizes a copy-on-write page uses `WriteProcessMemory`. The read-only sections are copied once for the table scan. The bundle's log callback was never installed by ReScaleFrame, so its unreachable messages and unread readiness flag are dropped. |
+| `ngx_mfg_gate.h`, `protected_pointer.h` | Deleted. `mfg_gate.rs` keeps the 13-byte pattern, ambiguity refusal, count-one target and unwind-range checks, 64-slot publication ledger and foreign-edit refusal. The two-byte publication keeps every protection check, revalidation, flush and rollback step. Only a certified exchange by this call counts as published. The unused pointer publisher's semantics are kept in `mfg_midpoint.rs`. |
+| `dlssg_provider_policy.h` | Deleted. Its C declarations became internal Rust calls in `mfg_provider.rs`. |
+| `reflex_audit.cpp` | Deleted. `reflex_audit.rs` exports the three audit entry points and calls MinHook directly, like the other orchestrator hooks. Each naked detour entry passes the real caller PC from `[rsp]` in r8 and its kind in r9, then calls the original trampoline once. The NVAPI record versions and key offsets have Rust compile-time assertions. NVAPI headers are no longer needed for the native build, so the audit is present whenever the driver exports the interfaces. |
+| `reflex_audit.h` | C declarations only. |
+| `streamline_diagnostics.h` | Retained. No D06 file includes it now. `dlss_generation.cpp` (D04) and `dlss_streamline.cpp` (D05) still use its C++ exception guard. The MFG and audit logs now call the host log directly, as `d3d12_generation.rs` and `d3d11_host.rs` already do. |
+
+Verification on `f43a03ae`: the integration tip does not compile `rsf-orchestrator`
+(48 errors in other modules) or configure CMake (`tests/CMakeLists.txt:448`). The D06
+modules add no crate diagnostics against that baseline. A scratch crate that includes
+the real `mfg_state.rs`, `mfg_*.rs` and `reflex_audit.rs` passed clippy with
+`-D warnings` and seven tests. Two opt-in tests mapped a local 310.9.1
+`nvngx_dlssg.dll` without running its code. They found one registration table and one
+unpatched gate, and the Rust transform reproduced the pinned output SHA-256 `579ACF33...`.
+MSVC `/Zs /W4 /WX` passed for the two headers as C11 and for `dlss_generation.cpp` with
+and without Streamline. Linking, CTest and device runs remain pending.
