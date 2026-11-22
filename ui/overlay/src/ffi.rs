@@ -359,7 +359,6 @@ unsafe fn borrow_stats(stats: &RsfOverlayStats) -> Stats<'_> {
             available: stats.fg_available != 0,
             requested_mode: stats.fg_requested_mode,
             requested_generated: stats.fg_requested_generated,
-            effective_mode: stats.fg_effective_mode,
             effective_generated: stats.fg_effective_generated,
             active: stats.fg_active != 0,
             max_generated: stats.fg_max_generated,

@@ -181,9 +181,11 @@ impl View {
 /// however many frames the runtime takes to apply it.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct Selection {
-    quality: Quality,
+    /// The level the panel shows as chosen.
+    pub(crate) quality: Quality,
     requested_quality: Option<Quality>,
-    enabled: bool,
+    /// Whether the panel shows reconstruction as on.
+    pub(crate) enabled: bool,
     requested_enabled: Option<bool>,
     requested_backend: Option<u32>,
     sr_change_id: u32,
@@ -246,17 +248,8 @@ impl Selection {
             self.requested_backend = Some(intent.backend);
         }
     }
-
-    /// The level the panel shows as chosen.
-    pub(crate) fn quality(&self) -> Quality {
-        self.quality
-    }
-
-    /// Whether the panel shows reconstruction as on.
-    pub(crate) fn enabled(&self) -> bool {
-        self.enabled
-    }
 }
+
 
 /// One rectangle per host option. The array is longer than the standard library's `Default`
 /// arrays, so it carries its own.
@@ -1016,14 +1009,12 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
         let dlss = stats.backend == 1;
         let items: Vec<Segment> = DLSS_PRESETS
             .iter()
-            .map(|(id, label)| Segment {
-                label: (*label).to_owned(),
-                enabled: dlss || stats.backend == SR_AUTO,
-                mark: if *id == stats.dlss_preset {
-                    Mark::On
-                } else {
-                    Mark::Off
-                },
+            .map(|(id, label)| {
+                choice(
+                    label,
+                    dlss || stats.backend == SR_AUTO,
+                    *id == stats.dlss_preset,
+                )
             })
             .collect();
         let (chosen, rects) = segments(ui, "dlss-preset", &items);
@@ -1274,14 +1265,12 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
         }
         let items: Vec<Segment> = [(0, "Off"), (1, "On"), (2, "On + Boost")]
             .iter()
-            .map(|(id, label)| Segment {
-                label: (*label).to_owned(),
-                enabled: generation.reflex_available,
-                mark: if *id == generation.requested_reflex {
-                    Mark::On
-                } else {
-                    Mark::Off
-                },
+            .map(|(id, label)| {
+                choice(
+                    label,
+                    generation.reflex_available,
+                    *id == generation.requested_reflex,
+                )
             })
             .collect();
         let (chosen, rects) = segments(ui, "reflex", &items);
@@ -1351,14 +1340,12 @@ fn latency_toggle(
     let items: Vec<Segment> = ["Off", "On"]
         .iter()
         .enumerate()
-        .map(|(id, label)| Segment {
-            label: (*label).to_owned(),
-            enabled: generation.reflex_available,
-            mark: if (generation.requested_reflex != 0) == (id != 0) {
-                Mark::On
-            } else {
-                Mark::Off
-            },
+        .map(|(id, label)| {
+            choice(
+                label,
+                generation.reflex_available,
+                (generation.requested_reflex != 0) == (id != 0),
+            )
         })
         .collect();
     let (chosen, rects) = segments(ui, "latency_toggle", &items);
@@ -1440,15 +1427,7 @@ fn frame_limit(
     ];
     let items: Vec<Segment> = presets
         .iter()
-        .map(|(label, interval)| Segment {
-            label: (*label).to_owned(),
-            enabled: usable,
-            mark: if stored == *interval {
-                Mark::On
-            } else {
-                Mark::Off
-            },
-        })
+        .map(|(label, interval)| choice(label, usable, stored == *interval))
         .collect();
     let (chosen, rects) = segments(ui, "frame-limit-presets", &items);
     store(&mut controls.frame_limit_preset, &rects);
@@ -1484,15 +1463,7 @@ fn sharpen_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &m
     let items: Vec<Segment> = ["Off", "RCAS", "Depth\nRCAS", "Depth\nDAS", "Vendor"]
         .iter()
         .enumerate()
-        .map(|(index, label)| Segment {
-            label: (*label).to_owned(),
-            enabled: index != 4 || vendor,
-            mark: if options.mode == index as u32 {
-                Mark::On
-            } else {
-                Mark::Off
-            },
-        })
+        .map(|(index, label)| choice(label, index != 4 || vendor, options.mode == index as u32))
         .collect();
     let (chosen, rects) = segments(ui, "sharpen-mode", &items);
     store(&mut controls.sharpening_mode, &rects);
@@ -1781,14 +1752,12 @@ fn display_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
     let items: Vec<Segment> = ["Compact", "Detailed"]
         .iter()
         .enumerate()
-        .map(|(index, label)| Segment {
-            label: (*label).to_owned(),
-            enabled: stats.show_performance_hud,
-            mark: if preferences.detailed_hud == (index == 1) {
-                Mark::On
-            } else {
-                Mark::Off
-            },
+        .map(|(index, label)| {
+            choice(
+                label,
+                stats.show_performance_hud,
+                preferences.detailed_hud == (index == 1),
+            )
         })
         .collect();
     let (chosen, rects) = segments(ui, "hud-detail", &items);
@@ -1803,15 +1772,7 @@ fn display_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
     heading(ui, "Panel size");
     let items: Vec<Segment> = PanelSize::ALL
         .iter()
-        .map(|size| Segment {
-            label: size.label().to_owned(),
-            enabled: true,
-            mark: if *size == preferences.size {
-                Mark::On
-            } else {
-                Mark::Off
-            },
-        })
+        .map(|size| choice(size.label(), true, *size == preferences.size))
         .collect();
     let (chosen, rects) = segments(ui, "panel-size", &items);
     store(&mut controls.panel_size, &rects);
@@ -1831,15 +1792,7 @@ fn display_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
     let items: Vec<Segment> = ["Left", "Right"]
         .iter()
         .enumerate()
-        .map(|(index, label)| Segment {
-            label: (*label).to_owned(),
-            enabled: true,
-            mark: if preferences.right == (index == 1) {
-                Mark::On
-            } else {
-                Mark::Off
-            },
-        })
+        .map(|(index, label)| choice(label, true, preferences.right == (index == 1)))
         .collect();
     let (chosen, rects) = segments(ui, "panel-side", &items);
     store(&mut controls.panel_side, &rects);
@@ -1871,6 +1824,15 @@ struct Segment {
     label: String,
     enabled: bool,
     mark: Mark,
+}
+
+/// A segment that is either the chosen one or not.
+fn choice(label: &str, enabled: bool, chosen: bool) -> Segment {
+    Segment {
+        label: label.to_owned(),
+        enabled,
+        mark: if chosen { Mark::On } else { Mark::Off },
+    }
 }
 
 /// A row of equal buttons in a well, one of which is usually chosen. Returns the tapped index and

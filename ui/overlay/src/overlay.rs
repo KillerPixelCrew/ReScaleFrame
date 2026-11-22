@@ -173,8 +173,8 @@ impl Overlay {
         }
 
         let mut intent = Intent {
-            quality: self.selection.quality(),
-            enabled: self.selection.enabled(),
+            quality: self.selection.quality,
+            enabled: self.selection.enabled,
             ui_preferences: preferences.to_bits(),
             ..Intent::default()
         };
@@ -239,17 +239,12 @@ impl Overlay {
         // same selection: the one the frame started with. A switch that wrote back into that
         // state mid-layout would toggle twice if the layout ever ran twice over one set of events.
         if intent.quality_changed || intent.enabled_changed {
-            let sequence = NEXT_SR_CHANGE.fetch_add(1, Ordering::Relaxed);
-            intent.sr_change_id = if sequence == 0 {
-                NEXT_SR_CHANGE.fetch_add(1, Ordering::Relaxed)
-            } else {
-                sequence
-            };
+            intent.sr_change_id = NEXT_SR_CHANGE.fetch_add(1, Ordering::Relaxed);
         }
         self.selection.apply(&intent);
         self.view.apply(&intent);
-        intent.quality = self.selection.quality();
-        intent.enabled = self.selection.enabled();
+        intent.quality = self.selection.quality;
+        intent.enabled = self.selection.enabled;
 
         let pixels_per_point = output.pixels_per_point;
         self.collect_textures(output.textures_delta);
@@ -391,13 +386,6 @@ impl Overlay {
         for (id, patch) in delta.set {
             let epaint::ImageData::Color(image) = &patch.image;
             let [width, height] = image.size;
-            // A patch whose pixel count does not match its size would have the renderer walk off
-            // the end of the buffer, and an empty one would hand it a dangling pointer, since an
-            // empty Vec has no allocation to point at. egui produces neither, so this only fires if
-            // egui changes shape under us, and dropping a patch beats a bad memcpy inside a game.
-            if width == 0 || height == 0 || width * height != image.pixels.len() {
-                continue;
-            }
             let mut pixels = Vec::with_capacity(image.pixels.len() * 4);
             for pixel in &image.pixels {
                 pixels.extend_from_slice(&pixel.to_array());
@@ -437,14 +425,6 @@ impl Overlay {
             let Some(clip) = scissor(primitive.clip_rect, pixels_per_point, display) else {
                 continue;
             };
-            // Overflowing a u32 index would need a quarter of a billion vertices from a debug
-            // panel. Stopping is still better than wrapping the offsets.
-            if self.vertices.len() + mesh.vertices.len() > u32::MAX as usize
-                || self.indices.len() + mesh.indices.len() > u32::MAX as usize
-            {
-                break;
-            }
-
             let vertex_offset = self.vertices.len() as u32;
             let index_offset = self.indices.len() as u32;
             self.vertices
@@ -548,19 +528,14 @@ fn pixels_per_point(display_height: f32) -> f32 {
     (display_height / REFERENCE_HEIGHT).clamp(1.0, 3.0)
 }
 
-/// egui's texture ids as one number.
-///
-/// The overlay only ever produces managed ids, so the high bit is never actually set today. It is
-/// still spelled out, because collapsing the two kinds onto the same numbers would make a user
-/// texture silently alias the font atlas the day one appears.
+/// egui's texture ids as one number. The overlay registers no user textures, so this is the
+/// managed id; the high bit keeps a user id from aliasing the font atlas should one appear.
 fn texture_id_to_u64(id: epaint::TextureId) -> u64 {
     match id {
-        epaint::TextureId::Managed(value) => value & !USER_TEXTURE_BIT,
-        epaint::TextureId::User(value) => (value & !USER_TEXTURE_BIT) | USER_TEXTURE_BIT,
+        epaint::TextureId::Managed(value) => value,
+        epaint::TextureId::User(value) => value | 1 << 63,
     }
 }
-
-const USER_TEXTURE_BIT: u64 = 1 << 63;
 
 /// Turn egui's clip rectangle in points into a scissor rectangle in whole physical pixels.
 ///
@@ -1109,7 +1084,7 @@ mod tests {
         };
         // Nothing found, nothing decoded, no jitter, no sizes, and a quality level from a runtime
         // newer than this build.
-        stats.set_quality(9);
+        stats.quality_raw = 9;
 
         settle(&mut overlay, &stats);
         let intent = idle_frame(&mut overlay, &stats);
@@ -1219,7 +1194,7 @@ mod tests {
         idle_frame(&mut overlay, &stats);
 
         // Something other than this panel changed the level, so the panel shows what is in effect.
-        stats.set_quality(Quality::UltraPerformance.to_abi());
+        stats.quality_raw = Quality::UltraPerformance.to_abi();
         let intent = idle_frame(&mut overlay, &stats);
         assert_eq!(intent.quality, Quality::UltraPerformance);
         assert!(!intent.quality_changed, "following is not asking");
@@ -1233,12 +1208,12 @@ mod tests {
         let target = quality_rect(&overlay, Quality::Quality);
         click(&mut overlay, &stats, target);
 
-        stats.set_quality(Quality::Quality.to_abi());
+        stats.quality_raw = Quality::Quality.to_abi();
         let intent = idle_frame(&mut overlay, &stats);
         assert_eq!(intent.quality, Quality::Quality);
 
         // And a later change by something else is followed rather than fought over.
-        stats.set_quality(Quality::Native.to_abi());
+        stats.quality_raw = Quality::Native.to_abi();
         let intent = idle_frame(&mut overlay, &stats);
         assert_eq!(intent.quality, Quality::Native);
     }

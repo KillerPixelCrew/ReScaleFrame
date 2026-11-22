@@ -98,8 +98,6 @@ pub struct GenerationStats {
     pub requested_mode: u32,
     /// Requested generated count.
     pub requested_generated: u32,
-    /// Configured mode after suspension policy.
-    pub effective_mode: u32,
     /// Configured generated count.
     pub effective_generated: u32,
     /// SDK-observed generation activity.
@@ -346,11 +344,6 @@ impl Default for Stats<'_> {
 }
 
 impl Stats<'_> {
-    /// Set the quality in effect from a raw ABI value, keeping the raw number.
-    pub fn set_quality(&mut self, raw: abi::RsfOverlayQuality) {
-        self.quality_raw = raw;
-    }
-
     /// Decode the reported quality when this panel recognizes it.
     #[must_use]
     pub fn quality(&self) -> Option<Quality> {
@@ -575,7 +568,7 @@ mod tests {
         assert_eq!(Quality::from_abi(u32::MAX), None);
 
         let mut stats = Stats::default();
-        stats.set_quality(7);
+        stats.quality_raw = 7;
         assert_eq!(stats.quality(), None);
         assert_eq!(stats.quality_raw, 7);
     }
