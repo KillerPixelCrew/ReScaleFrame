@@ -1,12 +1,18 @@
 // SPDX-License-Identifier: MIT
 #![cfg(all(windows, not(test)))]
 
+mod d3d11_bridge_sr;
+mod d3d11_bridge_sr_abi;
 mod d3d11_device_checks;
 #[cfg(feature = "d3d11-host-device-fixtures")]
 mod d3d11_host_device;
 mod d3d11_marker;
 mod d3d11_marker_abi;
+mod d3d11_scope_fixture;
+mod d3d11_scope_fixture_abi;
 mod fg_bridge;
+mod fg_device_runner_abi;
+mod fg_fixture_focus;
 mod fixture_device;
 mod fixture_device_abi;
 mod fsr4_fg_bridge;

@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! Typed command recording for the linked FG fixture. The native harness owns
 //! its vendor callbacks and the present and retirement order of those commands.
-use crate::fixture_device_abi::rsf_fg_fixture_inputs as FgInputs;
+use crate::fg_device_runner_abi::*;
+use crate::fixture_device_abi::{rsf_fg_fixture_inputs as FgInputs, rsf_fg_fixture_submission};
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, RSF_SCREEN_FLIGHT, rsf_camera_frame,
-    rsf_frame_record,
+    rsf_frame_record, rsf_game_render_pass,
 };
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
@@ -20,6 +21,109 @@ use windows::Win32::System::Threading::WaitForSingleObject;
 use windows::core::{BOOL, Interface};
 
 type Raw = *mut c_void;
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg_bridge_fixture_submit(
+    frame: &rsf_fg_fixture_submission,
+    accepted: &mut u32,
+) -> i32 {
+    let mut backbuffer = std::ptr::null_mut();
+    if unsafe {
+        rsf_fg_bridge_fixture_source_buffer(
+            frame.chain,
+            frame.allocator,
+            frame.list,
+            &mut backbuffer,
+        )
+    } != 0
+    {
+        return 1;
+    }
+    let backbuffer = unsafe { ID3D12Resource::from_raw(backbuffer) };
+    if frame.produce_input != 0
+        && let Some(prepare) = frame.prepare
+    {
+        unsafe { prepare(frame.list, backbuffer.as_raw(), frame.session) };
+    }
+    if frame.overlay != 0 {
+        let list = unsafe { borrow::<ID3D12GraphicsCommandList>(&frame.list) };
+        unsafe {
+            barrier(
+                list,
+                backbuffer.as_raw(),
+                D3D12_RESOURCE_STATE_PRESENT,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+            )
+        };
+    }
+    if unsafe { rsf_fg_bridge_fixture_execute(frame.queue, frame.list) } != 0 {
+        return 1;
+    }
+    if frame.submit != 0 {
+        unsafe { rsf_fg12_submitted(1, frame.source) };
+    }
+    let (chain, source, view) = (frame.chain as usize, frame.source, frame.view);
+    // The caller leases the chain through the worker's synchronous join.
+    let callback = std::thread::Builder::new().spawn(move || {
+        // The pass is a C record of scalar values and nullable resource pointers.
+        let mut pass: rsf_game_render_pass = unsafe { std::mem::zeroed() };
+        pass.struct_size = size_of::<rsf_game_render_pass>() as u32;
+        pass.session_id = 1;
+        pass.native_frame = source;
+        pass.source_frame_id = source;
+        pass.view_key = u64::from(view);
+        pass.swapchain = chain as Raw;
+        unsafe { rsf_fg12_window(&pass) };
+    });
+    if !callback.is_ok_and(|callback| callback.join().is_ok()) {
+        return 1;
+    }
+    if frame.overlay != 0 {
+        if frame.overlay_visible >= 0 {
+            unsafe { rsf_overlay_input_set_visible(frame.overlay_visible as u32) };
+        }
+        let stats = rsf_overlay_stats {
+            struct_size: size_of::<rsf_overlay_stats>() as u32,
+            backend_name: c"Fixture".as_ptr(),
+            show_performance_hud: 1,
+            output_width: 2560,
+            output_height: 1600,
+            ..Default::default()
+        };
+        let mut intent = rsf_overlay_intent {
+            struct_size: size_of::<rsf_overlay_intent>() as u32,
+            ..Default::default()
+        };
+        let drawn = unsafe {
+            rsf_overlay_d3d12_frame(
+                frame.gpu,
+                frame.queue,
+                frame.chain,
+                &stats,
+                &mut intent,
+                frame.log,
+                std::ptr::null_mut(),
+            )
+        };
+        *accepted &= u32::from(drawn != 0);
+        if unsafe { rsf_fg_bridge_fixture_reset(frame.finish_allocator, frame.finish_list) } != 0 {
+            return 1;
+        }
+        let list = unsafe { borrow::<ID3D12GraphicsCommandList>(&frame.finish_list) };
+        unsafe {
+            barrier(
+                list,
+                backbuffer.as_raw(),
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_PRESENT,
+            )
+        };
+        if unsafe { rsf_fg_bridge_fixture_execute(frame.queue, frame.finish_list) } != 0 {
+            return 1;
+        }
+    }
+    0
+}
 
 unsafe fn borrow<T: Interface>(value: &Raw) -> &T {
     unsafe { T::from_raw_borrowed(value) }.unwrap()

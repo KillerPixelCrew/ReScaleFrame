@@ -4,11 +4,9 @@
 #include <rescaleframe/native_fg_d3d12.h>
 #include <rescaleframe/native_sr_d3d12.h>
 #include <rescaleframe/overlay_d3d12.h>
-#include <rescaleframe/overlay_input.h>
 #include <windows.h>
 #include <d3d11.h>
 #include <d3d12.h>
-#include <d3d12sdklayers.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 #include <cstdio>
@@ -56,18 +54,6 @@ uint64_t flip_capture_frame = 0;
 bool mfg_test = false;
 // Retain the provider through a Unity-style session epoch change as well as ids >32 bits.
 uint64_t source_frame() { return rsf_fg_bridge_fixture_source(frame_id, uint32_t(hot)); }
-struct FocusTest {
-    HWND previous = nullptr, window = nullptr;
-    ULONGLONG started = 0;
-    std::jthread watchdog;
-    ~FocusTest() {
-        watchdog.request_stop();
-        if (watchdog.joinable()) watchdog.join();
-        // A human focus change ends the lease. Never pull focus back from them.
-        if (previous && GetForegroundWindow() == window) SetForegroundWindow(previous);
-        if (window) DestroyWindow(window);
-    }
-};
 ComPtr<ID3D12DescriptorHeap> color_heap;
 void log(void*, const char* message) { std::printf("SDK: %s\n", message); }
 int accept(void*, void*) { return 1; }
@@ -163,7 +149,7 @@ int main(int argc, char** argv) {
     HWND window = CreateWindowW(wc.lpszClassName, L"Shared generation fixture", WS_OVERLAPPEDWINDOW,
         0, 0, 1280, 720, nullptr, nullptr, wc.hInstance, nullptr);
     if (!window) return 1;
-    FocusTest focus;
+    std::unique_ptr<void, decltype(&rsf_fg_bridge_fixture_focus_end)> focus{nullptr, rsf_fg_bridge_fixture_focus_end};
     rsf_d3d11_present_setup setup{}; setup.struct_size = sizeof(setup); setup.runtime_directory_utf8 = argv[2];
     setup.backend = backend; setup.max_generated_frames = mfg_test ? 5u : 3u; setup.log = log; setup.accept_window = accept;
     setup.prepare = prepare; setup.latency_event = latency; setup.retire = retire;
@@ -299,25 +285,11 @@ int main(int argc, char** argv) {
     uint32_t mfg_active[6]{};
     uint64_t previous_total = 0;
     if (focus_test) {
-        focus.previous = GetForegroundWindow(); focus.window = window; focus.started = GetTickCount64();
-        ShowWindow(window, SW_SHOW);
-        if (!SetForegroundWindow(window) || GetForegroundWindow() != window) {
-            std::puts("FAIL: the explicitly authorized focus request was refused by Windows");
-            return 1;
-        }
-        focus.watchdog = std::jthread([previous = focus.previous, window](std::stop_token stop) {
-            const auto deadline = GetTickCount64() + 20000;
-            while (!stop.stop_requested() && GetTickCount64() < deadline) Sleep(25);
-            if (!stop.stop_requested()) {
-                if (GetForegroundWindow() == window && previous) SetForegroundWindow(previous);
-                ShowWindow(window, SW_HIDE);
-                std::puts("FAIL: 20-second focus deadline reached; stopping this fixture");
-                TerminateProcess(GetCurrentProcess(), 2);
-            }
-        });
+        focus.reset(rsf_fg_bridge_fixture_focus_start(window));
+        if (!focus) return 1;
     }
     for (frame_id = 1; frame_id <= (mfg_test ? 130u : 40u); ++frame_id) {
-        if (focus_test && (GetTickCount64() - focus.started >= 20000 || GetForegroundWindow() != window)) {
+        if (focus_test && !rsf_fg_bridge_fixture_focus_valid(focus.get())) {
             std::puts("FAIL: focus test ended at its time limit or after a human focus change");
             accepted = false; break;
         }
@@ -347,28 +319,17 @@ int main(int argc, char** argv) {
                 rsf_game_cpu_event event{sizeof(event), stage, 1, source_frame(), uint64_t(now.QuadPart), uint64_t(frequency.QuadPart), 0, 0, 0};
                 rsf_fg12_cpu(&event);
             }
-            ComPtr<ID3D12Resource> back;
-            if (rsf_fg_bridge_fixture_source_buffer(chain.Get(), allocator.Get(), source_list.Get(),
-                reinterpret_cast<void**>(back.GetAddressOf()))) return 1;
-            // An input refusal must not leak the shared CPU token and stall later frames.
-            if (plan.produce_input) prepare(nullptr, nullptr, nullptr, source_list.Get(), back.Get(), nullptr, session, 0);
-            if (overlay) barrier(source_list.Get(), back.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
-            if (rsf_fg_bridge_fixture_execute(queue.Get(), source_list.Get())) return 1;
-            if (plan.submit) rsf_fg12_submitted(1, source_frame());
-            rsf_game_render_pass pass{}; pass.struct_size = sizeof(pass); pass.session_id = 1;
-            pass.native_frame = pass.source_frame_id = source_frame(); pass.view_key = plan.view; pass.swapchain = chain.Get();
-            std::thread render_callback([&pass] { rsf_fg12_window(&pass); });
-            render_callback.join();
-            if (overlay) {
-                if (plan.overlay_visible >= 0) rsf_overlay_input_set_visible(uint32_t(plan.overlay_visible));
-                rsf_overlay_stats stats{}; stats.struct_size = sizeof(stats); stats.backend_name = "Fixture";
-                stats.show_performance_hud = 1; stats.output_width = 2560; stats.output_height = 1600;
-                rsf_overlay_intent intent{}; intent.struct_size = sizeof(intent);
-                accepted &= rsf_overlay_d3d12_frame(gpu, queue.Get(), chain.Get(), &stats, &intent, log, nullptr) != 0;
-                if (rsf_fg_bridge_fixture_reset(finish_allocator.Get(), finish_list.Get())) return 1;
-                barrier(finish_list.Get(), back.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-                if (rsf_fg_bridge_fixture_execute(queue.Get(), finish_list.Get())) return 1;
-            }
+            const rsf_fg_fixture_submission submission{
+                chain.Get(), gpu, queue.Get(), allocator.Get(), source_list.Get(),
+                finish_allocator.Get(), finish_list.Get(), session, source_frame(),
+                plan.produce_input, plan.submit, plan.view, uint32_t(overlay), plan.overlay_visible,
+                [](void* commands, void* backbuffer, void* session) {
+                    prepare(nullptr, nullptr, nullptr, commands, backbuffer, nullptr, session, 0);
+                }, log,
+            };
+            auto frame_accepted = uint32_t(accepted);
+            if (rsf_fg_bridge_fixture_submit(&submission, &frame_accepted)) return 1;
+            accepted &= frame_accepted != 0;
         } else {
             if (legacy_hot) {
                 accepted &= rsf_d3d11_present_acquire(frame_id) == RSF_BACKEND_OK;
@@ -480,16 +441,7 @@ int main(int argc, char** argv) {
     rsf_sr12_destroy(dlss_sr);
     if (overlay) rsf_overlay_d3d12_stop();
     if (debug) {
-        ComPtr<ID3D12InfoQueue> messages;
-        if (FAILED(gpu->QueryInterface(IID_PPV_ARGS(&messages)))) return 1;
-        for (UINT64 i = 0; i < messages->GetNumStoredMessagesAllowedByRetrievalFilter(); ++i) {
-            SIZE_T bytes = 0; messages->GetMessage(i, nullptr, &bytes);
-            auto storage = std::make_unique<unsigned char[]>(bytes);
-            auto* message = reinterpret_cast<D3D12_MESSAGE*>(storage.get());
-            if (SUCCEEDED(messages->GetMessage(i, message, &bytes)) && message->Severity <= D3D12_MESSAGE_SEVERITY_ERROR) {
-                std::printf("D3D12 validation: %s\n", message->pDescription); accepted = false;
-            }
-        }
+        accepted &= rsf_present_fixture_debug_errors(gpu) == 0;
         std::printf("D3D12 overlay/presentation validation=%u\n", accepted);
     }
     return accepted && (observed_active || legacy_hot) ? 0 : 1;

@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! The native detour retains its trampoline, while Rust owns descriptor
 //! translation and the decision to intercept a factory call.
+use super::device::rsf_d3d11p_device_native_chain;
 use super::{
-    DXGI_ERROR_UNSUPPORTED, E_FAIL, E_INVALIDARG, Platform, S_OK, failed, log,
-    rsf_core_d3d11p_capture, rsf_core_d3d11p_captured, rsf_core_d3d11p_create,
+    DXGI_ERROR_UNSUPPORTED, E_FAIL, E_INVALIDARG, E_UNEXPECTED, Platform, S_OK, failed, log,
+    rsf_core_d3d11p_active_bridge, rsf_core_d3d11p_capture, rsf_core_d3d11p_captured,
+    rsf_core_d3d11p_create, rsf_core_d3d11p_is_owner, settings,
 };
 use crate::com_ref::ComRef;
 use crate::d3d11_present_abi::{Raw, rsf_d3d11p_plain_plan, rsf_d3d11p_request};
@@ -178,6 +180,50 @@ unsafe extern "C" fn rsf_d3d11p_factory_create_hwnd(
 }
 
 #[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_d3d11p_factory_wrap_native(
+    platform: *const Platform,
+    hooked: u32,
+    device: Raw,
+    native: Raw,
+    out: *mut Raw,
+) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    unsafe { out.write(null_mut()) };
+    if device.is_null()
+        || native.is_null()
+        || settings().accept_window.is_none()
+        || hooked != 0
+        || !rsf_core_d3d11p_active_bridge().is_null()
+    {
+        return E_INVALIDARG;
+    }
+    let mut desc = DXGI_SWAP_CHAIN_DESC::default();
+    let mut factory = null_mut();
+    if failed(unsafe { rsf_d3d11p_device_native_chain(device, native, &mut desc, &mut factory) }) {
+        return E_INVALIDARG;
+    }
+    let factory = unsafe { IDXGIFactory::from_raw(factory) };
+    let mut facade = null_mut();
+    let result = unsafe {
+        rsf_d3d11p_factory_create(platform, factory.as_raw(), device, &desc, &mut facade)
+    };
+    let owned = unsafe { ComRef::from_owned(facade) };
+    if failed(result) {
+        return result;
+    }
+    let Some(owned) = owned else {
+        return E_UNEXPECTED;
+    };
+    if unsafe { rsf_core_d3d11p_is_owner(platform, owned.as_ptr()) } == 0 {
+        return E_UNEXPECTED;
+    }
+    unsafe { out.write(owned.into_raw()) };
+    S_OK
+}
+
+#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_d3d11p_factory_hook_targets(
     factory: Raw,
     create: *mut Raw,
@@ -191,11 +237,12 @@ unsafe extern "C" fn rsf_d3d11p_factory_hook_targets(
     }
 }
 
-type GuardedCreate = unsafe extern "C" fn(Raw, Raw, *mut DXGI_SWAP_CHAIN_DESC, *mut Raw) -> i32;
+pub(super) type GuardedCreate =
+    unsafe extern "C" fn(Raw, Raw, *mut DXGI_SWAP_CHAIN_DESC, *mut Raw) -> i32;
 
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
-unsafe extern "C" fn rsf_d3d11p_factory_create_plain(
+pub(super) unsafe extern "C" fn rsf_d3d11p_factory_create_plain(
     facade: Raw,
     factory: Raw,
     description: &DXGI_SWAP_CHAIN_DESC,

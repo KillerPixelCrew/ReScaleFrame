@@ -30,3 +30,70 @@ const _: () = {
     ["Offset of field: rsf_fg_fixture_inputs::stride"]
         [::core::mem::offset_of!(rsf_fg_fixture_inputs, stride) - 40usize];
 };
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_fg_fixture_submission {
+    pub chain: *mut ::core::ffi::c_void,
+    pub gpu: *mut ::core::ffi::c_void,
+    pub queue: *mut ::core::ffi::c_void,
+    pub allocator: *mut ::core::ffi::c_void,
+    pub list: *mut ::core::ffi::c_void,
+    pub finish_allocator: *mut ::core::ffi::c_void,
+    pub finish_list: *mut ::core::ffi::c_void,
+    pub session: *mut ::core::ffi::c_void,
+    pub source: u64,
+    pub produce_input: u32,
+    pub submit: u32,
+    pub view: u32,
+    pub overlay: u32,
+    pub overlay_visible: i32,
+    pub prepare: ::core::option::Option<
+        unsafe extern "C" fn(
+            commands: *mut ::core::ffi::c_void,
+            backbuffer: *mut ::core::ffi::c_void,
+            session: *mut ::core::ffi::c_void,
+        ),
+    >,
+    pub log: ::core::option::Option<
+        unsafe extern "C" fn(user: *mut ::core::ffi::c_void, message: *const ::core::ffi::c_char),
+    >,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_fg_fixture_submission"]
+        [::core::mem::size_of::<rsf_fg_fixture_submission>() - 112usize];
+    ["Alignment of rsf_fg_fixture_submission"]
+        [::core::mem::align_of::<rsf_fg_fixture_submission>() - 8usize];
+    ["Offset of field: rsf_fg_fixture_submission::chain"]
+        [::core::mem::offset_of!(rsf_fg_fixture_submission, chain) - 0usize];
+    ["Offset of field: rsf_fg_fixture_submission::gpu"]
+        [::core::mem::offset_of!(rsf_fg_fixture_submission, gpu) - 8usize];
+    ["Offset of field: rsf_fg_fixture_submission::queue"]
+        [::core::mem::offset_of!(rsf_fg_fixture_submission, queue) - 16usize];
+    ["Offset of field: rsf_fg_fixture_submission::allocator"]
+        [::core::mem::offset_of!(rsf_fg_fixture_submission, allocator) - 24usize];
+    ["Offset of field: rsf_fg_fixture_submission::list"]
+        [::core::mem::offset_of!(rsf_fg_fixture_submission, list) - 32usize];
+    ["Offset of field: rsf_fg_fixture_submission::finish_allocator"]
+        [::core::mem::offset_of!(rsf_fg_fixture_submission, finish_allocator) - 40usize];
+    ["Offset of field: rsf_fg_fixture_submission::finish_list"]
+        [::core::mem::offset_of!(rsf_fg_fixture_submission, finish_list) - 48usize];
+    ["Offset of field: rsf_fg_fixture_submission::session"]
+        [::core::mem::offset_of!(rsf_fg_fixture_submission, session) - 56usize];
+    ["Offset of field: rsf_fg_fixture_submission::source"]
+        [::core::mem::offset_of!(rsf_fg_fixture_submission, source) - 64usize];
+    ["Offset of field: rsf_fg_fixture_submission::produce_input"]
+        [::core::mem::offset_of!(rsf_fg_fixture_submission, produce_input) - 72usize];
+    ["Offset of field: rsf_fg_fixture_submission::submit"]
+        [::core::mem::offset_of!(rsf_fg_fixture_submission, submit) - 76usize];
+    ["Offset of field: rsf_fg_fixture_submission::view"]
+        [::core::mem::offset_of!(rsf_fg_fixture_submission, view) - 80usize];
+    ["Offset of field: rsf_fg_fixture_submission::overlay"]
+        [::core::mem::offset_of!(rsf_fg_fixture_submission, overlay) - 84usize];
+    ["Offset of field: rsf_fg_fixture_submission::overlay_visible"]
+        [::core::mem::offset_of!(rsf_fg_fixture_submission, overlay_visible) - 88usize];
+    ["Offset of field: rsf_fg_fixture_submission::prepare"]
+        [::core::mem::offset_of!(rsf_fg_fixture_submission, prepare) - 96usize];
+    ["Offset of field: rsf_fg_fixture_submission::log"]
+        [::core::mem::offset_of!(rsf_fg_fixture_submission, log) - 104usize];
+};

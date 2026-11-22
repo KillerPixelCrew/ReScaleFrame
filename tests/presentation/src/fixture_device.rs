@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Device creation shared by the two linked presentation fixtures.
-use std::ffi::{c_char, c_void};
+use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D::{
@@ -12,8 +12,9 @@ use windows::Win32::Graphics::Direct3D11::{
     ID3D11DeviceContext,
 };
 use windows::Win32::Graphics::Direct3D12::{
-    D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC, D3D12CreateDevice,
-    D3D12GetDebugInterface, ID3D12CommandQueue, ID3D12Debug, ID3D12Device,
+    D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC, D3D12_MESSAGE,
+    D3D12_MESSAGE_SEVERITY_ERROR, D3D12CreateDevice, D3D12GetDebugInterface, ID3D12CommandQueue,
+    ID3D12Debug, ID3D12Device, ID3D12InfoQueue,
 };
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, DXGI_ERROR_NOT_FOUND, IDXGIAdapter,
@@ -26,6 +27,42 @@ use windows::Win32::System::Threading::Sleep;
 use windows::core::{IUnknown, Interface, PCSTR, PCWSTR, w};
 
 type Raw = *mut c_void;
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_present_fixture_debug_errors(device: Raw) -> i32 {
+    let device = unsafe { ID3D12Device::from_raw_borrowed(&device) }.unwrap();
+    let Ok(messages) = device.cast::<ID3D12InfoQueue>() else {
+        return 1;
+    };
+    let mut failed = false;
+    for index in 0..unsafe { messages.GetNumStoredMessagesAllowedByRetrievalFilter() } {
+        let mut bytes = 0;
+        if unsafe { messages.GetMessage(index, None, &mut bytes) }.is_err()
+            || bytes < size_of::<D3D12_MESSAGE>()
+        {
+            continue;
+        }
+        let mut storage = Vec::<usize>::new();
+        if storage
+            .try_reserve_exact(bytes.div_ceil(size_of::<usize>()))
+            .is_err()
+        {
+            return 1;
+        }
+        let message = storage.as_mut_ptr().cast::<D3D12_MESSAGE>();
+        if unsafe { messages.GetMessage(index, Some(message), &mut bytes) }.is_ok() {
+            let message = unsafe { &*message };
+            if message.Severity.0 <= D3D12_MESSAGE_SEVERITY_ERROR.0 {
+                failed = true;
+                if !message.pDescription.is_null() {
+                    let text = unsafe { CStr::from_ptr(message.pDescription.cast()) };
+                    println!("D3D12 validation: {}", text.to_string_lossy());
+                }
+            }
+        }
+    }
+    i32::from(failed)
+}
 
 fn adapter_for_vendor(factory: &IDXGIFactory1, vendor: u32) -> Result<IDXGIAdapter1, i32> {
     for index in 0.. {

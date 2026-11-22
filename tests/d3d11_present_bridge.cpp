@@ -6,10 +6,9 @@
 #include <rescaleframe/native_cpu.h>
 #include <rescaleframe/native_scene.h>
 #include <rescaleframe/native_window.h>
-#include <rescaleframe/ac7_render_scope.h>
+#include "presentation/d3d11_scope_fixture.h"
 #include <d3d11.h>
 #include <d3d12.h>
-#include <d3d12sdklayers.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 #include <cstdio>
@@ -18,8 +17,10 @@
 #include <cstddef>
 #include <cwchar>
 #include <algorithm>
-#include <memory>
 using Microsoft::WRL::ComPtr;
+extern "C" int rsf_d3d11_fixture_shared_sr(void* host, void* device, void* context,
+    void* const* textures, rsf_dlss_log_fn log, rsf_dlss_frame* frame);
+
 struct NativeCommand {
     NativeCommand* next = nullptr;
     void (*execute)(void*, NativeCommand*) = nullptr;
@@ -291,39 +292,14 @@ int main(int argc, char** argv) {
     std::puts("PASS: SR/upload use a separate queue on the same presentation device");
     // Synthetic GPU evidence for the same host used by FG. This is not a game scene or a
     // latency measurement. It catches a second Streamline owner/token and D3D11/12 state errors.
-    if (rsf_dlss_share_host(rsf_d3d11_present_host(), log_message, nullptr) != RSF_DLSS_OK) return 1;
-    rsf_dlss_support support{}; support.struct_size = sizeof(support);
-    if (rsf_dlss_query_support(&support) != RSF_DLSS_OK) return 1;
     ComPtr<ID3D11Texture2D> inputs[4], hints[5];
     void* textures[9]{};
     if (rsf_d3d11_fixture_inputs(device.Get(), context.Get(), textures)) return 1;
     for (unsigned index = 0; index != 4; ++index) inputs[index].Attach(static_cast<ID3D11Texture2D*>(textures[index]));
     for (unsigned index = 0; index != 5; ++index) hints[index].Attach(static_cast<ID3D11Texture2D*>(textures[index + 4]));
-    rsf_dlss_frame frame{}; frame.struct_size = sizeof(frame); frame.abi_version = RSF_DLSS_ABI_VERSION;
-    frame.color_in = inputs[0].Get(); frame.depth = inputs[1].Get(); frame.motion = inputs[2].Get(); frame.color_out = inputs[3].Get();
-    frame.render_width = frame.render_height = frame.output_width = frame.output_height = 512;
-    frame.quality = RSF_DLSS_QUALITY_NATIVE; frame.near_plane = 0.1f; frame.vertical_fov = 1; frame.aspect_ratio = 1;
-    frame.motion_scale_x = frame.motion_scale_y = 1.0f / 512; frame.camera_motion_included = frame.depth_inverted = frame.reset = 1;
-    frame.camera_view_to_clip[0] = frame.camera_view_to_clip[5] = 2; frame.camera_view_to_clip[11] = 1; frame.camera_view_to_clip[14] = 0.1f;
-    frame.clip_to_camera_view[0] = frame.clip_to_camera_view[5] = 0.5f; frame.clip_to_camera_view[11] = 10; frame.clip_to_camera_view[14] = 1;
-    frame.clip_to_prev_clip[0] = frame.clip_to_prev_clip[5] = frame.clip_to_prev_clip[10] = frame.clip_to_prev_clip[15] = 1;
-    frame.prev_clip_to_clip[0] = frame.prev_clip_to_clip[5] = frame.prev_clip_to_clip[10] = frame.prev_clip_to_clip[15] = 1;
-    frame.camera_forward[2] = frame.camera_up[1] = frame.camera_right[0] = 1;
-    // The translucency hints AC7 sends: opaque-only colour and layer as RGBA16F, three R32 masks.
-    frame.color_before_transparency = hints[0].Get(); frame.transparency_layer = hints[1].Get();
-    frame.reactive_mask = hints[2].Get(); frame.transparency_hint = hints[3].Get(); frame.bias_current_color = hints[4].Get();
-    // AC7 runs DLSS on the display-range colour transport with HDR input off (colour_transport.h).
-    frame.color_encoded = 1;
-    rsf_game_render_pass pass{}; pass.struct_size = sizeof(pass); pass.source_frame_id = 1;
-    if (rsf_streamline_host_begin(rsf_d3d11_present_host(), 1) != RSF_BACKEND_OK) return 1;
-    rsf_native_fg_scene(&pass);
-    if (rsf_native_fg_evaluate(context.Get(), &frame) != RSF_DLSS_OK) return 1;
-    rsf_native_fg_scene(nullptr);
-    const auto sample = rsf_d3d11_fixture_red_half(device.Get(), context.Get(), inputs[3].Get());
-    if (!sample || sample >= 0x7c00) return 1;
-    std::printf("shared D3D12 SR output red half=%04x, one existing CPU token\n", sample);
-    rsf_streamline_host_abort(rsf_d3d11_present_host(), 1);
-    if (rsf_dlss_release_resources() != RSF_DLSS_OK || rsf_dlss_shutdown() != RSF_DLSS_OK) return 1;
+    rsf_dlss_frame frame{};
+    if (rsf_d3d11_fixture_shared_sr(rsf_d3d11_present_host(), device.Get(), context.Get(), textures,
+        log_message, &frame)) return 1;
     ComPtr<IDXGISwapChain4> modern; ComPtr<IUnknown> identity, modern_identity; ComPtr<ID3D11Device> returned_device;
     if (FAILED(chain.As(&modern)) || FAILED(chain.As(&identity)) || FAILED(modern.As(&modern_identity)) ||
         identity.Get() != modern_identity.Get() || FAILED(chain->GetDevice(IID_PPV_ARGS(&returned_device))) || returned_device.Get() != device.Get()) return 1;
@@ -371,6 +347,7 @@ int main(int argc, char** argv) {
         source.output_rect[2] = source.output_rect[3] = 512;
         rsf_ac7_render_scopes* scopes = nullptr;
         if (!rsf_ac7_render_scopes_create_passes(42, 8, nullptr, queued_pass, nullptr, &scopes)) return 1;
+        const rsf_d3d11_scope_fixture_calls scope_calls{rsf_ac7_render_scope_open, rsf_ac7_render_scope_close};
         bool sampled_active = false, direct_active = false;
         const uint64_t frame_count = pacing_fixture ? 240 : switching ? 120 : 16;
         uint32_t provider_activity[6]{};
@@ -393,10 +370,8 @@ int main(int argc, char** argv) {
                 reserved.sleep_calls != sleeps_expected) { std::printf("sleep count source=%llu actual=%llu expected=%llu\n", static_cast<unsigned long long>(id), static_cast<unsigned long long>(reserved.sleep_calls), static_cast<unsigned long long>(sleeps_expected)); return 1; }
             source.source_frame_id = source.submission_id = source.native_frame = source.scope_id = id;
             NativeList commands;
-            rsf_ac7_render_ticket *frame_ticket = nullptr, *submission_ticket = nullptr, *final_ticket = nullptr, *window_ticket = nullptr, *binding_ticket = nullptr;
-            auto full_frame = source; full_frame.role = RSF_GAME_RENDER_FRAME;
-            full_frame.family_key = full_frame.view_key = 0;
-            if (!rsf_ac7_render_scope_open(scopes, &commands, &full_frame, &frame_ticket)) return 1;
+            rsf_ac7_render_ticket *frame_ticket = nullptr, *submission_ticket = nullptr, *window_ticket = nullptr;
+            if (!rsf_d3d11_fixture_scope_begin(&scope_calls, scopes, &commands, &source, &frame_ticket)) return 1;
             run(commands); // Native BeginFrame can execute before game-thread Reflex sleep.
             cpu_event(id, RSF_GAME_CPU_PACING);
             rsf_native_fg_status pacing{}; pacing.struct_size=sizeof(pacing);
@@ -426,8 +401,7 @@ int main(int argc, char** argv) {
             cpu_event(id, RSF_GAME_CPU_SIMULATION_BEGIN);
             const bool late_simulation_end = (id & 1u) != 0;
             if (!late_simulation_end) cpu_event(id, RSF_GAME_CPU_SIMULATION_END);
-            auto submission = source; submission.role = RSF_GAME_RENDER_SUBMISSION;
-            if (!rsf_ac7_render_scope_open(scopes, &commands, &submission, &submission_ticket)) return 1;
+            if (!rsf_d3d11_fixture_scope_scene(&scope_calls, scopes, &commands, &source, &submission_ticket)) return 1;
             frame.reset = id == 2;
             EvaluateCommand evaluate; evaluate.context = context.Get(); evaluate.source = &source; evaluate.frame = &frame;
             append(commands, evaluate);
@@ -435,21 +409,8 @@ int main(int argc, char** argv) {
             if (FAILED(chain->GetBuffer(0, IID_PPV_ARGS(&backbuffer))) || FAILED(device->CreateRenderTargetView(backbuffer.Get(), nullptr, &target))) return 1;
             const float color[]{0.25f, 0.2f, 0.6f, 1}; context->ClearRenderTargetView(target.Get(), color);
             context->ClearRenderTargetView(hudless_target.Get(), color);
-            auto final = source; final.role = RSF_GAME_RENDER_FINAL_SCENE;
-            final.scene_surface = direct ? backbuffer.Get() : hudless.Get();
-            if (!rsf_ac7_render_scope_open(scopes, &commands, &final, &final_ticket) ||
-                !rsf_ac7_render_scope_close(final_ticket, &commands) ||
-                !rsf_ac7_render_scope_close(submission_ticket, &commands)) return 1;
-            // Native Slate packets carry source/window ownership, never copied scene-view keys.
-            rsf_game_render_pass output{}; output.struct_size = sizeof(output); output.session_id = source.session_id;
-            output.source_frame_id = id; output.viewport_key = source.viewport_key; output.pass_key = id;
-            output.flags = source.flags; output.role = RSF_GAME_RENDER_WINDOW; output.window_key = uint64_t(uintptr_t(window));
-            output.rhi_viewport_key = 4; output.swapchain = chain.Get();
-            auto binding = output; binding.role = RSF_GAME_RENDER_TEXTURE_BINDING; binding.sampled_texture = hudless.Get();
-            binding.rhi_viewport_key = 0; binding.swapchain = nullptr;
-            if (!rsf_ac7_render_scope_open(scopes, &commands, &output, &window_ticket)) return 1;
-            if (!direct && (!rsf_ac7_render_scope_open(scopes, &commands, &binding, &binding_ticket) ||
-                !rsf_ac7_render_scope_close(binding_ticket, &commands))) return 1;
+            if (!rsf_d3d11_fixture_scope_window(&scope_calls, scopes, &commands, &source,
+                submission_ticket, backbuffer.Get(), hudless.Get(), window, chain.Get(), uint32_t(direct), &window_ticket)) return 1;
             PresentCommand present; present.chain = chain.Get(); present.simulation_pending = late_simulation_end;
             append(commands, present);
             if (!rsf_ac7_render_scope_close(window_ticket, &commands)) return 1;
@@ -463,16 +424,7 @@ int main(int argc, char** argv) {
                 auto* gpu = static_cast<ID3D12Device*>(transfer_graphics.native_device);
                 std::printf("AC7 adapter failed source=%llu SR=%d Present=%08lx device=%08lx passes=%u\n",
                     static_cast<unsigned long long>(id), evaluate.result, present.result, gpu->GetDeviceRemovedReason(), unsigned(queued_passes_ok));
-                ComPtr<ID3D12InfoQueue> messages;
-                if (SUCCEEDED(gpu->QueryInterface(IID_PPV_ARGS(&messages)))) {
-                    for (UINT64 i = 0; i < messages->GetNumStoredMessagesAllowedByRetrievalFilter(); ++i) {
-                        SIZE_T bytes = 0; messages->GetMessage(i, nullptr, &bytes);
-                        auto storage = std::make_unique<unsigned char[]>(bytes);
-                        auto* diagnostic = reinterpret_cast<D3D12_MESSAGE*>(storage.get());
-                        if (SUCCEEDED(messages->GetMessage(i, diagnostic, &bytes)) && diagnostic->Severity <= D3D12_MESSAGE_SEVERITY_ERROR)
-                            std::printf("D3D12 validation: %s\n", diagnostic->pDescription);
-                    }
-                }
+                rsf_present_fixture_debug_errors(gpu);
                 return 1;
             }
             rsf_native_fg_status activity{}; activity.struct_size = sizeof(activity);

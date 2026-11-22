@@ -12,7 +12,7 @@ use std::mem::offset_of;
 pub(crate) type Raw = *mut c_void;
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub(crate) struct rsf_streamline_graphics {
     pub struct_size: u32,
     pub device: Raw,

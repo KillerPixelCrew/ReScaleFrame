@@ -1,19 +1,14 @@
 // SPDX-License-Identifier: MIT
-// Native state, factory interception and SDK calls for the shared presentation bridge.
-// Rust owns the IDXGISwapChain4 facade, presentation and its physical-chain leases.
+// Factory interception, native trampolines and SDK linkage for the Rust presentation owner.
 #include <rescaleframe/d3d11_present_bridge.h>
 #include <rescaleframe/shared_surface.h>
 #include "d3d11_present_platform.h"
 #include <d3d11_4.h>
 #include <d3d12.h>
-#include <d3d12sdklayers.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 #include <MinHook.h>
 #include <cstddef>
-#include <cstdio>
-#include <memory>
-#include <new>
 
 static_assert(sizeof(rsf_streamline_graphics) == 48);
 static_assert(sizeof(DXGI_SWAP_CHAIN_DESC) == 72 && sizeof(DXGI_SWAP_CHAIN_DESC1) == 48 &&
@@ -56,21 +51,46 @@ static_assert(RSF_FG_BACKEND_DLSS == 1 && RSF_FG_BACKEND_FSR3 == 3 && RSF_FG_BAC
     RSF_LATENCY_INPUT_SAMPLE == 6 && RSF_UI_MODE_NONE == 1);
 
 extern "C" {
-struct rsf_d3d11p_facade_state_ops {
-    void (*describe)(void*, DXGI_SWAP_CHAIN_DESC*);
-    void* (*parent)(void*);
-    void* (*device)(void*);
-    void (*destroy)(void*);
-};
-static_assert(sizeof(rsf_d3d11p_facade_state_ops) == 4 * sizeof(void*));
-void* rsf_d3d11p_facade_create(rsf_d3d11p_chain*, void*, const rsf_d3d11p_facade_state_ops*);
-void* rsf_d3d11p_facade_state(void*);
+uint32_t rsf_d3d11p_native_window_valid(void* window);
+uint32_t rsf_d3d11p_native_client_size(void* window, uint32_t* width, uint32_t* height);
+void* rsf_d3d11p_native_canonical_identity(void* receiver);
+void rsf_d3d11p_native_add_ref(void* object);
+void rsf_d3d11p_native_release(void* object);
+void* rsf_d3d11p_native_bridge_new(rsf_d3d11p_chain* chain);
+void rsf_d3d11p_native_bridge_release_owned(void* facade);
+void rsf_d3d11p_native_facts(void* facade, rsf_d3d11p_facts* out);
+uint32_t rsf_d3d11p_native_init_source(void* facade, void* factory, void* source, const void* desc);
+int32_t rsf_d3d11p_native_queue_device(void* facade);
+int32_t rsf_d3d11p_native_owning_adapter(void* facade, void* source, rsf_d3d11p_adapter* out);
+uint32_t rsf_d3d11p_native_adopt_host(void* facade, uint32_t identity, int32_t* result);
+int32_t rsf_d3d11p_native_d3d11_device(void* facade, void* source);
+int32_t rsf_d3d11p_native_create_host(void* facade);
+void* rsf_d3d11p_native_host(void* facade);
+int32_t rsf_d3d11p_native_resolve_graphics(void* facade);
+uint32_t rsf_d3d11p_native_tearing_supported(void* facade);
+uint32_t rsf_d3d11p_native_fsr4_supported(void* facade, const char* directory);
+int32_t rsf_d3d11p_native_create_upload_fence(void* facade);
+int32_t rsf_d3d11p_native_create_slot(void* facade, void** allocator, void** list);
+int32_t rsf_d3d11p_native_create_render_buffer(void* facade, uint32_t width, uint32_t height, uint32_t format, void** out);
+int32_t rsf_d3d11p_native_create_plain(void* facade, const rsf_d3d11p_plain_plan* plan, void** physical, void** queue);
+int32_t rsf_d3d11p_native_resize_physical(void* facade, void* physical, uint32_t count, uint32_t width, uint32_t height, uint32_t format);
+int32_t rsf_d3d11p_native_upload_wait(void* facade, void* queue, uint64_t value);
+void rsf_d3d11p_native_record_copy(void* facade, void* commands, void* backbuffer, void* source);
+void* rsf_d3d11p_native_context11(void* facade);
+int32_t rsf_d3d11p_native_upload_return(void* facade, void* queue, uint64_t value);
+void rsf_d3d11p_native_report_device_failure(void* facade, int32_t result, uint32_t backend);
+void rsf_d3d11p_native_log_present_failure(void* facade, const char* step, int32_t result, uint32_t render_index);
+void rsf_d3d11p_native_log_buffer_refusal(void* facade, uint32_t index, const void* requested, int32_t result, uint32_t pending);
+void rsf_d3d11p_native_set_description(void* facade, uint32_t count, uint32_t width, uint32_t height, uint32_t format, uint32_t flags);
+int32_t rsf_d3d11p_native_create_retirement_fence(void* facade, void** out);
+int32_t rsf_d3d11p_native_retire_submit(void* facade, void* queue, void* retirement_fence, void* vendor_fence, uint64_t vendor_value, void* list, uint64_t value);
+void rsf_d3d11p_native_retain_all(void* facade);
+void rsf_d3d11p_native_release_presentation(void* facade);
+void rsf_d3d11p_native_release_direct_graphics(void* facade);
+void rsf_d3d11p_native_release_host(void* facade);
+void* rsf_d3d11p_native_source_queue(void* facade, void* queue);
+void* rsf_d3d11p_native_command_list(void* facade, void* queue, void* list);
 rsf_d3d11p_chain* rsf_d3d11p_facade_chain(void*);
-uint32_t rsf_d3d11p_facade_release(void*);
-int32_t rsf_d3d11p_facade_color_space(void*, uint32_t);
-int32_t rsf_d3d11p_facade_present1(rsf_d3d11p_chain*, uint32_t, uint32_t, const DXGI_PRESENT_PARAMETERS*);
-int32_t rsf_d3d11p_facade_resize1(rsf_d3d11p_chain*, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
-    const uint32_t*, IUnknown* const*);
 int32_t rsf_d3d11p_native_query_interface(void*, const void*, void**);
 int32_t rsf_d3d11p_native_query_chain4(void*, void**);
 int32_t rsf_d3d11p_native_get_fullscreen(void*, int32_t*);
@@ -78,6 +98,9 @@ int32_t rsf_d3d11p_native_set_fullscreen(void*, int32_t, void*);
 int32_t rsf_d3d11p_native_present(void*, uint32_t, uint32_t);
 int32_t rsf_d3d11p_native_get_buffer(void*, uint32_t, const void*, void**);
 int32_t rsf_d3d11p_native_acquire_backbuffer(void*, void**);
+int32_t rsf_d3d11p_factory_wrap_native(const rsf_d3d11p_platform*, uint32_t, void*, void*, void**);
+void rsf_d3d11p_dispatch_chain(rsf_d3d11_chain_dispatch*);
+int32_t rsf_d3d11p_dispatch_present(void*, uint32_t, uint32_t, int32_t*);
 }
 
 namespace {
@@ -90,59 +113,7 @@ CreateHwnd original_hwnd = nullptr;
 
 const rsf_d3d11_present_setup& settings() { return *rsf_core_d3d11p_settings(); }
 void log(const char* message) { if (settings().log) settings().log(settings().user, message); }
-struct BridgeState {
-    ComPtr<ID3D11Device> device;
-    ComPtr<ID3D11DeviceContext4> context;
-    ComPtr<IDXGIAdapter> adapter;
-    ComPtr<IDXGIFactory> parent;
-    bool tearing_supported = false;
-    rsf_streamline_host* host = nullptr;
-    rsf_streamline_graphics graphics{};
-    ComPtr<ID3D12Device> direct_device;
-    ComPtr<ID3D12CommandQueue> direct_queue;
-    bool native12 = false;
-    rsf_shared_fence* shared_fence = nullptr;
-    // The three slot allocator/list pairs are leased by the Rust owner, which releases them
-    // where these members were destroyed.
-    DXGI_SWAP_CHAIN_DESC description{};
-
-    // Streamline's proxy queue takes the proxy list; any other provider queue takes the native
-    // list behind it. Null when the host cannot unwrap the list.
-    void* provider_list(void* queue, ID3D12GraphicsCommandList* list) {
-        return host && queue != graphics.queue ? rsf_streamline_host_native(host, list) : list;
-    }
-    // Streamline needs the engine identity; without one there is no host and no DLSS-G.
-    rsf_streamline_host_setup host_setup(void* dxgi_adapter) const {
-        const auto& s = settings();
-        return {sizeof(rsf_streamline_host_setup), RSF_STREAMLINE_HOST_ABI_VERSION, s.streamline_directory_utf8, dxgi_adapter,
-            s.engine_type, s.engine_version_utf8, s.project_id_utf8, 1, s.development_runtime,
-            s.log, s.user, RSF_SL_PROFILE_DLSS_FG, 1};
-    }
-
-};
-
-BridgeState* as_bridge(void* facade) {
-    return static_cast<BridgeState*>(rsf_d3d11p_facade_state(facade));
-}
-
-const rsf_d3d11p_facade_state_ops facade_state_ops{
-    [](void* state, DXGI_SWAP_CHAIN_DESC* out) noexcept {
-        *out = static_cast<const BridgeState*>(state)->description;
-    },
-    [](void* state) noexcept -> void* {
-        return static_cast<const BridgeState*>(state)->parent.Get();
-    },
-    [](void* state) noexcept -> void* {
-        const auto& bridge = *static_cast<const BridgeState*>(state);
-        return bridge.native12 ? static_cast<void*>(bridge.direct_device.Get())
-                               : static_cast<void*>(bridge.device.Get());
-    },
-    [](void* state) noexcept {
-        delete static_cast<BridgeState*>(state);
-    },
-};
-
-// Native device, provider and factory steps for the backing state.
+// SDK callbacks and the guarded original factory trampoline.
 namespace leaf {
 const rsf_generation_provider* provider_table(uint32_t family) {
     switch (family) {
@@ -153,18 +124,6 @@ const rsf_generation_provider* provider_table(uint32_t family) {
     }
 }
 void observer_present(rsf_observer_present_event* event) { (void)rsf_observer_notify_application_present(event); }
-uint32_t window_valid(void* window) { return IsWindow(static_cast<HWND>(window)) ? 1u : 0u; }
-uint32_t client_size(void* window, uint32_t* width, uint32_t* height) {
-    RECT rect{}; if (!GetClientRect(static_cast<HWND>(window), &rect)) return 0;
-    *width = UINT(rect.right); *height = UINT(rect.bottom); return 1;
-}
-void* canonical_identity(void* receiver) {
-    ComPtr<IUnknown> identity;
-    return SUCCEEDED(static_cast<IUnknown*>(receiver)->QueryInterface(IID_PPV_ARGS(&identity)))
-        ? identity.Get() : nullptr;
-}
-void add_ref(void* object) { static_cast<IUnknown*>(object)->AddRef(); }
-void release(void* object) { static_cast<IUnknown*>(object)->Release(); }
 rsf_streamline_host* sl(void* host) { return static_cast<rsf_streamline_host*>(host); }
 int32_t host_sleep(void* host, uint64_t id) { return rsf_streamline_host_sleep(sl(host), id); }
 int32_t host_marker(void* host, uint64_t id, uint32_t marker, uint32_t controller) { return rsf_streamline_host_marker(sl(host), id, marker, controller); }
@@ -177,256 +136,52 @@ int32_t host_present_common(void* host, void* chain, uint32_t sync, uint32_t fla
     return rsf_streamline_host_present_common(sl(host), chain, sync, flags, begin);
 }
 
-void* bridge_new(rsf_d3d11p_chain* chain) {
-    auto* state = new(std::nothrow) BridgeState;
-    if (!state) return nullptr;
-    auto* facade = rsf_d3d11p_facade_create(chain, state, &facade_state_ops);
-    if (!facade) delete state;
-    return facade;
-}
-void bridge_release_owned(void* facade) { rsf_d3d11p_facade_release(facade); }
-void facts(void* b, rsf_d3d11p_facts* out) {
-    const auto& self = *as_bridge(b); const auto& d = self.description;
-    *out = {d.OutputWindow, d.BufferDesc.Width, d.BufferDesc.Height, uint32_t(d.BufferDesc.Format), d.BufferCount,
-        d.Flags, d.Windowed ? 1u : 0u, self.native12 ? 1u : 0u, self.tearing_supported ? 1u : 0u, self.graphics,
-        self.direct_queue.Get(), self.device.Get(), d.BufferUsage};
-}
-
-uint32_t init_source(void* b, void* factory, void* source, const void* desc) {
-    auto& self = *as_bridge(b);
-    self.description = *static_cast<const DXGI_SWAP_CHAIN_DESC*>(desc);
-    self.parent = static_cast<IDXGIFactory*>(factory);
-    self.graphics.struct_size = sizeof(self.graphics);
-    self.native12 = SUCCEEDED(static_cast<IUnknown*>(source)->QueryInterface(IID_PPV_ARGS(&self.direct_queue)));
-    return self.native12 ? 1u : 0u;
-}
-int32_t native_device(void* b) {
-    auto& self = *as_bridge(b);
-    return rsf_d3d11p_device_queue_device(self.direct_queue.Get(),
-        reinterpret_cast<void**>(self.direct_device.ReleaseAndGetAddressOf()));
-}
-int32_t owning_adapter(void* b, void* source, rsf_d3d11p_adapter* out) {
-    auto& self = *as_bridge(b);
-    if (self.native12 && FAILED(native_device(b))) return E_FAIL;
-    rsf_d3d11p_device_adapter_info info{};
-    if (FAILED(rsf_d3d11p_device_read_adapter(source, self.direct_device.Get(), &info))) return E_FAIL;
-    *out = {info.vendor, info.device, rsf_fg_default_backend(info.vendor, info.software), 0};
-    return S_OK;
-}
-uint32_t adopt_host(void* b, uint32_t identity, int32_t* result) {
-    auto& self = *as_bridge(b);
-    ComPtr<IDXGIAdapter1> native_adapter;
-    if (FAILED(rsf_d3d11p_device_native_adapter(self.direct_device.Get(),
-        reinterpret_cast<void**>(native_adapter.GetAddressOf())))) return 0;
-    const auto setup = self.host_setup(native_adapter.Get());
-    *result = identity ? rsf_streamline_host_adopt(&setup, self.direct_device.Get(), self.direct_queue.Get(), &self.host) :
-        RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    return 1;
-}
-int32_t d3d11_device(void* b, void* source) {
-    auto& self = *as_bridge(b);
-    return rsf_d3d11p_device_immediate(source,
-        reinterpret_cast<void**>(self.device.ReleaseAndGetAddressOf()),
-        reinterpret_cast<void**>(self.context.ReleaseAndGetAddressOf()),
-        reinterpret_cast<void**>(self.adapter.ReleaseAndGetAddressOf()));
-}
-int32_t create_host(void* b) {
-    auto& self = *as_bridge(b);
-    const auto setup = self.host_setup(self.adapter.Get());
-    return rsf_streamline_host_create(&setup, &self.host);
-}
-void* host(void* b) { return as_bridge(b)->host; }
-// The adapter is the last initialization input; like the former local, it is not kept.
-int32_t resolve_graphics(void* b) {
-    auto& self = *as_bridge(b);
-    const auto adapter = std::move(self.adapter);
-    if (self.host) return rsf_streamline_host_graphics(self.host, &self.graphics) != RSF_BACKEND_OK ? E_FAIL : S_OK;
-    if (!self.native12 && FAILED(rsf_d3d11p_device_create12(adapter.Get(),
-        reinterpret_cast<void**>(self.direct_device.ReleaseAndGetAddressOf())))) return DXGI_ERROR_UNSUPPORTED;
-    if (!self.direct_queue && FAILED(rsf_d3d11p_gpu_queue(self.direct_device.Get(),
-        reinterpret_cast<void**>(self.direct_queue.GetAddressOf())))) return E_FAIL;
-    self.graphics.device = self.graphics.native_device = self.direct_device.Get();
-    self.graphics.queue = self.graphics.native_queue = self.direct_queue.Get();
-    return S_OK;
-}
-uint32_t tearing_supported(void* b) {
-    auto& self = *as_bridge(b);
-    self.tearing_supported = rsf_d3d11p_device_tearing(self.parent.Get()) != 0;
-    return self.tearing_supported ? 1u : 0u;
-}
-uint32_t fsr4_supported(void* b, const char* directory) {
-    return rsf_generation_fsr4_supported(as_bridge(b)->graphics.native_device, directory);
-}
-int32_t create_upload_fence(void* b) {
-    auto& self = *as_bridge(b);
-    return rsf_shared_fence_create(self.device.Get(), self.graphics.native_device, settings().log,
-        settings().user, &self.shared_fence) == RSF_SHARED_OK ? S_OK : E_FAIL;
-}
-// Slot lists record on the graphics device: Streamline's proxy device when a host exists.
-int32_t create_slot(void* b, void** allocator, void** list) {
-    return rsf_d3d11p_gpu_create_slot(as_bridge(b)->graphics.device, allocator, list);
-}
-int32_t create_render_buffer(void* b, uint32_t width, uint32_t height, uint32_t format, void** out) {
-    return rsf_d3d11p_gpu_render_buffer(as_bridge(b)->direct_device.Get(), width, height, format, out);
-}
-
 int32_t create_original(void* factory, void* queue, DXGI_SWAP_CHAIN_DESC* desc, void** out) noexcept try {
     return original_create(static_cast<IDXGIFactory*>(factory), static_cast<ID3D12CommandQueue*>(queue),
         desc, reinterpret_cast<IDXGISwapChain**>(out));
 } catch (...) {
     return E_FAIL;
 }
-int32_t create_plain(void* b, const rsf_d3d11p_plain_plan* plan, void** physical, void** queue) {
-    auto& self = *as_bridge(b);
-    return rsf_d3d11p_factory_create_plain(b, self.parent.Get(), &self.description, plan,
-        uint32_t(self.native12), original_create ? create_original : nullptr, physical, queue);
-}
-int32_t resize_physical(void* b, void* physical, uint32_t count, uint32_t width, uint32_t height, uint32_t format) {
-    return rsf_d3d11p_gpu_resize(physical, count, width, height, format, uint32_t(as_bridge(b)->tearing_supported));
-}
-int32_t upload_wait(void* b, void* queue, uint64_t value) {
-    auto& self = *as_bridge(b);
-    return rsf_d3d11p_gpu_upload_wait(self.context.Get(), queue, rsf_shared_fence_d3d11(self.shared_fence),
-        rsf_shared_fence_d3d12(self.shared_fence), value);
-}
-void record_copy(void* b, void* raw_list, void* backbuffer, void* source) {
-    rsf_d3d11p_gpu_record_copy(raw_list, backbuffer, source, uint32_t(as_bridge(b)->native12));
-}
-void* context11(void* b) { return as_bridge(b)->context.Get(); }
-int32_t upload_return(void* b, void* queue, uint64_t value) {
-    auto& self = *as_bridge(b);
-    return rsf_d3d11p_gpu_upload_return(self.context.Get(), queue, rsf_shared_fence_d3d11(self.shared_fence),
-        rsf_shared_fence_d3d12(self.shared_fence), value);
-}
-void report_device_failure(void* b, int32_t result, uint32_t backend) {
-    auto& self = *as_bridge(b);
-    char text[160]; std::snprintf(text, sizeof(text), "Native D3D12 presentation failed backend=%u HRESULT=%08lx device_reason=%08lx",
-        backend, static_cast<unsigned long>(result), static_cast<unsigned long>(self.direct_device->GetDeviceRemovedReason())); log(text);
-    ComPtr<ID3D12InfoQueue> messages;
-    if (FAILED(self.direct_device.As(&messages))) return;
-    unsigned reported = 0;
-    const auto count = messages->GetNumStoredMessagesAllowedByRetrievalFilter();
-    for (UINT64 i = count; i && reported < 8;) {
-        --i;
-        SIZE_T bytes = 0; if (FAILED(messages->GetMessage(i, nullptr, &bytes))) continue;
-        auto storage = std::make_unique<unsigned char[]>(bytes);
-        auto* message = reinterpret_cast<D3D12_MESSAGE*>(storage.get());
-        if (SUCCEEDED(messages->GetMessage(i, message, &bytes)) && message->Severity <= D3D12_MESSAGE_SEVERITY_ERROR) {
-            log(message->pDescription); ++reported;
-        }
-    }
-}
-void log_present_failure(void* b, const char* step, int32_t result, uint32_t render_index) {
-    const auto& d = as_bridge(b)->description;
-    char text[192]; std::snprintf(text, sizeof(text), "Native D3D12 presentation step '%s' failed HRESULT=%08lx render_index=%u buffers=%u size=%ux%u",
-        step, static_cast<unsigned long>(result), render_index, d.BufferCount, d.BufferDesc.Width, d.BufferDesc.Height);
-    log(text);
-}
-
-void log_buffer_refusal(void* b, uint32_t index, const void* requested, int32_t result, uint32_t pending) {
-    const auto& iid = *static_cast<const IID*>(requested);
-    char text[320]{};
-    std::snprintf(text, sizeof(text),
-        "GetBuffer refused HRESULT=0x%08lx facade=%p index=%u IID=%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x output=%p native12=%u physical_pending=%u",
-        static_cast<unsigned long>(result), b, index, static_cast<unsigned long>(iid.Data1),
-        uint32_t(iid.Data2), uint32_t(iid.Data3), uint32_t(iid.Data4[0]), uint32_t(iid.Data4[1]),
-        uint32_t(iid.Data4[2]), uint32_t(iid.Data4[3]), uint32_t(iid.Data4[4]), uint32_t(iid.Data4[5]),
-        uint32_t(iid.Data4[6]), uint32_t(iid.Data4[7]), static_cast<void*>(nullptr), uint32_t(as_bridge(b)->native12), pending);
-    log(text);
-}
-
-void set_description(void* b, uint32_t count, uint32_t width, uint32_t height, uint32_t format, uint32_t flags) {
-    auto& d = as_bridge(b)->description;
-    d.BufferCount = count;
-    d.BufferDesc.Width = width; d.BufferDesc.Height = height; d.BufferDesc.Format = DXGI_FORMAT(format); d.Flags = flags;
-}
-int32_t create_retirement_fence(void* b, void** out) {
-    return rsf_d3d11p_gpu_fence(as_bridge(b)->graphics.native_device, out);
-}
-void* retirement_command(void* b, void* queue, void* list) noexcept try {
-    return as_bridge(b)->provider_list(queue, static_cast<ID3D12GraphicsCommandList*>(list));
-} catch (...) {
-    return nullptr;
-}
-int32_t retire_submit(void* b, void* queue, void* retirement_fence, void* vendor_fence, uint64_t vendor_value, void* list, uint64_t value) {
-    return rsf_d3d11p_gpu_retire_submit(b, queue, retirement_fence, vendor_fence, vendor_value,
-        list, value, retirement_command);
-}
-// On device failure retain GPU-reachable storage for the process rather than free it.
-// The Rust owner has already retained its synchronization resources and slots.
-void retain_all(void* b) {
-    auto& self = *as_bridge(b);
-    self.context.Detach(); self.device.Detach(); self.parent.Detach();
-    self.direct_device.Detach(); self.direct_queue.Detach();
-}
-void release_presentation(void* b) {
-    auto& self = *as_bridge(b);
-    rsf_shared_fence_destroy(self.shared_fence); self.shared_fence = nullptr;
-}
-void release_direct_graphics(void* b) {
-    auto& self = *as_bridge(b);
-    self.direct_queue.Reset(); self.direct_device.Reset();
-}
-// A private host ends after the Rust owner has released the slot lists on its device.
-void release_host(void* b) {
-    auto& self = *as_bridge(b);
-    self.context.Reset(); self.device.Reset(); self.parent.Reset();
-    rsf_streamline_host_destroy(self.host);
-}
-void* source_queue(void* b, void* interop_queue) {
-    auto& self = *as_bridge(b);
-    auto* queue = static_cast<ID3D12CommandQueue*>(interop_queue);
-    if (!self.native12 && self.host && queue)
-        queue = static_cast<ID3D12CommandQueue*>(rsf_streamline_host_native(self.host, queue));
-    if (queue) queue->AddRef();
-    return queue;
-}
-void* command_list(void* b, void* queue, void* list) {
-    return as_bridge(b)->provider_list(queue, static_cast<ID3D12GraphicsCommandList*>(list));
-}
 } // namespace leaf
 
 const rsf_d3d11p_platform platform{
     .provider_table = leaf::provider_table, .observer_present = leaf::observer_present,
-    .window_valid = leaf::window_valid, .client_size = leaf::client_size, .canonical_identity = leaf::canonical_identity,
-    .add_ref = leaf::add_ref, .release = leaf::release,
+    .window_valid = rsf_d3d11p_native_window_valid, .client_size = rsf_d3d11p_native_client_size, .canonical_identity = rsf_d3d11p_native_canonical_identity,
+    .add_ref = rsf_d3d11p_native_add_ref, .release = rsf_d3d11p_native_release,
     .host_sleep = leaf::host_sleep, .host_marker = leaf::host_marker, .host_acquire = leaf::host_acquire,
     .host_input = leaf::host_input, .host_abort = leaf::host_abort, .host_reflex_off = leaf::host_reflex_off,
     .host_generation_load = leaf::host_generation_load, .host_present_common = leaf::host_present_common,
-    .bridge_new = leaf::bridge_new, .bridge_release_owned = leaf::bridge_release_owned,
-    .bridge_chain = rsf_d3d11p_facade_chain, .facts = leaf::facts,
-    .init_source = leaf::init_source, .owning_adapter = leaf::owning_adapter, .native_device = leaf::native_device,
-    .adopt_host = leaf::adopt_host, .d3d11_device = leaf::d3d11_device, .create_host = leaf::create_host,
-    .host = leaf::host, .resolve_graphics = leaf::resolve_graphics, .tearing_supported = leaf::tearing_supported,
-    .fsr4_supported = leaf::fsr4_supported, .create_interop_queue = rsf_d3d11p_gpu_queue,
+    .bridge_new = rsf_d3d11p_native_bridge_new, .bridge_release_owned = rsf_d3d11p_native_bridge_release_owned,
+    .bridge_chain = rsf_d3d11p_facade_chain, .facts = rsf_d3d11p_native_facts,
+    .init_source = rsf_d3d11p_native_init_source, .owning_adapter = rsf_d3d11p_native_owning_adapter, .native_device = rsf_d3d11p_native_queue_device,
+    .adopt_host = rsf_d3d11p_native_adopt_host, .d3d11_device = rsf_d3d11p_native_d3d11_device, .create_host = rsf_d3d11p_native_create_host,
+    .host = rsf_d3d11p_native_host, .resolve_graphics = rsf_d3d11p_native_resolve_graphics, .tearing_supported = rsf_d3d11p_native_tearing_supported,
+    .fsr4_supported = rsf_d3d11p_native_fsr4_supported, .create_interop_queue = rsf_d3d11p_gpu_queue,
     .create_completion_fence = rsf_d3d11p_gpu_fence, .create_event = rsf_d3d11p_gpu_create_event,
     .duplicate_event = rsf_d3d11p_gpu_duplicate_event, .close_event = rsf_d3d11p_gpu_close_event,
-    .create_upload_fence = leaf::create_upload_fence, .create_slot = leaf::create_slot,
-    .shared_surface_platform = rsf_shared_surface_native_platform, .create_render_buffer = leaf::create_render_buffer,
-    .create_plain = leaf::create_plain, .query_chain4 = rsf_d3d11p_native_query_chain4, .get_fullscreen = rsf_d3d11p_native_get_fullscreen,
+    .create_upload_fence = rsf_d3d11p_native_create_upload_fence, .create_slot = rsf_d3d11p_native_create_slot,
+    .shared_surface_platform = rsf_shared_surface_native_platform, .create_render_buffer = rsf_d3d11p_native_create_render_buffer,
+    .create_plain = rsf_d3d11p_native_create_plain, .query_chain4 = rsf_d3d11p_native_query_chain4, .get_fullscreen = rsf_d3d11p_native_get_fullscreen,
     .set_fullscreen = rsf_d3d11p_native_set_fullscreen,
-    .physical_present = rsf_d3d11p_native_present, .resize_physical = leaf::resize_physical,
+    .physical_present = rsf_d3d11p_native_present, .resize_physical = rsf_d3d11p_native_resize_physical,
     .join = rsf_d3d11p_gpu_join,
-    .slot_reset = rsf_d3d11p_gpu_reset_slot, .upload_wait = leaf::upload_wait, .acquire_backbuffer = rsf_d3d11p_native_acquire_backbuffer,
-    .record_copy = leaf::record_copy, .context11 = leaf::context11,
-    .close_execute = rsf_d3d11p_gpu_close_execute, .upload_return = leaf::upload_return, .signal_slot = rsf_d3d11p_gpu_signal,
-    .application_ready = rsf_d3d11p_gpu_application_ready, .report_device_failure = leaf::report_device_failure,
-    .log_present_failure = leaf::log_present_failure,
+    .slot_reset = rsf_d3d11p_gpu_reset_slot, .upload_wait = rsf_d3d11p_native_upload_wait, .acquire_backbuffer = rsf_d3d11p_native_acquire_backbuffer,
+    .record_copy = rsf_d3d11p_native_record_copy, .context11 = rsf_d3d11p_native_context11,
+    .close_execute = rsf_d3d11p_gpu_close_execute, .upload_return = rsf_d3d11p_native_upload_return, .signal_slot = rsf_d3d11p_gpu_signal,
+    .application_ready = rsf_d3d11p_gpu_application_ready, .report_device_failure = rsf_d3d11p_native_report_device_failure,
+    .log_present_failure = rsf_d3d11p_native_log_present_failure,
     .query_buffer_interface = rsf_d3d11p_native_query_interface, .get_physical_buffer = rsf_d3d11p_native_get_buffer,
-    .log_buffer_refusal = leaf::log_buffer_refusal,
+    .log_buffer_refusal = rsf_d3d11p_native_log_buffer_refusal,
     .signal_wait = rsf_d3d11p_gpu_signal_wait, .wait_fence = rsf_d3d11p_gpu_wait,
-    .buffer_referenced = rsf_d3d11p_gpu_buffer_referenced, .set_description = leaf::set_description,
-    .create_retirement_fence = leaf::create_retirement_fence, .retire_submit = leaf::retire_submit, .retain_all = leaf::retain_all,
-    .release_presentation = leaf::release_presentation,
-    .release_direct_graphics = leaf::release_direct_graphics,
-    .release_host = leaf::release_host,
-    .source_queue = leaf::source_queue,
-    .command_list = leaf::command_list, .verify_outer = rsf_d3d11p_device_verify_outer,
+    .buffer_referenced = rsf_d3d11p_gpu_buffer_referenced, .set_description = rsf_d3d11p_native_set_description,
+    .create_retirement_fence = rsf_d3d11p_native_create_retirement_fence, .retire_submit = rsf_d3d11p_native_retire_submit, .retain_all = rsf_d3d11p_native_retain_all,
+    .release_presentation = rsf_d3d11p_native_release_presentation,
+    .release_direct_graphics = rsf_d3d11p_native_release_direct_graphics,
+    .release_host = rsf_d3d11p_native_release_host,
+    .source_queue = rsf_d3d11p_native_source_queue,
+    .command_list = rsf_d3d11p_native_command_list, .verify_outer = rsf_d3d11p_device_verify_outer,
 };
 
-HRESULT create_bridge(IDXGIFactory* factory, IUnknown* unknown, const DXGI_SWAP_CHAIN_DESC& desc, IDXGISwapChain** out) {
-    return rsf_d3d11p_factory_create(&platform, factory, unknown, &desc, reinterpret_cast<void**>(out));
-}
 HRESULT STDMETHODCALLTYPE create_hook(IDXGIFactory* factory, IUnknown* device, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** out) {
     if (rsf_d3d11p_factory_intercept(&platform, factory, device, desc, reinterpret_cast<void**>(out))) return S_OK;
     return original_create(factory, device, desc, out);
@@ -439,6 +194,24 @@ HRESULT STDMETHODCALLTYPE hwnd_hook(IDXGIFactory2* factory, IUnknown* device, HW
     return original_hwnd(factory, device, hwnd, desc, fullscreen, output, out);
 }
 }
+extern "C" uint32_t rsf_d3d11p_default_backend(uint32_t vendor, uint32_t software) {
+    return rsf_fg_default_backend(vendor, software);
+}
+
+extern "C" decltype(&leaf::create_original) rsf_d3d11p_original_create() {
+    return original_create ? leaf::create_original : nullptr;
+}
+
+extern "C" void* rsf_d3d11p_unwrap_guarded(void* host, void* proxy) noexcept try {
+    return rsf_streamline_host_native(static_cast<rsf_streamline_host*>(host), proxy);
+} catch (...) {
+    return nullptr;
+}
+
+extern "C" int32_t rsf_d3d11p_streamline_graphics(void* host, rsf_streamline_graphics* out) {
+    return rsf_streamline_host_graphics(static_cast<rsf_streamline_host*>(host), out);
+}
+
 extern "C" const rsf_generation_provider* rsf_d3d11p_provider_for(uint32_t backend) {
     return leaf::provider_table(rsf_core_fg_provider_family(backend));
 }
@@ -454,19 +227,7 @@ extern "C" int32_t rsf_d3d11_present_create_for_hwnd(void* factory, void* queue,
     return E_FAIL;
 }
 extern "C" int32_t rsf_d3d11_present_wrap_native_chain(void* raw_device, void* raw_chain, void** out) try {
-    if (!out) return E_INVALIDARG;
-    *out = nullptr;
-    if (!raw_device || !raw_chain || !settings().accept_window || original_create || rsf_core_d3d11p_active_bridge()) return E_INVALIDARG;
-    auto* device = static_cast<ID3D11Device*>(raw_device);
-    DXGI_SWAP_CHAIN_DESC description{};
-    ComPtr<IDXGIFactory> factory;
-    if (FAILED(rsf_d3d11p_device_native_chain(device, raw_chain, &description,
-        reinterpret_cast<void**>(factory.GetAddressOf())))) return E_INVALIDARG;
-    ComPtr<IDXGISwapChain> facade;
-    const auto result = create_bridge(factory.Get(), device, description, &facade);
-    if (FAILED(result)) return result;
-    if (!rsf_d3d11_present_is_owner(facade.Get())) return E_UNEXPECTED;
-    *out = facade.Detach(); return S_OK;
+    return rsf_d3d11p_factory_wrap_native(&platform, original_create != nullptr, raw_device, raw_chain, out);
 } catch (...) { return E_FAIL; }
 extern "C" int rsf_d3d11_present_install(const rsf_d3d11_present_setup* setup) {
     if (!rsf_d3d11_present_prepare(setup)) return 0;
@@ -497,47 +258,11 @@ extern "C" int rsf_d3d11_present_graphics(rsf_streamline_graphics* graphics) { r
 extern "C" void* rsf_d3d11_present_queue() { return rsf_core_d3d11p_queue(&platform); }
 extern "C" void* rsf_d3d11_present_source_queue() { return rsf_core_d3d11p_source_queue(&platform); }
 extern "C" int rsf_d3d11_present_is_owner(void* swapchain) { return rsf_core_d3d11p_is_owner(&platform, swapchain); }
-extern "C" int rsf_d3d11_present_dispatch_owned(void* receiver, uint32_t sync, uint32_t flags, int32_t* result) {
-    if (!result) return 0;
-    rsf_d3d11_chain_dispatch request{}; request.receiver = receiver; request.method = RSF_D3D11_DISPATCH_PRESENT;
-    request.args.present = {sync,flags};
-    rsf_d3d11_chain_dispatch_owned(&request);
-    if (request.handled) *result = request.result.hresult;
-    return int(request.handled);
-}
-namespace {
-int32_t dispatch_invoke_owned(rsf_d3d11_chain_dispatch* request) try {
-    auto* chain = rsf_d3d11p_facade_chain(request->receiver);
-    const auto& args = request->args;
-    // Call the private continuations directly. The published COM entries may be detoured.
-    switch (request->method) {
-    case RSF_D3D11_DISPATCH_PRESENT:
-        return rsf_core_d3d11p_present(chain, args.present.sync_interval, args.present.flags);
-    case RSF_D3D11_DISPATCH_PRESENT1:
-        return rsf_d3d11p_facade_present1(chain, args.present1.sync_interval, args.present1.flags,
-            static_cast<const DXGI_PRESENT_PARAMETERS*>(args.present1.parameters));
-    case RSF_D3D11_DISPATCH_SET_FULLSCREEN_STATE:
-        return rsf_core_d3d11p_set_fullscreen(chain, int32_t(args.fullscreen.fullscreen), args.fullscreen.target);
-    case RSF_D3D11_DISPATCH_RESIZE_BUFFERS:
-        return rsf_core_d3d11p_resize(chain, args.resize_buffers.buffer_count,
-            args.resize_buffers.width, args.resize_buffers.height, args.resize_buffers.format,
-            args.resize_buffers.flags);
-    case RSF_D3D11_DISPATCH_SET_COLOR_SPACE1:
-        return rsf_d3d11p_facade_color_space(request->receiver, args.color_space.color_space);
-    case RSF_D3D11_DISPATCH_RESIZE_BUFFERS1:
-        return rsf_d3d11p_facade_resize1(chain, args.resize_buffers1.buffer_count,
-            args.resize_buffers1.width, args.resize_buffers1.height, args.resize_buffers1.format,
-            args.resize_buffers1.flags, args.resize_buffers1.node_masks,
-            reinterpret_cast<IUnknown* const*>(args.resize_buffers1.present_queues));
-    default: return E_FAIL;
-    }
-} catch (...) {
-    return E_FAIL;
-}
-} // namespace
-
 extern "C" void rsf_d3d11_chain_dispatch_owned(rsf_d3d11_chain_dispatch* request) {
-    rsf_core_d3d11p_dispatch_owned(request, rsf_d3d11p_facade_release, dispatch_invoke_owned);
+    rsf_d3d11p_dispatch_chain(request);
+}
+extern "C" int rsf_d3d11_present_dispatch_owned(void* receiver, uint32_t sync, uint32_t flags, int32_t* result) {
+    return rsf_d3d11p_dispatch_present(receiver, sync, flags, result);
 }
 extern "C" int rsf_d3d11_present_has_owner() { return rsf_core_d3d11p_has_owner(); }
 extern "C" const rsf_generation_provider* rsf_d3d11_present_provider() { return rsf_core_d3d11p_provider(&platform); }

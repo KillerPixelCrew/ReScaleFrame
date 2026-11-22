@@ -132,7 +132,11 @@ fn stage(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_fixture_red_half(device: Raw, context: Raw, source: Raw) -> u16 {
+pub(super) unsafe extern "C" fn rsf_d3d11_fixture_red_half(
+    device: Raw,
+    context: Raw,
+    source: Raw,
+) -> u16 {
     let mut red = 0;
     let _ = unsafe {
         stage(

@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: MIT
-// Shared D3D11/native D3D12 presentation bridge owner. The C++ facade in
-// The Rust facade owns the IDXGISwapChain4 object. Native graphics and SDK
-// state are supplied by the bridge platform.
+// Shared D3D11/native D3D12 presentation owner and typed DXGI facade.
 // This module decides admission and
 // publication, provider switching, frame and slot sequencing, accepted Present,
 // fallback, resize and retirement, status and callback order, and latency routing.
 use crate::com_ref::ComRef;
-use crate::d3d11_host_abi::{RSF_D3D11_DISPATCH_RELEASE, rsf_d3d11_chain_dispatch};
+use crate::d3d11_host_abi::{
+    RSF_D3D11_DISPATCH_PRESENT, RSF_D3D11_DISPATCH_PRESENT1, RSF_D3D11_DISPATCH_RELEASE,
+    RSF_D3D11_DISPATCH_RESIZE_BUFFERS, RSF_D3D11_DISPATCH_RESIZE_BUFFERS1,
+    RSF_D3D11_DISPATCH_SET_COLOR_SPACE1, RSF_D3D11_DISPATCH_SET_FULLSCREEN_STATE,
+    rsf_d3d11_chain_dispatch, rsf_d3d11_chain_dispatch__bindgen_ty_1__bindgen_ty_1,
+};
 use crate::d3d11_present_abi::*;
 use crate::fg_choice::known;
 use crate::fg_choice::rsf_fg_select_auto_backend;
@@ -39,6 +42,10 @@ mod facade;
 mod factory;
 #[path = "d3d11_present_gpu.rs"]
 mod gpu;
+#[path = "d3d11_present_native.rs"]
+mod native;
+#[path = "d3d11_present_streamline_abi.rs"]
+mod streamline_abi;
 
 type Platform = rsf_d3d11p_platform;
 type Graphics = rsf_streamline_graphics;
@@ -2874,6 +2881,98 @@ fn dispatch_admit(receiver: Raw) -> u32 {
 unsafe fn dispatch_result_slot(request: *mut rsf_d3d11_chain_dispatch) -> *mut i32 {
     // The C union's HRESULT and reference count have the same 32-bit storage.
     unsafe { (&raw mut (*request).result).cast::<i32>() }
+}
+
+unsafe extern "C" fn dispatch_invoke_owned(request: *mut rsf_d3d11_chain_dispatch) -> i32 {
+    let request = unsafe { &*request };
+    let chain = unsafe { facade::rsf_d3d11p_facade_chain(request.receiver) };
+    // Call private continuations because the published COM methods may be detoured.
+    unsafe {
+        match request.method {
+            RSF_D3D11_DISPATCH_PRESENT => {
+                let args = request.args.present;
+                rsf_core_d3d11p_present(chain, args.sync_interval, args.flags)
+            }
+            RSF_D3D11_DISPATCH_PRESENT1 => {
+                let args = request.args.present1;
+                dxgi::rsf_d3d11p_facade_present1(
+                    chain,
+                    args.sync_interval,
+                    args.flags,
+                    args.parameters.cast(),
+                )
+            }
+            RSF_D3D11_DISPATCH_SET_FULLSCREEN_STATE => {
+                let args = request.args.fullscreen;
+                rsf_core_d3d11p_set_fullscreen(chain, args.fullscreen as i32, args.target)
+            }
+            RSF_D3D11_DISPATCH_RESIZE_BUFFERS => {
+                let args = request.args.resize_buffers;
+                rsf_core_d3d11p_resize(
+                    chain,
+                    args.buffer_count,
+                    args.width,
+                    args.height,
+                    args.format,
+                    args.flags,
+                )
+            }
+            RSF_D3D11_DISPATCH_SET_COLOR_SPACE1 => facade::rsf_d3d11p_facade_color_space(
+                request.receiver,
+                request.args.color_space.color_space,
+            ),
+            RSF_D3D11_DISPATCH_RESIZE_BUFFERS1 => {
+                let args = request.args.resize_buffers1;
+                dxgi::rsf_d3d11p_facade_resize1(
+                    chain,
+                    args.buffer_count,
+                    args.width,
+                    args.height,
+                    args.format,
+                    args.flags,
+                    args.node_masks,
+                    args.present_queues,
+                )
+            }
+            _ => E_FAIL,
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_d3d11p_dispatch_chain(request: *mut rsf_d3d11_chain_dispatch) {
+    unsafe {
+        rsf_core_d3d11p_dispatch_owned(
+            request,
+            facade::rsf_d3d11p_facade_release,
+            dispatch_invoke_owned,
+        )
+    };
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_d3d11p_dispatch_present(
+    receiver: Raw,
+    sync_interval: u32,
+    flags: u32,
+    result: *mut i32,
+) -> i32 {
+    if result.is_null() {
+        return 0;
+    }
+    // The legacy call has no dispatch header; the core takes an exact receiver.
+    let mut request: rsf_d3d11_chain_dispatch = unsafe { std::mem::zeroed() };
+    request.receiver = receiver;
+    request.method = RSF_D3D11_DISPATCH_PRESENT;
+    request.args.present = rsf_d3d11_chain_dispatch__bindgen_ty_1__bindgen_ty_1 {
+        sync_interval,
+        flags,
+    };
+    unsafe { rsf_d3d11p_dispatch_chain(&mut request) };
+    if request.handled != 0 {
+        unsafe { result.write(request.result.hresult) };
+    }
+    request.handled as i32
 }
 
 #[unsafe(no_mangle)]

@@ -33,6 +33,23 @@ int rsf_fg_bridge_fixture_source_buffer(void* chain, void* allocator, void* list
 int rsf_fg_bridge_fixture_execute(void* queue, void* list);
 int rsf_fg_bridge_fixture_drain(void* queue, void* fence, void* event, uint64_t frame);
 
+typedef struct rsf_fg_fixture_submission {
+    void *chain, *gpu, *queue, *allocator, *list, *finish_allocator, *finish_list, *session;
+    uint64_t source;
+    uint32_t produce_input, submit, view, overlay;
+    int32_t overlay_visible;
+    void (*prepare)(void* commands, void* backbuffer, void* session);
+    void (*log)(void* user, const char* message);
+} rsf_fg_fixture_submission;
+/* A graphics error returns 1. A failed overlay draw clears accepted without ending the run. */
+int rsf_fg_bridge_fixture_submit(const rsf_fg_fixture_submission*, uint32_t* accepted);
+/* Returns nonzero when the fixture found a D3D12 validation error or no info queue. */
+int rsf_present_fixture_debug_errors(void* device);
+/* Opt-in foreground watchdog takes the window lease, including on start refusal. */
+void* rsf_fg_bridge_fixture_focus_start(void* window);
+int rsf_fg_bridge_fixture_focus_valid(void* lease);
+void rsf_fg_bridge_fixture_focus_end(void* lease);
+
 #ifdef __cplusplus
 }
 #endif

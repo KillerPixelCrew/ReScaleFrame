@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! Native COM discovery for the shared D3D presentation platform. The C++
-//! capsule keeps the device references used by the guarded provider callbacks.
+//! Native COM discovery for the shared D3D presentation platform.
 use super::{E_FAIL, E_INVALIDARG, S_OK};
 use crate::d3d11_present_abi::Raw;
 use std::ptr;
@@ -32,7 +31,7 @@ fn same_identity(left: &impl Interface, right: &impl Interface) -> bool {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_device_queue_device(queue: Raw, out: *mut Raw) -> i32 {
+pub(super) unsafe extern "C" fn rsf_d3d11p_device_queue_device(queue: Raw, out: *mut Raw) -> i32 {
     let mut device: Option<ID3D12Device> = None;
     let queue = unsafe { borrow::<ID3D12CommandQueue>(&queue) };
     if unsafe { queue.GetDevice(&mut device) }.is_err() {
@@ -51,7 +50,10 @@ unsafe fn adapter_at_device(device: &ID3D12Device) -> Result<IDXGIAdapter1> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_device_native_adapter(device: Raw, out: *mut Raw) -> i32 {
+pub(super) unsafe extern "C" fn rsf_d3d11p_device_native_adapter(
+    device: Raw,
+    out: *mut Raw,
+) -> i32 {
     let Ok(adapter) = (unsafe { adapter_at_device(borrow::<ID3D12Device>(&device)) }) else {
         return E_FAIL;
     };
@@ -60,14 +62,15 @@ unsafe extern "C" fn rsf_d3d11p_device_native_adapter(device: Raw, out: *mut Raw
 }
 
 #[repr(C)]
-struct AdapterInfo {
-    vendor: u32,
-    device: u32,
-    software: u32,
+#[derive(Default)]
+pub(super) struct AdapterInfo {
+    pub(super) vendor: u32,
+    pub(super) device: u32,
+    pub(super) software: u32,
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_device_read_adapter(
+pub(super) unsafe extern "C" fn rsf_d3d11p_device_read_adapter(
     source: Raw,
     native_device: Raw,
     out: *mut AdapterInfo,
@@ -96,7 +99,7 @@ unsafe extern "C" fn rsf_d3d11p_device_read_adapter(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_device_immediate(
+pub(super) unsafe extern "C" fn rsf_d3d11p_device_immediate(
     source: Raw,
     out_device: *mut Raw,
     out_context: *mut Raw,
@@ -126,7 +129,7 @@ unsafe extern "C" fn rsf_d3d11p_device_immediate(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_device_create12(adapter: Raw, out: *mut Raw) -> i32 {
+pub(super) unsafe extern "C" fn rsf_d3d11p_device_create12(adapter: Raw, out: *mut Raw) -> i32 {
     let adapter = unsafe { IUnknown::from_raw_borrowed(&adapter) };
     let mut device: Option<ID3D12Device> = None;
     if unsafe { D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, &mut device) }.is_err() {
@@ -140,7 +143,7 @@ unsafe extern "C" fn rsf_d3d11p_device_create12(adapter: Raw, out: *mut Raw) -> 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_device_tearing(factory: Raw) -> u32 {
+pub(super) unsafe extern "C" fn rsf_d3d11p_device_tearing(factory: Raw) -> u32 {
     let Ok(facility) = (unsafe { borrow::<IDXGIFactory>(&factory) }).cast::<IDXGIFactory5>() else {
         return 0;
     };
@@ -203,7 +206,7 @@ unsafe extern "C" fn rsf_d3d11p_device_verify_outer(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_device_native_chain(
+pub(super) unsafe extern "C" fn rsf_d3d11p_device_native_chain(
     device: Raw,
     chain: Raw,
     desc: *mut DXGI_SWAP_CHAIN_DESC,

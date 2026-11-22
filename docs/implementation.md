@@ -3161,6 +3161,13 @@ checks in Rust. Native AC7, vendor, window and overlay runner code
 remains. Build and device evidence is pending.
 [Native device harness evidence](research/rust-d3d11-present-cutover.md#native-device-harness-continuation)
 
+Rust now owns the D02 facade's graphics state, native chain wrapping and
+owned dispatch continuations. The native hook and SDK shim preserves the
+existing entry points. The device fixtures moved shared SR evaluation,
+AC7 scope packet assembly, overlay submission and focus handling. Both
+native fixture runners still contain scenario logic.
+[Bridge state and device source checks](research/rust-d3d11-bridge-native-owner.md)
+
 The scoped owner check now queries the caller's live COM receiver for
 its canonical identity and compares that address with the published
 facade. It rechecks publication after the query. The synthetic scoped

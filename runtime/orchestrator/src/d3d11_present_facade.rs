@@ -34,11 +34,11 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::core::{BOOL, GUID, HRESULT, IUnknown_Vtbl, Interface};
 
 #[repr(C)]
-struct NativeState {
-    describe: unsafe extern "C" fn(Raw, *mut DXGI_SWAP_CHAIN_DESC),
-    parent: unsafe extern "C" fn(Raw) -> Raw,
-    device: unsafe extern "C" fn(Raw) -> Raw,
-    destroy: unsafe extern "C" fn(Raw),
+pub(super) struct NativeState {
+    pub(super) describe: unsafe extern "C" fn(Raw, *mut DXGI_SWAP_CHAIN_DESC),
+    pub(super) parent: unsafe extern "C" fn(Raw) -> Raw,
+    pub(super) device: unsafe extern "C" fn(Raw) -> Raw,
+    pub(super) destroy: unsafe extern "C" fn(Raw),
 }
 
 #[repr(C)]
@@ -110,7 +110,7 @@ fn switching() -> bool {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_facade_create(
+pub(super) unsafe extern "C" fn rsf_d3d11p_facade_create(
     chain: *mut Chain,
     state: Raw,
     native: &'static NativeState,
@@ -126,12 +126,12 @@ unsafe extern "C" fn rsf_d3d11p_facade_create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_facade_state(this: Raw) -> Raw {
+pub(super) unsafe extern "C" fn rsf_d3d11p_facade_state(this: Raw) -> Raw {
     unsafe { Facade::borrow(this) }.state
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_facade_chain(this: Raw) -> *mut Chain {
+pub(super) unsafe extern "C" fn rsf_d3d11p_facade_chain(this: Raw) -> *mut Chain {
     unsafe { Facade::borrow(this) }.chain
 }
 
@@ -148,7 +148,7 @@ unsafe extern "system" fn add_ref(this: Raw) -> u32 {
 
 #[unsafe(no_mangle)]
 #[inline(never)]
-unsafe extern "C" fn rsf_d3d11p_facade_release(this: Raw) -> u32 {
+pub(super) unsafe extern "C" fn rsf_d3d11p_facade_release(this: Raw) -> u32 {
     let facade = unsafe { Facade::borrow(this) };
     let remaining = facade
         .references
@@ -485,7 +485,7 @@ unsafe extern "system" fn get_backbuffer_index(this: Raw) -> u32 {
 
 #[unsafe(no_mangle)]
 #[inline(never)]
-unsafe extern "C" fn rsf_d3d11p_facade_color_space(this: Raw, value: u32) -> i32 {
+pub(super) unsafe extern "C" fn rsf_d3d11p_facade_color_space(this: Raw, value: u32) -> i32 {
     let facade = unsafe { Facade::borrow(this) };
     let value = DXGI_COLOR_SPACE_TYPE(value as i32);
     facade
