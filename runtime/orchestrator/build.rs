@@ -73,11 +73,24 @@ fn sharpening_payload() {
         .compile("rsf_sharpening_payload");
 }
 
+fn plugin_callbacks() {
+    let mut build = cc::Build::new();
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        build.flags(["/Zl", "/std:c11"]);
+    }
+    build
+        .include("../../sdk/game/include")
+        .warnings_into_errors(true)
+        .file("src/plugin_callbacks.c")
+        .compile("rsf_plugin_callbacks");
+}
+
 fn main() {
-    let sources = ["src/plugin_callbacks.cpp", "src/frame_tap_callbacks.cpp"];
+    let sources = ["src/frame_tap_callbacks.cpp"];
     for source in sources {
         println!("cargo:rerun-if-changed={source}");
     }
+    println!("cargo:rerun-if-changed=src/plugin_callbacks.c");
     println!("cargo:rerun-if-changed=src/d3d11_output_platform.h");
     println!("cargo:rerun-if-changed=../graphics/include/rescaleframe/d3d11_state.h");
     println!("cargo:rerun-if-changed=../graphics/include/rescaleframe/srv_format.h");
@@ -85,6 +98,7 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         shader_patch_parser();
         sharpening_payload();
+        plugin_callbacks();
         let mut build = cc::Build::new();
         if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
             // The final CMake or Cargo binary selects its CRT, including Debug.

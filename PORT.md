@@ -152,7 +152,7 @@ Resolve shared ABI, session, option and provider contract findings at their owne
 - [x] [runtime/contract/src/negotiate.cpp](runtime/contract/src/negotiate.cpp)
 - [x] [runtime/orchestrator/include/rescaleframe/plugin_session.h](runtime/orchestrator/include/rescaleframe/plugin_session.h)
 - [x] [runtime/orchestrator/include/rescaleframe/runtime.h](runtime/orchestrator/include/rescaleframe/runtime.h)
-- [ ] [runtime/orchestrator/src/plugin_callbacks.cpp](runtime/orchestrator/src/plugin_callbacks.cpp)
+- [x] [runtime/orchestrator/src/plugin_callbacks.c](runtime/orchestrator/src/plugin_callbacks.c) (C++ removed; C11 SEH leaf that contains only the MSVC C++ exception code 0xE06D7363)
 - [x] [runtime/orchestrator/src/rust_export.h](runtime/orchestrator/src/rust_export.h)
 - [x] [sdk/game/include/rescaleframe/game_api.h](sdk/game/include/rescaleframe/game_api.h)
 - [x] [sdk/game/include/rescaleframe/game_frame.h](sdk/game/include/rescaleframe/game_frame.h)
@@ -166,7 +166,7 @@ Resolve shared ABI, session, option and provider contract findings at their owne
 - [x] [tests/plugin_contract.cpp](tests/plugin_contract.cpp)
 - [x] [tests/plugin_session.cpp](tests/plugin_session.cpp)
 - [x] [tests/plugin_session_fixture.cpp](tests/plugin_session_fixture.cpp)
-- [ ] [tests/plugin_session_fixture_throw.cpp](tests/plugin_session_fixture_throw.cpp) (deliberate foreign exception fixture)
+- [x] [tests/plugin_session_fixture_throw.c](tests/plugin_session_fixture_throw.c) (deliberate foreign exception fixture; C11, raises the C++ exception code since C cannot throw an object)
 
 **Rust review findings (3)**
 
@@ -196,7 +196,7 @@ Port control and rendering callbacks, session selection and frontend wiring acro
 - [x] [runtime/orchestrator/include/rescaleframe/render_links.h](runtime/orchestrator/include/rescaleframe/render_links.h)
 - [x] [runtime/orchestrator/src/callback_render_host_platform.cpp](runtime/orchestrator/src/callback_render_host_platform.cpp)
 - [x] [runtime/orchestrator/src/native_window_platform.cpp](runtime/orchestrator/src/native_window_platform.cpp)
-- [ ] [runtime/orchestrator/src/render_host_platform.cpp](runtime/orchestrator/src/render_host_platform.cpp)
+- [x] [runtime/orchestrator/src/render_host_platform.c](runtime/orchestrator/src/render_host_platform.c) (C++ removed; C11 SEH leaf for the Streamline native-interface call)
 
 **Fixtures (4)**
 

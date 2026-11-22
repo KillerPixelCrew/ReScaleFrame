@@ -153,7 +153,7 @@ target_link_libraries(rsf_gpu_policy_embedded_test PRIVATE rsf_generation_fixtur
 add_test(NAME gpu_sr_policy_embedded COMMAND rsf_gpu_policy_embedded_test)
 rsf_add_rust_static(rsf_plugin_session_fixture_rust rsf_rust_plugin_session_fixture
     rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features plugin-session-fixture)
-add_library(rsf_plugin_session_fixture SHARED plugin_session_fixture_throw.cpp)
+add_library(rsf_plugin_session_fixture SHARED plugin_session_fixture_throw.c)
 target_link_libraries(rsf_plugin_session_fixture PRIVATE rsf_plugin_session_fixture_rust ReScaleFrame::GameSDK rsf_build_options)
 add_executable(rsf_plugin_session_test game-sdk/session_main.c)
 target_link_libraries(rsf_plugin_session_test PRIVATE rsf_game_sdk_fixtures_rust rsf_orchestrator rsf_build_options)

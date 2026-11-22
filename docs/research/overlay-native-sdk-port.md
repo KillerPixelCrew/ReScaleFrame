@@ -8,7 +8,7 @@ Source range `05133165..045fbbb6` on
 | --- | --- |
 | `runtime/orchestrator/src/overlay_native12.cpp` | Removed. The typed Windows implementation in `overlay_native12/native.rs` owns root signature and pipeline creation, frame objects, upload mapping, atlas copies, draw recording and fence operations. The HLSL is in `overlay_native12/overlay.hlsl`. |
 | `runtime/orchestrator/src/overlay_d3d12.cpp` | Removed. `overlay_wrapped12/native.rs` resolves the typed D3D11On12CreateDevice export from the retained System32 module, wraps resources and submits through the same owner. The linked entries now use C linkage. |
-| `runtime/graphics/src/overlay_renderer.cpp` | Removed. Renderer, host and input logging share the existing `rsf_call_native_log` exception guard in `runtime/orchestrator/src/plugin_callbacks.cpp`. The retained rule is that a foreign C++ exception stops before it can unwind through Rust. |
+| `runtime/graphics/src/overlay_renderer.cpp` | Removed. Renderer, host and input logging share the existing `rsf_call_native_log` exception guard in `runtime/orchestrator/src/plugin_callbacks.c`. The retained rule is that a foreign C++ exception stops before it can unwind through Rust. |
 | `tests/overlay_dll_api_device.cpp` | Replaced by a C import launcher. The Rust graphics body owns hidden windows, hardware/WARP selection, COM leases, clear and Present, foreign-chain setup and resize. The fixture still calls the imported Runtime table. |
 | `tests/overlay_native12.cpp` | Replaced by a C launcher for the Rust WARP scenario. It invokes the same production native D3D12 entry through the passed callback. |
 
