@@ -76,11 +76,7 @@ static REPAIRED: AtomicBool = AtomicBool::new(false);
 static OBSERVED: AtomicU32 = AtomicU32::new(0);
 static MISMATCHED: AtomicU32 = AtomicU32::new(0);
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_rdr2_social_club_install(
-    current_index: CurrentIndex,
-    trace: bool,
-) -> bool {
+pub(crate) fn install(current_index: CurrentIndex, trace: bool) -> bool {
     let Some(asi) = asi::platform() else {
         return false;
     };

@@ -1,50 +1,22 @@
 // SPDX-License-Identifier: MIT
+use super::fixture::Fixture;
 use super::*;
 
 fn put(view: &mut [u8], offset: usize, value: f32) {
     view[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
 }
 
-struct Fixture {
-    view: Vec<u8>,
-    projection: [f32; 16],
-    input: CameraInputs,
-    jitter_matches: bool,
-    fov: f32,
-}
+const FIXTURE_BYTES: &[u8] = include_bytes!("../../../../tests/fixtures/rdr2-camera-v1.bin");
 
-fn fixture() -> Fixture {
-    let bytes = include_bytes!("../../../../tests/fixtures/rdr2-camera-v1.bin");
-    assert_eq!(&bytes[..8], b"RSFCAMF1");
-    let view = bytes[8..8 + 0x800].to_vec();
-    let input_offset = 8 + view.len();
-    let word = |offset| u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
-    let integer = |offset| word(input_offset + offset);
-    let real = |offset| f32::from_bits(integer(offset));
-    Fixture {
-        projection: std::array::from_fn(|index| f32::from_bits(word(8 + 0x80 + index * 4))),
-        view,
-        input: CameraInputs {
-            render_width: integer(0),
-            render_height: integer(4),
-            output_width: integer(8),
-            output_height: integer(12),
-            jitter: [real(16), real(20)],
-            previous_jitter: [real(24), real(28)],
-            frame_time_seconds: real(32),
-            reset: false,
-            motion_jittered: false,
-        },
-        jitter_matches: integer(40) != 0,
-        fov: real(44),
-    }
+fn fixture() -> Fixture<'static> {
+    Fixture::parse(FIXTURE_BYTES).unwrap()
 }
 
 #[test]
 fn decodes_a_valid_rage_camera() {
     let fixture = fixture();
     let mut output = CameraResult::default();
-    assert!(decode(&fixture.view, &fixture.input, &mut output));
+    assert!(decode(fixture.view, &fixture.input, &mut output));
     assert_eq!(output.projection_jitter_matches, fixture.jitter_matches);
     let camera = &output.camera;
     assert_eq!(camera.struct_size as usize, size_of::<rsf_camera_frame>());
@@ -66,7 +38,7 @@ fn decodes_a_valid_rage_camera() {
         }
     }
     // World point (10,-20,20): current view (0,0,-10), previous view (1,0,-10).
-    let p = &fixture.projection;
+    let p: [f32; 16] = std::array::from_fn(|index| scalar(fixture.view, 0x80 + index * 4));
     let clip = [
         0.0,
         0.0,
@@ -92,7 +64,7 @@ fn reset_clears_reprojection_and_seeds_jitter_history() {
     let mut fixture = fixture();
     fixture.input.reset = true;
     let mut output = CameraResult::default();
-    assert!(decode(&fixture.view, &fixture.input, &mut output));
+    assert!(decode(fixture.view, &fixture.input, &mut output));
     for (index, value) in output.camera.clip_to_previous_clip.iter().enumerate() {
         assert_eq!(*value, if index % 5 == 0 { 1.0 } else { 0.0 });
     }
@@ -107,7 +79,7 @@ fn frozen_projection_jitter_stays_explicit() {
     let mut fixture = fixture();
     fixture.input.jitter[0] = -0.25;
     let mut output = CameraResult::default();
-    assert!(decode(&fixture.view, &fixture.input, &mut output));
+    assert!(decode(fixture.view, &fixture.input, &mut output));
     assert!(!output.projection_jitter_matches);
 }
 
@@ -118,7 +90,7 @@ fn refusals_leave_a_zeroed_result() {
     let original_jitter = fixture.input.jitter[0];
     fixture.input.jitter[0] = f32::NAN;
     assert!(
-        !decode(&fixture.view, &fixture.input, &mut output),
+        !decode(fixture.view, &fixture.input, &mut output),
         "non-finite vendor jitter"
     );
     fixture.input.jitter[0] = original_jitter;
@@ -126,16 +98,17 @@ fn refusals_leave_a_zeroed_result() {
         !decode(&fixture.view[..16], &fixture.input, &mut output),
         "short copied view"
     );
-    let mut inactive = fixture.view.clone();
+    let mut inactive = fixture.view.to_vec();
     inactive[0x671] = 0;
     assert!(
         !decode(&inactive, &fixture.input, &mut output),
         "inactive view"
     );
     // Row 0 of the projection becomes zero.
-    put(&mut fixture.view, 0x80, 0.0);
+    let mut singular = fixture.view.to_vec();
+    put(&mut singular, 0x80, 0.0);
     assert!(
-        !decode(&fixture.view, &fixture.input, &mut output),
+        !decode(&singular, &fixture.input, &mut output),
         "singular projection"
     );
     assert_eq!(output.camera.struct_size, 0);
@@ -143,20 +116,7 @@ fn refusals_leave_a_zeroed_result() {
 }
 
 #[test]
-fn native_abi_matches_the_safe_decode() {
-    let fixture = fixture();
-    let mut output = CameraResult::default();
-    let accepted = unsafe {
-        rsf_rdr2_decode_render_camera_abi(
-            fixture.view.as_ptr().cast(),
-            fixture.view.len(),
-            &fixture.input,
-            &mut output,
-        )
-    };
-    assert!(accepted && output.projection_jitter_matches);
-    assert!(!unsafe {
-        rsf_rdr2_decode_render_camera_abi(std::ptr::null(), 0, &fixture.input, &mut output)
-    });
-    assert_eq!(output.camera.struct_size, 0);
+fn fixture_rejects_truncated_or_unversioned_data() {
+    assert!(Fixture::parse(&FIXTURE_BYTES[..8 + 0x800 + 47]).is_none());
+    assert!(Fixture::parse(&FIXTURE_BYTES[8..]).is_none());
 }

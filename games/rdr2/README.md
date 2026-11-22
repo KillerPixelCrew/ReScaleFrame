@@ -38,8 +38,9 @@ RVAs, expected entry bytes and native layouts (`layout.rs`), the worker-view cam
 (`renderer.rs`), and the completed-scene producer with its native marker, sleep, mode and input
 facts (`scene.rs`). `src/native_platform.rs` keeps only typed leaves the crate calls through a
 table: MinHook, D3D12/DXGI COM calls, ReadProcessMemory, TLS, QPC, window-message and XInput
-observation, and return-address capture. `src/plugin.cpp` exports `rsf_get_game_plugin_api`.
-`tests/rdr2_camera_abi.h` declares the camera C ABI for the native fixture and capture-file CLI.
+observation, and return-address capture. `src/lib.rs` supplies the `rsf_get_game_plugin_api` export.
+The `rsf_rdr2_camera` fixture and capture-file CLI share the Rust camera decoder and the
+versioned synthetic fixture parser.
 [The port note](../../docs/research/rust-rdr2-plugin.md) records what moved, the deliberate
 differences and the remaining work.
 
@@ -49,7 +50,9 @@ write, the D3D12 trace guard and the order in which the startup owners are armed
 `engine_settings.rs` owns the settings-collection carrier, refresh-rate storage and the
 ScriptHook quality request. Rust owns the Win32 startup leaves, ASI and research-attach
 workers, settings probe, DXGI adapter discovery and diagnostic adapters. `src/asi_entry.c`
-binds the linked capture and diagnostic services through `asi_platform.h`. `runtime_setup.h` declares the
+binds the linked capture and diagnostic services through `asi_platform.h`. The Social Club
+diagnostic calls the borrowed swapchain through the SEH leaf in `social_club_guard.cpp`.
+`runtime_setup.h` declares the
 C bridge also used by the Unity D3D12 fixture. The engine-settings vector suite lives in
 `src/engine_settings/tests.rs`.
 [The ASI note](../../docs/research/rust-rdr2-asi.md) records that slice.

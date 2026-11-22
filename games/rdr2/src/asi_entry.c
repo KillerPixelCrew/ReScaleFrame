@@ -3,9 +3,8 @@
 #include <rescaleframe/sha256_file.h>
 #include <windows.h>
 
-/* Capture services and the Social Club SEH leaf. */
+/* Capture services. */
 bool rsf_rdr2_install_native_capture(const wchar_t* directory);
-bool rsf_rdr2_social_club_current_index(void* swapchain, uint32_t* index);
 
 _Static_assert(RSF_CAPTURE_OK == 0 && RSF_CENSUS_OK == 0, "diagnostic success codes");
 _Static_assert(RSF_CENSUS_ERROR_INVALID_ARGUMENT == -1, "census invalid argument code");

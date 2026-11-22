@@ -7,10 +7,11 @@
 use crate::layout::view;
 use rsf_game_sys::camera_math::{inverse_4x4 as inverse, multiply_4x4 as multiply};
 use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, rsf_camera_frame};
-use std::ffi::c_void;
-use std::slice;
 
 type Matrix = [f64; 16];
+
+#[cfg(any(test, feature = "camera-fixture"))]
+mod fixture;
 
 #[derive(Clone, Copy, Default)]
 #[repr(C)]
@@ -198,27 +199,6 @@ fn decode_view(raw: &[u8], input: &CameraInputs) -> Option<CameraResult> {
     c.frame_time_seconds = input.frame_time_seconds;
     decoded.projection_jitter_matches = projection_jitter_matches;
     Some(decoded)
-}
-
-/// C ABI used by the native camera fixture (`tests/rdr2_camera.cpp`).
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_decode_render_camera_abi(
-    pointer: *const c_void,
-    bytes: usize,
-    input: *const CameraInputs,
-    result: *mut CameraResult,
-) -> bool {
-    if result.is_null() {
-        return false;
-    }
-    // The fixture lends a valid result object for the call.
-    let result = unsafe { &mut *result };
-    if pointer.is_null() || input.is_null() {
-        *result = CameraResult::default();
-        return false;
-    }
-    let raw = unsafe { slice::from_raw_parts(pointer.cast::<u8>(), bytes) };
-    decode(raw, unsafe { &*input }, result)
 }
 
 #[cfg(test)]

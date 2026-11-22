@@ -1,5 +1,28 @@
 # RDR2 game plugin in Rust
 
+## R02 follow-up on `3665aef0`
+
+The integrated base already contains the Rust camera probes, renderer and scene routing,
+and Social Club detours. Its queue and swapchain generation checks require fresh native
+observations after a replacement. The window renderer publishes the backbuffer observed
+at Present only when it matches the completed-scene target. FSR fallback uses the observed
+context flags and a copy of the full dispatch description when it needs a history reset.
+These paths retain the matched-build evidence in [rdr2-renderer.md](rdr2-renderer.md).
+
+The camera fixture now shares the `RSFCAMF1` parser between its Rust unit cases and the
+`rdr2_camera` CTest command, which reaches Rust through a C entry point. The existing
+capture-file command accepts the same numeric arguments and emits the same named JSON fields.
+The fixture compares numeric values, with Rust formatting the JSON numbers. The camera's
+private C decoder bridge was used only by the retired C++ fixture.
+
+The ASI still lends the Social Club detour one C++ leaf for the private swapchain
+`GetCurrentBackBufferIndex` call. The leaf retains the MSVC structured exception guard
+around the COM call, where either the borrowed pointer or code in the wrapper can fault.
+The port used source and binding checks. Runtime behaviour and fixture execution remain
+unverified for this follow-up.
+
+## Original plugin port
+
 This note covers the first RDR2 Rust slice: the production target `rsf_game_rdr2`
 (`ReScaleFrame.Game.RDR2.dll`) moved from `plugin.cpp`, `render_camera.cpp`,
 `native_renderer.cpp` and `scene_boundary.cpp` into the `rsf-rdr2` static library. It is a source

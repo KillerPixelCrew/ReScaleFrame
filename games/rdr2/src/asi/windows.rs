@@ -116,9 +116,7 @@ unsafe extern "C" fn camera_reference(path: *const u16) -> bool {
 unsafe extern "C" fn social_club(trace: bool) -> bool {
     services()
         .social_current_index
-        .is_some_and(|current_index| {
-            crate::social_club::rsf_rdr2_social_club_install(current_index, trace)
-        })
+        .is_some_and(|current_index| crate::social_club::install(current_index, trace))
 }
 
 unsafe extern "C" fn start_worker() {

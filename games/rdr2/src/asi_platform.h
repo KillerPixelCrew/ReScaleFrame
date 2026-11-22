@@ -24,6 +24,7 @@ typedef struct rsf_rdr2_asi_services {
 #ifdef __cplusplus
 extern "C" {
 #endif
+bool rsf_rdr2_social_club_current_index(void* swapchain, uint32_t* index);
 void rsf_rdr2_asi_process_attach(void* module, const rsf_rdr2_asi_services*);
 #ifdef __cplusplus
 }
