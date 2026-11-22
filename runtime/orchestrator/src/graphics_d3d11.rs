@@ -4,8 +4,9 @@ use crate::d3d11_output::{same_device, texture_desc};
 use crate::d3d11_output_abi::{
     rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format, rsf_d3d11_state,
 };
+use crate::render_abi::rsf_backend_log_fn as LogFn;
 use rsf_shader_compiler::{Compiler, Request, compile};
-use std::ffi::{CStr, c_void};
+use std::ffi::{CStr, CString, c_char, c_void};
 use std::mem::MaybeUninit;
 use std::ptr;
 use windows::Win32::Graphics::Direct3D::D3D_SRV_DIMENSION_TEXTURE2D;
@@ -21,6 +22,7 @@ const CACHE_IDLE_MS: u64 = 2000;
 unsafe extern "C" {
     pub(super) fn rsf_d3d11_state_save(context: Handle, state: *mut rsf_d3d11_state) -> u32;
     pub(super) fn rsf_d3d11_state_restore(context: Handle, state: *mut rsf_d3d11_state);
+    pub(super) fn rsf_call_native_log(log: LogFn, user: Handle, text: *const c_char);
 }
 
 pub(super) fn shader_code(
@@ -65,6 +67,59 @@ pub(super) fn compute_shader(device: &ID3D11Device, code: &[u8]) -> Option<ID3D1
     let mut shader = None;
     unsafe { device.CreateComputeShader(code, None, Some(&mut shader)) }.ok()?;
     shader
+}
+
+pub(super) fn vertex_shader(device: &ID3D11Device, code: &[u8]) -> Option<ID3D11VertexShader> {
+    let mut shader = None;
+    unsafe { device.CreateVertexShader(code, None, Some(&mut shader)) }.ok()?;
+    shader
+}
+
+pub(super) fn pixel_shader(device: &ID3D11Device, code: &[u8]) -> Option<ID3D11PixelShader> {
+    let mut shader = None;
+    unsafe { device.CreatePixelShader(code, None, Some(&mut shader)) }.ok()?;
+    shader
+}
+
+pub(super) fn shader_with_log(request: Request<'_>, log: LogFn, user: Handle) -> Option<Vec<u8>> {
+    match shader_code(
+        request.source,
+        request.name,
+        request.entry,
+        request.target,
+        request.flags,
+    ) {
+        Ok(code) => Some(code),
+        Err(text) => {
+            if !text.is_empty()
+                && let Ok(text) = CString::new(text)
+            {
+                unsafe { rsf_call_native_log(log, user, text.as_ptr()) };
+            }
+            None
+        }
+    }
+}
+
+pub(super) fn rasterizer(device: &ID3D11Device) -> Option<ID3D11RasterizerState> {
+    let desc = D3D11_RASTERIZER_DESC {
+        FillMode: D3D11_FILL_SOLID,
+        CullMode: D3D11_CULL_NONE,
+        DepthClipEnable: true.into(),
+        ..Default::default()
+    };
+    let mut state = None;
+    unsafe { device.CreateRasterizerState(&desc, Some(&mut state)) }.ok()?;
+    state
+}
+
+pub(super) fn depth_state(
+    device: &ID3D11Device,
+    desc: &D3D11_DEPTH_STENCIL_DESC,
+) -> Option<ID3D11DepthStencilState> {
+    let mut state = None;
+    unsafe { device.CreateDepthStencilState(desc, Some(&mut state)) }.ok()?;
+    state
 }
 
 pub(super) fn constant_buffer(
@@ -213,6 +268,7 @@ pub(super) fn bind_compute_parameters(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn dispatch_compute<const N: usize>(
     context: &ID3D11DeviceContext,
     shader: &ID3D11ComputeShader,

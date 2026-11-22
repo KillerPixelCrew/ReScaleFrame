@@ -2,7 +2,7 @@
 use crate::auxiliary_sr_abi::*;
 use crate::com_ref::ComRef;
 use crate::d3d11_output::SavedBindings;
-use crate::depth_scale::{DepthScale, Platform as DepthPlatform, jitter_valid, rect_valid};
+use crate::depth_scale::{DepthScale, jitter_valid, rect_valid};
 use rsf_game_sys::d3d11_host_abi::rsf_d3d11_auxiliary_surface;
 use rsf_game_sys::{rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::c_void;
@@ -554,8 +554,7 @@ impl AuxiliarySr {
                     log_user: user,
                 };
                 if self.depth.is_none() {
-                    let platform = unsafe { self.platform.depth.cast::<DepthPlatform>().as_ref() }?;
-                    self.depth = Some(unsafe { DepthScale::new(context, &setup, platform) }.ok()?);
+                    self.depth = Some(unsafe { DepthScale::new(context, &setup) }.ok()?);
                 }
                 if !self.depth.as_ref()?.reserve(plan.original) {
                     return None;

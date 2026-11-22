@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "auxiliary_sr.h"
 #include "auxiliary_sr_platform.h"
-#include "../../graphics/src/depth_platform.h"
 #include <rescaleframe/shader_compile.h>
 #include <wrl/client.h>
 #include <cstddef>
@@ -171,7 +170,7 @@ void draw(void* raw_context, const rsf_aux_colour_pipeline* pipeline, void* raw_
 constexpr rsf_aux_platform platform{
     immediate_device, device_ready, describe_texture, packed_colour_support, create_pipeline, create_texture,
     rsf_d3d11_create_shader_view, create_output_view, rsf_d3d11_state_save, rsf_d3d11_state_restore,
-    clear, rsf_d3d11_copy_resource, draw, &rsf_depth_scale_native_platform
+    clear, rsf_d3d11_copy_resource, draw,
 
 };
 }

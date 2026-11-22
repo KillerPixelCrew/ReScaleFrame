@@ -8,7 +8,7 @@ use crate::d3d11_output_abi::{
     rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format,
     rsf_d3d11_texture_desc as TextureDesc,
 };
-use crate::motion_d3d11::{
+use crate::graphics_d3d11::{
     GROUP_EDGE, Handle, SourceViews, bind_compute_parameters, compute_shader, constant_buffer,
     dispatch_compute, prepare_compute, rsf_d3d11_state_restore, rsf_d3d11_state_save, shader_code,
     source_view, target_view,

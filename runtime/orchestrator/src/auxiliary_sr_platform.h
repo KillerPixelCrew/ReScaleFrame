@@ -59,7 +59,6 @@ typedef struct rsf_aux_platform {
     void (*clear)(void* context);
     void (*copy)(void* context, void* destination, void* source);
     void (*draw)(void* context, const rsf_aux_colour_pipeline*, void* view, void* target, const rsf_aux_draw_constants*);
-    const void* depth;
 } rsf_aux_platform;
 
 #ifdef __cplusplus

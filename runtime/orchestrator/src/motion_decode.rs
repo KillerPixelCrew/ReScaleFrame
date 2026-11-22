@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
 use crate::d3d11_output::SavedBindings;
-use crate::motion_d3d11::{
+use crate::graphics_d3d11::{
     GROUP_EDGE, Handle, MakeView, SourceInfo, SourceViews, compute_shader, compute_texture,
     constant_buffer, context_matches, copy_params, describe_source, dispatch_compute,
     prepare_compute, rsf_d3d11_state_restore, rsf_d3d11_state_save, shader_code, source_view,

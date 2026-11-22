@@ -400,7 +400,7 @@ extern "C" uint32_t rsf_d3d11_state_save(void* context, rsf_d3d11_state* state)
     return rsf_core_d3d11_state_save(context, state, 0, &platform);
 }
 
-uint32_t rsf_d3d11_state_save_independent(void* context, rsf_d3d11_state* state)
+extern "C" uint32_t rsf_d3d11_state_save_independent(void* context, rsf_d3d11_state* state)
 {
     return rsf_core_d3d11_state_save(context, state, 1, &platform);
 }

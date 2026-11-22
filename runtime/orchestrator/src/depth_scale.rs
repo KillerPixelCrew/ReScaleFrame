@@ -1,12 +1,19 @@
 // SPDX-License-Identifier: MIT
 use crate::auxiliary_sr_abi::{rsf_depth_scale_frame as Frame, rsf_depth_scale_setup as Setup};
 use crate::com_ref::ComRef;
-use crate::d3d11_output::{RestoreBindings, SaveBindings, SavedBindings};
+use crate::d3d11_output::SavedBindings;
+use crate::d3d11_output_abi::{rsf_d3d11_output_clear_state, rsf_d3d11_output_copy_resource};
+use crate::graphics_d3d11::{rsf_d3d11_state_restore, rsf_d3d11_state_save};
 use crate::sr_session::has_capacity;
 use std::cell::RefCell;
 use std::ffi::c_void;
-use std::ptr::{self, null_mut};
+use std::ptr::null_mut;
+use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext};
+use windows::core::Interface;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+
+#[path = "depth_scale/d3d11.rs"]
+mod d3d11;
 
 type Handle = *mut c_void;
 type Pipeline = [Handle; 14];
@@ -28,25 +35,7 @@ struct Constants {
     padding: u32,
 }
 
-#[repr(C)]
-pub(super) struct Platform {
-    device: unsafe extern "C" fn(Handle) -> Handle,
-    make: unsafe extern "C" fn(Handle, &Setup, u32, &mut Pipeline) -> i32,
-    describe: unsafe extern "C" fn(Handle, Handle, &mut [u32; 2]) -> i32,
-    ready: unsafe extern "C" fn(Handle) -> i32,
-    surfaces: unsafe extern "C" fn(Handle, Handle, &mut Surfaces) -> i32,
-    save: SaveBindings,
-    restore: RestoreBindings,
-    clear: unsafe extern "C" fn(Handle),
-    copy: unsafe extern "C" fn(Handle, Handle, Handle),
-    bind: unsafe extern "C" fn(Handle, &Pipeline, &Surfaces, &[i32; 4]),
-    draw: unsafe extern "C" fn(Handle, &Pipeline, *const c_void, u32),
-}
-
-const _: () = {
-    assert!(size_of::<Constants>() == 48);
-    assert!(size_of::<Platform>() == 11 * size_of::<Handle>());
-};
+const _: () = assert!(size_of::<Constants>() == 48);
 
 const SNAPSHOT: usize = 0;
 const OUTPUT: usize = 1;
@@ -68,11 +57,10 @@ struct Transaction {
 // `thread`; the transaction is borrowed by the owner thread for each call.
 pub(super) struct DepthScale {
     thread: u32,
-    context: ComRef,
-    device: ComRef,
+    context: ID3D11DeviceContext,
+    device: ID3D11Device,
     pipeline: [ComRef; 14],
     transaction: RefCell<Transaction>,
-    platform: &'static Platform,
 }
 
 pub(super) fn rect_valid(rect: &[i32; 4], [width, height]: [u32; 2]) -> bool {
@@ -91,34 +79,17 @@ pub(super) fn jitter_valid(jitter: [f32; 2]) -> bool {
 }
 
 impl DepthScale {
-    pub(super) unsafe fn new(
-        context: Handle,
-        setup: &Setup,
-        platform: &'static Platform,
-    ) -> Result<Box<Self>, i32> {
-        let Some(device) = (unsafe { ComRef::from_owned((platform.device)(context)) }) else {
-            return Err(INVALID);
-        };
-        let mut raw = [null_mut(); 14];
-        let status = unsafe {
-            (platform.make)(
-                device.as_ptr(),
-                setup,
-                size_of::<Constants>() as u32,
-                &mut raw,
-            )
-        };
-        let resources = unsafe { ComRef::adopt_all(raw) };
-        if status != OK {
-            return Err(RESOURCE_FAILED);
-        }
+    pub(super) unsafe fn new(context: Handle, setup: &Setup) -> Result<Box<Self>, i32> {
+        let device = unsafe { d3d11::immediate_device(context) }.ok_or(INVALID)?;
+        let native_context =
+            unsafe { ID3D11DeviceContext::from_raw_borrowed(&context) }.ok_or(INVALID)?;
+        let pipeline = d3d11::make_pipeline(&device, setup).ok_or(RESOURCE_FAILED)?;
         let scale = crate::allocate_handle(Self {
             thread: unsafe { GetCurrentThreadId() },
-            context: unsafe { ComRef::retain(context) },
+            context: native_context.clone(),
             device,
-            pipeline: resources.ok_or(RESOURCE_FAILED)?,
+            pipeline,
             transaction: RefCell::default(),
-            platform,
         });
         if scale.is_null() {
             return Err(RESOURCE_FAILED);
@@ -149,27 +120,31 @@ impl DepthScale {
     }
 
     fn ready(&self) -> bool {
-        unsafe { (self.platform.ready)(self.device.as_ptr()) != 0 }
+        unsafe { self.device.GetDeviceRemovedReason().is_ok() }
     }
 
     fn describe(&self, texture: Handle) -> Option<[u32; 2]> {
-        let mut size = [0; 2];
-        let accepted =
-            unsafe { (self.platform.describe)(self.device.as_ptr(), texture, &mut size) } != 0;
-        accepted.then_some(size)
+        unsafe { d3d11::describe(&self.device, texture) }
     }
 
     fn bindings(&self) -> Option<SavedBindings> {
-        let platform = self.platform;
-        unsafe { SavedBindings::new(self.context.as_ptr(), platform.save, platform.restore) }
+        unsafe {
+            SavedBindings::new(
+                self.context.as_raw(),
+                rsf_d3d11_state_save,
+                rsf_d3d11_state_restore,
+            )
+        }
     }
 
     fn clear(&self) {
-        unsafe { (self.platform.clear)(self.context.as_ptr()) };
+        unsafe { rsf_d3d11_output_clear_state(self.context.as_raw()) };
     }
 
     fn copy(&self, destination: &ComRef, source: Handle) {
-        unsafe { (self.platform.copy)(self.context.as_ptr(), destination.as_ptr(), source) };
+        unsafe {
+            rsf_d3d11_output_copy_resource(self.context.as_raw(), destination.as_ptr(), source)
+        };
     }
 
     // Allocation only: the private snapshot and output follow the native texture's size.
@@ -191,14 +166,7 @@ impl DepthScale {
             return true;
         }
         // Build the complete replacement set before replacing the reusable resources.
-        let mut raw = [null_mut(); 5];
-        let made =
-            unsafe { (self.platform.surfaces)(self.device.as_ptr(), texture, &mut raw) } != 0;
-        let surfaces = unsafe { ComRef::adopt_all(raw) };
-        if !made {
-            return false;
-        }
-        let Some(surfaces) = surfaces else {
+        let Some(surfaces) = (unsafe { d3d11::make_surfaces(&self.device, texture) }) else {
             return false;
         };
         transaction.reserved = Some(Reserved { surfaces, size });
@@ -240,7 +208,6 @@ impl DepthScale {
         let Some(bindings) = self.bindings() else {
             return RESOURCE_FAILED;
         };
-        let context = self.context.as_ptr();
         let surfaces = &reserved.surfaces;
         self.clear();
         if capture {
@@ -256,13 +223,11 @@ impl DepthScale {
             bit: 0,
             padding: 0,
         };
-        unsafe { (self.platform.bind)(context, &pipeline, &views, &frame.output_rect) };
+        d3d11::bind(&self.context, &pipeline, &views, &frame.output_rect);
         // Depth first, then each stencil bit through its own write mask.
         for step in 0..=8 {
             constants.bit = if step == 0 { 0 } else { 1 << (step - 1) };
-            unsafe {
-                (self.platform.draw)(context, &pipeline, ptr::from_ref(&constants).cast(), step)
-            };
+            d3d11::draw(&self.context, &pipeline, &constants, step);
         }
         if !self.ready() {
             return RESOURCE_FAILED;
@@ -338,11 +303,10 @@ unsafe fn owned<'a>(scale: *const DepthScale) -> Result<&'a DepthScale, i32> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_depth_scale_create(
+unsafe extern "C" fn rsf_depth_scale_create(
     context: Handle,
     setup: *const Setup,
     out: *mut *mut DepthScale,
-    platform: &'static Platform,
 ) -> i32 {
     if !out.is_null() {
         unsafe { out.write(null_mut()) };
@@ -354,7 +318,7 @@ unsafe extern "C" fn rsf_core_depth_scale_create(
     if setup.abi_version != ABI {
         return ABI_MISMATCH;
     }
-    match unsafe { DepthScale::new(context, setup, platform) } {
+    match unsafe { DepthScale::new(context, setup) } {
         Ok(scale) => {
             unsafe { out.write(Box::into_raw(scale)) };
             OK
@@ -364,10 +328,7 @@ unsafe extern "C" fn rsf_core_depth_scale_create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_depth_scale_reserve(
-    scale: *const DepthScale,
-    texture: Handle,
-) -> u32 {
+unsafe extern "C" fn rsf_depth_scale_reserve(scale: *const DepthScale, texture: Handle) -> u32 {
     let Ok(scale) = (unsafe { owned(scale) }) else {
         return 0;
     };
@@ -375,11 +336,7 @@ unsafe extern "C" fn rsf_core_depth_scale_reserve(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_depth_scale_render(
-    scale: *const DepthScale,
-    frame: *const Frame,
-    capture: u32,
-) -> i32 {
+unsafe extern "C" fn rsf_depth_scale_prepare(scale: *const DepthScale, frame: *const Frame) -> i32 {
     if scale.is_null() || !unsafe { has_capacity(frame) } {
         return INVALID;
     }
@@ -388,32 +345,32 @@ unsafe extern "C" fn rsf_core_depth_scale_render(
         return ABI_MISMATCH;
     }
     match unsafe { owned(scale) } {
-        Ok(scale) => scale.render(frame, capture != 0),
+        Ok(scale) => scale.render(frame, true),
         Err(status) => status,
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_depth_scale_commit(scale: *const DepthScale) -> i32 {
+unsafe extern "C" fn rsf_depth_scale_commit(scale: *const DepthScale) -> i32 {
     unsafe { owned(scale) }.map_or_else(|status| status, DepthScale::commit)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_depth_scale_restore(scale: *const DepthScale) -> i32 {
+unsafe extern "C" fn rsf_depth_scale_restore(scale: *const DepthScale) -> i32 {
     unsafe { owned(scale) }.map_or_else(|status| status, DepthScale::restore)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_depth_scale_discard(scale: *const DepthScale) -> i32 {
+unsafe extern "C" fn rsf_depth_scale_discard(scale: *const DepthScale) -> i32 {
     unsafe { owned(scale) }.map_or_else(|status| status, DepthScale::discard)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_depth_scale_destroy(scale: *mut DepthScale) -> i32 {
+unsafe extern "C" fn rsf_depth_scale_destroy(scale: *mut DepthScale) -> i32 {
     if scale.is_null() {
         return OK;
     }
-    let status = unsafe { rsf_core_depth_scale_restore(scale) };
+    let status = unsafe { rsf_depth_scale_restore(scale) };
     if status == OK {
         drop(unsafe { Box::from_raw(scale) });
     }

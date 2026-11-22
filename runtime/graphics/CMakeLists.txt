@@ -4,11 +4,7 @@ add_library(rsf_graphics STATIC
     src/sharpening/d3d11.cpp
     src/sharpening/d3d12.cpp
     src/resource_ref.cpp
-    src/depth_replay.cpp
-    src/depth_scale.cpp
     src/d3d11_state.cpp
-    src/present_blit.cpp
-    src/fullscreen_pass.cpp
     src/ui_layer.cpp
     src/overlay_renderer.cpp
     src/d3d11_observer.cpp)

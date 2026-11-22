@@ -100,9 +100,9 @@ mod dxbc_chunks;
 #[cfg(windows)]
 mod dxgi_format;
 #[cfg(windows)]
-mod mfg_state;
+mod graphics_d3d11;
 #[cfg(windows)]
-mod motion_d3d11;
+mod mfg_state;
 #[cfg(windows)]
 mod motion_decode;
 #[cfg(windows)]

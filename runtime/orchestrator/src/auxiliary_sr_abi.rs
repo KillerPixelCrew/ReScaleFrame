@@ -209,7 +209,7 @@ impl Default for rsf_aux_colour_pipeline {
     }
 }
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Default, Copy, Clone)]
 pub struct rsf_aux_platform {
     pub immediate_device: ::core::option::Option<
         unsafe extern "C" fn(context: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
@@ -276,11 +276,10 @@ pub struct rsf_aux_platform {
             arg2: *const rsf_aux_draw_constants,
         ),
     >,
-    pub depth: *const ::core::ffi::c_void,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_aux_platform"][::core::mem::size_of::<rsf_aux_platform>() - 112usize];
+    ["Size of rsf_aux_platform"][::core::mem::size_of::<rsf_aux_platform>() - 104usize];
     ["Alignment of rsf_aux_platform"][::core::mem::align_of::<rsf_aux_platform>() - 8usize];
     ["Offset of field: rsf_aux_platform::immediate_device"]
         [::core::mem::offset_of!(rsf_aux_platform, immediate_device) - 0usize];
@@ -308,15 +307,4 @@ const _: () = {
         [::core::mem::offset_of!(rsf_aux_platform, copy) - 88usize];
     ["Offset of field: rsf_aux_platform::draw"]
         [::core::mem::offset_of!(rsf_aux_platform, draw) - 96usize];
-    ["Offset of field: rsf_aux_platform::depth"]
-        [::core::mem::offset_of!(rsf_aux_platform, depth) - 104usize];
 };
-impl Default for rsf_aux_platform {
-    fn default() -> Self {
-        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
-        unsafe {
-            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
-            s.assume_init()
-        }
-    }
-}

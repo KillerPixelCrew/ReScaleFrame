@@ -57,6 +57,7 @@ fn main() {
         println!("cargo:rerun-if-changed={source}");
     }
     println!("cargo:rerun-if-changed=src/d3d11_output_platform.h");
+    println!("cargo:rerun-if-changed=../graphics/src/d3d11_state_private.h");
     println!("cargo:rerun-if-changed=../graphics/include/rescaleframe/d3d11_state.h");
     println!("cargo:rerun-if-changed=../graphics/include/rescaleframe/srv_format.h");
     println!("cargo:rerun-if-changed=../../sdk/game/include");
@@ -70,6 +71,8 @@ fn main() {
         build
             .cpp(true)
             .warnings_into_errors(true)
+            .define("WIN32_LEAN_AND_MEAN", None)
+            .define("NOMINMAX", None)
             .include("../../sdk/game/include")
             .include("../graphics/include")
             .files(sources)
