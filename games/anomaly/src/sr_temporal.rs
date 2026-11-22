@@ -12,7 +12,7 @@ use rsf_game_sys::d3d11_sr_admission_abi::{
     RSF_D3D11_SR_ADMISSION_ABI_VERSION, RSF_SR_AUTO as AUTO, rsf_d3d11_sr_admission as Admission,
 };
 use rsf_game_sys::sr_abi::*;
-use rsf_game_sys::{rsf_camera_frame, rsf_game_log_fn};
+use rsf_game_sys::{rsf_camera_frame, rsf_game_log_fn, rsf_game_render_pass};
 use std::cell::UnsafeCell;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::{null, null_mut};
@@ -104,7 +104,45 @@ enum ApiStatus {
     Refused,
 }
 
-fn validate_api(table: rsf_d3d11_sr_api) -> Result<rsf_d3d11_sr_api, &'static CStr> {
+type LegacyStart = unsafe extern "C" fn(Raw, *const rsf_dlss_pipeline_setup) -> i32;
+type Select = unsafe extern "C" fn(u32, *mut u32, *mut u32) -> i32;
+
+#[derive(Clone, Copy)]
+struct RuntimeApi {
+    start: LegacyStart,
+    evaluate: unsafe extern "C" fn(Raw, *const rsf_game_render_pass) -> i32,
+    stop: unsafe extern "C" fn() -> i32,
+    status: unsafe extern "C" fn(*mut rsf_dlss_pipeline_status) -> i32,
+    select_backend: Select,
+    set_quality: Select,
+    set_preset: unsafe extern "C" fn(u32) -> i32,
+    resize_output: unsafe extern "C" fn(u32, u32, *mut u32, *mut u32) -> i32,
+    #[cfg_attr(not(windows), allow(dead_code))]
+    output_texture: unsafe extern "C" fn() -> Raw,
+    request_dump: unsafe extern "C" fn(*const c_char) -> i32,
+}
+
+impl RuntimeApi {
+    fn admit(table: rsf_d3d11_sr_api) -> Option<Self> {
+        // Required by the Runtime ABI even though this adapter has no caller.
+        table.reset?;
+        table.set_sharpening?;
+        Some(Self {
+            start: table.start?,
+            evaluate: table.evaluate?,
+            stop: table.stop?,
+            status: table.status?,
+            select_backend: table.select_backend?,
+            set_quality: table.set_quality?,
+            set_preset: table.set_preset?,
+            resize_output: table.resize_output?,
+            output_texture: table.output_texture?,
+            request_dump: table.request_dump?,
+        })
+    }
+}
+
+fn validate_api(table: rsf_d3d11_sr_api) -> Result<RuntimeApi, &'static CStr> {
     if table.struct_size < size_of::<rsf_d3d11_sr_api>() as u32
         || table.abi_version != RSF_D3D11_SR_API_VERSION
     {
@@ -113,27 +151,12 @@ fn validate_api(table: rsf_d3d11_sr_api) -> Result<rsf_d3d11_sr_api, &'static CS
     if table.pipeline_abi_version != RSF_DLSS_PIPELINE_ABI_VERSION {
         return Err(c"the Runtime's SR pipeline structures are of another version");
     }
-    if table.start.is_none()
-        || table.evaluate.is_none()
-        || table.reset.is_none()
-        || table.stop.is_none()
-        || table.status.is_none()
-        || table.select_backend.is_none()
-        || table.set_quality.is_none()
-        || table.set_preset.is_none()
-        || table.resize_output.is_none()
-        || table.output_texture.is_none()
-        || table.request_dump.is_none()
-        || table.set_sharpening.is_none()
-    {
-        return Err(c"the Runtime's SR API table has a missing entry");
-    }
-    Ok(table)
+    RuntimeApi::admit(table).ok_or(c"the Runtime's SR API table has a missing entry")
 }
 
 fn query_api(
     query: rsf_get_d3d11_sr_api_fn,
-) -> Result<rsf_d3d11_sr_api, (ApiStatus, &'static CStr)> {
+) -> Result<(RuntimeApi, rsf_d3d11_sr_api), (ApiStatus, &'static CStr)> {
     let Some(query) = query else {
         return Err((
             ApiStatus::Missing,
@@ -147,7 +170,9 @@ fn query_api(
     };
     // The resolver supplies the carrier-loaded Runtime's versioned query.
     match unsafe { query(&mut table) } {
-        OK => validate_api(table).map_err(|reason| (ApiStatus::Refused, reason)),
+        OK => validate_api(table)
+            .map(|api| (api, table))
+            .map_err(|reason| (ApiStatus::Refused, reason)),
         -2 => Err((
             ApiStatus::Refused,
             c"the Runtime's SR API version does not match",
@@ -416,28 +441,34 @@ pub(crate) fn admit(
 
 type StartBackend = unsafe extern "C" fn(Raw, *const rsf_dlss_pipeline_setup, u32) -> i32;
 
+#[derive(Clone, Copy, Default)]
+enum Startup {
+    #[default]
+    Legacy,
+    #[cfg_attr(not(any(windows, test)), allow(dead_code))]
+    Runtime { start: StartBackend, admit: Admit },
+}
+
 unsafe fn start_selected(
-    start_backend: Option<StartBackend>,
-    api: rsf_d3d11_sr_api,
+    startup: Startup,
+    legacy_start: LegacyStart,
     device: Raw,
     setup: &rsf_dlss_pipeline_setup,
     requested: u32,
 ) -> (i32, u32) {
-    if let Some(start) = start_backend {
-        return (unsafe { start(device, setup, requested) }, requested);
+    match startup {
+        Startup::Runtime { start, .. } => (unsafe { start(device, setup, requested) }, requested),
+        // The synthetic Runtime fixture also drives the service table's DLSS-first route.
+        Startup::Legacy => (unsafe { legacy_start(device, setup) }, DLSS),
     }
-    // Older Runtime builds expose only the DLSS-first startup in their service table.
-    let start = api.start.expect("validated SR start");
-    (unsafe { start(device, setup) }, DLSS)
 }
 
 #[derive(Default)]
 struct RenderState {
     setup: Option<Setup>,
     colour_transport: bool,
-    api: Option<rsf_d3d11_sr_api>,
-    start_backend: Option<StartBackend>,
-    admit: Option<Admit>,
+    api: Option<RuntimeApi>,
+    startup: Startup,
     backend_request: Option<(u32, Option<u32>)>,
     device: Raw, // identity only: the running Runtime owns its device reference
     failed_start: Option<StartRequest>,
@@ -479,15 +510,14 @@ impl Driver {
     fn bind(
         &self,
         render: &mut RenderState,
-        result: Result<rsf_d3d11_sr_api, &'static CStr>,
+        result: Result<(RuntimeApi, Startup), &'static CStr>,
         session: u64,
     ) -> bool {
         if !render.device.is_null() {
             return false; // the bound table still owns a live device
         }
-        render.api = result.ok();
-        render.start_backend = None;
-        render.admit = None;
+        render.api = result.ok().map(|(api, _)| api);
+        render.startup = result.map_or(Startup::Legacy, |(_, startup)| startup);
         render.backend_request = None;
         render.session = session;
         render.failed_start = None;
@@ -501,7 +531,7 @@ impl Driver {
     }
 
     fn resolve_backend(render: &RenderState, device: Raw, requested: u32) -> Option<u32> {
-        let Some(service) = render.admit else {
+        let Startup::Runtime { admit: service, .. } = render.startup else {
             // The native fixture binds a legacy table without a Runtime module.
             return Some(if requested == AUTO { DLSS } else { requested });
         };
@@ -517,7 +547,7 @@ impl Driver {
         (offered.checked_shr(backend).unwrap_or(0) & 1 != 0).then_some(backend)
     }
 
-    fn start(&self, render: &mut RenderState, api: rsf_d3d11_sr_api, request: StartRequest) {
+    fn start(&self, render: &mut RenderState, api: RuntimeApi, request: StartRequest) {
         if render.failed_start == Some(request) {
             return;
         }
@@ -551,8 +581,8 @@ impl Driver {
         // The device is borrowed from the engine, and the setup strings span the call.
         let (result, backend) = unsafe {
             start_selected(
-                render.start_backend,
-                api,
+                render.startup,
+                api.start,
                 request.device,
                 &setup,
                 wanted.backend,
@@ -589,17 +619,11 @@ impl Driver {
         self.apply(render, api, wanted);
     }
 
-    fn apply(&self, render: &mut RenderState, api: rsf_d3d11_sr_api, wanted: Settings) {
+    fn apply(&self, render: &mut RenderState, api: RuntimeApi, wanted: Settings) {
         // The Runtime builds a newly selected backend using the quality already in force.
         if wanted.quality != render.applied.quality {
             let mut size = [0, 0];
-            let result = unsafe {
-                api.set_quality.expect("validated SR quality")(
-                    wanted.quality,
-                    &mut size[0],
-                    &mut size[1],
-                )
-            };
+            let result = unsafe { (api.set_quality)(wanted.quality, &mut size[0], &mut size[1]) };
             let mut published = self.published();
             published.counters.qualities += 1;
             published.status.quality_result = result;
@@ -638,13 +662,7 @@ impl Driver {
             }
             render.pending_backend = None;
             let begun = Instant::now();
-            let result = unsafe {
-                api.select_backend.expect("validated SR select")(
-                    wanted.backend,
-                    null_mut(),
-                    null_mut(),
-                )
-            };
+            let result = unsafe { (api.select_backend)(wanted.backend, null_mut(), null_mut()) };
             let took = begun.elapsed().as_millis() as u64;
             let mut published = self.published();
             published.counters.selects += 1;
@@ -668,7 +686,7 @@ impl Driver {
             }
         }
         if wanted.preset != render.applied.preset
-            && unsafe { api.set_preset.expect("validated SR preset")(wanted.preset) } == OK
+            && unsafe { (api.set_preset)(wanted.preset) } == OK
         {
             self.published().counters.presets += 1;
             render.applied.preset = wanted.preset;
@@ -686,7 +704,7 @@ impl Driver {
             return;
         }
         if let Some(api) = render.api {
-            unsafe { api.stop.expect("validated SR stop")() };
+            unsafe { (api.stop)() };
         }
         render.device = null_mut();
         render.pending_backend = None;
@@ -761,9 +779,7 @@ impl Driver {
             && let Some(status) = render.pipeline_status()
             && [status.output_width, status.output_height] != output
         {
-            let result = unsafe {
-                api.resize_output.expect("validated SR resize")(ow, oh, null_mut(), null_mut())
-            };
+            let result = unsafe { (api.resize_output)(ow, oh, null_mut(), null_mut()) };
             let mut published = self.published();
             published.counters.resizes += 1;
             published.counters.resize_failures += u64::from(result != OK);
@@ -798,7 +814,7 @@ impl RenderState {
     fn pipeline_status(&self) -> Option<rsf_dlss_pipeline_status> {
         let api = self.api?;
         let mut status = fresh_pipeline_status();
-        let result = unsafe { api.status.expect("validated SR status")(&mut status) };
+        let result = unsafe { (api.status)(&mut status) };
         (result == OK).then_some(status)
     }
 }
@@ -882,20 +898,15 @@ unsafe extern "C" fn rsf_anomaly_sr_bind_runtime(driver: &Driver, runtime: Raw) 
     let admission = unsafe { admission_export(runtime) };
     let result = query_api(query)
         .map_err(|(_, reason)| reason)
-        .and_then(|table| {
-            if start_backend.is_some() && admission.is_some() {
-                Ok(table)
-            } else {
-                Err(c"Runtime SR admission or selected-provider startup export missing")
-            }
+        .and_then(|(api, _)| {
+            let (Some(start), Some(admit)) = (start_backend, admission) else {
+                return Err(c"Runtime SR admission or selected-provider startup export missing");
+            };
+            Ok((api, Startup::Runtime { start, admit }))
         });
     // Configuration and binding run on the serialized render side.
     let render = unsafe { &mut *driver.render.get() };
     let bound = driver.bind(render, result, rsf_anomaly_sr_session_id());
-    if bound {
-        render.start_backend = start_backend;
-        render.admit = admission;
-    }
     if bound && let Some(set_transport) = set_transport {
         unsafe { set_transport(u32::from(render.colour_transport)) };
         render.say(if render.colour_transport {
@@ -906,9 +917,9 @@ unsafe extern "C" fn rsf_anomaly_sr_bind_runtime(driver: &Driver, runtime: Raw) 
     }
     let stage = driver.published().stage;
     match result {
-        Ok(table) if bound => render.say(&format!(
+        Ok(_) if bound => render.say(&format!(
             "Anomaly SR stage {stage}: Runtime SR API bound (API {}, pipeline ABI {}).",
-            table.abi_version, table.pipeline_abi_version
+            RSF_D3D11_SR_API_VERSION, RSF_DLSS_PIPELINE_ABI_VERSION
         )),
         Err(reason) => render.say(&format!(
             "Anomaly SR stage {stage}: {}; SR stays on the bilinear seam pass.",
@@ -946,7 +957,7 @@ unsafe extern "C" fn rsf_anomaly_sr_output_format(driver: &Driver) -> u32 {
     let render = unsafe { &*driver.render.get() };
     match render.api {
         Some(api) if !render.device.is_null() => unsafe {
-            let texture = api.output_texture.expect("validated SR output texture")();
+            let texture = (api.output_texture)();
             crate::sr_d3d11::texture_format(texture)
         },
         _ => 0,
@@ -1049,7 +1060,7 @@ unsafe extern "C" fn rsf_anomaly_sr_evaluate(
         }
     };
     // Runtime consumes this pass synchronously while the native caller still owns its leases.
-    let result = unsafe { api.evaluate.expect("validated SR evaluate")(context, &pass) };
+    let result = unsafe { (api.evaluate)(context, &pass) };
     let pipeline = render.pipeline_status();
     let mut published = driver.published();
     let Published {
@@ -1115,7 +1126,7 @@ unsafe extern "C" fn rsf_anomaly_sr_request_dump(driver: &Driver, prefix: *const
     let Some(api) = render.api.filter(|_| !render.device.is_null()) else {
         return false;
     };
-    unsafe { prefix.read() != 0 && api.request_dump.expect("validated SR dump")(prefix) == OK }
+    unsafe { prefix.read() != 0 && (api.request_dump)(prefix) == OK }
 }
 
 #[unsafe(no_mangle)]
@@ -1373,6 +1384,53 @@ pub(super) extern "C" fn report_fixture(
 mod settings_tests {
     use super::*;
 
+    unsafe extern "C" fn legacy(_: Raw, _: *const rsf_dlss_pipeline_setup) -> i32 {
+        NOT_SUPPORTED
+    }
+
+    unsafe extern "C" fn no_provider(_: *mut Admission) -> i32 {
+        NOT_SUPPORTED
+    }
+
+    fn fixture_api() -> RuntimeApi {
+        unsafe extern "C" fn evaluate(_: Raw, _: *const rsf_game_render_pass) -> i32 {
+            NOT_SUPPORTED
+        }
+        unsafe extern "C" fn stop() -> i32 {
+            OK
+        }
+        unsafe extern "C" fn status(_: *mut rsf_dlss_pipeline_status) -> i32 {
+            NOT_SUPPORTED
+        }
+        unsafe extern "C" fn select(_: u32, _: *mut u32, _: *mut u32) -> i32 {
+            NOT_SUPPORTED
+        }
+        unsafe extern "C" fn preset(_: u32) -> i32 {
+            NOT_SUPPORTED
+        }
+        unsafe extern "C" fn resize(_: u32, _: u32, _: *mut u32, _: *mut u32) -> i32 {
+            NOT_SUPPORTED
+        }
+        unsafe extern "C" fn texture() -> Raw {
+            null_mut()
+        }
+        unsafe extern "C" fn dump(_: *const c_char) -> i32 {
+            NOT_SUPPORTED
+        }
+        RuntimeApi {
+            start: legacy,
+            evaluate,
+            stop,
+            status,
+            select_backend: select,
+            set_quality: select,
+            set_preset: preset,
+            resize_output: resize,
+            output_texture: texture,
+            request_dump: dump,
+        }
+    }
+
     #[test]
     fn provider_start_opens_requested_alternate_without_legacy_start() {
         unsafe extern "C" fn start_backend(
@@ -1382,9 +1440,12 @@ mod settings_tests {
         ) -> i32 {
             if backend == XESS { OK } else { NOT_SUPPORTED }
         }
-        let api = rsf_d3d11_sr_api::default();
         let setup = rsf_dlss_pipeline_setup::default();
-        let receipt = unsafe { start_selected(Some(start_backend), api, null_mut(), &setup, XESS) };
+        let startup = Startup::Runtime {
+            start: start_backend,
+            admit: no_provider,
+        };
+        let receipt = unsafe { start_selected(startup, legacy, null_mut(), &setup, XESS) };
         assert_eq!(receipt, (OK, XESS));
     }
 
@@ -1419,12 +1480,22 @@ mod settings_tests {
         };
         unsafe { rsf_anomaly_sr_configure(&driver, &options, None, null_mut()) };
         let render = unsafe { &mut *driver.render.get() };
-        render.admit = Some(admission);
-        render.start_backend = Some(start);
+        let api = fixture_api();
+        assert!(driver.bind(
+            render,
+            Ok((
+                api,
+                Startup::Runtime {
+                    start,
+                    admit: admission
+                }
+            )),
+            1
+        ));
         let device = std::ptr::without_provenance_mut(0x1200);
         driver.start(
             render,
-            rsf_d3d11_sr_api::default(),
+            api,
             StartRequest {
                 device,
                 output: [1920, 1080],

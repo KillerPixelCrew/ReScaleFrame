@@ -8147,6 +8147,13 @@ formatting, binding regeneration and locked offline Windows metadata.
 [Device evidence](research/rust-anomaly-sr-stage.md#n06-and-n07-device-scenarios-from-6cb0c169)
 [Swap and planning evidence](research/rust-anomaly-sr-swap.md#n07-swap-scenarios-from-6cb0c169)
 
+The Anomaly F01 follow-up validates swap and Runtime SR callbacks at
+admission and stores typed call targets. Scoped seam callbacks and the
+colour transport export retain their optional behavior. Source-only
+checks used pinned formatting, targeted binding regeneration and locked
+offline Windows metadata.
+[F01 admission evidence](research/rust-anomaly-sr-swap.md#f01-typed-callback-admission-from-10dac39f)
+
 ### Direct overlay service and panel admission
 
 Rust now owns the remaining overlay service entry points and binds input,

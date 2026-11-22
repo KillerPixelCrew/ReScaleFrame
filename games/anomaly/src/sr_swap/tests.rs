@@ -373,6 +373,22 @@ struct Case {
     size: [u32; 2],
 }
 
+fn callbacks(host: *mut Host) -> Platform {
+    Platform {
+        user: host.cast(),
+        read: Some(read),
+        write: Some(write),
+        make_twins: Some(make_twins),
+        drop_twins: Some(drop_twins),
+        round_trip: Some(round_trip),
+        upscale: Some(upscale),
+        set_viewport: Some(set_viewport),
+        upload_projection: Some(upload_projection),
+        set_mip_bias: Some(set_mip_bias),
+        correct_position_constant: Some(correct_position_constant),
+    }
+}
+
 impl Drop for Case {
     fn drop(&mut self) {
         // Each pointer came from Box::into_raw in Case::new.
@@ -436,19 +452,7 @@ impl Case {
             engine,
             ..Host::default()
         }));
-        let platform = Platform {
-            user: host.cast(),
-            read: Some(read),
-            write: Some(write),
-            make_twins: Some(make_twins),
-            drop_twins: Some(drop_twins),
-            round_trip: Some(round_trip),
-            upscale: Some(upscale),
-            set_viewport: Some(set_viewport),
-            upload_projection: Some(upload_projection),
-            set_mip_bias: Some(set_mip_bias),
-            correct_position_constant: Some(correct_position_constant),
-        };
+        let platform = callbacks(host);
         let swap = rsf_anomaly_swap_create(Some(&layout()), Some(&platform));
         assert!(!swap.is_null());
         unsafe { (*host).published = rsf_anomaly_swap_view_of(swap) };
@@ -1093,14 +1097,69 @@ fn layout_and_platform_are_checked_at_creation() {
         ..layout()
     };
     let c = Case::new(true);
-    let platform = Platform {
-        user: c.host.cast(),
-        read: Some(read),
-        ..Platform::default()
-    };
+    let platform = callbacks(c.host);
     assert!(rsf_anomaly_swap_create(Some(&short), Some(&platform)).is_null());
-    assert!(rsf_anomaly_swap_create(Some(&layout()), Some(&platform)).is_null());
-    assert!(rsf_anomaly_swap_create_scoped(Some(&layout()), Some(&platform)).is_null());
+    assert!(rsf_anomaly_swap_create_scoped(Some(&short), Some(&platform)).is_null());
+    for incomplete in [
+        Platform {
+            read: None,
+            ..platform
+        },
+        Platform {
+            write: None,
+            ..platform
+        },
+        Platform {
+            make_twins: None,
+            ..platform
+        },
+        Platform {
+            drop_twins: None,
+            ..platform
+        },
+        Platform {
+            set_viewport: None,
+            ..platform
+        },
+        Platform {
+            upload_projection: None,
+            ..platform
+        },
+        Platform {
+            set_mip_bias: None,
+            ..platform
+        },
+        Platform {
+            correct_position_constant: None,
+            ..platform
+        },
+    ] {
+        assert!(rsf_anomaly_swap_create(Some(&layout()), Some(&incomplete)).is_null());
+        assert!(rsf_anomaly_swap_create_scoped(Some(&layout()), Some(&incomplete)).is_null());
+    }
+    let scoped = Platform {
+        round_trip: None,
+        upscale: None,
+        ..platform
+    };
+    assert!(rsf_anomaly_swap_create(Some(&layout()), Some(&scoped)).is_null());
+    let swap = rsf_anomaly_swap_create_scoped(Some(&layout()), Some(&scoped));
+    assert!(!swap.is_null());
+    rsf_anomaly_swap_set_enabled(swap, true);
+    assert!(rsf_anomaly_swap_prepare(swap, Some(&c.facts())));
+    let mut drawn = false;
+    // The fixture keeps the fake engine and the scoped handle live through the call.
+    assert!(unsafe {
+        run_seam(swap, |pass| {
+            assert!(matches!(pass, SeamPass::RoundTrip(_, _)));
+            assert!(c.stock());
+            drawn = true;
+            true
+        })
+    });
+    assert!(drawn && c.host().round_trips == 0);
+    assert!(rsf_anomaly_swap_shutdown(swap));
+    unsafe { rsf_anomaly_swap_destroy(swap) };
     assert!(rsf_anomaly_swap_create(None, None).is_null());
     assert!(!rsf_anomaly_swap_prepare(null_mut(), Some(&c.facts())));
     let name = |text: *const c_char| unsafe { CStr::from_ptr(text) }.to_bytes();

@@ -20,7 +20,7 @@ unsafe fn rsf_anomaly_sr_query(
     reason: *mut *const c_char,
 ) -> ApiStatus {
     match query_api(query) {
-        Ok(table) => {
+        Ok((_, table)) => {
             *out = table;
             ApiStatus::Bound
         }
@@ -39,7 +39,7 @@ unsafe fn rsf_anomaly_sr_bind_table(
     session: u64,
 ) -> bool {
     let render = unsafe { &mut *driver.render.get() };
-    let result = validate_api(*table);
+    let result = validate_api(*table).map(|api| (api, Startup::Legacy));
     let bound = driver.bind(render, result, session);
     if let Err(reason) = result {
         render.say(&format!("Anomaly SR stage 5: {}", reason.to_string_lossy()));
@@ -261,11 +261,40 @@ fn adapter_binding(query: Query) {
             ..real
         },
         rsf_d3d11_sr_api {
+            start: None,
+            ..real
+        },
+        rsf_d3d11_sr_api {
             evaluate: None,
             ..real
         },
         rsf_d3d11_sr_api {
             reset: None,
+            ..real
+        },
+        rsf_d3d11_sr_api { stop: None, ..real },
+        rsf_d3d11_sr_api {
+            status: None,
+            ..real
+        },
+        rsf_d3d11_sr_api {
+            select_backend: None,
+            ..real
+        },
+        rsf_d3d11_sr_api {
+            set_quality: None,
+            ..real
+        },
+        rsf_d3d11_sr_api {
+            set_preset: None,
+            ..real
+        },
+        rsf_d3d11_sr_api {
+            resize_output: None,
+            ..real
+        },
+        rsf_d3d11_sr_api {
+            output_texture: None,
             ..real
         },
         rsf_d3d11_sr_api {

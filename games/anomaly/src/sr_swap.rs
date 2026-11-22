@@ -23,6 +23,50 @@ type Twins = rsf_anomaly_swap_twins;
 type Layout = rsf_anomaly_swap_layout;
 type Platform = rsf_anomaly_swap_platform;
 type View = rsf_anomaly_swap_view;
+type RoundTrip = unsafe extern "C" fn(*mut c_void, *const Fields, *const Fields) -> bool;
+type Upscale = unsafe extern "C" fn(*mut c_void, *const rsf_anomaly_swap_upscale) -> bool;
+
+struct SwapCallbacks {
+    user: *mut c_void,
+    read: unsafe extern "C" fn(*mut c_void, *const c_void, *mut c_void, usize) -> bool,
+    write: unsafe extern "C" fn(*mut c_void, *mut c_void, *const c_void, usize) -> bool,
+    make_twins: unsafe extern "C" fn(*mut c_void, *const Request, *mut Twins) -> u32,
+    drop_twins: unsafe extern "C" fn(*mut c_void),
+    set_viewport: unsafe extern "C" fn(*mut c_void, u32, u32),
+    upload_projection: unsafe extern "C" fn(*mut c_void, *const c_void) -> bool,
+    set_mip_bias: unsafe extern "C" fn(*mut c_void, f32) -> bool,
+    correct_position_constant: unsafe extern "C" fn(*mut c_void, *mut c_void, f32, f32) -> u32,
+}
+
+impl SwapCallbacks {
+    fn admit(platform: &Platform) -> Option<Self> {
+        Some(Self {
+            user: platform.user,
+            read: platform.read?,
+            write: platform.write?,
+            make_twins: platform.make_twins?,
+            drop_twins: platform.drop_twins?,
+            set_viewport: platform.set_viewport?,
+            upload_projection: platform.upload_projection?,
+            set_mip_bias: platform.set_mip_bias?,
+            correct_position_constant: platform.correct_position_constant?,
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+struct NativeSeam {
+    round_trip: RoundTrip,
+    upscale: Upscale,
+}
+
+unsafe extern "C" fn no_round_trip(_: *mut c_void, _: *const Fields, _: *const Fields) -> bool {
+    false
+}
+
+unsafe extern "C" fn no_upscale(_: *mut c_void, _: *const rsf_anomaly_swap_upscale) -> bool {
+    false
+}
 /// X-Ray Fmatrix bytes: row-major storage, row vectors (clip = v * M).
 type Matrix = [f32; 16];
 
@@ -257,7 +301,8 @@ impl RestoreState {
 struct Swap {
     view: View,
     layout: Layout,
-    platform: Platform,
+    platform: SwapCallbacks,
+    native_seam: NativeSeam,
     enabled: bool,
     have_twins: bool,
     key: TwinKey,
@@ -272,7 +317,7 @@ struct Swap {
 }
 
 impl Swap {
-    fn new(layout: Layout, platform: Platform) -> Self {
+    fn new(layout: Layout, platform: SwapCallbacks, native_seam: NativeSeam) -> Self {
         Self {
             view: View {
                 stage: 1,
@@ -280,6 +325,7 @@ impl Swap {
             },
             layout,
             platform,
+            native_seam,
             enabled: false,
             have_twins: false,
             key: TwinKey::default(),
@@ -296,12 +342,9 @@ impl Swap {
 
     // ---- native leaf calls ----------------------------------------------------------------------------------------
     fn read<T: Plain>(&self, address: Addr, value: &mut T) -> bool {
-        let Some(read) = self.platform.read else {
-            return false;
-        };
         // The leaf copies size_of::<T>() bytes from engine memory under its access guard into a live value.
         unsafe {
-            read(
+            (self.platform.read)(
                 self.platform.user,
                 address.0,
                 (value as *mut T).cast(),
@@ -311,12 +354,9 @@ impl Swap {
     }
 
     fn write<T: Plain>(&self, address: Addr, value: &T) -> bool {
-        let Some(write) = self.platform.write else {
-            return false;
-        };
         // The leaf copies size_of::<T>() bytes into engine memory under its access guard.
         unsafe {
-            write(
+            (self.platform.write)(
                 self.platform.user,
                 address.0,
                 (value as *const T).cast(),
@@ -326,25 +366,19 @@ impl Swap {
     }
 
     fn set_viewport(&mut self, width: u32, height: u32) {
-        if let Some(set_viewport) = self.platform.set_viewport {
-            // The leaf sets the immediate context's viewport on the render thread.
-            unsafe { set_viewport(self.platform.user, width, height) };
-        }
+        // The leaf sets the immediate context's viewport on the render thread.
+        unsafe { (self.platform.set_viewport)(self.platform.user, width, height) };
         self.view.counters.viewports += 1;
     }
 
     fn upload_projection(&self, matrix: Addr) -> bool {
         // R_xforms::set_P(&RCache.xforms, matrix) under the leaf's exception guard.
-        self.platform
-            .upload_projection
-            .is_some_and(|upload| unsafe { upload(self.platform.user, matrix.0) })
+        unsafe { (self.platform.upload_projection)(self.platform.user, matrix.0) }
     }
 
     fn set_mip_bias(&self, value: f32) -> bool {
         // dx10SamplerStateCache::SetMipLODBias under the leaf's exception guard.
-        self.platform
-            .set_mip_bias
-            .is_some_and(|set| unsafe { set(self.platform.user, value) })
+        unsafe { (self.platform.set_mip_bias)(self.platform.user, value) }
     }
 
     // ---- state helpers ------------------------------------------------------------------------------------------------
@@ -598,18 +632,19 @@ impl Swap {
         let zeros = [0u8; (MAX_CACHE_SLOTS * POINTER) as usize];
         let clear = |offset, len| {
             let address = self.backend.at(offset).0;
-            let write = self.platform.write.expect("validated platform");
             // Only the verified pointer span is cleared.
-            if !unsafe { write(self.platform.user, address, zeros.as_ptr().cast(), len) } {
+            if !unsafe {
+                (self.platform.write)(self.platform.user, address, zeros.as_ptr().cast(), len)
+            } {
                 return false;
             }
             if !verify {
                 return true;
             }
             let mut actual = [0xffu8; (MAX_CACHE_SLOTS * POINTER) as usize];
-            let read = self.platform.read.expect("validated platform");
-            (unsafe { read(self.platform.user, address, actual.as_mut_ptr().cast(), len) })
-                && actual[..len] == zeros[..len]
+            (unsafe {
+                (self.platform.read)(self.platform.user, address, actual.as_mut_ptr().cast(), len)
+            }) && actual[..len] == zeros[..len]
         };
         let mut ok = clear(self.layout.backend_texture_list, POINTER as usize);
         for range in self.layout.backend_textures {
@@ -630,10 +665,8 @@ impl Swap {
         if !self.have_twins || self.view.open || self.cleanup_pending() {
             return;
         }
-        if let Some(drop_twins) = self.platform.drop_twins {
-            // The leaf releases its own views and textures; the engine fields no longer name them.
-            unsafe { drop_twins(self.platform.user) };
-        }
+        // The leaf releases its own views and textures after the engine fields are restored.
+        unsafe { (self.platform.drop_twins)(self.platform.user) };
         self.have_twins = false;
         self.view.twins = Twins::default();
         self.key = TwinKey::default();
@@ -1047,13 +1080,9 @@ impl Swap {
             // Reset, resolution or scale change, or a recreated CRenderTarget: drop the old twins, build new ones.
             self.release_twins();
             let mut made = Twins::default();
-            let result = self
-                .platform
-                .make_twins
-                .map_or(RSF_ANOMALY_SWAP_MAKE_FAILED, |make| {
-                    // The leaf creates twins for `request` and fills `made`; neither outlives the call.
-                    unsafe { make(self.platform.user, &request, &mut made) }
-                });
+            // The two records are borrowed only during native allocation.
+            let result =
+                unsafe { (self.platform.make_twins)(self.platform.user, &request, &mut made) };
             match result {
                 RSF_ANOMALY_SWAP_MAKE_CREATED => {}
                 RSF_ANOMALY_SWAP_MAKE_FAILED => {
@@ -1225,12 +1254,9 @@ impl Swap {
         }
         let (x, y) = (self.projection.x, self.projection.y);
         // The leaf corrects the engine's constant buffer under its exception guard.
-        let result = self
-            .platform
-            .correct_position_constant
-            .map_or(0, |correct| unsafe {
-                correct(self.platform.user, constant, x, y)
-            });
+        let result = unsafe {
+            (self.platform.correct_position_constant)(self.platform.user, constant, x, y)
+        };
         if result == 1 {
             self.view.counters.position_corrected += 1;
         } else {
@@ -1384,17 +1410,6 @@ fn layout_valid(layout: &Layout) -> bool {
             .all(|range| range.count <= MAX_CACHE_SLOTS)
 }
 
-fn platform_valid(platform: &Platform) -> bool {
-    platform.read.is_some()
-        && platform.write.is_some()
-        && platform.make_twins.is_some()
-        && platform.drop_twins.is_some()
-        && platform.set_viewport.is_some()
-        && platform.upload_projection.is_some()
-        && platform.set_mip_bias.is_some()
-        && platform.correct_position_constant.is_some()
-}
-
 pub(crate) enum SeamPass<'a> {
     RoundTrip(&'a Fields, &'a Fields),
     Upscale(&'a rsf_anomaly_swap_upscale),
@@ -1423,10 +1438,20 @@ extern "C" fn rsf_anomaly_swap_create(
     layout: Option<&Layout>,
     platform: Option<&Platform>,
 ) -> *mut Handle {
-    let Some(platform) = platform.filter(|p| p.round_trip.is_some() && p.upscale.is_some()) else {
+    let Some(platform) = platform else {
         return null_mut();
     };
-    rsf_anomaly_swap_create_scoped(layout, Some(platform))
+    let (Some(round_trip), Some(upscale)) = (platform.round_trip, platform.upscale) else {
+        return null_mut();
+    };
+    create(
+        layout,
+        platform,
+        NativeSeam {
+            round_trip,
+            upscale,
+        },
+    )
 }
 
 #[unsafe(no_mangle)]
@@ -1434,13 +1459,26 @@ extern "C" fn rsf_anomaly_swap_create_scoped(
     layout: Option<&Layout>,
     platform: Option<&Platform>,
 ) -> *mut Handle {
-    let (Some(layout), Some(platform)) = (layout, platform) else {
+    let Some(platform) = platform else {
         return null_mut();
     };
-    if !layout_valid(layout) || !platform_valid(platform) {
+    // Production passes a Rust operation to run_seam. If called through the
+    // native entry, keep the previous draw refusal for each omitted callback.
+    let native_seam = NativeSeam {
+        round_trip: platform.round_trip.unwrap_or(no_round_trip),
+        upscale: platform.upscale.unwrap_or(no_upscale),
+    };
+    create(layout, platform, native_seam)
+}
+
+fn create(layout: Option<&Layout>, platform: &Platform, native_seam: NativeSeam) -> *mut Handle {
+    let Some(layout) = layout.filter(|layout| layout_valid(layout)) else {
         return null_mut();
-    }
-    let swap = Swap::new(*layout, *platform);
+    };
+    let Some(platform) = SwapCallbacks::admit(platform) else {
+        return null_mut();
+    };
+    let swap = Swap::new(*layout, platform, native_seam);
     let published = swap.view;
     Box::into_raw(Box::new(Handle { swap, published }))
 }
@@ -1493,14 +1531,11 @@ pub(crate) unsafe fn run_seam(swap: *mut Handle, run: impl FnOnce(SeamPass<'_>) 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_swap_seam(swap: *mut Handle) -> bool {
     with(swap, false, |swap| {
-        let platform = swap.platform;
+        let user = swap.platform.user;
+        let native = swap.native_seam;
         swap.seam(|pass| match pass {
-            SeamPass::RoundTrip(twin, engine) => platform
-                .round_trip
-                .is_some_and(|run| unsafe { run(platform.user, twin, engine) }),
-            SeamPass::Upscale(inputs) => platform
-                .upscale
-                .is_some_and(|run| unsafe { run(platform.user, inputs) }),
+            SeamPass::RoundTrip(twin, engine) => unsafe { (native.round_trip)(user, twin, engine) },
+            SeamPass::Upscale(inputs) => unsafe { (native.upscale)(user, inputs) },
         })
     })
 }

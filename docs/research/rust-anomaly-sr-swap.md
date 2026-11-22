@@ -186,14 +186,30 @@ The cleanup also makes jitter, round-trip and temporal device scenarios
 use the same debug queue reader. It preserves the original jitter
 assertion that no debug errors are present.
 
-### Typed callback admission follow-up
+### F01 typed callback admission from 10dac39f
 
-The Anomaly part of F01 can follow these fixture changes independently.
-At `sr_swap.rs::rsf_anomaly_swap_create_scoped`, convert the complete
-common native callback subset into a typed internal table once. Legacy
-fixture seam callbacks are required only by the separate legacy
-constructor. At `sr_temporal.rs::query_api`, convert the validated
-Runtime table into a typed internal table once and preserve the separate
-admission and selected-provider exports. Keep the existing ABI size and
-version checks, cold-start refusal reasons, synthetic API fixtures and
-the new live-device fixture routes.
+- `games/anomaly/src/sr_swap.rs` admits the eight common leaves when the
+  handle is created. The native seam constructor still requires both
+  draw callbacks. The scoped constructor accepts either callback as
+  absent and keeps the native entry's draw refusal if that callback is
+  omitted. Production continues to supply its Rust seam operation.
+  Readback verification, native fault return values and twin retirement
+  remain in the same transaction order.
+- `games/anomaly/src/sr_temporal.rs` validates the existing API size, API
+  and pipeline versions, and all twelve Runtime entries before storing
+  typed callbacks. Reset and sharpening remain ABI requirements.
+  Production requires both selected-provider start and admission
+  exports, while the synthetic table keeps its DLSS-first start. The
+  colour transport export remains optional. Refusal messages and the
+  original returned record are preserved for the Runtime query fixture.
+- `sr_swap/tests.rs` checks each absent common leaf, the legacy seam's
+  requirements and a scoped draw with neither native seam callback.
+  `sr_temporal/runtime_fixture.rs` submits all twelve missing-entry cases
+  and still checks that refusal leaves the output record untouched.
+  These are fixture source checks for this checkpoint.
+
+Only the internal Rust representations changed. Targeted bindgen
+regenerated the existing swap, stage, Runtime SR and admission records.
+Pinned formatting, locked offline Windows x64 metadata and source
+comparison passed. No compilation, fixture execution or device results
+were gathered.
