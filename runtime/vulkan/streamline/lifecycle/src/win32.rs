@@ -10,6 +10,7 @@ use crate::sdk_fg_options::Sample;
 use crate::sdk_records;
 use crate::sdk_records_abi::rsf_slvk_sdk_reflex_options;
 use std::ffi::{CStr, c_char, c_void};
+use std::io::{self, Write};
 use std::ptr::{NonNull, null_mut};
 
 const LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR: u32 = 0x100;
@@ -72,12 +73,23 @@ extern "C" fn rsf_slvk_diagnostic_worker_timeout_epoch() -> u64 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_slvk_diagnostic_message(message: *const c_char, info: u32) -> u32 {
+unsafe extern "C" fn rsf_slvk_log_message(kind: u32, message: *const c_char) {
     if message.is_null() {
-        return 0;
+        return;
     }
     let message = unsafe { CStr::from_ptr(message) };
-    u32::from(LIFECYCLE.diagnostics.message(message.to_bytes(), info != 0))
+    if !LIFECYCLE.diagnostics.message(message.to_bytes(), kind == 0) {
+        return;
+    }
+    let level = match kind {
+        2 => "error",
+        1 => "warning",
+        _ => "info",
+    };
+    let mut stderr = io::stderr().lock();
+    let _ = write!(stderr, "[Streamline {level}] ");
+    let _ = stderr.write_all(message.to_bytes());
+    let _ = stderr.write_all(b"\n");
 }
 
 /// Loads the verified interposer if needed and initializes the selected features.

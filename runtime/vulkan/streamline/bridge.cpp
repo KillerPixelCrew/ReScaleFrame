@@ -10,7 +10,6 @@
 #include <windows.h>
 #include <cstdint>
 #include <atomic>
-#include <cstdio>
 #include <cstring>
 #include "sdk_records_checks.h"
 #include "wsi_abi.h"
@@ -44,6 +43,7 @@ struct RsfSlFgPlatform {
 };
 static_assert(sizeof(RsfSlFgPlatform) == 3 * sizeof(void*));
 static_assert(static_cast<int32_t>(sl::Result::eOk) == 0);
+static_assert(uint32_t(sl::LogType::eInfo) == 0 && uint32_t(sl::LogType::eWarn) == 1 && uint32_t(sl::LogType::eError) == 2);
 static_assert(static_cast<int32_t>(sl::Result::eWarnOutOfVRAM) == 39);
 static_assert(static_cast<uint32_t>(sl::ReflexMode::eOff) == 0 &&
     static_cast<uint32_t>(sl::ReflexMode::eLowLatency) == 1 &&
@@ -59,7 +59,7 @@ void* rsf_slvk_life_module();
 void rsf_slvk_diagnostic_present_error(int32_t result);
 int32_t rsf_slvk_diagnostic_take_present_error();
 uint64_t rsf_slvk_diagnostic_worker_timeout_epoch();
-uint32_t rsf_slvk_diagnostic_message(const char* message, uint32_t info);
+void rsf_slvk_log_message(uint32_t kind, const char* message);
 int32_t rsf_slvk_fg_set(const RsfSlFgPlatform*, int32_t, const RsfSlFgOptions*);
 int32_t rsf_slvk_fg_disable(const RsfSlFgPlatform*);
 int32_t rsf_slvk_fg_free(const RsfSlFgPlatform*);
@@ -206,14 +206,6 @@ int32_t emitFrameMarker(uintptr_t token, uint32_t marker) {
     });
 }
 
-/// @brief Writes SDK warnings/errors and enabled verbose messages to stderr.
-void onStreamlineMessage(uint32_t nativeType, const char* message) {
-    const auto type = static_cast<sl::LogType>(nativeType);
-    if (!rsf_slvk_diagnostic_message(message, type == sl::LogType::eInfo)) return;
-    std::fprintf(stderr, "[Streamline %s] %s\n",
-        type == sl::LogType::eError ? "error" : type == sl::LogType::eWarn ? "warning" : "info", message);
-}
-
 /// @brief Resolves the typed SDK exports from the module admitted by the Rust lifecycle.
 /// @return Zero when every required export resolves.
 int32_t lifecycleResolve(void* handle) noexcept {
@@ -252,7 +244,7 @@ uint32_t lifecycleShutdown(int32_t* result) noexcept {
 }
 
 constexpr RsfSlLifecyclePlatform lifecycle{
-    openVerifiedRelease, lifecycleResolve, lifecycleInit, lifecycleShutdown, clearSdkFunctions, onStreamlineMessage,
+    openVerifiedRelease, lifecycleResolve, lifecycleInit, lifecycleShutdown, clearSdkFunctions, rsf_slvk_log_message,
 };
 }
 
