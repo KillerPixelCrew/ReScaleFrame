@@ -1,8 +1,8 @@
-# The native exception guards and headers. A Rust archive that embeds rsf-steam as an rlib (Skyrim
+# The native exception guards. A Rust archive that embeds rsf-steam as an rlib (Skyrim
 # SE) links only this; standalone consumers (Fallout 4) link the Steam archive below.
 add_library(rsf_steam_native INTERFACE)
 target_sources(rsf_steam_native INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src/exception_guards.c")
-target_include_directories(rsf_steam_native INTERFACE include
+target_include_directories(rsf_steam_native INTERFACE
     "${CMAKE_SOURCE_DIR}/runtime/orchestrator/include"
     "${CMAKE_SOURCE_DIR}/runtime/graphics/include"
     "${CMAKE_SOURCE_DIR}/runtime/presentation/include")
