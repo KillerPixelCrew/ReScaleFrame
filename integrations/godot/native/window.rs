@@ -16,6 +16,7 @@
 //! or a present marker means, and any pacing, stays with the Runtime (Rule 3): this owner reports
 //! what the window received and when.
 use crate::platform::{self, CpuService, Platform};
+use rsf_game_sys::ffi_util::ascii_wide;
 use rsf_game_sys::{
     RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_INPUT_EVENT,
     RSF_GAME_CPU_INPUT_KEYED, RSF_GAME_CPU_WINDOW_MESSAGE, RSF_GAME_RENDER_PRESENT,
@@ -38,18 +39,8 @@ thread_local! {
     static PRESENT: Cell<Option<PresentReceipt>> = const { Cell::new(None) };
 }
 
-const fn wide<const N: usize>(text: &[u8; N]) -> [u16; N] {
-    let mut out = [0; N];
-    let mut i = 0;
-    while i < N {
-        out[i] = text[i] as u16;
-        i += 1;
-    }
-    out
-}
-
 /// The window class of Godot's Windows display server.
-const ENGINE_CLASS: [u16; 6] = wide(b"Engine");
+const ENGINE_CLASS: [u16; 6] = ascii_wide(b"Engine");
 
 const WM_NCDESTROY: u32 = 0x0082;
 
