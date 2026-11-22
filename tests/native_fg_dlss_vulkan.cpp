@@ -319,13 +319,8 @@ void check_present_capture(const rsf_fgvk_setup& setup) {
     synthetic_capture = new rsf::CaptureVk;
     auto& vk = *synthetic_capture;
     vk.setup = setup; vk.registration = register_capture;
-#define CAPTURE_MOCK(member, name) vk.member = reinterpret_cast<PFN_##name>(device_proc(device, #name))
-    CAPTURE_MOCK(create_pool, vkCreateCommandPool); CAPTURE_MOCK(destroy_pool, vkDestroyCommandPool);
-    CAPTURE_MOCK(reset_pool, vkResetCommandPool); CAPTURE_MOCK(allocate_commands, vkAllocateCommandBuffers);
-    CAPTURE_MOCK(begin, vkBeginCommandBuffer); CAPTURE_MOCK(end, vkEndCommandBuffer);
-    CAPTURE_MOCK(create_fence, vkCreateFence); CAPTURE_MOCK(destroy_fence, vkDestroyFence);
-    CAPTURE_MOCK(reset_fences, vkResetFences); CAPTURE_MOCK(wait_fences, vkWaitForFences);
-#undef CAPTURE_MOCK
+    vk.commands = rsf_vk_capture_commands_open(&vk.setup.graphics);
+    require(vk.commands != nullptr, "synthetic capture resolves its command and fence operations");
     rsf_dlss_capture* capture{};
     require(rsf_core_dlss_capture_open(&synthetic, &setup, &capture) == RSF_BACKEND_OK && capture &&
         capture_callback && capture_user == capture && registrations == 1, "capture registers last with its Rust owner");
