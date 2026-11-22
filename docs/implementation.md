@@ -401,6 +401,11 @@ ABI checks and fixture, device and game runs for these ports remain open.
   unwind guards and the post-Swap scope sequence remain in place. Source
   checks passed. Build, link, fixture and runtime verification remain open.
   [Typed framebuffer and linked render boundaries](research/rust-fallout4-render-hooks.md#typed-framebuffer-and-linked-render-boundaries)
+- The next F02/F03 source pass replays the verified freeze and camera
+  predicates and explicit-size viewport writes in Rust. Native menu calls
+  and engine unwind guards remain in C++. Rust also sequences COM
+  identity comparisons while the native World retains the leases. Source
+  and native syntax checks passed. [Screen and viewport instruction replays](research/rust-fallout4-render-hooks.md#screen-and-viewport-instruction-replays)
 - AC7's Rust F9 path admits geometry reads and writes the existing JSONL
   schema. The velocity owner admits commit targets and applies the
   existing profile and log limits. D3D11 readback, blob deduplication,

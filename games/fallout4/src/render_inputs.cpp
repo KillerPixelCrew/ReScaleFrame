@@ -9,17 +9,31 @@ namespace rsf::fallout4 {
 // Each nonnull field receives one owned reference from Rust. Attach transfers
 // it to the result; refusal and unused slots release it here.
 struct NativeInputLease {
-    ID3D11DeviceContext* context{};
-    IDXGISwapChain* chain{};
-    ID3D11Texture2D* textures[native_input_slot_count]{};
+    NativeInputReferences refs{};
 
     ~NativeInputLease() {
-        for (auto* texture : textures) if (texture) texture->Release();
-        if (chain) chain->Release();
-        if (context) context->Release();
+        for (auto* texture : refs.textures) if (texture) static_cast<ID3D11Texture2D*>(texture)->Release();
+        if (refs.chain) static_cast<IDXGISwapChain*>(refs.chain)->Release();
+        if (refs.context) static_cast<ID3D11DeviceContext*>(refs.context)->Release();
     }
 };
-static_assert(sizeof(NativeInputLease) == 8 * sizeof(void*) && offsetof(NativeInputLease, textures) == 16);
+static_assert(sizeof(NativeInputReferences) == 8 * sizeof(void*) &&
+    offsetof(NativeInputReferences, textures) == 16);
+
+extern "C" void* rsf_fallout4_input_object(const void* opaque, uint32_t slot) noexcept {
+    const auto& inputs = *static_cast<const NativeInputs*>(opaque);
+    switch (slot) {
+    case native_input_context: return inputs.context.Get();
+    case native_input_chain: return inputs.chain.Get();
+    case native_input_colour: return inputs.colour.Get();
+    case native_input_motion: return inputs.motion.Get();
+    case native_input_depth: return inputs.depth.Get();
+    case native_input_refraction_normals: return inputs.refraction_normals.Get();
+    case native_input_pipboy: return inputs.pipboy.Get();
+    case native_input_vats: return inputs.vats.Get();
+    default: return nullptr;
+    }
+}
 
 // The text the former reader receipt wrote; Rust decides the stage and its once-per-stage mask.
 extern "C" void rsf_fallout4_inputs_report_reader(NativeInputReport report, const char* stage, const NativeInputReceipt* receipt,
@@ -120,15 +134,20 @@ extern "C" void rsf_fallout4_inputs_report_framebuffer(NativeInputReport report,
 }
 
 namespace {
-void take(NativeInputs& result, NativeInputLease& lease) noexcept {
-    result.context.Attach(std::exchange(lease.context, nullptr));
-    result.chain.Attach(std::exchange(lease.chain, nullptr));
-    result.colour.Attach(std::exchange(lease.textures[native_input_colour], nullptr));
-    result.motion.Attach(std::exchange(lease.textures[native_input_motion], nullptr));
-    result.depth.Attach(std::exchange(lease.textures[native_input_depth], nullptr));
-    result.refraction_normals.Attach(std::exchange(lease.textures[native_input_refraction_normals], nullptr));
-    result.pipboy.Attach(std::exchange(lease.textures[native_input_pipboy], nullptr));
-    result.vats.Attach(std::exchange(lease.textures[native_input_vats], nullptr));
+template<class T>
+void attach(Microsoft::WRL::ComPtr<T>& target, void*& source) noexcept {
+    target.Attach(static_cast<T*>(std::exchange(source, nullptr)));
+}
+
+void take(NativeInputs& result, NativeInputReferences& refs) noexcept {
+    attach(result.context, refs.context);
+    attach(result.chain, refs.chain);
+    attach(result.colour, refs.textures[native_input_colour]);
+    attach(result.motion, refs.textures[native_input_motion]);
+    attach(result.depth, refs.textures[native_input_depth]);
+    attach(result.refraction_normals, refs.textures[native_input_refraction_normals]);
+    attach(result.pipboy, refs.textures[native_input_pipboy]);
+    attach(result.vats, refs.textures[native_input_vats]);
 }
 }
 
@@ -136,8 +155,8 @@ bool read_native_inputs(NativeInputs& output, void (*report)(const char*), const
     output={};
     NativeInputLease lease;
     NativeInputs result;
-    if (!rsf_fallout4_inputs_read(&lease,report,producer,&result.pass)) return false;
-    take(result,lease);
+    if (!rsf_fallout4_inputs_read(&lease.refs,report,producer,&result.pass)) return false;
+    take(result,lease.refs);
     output=std::move(result); return true;
 } catch (...) {
     if (report && rsf_fallout4_inputs_claim_exception()) try { report("Fallout4 reader stage=exception"); } catch (...) {}
@@ -149,8 +168,8 @@ bool read_native_raster_inputs(NativeInputs& output, const rsf_game_render_pass&
     output={};
     NativeInputLease lease;
     NativeInputs result;
-    if (!rsf_fallout4_inputs_read_raster(&lease,&frame,producer,&result.pass)) return false;
-    take(result,lease);
+    if (!rsf_fallout4_inputs_read_raster(&lease.refs,&frame,producer,&result.pass)) return false;
+    take(result,lease.refs);
     output=std::move(result); return true;
 } catch (...) { return false; }
 

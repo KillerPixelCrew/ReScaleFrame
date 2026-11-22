@@ -8,7 +8,7 @@
 namespace rsf::fallout4 {
 struct NativeDepthSnapshot;
 
-using ResolutionReserve = bool (*)(const rsf_game_render_pass*);
+using ResolutionReserve = bool (*)(const rsf_game_render_pass*) noexcept;
 using ResolutionReport = void (*)(const char*);
 
 static_assert(sizeof(NativeOutputOwner) == 40 && offsetof(NativeOutputOwner, triangles) == 16);
@@ -17,8 +17,9 @@ static_assert(sizeof(NativeResolutionReceipt) == 128 && offsetof(NativeResolutio
     offsetof(NativeResolutionReceipt, actual_count) == 96);
 
 extern "C" {
-bool rsf_fallout4_resolution_reconfigure(const rsf_game_host_services*, void* context,
+bool rsf_fallout4_resolution_reconfigure(rsf_game_process_upscale_fn, void* user, void* context,
     const rsf_game_render_pass* planning) noexcept;
+int32_t rsf_fallout4_resolution_config(rsf_game_render_config_fn, void* user, rsf_game_render_config*) noexcept;
 bool rsf_fallout4_resolution_configure(const rsf_game_host_services*,
     const rsf_game_render_pass*, void*, ResolutionReserve) noexcept;
 bool rsf_fallout4_resolution_preflight(const rsf_game_render_pass*,

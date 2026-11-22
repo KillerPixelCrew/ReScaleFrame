@@ -7,6 +7,8 @@
 
 namespace rsf::fallout4 {
 struct NativeDepthSnapshot;
+// Compare two live World leases without taking additional references.
+extern "C" bool rsf_fallout4_inputs_same_resources(const void* current, const void* held, bool owners) noexcept;
 // Stack-owned synchronous callback lease. Never retain this snapshot after the
 // native callback; allocation references do not retain the frame's contents.
 struct NativeInputs {

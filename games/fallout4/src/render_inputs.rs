@@ -232,6 +232,7 @@ pub(crate) struct FramebufferLease {
 }
 
 unsafe extern "C" {
+    fn rsf_fallout4_input_object(inputs: *const c_void, slot: u32) -> *mut c_void;
     fn rsf_fallout4_inputs_report_reader(
         report: ReportFn,
         stage: *const c_char,
@@ -1648,6 +1649,36 @@ unsafe extern "C" fn rsf_fallout4_inputs_read_raster(
         }
         None => false,
     }
+}
+
+/// Compare the World-owned interfaces in the producer's established order.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fallout4_inputs_same_resources(
+    current: *const c_void,
+    held: *const c_void,
+    owners: bool,
+) -> bool {
+    use crate::render_records::{native_input_chain, native_input_context};
+
+    // SAFETY: Both pointers name the calling thread's native World leases.
+    // Read each pair just before its COM comparison, preserving short-circuit
+    // behavior and the fresh slot observations on reentrant calls.
+    let same = |slot| unsafe {
+        let current = rsf_fallout4_input_object(current, slot);
+        let held = rsf_fallout4_input_object(held, slot);
+        crate::d3d11::rsf_fallout4_render_same_object(current, held)
+    };
+    (!owners || (same(native_input_context) && same(native_input_chain)))
+        && [
+            SLOT_COLOUR,
+            SLOT_DEPTH,
+            SLOT_MOTION,
+            SLOT_PIPBOY,
+            SLOT_VATS,
+            SLOT_REFRACTION_NORMALS,
+        ]
+        .into_iter()
+        .all(same)
 }
 
 /// Own the accepted framebuffer directly for the duration of the render seam.

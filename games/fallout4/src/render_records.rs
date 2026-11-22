@@ -175,5 +175,36 @@ pub const native_input_refraction_normals: rsf_fallout4_NativeInputSlot = 3;
 pub const native_input_pipboy: rsf_fallout4_NativeInputSlot = 4;
 pub const native_input_vats: rsf_fallout4_NativeInputSlot = 5;
 pub const native_input_slot_count: rsf_fallout4_NativeInputSlot = 6;
+pub const native_input_context: rsf_fallout4_NativeInputSlot = 6;
+pub const native_input_chain: rsf_fallout4_NativeInputSlot = 7;
 pub const native_input_no_slot: rsf_fallout4_NativeInputSlot = 4294967295;
 pub type rsf_fallout4_NativeInputSlot = u32;
+#[repr(C)]
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub struct rsf_fallout4_NativeInputReferences {
+    pub context: *mut ::core::ffi::c_void,
+    pub chain: *mut ::core::ffi::c_void,
+    pub textures: [*mut ::core::ffi::c_void; 6usize],
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_fallout4_NativeInputReferences"]
+        [::core::mem::size_of::<rsf_fallout4_NativeInputReferences>() - 64usize];
+    ["Alignment of rsf_fallout4_NativeInputReferences"]
+        [::core::mem::align_of::<rsf_fallout4_NativeInputReferences>() - 8usize];
+    ["Offset of field: rsf_fallout4_NativeInputReferences::context"]
+        [::core::mem::offset_of!(rsf_fallout4_NativeInputReferences, context) - 0usize];
+    ["Offset of field: rsf_fallout4_NativeInputReferences::chain"]
+        [::core::mem::offset_of!(rsf_fallout4_NativeInputReferences, chain) - 8usize];
+    ["Offset of field: rsf_fallout4_NativeInputReferences::textures"]
+        [::core::mem::offset_of!(rsf_fallout4_NativeInputReferences, textures) - 16usize];
+};
+impl Default for rsf_fallout4_NativeInputReferences {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}

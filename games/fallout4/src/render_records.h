@@ -36,6 +36,16 @@ struct NativeDepthMathFailure {
 enum NativeInputSlot : uint32_t {
     native_input_colour, native_input_motion, native_input_depth,
     native_input_refraction_normals, native_input_pipboy, native_input_vats,
-    native_input_slot_count, native_input_no_slot = 0xffffffffu
+    native_input_slot_count,
+    // Owner identities follow the texture slots but never index the texture array.
+    native_input_context = native_input_slot_count, native_input_chain,
+    native_input_no_slot = 0xffffffffu
+};
+
+// One owned reference per nonnull field on an accepted reader return.
+struct NativeInputReferences {
+    void* context{};
+    void* chain{};
+    void* textures[native_input_slot_count]{};
 };
 }

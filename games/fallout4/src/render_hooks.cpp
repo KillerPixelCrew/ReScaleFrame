@@ -76,10 +76,6 @@ thread_local uint32_t prepass_depth{};
 void report(const char* message) noexcept {
     if (host.log) try { host.log(host.user, message); } catch (...) {}
 }
-void diagnostic(const char* message) noexcept {
-    static std::atomic<uint32_t> count{};
-    if (count.fetch_add(1, std::memory_order_relaxed) < 16) report(message);
-}
 struct Entry {
     Entry() { entered.fetch_add(1, std::memory_order_acq_rel); }
     ~Entry() { entered.fetch_sub(1, std::memory_order_acq_rel); }
@@ -121,16 +117,8 @@ bool recovery_read_raster(bool producer) noexcept {
     return world.raster_snapshot.raster_valid &&
         read_native_raster_inputs(world.recovery_candidate,world.frame_pass,&world.raster_snapshot);
 }
-// Colour, depth, motion, Pip-Boy, VATS and refraction COM identity, in that order; owners adds
-// Context and chain first.
-bool same_resources(const NativeInputs& current, const NativeInputs& held, bool owners) noexcept {
-    return (!owners || (rsf_fallout4_render_same_object(current.context.Get(),held.context.Get()) && rsf_fallout4_render_same_object(current.chain.Get(),held.chain.Get()))) &&
-        rsf_fallout4_render_same_object(current.colour.Get(),held.colour.Get()) && rsf_fallout4_render_same_object(current.depth.Get(),held.depth.Get()) &&
-        rsf_fallout4_render_same_object(current.motion.Get(),held.motion.Get()) && rsf_fallout4_render_same_object(current.pipboy.Get(),held.pipboy.Get()) &&
-        rsf_fallout4_render_same_object(current.vats.Get(),held.vats.Get()) && rsf_fallout4_render_same_object(current.refraction_normals.Get(),held.refraction_normals.Get());
-}
 bool recovery_same_resources(bool owners) noexcept {
-    return same_resources(world.recovery_candidate,world.recovery_inputs,owners);
+    return rsf_fallout4_inputs_same_resources(&world.recovery_candidate,&world.recovery_inputs,owners);
 }
 void recovery_adopt(const int32_t* render_rect) noexcept {
     auto& current=world.recovery_candidate;
@@ -176,9 +164,6 @@ bool publication_auxiliary_colour(void* texture) noexcept {
     return rsf_fallout4_render_auxiliary_colour(texture,inputs.context.Get(),
         inputs.pass.camera.output_width,inputs.pass.camera.output_height);
 }
-bool publication_same_texture(void* first, void* second) noexcept {
-    return rsf_fallout4_render_same_object(first,second);
-}
 int32_t publication_reconstruct(const rsf_game_render_pass* pass, const rsf_d3d11_auxiliary_surface* surfaces,
     uint32_t count) noexcept try {
     const auto context=world.sr_inputs.context.Get();
@@ -209,16 +194,16 @@ void publication_inputs(NativePublicationInputs* out) noexcept {
 }
 void publication_release_inputs() noexcept { world.sr_inputs={}; }
 bool publication_same_recovery_resources() noexcept {
-    return same_resources(world.sr_inputs,world.recovery_inputs,false);
+    return rsf_fallout4_inputs_same_resources(&world.sr_inputs,&world.recovery_inputs,false);
 }
 bool publication_depth_domains(rsf_game_render_pass* pass) noexcept {
     return rsf_fallout4_depth_make(&world.depth_snapshot,&world.cpu,pass,&pass->depth_domains,report);
 }
 bool publication_plan(const rsf_game_render_pass* planning) noexcept {
-    return rsf_fallout4_resolution_reconfigure(&host,world.sr_inputs.context.Get(),planning);
+    return rsf_fallout4_resolution_reconfigure(host.process_upscale,host.user,world.sr_inputs.context.Get(),planning);
 }
 int32_t publication_render_config(rsf_game_render_config* config) noexcept {
-    try { return host.render_config && host.render_config(host.user,config) ? 1 : 0; } catch (...) { return -1; }
+    return host.render_config ? rsf_fallout4_resolution_config(host.render_config,host.user,config) : 0;
 }
 void publication_retain_inputs(const rsf_game_render_pass* basis) noexcept {
     world.colour=world.sr_inputs.colour; world.depth=world.sr_inputs.depth; world.motion=world.sr_inputs.motion;
@@ -251,11 +236,11 @@ void publication_publish_window(void* texture, const rsf_game_render_pass* windo
     world.window_open=true;
     windows.fetch_add(1,std::memory_order_acq_rel);
 }
-constexpr NativePublicationLeaves publication_leaves{read_world, diagnostic, publication_read_inputs,
+constexpr NativePublicationLeaves publication_leaves{read_world, rsf_fallout4_render_diagnostic, publication_read_inputs,
     publication_inputs, publication_release_inputs, publication_same_recovery_resources, publication_depth_domains,
     publication_plan, publication_render_config, publication_retain_inputs, publication_classify,
     publication_notify, publication_publish_inputs, publication_begin_output, publication_report_state,
-    publication_auxiliary_inputs, publication_auxiliary_colour, publication_same_texture,
+    publication_auxiliary_inputs, publication_auxiliary_colour, rsf_fallout4_render_same_object,
     publication_reconstruct, rsf_fallout4_resolution_end_output, publication_publish_window};
 // FRAME, SUBMISSION and WINDOW scope leaves (render_hooks_platform.h). Rust (render_hooks/scope.rs)
 // decides the owner lease verdict, the FRAME identity and the begin and close order; these read
@@ -278,7 +263,7 @@ void scope_close_frame() noexcept { world.frame_open=false; frames.fetch_sub(1,s
 void scope_reset() noexcept { world={}; }
 constexpr NativeScopeLeaves scope_leaves{read_world, rsf_fallout4_render_read_owner, scope_lease_owner, scope_adopt_owner,
     scope_discard_owner, scope_open_frame, scope_open_submission, scope_close_submission, scope_close_window,
-    scope_close_frame, drain_auxiliaries, rsf_fallout4_resolution_finish_source, scope_reset, publication_notify, diagnostic,
+    scope_close_frame, drain_auxiliaries, rsf_fallout4_resolution_finish_source, scope_reset, publication_notify, rsf_fallout4_render_diagnostic,
     publication_report_state};
 // Imagespace, Effects and TAA leaves (render_hooks_platform.h). Rust (render_hooks/imagespace.rs)
 // selects the calls and sequences entry, the SR seam, retirement, drain, output resolution and
@@ -286,7 +271,7 @@ constexpr NativeScopeLeaves scope_leaves{read_world, rsf_fallout4_render_read_ow
 void imagespace_enter() noexcept { world.in_imagespace=true; }
 void imagespace_leave() noexcept { world.in_imagespace=world.published=world.full_output_resolved=false; }
 constexpr NativeImagespaceLeaves imagespace_leaves{read_world, imagespace_enter, imagespace_leave,
-    rsf_fallout4_render_read_manager, drain_auxiliaries, rsf_fallout4_resolution_end_output, publication_report_state, diagnostic};
+    rsf_fallout4_render_read_manager, drain_auxiliaries, rsf_fallout4_resolution_end_output, publication_report_state, rsf_fallout4_render_diagnostic};
 // Viewport, DR and prepass leaves (render_hooks_platform.h). Rust (render_hooks/producer.rs)
 // selects the calls and sequences the selector write, the HUDless seam, the DR admission and the
 // prepass capture; these read the World, call the typed screen, owner, resolution and depth
@@ -318,7 +303,7 @@ void producer_adopt_depth(const NativeDepthSnapshot* snapshot) noexcept { world.
 constexpr NativeProducerLeaves producer_leaves{read_world, producer_invalidate, producer_interrupt_depth,
     producer_refuse_raster, rsf_fallout4_resolution_native_dr, producer_screen_refusals, rsf_fallout4_render_read_owner,
     producer_configure, producer_capture_raster, producer_capture_depth, producer_adopt_depth,
-    publication_report_state, diagnostic};
+    publication_report_state, rsf_fallout4_render_diagnostic};
 void observe_viewport(void* manager, bool enabled) {
     Entry entry;
 #if defined(_MSC_VER)
@@ -496,12 +481,12 @@ void observe_native_present(void* renderer) {
             break;
         }
         case NativePresentAdmission::refused:
-            diagnostic("Fallout4 pre-Present screen/refusal changed; submission completion withheld from FG.");
+            rsf_fallout4_render_diagnostic("Fallout4 pre-Present screen/refusal changed; submission completion withheld from FG.");
             break;
         case NativePresentAdmission::source_changed:
             // Missing completion refuses prepare; the old scope drains after Swap.
             world.refused=true;
-            diagnostic("Fallout4 pre-Present source/owner changed; submission completion withheld from FG.");
+            rsf_fallout4_render_diagnostic("Fallout4 pre-Present source/owner changed; submission completion withheld from FG.");
             break;
         }
     }
@@ -522,6 +507,7 @@ const std::array<void**, RenderHookCount> originals{
     reinterpret_cast<void**>(&viewport), reinterpret_cast<void**>(&imagespace),
     reinterpret_cast<void**>(&effects), reinterpret_cast<void**>(&taa_active)};
 }
+extern "C" void rsf_fallout4_render_report(const char* message) noexcept { report(message); }
 extern "C" bool rsf_fallout4_render_create_hook(uint32_t hook, void* target) noexcept {
     return hook < detours.size() && MH_CreateHook(target, detours[hook], originals[hook]) == MH_OK;
 }

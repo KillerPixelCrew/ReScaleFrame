@@ -35,7 +35,7 @@ use rsf_game_sys::{rsf_game_host_services, rsf_game_render_pass};
 use std::ffi::{CStr, c_void};
 use std::mem::offset_of;
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::core::{s, w};
@@ -325,6 +325,7 @@ unsafe extern "system" {
 }
 
 unsafe extern "C" {
+    fn rsf_fallout4_render_report(message: *const std::ffi::c_char);
     fn rsf_fallout4_render_create_hook(hook: u32, target: *mut c_void) -> bool;
     fn rsf_fallout4_render_remove_hook(hook: u32, target: *mut c_void) -> bool;
     fn rsf_fallout4_render_scopes_busy() -> bool;
@@ -356,6 +357,15 @@ fn target(hook: &Hook) -> *mut c_void {
 fn report(ops: &Ops, message: &CStr) {
     let host = HOST.lock().unwrap_or_else(PoisonError::into_inner).0;
     let _ = ops.log_host(&host, message);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_fallout4_render_diagnostic(message: *const std::ffi::c_char) {
+    static COUNT: AtomicU32 = AtomicU32::new(0);
+    if COUNT.fetch_add(1, Ordering::Relaxed) < 16 {
+        // The native callback contains exceptions from the currently bound host log.
+        unsafe { rsf_fallout4_render_report(message) };
+    }
 }
 
 fn live() -> bool {

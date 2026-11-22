@@ -104,7 +104,7 @@ unsafe extern "C" fn rsf_fallout4_render_check_owner(
     let Ok(chain_device) = (unsafe { chain.GetDevice::<ID3D11Device>() }) else {
         return false;
     };
-    (unsafe { rsf_fallout4_render_same_object(device.as_raw(), chain_device.as_raw()) })
+    same_identity(&device, &chain_device)
         && unsafe { chain.GetDesc() }
             .is_ok_and(|description| description.OutputWindow.0 as usize == expected_window)
 }

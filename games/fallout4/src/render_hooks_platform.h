@@ -42,6 +42,7 @@ static_assert(sizeof(NativeRenderExports) == 5 * sizeof(void*));
 
 extern "C" {
 // The typed detours and trampoline slots stay on the native side.
+void rsf_fallout4_render_diagnostic(const char*) noexcept;
 bool rsf_fallout4_render_create_hook(uint32_t hook, void* target) noexcept;
 bool rsf_fallout4_render_remove_hook(uint32_t hook, void* target) noexcept;
 bool rsf_fallout4_render_scopes_busy() noexcept;

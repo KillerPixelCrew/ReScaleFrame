@@ -3,6 +3,7 @@
 
 use super::{DeviceFacts, ResourceFacts, SwapFacts, ViewportFacts};
 use crate::d3d11::{identity, viewport as read_viewport};
+pub(super) use crate::render_records::rsf_fallout4_NativeInputReferences as TransferredLease;
 use std::ffi::c_void;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_DEVICE_CONTEXT_IMMEDIATE, D3D11_RENDER_TARGET_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC,
@@ -20,14 +21,6 @@ pub(super) struct NativeLease {
     textures: [Option<ID3D11Texture2D>; TEXTURE_SLOTS],
     chain: Option<IDXGISwapChain>,
     context: Option<ID3D11DeviceContext>,
-}
-
-/// Each nonnull field transfers one owned reference to the native World.
-#[repr(C)]
-pub(super) struct TransferredLease {
-    context: *mut c_void,
-    chain: *mut c_void,
-    textures: [*mut c_void; TEXTURE_SLOTS],
 }
 
 const _: () = {

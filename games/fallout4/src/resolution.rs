@@ -35,23 +35,28 @@ const SHADOW: usize = 0x1b70;
 const RASTER: usize = 0x90;
 pub(crate) const MANAGER: usize = 0x3e5e4b0;
 const SHADOW_VIEWPORT_DIRTY: u32 = 2;
+const VIEWPORT_UNIT: usize = 0x2929458;
 
-type Reserve = Option<unsafe extern "C" fn(*const rsf_game_render_pass) -> bool>;
-type Report = Option<unsafe extern "C" fn(*const c_char)>;
+type Reserve = unsafe extern "C" fn(*const rsf_game_render_pass) -> bool;
+type ReportFn = unsafe extern "C" fn(*const c_char);
+type Report = Option<ReportFn>;
+type Upscale = unsafe extern "C" fn(*mut c_void, *mut c_void, *const rsf_game_render_pass) -> i32;
+type RenderConfig = unsafe extern "C" fn(*mut c_void, *mut rsf_game_render_config) -> i32;
 
 unsafe extern "C" {
     fn rsf_fallout4_resolution_reconfigure(
-        host: *const rsf_game_host_services,
+        upscale: Upscale,
+        user: *mut c_void,
         context: *mut c_void,
         planning: &rsf_game_render_pass,
     ) -> bool;
     fn rsf_fallout4_resolution_config(
-        host: *const rsf_game_host_services,
+        query: RenderConfig,
+        user: *mut c_void,
         config: &mut rsf_game_render_config,
-    ) -> bool;
-    fn rsf_fallout4_resolution_reserve(reserve: Reserve, planning: &rsf_game_render_pass) -> bool;
+    ) -> i32;
     fn rsf_fallout4_resolution_report_receipt(
-        report: Report,
+        report: ReportFn,
         pass: &rsf_game_render_pass,
         context: *mut c_void,
         receipt: &Receipt,
@@ -445,11 +450,14 @@ fn configured_targets(
     planning.flags = RSF_GAME_RENDER_RECONFIGURE | RSF_GAME_RENDER_NO_FG;
     [planning.camera.output_width, planning.camera.output_height] = size;
     // Reconfigure prepares the plan. Admission comes from the sized config that follows.
-    if !unsafe { rsf_fallout4_resolution_reconfigure(host, context, &planning) } {
+    let upscale = unsafe { (*host).process_upscale }?;
+    if !unsafe { rsf_fallout4_resolution_reconfigure(upscale, (*host).user, context, &planning) } {
         return None;
     }
     let mut config = rsf_game_render_config::request();
-    if !unsafe { rsf_fallout4_resolution_config(host, &mut config) } {
+    // Reconfigure may reenter. Sample the config callback and user after it.
+    let query = unsafe { (*host).render_config }?;
+    if unsafe { rsf_fallout4_resolution_config(query, (*host).user, &mut config) } != 1 {
         return None;
     }
     config.checked_render_extent(size)
@@ -497,7 +505,7 @@ unsafe fn configure(
     host: *const rsf_game_host_services,
     frame: *const rsf_game_render_pass,
     context: *mut c_void,
-    reserve: Reserve,
+    reserve: Option<Reserve>,
 ) -> Option<()> {
     let current = SCOPE.get();
     if current.input
@@ -561,10 +569,9 @@ unsafe fn configure(
         [planning.camera.render_width, planning.camera.render_height] = render;
         planning.render_rect = [0, 0, render[0] as i32, render[1] as i32];
         planning.output_rect = [0, 0, size[0] as i32, size[1] as i32];
-        if reserve.is_none()
-            || preflight(base, &planning, context).is_none()
-            || !unsafe { rsf_fallout4_resolution_reserve(reserve, &planning) }
-        {
+        if !reserve.is_some_and(|reserve| {
+            preflight(base, &planning, context).is_some() && unsafe { reserve(&planning) }
+        }) {
             SCOPE.set(Scope::default());
             return None;
         }
@@ -587,6 +594,52 @@ unsafe fn configure(
         return None;
     }
     Some(())
+}
+
+/// The nonzero-width branch of the verified native builder at 0x1817ef0.
+fn replay_output_viewport(base: usize, scope: &Scope) -> Option<()> {
+    let [width, height] = scope.frame.size;
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let width = width as f32;
+    let height = height as f32;
+    let shadow = scope.shadow();
+    let unit = read::<f32>(base + VIEWPORT_UNIT)?;
+    if native_context(base)? != scope.context {
+        return None;
+    }
+    let left = read::<f32>(shadow.checked_add(0x6d0)?)?;
+    let x = width * left;
+    if !write(shadow + RASTER, &x) {
+        return None;
+    }
+    let top = read::<f32>(shadow.checked_add(0x6d8)?)?;
+    let y = (unit - top) * height;
+    if !write(shadow + RASTER + 4, &y) {
+        return None;
+    }
+    let right = read::<f32>(shadow.checked_add(0x6d4)?)?;
+    let left = read::<f32>(shadow.checked_add(0x6d0)?)?;
+    let extent_x = (right - left) * width * unit;
+    if !write(shadow + RASTER + 8, &extent_x) {
+        return None;
+    }
+    let top = read::<f32>(shadow.checked_add(0x6d8)?)?;
+    let bottom = read::<f32>(shadow.checked_add(0x6dc)?)?;
+    let extent_y = (top - bottom) * height * unit;
+    if !write(shadow + RASTER + 12, &extent_y) {
+        return None;
+    }
+    // Depth endpoints are bit copies. The dirty OR precedes the last depth store.
+    let near = read::<u32>(shadow.checked_add(0x6e0)?)?;
+    if !write(shadow + RASTER + 16, &near) {
+        return None;
+    }
+    let far = read::<u32>(shadow.checked_add(0x6e4)?)?;
+    let dirty = read::<u32>(shadow)?;
+    (write(shadow, &(dirty | SHADOW_VIEWPORT_DIRTY)) && write(shadow + RASTER + 20, &far))
+        .then_some(())
 }
 
 fn begin_output(snapshot: &Snapshot, pass: &rsf_game_render_pass) -> Option<()> {
@@ -642,20 +695,11 @@ fn begin_output(snapshot: &Snapshot, pass: &rsf_game_render_pass) -> Option<()> 
     full.dirty_owned = true;
     SCOPE.set(scope);
 
-    // Supply explicit output dimensions through the native builder, independent of the last target.
-    let [width, height] = scope.frame.size;
-    // SAFETY: verification pins the builder bytes and the scope proves its live Context.
-    type BuildViewport = unsafe extern "C" fn(*mut c_void, *mut c_void, u32, u32, bool);
-    let build_viewport = unsafe { std::mem::transmute::<usize, BuildViewport>(base + 0x1817ef0) };
-    unsafe {
-        build_viewport(
-            (base + 0x3a25d00) as *mut c_void,
-            shadow as *mut c_void,
-            width,
-            height,
-            true,
-        )
-    };
+    // The native writer itself did not call Win32. Its checked replay must
+    // leave the incoming LastError for the following observation.
+    let error = unsafe { GetLastError() };
+    let replayed = replay_output_viewport(base, &scope).is_some();
+    unsafe { SetLastError(error) };
     scope = SCOPE.get();
     let owned_raster = read::<[f32; 6]>(shadow.wrapping_add(RASTER));
     if let Some(raster) = owned_raster {
@@ -663,10 +707,13 @@ fn begin_output(snapshot: &Snapshot, pass: &rsf_game_render_pass) -> Option<()> 
     }
     scope.full.owned_dirty = read::<u32>(shadow).map(|dirty| dirty & SHADOW_VIEWPORT_DIRTY);
     SCOPE.set(scope);
-    if owned_raster.is_some_and(|raster| {
-        let [width, height] = scope.frame.size;
-        scope.full.geometry.current(base) && raster[..4] == [0.0, 0.0, width as f32, height as f32]
-    }) {
+    if replayed
+        && owned_raster.is_some_and(|raster| {
+            let [width, height] = scope.frame.size;
+            scope.full.geometry.current(base)
+                && raster[..4] == [0.0, 0.0, width as f32, height as f32]
+        })
+    {
         return Some(());
     }
     end_output(base);
@@ -910,8 +957,24 @@ pub(crate) extern "C" fn rsf_fallout4_resolution_verify() -> bool {
         && guard(base, 0x183a278, b"\x41\xc6\x82\xe5\x0f\x00\x00\x01")
         && guard(base, 0x181801e, b"\xf3\x0f\x11\x83\x98\x00\x00\x00")
         && guard(base, 0x1839e00, b"\x48\x83\xec\x38\x8b\x15\x0e\x92\x63\x02")
-        && guard(base, 0x1817ef0, b"\x40\x53\x48\x83\xec\x60")
-        && guard(base, 0x1817f1f, b"\x45\x85\xc0\x74\x10\x41\x8b\xc0")
+        // Guard the explicit-size entry and the common shadow writer through RET.
+        && guard(base, 0x1817ef0, b"\x40\x53\x48\x83\xec\x60\x0f\x29\x74\x24\x50\x48\x8b\xda\xf3\x0f\x10\x35\
+            \x52\x15\x11\x01\x0f\x29\x7c\x24\x40\x44\x0f\x29\x44\x24\x30\x44\x0f\x28\
+            \xc6\x44\x0f\x29\x4c\x24\x20\x44\x0f\x28\xce\x45\x85\xc0\x74\x10\x41\x8b\
+            \xc0\x0f\x57\xff\xf3\x48\x0f\x2a\xf8\x41\x8b\xc1\xeb\x63")
+        && guard(base, 0x1817f97, b"\x8b\x0d\x7b\xb0\x65\x02\x0f\x57\xd2\xf3\x48\x0f\x2a\xd0\x65\x48\x8b\x04\
+            \x25\x58\x00\x00\x00\xba\x20\x0b\x00\x00\x48\x8b\x04\xc8\x48\x8b\x0c\x02\
+            \x48\x85\xc9\x75\x07\x48\x8b\x0d\xd1\x93\x0c\x02\x48\x81\xc1\x70\x1b\x00\
+            \x00\x0f\x28\xc7\xf3\x0f\x59\x81\xd0\x06\x00\x00\xf3\x0f\x11\x83\x90\x00\
+            \x00\x00\xf3\x0f\x5c\xb1\xd8\x06\x00\x00\xf3\x0f\x59\xf2\xf3\x0f\x11\xb3\
+            \x94\x00\x00\x00\xf3\x0f\x10\x81\xd4\x06\x00\x00\xf3\x0f\x5c\x81\xd0\x06\
+            \x00\x00\x0f\x28\x74\x24\x50\xf3\x0f\x59\xc7\x0f\x28\x7c\x24\x40\xf3\x41\
+            \x0f\x59\xc0\x44\x0f\x28\x44\x24\x30\xf3\x0f\x11\x83\x98\x00\x00\x00\xf3\
+            \x0f\x10\x89\xd8\x06\x00\x00\xf3\x0f\x5c\x89\xdc\x06\x00\x00\xf3\x0f\x59\
+            \xca\xf3\x41\x0f\x59\xc9\x44\x0f\x28\x4c\x24\x20\xf3\x0f\x11\x8b\x9c\x00\
+            \x00\x00\x8b\x81\xe0\x06\x00\x00\x89\x83\xa0\x00\x00\x00\x8b\x81\xe4\x06\
+            \x00\x00\x83\x0b\x02\x89\x83\xa4\x00\x00\x00\x48\x83\xc4\x60\x5b\xc3")
+        && guard(base, VIEWPORT_UNIT, &1.0_f32.to_le_bytes())
 }
 
 #[unsafe(no_mangle)]
@@ -937,7 +1000,7 @@ unsafe extern "C" fn rsf_fallout4_resolution_configure(
     host: *const rsf_game_host_services,
     frame: *const rsf_game_render_pass,
     context: *mut c_void,
-    reserve: Reserve,
+    reserve: Option<Reserve>,
 ) -> bool {
     unsafe { configure(host, frame, context, reserve) }.is_some()
 }
@@ -1048,9 +1111,9 @@ unsafe fn report_state(
         RSF_FALLOUT4_STAGE_SOURCE_RETIRED => c"source-retired",
         _ => return,
     };
-    if report.is_none() {
+    let Some(report) = report else {
         return;
-    }
+    };
     let pass = unsafe { pass.read() };
     if pass.source_frame_id == 0 {
         return;

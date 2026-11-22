@@ -3,18 +3,16 @@
 #include <cstdio>
 
 namespace rsf::fallout4 {
-extern "C" bool rsf_fallout4_resolution_reconfigure(const rsf_game_host_services* host, void* context, const rsf_game_render_pass* planning) noexcept try {
-    (void)host->process_upscale(host->user, context, planning);
+extern "C" bool rsf_fallout4_resolution_reconfigure(rsf_game_process_upscale_fn upscale, void* user,
+    void* context, const rsf_game_render_pass* planning) noexcept try {
+    (void)upscale(user, context, planning);
     return true;
 } catch (...) { return false; }
 
-extern "C" bool rsf_fallout4_resolution_config(const rsf_game_host_services* host, rsf_game_render_config* config) noexcept try {
-    return host->render_config(host->user, config) != 0;
-} catch (...) { return false; }
-
-extern "C" bool rsf_fallout4_resolution_reserve(ResolutionReserve reserve, const rsf_game_render_pass* planning) noexcept try {
-    return reserve(planning);
-} catch (...) { return false; }
+extern "C" int32_t rsf_fallout4_resolution_config(rsf_game_render_config_fn query, void* user,
+    rsf_game_render_config* config) noexcept try {
+    return query(user, config) != 0 ? 1 : 0;
+} catch (...) { return -1; }
 
 extern "C" void rsf_fallout4_resolution_report_receipt(ResolutionReport report, const rsf_game_render_pass* pass, void* context,
     const NativeResolutionReceipt* receipt) noexcept try {

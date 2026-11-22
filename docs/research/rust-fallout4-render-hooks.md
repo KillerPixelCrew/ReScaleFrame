@@ -566,3 +566,60 @@ WINDOW ownership, native trampolines and guards around throwing calls. Pinned
 Rust 1.94.1 formatting, targeted bindgen regeneration, locked offline Cargo
 metadata and Git whitespace checks cover this pass. Build, link, fixture,
 device and game validation remain open.
+
+
+## Screen and viewport instruction replays
+
+This follow-up starts at `fb27ab2f`, after the F01 typed admission work. It
+uses the exact Fallout4.exe 1.11.240.0 fingerprint recorded in
+[engine metadata](../../games/fallout4/engine.json). The source comparison
+used the recorded instruction windows and the checked adapter on that base.
+
+- `screen.rs` replays `0x1a80480` and `0x1a804a0` as unsigned nonzero
+  reads at UI `+0x1ec` and `+0x1f0`. For each index 0 through 12, the
+  replay of `0x102b5c0` freshly reads PlayerCamera `+0x28` and compares
+  the nonnull state with the pointer at `+0xe0 + 8 * index`. Null skips
+  the indexed read. Each read is guarded. An unreadable probe gives the
+  existing unavailable classification. The whole-function byte guards,
+  all menu name and object checks, the second observation, CPU source
+  checks, class sentinels and the LastError guard remain in use. The
+  name getter and menu-open routine still execute through the two C++
+  exception guards in `screen.cpp`. [Screen query evidence](fallout4-input-ownership-20261116.md#camera-state-and-correction-to-the-frozen-update-interpretation)
+- `resolution.rs` replays the explicit-size path of `0x1817ef0`, which
+  jumps from `0x1817f32` to `0x1817f97`. That path calls no helpers and
+  uses the unit scale from `0x2929458`. Guards cover
+  `0x1817ef0..0x1817f33`, `0x1817f97..0x181806d` and the unit literal.
+  The replay checks the live TLS/fallback Context against the owned
+  shadow, reads its normalized camera port, writes the four float
+  components at shadow `+0x90..+0x9c` with the original scalar operation
+  order, copies MinDepth as bits to `+0xa0`, sets dirty bit 2 and copies
+  MaxDepth as bits to `+0xa4`. Read or write failure follows the same
+  output-scope cleanup with a post-attempt shadow observation. LastError
+  is restored after the checked replay, before the existing next read.
+  Native no-explicit-size calls, selector handling, Context/renderer/HWND
+  matching, geometry checks and source retirement stay on the existing
+  paths. The retained instruction listing is
+  `reduced-native-1817ef0-20261116.txt`. [Viewport arithmetic and native consumer](fallout4-reduced-consumers-20261116.md#native-viewport-builder-does-not-round-the-ratio-product)
+- `render_inputs.rs` compares canonical COM identity in the same order
+  as the former owner: optional Context and chain, then colour, depth,
+  motion, Pip-Boy, VATS and refraction normals. It borrows each current
+  pair from the native World at the point of comparison. The generated
+  `NativeInputReferences` record describes just the accepted reader's
+  reference transfer. C++ still attaches the references to the World
+  and releases unused slots. Context/window checks, resource identities
+  and COM reference lifetimes retain their current contracts.
+- `render_hooks.rs` owns the common 16-message diagnostic budget.
+  `render_hooks.cpp` still supplies the bound native log callback and
+  retains its exception catch. Resolution passes resolved typed
+  reconfigure and config callbacks into the native guards and shares
+  the config guard with render publication. It samples config after
+  reconfigure and calls the private noexcept recovery reserve after
+  preflight. Native format strings and receipt budgets keep their
+  prior meanings. Typed original trampolines, return addresses, native
+  unwind guards and the Present/Swap LastError precedence stay in the
+  C++ detour frames.
+
+Source checks compared both viewport guard spans against the retained
+disassembly. Pinned Rust 1.94.1 formatting, bindgen 0.72.1, locked offline
+Windows Cargo metadata and MSVC x64 syntax-only checks covered this pass.
+Build, link, fixture, lint, device and game verification remain open.

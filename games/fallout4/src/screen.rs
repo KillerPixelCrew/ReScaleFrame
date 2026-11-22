@@ -2,19 +2,17 @@
 //! Verified Fallout 4 AE menu, freeze, camera and world-lease observations.
 
 use crate::cpu_abi::rsf_fallout4_cpu_identity;
-use crate::cpu_events::rsf_fallout4_cpu_render_source_is_current;
+use crate::cpu_events::render_source_is_current;
 pub(crate) use crate::render_records::rsf_fallout4_NativeScreen as NativeScreen;
-use crate::{image, read};
+use crate::{image, matches_bytes, read};
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_AFTER_SIMULATION, RSF_GAME_RENDER_PRIMARY,
     rsf_game_render_pass,
 };
 use rsf_game_sys::{RSF_SCREEN_GAMEPLAY, RSF_SCREEN_LOADING, RSF_SCREEN_MENU, RSF_SCREEN_UNKNOWN};
-use std::ffi::{CStr, c_void};
+use std::ffi::CStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
-use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
-use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
 const LOADING_FACT: u32 = 1;
 const MENU_FACTS: u32 = 2 | 4 | 8 | 16 | 32;
@@ -143,25 +141,6 @@ fn matches<const N: usize>(base: usize, rva: usize, expected: &[u8; N]) -> bool 
     read::<[u8; N]>(base + rva).as_ref() == Some(expected)
 }
 
-fn literal(base: usize, query: &MenuQuery) -> bool {
-    let expected = query.name.to_bytes_with_nul();
-    let mut bytes = [0_u8; 20];
-    let Some(bytes) = bytes.get_mut(..expected.len()) else {
-        return false;
-    };
-    let mut copied = 0;
-    let ok = unsafe {
-        ReadProcessMemory(
-            GetCurrentProcess(),
-            (base + query.literal) as *const c_void,
-            bytes.as_mut_ptr().cast(),
-            bytes.len(),
-            &mut copied,
-        )
-    } != 0;
-    ok && copied == bytes.len() && &*bytes == expected
-}
-
 #[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_fallout4_verify_screen_queries() -> bool {
     VERIFIED_IMAGE.store(0, Ordering::Release);
@@ -171,7 +150,7 @@ pub(crate) extern "C" fn rsf_fallout4_verify_screen_queries() -> bool {
             matches(base, menu.entry, &[0x40, 0x53, 0x48, 0x83, 0xec, 0x20])
                 && matches(base, menu.literal_lea, &menu.literal_bytes)
                 && matches(base, menu.return_lea, &menu.return_bytes)
-                && literal(base, menu)
+                && matches_bytes::<20>(base + menu.literal, menu.name.to_bytes_with_nul())
         })
         && matches(
             base,
@@ -228,8 +207,8 @@ impl Observation {
         }
         let mut value = Self {
             ui,
-            freeze_background: read(ui.checked_add(0x1ec)?)?,
-            freeze_pause: read(ui.checked_add(0x1f0)?)?,
+            freeze_background: read(ui.checked_add(FREEZE_BACKGROUND_OFFSET)?)?,
+            freeze_pause: read(ui.checked_add(FREEZE_PAUSE_OFFSET)?)?,
             main: read(base + 0x32d_d130)?,
             player_camera: read(base + 0x30e_6e58)?,
             world_graph: read(base + 0x32d_d338)?,
@@ -242,7 +221,7 @@ impl Observation {
         }
         if value.player_camera != 0 {
             value.camera_vtable = read(value.player_camera)?;
-            value.camera_state = read(value.player_camera.checked_add(0x28)?)?;
+            value.camera_state = read(value.player_camera.checked_add(CAMERA_CURRENT)?)?;
         }
         if value.world_graph != 0 {
             value.world_camera = read(value.world_graph.checked_add(0x140)?)?;
@@ -293,19 +272,27 @@ impl Observation {
 unsafe extern "C" {
     fn rsf_fallout4_menu_name(entry: usize, name: &mut usize) -> bool;
     fn rsf_fallout4_menu_open(entry: usize, ui: usize, name: usize, open: &mut bool) -> bool;
-    fn rsf_fallout4_menu_freeze(entry: usize, ui: usize, frozen: &mut bool) -> bool;
-    fn rsf_fallout4_camera_equals(
-        entry: usize,
-        camera: usize,
-        index: u32,
-        equal: &mut bool,
-    ) -> bool;
+
 }
 
 const _: () = assert!(size_of::<Observation>() == 80);
 
+const FREEZE_BACKGROUND_OFFSET: usize = 0x1ec;
+const FREEZE_PAUSE_OFFSET: usize = 0x1f0;
+const CAMERA_CURRENT: usize = 0x28;
+const CAMERA_STATES: usize = 0xe0;
+
+fn camera_equals(camera: usize, index: usize) -> Option<bool> {
+    let current: usize = read(camera.checked_add(CAMERA_CURRENT)?)?;
+    if current == 0 {
+        return Some(false);
+    }
+    let slot = camera.checked_add(CAMERA_STATES + index * size_of::<usize>())?;
+    Some(read::<usize>(slot)? == current)
+}
+
 /// The verified entry points run on the engine callback. The C++ leaves contain
-/// exceptions from individual native calls. A mismatched name retains the facts
+/// exceptions from the two native menu calls. A mismatched name retains the facts
 /// from earlier menus and skips all later calls.
 fn observe(base: usize, ui: usize, camera: usize) -> Option<(u32, Option<u16>)> {
     let mut facts = 0;
@@ -325,28 +312,19 @@ fn observe(base: usize, ui: usize, camera: usize) -> Option<(u32, Option<u16>)> 
             facts |= menu.fact;
         }
     }
-    for (entry, fact) in [
-        (FREEZE_BACKGROUND, FROZEN_BACKGROUND),
-        (FREEZE_PAUSE, FROZEN_PAUSE),
+    // The verified leaf bodies are unsigned nonzero tests of the two live counters.
+    for (offset, fact) in [
+        (FREEZE_BACKGROUND_OFFSET, FROZEN_BACKGROUND),
+        (FREEZE_PAUSE_OFFSET, FROZEN_PAUSE),
     ] {
-        let mut frozen = false;
-        if !unsafe { rsf_fallout4_menu_freeze(base + entry, ui, &mut frozen) } {
-            return None;
-        }
-        if frozen {
+        if read::<u32>(ui.checked_add(offset)?)? != 0 {
             facts |= fact;
         }
     }
     let mut cameras = 0;
     if camera != 0 {
         for index in 0..13 {
-            let mut equal = false;
-            if !unsafe {
-                rsf_fallout4_camera_equals(base + CAMERA_EQUALS, camera, index, &mut equal)
-            } {
-                return None;
-            }
-            if equal {
+            if camera_equals(camera, index)? {
                 cameras |= 1 << index;
             }
         }
@@ -377,7 +355,7 @@ pub(crate) extern "C" fn rsf_fallout4_screen_classify(
         *result = NativeScreen::refused(QUERY_UNAVAILABLE);
         return;
     }
-    if !unsafe { rsf_fallout4_cpu_render_source_is_current(source) } {
+    if !render_source_is_current(source) {
         *result = NativeScreen::refused(SOURCE_CHANGED);
         return;
     }
@@ -411,7 +389,7 @@ pub(crate) extern "C" fn rsf_fallout4_screen_classify(
     }
     result.camera_state = before.camera_state;
     if Observation::read(base).as_ref() != Some(&before)
-        || !unsafe { rsf_fallout4_cpu_render_source_is_current(source) }
+        || !render_source_is_current(source)
         || (result.facts & FROZEN_BACKGROUND != 0) != (before.freeze_background != 0)
         || (result.facts & FROZEN_PAUSE != 0) != (before.freeze_pause != 0)
     {

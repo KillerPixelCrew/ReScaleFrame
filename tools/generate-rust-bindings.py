@@ -27,7 +27,7 @@ def generate(output, header, types, constants, clang_args, extra=(), *, use_core
 generate("games/ac7/src/velocity_device_abi.rs", "games/ac7/src/velocity_device.h",
          "rsf_ac7_velocity_(variant|variant_request|kernels|refusal_fn)", "NOTHING", [])
 generate("games/fallout4/src/render_records.rs", "games/fallout4/src/render_records.h",
-         "rsf::fallout4::Native(Screen|OutputOwner|ResolutionReceipt|DepthMathFailure|InputSlot)", "NOTHING",
+         "rsf::fallout4::Native(Screen|OutputOwner|ResolutionReceipt|DepthMathFailure|InputSlot|InputReferences)", "NOTHING",
          ["-x", "c++", "-std=c++20"],
          ["--no-prepend-enum-name", "--with-derive-default", "--with-derive-partialeq",
           "--with-derive-eq", "--raw-line", "#![allow(non_upper_case_globals)]",

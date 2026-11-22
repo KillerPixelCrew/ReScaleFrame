@@ -81,15 +81,13 @@ struct NativeFramebufferReceipt {
     uint32_t rtv_dimension{}, rtv_mip{};
 };
 // The readers transfer an owned reference for each nonnull slot.
-// lease is the caller's NativeInputLease (render_inputs.cpp); it holds typed COM references until
-// the wrapper moves them into its output or discards them.
-struct NativeInputLease;
+// The native caller attaches them to the World or releases unused references.
 
 extern "C" {
 bool rsf_fallout4_inputs_claim_exception() noexcept;
-bool rsf_fallout4_inputs_read(NativeInputLease* lease,
+bool rsf_fallout4_inputs_read(NativeInputReferences* lease,
     NativeInputReport, const NativeDepthSnapshot* producer, rsf_game_render_pass*) noexcept;
-bool rsf_fallout4_inputs_read_raster(NativeInputLease* lease,
+bool rsf_fallout4_inputs_read_raster(NativeInputReferences* lease,
     const rsf_game_render_pass* frame, const NativeDepthSnapshot* producer, rsf_game_render_pass*) noexcept;
 }
 static_assert(sizeof(detail::NativeState) == 128 && offsetof(detail::NativeState, frame) == 56 &&
