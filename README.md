@@ -118,8 +118,8 @@ The Unity Mono adapter connects URP RenderGraph to ReScaleFrame through a manage
 and Unity's native rendering interfaces. The helper identifies the reconstruction and
 pre-UI stages, produces camera/temporal packets and queues native render events.
 
-The [native Unity bridge](games/unity-mono/src/bridge.c) validates those packets through
-its [Rust frame state](games/unity-mono/src/bridge_state.rs), retains their resources and
+The [native Unity bridge](integrations/unity/native/render_bridge.c) validates those packets through
+its [Rust frame state](integrations/unity/src/bridge_state.rs), retains their resources and
 forwards the passes to the shared runtime. SR runs before DoF, bloom
 and tonemapping; completed scene colour is captured before UI for FG. Player-loop callbacks
 supply the CPU frame boundaries used by latency coordination.

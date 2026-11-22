@@ -8,7 +8,7 @@ fn bindings() {
     ];
     let builder = rsf_bindgen::owner(
         &headers,
-        &["games/unity-mono/include"],
+        &["integrations/unity/include"],
         &headers,
         &[
             "runtime/orchestrator/src",
@@ -17,7 +17,6 @@ fn bindings() {
             "runtime/shader_patch/src",
             "runtime/vulkan",
             "games/anomaly",
-            "games/unity-mono",
             "integrations/unity",
         ],
         &["-fdeclspec"],

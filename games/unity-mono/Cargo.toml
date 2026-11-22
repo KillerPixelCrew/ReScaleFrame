@@ -7,49 +7,24 @@ publish.workspace = true
 license.workspace = true
 
 [lib]
-# rlib so tests/game-sdk can use the Unity bridge records this crate binds.
-crate-type = ["staticlib", "rlib"]
-
-[features]
-mono-plugin = []
+crate-type = ["staticlib"]
 
 [dependencies]
+rsf-unity = { path = "../../integrations/unity", features = ["mono-plugin"] }
 rsf-windows = { path = "../../integrations/windows" }
 rsf-game-sys = { path = "../../sdk/game" }
-rsf-runtime-submission = { path = "../../runtime/graphics/submission" }
 
 [target."cfg(windows)".dependencies]
-ash = { workspace = true }
-windows = { workspace = true, features = [
-  "Win32_Graphics_Direct3D",
-  "Win32_Graphics_Direct3D11",
-  "Win32_Graphics_Direct3D12",
-  "Win32_Graphics_Dxgi",
-  "Win32_Graphics_Dxgi_Common",
-  "Win32_Security",
-] }
+windows = { workspace = true, features = ["Win32_Graphics_Direct3D12"] }
 
 [target."cfg(windows)".dependencies.windows-sys]
 workspace = true
 features = [
   "Win32_Foundation",
-  "Win32_Graphics_Gdi",
-  "Win32_Security",
-  "Win32_Storage_FileSystem",
-  "Win32_System_Diagnostics_Debug",
-  "Win32_System_Environment",
-  "Win32_System_IO",
   "Win32_System_LibraryLoader",
-  "Win32_System_Performance",
-  "Win32_System_SystemInformation",
   "Win32_System_Threading",
-  "Win32_System_WindowsProgramming",
-  "Win32_UI_Input",
   "Win32_UI_WindowsAndMessaging",
 ]
-
-[build-dependencies]
-rsf-bindgen = { path = "../../tools/bindgen" }
 
 # Unit tests link the Runtime the plugins get from CMake.
 [target."cfg(windows)".dev-dependencies]

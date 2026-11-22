@@ -53,7 +53,7 @@ generate("tests/engine_sharpening_abi.rs", "integrations/unity/native/package_st
          "RSF_(GODOT_ABI_VERSION|GODOT_SETTINGS_ABI_VERSION|UNITY_SETTINGS_ABI_VERSION)",
          ["-include", "integrations/godot/native/api.h", "-Iruntime/orchestrator/include",
           "-Iruntime/contract/include", "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include",
-          "-Iruntime/presentation/include", "-Isdk/game/include", "-Igames/unity-mono/include"],
+          "-Iruntime/presentation/include", "-Isdk/game/include", "-Iintegrations/unity/include"],
          ["--no-recursive-allowlist", "--with-derive-default",
           "--raw-line", "use rsf_game_sys::rsf_sharpening_options;",
           "--with-derive-custom-struct", "rsf_(godot_settings|unity_package_settings)=PartialEq"])

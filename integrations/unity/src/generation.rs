@@ -9,26 +9,26 @@ use std::ffi::{c_char, c_int, c_void};
 use std::ptr::null_mut;
 
 /// RSF_DLSS_ENGINE_UNITY, a cast macro bindgen does not evaluate. The native package asserts it.
-pub(crate) const RSF_DLSS_ENGINE_UNITY: u32 = 2;
+pub const RSF_DLSS_ENGINE_UNITY: u32 = 2;
 
 /// rsf_fg12_setup's window guard and log.
-pub(crate) type AcceptWindow = unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int;
-pub(crate) type Log = unsafe extern "C" fn(*mut c_void, *const c_char);
+pub type AcceptWindow = unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int;
+pub type Log = unsafe extern "C" fn(*mut c_void, *const c_char);
 
 /// An install's SDK directories and Streamline identity, UTF-8 and borrowed for the install.
-pub(crate) struct Sources {
-    pub(crate) runtime: *const c_char,
-    pub(crate) fsr3: *const c_char,
-    pub(crate) fsr4: *const c_char,
-    pub(crate) xess: *const c_char,
-    pub(crate) streamline: *const c_char,
-    pub(crate) engine_version: *const c_char,
-    pub(crate) project_id: *const c_char,
+pub struct Sources {
+    pub runtime: *const c_char,
+    pub fsr3: *const c_char,
+    pub fsr4: *const c_char,
+    pub xess: *const c_char,
+    pub streamline: *const c_char,
+    pub engine_version: *const c_char,
+    pub project_id: *const c_char,
 }
 
 /// Unity's depth is inverted and finite, in metres; the provider's own generated-frame limit
 /// applies and it may be switched at run time; the HUD-less image comes from the backbuffer.
-pub(crate) fn setup(
+pub fn setup(
     backend: u32,
     options: rsf_native_fg_options,
     sources: &Sources,

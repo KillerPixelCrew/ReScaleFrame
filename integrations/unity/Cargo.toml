@@ -1,0 +1,62 @@
+[package]
+name = "rsf-unity"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+# The staticlib is the package DLL's archive; the rlib serves the Mono plugin and tests/game-sdk.
+crate-type = ["staticlib", "rlib"]
+
+[features]
+# The Mono plugin's subset: its D3D12 callbacks without the package's D3D11, Vulkan and preview
+# bridges (enabled by rsf-unity-mono).
+mono-plugin = []
+
+[dependencies]
+rsf-windows = { path = "../../integrations/windows" }
+rsf-game-sys = { path = "../../sdk/game" }
+rsf-runtime-submission = { path = "../../runtime/graphics/submission" }
+
+[target."cfg(windows)".dependencies]
+ash = { workspace = true }
+windows = { workspace = true, features = [
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Direct3D12",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_Security",
+] }
+
+[target."cfg(windows)".dependencies.windows-sys]
+workspace = true
+features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_Environment",
+  "Win32_System_IO",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Performance",
+  "Win32_System_SystemInformation",
+  "Win32_System_Threading",
+  "Win32_System_WindowsProgramming",
+  "Win32_UI_Input",
+  "Win32_UI_WindowsAndMessaging",
+]
+
+[build-dependencies]
+rsf-bindgen = { path = "../../tools/bindgen" }
+
+# Unit tests link the Runtime the plugins get from CMake.
+[target."cfg(windows)".dev-dependencies]
+rsf-orchestrator = { path = "../../runtime/orchestrator" }
+rsf-runtime-common = { path = "../../runtime/common" }
+
+[lints]
+workspace = true

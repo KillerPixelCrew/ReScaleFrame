@@ -3,19 +3,19 @@
 
 fn main() {
     let headers = [
-        "games/unity-mono/include/rescaleframe/unity_bridge.h",
-        "games/unity-mono/include/rescaleframe/unity_runtime_host.h",
-        "games/unity-mono/src/bridge.h",
-        "games/unity-mono/src/bridge_d3d12.h",
-        "games/unity-mono/src/bridge_state.h",
-        "games/unity-mono/src/vulkan_state.h",
+        "integrations/unity/include/rescaleframe/unity_bridge.h",
+        "integrations/unity/include/rescaleframe/unity_runtime_host.h",
+        "integrations/unity/native/bridge.h",
+        "integrations/unity/native/bridge_d3d12.h",
+        "integrations/unity/native/bridge_state.h",
+        "integrations/unity/native/vulkan_state.h",
         "integrations/unity/native/package_state.h",
         "integrations/unity/native/vulkan_foreign.h",
     ];
     let builder = rsf_bindgen::owner(
         &headers,
-        &["games/unity-mono/include"],
-        &["games/unity-mono", "integrations/unity"],
+        &["integrations/unity/include"],
+        &["integrations/unity"],
         &[],
         &[],
     )

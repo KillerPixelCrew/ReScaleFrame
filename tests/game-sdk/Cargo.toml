@@ -30,7 +30,7 @@ ash = { workspace = true, optional = true }
 rsf-anomaly = { path = "../../games/anomaly" }
 rsf-game-sys = { path = "../../sdk/game" }
 rsf-orchestrator = { path = "../../runtime/orchestrator" }
-rsf-unity-mono = { path = "../../games/unity-mono" }
+rsf-unity = { path = "../../integrations/unity" }
 windows = { workspace = true, optional = true, features = [
   "std",
   "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi",

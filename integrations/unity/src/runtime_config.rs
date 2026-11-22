@@ -8,7 +8,7 @@ const SLASH: u16 = b'/' as u16;
 const BACKSLASH: u16 = b'\\' as u16;
 const COLON: u16 = b':' as u16;
 /// Path buffers match the 32768-character limit of the replaced C++.
-pub(crate) const PATH_CAPACITY: usize = 32768;
+pub const PATH_CAPACITY: usize = 32768;
 
 fn separator(unit: &u16) -> bool {
     *unit == SLASH || *unit == BACKSLASH
@@ -16,7 +16,7 @@ fn separator(unit: &u16) -> bool {
 
 /// A drive-qualified or rooted value is kept as written. Anything else is joined to the ini's
 /// directory and canonicalised by `full`; without a directory in the ini path it is empty.
-pub(crate) fn resolve(
+pub fn resolve(
     ini: &[u16],
     value: Vec<u16>,
     full: impl FnOnce(&[u16]) -> Option<Vec<u16>>,
@@ -33,8 +33,7 @@ pub(crate) fn resolve(
 }
 
 /// Provider-independent root beside the startup INI.
-#[cfg_attr(not(feature = "mono-plugin"), allow(dead_code))]
-pub(crate) fn runtime_root(ini: &[u16]) -> Vec<u16> {
+pub fn runtime_root(ini: &[u16]) -> Vec<u16> {
     let end = ini.iter().rposition(separator).map_or(0, |index| index + 1);
     let mut root = ini[..end].to_vec();
     root.extend("ReScaleFrame".encode_utf16());
@@ -42,22 +41,21 @@ pub(crate) fn runtime_root(ini: &[u16]) -> Vec<u16> {
 }
 
 /// `<ini directory>\ReScaleFrame\preferences.ini`, where the overlay saves next-start choices.
-#[cfg_attr(not(feature = "mono-plugin"), allow(dead_code))]
-pub(crate) fn preferences_path(ini: &[u16]) -> Vec<u16> {
+pub fn preferences_path(ini: &[u16]) -> Vec<u16> {
     let mut preferences = runtime_root(ini);
     preferences.extend("\\preferences.ini".encode_utf16());
     preferences
 }
 
 /// The text after the last path separator.
-pub(crate) fn file_name(path: &[u16]) -> &[u16] {
+pub fn file_name(path: &[u16]) -> &[u16] {
     path.iter()
         .rposition(separator)
         .map_or(path, |end| &path[end + 1..])
 }
 
 /// UTF-16 to UTF-8; empty for invalid UTF-16, as WC_ERR_INVALID_CHARS made it.
-pub(crate) fn utf8(value: &[u16]) -> Vec<u8> {
+pub fn utf8(value: &[u16]) -> Vec<u8> {
     String::from_utf16(value)
         .map(String::into_bytes)
         .unwrap_or_default()
@@ -65,13 +63,13 @@ pub(crate) fn utf8(value: &[u16]) -> Vec<u8> {
 
 /// `value` with a terminator, for a `const char*` or `const wchar_t*` field. An empty value is
 /// an empty string, never a null pointer.
-pub(crate) fn terminated<T: Default>(mut value: Vec<T>) -> Vec<T> {
+pub fn terminated<T: Default>(mut value: Vec<T>) -> Vec<T> {
     value.push(T::default());
     value
 }
 
 #[cfg(windows)]
-pub(crate) use platform::*;
+pub use platform::*;
 
 #[cfg(windows)]
 mod platform {
@@ -87,12 +85,12 @@ mod platform {
     const SECTION: PCWSTR = w!("UnitySR");
 
     /// The configuration path handed to an entry point, with its terminator.
-    pub(crate) struct Ini(Vec<u16>);
+    pub struct Ini(Vec<u16>);
 
     impl Ini {
         /// # Safety
         /// `path` is null or a NUL-terminated UTF-16 string.
-        pub(crate) unsafe fn new(path: *const u16) -> Option<Self> {
+        pub unsafe fn new(path: *const u16) -> Option<Self> {
             if path.is_null() {
                 return None;
             }
@@ -102,24 +100,22 @@ mod platform {
             Some(Self(text))
         }
 
-        pub(crate) fn chars(&self) -> &[u16] {
+        pub fn chars(&self) -> &[u16] {
             &self.0[..self.0.len() - 1]
         }
 
-        pub(crate) fn as_ptr(&self) -> PCWSTR {
+        pub fn as_ptr(&self) -> PCWSTR {
             self.0.as_ptr()
         }
     }
 
     /// GetPrivateProfileIntW as the C++ read it: the INT result taken as UINT.
-    #[cfg_attr(not(feature = "mono-plugin"), allow(dead_code))]
-    pub(crate) fn profile_int(section: PCWSTR, name: PCWSTR, default: u32, file: PCWSTR) -> u32 {
+    pub fn profile_int(section: PCWSTR, name: PCWSTR, default: u32, file: PCWSTR) -> u32 {
         (unsafe { GetPrivateProfileIntW(section, name, default as i32, file) }) as u32
     }
 
     /// [UnitySR] `name` as an unsigned integer.
-    #[cfg_attr(not(feature = "mono-plugin"), allow(dead_code))]
-    pub(crate) fn setting(ini: &Ini, name: PCWSTR, default: u32) -> u32 {
+    pub fn setting(ini: &Ini, name: PCWSTR, default: u32) -> u32 {
         profile_int(SECTION, name, default, ini.as_ptr())
     }
 
@@ -143,7 +139,7 @@ mod platform {
 
     /// [UnitySR] `name` from `ini` as written, cut as GetPrivateProfileStringW cuts it for a
     /// buffer of `capacity` characters. Empty when unset.
-    pub(crate) fn string_setting(ini: &Ini, name: PCWSTR, capacity: usize) -> Vec<u16> {
+    pub fn string_setting(ini: &Ini, name: PCWSTR, capacity: usize) -> Vec<u16> {
         let read_capacity = rsf_game_sys::profile_text::read_capacity(capacity);
         let mut text = vec![0u16; read_capacity];
         let count = unsafe {
@@ -166,7 +162,7 @@ mod platform {
     }
 
     /// [UnitySR] `name` from `ini`, resolved by [`resolve`]. Empty when unset.
-    pub(crate) fn path_setting(ini: &Ini, name: PCWSTR) -> Vec<u16> {
+    pub fn path_setting(ini: &Ini, name: PCWSTR) -> Vec<u16> {
         resolve(
             ini.chars(),
             string_setting(ini, name, PATH_CAPACITY),

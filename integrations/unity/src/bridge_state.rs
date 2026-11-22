@@ -509,7 +509,7 @@ impl State {
 }
 
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_unity_frames_activate(enabled: u32) {
+pub extern "C" fn rsf_unity_frames_activate(enabled: u32) {
     let mut state = lock();
     if enabled != 0 {
         state.closed = false;
@@ -531,7 +531,7 @@ pub(crate) extern "C" fn rsf_unity_frames_report_managed(stage: u32) {
 }
 
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_unity_frames_managed_stage() -> u32 {
+pub extern "C" fn rsf_unity_frames_managed_stage() -> u32 {
     MANAGED_STAGE.load(Ordering::SeqCst)
 }
 
@@ -714,7 +714,7 @@ pub(crate) extern "C" fn rsf_unity_frames_set_policy(engine_spatial: u32, qualit
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_unity_mono_request_policy(
+pub unsafe extern "C" fn rsf_unity_mono_request_policy(
     engine_spatial: u32,
     quality: u32,
     generation: *mut u32,
@@ -731,7 +731,7 @@ pub(crate) unsafe extern "C" fn rsf_unity_mono_request_policy(
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_unity_mono_spatial_extent(
+pub unsafe extern "C" fn rsf_unity_mono_spatial_extent(
     quality: u32,
     width: u32,
     height: u32,

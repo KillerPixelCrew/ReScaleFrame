@@ -33,6 +33,7 @@ members = [
   "games/rdr2",
   "games/skyrim-se",
   "games/unity-mono",
+  "integrations/unity",
   "integrations/godot",
   "integrations/steam",
   "integrations/windows",

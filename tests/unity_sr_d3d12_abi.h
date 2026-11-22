@@ -6,7 +6,7 @@
 #include <rescaleframe/render_frontend.h>
 #include <rescaleframe/streamline_host.h>
 #include <rescaleframe/unity_bridge.h>
-#include "../games/unity-mono/include/rescaleframe/unity_runtime_host.h"
+#include "../integrations/unity/include/rescaleframe/unity_runtime_host.h"
 #include "../games/rdr2/src/runtime_setup.h"
 
 /* Bindgen cannot evaluate the public headers' cast macros directly. */

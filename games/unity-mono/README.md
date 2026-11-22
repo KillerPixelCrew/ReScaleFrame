@@ -8,14 +8,16 @@ The plugin owns Unity discovery, engine hooks, camera/frame conventions and SR r
 The shared orchestrator retains vendor SDKs, GPU interoperability and presentation. URP, HDRP
 and built-in rendering require separate adapters. IL2CPP is outside the initial Mono adapter.
 
-Build detection, the renderer lifecycle and the Mono helper bootstrap are Rust (`rsf-unity-mono`,
-linked as a staticlib); `plugin.def` publishes the Rust `rsf_get_game_plugin_api` entry. The Unity
-package (`integrations/unity/native`) links the shared-state variant of the same archive; a process
-has one Unity renderer, so only one bridge uses that state. Rust owns the state and policy; C keeps
+Build detection, the renderer lifecycle, runtime setup and the Mono helper bootstrap are Rust
+(`rsf-unity-mono`, `src/`, linked as a staticlib); `plugin.def` publishes the Rust
+`rsf_get_game_plugin_api` entry. The shared frame state, bridges and package state are the
+`rsf-unity` crate in `integrations/unity` (`src/` and `native/`): the Unity package links it whole and
+this plugin bundles its `mono-plugin` subset. A process has one Unity renderer, so only one bridge
+uses that state. Rust owns the state and policy; C keeps
 only the Unity graphics interfaces, the D3D11/D3D12/DXGI/Vulkan calls on vendor and engine objects and
 the exception guards.
 
-| Rust owns | Files |
+| Rust owns (`integrations/unity/src` unless marked) | Files |
 | --- | --- |
 | Frame state: packet validation and storage, policy generation, command-ring admission, source-submission bookkeeping, retirement | `bridge_state.rs` |
 | D3D12 submission ring, completion counter, shared D3D11/D3D12 fence values | `bridge_interop.rs`, `bridge_d3d12.rs`, `bridge_d3d11.rs`, `d3d11_pass.rs`, `d3d11_state.rs` |
@@ -23,10 +25,10 @@ the exception guards.
 | Vulkan typed graphics calls, HWND swapchain, shared images, command pool and slots | `vulkan_platform.rs`, `vulkan_platform/` |
 | Vulkan resolver keys, interceptor table, saved loader functions, Win32 interop extension selection | `vulkan_resolver.rs` |
 | Editor preview window selection and validation | `preview.rs` |
-| Runtime setup behind `rsf_unity_start`, `rsf_unity_fg_start`, `rsf_unity_sr_start`, `rsf_unity_sr_stop`: `[UnitySR]` keys, start gates, result codes, wait for Mono, FG descriptors | `runtime_setup.rs`, `generation.rs`, `runtime_config.rs` |
+| Runtime setup behind `rsf_unity_start`, `rsf_unity_fg_start`, `rsf_unity_sr_start`, `rsf_unity_sr_stop`: `[UnitySR]` keys, start gates, result codes, wait for Mono, FG descriptors | `runtime_setup.rs` (this crate), `generation.rs`, `runtime_config.rs` |
 | Package state: settings, `rsfu_status` and `rsfu_frame_counters`, render plan, session lifecycle, per-view SR contexts, presentation, session services | `package_state.rs`, `package_state/`, `package_views.rs` |
 
-C keeps `bridge.c`, `package.c` and `vulkan_bridge.c` (Unity graphics dispatch, the `rsfu_*` and bridge
+C keeps `integrations/unity/native`: `render_bridge.c`, `package.c` and `vulkan_bridge.c` (Unity graphics dispatch, the `rsfu_*` and bridge
 exports, guards for foreign callbacks, and the typed Win32, SDK and Runtime calls the package lends
 through `rsf_unity_package_platform`). The Editor preview lends Runtime a destination token and a
 source with its D3D12 state; Runtime owns the per-output swapchain, copy and submission fence and

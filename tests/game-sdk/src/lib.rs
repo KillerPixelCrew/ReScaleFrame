@@ -14,7 +14,7 @@
 mod sys {
     pub use rsf_anomaly::sys::*;
     pub use rsf_orchestrator::sys::*;
-    pub use rsf_unity_mono::sys::*;
+    pub use rsf_unity::sys::*;
     include!(concat!(env!("OUT_DIR"), "/sys.rs"));
 }
 
