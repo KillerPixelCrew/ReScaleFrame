@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include "vulkan_fg_resources.h"
-#include "native_vulkan_timing.h"
+#include "vulkan_timing_abi.h"
 #include <rescaleframe/native_fg_vulkan.h>
 #include <vulkan/vulkan.h>
 
@@ -142,8 +142,10 @@ inline constexpr rsf_vkfg_platform platform{
     [](void* user, uint64_t fence, uint64_t timeout_ns) -> int32_t {
         const auto& native = *static_cast<Device*>(user);
         const auto handle = reinterpret_cast<VkFence>(fence);
-        const VulkanTimingScope timing(native.wait_label, native.wait_frame);
-        return native.wait_fences(native.device, 1, &handle, VK_TRUE, timeout_ns);
+        const auto start = native.wait_label ? rsf_core_vk_timing_begin() : 0;
+        const auto result = native.wait_fences(native.device, 1, &handle, VK_TRUE, timeout_ns);
+        rsf_core_vk_timing_end(native.wait_label, native.wait_frame, start);
+        return result;
     },
     [](void* user, uint64_t fence) -> int32_t {
         const auto& native = *static_cast<Device*>(user);

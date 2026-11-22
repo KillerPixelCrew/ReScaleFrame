@@ -55,7 +55,7 @@ void rsf_core_latencyvk_sdk_result(int32_t, uint32_t marker);
 }
 
 #if defined(RSF_HAVE_STREAMLINE_VK)
-#include "native_vulkan_timing.h"
+#include "vulkan_timing_abi.h"
 
 extern "C" {
 int VulkanStorySlInitializeFeatures(const wchar_t*, const char*, uint32_t, uint32_t, uint32_t);
@@ -89,11 +89,17 @@ int32_t invoke(const rsf_slvk_call* call, void* module, uintptr_t token) noexcep
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 
 void pace(uint64_t frame, uint32_t mode, uint32_t limit, uint32_t sleep, int32_t* results) {
-    const rsf::VulkanTimingScope timing("cpu_pacing_total", frame);
-    results[0] = rsf::vk_timed_call("reflex_options",frame,[&] {
-        return VulkanStorySlSetReflexInterval(static_cast<int>(mode),limit);
-    });
-    results[1] = results[0]==0 && sleep ? rsf::vk_timed_call("reflex_sleep",frame,VulkanStorySlReflexSleep) : 0;
+    const auto start = rsf_core_vk_timing_begin();
+    const auto options_start = rsf_core_vk_timing_begin();
+    results[0] = VulkanStorySlSetReflexInterval(static_cast<int>(mode), limit);
+    rsf_core_vk_timing_end("reflex_options", frame, options_start);
+    results[1] = 0;
+    if (results[0] == 0 && sleep) {
+        const auto sleep_start = rsf_core_vk_timing_begin();
+        results[1] = VulkanStorySlReflexSleep();
+        rsf_core_vk_timing_end("reflex_sleep", frame, sleep_start);
+    }
+    rsf_core_vk_timing_end("cpu_pacing_total", frame, start);
 }
 
 constexpr rsf_vk_streamline_calls streamline{

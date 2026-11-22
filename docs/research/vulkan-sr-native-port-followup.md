@@ -28,3 +28,19 @@ the record types. The transfer is field by field and no public structure
 or size changed. MSYS2 Clang C11 syntax checks passed for the thin export
 boundary with FSR4 disabled and enabled. Pinned Rust formatting and
 `git diff --check` passed. Builds, tests, lint and devices remain user-owned.
+
+## Vulkan timing lifetime
+
+`runtime/orchestrator/src/native_vulkan_timing.h` was removed. Rust opens the
+timing file once on first use and registers the close callback with the
+linking image's CRT before it publishes the handle. Normal unload releases the
+file after the host drains callers. An unsuccessful registration drops the
+file immediately and disables timing for that image. The [MSVC CRT
+contract](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/atexit)
+documents DLL detach behavior. The GNU image still needs a link and unload check.
+
+The existing FG and latency leaves use C ABI begin/end calls. They keep the
+same tags and frame IDs. The outer WSI spans still include the borrow release,
+and the inner spans still measure the actual Vulkan call. Failed Reflex
+options still suppress sleep. The timing file format, QPC clock and 2,048
+sample limit stay in Rust. Pinned formatting and source review passed.

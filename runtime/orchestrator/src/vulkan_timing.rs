@@ -7,8 +7,8 @@ use std::io::Write;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::OpenOptionsExt;
 use std::ptr;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
+use std::sync::{Mutex, Once, PoisonError};
 use windows_sys::Win32::System::{
     Performance::{QueryPerformanceCounter, QueryPerformanceFrequency},
     Threading::GetCurrentThreadId,
@@ -90,25 +90,23 @@ impl Timing {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_vk_timing_open() -> *mut Timing {
-    std::env::var_os("RSF_VULKAN_TIMING_FILE")
-        .and_then(|path| Timing::open(&path))
-        .map_or(ptr::null_mut(), allocate_handle)
+// The final image's CRT runs this callback on normal DLL detach or executable exit.
+unsafe extern "C" {
+    fn atexit(callback: extern "C" fn()) -> i32;
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vk_timing_close(timing: *mut Timing) {
+static INITIALIZE: Once = Once::new();
+static TIMING: AtomicPtr<Timing> = AtomicPtr::new(ptr::null_mut());
+
+extern "C" fn close_timing() {
+    let timing = TIMING.swap(ptr::null_mut(), Ordering::AcqRel);
     if !timing.is_null() {
-        drop(unsafe { Box::from_raw(timing) });
+        // The host drains rendering before unloading the module.
+        unsafe { drop(Box::from_raw(timing)) };
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vk_timing_begin(timing: *const Timing) -> i64 {
-    let Some(timing) = (unsafe { timing.as_ref() }) else {
-        return 0;
-    };
+fn begin(timing: &Timing) -> i64 {
     if timing.records.load(Ordering::Relaxed) < MAX_RECORDS {
         counter()
     } else {
@@ -117,17 +115,32 @@ unsafe extern "C" fn rsf_core_vk_timing_begin(timing: *const Timing) -> i64 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vk_timing_end(
-    timing: *const Timing,
-    stage: *const c_char,
-    frame: u64,
-    start: i64,
-) {
+extern "C" fn rsf_core_vk_timing_begin() -> i64 {
+    INITIALIZE.call_once(|| {
+        let Some(timing) =
+            std::env::var_os("RSF_VULKAN_TIMING_FILE").and_then(|path| Timing::open(&path))
+        else {
+            return;
+        };
+        let timing = allocate_handle(timing);
+        if !timing.is_null() {
+            if unsafe { atexit(close_timing) } == 0 {
+                TIMING.store(timing, Ordering::Release);
+            } else {
+                unsafe { drop(Box::from_raw(timing)) };
+            }
+        }
+    });
+    unsafe { TIMING.load(Ordering::Acquire).as_ref() }.map_or(0, begin)
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_vk_timing_end(stage: *const c_char, frame: u64, start: i64) {
     if start <= 0 || stage.is_null() {
         return;
     }
     let end = counter();
-    let Some(timing) = (unsafe { timing.as_ref() }) else {
+    let Some(timing) = (unsafe { TIMING.load(Ordering::Acquire).as_ref() }) else {
         return;
     };
     if end >= start
@@ -159,7 +172,7 @@ mod tests {
         for frame in 1..=u64::from(MAX_RECORDS) + 2 {
             timing.write("submit", frame, 17, 1, 1 + frequency);
         }
-        assert_eq!(unsafe { rsf_core_vk_timing_begin(&timing) }, 0);
+        assert_eq!(begin(&timing), 0);
         drop(timing);
         drop(Timing::open(path.as_os_str()).unwrap());
 
