@@ -24,7 +24,7 @@ use windows::Win32::{
     System::{Threading::GetCurrentThreadId, WindowsProgramming::GetPrivateProfileIntW},
     UI::WindowsAndMessaging::*,
 };
-use windows::core::{PCWSTR, c, w};
+use windows::core::{PCWSTR, w};
 
 const OK: i32 = 0;
 const INVALID: i32 = -1;
@@ -181,8 +181,8 @@ impl Pipeline {
             runtime_directory_utf8: runtime.as_ptr(),
             log: Some(log),
             user: null_mut(),
-            engine_version_utf8: c!("Minecraft 1.21.1").as_ptr(),
-            project_id_utf8: c!("11e3ed7f-06c6-4863-a54d-2b790f2176f2").as_ptr(),
+            engine_version_utf8: c"Minecraft 1.21.1".as_ptr(),
+            project_id_utf8: c"11e3ed7f-06c6-4863-a54d-2b790f2176f2".as_ptr(),
             presentation_hwnd: child,
         };
         let mut pipeline = Self(null_mut());
@@ -584,7 +584,7 @@ fn verify_settings(
                 pipeline.0,
                 file.wide.as_ptr(),
                 w!("Render").0,
-                c!("OpenGL fixture").as_ptr(),
+                c"OpenGL fixture".as_ptr(),
                 &legacy,
                 60,
             ) == OK,
@@ -676,8 +676,8 @@ impl Capture {
             unsafe {
                 rsf_input_dump_configure(
                     encoded.as_ptr(),
-                    c!("OpenGLFixture").as_ptr(),
-                    c!("fixture").as_ptr(),
+                    c"OpenGLFixture".as_ptr(),
+                    c"fixture".as_ptr(),
                     Some(log),
                     null_mut(),
                 )

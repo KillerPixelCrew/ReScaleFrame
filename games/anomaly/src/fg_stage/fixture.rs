@@ -167,7 +167,15 @@ fn cpu_contract(
     );
     unsafe { ping_message(0xc123) };
     rsf_anomaly_fg_stage_input_received(0, 0xc123);
-    let last = || INPUT_FACTS.with_borrow(|facts| facts.last().copied().unwrap_or_default());
+    // The event record is plain data; an empty log reads as a zeroed record.
+    let last = || {
+        INPUT_FACTS.with_borrow(|facts| {
+            facts
+                .last()
+                .copied()
+                .unwrap_or_else(|| unsafe { std::mem::zeroed() })
+        })
+    };
     let message = last();
     checks.require(
         message.source_frame_id == 0 && message.flags & RSF_GAME_CPU_WINDOW_MESSAGE != 0,

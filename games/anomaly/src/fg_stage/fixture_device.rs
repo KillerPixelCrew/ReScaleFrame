@@ -798,7 +798,8 @@ pub(super) fn run(
         abi_version: RSF_D3D11_PRESENT_API_VERSION,
         ..Default::default()
     };
-    if unsafe { query(&mut present) } != RSF_OK as i32 || present.backend.is_none() {
+    // RSF_OK; game_api.h defines it as a cast, which the bindings do not carry.
+    if unsafe { query(&mut present) } != 0 || present.backend.is_none() {
         return 1;
     }
     let Some(mut scene) = setup_scene(device, context, chain, present, fg, driver) else {

@@ -5,7 +5,8 @@ extern int RSF_CAPTURE_FIXTURE(const char*, const rsf_fixture_vk_capture_api*);
 
 int main(int argc, char** argv)
 {
-    static const rsf_fixture_vk_capture_api api = {
+    /* Automatic storage: the dllimport addresses are not link-time constants. */
+    const rsf_fixture_vk_capture_api api = {
         rsf_input_dump_vk_create, rsf_input_dump_vk_snapshot,
         rsf_input_dump_vk_drain, rsf_input_dump_vk_destroy,
     };

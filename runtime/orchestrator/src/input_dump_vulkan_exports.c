@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+#include <rescaleframe/input_dump_vulkan.h>
 #include "rust_export.h"
 
 RSF_EXPORT(rsf_input_dump_vk_create)

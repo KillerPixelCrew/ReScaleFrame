@@ -455,9 +455,8 @@ unsafe extern "C" fn rsf_d3d11_host_fixture_shared_sr(
     calls: *const rsf_d3d11_fixture_sr_calls,
     capture_root: *const u16,
 ) -> i32 {
-    let root = PathBuf::from(OsString::from_wide(unsafe {
-        PCWSTR(capture_root).as_wide()
-    }));
+    let root = PCWSTR(capture_root);
+    let root = PathBuf::from(OsString::from_wide(unsafe { root.as_wide() }));
     unsafe { run_scenario(&*resources, &*calls, &root) }.unwrap_or_else(|label| {
         eprintln!("FAIL shared-SR fixture: {label}");
         1

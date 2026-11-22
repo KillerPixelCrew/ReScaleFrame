@@ -211,6 +211,8 @@ RSF_EXPORT(rsf_sr12_quality_supported)
 RSF_EXPORT(rsf_sr12_plan)
 RSF_EXPORT(rsf_sr12_evaluate)
 RSF_EXPORT(rsf_sr12_set_sharpening)
+/* rsf_sharpening_defaults() in sharpening_settings.h calls it from DLL consumers. */
+RSF_EXPORT(rsf_sharpening_core_defaults)
 RSF_EXPORT(rsf_sr12_destroy)
 RSF_EXPORT(rsf_sr12_present)
 RSF_EXPORT(rsf_sr12_capture)

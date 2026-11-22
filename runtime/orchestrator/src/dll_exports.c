@@ -1,4 +1,6 @@
 /* SPDX-License-Identifier: MIT */
+#include <rescaleframe/d3d11_fg_api.h>
+#include <rescaleframe/d3d11_sr_api.h>
 #include "rust_export.h"
 
 /* The query is a Runtime DLL entry. Embedded carriers use the native callbacks. */

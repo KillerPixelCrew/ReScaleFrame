@@ -395,7 +395,7 @@ fn debug_messages(info: &ID3D12InfoQueue) -> Result {
             let summary = if message.pDescription.is_null() {
                 c"unknown D3D12 error"
             } else {
-                unsafe { CStr::from_ptr(message.pDescription.0.cast()) }
+                unsafe { CStr::from_ptr(message.pDescription.cast()) }
             };
             return Err(format!(
                 "D3D12 debug validation: {}",

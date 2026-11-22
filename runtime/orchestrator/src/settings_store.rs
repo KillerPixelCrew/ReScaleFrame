@@ -133,7 +133,12 @@ unsafe extern "C" {
 // MSVC's inline bounded swprintf forwards to _vswprintf_c. Use the bounded
 // variadic entry point from the same CRT so locale, rounding and spellings agree.
 #[cfg(target_env = "msvc")]
-#[link(name = "legacy_stdio_definitions", kind = "static")]
+// The CRT library is linked by the final image (cmake/rust_static.cmake), never bundled.
+#[link(
+    name = "legacy_stdio_definitions",
+    kind = "static",
+    modifiers = "-bundle"
+)]
 unsafe extern "C" {
     #[link_name = "_swprintf_c"]
     fn format_decimal(text: *mut u16, capacity: usize, format: *const u16, ...) -> i32;

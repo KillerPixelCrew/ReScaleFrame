@@ -14,6 +14,7 @@ crate-type = ["staticlib", "rlib"]
 fg-fixture = ["windows/Win32_Graphics_Dxgi"]
 input-hook-fixture = []
 overlay-device-fixture = [
+  "windows/std",
   "windows/Win32_Devices_HumanInterfaceDevice",
   "windows/Win32_Graphics_Dxgi",
   "windows/Win32_Graphics_Imaging",

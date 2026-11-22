@@ -21,7 +21,8 @@ function(rsf_add_rust_static target build_target package archive)
     add_dependencies(${target} ${build_target})
     target_link_libraries(${target} INTERFACE "${rust_archive}" ntdll userenv ws2_32 dbghelp)
     if(MSVC)
-        target_link_libraries(${target} INTERFACE synchronization)
+        # legacy_stdio_definitions: the bounded swprintf entry the settings store formats with.
+        target_link_libraries(${target} INTERFACE synchronization legacy_stdio_definitions)
     endif()
 endfunction()
 

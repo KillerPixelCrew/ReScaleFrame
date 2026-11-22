@@ -71,10 +71,9 @@ impl Gpu {
         let module =
             unsafe { LoadLibraryExW(name.as_ptr(), ptr::null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32) };
         require(!module.is_null(), "Vulkan loader")?;
-        let mut gpu = Self {
-            module,
-            ..Self::default()
-        };
+        // Gpu releases its resources on drop, so it is filled in place rather than by update.
+        let mut gpu = Self::default();
+        gpu.module = module;
         gpu.initialize(setup)?;
         Ok(gpu)
     }

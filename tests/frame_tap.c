@@ -330,8 +330,9 @@ static void set_viewport(ID3D11DeviceContext* context, float width, float height
 static rsf_ac7_scene_color selection = {0};
 static uint32_t input_reports = 0;
 
-static void collect_input_draw(void*, const rsf_frame_tap_target_draw* draw)
+static void collect_input_draw(void* user, const rsf_frame_tap_target_draw* draw)
 {
+    (void)user;
     ++input_reports;
     rsf_ac7_scene_color_draw(&selection, draw);
 }
@@ -518,8 +519,9 @@ rsf_depth_replay* depth_fixture = NULL;
 static rsf_frame_tap_geometry last_geometry = {0};
 static uint32_t geometry_reports = 0, depth_draws = 0, geometry_calls = 0, geometry_rejected = 0;
 
-static void collect_geometry(void*, const rsf_frame_tap_geometry* draw)
+static void collect_geometry(void* user, const rsf_frame_tap_geometry* draw)
 {
+    (void)user;
     ++geometry_calls;
     if (!depth_fixture || !rsf_ac7_scene_depth_candidate(draw)) {
         ++geometry_rejected;
