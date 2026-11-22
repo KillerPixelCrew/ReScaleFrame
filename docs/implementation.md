@@ -3955,6 +3955,12 @@ the lookup and adapter setup order. The expanded fixture, binary
 linkage and device checks remain open.
 [Context setup](research/rust-gl-shared-surface-cutover.md#context-capability-and-adapter-setup)
 
+The D08 follow-up moves explicit OpenGL chain creation, sibling-owner
+dispatch and the GL hardware fixture to Rust. Source, pinned formatting,
+bindings and locked offline metadata checks passed. Windows linkage and
+device behavior remain unverified for this follow-up.
+[D08 source port](research/rust-gl-pipeline-residual.md)
+
 The integrated build passed all 371 locked Rust tests, formatting,
 Clippy and eight MSVC Release contracts. The test gate skipped the
 OpenGL device fixture. Runtime, AC7, Loader, its two aliases, Minecraft,

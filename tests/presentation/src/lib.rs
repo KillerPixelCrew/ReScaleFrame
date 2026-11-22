@@ -10,6 +10,14 @@ mod fg_bridge;
 mod fixture_device;
 mod fixture_device_abi;
 mod fsr4_fg_bridge;
+#[cfg(feature = "gl-device-fixture")]
+mod gl_fixture;
+#[cfg(feature = "gl-device-fixture")]
+mod gl_fixture_abi;
+#[cfg(feature = "gl-device-fixture")]
+mod gl_pipeline_fixture;
+#[cfg(feature = "gl-device-fixture")]
+mod gl_pipeline_fixture_abi;
 mod shared_surface_abi;
 
 use shared_surface_abi::*;

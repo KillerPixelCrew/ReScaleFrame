@@ -773,6 +773,26 @@ generate("runtime/orchestrator/src/vulkan_sr_abi.rs", "runtime/orchestrator/incl
           "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist", "--raw-line", "use crate::render_abi::rsf_sharpening_options;",
           "--raw-line", "use rsf_game_sys::rsf_frame_record;"])
+generate("tests/presentation/src/gl_fixture_abi.rs", "runtime/presentation/include/rescaleframe/gl_shared_surface.h",
+         "rsf_gl_(context|texture|setup|texture_info)", "RSF_GL_.*",
+         ["-Iruntime/presentation/include", "-Iruntime/contract/include", "-Isdk/game/include"],
+         ["--allowlist-function", "rsf_gl_(open|graphics|texture_(create|get|destroy)|begin|submit|drain|close)",
+          "--with-derive-default"])
+generate("tests/presentation/src/gl_pipeline_fixture_abi.rs", "runtime/orchestrator/include/rescaleframe/gl_pipeline.h",
+         "rsf_(gl_pipeline(_(setup|options|surfaces|status))?|native_latency_status|overlay_(api|diagnostics)|"
+         "render_settings|streamline_host)", "RSF_(OVERLAY_API_VERSION|RENDER_FRONTEND_ABI_VERSION|FG_(OFF|FIXED)|REFLEX_(OFF|ON)|SR_(DLSS|FSR3))",
+         ["-include", "rescaleframe/input_dump.h", "-include", "rescaleframe/native_cpu.h",
+          "-include", "rescaleframe/overlay_api.h", "-include", "rescaleframe/d3d11_present_bridge.h",
+          "-include", "rescaleframe/sr_session.h",
+          "-Iruntime/orchestrator/include", "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include",
+          "-Iruntime/contract/include", "-Iruntime/presentation/include", "-Isdk/game/include"],
+         ["--blocklist-type", "rsf_(game_render_pass|game_render_pass_role|camera_frame)",
+          "--with-derive-default", "--raw-line", "#![allow(dead_code)]",
+          "--raw-line", "use rsf_game_sys::rsf_game_render_pass;",
+          "--allowlist-function", "rsf_(gl_window_(create|destroy)|gl_pipeline_(open|configure(_settings)?|"
+          "settings_(open|revision)|get_surfaces|cpu|input|pcl_message|abort|evaluate|hudless|present|status_get|close)|"
+          "native_latency_status_get|d3d11_present_host|streamline_host_token|input_dump_(configure|request)|"
+          "get_overlay_(api|diagnostics))"])
 generate("runtime/orchestrator/src/gl_pipeline_abi.rs", "runtime/orchestrator/include/rescaleframe/gl_pipeline.h",
          "rsf_(gl_pipeline_(setup|options|surfaces|status)|gl_(setup|texture_info)|sr12_setup|dlss_setup)",
          "RSF_(GL_(RGBA16F|R32F|RG16F|RGBA8)|UI_MODE_BACKBUFFER_HUDLESS)",

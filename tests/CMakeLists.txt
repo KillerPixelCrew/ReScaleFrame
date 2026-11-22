@@ -766,8 +766,12 @@ target_link_libraries(rsf_ac7_native_graph_test PRIVATE ReScaleFrame::AC7RenderS
 add_test(NAME ac7_native_graph COMMAND rsf_ac7_native_graph_test)
 set_tests_properties(ac7_native_graph PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
-add_executable(rsf_gl_shared_surface_test gl_shared_surface.cpp)
-target_link_libraries(rsf_gl_shared_surface_test PRIVATE rsf_minecraft_rust ReScaleFrame::OrchestratorCore rsf_build_options opengl32)
+rsf_add_rust_static(rsf_gl_fixtures_rust rsf_rust_gl_fixtures
+    rsf-presentation-fixtures rsf_presentation_fixtures --features gl-device-fixture)
+add_executable(rsf_gl_shared_surface_test presentation/gl_shared_surface_main.c)
+set_target_properties(rsf_gl_shared_surface_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON
+    LINKER_LANGUAGE CXX)
+target_link_libraries(rsf_gl_shared_surface_test PRIVATE rsf_gl_fixtures_rust rsf_minecraft_rust ReScaleFrame::OrchestratorCore rsf_build_options opengl32)
 add_test(NAME gl_shared_surface COMMAND rsf_gl_shared_surface_test)
 set_tests_properties(gl_shared_surface PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
 

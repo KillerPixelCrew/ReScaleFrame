@@ -8,6 +8,10 @@ license.workspace = true
 
 [features]
 d3d11-host-device-fixtures = ["windows/Win32_System_Performance"]
+gl-device-fixture = [
+  "windows/Win32_Graphics_OpenGL",
+  "windows/Win32_System_WindowsProgramming",
+]
 
 [lib]
 crate-type = ["staticlib"]
