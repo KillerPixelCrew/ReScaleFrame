@@ -70,7 +70,7 @@ struct FfxOps {
 };
 struct Platform {
     const rsf_vkdlss_platform* dlss;
-    const rsf::xess_vk::Ops* xess;
+    const rsf_xessvk_ops* xess;
     FfxOps ffx;
     int32_t (*dump_begin)(const rsf_frame_record*, uint32_t);
     int32_t (*dump_wants)(const rsf_frame_record*);
@@ -296,7 +296,7 @@ catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 
 constexpr Platform native{
     rsf::dlss_vk::platform,
-    rsf::xess_vk::platform,
+    RSF_XESSVK_NATIVE_PLATFORM,
     {rsf_vk_sdk_system_loader, rsf_core_srvk_native_allocate, rsf_core_srvk_native_close,
         rsf_vkffx_symbol, rsf_core_srvk_native_bind, call_device_proc, rsf_core_srvk_graphics_initialize,
         versions, create_effect, effective_version, destroy_effect, plan,

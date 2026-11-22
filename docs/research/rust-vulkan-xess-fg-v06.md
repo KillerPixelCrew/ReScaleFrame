@@ -258,3 +258,46 @@ The independent C++ typed SR SDK mock remains byte-for-byte the same
 within its conditional. Synthetic provider coverage remains separate.
 Strict C11 launcher syntax and C++ mock syntax passed. Build and device
 execution remain pending.
+
+## C++ removal from `f43a03ae`
+
+This change finishes V06's native inventory. No first-party C++ remains in
+the XeSS Vulkan SR leaf, the integrated FG glue or the XeSS-FG bridge.
+
+| PORT path | Disposition |
+| --- | --- |
+| `runtime/orchestrator/src/native_xess_vulkan.cpp` | Ported. `vulkan_sr/xess/native.rs` defines `rsf_xessvk_native_ops` with the same 31-slot layout. It binds the ten SDK exports in `REQUIRED_EXPORTS` order to their C signatures and calls them directly. It also owns the per-context graphics, capture (command retirement) and sharpening state, released in the original order. `native_xess_vulkan.c` keeps the four public exports, the build-time SDK selection and the SDK layout and value assertions. |
+| `runtime/orchestrator/src/native_xess_vulkan.h` | C declarations only: the opaque table typedef, the selection macro and the four Rust entry points. V01's `native_sr_vulkan.cpp` now names the table type `rsf_xessvk_ops`. |
+| `tests/native_xess_vulkan.cpp` | Ported to `tests/vulkan-fg/src/xess_input_range.rs` (feature `xess-input-range`) with the C11 CPU launcher. It copies the production table, substitutes the loader, pin and lookup slots, and keeps the inert SDK and Vulkan entries, export-order check, missing-export refusal, reset sequence, range rejections and retirement counts. |
+| `runtime/orchestrator/src/native_fg_xess_vulkan.cpp`, `native_fg_xess_vulkan_present.cpp` | Converted to C11 leaves. They hold only integrated bridge exports and the public `rsf_xessgvk_*` forwarders, which remain the substitution seam for the dispatch fixture. `vulkan_xess_fg.rs` now selects the V02 graphics table and V03 importer from this crate, so the private table shrinks from 17 to 15 slots. |
+| `runtime/vulkan/xess-fg/bridge.cpp` | Converted to `bridge.c` (C11) for both builds. The integrated build still routes DXGI and D3D12 calls through the Runtime crate. The standalone MinGW build links `session.rs` as a dependency-free staticlib, so its COM calls stay in this leaf and use the explicit C vtable form. SDK entry types are checked against the Intel prototypes with `_Generic` in `_Static_assert`, which adds no import reference. |
+| `runtime/vulkan/xess-fg/diagnostic-capture.h` | C declarations only. The callback table is `rsf_xess_diagnostics_v2`. The callbacks, digest and standalone readback leaves moved into `bridge.c`. |
+
+`session_abi.h`, `dx12-runtime.h` and `native_fg_xess_vulkan_platform.h` were
+already checked off but still used C++ syntax. They are now C declarations so
+the C leaves can include them. The bridge platform ABI stays at version 8 and
+552 bytes. Public bridge ABI 1, the export names and `xess_fg.def` are unchanged.
+
+Two SDK headers are not valid C as shipped. `xess.h` uses `bool` without
+`stdbool.h`, and `xell.h` applies `sizeof` to the enum tag
+`_xell_latency_marker_type_t`. The leaves include `stdbool.h` and declare a
+matching typedef before the SDK include. MSVC `/std:c11 /W4` and MinGW
+`-std=c11 -Wall -Wextra` accept both.
+
+Behavior notes. The timing and serialize environment switches are sampled once
+per process on first use through `InitOnceExecuteOnce`, instead of during C++
+static initialization. The diagnostic copy skips its transitions when the
+callback state is already COPY_SOURCE, as the inline C++ helper did. The bridge
+links `dxguid` for the interface IDs that C passes by address.
+
+Verification. The integrated and standalone `bridge.c` modes passed MSVC
+`/std:c11 /Zs /W4` and MinGW `-std=c11 -Wall -Wextra` syntax checks, and the
+standalone mode compiled to an object. The two FG leaves and
+`native_xess_vulkan.c` passed MSVC `/W4 /WX` with the SDK enabled and
+disabled. `native_sr_vulkan.cpp` passed an MSVC C++20 syntax check. The
+fixture crate passed `cargo check` and `cargo clippy` with
+`xess-input-range`. `rsf-orchestrator` could not be type-checked or built
+because the integration tip and the WIP tip-build-fix branch both fail name
+resolution in unrelated files. The standalone DLL could not link because the
+`x86_64-pc-windows-gnu` Rust target is not installed here. The CMake build,
+the CPU input-range test and the device fixtures remain to be run.

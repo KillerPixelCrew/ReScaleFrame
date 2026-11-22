@@ -1,10 +1,13 @@
-// SPDX-License-Identifier: MIT
+/* SPDX-License-Identifier: MIT */
 #pragma once
 
+/* Typed DXGI and D3D12 calls owned by the Runtime crate
+   (frame_capture12/native/xess/context.rs) for the integrated bridge. */
 #if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
-struct rsf_xess_dx12_timestamps;
-namespace rsf_xess_dx12 {
+#ifdef __cplusplus
 extern "C" {
+#endif
+typedef struct rsf_xess_dx12_timestamps rsf_xess_dx12_timestamps;
 int32_t rsf_core_xess_dx12_factory(void**);
 int32_t rsf_core_xess_dx12_adapter(void*, uint64_t, void**);
 int32_t rsf_core_xess_dx12_device(void*, void**);
@@ -30,6 +33,7 @@ uint32_t rsf_core_xess_dx12_timestamps_begin(rsf_xess_dx12_timestamps**, void*, 
 void rsf_core_xess_dx12_timestamps_copy(rsf_xess_dx12_timestamps*, void*, uint32_t, uint32_t);
 void rsf_core_xess_dx12_timestamps_enter(rsf_xess_dx12_timestamps*, uint32_t, int64_t);
 void rsf_core_xess_dx12_timestamps_finish(rsf_xess_dx12_timestamps*, void*, uint32_t, int64_t);
+#ifdef __cplusplus
 }
-}
+#endif
 #endif

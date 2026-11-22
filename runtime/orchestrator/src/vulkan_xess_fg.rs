@@ -32,10 +32,10 @@ const ABI: u32 = 1;
 const REQUIRED_MARKERS: u8 = 0b1111;
 const LAST_MARKER: u32 = 6;
 
+// Integrated bridge exports from native_fg_xess_vulkan_present.c. The shared
+// graphics table and importer are this crate's own and are selected below.
 #[repr(C)]
 struct Ops {
-    graphics: *const GraphicsOps,
-    importer: *const InteropOps,
     interop_create: unsafe extern "C" fn(*const Graphics, Handle, u32, *mut Handle) -> i32,
     create: unsafe extern "C" fn(*const BridgeCreate, *mut Handle) -> i32,
     start: unsafe extern "C" fn(Handle, *const BridgeStart) -> i32,
@@ -68,7 +68,7 @@ const _: () = {
     assert!(size_of::<BridgeStart>() == 32);
     assert!(size_of::<BridgeFrame>() == 216);
     assert!(size_of::<BridgeStatus>() == 24);
-    assert!(size_of::<Ops>() == 17 * size_of::<Handle>());
+    assert!(size_of::<Ops>() == 15 * size_of::<Handle>());
     assert!(size_of::<ImportCreate>() == 5 * size_of::<Handle>());
 };
 
@@ -127,9 +127,23 @@ unsafe extern "C" {
         height: u32,
         output: *mut InteropImage,
     ) -> i32;
-    fn rsf_dx12vk_interop_timeline(owner: *const c_void) -> u64;
+    fn rsf_dx12vk_interop_timeline(owner: Handle) -> u64;
     fn rsf_dx12vk_interop_destroy(owner: Handle, queues_drained: u32) -> i32;
+    fn rsf_dx12vk_interop_release_guides(owner: Handle, depth: u64, motion: u64) -> i32;
+    fn rsf_dx12gvk_graphics() -> *const GraphicsOps;
+}
 
+// V03 importer entries used by the shared presenter.
+static IMPORTER: InteropOps = InteropOps {
+    image: rsf_dx12vk_interop_image,
+    timeline: rsf_dx12vk_interop_timeline,
+    destroy: rsf_dx12vk_interop_destroy,
+    release_guides: rsf_dx12vk_interop_release_guides,
+};
+
+// The V02 graphics table, a static in this crate.
+fn graphics() -> &'static GraphicsOps {
+    unsafe { &*rsf_dx12gvk_graphics() }
 }
 
 #[unsafe(no_mangle)]
@@ -145,7 +159,7 @@ unsafe extern "C" fn rsf_xessvk_interop_image(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_xessvk_interop_timeline(owner: *const c_void) -> u64 {
-    unsafe { rsf_dx12vk_interop_timeline(owner) }
+    unsafe { rsf_dx12vk_interop_timeline(owner.cast_mut()) }
 }
 
 #[unsafe(no_mangle)]
@@ -426,7 +440,7 @@ impl Vendor for Xess {
     }
 
     fn importer_ops(&self) -> &InteropOps {
-        unsafe { &*self.ops.importer }
+        &IMPORTER
     }
 }
 
@@ -539,7 +553,7 @@ unsafe extern "C" fn rsf_core_xessgvk_create(
         timeline_enabled: options.timeline_enabled,
         generated_count: options.generated_count,
     };
-    let Some(swapchain) = shared::describe(unsafe { &*ops.graphics }, setup) else {
+    let Some(swapchain) = shared::describe(graphics(), setup) else {
         return XESS_INVALID;
     };
     if !setup_valid(setup, &start)
@@ -550,15 +564,7 @@ unsafe extern "C" fn rsf_core_xessgvk_create(
     }
     let vendor = Xess::new(ops, options.intel_runtime_directory);
     status_result(unsafe {
-        shared::create(
-            vendor,
-            &*ops.graphics,
-            setup,
-            swapchain,
-            start,
-            output,
-            chain,
-        )
+        shared::create(vendor, graphics(), setup, swapchain, start, output, chain)
     })
 }
 
@@ -812,8 +818,6 @@ mod tests {
 
     fn operations() -> Box<Ops> {
         Box::new(Ops {
-            graphics: ptr::null(),
-            importer: ptr::null(),
             interop_create: unused_import,
             create: unused_create,
             start: unused_start,

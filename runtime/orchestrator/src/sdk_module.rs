@@ -157,7 +157,7 @@ impl Drop for SdkModule {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vk_sdk_load(path: *const u16) -> *mut c_void {
+pub(super) unsafe extern "C" fn rsf_core_vk_sdk_load(path: *const u16) -> *mut c_void {
     unsafe {
         LoadLibraryExW(
             path,
@@ -168,12 +168,12 @@ unsafe extern "C" fn rsf_core_vk_sdk_load(path: *const u16) -> *mut c_void {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vk_sdk_unload(module: *mut c_void) {
+pub(super) unsafe extern "C" fn rsf_core_vk_sdk_unload(module: *mut c_void) {
     unsafe { FreeLibrary(module) };
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vk_sdk_pin(module: *mut c_void) -> u32 {
+pub(super) unsafe extern "C" fn rsf_core_vk_sdk_pin(module: *mut c_void) -> u32 {
     let mut pinned = null_mut();
     u32::from(
         unsafe {

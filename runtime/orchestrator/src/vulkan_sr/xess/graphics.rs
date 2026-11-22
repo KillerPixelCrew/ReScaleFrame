@@ -7,7 +7,7 @@ use crate::vulkan_fg_copy::{rsf_core_vkfg_record_barrier, rsf_core_vkfg_record_c
 use crate::vulkan_fg_resources::device::{Device, rsf_core_vkfg_device_memory};
 use ash::vk::{self, Handle as _};
 
-struct Graphics {
+pub(super) struct Graphics {
     images: Device,
     barrier: vk::PFN_vkCmdPipelineBarrier,
     copy: vk::PFN_vkCmdCopyImage,
@@ -50,7 +50,7 @@ impl Graphics {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xessvk_graphics_bind(
+pub(super) unsafe extern "C" fn rsf_core_xessvk_graphics_bind(
     setup: &Setup,
     capture: *mut CaptureOwner,
     output: &mut *mut Graphics,
@@ -68,21 +68,21 @@ unsafe extern "C" fn rsf_core_xessvk_graphics_bind(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xessvk_graphics_destroy(graphics: *mut Graphics) {
+pub(super) unsafe extern "C" fn rsf_core_xessvk_graphics_destroy(graphics: *mut Graphics) {
     if !graphics.is_null() {
         unsafe { drop(Box::from_raw(graphics)) };
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xessvk_graphics_images(graphics: *mut Graphics) -> Handle {
+pub(super) unsafe extern "C" fn rsf_core_xessvk_graphics_images(graphics: *mut Graphics) -> Handle {
     unsafe { graphics.as_mut() }.map_or(std::ptr::null_mut(), |graphics| {
         (&raw mut graphics.images).cast()
     })
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xessvk_graphics_barrier(
+pub(super) unsafe extern "C" fn rsf_core_xessvk_graphics_barrier(
     graphics: &Graphics,
     commands: Handle,
     plan: &Barrier,
@@ -97,7 +97,7 @@ unsafe extern "C" fn rsf_core_xessvk_graphics_barrier(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xessvk_graphics_copy(
+pub(super) unsafe extern "C" fn rsf_core_xessvk_graphics_copy(
     graphics: &Graphics,
     commands: Handle,
     plan: &ImageCopy,

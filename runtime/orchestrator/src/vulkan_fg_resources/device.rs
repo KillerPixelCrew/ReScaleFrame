@@ -324,7 +324,7 @@ unsafe extern "C" fn submit_fence(user: *mut c_void, fence: u64) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-static rsf_core_vkfg_platform: rsf_vkfg_platform = rsf_vkfg_platform {
+pub(crate) static rsf_core_vkfg_platform: rsf_vkfg_platform = rsf_vkfg_platform {
     local_memory_types: Some(local_memory_types),
     create_image: Some(create_image),
     requirements: Some(requirements),

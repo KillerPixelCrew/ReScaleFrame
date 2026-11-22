@@ -35,14 +35,22 @@ mod wsi;
 #[cfg(feature = "wsi-dispatch")]
 mod wsi_abi;
 
-#[cfg(any(feature = "xess-device", feature = "xess-sr"))]
+#[cfg(any(
+    feature = "xess-device",
+    feature = "xess-sr",
+    feature = "xess-input-range"
+))]
 #[allow(dead_code)]
 #[path = "../../../runtime/orchestrator/src/vulkan_sr_abi.rs"]
 mod vulkan_sr_abi;
 #[cfg(feature = "xess-device")]
 mod xess_interop;
 
-#[cfg(any(feature = "xess-device", feature = "xess-sr"))]
+#[cfg(any(
+    feature = "xess-device",
+    feature = "xess-sr",
+    feature = "xess-input-range"
+))]
 mod render_abi {
     pub use rsf_game_sys::sharpening_abi::rsf_sharpening_options;
 }
@@ -61,9 +69,14 @@ mod vulkan_fg_abi;
 #[cfg(feature = "xess-device")]
 mod xess_present;
 
-#[cfg(feature = "xess-sr")]
+#[cfg(feature = "xess-input-range")]
+mod xess_input_range;
+#[cfg(any(feature = "xess-sr", feature = "xess-input-range"))]
 #[path = "../../../runtime/orchestrator/src/vulkan_sr/xess_requirements_abi.rs"]
 mod xess_requirements_abi;
+#[cfg(feature = "xess-input-range")]
+#[path = "../../../runtime/orchestrator/src/vulkan_sr/xess_sdk_abi.rs"]
+mod xess_sdk_abi;
 #[cfg(feature = "xess-sr")]
 mod xess_sr;
 

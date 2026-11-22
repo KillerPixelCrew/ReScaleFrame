@@ -18,6 +18,7 @@ dlss = ["dep:ash"]
 streamline-selected = []
 streamline-dispatch = ["dep:ash"]
 xess-sr = ["dep:ash", "dep:windows-sys"]
+xess-input-range = ["dep:ash"]
 xess-device = [
   "dep:ash", "dep:windows-sys", "windows-sys/Win32_Graphics_Gdi",
   "windows-sys/Win32_UI_WindowsAndMessaging",

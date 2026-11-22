@@ -3,7 +3,7 @@
 `VulkanStoryXessFg.dll`: drives XeSS-FG and XeLL through a DX12 presenter fed from the Vulkan renderer. Diagnostic environment keys use the `VULKANSTORY_XESS` prefix.
 Moved from Optimum's `native/optimum-xess-fg` (revision `386e0d0`).
 
-Build on Windows with x64 MinGW `g++`, the repository's Rust toolchain with the
+Build on Windows with x64 MinGW `gcc`, the repository's Rust toolchain with the
 `x86_64-pc-windows-gnu` target, and `VULKAN_SDK` set.
 
 ```powershell
@@ -22,5 +22,6 @@ failed drain or teardown keeps the session and its remaining leases alive.
 The session also owns the opt-in diagnostic capture (`capture.rs`): source
 records, admission, budgets, duplicate refusal, the generated-callback counter
 and the pending readbacks, published only after the drained DX12 fence.
-`diagnostic-capture.h` keeps the fingerprint check, the private SDK callback
-table, the DX12 readback, copy and map calls and the file formats.
+`diagnostic-capture.h` declares the private SDK callback table and the Runtime
+capture calls. `bridge.c` binds the SDK exports and keeps the Win32, COM and
+DX12 readback, copy and map leaves.

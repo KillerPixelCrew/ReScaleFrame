@@ -1637,23 +1637,23 @@ Port XeSS Vulkan requirements, frame generation and present/capture handling for
 **Port files (12)**
 
 - [x] [runtime/orchestrator/include/rescaleframe/native_xess_vulkan_requirements.h](runtime/orchestrator/include/rescaleframe/native_xess_vulkan_requirements.h)
-- [ ] [runtime/orchestrator/src/native_fg_xess_vulkan.cpp](runtime/orchestrator/src/native_fg_xess_vulkan.cpp)
+- [x] [runtime/orchestrator/src/native_fg_xess_vulkan.cpp](runtime/orchestrator/src/native_fg_xess_vulkan.cpp) (converted to the C11 leaf `native_fg_xess_vulkan.c`; Rust selects the V03 importer, see [rust-vulkan-xess-fg-v06.md](docs/research/rust-vulkan-xess-fg-v06.md))
 - [x] [runtime/orchestrator/src/native_fg_xess_vulkan.h](runtime/orchestrator/src/native_fg_xess_vulkan.h)
-- [x] [runtime/orchestrator/src/native_fg_xess_vulkan_platform.h](runtime/orchestrator/src/native_fg_xess_vulkan_platform.h)
-- [ ] [runtime/orchestrator/src/native_fg_xess_vulkan_present.cpp](runtime/orchestrator/src/native_fg_xess_vulkan_present.cpp)
-- [ ] [runtime/orchestrator/src/native_xess_vulkan.cpp](runtime/orchestrator/src/native_xess_vulkan.cpp)
-- [ ] [runtime/orchestrator/src/native_xess_vulkan.h](runtime/orchestrator/src/native_xess_vulkan.h)
-- [ ] [runtime/vulkan/xess-fg/bridge.cpp](runtime/vulkan/xess-fg/bridge.cpp)
+- [x] [runtime/orchestrator/src/native_fg_xess_vulkan_platform.h](runtime/orchestrator/src/native_fg_xess_vulkan_platform.h) (C declarations only)
+- [x] [runtime/orchestrator/src/native_fg_xess_vulkan_present.cpp](runtime/orchestrator/src/native_fg_xess_vulkan_present.cpp) (converted to the C11 leaf `native_fg_xess_vulkan_present.c`: bridge exports and the public dispatch seam)
+- [x] [runtime/orchestrator/src/native_xess_vulkan.cpp](runtime/orchestrator/src/native_xess_vulkan.cpp) (ported to `vulkan_sr/xess/native.rs`; the C11 leaf `native_xess_vulkan.c` keeps the public exports, SDK selection and SDK layout assertions)
+- [x] [runtime/orchestrator/src/native_xess_vulkan.h](runtime/orchestrator/src/native_xess_vulkan.h) (C declarations only)
+- [x] [runtime/vulkan/xess-fg/bridge.cpp](runtime/vulkan/xess-fg/bridge.cpp) (converted to the C11 leaf `bridge.c` for the integrated and standalone builds; the standalone MinGW DLL links `session.rs` without crates, so its COM calls stay native)
 - [x] [runtime/vulkan/xess-fg/bridge_api.h](runtime/vulkan/xess-fg/bridge_api.h)
 - [x] [runtime/vulkan/xess-fg/capture_api.h](runtime/vulkan/xess-fg/capture_api.h)
-- [ ] [runtime/vulkan/xess-fg/diagnostic-capture.h](runtime/vulkan/xess-fg/diagnostic-capture.h)
-- [x] [runtime/vulkan/xess-fg/session_abi.h](runtime/vulkan/xess-fg/session_abi.h)
+- [x] [runtime/vulkan/xess-fg/diagnostic-capture.h](runtime/vulkan/xess-fg/diagnostic-capture.h) (C declarations only; callbacks and readback leaves moved into `bridge.c`)
+- [x] [runtime/vulkan/xess-fg/session_abi.h](runtime/vulkan/xess-fg/session_abi.h) (C declarations only)
 
 **Fixtures (3)**
 
 - [x] [tests/native_fg_xess_vulkan_interop.cpp](tests/native_fg_xess_vulkan_interop.cpp)
 - [x] [tests/native_fg_xess_vulkan_present.cpp](tests/native_fg_xess_vulkan_present.cpp)
-- [ ] [tests/native_xess_vulkan.cpp](tests/native_xess_vulkan.cpp)
+- [x] [tests/native_xess_vulkan.cpp](tests/native_xess_vulkan.cpp) (ported to `tests/vulkan-fg/src/xess_input_range.rs` with the C11 CPU launcher)
 
 **Rust review findings (7)**
 

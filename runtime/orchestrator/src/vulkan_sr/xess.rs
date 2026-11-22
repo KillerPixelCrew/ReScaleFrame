@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! XeSS Vulkan super resolution. Rust owns SDK export resolution, the SDK session,
 //! context lifetime, admission, sizing, the private image cache, history, capture
-//! order and teardown. Rust plans transfers and the native table performs the
-//! typed Vulkan and SDK calls.
+//! order and teardown. Rust plans transfers and the table in native.rs performs
+//! the typed Vulkan and SDK calls.
 use super::*;
 use crate::frame_capture_vk::sr_capture_inputs;
 use crate::sdk_module::{Loader, SdkModule};
@@ -15,6 +15,7 @@ use std::ffi::CString;
 use std::sync::{Arc, PoisonError};
 
 mod graphics;
+mod native;
 
 #[path = "xess_requirements_abi.rs"]
 mod requirements_abi;
@@ -71,7 +72,7 @@ const REQUIRED_EXPORTS: [&CStr; 10] = [
 type Entries = [Handle; REQUIRED_EXPORTS.len()];
 type ExportLookup = unsafe extern "C" fn(Handle, *const c_char) -> Handle;
 
-// Private platform ABI with native_xess_vulkan.cpp.
+// Private platform ABI. native.rs supplies the production table and fixtures copy it.
 #[repr(C)]
 pub(super) struct XessOps {
     loader: Loader,
