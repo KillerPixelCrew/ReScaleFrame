@@ -24,48 +24,6 @@ const ULTRA_PERFORMANCE: u32 = 4;
 const FEATURE_FAILED: i32 = -9;
 const MISSING_ENTRY: i32 = -5;
 
-struct Bindings<Lease = ()> {
-    raw: Raw,
-    unbind: unsafe extern "C" fn(Raw),
-    // Any provider lease must retire after the native bindings and before the module.
-    _lease: Lease,
-    _module: SdkModule,
-}
-
-impl<Lease> Bindings<Lease> {
-    fn open(
-        desc: &Open,
-        load: Load,
-        bind: impl FnOnce(Raw, *mut Raw) -> (i32, Lease),
-        unbind: unsafe extern "C" fn(Raw),
-    ) -> Result<Self, i32> {
-        let module = SdkModule::adopt_system(unsafe { load(desc) }).ok_or(LOAD_FAILED)?;
-        let mut raw = null_mut();
-        let (result, lease) = bind(module.as_ptr(), &mut raw);
-        if result != OK {
-            if !raw.is_null() {
-                unsafe { unbind(raw) };
-            }
-            return Err(result);
-        }
-        if raw.is_null() {
-            return Err(INIT_FAILED);
-        }
-        Ok(Self {
-            raw,
-            unbind,
-            _lease: lease,
-            _module: module,
-        })
-    }
-}
-
-impl<Lease> Drop for Bindings<Lease> {
-    fn drop(&mut self) {
-        unsafe { (self.unbind)(self.raw) };
-    }
-}
-
 enum Backend {
     Fsr(fsr::Owner),
     Xess(xess::Owner),

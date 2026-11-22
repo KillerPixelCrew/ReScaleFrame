@@ -4,25 +4,122 @@ use crate::ffx_version::{self, MAX_VERSIONS, Version as ProviderVersion};
 use std::ffi::{CStr, CString};
 use std::ptr::NonNull;
 
-// Private ABI with fsr_backend.cpp.
+#[path = "fsr_abi.rs"]
+mod abi;
+use abi::*;
+
+const FFX_OK: u32 = FFX_API_RETURN_OK as u32;
+
+// Windows-specific operations and the guarded INT8 compatibility lease.
 #[repr(C)]
 struct Ops {
     load: Load,
     acquire_compatibility: unsafe extern "C" fn(Raw, *const Open) -> *const c_void,
     release_compatibility: unsafe extern "C" fn(*const c_void),
-    bind: unsafe extern "C" fn(Raw, *mut Raw) -> i32,
-    unbind: unsafe extern "C" fn(Raw),
-    versions: unsafe extern "C" fn(Raw, Raw, *mut ProviderVersion, *mut u64) -> i32,
-    create: unsafe extern "C" fn(Raw, *const Open, u64, *mut Raw) -> i32,
-    destroy: unsafe extern "C" fn(Raw, *mut Raw),
-    effective_version: unsafe extern "C" fn(Raw, *mut Raw, *mut u64) -> i32,
-    plan: unsafe extern "C" fn(Raw, *mut Raw, *const u32, u32, *mut u32, *mut u32) -> i32,
-    dispatch: unsafe extern "C" fn(Raw, *mut Raw, Raw, *const Frame, f32) -> i32,
+    resource: unsafe extern "C" fn(Raw, u32, *mut FfxApiResource),
 }
 
-const _: () = {
-    assert!(size_of::<Ops>() == 11 * size_of::<Raw>());
-};
+const _: () = assert!(size_of::<Ops>() == 4 * size_of::<Raw>());
+
+struct Sdk {
+    create: PfnFfxCreateContext,
+    destroy: PfnFfxDestroyContext,
+    query: PfnFfxQuery,
+    dispatch: PfnFfxDispatch,
+    _compatibility: Option<Compatibility>,
+    _module: SdkModule,
+}
+
+impl Sdk {
+    fn open(desc: &Open, ops: &Ops) -> Result<Self, i32> {
+        let module = SdkModule::adopt_system(unsafe { (ops.load)(desc) }).ok_or(LOAD_FAILED)?;
+        let [create, destroy, query, dispatch] =
+            crate::sdk_module::FFX_CONTEXT_EXPORTS.map(|name| module.symbol(name));
+        if [create, destroy, query, dispatch]
+            .iter()
+            .any(Option::is_none)
+        {
+            return Err(MISSING_ENTRY);
+        }
+        let compatibility = if desc.fsr_major == 4 {
+            let handle = unsafe { (ops.acquire_compatibility)(module.as_ptr(), desc) };
+            NonNull::new(handle.cast_mut()).map(|handle| Compatibility {
+                handle,
+                release: ops.release_compatibility,
+            })
+        } else {
+            None
+        };
+        // The signatures come from AMD's FFX API header. The module outlives each call.
+        Ok(Self {
+            create: unsafe { std::mem::transmute::<_, PfnFfxCreateContext>(create) },
+            destroy: unsafe { std::mem::transmute::<_, PfnFfxDestroyContext>(destroy) },
+            query: unsafe { std::mem::transmute::<_, PfnFfxQuery>(query) },
+            dispatch: unsafe { std::mem::transmute::<_, PfnFfxDispatch>(dispatch) },
+            _compatibility: compatibility,
+            _module: module,
+        })
+    }
+
+    unsafe fn query(&self, context: *mut Raw, desc: *mut ffxApiHeader) -> u32 {
+        unsafe { self.query.unwrap()(context, desc) }
+    }
+}
+
+#[derive(Default)]
+struct CreateDescription {
+    upscale: ffxCreateContextDescUpscale,
+    device: ffxCreateBackendDX12Desc,
+    version: ffxOverrideVersion,
+}
+
+fn header(kind: u32) -> ffxApiHeader {
+    ffxApiHeader {
+        type_: u64::from(kind),
+        pNext: null_mut(),
+    }
+}
+
+// SDK names start with a three-component version and may append a label.
+unsafe fn version_from_sdk(id: u64, name: *const c_char) -> ProviderVersion {
+    let mut version = ProviderVersion {
+        id,
+        name,
+        ..Default::default()
+    };
+    if !name.is_null() {
+        let text = unsafe { CStr::from_ptr(name) }.to_bytes();
+        if let Some([major, minor, patch]) = version_components(text) {
+            (version.major, version.minor, version.patch) = (major, minor, patch);
+        }
+    }
+    version
+}
+
+fn version_components(mut text: &[u8]) -> Option<[u32; 3]> {
+    // Preserve the native %u.%u.%u parsing, including a suffix after the patch.
+    let mut parts = [0; 3];
+    for (index, part) in parts.iter_mut().enumerate() {
+        if index != 0 {
+            text = text.strip_prefix(b".")?;
+        }
+        text = text.trim_ascii_start();
+        let negative = text.starts_with(b"-");
+        if negative || text.starts_with(b"+") {
+            text = &text[1..];
+        }
+        let digits = text.iter().take_while(|byte| byte.is_ascii_digit()).count();
+        *part = std::str::from_utf8(&text[..digits])
+            .ok()?
+            .parse::<u32>()
+            .ok()?;
+        if negative {
+            *part = part.wrapping_neg();
+        }
+        text = &text[digits..];
+    }
+    Some(parts)
+}
 
 struct Compatibility {
     handle: NonNull<c_void>,
@@ -37,47 +134,41 @@ impl Drop for Compatibility {
 
 pub(super) struct Owner {
     ops: &'static Ops,
-    sdk: Bindings<Option<Compatibility>>,
+    sdk: Sdk,
+    description: Box<CreateDescription>,
     context: Raw,
     major: u32,
 }
 
 impl Owner {
     fn open(desc: &Open, ops: &'static Ops) -> Result<(Backend, Version), i32> {
-        let sdk = Bindings::open(
-            desc,
-            ops.load,
-            |module, out| {
-                let result = unsafe { (ops.bind)(module, out) };
-                let compatibility = if result == OK && desc.fsr_major == 4 {
-                    let handle = unsafe { (ops.acquire_compatibility)(module, desc) };
-                    NonNull::new(handle.cast_mut()).map(|handle| Compatibility {
-                        handle,
-                        release: ops.release_compatibility,
-                    })
-                } else {
-                    None
-                };
-                (result, compatibility)
-            },
-            ops.unbind,
-        )?;
+        // The SDK may retain the chained descriptions until context destruction.
+        let description = crate::allocate_handle(CreateDescription::default());
+        if description.is_null() {
+            return Err(INIT_FAILED);
+        }
+        let description = unsafe { Box::from_raw(description) };
+        let sdk = Sdk::open(desc, ops)?;
         let mut owner = Self {
             ops,
             sdk,
+            description,
             context: null_mut(),
             major: desc.fsr_major,
         };
         let version = owner.select_version(desc)?;
-        checked(unsafe { (ops.create)(owner.sdk.raw, desc, version.id, &mut owner.context) })?;
-        if owner.context.is_null() {
-            return Err(NOT_SUPPORTED);
-        }
-        let mut effective = 0;
-        checked(unsafe {
-            (ops.effective_version)(owner.sdk.raw, &mut owner.context, &mut effective)
-        })?;
-        if effective != version.id {
+        owner.create_context(desc, version.id)?;
+        let mut actual = ffxQueryGetProviderVersion {
+            header: header(FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION),
+            ..Default::default()
+        };
+        if unsafe {
+            owner
+                .sdk
+                .query(&mut owner.context, (&raw mut actual).cast())
+        } != FFX_OK
+            || actual.versionId != version.id
+        {
             return Err(NOT_SUPPORTED);
         }
         if let Some(log) = desc.log {
@@ -86,13 +177,75 @@ impl Owner {
         Ok((Backend::Fsr(owner), version))
     }
 
+    fn create_context(&mut self, desc: &Open, version: u64) -> Result<(), i32> {
+        let data = &mut *self.description;
+        data.version.header = header(FFX_API_DESC_TYPE_OVERRIDE_VERSION);
+        data.version.versionId = version;
+        data.device.header = header(RSF_FFX_CREATE_BACKEND_DX12 as u32);
+        data.device.device = desc.device;
+        data.device.header.pNext = (&raw mut data.version).cast();
+        data.upscale.header = header(RSF_FFX_CREATE_UPSCALE as u32);
+        data.upscale.header.pNext = (&raw mut data.device).cast();
+        let output = FfxApiDimensions2D {
+            width: desc.output_width,
+            height: desc.output_height,
+        };
+        data.upscale.maxRenderSize = output;
+        data.upscale.maxUpscaleSize = output;
+        for (condition, flag) in [
+            (desc.hdr, FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE),
+            (desc.inverted_depth, FFX_UPSCALE_ENABLE_DEPTH_INVERTED),
+            (desc.depth_infinite, FFX_UPSCALE_ENABLE_DEPTH_INFINITE),
+            (
+                desc.dynamic_resolution,
+                FFX_UPSCALE_ENABLE_DYNAMIC_RESOLUTION,
+            ),
+            (
+                desc.motion_jittered,
+                FFX_UPSCALE_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION,
+            ),
+            (desc.auto_exposure, FFX_UPSCALE_ENABLE_AUTO_EXPOSURE),
+        ] {
+            if condition != 0 {
+                data.upscale.flags |= flag as u32;
+            }
+        }
+        let result = unsafe {
+            self.sdk.create.unwrap()(
+                &mut self.context,
+                (&raw mut data.upscale).cast(),
+                std::ptr::null(),
+            )
+        };
+        if result != FFX_OK {
+            return Err(INIT_FAILED);
+        }
+        if self.context.is_null() {
+            return Err(NOT_SUPPORTED);
+        }
+        Ok(())
+    }
+
     fn select_version(&self, desc: &Open) -> Result<Version, i32> {
-        let mut versions = [ProviderVersion::default(); MAX_VERSIONS];
-        let mut count = 0;
-        checked(unsafe {
-            (self.ops.versions)(self.sdk.raw, desc.device, versions.as_mut_ptr(), &mut count)
-        })?;
-        let versions = versions.get(..count as usize).ok_or(NOT_SUPPORTED)?;
+        let mut ids = [0; MAX_VERSIONS];
+        let mut names = [std::ptr::null(); MAX_VERSIONS];
+        let mut count = MAX_VERSIONS as u64;
+        let mut query = ffxQueryDescGetVersions {
+            header: header(FFX_API_QUERY_DESC_TYPE_GET_VERSIONS),
+            createDescType: u64::from(RSF_FFX_CREATE_UPSCALE as u32),
+            device: desc.device,
+            outputCount: &mut count,
+            versionIds: ids.as_mut_ptr(),
+            versionNames: names.as_mut_ptr(),
+        };
+        if unsafe { self.sdk.query(null_mut(), (&raw mut query).cast()) } != FFX_OK
+            || count > MAX_VERSIONS as u64
+        {
+            return Err(NOT_SUPPORTED);
+        }
+        let versions: [ProviderVersion; MAX_VERSIONS] =
+            std::array::from_fn(|index| unsafe { version_from_sdk(ids[index], names[index]) });
+        let versions = &versions[..count as usize];
         let best = ffx_version::select(versions, self.major, desc.version_id);
         if let Some(best) = best.filter(|best| best.id != 0) {
             let name = unsafe { CStr::from_ptr(best.name) };
@@ -139,31 +292,93 @@ impl Owner {
             }
             return OK;
         }
-        unsafe {
-            (self.ops.plan)(
-                self.sdk.raw,
-                &mut self.context,
-                output.as_ptr(),
-                quality,
-                width,
-                height,
-            )
+        let mut query = ffxQueryDescUpscaleGetRenderResolutionFromQualityMode {
+            header: header(RSF_FFX_QUERY_UPSCALE_SIZE as u32),
+            displayWidth: output[0],
+            displayHeight: output[1],
+            qualityMode: quality,
+            pOutRenderWidth: width,
+            pOutRenderHeight: height,
+        };
+        if unsafe { self.sdk.query(&mut self.context, (&raw mut query).cast()) } == FFX_OK {
+            OK
+        } else {
+            FEATURE_FAILED
         }
     }
 
+    fn resource(&self, resource: Raw, state: i32) -> FfxApiResource {
+        let mut description = FfxApiResource::default();
+        unsafe { (self.ops.resource)(resource, state as u32, &mut description) };
+        description
+    }
+
     pub(super) fn evaluate(&mut self, commands: Raw, frame: &Frame) -> i32 {
-        let far = unsafe { (*frame.record).camera.far_plane };
+        let record = unsafe { &*frame.record };
+        let far = record.camera.far_plane;
         let far = if far > 0.0 { far } else { f32::MAX };
-        unsafe { (self.ops.dispatch)(self.sdk.raw, &mut self.context, commands, frame, far) }
+        let sharpness = if frame.sharpness.is_finite() {
+            frame.sharpness.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let read = FFX_API_RESOURCE_STATE_COMPUTE_READ;
+        let data = ffxDispatchDescUpscale {
+            header: header(RSF_FFX_DISPATCH_UPSCALE as u32),
+            commandList: commands,
+            color: self.resource(frame.color.resource, read),
+            depth: self.resource(frame.depth.resource, read),
+            motionVectors: self.resource(frame.motion.resource, read),
+            exposure: self.resource(frame.exposure.resource, read),
+            reactive: self.resource(frame.reactive.resource, read),
+            transparencyAndComposition: self.resource(frame.transparency.resource, read),
+            output: self.resource(
+                frame.output.resource,
+                FFX_API_RESOURCE_STATE_UNORDERED_ACCESS,
+            ),
+            jitterOffset: FfxApiFloatCoords2D {
+                x: frame.jitter_x,
+                y: frame.jitter_y,
+            },
+            motionVectorScale: FfxApiFloatCoords2D {
+                x: frame.motion_scale_x,
+                y: frame.motion_scale_y,
+            },
+            renderSize: FfxApiDimensions2D {
+                width: record.render_width,
+                height: record.render_height,
+            },
+            upscaleSize: FfxApiDimensions2D {
+                width: record.output_width,
+                height: record.output_height,
+            },
+            frameTimeDelta: record.frame_time_ms,
+            preExposure: frame.pre_exposure,
+            reset: frame.reset != 0,
+            enableSharpening: sharpness > 0.0,
+            sharpness,
+            cameraNear: record.camera.near_plane,
+            cameraFar: far,
+            cameraFovAngleVertical: record.camera.vertical_fov_radians,
+            viewSpaceToMetersFactor: frame.view_space_to_meters,
+            flags: 0,
+        };
+        if unsafe { self.sdk.dispatch.unwrap()(&mut self.context, (&raw const data).cast()) }
+            == FFX_OK
+        {
+            OK
+        } else {
+            FEATURE_FAILED
+        }
     }
 }
 
 impl Drop for Owner {
     fn drop(&mut self) {
         if !self.context.is_null() {
-            unsafe { (self.ops.destroy)(self.sdk.raw, &mut self.context) };
+            unsafe { self.sdk.destroy.unwrap()(&mut self.context, std::ptr::null()) };
         }
-        // Bindings drops the INT8 compatibility lease before unloading the DLL.
+        // Sdk drops the INT8 compatibility lease before unloading the DLL.
     }
 }
 

@@ -5,10 +5,10 @@ import subprocess
 from pathlib import Path
 
 
-def generate(bindgen, header, pattern, output, aliases, clang_args):
+def generate(bindgen, header, pattern, output, aliases, clang_args, constants='NOTHING'):
     subprocess.run([
         bindgen, str(header), "--output", str(output), "--allowlist-type", pattern,
-        "--no-recursive-allowlist", "--no-prepend-enum-name", "--with-derive-default",
+        "--allowlist-var", constants, "--no-recursive-allowlist", "--no-prepend-enum-name", "--with-derive-default",
         "--no-derive-debug", "--no-doc-comments", "--use-core",
         "--rust-edition", "2024", "--rust-target", "1.85",
         "--raw-line", "#![allow(dead_code, non_camel_case_types, non_snake_case)]",
@@ -23,6 +23,7 @@ def main():
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--xess", type=Path, default=root / "vendor/xess/inc")
+    parser.add_argument("--fidelityfx", type=Path, default=root / "vendor/fidelityfx/Kits/FidelityFX")
     args = parser.parse_args()
     bindgen = os.environ.get("BINDGEN", "bindgen")
     if subprocess.check_output([bindgen, "--version"], text=True).strip() != "bindgen 0.72.1":
@@ -33,6 +34,20 @@ def main():
     generate(bindgen, args.xess / "xess/xess_d3d12.h",
              r"_?xess_(2d|coord|d3d12_init_params|d3d12_execute_params|quality_settings|init_flags|version|result)_t",
              root / "runtime/orchestrator/src/d3d12_sr/xess_abi.rs", aliases, [])
+
+    api = args.fidelityfx / "api/include"
+    generate(bindgen, root / "runtime/backends/fsr/src/ffx_descriptor_types.h",
+             r"ffx(ApiHeader|StructType_t|ApiMessage|Context|ReturnCode_t|AllocationCallbacks|Alloc|Dealloc|"
+             r"CreateContextDescHeader|DispatchDescHeader|QueryDescHeader|QueryDescGetVersions|OverrideVersion|"
+             r"QueryGetProviderVersion|CreateBackendDX12Desc|CreateContextDescUpscale|DispatchDescUpscale|"
+             r"QueryDescUpscaleGetRenderResolutionFromQualityMode)|PfnFfx(CreateContext|DestroyContext|Query|Dispatch)|"
+             r"rsf_ffx_descriptor_type|FfxApi(Resource|ResourceDescription|Dimensions2D|FloatCoords2D|ReturnCodes|CreateContextUpscaleFlags|ResourceState)",
+             root / "runtime/orchestrator/src/d3d12_sr/fsr_abi.rs",
+             ["type ID3D12Device = ::core::ffi::c_void;", "type wchar_t = u16;"],
+             [f"-I{api}", f"-I{args.fidelityfx / 'upscalers/include'}"],
+             r"FFX_API_(CREATE_CONTEXT_DESC_TYPE_(BACKEND_DX12|UPSCALE)|DISPATCH_DESC_TYPE_UPSCALE|"
+             r"QUERY_DESC_TYPE_(GET_VERSIONS|GET_PROVIDER_VERSION|UPSCALE_GETRENDERRESOLUTIONFROMQUALITYMODE)|"
+             r"DESC_TYPE_OVERRIDE_VERSION)")
 
 
 if __name__ == "__main__":
