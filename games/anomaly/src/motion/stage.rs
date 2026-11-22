@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Anomaly motion-stage policy. The native leaf supplies guarded producer facts,
-//! compiler and COM calls, plus the original engine and D3D11 trampolines.
+//! the SEH-protected engine include calls, and the original engine and D3D11 trampolines.
 
 pub(super) mod abi;
 mod capture;
@@ -408,7 +408,7 @@ impl Stage {
             if let Some(pack) = &loader.pack {
                 let device = unsafe { (p.shader_device)() };
                 if !device.is_null() {
-                    unsafe { (p.attach_device)(pack.ptr(), device) };
+                    unsafe { pack.attach(device) };
                 }
             }
         }

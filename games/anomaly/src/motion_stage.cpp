@@ -4,19 +4,13 @@
 #include "engine_guards.h"
 #include "geometry_feed.h"
 #include "motion_d3d11.h"
-#include "motion_foliage.h"
 #include "native_hooks.h"
+#include "native_memory.h"
 #include "native_observer.h"
-#include "runtime_shaders.h"
-#include "shader_d3d.h"
 #include "sr_profile.h"
 #include "sr_stage.h"
 #include <intrin.h>
-#include <algorithm>
 #include <array>
-#include <cstdio>
-#include <cstring>
-#include <memory>
 #include <type_traits>
 
 namespace rsf::anomaly::motion {
@@ -148,9 +142,6 @@ const char* guard_failure(void* module, uint32_t image_size, const void* selecte
     return rsf_anomaly_motion_guard_failure(&checked, &guards);
 }
 
-rsf_anomaly_shader_bytes bytes(std::span<const std::byte> s) noexcept {
-    return {reinterpret_cast<const uint8_t*>(s.data()), s.size()};
-}
 void* hw_device() noexcept {
     void* device{};
     read_global(srp().hw_device_rva, device);
@@ -239,40 +230,6 @@ constexpr rsf_anomaly_motion_bind_platform bind_platform{
     rsf_anomaly_motion_bind_targets, rsf_anomaly_motion_clear_targets
 };
 
-void* open_pack(void* module, const void* profile, const wchar_t* pack, const wchar_t* cache,
-    PackInfo* info, char* message, size_t size) noexcept try {
-    std::string error;
-    if (auto* result = open_runtime_pack(pack, cache, static_cast<std::byte*>(module),
-            *static_cast<const BuildProfile*>(profile)->motion, error)) {
-        *info = {rsf_anomaly_runtime_pack_manifest(result), rsf_anomaly_runtime_pack_api(result)};
-        return result;
-    }
-    std::snprintf(message, size, "%s", error.c_str());
-    return nullptr;
-} catch (...) { return nullptr; }
-void prepare_shader(void* pack, const rsf_anomaly_shader_request* request,
-    const rsf_anomaly_shader_entry* root, ShaderResult* out) noexcept try {
-    D3DShaderReflector reflector(rsf_anomaly_runtime_pack_reflector(pack));
-    auto storage = std::make_unique<Prepared>(prepare_runtime_pack(pack, *request, manifest_entry(*root), reflector));
-    *out = {storage.get(), bytes(storage->detail), storage->skin, static_cast<uint8_t>(storage->outcome)};
-    storage.release();
-} catch (...) {}
-void* create_shader(void* pack, const char* target, void* device, void* reflection, bool attach, bool* refused) noexcept {
-    const auto& api = runtime_pack_api(pack);
-    if (attach && api.attach_d3d11(device) != RSF_PATCH_OK) { *refused = true; return nullptr; }
-    void* shader{};
-    auto& buffer = *static_cast<Prepared*>(reflection);
-    const auto result = api.create_d3d11(device, target, {buffer.variant.data(), buffer.variant.size()}, &shader);
-    if (result == RSF_PATCH_OK) {
-        // The installed draw needs only the replacement interface.
-        std::vector<std::byte>().swap(buffer.variant);
-        buffer.stock = {};
-        buffer.entry = nullptr;
-        return shader;
-    }
-    if (shader) static_cast<IUnknown*>(shader)->Release();
-    return nullptr;
-}
 const MotionPlatform platform{
     sizeof(MotionPlatform), motion_platform_abi, rsf_anomaly_motion_device_platform_get(), &bind_platform,
     {sr::backend_rt_offset, sr::backend_zb_offset, sr::backend_rt_changed_offset},
@@ -295,40 +252,19 @@ const MotionPlatform platform{
         out->jitter[2] = jitter.previous_u;
         out->jitter[3] = jitter.previous_v;
     },
-    open_pack, rsf_anomaly_runtime_pack_close,
-    [](void* pack, void* device) { runtime_pack_api(pack).attach_d3d11(device); },
-    [](void* pack, const wchar_t* path) { return runtime_pack_api(pack).dump(path); },
-    [](void* pack, PatchCounters* out) {
-        rsf_patch_counters raw{sizeof(raw), RSF_SHADER_PATCH_VERSION};
-        runtime_pack_api(pack).counters(&raw);
-        *out = {raw.intercepted, raw.built, raw.cache_hits, raw.refused, {}};
-        std::copy(std::begin(raw.refusals), std::end(raw.refusals), out->refusals);
-    },
+    open_shader_pack,
     [](rsf_anomaly_shader_frame_layout* out) -> void* { *out = shader_frame_layout(mp()); return image; },
     [](const void*, uintptr_t address, uint8_t* out, size_t size) -> bool {
         return guarded_copy(out, reinterpret_cast<const void*>(address), size);
     },
-    prepare_shader, [](void* reflection) { delete static_cast<Prepared*>(reflection); },
-    [](void* raw, uint8_t family, FoliageLayout* out) {
-        *out = make_foliage_layout(static_cast<Family>(family), static_cast<Prepared*>(raw)->stock);
-        return out->usable;
-    },
-    [](const void* vs, const void* hs, const void* ds, const void* ps) {
-        const auto reflection = [](const void* raw) -> const Reflection& {
-            return static_cast<const Prepared*>(raw)->reflection;
-        };
-        return hs ? tess_chain_linkable(reflection(vs), reflection(hs), reflection(ds), reflection(ps)) :
-            linkable(reflection(vs), reflection(ps));
-    },
-    create_shader
 };
 
 static_assert(sizeof(PositionViews) == 16 && sizeof(TargetFacts) == 16 && sizeof(DrawFacts) == 32);
-static_assert(sizeof(ShaderObjects) == 40 && sizeof(ShaderResult) == 32 && sizeof(PackInfo) == 16);
-static_assert(sizeof(FoliageLayout) == 108 && offsetof(FoliageLayout, xform) == 4 && offsetof(FoliageLayout, usable) == 104);
-static_assert(sizeof(MotionPlatform) == 352 && offsetof(MotionPlatform, guards) == 40 &&
+static_assert(sizeof(ShaderObjects) == 40);
+static_assert(sizeof(MotionPlatform) == 280 && offsetof(MotionPlatform, guards) == 40 &&
     offsetof(MotionPlatform, render_target) == 104 && offsetof(MotionPlatform, target_facts) == 152 &&
-    offsetof(MotionPlatform, frame_layout) == 296 && offsetof(MotionPlatform, create_shader) == 344);
+    offsetof(MotionPlatform, open_pack) == 256 &&
+    offsetof(MotionPlatform, frame_layout) == 264 && offsetof(MotionPlatform, read_engine) == 272);
 static_assert(sizeof(FrameTarget) == 24 && offsetof(FrameTarget, written) == 20 && offsetof(FrameTarget, main) == 21);
 static_assert(static_cast<uint8_t>(ReplayResult::Done) == 0 && static_cast<uint8_t>(ReplayResult::SkippedNoDepthWrite) == 1);
 static_assert(RSF_PHASE_RENDER_SUBMIT == 2 && RSF_DUMP_VIEW_DENSE_MOTION == 7);

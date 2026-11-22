@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "shader_loader.h"
 #include "shader_loader_platform.h"
-#include "runtime_shaders.h"
 #include <utility>
 
 namespace rsf::anomaly::motion {
@@ -342,13 +341,5 @@ Prepared finish_runtime_shader(const ShaderRequest& request, const ManifestEntry
 {
     const RequestView input(request);
     return finish_runtime_view(input.value, entry, reflector, status, cache_hit, code, detail);
-}
-Prepared prepare_runtime_pack(void* pack, const rsf_anomaly_shader_request& request, const ManifestEntry& entry,
-    Reflector& reflector)
-{
-    rsf_patch_output output{};
-    const auto status = rsf_anomaly_runtime_pack_prepare(pack, &request, &output);
-    return finish_runtime_view(request, entry, reflector, status, output.cache_hit != 0,
-        {static_cast<const std::byte*>(output.bytecode.data), output.bytecode.size}, output.reason);
 }
 }

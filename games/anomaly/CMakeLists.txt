@@ -35,10 +35,8 @@ if(BUILD_TESTING)
     add_library(rsf_anomaly_motion_bridge STATIC src/motion_bridge.cpp)
     target_link_libraries(rsf_anomaly_motion_bridge PRIVATE rsf_anomaly_rust rsf_build_options)
 endif()
-target_sources(rsf_game_anomaly PRIVATE src/motion_foliage.cpp
-    src/motion_stage.cpp src/shader_loader.cpp src/shader_d3d.cpp)
+target_sources(rsf_game_anomaly PRIVATE src/motion_stage.cpp src/engine_shader_includes.cpp)
 target_link_libraries(rsf_game_anomaly PRIVATE bcrypt dxguid)
-target_sources(rsf_game_anomaly PRIVATE src/runtime_shaders.cpp)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 file(GLOB_RECURSE RSF_ANOMALY_PATCH_INPUTS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/patches/motion/*")
 add_custom_target(rsf_anomaly_patch_pack ALL

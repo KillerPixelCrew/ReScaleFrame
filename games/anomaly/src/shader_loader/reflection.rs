@@ -12,17 +12,63 @@ type Reflect = unsafe extern "system" fn(
     *const windows::core::GUID,
     *mut *mut c_void,
 ) -> HRESULT;
-fn name(value: PCSTR) -> Bytes {
-    if value.is_null() {
-        Bytes::from(&[][..])
-    } else {
-        // This view is only consumed while the parent reflector is still live.
-        Bytes::from(unsafe { CStr::from_ptr(value.0.cast()) }.to_bytes())
+// All spans point into the owned heap allocations, which remain fixed when the
+// snapshot moves. The descriptors and their text are immutable after construction.
+pub(crate) struct Snapshot {
+    view: Reflection,
+    _inputs: Vec<Parameter>,
+    _outputs: Vec<Parameter>,
+    _patch: Vec<Parameter>,
+    _bindings: Vec<Binding>,
+    _buffers: Vec<Buffer>,
+    _variables: Vec<Vec<Variable>>,
+    _names: Vec<Box<[u8]>>,
+}
+unsafe impl Send for Snapshot {}
+unsafe impl Sync for Snapshot {}
+
+impl Snapshot {
+    pub(crate) fn view(&self) -> &Reflection {
+        &self.view
     }
+}
+
+#[cfg(test)]
+impl Default for Snapshot {
+    fn default() -> Self {
+        Self {
+            view: Reflection {
+                version: 0,
+                inputs: Span::from(&[][..]),
+                outputs: Span::from(&[][..]),
+                patch: Span::from(&[][..]),
+                bindings: Span::from(&[][..]),
+                buffers: Span::from(&[][..]),
+            },
+            _inputs: Vec::new(),
+            _outputs: Vec::new(),
+            _patch: Vec::new(),
+            _bindings: Vec::new(),
+            _buffers: Vec::new(),
+            _variables: Vec::new(),
+            _names: Vec::new(),
+        }
+    }
+}
+
+fn name(value: PCSTR, storage: &mut Vec<Box<[u8]>>) -> Bytes {
+    if value.is_null() {
+        return Bytes::from(&[][..]);
+    }
+    let owned: Box<[u8]> = unsafe { CStr::from_ptr(value.0.cast()) }.to_bytes().into();
+    let span = Bytes::from(owned.as_ref());
+    storage.push(owned);
+    span
 }
 
 fn signature(
     count: u32,
+    names: &mut Vec<Box<[u8]>>,
     mut read: impl FnMut(u32, &mut D3D11_SIGNATURE_PARAMETER_DESC) -> windows::core::Result<()>,
 ) -> Option<Vec<Parameter>> {
     (0..count)
@@ -30,7 +76,7 @@ fn signature(
             let mut d = D3D11_SIGNATURE_PARAMETER_DESC::default();
             read(index, &mut d).ok()?;
             Some(Parameter {
-                name: name(d.SemanticName),
+                name: name(d.SemanticName, names),
                 index: d.SemanticIndex,
                 register: d.Register,
                 system_value: d.SystemValueType.0 as u32,
@@ -41,28 +87,28 @@ fn signature(
         .collect()
 }
 
-fn snapshot(
-    shader: &ID3D11ShaderReflection,
-    consume: impl FnOnce(&Reflection) -> bool,
-) -> Option<bool> {
+fn snapshot(shader: &ID3D11ShaderReflection) -> Option<Snapshot> {
+    let mut names = Vec::new();
     let mut desc = D3D11_SHADER_DESC::default();
     unsafe { shader.GetDesc(&mut desc) }.ok()?;
-    let inputs = signature(desc.InputParameters, |index, d| unsafe {
+    let inputs = signature(desc.InputParameters, &mut names, |index, d| unsafe {
         shader.GetInputParameterDesc(index, d)
     })?;
-    let outputs = signature(desc.OutputParameters, |index, d| unsafe {
+    let outputs = signature(desc.OutputParameters, &mut names, |index, d| unsafe {
         shader.GetOutputParameterDesc(index, d)
     })?;
-    let patch = signature(desc.PatchConstantParameters, |index, d| unsafe {
-        shader.GetPatchConstantParameterDesc(index, d)
-    })?;
+    let patch = signature(
+        desc.PatchConstantParameters,
+        &mut names,
+        |index, d| unsafe { shader.GetPatchConstantParameterDesc(index, d) },
+    )?;
 
     let mut bindings = Vec::new();
     for index in 0..desc.BoundResources {
         let mut d = D3D11_SHADER_INPUT_BIND_DESC::default();
         unsafe { shader.GetResourceBindingDesc(index, &mut d) }.ok()?;
         bindings.push(Binding {
-            name: name(d.Name),
+            name: name(d.Name, &mut names),
             kind: d.Type.0 as u32,
             point: d.BindPoint,
             count: d.BindCount,
@@ -83,26 +129,54 @@ fn snapshot(
             let mut v = D3D11_SHADER_VARIABLE_DESC::default();
             unsafe { variable.GetDesc(&mut v) }.ok()?;
             rows.push(Variable {
-                name: name(v.Name),
+                name: name(v.Name, &mut names),
                 offset: v.StartOffset,
                 size: v.Size,
             });
         }
         buffers.push(Buffer {
-            name: name(d.Name),
+            name: name(d.Name, &mut names),
             size: d.Size,
             variables: Span::from(rows.as_slice()),
         });
         variables.push(rows);
     }
-    Some(consume(&Reflection {
-        version: desc.Version,
-        inputs: Span::from(inputs.as_slice()),
-        outputs: Span::from(outputs.as_slice()),
-        patch: Span::from(patch.as_slice()),
-        bindings: Span::from(bindings.as_slice()),
-        buffers: Span::from(buffers.as_slice()),
-    }))
+    Some(Snapshot {
+        view: Reflection {
+            version: desc.Version,
+            inputs: Span::from(inputs.as_slice()),
+            outputs: Span::from(outputs.as_slice()),
+            patch: Span::from(patch.as_slice()),
+            bindings: Span::from(bindings.as_slice()),
+            buffers: Span::from(buffers.as_slice()),
+        },
+        _inputs: inputs,
+        _outputs: outputs,
+        _patch: patch,
+        _bindings: bindings,
+        _buffers: buffers,
+        _variables: variables,
+        _names: names,
+    })
+}
+
+pub(super) fn reflect(entry: FARPROC, code: &[u8]) -> Option<Snapshot> {
+    let entry = entry.filter(|_| !code.is_empty())?;
+    let reflect: Reflect = unsafe { std::mem::transmute(entry) };
+    let mut raw = ptr::null_mut();
+    let status = unsafe {
+        reflect(
+            code.as_ptr().cast(),
+            code.len(),
+            &ID3D11ShaderReflection::IID,
+            &mut raw,
+        )
+    };
+    if status.is_err() || raw.is_null() {
+        return None;
+    }
+    let shader = unsafe { ID3D11ShaderReflection::from_raw(raw) };
+    snapshot(&shader)
 }
 
 #[unsafe(no_mangle)]
@@ -112,24 +186,8 @@ unsafe extern "C" fn rsf_anomaly_shader_reflect(
     user: *mut c_void,
     consume: unsafe extern "C" fn(*mut c_void, &Reflection) -> bool,
 ) -> bool {
-    let Some(entry) = entry.filter(|_| code.len != 0) else {
-        return false;
-    };
-    let reflect: Reflect = unsafe { std::mem::transmute(entry) };
-    let mut raw = ptr::null_mut();
-    let status = unsafe {
-        reflect(
-            code.data.cast(),
-            code.len,
-            &ID3D11ShaderReflection::IID,
-            &mut raw,
-        )
-    };
-    if status.is_err() || raw.is_null() {
-        return false;
-    }
-    let shader = unsafe { ID3D11ShaderReflection::from_raw(raw) };
-    snapshot(&shader, |value| unsafe { consume(user, value) }).unwrap_or(false)
+    reflect(entry, unsafe { code.as_slice() })
+        .is_some_and(|snapshot| unsafe { consume(user, snapshot.view()) })
 }
 
 #[repr(C)]
@@ -463,12 +521,15 @@ fn covers(outputs: &[Parameter], inputs: &[Parameter]) -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_shader_linkable(vertex: &Reflection, pixel: &Reflection) -> bool {
+pub(crate) extern "C" fn rsf_anomaly_shader_linkable(
+    vertex: &Reflection,
+    pixel: &Reflection,
+) -> bool {
     covers(vertex.outputs(), pixel.inputs())
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_shader_tess_linkable(
+pub(crate) extern "C" fn rsf_anomaly_shader_tess_linkable(
     vertex: &Reflection,
     hull: &Reflection,
     domain: &Reflection,
@@ -485,7 +546,7 @@ extern "C" fn rsf_anomaly_shader_tess_linkable(
 #[test]
 fn unreadable_signature_row_refuses_the_entire_signature() {
     let mut visited = Vec::new();
-    let rows = signature(3, |index, _| {
+    let rows = signature(3, &mut Vec::new(), |index, _| {
         visited.push(index);
         if index == 1 {
             HRESULT(0x8000_4005_u32 as i32).ok()

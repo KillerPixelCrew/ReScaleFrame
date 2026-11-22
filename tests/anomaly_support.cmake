@@ -83,6 +83,7 @@ set_tests_properties(anomaly_sr_swap_contract anomaly_sr_swap_unknown_selection 
 # manifest, original-bytecode proof, reflection rules, disk cache) with fakes. The device fixture draws the real
 # deployed core variants (tools/anomaly_motion_deploy.py output, local only; 77 when absent) through the production
 # loader, b13 packers and invalidation replay. Neither runs game code.
+# These fixtures still use the C++ loader facade. The live hook fixture shares only the production leaves.
 set(RSF_ANOMALY_MOTION_SOURCES "${RSF_ANOMALY_SR_SRC}/motion_foliage.cpp"
     "${RSF_ANOMALY_SR_SRC}/motion_target.cpp" "${RSF_ANOMALY_SR_SRC}/shader_loader.cpp")
 add_executable(rsf_anomaly_motion_contract_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_contract.cpp" ${RSF_ANOMALY_MOTION_SOURCES})
@@ -153,8 +154,7 @@ target_link_libraries(rsf_anomaly_motion_far_device_test PRIVATE rsf_anomaly_mot
 add_test(NAME anomaly_motion_far_device COMMAND rsf_anomaly_motion_far_device_test)
 set_tests_properties(anomaly_motion_far_device PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
 # rsf_anomaly_sr_hooks_test links the native observer, which installs/reports/quiesces the motion stage.
-target_sources(rsf_anomaly_sr_hooks_test PRIVATE ${RSF_ANOMALY_MOTION_SOURCES} "${RSF_ANOMALY_SR_SRC}/motion_d3d11.cpp"
-    "${RSF_ANOMALY_SR_SRC}/motion_stage.cpp" "${RSF_ANOMALY_SR_SRC}/shader_d3d.cpp")
+target_sources(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}/motion_stage.cpp")
 target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE rsf_anomaly_motion_bridge bcrypt dxguid d3dcompiler)
 # SR Stage 3 (jitter and mip bias). The jitter test checks the Halton sequence, the row-vector NDC offset, the
 # first-person rule, the mip bias delta and the published motion/SR state on the CPU; the Stage 3 swap cases (projection
@@ -249,7 +249,7 @@ add_test(NAME anomaly_sr_sun_cascades_contract COMMAND rsf_anomaly_sr_swap_test 
 set_tests_properties(anomaly_sr_sun_cascades_contract PROPERTIES TIMEOUT 30)
 
 
-target_sources(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}/runtime_shaders.cpp")
+target_sources(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}/engine_shader_includes.cpp")
 
 # Jittered deferred reconstruction: float-precision round trips and all six native constant-buffer stages.
 add_test(NAME anomaly_sr_reconstruction_window_contract COMMAND rsf_anomaly_sr_swap_test stage3_position_reconstruction)

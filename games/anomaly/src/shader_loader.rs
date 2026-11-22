@@ -8,8 +8,11 @@ mod runtime_pack;
 use crate::digest::sha256;
 pub(crate) use frame::{DecodedFrame, FrameLayout, Read, decode_frame};
 pub(crate) use manifest::{Entry, Manifest};
-pub(crate) use reflection::Reflection;
 use reflection::{Compatibility, rsf_anomaly_shader_compatible};
+pub(crate) use reflection::{
+    Reflection, Snapshot, rsf_anomaly_shader_linkable, rsf_anomaly_shader_tess_linkable,
+};
+pub(crate) use runtime_pack::RuntimePack;
 use std::ffi::{CStr, OsString, c_char, c_void};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -374,13 +377,7 @@ unsafe extern "C" fn rsf_anomaly_shader_finish_runtime(
         skin: unsafe { rsf_anomaly_shader_skin_mode(request.defines) },
     };
     let detail = unsafe { detail.as_slice() };
-    let refusal = match status {
-        0 => None,
-        -7 => Some(Outcome::OriginalMismatch),
-        -8 => Some(Outcome::ReflectionMismatch),
-        _ => Some(Outcome::MotionCompileFailed),
-    };
-    if let Some(outcome) = refusal {
+    if let Some(outcome) = runtime_refusal(status) {
         return sink.refuse(outcome, detail);
     }
     let Some(stock) = host.reflect(true, unsafe { request.bytecode.as_slice() }) else {
@@ -396,4 +393,14 @@ unsafe extern "C" fn rsf_anomaly_shader_finish_runtime(
         Outcome::Replaced
     };
     sink.complete(outcome, Compatibility::Ok, detail, variant);
+}
+
+fn runtime_refusal(status: i32) -> Option<Outcome> {
+    use rsf_game_sys::shader_patch_abi::{RSF_PATCH_OK, RSF_PATCH_ORIGINAL, RSF_PATCH_REFLECTION};
+    match status {
+        RSF_PATCH_OK => None,
+        RSF_PATCH_ORIGINAL => Some(Outcome::OriginalMismatch),
+        RSF_PATCH_REFLECTION => Some(Outcome::ReflectionMismatch),
+        _ => Some(Outcome::MotionCompileFailed),
+    }
 }

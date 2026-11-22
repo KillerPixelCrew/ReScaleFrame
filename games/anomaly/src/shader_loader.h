@@ -34,6 +34,7 @@
 struct rsf_anomaly_shader_admitted;
 
 namespace rsf::anomaly::motion {
+// C++ data and callback facades for the native motion fixtures.
 // TessHull/TessDomain: DX11\tess.hs and DX11\tess.ds of X-Ray's G-buffer tessellation pass (uber_deffer.cpp r_TessPass,
 // r4_enable_tessellation): the motion hull stage carries the previous control data, the motion domain stage rebuilds the
 // previous PN patch and writes the previous clip position for the motion PS.

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
-#include "runtime_shaders.h"
+#include "build_profile.h"
+#include "motion_profile.h"
+#include "motion_stage_platform.h"
 #include "native_memory.h"
 #include <d3dcompiler.h>
 
@@ -29,16 +31,13 @@ void include_close(void* table, const void* data) noexcept {
 }
 }
 
-void* open_runtime_pack(const wchar_t* pack, const wchar_t* cache,
-    std::byte* image, const MotionProfile& profile, std::string& error) {
-    // Only the calls into the engine retain the native structured exception boundary.
+void* open_shader_pack(void* image, const void* profile, const wchar_t* pack, const wchar_t* cache,
+    char* error, size_t capacity) noexcept {
     const Includer includer{nullptr, include_open, guarded_copy, include_close};
-    char message[512]{};
     static_assert(sizeof(wchar_t) == sizeof(uint16_t));
-    auto* result = rsf_anomaly_runtime_pack_open(reinterpret_cast<const uint16_t*>(pack),
+    const auto& motion = *static_cast<const BuildProfile*>(profile)->motion;
+    return rsf_anomaly_runtime_pack_open(reinterpret_cast<const uint16_t*>(pack),
         reinterpret_cast<const uint16_t*>(cache), reinterpret_cast<const uint16_t*>(engine_compiler_module),
-        reinterpret_cast<uintptr_t>(image), profile.d3dcompile_setup_rva, &includer, message, sizeof(message));
-    if (!result) error = message;
-    return result;
+        reinterpret_cast<uintptr_t>(image), motion.d3dcompile_setup_rva, &includer, error, capacity);
 }
 }

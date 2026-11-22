@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::shaders::{Refusal, Variant};
+use super::shaders::{Refusal, Variant, link_variants};
 use super::*;
 use crate::geometry_registry_abi::RSF_ANOMALY_PASS_MAIN;
 use crate::motion_device_abi::{
@@ -469,11 +469,7 @@ impl Stage {
             let vertex = registry.get(stock.vs);
             let name = registry.name(stock.vs as usize);
             let element = unsafe { rsf_anomaly_motion_model_element(name.as_ptr(), name.len()) };
-            let selection = registry.select(
-                stock,
-                render.device_view().device,
-                |vs, hs, ds, ps| unsafe { (p.link_shaders)(vs, hs, ds, ps) },
-            );
+            let selection = registry.select(stock, render.device_view().device, link_variants);
             (vertex, element, selection)
         };
         if let Some(band) = band {

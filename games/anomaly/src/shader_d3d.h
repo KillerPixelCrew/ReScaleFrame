@@ -4,9 +4,7 @@
 #include <windows.h>
 
 namespace rsf::anomaly::motion {
-// The live pack lends its reflector for the duration of shader preparation.
-extern "C" FARPROC rsf_anomaly_runtime_pack_reflector(const void*) noexcept;
-
+// C++ D3D facades for the deployed-tree fixtures. The live path uses Rust snapshots.
 extern "C" bool rsf_anomaly_shader_reflect(FARPROC, rsf_anomaly_shader_bytes, void*,
     bool (*)(void*, const rsf_anomaly_shader_reflection*)) noexcept;
 

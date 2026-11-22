@@ -161,7 +161,7 @@ unsafe extern "C" fn pack_get() -> i32 {
         lock(&stage.loader)
             .pack
             .as_ref()
-            .map_or(0, |pack| pack.counters(stage.platform).refused)
+            .map_or(0, |pack| pack.counters().refused)
     } else {
         0
     };

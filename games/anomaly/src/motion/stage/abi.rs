@@ -5,11 +5,11 @@ use crate::motion_device::{Platform as DevicePlatform, ReplayPlatform};
 use crate::motion_device_abi::rsf_anomaly_motion_device_view as DeviceView;
 use crate::motion_target::Platform as BindPlatform;
 use crate::motion_target_abi::rsf_anomaly_motion_bind_layout as BindLayout;
-use crate::shader_loader::{Bytes, Entry, FrameLayout, Manifest, Read, Request as ShaderRequest};
+use crate::shader_loader::{FrameLayout, Read};
 use std::ffi::c_char;
 
 pub(super) type Raw = *mut std::ffi::c_void;
-pub(super) const PLATFORM_ABI: u32 = 10;
+pub(super) const PLATFORM_ABI: u32 = 11;
 
 #[repr(C)]
 pub(super) struct DrawScope([std::mem::MaybeUninit<u64>; 22]);
@@ -60,14 +60,6 @@ pub(super) struct DrawState {
 }
 
 #[repr(C)]
-pub(super) struct ShaderResult {
-    pub reflection: Raw,
-    pub detail: Bytes,
-    pub skin: i32,
-    pub outcome: u8,
-}
-
-#[repr(C)]
 pub(super) struct ShaderCreation {
     pub target: *const c_char,
     pub bytecode: *const std::ffi::c_void,
@@ -77,34 +69,6 @@ pub(super) struct ShaderCreation {
     pub stack: *const std::ffi::c_void,
     pub status: i32,
     pub size: u32,
-}
-
-impl Default for ShaderResult {
-    fn default() -> Self {
-        Self {
-            reflection: ptr::null_mut(),
-            detail: (&[][..]).into(),
-            skin: -2,
-            outcome: 9,
-        }
-    }
-}
-
-#[repr(C)]
-pub(super) struct PackInfo {
-    // Owned by the native pack and immutable until its close leaf runs.
-    pub manifest: *const Manifest,
-    pub api: *const rsf_game_sys::shader_patch_abi::rsf_shader_patch_api,
-}
-
-#[repr(C)]
-#[derive(Default)]
-pub(super) struct PatchCounters {
-    pub intercepted: u64,
-    pub built: u64,
-    pub cache_hits: u64,
-    pub refused: u64,
-    pub refusals: [u64; 11],
 }
 
 #[repr(C)]
@@ -141,26 +105,10 @@ pub(super) struct Platform {
     pub read_constant: unsafe extern "C" fn(u32, u32, u32, Raw, u32) -> bool,
     pub write_constant: unsafe extern "C" fn(u32, u32, u32, *const std::ffi::c_void, u32) -> bool,
     pub draw_state: unsafe extern "C" fn(Raw, &mut DrawState),
-    pub open_pack: unsafe extern "C" fn(
-        Raw,
-        Raw,
-        *const u16,
-        *const u16,
-        *mut PackInfo,
-        *mut c_char,
-        usize,
-    ) -> Raw,
-    pub close_pack: unsafe extern "C" fn(Raw),
-    pub attach_device: unsafe extern "C" fn(Raw, Raw),
-    pub dump_shaders: unsafe extern "C" fn(Raw, *const u16) -> i32,
-    pub patch_counters: unsafe extern "C" fn(Raw, &mut PatchCounters),
+    pub open_pack:
+        unsafe extern "C" fn(Raw, Raw, *const u16, *const u16, *mut c_char, usize) -> Raw,
     pub frame_layout: unsafe extern "C" fn(*mut FrameLayout) -> Raw,
     pub read_engine: Read,
-    pub prepare_shader: unsafe extern "C" fn(Raw, &ShaderRequest, &Entry, &mut ShaderResult),
-    pub drop_reflection: unsafe extern "C" fn(Raw),
-    pub foliage_layout: unsafe extern "C" fn(Raw, u8, &mut FoliageLayout) -> bool,
-    pub link_shaders: unsafe extern "C" fn(Raw, Raw, Raw, Raw) -> bool,
-    pub create_shader: unsafe extern "C" fn(Raw, *const c_char, Raw, Raw, bool, &mut bool) -> Raw,
 }
 
 #[repr(C)]
@@ -191,18 +139,17 @@ const _: () = {
     assert!(size_of::<PositionViews>() == 16);
     assert!(size_of::<DrawFacts>() == 32);
     assert!(size_of::<ShaderObjects>() == 40);
-    assert!(size_of::<ShaderResult>() == 32);
     assert!(size_of::<ShaderCreation>() == 56);
     assert!(std::mem::offset_of!(ShaderCreation, return_address) == 32);
     assert!(std::mem::offset_of!(ShaderCreation, status) == 48);
-    assert!(size_of::<PackInfo>() == 16);
     assert!(size_of::<FoliageLayout>() == 108);
     assert!(std::mem::offset_of!(FoliageLayout, usable) == 104);
     assert!(size_of::<FrameTarget>() == 24);
-    assert!(size_of::<Platform>() == 352);
+    assert!(size_of::<Platform>() == 280);
     assert!(std::mem::offset_of!(Platform, guards) == 40);
     assert!(std::mem::offset_of!(Platform, render_target) == 104);
     assert!(std::mem::offset_of!(Platform, target_facts) == 152);
-    assert!(std::mem::offset_of!(Platform, frame_layout) == 296);
-    assert!(std::mem::offset_of!(Platform, create_shader) == 344);
+    assert!(std::mem::offset_of!(Platform, open_pack) == 256);
+    assert!(std::mem::offset_of!(Platform, frame_layout) == 264);
+    assert!(std::mem::offset_of!(Platform, read_engine) == 272);
 };

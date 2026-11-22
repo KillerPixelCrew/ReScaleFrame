@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include "shader_frame_layout.h"
 #include <stddef.h>
 #include <stdint.h>
 #ifndef __cplusplus
@@ -23,14 +24,10 @@ typedef struct {
 } rsf_anomaly_shader_identity;
 
 typedef struct {
-    uint32_t calls[2], call_length, source, length, entry, flags, defines, define_capacity;
-} rsf_anomaly_shader_frame_layout;
-typedef struct {
     rsf_anomaly_shader_bytes source, entry;
     uint32_t flags;
     rsf_anomaly_shader_defines defines;
 } rsf_anomaly_shader_decoded_frame;
-typedef bool (*rsf_anomaly_shader_read)(const void*, uintptr_t address, uint8_t* out, size_t);
 typedef bool (*rsf_anomaly_shader_publish)(void*, const rsf_anomaly_shader_decoded_frame*);
 
 typedef struct {
@@ -130,17 +127,9 @@ static_assert(sizeof(rsf_anomaly_shader_reflection) == 88 &&
     offsetof(rsf_anomaly_shader_reflection, inputs) == 8 && offsetof(rsf_anomaly_shader_reflection, buffers) == 72);
 static_assert(sizeof(rsf_anomaly_shader_parameter) == 40 && sizeof(rsf_anomaly_shader_variable) == 24 &&
     sizeof(rsf_anomaly_shader_buffer) == 40 && sizeof(rsf_anomaly_shader_binding) == 40);
-static_assert(sizeof(rsf_anomaly_shader_frame_layout) == 36);
 static_assert(sizeof(rsf_anomaly_shader_request) == 88 && offsetof(rsf_anomaly_shader_request, defines) == 40 &&
     offsetof(rsf_anomaly_shader_request, bytecode) == 72);
 
-inline rsf_anomaly_shader_frame_layout shader_frame_layout(const MotionProfile& profile) noexcept
-{
-    const auto& frame = profile.frame;
-    return {{profile.create_shader_calls[0].rva, profile.create_shader_calls[1].rva}, call_length,
-        frame.source_offset, frame.length_offset, frame.entry_offset, frame.flags_offset, frame.defines_offset,
-        frame_defines_capacity};
-}
 
 static_assert(sizeof(ManifestEntry) == sizeof(rsf_anomaly_shader_entry) && sizeof(ManifestEntry) == 56 &&
     offsetof(ManifestEntry, name) == offsetof(rsf_anomaly_shader_entry, name) &&

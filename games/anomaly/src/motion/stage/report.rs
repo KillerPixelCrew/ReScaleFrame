@@ -128,10 +128,7 @@ impl Stage {
             let loader = lock(&self.loader);
             (
                 loader.stats,
-                loader
-                    .pack
-                    .as_ref()
-                    .map(|pack| pack.counters(self.platform)),
+                loader.pack.as_ref().map(|pack| pack.counters()),
             )
         };
         let old = std::mem::replace(&mut *lock(&self.previous_report), now.clone());

@@ -305,7 +305,9 @@ ABI checks and fixture, device and game runs for these ports remain open.
   refuses unreadable rows. Manifest admission, draw classification, and
   reports share stable shader-family IDs. The offline tree compiler uses the
   shared Rust compiler, and the guarded engine include lookup remains tied
-  to the Standard and AVX profiles.
+  to the Standard and AVX profiles. The live stage owns pack preparation,
+  variant snapshots, and linkage in Rust. The standalone temporal shader
+  fixture has been ported to Rust with device validation pending.
   [Shader loader port](research/rust-anomaly-shader-loader-n05.md)
 
 The [integration migration scope](rust-migration.md#remaining-integration-ports)

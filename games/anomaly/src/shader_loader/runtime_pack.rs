@@ -1,17 +1,21 @@
 // SPDX-License-Identifier: MIT
 use super::d3d::Modules;
 use super::manifest::{Manifest, Root, admit_pack};
-use super::{Bytes, Request};
+use super::reflection::{Snapshot, reflect};
+use super::{
+    Bytes, Compatibility, Outcome, Request, rsf_anomaly_shader_compatible,
+    rsf_anomaly_shader_skin_mode, runtime_refusal,
+};
+use crate::motion_device::ConstantOps;
 use crate::runtime_module::{export, rsf_anomaly_runtime_module};
 use rsf_game_sys::shader_patch_abi::{
     RSF_PATCH_ARGUMENT, RSF_PATCH_OK, RSF_PATCH_SOURCE, RSF_SHADER_PATCH_VERSION,
-    rsf_get_shader_patch_api_fn, rsf_patch_bytes, rsf_patch_define, rsf_patch_output,
-    rsf_patch_request, rsf_patch_root, rsf_patch_session, rsf_shader_patch_api,
+    rsf_get_shader_patch_api_fn, rsf_patch_bytes, rsf_patch_counters, rsf_patch_define,
+    rsf_patch_output, rsf_patch_request, rsf_patch_root, rsf_patch_session, rsf_shader_patch_api,
 };
 use std::ffi::{CStr, CString, OsString, c_char, c_void};
 use std::os::windows::ffi::OsStringExt;
 use std::ptr::{NonNull, null_mut};
-use windows_sys::Win32::Foundation::FARPROC;
 
 struct Session {
     api: rsf_shader_patch_api,
@@ -27,6 +31,7 @@ impl Drop for Session {
 pub(crate) struct RuntimePack {
     session: Session,
     manifest: Manifest,
+    constant_ops: ConstantOps,
     includes: Includes,
     // The Runtime's session borrows the compiler. Drop the session before releasing the DLLs.
     modules: Modules,
@@ -127,9 +132,6 @@ fn query_api() -> Option<rsf_shader_patch_api> {
         || api.close.is_none()
         || api.attach_d3d11.is_none()
         || api.create_d3d11.is_none()
-        || api.constant_buffer.is_none()
-        || api.upload_constant.is_none()
-        || api.bind_constant.is_none()
         || api.counters.is_none()
         || api.dump.is_none()
     {
@@ -194,6 +196,8 @@ impl RuntimePack {
             return Err(String::from("engine D3DCompiler unavailable"));
         };
         let api = query_api().ok_or_else(|| String::from("Runtime shader service unavailable"))?;
+        let constant_ops = ConstantOps::from_api(&api)
+            .ok_or_else(|| String::from("pack constant operations unavailable"))?;
         let path =
             unsafe { wide_path(pack) }.ok_or_else(|| String::from("invalid motion pack path"))?;
         let data =
@@ -229,6 +233,7 @@ impl RuntimePack {
         Ok(Self {
             session,
             manifest,
+            constant_ops,
             includes: Includes {
                 reader: includer,
                 bytes: Vec::new(),
@@ -314,30 +319,111 @@ unsafe extern "C" fn rsf_anomaly_runtime_pack_open(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_runtime_pack_close(pack: *mut RuntimePack) {
-    if !pack.is_null() {
-        drop(unsafe { Box::from_raw(pack) });
+pub(crate) struct RuntimeVariant {
+    pub(crate) stock: Snapshot,
+    pub(crate) reflection: Snapshot,
+    pub(crate) bytecode: Vec<u8>,
+    pub(crate) skin: i32,
+    pub(crate) outcome: u8,
+}
+
+impl RuntimePack {
+    pub(crate) fn constant_ops(&self) -> ConstantOps {
+        self.constant_ops
+    }
+
+    pub(crate) fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+
+    // The stage guarantees this is a live borrowed D3D11 device.
+    pub(crate) unsafe fn attach(&self, device: *mut c_void) -> i32 {
+        unsafe { (self.session.api.attach_d3d11.unwrap())(device) }
+    }
+
+    pub(crate) fn dump(&self, path: &[u16]) -> i32 {
+        assert_eq!(path.last(), Some(&0));
+        unsafe { (self.session.api.dump.unwrap())(path.as_ptr()) }
+    }
+
+    pub(crate) fn counters(&self) -> rsf_patch_counters {
+        let mut counters = rsf_patch_counters {
+            struct_size: size_of::<rsf_patch_counters>() as u32,
+            abi_version: RSF_SHADER_PATCH_VERSION,
+            ..Default::default()
+        };
+        unsafe { (self.session.api.counters.unwrap())(&mut counters) };
+        counters
+    }
+
+    pub(crate) unsafe fn prepare(
+        &mut self,
+        input: &Request,
+        stage: u8,
+    ) -> Result<RuntimeVariant, (u8, String)> {
+        let mut output = rsf_patch_output::default();
+        let status = unsafe { prepare_bytecode(self, input, &mut output) };
+        // The v1 Runtime copies diagnostics into the fixed output array.
+        let detail = output.reason.map(|c| c as u8);
+        let refusal = |outcome: Outcome| {
+            let detail = CStr::from_bytes_until_nul(&detail).map_or(&detail[..], CStr::to_bytes);
+            (outcome as u8, String::from_utf8_lossy(detail).into_owned())
+        };
+        if let Some(outcome) = runtime_refusal(status) {
+            return Err(refusal(outcome));
+        }
+        let incompatible = || refusal(Outcome::ReflectionMismatch);
+        let reflector = self.modules.reflect();
+        let stock =
+            reflect(reflector, unsafe { input.bytecode.as_slice() }).ok_or_else(incompatible)?;
+        let code = if output.bytecode.data.is_null() || output.bytecode.size == 0 {
+            return Err(incompatible());
+        } else {
+            // The session owns the bytes until its next prepare or close. Copy the
+            // result here before any other session operation can reuse that storage.
+            unsafe { std::slice::from_raw_parts(output.bytecode.data.cast(), output.bytecode.size) }
+        };
+        let reflection = reflect(reflector, code).ok_or_else(incompatible)?;
+        if rsf_anomaly_shader_compatible(stage, stock.view(), reflection.view())
+            != Compatibility::Ok
+        {
+            return Err(incompatible());
+        }
+        Ok(RuntimeVariant {
+            stock,
+            reflection,
+            bytecode: code.to_vec(),
+            skin: unsafe { rsf_anomaly_shader_skin_mode(input.defines) },
+            outcome: if output.cache_hit != 0 {
+                Outcome::ReplacedFromCache as u8
+            } else {
+                Outcome::Replaced as u8
+            },
+        })
+    }
+
+    pub(crate) unsafe fn create(
+        &self,
+        device: *mut c_void,
+        target: &CStr,
+        code: &[u8],
+        shader: &mut *mut c_void,
+    ) -> i32 {
+        unsafe {
+            (self.session.api.create_d3d11.unwrap())(
+                device,
+                target.as_ptr(),
+                rsf_patch_bytes {
+                    data: code.as_ptr().cast(),
+                    size: code.len(),
+                },
+                shader,
+            )
+        }
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_runtime_pack_manifest(pack: &RuntimePack) -> *const Manifest {
-    &pack.manifest
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_runtime_pack_api(pack: &RuntimePack) -> *const rsf_shader_patch_api {
-    &pack.session.api
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_runtime_pack_reflector(pack: &RuntimePack) -> FARPROC {
-    pack.modules.reflect()
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_runtime_pack_prepare(
+unsafe fn prepare_bytecode(
     pack: &mut RuntimePack,
     input: &Request,
     output: &mut rsf_patch_output,

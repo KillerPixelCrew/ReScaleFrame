@@ -3,9 +3,11 @@ use super::*;
 use crate::digest::sha256;
 use crate::shader_family::{FAMILY_COUNT, NO_FAMILY, diagnostic_family_name};
 use crate::shader_loader::{
-    DecodedFrame, Entry, FrameLayout, Manifest, OUTCOME_NAMES, Reflection, decode_frame,
-    outcome_name,
+    DecodedFrame, Entry, FrameLayout, Manifest, OUTCOME_NAMES, Reflection, RuntimePack, Snapshot,
+    decode_frame, outcome_name,
 };
+use crate::shader_loader::{rsf_anomaly_shader_linkable, rsf_anomaly_shader_tess_linkable};
+use rsf_game_sys::shader_patch_abi::{RSF_PATCH_OK, rsf_patch_counters};
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::Arc;
@@ -19,7 +21,7 @@ const FILENAME_CAPACITY: usize = 520;
 pub(in crate::motion) struct Variant {
     stock: Lease,
     shader: Lease,
-    reflection: Lease,
+    reflection: Snapshot,
     request: Arc<Request>,
     device: Lease,
     stage: u8,
@@ -162,7 +164,7 @@ impl Registry {
         &mut self,
         stock: ShaderObjects,
         device: Raw,
-        link: impl FnOnce(Raw, Raw, Raw, Raw) -> bool,
+        link: impl FnOnce(&Variant, Option<(&Variant, &Variant)>, &Variant) -> bool,
     ) -> Result<Chain, Refusal> {
         if !stock.gs.is_null() {
             return Err(Refusal::Geometry);
@@ -197,16 +199,10 @@ impl Registry {
             stock.ps as usize,
         ];
         let linked = *self.links.entry(key).or_insert_with(|| {
-            let (hs, ds) = tess
-                .as_ref()
-                .map_or((ptr::null_mut(), ptr::null_mut()), |(hs, ds)| {
-                    (hs.reflection.as_ptr(), ds.reflection.as_ptr())
-                });
             link(
-                vertex.reflection.as_ptr(),
-                hs,
-                ds,
-                pixel.reflection.as_ptr(),
+                &vertex,
+                tess.as_ref().map(|(hs, ds)| (hs.as_ref(), ds.as_ref())),
+                &pixel,
             )
         });
         if !linked {
@@ -224,24 +220,16 @@ impl Registry {
     }
 }
 
-pub(super) struct Pack {
-    lease: Lease,
-    // Admitted by Rust and owned by the native pack, which frees it only after
-    // `lease` closes the Runtime session. Rows are immutable until then.
-    manifest: ptr::NonNull<Manifest>,
-    constant_ops: ConstantOps,
-}
+pub(super) struct Pack(Box<RuntimePack>);
 
-// The native pack and its compiler/include scratch storage are serialized by
-// the stage's loader lock. Its Runtime service remains borrowed. The manifest
-// has no interior mutability.
+// The loader lock serializes access to the pack, including its engine includer
+// and Runtime session scratch storage.
 unsafe impl Send for Pack {}
 
 impl Pack {
     pub fn open(platform: &Platform, build: Build, root: &Path) -> Result<Self, String> {
         let pack = wide_path(&root.join("motion.rsfpatch"));
         let cache = wide_path(&root.join("cache"));
-        let mut info = MaybeUninit::<PackInfo>::uninit();
         let mut error = [0; 512];
         let handle = unsafe {
             (platform.open_pack)(
@@ -249,50 +237,51 @@ impl Pack {
                 build.profile(),
                 pack.as_ptr(),
                 cache.as_ptr(),
-                info.as_mut_ptr(),
                 error.as_mut_ptr(),
                 error.len(),
             )
         };
-        let lease = Lease::new(handle, platform.close_pack).ok_or_else(|| {
-            unsafe { CStr::from_ptr(error.as_ptr()) }
+        if handle.is_null() {
+            return Err(unsafe { CStr::from_ptr(error.as_ptr()) }
                 .to_string_lossy()
-                .into_owned()
-        })?;
-        let info = unsafe { info.assume_init() };
-        let manifest = ptr::NonNull::new(info.manifest.cast_mut())
-            .ok_or_else(|| String::from("pack manifest unavailable"))?;
-        let constant_ops = unsafe { info.api.as_ref() }
-            .and_then(ConstantOps::from_api)
-            .ok_or_else(|| String::from("pack constant operations unavailable"))?;
-        Ok(Self {
-            lease,
-            manifest,
-            constant_ops,
-        })
+                .into_owned());
+        }
+        // The native SEH wrapper returns the Rust allocation from runtime_pack_open.
+        Ok(Self(unsafe { Box::from_raw(handle.cast::<RuntimePack>()) }))
     }
 
-    pub fn ptr(&self) -> Raw {
-        self.lease.as_ptr()
+    pub(super) unsafe fn attach(&self, device: Raw) -> i32 {
+        unsafe { self.0.attach(device) }
     }
 
     pub fn constant_ops(&self) -> ConstantOps {
-        self.constant_ops
+        self.0.constant_ops()
     }
 
     fn manifest(&self) -> &Manifest {
-        // The native pack keeps the manifest alive while `self.lease` is open.
-        unsafe { self.manifest.as_ref() }
+        self.0.manifest()
     }
 
     fn entry(&self, hash: &[u8; 64]) -> Option<&Entry> {
         self.manifest().find(hash)
     }
 
-    pub fn counters(&self, platform: &Platform) -> PatchCounters {
-        let mut counters = PatchCounters::default();
-        unsafe { (platform.patch_counters)(self.ptr(), &mut counters) };
-        counters
+    pub fn counters(&self) -> rsf_patch_counters {
+        self.0.counters()
+    }
+}
+
+pub(super) fn link_variants(
+    vertex: &Variant,
+    tess: Option<(&Variant, &Variant)>,
+    pixel: &Variant,
+) -> bool {
+    let vs = vertex.reflection.view();
+    let ps = pixel.reflection.view();
+    if let Some((hs, ds)) = tess {
+        rsf_anomaly_shader_tess_linkable(vs, hs.reflection.view(), ds.reflection.view(), ps)
+    } else {
+        rsf_anomaly_shader_linkable(vs, ps)
     }
 }
 
@@ -386,72 +375,57 @@ extern "C" fn rsf_anomaly_motion_foliage_layout(
 
 struct Replacement {
     shader: Lease,
-    reflection: Lease,
+    reflection: Snapshot,
     skin: i32,
     outcome: u8,
     foliage: FoliageLayout,
+    stage: u8,
+    family: u8,
 }
 
 impl Replacement {
     fn build(
         platform: &Platform,
-        pack: &Pack,
+        pack: &mut Pack,
         request: &Request,
-        entry: &Entry,
+        identity: (u8, u8),
         device: Raw,
         attach: bool,
     ) -> Result<Self, (u8, String)> {
-        let mut result = ShaderResult::default();
-        request
-            .frame
-            .with_request(request.target().to_bytes(), &request.bytecode, |view| {
-                unsafe { (platform.prepare_shader)(pack.ptr(), view, entry, &mut result) };
-            });
-        let reflection = Lease::new(result.reflection, platform.drop_reflection);
-        if !matches!(result.outcome, 1 | 2) {
-            return Err((
-                result.outcome,
-                String::from_utf8_lossy(unsafe { result.detail.as_slice() }).into_owned(),
-            ));
-        }
-        let Some(reflection) = reflection else {
-            return Err((CREATE_FAILED, "reflection storage unavailable".into()));
-        };
+        let (stage, family) = identity;
+        let result = request.frame.with_request(
+            request.target().to_bytes(),
+            &request.bytecode,
+            |view| unsafe { pack.0.prepare(view, stage) },
+        )?;
         if device.is_null() {
             return Err((CREATE_FAILED, "engine shader device unreadable".into()));
         }
-        let mut foliage = FoliageLayout::default();
-        if entry.stage == b'v' && matches!(entry.family, FOLIAGE_TREE | FOLIAGE_DETAIL) {
-            unsafe { (platform.foliage_layout)(reflection.as_ptr(), entry.family, &mut foliage) };
-        }
-        let mut refused = false;
-        let shader = unsafe {
-            (platform.create_shader)(
-                pack.ptr(),
-                request.target().as_ptr(),
-                device,
-                reflection.as_ptr(),
-                attach,
-                &mut refused,
-            )
+        let foliage = if stage == b'v' && matches!(family, FOLIAGE_TREE | FOLIAGE_DETAIL) {
+            FoliageLayout::from_stock(family, result.stock.view())
+        } else {
+            FoliageLayout::default()
         };
-        let shader = Lease::new(shader, platform.device.release).ok_or_else(|| {
-            (
-                CREATE_FAILED,
-                if refused {
-                    "Runtime D3D11 interception refused"
-                } else {
-                    "Create*Shader failed"
-                }
-                .into(),
-            )
-        })?;
+        if attach && unsafe { pack.attach(device) } != RSF_PATCH_OK {
+            return Err((CREATE_FAILED, "Runtime D3D11 interception refused".into()));
+        }
+        let mut shader = ptr::null_mut();
+        let status = unsafe {
+            pack.0
+                .create(device, request.target(), &result.bytecode, &mut shader)
+        };
+        let shader = Lease::new(shader, platform.device.release);
+        let shader = shader
+            .filter(|_| status == RSF_PATCH_OK)
+            .ok_or((CREATE_FAILED, "Create*Shader failed".into()))?;
         Ok(Self {
             shader,
-            reflection,
+            reflection: result.reflection,
             skin: result.skin,
             outcome: result.outcome,
             foliage,
+            stage,
+            family,
         })
     }
 
@@ -460,7 +434,6 @@ impl Replacement {
         platform: &Platform,
         stock: Raw,
         request: Arc<Request>,
-        entry: &Entry,
         device: Raw,
     ) -> Arc<Variant> {
         let release = platform.device.release;
@@ -477,8 +450,8 @@ impl Replacement {
             reflection: self.reflection,
             request,
             device,
-            stage: entry.stage,
-            family: entry.family,
+            stage: self.stage,
+            family: self.family,
             skin: self.skin,
             foliage: self.foliage,
         })
@@ -589,10 +562,9 @@ impl Stage {
         let mut loader = lock(&self.loader);
         let Some(old_pack) = &loader.pack else { return };
         let root = lock(&self.settings).shader_dir.clone();
-        let p = self.platform;
         if dump {
             let path = wide_path(&root.join("cache").join("shader-dump"));
-            let result = unsafe { (p.dump_shaders)(old_pack.ptr(), path.as_ptr()) };
+            let result = old_pack.0.dump(&path);
             self.log()
                 .say(format!("Runtime shader dump result={result}"));
         }
@@ -631,7 +603,7 @@ impl Stage {
         root: &Path,
     ) -> Result<(Pack, HashMap<usize, Arc<Variant>>), String> {
         let p = self.platform;
-        let pack = Pack::open(p, build, root)?;
+        let mut pack = Pack::open(p, build, root)?;
         let previous: Vec<_> = lock(&self.registry).shaders.values().cloned().collect();
         let mut next = HashMap::new();
         for old in previous {
@@ -642,12 +614,14 @@ impl Stage {
                 return Err("stage changed for a registered root".into());
             }
             let device = old.device.as_ptr();
-            let replacement = Replacement::build(p, &pack, &old.request, entry, device, false)
-                .map_err(|(outcome, detail)| format!("{}: {detail}", outcome_name(outcome)))?;
+            let identity = (entry.stage, entry.family);
+            let replacement =
+                Replacement::build(p, &mut pack, &old.request, identity, device, false)
+                    .map_err(|(outcome, detail)| format!("{}: {detail}", outcome_name(outcome)))?;
             let key = old.stock.as_ptr();
             next.insert(
                 key as usize,
-                replacement.publish(p, key, old.request.clone(), entry, device),
+                replacement.publish(p, key, old.request.clone(), device),
             );
         }
         Ok((pack, next))
@@ -669,9 +643,9 @@ impl Stage {
         let p = self.platform;
         lock(&self.registry).remember(call.stock, call.file);
         let mut guard = lock(&self.loader);
-        // Split the guard so a borrowed manifest row can outlive counter updates.
+        // Split the guard so pack preparation and counter updates can borrow separate fields.
         let loader = &mut *guard;
-        let Some(pack) = &loader.pack else { return };
+        let Some(pack) = &mut loader.pack else { return };
         let mut layout = MaybeUninit::<FrameLayout>::uninit();
         let module = unsafe { (p.frame_layout)(layout.as_mut_ptr()) };
         let layout = unsafe { layout.assume_init() };
@@ -706,9 +680,11 @@ impl Stage {
             loader.stats.outcomes[NO_FAMILY as usize][NOT_ALLOWLISTED as usize] += 1;
             return;
         };
-        let family = entry.family as usize;
+        let family_id = entry.family;
+        let stage = entry.stage;
+        let family = family_id as usize;
         let name = String::from_utf8_lossy(entry.name()).into_owned();
-        let result = if entry.stage == call.stage {
+        let result = if stage == call.stage {
             Request::copy_stock(&call, frame, hash, read)
                 .ok_or_else(|| {
                     (
@@ -718,7 +694,7 @@ impl Stage {
                 })
                 .and_then(|request| {
                     let device = unsafe { (p.shader_device)() };
-                    Replacement::build(p, pack, &request, entry, device, true)
+                    Replacement::build(p, pack, &request, (stage, family_id), device, true)
                         .map(|replacement| (replacement, request, device))
                 })
         } else {
@@ -726,7 +702,7 @@ impl Stage {
         };
         let outcome = match result {
             Ok((replacement, request, device)) => {
-                if matches!(entry.family, FOLIAGE_TREE | FOLIAGE_DETAIL)
+                if matches!(family_id, FOLIAGE_TREE | FOLIAGE_DETAIL)
                     && !replacement.foliage.usable
                     && loader.refused_logs < 32
                 {
@@ -738,12 +714,12 @@ impl Stage {
                     loader.replacement_logs += 1;
                     self.log().say(format!(
                         "Anomaly motion variant {name} {} skin={} ({}) for {file}",
-                        diagnostic_family_name(entry.family),
+                        diagnostic_family_name(family_id),
                         replacement.skin,
                         outcome_name(outcome)
                     ));
                 }
-                let variant = replacement.publish(p, call.stock, Arc::new(request), entry, device);
+                let variant = replacement.publish(p, call.stock, Arc::new(request), device);
                 let previous = lock(&self.registry).put(variant);
                 drop(previous);
                 outcome
@@ -834,7 +810,7 @@ mod tests {
         Arc::new(Variant {
             stock: lease(stock),
             shader: lease(replacement),
-            reflection: lease(replacement),
+            reflection: Snapshot::default(),
             request: Arc::new(Request {
                 hash: [0; 64],
                 target: [0; 17],
@@ -862,26 +838,26 @@ mod tests {
             ..Default::default()
         };
         let chain = registry
-            .select(pair, raw(42), |vs, hs, ds, ps| {
-                [vs as usize, hs as usize, ds as usize, ps as usize] == [11, 0, 0, 21]
+            .select(pair, raw(42), |vs, tess, ps| {
+                vs.shader.as_ptr() == raw(11) && tess.is_none() && ps.shader.as_ptr() == raw(21)
             })
             .ok()
             .unwrap();
         assert!(!chain.tessellated());
         assert!(
             registry
-                .select(pair, raw(42), |_, _, _, _| panic!("cached link"))
+                .select(pair, raw(42), |_, _, _| panic!("cached link"))
                 .is_ok()
         );
         assert!(matches!(
-            registry.select(pair, raw(43), |_, _, _, _| panic!("foreign device")),
+            registry.select(pair, raw(43), |_, _, _| panic!("foreign device")),
             Err(Refusal::Missing)
         ));
         drop(registry.put(variant(1, 12, 42, CORE_MODEL, b'v')));
         assert!(weak.upgrade().is_some());
         assert_eq!(chain.shaders().vs, raw(11));
         assert!(matches!(
-            registry.select(pair, raw(42), |_, _, _, _| false),
+            registry.select(pair, raw(42), |_, _, _| false),
             Err(Refusal::Missing)
         ));
         drop(chain);
@@ -914,7 +890,9 @@ mod tests {
             gs: raw(5),
             ..chain
         };
-        let unavailable = |_, _, _, _| panic!("an incomplete or unsafe chain cannot be linked");
+        fn unavailable(_: &Variant, _: Option<(&Variant, &Variant)>, _: &Variant) -> bool {
+            panic!("an incomplete or unsafe chain cannot be linked");
+        }
         assert!(matches!(
             registry.select(partial, raw(42), unavailable),
             Err(Refusal::TessMissing)
@@ -924,13 +902,14 @@ mod tests {
             Err(Refusal::Geometry)
         ));
         assert!(matches!(
-            registry.select(chain, raw(42), |_, _, _, _| false),
+            registry.select(chain, raw(42), |_, _, _| false),
             Err(Refusal::TessUnlinked)
         ));
         registry.clear_links();
         let selected = registry
-            .select(chain, raw(42), |vs, hs, ds, ps| {
-                [vs as usize, hs as usize, ds as usize, ps as usize] == [11, 13, 14, 12]
+            .select(chain, raw(42), |vs, tess, ps| {
+                let (hs, ds) = tess.expect("tessellated");
+                [vs, hs, ds, ps].map(|s| s.shader.as_ptr() as usize) == [11, 13, 14, 12]
             })
             .ok()
             .unwrap();
