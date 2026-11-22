@@ -18,3 +18,8 @@ Base `9716068b0237b76cb6279c90cceaec39cbf00826`. The C headers now declare the p
 ## Checks
 
 Pinned Rust 1.94.1 formatting, bindgen 0.72.1 regeneration, locked offline Cargo metadata, header layout and constant comparisons, and source link-path review. Native link, fixture, device and game results are pending.
+
+The integrated D04 native tables now call the same SDK predicates directly.
+One Rust pass callback adapts the depth-domain query for both SR12 and FG12,
+so the later D04 table remains wired after the C predicate object is removed.
+Strict C11 syntax checks passed for the three retained public headers.

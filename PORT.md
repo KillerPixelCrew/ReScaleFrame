@@ -148,16 +148,16 @@ Resolve shared ABI, session, option and provider contract findings at their owne
 
 - [x] [runtime/contract/include/rescaleframe/backend.h](runtime/contract/include/rescaleframe/backend.h)
 - [x] [runtime/contract/include/rescaleframe/backend_registry.h](runtime/contract/include/rescaleframe/backend_registry.h)
-- [ ] [runtime/contract/include/rescaleframe/frame_generation.h](runtime/contract/include/rescaleframe/frame_generation.h)
+- [x] [runtime/contract/include/rescaleframe/frame_generation.h](runtime/contract/include/rescaleframe/frame_generation.h)
 - [x] [runtime/contract/src/negotiate.cpp](runtime/contract/src/negotiate.cpp)
 - [x] [runtime/orchestrator/include/rescaleframe/plugin_session.h](runtime/orchestrator/include/rescaleframe/plugin_session.h)
 - [x] [runtime/orchestrator/include/rescaleframe/runtime.h](runtime/orchestrator/include/rescaleframe/runtime.h)
 - [ ] [runtime/orchestrator/src/plugin_callbacks.cpp](runtime/orchestrator/src/plugin_callbacks.cpp)
 - [x] [runtime/orchestrator/src/rust_export.h](runtime/orchestrator/src/rust_export.h)
 - [x] [sdk/game/include/rescaleframe/game_api.h](sdk/game/include/rescaleframe/game_api.h)
-- [ ] [sdk/game/include/rescaleframe/game_frame.h](sdk/game/include/rescaleframe/game_frame.h)
+- [x] [sdk/game/include/rescaleframe/game_frame.h](sdk/game/include/rescaleframe/game_frame.h)
 - [x] [sdk/game/include/rescaleframe/game_plugin_util.h](sdk/game/include/rescaleframe/game_plugin_util.h)
-- [ ] [sdk/game/include/rescaleframe/game_renderer.h](sdk/game/include/rescaleframe/game_renderer.h)
+- [x] [sdk/game/include/rescaleframe/game_renderer.h](sdk/game/include/rescaleframe/game_renderer.h)
 
 **Fixtures (6)**
 
@@ -336,7 +336,7 @@ Port CPU event admission, input receipts, vendor latency and pacing decisions, i
 
 - Versioned GameSDK events, host callbacks and session leases ([C01](#c01), [C02](#c02), [C04](#c04)).
 
-**Port files (11)**
+**Port files (12)**
 
 - [x] [runtime/orchestrator/include/rescaleframe/native_cpu.h](runtime/orchestrator/include/rescaleframe/native_cpu.h)
 - [x] [runtime/orchestrator/include/rescaleframe/native_latency_vulkan.h](runtime/orchestrator/include/rescaleframe/native_latency_vulkan.h)
@@ -347,7 +347,8 @@ Port CPU event admission, input receipts, vendor latency and pacing decisions, i
 - [x] [runtime/orchestrator/src/latency_antilag.h](runtime/orchestrator/src/latency_antilag.h)
 - [x] [runtime/orchestrator/src/latency_policy.h](runtime/orchestrator/src/latency_policy.h)
 - [x] [runtime/orchestrator/src/native_fg_cpu_platform.h](runtime/orchestrator/src/native_fg_cpu_platform.h)
-- [ ] [runtime/orchestrator/src/native_latency_vulkan.cpp](runtime/orchestrator/src/native_latency_vulkan.cpp)
+- [ ] [runtime/orchestrator/src/native_latency_streamline_exceptions.cpp](runtime/orchestrator/src/native_latency_streamline_exceptions.cpp) (native Streamline callback exceptions)
+- [x] [runtime/orchestrator/src/native_latency_vulkan.cpp](runtime/orchestrator/src/native_latency_vulkan.cpp)
 - [x] [runtime/orchestrator/src/native_latency_vulkan_presentation.h](runtime/orchestrator/src/native_latency_vulkan_presentation.h)
 
 **Fixtures (8)**
@@ -359,7 +360,7 @@ Port CPU event admission, input receipts, vendor latency and pacing decisions, i
 - [x] [tests/native_cpu_reservation.cpp](tests/native_cpu_reservation.cpp)
 - [x] [tests/native_fg_cpu.cpp](tests/native_fg_cpu.cpp)
 - [x] [tests/native_latency_vulkan.cpp](tests/native_latency_vulkan.cpp)
-- [ ] [tests/xell_sleep_concurrency.cpp](tests/xell_sleep_concurrency.cpp)
+- [x] [tests/xell_sleep_concurrency.cpp](tests/xell_sleep_concurrency.cpp)
 
 **Rust review findings (12)**
 
