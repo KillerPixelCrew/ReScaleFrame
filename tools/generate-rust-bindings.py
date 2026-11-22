@@ -24,8 +24,9 @@ def generate(output, header, types, constants, clang_args, extra=(), *, use_core
         Path(temporary.name).replace(output)
 
 
-generate("games/ac7/src/velocity_device_abi.rs", "games/ac7/src/velocity_device.h",
-         "rsf_ac7_velocity_(variant|variant_request|kernels|refusal_fn)", "NOTHING", [])
+generate("games/ac7/src/velocity_state_abi.rs", "runtime/graphics/include/rescaleframe/d3d11_state.h",
+         "rsf_d3d11_state", "NOTHING", [],
+         ["--allowlist-function", "rsf_d3d11_state_(save|restore)", "--no-derive-copy"])
 generate("games/fallout4/src/render_records.rs", "games/fallout4/src/render_records.h",
          "rsf::fallout4::Native(Screen|OutputOwner|ResolutionReceipt|DepthMathFailure|InputSlot|InputReferences)", "NOTHING",
          ["-x", "c++", "-std=c++20"],

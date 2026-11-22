@@ -1060,13 +1060,13 @@ removed. Build, emitted-bytecode parity and replay remain open.
 [Tessellation audit](research/rust-ac7-velocity-tessellation.md)
 
 A04 and A05 keep shader compilation, DXBC writes, D3D11 shader creation,
-variant publication and replay lease ownership in Rust. The native pass
-keeps GPU resource setup and the existing capture, motion, history and merge
-submissions. The WARP driver lends its device to Rust shader-link and retained
-DXBC fixtures. Source comparisons, pinned formatting, binding regeneration and
-locked offline metadata passed. Build, emitted DXBC and runtime validation
-remain open.
-[A04 and A05 source dispositions](research/rust-ac7-velocity-a04-a05-residual.md)
+variant publication, replay leases, GPU resources and capture, motion,
+history and merge submission in Rust. The Rust WARP fixture retains its
+real device and readback assertions behind the original CTest entry.
+Source comparisons, pinned formatting, focused syntax, binding
+regeneration and locked offline metadata passed. Build, emitted DXBC
+and runtime validation remain open.
+[A04 and A05 D3D11 source dispositions](research/rust-ac7-velocity-d3d11.md)
 
 AC7 motion capture now stores its bounded engine and renderer-root
 records and associates native queued commands in Rust. The typed

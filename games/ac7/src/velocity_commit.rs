@@ -2,7 +2,7 @@
 //! The translucent velocity pass's commit and reporting policy: the commit pass's admission and
 //! its view identity, the native motion target's extent, sample, array and format check, the
 //! refusal and commit log budgets, and the per-frame CPU profile with its report thresholds.
-//! velocity_pass.cpp keeps the renderer and context checks, the view's native depth identity, the
+//! The D3D11 replay keeps the renderer and context checks, the view's native depth identity, the
 //! target's description and device check, the state scope, the merge draw, the copies, the clock,
 //! and the device shader object count.
 
@@ -31,26 +31,26 @@ const REPORT_PEAK_MS: f64 = 4.0;
 /// DXGI format.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[allow(dead_code)] // constructed by velocity_pass.cpp
-struct CommitTarget {
-    width: u32,
-    height: u32,
-    samples: u32,
-    array_size: u32,
-    format: u32,
+#[allow(dead_code)] // constructed by D3D11 replay
+pub(crate) struct CommitTarget {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) samples: u32,
+    pub(crate) array_size: u32,
+    pub(crate) format: u32,
 }
 
 /// One admitted draw callback's CPU time from entry to return, the part spent admitting its
 /// variant, the part spent preparing resources, its native frame and its record bound.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-#[allow(dead_code)] // constructed by velocity_pass.cpp
-struct ProfileSample {
-    elapsed_ms: f64,
-    shader_ms: f64,
-    resource_ms: f64,
-    frame: u32,
-    records: u32,
+#[allow(dead_code)] // constructed by D3D11 replay
+pub(crate) struct ProfileSample {
+    pub(crate) elapsed_ms: f64,
+    pub(crate) shader_ms: f64,
+    pub(crate) resource_ms: f64,
+    pub(crate) frame: u32,
+    pub(crate) records: u32,
 }
 
 /// A frame's accumulated profile. `frame` is the last sampled native frame, kept across frame
@@ -188,7 +188,7 @@ fn lock() -> MutexGuard<'static, Pass> {
 /// Nonzero with the decision's slot and extent when the pass's view has translucent motion
 /// written for its frame, view and family. The decision is unavailable otherwise.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_commit_view(
+pub(crate) unsafe extern "C" fn rsf_ac7_velocity_commit_view(
     pass: *const rsf_game_render_pass,
     decision: *mut ViewDecision,
 ) -> i32 {
@@ -212,7 +212,7 @@ unsafe extern "C" fn rsf_ac7_velocity_commit_view(
 
 /// Nonzero when the native motion target can receive the committed view's merge.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_commit_target(
+pub(crate) unsafe extern "C" fn rsf_ac7_velocity_commit_target(
     view: *const ViewDecision,
     target: *const CommitTarget,
 ) -> i32 {
@@ -237,10 +237,8 @@ fn take_log(kind: u32) -> Option<Log> {
 }
 
 #[cfg(windows)]
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_log_refusal(reason: *const c_char) {
+pub(crate) fn refused(reason: &CStr) {
     if let Some(log) = take_log(REPORT_REFUSAL) {
-        let reason = unsafe { CStr::from_ptr(reason) };
         let message = format!(
             "AC7 translucent velocity refused: {}",
             reason.to_string_lossy()
@@ -253,14 +251,14 @@ unsafe extern "C" fn rsf_ac7_velocity_log_refusal(reason: *const c_char) {
 
 #[cfg(windows)]
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_velocity_log_commit() {
+pub(crate) extern "C" fn rsf_ac7_velocity_log_commit() {
     if let Some(log) = take_log(REPORT_COMMIT) {
         log.emit(c"AC7 translucent velocity: opacity-clipped generated-geometry motion and depth committed before native post-processing");
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_profile_sample(sample: *const ProfileSample) {
+pub(crate) unsafe extern "C" fn rsf_ac7_velocity_profile_sample(sample: *const ProfileSample) {
     // SAFETY: The finishing draw callback lends its sample for this call.
     if let Some(sample) = unsafe { sample.as_ref() } {
         lock().profile.sample(sample);
@@ -270,7 +268,7 @@ unsafe extern "C" fn rsf_ac7_velocity_profile_sample(sample: *const ProfileSampl
 /// The totals restart on every renderer frame end, even without a log attachment.
 #[cfg(windows)]
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_velocity_log_frame_end(shader_objects: u32) {
+pub(crate) extern "C" fn rsf_ac7_velocity_log_frame_end(shader_objects: u32) {
     let (report, log) = {
         let mut pass = lock();
         (pass.profile.end_frame(), pass.log)

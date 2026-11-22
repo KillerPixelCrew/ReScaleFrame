@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: MIT
-//! Shader-link and retained-bytecode checks called by the existing WARP fixture.
-use crate::velocity_container::borrowed;
+//! AC7 shader linkage, retained-bytecode and WARP replay fixtures.
+#[path = "ac7_velocity_warp.rs"]
+mod warp;
 use crate::velocity_geometry::{GeometryRegisters, history_compile_count};
 use crate::velocity_stage::compile_source;
 use crate::velocity_tessellation::DomainRegisters;
 use crate::{velocity_geometry, velocity_pixel, velocity_tessellation, velocity_vertex};
-use std::ffi::{CStr, OsString, c_void};
+use std::ffi::{CStr, OsString};
 use std::fs;
 use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
-use windows::Win32::Foundation::E_FAIL;
 use windows::Win32::Graphics::Direct3D11::ID3D11Device;
-use windows::core::Interface;
 
 fn check(value: bool, description: &str) -> bool {
     if !value {
@@ -181,71 +180,6 @@ unsafe fn directory(path: *const u16) -> Option<PathBuf> {
     })
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_fixture_links(device: *mut c_void, path: *const u16) -> bool {
-    let Some(device) = (unsafe { ID3D11Device::from_raw_borrowed(&device) }) else {
-        return false;
-    };
-    let path = unsafe { directory(path) };
-    let geometry = check(
-        geometry(device) == Some(true),
-        "validate velocity geometry linkage",
-    );
-    let tessellation = check(
-        tessellation_fixture(device, path.as_deref()) == Some(true),
-        "validate velocity tessellation linkage",
-    );
-    geometry && tessellation
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_fixture_pixel(
-    device: *mut c_void,
-    bytes: *const u8,
-    size: usize,
-    blend: u32,
-    output: *mut *mut c_void,
-) -> i32 {
-    let (Some(device), Some(bytes), Some(output)) = (
-        unsafe { ID3D11Device::from_raw_borrowed(&device) },
-        unsafe { borrowed(bytes, size) },
-        unsafe { output.as_mut() },
-    ) else {
-        return E_FAIL.0;
-    };
-    let Some(code) = velocity_pixel::transform(bytes, blend, u32::MAX, u32::MAX) else {
-        return E_FAIL.0;
-    };
-    let mut shader = None;
-    match unsafe { device.CreatePixelShader(&code, None, Some(&mut shader)) } {
-        Ok(()) => match shader {
-            Some(shader) => {
-                *output = shader.into_raw();
-                0
-            }
-            None => E_FAIL.0,
-        },
-        Err(error) => error.code().0,
-    }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_fixture_retained(
-    device: *mut c_void,
-    path: *const u16,
-) -> bool {
-    let Some(device) = (unsafe { ID3D11Device::from_raw_borrowed(&device) }) else {
-        return false;
-    };
-    let replayed =
-        unsafe { directory(path) }.is_none_or(|path| replay_retained(device, &path) == Some(true));
-    let compiled_once = check(
-        history_compile_count() == 1,
-        "native/material interface changes link DXBC without repeating history-GS HLSL compilation",
-    );
-    replayed && compiled_once
-}
-
 const VERTEX: &str =
     r#"float4 main(uint id:SV_VertexID):SV_Position{return float4(id==2?3:-1,id==1?3:-1,.75,1);}"#;
 
@@ -258,3 +192,30 @@ const HULL: &str = r#"struct V{float4 p:VS_To_DS_Position;};struct C{float e[3]:
 const DOMAIN: &str = r#"struct V{float4 p:VS_To_DS_Position;};struct C{float e[3]:SV_TessFactor;float i:SV_InsideTessFactor;};[domain("tri")]float4 main(C c,const OutputPatch<V,3> p,float3 d:SV_DomainLocation):SV_Position{return p[0].p*d.x+p[1].p*d.y+p[2].p*d.z;}"#;
 
 const MATCHED_VERTEX: &str = r#"struct V{float4 a:TEXCOORD10;float4 b:TEXCOORD11;float4 c:TEXCOORD7;float3 n:TEXCOORD9;float4 p:VS_To_DS_Position;uint id:VS_To_DS_VertexID;};V main(uint i:SV_VertexID){V o;o.a=o.b=o.c=0;o.n=float3(0,0,1);o.p=float4(i,0,0,1);o.id=i;return o;}"#;
+
+const FIXTURE_VS: &str = r#"
+struct V {float4 position:SV_Position;float4 previous:RSFPREV0;float4 current:RSFCUR0;};
+V main(uint id:SV_VertexID) {V o;o.position=float4(id==2?3:-1,id==1?3:-1,.75,1);
+o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;}"#;
+
+const MOVING_VS: &str = r#"cbuffer Object:register(b0){float4 offset;}float4 main(uint id:SV_VertexID):SV_Position{return float4(id==2?3:-1,id==1?3:-1,.75,1)+offset;}"#;
+
+const GENERATED_GS: &str = r#"cbuffer Generated:register(b1){float4 shift;}struct V{float4 p:SV_Position;};[maxvertexcount(3)]void main(triangle V input[3],inout TriangleStream<V> stream){[unroll]for(uint i=0;i<3;i++){V output;output.p=input[i].p+shift;stream.Append(output);}}"#;
+
+const PATCH_VS: &str = r#"cbuffer Object:register(b0){float4 offset;}struct V{float4 p:VS_To_DS_Position;};V main(uint i:SV_VertexID){V o;o.p=float4(i==2?3:-1,i==1?3:-1,.75,1)+offset;return o;}"#;
+
+const PATCH_HS: &str = r#"cbuffer Tess:register(b1){float4 factor;}struct V{float4 p:VS_To_DS_Position;};struct C{float e[3]:SV_TessFactor;float i:SV_InsideTessFactor;};C constants(InputPatch<V,3> p){C o;o.e[0]=o.e[1]=o.e[2]=factor.x;o.i=factor.x;return o;}[domain("tri")][partitioning("fractional_even")][outputtopology("triangle_cw")][outputcontrolpoints(3)][patchconstantfunc("constants")]V main(InputPatch<V,3> p,uint i:SV_OutputControlPointID){return p[i];}"#;
+
+const PATCH_DS: &str = r#"cbuffer Deform:register(b2){float4 shift;}struct V{float4 p:VS_To_DS_Position;};struct C{float e[3]:SV_TessFactor;float i:SV_InsideTessFactor;};[domain("tri")]float4 main(C c,const OutputPatch<V,3> p,float3 d:SV_DomainLocation):SV_Position{float4 o=p[0].p*d.x+p[1].p*d.y+p[2].p*d.z+shift;o.z+=.1*d.x*d.y;return o;}"#;
+
+const PATCH_HS12: &str = r#"cbuffer Tess:register(b1){float4 factor;}struct V{float4 p:VS_To_DS_Position;};struct C{float e[3]:SV_TessFactor;float i:SV_InsideTessFactor;};C constants(InputPatch<V,12> p){C o;o.e[0]=o.e[1]=o.e[2]=factor.x;o.i=factor.x;return o;}[domain("tri")][partitioning("fractional_even")][outputtopology("triangle_cw")][outputcontrolpoints(3)][patchconstantfunc("constants")]V main(InputPatch<V,12> p,uint i:SV_OutputControlPointID){V o;o.p=p[i].p;o.p.z+=.001;return o;}"#;
+
+const PARTICLE_VS: &str = r#"float4 main(float4 centre:ATTRIBUTE0,float4 old:ATTRIBUTE1,float4 size:ATTRIBUTE2,float2 corner:ATTRIBUTE4):SV_Position{return float4(centre.xy+corner,centre.z,1);}"#;
+
+const MESH_VS: &str = r#"float4 main(uint vertex:SV_VertexID,float4 a:ATTRIBUTE8,float4 b:ATTRIBUTE9,float4 c:ATTRIBUTE10):SV_Position {float4 p=float4(vertex==2?3:-1,vertex==1?3:-1,.75,1);return float4(dot(p,a),dot(p,b),dot(p,c),1);}"#;
+
+const BEAM_VS: &str = r#"float4 main(float4 p:ATTRIBUTE0,float3 old:ATTRIBUTE1,float4 size:ATTRIBUTE2,float4 colour:ATTRIBUTE4,float4 uv:ATTRIBUTE3):SV_Position{return float4(p.xyz,1);}"#;
+
+const MATERIAL_0: &str = r#"Texture2D<float4> data:register(t0);float4 main(float4 p:SV_Position):SV_Target0{float4 c=data.Load(int3(int2(p.xy),0));return float4(max(c.xyz,0),saturate(c.w));}"#;
+
+const MATERIAL_1: &str = r#"Texture2D<float4> data:register(t0);float4 main(float4 p:SV_Position):SV_Target0{float4 c=data.Load(int3(int2(p.xy),0));float a=saturate(c.w);return float4(max(c.xyz,0)*a,0);}"#;

@@ -1,13 +1,19 @@
 // SPDX-License-Identifier: MIT
-//! Scope facts and synchronous replay leases for the native D3D11 submission leaves.
-use super::{lock, release_renderer};
+//! Scope facts and synchronous leases for AC7 D3D11 replay.
+use super::d3d11::{Pipeline, Renderer, clock_ms};
+use super::{LIFETIME, admit, lock, published, release_renderer, reset_for_renderer};
 use crate::scene_color_abi::rsf_frame_tap_geometry;
-use crate::velocity_commit::{Log, set_log};
+use crate::velocity_commit::{Log, refused, rsf_ac7_velocity_log_frame_end, set_log};
+use crate::velocity_history;
 use crate::velocity_stream::draw_admitted;
+use rsf_game_sys::ffi_util::try_box;
 use rsf_game_sys::rsf_game_render_pass;
 use std::cell::{Cell, RefCell};
 use std::ffi::{c_char, c_void};
+use std::ptr::null_mut;
 use std::sync::Mutex;
+use windows::Win32::Graphics::Direct3D11::{D3D11_DEVICE_CONTEXT_IMMEDIATE, ID3D11DeviceContext};
+use windows::core::Interface;
 
 static REPLAY: Mutex<()> = Mutex::new(());
 
@@ -17,7 +23,7 @@ thread_local! {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_set_log(
+pub(crate) unsafe extern "C" fn rsf_ac7_velocity_set_log(
     log: Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
     user: *mut c_void,
 ) {
@@ -26,7 +32,7 @@ unsafe extern "C" fn rsf_ac7_velocity_set_log(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_scope(scope: *const rsf_game_render_pass) {
+pub(crate) unsafe extern "C" fn rsf_ac7_velocity_scope(scope: *const rsf_game_render_pass) {
     // The queued renderer lends the exact pass. Only its leading size is read before admission.
     let pass = if !scope.is_null()
         && unsafe { (*scope).struct_size as usize } >= size_of::<rsf_game_render_pass>()
@@ -39,10 +45,7 @@ unsafe extern "C" fn rsf_ac7_velocity_scope(scope: *const rsf_game_render_pass) 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_replay_draw(
-    draw: *const rsf_frame_tap_geometry,
-    submit: unsafe extern "C" fn(*const rsf_game_render_pass, *const rsf_frame_tap_geometry),
-) {
+pub(crate) unsafe extern "C" fn rsf_ac7_velocity_geometry(draw: *const rsf_frame_tap_geometry) {
     if MERGING.get() {
         return;
     }
@@ -59,25 +62,57 @@ unsafe extern "C" fn rsf_ac7_velocity_replay_draw(
         return;
     }
     let _lease = lock(&REPLAY);
-    // The geometry observation and scope snapshot are borrowed through submission.
-    unsafe { submit(&scope, draw) };
+    let Some(context) = (unsafe { ID3D11DeviceContext::from_raw_borrowed(&draw.context) }) else {
+        return;
+    };
+    if unsafe { context.GetType() } != D3D11_DEVICE_CONTEXT_IMMEDIATE {
+        return;
+    }
+    let entered = clock_ms();
+    let Some(pipeline) = Pipeline::inspect(context, draw.topology) else {
+        return;
+    };
+    let Ok(device) = (unsafe { context.GetDevice() }) else {
+        return;
+    };
+    let renderer = admit(
+        &LIFETIME,
+        device.as_raw(),
+        || {
+            Renderer::new(&device)
+                .and_then(try_box)
+                .map_or(null_mut(), |renderer| Box::into_raw(renderer).cast())
+        },
+        destroy,
+        reset_for_renderer,
+    );
+    let Some(renderer) = (unsafe { renderer.cast::<Renderer>().as_mut() }) else {
+        refused(c"device-side pass initialization failed");
+        return;
+    };
+    let _ = renderer.draw(context, &scope, draw, pipeline, entered);
+}
+
+unsafe extern "C" fn destroy(renderer: *mut c_void) {
+    drop(unsafe { Box::from_raw(renderer.cast::<Renderer>()) });
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_replay_commit(
+pub(crate) unsafe extern "C" fn rsf_ac7_velocity_commit(
     context: *mut c_void,
     pass: *const rsf_game_render_pass,
-    submit: unsafe extern "C" fn(*mut c_void, *const rsf_game_render_pass) -> i32,
 ) -> i32 {
     let _lease = lock(&REPLAY);
-    unsafe { submit(context, pass) }
+    let (Some(renderer), Some(context)) = (
+        unsafe { published(&LIFETIME).cast::<Renderer>().as_ref() },
+        unsafe { ID3D11DeviceContext::from_raw_borrowed(&context) },
+    ) else {
+        return 0;
+    };
+    i32::from(unsafe { renderer.commit(context, pass) }.is_some())
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_replay_merge(
-    context: *mut c_void,
-    draw: unsafe extern "C" fn(*mut c_void),
-) {
+pub(super) fn merge(draw: impl FnOnce()) {
     struct Restore(bool);
     impl Drop for Restore {
         fn drop(&mut self) {
@@ -85,23 +120,28 @@ unsafe extern "C" fn rsf_ac7_velocity_replay_merge(
         }
     }
     let _restore = Restore(MERGING.replace(true));
-    unsafe { draw(context) };
+    draw();
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_replay_frame_end(retire: unsafe extern "C" fn()) {
+pub(crate) extern "C" fn rsf_ac7_velocity_frame_end() {
     let _lease = lock(&REPLAY);
-    unsafe { retire() };
+    let renderer = published(&LIFETIME);
+    let Some(owner) = (unsafe { renderer.cast::<Renderer>().as_mut() }) else {
+        return;
+    };
+    rsf_ac7_velocity_log_frame_end(owner.count());
+    velocity_history::frame_end(|kind, slot| owner.retire(kind, slot));
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_replay_count(count: unsafe extern "C" fn() -> u32) -> u32 {
+#[cfg(feature = "warp-fixture")]
+pub(crate) fn shader_creation_count() -> u32 {
     let _lease = lock(&REPLAY);
-    unsafe { count() }
+    unsafe { published(&LIFETIME).cast::<Renderer>().as_ref() }.map_or(0, Renderer::count)
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_velocity_release() {
+pub(crate) extern "C" fn rsf_ac7_velocity_release() {
     let _lease = lock(&REPLAY);
     release_renderer();
     let _ = SCOPE.replace(None);

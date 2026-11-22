@@ -9,6 +9,9 @@ license.workspace = true
 [lib]
 crate-type = ["staticlib"]
 
+[features]
+warp-fixture = []
+
 [dependencies]
 rsf-game-sys = { path = "../../sdk/game" }
 

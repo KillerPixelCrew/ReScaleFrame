@@ -1,17 +1,14 @@
 // SPDX-License-Identifier: MIT
 //! The translucent velocity pass's logical history: model and view identity, frame rotation,
 //! history validity, record accounting, the view's written and commit state, and epoch
-//! retirement. velocity_pass.cpp keeps the D3D11 buffers and textures at the slots assigned here,
-//! performs every allocation, clear, rehash and copy these decisions ask for, and releases a
-//! slot's resources when frame end retires it.
+//! retirement. The D3D11 replay keeps resources at these slots and releases them on retirement.
 
 use std::collections::HashMap;
-use std::ffi::c_void;
 use std::hash::Hash;
 use std::mem::offset_of;
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
-const NO_SLOT: u32 = u32::MAX;
+pub(crate) const NO_SLOT: u32 = u32::MAX;
 const NO_FRAME: u32 = u32::MAX;
 const FIRST_EPOCH: u64 = 1;
 // An entry survives the frame end it was used in and the one after.
@@ -23,53 +20,53 @@ pub(crate) const MIN_CAPACITY: u32 = 1024;
 pub(crate) const RECORD_LIMIT: u32 = u32::MAX / 128;
 
 // View actions.
-const VIEW_UNAVAILABLE: u32 = 0;
-const VIEW_SAME_FRAME: u32 = 1;
+pub(crate) const VIEW_UNAVAILABLE: u32 = 0;
+pub(crate) const VIEW_SAME_FRAME: u32 = 1;
 const VIEW_REUSE: u32 = 2;
-const VIEW_ALLOCATE: u32 = 3;
+pub(crate) const VIEW_ALLOCATE: u32 = 3;
 pub(crate) const VIEW_COMMIT: u32 = 4;
 
 // Retirement kinds.
-const RETIRE_MODEL: u32 = 0;
-const RETIRE_VIEW: u32 = 1;
+pub(crate) const RETIRE_MODEL: u32 = 0;
+pub(crate) const RETIRE_VIEW: u32 = 1;
 
 /// A draw's model identity and its record count for this callback. `particle` drops the vertex
 /// factory and draw offsets from the identity; `reset` is the scope's history reset.
 #[repr(C)]
 #[derive(Clone, Copy)]
-#[allow(dead_code)] // constructed by velocity_pass.cpp
-struct ModelDraw {
-    session_id: u64,
-    history_key: u64,
-    view_key: u64,
-    primitive_key: u64,
-    material_key: u64,
-    vertex_factory_key: u64,
-    vertex_hash: u32,
-    geometry_hash: u32,
-    start: u32,
-    base_vertex: i32,
-    particle: u32,
-    frame: u32,
-    reset: u32,
-    records: u32,
+#[allow(dead_code)] // constructed by D3D11 replay
+pub(crate) struct ModelDraw {
+    pub(crate) session_id: u64,
+    pub(crate) history_key: u64,
+    pub(crate) view_key: u64,
+    pub(crate) primitive_key: u64,
+    pub(crate) material_key: u64,
+    pub(crate) vertex_factory_key: u64,
+    pub(crate) vertex_hash: u32,
+    pub(crate) geometry_hash: u32,
+    pub(crate) start: u32,
+    pub(crate) base_vertex: i32,
+    pub(crate) particle: u32,
+    pub(crate) frame: u32,
+    pub(crate) reset: u32,
+    pub(crate) records: u32,
 }
 
 /// `rotate`: swap previous and current and clear the new current. `capacity`: the current
 /// buffer must hold at least this many records. Both apply only while `slot` is valid.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ModelDecision {
-    slot: u32,
-    rotate: u32,
-    usable: u32,
-    capacity: u32,
+pub(crate) struct ModelDecision {
+    pub(crate) slot: u32,
+    pub(crate) rotate: u32,
+    pub(crate) usable: u32,
+    pub(crate) capacity: u32,
 }
 
 /// A view's identity at a draw (its native depth extent) or at a commit (the motion target's
 /// pass, extent unused).
 #[repr(C)]
-#[allow(dead_code)] // constructed by velocity_pass.cpp and velocity_commit.rs
+#[allow(dead_code)] // constructed by D3D11 replay and velocity_commit.rs
 pub(crate) struct ViewDraw {
     pub(crate) session_id: u64,
     pub(crate) history_key: u64,
@@ -98,7 +95,7 @@ const _: () = {
     assert!(size_of::<ViewDecision>() == 16);
 };
 
-const UNAVAILABLE_MODEL: ModelDecision = ModelDecision {
+pub(crate) const UNAVAILABLE_MODEL: ModelDecision = ModelDecision {
     slot: NO_SLOT,
     rotate: 0,
     usable: 0,
@@ -435,10 +432,8 @@ fn lock() -> MutexGuard<'static, History> {
     HISTORY.lock().unwrap_or_else(|error| error.into_inner())
 }
 
-type RetireSlot = unsafe extern "C" fn(*mut c_void, u32, u32);
-
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_model_begin(
+pub(crate) unsafe extern "C" fn rsf_ac7_velocity_model_begin(
     draw: *const ModelDraw,
     decision: *mut ModelDecision,
 ) -> i32 {
@@ -453,12 +448,12 @@ unsafe extern "C" fn rsf_ac7_velocity_model_begin(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_velocity_model_record(slot: u32, frame: u32, records: u32) {
+pub(crate) extern "C" fn rsf_ac7_velocity_model_record(slot: u32, frame: u32, records: u32) {
     lock().record_model(slot, frame, records);
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_view_begin(
+pub(crate) unsafe extern "C" fn rsf_ac7_velocity_view_begin(
     draw: *const ViewDraw,
     decision: *mut ViewDecision,
 ) {
@@ -471,7 +466,7 @@ unsafe extern "C" fn rsf_ac7_velocity_view_begin(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_view_ready(slot: u32, draw: *const ViewDraw) {
+pub(crate) unsafe extern "C" fn rsf_ac7_velocity_view_ready(slot: u32, draw: *const ViewDraw) {
     // SAFETY: The draw callback lends its identity for this call.
     if let Some(draw) = unsafe { draw.as_ref() } {
         lock().ready_view(slot, draw);
@@ -479,7 +474,7 @@ unsafe extern "C" fn rsf_ac7_velocity_view_ready(slot: u32, draw: *const ViewDra
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_velocity_view_written(slot: u32) {
+pub(crate) extern "C" fn rsf_ac7_velocity_view_written(slot: u32) {
     lock().mark_written(slot, true);
 }
 
@@ -489,7 +484,7 @@ pub(crate) fn commit(pass: &ViewDraw) -> ViewDecision {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_velocity_view_committed(slot: u32) {
+pub(crate) extern "C" fn rsf_ac7_velocity_view_committed(slot: u32) {
     lock().mark_written(slot, false);
 }
 
@@ -498,12 +493,8 @@ pub(crate) fn model_count() -> usize {
     lock().models.len()
 }
 
-/// Advances the epoch and reports every retired slot after the lock is released.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_history_frame_end(
-    user: *mut c_void,
-    retire: Option<RetireSlot>,
-) {
+/// Advances the epoch and reports retired slots after releasing the history lock.
+pub(crate) fn frame_end(mut retire: impl FnMut(u32, u32)) {
     let mut retired = Vec::new();
     {
         let mut history = lock();
@@ -515,11 +506,8 @@ unsafe extern "C" fn rsf_ac7_velocity_history_frame_end(
         }
         history.end_frame(&mut retired);
     }
-    if let Some(retire) = retire {
-        for (kind, slot) in retired {
-            // SAFETY: The frame-end caller lends its retirement leaf and context for this call.
-            unsafe { retire(user, kind, slot) };
-        }
+    for (kind, slot) in retired {
+        retire(kind, slot);
     }
 }
 

@@ -47,7 +47,12 @@ struct Layout {
     serial: u64,
 }
 
-pub(crate) use crate::velocity_device_abi::rsf_ac7_velocity_variant_request as VariantRequest;
+pub(crate) struct VariantRequest {
+    pub(crate) shaders: [*mut c_void; 5],
+    pub(crate) layout: *mut c_void,
+    pub(crate) material_blend: u32,
+    pub(crate) stride: u32,
+}
 
 pub(crate) struct VariantSources<'a> {
     pub(crate) bytes: [&'a [u8]; STAGES],
@@ -304,7 +309,7 @@ pub(crate) fn observe_shader(identity: usize, stage: u32, bytes: Option<Arc<Vec<
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_layout_seen(
+pub(crate) unsafe extern "C" fn rsf_ac7_velocity_layout_seen(
     layout: *mut c_void,
     elements: *const LayoutElement,
     copied: u32,

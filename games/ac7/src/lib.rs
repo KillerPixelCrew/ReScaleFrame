@@ -11,7 +11,7 @@
 //! The translucent velocity pass keeps shader compilation, DXBC transforms, D3D11 shader
 //! objects and variant publication in Rust. The Rust renderer owns the replay and scope lease,
 //! the history and stream modules own their decisions, and the commit module owns admission
-//! and reports. velocity_pass.cpp lends the D3D11 resource allocation, draw and merge leaves.
+//! and reports. The D3D11 replay allocates and submits under the shared binding-state lease.
 //!
 //! The rest of the native renderer stays C++ (native_renderer.cpp and the render-scope library):
 //! the renderer object and its fields, MinHook leaves, module pinning, detours, engine relays,
@@ -59,7 +59,6 @@ mod velocity_commit;
 mod velocity_container;
 #[cfg(windows)]
 mod velocity_device;
-mod velocity_device_abi;
 #[cfg(windows)]
 mod velocity_geometry;
 mod velocity_history;
@@ -67,11 +66,13 @@ mod velocity_pass_cache;
 #[cfg(windows)]
 mod velocity_pixel;
 mod velocity_renderer;
-#[cfg(windows)]
+#[cfg(all(windows, feature = "warp-fixture"))]
 #[path = "../../../tests/ac7_velocity_shader_fixture.rs"]
 mod velocity_shader_fixture;
 #[cfg(any(windows, test))]
 mod velocity_stage;
+#[cfg(windows)]
+mod velocity_state_abi;
 mod velocity_stream;
 #[cfg(windows)]
 mod velocity_tessellation;

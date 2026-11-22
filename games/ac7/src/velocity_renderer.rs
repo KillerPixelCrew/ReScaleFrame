@@ -2,30 +2,35 @@
 //! The translucent velocity pass's per-device renderer lifetime: which renderer is published and
 //! for which D3D11 device, admission of a draw's device, replacement when the device changes,
 //! the history, variant and profile resets that follow a publication, and teardown at release.
-//! velocity_pass.cpp lends the D3D11 allocation and submission leaves. The replay lock spans
-//! admission through the final use of the shader variants and history resources.
+//! The replay lock spans admission through the final use of the D3D11 variants and history resources.
 
 use crate::{velocity_commit, velocity_history, velocity_pass_cache};
 use std::ffi::c_void;
+#[cfg(test)]
 use std::mem::offset_of;
 use std::ptr::{NonNull, null_mut};
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
 #[cfg(windows)]
-mod replay;
+mod d3d11;
+#[cfg(windows)]
+pub(crate) mod replay;
 
 /// Creates and initializes a renderer for the device, or returns null. Must not throw.
+#[cfg(test)]
 type CreateRenderer = unsafe extern "C" fn(device: *mut c_void) -> *mut c_void;
 /// Destroys a renderer the create leaf made. Must not throw.
 type DestroyRenderer = unsafe extern "C" fn(renderer: *mut c_void);
 
-/// velocity_pass.cpp's renderer leaves.
+/// Synthetic admission fixture leaves.
+#[cfg(test)]
 #[repr(C)]
 struct RendererLeaves {
     create: Option<CreateRenderer>,
     destroy: Option<DestroyRenderer>,
 }
 
+#[cfg(test)]
 const _: () = {
     assert!(size_of::<RendererLeaves>() == 16 && offset_of!(RendererLeaves, destroy) == 8);
 };
@@ -70,7 +75,7 @@ impl Lifetime {
 
 static LIFETIME: LazyLock<Mutex<Lifetime>> = LazyLock::new(Mutex::default);
 
-fn lock(state: &Mutex<Lifetime>) -> MutexGuard<'_, Lifetime> {
+fn lock<T>(state: &Mutex<T>) -> MutexGuard<'_, T> {
     state.lock().unwrap_or_else(|error| error.into_inner())
 }
 
@@ -138,6 +143,7 @@ fn published(state: &Mutex<Lifetime>) -> *mut c_void {
 }
 
 /// The published renderer when it was made for this device, or null.
+#[cfg(test)]
 fn published_for(state: &Mutex<Lifetime>, device: *mut c_void) -> *mut c_void {
     if device.is_null() {
         return null_mut();
@@ -156,8 +162,8 @@ fn reset_for_renderer() {
 
 /// The renderer for the draw context's device, made and published when the device differs from
 /// the published one. Null when the device is null, the leaves are incomplete or creation failed.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_renderer_admit(
+#[cfg(test)]
+unsafe fn rsf_ac7_velocity_renderer_admit(
     device: *mut c_void,
     leaves: *const RendererLeaves,
 ) -> *mut c_void {
@@ -176,18 +182,6 @@ unsafe extern "C" fn rsf_ac7_velocity_renderer_admit(
         destroy,
         reset_for_renderer,
     )
-}
-
-/// The published renderer, or null.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_velocity_renderer_published() -> *mut c_void {
-    published(&LIFETIME)
-}
-
-/// The published renderer when it was made for this device, or null. Never creates one.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_velocity_renderer_for(device: *mut c_void) -> *mut c_void {
-    published_for(&LIFETIME, device)
 }
 
 /// Destroys the published renderer and forgets the observed sources, layouts, variants, history

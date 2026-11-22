@@ -2,7 +2,7 @@
 //! The translucent velocity pass's per-draw stream policy: scope and draw admission, the
 //! pipeline route, the input vertex and stream-output record bounds, the indirect packing and
 //! argument range, capture and zero-source sizing, the hash build's record count and dispatch,
-//! and the packed b13 draw parameters. The native submission leaf applies these decisions to
+//! and the packed b13 draw parameters. The D3D11 replay applies these decisions to
 //! the borrowed context, including the argument copy, GPU validation, draws and hash build.
 
 use crate::scene_color_abi::rsf_frame_tap_geometry;
@@ -13,14 +13,14 @@ use rsf_game_sys::{
 use std::mem::offset_of;
 
 // Bound shader stages besides vertex and pixel.
-const STAGE_GEOMETRY: u32 = 1;
-const STAGE_HULL: u32 = 2;
-const STAGE_DOMAIN: u32 = 4;
+pub(crate) const STAGE_GEOMETRY: u32 = 1;
+pub(crate) const STAGE_HULL: u32 = 2;
+pub(crate) const STAGE_DOMAIN: u32 = 4;
 
 // Pipeline routes.
-const ROUTE_ADMITTED: u32 = 0;
+pub(crate) const ROUTE_ADMITTED: u32 = 0;
 const ROUTE_SKIPPED: u32 = 1;
-const ROUTE_MISMATCHED: u32 = 2;
+pub(crate) const ROUTE_MISMATCHED: u32 = 2;
 
 // D3D11_PRIMITIVE_TOPOLOGY values. An N-point patch list is N plus PATCH_LIST_BASE.
 const TRIANGLE_LIST: u32 = 4;
@@ -55,11 +55,11 @@ const OPACITY_STEP: f32 = 1.0 / 255.0;
 /// vertex bound, the stream-output record bound, the packing and the patch control points.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct IndirectBounds {
-    vertices: u32,
-    records: u32,
-    packing: u32,
-    points: u32,
+pub(crate) struct IndirectBounds {
+    pub(crate) vertices: u32,
+    pub(crate) records: u32,
+    pub(crate) packing: u32,
+    pub(crate) points: u32,
 }
 
 /// `capacity` is what a capture or zero-source buffer holding fewer than `bounds.records` grows
@@ -68,12 +68,12 @@ struct IndirectBounds {
 /// zeroed before the draw.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct StreamPlan {
-    bounds: IndirectBounds,
-    capacity: u32,
-    built: u32,
-    zero_source: u32,
-    padding: u32,
+pub(crate) struct StreamPlan {
+    pub(crate) bounds: IndirectBounds,
+    pub(crate) capacity: u32,
+    pub(crate) built: u32,
+    pub(crate) zero_source: u32,
+    pub(crate) padding: u32,
 }
 
 /// The geometry, tessellation and pixel b13 cbuffer of velocity_geometry.rs,
@@ -81,7 +81,7 @@ struct StreamPlan {
 /// HistoryMask, Padding and ClipToPrevious.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-struct DrawParameters {
+pub(crate) struct DrawParameters {
     rect: [f32; 4],
     jitter: [f32; 4],
     cutoff: f32,
@@ -95,7 +95,7 @@ struct DrawParameters {
 /// and width from the validated indirect arguments.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct HashParameters {
+pub(crate) struct HashParameters {
     count: u32,
     mask: u32,
     mode: u32,
@@ -105,9 +105,9 @@ struct HashParameters {
 /// `groups` is the direct dispatch; an indirect build dispatches from the arguments instead.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct HashDispatch {
-    parameters: HashParameters,
-    groups: [u32; 2],
+pub(crate) struct HashDispatch {
+    pub(crate) parameters: HashParameters,
+    pub(crate) groups: [u32; 2],
 }
 
 const _: () = {
@@ -133,7 +133,7 @@ pub(crate) fn draw_admitted(scope: &rsf_game_render_pass, draw: &rsf_frame_tap_g
 
 /// Tessellation needs both stages and no native GS. Without it only triangle lists and strips
 /// are captured; the patch topology is checked once the variant knows its control points.
-fn route(topology: u32, stages: u32) -> u32 {
+pub(crate) fn route(topology: u32, stages: u32) -> u32 {
     let geometry = stages & STAGE_GEOMETRY != 0;
     let hull = stages & STAGE_HULL != 0;
     let domain = stages & STAGE_DOMAIN != 0;
@@ -148,7 +148,7 @@ fn route(topology: u32, stages: u32) -> u32 {
 
 /// The record bounds of an admitted route. Indirect and DrawAuto inputs are bounded by the
 /// scope's geometry capacity, read as triangles of control points for patches.
-fn plan(
+pub(crate) fn plan(
     draw: &rsf_frame_tap_geometry,
     stages: u32,
     geometry_capacity: u32,
@@ -224,7 +224,7 @@ fn plan(
 
 /// The end of the argument range copied from a 4-byte-aligned offset, or None when the buffer
 /// does not hold it.
-fn indirect_end(kind: u32, offset: u32, byte_width: u32) -> Option<u32> {
+pub(crate) fn indirect_end(kind: u32, offset: u32, byte_width: u32) -> Option<u32> {
     let bytes = if kind == INDEXED_INDIRECT {
         INDEXED_ARGUMENTS
     } else {
@@ -267,7 +267,7 @@ fn parameters(
 }
 
 /// None when there is nothing to build.
-fn hash_dispatch(
+pub(crate) fn hash_dispatch(
     records: u32,
     destination_records: u32,
     mode: u32,
@@ -302,11 +302,6 @@ unsafe fn rsf_ac7_velocity_stream_draw(
     i32::from(draw_admitted(scope, draw))
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_velocity_stream_route(topology: u32, stages: u32) -> u32 {
-    route(topology, stages)
-}
-
 /// Nonzero with the plan written when the draw's records fit.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_ac7_velocity_stream_plan(
@@ -338,7 +333,7 @@ extern "C" fn rsf_ac7_velocity_indirect_end(kind: u32, offset: u32, byte_width: 
 
 /// Nonzero with the parameters written for exactly one viewport of positive extent.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_draw_parameters(
+pub(crate) unsafe extern "C" fn rsf_ac7_velocity_draw_parameters(
     scope: *const rsf_game_render_pass,
     viewports: u32,
     rect: *const [f32; 4],

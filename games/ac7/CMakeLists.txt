@@ -1,5 +1,9 @@
 # The plugin and linked carriers call the same Rust reader through the existing view C ABI.
-rsf_add_rust_static(rsf_ac7_rust rsf_rust_ac7 rsf-ac7 rsf_ac7)
+if(BUILD_TESTING)
+    rsf_add_rust_static(rsf_ac7_rust rsf_rust_ac7 rsf-ac7 rsf_ac7 --features warp-fixture)
+else()
+    rsf_add_rust_static(rsf_ac7_rust rsf_rust_ac7 rsf-ac7 rsf_ac7)
+endif()
 # TrueSky's Rust D3D11 owner uses the shared System32 shader compiler entry.
 target_link_libraries(rsf_ac7_rust INTERFACE rsf_shader_compiler)
 add_library(rsf_ac7_view INTERFACE)
@@ -56,9 +60,8 @@ target_link_libraries(rsf_ac7_render_scope PUBLIC ReScaleFrame::GameSDK PRIVATE 
 target_link_libraries(rsf_ac7_render_scope PUBLIC rsf_shader_compiler)
 target_include_directories(rsf_ac7_render_scope PRIVATE "${CMAKE_SOURCE_DIR}/runtime/graphics/include")
 add_library(ReScaleFrame::AC7RenderScope ALIAS rsf_ac7_render_scope)
-# Rust owns the velocity shader objects and replay lease. The native pass supplies
-# the D3D11 resource, draw and merge leaves.
-add_library(rsf_ac7_velocity_pass STATIC src/velocity_pass.cpp)
-target_include_directories(rsf_ac7_velocity_pass PUBLIC include)
-target_link_libraries(rsf_ac7_velocity_pass PRIVATE ReScaleFrame::AC7RenderScope ReScaleFrame::Graphics rsf_ac7_rust rsf_build_options)
+# The AC7 Rust replay uses the shared graphics binding-state lease.
+add_library(rsf_ac7_velocity_pass INTERFACE)
+target_include_directories(rsf_ac7_velocity_pass INTERFACE include)
+target_link_libraries(rsf_ac7_velocity_pass INTERFACE ReScaleFrame::Graphics rsf_ac7_rust)
 add_library(ReScaleFrame::AC7VelocityPass ALIAS rsf_ac7_velocity_pass)

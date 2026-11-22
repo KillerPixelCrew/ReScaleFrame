@@ -1,19 +1,14 @@
 // SPDX-License-Identifier: MIT
 //! Device-side shader and variant ownership for translucent velocity replay.
 use crate::velocity_commit::{FULLSCREEN_SOURCE, MERGE_SOURCE};
-use crate::velocity_device_abi::{
-    rsf_ac7_velocity_kernels, rsf_ac7_velocity_refusal_fn, rsf_ac7_velocity_variant,
-};
 use crate::velocity_geometry::GeometryRegisters;
 use crate::velocity_pass_cache::{BUILT, REFUSED, VariantRequest, VariantSources, admit_variant};
 use crate::velocity_stage::{HISTORY_WRITER, compile_source};
 use crate::velocity_stream::INDIRECT_SOURCE;
 use crate::velocity_tessellation::DomainRegisters;
 use crate::{velocity_geometry, velocity_pixel, velocity_tessellation, velocity_vertex};
-use rsf_game_sys::ffi_util::try_box;
 use std::collections::HashMap;
-use std::ffi::{CStr, c_void};
-use std::ptr::null_mut;
+use std::ffi::CStr;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_INPUT_ELEMENT_DESC, D3D11_INPUT_PER_VERTEX_DATA, D3D11_SO_DECLARATION_ENTRY,
     D3D11_SO_NO_RASTERIZED_STREAM, ID3D11ComputeShader, ID3D11Device, ID3D11DomainShader,
@@ -21,7 +16,7 @@ use windows::Win32::Graphics::Direct3D11::{
     ID3D11VertexShader,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32G32B32A32_FLOAT;
-use windows::core::{Interface, PCSTR, Result};
+use windows::core::{PCSTR, Result};
 
 const RETRY: i32 = 2;
 
@@ -50,52 +45,28 @@ fn cached<T: Clone>(
     Some(shader)
 }
 
-fn raw<T: Interface>(value: &Option<T>) -> *mut c_void {
-    value.as_ref().map_or(null_mut(), Interface::as_raw)
+#[derive(Clone, Default)]
+pub(super) struct Variant {
+    pub(super) vertex: Option<ID3D11VertexShader>,
+    pub(super) pixel: Option<ID3D11PixelShader>,
+    pub(super) capture: Option<ID3D11GeometryShader>,
+    pub(super) geometry: Option<ID3D11GeometryShader>,
+    pub(super) hull: Option<ID3D11HullShader>,
+    pub(super) corners: Option<ID3D11HullShader>,
+    pub(super) domain: Option<ID3D11DomainShader>,
+    pub(super) layout: Option<ID3D11InputLayout>,
+    pub(super) maximum_vertices: u32,
+    pub(super) history_slot: u32,
+    pub(super) geometry_hash: u32,
+    pub(super) input_points: u32,
+    pub(super) particle: bool,
 }
 
-#[derive(Default)]
-struct Variant {
-    vertex: Option<ID3D11VertexShader>,
-    pixel: Option<ID3D11PixelShader>,
-    capture: Option<ID3D11GeometryShader>,
-    geometry: Option<ID3D11GeometryShader>,
-    hull: Option<ID3D11HullShader>,
-    corners: Option<ID3D11HullShader>,
-    domain: Option<ID3D11DomainShader>,
-    layout: Option<ID3D11InputLayout>,
-    maximum_vertices: u32,
-    history_slot: u32,
-    geometry_hash: u32,
-    input_points: u32,
-    particle: bool,
-}
-
-impl Variant {
-    fn lend(&self) -> rsf_ac7_velocity_variant {
-        rsf_ac7_velocity_variant {
-            vertex: raw(&self.vertex),
-            pixel: raw(&self.pixel),
-            capture: raw(&self.capture),
-            geometry: raw(&self.geometry),
-            hull: raw(&self.hull),
-            corners: raw(&self.corners),
-            domain: raw(&self.domain),
-            layout: raw(&self.layout),
-            maximum_vertices: self.maximum_vertices,
-            history_slot: self.history_slot,
-            geometry_hash: self.geometry_hash,
-            input_points: self.input_points,
-            particle: self.particle,
-        }
-    }
-}
-
-struct Kernels {
-    hash: ID3D11ComputeShader,
-    merge: ID3D11PixelShader,
-    fullscreen: ID3D11VertexShader,
-    validate_indirect: ID3D11ComputeShader,
+pub(super) struct Kernels {
+    pub(super) hash: ID3D11ComputeShader,
+    pub(super) merge: ID3D11PixelShader,
+    pub(super) fullscreen: ID3D11VertexShader,
+    pub(super) validate_indirect: ID3D11ComputeShader,
 }
 
 impl Kernels {
@@ -117,20 +88,11 @@ impl Kernels {
             validate_indirect,
         })
     }
-
-    fn lend(&self) -> rsf_ac7_velocity_kernels {
-        rsf_ac7_velocity_kernels {
-            hash: self.hash.as_raw(),
-            merge: self.merge.as_raw(),
-            fullscreen: self.fullscreen.as_raw(),
-            validate_indirect: self.validate_indirect.as_raw(),
-        }
-    }
 }
 
-struct Device {
+pub(super) struct Device {
     device: ID3D11Device,
-    kernels: Kernels,
+    pub(super) kernels: Kernels,
     variants: Vec<Variant>,
     vertex: HashMap<Vec<u8>, ID3D11VertexShader>,
     pixel: HashMap<Vec<u8>, ID3D11PixelShader>,
@@ -138,7 +100,7 @@ struct Device {
     domain: HashMap<Vec<u8>, ID3D11DomainShader>,
     geometry: HashMap<Vec<u8>, ID3D11GeometryShader>,
     capture: HashMap<Vec<u8>, ID3D11GeometryShader>,
-    count: u32,
+    pub(super) count: u32,
 }
 
 enum Failure {
@@ -308,84 +270,38 @@ impl Device {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_device_create(
-    device: *mut c_void,
-    kernels: *mut rsf_ac7_velocity_kernels,
-) -> *mut Device {
-    let (Some(device), Some(out)) = (
-        unsafe { ID3D11Device::from_raw_borrowed(&device) },
-        unsafe { kernels.as_mut() },
-    ) else {
-        return null_mut();
-    };
-    let Some(kernels) = Kernels::new(device) else {
-        return null_mut();
-    };
-    let Some(owner) = try_box(Device {
-        device: device.clone(),
-        kernels,
-        variants: Vec::new(),
-        vertex: HashMap::new(),
-        pixel: HashMap::new(),
-        hull: HashMap::new(),
-        domain: HashMap::new(),
-        geometry: HashMap::new(),
-        capture: HashMap::new(),
-        count: 0,
-    }) else {
-        return null_mut();
-    };
-    *out = owner.kernels.lend();
-    Box::into_raw(owner)
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_device_destroy(owner: *mut Device) {
-    if !owner.is_null() {
-        drop(unsafe { Box::from_raw(owner) });
+impl Device {
+    pub(super) fn new(device: &ID3D11Device) -> Option<Self> {
+        Some(Self {
+            device: device.clone(),
+            kernels: Kernels::new(device)?,
+            variants: Vec::new(),
+            vertex: HashMap::new(),
+            pixel: HashMap::new(),
+            hull: HashMap::new(),
+            domain: HashMap::new(),
+            geometry: HashMap::new(),
+            capture: HashMap::new(),
+            count: 0,
+        })
     }
-}
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_device_variant(
-    owner: *mut Device,
-    request: *const VariantRequest,
-    refusal: rsf_ac7_velocity_refusal_fn,
-    vertex_hash: *mut u32,
-    output: *mut rsf_ac7_velocity_variant,
-) -> bool {
-    let (Some(owner), Some(request), Some(hash), Some(output)) = (
-        unsafe { owner.as_mut() },
-        unsafe { request.as_ref() },
-        unsafe { vertex_hash.as_mut() },
-        unsafe { output.as_mut() },
-    ) else {
-        return false;
-    };
-    let slot = admit_variant(request, hash, |sources, slot| {
-        match owner.build(sources, request) {
-            Ok(index) => {
-                *slot = index;
-                BUILT
-            }
-            Err(Failure::Refused) => REFUSED,
-            Err(Failure::Retry(reason)) => {
-                if let (Some(report), Some(reason)) = (refusal, reason) {
-                    unsafe { report(reason.as_ptr()) };
+    pub(super) fn variant(&mut self, request: &VariantRequest, hash: &mut u32) -> Option<Variant> {
+        let slot = admit_variant(request, hash, |sources, slot| {
+            match self.build(sources, request) {
+                Ok(index) => {
+                    *slot = index;
+                    BUILT
                 }
-                RETRY
+                Err(Failure::Refused) => REFUSED,
+                Err(Failure::Retry(reason)) => {
+                    if let Some(reason) = reason {
+                        crate::velocity_commit::refused(reason);
+                    }
+                    RETRY
+                }
             }
-        }
-    });
-    let Some(variant) = owner.variants.get(slot as usize) else {
-        return false;
-    };
-    *output = variant.lend();
-    true
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_device_count(owner: *const Device) -> u32 {
-    unsafe { owner.as_ref() }.map_or(0, |owner| owner.count)
+        });
+        self.variants.get(slot as usize).cloned()
+    }
 }
