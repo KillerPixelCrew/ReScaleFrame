@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 use super::{bundles, contents, entry, root, utf8};
 use crate::sys::*;
+use rsf_test_support::{Window, warp_swapchain};
 use std::ffi::{CStr, c_char, c_void};
 use std::os::windows::ffi::OsStrExt;
 use std::{fs, path::Path, ptr};
-use windows::Win32::Foundation::{GENERIC_READ, HMODULE, HWND};
-use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_WARP;
+use windows::Win32::Foundation::GENERIC_READ;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
@@ -13,12 +13,9 @@ use windows::Win32::Graphics::Imaging::*;
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
 };
+use windows::Win32::UI::WindowsAndMessaging::WS_OVERLAPPED;
 use windows::core::{BOOL, IUnknown, Interface, PCWSTR, w};
-use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, WNDCLASSW, WS_OVERLAPPED,
-};
 
 const RAW: u32 = RSF_FIXTURE_DUMP_VIEW_RAW as u32;
 const HDR: u32 = RSF_FIXTURE_DUMP_VIEW_HDR as u32;
@@ -34,40 +31,8 @@ impl Drop for Apartment {
     }
 }
 
-struct Window(HWND);
-impl Drop for Window {
-    fn drop(&mut self) {
-        unsafe { DestroyWindow(self.0.0) };
-    }
-}
-
 fn window() -> Option<Window> {
-    let name = w!("RSF_InputDumpTest");
-    let instance = unsafe { GetModuleHandleW(ptr::null()) };
-    let class = WNDCLASSW {
-        hInstance: instance,
-        lpszClassName: name.as_ptr(),
-        lpfnWndProc: Some(DefWindowProcW),
-        ..Default::default()
-    };
-    unsafe { RegisterClassW(&class) };
-    let raw = unsafe {
-        CreateWindowExW(
-            0,
-            name.as_ptr(),
-            w!("").as_ptr(),
-            WS_OVERLAPPED,
-            0,
-            0,
-            32,
-            32,
-            ptr::null_mut(),
-            ptr::null_mut(),
-            instance,
-            ptr::null(),
-        )
-    };
-    (!raw.is_null()).then_some(Window(HWND(raw)))
+    Window::new(w!("RSF_InputDumpTest"), w!(""), WS_OVERLAPPED, 32, 32).ok()
 }
 
 fn warp(window: &Window) -> Option<(ID3D11Device, ID3D11DeviceContext, IDXGISwapChain)> {
@@ -84,33 +49,13 @@ fn warp(window: &Window) -> Option<(ID3D11Device, ID3D11DeviceContext, IDXGISwap
         },
         BufferCount: 1,
         BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-        OutputWindow: window.0,
+        OutputWindow: window.handle,
         Windowed: BOOL(1),
         ..Default::default()
     };
-    for flags in [D3D11_CREATE_DEVICE_DEBUG, D3D11_CREATE_DEVICE_FLAG(0)] {
-        let (mut chain, mut device, mut context) = (None, None, None);
-        if unsafe {
-            D3D11CreateDeviceAndSwapChain(
-                None::<&IDXGIAdapter>,
-                D3D_DRIVER_TYPE_WARP,
-                HMODULE::default(),
-                flags,
-                None,
-                D3D11_SDK_VERSION,
-                Some(&swap),
-                Some(&mut chain),
-                Some(&mut device),
-                None,
-                Some(&mut context),
-            )
-        }
-        .is_ok()
-        {
-            return Some((device?, context?, chain?));
-        }
-    }
-    None
+    [D3D11_CREATE_DEVICE_DEBUG, D3D11_CREATE_DEVICE_FLAG(0)]
+        .into_iter()
+        .find_map(|flags| warp_swapchain(flags, &swap).ok())
 }
 
 fn png(bundle: &Path, name: &str) -> Vec<u8> {

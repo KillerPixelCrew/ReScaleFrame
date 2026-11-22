@@ -2,13 +2,12 @@
 // Dump known motion and mask textures through the native ABI and inspect the files.
 use super::{entry, utf8};
 use crate::sys::*;
+use rsf_test_support::d3d11_device;
 use std::ffi::{CStr, c_char, c_void};
 use std::{fs, path::Path, ptr};
-use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
-use windows::Win32::Graphics::Dxgi::IDXGIAdapter;
 use windows::core::Interface;
 
 const SCALE: f32 = 0.499 * 0.5;
@@ -35,22 +34,12 @@ unsafe extern "C" fn collect(user: *mut c_void, message: *const c_char) {
 }
 
 fn device(driver: D3D_DRIVER_TYPE) -> Option<(ID3D11Device, ID3D11DeviceContext)> {
-    let (mut device, mut context) = (None, None);
-    unsafe {
-        D3D11CreateDevice(
-            None::<&IDXGIAdapter>,
-            driver,
-            HMODULE::default(),
-            D3D11_CREATE_DEVICE_FLAG(0),
-            Some(&[D3D_FEATURE_LEVEL_11_0]),
-            D3D11_SDK_VERSION,
-            Some(&mut device),
-            None,
-            Some(&mut context),
-        )
-    }
-    .ok()?;
-    Some((device?, context?))
+    d3d11_device(
+        driver,
+        D3D11_CREATE_DEVICE_FLAG(0),
+        Some(&[D3D_FEATURE_LEVEL_11_0]),
+    )
+    .ok()
 }
 
 fn texture(

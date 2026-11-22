@@ -625,6 +625,7 @@ dependencies = [
  "ash",
  "rsf-bindgen",
  "rsf-game-sys",
+ "rsf-test-support",
  "windows",
  "windows-sys",
 ]

@@ -8,10 +8,8 @@ use std::ffi::{CStr, c_char};
 use std::mem::ManuallyDrop;
 use std::{fs, path::Path, ptr};
 use windows::Win32::Foundation::HANDLE;
-use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC};
-use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIAdapter, IDXGIFactory4};
 use windows::core::Interface;
 use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
 use windows_sys::Win32::System::Environment::SetEnvironmentVariableW;
@@ -22,19 +20,10 @@ const PIXELS: [u32; 8] = [
 ];
 
 fn warp() -> Option<ID3D12Device> {
-    unsafe {
-        let mut debug: Option<ID3D12Debug> = None;
-        if D3D12GetDebugInterface(&mut debug).is_ok()
-            && let Some(debug) = debug
-        {
-            debug.EnableDebugLayer();
-        }
-        let factory: IDXGIFactory4 = CreateDXGIFactory1().ok()?;
-        let warp: IDXGIAdapter = factory.EnumWarpAdapter().ok()?;
-        let mut device = None;
-        D3D12CreateDevice(&warp, D3D_FEATURE_LEVEL_11_0, &mut device).ok()?;
-        device
-    }
+    rsf_test_support::enable_d3d12_debug_layer();
+    rsf_test_support::warp_d3d12()
+        .ok()
+        .map(|(_, device)| device)
 }
 
 fn resource(

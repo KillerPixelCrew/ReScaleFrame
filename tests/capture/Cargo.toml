@@ -11,6 +11,7 @@ crate-type = ["staticlib"]
 
 [target.'cfg(windows)'.dependencies]
 rsf-game-sys = { path = "../../sdk/game" }
+rsf-test-support = { path = "../support" }
 ash = { workspace = true, optional = true }
 windows = { workspace = true, features = [
   "Win32_Graphics_Direct3D",
