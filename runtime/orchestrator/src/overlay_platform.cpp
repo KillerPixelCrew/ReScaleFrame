@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 // DLL export entry points and platform calls for the Rust overlay service.
+#include <rescaleframe/adapter_settings.h>
 #include <rescaleframe/dlss_pipeline.h>
 #include <rescaleframe/dlss_preset.h>
 #include "../../../loader/proxy/src/overlay_host.h"
@@ -79,6 +80,21 @@ constexpr rsf_overlay_platform platform{
 }
 
 extern "C" {
+int32_t rsf_core_adapter_setting_read_bool(const wchar_t*, const wchar_t*, const wchar_t*, uint32_t);
+int32_t rsf_core_adapter_setting_write_bool(const wchar_t*, const wchar_t*, const wchar_t*, uint32_t);
+
+RSF_RUNTIME_API int32_t rsf_adapter_setting_read_bool(
+    const wchar_t* path, const wchar_t* section, const wchar_t* key, uint32_t fallback)
+{
+    return rsf_core_adapter_setting_read_bool(path, section, key, fallback);
+}
+
+RSF_RUNTIME_API int32_t rsf_adapter_setting_write_bool(
+    const wchar_t* path, const wchar_t* section, const wchar_t* key, uint32_t value)
+{
+    return rsf_core_adapter_setting_write_bool(path, section, key, value);
+}
+
 rsf_result rsf_core_get_overlay_api(rsf_overlay_api*, const rsf_overlay_platform*);
 rsf_result rsf_core_get_overlay_diagnostics(rsf_overlay_diagnostics*, const rsf_overlay_platform*);
 
