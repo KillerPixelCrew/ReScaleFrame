@@ -14,10 +14,17 @@ evidence. [Shader loader evidence](rust-anomaly-shader-loader.md),
 | Live compile | Anomaly still opens the already-loaded Runtime service and passes the engine's loaded compiler export. Rust checks the RIP-relative LEA at setup RVA plus six (`0x83b9ce` Standard and `0x832cce` AVX are the setup RVAs), signed address arithmetic, and both guarded includer entry prefixes before opening the pack. Native SEH wrappers still guard reads and the engine's include Open and Close calls. Runtime owns proof, cache, and variant creation. |
 | Shader asset | `tools/anomaly_shader_constants.hlsli` retains identical HLSL bytes. Both the staging tool and its fixture use the new source filename. |
 
-The native headers and facades still serve the existing hook and device
-fixtures. The standalone `tests/anomaly_temporal_shader_device.cpp` harness
-still owns the D3D11 draws, MSAA readback, and numeric assertions invoked
-by `tests/anomaly_temporal_shader_verify.py`. Its Rust conversion remains open.
+The standalone temporal fixture now lives in the Anomaly Cargo example
+`anomaly_temporal_shader_device`. The Python verifier builds the locked
+example under its existing local evidence directory and retains the TSV
+case list and JSON report fields. The example uses the G06 compiler for
+fixture VS/CS HLSL and reads the same FXC-built stock and patched DXBC.
+The port keeps hardware with the debug layer, WARP fallback, VS stream
+output, reflected b13 constants, the native MRT formats, per-sample MSAA
+readback, and the current/prior clip, invalid history, alpha, stationary
+motion, and jitter checks. The verifier now checks the pixel count against
+the same alpha modes used to generate the case list. This is a source
+comparison. The built binary and device results remain unverified.
 
 This checkpoint has source and private ABI review, pinned 1.94.1 rustfmt,
 and whitespace checks. A Rust regression fixture covers refusal on an
