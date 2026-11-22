@@ -9,7 +9,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 // RSF_OVERLAY_CAPTURE_MOUSE / _KEYBOARD.
 const CAPTURE_MOUSE: u32 = 0x1;
 const CAPTURE_KEYBOARD: u32 = 0x2;
-// dinput.h values; overlay_input_gate.h asserts them against the SDK header.
+// dinput.h values for the ANSI/Unicode DirectInput 8 device boundary.
 type HResult = i32;
 const DI_OK: HResult = 0;
 const DIERR_INPUTLOST: HResult = 0x8007_001E_u32 as i32;
@@ -73,7 +73,7 @@ struct Entry {
 
 pub(crate) struct Gate {
     capture: Option<Capture>,
-    user: *mut c_void,
+    user: usize,
     devices: Mutex<BTreeMap<usize, Entry>>,
 }
 
@@ -99,6 +99,15 @@ unsafe fn flush(device: *mut c_void, calls: &DeviceCalls, stride: u32) -> HResul
 }
 
 impl Gate {
+    #[cfg(windows)]
+    pub(crate) fn new(capture: Capture) -> Self {
+        Self {
+            capture: Some(capture),
+            user: 0,
+            devices: Mutex::new(BTreeMap::new()),
+        }
+    }
+
     fn lock(&self) -> MutexGuard<'_, BTreeMap<usize, Entry>> {
         self.devices.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -110,7 +119,7 @@ impl Gate {
     /// As for `flush`.
     unsafe fn update(&self, entry: &mut Entry, device: *mut c_void, calls: &DeviceCalls) -> bool {
         let bits = match self.capture {
-            Some(capture) => unsafe { capture(self.user) },
+            Some(capture) => unsafe { capture(std::ptr::with_exposed_provenance_mut(self.user)) },
             None => 0,
         };
         let wanted = if entry.kind == MOUSE {
@@ -216,27 +225,6 @@ unsafe fn track(entry: &mut Entry, events: *const u8, count: u32, stride: u32) {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_input_gate_create(
-    capture: Option<Capture>,
-    user: *mut c_void,
-) -> *mut Gate {
-    Box::into_raw(Box::new(Gate {
-        capture,
-        user,
-        devices: Mutex::new(BTreeMap::new()),
-    }))
-}
-
-/// # Safety
-/// `gate` came from `rsf_anomaly_input_gate_create` and no call on it is executing.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_input_gate_destroy(gate: *mut Gate) {
-    if !gate.is_null() {
-        drop(unsafe { Box::from_raw(gate) });
-    }
-}
-
 /// The same address may be reused by a later device; adding it again replaces the old record.
 pub(crate) fn gate_add(gate: &Gate, device: *mut c_void, kind: u8) {
     if device.is_null() {
@@ -255,8 +243,8 @@ pub(crate) fn gate_cooperative_level(gate: &Gate, device: *mut c_void, flags: u3
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_input_gate_tracked(gate: &Gate, device: *mut c_void) -> bool {
+#[cfg(all(windows, feature = "overlay-device-fixture"))]
+pub(crate) fn tracked(gate: &Gate, device: *mut c_void) -> bool {
     gate.lock().contains_key(&(device as usize))
 }
 

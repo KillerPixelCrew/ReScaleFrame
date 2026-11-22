@@ -54,8 +54,8 @@ bool install_with(const rsf_d3d11_present_api& present, const rsf_d3d11_fg_api& 
 }
 bool installed() noexcept { return rsf_anomaly_fg_installed(); }
 void set_depth_view_source(void* (*source)()) noexcept { rsf_anomaly_fg_set_depth_source(source); }
-void set_overlay_sink(const overlay::PresentSink& sink) noexcept {
-    rsf_anomaly_fg_set_overlay_sink(sink.before_present, sink.user);
+void set_overlay_sink(rsf_anomaly_fg_overlay_present sink) noexcept {
+    rsf_anomaly_fg_set_overlay_sink(sink, nullptr);
 }
 void camera(const float* view, const float* projection) noexcept { rsf_anomaly_fg_stage_camera(view, projection); }
 void input_begin(uint32_t frame) noexcept { rsf_anomaly_fg_stage_input_begin(frame); }

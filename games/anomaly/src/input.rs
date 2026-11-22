@@ -3,7 +3,7 @@
 //!
 //! The engine samples input in `CInput::OnFrame` and polls buffered DirectInput devices from it.
 //! This module delimits the polling thread and admits input facts while the native callback is
-//! in flight. `input_hooks.cpp` performs the guarded frame read and invokes the original callback.
+//! in flight. The bootstrap detour performs the guarded frame read and invokes the original callback.
 //! The buffered device policy is in `gate`; the Rust DirectInput detours are in `overlay_hooks`.
 
 use rsf_game_sys::{RSF_GAME_INPUT_KEYBOARD, RSF_GAME_INPUT_MOUSE};
@@ -17,10 +17,12 @@ use crate::engine_guards::{Image, NativeSite, Read};
 #[cfg(windows)]
 use crate::engine_slots::{Exchange, INPUT, input_counter, rsf_anomaly_slot_install};
 
+#[cfg(windows)]
+mod profile;
+
 // ---- CInput::OnFrame admission ------------------------------------------------------------------
 
 #[cfg(windows)]
-#[repr(C)]
 struct InputProfile {
     sites: [NativeSite; 3],
     slot_rva: u32,
@@ -28,15 +30,26 @@ struct InputProfile {
 }
 
 #[cfg(windows)]
-const _: () = {
-    assert!(size_of::<InputProfile>() == 112);
-    assert!(std::mem::offset_of!(InputProfile, slot_rva) == 96);
-    assert!(std::mem::offset_of!(InputProfile, frame_code) == 104);
-};
-
-#[cfg(windows)]
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_input_install(
+    image: &Image,
+    build: usize,
+    counter_rva: u32,
+    replacement: *mut c_void,
+    exchange: Exchange,
+    reason: Option<&mut *const std::ffi::c_char>,
+) -> bool {
+    let Some(profile) = profile::for_build(build) else {
+        if let Some(reason) = reason {
+            *reason = c"unknown CInput build".as_ptr();
+        }
+        return false;
+    };
+    install(image, &profile, counter_rva, replacement, exchange, reason)
+}
+
+#[cfg(windows)]
+fn install(
     image: &Image,
     profile: &InputProfile,
     counter_rva: u32,
@@ -194,3 +207,6 @@ pub(super) const KEYBOARD: u8 = 1;
 
 #[cfg(any(windows, test))]
 pub(crate) mod gate;
+
+#[cfg(all(windows, feature = "input-hook-fixture"))]
+mod fixture;

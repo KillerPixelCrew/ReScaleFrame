@@ -4,14 +4,15 @@
 //! This module owns what the Runtime must not know about Anomaly: the binding and validation of the overlay table the
 //! carrier-loaded Runtime exports, the translation of this adapter's SR, FG and option choices into the generic
 //! service setup, the callbacks the Runtime calls back into, the start state, the engine-chain identity and the
-//! per-panel diagnostics and backbuffer capture. The native leaves in `overlay_service.cpp` keep the COM calls on a
-//! presented chain and the guarded Present and DirectInput hook installs. Window, key and
+//! per-panel diagnostics and backbuffer capture. The hooks and COM calls live in the adapter. Window, key and
 //! INI reads are the Win32 calls in `win32` below. The service never loads a second Runtime.
 
 use crate::fg_stage::{self, Frontend};
+use crate::native_hooks::HookOps;
 use crate::overlay_abi::*;
 use crate::sr_stage::{OverlayChoices, STAGE};
 use crate::sr_stage_abi::rsf_anomaly_sr_settings;
+use crate::{overlay_hooks, overlay_native};
 use rsf_game_sys::rsf_game_log_fn;
 use rsf_game_sys::sr_abi::rsf_overlay_sr_report;
 use std::ffi::{CStr, CString, OsString, c_char, c_int, c_void};
@@ -23,6 +24,9 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex, MutexGuard, OnceLock, PoisonError};
 use windows_sys::core::w;
+
+#[path = "../../../runtime/orchestrator/src/overlay_saved_abi.rs"]
+mod saved_abi;
 
 const OK: i32 = 0;
 const ABI_MISMATCH: i32 = -2;
@@ -297,20 +301,31 @@ struct Leaves {
         *const rsf_named_frame_dump,
         *mut rsf_named_frame_dump_report,
     ) -> i32,
-    install_input: unsafe extern "C" fn(*mut *const c_char) -> u32,
-    install_present: unsafe extern "C" fn(*mut *const c_char) -> u32,
 }
 
-impl Leaves {
-    fn new(platform: &rsf_anomaly_overlay_platform) -> Option<Self> {
-        Some(Self {
-            chain: platform.chain?,
-            capture_backbuffer: platform.capture_backbuffer?,
-            install_input: platform.install_input?,
-            install_present: platform.install_present?,
-        })
-    }
+type InstallHook = fn(&HookOps, &mut *const c_char) -> bool;
+
+struct Platform {
+    leaves: Leaves,
+    install_input: InstallHook,
+    install_present: InstallHook,
 }
+
+const NATIVE: Platform = Platform {
+    leaves: Leaves {
+        chain: overlay_native::describe_chain,
+        capture_backbuffer: overlay_native::capture_backbuffer,
+    },
+    install_input: overlay_hooks::install_input,
+    install_present: |hooks, reason| {
+        overlay_hooks::install_present(
+            rsf_anomaly_overlay_present,
+            rsf_anomaly_overlay_resize,
+            hooks,
+            reason,
+        )
+    },
+};
 
 #[derive(Clone, Copy)]
 struct StageControls {
@@ -443,6 +458,55 @@ struct Capture {
     cycles: u32,
     directory: CString,
     dump: DumpFn,
+}
+
+fn register_saved_options(runtime: *mut c_void, ini: &[u16], log: &Log) {
+    use saved_abi::*;
+    if runtime.is_null() {
+        return;
+    }
+    type Register = unsafe extern "C" fn(*mut c_void, *const rsf_overlay_saved_setup) -> i32;
+    let Some(register) = (unsafe {
+        crate::runtime_module::export::<Register>(runtime, b"rsf_overlay_saved_options_register\0")
+    }) else {
+        log.say(format_args!(
+            "Anomaly overlay: saved startup controls are unavailable in this Runtime."
+        ));
+        return;
+    };
+    let rows = [
+        rsf_overlay_saved_option {
+            label_utf8: c"Enable overlay at startup".as_ptr(),
+            key_utf8: c"Overlay".as_ptr(),
+            kind: RSF_OVERLAY_SAVED_TOGGLE,
+            restart: 1,
+            ..Default::default()
+        },
+        rsf_overlay_saved_option {
+            label_utf8: c"Overlay capture directory".as_ptr(),
+            key_utf8: c"OverlayCaptureDir".as_ptr(),
+            kind: RSF_OVERLAY_SAVED_TEXT,
+            restart: 1,
+            max_text_length: RSF_OVERLAY_SAVED_TEXT_LIMIT,
+            ..Default::default()
+        },
+    ];
+    let setup = rsf_overlay_saved_setup {
+        struct_size: size_of::<rsf_overlay_saved_setup>() as u32,
+        abi_version: RSF_OVERLAY_SAVED_OPTIONS_ABI_VERSION,
+        configuration_path: ini.as_ptr(),
+        configuration_section: w!("Anomaly"),
+        options: rows.as_ptr(),
+        option_count: rows.len() as u32,
+        ..Default::default()
+    };
+    // The Runtime copies both rows. Restart options retain no adapter callback or user pointer.
+    let result = unsafe { register(ptr::null_mut(), &setup) };
+    if result != OK {
+        log.say(format_args!(
+            "Anomaly overlay: saved startup controls refused ({result})."
+        ));
+    }
 }
 
 /// Always resolves the diagnostics (they cost nothing); the PNG capture is opt-in.
@@ -866,7 +930,8 @@ impl Overlay {
     fn start(
         &self,
         options: &rsf_anomaly_overlay_options,
-        platform: &rsf_anomaly_overlay_platform,
+        platform: &Platform,
+        hooks: Option<&HookOps>,
         adapter_options: Vec<AdapterOption>,
     ) -> Result<Status, Refusal> {
         let _entry = lock(&self.gate);
@@ -892,31 +957,16 @@ impl Overlay {
             log: options.log,
             user: options.log_user,
         };
-        let bound = Leaves::new(platform)
-            .ok_or(Refusal::new(
-                CONFIGURE_REFUSED,
-                c"the adapter's overlay leaves are incomplete",
-            ))
-            .and_then(|leaves| {
-                let api = match unsafe { options.api_override.as_ref() } {
-                    // The override passes the same validation as a Runtime table.
-                    Some(table) => validate(OK, table),
-                    None => bind(if options.runtime.is_null() {
-                        None
-                    } else {
-                        unsafe {
-                            crate::runtime_module::export(
-                                options.runtime,
-                                RSF_OVERLAY_API_ENTRY_POINT,
-                            )
-                        }
-                    }),
-                };
-                api.map(|api| (leaves, api))
-            });
-        let (leaves, api) = bound.inspect_err(|refusal| {
+        let api = match unsafe { options.api_override.as_ref() } {
+            Some(table) => validate(OK, table),
+            None => bind(unsafe {
+                crate::runtime_module::export(options.runtime, RSF_OVERLAY_API_ENTRY_POINT)
+            }),
+        }
+        .inspect_err(|refusal| {
             log.say(format_args!("Anomaly overlay refused: {}.", refusal.text()));
         })?;
+        let leaves = platform.leaves;
         let mut table = Vec::new();
         let setup = make_setup(
             self.controls,
@@ -975,9 +1025,10 @@ impl Overlay {
             }
         }
         if options.install_hooks != 0 {
+            let hooks = hooks.ok_or(Refusal::new(HOOKS_REFUSED, c"no hook operations"))?;
             // Input first: a panel that cannot keep the game from acting on mouse and keyboard must not open.
             let mut reason = ptr::null();
-            if unsafe { (leaves.install_input)(&mut reason) } == 0 {
+            if !(platform.install_input)(hooks, &mut reason) {
                 log.say(format_args!(
                     "Anomaly overlay refused: DirectInput gate unavailable ({}). The panel will not start.",
                     text(reason)
@@ -988,7 +1039,7 @@ impl Overlay {
                 });
             }
             let mut reason = ptr::null();
-            if unsafe { (leaves.install_present)(&mut reason) } == 0 {
+            if !(platform.install_present)(hooks, &mut reason) {
                 log.say(format_args!(
                     "Anomaly overlay refused: Present hook unavailable ({}). The panel will not start.",
                     text(reason)
@@ -999,6 +1050,7 @@ impl Overlay {
                 });
             }
         }
+        register_saved_options(options.runtime, ini, &log);
         self.started.store(true, Ordering::Release);
         log.say(format_args!("Anomaly overlay active: Insert opens the shared panel; mouse and keyboard are withheld from the game while it is open."));
         Ok(STARTED)
@@ -1056,21 +1108,17 @@ fn service() -> Option<&'static Service> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_overlay_start(
+pub(super) unsafe extern "C" fn rsf_anomaly_overlay_start(
     options: *const rsf_anomaly_overlay_options,
-    platform: *const rsf_anomaly_overlay_platform,
+    hooks: Option<&HookOps>,
     reason: *mut *const c_char,
 ) -> u32 {
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        match unsafe { (options.as_ref(), platform.as_ref()) } {
-            (Some(options), Some(platform)) => {
-                OVERLAY.start(options, platform, registered_options())
-            }
-            _ => Err(Refusal::new(
-                CONFIGURE_REFUSED,
-                c"no adapter configuration path",
-            )),
-        }
+    let result = catch_unwind(AssertUnwindSafe(|| match unsafe { options.as_ref() } {
+        Some(options) => OVERLAY.start(options, &NATIVE, hooks, registered_options()),
+        None => Err(Refusal::new(
+            CONFIGURE_REFUSED,
+            c"no adapter configuration path",
+        )),
     }))
     .unwrap_or(Err(Refusal::new(
         CONFIGURE_REFUSED,
@@ -1089,13 +1137,13 @@ unsafe extern "C" fn rsf_anomaly_overlay_start(
 
 /// The capture bits (RSF_OVERLAY_CAPTURE_*) the input gate acts on; 0 before start or when the query fails.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_overlay_capture_bits(_: *mut c_void) -> u32 {
+pub(super) extern "C" fn rsf_anomaly_overlay_capture_bits(_: *mut c_void) -> u32 {
     OVERLAY.running().map_or(0, Service::capture_bits)
 }
 
 /// Present-owner thread, immediately before the real Present (never for DXGI_PRESENT_TEST).
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_overlay_present(_: *mut c_void, chain: *mut c_void) {
+pub(super) extern "C" fn rsf_anomaly_overlay_present(_: *mut c_void, chain: *mut c_void) {
     if chain.is_null() {
         return;
     }
@@ -1109,7 +1157,11 @@ extern "C" fn rsf_anomaly_overlay_present(_: *mut c_void, chain: *mut c_void) {
 /// Before ResizeBuffers or ResizeTarget is forwarded.
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_overlay_resize(_: *mut c_void, chain: *mut c_void) {
-    if let Some(service) = OVERLAY.running() {
+    if let Ok(panel) = PANEL.try_lock()
+        && panel.chain != 0
+        && panel.chain == chain.addr()
+        && let Some(service) = OVERLAY.running()
+    {
         unsafe { (service.api.notify)(chain, RSF_OVERLAY_NOTIFY_RESIZE) };
     }
 }
@@ -1171,7 +1223,6 @@ mod win32 {
 
     // xrEngine Device_Initialize.cpp
     const ENGINE_WINDOW_CLASS: &str = "_XRAY_1.5";
-    const MAX_PATH: usize = 260;
 
     /// The engine's main window in this process.
     pub(crate) fn engine_window(window: *mut c_void) -> bool {
@@ -1203,11 +1254,15 @@ mod win32 {
     }
 
     pub(super) fn ini_text(ini: &[u16], key: PCWSTR) -> Vec<u16> {
-        let mut text = [0u16; MAX_PATH];
+        use rsf_game_sys::profile_text;
+        let mut text = vec![0u16; profile_text::read_capacity(profile_text::MAX_UNITS + 1)];
         let length = unsafe { ini::read_text(ini.as_ptr(), key, w!(""), &mut text) };
-        text[..length.min(MAX_PATH)].to_vec()
+        text.truncate(length);
+        profile_text::decode(text)
     }
 }
 
+#[cfg(feature = "overlay-device-fixture")]
+mod fixture;
 #[cfg(test)]
 mod tests;

@@ -5,7 +5,6 @@
 #include "motion_profile.h"
 #include "native_profile.h"
 #include "sr_profile.h"
-#include "input_profile.h"
 #include <cstddef>
 #include <string_view>
 
@@ -28,14 +27,13 @@ struct BuildProfile {
     const geometry::GeometryProfile* geometry;
     const sr::SrProfile* sr;
     const motion::MotionProfile* motion;
-    const InputProfile* input;
     constexpr uint32_t image_size() const noexcept { return native->image_size; }
 };
 inline constexpr std::array<BuildProfile, 2> build_profiles{{
     {"standard", "AnomalyDX11.exe", L"AnomalyDX11.exe", dx11_hash, &native_standard, &geometry::geometry_standard,
-        &sr::sr_standard, &motion::motion_standard, &input_standard},
+        &sr::sr_standard, &motion::motion_standard},
     {"avx", "AnomalyDX11AVX.exe", L"AnomalyDX11AVX.exe", avx_hash, &native_avx, &geometry::geometry_avx,
-        &sr::sr_avx, &motion::motion_avx, &input_avx},
+        &sr::sr_avx, &motion::motion_avx},
 }};
 inline constexpr const BuildProfile& standard_build = build_profiles[0];
 inline constexpr const BuildProfile& avx_build = build_profiles[1];

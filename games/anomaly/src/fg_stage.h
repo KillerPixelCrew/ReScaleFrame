@@ -25,7 +25,6 @@
 // The shared frontend keys (FG, FGBackend, FGGeneratedFrames, Latency, FrameLimitUs) are also what the overlay saves.
 //
 // Threads: everything except configure/install/status runs on the engine thread, which renders and Presents.
-#include "overlay_hooks.h"
 #include "build_profile.h"
 #include "fg_stage_platform.h"
 #include <rescaleframe/game_api.h>
@@ -68,7 +67,7 @@ void set_depth_view_source(void* (*source)()) noexcept;
 
 // The overlay's Present sink, called from the bridge's before_present with the engine-facing swap chain, after every
 // tag of the frame and before the upload. Set once by the bootstrap after the overlay started.
-void set_overlay_sink(const overlay::PresentSink& sink) noexcept;
+void set_overlay_sink(rsf_anomaly_fg_overlay_present sink) noexcept;
 // Native engine facts. A new input update can close a skipped source without observing its
 // simulation end. The Runtime owns pacing, marker mapping and input deduplication.
 void input_begin(uint32_t engine_frame) noexcept;

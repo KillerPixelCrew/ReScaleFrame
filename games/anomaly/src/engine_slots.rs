@@ -170,7 +170,7 @@ pub(super) extern "C" fn rsf_anomaly_slot_install(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_slot_set(kind: u32, enabled: bool) -> bool {
+pub(super) extern "C" fn rsf_anomaly_slot_set(kind: u32, enabled: bool) -> bool {
     let kind = kind as usize;
     let mut slots = slots();
     let Some(entry) = slots.get_mut(kind) else {

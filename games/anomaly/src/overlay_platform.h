@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Private layouts between the Anomaly overlay service (overlay.rs) and its native leaves (overlay_service.cpp).
+// Private layouts between the Anomaly overlay service (overlay.rs) and its native bootstrap caller.
 // tools/generate-rust-bindings.py generates overlay_abi.rs from this header and the Runtime's overlay API.
 #include <rescaleframe/named_frame_dump.h>
 #include <rescaleframe/overlay_api.h>
@@ -30,17 +30,6 @@ typedef struct rsf_anomaly_overlay_chain {
     uint32_t width, height;
 } rsf_anomaly_overlay_chain;
 
-// Platform calls for the service: COM access and guarded hook installation.
-typedef struct rsf_anomaly_overlay_platform {
-    // Zero when the chain's description cannot be read.
-    uint32_t (*chain)(void* chain, rsf_anomaly_overlay_chain*);
-    // Writes the chain's backbuffer through `dump`; -1 without a backbuffer or immediate context.
-    int32_t (*capture_backbuffer)(void* chain, rsf_input_dump_named_texture_fn dump, const rsf_named_frame_dump*,
-        rsf_named_frame_dump_report*);
-    uint32_t (*install_input)(const char** reason);
-    uint32_t (*install_present)(const char** reason);
-} rsf_anomaly_overlay_platform;
-
 typedef struct rsf_anomaly_overlay_options {
     void* runtime;
     const wchar_t* configuration;
@@ -53,17 +42,11 @@ typedef struct rsf_anomaly_overlay_options {
 } rsf_anomaly_overlay_options;
 
 #ifdef __cplusplus
+namespace rsf::anomaly { struct HookOps; }
 extern "C" {
-#endif
-uint32_t rsf_anomaly_overlay_start(const rsf_anomaly_overlay_options*, const rsf_anomaly_overlay_platform*,
-    const char** reason);
-uint32_t rsf_anomaly_overlay_describe_chain(void*, rsf_anomaly_overlay_chain*);
-int32_t rsf_anomaly_overlay_capture_backbuffer(void*, rsf_input_dump_named_texture_fn, const rsf_named_frame_dump*,
-    rsf_named_frame_dump_report*);
-uint32_t rsf_anomaly_overlay_capture_bits(void* user);
-void rsf_anomaly_overlay_present(void* user, void* chain);
-void rsf_anomaly_overlay_resize(void* user, void* chain);
-void rsf_anomaly_overlay_option_add(const rsf_anomaly_overlay_option*);
-#ifdef __cplusplus
+uint32_t rsf_anomaly_overlay_start(const rsf_anomaly_overlay_options*, const rsf::anomaly::HookOps*,
+    const char** reason) noexcept;
+bool rsf_anomaly_overlay_install_default_input(const rsf::anomaly::HookOps*, const char** reason) noexcept;
+void rsf_anomaly_overlay_present(void* user, void* chain) noexcept;
 }
 #endif

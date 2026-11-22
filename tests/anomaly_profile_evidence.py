@@ -41,7 +41,7 @@ def main():
             end = text.find('// ---- ', start + 10)
             end = len(text) if end < 0 else end
             selected = text[start:end]
-            guard = re.search(r'signature\("([0-9a-f]{32})"\)', selected)
+            guard = re.search(r'b"([0-9a-f]{32})"', selected)
             rva = re.search(r'\{"[^"]+", (0x[0-9a-f]+), signature', selected)
             layout = re.search(r'\.' + field + r' = (0x[0-9a-f]+)', selected)
             assert guard and rva and layout, (domain, field)
@@ -82,25 +82,25 @@ def main():
                     assert result.returncode != 0 and 'AssertionError' in result.stderr, (domain, build, kind, result.stdout, result.stderr)
                     checks += 1
             if domain == 'fg':
-                input_text = (ROOT / 'games/anomaly/src/input_profile.h').read_text(encoding='utf-8')
+                input_text = (ROOT / 'games/anomaly/src/input/profile.rs').read_text(encoding='utf-8')
                 begin = input_text.index('// ---- ' + section + ' 1.5.3 DX11')
                 stop = input_text.find('// ---- ', begin + 10)
                 stop = len(input_text) if stop < 0 else stop
                 part = input_text[begin:stop]
                 changes = []
-                for m in re.finditer(r'signature\("([0-9a-f]{32})"\)', part):
+                for m in re.finditer(r'b"([0-9a-f]{32})"', part):
                     changes.append((begin+m.start(1), begin+m.end(1), '00'+m[1][2:]))
-                m = re.search(r'signature\("[0-9a-f]+"\)\},\s*(0x[0-9a-f]+),', part)
+                m = re.search(r'slot_rva: (0x[0-9a-f]+),', part)
                 changes.append((begin+m.start(1), begin+m.end(1), hex(int(m[1],16)+8)))
                 m = list(re.finditer(r'"([0-9a-f]{64,})"', part))[-1]
                 changes.append((begin+m.start(1), begin+m.end(1), m[1][:-2]+'cc'))
                 for field in ('keyboard','mouse'):
-                    m = re.search(r'input_'+field+r'_offset = (0x[0-9a-f]+)', input_text)
+                    m = re.search(r'p'+field.title()+r' \+(0x[0-9a-f]+)', input_text)
                     changes.append((m.start(1),m.end(1),hex(int(m[1],16)+8)))
                 assert len(changes)==7
                 with tempfile.TemporaryDirectory(prefix='rsf-input-evidence-') as temp:
                     for a,b,new in changes:
-                        path=pathlib.Path(temp)/'input_profile.h'
+                        path=pathlib.Path(temp)/'input_profile.rs'
                         path.write_text(input_text[:a]+new+input_text[b:],encoding='utf-8')
                         result=run('fg',build,input_profile=path)
                         assert result.returncode != 0 and 'AssertionError' in result.stderr, (build,result.stdout,result.stderr)

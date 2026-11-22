@@ -71,3 +71,51 @@ The Anomaly and Runtime overlay bindings, SR stage binding and panel limit
 were regenerated with bindgen-cli 0.72.1. The edited Rust files were formatted
 with Rust 1.94.1 and the patch passed the whitespace check. Build, lint, fixture
 and game execution remain with the user. Runtime validation is pending.
+
+## Residual port from 3665aef0
+
+The existing N02 port on this base is `0c029e08971744c5f0865a7961940951f4d05044`.
+The residual port removes the C++ input, overlay service, hook and gate
+facades. The Rust gate is process-owned, and the existing MinHook operation
+table still supplies installation and rollback. DXGI targets are still
+probed from the system D3D11 WARP chain, with Present1 discovered via its
+interface. The overlay still admits the same-process Anomaly engine window
+and rejects test Presents and foreign FG chains. Resize notification now
+requires the chain that owns the panel. The overlay retains the original
+trampolines and their module references across retirement.
+
+`input/profile.rs` carries the Standard and AVX OnFrame, KeyUpdate and
+MouseUpdate guards, primary vtable slot RVAs and complete OnFrame bodies.
+Bootstrap passes the build index only after its name and hash admission.
+The native detour keeps C++ unwinding around the original OnFrame call
+so the Rust in-flight ticket is retired on both return and unwind. The
+narrow `input_hooks.h` declarations keep that boundary and expose input
+slot enable, disable and idle to the observer. `overlay_platform.h`
+retains the generated private startup and option layouts. The three
+remaining fixture executables keep small native entry points for the
+guarded Win32 primitives, MinHook and SDK mouse format, and the imported
+Runtime query respectively. Their assertions and device scenarios run in
+Rust when the fixtures are executed.
+
+The original option descriptors, restart flags and apply/save results
+continue through overlay service v4. Startup also registers the overlay
+toggle and capture directory through O02's existing saved-options ABI 1.
+Both rows require a restart. The Runtime copies the descriptors and
+persists the values without borrowing an adapter callback. Empty capture
+text selects the existing timestamped directory. The cold reader decodes
+saved UTF-16 and accepts legacy INI text. The visibility fixture supplies an
+encoded directory with a supplementary Unicode character and retains real
+Runtime, WARP/hardware, PNG pixel, input and settings checks.
+
+Pinned Rust 1.94.1 formatting, bindgen-cli 0.72.1, locked offline Cargo
+metadata and whitespace checks passed. Source checks matched the six site
+guards, both complete bodies, both slot RVAs and both device field offsets
+against the base, and checked fixture registration and O02 ABI equality.
+The N06 SR source and Runtime API remain outside this replay. Windows
+builds, fixtures, lint, device and gameplay execution remain pending.
+
+For the N06 fixture replay, retain its `rsf_anomaly_sr_fixture_rust` link
+for `rsf_anomaly_sr_hooks_test` and remove that fixture's reference to
+`input_hooks.cpp`. The observer now calls the Rust slot owner through
+the inline declarations. Both N02 and N06 implementation entries belong
+in the tracker.

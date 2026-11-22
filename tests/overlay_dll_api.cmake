@@ -37,18 +37,19 @@ else()
     message(STATUS "overlay_dll_api_device not registered: ${RSF_OVERLAY_PANEL_DLL} is missing")
 endif()
 
+rsf_add_rust_static(rsf_anomaly_overlay_fixture_rust rsf_rust_anomaly_overlay_fixture
+    rsf-anomaly rsf_anomaly --features overlay-device-fixture)
+
 # The Anomaly adapter's evidence path against the real Runtime and panel: the backbuffer capture PNGs
 # contain panel pixels while open, and the adapter log reports drawn state, pointer events and settings
 # requests. The adapter service is compiled in (hooks off) and imports the Runtime like a carrier would.
 if(EXISTS "${RSF_OVERLAY_PANEL_DLL}")
-    add_executable(rsf_anomaly_overlay_visibility_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_overlay_visibility.cpp"
-        "${PROJECT_SOURCE_DIR}/games/anomaly/src/overlay_hooks.cpp"
-        "${PROJECT_SOURCE_DIR}/games/anomaly/src/overlay_service.cpp")
+    add_executable(rsf_anomaly_overlay_visibility_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_overlay_visibility.cpp")
     target_include_directories(rsf_anomaly_overlay_visibility_test PRIVATE
         "${PROJECT_SOURCE_DIR}/games/anomaly/src"
         "$<TARGET_PROPERTY:rsf_orchestrator,INTERFACE_INCLUDE_DIRECTORIES>")
     target_link_libraries(rsf_anomaly_overlay_visibility_test PRIVATE "$<TARGET_LINKER_FILE:rsf_orchestrator>"
-        rsf_anomaly_rust ReScaleFrame::GameSDK ReScaleFrame::Contract minhook rsf_build_options d3d11 dxgi dinput8 dxguid windowscodecs ole32)
+        rsf_anomaly_overlay_fixture_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_build_options d3d11 dxgi dinput8 dxguid windowscodecs ole32)
     add_dependencies(rsf_anomaly_overlay_visibility_test rsf_orchestrator)
     add_test(NAME anomaly_overlay_visibility COMMAND rsf_anomaly_overlay_visibility_test)
     set_tests_properties(anomaly_overlay_visibility PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77

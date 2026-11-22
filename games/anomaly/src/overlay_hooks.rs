@@ -2,7 +2,7 @@
 use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{null, null_mut};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 use windows_sys::Win32::Foundation::{HWND, MAX_PATH};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
@@ -13,6 +13,7 @@ use crate::input::gate::{self, DeviceCalls, Gate};
 use crate::input::{KEYBOARD, MOUSE};
 use crate::lease::Lease;
 use crate::native_hooks::{HookOps, Target, enable_batch, transaction};
+use crate::overlay::rsf_anomaly_overlay_capture_bits;
 use crate::overlay_native::{self as native, ChainObjects, Object};
 use crate::runtime_module::Module;
 use std::mem::transmute;
@@ -417,12 +418,9 @@ thread_local! {
     static IN_PRESENT: Cell<bool> = const { Cell::new(false) };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_overlay_install_input(
-    gate: Address,
-    platform: &HookOps,
-    reason: &mut Reason,
-) -> bool {
+pub(super) fn install_input(platform: &HookOps, reason: &mut Reason) -> bool {
+    static GATE: LazyLock<Gate> = LazyLock::new(|| Gate::new(rsf_anomaly_overlay_capture_bits));
+    let gate = std::ptr::from_ref(&*GATE).expose_provenance();
     match HOOKS.install(Binding::Input(gate), platform, |registration| {
         probe_input(registration).map(Some)
     }) {
@@ -434,22 +432,16 @@ unsafe extern "C" fn rsf_anomaly_overlay_install_input(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_overlay_install_present(
-    before_present: Option<SinkCallback>,
-    resize: Option<SinkCallback>,
-    user: Address,
+pub(super) fn install_present(
+    before_present: SinkCallback,
+    resize: SinkCallback,
     platform: &HookOps,
     reason: &mut Reason,
 ) -> bool {
-    let Some(before_present) = before_present else {
-        *reason = c"no Present sink".as_ptr();
-        return false;
-    };
     let sink = PresentSink {
         before_present,
-        resize,
-        user,
+        resize: Some(resize),
+        user: 0,
     };
     match HOOKS.install(Binding::Present(sink), platform, |registration| {
         probe_present(registration).map(Some)
@@ -485,7 +477,7 @@ extern "C" fn rsf_anomaly_overlay_input_gate() -> Address {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_overlay_set_input_observer(observer: Option<InputObserver>) {
+pub(super) extern "C" fn rsf_anomaly_overlay_set_input_observer(observer: Option<InputObserver>) {
     HOOKS.state().observer = observer;
 }
 
@@ -519,9 +511,9 @@ unsafe fn device_calls(device: Object) -> DeviceCalls {
     }
 }
 
-fn active_gate() -> Option<&'static Gate> {
+pub(super) fn active_gate() -> Option<&'static Gate> {
     // The adapter publishes one gate for the process before enabling any input hook.
-    unsafe { (rsf_anomaly_overlay_input_gate() as *const Gate).as_ref() }
+    unsafe { std::ptr::with_exposed_provenance::<Gate>(rsf_anomaly_overlay_input_gate()).as_ref() }
 }
 
 fn device_kind(guid: &GUID) -> Option<u8> {
@@ -839,4 +831,12 @@ mod tests {
         }
         assert_eq!(CALLS.with_borrow(|calls| calls.len()), 12);
     }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_overlay_install_default_input(
+    hooks: &HookOps,
+    reason: &mut Reason,
+) -> bool {
+    install_input(hooks, reason)
 }

@@ -399,7 +399,7 @@ stock callback; the matched source implementation is commented out. Third-party 
 | CInput::MouseUpdate | 0x67020 / 4c8bdc534881ec80060000488bd941c7 | 0x65d50 / 4c8bdc534881ec80060000488bd941c7 |
 | CInput primary vtable, slot 0 | 0xa55a20 -> 0x67810 | 0xa42a60 -> 0x66540 |
 
-All three expected16 guards are unique in each executable's .text. input_profile.h also carries the complete unique
+All three expected16 guards are unique in each executable's .text. games/anomaly/src/input/profile.rs also carries the complete unique
 0xc3-byte OnFrame guard, checked before replacing the slot. The pointer must still hold the exact profiled function.
 Both actual executables were mapped read-only with DONT_RESOLVE_DLL_REFERENCES; the production installer swapped,
 restored, re-enabled and restored their slots successfully without executing game code. No new detour decoder or stack

@@ -28,7 +28,7 @@ from capstone import x86
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 NATIVE = ROOT / 'games/anomaly/src/native_profile.h'
 SR_PROFILE = ROOT / 'games/anomaly/src/sr_profile.h'
-INPUT_PROFILE = ROOT / 'games/anomaly/src/input_profile.h'
+INPUT_PROFILE = ROOT / 'games/anomaly/src/input/profile.rs'
 _spec = importlib.util.spec_from_file_location('anomaly_sr_evidence', ROOT / 'tests/anomaly_sr_evidence.py')
 sr = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(sr)
@@ -70,12 +70,12 @@ def indirect_calls(code, base, displacement):
 def verify_input(pe, log):
     text = sr.geometry.profile_text(INPUT_PROFILE)
     sites = [(n, int(r, 16), bytes.fromhex(h)) for n, r, h in re.findall(
-        r'\{"(CInput::[^"]+)", (0x[0-9a-f]+), signature\("([0-9a-f]+)"\)\}', text)]
+        r'site\(\s*c"(CInput::[^"]+)",\s*(0x[0-9a-f]+),\s*b"([0-9a-f]+)"\s*,?\s*\)', text)]
     assert len(sites) == 3, 'input profile entries'
     for name, rva, raw in sites:
         assert len(raw) == 16 and pe.read(rva, 16) == raw and pe.unique_in_text(raw), ('input expected16', name)
     frame, keyboard, mouse = [r for _, r, _ in sites]
-    table_rva = int(re.search(r'signature\("[0-9a-f]+"\)\},\s*(0x[0-9a-f]+),', text)[1], 16)
+    table_rva = int(re.search(r'slot_rva: (0x[0-9a-f]+),', text)[1], 16)
     table = next(t for t in pe.tables('CInput') if t['this_offset'] == 0)
     assert int(table['vtable'], 16) == table_rva and int(table['slots'][0], 16) == frame, 'CInput primary pureFrame slot 0'
     raw = bytes.fromhex(re.findall(r'"([0-9a-f]{64,})"', text)[-1])
@@ -86,7 +86,7 @@ def verify_input(pe, log):
     calls = [i for i in code if i.mnemonic == 'call' and i.operands[0].type == x86.X86_OP_IMM]
     assert [i.operands[0].imm for i in calls if i.operands[0].imm in (keyboard, mouse)] == [keyboard, mouse], 'keyboard before mouse'
     full = INPUT_PROFILE.read_text(encoding='utf-8')
-    offsets = [int(re.search(r'input_' + name + r'_offset = (0x[0-9a-f]+)', full)[1], 16) for name in ('keyboard', 'mouse')]
+    offsets = [int(re.search(r'p' + name.title() + r' \+(0x[0-9a-f]+)', full)[1], 16) for name in ('keyboard', 'mouse')]
     for target, offset in zip((keyboard, mouse), offsets):
         call = next(i for i in calls if i.operands[0].imm == target)
         prior = [i for i in code if call.address-16 <= i.address < call.address]

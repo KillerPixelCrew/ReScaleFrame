@@ -205,12 +205,12 @@ unsafe extern "C" fn capture_backbuffer(
     }
     OK
 }
-unsafe extern "C" fn installed(_: *mut *const c_char) -> u32 {
-    1
+fn installed(_: &HookOps, _: &mut *const c_char) -> bool {
+    true
 }
-unsafe extern "C" fn present_refused(reason: *mut *const c_char) -> u32 {
-    unsafe { reason.write(c"dummy swap chain creation failed".as_ptr()) };
-    0
+fn present_refused(_: &HookOps, reason: &mut *const c_char) -> bool {
+    *reason = c"dummy swap chain creation failed".as_ptr();
+    false
 }
 unsafe extern "C" fn dump(
     _: *mut c_void,
@@ -221,13 +221,35 @@ unsafe extern "C" fn dump(
     OK
 }
 
-fn platform() -> rsf_anomaly_overlay_platform {
-    rsf_anomaly_overlay_platform {
-        chain: Some(describe),
-        capture_backbuffer: Some(capture_backbuffer),
-        install_input: Some(installed),
-        install_present: Some(installed),
+fn platform() -> Platform {
+    Platform {
+        leaves: Leaves {
+            chain: describe,
+            capture_backbuffer,
+        },
+        install_input: installed,
+        install_present: installed,
     }
+}
+
+const UNUSED_HOOKS: HookOps = HookOps {
+    initialize: unused_initialize,
+    create: unused_create,
+    remove_unqueued: unused_remove,
+    queue: unused_queue,
+    apply: unused_initialize,
+};
+unsafe extern "C" fn unused_initialize() -> bool {
+    unreachable!()
+}
+unsafe extern "C" fn unused_create(_: *mut c_void, _: *mut c_void, _: *mut *mut c_void) -> bool {
+    unreachable!()
+}
+unsafe extern "C" fn unused_remove(_: *mut c_void) {
+    unreachable!()
+}
+unsafe extern "C" fn unused_queue(_: *mut c_void, _: bool) -> bool {
+    unreachable!()
 }
 
 const INI: &[u16] = &[
@@ -402,7 +424,7 @@ fn runtime_start_and_capture_report_refusals() {
     let overlay = Overlay::new(TEST_DESKTOP, TEST_STAGES);
     assert_eq!(
         overlay
-            .start(&start, &platform(), Vec::new())
+            .start(&start, &platform(), None, Vec::new())
             .unwrap_err()
             .status,
         API_MISSING
@@ -420,7 +442,7 @@ fn runtime_start_and_capture_report_refusals() {
     start.api_override = &api;
     assert_eq!(
         overlay
-            .start(&start, &platform(), Vec::new())
+            .start(&start, &platform(), None, Vec::new())
             .unwrap_err()
             .status,
         CONFIGURE_REFUSED
@@ -474,15 +496,25 @@ fn a_hook_refusal_stays_refused_on_retry() {
         ..table()
     };
     let mut leaves = platform();
-    leaves.install_present = Some(present_refused);
+    leaves.install_present = present_refused;
     let overlay = Overlay::new(TEST_DESKTOP, TEST_STAGES);
     let first = overlay
-        .start(&options(&api, true), &leaves, Vec::new())
+        .start(
+            &options(&api, true),
+            &leaves,
+            Some(&UNUSED_HOOKS),
+            Vec::new(),
+        )
         .unwrap_err();
     assert_eq!(first.status, HOOKS_REFUSED);
     assert_eq!(reason_of(first), "dummy swap chain creation failed");
     let retry = overlay
-        .start(&options(&api, true), &leaves, Vec::new())
+        .start(
+            &options(&api, true),
+            &leaves,
+            Some(&UNUSED_HOOKS),
+            Vec::new(),
+        )
         .unwrap_err();
     assert_eq!(retry.status, HOOKS_REFUSED);
     assert!(reason_of(retry).contains("refused earlier"));
@@ -495,18 +527,18 @@ fn a_hook_refusal_stays_refused_on_retry() {
     empty.configuration = w!("");
     assert_eq!(
         overlay
-            .start(&empty, &platform(), Vec::new())
+            .start(&empty, &platform(), None, Vec::new())
             .unwrap_err()
             .status,
         CONFIGURE_REFUSED
     );
     assert_eq!(
-        overlay.start(&options(&api, false), &platform(), Vec::new()),
+        overlay.start(&options(&api, false), &platform(), None, Vec::new()),
         Ok(STARTED)
     );
     assert_eq!(
         overlay
-            .start(&options(&api, false), &platform(), Vec::new())
+            .start(&options(&api, false), &platform(), None, Vec::new())
             .unwrap_err()
             .status,
         ALREADY_STARTED
@@ -555,7 +587,7 @@ fn insert(_: *mut c_void) -> bool {
 fn service(api: &rsf_overlay_api, log: Log, capture: Option<Capture>) -> Service {
     Service {
         api: Api::new(api).unwrap(),
-        leaves: Leaves::new(&platform()).unwrap(),
+        leaves: platform().leaves,
         controls: TEST_STAGES,
         desktop: Desktop {
             engine_window: any_window,
@@ -684,7 +716,7 @@ fn panel_edges_log_and_capture_the_configured_frames() {
 #[test]
 fn log_lines_are_bounded_like_the_native_buffer() {
     let log = Mutex::new(Vec::new());
-    log_into(&log).say(format_args!("{}", "é".repeat(500)));
+    log_into(&log).say(format_args!("{}", "ÃƒÂ©".repeat(500)));
     let line = &lines(&log)[0];
     assert!(line.len() <= LOG_CAPACITY && line.len() >= LOG_CAPACITY - 1);
 }

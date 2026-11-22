@@ -10,6 +10,13 @@ license.workspace = true
 crate-type = ["staticlib"]
 
 [features]
+input-hook-fixture = []
+overlay-device-fixture = [
+  "windows/Win32_Devices_HumanInterfaceDevice",
+  "windows/Win32_Graphics_Dxgi",
+  "windows/Win32_Graphics_Imaging",
+  "windows/Win32_System_Com",
+]
 motion-hooks-fixture = []
 motion-binder-fixture = []
 motion-device-fixture = ["windows/Win32_Graphics_Dxgi"]

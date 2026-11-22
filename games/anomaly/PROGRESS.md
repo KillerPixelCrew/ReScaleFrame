@@ -72,7 +72,7 @@ Today's commits on main (not pushed): 6f7393d, d75a881, ae714a2, 3ac6cb0, e991e8
 ## INI keys (`bin/ReScaleFrame.ini`, section `[Anomaly]`)
 
 `Mode=Observe` (required by everything below), `Overlay=1`, `OverlayKeyPoll`, overlay capture
-keys (`games/anomaly/src/overlay_service.cpp`), `SRStage=0..5`, `SRScale`, `SRJitter`,
+keys (`games/anomaly/src/overlay.rs`), `SRStage=0..5`, `SRScale`, `SRJitter`,
 `SRMipBias`, `SRStageCapture` (+`Start/Count/Interval`), `SR`, `SRBackend`, `SRQuality`,
 `DLSSPreset`, `SRExposure`, `SRFirstPersonZero`, `SRCutDistance/SRCutAngle`,
 `SRStreamlineDir/SRFidelityFXDir/SRXeSSDir`, `SRRequireSignature`, `Motion=1`, `MotionFoliage`,

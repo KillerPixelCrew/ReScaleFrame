@@ -133,7 +133,6 @@ int input_contract(const rsf::anomaly::BuildProfile& build) {
     core_cpu=api.cpu; api.cpu=&observe_input;
     fg::Options options{}; options.bridge=true; fg::configure(options,nullptr,nullptr);
     CHECK(fg::install_with(present,api));
-    CHECK(build.input && build.input->frame.rva && build.input->frame_vtable_rva);
     fg::input_begin(100);
     CHECK(input_facts.size()==3 && input_facts[0].stage==RSF_GAME_CPU_FRAME_BEGIN &&
         input_facts[1].stage==RSF_GAME_CPU_INPUT_SAMPLE && input_facts[2].stage==RSF_GAME_CPU_SIMULATION_BEGIN);
@@ -225,7 +224,7 @@ int main(int argc, char** argv) {
     fg::set_depth_view_source(&depth_source);
     HMODULE runtime = GetModuleHandleW(L"ReScaleFrame.Runtime.dll");
     if (!runtime || !fg::install(runtime, rsf::anomaly::standard_build)) { std::puts("FAIL: the bridge did not install"); return 1; }
-    fg::set_overlay_sink({&overlay_sink, nullptr, nullptr});
+    fg::set_overlay_sink(&overlay_sink);
 
     sr::TemporalDriver driver;
     if (stage5) {

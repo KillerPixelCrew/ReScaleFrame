@@ -181,8 +181,7 @@ unsafe fn get_device(chain: Object) -> Option<Lease> {
     Lease::new(raw, release).filter(|_| result >= 0)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_overlay_describe_chain(
+pub(super) unsafe extern "C" fn describe_chain(
     chain: Object,
     out: *mut rsf_anomaly_overlay_chain,
 ) -> u32 {
@@ -206,8 +205,7 @@ unsafe extern "C" fn rsf_anomaly_overlay_describe_chain(
     1
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_overlay_capture_backbuffer(
+pub(super) unsafe extern "C" fn capture_backbuffer(
     chain: Object,
     dump: rsf_input_dump_named_texture_fn,
     request: *const rsf_named_frame_dump,

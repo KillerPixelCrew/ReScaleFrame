@@ -1243,6 +1243,12 @@ callbacks report persistence failures. Source and binding checks are complete.
 Build, fixture and game verification remain open.
 [Anomaly input and overlay port](research/rust-anomaly-n02.md)
 
+The N02 follow-up moves both exact CInput profiles and the remaining input,
+live-hook and visibility fixture bodies into Rust. Anomaly registers the
+startup toggle and Unicode capture directory through the existing Runtime
+saved-options API. Source checks passed. Windows fixture and game execution
+remain pending. [N02 follow-up](research/rust-anomaly-n02.md#residual-port-from-3665aef0)
+
 The native D3D12 overlay now owns its three command and descriptor
 slots in Rust. The fixed slot array keeps partial references until
 initialization releases the fence and tears down the renderer.

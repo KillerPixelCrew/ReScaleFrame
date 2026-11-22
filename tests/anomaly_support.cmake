@@ -34,13 +34,11 @@ set_tests_properties(anomaly_geometry_contract anomaly_geometry_hooks_contract P
 
 # Rust unit fixtures cover the input gate and overlay API contracts. This fixture uses the
 # Windows SDK to exercise the installed hooks through WARP and system DirectInput.
-add_executable(rsf_anomaly_overlay_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_overlay_hooks.cpp"
-    "${PROJECT_SOURCE_DIR}/games/anomaly/src/overlay_hooks.cpp"
-    "${PROJECT_SOURCE_DIR}/games/anomaly/src/overlay_service.cpp")
+add_executable(rsf_anomaly_overlay_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_overlay_hooks.cpp")
 target_include_directories(rsf_anomaly_overlay_hooks_test PRIVATE
     "${PROJECT_SOURCE_DIR}/games/anomaly/src" "${PROJECT_SOURCE_DIR}/runtime/orchestrator/include")
 target_link_libraries(rsf_anomaly_overlay_hooks_test PRIVATE
-    rsf_anomaly_rust ReScaleFrame::GameSDK ReScaleFrame::Contract minhook rsf_build_options d3d11 dxgi dinput8 dxguid)
+    rsf_anomaly_overlay_fixture_rust ReScaleFrame::GameSDK ReScaleFrame::Contract minhook rsf_build_options d3d11 dxgi dinput8 dxguid)
 add_test(NAME anomaly_overlay_hooks_contract COMMAND rsf_anomaly_overlay_hooks_test)
 set_tests_properties(anomaly_overlay_hooks_contract PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
 
@@ -267,13 +265,13 @@ target_sources(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}/engine_s
 add_test(NAME anomaly_sr_reconstruction_window_contract COMMAND rsf_anomaly_sr_swap_test stage3_position_reconstruction)
 set_tests_properties(anomaly_sr_reconstruction_window_contract PROPERTIES TIMEOUT 30)
 
-target_sources(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}/input_hooks.cpp")
-# input_hooks.cpp keeps the native leaves; admission and routing are the production Rust library.
 target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE rsf_anomaly_sr_fixture_rust)
 
-add_executable(rsf_anomaly_input_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_input_hooks.cpp" "${RSF_ANOMALY_SR_SRC}/input_hooks.cpp")
+rsf_add_rust_static(rsf_anomaly_input_fixture_rust rsf_rust_anomaly_input_fixture
+    rsf-anomaly rsf_anomaly --features input-hook-fixture)
+add_executable(rsf_anomaly_input_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_input_hooks.cpp")
 target_include_directories(rsf_anomaly_input_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
-target_link_libraries(rsf_anomaly_input_hooks_test PRIVATE rsf_anomaly_rust ReScaleFrame::GameSDK rsf_build_options)
+target_link_libraries(rsf_anomaly_input_hooks_test PRIVATE rsf_anomaly_input_fixture_rust ReScaleFrame::GameSDK rsf_build_options)
 add_test(NAME anomaly_input_hooks_standard_contract COMMAND rsf_anomaly_input_hooks_test standard)
 add_test(NAME anomaly_input_hooks_avx_contract COMMAND rsf_anomaly_input_hooks_test avx)
 add_executable(rsf_latency_event_contract_test "${CMAKE_CURRENT_LIST_DIR}/game-sdk/cpu_fixture_main.c")

@@ -705,45 +705,6 @@ impl Default for rsf_anomaly_overlay_chain {
     }
 }
 #[repr(C)]
-#[derive(Default, Copy, Clone)]
-pub struct rsf_anomaly_overlay_platform {
-    pub chain: ::core::option::Option<
-        unsafe extern "C" fn(
-            chain: *mut ::core::ffi::c_void,
-            arg1: *mut rsf_anomaly_overlay_chain,
-        ) -> u32,
-    >,
-    pub capture_backbuffer: ::core::option::Option<
-        unsafe extern "C" fn(
-            chain: *mut ::core::ffi::c_void,
-            dump: rsf_input_dump_named_texture_fn,
-            arg1: *const rsf_named_frame_dump,
-            arg2: *mut rsf_named_frame_dump_report,
-        ) -> i32,
-    >,
-    pub install_input: ::core::option::Option<
-        unsafe extern "C" fn(reason: *mut *const ::core::ffi::c_char) -> u32,
-    >,
-    pub install_present: ::core::option::Option<
-        unsafe extern "C" fn(reason: *mut *const ::core::ffi::c_char) -> u32,
-    >,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_anomaly_overlay_platform"]
-        [::core::mem::size_of::<rsf_anomaly_overlay_platform>() - 32usize];
-    ["Alignment of rsf_anomaly_overlay_platform"]
-        [::core::mem::align_of::<rsf_anomaly_overlay_platform>() - 8usize];
-    ["Offset of field: rsf_anomaly_overlay_platform::chain"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_platform, chain) - 0usize];
-    ["Offset of field: rsf_anomaly_overlay_platform::capture_backbuffer"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_platform, capture_backbuffer) - 8usize];
-    ["Offset of field: rsf_anomaly_overlay_platform::install_input"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_platform, install_input) - 16usize];
-    ["Offset of field: rsf_anomaly_overlay_platform::install_present"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_platform, install_present) - 24usize];
-};
-#[repr(C)]
 pub struct rsf_anomaly_overlay_options {
     pub runtime: *mut ::core::ffi::c_void,
     pub configuration: *const wchar_t,
