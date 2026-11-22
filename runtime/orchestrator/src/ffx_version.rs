@@ -80,6 +80,15 @@ fn version_components(mut text: &[u8]) -> Option<[u32; 3]> {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    #[test]
+    fn provider_names_accept_numeric_prefixes_but_reject_incomplete_versions() {
+        assert_eq!(version_components(b"4.1.2.4555 INT8"), Some([4, 1, 2]));
+        assert_eq!(version_components(b" 3. 1.+5"), Some([3, 1, 5]));
+        assert_eq!(version_components(b"4.1"), None);
+        assert_eq!(version_components(b"FidelityFX 4.1.2"), None);
+    }
+
     #[test]
     fn selects_by_family_and_revision_then_applies_the_opaque_id_contract() {
         let version = |id, major, minor, patch| Version {

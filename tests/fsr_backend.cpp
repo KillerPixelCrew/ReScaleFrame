@@ -101,7 +101,9 @@ int main()
         check((caps.sr_apis & RSF_API_D3D11) == 0,
               "And offers no D3D11 path, which is the fact that decides the route.");
         check(caps.max_generated_frames == 0,
-              "Generation is not implemented and cannot be selected.");
+              "The legacy table does not advertise generation.");
+        check(fg->tag_frame(nullptr, nullptr, nullptr) == RSF_BACKEND_ERROR_NOT_READY,
+              "The header-enabled legacy FG table remains callable and reports NOT_READY.");
         check(caps.sr_fg_share_session == 0,
               "No shared session, so choosing it for generation leaves reconstruction free to be "
               "another vendor. This is what makes it the first generator worth wiring up.");
@@ -127,10 +129,18 @@ int main()
 
     stage("XeSS has the same missing-build versus missing-runtime distinction");
     const auto* xess = rsf_xess_sr_provider();
+    const auto* xess_fg = rsf_xess_fg_provider();
     caps.struct_size = sizeof(caps);
     const auto xess_result = xess->probe(&desc, &caps);
     check(caps.vendor == RSF_VENDOR_INTEL && caps.fg_apis == 0,
-          "XeSS is named and never advertises unimplemented frame generation.");
+          "XeSS is named and the legacy table does not advertise generation.");
+    const auto xess_absent = xess_result == RSF_BACKEND_ERROR_NOT_COMPILED
+        ? RSF_BACKEND_ERROR_NOT_COMPILED : RSF_BACKEND_ERROR_NOT_READY;
+    check(xess_fg && xess_fg->tag_frame && xess_fg->tag_frame(nullptr, nullptr, nullptr) == xess_absent,
+          "The legacy XeSS FG table preserves the header-dependent refusal.");
+    check((xess->get_version != nullptr) == (xess_result == RSF_BACKEND_OK) &&
+          (sr->get_version != nullptr) == (result == RSF_BACKEND_OK),
+          "The version callback is present only when SR is compiled in.");
     rsf_sr_open_desc missing{};
     missing.struct_size = sizeof(missing); missing.abi_version = RSF_BACKEND_ABI_VERSION;
     missing.api = RSF_API_D3D12; missing.device = &missing;

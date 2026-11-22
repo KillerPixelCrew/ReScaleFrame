@@ -8,6 +8,10 @@
 
 using Microsoft::WRL::ComPtr;
 namespace {
+// The SDK records below are generated into d3d12_generation/xess_abi.rs.
+static_assert(sizeof(xell_sleep_params_t) == 8 && sizeof(xefg_swapchain_version_t) == 8 &&
+    sizeof(xefg_swapchain_frame_constant_data_t) == 152 && sizeof(xefg_swapchain_properties_t) == 40 &&
+    sizeof(xefg_swapchain_present_status_t) == 12 && sizeof(xefg_swapchain_d3d12_resource_data_t) == 40);
 static_assert(RSF_LATENCY_INPUT_SAMPLE == 6);
 static_assert(RSF_REFLEX_ON == 1);
 static_assert(XEFG_SWAPCHAIN_RESULT_SUCCESS == 0 && XELL_RESULT_SUCCESS == 0);

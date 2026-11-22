@@ -62,6 +62,11 @@ void sr_close(void*) {}
 
 #else
 
+// The SDK records below are generated into d3d12_sr/fsr_abi.rs.
+static_assert(sizeof(FfxApiResource) == 48 && sizeof(ffxCreateContextDescUpscale) == 48 &&
+    sizeof(ffxDispatchDescUpscale) == 432 && sizeof(ffxQueryDescGetVersions) == 56 &&
+    sizeof(ffxQueryGetProviderVersion) == 32 &&
+    sizeof(ffxQueryDescUpscaleGetRenderResolutionFromQualityMode) == 48);
 static_assert(RSF_QUALITY_NATIVE == FFX_UPSCALE_QUALITY_MODE_NATIVEAA &&
     RSF_QUALITY_QUALITY == FFX_UPSCALE_QUALITY_MODE_QUALITY &&
     RSF_QUALITY_BALANCED == FFX_UPSCALE_QUALITY_MODE_BALANCED &&

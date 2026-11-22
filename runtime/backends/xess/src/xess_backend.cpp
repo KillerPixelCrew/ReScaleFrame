@@ -7,6 +7,7 @@
 #include "../../common/sr_helpers.h"
 #if defined(RSF_HAVE_XESS)
 #include "../../common/sr12_platform.h"
+#include <xess/xess_d3d12.h>
 #endif
 
 namespace {
@@ -38,6 +39,9 @@ constexpr rsf_backend_result absent = RSF_BACKEND_ERROR_NOT_READY;
 
 #if defined(RSF_HAVE_XESS)
 
+// The SDK records below are generated into d3d12_sr/xess_abi.rs.
+static_assert(sizeof(xess_version_t) == 8 && sizeof(xess_d3d12_init_params_t) == 64 &&
+    sizeof(xess_d3d12_execute_params_t) == 136);
 static_assert(RSF_QUALITY_NATIVE == 0 && RSF_QUALITY_QUALITY == 1 && RSF_QUALITY_BALANCED == 2 &&
     RSF_QUALITY_PERFORMANCE == 3 && RSF_QUALITY_ULTRA_PERFORMANCE == 4 && RSF_QUALITY_ULTRA_QUALITY == 5);
 
