@@ -349,10 +349,8 @@ impl Renderer {
             frame: scope.native_frame as u32,
             width: desc.Width,
             height: desc.Height,
-            padding: 0,
         };
-        let mut decision = UNAVAILABLE_VIEW;
-        unsafe { rsf_ac7_velocity_view_begin(&draw, &mut decision) };
+        let decision = view_begin(&draw);
         if decision.action == VIEW_UNAVAILABLE || decision.slot == NO_SLOT {
             return None;
         }
@@ -372,8 +370,8 @@ impl Renderer {
         unsafe {
             c.CopyResource(&view.depth, &view.native_depth);
             c.ClearRenderTargetView(&view.motion_target, &[0.; 4]);
-            rsf_ac7_velocity_view_ready(decision.slot, &draw);
         }
+        view_ready(decision.slot, &draw);
         Some(decision.slot)
     }
 
@@ -564,21 +562,14 @@ impl Renderer {
             viewport.Width,
             viewport.Height,
         ];
-        let mut parameters = DrawParameters::default();
         let previous = model.previous.as_ref().map(|b| &b.read);
-        if unsafe {
-            rsf_ac7_velocity_draw_parameters(
-                scope,
-                viewports,
-                &rect,
-                decision.usable,
-                previous.map_or(0, |b| b.count),
-                &mut parameters,
-            )
-        } == 0
-        {
-            return None;
-        }
+        let parameters = draw_parameters(
+            scope,
+            viewports,
+            rect,
+            decision.usable != 0,
+            previous.map_or(0, |b| b.count),
+        )?;
         let previous = [previous.map(|b| b.view.clone())];
         unsafe {
             upload(c, &self.parameters, &parameters);
@@ -602,7 +593,7 @@ impl Renderer {
             c.SetPredication(predicate.0, predicate.1);
             submit(c, g, &self.indirect.read.buffer);
             c.SetPredication(None, false);
-            rsf_ac7_velocity_view_written(view_slot);
+            view_written(view_slot);
             c.GSSetShaderResources(variant.history_slot, Some(&[None]));
             c.OMSetRenderTargets(None, None);
             if tess {
@@ -620,17 +611,13 @@ impl Renderer {
             )
             .is_some()
         {
-            rsf_ac7_velocity_model_record(decision.slot, draw.frame, draw.records);
+            model_record(decision.slot, draw.frame, draw.records);
         }
         Some(())
     }
 
-    pub(super) unsafe fn commit(&self, c: &ID3D11DeviceContext, pass: *const Pass) -> Option<()> {
-        let mut found = UNAVAILABLE_VIEW;
-        if unsafe { rsf_ac7_velocity_commit_view(pass, &mut found) } == 0 {
-            return None;
-        }
-        let pass = unsafe { &*pass };
+    pub(super) fn commit(&self, c: &ID3D11DeviceContext, pass: &Pass) -> Option<()> {
+        let found = commit_view(pass)?;
         let view = self.views.get(found.slot as usize)?.as_ref()?;
         if view.native_depth.as_raw() != pass.depth {
             return None;
@@ -645,7 +632,7 @@ impl Renderer {
             array_size: desc.ArraySize,
             format: desc.Format.0 as u32,
         };
-        if unsafe { rsf_ac7_velocity_commit_target(&found, &target) } == 0 {
+        if !target_matches(&found, &target) {
             return None;
         }
         let device = unsafe { c.GetDevice() }.ok()?;
@@ -707,8 +694,8 @@ impl Renderer {
             c.CopyResource(native, &view.merged);
             c.CopyResource(&view.native_depth, &view.depth);
         }
-        rsf_ac7_velocity_view_committed(found.slot);
-        rsf_ac7_velocity_log_commit();
+        view_committed(found.slot);
+        log_commit();
         Some(())
     }
 }
@@ -764,8 +751,7 @@ fn model<'a>(
     hash: &HashPass<'_>,
     draw: &ModelDraw,
 ) -> Option<(&'a Model, ModelDecision)> {
-    let mut decision = UNAVAILABLE_MODEL;
-    let admitted = unsafe { rsf_ac7_velocity_model_begin(draw, &mut decision) } != 0;
+    let (admitted, decision) = model_begin(draw);
     if decision.slot == NO_SLOT {
         return None;
     }
@@ -880,6 +866,6 @@ impl Timing {
 impl Drop for Timing {
     fn drop(&mut self) {
         self.sample.elapsed_ms = clock_ms() - self.entered;
-        unsafe { rsf_ac7_velocity_profile_sample(&self.sample) };
+        profile_sample(&self.sample);
     }
 }

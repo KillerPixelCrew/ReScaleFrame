@@ -136,7 +136,7 @@ thread and release runs after the frame tap is uninstalled.
 [velocity_renderer.rs](../../games/ac7/src/velocity_renderer.rs), through
 [velocity_renderer.h](../../games/ac7/src/velocity_renderer.h), now owns:
 
-- `rsf_ac7_velocity_renderer_admit`: the published renderer for the draw's device, or a new one.
+- `admit`: the published renderer for the draw's device, or a new one.
   The create leaf runs without the lock because it compiles HLSL and creates D3D11 objects whose
   creation callbacks report into the source cache. A null result keeps the published renderer and
   returns null, so the native refusal text and the skipped draw are unchanged. On success the new

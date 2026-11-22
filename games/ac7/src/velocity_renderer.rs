@@ -6,8 +6,6 @@
 
 use crate::{velocity_commit, velocity_history, velocity_pass_cache};
 use std::ffi::c_void;
-#[cfg(test)]
-use std::mem::offset_of;
 use std::ptr::{NonNull, null_mut};
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
@@ -16,24 +14,8 @@ mod d3d11;
 #[cfg(windows)]
 pub(crate) mod replay;
 
-/// Creates and initializes a renderer for the device, or returns null. Must not throw.
-#[cfg(test)]
-type CreateRenderer = unsafe extern "C" fn(device: *mut c_void) -> *mut c_void;
-/// Destroys a renderer the create leaf made. Must not throw.
-type DestroyRenderer = unsafe extern "C" fn(renderer: *mut c_void);
-
-/// Synthetic admission fixture leaves.
-#[cfg(test)]
-#[repr(C)]
-struct RendererLeaves {
-    create: Option<CreateRenderer>,
-    destroy: Option<DestroyRenderer>,
-}
-
-#[cfg(test)]
-const _: () = {
-    assert!(size_of::<RendererLeaves>() == 16 && offset_of!(RendererLeaves, destroy) == 8);
-};
+/// Destroys a renderer the create closure made. Must not throw.
+type DestroyRenderer = unsafe fn(renderer: *mut c_void);
 
 /// A native renderer and the leaf that destroys it.
 struct Owned {
@@ -158,30 +140,6 @@ fn reset_for_renderer() {
     velocity_pass_cache::reset_variants();
     velocity_history::reset();
     velocity_commit::reset_profile();
-}
-
-/// The renderer for the draw context's device, made and published when the device differs from
-/// the published one. Null when the device is null, the leaves are incomplete or creation failed.
-#[cfg(test)]
-unsafe fn rsf_ac7_velocity_renderer_admit(
-    device: *mut c_void,
-    leaves: *const RendererLeaves,
-) -> *mut c_void {
-    // SAFETY: The draw callback lends its leaves for this call.
-    let Some(leaves) = (unsafe { leaves.as_ref() }) else {
-        return null_mut();
-    };
-    let (Some(create), Some(destroy)) = (leaves.create, leaves.destroy) else {
-        return null_mut();
-    };
-    admit(
-        &LIFETIME,
-        device,
-        // SAFETY: The leaf receives the draw context's device for this call.
-        || unsafe { create(device) },
-        destroy,
-        reset_for_renderer,
-    )
 }
 
 /// Destroys the published renderer and forgets the observed sources, layouts, variants, history

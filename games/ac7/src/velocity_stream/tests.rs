@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use std::ptr::{NonNull, null, null_mut};
+use std::ptr::{NonNull, null_mut};
 
 fn scope() -> rsf_game_render_pass {
     // SAFETY: Every field of the plain C scope is valid as zero.
@@ -219,16 +219,13 @@ fn parameters_pack_viewport_jitter_cutoff_and_history() {
 #[test]
 fn parameters_need_one_viewport_of_positive_extent() {
     let scope = scope();
-    let mut made = DrawParameters::default();
-    let call = |viewports, rect: [f32; 4], made: &mut DrawParameters| unsafe {
-        rsf_ac7_velocity_draw_parameters(&scope, viewports, &rect, 1, 0, made)
-    };
-    assert_eq!(call(1, [0.0, 0.0, 8.0, 8.0], &mut made), 1);
-    assert_eq!(call(0, [0.0, 0.0, 8.0, 8.0], &mut made), 0);
-    assert_eq!(call(2, [0.0, 0.0, 8.0, 8.0], &mut made), 0);
-    assert_eq!(call(1, [0.0, 0.0, 0.0, 8.0], &mut made), 0);
-    assert_eq!(call(1, [0.0, 0.0, 8.0, -1.0], &mut made), 0);
-    assert_eq!(call(1, [0.0, 0.0, f32::NAN, 8.0], &mut made), 1);
+    let call = |viewports, rect: [f32; 4]| draw_parameters(&scope, viewports, rect, true, 0).is_some();
+    assert!(call(1, [0.0, 0.0, 8.0, 8.0]));
+    assert!(!call(0, [0.0, 0.0, 8.0, 8.0]));
+    assert!(!call(2, [0.0, 0.0, 8.0, 8.0]));
+    assert!(!call(1, [0.0, 0.0, 0.0, 8.0]));
+    assert!(!call(1, [0.0, 0.0, 8.0, -1.0]));
+    assert!(call(1, [0.0, 0.0, f32::NAN, 8.0]));
 }
 
 #[test]
@@ -250,51 +247,4 @@ fn hash_dispatch_splits_groups_and_reads_indirect_counts() {
     assert_eq!(made.groups, [65535, 2]);
     let made = hash_dispatch(RECORD_LIMIT, 1 << 26, 0, false).unwrap();
     assert_eq!(made.groups, [65535, 9]);
-}
-
-#[test]
-fn calls_refuse_null_pointers() {
-    let scope = scope();
-    let geometry = draw(0, 3, 0, TRIANGLE_LIST);
-    let mut plan = StreamPlan::default();
-    let mut parameters = DrawParameters::default();
-    let mut dispatch = HashDispatch::default();
-    unsafe {
-        assert_eq!(rsf_ac7_velocity_stream_draw(null(), &geometry), 0);
-        assert_eq!(rsf_ac7_velocity_stream_draw(&scope, null()), 0);
-        assert_eq!(rsf_ac7_velocity_stream_draw(&scope, &geometry), 1);
-        assert_eq!(
-            rsf_ac7_velocity_stream_plan(null(), 0, 0, 1, 0, &mut plan),
-            0
-        );
-        assert_eq!(
-            rsf_ac7_velocity_stream_plan(&geometry, 0, 0, 1, 0, null_mut()),
-            0
-        );
-        assert_eq!(
-            rsf_ac7_velocity_stream_plan(&geometry, 0, 0, 1, 0, &mut plan),
-            1
-        );
-        assert_eq!(plan.bounds.records, 3);
-        let rect = [0.0, 0.0, 8.0, 8.0];
-        assert_eq!(
-            rsf_ac7_velocity_draw_parameters(null(), 1, &rect, 1, 0, &mut parameters),
-            0
-        );
-        assert_eq!(
-            rsf_ac7_velocity_draw_parameters(&scope, 1, null(), 1, 0, &mut parameters),
-            0
-        );
-        assert_eq!(
-            rsf_ac7_velocity_draw_parameters(&scope, 1, &rect, 1, 0, null_mut()),
-            0
-        );
-        assert_eq!(rsf_ac7_velocity_hash_dispatch(1, 1024, 0, 0, null_mut()), 0);
-        assert_eq!(
-            rsf_ac7_velocity_hash_dispatch(1, 1024, 0, 0, &mut dispatch),
-            1
-        );
-    }
-    assert_eq!(rsf_ac7_velocity_indirect_end(5, 0, 16), 0);
-    assert_eq!(rsf_ac7_velocity_indirect_end(5, 0, 20), 20);
 }

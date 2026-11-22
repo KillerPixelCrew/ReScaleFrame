@@ -3,7 +3,7 @@
 use super::d3d11::{Pipeline, Renderer, clock_ms};
 use super::{LIFETIME, admit, lock, published, release_renderer, reset_for_renderer};
 use crate::sys::rsf_frame_tap_geometry;
-use crate::velocity_commit::{Log, refused, rsf_ac7_velocity_log_frame_end, set_log};
+use crate::velocity_commit::{Log, log_frame_end, refused, set_log};
 use crate::velocity_history;
 use crate::velocity_stream::draw_admitted;
 use rsf_game_sys::ffi_util::try_box;
@@ -93,7 +93,7 @@ pub(crate) unsafe extern "C" fn rsf_ac7_velocity_geometry(draw: *const rsf_frame
     let _ = renderer.draw(context, &scope, draw, pipeline, entered);
 }
 
-unsafe extern "C" fn destroy(renderer: *mut c_void) {
+unsafe fn destroy(renderer: *mut c_void) {
     drop(unsafe { Box::from_raw(renderer.cast::<Renderer>()) });
 }
 
@@ -103,13 +103,17 @@ pub(crate) unsafe extern "C" fn rsf_ac7_velocity_commit(
     pass: *const rsf_game_render_pass,
 ) -> i32 {
     let _lease = lock(&REPLAY);
+    // The queued renderer lends the pass; only its leading size is read before admission.
+    if pass.is_null() || unsafe { (*pass).struct_size as usize } < size_of::<rsf_game_render_pass>() {
+        return 0;
+    }
     let (Some(renderer), Some(context)) = (
         unsafe { published(&LIFETIME).cast::<Renderer>().as_ref() },
         unsafe { ID3D11DeviceContext::from_raw_borrowed(&context) },
     ) else {
         return 0;
     };
-    i32::from(unsafe { renderer.commit(context, pass) }.is_some())
+    i32::from(renderer.commit(context, unsafe { &*pass }).is_some())
 }
 
 pub(super) fn merge(draw: impl FnOnce()) {
@@ -130,7 +134,7 @@ pub(crate) extern "C" fn rsf_ac7_velocity_frame_end() {
     let Some(owner) = (unsafe { renderer.cast::<Renderer>().as_mut() }) else {
         return;
     };
-    rsf_ac7_velocity_log_frame_end(owner.count());
+    log_frame_end(owner.count());
     velocity_history::frame_end(|kind, slot| owner.retire(kind, slot));
 }
 

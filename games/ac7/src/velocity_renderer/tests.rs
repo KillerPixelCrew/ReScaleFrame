@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use std::cell::RefCell;
-use std::ptr::null;
 
 thread_local! {
     // What happened on this test's thread, in order.
@@ -31,7 +30,7 @@ fn name(renderer: *mut c_void) -> u32 {
     unsafe { *renderer.cast::<u32>() }
 }
 
-unsafe extern "C" fn destroy(renderer: *mut c_void) {
+unsafe fn destroy(renderer: *mut c_void) {
     // SAFETY: `make` boxed every renderer this owner destroys.
     let name = *unsafe { Box::from_raw(renderer.cast::<u32>()) };
     event(format!("destroy {name}"));
@@ -162,26 +161,4 @@ fn device_lookup_never_creates() {
     assert!(published_for(&state, device(0x11)).is_null());
     assert!(events().is_empty());
     release_all(&state);
-}
-
-unsafe extern "C" fn never_create(_device: *mut c_void) -> *mut c_void {
-    panic!("incomplete leaves must not create")
-}
-
-#[test]
-fn incomplete_leaves_refuse() {
-    let missing_destroy = RendererLeaves {
-        create: Some(never_create),
-        destroy: None,
-    };
-    let missing_create = RendererLeaves {
-        create: None,
-        destroy: Some(destroy),
-    };
-    // SAFETY: Each call lends its leaves, or none, for the call.
-    unsafe {
-        assert!(rsf_ac7_velocity_renderer_admit(device(0x10), null()).is_null());
-        assert!(rsf_ac7_velocity_renderer_admit(device(0x10), &missing_destroy).is_null());
-        assert!(rsf_ac7_velocity_renderer_admit(device(0x10), &missing_create).is_null());
-    }
 }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use std::ptr::{NonNull, null, null_mut};
+use crate::velocity_history::UNAVAILABLE_VIEW;
+use std::ptr::{NonNull, null_mut};
 
 fn pass() -> rsf_game_render_pass {
     // SAFETY: Every field of the plain C pass is valid as zero.
@@ -58,10 +59,7 @@ fn commit_identity_carries_the_pass_keys_and_low_frame() {
         ),
         (1, 2, 3, 4, 5)
     );
-    assert_eq!(
-        (identity.width, identity.height, identity.padding),
-        (0, 0, 0)
-    );
+    assert_eq!((identity.width, identity.height), (0, 0));
 }
 
 #[test]
@@ -103,15 +101,14 @@ fn target_must_match_the_view_extent_and_format() {
 fn report_budgets_allow_twelve_refusals_and_three_commits() {
     let mut reports = Reports::default();
     for _ in 0..REFUSAL_BUDGET {
-        assert!(reports.take(REPORT_REFUSAL));
+        assert!(take(&mut reports.refusals, REFUSAL_BUDGET));
     }
-    assert!(!reports.take(REPORT_REFUSAL));
+    assert!(!take(&mut reports.refusals, REFUSAL_BUDGET));
     // The budgets are independent.
     for _ in 0..COMMIT_BUDGET {
-        assert!(reports.take(REPORT_COMMIT));
+        assert!(take(&mut reports.commits, COMMIT_BUDGET));
     }
-    assert!(!reports.take(REPORT_COMMIT));
-    assert!(!reports.take(2));
+    assert!(!take(&mut reports.commits, COMMIT_BUDGET));
     assert_eq!((reports.refusals, reports.commits), (12, 3));
 }
 
@@ -163,40 +160,4 @@ fn profile_totals_restart_at_frame_end_but_keep_the_frame() {
         }
     );
     assert_eq!(profile.end_frame(), None);
-}
-
-#[test]
-fn exported_calls_reject_missing_and_short_inputs() {
-    let mut decision = committed(1, 1);
-    // SAFETY: Null pointers are the tested refusal.
-    assert_eq!(
-        unsafe { rsf_ac7_velocity_commit_view(null(), &mut decision) },
-        0
-    );
-    assert_eq!(decision, UNAVAILABLE_VIEW);
-
-    let mut short = pass();
-    short.struct_size -= 1;
-    decision = committed(1, 1);
-    // SAFETY: A full pass whose size field is short is the tested refusal.
-    assert_eq!(
-        unsafe { rsf_ac7_velocity_commit_view(&short, &mut decision) },
-        0
-    );
-    assert_eq!(decision, UNAVAILABLE_VIEW);
-
-    // SAFETY: Null pointers are the tested refusal.
-    unsafe {
-        assert_eq!(rsf_ac7_velocity_commit_view(&pass(), null_mut()), 0);
-        assert_eq!(
-            rsf_ac7_velocity_commit_target(null(), &target(R16G16_UNORM)),
-            0
-        );
-        assert_eq!(rsf_ac7_velocity_commit_target(&committed(16, 8), null()), 0);
-        assert_eq!(
-            rsf_ac7_velocity_commit_target(&committed(16, 8), &target(R16G16_UNORM)),
-            1
-        );
-        rsf_ac7_velocity_profile_sample(null());
-    }
 }

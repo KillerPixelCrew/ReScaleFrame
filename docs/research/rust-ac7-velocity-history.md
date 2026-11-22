@@ -33,17 +33,17 @@ touch history state, with the behavior at `3856821`:
 [velocity_history.h](../../games/ac7/src/velocity_history.h):
 
 - Model identity, including the history-key fallback and the particle rule, and per model the
-  frame, record count, epoch and `usable`. `rsf_ac7_velocity_model_begin` returns a slot, whether
+  frame, record count, epoch and `usable`. `velocity_history::model_begin` returns a slot, whether
   to rotate, the validity and the required capacity, and whether the records fit. The rotation
   and epoch refresh happen before the overflow refusal, as before.
 - View identity and per view the frame, extent, family and view keys, epoch, `written`, and
-  whether every target exists. `rsf_ac7_velocity_view_begin` answers same frame, reuse or
-  allocate; allocate resets the entry exactly as `v={}` did. `rsf_ac7_velocity_view_ready` records
-  the frame after the targets exist. `rsf_ac7_velocity_view_written` and
-  `rsf_ac7_velocity_view_committed` set and clear `written`.
+  whether every target exists. `velocity_history::view_begin` answers same frame, reuse or
+  allocate; allocate resets the entry exactly as `v={}` did. `velocity_history::view_ready` records
+  the frame after the targets exist. `velocity_history::view_written` and
+  `velocity_history::view_committed` set and clear `written`.
 - The commit's logical identity: `rsf_ac7_velocity_view_commit` matches written, frame, view key
   and family key and returns the slot and extent. The commit port
-  later replaced this call with `rsf_ac7_velocity_commit_view`, which builds the identity itself.
+  later replaced this call with `velocity_commit::commit_view`, which builds the identity itself.
 - The epoch, starting at 1, and retirement. `rsf_ac7_velocity_history_frame_end` advances it,
   removes models then views whose epoch plus 2 is below it, and reports each retired slot to the
   native release leaf after the lock is released. `rsf_ac7_velocity_model_count` feeds the log.

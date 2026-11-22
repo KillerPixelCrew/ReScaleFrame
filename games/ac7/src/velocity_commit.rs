@@ -6,20 +6,17 @@
 //! target's description and device check, the state scope, the merge draw, the copies, the clock,
 //! and the device shader object count.
 
-use crate::velocity_history::{self, UNAVAILABLE_VIEW, VIEW_COMMIT, ViewDecision, ViewDraw};
+use crate::velocity_history::{self, VIEW_COMMIT, ViewDecision, ViewDraw};
 use rsf_game_sys::rsf_game_render_pass;
 #[cfg(windows)]
 use std::ffi::{CStr, CString, c_char, c_void};
-use std::mem::offset_of;
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
 // DXGI_FORMAT_R16G16_TYPELESS and DXGI_FORMAT_R16G16_UNORM, the engine's velocity target.
 const R16G16_TYPELESS: u32 = 33;
 const R16G16_UNORM: u32 = 35;
 
-// Report kinds and how many of each are logged per log attachment.
-const REPORT_REFUSAL: u32 = 0;
-const REPORT_COMMIT: u32 = 1;
+// How many refusals and commits are logged per log attachment.
 const REFUSAL_BUDGET: u32 = 12;
 const COMMIT_BUDGET: u32 = 3;
 
@@ -29,7 +26,6 @@ const REPORT_PEAK_MS: f64 = 4.0;
 
 /// The native motion target's description: width, height, sample count, array size and
 /// DXGI format.
-#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[allow(dead_code)] // constructed by D3D11 replay
 pub(crate) struct CommitTarget {
@@ -42,7 +38,6 @@ pub(crate) struct CommitTarget {
 
 /// One admitted draw callback's CPU time from entry to return, the part spent admitting its
 /// variant, the part spent preparing resources, its native frame and its record bound.
-#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[allow(dead_code)] // constructed by D3D11 replay
 pub(crate) struct ProfileSample {
@@ -55,7 +50,6 @@ pub(crate) struct ProfileSample {
 
 /// A frame's accumulated profile. `frame` is the last sampled native frame, kept across frame
 /// ends.
-#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct ProfileReport {
     total_ms: f64,
@@ -65,14 +59,7 @@ struct ProfileReport {
     frame: u32,
     callbacks: u32,
     largest_records: u32,
-    padding: u32,
 }
-
-const _: () = {
-    assert!(size_of::<CommitTarget>() == 20);
-    assert!(size_of::<ProfileSample>() == 32 && offset_of!(ProfileSample, frame) == 24);
-    assert!(size_of::<ProfileReport>() == 48 && offset_of!(ProfileReport, frame) == 32);
-};
 
 /// The view identity of a complete pass that leases both depth and motion.
 fn commit_identity(pass: &rsf_game_render_pass) -> Option<ViewDraw> {
@@ -88,12 +75,11 @@ fn commit_identity(pass: &rsf_game_render_pass) -> Option<ViewDraw> {
         frame: pass.native_frame as u32,
         width: 0,
         height: 0,
-        padding: 0,
     })
 }
 
 /// A single-sample, unarrayed R16G16 UNORM or typeless target at the committed view's extent.
-fn target_matches(view: &ViewDecision, target: &CommitTarget) -> bool {
+pub(crate) fn target_matches(view: &ViewDecision, target: &CommitTarget) -> bool {
     view.action == VIEW_COMMIT
         && target.width == view.width
         && target.height == view.height
@@ -108,21 +94,14 @@ struct Reports {
     commits: u32,
 }
 
-impl Reports {
-    /// Whether a report of this kind is within its budget. A spent budget stays spent until the
-    /// next log attachment.
-    fn take(&mut self, kind: u32) -> bool {
-        let (count, budget) = match kind {
-            REPORT_REFUSAL => (&mut self.refusals, REFUSAL_BUDGET),
-            REPORT_COMMIT => (&mut self.commits, COMMIT_BUDGET),
-            _ => return false,
-        };
-        if *count >= budget {
-            return false;
-        }
-        *count += 1;
-        true
+/// Whether a report is within its budget. A spent budget stays spent until the next log
+/// attachment.
+fn take(count: &mut u32, budget: u32) -> bool {
+    if *count >= budget {
+        return false;
     }
+    *count += 1;
+    true
 }
 
 #[derive(Default)]
@@ -185,42 +164,11 @@ fn lock() -> MutexGuard<'static, Pass> {
     PASS.lock().unwrap_or_else(|error| error.into_inner())
 }
 
-/// Nonzero with the decision's slot and extent when the pass's view has translucent motion
-/// written for its frame, view and family. The decision is unavailable otherwise.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_ac7_velocity_commit_view(
-    pass: *const rsf_game_render_pass,
-    decision: *mut ViewDecision,
-) -> i32 {
-    // SAFETY: The commit lends its decision for this call.
-    let Some(decision) = (unsafe { decision.as_mut() }) else {
-        return 0;
-    };
-    *decision = UNAVAILABLE_VIEW;
-    // SAFETY: The commit lends its pass for this call; only its leading size is read before the
-    // size check admits the rest.
-    if pass.is_null() || unsafe { (*pass).struct_size } < size_of::<rsf_game_render_pass>() as u32 {
-        return 0;
-    }
-    // SAFETY: Non-null and at least the full pass, checked above.
-    let Some(identity) = commit_identity(unsafe { &*pass }) else {
-        return 0;
-    };
-    *decision = velocity_history::commit(&identity);
-    i32::from(decision.action == VIEW_COMMIT)
-}
-
-/// Nonzero when the native motion target can receive the committed view's merge.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_ac7_velocity_commit_target(
-    view: *const ViewDecision,
-    target: *const CommitTarget,
-) -> i32 {
-    // SAFETY: The commit lends both for this call.
-    let (Some(view), Some(target)) = (unsafe { view.as_ref() }, unsafe { target.as_ref() }) else {
-        return 0;
-    };
-    i32::from(target_matches(view, target))
+/// The decision's slot and extent when the pass's view has translucent motion written for its
+/// frame, view and family.
+pub(crate) fn commit_view(pass: &rsf_game_render_pass) -> Option<ViewDecision> {
+    let decision = velocity_history::commit(&commit_identity(pass)?);
+    (decision.action == VIEW_COMMIT).then_some(decision)
 }
 
 #[cfg(windows)]
@@ -231,14 +179,21 @@ pub(crate) fn set_log(log: Option<Log>) {
 }
 
 #[cfg(windows)]
-fn take_log(kind: u32) -> Option<Log> {
+fn take_log(refusal: bool) -> Option<Log> {
     let mut pass = lock();
-    pass.log.filter(|_| pass.reports.take(kind))
+    let log = pass.log?;
+    let reports = &mut pass.reports;
+    let within = if refusal {
+        take(&mut reports.refusals, REFUSAL_BUDGET)
+    } else {
+        take(&mut reports.commits, COMMIT_BUDGET)
+    };
+    within.then_some(log)
 }
 
 #[cfg(windows)]
 pub(crate) fn refused(reason: &CStr) {
-    if let Some(log) = take_log(REPORT_REFUSAL) {
+    if let Some(log) = take_log(true) {
         let message = format!(
             "AC7 translucent velocity refused: {}",
             reason.to_string_lossy()
@@ -250,25 +205,20 @@ pub(crate) fn refused(reason: &CStr) {
 }
 
 #[cfg(windows)]
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_velocity_log_commit() {
-    if let Some(log) = take_log(REPORT_COMMIT) {
+pub(crate) fn log_commit() {
+    if let Some(log) = take_log(false) {
         log.emit(c"AC7 translucent velocity: opacity-clipped generated-geometry motion and depth committed before native post-processing");
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_ac7_velocity_profile_sample(sample: *const ProfileSample) {
-    // SAFETY: The finishing draw callback lends its sample for this call.
-    if let Some(sample) = unsafe { sample.as_ref() } {
-        lock().profile.sample(sample);
-    }
+#[cfg(windows)]
+pub(crate) fn profile_sample(sample: &ProfileSample) {
+    lock().profile.sample(sample);
 }
 
 /// The totals restart on every renderer frame end, even without a log attachment.
 #[cfg(windows)]
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_velocity_log_frame_end(shader_objects: u32) {
+pub(crate) fn log_frame_end(shader_objects: u32) {
     let (report, log) = {
         let mut pass = lock();
         (pass.profile.end_frame(), pass.log)

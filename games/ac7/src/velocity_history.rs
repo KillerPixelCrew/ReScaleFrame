@@ -5,7 +5,6 @@
 
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::mem::offset_of;
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
 pub(crate) const NO_SLOT: u32 = u32::MAX;
@@ -32,7 +31,6 @@ pub(crate) const RETIRE_VIEW: u32 = 1;
 
 /// A draw's model identity and its record count for this callback. `particle` drops the vertex
 /// factory and draw offsets from the identity; `reset` is the scope's history reset.
-#[repr(C)]
 #[derive(Clone, Copy)]
 #[allow(dead_code)] // constructed by D3D11 replay
 pub(crate) struct ModelDraw {
@@ -54,7 +52,6 @@ pub(crate) struct ModelDraw {
 
 /// `rotate`: swap previous and current and clear the new current. `capacity`: the current
 /// buffer must hold at least this many records. Both apply only while `slot` is valid.
-#[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ModelDecision {
     pub(crate) slot: u32,
@@ -65,7 +62,6 @@ pub(crate) struct ModelDecision {
 
 /// A view's identity at a draw (its native depth extent) or at a commit (the motion target's
 /// pass, extent unused).
-#[repr(C)]
 #[allow(dead_code)] // constructed by D3D11 replay and velocity_commit.rs
 pub(crate) struct ViewDraw {
     pub(crate) session_id: u64,
@@ -75,10 +71,8 @@ pub(crate) struct ViewDraw {
     pub(crate) frame: u32,
     pub(crate) width: u32,
     pub(crate) height: u32,
-    pub(crate) padding: u32,
 }
 
-#[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ViewDecision {
     pub(crate) slot: u32,
@@ -86,14 +80,6 @@ pub(crate) struct ViewDecision {
     pub(crate) width: u32,
     pub(crate) height: u32,
 }
-
-const _: () = {
-    assert!(size_of::<ModelDraw>() == 80 && offset_of!(ModelDraw, vertex_hash) == 48);
-    assert!(offset_of!(ModelDraw, records) == 76);
-    assert!(size_of::<ModelDecision>() == 16);
-    assert!(size_of::<ViewDraw>() == 48 && offset_of!(ViewDraw, frame) == 32);
-    assert!(size_of::<ViewDecision>() == 16);
-};
 
 pub(crate) const UNAVAILABLE_MODEL: ModelDecision = ModelDecision {
     slot: NO_SLOT,
@@ -432,49 +418,24 @@ fn lock() -> MutexGuard<'static, History> {
     HISTORY.lock().unwrap_or_else(|error| error.into_inner())
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_ac7_velocity_model_begin(
-    draw: *const ModelDraw,
-    decision: *mut ModelDecision,
-) -> i32 {
-    // SAFETY: The draw callback lends both for this call.
-    let (Some(draw), Some(decision)) = (unsafe { draw.as_ref() }, unsafe { decision.as_mut() })
-    else {
-        return 0;
-    };
-    let (admitted, made) = lock().begin_model(draw);
-    *decision = made;
-    i32::from(admitted)
+/// Whether the draw's records fit, with the slot decision either way.
+pub(crate) fn model_begin(draw: &ModelDraw) -> (bool, ModelDecision) {
+    lock().begin_model(draw)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_velocity_model_record(slot: u32, frame: u32, records: u32) {
+pub(crate) fn model_record(slot: u32, frame: u32, records: u32) {
     lock().record_model(slot, frame, records);
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_ac7_velocity_view_begin(
-    draw: *const ViewDraw,
-    decision: *mut ViewDecision,
-) {
-    // SAFETY: The draw callback lends both for this call.
-    let (Some(draw), Some(decision)) = (unsafe { draw.as_ref() }, unsafe { decision.as_mut() })
-    else {
-        return;
-    };
-    *decision = lock().begin_view(draw);
+pub(crate) fn view_begin(draw: &ViewDraw) -> ViewDecision {
+    lock().begin_view(draw)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_ac7_velocity_view_ready(slot: u32, draw: *const ViewDraw) {
-    // SAFETY: The draw callback lends its identity for this call.
-    if let Some(draw) = unsafe { draw.as_ref() } {
-        lock().ready_view(slot, draw);
-    }
+pub(crate) fn view_ready(slot: u32, draw: &ViewDraw) {
+    lock().ready_view(slot, draw);
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_velocity_view_written(slot: u32) {
+pub(crate) fn view_written(slot: u32) {
     lock().mark_written(slot, true);
 }
 
@@ -483,8 +444,7 @@ pub(crate) fn commit(pass: &ViewDraw) -> ViewDecision {
     lock().commit_view(pass)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_velocity_view_committed(slot: u32) {
+pub(crate) fn view_committed(slot: u32) {
     lock().mark_written(slot, false);
 }
 

@@ -29,7 +29,6 @@ fn view(frame: u32, width: u32, height: u32) -> ViewDraw {
         frame,
         width,
         height,
-        padding: 0,
     }
 }
 
@@ -305,20 +304,4 @@ fn reset_restarts_slots_and_the_epoch() {
     assert_eq!(history.epoch, FIRST_EPOCH);
     assert_eq!(history.begin_model(&model(2, 1)).1.usable, 0);
     assert_eq!(history.begin_view(&view(2, 8, 8)).action, VIEW_ALLOCATE);
-}
-
-#[test]
-fn exported_calls_reject_missing_pointers() {
-    let mut decision = ModelDecision {
-        slot: 5,
-        rotate: 1,
-        usable: 1,
-        capacity: 1,
-    };
-    // SAFETY: Null pointers are the tested refusal.
-    assert_eq!(
-        unsafe { rsf_ac7_velocity_model_begin(std::ptr::null(), &mut decision) },
-        0
-    );
-    assert_eq!(decision.slot, 5);
 }

@@ -66,14 +66,12 @@ pub(crate) struct IndirectBounds {
 /// to. `built` is the hash build's record count, an upper bound for indirect draws.
 /// `zero_source`: native GS emission or DrawAuto leaves no readable count, so the capture is
 /// zeroed before the draw.
-#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct StreamPlan {
     pub(crate) bounds: IndirectBounds,
     pub(crate) capacity: u32,
     pub(crate) built: u32,
     pub(crate) zero_source: u32,
-    pub(crate) padding: u32,
 }
 
 /// The geometry, tessellation and pixel b13 cbuffer of velocity_geometry.rs,
@@ -103,7 +101,6 @@ pub(crate) struct HashParameters {
 }
 
 /// `groups` is the direct dispatch; an indirect build dispatches from the arguments instead.
-#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct HashDispatch {
     pub(crate) parameters: HashParameters,
@@ -112,10 +109,9 @@ pub(crate) struct HashDispatch {
 
 const _: () = {
     assert!(size_of::<IndirectBounds>() == 16);
-    assert!(size_of::<StreamPlan>() == 32 && offset_of!(StreamPlan, capacity) == 16);
     assert!(size_of::<DrawParameters>() == 112 && offset_of!(DrawParameters, cutoff) == 32);
     assert!(offset_of!(DrawParameters, matrix) == 48);
-    assert!(size_of::<HashParameters>() == 16 && size_of::<HashDispatch>() == 24);
+    assert!(size_of::<HashParameters>() == 16);
 };
 
 /// A primary translucent mesh scope with a camera, and a single-sample draw with depth of a
@@ -218,7 +214,6 @@ pub(crate) fn plan(
         capacity,
         built,
         zero_source: u32::from(geometry || draw.kind == DRAW_AUTO),
-        padding: 0,
     })
 }
 
@@ -289,94 +284,19 @@ pub(crate) fn hash_dispatch(
     })
 }
 
-/// Pointer-boundary fixture for draw admission.
-#[cfg(test)]
-unsafe fn rsf_ac7_velocity_stream_draw(
-    scope: *const rsf_game_render_pass,
-    draw: *const rsf_frame_tap_geometry,
-) -> i32 {
-    // SAFETY: The draw callback lends its scope copy and the draw for this call.
-    let (Some(scope), Some(draw)) = (unsafe { scope.as_ref() }, unsafe { draw.as_ref() }) else {
-        return 0;
-    };
-    i32::from(draw_admitted(scope, draw))
-}
-
-/// Nonzero with the plan written when the draw's records fit.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_stream_plan(
-    draw: *const rsf_frame_tap_geometry,
-    stages: u32,
-    geometry_capacity: u32,
-    maximum_vertices: u32,
-    points: u32,
-    output: *mut StreamPlan,
-) -> i32 {
-    // SAFETY: The draw callback lends both for this call.
-    let (Some(draw), Some(output)) = (unsafe { draw.as_ref() }, unsafe { output.as_mut() }) else {
-        return 0;
-    };
-    match plan(draw, stages, geometry_capacity, maximum_vertices, points) {
-        Some(made) => {
-            *output = made;
-            1
-        }
-        None => 0,
-    }
-}
-
-/// The copy's end offset, or zero when the argument buffer does not hold the draw's arguments.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_velocity_indirect_end(kind: u32, offset: u32, byte_width: u32) -> u32 {
-    indirect_end(kind, offset, byte_width).unwrap_or(0)
-}
-
-/// Nonzero with the parameters written for exactly one viewport of positive extent.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_ac7_velocity_draw_parameters(
-    scope: *const rsf_game_render_pass,
+/// The parameters for exactly one viewport of positive extent. A NaN extent passes, as the
+/// D3D11 viewport check did.
+pub(crate) fn draw_parameters(
+    scope: &rsf_game_render_pass,
     viewports: u32,
-    rect: *const [f32; 4],
-    usable: u32,
+    rect: [f32; 4],
+    usable: bool,
     previous_records: u32,
-    output: *mut DrawParameters,
-) -> i32 {
-    // SAFETY: The draw callback lends all three for this call.
-    let (Some(scope), Some(&rect), Some(output)) = (
-        unsafe { scope.as_ref() },
-        unsafe { rect.as_ref() },
-        unsafe { output.as_mut() },
-    ) else {
-        return 0;
-    };
-    // A NaN extent passes, as the D3D11 viewport check did.
+) -> Option<DrawParameters> {
     if viewports != 1 || rect[2] <= 0.0 || rect[3] <= 0.0 {
-        return 0;
+        return None;
     }
-    *output = parameters(scope, rect, usable != 0, previous_records);
-    1
-}
-
-/// Nonzero with the dispatch written when there are records to build.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_hash_dispatch(
-    records: u32,
-    destination_records: u32,
-    mode: u32,
-    dynamic: u32,
-    output: *mut HashDispatch,
-) -> i32 {
-    // SAFETY: The build lends its output for this call.
-    let Some(output) = (unsafe { output.as_mut() }) else {
-        return 0;
-    };
-    match hash_dispatch(records, destination_records, mode, dynamic != 0) {
-        Some(made) => {
-            *output = made;
-            1
-        }
-        None => 0,
-    }
+    Some(parameters(scope, rect, usable, previous_records))
 }
 
 #[cfg(windows)]
