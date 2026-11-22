@@ -484,8 +484,8 @@ generate("tests/game-sdk/src/antilag_abi.rs", "runtime/orchestrator/src/latency_
 generate("tests/game-sdk/src/cpu_calls.rs", "runtime/orchestrator/include/rescaleframe/native_cpu.h",
          "NOTHING", "NOTHING", ["-Iruntime/orchestrator/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist",
-          "--allowlist-function", "rsf_native_(cpu_(event|dispatch|read|release|release_session|marker|ping_message|counters_get)|input_receipts_get)",
-          "--raw-line", "use crate::cpu_abi::{rsf_native_cpu_counters, rsf_native_cpu_frame, rsf_native_input_receipts};",
+          "--allowlist-function", "rsf_native_(cpu_(event|dispatch|read|release|release_session|marker|ping_message|counters_get|rendered_source_set|reservation_read|reservation_counters_get|present_result)|input_receipts_get)",
+          "--raw-line", "use crate::cpu_abi::{rsf_native_cpu_counters, rsf_native_cpu_frame, rsf_native_input_receipts, rsf_native_cpu_reservation, rsf_native_cpu_reservation_counters};",
           "--raw-line", "use rsf_game_sys::{rsf_game_cpu_event, rsf_game_cpu_event_fn};"])
 generate("runtime/orchestrator/src/scene_abi.rs", "runtime/orchestrator/include/rescaleframe/native_window.h",
          "rsf_(native_present_record|observer_present_event|native_scene_identity)",

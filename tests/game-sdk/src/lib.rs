@@ -18,6 +18,8 @@ mod cpu_events;
 mod domains;
 #[cfg(feature = "cpu-fixtures")]
 mod input_receipts;
+#[cfg(feature = "cpu-fixtures")]
+mod reservation;
 mod session;
 
 use std::ffi::{CStr, OsStr};

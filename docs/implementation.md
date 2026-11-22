@@ -3,7 +3,7 @@
 C05 moves Vulkan Anti-Lag device discovery and SDK calls, Streamline token
 result handling, and Reflex timing into Rust. The optional native provider
 entry points still supply linkage and contain C++ exceptions. The receipt,
-CPU latency event, and D3D Anti-Lag fixture bodies use Rust with their existing
+CPU latency event, CPU reservation, and D3D Anti-Lag fixture bodies use Rust with their existing
 CTest names. Verification is limited to source and binding checks.
 
 AC7 carrier startup passes the admitted Present size directly to the backend

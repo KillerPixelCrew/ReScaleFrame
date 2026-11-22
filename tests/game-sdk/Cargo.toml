@@ -7,7 +7,7 @@ publish.workspace = true
 license.workspace = true
 
 [features]
-cpu-fixtures = []
+cpu-fixtures = ["windows-sys/Win32_System_Memory", "windows-sys/Win32_System_SystemInformation"]
 
 [lib]
 crate-type = ["staticlib"]
