@@ -2858,13 +2858,13 @@ Port shared frame state, submission resources and per-frame ownership from both 
 
 **Port files (8)**
 
-- [ ] [games/unity-mono/include/rescaleframe/unity_bridge.h](games/unity-mono/include/rescaleframe/unity_bridge.h)
+- [x] [games/unity-mono/include/rescaleframe/unity_bridge.h](games/unity-mono/include/rescaleframe/unity_bridge.h)
 - [ ] [games/unity-mono/src/bridge.cpp](games/unity-mono/src/bridge.cpp)
-- [ ] [games/unity-mono/src/bridge.h](games/unity-mono/src/bridge.h)
-- [ ] [games/unity-mono/src/bridge_interop.h](games/unity-mono/src/bridge_interop.h)
-- [ ] [games/unity-mono/src/bridge_state.h](games/unity-mono/src/bridge_state.h)
-- [ ] [games/unity-mono/src/d3d11_pass.h](games/unity-mono/src/d3d11_pass.h)
-- [ ] [games/unity-mono/src/d3d11_state.h](games/unity-mono/src/d3d11_state.h)
+- [x] [games/unity-mono/src/bridge.h](games/unity-mono/src/bridge.h)
+- [x] [games/unity-mono/src/bridge_interop.h](games/unity-mono/src/bridge_interop.h)
+- [x] [games/unity-mono/src/bridge_state.h](games/unity-mono/src/bridge_state.h)
+- [x] [games/unity-mono/src/d3d11_pass.h](games/unity-mono/src/d3d11_pass.h)
+- [x] [games/unity-mono/src/d3d11_state.h](games/unity-mono/src/d3d11_state.h)
 - [ ] [integrations/unity/native/bridge.cpp](integrations/unity/native/bridge.cpp)
 
 **Rust review findings (7)**
