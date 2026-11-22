@@ -7,6 +7,7 @@ use crate::render_abi::{
     RSF_FG_FIXED, RSF_FG_STAT_ACTIVITY, RSF_FG_STAT_PRESENT_CALLBACKS, RSF_FG_STAT_TOTAL_PRESENTED,
     RSF_REFLEX_OFF, rsf_backend_resource as Resource,
 };
+use crate::sdk_module::FFX_CONTEXT_EXPORTS;
 use std::cell::{Cell, RefCell};
 use std::ffi::CStr;
 use std::sync::atomic::{AtomicI32, AtomicPtr, AtomicU32, AtomicU64, Ordering::Relaxed};
@@ -14,6 +15,7 @@ use std::sync::atomic::{AtomicI32, AtomicPtr, AtomicU32, AtomicU64, Ordering::Re
 const CAPTURE_SLOTS: usize = 64;
 const NON_PIXEL_READ: u32 = 0x40; // D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
 const VENDOR_PARAMETER_ERROR: u32 = 6;
+const MISSING_ENTRY_POINT: i32 = -5;
 const MODULE: &str = "amd_fidelityfx_framegeneration_dx12.dll";
 // FFX_FRAMEGENERATION_ENABLE_* values; fsr_generation.cpp asserts them.
 const CREATE_DISPLAY_RESOLUTION_MOTION: u32 = 1 << 1;
@@ -70,15 +72,19 @@ struct Configuration {
     user: Raw,
     hudless: Raw,
     sequence: u64,
-    width: u32,
-    height: u32,
+    left: i32,
+    top: i32,
+    width: i32,
+    height: i32,
     enabled: u32,
-    copy_present: u32,
+    generation_callback: u32,
+    present_callback: u32,
 }
 
+/// An SDK resource with its raw FFX_API_RESOURCE_STATE_* bits.
 #[repr(C)]
-#[derive(Default)]
-struct CapturedResource {
+#[derive(Clone, Copy, Default)]
+struct SdkResource {
     resource: Raw,
     state: u32,
 }
@@ -90,9 +96,19 @@ struct Generated {
     sequence: u64,
     count: u32,
     reset: u32,
-    input: CapturedResource,
-    outputs: [CapturedResource; 4],
+    input: SdkResource,
+    outputs: [SdkResource; 4],
 }
+
+#[repr(C)]
+#[derive(Default)]
+struct PresentFacts {
+    command: Raw,
+    source: SdkResource,
+    output: SdkResource,
+}
+
+type Entry = Option<unsafe extern "system" fn() -> isize>;
 
 #[repr(C)]
 struct Ops {
@@ -101,6 +117,7 @@ struct Ops {
     sdk: &'static SdkApi,
     resolve: Resolve,
     close: unsafe extern "C" fn(Raw),
+    bind: unsafe extern "C" fn(Raw, *const Entry),
     versions: QueryVersions,
     surface_format: unsafe extern "C" fn(u32) -> u32,
     create_generation: unsafe extern "C" fn(Raw, *const GenerationPlan, *mut Raw) -> u32,
@@ -113,18 +130,71 @@ struct Ops {
     configure: unsafe extern "C" fn(Raw, Raw, *const Configuration) -> u32,
     prepare: unsafe extern "C" fn(Raw, Raw, *const PreparePlan) -> u32,
     generate: unsafe extern "C" fn(Raw, Raw, Raw, *mut Generated) -> u32,
-    copy_present: unsafe extern "C" fn(Raw) -> u32,
+    present_facts: unsafe extern "C" fn(Raw, *mut PresentFacts),
+    copy: unsafe extern "C" fn(Raw, Raw, u32, Raw, u32),
     present_count: unsafe extern "C" fn(Raw, *mut u32) -> i32,
 }
 
 const _: () = {
     assert!(size_of::<SdkApi>() == 24 && size_of::<GenerationPlan>() == 32);
     assert!(size_of::<PreparePlan>() == 128);
-    assert!(size_of::<Configuration>() == 48);
-    assert!(size_of::<Generated>() == 104);
-    assert!(size_of::<Ops>() == 19 * size_of::<Raw>());
+    assert!(size_of::<Configuration>() == 64);
+    assert!(size_of::<Generated>() == 104 && size_of::<PresentFacts>() == 40);
+    assert!(size_of::<Entry>() == size_of::<Raw>());
+    assert!(size_of::<Ops>() == 21 * size_of::<Raw>());
 };
 
+// rsf_fsr12_entry_index order. The shared names are create, destroy, query, dispatch.
+const ENTRY_NAMES: [&CStr; 5] = [
+    FFX_CONTEXT_EXPORTS[0],
+    FFX_CONTEXT_EXPORTS[1],
+    FFX_CONTEXT_EXPORTS[2],
+    FFX_CONTEXT_EXPORTS[3],
+    c"ffxConfigure",
+];
+const QUERY_ENTRY: usize = 2;
+
+/// All SDK exports the owner calls, or None when any is missing.
+fn resolve_entries(module: &SdkModule) -> Option<[Entry; ENTRY_NAMES.len()]> {
+    let entries = ENTRY_NAMES.map(|name| module.symbol(name));
+    entries.iter().all(Option::is_some).then_some(entries)
+}
+
+// FFX_API_RESOURCE_STATE_* bits and the D3D12 state each adds; fsr_generation.cpp
+// asserts both sides. COMMON and PRESENT are D3D12 state 0.
+const STATE_COMMON: u32 = 1;
+const STATE_PRESENT: u32 = 1 << 7;
+const STATE_MAP: [(u32, u32); 8] = [
+    (1 << 1, 0x8),   // UNORDERED_ACCESS
+    (1 << 2, 0x40),  // COMPUTE_READ: NON_PIXEL_SHADER_RESOURCE
+    (1 << 3, 0x80),  // PIXEL_READ: PIXEL_SHADER_RESOURCE
+    (1 << 4, 0x800), // COPY_SRC: COPY_SOURCE
+    (1 << 5, 0x400), // COPY_DEST
+    (1 << 6, 0x200), // INDIRECT_ARGUMENT
+    (1 << 8, 0x4),   // RENDER_TARGET
+    (1 << 9, 0x10),  // DEPTH_ATTACHMENT: DEPTH_WRITE
+];
+
+/// D3D12 state for an FFX resource state, or None for bits this owner does not know.
+fn d3d12_state(ffx: u32) -> Option<u32> {
+    let known = STATE_MAP
+        .iter()
+        .fold(STATE_COMMON | STATE_PRESENT, |known, &(bit, _)| known | bit);
+    (ffx & !known == 0).then(|| {
+        STATE_MAP
+            .iter()
+            .filter(|&&(bit, _)| ffx & bit != 0)
+            .fold(0, |state, &(_, d3d12)| state | d3d12)
+    })
+}
+
+impl SdkResource {
+    /// The resource with its D3D12 state, when both are usable.
+    fn native(self) -> Option<(Raw, u32)> {
+        let state = d3d12_state(self.state)?;
+        (!self.resource.is_null()).then_some((self.resource, state))
+    }
+}
 /// FFX frame-generation create flags for the setup's declared inputs.
 fn create_flags(setup: &Setup) -> u32 {
     [
@@ -303,6 +373,55 @@ impl Fsr {
         unsafe { (self.ops.configure)(self.sdk.raw, self.generation.load(Relaxed), config) == 0 }
     }
 
+    /// Configuration for the next SDK sequence. An attached owner receives the
+    /// generation callback, and the present callback when it composes no UI
+    /// and copies each presented image itself. Generation covers the whole
+    /// `width` by `height` back buffer.
+    fn configuration(
+        &self,
+        chain: Raw,
+        attached: bool,
+        hudless: Raw,
+        (width, height): (u32, u32),
+        enabled: bool,
+        copy_present: bool,
+    ) -> Configuration {
+        Configuration {
+            chain,
+            user: if attached {
+                std::ptr::from_ref(self).cast_mut().cast()
+            } else {
+                null_mut()
+            },
+            hudless,
+            sequence: self.next_sequence(),
+            left: 0,
+            top: 0,
+            width: width as i32,
+            height: height as i32,
+            enabled: u32::from(enabled),
+            generation_callback: u32::from(attached),
+            present_callback: u32::from(attached && copy_present),
+        }
+    }
+
+    /// Present-callback copy of the presented image into the SDK's output
+    /// buffer, when they differ. Both keep the state they arrived in.
+    fn copy_present(&self, present: &PresentFacts) -> u32 {
+        let (Some((source, source_state)), Some((output, output_state))) =
+            (present.source.native(), present.output.native())
+        else {
+            return VENDOR_PARAMETER_ERROR;
+        };
+        if present.command.is_null() {
+            return VENDOR_PARAMETER_ERROR;
+        }
+        if source != output {
+            unsafe { (self.ops.copy)(present.command, output, output_state, source, source_state) };
+        }
+        0
+    }
+
     fn recreate(&self, before: &mut Snapshot, extent: Extent) -> i32 {
         if !self.wait() {
             return NOT_READY;
@@ -330,11 +449,11 @@ impl Fsr {
         let Some(record) = record.filter(|record| self.capture.wants(record.frame_id)) else {
             return;
         };
-        if !generated.input.resource.is_null() {
+        if let Some((resource, state)) = generated.input.native() {
             self.capture.record(
                 generated.command,
-                generated.input.resource,
-                generated.input.state,
+                resource,
+                state,
                 &record,
                 c"fg-generation-input",
                 0,
@@ -344,17 +463,18 @@ impl Fsr {
                 0.0,
             );
         }
+        // The SDK fills `count` of its four output slots; the rest are stale.
         for (index, output) in generated
             .outputs
             .iter()
             .take(generated.count as usize)
             .enumerate()
         {
-            if !output.resource.is_null() {
+            if let Some((resource, state)) = output.native() {
                 self.capture.record(
                     generated.command,
-                    output.resource,
-                    output.state,
+                    resource,
+                    state,
                     &record,
                     c"fg-generated-before-ui",
                     0,
@@ -393,17 +513,10 @@ impl Session for Fsr {
         }) {
             return OK;
         }
+        // A mode change disables generation until the next prepare and keeps
+        // only the generation callback installed.
         if self.generation_ready.get()
-            && !self.apply(&Configuration {
-                chain,
-                user: std::ptr::from_ref(self).cast_mut().cast(),
-                hudless: null_mut(),
-                sequence: self.next_sequence(),
-                width: 0,
-                height: 0,
-                enabled: 0,
-                copy_present: 0,
-            })
+            && !self.apply(&self.configuration(chain, true, null_mut(), (0, 0), false, false))
         {
             return FEATURE_FAILED;
         }
@@ -464,20 +577,18 @@ impl Session for Fsr {
         }
 
         if self.generation_ready.get() {
-            let config = Configuration {
+            let config = self.configuration(
                 chain,
-                user: std::ptr::from_ref(self).cast_mut().cast(),
-                hudless: if hudless {
+                true,
+                if hudless {
                     frame.hudless.resource
                 } else {
                     null_mut()
                 },
-                sequence: self.next_sequence(),
-                width: record.output_width,
-                height: record.output_height,
-                enabled: u32::from(enabled),
-                copy_present: u32::from(self.ui_mode == UI_NONE),
-            };
+                (record.output_width, record.output_height),
+                enabled,
+                self.ui_mode == UI_NONE,
+            );
             if self.capture.enabled() {
                 self.capture_ids
                     .lock()
@@ -596,16 +707,7 @@ impl Session for Fsr {
         let chain = self.chain();
         if self.generation_ready.get()
             && !chain.is_null()
-            && !self.apply(&Configuration {
-                chain,
-                user: null_mut(),
-                hudless: null_mut(),
-                sequence: self.next_sequence(),
-                width: 0,
-                height: 0,
-                enabled: 0,
-                copy_present: 0,
-            })
+            && !self.apply(&self.configuration(chain, false, null_mut(), (0, 0), false, false))
         {
             return false;
         }
@@ -652,9 +754,14 @@ fn select_version(handle: Raw, setup: &Setup, query: QueryVersions) -> Option<Ve
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_fsr12_probe(checks: &Checks, setup: &Setup, query: QueryVersions) -> u32 {
-    checks.module(setup, MODULE).map_or(0, |module| {
-        u32::from(select_version(module.as_ptr(), setup, query).is_some())
-    })
+    let Some(module) = checks.module(setup, MODULE) else {
+        return 0;
+    };
+    // The native query receives the resolved ffxQuery export.
+    let Some(entry) = module.symbol(ENTRY_NAMES[QUERY_ENTRY]) else {
+        return 0;
+    };
+    u32::from(select_version(entry as Raw, setup, query).is_some())
 }
 
 #[unsafe(no_mangle)]
@@ -679,6 +786,10 @@ unsafe extern "C" fn rsf_core_fsr12_create(
         Ok(sdk) => sdk,
         Err(result) => return result,
     };
+    let Some(entries) = resolve_entries(&sdk.module) else {
+        return MISSING_ENTRY_POINT;
+    };
+    unsafe { (ops.bind)(sdk.raw, entries.as_ptr()) };
     let mut initial = initial_status(1);
     let Some(version) = select_version(sdk.raw, setup, ops.versions) else {
         return UNSUPPORTED;
@@ -804,7 +915,9 @@ unsafe extern "C" fn rsf_core_fsr12_generate(user: Raw, desc: Raw) -> u32 {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr12_present(user: Raw, desc: Raw, generated: u32) -> u32 {
     let owner = unsafe { &*user.cast::<Fsr>() };
-    let result = unsafe { (owner.ops.copy_present)(desc) };
+    let mut present = PresentFacts::default();
+    unsafe { (owner.ops.present_facts)(desc, &mut present) };
+    let result = owner.copy_present(&present);
     if result == 0 {
         owner.presented.fetch_add(1, Relaxed);
         if generated != 0 {
@@ -832,6 +945,26 @@ mod tests {
         setup.depth_infinite = 1;
         setup.motion_at_display_resolution = 1;
         assert_eq!(create_flags(&setup), 0b11_1110);
+    }
+
+    #[test]
+    fn sdk_states_map_to_d3d12_and_refuse_unknown_bits() {
+        assert_eq!(d3d12_state(STATE_COMMON), Some(0));
+        assert_eq!(d3d12_state(STATE_PRESENT), Some(0));
+        // PIXEL_COMPUTE_READ reads in both shader stages.
+        assert_eq!(d3d12_state(0b1100), Some(0xc0));
+        assert_eq!(d3d12_state((1 << 4) | (1 << 8)), Some(0x804));
+        assert_eq!(d3d12_state(1 << 10), None);
+        let resource = SdkResource {
+            resource: std::ptr::dangling_mut(),
+            state: 1 << 5,
+        };
+        assert_eq!(resource.native(), Some((resource.resource, 0x400)));
+        let missing = SdkResource {
+            state: 1 << 5,
+            ..SdkResource::default()
+        };
+        assert_eq!(missing.native(), None);
     }
 
     #[test]

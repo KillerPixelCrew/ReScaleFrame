@@ -65,7 +65,7 @@ const _: () = {
 struct Bindings {
     raw: Raw,
     close: unsafe extern "C" fn(Raw),
-    _module: SdkModule,
+    module: SdkModule,
     _latency: Option<SdkModule>,
 }
 
@@ -107,7 +107,7 @@ impl Bindings {
         Ok(Self {
             raw,
             close,
-            _module: module,
+            module,
             _latency: latency,
         })
     }

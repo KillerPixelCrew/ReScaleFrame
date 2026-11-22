@@ -17,6 +17,16 @@ static_assert(FFX_FRAMEGENERATION_ENABLE_DISPLAY_RESOLUTION_MOTION_VECTORS == 2 
     FFX_FRAMEGENERATION_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION == 4 &&
     FFX_FRAMEGENERATION_ENABLE_DEPTH_INVERTED == 8 && FFX_FRAMEGENERATION_ENABLE_DEPTH_INFINITE == 16 &&
     FFX_FRAMEGENERATION_ENABLE_HIGH_DYNAMIC_RANGE == 32);
+// Rust maps raw FFX resource states to D3D12 states (d3d12_generation/fsr.rs STATE_MAP).
+static_assert(FFX_API_RESOURCE_STATE_COMMON == 1 && FFX_API_RESOURCE_STATE_UNORDERED_ACCESS == 2 &&
+    FFX_API_RESOURCE_STATE_COMPUTE_READ == 4 && FFX_API_RESOURCE_STATE_PIXEL_READ == 8 &&
+    FFX_API_RESOURCE_STATE_COPY_SRC == 16 && FFX_API_RESOURCE_STATE_COPY_DEST == 32 &&
+    FFX_API_RESOURCE_STATE_INDIRECT_ARGUMENT == 64 && FFX_API_RESOURCE_STATE_PRESENT == 128 &&
+    FFX_API_RESOURCE_STATE_RENDER_TARGET == 256 && FFX_API_RESOURCE_STATE_DEPTH_ATTACHMENT == 512);
+static_assert(D3D12_RESOURCE_STATE_COMMON == 0 && D3D12_RESOURCE_STATE_RENDER_TARGET == 0x4 &&
+    D3D12_RESOURCE_STATE_UNORDERED_ACCESS == 0x8 && D3D12_RESOURCE_STATE_DEPTH_WRITE == 0x10 &&
+    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE == 0x80 && D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT == 0x200 &&
+    D3D12_RESOURCE_STATE_COPY_DEST == 0x400 && D3D12_RESOURCE_STATE_COPY_SOURCE == 0x800);
 
 // The SDK requires pointers passed in create descriptors to remain live
 // until context destruction. Rust owns both contexts and this backing storage.
@@ -39,18 +49,11 @@ struct Bindings {
     ffxCreateContextDescFrameGenerationSwapChainForHwndDX12 swapchain{};
 };
 
-rsf_backend_result resolve(const rsf_generation_setup* setup, void* handle, void*, void** out)
+// Rust resolves and admits the SDK exports, then binds them with `bind`.
+rsf_backend_result resolve(const rsf_generation_setup* setup, void*, void*, void** out)
 {
     auto api = std::unique_ptr<Bindings>(new (std::nothrow) Bindings{});
     if (!api) return RSF_BACKEND_ERROR_INIT_FAILED;
-    const auto module = static_cast<HMODULE>(handle);
-    api->create = rsf::entry<PfnFfxCreateContext>(module, "ffxCreateContext");
-    api->destroy = rsf::entry<PfnFfxDestroyContext>(module, "ffxDestroyContext");
-    api->configure = rsf::entry<PfnFfxConfigure>(module, "ffxConfigure");
-    api->dispatch = rsf::entry<PfnFfxDispatch>(module, "ffxDispatch");
-    api->query = rsf::entry<PfnFfxQuery>(module, "ffxQuery");
-    if (!api->create || !api->destroy || !api->configure || !api->dispatch || !api->query)
-        return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
     api->log = setup->chain.log;
     api->log_user = setup->chain.log_user;
     api->backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12;
@@ -71,6 +74,16 @@ void close(void* bindings)
     delete static_cast<Bindings*>(bindings);
 }
 
+void bind(void* bindings, const rsf_fsr12_entry* entries)
+{
+    auto& api = *static_cast<Bindings*>(bindings);
+    api.create = reinterpret_cast<PfnFfxCreateContext>(entries[RSF_FSR12_CREATE_CONTEXT]);
+    api.destroy = reinterpret_cast<PfnFfxDestroyContext>(entries[RSF_FSR12_DESTROY_CONTEXT]);
+    api.query = reinterpret_cast<PfnFfxQuery>(entries[RSF_FSR12_QUERY]);
+    api.dispatch = reinterpret_cast<PfnFfxDispatch>(entries[RSF_FSR12_DISPATCH]);
+    api.configure = reinterpret_cast<PfnFfxConfigure>(entries[RSF_FSR12_CONFIGURE]);
+}
+
 rsf_backend_result query_versions(PfnFfxQuery query, const rsf_generation_setup& setup,
     rsf_ffx_version* out, uint64_t* count)
 {
@@ -84,7 +97,7 @@ rsf_backend_result query_versions(PfnFfxQuery query, const rsf_generation_setup&
     versions.outputCount = count;
     versions.versionIds = ids;
     versions.versionNames = names;
-    if (!query || query(nullptr, &versions.header) != FFX_API_RETURN_OK || *count > rsf::max_ffx_versions)
+    if (query(nullptr, &versions.header) != FFX_API_RETURN_OK || *count > rsf::max_ffx_versions)
         return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     for (uint64_t i = 0; i < *count; ++i)
         out[i] = rsf::ffx_version(ids[i], names[i]);
@@ -96,10 +109,10 @@ rsf_backend_result versions(void* bindings, const rsf_generation_setup* setup, r
     return query_versions(static_cast<Bindings*>(bindings)->query, *setup, out, count);
 }
 
-rsf_backend_result probe_versions(void* module, const rsf_generation_setup* setup, rsf_ffx_version* out, uint64_t* count)
+// Rust passes the ffxQuery export it resolved from the probed module.
+rsf_backend_result probe_versions(void* query, const rsf_generation_setup* setup, rsf_ffx_version* out, uint64_t* count)
 {
-    const auto query = rsf::entry<PfnFfxQuery>(static_cast<HMODULE>(module), "ffxQuery");
-    return query_versions(query, *setup, out, count);
+    return query_versions(reinterpret_cast<PfnFfxQuery>(query), *setup, out, count);
 }
 
 uint32_t surface_format(uint32_t dxgi)
@@ -179,25 +192,6 @@ uint32_t whole_texture(const rsf_backend_resource* resource)
     const auto desc = static_cast<ID3D12Resource*>(resource->resource)->GetDesc();
     return !resource->x && !resource->y && resource->width == desc.Width && resource->height == desc.Height;
 }
-bool native_state(uint32_t state, D3D12_RESOURCE_STATES& out)
-{
-    out = D3D12_RESOURCE_STATE_COMMON;
-    const uint32_t known = FFX_API_RESOURCE_STATE_COMMON | FFX_API_RESOURCE_STATE_PRESENT |
-        FFX_API_RESOURCE_STATE_UNORDERED_ACCESS | FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ |
-        FFX_API_RESOURCE_STATE_COPY_SRC | FFX_API_RESOURCE_STATE_COPY_DEST |
-        FFX_API_RESOURCE_STATE_INDIRECT_ARGUMENT | FFX_API_RESOURCE_STATE_RENDER_TARGET |
-        FFX_API_RESOURCE_STATE_DEPTH_ATTACHMENT;
-    if (state & ~known) return false;
-    if (state & FFX_API_RESOURCE_STATE_UNORDERED_ACCESS) out |= D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    if (state & FFX_API_RESOURCE_STATE_COMPUTE_READ) out |= D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-    if (state & FFX_API_RESOURCE_STATE_PIXEL_READ) out |= D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    if (state & FFX_API_RESOURCE_STATE_COPY_SRC) out |= D3D12_RESOURCE_STATE_COPY_SOURCE;
-    if (state & FFX_API_RESOURCE_STATE_COPY_DEST) out |= D3D12_RESOURCE_STATE_COPY_DEST;
-    if (state & FFX_API_RESOURCE_STATE_INDIRECT_ARGUMENT) out |= D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
-    if (state & FFX_API_RESOURCE_STATE_RENDER_TARGET) out |= D3D12_RESOURCE_STATE_RENDER_TARGET;
-    if (state & FFX_API_RESOURCE_STATE_DEPTH_ATTACHMENT) out |= D3D12_RESOURCE_STATE_DEPTH_WRITE;
-    return true;
-}
 ffxReturnCode_t generate_callback(ffxDispatchDescFrameGeneration* desc, void* user)
 {
     return rsf_core_fsr12_generate(user, desc);
@@ -215,15 +209,15 @@ uint32_t configure(void* bindings, void* context, const rsf_fsr12_config* config
     desc.swapChain = config->chain;
     desc.frameID = config->sequence;
     desc.frameGenerationEnabled = config->enabled != 0;
-    if (config->user) {
+    if (config->generation_callback) {
         desc.frameGenerationCallback = generate_callback;
         desc.frameGenerationCallbackUserContext = config->user;
     }
-    if (config->copy_present) {
+    if (config->present_callback) {
         desc.presentCallback = present_callback;
         desc.presentCallbackUserContext = config->user;
     }
-    desc.generationRect = {0, 0, static_cast<int32_t>(config->width), static_cast<int32_t>(config->height)};
+    desc.generationRect = {config->left, config->top, config->width, config->height};
     if (config->hudless) desc.HUDLessColor = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(config->hudless));
     return static_cast<Bindings*>(bindings)->configure(&context, &desc.header);
 }
@@ -254,40 +248,38 @@ uint32_t prepare(void* bindings, void* context, const rsf_fsr12_prepare* plan)
     return static_cast<Bindings*>(bindings)->dispatch(&context, &data.header);
 }
 
-rsf_fsr12_capture_resource capture_resource(const FfxApiResource& resource)
+rsf_fsr12_capture_resource raw_resource(const FfxApiResource& resource)
 {
-    D3D12_RESOURCE_STATES state{};
-    if (!native_state(resource.state, state)) return {};
-    return {resource.resource, uint32_t(state)};
+    return {resource.resource, resource.state};
 }
 
 uint32_t generate(void* bindings, void* context, void* raw, rsf_fsr12_generated* out)
 {
     auto* desc = static_cast<ffxDispatchDescFrameGeneration*>(raw);
+    static_assert(sizeof(ffxDispatchDescFrameGeneration::outputs) == 4 * sizeof(FfxApiResource));
     const auto result = static_cast<Bindings*>(bindings)->dispatch(&context, &desc->header);
     out->command = desc->commandList;
     out->sequence = desc->frameID;
     out->count = desc->numGeneratedFrames;
     out->reset = desc->reset;
-    if (result == FFX_API_RETURN_OK) {
-        out->input = capture_resource(desc->presentColor);
-        for (uint32_t i = 0; i < desc->numGeneratedFrames && i < 4; ++i)
-            out->outputs[i] = capture_resource(desc->outputs[i]);
-    }
+    out->input = raw_resource(desc->presentColor);
+    for (uint32_t i = 0; i < 4; ++i) out->outputs[i] = raw_resource(desc->outputs[i]);
     return result;
 }
 
-uint32_t copy_present(void* raw)
+void present_facts(void* raw, rsf_fsr12_present* out)
 {
     const auto* desc = static_cast<const ffxCallbackDescFrameGenerationPresent*>(raw);
-    auto* list = static_cast<ID3D12GraphicsCommandList*>(desc->commandList);
-    auto* source = static_cast<ID3D12Resource*>(desc->currentBackBuffer.resource);
-    auto* output = static_cast<ID3D12Resource*>(desc->outputSwapChainBuffer.resource);
-    D3D12_RESOURCE_STATES source_state{}, output_state{};
-    if (!source || !output || !list || !native_state(desc->currentBackBuffer.state, source_state) ||
-        !native_state(desc->outputSwapChainBuffer.state, output_state)) return FFX_API_RETURN_ERROR_PARAMETER;
-    if (source != output) rsf::copy_transitioned(list, output, output_state, output_state, source, source_state, source_state);
-    return FFX_API_RETURN_OK;
+    *out = {desc->commandList, raw_resource(desc->currentBackBuffer), raw_resource(desc->outputSwapChainBuffer)};
+}
+
+// Each resource returns to the state it arrived in.
+void copy(void* command, void* output, uint32_t output_state, void* source, uint32_t source_state)
+{
+    const auto output_native = static_cast<D3D12_RESOURCE_STATES>(output_state);
+    const auto source_native = static_cast<D3D12_RESOURCE_STATES>(source_state);
+    rsf::copy_transitioned(static_cast<ID3D12GraphicsCommandList*>(command), static_cast<ID3D12Resource*>(output),
+        output_native, output_native, static_cast<ID3D12Resource*>(source), source_native, source_native);
 }
 
 int32_t present_count(void* chain, uint32_t* count)
@@ -304,8 +296,9 @@ rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** 
             uint32_t(FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION_MINOR),
             uint32_t(FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION_PATCH)}};
     static const rsf_fsr12_ops ops{&rsf::generation12_checks, rsf::FrameCapture12::native_platform(), &sdk,
-        resolve, close, versions, surface_format, create_generation, provider_version, create_chain,
-        destroy_context, wait, chain_extent, whole_texture, configure, prepare, generate, copy_present, present_count};
+        resolve, close, bind, versions, surface_format, create_generation, provider_version, create_chain,
+        destroy_context, wait, chain_extent, whole_texture, configure, prepare, generate, present_facts, copy,
+        present_count};
     return rsf_core_fsr12_create(&ops, setup, out, chain);
 }
 }

@@ -45,19 +45,35 @@ typedef struct rsf_fsr12_prepare {
     float position[3], right[3], up[3], forward[3];
 } rsf_fsr12_prepare;
 
+/* SDK exports Rust resolved and admitted, in rsf_fsr12_entry_index order. */
+typedef void (*rsf_fsr12_entry)(void);
+enum rsf_fsr12_entry_index {
+    RSF_FSR12_CREATE_CONTEXT,
+    RSF_FSR12_DESTROY_CONTEXT,
+    RSF_FSR12_QUERY,
+    RSF_FSR12_DISPATCH,
+    RSF_FSR12_CONFIGURE,
+    RSF_FSR12_ENTRY_COUNT
+};
+
+/* Configure plan. Rust decides the generation rectangle and which SDK callbacks
+   are installed; both callbacks receive `user`. */
 typedef struct rsf_fsr12_config {
     void* chain;
     void* user;
     void* hudless;
     uint64_t sequence;
-    uint32_t width, height, enabled, copy_present;
+    int32_t left, top, width, height;
+    uint32_t enabled, generation_callback, present_callback;
 } rsf_fsr12_config;
 
+/* An SDK resource with its raw FFX_API_RESOURCE_STATE_* bits; Rust maps the state. */
 typedef struct rsf_fsr12_capture_resource {
     void* resource;
     uint32_t state;
 } rsf_fsr12_capture_resource;
 
+/* Raw dispatch facts: all four SDK output slots, bounded by `count` in Rust. */
 typedef struct rsf_fsr12_generated {
     void* command;
     uint64_t sequence;
@@ -65,12 +81,19 @@ typedef struct rsf_fsr12_generated {
     rsf_fsr12_capture_resource input, outputs[4];
 } rsf_fsr12_generated;
 
+/* Raw present-callback facts; Rust admits the copy. */
+typedef struct rsf_fsr12_present {
+    void* command;
+    rsf_fsr12_capture_resource source, output;
+} rsf_fsr12_present;
+
 typedef struct rsf_fsr12_ops {
     const rsf_gen12_checks* check;
     const struct rsf_core_capture12_platform* capture;
     const rsf_fsr12_sdk* sdk;
     rsf_backend_result (*resolve)(const rsf_generation_setup*, void* module, void* latency, void**);
     void (*close)(void*);
+    void (*bind)(void*, const rsf_fsr12_entry*);
     rsf_backend_result (*versions)(void*, const rsf_generation_setup*, struct rsf_ffx_version*, uint64_t*);
     uint32_t (*surface_format)(uint32_t);
     /* The next three return raw FFX codes; Rust owns admission and records. */
@@ -85,7 +108,9 @@ typedef struct rsf_fsr12_ops {
     uint32_t (*configure)(void*, void*, const rsf_fsr12_config*);
     uint32_t (*prepare)(void*, void*, const rsf_fsr12_prepare*);
     uint32_t (*generate)(void*, void*, void*, rsf_fsr12_generated*);
-    uint32_t (*copy_present)(void*);
+    void (*present_facts)(void*, rsf_fsr12_present*);
+    /* command, output, output D3D12 state, source, source D3D12 state. */
+    void (*copy)(void*, void*, uint32_t, void*, uint32_t);
     int32_t (*present_count)(void*, uint32_t*);
 } rsf_fsr12_ops;
 
@@ -126,6 +151,7 @@ typedef struct rsf_xeg12_ops {
 } rsf_xeg12_ops;
 
 const rsf_generation_provider* rsf_core_fsr12_provider(void);
+/* The query receives the ffxQuery export Rust resolved, as its first argument. */
 uint32_t rsf_core_fsr12_probe(const rsf_gen12_checks*, const rsf_generation_setup*,
     rsf_backend_result (*query)(void*, const rsf_generation_setup*, struct rsf_ffx_version*, uint64_t*));
 rsf_backend_result rsf_core_fsr12_create(const rsf_fsr12_ops*, const rsf_generation_setup*, void**, void**);
@@ -140,9 +166,9 @@ static_assert(sizeof(rsf_gen12_checks) == 5 * sizeof(void*));
 static_assert(sizeof(rsf_gen12_extent) == 12);
 static_assert(sizeof(rsf_fsr12_sdk) == 24 && sizeof(rsf_fsr12_generation) == 32);
 static_assert(sizeof(rsf_fsr12_prepare) == 128);
-static_assert(sizeof(rsf_fsr12_config) == 48);
-static_assert(sizeof(rsf_fsr12_generated) == 104);
-static_assert(sizeof(rsf_fsr12_ops) == 19 * sizeof(void*));
+static_assert(sizeof(rsf_fsr12_config) == 64 && RSF_FSR12_ENTRY_COUNT == 5);
+static_assert(sizeof(rsf_fsr12_generated) == 104 && sizeof(rsf_fsr12_present) == 40);
+static_assert(sizeof(rsf_fsr12_ops) == 21 * sizeof(void*));
 static_assert(sizeof(rsf_xeg12_version) == 12 && sizeof(rsf_xeg12_present) == 12);
 static_assert(sizeof(rsf_xeg12_ops) == 24 * sizeof(void*));
 #endif
