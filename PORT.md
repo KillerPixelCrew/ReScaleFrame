@@ -1719,13 +1719,13 @@ Port scoped render commands, view data, UI, scene colour, contact shadows and Tr
 **Port files (15)**
 
 - [x] [games/ac7/include/rescaleframe/ac7_render_scope.h](games/ac7/include/rescaleframe/ac7_render_scope.h)
-- [ ] [games/ac7/include/rescaleframe/ac7_scene_color.h](games/ac7/include/rescaleframe/ac7_scene_color.h)
+- [x] [games/ac7/include/rescaleframe/ac7_scene_color.h](games/ac7/include/rescaleframe/ac7_scene_color.h)
 - [x] [games/ac7/include/rescaleframe/ac7_ui_rules.h](games/ac7/include/rescaleframe/ac7_ui_rules.h)
 - [x] [games/ac7/include/rescaleframe/ac7_view.h](games/ac7/include/rescaleframe/ac7_view.h)
-- [ ] [games/ac7/src/ac7_scope_owner.h](games/ac7/src/ac7_scope_owner.h)
+- [x] [games/ac7/src/ac7_scope_owner.h](games/ac7/src/ac7_scope_owner.h)
 - [x] [games/ac7/src/cloud_depth_platform.h](games/ac7/src/cloud_depth_platform.h)
 - [x] [games/ac7/src/contact_shadow.cpp](games/ac7/src/contact_shadow.cpp)
-- [ ] [games/ac7/src/contact_shadow.h](games/ac7/src/contact_shadow.h)
+- [x] [games/ac7/src/contact_shadow.h](games/ac7/src/contact_shadow.h)
 - [ ] [games/ac7/src/render_scope.cpp](games/ac7/src/render_scope.cpp)
 - [x] [games/ac7/src/scene_color.cpp](games/ac7/src/scene_color.cpp)
 - [x] [games/ac7/src/truesky_depth.cpp](games/ac7/src/truesky_depth.cpp)
@@ -1736,9 +1736,9 @@ Port scoped render commands, view data, UI, scene colour, contact shadows and Tr
 
 **Fixtures (4)**
 
-- [ ] [tests/ac7_render_scope.cpp](tests/ac7_render_scope.cpp)
+- [x] [tests/ac7_render_scope.cpp](tests/ac7_render_scope.cpp)
 - [x] [tests/ac7_ui_rules.cpp](tests/ac7_ui_rules.cpp)
-- [ ] [tests/ac7_view.cpp](tests/ac7_view.cpp)
+- [x] [tests/ac7_view.cpp](tests/ac7_view.cpp)
 - [x] [tests/ac7_view_fixture.h](tests/ac7_view_fixture.h)
 
 **Rust review findings (8)**
