@@ -1109,7 +1109,7 @@ Port shared D3D12 SR, FG, provider dispatch and retirements. Coordinate provider
 
 - [ ] [runtime/backends/common/d3d12_helpers.h](runtime/backends/common/d3d12_helpers.h)
 - [ ] [runtime/backends/common/fg_helpers.h](runtime/backends/common/fg_helpers.h)
-- [ ] [runtime/backends/common/generation12_checks.h](runtime/backends/common/generation12_checks.h)
+- [x] [runtime/backends/common/generation12_checks.h](runtime/backends/common/generation12_checks.h)
 - [x] [runtime/backends/common/generation12_platform.h](runtime/backends/common/generation12_platform.h)
 - [x] [runtime/backends/common/sr12_platform.h](runtime/backends/common/sr12_platform.h)
 - [x] [runtime/orchestrator/include/rescaleframe/native_fg_d3d12.h](runtime/orchestrator/include/rescaleframe/native_fg_d3d12.h)
