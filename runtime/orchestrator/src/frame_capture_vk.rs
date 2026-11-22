@@ -126,7 +126,7 @@ impl Legacy {
             count: 4,
         };
         let Some(directory) = crate::diagnostic_preferences::value(variable)
-            .filter(|path| !path.is_empty() && path.encode_wide_len() < 32768)
+            .filter(|path| !path.is_empty() && wide_len(path) < 32768)
         else {
             return legacy;
         };
@@ -167,27 +167,21 @@ impl Legacy {
     }
 }
 
-trait WideLength {
-    fn encode_wide_len(&self) -> usize;
-}
-
-impl WideLength for std::ffi::OsStr {
-    fn encode_wide_len(&self) -> usize {
-        #[cfg(windows)]
-        {
-            use std::os::windows::ffi::OsStrExt;
-            self.encode_wide().count()
-        }
-        #[cfg(not(windows))]
-        {
-            self.len()
-        }
+fn wide_len(value: &std::ffi::OsStr) -> usize {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        value.encode_wide().count()
+    }
+    #[cfg(not(windows))]
+    {
+        value.len()
     }
 }
 
 /// `wcstoull(value, nullptr, 10)` over a 32-character environment buffer.
 pub(crate) fn parse_count(value: &std::ffi::OsStr) -> u64 {
-    if value.encode_wide_len() >= 32 {
+    if wide_len(value) >= 32 {
         return 0;
     }
     let text = value.to_string_lossy();
