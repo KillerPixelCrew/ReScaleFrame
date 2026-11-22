@@ -12,6 +12,7 @@
 #include "servers/rendering/renderer_rd/storage_rd/render_data_rd.h"
 #include "core/config/project_settings.h"
 #include "core/config/engine.h"
+#include "core/math/projection.h"
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
 #include "core/os/os.h"
@@ -68,11 +69,6 @@ decltype(&rsfg_shutdown) native_shutdown = nullptr;
 // configure, shutdown and status-driven extent order. The leaves below do the engine work.
 HMODULE native_module = nullptr;
 String boot_runtime, boot_id;
-// primary.rs keeps the primary viewport and target identity, the resource generation and the
-// history reset state; pass.rs keeps the last recorded SR pass. The Godot camera transform and
-// projection of the last recorded SR pass stay here for the reprojection math.
-Projection previous_projection;
-Transform3D previous_camera;
 static_assert(sizeof(real_t) == sizeof(float), "pass.rs takes Godot's jitter and camera scalars as float");
 
 bool configure_viewport(RID viewport, const Dictionary *options, const rsf_godot_settings *typed);
@@ -457,31 +453,33 @@ void upscale(const RenderDataRD *data, double) {
     if (!color.is_valid() || !depth.is_valid() || !motion.is_valid() || !output.is_valid()) return;
     const RenderSceneDataRD *scene = data->scene_data;
     const Vector2i internal = rb->get_internal_size(), target = rb->get_target_size();
+    float origin[3];
+    rsf_godot_sr_previous_origin(origin);
+    const Vector3 previous_origin(origin[0], origin[1], origin[2]);
     const rsf_godot_sr_facts sr{
         {color.get_id(), internal.x, internal.y, frame.frame_seconds,
-            double(previous_camera.origin.distance_to(scene->cam_transform.origin)), frame.sequence_break, 0},
+            double(previous_origin.distance_to(scene->cam_transform.origin)), frame.sequence_break, 0},
         frame.source_frame_id, rb->get_render_target().get_id(), target.x, target.y, scene->z_near, scene->z_far,
         Math::deg_to_rad(scene->cam_projection.get_fovy(scene->cam_projection.get_fov(), 1.0 / scene->cam_projection.get_aspect())),
         {scene->taa_jitter.x, scene->taa_jitter.y}, {scene->prev_taa_jitter.x, scene->prev_taa_jitter.y},
         frame.gameplay ? RSF_SCREEN_FLIGHT : RSF_SCREEN_MENU, facts.driver, 0};
     rsf_godot_pass_record record;
     rsf_godot_sr_plan(&sr, &record);
-    auto &camera = record.camera;
-    // SDK clip space has +Y up. Godot's render-target Y flip is already reflected
-    // in its texture-space velocity and must not be applied to camera metadata.
-    Projection correction; correction.set_depth_correction(false);
-    const Projection projection = correction * scene->cam_projection;
-    matrix(camera.view_to_clip, projection); matrix(camera.clip_to_view, projection.inverse());
-    matrix(camera.view_to_world, Projection(scene->cam_transform)); matrix(camera.world_to_view, Projection(scene->cam_transform.affine_inverse()));
-    const Projection to_previous = (record.flags & RSF_GAME_RENDER_RESET) ? Projection() :
-        previous_projection * Projection(previous_camera.affine_inverse() * scene->cam_transform) * projection.inverse();
-    matrix(camera.clip_to_previous_clip, to_previous);
-    matrix(record.previous_clip_to_clip, to_previous.inverse());
+    float native_projection[16], view_to_world[16], world_to_view[16];
+    matrix(native_projection, scene->cam_projection);
+    matrix(view_to_world, Projection(scene->cam_transform));
+    matrix(world_to_view, Projection(scene->cam_transform.affine_inverse()));
+    rsf_godot_sr_camera(&record, native_projection, view_to_world, world_to_view,
+            [](const float *input, float *output) {
+                Projection projection;
+                for (int column = 0; column < 4; ++column)
+                    for (int row = 0; row < 4; ++row) projection.columns[column][row] = input[column * 4 + row];
+                matrix(output, projection.inverse());
+            });
     RID resolved_depth;
-    const RID resolved_motion = resolve_motion(rb, depth, motion, to_previous, scene->taa_jitter,
+    const RID resolved_motion = resolve_motion(rb, depth, motion, record.camera.clip_to_previous_clip, scene->taa_jitter,
             record.normalized_depth != 0, resolved_depth);
     if (!resolved_motion.is_valid() || !resolved_depth.is_valid()) return;
-    previous_projection = projection; previous_camera = scene->cam_transform;
     rsf_godot_sr_record(&sr, &record);
     RD::CallbackResource resources[] = {
         {color, RD::CALLBACK_RESOURCE_TYPE_TEXTURE, RD::CALLBACK_RESOURCE_USAGE_TEXTURE_SAMPLE},

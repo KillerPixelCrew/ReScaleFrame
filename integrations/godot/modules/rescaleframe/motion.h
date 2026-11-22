@@ -11,7 +11,7 @@ static_assert(sizeof(rsf_godot_motion_constants) == 80 &&
     offsetof(rsf_godot_motion_constants, jitter) == 64 && offsetof(rsf_godot_motion_constants, size) == 72);
 
 struct rsf_godot_motion_calls {
-    uint64_t (*shader)(void *context, uint32_t normalized);
+    uint64_t (*shader)(void *context, const char *source);
     uint64_t (*pipeline)(void *context, uint64_t shader);
     uint64_t (*sampler)(void *context);
     void (*free_rid)(void *context, uint64_t resource);

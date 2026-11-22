@@ -3,45 +3,9 @@
 #include "motion.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.h"
 #include "servers/rendering/renderer_rd/uniform_set_cache_rd.h"
+#include <cstring>
 
 namespace {
-constexpr char source[] = R"(
-#version 450
-layout(local_size_x=8, local_size_y=8, local_size_z=1) in;
-layout(set=0,binding=0) uniform sampler2D source_motion;
-layout(set=0,binding=1) uniform sampler2D source_depth;
-layout(set=0,binding=2,rg16f) uniform restrict writeonly image2D resolved_motion;
-#ifdef RSF_NORMALIZE_DEPTH
-layout(set=0,binding=3,r32f) uniform restrict writeonly image2D resolved_depth;
-#endif
-layout(push_constant,std430) uniform Constants {
-    mat4 clip_to_previous_clip;
-    vec2 jitter_uv;
-    uvec2 size;
-} params;
-void main() {
-    uvec2 pixel = gl_GlobalInvocationID.xy;
-    if (any(greaterThanEqual(pixel, params.size))) return;
-    vec2 motion = texelFetch(source_motion, ivec2(pixel), 0).xy;
-#ifdef RSF_NORMALIZE_DEPTH
-    float sampled_depth = texelFetch(source_depth, ivec2(pixel), 0).x;
-    imageStore(resolved_depth, ivec2(pixel), vec4(sampled_depth));
-#endif
-    // Godot skips static geometry in its temporal motion pass. (-1,-1) means
-    // derive camera motion from depth, rather than a real UV displacement.
-    if (all(lessThanEqual(motion, vec2(-1.0)))) {
-        vec2 uv = (vec2(pixel) + 0.5) / vec2(params.size) - params.jitter_uv;
-#ifdef RSF_NORMALIZE_DEPTH
-        float depth = sampled_depth;
-#else
-        float depth = texelFetch(source_depth, ivec2(pixel), 0).x;
-#endif
-        vec4 previous = params.clip_to_previous_clip * vec4(uv.x*2.0-1.0, 1.0-uv.y*2.0, depth, 1.0);
-        motion = vec2(previous.x, -previous.y) / previous.w * 0.5 + 0.5 - uv;
-    }
-    imageStore(resolved_motion, ivec2(pixel), vec4(motion, 0.0, 0.0));
-}
-)";
 struct Context {
     RD *rd;
     RenderSceneBuffersRD *buffers;
@@ -49,14 +13,12 @@ struct Context {
 };
 
 const rsf_godot_motion_calls calls{
-    [](void *opaque, uint32_t normalized) -> uint64_t {
+    [](void *opaque, const char *source) -> uint64_t {
         auto *rd = static_cast<Context *>(opaque)->rd;
         String error;
         RD::ShaderStageSPIRVData stage;
         stage.shader_stage = RD::SHADER_STAGE_COMPUTE;
-        String shader_source(source);
-        if (normalized) shader_source = shader_source.replace("#version 450", "#version 450\n#define RSF_NORMALIZE_DEPTH");
-        stage.spirv = rd->shader_compile_spirv_from_source(stage.shader_stage, shader_source, RD::SHADER_LANGUAGE_GLSL, &error);
+        stage.spirv = rd->shader_compile_spirv_from_source(stage.shader_stage, String(source), RD::SHADER_LANGUAGE_GLSL, &error);
         if (stage.spirv.is_empty()) { ERR_PRINT("ReScaleFrame motion decoder: " + error); return 0; }
         return rd->shader_create_from_spirv(Vector<RD::ShaderStageSPIRVData>({stage}), "ReScaleFrame Godot motion decoder").get_id();
     },
@@ -105,11 +67,10 @@ const rsf_godot_motion_calls calls{
 
 namespace RSFGodot {
 RID resolve_motion(const Ref<RenderSceneBuffersRD> &buffers, RID depth, RID motion,
-        const Projection &to_previous, const Vector2 &jitter, bool normalize_depth, RID &resolved_depth) {
+        const float *to_previous, const Vector2 &jitter, bool normalize_depth, RID &resolved_depth) {
     const Size2i size = buffers->get_internal_size();
     rsf_godot_motion_constants facts{{}, {jitter.x, jitter.y}, {uint32_t(size.x), uint32_t(size.y)}};
-    for (int column = 0; column < 4; ++column)
-        for (int row = 0; row < 4; ++row) facts.matrix[column * 4 + row] = to_previous.columns[column][row];
+    std::memcpy(facts.matrix, to_previous, sizeof(facts.matrix));
     Context context{RD::get_singleton(), buffers.ptr(), depth, motion};
     uint64_t normalized = 0;
     const uint64_t output = rsf_godot_motion_resolve(&calls, &context, normalize_depth, &facts, &normalized);

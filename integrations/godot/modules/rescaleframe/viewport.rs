@@ -2,6 +2,7 @@
 //! Private Rust object linked into Godot's engine module by SCons.
 #![no_std]
 
+mod camera;
 mod cpu_facts;
 mod frame;
 #[path = "../../../../sdk/game/src/frame_abi.rs"]
@@ -16,6 +17,10 @@ mod packet_abi;
 mod pass;
 mod present;
 mod primary;
+
+#[cfg(rsf_graph_fixture)]
+#[path = "../../../../tests/godot_graph_handoff.rs"]
+mod graph_fixture;
 
 // Settings values from sr_session.h and local mode values from viewport.h.
 const SR_NONE: u32 = 0;

@@ -2,13 +2,13 @@
 //! SR and final-scene pass records: identity, keys, flags, screen class, driver route, camera
 //! scalars and the last recorded SR pass that the final scene repeats.
 //!
-//! The C++ side keeps every Godot read, the camera matrix math, the previous camera and
-//! projection, motion resolve, native texture handles, the Vulkan image descriptions and the
-//! driver callback's engine calls. Everything here runs on Godot's rendering server thread.
+//! Everything here runs on Godot's rendering server thread. Godot supplies scene reads,
+//! typed matrix inversions and leased graphics resources.
 
 use core::cell::UnsafeCell;
 use core::mem::{align_of, offset_of, size_of};
 
+use crate::camera::{self, Matrix};
 use crate::host;
 use crate::packet_abi::rsf_game_render_pass;
 use crate::primary::{self, Admission, DRIVER_VULKAN, History};
@@ -151,15 +151,26 @@ unsafe impl Sync for Last {}
 
 static LAST: Last = Last(UnsafeCell::new(ZERO));
 
-/// Rendering server thread: retargeting retires the previous target's receipt.
+/// Rendering server thread: retargeting retires the receipt's identity. Camera history
+/// remains available until the next successful record, as it did in the engine bridge.
 pub(crate) fn invalidate() {
     // SAFETY: rendering server thread only, see `Last`.
-    unsafe { *LAST.0.get() = ZERO };
+    unsafe { (*LAST.0.get()).source_frame_id = 0 };
+}
+
+/// Translation of the last recorded camera, in Godot world units.
+///
+/// # Safety
+/// Call on the rendering server thread with writable storage for three floats.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rsf_godot_sr_previous_origin(out: *mut [f32; 3]) {
+    let camera = unsafe { &(*LAST.0.get()).camera };
+    let [.., x, y, z, _] = camera.view_to_world;
+    unsafe { out.write([x, y, z]) };
 }
 
 /// Rendering server thread: decides the SR pass identity, reset, screen class, driver route and
-/// camera scalars. The C++ then fills the five camera matrices and `previous_clip_to_clip`, with
-/// the identity reprojection when `flags` carries the reset.
+/// camera scalars before the camera matrices and motion resources are resolved.
 ///
 /// # Safety
 /// `facts` must point to a valid `rsf_godot_sr_facts` and `out` to writable, aligned storage
@@ -216,6 +227,42 @@ pub unsafe extern "C" fn rsf_godot_sr_plan(facts: *const SrFacts, out: *mut Reco
         },
     };
     unsafe { out.write(record) };
+}
+
+/// Fill camera matrices using the last recorded pass and Godot's projection inverse.
+///
+/// # Safety
+/// `record` must be a planned SR pass. Each input must contain 16 floats in Godot column order.
+/// The synchronous inverse callback must write 16 floats to its output.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rsf_godot_sr_camera(
+    record: *mut Record,
+    native_projection: *const Matrix,
+    view_to_world: *const Matrix,
+    world_to_view: *const Matrix,
+    inverse: unsafe extern "C" fn(*const Matrix, *mut Matrix),
+) {
+    let record = unsafe { &mut *record };
+    let camera = &mut record.camera;
+    camera.view_to_clip = camera::corrected_projection(unsafe { &*native_projection });
+    unsafe { inverse(&camera.view_to_clip, &mut camera.clip_to_view) };
+    camera.view_to_world = unsafe { *view_to_world };
+    camera.world_to_view = unsafe { *world_to_view };
+    camera.clip_to_previous_clip = if record.flags & RSF_GAME_RENDER_RESET != 0 {
+        camera::IDENTITY
+    } else {
+        // The planned reset decides whether the previous recorded camera can be reused.
+        let previous = unsafe { &(*LAST.0.get()).camera };
+        let relative = camera::relative_view(&previous.world_to_view, &camera.view_to_world);
+        let to_previous = camera::multiply(&previous.view_to_clip, &relative);
+        camera::multiply(&to_previous, &camera.clip_to_view)
+    };
+    unsafe {
+        inverse(
+            &camera.clip_to_previous_clip,
+            &mut record.previous_clip_to_clip,
+        )
+    };
 }
 
 /// Rendering server thread: the planned SR pass passed its resolve checks and is recorded. The

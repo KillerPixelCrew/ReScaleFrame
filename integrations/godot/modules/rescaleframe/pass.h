@@ -45,6 +45,9 @@ struct rsf_godot_sr_facts {
 
 // Rendering server thread.
 extern "C" void rsf_godot_sr_plan(const rsf_godot_sr_facts *facts, rsf_godot_pass_record *out);
+extern "C" void rsf_godot_sr_camera(rsf_godot_pass_record *record, const float *native_projection,
+        const float *view_to_world, const float *world_to_view, void (*inverse)(const float *, float *));
+extern "C" void rsf_godot_sr_previous_origin(float *origin);
 extern "C" void rsf_godot_sr_record(const rsf_godot_sr_facts *facts, const rsf_godot_pass_record *record);
 extern "C" uint32_t rsf_godot_final_scene_plan(const rsf_godot_render_admission *facts, rsf_godot_pass_record *out);
 

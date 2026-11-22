@@ -3,7 +3,6 @@
 #include "core/object/object.h"
 #include "core/variant/dictionary.h"
 #include "core/math/vector2i.h"
-#include "core/math/projection.h"
 #include "core/object/ref_counted.h"
 class RenderDataRD;
 class RenderSceneBuffersRD;
@@ -35,7 +34,7 @@ void present(void *swapchain);
 void render_size(RID target, const Vector2i &output, Vector2i &internal);
 void camera_changed(RID target);
 RID resolve_motion(const Ref<RenderSceneBuffersRD> &buffers, RID depth, RID motion,
-    const Projection &to_previous, const Vector2 &jitter, bool normalize_depth, RID &resolved_depth);
+    const float *to_previous, const Vector2 &jitter, bool normalize_depth, RID &resolved_depth);
 void release_motion();
 bool vulkan_enabled();
 uint64_t vk_resolver();

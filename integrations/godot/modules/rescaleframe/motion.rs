@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Rendering-thread ownership of Godot's motion resolve resources.
 use core::cell::UnsafeCell;
-use core::ffi::c_void;
+use core::ffi::{c_char, c_void};
 use core::mem::{offset_of, size_of};
 
 #[repr(C)]
@@ -19,7 +19,7 @@ const _: () = {
 
 #[repr(C)]
 pub struct Calls {
-    shader: unsafe extern "C" fn(*mut c_void, u32) -> u64,
+    shader: unsafe extern "C" fn(*mut c_void, *const c_char) -> u64,
     pipeline: unsafe extern "C" fn(*mut c_void, u64) -> u64,
     sampler: unsafe extern "C" fn(*mut c_void) -> u64,
     free_rid: unsafe extern "C" fn(*mut c_void, u64),
@@ -56,7 +56,16 @@ pub unsafe extern "C" fn rsf_godot_motion_resolve(
     let decoder = if let Some(decoder) = *state {
         decoder
     } else {
-        let shader = unsafe { (calls.shader)(context, normalized) };
+        let source = if normalized != 0 {
+            concat!(
+                "\n#version 450\n#define RSF_NORMALIZE_DEPTH\n",
+                include_str!("motion.glsl"),
+                "\0"
+            )
+        } else {
+            concat!("\n#version 450\n", include_str!("motion.glsl"), "\0")
+        };
+        let shader = unsafe { (calls.shader)(context, source.as_ptr().cast()) };
         if shader == 0 {
             return 0;
         }

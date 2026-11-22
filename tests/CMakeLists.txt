@@ -665,8 +665,10 @@ set(godot_module "${PROJECT_SOURCE_DIR}/integrations/godot/modules/rescaleframe"
 set(godot_graph_object "${CMAKE_CURRENT_BINARY_DIR}/godot_graph_module${CMAKE_CXX_OUTPUT_EXTENSION}")
 add_custom_command(OUTPUT "${godot_graph_object}"
     COMMAND "${RSF_RUSTC}" --edition=2024 --crate-type=lib --emit=obj --target ${godot_graph_rust_target}
-        -Cpanic=abort -Copt-level=2 -Ccodegen-units=1 -Dwarnings "${godot_module}/viewport.rs" -o "${godot_graph_object}"
+        --cfg rsf_graph_fixture -Cpanic=abort -Copt-level=2 -Ccodegen-units=1 -Dwarnings
+        "${godot_module}/viewport.rs" -o "${godot_graph_object}"
     DEPENDS "${godot_module}/viewport.rs" "${godot_module}/cpu_facts.rs" "${godot_module}/frame.rs"
+        "${godot_module}/camera.rs" "${godot_module}/motion.glsl" "${CMAKE_CURRENT_SOURCE_DIR}/godot_graph_handoff.rs"
         "${godot_module}/graph.rs" "${godot_module}/host.rs" "${godot_module}/pass.rs"
         "${godot_module}/motion.rs" "${godot_module}/packet.rs" "${godot_module}/packet_abi.rs"
         "${godot_module}/present.rs" "${godot_module}/primary.rs"

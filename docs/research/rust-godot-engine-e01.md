@@ -52,3 +52,31 @@ revision. Checks covered Vulkan submit and separate Present ordering, unchanged 
 GLSL, pin-matched formatting, bindgen 0.72.1 regeneration and locked offline Cargo
 metadata. Engine compilation, fixture execution, link validation and moving-scene/device
 behavior remain unverified.
+
+## E01 native follow-up
+
+This follow-up starts at RSF `0251a81a` and reads Godot `ed1daf0bf001b61586d9930840f2f1394092c079`
+from the local reference's Git objects. The question was which computations and fixture
+scenarios could leave C++ while keeping the engine's typed operations and callback lifetimes.
+
+| RSF paths | Pinned source and ownership |
+| --- | --- |
+| `integrations/godot/modules/rescaleframe/{camera.rs,pass.rs,pass.h,bridge.cpp}` | Godot `core/math/projection.h` and `projection.cpp` define the column-order product and `set_depth_correction(false)` defaults. Rust applies the same +Y-up, reverse-Z, zero-to-one correction and composes reprojection from the last recorded SR pass. The affine composition follows `Transform3D::operator*=`, `Basis::operator*=` and `Transform3D::xform`. Godot still evaluates projection inversion, affine inversion, FoV and camera distance. Its typed inverses retain the engine's pivot and singular-matrix behavior. |
+| `integrations/godot/modules/rescaleframe/{motion.cpp,motion.h,motion.rs,motion.glsl,rsf_godot_engine.h}` | Forward+ clears temporal motion to `(-1,-1)` in `servers/rendering/renderer_rd/forward_clustered/render_forward_clustered.cpp:2236`. The matching scene shader writes previous minus current UV at `scene_forward_clustered.glsl:3112`. Rust supplies the GLSL source and selects the Vulkan depth-copy variant. The engine still owns shader compilation, texture RIDs, uniform sets and compute dispatch. Both variants preserve the shader source, UV units, half jitter and push-constant layout. |
+| `tests/{godot_graph_handoff.rs,godot_graph_handoff.cpp,CMakeLists.txt}`, `integrations/godot/modules/rescaleframe/{viewport.rs,SCsub}` | Rust drives allocation, reuse and refusal scenarios against the actual `graph.cpp` lease. CMake enables the fixture module in the same Rust object only for the fixture. C++ keeps the typed doubles under `tests/godot_graph_stubs/`, scope lifetime and snapshots of the live command reference and pool. Godot's `rendering_device_graph.cpp:1127-1163` shows the paired pool allocation and `buffers_used` cursor. The fake driver supplies observable allocation, begin and dependency mutations without calling a driver. |
+| `integrations/godot/modules/rescaleframe/{graph.cpp,graph.h,vulkan.cpp,d3d12.cpp}` | The graph and Vulkan leaves retain typed command-buffer and semaphore ownership. `RenderingDevice::_execute_frame` scopes the real Vulkan receipt, and the patch only reports submit completion after the `vkQueueSubmit` success check. D3D12's `CommandBufferInfo` owns cached bindings and `_resource_transitions_flush` owns pending transitions. These callbacks still borrow engine objects and run at the original driver sites. |
+| `integrations/godot/modules/rescaleframe/{register_types.cpp,register_types.h,rsf_godot_engine.h}`, `eng/patch-godot.py` | Godot's `modules/register_module_types.h`, `main/main.cpp` and `core/object/class_db.h` define the scene initialization level, generated registration calls and ClassDB API selection. `GDCLASS`, method binding and singleton registration remain typed C++. The Python source patcher verifies the engine revision and exact source anchors, then inserts calls where private engine values are live. This source-patching boundary remains necessary for these hooks. |
+
+The motion pass takes the same column-order reprojection values as the SDK record.
+Reset uses identity. Missing resolved motion or depth returns before recording,
+so a failed resolve leaves the last recorded camera intact. Retargeting invalidates
+the receipt identity and clears frame continuity through the existing frame owner.
+The Forward+ motion producer, scene-buffer
+bindings and final scene hook retain their existing paths.
+
+Source checks resolved the 21-file engine patch plan in memory and compared both
+motion shader variants with the base revision. Rust 1.94.1 formatting, bindgen
+0.72.1 regeneration and locked offline Cargo metadata passed. The patch plan was
+read from Git objects because the reference worktree already contained older patches.
+Engine compilation, linking, fixture execution and motion or presentation on a device
+remain unverified for this follow-up.

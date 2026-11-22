@@ -277,8 +277,9 @@ trampolines stay native. [Godot engine module](../integrations/godot/NATIVE.md) 
 [AC7 F9 roots](research/rust-ac7-motion-root-admission.md)
 
 Godot's SCons Rust object now assembles driver packets, matches Vulkan submission
-receipts, chooses graph pool reuse and owns the motion decoder RIDs. Engine
-resource leases, class registration and driver calls remain in Godot C++.
+receipts, chooses graph pool reuse, composes SR camera reprojection and owns the
+motion decoder variants and RIDs. The graph fixture runs Rust scenarios through the
+typed C++ graph lease. Godot C++ owns ClassDB, resource leases and driver calls.
 Source checks only. [Engine ownership and evidence](research/rust-godot-engine-e01.md)
 
 RDR2's pending and ready readbacks and retained final draw live in Rust.
