@@ -3,6 +3,7 @@
 //! interceptors native code registers at initialization, the loader functions they replace, the
 //! Win32 interop device-extension selection and the interop readiness of the created device.
 //! Native code supplies stateless Vulkan loader entry points and the DXGI presentation callback.
+use ash::vk;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 use std::slice;
@@ -46,65 +47,20 @@ const INTEROP_FUNCTIONS: [&CStr; 2] = [
     c"vkGetMemoryWin32HandlePropertiesKHR",
 ];
 
-const EXTENSION_NAME_SIZE: usize = 256;
-
-/// VkExtensionProperties from the Vulkan SDK.
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct ExtensionProperties {
-    name: [u8; EXTENSION_NAME_SIZE],
-    #[allow(dead_code)] // written by the native enumeration
-    spec_version: u32,
-}
-const _: () = assert!(size_of::<ExtensionProperties>() == 260);
-
-impl ExtensionProperties {
-    const EMPTY: Self = Self {
-        name: [0; EXTENSION_NAME_SIZE],
-        spec_version: 0,
-    };
-
-    /// An unterminated name matches nothing.
-    fn name(&self) -> Option<&CStr> {
-        CStr::from_bytes_until_nul(&self.name).ok()
-    }
-}
-
 type Function = unsafe extern "system" fn();
 pub(crate) type Lookup = unsafe extern "system" fn(*mut c_void, *const c_char) -> Option<Function>;
 type Enumerate = unsafe extern "system" fn(
     *mut c_void,
     *const c_char,
     *mut u32,
-    *mut ExtensionProperties,
+    *mut vk::ExtensionProperties,
 ) -> i32;
 type CreateDevice = unsafe extern "system" fn(
     *mut c_void,
-    *const DeviceCreateInfo,
+    *const vk::DeviceCreateInfo<'static>,
     *const c_void,
     *mut *mut c_void,
 ) -> i32;
-
-/// VkDeviceCreateInfo, verified against bindgen 0.72.1 and the Windows x64 Vulkan SDK.
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct DeviceCreateInfo {
-    kind: i32,
-    next: *const c_void,
-    flags: u32,
-    queue_count: u32,
-    queues: *const c_void,
-    layer_count: u32,
-    layers: *const *const c_char,
-    extension_count: u32,
-    extensions: *const *const c_char,
-    features: *const c_void,
-}
-const _: () = assert!(
-    size_of::<DeviceCreateInfo>() == 72
-        && std::mem::offset_of!(DeviceCreateInfo, extension_count) == 48
-        && std::mem::offset_of!(DeviceCreateInfo, extensions) == 56
-);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -271,7 +227,7 @@ fn functions_resolve(resolves: impl FnMut(&CStr) -> bool) -> bool {
 /// Whether the physical device offers every required name. The two-call enumeration fails on an
 /// unsuccessful query, a failed allocation or a second count above the first.
 fn available(
-    mut enumerate: impl FnMut(*mut u32, *mut ExtensionProperties) -> i32,
+    mut enumerate: impl FnMut(*mut u32, *mut vk::ExtensionProperties) -> i32,
     required: &[&CStr],
 ) -> bool {
     let mut count = 0;
@@ -282,7 +238,7 @@ fn available(
     if properties.try_reserve_exact(count as usize).is_err() {
         return false;
     }
-    properties.resize(count as usize, ExtensionProperties::EMPTY);
+    properties.resize(count as usize, vk::ExtensionProperties::default());
     // An empty list repeats the count query, as the native empty vector did.
     let target = if properties.is_empty() {
         ptr::null_mut()
@@ -293,9 +249,11 @@ fn available(
         return false;
     }
     properties.truncate(count as usize);
-    required
-        .iter()
-        .all(|&name| properties.iter().any(|item| item.name() == Some(name)))
+    required.iter().all(|&name| {
+        properties
+            .iter()
+            .any(|item| item.extension_name_as_c_str().ok() == Some(name))
+    })
 }
 
 /// Unity's names followed by each interop name it lacks. None when the list cannot be allocated.
@@ -307,7 +265,7 @@ unsafe fn merge(supplied: &[*const c_char]) -> Option<Vec<*const c_char>> {
 /// Unity lends the native create request and its borrowed pointers until the driver returns.
 unsafe extern "system" fn intercept_create_device(
     physical: *mut c_void,
-    info: *const DeviceCreateInfo,
+    info: *const vk::DeviceCreateInfo<'static>,
     allocator: *const c_void,
     output: *mut *mut c_void,
 ) -> i32 {
@@ -317,12 +275,17 @@ unsafe extern "system" fn intercept_create_device(
     if output.is_null() {
         return INITIALIZATION_FAILED;
     }
-    let supplied = if info.extension_count == 0 {
+    let supplied = if info.enabled_extension_count == 0 {
         &[]
-    } else if info.extensions.is_null() {
+    } else if info.pp_enabled_extension_names.is_null() {
         return INITIALIZATION_FAILED;
     } else {
-        unsafe { slice::from_raw_parts(info.extensions, info.extension_count as usize) }
+        unsafe {
+            slice::from_raw_parts(
+                info.pp_enabled_extension_names,
+                info.enabled_extension_count as usize,
+            )
+        }
     };
     let create = native.create_device;
     let interop = available(
@@ -333,9 +296,9 @@ unsafe extern "system" fn intercept_create_device(
         let Some(extensions) = (unsafe { merge(supplied) }) else {
             return OUT_OF_HOST_MEMORY;
         };
-        let configured = DeviceCreateInfo {
-            extension_count: extensions.len() as u32,
-            extensions: extensions.as_ptr(),
+        let configured = vk::DeviceCreateInfo {
+            enabled_extension_count: extensions.len() as u32,
+            pp_enabled_extension_names: extensions.as_ptr(),
             ..*info
         };
         unsafe { create(physical, &configured, allocator, output) }
@@ -494,7 +457,7 @@ mod tests {
     unsafe extern "C" fn enumerate(
         context: *mut c_void,
         count: *mut u32,
-        properties: *mut ExtensionProperties,
+        properties: *mut vk::ExtensionProperties,
     ) -> i32 {
         let state = unsafe { &mut *context.cast::<Enumeration>() };
         let capacity = unsafe { *count };
@@ -507,8 +470,10 @@ mod tests {
         }
         let written = capacity.min(state.names.len() as u32);
         for (index, name) in state.names.iter().take(written as usize).enumerate() {
-            let mut item = ExtensionProperties::EMPTY;
-            item.name[..name.len()].copy_from_slice(name);
+            let mut item = vk::ExtensionProperties::default();
+            for (target, &byte) in item.extension_name.iter_mut().zip(name) {
+                *target = byte as c_char;
+            }
             unsafe { properties.add(index).write(item) };
         }
         unsafe { *count = written };
@@ -549,7 +514,7 @@ mod tests {
             ]))
             .0
         );
-        let mut unterminated = [b'A'; EXTENSION_NAME_SIZE];
+        let mut unterminated = [b'A'; vk::MAX_EXTENSION_NAME_SIZE];
         unterminated[..MEMORY.len() - 1].copy_from_slice(&MEMORY[..MEMORY.len() - 1]);
         assert!(!offered(enumeration(&[&unterminated, SEMAPHORE])).0);
     }

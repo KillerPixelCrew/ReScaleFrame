@@ -1,11 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 
-const _: () = assert!(
-    size_of::<vk::PresentInfoKHR<'static>>() == 64
-        && std::mem::offset_of!(vk::PresentInfoKHR<'static>, p_swapchains) == 40
-);
-
 struct Present<'a> {
     queue: u64,
     info: &'a vk::PresentInfoKHR<'a>,

@@ -4,7 +4,6 @@
    foreign C++ exceptions only; access violations and other faults still propagate). */
 #include "vulkan_foreign.h"
 #include "vulkan_state.h"
-#include <stddef.h>
 #include <windows.h>
 #define RSF_UNITY_SDK_LEAF rsf_unity_package_vulkan
 #include "unity_sdk.h"
@@ -28,24 +27,10 @@ typedef struct rsf_unity_vk_hooks {
 } rsf_unity_vk_hooks;
 PFN_vkGetInstanceProcAddr rsf_unity_vk_install(PFN_vkGetInstanceProcAddr original, const rsf_unity_vk_hooks* hooks);
 
-/* vulkan_resolver.rs, vulkan_platform.rs and vulkan_bridge.rs read these Vulkan layouts. */
+/* vulkan_resolver.rs reads this table, and vulkan_platform.rs and vulkan_bridge.rs the records below.
+   The Vulkan structures themselves are ash's. */
 _Static_assert(sizeof(rsf_unity_vk_hooks) == 8 * sizeof(void*), "hook table");
-_Static_assert(sizeof(VkExtensionProperties) == 260 && offsetof(VkExtensionProperties, specVersion) == 256,
-    "VkExtensionProperties");
-_Static_assert(sizeof(VkSwapchainCreateInfoKHR) == 104 && offsetof(VkSwapchainCreateInfoKHR, imageUsage) == 56 &&
-    offsetof(VkSwapchainCreateInfoKHR, oldSwapchain) == 96, "VkSwapchainCreateInfoKHR");
-_Static_assert(sizeof(VkWin32SurfaceCreateInfoKHR) == 40 && offsetof(VkWin32SurfaceCreateInfoKHR, hwnd) == 32,
-    "VkWin32SurfaceCreateInfoKHR");
-_Static_assert(sizeof(VkSemaphoreCreateInfo) == 24, "VkSemaphoreCreateInfo");
 _Static_assert(sizeof(VkSemaphore) == sizeof(uint64_t), "VkSemaphore");
-_Static_assert(sizeof(VkDeviceCreateInfo) == 72 && offsetof(VkDeviceCreateInfo, enabledExtensionCount) == 48 &&
-    offsetof(VkDeviceCreateInfo, ppEnabledExtensionNames) == 56, "VkDeviceCreateInfo");
-_Static_assert(sizeof(rsf_uvk_engine_instance) == 40 && offsetof(rsf_uvk_engine_instance, queue_family) == 32,
-    "engine instance");
-_Static_assert(sizeof(rsf_uvk_engine_image) == 16 && offsetof(rsf_uvk_engine_image, layout) == 8, "engine image");
-_Static_assert(sizeof(VkPresentInfoKHR) == 64 && offsetof(VkPresentInfoKHR, pSwapchains) == 40, "VkPresentInfoKHR");
-_Static_assert(sizeof(rsf_unity_vulkan_device_handles) == 72 && offsetof(rsf_unity_vulkan_device_handles, dispatch) == 64,
-    "device handles");
 
 void rsf_uvk_preload(void* interfaces);
 void rsf_unity_package_sdk_bind_vulkan(void* interfaces, int base_event);

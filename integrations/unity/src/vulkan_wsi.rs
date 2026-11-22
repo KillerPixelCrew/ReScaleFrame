@@ -9,81 +9,28 @@ use crate::vulkan_state::{
     forget_win32_surface, register_swapchain, register_win32_surface, retire_swapchain,
     supersede_swapchain,
 };
+use ash::vk::{self, Handle as _};
 use std::ffi::c_void;
 use std::ptr;
 
 const DEVICE_LOST: i32 = -4;
 const OUT_OF_DEVICE_MEMORY: i32 = -2;
-const TRANSFER_SRC: u32 = 1;
-const SEMAPHORE_CREATE_INFO: i32 = 9;
-
-// Vulkan SDK 1.4.357.0 Windows x64 sizes checked against bindgen 0.72.1.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(super) struct SwapchainCreateInfo {
-    kind: i32,
-    next: *const c_void,
-    flags: u32,
-    surface: u64,
-    minimum_image_count: u32,
-    format: i32,
-    color_space: i32,
-    width: u32,
-    height: u32,
-    layers: u32,
-    usage: u32,
-    sharing_mode: i32,
-    family_count: u32,
-    families: *const u32,
-    pre_transform: u32,
-    alpha: u32,
-    mode: i32,
-    clipped: u32,
-    old_chain: u64,
-}
-
-#[repr(C)]
-pub(super) struct SurfaceCreateInfo {
-    kind: i32,
-    next: *const c_void,
-    flags: u32,
-    application: *mut c_void,
-    window: *mut c_void,
-}
-
-#[repr(C)]
-pub(super) struct SemaphoreCreateInfo {
-    kind: i32,
-    next: *const c_void,
-    flags: u32,
-}
-
-const _: () = assert!(
-    size_of::<SwapchainCreateInfo>() == 104
-        && std::mem::offset_of!(SwapchainCreateInfo, width) == 44
-        && std::mem::offset_of!(SwapchainCreateInfo, usage) == 56
-        && std::mem::offset_of!(SwapchainCreateInfo, old_chain) == 96
-        && size_of::<SurfaceCreateInfo>() == 40
-        && std::mem::offset_of!(SurfaceCreateInfo, window) == 32
-        && size_of::<SemaphoreCreateInfo>() == 24
-);
-
 pub(super) type CreateSwapchain = unsafe extern "system" fn(
     *mut c_void,
-    *const SwapchainCreateInfo,
+    *const vk::SwapchainCreateInfoKHR<'static>,
     *const c_void,
     *mut u64,
 ) -> i32;
 pub(super) type CreateSurface = unsafe extern "system" fn(
     *mut c_void,
-    *const SurfaceCreateInfo,
+    *const vk::Win32SurfaceCreateInfoKHR<'static>,
     *const c_void,
     *mut u64,
 ) -> i32;
 pub(super) type Destroy = unsafe extern "system" fn(*mut c_void, u64, *const c_void);
 pub(super) type CreateSemaphore = unsafe extern "system" fn(
     *mut c_void,
-    *const SemaphoreCreateInfo,
+    *const vk::SemaphoreCreateInfo<'static>,
     *const c_void,
     *mut u64,
 ) -> i32;
@@ -115,7 +62,7 @@ impl Drop for PendingSwapchain {
 unsafe fn populate(
     pending: &mut PendingSwapchain,
     native: NativeHooks,
-    request: SwapchainCreateInfo,
+    request: vk::SwapchainCreateInfoKHR<'static>,
     get_images: Images,
 ) -> Result<(), i32> {
     let mut count = 0;
@@ -147,11 +94,7 @@ unsafe fn populate(
         .semaphores
         .try_reserve_exact(count as usize)
         .map_err(|_| OUT_OF_HOST_MEMORY)?;
-    let info = SemaphoreCreateInfo {
-        kind: SEMAPHORE_CREATE_INFO,
-        next: ptr::null(),
-        flags: 0,
-    };
+    let info = vk::SemaphoreCreateInfo::default();
     for _ in 0..count {
         let mut semaphore = 0;
         if unsafe { (native.create_semaphore)(pending.device, &info, ptr::null(), &mut semaphore) }
@@ -164,8 +107,8 @@ unsafe fn populate(
     register_swapchain(
         pending.device,
         pending.chain,
-        request.surface,
-        (request.width, request.height),
+        request.surface.as_raw(),
+        (request.image_extent.width, request.image_extent.height),
         images,
         std::mem::take(&mut pending.semaphores),
     )
@@ -177,7 +120,7 @@ unsafe fn populate(
 
 pub(super) unsafe extern "system" fn create_swapchain(
     device: *mut c_void,
-    info: *const SwapchainCreateInfo,
+    info: *const vk::SwapchainCreateInfoKHR<'static>,
     allocator: *const c_void,
     output: *mut u64,
 ) -> i32 {
@@ -193,7 +136,7 @@ pub(super) unsafe extern "system" fn create_swapchain(
     };
     let create = unsafe { std::mem::transmute::<Function, CreateSwapchain>(create) };
     // oldSwapchain is retired by a valid create call even if creation fails.
-    supersede_swapchain(device, info.old_chain);
+    supersede_swapchain(device, info.old_swapchain.as_raw());
     let (Some(destroy), Some(get_images)) = (
         lookup(c"vkDestroySwapchainKHR"),
         lookup(c"vkGetSwapchainImagesKHR"),
@@ -208,8 +151,8 @@ pub(super) unsafe extern "system" fn create_swapchain(
         chain: 0,
         semaphores: Vec::new(),
     };
-    let request = SwapchainCreateInfo {
-        usage: info.usage | TRANSFER_SRC,
+    let request = vk::SwapchainCreateInfoKHR {
+        image_usage: info.image_usage | vk::ImageUsageFlags::TRANSFER_SRC,
         ..*info
     };
     unsafe { output.write(0) };
@@ -256,7 +199,7 @@ pub(super) unsafe extern "system" fn destroy_swapchain(
 
 pub(super) unsafe extern "system" fn create_surface(
     instance: *mut c_void,
-    info: *const SurfaceCreateInfo,
+    info: *const vk::Win32SurfaceCreateInfoKHR<'static>,
     allocator: *const c_void,
     output: *mut u64,
 ) -> i32 {
@@ -273,7 +216,11 @@ pub(super) unsafe extern "system" fn create_surface(
     let create = unsafe { std::mem::transmute::<Function, CreateSurface>(create) };
     let result = unsafe { create(instance, info, allocator, output) };
     if result == SUCCESS {
-        register_win32_surface(instance as u64, unsafe { *output }, info.window);
+        register_win32_surface(
+            instance as u64,
+            unsafe { *output },
+            info.hwnd as *mut c_void,
+        );
     }
     result
 }
