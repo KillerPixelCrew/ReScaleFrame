@@ -4,11 +4,11 @@ use core::ffi::c_void;
 use core::mem::{MaybeUninit, size_of};
 use core::ptr;
 
-use crate::frame_event_abi::RSF_GAME_RENDER_FINAL_SCENE;
+use crate::frame_event_abi::{RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_SR};
 use crate::packet_abi::{
     RSF_FGVK_ABI_VERSION, RSF_GODOT_ABI_VERSION, RSF_GODOT_CHAIN_CREATED, RSF_GODOT_CHAIN_REFUSED,
     RSF_GODOT_CHAIN_SKIPPED, RSF_SRVK_ABI_VERSION, rsf_fgvk_setup, rsf_game_render_pass,
-    rsf_godot_driver_packet, rsf_godot_packet_calls, rsf_godot_packet_facts,
+    rsf_godot_driver_packet, rsf_godot_packet_calls, rsf_godot_packet_sources,
     rsf_godot_swapchain_calls, rsf_godot_vk_image, rsf_godot_vk_packet, rsf_srvk_setup,
 };
 use crate::pass::Record;
@@ -68,55 +68,83 @@ pub unsafe extern "C" fn rsf_godot_swapchain_setup(
 }
 
 /// # Safety
-/// `record` and `facts` must be initialized. `out` must be writable, aligned packet storage.
+/// `record` and `textures` must be initialized and `out` writable. Godot must keep the
+/// scene textures and the required callback arguments live for the complete call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_godot_packet_prepare(
     record: *const Record,
-    facts: *const rsf_godot_packet_facts,
+    sources: *const rsf_godot_packet_sources,
+    context: *mut c_void,
+    textures: *const [u64; 4],
     out: *mut rsf_godot_driver_packet,
 ) {
-    // SAFETY: the rendering server supplies initialized inputs and writable output.
-    let (record, facts) = unsafe { (&*record, &*facts) };
+    let (record, sources, [color, depth, motion, output]) =
+        unsafe { (&*record, &*sources, *textures) };
     let mut payload = rsf_godot_vk_packet {
-        device: facts.device,
+        device: unsafe { sources.device.unwrap_unchecked()(context) },
         pass: record.public_pass(),
         ..Default::default()
     };
-    if record.driver == DRIVER_VULKAN {
+    let queue = if record.driver == DRIVER_VULKAN {
         let final_scene = record.role == RSF_GAME_RENDER_FINAL_SCENE;
         let camera = &payload.pass.camera;
         let render = [camera.render_width, camera.render_height];
-        let output = [camera.output_width, camera.output_height];
-        let describe = |mut image: rsf_godot_vk_image, [width, height]| {
+        let target = [camera.output_width, camera.output_height];
+        let describe = |rid, [width, height]| {
+            let mut image = rsf_godot_vk_image::default();
+            if rid != 0 {
+                unsafe { sources.vk_image.unwrap_unchecked()(context, rid, &mut image) };
+            }
             image.width = width;
             image.height = height;
             image
         };
         payload.struct_size = size_of::<rsf_godot_vk_packet>() as u32;
         payload.abi_version = RSF_GODOT_ABI_VERSION;
-        payload.instance = facts.instance;
-        payload.physical_device = facts.physical_device;
-        payload.instance_proc = facts.instance_proc;
-        payload.device_proc = facts.device_proc;
-        payload.color = describe(facts.vk_color, if final_scene { output } else { render });
-        if !final_scene {
-            payload.depth = describe(facts.vk_depth, render);
-            payload.motion = describe(facts.vk_motion, render);
-            payload.output = describe(facts.vk_output, output);
+        if record.role == RSF_GAME_RENDER_SR {
+            unsafe {
+                sources.vk_context.unwrap_unchecked()(
+                    context,
+                    &mut payload.instance,
+                    &mut payload.physical_device,
+                )
+            };
         }
+        unsafe {
+            sources.vk_procs.unwrap_unchecked()(
+                &mut payload.instance_proc,
+                &mut payload.device_proc,
+            )
+        };
+        payload.color = describe(color, if final_scene { target } else { render });
+        if !final_scene {
+            payload.depth = describe(depth, render);
+            payload.motion = describe(motion, render);
+            payload.output = describe(output, target);
+        }
+        ptr::null_mut()
     } else {
-        payload.pass.color_input = facts.color;
-        payload.pass.color_output = facts.output;
-        payload.pass.depth = facts.depth;
-        payload.pass.motion = facts.motion;
-    }
+        let queue = unsafe { sources.queue.unwrap_unchecked()(context) };
+        let native = |rid| {
+            if rid == 0 {
+                ptr::null_mut()
+            } else {
+                unsafe { sources.texture.unwrap_unchecked()(context, rid) as usize as *mut c_void }
+            }
+        };
+        payload.pass.color_input = native(color);
+        payload.pass.depth = native(depth);
+        payload.pass.motion = native(motion);
+        payload.pass.color_output = native(output);
+        queue
+    };
     unsafe {
         out.write(rsf_godot_driver_packet {
             driver: record.driver,
-            queue: facts.queue,
+            queue,
             payload,
-        });
-    }
+        })
+    };
 }
 
 /// # Safety
@@ -130,8 +158,8 @@ pub unsafe extern "C" fn rsf_godot_packet_execute(
 ) {
     // SAFETY: a single Godot callback owns the packet, driver context and resource leases.
     let (packet, calls) = unsafe { (&*packet, &*calls) };
-    let commands = unsafe { calls.begin.unwrap_unchecked()(context, packet.driver) };
     if packet.driver == DRIVER_VULKAN {
+        let commands = unsafe { calls.begin_vulkan.unwrap_unchecked()(context) };
         if commands.is_null() {
             return;
         }
@@ -153,6 +181,7 @@ pub unsafe extern "C" fn rsf_godot_packet_execute(
         }
     } else {
         unsafe {
+            let commands = calls.begin_d3d12.unwrap_unchecked()(context);
             calls.render_d3d12.unwrap_unchecked()(
                 packet.payload.device,
                 packet.queue,

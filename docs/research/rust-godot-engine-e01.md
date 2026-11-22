@@ -93,3 +93,14 @@ pool, so the scenario can observe which command would record a provider fallback
 The Godot graph type double remains under `tests/godot_graph_stubs/servers/rendering/`.
 The seam mirrors the pinned graph pool and Vulkan begin/retirement sites listed
 above. Its transitions are synthetic and exercise no GPU work.
+
+`packet.rs` also owns the order and selection of resource reads and command
+recording by driver. `bridge.cpp` supplies typed reads through the private
+`packet.h` callback table, with generated records in `packet_abi.rs`.
+The pinned `core/templates/rid.h` defines zero as the invalid RID, and
+`RenderingDevice::get_driver_resource` returns a 64-bit native value.
+SR queries the Vulkan instance and physical device, along with render-sized
+color, depth and resolved motion and target-sized output. Final scene queries
+only its target-sized color. The D3D12 path keeps its queue and native texture
+queries, transition flush and command cache invalidation. Callback declarations
+remain in Godot and lease the same four resources in the same order.

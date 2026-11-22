@@ -147,12 +147,13 @@ void execute(RenderingDeviceDriver *driver, RenderingDeviceDriver::CommandBuffer
         RenderingDeviceDriver::CommandBufferID commands;
     } context{driver, commands};
     const rsf_godot_packet_calls calls{
-        [](void *opaque, uint32_t route) -> void * {
+        [](void *opaque) -> void * {
             const auto &lease = *static_cast<Context *>(opaque);
-            if (route == RSF_GODOT_DRIVER_VULKAN) {
-                return static_cast<RenderingDeviceDriverVulkan *>(lease.driver)->rescaleframe_begin(lease.commands);
-            }
             return static_cast<RenderingDeviceDriverD3D12 *>(lease.driver)->rescaleframe_begin(lease.commands);
+        },
+        [](void *opaque) -> void * {
+            const auto &lease = *static_cast<Context *>(opaque);
+            return static_cast<RenderingDeviceDriverVulkan *>(lease.driver)->rescaleframe_begin(lease.commands);
         },
         [](void *opaque) {
             const auto &lease = *static_cast<Context *>(opaque);
@@ -182,37 +183,36 @@ rsf_godot_render_admission admission(const RenderDataRD *data, uint64_t frame) {
 }
 rsf_godot_driver_packet *packet_for(RD *rd, const rsf_godot_pass_record &record,
         RID color, RID depth = RID(), RID motion = RID(), RID output = RID()) {
-    rsf_godot_packet_facts facts{};
-    facts.device = reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_LOGICAL_DEVICE));
-    if (record.driver == RSF_GODOT_DRIVER_VULKAN) {
-        if (record.role == RSF_GAME_RENDER_SR) {
-            facts.instance = reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_TOPMOST_OBJECT));
-            facts.physical_device = reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_PHYSICAL_DEVICE));
-        }
-        facts.instance_proc = reinterpret_cast<rsf_godot_vk_proc>(RenderingDeviceDriverVulkan::rescaleframe_instance_proc());
-        facts.device_proc = reinterpret_cast<rsf_godot_vk_proc>(RenderingDeviceDriverVulkan::rescaleframe_device_proc());
-        auto describe = [rd](RID texture) -> rsf_godot_vk_image {
-            if (!texture.is_valid()) return {};
-            return {rd->get_driver_resource(RD::DRIVER_RESOURCE_TEXTURE, texture),
+    const rsf_godot_packet_sources sources{
+        [](void *opaque) -> void * {
+            return reinterpret_cast<void *>(static_cast<RD *>(opaque)->get_driver_resource(RD::DRIVER_RESOURCE_LOGICAL_DEVICE));
+        },
+        [](void *opaque) -> void * {
+            return reinterpret_cast<void *>(static_cast<RD *>(opaque)->get_driver_resource(RD::DRIVER_RESOURCE_COMMAND_QUEUE));
+        },
+        [](void *opaque, void **instance, void **physical_device) {
+            auto *rd = static_cast<RD *>(opaque);
+            *instance = reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_TOPMOST_OBJECT));
+            *physical_device = reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_PHYSICAL_DEVICE));
+        },
+        [](rsf_godot_vk_proc *instance, rsf_godot_vk_proc *device) {
+            *instance = reinterpret_cast<rsf_godot_vk_proc>(RenderingDeviceDriverVulkan::rescaleframe_instance_proc());
+            *device = reinterpret_cast<rsf_godot_vk_proc>(RenderingDeviceDriverVulkan::rescaleframe_device_proc());
+        },
+        [](void *opaque, uint64_t rid) -> uint64_t {
+            return static_cast<RD *>(opaque)->get_driver_resource(RD::DRIVER_RESOURCE_TEXTURE, RID::from_uint64(rid));
+        },
+        [](void *opaque, uint64_t rid, rsf_godot_vk_image *out) {
+            auto *rd = static_cast<RD *>(opaque);
+            const RID texture = RID::from_uint64(rid);
+            *out = {rd->get_driver_resource(RD::DRIVER_RESOURCE_TEXTURE, texture),
                 uint32_t(rd->get_driver_resource(RD::DRIVER_RESOURCE_TEXTURE_DATA_FORMAT, texture)), 0, 0,
                 uint32_t((rd->texture_get_format(texture).usage_bits & RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT) != 0)};
-        };
-        facts.vk_color = describe(color);
-        facts.vk_depth = describe(depth);
-        facts.vk_motion = describe(motion);
-        facts.vk_output = describe(output);
-    } else {
-        facts.queue = reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_COMMAND_QUEUE));
-        auto native = [rd](RID texture) -> void * {
-            return texture.is_valid() ? reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_TEXTURE, texture)) : nullptr;
-        };
-        facts.color = native(color);
-        facts.depth = native(depth);
-        facts.motion = native(motion);
-        facts.output = native(output);
-    }
+        },
+    };
+    const uint64_t textures[]{color.get_id(), depth.get_id(), motion.get_id(), output.get_id()};
     auto *packet = memnew(rsf_godot_driver_packet);
-    rsf_godot_packet_prepare(&record, &facts, packet);
+    rsf_godot_packet_prepare(&record, &sources, rd, &textures, packet);
     return packet;
 }
 }

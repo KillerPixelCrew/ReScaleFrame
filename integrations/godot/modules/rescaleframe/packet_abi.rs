@@ -227,31 +227,34 @@ impl Default for rsf_godot_vk_handoff {
     }
 }
 #[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_godot_packet_facts {
-    pub device: *mut ::core::ffi::c_void,
-    pub queue: *mut ::core::ffi::c_void,
-    pub instance: *mut ::core::ffi::c_void,
-    pub physical_device: *mut ::core::ffi::c_void,
-    pub instance_proc: rsf_godot_vk_proc,
-    pub device_proc: rsf_godot_vk_proc,
-    pub color: *mut ::core::ffi::c_void,
-    pub depth: *mut ::core::ffi::c_void,
-    pub motion: *mut ::core::ffi::c_void,
-    pub output: *mut ::core::ffi::c_void,
-    pub vk_color: rsf_godot_vk_image,
-    pub vk_depth: rsf_godot_vk_image,
-    pub vk_motion: rsf_godot_vk_image,
-    pub vk_output: rsf_godot_vk_image,
-}
-impl Default for rsf_godot_packet_facts {
-    fn default() -> Self {
-        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
-        unsafe {
-            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
-            s.assume_init()
-        }
-    }
+#[derive(Default, Copy, Clone)]
+pub struct rsf_godot_packet_sources {
+    pub device: ::core::option::Option<
+        unsafe extern "C" fn(context: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
+    >,
+    pub queue: ::core::option::Option<
+        unsafe extern "C" fn(context: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
+    >,
+    pub vk_context: ::core::option::Option<
+        unsafe extern "C" fn(
+            context: *mut ::core::ffi::c_void,
+            instance: *mut *mut ::core::ffi::c_void,
+            physical_device: *mut *mut ::core::ffi::c_void,
+        ),
+    >,
+    pub vk_procs: ::core::option::Option<
+        unsafe extern "C" fn(instance: *mut rsf_godot_vk_proc, device: *mut rsf_godot_vk_proc),
+    >,
+    pub texture: ::core::option::Option<
+        unsafe extern "C" fn(context: *mut ::core::ffi::c_void, rid: u64) -> u64,
+    >,
+    pub vk_image: ::core::option::Option<
+        unsafe extern "C" fn(
+            context: *mut ::core::ffi::c_void,
+            rid: u64,
+            out: *mut rsf_godot_vk_image,
+        ),
+    >,
 }
 #[repr(C)]
 pub struct rsf_godot_driver_packet {
@@ -271,11 +274,11 @@ impl Default for rsf_godot_driver_packet {
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct rsf_godot_packet_calls {
-    pub begin: ::core::option::Option<
-        unsafe extern "C" fn(
-            context: *mut ::core::ffi::c_void,
-            driver: u32,
-        ) -> *mut ::core::ffi::c_void,
+    pub begin_d3d12: ::core::option::Option<
+        unsafe extern "C" fn(context: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
+    >,
+    pub begin_vulkan: ::core::option::Option<
+        unsafe extern "C" fn(context: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
     >,
     pub end_d3d12: ::core::option::Option<unsafe extern "C" fn(context: *mut ::core::ffi::c_void)>,
     pub handoff: ::core::option::Option<

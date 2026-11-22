@@ -3,12 +3,14 @@
 
 #include "api.h"
 
-typedef struct rsf_godot_packet_facts {
-    void *device, *queue, *instance, *physical_device;
-    rsf_godot_vk_proc instance_proc, device_proc;
-    void *color, *depth, *motion, *output;
-    rsf_godot_vk_image vk_color, vk_depth, vk_motion, vk_output;
-} rsf_godot_packet_facts;
+typedef struct rsf_godot_packet_sources {
+    void *(*device)(void *context);
+    void *(*queue)(void *context);
+    void (*vk_context)(void *context, void **instance, void **physical_device);
+    void (*vk_procs)(rsf_godot_vk_proc *instance, rsf_godot_vk_proc *device);
+    uint64_t (*texture)(void *context, uint64_t rid);
+    void (*vk_image)(void *context, uint64_t rid, rsf_godot_vk_image *out);
+} rsf_godot_packet_sources;
 
 typedef struct rsf_godot_driver_packet {
     uint32_t driver;
@@ -17,7 +19,8 @@ typedef struct rsf_godot_driver_packet {
 } rsf_godot_driver_packet;
 
 typedef struct rsf_godot_packet_calls {
-    void *(*begin)(void *context, uint32_t driver);
+    void *(*begin_d3d12)(void *context);
+    void *(*begin_vulkan)(void *context);
     void (*end_d3d12)(void *context);
     uint32_t (*handoff)(void *context, rsf_godot_vk_handoff *out);
     int (*render_d3d12)(void *device, void *queue, void *commands, const rsf_game_render_pass *pass);
@@ -39,7 +42,8 @@ typedef struct rsf_godot_swapchain_calls {
 #ifdef __cplusplus
 struct rsf_godot_pass_record;
 extern "C" void rsf_godot_packet_prepare(const rsf_godot_pass_record *record,
-        const rsf_godot_packet_facts *facts, rsf_godot_driver_packet *out);
+        const rsf_godot_packet_sources *sources, void *context, const uint64_t (*textures)[4],
+        rsf_godot_driver_packet *out);
 extern "C" void rsf_godot_packet_execute(const rsf_godot_driver_packet *packet,
         const rsf_godot_packet_calls *calls, void *context);
 extern "C" uint32_t rsf_godot_swapchain_setup(rsf_fgvk_setup *setup,
