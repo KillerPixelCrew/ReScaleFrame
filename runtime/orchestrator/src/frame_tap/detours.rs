@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 
-use super::platform::platform;
+use super::platform::{admitted_platform, platform};
 
 // Call an exact STDMETHODCALLTYPE original. The occupied slots were verified against
 // the Windows SDK ID3D11DeviceContext and ID3D11DeviceContext1 C vtables.
@@ -475,25 +475,40 @@ unsafe extern "C" fn rsf_frame_tap_install(
     context: Handle,
     options: *const rsf_frame_tap_options,
 ) -> i32 {
-    unsafe { rsf_core_frame_tap_install(platform(), context, options, DETOURS.as_ptr()) }
+    let Some(platform) = admitted_platform() else {
+        return INVALID;
+    };
+    unsafe { rsf_core_frame_tap_install(platform, context, options, DETOURS.as_ptr()) }
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_frame_tap_set_sampler_bias(bias: f32) -> i32 {
-    rsf_core_frame_tap_set_sampler_bias(platform(), bias)
+    let Some(platform) = admitted_platform() else {
+        return INVALID;
+    };
+    rsf_core_frame_tap_set_sampler_bias(platform, bias)
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_frame_tap_refresh() -> i32 {
-    rsf_core_frame_tap_refresh(platform())
+    let Some(platform) = admitted_platform() else {
+        return INVALID;
+    };
+    rsf_core_frame_tap_refresh(platform)
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_frame_tap_uninstall() -> i32 {
-    rsf_core_frame_tap_uninstall(platform())
+    let Some(platform) = admitted_platform() else {
+        return INVALID;
+    };
+    rsf_core_frame_tap_uninstall(platform)
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_frame_tap_set_divert(setup: *const rsf_frame_tap_divert_setup) -> i32 {
-    unsafe { rsf_core_frame_tap_set_divert(platform(), setup) }
+    let Some(platform) = admitted_platform() else {
+        return INVALID;
+    };
+    unsafe { rsf_core_frame_tap_set_divert(platform, setup) }
 }

@@ -6,7 +6,7 @@ use crate::d3d11_present_abi::rsf_streamline_graphics;
 use crate::d3d12_fence::rsf_core_d3d12_wait_fence;
 use crate::fg_leases::rsf_d3d12_fence_completed;
 use crate::native_fg_abi::*;
-use crate::native_fg_cpu::rsf_native_fg_cpu_platform;
+use crate::native_fg_cpu::NATIVE_PLATFORM as CPU_PLATFORM;
 use crate::native_scene::{rsf_native_scene_classify_present, rsf_native_scene_for_window};
 use crate::native_window::rsf_native_window_match;
 use crate::shared_surface::{
@@ -73,7 +73,7 @@ unsafe extern "C" {
 }
 
 pub(super) static NATIVE_PLATFORM: Platform = Platform {
-    cpu: &rsf_native_fg_cpu_platform,
+    cpu: &CPU_PLATFORM,
     present_has_owner: rsf_d3d11_present_has_owner,
     present_is_owner: rsf_d3d11_present_is_owner,
     present_host: rsf_core_d3d11p_host,

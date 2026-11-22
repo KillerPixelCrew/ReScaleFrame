@@ -180,20 +180,20 @@ unsafe fn fake_remove(_: *mut c_void) {
 }
 
 pub(super) static FAKE: Platform = Platform {
-    parse_json: Some(rsf_patch_parse_json),
-    compile: Some(fake_compile),
-    reflect: Some(fake_reflect),
-    disassemble: Some(fake_disassemble),
-    create_shader: Some(fake_create_shader),
-    create_constant_buffer: Some(fake_buffer),
-    buffer_desc: Some(fake_desc),
-    upload: Some(fake_upload),
-    bind_constant: Some(fake_bind),
-    hooks_ready: Some(fake_ready),
-    hook_create: Some(fake_hook),
-    hook_enable: Some(fake_enable),
-    hook_disable: Some(fake_disable),
-    hook_remove: Some(fake_remove),
+    parse_json: rsf_patch_parse_json,
+    compile: fake_compile,
+    reflect: fake_reflect,
+    disassemble: fake_disassemble,
+    create_shader: fake_create_shader,
+    create_constant_buffer: fake_buffer,
+    buffer_desc: fake_desc,
+    upload: fake_upload,
+    bind_constant: fake_bind,
+    hooks_ready: fake_ready,
+    hook_create: fake_hook,
+    hook_enable: fake_enable,
+    hook_disable: fake_disable,
+    hook_remove: fake_remove,
 };
 
 fn api() -> rsf_shader_patch_api {

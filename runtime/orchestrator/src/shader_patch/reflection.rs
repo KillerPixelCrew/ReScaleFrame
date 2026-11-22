@@ -117,7 +117,7 @@ pub(crate) fn reflect(platform: &Platform, code: &[u8]) -> Option<Shader> {
         variable: Some(on_variable),
         parameter: Some(on_parameter),
     };
-    let reflect = platform.reflect.expect("bound shader patch platform");
+    let reflect = platform.reflect;
     (unsafe { reflect(raw(code), &sink) } == 0).then_some(shader)
 }
 

@@ -4,6 +4,7 @@ mod platform;
 use crate::auxiliary_sr_abi::*;
 use crate::com_ref::ComRef;
 use crate::d3d11_output::SavedBindings;
+use crate::d3d11_output_abi::rsf_d3d11_state;
 use crate::depth_scale::{DepthScale, jitter_valid, rect_valid};
 use rsf_game_sys::d3d11_host_abi::rsf_d3d11_auxiliary_surface;
 use rsf_game_sys::{rsf_game_log_fn, rsf_game_render_pass};
@@ -234,15 +235,72 @@ struct Frame {
     phase: Phase,
 }
 
+struct Platform {
+    immediate_device: unsafe extern "C" fn(context: *mut c_void) -> *mut c_void,
+    device_ready: unsafe extern "C" fn(device: *mut c_void) -> i32,
+    describe_texture: unsafe extern "C" fn(
+        texture: *mut c_void,
+        device: *mut c_void,
+        *mut rsf_aux_texture_facts,
+    ) -> i32,
+    packed_colour_support: unsafe extern "C" fn(device: *mut c_void, flags: *mut u32) -> i32,
+    create_pipeline: unsafe extern "C" fn(
+        device: *mut c_void,
+        rsf_game_log_fn,
+        log_user: *mut c_void,
+        *mut rsf_aux_colour_pipeline,
+    ) -> i32,
+    create_texture: unsafe extern "C" fn(
+        device: *mut c_void,
+        *const rsf_aux_texture_info,
+        usage: u32,
+    ) -> *mut c_void,
+    create_source_view:
+        unsafe extern "C" fn(device: *mut c_void, texture: *mut c_void) -> *mut c_void,
+    create_output_view:
+        unsafe extern "C" fn(device: *mut c_void, texture: *mut c_void) -> *mut c_void,
+    save: unsafe extern "C" fn(context: *mut c_void, *mut rsf_d3d11_state) -> u32,
+    restore: unsafe extern "C" fn(context: *mut c_void, *mut rsf_d3d11_state),
+    clear: unsafe extern "C" fn(context: *mut c_void),
+    copy: unsafe extern "C" fn(context: *mut c_void, destination: *mut c_void, source: *mut c_void),
+    draw: unsafe extern "C" fn(
+        context: *mut c_void,
+        *const rsf_aux_colour_pipeline,
+        view: *mut c_void,
+        target: *mut c_void,
+        *const rsf_aux_draw_constants,
+    ),
+}
+
+impl Platform {
+    fn checked(raw: &rsf_aux_platform) -> Option<Self> {
+        Some(Self {
+            immediate_device: raw.immediate_device?,
+            device_ready: raw.device_ready?,
+            describe_texture: raw.describe_texture?,
+            packed_colour_support: raw.packed_colour_support?,
+            create_pipeline: raw.create_pipeline?,
+            create_texture: raw.create_texture?,
+            create_source_view: raw.create_source_view?,
+            create_output_view: raw.create_output_view?,
+            save: raw.save?,
+            restore: raw.restore?,
+            clear: raw.clear?,
+            copy: raw.copy?,
+            draw: raw.draw?,
+        })
+    }
+}
+
 struct Bindings<'a> {
-    platform: &'a rsf_aux_platform,
+    platform: &'a Platform,
     context: *mut c_void,
     _saved: SavedBindings,
 }
 
 impl<'a> Bindings<'a> {
-    fn new(platform: &'a rsf_aux_platform, context: *mut c_void) -> Option<Self> {
-        let saved = unsafe { SavedBindings::new(context, platform.save?, platform.restore?) }?;
+    fn new(platform: &'a Platform, context: *mut c_void) -> Option<Self> {
+        let saved = unsafe { SavedBindings::new(context, platform.save, platform.restore) }?;
         let bindings = Self {
             platform,
             context,
@@ -253,16 +311,16 @@ impl<'a> Bindings<'a> {
     }
 
     fn clear(&self) {
-        unsafe { self.platform.clear.unwrap()(self.context) };
+        unsafe { (self.platform.clear)(self.context) };
     }
 
     fn copy(&self, destination: Texture, source: Texture) {
-        unsafe { self.platform.copy.unwrap()(self.context, destination, source) };
+        unsafe { (self.platform.copy)(self.context, destination, source) };
     }
 }
 
-fn device_ready(platform: &rsf_aux_platform, device: *mut c_void) -> bool {
-    unsafe { platform.device_ready.unwrap()(device) != 0 }
+fn device_ready(platform: &Platform, device: *mut c_void) -> bool {
+    unsafe { (platform.device_ready)(device) != 0 }
 }
 
 pub(crate) struct AuxiliarySr {
@@ -273,20 +331,20 @@ pub(crate) struct AuxiliarySr {
     pipeline: Option<Pipeline>,
     owner: Option<Owner>,
     depth: Option<Box<DepthScale>>,
-    platform: rsf_aux_platform,
+    platform: Platform,
 }
 
 impl AuxiliarySr {
-    pub(crate) fn new(platform: rsf_aux_platform) -> Self {
-        Self {
-            platform,
+    pub(crate) fn new(platform: &rsf_aux_platform) -> Option<Self> {
+        Some(Self {
+            platform: Platform::checked(platform)?,
             owner: None,
             pipeline: None,
             depth: None,
             colours: [const { None }; MAX_SURFACES],
             backups: [None, None],
             frame: None,
-        }
+        })
     }
 
     fn on_owner_thread(&self) -> bool {
@@ -304,8 +362,7 @@ impl AuxiliarySr {
             return (owner.context.0.as_ptr() == context && owner.thread == thread)
                 .then_some(owner.device.0.as_ptr());
         }
-        let device =
-            unsafe { ComRef::from_owned(self.platform.immediate_device.unwrap()(context)) }?;
+        let device = unsafe { ComRef::from_owned((self.platform.immediate_device)(context)) }?;
         let device_ptr = device.0.as_ptr();
         self.owner = Some(Owner {
             context: unsafe { ComRef::retain(context) },
@@ -318,7 +375,7 @@ impl AuxiliarySr {
     fn texture_info(&self, device: *mut c_void, texture: Texture) -> Option<rsf_aux_texture_info> {
         let mut facts = rsf_aux_texture_facts::default();
         if texture.is_null()
-            || unsafe { self.platform.describe_texture.unwrap()(texture, device, &mut facts) } == 0
+            || unsafe { (self.platform.describe_texture)(texture, device, &mut facts) } == 0
             || facts.same_device == 0
             || facts.array_size != 1
             || facts.mip_levels != 1
@@ -335,7 +392,7 @@ impl AuxiliarySr {
             RSF_AUX_FORMAT_R11G11B10_FLOAT => {
                 // Numeric nearest loads through an SRV and draws into an RTV.
                 let mut flags = 0;
-                (unsafe { self.platform.packed_colour_support.unwrap()(device, &mut flags) } != 0)
+                (unsafe { (self.platform.packed_colour_support)(device, &mut flags) } != 0)
                     && flags & RSF_AUX_PACKED_SUPPORT_MASK == RSF_AUX_PACKED_SUPPORT_MASK
             }
             RSF_AUX_FORMAT_RGBA32_FLOAT
@@ -434,7 +491,7 @@ impl AuxiliarySr {
         desc: &rsf_aux_texture_info,
         usage: u32,
     ) -> Option<ComRef> {
-        unsafe { ComRef::from_owned(self.platform.create_texture.unwrap()(device, desc, usage)) }
+        unsafe { ComRef::from_owned((self.platform.create_texture)(device, desc, usage)) }
     }
 
     fn reserve_backup(
@@ -473,16 +530,13 @@ impl AuxiliarySr {
         let snapshot = self.create_texture(device, &plan.source_desc, RSF_AUX_TEXTURE_SOURCE)?;
         let output = self.create_texture(device, &plan.original_desc, RSF_AUX_TEXTURE_OUTPUT)?;
         let view = unsafe {
-            ComRef::from_owned(self.platform.create_source_view.unwrap()(
+            ComRef::from_owned((self.platform.create_source_view)(
                 device,
                 snapshot.as_ptr(),
             ))
         }?;
         let target = unsafe {
-            ComRef::from_owned(self.platform.create_output_view.unwrap()(
-                device,
-                output.as_ptr(),
-            ))
+            ComRef::from_owned((self.platform.create_output_view)(device, output.as_ptr()))
         }?;
         self.colours[index] = Some(ColourProducts {
             source: Snapshot {
@@ -516,9 +570,7 @@ impl AuxiliarySr {
         }
         if self.pipeline.is_none() {
             let mut pipeline = rsf_aux_colour_pipeline::default();
-            if unsafe { self.platform.create_pipeline.unwrap()(device, log, user, &mut pipeline) }
-                == 0
-            {
+            if unsafe { (self.platform.create_pipeline)(device, log, user, &mut pipeline) } == 0 {
                 return None;
             }
             let (Some(vertex), Some(pixel), Some(raster), Some(constants)) = (unsafe {
@@ -709,7 +761,7 @@ impl AuxiliarySr {
                 }
                 bindings.copy(colour.output.0.as_ptr(), baseline);
                 unsafe {
-                    self.platform.draw.unwrap()(
+                    (self.platform.draw)(
                         bindings.context,
                         &pipeline,
                         colour.view.0.as_ptr(),
@@ -954,7 +1006,10 @@ unsafe extern "C" fn rsf_auxiliary_sr_create(
     let Some(platform) = (unsafe { platform.as_ref() }) else {
         return ptr::null_mut();
     };
-    crate::allocate_handle(AuxiliarySr::new(*platform))
+    let Some(owner) = AuxiliarySr::new(platform) else {
+        return ptr::null_mut();
+    };
+    crate::allocate_handle(owner)
 }
 
 #[unsafe(no_mangle)]
@@ -1138,6 +1193,45 @@ mod tests {
         unsafe { retain(device) }
     }
 
+    unsafe extern "C" fn unused_packed_colour_support(_: *mut c_void, _: *mut u32) -> i32 {
+        unreachable!("fixture does not call packed_colour_support")
+    }
+
+    unsafe extern "C" fn unused_create_pipeline(
+        _: *mut c_void,
+        _: rsf_game_log_fn,
+        _: *mut c_void,
+        _: *mut rsf_aux_colour_pipeline,
+    ) -> i32 {
+        unreachable!("fixture does not call create_pipeline")
+    }
+
+    unsafe extern "C" fn unused_save(_: *mut c_void, _: *mut rsf_d3d11_state) -> u32 {
+        unreachable!("fixture does not call save")
+    }
+
+    unsafe extern "C" fn unused_restore(_: *mut c_void, _: *mut rsf_d3d11_state) {
+        unreachable!("fixture does not call restore")
+    }
+
+    unsafe extern "C" fn unused_clear(_: *mut c_void) {
+        unreachable!("fixture does not call clear")
+    }
+
+    unsafe extern "C" fn unused_copy(_: *mut c_void, _: *mut c_void, _: *mut c_void) {
+        unreachable!("fixture does not call copy")
+    }
+
+    unsafe extern "C" fn unused_draw(
+        _: *mut c_void,
+        _: *const rsf_aux_colour_pipeline,
+        _: *mut c_void,
+        _: *mut c_void,
+        _: *const rsf_aux_draw_constants,
+    ) {
+        unreachable!("fixture does not call draw")
+    }
+
     #[test]
     fn failed_readable_backup_leaves_no_native_surface_leases() {
         // Reuse the fake context interface as the device and every private resource.
@@ -1153,9 +1247,15 @@ mod tests {
             create_texture: Some(create_texture),
             create_source_view: Some(create_view),
             create_output_view: Some(create_view),
-            ..Default::default()
+            packed_colour_support: Some(unused_packed_colour_support),
+            create_pipeline: Some(unused_create_pipeline),
+            save: Some(unused_save),
+            restore: Some(unused_restore),
+            clear: Some(unused_clear),
+            copy: Some(unused_copy),
+            draw: Some(unused_draw),
         };
-        let mut owner = AuxiliarySr::new(platform);
+        let mut owner = AuxiliarySr::new(&platform).expect("complete fixture platform");
         owner.pipeline = Some(Pipeline {
             vertex: unsafe { ComRef::retain(context.raw()) },
             pixel: unsafe { ComRef::retain(context.raw()) },

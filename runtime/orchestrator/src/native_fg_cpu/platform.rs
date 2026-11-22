@@ -6,7 +6,7 @@ use crate::d3d11_present::{
 };
 use crate::d3d11_present_abi::rsf_streamline_graphics;
 use crate::native_cpu::rsf_native_cpu_rendered_source_set;
-use diagnostics::rsf_core_native_fg_stage;
+use diagnostics::report_stage;
 use rsf_game_sys::rsf_frame_allows_fg;
 use std::ffi::c_char;
 use std::ptr::null_mut;
@@ -37,32 +37,59 @@ unsafe extern "C" {
     fn rsf_native_antilag_context_create() -> Handle;
 }
 
-#[unsafe(no_mangle)]
-pub(crate) static rsf_native_fg_cpu_platform: Platform = Platform {
-    has_owner: Some(rsf_core_d3d11p_has_owner),
-    generation: Some(rsf_core_d3d11p_generation),
-    backend: Some(rsf_core_d3d11p_backend),
-    status: Some(rsf_d3d11_present_status_get),
-    device: Some(native_device),
-    adapter_vendor: Some(adapter_vendor),
-    host: Some(rsf_core_d3d11p_host),
-    host_status: Some(rsf_streamline_host_latency_status),
-    host_reflex: Some(rsf_streamline_host_reflex),
-    host_token: Some(rsf_streamline_host_token),
-    host_presented: Some(rsf_streamline_host_presented),
-    host_abort: Some(rsf_streamline_host_abort),
-    host_retire: Some(rsf_streamline_host_retire_through),
-    host_reset: Some(rsf_streamline_host_reset_sources),
-    acquire: Some(rsf_d3d11_present_acquire),
-    pace: Some(rsf_d3d11_present_pace_for_generation),
-    marker: Some(rsf_d3d11_present_marker),
-    input: Some(rsf_d3d11_present_input),
-    receipt: Some(rsf_d3d11_present_receipt),
-    abort: Some(rsf_d3d11_present_abort),
-    create_antilag: Some(rsf_native_antilag_context_create),
+pub(crate) static NATIVE_PLATFORM: Platform = Platform {
+    has_owner: rsf_core_d3d11p_has_owner,
+    generation: rsf_core_d3d11p_generation,
+    backend: rsf_core_d3d11p_backend,
+    status: rsf_d3d11_present_status_get,
+    device: native_device,
+    adapter_vendor: adapter_vendor,
+    host: rsf_core_d3d11p_host,
+    host_status: rsf_streamline_host_latency_status,
+    host_reflex: rsf_streamline_host_reflex,
+    host_token: rsf_streamline_host_token,
+    host_presented: rsf_streamline_host_presented,
+    host_abort: rsf_streamline_host_abort,
+    host_retire: rsf_streamline_host_retire_through,
+    host_reset: rsf_streamline_host_reset_sources,
+    acquire: rsf_d3d11_present_acquire,
+    pace: rsf_d3d11_present_pace_for_generation,
+    marker: rsf_d3d11_present_marker,
+    input: rsf_d3d11_present_input,
+    receipt: rsf_d3d11_present_receipt,
+    abort: rsf_d3d11_present_abort,
+    create_antilag: rsf_native_antilag_context_create,
     fixture_owned_window_thread: None,
     fixture_wait_completion: None,
-    allows_fg: Some(rsf_frame_allows_fg),
+    allows_fg: rsf_frame_allows_fg,
+};
+
+#[unsafe(no_mangle)]
+pub(crate) static rsf_native_fg_cpu_platform: rsf_nfg_cpu_platform = rsf_nfg_cpu_platform {
+    has_owner: Some(NATIVE_PLATFORM.has_owner),
+    generation: Some(NATIVE_PLATFORM.generation),
+    backend: Some(NATIVE_PLATFORM.backend),
+    status: Some(NATIVE_PLATFORM.status),
+    device: Some(NATIVE_PLATFORM.device),
+    adapter_vendor: Some(NATIVE_PLATFORM.adapter_vendor),
+    host: Some(NATIVE_PLATFORM.host),
+    host_status: Some(NATIVE_PLATFORM.host_status),
+    host_reflex: Some(NATIVE_PLATFORM.host_reflex),
+    host_token: Some(NATIVE_PLATFORM.host_token),
+    host_presented: Some(NATIVE_PLATFORM.host_presented),
+    host_abort: Some(NATIVE_PLATFORM.host_abort),
+    host_retire: Some(NATIVE_PLATFORM.host_retire),
+    host_reset: Some(NATIVE_PLATFORM.host_reset),
+    acquire: Some(NATIVE_PLATFORM.acquire),
+    pace: Some(NATIVE_PLATFORM.pace),
+    marker: Some(NATIVE_PLATFORM.marker),
+    input: Some(NATIVE_PLATFORM.input),
+    receipt: Some(NATIVE_PLATFORM.receipt),
+    abort: Some(NATIVE_PLATFORM.abort),
+    create_antilag: Some(NATIVE_PLATFORM.create_antilag),
+    fixture_owned_window_thread: NATIVE_PLATFORM.fixture_owned_window_thread,
+    fixture_wait_completion: NATIVE_PLATFORM.fixture_wait_completion,
+    allows_fg: Some(NATIVE_PLATFORM.allows_fg),
 };
 
 unsafe extern "C" fn native_device() -> Handle {
@@ -109,22 +136,22 @@ unsafe extern "C" fn rsf_native_fg_stage(
     frame: u64,
     result: i32,
 ) {
-    unsafe { rsf_core_native_fg_stage(stage, source, frame, result, &rsf_native_fg_cpu_platform) };
+    unsafe { report_stage(stage, source, frame, result, &NATIVE_PLATFORM) };
 }
 
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_native_fg_cpu(event: *const Event) {
-    unsafe { rsf_core_native_fg_cpu(event, &rsf_native_fg_cpu_platform) };
+    unsafe { fg_cpu(event, &NATIVE_PLATFORM) };
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_native_fg_frame(pass: *const Pass, begin: u32) {
-    unsafe { rsf_core_native_fg_frame(pass, begin, &rsf_native_fg_cpu_platform) };
+    unsafe { fg_frame(pass, begin, &NATIVE_PLATFORM) };
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_native_fg_submission(pass: *const Pass, begin: u32) {
-    unsafe { rsf_core_native_fg_submission(pass, begin, &rsf_native_fg_cpu_platform) };
+    unsafe { fg_submission(pass, begin, &NATIVE_PLATFORM) };
 }
 
 #[unsafe(no_mangle)]
@@ -134,17 +161,17 @@ extern "C" fn rsf_native_latency_graphics(api: u32) {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_native_latency_render(source: u64, begin: u32) {
-    rsf_core_native_latency_render(source, begin, &rsf_native_fg_cpu_platform);
+    latency_render(source, begin, &NATIVE_PLATFORM);
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_native_latency_present(source: u64, chain: Handle, begin: u32) {
-    rsf_core_native_latency_present(source, chain, begin, &rsf_native_fg_cpu_platform);
+    observe_latency_present(source, chain, begin, &NATIVE_PLATFORM);
 }
 
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_native_latency_status_get(out: *mut LatencyStatus) -> i32 {
-    unsafe { rsf_core_native_latency_status_get(out, &rsf_native_fg_cpu_platform) }
+    unsafe { latency_status_get(out, &NATIVE_PLATFORM) }
 }
 
 #[unsafe(no_mangle)]
@@ -154,7 +181,7 @@ unsafe extern "C" fn rsf_native_latency_frame_get(out: *mut LatencyFrame) -> i32
 
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_native_latency_window_bind(binding: *const Window) -> i32 {
-    unsafe { rsf_core_native_latency_window_bind(binding, &rsf_native_fg_cpu_platform) }
+    unsafe { latency_window_bind(binding, &NATIVE_PLATFORM) }
 }
 
 #[unsafe(no_mangle)]
@@ -164,15 +191,15 @@ unsafe extern "C" fn rsf_native_input_routes_get(out: *mut Routes) -> i32 {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_native_latency_ping(window: Handle) -> i32 {
-    rsf_core_native_latency_ping(window, &rsf_native_fg_cpu_platform)
+    latency_ping(window, &NATIVE_PLATFORM)
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_native_latency_retire(session: u64, through: u64) {
-    rsf_core_native_latency_retire(session, through, &rsf_native_fg_cpu_platform);
+    latency_retire(session, through, &NATIVE_PLATFORM);
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_native_latency_end_session(session: u64) {
-    rsf_core_native_latency_end_session(session, &rsf_native_fg_cpu_platform);
+    latency_end_session(session, &NATIVE_PLATFORM);
 }

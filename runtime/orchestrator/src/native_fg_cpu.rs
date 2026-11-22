@@ -31,7 +31,66 @@ use std::mem::zeroed;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex, MutexGuard, OnceLock, PoisonError};
 
-type Platform = rsf_nfg_cpu_platform;
+pub(crate) struct Platform {
+    has_owner: unsafe extern "C" fn() -> i32,
+    generation: unsafe extern "C" fn() -> u64,
+    backend: unsafe extern "C" fn() -> u32,
+    status: unsafe extern "C" fn(*mut rsf_d3d11_present_status) -> i32,
+    device: unsafe extern "C" fn() -> *mut c_void,
+    adapter_vendor: unsafe extern "C" fn(device: *mut c_void) -> u32,
+    host: unsafe extern "C" fn() -> *mut c_void,
+    host_status:
+        unsafe extern "C" fn(host: *mut c_void, status: *mut rsf_streamline_latency_status) -> i32,
+    host_reflex: unsafe extern "C" fn(host: *mut c_void, mode: u32, interval: u32) -> i32,
+    host_token: unsafe extern "C" fn(host: *mut c_void, source: u64) -> *mut c_void,
+    host_presented: unsafe extern "C" fn(host: *mut c_void, source: u64) -> i32,
+    host_abort: unsafe extern "C" fn(host: *mut c_void, source: u64) -> i32,
+    host_retire: unsafe extern "C" fn(host: *mut c_void, through: u64) -> i32,
+    host_reset: unsafe extern "C" fn(host: *mut c_void) -> i32,
+    acquire: unsafe extern "C" fn(source: u64) -> i32,
+    pace: unsafe extern "C" fn(source: u64, pacer: u32, generation: u64) -> i32,
+    marker: unsafe extern "C" fn(generation: u64, source: u64, marker: u32, controller: u32) -> i32,
+    input: unsafe extern "C" fn(source: u64, kind: u32, message: u32) -> i32,
+    receipt: unsafe extern "C" fn(generation: u64, source: u64, kind: u32, message: u32) -> i32,
+    abort: unsafe extern "C" fn(source: u64) -> i32,
+    create_antilag: unsafe extern "C" fn() -> *mut c_void,
+    fixture_owned_window_thread: Option<unsafe extern "C" fn(window_key: u64) -> u32>,
+    fixture_wait_completion:
+        Option<unsafe extern "C" fn(timeout_ms: u32, pump_sent_messages: u32) -> i32>,
+    allows_fg: unsafe extern "C" fn(*const rsf_frame_record) -> i32,
+}
+
+impl Platform {
+    fn checked(raw: &rsf_nfg_cpu_platform) -> Option<Self> {
+        Some(Self {
+            has_owner: raw.has_owner?,
+            generation: raw.generation?,
+            backend: raw.backend?,
+            status: raw.status?,
+            device: raw.device?,
+            adapter_vendor: raw.adapter_vendor?,
+            host: raw.host?,
+            host_status: raw.host_status?,
+            host_reflex: raw.host_reflex?,
+            host_token: raw.host_token?,
+            host_presented: raw.host_presented?,
+            host_abort: raw.host_abort?,
+            host_retire: raw.host_retire?,
+            host_reset: raw.host_reset?,
+            acquire: raw.acquire?,
+            pace: raw.pace?,
+            marker: raw.marker?,
+            input: raw.input?,
+            receipt: raw.receipt?,
+            abort: raw.abort?,
+            create_antilag: raw.create_antilag?,
+            fixture_owned_window_thread: raw.fixture_owned_window_thread,
+            fixture_wait_completion: raw.fixture_wait_completion,
+            allows_fg: raw.allows_fg?,
+        })
+    }
+}
+
 type Event = rsf_game_cpu_event;
 type Pass = rsf_game_render_pass;
 type Reservation = rsf_native_cpu_reservation;
@@ -47,15 +106,16 @@ const INVALID: i32 = RSF_NFG_CPU_INVALID;
 macro_rules! call {
     ($p:expr, $f:ident $(, $a:expr)* $(,)?) => {{
         #[allow(unused_unsafe)]
-        let value = unsafe { ($p.$f.expect(concat!("native FG CPU platform entry ", stringify!($f))))($($a),*) };
+        let value = unsafe { ($p.$f)($($a),*) };
         value
     }};
 }
 
 mod diagnostics;
+mod fixture_calls;
 mod hitch;
 pub(super) mod platform;
-pub(crate) use platform::rsf_native_fg_cpu_platform;
+pub(crate) use platform::NATIVE_PLATFORM;
 mod win32;
 use diagnostics::{Diagnostics, audit, failure, report_latency_window};
 pub(crate) use diagnostics::{Failure, report_timing, sr_failure, stage, trace};
@@ -1034,8 +1094,7 @@ fn route_receipt(p: &Platform, receipt: &rsf_game_cpu_receipt_event) {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_fg_cpu(event: *const Event, p: &Platform) {
+unsafe fn fg_cpu(event: *const Event, p: &Platform) {
     if event.is_null() || unsafe { event.cast::<u32>().read() } < size_of::<Event>() as u32 {
         return;
     }
@@ -1338,8 +1397,7 @@ fn has_pass_size(pass: *const Pass) -> bool {
     !pass.is_null() && unsafe { pass.cast::<u32>().read() } >= size_of::<Pass>() as u32
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_fg_frame(pass: *const Pass, begin: u32, p: &Platform) {
+unsafe fn fg_frame(pass: *const Pass, begin: u32, p: &Platform) {
     if !has_pass_size(pass) {
         return;
     }
@@ -1407,8 +1465,7 @@ fn watch(p: &Platform, pass: &Pass, begin: bool) {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_fg_submission(pass: *const Pass, begin: u32, p: &Platform) {
+unsafe fn fg_submission(pass: *const Pass, begin: u32, p: &Platform) {
     if !has_pass_size(pass) {
         return;
     }
@@ -1476,8 +1533,7 @@ extern "C" fn rsf_core_native_latency_graphics(api: u32) {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_native_latency_render(id: u64, begin: u32, p: &Platform) {
+fn latency_render(id: u64, begin: u32, p: &Platform) {
     if begin != 0 {
         start_render_marker(p, id);
     } else {
@@ -1485,8 +1541,7 @@ extern "C" fn rsf_core_native_latency_render(id: u64, begin: u32, p: &Platform) 
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_native_latency_present(id: u64, chain: Handle, begin: u32, p: &Platform) {
+fn observe_latency_present(id: u64, chain: Handle, begin: u32, p: &Platform) {
     latency_present(p, id, chain, begin != 0);
     if begin == 0 && id != 0 {
         let host = call!(p, host);
@@ -1504,11 +1559,7 @@ fn empty_routes() -> Routes {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_latency_window_bind(
-    binding: *const Window,
-    p: &Platform,
-) -> i32 {
+unsafe fn latency_window_bind(binding: *const Window, p: &Platform) -> i32 {
     if !unsafe { has_capacity(binding) } {
         return INVALID;
     }
@@ -1573,11 +1624,7 @@ fn registered_ping(message: u32) -> bool {
     (0xc000..=0xffff).contains(&message)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_latency_status_get(
-    out: *mut LatencyStatus,
-    p: &Platform,
-) -> i32 {
+unsafe fn latency_status_get(out: *mut LatencyStatus, p: &Platform) -> i32 {
     if !unsafe { has_capacity(out) } || unsafe { (*out).version } != 1 {
         return 0;
     }
@@ -1604,8 +1651,7 @@ unsafe extern "C" fn rsf_core_native_latency_status_get(
     1
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_native_latency_ping(window: Handle, p: &Platform) -> i32 {
+fn latency_ping(window: Handle, p: &Platform) -> i32 {
     i32::from(
         !window.is_null()
             && host_status(p, call!(p, host)).is_some_and(|sdk| {
@@ -1615,8 +1661,7 @@ extern "C" fn rsf_core_native_latency_ping(window: Handle, p: &Platform) -> i32 
     )
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_native_latency_retire(session: u64, through: u64, p: &Platform) {
+fn latency_retire(session: u64, through: u64, p: &Platform) {
     // The caller reports older sources with no submitted GPU work.
     if through == 0 || !owns_session(session) {
         return;
@@ -1637,8 +1682,7 @@ extern "C" fn rsf_core_native_latency_retire(session: u64, through: u64, p: &Pla
     complete(p, through);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_native_latency_end_session(session: u64, p: &Platform) {
+fn latency_end_session(session: u64, p: &Platform) {
     // All producers and leased graphics work have drained. The CPU dispatcher
     // owns admission and can refuse shutdown of a different session.
     if rsf_native_cpu_release_session(session) == 0 {

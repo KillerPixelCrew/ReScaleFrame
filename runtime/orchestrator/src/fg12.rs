@@ -9,8 +9,8 @@ use crate::native_cpu::rsf_native_cpu_read;
 use crate::overlay_abi::rsf_native_latency_status;
 use crate::render_abi::{
     RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO, RSF_FG_FIXED, RSF_FG_OFF, RSF_REFLEX_BOOST,
-    RSF_REFLEX_OFF, rsf_backend_log_fn, rsf_backend_resource, rsf_fg_frame, rsf_fg_status,
-    rsf_native_fg_options, rsf_native_fg_status,
+    RSF_REFLEX_OFF, rsf_backend_log_fn, rsf_backend_resource, rsf_backend_result, rsf_fg_frame,
+    rsf_fg_status, rsf_generation_provider, rsf_native_fg_options, rsf_native_fg_status,
 };
 use crate::scene_abi::rsf_observer_present_event;
 use rsf_game_sys::{
@@ -18,19 +18,79 @@ use rsf_game_sys::{
     RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_FRAME_END,
     RSF_GAME_CPU_INPUT_KEYED, RSF_GAME_CPU_INPUT_SAMPLE, RSF_GAME_CPU_INPUT_SUBSTITUTE,
     RSF_GAME_CPU_PACING, RSF_GAME_CPU_SIMULATION_BEGIN, RSF_GAME_CPU_SIMULATION_END,
-    RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record, rsf_game_cpu_event, rsf_game_latency_event,
-    rsf_game_render_pass,
+    RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record, rsf_game_cpu_event, rsf_game_cpu_event_fn,
+    rsf_game_latency_event, rsf_game_render_pass,
 };
 use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::PathBuf;
 use std::ptr::null_mut;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Mutex, OnceLock};
 
-use std::sync::OnceLock;
+// The bind entry publishes this fully linked Rust table.
+struct Platform {
+    buffer_index: unsafe extern "C" fn(*mut c_void) -> u32,
+    install: unsafe extern "C" fn(*const rsf_d3d11_present_setup, i32) -> i32,
+    allows_fg: unsafe extern "C" fn(*const rsf_frame_record) -> u32,
+    depth_domains: unsafe extern "C" fn(*const rsf_game_render_pass) -> u32,
+    texture_desc: unsafe extern "C" fn(*mut c_void, *mut rsf_fg12_texture_desc),
+    texture: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> *mut c_void,
+    copy: unsafe extern "C" fn(*mut c_void, *mut c_void, u32, *mut c_void, u32),
+    transition: unsafe extern "C" fn(*mut c_void, *mut c_void, u32, u32),
+    fence: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
+    signal: unsafe extern "C" fn(*mut c_void, *mut c_void, u64) -> i32,
+    readback: unsafe extern "C" fn(*mut c_void, *mut rsf_fg12_readback_layout) -> *mut c_void,
+    readback_copy: unsafe extern "C" fn(
+        *mut c_void,
+        *mut c_void,
+        u32,
+        *mut c_void,
+        *const rsf_fg12_readback_layout,
+    ),
+    map: unsafe extern "C" fn(*mut c_void, u64) -> *const u8,
+    unmap: unsafe extern "C" fn(*mut c_void),
+    dump_record: unsafe extern "C" fn(
+        *mut c_void,
+        *mut c_void,
+        u32,
+        *const rsf_frame_record,
+        *const c_char,
+        u32,
+    ),
+    dump_flush: unsafe extern "C" fn(),
+    dump_submitted: unsafe extern "C" fn(*mut c_void, *const rsf_frame_record),
+    dump_prepare: unsafe extern "C" fn(*const rsf_fg_frame, rsf_backend_result),
+    present_queue: unsafe extern "C" fn() -> *mut c_void,
+    source_queue: unsafe extern "C" fn() -> *mut c_void,
+    present_retire:
+        unsafe extern "C" fn(*mut c_void, *mut c_void, *mut *mut c_void, *mut u64) -> i32,
+    is_owner: unsafe extern "C" fn(*mut c_void) -> i32,
+    has_owner: unsafe extern "C" fn() -> i32,
+    present_provider: unsafe extern "C" fn() -> *const rsf_generation_provider,
+    present_backend: unsafe extern "C" fn() -> u32,
+    present_generation: unsafe extern "C" fn() -> u64,
+    host_abort: unsafe extern "C" fn(*mut rsf_streamline_host, u64) -> rsf_backend_result,
+    fg_set_log: unsafe extern "C" fn(rsf_backend_log_fn, *mut c_void),
+    fg_options_set: unsafe extern "C" fn(*const rsf_native_fg_options),
+    fg_cpu: unsafe extern "C" fn(*const rsf_game_cpu_event),
+    latency_status_get: unsafe extern "C" fn(*mut rsf_native_latency_status) -> i32,
+    latency_frame_get: unsafe extern "C" fn(*mut rsf_native_latency_frame) -> i32,
+    latency_graphics: unsafe extern "C" fn(u32),
+    latency_render: unsafe extern "C" fn(u64, u32),
+    latency_present: unsafe extern "C" fn(u64, *mut c_void, u32),
+    latency_end_session: unsafe extern "C" fn(u64),
+    cpu_dispatch:
+        unsafe extern "C" fn(*const rsf_game_cpu_event, rsf_game_cpu_event_fn, *mut c_void) -> i32,
+    dump_poll: unsafe extern "C" fn(),
+    dump_begin_record: unsafe extern "C" fn(*const rsf_frame_record, u32) -> i32,
+    dump_current: unsafe extern "C" fn(*mut rsf_frame_record) -> i32,
+    dump_requested: unsafe extern "C" fn() -> i32,
+    dump_complete: unsafe extern "C" fn(*const rsf_frame_record, i32),
+    dump_result: unsafe extern "C" fn(*const rsf_frame_record, *const c_char, u32, i32),
+}
 
-static PLATFORM: OnceLock<&'static rsf_fg12_calls> = OnceLock::new();
+static PLATFORM: OnceLock<&'static Platform> = OnceLock::new();
 
 #[cfg(not(test))]
 mod native;
@@ -46,7 +106,7 @@ pub(super) use rsf_fg12_platform_bind as bind_native_platform;
 
 macro_rules! native {
     ($operation:ident($($argument:expr),* $(,)?)) => {
-        (PLATFORM.get().unwrap().$operation.unwrap())($($argument),*)
+        (PLATFORM.get().unwrap().$operation)($($argument),*)
     };
 }
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::allocate_handle;
-use crate::dx12_vulkan_interop::{Owner as Interop, checked};
+use crate::dx12_vulkan_interop::{Owner as Interop, Platform as InteropPlatform, checked};
 use crate::dx12_vulkan_interop_abi::rsf_dx12vk_shared_image;
 use crate::frame_capture_vk::sr_capture_inputs;
 use crate::sharpening_policy;
@@ -546,11 +546,14 @@ unsafe fn create_admitted(
     let Some(interop_ops) = (unsafe { ops.interop.as_ref() }) else {
         return INITIALIZATION_FAILED;
     };
+    let Some(interop_ops) = InteropPlatform::checked(interop_ops) else {
+        return INVALID;
+    };
     let interop = match Interop::open(interop_ops, &setup, ops.release_image.unwrap()) {
         Ok(interop) => interop,
         Err(error) => return error,
     };
-    let luid = match Interop::adapter_luid(interop_ops, &setup) {
+    let luid = match interop.device_luid(&setup) {
         Ok(luid) => luid,
         Err(error) => return error,
     };

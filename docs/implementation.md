@@ -51,6 +51,13 @@ teardown paths. The affected ABI bindings and source fixtures were checked.
 Build and runtime validation are pending.
 [C04 source evidence](research/rust-generation-ownership.md)
 
+The C04 callback follow-up types the linked FG12 and shader patch tables and
+checks interop, auxiliary SR, frame tap, and CPU fixture leaves at admission.
+Native FG now holds a typed CPU table. The wire declarations and generated
+bindings are unchanged. Pinned formatting, bindgen regeneration, and locked
+offline metadata passed. Build and fixture validation remain pending.
+[Callback owner audit](research/rust-generation-ownership.md#shared-callback-admission)
+
 The active migration build candidate is `9f53f1b0`. It includes the
 Rust Godot SR and final-scene records and the merged Streamline,
 FidelityFX, Vulkan and Unity batches. Pinned formatting, locked offline

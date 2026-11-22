@@ -18,7 +18,6 @@ use crate::native_cpu::{
 };
 use crate::native_fg_abi::*;
 use crate::native_fg_cpu::{self as cpu_owner, Failure, Frame as CpuOwner};
-use crate::native_fg_cpu_abi::rsf_nfg_cpu_platform;
 use crate::render_abi::{
     RSF_FG_ABI_VERSION, RSF_FG_DYNAMIC, RSF_FG_FIXED, RSF_FG_OFF, RSF_PACING_NONE,
     RSF_PACING_REFLEX, RSF_REFLEX_BOOST, RSF_REFLEX_OFF, rsf_backend_log_fn as Log,
@@ -66,7 +65,7 @@ const STAGING: usize = 4;
 
 // The private native table is fixed for the lifetime of the linked runtime.
 struct Platform {
-    cpu: &'static rsf_nfg_cpu_platform,
+    cpu: &'static cpu_owner::Platform,
     present_has_owner: unsafe extern "C" fn() -> i32,
     present_is_owner: unsafe extern "C" fn(swapchain: *mut ::core::ffi::c_void) -> i32,
     present_host: unsafe extern "C" fn() -> *mut ::core::ffi::c_void,
@@ -341,7 +340,7 @@ fn trace(name: &CStr, source: u64, result: i32) {
     cpu_owner::trace(&name.to_string_lossy(), source, result);
 }
 
-fn cpu_platform(p: &Platform) -> &rsf_nfg_cpu_platform {
+fn cpu_platform(p: &Platform) -> &cpu_owner::Platform {
     // The native graphics callback table supplies a process-lifetime CPU platform.
     p.cpu
 }

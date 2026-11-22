@@ -183,7 +183,7 @@ unsafe extern "C" fn visit(
 pub(crate) fn json(platform: &Platform, data: &[u8]) -> Outcome<Json> {
     let mut builder = Builder::default();
     let text = super::raw(data);
-    let parse = platform.parse_json.expect("bound shader patch platform");
+    let parse = platform.parse_json;
     let parsed = unsafe { parse(text, (&raw mut builder).cast(), Some(visit)) } == 0;
     check(parsed, FORMAT, "invalid JSON")?;
     if let Some(reason) = builder.failed {

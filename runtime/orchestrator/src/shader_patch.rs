@@ -501,7 +501,7 @@ fn compile(
         code: Some(code),
         errors: Some(errors),
     };
-    let result = unsafe { (platform.compile.expect("bound shader patch platform"))(&call) };
+    let result = unsafe { (platform.compile)(&call) };
     match state.code {
         Some(code) if result >= 0 => Ok(code),
         _ => Err(Refusal {

@@ -7,37 +7,54 @@ use windows_sys::Win32::System::Memory::{PAGE_EXECUTE_READWRITE, VirtualProtect}
 use windows_sys::core::GUID;
 
 unsafe extern "C" {
-    fn rsf_frame_tap_foreign_callbacks() -> *const Platform;
+    fn rsf_frame_tap_foreign_callbacks() -> *const rsf_frame_tap_platform;
 }
 
 pub(super) fn platform() -> &'static Platform {
-    static PLATFORM: OnceLock<Platform> = OnceLock::new();
-    PLATFORM.get_or_init(|| Platform {
-        patch: Some(patch_slot),
-        context1: Some(context1),
-        texture_behind: Some(texture_behind),
-        view_resource: Some(view_resource),
-        texture_facts: Some(texture_facts),
-        target_view_format: Some(target_format),
-        buffer_width: Some(buffer_width),
-        shader_views: Some(shader_views),
-        set_shader_views: Some(set_shader_views),
-        set_targets: Some(set_targets),
-        set_viewports: Some(set_viewports),
-        set_scissors: Some(set_scissors),
-        viewport: Some(viewport),
-        set_blend: Some(set_blend),
-        save_output: Some(save_output),
-        patch_blend: Some(patch_blend),
-        stage_constants: Some(stage_constants),
-        bind_constants: Some(bind_constants),
-        seed_geometry: Some(seed_geometry),
-        draw: Some(draw),
-        samplers: Some(samplers),
-        set_samplers: Some(set_shader_views),
-        clone_sampler: Some(clone_sampler),
-        // The C++ boundary contains exceptions from foreign C ABI callbacks.
-        ..unsafe { *rsf_frame_tap_foreign_callbacks() }
+    admitted_platform().expect("frame tap install admits the platform before patching")
+}
+
+pub(super) fn admitted_platform() -> Option<&'static Platform> {
+    static PLATFORM: OnceLock<Option<Platform>> = OnceLock::new();
+    PLATFORM.get_or_init(check_platform).as_ref()
+}
+
+fn check_platform() -> Option<Platform> {
+    // The C++ boundary contains exceptions from foreign C ABI callbacks.
+    let foreign = unsafe { rsf_frame_tap_foreign_callbacks().as_ref() }?;
+    Some(Platform {
+        patch: patch_slot,
+        context1,
+        texture_behind,
+        view_resource,
+        texture_facts,
+        target_view_format: target_format,
+        buffer_width,
+        shader_views,
+        set_shader_views,
+        set_targets,
+        set_viewports,
+        set_scissors,
+        viewport,
+        set_blend,
+        save_output,
+        patch_blend,
+        stage_constants,
+        bind_constants,
+        seed_geometry,
+        draw,
+        samplers,
+        set_samplers: set_shader_views,
+        clone_sampler,
+        log: foreign.log?,
+        pass: foreign.pass?,
+        report: foreign.report?,
+        geometry: foreign.geometry?,
+        compute: foreign.compute?,
+        constants: foreign.constants?,
+        gate: foreign.gate?,
+        verdict: foreign.verdict?,
+        override_constants: foreign.override_constants?,
     })
 }
 

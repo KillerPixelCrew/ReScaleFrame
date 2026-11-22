@@ -422,8 +422,7 @@ pub(crate) fn stage(
     log.say(&row);
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_native_fg_stage(
+pub(super) unsafe fn report_stage(
     name: *const c_char,
     source: u64,
     native: u64,

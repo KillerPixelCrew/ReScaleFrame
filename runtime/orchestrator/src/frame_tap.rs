@@ -12,7 +12,7 @@ use crate::resource_roles_abi::{
 };
 use std::cell::{Cell, UnsafeCell};
 use std::collections::BTreeMap;
-use std::ffi::{CString, c_void};
+use std::ffi::{CString, c_char, c_void};
 use std::mem::{MaybeUninit, transmute_copy, zeroed};
 use std::ptr::{null, null_mut};
 use std::slice;
@@ -21,7 +21,142 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicUsize};
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 
 type Handle = *mut c_void;
-type Platform = rsf_frame_tap_platform;
+struct Platform {
+    patch:
+        unsafe extern "C" fn(vtable: *mut *mut c_void, slot: u32, replacement: *mut c_void) -> i32,
+    context1: unsafe extern "C" fn(context: *mut c_void) -> i32,
+    texture_behind: unsafe extern "C" fn(view: *mut c_void) -> *mut c_void,
+    view_resource: unsafe extern "C" fn(view: *mut c_void) -> *mut c_void,
+    texture_facts: unsafe extern "C" fn(texture: *mut c_void, facts: *mut rsf_texture_facts),
+    target_view_format: unsafe extern "C" fn(view: *mut c_void) -> u32,
+    buffer_width: unsafe extern "C" fn(resource: *mut c_void, bind_flags: *mut u32) -> u32,
+    shader_views: unsafe extern "C" fn(context: *mut c_void, views: *mut *mut c_void),
+    set_shader_views: unsafe extern "C" fn(
+        original: *mut c_void,
+        context: *mut c_void,
+        start: u32,
+        count: u32,
+        views: *const *mut c_void,
+    ),
+    set_targets: unsafe extern "C" fn(
+        original: *mut c_void,
+        context: *mut c_void,
+        count: u32,
+        views: *const *mut c_void,
+        depth: *mut c_void,
+        uavs: *const rsf_frame_tap_uavs,
+    ),
+    set_viewports: unsafe extern "C" fn(
+        original: *mut c_void,
+        context: *mut c_void,
+        count: u32,
+        viewports: *const rsf_frame_tap_viewport,
+    ),
+    set_scissors: unsafe extern "C" fn(
+        original: *mut c_void,
+        context: *mut c_void,
+        count: u32,
+        rectangles: *const rsf_frame_tap_rect,
+    ),
+    viewport:
+        unsafe extern "C" fn(context: *mut c_void, viewport: *mut rsf_frame_tap_viewport) -> u32,
+    set_blend: unsafe extern "C" fn(
+        context: *mut c_void,
+        blend: *mut c_void,
+        factor: *const f32,
+        mask: u32,
+    ),
+    save_output: unsafe extern "C" fn(context: *mut c_void, output: *mut rsf_frame_tap_output),
+    patch_blend: unsafe extern "C" fn(
+        context: *mut c_void,
+        blend: *mut c_void,
+        log: *mut rsf_frame_tap_blend_log,
+    ) -> *mut c_void,
+    stage_constants: unsafe extern "C" fn(
+        context: *mut c_void,
+        geometry: *mut *mut c_void,
+        hull: *mut *mut c_void,
+        domain: *mut *mut c_void,
+    ),
+    bind_constants: unsafe extern "C" fn(
+        original: *mut c_void,
+        context: *mut c_void,
+        stage: u32,
+        slot: u32,
+        buffer: *mut c_void,
+    ),
+    seed_geometry: unsafe extern "C" fn(
+        context: *mut c_void,
+        geometry: *mut rsf_frame_tap_geometry,
+        pixel_constants: *mut *mut c_void,
+    ),
+    draw: unsafe extern "C" fn(
+        original: *mut c_void,
+        context: *mut c_void,
+        call: *const rsf_frame_tap_draw_call,
+    ),
+    samplers: unsafe extern "C" fn(context: *mut c_void, samplers: *mut *mut c_void),
+    set_samplers: unsafe extern "C" fn(
+        original: *mut c_void,
+        context: *mut c_void,
+        start: u32,
+        count: u32,
+        samplers: *const *mut c_void,
+    ),
+    clone_sampler:
+        unsafe extern "C" fn(context: *mut c_void, sampler: *mut c_void, bias: f32) -> *mut c_void,
+    log: unsafe extern "C" fn(fn_: rsf_frame_tap_log_fn, user: *mut c_void, message: *const c_char),
+    pass: unsafe extern "C" fn(
+        fn_: rsf_frame_tap_fn,
+        user: *mut c_void,
+        pass: *const rsf_frame_tap_pass,
+    ),
+    report: unsafe extern "C" fn(
+        fn_: rsf_frame_tap_target_fn,
+        user: *mut c_void,
+        draw: *const rsf_frame_tap_target_draw,
+    ),
+    geometry: unsafe extern "C" fn(
+        fn_: rsf_frame_tap_geometry_fn,
+        user: *mut c_void,
+        geometry: *const rsf_frame_tap_geometry,
+    ),
+    compute: unsafe extern "C" fn(
+        fn_: rsf_frame_tap_compute_fn,
+        user: *mut c_void,
+        context: *mut c_void,
+        x: u32,
+        y: u32,
+        z: u32,
+        arguments: *mut c_void,
+        offset: u32,
+    ),
+    constants: unsafe extern "C" fn(
+        fn_: rsf_frame_tap_constants_fn,
+        user: *mut c_void,
+        buffer: *mut c_void,
+        contents: *mut c_void,
+        bytes: u32,
+    ),
+    gate: unsafe extern "C" fn(
+        fn_: rsf_frame_tap_gate_fn,
+        user: *mut c_void,
+        context: *mut c_void,
+        texture: *mut c_void,
+    ) -> i32,
+    verdict: unsafe extern "C" fn(
+        fn_: rsf_frame_tap_verdict_fn,
+        user: *mut c_void,
+        draw: *const rsf_frame_tap_target_draw,
+    ) -> rsf_frame_tap_verdict,
+    override_constants: unsafe extern "C" fn(
+        fn_: rsf_frame_tap_constant_override_fn,
+        user: *mut c_void,
+        draw: *const rsf_frame_tap_target_draw,
+        slots: *mut u32,
+        buffers: *mut *mut c_void,
+    ) -> i32,
+}
 
 const OK: i32 = 0;
 const INVALID: i32 = -1;
@@ -320,7 +455,7 @@ fn patch(platform: &Platform, vtable: *mut Handle, hook: usize, replacement: Han
     let slot = HOOK_TABLE.slots[hook].load(Relaxed);
     let current = unsafe { vtable.add(slot).read_volatile() };
     HOOK_TABLE.originals[hook].store(current, Release);
-    unsafe { (platform.patch.unwrap())(vtable, slot as u32, replacement) != 0 }
+    unsafe { (platform.patch)(vtable, slot as u32, replacement) != 0 }
 }
 
 // Put back the originals of patched hooks, in the given order.
@@ -331,7 +466,7 @@ fn restore(platform: &Platform, vtable: *mut Handle, hooks: impl Iterator<Item =
             continue;
         }
         let slot = HOOK_TABLE.slots[hook].load(Relaxed) as u32;
-        if unsafe { (platform.patch.unwrap())(vtable, slot, original(hook)) } != 0 {
+        if unsafe { (platform.patch)(vtable, slot, original(hook)) } != 0 {
             HOOK_TABLE.replacements[hook].store(null_mut(), Release);
         } else {
             restored = false;
@@ -568,7 +703,7 @@ fn say(platform: &Platform, message: impl FnOnce() -> String) {
         return;
     }
     if let Ok(message) = CString::new(message()) {
-        unsafe { (platform.log.unwrap())(options.log, options.log_user, message.as_ptr()) };
+        unsafe { (platform.log)(options.log, options.log_user, message.as_ptr()) };
     }
 }
 
@@ -769,9 +904,8 @@ impl Samplers {
             self.clones.remove(&(previous.as_ptr() as usize));
         }
         entry.bias = bias;
-        let clone = unsafe {
-            ComRef::from_owned((platform.clone_sampler.unwrap())(context, original, bias))
-        };
+        let clone =
+            unsafe { ComRef::from_owned((platform.clone_sampler)(context, original, bias)) };
         let Some(clone) = clone else {
             return original;
         };
@@ -783,12 +917,12 @@ impl Samplers {
 }
 
 fn texture_behind(platform: &Platform, view: Handle) -> Option<ComRef> {
-    unsafe { ComRef::from_owned((platform.texture_behind.unwrap())(view)) }
+    unsafe { ComRef::from_owned((platform.texture_behind)(view)) }
 }
 
 fn facts_of(platform: &Platform, texture: Handle) -> rsf_texture_facts {
     let mut facts = ZERO_FACTS;
-    unsafe { (platform.texture_facts.unwrap())(texture, &mut facts) };
+    unsafe { (platform.texture_facts)(texture, &mut facts) };
     facts
 }
 
@@ -861,8 +995,7 @@ fn open_gates_for(platform: &Platform, context: Handle, texture: Handle) -> bool
         }
         if on_gate.is_some() && !asked {
             // Under the caller's reentry guard. A decline leaves the gate shut for the next binding.
-            accepted =
-                unsafe { (platform.gate.unwrap())(on_gate, on_gate_user, context, texture) != 0 };
+            accepted = unsafe { (platform.gate)(on_gate, on_gate_user, context, texture) != 0 };
             asked = true;
             if TAP.plan_generation.load(SeqCst) != generation {
                 return false;
@@ -928,17 +1061,13 @@ fn apply_viewport_policy(platform: &Platform, render: &Render, context: Handle) 
     if render.game_viewport_count > 0 && !set_viewports.is_null() {
         let count = render.game_viewport_count;
         let scaled = scale_viewports(&render.game_viewports[..count], scale_x, scale_y);
-        unsafe {
-            (platform.set_viewports.unwrap())(set_viewports, context, count as u32, scaled.as_ptr())
-        };
+        unsafe { (platform.set_viewports)(set_viewports, context, count as u32, scaled.as_ptr()) };
     }
     let set_scissors = original(HOOK_SCISSORS);
     if render.game_scissor_count > 0 && !set_scissors.is_null() {
         let count = render.game_scissor_count;
         let scaled = scale_scissors(&render.game_scissors[..count], scale_x, scale_y);
-        unsafe {
-            (platform.set_scissors.unwrap())(set_scissors, context, count as u32, scaled.as_ptr())
-        };
+        unsafe { (platform.set_scissors)(set_scissors, context, count as u32, scaled.as_ptr()) };
     }
 }
 
@@ -1021,7 +1150,7 @@ fn shadow_target(platform: &Platform, render: &mut Render, view: Handle, resolve
     }
     render.target_texture = texture;
     // For a typeless target the view, not the texture, says whether output is encoded.
-    render.target_view_format = unsafe { (platform.target_view_format.unwrap())(view) };
+    render.target_view_format = unsafe { (platform.target_view_format)(view) };
 }
 
 // A pass that writes output slot zero cannot read it; clear that hazard from the shadow.
@@ -1152,9 +1281,9 @@ fn patched_blend_for(
         return null_mut();
     }
     let mut log: rsf_frame_tap_blend_log = unsafe { zeroed() };
-    let Some(patched) = (unsafe {
-        ComRef::from_owned((platform.patch_blend.unwrap())(context, original, &mut log))
-    }) else {
+    let Some(patched) =
+        (unsafe { ComRef::from_owned((platform.patch_blend)(context, original, &mut log)) })
+    else {
         return null_mut();
     };
     let raw = patched.as_ptr();
@@ -1204,9 +1333,8 @@ fn begin_divert(
     if !divert.armed.load(Relaxed) || verdict_fn.is_none() {
         return false;
     }
-    let verdict = unsafe {
-        (platform.verdict.unwrap())(verdict_fn, divert.verdict_user.load(Relaxed), facts)
-    };
+    let verdict =
+        unsafe { (platform.verdict)(verdict_fn, divert.verdict_user.load(Relaxed), facts) };
     if verdict == LEAVE {
         return false;
     }
@@ -1227,7 +1355,7 @@ fn begin_divert(
 
     // Saved from the context: what goes back is exactly what was bound, all eight targets.
     let mut saved: rsf_frame_tap_output = unsafe { zeroed() };
-    unsafe { (platform.save_output.unwrap())(context, &mut saved) };
+    unsafe { (platform.save_output)(context, &mut saved) };
     let mut blend = saved.blend;
     if verdict == DIVERT_PATCH_ALPHA {
         blend = patched_blend_for(platform, render, context, saved.blend);
@@ -1241,7 +1369,7 @@ fn begin_divert(
 
     // No depth: the interface is an overlay on the layer, and the scene's depth has another extent.
     unsafe {
-        (platform.set_targets.unwrap())(
+        (platform.set_targets)(
             original(HOOK_TARGETS),
             context,
             1,
@@ -1249,7 +1377,7 @@ fn begin_divert(
             null_mut(),
             null(),
         );
-        (platform.set_blend.unwrap())(
+        (platform.set_blend)(
             context,
             blend,
             saved.blend_factor.as_ptr(),
@@ -1270,19 +1398,12 @@ fn begin_divert(
         let scale_y = layer_height as f32 / target_height as f32;
         let count = (saved.viewport_count as usize).min(VIEWPORTS);
         let viewports = scale_viewports(&saved.viewports[..count], scale_x, scale_y);
-        unsafe {
-            (platform.set_viewports.unwrap())(null_mut(), context, count as u32, viewports.as_ptr())
-        };
+        unsafe { (platform.set_viewports)(null_mut(), context, count as u32, viewports.as_ptr()) };
         if saved.scissor_count >= 1 {
             let count = (saved.scissor_count as usize).min(VIEWPORTS);
             let scissors = scale_scissors(&saved.scissors[..count], scale_x, scale_y);
             unsafe {
-                (platform.set_scissors.unwrap())(
-                    null_mut(),
-                    context,
-                    count as u32,
-                    scissors.as_ptr(),
-                )
+                (platform.set_scissors)(null_mut(), context, count as u32, scissors.as_ptr())
             };
         }
     }
@@ -1296,7 +1417,7 @@ fn end_divert(platform: &Platform, render: &mut Render, context: Handle) {
         return;
     };
     unsafe {
-        (platform.set_targets.unwrap())(
+        (platform.set_targets)(
             original(HOOK_TARGETS),
             context,
             TARGETS,
@@ -1304,14 +1425,14 @@ fn end_divert(platform: &Platform, render: &mut Render, context: Handle) {
             saved.depth_view,
             null(),
         );
-        (platform.set_blend.unwrap())(
+        (platform.set_blend)(
             context,
             saved.blend,
             saved.blend_factor.as_ptr(),
             saved.blend_mask,
         );
         if saved.viewport_count >= 1 {
-            (platform.set_viewports.unwrap())(
+            (platform.set_viewports)(
                 null_mut(),
                 context,
                 saved.viewport_count,
@@ -1319,7 +1440,7 @@ fn end_divert(platform: &Platform, render: &mut Render, context: Handle) {
             );
         }
         if saved.scissor_count >= 1 {
-            (platform.set_scissors.unwrap())(
+            (platform.set_scissors)(
                 null_mut(),
                 context,
                 saved.scissor_count,
@@ -1348,7 +1469,7 @@ fn try_divert(
 // Geometry, hull and domain constants, asked only on a draw that is offered.
 fn stage_constants(platform: &Platform, context: Handle, facts: &mut rsf_frame_tap_target_draw) {
     unsafe {
-        (platform.stage_constants.unwrap())(
+        (platform.stage_constants)(
             context,
             facts.geometry_constants.as_mut_ptr(),
             facts.hull_constants.as_mut_ptr(),
@@ -1366,7 +1487,7 @@ fn bind_override(platform: &Platform, context: Handle, encoded: u32, buffer: Han
         _ => null_mut(),
     };
     unsafe {
-        (platform.bind_constants.unwrap())(
+        (platform.bind_constants)(
             setter,
             context,
             stage,
@@ -1417,7 +1538,7 @@ fn begin_constant_override(
     let mut slots = [0u32; CONSTANT_SLOTS];
     let mut buffers = [null_mut(); CONSTANT_SLOTS];
     let asked = unsafe {
-        (platform.override_constants.unwrap())(
+        (platform.override_constants)(
             callback,
             TAP.constant_override_user.load(Relaxed),
             &facts,
@@ -1553,7 +1674,7 @@ fn consider_target_draw(
     collect_inputs(render, &mut report, &mut inputs);
     // The one fact the shadow cannot supply, asked only on a reported draw.
     let mut viewport = ZERO_VIEWPORT;
-    if unsafe { (platform.viewport.unwrap())(context, &mut viewport) } >= 1 {
+    if unsafe { (platform.viewport)(context, &mut viewport) } >= 1 {
         report.viewport_x = viewport.x;
         report.viewport_y = viewport.y;
         report.viewport_width = viewport.width as u32;
@@ -1564,21 +1685,17 @@ fn consider_target_draw(
     // distinguishes.
     if report_target {
         bump(TARGET_DRAWS);
-        unsafe {
-            (platform.report.unwrap())(options.on_target_draw, options.on_target_draw_user, &report)
-        };
+        unsafe { (platform.report)(options.on_target_draw, options.on_target_draw_user, &report) };
     }
     if report_input {
         report.watch_index = WATCH_SLOTS as u32;
-        unsafe {
-            (platform.report.unwrap())(options.on_input_draw, options.on_input_draw_user, &report)
-        };
+        unsafe { (platform.report)(options.on_input_draw, options.on_input_draw_user, &report) };
     }
     if report_candidate {
         // Reported for what it is made of, not because anyone named its target.
         report.watch_index = WATCH_SLOTS as u32;
         unsafe {
-            (platform.report.unwrap())(
+            (platform.report)(
                 options.on_candidate_draw,
                 options.on_candidate_draw_user,
                 &report,
@@ -1596,7 +1713,7 @@ fn consider_target_draw(
         report.vertex_constants = render.geometry.vertex_constants;
         report.pixel_constants = render.pixel_constants;
         stage_constants(platform, context, &mut report);
-        unsafe { (platform.report.unwrap())(research, TAP.research_user.load(Relaxed), &report) };
+        unsafe { (platform.report)(research, TAP.research_user.load(Relaxed), &report) };
     }
 }
 
@@ -1676,7 +1793,7 @@ fn sync_shadow(platform: &Platform, render: &mut Render, context: Handle) {
         return;
     }
     let mut views = [null_mut(); VIEWS];
-    unsafe { (platform.shader_views.unwrap())(context, views.as_mut_ptr()) };
+    unsafe { (platform.shader_views)(context, views.as_mut_ptr()) };
     for (index, view) in views.into_iter().enumerate() {
         if let Some(view) = unsafe { ComRef::from_owned(view) } {
             shadow_view(platform, render, index, view.as_ptr(), None);
@@ -1852,7 +1969,7 @@ fn consider_bound_set(platform: &Platform, render: &mut Render, context: Handle)
     // No lock across the callback: it calls back into D3D. `live` can be stale, which narrows the
     // window in which a detached caller is still called rather than closing it.
     if live {
-        unsafe { (platform.pass.unwrap())(options.on_pass, options.on_pass_user, &pass) };
+        unsafe { (platform.pass)(options.on_pass, options.on_pass_user, &pass) };
     }
 }
 
@@ -1860,7 +1977,7 @@ fn consider_bound_set(platform: &Platform, render: &mut Render, context: Handle)
 // list. The context owns the live bindings.
 fn seed_geometry(platform: &Platform, render: &mut Render, context: Handle) {
     unsafe {
-        (platform.seed_geometry.unwrap())(
+        (platform.seed_geometry)(
             context,
             &mut render.geometry,
             render.pixel_constants.as_mut_ptr(),
@@ -1933,9 +2050,7 @@ fn report_geometry(
     geometry.start_instance = call.first_instance;
     geometry.indirect_buffer = indirect;
     geometry.indirect_offset = offset;
-    unsafe {
-        (platform.geometry.unwrap())(options.on_geometry, options.on_geometry_user, geometry)
-    };
+    unsafe { (platform.geometry)(options.on_geometry, options.on_geometry_user, geometry) };
 }
 
 // Command lists and ClearState invalidate all observation until the engine binds again.
@@ -2029,7 +2144,7 @@ impl ConstantWatch {
                 rsf_frame_tap_call_constant_observer(callback, self.user, resource, data, bytes)
             },
             ConstantCallback::Legacy(callback, _) => unsafe {
-                (platform.constants.unwrap())(callback, self.user, resource, data.cast_mut(), bytes)
+                (platform.constants)(callback, self.user, resource, data.cast_mut(), bytes)
             },
         }
     }
@@ -2051,7 +2166,7 @@ fn watched_buffer(platform: &Platform, render: &mut Render, resource: Handle, wa
         return 0;
     }
     let mut bind_flags = 0;
-    let width = unsafe { (platform.buffer_width.unwrap())(resource, &mut bind_flags) };
+    let width = unsafe { (platform.buffer_width)(resource, &mut bind_flags) };
     let wanted = if watched == 0 {
         width <= 4096
     } else {
@@ -2170,7 +2285,7 @@ unsafe fn rsf_core_frame_tap_install(
     HOOK_TABLE
         .sentinel
         .store(hooks[HOOK_DRAW].replacement, Relaxed);
-    let context1 = unsafe { (platform.context1.unwrap())(context) } != 0;
+    let context1 = unsafe { (platform.context1)(context) } != 0;
     // Every slot at once, undone as a unit: bindings and draws only mean anything together.
     for (hook, entry) in hooks.iter().enumerate() {
         HOOK_TABLE.replacements[hook].store(null_mut(), Relaxed);
@@ -2303,15 +2418,13 @@ fn rsf_core_frame_tap_set_sampler_bias(platform: &Platform, bias: f32) -> i32 {
     // here. Every slot is resolved to its original before any is re-biased: re-biasing drops the
     // old clone's mapping, and a later slot holding it would be biased twice.
     let mut current = [null_mut(); SAMPLERS];
-    unsafe { (platform.samplers.unwrap())(context, current.as_mut_ptr()) };
+    unsafe { (platform.samplers)(context, current.as_mut_ptr()) };
     let current = current.map(|sampler| unsafe { ComRef::from_owned(sampler) });
     let originals = current
         .each_ref()
         .map(|sampler| state.original_of(sampler.as_ref().map_or(null_mut(), ComRef::as_ptr)));
     let bound = originals.map(|sampler| state.biased(platform, context, sampler));
-    unsafe {
-        (platform.set_samplers.unwrap())(forward, context, 0, SAMPLERS as u32, bound.as_ptr())
-    };
+    unsafe { (platform.set_samplers)(forward, context, 0, SAMPLERS as u32, bound.as_ptr()) };
     drop(current);
     TAP.sampler_bias_active.store(bias != 0.0, Release);
     OK
@@ -2711,7 +2824,7 @@ unsafe fn rsf_core_frame_tap_views(
                 .and_then(|slot| slot.texture.as_ref())
                 .map(ComRef::as_ptr);
             let texture = known.unwrap_or_else(|| {
-                let texture = unsafe { (platform.texture_behind.unwrap())(view) };
+                let texture = unsafe { (platform.texture_behind)(view) };
                 resolved.handles[index] = MaybeUninit::new(texture);
                 texture
             });
@@ -2728,7 +2841,7 @@ unsafe fn rsf_core_frame_tap_views(
         }
     }
     // Forwarded before the shadow, so it is in place before a callback binds something else.
-    unsafe { (platform.set_shader_views.unwrap())(forward, context, start, count, forwarded) };
+    unsafe { (platform.set_shader_views)(forward, context, start, count, forwarded) };
 
     if inside() || !admitted {
         return;
@@ -2878,9 +2991,7 @@ unsafe fn rsf_core_frame_tap_targets(
             )
         }
     };
-    unsafe {
-        (platform.set_targets.unwrap())(forward, context, count, forwarded, forwarded_depth, uavs)
-    };
+    unsafe { (platform.set_targets)(forward, context, count, forwarded, forwarded_depth, uavs) };
     if inside() || !admitted || keeps {
         return;
     }
@@ -2914,7 +3025,7 @@ unsafe fn rsf_core_frame_tap_viewports(
     }
     let admission = Admission::enter(context);
     if inside() || admission.is_none() || !TAP.plan_active.load(SeqCst) {
-        unsafe { (platform.set_viewports.unwrap())(forward, context, count, viewports) };
+        unsafe { (platform.set_viewports)(forward, context, count, viewports) };
         return;
     }
     let _guard = Reentry::enter();
@@ -2928,7 +3039,7 @@ unsafe fn rsf_core_frame_tap_viewports(
         render.game_viewport_count = kept;
     }
     if !TAP.target_substituted.load(Relaxed) || render.game_viewport_count == 0 {
-        unsafe { (platform.set_viewports.unwrap())(forward, context, count, viewports) };
+        unsafe { (platform.set_viewports)(forward, context, count, viewports) };
         return;
     }
     apply_viewport_policy(platform, render, context);
@@ -2947,7 +3058,7 @@ unsafe fn rsf_core_frame_tap_scissors(
     }
     let admission = Admission::enter(context);
     if inside() || admission.is_none() || !TAP.plan_active.load(SeqCst) {
-        unsafe { (platform.set_scissors.unwrap())(forward, context, count, rectangles) };
+        unsafe { (platform.set_scissors)(forward, context, count, rectangles) };
         return;
     }
     let _guard = Reentry::enter();
@@ -2960,7 +3071,7 @@ unsafe fn rsf_core_frame_tap_scissors(
         render.game_scissor_count = kept;
     }
     if !TAP.target_substituted.load(Relaxed) || render.game_scissor_count == 0 {
-        unsafe { (platform.set_scissors.unwrap())(forward, context, count, rectangles) };
+        unsafe { (platform.set_scissors)(forward, context, count, rectangles) };
         return;
     }
     apply_viewport_policy(platform, render, context);
@@ -3019,7 +3130,7 @@ fn rsf_core_frame_tap_draw(
     if original(hook).is_null() {
         return;
     }
-    let forward = || unsafe { (platform.draw.unwrap())(original(hook), context, call) };
+    let forward = || unsafe { (platform.draw)(original(hook), context, call) };
     let admission = Admission::enter(context);
     if inside() || admission.is_none() {
         forward();
@@ -3231,7 +3342,7 @@ unsafe fn rsf_core_frame_tap_pixel_constants(
         // The most recent of the size: older ones describe a frame nobody asked about. Which of
         // them holds view data is the caller's question.
         let mut bind_flags = 0;
-        if unsafe { (platform.buffer_width.unwrap())(buffer, &mut bind_flags) } == wanted {
+        if unsafe { (platform.buffer_width)(buffer, &mut bind_flags) } == wanted {
             view = buffer;
         }
     }
@@ -3354,7 +3465,7 @@ fn rsf_core_frame_tap_dispatch(
     };
     let _guard = Reentry::enter();
     unsafe {
-        (platform.compute.unwrap())(
+        (platform.compute)(
             compute,
             TAP.research_user.load(Relaxed),
             context,
@@ -3373,7 +3484,7 @@ fn promoted(platform: &Platform, resource: Handle) -> Option<ComRef> {
     if view.is_null() {
         return None;
     }
-    unsafe { ComRef::from_owned((platform.view_resource.unwrap())(view)) }
+    unsafe { ComRef::from_owned((platform.view_resource)(view)) }
 }
 
 // A copy between promoted textures goes between their stand-ins, so a result copied from one

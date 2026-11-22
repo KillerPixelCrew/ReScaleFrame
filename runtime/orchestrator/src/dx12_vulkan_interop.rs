@@ -21,9 +21,84 @@ const IMAGE_SLOTS: usize = 24;
 
 type Handle = *mut c_void;
 type Callbacks = rsf_dx12vk_interop_callbacks;
-type Platform = rsf_dx12vk_platform;
+pub(super) struct Platform {
+    adapter_luid: unsafe extern "C" fn(*const rsf_srvk_setup, *mut u64) -> i32,
+    open: unsafe extern "C" fn(*const rsf_srvk_setup, *mut *mut c_void) -> i32,
+    close: unsafe extern "C" fn(*mut c_void),
+    timeline_importable: unsafe extern "C" fn(*mut c_void) -> u32,
+    create_timeline: unsafe extern "C" fn(*mut c_void, *mut u64) -> i32,
+    import_timeline: unsafe extern "C" fn(*mut c_void, u64, *mut c_void) -> i32,
+    destroy_timeline: unsafe extern "C" fn(*mut c_void, u64),
+    image_properties: unsafe extern "C" fn(
+        *mut c_void,
+        format: u32,
+        extra_usage: u32,
+        importable: *mut u32,
+        max_width: *mut u32,
+        max_height: *mut u32,
+    ) -> i32,
+    create_image: unsafe extern "C" fn(
+        *mut c_void,
+        format: u32,
+        width: u32,
+        height: u32,
+        extra_usage: u32,
+        *mut u64,
+    ) -> i32,
+    image_requirements:
+        unsafe extern "C" fn(*mut c_void, image: u64, bytes: *mut u64, types: *mut u32),
+    handle_memory_types: unsafe extern "C" fn(*mut c_void, handle: *mut c_void, *mut u32) -> i32,
+    device_local_types: unsafe extern "C" fn(*mut c_void) -> u32,
+    allocate_memory: unsafe extern "C" fn(
+        *mut c_void,
+        image: u64,
+        handle: *mut c_void,
+        bytes: u64,
+        type_: u32,
+        *mut u64,
+    ) -> i32,
+    bind_image: unsafe extern "C" fn(*mut c_void, image: u64, memory: u64) -> i32,
+    destroy_image: unsafe extern "C" fn(*mut c_void, u64),
+    free_memory: unsafe extern "C" fn(*mut c_void, u64),
+}
+
+impl Platform {
+    pub(super) fn checked(raw: &rsf_dx12vk_platform) -> Option<Self> {
+        Some(Self {
+            adapter_luid: raw.adapter_luid?,
+            open: raw.open?,
+            close: raw.close?,
+            timeline_importable: raw.timeline_importable?,
+            create_timeline: raw.create_timeline?,
+            import_timeline: raw.import_timeline?,
+            destroy_timeline: raw.destroy_timeline?,
+            image_properties: raw.image_properties?,
+            create_image: raw.create_image?,
+            image_requirements: raw.image_requirements?,
+            handle_memory_types: raw.handle_memory_types?,
+            device_local_types: raw.device_local_types?,
+            allocate_memory: raw.allocate_memory?,
+            bind_image: raw.bind_image?,
+            destroy_image: raw.destroy_image?,
+            free_memory: raw.free_memory?,
+        })
+    }
+}
 pub(super) type FenceFactory = unsafe extern "C" fn(Handle, *mut Handle) -> i32;
 pub(super) type ImageRelease = unsafe extern "C" fn(Handle);
+#[derive(Clone, Copy)]
+struct LegacyImageFactory {
+    user: Handle,
+    create_image: unsafe extern "C" fn(
+        user: *mut c_void,
+        width: u32,
+        height: u32,
+        format: u32,
+        native_handle: *mut *mut c_void,
+        resource: *mut *mut c_void,
+    ) -> i32,
+}
+
 type Output = rsf_dx12vk_shared_image;
 const INVALID: i32 = RSF_DX12VK_INTEROP_INVALID_ARGUMENT;
 const ABI_MISMATCH: i32 = RSF_DX12VK_INTEROP_ABI_MISMATCH;
@@ -43,28 +118,32 @@ struct Image {
 }
 
 pub(super) struct Owner {
-    platform: &'static Platform,
+    platform: Platform,
     native: Handle,
     release_image: ImageRelease,
-    legacy: Option<Callbacks>,
+    legacy: Option<LegacyImageFactory>,
     timeline: u64,
     images: [Option<Image>; IMAGE_SLOTS],
 }
 
 impl Owner {
+    pub(super) fn device_luid(&self, setup: &rsf_srvk_setup) -> Result<u64, i32> {
+        Self::adapter_luid(&self.platform, setup)
+    }
+
     pub(super) fn adapter_luid(platform: &Platform, setup: &rsf_srvk_setup) -> Result<u64, i32> {
         let mut luid = 0;
-        checked(unsafe { (platform.adapter_luid.unwrap())(setup, &mut luid) })?;
+        checked(unsafe { (platform.adapter_luid)(setup, &mut luid) })?;
         Ok(luid)
     }
 
     pub(super) fn open(
-        platform: &'static Platform,
+        platform: Platform,
         setup: &rsf_srvk_setup,
         release_image: ImageRelease,
     ) -> Result<Self, i32> {
         let mut native = ptr::null_mut();
-        checked(unsafe { (platform.open.unwrap())(setup, &mut native) })?;
+        checked(unsafe { (platform.open)(setup, &mut native) })?;
         if native.is_null() {
             return Err(INITIALIZATION_FAILED);
         }
@@ -118,10 +197,10 @@ impl Owner {
     fn release(&self, image: &Image) {
         unsafe {
             if image.image != 0 {
-                (self.platform.destroy_image.unwrap())(self.native, image.image);
+                (self.platform.destroy_image)(self.native, image.image);
             }
             if image.memory != 0 {
-                (self.platform.free_memory.unwrap())(self.native, image.memory);
+                (self.platform.free_memory)(self.native, image.memory);
             }
             if !image.dx12.is_null() {
                 (self.release_image)(image.dx12);
@@ -158,11 +237,11 @@ impl Owner {
         user: Handle,
         create: FenceFactory,
     ) -> Result<(), i32> {
-        let platform = self.platform;
-        if unsafe { (platform.timeline_importable.unwrap())(self.native) } == 0 {
+        let platform = &self.platform;
+        if unsafe { (platform.timeline_importable)(self.native) } == 0 {
             return Err(INVALID_EXTERNAL_HANDLE);
         }
-        checked(unsafe { (platform.create_timeline.unwrap())(self.native, &mut self.timeline) })?;
+        checked(unsafe { (platform.create_timeline)(self.native, &mut self.timeline) })?;
         if self.timeline == 0 {
             return Err(INITIALIZATION_FAILED);
         }
@@ -172,7 +251,7 @@ impl Owner {
         checked(result)?;
         let handle = handle.ok_or(INVALID_EXTERNAL_HANDLE)?;
         checked(unsafe {
-            (platform.import_timeline.unwrap())(self.native, self.timeline, handle.as_raw_handle())
+            (platform.import_timeline)(self.native, self.timeline, handle.as_raw_handle())
         })
     }
 
@@ -184,10 +263,10 @@ impl Owner {
         image: &mut Image,
         create: impl FnOnce(*mut Handle, *mut Handle) -> i32,
     ) -> Result<(), i32> {
-        let platform = self.platform;
+        let platform = &self.platform;
         let (mut importable, mut max_width, mut max_height) = (0, 0, 0);
         checked(unsafe {
-            (platform.image_properties.unwrap())(
+            (platform.image_properties)(
                 self.native,
                 format,
                 extra_usage,
@@ -209,7 +288,7 @@ impl Owner {
             return Err(INVALID_EXTERNAL_HANDLE);
         }
         checked(unsafe {
-            (platform.create_image.unwrap())(
+            (platform.create_image)(
                 self.native,
                 format,
                 width,
@@ -223,28 +302,18 @@ impl Owner {
         }
         let (mut bytes, mut image_types, mut handle_types) = (0, 0, 0);
         unsafe {
-            (platform.image_requirements.unwrap())(
-                self.native,
-                image.image,
-                &mut bytes,
-                &mut image_types,
-            )
+            (platform.image_requirements)(self.native, image.image, &mut bytes, &mut image_types)
         };
         checked(unsafe {
-            (platform.handle_memory_types.unwrap())(
-                self.native,
-                handle.as_raw_handle(),
-                &mut handle_types,
-            )
+            (platform.handle_memory_types)(self.native, handle.as_raw_handle(), &mut handle_types)
         })?;
-        let memory_types = image_types
-            & handle_types
-            & unsafe { (platform.device_local_types.unwrap())(self.native) };
+        let memory_types =
+            image_types & handle_types & unsafe { (platform.device_local_types)(self.native) };
         if memory_types == 0 {
             return Err(INCOMPATIBLE_DRIVER);
         }
         checked(unsafe {
-            (platform.allocate_memory.unwrap())(
+            (platform.allocate_memory)(
                 self.native,
                 image.image,
                 handle.as_raw_handle(),
@@ -256,7 +325,7 @@ impl Owner {
         if image.memory == 0 {
             return Err(INITIALIZATION_FAILED);
         }
-        checked(unsafe { (platform.bind_image.unwrap())(self.native, image.image, image.memory) })?;
+        checked(unsafe { (platform.bind_image)(self.native, image.image, image.memory) })?;
         Ok(())
     }
 }
@@ -268,9 +337,9 @@ impl Drop for Owner {
         }
         unsafe {
             if self.timeline != 0 {
-                (self.platform.destroy_timeline.unwrap())(self.native, self.timeline);
+                (self.platform.destroy_timeline)(self.native, self.timeline);
             }
-            (self.platform.close.unwrap())(self.native);
+            (self.platform.close)(self.native);
         }
     }
 }
@@ -282,7 +351,6 @@ unsafe extern "C" fn rsf_dx12vk_interop_create(
     timeline_enabled: u32,
     out: *mut *mut Owner,
 ) -> i32 {
-    let platform = &crate::dx12_vulkan_platform::PLATFORM;
     if out.is_null() {
         return INVALID;
     }
@@ -292,10 +360,14 @@ unsafe extern "C" fn rsf_dx12vk_interop_create(
     }
     let setup = unsafe { &*setup };
     let callbacks = unsafe { &*callbacks };
+    let (Some(create_image), Some(release_image), Some(create_fence)) = (
+        callbacks.create_image,
+        callbacks.release_image,
+        callbacks.create_fence,
+    ) else {
+        return INVALID;
+    };
     if callbacks.adapter_luid == 0
-        || callbacks.create_image.is_none()
-        || callbacks.release_image.is_none()
-        || callbacks.create_fence.is_none()
         || setup.instance.is_null()
         || setup.physical_device.is_null()
         || setup.device.is_null()
@@ -309,24 +381,30 @@ unsafe extern "C" fn rsf_dx12vk_interop_create(
     {
         return ABI_MISMATCH;
     }
-    let luid = match Owner::adapter_luid(platform, setup) {
+    let Some(platform) = Platform::checked(&crate::dx12_vulkan_platform::PLATFORM) else {
+        return INVALID;
+    };
+    let luid = match Owner::adapter_luid(&platform, setup) {
         Ok(luid) => luid,
         Err(error) => return error,
     };
     if luid != callbacks.adapter_luid {
         return INVALID_EXTERNAL_HANDLE;
     }
-    let mut owner = match Owner::open(platform, setup, callbacks.release_image.unwrap()) {
+    let mut owner = match Owner::open(platform, setup, release_image) {
         Ok(owner) => owner,
         Err(error) => return error,
     };
-    owner.legacy = Some(*callbacks);
+    owner.legacy = Some(LegacyImageFactory {
+        user: callbacks.user,
+        create_image,
+    });
     let raw = allocate_handle(owner);
     if raw.is_null() {
         return OUT_OF_HOST_MEMORY;
     }
     let mut owner = unsafe { Box::from_raw(raw) };
-    if let Err(error) = owner.import_timeline(callbacks.user, callbacks.create_fence.unwrap()) {
+    if let Err(error) = owner.import_timeline(callbacks.user, create_fence) {
         return error;
     }
     unsafe { out.write(Box::into_raw(owner)) };
@@ -364,9 +442,11 @@ unsafe extern "C" fn rsf_dx12vk_interop_image(
     if width == 0 || height == 0 || !matches!(format, BGRA8_UNORM | R32_FLOAT | RG16_FLOAT) {
         return INVALID;
     }
-    let callbacks = owner.legacy.unwrap();
+    let Some(callbacks) = owner.legacy else {
+        return INVALID;
+    };
     match owner.add_image(format, [width, height], 0, |handle, resource| unsafe {
-        (callbacks.create_image.unwrap())(callbacks.user, width, height, format, handle, resource)
+        (callbacks.create_image)(callbacks.user, width, height, format, handle, resource)
     }) {
         Ok(image) => {
             unsafe { out.write(image) };

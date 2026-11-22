@@ -53,8 +53,8 @@ pub(crate) trait Products {
 pub(crate) type ProductsFactory = fn(*const rsf_aux_platform) -> Option<Box<dyn Products>>;
 
 pub(crate) fn auxiliary_products(platform: *const rsf_aux_platform) -> Option<Box<dyn Products>> {
-    let platform = unsafe { *platform.as_ref()? };
-    let owner = NonNull::new(crate::allocate_handle(AuxiliarySr::new(platform)))?;
+    let platform = unsafe { platform.as_ref()? };
+    let owner = NonNull::new(crate::allocate_handle(AuxiliarySr::new(platform)?))?;
     Some(unsafe { Box::from_raw(owner.as_ptr()) })
 }
 

@@ -55,38 +55,30 @@ pub(super) struct ReflectionSink {
 }
 
 pub(super) struct Platform {
-    pub parse_json: Option<
-        unsafe extern "C" fn(
-            text: rsf_patch_bytes,
-            user: *mut c_void,
-            visit: rsf_patch_json_visit,
-        ) -> i32,
-    >,
-    pub compile: Option<unsafe fn(call: *const CompileCall) -> i32>,
-    pub reflect: Option<unsafe fn(code: rsf_patch_bytes, sink: *const ReflectionSink) -> i32>,
-    pub disassemble: Option<unsafe fn(code: rsf_patch_bytes, user: *mut c_void, text: Sink) -> i32>,
-    pub create_shader: Option<
-        unsafe fn(
-            device: *mut c_void,
-            stage: u32,
-            code: rsf_patch_bytes,
-            shader: *mut *mut c_void,
-        ) -> i32,
-    >,
+    pub parse_json: unsafe extern "C" fn(
+        text: rsf_patch_bytes,
+        user: *mut c_void,
+        visit: rsf_patch_json_visit,
+    ) -> i32,
+    pub compile: unsafe fn(call: *const CompileCall) -> i32,
+    pub reflect: unsafe fn(code: rsf_patch_bytes, sink: *const ReflectionSink) -> i32,
+    pub disassemble: unsafe fn(code: rsf_patch_bytes, user: *mut c_void, text: Sink) -> i32,
+    pub create_shader: unsafe fn(
+        device: *mut c_void,
+        stage: u32,
+        code: rsf_patch_bytes,
+        shader: *mut *mut c_void,
+    ) -> i32,
     pub create_constant_buffer:
-        Option<unsafe fn(device: *mut c_void, size: u32, buffer: *mut *mut c_void) -> i32>,
-    pub buffer_desc: Option<
+        unsafe fn(device: *mut c_void, size: u32, buffer: *mut *mut c_void) -> i32,
+    pub buffer_desc:
         unsafe fn(buffer: *mut c_void, width: *mut u32, usage: *mut u32, cpu_access: *mut u32),
-    >,
-    pub upload:
-        Option<unsafe fn(context: *mut c_void, buffer: *mut c_void, data: rsf_patch_bytes) -> i32>,
-    pub bind_constant:
-        Option<unsafe fn(context: *mut c_void, stage: u32, slot: u32, buffer: *mut c_void)>,
-    pub hooks_ready: Option<unsafe fn() -> i32>,
-    pub hook_create: Option<
+    pub upload: unsafe fn(context: *mut c_void, buffer: *mut c_void, data: rsf_patch_bytes) -> i32,
+    pub bind_constant: unsafe fn(context: *mut c_void, stage: u32, slot: u32, buffer: *mut c_void),
+    pub hooks_ready: unsafe fn() -> i32,
+    pub hook_create:
         unsafe fn(target: *mut c_void, detour: *mut c_void, original: *mut *mut c_void) -> i32,
-    >,
-    pub hook_enable: Option<unsafe fn(target: *mut c_void) -> i32>,
-    pub hook_disable: Option<unsafe fn(target: *mut c_void)>,
-    pub hook_remove: Option<unsafe fn(target: *mut c_void)>,
+    pub hook_enable: unsafe fn(target: *mut c_void) -> i32,
+    pub hook_disable: unsafe fn(target: *mut c_void),
+    pub hook_remove: unsafe fn(target: *mut c_void),
 }
