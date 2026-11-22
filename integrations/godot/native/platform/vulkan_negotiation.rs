@@ -6,10 +6,8 @@
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 
-#[path = "vulkan_extensions.rs"]
-mod vulkan_extensions;
-use vulkan_extensions::WIN32_INTEROP;
-pub(crate) use vulkan_extensions::merge;
+pub(crate) use rsf_game_sys::vulkan_extensions::merge;
+use rsf_game_sys::vulkan_extensions::WIN32_INTEROP;
 
 /// `PFN_vkVoidFunction`.
 pub(crate) type VkFunction = unsafe extern "C" fn();

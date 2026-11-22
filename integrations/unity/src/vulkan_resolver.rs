@@ -39,9 +39,7 @@ const KEYS: [(u32, &CStr); 7] = [
 ];
 
 /// The device extensions the shared memory and fence imports need.
-#[path = "../../../runtime/common/src/vulkan_extensions.rs"]
-mod vulkan_extensions;
-use vulkan_extensions::WIN32_INTEROP as INTEROP;
+use rsf_game_sys::vulkan_extensions::{self, WIN32_INTEROP as INTEROP};
 
 const INTEROP_FUNCTIONS: [&CStr; 2] = [
     c"vkImportSemaphoreWin32HandleKHR",

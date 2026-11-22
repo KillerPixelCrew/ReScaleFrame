@@ -8,7 +8,7 @@ fn le<const N: usize>(bytes: &[u8], offset: usize) -> Option<[u8; N]> {
     bytes.get(offset..)?.get(..N)?.try_into().ok()
 }
 
-pub(crate) struct Pe32Plus<'a> {
+pub struct Pe32Plus<'a> {
     bytes: &'a [u8],
     coff: &'a [u8],
     optional: &'a [u8],
@@ -17,7 +17,7 @@ pub(crate) struct Pe32Plus<'a> {
 
 #[allow(dead_code)] // Each consumer uses different metadata.
 impl<'a> Pe32Plus<'a> {
-    pub(crate) fn parse(bytes: &'a [u8]) -> Option<Self> {
+    pub fn parse(bytes: &'a [u8]) -> Option<Self> {
         if le::<2>(bytes, 0)? != *b"MZ" {
             return None;
         }
@@ -49,27 +49,27 @@ impl<'a> Pe32Plus<'a> {
         })
     }
 
-    pub(crate) fn timestamp(&self) -> u32 {
+    pub fn timestamp(&self) -> u32 {
         u32::from_le_bytes(le(self.coff, 4).expect("checked COFF header"))
     }
 
-    pub(crate) fn optional_size(&self) -> usize {
+    pub fn optional_size(&self) -> usize {
         self.optional.len()
     }
 
-    pub(crate) fn image_size(&self) -> Option<u32> {
+    pub fn image_size(&self) -> Option<u32> {
         Some(u32::from_le_bytes(le(self.optional, 56)?))
     }
 
-    pub(crate) fn preferred_base(&self) -> u64 {
+    pub fn preferred_base(&self) -> u64 {
         u64::from_le_bytes(le(self.optional, 24).expect("checked image base"))
     }
 
-    pub(crate) fn section_count(&self) -> usize {
+    pub fn section_count(&self) -> usize {
         self.sections.len() / SECTION_SIZE
     }
 
-    pub(crate) fn span(&self, rva: usize, count: usize) -> Option<(&'a [u8], u32)> {
+    pub fn span(&self, rva: usize, count: usize) -> Option<(&'a [u8], u32)> {
         for section in self.sections.chunks_exact(SECTION_SIZE) {
             let virtual_size = u32::from_le_bytes(le(section, 8)?) as usize;
             let virtual_address = u32::from_le_bytes(le(section, 12)?) as usize;

@@ -6,8 +6,7 @@ mod initializer;
 pub(crate) use initializer::checkpoint;
 pub(crate) use initializer::matches_postprocess;
 pub(crate) use initializer::{render_allowed, status};
-#[path = "../../../runtime/common/src/pe32_plus.rs"]
-mod pe32_plus;
+use rsf_game_sys::pe32_plus;
 
 use std::cell::Cell;
 use std::ffi::c_void;

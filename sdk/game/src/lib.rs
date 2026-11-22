@@ -30,7 +30,9 @@ pub mod camera_math;
 pub mod checksum;
 #[cfg(windows)]
 pub mod dpi;
+pub mod dxbc_chunks;
 pub mod ffi_util;
+pub mod pe32_plus;
 mod frame_policy;
 pub use frame_policy::*;
 mod renderer_policy;
@@ -42,9 +44,11 @@ mod render_config;
 mod render_pass;
 pub mod sampling;
 pub mod session;
+pub mod shader_hash;
 mod upstream;
 pub use upstream::same_upstream_identity;
 pub mod vendor_paths;
+pub mod vulkan_extensions;
 #[cfg(windows)]
 pub mod win32;
 pub mod windows_path;

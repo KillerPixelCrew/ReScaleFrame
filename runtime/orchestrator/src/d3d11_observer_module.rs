@@ -7,9 +7,7 @@ use std::os::windows::fs::OpenOptionsExt;
 
 const FILE_SHARE_READ: u32 = 1;
 const MAX_FILE: u64 = 1 << 28;
-#[path = "../../common/src/pe32_plus.rs"]
-mod pe32_plus;
-use pe32_plus::Pe32Plus;
+use rsf_game_sys::pe32_plus::Pe32Plus;
 
 pub(super) struct ModuleFile {
     bytes: Vec<u8>,

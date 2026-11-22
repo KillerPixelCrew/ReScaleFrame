@@ -2,7 +2,7 @@
 //! First-party checksums shared by the Runtime and game shader owners.
 
 // RFC 1321 round constants and shifts.
-pub(crate) const MD5_K: [u32; 64] = [
+pub const MD5_K: [u32; 64] = [
     0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
     0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821,
     0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8,
@@ -51,7 +51,7 @@ fn compress(state: &mut [u32; 4], block: &[u8]) {
 
 /// The DXBC checksum covers the payload starting at container byte 20. Its bit length
 /// leads the last block, and the final word holds twice the byte count plus one.
-pub(crate) fn dxbc_checksum(payload: &[u8]) -> Option<[u32; 4]> {
+pub fn dxbc_checksum(payload: &[u8]) -> Option<[u32; 4]> {
     let length = u32::try_from(payload.len()).ok()?;
     let mut state = [0x6745_2301, 0xefcd_ab89, 0x98ba_dcfe, 0x1032_5476];
     let blocks = payload.chunks_exact(64);
@@ -75,7 +75,7 @@ pub(crate) fn dxbc_checksum(payload: &[u8]) -> Option<[u32; 4]> {
     Some(state)
 }
 
-pub(crate) fn dxbc_digest_bytes(words: [u32; 4]) -> [u8; 16] {
+pub fn dxbc_digest_bytes(words: [u32; 4]) -> [u8; 16] {
     let mut bytes = [0; 16];
     for (dst, word) in bytes.chunks_exact_mut(4).zip(words) {
         dst.copy_from_slice(&word.to_le_bytes());
@@ -84,7 +84,7 @@ pub(crate) fn dxbc_digest_bytes(words: [u32; 4]) -> [u8; 16] {
 }
 
 /// Reflected Castagnoli CRC32C used for persisted shader identifiers.
-pub(crate) fn crc32c(data: &[u8]) -> u32 {
+pub fn crc32c(data: &[u8]) -> u32 {
     let mut crc = u32::MAX;
     for &byte in data {
         crc ^= u32::from(byte);

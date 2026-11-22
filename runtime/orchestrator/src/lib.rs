@@ -106,8 +106,7 @@ mod dx12_vulkan_interop;
 #[cfg(windows)]
 mod dx12_vulkan_platform;
 #[cfg(all(windows, any(test, feature = "test-fixtures")))]
-#[path = "../../graphics/src/dxbc_chunks.rs"]
-mod dxbc_chunks;
+use rsf_game_sys::dxbc_chunks;
 #[cfg(windows)]
 use rsf_graphics::dxgi_format;
 #[cfg(windows)]
@@ -252,10 +251,8 @@ mod sampler_bias;
 mod sdk_module;
 #[cfg(windows)]
 mod settings_store;
-#[cfg(windows)]
-#[cfg_attr(not(any(test, feature = "test-fixtures")), allow(dead_code))] // only crc32c is production; the DXBC checksum is the synthetic rewrite's
-#[path = "../../graphics/src/shader_hash.rs"]
-mod shader_hash;
+#[cfg(all(windows, any(test, feature = "test-fixtures")))]
+use rsf_game_sys::shader_hash;
 #[cfg(windows)]
 mod shader_patch;
 #[cfg(windows)]

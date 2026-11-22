@@ -414,7 +414,6 @@ pub(crate) const VK_ROUTE_CREATE_INSTANCE: u32 = 2;
 pub(crate) const VK_ROUTE_DEVICE_PROC: u32 = 3;
 pub(crate) const VK_ROUTE_CREATE_DEVICE: u32 = 4;
 pub(crate) const VK_ROUTE_DESTROY_DEVICE: u32 = 5;
-#[path = "../../../runtime/common/src/vulkan_negotiation.rs"]
 pub(crate) mod vulkan_negotiation;
 pub(crate) use vulkan_negotiation::{
     VK_CREATION_VERSION, VkAdapter, VkChainFacts, VkCreationLeaves, VkDeviceCall, VkDeviceDerive,

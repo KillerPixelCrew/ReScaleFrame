@@ -43,8 +43,7 @@ mod cloud_depth;
 #[cfg(windows)]
 mod com_resource;
 mod contact_shadow;
-#[path = "../../../runtime/graphics/src/dxbc_chunks.rs"]
-mod dxbc_chunks;
+use rsf_game_sys::dxbc_chunks;
 mod guards;
 mod hook_batch;
 mod lifecycle;
@@ -57,8 +56,7 @@ mod patches;
 mod render_scope;
 mod renderer;
 mod scope_facts;
-#[path = "../../../runtime/graphics/src/shader_hash.rs"]
-mod shader_hash;
+use rsf_game_sys::shader_hash;
 mod sites;
 mod truesky;
 mod velocity_commit;
