@@ -13,7 +13,7 @@ crate-type = ["staticlib"]
 rsf-ac7 = { path = "../../games/ac7" }
 
 [target."cfg(windows)".dependencies]
-windows = { version = "=0.62.2", default-features = false, features = [
+windows = { workspace = true, features = [
   "Win32_Globalization",
   "Win32_Graphics_Direct3D_Fxc",
   "Win32_Graphics_Direct3D11",

@@ -19,8 +19,8 @@ rsf-game-sys = { path = "../../sdk/game" }
 rsf-runtime-submission = { path = "../../runtime/graphics/submission" }
 
 [target."cfg(windows)".dependencies]
-ash = { version = "=0.38.0", default-features = false, features = ["std"] }
-windows = { version = "0.62.2", default-features = false, features = [
+ash = { workspace = true }
+windows = { workspace = true, features = [
   "Win32_Graphics_Direct3D",
   "Win32_Graphics_Direct3D11",
   "Win32_Graphics_Direct3D12",
@@ -30,7 +30,7 @@ windows = { version = "0.62.2", default-features = false, features = [
 ] }
 
 [target."cfg(windows)".dependencies.windows-sys]
-version = "0.61"
+workspace = true
 features = [
   "Win32_Foundation",
   "Win32_Graphics_Gdi",

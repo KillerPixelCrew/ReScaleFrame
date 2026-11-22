@@ -14,7 +14,7 @@ rsf-game-sys = { path = "../../sdk/game" }
 rsf-minhook-sys = { path = "../../third_party/minhook" }
 
 [target."cfg(windows)".dependencies.windows-sys]
-version = "0.61"
+workspace = true
 features = [
   "Win32_Foundation",
   "Win32_Security_Cryptography",

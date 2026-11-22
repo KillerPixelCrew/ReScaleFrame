@@ -13,7 +13,7 @@ crate-type = ["cdylib"]
 vulkanstory-compat = []
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = [
+windows-sys = { workspace = true, features = [
     "Win32_Storage_FileSystem",
     "Win32_System_LibraryLoader",
     "Win32_System_SystemInformation",

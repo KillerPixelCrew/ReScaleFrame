@@ -29,7 +29,7 @@ workspace = true
 rsf-ac7 = { path = "../../games/ac7" }
 rsf-game-sys = { path = "../../sdk/game" }
 rsf-orchestrator = { path = "../../runtime/orchestrator" }
-windows = { version = "=0.62.2", default-features = false, features = [
+windows = { workspace = true, features = [
   "Win32_Graphics_Direct3D",
   "Win32_Graphics_Direct3D11",
   "Win32_Graphics_Direct3D12",

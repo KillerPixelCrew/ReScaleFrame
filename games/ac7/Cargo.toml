@@ -24,7 +24,7 @@ cc = "1"
 rsf-bindgen = { path = "../../tools/bindgen" }
 
 [target."cfg(windows)".dependencies]
-windows = { version = "=0.62.2", default-features = false, features = [
+windows = { workspace = true, features = [
   "Win32_Graphics_Direct3D_Fxc",
   "Win32_Graphics_Direct3D11",
   "Win32_Graphics_Dxgi",

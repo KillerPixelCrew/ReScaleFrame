@@ -17,7 +17,7 @@ workspace = true
 
 [target."cfg(windows)".dependencies]
 rsf-game-sys = { path = "../../sdk/game" }
-windows = { version = "=0.62.2", default-features = false, features = [
+windows = { workspace = true, features = [
   "Win32_Graphics_Direct3D",
   "Win32_Graphics_Direct3D12",
   "Win32_Graphics_Dxgi",
@@ -30,7 +30,7 @@ windows = { version = "=0.62.2", default-features = false, features = [
   "Win32_UI_WindowsAndMessaging",
 ] }
 
-windows-sys = { version = "0.61", features = [
+windows-sys = { workspace = true, features = [
   "Win32_Storage_FileSystem",
   "Win32_System_Performance",
   "Win32_System_WindowsProgramming",

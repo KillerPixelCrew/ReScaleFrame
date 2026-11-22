@@ -11,8 +11,8 @@ crate-type = ["staticlib"]
 
 [target.'cfg(windows)'.dependencies]
 rsf-game-sys = { path = "../../sdk/game" }
-ash = { version = "=0.38.0", default-features = false, features = ["std"], optional = true }
-windows = { version = "0.62.2", default-features = false, features = [
+ash = { workspace = true, optional = true }
+windows = { workspace = true, features = [
   "Win32_Graphics_Direct3D",
   "Win32_Graphics_Direct3D11",
   "Win32_Graphics_Direct3D12",
@@ -22,7 +22,7 @@ windows = { version = "0.62.2", default-features = false, features = [
   "Win32_System_Com",
   "Win32_Security",
 ] }
-windows-sys = { version = "0.61", features = [
+windows-sys = { workspace = true, features = [
   "Win32_Security",
   "Win32_Graphics_Gdi",
   "Win32_System_Environment",

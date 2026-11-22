@@ -18,7 +18,7 @@ rsf-game-sys = { path = "../../sdk/game" }
 jni-sys = "=0.3.0"
 
 [target."cfg(windows)".dependencies.windows-sys]
-version = "0.61"
+workspace = true
 features = [
   "Win32_Foundation",
   "Win32_System_Threading",

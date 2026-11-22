@@ -16,7 +16,7 @@ workspace = true
 rsf-game-sys = { path = "../../../sdk/game" }
 
 [target."cfg(windows)".dependencies]
-windows-sys = { version = "0.61", features = [
+windows-sys = { workspace = true, features = [
   "Win32_Foundation",
   "Win32_System_LibraryLoader",
   "Win32_System_Memory",

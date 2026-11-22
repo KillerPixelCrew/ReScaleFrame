@@ -13,7 +13,7 @@ crate-type = ["staticlib"]
 rsf-game-sys = { path = "../../sdk/game" }
 
 [target."cfg(windows)".dependencies.windows-sys]
-version = "0.61"
+workspace = true
 features = [
   "Win32_Foundation",
   "Win32_Security",

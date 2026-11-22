@@ -28,12 +28,12 @@ xess-device = [
 ]
 
 [dependencies]
-ash = { version = "=0.38.0", default-features = false, features = ["std"], optional = true }
+ash = { workspace = true, optional = true }
 rsf-game-sys = { path = "../../sdk/game" }
 rsf-orchestrator = { path = "../../runtime/orchestrator" }
 
 [target."cfg(windows)".dependencies]
-windows-sys = { version = "0.61", features = [
+windows-sys = { workspace = true, features = [
   "Win32_Foundation",
   "Win32_System_LibraryLoader",
 ], optional = true }

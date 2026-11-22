@@ -25,16 +25,16 @@ rsf-graphics = { path = "../graphics/rust", features = ["test-support"] }
 rsf-runtime-common = { path = "../common" }
 
 [build-dependencies]
-cc = "1"
+cc.workspace = true
 rsf-bindgen = { path = "../../tools/bindgen" }
 
 [lints]
 workspace = true
 
 [target."cfg(windows)".dependencies]
-ash = { version = "=0.38.0", default-features = false, features = ["std"] }
+ash = { workspace = true }
 rsf-shader-compiler = { path = "../shader_patch/compiler", default-features = false }
-windows = { version = "0.62.2", default-features = false, features = [
+windows = { workspace = true, features = [
   "std",
   "Win32_Graphics_Direct3D",
   "Win32_Graphics_Direct3D_Fxc",
@@ -50,7 +50,7 @@ windows = { version = "0.62.2", default-features = false, features = [
   "Win32_System_WindowsProgramming",
   "Win32_UI_WindowsAndMessaging",
 ] }
-windows-sys = { version = "0.61", features = [
+windows-sys = { workspace = true, features = [
   "Win32_Graphics_Gdi",
   "Win32_Graphics_OpenGL",
   "Win32_Security",

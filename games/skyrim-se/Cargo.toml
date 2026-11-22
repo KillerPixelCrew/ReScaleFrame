@@ -13,7 +13,7 @@ crate-type = ["staticlib"]
 rsf-game-sys = { path = "../../sdk/game" }
 rsf-steam = { path = "../../integrations/steam" }
 rsf-windows = { path = "../../integrations/windows" }
-windows-sys = { version = "0.61", features = [
+windows-sys = { workspace = true, features = [
   "Win32_Foundation",
   "Win32_Security",
   "Win32_Storage_FileSystem",
