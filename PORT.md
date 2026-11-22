@@ -1893,7 +1893,7 @@ Port bootstrap, profile admission and observer lifetime. Attribute each guarded 
 - [ ] [games/anomaly/src/native_hook_ops.h](games/anomaly/src/native_hook_ops.h)
 - [ ] [games/anomaly/src/native_hooks.cpp](games/anomaly/src/native_hooks.cpp)
 - [ ] [games/anomaly/src/native_hooks.h](games/anomaly/src/native_hooks.h)
-- [ ] [games/anomaly/src/native_memory.h](games/anomaly/src/native_memory.h)
+- [x] [games/anomaly/src/native_memory.h](games/anomaly/src/native_memory.h)
 - [x] [games/anomaly/src/native_observer.h](games/anomaly/src/native_observer.h)
 - [ ] [games/anomaly/src/native_observer_platform.cpp](games/anomaly/src/native_observer_platform.cpp)
 - [x] [games/anomaly/src/native_observer_platform.h](games/anomaly/src/native_observer_platform.h)
