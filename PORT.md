@@ -871,7 +871,7 @@ Port shader patch sessions, compiler interfaces and the cache with their CPU and
 
 **Port files (5)**
 
-- [ ] [runtime/graphics/include/rescaleframe/shader_compile.h](runtime/graphics/include/rescaleframe/shader_compile.h)
+- [x] [runtime/graphics/include/rescaleframe/shader_compile.h](runtime/graphics/include/rescaleframe/shader_compile.h)
 - [x] [runtime/shader_patch/include/rescaleframe/shader_patch.h](runtime/shader_patch/include/rescaleframe/shader_patch.h)
 - [x] [runtime/shader_patch/src/export.cpp](runtime/shader_patch/src/export.cpp)
 - [x] [runtime/shader_patch/src/platform.cpp](runtime/shader_patch/src/platform.cpp)
@@ -1818,7 +1818,7 @@ Finish the shader container and stage transforms, keeping emitted bytecode and s
 
 **Fixtures (1)**
 
-- [ ] [tests/ac7_velocity_shader.cpp](tests/ac7_velocity_shader.cpp)
+- [x] [tests/ac7_velocity_shader.cpp](tests/ac7_velocity_shader.cpp)
 
 **Rust review findings (7)**
 
@@ -1852,7 +1852,7 @@ Port the velocity pass and consolidate variant publication, frame history and st
 - [x] [games/ac7/include/rescaleframe/ac7_velocity_pass.h](games/ac7/include/rescaleframe/ac7_velocity_pass.h)
 - [x] [games/ac7/src/velocity_commit.h](games/ac7/src/velocity_commit.h)
 - [x] [games/ac7/src/velocity_history.h](games/ac7/src/velocity_history.h)
-- [ ] [games/ac7/src/velocity_pass.cpp](games/ac7/src/velocity_pass.cpp)
+- [x] [games/ac7/src/velocity_pass.cpp](games/ac7/src/velocity_pass.cpp)
 - [x] [games/ac7/src/velocity_pass_cache.h](games/ac7/src/velocity_pass_cache.h)
 - [x] [games/ac7/src/velocity_renderer.h](games/ac7/src/velocity_renderer.h)
 - [x] [games/ac7/src/velocity_stream.h](games/ac7/src/velocity_stream.h)

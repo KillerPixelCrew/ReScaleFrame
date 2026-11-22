@@ -12,6 +12,5 @@ target_link_libraries(rsf_graphics PRIVATE windowscodecs ole32 psapi)
 target_link_libraries(rsf_graphics PRIVATE minhook)
 # Both observers dispatch in Rust and use a native frame for foreign exceptions.
 target_link_libraries(rsf_graphics PRIVATE rsf_orchestrator_rust)
-# Public: shader_compile.h includes log.h, and presentation and the orchestrator reach it through here.
 target_link_libraries(rsf_graphics PUBLIC ReScaleFrame::RuntimeCommon)
 add_library(ReScaleFrame::Graphics ALIAS rsf_graphics)

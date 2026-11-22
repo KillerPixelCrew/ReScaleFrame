@@ -45,3 +45,9 @@ history dispatch, and merge. Pinned Rust formatting and syntax parsing,
 MSVC fixture-entry syntax, targeted bindgen 0.72.1 regeneration, locked offline
 Cargo metadata and whitespace checks passed. Native linking, emitted DXBC
 comparison, WARP readback and game validation remain open.
+
+The C11 launcher passes the optional Windows path as UTF-16 directly.
+It retains the CTest name, the empty path behavior, and the existing
+C++ link driver. Strict MinGW C11 syntax passed. The former graphics
+shader compiler wrapper had no remaining source consumers after this
+port and was retired. Linking and WARP execution remain pending.
