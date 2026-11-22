@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! The Unity package's presentation behind package.cpp: the package identity (the SDK root with
+//! The Unity package's presentation behind package.c: the package identity (the SDK root with
 //! its streamline, fidelityfx and xess directories and the Streamline interposer, Unity's version
 //! and the project id), the one generation install, and the provider request of every window
 //! pass. The identity comes from [UnitySR] when the plugin loads and from rsfu_initialize for each
@@ -104,7 +104,7 @@ impl Presentation {
     }
 }
 
-// SAFETY for every call below: as for the other leaves, package.cpp's noexcept functions that
+// SAFETY for every call below: as for the other leaves, package.c's functions that
 // borrow their pointer arguments for the call only.
 impl Leaves {
     fn fg_install(&self, setup: &rsf_fg12_setup) -> i32 {
@@ -201,7 +201,7 @@ impl Package {
 /// installs generation (services.rs).
 ///
 /// # Safety
-/// `platform` is null or package.cpp's table.
+/// `platform` is null or package.c's table.
 #[cfg(windows)]
 pub(super) unsafe fn load(platform: *const rsf_unity_package_platform) {
     use crate::runtime_config::{Ini, path_setting, string_setting, utf8};

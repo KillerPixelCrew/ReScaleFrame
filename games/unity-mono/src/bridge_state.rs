@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-//! Frame state of the shared Unity D3D12 render bridge. bridge.cpp is linked into the game plugin
+//! Frame state of the shared Unity D3D12 render bridge. bridge.c is linked into the game plugin
 //! and the Unity package, and both link this archive. This module owns packet admission and
 //! storage, the engine policy and its generation, frame admission into the command ring, source
-//! submission bookkeeping and retirement. bridge.cpp keeps the Unity interfaces, D3D12 objects,
-//! native frame-fence reads, recording events and the Win32 input producers.
+//! submission bookkeeping and retirement. The C11 leaf bridge.c keeps the Unity interface pointers
+//! and their SDK calls.
 //!
-//! The Unity package's D3D11 and Vulkan bridge (integrations/unity/native/bridge.cpp) shares the
+//! The Unity package's D3D11 and Vulkan bridges (d3d11_state.rs, vulkan_state.rs) share the
 //! activity flag, managed stage, callback count, packet store, policy and config: a process has
 //! one Unity renderer, so only one bridge uses this state. That bridge does not use the D3D12
 //! ring or sources. It applies policy changes through `pending_change` and `settle_change`.

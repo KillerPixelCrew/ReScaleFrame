@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-//! Graphics owner of the Unity package's D3D11 bridge (integrations/unity/native/bridge.cpp). That
-//! bridge copies Unity's D3D11 textures into shared surfaces and records the render pass on a
-//! D3D12 queue: the Runtime's D3D11 presentation device when it has one, else a device it creates
-//! on Unity's adapter.
+//! Graphics owner of the Unity package's D3D11 bridge, whose Unity SDK calls are the C11 leaf
+//! integrations/unity/native/bridge.c. That bridge copies Unity's D3D11 textures into shared
+//! surfaces and records the render pass on a D3D12 queue: the Runtime's D3D11 presentation device
+//! when it has one, else a device it creates on Unity's adapter.
 //!
 //! One record owns the shared graphics, the command slots and the shared surfaces as a unit:
 //! Unity's D3D11 device and immediate context, the D3D12 device and queue, the completion fence,

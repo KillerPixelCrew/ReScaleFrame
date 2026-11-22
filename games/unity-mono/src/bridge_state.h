@@ -1,16 +1,16 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
-/* Internal boundary between the shared Unity D3D12 bridge (bridge.cpp) and its Rust frame-state
+/* Internal boundary between the shared Unity D3D12 bridge (bridge.c) and its Rust frame-state
    owner (bridge_state.rs). Not a DLL ABI: the game plugin and the Unity package each link
-   bridge.cpp with the rsf-unity-mono archive. tools/generate-rust-bindings.py generates
+   bridge.c with the rsf-unity-mono archive. tools/generate-rust-bindings.py generates
    bridge_abi.rs from this header.
 
    Rust owns packet admission and storage, the policy generation, frame admission into the
    command ring, source-submission bookkeeping and retirement. bridge_d3d12.rs reads
-   Unity's frame fence and owns the recording objects and resource leases. bridge.cpp
-   supplies Unity SDK calls and CPU input observations.
+   Unity's frame fence and owns the recording objects and resource leases. The C11 leaf
+   bridge.c supplies the Unity SDK calls.
 
-   The Unity package's D3D11 and Vulkan bridge (integrations/unity/native/bridge.cpp) uses the
+   The Unity package's D3D11 and Vulkan bridges (d3d11_state.rs, vulkan_state.rs) use the
    same activity, managed stage, callbacks, packet store, policy and config. D3D11 and D3D12
    packets carry their texture references in the store. A process has one Unity
    renderer, so the two bridges never share this state at once. */

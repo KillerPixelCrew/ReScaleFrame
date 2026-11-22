@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
 /* Internal package ABI. Rust owns package state, routing, SR planning and the session
-   and Unity device lifecycles. package.cpp supplies SDK and Runtime boundary calls.
+   and Unity device lifecycles. The C11 leaf package.c supplies SDK and Runtime boundary calls.
    tools/generate-rust-bindings.py mirrors this header in package_abi.rs.
    Settings, status and frame-counter layouts are also used by Runtime/Native.cs. */
 #include <rescaleframe/game_renderer.h>
@@ -38,7 +38,7 @@ typedef struct rsf_unity_frame_counters {
     uint64_t total_presented, generated_presented, provider_generation;
 } rsf_unity_frame_counters;
 
-/* Defined by rescaleframe/native_fg.h and native_cpu.h, which package.cpp includes. */
+/* Defined by rescaleframe/native_fg.h and native_cpu.h, which package.c includes. */
 typedef struct rsf_native_fg_options rsf_native_fg_options;
 typedef struct rsf_native_fg_status rsf_native_fg_status;
 typedef struct rsf_native_latency_status rsf_native_latency_status;
@@ -69,7 +69,7 @@ typedef struct rsf_unity_package_view_setup {
    The Unity registry and graphics interface are borrowed until plugin unload. SDK device
    callback registration can re-enter the Rust device handler. */
 typedef struct rsf_unity_package_platform {
-    /* rsf::sharpening_settings::valid and rsf_dlss_preset_valid are header-inline C/C++. */
+    /* The sharpening header's size and Runtime validity check, and the inline rsf_dlss_preset_valid. */
     uint32_t (*sharpening_valid)(const rsf_sharpening_options* options);
     uint32_t (*dlss_preset_valid)(uint32_t preset);
     /* The renderer bridge's engine policy, rsf_unity_set_engine_spatial. */
@@ -141,14 +141,13 @@ typedef struct rsf_unity_package_platform {
        format. preview_prepare reads Unity's D3D12 device and queue and prepares the Editor
        preview for the extents; zero when either refuses. */
     void (*fg_submitted)(uint64_t session, uint64_t source_frame);
-    /* 1 after Runtime returns. With catch_exception set, 0 on a caught C++ exception. */
-    int (*fg_window)(const rsf_game_render_pass* pass, uint32_t catch_exception);
+    void (*fg_window)(const rsf_game_render_pass* pass);
     void (*fg_hudless)(void* commands, const rsf_game_render_pass* pass);
     uint32_t (*preview_present)(void* resource, const rsf_game_render_pass* pass, uint32_t common);
     void (*texture_desc)(void* resource, uint64_t* width, uint32_t* height, uint32_t* format);
     uint32_t (*preview_prepare)(uint32_t width, uint32_t height);
     /* The window guard's facts. preview_owns is rsf_unity_preview_owns, renderer_vulkan whether
-       Unity's renderer is Vulkan, vulkan_owns rsf_uvk_owns_window. window_class is 0 for another
+       Unity's renderer is Vulkan, vulkan_owns rsf_uvk_bridge_owns_window. window_class is 0 for another
        process's window or an unreadable class, 1 for this process's UnityWndClass and 2 for
        another class in this process; the class is read only for this process's windows. */
     uint32_t (*preview_owns)(void* window);

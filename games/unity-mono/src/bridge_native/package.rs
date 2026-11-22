@@ -22,15 +22,16 @@ unsafe extern "C" {
     fn rsf_unity_d3d12_sdk_load(interfaces: *mut c_void, package: bool);
     fn rsf_unity_d3d12_sdk_unload();
 
-    fn rsf_unity_package_vulkan_create_window() -> bool;
-    fn rsf_unity_package_vulkan_render(
-        id: c_int,
+    // vulkan_bridge.rs. The Unity calls behind them are guarded in vulkan_bridge.c.
+    fn rsf_uvk_bridge_create_window() -> bool;
+    fn rsf_uvk_bridge_render(
+        event_id: c_int,
+        base_event: c_int,
         packet: *const rsf_unity_packet,
         services: *const rsf_game_host_services,
         reconfigure: bool,
-    ) -> c_int;
-    fn rsf_unity_package_vulkan_graphics(device: *mut *mut c_void, queue: *mut *mut c_void)
-    -> bool;
+    ) -> bool;
+    fn rsf_uvk_bridge_graphics(device: *mut *mut c_void, queue: *mut *mut c_void) -> bool;
     fn rsf_unity_vulkan_open();
     fn rsf_unity_vulkan_stop_admission();
     fn rsf_unity_vulkan_try_close() -> bool;
@@ -112,7 +113,7 @@ extern "C" fn rsf_unity_package_bridge_open(editor: u32) -> u32 {
     match route() {
         Route::Vulkan => unsafe {
             rsf_unity_vulkan_open();
-            u32::from(editor != 0 || rsf_unity_package_vulkan_create_window())
+            u32::from(editor != 0 || rsf_uvk_bridge_create_window())
         },
         Route::D3d11 => {
             d3d11_state::open();
@@ -203,18 +204,10 @@ pub(super) fn render(
             let mut change = 0;
             let reconfigure =
                 offset == 0 && unsafe { rsf_unity_frames_pending_change(&mut change) } != 0;
-            let result = unsafe { rsf_unity_package_vulkan_render(id, packet, host, reconfigure) };
-            if result == 1 && reconfigure {
+            let delivered =
+                unsafe { rsf_uvk_bridge_render(id, event_id(), packet, host, reconfigure) };
+            if delivered && reconfigure {
                 rsf_unity_frames_settle_change(change);
-            } else if result < 0
-                && let Some(log) = host.log
-            {
-                unsafe {
-                    log(
-                        host.user,
-                        c"Unity DX11 bridge refused its render event.".as_ptr(),
-                    )
-                };
             }
         }
         Route::D3d11 if unsafe { rsf_unity_package_sdk_has_d3d11() } => {
@@ -241,7 +234,7 @@ pub(crate) fn graphics() -> Option<(ID3D12Device, ID3D12CommandQueue)> {
         }
         Route::Vulkan => {
             let (mut device, mut queue) = (null_mut(), null_mut());
-            if !unsafe { rsf_unity_package_vulkan_graphics(&mut device, &mut queue) } {
+            if !unsafe { rsf_uvk_bridge_graphics(&mut device, &mut queue) } {
                 return None;
             }
             Some(unsafe {

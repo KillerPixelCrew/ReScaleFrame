@@ -32,7 +32,7 @@ pub(super) const DEVICE_RETAINED: u8 = 2;
 
 const RETAINED: &str = "Unity device shutdown retained unproved bridge work; initialization requires a process restart.";
 
-// SAFETY for every call below: package.cpp's noexcept leaves, borrowing their pointer arguments
+// SAFETY for every call below: package.c's leaves, borrowing their pointer arguments
 // for the call only.
 impl Leaves {
     fn fg_submitted(&self, session: u64, source_frame: u64) {
@@ -104,7 +104,7 @@ impl Package {
                     .preview_present(&pass, pass.flags & RSF_UNITY_PREVIEW_SOURCE_COMMON != 0);
                 self.preview_refused(leaves, shown, &pass);
             } else {
-                unsafe { (leaves.fg_window)(&pass, 0) };
+                unsafe { (leaves.fg_window)(&pass) };
             }
             return false;
         }
@@ -226,8 +226,10 @@ pub(super) unsafe extern "C" fn observe_preview(pass: *const rsf_game_render_pas
     let Some(leaves) = LEAVES.get() else {
         return 0;
     };
-    // The presenter lends the pass with the preview swap chain already attached.
-    unsafe { (leaves.fg_window)(pass, 1) }
+    // The presenter lends the pass with the preview swap chain already attached. The Runtime
+    // entry cannot unwind, so its return is the observation.
+    unsafe { (leaves.fg_window)(pass) };
+    1
 }
 
 #[unsafe(no_mangle)]

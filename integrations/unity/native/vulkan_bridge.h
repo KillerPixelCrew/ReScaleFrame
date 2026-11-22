@@ -1,18 +1,16 @@
-// SPDX-License-Identifier: MIT
+/* SPDX-License-Identifier: MIT */
 #pragma once
-#include <d3d12.h>
-#include <rescaleframe/unity_bridge.h>
-#include <IUnityInterface.h>
-#include <wrl/client.h>
-// Unity package entry points for plugin events, texture/queue access and HWND management.
-// Foreign callback guards and the Rust ingress use the private vulkan_foreign.h contract.
-void rsf_uvk_preload(IUnityInterfaces*);
-void rsf_uvk_load(IUnityInterfaces*, int event_id);
-void rsf_uvk_unload() noexcept;
-bool rsf_uvk_render(int event_id, const rsf_unity_packet&, const rsf_game_host_services&, bool reconfigure);
-bool rsf_uvk_create_window();
-bool rsf_uvk_update_window(uint32_t width, uint32_t height);
-bool rsf_uvk_owns_window(void*);
-// The native preview caller receives independent COM references under bridge admission.
-bool rsf_uvk_graphics(Microsoft::WRL::ComPtr<ID3D12Device>& device,
-    Microsoft::WRL::ComPtr<ID3D12CommandQueue>& queue) noexcept;
+/* Unity Vulkan SDK leaves in vulkan_bridge.c. interfaces is Unity's IUnityInterfaces registry,
+   borrowed until plugin unload. preload installs the loader interception before device creation;
+   bind configures the three plugin events from base_event. Frame routing, presentation and the
+   player surface are Rust (vulkan_bridge.rs). Foreign callback guards and the Rust ingress use the
+   private vulkan_foreign.h contract. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+void rsf_uvk_preload(void* interfaces);
+void rsf_unity_package_sdk_bind_vulkan(void* interfaces, int base_event);
+void rsf_unity_package_sdk_unbind_vulkan(void);
+#ifdef __cplusplus
+}
+#endif

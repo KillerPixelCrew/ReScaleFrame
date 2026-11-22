@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-//! The Unity package's D3D12 SR views (integrations/unity/native/package.cpp's render callback):
+//! The Unity package's D3D12 SR views (integrations/unity/native/package.c's render callback):
 //! one Runtime SR context per Unity view key with the extents and backend it was made for, and
 //! the recording slots bound to the command lists the renderer bridge records with. Every
 //! bridge (D3D12, D3D11 interop and Vulkan interop) records SR on a ring of three D3D12 lists and
 //! retires a list's previous submission before recording it again, which is what
 //! rsf_sr12_evaluate's slot contract (0..2) needs. package_state.rs sequences creation,
-//! evaluation and release against the stored settings through package.cpp's typed leaves; this
+//! evaluation and release against the stored settings through package.c's typed leaves; this
 //! module holds the table and its rules, and never touches a context itself.
 use crate::package_abi::rsf_sr12;
 use rsf_game_sys::recording_slots::RecordingSlots;
@@ -97,7 +97,7 @@ impl View {
 /// Views by Unity view key in first-use order.
 pub(crate) struct Views(Vec<(u64, View)>);
 
-// SAFETY: the handles are Runtime SR contexts and command-list identities that package.cpp's
+// SAFETY: the handles are Runtime SR contexts and command-list identities that package.c's
 // leaves use under the view lock; nothing here dereferences them.
 unsafe impl Send for Views {}
 

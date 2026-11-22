@@ -2845,8 +2845,8 @@ Port settings, host services, routing and window admission, including safe subcl
 
 **Port files (3)**
 
-- [ ] [integrations/unity/native/package.cpp](integrations/unity/native/package.cpp)
-- [x] [integrations/unity/native/package.h](integrations/unity/native/package.h)
+- [x] [integrations/unity/native/package.c](integrations/unity/native/package.c) (C++ removed: C11 leaf for the SDK device events, the platform table, the `rsfu_*` exports and plugin load; the Runtime shims and the dead `fg_window` exception flag moved to direct Rust calls)
+- [x] integrations/unity/native/package.h (deleted: its two declarations had no caller)
 - [x] [integrations/unity/native/package_state.h](integrations/unity/native/package_state.h)
 
 **Rust review findings (9)**
@@ -2882,13 +2882,13 @@ Port shared frame state, submission resources and per-frame ownership from both 
 **Port files (8)**
 
 - [x] [games/unity-mono/include/rescaleframe/unity_bridge.h](games/unity-mono/include/rescaleframe/unity_bridge.h)
-- [ ] [games/unity-mono/src/bridge.cpp](games/unity-mono/src/bridge.cpp)
+- [x] [games/unity-mono/src/bridge.c](games/unity-mono/src/bridge.c) (C++ removed: C11 leaf for the pinned D3D12 interface calls and resource-state records, linked into the Mono plugin and the package)
 - [x] [games/unity-mono/src/bridge.h](games/unity-mono/src/bridge.h)
 - [x] [games/unity-mono/src/bridge_interop.h](games/unity-mono/src/bridge_interop.h)
 - [x] [games/unity-mono/src/bridge_state.h](games/unity-mono/src/bridge_state.h)
 - [x] [games/unity-mono/src/d3d11_pass.h](games/unity-mono/src/d3d11_pass.h)
 - [x] [games/unity-mono/src/d3d11_state.h](games/unity-mono/src/d3d11_state.h)
-- [ ] [integrations/unity/native/bridge.cpp](integrations/unity/native/bridge.cpp)
+- [x] [integrations/unity/native/bridge.c](integrations/unity/native/bridge.c) (C++ removed: C11 leaf for the renderer query and the D3D11 interface; the swapchain getter is gated by a CMake header check; the Vulkan wrappers became direct Rust calls)
 
 **Rust review findings (7)**
 
@@ -2920,8 +2920,8 @@ Port resolver, shared surfaces, presentation and their retirement. Account for e
 
 - [x] [games/unity-mono/src/vulkan_resolver.h](games/unity-mono/src/vulkan_resolver.h)
 - [x] [games/unity-mono/src/vulkan_state.h](games/unity-mono/src/vulkan_state.h)
-- [ ] [integrations/unity/native/vulkan_bridge.cpp](integrations/unity/native/vulkan_bridge.cpp)
-- [x] [integrations/unity/native/vulkan_bridge.h](integrations/unity/native/vulkan_bridge.h)
+- [x] [integrations/unity/native/vulkan_bridge.c](integrations/unity/native/vulkan_bridge.c) (C++ removed: C11 leaf for the Vulkan interface, loader hooks and layout assertions, with SEH guards filtered on 0xE06D7363)
+- [x] [integrations/unity/native/vulkan_bridge.h](integrations/unity/native/vulkan_bridge.h) (C declarations only)
 
 **Rust review findings (7)**
 

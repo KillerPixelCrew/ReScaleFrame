@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
 /* Internal boundary between the Unity package's Vulkan bridge (integrations/unity/native/
-   vulkan_bridge.cpp) and its Rust state (vulkan_state.rs). The GPU handle records are
+   vulkan_bridge.c) and its Rust state (vulkan_state.rs). The GPU handle records are
    generated in vulkan_handles.rs. The frame and presentation records use the existing
    packet bindings and layout assertions.
 
@@ -15,7 +15,7 @@
    D3D11 and Vulkan bridges never use it at once. Rust owns the shared graphics device record,
    Vulkan dispatch, command pool, per-slot handles and imported images. vulkan_platform.rs
    executes the graphics operations. Rust also owns the HWND path and the image descriptors
-   copied into each admitted event. vulkan_bridge.cpp calls the Unity SDK and guards foreign
+   copied into each admitted event. vulkan_bridge.c calls the Unity SDK and guards foreign
    callbacks. */
 #include "bridge_state.h"
 

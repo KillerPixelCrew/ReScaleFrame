@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-//! The Unity package's session services behind package.cpp: the host services and managed bridge
+//! The Unity package's session services behind package.c: the host services and managed bridge
 //! API of each session, the package log, the input window's registration and retirement, and the
 //! routing of the bridge's CPU events, the input window's messages and rsfu_input into the
-//! Runtime. package.cpp keeps the Win32, Unity and Runtime calls as leaves: the file, window,
+//! Runtime. package.c keeps the Win32, Unity and Runtime calls as leaves: the file, window,
 //! raw-input and clock calls, the Vulkan surface, the render callback and plan, the bridge's
 //! preparation and rsf_fg12_cpu.
 //!
@@ -32,7 +32,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::SeqCst};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 /// RSF_BACKEND_ERROR_INVALID_ARGUMENT and RSF_BACKEND_ERROR_FEATURE_FAILED, cast macros;
-/// package.cpp asserts them.
+/// package.c asserts them.
 const BACKEND_INVALID_ARGUMENT: i32 = -1;
 pub(super) const BACKEND_FEATURE_FAILED: i32 = -9;
 /// The kinds rsfu_input accepts.
@@ -154,7 +154,7 @@ impl Services {
     }
 }
 
-// SAFETY for every call below: package.cpp's noexcept leaves, borrowing their pointer arguments
+// SAFETY for every call below: package.c's leaves, borrowing their pointer arguments
 // for the call only. Paths are terminated here.
 impl Leaves {
     fn bridge_open(&self, editor: bool) -> bool {
@@ -402,7 +402,7 @@ unsafe extern "C" fn host_cpu_event(_: *mut c_void, event: *const rsf_game_cpu_e
     }
 }
 
-/// The package log in every form package.cpp lends it.
+/// The package log in every form package.c lends it.
 ///
 /// # Safety
 /// `text` is null or NUL-terminated.

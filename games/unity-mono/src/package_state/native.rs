@@ -3,6 +3,7 @@
 use super::services::backend_log;
 use super::{BACKEND_OK, PACKAGE, routing, services};
 use crate::bridge_native::package::graphics;
+use crate::bridge_present_abi::rsf_d3d11_present_host;
 use crate::generation::RSF_DLSS_ENGINE_UNITY;
 use crate::package_abi::{
     RSF_DLSS_ABI_VERSION, RSF_SR12_PLAN_ABI_VERSION, rsf_dlss_setup, rsf_sr12,
@@ -19,14 +20,13 @@ use windows::Win32::Graphics::{
 use windows::core::Interface;
 
 unsafe extern "C" {
-    fn rsf_unity_package_choose_fg(vendor: u32, software: u32) -> u32;
-    fn rsf_unity_package_create_planned(
+    // Runtime entries linked from rsf_orchestrator_core. They are Rust and cannot unwind.
+    fn rsf_fg_default_backend(vendor: u32, software: u32) -> u32;
+    fn rsf_sr12_create_planned(
         setup: *const rsf_sr12_setup,
         plan: *mut rsf_sr12_plan_result,
         output: *mut *mut rsf_sr12,
-        result: *mut i32,
-    ) -> u32;
-    fn rsf_unity_package_streamline_host() -> *mut c_void;
+    ) -> i32;
     fn rsf_unity_preview_prepare(
         device: *mut c_void,
         queue: *mut c_void,
@@ -75,7 +75,7 @@ unsafe extern "C" fn rsf_unity_package_create_view(
         render_width: view.render_width,
         render_height: view.render_height,
         inverted_depth: view.inverted_depth,
-        streamline_host: unsafe { rsf_unity_package_streamline_host() },
+        streamline_host: unsafe { rsf_d3d11_present_host() }.cast(),
         fsr2_directory_utf8: view.fsr_utf8,
         fsr3_directory_utf8: view.fsr_utf8,
         fsr4_directory_utf8: view.fsr_utf8,
@@ -102,10 +102,7 @@ unsafe extern "C" fn rsf_unity_package_create_view(
         abi_version: RSF_SR12_PLAN_ABI_VERSION,
         ..Default::default()
     };
-    let mut created = BACKEND_OK;
-    if unsafe { rsf_unity_package_create_planned(&setup, &mut plan, output, &mut created) } == 0 {
-        return 0;
-    }
+    let created = unsafe { rsf_sr12_create_planned(&setup, &mut plan, output) };
     unsafe {
         result.write(if plan.requested_result != BACKEND_OK {
             plan.requested_result
@@ -135,12 +132,7 @@ unsafe extern "C" fn rsf_unity_package_default_fg(backend: *mut u32) -> u32 {
         return 0;
     };
     let software = desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0;
-    unsafe {
-        backend.write(rsf_unity_package_choose_fg(
-            desc.VendorId,
-            u32::from(software),
-        ))
-    };
+    unsafe { backend.write(rsf_fg_default_backend(desc.VendorId, u32::from(software))) };
     1
 }
 

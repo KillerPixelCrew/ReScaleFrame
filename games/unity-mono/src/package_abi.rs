@@ -806,12 +806,7 @@ pub struct rsf_unity_package_platform {
         ::core::option::Option<unsafe extern "C" fn(counter: *mut u64, frequency: *mut u64)>,
     pub cpu: ::core::option::Option<unsafe extern "C" fn(event: *const rsf_game_cpu_event)>,
     pub fg_submitted: ::core::option::Option<unsafe extern "C" fn(session: u64, source_frame: u64)>,
-    pub fg_window: ::core::option::Option<
-        unsafe extern "C" fn(
-            pass: *const rsf_game_render_pass,
-            catch_exception: u32,
-        ) -> ::core::ffi::c_int,
-    >,
+    pub fg_window: ::core::option::Option<unsafe extern "C" fn(pass: *const rsf_game_render_pass)>,
     pub fg_hudless: ::core::option::Option<
         unsafe extern "C" fn(commands: *mut ::core::ffi::c_void, pass: *const rsf_game_render_pass),
     >,

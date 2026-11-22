@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-//! State of the Unity package's Vulkan bridge (integrations/unity/native/vulkan_bridge.cpp). That
-//! bridge copies Unity's Vulkan images into same-adapter D3D12 resources, records the render pass
-//! on its own D3D12 queue and replaces Unity's present with its own DXGI swap chain.
+//! State of the Unity package's Vulkan bridge, whose Unity SDK calls and foreign guards are the
+//! C11 leaf integrations/unity/native/vulkan_bridge.c. That bridge copies Unity's Vulkan images
+//! into same-adapter D3D12 resources, records the render pass on its own D3D12 queue and replaces
+//! Unity's present with its own DXGI swap chain.
 //!
 //! This module owns the bridge's admission and lifecycle: the shared device's readiness and its
 //! single creator, the permanent fault, the render events queued to Unity and their packets, the

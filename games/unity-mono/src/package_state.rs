@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! The Unity package's state behind ReScaleFrame.Unity.Native.dll's rsfu_* exports
-//! (integrations/unity/native/package.cpp): the stored settings and their validation, the status
+//! (integrations/unity/native/package.c): the stored settings and their validation, the status
 //! snapshot, the render plan, temporal readiness, the pending reconfiguration, the session
 //! lifecycle with its result codes, the sequencing of the render callback's D3D12 SR views
 //! (their table and slot rules are package_views.rs), the presentation: the package identity,
@@ -46,9 +46,9 @@ use std::sync::atomic::{
 };
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
-/// RSF_BACKEND_OK, a cast macro bindgen does not evaluate; package.cpp asserts it.
+/// RSF_BACKEND_OK, a cast macro bindgen does not evaluate; package.c asserts it.
 const BACKEND_OK: i32 = 0;
-/// RSF_SCREEN_MENU and RSF_SCREEN_FLIGHT, cast macros; package.cpp asserts them. The stored
+/// RSF_SCREEN_MENU and RSF_SCREEN_FLIGHT, cast macros; package.c asserts them. The stored
 /// gameplay flag picks the screen class of every SR pass.
 /// rsfu_initialize's results, part of the managed contract (ReScaleFrameRuntime.Apply).
 mod code {
@@ -174,7 +174,7 @@ struct Leaves {
     timestamp: unsafe extern "C" fn(*mut u64, *mut u64),
     cpu: unsafe extern "C" fn(*const rsf_game_cpu_event),
     fg_submitted: unsafe extern "C" fn(u64, u64),
-    fg_window: unsafe extern "C" fn(*const rsf_game_render_pass, u32) -> c_int,
+    fg_window: unsafe extern "C" fn(*const rsf_game_render_pass),
     fg_hudless: unsafe extern "C" fn(*mut c_void, *const rsf_game_render_pass),
     preview_present: unsafe extern "C" fn(*mut c_void, *const rsf_game_render_pass, u32) -> u32,
     texture_desc: unsafe extern "C" fn(*mut c_void, *mut u64, *mut u32, *mut u32),
@@ -187,10 +187,10 @@ struct Leaves {
     bridge_unload: unsafe extern "C" fn(),
 }
 
-// SAFETY for every call below: the leaves are package.cpp's noexcept functions and borrow their
+// SAFETY for every call below: the leaves are package.c's functions and borrow their
 // pointer arguments for the call only.
 impl Leaves {
-    /// The table is package.cpp's constant; an incomplete one is a build defect.
+    /// The table is package.c's constant; an incomplete one is a build defect.
     unsafe fn adopt(platform: *const rsf_unity_package_platform) -> Option<Self> {
         if platform.is_null() {
             return None;
@@ -369,7 +369,7 @@ struct Package {
     temporal_ready: AtomicBool,
     /// A renderer bridge failure, reported as the SR result until the next session.
     bridge_result: AtomicI32,
-    /// Unity's device (routing.rs), written only under package.cpp's mutex.
+    /// Unity's device (routing.rs), written only under the package operation lock.
     device: AtomicU8,
     /// Editor preview refusals counted toward the process's diagnostic budget.
     preview_reports: AtomicU32,
@@ -585,7 +585,7 @@ impl Package {
     }
 
     /// The stored status merged with the Runtime's generation and latency status. The merge is
-    /// kept, as the C++ kept it. Leaves are called in the C++ order: generation status, present
+    /// kept, as the C++ kept it. Leaves are called in the original C++ order: generation status, present
     /// backend, provider-switch result, latency status.
     fn status(&self, leaves: &Leaves) -> rsf_unity_package_status {
         let fg = leaves.fg_status();
@@ -745,7 +745,7 @@ impl Package {
         self.temporal_ready.store(false, SeqCst);
     }
 
-    /// The SR pass of package.cpp's render callback, in the C++ order: settings are read once,
+    /// The SR pass of package.c's render callback, in the original C++ order: settings are read once,
     /// a reconfiguring pass releases every view, a view whose extents no longer fit is
     /// destroyed, a missing one is created, and evaluation waits for a valid camera, the end of
     /// a pending reconfiguration and a recording slot.
@@ -1468,13 +1468,8 @@ mod tests {
     unsafe extern "C" fn fg_submitted(session: u64, source_frame: u64) {
         call(format!("submitted {session} {source_frame}"));
     }
-    unsafe extern "C" fn fg_window(
-        pass: *const rsf_game_render_pass,
-        catch_exception: u32,
-    ) -> c_int {
-        assert_eq!(catch_exception, 0);
+    unsafe extern "C" fn fg_window(pass: *const rsf_game_render_pass) {
         call(format!("window {}", unsafe { (*pass).view_key }));
-        1
     }
     unsafe extern "C" fn fg_hudless(commands: *mut c_void, pass: *const rsf_game_render_pass) {
         call(format!("hudless {:#x} {}", commands as usize, unsafe {
@@ -1531,7 +1526,7 @@ mod tests {
         call("bridge unload".into());
     }
 
-    /// The table every test adopts, at a fixed address like package.cpp's constant.
+    /// The table every test adopts, at a fixed address like package.c's constant.
     static PLATFORM: rsf_unity_package_platform = TABLE;
     fn platform() -> rsf_unity_package_platform {
         TABLE
