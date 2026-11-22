@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! SR and HUDless callback order with fake leaves standing in for render_hooks.cpp.
 use super::*;
-use crate::render_hooks::recovery::{Facts, Lease, OutputOwner, Request};
+use crate::render_hooks::recovery::fixtures::IDLE;
 use std::cell::RefCell;
 
 const CONTEXT: usize = 0x100;
@@ -79,9 +79,9 @@ unsafe extern "C" fn world(out: &mut World) {
             began_qpc: 0,
             frequency: 0,
         };
-        out.pass = &fake.pass;
-        out.frame_pass = &fake.frame;
-        out.screen_basis = &fake.basis;
+        out.pass = &mut fake.pass;
+        out.frame_pass = &mut fake.frame;
+        out.screen_basis = &mut fake.basis;
         out.context = CONTEXT as *mut c_void;
         out.chain = CHAIN as *mut c_void;
         out.upscale = true;
@@ -193,25 +193,18 @@ unsafe extern "C" fn end_output() -> bool {
     event("end_output", 0);
     true
 }
-unsafe extern "C" fn read_framebuffer() -> bool {
-    event("read_framebuffer", 0);
-    true
-}
-unsafe extern "C" fn framebuffer(out: &mut Framebuffer) {
+unsafe extern "C" fn read_framebuffer(lease: *mut c_void, out: &mut Framebuffer) -> bool {
+    event("read_framebuffer", lease as usize as u32);
     out.context = CONTEXT as *mut c_void;
     out.chain = CHAIN as *mut c_void;
     out.texture = TEXTURE as *mut c_void;
     out.native_frame = with(|fake| fake.framebuffer_frame);
     out.window_key = WINDOW_KEY;
+    out.extent = [1920, 1080, 1];
+    true
 }
-unsafe extern "C" fn framebuffer_extent(extent: &mut [u32; 3]) {
-    *extent = [1920, 1080, 1];
-}
-unsafe extern "C" fn release_framebuffer() {
-    event("release_framebuffer", 0);
-}
-unsafe extern "C" fn publish_window(window: *const rsf_game_render_pass) {
-    event("publish_window", 0);
+unsafe extern "C" fn publish_window(lease: *const c_void, window: *const rsf_game_render_pass) {
+    event("publish_window", lease as usize as u32);
     with(|fake| {
         fake.pass = unsafe { *window };
         fake.window_open = true;
@@ -237,58 +230,24 @@ const LEAVES: Leaves = Leaves {
     reconstruct,
     end_output,
     read_framebuffer,
-    framebuffer,
-    framebuffer_extent,
-    release_framebuffer,
     publish_window,
 };
 
-unsafe extern "C" fn report(_: *const c_char) {}
 unsafe extern "C" fn refuse() {
     event("refuse", 0);
     with(|fake| fake.refused = true);
 }
-unsafe extern "C" fn facts(_: &mut Facts) {}
 unsafe extern "C" fn resolve(full_output: bool, published: bool) {
     event(
         "resolve",
         (u32::from(full_output) << 1) | u32::from(published),
     );
 }
-unsafe extern "C" fn unused(_: bool) -> bool {
-    unreachable!()
-}
-unsafe extern "C" fn adopt(_: *const i32) {}
-unsafe extern "C" fn nothing() {}
-unsafe extern "C" fn lease(_: u32, _: &mut Lease) {}
-unsafe extern "C" fn preflight(
-    _: *const rsf_game_render_pass,
-    _: *mut c_void,
-    _: &mut OutputOwner,
-) -> bool {
-    false
-}
-unsafe extern "C" fn reduce(_: &mut Request, _: &mut rsf_result) -> bool {
-    false
-}
 
-// No token is owned, so SEAL and FINISH answer without a host call.
 const RECOVERY: RecoveryLeaves = RecoveryLeaves {
-    report,
     refuse,
-    facts,
-    same_source: yes,
     resolve,
-    read_raster: unused,
-    same_resources: unused,
-    adopt,
-    discard: nothing,
-    release: nothing,
-    lease,
-    preflight,
-    raster_current: yes,
-    begin_output: yes,
-    reduce,
+    ..IDLE
 };
 
 fn events() -> Vec<(&'static str, u32)> {
@@ -364,17 +323,16 @@ fn hudless_opens_window_after_final_scene() {
     install(1, 1);
     assert_eq!(emit_sr(&LEAVES, &RECOVERY), SrOutcome::Published);
     let _ = events();
-    emit_hudless(&LEAVES, &RECOVERY);
+    emit_hudless(&LEAVES, &RECOVERY, TEXTURE as *mut c_void);
     assert_eq!(
         events(),
         [
-            ("read_framebuffer", 0),
+            ("read_framebuffer", TEXTURE as u32),
             ("classify", 0),
             ("final_scene", 1),
             ("final_scene", 0),
-            ("publish_window", 0),
+            ("publish_window", TEXTURE as u32),
             ("window", 1),
-            ("release_framebuffer", 0),
         ]
     );
     with(|fake| {
@@ -391,10 +349,7 @@ fn hudless_refuses_a_foreign_framebuffer_without_callbacks() {
     assert_eq!(emit_sr(&LEAVES, &RECOVERY), SrOutcome::Published);
     let _ = events();
     with(|fake| fake.framebuffer_frame = 6);
-    emit_hudless(&LEAVES, &RECOVERY);
-    assert_eq!(
-        events(),
-        [("read_framebuffer", 0), ("release_framebuffer", 0)]
-    );
+    emit_hudless(&LEAVES, &RECOVERY, TEXTURE as *mut c_void);
+    assert_eq!(events(), [("read_framebuffer", TEXTURE as u32)]);
     assert!(with(|fake| !fake.window_open));
 }

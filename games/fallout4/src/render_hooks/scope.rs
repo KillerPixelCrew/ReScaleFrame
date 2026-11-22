@@ -12,10 +12,11 @@
 //! checks and recovery retirement use the recovery leaves. See
 //! docs/research/rust-fallout4-render-hooks.md.
 
+use super::World;
 use super::publication;
 use super::recovery::{self, Leaves as RecoveryLeaves};
-use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;
 use crate::resolution::is_busy as resolution_busy;
+use crate::resolution_stages::RSF_FALLOUT4_STAGE_SOURCE_RETIRED as SOURCE_RETIRED;
 use crate::{RSF_ERROR_NOT_READY, RSF_OK, image};
 use rsf_game_sys::{
     RSF_GAME_RENDER_FRAME, RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_SUBMISSION, rsf_game_render_pass,
@@ -23,14 +24,10 @@ use rsf_game_sys::{
 };
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::offset_of;
-use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 // WorldBegin, the FRAME and SUBMISSION pass key.
 const FRAME_PASS: usize = 0x21f_0ac0;
-
-// ResolutionStage::source_retired (resolution.h).
-const SOURCE_RETIRED: u32 = 7;
 
 /// NativeRenderOwner: the native renderer, device, Context, chain, window, scene graph view and
 /// frame counter, read whole by the typed owner reader. The DR seam (producer.rs) compares it with
@@ -48,31 +45,8 @@ pub(super) struct Owner {
     pub(super) frame: u32,
 }
 
-/// NativeScopeWorld: the World values a step reads at the moment it runs. The pass pointers name
-/// World fields of the calling thread and stay valid for it.
-#[repr(C)]
-pub(super) struct World {
-    cpu: CpuIdentity,
-    pass: *mut rsf_game_render_pass,
-    frame_pass: *mut rsf_game_render_pass,
-    submission_pass: *mut rsf_game_render_pass,
-    context: *mut c_void,
-    inputs: bool,
-    published: bool,
-    window_open: bool,
-    frame_open: bool,
-    submission_open: bool,
-    refused: bool,
-    auxiliary_open: bool,
-}
-
 const _: () = {
     assert!(size_of::<Owner>() == 64 && offset_of!(Owner, frame) == 56);
-    assert!(size_of::<World>() == 80);
-    assert!(offset_of!(World, pass) == 40);
-    assert!(offset_of!(World, context) == 64);
-    assert!(offset_of!(World, inputs) == 72);
-    assert!(offset_of!(World, auxiliary_open) == 78);
 };
 
 /// NativeScopeLeaves, constant for the process. Every leaf acts on the calling thread's World.
@@ -113,28 +87,7 @@ const _: () = assert!(size_of::<Leaves>() == 16 * size_of::<usize>());
 
 impl Leaves {
     fn world(&self) -> World {
-        let mut world = World {
-            cpu: CpuIdentity {
-                session: 0,
-                source: 0,
-                submission: 0,
-                began_qpc: 0,
-                frequency: 0,
-            },
-            pass: null_mut(),
-            frame_pass: null_mut(),
-            submission_pass: null_mut(),
-            context: null_mut(),
-            inputs: false,
-            published: false,
-            window_open: false,
-            frame_open: false,
-            submission_open: false,
-            refused: false,
-            auxiliary_open: false,
-        };
-        unsafe { (self.world)(&mut world) };
-        world
+        World::read(self.world)
     }
     fn read_owner(&self) -> Option<Owner> {
         let mut owner = Owner::default();
@@ -282,11 +235,7 @@ fn finish(scope: &Leaves, recovery: &RecoveryLeaves) {
         recovery.refuse();
     }
     let world = scope.world();
-    let state = if world.inputs {
-        world.pass
-    } else {
-        world.frame_pass
-    };
+    let state = world.state();
     let result = if resolution_finished {
         RSF_OK
     } else {

@@ -83,19 +83,41 @@ static_assert(sizeof(NativeWorldAdmission) == 24 && offsetof(NativeWorldAdmissio
 static_assert(sizeof(NativeRenderScopeKey) == 40 && offsetof(NativeRenderScopeKey, context) == 24 &&
     offsetof(NativeRenderScopeKey, chain) == 32);
 
+// A fresh snapshot of the calling thread's World. Pass pointers name that World's fields.
+struct NativeWorld {
+    rsf_fallout4_cpu_identity cpu;
+    rsf_game_render_pass* pass;
+    rsf_game_render_pass* frame_pass;
+    rsf_game_render_pass* submission_pass;
+    rsf_game_render_pass* screen_basis;
+    void* context;
+    void* chain;
+    bool upscale;
+    bool recovery_exported;
+    bool in_imagespace;
+    bool inputs;
+    bool published;
+    bool window_open;
+    bool frame_open;
+    bool submission_open;
+    bool refused;
+    bool raster_refused;
+    bool auxiliary_open;
+    bool depth_valid;
+    bool raster_valid;
+    bool depth_interrupted;
+    bool full_output_resolved;
+};
+static_assert(sizeof(NativeWorld) == 104 && offsetof(NativeWorld, pass) == 40 &&
+    offsetof(NativeWorld, context) == 72 && offsetof(NativeWorld, upscale) == 88 &&
+    offsetof(NativeWorld, full_output_resolved) == 102);
+
 // Reduced-render recovery. Rust owns the Runtime reduced-frame token, its verdicts, the surface
 // plan, the reserved output owner, the receipt budgets and the owned-token count. C++ keeps the
 // typed raster reads, COM identity, the held and candidate leases, the guarded Runtime call and
 // the World flags. Every leaf acts on the calling thread's World.
 constexpr uint32_t RecoverySurfaceCount = 5;
 enum NativeRecoveryLeaseSlot : uint32_t { RecoveryLeaseHeld = 0, RecoveryLeaseCandidate = 1 };
-struct NativeRecoveryFacts {
-    void* context;          // World Context
-    uint64_t source;        // World CPU source
-    bool exported;          // rsf_d3d11_host_reduced_frame is bound
-    bool frame_open;
-    bool full_output_resolved;
-};
 struct NativeRecoveryLease {
     const rsf_game_render_pass* pass;
     void* context;
@@ -105,7 +127,7 @@ struct NativeRecoveryLease {
 struct NativeRecoveryLeaves {
     void (*report)(const char*) noexcept;
     void (*refuse)() noexcept;
-    void (*facts)(NativeRecoveryFacts*) noexcept;
+    void (*facts)(NativeWorld*) noexcept;
     bool (*same_source)() noexcept;
     // FINISH verdict: World full-output and temporal publication flags.
     void (*resolve)(bool full_output, bool published) noexcept;
@@ -129,7 +151,6 @@ struct NativeRecoveryLeaves {
     bool (*reduce)(rsf_d3d11_reduced_frame*, int32_t* result) noexcept;
 };
 
-static_assert(sizeof(NativeRecoveryFacts) == 24 && offsetof(NativeRecoveryFacts, exported) == 16);
 static_assert(sizeof(NativeRecoveryLease) == 7 * sizeof(void*));
 static_assert(sizeof(NativeRecoveryLeaves) == 15 * sizeof(void*));
 
@@ -139,18 +160,7 @@ static_assert(sizeof(NativeRecoveryLeaves) == 15 * sizeof(void*));
 // HUDless framebuffer leases, the engine depth and screen readers, the guarded Runtime calls and
 // the World fields. Rust also uses the recovery leaves' report, refuse, same_source and resolve.
 struct NativeScreen;
-struct NativePublicationWorld {
-    rsf_fallout4_cpu_identity cpu;
-    const rsf_game_render_pass* pass;          // World pass
-    const rsf_game_render_pass* frame_pass;
-    const rsf_game_render_pass* screen_basis;
-    void* context;                             // World Context and outer chain
-    void* chain;
-    bool upscale;                              // process_upscale is bound
-    bool in_imagespace, inputs, window_open, frame_open, submission_open;
-    bool refused, raster_refused, auxiliary_open;
-    bool depth_valid;                          // same-source prepass depth snapshot
-};
+struct NativeFramebuffer;
 struct NativePublicationInputs {
     const rsf_game_render_pass* pass;
     void* context;
@@ -161,9 +171,10 @@ struct NativePublicationFramebuffer {
     void* chain;
     void* texture;
     uint64_t native_frame, window_key;
+    uint32_t extent[3];
 };
 struct NativePublicationLeaves {
-    void (*world)(NativePublicationWorld*) noexcept;
+    void (*world)(NativeWorld*) noexcept;
     // The shared bounded diagnostic receipt.
     void (*diagnostic)(const char*) noexcept;
     // Replace the SR input lease with a fresh producer read on the depth snapshot.
@@ -191,21 +202,15 @@ struct NativePublicationLeaves {
     // Evaluate the input lease; a throw drains auxiliaries and answers RSF_ERROR_NOT_READY.
     int32_t (*reconstruct)(const rsf_game_render_pass*) noexcept;
     bool (*end_output)() noexcept;
-    // Replace the framebuffer lease with a fresh logical framebuffer read.
-    bool (*read_framebuffer)() noexcept;
-    void (*framebuffer)(NativePublicationFramebuffer*) noexcept;
-    // Width, height and sample count of the framebuffer texture.
-    void (*framebuffer_extent)(uint32_t extent[3]) noexcept;
-    void (*release_framebuffer)() noexcept;
-    // Final colour lease, World pass and open WINDOW.
-    void (*publish_window)(const rsf_game_render_pass* window) noexcept;
+    // Acquire in the viewport detour's stack lease and return that read's facts, including on refusal.
+    bool (*read_framebuffer)(NativeFramebuffer*, NativePublicationFramebuffer*) noexcept;
+    // Retain the final colour from that lease and open WINDOW.
+    void (*publish_window)(const NativeFramebuffer*, const rsf_game_render_pass* window) noexcept;
 };
-static_assert(sizeof(NativePublicationWorld) == 96 && offsetof(NativePublicationWorld, pass) == 40 &&
-    offsetof(NativePublicationWorld, upscale) == 80 && offsetof(NativePublicationWorld, depth_valid) == 89);
 static_assert(sizeof(NativePublicationInputs) == 3 * sizeof(void*));
-static_assert(sizeof(NativePublicationFramebuffer) == 40 &&
+static_assert(sizeof(NativePublicationFramebuffer) == 56 &&
     offsetof(NativePublicationFramebuffer, native_frame) == 24);
-static_assert(sizeof(NativePublicationLeaves) == 22 * sizeof(void*));
+static_assert(sizeof(NativePublicationLeaves) == 19 * sizeof(void*));
 
 // FRAME, SUBMISSION and WINDOW scope (render_hooks/scope.rs). Rust owns the before/after owner
 // lease verdict, the FRAME pass identity and keys, FRAME then SUBMISSION begin, the balanced
@@ -222,16 +227,8 @@ struct NativeRenderOwner {
 extern "C" bool rsf_fallout4_render_read_owner(NativeRenderOwner*);
 extern "C" bool rsf_fallout4_render_read_outer_chain(uintptr_t renderer, uintptr_t* chain);
 
-struct NativeScopeWorld {
-    rsf_fallout4_cpu_identity cpu;
-    rsf_game_render_pass* pass;                // World pass
-    rsf_game_render_pass* frame_pass;
-    rsf_game_render_pass* submission_pass;
-    void* context;                             // World Context
-    bool inputs, published, window_open, frame_open, submission_open, refused, auxiliary_open;
-};
 struct NativeScopeLeaves {
-    void (*world)(NativeScopeWorld*) noexcept;
+    void (*world)(NativeWorld*) noexcept;
     // Renderer cell, RendererData device, Context, window and chain, scene graph view, frame
     // counter and accepted window; false when any is unreadable, null or not the renderer.
     bool (*read_owner)(NativeRenderOwner*) noexcept;
@@ -261,9 +258,6 @@ struct NativeScopeLeaves {
 };
 
 static_assert(sizeof(NativeRenderOwner) == 64 && offsetof(NativeRenderOwner, frame) == 56);
-static_assert(sizeof(NativeScopeWorld) == 80 && offsetof(NativeScopeWorld, pass) == 40 &&
-    offsetof(NativeScopeWorld, context) == 64 && offsetof(NativeScopeWorld, inputs) == 72 &&
-    offsetof(NativeScopeWorld, auxiliary_open) == 78);
 static_assert(sizeof(NativeScopeLeaves) == 16 * sizeof(void*));
 
 // Imagespace, Effects and TAA seams (render_hooks/imagespace.rs). Rust owns the verified caller
@@ -275,20 +269,12 @@ static_assert(sizeof(NativeScopeLeaves) == 16 * sizeof(void*));
 // fields and the scope guard that runs the imagespace exit when the original returns or unwinds.
 // Rust also uses the recovery leaves' report, refuse, same_source and raster_current, and the
 // publication leaves for the SR seam.
-struct NativeImagespaceWorld {
-    rsf_fallout4_cpu_identity cpu;
-    const rsf_game_render_pass* pass;          // World pass
-    const rsf_game_render_pass* frame_pass;
-    void* context;                             // World Context
-    bool in_imagespace, inputs, published, frame_open, full_output_resolved, auxiliary_open;
-    bool raster_valid;                         // same-frame prepass raster snapshot
-};
 struct NativeEffectsCall {
     uintptr_t caller, manager;
     uint32_t first, last, mode, flags;
 };
 struct NativeImagespaceLeaves {
-    void (*world)(NativeImagespaceWorld*) noexcept;
+    void (*world)(NativeWorld*) noexcept;
     // World inside the selected imagespace.
     void (*enter)() noexcept;
     // Clear the World's imagespace, temporal publication and full-output flags.
@@ -304,9 +290,6 @@ struct NativeImagespaceLeaves {
     void (*diagnostic)(const char*) noexcept;
 };
 
-static_assert(sizeof(NativeImagespaceWorld) == 72 && offsetof(NativeImagespaceWorld, pass) == 40 &&
-    offsetof(NativeImagespaceWorld, context) == 56 && offsetof(NativeImagespaceWorld, in_imagespace) == 64 &&
-    offsetof(NativeImagespaceWorld, raster_valid) == 70);
 static_assert(sizeof(NativeEffectsCall) == 32 && offsetof(NativeEffectsCall, first) == 16 &&
     offsetof(NativeEffectsCall, flags) == 28);
 static_assert(sizeof(NativeImagespaceLeaves) == 8 * sizeof(void*));
@@ -322,22 +305,13 @@ static_assert(sizeof(NativeImagespaceLeaves) == 8 * sizeof(void*));
 // World fields and snapshots. Rust also uses the recovery leaves' refuse and same_source, and the
 // publication leaves for the HUDless seam.
 struct NativeDepthSnapshot;
-struct NativeProducerWorld {
-    rsf_fallout4_cpu_identity cpu;
-    const rsf_game_render_pass* pass;          // World pass
-    const rsf_game_render_pass* frame_pass;
-    void* context;                             // World Context and outer chain
-    void* chain;
-    bool inputs, published, frame_open, submission_open;
-    bool depth_interrupted;                    // a nested prepass ran inside the selected one
-};
 // The World source before the original prepass and its selection, held across the original.
 struct NativePrepassCall {
     rsf_fallout4_cpu_identity identity;
     bool selected;
 };
 struct NativeProducerLeaves {
-    void (*world)(NativeProducerWorld*) noexcept;
+    void (*world)(NativeWorld*) noexcept;
     // Clear the depth snapshot, and the raster snapshot when raster is set.
     void (*invalidate)(bool raster) noexcept;
     void (*interrupt_depth)(bool interrupted) noexcept;
@@ -362,9 +336,6 @@ struct NativeProducerLeaves {
     void (*diagnostic)(const char*) noexcept;
 };
 
-static_assert(sizeof(NativeProducerWorld) == 80 && offsetof(NativeProducerWorld, pass) == 40 &&
-    offsetof(NativeProducerWorld, context) == 56 && offsetof(NativeProducerWorld, chain) == 64 &&
-    offsetof(NativeProducerWorld, inputs) == 72 && offsetof(NativeProducerWorld, depth_interrupted) == 76);
 static_assert(sizeof(NativePrepassCall) == 48 && offsetof(NativePrepassCall, selected) == 40);
 static_assert(sizeof(NativeProducerLeaves) == 13 * sizeof(void*));
 
@@ -394,18 +365,18 @@ bool rsf_fallout4_render_enter_imagespace(const NativeImagespaceLeaves*, const N
 // The selected imagespace exit: RETIRE, auxiliary drain, output resolution end and leave.
 void rsf_fallout4_render_leave_imagespace(const NativeImagespaceLeaves*, const NativeRecoveryLeaves*) noexcept;
 // Before the original Effects range: the pre-SR receipt and the SR seam on the verified call.
-void rsf_fallout4_render_before_effects(const NativeImagespaceLeaves*, const NativePublicationLeaves*,
-    const NativeRecoveryLeaves*, const NativeEffectsCall*) noexcept;
+bool rsf_fallout4_render_before_effects(const NativeImagespaceLeaves*, const NativePublicationLeaves*,
+    const NativeRecoveryLeaves*, const NativeEffectsCall*, rsf_fallout4_cpu_identity*) noexcept;
 // After the original Effects range: the Effects receipt, RETIRE and auxiliary drain.
 void rsf_fallout4_render_after_effects(const NativeImagespaceLeaves*, const NativeRecoveryLeaves*,
-    const NativeEffectsCall*) noexcept;
+    const rsf_fallout4_cpu_identity*) noexcept;
 // The TAA active answer from the original answer.
 bool rsf_fallout4_render_gate_taa(const NativeImagespaceLeaves*, const NativeRecoveryLeaves*,
     bool original) noexcept;
 // After the original viewport selector store: the owned full-output selector write on the native
 // targets, then the HUDless receipt and seam after the live HUDless selection.
 void rsf_fallout4_render_after_viewport(const NativeProducerLeaves*, const NativePublicationLeaves*,
-    const NativeRecoveryLeaves*, uintptr_t caller, uintptr_t manager, bool enabled) noexcept;
+    const NativeRecoveryLeaves*, uintptr_t caller, uintptr_t manager, bool enabled, NativeFramebuffer*) noexcept;
 // Before the original DR writer: depth invalidation on an open FRAME.
 void rsf_fallout4_render_before_dynamic_resolution(const NativeProducerLeaves*) noexcept;
 // After the original DR writer: the overlap refusal and transfer, then the configuration admission.

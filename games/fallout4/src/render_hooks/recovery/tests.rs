@@ -17,7 +17,7 @@ thread_local! {
 
 unsafe extern "C" fn report(_: *const c_char) {}
 unsafe extern "C" fn nothing() {}
-unsafe extern "C" fn facts(facts: &mut Facts) {
+unsafe extern "C" fn facts(facts: &mut World) {
     facts.full_output_resolved = WORLD_FULL_OUTPUT.get();
 }
 unsafe extern "C" fn yes() -> bool {
@@ -108,7 +108,7 @@ fn refused_retire_retains_token_and_retries_without_finish() {
 
     // An accepted RETIRE that withholds the next reduction keeps the token too.
     RESULT.set(RSF_OK);
-    assert!(retire(&LEAVES));
+    assert!(!retire(&LEAVES));
     assert_eq!(state().token, 9);
 
     FLAGS.set(NEXT_REDUCTION_ALLOWED);

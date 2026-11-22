@@ -28,6 +28,7 @@ mod platform_abi;
 mod render_hooks;
 mod render_inputs;
 mod resolution;
+mod resolution_stages;
 mod screen;
 mod session;
 
@@ -309,6 +310,25 @@ pub(crate) fn read<T: Plain>(address: usize) -> Option<T> {
     };
     // SAFETY: the read filled every byte, and T accepts any contents.
     (read != 0 && copied == size_of::<T>()).then(|| unsafe { value.assume_init() })
+}
+
+/// Compares an entire guarded instruction span within the caller's byte limit.
+fn matches_bytes<const N: usize>(address: usize, expected: &[u8]) -> bool {
+    let mut actual = [0u8; N];
+    let Some(actual) = actual.get_mut(..expected.len()) else {
+        return false;
+    };
+    let mut copied = 0;
+    let read = unsafe {
+        ReadProcessMemory(
+            GetCurrentProcess(),
+            address as *const c_void,
+            actual.as_mut_ptr().cast(),
+            actual.len(),
+            &mut copied,
+        )
+    };
+    read != 0 && copied == actual.len() && &*actual == expected
 }
 
 pub(crate) fn image() -> usize {

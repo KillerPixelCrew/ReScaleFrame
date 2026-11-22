@@ -5,6 +5,7 @@ mod frame_event_abi;
 pub use frame_event_abi::*;
 pub mod camera_math;
 pub mod d3d11_host_abi;
+pub mod d3d11_reduced_abi;
 pub mod plugin_session_abi;
 mod render_config;
 mod render_pass;

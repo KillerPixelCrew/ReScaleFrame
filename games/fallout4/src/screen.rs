@@ -119,15 +119,18 @@ const MENUS: [MenuQuery; 6] = [
 ];
 
 #[repr(C)]
-struct NativeScreen {
-    screen: u32,
-    facts: u32,
-    refusals: u32,
-    camera_index: u32,
-    camera_state: usize,
+#[derive(Clone, Copy)]
+pub(crate) struct NativeScreen {
+    pub(crate) screen: u32,
+    pub(crate) facts: u32,
+    pub(crate) refusals: u32,
+    pub(crate) camera_index: u32,
+    pub(crate) camera_state: usize,
 }
 
 impl NativeScreen {
+    pub(crate) const EMPTY: Self = Self::refused(0);
+
     const fn refused(refusals: u32) -> Self {
         Self {
             screen: UNKNOWN,

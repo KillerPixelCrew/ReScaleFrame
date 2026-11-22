@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Imagespace, Effects and TAA order with fake leaves standing in for render_hooks.cpp.
 use super::*;
-use crate::render_hooks::recovery::{Facts, Lease, OutputOwner, Request};
+use crate::render_hooks::recovery::fixtures::IDLE;
 use std::cell::RefCell;
 
 const CONTEXT: usize = 0x100;
@@ -74,8 +74,8 @@ unsafe extern "C" fn world(out: &mut World) {
             began_qpc: 0,
             frequency: 0,
         };
-        out.pass = &fake.pass;
-        out.frame_pass = &fake.frame;
+        out.pass = &mut fake.pass;
+        out.frame_pass = &mut fake.frame;
         out.context = CONTEXT as *mut c_void;
         out.in_imagespace = fake.in_imagespace;
         out.inputs = fake.inputs;
@@ -151,53 +151,21 @@ unsafe extern "C" fn report(_: *const c_char) {
 unsafe extern "C" fn refuse() {
     event("refuse", 0);
 }
-unsafe extern "C" fn facts(_: &mut Facts) {}
 unsafe extern "C" fn same_source() -> bool {
     event("same_source", 0);
     with(|fake| fake.same_source)
-}
-unsafe extern "C" fn resolve(_: bool, _: bool) {}
-unsafe extern "C" fn unused(_: bool) -> bool {
-    unreachable!()
-}
-unsafe extern "C" fn adopt(_: *const i32) {}
-unsafe extern "C" fn nothing() {}
-unsafe extern "C" fn lease(_: u32, _: &mut Lease) {}
-unsafe extern "C" fn preflight(
-    _: *const rsf_game_render_pass,
-    _: *mut c_void,
-    _: &mut OutputOwner,
-) -> bool {
-    false
 }
 unsafe extern "C" fn raster_current() -> bool {
     event("raster_current", 0);
     with(|fake| fake.raster_current)
 }
-unsafe extern "C" fn yes() -> bool {
-    true
-}
-unsafe extern "C" fn reduce(_: &mut Request, _: &mut rsf_result) -> bool {
-    false
-}
 
-// No token is owned, so RETIRE answers without a host call.
 const RECOVERY: RecoveryLeaves = RecoveryLeaves {
     report,
     refuse,
-    facts,
     same_source,
-    resolve,
-    read_raster: unused,
-    same_resources: unused,
-    adopt,
-    discard: nothing,
-    release: nothing,
-    lease,
-    preflight,
     raster_current,
-    begin_output: yes,
-    reduce,
+    ..IDLE
 };
 
 fn effects_call(manager: usize, last: u32) -> EffectsCall {
@@ -295,7 +263,7 @@ fn imagespace_exit_refuses_a_failed_output_end_on_the_frame_pass() {
             ("report_state", UI_RETURN | (1 << 8) | (5 << 16)),
             ("end_output", 0),
             ("refuse", 0),
-            ("report_state", UI_RESTORED | (1 << 8) | (5 << 16)),
+            ("report_state", UI_RESTORED | (5 << 16)),
             ("leave", 0),
         ]
     );
@@ -304,19 +272,20 @@ fn imagespace_exit_refuses_a_failed_output_end_on_the_frame_pass() {
 #[test]
 fn effects_emit_sr_only_for_the_native_manager_and_exact_range() {
     install();
+    with(|fake| fake.in_imagespace = true);
     let mut emitted = 0;
-    before_effects(&LEAVES, &effects_call(MANAGER, 12), || {
+    let _ = before_effects(&LEAVES, &RECOVERY, &effects_call(MANAGER, 12), || {
         emitted += 1;
         SrOutcome::Published
     });
     assert!(events().is_empty());
-    before_effects(&LEAVES, &effects_call(MANAGER + 8, 13), || {
+    let _ = before_effects(&LEAVES, &RECOVERY, &effects_call(MANAGER + 8, 13), || {
         emitted += 1;
         SrOutcome::Published
     });
     assert_eq!(events(), [("manager", 0)]);
     assert_eq!(emitted, 0);
-    before_effects(&LEAVES, &effects_call(MANAGER, 13), || {
+    let _ = before_effects(&LEAVES, &RECOVERY, &effects_call(MANAGER, 13), || {
         event("emit_sr", 0);
         SrOutcome::Published
     });
@@ -324,15 +293,19 @@ fn effects_emit_sr_only_for_the_native_manager_and_exact_range() {
         events(),
         [
             ("manager", 0),
+            ("same_source", 0),
             ("report_state", PRE_SR | (5 << 16)),
             ("emit_sr", 0),
         ]
     );
-    before_effects(&LEAVES, &effects_call(MANAGER, 13), || SrOutcome::Failed);
+    let _ = before_effects(&LEAVES, &RECOVERY, &effects_call(MANAGER, 13), || {
+        SrOutcome::Failed
+    });
     assert_eq!(
         events(),
         [
             ("manager", 0),
+            ("same_source", 0),
             ("report_state", PRE_SR | (5 << 16)),
             ("diagnostic", 0),
         ]
@@ -342,18 +315,34 @@ fn effects_emit_sr_only_for_the_native_manager_and_exact_range() {
 #[test]
 fn effects_return_reports_then_drains_open_auxiliaries() {
     install();
-    rsf_fallout4_render_after_effects(&LEAVES, &RECOVERY, &effects_call(0, 12));
-    assert!(events().is_empty());
-    rsf_fallout4_render_after_effects(&LEAVES, &RECOVERY, &effects_call(0, 13));
-    assert_eq!(
-        events(),
-        [("report_state", EFFECTS_RETURNED | (1 << 8) | (5 << 16))]
-    );
     with(|fake| {
+        fake.in_imagespace = true;
         fake.auxiliary_open = true;
         fake.inputs = true;
+        fake.same_source = false;
     });
-    rsf_fallout4_render_after_effects(&LEAVES, &RECOVERY, &effects_call(0, 13));
+    assert!(
+        before_effects(&LEAVES, &RECOVERY, &effects_call(0, 13), || {
+            SrOutcome::Failed
+        })
+        .is_none()
+    );
+    assert_eq!(events(), [("manager", 0)]);
+    let receipt = before_effects(&LEAVES, &RECOVERY, &effects_call(MANAGER, 13), || {
+        SrOutcome::Refused
+    })
+    .expect("matching Effects cleanup");
+    assert_eq!(
+        events(),
+        [("manager", 0), ("report_state", PRE_SR | (5 << 16))]
+    );
+    let replaced = CpuIdentity {
+        source: receipt.source + 1,
+        ..receipt
+    };
+    rsf_fallout4_render_after_effects(&LEAVES, &RECOVERY, &replaced);
+    assert!(events().is_empty());
+    rsf_fallout4_render_after_effects(&LEAVES, &RECOVERY, &receipt);
     assert_eq!(
         events(),
         [

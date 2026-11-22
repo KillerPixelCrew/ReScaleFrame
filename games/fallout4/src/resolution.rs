@@ -73,11 +73,19 @@ struct Receipt {
 }
 
 #[repr(C)]
-#[derive(Default)]
-struct OutputOwner {
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct OutputOwner {
     context: u64,
     manager: u64,
     triangles: [u64; 3],
+}
+
+impl OutputOwner {
+    pub(crate) const EMPTY: Self = Self {
+        context: 0,
+        manager: 0,
+        triangles: [0; 3],
+    };
 }
 
 const _: () = {
@@ -941,18 +949,17 @@ unsafe extern "C" fn rsf_fallout4_resolution_report(
     result: i32,
     report: Report,
 ) {
-    const STAGES: [&std::ffi::CStr; 8] = [
-        c"pre-sr",
-        c"output-ready",
-        c"evaluated",
-        c"effects-return",
-        c"hudless",
-        c"ui-return",
-        c"ui-restored",
-        c"source-retired",
-    ];
-    let Some(name) = STAGES.get(stage as usize) else {
-        return;
+    use crate::resolution_stages::*;
+    let name = match stage {
+        RSF_FALLOUT4_STAGE_PRE_SR => c"pre-sr",
+        RSF_FALLOUT4_STAGE_OUTPUT_READY => c"output-ready",
+        RSF_FALLOUT4_STAGE_EVALUATED => c"evaluated",
+        RSF_FALLOUT4_STAGE_EFFECTS_RETURNED => c"effects-return",
+        RSF_FALLOUT4_STAGE_HUDLESS => c"hudless",
+        RSF_FALLOUT4_STAGE_UI_RETURN => c"ui-return",
+        RSF_FALLOUT4_STAGE_UI_RESTORED => c"ui-restored",
+        RSF_FALLOUT4_STAGE_SOURCE_RETIRED => c"source-retired",
+        _ => return,
     };
     if report.is_none() {
         return;
@@ -969,7 +976,7 @@ unsafe extern "C" fn rsf_fallout4_resolution_report(
     let mut receipt = Receipt {
         stage: name.as_ptr(),
         result,
-        evaluation: stage == 2,
+        evaluation: stage == RSF_FALLOUT4_STAGE_EVALUATED,
         published,
         input: scope.input,
         output: scope.output,

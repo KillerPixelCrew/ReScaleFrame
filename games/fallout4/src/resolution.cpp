@@ -78,10 +78,10 @@ const NativeResolutionLeaves leaves{tls_slots, screen_refusals, reconfigure, ren
     build_viewport, report_receipt};
 }
 
-void report_resolution_state(ResolutionStage stage, const rsf_game_render_pass& pass, void* context,
+void report_resolution_state(uint32_t stage, const rsf_game_render_pass& pass, void* context,
     bool published, int32_t result, ResolutionReport report) noexcept {
     struct Restore { DWORD error; ~Restore() { SetLastError(error); } } restore{GetLastError()};
-    rsf_fallout4_resolution_report(&leaves, static_cast<uint32_t>(stage), &pass, context,
+    rsf_fallout4_resolution_report(&leaves, stage, &pass, context,
         published, result, report);
 }
 

@@ -24,6 +24,15 @@ def generate(output, header, types, constants, clang_args, extra=(), *, use_core
         Path(temporary.name).replace(output)
 
 
+generate("games/fallout4/src/resolution_stages.rs", "games/fallout4/src/resolution_stages.h",
+         "NOTHING", "RSF_FALLOUT4_STAGE_.*", [])
+generate("sdk/game/src/d3d11_reduced_abi.rs", "runtime/orchestrator/include/rescaleframe/d3d11_host.h",
+         "rsf_d3d11_reduced_frame", "RSF_D3D11_REDUCED_.*",
+         ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/graphics/include",
+          "-Iruntime/presentation/include"],
+         ["--no-recursive-allowlist", "--with-derive-default",
+          "--raw-line", "use crate::rsf_game_render_pass;",
+          "--raw-line", "pub use crate::d3d11_host_abi::{rsf_d3d11_auxiliary_surface, RSF_D3D11_AUXILIARY_COLOUR, RSF_D3D11_AUXILIARY_DEPTH_STENCIL, RSF_D3D11_AUXILIARY_RESTORE_CONTENTS};"])
 generate("runtime/backends/fsr/compat/src/abi.rs", "runtime/backends/fsr/src/fsr4_compat_platform.h",
          "rsf_fsr4_compat_.*", "RSF_FSR4_COMPAT_PLATFORM_ABI_VERSION", [])
 frame_records = "rsf_(camera_frame|game_cpu_event)"
@@ -39,6 +48,7 @@ generate("sdk/game/src/lib.rs", "sdk/game/include/rescaleframe/game_api.h",
          ["-Isdk/game/include"], ["--blocklist-type", frame_records, "--blocklist-item", frame_constants,
           "--raw-line", "mod frame_event_abi;", "--raw-line", "pub use frame_event_abi::*;",
           "--raw-line", "pub mod camera_math;", "--raw-line", "pub mod d3d11_host_abi;",
+          "--raw-line", "pub mod d3d11_reduced_abi;",
           "--raw-line", "pub mod plugin_session_abi;", "--raw-line", "mod render_config;",
           "--raw-line", "mod render_pass;", "--raw-line", "pub mod presentation_result;",
           "--raw-line", "pub mod session;", "--raw-line", "pub mod shader_patch_abi;",
@@ -390,11 +400,15 @@ generate("sdk/game/src/d3d11_host_abi.rs", "runtime/orchestrator/include/rescale
           "--raw-line", "use crate::rsf_game_render_pass;"])
 generate("runtime/orchestrator/src/auxiliary_sr_abi.rs", "runtime/orchestrator/src/auxiliary_sr_platform.h",
          "rsf_aux_platform",
-         "RSF_(AUX_.*|D3D11_AUXILIARY_.*|DEPTH_SCALE_(ABI_VERSION|OK))",
+         "RSF_(AUX_.*|DEPTH_SCALE_(ABI_VERSION|OK))",
          ["-Iruntime/orchestrator/include", "-Iruntime/graphics/include",
           "-Iruntime/presentation/include", "-Isdk/game/include"],
          ["--blocklist-type", "rsf_game_log_fn",
-          "--raw-line", "use rsf_game_sys::rsf_game_log_fn;", "--with-derive-default"])
+          "--blocklist-type", "rsf_d3d11_auxiliary_surface",
+          "--raw-line", "use rsf_game_sys::rsf_game_log_fn;",
+          "--raw-line", "pub use rsf_game_sys::d3d11_reduced_abi::{rsf_d3d11_auxiliary_surface, "
+          "RSF_D3D11_AUXILIARY_DEPTH_STENCIL, RSF_D3D11_AUXILIARY_COLOUR, RSF_D3D11_AUXILIARY_RESTORE_CONTENTS};",
+          "--with-derive-default"])
 generate("runtime/orchestrator/src/native_sr_abi.rs", "runtime/orchestrator/include/rescaleframe/native_sr.h",
          "rsf_(dlss_pipeline_frame|native_translucency_masks)", "NOTHING",
          ["-include", "rescaleframe/native_translucency.h", "-Iruntime/orchestrator/include",
