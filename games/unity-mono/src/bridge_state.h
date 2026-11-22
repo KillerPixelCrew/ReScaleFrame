@@ -118,7 +118,9 @@ void rsf_unity_frames_callback_leave(void);
 /* The package closes callback admission once inactive, without queued or consuming packets or
    callbacks.
    A closed bridge stays closed through release and reopens on activation of the next session. */
+void rsf_unity_frames_open_callbacks(void);
 uint32_t rsf_unity_frames_try_close(void);
+uint32_t rsf_unity_frames_try_close_completed(uint64_t completed);
 /* Non-zero when no callback, packet or submission is outstanding at this completion. */
 uint32_t rsf_unity_frames_drained(uint64_t completed);
 /* Forgets packets, ring completions, sources, extents and the managed stage, releasing the

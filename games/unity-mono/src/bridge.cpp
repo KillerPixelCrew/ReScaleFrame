@@ -271,6 +271,9 @@ bool rsf_unity_bridge_prepare(const rsf_game_host_services& host, rsf_unity_nati
     if (!api || !host.render_pass || !host.render_config || !host.log) return false;
     std::lock_guard<std::mutex> lock(guard);
     services = host;
+#ifndef RSF_UNITY_PACKAGE_BRIDGE
+    rsf_unity_frames_open_callbacks();
+#endif
     *api = {sizeof(*api), RSF_UNITY_NATIVE_ABI_VERSION, host.session_id,
         [](const char* text) { rsf_unity_frame_callback call; if (call.entered) log(text); }, config, enqueue,
         reinterpret_cast<void*>(render), rsf_unity_frames_report_managed, cpu_event, cpu_fact};
@@ -286,10 +289,15 @@ bool rsf_unity_d3d12_try_close() noexcept
     return rsf_unity_frames_drained(value) != 0;
 }
 #else
-bool rsf_unity_bridge_drained() noexcept
+extern "C" uint32_t rsf_unity_mono_prepare(const rsf_game_host_services* host, rsf_unity_native_api* api) noexcept
+{
+    return host && rsf_unity_bridge_prepare(*host, api);
+}
+
+extern "C" uint32_t rsf_unity_mono_try_close() noexcept
 {
     std::lock_guard<std::mutex> lock(guard);
-    return rsf_unity_frames_drained(completed()) != 0;
+    return rsf_unity_frames_try_close_completed(completed()) != 0;
 }
 #endif
 void rsf_unity_bridge_release() noexcept
@@ -299,9 +307,16 @@ void rsf_unity_bridge_release() noexcept
     commands = {}; fence.Reset(); services = {};
     rsf_unity_frames_release();
 }
+#ifndef RSF_UNITY_PACKAGE_BRIDGE
+extern "C" void rsf_unity_mono_release() noexcept { rsf_unity_bridge_release(); }
+#endif
 uint32_t rsf_unity_bridge_managed_state() noexcept { return rsf_unity_frames_managed_stage(); }
 extern "C" __declspec(dllexport) void* rsf_unity_get_render_event() noexcept
 {
+#ifndef RSF_UNITY_PACKAGE_BRIDGE
+    rsf_unity_frame_callback call;
+    if (!call.entered) return nullptr;
+#endif
 #if RSF_HAVE_UNITY_NATIVE
     if (!unity) {
         HMODULE player = GetModuleHandleW(L"UnityPlayer.dll");

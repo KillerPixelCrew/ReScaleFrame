@@ -3,7 +3,7 @@
 //! managed API table handed to the helper, and the order in which the native bridge and the Mono
 //! helper are prepared, activated, drained and released.
 use crate::mono;
-use crate::plugin_abi::{rsf_unity_native_api, rsf_unity_plugin_platform};
+use crate::plugin_abi::rsf_unity_native_api;
 #[cfg(test)]
 use rsf_game_sys::RSF_GAME_ABI_VERSION;
 use rsf_game_sys::call_header::validate;
@@ -13,7 +13,7 @@ use rsf_game_sys::{
 };
 use std::ffi::CStr;
 use std::ptr;
-use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
@@ -44,6 +44,7 @@ const CONTRACT_REFUSED: &CStr =
     c"Managed Unity adapter refused its pipeline contract; see diagnostics.";
 
 struct State {
+    bridge_owned: bool,
     prepared: bool,
     running: bool,
     reason: &'static CStr,
@@ -55,6 +56,7 @@ struct State {
 unsafe impl Send for State {}
 
 static STATE: Mutex<State> = Mutex::new(State {
+    bridge_owned: false,
     prepared: false,
     running: false,
     reason: UNPREPARED,
@@ -72,42 +74,13 @@ static STATE: Mutex<State> = Mutex::new(State {
     },
 });
 
-static PLATFORM: OnceLock<Bridge> = OnceLock::new();
-
-/// The native bridge entry points, all present.
-#[derive(Clone, Copy)]
-struct Bridge {
-    prepare: unsafe extern "C" fn(
+unsafe extern "C" {
+    fn rsf_unity_mono_prepare(
         host: *const rsf_game_sys::rsf_game_host_services,
         api: *mut rsf_unity_native_api,
-    ) -> u32,
-    activate: unsafe extern "C" fn(enabled: u32),
-    drained: unsafe extern "C" fn() -> u32,
-    release: unsafe extern "C" fn(),
-    managed_state: unsafe extern "C" fn() -> u32,
-}
-
-impl Bridge {
-    fn complete(platform: &rsf_unity_plugin_platform) -> Option<Self> {
-        Some(Self {
-            prepare: platform.bridge_prepare?,
-            activate: platform.bridge_activate?,
-            drained: platform.bridge_drained?,
-            release: platform.bridge_release?,
-            managed_state: platform.bridge_managed_state?,
-        })
-    }
-}
-
-/// Keeps the first complete bridge table. False when the table is incomplete.
-pub(crate) fn adopt(platform: &rsf_unity_plugin_platform) -> bool {
-    match Bridge::complete(platform) {
-        Some(bridge) => {
-            let _ = PLATFORM.get_or_init(|| bridge);
-            true
-        }
-        None => false,
-    }
+    ) -> u32;
+    fn rsf_unity_mono_try_close() -> u32;
+    fn rsf_unity_mono_release();
 }
 
 fn lock() -> MutexGuard<'static, State> {
@@ -154,16 +127,14 @@ pub(crate) unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> r
     if host_services.session_id == 0 {
         return INVALID_ARGUMENT;
     }
-    let Some(bridge) = PLATFORM.get() else {
-        return NOT_READY;
-    };
     let mut state = lock();
-    if state.prepared {
+    if state.bridge_owned {
         return BUSY;
     }
-    if unsafe { (bridge.prepare)(host, &raw mut state.api) } == 0 {
+    if unsafe { rsf_unity_mono_prepare(host, &raw mut state.api) } == 0 {
         return NOT_READY;
     }
+    state.bridge_owned = true;
     let started = match helper_path() {
         Some(helper) => unsafe { mono::start(&helper, &raw mut state.api) },
         None => Err(NO_HELPER_PATH),
@@ -178,8 +149,14 @@ pub(crate) unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> r
     if let Some(log) = host_services.log {
         unsafe { log(host_services.user, state.reason.as_ptr()) };
     }
-    unsafe { (bridge.release)() };
-    NOT_READY
+    if unsafe { rsf_unity_mono_try_close() } != 0 {
+        unsafe { rsf_unity_mono_release() };
+        state.bridge_owned = false;
+        NOT_READY
+    } else {
+        // Keep ownership until the host retries stop and the failed preparation drains.
+        BUSY
+    }
 }
 
 pub(crate) unsafe extern "C" fn start(args: *const rsf_game_start_args) -> rsf_result {
@@ -188,10 +165,10 @@ pub(crate) unsafe extern "C" fn start(args: *const rsf_game_start_args) -> rsf_r
         return valid;
     }
     let mut state = lock();
-    let Some(bridge) = PLATFORM.get().filter(|_| state.prepared) else {
+    if !state.prepared {
         return NOT_READY;
-    };
-    unsafe { (bridge.activate)(1) };
+    }
+    crate::bridge_state::rsf_unity_frames_activate(1);
     state.running = true;
     state.reason = ACTIVE;
     OK
@@ -203,9 +180,7 @@ pub(crate) unsafe extern "C" fn quiesce(args: *const rsf_game_control_args) -> r
         return valid;
     }
     let mut state = lock();
-    if let Some(bridge) = PLATFORM.get() {
-        unsafe { (bridge.activate)(0) };
-    }
+    crate::bridge_state::rsf_unity_frames_activate(0);
     state.running = false;
     state.reason = QUIESCED;
     OK
@@ -220,12 +195,13 @@ pub(crate) unsafe extern "C" fn stop(args: *const rsf_game_control_args) -> rsf_
     if state.running {
         return BUSY;
     }
-    if let Some(bridge) = PLATFORM.get() {
-        // Retire only after every callback, packet and Unity submission has completed.
-        if unsafe { (bridge.drained)() } == 0 || !mono::stop() {
+    // Close admission before releasing any of the host's borrowed services.
+    if state.bridge_owned {
+        if unsafe { rsf_unity_mono_try_close() } == 0 || !mono::stop() {
             return BUSY;
         }
-        unsafe { (bridge.release)() };
+        unsafe { rsf_unity_mono_release() };
+        state.bridge_owned = false;
     }
     state.prepared = false;
     state.reason = STOPPED;
@@ -238,9 +214,7 @@ pub(crate) unsafe extern "C" fn status(out: *mut rsf_game_renderer_status) -> rs
         return valid;
     }
     let state = lock();
-    let stage = PLATFORM
-        .get()
-        .map_or(0, |bridge| unsafe { (bridge.managed_state)() });
+    let stage = crate::bridge_state::rsf_unity_frames_managed_stage();
     let out = unsafe { &mut *out };
     out.prepared = u32::from(state.prepared);
     out.active = u32::from(state.running && stage == MANAGED_INSTALLED);

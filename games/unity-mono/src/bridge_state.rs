@@ -453,12 +453,24 @@ impl State {
         !in_flight(self.inline_complete, completed) && !self.any_in_flight(completed)
     }
 
+    fn try_close(&mut self, active: bool) -> bool {
+        if active || self.callbacks != 0 || self.pending.iter().any(|entry| entry.used) {
+            return false;
+        }
+        self.closed = true;
+        true
+    }
+
+    fn try_close_completed(&mut self, active: bool, completed: u64) -> bool {
+        completed != u64::MAX && self.drained(completed) && self.try_close(active)
+    }
+
     /// Forgets the store and returns the leases of any packet still queued or consuming, which
     /// release cancels outside the mutex.
     fn release(&mut self) -> [Option<Lease>; PACKETS] {
         let leases = self.pending.map(|entry| entry.lease);
         let policy = self.policy;
-        // Mono keeps its separate drain/release sequence and can still receive callbacks.
+        // Preserve the admission state across retirement.
         let callbacks = self.callbacks;
         let closed = self.closed;
         *self = Self::new();
@@ -519,7 +531,7 @@ extern "C" fn rsf_unity_frames_report_managed(stage: u32) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_frames_managed_stage() -> u32 {
+pub(crate) extern "C" fn rsf_unity_frames_managed_stage() -> u32 {
     MANAGED_STAGE.load(Ordering::SeqCst)
 }
 
@@ -702,7 +714,7 @@ extern "C" fn rsf_unity_frames_set_policy(engine_spatial: u32, quality: u32) -> 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_mono_request_policy(
+pub(crate) unsafe extern "C" fn rsf_unity_mono_request_policy(
     engine_spatial: u32,
     quality: u32,
     generation: *mut u32,
@@ -719,7 +731,7 @@ unsafe extern "C" fn rsf_unity_mono_request_policy(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_mono_spatial_extent(
+pub(crate) unsafe extern "C" fn rsf_unity_mono_spatial_extent(
     quality: u32,
     width: u32,
     height: u32,
@@ -914,19 +926,23 @@ pub(crate) extern "C" fn rsf_unity_frames_callback_leave() {
     lock().callbacks -= 1;
 }
 
-/// Package retirement only. Keep queued packet delivery open until all packets have been taken
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_frames_open_callbacks() {
+    lock().closed = false;
+}
+
+/// Keep queued packet delivery open until all packets have been taken
 /// and every leased packet's render event has ended.
 #[unsafe(no_mangle)]
 extern "C" fn rsf_unity_frames_try_close() -> u32 {
     let mut state = lock();
-    if ACTIVE.load(Ordering::SeqCst)
-        || state.callbacks != 0
-        || state.pending.iter().any(|entry| entry.used)
-    {
-        return 0;
-    }
-    state.closed = true;
-    1
+    u32::from(state.try_close(ACTIVE.load(Ordering::SeqCst)))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_frames_try_close_completed(completed: u64) -> u32 {
+    let mut state = lock();
+    u32::from(state.try_close_completed(ACTIVE.load(Ordering::SeqCst), completed))
 }
 
 #[unsafe(no_mangle)]
@@ -992,6 +1008,23 @@ mod tests {
             source_frame_id: frame_id,
             view_key: 3,
         }
+    }
+
+    #[test]
+    fn mono_closes_only_after_callbacks_and_gpu_work_retire() {
+        let mut state = State::new();
+        state.callbacks = 1;
+        assert!(!state.try_close_completed(false, 10));
+        assert!(!state.closed);
+        state.callbacks = 0;
+        state.inline_complete = 11;
+        assert!(!state.try_close_completed(false, 10));
+        assert!(!state.try_close_completed(false, u64::MAX));
+        assert!(!state.try_close_completed(true, 11));
+        assert!(state.try_close_completed(false, 11));
+        assert!(state.closed);
+        let _ = state.release();
+        assert!(state.closed);
     }
 
     #[test]

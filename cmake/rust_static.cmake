@@ -6,10 +6,13 @@ function(rsf_add_rust_static target build_target package archive)
         set(rust_target x86_64-pc-windows-gnu)
     endif()
     set(cargo_dir "${CMAKE_BINARY_DIR}/cargo")
+    if(ARGN)
+        set(cargo_dir "${cargo_dir}/${package}-${target}")
+    endif()
     set(profile "$<IF:$<CONFIG:Debug>,debug,release>")
     set(rust_archive "${cargo_dir}/${rust_target}/${profile}/${CMAKE_STATIC_LIBRARY_PREFIX}${archive}${CMAKE_STATIC_LIBRARY_SUFFIX}")
     add_custom_target(${build_target}
-        COMMAND "${RSF_CARGO}" build --locked -p ${package}
+        COMMAND "${RSF_CARGO}" build --locked -p ${package} ${ARGN}
             --target ${rust_target} --target-dir "${cargo_dir}" $<$<NOT:$<CONFIG:Debug>>:--release>
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
         BYPRODUCTS "${rust_archive}"

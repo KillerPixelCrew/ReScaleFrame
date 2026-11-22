@@ -2,7 +2,6 @@
 
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
-use rsf_game_sys::callback_host_abi::rsf_callback_host_setup;
 
 pub const RSF_UI_MODE_BACKBUFFER_HUDLESS: u32 = 4;
 pub const RSF_SR_DLSS: u32 = 1;
@@ -25,6 +24,24 @@ pub type rsf_backend_result = i32;
 pub type rsf_backend_log_fn = ::core::option::Option<
     unsafe extern "C" fn(user: *mut ::core::ffi::c_void, message: *const ::core::ffi::c_char),
 >;
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_fg_choice {
+    pub backend: u32,
+    pub choices: u32,
+    pub last_result: i32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_fg_choice"][::core::mem::size_of::<rsf_fg_choice>() - 12usize];
+    ["Alignment of rsf_fg_choice"][::core::mem::align_of::<rsf_fg_choice>() - 4usize];
+    ["Offset of field: rsf_fg_choice::backend"]
+        [::core::mem::offset_of!(rsf_fg_choice, backend) - 0usize];
+    ["Offset of field: rsf_fg_choice::choices"]
+        [::core::mem::offset_of!(rsf_fg_choice, choices) - 4usize];
+    ["Offset of field: rsf_fg_choice::last_result"]
+        [::core::mem::offset_of!(rsf_fg_choice, last_result) - 8usize];
+};
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_native_fg_options {
@@ -126,90 +143,4 @@ const _: () = {
         [::core::mem::offset_of!(rsf_fg12_setup, engine_version_utf8) - 136usize];
     ["Offset of field: rsf_fg12_setup::project_id_utf8"]
         [::core::mem::offset_of!(rsf_fg12_setup, project_id_utf8) - 144usize];
-};
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_unity_runtime_platform {
-    pub engine_version_utf8: *const ::core::ffi::c_char,
-    pub project_id_utf8: *const ::core::ffi::c_char,
-    pub fg_backend_key:
-        ::core::option::Option<unsafe extern "C" fn(backend: u32) -> *const ::core::ffi::c_char>,
-    pub fg_choice_start: ::core::option::Option<
-        unsafe extern "C" fn(preferences_path: *const wchar_t, fallback: u32, choices: u32) -> u32,
-    >,
-    pub fg_choice_choices: ::core::option::Option<unsafe extern "C" fn() -> u32>,
-    pub fg_install: ::core::option::Option<
-        unsafe extern "C" fn(setup: *const rsf_fg12_setup) -> rsf_backend_result,
-    >,
-    pub fg_capture_outputs: ::core::option::Option<
-        unsafe extern "C" fn(directory_utf8: *const ::core::ffi::c_char) -> rsf_backend_result,
-    >,
-    pub graphics_debug: ::core::option::Option<unsafe extern "C" fn()>,
-    pub dlss_preset_valid: ::core::option::Option<unsafe extern "C" fn(preset: u32) -> u32>,
-    pub sha256_file: ::core::option::Option<
-        unsafe extern "C" fn(path: *const wchar_t, digest: *mut ::core::ffi::c_char) -> u32,
-    >,
-    pub callback_host_start:
-        ::core::option::Option<unsafe extern "C" fn(setup: *const rsf_callback_host_setup) -> u32>,
-    pub callback_host_stop: ::core::option::Option<unsafe extern "C" fn() -> u32>,
-    pub set_engine_spatial: ::core::option::Option<
-        unsafe extern "C" fn(spatial: u32, quality: u32) -> ::core::ffi::c_int,
-    >,
-    pub request_policy: ::core::option::Option<
-        unsafe extern "C" fn(
-            spatial: u32,
-            quality: u32,
-            generation: *mut u32,
-        ) -> ::core::ffi::c_int,
-    >,
-    pub drained_generation:
-        ::core::option::Option<unsafe extern "C" fn(generation: *mut u32) -> ::core::ffi::c_int>,
-    pub spatial_extent: ::core::option::Option<
-        unsafe extern "C" fn(
-            quality: u32,
-            output_width: u32,
-            output_height: u32,
-            render_width: *mut u32,
-            render_height: *mut u32,
-        ) -> ::core::ffi::c_int,
-    >,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_unity_runtime_platform"]
-        [::core::mem::size_of::<rsf_unity_runtime_platform>() - 128usize];
-    ["Alignment of rsf_unity_runtime_platform"]
-        [::core::mem::align_of::<rsf_unity_runtime_platform>() - 8usize];
-    ["Offset of field: rsf_unity_runtime_platform::engine_version_utf8"]
-        [::core::mem::offset_of!(rsf_unity_runtime_platform, engine_version_utf8) - 0usize];
-    ["Offset of field: rsf_unity_runtime_platform::project_id_utf8"]
-        [::core::mem::offset_of!(rsf_unity_runtime_platform, project_id_utf8) - 8usize];
-    ["Offset of field: rsf_unity_runtime_platform::fg_backend_key"]
-        [::core::mem::offset_of!(rsf_unity_runtime_platform, fg_backend_key) - 16usize];
-    ["Offset of field: rsf_unity_runtime_platform::fg_choice_start"]
-        [::core::mem::offset_of!(rsf_unity_runtime_platform, fg_choice_start) - 24usize];
-    ["Offset of field: rsf_unity_runtime_platform::fg_choice_choices"]
-        [::core::mem::offset_of!(rsf_unity_runtime_platform, fg_choice_choices) - 32usize];
-    ["Offset of field: rsf_unity_runtime_platform::fg_install"]
-        [::core::mem::offset_of!(rsf_unity_runtime_platform, fg_install) - 40usize];
-    ["Offset of field: rsf_unity_runtime_platform::fg_capture_outputs"]
-        [::core::mem::offset_of!(rsf_unity_runtime_platform, fg_capture_outputs) - 48usize];
-    ["Offset of field: rsf_unity_runtime_platform::graphics_debug"]
-        [::core::mem::offset_of!(rsf_unity_runtime_platform, graphics_debug) - 56usize];
-    ["Offset of field: rsf_unity_runtime_platform::dlss_preset_valid"]
-        [::core::mem::offset_of!(rsf_unity_runtime_platform, dlss_preset_valid) - 64usize];
-    ["Offset of field: rsf_unity_runtime_platform::sha256_file"]
-        [::core::mem::offset_of!(rsf_unity_runtime_platform, sha256_file) - 72usize];
-    ["Offset of field: rsf_unity_runtime_platform::callback_host_start"]
-        [::core::mem::offset_of!(rsf_unity_runtime_platform, callback_host_start) - 80usize];
-    ["Offset of field: rsf_unity_runtime_platform::callback_host_stop"]
-        [::core::mem::offset_of!(rsf_unity_runtime_platform, callback_host_stop) - 88usize];
-    ["Offset of field: rsf_unity_runtime_platform::set_engine_spatial"]
-        [::core::mem::offset_of!(rsf_unity_runtime_platform, set_engine_spatial) - 96usize];
-    ["Offset of field: rsf_unity_runtime_platform::request_policy"]
-        [::core::mem::offset_of!(rsf_unity_runtime_platform, request_policy) - 104usize];
-    ["Offset of field: rsf_unity_runtime_platform::drained_generation"]
-        [::core::mem::offset_of!(rsf_unity_runtime_platform, drained_generation) - 112usize];
-    ["Offset of field: rsf_unity_runtime_platform::spatial_extent"]
-        [::core::mem::offset_of!(rsf_unity_runtime_platform, spatial_extent) - 120usize];
 };

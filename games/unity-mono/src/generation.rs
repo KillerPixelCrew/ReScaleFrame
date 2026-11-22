@@ -8,8 +8,7 @@ use crate::runtime_abi::{RSF_UI_MODE_BACKBUFFER_HUDLESS, rsf_fg12_setup, rsf_nat
 use std::ffi::{c_char, c_int, c_void};
 use std::ptr::null_mut;
 
-/// RSF_DLSS_ENGINE_UNITY, a cast macro bindgen does not evaluate; runtime_host.cpp and package.cpp
-/// assert it.
+/// RSF_DLSS_ENGINE_UNITY, a cast macro bindgen does not evaluate. The native package asserts it.
 pub(crate) const RSF_DLSS_ENGINE_UNITY: u32 = 2;
 
 /// rsf_fg12_setup's window guard and log.

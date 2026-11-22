@@ -307,11 +307,11 @@ generate("games/anomaly/src/sr_stage_abi.rs", "games/anomaly/src/sr_stage_platfo
           "--raw-line", "pub use crate::sr_swap_abi::rsf_anomaly_swap_counters as rsf_anomaly_sr_swap_counters;",
           "--raw-line", "pub use crate::sr_swap_abi::rsf_anomaly_swap_facts as rsf_anomaly_sr_frame_facts;",
           "--raw-line", "use rsf_game_sys::rsf_camera_frame;"])
-generate("games/unity-mono/src/plugin_abi.rs", "games/unity-mono/src/plugin_platform.h",
-         "rsf_unity_(native_api|plugin_platform)", "NOTHING",
+generate("games/unity-mono/src/plugin_abi.rs", "games/unity-mono/include/rescaleframe/unity_bridge.h",
+         "rsf_unity_native_api", "NOTHING",
          ["-Isdk/game/include", "-Igames/unity-mono/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
-          "--raw-line", "use rsf_game_sys::{rsf_game_cpu_event, rsf_game_host_services};",
+          "--raw-line", "use rsf_game_sys::rsf_game_cpu_event;",
           "--raw-line", "type rsf_unity_config = ::core::ffi::c_void;",
           "--raw-line", "type rsf_unity_packet = ::core::ffi::c_void;"])
 generate("games/unity-mono/src/bridge_abi.rs", "games/unity-mono/src/bridge_state.h",
@@ -321,15 +321,14 @@ generate("games/unity-mono/src/bridge_abi.rs", "games/unity-mono/src/bridge_stat
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "use rsf_game_sys::rsf_camera_frame;",
           "--with-derive-custom-struct", "rsf_unity_packet=Copy,Clone"])
-generate("games/unity-mono/src/runtime_abi.rs", "games/unity-mono/src/runtime_platform.h",
-         "rsf_(unity_runtime_platform|fg12_setup|native_fg_options|backend_result|backend_log_fn)|wchar_t",
+generate("games/unity-mono/src/runtime_abi.rs", "runtime/orchestrator/include/rescaleframe/native_fg_d3d12.h",
+         "rsf_(fg12_setup|fg_choice|native_fg_options|backend_result|backend_log_fn)|wchar_t",
          "RSF_(FG_BACKEND_(DLSS|FSR3|FSR4|XESS|AUTO|ALL)|FG_FIXED|REFLEX_OFF|UI_MODE_BACKBUFFER_HUDLESS|"
          "SR_(DLSS|FSR2|FSR3|FSR4|XESS|SPATIAL|AUTO))",
-         ["-include", "rescaleframe/sr_session.h", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
+         ["-include", "rescaleframe/sr_session.h", "-include", "rescaleframe/fg_choice.h", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
           "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include", "-Iruntime/presentation/include",
           "-Isdk/game/include"],
-         ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
-          "--raw-line", "use rsf_game_sys::callback_host_abi::rsf_callback_host_setup;"])
+         ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]"])
 generate("games/unity-mono/src/package_abi.rs", "integrations/unity/native/package_state.h",
          "rsf_(unity_(package_(settings|status|platform|view_setup)|frame_counters)|native_fg_(options|status)|fg_status|"
          "native_(latency_status|cpu_counters)|fg_mode|pacing_owner|reflex_mode|sr12)",

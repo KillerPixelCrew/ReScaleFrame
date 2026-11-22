@@ -7667,3 +7667,10 @@ functions. The split contract and live DLL export checks have Rust fixtures.
 [Source evidence and remaining native paths](research/vulkan-sr-native-port-followup.md)
 record the SDK and Vulkan revisions. Build, test, lint and device verification
 remain pending.
+### Unity Mono startup port
+
+The Mono DLL startup exports, GameSDK entry, executable identity and isolated
+Mono fixture moved to Rust. Source checks cover late Mono arrival, retained
+fingerprints, provider paths and checked bridge retirement. The offline fixtures
+and native links await user execution. The shared overlay controls for Mono
+graphics diagnostics remain open. See [Unity Mono startup and configuration](research/rust-unity-mono-startup.md).

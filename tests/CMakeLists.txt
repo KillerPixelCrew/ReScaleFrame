@@ -140,8 +140,22 @@ target_link_libraries(rsf_plugin_session_embedded_test PRIVATE rsf_game_sdk_fixt
 add_dependencies(rsf_plugin_session_embedded_test rsf_plugin_session_fixture)
 add_test(NAME plugin_session_lifetime_embedded COMMAND rsf_plugin_session_embedded_test $<TARGET_FILE:rsf_plugin_session_fixture>)
 set_tests_properties(plugin_session_lifetime plugin_session_lifetime_embedded PROPERTIES TIMEOUT 30)
-add_executable(rsf_unity_mono_runtime_test unity_mono_runtime.cpp)
-target_link_libraries(rsf_unity_mono_runtime_test PRIVATE rsf_build_options)
+find_program(RSF_RUSTC rustc REQUIRED)
+if(MSVC)
+    set(unity_mono_fixture_target x86_64-pc-windows-msvc)
+else()
+    set(unity_mono_fixture_target x86_64-pc-windows-gnu)
+endif()
+set(unity_mono_fixture_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>")
+set(unity_mono_fixture_exe "${unity_mono_fixture_dir}/rsf_unity_mono_runtime_test.exe")
+add_custom_command(OUTPUT "${unity_mono_fixture_exe}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${unity_mono_fixture_dir}"
+    COMMAND "${RSF_RUSTC}" --edition=2024 --target ${unity_mono_fixture_target}
+        -Dwarnings "${CMAKE_CURRENT_SOURCE_DIR}/unity_mono_runtime.rs" -o "${unity_mono_fixture_exe}"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/unity_mono_runtime.rs" "${PROJECT_SOURCE_DIR}/rust-toolchain.toml"
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    VERBATIM)
+add_custom_target(rsf_unity_mono_runtime_test ALL DEPENDS "${unity_mono_fixture_exe}")
 if(MSVC)
     rsf_add_loader_test(rsf_wingman_carrier_test rsf_test_xinput_carrier)
     add_dependencies(rsf_wingman_carrier_test rsf_proxy_wingman)

@@ -2,7 +2,7 @@
 //! The [UnitySR] settings both Unity routes read: the game plugin's runtime setup and the Unity
 //! package, which links this archive, reads its identity through package_state/presentation.rs
 //! and its Log path through package_state/services.rs. A relative path therefore resolves the same
-//! way in both. The two exports behind unity_runtime_config.h no longer have a caller in the tree.
+//! way in both.
 
 const SLASH: u16 = b'/' as u16;
 const BACKSLASH: u16 = b'\\' as u16;
@@ -21,7 +21,7 @@ pub(crate) fn resolve(
     value: Vec<u16>,
     full: impl FnOnce(&[u16]) -> Option<Vec<u16>>,
 ) -> Vec<u16> {
-    if value.is_empty() || (value.len() >= 2 && (value[1] == COLON || value[0] == BACKSLASH)) {
+    if value.is_empty() || value.first().is_some_and(separator) || value.get(1) == Some(&COLON) {
         return value;
     }
     let Some(end) = ini.iter().rposition(separator) else {
@@ -32,11 +32,18 @@ pub(crate) fn resolve(
     full(&containing).unwrap_or_default()
 }
 
+/// Provider-independent root beside the startup INI.
+pub(crate) fn runtime_root(ini: &[u16]) -> Vec<u16> {
+    let end = ini.iter().rposition(separator).map_or(0, |index| index + 1);
+    let mut root = ini[..end].to_vec();
+    root.extend("ReScaleFrame".encode_utf16());
+    root
+}
+
 /// `<ini directory>\ReScaleFrame\preferences.ini`, where the overlay saves next-start choices.
 pub(crate) fn preferences_path(ini: &[u16]) -> Vec<u16> {
-    let keep = ini.iter().rposition(separator).map_or(0, |end| end + 1);
-    let mut preferences = ini[..keep].to_vec();
-    preferences.extend("ReScaleFrame\\preferences.ini".encode_utf16());
+    let mut preferences = runtime_root(ini);
+    preferences.extend("\\preferences.ini".encode_utf16());
     preferences
 }
 
@@ -66,9 +73,8 @@ pub(crate) use platform::*;
 
 #[cfg(windows)]
 mod platform {
-    use super::{PATH_CAPACITY, resolve, utf8};
-    use std::ffi::c_char;
-    use std::ptr::{self, null_mut};
+    use super::{PATH_CAPACITY, resolve};
+    use std::ptr::null_mut;
     use std::slice;
     use windows_sys::Win32::Storage::FileSystem::GetFullPathNameW;
     use windows_sys::Win32::System::WindowsProgramming::{
@@ -160,53 +166,6 @@ mod platform {
             full_path,
         )
     }
-
-    /// Writes [UnitySR] `name` from `ini`, resolved like the game plugin's settings, with its
-    /// terminator into `output`. Returns the length without the terminator; 0 when the value is
-    /// unset or unresolved, or when it does not fit.
-    #[unsafe(no_mangle)]
-    unsafe extern "C" fn rsf_unity_config_path_setting(
-        ini: *const u16,
-        name: *const u16,
-        output: *mut u16,
-        capacity: u32,
-    ) -> u32 {
-        let Some(ini) = (unsafe { Ini::new(ini) }) else {
-            return 0;
-        };
-        if name.is_null() || output.is_null() {
-            return 0;
-        }
-        let value = path_setting(&ini, name);
-        if value.is_empty() || value.len() >= capacity as usize {
-            return 0;
-        }
-        unsafe {
-            ptr::copy_nonoverlapping(value.as_ptr(), output, value.len());
-            output.add(value.len()).write(0);
-        }
-        value.len() as u32
-    }
-
-    /// UTF-16 to UTF-8 without a terminator. Returns the byte count; 0 for invalid UTF-16 or
-    /// when the result does not fit.
-    #[unsafe(no_mangle)]
-    unsafe extern "C" fn rsf_unity_config_utf8(
-        text: *const u16,
-        length: usize,
-        output: *mut c_char,
-        capacity: usize,
-    ) -> usize {
-        if text.is_null() || output.is_null() || length == 0 {
-            return 0;
-        }
-        let bytes = utf8(unsafe { slice::from_raw_parts(text, length) });
-        if bytes.len() > capacity {
-            return 0;
-        }
-        unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), output.cast(), bytes.len()) };
-        bytes.len()
-    }
 }
 
 #[cfg(test)]
@@ -226,6 +185,9 @@ mod tests {
             resolve(&ini, wide("\\\\server\\sdk"), never),
             wide("\\\\server\\sdk")
         );
+        for rooted in ["\\", "/", "/sdk", r"\sdk"] {
+            assert_eq!(resolve(&ini, wide(rooted), never), wide(rooted));
+        }
         assert!(resolve(&ini, Vec::new(), never).is_empty());
     }
 
@@ -234,11 +196,6 @@ mod tests {
         let ini = wide("C:\\Game/ReScaleFrame.Unity.ini");
         let joined = resolve(&ini, wide("sdk\\xess"), |path| Some(path.to_vec()));
         assert_eq!(joined, wide("C:\\Game/sdk\\xess"));
-        // A one-character rooted value is not exempt, as in the C++.
-        assert_eq!(
-            resolve(&ini, wide("\\"), |path| Some(path.to_vec())),
-            wide("C:\\Game/\\")
-        );
         assert!(
             resolve(
                 &wide("ReScaleFrame.Unity.ini"),

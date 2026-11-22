@@ -1,0 +1,6 @@
+EXPORTS
+    rsf_get_game_plugin_api
+    rsf_unity_start
+    rsf_unity_fg_start
+    rsf_unity_sr_start
+    rsf_unity_sr_stop

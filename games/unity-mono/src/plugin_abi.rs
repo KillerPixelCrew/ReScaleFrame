@@ -2,7 +2,7 @@
 
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
-use rsf_game_sys::{rsf_game_cpu_event, rsf_game_host_services};
+use rsf_game_sys::rsf_game_cpu_event;
 type rsf_unity_config = ::core::ffi::c_void;
 type rsf_unity_packet = ::core::ffi::c_void;
 
@@ -52,35 +52,4 @@ const _: () = {
         [::core::mem::offset_of!(rsf_unity_native_api, cpu_event) - 56usize];
     ["Offset of field: rsf_unity_native_api::cpu_fact"]
         [::core::mem::offset_of!(rsf_unity_native_api, cpu_fact) - 64usize];
-};
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_unity_plugin_platform {
-    pub bridge_prepare: ::core::option::Option<
-        unsafe extern "C" fn(
-            host: *const rsf_game_host_services,
-            api: *mut rsf_unity_native_api,
-        ) -> u32,
-    >,
-    pub bridge_activate: ::core::option::Option<unsafe extern "C" fn(enabled: u32)>,
-    pub bridge_drained: ::core::option::Option<unsafe extern "C" fn() -> u32>,
-    pub bridge_release: ::core::option::Option<unsafe extern "C" fn()>,
-    pub bridge_managed_state: ::core::option::Option<unsafe extern "C" fn() -> u32>,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_unity_plugin_platform"]
-        [::core::mem::size_of::<rsf_unity_plugin_platform>() - 40usize];
-    ["Alignment of rsf_unity_plugin_platform"]
-        [::core::mem::align_of::<rsf_unity_plugin_platform>() - 8usize];
-    ["Offset of field: rsf_unity_plugin_platform::bridge_prepare"]
-        [::core::mem::offset_of!(rsf_unity_plugin_platform, bridge_prepare) - 0usize];
-    ["Offset of field: rsf_unity_plugin_platform::bridge_activate"]
-        [::core::mem::offset_of!(rsf_unity_plugin_platform, bridge_activate) - 8usize];
-    ["Offset of field: rsf_unity_plugin_platform::bridge_drained"]
-        [::core::mem::offset_of!(rsf_unity_plugin_platform, bridge_drained) - 16usize];
-    ["Offset of field: rsf_unity_plugin_platform::bridge_release"]
-        [::core::mem::offset_of!(rsf_unity_plugin_platform, bridge_release) - 24usize];
-    ["Offset of field: rsf_unity_plugin_platform::bridge_managed_state"]
-        [::core::mem::offset_of!(rsf_unity_plugin_platform, bridge_managed_state) - 32usize];
 };

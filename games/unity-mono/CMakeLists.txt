@@ -1,14 +1,21 @@
 set(RSF_UNITY_NATIVE_INCLUDE "${CMAKE_SOURCE_DIR}/vendor/unity-native/include" CACHE PATH
     "Unity native-plugin headers; untracked, see docs/dependencies.md")
-add_library(rsf_game_unity_mono SHARED src/plugin.cpp src/bridge.cpp src/runtime_host.cpp)
-# Detection, the renderer lifecycle, the Mono helper bootstrap, the D3D12 bridge frame state and the
-# Runtime setup with its [UnitySR] settings are Rust; plugin.cpp lends the bridge and runtime_host.cpp
-# the typed Runtime calls. integrations/unity links the same archive for bridge.cpp, the settings
-# and its package state, SR views, presentation and session services (package_state.rs,
-# package_views.rs, package_state/presentation.rs, package_state/services.rs).
+# The package uses the shared state archive. Only the Mono plugin links the Runtime DLL imports
+# and the private Unity Mono graphics leaves.
 rsf_add_rust_static(rsf_unity_mono_rust rsf_rust_unity_mono rsf-unity-mono rsf_unity_mono)
+rsf_add_rust_static(rsf_unity_mono_plugin_rust rsf_rust_unity_mono_plugin rsf-unity-mono rsf_unity_mono
+    --features mono-plugin)
+add_library(rsf_game_unity_mono SHARED src/plugin.def src/bridge.cpp src/runtime_graphics.cpp)
+set(unity_mono_exports rsf_get_game_plugin_api rsf_unity_start rsf_unity_fg_start rsf_unity_sr_start rsf_unity_sr_stop)
+foreach(symbol IN LISTS unity_mono_exports)
+    if(MSVC)
+        target_link_options(rsf_game_unity_mono PRIVATE "LINKER:/INCLUDE:${symbol}")
+    elseif(MINGW)
+        target_link_options(rsf_game_unity_mono PRIVATE "LINKER:--undefined=${symbol}")
+    endif()
+endforeach()
 target_include_directories(rsf_game_unity_mono PRIVATE include)
-target_link_libraries(rsf_game_unity_mono PRIVATE rsf_unity_mono_rust ReScaleFrame::GameSDK ReScaleFrame::RuntimeCommon rsf_build_options)
+target_link_libraries(rsf_game_unity_mono PRIVATE rsf_unity_mono_plugin_rust ReScaleFrame::GameSDK ReScaleFrame::RuntimeCommon rsf_build_options)
 target_link_libraries(rsf_game_unity_mono PRIVATE rsf_orchestrator)
 target_compile_definitions(rsf_game_unity_mono PRIVATE RSF_GAME_UNITY_HOST_BUILD _CRT_SECURE_NO_WARNINGS)
 if(EXISTS "${RSF_UNITY_NATIVE_INCLUDE}/IUnityGraphicsD3D12.h")

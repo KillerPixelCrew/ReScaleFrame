@@ -9,9 +9,15 @@ license.workspace = true
 [lib]
 crate-type = ["staticlib"]
 
+[features]
+mono-plugin = ["dep:rsf-windows"]
+
 [dependencies]
 rsf-game-sys = { path = "../../sdk/game" }
 rsf-runtime-submission = { path = "../../runtime/graphics/submission" }
+
+[target."cfg(windows)".dependencies]
+rsf-windows = { path = "../../integrations/windows", optional = true }
 
 [target."cfg(windows)".dependencies.windows-sys]
 version = "0.61"

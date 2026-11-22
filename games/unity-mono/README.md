@@ -9,12 +9,11 @@ The shared orchestrator retains vendor SDKs, GPU interoperability and presentati
 and built-in rendering require separate adapters. IL2CPP is outside the initial Mono adapter.
 
 Build detection, the renderer lifecycle and the Mono helper bootstrap are Rust (`rsf-unity-mono`,
-linked as a staticlib). `plugin.cpp` keeps the stable `rsf_get_game_plugin_api` export and lends
-the native D3D12 bridge through `rsf_unity_plugin_platform`. The bridge's frame state is Rust
+linked as a staticlib). `plugin.def` publishes the Rust `rsf_get_game_plugin_api` entry. The bridge's frame state is Rust
 too (`bridge_state.rs`): packet validation and storage, the policy generation, admission into
 the command ring, source-submission bookkeeping and retirement. `bridge.cpp` keeps the Unity
 graphics interfaces, D3D12 commands, resource leases, CPU input events and the bridge exports.
-The Unity package compiles the same `bridge.cpp` and links the same archive. Its own D3D11 and
+The Unity package compiles the same `bridge.cpp` and links the shared-state variant of the archive. Its own D3D11 and
 Vulkan bridge (`integrations/unity/native/bridge.cpp`) uses the same activity, managed stage,
 callback count, packet store, policy and config; a process has one Unity renderer, so only one
 bridge uses that state. It applies a policy change on its next reconstruction event and clears it
@@ -71,11 +70,10 @@ The Runtime setup behind the loader entry `rsf_unity_start` and `rsf_unity_fg_st
 `rsf_unity_sr_start` and `rsf_unity_sr_stop` is Rust as well (`runtime_setup.rs`): the
 `[UnitySR]` keys and defaults, the start gates and result codes, the wait for Unity's Mono
 runtime and the `rsf_fg12_setup` (built by `generation.rs`, which the Unity package shares) and
-`rsf_callback_host_setup` descriptors. `runtime_host.cpp` keeps those exports and lends the typed
-calls into the already loaded Runtime, the SDK header tables and the D3D12 debug layer through
-`rsf_unity_runtime_platform`. Path resolution for
-`[UnitySR]` lives in `runtime_config.rs`; the Unity package reads its identity and `Log` path
-through it from the same archive.
+`rsf_callback_host_setup_v2` descriptors. The exports in `plugin.def` call the already loaded
+Runtime through its import library. `runtime_graphics.cpp` supplies the D3D12 debug-layer and
+DLSS preset validation calls. Path resolution for `[UnitySR]` lives in `runtime_config.rs` and
+serves both routes. The combined entry reuses the executable fingerprint across SR retries.
 
 The Unity package's own state is in the archive too (`package_state.rs`, through
 `integrations/unity/native/package_state.h`): the stored settings and their validation, the
