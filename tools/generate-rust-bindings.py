@@ -525,7 +525,7 @@ generate("games/unity-mono/src/preview_abi.rs", "runtime/orchestrator/include/re
 generate("games/unity-mono/src/package_abi.rs", "integrations/unity/native/package_state.h",
          "rsf_(unity_(package_(settings|status|platform|view_setup)|frame_counters)|native_fg_(options|status)|fg_status|"
          "native_(latency_status|cpu_counters)|fg_mode|pacing_owner|reflex_mode|sr12(_setup|_plan_result)?|dlss_(setup|engine|log_fn))",
-         "RSF_(UNITY_(SETTINGS|PACKAGE)_ABI_VERSION|DLSS_ABI_VERSION|SR12_PLAN_ABI_VERSION|SR_NONE|FG_(OFF|STAT_TOTAL_PRESENTED))",
+         "RSF_(UNITY_((SETTINGS|PACKAGE)_ABI_VERSION|DEVICE_EVENT_(INITIALIZE|SHUTDOWN))|DLSS_ABI_VERSION|SR12_PLAN_ABI_VERSION|SR_NONE|FG_(OFF|STAT_TOTAL_PRESENTED))",
          ["-include", "rescaleframe/native_sr_d3d12.h", "-include", "rescaleframe/native_fg.h", "-include", "rescaleframe/native_cpu.h",
           "-include", "rescaleframe/sr_session.h", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
           "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include", "-Iruntime/presentation/include",

@@ -29,7 +29,6 @@ unsafe extern "C" {
         result: *mut i32,
     ) -> u32;
     fn rsf_unity_package_streamline_host() -> *mut c_void;
-    fn rsf_unity_package_observe_preview(pass: *const rsf_game_render_pass) -> c_int;
     fn rsf_unity_preview_prepare(
         device: *mut c_void,
         queue: *mut c_void,
@@ -191,7 +190,7 @@ extern "C" fn rsf_unity_package_prepare_preview(width: u32, height: u32) -> u32 
             queue.as_raw(),
             width,
             height,
-            Some(rsf_unity_package_observe_preview),
+            Some(routing::observe_preview),
         )
     }
 }

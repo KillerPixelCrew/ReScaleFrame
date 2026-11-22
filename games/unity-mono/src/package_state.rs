@@ -174,7 +174,7 @@ struct Leaves {
     timestamp: unsafe extern "C" fn(*mut u64, *mut u64),
     cpu: unsafe extern "C" fn(*const rsf_game_cpu_event),
     fg_submitted: unsafe extern "C" fn(u64, u64),
-    fg_window: unsafe extern "C" fn(*const rsf_game_render_pass),
+    fg_window: unsafe extern "C" fn(*const rsf_game_render_pass, u32) -> c_int,
     fg_hudless: unsafe extern "C" fn(*mut c_void, *const rsf_game_render_pass),
     preview_present: unsafe extern "C" fn(*mut c_void, *const rsf_game_render_pass, u32) -> u32,
     texture_desc: unsafe extern "C" fn(*mut c_void, *mut u64, *mut u32, *mut u32),
@@ -1464,8 +1464,13 @@ mod tests {
     unsafe extern "C" fn fg_submitted(session: u64, source_frame: u64) {
         call(format!("submitted {session} {source_frame}"));
     }
-    unsafe extern "C" fn fg_window(pass: *const rsf_game_render_pass) {
+    unsafe extern "C" fn fg_window(
+        pass: *const rsf_game_render_pass,
+        catch_exception: u32,
+    ) -> c_int {
+        assert_eq!(catch_exception, 0);
         call(format!("window {}", unsafe { (*pass).view_key }));
+        1
     }
     unsafe extern "C" fn fg_hudless(commands: *mut c_void, pass: *const rsf_game_render_pass) {
         call(format!("hudless {:#x} {}", commands as usize, unsafe {

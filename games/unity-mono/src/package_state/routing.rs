@@ -8,6 +8,7 @@ use super::{presentation, services};
 use crate::bridge_abi::RSF_UNITY_PREVIEW_SOURCE_COMMON;
 #[cfg(windows)]
 use crate::package_abi::rsf_unity_package_platform;
+use crate::package_abi::{RSF_UNITY_DEVICE_EVENT_INITIALIZE, RSF_UNITY_DEVICE_EVENT_SHUTDOWN};
 use rsf_game_sys::{RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_WINDOW, rsf_game_render_pass};
 use std::ffi::{c_int, c_void};
 #[cfg(windows)]
@@ -36,9 +37,6 @@ const RETAINED: &str = "Unity device shutdown retained unproved bridge work; ini
 impl Leaves {
     fn fg_submitted(&self, session: u64, source_frame: u64) {
         unsafe { (self.fg_submitted)(session, source_frame) }
-    }
-    fn fg_window(&self, pass: &rsf_game_render_pass) {
-        unsafe { (self.fg_window)(pass) }
     }
     fn fg_hudless(&self, commands: *mut c_void, pass: &rsf_game_render_pass) {
         unsafe { (self.fg_hudless)(commands, pass) }
@@ -106,7 +104,7 @@ impl Package {
                     .preview_present(&pass, pass.flags & RSF_UNITY_PREVIEW_SOURCE_COMMON != 0);
                 self.preview_refused(leaves, shown, &pass);
             } else {
-                leaves.fg_window(&pass);
+                unsafe { (leaves.fg_window)(&pass, 0) };
             }
             return false;
         }
@@ -222,11 +220,26 @@ pub(super) extern "C" fn accept_window(_: *mut c_void, window: *mut c_void) -> c
     })
 }
 
+// The preview presenter consumes the Runtime observation receipt before presenting.
+#[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
+pub(super) unsafe extern "C" fn observe_preview(pass: *const rsf_game_render_pass) -> c_int {
+    let Some(leaves) = LEAVES.get() else {
+        return 0;
+    };
+    // The presenter lends the pass with the preview swap chain already attached.
+    unsafe { (leaves.fg_window)(pass, 1) }
+}
+
 #[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_unity_package_device_event(initialize: u32) {
+extern "C" fn rsf_unity_package_device_event(sdk_event: u32) {
+    let initialize = match sdk_event {
+        RSF_UNITY_DEVICE_EVENT_INITIALIZE => true,
+        RSF_UNITY_DEVICE_EVENT_SHUTDOWN => false,
+        _ => return,
+    };
     let _operation = OPERATIONS.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(leaves) = LEAVES.get() {
-        PACKAGE.device_event(leaves, initialize != 0);
+        PACKAGE.device_event(leaves, initialize);
     }
 }
 
@@ -274,7 +287,7 @@ unsafe extern "C" fn rsf_unity_package_plugin_load(
     if !graphics.is_null() {
         *registration = Some(device_callback);
         unsafe { device_callback(graphics, 1) };
-        rsf_unity_package_device_event(1);
+        rsf_unity_package_device_event(RSF_UNITY_DEVICE_EVENT_INITIALIZE);
     }
 }
 
@@ -285,7 +298,7 @@ extern "C" fn rsf_unity_package_plugin_unload() {
     if let Some(device_callback) = registration.take() {
         unsafe { device_callback(UNITY_GRAPHICS.load(SeqCst), 0) };
     }
-    rsf_unity_package_device_event(0);
+    rsf_unity_package_device_event(RSF_UNITY_DEVICE_EVENT_SHUTDOWN);
     services::unload();
     UNITY_INTERFACES.store(null_mut(), SeqCst);
     UNITY_GRAPHICS.store(null_mut(), SeqCst);
@@ -307,7 +320,7 @@ mod tests {
         }
         // The static package's device is still waiting: shutdown has nothing to retire.
         assert_eq!(accept_window(std::ptr::null_mut(), std::ptr::null_mut()), 0);
-        rsf_unity_package_device_event(1);
+        rsf_unity_package_device_event(RSF_UNITY_DEVICE_EVENT_INITIALIZE);
         assert_eq!(PACKAGE.device.load(SeqCst), DEVICE_WAITING);
         assert!(shutdown());
     }

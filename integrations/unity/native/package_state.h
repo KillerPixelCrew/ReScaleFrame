@@ -12,6 +12,8 @@
 
 #define RSF_UNITY_SETTINGS_ABI_VERSION 2u
 #define RSF_UNITY_PACKAGE_ABI_VERSION 2u
+#define RSF_UNITY_DEVICE_EVENT_INITIALIZE 0u
+#define RSF_UNITY_DEVICE_EVENT_SHUTDOWN 1u
 typedef struct rsf_unity_package_settings {
     uint32_t struct_size, abi_version;
     uint32_t sr_backend, quality, dlss_preset;
@@ -139,7 +141,8 @@ typedef struct rsf_unity_package_platform {
        format. preview_prepare reads Unity's D3D12 device and queue and prepares the Editor
        preview for the extents; zero when either refuses. */
     void (*fg_submitted)(uint64_t session, uint64_t source_frame);
-    void (*fg_window)(const rsf_game_render_pass* pass);
+    /* 1 after Runtime returns. With catch_exception set, 0 on a caught C++ exception. */
+    int (*fg_window)(const rsf_game_render_pass* pass, uint32_t catch_exception);
     void (*fg_hudless)(void* commands, const rsf_game_render_pass* pass);
     uint32_t (*preview_present)(void* resource, const rsf_game_render_pass* pass, uint32_t common);
     void (*texture_desc)(void* resource, uint64_t* width, uint32_t* height, uint32_t* format);
@@ -200,7 +203,7 @@ void rsf_unity_package_sr_slots_released(uint32_t bridge);
 
 void rsf_unity_package_plugin_load(const rsf_unity_package_platform* platform, void* interfaces);
 void rsf_unity_package_plugin_unload(void);
-void rsf_unity_package_device_event(uint32_t initialize);
+void rsf_unity_package_device_event(uint32_t sdk_event);
 uint32_t rsf_unity_package_editor(void);
 /* A renderer bridge failure reported for the rest of the session. */
 void rsf_unity_package_bridge_failed(int32_t result);

@@ -44,12 +44,15 @@ static_assert(sizeof(rsf_sr12_setup) == 216 && sizeof(rsf_sr12_plan_result) == 2
 static_assert(RSF_BACKEND_ERROR_INVALID_ARGUMENT == -1 && RSF_BACKEND_ERROR_FEATURE_FAILED == -9);
 static_assert(sizeof(rsf_game_host_services) == 104 && sizeof(rsf_unity_native_api) == 72 && sizeof(wchar_t) == 2);
 
+// The SDK enum crosses as its raw value. Rust decides which events it handles.
+static_assert(kUnityGfxDeviceEventInitialize == RSF_UNITY_DEVICE_EVENT_INITIALIZE);
+static_assert(kUnityGfxDeviceEventShutdown == RSF_UNITY_DEVICE_EVENT_SHUTDOWN);
+
 namespace {
 using Microsoft::WRL::ComPtr;
 void UNITY_INTERFACE_API device_event(UnityGfxDeviceEventType type)
 {
-    if (type == kUnityGfxDeviceEventInitialize || type == kUnityGfxDeviceEventShutdown)
-        rsf_unity_package_device_event(type == kUnityGfxDeviceEventInitialize ? 1u : 0u);
+    rsf_unity_package_device_event(static_cast<uint32_t>(type));
 }
 void* graphics_interface(void* pointer) noexcept
 {
@@ -67,13 +70,21 @@ uint32_t bridge_open(uint32_t is_editor) noexcept try
 {
     return rsf_unity_package_bridge_open(is_editor != 0) ? 1u : 0u;
 } catch (...) { return 0; }
-}
-
-extern "C" int rsf_unity_package_observe_preview(const rsf_game_render_pass* pass) noexcept try
+int fg_window(const rsf_game_render_pass* pass, uint32_t catch_exception) noexcept
 {
-    rsf_fg12_window(pass);
-    return 1;
-} catch (...) { return 0; }
+    // The player call keeps its noexcept boundary. The preview observer can report refusal.
+    if (!catch_exception) {
+        rsf_fg12_window(pass);
+        return 1;
+    }
+    try {
+        rsf_fg12_window(pass);
+        return 1;
+    } catch (...) {
+        return 0;
+    }
+}
+}
 extern "C" uint32_t rsf_unity_package_acquire_graphics(void** device, void** queue) noexcept
 {
     ComPtr<ID3D12Device> owning_device;
@@ -140,7 +151,7 @@ constexpr rsf_unity_package_platform platform{
     rsf_unity_package_timestamp,
     [](const rsf_game_cpu_event* event) noexcept { rsf_fg12_cpu(event); },
     [](uint64_t session, uint64_t frame) noexcept { rsf_fg12_submitted(session, frame); },
-    [](const rsf_game_render_pass* pass) noexcept { rsf_fg12_window(pass); },
+    fg_window,
     [](void* commands, const rsf_game_render_pass* pass) noexcept { rsf_fg12_hudless(commands, pass); },
     rsf_unity_preview_present,
     rsf_unity_package_texture_desc,

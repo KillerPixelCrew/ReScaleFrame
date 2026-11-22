@@ -16,6 +16,8 @@ pub const RSF_FG_OFF: u32 = 0;
 pub const RSF_FG_STAT_TOTAL_PRESENTED: u32 = 1;
 pub const RSF_UNITY_SETTINGS_ABI_VERSION: u32 = 2;
 pub const RSF_UNITY_PACKAGE_ABI_VERSION: u32 = 2;
+pub const RSF_UNITY_DEVICE_EVENT_INITIALIZE: u32 = 0;
+pub const RSF_UNITY_DEVICE_EVENT_SHUTDOWN: u32 = 1;
 pub type rsf_dlss_engine = u32;
 pub type rsf_dlss_log_fn = ::core::option::Option<
     unsafe extern "C" fn(user: *mut ::core::ffi::c_void, message: *const ::core::ffi::c_char),
@@ -804,7 +806,12 @@ pub struct rsf_unity_package_platform {
         ::core::option::Option<unsafe extern "C" fn(counter: *mut u64, frequency: *mut u64)>,
     pub cpu: ::core::option::Option<unsafe extern "C" fn(event: *const rsf_game_cpu_event)>,
     pub fg_submitted: ::core::option::Option<unsafe extern "C" fn(session: u64, source_frame: u64)>,
-    pub fg_window: ::core::option::Option<unsafe extern "C" fn(pass: *const rsf_game_render_pass)>,
+    pub fg_window: ::core::option::Option<
+        unsafe extern "C" fn(
+            pass: *const rsf_game_render_pass,
+            catch_exception: u32,
+        ) -> ::core::ffi::c_int,
+    >,
     pub fg_hudless: ::core::option::Option<
         unsafe extern "C" fn(commands: *mut ::core::ffi::c_void, pass: *const rsf_game_render_pass),
     >,
