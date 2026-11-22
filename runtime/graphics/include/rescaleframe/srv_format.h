@@ -7,13 +7,12 @@
    typed and is returned unchanged. Pairs with is_depth_format() in resource_roles.h.
 
    Sharing is a separate question: R32G32_FLOAT is a valid view here but is not D3D11-shareable. */
-#include <dxgiformat.h>
+#include <stdint.h>
 
-extern "C" unsigned int rsf_d3d11_output_srv_format(unsigned int format);
-
-namespace rsf {
-inline DXGI_FORMAT srv_format(DXGI_FORMAT format)
-{
-    return static_cast<DXGI_FORMAT>(rsf_d3d11_output_srv_format(static_cast<unsigned int>(format)));
+#ifdef __cplusplus
+extern "C" {
+#endif
+uint32_t rsf_d3d11_output_srv_format(uint32_t format);
+#ifdef __cplusplus
 }
-}
+#endif

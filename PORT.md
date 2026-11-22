@@ -686,56 +686,58 @@ Port state preservation, role selection, UI composition and resource views toget
 
 - Observer callbacks, saved D3D state and slot restoration ([G01](#g01), [G02](#g02)).
 
-**Port files (23)**
+**Port files (25)**
 
-- [ ] [runtime/graphics/include/rescaleframe/d3d11_state.h](runtime/graphics/include/rescaleframe/d3d11_state.h)
-- [ ] [runtime/graphics/include/rescaleframe/resource_ref.h](runtime/graphics/include/rescaleframe/resource_ref.h)
-- [ ] [runtime/graphics/include/rescaleframe/resource_roles.h](runtime/graphics/include/rescaleframe/resource_roles.h)
-- [ ] [runtime/graphics/include/rescaleframe/srv_cache.h](runtime/graphics/include/rescaleframe/srv_cache.h)
-- [ ] [runtime/graphics/include/rescaleframe/srv_format.h](runtime/graphics/include/rescaleframe/srv_format.h)
-- [ ] [runtime/graphics/include/rescaleframe/ui_identify.h](runtime/graphics/include/rescaleframe/ui_identify.h)
-- [ ] [runtime/graphics/include/rescaleframe/ui_layer.h](runtime/graphics/include/rescaleframe/ui_layer.h)
-- [ ] [runtime/graphics/src/d3d11_state.cpp](runtime/graphics/src/d3d11_state.cpp)
-- [ ] [runtime/graphics/src/d3d11_state_private.h](runtime/graphics/src/d3d11_state_private.h)
-- [ ] [runtime/graphics/src/resource_ref.cpp](runtime/graphics/src/resource_ref.cpp)
-- [ ] [runtime/graphics/src/ui_layer.cpp](runtime/graphics/src/ui_layer.cpp)
-- [ ] [runtime/orchestrator/include/rescaleframe/native_composition.h](runtime/orchestrator/include/rescaleframe/native_composition.h)
-- [ ] [runtime/orchestrator/include/rescaleframe/native_translucency.h](runtime/orchestrator/include/rescaleframe/native_translucency.h)
-- [ ] [runtime/orchestrator/src/com_ref.cpp](runtime/orchestrator/src/com_ref.cpp)
-- [ ] [runtime/orchestrator/src/native_regions.cpp](runtime/orchestrator/src/native_regions.cpp)
-- [ ] [runtime/orchestrator/src/native_regions.h](runtime/orchestrator/src/native_regions.h)
-- [ ] [runtime/orchestrator/src/native_regions_com.cpp](runtime/orchestrator/src/native_regions_com.cpp)
-- [ ] [runtime/orchestrator/src/native_reinsert.h](runtime/orchestrator/src/native_reinsert.h)
-- [ ] [runtime/orchestrator/src/native_reinsert_platform.cpp](runtime/orchestrator/src/native_reinsert_platform.cpp)
-- [ ] [runtime/orchestrator/src/native_translucency.cpp](runtime/orchestrator/src/native_translucency.cpp)
-- [ ] [runtime/orchestrator/src/native_translucency_com.cpp](runtime/orchestrator/src/native_translucency_com.cpp)
-- [ ] [runtime/orchestrator/src/sampler_bias_bridge.h](runtime/orchestrator/src/sampler_bias_bridge.h)
-- [ ] [runtime/orchestrator/src/sampler_bias_com.cpp](runtime/orchestrator/src/sampler_bias_com.cpp)
+- [x] [runtime/graphics/include/rescaleframe/d3d11_state.h](runtime/graphics/include/rescaleframe/d3d11_state.h)
+- [x] [runtime/graphics/include/rescaleframe/resource_ref.h](runtime/graphics/include/rescaleframe/resource_ref.h)
+- [x] [runtime/graphics/include/rescaleframe/resource_roles.h](runtime/graphics/include/rescaleframe/resource_roles.h)
+- [x] [runtime/graphics/include/rescaleframe/srv_cache.h](runtime/graphics/include/rescaleframe/srv_cache.h)
+- [x] [runtime/graphics/include/rescaleframe/srv_format.h](runtime/graphics/include/rescaleframe/srv_format.h)
+- [x] [runtime/graphics/include/rescaleframe/ui_identify.h](runtime/graphics/include/rescaleframe/ui_identify.h)
+- [x] [runtime/graphics/include/rescaleframe/ui_layer.h](runtime/graphics/include/rescaleframe/ui_layer.h)
+- [x] [runtime/graphics/src/d3d11_state.cpp](runtime/graphics/src/d3d11_state.cpp)
+- [x] [runtime/graphics/src/d3d11_state_private.h](runtime/graphics/src/d3d11_state_private.h)
+- [x] [runtime/graphics/src/resource_ref.cpp](runtime/graphics/src/resource_ref.cpp)
+- [x] [runtime/graphics/src/ui_layer.cpp](runtime/graphics/src/ui_layer.cpp)
+- [x] [runtime/orchestrator/include/rescaleframe/native_composition.h](runtime/orchestrator/include/rescaleframe/native_composition.h)
+- [x] [runtime/orchestrator/include/rescaleframe/native_translucency.h](runtime/orchestrator/include/rescaleframe/native_translucency.h)
+- [x] [runtime/orchestrator/src/com_ref.cpp](runtime/orchestrator/src/com_ref.cpp)
+- [x] [runtime/orchestrator/src/native_regions.cpp](runtime/orchestrator/src/native_regions.cpp)
+- [x] [runtime/orchestrator/src/native_regions.h](runtime/orchestrator/src/native_regions.h)
+- [x] [runtime/orchestrator/src/native_regions_com.cpp](runtime/orchestrator/src/native_regions_com.cpp)
+- [x] [runtime/orchestrator/src/native_reinsert.h](runtime/orchestrator/src/native_reinsert.h)
+- [x] [runtime/orchestrator/src/native_reinsert_platform.cpp](runtime/orchestrator/src/native_reinsert_platform.cpp)
+- [x] [runtime/orchestrator/src/native_translucency.cpp](runtime/orchestrator/src/native_translucency.cpp)
+- [x] [runtime/orchestrator/src/native_translucency_com.cpp](runtime/orchestrator/src/native_translucency_com.cpp)
+- [x] [runtime/orchestrator/src/sampler_bias_bridge.h](runtime/orchestrator/src/sampler_bias_bridge.h)
+- [x] [runtime/orchestrator/src/sampler_bias_com.cpp](runtime/orchestrator/src/sampler_bias_com.cpp)
+- [ ] [runtime/orchestrator/src/depth_domains_abi.cpp](runtime/orchestrator/src/depth_domains_abi.cpp) (shared SDK predicate thunk)
+- [ ] [runtime/orchestrator/src/native_composition_unload.cpp](runtime/orchestrator/src/native_composition_unload.cpp) (CRT teardown registration)
 
 **Fixtures (8)**
 
 - [ ] [tests/d3d11_state.cpp](tests/d3d11_state.cpp)
-- [ ] [tests/native_reinsert.cpp](tests/native_reinsert.cpp)
+- [x] [tests/native_reinsert.cpp](tests/native_reinsert.cpp)
 - [ ] [tests/native_translucency.cpp](tests/native_translucency.cpp)
 - [ ] [tests/native_translucency_abi.cpp](tests/native_translucency_abi.cpp)
-- [ ] [tests/resource_roles.cpp](tests/resource_roles.cpp)
-- [ ] [tests/sampler_bias.cpp](tests/sampler_bias.cpp)
-- [ ] [tests/ui_identify.cpp](tests/ui_identify.cpp)
+- [x] [tests/resource_roles.cpp](tests/resource_roles.cpp)
+- [x] [tests/sampler_bias.cpp](tests/sampler_bias.cpp)
+- [x] [tests/ui_identify.cpp](tests/ui_identify.cpp)
 - [ ] [tests/ui_layer.cpp](tests/ui_layer.cpp)
 
 **Rust review findings (6)**
 
-- [ ] **Altitude | Medium | Include session identity in the translucency mask lease.** Ledger::open receives session_id but only uses it to match pending cloud depth. The mask key used by open_frame and take contains family, view, native frame and rectangle alone. Two sessions reusing those values on the same D3D11 device can be treated as one open scope, and SR can read the previous session's opaque snapshot and masks. Include session_id in Key and in the same-view close rule, and test identical keys from distinct sessions. [runtime/orchestrator/src/native_translucency.rs:159](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/native_translucency.rs#L159)
+- [x] **Altitude | Medium | Include session identity in the translucency mask lease.** Ledger::open receives session_id but only uses it to match pending cloud depth. The mask key used by open_frame and take contains family, view, native frame and rectangle alone. Two sessions reusing those values on the same D3D11 device can be treated as one open scope, and SR can read the previous session's opaque snapshot and masks. Include session_id in Key and in the same-view close rule, and test identical keys from distinct sessions. [runtime/orchestrator/src/native_translucency.rs:159](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/native_translucency.rs#L159)
 
-- [ ] **Duplication | Low | Use the public all-zero depth-domain rule in region preparation.** The depth kernel chooses legacy copying at runtime/orchestrator/src/native_regions.rs:282 using a field-by-field empty_layout predicate that enumerates every scalar, bitwise float and both transform arrays. The published contract at sdk/game/include/rescaleframe/game_renderer.h:45 defines the same decision as any nonzero byte, already used in the OpenGL evaluation path through runtime/orchestrator/src/gl_pipeline_platform.cpp:172. A newly appended field would immediately request mapping in those callers but be ignored by the field list until it too is edited. Reuse the published requested predicate for the full descriptor and keep the separate unused-domain validation at native_regions.rs:303. [runtime/orchestrator/src/native_regions.rs:124](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/native_regions.rs#L124)
+- [x] **Duplication | Low | Use the public all-zero depth-domain rule in region preparation.** The depth kernel chooses legacy copying at runtime/orchestrator/src/native_regions.rs:282 using a field-by-field empty_layout predicate that enumerates every scalar, bitwise float and both transform arrays. The published contract at sdk/game/include/rescaleframe/game_renderer.h:45 defines the same decision as any nonzero byte, already used in the OpenGL evaluation path through runtime/orchestrator/src/gl_pipeline_platform.cpp:172. A newly appended field would immediately request mapping in those callers but be ignored by the field list until it too is edited. Reuse the published requested predicate for the full descriptor and keep the separate unused-domain validation at native_regions.rs:303. [runtime/orchestrator/src/native_regions.rs:124](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/native_regions.rs#L124)
 
-- [ ] **Duplication | Low | Unbind D3D11 output targets once per temporal-mask dispatch.** The temporal-mask entry invoked from runtime/orchestrator/src/native_regions.cpp:117 unbinds output targets before its optional readable copy at runtime/orchestrator/src/native_regions.rs:804, then repeats the call at :842. The intervening code only creates or looks up SRVs, optionally copies a texture and builds constants; none of it binds an output. The leaf at runtime/orchestrator/src/d3d11_output_platform.cpp:89 issues an actual OMSetRenderTargets call both times. Keep the first unbind so the copy remains legal and remove the second call from the per-frame path. [runtime/orchestrator/src/native_regions.rs:842](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/native_regions.rs#L842)
+- [x] **Duplication | Low | Unbind D3D11 output targets once per temporal-mask dispatch.** The temporal-mask entry invoked from runtime/orchestrator/src/native_regions.cpp:117 unbinds output targets before its optional readable copy at runtime/orchestrator/src/native_regions.rs:804, then repeats the call at :842. The intervening code only creates or looks up SRVs, optionally copies a texture and builds constants; none of it binds an output. The leaf at runtime/orchestrator/src/d3d11_output_platform.cpp:89 issues an actual OMSetRenderTargets call both times. Keep the first unbind so the copy remains legal and remove the second call from the per-frame path. [runtime/orchestrator/src/native_regions.rs:842](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/native_regions.rs#L842)
 
-- [ ] **Simplicity | Low | native_reinsert and native_exposure re-implement the SRV cache that native_regions already shares** native_regions.rs:399-424 exports pub(super) SourceView::get(cache, device, texture, format). It returns the cached view when the retained texture matches, otherwise creates an SRV with rsf_d3d11_output_create_srv and retains the texture so its identity cannot be reused. native_translucency.rs:15 and :544-553 already reuse it. native_reinsert.rs:97-136 declares its own SourceView { view, source } and Conversions::source_view with the same body (match retained pointer, else create SRV, retain, insert). native_exposure.rs:34-113 declares a third SourceView { view, source } with a two-entry round-robin of the same create-and-retain step. motion_d3d11.rs:31-92 is a fourth, generic SourceViews<N> LRU (with idle expiry) shared by motion_decode and motion_resolve. Simpler: native_reinsert keeps an Option<native_regions::SourceView> and calls SourceView::get, deleting its private struct and method. native_exposure can do the same with [Option<SourceView>; 2], or use motion_d3d11::SourceViews<2>. Tradeoff: SourceView::get drops the cache entry before creating the replacement while native_reinsert keeps the old view on failure; the shared helper would need to commit only after success (native_exposure already documents "Commit the replacement only after the new SRV is valid"). [runtime/orchestrator/src/native_reinsert.rs:97](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/native_reinsert.rs#L97)
+- [x] **Simplicity | Low | native_reinsert and native_exposure re-implement the SRV cache that native_regions already shares** native_regions.rs:399-424 exports pub(super) SourceView::get(cache, device, texture, format). It returns the cached view when the retained texture matches, otherwise creates an SRV with rsf_d3d11_output_create_srv and retains the texture so its identity cannot be reused. native_translucency.rs:15 and :544-553 already reuse it. native_reinsert.rs:97-136 declares its own SourceView { view, source } and Conversions::source_view with the same body (match retained pointer, else create SRV, retain, insert). native_exposure.rs:34-113 declares a third SourceView { view, source } with a two-entry round-robin of the same create-and-retain step. motion_d3d11.rs:31-92 is a fourth, generic SourceViews<N> LRU (with idle expiry) shared by motion_decode and motion_resolve. Simpler: native_reinsert keeps an Option<native_regions::SourceView> and calls SourceView::get, deleting its private struct and method. native_exposure can do the same with [Option<SourceView>; 2], or use motion_d3d11::SourceViews<2>. Tradeoff: SourceView::get drops the cache entry before creating the replacement while native_reinsert keeps the old view on failure; the shared helper would need to commit only after success (native_exposure already documents "Commit the replacement only after the new SRV is valid"). [runtime/orchestrator/src/native_reinsert.rs:97](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/native_reinsert.rs#L97)
 
-- [ ] **Duplication | Low | Reuse the same R32 mask texture and UAV owner in both D3D11 passes.** Translucency creates three MaskTarget objects for reactive, coverage and bias output at runtime/orchestrator/src/native_translucency.rs:467. Region merging independently defines the same two-ComRef type and constructor at runtime/orchestrator/src/native_regions.rs:563 and creates two targets at :797. Both allocate a single-sample, single-mip R32_FLOAT texture with shader-read and unordered-access flags, then call the same rsf_regions_create_uav leaf. Expose one constructor beside the shared region resources so allocation flags, creation-failure cleanup and view lifetime are maintained together; each pass still chooses its own target count. [runtime/orchestrator/src/native_translucency.rs:440](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/native_translucency.rs#L440)
+- [x] **Duplication | Low | Reuse the same R32 mask texture and UAV owner in both D3D11 passes.** Translucency creates three MaskTarget objects for reactive, coverage and bias output at runtime/orchestrator/src/native_translucency.rs:467. Region merging independently defines the same two-ComRef type and constructor at runtime/orchestrator/src/native_regions.rs:563 and creates two targets at :797. Both allocate a single-sample, single-mip R32_FLOAT texture with shader-read and unordered-access flags, then call the same rsf_regions_create_uav leaf. Expose one constructor beside the shared region resources so allocation flags, creation-failure cleanup and view lifetime are maintained together; each pass still chooses its own target count. [runtime/orchestrator/src/native_translucency.rs:440](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/native_translucency.rs#L440)
 
-- [ ] **Altitude | Low | Give the frame-tap classifier the actual render extent or the adapter's supported range.** Without a known render size, at_render_resolution enforces a fixed half-output minimum for every adapter. frame_tap.rs::role_of always passes zero render dimensions, even though the runtime itself recognizes 3x output/input as Ultra Performance. At that ratio, a correctly shaped motion, depth or scene-color input cannot match any RENDER_SIZED rule. Pass the current render extent when known, or make the uncertain range part of the adapter's rule and retain candidate confidence. [runtime/orchestrator/src/resource_roles.rs:35](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/resource_roles.rs#L35)
+- [x] **Altitude | Low | Give the frame-tap classifier the actual render extent or the adapter's supported range.** Without a known render size, at_render_resolution enforces a fixed half-output minimum for every adapter. frame_tap.rs::role_of always passes zero render dimensions, even though the runtime itself recognizes 3x output/input as Ultra Performance. At that ratio, a correctly shaped motion, depth or scene-color input cannot match any RENDER_SIZED rule. Pass the current render extent when known, or make the uncertain range part of the adapter's rule and retain candidate confidence. [runtime/orchestrator/src/resource_roles.rs:35](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/resource_roles.rs#L35)
 
 <a id="g04"></a>
 

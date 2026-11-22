@@ -181,7 +181,7 @@ void describe(void* resource, TextureDesc* out)
 {
     const auto desc = static_cast<ID3D12Resource*>(resource)->GetDesc();
     *out = {desc.Width, desc.Height, uint32_t(desc.Dimension), desc.DepthOrArraySize, desc.SampleDesc.Count,
-        uint32_t(desc.Format), uint32_t(rsf::srv_format(desc.Format))};
+        uint32_t(desc.Format), rsf_d3d11_output_srv_format(uint32_t(desc.Format))};
 }
 // Resources and command lists are both device children.
 int owned_by(void* child, void* device)

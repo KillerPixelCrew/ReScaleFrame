@@ -180,7 +180,7 @@ generate("runtime/orchestrator/src/scene_promote_abi.rs", "runtime/graphics/incl
 generate("sdk/game/src/d3d11_sr_admission_abi.rs", "runtime/orchestrator/include/rescaleframe/gpu_policy.h",
          "rsf_d3d11_sr_admission", "RSF_(D3D11_SR_ADMISSION_ABI_VERSION|SR_AUTO)",
          ["-include", "rescaleframe/sr_session.h", "-Iruntime/orchestrator/include",
-          "-Iruntime/contract/include"],
+          "-Iruntime/contract/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist", "--with-derive-default"])
 generate("sdk/game/src/d3d11_chain_abi.rs", "runtime/orchestrator/include/rescaleframe/d3d11_host.h",
          "rsf_d3d11_chain_dispatch.*", "RSF_D3D11_(HOST_(ABI_VERSION|DEPTH_.*)|DISPATCH_.*)",
