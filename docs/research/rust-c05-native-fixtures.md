@@ -84,3 +84,7 @@ Scoped bindgen regeneration and the source comparison covered the private
 tables. MSVC syntax-only checks covered both optional-SDK variants and
 the callback exception leaf. No link, fixture execution or device result
 is claimed.
+
+## Superseded leaf decisions
+
+The retained Anti-Lag C++ leaf and the C++ exception leaf above are replaced. The driver calls are Rust and the exception leaf is C11. See [leaf closure](rust-core-leaves-closure.md).

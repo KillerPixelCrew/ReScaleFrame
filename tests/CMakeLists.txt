@@ -671,7 +671,7 @@ rsf_add_rust_static(rsf_vk_latency_fixtures_rust rsf_rust_vk_latency_fixtures
 add_executable(rsf_native_latency_vulkan_test game-sdk/cpu_fixture_main.c ../runtime/orchestrator/src/native_latency_vulkan.c)
 target_sources(rsf_native_latency_vulkan_test PRIVATE
     ../runtime/orchestrator/src/latency_amd_vulkan.c
-    ../runtime/orchestrator/src/native_latency_streamline_exceptions.cpp)
+    ../runtime/orchestrator/src/native_latency_streamline_exceptions.c)
 target_include_directories(rsf_native_latency_vulkan_test PRIVATE ../runtime/orchestrator/include)
 target_compile_definitions(rsf_native_latency_vulkan_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_STREAMLINE_VK=1
     RSF_CPU_FIXTURE=rsf_native_latency_vulkan_fixture

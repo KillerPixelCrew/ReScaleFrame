@@ -757,8 +757,6 @@ generate("runtime/orchestrator/src/cpu_abi.rs", "runtime/orchestrator/include/re
          "rsf_native_(cpu_(frame|counters|reservation|reservation_counters)|input_receipts)",
          "RSF_NATIVE_CPU_(RESERVATION_.*|DEPENDENCY_.*|PRESENT_.*)",
          ["-Iruntime/orchestrator/include", "-Isdk/game/include"])
-generate("runtime/orchestrator/src/latency_antilag_native_abi.rs", "runtime/orchestrator/src/latency_antilag.h",
-         "AntiLagNativeOps", "NOTHING", [], ["--no-recursive-allowlist"])
 generate("tests/game-sdk/src/antilag_abi.rs", "runtime/orchestrator/src/latency_antilag.h",
          "AntiLag(Callbacks|Context|State)", "NOTHING", [],
          ["--allowlist-function", "rsf_core_antilag_(create|destroy|bind|pace|end_render|state|reset_sources)",

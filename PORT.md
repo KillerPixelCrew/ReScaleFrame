@@ -356,11 +356,11 @@ Port CPU event admission, input receipts, vendor latency and pacing decisions, i
 - [x] [runtime/orchestrator/include/rescaleframe/native_latency_vulkan_requirements.h](runtime/orchestrator/include/rescaleframe/native_latency_vulkan_requirements.h)
 - [x] [runtime/orchestrator/src/latency_amd_vulkan.cpp](runtime/orchestrator/src/latency_amd_vulkan.cpp)
 - [x] [runtime/orchestrator/src/latency_amd_vulkan_platform.h](runtime/orchestrator/src/latency_amd_vulkan_platform.h)
-- [ ] [runtime/orchestrator/src/latency_antilag.cpp](runtime/orchestrator/src/latency_antilag.cpp)
+- [x] [runtime/orchestrator/src/latency_antilag.cpp](runtime/orchestrator/src/latency_antilag.cpp) (removed; the AMD Anti-Lag 2 driver calls are [latency_antilag_sdk.rs](runtime/orchestrator/src/latency_antilag_sdk.rs), see [leaf closure](docs/research/rust-core-leaves-closure.md))
 - [x] [runtime/orchestrator/src/latency_antilag.h](runtime/orchestrator/src/latency_antilag.h)
 - [x] [runtime/orchestrator/src/latency_policy.h](runtime/orchestrator/src/latency_policy.h)
 - [x] [runtime/orchestrator/src/native_fg_cpu_platform.h](runtime/orchestrator/src/native_fg_cpu_platform.h)
-- [ ] [runtime/orchestrator/src/native_latency_streamline_exceptions.cpp](runtime/orchestrator/src/native_latency_streamline_exceptions.cpp) (native Streamline callback exceptions)
+- [x] [runtime/orchestrator/src/native_latency_streamline_exceptions.cpp](runtime/orchestrator/src/native_latency_streamline_exceptions.cpp) (native Streamline callback exceptions; now the C11 leaf [native_latency_streamline_exceptions.c](runtime/orchestrator/src/native_latency_streamline_exceptions.c) with MSVC structured exception handling)
 - [x] [runtime/orchestrator/src/native_latency_vulkan.cpp](runtime/orchestrator/src/native_latency_vulkan.cpp)
 - [x] [runtime/orchestrator/src/native_latency_vulkan_presentation.h](runtime/orchestrator/src/native_latency_vulkan_presentation.h)
 
@@ -667,7 +667,7 @@ Port slot substitution, constant overrides and promotion as one lifetime chain. 
 - [x] [runtime/graphics/src/frame_tap_platform.h](runtime/graphics/src/frame_tap_platform.h)
 - [x] [runtime/graphics/src/scene_promote.cpp](runtime/graphics/src/scene_promote.cpp)
 
-- [ ] [runtime/orchestrator/src/frame_tap_callbacks.cpp](runtime/orchestrator/src/frame_tap_callbacks.cpp) (introduced by the port to contain foreign C++ callback exceptions)
+- [x] [runtime/orchestrator/src/frame_tap_callbacks.cpp](runtime/orchestrator/src/frame_tap_callbacks.cpp) (introduced by the port to contain foreign C++ callback exceptions; now the C11 leaf [frame_tap_callbacks.c](runtime/orchestrator/src/frame_tap_callbacks.c) built by `build.rs`)
 
 **Fixtures (3)**
 
@@ -733,7 +733,7 @@ Port state preservation, role selection, UI composition and resource views toget
 - [x] [runtime/orchestrator/src/sampler_bias_bridge.h](runtime/orchestrator/src/sampler_bias_bridge.h)
 - [x] [runtime/orchestrator/src/sampler_bias_com.cpp](runtime/orchestrator/src/sampler_bias_com.cpp)
 - [x] [runtime/orchestrator/src/depth_domains_abi.cpp](runtime/orchestrator/src/depth_domains_abi.cpp) (shared SDK predicate thunk)
-- [ ] [runtime/orchestrator/src/native_composition_unload.cpp](runtime/orchestrator/src/native_composition_unload.cpp) (CRT teardown registration)
+- [x] [runtime/orchestrator/src/native_composition_unload.cpp](runtime/orchestrator/src/native_composition_unload.cpp) (CRT teardown registration; now the C11 initializer [native_composition_unload.c](runtime/orchestrator/src/native_composition_unload.c))
 
 **Fixtures (8)**
 

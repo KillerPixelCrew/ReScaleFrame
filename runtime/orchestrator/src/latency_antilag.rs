@@ -6,9 +6,9 @@ use std::ptr::null_mut;
 use std::sync::{Mutex, RwLock};
 use windows::{Win32::Graphics::Dxgi::IDXGIObject, core::GUID};
 
-#[path = "latency_antilag_native_abi.rs"]
-mod native_abi;
-use native_abi::AntiLagNativeOps;
+#[path = "latency_antilag_sdk.rs"]
+mod sdk;
+use sdk::Sdk;
 
 pub(super) const AMD_VENDOR_ID: u32 = 0x1002;
 
@@ -31,7 +31,8 @@ const _: () = assert!(size_of::<Driver>() == 32);
 enum Binding {
     Unavailable,
     Callback(&'static Driver, *mut c_void),
-    Sdk(&'static AntiLagNativeOps, *mut c_void),
+    // Leaked storage. DXGI can keep the embedded DX12 context address after retirement.
+    Sdk(*mut Sdk),
 }
 
 // The pinned FSR DX12 swap chain reads a Context* followed by a C++ bool.
@@ -54,11 +55,11 @@ impl Binding {
         match *self {
             Self::Unavailable => 0,
             Self::Callback(calls, raw) => unsafe { (calls.initialize)(raw, api, device) },
-            Self::Sdk(ops, raw) => {
+            Self::Sdk(raw) => {
                 let result = unsafe {
                     match api {
-                        11 => (ops.initialize_dx11.unwrap())(raw),
-                        12 => (ops.initialize_dx12.unwrap())(raw, device),
+                        11 => Sdk::initialize_dx11(raw),
+                        12 => Sdk::initialize_dx12(raw, device),
                         _ => return 0,
                     }
                 };
@@ -71,13 +72,16 @@ impl Binding {
         match *self {
             Self::Unavailable => false,
             Self::Callback(calls, raw) => unsafe { (calls.update)(raw, api, enabled, fps) != 0 },
-            Self::Sdk(ops, raw) => {
-                let update = match api {
-                    11 => ops.update_dx11,
-                    12 => ops.update_dx12,
-                    _ => return false,
+            Self::Sdk(raw) => {
+                let enabled = enabled != 0;
+                let result = unsafe {
+                    match api {
+                        11 => Sdk::update_dx11(raw, enabled, fps),
+                        12 => Sdk::update_dx12(raw, enabled, fps),
+                        _ => return false,
+                    }
                 };
-                unsafe { update.unwrap()(raw, enabled, fps) >= 0 }
+                result >= 0
             }
         }
     }
@@ -86,9 +90,9 @@ impl Binding {
         match *self {
             Self::Unavailable => false,
             Self::Callback(calls, raw) => unsafe { (calls.end_render)(raw, chain, attach) != 0 },
-            Self::Sdk(ops, raw) => {
+            Self::Sdk(raw) => {
                 let data = FrameTypeData {
-                    context: unsafe { (ops.context_dx12.unwrap())(raw) },
+                    context: unsafe { Sdk::context_dx12(raw) },
                     enabled: u8::from(attach != 0),
                     padding: [0; 7],
                 };
@@ -102,7 +106,7 @@ impl Binding {
                         std::ptr::from_ref(&data).cast(),
                     )
                 };
-                tagged.is_ok() && (attach == 0 || unsafe { (ops.mark_dx12.unwrap())(raw) >= 0 })
+                tagged.is_ok() && (attach == 0 || unsafe { Sdk::mark_dx12(raw) >= 0 })
             }
         }
     }
@@ -111,7 +115,7 @@ impl Binding {
         match *self {
             Self::Unavailable => {}
             Self::Callback(calls, raw) => unsafe { (calls.shutdown)(raw) },
-            Self::Sdk(ops, raw) => unsafe { (ops.shutdown.unwrap())(raw) },
+            Self::Sdk(raw) => unsafe { Sdk::shutdown(raw) },
         }
     }
 }
@@ -290,21 +294,15 @@ extern "C" fn rsf_core_antilag_create(
     crate::allocate_handle(Context::new(binding))
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_antilag_create_sdk(ops: Option<&'static AntiLagNativeOps>) -> *mut Context {
-    let Some(ops) = ops else {
-        return crate::allocate_handle(Context::new(Binding::Unavailable));
-    };
-    // Reserve the Rust owner first. DXGI can keep the embedded SDK context
-    // address alive after retirement, so published native storage is never freed.
+/// The D3D owner for AMD hardware. Without a driver the binding reports unavailable on bind.
+pub(crate) unsafe extern "C" fn create_sdk_context() -> *mut c_void {
+    // Reserve the Rust owner first. DXGI can keep the SDK context address alive after
+    // retirement, so the published storage is never freed.
     let Some(storage) = crate::reserve_handle() else {
         return null_mut();
     };
-    let raw = unsafe { (ops.allocate.unwrap())() };
-    if raw.is_null() {
-        return null_mut();
-    }
-    Box::into_raw(Box::write(storage, Context::new(Binding::Sdk(ops, raw))))
+    let binding = Binding::Sdk(Sdk::leak());
+    Box::into_raw(Box::write(storage, Context::new(binding))).cast()
 }
 
 #[unsafe(no_mangle)]

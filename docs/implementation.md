@@ -1,5 +1,17 @@
 # Implementation tracker
 
+C05, G02 and G03 close their last first-party C++ files. The D3D
+Anti-Lag 2 driver calls (initialization, update, end-of-frame marker and
+teardown) now run in Rust over the driver COM interfaces, so the AMD SDK
+headers are no longer a build input. Foreign C++ exception containment for
+Streamline callbacks and frame-tap callbacks is a C11 leaf using structured
+exception handling on MSVC, and the CRT unload hook is a C11 initializer.
+The Anti-Lag layouts, call sequence and unload hook were checked against the
+pinned SDK headers and a built probe. Native CMake wiring is updated, but
+the tip does not configure, so no CMake build or CTest result exists. Rust
+unit tests ran in an isolated crate. AMD hardware validation is pending.
+[C05, G02 and G03 leaf closure](research/rust-core-leaves-closure.md)
+
 C05 moves D3D Anti-Lag API selection, result handling and FSR
 swap-chain tagging to the Rust owner. The inline SDK calls retain their
 typed C++ leaf. Streamline initialization now uses the neutral bridge

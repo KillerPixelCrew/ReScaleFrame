@@ -204,16 +204,18 @@ not added. See docs/research/runtime-shader-patching.md for approved later scope
 
 ## AMD Anti-Lag 2
 
-The optional Direct3D driver SDK is under ignored `vendor/antilag2`, from
+The Direct3D Anti-Lag 2 calls follow the MIT-licensed inline DX11 and DX12 headers of
 [GPUOpen AntiLag2-SDK](https://github.com/GPUOpen-LibrariesAndSDKs/AntiLag2-SDK) revision
-`390aa4a8c8655d0ae6e90079db2c85e103a96da3` (MIT). Only its DX11 and DX12 inline headers are used; no sample code or
-runtime DLL is shipped. `RSF_ANTILAG2_INCLUDE` selects the SDK directory. Without both headers the core compiles an
-unavailable driver endpoint, while its stub contract remains testable. The Runtime owns initialization, the pre-input
-Update, device/vendor gating, status and FSR DX12 frame typing. AMD hardware and supported Adrenalin drivers are required;
-the NVIDIA/Intel development machine cannot establish AMD acceptance. The original licence is preserved in vendor and
-`runtime/orchestrator/ANTILAG2-LICENSE.txt`, included by the game packagers.
+`390aa4a8c8655d0ae6e90079db2c85e103a96da3`. The Runtime no longer compiles against those headers. They are inline C++
+over driver COM interfaces with no C ABI, so `runtime/orchestrator/src/latency_antilag_sdk.rs` makes the same driver
+calls through the interface tables: the same `amdxc64.dll` and `amdxx64.dll` entry points, interface identifier,
+structure layouts and call sequence. The `vendor/antilag2` checkout is a comparison reference only and nothing builds
+from it; no sample code or runtime DLL is shipped. The Runtime owns initialization, the pre-input Update, device/vendor
+gating, status and FSR DX12 frame typing. AMD hardware and supported Adrenalin drivers are required; the NVIDIA/Intel
+development machine cannot establish AMD acceptance. The original licence is preserved in vendor and
+`runtime/orchestrator/ANTILAG2-LICENSE.txt`, included by the game packagers, and covers the derived Rust module.
 
-Pinned header SHA-256:
+Reference header SHA-256 (compared when the Rust module was written):
 
 - `ffx_antilag2_dx11.h`: `72659da3673d0d04ebcc7c3c4d5442bf4189c3cc99b5d2eb06ba832e5c288d31`
 - `ffx_antilag2_dx12.h`: `bf4e292c040103c7d2dd25d8c86c4ecd3a35338d539428a8db6535da4f82d52f`

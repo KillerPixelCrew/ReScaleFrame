@@ -21,7 +21,7 @@ target_link_libraries(rsf_native_cpu INTERFACE ReScaleFrame::GameSDK)
 add_library(rsf_orchestrator_core OBJECT
     src/fg12_platform.c
     src/native_sr.cpp
-    src/native_composition_unload.cpp
+    src/native_composition_unload.c
     src/gl_pipeline_contract.c
     src/rust_exports.c
     src/render_host_platform.c
@@ -121,7 +121,7 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_STREAMLINE_I
     endforeach()
     file(SHA256 "${RSF_STREAMLINE_VK_RUNTIME}/sl.interposer.dll" rsf_sl_hash)
     string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," rsf_sl_bytes "${rsf_sl_hash}")
-    target_sources(rsf_native_vulkan PRIVATE ../vulkan/streamline/bridge.cpp src/native_latency_streamline_exceptions.cpp)
+    target_sources(rsf_native_vulkan PRIVATE ../vulkan/streamline/bridge.cpp src/native_latency_streamline_exceptions.c)
     target_compile_definitions(rsf_native_vulkan PRIVATE RSF_HAVE_STREAMLINE_VK=1 RSF_STREAMLINE_VULKAN_STATIC=1 "VULKANSTORY_CORRECTED_STREAMLINE_SHA256=${rsf_sl_bytes}")
     target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}" "${RSF_STREAMLINE_INCLUDE}")
     # The interposer lifecycle is Rust; the standalone bridge links the same crate.
@@ -150,10 +150,4 @@ target_sources(rsf_orchestrator PRIVATE src/d3d11_present_api.c src/dll_exports.
 target_sources(rsf_orchestrator PRIVATE src/d3d11_host_foreign.cpp src/d3d11_host_exports.c)
 add_subdirectory(../shader_patch "${CMAKE_CURRENT_BINARY_DIR}/shader_patch")
 
-# Optional AMD driver SDK; the Runtime remains available when it is absent.
-set(RSF_ANTILAG2_INCLUDE "${PROJECT_SOURCE_DIR}/vendor/antilag2" CACHE PATH "Pinned Anti-Lag 2 SDK headers")
-target_sources(rsf_orchestrator_core PRIVATE src/latency_antilag.cpp)
-if(EXISTS "${RSF_ANTILAG2_INCLUDE}/ffx_antilag2_dx11.h" AND EXISTS "${RSF_ANTILAG2_INCLUDE}/ffx_antilag2_dx12.h")
-    target_compile_definitions(rsf_orchestrator_core PRIVATE RSF_HAVE_ANTILAG2=1)
-    target_include_directories(rsf_orchestrator_core SYSTEM PRIVATE "${RSF_ANTILAG2_INCLUDE}")
-endif()
+# Anti-Lag 2 driver calls are Rust (src/latency_antilag_sdk.rs); no SDK headers are needed.

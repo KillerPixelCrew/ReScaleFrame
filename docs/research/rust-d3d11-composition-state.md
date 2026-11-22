@@ -42,8 +42,8 @@ translucency entry points, and embedded callers link the same symbols.
   D01 Rust mapping. Private native region and reinsert callers compile against
   declarations with C linkage. Runtime DLL export directives remain in the
   shared export manifest.
-- `native_composition_unload.cpp` isolates CRT retirement for DLL and embedded
-  module unload. `depth_domains_abi.cpp` isolates the public SDK's inline
+- `native_composition_unload.c` isolates CRT retirement for DLL and embedded
+  module unload as a C11 initializer ([leaf closure](rust-core-leaves-closure.md)). `depth_domains_abi.cpp` isolates the public SDK's inline
   depth-domain predicate.
 - Fixtures replaced in Rust are `native_reinsert.cpp`, `resource_roles.cpp`,
   `sampler_bias.cpp`, and `ui_identify.cpp`. The first three keep their CTest

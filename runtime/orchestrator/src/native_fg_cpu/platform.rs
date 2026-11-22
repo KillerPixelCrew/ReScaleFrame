@@ -34,7 +34,6 @@ unsafe extern "C" {
     fn rsf_d3d11_present_input(source: u64, kind: u32, message: u32) -> i32;
     fn rsf_d3d11_present_receipt(generation: u64, source: u64, kind: u32, message: u32) -> i32;
     fn rsf_d3d11_present_abort(source: u64) -> i32;
-    fn rsf_native_antilag_context_create() -> Handle;
 }
 
 pub(crate) static NATIVE_PLATFORM: Platform = Platform {
@@ -58,7 +57,7 @@ pub(crate) static NATIVE_PLATFORM: Platform = Platform {
     input: rsf_d3d11_present_input,
     receipt: rsf_d3d11_present_receipt,
     abort: rsf_d3d11_present_abort,
-    create_antilag: rsf_native_antilag_context_create,
+    create_antilag: crate::latency_antilag::create_sdk_context,
     fixture_owned_window_thread: None,
     fixture_wait_completion: None,
     allows_fg: rsf_frame_allows_fg,

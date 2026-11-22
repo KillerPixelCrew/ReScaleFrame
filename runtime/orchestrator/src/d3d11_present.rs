@@ -2731,7 +2731,10 @@ facade!(
     rsf_core_d3d11p_set_max_latency(value: u32) -> i32,
     DXGI_ERROR_INVALID_CALL,
     |o| {
-        if lock(&o.sync).ready_event().is_null() || value == 0 || value as usize > APPLICATION_FENCES {
+        if lock(&o.sync).ready_event().is_null()
+            || value == 0
+            || value as usize > APPLICATION_FENCES
+        {
             DXGI_ERROR_INVALID_CALL
         } else {
             o.application_latency
