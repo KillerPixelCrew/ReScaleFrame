@@ -429,7 +429,9 @@ pub(super) unsafe extern "C" fn rsf_core_fg12_install(request: *const rsf_fg12_s
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fg12_install_explicit(request: *const rsf_fg12_setup) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_fg12_install_explicit(
+    request: *const rsf_fg12_setup,
+) -> i32 {
     unsafe { install(request, true) }
 }
 

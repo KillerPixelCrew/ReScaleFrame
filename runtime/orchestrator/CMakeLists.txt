@@ -23,7 +23,7 @@ add_library(rsf_orchestrator_core OBJECT
     src/native_sr.cpp
     src/native_composition_unload.cpp
     src/sr12_platform.cpp
-    src/gl_pipeline_platform.cpp
+    src/gl_pipeline_contract.cpp
     src/rust_exports.c
     src/callback_render_host_platform.cpp
     src/render_host_platform.cpp

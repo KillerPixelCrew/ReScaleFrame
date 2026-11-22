@@ -13,7 +13,8 @@ typedef struct rsf_gl_pipeline_setup {
     void* user;
     const char* engine_version_utf8;
     const char* project_id_utf8;
-    /* Optional borrowed child created on the GLFW window's event thread. It outlives the pipeline. */
+    /* Optional borrowed DXGI child created on the parent window's event thread.
+       It outlives the pipeline. The parent remains the overlay input window. */
     void* presentation_hwnd;
 } rsf_gl_pipeline_setup;
 typedef struct rsf_gl_pipeline_options {
@@ -43,7 +44,8 @@ RSF_RUNTIME_API int rsf_gl_window_destroy(void* window);
 /* A failed open can return a cleanup-only handle. Close it on the graphics owner
    before releasing the presentation window or GL context. */
 RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_open(const rsf_gl_pipeline_setup*, rsf_gl_pipeline**);
-/* Graphics owner, drained boundary before beginning the CPU frame. No restart required. */
+/* Graphics owner, drained boundary before beginning the CPU frame. No restart required.
+   Configuration publishes new surfaces only after the replacement and presentation resize succeed. */
 RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_configure(rsf_gl_pipeline*, const rsf_gl_pipeline_options*, uint32_t width, uint32_t height);
 /* Legacy instance JSON supplied a provider choice and limit in FPS. The Runtime
    converts them to frame-generation and pacing settings. */
@@ -64,7 +66,8 @@ RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_abort(rsf_gl_pipeline*, uint6
 RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_evaluate(rsf_gl_pipeline*, const rsf_game_render_pass*);
 RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_hudless(rsf_gl_pipeline*, const rsf_game_render_pass*);
 /* Every present carries its nonzero CPU frame ID, including menus. Missing scene
-   captures disable FG; zero is never a substitute for the input frame identity. */
+   captures disable FG; zero is never a substitute for the input frame identity.
+   The composed image and overlay target the acquired backbuffer before DXGI Present. */
 RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_present(rsf_gl_pipeline*, uint64_t frame, uint32_t vsync);
 RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_status_get(rsf_gl_pipeline*, rsf_gl_pipeline_status*);
 RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_close(rsf_gl_pipeline*);

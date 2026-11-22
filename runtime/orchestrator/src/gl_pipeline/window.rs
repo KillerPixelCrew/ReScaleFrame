@@ -38,13 +38,12 @@ unsafe extern "system" fn surface_window(
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_gl_window_valid(window: HWND) -> i32 {
+pub(super) extern "C" fn rsf_core_gl_window_valid(window: HWND) -> i32 {
     unsafe { IsWindow(window) }
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_gl_window_create(parent: HWND) -> HWND {
+pub(super) extern "C" fn rsf_gl_window_create(parent: HWND) -> HWND {
     if unsafe { GetWindowThreadProcessId(parent, null_mut()) != GetCurrentThreadId() } {
         return null_mut();
     }
@@ -92,12 +91,12 @@ fn surface_message(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_gl_window_destroy(window: HWND) -> i32 {
+pub(super) extern "C" fn rsf_gl_window_destroy(window: HWND) -> i32 {
     i32::from(rsf_core_gl_window_valid(window) == 0 || surface_message(window, DESTROY, 0, 0))
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_gl_window_child_of(child: HWND, parent: HWND) -> i32 {
+#[cfg(not(test))]
+pub(super) extern "C" fn rsf_core_gl_window_child_of(child: HWND, parent: HWND) -> i32 {
     i32::from(unsafe {
         GetParent(child) == parent
             && GetWindowThreadProcessId(child, null_mut())
@@ -105,8 +104,8 @@ extern "C" fn rsf_core_gl_window_child_of(child: HWND, parent: HWND) -> i32 {
     })
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_gl_window_resize(window: HWND, width: u32, height: u32) -> i32 {
+#[cfg(not(test))]
+pub(super) extern "C" fn rsf_core_gl_window_resize(window: HWND, width: u32, height: u32) -> i32 {
     i32::from(
         width <= i32::MAX as u32
             && height <= i32::MAX as u32
@@ -114,7 +113,7 @@ extern "C" fn rsf_core_gl_window_resize(window: HWND, width: u32, height: u32) -
     )
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_gl_window_show(window: HWND) {
+#[cfg(not(test))]
+pub(super) extern "C" fn rsf_core_gl_window_show(window: HWND) {
     unsafe { ShowWindowAsync(window, SW_SHOWNOACTIVATE) };
 }

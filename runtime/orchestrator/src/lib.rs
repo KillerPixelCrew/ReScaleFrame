@@ -431,6 +431,23 @@ fn reserve_handle<T>() -> Option<Box<std::mem::MaybeUninit<T>>> {
     (!storage.is_null()).then(|| unsafe { Box::from_raw(storage) })
 }
 
+// Reserve before opening GPU resources. Some failures leave an owner for the caller to retire.
+#[cfg(windows)]
+fn initialize_handle<T>(
+    out: &mut *mut T,
+    allocation_error: i32,
+    initialize: impl FnOnce() -> (i32, Option<T>),
+) -> i32 {
+    let Some(storage) = reserve_handle() else {
+        return allocation_error;
+    };
+    let (result, owner) = initialize();
+    if let Some(owner) = owner {
+        *out = Box::into_raw(Box::write(storage, owner));
+    }
+    result
+}
+
 // Adopt a returned Win32 handle. APIs use both null and -1 to report failure.
 #[cfg(windows)]
 unsafe fn owned_win32_handle(

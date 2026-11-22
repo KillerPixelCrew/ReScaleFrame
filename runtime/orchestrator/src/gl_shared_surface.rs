@@ -706,7 +706,10 @@ fn with_state(context: *mut Context, run: impl FnOnce(&Context, &mut State) -> i
 /// # Safety
 /// `setup` is null or readable for its `struct_size` and `out` is null or writable.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_gl_open(setup: *const rsf_gl_setup, out: *mut *mut Context) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_gl_open(
+    setup: *const rsf_gl_setup,
+    out: *mut *mut Context,
+) -> i32 {
     unsafe { rsf_core_gl_open(setup, out, &native_dx::NATIVE) }
 }
 
@@ -733,21 +736,17 @@ unsafe fn rsf_core_gl_open(
     if setup.abi_version != SETUP_ABI_VERSION {
         return ABI_MISMATCH;
     }
-    let Some(storage) = crate::reserve_handle() else {
-        return FEATURE_FAILED;
-    };
-    match open(&setup, leaves, gl_context) {
-        Ok(context) => {
-            unsafe { out.write(Box::into_raw(Box::write(storage, context))) };
-            OK
+    crate::initialize_handle(unsafe { &mut *out }, FEATURE_FAILED, || {
+        match open(&setup, leaves, gl_context) {
+            Ok(context) => (OK, Some(context)),
+            Err(result) => (result, None),
         }
-        Err(result) => result,
-    }
+    })
 }
 
 /// Borrows the D3D12 device and queue; no reference is added.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_gl_graphics(
+pub(crate) unsafe extern "C" fn rsf_gl_graphics(
     context: *mut Context,
     device: *mut Handle,
     queue: *mut Handle,
@@ -766,7 +765,7 @@ unsafe extern "C" fn rsf_gl_graphics(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_gl_texture_create(
+pub(crate) unsafe extern "C" fn rsf_gl_texture_create(
     context: *mut Context,
     width: u32,
     height: u32,
@@ -783,20 +782,18 @@ unsafe extern "C" fn rsf_gl_texture_create(
     if width == 0 || height == 0 {
         return INVALID;
     }
-    let Some(storage) = crate::reserve_handle() else {
-        return FEATURE_FAILED;
-    };
-    match create_texture(context, width, height, format) {
-        Ok(texture) => {
-            unsafe { out.write(Box::into_raw(Box::write(storage, texture))) };
-            OK
-        }
-        Err(result) => result,
-    }
+    crate::initialize_handle(
+        unsafe { &mut *out },
+        FEATURE_FAILED,
+        || match create_texture(context, width, height, format) {
+            Ok(texture) => (OK, Some(texture)),
+            Err(result) => (result, None),
+        },
+    )
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_gl_texture_get(
+pub(crate) unsafe extern "C" fn rsf_gl_texture_get(
     texture: *mut Texture,
     info: *mut rsf_gl_texture_info,
 ) -> i32 {
@@ -821,7 +818,7 @@ unsafe extern "C" fn rsf_gl_texture_get(
 
 /// Releases the textures to D3D12 and returns an open list. Submit even when recording refuses.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_gl_begin(
+pub(crate) unsafe extern "C" fn rsf_gl_begin(
     context: *mut Context,
     count: u32,
     textures: *const *mut Texture,
@@ -844,7 +841,7 @@ unsafe extern "C" fn rsf_gl_begin(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_gl_submit(
+pub(crate) unsafe extern "C" fn rsf_gl_submit(
     context: *mut Context,
     count: u32,
     textures: *const *mut Texture,
@@ -861,14 +858,14 @@ unsafe extern "C" fn rsf_gl_submit(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_gl_drain(context: *mut Context) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_gl_drain(context: *mut Context) -> i32 {
     with_state(context, |context, state| context.drain(state))
 }
 
 /// Destroys a texture on its owner's thread. A texture still named by an unsignalled handoff
 /// leaves that GL acquire; its D3D12 resource stays leased until completion is proven.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_gl_texture_destroy(texture: *mut Texture) {
+pub(crate) unsafe extern "C" fn rsf_gl_texture_destroy(texture: *mut Texture) {
     let Some(value) = (unsafe { texture.as_ref() }) else {
         return;
     };
@@ -901,7 +898,7 @@ unsafe extern "C" fn rsf_gl_texture_destroy(texture: *mut Texture) {
 /// Drains, then releases the semaphore, handles and D3D12 objects. A refused drain keeps
 /// everything and the close can be retried.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_gl_close(context: *mut Context) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_gl_close(context: *mut Context) -> i32 {
     if context.is_null() {
         return OK;
     }

@@ -2,8 +2,8 @@
 // OpenGL pipeline: GL scene surfaces shared with a D3D12 device, a native SR session and a DXGI
 // child window whose presentation the FG owner intercepts. This owner decides session and frame
 // identity, surface and SR session lifetime, configuration admission, SR backend switching and
-// fallback, the FG provider request and teardown order. gl_pipeline_platform.cpp supplies one call
-// per platform operation; graphics work stays on the caller's GL context and graphics thread.
+// fallback, the FG provider request and teardown order. The linked platform connects the runtime
+// owners. Graphics work stays on the caller's GL context and graphics thread.
 use crate::com_ref::ComRef;
 use crate::cpu_abi::rsf_native_cpu_frame;
 use crate::fg12_abi::rsf_fg12_setup;
@@ -28,7 +28,10 @@ use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Mutex, MutexGuard, TryLockError};
 
+#[cfg_attr(test, allow(dead_code))]
 mod dxgi;
+#[cfg(not(test))]
+mod linked;
 mod settings;
 mod window;
 
@@ -39,7 +42,7 @@ const NOT_READY: i32 = -8;
 const FEATURE_FAILED: i32 = -9;
 const NEEDS_RESTART: i32 = -11;
 
-// Public SR backend IDs (sr_session.h), pinned by static_asserts in gl_pipeline_platform.cpp.
+// Public SR backend IDs (sr_session.h), checked by the native contract.
 const SR_NONE: u32 = 0;
 const SR_DLSS: u32 = 1;
 const SR_FSR2: u32 = 2;
@@ -54,14 +57,14 @@ const MAX_QUALITY: u32 = 5;
 const DLSS_ENGINE_CUSTOM: u32 = 0;
 const SR12_ABI_VERSION: u32 = 1;
 
-// D3D12 states and the DXGI back-buffer format, pinned in gl_pipeline_platform.cpp.
-const STATE_COMMON: u32 = 0;
-const STATE_PRESENT: u32 = 0;
-const STATE_RENDER_TARGET: u32 = 0x4;
-const STATE_SHADER_INPUT: u32 = 0x40;
-const STATE_COPY_DEST: u32 = 0x400;
-const STATE_COPY_SOURCE: u32 = 0x800;
-const CHAIN_FORMAT: u32 = 28; // R8G8B8A8_UNORM
+// D3D12 states and the DXGI back-buffer format, from the Windows SDK.
+const STATE_COMMON: u32 = dxgi::STATE_COMMON;
+const STATE_PRESENT: u32 = dxgi::STATE_PRESENT;
+const STATE_RENDER_TARGET: u32 = dxgi::STATE_RENDER_TARGET;
+const STATE_SHADER_INPUT: u32 = dxgi::STATE_SHADER_INPUT;
+const STATE_COPY_DEST: u32 = dxgi::STATE_COPY_DEST;
+const STATE_COPY_SOURCE: u32 = dxgi::STATE_COPY_SOURCE;
+const CHAIN_FORMAT: u32 = dxgi::CHAIN_FORMAT;
 const CHAIN_BUFFERS: u32 = 3;
 
 // Published GL surfaces, in rsf_gl_pipeline_surfaces order. The first three have the render
@@ -78,8 +81,7 @@ const SR_SURFACES: u32 = 4;
 type Handle = *mut c_void;
 type Log = rsf_backend_log_fn;
 
-// Field order matches `Platform` in gl_pipeline_platform.cpp.
-#[repr(C)]
+// Production and synthetic owners share this Rust-only dispatch table.
 pub(crate) struct Platform {
     gl_open: unsafe extern "C" fn(Log, Handle, *mut Handle) -> i32,
     gl_graphics: unsafe extern "C" fn(Handle, *mut Handle, *mut Handle) -> i32,
@@ -1108,39 +1110,35 @@ fn reject_open(pipeline: Pipeline, cleanup: &mut Option<Pipeline>) {
 }
 
 /// # Safety
-/// `setup` is null or readable for its `struct_size`; `out` is null or writable. `platform` is the
-/// static table from gl_pipeline_platform.cpp.
+/// `setup` is null or readable for its `struct_size`; `out` is null or writable.
+#[cfg(not(test))]
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_gl_pipeline_open(
+unsafe extern "C" fn rsf_gl_pipeline_open(
     setup: *const rsf_gl_pipeline_setup,
     out: *mut *mut Pipeline,
-    platform: *const Platform,
+) -> i32 {
+    unsafe { open_handle(setup, out, &linked::PLATFORM) }
+}
+
+unsafe fn open_handle(
+    setup: *const rsf_gl_pipeline_setup,
+    out: *mut *mut Pipeline,
+    platform: &'static Platform,
 ) -> i32 {
     if out.is_null() {
         return INVALID;
     }
     unsafe { out.write(ptr::null_mut()) };
-    let (Some(setup), Some(platform)) =
-        (unsafe { read_sized(setup) }, unsafe { platform.as_ref() })
-    else {
+    let Some(setup) = (unsafe { read_sized(setup) }) else {
         return INVALID;
     };
-    let Some(storage) = crate::reserve_handle() else {
-        return INIT_FAILED;
-    };
-    let mut cleanup = None;
-    match open(&setup, platform, &mut cleanup) {
-        Ok(pipeline) => {
-            unsafe { out.write(Box::into_raw(Box::write(storage, pipeline))) };
-            OK
+    crate::initialize_handle(unsafe { &mut *out }, INIT_FAILED, || {
+        let mut cleanup = None;
+        match open(&setup, platform, &mut cleanup) {
+            Ok(pipeline) => (OK, Some(pipeline)),
+            Err(result) => (result, cleanup),
         }
-        Err(result) => {
-            if let Some(pipeline) = cleanup {
-                unsafe { out.write(Box::into_raw(Box::write(storage, pipeline))) };
-            }
-            result
-        }
-    }
+    })
 }
 
 fn with_state(pipeline: *mut Pipeline, run: impl FnOnce(&Pipeline, &mut State) -> i32) -> i32 {

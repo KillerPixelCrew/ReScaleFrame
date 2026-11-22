@@ -528,10 +528,7 @@ fn setup() -> rsf_gl_pipeline_setup {
 fn open_pipeline() -> *mut Pipeline {
     let setup = setup();
     let mut pipeline = ptr::null_mut();
-    assert_eq!(
-        unsafe { rsf_core_gl_pipeline_open(&setup, &mut pipeline, &PLATFORM) },
-        OK
-    );
+    assert_eq!(unsafe { open_handle(&setup, &mut pipeline, &PLATFORM) }, OK);
     assert!(!pipeline.is_null());
     assert_eq!(events(), ["gl_open", "fg_install"]);
     pipeline
@@ -897,7 +894,7 @@ fn failed_chain_open_returns_a_cleanup_handle_if_retirement_refuses() {
     });
     let mut pipeline = ptr::null_mut();
     assert_eq!(
-        unsafe { rsf_core_gl_pipeline_open(&setup(), &mut pipeline, &PLATFORM) },
+        unsafe { open_handle(&setup(), &mut pipeline, &PLATFORM) },
         INIT_FAILED
     );
     assert!(!pipeline.is_null());
@@ -918,7 +915,7 @@ fn failed_chain_open_returns_a_cleanup_handle_if_retirement_refuses() {
     );
     world(|world| world.chain_unowned = false);
     assert_eq!(
-        unsafe { rsf_core_gl_pipeline_open(&setup(), &mut pipeline, &PLATFORM) },
+        unsafe { open_handle(&setup(), &mut pipeline, &PLATFORM) },
         OK
     );
     assert_eq!(events(), ["gl_open"]);
