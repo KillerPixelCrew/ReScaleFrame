@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Internal boundary between the Fallout 4 native leaves (plugin.cpp, native_creation.cpp) and
+// Internal boundary between the Fallout 4 native leaves (host_boundary.cpp, native_creation.cpp) and
 // their Rust owner (lib.rs). Not a DLL ABI: both sides link into ReScaleFrame.Game.Fallout4.dll.
 // tools/generate-rust-bindings.py generates src/platform_abi.rs from this header.
 #include <stdbool.h>
@@ -50,12 +50,6 @@ typedef struct rsf_fallout4_platform {
     bool (*file_sha256)(const wchar_t* path, char* digest, bool* hashed);
     // The shared Steam D3D11 chain facade, given this adapter's cold-owner check.
     bool (*prepare_steam_chain)(const rsf_game_host_services* host);
-    // MinHook on the process instance. Initialize accepts an existing instance; disable accepts
-    // an already disabled hook. The creation hook keeps its trampoline natively.
-    bool (*initialize_hooks)(void);
-    bool (*create_creation_hook)(void* target);
-    bool (*enable_hook)(void* target);
-    bool (*disable_hook)(void* target);
     // The original creation through its trampoline, with the thread's last error unchanged.
     int32_t (*call_create)(const rsf_fallout4_create_call* call);
     // Guarded Runtime calls.
@@ -72,13 +66,9 @@ typedef struct rsf_fallout4_platform {
 } rsf_fallout4_platform;
 
 // Rust owner entry points.
-// Publishes the GameSDK table. platform must be complete and live for the process.
-rsf_result rsf_fallout4_publish_api(uint32_t requested_abi, rsf_game_plugin_api* api,
-    const rsf_fallout4_platform* platform);
+void* rsf_fallout4_creation_original(void);
 // The creation thunk detour body. caller is the detour's return address.
 int32_t rsf_fallout4_creation_observe(uintptr_t caller, const rsf_fallout4_create_call* call);
-// Exact executable name and SHA-256, for the C++ subsystem guards.
-bool rsf_fallout4_verify_executable(void);
 // The native renderer owner's window in this process.
 int rsf_fallout4_accept_window(void* user, void* window);
 // The renderer owner has not created its device yet.

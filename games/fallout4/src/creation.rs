@@ -6,35 +6,35 @@
 //! for its window, the call is bracketed by the Runtime's creation scope, and the final outer
 //! swapchain is bound for presentation. Scene and input producers are admitted separately.
 //! native_creation.cpp keeps the typed detour and the trampoline call as leaves.
+use crate::build_layout::{
+    RENDERER_CHAIN as CHAIN, RENDERER_CONTEXT as CONTEXT, RENDERER_DEVICE as DEVICE,
+    RENDERER_POINTER as OWNER_RVA, RENDERER_WINDOW as WINDOW,
+};
 use crate::platform_abi::{
     RSF_D3D11_HOST_ABI_VERSION, rsf_d3d11_creation_scope, rsf_d3d11_native_chain,
     rsf_d3d11_presentation_binding, rsf_fallout4_create_call,
 };
-use crate::{EXECUTABLE, EXECUTABLE_SHA256, Ops, Plain, RSF_ERROR_NOT_READY, RSF_OK, Threw};
-use crate::{image, message, ops, read};
+use crate::{
+    EXECUTABLE, EXECUTABLE_SHA256, MH_CreateHook, MH_OK, Ops, Plain, RSF_ERROR_NOT_READY, RSF_OK,
+    Threw,
+};
+use crate::{image, message, ops, read, typed_export};
 use rsf_game_sys::rsf_game_host_services;
-use std::ffi::{CStr, c_void};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::ffi::c_void;
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Mutex, PoisonError};
 use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
-use windows_sys::Win32::System::LibraryLoader::{
-    GetModuleFileNameW, GetModuleHandleW, GetProcAddress,
-};
+use windows_sys::Win32::System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW};
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
-use windows_sys::core::{s, w};
+use windows_sys::core::w;
 
 pub(crate) const E_FAIL: i32 = 0x8000_4005_u32 as i32;
 
 // AE1.11.240 disassembly: creation1824930+410 -> thunk22C4CD9;
 // renderer owner38E13A0, native device48/context50/window58/chain70.
-pub(crate) const OWNER_RVA: usize = 0x38e13a0;
 const CALL_RVA: usize = 0x1824d40;
 const THUNK_RVA: usize = 0x22c4cd9;
-pub(crate) const DEVICE: usize = 0x48;
-const CONTEXT: usize = 0x50;
-pub(crate) const WINDOW: usize = 0x58;
-const CHAIN: usize = 0x70;
 // CALL rel32 to the thunk, and the thunk's JMP [RIP+disp32] to the imported creation.
 const CALL_BYTES: [u8; 5] = [0xe8, 0x94, 0xff, 0xa9, 0x00];
 const THUNK_BYTES: [u8; 6] = [0xff, 0x25, 0x79, 0xca, 0x17, 0x00];
@@ -80,8 +80,33 @@ unsafe impl Send for Scoped {}
 static SCOPED: Mutex<Option<Scoped>> = Mutex::new(None);
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static ENTERED: AtomicU32 = AtomicU32::new(0);
-// The trampoline is kept by the native leaf; the hook is created once and stays process-lived.
-static HOOK_CREATED: AtomicBool = AtomicBool::new(false);
+// The hook is created once and its trampoline stays process-lived.
+static ORIGINAL: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+
+unsafe extern "C" {
+    fn rsf_fallout4_creation_detour() -> *mut c_void;
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_fallout4_creation_original() -> *mut c_void {
+    ORIGINAL.load(Ordering::Acquire)
+}
+
+fn hook_created() -> bool {
+    !rsf_fallout4_creation_original().is_null()
+}
+
+fn create_hook() -> bool {
+    let target = hook_address() as *mut c_void;
+    let detour = unsafe { rsf_fallout4_creation_detour() };
+    let mut original = std::ptr::null_mut();
+    // MinHook creates this disabled, so the trampoline can be published before start.
+    if unsafe { MH_CreateHook(target, detour, &mut original) } != MH_OK {
+        return false;
+    }
+    ORIGINAL.store(original, Ordering::Release);
+    true
+}
 
 fn hook_address() -> usize {
     image() + THUNK_RVA
@@ -130,13 +155,16 @@ fn executable_name(leaf: &[u16]) -> bool {
         })
 }
 
-/// The loaded executable is Fallout4.exe with the recognized SHA-256.
-pub(crate) fn verify_executable(ops: &Ops) -> Result<bool, Threw> {
+/// Proof that this preparation admitted the running Fallout4.exe.
+pub(crate) struct ExactBuild(());
+
+/// Checks the executable name and recognized SHA-256 once for the calling transaction.
+pub(crate) fn admit_build(ops: &Ops) -> Result<Option<ExactBuild>, Threw> {
     let mut path = [0u16; 32768];
     let length = unsafe { GetModuleFileNameW(std::ptr::null_mut(), path.as_mut_ptr(), 32768) };
     let length = length as usize;
     if length == 0 || length >= path.len() {
-        return Ok(false);
+        return Ok(None);
     }
     let name = &path[..length];
     let leaf = name
@@ -144,11 +172,17 @@ pub(crate) fn verify_executable(ops: &Ops) -> Result<bool, Threw> {
         .rposition(|&unit| unit == u16::from(b'\\'))
         .map_or(name, |separator| &name[separator + 1..]);
     if !executable_name(leaf) {
-        return Ok(false);
+        return Ok(None);
     }
     Ok(ops
         .file_sha256(&path[..=length])?
-        .is_some_and(|digest| digest == *EXECUTABLE_SHA256.to_bytes()))
+        .filter(|digest| *digest == *EXECUTABLE_SHA256.to_bytes())
+        .map(|_| ExactBuild(())))
+}
+
+// Called by independent native reader verification outside the preparation transaction.
+pub(crate) fn verify_executable(ops: &Ops) -> Result<bool, Threw> {
+    Ok(admit_build(ops)?.is_some())
 }
 
 pub(crate) fn preflight() -> bool {
@@ -162,15 +196,9 @@ pub(crate) fn busy() -> bool {
     ENTERED.load(Ordering::Acquire) != 0
 }
 
-type Export = unsafe extern "system" fn() -> isize;
-
-fn runtime_export(runtime: *mut c_void, name: windows_sys::core::PCSTR) -> Option<Export> {
-    unsafe { GetProcAddress(runtime, name) }
-}
-
 /// Resolves the Runtime creation exports, prepares Steam's chain forwarding and creates the
 /// disabled creation hook.
-pub(crate) fn prepare(ops: &Ops, services: &rsf_game_host_services) -> bool {
+pub(crate) fn prepare(ops: &Ops, services: &rsf_game_host_services, _build: &ExactBuild) -> bool {
     if !preflight() {
         return false;
     }
@@ -178,29 +206,28 @@ pub(crate) fn prepare(ops: &Ops, services: &rsf_game_host_services) -> bool {
     if runtime.is_null() {
         return false;
     }
-    let begin = runtime_export(runtime, s!("rsf_d3d11_host_creation_begin"));
-    let end = runtime_export(runtime, s!("rsf_d3d11_host_creation_end"));
-    let bind = runtime_export(runtime, s!("rsf_d3d11_host_bind_presentation"));
+    // SAFETY: the process-lived Runtime exports these signatures in d3d11_host.h.
+    let (begin, end, bind) = unsafe {
+        (
+            typed_export::<Begin>(runtime, c"rsf_d3d11_host_creation_begin"),
+            typed_export::<End>(runtime, c"rsf_d3d11_host_creation_end"),
+            typed_export::<Bind>(runtime, c"rsf_d3d11_host_bind_presentation"),
+        )
+    };
     let (Some(begin), Some(end), Some(bind)) = (begin, end, bind) else {
         return false;
     };
     if !ops.prepare_steam_chain(services) {
         return false;
     }
-    if !HOOK_CREATED.load(Ordering::Acquire) {
-        if !ops.create_creation_hook(hook_address()) {
-            return false;
-        }
-        HOOK_CREATED.store(true, Ordering::Release);
+    if !hook_created() && !create_hook() {
+        return false;
     }
-    // SAFETY: the Runtime exports have these C signatures (d3d11_host.h).
-    let scoped = unsafe {
-        Scoped {
-            host: *services,
-            begin: std::mem::transmute::<Export, Begin>(begin),
-            end: std::mem::transmute::<Export, End>(end),
-            bind: std::mem::transmute::<Export, Bind>(bind),
-        }
+    let scoped = Scoped {
+        host: *services,
+        begin,
+        end,
+        bind,
     };
     *SCOPED.lock().unwrap_or_else(PoisonError::into_inner) = Some(scoped);
     let _ = ops.log_host(
@@ -211,7 +238,7 @@ pub(crate) fn prepare(ops: &Ops, services: &rsf_game_host_services) -> bool {
 }
 
 pub(crate) fn start(ops: &Ops) -> bool {
-    if !HOOK_CREATED.load(Ordering::Acquire) || !expected_creation() || !cold_owner() {
+    if !hook_created() || !expected_creation() || !cold_owner() {
         return false;
     }
     if !ops.enable_hook(hook_address()) {
@@ -227,7 +254,7 @@ pub(crate) fn quiesce() {
 
 pub(crate) fn stop(ops: &Ops) -> bool {
     quiesce();
-    let disabled = !HOOK_CREATED.load(Ordering::Acquire) || ops.disable_hook(hook_address());
+    let disabled = !hook_created() || ops.disable_hook(hook_address());
     disabled && !busy()
 }
 
@@ -309,9 +336,7 @@ fn close(
         "Fallout4 cold creation native_HRESULT=0x{:08x} scope_end={admitted} binding={bound}; outer outputs retained, no scene/input producers",
         native_result as u32
     ));
-    if let Ok(text) = CStr::from_bytes_with_nul(&text) {
-        let _ = ops.log_host(&scoped.host, text);
-    }
+    let _ = ops.log_host(&scoped.host, &text);
     unsafe { SetLastError(last_error) };
 }
 
@@ -379,11 +404,6 @@ unsafe extern "C" fn rsf_fallout4_creation_observe(
         (Some(ops), Some(call)) => observe(ops, caller, call),
         _ => E_FAIL,
     }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_verify_executable() -> bool {
-    ops().is_some_and(|ops| verify_executable(ops).unwrap_or(false))
 }
 
 #[unsafe(no_mangle)]

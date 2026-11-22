@@ -200,8 +200,8 @@ impl Leaves {
         unsafe { (self.report)(text.as_ptr()) }
     }
     /// Reports a terminated message from `crate::message`.
-    pub(super) fn report_text(&self, text: &[u8]) {
-        unsafe { (self.report)(text.as_ptr().cast()) }
+    pub(super) fn report_text(&self, text: &CStr) {
+        unsafe { (self.report)(text.as_ptr()) }
     }
     pub(super) fn refuse(&self) {
         unsafe { (self.refuse)() }
@@ -389,7 +389,7 @@ fn call(leaves: &Leaves, operation: u32) -> bool {
                 request.temporal_result,
                 u32::from(request.result_flags & TEMPORAL_ATTEMPTED != 0),
             ));
-            unsafe { (leaves.report)(text.as_ptr().cast()) };
+            unsafe { (leaves.report)(text.as_ptr()) };
         }
     }
     if result == RSF_OK

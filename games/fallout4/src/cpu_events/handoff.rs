@@ -6,14 +6,7 @@
 //! these scalar transitions under one lock and never holds that lock while delivering events.
 
 /// The CPU source identity borrowed during the guarded Swap.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct CpuIdentity {
-    pub session: u64,
-    pub source: u64,
-    pub submission: u64,
-    pub began_qpc: u64,
-    pub frequency: u64,
-}
+pub(crate) use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;
 
 impl CpuIdentity {
     pub const ZERO: Self = Self {
@@ -133,9 +126,6 @@ pub(crate) struct WorkerTicket {
     pub callback_returned: bool,
     pub native_poll_started: bool,
     pub predecessor_generation: u64,
-    // Recorded with the callback intention; no transition compares it.
-    #[allow(dead_code)]
-    pub predecessor_raw: u64,
     pub predecessor_cursor: u32,
 }
 
@@ -154,7 +144,6 @@ impl WorkerTicket {
         callback_returned: false,
         native_poll_started: false,
         predecessor_generation: 0,
-        predecessor_raw: 0,
         predecessor_cursor: 0,
     };
 
@@ -173,15 +162,8 @@ impl WorkerTicket {
         }
     }
 
-    pub fn reserve(
-        &mut self,
-        owner: &WorkerCycle,
-        future: &CpuIdentity,
-        generation: u64,
-        constructed: bool,
-    ) -> bool {
+    pub fn reserve(&mut self, owner: &WorkerCycle, future: &CpuIdentity, generation: u64) -> bool {
         if self.active()
-            || !constructed
             || owner.source == 0
             || future.source <= owner.source
             || future.session != owner.session
@@ -196,12 +178,7 @@ impl WorkerTicket {
         true
     }
 
-    pub fn begin_callback(
-        &mut self,
-        bound_generation: u64,
-        bound_raw: u64,
-        bound_cursor: u32,
-    ) -> bool {
+    pub fn begin_callback(&mut self, bound_generation: u64, bound_cursor: u32) -> bool {
         if !self.valid()
             || self.phase != Phase::Reserved
             || self.callback_inflight
@@ -213,7 +190,6 @@ impl WorkerTicket {
             return false;
         }
         self.predecessor_generation = bound_generation;
-        self.predecessor_raw = bound_raw;
         self.predecessor_cursor = bound_cursor;
         self.callback_inflight = true;
         true
@@ -226,16 +202,13 @@ impl WorkerTicket {
 
     /// The predecessor's sample is already consumed. Raw arrivals and queue-tail writes belong to
     /// the future poll, which has not started during this lease.
-    #[allow(clippy::too_many_arguments)]
     pub fn protects_bound(
         &self,
         owner: &WorkerCycle,
         source: u64,
         bound_generation: u64,
         generation: u64,
-        _revision: u64,
         consumed: u32,
-        _queued: u32,
         native_valid: bool,
     ) -> bool {
         self.valid()
@@ -262,7 +235,6 @@ impl WorkerTicket {
         owner: &WorkerCycle,
         generation: u64,
         revision: u64,
-        native_valid: bool,
         predecessor_safe: bool,
     ) -> bool {
         if !self.valid()
@@ -271,7 +243,6 @@ impl WorkerTicket {
             || !self.callback_returned
             || *owner != self.predecessor
             || generation != self.generation
-            || !native_valid
             || !predecessor_safe
         {
             return false;
@@ -309,20 +280,12 @@ impl WorkerTicket {
         true
     }
 
-    pub fn begin(
-        &mut self,
-        now: u64,
-        generation: u64,
-        revision: u64,
-        sequence: u32,
-        native_valid: bool,
-    ) -> bool {
+    pub fn begin(&mut self, now: u64, generation: u64, revision: u64, sequence: u32) -> bool {
         if !self.valid()
             || self.phase != Phase::Sampled
             || generation != self.generation
             || revision != self.raw
             || sequence != self.cursor
-            || !native_valid
         {
             return false;
         }
@@ -332,19 +295,12 @@ impl WorkerTicket {
         true
     }
 
-    pub fn bind(
-        &mut self,
-        generation: u64,
-        revision: u64,
-        sequence: u32,
-        native_valid: bool,
-    ) -> bool {
+    pub fn bind(&mut self, generation: u64, revision: u64, sequence: u32) -> bool {
         if !self.valid()
             || self.phase != Phase::Begun
             || generation != self.generation
             || revision != self.raw
             || sequence != self.cursor
-            || !native_valid
         {
             return false;
         }
@@ -352,12 +308,11 @@ impl WorkerTicket {
         true
     }
 
-    pub fn consumed(&mut self, generation: u64, sequence: u32, native_valid: bool) -> bool {
+    pub fn consumed(&mut self, generation: u64, sequence: u32) -> bool {
         if !self.valid()
             || self.phase != Phase::Bound
             || generation != self.generation
             || sequence != self.cursor
-            || !native_valid
         {
             return false;
         }
@@ -365,20 +320,16 @@ impl WorkerTicket {
         true
     }
 
-    pub fn complete(&mut self, native_valid: bool) -> bool {
-        if !self.valid() || self.phase != Phase::Consumed || !native_valid {
+    pub fn complete(&mut self) -> bool {
+        if !self.valid() || self.phase != Phase::Consumed {
             return false;
         }
         self.phase = Phase::Complete;
         true
     }
 
-    pub fn join(&mut self, owner: &WorkerCycle, completed_wait: bool) -> bool {
-        if !self.valid()
-            || self.phase != Phase::Complete
-            || *owner != self.predecessor
-            || !completed_wait
-        {
+    pub fn join(&mut self, owner: &WorkerCycle) -> bool {
+        if !self.valid() || self.phase != Phase::Complete || *owner != self.predecessor {
             return false;
         }
         self.phase = Phase::Joined;

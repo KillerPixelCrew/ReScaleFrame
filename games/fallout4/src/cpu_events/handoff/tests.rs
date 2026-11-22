@@ -39,16 +39,16 @@ fn successor() -> CpuIdentity {
 fn consumed_ticket() -> WorkerTicket {
     let mut ticket = WorkerTicket::ZERO;
     assert!(
-        ticket.reserve(&predecessor(), &successor(), 9, true),
+        ticket.reserve(&predecessor(), &successor(), 9),
         "reserve after predecessor allocation/Present entry"
     );
     assert!(
-        ticket.begin_callback(0, 0, 0),
+        ticket.begin_callback(0, 0),
         "registered no-native-poll-yet callback"
     );
     ticket.end_callback();
     assert!(
-        ticket.arm(&predecessor(), 9, 12, true, true),
+        ticket.arm(&predecessor(), 9, 12, true),
         "raw revision snapped after RESERVE return"
     );
     ticket.native_poll_entry();
@@ -57,15 +57,15 @@ fn consumed_ticket() -> WorkerTicket {
         "actual poll completed"
     );
     assert!(
-        ticket.begin(1010, 9, 12, 77, true),
+        ticket.begin(1010, 9, 12, 77),
         "actual receiver begins future flags0 frame"
     );
     assert!(
-        ticket.bind(9, 12, 77, true),
+        ticket.bind(9, 12, 77),
         "strict matching sample binds at receiver"
     );
     assert!(
-        ticket.consumed(9, 77, true),
+        ticket.consumed(9, 77),
         "native receiver returns with matching consumed cursor"
     );
     ticket
@@ -73,9 +73,9 @@ fn consumed_ticket() -> WorkerTicket {
 
 fn joined_ticket() -> WorkerTicket {
     let mut ticket = consumed_ticket();
-    assert!(ticket.complete(true), "selected worker callback returns");
+    assert!(ticket.complete(), "selected worker callback returns");
     assert!(
-        ticket.join(&predecessor(), true),
+        ticket.join(&predecessor()),
         "verified actual wait completed"
     );
     ticket
@@ -170,11 +170,6 @@ fn unmatched_poll_preserves_only_input_unbound_renderer() {
             !future.claim(&next_swap(), 77, 9) && future.frame_begun && future.refusal != 0,
             "preserved renderer never revives the refused future or drops abort/end obligations"
         );
-        let mut early = WorkerTicket::ZERO;
-        assert!(
-            !early.reserve(&predecessor(), &successor(), 10, false),
-            "unbound preservation never admits an early future"
-        );
         // These are explicitly not poll-only facts in the production callsite: quiesce, active
         // raw writer/overlap, and native owner/state mismatch.
         for reason in [
@@ -189,7 +184,7 @@ fn unmatched_poll_preserves_only_input_unbound_renderer() {
                 "lifecycle/raw/native refusal invalidates bound and unbound renderer"
             );
             assert!(
-                refused.refusal == reason && !refused.complete(true),
+                refused.refusal == reason && !refused.complete(),
                 "native refusal remains sticky on future ticket"
             );
         }
@@ -197,22 +192,18 @@ fn unmatched_poll_preserves_only_input_unbound_renderer() {
 }
 
 #[test]
-fn reservation_requires_constructed_allocated_predecessor() {
+fn reservation_requires_allocated_predecessor() {
     let mut empty = WorkerTicket::ZERO;
-    assert!(
-        !empty.reserve(&predecessor(), &successor(), 9, false),
-        "poll cannot reserve before ordinary world/source construction"
-    );
     let mut bad_source = successor();
     bad_source.source = 40;
     assert!(
-        !empty.reserve(&predecessor(), &bad_source, 9, true),
+        !empty.reserve(&predecessor(), &bad_source, 9),
         "future id must follow allocated predecessor"
     );
     let mut unknown = predecessor();
     unknown.source = 0;
     assert!(
-        !empty.reserve(&unknown, &successor(), 9, true),
+        !empty.reserve(&unknown, &successor(), 9),
         "unknown predecessor refuses"
     );
 }
@@ -221,16 +212,16 @@ fn reservation_requires_constructed_allocated_predecessor() {
 fn sample_and_begin_require_the_actual_unchanged_poll() {
     let mut pending = WorkerTicket::ZERO;
     assert!(
-        pending.reserve(&predecessor(), &successor(), 9, true),
+        pending.reserve(&predecessor(), &successor(), 9),
         "pending fixture reserve"
     );
     assert!(
-        pending.begin_callback(0, 0, 0),
+        pending.begin_callback(0, 0),
         "unbound predecessor callback begins"
     );
     pending.end_callback();
     assert!(
-        pending.arm(&predecessor(), 9, 12, true, true),
+        pending.arm(&predecessor(), 9, 12, true),
         "post-wait raw revision may differ from pre-reserve raw revision"
     );
     assert!(
@@ -251,44 +242,32 @@ fn sample_and_begin_require_the_actual_unchanged_poll() {
         "unchanged actual sample succeeds"
     );
     assert!(
-        !pending.begin(1010, 9, 13, 77, true),
+        !pending.begin(1010, 9, 13, 77),
         "raw change before BIND refuses"
     );
     assert!(
-        !pending.begin(1010, 9, 12, 78, true),
+        !pending.begin(1010, 9, 12, 78),
         "queue advance without matching sampled cursor refuses"
-    );
-    assert!(
-        !pending.begin(1010, 9, 12, 77, false),
-        "native state/receiver mismatch refuses"
     );
 }
 
 #[test]
 fn consumed_ticket_joins_claims_and_adopts_once() {
     let mut consumed = consumed_ticket();
-    assert!(
-        !consumed.complete(false),
-        "changed worker/native state cannot complete"
-    );
     // Consumed sources do not compare later raw revisions. Future adoption still requires their
     // exact consumed cursor and absence of an unmatched poll.
     assert!(
-        consumed.complete(true),
+        consumed.complete(),
         "later raw arrival does not rewrite genuinely consumed source"
-    );
-    assert!(
-        !consumed.join(&predecessor(), false),
-        "early/no-op join EAX0 is not actual completed wait"
     );
     let mut changed = predecessor();
     changed.complete_event += 1;
     assert!(
-        !consumed.join(&changed, true),
+        !consumed.join(&changed),
         "changed native completion handle refuses join"
     );
     assert!(
-        consumed.join(&predecessor(), true),
+        consumed.join(&predecessor()),
         "actual matching wait closes worker handoff"
     );
     assert!(
@@ -349,58 +328,50 @@ fn intention_protects_only_the_exact_bound_predecessor() {
     let p = predecessor();
     let mut intention = WorkerTicket::ZERO;
     assert!(
-        intention.reserve(&p, &successor(), 9, true) && intention.begin_callback(8, 12, 76),
+        intention.reserve(&p, &successor(), 9) && intention.begin_callback(8, 76),
         "construct/source allocation precede a genuine callback intention"
     );
     assert!(
-        intention.protects_bound(&p, 40, 8, 9, 12, 76, 76, true),
+        intention.protects_bound(&p, 40, 8, 9, 76, true),
         "exact bound predecessor is protected"
     );
     assert!(
-        !intention.protects_bound(&p, 39, 8, 9, 12, 76, 76, true),
+        !intention.protects_bound(&p, 39, 8, 9, 76, true),
         "wrong bound source cannot borrow intention"
     );
     assert!(
-        !intention.protects_bound(&p, 40, 7, 9, 12, 76, 76, true),
+        !intention.protects_bound(&p, 40, 7, 9, 76, true),
         "wrong previous generation refuses"
     );
     assert!(
-        !intention.protects_bound(&p, 40, 8, 10, 12, 76, 76, true),
+        !intention.protects_bound(&p, 40, 8, 10, 76, true),
         "intervening or nested Poll removes protection"
     );
     assert!(
-        intention.protects_bound(&p, 40, 8, 9, 13, 76, 76, true),
-        "new raw arrival preserves already consumed predecessor"
-    );
-    assert!(
-        !intention.protects_bound(&p, 40, 8, 9, 12, 77, 77, true),
+        !intention.protects_bound(&p, 40, 8, 9, 77, true),
         "consumed cursor advance refuses"
-    );
-    assert!(
-        intention.protects_bound(&p, 40, 8, 9, 12, 76, 77, true),
-        "later queue tail preserves already consumed predecessor"
     );
     let mut changed = p;
     changed.main += 1;
     assert!(
-        !intention.protects_bound(&changed, 40, 8, 9, 12, 76, 76, true),
+        !intention.protects_bound(&changed, 40, 8, 9, 76, true),
         "changed native Main/owner refuses"
     );
     assert!(
-        !intention.protects_bound(&p, 40, 8, 9, 12, 76, 76, false),
+        !intention.protects_bound(&p, 40, 8, 9, 76, false),
         "lifecycle/native/raw-writer proof failure refuses"
     );
     assert!(
-        !intention.begin(1010, 9, 12, 76, true),
+        !intention.begin(1010, 9, 12, 76),
         "consumer cannot adopt callback intention before actual Poll"
     );
     intention.end_callback();
     assert!(
-        !intention.arm(&p, 9, 12, true, WorkerTicket::poll_safe(40, false, false)),
+        !intention.arm(&p, 9, 12, WorkerTicket::poll_safe(40, false, false)),
         "core timeout before actual seal does not retain bound generation"
     );
     assert!(
-        !intention.callback_inflight && !intention.protects_bound(&p, 40, 8, 9, 12, 76, 76, true),
+        !intention.callback_inflight && !intention.protects_bound(&p, 40, 8, 9, 76, true),
         "timeout expires protection before native continuation"
     );
     intention.refuse(RSF_GAME_CPU_ABORT_STATE_CHANGED);
@@ -411,22 +382,22 @@ fn intention_protects_only_the_exact_bound_predecessor() {
     );
     let mut gap = WorkerTicket::ZERO;
     assert!(
-        gap.reserve(&p, &successor(), 10, true) && !gap.begin_callback(8, 12, 76),
+        gap.reserve(&p, &successor(), 10) && !gap.begin_callback(8, 76),
         "a generation gap cannot create bound protection"
     );
     let mut withdrawn = WorkerTicket::ZERO;
     assert!(
-        withdrawn.reserve(&p, &successor(), 9, true) && withdrawn.begin_callback(8, 12, 76),
+        withdrawn.reserve(&p, &successor(), 9) && withdrawn.begin_callback(8, 76),
         "withdrawal fixture intention"
     );
     withdrawn.refuse(RSF_GAME_CPU_ABORT_QUIESCE);
     assert!(
-        !withdrawn.protects_bound(&p, 40, 8, 9, 12, 76, 76, true),
+        !withdrawn.protects_bound(&p, 40, 8, 9, 76, true),
         "quiesce/reentrant withdrawal immediately removes protection"
     );
     withdrawn.end_callback();
     assert!(
-        !withdrawn.arm(&p, 9, 12, true, true) && withdrawn.active(),
+        !withdrawn.arm(&p, 9, 12, true) && withdrawn.active(),
         "withdrawn intention retains abort ownership until drained"
     );
     assert!(
@@ -451,11 +422,11 @@ fn blocking_reserve_callback_holds_no_scalar_lock() {
             {
                 let mut cross = guard.lock().unwrap();
                 assert!(
-                    cross.reserve(&predecessor(), &successor(), 9, true),
+                    cross.reserve(&predecessor(), &successor(), 9),
                     "constructed predecessor admits intention before Present"
                 );
                 assert!(
-                    cross.begin_callback(8, 12, 76),
+                    cross.begin_callback(8, 76),
                     "register exact bound-source callback intention"
                 );
             }
@@ -464,7 +435,7 @@ fn blocking_reserve_callback_holds_no_scalar_lock() {
             let mut cross = guard.lock().unwrap();
             cross.end_callback();
             assert!(
-                !cross.protects_bound(&predecessor(), 40, 8, 9, 12, 76, 76, true),
+                !cross.protects_bound(&predecessor(), 40, 8, 9, 76, true),
                 "callback return always expires bound protection"
             );
             assert!(
@@ -472,7 +443,6 @@ fn blocking_reserve_callback_holds_no_scalar_lock() {
                     &predecessor(),
                     9,
                     20,
-                    true,
                     WorkerTicket::poll_safe(40, true, true)
                 ),
                 "core returns after Main Present progress"
@@ -483,11 +453,11 @@ fn blocking_reserve_callback_holds_no_scalar_lock() {
                 "worker actual poll after core wait"
             );
             assert!(
-                cross.begin(1010, 9, 20, 77, true) && cross.bind(9, 20, 77, true),
+                cross.begin(1010, 9, 20, 77) && cross.bind(9, 20, 77),
                 "actual receiver FRAME_BEGIN/BIND"
             );
             assert!(
-                cross.consumed(9, 77, true) && cross.complete(true),
+                cross.consumed(9, 77) && cross.complete(),
                 "native worker consumed source completion"
             );
         })
@@ -500,7 +470,7 @@ fn blocking_reserve_callback_holds_no_scalar_lock() {
     {
         let cross = guard.lock().unwrap();
         assert!(
-            cross.protects_bound(&predecessor(), 40, 8, 9, 12, 76, 76, true),
+            cross.protects_bound(&predecessor(), 40, 8, 9, 76, true),
             "Main bound source remains valid during exact pre-poll intention and can reach Present"
         );
         assert!(
@@ -512,7 +482,7 @@ fn blocking_reserve_callback_holds_no_scalar_lock() {
     worker.join().unwrap();
     let mut cross = guard.lock().unwrap();
     assert!(
-        cross.join(&predecessor(), true) && cross.claim(&next_swap(), 77, 9),
+        cross.join(&predecessor()) && cross.claim(&next_swap(), 77, 9),
         "post-Swap join transfers ticket to next graphics Swap"
     );
     let mut changed = next_swap();

@@ -11,18 +11,13 @@ namespace rsf::fallout4 {
 // separate unframed receipts. They never assert a physical sample. The executable-local message
 // thunk and its saved continuation stay pinned after stop, including when a later IAT owner
 // retains our address.
-struct CpuIdentity {
-    uint64_t session{}, source{}, submission{}, began_qpc{}, frequency{};
-};
-static_assert(sizeof(CpuIdentity) == sizeof(rsf_fallout4_cpu_identity));
+using CpuIdentity = rsf_fallout4_cpu_identity;
 
-inline rsf_fallout4_cpu_identity cpu_identity_abi(const CpuIdentity& value) noexcept {
-    return {value.session, value.source, value.submission, value.began_qpc, value.frequency};
-}
+inline const CpuIdentity& cpu_identity_abi(const CpuIdentity& value) noexcept { return value; }
 inline CpuIdentity current_cpu_identity() noexcept {
     rsf_fallout4_cpu_identity value{};
     rsf_fallout4_cpu_current_identity(&value);
-    return {value.session, value.source, value.submission, value.began_qpc, value.frequency};
+    return value;
 }
 // Called once by the primary render producer inside the active Swap scope.
 // Supplies a render-pass association, never an ExecuteCommandLists fact.
@@ -51,6 +46,4 @@ inline void end_cpu_present_phase(const CpuIdentity& identity) noexcept {
     const auto value = cpu_identity_abi(identity);
     rsf_fallout4_cpu_end_present_phase(&value);
 }
-// The native leaves of the Rust owner, published with the GameSDK table.
-const rsf_fallout4_cpu_platform* cpu_event_platform() noexcept;
 }

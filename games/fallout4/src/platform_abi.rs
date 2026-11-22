@@ -289,13 +289,6 @@ pub struct rsf_fallout4_platform {
     >,
     pub prepare_steam_chain:
         ::core::option::Option<unsafe extern "C" fn(host: *const rsf_game_host_services) -> bool>,
-    pub initialize_hooks: ::core::option::Option<unsafe extern "C" fn() -> bool>,
-    pub create_creation_hook:
-        ::core::option::Option<unsafe extern "C" fn(target: *mut ::core::ffi::c_void) -> bool>,
-    pub enable_hook:
-        ::core::option::Option<unsafe extern "C" fn(target: *mut ::core::ffi::c_void) -> bool>,
-    pub disable_hook:
-        ::core::option::Option<unsafe extern "C" fn(target: *mut ::core::ffi::c_void) -> bool>,
     pub call_create:
         ::core::option::Option<unsafe extern "C" fn(call: *const rsf_fallout4_create_call) -> i32>,
     pub host_create: ::core::option::Option<
@@ -342,7 +335,7 @@ pub struct rsf_fallout4_platform {
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_fallout4_platform"][::core::mem::size_of::<rsf_fallout4_platform>() - 104usize];
+    ["Size of rsf_fallout4_platform"][::core::mem::size_of::<rsf_fallout4_platform>() - 72usize];
     ["Alignment of rsf_fallout4_platform"]
         [::core::mem::align_of::<rsf_fallout4_platform>() - 8usize];
     ["Offset of field: rsf_fallout4_platform::log"]
@@ -351,24 +344,16 @@ const _: () = {
         [::core::mem::offset_of!(rsf_fallout4_platform, file_sha256) - 8usize];
     ["Offset of field: rsf_fallout4_platform::prepare_steam_chain"]
         [::core::mem::offset_of!(rsf_fallout4_platform, prepare_steam_chain) - 16usize];
-    ["Offset of field: rsf_fallout4_platform::initialize_hooks"]
-        [::core::mem::offset_of!(rsf_fallout4_platform, initialize_hooks) - 24usize];
-    ["Offset of field: rsf_fallout4_platform::create_creation_hook"]
-        [::core::mem::offset_of!(rsf_fallout4_platform, create_creation_hook) - 32usize];
-    ["Offset of field: rsf_fallout4_platform::enable_hook"]
-        [::core::mem::offset_of!(rsf_fallout4_platform, enable_hook) - 40usize];
-    ["Offset of field: rsf_fallout4_platform::disable_hook"]
-        [::core::mem::offset_of!(rsf_fallout4_platform, disable_hook) - 48usize];
     ["Offset of field: rsf_fallout4_platform::call_create"]
-        [::core::mem::offset_of!(rsf_fallout4_platform, call_create) - 56usize];
+        [::core::mem::offset_of!(rsf_fallout4_platform, call_create) - 24usize];
     ["Offset of field: rsf_fallout4_platform::host_create"]
-        [::core::mem::offset_of!(rsf_fallout4_platform, host_create) - 64usize];
+        [::core::mem::offset_of!(rsf_fallout4_platform, host_create) - 32usize];
     ["Offset of field: rsf_fallout4_platform::host_set_active"]
-        [::core::mem::offset_of!(rsf_fallout4_platform, host_set_active) - 72usize];
+        [::core::mem::offset_of!(rsf_fallout4_platform, host_set_active) - 40usize];
     ["Offset of field: rsf_fallout4_platform::creation_begin"]
-        [::core::mem::offset_of!(rsf_fallout4_platform, creation_begin) - 80usize];
+        [::core::mem::offset_of!(rsf_fallout4_platform, creation_begin) - 48usize];
     ["Offset of field: rsf_fallout4_platform::creation_end"]
-        [::core::mem::offset_of!(rsf_fallout4_platform, creation_end) - 88usize];
+        [::core::mem::offset_of!(rsf_fallout4_platform, creation_end) - 56usize];
     ["Offset of field: rsf_fallout4_platform::bind_presentation"]
-        [::core::mem::offset_of!(rsf_fallout4_platform, bind_presentation) - 96usize];
+        [::core::mem::offset_of!(rsf_fallout4_platform, bind_presentation) - 64usize];
 };

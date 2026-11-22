@@ -14,7 +14,7 @@ use crate::platform_abi::{
 use crate::{
     EXECUTABLE_SHA256, Ops, PENDING, RSF_ERROR_ABI_MISMATCH, RSF_ERROR_BUSY,
     RSF_ERROR_INVALID_ARGUMENT, RSF_ERROR_NATIVE_REFUSED, RSF_ERROR_NOT_READY, RSF_OK, Threw,
-    cpu_events, dpi, ops, pin, render_hooks,
+    cpu_events, dpi, ops, pin, render_hooks, typed_export,
 };
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_game_control_args, rsf_game_host_services, rsf_game_prepare_args,
@@ -40,7 +40,6 @@ const PRESENTATION_BRIDGE_SCOPED: u32 = 3;
 // Native colour, transport Off, unless a saved ColourTransport value exists.
 const COLOUR_TRANSPORT_NATIVE: u32 = 1;
 
-type Export = unsafe extern "system" fn() -> isize;
 type Create =
     unsafe extern "C" fn(*const rsf_d3d11_host_setup, *mut rsf_game_host_services) -> rsf_result;
 type Activate = unsafe extern "C" fn(*mut c_void, u32) -> rsf_result;
@@ -90,13 +89,6 @@ unsafe fn validate<T>(value: *const T) -> rsf_result {
     }
 }
 
-fn runtime_export<F: Copy>(runtime: *mut c_void, name: windows_sys::core::PCSTR) -> Option<F> {
-    const { assert!(size_of::<F>() == size_of::<Export>()) };
-    // SAFETY: each caller names the export's C signature.
-    unsafe { GetProcAddress(runtime, name) }
-        .map(|export| unsafe { std::mem::transmute_copy::<Export, F>(&export) })
-}
-
 fn same_session(upstream: &rsf_game_host_services, host: &rsf_game_host_services) -> bool {
     upstream.session_id == host.session_id
         && upstream.user == host.user
@@ -117,9 +109,14 @@ impl Session {
         creation::busy() || render_hooks::busy() || cpu_events::busy()
     }
 
-    fn refuse(&mut self, ops: &Ops, message: &'static CStr) -> Result<rsf_result, Threw> {
+    fn refuse(
+        &mut self,
+        ops: &Ops,
+        host: &rsf_game_host_services,
+        message: &'static CStr,
+    ) -> Result<rsf_result, Threw> {
         self.reason = message;
-        ops.log(self.services.log, self.services.user, message)?;
+        ops.log_host(host, message)?;
         Ok(RSF_ERROR_NATIVE_REFUSED)
     }
 
@@ -210,15 +207,17 @@ impl Session {
         if self.prepared || self.busy() {
             return Ok(RSF_ERROR_BUSY);
         }
-        if !creation::verify_executable(ops)? {
+        let Some(build) = creation::admit_build(ops)? else {
             return self.refuse(
                 ops,
+                host,
                 c"Fallout4 cold creation refused: executable identity mismatch.",
             );
-        }
+        };
         if !creation::preflight() {
             return self.refuse(
                 ops,
+                host,
                 c"Fallout4 cold creation refused: expected native bytes or cold owner unavailable.",
             );
         }
@@ -230,26 +229,25 @@ impl Session {
         if !render_hooks::verify_with_inputs() {
             return self.refuse(
                 ops,
+                host,
                 c"Fallout4 render preparation refused: native call, TAA, resource, camera or depth-domain guard mismatch.",
             );
         }
         if !ops.initialize_hooks() {
             return self.refuse(
                 ops,
+                host,
                 c"Fallout4 cold creation refused: native hook initialization failed.",
             );
         }
         let adapter = prepare as unsafe extern "C" fn(_) -> _;
         if !pin(adapter as *const c_void) {
-            return self.refuse(ops, c"Fallout4 native hook lifetime pin refused.");
+            return self.refuse(ops, host, c"Fallout4 native hook lifetime pin refused.");
         }
         let runtime = unsafe { GetModuleHandleW(w!("ReScaleFrame.Runtime.dll")) };
-        let create = (!runtime.is_null())
-            .then(|| runtime_export::<Create>(runtime, s!("rsf_d3d11_host_create")))
-            .flatten();
-        self.activate = (!runtime.is_null())
-            .then(|| runtime_export::<Activate>(runtime, s!("rsf_d3d11_host_set_active")))
-            .flatten();
+        // SAFETY: the process-lived Runtime exports these signatures in d3d11_host.h.
+        let create = unsafe { typed_export::<Create>(runtime, c"rsf_d3d11_host_create") };
+        self.activate = unsafe { typed_export::<Activate>(runtime, c"rsf_d3d11_host_set_active") };
         let (Some(create), Some(_)) = (create, self.activate) else {
             return Ok(RSF_ERROR_NOT_READY);
         };
@@ -260,6 +258,7 @@ impl Session {
             if !same_session(&self.upstream, host) {
                 return self.refuse(
                     ops,
+                    host,
                     c"Fallout4 process-lived creation host requires the original session.",
                 );
             }
@@ -270,21 +269,24 @@ impl Session {
             }
         }
         let services = self.services;
-        if !creation::prepare(ops, &services) {
+        if !creation::prepare(ops, &services, &build) {
             return self.refuse(
                 ops,
+                host,
                 c"Fallout4 cold creation refused: native bytes, owner, Steam forwarding or scoped services unavailable.",
             );
         }
         if !render_hooks::prepare(ops, &services) {
             return self.refuse(
                 ops,
+                host,
                 c"Fallout4 render preparation refused: native guards, synchronous services or hook creation unavailable.",
             );
         }
-        if !cpu_events::prepare(ops, &services) {
+        if !cpu_events::prepare(ops, &services, &build) {
             return self.refuse(
                 ops,
+                host,
                 c"Fallout4 CPU preparation refused: guarded Swap/input callbacks or source services unavailable.",
             );
         }

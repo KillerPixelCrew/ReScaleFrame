@@ -4,7 +4,9 @@
 //! The request is made only while the renderer owner has neither and the process owns no window,
 //! and is then verified for both the process and the calling thread. An existing compatible
 //! awareness is accepted unchanged.
-use crate::creation::{DEVICE, OWNER_RVA, WINDOW};
+use crate::build_layout::{
+    RENDERER_DEVICE as DEVICE, RENDERER_POINTER as OWNER_RVA, RENDERER_WINDOW as WINDOW,
+};
 use crate::{Ops, Threw, image, message, read};
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::{CStr, c_void};
@@ -163,9 +165,7 @@ fn request(ops: &Ops, host: &rsf_game_host_services) -> Result<Option<&'static C
             process_after as usize,
             thread_after as usize,
         ));
-        if let Ok(text) = CStr::from_bytes_with_nul(&text) {
-            ops.log_host(host, text)?;
-        }
+        ops.log_host(host, &text)?;
     }
     Ok(if !cold {
         Some(c"Fallout4 DPI startup refused: native owner unreadable or window/device already created.")

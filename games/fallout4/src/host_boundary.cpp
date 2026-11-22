@@ -1,22 +1,16 @@
 // SPDX-License-Identifier: MIT
-// GameSDK export and native leaves of the Rust Fallout 4 owner (lib.rs). Rust owns the exact
-// build identity, the lifecycle and its Runtime session, DPI startup, the cold creation
-// sequence, the CPU event owner and the render hook lifecycle. This file supplies MinHook,
-// exception guards, the shared file hash and the shared Steam chain facade; cpu_events.cpp and
-// render_hooks.cpp supply the CPU and render hook leaves.
+// C++ exception guards and the Steam and render bridges used by the Rust GameSDK export.
 #include "fallout4_platform.h"
 #include "native_creation.h"
-#include "cpu_events.h"
 #include "render_hooks_platform.h"
 #include <rescaleframe/sha256_file.h>
 #include <rescaleframe/steam_d3d11_chain.h>
-#include <MinHook.h>
 #include <cstring>
 #include <string>
 
 namespace {
 using namespace rsf::fallout4;
-static_assert(sizeof(rsf_fallout4_platform) == 13 * sizeof(void*));
+static_assert(sizeof(rsf_fallout4_platform) == 9 * sizeof(void*));
 
 // A native call that throws reports false; the Rust lifecycle then answers RSF_ERROR_NOT_READY
 // as the previous native catch did.
@@ -37,16 +31,6 @@ constexpr rsf_fallout4_platform platform{
     },
     [](const rsf_game_host_services* host) noexcept {
         return rsf::steam::prepare_d3d11_chain(*host, [] { return rsf_fallout4_cold_owner(); });
-    },
-    []() noexcept {
-        const auto result = MH_Initialize();
-        return result == MH_OK || result == MH_ERROR_ALREADY_INITIALIZED;
-    },
-    [](void* target) noexcept { return create_creation_hook(target); },
-    [](void* target) noexcept { return MH_EnableHook(target) == MH_OK; },
-    [](void* target) noexcept {
-        const auto result = MH_DisableHook(target);
-        return result == MH_OK || result == MH_ERROR_DISABLED;
     },
     [](const rsf_fallout4_create_call* call) noexcept { return call_creation(call); },
     [](rsf_fallout4_host_create_fn create, const rsf_d3d11_host_setup* setup, rsf_game_host_services* services,
@@ -69,10 +53,10 @@ constexpr rsf_fallout4_platform platform{
     },
 };
 }
-extern "C" __declspec(dllexport) rsf_result rsf_get_game_plugin_api(uint32_t requested_abi, rsf_game_plugin_api* api) noexcept {
-    // The CPU and render hook leaves are constant and complete; prepare refuses their hooks if
-    // they are unbound.
-    (void)rsf_fallout4_cpu_publish(rsf::fallout4::cpu_event_platform());
+extern "C" const rsf_fallout4_platform* rsf_fallout4_host_boundary() noexcept {
+    return &platform;
+}
+
+extern "C" void rsf_fallout4_publish_render_boundary() noexcept {
     (void)rsf::fallout4::rsf_fallout4_render_publish(rsf::fallout4::render_hook_leaves());
-    return rsf_fallout4_publish_api(requested_abi, api, &platform);
 }

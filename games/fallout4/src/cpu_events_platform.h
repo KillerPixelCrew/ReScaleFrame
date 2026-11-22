@@ -41,16 +41,9 @@ typedef struct rsf_fallout4_cpu_scope {
     uint64_t state[RSF_FALLOUT4_CPU_SCOPE_WORDS];
 } rsf_fallout4_cpu_scope;
 
-// Leaves the Rust owner cannot express without C++ or MinHook. The table lives for the process.
+// Leaves the Rust owner cannot express without C++. The table lives for the process.
 // Original engine functions are never called from Rust: each shell calls its trampoline itself.
 typedef struct rsf_fallout4_cpu_platform {
-    // MH_CreateHook on target with the hook's native detour shell. Refuses an existing trampoline.
-    bool (*create_hook)(uint32_t hook, void* target);
-    // The hook's trampoline exists.
-    bool (*hook_created)(uint32_t hook);
-    // MH_RemoveHook; clears the trampoline only when removal succeeded.
-    bool (*remove_hook)(uint32_t hook, void* target);
-
     // Guarded GameSDK CPU callback. False only when it threw.
     bool (*cpu_event)(rsf_game_cpu_event_fn callback, void* user, const rsf_game_cpu_event* event);
     // render_hooks' scope close, called before a CPU frame end clears its identity.
@@ -60,8 +53,8 @@ typedef struct rsf_fallout4_cpu_platform {
 } rsf_fallout4_cpu_platform;
 
 // Rust owner entry points.
-// Binds the CPU leaves. platform must be complete and live for the process.
-bool rsf_fallout4_cpu_publish(const rsf_fallout4_cpu_platform* platform);
+void* rsf_fallout4_cpu_original(uint32_t hook);
+
 // Detour entry and exit decisions. caller is the shell's return address. Each shell calls entry,
 // restores its entry last error, calls the original through its trampoline, captures the native
 // last error, calls exit and restores that error. None of these throws or unwinds.
@@ -94,6 +87,10 @@ void rsf_fallout4_cpu_worker_join_exit(rsf_fallout4_cpu_scope* scope, uint32_t r
 void* rsf_fallout4_cpu_peek_enter(void);
 void rsf_fallout4_cpu_peek_exit(uintptr_t caller, int32_t result, void* message, void* window,
     uint32_t minimum, uint32_t maximum, uint32_t flags);
+// Cancellation when the original unwinds before returning its result.
+void rsf_fallout4_cpu_cancel(uint32_t hook, rsf_fallout4_cpu_scope* scope);
+void rsf_fallout4_cpu_peek_cancel(void);
+
 // Render producer queries, all on the Swap thread (see cpu_events.h).
 void rsf_fallout4_cpu_current_identity(rsf_fallout4_cpu_identity* identity);
 bool rsf_fallout4_cpu_begin_render(void);

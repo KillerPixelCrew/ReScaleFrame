@@ -97,7 +97,8 @@ generate("games/fallout4/src/cpu_abi.rs", "games/fallout4/src/cpu_events_platfor
          "rsf_fallout4_cpu_(identity|scope|platform)", "RSF_FALLOUT4_CPU_(HOOK_.*|SCOPE_WORDS)",
          ["-Isdk/game/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
-          "--raw-line", "use rsf_game_sys::{rsf_game_cpu_event, rsf_game_cpu_event_fn};"])
+          "--raw-line", "use rsf_game_sys::{rsf_game_cpu_event, rsf_game_cpu_event_fn};",
+          "--with-derive-custom-struct", "rsf_fallout4_cpu_identity=Debug,PartialEq,Eq"])
 generate("games/ac7/src/platform_abi.rs", "games/ac7/src/ac7_platform.h",
          "rsf_ac7_(platform|native_renderer(_options)?|renderer_log_fn|render_scope(_fn)?)", "RSF_AC7_DIAG_.*",
          ["-Isdk/game/include", "-Igames/ac7/include"],

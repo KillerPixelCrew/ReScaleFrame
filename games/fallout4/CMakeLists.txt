@@ -1,10 +1,10 @@
-add_library(rsf_game_fallout4 SHARED src/plugin.cpp src/native_creation.cpp
+add_library(rsf_game_fallout4 SHARED src/fallout4_exports.def src/host_boundary.cpp src/native_creation.cpp
     src/cpu_events.cpp src/render_inputs.cpp src/render_hooks.cpp src/resolution.cpp src/screen.cpp
     src/depth_domains.cpp)
 # Identity, lifecycle, Runtime session, DPI startup, creation sequencing and the CPU event owner are
-# Rust (src/lib.rs, src/cpu_events.rs). plugin.cpp and native_creation.cpp supply the native leaves
-# through src/fallout4_platform.h; cpu_events.cpp supplies the CPU detour shells, MinHook
-# trampolines and guarded host callback through src/cpu_events_platform.h. Rust also owns
+# Rust (src/lib.rs, src/cpu_events.rs), including MinHook trampoline ownership. The C++ boundaries
+# capture native return addresses, retain typed original calls and handle native exceptions.
+# Rust also owns
 # depth-domain admission and composition, producer resolution, the render hook lifecycle with
 # World/Present admission, reduced-render recovery, SR/HUDless publication, the FRAME,
 # SUBMISSION and WINDOW scope, the imagespace, Effects and TAA seams and the viewport, DR and

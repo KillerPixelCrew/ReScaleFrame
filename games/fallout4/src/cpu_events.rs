@@ -18,6 +18,7 @@
 mod handoff;
 mod native;
 
+use crate::build_layout::{RENDERER_OBJECT, RENDERER_POINTER, RENDERER_WINDOW};
 use crate::cpu_abi::{
     RSF_FALLOUT4_CPU_HOOK_CONSUME, RSF_FALLOUT4_CPU_HOOK_COUNT, RSF_FALLOUT4_CPU_HOOK_IDLE,
     RSF_FALLOUT4_CPU_HOOK_JOB_END, RSF_FALLOUT4_CPU_HOOK_KEYBOARD, RSF_FALLOUT4_CPU_HOOK_MOUSE,
@@ -25,7 +26,9 @@ use crate::cpu_abi::{
     RSF_FALLOUT4_CPU_HOOK_WORKER_JOIN, RSF_FALLOUT4_CPU_HOOK_WRAPPER, RSF_FALLOUT4_CPU_SCOPE_WORDS,
     rsf_fallout4_cpu_identity, rsf_fallout4_cpu_platform, rsf_fallout4_cpu_scope,
 };
-use crate::{Ops, Plain, creation, image, message, ops, pin, read};
+use crate::{
+    MH_CreateHook, MH_OK, MH_RemoveHook, Ops, Plain, creation, image, message, ops, pin, read,
+};
 use handoff::{
     CpuIdentity, Phase, WorkerCycle, WorkerTicket, active_join_matches, invalidates_render_source,
 };
@@ -44,7 +47,7 @@ use rsf_game_sys::{
     rsf_game_cpu_source_event, rsf_game_host_services,
 };
 use std::cell::Cell;
-use std::ffi::{CStr, c_void};
+use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
@@ -67,55 +70,91 @@ const WAIT_OBJECT_0: u32 = 0;
 // ---------------------------------------------------------------------------------------------
 // Native leaves.
 
-static PLATFORM: OnceLock<rsf_fallout4_cpu_platform> = OnceLock::new();
-
-fn platform() -> Option<&'static rsf_fallout4_cpu_platform> {
-    PLATFORM.get()
+struct Leaves {
+    cpu_event: unsafe extern "C" fn(
+        callback: rsf_game_sys::rsf_game_cpu_event_fn,
+        user: *mut ::core::ffi::c_void,
+        event: *const rsf_game_cpu_event,
+    ) -> bool,
+    finish_render_scope: unsafe extern "C" fn(),
+    peek_thunk: unsafe extern "C" fn() -> *mut ::core::ffi::c_void,
 }
 
-fn complete(table: &rsf_fallout4_cpu_platform) -> bool {
-    table.create_hook.is_some()
-        && table.hook_created.is_some()
-        && table.remove_hook.is_some()
-        && table.cpu_event.is_some()
-        && table.finish_render_scope.is_some()
-        && table.peek_thunk.is_some()
+impl Leaves {
+    fn from_native(table: &rsf_fallout4_cpu_platform) -> Option<Self> {
+        Some(Self {
+            cpu_event: table.cpu_event?,
+            finish_render_scope: table.finish_render_scope?,
+            peek_thunk: table.peek_thunk?,
+        })
+    }
+}
+
+static PLATFORM: OnceLock<Leaves> = OnceLock::new();
+
+fn platform() -> Option<&'static Leaves> {
+    PLATFORM.get()
 }
 
 /// Binds the CPU leaves for the process.
 ///
 /// # Safety
 /// A nonnull `table` is a complete leaf table that lives for the process.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_cpu_publish(table: *const rsf_fallout4_cpu_platform) -> bool {
-    match unsafe { table.as_ref() } {
-        Some(table) if complete(table) => {
-            let _ = PLATFORM.get_or_init(|| *table);
-            true
-        }
-        _ => false,
-    }
+pub(crate) unsafe fn publish(table: *const rsf_fallout4_cpu_platform) -> bool {
+    let Some(table) = (unsafe { table.as_ref() }).and_then(Leaves::from_native) else {
+        return false;
+    };
+    let _ = PLATFORM.get_or_init(|| table);
+    true
 }
 
 fn hook_target(hook: u32) -> *mut c_void {
-    (image() + native::HOOK_RVAS[hook as usize]) as *mut c_void
+    (image() + native::HOOK_ENTRIES[hook as usize].0) as *mut c_void
+}
+
+// Hook lifecycle is serialized by Session. The detours only load the published originals.
+static ORIGINALS: [AtomicPtr<c_void>; RSF_FALLOUT4_CPU_HOOK_COUNT as usize] =
+    [const { AtomicPtr::new(std::ptr::null_mut()) }; RSF_FALLOUT4_CPU_HOOK_COUNT as usize];
+
+unsafe extern "C" {
+    fn rsf_fallout4_cpu_detour(hook: u32) -> *mut c_void;
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_fallout4_cpu_original(hook: u32) -> *mut c_void {
+    ORIGINALS[hook as usize].load(Acquire)
 }
 
 fn hook_created(hook: u32) -> bool {
-    platform()
-        .and_then(|table| table.hook_created)
-        .is_some_and(|created| unsafe { created(hook) })
+    !rsf_fallout4_cpu_original(hook).is_null()
+}
+
+fn create_hook(hook: u32, target: *mut c_void) -> bool {
+    let mut original = std::ptr::null_mut();
+    let detour = unsafe { rsf_fallout4_cpu_detour(hook) };
+    // MinHook creates this disabled. Publish the trampoline before the later start.
+    if unsafe { MH_CreateHook(target, detour, &mut original) } != MH_OK {
+        return false;
+    }
+    ORIGINALS[hook as usize].store(original, Release);
+    true
+}
+
+fn remove_hook(hook: u32, target: *mut c_void) -> bool {
+    if unsafe { MH_RemoveHook(target) } != MH_OK {
+        return false;
+    }
+    ORIGINALS[hook as usize].store(std::ptr::null_mut(), Release);
+    true
 }
 
 fn peek_thunk() -> usize {
-    platform()
-        .and_then(|table| table.peek_thunk)
-        .map_or(0, |thunk| unsafe { thunk() } as usize)
+    platform().map_or(0, |table| unsafe { (table.peek_thunk)() } as usize)
 }
 
 fn finish_render_scope() {
-    if let Some(finish) = platform().and_then(|table| table.finish_render_scope) {
-        unsafe { finish() };
+    if let Some(table) = platform() {
+        unsafe { (table.finish_render_scope)() };
     }
 }
 
@@ -193,9 +232,7 @@ fn predicate_bits(terms: &[bool]) -> u32 {
 fn log(host: &rsf_game_host_services, text: String) {
     if let Some(ops) = ops() {
         let text = message(text);
-        if let Ok(text) = CStr::from_bytes_with_nul(&text) {
-            let _ = ops.log_host(host, text);
-        }
+        let _ = ops.log_host(host, &text);
     }
 }
 
@@ -471,28 +508,37 @@ fn native_cycle(
         && t.test(8, entry == base + native::WORKER_ENTRY)
         && t.test(
             9,
-            load(&mut proof.start_event, worker_address + native::WORKER_START),
+            load(
+                &mut proof.start_event,
+                worker_address + native::WORKER_START,
+            ),
         )
         && t.test(10, proof.start_event != 0)
         && t.test(
             11,
-            load(&mut proof.complete_event, worker_address + native::WORKER_COMPLETE),
+            load(
+                &mut proof.complete_event,
+                worker_address + native::WORKER_COMPLETE,
+            ),
         )
         && t.test(12, proof.complete_event != 0)
         && t.test(13, load(&mut mode, worker_address + native::WORKER_MODE))
         && t.test(14, mode == 1 || (joining && mode == 0))
-        && t.test(15, load(&mut running, worker_address + native::WORKER_RUNNING))
+        && t.test(
+            15,
+            load(&mut running, worker_address + native::WORKER_RUNNING),
+        )
         && t.test(16, running != 0)
-        && t.test(17, load(&mut exiting, worker_address + native::WORKER_EXITING))
+        && t.test(
+            17,
+            load(&mut exiting, worker_address + native::WORKER_EXITING),
+        )
         && t.test(18, exiting == 0)
         && t.test(19, load(&mut window, native.main + native::MAIN_WINDOW))
         && t.test(20, window != 0)
-        && t.test(21, load(&mut renderer, base + native::RENDERER))
-        && t.test(22, renderer == base + native::RENDERER_OBJECT)
-        && t.test(
-            23,
-            load(&mut proof.window, renderer + native::RENDERER_WINDOW),
-        )
+        && t.test(21, load(&mut renderer, base + RENDERER_POINTER))
+        && t.test(22, renderer == base + RENDERER_OBJECT)
+        && t.test(23, load(&mut proof.window, renderer + RENDERER_WINDOW))
         && t.test(24, proof.window == window)
         && t.test(25, load(&mut proof.frame, base + native::NATIVE_FRAME));
     if proved {
@@ -648,8 +694,10 @@ fn ticket_pending(value: &Future) -> Pending {
 // GameSDK CPU facts.
 
 fn deliver(host: &rsf_game_host_services, event: *const rsf_game_cpu_event) -> bool {
-    match (host.cpu_event, platform().and_then(|table| table.cpu_event)) {
-        (Some(callback), Some(guarded)) => unsafe { guarded(Some(callback), host.user, event) },
+    match (host.cpu_event, platform()) {
+        (Some(callback), Some(table)) => unsafe {
+            (table.cpu_event)(Some(callback), host.user, event)
+        },
         _ => false,
     }
 }
@@ -932,9 +980,7 @@ fn bound_current_valid(c: &RenderCycle, strict_raw: bool) -> bool {
             c.binding.source,
             c.binding.generation,
             generation,
-            revision,
             cursor,
-            queued,
             cycle_valid,
         )
 }
@@ -1272,12 +1318,9 @@ fn reserve_worker_poll(
                 0
             };
             let f = &mut w.future;
-            if f.facts.reserve(&c.key, &next, *generation, true)
-                && f.facts.begin_callback(
-                    bound_generation,
-                    c.binding.raw,
-                    c.binding.queue_generation,
-                )
+            if f.facts.reserve(&c.key, &next, *generation)
+                && f.facts
+                    .begin_callback(bound_generation, c.binding.queue_generation)
             {
                 f.state = native;
                 f.busy = true;
@@ -1353,7 +1396,7 @@ fn reserve_worker_poll(
                 && !current.invalid
                 && w.future
                     .facts
-                    .arm(&proof, *generation, revision, true, predecessor_safe)
+                    .arm(&proof, *generation, revision, predecessor_safe)
             {
                 armed = true;
             } else {
@@ -1493,13 +1536,7 @@ fn begin_worker_consumer(receiver: usize, caller: usize) -> bool {
         let current_matches = w.current.key == f.facts.predecessor && !w.current.invalid;
         let generation = POLL_GENERATION.load(SeqCst);
         let revision = RAW_REVISION.load(SeqCst);
-        if !valid
-            || !current_matches
-            || !w
-                .future
-                .facts
-                .begin(now, generation, revision, cursor, true)
-        {
+        if !valid || !current_matches || !w.future.facts.begin(now, generation, revision, cursor) {
             w.future.facts.refuse(RSF_GAME_CPU_ABORT_STATE_CHANGED);
         } else {
             begun = w.future;
@@ -1545,10 +1582,7 @@ fn begin_worker_consumer(receiver: usize, caller: usize) -> bool {
                 && {
                     trace.generation = POLL_GENERATION.load(SeqCst);
                     let revision = RAW_REVISION.load(SeqCst);
-                    let bound = w
-                        .future
-                        .facts
-                        .bind(trace.generation, revision, cursor, true);
+                    let bound = w.future.facts.bind(trace.generation, revision, cursor);
                     trace.test(14, bound)
                 };
             if !accepted {
@@ -1586,7 +1620,7 @@ fn end_worker_consumer() {
         if w.future.facts.cpu.source == worker_source {
             let accepted = valid && {
                 trace.generation = POLL_GENERATION.load(SeqCst);
-                let consumed = w.future.facts.consumed(trace.generation, cursor, true);
+                let consumed = w.future.facts.consumed(trace.generation, cursor);
                 trace.test(11, consumed)
             };
             if !accepted {
@@ -1607,8 +1641,8 @@ fn end_worker_consumer() {
 // last error, calls the entry decision here, restores that error, calls the original through its
 // typed trampoline on its own C++ frame, captures the native last error, calls the exit decision
 // here and restores the native error. No Rust frame is on the stack during an engine call, so a
-// native unwind passes only through the C++ shells, exactly as it did before the port; the Swap
-// shell keeps its scope destructor for that case.
+// native unwind passes only through the C++ shells. Their destructors retire the entry without
+// observing a successful native return.
 //
 // The scope is the shell's stack receipt for one call. The entry writes it with its hook tag;
 // the exit consumes it and refuses a receipt of another hook.
@@ -2053,6 +2087,7 @@ fn sampled_sequence(p: &Pending) -> bool {
 #[derive(Clone, Copy)]
 struct PlayerControlsScope {
     worker_consuming: bool,
+    main_source: u64,
 }
 
 /// # Safety
@@ -2130,6 +2165,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_player_controls_enter(
             }
         }
     }
+    let mut main_source = 0;
     // The verified native PlayerControls callback begins consumption-driven simulation. Report
     // this actual boundary, never the earlier BIND callback.
     if worker_consuming {
@@ -2148,6 +2184,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_player_controls_enter(
         let p = pending();
         let identity = IDENTITY.get();
         if CONSUMER_ADMITTED.get() && p.bound && p.source == identity.source && selected_caller {
+            main_source = p.source;
             let started = emit_identity(&identity, RSF_GAME_CPU_SIMULATION_BEGIN, 0);
             update_pending(|p| p.simulation_started = started);
         }
@@ -2155,7 +2192,10 @@ unsafe extern "C" fn rsf_fallout4_cpu_player_controls_enter(
     open_scope(
         scope,
         RSF_FALLOUT4_CPU_HOOK_PLAYER_CONTROLS,
-        PlayerControlsScope { worker_consuming },
+        PlayerControlsScope {
+            worker_consuming,
+            main_source,
+        },
     );
 }
 
@@ -2163,8 +2203,9 @@ unsafe extern "C" fn rsf_fallout4_cpu_player_controls_enter(
 /// `scope` is the receipt its entry wrote.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fallout4_cpu_player_controls_exit(scope: *mut rsf_fallout4_cpu_scope) {
-    let Some(PlayerControlsScope { worker_consuming }) =
-        scope_value(scope, RSF_FALLOUT4_CPU_HOOK_PLAYER_CONTROLS, true)
+    let Some(PlayerControlsScope {
+        worker_consuming, ..
+    }) = scope_value(scope, RSF_FALLOUT4_CPU_HOOK_PLAYER_CONTROLS, true)
     else {
         return;
     };
@@ -2526,7 +2567,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_job_end_exit(scope: *mut rsf_fallout4_cpu_
             let mut w = worker();
             if w.future.facts.cpu.source == worker_source {
                 let completed = valid && {
-                    let complete = w.future.facts.complete(true);
+                    let complete = w.future.facts.complete();
                     trace.test(7, complete)
                 };
                 if !completed {
@@ -2712,7 +2753,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_worker_join_exit(
         if selected && w.current.key == key {
             if w.future.facts.active() {
                 let joined = valid && trace.test(13, !w.future.busy) && {
-                    let join = w.future.facts.join(&proof, true);
+                    let join = w.future.facts.join(&proof);
                     trace.test(14, join)
                 };
                 if !joined {
@@ -2732,6 +2773,109 @@ unsafe extern "C" fn rsf_fallout4_cpu_worker_join_exit(
     leave();
 }
 
+/// The PeekMessage continuation unwound before it returned a message.
+#[unsafe(no_mangle)]
+extern "C" fn rsf_fallout4_cpu_peek_cancel() {
+    leave();
+}
+
+/// Retires an interrupted call without recording a normal return.
+///
+/// # Safety
+/// The matching detour entry wrote the receipt.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fallout4_cpu_cancel(hook: u32, scope: *mut rsf_fallout4_cpu_scope) {
+    const ABORT: u32 = RSF_GAME_CPU_ABORT_STATE_CHANGED;
+    match hook {
+        RSF_FALLOUT4_CPU_HOOK_IDLE => unsafe { rsf_fallout4_cpu_idle_exit(scope) },
+        RSF_FALLOUT4_CPU_HOOK_CONSUME => unsafe { rsf_fallout4_cpu_consume_exit(scope) },
+        RSF_FALLOUT4_CPU_HOOK_WRAPPER => unsafe { rsf_fallout4_cpu_wrapper_exit(scope) },
+        RSF_FALLOUT4_CPU_HOOK_POLL => {
+            let Some(PollScope { receipt, mapped }) = scope_value(scope, hook, true) else {
+                return;
+            };
+            let p = pending();
+            if receipt.candidate && p.source != 0 && p.generation == receipt.generation {
+                abort_pending(ABORT);
+            }
+            if mapped {
+                invalidate_worker(ABORT, false, None);
+            }
+            POLLS.fetch_sub(1, SeqCst);
+            leave();
+        }
+        RSF_FALLOUT4_CPU_HOOK_SWAP => {
+            if let Some(SwapScope { owns: true, .. }) = scope_value(scope, hook, false) {
+                abort_pending(ABORT);
+                invalidate_worker(ABORT, true, None);
+                if FUTURE_CLAIMED.get() {
+                    IDENTITY.set(CpuIdentity::ZERO);
+                    RENDERED.set(0);
+                    FUTURE_CLAIMED.set(false);
+                } else {
+                    close_frame();
+                }
+                PENDING.set(Pending::ZERO);
+            }
+            unsafe { rsf_fallout4_cpu_swap_leave(scope) };
+        }
+        RSF_FALLOUT4_CPU_HOOK_PLAYER_CONTROLS => {
+            let Some(PlayerControlsScope {
+                worker_consuming,
+                main_source,
+            }) = scope_value(scope, hook, true)
+            else {
+                return;
+            };
+            if worker_consuming {
+                invalidate_worker(ABORT, false, None);
+            } else if main_source != 0 && pending().source == main_source {
+                abort_pending(ABORT);
+            }
+            leave();
+        }
+        RSF_FALLOUT4_CPU_HOOK_JOB_END => {
+            let Some(JobScope {
+                parent,
+                parent_source,
+                ..
+            }) = scope_value(scope, hook, true)
+            else {
+                return;
+            };
+            {
+                let mut w = worker();
+                let source = WORKER_SOURCE.get();
+                if source != 0 && w.future.facts.cpu.source == source {
+                    w.future.facts.refuse(ABORT);
+                    w.future.busy = false;
+                }
+            }
+            let _ = drain_future();
+            WORKER_SOURCE.set(parent_source);
+            JOB_SELECTED.set(parent);
+            JOB_DEPTH.set(JOB_DEPTH.get() - 1);
+            JOBS.fetch_sub(1, SeqCst);
+            leave();
+        }
+        RSF_FALLOUT4_CPU_HOOK_WORKER_JOIN => {
+            let Some(JoinScope { key, selected, .. }) = scope_value(scope, hook, true) else {
+                return;
+            };
+            if selected {
+                let mut w = worker();
+                if w.current.key == key {
+                    w.future.facts.refuse(ABORT);
+                    w.current.joining = false;
+                }
+            }
+            let _ = drain_future();
+            leave();
+        }
+        _ => {}
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Render producer queries, on the Swap thread.
 
@@ -2746,14 +2890,7 @@ fn current_identity() -> CpuIdentity {
 /// The identity is this Swap's rendered source.
 fn same_rendered_identity(expected: &CpuIdentity) -> bool {
     let identity = IDENTITY.get();
-    RENDERED.get() == 1
-        && expected.source != 0
-        && expected.submission != 0
-        && expected.session == identity.session
-        && expected.source == identity.source
-        && expected.submission == identity.submission
-        && expected.began_qpc == identity.began_qpc
-        && expected.frequency == identity.frequency
+    RENDERED.get() == 1 && expected.source != 0 && expected.submission != 0 && *expected == identity
 }
 
 fn swap_scope() -> bool {
@@ -2944,13 +3081,7 @@ fn end_present_phase(source: &CpuIdentity) {
 }
 
 fn identity_from(value: *const rsf_fallout4_cpu_identity) -> Option<CpuIdentity> {
-    unsafe { value.as_ref() }.map(|value| CpuIdentity {
-        session: value.session,
-        source: value.source,
-        submission: value.submission,
-        began_qpc: value.began_qpc,
-        frequency: value.frequency,
-    })
+    unsafe { value.as_ref() }.copied()
 }
 
 /// # Safety
@@ -2959,15 +3090,8 @@ fn identity_from(value: *const rsf_fallout4_cpu_identity) -> Option<CpuIdentity>
 pub(crate) unsafe extern "C" fn rsf_fallout4_cpu_current_identity(
     out: *mut rsf_fallout4_cpu_identity,
 ) {
-    let identity = current_identity();
     if let Some(out) = unsafe { out.as_mut() } {
-        *out = rsf_fallout4_cpu_identity {
-            session: identity.session,
-            source: identity.source,
-            submission: identity.submission,
-            began_qpc: identity.began_qpc,
-            frequency: identity.frequency,
-        };
+        *out = current_identity();
     }
 }
 
@@ -3201,16 +3325,17 @@ pub(crate) fn busy() -> bool {
 }
 
 /// Checks the build, the guards and the services, then creates every detour disabled.
-pub(crate) fn prepare(ops: &Ops, services: &rsf_game_host_services) -> bool {
-    let Some(table) = platform() else {
-        return false;
-    };
-    if services.struct_size < size_of::<rsf_game_host_services>() as u32
+pub(crate) fn prepare(
+    ops: &Ops,
+    services: &rsf_game_host_services,
+    _build: &creation::ExactBuild,
+) -> bool {
+    if platform().is_none()
+        || services.struct_size < size_of::<rsf_game_host_services>() as u32
         || services.abi_version != RSF_GAME_ABI_VERSION
         || services.session_id == 0
         || services.cpu_event.is_none()
         || busy()
-        || !creation::verify_executable(ops).unwrap_or(false)
         || !native::guards()
     {
         return false;
@@ -3222,11 +3347,8 @@ pub(crate) fn prepare(ops: &Ops, services: &rsf_game_host_services) -> bool {
     if !prepare_peek(services) {
         return false;
     }
-    let Some(create) = table.create_hook else {
-        return false;
-    };
     for hook in HOOKS {
-        if unsafe { create(hook, hook_target(hook)) } {
+        if create_hook(hook, hook_target(hook)) {
             continue;
         }
         let _ = stop(ops);
@@ -3280,15 +3402,15 @@ pub(crate) fn stop(ops: &Ops) -> bool {
     if !drain_future() || !drain_current_abort() {
         return false;
     }
-    let Some(remove) = platform().and_then(|table| table.remove_hook) else {
+    if platform().is_none() {
         return false;
-    };
+    }
     for hook in HOOKS {
         if !hook_created(hook) {
             continue;
         }
         let target = hook_target(hook);
-        if !ops.disable_hook(target as usize) || busy() || !unsafe { remove(hook, target) } {
+        if !ops.disable_hook(target as usize) || busy() || !remove_hook(hook, target) {
             return false;
         }
     }
