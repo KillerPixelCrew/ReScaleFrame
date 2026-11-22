@@ -2,6 +2,8 @@
 use super::platform::LEAVES;
 use super::*;
 
+#[path = "../../../../tests/sr_backend_switch_device.rs"]
+mod backend_switch_fixture;
 mod fixture;
 
 #[unsafe(no_mangle)]

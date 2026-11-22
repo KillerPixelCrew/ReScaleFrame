@@ -378,8 +378,8 @@ target_link_libraries(rsf_depth_scale PRIVATE ReScaleFrame::Graphics rsf_build_o
 add_test(NAME depth_scale_device COMMAND rsf_depth_scale)
 set_tests_properties(depth_scale_device PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
-add_executable(rsf_auxiliary_sr auxiliary_sr.cpp)
-target_include_directories(rsf_auxiliary_sr PRIVATE ../runtime/orchestrator/include ../runtime/presentation/include)
+add_executable(rsf_auxiliary_sr graphics_fixture_main.c)
+target_compile_definitions(rsf_auxiliary_sr PRIVATE RSF_GRAPHICS_FIXTURE=rsf_auxiliary_sr_fixture)
 target_link_libraries(rsf_auxiliary_sr PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics ReScaleFrame::GameSDK rsf_build_options)
 add_test(NAME auxiliary_sr_device COMMAND rsf_auxiliary_sr)
 set_tests_properties(auxiliary_sr_device PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)

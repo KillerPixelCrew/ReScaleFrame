@@ -966,7 +966,7 @@ unsafe extern "C" fn rsf_native_regions_depth_valid(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_regions_prepare(
+pub(super) unsafe extern "C" fn rsf_native_regions_prepare(
     context: Object,
     color: Object,
     depth: Object,
@@ -1004,7 +1004,7 @@ unsafe extern "C" fn rsf_native_regions_prepare(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_regions_temporal_mask(
+pub(super) unsafe extern "C" fn rsf_native_regions_temporal_mask(
     context: Object,
     mask: Object,
     rect: *const [i32; 4],

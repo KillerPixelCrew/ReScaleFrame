@@ -89,3 +89,29 @@ to release non-null failed COM outputs. Both the bridge and FG reuse it.
 Source checked against the existing C headers and the pinned Windows bindings.
 Rust 1.94.1 formatting, targeted bindgen 0.72.1 regeneration and locked offline
 Cargo metadata passed. The four regenerated binding files were unchanged.
+
+## D03 device fixtures from `e5d73636`
+
+- `tests/auxiliary_sr.cpp` was replaced by `tests/auxiliary_sr.rs` and
+  `tests/auxiliary_sr/regions.rs`. The Rust body keeps the WARP device,
+  reserve/seal/commit/restore sequence, frames 7, 81 and 82, packed-HDR
+  capability and fallback, second-device refusals with unchanged bindings
+  and output pointers, and the UNORM and D24 normalization and admission
+  checks. The ordinary and packed auxiliary cases reuse the same transaction.
+  The fixture now calls the Rust cancel operation directly, restoring the
+  seam used by the original recovery assertions after the C++ wrapper lost it.
+- `tests/sr_backend_switch_device.cpp` was replaced by
+  `tests/sr_backend_switch_device.rs` and a C argument forwarder. The Rust
+  body opens the Runtime DLL beside the fixture and calls its published
+  pipeline exports. NVIDIA selection, FSR3 startup on any enumerated adapter
+  with a null Streamline directory, optional manual exposure, 12 warm-up
+  frames, and the FSR4/XeSS/FSR3/DLSS/FSR4 sequence are preserved. Baseline
+  measures eight frames per successful switch. Select measures 12 and
+  checks both frame timing bounds at 250 ms. The original CTest entries
+  keep their vendor gates, timeouts and skip handling.
+
+All 111 extracted auxiliary assertion and readback label occurrences match
+the original source. Rust 1.94.1 formatting, targeted bindgen 0.72.1 with
+unchanged generated bindings, locked offline Cargo metadata, and MSVC C11
+syntax-only checks for both launchers passed. The fixtures remain unverified
+by compilation or execution.

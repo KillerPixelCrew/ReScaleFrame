@@ -224,8 +224,8 @@ if(RSF_ANOMALY_SR_VENDOR_ROOT AND EXISTS "${RSF_ANOMALY_SR_VENDOR_ROOT}/streamli
     set_tests_properties(anomaly_sr_provider_device PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
 endif()
 # Backend switching through the shared pipeline on hardware (generic runtime behaviour, driven by the same vendor root).
-add_executable(rsf_sr_backend_switch_device_test "${CMAKE_CURRENT_LIST_DIR}/sr_backend_switch_device.cpp")
-target_link_libraries(rsf_sr_backend_switch_device_test PRIVATE rsf_orchestrator ReScaleFrame::Graphics rsf_build_options)
+add_executable(rsf_sr_backend_switch_device_test "${CMAKE_CURRENT_LIST_DIR}/sr_backend_switch_device_main.c")
+target_link_libraries(rsf_sr_backend_switch_device_test PRIVATE rsf_orchestrator rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options)
 if(RSF_ANOMALY_SR_VENDOR_ROOT AND EXISTS "${RSF_ANOMALY_SR_VENDOR_ROOT}/streamline/sl.interposer.dll")
     foreach(rsf_switch_mode baseline select select+exposure)
         add_test(NAME sr_backend_switch_${rsf_switch_mode}

@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: MIT
+#[cfg(not(test))]
+#[path = "../../../tests/auxiliary_sr.rs"]
+mod fixture;
 mod platform;
 
 use crate::auxiliary_sr_abi::*;
