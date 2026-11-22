@@ -313,6 +313,430 @@ impl SplitLease {
 mod tests {
     use super::*;
 
+    use rsf_game_sys::rsf_frame_record;
+
+    unsafe extern "C" fn no_proc(_: Handle, _: *const std::ffi::c_char) -> rsf_vk_function {
+        None
+    }
+
+    unsafe extern "C" fn split(
+        _: Handle,
+        _: Handle,
+        _: u64,
+        _: u64,
+        _: u64,
+        _: u64,
+        _: *mut Handle,
+    ) -> i32 {
+        0
+    }
+
+    fn records() -> (Setup, Handoff, rsf_frame_record) {
+        let device = ptr::dangling_mut::<u8>().cast();
+        let setup = Setup {
+            struct_size: size_of::<Setup>() as u32,
+            abi_version: RSF_SRVK_ABI_VERSION,
+            instance: device,
+            physical_device: device,
+            device,
+            instance_proc: Some(no_proc),
+            device_proc: Some(no_proc),
+            backend: RSF_SR_FSR4,
+            quality: 1,
+            output_width: 640,
+            output_height: 360,
+            depth_inverted: 0,
+            depth_infinite: 0,
+            motion_jittered: 0,
+            runtime_directory_utf8: c"C:/unused".as_ptr(),
+        };
+        let handoff = Handoff {
+            struct_size: size_of::<Handoff>() as u32,
+            abi_version: RSF_SRVK_SPLIT_ABI_VERSION,
+            timeline_enabled: 1,
+            queue_family: 0,
+            user: ptr::null_mut(),
+            split_record: Some(split),
+        };
+        let mut record: rsf_frame_record = unsafe { std::mem::zeroed() };
+        record.struct_size = size_of::<rsf_frame_record>() as u32;
+        record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+        record.camera.struct_size = size_of_val(&record.camera) as u32;
+        record.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
+        (setup, handoff, record)
+    }
+
+    fn frame(record: &rsf_frame_record) -> Frame {
+        Frame {
+            struct_size: size_of::<Frame>() as u32,
+            abi_version: RSF_SRVK_ABI_VERSION,
+            record,
+            ..unsafe { std::mem::zeroed() }
+        }
+    }
+
+    #[test]
+    fn split_admission_and_disabled_outputs() {
+        let disabled = ptr::null();
+        let (setup, handoff, mut record) = records();
+        let commands = ptr::dangling_mut::<u8>().cast();
+        let mut owner = commands;
+        let invalid_setups: [(Setup, i32); 4] = [
+            (
+                Setup {
+                    struct_size: setup.struct_size - 1,
+                    abi_version: 99,
+                    ..setup
+                },
+                INVALID,
+            ),
+            (
+                Setup {
+                    abi_version: 99,
+                    ..setup
+                },
+                ABI_MISMATCH,
+            ),
+            (
+                Setup {
+                    backend: RSF_SR_FSR3,
+                    ..setup
+                },
+                NOT_SUPPORTED,
+            ),
+            (
+                Setup {
+                    depth_inverted: 2,
+                    ..setup
+                },
+                INVALID,
+            ),
+        ];
+        for (setup, expected) in invalid_setups {
+            assert_eq!(
+                unsafe { rsf_core_srvk_fsr4_create(disabled, &setup, &handoff, &mut owner) },
+                expected
+            );
+            assert!(owner.is_null());
+        }
+        for (handoff, expected) in [
+            (
+                Handoff {
+                    struct_size: handoff.struct_size - 1,
+                    abi_version: 99,
+                    ..handoff
+                },
+                INVALID,
+            ),
+            (
+                Handoff {
+                    abi_version: 99,
+                    ..handoff
+                },
+                ABI_MISMATCH,
+            ),
+            (
+                Handoff {
+                    timeline_enabled: 0,
+                    ..handoff
+                },
+                INVALID,
+            ),
+            (
+                Handoff {
+                    queue_family: 0xffff_fffe,
+                    ..handoff
+                },
+                INVALID,
+            ),
+            (
+                Handoff {
+                    split_record: None,
+                    ..handoff
+                },
+                INVALID,
+            ),
+        ] {
+            assert_eq!(
+                unsafe { rsf_core_srvk_fsr4_create(disabled, &setup, &handoff, &mut owner) },
+                expected
+            );
+        }
+        unsafe {
+            assert_eq!(
+                rsf_core_srvk_fsr4_create(disabled, &setup, &handoff, ptr::null_mut()),
+                INVALID
+            );
+            assert_eq!(
+                rsf_core_srvk_fsr4_create(disabled, &setup, &handoff, &mut owner),
+                NOT_COMPILED
+            );
+            assert!(owner.is_null());
+
+            let (mut width, mut height) = (9, 9);
+            assert_eq!(
+                rsf_core_srvk_fsr4_plan(disabled, ptr::null(), &mut width, &mut height),
+                INVALID
+            );
+            assert_eq!((width, height), (0, 0));
+            assert_eq!(
+                rsf_core_srvk_fsr4_plan(disabled, commands, &mut width, &mut height),
+                NOT_COMPILED
+            );
+            assert_eq!((width, height), (0, 0));
+            assert_eq!(rsf_core_srvk_fsr4_destroy(disabled, ptr::null_mut()), 0);
+            assert_eq!(rsf_core_srvk_fsr4_destroy(disabled, commands), NOT_COMPILED);
+            assert_eq!(
+                rsf_core_srvk_fsr4_submitted(disabled, commands, ptr::null_mut()),
+                INVALID
+            );
+            assert_eq!(
+                rsf_core_srvk_fsr4_submitted(disabled, ptr::null_mut(), commands),
+                INVALID
+            );
+            assert_eq!(
+                rsf_core_srvk_fsr4_submitted(disabled, commands, commands),
+                NOT_COMPILED
+            );
+
+            let mut info = Info {
+                struct_size: size_of::<Info>() as u32 - 1,
+                abi_version: 99,
+                adapter_luid: 7,
+                provider_version: 2,
+                vendor_id: 3,
+                int8_compatibility: 4,
+            };
+            assert_eq!(
+                rsf_core_srvk_fsr4_info(disabled, commands, &mut info),
+                INVALID
+            );
+            assert_eq!(info.adapter_luid, 7);
+            info.struct_size += 1;
+            assert_eq!(
+                rsf_core_srvk_fsr4_info(disabled, commands, &mut info),
+                ABI_MISMATCH
+            );
+            assert_eq!(
+                (
+                    info.adapter_luid,
+                    info.provider_version,
+                    info.vendor_id,
+                    info.int8_compatibility
+                ),
+                (0, 0, 0, 0)
+            );
+            info.abi_version = RSF_SRVK_FSR4_INFO_ABI_VERSION;
+            assert_eq!(
+                rsf_core_srvk_fsr4_info(disabled, commands, &mut info),
+                NOT_COMPILED
+            );
+
+            let mut next = ptr::null_mut();
+            let mut input = frame(&record);
+            input.struct_size -= 1;
+            input.abi_version = 99;
+            assert_eq!(
+                rsf_core_srvk_fsr4_evaluate(disabled, commands, commands, &input, &mut next),
+                INVALID
+            );
+            assert_eq!(next, commands);
+            input.struct_size += 1;
+            assert_eq!(
+                rsf_core_srvk_fsr4_evaluate(disabled, commands, commands, &input, &mut next),
+                ABI_MISMATCH
+            );
+            input.abi_version = RSF_SRVK_ABI_VERSION;
+            let probe = |record: &rsf_frame_record| {
+                let mut next = ptr::null_mut();
+                let result = rsf_core_srvk_fsr4_evaluate(
+                    disabled,
+                    commands,
+                    commands,
+                    &frame(record),
+                    &mut next,
+                );
+                assert_eq!(next, commands);
+                result
+            };
+            record.struct_size -= 1;
+            assert_eq!(probe(&record), INVALID);
+            record.struct_size += 1;
+            record.abi_version = 99;
+            assert_eq!(probe(&record), ABI_MISMATCH);
+            record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+            record.camera.struct_size -= 1;
+            assert_eq!(probe(&record), INVALID);
+            record.camera.struct_size += 1;
+            record.camera.abi_version = 99;
+            assert_eq!(probe(&record), ABI_MISMATCH);
+            record.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
+            assert_eq!(probe(&record), NOT_COMPILED);
+            input.record = &record;
+            input.reactive.image = 1;
+            assert_eq!(
+                rsf_core_srvk_fsr4_evaluate(disabled, commands, commands, &input, &mut next),
+                NOT_SUPPORTED
+            );
+            assert_eq!(
+                rsf_core_srvk_fsr4_evaluate(disabled, commands, commands, &input, ptr::null_mut()),
+                INVALID
+            );
+        }
+    }
+
+    unsafe extern "C" fn allocate(
+        setup: *const Setup,
+        handoff: *const Handoff,
+        out: *mut Handle,
+    ) -> i32 {
+        let (setup, handoff) = unsafe { (&*setup, &*handoff) };
+        assert_eq!((setup.output_width, handoff.timeline_enabled), (640, 1));
+        let result = if handoff.abi_version == RSF_SRVK_SPLIT_TRACKED_ABI_VERSION {
+            -71
+        } else {
+            0
+        };
+        unsafe { out.write(Box::into_raw(Box::new(result)).cast()) };
+        result
+    }
+
+    static STUB: Provider = Provider {
+        create: allocate,
+        plan: plan,
+        evaluate: evaluate,
+        destroy: destroy,
+        retire: retire,
+        submitted: submitted,
+        info: info,
+    };
+
+    unsafe extern "C" fn plan(_: *const c_void, w: *mut u32, h: *mut u32) -> i32 {
+        unsafe {
+            w.write(320);
+            h.write(180);
+        }
+        0
+    }
+
+    unsafe extern "C" fn evaluate(
+        owner: Handle,
+        _: Handle,
+        frame: *const Frame,
+        next: *mut Handle,
+    ) -> i32 {
+        assert_eq!(unsafe { (*frame).struct_size } as usize, size_of::<Frame>());
+        unsafe { next.write(ptr::dangling_mut::<u16>().cast()) };
+        unsafe { *owner.cast::<i32>() }
+    }
+
+    unsafe extern "C" fn destroy(owner: Handle) -> i32 {
+        let result = unsafe { *owner.cast::<i32>() };
+        if result == 0 {
+            unsafe { drop(Box::from_raw(owner.cast::<i32>())) };
+        }
+        result
+    }
+
+    unsafe extern "C" fn retire(_: Handle, _: Handle) {}
+
+    unsafe extern "C" fn submitted(owner: Handle, _: Handle) -> i32 {
+        unsafe { *owner.cast::<i32>() }
+    }
+
+    unsafe extern "C" fn info(owner: *const c_void, out: *mut Info) -> i32 {
+        let result = unsafe { *owner.cast::<i32>() };
+        if result == 0 {
+            let out = unsafe { &mut *out };
+            out.adapter_luid = 0x123456789abcdef0;
+            out.provider_version = 0x456789abcdef0123;
+            out.vendor_id = 0x10de;
+            out.int8_compatibility = 1;
+        }
+        result
+    }
+
+    #[test]
+    fn split_routes_prefix_and_continuation_to_the_provider() {
+        let (mut setup, mut handoff, record) = records();
+        setup.struct_size += 8;
+        handoff.struct_size += 8;
+        let mut owner = ptr::null_mut();
+        let commands = ptr::dangling_mut::<u8>().cast();
+        let mut next = ptr::null_mut();
+        let mut input = frame(&record);
+        input.struct_size = FRAME_PREFIX as u32;
+        #[repr(C)]
+        struct Extended {
+            info: Info,
+            tail: u64,
+        }
+        let mut extended = Extended {
+            info: Info {
+                struct_size: size_of::<Extended>() as u32,
+                abi_version: RSF_SRVK_FSR4_INFO_ABI_VERSION,
+                ..unsafe { std::mem::zeroed() }
+            },
+            tail: 0xcafe,
+        };
+        unsafe {
+            assert_eq!(
+                rsf_core_srvk_fsr4_create(&STUB, &setup, &handoff, &mut owner),
+                0
+            );
+            let (mut w, mut h) = (0, 0);
+            assert_eq!(rsf_core_srvk_fsr4_plan(&STUB, owner, &mut w, &mut h), 0);
+            assert_eq!((w, h), (320, 180));
+            assert_eq!(rsf_core_srvk_fsr4_submitted(&STUB, owner, commands), 0);
+            assert_eq!(rsf_core_srvk_fsr4_info(&STUB, owner, &mut extended.info), 0);
+            assert_eq!(
+                (
+                    extended.info.adapter_luid,
+                    extended.info.provider_version,
+                    extended.info.vendor_id,
+                    extended.info.int8_compatibility,
+                    extended.tail
+                ),
+                (0x123456789abcdef0, 0x456789abcdef0123, 0x10de, 1, 0xcafe)
+            );
+            assert_eq!(
+                rsf_core_srvk_fsr4_evaluate(&STUB, owner, commands, &input, &mut next),
+                0
+            );
+            assert_eq!(rsf_core_srvk_fsr4_destroy(&STUB, owner), 0);
+
+            handoff.abi_version = RSF_SRVK_SPLIT_TRACKED_ABI_VERSION;
+            assert_eq!(
+                rsf_core_srvk_fsr4_create(&STUB, &setup, &handoff, &mut owner),
+                -71
+            );
+            assert!(!owner.is_null());
+            assert_eq!(
+                rsf_core_srvk_fsr4_info(&STUB, owner, &mut extended.info),
+                -71
+            );
+            assert_eq!(
+                (
+                    extended.info.adapter_luid,
+                    extended.info.provider_version,
+                    extended.info.vendor_id,
+                    extended.info.int8_compatibility,
+                    extended.tail
+                ),
+                (0, 0, 0, 0, 0xcafe)
+            );
+            assert_eq!(rsf_core_srvk_fsr4_submitted(&STUB, owner, commands), -71);
+            assert_eq!(
+                rsf_core_srvk_fsr4_evaluate(&STUB, owner, commands, &input, &mut next),
+                -71
+            );
+            assert_eq!(next, ptr::dangling_mut::<u16>().cast());
+            assert_eq!(rsf_core_srvk_fsr4_destroy(&STUB, owner), -71);
+            owner.cast::<i32>().write(0);
+            assert_eq!(rsf_core_srvk_fsr4_destroy(&STUB, owner), 0);
+        }
+    }
+
     #[test]
     fn tracked_split_requires_ordered_submission_of_both_sections() {
         let mut lease = SplitLease::default();

@@ -48,6 +48,26 @@ const EXPORTS: &[&CStr] = &[
     c"rsf_fgvk_present_source",
 ];
 
+// No Vulkan handles are needed to check the production DLL's output-clearing rules.
+fn split_refuses_null_calls(runtime: *mut c_void) -> bool {
+    type Plan = unsafe extern "C" fn(*const c_void, *mut u32, *mut u32) -> i32;
+    type Destroy = unsafe extern "C" fn(*mut c_void) -> i32;
+    let (Some(plan), Some(destroy)) = (unsafe {
+        (
+            GetProcAddress(runtime, c"rsf_srvk_fsr4_plan".as_ptr()),
+            GetProcAddress(runtime, c"rsf_srvk_fsr4_destroy".as_ptr()),
+        )
+    }) else {
+        return false;
+    };
+    let plan: Plan = unsafe { std::mem::transmute(plan) };
+    let destroy: Destroy = unsafe { std::mem::transmute(destroy) };
+    let (mut width, mut height) = (9, 9);
+    let result = unsafe { plan(std::ptr::null(), &mut width, &mut height) };
+    let destroyed = unsafe { destroy(std::ptr::null_mut()) };
+    (result, width, height, destroyed) == (-1, 0, 0, 0)
+}
+
 fn main() -> ExitCode {
     let mut args = std::env::args_os().skip(1);
     let Some(path) = args.next().filter(|_| args.next().is_none()) else {
@@ -66,6 +86,10 @@ fn main() -> ExitCode {
             eprintln!("Missing native Vulkan export: {}", name.to_string_lossy());
             result = ExitCode::FAILURE;
         }
+    }
+    if !split_refuses_null_calls(runtime) {
+        eprintln!("Vulkan split SR DLL admission check failed");
+        result = ExitCode::FAILURE;
     }
     unsafe { FreeLibrary(runtime) };
     result

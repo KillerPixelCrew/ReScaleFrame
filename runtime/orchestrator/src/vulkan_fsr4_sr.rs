@@ -602,6 +602,29 @@ unsafe extern "C" fn rsf_fsr4vk_info(owner: *const Owner, info: *mut Info) -> i3
 }
 
 #[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4vk_public_info(
+    owner: *const Owner,
+    public: &mut rsf_srvk_fsr4_provider_info,
+) -> i32 {
+    let mut native = Info {
+        struct_size: size_of::<Info>() as u32,
+        abi_version: RSF_FSR4_BRIDGE_ABI_VERSION,
+        adapter_luid: 0,
+        provider_version: 0,
+        vendor_id: 0,
+        int8_compatibility: 0,
+    };
+    let result = unsafe { rsf_fsr4vk_info(owner, &mut native) };
+    if result == 0 {
+        public.adapter_luid = native.adapter_luid;
+        public.provider_version = native.provider_version;
+        public.vendor_id = native.vendor_id;
+        public.int8_compatibility = native.int8_compatibility;
+    }
+    result
+}
+
+#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fsr4vk_evaluate(
     owner: *mut Owner,
     commands: Handle,
