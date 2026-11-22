@@ -2,11 +2,11 @@
 //! Skyrim's native PS sampler selection and restoration around the cached-state flush.
 
 use crate::platform::{self, Platform};
+use crate::render_hook::RenderHook;
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 const FLUSH: usize = 0x101_0de0;
 const FLUSH_BYTES: [u8; 18] = [
@@ -65,9 +65,7 @@ struct Binding {
 // Every engine read and graphics call uses the renderer thread.
 unsafe impl Send for Binding {}
 
-static BINDING: Mutex<Option<Binding>> = Mutex::new(None);
-static ORIGINAL: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
-static LIVE: AtomicBool = AtomicBool::new(false);
+static HOOK: RenderHook<Binding> = RenderHook::new();
 static PENDING: AtomicBool = AtomicBool::new(false);
 static CALLS: AtomicU32 = AtomicU32::new(0);
 static REPORTS: AtomicU32 = AtomicU32::new(0);
@@ -147,7 +145,7 @@ impl Binding {
         }
         let width = u32::from_le_bytes(dimensions[..4].try_into().ok()?);
         let height = u32::from_le_bytes(dimensions[4..].try_into().ok()?);
-        let scene = if !restore && LIVE.load(Ordering::Acquire) {
+        let scene = if !restore && HOOK.live.load(Ordering::Acquire) {
             self.scene_extent(width, height)
         } else {
             None
@@ -203,7 +201,7 @@ impl Binding {
 }
 
 fn apply(restore: bool) {
-    let binding = *BINDING.lock().unwrap_or_else(PoisonError::into_inner);
+    let binding = HOOK.binding();
     if let Some(binding) = binding {
         let _ = binding.apply(restore);
     }
@@ -234,19 +232,13 @@ unsafe extern "C" fn rsf_skyrim_sampling_start(
         return false;
     }
     let target = base + FLUSH;
-    if !LIVE.load(Ordering::Acquire) && !platform.matches(target, &FLUSH_BYTES) {
+    if !HOOK.live.load(Ordering::Acquire) && !platform.matches(target, &FLUSH_BYTES) {
         return false;
     }
     let runtime = platform.module_handle("ReScaleFrame.Runtime.dll");
     let service = platform.export_address(runtime, c"rsf_d3d11_host_bind_sampler_bias");
     if service == 0 {
         return false;
-    }
-    if ORIGINAL.load(Ordering::Acquire).is_null() {
-        let Some(original) = platform.hook_create(target, detour) else {
-            return false;
-        };
-        ORIGINAL.store(original, Ordering::Release);
     }
     let binding = Binding {
         platform,
@@ -255,21 +247,16 @@ unsafe extern "C" fn rsf_skyrim_sampling_start(
         host: *host,
         leaves: *leaves,
     };
-    let previous = BINDING
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .replace(binding);
-    if !platform.hook_enable(target) {
-        *BINDING.lock().unwrap_or_else(PoisonError::into_inner) = previous;
-        return false;
-    }
-    LIVE.store(true, Ordering::Release);
-    true
+    HOOK.enable(
+        binding,
+        || platform.hook_create(target, detour),
+        || platform.hook_enable(target),
+    )
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_skyrim_sampling_quiesce() {
-    LIVE.store(false, Ordering::Release);
+    HOOK.live.store(false, Ordering::Release);
 }
 
 #[unsafe(no_mangle)]
@@ -283,7 +270,7 @@ unsafe extern "C" fn rsf_skyrim_sampling_stop(platform: *const Platform) -> bool
     if rsf_skyrim_sampling_busy() {
         return false;
     }
-    if ORIGINAL.load(Ordering::Acquire).is_null() {
+    if HOOK.original.load(Ordering::Acquire).is_null() {
         return true;
     }
     let Some(platform) = (unsafe { platform::inspect(platform) }) else {
@@ -296,7 +283,7 @@ unsafe extern "C" fn rsf_skyrim_sampling_stop(platform: *const Platform) -> bool
 #[unsafe(no_mangle)]
 extern "C" fn rsf_skyrim_sampling_enter() -> *mut c_void {
     CALLS.fetch_add(1, Ordering::AcqRel);
-    ORIGINAL.load(Ordering::Acquire)
+    HOOK.original.load(Ordering::Acquire)
 }
 
 #[unsafe(no_mangle)]

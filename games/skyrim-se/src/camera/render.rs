@@ -3,6 +3,7 @@
 
 use super::{Matrix, NativeCamera, decode};
 use crate::platform::Platform;
+use crate::taa;
 use rsf_game_sys::{RSF_GAME_RENDER_RESET, rsf_game_render_pass};
 use std::sync::{Mutex, PoisonError};
 
@@ -30,6 +31,7 @@ pub(crate) struct Leaves {
 const _: () = assert!(size_of::<Leaves>() == 16);
 
 struct History {
+    session: u64,
     camera: usize,
     frame: u32,
     render: [u32; 2],
@@ -41,15 +43,17 @@ struct History {
 
 // SR and FG observe the same native frame at their own call sites. Each needs its own
 // previous callback time and camera receipt. No native pointer is dereferenced from history.
+static ACCEPTED_SR: Mutex<Option<(u64, u32)>> = Mutex::new(None);
+
+pub(crate) fn accept_sr(session: u64, frame: u32) {
+    *ACCEPTED_SR.lock().unwrap_or_else(PoisonError::into_inner) = Some((session, frame));
+}
+
 static HISTORY: Mutex<[Option<History>; 2]> = Mutex::new([None, None]);
 
 fn read<const N: usize>(platform: &Platform, address: usize) -> Option<[u8; N]> {
     let mut bytes = [0; N];
     platform.read(address, &mut bytes).then_some(bytes)
-}
-
-fn read_u32(platform: &Platform, address: usize) -> Option<u32> {
-    read(platform, address).map(u32::from_le_bytes)
 }
 
 fn read_floats<const N: usize>(platform: &Platform, address: usize) -> Option<[f32; N]> {
@@ -78,15 +82,15 @@ fn read_cache(
     manager: usize,
 ) -> Option<(RenderCamera, NativeCamera)> {
     let state = base + RENDER_STATE;
-    let taa = platform.read_usize(manager.checked_add(0x1f0)?)?;
-    if taa == 0 || read::<1>(platform, taa.checked_add(0x18)?)? == [0] {
+    let taa = taa::owner(platform, manager)?;
+    if taa == 0 || read::<1>(platform, taa.checked_add(taa::ENABLED)?)? == [0] {
         return None;
     }
     let camera = platform.read_usize(base + ACTIVE_CAMERA)?;
     let cache = platform.read_usize(state + 0xb8)?;
-    let count = read_u32(platform, state + 0xc8)?;
-    let width = read_u32(platform, state + 0x24)?;
-    let height = read_u32(platform, state + 0x28)?;
+    let count = platform.read_u32(state + 0xc8)?;
+    let width = platform.read_u32(state + 0x24)?;
+    let height = platform.read_u32(state + 0x28)?;
     if camera == 0
         || cache == 0
         || !(1..=256).contains(&count)
@@ -96,7 +100,7 @@ fn read_cache(
         return None;
     }
     let ratios = read_floats(platform, state + 0x114)?;
-    let frame = read_u32(platform, base + NATIVE_FRAME)?;
+    let frame = platform.read_u32(base + NATIVE_FRAME)?;
     let window = platform.read_usize(base + ACTIVE_WINDOW)?;
     if window == 0 {
         return None;
@@ -110,8 +114,8 @@ fn read_cache(
         origin: read_floats(platform, entry.checked_add(0x26c)?)?,
         previous_origin: read_floats(platform, entry.checked_add(0x278)?)?,
         jitter_ndc: read_floats(platform, state + 0x44)?,
-        near_plane: f32::from_bits(read_u32(platform, camera.checked_add(0x160)?)?),
-        far_plane: f32::from_bits(read_u32(platform, camera.checked_add(0x164)?)?),
+        near_plane: f32::from_bits(platform.read_u32(camera.checked_add(0x160)?)?),
+        far_plane: f32::from_bits(platform.read_u32(camera.checked_add(0x164)?)?),
     };
     Some((
         RenderCamera {
@@ -137,6 +141,7 @@ pub(crate) fn read_frame(
     leaves: &Leaves,
     manager: usize,
     fg: bool,
+    session: u64,
     pass: &mut rsf_game_render_pass,
 ) -> Option<RenderCamera> {
     let base = platform.main_module();
@@ -166,6 +171,7 @@ pub(crate) fn read_frame(
         return None;
     }
     let receipt = History {
+        session,
         camera: facts.camera,
         frame: facts.frame,
         render: facts.render,
@@ -176,12 +182,19 @@ pub(crate) fn read_frame(
     };
     let previous =
         HISTORY.lock().unwrap_or_else(PoisonError::into_inner)[usize::from(fg)].replace(receipt)?;
+    if previous.session != session {
+        return None;
+    }
     let elapsed = now.checked_sub(previous.time)? as f64 / frequency as f64;
     if previous.time == 0 || elapsed <= 0.0 || elapsed > 1.0 {
         return None;
     }
     camera.frame_time_seconds = elapsed as f32;
-    if history.is_some()
+    let consumed = fg
+        || *ACCEPTED_SR.lock().unwrap_or_else(PoisonError::into_inner)
+            == Some((session, previous.frame));
+    if consumed
+        && history.is_some()
         && previous.camera == facts.camera
         && facts.frame == previous.frame.wrapping_add(1)
         && previous.render == facts.render

@@ -341,14 +341,14 @@ unsafe extern "C" fn rsf_skyrim_auxiliaries_apply(
     };
     {
         let mut state = state();
-        if !matches!(*state, State::Applying { finish: true, .. }) {
+        if receipt.entered && !matches!(*state, State::Applying { finish: true, .. }) {
             *state = State::Pending(receipt);
             return true;
         }
         *state = State::Retiring;
     }
     retire(leaves, host, receipt);
-    true
+    false
 }
 
 #[unsafe(no_mangle)]

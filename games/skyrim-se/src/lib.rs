@@ -21,11 +21,13 @@ mod platform;
 mod plugin;
 mod postprocess;
 mod presentation;
+mod render_hook;
 mod render_inputs;
 mod render_observer;
 mod resolution;
 mod sampling;
 mod session;
+mod taa;
 
 use platform::CreationCall;
 use std::ffi::c_void;

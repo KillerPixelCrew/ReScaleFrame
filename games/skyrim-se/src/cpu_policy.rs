@@ -185,13 +185,6 @@ struct NativeScreen {
     running: u32,
 }
 
-fn read_u32(platform: &Platform, address: usize) -> Option<u32> {
-    let mut bytes = [0; 4];
-    platform
-        .read(address, &mut bytes)
-        .then(|| u32::from_le_bytes(bytes))
-}
-
 impl NativeScreen {
     fn read(platform: &Platform, base: usize) -> Option<Self> {
         let nonzero = |address| platform.read_usize(address).filter(|value| *value != 0);
@@ -203,7 +196,7 @@ impl NativeScreen {
         let player = nonzero(base + PLAYER)?;
         let manager = nonzero(base + MANAGER)?;
         let cell = platform.read_usize(player.checked_add(0x60)?)?;
-        let pause = read_u32(platform, ui.checked_add(0x160)?)?;
+        let pause = platform.read_u32(ui.checked_add(0x160)?)?;
         let mut freeze = [0];
         if !platform.read(main.checked_add(0x16)?, &mut freeze) {
             return None;
@@ -219,8 +212,8 @@ impl NativeScreen {
             cell,
             pause,
             freeze: freeze[0],
-            requested: read_u32(platform, manager.checked_add(0x68)?)?,
-            running: read_u32(platform, manager.checked_add(0x6c)?)?,
+            requested: platform.read_u32(manager.checked_add(0x68)?)?,
+            running: platform.read_u32(manager.checked_add(0x6c)?)?,
         })
     }
 }
@@ -361,7 +354,7 @@ extern "C" fn rsf_skyrim_cpu_render_fact(pass: &mut rsf_game_render_pass, sessio
     let base = platform.main_module();
     pass.session_id = session;
     pass.flags |= RSF_GAME_RENDER_PRIMARY;
-    pass.native_frame = u64::from(read_u32(platform, base + NATIVE_FRAME).unwrap_or(0));
+    pass.native_frame = u64::from(platform.read_u32(base + NATIVE_FRAME).unwrap_or(0));
     let camera = platform
         .read_usize(base + CAMERA_ROOT)
         .filter(|root| *root != 0)

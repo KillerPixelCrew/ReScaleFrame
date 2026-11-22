@@ -190,13 +190,6 @@ constexpr rsf_skyrim_postprocess_leaves postprocess_leaves{
         try { return rsf::skyrim::reconstruct(manager, *host); } catch (...) { return false; }
     },
     report_postprocess,
-    [](uintptr_t address, const void* data, size_t bytes) noexcept {
-        const auto error = GetLastError();
-        SIZE_T copied{};
-        const bool written = WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(address), data, bytes, &copied) && copied == bytes;
-        SetLastError(error);
-        return written;
-    },
 };
 
 uintptr_t observe_process(void* manager, uint32_t input, uint32_t output, uintptr_t argument4, uint8_t argument5) noexcept
@@ -212,7 +205,7 @@ uintptr_t observe_process(void* manager, uint32_t input, uint32_t output, uintpt
     } activity;
     struct Restore {
         rsf_skyrim_taa_receipt receipt{};
-        ~Restore() { rsf_skyrim_postprocess_restore(rsf::skyrim::creation_platform(), &postprocess_leaves, &receipt); }
+        ~Restore() { rsf_skyrim_postprocess_restore(rsf::skyrim::creation_platform(), &receipt); }
     } restore;
     const rsf_skyrim_cs_hdr_call call{caller, uintptr_t(manager), argument4, input, output, argument5};
     rsf_skyrim_postprocess_prepare(rsf::skyrim::creation_platform(), &postprocess_leaves, &call, &restore.receipt);
@@ -247,9 +240,10 @@ uintptr_t observe_end() noexcept
 void observe_upload(void* renderer, uint8_t flags) noexcept
 {
     calls.fetch_add(1, std::memory_order_acq_rel);
-    const bool uploading = rsf_skyrim_render_upload_enter(rsf::skyrim::creation_platform(), uintptr_t(renderer));
+    rsf_skyrim_upload_observation observation{};
+    const bool uploading = rsf_skyrim_render_upload_enter(rsf::skyrim::creation_platform(), uintptr_t(renderer), &observation);
     original_upload(renderer, flags);
-    rsf_skyrim_render_upload_leave(uploading, flags);
+    if (uploading) rsf_skyrim_render_upload_leave(&observation, flags);
     calls.fetch_sub(1, std::memory_order_acq_rel);
 }
 
@@ -354,7 +348,7 @@ bool subsystem(uint32_t operation, const rsf_game_host_services* services, int32
     case RSF_SKYRIM_PRESENTATION_STOP: flag(presentation_inputs_stop()); break;
     case RSF_SKYRIM_PRESENTATION_BUSY: flag(presentation_inputs_busy()); break;
     case RSF_SKYRIM_RESOLUTION_OWNED: flag(resolution_owned()); break;
-    case RSF_SKYRIM_AUXILIARIES_PENDING: flag(auxiliaries_pending()); break;
+    case RSF_SKYRIM_AUXILIARIES_PENDING: flag(auxiliaries_pending() || rsf_skyrim_postprocess_busy(creation_platform())); break;
     default: flag(false); break;
     }
     return true;

@@ -27,8 +27,13 @@ extern "C" void rsf_skyrim_render_end_enter(const rsf_skyrim_creation_platform*,
     const rsf_skyrim_render_observer_leaves*, rsf_game_host_services*) noexcept;
 extern "C" void rsf_skyrim_render_end_leave(const rsf_skyrim_render_observer_leaves*,
     const rsf_game_host_services*) noexcept;
-extern "C" bool rsf_skyrim_render_upload_enter(const rsf_skyrim_creation_platform*, uintptr_t renderer) noexcept;
-extern "C" void rsf_skyrim_render_upload_leave(bool uploading, uint8_t flags) noexcept;
+struct rsf_skyrim_upload_observation {
+    uint64_t session;
+    uint32_t frame;
+};
+extern "C" bool rsf_skyrim_render_upload_enter(const rsf_skyrim_creation_platform*, uintptr_t renderer,
+    rsf_skyrim_upload_observation*) noexcept;
+extern "C" void rsf_skyrim_render_upload_leave(const rsf_skyrim_upload_observation*, uint8_t flags) noexcept;
 extern "C" void rsf_skyrim_render_jitter_observed(const rsf_skyrim_creation_platform*,
     const rsf_skyrim_render_observer_leaves*, uintptr_t state) noexcept;
 extern "C" bool rsf_skyrim_render_accept_window(const rsf_skyrim_render_observer_leaves*, void* window) noexcept;

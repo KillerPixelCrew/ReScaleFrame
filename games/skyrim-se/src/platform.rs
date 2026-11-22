@@ -210,6 +210,12 @@ impl Platform {
         unsafe { (self.read)(address, out.as_mut_ptr().cast(), out.len()) }
     }
 
+    pub(crate) fn read_u32(&self, address: usize) -> Option<u32> {
+        let mut value = [0; 4];
+        self.read(address, &mut value)
+            .then(|| u32::from_le_bytes(value))
+    }
+
     pub(crate) fn read_usize(&self, address: usize) -> Option<usize> {
         let mut value = [0; size_of::<usize>()];
         self.read(address, &mut value)

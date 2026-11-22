@@ -18,14 +18,14 @@ struct rsf_skyrim_postprocess_leaves {
     void (*fg_inputs)(void*, const rsf_game_host_services*);
     bool (*reconstruct)(void*, const rsf_game_host_services*);
     void (*observe)(const rsf_skyrim_cs_hdr_call*, const rsf_game_host_services*, uint64_t, bool);
-    bool (*write)(uintptr_t, const void*, size_t);
 };
 
 static_assert(sizeof(rsf_skyrim_cs_hdr_call) == 40 && offsetof(rsf_skyrim_cs_hdr_call, argument5) == 32);
 static_assert(sizeof(rsf_skyrim_taa_receipt) == 24 && offsetof(rsf_skyrim_taa_receipt, enabled) == 16);
-static_assert(sizeof(rsf_skyrim_postprocess_leaves) == 48);
+static_assert(sizeof(rsf_skyrim_postprocess_leaves) == 40);
 
 extern "C" void rsf_skyrim_postprocess_prepare(const rsf_skyrim_creation_platform*,
     const rsf_skyrim_postprocess_leaves*, const rsf_skyrim_cs_hdr_call*, rsf_skyrim_taa_receipt*) noexcept;
 extern "C" void rsf_skyrim_postprocess_restore(const rsf_skyrim_creation_platform*,
-    const rsf_skyrim_postprocess_leaves*, const rsf_skyrim_taa_receipt*) noexcept;
+    const rsf_skyrim_taa_receipt*) noexcept;
+extern "C" bool rsf_skyrim_postprocess_busy(const rsf_skyrim_creation_platform*) noexcept;

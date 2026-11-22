@@ -2,6 +2,7 @@
 //! Owns Skyrim's engine render ratios, jitter and temporary output viewport.
 
 use crate::platform::{self, Platform};
+use crate::taa;
 use rsf_game_sys::{
     RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_SR, rsf_game_host_services,
     rsf_game_render_config, rsf_game_render_pass,
@@ -65,6 +66,7 @@ const _: () = {
 #[derive(Clone, Copy)]
 struct Owner {
     pointer: usize,
+    session: u64,
     output: [u32; 2],
     render: [u32; 2],
     saved_ratios: [f32; 4],
@@ -76,6 +78,7 @@ struct Owner {
 struct Output {
     producer_ratios: [f32; 4],
     thread: u32,
+    flags: u8,
 }
 
 struct State {
@@ -90,8 +93,15 @@ static STATE: Mutex<State> = Mutex::new(State {
 // Serializes mutations. Reentry from the engine or Runtime cannot wait on its own call.
 static MUTATION: Mutex<()> = Mutex::new(());
 
+#[derive(Clone, Copy)]
+struct FrameFlags {
+    session: u64,
+    frame: u32,
+    flags: u8,
+}
+
 thread_local! {
-    static FRAME_FLAGS: Cell<Option<u8>> = const { Cell::new(None) };
+    static FRAME_FLAGS: Cell<Option<FrameFlags>> = const { Cell::new(None) };
 }
 
 fn state() -> MutexGuard<'static, State> {
@@ -105,19 +115,10 @@ fn words<const N: usize>(platform: &Platform, address: usize) -> Option<[u32; N]
         .then(|| bytes.map(u32::from_le_bytes))
 }
 
-fn reset_history(platform: &Platform, base: usize, leaves: &Leaves) -> Option<()> {
+fn reset_history(platform: &Platform, base: usize) -> Option<()> {
     let manager = platform.read_usize(base + TAA_MANAGER)?;
-    if manager == 0 {
-        return None;
-    }
-    let taa = platform.read_usize(manager.checked_add(0x1f0)?)?;
-    if taa == 0 {
-        return None;
-    }
-    let address = taa.checked_add(0x30)?;
-    let [mask] = words(platform, address)?;
-    unsafe { (leaves.lock)(address, mask | 1) };
-    Some(())
+    let taa = taa::owner(platform, manager).filter(|&taa| taa != 0)?;
+    taa::clear_main_history(platform, taa)
 }
 
 fn halton(mut index: u32, base: u32) -> f32 {
@@ -206,7 +207,7 @@ fn configure(
                 (leaves.lock)(pointer + RATIO_LOCK, previous.saved_lock);
             }
             state().owner = None;
-            let _ = reset_history(platform, base, leaves);
+            let _ = reset_history(platform, base);
             platform.log(
                 host,
                 c"Skyrim native resolution ownership released; original ratios restored.",
@@ -248,6 +249,7 @@ fn configure(
     }
     state().owner = Some(Owner {
         pointer,
+        session: host.session_id,
         output,
         render,
         saved_ratios,
@@ -255,7 +257,7 @@ fn configure(
         last_ratios: ratios,
     });
     if changed {
-        let _ = reset_history(platform, base, leaves);
+        let _ = reset_history(platform, base);
         if host.log.is_some() {
             unsafe {
                 (leaves.report)(
@@ -326,14 +328,31 @@ extern "C" fn rsf_skyrim_resolution_extent(
     true
 }
 
-pub(crate) fn record_per_frame_flags(flags: u8) {
-    FRAME_FLAGS.set(Some(flags));
+pub(crate) fn record_per_frame_flags(session: u64, frame: u32, flags: u8) {
+    FRAME_FLAGS.set(Some(FrameFlags {
+        session,
+        frame,
+        flags,
+    }));
+}
+
+fn current_flags(platform: &Platform, owner: Owner) -> Option<u8> {
+    let observation = FRAME_FLAGS.get()?;
+    let frame = platform.read_u32(owner.pointer - RENDER_STATE + NATIVE_FRAME)?;
+    (frame == observation.frame && owner.session == observation.session)
+        .then_some(observation.flags)
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_resolution_output_ready() -> bool {
+unsafe extern "C" fn rsf_skyrim_resolution_output_ready(platform: *const Platform) -> bool {
+    let Some(platform) = (unsafe { platform::inspect(platform) }) else {
+        return false;
+    };
     let state = state();
-    state.owner.is_some() && state.output.is_none() && FRAME_FLAGS.get().is_some()
+    state.output.is_none()
+        && state
+            .owner
+            .is_some_and(|owner| current_flags(platform, owner).is_some())
 }
 
 #[unsafe(no_mangle)]
@@ -357,7 +376,7 @@ unsafe extern "C" fn rsf_skyrim_resolution_enter(
         };
         owner
     };
-    let Some(flags) = FRAME_FLAGS.get() else {
+    let Some(flags) = current_flags(platform, owner) else {
         return false;
     };
     let thread = unsafe { (leaves.thread)() };
@@ -369,6 +388,7 @@ unsafe extern "C" fn rsf_skyrim_resolution_enter(
     state().output = Some(Output {
         producer_ratios: numbers.map(f32::from_bits),
         thread,
+        flags,
     });
     true
 }
@@ -391,11 +411,13 @@ extern "C" fn rsf_skyrim_resolution_leave(leaves: &Leaves) -> bool {
     if output.thread != unsafe { (leaves.thread)() } {
         return false;
     }
-    let Some(flags) = FRAME_FLAGS.get() else {
-        return false;
-    };
     unsafe { (leaves.ratios)(owner.pointer + RATIO, &output.producer_ratios) };
-    upload(owner.pointer - RENDER_STATE, leaves, owner.render, flags);
+    upload(
+        owner.pointer - RENDER_STATE,
+        leaves,
+        owner.render,
+        output.flags,
+    );
     state().output = None;
     true
 }

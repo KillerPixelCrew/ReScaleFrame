@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Skyrim's pre-HDR SR and FG producers use the same native texture admission.
 
-use crate::camera::render::{Leaves as CameraLeaves, RenderCamera, read_frame};
+use crate::camera::render::{Leaves as CameraLeaves, RenderCamera, accept_sr, read_frame};
 use crate::platform::{self, Platform};
 use crate::presentation::{begin_inputs, empty_pass, identify, same_source};
 use rsf_game_sys::{
@@ -120,13 +120,6 @@ struct Inputs<'a> {
 static SCENE_THREAD: AtomicU32 = AtomicU32::new(0);
 static LOGGED_EXTENT: AtomicU64 = AtomicU64::new(0);
 
-fn read_u32(platform: &Platform, address: usize) -> Option<u32> {
-    let mut bytes = [0; 4];
-    platform
-        .read(address, &mut bytes)
-        .then_some(u32::from_le_bytes(bytes))
-}
-
 fn log_viewport(
     platform: &Platform,
     base: usize,
@@ -142,7 +135,7 @@ fn log_viewport(
     if LOGGED_EXTENT.load(Ordering::Relaxed) == key {
         return;
     }
-    let Some(lock) = read_u32(platform, base + RATIO_LOCK) else {
+    let Some(lock) = platform.read_u32(base + RATIO_LOCK) else {
         return;
     };
     LOGGED_EXTENT.store(key, Ordering::Relaxed);
@@ -282,7 +275,14 @@ fn produce(
         return None;
     }
     let mut pass = empty_pass();
-    let view = read_frame(platform, &leaves.camera, manager, fg, &mut pass)?;
+    let view = read_frame(
+        platform,
+        &leaves.camera,
+        manager,
+        fg,
+        host.session_id,
+        &mut pass,
+    )?;
     let base = platform.main_module();
     if base == 0 {
         return None;
@@ -303,7 +303,7 @@ fn produce(
         }
         bind_inputs(&mut pass, &view, &inputs);
         let mut current = empty_pass();
-        if read_u32(platform, base + NATIVE_FRAME) != Some(view.frame)
+        if platform.read_u32(base + NATIVE_FRAME) != Some(view.frame)
             || !unsafe { (leaves.identity)(&mut current) }
             || !same_source(&current, &pass)
         {
@@ -331,6 +331,9 @@ fn produce(
         leaves.auxiliaries
     };
     let reconstructed = unsafe { upscale(context, &pass, host) };
+    if reconstructed {
+        accept_sr(host.session_id, view.frame);
+    }
     unsafe { (leaves.observe)(context, &pass, host) };
     identify(&pass);
     Some(reconstructed)

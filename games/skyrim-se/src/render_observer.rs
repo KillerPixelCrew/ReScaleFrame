@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const ACTIVE_WINDOW: usize = 0x333_0198;
 const SWAPCHAIN: usize = 0x18;
 const RENDERER: usize = 0x333_1f40;
+const NATIVE_FRAME: usize = 0x333_63f4;
 const UPLOAD_DIRTY: usize = 0x333_6400;
 const JITTER_OBSERVATIONS: u64 = 16;
 const WINDOW_CLASS: &[u8] = b"Skyrim Special Edition";
@@ -98,23 +99,45 @@ extern "C" fn rsf_skyrim_render_end_leave(leaves: &Leaves, retained: &rsf_game_h
 unsafe extern "C" fn rsf_skyrim_render_upload_enter(
     platform: *const Platform,
     renderer: usize,
+    observation: &mut UploadObservation,
 ) -> bool {
     let Some(platform) = (unsafe { platform::inspect(platform) }) else {
         return false;
     };
     let base = platform.main_module();
     let mut dirty = [0];
-    base != 0
-        && base.checked_add(RENDERER) == Some(renderer)
-        && platform.read(base + UPLOAD_DIRTY, &mut dirty)
-        && dirty[0] != 0
+    if base == 0
+        || base.checked_add(RENDERER) != Some(renderer)
+        || !platform.read(base + UPLOAD_DIRTY, &mut dirty)
+        || dirty[0] == 0
+        || !rsf_skyrim_session_accepting()
+    {
+        return false;
+    }
+    let mut host: rsf_game_host_services = unsafe { std::mem::zeroed() };
+    unsafe { rsf_skyrim_session_lease(true, &mut host) };
+    let Some(frame) = platform.read_u32(base + NATIVE_FRAME) else {
+        return false;
+    };
+    if host.session_id == 0 {
+        return false;
+    }
+    *observation = UploadObservation {
+        session: host.session_id,
+        frame,
+    };
+    true
+}
+
+#[repr(C)]
+struct UploadObservation {
+    session: u64,
+    frame: u32,
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_render_upload_leave(uploading: bool, flags: u8) {
-    if uploading {
-        resolution::record_per_frame_flags(flags);
-    }
+extern "C" fn rsf_skyrim_render_upload_leave(observation: &UploadObservation, flags: u8) {
+    resolution::record_per_frame_flags(observation.session, observation.frame, flags);
 }
 
 fn pair(platform: &Platform, state: usize, offset: usize) -> Option<[u32; 2]> {

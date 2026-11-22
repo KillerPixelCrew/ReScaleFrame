@@ -2,6 +2,7 @@
 //! Pre-HDR identity, HUD-less handoff and matching window pass for Skyrim.
 
 use crate::platform::{self, Platform};
+use crate::render_hook::RenderHook;
 use rsf_game_sys::{
     RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_NO_FG,
     RSF_GAME_RENDER_WINDOW, rsf_game_host_services, rsf_game_render_pass,
@@ -9,8 +10,7 @@ use rsf_game_sys::{
 use std::cell::RefCell;
 use std::ffi::{c_char, c_void};
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 const DRAW_INTERFACE: usize = 0x116_ac80;
 const INTERFACE_BYTES: [u8; 15] = [
@@ -84,9 +84,7 @@ struct Binding {
 // the command context and resources used during an admitted callback.
 unsafe impl Send for Binding {}
 
-static BINDING: Mutex<Option<Binding>> = Mutex::new(None);
-static ORIGINAL: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
-static LIVE: AtomicBool = AtomicBool::new(false);
+static HOOK: RenderHook<Binding> = RenderHook::new();
 static CALLS: AtomicU32 = AtomicU32::new(0);
 static WINDOWS: AtomicU32 = AtomicU32::new(0);
 
@@ -116,6 +114,7 @@ enum WindowState {
         finish_requested: bool,
     },
     Open,
+    Recovery,
     Closing,
 }
 
@@ -158,7 +157,7 @@ impl Frame {
         match &mut self.window_state {
             WindowState::Idle => self.scene = None,
             WindowState::Opening { finish_requested } => *finish_requested = true,
-            WindowState::Open => {
+            WindowState::Open | WindowState::Recovery => {
                 self.window_state = WindowState::Closing;
                 return self.window.take();
             }
@@ -173,7 +172,7 @@ thread_local! {
 }
 
 fn binding() -> Option<Binding> {
-    *BINDING.lock().unwrap_or_else(PoisonError::into_inner)
+    HOOK.binding()
 }
 
 pub(crate) fn empty_pass() -> rsf_game_render_pass {
@@ -250,7 +249,7 @@ pub(crate) fn begin_inputs(services: &rsf_game_host_services) -> bool {
         return false;
     }
     services.render_pass.is_some()
-        && LIVE.load(Ordering::Acquire)
+        && HOOK.live.load(Ordering::Acquire)
         && binding().is_some_and(|binding| {
             services.session_id == binding.host.session_id && services.user == binding.host.user
         })
@@ -291,7 +290,7 @@ struct Snapshot {
 }
 
 fn snapshot(binding: Binding, after: bool) -> Option<()> {
-    if !LIVE.load(Ordering::Acquire) {
+    if !HOOK.live.load(Ordering::Acquire) {
         return None;
     }
     let scene = FRAME.with_borrow(|frame| frame.scene)?;
@@ -372,11 +371,19 @@ unsafe extern "C" fn use_buffer(snapshot: *const c_void, buffer: &Buffer) {
         };
         unsafe { (binding.leaves.diagnostic)(c"WINDOW".as_ptr(), &pass) };
         let began = binding.render(buffer.context, &pass, true);
+        if !began {
+            // The host callback can throw after opening its scope. Recover immediately,
+            // using the same pass and leases, and retry at renderer-end if recovery throws.
+            FRAME.with_borrow_mut(|frame| frame.window_state = WindowState::Closing);
+            binding.platform.log(
+                &binding.host,
+                c"Skyrim window begin threw; attempting scope recovery.",
+            );
+            retire_window(window);
+            return;
+        }
         if let Some(window) = FRAME.with_borrow_mut(|frame| frame.publish_window(window)) {
             retire_window(window);
-        }
-        if !began {
-            return;
         }
     }
     if binding.capture != 0 {
@@ -415,9 +422,16 @@ fn clear_window() {
 }
 
 fn retire_window(window: Window) {
-    window.binding.render(window.context, &window.pass, false);
-    drop(window);
-    clear_window();
+    if window.binding.render(window.context, &window.pass, false) {
+        drop(window);
+        clear_window();
+    } else {
+        FRAME.with_borrow_mut(|frame| {
+            frame.scene = None;
+            frame.window_state = WindowState::Recovery;
+            frame.window = Some(window);
+        });
+    }
 }
 
 pub(crate) fn finish() {
@@ -451,18 +465,12 @@ unsafe extern "C" fn rsf_skyrim_presentation_start(
     };
     let base = platform.main_module();
     if base == 0
-        || (!LIVE.load(Ordering::Acquire)
+        || (!HOOK.live.load(Ordering::Acquire)
             && !platform.matches(base + DRAW_INTERFACE, &INTERFACE_BYTES))
     {
         return false;
     }
     let target = base + DRAW_INTERFACE;
-    if ORIGINAL.load(Ordering::Acquire).is_null() {
-        let Some(original) = platform.hook_create(target, detour) else {
-            return false;
-        };
-        ORIGINAL.store(original, Ordering::Release);
-    }
     let runtime = platform.module_handle("ReScaleFrame.Runtime.dll");
     let capture = platform.export_address(runtime, c"rsf_d3d11_host_capture_texture");
     let binding = Binding {
@@ -472,21 +480,16 @@ unsafe extern "C" fn rsf_skyrim_presentation_start(
         capture,
         leaves: *leaves,
     };
-    let previous = BINDING
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .replace(binding);
-    if !platform.hook_enable(target) {
-        *BINDING.lock().unwrap_or_else(PoisonError::into_inner) = previous;
-        return false;
-    }
-    LIVE.store(true, Ordering::Release);
-    true
+    HOOK.enable(
+        binding,
+        || platform.hook_create(target, detour),
+        || platform.hook_enable(target),
+    )
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_skyrim_presentation_quiesce() {
-    LIVE.store(false, Ordering::Release);
+    HOOK.live.store(false, Ordering::Release);
 }
 
 #[unsafe(no_mangle)]
@@ -497,7 +500,7 @@ extern "C" fn rsf_skyrim_presentation_busy() -> bool {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_skyrim_presentation_stop(platform: *const Platform) -> bool {
     rsf_skyrim_presentation_quiesce();
-    if ORIGINAL.load(Ordering::Acquire).is_null() {
+    if HOOK.original.load(Ordering::Acquire).is_null() {
         return !rsf_skyrim_presentation_busy();
     }
     let Some(platform) = (unsafe { platform::inspect(platform) }) else {
@@ -516,7 +519,7 @@ extern "C" fn rsf_skyrim_presentation_enter(ui: usize, primary: &mut bool) -> *m
         *primary = true;
         let _ = snapshot(binding, false);
     }
-    ORIGINAL.load(Ordering::Acquire)
+    HOOK.original.load(Ordering::Acquire)
 }
 
 #[unsafe(no_mangle)]
