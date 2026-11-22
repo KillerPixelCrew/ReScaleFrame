@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <cstdio>
+#include <limits>
 
 namespace {
 template<class T> void store(void* base, size_t offset, const T& value)
@@ -39,6 +40,12 @@ int main()
     const uint32_t unknown=UINT32_MAX; store(family.data(),0x5c,unknown);
     if (rsf::wingman::read_camera(view.data(),pass) || pass.camera_valid) return 1;
     store(family.data(),0x5c,frame);
+    const float invalid_jitter[2]={0.125f,std::numeric_limits<float>::quiet_NaN()};
+    store(view.data(),0x4fa4,invalid_jitter);
+    if (rsf::wingman::read_camera(view.data(),pass) || pass.camera_valid) return 1;
+    const float finite_jitter[2]={0.125f,-0.25f};
+    store(view.data(),0x4fa4,finite_jitter);
+    if (!rsf::wingman::read_camera(view.data(),pass) || !close(pass.camera.jitter_pixels[1],-0.25f)) return 1;
     const float paused=0; store(family.data(),0x54,paused);
     if (rsf::wingman::read_camera(view.data(),pass)) return 1;
     std::puts("PASS: Wingman projection, translated camera reprojection, frame identity and pause refusal.");

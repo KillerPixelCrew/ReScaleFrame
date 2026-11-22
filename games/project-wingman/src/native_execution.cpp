@@ -12,8 +12,14 @@ namespace rsf::wingman {
 struct Packet {
     rsf_game_render_pass pass;
     uintptr_t rdg[4];
+    uintptr_t graph;
 };
-static_assert(sizeof(Packet) == sizeof(rsf_game_render_pass) + 4 * sizeof(uintptr_t));
+struct Construction {
+    uintptr_t parameters;
+    Packet packet;
+};
+static_assert(sizeof(Packet) == sizeof(rsf_game_render_pass) + 5 * sizeof(uintptr_t));
+static_assert(sizeof(Construction) == sizeof(Packet) + sizeof(uintptr_t));
 }
 
 extern "C" {
@@ -21,7 +27,10 @@ void rsf_wingman_exec_enter() noexcept;
 void rsf_wingman_exec_leave() noexcept;
 const rsf::wingman::Packet* rsf_wingman_exec_taa_begin(uintptr_t, uintptr_t, uintptr_t, uintptr_t, rsf::wingman::Packet*) noexcept;
 void rsf_wingman_exec_taa_end(const rsf::wingman::Packet*) noexcept;
-void rsf_wingman_exec_record_compute(uintptr_t) noexcept;
+const rsf::wingman::Construction* rsf_wingman_exec_compute_begin(uintptr_t, uintptr_t, rsf::wingman::Construction*) noexcept;
+void rsf_wingman_exec_compute_end(const rsf::wingman::Construction*) noexcept;
+void rsf_wingman_exec_bind_pass(uintptr_t, uintptr_t) noexcept;
+void rsf_wingman_exec_discard(uintptr_t) noexcept;
 bool rsf_wingman_exec_take(uintptr_t, rsf::wingman::Packet*, rsf_game_host_services*) noexcept;
 bool rsf_wingman_exec_reserve() noexcept;
 void rsf_wingman_exec_retire() noexcept;
@@ -36,9 +45,13 @@ struct TaaParameters;
 using AddTaa = void* (*)(void*, void*, const void*, const TaaParameters*, const void*, void*);
 using AddCompute = void (*)(void*, void*, uint8_t, const void*, const void*, const void*);
 using ExecutePass = void (*)(void*, void*);
+using SetupPass = void (*)(void*, void*);
+using DeleteTracked = void* (*)(void*, uint32_t);
 AddTaa original_taa = nullptr;
 AddCompute original_compute = nullptr;
 ExecutePass original_execute = nullptr;
+SetupPass original_setup = nullptr;
+DeleteTracked original_delete_tracked = nullptr;
 
 struct Entry {
     Entry() { rsf_wingman_exec_enter(); }
@@ -134,8 +147,26 @@ void add_compute(void* graph, void* name, uint8_t flags, const void* shader,
     const void* parameters, const void* groups)
 {
     Entry entered;
-    rsf_wingman_exec_record_compute(uintptr_t(parameters));
+    Construction storage;
+    struct Restore {
+        const Construction* previous;
+        ~Restore() { rsf_wingman_exec_compute_end(previous); }
+    } restore{rsf_wingman_exec_compute_begin(uintptr_t(graph), uintptr_t(parameters), &storage)};
     original_compute(graph, name, flags, shader, parameters, groups);
+}
+
+void setup_pass(void* graph, void* pass)
+{
+    Entry entered;
+    original_setup(graph, pass);
+    rsf_wingman_exec_bind_pass(uintptr_t(graph), uintptr_t(pass));
+}
+
+void* delete_tracked(void* owner, uint32_t flags)
+{
+    Entry entered;
+    rsf_wingman_exec_discard(uintptr_t(owner));
+    return original_delete_tracked(owner, flags);
 }
 
 void execute_pass(void* pass, void* list)
@@ -173,11 +204,13 @@ void execute_pass(void* pass, void* list)
 
 bool create_execution_hook(uint32_t index, uintptr_t target) noexcept
 {
-    void* detours[] = {reinterpret_cast<void*>(&add_taa), reinterpret_cast<void*>(&add_compute),
+    void* detours[] = {reinterpret_cast<void*>(&delete_tracked), reinterpret_cast<void*>(&add_taa),
+        reinterpret_cast<void*>(&add_compute), reinterpret_cast<void*>(&setup_pass),
         reinterpret_cast<void*>(&execute_pass)};
-    void** originals[] = {reinterpret_cast<void**>(&original_taa), reinterpret_cast<void**>(&original_compute),
+    void** originals[] = {reinterpret_cast<void**>(&original_delete_tracked), reinterpret_cast<void**>(&original_taa),
+        reinterpret_cast<void**>(&original_compute), reinterpret_cast<void**>(&original_setup),
         reinterpret_cast<void**>(&original_execute)};
-    return index < 3 && MH_CreateHook(reinterpret_cast<void*>(target), detours[index], originals[index]) == MH_OK;
+    return index < 5 && MH_CreateHook(reinterpret_cast<void*>(target), detours[index], originals[index]) == MH_OK;
 }
 
 void report_execution(const rsf_game_host_services* host, void* context, const rsf_game_render_pass* pass) noexcept

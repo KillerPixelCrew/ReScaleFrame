@@ -66,6 +66,15 @@ pub(crate) fn platform() -> Option<&'static Platform> {
     PLATFORM.get()
 }
 
+pub(crate) fn accepting() -> bool {
+    ACCEPTING.load(Ordering::Acquire)
+}
+
+pub(crate) fn active_host() -> Option<rsf_game_host_services> {
+    let state = state();
+    state.host.filter(|_| accepting())
+}
+
 type Rect = [i32; 4];
 
 #[derive(Clone, Copy)]
@@ -148,7 +157,7 @@ pub(crate) unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> r
     if !unsafe { (platform.create_hook)(target) } {
         return NATIVE_REFUSED;
     }
-    if !execution::prepare(host, platform) {
+    if !execution::prepare(platform) {
         state.reason = c"Native temporal execution refused: queued-pass entry bytes differ or hooks could not be created.";
         return NATIVE_REFUSED;
     }
@@ -189,7 +198,6 @@ pub(crate) unsafe extern "C" fn quiesce(args: *const rsf_game_control_args) -> r
         return result;
     }
     ACCEPTING.store(false, Ordering::Release);
-    execution::quiesce();
     OK
 }
 

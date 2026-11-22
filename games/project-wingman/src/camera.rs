@@ -63,7 +63,12 @@ fn extent(rect: [i32; 4]) -> Option<[u32; 2]> {
     Some([width as u32, height as u32])
 }
 
-fn decode(view: usize, pass: &mut rsf_game_render_pass, copy: CopyMemory) -> Option<()> {
+fn decode(
+    view: usize,
+    pass: &mut rsf_game_render_pass,
+    copy: CopyMemory,
+    jitter: Option<[f32; 2]>,
+) -> Option<()> {
     let camera = &mut pass.camera;
     // These exact view and family offsets are verified for the matched Wingman build. The native
     // leaf copies each field so an unreadable view is a refusal rather than a Rust reference.
@@ -78,7 +83,7 @@ fn decode(view: usize, pass: &mut rsf_game_render_pass, copy: CopyMemory) -> Opt
     let previous_projection: Matrix = unsafe { read(copy, view, PREVIOUS_PROJECTION) }?;
     let previous_translated: Matrix = unsafe { read(copy, view, PREVIOUS_TRANSLATED) }?;
     let previous_translation: [f32; 3] = unsafe { read(copy, view, PREVIOUS_TRANSLATION) }?;
-    camera.jitter_pixels = unsafe { read(copy, view, JITTER) }?;
+    let jitter = jitter?;
 
     let frame_time = camera.frame_time_seconds;
     let projection = camera.view_to_clip;
@@ -86,6 +91,7 @@ fn decode(view: usize, pass: &mut rsf_game_render_pass, copy: CopyMemory) -> Opt
         || !frame_time.is_finite()
         || frame_time <= 0.0
         || frame_time > 1.0
+        || jitter.iter().any(|value| !value.is_finite())
         || projection[15].abs() > 1e-6
         || projection[0] <= 0.0
         || projection[5] <= 0.0
@@ -144,9 +150,19 @@ fn decode(view: usize, pass: &mut rsf_game_render_pass, copy: CopyMemory) -> Opt
         .then_some(())
 }
 
-pub(crate) fn read_camera(view: usize, pass: &mut rsf_game_render_pass, copy: CopyMemory) -> bool {
+pub(crate) fn read_jitter(view: usize, copy: CopyMemory) -> Option<[f32; 2]> {
+    unsafe { read(copy, view, JITTER) }
+}
+
+pub(crate) fn read_camera(
+    view: usize,
+    pass: &mut rsf_game_render_pass,
+    copy: CopyMemory,
+    jitter: Option<[f32; 2]>,
+) -> bool {
     pass.camera_valid = 0;
-    let valid = decode(view, pass, copy).is_some();
+    pass.camera.jitter_pixels = jitter.unwrap_or_default();
+    let valid = decode(view, pass, copy, jitter).is_some();
     pass.camera_valid = u32::from(valid);
     valid
 }
@@ -157,5 +173,6 @@ unsafe extern "C" fn rsf_wingman_read_camera(
     pass: &mut rsf_game_render_pass,
     copy: CopyMemory,
 ) -> bool {
-    read_camera(view as usize, pass, copy)
+    let view = view as usize;
+    read_camera(view, pass, copy, read_jitter(view, copy))
 }
