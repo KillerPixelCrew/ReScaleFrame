@@ -2,10 +2,18 @@
 #[path = "fsr_abi.rs"]
 mod abi;
 use super::*;
-use crate::d3d12_sr::ffx_abi::*;
+use crate::d3d12_sr::{ffx_abi::*, ffx_resource};
 use abi::*;
 use std::cell::UnsafeCell;
+use std::mem::ManuallyDrop;
 use std::sync::OnceLock;
+use windows::{
+    Win32::Graphics::{
+        Direct3D12::*,
+        Dxgi::{Common::DXGI_FORMAT, *},
+    },
+    core::Interface,
+};
 
 const FFX_OK: u32 = FFX_API_RETURN_OK as u32;
 
@@ -24,37 +32,33 @@ struct Sdk {
     query: PfnFfxQuery,
     dispatch: PfnFfxDispatch,
     configure: PfnFfxConfigure,
-    create_entry: Entry,
     // Context creation retains the linked descriptions and their backing storage.
     description: UnsafeCell<CreateDescription>,
-    chain: Cell<Raw>,
+    chain: Cell<*mut SwapchainBindings>,
 }
 
-#[repr(C)]
-struct Native {
-    check: &'static Checks,
-    capture: &'static CapturePlatform,
-    sdk: &'static SdkApi,
-    generation_version: u32,
-    create_chain:
-        unsafe extern "C" fn(Entry, *const Setup, *mut Raw, *mut Raw, *mut u32, *mut Raw) -> i32,
-    close_chain: unsafe extern "C" fn(Raw),
-    resource: unsafe extern "C" fn(Raw, *mut FfxApiResource),
-    surface_format: unsafe extern "C" fn(u32) -> u32,
-    chain_extent: unsafe extern "C" fn(Raw, *mut Extent) -> i32,
-    whole_texture: unsafe extern "C" fn(*const Resource) -> u32,
-    copy: unsafe extern "C" fn(Raw, Raw, u32, Raw, u32),
-    present_count: unsafe extern "C" fn(Raw, *mut u32) -> i32,
+// Pointers in the create chain stay stable until the SDK context is destroyed.
+struct SwapchainBindings {
+    desc: DXGI_SWAP_CHAIN_DESC1,
+    _factory: IDXGIFactory2,
+    chain: Raw,
+    version: ffxCreateContextDescFrameGenerationSwapChainVersionDX12,
+    create: ffxCreateContextDescFrameGenerationSwapChainForHwndDX12,
 }
 
-const _: () = assert!(size_of::<Native>() == 12 * size_of::<Raw>());
-
-static NATIVE: OnceLock<&Native> = OnceLock::new();
+static SDK: SdkApi = SdkApi {
+    generation: [
+        FFX_FRAMEGENERATION_VERSION_MAJOR,
+        FFX_FRAMEGENERATION_VERSION_MINOR,
+        FFX_FRAMEGENERATION_VERSION_PATCH,
+    ],
+    swapchain: [
+        FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION_MAJOR,
+        FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION_MINOR,
+        FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION_PATCH,
+    ],
+};
 static OPS: OnceLock<Ops> = OnceLock::new();
-
-fn platform() -> &'static Native {
-    NATIVE.get().unwrap()
-}
 
 fn header(kind: u32) -> ffxApiHeader {
     ffxApiHeader {
@@ -72,15 +76,15 @@ unsafe extern "C" fn resolve(setup: &Setup, _: Raw, _: Raw, out: &mut Raw) -> i3
 
 unsafe extern "C" fn close(bindings: Raw) {
     let sdk = unsafe { Box::from_raw(bindings.cast::<Sdk>()) };
-    if !sdk.chain.get().is_null() {
-        unsafe { (platform().close_chain)(sdk.chain.get()) };
+    let chain = sdk.chain.get();
+    if !chain.is_null() {
+        drop(unsafe { Box::from_raw(chain) });
     }
 }
 
 unsafe extern "C" fn bind(bindings: Raw, entries: *const Entry) {
     let sdk = unsafe { &mut *bindings.cast::<Sdk>() };
     let [create, destroy, query, dispatch, configure] = unsafe { *entries.cast::<[Entry; 5]>() };
-    sdk.create_entry = create;
     // The owner has verified all five exports in the retained SDK module.
     unsafe {
         sdk.create = std::mem::transmute::<Entry, PfnFfxCreateContext>(create);
@@ -145,7 +149,7 @@ unsafe extern "C" fn create_generation(
     data.backend.header = header(RSF_FFX_CREATE_BACKEND_DX12 as u32);
     data.backend.header.pNext = (&raw mut data.provider).cast();
     data.version.header = header(RSF_FFX_CREATE_GENERATION_VERSION as u32);
-    data.version.version = platform().generation_version;
+    data.version.version = RSF_FFX_GENERATION_VERSION as u32;
     data.version.header.pNext = (&raw mut data.backend).cast();
     data.generation = ffxCreateContextDescFrameGeneration {
         header: ffxApiHeader {
@@ -185,16 +189,137 @@ unsafe extern "C" fn create_chain(
     result: *mut u32,
 ) -> i32 {
     let sdk = unsafe { &*bindings.cast::<Sdk>() };
-    unsafe {
-        (platform().create_chain)(
-            sdk.create_entry,
-            setup,
-            context,
-            chain,
-            result,
-            sdk.chain.as_ptr(),
-        )
+    let setup = unsafe { &*setup };
+    let factory = match unsafe { CreateDXGIFactory2::<IDXGIFactory2>(DXGI_CREATE_FACTORY_FLAGS(0)) }
+    {
+        Ok(factory) => factory,
+        Err(error) => {
+            Log::new(setup).write(format_args!(
+                "FSR FG create DXGI factory failed HRESULT=0x{:08x}",
+                error.code().0 as u32
+            ));
+            return INIT_FAILED;
+        }
+    };
+    let factory_ptr = factory.as_raw();
+    let storage = crate::allocate_handle(SwapchainBindings {
+        desc: chain_description(&setup.chain),
+        _factory: factory,
+        chain: null_mut(),
+        version: ffxCreateContextDescFrameGenerationSwapChainVersionDX12 {
+            header: header(RSF_FFX_CREATE_SWAPCHAIN_VERSION as u32),
+            version: RSF_FFX_SWAPCHAIN_VERSION as u32,
+        },
+        create: Default::default(),
+    });
+    if storage.is_null() {
+        return INIT_FAILED;
     }
+    // Store the pointer so cleanup can recover the allocation even after a failed create.
+    sdk.chain.set(storage);
+    unsafe {
+        (*storage).create = ffxCreateContextDescFrameGenerationSwapChainForHwndDX12 {
+            header: ffxApiHeader {
+                pNext: (&raw mut (*storage).version).cast(),
+                ..header(RSF_FFX_CREATE_SWAPCHAIN_HWND as u32)
+            },
+            swapchain: &raw mut (*storage).chain,
+            hwnd: setup.chain.hwnd,
+            desc: &raw mut (*storage).desc,
+            fullscreenDesc: null_mut(),
+            dxgiFactory: factory_ptr,
+            gameQueue: setup.chain.d3d12_queue,
+        };
+        result.write(sdk.create.unwrap()(
+            context,
+            (&raw mut (*storage).create).cast(),
+            std::ptr::null(),
+        ));
+        chain.write((*storage).chain);
+    }
+    OK
+}
+
+unsafe extern "C" fn surface_format(format: u32) -> u32 {
+    ffx_resource::surface_format(DXGI_FORMAT(format as i32))
+}
+
+unsafe extern "C" fn chain_extent(chain: Raw, out: *mut Extent) -> i32 {
+    let chain = unsafe { IDXGISwapChain4::from_raw_borrowed(&chain) }.unwrap();
+    match unsafe { chain.GetDesc1() } {
+        Ok(desc) => {
+            unsafe {
+                out.write(Extent {
+                    width: desc.Width,
+                    height: desc.Height,
+                    format: ffx_resource::surface_format(desc.Format),
+                })
+            };
+            OK
+        }
+        Err(error) => error.code().0,
+    }
+}
+
+unsafe extern "C" fn whole_texture(resource: *const Resource) -> u32 {
+    let resource = unsafe { &*resource };
+    let texture = unsafe { ID3D12Resource::from_raw_borrowed(&resource.resource) }.unwrap();
+    let desc = unsafe { texture.GetDesc() };
+    u32::from(
+        resource.x == 0
+            && resource.y == 0
+            && u64::from(resource.width) == desc.Width
+            && resource.height == desc.Height,
+    )
+}
+
+unsafe extern "C" fn present_count(chain: Raw, count: *mut u32) -> i32 {
+    let chain = unsafe { IDXGISwapChain4::from_raw_borrowed(&chain) }.unwrap();
+    match unsafe { chain.GetLastPresentCount() } {
+        Ok(value) => {
+            unsafe { count.write(value) };
+            OK
+        }
+        Err(error) => error.code().0,
+    }
+}
+
+unsafe extern "C" fn copy(
+    command: Raw,
+    output: Raw,
+    output_state: u32,
+    source: Raw,
+    source_state: u32,
+) {
+    let command = unsafe { ID3D12GraphicsCommandList::from_raw_borrowed(&command) }.unwrap();
+    let output = unsafe { ID3D12Resource::from_raw_borrowed(&output) }.unwrap();
+    let source = unsafe { ID3D12Resource::from_raw_borrowed(&source) }.unwrap();
+    let transition = |texture: &ID3D12Resource, before, after| {
+        if before != after {
+            // The callback lends the resource through command recording.
+            let borrow = unsafe { ID3D12Resource::from_raw(texture.as_raw()) };
+            let barrier = D3D12_RESOURCE_BARRIER {
+                Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+                Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
+                Anonymous: D3D12_RESOURCE_BARRIER_0 {
+                    Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
+                        pResource: ManuallyDrop::new(Some(borrow)),
+                        Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                        StateBefore: before,
+                        StateAfter: after,
+                    }),
+                },
+            };
+            unsafe { command.ResourceBarrier(&[barrier]) };
+        }
+    };
+    let output_state = D3D12_RESOURCE_STATES(output_state as i32);
+    let source_state = D3D12_RESOURCE_STATES(source_state as i32);
+    transition(source, source_state, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    transition(output, output_state, D3D12_RESOURCE_STATE_COPY_DEST);
+    unsafe { command.CopyResource(output, source) };
+    transition(output, D3D12_RESOURCE_STATE_COPY_DEST, output_state);
+    transition(source, D3D12_RESOURCE_STATE_COPY_SOURCE, source_state);
 }
 
 unsafe extern "C" fn destroy_context(bindings: Raw, context: *mut Raw) -> u32 {
@@ -220,9 +345,7 @@ unsafe extern "C" fn on_present(
 }
 
 fn resource(texture: Raw) -> FfxApiResource {
-    let mut resource = FfxApiResource::default();
-    unsafe { (platform().resource)(texture, &mut resource) };
-    resource
+    unsafe { ffx_resource::describe(texture, FFX_API_RESOURCE_STATE_COMPUTE_READ as u32) }
 }
 
 unsafe extern "C" fn configure(bindings: Raw, mut context: Raw, plan: *const Configuration) -> u32 {
@@ -338,34 +461,34 @@ extern "C" fn rsf_core_fsr12_probe_native(checks: &Checks, setup: &Setup) -> u32
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr12_create_native(
-    native: &'static Native,
+    checks: &'static Checks,
+    capture: &'static CapturePlatform,
     setup: *const Setup,
     out: *mut Raw,
     chain: *mut Raw,
 ) -> i32 {
-    let native = NATIVE.get_or_init(|| native);
     let ops = OPS.get_or_init(|| Ops {
-        check: native.check,
-        capture: native.capture,
-        sdk: native.sdk,
+        check: checks,
+        capture,
+        sdk: &SDK,
         resolve,
         close,
         bind,
         versions,
-        surface_format: native.surface_format,
+        surface_format,
         create_generation,
         provider_version,
         create_chain,
         destroy_context,
         wait,
-        chain_extent: native.chain_extent,
-        whole_texture: native.whole_texture,
+        chain_extent,
+        whole_texture,
         configure,
         prepare,
         generate,
         present_facts,
-        copy: native.copy,
-        present_count: native.present_count,
+        copy,
+        present_count,
     });
     unsafe { rsf_core_fsr12_create(ops, setup, out, chain) }
 }

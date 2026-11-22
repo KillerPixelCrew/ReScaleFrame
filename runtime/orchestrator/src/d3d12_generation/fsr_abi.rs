@@ -2,7 +2,18 @@
 
 #![allow(dead_code, non_camel_case_types, non_snake_case)]
 use crate::d3d12_sr::ffx_abi::*;
+use windows::Win32::Graphics::Dxgi::{DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FULLSCREEN_DESC};
+type HWND = *mut ::core::ffi::c_void;
+type IDXGISwapChain4 = ::core::ffi::c_void;
+type IDXGIFactory = ::core::ffi::c_void;
+type ID3D12CommandQueue = ::core::ffi::c_void;
 
+pub const FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION_MAJOR: u32 = 4;
+pub const FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION_MINOR: u32 = 0;
+pub const FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION_PATCH: u32 = 0;
+pub const FFX_FRAMEGENERATION_VERSION_MAJOR: u32 = 4;
+pub const FFX_FRAMEGENERATION_VERSION_MINOR: u32 = 0;
+pub const FFX_FRAMEGENERATION_VERSION_PATCH: u32 = 2;
 pub type ffxConfigureDescHeader = ffxApiHeader;
 pub type PfnFfxConfigure = ::core::option::Option<
     unsafe extern "C" fn(
@@ -28,6 +39,100 @@ const _: () = {
     ["Offset of field: FfxApiRect2D::height"]
         [::core::mem::offset_of!(FfxApiRect2D, height) - 12usize];
 };
+#[repr(C)]
+pub struct ffxCreateContextDescFrameGenerationSwapChainForHwndDX12 {
+    pub header: ffxCreateContextDescHeader,
+    pub swapchain: *mut *mut IDXGISwapChain4,
+    pub hwnd: HWND,
+    pub desc: *mut DXGI_SWAP_CHAIN_DESC1,
+    pub fullscreenDesc: *mut DXGI_SWAP_CHAIN_FULLSCREEN_DESC,
+    pub dxgiFactory: *mut IDXGIFactory,
+    pub gameQueue: *mut ID3D12CommandQueue,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of ffxCreateContextDescFrameGenerationSwapChainForHwndDX12"][::core::mem::size_of::<
+        ffxCreateContextDescFrameGenerationSwapChainForHwndDX12,
+    >() - 64usize];
+    ["Alignment of ffxCreateContextDescFrameGenerationSwapChainForHwndDX12"][::core::mem::align_of::<
+        ffxCreateContextDescFrameGenerationSwapChainForHwndDX12,
+    >() - 8usize];
+    ["Offset of field: ffxCreateContextDescFrameGenerationSwapChainForHwndDX12::header"][::core::mem::offset_of!(
+        ffxCreateContextDescFrameGenerationSwapChainForHwndDX12,
+        header
+    )
+        - 0usize];
+    ["Offset of field: ffxCreateContextDescFrameGenerationSwapChainForHwndDX12::swapchain"][::core::mem::offset_of!(
+        ffxCreateContextDescFrameGenerationSwapChainForHwndDX12,
+        swapchain
+    )
+        - 16usize];
+    ["Offset of field: ffxCreateContextDescFrameGenerationSwapChainForHwndDX12::hwnd"][::core::mem::offset_of!(
+        ffxCreateContextDescFrameGenerationSwapChainForHwndDX12,
+        hwnd
+    ) - 24usize];
+    ["Offset of field: ffxCreateContextDescFrameGenerationSwapChainForHwndDX12::desc"][::core::mem::offset_of!(
+        ffxCreateContextDescFrameGenerationSwapChainForHwndDX12,
+        desc
+    ) - 32usize];
+    ["Offset of field: ffxCreateContextDescFrameGenerationSwapChainForHwndDX12::fullscreenDesc"][::core::mem::offset_of!(
+        ffxCreateContextDescFrameGenerationSwapChainForHwndDX12,
+        fullscreenDesc
+    )
+        - 40usize];
+    ["Offset of field: ffxCreateContextDescFrameGenerationSwapChainForHwndDX12::dxgiFactory"][::core::mem::offset_of!(
+        ffxCreateContextDescFrameGenerationSwapChainForHwndDX12,
+        dxgiFactory
+    )
+        - 48usize];
+    ["Offset of field: ffxCreateContextDescFrameGenerationSwapChainForHwndDX12::gameQueue"][::core::mem::offset_of!(
+        ffxCreateContextDescFrameGenerationSwapChainForHwndDX12,
+        gameQueue
+    )
+        - 56usize];
+};
+impl Default for ffxCreateContextDescFrameGenerationSwapChainForHwndDX12 {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+pub struct ffxCreateContextDescFrameGenerationSwapChainVersionDX12 {
+    pub header: ffxCreateContextDescHeader,
+    pub version: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of ffxCreateContextDescFrameGenerationSwapChainVersionDX12"][::core::mem::size_of::<
+        ffxCreateContextDescFrameGenerationSwapChainVersionDX12,
+    >() - 24usize];
+    ["Alignment of ffxCreateContextDescFrameGenerationSwapChainVersionDX12"][::core::mem::align_of::<
+        ffxCreateContextDescFrameGenerationSwapChainVersionDX12,
+    >() - 8usize];
+    ["Offset of field: ffxCreateContextDescFrameGenerationSwapChainVersionDX12::header"][::core::mem::offset_of!(
+        ffxCreateContextDescFrameGenerationSwapChainVersionDX12,
+        header
+    )
+        - 0usize];
+    ["Offset of field: ffxCreateContextDescFrameGenerationSwapChainVersionDX12::version"][::core::mem::offset_of!(
+        ffxCreateContextDescFrameGenerationSwapChainVersionDX12,
+        version
+    )
+        - 16usize];
+};
+impl Default for ffxCreateContextDescFrameGenerationSwapChainVersionDX12 {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
 #[repr(C)]
 pub struct ffxCreateContextDescFrameGeneration {
     pub header: ffxCreateContextDescHeader,
@@ -362,5 +467,9 @@ pub const RSF_FFX_CREATE_GENERATION: rsf_ffx_fg_descriptor_type = 131073;
 pub const RSF_FFX_CREATE_GENERATION_VERSION: rsf_ffx_fg_descriptor_type = 131086;
 pub const RSF_FFX_CONFIGURE_GENERATION: rsf_ffx_fg_descriptor_type = 131074;
 pub const RSF_FFX_PREPARE_GENERATION: rsf_ffx_fg_descriptor_type = 131084;
+pub const RSF_FFX_CREATE_SWAPCHAIN_HWND: rsf_ffx_fg_descriptor_type = 196614;
+pub const RSF_FFX_CREATE_SWAPCHAIN_VERSION: rsf_ffx_fg_descriptor_type = 196619;
+pub const RSF_FFX_GENERATION_VERSION: rsf_ffx_fg_descriptor_type = 16777218;
+pub const RSF_FFX_SWAPCHAIN_VERSION: rsf_ffx_fg_descriptor_type = 16777216;
 pub const RSF_FFX_WAIT_GENERATION_PRESENT: rsf_ffx_fg_descriptor_type = 196615;
 pub type rsf_ffx_fg_descriptor_type = ::core::ffi::c_int;
