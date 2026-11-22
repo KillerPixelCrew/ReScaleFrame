@@ -65,6 +65,6 @@ target_include_directories(rsf_game_anomaly PRIVATE "${PROJECT_SOURCE_DIR}/runti
 
 # Frame generation (src/fg_stage.h): the Runtime's shared D3D11 presentation bridge and FG tagging path through
 # rsf_get_d3d11_present_api and rsf_get_d3d11_fg_api. Inert unless [Anomaly] FG=1 or FGBridge=1.
-target_sources(rsf_game_anomaly PRIVATE src/fg_stage_platform.cpp src/fg_inputs.cpp)
+target_sources(rsf_game_anomaly PRIVATE src/fg_stage_platform.cpp)
 # The FG tables name presentation-bridge and Streamline-host types; include paths only, nothing is linked.
 target_include_directories(rsf_game_anomaly PRIVATE "$<TARGET_PROPERTY:rsf_orchestrator,INTERFACE_INCLUDE_DIRECTORIES>")

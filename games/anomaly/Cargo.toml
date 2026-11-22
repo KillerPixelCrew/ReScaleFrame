@@ -10,6 +10,7 @@ license.workspace = true
 crate-type = ["staticlib"]
 
 [features]
+fg-fixture = ["windows/Win32_Graphics_Dxgi"]
 input-hook-fixture = []
 overlay-device-fixture = [
   "windows/Win32_Devices_HumanInterfaceDevice",

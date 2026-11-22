@@ -22,6 +22,9 @@ use std::time::Instant;
 #[cfg(all(windows, feature = "sr-fixtures"))]
 mod runtime_fixture;
 
+#[cfg(all(windows, feature = "fg-fixture", not(test)))]
+pub(crate) mod fg_fixture;
+
 type Raw = *mut c_void;
 const OK: i32 = 0;
 const STREAMLINE_FAILED: i32 = -5;
@@ -303,6 +306,8 @@ struct Setup {
     xess: CString,
 }
 
+pub(crate) const MOTION_VALIDITY_THRESHOLD: f32 = RSF_ANOMALY_SR_MOTION_VALIDITY_THRESHOLD as f32;
+
 pub(crate) fn motion_decode_params() -> rsf_motion_decode_params {
     rsf_motion_decode_params {
         struct_size: size_of::<rsf_motion_decode_params>() as u32,
@@ -313,7 +318,7 @@ pub(crate) fn motion_decode_params() -> rsf_motion_decode_params {
         invalid_value: RSF_ANOMALY_SR_MOTION_SENTINEL as f32,
         validity_enabled: 1,
         validity_channel: RSF_ANOMALY_SR_MOTION_VALIDITY_CHANNEL,
-        validity_threshold: RSF_ANOMALY_SR_MOTION_VALIDITY_THRESHOLD as f32,
+        validity_threshold: MOTION_VALIDITY_THRESHOLD,
         ..Default::default()
     }
 }

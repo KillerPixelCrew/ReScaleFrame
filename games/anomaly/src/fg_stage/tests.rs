@@ -34,7 +34,7 @@ fn successful_present_requires_the_matching_accepted_window() {
 
 #[test]
 fn device_reset_retires_the_window_and_preserves_the_next_frame_reset() {
-    use crate::fg_policy_abi::{RSF_ANOMALY_RESET_DEVICE, RSF_ANOMALY_SKIP_NO_PRESENT};
+    use crate::fg_policy::{RSF_ANOMALY_RESET_DEVICE, RSF_ANOMALY_SKIP_NO_PRESENT};
 
     let mut engine = Engine::new(1);
     let extent = [1280, 720];
@@ -67,7 +67,7 @@ fn device_reset_retires_the_window_and_preserves_the_next_frame_reset() {
 
 #[test]
 fn quiesce_retires_inputs_without_reusing_the_source_or_camera_history() {
-    use crate::fg_policy_abi::RSF_ANOMALY_RESET_DISCONTINUITY;
+    use crate::fg_policy::RSF_ANOMALY_RESET_DISCONTINUITY;
 
     let mut engine = Engine::new(1);
     let extent = [1280, 720];
@@ -95,7 +95,7 @@ fn quiesce_retires_inputs_without_reusing_the_source_or_camera_history() {
 
 #[test]
 fn changing_scope_hold_applies_to_the_next_source_without_resetting_history() {
-    use crate::fg_policy_abi::{RSF_ANOMALY_RESET_SCOPE_END, RSF_ANOMALY_SKIP_SCOPE};
+    use crate::fg_policy::{RSF_ANOMALY_RESET_SCOPE_END, RSF_ANOMALY_SKIP_SCOPE};
 
     let mut policy = Policy::new(4);
     let extent = [1280, 720];
@@ -144,32 +144,34 @@ fn sr_off_motion_requires_the_current_engine_frame_and_view() {
     target.main = false;
     assert!(render.motion_input(target).is_null());
 }
-use crate::fg_inputs_abi::rsf_anomaly_input_platform;
 use std::cell::{Cell, RefCell};
 
 #[test]
 fn fg_settings_keep_option_bounds_and_normalize_only_vendor_paths() {
-    let terminated = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<_>>();
-    let streamline = terminated(r"\\?\D:\RSF/streamline\");
-    let fidelityfx = terminated(r"\\?\UNC\server\share/fidelityfx\");
-    let capture = terminated(r"\\?\D:\RSF\capture");
-    let native = rsf_anomaly_fg_config {
-        bridge: true,
-        enabled: true,
-        backend: 42,
-        generated: 9,
-        latency: 3,
-        frame_limit_us: u32::MAX,
-        scope_hold: 0,
-        capture: true,
-        capture_count: 999,
-        capture_interval: 0,
-        streamline_dir: streamline.as_ptr(),
-        fidelityfx_dir: fidelityfx.as_ptr(),
-        capture_dir: capture.as_ptr(),
-        ..Default::default()
-    };
-    let options = Options::from_native(&native);
+    let vendors = [
+        r"\\?\D:\RSF/streamline\",
+        r"\\?\UNC\server\share/fidelityfx\",
+        "",
+    ]
+    .map(|path| crate::sr_stage::plain_directory(&path.encode_utf16().collect::<Vec<_>>()));
+    let options = Options::admit(
+        options::Settings {
+            bridge: true,
+            debug: false,
+            development: false,
+            scope_hold: 0,
+            capture: CaptureSettings::new(true, 0, 999, 0),
+            frontend: Frontend {
+                enabled: 1,
+                backend: 42,
+                generated: 9,
+                latency: 3,
+                frame_limit_us: u32::MAX,
+            },
+        },
+        r"\\?\D:\RSF\capture".into(),
+        vendors,
+    );
     let frontend = options.frontend;
     assert_eq!(
         (
@@ -411,19 +413,15 @@ fn missing_hudless_backbuffer_cannot_advance_fg_history() {
     );
     // This mock never falls back to SR-off input dispatch. Only the borrowed Runtime data and the
     // synthetic immediate-context/backbuffer leases cross the production stage boundary.
-    static INPUTS: rsf_anomaly_input_platform = rsf_anomaly_input_platform {
-        release_interface: Some(release),
-        ..crate::fg_inputs::tests::PLATFORM
-    };
     let platform = Platform {
         struct_size: size_of::<Platform>() as u32,
-        inputs: &INPUTS,
         engine_version: c"fixture".as_ptr(),
         project_id: c"fixture".as_ptr(),
         units_to_meters: 1.0,
         engine_depth_view: Some(no_depth),
         sr_owns_depth: Some(sr_owns_depth),
         motion_target: Some(no_motion),
+        state_scope: crate::fg_inputs::tests::STATE_SCOPE,
     };
     assert!(unsafe { EngineBindings::bind(&platform) }.is_some());
     assert!(
@@ -436,39 +434,42 @@ fn missing_hudless_backbuffer_cannot_advance_fg_history() {
         .is_none()
     );
     assert!(unsafe { EngineBindings::bind(ptr::from_ref(&4_u32).cast()) }.is_none());
-    let missing_input = rsf_anomaly_input_platform {
-        dispatch: None,
-        ..INPUTS
-    };
     assert!(
         unsafe {
             EngineBindings::bind(&Platform {
-                inputs: &missing_input,
+                state_scope: rsf_anomaly_fg_state_scope {
+                    restore: None,
+                    ..platform.state_scope
+                },
                 ..platform
             })
         }
         .is_none()
     );
-    let short_inputs = 4_u32;
-    assert!(
-        unsafe {
-            EngineBindings::bind(&Platform {
-                inputs: ptr::from_ref(&short_inputs).cast(),
-                ..platform
-            })
-        }
-        .is_none()
-    );
-    rsf_anomaly_fg_configure(
-        &rsf_anomaly_fg_config {
-            bridge: true,
-            ..Default::default()
-        },
-        None,
-        ptr::null_mut(),
+    Cold::configure(
+        Options::admit(
+            options::Settings {
+                bridge: true,
+                debug: false,
+                development: false,
+                scope_hold: 4,
+                capture: CaptureSettings::new(false, 600, 3, 300),
+                frontend: Frontend {
+                    enabled: 0,
+                    backend: RSF_FG_BACKEND_AUTO,
+                    generated: 1,
+                    latency: RSF_REFLEX_ON,
+                    frame_limit_us: 0,
+                },
+            },
+            String::new(),
+            Default::default(),
+        ),
+        Log::default(),
     );
     let platform = EngineBindings {
         immediate_context: immediate,
+        release_interface: release,
         backbuffer,
         output_window,
         ..unsafe { EngineBindings::bind(&platform) }.expect("complete fixture bindings")
@@ -490,11 +491,11 @@ fn missing_hudless_backbuffer_cannot_advance_fg_history() {
         event.completed = 1;
         unsafe { present_event(ptr::null_mut(), event) };
         rsf_anomaly_fg_stage_end_after();
-        let status = rsf_anomaly_fg_stage_status();
+        let status = stage_status();
         (status.presented, status.fed)
     };
     assert_eq!(run_frame(100, &mut event), (1, 0));
-    let status = rsf_anomaly_fg_stage_status();
+    let status = stage_status();
     assert_eq!(status.eligible_at_ui_boundary, 1);
     assert_eq!(status.runtime_tagged, 0);
     assert_eq!(

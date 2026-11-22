@@ -1738,6 +1738,14 @@ without assigning a simulation-end timestamp. Source, binding and
 formatting checks are recorded in the [N08 follow-up](research/rust-anomaly-fg-stage.md#n08-source-follow-up).
 Build and device verification remain open.
 
+The N08 follow-up moves the SR-off input allocation and compute recording
+into the Rust FG owner and moves the Standard and AVX CPU scenarios and
+four device scenarios into the feature-gated Rust fixture. The native
+carrier still supplies the verified depth and motion facts. The fixture
+launcher supplies the exact profile facts and linked Runtime CPU
+callbacks. [Source dispositions and checks](research/rust-anomaly-fg-stage.md#n08-typed-d3d11-and-device-fixture-port)
+record the source-only verification.
+
 Anomaly observer quiesce now suspends the overlay before retiring the
 render stages. It closes DirectInput capture and hides the window
 panel. The next accepted Present performs the Runtime reset on its

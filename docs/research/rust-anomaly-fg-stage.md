@@ -193,3 +193,40 @@ libclang 18.1.1, locked offline Windows Cargo metadata and Git whitespace
 checks. Builds, lint, Rust and native fixtures, and device/game runs
 remain user-owned. Window recreation, provider output and motion
 coverage after the port require execution evidence.
+
+
+## N08 typed D3D11 and device fixture port
+
+The source baseline is `031aa9ac`. The earlier FG port at `410a672c`
+provided the existing Rust stage, policy and typed DXGI probes. This
+pass moves the remaining D3D11 input recording and fixture scenarios
+into that adapter. The engine and shader producer evidence remains in
+[Anomaly FG evidence](anomaly-fg.md).
+
+| Source path | Disposition |
+| --- | --- |
+| `games/anomaly/src/fg_inputs.cpp` | Removed. `fg_inputs/d3d.rs` creates the shader, constants, textures and views and records the pass using typed D3D11 interfaces. `shaders/fg/rsf_fg_inputs.hlsl` contains the extracted shader body. |
+| `games/anomaly/src/fg_inputs_platform.h`, `fg_inputs_abi.rs` | Removed. The allocation and recording bindings are private to Rust. The stage receives only the generic state save/restore callbacks alongside the existing engine facts. |
+| `games/anomaly/src/fg_policy_platform.h`, `fg_policy_abi.rs` | Removed. `fg_policy.rs` owns the decision and counters and uses the GameSDK screen constants. `fg_policy.h` and `tests/anomaly_fg_policy.cpp` were already absent at the baseline. The Rust policy fixture continues to call the same owner. |
+| `games/anomaly/src/fg_stage.h`, `fg_stage_platform.cpp`, `fg_stage_platform.h` | Retained for the carrier and native observer. Cold start supplies the exact profile's guarded depth RVA, SR reduced-depth ownership and current N04 motion target. The fixture-only native Options, install, depth-source override and status interfaces were retired. `fg_stage/options.rs` admits typed Rust settings from both INI and fixture callers with the existing N06 path normalization. |
+| `tests/anomaly_fg_device.cpp`, `tests/anomaly_fg.cmake` | The executable is a thin launcher and still links the Runtime DLL. It passes native profile facts and explicitly imported CPU ledger functions. The `fg-fixture` Rust feature owns both CPU contracts and all four registered device scenarios, including adapter selection, window and swapchain creation, SR stage 5, texture allocation, draw/Present order, resize, switching, assertions and skip decisions. |
+
+The FG input pass keeps the immediate context and canonical IUnknown device
+identity checks. It copies the D24S8 resource to an R24G8 typeless
+texture with an R24_UNORM_X8 view. The full-size R32F depth and RG16F
+motion retain their SRV/UAV bind flags. Constants remain 96 bytes with
+the same reprojection, motion validity and first-person threshold. The
+pass saves state before mapping, unmaps any successful map, clears
+predication, records the copy and dispatch, unbinds CS SRVs and UAVs,
+and restores state through the existing generic scope on every exit
+after a save. N07 SR restoration remains in its existing owner. The
+stage only publishes a successful input pair for the synchronous
+Runtime handoff. Failed allocations remain retryable, and a shader
+refusal remains latched for that device.
+
+The source review compared shader text and D3D11 calls to the C++ body
+and the checked-out Windows bindings. Bindgen 0.72.1 with libclang 18.1.1
+regenerated the stage and fixture ABI records. Rust 1.94.1 formatting,
+locked offline Windows Cargo metadata with `rsf-anomaly/fg-fixture`,
+and Git whitespace checks were the verification for this pass.
+Build, fixture execution and game/device acceptance remain unverified.

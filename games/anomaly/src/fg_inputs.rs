@@ -1,18 +1,67 @@
 // SPDX-License-Identifier: MIT
-use crate::fg_inputs_abi::{
-    rsf_anomaly_input_constants as Constants, rsf_anomaly_input_desc as Description,
-    rsf_anomaly_input_frame as Frame, rsf_anomaly_input_log as Log,
-    rsf_anomaly_input_pipeline as PipelineBindings, rsf_anomaly_input_platform as Platform,
-    rsf_anomaly_input_targets as Targets,
-};
+#[cfg(windows)]
+use crate::fg_stage_abi::{rsf_anomaly_fg_state_scope, rsf_d3d11_state};
 use crate::lease::Lease;
 use std::ffi::c_void;
 use std::ptr;
 
+#[cfg(all(windows, not(test)))]
+pub(crate) mod d3d;
+
+type Log = rsf_game_sys::rsf_game_log_fn;
+
+#[derive(Copy, Clone)]
+pub(crate) struct Frame {
+    pub depth: *mut c_void,
+    pub motion: *mut c_void,
+    pub clip_to_previous_clip: [f32; 16],
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Default, Copy, Clone)]
+struct Description {
+    pub format: u32,
+    pub width: u32,
+    pub height: u32,
+    pub samples: u32,
+    pub layers: u32,
+    pub mips: u32,
+}
+
+#[derive(Copy, Clone)]
+struct Targets {
+    pub depth_copy: *mut c_void,
+    pub depth: *mut c_void,
+    pub motion: *mut c_void,
+    pub depth_view: *mut c_void,
+    pub depth_uav: *mut c_void,
+    pub motion_uav: *mut c_void,
+}
+
+#[derive(Copy, Clone)]
+struct PipelineBindings {
+    pub shader: *mut c_void,
+    pub constants: *mut c_void,
+}
+
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+struct Constants {
+    pub clip_to_previous: [f32; 16],
+    pub size: [f32; 2],
+    pub has_motion: f32,
+    pub first_person_limit: f32,
+    pub validity_threshold: f32,
+    pub padding: [f32; 3],
+}
+
+const _: () = assert!(size_of::<Constants>() == 96);
+
 #[derive(Clone, Copy)]
-pub(crate) struct Bindings {
+struct Bindings {
     device: unsafe extern "C" fn(context: *mut c_void) -> *mut c_void,
-    pub(crate) release_interface: unsafe extern "C" fn(arg1: *mut c_void),
+    release_interface: unsafe extern "C" fn(arg1: *mut c_void),
     describe: unsafe extern "C" fn(texture: *mut c_void, arg1: *mut Description),
     same_device: unsafe extern "C" fn(texture: *mut c_void, device: *mut c_void) -> u32,
     shader: unsafe extern "C" fn(device: *mut c_void, arg1: Log, arg2: *mut c_void) -> *mut c_void,
@@ -27,7 +76,8 @@ pub(crate) struct Bindings {
     depth_view: unsafe extern "C" fn(device: *mut c_void, depth_copy: *mut c_void) -> *mut c_void,
     unordered_view: unsafe extern "C" fn(device: *mut c_void, texture: *mut c_void) -> *mut c_void,
     motion_view: unsafe extern "C" fn(device: *mut c_void, texture: *mut c_void) -> *mut c_void,
-    dispatch: unsafe extern "C" fn(
+    dispatch: unsafe fn(
+        state_scope: StateScope,
         context: *mut c_void,
         pipeline: *const PipelineBindings,
         targets: *const Targets,
@@ -37,32 +87,28 @@ pub(crate) struct Bindings {
         groups_x: u32,
         groups_y: u32,
     ) -> u32,
-    first_person_limit: f32,
-    validity_threshold: f32,
 }
 
-impl Bindings {
-    pub(crate) fn bind(platform: &Platform) -> Option<Self> {
-        if platform.struct_size < size_of::<Platform>() as u32 {
-            return None;
-        }
+#[cfg(windows)]
+#[derive(Clone, Copy)]
+pub(crate) struct StateScope {
+    pub(super) save: unsafe extern "C" fn(*mut c_void, *mut rsf_d3d11_state) -> u32,
+    pub(super) restore: unsafe extern "C" fn(*mut c_void, *mut rsf_d3d11_state),
+}
+
+#[cfg(windows)]
+impl StateScope {
+    pub(crate) fn bind(scope: rsf_anomaly_fg_state_scope) -> Option<Self> {
         Some(Self {
-            device: platform.device?,
-            release_interface: platform.release_interface?,
-            describe: platform.describe?,
-            same_device: platform.same_device?,
-            shader: platform.shader?,
-            constant_buffer: platform.constant_buffer?,
-            texture: platform.texture?,
-            depth_view: platform.depth_view?,
-            unordered_view: platform.unordered_view?,
-            motion_view: platform.motion_view?,
-            dispatch: platform.dispatch?,
-            first_person_limit: platform.first_person_limit,
-            validity_threshold: platform.validity_threshold,
+            save: scope.save?,
+            restore: scope.restore?,
         })
     }
 }
+
+#[cfg(not(windows))]
+#[derive(Clone, Copy)]
+struct StateScope;
 
 const R24G8_TYPELESS: u32 = 44;
 const D24_UNORM_S8_UINT: u32 = 45;
@@ -172,6 +218,7 @@ impl Pipeline {
 
 pub(crate) struct Owner {
     platform: Bindings,
+    state_scope: StateScope,
     surfaces: Option<SurfaceSet>,
     pipeline: Option<Pipeline>,
     device: Option<Lease>,
@@ -180,15 +227,25 @@ pub(crate) struct Owner {
 }
 
 impl Owner {
-    pub(crate) fn new(platform: Bindings) -> Self {
+    fn with_bindings(platform: Bindings, state_scope: StateScope) -> Self {
         Self {
             platform,
+            state_scope,
             surfaces: None,
             pipeline: None,
             device: None,
             shader_failed: false,
             ready: false,
         }
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn new(state_scope: StateScope) -> Self {
+        #[cfg(test)]
+        let bindings = tests::BINDINGS;
+        #[cfg(not(test))]
+        let bindings = d3d::BINDINGS;
+        Self::with_bindings(bindings, state_scope)
     }
 
     pub(crate) fn outputs(&self) -> Option<[*mut c_void; 2]> {
@@ -301,12 +358,13 @@ impl Owner {
             clip_to_previous: frame.clip_to_previous_clip,
             size: [frame.width as f32, frame.height as f32],
             has_motion: if motion_view.is_some() { 1.0 } else { 0.0 },
-            first_person_limit: platform.first_person_limit,
-            validity_threshold: platform.validity_threshold,
+            first_person_limit: f32::from_bits(crate::sr_stage::FIRST_PERSON_DEPTH_BITS),
+            validity_threshold: crate::sr_temporal::MOTION_VALIDITY_THRESHOLD,
             ..Default::default()
         };
         let accepted = unsafe {
             (platform.dispatch)(
+                self.state_scope,
                 context,
                 &pipeline,
                 &targets,

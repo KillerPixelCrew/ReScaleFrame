@@ -1,18 +1,10 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-#include "fg_inputs_platform.h"
 #include "motion_frame_target.h"
 #include <rescaleframe/d3d11_fg_api.h>
 #include <rescaleframe/d3d11_present_api.h>
 #include <stdbool.h>
 #include <stddef.h>
-
-typedef struct rsf_anomaly_fg_config {
-    bool bridge, enabled, debug, development, capture;
-    uint32_t backend, generated, latency, frame_limit_us, scope_hold;
-    uint32_t capture_start, capture_count, capture_interval;
-    const wchar_t *capture_dir, *streamline_dir, *fidelityfx_dir, *xess_dir;
-} rsf_anomaly_fg_config;
 
 typedef struct rsf_anomaly_fg_status {
     bool installed, owner;
@@ -27,12 +19,17 @@ typedef struct IDXGISwapChain rsf_anomaly_fg_swap_chain;
 typedef void rsf_anomaly_fg_swap_chain;
 #endif
 typedef void (*rsf_anomaly_fg_overlay_present)(void* user, rsf_anomaly_fg_swap_chain* chain);
-typedef void* (*rsf_anomaly_fg_depth_source)(void);
+
+typedef struct rsf_d3d11_state rsf_d3d11_state;
+
+typedef struct rsf_anomaly_fg_state_scope {
+    uint32_t (*save)(void*, rsf_d3d11_state*);
+    void (*restore)(void*, rsf_d3d11_state*);
+} rsf_anomaly_fg_state_scope;
 
 typedef struct rsf_anomaly_fg_platform {
     uint32_t struct_size;
-    // Immutable input pass and engine metadata shared with the SR owner.
-    const rsf_anomaly_input_platform* inputs;
+    // Immutable engine metadata shared with the SR owner.
     const char* engine_version;
     const char* project_id;
     float units_to_meters;
@@ -40,18 +37,14 @@ typedef struct rsf_anomaly_fg_platform {
     void* (*engine_depth_view)(uint32_t rva);
     bool (*sr_owns_depth)(uint32_t native_frame);
     rsf_anomaly_motion_frame_target (*motion_target)(void);
+    rsf_anomaly_fg_state_scope state_scope;
 } rsf_anomaly_fg_platform;
 
 #ifdef __cplusplus
 extern "C" {
 bool rsf_anomaly_fg_configure_ini(const wchar_t*, bool apply, void* runtime, uint32_t depth_rva,
     rsf_game_log_fn, const rsf_anomaly_fg_platform*) noexcept;
-void rsf_anomaly_fg_configure(const rsf_anomaly_fg_config*, rsf_game_log_fn, void*) noexcept;
-bool rsf_anomaly_fg_install(void* runtime, uint32_t depth_rva, const rsf_anomaly_fg_platform*) noexcept;
-bool rsf_anomaly_fg_install_with(const rsf_d3d11_present_api*, const rsf_d3d11_fg_api*,
-    const rsf_anomaly_fg_platform*) noexcept;
 bool rsf_anomaly_fg_installed() noexcept;
-void rsf_anomaly_fg_set_depth_source(rsf_anomaly_fg_depth_source) noexcept;
 void rsf_anomaly_fg_set_overlay_sink(rsf_anomaly_fg_overlay_present, void*) noexcept;
 void rsf_anomaly_fg_stage_camera(const float*, const float*) noexcept;
 void rsf_anomaly_fg_stage_input_begin(uint32_t) noexcept;
@@ -63,6 +56,5 @@ void rsf_anomaly_fg_stage_end_before() noexcept;
 void rsf_anomaly_fg_stage_end_after() noexcept;
 void rsf_anomaly_fg_stage_device_reset() noexcept;
 void rsf_anomaly_fg_stage_report(rsf_game_log_fn emit, void* user) noexcept;
-rsf_anomaly_fg_status rsf_anomaly_fg_stage_status() noexcept;
 }
 #endif

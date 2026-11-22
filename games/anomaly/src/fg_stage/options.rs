@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 use super::Frontend;
-use crate::fg_stage_abi::*;
+use crate::fg_stage_abi::{
+    RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO, RSF_FG_BACKEND_DLSS, RSF_FG_BACKEND_FSR3,
+    RSF_FG_BACKEND_FSR4, RSF_FG_BACKEND_XESS, RSF_REFLEX_BOOST, RSF_REFLEX_ON,
+};
 use crate::ini;
 use std::ffi::{CString, OsString};
 use std::os::windows::ffi::OsStringExt;
@@ -19,7 +22,7 @@ pub(crate) struct CaptureSettings {
 }
 
 impl CaptureSettings {
-    fn new(enabled: bool, start: u32, count: u32, interval: u32) -> Self {
+    pub(super) fn new(enabled: bool, start: u32, count: u32, interval: u32) -> Self {
         Self {
             enabled,
             start: start.min(i32::MAX as u32),
@@ -104,13 +107,13 @@ impl Capture {
     }
 }
 
-struct Settings {
-    bridge: bool,
-    debug: bool,
-    development: bool,
-    scope_hold: u32,
-    capture: CaptureSettings,
-    frontend: Frontend,
+pub(super) struct Settings {
+    pub bridge: bool,
+    pub debug: bool,
+    pub development: bool,
+    pub scope_hold: u32,
+    pub capture: CaptureSettings,
+    pub frontend: Frontend,
 }
 
 pub(super) struct Options {
@@ -180,47 +183,7 @@ impl Options {
         Self::admit(settings, capture_dir, vendors)
     }
 
-    pub(super) fn from_native(native: &rsf_anomaly_fg_config) -> Self {
-        let vendors = [
-            native.streamline_dir,
-            native.fidelityfx_dir,
-            native.xess_dir,
-        ]
-        .map(|path| {
-            crate::sr_stage::plain_directory(
-                unsafe { crate::wide::terminated(path) }.map_or(&[][..], |(units, _)| units),
-            )
-        });
-        let settings = Settings {
-            bridge: native.bridge,
-            debug: native.debug,
-            development: native.development,
-            scope_hold: native.scope_hold,
-            capture: CaptureSettings::new(
-                native.capture,
-                native.capture_start,
-                native.capture_count,
-                native.capture_interval,
-            ),
-            frontend: Frontend {
-                enabled: u32::from(native.enabled),
-                backend: native.backend,
-                generated: native.generated,
-                latency: native.latency,
-                frame_limit_us: native.frame_limit_us,
-            },
-        };
-        Self::admit(
-            settings,
-            String::from_utf16_lossy(
-                unsafe { crate::wide::terminated(native.capture_dir) }
-                    .map_or(&[][..], |(units, _)| units),
-            ),
-            vendors,
-        )
-    }
-
-    fn admit(settings: Settings, capture_dir: String, vendors: [Vec<u16>; 3]) -> Self {
+    pub(super) fn admit(settings: Settings, capture_dir: String, vendors: [Vec<u16>; 3]) -> Self {
         let [streamline, fidelityfx, xess] =
             vendors.map(|dir| c_string(String::from_utf16_lossy(&dir)));
         let Frontend {

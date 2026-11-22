@@ -3,6 +3,7 @@
 #include "motion_stage.h"
 #include "native_memory.h"
 #include "sr_pass.h"
+#include <rescaleframe/d3d11_state.h>
 #include <cstddef>
 
 extern "C" bool rsf_anomaly_sr_stage_owns_depth(uint32_t native_frame) noexcept;
@@ -20,12 +21,13 @@ void* engine_depth_view(uint32_t rva) noexcept {
 const rsf_anomaly_fg_platform& platform() noexcept {
     static const rsf_anomaly_fg_platform value{
         sizeof(rsf_anomaly_fg_platform),
-        &input_platform(), sr::engine_version, sr::project_id, sr::view_space_to_meters,
+        sr::engine_version, sr::project_id, sr::view_space_to_meters,
         &engine_depth_view,
         rsf_anomaly_sr_stage_owns_depth,
         [] {
             return motion::frame_target();
         },
+        {rsf_d3d11_state_save, rsf_d3d11_state_restore},
     };
     return value;
 }
@@ -36,24 +38,7 @@ bool configure_ini(const wchar_t* ini, bool apply, HMODULE runtime, const BuildP
     return rsf_anomaly_fg_configure_ini(ini, apply, runtime, build.sr->hw_base_zb_rva, log, &platform());
 }
 
-void configure(const Options& options, rsf_game_log_fn log, void* user) noexcept {
-    const rsf_anomaly_fg_config config{
-        options.bridge, options.enabled, options.debug, options.development, options.capture,
-        options.backend, options.generated, options.latency, options.frame_limit_us, options.scope_hold,
-        options.capture_start, options.capture_count, options.capture_interval, options.capture_dir.c_str(),
-        options.streamline_dir.c_str(), options.fidelityfx_dir.c_str(), options.xess_dir.c_str(),
-    };
-    rsf_anomaly_fg_configure(&config, log, user);
-}
-
-bool install(HMODULE runtime, const BuildProfile& build) noexcept {
-    return rsf_anomaly_fg_install(runtime, build.sr->hw_base_zb_rva, &platform());
-}
-bool install_with(const rsf_d3d11_present_api& present, const rsf_d3d11_fg_api& api) noexcept {
-    return rsf_anomaly_fg_install_with(&present, &api, &platform());
-}
 bool installed() noexcept { return rsf_anomaly_fg_installed(); }
-void set_depth_view_source(void* (*source)()) noexcept { rsf_anomaly_fg_set_depth_source(source); }
 void set_overlay_sink(rsf_anomaly_fg_overlay_present sink) noexcept {
     rsf_anomaly_fg_set_overlay_sink(sink, nullptr);
 }
@@ -69,5 +54,4 @@ void end_before() noexcept { rsf_anomaly_fg_stage_end_before(); }
 void end_after() noexcept { rsf_anomaly_fg_stage_end_after(); }
 void device_reset() noexcept { rsf_anomaly_fg_stage_device_reset(); }
 void report(void (*emit)(void*, const char*), void* user) noexcept { rsf_anomaly_fg_stage_report(emit, user); }
-Status status() noexcept { return rsf_anomaly_fg_stage_status(); }
 }

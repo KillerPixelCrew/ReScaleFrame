@@ -4,7 +4,11 @@ use super::Raw;
 use std::ptr::null_mut;
 use windows::Win32::Graphics::Direct3D11::{ID3D11DepthStencilView, ID3D11Device, ID3D11Texture2D};
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
-use windows::core::Interface;
+use windows::core::{IUnknown, Interface};
+
+pub(super) unsafe extern "C" fn release(raw: Raw) {
+    drop(unsafe { IUnknown::from_raw(raw) });
+}
 
 pub(super) unsafe extern "C" fn immediate_context(chain: Raw) -> Raw {
     let device = unsafe {

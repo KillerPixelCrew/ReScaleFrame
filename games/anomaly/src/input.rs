@@ -20,6 +20,12 @@ use crate::engine_slots::{Exchange, INPUT, input_counter, rsf_anomaly_slot_insta
 #[cfg(windows)]
 mod profile;
 
+#[cfg(all(windows, feature = "fg-fixture", not(test)))]
+pub(crate) fn has_fixture_profile(build: usize) -> bool {
+    profile::for_build(build)
+        .is_some_and(|profile| profile.sites[0].rva != 0 && profile.slot_rva != 0)
+}
+
 // ---- CInput::OnFrame admission ------------------------------------------------------------------
 
 #[cfg(windows)]

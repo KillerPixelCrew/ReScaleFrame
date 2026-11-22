@@ -137,7 +137,8 @@ unsafe extern "C" fn motion_view(_: *mut c_void, texture: *mut c_void) -> *mut c
     texture
 }
 
-unsafe extern "C" fn dispatch(
+unsafe fn dispatch(
+    _: StateScope,
     context: *mut c_void,
     pipeline: *const PipelineBindings,
     targets: *const Targets,
@@ -183,21 +184,18 @@ const SET: [&str; 6] = [
 const PIPELINE_CREATED: [Entry; 2] = [("shader", 0), ("constants", 0)];
 const PIPELINE_RELEASED: [Entry; 2] = [("constants", 0), ("shader", 0)];
 
-pub(crate) const PLATFORM: Platform = Platform {
-    struct_size: size_of::<Platform>() as u32,
-    device: Some(device),
-    release_interface: Some(release),
-    describe: Some(describe),
-    same_device: Some(same_device),
-    shader: Some(shader),
-    constant_buffer: Some(constant_buffer),
-    texture: Some(texture),
-    depth_view: Some(depth_view),
-    unordered_view: Some(unordered_view),
-    motion_view: Some(motion_view),
-    dispatch: Some(dispatch),
-    first_person_limit: 0.02,
-    validity_threshold: 0.5,
+pub(super) const BINDINGS: Bindings = Bindings {
+    device,
+    release_interface: release,
+    describe,
+    same_device,
+    shader,
+    constant_buffer,
+    texture,
+    depth_view,
+    unordered_view,
+    motion_view,
+    dispatch,
 };
 
 fn created(generation: u32, count: usize) -> Vec<Entry> {
@@ -241,7 +239,7 @@ fn foreign_depth_refuses_the_copy_and_foreign_motion_falls_back_to_camera_motion
         width: 9,
         height: 17,
     };
-    let mut owner = Owner::new(Bindings::bind(&PLATFORM).expect("complete fixture bindings"));
+    let mut owner = Owner::with_bindings(BINDINGS, scope());
     assert_eq!(
         owner.run(context, &frame, None, ptr::null_mut()),
         Result::Resources
@@ -279,7 +277,7 @@ fn failed_resize_releases_the_partial_set_and_keeps_the_previous_one_for_retry()
         width: 9,
         height: 17,
     };
-    let mut owner = Owner::new(Bindings::bind(&PLATFORM).expect("complete fixture bindings"));
+    let mut owner = Owner::with_bindings(BINDINGS, scope());
     assert_eq!(
         owner.run(context, &frame, None, ptr::null_mut()),
         Result::Ok
@@ -332,7 +330,7 @@ fn refused_constant_buffer_releases_shader_and_retries_on_same_device() {
         width: 9,
         height: 17,
     };
-    let mut owner = Owner::new(Bindings::bind(&PLATFORM).expect("complete fixture bindings"));
+    let mut owner = Owner::with_bindings(BINDINGS, scope());
     state.fail_at.set(Some("constants"));
     assert_eq!(
         owner.run(context, &frame, None, ptr::null_mut()),
@@ -348,4 +346,23 @@ fn refused_constant_buffer_releases_shader_and_retries_on_same_device() {
     );
     assert_eq!(state.builds.get(), 2);
     assert_eq!(state.submissions.get(), 1);
+}
+
+#[cfg(windows)]
+pub(crate) const STATE_SCOPE: rsf_anomaly_fg_state_scope = {
+    unsafe extern "C" fn save(_: *mut c_void, _: *mut rsf_d3d11_state) -> u32 {
+        0
+    }
+    unsafe extern "C" fn restore(_: *mut c_void, _: *mut rsf_d3d11_state) {}
+    rsf_anomaly_fg_state_scope {
+        save: Some(save),
+        restore: Some(restore),
+    }
+};
+
+fn scope() -> StateScope {
+    #[cfg(windows)]
+    return StateScope::bind(STATE_SCOPE).expect("fixture state scope");
+    #[cfg(not(windows))]
+    StateScope
 }

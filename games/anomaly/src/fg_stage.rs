@@ -3,6 +3,8 @@
 
 mod camera;
 mod d3d;
+#[cfg(all(feature = "fg-fixture", not(test)))]
+mod fixture;
 mod options;
 #[cfg(test)]
 mod tests;
@@ -11,13 +13,9 @@ mod window;
 use self::camera::Camera;
 pub(crate) use self::options::CaptureSettings;
 use self::options::{Options, backend_name};
-use crate::fg_inputs::{Owner as InputPass, Result as InputResult};
-use crate::fg_inputs_abi::rsf_anomaly_input_frame;
-use crate::fg_policy::Policy;
-use crate::fg_policy_abi::{
-    RSF_ANOMALY_RESET_NONE, RSF_ANOMALY_SKIP_NONE, rsf_anomaly_fg_counters as Counters,
-    rsf_anomaly_fg_decision as Decision,
-};
+use crate::fg_inputs::Frame as InputFrame;
+use crate::fg_inputs::{Owner as InputPass, Result as InputResult, StateScope};
+use crate::fg_policy::{Counters, Decision, Policy, RSF_ANOMALY_RESET_NONE, RSF_ANOMALY_SKIP_NONE};
 use crate::fg_stage_abi::*;
 use crate::host_log::Log;
 use crate::lease::Lease;
@@ -101,7 +99,8 @@ struct FgBindings {
 }
 
 struct EngineBindings {
-    inputs: crate::fg_inputs::Bindings,
+    state_scope: StateScope,
+    release_interface: unsafe extern "C" fn(Raw),
     engine_version: *const c_char,
     project_id: *const c_char,
     units_to_meters: f32,
@@ -117,9 +116,9 @@ struct EngineBindings {
 impl EngineBindings {
     unsafe fn bind(platform: *const Platform) -> Option<Self> {
         let platform = unsafe { full_table(platform) }?;
-        let inputs = unsafe { full_table(platform.inputs) }?;
         Some(Self {
-            inputs: crate::fg_inputs::Bindings::bind(inputs)?,
+            state_scope: StateScope::bind(platform.state_scope)?,
+            release_interface: d3d::release,
             engine_version: platform.engine_version,
             project_id: platform.project_id,
             units_to_meters: platform.units_to_meters,
@@ -237,7 +236,6 @@ static COLD: Mutex<Cold> = Mutex::new(Cold {
 static STAGE: OnceLock<Stage> = OnceLock::new();
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 static OVERLAY: OnceLock<(rsf_anomaly_fg_overlay_present, usize)> = OnceLock::new();
-static DEPTH_SOURCE: Mutex<rsf_anomaly_fg_depth_source> = Mutex::new(None);
 
 impl Cold {
     fn configure(options: Options, log: Log) {
@@ -536,7 +534,7 @@ impl Stage {
     }
 
     fn lease(&self, object: Raw) -> Option<Lease> {
-        let release = self.platform.inputs.release_interface;
+        let release = self.platform.release_interface;
         Lease::new(object, release)
     }
 
@@ -571,13 +569,7 @@ impl Stage {
         identity.previous_clip_to_clip = previous_clip_to_clip;
         identity.camera_valid = 1;
 
-        let depth_source = *DEPTH_SOURCE.lock().unwrap();
-        let view = unsafe {
-            match depth_source {
-                Some(source) => source(),
-                None => (self.platform.engine_depth_view)(self.depth_rva),
-            }
-        };
+        let view = unsafe { (self.platform.engine_depth_view)(self.depth_rva) };
         if view.is_null() {
             return;
         }
@@ -587,7 +579,7 @@ impl Stage {
         let target = unsafe { (self.platform.motion_target)() };
         let motion = render.motion_input(target);
         let [width, height] = render.extent;
-        let frame = rsf_anomaly_input_frame {
+        let frame = InputFrame {
             depth: depth.as_ptr(),
             motion,
             clip_to_previous_clip: identity.camera.clip_to_previous_clip,
@@ -595,7 +587,7 @@ impl Stage {
             height,
         };
         let previous_inputs = self.engine.lock().unwrap().inputs.take();
-        let mut pass = previous_inputs.unwrap_or_else(|| InputPass::new(self.platform.inputs));
+        let mut pass = previous_inputs.unwrap_or_else(|| InputPass::new(self.platform.state_scope));
         let result = pass.run(context, &frame, self.log.callback, self.log.user as Raw);
         if let Some([depth, motion]) = pass.outputs() {
             let inputs = rsf_d3d11_fg_inputs {
@@ -820,63 +812,21 @@ unsafe extern "C" fn rsf_anomaly_fg_configure_ini(
                 user: 0,
             },
         );
-        rsf_anomaly_fg_install(runtime, depth_rva, platform);
+        install_runtime(runtime, depth_rva, platform);
     }
     selected
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_fg_configure(
-    native: &rsf_anomaly_fg_config,
-    log: rsf_game_log_fn,
-    user: Raw,
-) {
-    Cold::configure(
-        Options::from_native(native),
-        Log {
-            callback: log,
-            user: user as usize,
-        },
-    );
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_fg_install(
-    runtime: HMODULE,
-    depth_rva: u32,
-    platform: *const Platform,
-) -> bool {
+fn install_runtime(runtime: HMODULE, depth_rva: u32, platform: *const Platform) -> bool {
     let Some((options, log)) = Cold::attempt() else {
         return false;
     };
     let Some(platform) = (unsafe { EngineBindings::bind(platform) }) else {
-        log.text(c"Anomaly FG refused: incomplete engine or input bindings.");
+        log.text(c"Anomaly FG refused: incomplete engine bindings.");
         return false;
     };
     Tables::query(runtime, log)
         .is_some_and(|tables| Stage::install(options, log, tables, platform, depth_rva))
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_fg_install_with(
-    present: *const rsf_d3d11_present_api,
-    fg: *const rsf_d3d11_fg_api,
-    platform: *const Platform,
-) -> bool {
-    let Some((options, log)) = Cold::attempt() else {
-        return false;
-    };
-    let (Some(present), Some(fg), Some(platform)) = (unsafe {
-        (
-            full_table(present),
-            full_table(fg),
-            EngineBindings::bind(platform),
-        )
-    }) else {
-        return false;
-    };
-    Tables::bind(*present, *fg)
-        .is_some_and(|tables| Stage::install(options, log, tables, platform, 0))
 }
 
 #[unsafe(no_mangle)]
@@ -908,11 +858,6 @@ pub(crate) unsafe fn reload_capture(ini: *const u16) {
         let settings = unsafe { CaptureSettings::read(ini) };
         stage.options.capture.lock().unwrap().configure(settings);
     }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_fg_set_depth_source(source: rsf_anomaly_fg_depth_source) {
-    *DEPTH_SOURCE.lock().unwrap() = source;
 }
 
 #[unsafe(no_mangle)]
@@ -1253,7 +1198,7 @@ extern "C" fn rsf_anomaly_fg_stage_report(emit: rsf_game_log_fn, user: Raw) {
     ));
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_fg_stage_status() -> Status {
+#[cfg(any(test, feature = "fg-fixture"))]
+fn stage_status() -> Status {
     installed().map_or_else(Status::default, |stage| *stage.status.lock().unwrap())
 }

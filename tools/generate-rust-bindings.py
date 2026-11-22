@@ -310,25 +310,24 @@ generate("games/minecraft/native/platform_abi.rs", "runtime/orchestrator/include
           "evaluate|hudless|present|status_get|close)|input_dump_configure|native_latency_status_get)",
           "--raw-line", "use rsf_game_sys::rsf_game_render_pass;",
           "--raw-line", "type wchar_t = u16;"])
-generate("games/anomaly/src/fg_inputs_abi.rs", "games/anomaly/src/fg_inputs_platform.h",
-         "rsf_anomaly_input_(log|frame|desc|targets|constants|pipeline|platform)", "NOTHING", [],
-         ["--no-recursive-allowlist", "--with-derive-default"])
-generate("games/anomaly/src/fg_policy_abi.rs", "games/anomaly/src/fg_policy_platform.h",
-         "rsf_anomaly_fg_(decision|counters)", "RSF_ANOMALY_(GAMEPLAY_SCREEN|HELD_SCREEN|SKIP_.*|RESET_.*)",
-         ["-Isdk/game/include"], ["--no-recursive-allowlist", "--with-derive-default"])
+generate("games/anomaly/src/fg_stage/fixture_cpu_abi.rs", "games/anomaly/src/fg_stage/fixture_platform.h",
+         "rsf_(native_cpu_(frame|counters)|anomaly_fg_fixture_platform)", "NOTHING",
+         ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/graphics/include",
+          "-Iruntime/contract/include", "-Iruntime/presentation/include", "-Iruntime/backends/dlss/include"],
+         ["--no-recursive-allowlist", "--with-derive-default",
+          "--raw-line", "use crate::fg_stage_abi::rsf_anomaly_fg_state_scope;"])
 generate("games/anomaly/src/motion_frame_target_abi.rs", "games/anomaly/src/motion_frame_target.h",
          "rsf_anomaly_motion_frame_target", "NOTHING", [], ["--with-derive-default"])
 generate("games/anomaly/src/shader_loader/frame_abi.rs", "games/anomaly/src/shader_frame_layout.h",
          "rsf_anomaly_shader_frame_layout", "NOTHING", [])
 generate("games/anomaly/src/fg_stage_abi.rs", "games/anomaly/src/fg_stage_platform.h",
-         "rsf_(anomaly_fg_.*|d3d11_(present_(api|setup)|fg_api)|get_d3d11_(present|fg)_api_fn|"
+         "rsf_(anomaly_fg_.*|d3d11_(present_(api|setup)|fg_api|state)|get_d3d11_(present|fg)_api_fn|"
          "native_fg_(options|status)|fg_status|d3d11_fg_inputs|observer_present(_event)?(_fn)?|backend_log_fn)",
          "RSF_(D3D11_(PRESENT|FG)_API_(VERSION|ENTRY_POINT)|D3D11_FG_INPUTS_VERSION|"
          "FG_(BACKEND_.*|OFF|FIXED|STAT_TOTAL_PRESENTED)|REFLEX_(ON|BOOST)|UI_MODE_BACKBUFFER_HUDLESS)",
-         ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
+         ["-include", "rescaleframe/d3d11_state.h", "-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
           "-Iruntime/graphics/include", "-Iruntime/presentation/include", "-Iruntime/backends/dlss/include"],
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]",
-          "--raw-line", "use crate::fg_inputs_abi::rsf_anomaly_input_platform;",
           "--raw-line", "use crate::motion_frame_target_abi::rsf_anomaly_motion_frame_target;",
           "--raw-line", "use rsf_game_sys::{rsf_game_cpu_event, rsf_game_render_pass, rsf_result};",
           "--raw-line", "type wchar_t = u16;",

@@ -2,7 +2,6 @@
 
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
-use crate::fg_inputs_abi::rsf_anomaly_input_platform;
 use crate::motion_frame_target_abi::rsf_anomaly_motion_frame_target;
 use rsf_game_sys::{rsf_game_cpu_event, rsf_game_render_pass, rsf_result};
 type wchar_t = u16;
@@ -31,6 +30,27 @@ pub const RSF_D3D11_FG_INPUTS_VERSION: u32 = 1;
 pub const RSF_D3D11_FG_API_ENTRY_POINT: &[u8; 21] = b"rsf_get_d3d11_fg_api\0";
 pub const RSF_D3D11_PRESENT_API_VERSION: u32 = 1;
 pub const RSF_D3D11_PRESENT_API_ENTRY_POINT: &[u8; 26] = b"rsf_get_d3d11_present_api\0";
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_d3d11_state {
+    pub opaque: [u64; 1024usize],
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_d3d11_state"][::core::mem::size_of::<rsf_d3d11_state>() - 8192usize];
+    ["Alignment of rsf_d3d11_state"][::core::mem::align_of::<rsf_d3d11_state>() - 8usize];
+    ["Offset of field: rsf_d3d11_state::opaque"]
+        [::core::mem::offset_of!(rsf_d3d11_state, opaque) - 0usize];
+};
+impl Default for rsf_d3d11_state {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
 pub type rsf_backend_log_fn = ::core::option::Option<
     unsafe extern "C" fn(user: *mut ::core::ffi::c_void, message: *const ::core::ffi::c_char),
 >;
@@ -631,76 +651,6 @@ const _: () = {
 pub type rsf_get_d3d11_present_api_fn =
     ::core::option::Option<unsafe extern "C" fn(api: *mut rsf_d3d11_present_api) -> rsf_result>;
 #[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_anomaly_fg_config {
-    pub bridge: bool,
-    pub enabled: bool,
-    pub debug: bool,
-    pub development: bool,
-    pub capture: bool,
-    pub backend: u32,
-    pub generated: u32,
-    pub latency: u32,
-    pub frame_limit_us: u32,
-    pub scope_hold: u32,
-    pub capture_start: u32,
-    pub capture_count: u32,
-    pub capture_interval: u32,
-    pub capture_dir: *const wchar_t,
-    pub streamline_dir: *const wchar_t,
-    pub fidelityfx_dir: *const wchar_t,
-    pub xess_dir: *const wchar_t,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_anomaly_fg_config"][::core::mem::size_of::<rsf_anomaly_fg_config>() - 72usize];
-    ["Alignment of rsf_anomaly_fg_config"]
-        [::core::mem::align_of::<rsf_anomaly_fg_config>() - 8usize];
-    ["Offset of field: rsf_anomaly_fg_config::bridge"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_config, bridge) - 0usize];
-    ["Offset of field: rsf_anomaly_fg_config::enabled"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_config, enabled) - 1usize];
-    ["Offset of field: rsf_anomaly_fg_config::debug"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_config, debug) - 2usize];
-    ["Offset of field: rsf_anomaly_fg_config::development"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_config, development) - 3usize];
-    ["Offset of field: rsf_anomaly_fg_config::capture"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_config, capture) - 4usize];
-    ["Offset of field: rsf_anomaly_fg_config::backend"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_config, backend) - 8usize];
-    ["Offset of field: rsf_anomaly_fg_config::generated"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_config, generated) - 12usize];
-    ["Offset of field: rsf_anomaly_fg_config::latency"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_config, latency) - 16usize];
-    ["Offset of field: rsf_anomaly_fg_config::frame_limit_us"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_config, frame_limit_us) - 20usize];
-    ["Offset of field: rsf_anomaly_fg_config::scope_hold"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_config, scope_hold) - 24usize];
-    ["Offset of field: rsf_anomaly_fg_config::capture_start"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_config, capture_start) - 28usize];
-    ["Offset of field: rsf_anomaly_fg_config::capture_count"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_config, capture_count) - 32usize];
-    ["Offset of field: rsf_anomaly_fg_config::capture_interval"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_config, capture_interval) - 36usize];
-    ["Offset of field: rsf_anomaly_fg_config::capture_dir"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_config, capture_dir) - 40usize];
-    ["Offset of field: rsf_anomaly_fg_config::streamline_dir"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_config, streamline_dir) - 48usize];
-    ["Offset of field: rsf_anomaly_fg_config::fidelityfx_dir"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_config, fidelityfx_dir) - 56usize];
-    ["Offset of field: rsf_anomaly_fg_config::xess_dir"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_config, xess_dir) - 64usize];
-};
-impl Default for rsf_anomaly_fg_config {
-    fn default() -> Self {
-        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
-        unsafe {
-            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
-            s.assume_init()
-        }
-    }
-}
-#[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct rsf_anomaly_fg_status {
     pub installed: bool,
@@ -765,13 +715,31 @@ pub type rsf_anomaly_fg_swap_chain = ::core::ffi::c_void;
 pub type rsf_anomaly_fg_overlay_present = ::core::option::Option<
     unsafe extern "C" fn(user: *mut ::core::ffi::c_void, chain: *mut rsf_anomaly_fg_swap_chain),
 >;
-pub type rsf_anomaly_fg_depth_source =
-    ::core::option::Option<unsafe extern "C" fn() -> *mut ::core::ffi::c_void>;
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_anomaly_fg_state_scope {
+    pub save: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: *mut rsf_d3d11_state) -> u32,
+    >,
+    pub restore: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: *mut rsf_d3d11_state),
+    >,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_anomaly_fg_state_scope"]
+        [::core::mem::size_of::<rsf_anomaly_fg_state_scope>() - 16usize];
+    ["Alignment of rsf_anomaly_fg_state_scope"]
+        [::core::mem::align_of::<rsf_anomaly_fg_state_scope>() - 8usize];
+    ["Offset of field: rsf_anomaly_fg_state_scope::save"]
+        [::core::mem::offset_of!(rsf_anomaly_fg_state_scope, save) - 0usize];
+    ["Offset of field: rsf_anomaly_fg_state_scope::restore"]
+        [::core::mem::offset_of!(rsf_anomaly_fg_state_scope, restore) - 8usize];
+};
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_anomaly_fg_platform {
     pub struct_size: u32,
-    pub inputs: *const rsf_anomaly_input_platform,
     pub engine_version: *const ::core::ffi::c_char,
     pub project_id: *const ::core::ffi::c_char,
     pub units_to_meters: f32,
@@ -780,29 +748,30 @@ pub struct rsf_anomaly_fg_platform {
     pub sr_owns_depth: ::core::option::Option<unsafe extern "C" fn(native_frame: u32) -> bool>,
     pub motion_target:
         ::core::option::Option<unsafe extern "C" fn() -> rsf_anomaly_motion_frame_target>,
+    pub state_scope: rsf_anomaly_fg_state_scope,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_anomaly_fg_platform"]
-        [::core::mem::size_of::<rsf_anomaly_fg_platform>() - 64usize];
+        [::core::mem::size_of::<rsf_anomaly_fg_platform>() - 72usize];
     ["Alignment of rsf_anomaly_fg_platform"]
         [::core::mem::align_of::<rsf_anomaly_fg_platform>() - 8usize];
     ["Offset of field: rsf_anomaly_fg_platform::struct_size"]
         [::core::mem::offset_of!(rsf_anomaly_fg_platform, struct_size) - 0usize];
-    ["Offset of field: rsf_anomaly_fg_platform::inputs"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_platform, inputs) - 8usize];
     ["Offset of field: rsf_anomaly_fg_platform::engine_version"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_platform, engine_version) - 16usize];
+        [::core::mem::offset_of!(rsf_anomaly_fg_platform, engine_version) - 8usize];
     ["Offset of field: rsf_anomaly_fg_platform::project_id"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_platform, project_id) - 24usize];
+        [::core::mem::offset_of!(rsf_anomaly_fg_platform, project_id) - 16usize];
     ["Offset of field: rsf_anomaly_fg_platform::units_to_meters"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_platform, units_to_meters) - 32usize];
+        [::core::mem::offset_of!(rsf_anomaly_fg_platform, units_to_meters) - 24usize];
     ["Offset of field: rsf_anomaly_fg_platform::engine_depth_view"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_platform, engine_depth_view) - 40usize];
+        [::core::mem::offset_of!(rsf_anomaly_fg_platform, engine_depth_view) - 32usize];
     ["Offset of field: rsf_anomaly_fg_platform::sr_owns_depth"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_platform, sr_owns_depth) - 48usize];
+        [::core::mem::offset_of!(rsf_anomaly_fg_platform, sr_owns_depth) - 40usize];
     ["Offset of field: rsf_anomaly_fg_platform::motion_target"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_platform, motion_target) - 56usize];
+        [::core::mem::offset_of!(rsf_anomaly_fg_platform, motion_target) - 48usize];
+    ["Offset of field: rsf_anomaly_fg_platform::state_scope"]
+        [::core::mem::offset_of!(rsf_anomaly_fg_platform, state_scope) - 56usize];
 };
 impl Default for rsf_anomaly_fg_platform {
     fn default() -> Self {

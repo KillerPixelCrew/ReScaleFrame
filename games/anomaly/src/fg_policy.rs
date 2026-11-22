@@ -1,16 +1,44 @@
 // SPDX-License-Identifier: MIT
-use crate::fg_policy_abi::*;
+use rsf_game_sys::{RSF_SCREEN_FLIGHT, RSF_SCREEN_UNKNOWN};
 
-type Decision = rsf_anomaly_fg_decision;
-type Counters = rsf_anomaly_fg_counters;
+pub(crate) const RSF_ANOMALY_SKIP_NONE: i32 = 0;
+const RSF_ANOMALY_SKIP_NO_LEVEL: i32 = 1;
+pub(crate) const RSF_ANOMALY_SKIP_SCOPE: i32 = 2;
+pub(crate) const RSF_ANOMALY_SKIP_NO_PRESENT: i32 = 3;
+const RSF_ANOMALY_SKIP_NO_INPUTS: i32 = 4;
+const RSF_ANOMALY_SKIP_COUNT: usize = 5;
+pub(crate) const RSF_ANOMALY_RESET_NONE: i32 = 0;
+const RSF_ANOMALY_RESET_FIRST: i32 = 1;
+pub(crate) const RSF_ANOMALY_RESET_DEVICE: i32 = 2;
+pub(crate) const RSF_ANOMALY_RESET_DISCONTINUITY: i32 = 3;
+pub(crate) const RSF_ANOMALY_RESET_SCOPE_END: i32 = 4;
+const RSF_ANOMALY_RESET_SIZE: i32 = 5;
+const RSF_ANOMALY_RESET_CUT: i32 = 6;
+const RSF_ANOMALY_RESET_COUNT: usize = 7;
 
-const GAMEPLAY: u32 = RSF_ANOMALY_GAMEPLAY_SCREEN as u32;
-const HELD: u32 = RSF_ANOMALY_HELD_SCREEN as u32;
+#[derive(Default, Copy, Clone)]
+pub(crate) struct Decision {
+    pub tag: u32,
+    pub screen: u32,
+    pub reset: i32,
+    pub skip: i32,
+}
 
-const _: fn(&Counters) = |counts| {
-    let _: &[u64; RSF_ANOMALY_SKIP_COUNT as usize] = &counts.skipped;
-    let _: &[u64; RSF_ANOMALY_RESET_COUNT as usize] = &counts.resets;
-};
+#[derive(Default, Copy, Clone)]
+pub(crate) struct Counters {
+    pub source_frames: u64,
+    pub level_frames: u64,
+    pub eligible_at_ui_boundary: u64,
+    pub fed: u64,
+    pub presented: u64,
+    pub unpresented: u64,
+    pub scope_frames: u64,
+    pub skipped: [u64; RSF_ANOMALY_SKIP_COUNT],
+    pub resets: [u64; RSF_ANOMALY_RESET_COUNT],
+}
+
+const GAMEPLAY: u32 = RSF_SCREEN_FLIGHT;
+const HELD: u32 = RSF_SCREEN_UNKNOWN;
 
 #[derive(Default)]
 struct Frame {
