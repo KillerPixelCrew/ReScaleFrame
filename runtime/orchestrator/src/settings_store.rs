@@ -470,6 +470,31 @@ pub(crate) unsafe extern "C" fn rsf_settings_store_write_layout(
     file.write_integer(OVERLAY_LAYOUT, value)
 }
 
+/// # Safety
+/// `ini` and `section` are terminated UTF-16 strings.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_settings_store_read_fg_debug(
+    ini: PCWSTR,
+    section: PCWSTR,
+    fallback: u32,
+) -> u32 {
+    File::new(ini, section).map_or(fallback, |file| file.integer("FGDebug", fallback))
+}
+
+/// # Safety
+/// `ini` and `section` are terminated UTF-16 strings.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_settings_store_write_fg_debug(
+    ini: PCWSTR,
+    section: PCWSTR,
+    value: u32,
+) -> i32 {
+    let Some(file) = File::new(ini, section) else {
+        return INVALID_ARGUMENT;
+    };
+    file.write_integer("FGDebug", u32::from(value != 0))
+}
+
 /// Persists only the shared post-pass keys for hosts that own their base SR settings.
 ///
 /// # Safety

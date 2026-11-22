@@ -5,6 +5,7 @@
 #include <rescaleframe/gl_pipeline.h>
 #include <rescaleframe/native_cpu.h>
 #include <rescaleframe/sr_session.h>
+#include <rescaleframe/overlay_api.h>
 #include <rescaleframe/input_dump.h>
 #include <windows.h>
 #include <GL/gl.h>
@@ -227,14 +228,64 @@ int main() try {
             bind(0x8d40,0);remove(1,&fbo);
             std::printf("PASS: native SR backend %u, plan %ux%u -> %ux%u, runtime switch and DXGI presentation\n",backend,surfaces.render_width,surfaces.render_height,width,height);
         }
-        bind(0x8d40,0);remove(1,&held_framebuffer);
+        bind(0x8d40,0);
         rsf_native_latency_status latency{sizeof(latency),1};
         require(rsf_native_latency_status_get(&latency)!=0 && latency.events.order_violations==0 && latency.events.substitutes==0,
             "all measured GL input frames preserve core ordering without substitute polls");
         std::printf("GL core latency: owner=%u paced=%llu input=%llu/%llu/%llu pings=%llu order=%llu substitutes=%llu\n",
             latency.owner,latency.paced_frames,latency.events.input_events[0],latency.events.input_events[1],
             latency.events.input_events[2],latency.events.pings,latency.events.order_violations,latency.events.substitutes);
+        const auto directory=std::filesystem::temp_directory_path();
+        wchar_t ini[MAX_PATH]{};
+        require(GetTempFileNameW(directory.c_str(),L"rsf",0,ini)!=0&&DeleteFileW(ini)!=0,
+            "reserve a missing instance configuration for legacy migration");
+        rsf_gl_pipeline_options legacy{};
+        legacy.struct_size=sizeof(legacy);
+        legacy.quality=1;
+        legacy.generation={sizeof(legacy.generation),RSF_FG_OFF,1,RSF_REFLEX_OFF,0,1};
+        require(rsf_gl_pipeline_settings_open(pipeline,ini,L"Render","OpenGL fixture",&legacy,60)==RSF_BACKEND_OK,
+            "register OpenGL settings with the shared overlay");
+        require(GetPrivateProfileIntW(L"Render",L"FrameLimitUs",0,ini)==16666&&
+            GetPrivateProfileIntW(L"Render",L"FGDebug",0,ini)==1,"persist migrated frame limit and diagnostic control");
+        rsf_overlay_api overlay{sizeof(overlay),RSF_OVERLAY_API_VERSION};
+        rsf_render_settings requested{sizeof(requested),RSF_RENDER_FRONTEND_ABI_VERSION};
+        require(rsf_get_overlay_api(&overlay)==RSF_OK&&overlay.settings_get(&requested)==RSF_OK,"read shared settings");
+        const auto revision=rsf_gl_pipeline_settings_revision(pipeline);
+        requested.sr_enabled=1;requested.sr_backend=RSF_SR_FSR3;
+        require(overlay.settings_apply(&requested)==RSF_OK&&rsf_gl_pipeline_settings_revision(pipeline)>revision,
+            "a saved overlay change invalidates the current configuration");
+        require(rsf_gl_pipeline_configure_settings(pipeline,1280,720)==RSF_BACKEND_OK,
+            "reconfigure the OpenGL pipeline at the same extent");
+        rsf_gl_pipeline_status settings_status{};
+        settings_status.struct_size=sizeof(settings_status);
+        require(rsf_gl_pipeline_status_get(pipeline,&settings_status)==RSF_BACKEND_OK&&
+            settings_status.requested_sr==RSF_SR_FSR3&&settings_status.effective_sr==RSF_SR_FSR3,
+            "shared settings reach native provider selection before simulation");
+        require(GetPrivateProfileIntW(L"Render",L"FGDebug",0,ini)==1,
+            "rewriting shared settings keeps the persisted FG debug control");
+        if(std::getenv("RSF_GL_TEST_OVERLAY")) {
+            const auto original_owner=GetWindowLongPtrW(window.window,GWLP_WNDPROC);
+            rsf_gl_pipeline_surfaces surfaces{};
+            surfaces.struct_size=sizeof(surfaces);
+            require(rsf_gl_pipeline_get_surfaces(pipeline,&surfaces)==RSF_BACKEND_OK,"get the shared final image");
+            bind(0x8d40,held_framebuffer);attach(0x8d40,0x8ce0,GL_TEXTURE_2D,surfaces.composed,0);
+            require(check(0x8d40)==0x8cd5,"bind the shared final image for the overlay frame");
+            glClearColor(.25f,.5f,.75f,1);glClear(GL_COLOR_BUFFER_BIT);
+            bind(0x8d40,0);
+            ++frame;
+            rsf_gl_pipeline_cpu(pipeline,frame,0);
+            require(rsf_gl_pipeline_present(pipeline,frame,0)==RSF_BACKEND_OK,"compose the shared overlay before DXGI Present");
+            rsf_overlay_diagnostics diagnostics{};
+            diagnostics.struct_size=sizeof(diagnostics);
+            require(rsf_get_overlay_diagnostics(&diagnostics)==RSF_OK&&diagnostics.presents_drawn==1&&
+                GetWindowLongPtrW(window.window,GWLP_WNDPROC)!=original_owner,
+                "draw the native panel and install input on the GLFW parent");
+            require(rsf_gl_pipeline_configure_settings(pipeline,854,480)==RSF_BACKEND_OK,
+                "wrapped overlay buffers retire before resizing the native backbuffer");
+        }
+        remove(1,&held_framebuffer);
         require(rsf_gl_pipeline_close(pipeline)==RSF_BACKEND_OK,"close GL native pipeline");
+        require(DeleteFileW(ini)!=0,"remove the fixture's settings file");
         if(capture_requested) {
             std::filesystem::path bundle;
             for(const auto& entry:std::filesystem::directory_iterator(capture_root/"website"))if(entry.is_directory())bundle=entry.path();

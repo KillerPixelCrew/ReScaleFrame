@@ -426,6 +426,17 @@ unsafe extern "C" fn depth_domains_requested(pass: *const Pass) -> u32 {
     };
     u32::from(bytes.iter().any(|byte| *byte != 0))
 }
+unsafe extern "C" fn overlay_configure(_: *const rsf_overlay_service_setup) -> i32 {
+    NOT_READY
+}
+unsafe extern "C" fn overlay_present(
+    _: Handle, _: Handle, _: Handle, _: Handle, _: Handle, _: Log, _: Handle,
+) -> i32 {
+    NOT_READY
+}
+unsafe extern "C" fn overlay_notify(_: u32) -> i32 {
+    NOT_READY
+}
 
 static PLATFORM: Platform = Platform {
     gl_open,
@@ -478,6 +489,9 @@ static PLATFORM: Platform = Platform {
     dlss_preset_valid,
     fg_default_backend,
     depth_domains_requested,
+    overlay_configure,
+    overlay_present,
+    overlay_notify,
 };
 
 unsafe extern "C" fn record_log(_: Handle, message: *const c_char) {

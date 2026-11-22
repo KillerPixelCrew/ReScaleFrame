@@ -219,9 +219,10 @@ generate("games/minecraft/native/platform_abi.rs", "runtime/orchestrator/include
           "-Iruntime/contract/include", "-Iruntime/presentation/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]",
           "--allowlist-function",
-          "rsf_(gl_window_(create|destroy)|gl_pipeline_(open|configure|get_surfaces|cpu|input|abort|"
+          "rsf_(gl_window_(create|destroy)|gl_pipeline_(open|configure(_legacy|_settings)?|settings_(open|revision)|get_surfaces|cpu|input|abort|"
           "evaluate|hudless|present|status_get|close)|input_dump_configure|native_latency_status_get)",
-          "--raw-line", "use rsf_game_sys::rsf_game_render_pass;"])
+          "--raw-line", "use rsf_game_sys::rsf_game_render_pass;",
+          "--raw-line", "type wchar_t = u16;"])
 generate("games/anomaly/src/fg_inputs_abi.rs", "games/anomaly/src/fg_inputs_platform.h",
          "rsf_anomaly_input_(log|frame|desc|targets|constants|pipeline|platform)", "NOTHING", [],
          ["--no-recursive-allowlist", "--with-derive-default"])

@@ -10,6 +10,7 @@
 #include <rescaleframe/native_fg_d3d12.h>
 #include <rescaleframe/streamline_host.h>
 #include <rescaleframe/d3d11_present_bridge.h>
+#include "overlay_bound.h"
 #include <windows.h>
 #include <d3d12.h>
 #include <dxgi1_4.h>
@@ -178,6 +179,9 @@ struct Platform {
     decltype(&dlss_preset_valid) dlss_preset_valid;
     decltype(&fg_default_backend) fg_default_backend;
     decltype(&depth_domains_requested) depth_domains_requested;
+    decltype(&rsf_overlay_configure_bound) overlay_configure;
+    decltype(&rsf_overlay_present_bound) overlay_present;
+    decltype(&rsf_overlay_notify_bound) overlay_notify;
 };
 
 constexpr Platform platform{
@@ -191,6 +195,7 @@ constexpr Platform platform{
     rsf_d3d11_present_switch_result, rsf_d3d11_present_abort,
     pcl_message, rsf_native_cpu_read, latency_completed, rsf_native_latency_end_session, rsf_input_dump_cancel,
     dlss_preset_valid, fg_default_backend, depth_domains_requested,
+    rsf_overlay_configure_bound, rsf_overlay_present_bound, rsf_overlay_notify_bound,
 };
 }
 

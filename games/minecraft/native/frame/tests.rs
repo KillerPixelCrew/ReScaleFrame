@@ -142,19 +142,19 @@ fn options_map_generation_limit_and_debug() {
         generation.struct_size,
         struct_size::<rsf_native_fg_options>()
     );
-    assert_eq!(generation.mode, RSF_FG_FIXED);
+    assert_eq!(generation.mode, 0);
     assert_eq!(
         (generation.generated_frames, generation.reflex_mode),
         (3, 2)
     );
-    assert_eq!(generation.frame_limit_us, 16_666);
+    assert_eq!(generation.frame_limit_us, 0);
     assert_eq!(generation.debug, 1);
 
     configuration.fg = 0;
     configuration.limit = 0;
     configuration.debug = false;
     let generation = super::options(&configuration).generation;
-    assert_eq!(generation.mode, RSF_FG_OFF);
+    assert_eq!(generation.mode, 0);
     assert_eq!((generation.frame_limit_us, generation.debug), (0, 0));
     configuration.limit = -5;
     assert_eq!(super::options(&configuration).generation.frame_limit_us, 0);

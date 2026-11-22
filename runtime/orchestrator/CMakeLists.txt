@@ -33,6 +33,7 @@ add_library(rsf_orchestrator_core OBJECT
     src/callback_render_host_platform.cpp
     src/render_host_platform.cpp
     src/overlay_d3d12.cpp
+    src/overlay_platform.cpp
     src/overlay_native12.cpp
     src/native_regions.cpp
     src/fg_session_platform.cpp
@@ -159,7 +160,6 @@ target_link_libraries(rsf_orchestrator PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,rsf
 target_link_libraries(rsf_orchestrator PRIVATE rsf_build_options)
 set_target_properties(rsf_orchestrator PROPERTIES OUTPUT_NAME "ReScaleFrame.Runtime")
 target_sources(rsf_orchestrator PRIVATE src/d3d11_present_api.cpp)
-target_sources(rsf_orchestrator PRIVATE src/overlay_platform.cpp)
 target_sources(rsf_orchestrator PRIVATE src/d3d11_host.cpp src/d3d11_host_exports.c)
 target_sources(rsf_orchestrator PRIVATE src/auxiliary_sr.cpp)
 target_sources(rsf_orchestrator PRIVATE src/d3d11_sr_api.cpp)

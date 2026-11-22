@@ -67,22 +67,24 @@ const LATENCY_ANTILAG2: u32 = 3;
 const LATENCY_ANTILAG_VULKAN: u32 = 4;
 
 /// Super-resolution backends by ID. The ID is the bit the host's choices mask uses.
-const SR_BACKENDS: [(u32, &str); 6] = [
+const SR_BACKENDS: [(u32, &str); 7] = [
     (1, "DLSS"),
     (2, "FSR2"),
     (3, "FSR3"),
     (4, "FSR4"),
     (5, "XeSS"),
     (6, "FSR1"),
+    (7, "Auto"),
 ];
 
 /// Frame generation providers by ID. Zero is Off, and the ID is the bit in the choices mask.
-const FG_PROVIDERS: [(u32, &str); 5] = [
+const FG_PROVIDERS: [(u32, &str); 6] = [
     (0, "Off"),
     (1, "DLSS-G"),
     (3, "FSR3"),
     (4, "FSR4"),
     (5, "XeSS"),
+    (7, "Auto"),
 ];
 
 const DLSS_PRESETS: [(u32, &str); 7] = [
@@ -261,9 +263,9 @@ pub struct Controls {
     /// The upscaling switch row.
     pub enabled: Option<Rect>,
     /// One control per SR backend, in `SR_BACKENDS` order.
-    pub backend: [Option<Rect>; 6],
+    pub backend: [Option<Rect>; 7],
     /// Off, DLSS-G, FSR3, FSR4 and XeSS generation choices.
-    pub fg_backend: [Option<Rect>; 5],
+    pub fg_backend: [Option<Rect>; 6],
     /// The frame generation switch row.
     pub fg_enabled: Option<Rect>,
     /// Multiplier segments, 2x first.
@@ -831,6 +833,7 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
     let shown_backend = selection.requested_backend.unwrap_or(stats.backend);
     let items: Vec<Segment> = SR_BACKENDS
         .iter()
+        .filter(|(id, _)| *id != 7 || stats.backend_choices & (1 << id) != 0)
         .map(|(id, name)| Segment {
             label: (*name).to_owned(),
             sub: None,
@@ -846,7 +849,7 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
             },
         })
         .collect();
-    let (chosen, rects) = segments(ui, "sr-backend", &items, 6);
+    let (chosen, rects) = segments(ui, "sr-backend", &items, items.len());
     store(&mut controls.backend, &rects);
     if let Some(index) = chosen {
         let backend = SR_BACKENDS[index].0;
@@ -857,7 +860,7 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
     }
     let missing: Vec<&str> = SR_BACKENDS
         .iter()
-        .filter(|(id, _)| stats.backend_choices & (1 << id) == 0)
+        .filter(|(id, _)| *id != 7 && stats.backend_choices & (1 << id) == 0)
         .map(|(_, name)| *name)
         .collect();
     if !stats.backend_loaded {
@@ -993,9 +996,10 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
     }
 
     heading(ui, "Provider");
-    let pending = generation.requested_backend != generation.backend;
+    let pending = generation.requested_backend != 7 && generation.requested_backend != generation.backend;
     let items: Vec<Segment> = FG_PROVIDERS
         .iter()
+        .filter(|(id, _)| *id != 7 || generation.backend_choices & (1 << id) != 0)
         .map(|(id, name)| Segment {
             label: (*name).to_owned(),
             sub: None,
@@ -1007,7 +1011,7 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
             },
         })
         .collect();
-    let (chosen, rects) = segments(ui, "fg-provider", &items, 5);
+    let (chosen, rects) = segments(ui, "fg-provider", &items, items.len());
     store(&mut controls.fg_backend, &rects);
     if let Some(index) = chosen {
         let id = FG_PROVIDERS[index].0;
@@ -1032,7 +1036,7 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
     }
     let missing: Vec<&str> = FG_PROVIDERS
         .iter()
-        .filter(|(id, _)| *id != 0 && generation.backend_choices & (1 << id) == 0)
+        .filter(|(id, _)| *id != 0 && *id != 7 && generation.backend_choices & (1 << id) == 0)
         .map(|(_, name)| *name)
         .collect();
     let mut line = if runtime_switching {

@@ -18,8 +18,7 @@ public final class IrisIntegration {
     private static Boolean previousOwner;
     private IrisIntegration() {}
     private static boolean ownsTemporal() {
-        var settings=TaaSettings.current;
-        return settings.enabled||settings.upscaler!=TaaSettings.Upscaler.OFF||settings.frameGeneration!=TaaSettings.FrameGeneration.OFF;
+        return TaaSettings.current.enabled||NativeRenderer.nativeRequested();
     }
     public static OptionValues runtimeOptions(OptionValues original) {return runtimeOptions(original,ownsTemporal());}
     static synchronized OptionValues runtimeOptions(OptionValues original,boolean owner) {

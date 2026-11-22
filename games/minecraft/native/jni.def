@@ -3,6 +3,9 @@ EXPORTS
     Java_org_kpc_rescaleframecraft_render_NativeBridge_destroySurface
     Java_org_kpc_rescaleframecraft_render_NativeBridge_open
     Java_org_kpc_rescaleframecraft_render_NativeBridge_configure
+    Java_org_kpc_rescaleframecraft_render_NativeBridge_openSettings
+    Java_org_kpc_rescaleframecraft_render_NativeBridge_settingsRevision
+    Java_org_kpc_rescaleframecraft_render_NativeBridge_configureSettings
     Java_org_kpc_rescaleframecraft_render_NativeBridge_cpu
     Java_org_kpc_rescaleframecraft_render_NativeBridge_input
     Java_org_kpc_rescaleframecraft_render_NativeBridge_abort

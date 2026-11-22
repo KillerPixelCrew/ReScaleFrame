@@ -8,6 +8,7 @@ use crate::com_ref::ComRef;
 use crate::cpu_abi::rsf_native_cpu_frame;
 use crate::fg12_abi::rsf_fg12_setup;
 use crate::gl_pipeline_abi::*;
+use crate::overlay_abi::{RSF_OVERLAY_NOTIFY_DEVICE_RESET, rsf_overlay_service_setup};
 use crate::owned_handle::OwnedHandle as Owned;
 use crate::render_abi::{
     RSF_DLSS_ABI_VERSION, RSF_FG_BACKEND_AUTO, RSF_FG_OFF, RSF_REFLEX_OFF, rsf_backend_log_fn,
@@ -27,6 +28,7 @@ use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Mutex, MutexGuard, TryLockError};
 
+mod settings;
 mod window;
 
 const OK: i32 = 0;
@@ -128,6 +130,9 @@ pub(crate) struct Platform {
     dlss_preset_valid: unsafe extern "C" fn(u32) -> c_int,
     fg_default_backend: unsafe extern "C" fn(u32, u32) -> u32,
     depth_domains_requested: unsafe extern "C" fn(*const Pass) -> u32,
+    overlay_configure: unsafe extern "C" fn(*const rsf_overlay_service_setup) -> i32,
+    overlay_present: unsafe extern "C" fn(Handle, Handle, Handle, Handle, Handle, Log, Handle) -> i32,
+    overlay_notify: unsafe extern "C" fn(u32) -> i32,
 }
 
 impl Platform {
@@ -235,6 +240,8 @@ struct State {
     generation: u32,
     status: rsf_gl_pipeline_status,
     evaluation_result: i32,
+    evaluated_frame: u64,
+    overlay: bool,
     frame_view: Option<(u64, Option<u64>)>,
     active: Option<Surfaces>,
 }
@@ -256,6 +263,8 @@ pub(crate) struct Pipeline {
     session: u64,
     own_window: bool,
     ready: AtomicBool,
+    parent: Handle,
+    settings: settings::SettingsSlot,
     // Graphics-owner state. CPU, input, abort and PCL calls never take it.
     state: Mutex<State>,
 }
@@ -570,8 +579,15 @@ impl Pipeline {
         };
         state.status.requested_sr = options.sr_backend;
         state.status.requested_fg = options.fg_backend;
-        unsafe { (p.fg_options)(&options.generation) };
-        self.request_fg(state, options.fg_backend);
+        if state.overlay {
+            let drained = unsafe { (p.gl_drain)(state.sharing) };
+            if drained != OK {
+                return drained;
+            }
+        } else {
+            unsafe { (p.fg_options)(&options.generation) };
+            self.request_fg(state, options.fg_backend);
+        }
         let sharpening = if options.sharpening.struct_size != 0 {
             options.sharpening
         } else {
@@ -587,9 +603,11 @@ impl Pipeline {
             state.status.sr_result = active.selection_result;
             return unsafe { (p.sr_set_sharpening)(active.sr.get(), &sharpening) };
         }
-        let drained = unsafe { (p.gl_drain)(state.sharing) };
-        if drained != OK {
-            return drained;
+        if !state.overlay {
+            let drained = unsafe { (p.gl_drain)(state.sharing) };
+            if drained != OK {
+                return drained;
+            }
         }
         let (selected, surfaces) = match self.prepare(state, options, shape) {
             Ok(prepared) => prepared,
@@ -602,6 +620,7 @@ impl Pipeline {
         state.status.effective_sr = selected;
         state.status.evaluated = 0;
         state.evaluation_result = OK;
+        state.evaluated_frame = 0;
         state.frame_view = None;
         if let Some(active) = &state.active {
             unsafe { (p.sr_set_sharpening)(active.sr.get(), &sharpening) };
@@ -683,6 +702,7 @@ impl Pipeline {
         state.record_view(&pass);
         if result == OK && state.status.effective_sr != SR_NONE {
             state.status.evaluated += 1;
+            state.evaluated_frame = pass.source_frame_id;
         }
         result
     }
@@ -742,6 +762,9 @@ impl Pipeline {
         if let Err(result) = copied {
             return result;
         }
+        if state.overlay {
+            settings::present(self, state, chain.as_ptr(), buffer.as_ptr(), frame);
+        }
         let mut window: Pass = unsafe { std::mem::zeroed() };
         window.struct_size = size_of::<Pass>() as u32;
         window.role = RSF_GAME_RENDER_WINDOW;
@@ -772,6 +795,12 @@ impl Pipeline {
             let drained = unsafe { (p.gl_drain)(state.sharing) };
             if drained != OK {
                 return drained;
+            }
+            if state.overlay {
+                if unsafe { (p.overlay_notify)(RSF_OVERLAY_NOTIFY_DEVICE_RESET) } != OK {
+                    return NOT_READY;
+                }
+                state.overlay = false;
             }
             // DLSS SR borrows the chain's Streamline host.
             state.active = None;
@@ -943,6 +972,8 @@ fn open(
         session: session_seed(),
         own_window,
         ready: AtomicBool::new(false),
+        parent: setup.hwnd,
+        settings: settings::SettingsSlot::new(),
         state: Mutex::new(State {
             sharing,
             device,
@@ -957,6 +988,8 @@ fn open(
             generation: 0,
             status: new_status(),
             evaluation_result: OK,
+            evaluated_frame: 0,
+            overlay: false,
             frame_view: None,
             active: None,
         }),
@@ -1074,6 +1107,9 @@ unsafe extern "C" fn rsf_gl_pipeline_configure(
         let result = pipeline.configure(state, &options, width, height);
         if result != OK {
             state.status.sr_result = result;
+        } else if state.overlay {
+            unsafe { (pipeline.platform.fg_options)(&options.generation) };
+            pipeline.request_fg(state, options.fg_backend);
         }
         result
     })

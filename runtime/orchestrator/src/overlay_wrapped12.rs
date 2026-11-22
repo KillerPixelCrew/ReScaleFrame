@@ -80,15 +80,22 @@ impl Binding {
 struct Wrapped<'a> {
     platform: &'a Platform,
     binding: &'a Binding,
-    view: ComRef,
-    resource: ComRef,
+    view: Option<ComRef>,
+    resource: Option<ComRef>,
     _backbuffer: ComRef,
 }
 
 impl Drop for Wrapped<'_> {
     fn drop(&mut self) {
         unsafe {
-            (self.platform.release.unwrap())(self.binding.interop.as_ptr(), self.resource.as_ptr());
+            (self.platform.release.unwrap())(
+                self.binding.interop.as_ptr(),
+                self.resource.as_ref().unwrap().as_ptr(),
+            );
+            // Release D3D11 references first. Flush also retires their deferred
+            // destruction, so they do not hold a backbuffer across ResizeBuffers.
+            self.view = None;
+            self.resource = None;
             (self.platform.flush.unwrap())(self.binding.context.as_ptr());
         }
     }
@@ -98,6 +105,7 @@ struct Frame<'a> {
     device: Handle,
     queue: Handle,
     chain: Handle,
+    input_window: Handle,
     stats: &'a rsf_overlay_stats,
     intent: *mut rsf_overlay_intent,
     logger: rsf_overlay12_log,
@@ -171,8 +179,10 @@ impl State {
         let started = if let Some(started) = binding.started {
             started
         } else {
-            let mut window = ptr::null_mut();
-            if unsafe { (platform.window.unwrap())(frame.chain, &mut window) } == 0 {
+            let mut window = frame.input_window;
+            if window.is_null()
+                && unsafe { (platform.window.unwrap())(frame.chain, &mut window) } == 0
+            {
                 return 0;
             }
             if unsafe {
@@ -220,14 +230,14 @@ impl State {
         let wrapped = Wrapped {
             platform,
             binding,
-            view,
-            resource,
+            view: Some(view),
+            resource: Some(resource),
             _backbuffer: backbuffer,
         };
         unsafe {
             (platform.draw.unwrap())(
                 binding.context.as_ptr(),
-                wrapped.view.as_ptr(),
+                wrapped.view.as_ref().unwrap().as_ptr(),
                 native.width,
                 native.height,
                 frame.stats,
@@ -252,6 +262,7 @@ unsafe extern "C" fn rsf_core_overlay11on12_frame(
     device: Handle,
     queue: Handle,
     chain: Handle,
+    input_window: Handle,
     stats: *const rsf_overlay_stats,
     intent: *mut rsf_overlay_intent,
     logger: rsf_overlay12_log,
@@ -268,18 +279,24 @@ unsafe extern "C" fn rsf_core_overlay11on12_frame(
     let Ok(mut owner) = OWNER.try_lock() else {
         return 0;
     };
-    owner.render(
+    let drawn = owner.render(
         platform,
         &Frame {
             device,
             queue,
             chain,
+            input_window,
             stats: unsafe { &*stats },
             intent,
             logger,
             user,
         },
-    )
+    );
+    if !input_window.is_null() && owner.failed {
+        -1
+    } else {
+        drawn
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -410,6 +427,7 @@ mod tests {
             device,
             queue,
             chain: device,
+            input_window: ptr::null_mut(),
             stats: &stats,
             intent: ptr::null_mut(),
             logger: None,

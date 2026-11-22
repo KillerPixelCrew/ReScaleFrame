@@ -8,8 +8,6 @@ import net.minecraft.client.Minecraft;
 import org.joml.Matrix4f;
 import org.kpc.rescaleframecraft.ReScaleFrameCraft;
 import org.kpc.rescaleframecraft.client.TaaSettings;
-import org.kpc.rescaleframecraft.client.FrameGenerationLimits;
-import org.kpc.rescaleframecraft.client.SodiumConfig;
 import org.kpc.rescaleframecraft.temporal.TemporalCamera;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.glfw.GLFWNativeWin32;
@@ -40,16 +38,9 @@ public final class NativeRenderer {
     private static final Matrix4f currentInverse=new Matrix4f(),previousClip=new Matrix4f(),depthRemap=new Matrix4f();
     private static float frameTime=.016f;
     private static final InputFrames inputs=new InputFrames((id,kinds)->NativeBridge.input(handle,id,kinds));
-    private record Configuration(int width,int height,TaaSettings.Upscaler upscaler,TaaSettings.Quality quality,
-        TaaSettings.DlssPreset preset,TaaSettings.FrameGeneration generation,int count,TaaSettings.Reflex reflex,int limit,boolean debug,TaaSettings.SharpeningState sharpening) {
-        Configuration(int width,int height,TaaSettings settings) {
-            this(width,height,settings.upscaler,settings.quality,settings.dlssPreset,settings.frameGeneration,settings.generatedFrames,
-                settings.reflex,settings.frameLimit,settings.nativeDebug,settings.sharpeningState());
-        }
-        boolean matches(int width,int height,TaaSettings settings) {
-            return this.width==width&&this.height==height&&upscaler==settings.upscaler&&quality==settings.quality&&
-                preset==settings.dlssPreset&&generation==settings.frameGeneration&&count==settings.generatedFrames&&reflex==settings.reflex&&
-                limit==settings.frameLimit&&debug==settings.nativeDebug&&sharpening.matches(settings);
+    private record Configuration(int width,int height,long revision) {
+        boolean matches(int width,int height,long revision) {
+            return this.width==width&&this.height==height&&this.revision==revision;
         }
     }
     private NativeRenderer() {}
@@ -63,7 +54,6 @@ public final class NativeRenderer {
         if(!GL.getCapabilities().OpenGL33)return;
         display=game.getMainRenderTarget();
         frameDisplayWidth=display.viewWidth;frameDisplayHeight=display.viewHeight;
-        if(handle==0&&s.upscaler==TaaSettings.Upscaler.OFF&&s.frameGeneration==TaaSettings.FrameGeneration.OFF)return;
         configure(game,s);
         if(handle!=0&&surfaces!=null) {
             cpuFrames.simulation(frame);
@@ -73,33 +63,40 @@ public final class NativeRenderer {
                 status="native status unavailable";
                 return;
             }
-            var limits=FrameGenerationLimits.INSTANCE;
-            if(limits.record((int)NativeStatus.requestedFg(nativeStatus),(int)NativeStatus.effectiveFg(nativeStatus),(int)NativeStatus.maxGeneratedFrames(nativeStatus),NativeStatus.fgSupported(nativeStatus)!=0)) {
-                SodiumConfig.capabilitiesChanged();
-                int count=limits.clamp(s.frameGeneration,s.generatedFrames);
-                if(s.frameGeneration!=TaaSettings.FrameGeneration.OFF&&count!=s.generatedFrames) {s.generatedFrames=count;TaaSettings.save();}
-            }
             status=null;
         }
     }
     private static void configure(Minecraft game,TaaSettings s) {
-        if((applied==null||!applied.matches(display.viewWidth,display.viewHeight,s))&&
-           (failed==null||!failed.matches(display.viewWidth,display.viewHeight,s))) {
-            var configuration=new Configuration(display.viewWidth,display.viewHeight,s);
+        long revision=handle==0?0:NativeBridge.settingsRevision(handle);
+        if((applied==null||!applied.matches(display.viewWidth,display.viewHeight,revision))&&
+           (failed==null||!failed.matches(display.viewWidth,display.viewHeight,revision))) {
+            var configuration=new Configuration(display.viewWidth,display.viewHeight,revision);
             try(var saved=new GlState(true)) {
                 if(handle==0) {
                     var root=NativeBridge.load();
                     long parent=GLFWNativeWin32.glfwGetWin32Window(game.getWindow().getWindow());
-                    surfaceWindow=windowThread(()->NativeBridge.createSurface(parent));
+                    if(surfaceWindow==0)surfaceWindow=windowThread(()->NativeBridge.createSurface(parent));
                     if(surfaceWindow==0)throw new IllegalStateException("Presentation surface must be created on the GLFW event thread");
                     handle=NativeBridge.open(parent,surfaceWindow,root.toString());
                     if(handle==0)throw new IllegalStateException("Native device/presentation initialization refused; see minecraft-native.log");
-                    guides=new GlProgram("fullscreen.vert","native-guides.frag");
-                    copyDepth=new GlProgram("fullscreen.vert","copy-depth.frag");
+                }
+                if(revision==0) {
+                    var path=TaaSettings.nativeSettingsPath();
+                    java.nio.file.Files.createDirectories(path.getParent());
+                    int result=NativeBridge.openSettings(handle,path.toString(),s.upscaler.id,s.quality.ordinal(),
+                        s.dlssPreset.id,s.frameGeneration.id,s.generatedFrames,s.reflex.ordinal(),s.frameLimit,s.nativeDebug,s.sharpening());
+                    if(result!=0) {
+                        if(result==NativeBridge.BACKEND_NOT_READY&&NativeBridge.close(handle)==0)handle=0;
+                        throw new IllegalStateException("Shared settings initialization refused: "+result);
+                    }
+                    configuration=new Configuration(display.viewWidth,display.viewHeight,NativeBridge.settingsRevision(handle));
+                }
+                if(guides==null)guides=new GlProgram("fullscreen.vert","native-guides.frag");
+                if(copyDepth==null)copyDepth=new GlProgram("fullscreen.vert","copy-depth.frag");
+                if(framebuffer==0) {
                     framebuffer=GL30.glGenFramebuffers();readFramebuffer=GL30.glGenFramebuffers();vao=GL30.glGenVertexArrays();
                 }
-                var replacement=NativeBridge.configure(handle,display.viewWidth,display.viewHeight,s.upscaler.id,s.quality.ordinal(),s.dlssPreset.id,s.frameGeneration.id,
-                    s.generatedFrames,s.reflex.ordinal(),s.frameLimit,s.nativeDebug,s.sharpening());
+                var replacement=NativeBridge.configureSettings(handle,display.viewWidth,display.viewHeight);
                 if(replacement==null)throw new IllegalStateException("Native reconfiguration failed; see minecraft-native.log");
                 boolean resize=surfaces==null||surfaces[0]!=replacement[0]||surfaces[1]!=replacement[1];surfaces=replacement;
                 if(resize) {
@@ -126,8 +123,11 @@ public final class NativeRenderer {
     private static String name(long id) {return switch((int)id) {case 0->"Off";case 1->"DLSS";case 2->"FSR2";case 3->"FSR3";case 4->"FSR4";case 5->"XeSS";case 7->"Auto";default->"Unknown";};}
     public static void input(int kinds) {if(handle!=0)inputs.sample(kinds);}
     public static void simulationEnd() {inputs.end();if(handle!=0)NativeBridge.cpu(handle,frame,NativeBridge.SIMULATION_END);}
+    static boolean nativeRequested() {
+        return nativeStatusAvailable&&(NativeStatus.requestedSr(nativeStatus)!=0||NativeStatus.requestedFg(nativeStatus)!=0);
+    }
     public static void beginWorld() {
-        if(handle==0||surfaces==null||world==null||closedFrame==frame)return;
+        if(!nativeRequested()||handle==0||surfaces==null||world==null||closedFrame==frame)return;
         worldRendering=true;world.setClearColor(0,0,0,0);world.clear(Minecraft.ON_OSX);world.bindWrite(true);
     }
     public static RenderTarget worldTarget() {return worldRendering?world:null;}
@@ -255,8 +255,13 @@ public final class NativeRenderer {
     static TemporalRenderer.SceneFrame sceneFrame(long id) {return new TemporalRenderer.SceneFrame(id,surfaces[2],surfaces[3],surfaces[8],true);}
     public static void shutdown() {
         inputs.end();
-        if(handle!=0) {NativeBridge.close(handle);handle=0;surfaces=null;worldRendering=false;}
-        if(surfaceWindow!=0) {NativeBridge.destroySurface(surfaceWindow);surfaceWindow=0;}
+        if(handle!=0) {
+            int result=NativeBridge.close(handle);
+            if(result==0)handle=0;
+            else ReScaleFrameCraft.LOGGER.warn("Shared native teardown will retain its owner after a refusal: {}",result);
+            surfaces=null;worldRendering=false;
+        }
+        if(handle==0&&surfaceWindow!=0) {NativeBridge.destroySurface(surfaceWindow);surfaceWindow=0;}
         if(world!=null) {world.destroyBuffers();world=null;}
         if(guides!=null) {guides.close();guides=null;}
         if(copyDepth!=null) {copyDepth.close();copyDepth=null;}
@@ -266,6 +271,6 @@ public final class NativeRenderer {
         framebuffer=readFramebuffer=vao=0;
         cpuFrames.reset();
         applied=failed=null;display=null;status="native processing off";
-        FrameGenerationLimits.INSTANCE.reset();SodiumConfig.capabilitiesChanged();
+        nativeStatusAvailable=false;
     }
 }
