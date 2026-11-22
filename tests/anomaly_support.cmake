@@ -86,7 +86,6 @@ set_tests_properties(anomaly_sr_swap_contract anomaly_sr_swap_unknown_selection 
 # deployed core variants (tools/anomaly_motion_deploy.py output, local only; 77 when absent) through the Rust
 # deployed-tree loader, b13 packers and invalidation replay. Neither runs game code.
 # The device fixtures retain native draw and readback bodies. Rust schedules their cases.
-set(RSF_ANOMALY_MOTION_SOURCES "${RSF_ANOMALY_SR_SRC}/shader_loader.cpp")
 rsf_add_rust_static(rsf_anomaly_motion_binder_fixture_rust rsf_rust_anomaly_motion_binder_fixture
     rsf-anomaly rsf_anomaly --features motion-binder-fixture)
 add_executable(rsf_anomaly_motion_contract_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_contract_main.cpp")
@@ -98,7 +97,7 @@ add_test(NAME anomaly_motion_unknown_selection COMMAND rsf_anomaly_motion_contra
 set_tests_properties(anomaly_motion_unknown_selection PROPERTIES WILL_FAIL TRUE)
 rsf_add_rust_static(rsf_anomaly_motion_device_fixture_rust rsf_rust_anomaly_motion_device_fixture
     rsf-anomaly rsf_anomaly --features motion-device-fixture)
-add_executable(rsf_anomaly_motion_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_device.cpp" ${RSF_ANOMALY_MOTION_SOURCES}
+add_executable(rsf_anomaly_motion_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_device.cpp"
     "${RSF_ANOMALY_SR_SRC}/motion_bridge.cpp")
 target_include_directories(rsf_anomaly_motion_device_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
 target_compile_definitions(rsf_anomaly_motion_device_test PRIVATE RSF_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
@@ -140,7 +139,7 @@ set_tests_properties(anomaly_motion_tess_device PROPERTIES SKIP_RETURN_CODE 77 T
 # The real VS+HS+DS+PS motion chain of the tessellation pass (local deployment with the dx11/tess roots, NVIDIA adapter
 # preferred; 77 without deployment, d3dcompiler_43 or hardware): a skinned PN/HM mover against the CPU model.
 add_executable(rsf_anomaly_motion_tess_chain_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_tess_chain_device.cpp"
-    ${RSF_ANOMALY_MOTION_SOURCES} "${RSF_ANOMALY_SR_SRC}/motion_bridge.cpp")
+    "${RSF_ANOMALY_SR_SRC}/motion_bridge.cpp")
 target_include_directories(rsf_anomaly_motion_tess_chain_device_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
 target_compile_definitions(rsf_anomaly_motion_tess_chain_device_test PRIVATE RSF_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 target_link_libraries(rsf_anomaly_motion_tess_chain_device_test PRIVATE rsf_anomaly_motion_device_fixture_rust ReScaleFrame::Graphics
@@ -150,7 +149,7 @@ set_tests_properties(anomaly_motion_tess_chain_device PROPERTIES SKIP_RETURN_COD
 # The far (SE_R2_NORMAL_LQ, beyond r__dtex_range) and near (HQ) skinned VS/PS pairs against the CPU model, including a
 # few-pixel mover 100 m away (local deployment, NVIDIA adapter preferred; 77 without deployment, d3dcompiler_43 or hardware).
 add_executable(rsf_anomaly_motion_far_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_far_device.cpp"
-    ${RSF_ANOMALY_MOTION_SOURCES} "${RSF_ANOMALY_SR_SRC}/motion_bridge.cpp")
+    "${RSF_ANOMALY_SR_SRC}/motion_bridge.cpp")
 target_include_directories(rsf_anomaly_motion_far_device_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
 target_compile_definitions(rsf_anomaly_motion_far_device_test PRIVATE RSF_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 target_link_libraries(rsf_anomaly_motion_far_device_test PRIVATE rsf_anomaly_motion_device_fixture_rust ReScaleFrame::Graphics

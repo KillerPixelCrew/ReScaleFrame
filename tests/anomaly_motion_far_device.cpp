@@ -27,7 +27,7 @@
 #include "motion_device_platform.h"
 #include "motion_fixture_platform.h"
 #include "anomaly_motion_native.h"
-#include "shader_loader.h"
+#include "anomaly_motion_shader_facade.h"
 #include <d3d11.h>
 #include <d3d11sdklayers.h>
 #include <d3dcompiler.h>

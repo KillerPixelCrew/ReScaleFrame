@@ -2103,9 +2103,9 @@ Port shader loading, reflection and interception. Track shader-language assets s
 - [x] [games/anomaly/src/runtime_shaders.h](games/anomaly/src/runtime_shaders.h)
 - [x] [games/anomaly/src/shader_d3d.cpp](games/anomaly/src/shader_d3d.cpp)
 - [x] [games/anomaly/src/shader_d3d.h](games/anomaly/src/shader_d3d.h)
-- [ ] [games/anomaly/src/shader_loader.cpp](games/anomaly/src/shader_loader.cpp)
-- [ ] [games/anomaly/src/shader_loader.h](games/anomaly/src/shader_loader.h)
-- [ ] [games/anomaly/src/shader_loader_platform.h](games/anomaly/src/shader_loader_platform.h)
+- [x] [games/anomaly/src/shader_loader.cpp](games/anomaly/src/shader_loader.cpp) (deleted; include opening moved to `shader_loader/d3d.rs`, fixture marshalling moved to `tests/anomaly_motion_shader_facade.h`)
+- [x] [games/anomaly/src/shader_loader.h](games/anomaly/src/shader_loader.h) (deleted; its C++ fixture types live in `tests/anomaly_motion_shader_facade.h` until N04 retires the three device fixtures)
+- [x] [games/anomaly/src/shader_loader_platform.h](games/anomaly/src/shader_loader_platform.h) (C11 declarations only)
 - [x] [tools/anomaly_shader_constants.h](tools/anomaly_shader_constants.h)
 
 **Fixtures (1)**

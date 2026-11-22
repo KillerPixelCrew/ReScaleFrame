@@ -8,18 +8,20 @@ use crate::runtime_module::Module;
 use rsf_shader_compiler::{Request as CompileRequest, compile};
 use std::collections::HashMap;
 use std::ffi::CString;
-use std::ffi::{CStr, OsString, c_char, c_void};
-use std::fs::File;
+use std::ffi::{CStr, OsString, c_void};
+use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, Read};
-use std::os::windows::{ffi::OsStringExt, io::FromRawHandle};
-use std::path::PathBuf;
-use std::ptr::{null, null_mut};
+use std::os::windows::{ffi::OsStringExt, fs::OpenOptionsExt};
+use std::path::{Path, PathBuf};
+use std::ptr::null_mut;
 use std::sync::Mutex;
 use windows::Win32::Graphics::Direct3D::{D3D_INCLUDE_TYPE, D3D_SHADER_MACRO, ID3DInclude_Vtbl};
 use windows::core::{HRESULT as ComResult, PCSTR};
-use windows_sys::Win32::Foundation::{
-    E_FAIL, E_INVALIDARG, E_OUTOFMEMORY, FARPROC, HANDLE, S_FALSE, S_OK,
+use windows_sys::Win32::Foundation::{E_FAIL, E_INVALIDARG, E_OUTOFMEMORY, FARPROC, S_OK};
+use windows_sys::Win32::Globalization::{
+    CP_ACP, CP_OEMCP, MB_ERR_INVALID_CHARS, MultiByteToWideChar,
 };
+use windows_sys::Win32::Storage::FileSystem::{AreFileApisANSI, FILE_SHARE_READ, FILE_SHARE_WRITE};
 use windows_sys::core::{HRESULT, w};
 
 fn allocate<T>(value: T) -> *mut T {
@@ -109,10 +111,74 @@ struct Includes {
     buffers: Mutex<HashMap<usize, Vec<u8>>>,
 }
 
-// The native path leaf opens a single candidate, yielding an owned handle on S_OK or S_FALSE
-// when the candidate could not be opened.
-type OpenFile =
-    unsafe extern "C" fn(*const c_void, *const c_char, *const c_char, *mut HANDLE) -> HRESULT;
+// The deployed trees are Windows paths. The engine's includer names arrive as narrow bytes, which the
+// previous native leaf converted with the STL's file-name rules: the ANSI or OEM code page chosen by
+// AreFileApisANSI, strict decoding and preferred separators. Appending follows the same drive/UNC/root
+// replacement rules as Path::join.
+fn include_name(name: &CStr) -> Result<PathBuf, HRESULT> {
+    let narrow = name.to_bytes();
+    if narrow.is_empty() {
+        return Ok(PathBuf::new());
+    }
+    let code_page = if unsafe { AreFileApisANSI() } != 0 {
+        CP_ACP
+    } else {
+        CP_OEMCP
+    };
+    let length = i32::try_from(narrow.len()).map_err(|_| E_FAIL)?;
+    let wide_length = unsafe {
+        MultiByteToWideChar(
+            code_page,
+            MB_ERR_INVALID_CHARS,
+            narrow.as_ptr(),
+            length,
+            null_mut(),
+            0,
+        )
+    };
+    let capacity = usize::try_from(wide_length)
+        .ok()
+        .filter(|capacity| *capacity != 0)
+        .ok_or(E_FAIL)?;
+    let mut wide = Vec::new();
+    wide.try_reserve_exact(capacity)
+        .map_err(|_| E_OUTOFMEMORY)?;
+    wide.resize(capacity, 0u16);
+    let written = unsafe {
+        MultiByteToWideChar(
+            code_page,
+            MB_ERR_INVALID_CHARS,
+            narrow.as_ptr(),
+            length,
+            wide.as_mut_ptr(),
+            wide_length,
+        )
+    };
+    if written != wide_length {
+        return Err(E_FAIL);
+    }
+    for unit in &mut wide {
+        if *unit == u16::from(b'/') {
+            *unit = u16::from(b'\\');
+        }
+    }
+    Ok(PathBuf::from(OsString::from_wide(&wide)))
+}
+
+// Read access with shared read and write, as the previous CreateFileW call. None when the
+// candidate could not be opened.
+fn open_candidate(tree: &Path, prefix: Option<&str>, name: &CStr) -> Result<Option<File>, HRESULT> {
+    let mut path = tree.to_path_buf();
+    if let Some(prefix) = prefix {
+        path.push(prefix);
+    }
+    path.push(include_name(name)?);
+    Ok(OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .open(path)
+        .ok())
+}
 
 fn read_include(file: File) -> Result<(Vec<u8>, u32), HRESULT> {
     let max = u64::from(u32::MAX);
@@ -135,22 +201,12 @@ fn read_include(file: File) -> Result<(Vec<u8>, u32), HRESULT> {
 }
 
 impl Includes {
-    fn open(
-        &self,
-        tree: *const c_void,
-        name: *const c_char,
-        open_file: OpenFile,
-    ) -> Result<(*const c_void, u32), HRESULT> {
+    fn open(&self, tree: &Path, name: &CStr) -> Result<(*const c_void, u32), HRESULT> {
         // X-Ray r4.cpp:1170 first tries the requested name under r3, then the shared name.
-        for prefix in [c"r3".as_ptr(), null()] {
-            let mut handle = null_mut();
-            match unsafe { open_file(tree, prefix, name, &mut handle) } {
-                S_FALSE => continue,
-                S_OK => {}
-                error => return Err(error),
-            }
-            // S_OK transfers ownership of a valid file handle from the native leaf.
-            let file = unsafe { File::from_raw_handle(handle) };
+        for prefix in [Some("r3"), None] {
+            let Some(file) = open_candidate(tree, prefix, name)? else {
+                continue;
+            };
             let (bytes, len) = read_include(file)?;
             let mut buffers = self.buffers.lock().map_err(|_| E_FAIL)?;
             buffers.try_reserve(1).map_err(|_| E_OUTOFMEMORY)?;
@@ -163,10 +219,9 @@ impl Includes {
 }
 
 #[repr(C)]
-struct CompilerIncludes {
+struct CompilerIncludes<'a> {
     vtable: &'static ID3DInclude_Vtbl,
-    tree: *const c_void,
-    open_file: OpenFile,
+    tree: &'a Path,
     storage: Includes,
 }
 
@@ -187,7 +242,10 @@ unsafe extern "system" fn include_open(
         return ComResult(E_INVALIDARG);
     }
     let this = unsafe { &*this.cast::<CompilerIncludes>() };
-    match this.storage.open(this.tree, name.0.cast(), this.open_file) {
+    match this
+        .storage
+        .open(this.tree, unsafe { CStr::from_ptr(name.0.cast()) })
+    {
         Ok((bytes, len)) => {
             unsafe {
                 data.write(bytes.cast_mut());
@@ -216,8 +274,7 @@ unsafe extern "system" fn include_close(this: *mut c_void, data: *const c_void) 
 
 fn compile_tree(
     entry: FARPROC,
-    tree: *const c_void,
-    open_file: OpenFile,
+    tree: &Path,
     request: &Request,
     source: &[u8],
 ) -> Result<Vec<u8>, Vec<u8>> {
@@ -251,7 +308,6 @@ fn compile_tree(
     let mut includes = CompilerIncludes {
         vtable: &INCLUDE_VTABLE,
         tree,
-        open_file,
         storage: Includes::default(),
     };
     let result = unsafe {
@@ -284,14 +340,14 @@ type PublishCompile = unsafe extern "C" fn(*mut c_void, bool, Bytes) -> bool;
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_shader_d3d_compile(
     modules: &Modules,
-    tree: *const c_void,
-    open_file: OpenFile,
+    tree: Span<u16>,
     request: &Request,
     user: *mut c_void,
     publish: PublishCompile,
 ) -> bool {
     let source = unsafe { request.source.as_slice() };
-    match compile_tree(modules.compile(), tree, open_file, request, source) {
+    let tree = PathBuf::from(OsString::from_wide(unsafe { tree.as_slice() }));
+    match compile_tree(modules.compile(), &tree, request, source) {
         Ok(code) => unsafe { publish(user, true, Bytes::from(code.as_slice())) },
         Err(error) => unsafe { publish(user, false, Bytes::from(error.as_slice())) },
     }
@@ -317,13 +373,12 @@ unsafe extern "C" fn rsf_anomaly_shader_d3d_prepare(
     manifest: &Manifest,
     request: &Request,
     deployment: Span<u16>,
-    original: *const c_void,
-    motion: *const c_void,
-    open_file: OpenFile,
     user: *mut c_void,
     stock_sink: Option<PublishCompile>,
     publish: PublishPrepared,
 ) {
+    let deployment = PathBuf::from(OsString::from_wide(unsafe { deployment.as_slice() }));
+    let (original, motion) = (deployment.join("original"), deployment.join("motion"));
     // Ordinary fixture builds use two independent original-tree compiles. The
     // first supplies the simulated engine bytecode, the second proves it.
     // Refusal cases supply their own mutated or foreign engine bytecode.
@@ -331,7 +386,7 @@ unsafe extern "C" fn rsf_anomaly_shader_d3d_prepare(
     let replay;
     let request = if let Some(sink) = stock_sink {
         let source = unsafe { request.source.as_slice() };
-        match compile_tree(modules.compile(), original, open_file, request, source) {
+        match compile_tree(modules.compile(), &original, request, source) {
             Ok(bytes) => {
                 stock = bytes;
                 if !unsafe { sink(user, true, Bytes::from(stock.as_slice())) } {
@@ -362,7 +417,6 @@ unsafe extern "C" fn rsf_anomaly_shader_d3d_prepare(
     };
     // Entry spans come from immutable manifest-owned backing storage.
     let id = entry.identity(manifest.namespace());
-    let deployment = PathBuf::from(OsString::from_wide(unsafe { deployment.as_slice() }));
     let result = prepare_tree(
         request,
         &id,
@@ -373,8 +427,7 @@ unsafe extern "C" fn rsf_anomaly_shader_d3d_prepare(
         |patched, code| {
             compile_tree(
                 modules.compile(),
-                if patched { motion } else { original },
-                open_file,
+                if patched { &motion } else { &original },
                 request,
                 code,
             )
@@ -393,4 +446,58 @@ unsafe extern "C" fn rsf_anomaly_shader_d3d_prepare(
             result.reflection.map_or(null_mut(), allocate),
         )
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn include_names_use_preferred_separators() {
+        assert_eq!(
+            include_name(c"dx11/tess.hs").unwrap(),
+            PathBuf::from(r"dx11\tess.hs")
+        );
+        assert_eq!(
+            include_name(c"common.h").unwrap(),
+            PathBuf::from("common.h")
+        );
+        assert_eq!(include_name(c"").unwrap(), PathBuf::new());
+    }
+
+    fn contents(includes: &Includes, tree: &Path, name: &CStr) -> Result<Vec<u8>, HRESULT> {
+        let (data, len) = includes.open(tree, name)?;
+        Ok(unsafe { std::slice::from_raw_parts(data.cast::<u8>(), len as usize) }.to_vec())
+    }
+
+    #[test]
+    fn include_lookup_tries_r3_before_the_shared_tree() {
+        let tree =
+            std::env::temp_dir().join(format!("rsf-anomaly-includes-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tree);
+        fs::create_dir_all(tree.join("r3").join("dx11")).unwrap();
+        fs::create_dir_all(tree.join("dx11")).unwrap();
+        fs::write(tree.join("r3").join("both.h"), b"r3").unwrap();
+        fs::write(tree.join("both.h"), b"shared").unwrap();
+        fs::write(tree.join("shared_only.h"), b"shared only").unwrap();
+        fs::write(tree.join("r3").join("dx11").join("tess.h"), b"nested").unwrap();
+        let includes = Includes::default();
+        assert_eq!(contents(&includes, &tree, c"both.h").unwrap(), b"r3");
+        assert_eq!(
+            contents(&includes, &tree, c"shared_only.h").unwrap(),
+            b"shared only"
+        );
+        assert_eq!(
+            contents(&includes, &tree, c"dx11/tess.h").unwrap(),
+            b"nested"
+        );
+        // A directory or a missing file never opens as an include.
+        assert_eq!(contents(&includes, &tree, c"dx11").unwrap_err(), E_FAIL);
+        assert_eq!(
+            contents(&includes, &tree, c"missing.h").unwrap_err(),
+            E_FAIL
+        );
+        let _ = fs::remove_dir_all(&tree);
+    }
 }

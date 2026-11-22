@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-#include "shader_frame_layout.h"
+// C declarations of the private Anomaly shader-loader ABI implemented by the Rust crate
+// (shader_loader.rs, shader_loader/d3d.rs, shader_loader/reflection.rs). No native implementation remains;
+// the C++ projection used by the standalone device fixtures lives in tests/anomaly_motion_shader_facade.h.
+#include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
-#ifndef __cplusplus
 #include <stdbool.h>
-#endif
 
 // Private synchronous ABI. All spans borrow storage through the call or callback.
 typedef struct { const uint8_t* data; size_t len; } rsf_anomaly_shader_bytes;
@@ -18,6 +19,8 @@ typedef struct {
     rsf_anomaly_shader_defines defines;
     rsf_anomaly_shader_bytes source, bytecode;
 } rsf_anomaly_shader_request;
+static_assert(sizeof(rsf_anomaly_shader_request) == 88 && offsetof(rsf_anomaly_shader_request, defines) == 40 &&
+    offsetof(rsf_anomaly_shader_request, bytecode) == 72, "request layout shared with shader_loader.rs");
 // The admitted manifest is Rust-owned and immutable; free it with rsf_anomaly_shader_admitted_free.
 // Its namespace and rows borrow its storage until then.
 typedef struct rsf_anomaly_shader_admitted rsf_anomaly_shader_admitted;  // opaque
@@ -25,6 +28,8 @@ typedef struct {
     rsf_anomaly_shader_bytes name, original, motion;
     uint8_t stage, family;
 } rsf_anomaly_shader_entry;
+static_assert(sizeof(rsf_anomaly_shader_entry) == 56 && offsetof(rsf_anomaly_shader_entry, stage) == 48 &&
+    offsetof(rsf_anomaly_shader_entry, family) == 49, "entry layout shared with shader_loader/manifest.rs");
 typedef struct {
     rsf_anomaly_shader_bytes name_space;
     const rsf_anomaly_shader_entry* entries;  // ordered by original SHA-256
@@ -35,7 +40,20 @@ typedef struct {
     void (*report)(void*, rsf_anomaly_shader_bytes message);
 } rsf_anomaly_shader_refusal;
 
+// Reflection owners. A snapshot is a complete copy owned by Rust; a reflection is its borrowed view.
 typedef struct rsf_anomaly_shader_reflection rsf_anomaly_shader_reflection;
+typedef struct rsf_anomaly_shader_snapshot rsf_anomaly_shader_snapshot;
+// Loaded D3D compiler and reflector pair used by the deployed-tree fixtures.
+typedef struct rsf_anomaly_shader_d3d rsf_anomaly_shader_d3d;
+
+// Compile or stock-publish callback: (user, ok, bytecode-or-error) returns false to stop.
+typedef bool (*rsf_anomaly_shader_publish_compile)(void*, bool, rsf_anomaly_shader_bytes);
+// Prepared-variant callback: (user, entry, outcome, compatibility, skin, detail, variant, stock, reflection).
+// The two snapshots transfer to the receiver, which frees them with rsf_anomaly_shader_snapshot_drop.
+typedef void (*rsf_anomaly_shader_publish_prepared)(void*, const rsf_anomaly_shader_entry*, uint8_t, uint8_t,
+    int32_t, rsf_anomaly_shader_bytes, rsf_anomaly_shader_bytes, rsf_anomaly_shader_snapshot*,
+    rsf_anomaly_shader_snapshot*);
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -49,28 +67,24 @@ const char* rsf_anomaly_shader_outcome_name(uint8_t);
 bool rsf_anomaly_shader_linkable(const rsf_anomaly_shader_reflection*, const rsf_anomaly_shader_reflection*);
 bool rsf_anomaly_shader_tess_linkable(const rsf_anomaly_shader_reflection*, const rsf_anomaly_shader_reflection*,
     const rsf_anomaly_shader_reflection*, const rsf_anomaly_shader_reflection*);
+
+const rsf_anomaly_shader_reflection* rsf_anomaly_shader_snapshot_view(const rsf_anomaly_shader_snapshot*);
+bool rsf_anomaly_shader_snapshot_keeps_buffer_sizes(const rsf_anomaly_shader_snapshot*,
+    const rsf_anomaly_shader_snapshot*);
+void rsf_anomaly_shader_snapshot_drop(rsf_anomaly_shader_snapshot*);
+
+// Loads the compiler named by a NUL-terminated UTF-16 string plus the system d3dcompiler_47 reflector.
+rsf_anomaly_shader_d3d* rsf_anomaly_shader_d3d_load(const uint16_t*);
+void rsf_anomaly_shader_d3d_unload(rsf_anomaly_shader_d3d*);
+rsf_anomaly_shader_snapshot* rsf_anomaly_shader_d3d_reflect(const rsf_anomaly_shader_d3d*, rsf_anomaly_shader_bytes);
+// Compiles the request with the include tree at the given UTF-16 path; Rust opens include files.
+bool rsf_anomaly_shader_d3d_compile(const rsf_anomaly_shader_d3d*, rsf_anomaly_shader_wide tree,
+    const rsf_anomaly_shader_request*, void* user, rsf_anomaly_shader_publish_compile);
+// Reproduces the stock bytecode from deployment/original (when the stock callback is given), then prepares the
+// motion variant from deployment/motion.
+void rsf_anomaly_shader_d3d_prepare(const rsf_anomaly_shader_d3d*, const rsf_anomaly_shader_admitted*,
+    const rsf_anomaly_shader_request*, rsf_anomaly_shader_wide deployment, void* user,
+    rsf_anomaly_shader_publish_compile stock, rsf_anomaly_shader_publish_prepared);
 #ifdef __cplusplus
-}
-
-#include "shader_loader.h"
-#include <cstddef>
-namespace rsf::anomaly::motion {
-static_assert(sizeof(rsf_anomaly_shader_request) == 88 && offsetof(rsf_anomaly_shader_request, defines) == 40 &&
-    offsetof(rsf_anomaly_shader_request, bytecode) == 72);
-
-
-static_assert(sizeof(ManifestEntry) == sizeof(rsf_anomaly_shader_entry) && sizeof(ManifestEntry) == 56 &&
-    offsetof(ManifestEntry, name) == offsetof(rsf_anomaly_shader_entry, name) &&
-    offsetof(ManifestEntry, original_sha256) == offsetof(rsf_anomaly_shader_entry, original) &&
-    offsetof(ManifestEntry, motion_sha256) == offsetof(rsf_anomaly_shader_entry, motion) &&
-    offsetof(ManifestEntry, stage) == offsetof(rsf_anomaly_shader_entry, stage) &&
-    offsetof(ManifestEntry, family) == offsetof(rsf_anomaly_shader_entry, family) &&
-    sizeof(ManifestText) == sizeof(rsf_anomaly_shader_bytes) && sizeof(Family) == 1);
-// ManifestEntry is the C++ spelling of one Rust-owned row.
-inline const ManifestEntry& manifest_entry(const rsf_anomaly_shader_entry& row) noexcept
-{
-    return *reinterpret_cast<const ManifestEntry*>(&row);
-}
-const rsf_anomaly_shader_reflection* reflection_view(const Reflection&) noexcept;
 }
 #endif
