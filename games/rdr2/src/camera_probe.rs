@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicPtr;
 use std::sync::{Mutex, OnceLock};
 use windows_sys::Win32::Foundation::HMODULE;
+use windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringW;
 use windows_sys::Win32::System::LibraryLoader::LoadLibraryW;
 use windows_sys::Win32::System::Performance::QueryPerformanceCounter;
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
@@ -297,11 +298,14 @@ fn capture(provider: u32, context: *const c_void, parameters: *const c_void, cal
         record.capture, record.index
     ));
     if let Err(error) = fs::write(&output, record.bytes()) {
-        crate::runtime_worker::log(format!(
+        let message = format!(
             "RDR2 camera capture stopped after {} saved records: {}: {error}",
             probe.index,
             output.display()
-        ));
+        );
+        let debug: Vec<u16> = message.encode_utf16().chain([0]).collect();
+        unsafe { OutputDebugStringW(debug.as_ptr()) };
+        crate::runtime_worker::log(message);
         probe.remaining = 0;
         return;
     }
