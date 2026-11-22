@@ -136,10 +136,10 @@ The counts refer to finding entries. Related entries across review areas may sha
 
 A sweep of `git ls-files '*.cpp'` on 2026-11-22 found first-party C++ that the port itself added and that no chunk lists. Each belongs to the chunk named after it.
 
-- [ ] [games/project-wingman/src/native_platform.cpp](games/project-wingman/src/native_platform.cpp) (W01)
-- [ ] [games/skyrim-se/src/render_detours.cpp](games/skyrim-se/src/render_detours.cpp) (S02)
-- [ ] [integrations/steam/src/exception_guards.cpp](integrations/steam/src/exception_guards.cpp) (I01)
-- [ ] [runtime/graphics/src/observer_exception_guards.cpp](runtime/graphics/src/observer_exception_guards.cpp) (G01)
+- [x] [games/project-wingman/src/native_platform.c](games/project-wingman/src/native_platform.c) (W01; C++ removed, C11 SEH leaf for MinHook, the RHI texture probe, the execution report and the GameSDK export)
+- [x] [games/skyrim-se/src/render_detours.c](games/skyrim-se/src/render_detours.c) (S02; C++ removed, C11 leaf, `__try/__finally` scopes, filter on 0xE06D7363; observer_platform.h and session_platform.h now hold C declarations only)
+- [x] [integrations/steam/src/exception_guards.c](integrations/steam/src/exception_guards.c) (I01; C++ removed, C11 SEH leaf that contains only 0xE06D7363)
+- [x] [runtime/graphics/src/observer_exception_guards.c](runtime/graphics/src/observer_exception_guards.c) (G01; C++ removed, C11 SEH leaf; the three private observer headers now hold C declarations only)
 - [ ] [runtime/orchestrator/src/d3d11_host_foreign.cpp](runtime/orchestrator/src/d3d11_host_foreign.cpp) (D01)
 - [ ] [tests/ac7_render_scope_exceptions.cpp](tests/ac7_render_scope_exceptions.cpp) (A02)
 - [ ] [tests/anomaly_motion_contract_main.cpp](tests/anomaly_motion_contract_main.cpp) (N04)
