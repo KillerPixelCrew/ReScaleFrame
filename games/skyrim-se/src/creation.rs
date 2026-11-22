@@ -15,7 +15,7 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-const OK: i32 = 0;
+use rsf_game_sys::RSF_OK as OK;
 
 /// `DXGI_SWAP_CHAIN_DESC` size and `OutputWindow` offset; `native_creation.c` asserts both.
 const DESCRIPTION_SIZE: usize = 72;

@@ -1,24 +1,25 @@
 // SPDX-License-Identifier: MIT
 //! Guarded temporal graph observation and its GameSDK lifecycle.
+use crate::INVALID_ARGUMENT;
 use crate::camera::{CopyMemory, JITTER, read};
 use crate::execution;
 use crate::windows::{
     copy, create_hook, disable_hook, enable_hook, image_base, rsf_wingman_guarded_log, tick_count,
     verify_executable,
 };
-use crate::{ABI_MISMATCH, INVALID_ARGUMENT};
 use rsf_game_sys::{
-    RSF_GAME_ABI_VERSION, rsf_game_control_args, rsf_game_host_services, rsf_game_prepare_args,
-    rsf_game_renderer_status, rsf_game_start_args, rsf_result,
+    rsf_game_control_args, rsf_game_host_services, rsf_game_prepare_args, rsf_game_renderer_status,
+    rsf_game_start_args, rsf_result,
 };
 use std::ffi::{CStr, CString, c_void};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-const OK: rsf_result = 0;
-const NOT_READY: rsf_result = -3;
-const BUSY: rsf_result = -4;
-const NATIVE_REFUSED: rsf_result = -5;
+use rsf_game_sys::call_header::validate;
+use rsf_game_sys::{
+    RSF_ERROR_BUSY as BUSY, RSF_ERROR_NATIVE_REFUSED as NATIVE_REFUSED,
+    RSF_ERROR_NOT_READY as NOT_READY, RSF_OK as OK,
+};
 const ADD_PASSES: usize = 0x5c4_42b0;
 const ADD_PASSES_BYTES: [u8; 32] = [
     0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x40, 0x48,
@@ -116,17 +117,6 @@ fn state() -> MutexGuard<'static, State> {
     STATE.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-unsafe fn validate<T>(value: *const T) -> Result<(), rsf_result> {
-    let header = value.cast::<u32>();
-    if header.is_null() || unsafe { header.read() } < size_of::<T>() as u32 {
-        return Err(INVALID_ARGUMENT);
-    }
-    if unsafe { header.add(1).read() } != RSF_GAME_ABI_VERSION {
-        return Err(ABI_MISMATCH);
-    }
-    Ok(())
-}
-
 fn target() -> Option<usize> {
     if !verify_executable() {
         return None;
@@ -137,12 +127,14 @@ fn target() -> Option<usize> {
 }
 
 pub(crate) unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> rsf_result {
-    if let Err(result) = unsafe { validate(args) } {
-        return result;
+    let valid = unsafe { validate(args) };
+    if valid != OK {
+        return valid;
     }
     let host = unsafe { (*args).host };
-    if let Err(result) = unsafe { validate(host) } {
-        return result;
+    let valid = unsafe { validate(host) };
+    if valid != OK {
+        return valid;
     }
     let host = unsafe { &*host };
     if host.session_id == 0 {
@@ -173,8 +165,9 @@ pub(crate) unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> r
 }
 
 pub(crate) unsafe extern "C" fn start(args: *const rsf_game_start_args) -> rsf_result {
-    if let Err(result) = unsafe { validate(args) } {
-        return result;
+    let valid = unsafe { validate(args) };
+    if valid != OK {
+        return valid;
     }
     let mut state = state();
     if state.host.is_none() {
@@ -194,16 +187,18 @@ pub(crate) unsafe extern "C" fn start(args: *const rsf_game_start_args) -> rsf_r
 }
 
 pub(crate) unsafe extern "C" fn quiesce(args: *const rsf_game_control_args) -> rsf_result {
-    if let Err(result) = unsafe { validate(args) } {
-        return result;
+    let valid = unsafe { validate(args) };
+    if valid != OK {
+        return valid;
     }
     ACCEPTING.store(false, Ordering::Release);
     OK
 }
 
 pub(crate) unsafe extern "C" fn stop(args: *const rsf_game_control_args) -> rsf_result {
-    if let Err(result) = unsafe { validate(args) } {
-        return result;
+    let valid = unsafe { validate(args) };
+    if valid != OK {
+        return valid;
     }
     let mut state = state();
     ACCEPTING.store(false, Ordering::Release);
@@ -223,8 +218,9 @@ pub(crate) unsafe extern "C" fn stop(args: *const rsf_game_control_args) -> rsf_
 }
 
 pub(crate) unsafe extern "C" fn status(out: *mut rsf_game_renderer_status) -> rsf_result {
-    if let Err(result) = unsafe { validate(out) } {
-        return result;
+    let valid = unsafe { validate(out) };
+    if valid != OK {
+        return valid;
     }
     let state = state();
     let out = unsafe { &mut *out };

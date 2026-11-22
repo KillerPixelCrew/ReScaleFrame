@@ -51,39 +51,16 @@ use rsf_game_sys::{
 };
 use std::ffi::CStr;
 
-/// rsf_result values from game_api.h.
-pub(crate) const OK: i32 = 0;
-pub(crate) const INVALID_ARGUMENT: i32 = -1;
-pub(crate) const ABI_MISMATCH: i32 = -2;
-pub(crate) const NOT_READY: i32 = -3;
-pub(crate) const BUSY: i32 = -4;
-pub(crate) const NATIVE_REFUSED: i32 = -5;
-/// rsf_detection values.
-const UNKNOWN: u32 = 0;
-const RECOGNIZED: u32 = 1;
+use rsf_game_sys::call_header::validate;
+pub(crate) use rsf_game_sys::{
+    RSF_ERROR_ABI_MISMATCH as ABI_MISMATCH, RSF_ERROR_BUSY as BUSY,
+    RSF_ERROR_INVALID_ARGUMENT as INVALID_ARGUMENT, RSF_ERROR_NATIVE_REFUSED as NATIVE_REFUSED,
+    RSF_ERROR_NOT_READY as NOT_READY, RSF_OK as OK,
+};
+use rsf_game_sys::{RSF_GAME_RECOGNIZED as RECOGNIZED, RSF_GAME_UNKNOWN as UNKNOWN};
 const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
 const STATUS: &CStr =
     c"Native DLSS SR replacement implemented; game acceptance, FSR routing and FG pending.";
-
-/// Size and ABI check for a call structure that leads with `struct_size` and `abi_version`.
-///
-/// # Safety
-/// `value` is null or points at a readable structure of at least its declared size.
-unsafe fn validate<T>(value: *const T) -> i32 {
-    if value.is_null() {
-        return INVALID_ARGUMENT;
-    }
-    // Only the size field is readable from a short SDK structure.
-    let header = value.cast::<u32>();
-    if unsafe { header.read() } < size_of::<T>() as u32 {
-        return INVALID_ARGUMENT;
-    }
-    if unsafe { header.add(1).read() } == RSF_GAME_ABI_VERSION {
-        OK
-    } else {
-        ABI_MISMATCH
-    }
-}
 
 unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> i32 {
     let valid = unsafe { validate(args) };

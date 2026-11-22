@@ -13,10 +13,10 @@ use rsf_game_sys::{
 };
 use std::ffi::CStr;
 
-const UNKNOWN: rsf_detection = 0;
-const RECOGNIZED: rsf_detection = 1;
-const INVALID_ARGUMENT: rsf_result = -1;
-const ABI_MISMATCH: rsf_result = -2;
+use rsf_game_sys::{
+    RSF_ERROR_ABI_MISMATCH as ABI_MISMATCH, RSF_ERROR_INVALID_ARGUMENT as INVALID_ARGUMENT,
+    RSF_GAME_RECOGNIZED as RECOGNIZED, RSF_GAME_UNKNOWN as UNKNOWN,
+};
 const AMD64: u16 = 0x8664;
 const EXECUTABLE: &CStr = c"ProjectWingman-Win64-Shipping.exe";
 const SHA256: &CStr = c"092e84225624a4de9c05d2404ff55269bd4a2aa2ff0548f2a183c6bf36abc85a";

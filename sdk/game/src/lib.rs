@@ -14,6 +14,16 @@ mod sys {
 }
 pub use sys::*;
 
+// game_api.h defines these as cast macros, which bindgen does not emit.
+pub const RSF_OK: rsf_result = 0;
+pub const RSF_ERROR_INVALID_ARGUMENT: rsf_result = -1;
+pub const RSF_ERROR_ABI_MISMATCH: rsf_result = -2;
+pub const RSF_ERROR_NOT_READY: rsf_result = -3;
+pub const RSF_ERROR_BUSY: rsf_result = -4;
+pub const RSF_ERROR_NATIVE_REFUSED: rsf_result = -5;
+pub const RSF_GAME_UNKNOWN: rsf_detection = 0;
+pub const RSF_GAME_RECOGNIZED: rsf_detection = 1;
+
 pub mod call_header;
 pub mod camera_math;
 pub mod checksum;

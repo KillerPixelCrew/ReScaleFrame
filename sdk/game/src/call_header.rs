@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Validate versioned GameSDK calls before borrowing the complete structure.
 
-use crate::{RSF_GAME_ABI_VERSION, rsf_result};
+use crate::{
+    RSF_ERROR_ABI_MISMATCH, RSF_ERROR_INVALID_ARGUMENT, RSF_GAME_ABI_VERSION, RSF_OK, rsf_result,
+};
 
 /// Checks size before ABI version and returns the GameSDK result code.
 ///
@@ -13,10 +15,10 @@ use crate::{RSF_GAME_ABI_VERSION, rsf_result};
 pub unsafe fn validate<T>(value: *const T) -> rsf_result {
     let header = value.cast::<u32>();
     if header.is_null() || unsafe { header.read() } < size_of::<T>() as u32 {
-        -1 // RSF_ERROR_INVALID_ARGUMENT
+        RSF_ERROR_INVALID_ARGUMENT
     } else if unsafe { header.add(1).read() } != RSF_GAME_ABI_VERSION {
-        -2 // RSF_ERROR_ABI_MISMATCH
+        RSF_ERROR_ABI_MISMATCH
     } else {
-        0 // RSF_OK
+        RSF_OK
     }
 }

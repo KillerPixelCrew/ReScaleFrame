@@ -9,8 +9,9 @@ use rsf_game_sys::{
 };
 use std::ffi::{CStr, c_char};
 
-pub(crate) const INVALID_ARGUMENT: rsf_result = -1;
-pub(crate) const ABI_MISMATCH: rsf_result = -2;
+pub(crate) use rsf_game_sys::{
+    RSF_ERROR_ABI_MISMATCH as ABI_MISMATCH, RSF_ERROR_INVALID_ARGUMENT as INVALID_ARGUMENT,
+};
 const AMD64: u16 = 0x8664;
 const EXECUTABLE: &[u8] = b"SkyrimSE.exe";
 pub(crate) const SHA256: &CStr =

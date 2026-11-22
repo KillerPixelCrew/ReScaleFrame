@@ -14,21 +14,22 @@
 use crate::creation;
 use crate::observers::Control;
 use crate::platform::{self, Platform};
-use crate::plugin::{ABI_MISMATCH, INVALID_ARGUMENT, SHA256};
+use crate::plugin::{INVALID_ARGUMENT, SHA256};
+use rsf_game_sys::call_header::validate;
 use rsf_game_sys::rsf_motion_decode_params as MotionDecode;
 use rsf_game_sys::{
-    RSF_GAME_ABI_VERSION, rsf_game_control_args, rsf_game_host_services, rsf_game_prepare_args,
-    rsf_game_renderer_status, rsf_game_start_args, rsf_result,
+    RSF_ERROR_BUSY as BUSY, RSF_ERROR_NATIVE_REFUSED as NATIVE_REFUSED,
+    RSF_ERROR_NOT_READY as NOT_READY, RSF_OK as OK,
 };
 use rsf_game_sys::{rsf_d3d11_host_setup as HostSetup, same_upstream_identity};
+use rsf_game_sys::{
+    rsf_game_control_args, rsf_game_host_services, rsf_game_prepare_args, rsf_game_renderer_status,
+    rsf_game_start_args, rsf_result,
+};
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
-const OK: rsf_result = 0;
-const NOT_READY: rsf_result = -3;
-const BUSY: rsf_result = -4;
-const NATIVE_REFUSED: rsf_result = -5;
 
 const RUNTIME_MODULE: &str = "ReScaleFrame.Runtime.dll";
 const PATH_CAPACITY: usize = 32_768;
@@ -615,25 +616,6 @@ impl Session {
         self.rollback_observers = false;
         self.reason = STOPPED.as_ptr();
         Ok(OK)
-    }
-}
-
-/// The GameSDK size and ABI check on a caller structure that leads with struct_size and
-/// abi_version.
-///
-/// # Safety
-/// A nonnull `value` points to at least its two leading fields.
-unsafe fn validate<T>(value: *const T) -> rsf_result {
-    if value.is_null() {
-        return INVALID_ARGUMENT;
-    }
-    let header = value.cast::<u32>();
-    if (unsafe { header.read() } as usize) < size_of::<T>() {
-        INVALID_ARGUMENT
-    } else if unsafe { header.add(1).read() } != RSF_GAME_ABI_VERSION {
-        ABI_MISMATCH
-    } else {
-        OK
     }
 }
 

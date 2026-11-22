@@ -78,8 +78,7 @@ const RSF_ERROR_ABI_MISMATCH: rsf_result = -2;
 const RSF_ERROR_NOT_READY: rsf_result = -3;
 const RSF_ERROR_BUSY: rsf_result = -4;
 const RSF_ERROR_NATIVE_REFUSED: rsf_result = -5;
-const UNKNOWN: rsf_detection = 0;
-const RECOGNIZED: rsf_detection = 1;
+use rsf_game_sys::{RSF_GAME_RECOGNIZED as RECOGNIZED, RSF_GAME_UNKNOWN as UNKNOWN};
 const AMD64: u16 = 0x8664;
 
 // The only recognized build: Fallout 4 AE 1.11.240.0. Every RVA and byte in this crate belongs
