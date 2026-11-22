@@ -732,7 +732,7 @@ chooses the phase_sunshafts/phase_blur prologue with FP16 render-size targets an
 inverse/forward tonemap; all Stage 0 sites are byte-guarded and verified against the exe.
 The shared motion decode gained an optional validity channel. Release VS2026: 173 discovered,
 162 passed, 11 optional skips, fmt/Clippy. Overlay and coverage are not yet game-tested.
-[Progress](../games/anomaly/PROGRESS.md), [SR seam](research/anomaly-sr-seam.md).
+[Acceptance matrix and SR seam](research/anomaly-sr-seam.md#integration-goal-and-acceptance-matrix-from-the-former-progressmd).
 
 ## Anomaly wave 1, 12 November 2026
 
@@ -740,13 +740,13 @@ Resumed on request. The geometry producer is audited and built into the adapter 
 two registered contracts. The Runtime exports a generic `rsf_get_overlay_api` with DLL-import
 and hardware D3D11 fixture tests. The Debug Godot CRT mismatch is fixed at its CMake cache
 source. Release VS2026: 168 discovered, 157 passed, 11 optional skips, fmt/Clippy. Built and
-synthetic-tested only; nothing was deployed or game-tested. [Progress](../games/anomaly/PROGRESS.md).
+synthetic-tested only; nothing was deployed or game-tested. [Acceptance matrix](research/anomaly-sr-seam.md#integration-goal-and-acceptance-matrix-from-the-former-progressmd).
 
 ## Anomaly checkpoint, 12 November 2026
 
 Implementation was paused for the day. The detailed acceptance matrix, build/device evidence,
 installation cleanup, overlay requirement and ordered resumption checklist are in
-[`games/anomaly/PROGRESS.md`](../games/anomaly/PROGRESS.md). Full in-game SR/FG and overlay
+[the acceptance matrix in the SR seam note](research/anomaly-sr-seam.md#integration-goal-and-acceptance-matrix-from-the-former-progressmd). Full in-game SR/FG and overlay
 integration remain incomplete. No RSF DLLs or shader replacements were deployed to Anomaly.
 
 ## Anomaly DLL-only integration research, 11 November 2026
@@ -1617,7 +1617,7 @@ still require a fresh game run. [Evidence and limits](research/shared-fg-2026100
 See [current status](current-status.md) for the source/release/acceptance summary checked on
 7 October 2026. This tracker preserves dated increments, test counts and superseded failures;
 earlier unchecked or pending entries are not automatically current blockers. No new game/device
-experiment was performed for the documentation audit; [scope and checks](documentation-audit.md).
+experiment was performed for the documentation audit.
 
 ## REA development tooling, 8 October 2026
 
@@ -2064,7 +2064,7 @@ this overlay preflight is not a gameplay test.
 - [x] Streamline DLSS adapter: loading, device handover, support/render-size queries, tags, constants, and evaluation. Runs in AC7.
 - [x] View layout mapped through matrix identities, including camera basis, projection, and `ClipToPrevClip`. Offline check: 11 captured perspective views, no failures.
 - [x] D3D11 motion decode with bias/scale parameters, unwritten sentinel, and compute-state handling. Cross-built and tested under Wine/DXVK with source-encoded values and an axis flip. Game-buffer dumps matched the reference range and unwritten fraction.
-- [x] AC7 view reader with matrix/size checks, main-view classification, pixel jitter, and unjittered projection. Recorded dataset: 50 recognized buffers, ten perspective views, secondary views marked. [Review](review.md) identifies remaining validation defects.
+- [x] AC7 view reader with matrix/size checks, main-view classification, pixel jitter, and unjittered projection. Recorded dataset: 50 recognized buffers, ten perspective views, secondary views marked. The 7 September review (since removed) identified remaining validation defects.
 - [x] `TemporalAAJitter` located at `0x720` by comparing pre/post-patch captures, then checked against projection entries and live pixel offsets.
 - [x] Orchestrator frame assembly converts plugin camera/resource data into a DLSS frame and rejects unusable combinations. Unit-tested without GPU work.
 - [x] Live DLSS evaluation. Initial run: 2,176 recognized passes, 2,175 evaluations, no refusals. Mission run on 7 September: 7,917 evaluations, no refusals, 1024Ã—576 input and 2048Ã—1152 output. Recorded images show recovered detail and a complete scene; flight showed no obvious smearing. F7 is a debug display; reinsertion, grading, HUD, and controlled motion validation remain pending. [Evidence](research/ac7-frame-capture.md).
@@ -2801,7 +2801,7 @@ backend evaluation is not evidence that the supplied scene includes intact light
 - [ ] Reassess remaining hangar banding using an intact input scene. Keep driver preset selection
       unrestricted. Post-tonemap SR is a possible experiment, not the established correction.
 
-Open defects from the [7 September review](review.md). These are not fixed by the documentation rewrite.
+Open defects from the 7 September review (since removed). These are not fixed by the documentation rewrite.
 
 - [ ] Move F8 startup and F7 state changes to a render-thread command boundary; eliminate concurrent immediate-context use.
 - [ ] Reject non-finite camera, projection, reprojection, and jitter data in the reader/assembly path; add poisoned-input regressions.
@@ -3125,7 +3125,7 @@ backup `.local/deploy-backups/ac7-pair-20261004-132153-981`; not yet seen in gam
 
 ## Codebase review pass (2026-10-09)
 
-Implemented the [codebase review](reviews/codebase-review-20261009.md): shared helpers for D3D12, logging, shader compile, SRV formats and plugin boilerplate; the FG bridge reads engine identity from setup and has one retire export; the frame tap uses a game-supplied role table; per-frame cost reductions in the tap, SR bridge and Unity managed code; dead code removed. The full item table is section 8 of the review.
+Implemented the 9 October codebase review (since removed): shared helpers for D3D12, logging, shader compile, SRV formats and plugin boilerplate; the FG bridge reads engine identity from setup and has one retire export; the frame tap uses a game-supplied role table; per-frame cost reductions in the tap, SR bridge and Unity managed code; dead code removed.
 
 Status: built (Release, MSVC) and synthetic-tested (ctest 49/49, 7 hardware-gated tests skipped; cargo fmt, clippy and test clean; RTX shared-host test passed). NOT game-tested.
 

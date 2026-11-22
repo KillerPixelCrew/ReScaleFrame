@@ -36,8 +36,7 @@ recorded in [interop research](../../docs/research/sr-interop-performance-202610
 [Shared FG research](../../docs/research/shared-fg-20261004.md) records independent generation,
 provider changes and final Unity acceptance. Those results do not establish AC7 FSR/XeSS FG,
 FSR4 FG on the tested NVIDIA device, higher MFG counts, or measured latency reduction.
-[Current status](../../docs/current-status.md) summarizes the limits;
-[the September review](../../docs/review.md) retains historical findings.
+[Current status](../../docs/current-status.md) summarizes the limits.
 
 ## Wine development notes
 

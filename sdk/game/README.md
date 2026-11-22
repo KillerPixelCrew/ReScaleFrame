@@ -26,5 +26,3 @@ All three currently return `rendering_ready = 0`, even where individual deployed
 acceptance. Recognition is separate from capability and validation.
 
 See [current status](../../docs/current-status.md) and [contract fixtures](../../tests/game-sdk/src/contract.rs).
-The ABI 2 sketches in the [representation plan](../../docs/representation-plan.md) are historical
-design, superseded by these headers.

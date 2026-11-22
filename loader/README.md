@@ -69,7 +69,7 @@ working and makes a one-off override a launch option rather than an edit.
 
 Numbers accept hexadecimal with an `0x` prefix, and a setting present and zero is that value rather
 than an absence, so `RSF_DECODE_MOTION=0` disables decoding and quality `0` selects Native. Both
-were [review findings](../docs/review.md) against the old parser.
+were review findings against the old parser.
 
 The vendor runtime is found at `ReScaleFrame\streamline` beside the proxy, and `renderdoc.dll`
 beside the proxy, so neither path normally needs setting at all.

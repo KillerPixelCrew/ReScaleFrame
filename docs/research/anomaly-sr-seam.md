@@ -272,7 +272,7 @@ From `CRender::Render` (`r4_R_render.cpp:209-542`) and `CRenderTarget::phase_com
 ### 2.2 What is linear where
 
 - Genuine pre-tonemap colour exists only shader-locally in `combine_1.ps` (and in its volumetric
-  equivalent). No stock FP16 scene texture exists. This confirms `PROGRESS.md`.
+  equivalent). No stock FP16 scene texture exists. This confirms the acceptance matrix below.
 - `generic0` is a composite in "low" space: sky and volumetrics use `f`; combine_1 uses `f`; clouds
   are approximately `f` for small values (`f'(0) = 1`); forward materials blend in that space by
   construction. `generic1` holds `x/9` for the bloom extraction, then the distortion mask.
@@ -413,7 +413,7 @@ during eye adaptation. Choosing between the two is a measurement, not a guess.
   their effects have not been measured in this task.
 - Motion convention: the core shader ABI subtracts the current and previous jitter in UV inside the
   PS (`core/README.md`, PS b13), so RTV2 motion is unjittered. Foliage previous projection is
-  unjittered (`PROGRESS.md`).
+  unjittered (the acceptance matrix below).
 - Sequence and history: Halton(2,3) with phase count `8 * (output/render)^2` (standard practice). A
   separate main-view counter: SVP frames do not advance it, and the native SR history rule requires
   `native_frame == previous + 1` (`native_sr.cpp:131-135`).
@@ -517,7 +517,7 @@ offsets. The first-person weapon moves with the same offset (no relative shimmer
 do not move. Texture sharpness matches the native-resolution reference.
 
 **Stage 4: motion and depth inputs.** Built; see section 12.
-Depends on the core/foliage MRT2 binding (`PROGRESS.md` checklist).
+Depends on the core/foliage MRT2 binding (the acceptance matrix below).
 - The pipeline's decode treats a stored zero as "unwritten" only through `zero_means_unwritten`
   (`motion_decode.h:57-80`). Anomaly's valid stationary vector is `(0, 0, 1, 0)`, so a stationary
   first-person weapon would be misread as unwritten and reprojected with the world camera.
@@ -1522,3 +1522,39 @@ of 484 lines), `0012-procedure_pseudo_code.json` (CRender::RenderToTarget),
 source read for Stage 0: `xrRender/{R_Backend.h, r_backend_xform.h, SH_Texture.h, xrRender_console.cpp,
 ParticleEffect.cpp}`, `xrRenderPC_R4/{r4.h, r4_rendertarget_accum_point.cpp}`,
 `xrRenderDX10/StateManager/dx10SamplerStateCache.h`.
+
+## Integration goal and acceptance matrix (from the former `PROGRESS.md`)
+
+Checkpoint, end of 12 November 2026: SR stages 1 and 2, motion vectors and the overlay are game-accepted; jitter, foliage motion and temporal SR are built and fixture-tested; frame generation is built and device-fixture-tested but not game-accepted. The one Stage 3 jitter burst that missed its accuracy bar was traced on 13 November to the estimator (`ce3484c`).
+
+### Goal and non-negotiable constraints
+
+- Add RSF upscaling, frame generation and the shared RSF overlay to Anomaly 1.5.3.
+- Deliver through a DLL shim. Do not replace/rebuild either game executable.
+- Treat `D:/xray-monolith` as read-only reference source.
+- Keep detection, signatures, native layouts, shader conventions, engine input and
+  settings policy in `games/anomaly/`. Shared runtime/presentation/overlay services
+  remain game-independent, with one Runtime DLL owner.
+- Separate world render resolution, presentation/UI resolution and PDA content
+  texture dimensions. A physical PDA is scene-attached material content, not an
+  output-space HUD merely because its texture was drawn by UI code.
+- Do not advertise detection, CPU history, compiled shaders or device fixtures as
+  working game SR/FG. Rendering-readiness flags remain false.
+
+### Acceptance matrix at the 12 November 2026 checkpoint
+
+All game runs used the standard DX11 exe on an RTX 4070 Laptop GPU, l01_escape from the
+existing autosave, 1280x720 windowed unless stated. Evidence directories are under `.local/anomaly/`.
+
+| Area | Game-accepted | Built and fixture-tested only | Still required |
+| --- | --- | --- | --- |
+| Carrier and adapter | Forwarding and exactly-once startup before device creation; `Mode=Observe` hooks install with 0 refusals (`wave2-observe`) | Exact-build detection, foreign-process refusal, lifecycle | AVX exe mapping |
+| Geometry identification | Static world correctly ignored, shadow ~93% of entries, no unidentified dynamic draws, captured equals main identified with 0 errors (`wave3-game`) | Tree/grass identification (`docs/research/anomaly-foliage-motion.md`) | Live tree/grass coverage; LOD, particles; 22-32% of main draws outside visuals still to decide |
+| Overlay (`Overlay=1`) | Panel at native size (1280x720, 1600x900) seen via adapter captures, FG Off only, click applied and persisted, relayout on vid_restart, DirectInput withheld while open and normal when closed (`wave3-game`, `wave4-game`) | Real SR backend/quality choices and sr_report for Stage 5 | Live SR controls; FG controls once FG exists |
+| SR Stage 1 (FP16 twins, tonemap round trip) | Matches stock within run-to-run noise over ~7900 frames with 0 faults (`wave4-game`). Glass-pane difference is stock exterior brightness drift (`glass-diff/FINDINGS.md`) | | Scope frames, bright outdoor sky, additive particles |
+| SR Stage 2 (`SRStage=2`, `SRScale`) | 1.0 matches stock; 0.67 and 0.5 registered with zero shift and only softer; SSAO variants, vid_restart and resolution change clean (`wave5-game`) | | PDA, scope, item-attached UI, fluid; no GPU gain measurable on this CPU-bound laptop (~40 ms frames) |
+| Motion (`Motion=1`) | Core mesh vectors plausible for pan, walk and weapon; image unchanged vs stock; target follows render size (`wave5-game`) | Foliage (`MotionFoliage=1`): wind motion equals CPU model in the device fixture | Moving NPC; live foliage; terrain/LOD validity 0; first-window rebind 179 vs 180 |
+| SR Stage 3 (jitter, mip bias) | | Halton jitter of world and six first-person projections once each; static scene gives 0.003 px worst motion in the fixture | Live jitter measurement, weapon/world coherence, sharpness |
+| SR Stage 5 (temporal SR) | | `rsf_get_d3d11_sr_api`; DLSS, FSR3, FSR4, XeSS evaluate 24/24 frames through the Anomaly path; shared-host D3D11-to-D3D12 and RDR2 host fixtures pass | Every live acceptance item in `docs/research/anomaly-sr-seam.md` section 12; Stage 6 hints (opaque colour, reactive/transparency masks) |
+| FG | | DLL access to the presentation bridge tested | Everything: source-frame ownership, pacing, depth/motion/UI transport, Present matching, retirement, overlay FG controls |
+| PDA and scope | Not exercised: P/Tab/M/J did not open the PDA, the save has no scoped weapon | | Find the real PDA binding; a save with a scope |
