@@ -2,7 +2,7 @@
 .SYNOPSIS
 Compiles the Streamline Vulkan bridge with its compiler runtime linked statically.
 .DESCRIPTION
-Checks Streamline/Vulkan headers, builds the Rust bridge and interposer lifecycle owner for Windows GNU, then links its C11 digest leaf (bridge.c) with gcc and wintrust/advapi32 into a sibling temporary DLL. Successful compilation replaces Output; failure removes temporary output and throws. SDK plugin binaries are supplied separately by native bundle preparation.
+Checks Streamline/Vulkan headers and, with -CorrectedRuntimeDirectory, the corrected runtime's receipt (verify-receipt.cmake), builds the Rust bridge and interposer lifecycle owner for Windows GNU with that digest, then links it with gcc and wintrust/advapi32 into a sibling temporary DLL. Successful compilation replaces Output; failure removes temporary output and throws. SDK plugin binaries are supplied separately by native bundle preparation.
 .PARAMETER SdkRoot
 Streamline SDK root containing include/sl.h.
 .PARAMETER Output
@@ -22,7 +22,6 @@ $compiler = (Get-Command gcc.exe -ErrorAction Stop).Source
 $cargo = (Get-Command cargo.exe -ErrorAction Stop).Source
 if (-not $VulkanSdkRoot) { throw 'Specify -VulkanSdkRoot or set VULKAN_SDK.' }
 
-$source = Join-Path $PSScriptRoot 'bridge.c'
 $wsiExports = Join-Path $PSScriptRoot 'wsi_exports.def'
 $hostExports = Join-Path $PSScriptRoot '../../../integrations/vulkanstory/native/sl.def'
 $sdk = (Resolve-Path -LiteralPath $SdkRoot).Path
@@ -39,37 +38,28 @@ if (-not (Test-Path -LiteralPath (Join-Path $vulkanInclude 'vulkan\vulkan.h'))) 
 $target = [IO.Path]::GetFullPath($Output)
 New-Item -ItemType Directory -Path (Split-Path $target) -Force | Out-Null
 $temporary = [IO.Path]::ChangeExtension($target, '.tmp.dll')
-$correctionArguments = @()
+$corrected = $null
 if ($CorrectedRuntimeDirectory) {
-    $receipt = Get-Content -LiteralPath (Join-Path $CorrectedRuntimeDirectory 'streamline-sdk-build.json') -Raw | ConvertFrom-Json
-    if ($receipt.sdkCommit -ne '2122257e0fce486f91b385aa63b9a09b0a34b363' -or
-        $receipt.patchSha256 -ne (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'sdk-fixes/prepare.py')).Hash -or
-        $receipt.selectedDevicePatchSha256 -ne (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'sdk-fixes/selected_device.py')).Hash -or
-        $receipt.selectedDeviceConfigSha256 -ne (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'sdk-fixes/selected-device-config.h')).Hash -or
-        $receipt.dispatchSha256 -ne (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'sdk-fixes/ngx-vulkan-dispatch.h')).Hash) {
-        throw 'Corrected Streamline receipt does not match the pinned source corrections.'
-    }
-    foreach ($name in @('sl.common.dll','sl.interposer.dll')) {
-        if ($receipt.binaries.$name -ne (Get-FileHash -LiteralPath (Join-Path $CorrectedRuntimeDirectory $name)).Hash) {
-            throw "Corrected Streamline hash mismatch: $name"
-        }
-    }
-    $hash = $receipt.binaries.'sl.interposer.dll'
-    $bytes = for ($i = 0; $i -lt 64; $i += 2) { '0x' + $hash.Substring($i, 2) }
-    $correctionArguments += '-DVULKANSTORY_CORRECTED_STREAMLINE_SHA256=' + ($bytes -join ',')
-}
-$objects = Join-Path ([IO.Path]::GetTempPath()) ('VulkanStoryStreamline-' + [Guid]::NewGuid().ToString('N'))
+    # The one receipt verifier; it prints the corrected interposer digest that rsf-streamline-vk admits.
+    $corrected = & (Get-Command cmake.exe -ErrorAction Stop).Source "-DRUNTIME=$CorrectedRuntimeDirectory" `
+        -P (Join-Path $PSScriptRoot 'verify-receipt.cmake')
+    if ($LASTEXITCODE -ne 0) { throw 'Corrected Streamline receipt does not match the pinned source corrections.' }
+    $corrected = "$corrected".Trim()
+}$objects = Join-Path ([IO.Path]::GetTempPath()) ('VulkanStoryStreamline-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $objects | Out-Null
 try {
     # The bridge exports and interposer lifecycle are the same Rust crate the Runtime links.
     $rustTarget = 'x86_64-pc-windows-gnu'
     $rustOutput = Join-Path $objects 'cargo'
     Push-Location -LiteralPath (Join-Path $PSScriptRoot '../../..')
+    $previousDigest = $env:RSF_CORRECTED_STREAMLINE_SHA256
+    $env:RSF_CORRECTED_STREAMLINE_SHA256 = $corrected
     try {
         & $cargo build --locked --release -p rsf-streamline-vk --target $rustTarget --target-dir $rustOutput
         if ($LASTEXITCODE -ne 0) { throw "Streamline Rust lifecycle compilation failed: $LASTEXITCODE" }
     }
     finally {
+        $env:RSF_CORRECTED_STREAMLINE_SHA256 = $previousDigest
         Pop-Location
     }
     $rustArchive = Join-Path $rustOutput "$rustTarget/release/librsf_streamline_vk.a"
@@ -77,7 +67,7 @@ try {
     @(Get-Content -LiteralPath $wsiExports
       Get-Content -LiteralPath $hostExports | Select-Object -Skip 1) |
         Set-Content -LiteralPath $exports -Encoding ascii
-    & $compiler -std=c11 -O2 -shared -static @correctionArguments $source $exports $rustArchive `
+    & $compiler -O2 -shared -static $exports $rustArchive `
         -o $temporary -lwintrust -ladvapi32 -lntdll -luserenv -lws2_32 -ldbghelp
     if ($LASTEXITCODE -ne 0) { throw 'Streamline bridge compilation failed.' }
     Move-Item -LiteralPath $temporary -Destination $target -Force

@@ -116,12 +116,7 @@ fn hash_matches(input: HANDLE, expected: &[u8; 32]) -> bool {
         && actual == *expected
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_slvk_open_verified(
-    path: *const u16,
-    expected: &[u8; 32],
-    require_signature: u32,
-) -> HANDLE {
+unsafe fn open_verified(path: *const u16, expected: &[u8; 32], require_signature: bool) -> HANDLE {
     let input = unsafe {
         CreateFileW(
             path,
@@ -139,7 +134,7 @@ unsafe extern "C" fn rsf_slvk_open_verified(
     // SAFETY: CreateFileW returned an owned, non-inheritable file handle.
     let handle = unsafe { OwnedHandle::from_raw_handle(input) };
     let signed = signature_valid(path, input);
-    if (require_signature != 0 && !signed)
+    if (require_signature && !signed)
         || unsafe { SetFilePointerEx(input, 0, null_mut(), FILE_BEGIN) } == 0
         || !hash_matches(input, expected)
     {
@@ -147,4 +142,47 @@ unsafe extern "C" fn rsf_slvk_open_verified(
     }
     // The lifecycle closes only after LoadLibraryExW returns.
     handle.into_raw_handle()
+}
+
+/// SHA-256 of the pinned retail sl.interposer.dll, admitted with its Authenticode signature.
+const RETAIL: [u8; 32] = [
+    0x8c, 0x87, 0xc9, 0x49, 0x94, 0x61, 0xda, 0x56, 0x1e, 0xdd, 0x52, 0x9a, 0xa9, 0xbf, 0x78, 0x31,
+    0xd6, 0x7d, 0x7b, 0x94, 0xeb, 0xb1, 0xc1, 0xa5, 0xed, 0x54, 0xef, 0x49, 0x34, 0xe1, 0xea, 0x4c,
+];
+
+/// The corrected build's interposer digest from its verified receipt
+/// (runtime/vulkan/streamline/verify-receipt.cmake). That build is unsigned.
+const CORRECTED: Option<[u8; 32]> = match option_env!("RSF_CORRECTED_STREAMLINE_SHA256") {
+    Some(hex) => Some(digest(hex)),
+    None => None,
+};
+
+/// Parses 64 hex digits at compile time; anything else fails the build.
+const fn digest(hex: &str) -> [u8; 32] {
+    const fn nibble(digit: u8) -> u8 {
+        match digit {
+            b'0'..=b'9' => digit - b'0',
+            b'a'..=b'f' => digit - b'a' + 10,
+            b'A'..=b'F' => digit - b'A' + 10,
+            _ => panic!("RSF_CORRECTED_STREAMLINE_SHA256 must be hexadecimal"),
+        }
+    }
+    let hex = hex.as_bytes();
+    assert!(hex.len() == 64, "RSF_CORRECTED_STREAMLINE_SHA256 must be a SHA-256");
+    let mut out = [0; 32];
+    let mut index = 0;
+    while index < 32 {
+        out[index] = nibble(hex[2 * index]) << 4 | nibble(hex[2 * index + 1]);
+        index += 1;
+    }
+    out
+}
+
+/// Opens the interposer the build admits: the corrected build by digest, otherwise the pinned
+/// retail build by digest and signature. Returns the verified handle or INVALID_HANDLE_VALUE.
+pub(super) unsafe fn open_interposer(path: *const u16) -> HANDLE {
+    match CORRECTED {
+        Some(expected) => unsafe { open_verified(path, &expected, false) },
+        None => unsafe { open_verified(path, &RETAIL, true) },
+    }
 }

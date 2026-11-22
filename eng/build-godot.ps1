@@ -58,16 +58,10 @@ if ($StageRuntime) {
     }
     $taskSlVulkan = Join-Path $taskRoot '.local/godot/vulkan/host/artifacts/streamline-production-selected-device-reflex/runtime'
     if (Test-Path -LiteralPath (Join-Path $taskSlVulkan 'streamline-sdk-build.json')) {
-        $taskSlReceipt = Get-Content -Raw -LiteralPath (Join-Path $taskSlVulkan 'streamline-sdk-build.json') | ConvertFrom-Json
-        if ($taskSlReceipt.sdkCommit -ne $taskLock.vendor.streamline_source.revision -or
-            $taskSlReceipt.recipeSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/streamline/build-sdk.ps1')).Hash -or
-            $taskSlReceipt.presentCaptureSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/streamline/present-capture.h')).Hash -or
-            $taskSlReceipt.patchSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/streamline/sdk-fixes/prepare.py')).Hash -or
-            $taskSlReceipt.selectedDevicePatchSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/streamline/sdk-fixes/selected_device.py')).Hash -or
-            $taskSlReceipt.selectedDeviceConfigSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/streamline/sdk-fixes/selected-device-config.h')).Hash -or
-            $taskSlReceipt.dispatchSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/streamline/sdk-fixes/ngx-vulkan-dispatch.h')).Hash) { throw 'Corrected Streamline receipt differs from pinned source corrections.' }
+        # The one receipt verifier (also used by the Runtime build and the standalone bridge script).
+        & (Get-Command cmake.exe -ErrorAction Stop).Source "-DRUNTIME=$taskSlVulkan" -P (Join-Path $taskRoot 'runtime/vulkan/streamline/verify-receipt.cmake') | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Corrected Streamline receipt differs from pinned source corrections.' }
         foreach ($taskFile in @('sl.interposer.dll','sl.common.dll')) {
-            if ($taskSlReceipt.binaries.$taskFile -ne (Get-FileHash -LiteralPath (Join-Path $taskSlVulkan $taskFile)).Hash) { throw "Corrected Streamline hash mismatch: $taskFile" }
             $taskPayload["streamline-vulkan/$taskFile"] = Join-Path $taskSlVulkan $taskFile
         }
         foreach ($taskFile in @('sl.reflex.dll','sl.pcl.dll','sl.dlss.dll','sl.dlss_g.dll','nvngx_dlss.dll','nvngx_dlssg.dll','nvngx_dlss.license.txt')) { $taskPayload["streamline-vulkan/$taskFile"] = Join-Path $taskRoot ".local/streamline/sdk/bin/x64/$taskFile" }

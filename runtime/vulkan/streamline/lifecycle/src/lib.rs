@@ -2,8 +2,8 @@
 //! Lifecycle owner for the Streamline Vulkan interposer.
 //!
 //! The crate owns the `rsf_vk_sl_*` exports of the standalone bridge and its
-//! typed SDK calls (`win32/bridge.rs`). `bridge.c` keeps the interposer
-//! digest the build injects, and `sdk_guard.c` the exception containment and
+//! typed SDK calls (`win32/bridge.rs`). `win32/verified.rs` admits the interposer by the
+//! digest the build selects, and `sdk_guard.c` keeps the exception containment and
 //! the `sl::FrameToken` virtual call. The crate decides when the interposer is
 //! admitted, loaded, initialized, shut down and unloaded, which features slInit
 //! loads, and which Vulkan dispatch entry points stay usable after SDK shutdown. It also owns the legacy bridge's

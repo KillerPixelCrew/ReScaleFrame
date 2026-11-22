@@ -2,8 +2,8 @@
 //! The `rsf_vk_sl_*` exports of the Streamline Vulkan bridge and its typed SDK
 //! calls, formerly bridge.cpp. The lifecycle owner admits, loads, initializes,
 //! shuts down and unloads the interposer; these calls run under its session or
-//! frame-token lease. The C leaf in bridge.c keeps the interposer digest that
-//! the build injects.
+//! frame-token lease. verified.rs admits the interposer by the digest the build
+//! selects.
 use super::{GetCurrentThreadId, GetProcAddress, LIFECYCLE, Win32, rsf_slvk_log_message};
 use crate::frame_generation::{Options, Platform as FgPlatform};
 use crate::lifecycle::{Platform, feature_mask};
@@ -20,18 +20,6 @@ use std::ffi::{CStr, c_char, c_void};
 use std::marker::PhantomData;
 use std::ptr::{self, null, null_mut};
 use std::sync::atomic::{AtomicPtr, Ordering};
-
-#[cfg(not(test))]
-unsafe extern "C" {
-    // bridge.c, with the digest of the corrected or pinned retail interposer.
-    fn rsf_slvk_open_verified_release(path: *const u16) -> *mut c_void;
-}
-
-// Unit tests link no bridge.c and never reach a verified load.
-#[cfg(test)]
-unsafe fn rsf_slvk_open_verified_release(_: *const u16) -> *mut c_void {
-    null_mut()
-}
 
 unsafe extern "C-unwind" {
     // sdk_guard.c: the sl::FrameToken virtual conversion.
@@ -93,7 +81,7 @@ fn bind<T: Copy>(entry: &Entry<T>, feature: u32, name: &CStr) -> bool {
 // Lifecycle leaves, in the owner's Platform order.
 
 unsafe extern "C" fn open_verified(path: *const u16) -> *mut c_void {
-    unsafe { rsf_slvk_open_verified_release(path) }
+    unsafe { super::verified::open_interposer(path) }
 }
 
 unsafe extern "C" fn resolve(module: *mut c_void) -> i32 {

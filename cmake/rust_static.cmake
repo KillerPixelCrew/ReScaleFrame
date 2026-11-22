@@ -2,8 +2,10 @@
 # package's archive to <archive>.lib whatever its features, and a second build of the package
 # (the plugin entry, the fixtures) would overwrite the first, so each build copies its archive to a
 # file named for its own target. Builds of one package run one after another so that the copy is of
-# its own build.
+# its own build. An optional `ENV NAME=value` sets one variable for the Cargo build; the remaining
+# arguments go to cargo build.
 function(rsf_add_rust_static target build_target package archive)
+    cmake_parse_arguments(PARSE_ARGV 4 rsf "" "ENV" "")
     find_program(RSF_CARGO cargo REQUIRED)
     if(MSVC)
         set(rust_target x86_64-pc-windows-msvc)
@@ -15,7 +17,7 @@ function(rsf_add_rust_static target build_target package archive)
     set(artifacts "${cargo_dir}/${rust_target}/${profile}")
     set(rust_archive "${artifacts}/archives/${CMAKE_STATIC_LIBRARY_PREFIX}${target}${CMAKE_STATIC_LIBRARY_SUFFIX}")
     add_custom_target(${build_target}
-        COMMAND "${RSF_CARGO}" build --locked -p ${package} ${ARGN}
+        COMMAND "${CMAKE_COMMAND}" -E env ${rsf_ENV} "${RSF_CARGO}" build --locked -p ${package} ${rsf_UNPARSED_ARGUMENTS}
             --target ${rust_target} --target-dir "${cargo_dir}" $<$<NOT:$<CONFIG:Debug>>:--release>
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${artifacts}/archives"
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
