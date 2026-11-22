@@ -100,14 +100,11 @@ use std::ffi::{CStr, c_char};
 use std::ptr::null_mut;
 use std::sync::OnceLock;
 
-pub(crate) const RSF_OK: rsf_result = 0;
-pub(crate) const RSF_ERROR_INVALID_ARGUMENT: rsf_result = -1;
-pub(crate) const RSF_ERROR_ABI_MISMATCH: rsf_result = -2;
-pub(crate) const RSF_ERROR_NOT_READY: rsf_result = -3;
-pub(crate) const RSF_ERROR_BUSY: rsf_result = -4;
-pub(crate) const RSF_ERROR_NATIVE_REFUSED: rsf_result = -5;
-const UNKNOWN: rsf_detection = 0;
-const RECOGNIZED: rsf_detection = 1;
+pub(crate) use rsf_game_sys::{
+    RSF_ERROR_ABI_MISMATCH, RSF_ERROR_BUSY, RSF_ERROR_INVALID_ARGUMENT, RSF_ERROR_NATIVE_REFUSED,
+    RSF_ERROR_NOT_READY, RSF_OK,
+};
+use rsf_game_sys::{RSF_GAME_RECOGNIZED as RECOGNIZED, RSF_GAME_UNKNOWN as UNKNOWN};
 const AMD64: u16 = 0x8664;
 
 // The only recognized build. Every RVA and expected byte in sites.rs, patches.rs and

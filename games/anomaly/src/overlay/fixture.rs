@@ -601,7 +601,7 @@ fn visibility(query: rsf_get_overlay_api_fn) -> Result<i32, Box<dyn std::error::
         sr_enabled: 1,
         ..settings
     };
-    let invalid = crate::INVALID_ARGUMENT;
+    let invalid = rsf_game_sys::RSF_ERROR_INVALID_ARGUMENT;
     checks.check(
         unsafe { table.settings_apply.unwrap()(&refused) } == invalid,
         "enabling unavailable SR is refused",

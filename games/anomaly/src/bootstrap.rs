@@ -68,16 +68,17 @@ struct Runtime {
 
 impl Runtime {
     fn borrow() -> Option<Self> {
-        use crate::runtime_module::{export, rsf_anomaly_runtime_module};
+        use crate::runtime_module::rsf_anomaly_runtime_module;
+        use rsf_game_sys::win32::typed_export;
         let module = rsf_anomaly_runtime_module();
         if module.is_null() {
             return None;
         }
         // These exports have the C signatures declared in plugin_session.h.
-        let prepare = unsafe { export(module, c"rsf_plugin_session_prepare".to_bytes_with_nul()) };
-        let start = unsafe { export(module, c"rsf_plugin_session_start".to_bytes_with_nul()) };
-        let quiesce = unsafe { export(module, c"rsf_plugin_session_quiesce".to_bytes_with_nul()) };
-        let stop = unsafe { export(module, c"rsf_plugin_session_stop".to_bytes_with_nul()) };
+        let prepare = unsafe { typed_export(module, c"rsf_plugin_session_prepare") };
+        let start = unsafe { typed_export(module, c"rsf_plugin_session_start") };
+        let quiesce = unsafe { typed_export(module, c"rsf_plugin_session_quiesce") };
+        let stop = unsafe { typed_export(module, c"rsf_plugin_session_stop") };
         Some(Self {
             module,
             prepare,

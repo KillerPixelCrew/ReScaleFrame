@@ -28,8 +28,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex, MutexGuard, OnceLock, PoisonError};
 use windows_sys::core::w;
 
-const OK: i32 = 0;
-const ABI_MISMATCH: i32 = -2;
+use rsf_game_sys::{RSF_ERROR_ABI_MISMATCH as ABI_MISMATCH, RSF_OK as OK};
 // The C++ service formatted log lines into char[768].
 const LOG_CAPACITY: usize = 767;
 
@@ -469,7 +468,7 @@ fn register_saved_options(runtime: *mut c_void, ini: &[u16], log: &Log) {
     }
     type Register = unsafe extern "C" fn(*mut c_void, *const rsf_overlay_saved_setup) -> i32;
     let Some(register) = (unsafe {
-        crate::runtime_module::export::<Register>(runtime, b"rsf_overlay_saved_options_register\0")
+        rsf_game_sys::win32::typed_export::<Register>(runtime, c"rsf_overlay_saved_options_register")
     }) else {
         log.say(format_args!(
             "Anomaly overlay: saved startup controls are unavailable in this Runtime."

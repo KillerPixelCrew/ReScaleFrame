@@ -51,6 +51,7 @@ pub(crate) extern "C" fn rsf_anomaly_runtime_module() -> HMODULE {
     unsafe { GetModuleHandleW(w!("ReScaleFrame.Runtime.dll")) }
 }
 
+/// For the NUL-terminated byte-string export names bindgen emits from the Runtime headers.
 /// The module must be the carrier's borrowed handle, and F must be the named C export's signature.
 pub(crate) unsafe fn export<F: Copy>(module: HMODULE, name: &[u8]) -> Option<F> {
     let name = CStr::from_bytes_with_nul(name).ok()?;
@@ -61,9 +62,9 @@ pub(crate) unsafe fn export<F: Copy>(module: HMODULE, name: &[u8]) -> Option<F> 
 extern "C" fn rsf_anomaly_runtime_set_colour_transport(transport: bool) {
     let runtime = rsf_anomaly_runtime_module();
     let set = unsafe {
-        export::<unsafe extern "C" fn(u32)>(
+        rsf_game_sys::win32::typed_export::<unsafe extern "C" fn(u32)>(
             runtime,
-            c"rsf_dlss_pipeline_set_colour_transport".to_bytes_with_nul(),
+            c"rsf_dlss_pipeline_set_colour_transport",
         )
     };
     if let Some(set) = set {

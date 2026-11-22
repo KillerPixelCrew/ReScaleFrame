@@ -17,9 +17,10 @@ use crate::sys::{
     rsf_anomaly_observer_camera as Camera, rsf_anomaly_observer_engine as Engine,
     rsf_anomaly_observer_frame as Frame, rsf_anomaly_observer_platform as Platform,
 };
-use crate::{ABI_MISMATCH, INVALID_ARGUMENT};
 use rsf_game_sys::{
-    RSF_GAME_ABI_VERSION, rsf_game_control_args, rsf_game_host_services, rsf_game_log_fn,
+    RSF_ERROR_ABI_MISMATCH as ABI_MISMATCH, RSF_ERROR_BUSY as BUSY,
+    RSF_ERROR_INVALID_ARGUMENT as INVALID_ARGUMENT, RSF_ERROR_NATIVE_REFUSED as NATIVE_REFUSED,
+    RSF_ERROR_NOT_READY as NOT_READY, RSF_GAME_ABI_VERSION, RSF_OK as OK, rsf_game_control_args, rsf_game_host_services, rsf_game_log_fn,
     rsf_game_prepare_args, rsf_game_renderer_status, rsf_game_start_args, rsf_result,
 };
 use std::ffi::{CStr, CString, c_char, c_void};
@@ -30,11 +31,6 @@ use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExW,
     GetModuleHandleW,
 };
-
-const OK: rsf_result = 0;
-const NOT_READY: rsf_result = -3;
-const BUSY: rsf_result = -4;
-const NATIVE_REFUSED: rsf_result = -5;
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_observer_identify(

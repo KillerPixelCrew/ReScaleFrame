@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! The hash-pinned AC7 contact-shadow rewrite. The factory borrows the output for the call.
 //! The shader facts and operands come from the existing capture evidence.
+use crate::dxbc_chunks::word;
 use crate::shader_hash::{crc32c, dxbc_checksum, dxbc_digest_bytes};
 use crate::sys::{
     RSF_AC7_CONTACT_PATCHED, RSF_AC7_CONTACT_REFUSED, RSF_AC7_CONTACT_UNMATCHED,
     rsf_ac7_contact_shader_fn,
 };
+use crate::velocity_container::store;
 use std::ffi::c_void;
 use std::slice;
 
@@ -66,29 +68,16 @@ const BIASED_START: [u32; 7] = [
 
 const GROWTH: usize = (PHASE.len() + BIAS.len() + BIASED_START.len() - RAY_START.len()) * 4;
 
-fn word(data: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes([
-        data[offset],
-        data[offset + 1],
-        data[offset + 2],
-        data[offset + 3],
-    ])
-}
-
 fn words_match(input: &[u8], offset: usize, expected: &[u32]) -> bool {
     expected
         .iter()
         .enumerate()
-        .all(|(i, &value)| word(input, offset + i * 4) == value)
-}
-
-fn store_word(output: &mut [u8], offset: usize, value: u32) {
-    output[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        .all(|(i, &value)| word(input, offset + i * 4) == Some(value))
 }
 
 fn put_words(output: &mut [u8], offset: usize, values: &[u32]) -> usize {
     for (i, &value) in values.iter().enumerate() {
-        store_word(output, offset + i * 4, value);
+        store(output, offset + i * 4, value);
     }
     offset + values.len() * 4
 }
@@ -99,22 +88,22 @@ fn checksum_matches(input: &[u8]) -> bool {
 }
 
 fn layout_matches(input: &[u8]) -> bool {
-    word(input, 20) == 1
-        && word(input, 28) == 3
-        && word(input, 32) == 44
-        && word(input, 36) == 156
-        && word(input, 40) == SHADER_OFFSET as u32
+    word(input, 20) == Some(1)
+        && word(input, 28) == Some(3)
+        && word(input, 32) == Some(44)
+        && word(input, 36) == Some(156)
+        && word(input, 40) == Some(SHADER_OFFSET as u32)
         && &input[44..48] == b"ISGN"
-        && word(input, 48) == 104
+        && word(input, 48) == Some(104)
         && &input[156..160] == b"OSGN"
-        && word(input, 160) == 44
+        && word(input, 160) == Some(44)
         && &input[SHADER_OFFSET..SHADER_OFFSET + 4] == b"SHEX"
-        && word(input, SHADER_OFFSET + 4) == SHADER_SIZE as u32
+        && word(input, SHADER_OFFSET + 4) == Some(SHADER_SIZE as u32)
         && checksum_matches(input)
-        && word(input, TOKENS) == 0x50
-        && word(input, TOKENS + 4) == (SHADER_SIZE / 4) as u32
-        && word(input, TEMPS) == 0x0200_0068
-        && word(input, TEMPS + 4) == 14
+        && word(input, TOKENS) == Some(0x50)
+        && word(input, TOKENS + 4) == Some((SHADER_SIZE / 4) as u32)
+        && word(input, TEMPS) == Some(0x0200_0068)
+        && word(input, TEMPS + 4) == Some(14)
         && words_match(input, PHASE_SPLIT, &NOISE)
         && words_match(input, START_SPLIT, &RAY_START)
 }
@@ -133,13 +122,13 @@ fn rewrite(input: &[u8], output: &mut [u8]) -> bool {
 
     let container_size = ORIGINAL_SIZE + GROWTH;
     let shader_size = SHADER_SIZE + GROWTH;
-    store_word(output, 24, container_size as u32);
-    store_word(output, SHADER_OFFSET + 4, shader_size as u32);
-    store_word(output, TOKENS + 4, (shader_size / 4) as u32);
-    store_word(output, TEMPS + 4, 18);
+    store(output, 24, container_size as u32);
+    store(output, SHADER_OFFSET + 4, shader_size as u32);
+    store(output, TOKENS + 4, (shader_size / 4) as u32);
+    store(output, TEMPS + 4, 18);
     // The noise dot product reads r14.xy in place of v2.xy.
-    store_word(output, noise_at + 3 * 4, 0x0010_0046);
-    store_word(output, noise_at + 4 * 4, 14);
+    store(output, noise_at + 3 * 4, 0x0010_0046);
+    store(output, noise_at + 4 * 4, 14);
     let Some(checksum) = dxbc_checksum(&output[20..container_size]) else {
         return false;
     };
@@ -164,7 +153,7 @@ unsafe extern "C" fn rsf_ac7_contact_shadow_correct(
     }
     let source = unsafe { slice::from_raw_parts(bytes, size) };
     let (prefix, input) = source.split_at(offset);
-    if &input[..4] != b"DXBC" || word(input, 24) != ORIGINAL_SIZE as u32 {
+    if &input[..4] != b"DXBC" || word(input, 24) != Some(ORIGINAL_SIZE as u32) {
         return UNMATCHED;
     }
     if rsf_windows::sha256_hex(&input[..ORIGINAL_SIZE]).as_ref() != Some(EXPECTED) {
@@ -196,5 +185,7 @@ pub(crate) fn container_crc(data: &[u8]) -> u32 {
     if data.len() < 28 {
         return 0;
     }
-    data.get(..word(data, 24) as usize).map_or(0, crc32c)
+    word(data, 24)
+        .and_then(|size| data.get(..size as usize))
+        .map_or(0, crc32c)
 }

@@ -43,7 +43,7 @@ pub(crate) fn resize_bytes(bytes: &mut Vec<u8>, size: usize) -> Option<&mut [u8]
     Some(bytes.as_mut_slice())
 }
 
-fn store(bytes: &mut [u8], offset: usize, value: u32) {
+pub(crate) fn store(bytes: &mut [u8], offset: usize, value: u32) {
     bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
 }
 

@@ -57,11 +57,12 @@ impl DumpApi {
 
     #[cfg(windows)]
     pub fn bind() -> Option<Self> {
-        use crate::runtime_module::{export, rsf_anomaly_runtime_module};
+        use crate::runtime_module::rsf_anomaly_runtime_module;
+        use rsf_game_sys::win32::typed_export;
         let module = rsf_anomaly_runtime_module();
         macro_rules! export {
             ($name:expr, $signature:ty) => {
-                unsafe { export::<$signature>(module, $name.to_bytes_with_nul()) }
+                unsafe { typed_export::<$signature>(module, $name) }
             };
         }
         // The carrier keeps the loaded Runtime alive. Signatures come from input_dump.h.

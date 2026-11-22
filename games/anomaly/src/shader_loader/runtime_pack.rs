@@ -7,7 +7,8 @@ use super::{
     rsf_anomaly_shader_skin_mode, runtime_refusal,
 };
 use crate::motion_device::ConstantOps;
-use crate::runtime_module::{export, rsf_anomaly_runtime_module};
+use crate::runtime_module::rsf_anomaly_runtime_module;
+use rsf_game_sys::win32::typed_export;
 use rsf_game_sys::{
     RSF_PATCH_ARGUMENT, RSF_PATCH_OK, RSF_PATCH_SOURCE, RSF_SHADER_PATCH_VERSION,
     rsf_get_shader_patch_api_fn, rsf_patch_bytes, rsf_patch_counters, rsf_patch_define,
@@ -110,9 +111,9 @@ unsafe extern "C" fn resolve_include(
 fn query_api() -> Option<rsf_shader_patch_api> {
     // The carrier keeps the Runtime loaded, and shader_patch.h specifies this entry.
     let query = unsafe {
-        export::<rsf_get_shader_patch_api_fn>(
+        typed_export::<rsf_get_shader_patch_api_fn>(
             rsf_anomaly_runtime_module(),
-            c"rsf_get_shader_patch_api".to_bytes_with_nul(),
+            c"rsf_get_shader_patch_api",
         )
     }
     .flatten()?;
