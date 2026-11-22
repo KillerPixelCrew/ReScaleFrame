@@ -108,8 +108,13 @@ using Microsoft::WRL::ComPtr;
 using Create = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**);
 using CreateHwnd = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND,
     const DXGI_SWAP_CHAIN_DESC1*, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**);
-Create original_create = nullptr;
-CreateHwnd original_hwnd = nullptr;
+struct FactoryContinuations {
+    Create legacy = nullptr;
+    CreateHwnd hwnd = nullptr;
+
+    bool installed() const noexcept { return legacy != nullptr; }
+};
+FactoryContinuations originals;
 
 const rsf_d3d11_present_setup& settings() { return *rsf_core_d3d11p_settings(); }
 void log(const char* message) { if (settings().log) settings().log(settings().user, message); }
@@ -137,7 +142,7 @@ int32_t host_present_common(void* host, void* chain, uint32_t sync, uint32_t fla
 }
 
 int32_t create_original(void* factory, void* queue, DXGI_SWAP_CHAIN_DESC* desc, void** out) noexcept try {
-    return original_create(static_cast<IDXGIFactory*>(factory), static_cast<ID3D12CommandQueue*>(queue),
+    return originals.legacy(static_cast<IDXGIFactory*>(factory), static_cast<ID3D12CommandQueue*>(queue),
         desc, reinterpret_cast<IDXGISwapChain**>(out));
 } catch (...) {
     return E_FAIL;
@@ -184,14 +189,44 @@ const rsf_d3d11p_platform platform{
 
 HRESULT STDMETHODCALLTYPE create_hook(IDXGIFactory* factory, IUnknown* device, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** out) {
     if (rsf_d3d11p_factory_intercept(&platform, factory, device, desc, reinterpret_cast<void**>(out))) return S_OK;
-    return original_create(factory, device, desc, out);
+    return originals.legacy(factory, device, desc, out);
 }
 HRESULT STDMETHODCALLTYPE hwnd_hook(IDXGIFactory2* factory, IUnknown* device, HWND hwnd,
     const DXGI_SWAP_CHAIN_DESC1* desc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fullscreen, IDXGIOutput* output, IDXGISwapChain1** out) {
     int32_t result = E_FAIL;
     if (rsf_d3d11p_factory_intercept_hwnd(&platform, factory, device, hwnd, desc, fullscreen, output,
         reinterpret_cast<void**>(out), &result)) return result;
-    return original_hwnd(factory, device, hwnd, desc, fullscreen, output, out);
+    return originals.hwnd(factory, device, hwnd, desc, fullscreen, output, out);
+}
+
+bool install_factory_detours(IDXGIFactory2* factory) {
+    const auto initialized = MH_Initialize();
+    if (initialized != MH_OK && initialized != MH_ERROR_ALREADY_INITIALIZED) return false;
+
+    void* legacy_target = nullptr;
+    void* hwnd_target = nullptr;
+    rsf_d3d11p_factory_hook_targets(factory, &legacy_target, &hwnd_target);
+
+    void* legacy_original = nullptr;
+    if (MH_CreateHook(legacy_target, reinterpret_cast<void*>(&create_hook), &legacy_original) != MH_OK)
+        return false;
+    void* hwnd_original = nullptr;
+    if (MH_CreateHook(hwnd_target, reinterpret_cast<void*>(&hwnd_hook), &hwnd_original) != MH_OK) {
+        MH_RemoveHook(legacy_target);
+        return false;
+    }
+
+    // Both original continuations must be available before a native entry can
+    // replay either target. MinHook only writes to the local void* outputs.
+    originals = {reinterpret_cast<Create>(legacy_original), reinterpret_cast<CreateHwnd>(hwnd_original)};
+    if (MH_EnableHook(legacy_target) == MH_OK && MH_EnableHook(hwnd_target) == MH_OK)
+        return true;
+
+    MH_DisableHook(legacy_target);
+    MH_RemoveHook(legacy_target);
+    MH_RemoveHook(hwnd_target);
+    originals = {};
+    return false;
 }
 }
 extern "C" uint32_t rsf_d3d11p_default_backend(uint32_t vendor, uint32_t software) {
@@ -199,7 +234,7 @@ extern "C" uint32_t rsf_d3d11p_default_backend(uint32_t vendor, uint32_t softwar
 }
 
 extern "C" decltype(&leaf::create_original) rsf_d3d11p_original_create() {
-    return original_create ? leaf::create_original : nullptr;
+    return originals.installed() ? leaf::create_original : nullptr;
 }
 
 extern "C" void* rsf_d3d11p_unwrap_guarded(void* host, void* proxy) noexcept try {
@@ -216,7 +251,7 @@ extern "C" const rsf_generation_provider* rsf_d3d11p_provider_for(uint32_t backe
     return leaf::provider_table(rsf_core_fg_provider_family(backend));
 }
 extern "C" int rsf_d3d11_present_prepare(const rsf_d3d11_present_setup* setup) {
-    return rsf_core_d3d11p_prepare(setup, original_create != nullptr);
+    return rsf_core_d3d11p_prepare(setup, originals.installed());
 }
 extern "C" int32_t rsf_d3d11_present_create_for_hwnd(void* factory, void* queue, void* hwnd,
     const void* description, void** out) try {
@@ -227,20 +262,15 @@ extern "C" int32_t rsf_d3d11_present_create_for_hwnd(void* factory, void* queue,
     return E_FAIL;
 }
 extern "C" int32_t rsf_d3d11_present_wrap_native_chain(void* raw_device, void* raw_chain, void** out) try {
-    return rsf_d3d11p_factory_wrap_native(&platform, original_create != nullptr, raw_device, raw_chain, out);
+    return rsf_d3d11p_factory_wrap_native(&platform, originals.installed(), raw_device, raw_chain, out);
 } catch (...) { return E_FAIL; }
 extern "C" int rsf_d3d11_present_install(const rsf_d3d11_present_setup* setup) {
     if (!rsf_d3d11_present_prepare(setup)) return 0;
     ComPtr<IDXGIFactory2> factory;
     if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return 0;
-    const auto initialized = MH_Initialize();
-    if (initialized != MH_OK && initialized != MH_ERROR_ALREADY_INITIALIZED) return 0;
-    void* create = nullptr; void* create_hwnd = nullptr;
-    rsf_d3d11p_factory_hook_targets(factory.Get(), &create, &create_hwnd);
-    if (MH_CreateHook(create, reinterpret_cast<void*>(&create_hook), reinterpret_cast<void**>(&original_create)) != MH_OK) return 0;
-    if (MH_CreateHook(create_hwnd, reinterpret_cast<void*>(&hwnd_hook), reinterpret_cast<void**>(&original_hwnd)) != MH_OK) { MH_RemoveHook(create); original_create = nullptr; return 0; }
-    if (MH_EnableHook(create) != MH_OK || MH_EnableHook(create_hwnd) != MH_OK) { MH_DisableHook(create); MH_RemoveHook(create); MH_RemoveHook(create_hwnd); original_create = nullptr; return 0; }
-    log("presentation bridge: cold-start D3D11 swapchain interception installed"); return 1;
+    if (!install_factory_detours(factory.Get())) return 0;
+    log("presentation bridge: cold-start D3D11 swapchain interception installed");
+    return 1;
 }
 extern "C" int rsf_d3d11_present_install_scoped(const rsf_d3d11_present_setup* setup) {
     rsf_core_d3d11p_set_scoped(1);
@@ -248,7 +278,7 @@ extern "C" int rsf_d3d11_present_install_scoped(const rsf_d3d11_present_setup* s
     return 1;
 }
 extern "C" int32_t rsf_d3d11_present_creation_begin(void* window, uint64_t* token) {
-    return rsf_core_d3d11p_creation_begin(&platform, window, token, original_create != nullptr);
+    return rsf_core_d3d11p_creation_begin(&platform, window, token, originals.installed());
 }
 extern "C" int32_t rsf_d3d11_present_creation_end(void* window, uint64_t token, void* device, void* context, void* outer) {
     return rsf_core_d3d11p_creation_end(&platform, window, token, device, context, outer);
