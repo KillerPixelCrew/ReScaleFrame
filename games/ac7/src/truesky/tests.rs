@@ -556,20 +556,3 @@ fn restore_keeps_relay_memory_while_a_relay_call_runs() {
     assert_eq!(*fake.releases.borrow(), ["motion", "depth"]);
     assert_eq!(owned(&state), [false; 5]);
 }
-
-#[test]
-fn incomplete_leaf_tables_refuse() {
-    // SAFETY: all-zero is a table without leaves.
-    let leaves: rsf_ac7_truesky_leaves = unsafe { std::mem::zeroed() };
-    assert!(unsafe { NativePlugin::new(&leaves) }.is_none());
-    assert!(unsafe { NativePlugin::new(std::ptr::null()) }.is_none());
-    let mut state = unpatched();
-    // SAFETY: the arguments are live for the call.
-    unsafe {
-        rsf_ac7_truesky_apply(&mut state, &leaves);
-        rsf_ac7_truesky_refuse_full_grid(&mut state, &leaves);
-        assert!(!rsf_ac7_truesky_restore(&mut state, &leaves));
-        assert!(!rsf_ac7_truesky_restore(null_mut(), &leaves));
-    }
-    assert!(!state.resolution_refused && owned(&state) == [false; 5]);
-}

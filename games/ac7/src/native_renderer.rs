@@ -51,7 +51,7 @@ mod graph;
 pub(crate) mod leaves;
 mod particles;
 mod shaders;
-mod sky;
+pub(crate) mod sky;
 mod slate;
 mod translucency;
 mod views;

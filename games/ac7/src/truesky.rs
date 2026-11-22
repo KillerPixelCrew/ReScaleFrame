@@ -12,13 +12,13 @@
 //! The ownership record (`rsf_ac7_truesky_patches`) lives in the native renderer. Only this module
 //! changes it, always under the renderer's cloud resolution lock. native_renderer/sky.rs keeps the
 //! relay handlers with their D3D11 binding checks and one-to-one depth shader, the module lookup,
-//! the relay memory and the protected code writes, and lends them through
-//! `rsf_ac7_truesky_leaves`.
+//! the relay memory and the protected code writes, which `NativePlugin` calls.
 use crate::guards::rsf_ac7_guards_held;
+use crate::native_renderer::sky;
 use crate::sites::{Code, CodeView, NativeCode};
 use crate::sys::rsf_ac7_native_renderer;
 use crate::sys::{
-    RSF_AC7_RELAY_BYTES, rsf_ac7_call_relay, rsf_ac7_truesky_leaves, rsf_ac7_truesky_patches,
+    RSF_AC7_RELAY_BYTES, rsf_ac7_call_relay, rsf_ac7_code_leaves, rsf_ac7_truesky_patches,
 };
 use rsf_game_sys::{checksum::crc32_ieee, ffi_util::ascii_wide};
 use std::ffi::c_void;
@@ -432,44 +432,25 @@ pub(crate) fn restore(state: &mut rsf_ac7_truesky_patches, plugin: &impl Plugin)
     true
 }
 
-/// The validated leaf table of one call.
-struct NativePlugin {
+/// The TrueSky leaves of native_renderer/sky.rs for one live renderer, logging to its host log.
+pub(crate) struct NativePlugin {
     code: NativeCode,
     renderer: *mut rsf_ac7_native_renderer,
-    module: unsafe extern "C" fn(*const u16) -> *mut u8,
-    relay_allocate: unsafe extern "C" fn(*mut u8, *mut c_void) -> *mut c_void,
-    relay_release: unsafe extern "C" fn(*mut c_void),
-    depth_dispatch: *mut c_void,
-    composite_draw: *mut c_void,
-    depth_ready: unsafe extern "C" fn(*mut rsf_ac7_native_renderer) -> bool,
-    motion_release: unsafe extern "C" fn(*mut rsf_ac7_native_renderer),
-    depth_release: unsafe extern "C" fn(*mut rsf_ac7_native_renderer),
 }
 
 impl NativePlugin {
-    /// The table when every leaf, both handlers and the renderer are present.
-    ///
     /// # Safety
-    /// `leaves` is null or valid for the call, and its leaves keep the contracts of ac7_sites.h.
-    unsafe fn new(leaves: *const rsf_ac7_truesky_leaves) -> Option<Self> {
-        let leaves = unsafe { leaves.as_ref() }?;
-        if leaves.renderer.is_null()
-            || leaves.depth_dispatch.is_null()
-            || leaves.composite_draw.is_null()
-        {
+    /// `code` keeps the contracts of ac7_sites.h; a nonnull `renderer` is live for the call.
+    pub(crate) unsafe fn new(
+        code: &rsf_ac7_code_leaves,
+        renderer: *mut rsf_ac7_native_renderer,
+    ) -> Option<Self> {
+        if renderer.is_null() {
             return None;
         }
         Some(Self {
-            code: unsafe { NativeCode::new(&leaves.code) }?,
-            renderer: leaves.renderer,
-            module: leaves.module?,
-            relay_allocate: leaves.relay_allocate?,
-            relay_release: leaves.relay_release?,
-            depth_dispatch: leaves.depth_dispatch,
-            composite_draw: leaves.composite_draw,
-            depth_ready: leaves.depth_ready?,
-            motion_release: leaves.motion_release?,
-            depth_release: leaves.depth_release?,
+            code: unsafe { NativeCode::new(code) }?,
+            renderer,
         })
     }
 }
@@ -489,85 +470,68 @@ impl Code for NativePlugin {
     }
 }
 
-// SAFETY, for every call below: the leaves were lent for this call with the contracts of
-// ac7_sites.h, and the renderer is the live one whose record is being changed.
+// SAFETY, for every call below: the leaves keep the contracts of native_renderer/sky.rs, and the
+// renderer is the live one whose record is being changed.
 impl Plugin for NativePlugin {
     fn module(&self) -> *mut u8 {
-        unsafe { (self.module)(MODULE.as_ptr()) }
+        unsafe { sky::module(MODULE.as_ptr()) }
     }
     fn effect(&self) -> bool {
         effect_file()
     }
     fn relay_allocate(&self, call: *mut u8, handler: Handler) -> *mut c_void {
         let handler = match handler {
-            Handler::DepthDispatch => self.depth_dispatch,
-            Handler::CompositeDraw => self.composite_draw,
+            Handler::DepthDispatch => sky::native_cloud_depth_dispatch as *mut c_void,
+            Handler::CompositeDraw => sky::native_cloud_composite_draw as *mut c_void,
         };
-        unsafe { (self.relay_allocate)(call, handler) }
+        unsafe { sky::relay_allocate(call, handler) }
     }
     fn relay_release(&self, slot: *mut c_void) {
-        unsafe { (self.relay_release)(slot) }
+        unsafe { sky::relay_release(slot) }
     }
     fn depth_ready(&self) -> bool {
-        unsafe { (self.depth_ready)(self.renderer) }
+        unsafe { sky::depth_ready(self.renderer) }
     }
     fn motion_release(&self) {
-        unsafe { (self.motion_release)(self.renderer) }
+        unsafe { sky::motion_release(self.renderer) }
     }
     fn depth_release(&self) {
-        unsafe { (self.depth_release)(self.renderer) }
+        unsafe { sky::depth_release(self.renderer) }
     }
     fn guards_held(&self) -> u32 {
         rsf_ac7_guards_held(true)
     }
 }
 
-/// The record and leaves of one native call.
+/// Installs the relays and, once the depth relay is ready, the full cloud grid.
 ///
 /// # Safety
-/// `patches` and `leaves` are null or valid for the call, and the caller holds the renderer's
-/// cloud resolution lock, so nothing else uses `patches` during it.
-unsafe fn native<'a>(
-    patches: *mut rsf_ac7_truesky_patches,
-    leaves: *const rsf_ac7_truesky_leaves,
-) -> Option<(&'a mut rsf_ac7_truesky_patches, NativePlugin)> {
-    let patches = unsafe { patches.as_mut() }?;
-    let plugin = unsafe { NativePlugin::new(leaves) }?;
-    Some((patches, plugin))
-}
-
-/// # Safety
-/// See `native`.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_ac7_truesky_apply(
-    patches: *mut rsf_ac7_truesky_patches,
-    leaves: *const rsf_ac7_truesky_leaves,
-) {
-    if let Some((patches, plugin)) = unsafe { native(patches, leaves) } {
-        apply(patches, &plugin);
+/// `patches` is null or valid for the call, and the caller holds the renderer's cloud resolution
+/// lock, so nothing else uses `patches` during it.
+pub(crate) unsafe fn apply_native(patches: *mut rsf_ac7_truesky_patches, plugin: &NativePlugin) {
+    if let Some(patches) = unsafe { patches.as_mut() } {
+        apply(patches, plugin);
     }
 }
 
 /// # Safety
-/// See `native`.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_ac7_truesky_refuse_full_grid(
+/// As `apply_native`.
+pub(crate) unsafe fn refuse_full_grid_native(
     patches: *mut rsf_ac7_truesky_patches,
-    leaves: *const rsf_ac7_truesky_leaves,
+    plugin: &NativePlugin,
 ) {
-    if let Some((patches, plugin)) = unsafe { native(patches, leaves) } {
-        refuse_full_grid(patches, &plugin);
+    if let Some(patches) = unsafe { patches.as_mut() } {
+        refuse_full_grid(patches, plugin);
     }
 }
 
 /// # Safety
-/// See `native`.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_ac7_truesky_restore(
+/// As `apply_native`.
+pub(crate) unsafe fn restore_native(
     patches: *mut rsf_ac7_truesky_patches,
-    leaves: *const rsf_ac7_truesky_leaves,
+    plugin: &NativePlugin,
 ) -> bool {
-    unsafe { native(patches, leaves) }.is_some_and(|(patches, plugin)| restore(patches, &plugin))
+    unsafe { patches.as_mut() }.is_some_and(|patches| restore(patches, plugin))
 }
 
 #[cfg(test)]

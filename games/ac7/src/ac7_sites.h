@@ -106,36 +106,7 @@ typedef struct rsf_ac7_truesky_patches {
     bool motion_refused;              // composite_tile fingerprint refused for this renderer
 } rsf_ac7_truesky_patches;
 
-// Native leaves of the TrueSky owner, lent for one call. Every entry is required. None throws.
-typedef struct rsf_ac7_truesky_leaves {
-    // Compares and writes plugin code and logs to the renderer's host log.
-    rsf_ac7_code_leaves code;
-    rsf_ac7_native_renderer* renderer;
-    // Base of the loaded module named `name` (UTF-16, terminated), or null.
-    unsigned char* (*module)(const uint16_t* name);
-    // Relay memory within rel32 search range of `call` holding `handler`, or null.
-    void* (*relay_allocate)(unsigned char* call, void* handler);
-    void (*relay_release)(void* slot);
-    void* depth_dispatch; // relay handler of the depth producer dispatch
-    void* composite_draw; // relay handler of the composite_tile draw
-    // Whether the depth dispatch relay verified its one-to-one shader and bindings on the device.
-    bool (*depth_ready)(rsf_ac7_native_renderer* renderer);
-    // Releases the cloud motion depth resources.
-    void (*motion_release)(rsf_ac7_native_renderer* renderer);
-    // Releases the one-to-one depth shader and its device and clears readiness.
-    void (*depth_release)(rsf_ac7_native_renderer* renderer);
-} rsf_ac7_truesky_leaves;
 
-// Each call runs with the renderer's cloud resolution lock held.
-// Per sky render while active: installs the motion and depth relays, then the full cloud grid once
-// the depth relay is ready. A refusal is logged and keeps the supported native cloud resolution.
-void rsf_ac7_truesky_apply(rsf_ac7_truesky_patches* patches, const rsf_ac7_truesky_leaves* leaves);
-// The depth relay found unverified bindings: the full grid is refused for this renderer and the
-// native divisor restored for the next allocation.
-void rsf_ac7_truesky_refuse_full_grid(rsf_ac7_truesky_patches* patches,
-    const rsf_ac7_truesky_leaves* leaves);
-// Retirement in the former order. False, logged, keeps everything not yet restored for a retry.
-bool rsf_ac7_truesky_restore(rsf_ac7_truesky_patches* patches, const rsf_ac7_truesky_leaves* leaves);
 
 // Native calls of the native renderer, bound at run time by plugin.c and the native graph fixture
 // so that MinHook, the Windows input facts, the render scope create call and the shader factory
