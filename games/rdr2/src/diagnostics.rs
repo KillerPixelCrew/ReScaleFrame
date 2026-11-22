@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! ASI diagnostic sampling and the optional RenderDoc request worker.
+use crate::asi;
 use crate::camera_probe::rsf_rdr2_camera_request;
 use crate::runtime_worker::{append_path, log};
 use rsf_game_sys::ffi_util::try_box;
@@ -17,7 +18,6 @@ const MODULE_MARKS_MS: [u32; 5] = [5_000, 15_000, 30_000, 60_000, 120_000];
 pub(crate) const CAPTURE_PATH_CAPACITY: usize = 260;
 const CAPTURE_DIRECTORY_LIMIT: usize = CAPTURE_PATH_CAPACITY - 64;
 
-#[repr(C)]
 #[derive(Default)]
 pub(crate) struct DumpResult {
     pub(crate) result: i32,
@@ -29,7 +29,6 @@ pub(crate) struct DumpResult {
     pub(crate) bytes: u64,
 }
 
-#[repr(C)]
 #[derive(Default)]
 pub(crate) struct CensusResult {
     pub(crate) calls: u64,
@@ -41,25 +40,9 @@ pub(crate) struct CensusResult {
     pub(crate) conflicts: u32,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(crate) struct DiagnosticsLeaves {
-    pub(crate) measure: unsafe extern "C" fn() -> f64,
-    pub(crate) dump: unsafe extern "C" fn(*const c_char, f64, u32, u32, u32, u32, *mut DumpResult),
-    pub(crate) modules: unsafe extern "C" fn(*const c_char, *const c_char),
-    pub(crate) census: unsafe extern "C" fn(*mut CensusResult) -> bool,
-}
-
-const _: () = {
-    assert!(size_of::<DumpResult>() == 40);
-    assert!(size_of::<CensusResult>() == 48);
-    assert!(size_of::<DiagnosticsLeaves>() == 32);
-};
-
 struct Diagnostics {
     modules: CString,
     dumps: CString,
-    leaves: DiagnosticsLeaves,
 }
 
 type Worker = unsafe extern "system" fn(*mut c_void) -> u32;
@@ -108,12 +91,10 @@ fn utf8(text: &[u16]) -> CString {
 
 unsafe extern "system" fn diagnostics(work: *mut c_void) -> u32 {
     let worker = unsafe { Box::from_raw(work.cast::<Diagnostics>()) };
-    let leaves = worker.leaves;
-    let entropy = unsafe { (leaves.measure)() };
+    let entropy = asi::measure();
     log(format!("Code entropy at entry {entropy:.3}."));
     if !worker.dumps.is_empty() {
-        let mut report = DumpResult::default();
-        unsafe { (leaves.dump)(worker.dumps.as_ptr(), 7.0, 1, 250, 180_000, 2, &mut report) };
+        let report = asi::dump(worker.dumps.as_ptr(), 7.0, 1, 250, 180_000, 2);
         log(format!(
             "Module dump result={} entropy={:.3} sections={} imports={} iat_refs={} base=0x{:x} bytes={}",
             report.result,
@@ -132,11 +113,10 @@ unsafe extern "system" fn diagnostics(work: *mut c_void) -> u32 {
             unsafe { Sleep(mark - elapsed as u32) };
         }
         let label = CString::new(format!("t+{}s", mark / 1000)).unwrap_or_default();
-        unsafe { (leaves.modules)(worker.modules.as_ptr(), label.as_ptr()) };
+        asi::module_list(worker.modules.as_ptr(), label.as_ptr());
     }
     log("Module sampling finished.");
-    let mut report = CensusResult::default();
-    if unsafe { (leaves.census)(&mut report) } {
+    if let Some(report) = asi::census_report() {
         log(format!(
             "Census at 120 s: calls={} written={} sites={} hooks={} conflicts={} presents={} dropped={}",
             report.calls,
@@ -151,16 +131,11 @@ unsafe extern "system" fn diagnostics(work: *mut c_void) -> u32 {
     0
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_rdr2_start_diagnostics(
-    modules: *const u16,
-    dumps: *const u16,
-    leaves: &DiagnosticsLeaves,
-) {
+/// The ASI's module sampling and dump worker; both paths are NUL-terminated UTF-16.
+pub(crate) unsafe fn start_diagnostics(modules: *const u16, dumps: *const u16) {
     let worker = Diagnostics {
         modules: utf8(unsafe { path_units(modules) }),
         dumps: utf8(unsafe { path_units(dumps) }),
-        leaves: *leaves,
     };
     let _ = unsafe { start(worker, diagnostics) };
 }
@@ -203,8 +178,7 @@ unsafe extern "system" fn frame_requests(work: *mut c_void) -> u32 {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_rdr2_start_frame_probe(
+pub(crate) unsafe fn start_frame_probe(
     library: *const u16,
     prefix: *const u16,
     initialise: FrameInitialise,

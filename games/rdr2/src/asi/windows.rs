@@ -17,7 +17,7 @@ pub(crate) use diagnostic_services::install_census as census;
 #[cfg(feature = "research")]
 use diagnostic_services::install_frame_probe;
 #[cfg(feature = "research")]
-pub(crate) use diagnostic_services::start_diagnostics;
+pub(crate) use diagnostic_services::{census_report, dump, measure, module_list};
 use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use std::sync::OnceLock;

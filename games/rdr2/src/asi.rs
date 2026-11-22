@@ -14,8 +14,8 @@ pub(crate) use windows::{
 };
 #[cfg(all(windows, feature = "research"))]
 pub(crate) use windows::{
-    camera_probe, camera_reference, census, d3d12_trace, frame_probe, native_capture,
-    start_diagnostics,
+    camera_probe, camera_reference, census, census_report, d3d12_trace, dump, frame_probe, measure,
+    module_list, native_capture,
 };
 
 use crate::engine_settings;

@@ -223,7 +223,6 @@ unsafe extern "C" fn mode(device: *mut c_void, parameters: *const c_void) -> i32
 }
 
 /// Entered from the native leaf with the call's return address.
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_rdr2_output_detour(
     depth: *mut c_void,
     color: *mut c_void,
@@ -274,7 +273,6 @@ fn blit_target(image: usize) -> Option<BlitTarget> {
 }
 
 /// Entered from the native leaf with the call's return address.
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_rdr2_blit_detour(
     shader: *mut c_void,
     technique: u32,

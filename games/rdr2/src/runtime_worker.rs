@@ -362,7 +362,7 @@ pub(crate) fn asi_start_runtime(module: HMODULE, fingerprint: Fingerprint) -> u3
                 None
             };
         unsafe {
-            asi::start_diagnostics(
+            crate::diagnostics::start_diagnostics(
                 modules_path.as_ptr(),
                 dump_directory.as_ref().map_or(null(), |path| path.as_ptr()),
             )
