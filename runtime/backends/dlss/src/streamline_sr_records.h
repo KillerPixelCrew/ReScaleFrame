@@ -4,7 +4,7 @@
 #include "../../../vulkan/streamline/sdk_records.h"
 
 /* Streamline 2.14.1 records that only the Direct3D SR callers fill. The header, preferences,
-   constants, resource and tag records are the ones in sdk_records.h. dlss_streamline.cpp checks
+   constants, resource and tag records are the ones in sdk_records.h. tests/dlss_sr_layout_facts.cpp checks
    every record against the pinned SDK declarations; Rust builds them and calls the SDK entry
    points directly. */
 typedef struct rsf_sl_sdk_version {

@@ -37,7 +37,7 @@ mod provider;
 
 type Handle = *mut c_void;
 // The SDK host lends Streamline's embedded-signature check, which stays with
-// the vendor header in dlss_streamline.cpp.
+// the vendor header (`streamline_sr/signature.rs`).
 pub(crate) type VerifySignature = Option<unsafe extern "C" fn(*const u16) -> bool>;
 
 const NOT_APPLICABLE: u32 = 0;

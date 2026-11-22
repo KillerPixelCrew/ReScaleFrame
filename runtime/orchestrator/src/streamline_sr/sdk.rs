@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Streamline 2.14.1 records for the Direct3D SR callers. The record layouts are checked against the
-//! pinned SDK headers by `runtime/backends/dlss/src/dlss_streamline.cpp`; Rust builds them and calls
+//! pinned SDK headers by `tests/dlss_sr_layout_facts.cpp`; Rust builds them and calls
 //! the SDK entry points through typed function pointers.
 #[cfg(not(test))]
 mod layout_fixture;
