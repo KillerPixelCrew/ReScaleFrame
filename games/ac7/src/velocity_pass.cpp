@@ -56,46 +56,6 @@ bool raw_buffer(ID3D11Device* device,uint32_t records,bool output,Buffer& result
 }
 // Draw admission, record bounds, buffer sizing, the argument range and both cbuffers' contents
 // are velocity_stream.rs; VelocityDrawParameters is the generated shaders' b13 layout.
-constexpr char hash_source[]=R"(
-ByteAddressBuffer Source:register(t0);ByteAddressBuffer Arguments:register(t1);
-RWByteAddressBuffer Destination:register(u0);
-cbuffer Parameters:register(b0) {uint Count;uint Mask;uint Mode;uint WorkWidth;};
-uint key_hash(uint4 key) {
-    uint value=2166136261;
-    [unroll]for(uint i=0;i<4;i++)value=(value^key[i])*16777619;
-    value^=value>>16;return max(1,value&0x7fffffff);
-}
-void insert(uint4 clip,uint4 key,uint3 centre) {
-    float4 position=asfloat(clip);if(!all(isfinite(position)) || position.w<=0)return;
-    uint hash=key_hash(key);
-    [loop]for(uint probe=0;probe<32;probe++) {
-        uint address=((hash+probe)&Mask)*64;uint old;
-        Destination.InterlockedCompareExchange(address,0,0xffffffff,old);
-        if(old==0) {
-            Destination.Store4(address+4,key);Destination.Store4(address+20,clip);
-            Destination.Store3(address+36,centre);Destination.Store(address+48,0);
-            DeviceMemoryBarrier();Destination.Store(address,hash);return;
-        }
-        if(old==hash && all(Destination.Load4(address+4)==key) &&
-           all(Destination.Load4(address+20)==clip) && all(Destination.Load3(address+36)==centre))return;
-    }
-}
-[numthreads(64,1,1)]void main(uint3 thread:SV_DispatchThreadID) {
-    uint count=WorkWidth ? Count : min(Count,Arguments.Load(32));
-    uint width=WorkWidth ? WorkWidth : Arguments.Load(36);
-    uint index=thread.x+thread.y*width*64;
-    if(index>=count)return;uint offset=index*64;
-    if(Mode!=0 && Source.Load(offset)==0)return;
-    uint4 clip=Source.Load4(offset+(Mode==0 ? 0 : 20));
-    uint4 key=Source.Load4(offset+(Mode==0 ? 16 : 4));
-    uint3 centre=Source.Load3(offset+(Mode==0 ? 32 : 36));insert(clip,key,centre);
-    uint a=(key.x&0x1fffffff)|((key.x>>2)&0x20000000);
-    uint b=(key.y&0x1fffffff)|((key.y>>2)&0x20000000);
-    if((key.w==asuint(4.f) || key.w==asuint(5.f)) && key.z==0 && centre.x==0 && a>>28!=0) {
-        b=(b&~0x3ffffff)|(a&0x3ffffff);
-        key.y=0x20000000|(b&0x1fffffff)|((b&0x20000000)<<2);insert(clip,key,centre);
-    }
-})";
 constexpr char merge_source[]=R"(
 Texture2D<float2> Native:register(t0);Texture2D<float2> Layer:register(t1);
 float2 main(float4 pixel:SV_Position):SV_Target0 {
@@ -166,7 +126,7 @@ struct Renderer {
     explicit Renderer(ID3D11Device* d):device(d) {}
     bool initialize() {
         std::vector<uint8_t> bytes;
-        if (!rsf::compile_shader(hash_source,"ac7-geometry-history","main","cs_5_0",bytes) ||
+        if (!rsf::compile_shader(rsf_core_ac7_velocity_history_source(),"ac7-geometry-history","main","cs_5_0",bytes) ||
             FAILED(device->CreateComputeShader(bytes.data(),bytes.size(),nullptr,&hash)) ||
             !rsf::compile_shader(merge_source,"ac7-velocity-merge","main","ps_5_0",bytes) ||
             FAILED(device->CreatePixelShader(bytes.data(),bytes.size(),nullptr,&merge)) ||
@@ -242,9 +202,9 @@ struct Renderer {
             if (transformed) transformed=SUCCEEDED(device->CreateInputLayout(elements.data(),UINT(elements.size()),vertex.data(),vertex.size(),&made.layout));
         }
         if (transformed && native_hull) {
-            rsf_ac7_velocity_vertex_info h,d;std::vector<uint8_t> normal,corners;
-            transformed=rsf_ac7_velocity_hull_shader(lent.bytes[3],lent.sizes[3],info,normal,corners,h,made.input_points)==rsf_ac7_velocity_shader_result::patched &&
-                rsf_ac7_velocity_domain_shader(lent.bytes[4],lent.sizes[4],h,geometry,d,previous,current_clip)==rsf_ac7_velocity_shader_result::patched;
+            rsf_ac7_velocity_vertex_info d;std::vector<uint8_t> normal,corners;
+            transformed=rsf_ac7_velocity_tessellation(lent.bytes[3],lent.sizes[3],lent.bytes[4],lent.sizes[4],
+                info,normal,corners,geometry,d,made.input_points,previous,current_clip)==rsf_ac7_velocity_shader_result::patched;
             if (transformed) {
                 if (const auto cached=hull_shaders.find(normal);cached!=hull_shaders.end()) made.hull=cached->second;
                 else if (SUCCEEDED(device->CreateHullShader(normal.data(),normal.size(),nullptr,&made.hull))) {hull_shaders.emplace(normal,made.hull);++shader_objects;}

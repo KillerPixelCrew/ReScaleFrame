@@ -3,18 +3,18 @@
 
 use crate::dxbc_chunks::Chunk;
 use crate::velocity_container::{
-    AppendSemantic, Resize, Semantic, borrowed, chunk_index, chunks, native_output, read_signature,
-    resize_bytes, shader_index, valid_container_size, write_container, write_signature,
+    AppendSemantic, Resize, Semantic, borrowed, chunks, native_output, valid_container_size,
+};
+use crate::velocity_stage::{
+    CompileHelper, HelperCache, REGISTER_COUNT, Stage, compile_bytecode, stage, write_stage,
 };
 use crate::velocity_tokens::{
-    DCL_TEMPS, Instruction, MAX_TEMPS, OperandEdit, append_words, instructions, read_operands,
-    rewrite_operands, temp_count, write_instructions,
+    DCL_TEMPS, Instruction, MAX_TEMPS, OperandEdit, append_words, read_operands, rewrite_operands,
+    temp_count,
 };
-use std::ffi::{c_char, c_void};
-use std::ptr;
+use std::ffi::c_void;
 
 const VERTEX_PROFILE: u32 = 0x10050;
-const REGISTER_COUNT: usize = 32;
 const POSITION: u32 = 1;
 const FLOAT32: u32 = 3;
 
@@ -91,59 +91,21 @@ enum Particle {
 }
 
 #[repr(C)]
-struct ShaderSource {
-    text: *const c_char,
-    length: usize,
-}
-
-#[repr(C)]
 struct VertexMetadata {
     particle: u32,
     position_register: u32,
 }
 
-const _: () = {
-    assert!(size_of::<ShaderSource>() == 16);
-    assert!(size_of::<VertexMetadata>() == 8);
-};
+const _: () = assert!(size_of::<VertexMetadata>() == 8);
 
-type CompileHelper =
-    unsafe extern "C" fn(*const ShaderSource, u32, *mut *const u8, *mut usize) -> bool;
-
-struct Stage<'a> {
-    shader: usize,
-    input: usize,
-    output: usize,
-    code: Vec<Instruction>,
-    inputs: Vec<Semantic<'a>>,
-    outputs: Vec<Semantic<'a>>,
-}
-
-fn signature(bytes: &[u8]) -> Option<Vec<Semantic<'_>>> {
-    let mut semantics = Vec::new();
-    read_signature(bytes, false, |semantic| {
-        if semantic.reg as usize >= REGISTER_COUNT {
-            return None;
-        }
-        semantics.try_reserve(1).ok()?;
-        semantics.push(semantic);
-        Some(())
-    })?;
-    Some(semantics)
-}
-
-fn stage<'a>(chunks: &[Chunk<'a>]) -> Option<Stage<'a>> {
-    let shader = shader_index(chunks)?;
-    let input = chunk_index(chunks, b"ISGN")?;
-    let output = chunk_index(chunks, b"OSGN")?;
-    Some(Stage {
-        shader,
-        input,
-        output,
-        code: instructions(chunks[shader].data, VERTEX_PROFILE)?,
-        inputs: signature(chunks[input].data)?,
-        outputs: signature(chunks[output].data)?,
-    })
+fn vertex_stage<'a>(chunks: &[Chunk<'a>]) -> Option<Stage<'a>> {
+    let stage = stage(chunks, VERTEX_PROFILE, &[*b"OSGN"])?;
+    stage
+        .inputs
+        .iter()
+        .chain(&stage.outputs)
+        .all(|semantic| (semantic.reg as usize) < REGISTER_COUNT)
+        .then_some(stage)
 }
 
 fn particle_mode(inputs: &[Semantic<'_>], beam: bool) -> Particle {
@@ -388,46 +350,24 @@ fn patch<'a, 'output>(
     allocate: impl FnOnce(usize) -> Option<&'output mut [u8]>,
 ) -> Option<(VertexMetadata, Vec<Semantic<'a>>)> {
     let native_chunks = chunks(bytes)?;
-    let mut native = stage(&native_chunks)?;
+    let mut native = vertex_stage(&native_chunks)?;
     let particle = particle_mode(&native.inputs, beam) as u32;
     let position_register = position_register(&native.outputs, tessellation)?;
     if next_register(&native.outputs) as usize + 4 > REGISTER_COUNT {
         return None;
     }
 
-    let helper = stage(&chunks(compile(particle)?)?)?;
+    let helper = vertex_stage(&chunks(compile(particle)?)?)?;
     let link = link_signatures(&mut native, helper.inputs, helper.outputs)?;
     let code = assemble(&native.code, helper.code, &link)?;
-    let mut shader_bytes = Vec::new();
-    let mut input_bytes = Vec::new();
-    let mut output_bytes = Vec::new();
-    let shader = &mut shader_bytes;
-    write_instructions(&code, move |size| resize_bytes(shader, size))?;
-    let input = &mut input_bytes;
-    write_signature(&native.inputs, false, move |size| resize_bytes(input, size))?;
-    let output = &mut output_bytes;
-    write_signature(&native.outputs, false, move |size| {
-        resize_bytes(output, size)
-    })?;
-
-    let mut output_chunks = Vec::new();
-    output_chunks.try_reserve_exact(native_chunks.len()).ok()?;
-    for (i, chunk) in native_chunks.iter().enumerate() {
-        let data = if i == native.shader {
-            shader_bytes.as_slice()
-        } else if i == native.input {
-            input_bytes.as_slice()
-        } else if i == native.output {
-            output_bytes.as_slice()
-        } else {
-            chunk.data
-        };
-        output_chunks.push(Chunk {
-            tag: chunk.tag,
-            data,
-        });
-    }
-    write_container(&output_chunks, allocate)?;
+    write_stage(
+        &native_chunks,
+        &native.chunks,
+        &native.inputs,
+        &native.outputs,
+        &code,
+        allocate,
+    )?;
     Some((
         VertexMetadata {
             particle,
@@ -437,8 +377,26 @@ fn patch<'a, 'output>(
     ))
 }
 
-/// The compiler borrows four sources in particle-mode order and returns immutable cached
-/// bytecode. Resizing borrows a separate native destination, and append copies each semantic.
+fn vertex_helper(compile: CompileHelper, particle: u32) -> Option<&'static [u8]> {
+    static CACHE: [HelperCache; 4] = [const { HelperCache::new() }; 4];
+    let sources = [
+        (GENERIC_SOURCE, c"ac7-geometry-key"),
+        (SPRITE_SOURCE, c"ac7-particle-key"),
+        (MESH_SOURCE, c"ac7-mesh-particle-pose-key"),
+        (BEAM_SOURCE, c"ac7-beam-sample-key"),
+    ];
+    // Keep the original initialization order, including for the first particle draw.
+    let mut selected = None;
+    for (index, (source, name)) in sources.into_iter().enumerate() {
+        let code = compile_bytecode(&CACHE[index], compile, source, name, c"vs_5_0");
+        if index as u32 == particle {
+            selected = code;
+        }
+    }
+    selected
+}
+
+/// Resizing borrows a separate native destination and append copies each semantic.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_ac7_velocity_vertex_shader(
     bytes: *const u8,
@@ -461,22 +419,7 @@ unsafe extern "C" fn rsf_core_ac7_velocity_vertex_shader(
         bytes,
         tessellation,
         beam,
-        |particle| {
-            let sources = [GENERIC_SOURCE, SPRITE_SOURCE, MESH_SOURCE, BEAM_SOURCE].map(|source| {
-                ShaderSource {
-                    text: source.as_ptr().cast(),
-                    length: source.len(),
-                }
-            });
-            let mut helper = ptr::null();
-            let mut size = 0;
-            if !unsafe { compile(sources.as_ptr(), particle, &mut helper, &mut size) }
-                || !valid_container_size(size)
-            {
-                return None;
-            }
-            unsafe { borrowed(helper, size) }
-        },
+        |particle| vertex_helper(compile, particle),
         |size| unsafe { native_output(user, resize, size) },
     ) else {
         return false;

@@ -43,15 +43,15 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
         check(rsf_ac7_velocity_geometry_shader(info,geometry,previous,current_clip),"compile previous-generated-geometry GS");
         ComPtr<ID3D11GeometryShader> gs;
         check(SUCCEEDED(device->CreateGeometryShader(geometry.data(),geometry.size(),nullptr,&gs)),"create previous-generated-geometry GS");
-        auto native_gs=compile("struct V{float4 p:SV_Position;};"
+        auto native_gs=compile("struct V{float4 p:SV_Position;};ByteAddressBuffer native:register(t126);"
             "[maxvertexcount(3)]void main(triangle V v[3],inout TriangleStream<V> s)"
-            "{[unroll]for(uint i=0;i<3;i++){V o;o.p=v[i].p+float4(.1,0,0,0);s.Append(o);}}","gs_5_0");
+            "{[unroll]for(uint i=0;i<3;i++){V o;o.p=v[i].p+float4(asfloat(native.Load(4*i)),0,0,0);s.Append(o);}}","gs_5_0");
         rsf_ac7_velocity_vertex_info generated;uint32_t maximum=0;
         check(rsf_ac7_velocity_native_geometry_shader(native_gs.data(),native_gs.size(),info,geometry,
             generated,maximum,previous,current_clip)==rsf_ac7_velocity_shader_result::patched && maximum==3,
             "augment native GS at emission preserving generated position");
         gs.Reset();
-        check(SUCCEEDED(device->CreateGeometryShader(geometry.data(),geometry.size(),nullptr,&gs)),"create augmented native GS");
+        check(SUCCEEDED(device->CreateGeometryShader(geometry.data(),geometry.size(),nullptr,&gs)),"create augmented native GS with its original raw SRV at t126");
     }
     const char* materials[]{
         "Texture2D<float4> data:register(t0);float4 main(float4 p:SV_Position):SV_Target0"
@@ -70,10 +70,11 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
         auto tess_domain=compile("struct V{float4 p:VS_To_DS_Position;};struct C{float e[3]:SV_TessFactor;float i:SV_InsideTessFactor;};"
             "[domain(\"tri\")]float4 main(C c,const OutputPatch<V,3> p,float3 d:SV_DomainLocation):SV_Position"
             "{return p[0].p*d.x+p[1].p*d.y+p[2].p*d.z;}","ds_5_0");
-        std::vector<uint8_t> v,h,d,corners;rsf_ac7_velocity_vertex_info vi,hi,di;uint32_t points=0,previous=0,current_clip=0;
+        std::vector<uint8_t> v,h,d,corners;rsf_ac7_velocity_vertex_info vi,di;uint32_t points=0,previous=0,current_clip=0;
         check(rsf_ac7_velocity_vertex_shader(tess_vertex.data(),tess_vertex.size(),v,vi,true)==rsf_ac7_velocity_shader_result::patched,"key tessellation VS world-position outputs");
-        check(rsf_ac7_velocity_hull_shader(tess_hull.data(),tess_hull.size(),vi,h,corners,hi,points)==rsf_ac7_velocity_shader_result::patched && points==3,"relay patch keys through native hull control phase");
-        check(rsf_ac7_velocity_domain_shader(tess_domain.data(),tess_domain.size(),hi,d,di,previous,current_clip)==rsf_ac7_velocity_shader_result::patched,"augment native domain evaluation with prior control motion");
+        check(rsf_ac7_velocity_tessellation(tess_hull.data(),tess_hull.size(),tess_domain.data(),tess_domain.size(),
+            vi,h,corners,d,di,points,previous,current_clip)==rsf_ac7_velocity_shader_result::patched && points==3,
+            "relay native hull patch keys and augment native domain evaluation");
         ComPtr<ID3D11VertexShader> tv;ComPtr<ID3D11HullShader> th,tc;ComPtr<ID3D11DomainShader> td;
         check(SUCCEEDED(device->CreateVertexShader(v.data(),v.size(),nullptr,&tv)),"create tessellation keyed VS");
         check(SUCCEEDED(device->CreateHullShader(h.data(),h.size(),nullptr,&th)) && SUCCEEDED(device->CreateHullShader(corners.data(),corners.size(),nullptr,&tc)),"create normal/corner native HS variants");
@@ -97,8 +98,8 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
                 std::ifstream hf(native_h,std::ios::binary),df(native_d,std::ios::binary);
                 std::vector<uint8_t> hb{std::istreambuf_iterator<char>(hf),std::istreambuf_iterator<char>()},db{std::istreambuf_iterator<char>(df),std::istreambuf_iterator<char>()};
                 check(rsf_ac7_velocity_vertex_shader(matched_vertex.data(),matched_vertex.size(),v,vi,true)==rsf_ac7_velocity_shader_result::patched &&
-                    rsf_ac7_velocity_hull_shader(hb.data(),hb.size(),vi,h,corners,hi,points)==rsf_ac7_velocity_shader_result::patched && points==12 &&
-                    rsf_ac7_velocity_domain_shader(db.data(),db.size(),hi,d,di,previous,current_clip)==rsf_ac7_velocity_shader_result::patched,
+                    rsf_ac7_velocity_tessellation(hb.data(),hb.size(),db.data(),db.size(),vi,h,corners,d,di,points,previous,current_clip)==
+                        rsf_ac7_velocity_shader_result::patched && points==12,
                     "transform retained native 12-control-point PN tessellation with matching VS inputs");
                 tv.Reset();th.Reset();tc.Reset();td.Reset();
                 check(SUCCEEDED(device->CreateVertexShader(v.data(),v.size(),nullptr,&tv)) &&
@@ -586,6 +587,6 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
             std::fprintf(stderr,"retained shader creation refused: %s\n",name.c_str()); ok=false;
         }
     }
-    check(rsf_ac7_velocity_geometry_compile_count()==1,"native/material interface changes link DXBC without repeating history-GS HLSL compilation");
+    check(rsf_core_ac7_velocity_geometry_compile_count()==1,"native/material interface changes link DXBC without repeating history-GS HLSL compilation");
     return ok ? 0 : 1;
 }

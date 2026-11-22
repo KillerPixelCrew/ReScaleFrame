@@ -2,15 +2,14 @@
 //! AC7 velocity hull control-point relay and native domain evaluation.
 
 use crate::velocity_container::{
-    AppendSemantic, Resize, Semantic, SemanticView, borrowed, chunk_index, chunks, native_output,
+    AppendSemantic, Semantic, SemanticView, borrowed, chunk_index, chunks,
 };
 use crate::velocity_stage::{
-    CompileHelper, REGISTER_COUNT, RegisterMap, Stage, compile_bytecode, insert, mapped,
-    next_register, signature, stage, vertex_outputs, write_stage,
+    CompileHelper, HelperCache, REGISTER_COUNT, RegisterMap, Stage, compile_bytecode, insert,
+    mapped, next_register, rewrite_helper, signature, stage, vertex_outputs, write_stage,
 };
 use crate::velocity_tokens::{
-    DCL_TEMPS, Instruction, MAX_TEMPS, OperandEdit, OperandView, append_words, rewrite_operands,
-    temp_count,
+    DCL_TEMPS, Instruction, MAX_TEMPS, OperandEdit, append_words, rewrite_operands, temp_count,
 };
 use std::collections::BTreeMap;
 use std::ffi::c_void;
@@ -37,10 +36,8 @@ const RET_C: u32 = 63;
 const DCL_RESOURCE: u32 = 88;
 const DCL_CONSTANT_BUFFER: u32 = 89;
 const DCL_INPUT: u32 = 95;
-const DCL_INPUT_SIV: u32 = 97;
 const DCL_OUTPUT: u32 = 101;
 const DCL_OUTPUT_SIV: u32 = 103;
-const DCL_GLOBAL_FLAGS: u32 = 106;
 const HS_CONTROL_POINT_PHASE: u32 = 114;
 const HS_FORK_PHASE: u32 = 115;
 const HS_JOIN_PHASE: u32 = 116;
@@ -492,11 +489,6 @@ fn domain_declarations(
                 declared = true;
             }
             RET => {}
-            DCL_INPUT_CONTROL_POINT_COUNT..=DCL_TESS_PARTITIONING
-            | DCL_RESOURCE_RAW
-            | DCL_RESOURCE_STRUCTURED => {
-                append_words(declarations, &inst.words)?;
-            }
             _ if inst.declaration => append_words(declarations, &inst.words)?,
             _ => {
                 body.try_reserve(1).ok()?;
@@ -510,11 +502,6 @@ fn domain_declarations(
     Some(body)
 }
 
-fn rebase_temp(operand: &OperandView, base: u32) -> Option<OperandEdit> {
-    let reg = base.checked_add(operand.direct_register()?)?;
-    (reg < MAX_TEMPS).then_some(OperandEdit::register(TEMP, reg))
-}
-
 fn domain_injection(
     declarations: &mut Vec<u32>,
     helper: Vec<Instruction>,
@@ -522,44 +509,15 @@ fn domain_injection(
     outputs: &RegisterMap<u32>,
     base: u32,
 ) -> Option<Vec<u32>> {
-    let mut injection = Vec::new();
-    for mut inst in helper {
-        match inst.opcode {
-            DCL_TEMPS | DCL_GLOBAL_FLAGS | RET | DCL_INPUT..=DCL_INPUT_SIV => continue,
-            DCL_OUTPUT..=DCL_OUTPUT_SIV => {
-                let reg = inst.words.get_mut(2)?;
-                *reg = mapped(outputs, *reg)?;
-                append_words(declarations, &inst.words)?;
+    rewrite_helper(declarations, helper, outputs, base, |register| {
+        Some(match mapped(inputs, register)? {
+            DomainInput::Domain => OperandEdit::without_register(INPUT_DOMAIN_POINT),
+            DomainInput::Corner(reg) => OperandEdit::register(TEMP, reg),
+            DomainInput::ControlPoint { point, reg } => {
+                OperandEdit::register_pair(1, INPUT_CONTROL_POINT, [point, reg])
             }
-            _ if inst.declaration || inst.opcode == DCL_RESOURCE_RAW => {
-                append_words(declarations, &inst.words)?;
-            }
-            _ => {
-                let edited = rewrite_operands(&inst.words, false, |operand| {
-                    let edit = match operand.kind {
-                        TEMP => return rebase_temp(operand, base),
-                        OUTPUT => OperandEdit::register(
-                            OUTPUT,
-                            mapped(outputs, operand.direct_register()?)?,
-                        ),
-                        INPUT => match mapped(inputs, operand.direct_register()?)? {
-                            DomainInput::Domain => {
-                                OperandEdit::without_register(INPUT_DOMAIN_POINT)
-                            }
-                            DomainInput::Corner(reg) => OperandEdit::register(TEMP, reg),
-                            DomainInput::ControlPoint { point, reg } => {
-                                OperandEdit::register_pair(1, INPUT_CONTROL_POINT, [point, reg])
-                            }
-                        },
-                        _ => OperandEdit::KEEP,
-                    };
-                    Some(edit)
-                })?;
-                append_words(&mut injection, &edited)?;
-            }
-        }
-    }
-    Some(injection)
+        })
+    })
 }
 
 fn evaluate_domain(
@@ -650,87 +608,68 @@ fn domain_program<'a>(
     Some(code)
 }
 
-/// The wrapper lends native bytecode and upstream names through both container writes.
-/// The two resize leaves provide separate storage and the semantic callback copies each name.
+/// Links the two hull variants and the domain shader while hull metadata is still borrowed
+/// from the native hull bytecode. Only final domain semantics cross the boundary.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ac7_velocity_hull_shader(
-    bytes: *const u8,
-    size: usize,
+unsafe extern "C" fn rsf_core_ac7_velocity_tessellation(
+    hull_bytes: *const u8,
+    hull_size: usize,
+    domain_bytes: *const u8,
+    domain_size: usize,
     vertex: *const SemanticView,
-    count: usize,
-    user: *mut c_void,
-    resize_ordinary: Resize,
-    resize_corners: Resize,
-    append: AppendSemantic,
-    input_points: *mut u32,
-) -> bool {
-    let assemble = || {
-        let native_chunks = chunks(unsafe { borrowed(bytes, size) }?)?;
-        let patch = chunk_index(&native_chunks, b"PCSG")?;
-        let mut native = stage(&native_chunks, HULL_PROFILE, &[*b"OSGN"])?;
-        let constants = signature(&native_chunks[patch])?;
-        let vertex = vertex_outputs(unsafe { borrowed(vertex, count) }?)?;
-        let programs = hull_programs(&mut native, &constants, &vertex, |points| unsafe {
-            input_points.write(points);
-        })?;
-        write_stage(
-            &native_chunks,
-            &native.chunks,
-            &native.inputs,
-            &native.outputs,
-            &programs.ordinary,
-            |size| unsafe { native_output(user, resize_ordinary, size) },
-        )?;
-        write_stage(
-            &native_chunks,
-            &native.chunks,
-            &native.inputs,
-            &native.outputs,
-            &programs.corners,
-            |size| unsafe { native_output(user, resize_corners, size) },
-        )?;
-        native
-            .outputs
-            .iter()
-            .all(|s| unsafe { append(user, &s.view()) })
-            .then_some(())
-    };
-    !input_points.is_null() && assemble().is_some()
-}
-
-/// The wrapper lends native bytecode, hull names and scalar outputs through the call.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ac7_velocity_domain_shader(
-    bytes: *const u8,
-    size: usize,
-    hull: *const SemanticView,
     count: usize,
     compile: CompileHelper,
     user: *mut c_void,
-    resize: Resize,
+    resize: unsafe extern "C" fn(*mut c_void, u32, usize) -> *mut u8,
     append: AppendSemantic,
+    input_points: *mut u32,
     registers: *const DomainRegisters,
 ) -> bool {
     let assemble = || {
         let registers = unsafe { registers.as_ref() }?;
-        if registers.previous.is_null() || registers.current.is_null() {
+        if input_points.is_null() || registers.previous.is_null() || registers.current.is_null() {
             return None;
         }
-        let native_chunks = chunks(unsafe { borrowed(bytes, size) }?)?;
-        let mut native = stage(&native_chunks, DOMAIN_PROFILE, &[*b"OSGN"])?;
-        let hull = vertex_outputs(unsafe { borrowed(hull, count) }?)?;
-        let code = domain_program(&mut native, &hull, registers, || unsafe {
-            compile_bytecode(compile, DOMAIN_SOURCE)
+        let hull_chunks = chunks(unsafe { borrowed(hull_bytes, hull_size) }?)?;
+        let patch = chunk_index(&hull_chunks, b"PCSG")?;
+        let mut hull = stage(&hull_chunks, HULL_PROFILE, &[*b"OSGN"])?;
+        let constants = signature(&hull_chunks[patch])?;
+        let vertex = vertex_outputs(unsafe { borrowed(vertex, count) }?)?;
+        let programs = hull_programs(&mut hull, &constants, &vertex, |points| unsafe {
+            input_points.write(points);
         })?;
-        write_stage(
-            &native_chunks,
-            &native.chunks,
-            &native.inputs,
-            &native.outputs,
-            &code,
-            |size| unsafe { native_output(user, resize, size) },
-        )?;
-        native
+
+        let domain_chunks = chunks(unsafe { borrowed(domain_bytes, domain_size) }?)?;
+        let mut domain = stage(&domain_chunks, DOMAIN_PROFILE, &[*b"OSGN"])?;
+        let code = domain_program(&mut domain, &hull.outputs, registers, || {
+            static HELPER: HelperCache = HelperCache::new();
+            compile_bytecode(
+                &HELPER,
+                compile,
+                DOMAIN_SOURCE,
+                c"ac7-tessellated-control-motion",
+                c"vs_5_0",
+            )
+        })?;
+        for (index, chunks, stage, code) in [
+            (0, &hull_chunks, &hull, &programs.ordinary),
+            (1, &hull_chunks, &hull, &programs.corners),
+            (2, &domain_chunks, &domain, &code),
+        ] {
+            write_stage(
+                chunks,
+                &stage.chunks,
+                &stage.inputs,
+                &stage.outputs,
+                code,
+                |size| unsafe {
+                    // The caller lends a separate native destination for each product.
+                    let bytes = resize(user, index, size);
+                    (!bytes.is_null()).then(|| std::slice::from_raw_parts_mut(bytes, size))
+                },
+            )?;
+        }
+        domain
             .outputs
             .iter()
             .all(|s| unsafe { append(user, &s.view()) })
@@ -739,48 +678,9 @@ unsafe extern "C" fn rsf_core_ac7_velocity_domain_shader(
     assemble().is_some()
 }
 
-const DOMAIN_SOURCE: &str = r#"
-ByteAddressBuffer History:register(t127);
-cbuffer Parameters:register(b13) {
- float4 Rect;float4 Jitter;float Cutoff;uint HasHistory;uint HistoryMask;uint Padding;
- row_major float4x4 ClipToPrevious;
-};
-struct O {float4 key:RSFKEY0;float4 centre:RSFCENTRE0;float4 old:RSFOLD0;float4 current:RSFCUR0;float4 previous:RSFPREV0;};
-uint3 patch_key(float4 a,float4 b,float4 c) {
- uint3 hash=uint3(2166136261,2246822519,3266489917);
- [unroll]for(uint v=0;v<3;v++) {
-  uint4 bits=asuint(v==0 ? a : v==1 ? b : c);
-  [unroll]for(uint j=0;j<4;j++)hash=(hash^bits[j])*uint3(16777619,3266489917,668265263);
- }
- return hash;
-}
-float4 previous_corner(float4 current,uint3 patch,uint corner,float3 old,bool sprite,bool valid) {
- float4 p=current;p.xy-=Jitter.xy*p.w;float4 fallback=mul(p,ClipToPrevious);fallback.xy+=Jitter.zw*fallback.w;
- if(HasHistory==0 || !valid)return fallback;
- uint4 key=uint4(patch,asuint(float(corner)));uint hash=2166136261;
- [unroll]for(uint j=0;j<4;j++)hash=(hash^key[j])*16777619;
- hash^=hash>>16;hash=max(1,hash&0x7fffffff);
- bool found=false,ambiguous=false;float distance=3.402823e38;float4 selected=fallback;
- [loop]for(uint probe=0;probe<32;probe++) {
-  uint address=((hash+probe)&HistoryMask)*64;uint marker=History.Load(address);
-  if(marker==0)break;if(marker!=hash || any(History.Load4(address+4)!=key))continue;
-  float4 candidate=asfloat(History.Load4(address+20));if(!all(isfinite(candidate)) || candidate.w<=0)continue;
-  float3 centre=asfloat(History.Load3(address+36));float d=sprite ? dot(centre-old,centre-old) : 0;
-  if(!found || d<distance) {found=true;distance=d;selected=candidate;ambiguous=false;}
-  else if(d==distance && any(asuint(candidate)!=asuint(selected)))ambiguous=true;
- }
- return found && !ambiguous ? selected : fallback;
-}
-O main(float3 domain:RSFDOMAIN0,float4 p0:RSFCORNER0,float4 p1:RSFCORNER1,float4 p2:RSFCORNER2,
- float4 a:RSFA0,float4 b:RSFA1,float4 c:RSFA2,float4 la:RSFB0,float4 lb:RSFB1,float4 lc:RSFB2,
- float4 centre:RSFCENTRE0,float4 old:RSFOLD0) {
- O o;uint3 now=patch_key(a,b,c),prior=patch_key(la,lb,lc);
- uint corner=domain.x==1 ? 1 : domain.y==1 ? 2 : domain.z==1 ? 3 : 0;
- o.key=asfloat(uint4(now,asuint(float(corner))));o.centre=centre;o.old=old;
- o.current=p0*domain.x+p1*domain.y+p2*domain.z;
- bool valid=la.w!=3 && lb.w!=3 && lc.w!=3;
- o.previous=previous_corner(p0,prior,1,old.xyz,la.w==1,valid)*domain.x+
-  previous_corner(p1,prior,2,old.xyz,la.w==1,valid)*domain.y+
-  previous_corner(p2,prior,3,old.xyz,la.w==1,valid)*domain.z;
- return o;
-}"#;
+const DOMAIN_SOURCE: &str = concat!(
+    "#define RSF_HISTORY_SLOT t127\n",
+    include_str!("velocity_history_table.hlsl"),
+    include_str!("velocity_history_lookup.hlsl"),
+    include_str!("velocity_domain.hlsl")
+);
