@@ -1,18 +1,13 @@
 // SPDX-License-Identifier: MIT
-use super::{DlssFrame, Handle, Log, Pass, Platform, Provider, TextureInfo, rsf_fg_frame};
+use super::{DlssFrame, Handle, Log, Pass, Provider, TextureInfo, rsf_fg_frame};
 use crate::d3d11_d3d12::*;
-use crate::d3d11_present::{rsf_core_d3d11p_graphics, rsf_core_d3d11p_host};
+use crate::d3d11_present::rsf_core_d3d11p_graphics;
 use crate::d3d11_present_abi::rsf_streamline_graphics;
 use crate::d3d12_fence::rsf_core_d3d12_wait_fence;
-use crate::fg_leases::rsf_d3d12_fence_completed;
-use crate::native_fg_cpu::NATIVE_PLATFORM as CPU_PLATFORM;
-use crate::native_scene::{rsf_native_scene_classify_present, rsf_native_scene_for_window};
-use crate::native_window::rsf_native_window_match;
 use crate::shared_surface::{
     ABI_VERSION as SURFACE_ABI, SurfaceSetup, rsf_shared_fence_create, rsf_shared_surface_create,
 };
 use crate::sys::*;
-use rsf_game_sys::rsf_frame_allows_fg;
 use std::ffi::c_char;
 use std::ptr::null_mut;
 use windows::Win32::Graphics::Direct3D11::{
@@ -21,25 +16,38 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::core::{IUnknown, Interface};
 
 unsafe extern "C" {
-    fn rsf_d3d11_present_has_owner() -> i32;
-    fn rsf_d3d11_present_is_owner(chain: Handle) -> i32;
-    fn rsf_d3d11_present_provider() -> *const Provider;
-    fn rsf_d3d11_present_session() -> Handle;
-    fn rsf_d3d11_present_backend() -> u32;
-    fn rsf_d3d11_present_generation() -> u64;
-    fn rsf_d3d11_present_retire(
+    #[link_name = "rsf_d3d11_present_has_owner"]
+    pub(super) fn present_has_owner() -> i32;
+    #[link_name = "rsf_d3d11_present_is_owner"]
+    pub(super) fn present_is_owner(chain: Handle) -> i32;
+    #[link_name = "rsf_d3d11_present_provider"]
+    pub(super) fn present_provider() -> *const Provider;
+    #[link_name = "rsf_d3d11_present_session"]
+    pub(super) fn present_session() -> Handle;
+    #[link_name = "rsf_d3d11_present_backend"]
+    pub(super) fn present_backend() -> u32;
+    #[link_name = "rsf_d3d11_present_generation"]
+    pub(super) fn present_generation() -> u64;
+    #[link_name = "rsf_d3d11_present_retire"]
+    pub(super) fn present_retire(
         session: Handle,
         list: Handle,
         fence: *mut Handle,
         value: *mut u64,
     ) -> i32;
-    fn rsf_d3d11_present_abort(id: u64) -> i32;
+    #[link_name = "rsf_d3d11_present_abort"]
+    pub(super) fn present_abort(id: u64) -> i32;
     fn rsf_streamline_host_token(host: Handle, source: u64) -> Handle;
-    fn rsf_dlss_evaluate(context: Handle, frame: *const DlssFrame) -> i32;
-    fn rsf_dlss_evaluate_shared(list: Handle, frame: *const DlssFrame, source: u64) -> i32;
-    fn rsf_input_dump_sr(context: Handle, frame: *const DlssFrame, backend: u32);
-    fn rsf_input_dump_fg(context: Handle, pass: *const Pass, frame: *const DlssFrame);
-    fn rsf_input_dump_fg_prepare(pass: *const Pass, frame: *const rsf_fg_frame, result: i32);
+    #[link_name = "rsf_dlss_evaluate"]
+    pub(super) fn dlss_evaluate(context: Handle, frame: *const DlssFrame) -> i32;
+    #[link_name = "rsf_dlss_evaluate_shared"]
+    pub(super) fn dlss_evaluate_shared(list: Handle, frame: *const DlssFrame, source: u64) -> i32;
+    #[link_name = "rsf_input_dump_sr"]
+    pub(super) fn dump_sr(context: Handle, frame: *const DlssFrame, backend: u32);
+    #[link_name = "rsf_input_dump_fg"]
+    pub(super) fn dump_fg(context: Handle, pass: *const Pass, frame: *const DlssFrame);
+    #[link_name = "rsf_input_dump_fg_prepare"]
+    pub(super) fn dump_fg_prepare(pass: *const Pass, frame: *const rsf_fg_frame, result: i32);
     fn rsf_input_dump_named_texture(
         context: Handle,
         texture: Handle,
@@ -48,60 +56,32 @@ unsafe extern "C" {
     ) -> i32;
 }
 
-pub(super) static NATIVE_PLATFORM: Platform = Platform {
-    cpu: &CPU_PLATFORM,
-    present_has_owner: rsf_d3d11_present_has_owner,
-    present_is_owner: rsf_d3d11_present_is_owner,
-    present_host: rsf_core_d3d11p_host,
-    present_provider: rsf_d3d11_present_provider,
-    present_session: rsf_d3d11_present_session,
-    present_backend: rsf_d3d11_present_backend,
-    present_generation: rsf_d3d11_present_generation,
-    present_graphics,
-    present_retire: rsf_d3d11_present_retire,
-    present_abort: rsf_d3d11_present_abort,
-    host_token,
-    window_match: rsf_native_window_match,
-    scene_for_window: rsf_native_scene_for_window,
-    scene_present_path: rsf_native_scene_classify_present,
-    allows_fg: rsf_frame_allows_fg,
-    context_device,
-    query_context4: query::<ID3D11DeviceContext, ID3D11DeviceContext4>,
-    query_texture: query::<IUnknown, ID3D11Texture2D>,
-    texture_info,
-    create_event,
-    close_event,
-    fence_create,
-    fence_d3d11,
-    fence_d3d12,
-    surface_create,
-    surface_destroy,
-    surface_d3d11,
-    surface_d3d12,
-    fence_completed: rsf_d3d12_fence_completed,
-    wait_fence,
-    flush,
-    copy_resource,
-    context_signal,
-    context_wait,
-    create_commands,
-    create_output,
-    reset_commands,
-    close_commands,
-    execute,
+// The native_fg owner calls these directly. Rust owners elsewhere in the Runtime appear under the
+// names the owner uses.
+pub(super) use crate::d3d11_d3d12::{
+    close_commands, close_event, context_signal, context_wait, copy_resource, copy_transitioned,
+    create_commands, create_event, create_output, execute, fence_d3d11, fence_d3d12, flush,
+    queue_signal, queue_wait, reset_commands, surface_d3d11, surface_d3d12, surface_destroy,
     transition,
-    copy_transitioned,
-    queue_signal,
-    queue_wait,
-    dlss_evaluate: rsf_dlss_evaluate,
-    dlss_evaluate_shared: rsf_dlss_evaluate_shared,
-    dump_sr: rsf_input_dump_sr,
-    dump_fg: rsf_input_dump_fg,
-    dump_fg_prepare: rsf_input_dump_fg_prepare,
-    dump_named,
 };
+pub(super) use crate::d3d11_present::rsf_core_d3d11p_host as present_host;
+pub(super) use crate::fg_leases::rsf_d3d12_fence_completed as fence_completed;
+pub(super) use crate::native_scene::{
+    rsf_native_scene_classify_present as scene_present_path,
+    rsf_native_scene_for_window as scene_for_window,
+};
+pub(super) use crate::native_window::rsf_native_window_match as window_match;
+pub(super) use rsf_game_sys::rsf_frame_allows_fg as allows_fg;
 
-unsafe extern "C" fn present_graphics(
+pub(super) unsafe fn query_context4(context: Handle) -> Handle {
+    unsafe { query::<ID3D11DeviceContext, ID3D11DeviceContext4>(context) }
+}
+
+pub(super) unsafe fn query_texture(object: Handle) -> Handle {
+    unsafe { query::<IUnknown, ID3D11Texture2D>(object) }
+}
+
+pub(super) unsafe fn present_graphics(
     device: *mut Handle,
     queue: *mut Handle,
     native: *mut Handle,
@@ -121,16 +101,16 @@ unsafe extern "C" fn present_graphics(
     1
 }
 
-unsafe extern "C" fn host_token(host: Handle, source: u64) -> i32 {
+pub(super) unsafe fn host_token(host: Handle, source: u64) -> i32 {
     i32::from(!unsafe { rsf_streamline_host_token(host, source) }.is_null())
 }
 
-unsafe extern "C" fn context_device(context: Handle) -> Handle {
+pub(super) unsafe fn context_device(context: Handle) -> Handle {
     unsafe { borrow::<ID3D11DeviceContext>(&context).GetDevice() }
         .map_or(null_mut(), Interface::into_raw)
 }
 
-unsafe extern "C" fn texture_info(texture: Handle, out: *mut TextureInfo) -> i32 {
+pub(super) unsafe fn texture_info(texture: Handle, out: *mut TextureInfo) -> i32 {
     let mut desc = D3D11_TEXTURE2D_DESC::default();
     unsafe {
         borrow::<ID3D11Texture2D>(&texture).GetDesc(&mut desc);
@@ -144,7 +124,7 @@ unsafe extern "C" fn texture_info(texture: Handle, out: *mut TextureInfo) -> i32
     1
 }
 
-unsafe extern "C" fn fence_create(device11: Handle, device12: Handle) -> Handle {
+pub(super) unsafe fn fence_create(device11: Handle, device12: Handle) -> Handle {
     let mut fence = null_mut();
     if unsafe { rsf_shared_fence_create(device11, device12, None, null_mut(), &mut fence) } == 0 {
         fence.cast()
@@ -153,7 +133,7 @@ unsafe extern "C" fn fence_create(device11: Handle, device12: Handle) -> Handle 
     }
 }
 
-unsafe extern "C" fn surface_create(
+pub(super) unsafe fn surface_create(
     device11: Handle,
     device12: Handle,
     width: u32,
@@ -179,22 +159,15 @@ unsafe extern "C" fn surface_create(
     }
 }
 
-unsafe extern "C" fn wait_fence(fence: Handle, value: u64, event: Handle) -> i32 {
+pub(super) unsafe fn wait_fence(fence: Handle, value: u64, event: Handle) -> i32 {
     i32::from(
         unsafe {
-            rsf_core_d3d12_wait_fence(
-                fence,
-                value,
-                event,
-                10_000,
-                rsf_d3d12_fence_completed,
-                arm_fence,
-            )
+            rsf_core_d3d12_wait_fence(fence, value, event, 10_000, fence_completed, arm_fence)
         } >= 0,
     )
 }
 
-unsafe extern "C" fn dump_named(
+pub(super) unsafe fn dump_named(
     context: Handle,
     texture: Handle,
     directory: *const c_char,

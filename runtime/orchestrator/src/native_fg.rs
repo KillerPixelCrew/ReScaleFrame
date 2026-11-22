@@ -50,8 +50,6 @@ use windows::Win32::Graphics::Dxgi::{Common::*, DXGI_PRESENT_TEST};
 
 mod platform;
 
-use platform::NATIVE_PLATFORM;
-
 type Handle = *mut c_void;
 
 const SLOT_COUNT: usize = 6;
@@ -90,163 +88,11 @@ const MOTION: usize = 2;
 const EXPOSURE: usize = 3;
 const STAGING: usize = 4;
 
-// The private native table is fixed for the lifetime of the linked runtime.
-struct Platform {
-    cpu: &'static cpu_owner::Platform,
-    present_has_owner: unsafe extern "C" fn() -> i32,
-    present_is_owner: unsafe extern "C" fn(swapchain: *mut ::core::ffi::c_void) -> i32,
-    present_host: unsafe extern "C" fn() -> *mut ::core::ffi::c_void,
-    present_provider: unsafe extern "C" fn() -> *const Provider,
-    present_session: unsafe extern "C" fn() -> *mut ::core::ffi::c_void,
-    present_backend: unsafe extern "C" fn() -> u32,
-    present_generation: unsafe extern "C" fn() -> u64,
-    present_graphics: unsafe extern "C" fn(
-        device12: *mut *mut ::core::ffi::c_void,
-        queue12: *mut *mut ::core::ffi::c_void,
-        native_device: *mut *mut ::core::ffi::c_void,
-    ) -> i32,
-    present_retire: unsafe extern "C" fn(
-        provider: *mut ::core::ffi::c_void,
-        list: *mut ::core::ffi::c_void,
-        fence: *mut *mut ::core::ffi::c_void,
-        value: *mut u64,
-    ) -> i32,
-    present_abort: unsafe extern "C" fn(id: u64) -> i32,
-    host_token: unsafe extern "C" fn(host: *mut ::core::ffi::c_void, id: u64) -> i32,
-    window_match: unsafe extern "C" fn(swapchain: *mut ::core::ffi::c_void, out: *mut Pass) -> i32,
-    scene_for_window: unsafe extern "C" fn(window: *const Pass, out: *mut SceneIdentity) -> i32,
-    scene_present_path:
-        unsafe extern "C" fn(window: *const Pass, scene: *const SceneIdentity) -> u32,
-    allows_fg: unsafe extern "C" fn(record: *const rsf_frame_record) -> i32,
-    context_device:
-        unsafe extern "C" fn(context: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
-    query_context4:
-        unsafe extern "C" fn(context: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
-    query_texture:
-        unsafe extern "C" fn(object: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
-    texture_info:
-        unsafe extern "C" fn(texture: *mut ::core::ffi::c_void, out: *mut TextureInfo) -> i32,
-    create_event: unsafe extern "C" fn() -> *mut ::core::ffi::c_void,
-    close_event: unsafe extern "C" fn(event: *mut ::core::ffi::c_void),
-    fence_create: unsafe extern "C" fn(
-        device11: *mut ::core::ffi::c_void,
-        native_device: *mut ::core::ffi::c_void,
-    ) -> *mut ::core::ffi::c_void,
-    fence_d3d11: unsafe extern "C" fn(fence: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
-    fence_d3d12: unsafe extern "C" fn(fence: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
-    surface_create: unsafe extern "C" fn(
-        device11: *mut ::core::ffi::c_void,
-        native_device: *mut ::core::ffi::c_void,
-        width: u32,
-        height: u32,
-        format: u32,
-    ) -> *mut ::core::ffi::c_void,
-    surface_destroy: unsafe extern "C" fn(surface: *mut ::core::ffi::c_void),
-    surface_d3d11:
-        unsafe extern "C" fn(surface: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
-    surface_d3d12:
-        unsafe extern "C" fn(surface: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
-    fence_completed: unsafe extern "C" fn(fence12: *mut ::core::ffi::c_void) -> u64,
-    wait_fence: unsafe extern "C" fn(
-        fence12: *mut ::core::ffi::c_void,
-        value: u64,
-        event: *mut ::core::ffi::c_void,
-    ) -> i32,
-    flush: unsafe extern "C" fn(context4: *mut ::core::ffi::c_void),
-    copy_resource: unsafe extern "C" fn(
-        context4: *mut ::core::ffi::c_void,
-        destination: *mut ::core::ffi::c_void,
-        source: *mut ::core::ffi::c_void,
-    ),
-    context_signal: unsafe extern "C" fn(
-        context4: *mut ::core::ffi::c_void,
-        fence11: *mut ::core::ffi::c_void,
-        value: u64,
-    ) -> i32,
-    context_wait: unsafe extern "C" fn(
-        context4: *mut ::core::ffi::c_void,
-        fence11: *mut ::core::ffi::c_void,
-        value: u64,
-    ) -> i32,
-    create_commands: unsafe extern "C" fn(
-        device12: *mut ::core::ffi::c_void,
-        allocator: *mut *mut ::core::ffi::c_void,
-        list: *mut *mut ::core::ffi::c_void,
-    ) -> i32,
-    create_output: unsafe extern "C" fn(
-        device12: *mut ::core::ffi::c_void,
-        width: u32,
-        height: u32,
-        format: u32,
-    ) -> *mut ::core::ffi::c_void,
-    reset_commands: unsafe extern "C" fn(
-        allocator: *mut ::core::ffi::c_void,
-        list: *mut ::core::ffi::c_void,
-    ) -> i32,
-    close_commands: unsafe extern "C" fn(list: *mut ::core::ffi::c_void) -> i32,
-    execute: unsafe extern "C" fn(queue: *mut ::core::ffi::c_void, list: *mut ::core::ffi::c_void),
-    transition: unsafe extern "C" fn(
-        list: *mut ::core::ffi::c_void,
-        resource: *mut ::core::ffi::c_void,
-        before: u32,
-        after: u32,
-    ),
-    copy_transitioned: unsafe extern "C" fn(
-        list: *mut ::core::ffi::c_void,
-        destination: *mut ::core::ffi::c_void,
-        destination_before: u32,
-        destination_after: u32,
-        source: *mut ::core::ffi::c_void,
-        source_before: u32,
-        source_after: u32,
-    ),
-    queue_signal: unsafe extern "C" fn(
-        queue: *mut ::core::ffi::c_void,
-        fence12: *mut ::core::ffi::c_void,
-        value: u64,
-    ) -> i32,
-    queue_wait: unsafe extern "C" fn(
-        queue: *mut ::core::ffi::c_void,
-        fence12: *mut ::core::ffi::c_void,
-        value: u64,
-    ) -> i32,
-    dlss_evaluate:
-        unsafe extern "C" fn(context: *mut ::core::ffi::c_void, frame: *const DlssFrame) -> i32,
-    dlss_evaluate_shared: unsafe extern "C" fn(
-        list: *mut ::core::ffi::c_void,
-        frame: *const DlssFrame,
-        source: u64,
-    ) -> i32,
-    dump_sr: unsafe extern "C" fn(
-        context: *mut ::core::ffi::c_void,
-        frame: *const DlssFrame,
-        backend: u32,
-    ),
-    dump_fg: unsafe extern "C" fn(
-        context: *mut ::core::ffi::c_void,
-        pass: *const Pass,
-        frame: *const DlssFrame,
-    ),
-    dump_fg_prepare:
-        unsafe extern "C" fn(pass: *const Pass, frame: *const rsf_fg_frame, result: i32),
-    dump_named: unsafe extern "C" fn(
-        context: *mut ::core::ffi::c_void,
-        texture: *mut ::core::ffi::c_void,
-        directory: *const ::core::ffi::c_char,
-        name: *const ::core::ffi::c_char,
-        view: u32,
-        scale: f32,
-        log: Log,
-        log_user: *mut ::core::ffi::c_void,
-    ) -> i32,
-}
-
 macro_rules! call {
-    ($p:expr, $f:ident $(, $a:expr)* $(,)?) => {{
-        // Every entry is present and takes the caller's validated or owned handles.
+    ($f:ident $(, $a:expr)* $(,)?) => {{
+        // Each leaf takes the caller's validated or owned handles.
         #[allow(unused_unsafe)]
-        let result =
-            unsafe { ($p.$f)($($a),*) };
+        let result = unsafe { platform::$f($($a),*) };
         result
     }};
 }
@@ -336,10 +182,10 @@ pub(crate) fn requested() -> Options {
     lock(&SETTINGS).requested
 }
 
-fn stage(p: &Platform, name: &CStr, source: u64, native: u64, result: i32) {
+fn stage(name: &CStr, source: u64, native: u64, result: i32) {
     cpu_owner::stage(
-        cpu_platform(p),
-        call!(p, present_generation),
+        cpu_platform(),
+        call!(present_generation),
         &name.to_string_lossy(),
         source,
         native,
@@ -352,17 +198,16 @@ fn trace(name: &CStr, source: u64, result: i32) {
     cpu_owner::trace(&name.to_string_lossy(), source, result);
 }
 
-fn cpu_platform(p: &Platform) -> &cpu_owner::Platform {
-    // The native graphics callback table supplies a process-lifetime CPU platform.
-    p.cpu
+fn cpu_platform() -> &'static cpu_owner::Platform {
+    &cpu_owner::NATIVE_PLATFORM
 }
 
 // The game's screen class decides, through the one rule every generation consumer applies.
-fn generates_on(p: &Platform, screen: u32) -> bool {
+fn generates_on(screen: u32) -> bool {
     let mut record: rsf_frame_record = empty();
     record.struct_size = size_of::<rsf_frame_record>() as u32;
     record.screen = screen;
-    call!(p, allows_fg, &record) != 0
+    call!(allows_fg, &record) != 0
 }
 
 // A non-COM platform object released by its own destroy call.
@@ -409,7 +254,7 @@ unsafe impl Sync for Device {}
 
 static DEVICE: Mutex<Option<&'static Device>> = Mutex::new(None);
 
-fn initialize(p: &Platform, context: Handle) -> Option<&'static Device> {
+fn initialize(context: Handle) -> Option<&'static Device> {
     let mut bound = lock(&DEVICE);
     if let Some(device) = *bound {
         return Some(device);
@@ -417,7 +262,6 @@ fn initialize(p: &Platform, context: Handle) -> Option<&'static Device> {
     let (mut device12, mut queue, mut native_device) =
         (ptr::null_mut(), ptr::null_mut(), ptr::null_mut());
     if call!(
-        p,
         present_graphics,
         &mut device12,
         &mut queue,
@@ -426,15 +270,15 @@ fn initialize(p: &Platform, context: Handle) -> Option<&'static Device> {
     {
         return None;
     }
-    let device11 = unsafe { ComRef::from_owned(call!(p, context_device, context)) }?;
-    let context4 = unsafe { ComRef::from_owned(call!(p, query_context4, context)) }?;
-    let event = call!(p, create_event);
+    let device11 = unsafe { ComRef::from_owned(call!(context_device, context)) }?;
+    let context4 = unsafe { ComRef::from_owned(call!(query_context4, context)) }?;
+    let event = call!(create_event);
     if event.is_null() {
         return None;
     }
-    let fence = call!(p, fence_create, device11.as_ptr(), native_device);
+    let fence = call!(fence_create, device11.as_ptr(), native_device);
     if fence.is_null() {
-        call!(p, close_event, event);
+        call!(close_event, event);
         return None;
     }
     let device = Box::leak(Box::new(Device {
@@ -444,8 +288,8 @@ fn initialize(p: &Platform, context: Handle) -> Option<&'static Device> {
         device12,
         queue,
         native_device,
-        fence11: call!(p, fence_d3d11, fence),
-        fence12: call!(p, fence_d3d12, fence),
+        fence11: call!(fence_d3d11, fence),
+        fence12: call!(fence_d3d12, fence),
         event,
         serial: AtomicU64::new(0),
     }));
@@ -456,20 +300,13 @@ fn initialize(p: &Platform, context: Handle) -> Option<&'static Device> {
 impl Device {
     // Queues the next serial on the D3D11 side. Unflushed: the presentation bridge's own Signal and
     // Flush later in the frame submit it, ahead of any CPU wait for slot reuse.
-    fn signal11(&self, p: &Platform, serial: &mut u64) -> bool {
+    fn signal11(&self, serial: &mut u64) -> bool {
         *serial = self.serial.fetch_add(1, Ordering::Relaxed) + 1;
-        call!(
-            p,
-            context_signal,
-            self.context.as_ptr(),
-            self.fence11,
-            *serial
-        ) != 0
+        call!(context_signal, self.context.as_ptr(), self.fence11, *serial) != 0
     }
 
-    fn surface(&self, p: &Platform, width: u32, height: u32, format: u32) -> Option<Surface> {
+    fn surface(&self, width: u32, height: u32, format: u32) -> Option<Surface> {
         let handle = NonNull::new(call!(
-            p,
             surface_create,
             self.device11,
             self.native_device,
@@ -478,9 +315,9 @@ impl Device {
             format
         ))?;
         Some(Surface {
-            d3d11: call!(p, surface_d3d11, handle.as_ptr()),
-            d3d12: call!(p, surface_d3d12, handle.as_ptr()),
-            destroy: p.surface_destroy,
+            d3d11: call!(surface_d3d11, handle.as_ptr()),
+            d3d12: call!(surface_d3d12, handle.as_ptr()),
+            destroy: platform::surface_destroy,
             handle,
         })
     }
@@ -491,16 +328,9 @@ struct Commands {
     list: ComRef,
 }
 
-fn create_commands(p: &Platform, device: &Device) -> Option<Commands> {
+fn create_commands(device: &Device) -> Option<Commands> {
     let (mut allocator, mut list) = (ptr::null_mut(), ptr::null_mut());
-    if call!(
-        p,
-        create_commands,
-        device.device12,
-        &mut allocator,
-        &mut list
-    ) == 0
-    {
+    if call!(create_commands, device.device12, &mut allocator, &mut list) == 0 {
         return None;
     }
     Some(Commands {
@@ -509,9 +339,8 @@ fn create_commands(p: &Platform, device: &Device) -> Option<Commands> {
     })
 }
 
-fn reset(p: &Platform, commands: &Commands) -> bool {
+fn reset(commands: &Commands) -> bool {
     call!(
-        p,
         reset_commands,
         commands.allocator.as_ptr(),
         commands.list.as_ptr()
@@ -712,20 +541,20 @@ fn try_slot(source: u64) -> Option<MutexGuard<'static, Slot>> {
     }
 }
 
-fn texture_info(p: &Platform, texture: Handle) -> TextureInfo {
+fn texture_info(texture: Handle) -> TextureInfo {
     let mut info: TextureInfo = empty();
-    call!(p, texture_info, texture, &mut info);
+    call!(texture_info, texture, &mut info);
     info
 }
 
 // Returns surfaces a failed retirement left in the read state to COMMON on the interop queue, ahead
 // of any D3D11 write. The vendor's reads have been joined or drained by now.
-fn restore_read_state(p: &Platform, device: &Device, slot: &mut Slot) -> bool {
+fn restore_read_state(device: &Device, slot: &mut Slot) -> bool {
     // A list left open by a failed Close cannot be reset; replace the pair instead.
-    if !slot.retirement.as_ref().is_some_and(|c| reset(p, c)) {
+    if !slot.retirement.as_ref().is_some_and(|c| reset(c)) {
         slot.retirement = None;
-        match create_commands(p, device) {
-            Some(commands) if reset(p, &commands) => slot.retirement = Some(commands),
+        match create_commands(device) {
+            Some(commands) if reset(&commands) => slot.retirement = Some(commands),
             _ => return false,
         }
     }
@@ -735,30 +564,29 @@ fn restore_read_state(p: &Platform, device: &Device, slot: &mut Slot) -> bool {
         .map_or(ptr::null_mut(), |c| c.list.as_ptr());
     for surface in [&slot.surfaces[DEPTH], &slot.surfaces[MOTION], &slot.hudless] {
         if surface.is_some() {
-            call!(p, transition, list, d3d12(surface), READ, COMMON);
+            call!(transition, list, d3d12(surface), READ, COMMON);
         }
     }
-    if call!(p, close_commands, list) == 0 {
+    if call!(close_commands, list) == 0 {
         return false;
     }
-    call!(p, execute, device.queue, list);
+    call!(execute, device.queue, list);
     // Waited on the CPU: rare, and the caller may destroy these surfaces right after.
     slot.complete = device.serial.fetch_add(1, Ordering::Relaxed) + 1;
-    call!(p, queue_signal, device.queue, device.fence12, slot.complete) != 0
-        && call!(p, wait_fence, device.fence12, slot.complete, device.event) != 0
+    call!(queue_signal, device.queue, device.fence12, slot.complete) != 0
+        && call!(wait_fence, device.fence12, slot.complete, device.event) != 0
 }
 
 // Joins the slot's previous use and sizes its storage. Generation keeps only depth and motion per
 // slot; reconstruct adds what SR evaluation needs on top.
 fn resources(
-    p: &Platform,
     device: &Device,
     fg_index: Option<usize>,
     slot: &mut Slot,
     frame: &DlssFrame,
     reconstruct: bool,
 ) -> bool {
-    let generation = call!(p, present_generation);
+    let generation = call!(present_generation);
     let (vendor_fence, vendor_value, read_state) = if let Some(index) = fg_index {
         let mut vendor = lock(&VENDOR);
         let vendor = &mut vendor[index];
@@ -776,32 +604,32 @@ fn resources(
     let started = now_qpc();
     // D3D11 signals are queued unflushed. Submit them before blocking on one, which happens when the
     // same frame reuses the slot, e.g. capture after a failed SR evaluation.
-    if slot.complete != 0 && call!(p, fence_completed, device.fence12) < slot.complete {
-        call!(p, flush, device.context.as_ptr());
+    if slot.complete != 0 && call!(fence_completed, device.fence12) < slot.complete {
+        call!(flush, device.context.as_ptr());
     }
     let vendor_fence = vendor_fence
         .as_ref()
         .map_or(ptr::null_mut(), ComRef::as_ptr);
-    if call!(p, wait_fence, device.fence12, slot.complete, device.event) == 0
-        || call!(p, wait_fence, vendor_fence, vendor_value, device.event) == 0
+    if call!(wait_fence, device.fence12, slot.complete, device.event) == 0
+        || call!(wait_fence, vendor_fence, vendor_value, device.event) == 0
     {
         return false;
     }
     slot.wait_ticks = now_qpc() - started;
     if slot.commands.is_none() {
-        slot.commands = create_commands(p, device);
+        slot.commands = create_commands(device);
         if slot.commands.is_none() {
             return false;
         }
     }
     if slot.retirement.is_none() {
-        slot.retirement = create_commands(p, device);
+        slot.retirement = create_commands(device);
         if slot.retirement.is_none() {
             return false;
         }
     }
     if let Some(index) = fg_index.filter(|_| read_state) {
-        if !restore_read_state(p, device, slot) {
+        if !restore_read_state(device, slot) {
             return false;
         }
         lock(&VENDOR)[index].read_state = false;
@@ -810,7 +638,7 @@ fn resources(
     if frame.motion.is_null() {
         return false;
     }
-    let motion = texture_info(p, frame.motion);
+    let motion = texture_info(frame.motion);
     if motion.format != RG16_FLOAT && motion.format != RG32_FLOAT {
         return false;
     }
@@ -826,11 +654,11 @@ fn resources(
         slot.width = 0;
         slot.height = 0;
         let (width, height) = (frame.render_width, frame.render_height);
-        slot.surfaces[DEPTH] = device.surface(p, width, height, R32_FLOAT);
+        slot.surfaces[DEPTH] = device.surface(width, height, R32_FLOAT);
         if slot.surfaces[DEPTH].is_none() {
             return false;
         }
-        slot.surfaces[MOTION] = device.surface(p, width, height, motion.format);
+        slot.surfaces[MOTION] = device.surface(width, height, motion.format);
         if slot.surfaces[MOTION].is_none() {
             return false;
         }
@@ -855,14 +683,13 @@ fn resources(
         ),
     ];
     for (surface, width, height, format) in shapes {
-        slot.surfaces[surface] = device.surface(p, width, height, format);
+        slot.surfaces[surface] = device.surface(width, height, format);
         if slot.surfaces[surface].is_none() {
             return false;
         }
     }
     slot.output = unsafe {
         ComRef::from_owned(call!(
-            p,
             create_output,
             device.device12,
             frame.output_width,
@@ -918,13 +745,12 @@ pub(super) unsafe extern "C" fn rsf_native_fg_set_log(log: Log, user: Handle) {
 
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_native_fg_status_get(status: *mut NativeStatus) -> i32 {
-    let p = &NATIVE_PLATFORM;
     if status.is_null() || unsafe { status.cast::<u32>().read() } < size_of::<NativeStatus>() as u32
     {
         return 0;
     }
-    let generation = call!(p, present_generation);
-    let owner = call!(p, present_has_owner) != 0;
+    let generation = call!(present_generation);
+    let owner = call!(present_has_owner) != 0;
     let rendered = rendered_source();
     let mut out = {
         let settings = lock(&SETTINGS);
@@ -954,7 +780,7 @@ pub(super) unsafe extern "C" fn rsf_native_fg_status_get(status: *mut NativeStat
         out.vendor.low_latency_available = 0;
     }
     if owner && !rendered {
-        cpu_owner::pacing_status(cpu_platform(p), &mut out.vendor);
+        cpu_owner::pacing_status(cpu_platform(), &mut out.vendor);
     }
     if rendered {
         out.vendor.effective_reflex = RSF_REFLEX_OFF;
@@ -968,12 +794,11 @@ pub(super) unsafe extern "C" fn rsf_native_fg_status_get(status: *mut NativeStat
 
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_native_fg_scene(pass: *const Pass) {
-    let p = &NATIVE_PLATFORM;
-    unsafe { set_scene(pass, |pass| refuse_held_inputs(p, pass)) };
+    unsafe { set_scene(pass, |pass| refuse_held_inputs(pass)) };
 }
 
-fn refuse_held_inputs(p: &Platform, pass: &Pass) {
-    if call!(p, present_has_owner) != 0 {
+fn refuse_held_inputs(pass: &Pass) {
+    if call!(present_has_owner) != 0 {
         let mut held = slot(pass.source_frame_id);
         if held.prepared && held.holds(pass) {
             held.pass.flags |= RSF_GAME_RENDER_NO_FG;
@@ -995,11 +820,10 @@ unsafe extern "C" fn rsf_native_fg_capture_scoped(
     {
         return;
     }
-    let p = &NATIVE_PLATFORM;
     with_capture_scene(
         unsafe { &*identity },
-        |pass| refuse_held_inputs(p, pass),
-        || capture(p, context, frame),
+        |pass| refuse_held_inputs(pass),
+        || capture(context, frame),
     );
 }
 
@@ -1008,24 +832,23 @@ pub(super) unsafe extern "C" fn rsf_native_fg_final(context: Handle, pass: *cons
     let Some(pass) = (unsafe { pass.as_ref() }) else {
         return;
     };
-    let p = &NATIVE_PLATFORM;
     if context.is_null()
         || pass.scene_surface.is_null()
         || pass.source_frame_id == 0
-        || call!(p, present_has_owner) == 0
+        || call!(present_has_owner) == 0
     {
         return;
     }
     // HUD-less colour only feeds generation: no copy while it is off or no provider is live.
     if requested().mode == RSF_FG_OFF
-        || call!(p, present_provider).is_null()
-        || call!(p, present_session).is_null()
+        || call!(present_provider).is_null()
+        || call!(present_session).is_null()
     {
         return;
     }
     let (source, native) = (pass.source_frame_id, pass.native_frame);
-    stage(p, c"final-enter", source, native, 0);
-    let Some(device) = initialize(p, context) else {
+    stage(c"final-enter", source, native, 0);
+    let Some(device) = initialize(context) else {
         return;
     };
     let mut slot = slot(source);
@@ -1033,12 +856,11 @@ pub(super) unsafe extern "C" fn rsf_native_fg_final(context: Handle, pass: *cons
         return;
     }
     slot.hudless_ready = false;
-    let Some(texture) =
-        (unsafe { ComRef::from_owned(call!(p, query_texture, pass.scene_surface)) })
+    let Some(texture) = (unsafe { ComRef::from_owned(call!(query_texture, pass.scene_surface)) })
     else {
         return;
     };
-    let desc = texture_info(p, texture.as_ptr());
+    let desc = texture_info(texture.as_ptr());
     if desc.width != slot.output_width
         || desc.height != slot.output_height
         || desc.samples != 1
@@ -1073,7 +895,7 @@ pub(super) unsafe extern "C" fn rsf_native_fg_final(context: Handle, pass: *cons
         slot.hudless_width = 0;
         slot.hudless_height = 0;
         slot.hudless = None;
-        slot.hudless = device.surface(p, desc.width, desc.height, desc.format);
+        slot.hudless = device.surface(desc.width, desc.height, desc.format);
         if slot.hudless.is_none() {
             return;
         }
@@ -1081,40 +903,38 @@ pub(super) unsafe extern "C" fn rsf_native_fg_final(context: Handle, pass: *cons
         slot.hudless_width = desc.width;
         slot.hudless_height = desc.height;
     }
-    stage(p, c"final-copy", source, native, 0);
+    stage(c"final-copy", source, native, 0);
     call!(
-        p,
         copy_resource,
         device.context.as_ptr(),
         d3d11(&slot.hudless),
         texture.as_ptr()
     );
     let mut complete = 0;
-    slot.hudless_ready = device.signal11(p, &mut complete);
+    slot.hudless_ready = device.signal11(&mut complete);
     slot.complete = complete;
     let result = if slot.hudless_ready { OK } else { NOT_READY };
-    stage(p, c"final-done", source, native, result);
+    stage(c"final-done", source, native, result);
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_native_fg_capture(context: Handle, frame: *const DlssFrame) {
-    let p = &NATIVE_PLATFORM;
-    capture(p, context, frame);
+    capture(context, frame);
 }
 
-fn capture(p: &Platform, context: Handle, frame: *const DlssFrame) {
+fn capture(context: Handle, frame: *const DlssFrame) {
     let scene = read_scene();
     let frame = unsafe { frame.as_ref() };
     if let Some(frame) = frame
         && !context.is_null()
         && frame.camera_motion_included != 0
     {
-        call!(p, dump_fg, context, &scene, frame);
+        call!(dump_fg, context, &scene, frame);
     }
     let Some(frame) = frame else {
         return;
     };
-    if call!(p, present_has_owner) == 0
+    if call!(present_has_owner) == 0
         || context.is_null()
         || scene.source_frame_id == 0
         || frame.camera_motion_included == 0
@@ -1122,7 +942,7 @@ fn capture(p: &Platform, context: Handle, frame: *const DlssFrame) {
     {
         return;
     }
-    let Some(device) = initialize(p, context) else {
+    let Some(device) = initialize(context) else {
         return;
     };
     let (source, native) = (scene.source_frame_id, scene.native_frame);
@@ -1145,32 +965,30 @@ fn capture(p: &Platform, context: Handle, frame: *const DlssFrame) {
         }
         // Explicit inputs supersede a fallback SR capture, including its contents.
     }
-    stage(p, c"capture-resources", source, native, 0);
+    stage(c"capture-resources", source, native, 0);
     if frame.depth.is_null()
         || frame.motion.is_null()
-        || !resources(p, device, Some(index), &mut slot, frame, false)
+        || !resources(device, Some(index), &mut slot, frame, false)
     {
         return;
     }
-    stage(p, c"capture-copy", source, native, 0);
+    stage(c"capture-copy", source, native, 0);
     slot.prepared = false;
     let context4 = device.context.as_ptr();
     call!(
-        p,
         copy_resource,
         context4,
         d3d11(&slot.surfaces[DEPTH]),
         frame.depth
     );
     call!(
-        p,
         copy_resource,
         context4,
         d3d11(&slot.surfaces[MOTION]),
         frame.motion
     );
     let mut complete = 0;
-    let signalled = device.signal11(p, &mut complete);
+    let signalled = device.signal11(&mut complete);
     slot.complete = complete;
     if !signalled {
         return;
@@ -1180,17 +998,16 @@ fn capture(p: &Platform, context: Handle, frame: *const DlssFrame) {
     slot.prepared = true;
     slot.hudless_ready = false;
     cpu_owner::count_sr(source);
-    stage(p, c"capture-done", source, native, 0);
+    stage(c"capture-done", source, native, 0);
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_native_fg_evaluate(context: Handle, frame: *const DlssFrame) -> i32 {
-    let p = &NATIVE_PLATFORM;
     let started = now_qpc();
-    let host = call!(p, present_host);
+    let host = call!(present_host);
     if host.is_null() {
-        call!(p, dump_sr, context, frame, RSF_SR_DLSS);
-        return call!(p, dlss_evaluate, context, frame);
+        call!(dump_sr, context, frame, RSF_SR_DLSS);
+        return call!(dlss_evaluate, context, frame);
     }
     let scene = read_scene();
     let frame = unsafe { frame.as_ref() };
@@ -1219,12 +1036,12 @@ unsafe extern "C" fn rsf_native_fg_evaluate(context: Handle, frame: *const DlssF
         return NOT_READY;
     };
     let source = scene.source_frame_id;
-    if call!(p, host_token, host, source) == 0 {
+    if call!(host_token, host, source) == 0 {
         failure(Failure::SrToken, NOT_READY, 0);
         return NOT_READY;
     }
     cpu_owner::count_sr(source);
-    let Some(device) = initialize(p, context) else {
+    let Some(device) = initialize(context) else {
         failure(Failure::SrInitialize, NOT_READY, 0);
         return NOT_READY;
     };
@@ -1244,17 +1061,17 @@ unsafe extern "C" fn rsf_native_fg_evaluate(context: Handle, frame: *const DlssF
     // A failed SR evaluation cannot keep an inferred FG lease eligible after overwriting it.
     slot.prepared = false;
     let fg_index = (!explicit_inputs).then_some(index);
-    if !resources(p, device, fg_index, &mut slot, frame, true) {
+    if !resources(device, fg_index, &mut slot, frame, true) {
         return FEATURE_FAILED;
     }
-    let Some(commands) = slot.commands.as_ref().filter(|c| reset(p, c)) else {
+    let Some(commands) = slot.commands.as_ref().filter(|c| reset(c)) else {
         return FEATURE_FAILED;
     };
     let list = commands.list.as_ptr();
     let mut translated = *frame;
     // Dense motion has no unwritten sentinel. Valid zero displacement must remain valid.
     translated.motion_invalid_value = f32::MAX;
-    let allowed = generates_on(p, scene.screen);
+    let allowed = generates_on(scene.screen);
     {
         // DLSS-G shares these constants. History restarts when generation starts or stops, not on
         // every frame it stays off (no provider, an ineligible frame, VSync unsupported).
@@ -1266,7 +1083,7 @@ unsafe extern "C" fn rsf_native_fg_evaluate(context: Handle, frame: *const DlssF
         }
         settings.was_generating = generating;
     }
-    call!(p, dump_sr, context, &translated, RSF_SR_DLSS);
+    call!(dump_sr, context, &translated, RSF_SR_DLSS);
     let context4 = device.context.as_ptr();
     let inputs = [frame.color_in, frame.depth, frame.motion, frame.exposure];
     let mut targets = [ptr::null_mut(); 4];
@@ -1274,9 +1091,9 @@ unsafe extern "C" fn rsf_native_fg_evaluate(context: Handle, frame: *const DlssF
         if input.is_null() {
             continue;
         }
-        call!(p, copy_resource, context4, d3d11(&slot.surfaces[i]), input);
+        call!(copy_resource, context4, d3d11(&slot.surfaces[i]), input);
         targets[i] = d3d12(&slot.surfaces[i]);
-        call!(p, transition, list, targets[i], COMMON, READ);
+        call!(transition, list, targets[i], COMMON, READ);
     }
     [
         translated.color_in,
@@ -1296,7 +1113,7 @@ unsafe extern "C" fn rsf_native_fg_evaluate(context: Handle, frame: *const DlssF
         if input.is_null() {
             continue;
         }
-        let desc = texture_info(p, input);
+        let desc = texture_info(input);
         let known = slot.hint_desc[i];
         if slot.hints[i].is_none()
             || known.width != desc.width
@@ -1306,15 +1123,15 @@ unsafe extern "C" fn rsf_native_fg_evaluate(context: Handle, frame: *const DlssF
             slot.hint_desc[i] = empty();
             // A hint that cannot cross is left untagged rather than failing the reconstruction.
             slot.hints[i] = None;
-            slot.hints[i] = device.surface(p, desc.width, desc.height, desc.format);
+            slot.hints[i] = device.surface(desc.width, desc.height, desc.format);
             if slot.hints[i].is_none() {
                 continue;
             }
             slot.hint_desc[i] = desc;
         }
-        call!(p, copy_resource, context4, d3d11(&slot.hints[i]), input);
+        call!(copy_resource, context4, d3d11(&slot.hints[i]), input);
         hint_targets[i] = d3d12(&slot.hints[i]);
-        call!(p, transition, list, hint_targets[i], COMMON, READ);
+        call!(transition, list, hint_targets[i], COMMON, READ);
     }
     [
         translated.color_before_transparency,
@@ -1328,21 +1145,20 @@ unsafe extern "C" fn rsf_native_fg_evaluate(context: Handle, frame: *const DlssF
     translated.color_out = output;
     // This Flush stays: the D3D12 queue waits on the signal below within this frame.
     let mut uploaded = 0;
-    if !device.signal11(p, &mut uploaded) {
+    if !device.signal11(&mut uploaded) {
         return FEATURE_FAILED;
     }
-    call!(p, flush, context4);
-    if call!(p, queue_wait, device.queue, device.fence12, uploaded) == 0 {
+    call!(flush, context4);
+    if call!(queue_wait, device.queue, device.fence12, uploaded) == 0 {
         return FEATURE_FAILED;
     }
-    let result = call!(p, dlss_evaluate_shared, list, &translated, source);
+    let result = call!(dlss_evaluate_shared, list, &translated, source);
     if result == NOT_READY {
         failure(Failure::SrSharedEvaluate, result, 0);
     }
     if result == OK {
         let staging = d3d12(&slot.surfaces[STAGING]);
         call!(
-            p,
             copy_transitioned,
             list,
             staging,
@@ -1356,27 +1172,27 @@ unsafe extern "C" fn rsf_native_fg_evaluate(context: Handle, frame: *const DlssF
     // SR only borrows colour/exposure. FG retains immutable depth and motion in the slot.
     for target in targets.into_iter().chain(hint_targets) {
         if !target.is_null() {
-            call!(p, transition, list, target, READ, COMMON);
+            call!(transition, list, target, READ, COMMON);
         }
     }
-    if call!(p, close_commands, list) == 0 {
+    if call!(close_commands, list) == 0 {
         return FEATURE_FAILED;
     }
-    call!(p, execute, device.queue, list);
+    call!(execute, device.queue, list);
     slot.complete = device.serial.fetch_add(1, Ordering::Relaxed) + 1;
-    if call!(p, queue_signal, device.queue, device.fence12, slot.complete) == 0
-        || call!(p, context_wait, context4, device.fence11, slot.complete) == 0
+    if call!(queue_signal, device.queue, device.fence12, slot.complete) == 0
+        || call!(context_wait, context4, device.fence11, slot.complete) == 0
     {
         return FEATURE_FAILED;
     }
     if result == OK {
         let staging = d3d11(&slot.surfaces[STAGING]);
-        call!(p, copy_resource, context4, frame.color_out, staging);
+        call!(copy_resource, context4, frame.color_out, staging);
     }
     // The D3D11 output consumer also belongs to this lease. A D3D12 evaluation fence alone cannot
     // authorize destroying/reallocating shared storage while this copy is outstanding.
     let mut complete = 0;
-    let signalled = device.signal11(p, &mut complete);
+    let signalled = device.signal11(&mut complete);
     slot.complete = complete;
     if !signalled {
         return FEATURE_FAILED;
@@ -1490,7 +1306,6 @@ pub(super) unsafe extern "C" fn rsf_native_fg_prepare(
     session: Handle,
     sync: u32,
 ) {
-    let p = &NATIVE_PLATFORM;
     TAGGED.set(None);
     let mut window: Pass = empty();
     window.struct_size = PASS_SIZE;
@@ -1498,7 +1313,7 @@ pub(super) unsafe extern "C" fn rsf_native_fg_prepare(
     final_scene.struct_size = size_of::<SceneIdentity>() as u32;
     let options = requested();
     unsafe { crate::frame_limit::observe_pacing_display(options.frame_limit_us, chain) };
-    let provider = unsafe { call!(p, present_provider).as_ref() };
+    let provider = unsafe { call!(present_provider).as_ref() };
     let Some(provider) = provider.filter(|_| !session.is_null()) else {
         INPUT_TIMING.set(InputTiming::default());
         let mut settings = lock(&SETTINGS);
@@ -1508,11 +1323,10 @@ pub(super) unsafe extern "C" fn rsf_native_fg_prepare(
     };
     let mut status: ProviderStatus = empty();
     provider_status(provider, session, &mut status);
-    let window_matched = call!(p, window_match, chain, &mut window) != 0;
-    let scene_matched =
-        window_matched && call!(p, scene_for_window, &window, &mut final_scene) != 0;
+    let window_matched = call!(window_match, chain, &mut window) != 0;
+    let scene_matched = window_matched && call!(scene_for_window, &window, &mut final_scene) != 0;
     let presentation_path = if scene_matched {
-        call!(p, scene_present_path, &window, &final_scene)
+        call!(scene_present_path, &window, &final_scene)
     } else {
         RSF_NATIVE_SCENE_PRESENT_NONE
     };
@@ -1527,13 +1341,13 @@ pub(super) unsafe extern "C" fn rsf_native_fg_prepare(
     let mut cpu: CpuFrame = empty();
     cpu.struct_size = size_of::<CpuFrame>() as u32;
     let mut owner = CpuOwner::default();
-    let backend = call!(p, present_backend);
+    let backend = call!(present_backend);
     let no_pacer = status.pacing_owner == RSF_PACING_NONE
         && options.reflex_mode == RSF_REFLEX_OFF
         && options.frame_limit_us == 0
         && (backend == RSF_FG_BACKEND_FSR3 || backend == RSF_FG_BACKEND_FSR4);
     let rendered = rendered_source();
-    let generation = call!(p, present_generation);
+    let generation = call!(present_generation);
     let mut submitted = false;
     if window_matched {
         owner = cpu_owner::frame_read(source);
@@ -1558,7 +1372,7 @@ pub(super) unsafe extern "C" fn rsf_native_fg_prepare(
     let screen = held.map_or(0, |s| s.pass.screen);
     let pass_flags = held.map_or(0, |s| s.pass.flags);
     let native = held.map_or(0, |s| s.pass.native_frame);
-    let scene_supported = inputs && generates_on(p, screen);
+    let scene_supported = inputs && generates_on(screen);
     let continuous = inputs
         && pass_flags & (RSF_GAME_RENDER_RESET | RSF_GAME_RENDER_NO_FG) == 0
         && window.flags & RSF_GAME_RENDER_NO_FG == 0;
@@ -1668,7 +1482,7 @@ pub(super) unsafe extern "C" fn rsf_native_fg_prepare(
         && owner.id == source
     {
         cpu_owner::report_timing(
-            cpu_platform(p),
+            cpu_platform(),
             &cpu,
             &owner,
             held.pass.screen,
@@ -1706,7 +1520,7 @@ pub(super) unsafe extern "C" fn rsf_native_fg_prepare(
     );
     let result = if valid { OK } else { NOT_READY };
     cpu_owner::stage(
-        cpu_platform(p),
+        cpu_platform(),
         generation,
         &row,
         source,
@@ -1715,9 +1529,9 @@ pub(super) unsafe extern "C" fn rsf_native_fg_prepare(
         Some((&owner, &window)),
     );
     let configuration = provider_configure(provider, session, &configured);
-    stage(p, c"prepare-configured", source, native, configuration);
+    stage(c"prepare-configured", source, native, configuration);
     let eligibility = admission.eligibility(screen);
-    let pending_generation = call!(p, present_generation);
+    let pending_generation = call!(present_generation);
     let diagnostic = {
         let mut settings = lock(&SETTINGS);
         settings.pending_generation = pending_generation;
@@ -1836,17 +1650,17 @@ pub(super) unsafe extern "C" fn rsf_native_fg_prepare(
         target.height = height;
         target.state = if i == 0 { PRESENT } else { READ };
         if i != 0 {
-            call!(p, transition, list, native_resources[i], COMMON, READ);
+            call!(transition, list, native_resources[i], COMMON, READ);
         }
     }
     selected.restore = true;
     let native = selected.pass.native_frame;
-    stage(p, c"provider-prepare-enter", source, native, 0);
+    stage(c"provider-prepare-enter", source, native, 0);
     let preparation = provider
         .prepare
         .map_or(FEATURE_FAILED, |f| unsafe { f(session, list, &frame) });
-    stage(p, c"provider-prepare-done", source, native, preparation);
-    call!(p, dump_fg_prepare, &selected.pass, &frame, preparation);
+    stage(c"provider-prepare-done", source, native, preparation);
+    call!(dump_fg_prepare, &selected.pass, &frame, preparation);
     selected.prepared = preparation == OK;
     {
         let mut settings = lock(&SETTINGS);
@@ -1865,8 +1679,7 @@ pub(super) unsafe extern "C" fn rsf_native_fg_prepare(
 
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_native_fg_retire(_user: Handle, session: Handle) {
-    let p = &NATIVE_PLATFORM;
-    let provider = unsafe { call!(p, present_provider).as_ref() };
+    let provider = unsafe { call!(present_provider).as_ref() };
     let Some(provider) = provider.filter(|_| !session.is_null()) else {
         // No provider is left to read the inputs, but they are still in the read state.
         if let Some(index) = TAGGED.take() {
@@ -1885,7 +1698,7 @@ pub(super) unsafe extern "C" fn rsf_native_fg_retire(_user: Handle, session: Han
     };
     let mut state: ProviderStatus = empty();
     let status_result = provider_status(provider, session, &mut state);
-    let generation = call!(p, present_generation);
+    let generation = call!(present_generation);
     let (completed_source, completed_generation, completed_ok) = consume_completed_present();
     if status_result == OK {
         let (changed, log) = {
@@ -1933,15 +1746,15 @@ pub(super) unsafe extern "C" fn rsf_native_fg_retire(_user: Handle, session: Han
     let mut restore = ptr::null_mut();
     if restoring
         && let Some(slot) = slot.as_deref()
-        && let Some(retirement) = slot.retirement.as_ref().filter(|c| reset(p, c))
+        && let Some(retirement) = slot.retirement.as_ref().filter(|c| reset(c))
     {
         let list = retirement.list.as_ptr();
         for surface in [&slot.surfaces[DEPTH], &slot.surfaces[MOTION], &slot.hudless] {
             if surface.is_some() {
-                call!(p, transition, list, d3d12(surface), READ, COMMON);
+                call!(transition, list, d3d12(surface), READ, COMMON);
             }
         }
-        if call!(p, close_commands, list) != 0 {
+        if call!(close_commands, list) != 0 {
             restore = list;
         }
     }
@@ -1949,12 +1762,12 @@ pub(super) unsafe extern "C" fn rsf_native_fg_retire(_user: Handle, session: Han
     let result = if restoring && restore.is_null() {
         FEATURE_FAILED
     } else {
-        call!(p, present_retire, session, restore, &mut fence, &mut serial)
+        call!(present_retire, session, restore, &mut fence, &mut serial)
     };
     if let Some(slot) = slot.as_deref_mut() {
         slot.restore = false;
     }
-    let generation = call!(p, present_generation);
+    let generation = call!(present_generation);
     {
         let mut vendor = lock(&VENDOR);
         if result == OK && !fence.is_null() {
@@ -2000,14 +1813,13 @@ pub(super) unsafe extern "C" fn rsf_native_fg_present(event: *const PresentEvent
     let Some(event) = (unsafe { event.as_ref() }) else {
         return;
     };
-    let p = &NATIVE_PLATFORM;
-    if event.flags & DXGI_PRESENT_TEST.0 != 0 || call!(p, present_has_owner) == 0 {
+    if event.flags & DXGI_PRESENT_TEST.0 != 0 || call!(present_has_owner) == 0 {
         return;
     }
     if event.completed == 0 {
         let mut window: Pass = empty();
         window.struct_size = PASS_SIZE;
-        let presenting = if call!(p, window_match, event.swapchain, &mut window) != 0 {
+        let presenting = if call!(window_match, event.swapchain, &mut window) != 0 {
             window.source_frame_id
         } else {
             0
@@ -2019,10 +1831,10 @@ pub(super) unsafe extern "C" fn rsf_native_fg_present(event: *const PresentEvent
         };
         PRESENTING.set((presenting, session));
         cpu_owner::present_observed(presenting, session);
-        cpu_owner::latency_present(cpu_platform(p), presenting, event.swapchain, true);
+        cpu_owner::latency_present(cpu_platform(), presenting, event.swapchain, true);
     } else {
         let (presenting, session) = PRESENTING.get();
-        let generation = call!(p, present_generation);
+        let generation = call!(present_generation);
         COMPLETED_PRESENT.set((presenting, generation, event.result >= 0));
         if presenting != 0 {
             rsf_native_cpu_present_result(
@@ -2032,33 +1844,32 @@ pub(super) unsafe extern "C" fn rsf_native_fg_present(event: *const PresentEvent
                 event.result,
             );
         }
-        cpu_owner::latency_present(cpu_platform(p), presenting, event.swapchain, false);
+        cpu_owner::latency_present(cpu_platform(), presenting, event.swapchain, false);
         PRESENTING.set((0, 0));
     }
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_native_fg_window_end(pass: *const Pass) {
-    let p = &NATIVE_PLATFORM;
     if pass.is_null() || unsafe { pass.cast::<u32>().read() } < PASS_SIZE {
         return;
     }
     let pass = unsafe { &*pass };
     let source = pass.source_frame_id;
-    let owner = call!(p, present_has_owner) != 0;
-    if source == 0 || (owner && call!(p, present_is_owner, pass.swapchain) == 0) {
+    let owner = call!(present_has_owner) != 0;
+    if source == 0 || (owner && call!(present_is_owner, pass.swapchain) == 0) {
         return;
     }
     cpu_owner::count_window(source);
     if !owner {
         return;
     }
-    let (live, presented) = cpu_owner::progress(cpu_platform(p), source);
+    let (live, presented) = cpu_owner::progress(cpu_platform(), source);
     // The window ended without presenting a live source: its token cannot carry a later frame.
     if live && !presented {
-        call!(p, present_abort, source);
+        call!(present_abort, source);
         cpu_owner::fail(source);
-        cpu_owner::complete(cpu_platform(p), source);
+        cpu_owner::complete(cpu_platform(), source);
     }
 }
 
@@ -2083,7 +1894,6 @@ unsafe extern "C" fn rsf_native_fg_dump_inputs(
     directory: *const c_char,
     prefix: *const c_char,
 ) -> i32 {
-    let p = &NATIVE_PLATFORM;
     if context.is_null()
         || source == 0
         || directory.is_null()
@@ -2131,7 +1941,6 @@ unsafe extern "C" fn rsf_native_fg_dump_inputs(
             continue;
         };
         let result = call!(
-            p,
             dump_named,
             context,
             texture,
