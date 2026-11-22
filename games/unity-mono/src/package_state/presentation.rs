@@ -3,10 +3,8 @@
 //! its streamline, fidelityfx and xess directories and the Streamline interposer, Unity's version
 //! and the project id), the one generation install, and the provider request of every window
 //! pass. The identity comes from [UnitySR] when the plugin loads and from rsfu_initialize for each
-//! session; SR views read it for their contexts. package.cpp keeps the window guard and the DXGI
-//! adapter lookup behind Auto, and lends rsf_fg12_install, the presentation host's calls and the
-//! package log in the Runtime's form as leaves. The provider choice for Auto is the Runtime's rsf_fg_default_backend, reached
-//! through that leaf; nothing here selects a vendor.
+//! session. SR views read it for their contexts. Auto uses the Runtime's
+//! rsf_fg_default_backend with the current D3D12 adapter.
 use super::{BACKEND_OK, Leaves, PACKAGE, Package};
 use crate::generation::{self, Sources};
 use crate::package_abi::{RSF_FG_OFF, rsf_unity_package_platform, rsf_unity_package_view_setup};
@@ -161,8 +159,8 @@ impl Package {
                 RSF_FG_BACKEND_AUTO,
                 options,
                 &sources,
-                leaves.accept_window,
-                leaves.backend_log,
+                super::routing::accept_window,
+                super::services::backend_log,
             );
             let result = leaves.fg_install(&setup);
             *installed = result == BACKEND_OK;
@@ -205,8 +203,7 @@ impl Package {
 /// # Safety
 /// `platform` is null or package.cpp's table.
 #[cfg(windows)]
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_load(platform: *const rsf_unity_package_platform) {
+pub(super) unsafe fn load(platform: *const rsf_unity_package_platform) {
     use crate::runtime_config::{Ini, path_setting, string_setting, utf8};
     use windows_sys::core::w;
     const PROFILE_TEXT: usize = 256;

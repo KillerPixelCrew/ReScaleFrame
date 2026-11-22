@@ -281,10 +281,10 @@ impl Package {
             struct_size: size_of::<rsf_game_host_services>() as u32,
             abi_version: RSF_GAME_ABI_VERSION,
             session_id: leaves.session_seed().wrapping_add(1),
-            log: Some(host_log),
-            render_pass: Some(leaves.render_pass),
+            log: Some(backend_log),
+            render_pass: Some(super::routing::render_callback),
             user: null_mut(),
-            render_config: Some(leaves.render_config),
+            render_config: Some(super::render_config),
             cpu_event: Some(host_cpu_event),
             scope_state: None,
             process_upscale: None,
@@ -388,7 +388,7 @@ impl Package {
 }
 
 /// rsf_game_host_services::log.
-unsafe extern "C" fn host_log(_: *mut c_void, text: *const c_char) {
+pub(super) unsafe extern "C" fn backend_log(_: *mut c_void, text: *const c_char) {
     unsafe { rsf_unity_package_log(text) }
 }
 
@@ -446,7 +446,7 @@ extern "C" fn rsf_unity_package_input(frame: u64, kinds: u32) -> c_int {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_package_preview_input() {
+pub(super) extern "C" fn rsf_unity_package_preview_input() {
     if let Some(leaves) = LEAVES.get() {
         PACKAGE.preview_input(leaves);
     }
@@ -457,8 +457,8 @@ extern "C" fn rsf_unity_package_editor() -> u32 {
     u32::from(PACKAGE.services.editor.load(SeqCst))
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_package_unload() {
+#[cfg(windows)]
+pub(super) fn unload() {
     if let Some(leaves) = LEAVES.get() {
         PACKAGE.unload(leaves);
     }
@@ -479,8 +479,6 @@ mod tests {
             rsf_unity_package_log(std::ptr::null());
             rsf_unity_package_log(c"x".as_ptr());
             host_cpu_event(null_mut(), std::ptr::null());
-            rsf_unity_package_preview_input();
-            rsf_unity_package_unload();
         }
     }
 }

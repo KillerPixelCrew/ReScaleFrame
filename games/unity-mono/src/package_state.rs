@@ -8,19 +8,11 @@
 //! session services: each session's host services and bridge API, the log, the input window and
 //! the routing of CPU events, window messages and rsfu_input (services.rs), and the render
 //! callback's routing, the generation window guard and Unity's device lifecycle (routing.rs).
-//! package.cpp keeps the Unity, DXGI, Vulkan and preview work, and lends the Unity, Win32, SDK
-//! and Runtime calls through rsf_unity_package_platform
-//! (integrations/unity/native/package_state.h); nothing here loads a Runtime or references its
-//! exports.
-//!
-//! package.cpp's mutex serializes the session exports, Unity device events and the SR pass. The
-//! state lock here also covers render plan reads, renderer bridge failures, temporal readiness,
-//! the plugin load's install and the window pass's provider request. It is never held across a
-//! leaf. The view lock is held
-//! across the SR leaves, which never re-enter, so Unity's device shutdown cannot destroy a
-//! context mid-evaluation; the presentation lock is held across the install leaf. Both are always
-//! taken before the state lock. The log and input-window locks are innermost: they are held
-//! across their own leaves only.
+//! Rust serializes the session exports, Unity device events and SR evaluation with OPERATIONS.
+//! The inner state lock is released across leaf calls. The view and presentation locks
+//! precede the state lock. The log and input-window locks cover their own leaves only.
+#[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
+mod native;
 mod presentation;
 mod routing;
 mod services;
@@ -49,7 +41,9 @@ use rsf_game_sys::{RSF_SCREEN_FLIGHT, RSF_SCREEN_MENU};
 use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicU32, AtomicU64, Ordering::SeqCst};
+use std::sync::atomic::{
+    AtomicBool, AtomicI32, AtomicPtr, AtomicU8, AtomicU32, AtomicU64, Ordering::SeqCst,
+};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
 /// RSF_BACKEND_OK, a cast macro bindgen does not evaluate; package.cpp asserts it.
@@ -127,9 +121,12 @@ const fn fresh_status() -> rsf_unity_package_status {
     status
 }
 
+static OPERATIONS: Mutex<()> = Mutex::new(());
+static UNITY_INTERFACES: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+static UNITY_GRAPHICS: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static LEAVES: OnceLock<Leaves> = OnceLock::new();
 
-/// package.cpp's leaves, all present.
+/// Package callbacks and native leaves, all present.
 struct Leaves {
     sharpening_valid: unsafe extern "C" fn(*const rsf_sharpening_options) -> u32,
     dlss_preset_valid: unsafe extern "C" fn(u32) -> u32,
@@ -156,16 +153,12 @@ struct Leaves {
         unsafe extern "C" fn(*mut rsf_sr12, *mut c_void, *const rsf_game_render_pass, u32) -> i32,
     sr_destroy: unsafe extern "C" fn(*mut rsf_sr12),
     bridge_finish_retirement: unsafe extern "C" fn(u32),
-    accept_window: unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int,
-    backend_log: unsafe extern "C" fn(*mut c_void, *const c_char),
     fg_install: unsafe extern "C" fn(*const rsf_fg12_setup) -> i32,
     present_has_owner: unsafe extern "C" fn() -> u32,
     present_request: unsafe extern "C" fn(u32) -> i32,
     fg_default_backend: unsafe extern "C" fn(*mut u32) -> u32,
     bridge_open: unsafe extern "C" fn(u32) -> u32,
     session_seed: unsafe extern "C" fn() -> u64,
-    render_pass: RenderPass,
-    render_config: RenderConfig,
     bridge_prepare:
         unsafe extern "C" fn(*const rsf_game_host_services, *mut rsf_unity_native_api) -> u32,
     local_app_data: unsafe extern "C" fn(*mut u16, u32) -> u32,
@@ -187,16 +180,12 @@ struct Leaves {
     texture_desc: unsafe extern "C" fn(*mut c_void, *mut u64, *mut u32, *mut u32),
     preview_prepare: unsafe extern "C" fn(u32, u32) -> u32,
     preview_owns: unsafe extern "C" fn(*mut c_void) -> u32,
-    renderer_vulkan: unsafe extern "C" fn() -> u32,
+    renderer_vulkan: unsafe extern "C" fn(*mut c_void) -> u32,
     vulkan_owns: unsafe extern "C" fn(*mut c_void) -> u32,
     window_class: unsafe extern "C" fn(*mut c_void) -> u32,
-    bridge_load: unsafe extern "C" fn() -> u32,
+    bridge_load: unsafe extern "C" fn(*mut c_void) -> u32,
     bridge_unload: unsafe extern "C" fn(),
 }
-
-/// rsf_game_host_services' render callback and render plan, package.cpp's leaves.
-type RenderPass = unsafe extern "C" fn(*mut c_void, *mut c_void, *const rsf_game_render_pass, u32);
-type RenderConfig = unsafe extern "C" fn(*mut c_void, *mut rsf_game_render_config) -> c_int;
 
 // SAFETY for every call below: the leaves are package.cpp's noexcept functions and borrow their
 // pointer arguments for the call only.
@@ -227,16 +216,12 @@ impl Leaves {
             sr_evaluate: p.sr_evaluate?,
             sr_destroy: p.sr_destroy?,
             bridge_finish_retirement: p.bridge_finish_retirement?,
-            accept_window: p.accept_window?,
-            backend_log: p.backend_log?,
             fg_install: p.fg_install?,
             present_has_owner: p.present_has_owner?,
             present_request: p.present_request?,
             fg_default_backend: p.fg_default_backend?,
             bridge_open: p.bridge_open?,
             session_seed: p.session_seed?,
-            render_pass: p.render_pass?,
-            render_config: p.render_config?,
             bridge_prepare: p.bridge_prepare?,
             local_app_data: p.local_app_data?,
             create_directory: p.create_directory?,
@@ -894,6 +879,7 @@ unsafe fn struct_size<T>(value: *const T) -> u32 {
 unsafe extern "C" fn rsf_unity_package_configure(
     input: *const rsf_unity_package_settings,
 ) -> c_int {
+    let _operation = OPERATIONS.lock().unwrap_or_else(PoisonError::into_inner);
     let Some(leaves) = LEAVES.get() else {
         return 0;
     };
@@ -910,6 +896,7 @@ unsafe extern "C" fn rsf_unity_package_configure(
 unsafe extern "C" fn rsf_unity_package_settings_get(
     output: *mut rsf_unity_package_settings,
 ) -> c_int {
+    let _operation = OPERATIONS.lock().unwrap_or_else(PoisonError::into_inner);
     if output.is_null()
         || unsafe { struct_size(output) } < size_of::<rsf_unity_package_settings>() as u32
         || unsafe { (*output).abi_version } != RSF_UNITY_SETTINGS_ABI_VERSION
@@ -922,6 +909,7 @@ unsafe extern "C" fn rsf_unity_package_settings_get(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_unity_package_status_get(output: *mut rsf_unity_package_status) -> c_int {
+    let _operation = OPERATIONS.lock().unwrap_or_else(PoisonError::into_inner);
     let Some(leaves) = LEAVES.get() else {
         return 0;
     };
@@ -962,13 +950,13 @@ unsafe extern "C" fn rsf_unity_package_initialize(
     project: *const c_char,
     output: *mut rsf_unity_native_api,
 ) -> c_int {
+    let _operation = OPERATIONS.lock().unwrap_or_else(PoisonError::into_inner);
     let Some(leaves) = LEAVES.get() else {
         return code::FAILED;
     };
     if runtime.is_null() || engine.is_null() || project.is_null() || output.is_null() {
         return code::FAILED;
     }
-    // package.cpp's mutex serializes this with Unity's device events.
     match PACKAGE.device.load(SeqCst) {
         routing::DEVICE_RETAINED => return code::FAILED,
         routing::DEVICE_WAITING => return code::BUSY,
@@ -985,8 +973,7 @@ unsafe extern "C" fn rsf_unity_package_initialize(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_plan(output: *mut rsf_game_render_config) -> c_int {
+unsafe extern "C" fn render_config(_: *mut c_void, output: *mut rsf_game_render_config) -> c_int {
     if output.is_null()
         || unsafe { struct_size(output) } < size_of::<rsf_game_render_config>() as u32
     {
@@ -994,21 +981,6 @@ unsafe extern "C" fn rsf_unity_package_plan(output: *mut rsf_game_render_config)
     }
     unsafe { output.write(PACKAGE.lock().plan) };
     1
-}
-
-/// package.cpp checked both pointers before its editor preview, as the C++ render path did.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_render(
-    commands: *mut c_void,
-    pass: *const rsf_game_render_pass,
-) {
-    let Some(leaves) = LEAVES.get() else {
-        return;
-    };
-    if commands.is_null() || pass.is_null() {
-        return;
-    }
-    PACKAGE.render(leaves, commands, unsafe { &*pass });
 }
 
 #[unsafe(no_mangle)]
@@ -1321,20 +1293,14 @@ mod tests {
         set(|f| f.close_held = false);
         call(if commit == 0 { "retain" } else { "release" }.into());
     }
-    unsafe extern "C" fn accept_window(_: *mut c_void, _: *mut c_void) -> c_int {
-        call("accept".into());
-        1
-    }
-    unsafe extern "C" fn backend_log(_: *mut c_void, _: *const c_char) {
-        call("backend log".into());
-    }
     unsafe extern "C" fn fg_install(setup: *const rsf_fg12_setup) -> i32 {
         let s = unsafe { *setup };
         let o = s.options;
         let text = |value: *const c_char| unsafe { CStr::from_ptr(value) }.to_str().unwrap();
-        // The window guard and log are package.cpp's own; no user pointer is lent.
-        let lent = s.accept_window.map(|f| f as usize) == Some(accept_window as usize)
-            && s.log.map(|f| f as usize) == Some(backend_log as usize)
+        // The package owns both callbacks and passes a null user.
+        let lent = s.accept_window.map(|f| f as usize)
+            == Some(routing::accept_window as *const () as usize)
+            && s.log.map(|f| f as usize) == Some(services::backend_log as *const () as usize)
             && s.user.is_null();
         assert!(lent);
         call(format!(
@@ -1392,18 +1358,6 @@ mod tests {
         call("seed".into());
         41
     }
-    unsafe extern "C" fn render(
-        _: *mut c_void,
-        _: *mut c_void,
-        _: *const rsf_game_render_pass,
-        _: u32,
-    ) {
-        call("render".into());
-    }
-    unsafe extern "C" fn render_config(_: *mut c_void, _: *mut rsf_game_render_config) -> c_int {
-        call("render config".into());
-        1
-    }
     /// Checks the host services and writes the API a bridge writes on success.
     unsafe extern "C" fn bridge_prepare(
         services: *const rsf_game_host_services,
@@ -1412,9 +1366,12 @@ mod tests {
         let s = unsafe { *services };
         call(format!("prepare {}", s.session_id));
         assert_eq!((s.struct_size, s.abi_version), (104, 24));
-        assert_eq!(s.user, (&raw const PLATFORM).cast_mut().cast());
-        assert!(s.render_pass.map(|f| f as usize) == Some(render as usize));
-        assert!(s.render_config.map(|f| f as usize) == Some(render_config as usize));
+        assert!(s.user.is_null());
+        assert!(
+            s.render_pass.map(|f| f as usize)
+                == Some(routing::render_callback as *const () as usize)
+        );
+        assert!(s.render_config.map(|f| f as usize) == Some(render_config as *const () as usize));
         assert!(s.log.is_some() && s.cpu_event.is_some());
         assert!(s.scope_state.is_none() && s.process_upscale.is_none() && s.submit.is_none());
         assert!(s.present.is_none() && s.process_latency.is_none() && s.render_feedback.is_none());
@@ -1545,7 +1502,7 @@ mod tests {
         call(format!("preview owns {:#x}", window as usize));
         fake().preview_owns.into()
     }
-    unsafe extern "C" fn renderer_vulkan() -> u32 {
+    unsafe extern "C" fn renderer_vulkan(_: *mut c_void) -> u32 {
         call("vulkan renderer".into());
         fake().vulkan.into()
     }
@@ -1557,7 +1514,7 @@ mod tests {
         call(format!("class {:#x}", window as usize));
         fake().class
     }
-    unsafe extern "C" fn bridge_load() -> u32 {
+    unsafe extern "C" fn bridge_load(_: *mut c_void) -> u32 {
         call("bridge load".into());
         fake().registry.into()
     }
@@ -1590,16 +1547,12 @@ mod tests {
         sr_evaluate: Some(sr_evaluate),
         sr_destroy: Some(sr_destroy),
         bridge_finish_retirement: Some(bridge_finish_retirement),
-        accept_window: Some(accept_window),
-        backend_log: Some(backend_log),
         fg_install: Some(fg_install),
         present_has_owner: Some(present_has_owner),
         present_request: Some(present_request),
         fg_default_backend: Some(fg_default_backend),
         bridge_open: Some(bridge_open),
         session_seed: Some(session_seed),
-        render_pass: Some(render),
-        render_config: Some(render_config),
         bridge_prepare: Some(bridge_prepare),
         local_app_data: Some(local_app_data),
         create_directory: Some(create_directory),
@@ -1625,6 +1578,9 @@ mod tests {
         window_class: Some(window_class),
         bridge_load: Some(bridge_load),
         bridge_unload: Some(bridge_unload),
+        graphics_interface: None,
+        preload: None,
+        device_callback: None,
     };
     /// Fresh fakes and an empty call record for this test.
     fn leaves() -> Leaves {
@@ -2314,15 +2270,15 @@ mod tests {
             struct_size: 23,
             ..EMPTY_PLAN
         };
-        assert_eq!(unsafe { rsf_unity_package_plan(&mut plan) }, 0);
+        assert_eq!(unsafe { render_config(null_mut(), &mut plan) }, 0);
         plan.struct_size = 24;
-        assert_eq!(unsafe { rsf_unity_package_plan(&mut plan) }, 1);
+        assert_eq!(unsafe { render_config(null_mut(), &mut plan) }, 1);
         calls();
         let pass = sr_pass(1, (8, 8), (4, 4));
         unsafe {
-            rsf_unity_package_render(std::ptr::null_mut(), &pass);
-            rsf_unity_package_render(list(1), std::ptr::null());
-            rsf_unity_package_render(list(1), &pass);
+            routing::render_callback(null_mut(), null_mut(), &pass, 1);
+            routing::render_callback(null_mut(), list(1), std::ptr::null(), 1);
+            routing::render_callback(null_mut(), list(1), &pass, 1);
         }
         assert!(calls().is_empty());
         let (text, none) = (c"x".as_ptr(), std::ptr::null());
@@ -2535,13 +2491,6 @@ mod tests {
         // Any other pass goes to the SR pass; the player has no preview to prepare.
         pass.role = RSF_GAME_RENDER_SR;
         assert!(package.route(&leaves, list(1), &pass, true));
-        assert!(calls().is_empty());
-        // The export refuses a null list or pass before routing.
-        let route = routing::rsf_unity_package_route;
-        unsafe {
-            assert_eq!(route(std::ptr::null_mut(), &pass, 1, &PLATFORM), 0);
-            assert_eq!(route(list(1), std::ptr::null(), 1, &PLATFORM), 0);
-        }
         assert!(calls().is_empty());
     }
 

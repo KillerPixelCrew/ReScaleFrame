@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: MIT
-//! The Unity package's routing behind package.cpp: the host render callback's window,
-//! final-scene, SR and submitted passes with the Editor preview's admission and diagnostic
-//! budget, the generation window guard, and Unity's device lifecycle. package.cpp keeps the
-//! Unity, Win32, D3D12, Vulkan, preview and Runtime calls as leaves and runs the SR pass itself
-//! under its mutex when the route asks for it.
-//!
-//! No lock here is held across a leaf. The route runs outside package.cpp's mutex, as the C++
-//! callback did; the device lifecycle runs under it, so its state is only stored here.
-use super::{LEAVES, Leaves, PACKAGE, Package, RECORDING};
+//! Unity render-pass routing, window admission and device events.
+use super::{
+    LEAVES, Leaves, OPERATIONS, PACKAGE, Package, RECORDING, UNITY_GRAPHICS, UNITY_INTERFACES,
+};
+#[cfg(windows)]
+use super::{presentation, services};
 use crate::bridge_abi::RSF_UNITY_PREVIEW_SOURCE_COMMON;
+#[cfg(windows)]
+use crate::package_abi::rsf_unity_package_platform;
 use rsf_game_sys::{RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_WINDOW, rsf_game_render_pass};
 use std::ffi::{c_int, c_void};
+#[cfg(windows)]
+use std::ptr::null_mut;
+#[cfg(windows)]
+use std::sync::Mutex;
+use std::sync::PoisonError;
 use std::sync::atomic::Ordering::SeqCst;
 
 /// Editor preview refusals with a texture logged per process.
@@ -55,7 +59,7 @@ impl Leaves {
         unsafe { (self.preview_owns)(window) != 0 }
     }
     fn renderer_vulkan(&self) -> bool {
-        unsafe { (self.renderer_vulkan)() != 0 }
+        unsafe { (self.renderer_vulkan)(UNITY_GRAPHICS.load(SeqCst)) != 0 }
     }
     fn vulkan_owns(&self, window: *mut c_void) -> bool {
         unsafe { (self.vulkan_owns)(window) != 0 }
@@ -64,7 +68,7 @@ impl Leaves {
         unsafe { (self.window_class)(window) }
     }
     fn bridge_load(&self) -> bool {
-        unsafe { (self.bridge_load)() != 0 }
+        unsafe { (self.bridge_load)(UNITY_INTERFACES.load(SeqCst)) != 0 }
     }
     fn bridge_unload(&self) {
         unsafe { (self.bridge_unload)() }
@@ -80,7 +84,7 @@ impl Package {
     /// submitted. The window pass asks for the generation provider, then presents the Editor
     /// preview or hands the pass to generation; the final scene is generation's HUD-less image.
     /// Any other pass is SR: the Editor preview is prepared first and true runs the SR pass on
-    /// the original under package.cpp's mutex.
+    /// the original under the package operation lock.
     pub(super) fn route(
         &self,
         leaves: &Leaves,
@@ -150,7 +154,7 @@ impl Package {
         }
     }
 
-    /// Unity's device events, under package.cpp's mutex. A waiting device loads the bridge once
+    /// Unity's device events, under the package operation lock. A waiting device loads the bridge once
     /// Unity's interfaces exist. A ready one retires the session, then unloads the bridge; a
     /// refused retirement retains the device, since Unity's void event can go on to destroy it
     /// and a later callback cannot assume borrowed Vulkan handles still name a live device.
@@ -177,6 +181,7 @@ impl Package {
 
     /// rsfu_shutdown after the preview is hidden: nothing to retire while waiting, a retained
     /// device refuses, a ready one reports its session's retirement.
+    #[cfg(any(test, all(windows, not(feature = "mono-plugin"))))]
     pub(super) fn shutdown(&self, leaves: &Leaves) -> bool {
         let retired = match self.device.load(SeqCst) {
             DEVICE_READY => self.retire(leaves),
@@ -189,53 +194,102 @@ impl Package {
     }
 }
 
-/// package.cpp's render callback body. A null list or pass does nothing, as before.
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_unity_package_route(
+/// The bridge holds its callback and packet leases until this returns.
+pub(super) unsafe extern "C" fn render_callback(
+    _: *mut c_void,
     commands: *mut c_void,
     pass: *const rsf_game_render_pass,
     begin: u32,
-) -> u32 {
+) {
     let Some(leaves) = LEAVES.get() else {
-        return 0;
+        return;
     };
     if commands.is_null() || pass.is_null() {
-        return 0;
+        return;
     }
-    let evaluate = PACKAGE.route(leaves, commands, unsafe { &*pass }, begin != 0);
-    if !evaluate {
+    let pass = unsafe { &*pass };
+    if PACKAGE.route(leaves, commands, pass, begin != 0) {
+        let _operation = OPERATIONS.lock().unwrap_or_else(PoisonError::into_inner);
+        PACKAGE.render(leaves, commands, pass);
+    } else {
         RECORDING.set(None);
     }
-    u32::from(evaluate)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_package_accept_window(window: *mut c_void) -> c_int {
+pub(super) extern "C" fn accept_window(_: *mut c_void, window: *mut c_void) -> c_int {
     LEAVES.get().map_or(0, |leaves| {
         c_int::from(PACKAGE.accept_window(leaves, window))
     })
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_package_device_event(initialize: u32) {
+pub(super) extern "C" fn rsf_unity_package_device_event(initialize: u32) {
+    let _operation = OPERATIONS.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(leaves) = LEAVES.get() {
         PACKAGE.device_event(leaves, initialize != 0);
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_package_device_retained() -> u32 {
-    u32::from(PACKAGE.device.load(SeqCst) == DEVICE_RETAINED)
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_package_shutdown() -> u32 {
-    u32::from(match LEAVES.get() {
+#[cfg(any(test, all(windows, not(feature = "mono-plugin"))))]
+pub(super) fn shutdown() -> bool {
+    let _operation = OPERATIONS.lock().unwrap_or_else(PoisonError::into_inner);
+    match LEAVES.get() {
         Some(leaves) => PACKAGE.shutdown(leaves),
         None => PACKAGE.device.load(SeqCst) == DEVICE_WAITING,
-    })
+    }
 }
 
+// Only the load/unload entries take this lock. Registration can call the device callback,
+// so the package operation lock must be free and the registry already published.
+#[cfg(windows)]
+static REGISTRATION: Mutex<Option<unsafe extern "C" fn(*mut c_void, u32)>> = Mutex::new(None);
+
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_package_plugin_load(
+    platform: *const rsf_unity_package_platform,
+    interfaces: *mut c_void,
+) {
+    let mut registration = REGISTRATION.lock().unwrap_or_else(PoisonError::into_inner);
+    if PACKAGE.device.load(SeqCst) == DEVICE_RETAINED || !UNITY_INTERFACES.load(SeqCst).is_null() {
+        return;
+    }
+    let Some(platform_ref) = (unsafe { platform.as_ref() }) else {
+        return;
+    };
+    let (Some(graphics_interface), Some(preload), Some(device_callback)) = (
+        platform_ref.graphics_interface,
+        platform_ref.preload,
+        platform_ref.device_callback,
+    ) else {
+        return;
+    };
+    UNITY_INTERFACES.store(interfaces, SeqCst);
+    let graphics = unsafe { graphics_interface(interfaces) };
+    UNITY_GRAPHICS.store(graphics, SeqCst);
+    if !interfaces.is_null() {
+        unsafe { preload(interfaces) };
+    }
+    unsafe { presentation::load(platform) };
+    if !graphics.is_null() {
+        *registration = Some(device_callback);
+        unsafe { device_callback(graphics, 1) };
+        rsf_unity_package_device_event(1);
+    }
+}
+
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_package_plugin_unload() {
+    let mut registration = REGISTRATION.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(device_callback) = registration.take() {
+        unsafe { device_callback(UNITY_GRAPHICS.load(SeqCst), 0) };
+    }
+    rsf_unity_package_device_event(0);
+    services::unload();
+    UNITY_INTERFACES.store(null_mut(), SeqCst);
+    UNITY_GRAPHICS.store(null_mut(), SeqCst);
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,15 +298,17 @@ mod tests {
     fn routes_without_a_loaded_table() {
         let pass: rsf_game_render_pass = unsafe { std::mem::zeroed() };
         unsafe {
-            assert_eq!(
-                rsf_unity_package_route(std::ptr::NonNull::dangling().as_ptr(), &pass, 1),
-                0
+            render_callback(
+                std::ptr::null_mut(),
+                std::ptr::NonNull::dangling().as_ptr(),
+                &pass,
+                1,
             );
-            assert_eq!(rsf_unity_package_accept_window(std::ptr::null_mut()), 0);
-            rsf_unity_package_device_event(1);
         }
         // The static package's device is still waiting: shutdown has nothing to retire.
-        assert_eq!(rsf_unity_package_device_retained(), 0);
-        assert_eq!(rsf_unity_package_shutdown(), 1);
+        assert_eq!(accept_window(std::ptr::null_mut(), std::ptr::null_mut()), 0);
+        rsf_unity_package_device_event(1);
+        assert_eq!(PACKAGE.device.load(SeqCst), DEVICE_WAITING);
+        assert!(shutdown());
     }
 }

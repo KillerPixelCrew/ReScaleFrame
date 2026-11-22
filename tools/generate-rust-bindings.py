@@ -425,20 +425,19 @@ generate("games/unity-mono/src/preview_abi.rs", "runtime/orchestrator/include/re
           "--raw-line", "use rsf_game_sys::rsf_game_render_pass;"])
 generate("games/unity-mono/src/package_abi.rs", "integrations/unity/native/package_state.h",
          "rsf_(unity_(package_(settings|status|platform|view_setup)|frame_counters)|native_fg_(options|status)|fg_status|"
-         "native_(latency_status|cpu_counters)|fg_mode|pacing_owner|reflex_mode|sr12)",
-         "RSF_(UNITY_(SETTINGS|PACKAGE)_ABI_VERSION|SR_NONE|FG_(OFF|STAT_TOTAL_PRESENTED))",
-         ["-include", "rescaleframe/native_fg.h", "-include", "rescaleframe/native_cpu.h",
+         "native_(latency_status|cpu_counters)|fg_mode|pacing_owner|reflex_mode|sr12(_setup|_plan_result)?|dlss_(setup|engine|log_fn))",
+         "RSF_(UNITY_(SETTINGS|PACKAGE)_ABI_VERSION|DLSS_ABI_VERSION|SR12_PLAN_ABI_VERSION|SR_NONE|FG_(OFF|STAT_TOTAL_PRESENTED))",
+         ["-include", "rescaleframe/native_sr_d3d12.h", "-include", "rescaleframe/native_fg.h", "-include", "rescaleframe/native_cpu.h",
           "-include", "rescaleframe/sr_session.h", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
           "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include", "-Iruntime/presentation/include",
           "-Isdk/game/include", "-Igames/unity-mono/include"],
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]",
-          "--raw-line", "type wchar_t = u16;",
+          "--raw-line", "type wchar_t = u16;\ntype rsf_backend_result = i32;",
           "--raw-line", "use crate::plugin_abi::rsf_unity_native_api;",
-          "--raw-line", "use crate::runtime_abi::rsf_fg12_setup;",
+          "--raw-line", "use crate::runtime_abi::{rsf_backend_log_fn, rsf_fg12_setup};",
           "--raw-line", "pub use rsf_game_sys::sharpening_abi::rsf_sharpening_options;",
           "--raw-line", "use rsf_game_sys::{\n"
-          "    rsf_game_cpu_event, rsf_game_host_services, rsf_game_render_config_fn, rsf_game_render_pass,\n"
-          "    rsf_game_render_pass_fn,\n};",
+          "    rsf_game_cpu_event, rsf_game_host_services, rsf_game_render_pass,\n};",
           "--with-derive-custom-struct", "rsf_unity_package_platform=Copy,Clone"])
 generate("tests/engine_sharpening_abi.rs", "integrations/unity/native/package_state.h",
          "rsf_(godot_settings|unity_package_settings|srvk_(frame|image))",
