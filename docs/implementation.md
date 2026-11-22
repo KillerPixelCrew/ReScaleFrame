@@ -11,9 +11,10 @@ callbacks and public declarations. The SCons build, editor and player
 checks remain open. [Godot evidence](../integrations/godot/NATIVE.md#engine-module-host-lifecycle)
 
 D3D12 FidelityFX frame generation now plans context flags, extents,
-provider admission and per-frame camera constants in Rust. Native code
-retains typed descriptors and SDK calls. Source review matched startup
-and prepare ordering. Builds and device checks remain open.
+provider admission, per-frame camera constants, SDK entry admission,
+configure records and the present copy in Rust. Native code retains
+typed descriptors and SDK calls. Source review matched startup,
+prepare and dispatch ordering. Builds and device checks remain open.
 [Migration evidence](rust-migration.md#fast-path-to-a-verified-candidate)
 
 The D3D11 Streamline signature check is restored for the shared DLL and

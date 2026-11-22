@@ -54,6 +54,10 @@ leaves retain the typed descriptors, callback frames and DXGI creation.
 Source comparison covered the 19-entry private table and the disabled
 provider. Pinned formatting, locked offline metadata and whitespace
 passed. The new Rust cases and native routes remain unverified by execution.
+The same owner now resolves the five required SDK entries, admits the
+present copy, bounds generated outputs and plans configure callbacks
+and rectangles. Source review covered the updated 21-slot private
+table and matched the public enabled and disabled routes. See `6f4b2cb2`.
 
 Vulkan-to-D3D12 FG swapchain admission for FSR4 and XeSS is in Rust.
 The fixture uses the 31-slot graphics table and exercises the Rust
