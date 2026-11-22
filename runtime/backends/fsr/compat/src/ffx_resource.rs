@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: MIT
-use super::{Raw, ffx_abi::*};
+//! The pinned FidelityFX SDK's ffxApiGetResourceDX12 helper.
+use crate::ffx_abi::*;
+use core::ffi::c_void;
+
+type Raw = *mut c_void;
 use windows::{
     Win32::Graphics::{Direct3D12::*, Dxgi::Common::*},
     core::Interface,
 };
 
 // Format mapping from the pinned FidelityFX SDK DX12 helper, including typeless depth aliases.
-pub(crate) fn surface_format(format: DXGI_FORMAT) -> u32 {
+pub fn surface_format(format: DXGI_FORMAT) -> u32 {
     let format = match format {
         DXGI_FORMAT_R32G32B32A32_TYPELESS => FFX_API_SURFACE_FORMAT_R32G32B32A32_TYPELESS,
         DXGI_FORMAT_R32G32B32A32_FLOAT => FFX_API_SURFACE_FORMAT_R32G32B32A32_FLOAT,
@@ -59,7 +63,9 @@ pub(crate) fn surface_format(format: DXGI_FORMAT) -> u32 {
 }
 
 // The caller holds the actual D3D12 resource for the descriptor's use.
-pub(crate) unsafe fn describe(texture: Raw, state: u32) -> FfxApiResource {
+/// # Safety
+/// `texture` must be null or a live `ID3D12Resource`.
+pub unsafe fn describe(texture: Raw, state: u32) -> FfxApiResource {
     let mut resource = FfxApiResource {
         resource: texture,
         state,

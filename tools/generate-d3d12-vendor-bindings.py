@@ -72,10 +72,10 @@ def main():
     generate(root / "runtime/backends/fsr/src/ffx_descriptor_types.h",
              r"ffx(ApiHeader|StructType_t|ApiMessage|Context|ReturnCode_t|AllocationCallbacks|Alloc|Dealloc|"
              r"CreateContextDescHeader|DispatchDescHeader|QueryDescHeader|QueryDescGetVersions|OverrideVersion|"
-             r"QueryGetProviderVersion|CreateBackendDX12Desc|CreateContextDescUpscale|DispatchDescUpscale|"
+             r"QueryGetProviderVersion|CreateBackendDX12Desc|CreateContextDescUpscale(Version)?|DispatchDescUpscale|"
              r"QueryDescUpscaleGetRenderResolutionFromQualityMode)|PfnFfx(CreateContext|DestroyContext|Query|Dispatch)|"
              r"rsf_ffx_descriptor_type|FfxApi(Resource|ResourceDescription|Dimensions2D|FloatCoords2D|ReturnCodes|CreateContextUpscaleFlags|ResourceState|SurfaceFormat|ResourceType|ResourceUsage)",
-             root / "runtime/orchestrator/src/d3d12_sr/fsr_abi.rs",
+             root / "runtime/backends/fsr/compat/src/ffx_abi.rs",
              ["type ID3D12Device = ::core::ffi::c_void;", "type wchar_t = u16;"],
              [f"-I{api}", f"-I{args.fidelityfx / 'upscalers/include'}"],
              r"FFX_API_(CREATE_CONTEXT_DESC_TYPE_(BACKEND_DX12|UPSCALE)|DISPATCH_DESC_TYPE_UPSCALE|"
@@ -85,7 +85,7 @@ def main():
     generate(root / "runtime/backends/fsr/src/ffx_generation_descriptor_types.h",
              r"ffx(CreateContextDescFrameGeneration(Version|SwapChain(ForHwnd|Version)DX12)?|DispatchDescFrameGeneration(PrepareV2)?|"
              r"CallbackDescFrameGenerationPresent|ConfigureDescFrameGeneration|ConfigureDescHeader)|"
-             r"PfnFfxConfigure|FfxApi(Rect2D|PresentCallbackFunc|FrameGenerationDispatchFunc)|rsf_ffx_fg_descriptor_type",
+             r"PfnFfxConfigure|FfxApi(Rect2D|PresentCallbackFunc|FrameGenerationDispatchFunc|CreateContextFramegenerationFlags)|rsf_ffx_fg_descriptor_type",
              root / "runtime/orchestrator/src/d3d12_generation/fsr_abi.rs",
              ["use crate::d3d12_sr::ffx_abi::*;",
               "use windows::Win32::Graphics::Dxgi::{DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FULLSCREEN_DESC};",

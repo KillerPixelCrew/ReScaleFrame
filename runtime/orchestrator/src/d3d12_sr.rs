@@ -12,9 +12,7 @@ use std::ffi::{c_char, c_void};
 use std::mem::MaybeUninit;
 use std::ptr::null_mut;
 
-#[path = "d3d12_sr/fsr_abi.rs"]
-pub(crate) mod ffx_abi;
-pub(super) mod ffx_resource;
+pub(crate) use rsf_fsr4_compat::{ffx_abi, ffx_resource};
 mod fsr;
 mod legacy;
 mod xess;

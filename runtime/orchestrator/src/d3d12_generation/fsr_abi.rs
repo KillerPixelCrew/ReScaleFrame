@@ -133,6 +133,18 @@ impl Default for ffxCreateContextDescFrameGenerationSwapChainVersionDX12 {
         }
     }
 }
+pub const FFX_FRAMEGENERATION_ENABLE_ASYNC_WORKLOAD_SUPPORT:
+    FfxApiCreateContextFramegenerationFlags = 1;
+pub const FFX_FRAMEGENERATION_ENABLE_DISPLAY_RESOLUTION_MOTION_VECTORS:
+    FfxApiCreateContextFramegenerationFlags = 2;
+pub const FFX_FRAMEGENERATION_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION:
+    FfxApiCreateContextFramegenerationFlags = 4;
+pub const FFX_FRAMEGENERATION_ENABLE_DEPTH_INVERTED: FfxApiCreateContextFramegenerationFlags = 8;
+pub const FFX_FRAMEGENERATION_ENABLE_DEPTH_INFINITE: FfxApiCreateContextFramegenerationFlags = 16;
+pub const FFX_FRAMEGENERATION_ENABLE_HIGH_DYNAMIC_RANGE: FfxApiCreateContextFramegenerationFlags =
+    32;
+pub const FFX_FRAMEGENERATION_ENABLE_DEBUG_CHECKING: FfxApiCreateContextFramegenerationFlags = 64;
+pub type FfxApiCreateContextFramegenerationFlags = ::core::ffi::c_int;
 #[repr(C)]
 pub struct ffxCreateContextDescFrameGeneration {
     pub header: ffxCreateContextDescHeader,
