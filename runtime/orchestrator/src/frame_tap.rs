@@ -1699,7 +1699,7 @@ fn consider_bound_set(platform: &Platform, render: &mut Render, context: Handle)
 
     // Judged against the presented size with the render size unknown, so the classifier accepts
     // anything from half of it upwards that keeps the frame's aspect.
-    let (mut motion, mut depth, mut exposure, mut history) =
+    let (mut motion, mut depth, mut exposure, mut history): (Handle, Handle, Handle, Handle) =
         (null_mut(), null_mut(), null_mut(), null_mut());
     let (mut motion_width, mut motion_height) = (0, 0);
     for index in occupied(render) {
@@ -2626,7 +2626,7 @@ unsafe extern "C" fn rsf_frame_tap_get_status(status: *mut rsf_frame_tap_status)
     OK
 }
 
-fn rsf_core_frame_tap_enter(platform: &Platform, hook: u32) -> Handle {
+fn rsf_core_frame_tap_enter(platform: &Platform, hook: i32) -> Handle {
     refresh(platform);
     original(hook as usize)
 }
@@ -2990,7 +2990,7 @@ unsafe fn rsf_core_frame_tap_clear_target(
 fn rsf_core_frame_tap_draw(
     platform: &Platform,
     context: Handle,
-    hook: u32,
+    hook: i32,
     call: &rsf_frame_tap_draw_call,
 ) {
     refresh(platform);
@@ -3193,7 +3193,7 @@ unsafe fn rsf_core_frame_tap_pixel_constants(
         0
     };
     let render = unsafe { render() };
-    let mut view = null_mut();
+    let mut view: Handle = null_mut();
     for index in 0..count as usize {
         let buffer = unsafe { read_or(buffers, index, null_mut()) };
         let slot = start as usize + index;

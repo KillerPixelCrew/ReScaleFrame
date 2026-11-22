@@ -423,7 +423,7 @@ static void test_composed_color(ID3D11Device* device, ID3D11DeviceContext* conte
     check(rsf_ac7_scene_color_selected(&selection, base) == base,
           "A colour-only copy must not qualify as recombination.");
     COM(context, PSSetShaderResources, 31, 1, &layer_srv);
-    COM(context, OMSetRenderTargetsAndUnorderedAccessViews, 
+    COM(context, OMSetRenderTargetsAndUnorderedAccessViews,
         D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, NULL, NULL, 1, 0, NULL, NULL);
     COM(context, DrawIndexed, 3, 0, 0);
     check(rsf_ac7_scene_color_selected(&selection, base) == composed,

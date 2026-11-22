@@ -8,6 +8,7 @@ mod frame_tap_abi;
 #[allow(dead_code)]
 mod resource_roles_abi;
 #[path = "../../runtime/orchestrator/src/scene_promote_abi.rs"]
+#[allow(dead_code)]
 mod scene_promote_abi;
 
 use d3d11::{Checks, Com, Handle, TextureDesc, create_device, create_texture, stage};

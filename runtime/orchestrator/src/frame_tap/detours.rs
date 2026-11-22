@@ -43,7 +43,7 @@ unsafe extern "system" fn topology(context: Handle, value: u32) {
     rsf_core_frame_tap_topology(context, value);
 }
 
-unsafe extern "system" fn shader<const HOOK: u32, const OBJECT: u32>(
+unsafe extern "system" fn shader<const HOOK: i32, const OBJECT: u32>(
     context: Handle,
     value: Handle,
     classes: *const Handle,
@@ -63,7 +63,7 @@ unsafe extern "system" fn depth_stencil(context: Handle, value: Handle, referenc
     rsf_core_frame_tap_object(context, OBJECT_DEPTH_STENCIL, value);
 }
 
-unsafe extern "system" fn constants<const HOOK: u32>(
+unsafe extern "system" fn constants<const HOOK: i32>(
     context: Handle,
     start: u32,
     count: u32,
@@ -247,7 +247,7 @@ unsafe extern "system" fn draw_auto(context: Handle) {
     rsf_core_frame_tap_indirect(platform(), context, 4, null_mut(), 0);
 }
 
-unsafe extern "system" fn indirect<const HOOK: u32, const KIND: u32>(
+unsafe extern "system" fn indirect<const HOOK: i32, const KIND: u32>(
     context: Handle,
     args: Handle,
     offset: u32,
