@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! COM ownership of capture backbuffers, readbacks and per-queue completion fences.
 
-use super::{Capture, allocate};
+use super::Capture;
+#[cfg(any(windows, test))]
+use rsf_game_sys::ffi_util::try_box;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr::{self, NonNull};
@@ -279,11 +281,11 @@ pub(super) unsafe fn take_idle(owner: &Capture) -> *mut Gpu {
     if gpu.queues.is_empty() && gpu.backbuffers.is_none() {
         return ptr::null_mut();
     }
-    let retired = allocate(Gpu::default());
-    if !retired.is_null() {
-        unsafe { ptr::swap(gpu, retired) };
-    }
-    retired
+    let Some(mut retired) = try_box(Gpu::default()) else {
+        return ptr::null_mut();
+    };
+    std::mem::swap(gpu, &mut *retired);
+    Box::into_raw(retired)
 }
 
 #[cfg(windows)]

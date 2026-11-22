@@ -2,7 +2,7 @@
 //! Capture admission, limits, and publication. Native capture holds its existing mutex for
 //! ledger operations, ordering state with its graphics objects. Request and fast admission
 //! queries are atomic. The NGX wrapper nesting is tracked on the calling thread.
-use std::alloc::{Layout, alloc};
+use rsf_game_sys::ffi_util::try_box;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -120,15 +120,7 @@ impl Capture {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_rdr2_capture_create() -> *mut Capture {
     // Return null on allocation refusal so the optional probe can decline installation.
-    allocate(Capture::new())
-}
-
-fn allocate<T>(value: T) -> *mut T {
-    let owner = unsafe { alloc(Layout::new::<T>()) }.cast::<T>();
-    if !owner.is_null() {
-        unsafe { owner.write(value) };
-    }
-    owner
+    try_box(Capture::new()).map_or_else(std::ptr::null_mut, Box::into_raw)
 }
 
 fn try_entry<V: Default>(map: &mut HashMap<usize, V>, key: usize) -> Option<&mut V> {

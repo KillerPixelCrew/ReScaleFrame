@@ -2,6 +2,7 @@
 //! ASI diagnostic sampling and the optional RenderDoc request worker.
 use crate::camera_probe::rsf_rdr2_camera_request;
 use crate::runtime_worker::{append_path, log};
+use rsf_game_sys::ffi_util::try_box;
 use std::ffi::{CString, c_char, c_void};
 use std::ptr::{null, null_mut};
 use std::slice;
@@ -67,7 +68,10 @@ type FrameTrigger = unsafe extern "C" fn(u32) -> i32;
 
 /// The entry consumes the owned pointer exactly once, after successful thread creation.
 unsafe fn start<T: Send>(work: T, entry: Worker) -> bool {
-    let work = Box::into_raw(Box::new(work));
+    let Some(work) = try_box(work) else {
+        return false;
+    };
+    let work = Box::into_raw(work);
     let thread = unsafe { CreateThread(null(), 0, Some(entry), work.cast(), 0, null_mut()) };
     if thread.is_null() {
         drop(unsafe { Box::from_raw(work) });

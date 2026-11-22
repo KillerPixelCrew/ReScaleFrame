@@ -175,7 +175,9 @@ unsafe fn clone_table<const N: usize>(
 ) -> bool {
     let location = unsafe { AtomicPtr::<usize>::from_ptr(object.cast()) };
     let table = location.load(Ordering::Acquire);
-    let mut copy = Box::new([0usize; N]);
+    let Some(mut copy) = rsf_game_sys::ffi_util::try_box([0usize; N]) else {
+        return false;
+    };
     if !unsafe {
         read(
             table as usize,
