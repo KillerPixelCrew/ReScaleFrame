@@ -16,22 +16,6 @@ use windows::core::{IUnknown, Interface};
 
 // The native_fg owner calls these directly. Rust owners elsewhere in the Runtime appear under the
 // names the owner uses.
-pub(super) use crate::d3d11_present::{
-    rsf_d3d11_present_abort as present_abort, rsf_d3d11_present_backend as present_backend,
-    rsf_d3d11_present_generation as present_generation,
-    rsf_d3d11_present_has_owner as present_has_owner, rsf_d3d11_present_is_owner as present_is_owner,
-    rsf_d3d11_present_provider as present_provider, rsf_d3d11_present_retire as present_retire,
-    rsf_d3d11_present_session as present_session,
-};
-pub(super) use crate::dlss_streamline::exports::{
-    rsf_dlss_evaluate as dlss_evaluate, rsf_dlss_evaluate_shared as dlss_evaluate_shared,
-};
-use crate::input_dump::abi::rsf_input_dump_named_texture;
-pub(super) use crate::input_dump::{
-    rsf_input_dump_fg as dump_fg, rsf_input_dump_fg_prepare as dump_fg_prepare,
-    rsf_input_dump_sr as dump_sr,
-};
-use crate::streamline_host::rsf_streamline_host_token;
 pub(super) use crate::d3d11_d3d12::{
     close_commands, close_event, context_signal, context_wait, copy_resource, copy_transitioned,
     create_commands, create_event, create_output, execute, fence_d3d11, fence_d3d12, flush,
@@ -39,12 +23,28 @@ pub(super) use crate::d3d11_d3d12::{
     transition,
 };
 pub(super) use crate::d3d11_present::rsf_d3d11_present_host as present_host;
+pub(super) use crate::d3d11_present::{
+    rsf_d3d11_present_abort as present_abort, rsf_d3d11_present_backend as present_backend,
+    rsf_d3d11_present_generation as present_generation,
+    rsf_d3d11_present_has_owner as present_has_owner,
+    rsf_d3d11_present_is_owner as present_is_owner, rsf_d3d11_present_provider as present_provider,
+    rsf_d3d11_present_retire as present_retire, rsf_d3d11_present_session as present_session,
+};
+pub(super) use crate::dlss_streamline::exports::{
+    rsf_dlss_evaluate as dlss_evaluate, rsf_dlss_evaluate_shared as dlss_evaluate_shared,
+};
 pub(super) use crate::fg_leases::rsf_d3d12_fence_completed as fence_completed;
+use crate::input_dump::abi::rsf_input_dump_named_texture;
+pub(super) use crate::input_dump::{
+    rsf_input_dump_fg as dump_fg, rsf_input_dump_fg_prepare as dump_fg_prepare,
+    rsf_input_dump_sr as dump_sr,
+};
 pub(super) use crate::native_scene::{
     rsf_native_scene_classify_present as scene_present_path,
     rsf_native_scene_for_window as scene_for_window,
 };
 pub(super) use crate::native_window::rsf_native_window_match as window_match;
+use crate::streamline_host::rsf_streamline_host_token;
 pub(super) use rsf_game_sys::rsf_frame_allows_fg as allows_fg;
 
 pub(super) unsafe fn query_context4(context: Handle) -> Handle {
@@ -134,11 +134,7 @@ pub(super) unsafe fn surface_create(
 }
 
 pub(super) unsafe fn wait_fence(fence: Handle, value: u64, event: Handle) -> i32 {
-    i32::from(
-        unsafe {
-            crate::d3d12_fence::wait_fence(fence, value, event, 10_000)
-        } >= 0,
-    )
+    i32::from(unsafe { crate::d3d12_fence::wait_fence(fence, value, event, 10_000) } >= 0)
 }
 
 pub(super) unsafe fn dump_named(

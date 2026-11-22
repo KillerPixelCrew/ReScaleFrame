@@ -30,7 +30,12 @@ impl Sdk {
         }
         let compatibility = if desc.fsr_major == 4 {
             let handle = unsafe {
-                rsf_fsr4_compat::acquire_for_device(module.as_ptr(), desc.device, desc.log, desc.log_user)
+                rsf_fsr4_compat::acquire_for_device(
+                    module.as_ptr(),
+                    desc.device,
+                    desc.log,
+                    desc.log_user,
+                )
             };
             NonNull::new(handle.cast_mut()).map(|handle| Compatibility { handle })
         } else {

@@ -1,7 +1,4 @@
 // SPDX-License-Identifier: MIT
-use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R32_FLOAT,
-};
 use crate::allocate_handle;
 use crate::dx12_vulkan_interop::{
     BGRA8_UNORM as VK_BGRA8_UNORM, R32_FLOAT as VK_R32_FLOAT, RG16_FLOAT as VK_RG16_FLOAT, checked,
@@ -16,6 +13,9 @@ use rsf_game_sys::{
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering::SeqCst};
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R32_FLOAT,
+};
 
 use rsf_fsr4_compat::dx12_bridge::{self as dx12, can_signal_done, next_local_completion};
 mod commands;

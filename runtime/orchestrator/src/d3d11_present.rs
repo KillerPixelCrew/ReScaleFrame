@@ -79,7 +79,13 @@ mod leaf {
     }
 
     pub(super) unsafe fn host_reflex_off(host: Raw) -> i32 {
-        unsafe { crate::streamline_host::rsf_streamline_host_reflex(host.cast(), super::RSF_REFLEX_OFF, 0) }
+        unsafe {
+            crate::streamline_host::rsf_streamline_host_reflex(
+                host.cast(),
+                super::RSF_REFLEX_OFF,
+                0,
+            )
+        }
     }
 }
 #[cfg(test)]
@@ -1630,7 +1636,8 @@ impl Owner {
         if result != OK {
             effective = previous;
             if !host.is_null() {
-                let _ = unsafe { leaf::host_generation_load(host.cast(), u32::from(previous == DLSS)) };
+                let _ =
+                    unsafe { leaf::host_generation_load(host.cast(), u32::from(previous == DLSS)) };
             }
             if self.create_physical(previous) != OK {
                 effective = 0;
@@ -1739,7 +1746,8 @@ impl Owner {
         }
         let host = self.host();
         let common = !host.is_null() && ACTIVE_BACKEND.load(Ordering::SeqCst) != DLSS;
-        if common && unsafe { leaf::host_present_common(host.cast(), chain, sync, flags, 1) } != OK {
+        if common && unsafe { leaf::host_present_common(host.cast(), chain, sync, flags, 1) } != OK
+        {
             log("presentation bridge: shared Streamline common Present begin refused");
             return E_FAIL;
         }
@@ -1752,7 +1760,8 @@ impl Owner {
         self.receipt("vendor-present-enter", S_OK);
         let result = unsafe { leaf::physical_present(chain, sync, flags) };
         self.receipt("vendor-present-done", result);
-        if common && unsafe { leaf::host_present_common(host.cast(), chain, sync, flags, 0) } != OK {
+        if common && unsafe { leaf::host_present_common(host.cast(), chain, sync, flags, 0) } != OK
+        {
             log("presentation bridge: shared Streamline common Present end refused");
         }
         if debug {
@@ -3190,7 +3199,9 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_pace(
                 return INVALID_ARGUMENT;
             }
             match owner {
-                RSF_PACING_REFLEX if !lease.host.is_null() => leaf::host_sleep(lease.host.cast(), id),
+                RSF_PACING_REFLEX if !lease.host.is_null() => {
+                    leaf::host_sleep(lease.host.cast(), id)
+                }
                 RSF_PACING_REFLEX => NOT_READY,
                 RSF_PACING_XELL => lease
                     .context()

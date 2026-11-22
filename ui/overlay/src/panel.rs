@@ -250,7 +250,6 @@ impl Selection {
     }
 }
 
-
 /// One rectangle per host option. The array is longer than the standard library's `Default`
 /// arrays, so it carries its own.
 #[derive(Debug, Clone, Copy, PartialEq)]

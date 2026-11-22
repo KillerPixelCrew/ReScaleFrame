@@ -70,7 +70,6 @@ struct Calls {
 
 const _: () = assert!(size_of::<Calls>() == 16 * size_of::<usize>());
 
-
 struct Gpu {
     session: Option<Session>,
     _library: Library,

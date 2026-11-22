@@ -649,7 +649,14 @@ unsafe extern "C" fn rsf_xessvk_device_requirements(
     features: *mut Handle,
 ) -> i32 {
     unsafe {
-        rsf_core_xessvk_device_requirements(native_ops(), instance, physical, count, names, features)
+        rsf_core_xessvk_device_requirements(
+            native_ops(),
+            instance,
+            physical,
+            count,
+            names,
+            features,
+        )
     }
 }
 

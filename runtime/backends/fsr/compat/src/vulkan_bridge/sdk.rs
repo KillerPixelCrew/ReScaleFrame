@@ -70,18 +70,15 @@ pub(super) unsafe fn load_provider(
     *out = module.0;
     // Each optional export uses its SDK signature on Windows x64.
     unsafe {
-        *create = core::mem::transmute::<FARPROC, PfnFfxCreateContext>(provider_module::module_export(
-            module,
-            c"ffxCreateContext",
-        ));
-        *destroy = core::mem::transmute::<FARPROC, PfnFfxDestroyContext>(provider_module::module_export(
-            module,
-            c"ffxDestroyContext",
-        ));
-        *dispatch = core::mem::transmute::<FARPROC, PfnFfxDispatch>(provider_module::module_export(
-            module,
-            c"ffxDispatch",
-        ));
+        *create = core::mem::transmute::<FARPROC, PfnFfxCreateContext>(
+            provider_module::module_export(module, c"ffxCreateContext"),
+        );
+        *destroy = core::mem::transmute::<FARPROC, PfnFfxDestroyContext>(
+            provider_module::module_export(module, c"ffxDestroyContext"),
+        );
+        *dispatch = core::mem::transmute::<FARPROC, PfnFfxDispatch>(
+            provider_module::module_export(module, c"ffxDispatch"),
+        );
         *query = core::mem::transmute::<FARPROC, PfnFfxQuery>(provider_module::module_export(
             module,
             c"ffxQuery",

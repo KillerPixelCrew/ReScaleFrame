@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-use ash::vk;
 use crate::allocate_handle;
 use crate::sr_session::has_capacity;
 use crate::sys::rsf_dx12vk_shared_image as SharedImage;
@@ -16,6 +15,7 @@ use crate::vulkan_external_copy::{
 use crate::vulkan_fg_frames::*;
 use crate::vulkan_fg_resources::{ensure_image, rsf_core_vkfg_release_image};
 use crate::vulkan_sr::{SAMPLED_USAGE, TRANSFER_SRC_USAGE, valid_image};
+use ash::vk;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION,
     rsf_frame_record as Record,

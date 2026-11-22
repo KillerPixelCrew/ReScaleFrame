@@ -136,7 +136,11 @@ struct Config {
 use rsf_game_sys::diagnostic_preferences;
 
 fn read_number(name: &str) -> Option<u64> {
-    diagnostic_preferences::value(name)?.to_str()?.trim().parse().ok()
+    diagnostic_preferences::value(name)?
+        .to_str()?
+        .trim()
+        .parse()
+        .ok()
 }
 
 impl Config {

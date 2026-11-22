@@ -68,9 +68,7 @@ pub(super) unsafe fn acquire_device(
         unsafe { factory.EnumAdapterByLuid::<IDXGIAdapter1>(device_ref.GetAdapterLuid()) };
     drop(factory);
     match adapter {
-        Ok(adapter) => unsafe {
-            acquire_logged(module, adapter.as_raw(), device, log, user)
-        },
+        Ok(adapter) => unsafe { acquire_logged(module, adapter.as_raw(), device, log, user) },
         Err(_) => ptr::null(),
     }
 }

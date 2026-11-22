@@ -524,11 +524,7 @@ unsafe fn observe_nvapi(
     }
 }
 
-pub(crate) unsafe fn rsf_reflex_driver_sleep(
-    device: *mut c_void,
-    log: Log,
-    user: *mut c_void,
-) {
+pub(crate) unsafe fn rsf_reflex_driver_sleep(device: *mut c_void, log: Log, user: *mut c_void) {
     let mut state = NV_GET_SLEEP_STATUS_PARAMS {
         version: version::<NV_GET_SLEEP_STATUS_PARAMS>(),
         ..Default::default()

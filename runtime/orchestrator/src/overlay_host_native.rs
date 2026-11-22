@@ -55,7 +55,9 @@ unsafe extern "C" fn same_object(first: Handle, second: Handle) -> u32 {
         unsafe { IUnknown::from_raw_borrowed(&object) }
             .and_then(|object| object.cast::<IUnknown>().ok())
     };
-    u32::from(identity(first).is_some_and(|a| identity(second).is_some_and(|b| a.as_raw() == b.as_raw())))
+    u32::from(
+        identity(first).is_some_and(|a| identity(second).is_some_and(|b| a.as_raw() == b.as_raw())),
+    )
 }
 
 unsafe extern "C" fn immediate_context(device: Handle) -> Handle {
@@ -86,9 +88,10 @@ unsafe extern "C" fn texture_desc(texture: Handle, out: *mut TextureDesc) {
 }
 
 unsafe extern "C" fn create_view(device: Handle, texture: Handle, out: *mut Handle) -> i32 {
-    let (Some(device), Some(texture)) = (unsafe { ID3D11Device::from_raw_borrowed(&device) }, unsafe {
-        ID3D11Resource::from_raw_borrowed(&texture)
-    }) else {
+    let (Some(device), Some(texture)) = (
+        unsafe { ID3D11Device::from_raw_borrowed(&device) },
+        unsafe { ID3D11Resource::from_raw_borrowed(&texture) },
+    ) else {
         return E_POINTER;
     };
     let mut view = None;

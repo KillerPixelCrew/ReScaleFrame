@@ -38,25 +38,6 @@ const _: () = {
 };
 
 // The owner's leaves, by the names sr12.rs calls them; sr12/tests.rs fakes the same names.
-pub(super) use crate::dlss_native12::exports::{
-    rsf_dlss_native12_create as dlss_create,
-    rsf_dlss_native12_create_registered as dlss_create_registered,
-    rsf_dlss_native12_create_shared as dlss_create_shared,
-    rsf_dlss_native12_destroy as dlss_destroy, rsf_dlss_native12_evaluate as dlss_evaluate,
-    rsf_dlss_native12_evaluate_borrowed as dlss_evaluate_borrowed,
-    rsf_dlss_native12_plan as dlss_plan, rsf_dlss_native12_present as dlss_present,
-    rsf_dlss_native12_set_sdr as dlss_set_sdr,
-};
-pub(super) use crate::input_dump::abi::{
-    rsf_input_dump_begin_record as dump_begin_record,
-    rsf_input_dump_pass_metadata as dump_pass_metadata, rsf_input_dump_result as dump_result,
-    rsf_input_dump_sr_frame as dump_sr_frame,
-};
-pub(super) use crate::sr_session::{
-    rsf_sr_session_create as session_create, rsf_sr_session_destroy as session_destroy,
-    rsf_sr_session_evaluate as session_evaluate, rsf_sr_session_get_status as session_get_status,
-    rsf_sr_session_select as session_select,
-};
 pub(super) use crate::d3d12_host::pass_depth_domains as depth_domains;
 pub(super) use crate::d3d12_host::rsf_core_d3d12_create_uav_texture as create_texture;
 pub(super) use crate::d3d12_host::rsf_core_d3d12_transition as transition;
@@ -69,9 +50,28 @@ pub(super) use crate::d3d12_host::sr::{
 pub(super) use crate::d3d12_sharpening::{
     create_host as sharpen_create, destroy_host as sharpen_destroy, run_host as sharpen_run,
 };
+pub(super) use crate::dlss_native12::exports::{
+    rsf_dlss_native12_create as dlss_create,
+    rsf_dlss_native12_create_registered as dlss_create_registered,
+    rsf_dlss_native12_create_shared as dlss_create_shared,
+    rsf_dlss_native12_destroy as dlss_destroy, rsf_dlss_native12_evaluate as dlss_evaluate,
+    rsf_dlss_native12_evaluate_borrowed as dlss_evaluate_borrowed,
+    rsf_dlss_native12_plan as dlss_plan, rsf_dlss_native12_present as dlss_present,
+    rsf_dlss_native12_set_sdr as dlss_set_sdr,
+};
 pub(super) use crate::fg12::handoff_inputs as fg_handoff;
 pub(super) use crate::frame_capture12::native::{
     rsf_fg12_platform_map as map, rsf_fg12_platform_unmap as unmap,
+};
+pub(super) use crate::input_dump::abi::{
+    rsf_input_dump_begin_record as dump_begin_record,
+    rsf_input_dump_pass_metadata as dump_pass_metadata, rsf_input_dump_result as dump_result,
+    rsf_input_dump_sr_frame as dump_sr_frame,
+};
+pub(super) use crate::sr_session::{
+    rsf_sr_session_create as session_create, rsf_sr_session_destroy as session_destroy,
+    rsf_sr_session_evaluate as session_evaluate, rsf_sr_session_get_status as session_get_status,
+    rsf_sr_session_select as session_select,
 };
 pub(super) unsafe extern "C" fn write_exposure_upload(resource: Handle, value: f32) -> i32 {
     let upload: &ID3D12Resource = unsafe { borrow(&resource) };

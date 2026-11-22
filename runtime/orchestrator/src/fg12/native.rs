@@ -7,10 +7,9 @@ use std::sync::atomic::AtomicPtr;
 // The linked native calls `native!` reaches by name. Unit tests do not build this module.
 pub(super) use crate::d3d11_present::{
     rsf_d3d11_present_backend as present_backend,
-    rsf_d3d11_present_generation as present_generation,
-    rsf_d3d11_present_has_owner as has_owner, rsf_d3d11_present_is_owner as is_owner,
-    rsf_d3d11_present_provider as present_provider, rsf_d3d11_present_queue as present_queue,
-    rsf_d3d11_present_retire as present_retire,
+    rsf_d3d11_present_generation as present_generation, rsf_d3d11_present_has_owner as has_owner,
+    rsf_d3d11_present_is_owner as is_owner, rsf_d3d11_present_provider as present_provider,
+    rsf_d3d11_present_queue as present_queue, rsf_d3d11_present_retire as present_retire,
     rsf_d3d11_present_source_queue as source_queue,
 };
 pub(super) use crate::d3d12_host::fg::{
@@ -38,8 +37,8 @@ use crate::native_fg_cpu::platform::rsf_native_latency_ping;
 pub(super) use crate::native_fg_cpu::platform::{
     rsf_native_fg_cpu as fg_cpu, rsf_native_latency_end_session as latency_end_session,
     rsf_native_latency_frame_get as latency_frame_get,
-    rsf_native_latency_graphics as latency_graphics,
-    rsf_native_latency_present as latency_present, rsf_native_latency_render as latency_render,
+    rsf_native_latency_graphics as latency_graphics, rsf_native_latency_present as latency_present,
+    rsf_native_latency_render as latency_render,
     rsf_native_latency_status_get as latency_status_get,
 };
 

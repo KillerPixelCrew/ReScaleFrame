@@ -252,9 +252,7 @@ pub(super) unsafe extern "C" fn drain(queue: Handle) -> u64 {
     }
     let result = unsafe { queue.Signal(&fence, SUBMITTED) }.map_or_else(
         |error| error.code().0,
-        |()| unsafe {
-            wait_fence(fence.as_raw(), SUBMITTED, event, 15_000)
-        },
+        |()| unsafe { wait_fence(fence.as_raw(), SUBMITTED, event, 15_000) },
     );
     unsafe { CloseHandle(event) };
     if result == DXGI_ERROR_DEVICE_REMOVED.0 {

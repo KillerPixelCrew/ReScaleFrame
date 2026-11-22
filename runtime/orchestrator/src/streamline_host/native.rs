@@ -29,8 +29,8 @@ use windows::Win32::Graphics::Direct3D12::{
     D3D12CreateDevice, ID3D12CommandQueue, ID3D12Device, ID3D12Fence,
 };
 use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, IDXGIAdapter,
-    IDXGIFactory2, IDXGIOutput, IDXGISwapChain1, IDXGISwapChain4,
+    CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, IDXGIAdapter, IDXGIFactory2, IDXGIOutput,
+    IDXGISwapChain1, IDXGISwapChain4,
 };
 use windows::core::{IUnknown, Interface};
 use windows_sys::Win32::Foundation::CloseHandle;
@@ -153,7 +153,6 @@ impl Native {
 unsafe fn native<'a>(native: Handle) -> &'a mut Native {
     unsafe { &mut *native.cast::<Native>() }
 }
-
 
 unsafe extern "C" fn message(kind: u32, text: *const c_char) {
     let important = kind == sdk::LOG_ERROR || kind == sdk::LOG_WARN;
@@ -1002,7 +1001,10 @@ fn raw<T: Interface>(object: &Option<T>) -> Handle {
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_streamline_host_graphics(host: *mut Host, out: *mut Graphics) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_streamline_host_graphics(
+    host: *mut Host,
+    out: *mut Graphics,
+) -> i32 {
     if host.is_null() || !unsafe { has_capacity(out) } {
         return INVALID;
     }
@@ -1044,14 +1046,8 @@ pub(crate) unsafe fn drain(host: *mut Host) -> i32 {
         return FEATURE_FAILED;
     }
     let ready = unsafe { queue.Signal(&fence, 1) }.is_ok()
-        && unsafe {
-            crate::d3d12_fence::wait_fence(
-                fence.as_raw(),
-                1,
-                event,
-                DRAIN_TIMEOUT_MS,
-            )
-        } >= 0;
+        && unsafe { crate::d3d12_fence::wait_fence(fence.as_raw(), 1, event, DRAIN_TIMEOUT_MS) }
+            >= 0;
     unsafe { CloseHandle(event) };
     if ready { OK } else { FEATURE_FAILED }
 }
@@ -1162,7 +1158,11 @@ pub(crate) unsafe extern "C" fn rsf_streamline_host_input(
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_streamline_host_reflex(host: *mut Host, mode: u32, limit: u32) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_streamline_host_reflex(
+    host: *mut Host,
+    mode: u32,
+    limit: u32,
+) -> i32 {
     unsafe { rsf_core_slhost_reflex(host, mode, limit, &PLATFORM) }
 }
 
@@ -1186,7 +1186,10 @@ unsafe extern "C" fn rsf_streamline_host_upgrade_chain(host: *mut Host, chain: *
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_streamline_host_generation_load(host: *mut Host, enabled: u32) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_streamline_host_generation_load(
+    host: *mut Host,
+    enabled: u32,
+) -> i32 {
     unsafe { rsf_core_slhost_generation_load(host, enabled, &PLATFORM) }
 }
 

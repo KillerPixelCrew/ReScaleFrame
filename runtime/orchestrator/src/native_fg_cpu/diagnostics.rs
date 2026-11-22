@@ -123,13 +123,7 @@ struct Timing {
     peak: [f64; 8],
 }
 
-pub(crate) fn report_timing(
-    cpu: &Facts,
-    owner: &Frame,
-    screen: u32,
-    wait: u64,
-    evaluate: u64,
-) {
+pub(crate) fn report_timing(cpu: &Facts, owner: &Frame, screen: u32, wait: u64, evaluate: u64) {
     if owner.marker_failed
         || cpu.qpc_frequency == 0
         || owner.ready_qpc == 0

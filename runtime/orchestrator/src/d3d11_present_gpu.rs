@@ -177,7 +177,6 @@ unsafe fn queue_wait(queue: Raw, fence: Raw, value: u64) -> i32 {
     unsafe { (bound.vtable().Wait)(queue, fence, value) }.0
 }
 
-
 unsafe extern "C" fn arm(fence: Raw, value: u64, event: Raw) -> i32 {
     let bound = unsafe { borrow::<ID3D12Fence>(&fence) };
     unsafe { (bound.vtable().SetEventOnCompletion)(fence, value, HANDLE(event)) }.0

@@ -55,15 +55,6 @@ mod velocity_renderer;
 #[cfg(all(windows, feature = "warp-fixture"))]
 #[path = "../../../tests/ac7_velocity_shader_fixture.rs"]
 mod velocity_shader_fixture;
-#[cfg(feature = "view-fixtures")]
-#[path = "../../../tests/ac7_session.rs"]
-mod view_fixture_session;
-#[cfg(feature = "view-fixtures")]
-#[path = "../../../tests/ac7_view_probe.rs"]
-mod view_fixture_probe;
-#[cfg(all(windows, feature = "warp-fixture"))]
-#[path = "../../../tests/ac7_view_fixture.rs"]
-mod view_fixture_graph;
 #[cfg(any(windows, test))]
 mod velocity_stage;
 mod velocity_stream;
@@ -74,6 +65,15 @@ mod velocity_tokens;
 #[cfg(windows)]
 mod velocity_vertex;
 pub mod view;
+#[cfg(all(windows, feature = "warp-fixture"))]
+#[path = "../../../tests/ac7_view_fixture.rs"]
+mod view_fixture_graph;
+#[cfg(feature = "view-fixtures")]
+#[path = "../../../tests/ac7_view_probe.rs"]
+mod view_fixture_probe;
+#[cfg(feature = "view-fixtures")]
+#[path = "../../../tests/ac7_session.rs"]
+mod view_fixture_session;
 
 pub const AMD64: u16 = 0x8664;
 // The only recognized build. Every RVA and expected byte in sites.rs and in the plugin's

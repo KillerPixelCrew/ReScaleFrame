@@ -28,22 +28,18 @@ pub(super) unsafe fn load_provider(
     *out = module.0;
     // Each optional export uses its SDK signature on Windows x64.
     unsafe {
-        *create = core::mem::transmute::<FARPROC, PfnFfxCreateContext>(provider_module::module_export(
-            module,
-            c"ffxCreateContext",
-        ));
-        *destroy = core::mem::transmute::<FARPROC, PfnFfxDestroyContext>(provider_module::module_export(
-            module,
-            c"ffxDestroyContext",
-        ));
-        *configure = core::mem::transmute::<FARPROC, PfnFfxConfigure>(provider_module::module_export(
-            module,
-            c"ffxConfigure",
-        ));
-        *dispatch = core::mem::transmute::<FARPROC, PfnFfxDispatch>(provider_module::module_export(
-            module,
-            c"ffxDispatch",
-        ));
+        *create = core::mem::transmute::<FARPROC, PfnFfxCreateContext>(
+            provider_module::module_export(module, c"ffxCreateContext"),
+        );
+        *destroy = core::mem::transmute::<FARPROC, PfnFfxDestroyContext>(
+            provider_module::module_export(module, c"ffxDestroyContext"),
+        );
+        *configure = core::mem::transmute::<FARPROC, PfnFfxConfigure>(
+            provider_module::module_export(module, c"ffxConfigure"),
+        );
+        *dispatch = core::mem::transmute::<FARPROC, PfnFfxDispatch>(
+            provider_module::module_export(module, c"ffxDispatch"),
+        );
         *query = core::mem::transmute::<FARPROC, PfnFfxQuery>(provider_module::module_export(
             module,
             c"ffxQuery",
@@ -90,10 +86,7 @@ const FG_PREPARE_V2: u32 = 0x2000c;
 const FG_VERSION: u32 = 0x2000e;
 const SWAPCHAIN_WAIT_PRESENTS: u32 = 0x30007;
 
-pub(super) unsafe fn sdk_wait_presents(
-    dispatch: PfnFfxDispatch,
-    context: *mut ffxContext,
-) -> i32 {
+pub(super) unsafe fn sdk_wait_presents(dispatch: PfnFfxDispatch, context: *mut ffxContext) -> i32 {
     let Some(dispatch) = dispatch else {
         return INVALID;
     };
@@ -399,9 +392,7 @@ mod tests {
             MODE.set(mode);
             let mut versions = [Version::default(); MAX_VERSIONS];
             let mut count = MAX_VERSIONS as u64;
-            let code = unsafe {
-                sdk_versions(query, device, versions.as_mut_ptr(), &mut count)
-            };
+            let code = unsafe { sdk_versions(query, device, versions.as_mut_ptr(), &mut count) };
             if code != 0 {
                 return Err(code);
             }

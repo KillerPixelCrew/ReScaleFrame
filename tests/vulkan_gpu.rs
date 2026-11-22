@@ -99,7 +99,9 @@ pub(super) fn allocate(
         .iter()
         .take(memory.memory_type_count as usize)
         .enumerate()
-        .position(|(i, ty)| req.memory_type_bits & (1 << i) != 0 && ty.property_flags.contains(flags))
+        .position(|(i, ty)| {
+            req.memory_type_bits & (1 << i) != 0 && ty.property_flags.contains(flags)
+        })
         .ok_or("Vulkan memory type")? as u32;
     let info = vk::MemoryAllocateInfo::default()
         .allocation_size(req.size)

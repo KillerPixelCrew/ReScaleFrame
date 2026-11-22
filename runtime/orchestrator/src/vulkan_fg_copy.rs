@@ -81,7 +81,8 @@ const TRANSFER_DST: u32 = vk::ImageLayout::TRANSFER_DST_OPTIMAL.as_raw() as u32;
 pub(super) const FAMILY_IGNORED: u32 = vk::QUEUE_FAMILY_IGNORED;
 pub(super) const FAMILY_EXTERNAL: u32 = vk::QUEUE_FAMILY_EXTERNAL;
 // VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT.
-pub(super) const MEMORY_ACCESS: u32 = (vk::AccessFlags::MEMORY_READ.as_raw() | vk::AccessFlags::MEMORY_WRITE.as_raw());
+pub(super) const MEMORY_ACCESS: u32 =
+    (vk::AccessFlags::MEMORY_READ.as_raw() | vk::AccessFlags::MEMORY_WRITE.as_raw());
 pub(super) const ALL_COMMANDS: u32 = 0x1_0000;
 
 type Handle = *mut c_void;

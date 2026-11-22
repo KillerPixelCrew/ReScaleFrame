@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-use ash::vk;
 use crate::ffx_version::{self, MAX_VERSIONS, Version};
 use crate::sdk_module::{FFX_CONTEXT_EXPORTS, FIDELITYFX_DLL, Loader, SdkModule};
 use crate::sharpening_policy;
@@ -13,6 +12,7 @@ use crate::vulkan_fg_resources::{
     MemoryChoice, ensure_image_with_memory, rsf_core_vkfg_release_image,
 };
 use crate::vulkan_sr_split::normalize_frame;
+use ash::vk;
 use rsf_game_sys::backend_result::{
     ABI_MISMATCH, INIT_FAILED, INVALID_ARGUMENT, MISSING_ENTRY_POINT, NOT_COMPILED, NOT_READY,
     NOT_SUPPORTED, WRONG_API,

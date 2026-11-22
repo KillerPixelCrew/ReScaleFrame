@@ -8,9 +8,7 @@ use crate::shared_surface::{
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
 use std::ptr::{null, null_mut};
-use windows::Win32::{
-    Graphics::{Direct3D11::*, Direct3D12::*, Dxgi::Common::*},
-};
+use windows::Win32::Graphics::{Direct3D11::*, Direct3D12::*, Dxgi::Common::*};
 use windows::core::IUnknown;
 use windows::core::{HRESULT, Interface};
 use windows_sys::Win32::{Foundation::CloseHandle, System::Threading::CreateEventW};

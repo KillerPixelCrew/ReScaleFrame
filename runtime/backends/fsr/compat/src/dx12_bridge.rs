@@ -85,10 +85,7 @@ pub unsafe fn create_shared_fence(
     )
 }
 
-pub unsafe fn reset_commands(
-    list: &ID3D12GraphicsCommandList,
-    allocator: Handle,
-) -> Result<()> {
+pub unsafe fn reset_commands(list: &ID3D12GraphicsCommandList, allocator: Handle) -> Result<()> {
     let allocator: &ID3D12CommandAllocator = unsafe { borrow(&allocator) };
     unsafe { allocator.Reset()? };
     unsafe { list.Reset(allocator, None) }

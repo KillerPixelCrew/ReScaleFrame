@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 use crate::sys::rsf_fgvk_setup;
-use crate::sys::{rsf_vk_function, rsf_vk_get_proc};
 use crate::sys::rsf_vk_wsi_call;
+use crate::sys::{rsf_vk_function, rsf_vk_get_proc};
 
 /// A Streamline scope that runs a borrowed WSI callback (rsf-streamline-vk's bridge exports).
 pub type WsiScope = Option<unsafe extern "C" fn(rsf_vk_wsi_call, *mut c_void) -> i32>;
 /// Streamline's present that also carries the frame token.
-pub type SynchronizedPresent = Option<unsafe extern "C" fn(usize, *mut c_void, *const c_void) -> i32>;
+pub type SynchronizedPresent =
+    Option<unsafe extern "C" fn(usize, *mut c_void, *const c_void) -> i32>;
 use crate::vulkan_dispatch::promoted_device_proc_alias;
 use crate::vulkan_timing::{timing_begin, timing_end};
 use ash::vk::{self, Handle};

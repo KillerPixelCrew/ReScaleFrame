@@ -24,13 +24,7 @@ pub fn state() -> State {
     }
 }
 
-pub fn pack(
-    count: Option<u32>,
-    width: u32,
-    height: u32,
-    format: u32,
-    buffers: u32,
-) -> Packed {
+pub fn pack(count: Option<u32>, width: u32, height: u32, format: u32, buffers: u32) -> Packed {
     Packed {
         base: rsf_slvk_sdk_header {
             next: std::ptr::null_mut(),

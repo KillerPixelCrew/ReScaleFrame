@@ -28,9 +28,8 @@ fn refused_observe(dll: &OsStr, directory: &Path, check_invalid_ini: bool) -> Re
     let entry = module
         .symbol(c"rsf_anomaly_start")
         .ok_or("Anomaly cold-start entry missing")?;
-    let start = unsafe {
-        std::mem::transmute::<unsafe extern "system" fn() -> isize, Entry>(entry)
-    };
+    let start =
+        unsafe { std::mem::transmute::<unsafe extern "system" fn() -> isize, Entry>(entry) };
 
     fs::create_dir_all(directory).map_err(|error| error.to_string())?;
     if check_invalid_ini {

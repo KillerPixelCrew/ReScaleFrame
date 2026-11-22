@@ -9,7 +9,9 @@ use std::ffi::{c_char, c_void};
 use std::ptr;
 
 type Handle = *mut c_void;
-use rsf_game_sys::backend_result::{ABI_MISMATCH, INIT_FAILED, INVALID_ARGUMENT as INVALID, NOT_READY};
+use rsf_game_sys::backend_result::{
+    ABI_MISMATCH, INIT_FAILED, INVALID_ARGUMENT as INVALID, NOT_READY,
+};
 
 mod routes;
 use routes::{Route, Routes};

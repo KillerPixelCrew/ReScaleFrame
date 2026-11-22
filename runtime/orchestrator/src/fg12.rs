@@ -15,16 +15,16 @@ use crate::sys::rsf_native_latency_status;
 use crate::sys::rsf_observer_present_event;
 use crate::sys::{
     RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO, RSF_FG_FIXED, RSF_FG_OFF, RSF_REFLEX_BOOST,
-    RSF_REFLEX_OFF, rsf_backend_log_fn, rsf_backend_resource, rsf_fg_frame,
-    rsf_fg_status, rsf_native_fg_options, rsf_native_fg_status,
+    RSF_REFLEX_OFF, rsf_backend_log_fn, rsf_backend_resource, rsf_fg_frame, rsf_fg_status,
+    rsf_native_fg_options, rsf_native_fg_status,
 };
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_NO_SR, RSF_FRAME_FLAG_RESET,
     RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_FRAME_END,
     RSF_GAME_CPU_INPUT_KEYED, RSF_GAME_CPU_INPUT_SAMPLE, RSF_GAME_CPU_INPUT_SUBSTITUTE,
     RSF_GAME_CPU_PACING, RSF_GAME_CPU_SIMULATION_BEGIN, RSF_GAME_CPU_SIMULATION_END,
-    RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record, rsf_game_cpu_event,
-    rsf_game_latency_event, rsf_game_render_pass,
+    RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record, rsf_game_cpu_event, rsf_game_latency_event,
+    rsf_game_render_pass,
 };
 use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_void};
@@ -1213,8 +1213,7 @@ unsafe fn status_snapshot(output: *mut rsf_native_fg_status, wait: bool) -> i32 
     let mut result = owner.state;
     result.struct_size = size_of::<rsf_native_fg_status>() as u32;
     result.requested = owner.options;
-    result.available =
-        u32::from(native!(has_owner()) != 0 && native!(present_backend()) != 0);
+    result.available = u32::from(native!(has_owner()) != 0 && native!(present_backend()) != 0);
     let generation = owner.generation;
     if generation != native!(present_generation()) {
         result.vendor = unsafe { std::mem::zeroed() };

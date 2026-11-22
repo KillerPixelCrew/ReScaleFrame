@@ -12,9 +12,9 @@ use crate::dxgi_format::{
 use crate::sharpening_policy;
 use crate::sr_session::checked;
 use crate::sync::lock;
+use crate::sys::rsf_sr12_setup as Setup;
 use crate::sys::*;
 use crate::sys::{RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_NONE};
-use crate::sys::rsf_sr12_setup as Setup;
 use rsf_game_sys::backend_result::{
     ABI_MISMATCH, FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, NOT_READY, OK, STALE_RESOURCES,
 };
@@ -1409,7 +1409,13 @@ pub(super) unsafe extern "C" fn rsf_core_sr12_present(
     }
     match owner.native.vendor {
         Vendor::Dlss(context) => unsafe {
-            native::dlss_present(context.as_ptr().cast(), swapchain, sync_interval, flags, begin)
+            native::dlss_present(
+                context.as_ptr().cast(),
+                swapchain,
+                sync_interval,
+                flags,
+                begin,
+            )
         },
         _ => OK,
     }

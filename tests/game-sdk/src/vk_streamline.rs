@@ -249,7 +249,9 @@ unsafe extern "C" fn sdk_invoke(
     token: usize,
     user: *mut c_void,
 ) -> i32 {
-    callback.map_or(FEATURE_FAILED, |callback| unsafe { callback(module, token, user) })
+    callback.map_or(FEATURE_FAILED, |callback| unsafe {
+        callback(module, token, user)
+    })
 }
 
 /// The fake Streamline the latency owner calls in place of rsf-streamline-vk.

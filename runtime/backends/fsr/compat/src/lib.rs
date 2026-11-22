@@ -163,13 +163,15 @@ fn install(module: *mut c_void, diagnostic: &mut Diagnostic) -> Option<Resident>
         .map(|target| (build, target))
     });
     let Some((build, target)) = target else {
-        diagnostic.refusal =
-            Some(c"FSR4 INT8 compatibility refused: SDK binary fingerprint or capability bytes differ");
+        diagnostic.refusal = Some(
+            c"FSR4 INT8 compatibility refused: SDK binary fingerprint or capability bytes differ",
+        );
         return None;
     };
 
     let Some(original) = (unsafe { native::create_hook(target.as_ptr(), capability) }) else {
-        diagnostic.refusal = Some(c"FSR4 INT8 compatibility refused: resident hook creation failed");
+        diagnostic.refusal =
+            Some(c"FSR4 INT8 compatibility refused: resident hook creation failed");
         return None;
     };
     REGISTRATION
@@ -270,8 +272,9 @@ pub unsafe fn acquire_logged(
     let mut diagnostic = Diagnostic::default();
     let lease = match NonNull::new(device) {
         Some(device) if !module.is_null() && !adapter.is_null() => {
-            acquire(module, adapter, device, &mut diagnostic)
-                .map_or(ptr::null(), |lease| Arc::into_raw(lease).cast::<CompatLease>())
+            acquire(module, adapter, device, &mut diagnostic).map_or(ptr::null(), |lease| {
+                Arc::into_raw(lease).cast::<CompatLease>()
+            })
         }
         _ => ptr::null(),
     };

@@ -279,7 +279,11 @@ unsafe fn rsf_latencyvk_shutdown() -> i32 {
     rsf_core_latencyvk_shutdown(platform())
 }
 unsafe fn rsf_slvk_without_dlssg(callback: rsf_vk_wsi_call, user: *mut c_void) -> i32 {
-    let scope = if amd() { None } else { streamline::WITHOUT_DLSS_G };
+    let scope = if amd() {
+        None
+    } else {
+        streamline::WITHOUT_DLSS_G
+    };
     unsafe { rsf_core_slvk_without_dlssg(scope, callback, user) }
 }
 // The Anti-Lag fixture ran the device entries with the Vulkan headers present, the latency

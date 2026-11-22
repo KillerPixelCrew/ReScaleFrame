@@ -31,7 +31,6 @@ const VULKAN_LOADER: u32 = 1 << 0;
 const VULKAN_BUFFER_REQUIREMENTS: u32 = 1 << 1;
 const VULKAN_READY: u32 = VULKAN_LOADER | VULKAN_BUFFER_REQUIREMENTS;
 
-
 /// `VK_ERROR_INITIALIZATION_FAILED`, the swapchain pass-through refusal.
 const VK_ERROR_INITIALIZATION_FAILED: i32 = -3;
 /// Byte offset of `VkSwapchainCreateInfoKHR::oldSwapchain`, asserted natively.
@@ -756,10 +755,7 @@ unsafe fn rsf_core_fsr3_swapchain_present(
 ///
 /// # Safety
 /// `value` is null or a live owner whose `active_fg` is null or live.
-unsafe fn rsf_core_fsr3_swapchain_prepare_destroy(
-    value: *mut Swapchain,
-    chain: Vk,
-) -> i32 {
+unsafe fn rsf_core_fsr3_swapchain_prepare_destroy(value: *mut Swapchain, chain: Vk) -> i32 {
     if chain == 0 {
         return 0;
     }
@@ -784,10 +780,7 @@ unsafe fn rsf_core_fsr3_swapchain_prepare_destroy(
 ///
 /// # Safety
 /// As `rsf_core_fsr3_swapchain_prepare_destroy`.
-unsafe fn rsf_core_fsr3_swapchain_destroy_chain(
-    value: *mut Swapchain,
-    chain: Vk,
-) -> i32 {
+unsafe fn rsf_core_fsr3_swapchain_destroy_chain(value: *mut Swapchain, chain: Vk) -> i32 {
     let prepared = unsafe { rsf_core_fsr3_swapchain_prepare_destroy(value, chain) };
     if prepared != 0 {
         return prepared;
@@ -813,10 +806,7 @@ unsafe fn rsf_core_fsr3_swapchain_destroy_chain(
 ///
 /// # Safety
 /// `value` is null or a live owner.
-unsafe fn rsf_core_fsr3_swapchain_last_present_count(
-    value: *mut Swapchain,
-    chain: Vk,
-) -> u64 {
+unsafe fn rsf_core_fsr3_swapchain_last_present_count(value: *mut Swapchain, chain: Vk) -> u64 {
     if value.is_null() || chain == 0 || unsafe { (*value).cleanup_only } {
         return 0;
     }
@@ -971,10 +961,7 @@ unsafe fn fg_disable(context: *mut FgContext) -> i32 {
 ///
 /// # Safety
 /// As `fg_disable`.
-unsafe fn rsf_core_fsr3_fg_disable(
-    context: *mut FgContext,
-    _swapchain: *mut Swapchain,
-) -> i32 {
+unsafe fn rsf_core_fsr3_fg_disable(context: *mut FgContext, _swapchain: *mut Swapchain) -> i32 {
     unsafe { fg_disable(context) }
 }
 
@@ -989,10 +976,7 @@ unsafe fn rsf_core_fsr3_fg_disable(
 /// # Safety
 /// `context` is null or a live owner; `frame` is null or a readable 248-byte
 /// record whose `swapchain_context` is null or a live swapchain owner.
-unsafe fn rsf_core_fsr3_fg_evaluate(
-    context: *mut FgContext,
-    frame: *const FgFrame,
-) -> i32 {
+unsafe fn rsf_core_fsr3_fg_evaluate(context: *mut FgContext, frame: *const FgFrame) -> i32 {
     let Some(record) = (unsafe { frame.as_ref() }) else {
         return -1;
     };
@@ -1056,10 +1040,7 @@ unsafe fn rsf_core_fsr3_fg_evaluate(
 ///
 /// # Safety
 /// As `rsf_core_fsr3_fg_evaluate`.
-unsafe fn rsf_core_fsr3_fg_evaluate_direct(
-    context: *mut FgContext,
-    frame: *const FgFrame,
-) -> i32 {
+unsafe fn rsf_core_fsr3_fg_evaluate_direct(context: *mut FgContext, frame: *const FgFrame) -> i32 {
     match unsafe { frame.as_ref() } {
         Some(record) if record.swapchain_context.is_null() => unsafe {
             rsf_core_fsr3_fg_evaluate(context, frame)

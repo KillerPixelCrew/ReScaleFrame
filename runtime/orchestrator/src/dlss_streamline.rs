@@ -37,7 +37,6 @@ const OPTIMAL: u32 = 1;
 const OPTIONS: u32 = 2;
 const LEGACY_SR_LOG: u32 = 0;
 
-
 fn say(text: &str) {
     if let Ok(text) = CString::new(text) {
         unsafe { streamline_log::emit(LEGACY_SR_LOG, true, text.as_ptr()) };

@@ -19,10 +19,10 @@ pub(super) use super::window::{
     rsf_gl_window_create as window_create, rsf_gl_window_destroy as window_destroy,
 };
 pub(super) use crate::d3d11_present::{
-    rsf_d3d11_present_backend as present_backend,
+    rsf_d3d11_present_abort as present_abort, rsf_d3d11_present_backend as present_backend,
     rsf_d3d11_present_backend_choices as present_backend_choices,
-    rsf_d3d11_present_abort as present_abort, rsf_d3d11_present_host as present_host,
-    rsf_d3d11_present_is_owner as present_is_owner, rsf_d3d11_present_request as present_request,
+    rsf_d3d11_present_host as present_host, rsf_d3d11_present_is_owner as present_is_owner,
+    rsf_d3d11_present_request as present_request,
     rsf_d3d11_present_switch_result as present_switch_result,
 };
 pub(super) use crate::fg_choice::rsf_fg_default_backend as fg_default_backend;
