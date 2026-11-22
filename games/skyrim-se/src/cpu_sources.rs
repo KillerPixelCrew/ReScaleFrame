@@ -144,6 +144,7 @@ struct PollTicket {
 }
 
 struct InputEpochs {
+    publication: Mutex<()>,
     next: AtomicU64,
     revision: AtomicU64,
     completed: AtomicU64,
@@ -155,6 +156,7 @@ struct InputEpochs {
 impl InputEpochs {
     const fn new() -> Self {
         Self {
+            publication: Mutex::new(()),
             next: AtomicU64::new(1),
             revision: AtomicU64::new(0),
             completed: AtomicU64::new(0),
@@ -165,6 +167,10 @@ impl InputEpochs {
     }
 
     fn begin_poll(&self) -> PollTicket {
+        let _guard = self
+            .publication
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         self.begin_write();
         let conflicts = self.conflicts.load(SeqCst);
         let exclusive = self.polls.fetch_add(1, SeqCst) == 0;
@@ -179,6 +185,10 @@ impl InputEpochs {
     }
 
     fn end_poll(&self, poll: PollTicket, produced: bool) {
+        let _guard = self
+            .publication
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let completed =
             if produced && poll.exclusive && poll.conflicts == self.conflicts.load(SeqCst) {
                 poll.generation
@@ -191,6 +201,10 @@ impl InputEpochs {
     }
 
     fn owns_poll(&self, poll: PollTicket) -> bool {
+        let _guard = self
+            .publication
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         poll.generation != 0
             && poll.exclusive
             && self.polls.load(SeqCst) == 1
@@ -198,6 +212,10 @@ impl InputEpochs {
     }
 
     fn invalidate(&self) {
+        let _guard = self
+            .publication
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         self.begin_write();
         self.conflicts.fetch_add(1, SeqCst);
         self.completed.store(0, SeqCst);
@@ -843,4 +861,31 @@ extern "C" fn rsf_skyrim_bind_refusal(
         BindRefusal::None
     };
     reason as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_completed_overlap_invalidates_the_first_poll() {
+        let epochs = InputEpochs::new();
+        let first = epochs.begin_poll();
+        std::thread::scope(|threads| {
+            threads
+                .spawn(|| {
+                    let overlap = epochs.begin_poll();
+                    assert!(!epochs.owns_poll(overlap));
+                    epochs.end_poll(overlap, true);
+                })
+                .join()
+                .unwrap();
+        });
+        epochs.end_poll(first, true);
+        assert_eq!(epochs.snapshot().generation, 0);
+
+        let next = epochs.begin_poll();
+        epochs.end_poll(next, true);
+        assert_eq!(epochs.snapshot().generation, next.generation);
+    }
 }

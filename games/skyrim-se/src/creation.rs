@@ -164,11 +164,9 @@ fn guard(platform: &Platform) -> Result<usize, &'static CStr> {
 
 /// The game's renderer owner is absent or has no device yet.
 fn cold(platform: &Platform) -> bool {
-    match platform.read_usize(platform.main_module().wrapping_add(OWNER)) {
-        Some(0) => true,
-        Some(owner) => platform.read_usize(owner.wrapping_add(OWNER_DEVICE)) == Some(0),
-        None => false,
-    }
+    before_device(platform.main_module(), |address| {
+        platform.read_usize(address)
+    }) == Some(true)
 }
 
 /// Cold-owner callback for the Steam facade, which may call it again on a later prepare.

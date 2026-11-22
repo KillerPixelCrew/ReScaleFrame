@@ -259,13 +259,16 @@ unsafe extern "C" fn rsf_skyrim_cs_resolved(
     }
     // This may run in a loader callout. Publish scalars only and keep all effects outside the lock.
     let mut state = state();
-    if state.phase != Phase::Armed {
-        return result;
+    if state.phase == Phase::Armed {
+        state.module = module;
+        state.original = result;
+        state.phase = Phase::Captured;
     }
-    state.module = module;
-    state.original = result;
-    state.phase = Phase::Captured;
-    leaves.initialize_detour
+    if state.module == module && state.original == result {
+        leaves.initialize_detour
+    } else {
+        result
+    }
 }
 
 fn call_initializer(leaves: &Leaves, original: usize, skse: *const c_void) -> bool {
@@ -293,7 +296,11 @@ fn retain_original(
 
 fn initialize(platform: &Platform, leaves: &Leaves, skse: *const c_void) -> bool {
     let (module, original, callout) = {
-        let state = state();
+        let mut state = state();
+        if state.phase != Phase::Captured {
+            return false;
+        }
+        state.phase = Phase::Initializing;
         (state.module, state.original, state.callout)
     };
     if callout == 0 || unsafe { (leaves.loader_callout)(callout) } {
@@ -315,18 +322,6 @@ fn initialize(platform: &Platform, leaves: &Leaves, skse: *const c_void) -> bool
         );
         return false;
     };
-    {
-        let mut state = state();
-        if state.phase != Phase::Captured {
-            drop(state);
-            refuse(
-                c"CS handover refused: initializer reentry or uncertain prior initialization.",
-                true,
-            );
-            return false;
-        }
-        state.phase = Phase::Initializing;
-    }
     let mut path = [0; PATH_LIMIT];
     let length = module_path(leaves, module, &mut path);
     if module.checked_add(INITIALIZE) != Some(original)

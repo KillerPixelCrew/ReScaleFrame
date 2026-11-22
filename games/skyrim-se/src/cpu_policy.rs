@@ -28,8 +28,7 @@ const UI_NAMES: usize = 0x21a_05c8;
 const PLAYER: usize = 0x323_0778;
 const MANAGER: usize = 0x322_0a90;
 const CAMERA_ROOT: usize = 0x323_0740;
-const NATIVE_FRAME: usize = 0x333_63f4;
-const ACTIVE_WINDOW: usize = 0x333_0198;
+use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
 const MENU_OPEN: usize = 0x116_9530;
 const FROZEN_BACKGROUND: usize = 0x116_9590;
 const LOADING_NAME_OFFSET: usize = 0xe8;
@@ -275,11 +274,23 @@ extern "C" fn rsf_skyrim_cpu_screen(
     rsf_skyrim_classify_screen(&facts)
 }
 
+#[repr(C)]
+#[derive(Default)]
+struct RenderReceipt {
+    scope: u64,
+    screen: rsf_screen_class,
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn rsf_skyrim_cpu_begin_render(
     state: &mut RenderState,
     screen: rsf_screen_class,
+    previous: &mut RenderReceipt,
 ) -> bool {
+    *previous = RenderReceipt {
+        scope: state.scope,
+        screen: state.screen,
+    };
     state.screen = screen;
     state.scope = NEXT_RENDER_SCOPE.fetch_add(1, Ordering::SeqCst);
     state.render_entered = true;
@@ -287,8 +298,9 @@ extern "C" fn rsf_skyrim_cpu_begin_render(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_end_render(state: &mut RenderState, previous_scope: u64) {
-    state.scope = previous_scope;
+extern "C" fn rsf_skyrim_cpu_end_render(state: &mut RenderState, previous: &RenderReceipt) {
+    state.scope = previous.scope;
+    state.screen = previous.screen;
 }
 
 #[unsafe(no_mangle)]

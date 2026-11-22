@@ -21,11 +21,12 @@ void check_render_scope() {
     rsf_skyrim_cpu_render_state state{};
     rsf_game_render_pass pass{};
     rsf_game_cpu_event event{};
+    rsf_skyrim_cpu_render_receipt outer{}, nested{};
     rsf_skyrim_cpu_frame_event(&event, &state, RSF_GAME_CPU_FRAME_END, session, source, 20, 50);
     check(event.flags == (RSF_GAME_CPU_INPUT_KEYED | RSF_GAME_CPU_RENDER_SKIPPED) && event.render_expected == 0,
         "skipped render closes the CPU frame without a completed World");
     check(!rsf_skyrim_cpu_render_identity(&state, &pass, source, true), "identity requires RenderEntry");
-    check(rsf_skyrim_cpu_begin_render(&state, RSF_SCREEN_UNKNOWN), "first RenderEntry closes simulation");
+    check(rsf_skyrim_cpu_begin_render(&state, RSF_SCREEN_UNKNOWN, &outer), "first RenderEntry closes simulation");
     const auto scope = state.scope;
     check(rsf_skyrim_cpu_render_identity(&state, &pass, source, true) && scope && pass.scope_id == scope &&
         pass.submission_id == scope && pass.source_frame_id == source && (pass.flags & RSF_GAME_RENDER_NO_FG),
@@ -48,12 +49,12 @@ void check_render_scope() {
     check(rsf_skyrim_cpu_render_identity(&state, &pass, source, true) && (pass.flags & RSF_GAME_RENDER_NO_FG) &&
         pass.screen == RSF_SCREEN_UNKNOWN, "duplicate World withdraws gameplay admission");
     rsf_skyrim_cpu_end_world(&state);
-    check(!rsf_skyrim_cpu_begin_render(&state, RSF_SCREEN_UNKNOWN) && state.scope != scope,
+    check(!rsf_skyrim_cpu_begin_render(&state, RSF_SCREEN_LOADING, &nested) && state.scope != scope,
         "nested RenderEntry starts a distinct scope without repeating simulation end");
-    rsf_skyrim_cpu_end_render(&state, scope);
-    check(rsf_skyrim_cpu_render_identity(&state, &pass, source, true) && pass.scope_id == scope,
-        "leaving a nested RenderEntry restores its enclosing scope");
-    rsf_skyrim_cpu_end_render(&state, 0);
+    rsf_skyrim_cpu_end_render(&state, &nested);
+    check(rsf_skyrim_cpu_render_identity(&state, &pass, source, true) && pass.scope_id == scope &&
+        pass.screen == RSF_SCREEN_UNKNOWN, "leaving a nested RenderEntry restores its enclosing scope and screen");
+    rsf_skyrim_cpu_end_render(&state, &outer);
     check(!rsf_skyrim_cpu_render_identity(&state, &pass, source, true), "closed render has no live identity");
     rsf_skyrim_cpu_frame_event(&event, &state, RSF_GAME_CPU_FRAME_END, session, source, 30, 50);
     check(event.render_expected == 2 && event.flags == RSF_GAME_CPU_INPUT_KEYED && event.session_id == session &&

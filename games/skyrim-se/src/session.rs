@@ -29,12 +29,13 @@ const NOT_READY: rsf_result = -3;
 const BUSY: rsf_result = -4;
 const NATIVE_REFUSED: rsf_result = -5;
 
-const LEAVES_VERSION: u32 = 1;
+const LEAVES_VERSION: u32 = 2;
 // Native subsystem operations, RSF_SKYRIM_* in session_platform.h.
 const ADMIT_OBSERVERS: u32 = 0;
 const OBSERVERS_BUSY: u32 = 1;
 const RESET_OBSERVATIONS: u32 = 2;
 const CPU_PREPARE: u32 = 3;
+const CPU_BIND: u32 = 19;
 const CPU_START: u32 = 4;
 const CPU_QUIESCE: u32 = 5;
 const CPU_DISABLE: u32 = 6;
@@ -239,11 +240,15 @@ impl Leaves {
         }
     }
 
-    fn set_active(&self, activate: usize, user: *mut c_void, active: u32) -> Result<(), Threw> {
+    fn set_active(
+        &self,
+        activate: usize,
+        user: *mut c_void,
+        active: u32,
+    ) -> Result<rsf_result, Threw> {
         let mut result = NOT_READY;
-        // The activation result was never consumed by the lifecycle.
         if unsafe { (self.host_set_active)(activate, user, active, &mut result) } {
-            Ok(())
+            Ok(result)
         } else {
             Err(Threw)
         }
@@ -372,16 +377,13 @@ impl Stage {
         }
     }
 
-    /// Rollback of a started stage, or of one whose start threw. Returns false when it threw.
+    /// A stage retires only when it acknowledges cleanup.
     fn retire(self, leaves: &Leaves) -> bool {
         match self {
-            Self::Sampling => leaves.check(SAMPLING_STOP).is_ok(),
-            Self::Presentation => leaves.check(PRESENTATION_STOP).is_ok(),
-            Self::Cpu => leaves.check(CPU_DISABLE).is_ok(),
-            Self::Creation => {
-                let _ = creation::stop();
-                true
-            }
+            Self::Sampling => matches!(leaves.check(SAMPLING_STOP), Ok(true)),
+            Self::Presentation => matches!(leaves.check(PRESENTATION_STOP), Ok(true)),
+            Self::Cpu => matches!(leaves.check(CPU_DISABLE), Ok(true)),
+            Self::Creation => creation::stop(),
         }
     }
 
@@ -405,6 +407,7 @@ struct Session {
     prepared: bool,
     // The observers and every stage are enabled; accepting is separate.
     enabled: bool,
+    retirement_pending: bool,
     dpi_requested: bool,
     // Borrowed by the detours through the lease while accepting, and by the renderer-end
     // detour as retained.
@@ -428,6 +431,7 @@ impl Session {
         Self {
             prepared: false,
             enabled: false,
+            retirement_pending: false,
             dpi_requested: false,
             services: empty_services(),
             bound_services: empty_services(),
@@ -439,11 +443,12 @@ impl Session {
         }
     }
 
-    fn suspend_host(&self, leaves: &Leaves) -> Result<(), Threw> {
-        if self.activate != 0 {
-            leaves.set_active(self.activate, self.services.user, 0)?;
+    fn suspend_host(&self, leaves: &Leaves) -> Result<rsf_result, Threw> {
+        if self.activate != 0 && !self.bound_services.user.is_null() {
+            leaves.set_active(self.activate, self.bound_services.user, 0)
+        } else {
+            Ok(OK)
         }
-        Ok(())
     }
 
     fn prepare(
@@ -451,7 +456,11 @@ impl Session {
         leaves: &Leaves,
         host: &rsf_game_host_services,
     ) -> Result<rsf_result, Threw> {
-        if self.prepared || leaves.check(OBSERVERS_BUSY)? || leaves.check(CPU_BUSY)? {
+        if self.prepared
+            || self.retirement_pending
+            || leaves.check(OBSERVERS_BUSY)?
+            || leaves.check(CPU_BUSY)?
+        {
             return Ok(BUSY);
         }
         let admitted = leaves.run(ADMIT_OBSERVERS, None)?;
@@ -473,7 +482,7 @@ impl Session {
         if !self.observers.prepare(leaves.observers()) {
             return Ok(NATIVE_REFUSED);
         }
-        if !leaves.check_with(CPU_PREPARE, host)? {
+        if !leaves.check(CPU_PREPARE)? {
             self.reason = CPU_REFUSED.as_ptr();
             return Ok(NATIVE_REFUSED);
         }
@@ -571,7 +580,7 @@ impl Session {
             leaves.log(&services, self.reason)?;
             return Ok(NATIVE_REFUSED);
         }
-        if !leaves.check_with(CPU_PREPARE, &services)? {
+        if !leaves.check_with(CPU_BIND, &services)? {
             return Ok(NATIVE_REFUSED);
         }
         leaves.run(RESET_OBSERVATIONS, None)?;
@@ -594,8 +603,15 @@ impl Session {
             leaves.log(&self.services, self.reason)?;
             return Ok(NATIVE_REFUSED);
         }
+        if self.retirement_pending {
+            return Ok(BUSY);
+        }
         if self.enabled {
-            return Ok(OK);
+            return Ok(if rsf_skyrim_session_accepting() {
+                OK
+            } else {
+                BUSY
+            });
         }
         self.reason = START_IDENTITY.as_ptr();
         let admitted = leaves.run(ADMIT_OBSERVERS, None)?;
@@ -608,7 +624,12 @@ impl Session {
         }
         let services = self.services;
         if !self.observers.start(leaves.observers(), &services) {
-            return Ok(NATIVE_REFUSED);
+            self.retirement_pending = !self.observers.disable(leaves.observers(), true);
+            return Ok(if self.retirement_pending {
+                BUSY
+            } else {
+                NATIVE_REFUSED
+            });
         }
         for (index, stage) in STAGES.into_iter().enumerate() {
             let (started, threw) = match stage.start(leaves, &services) {
@@ -618,43 +639,44 @@ impl Session {
             if started {
                 continue;
             }
-            // Retire in reverse start order. A stage that threw has unknown state and is
-            // retired as well; one that refused is not, as before.
-            let retired_from = if threw { index + 1 } else { index };
+            // Start can refuse after acquiring a subset of its hooks. Retire it too.
             let mut retired = true;
-            for earlier in STAGES[..retired_from].iter().rev() {
+            for earlier in STAGES[..=index].iter().rev() {
                 retired &= earlier.retire(leaves);
             }
-            // Observers whose disable refuses stay recorded for stop.
-            let _ = self.observers.disable(leaves.observers(), true);
-            if threw || !retired {
+            retired &= self.observers.disable(leaves.observers(), true);
+            self.retirement_pending = !retired;
+            if !retired {
+                return Ok(BUSY);
+            }
+            if threw {
                 return Ok(NOT_READY);
             }
             return self.refuse(leaves, stage.refusal());
         }
         self.enabled = true;
-        if self.activate != 0
-            && leaves
-                .set_active(self.activate, self.services.user, 1)
-                .is_err()
-        {
-            // Enabled but never accepting: suspend what started; stop retires the hooks.
-            let _ = self.suspend_host(leaves);
-            let _ = quiesce_subsystems(leaves, false);
-            return Ok(NOT_READY);
+        if self.activate != 0 {
+            let activated = leaves.set_active(self.activate, self.services.user, 1);
+            if !matches!(activated, Ok(OK)) {
+                self.retirement_pending = true;
+                let _ = self.suspend_host(leaves);
+                let _ = quiesce_subsystems(leaves, false);
+                return activated;
+            }
         }
         ACCEPTING.store(true, Ordering::Release);
         // Close a refusal racing start: do not republish a live engine source after the
         // compatibility callback already withdrew it on another thread.
         if !leaves.checkpoint(&mut self.reason, false) {
             ACCEPTING.store(false, Ordering::Release);
-            let suspended = self.suspend_host(leaves).is_ok();
+            let suspended = self.suspend_host(leaves);
             let quiesced = quiesce_subsystems(leaves, false);
-            return Ok(if suspended && quiesced {
-                NATIVE_REFUSED
-            } else {
-                NOT_READY
-            });
+            self.retirement_pending = true;
+            return match suspended {
+                Ok(OK) if quiesced => Ok(NATIVE_REFUSED),
+                Ok(OK) => Ok(NOT_READY),
+                failure => failure,
+            };
         }
         self.reason = ACTIVE.as_ptr();
         Ok(OK)
@@ -664,12 +686,17 @@ impl Session {
     fn quiesce(&mut self, leaves: &Leaves) -> Result<rsf_result, Threw> {
         // A start holding the lock could have published after the public entry cleared it.
         ACCEPTING.store(false, Ordering::Release);
-        let suspended = self.suspend_host(leaves).is_ok();
+        let suspended = self.suspend_host(leaves);
         let quiesced = quiesce_subsystems(leaves, true);
-        if !suspended || !quiesced {
+        let suspended = suspended?;
+        if suspended != OK {
+            return Ok(suspended);
+        }
+        if !quiesced {
             return Err(Threw);
         }
-        let busy = leaves.check(OBSERVERS_BUSY)?
+        let busy = self.retirement_pending
+            || leaves.check(OBSERVERS_BUSY)?
             || leaves.check(CPU_BUSY)?
             || leaves.check(RESOLUTION_OWNED)?
             || leaves.check(AUXILIARIES_PENDING)?
@@ -682,7 +709,11 @@ impl Session {
     /// Each refusal is retryable: a later stop resumes from the first stage that remains.
     fn stop(&mut self, leaves: &Leaves) -> Result<rsf_result, Threw> {
         ACCEPTING.store(false, Ordering::Release);
-        self.suspend_host(leaves)?;
+        self.retirement_pending |= self.prepared;
+        let suspended = self.suspend_host(leaves)?;
+        if suspended != OK {
+            return Ok(suspended);
+        }
         if leaves.check(RESOLUTION_OWNED)? || leaves.check(AUXILIARIES_PENDING)? {
             return Ok(BUSY);
         }
@@ -699,6 +730,7 @@ impl Session {
         }
         self.services = empty_services();
         self.prepared = false;
+        self.retirement_pending = false;
         self.reason = STOPPED.as_ptr();
         Ok(OK)
     }

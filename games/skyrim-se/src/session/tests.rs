@@ -5,6 +5,8 @@ use std::cell::{Cell, RefCell};
 thread_local! {
     static OPERATIONS: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
     static CPU_START_THROWS: Cell<bool> = const { Cell::new(false) };
+    static ROLLBACK: Cell<i32> = const { Cell::new(1) };
+    static ACTIVE_RESULT: Cell<i32> = const { Cell::new(OK) };
     static DISABLED: Cell<u32> = const { Cell::new(0) };
 }
 
@@ -15,6 +17,14 @@ unsafe extern "C" fn subsystem(
 ) -> bool {
     OPERATIONS.with_borrow_mut(|operations| operations.push(operation));
     // Admission and every other stage succeed; the CPU start refuses or throws.
+    if operation == PRESENTATION_STOP {
+        let outcome = ROLLBACK.get();
+        if outcome < 0 {
+            return false;
+        }
+        unsafe { value.write(outcome) };
+        return true;
+    }
     unsafe { value.write(i32::from(operation != CPU_START)) };
     operation != CPU_START || !CPU_START_THROWS.get()
 }
@@ -44,7 +54,8 @@ unsafe extern "C" fn host_create(
     true
 }
 
-unsafe extern "C" fn host_set_active(_: usize, _: *mut c_void, _: u32, _: *mut i32) -> bool {
+unsafe extern "C" fn host_set_active(_: usize, _: *mut c_void, _: u32, result: *mut i32) -> bool {
+    unsafe { result.write(ACTIVE_RESULT.get()) };
     true
 }
 
@@ -109,7 +120,7 @@ fn prepared() -> Session {
 }
 
 #[test]
-fn a_refused_stage_retires_only_the_earlier_stages() {
+fn a_refused_stage_and_its_predecessors_retire() {
     CPU_START_THROWS.set(false);
     let leaves = leaves();
     let mut session = prepared();
@@ -121,6 +132,7 @@ fn a_refused_stage_retires_only_the_earlier_stages() {
             SAMPLING_START,
             PRESENTATION_START,
             CPU_START,
+            CPU_DISABLE,
             PRESENTATION_STOP,
             SAMPLING_STOP,
         ]
@@ -163,4 +175,33 @@ fn quiesce_withdraws_a_start_that_published_while_it_waited() {
     ACCEPTING.store(true, Ordering::Release);
     assert!(matches!(session.quiesce(&leaves), Ok(BUSY)));
     assert!(!ACCEPTING.load(Ordering::Acquire));
+}
+
+#[test]
+fn refused_and_throwing_rollback_both_leave_stop_owed() {
+    for outcome in [0, -1] {
+        ROLLBACK.set(outcome);
+        let leaves = leaves();
+        let mut session = prepared();
+        assert!(matches!(session.start(&leaves), Ok(BUSY)));
+        assert!(session.retirement_pending);
+        OPERATIONS.take();
+        assert!(matches!(session.start(&leaves), Ok(BUSY)));
+        assert!(OPERATIONS.take().is_empty());
+    }
+    ROLLBACK.set(1);
+}
+
+#[test]
+fn runtime_deactivation_refusal_survives_the_native_call() {
+    let leaves = leaves();
+    let mut session = prepared();
+    ACTIVE_RESULT.set(INVALID_ARGUMENT);
+    session.activate = 1;
+    session.bound_services.user = ptr::dangling_mut();
+    assert!(matches!(
+        session.suspend_host(&leaves),
+        Ok(INVALID_ARGUMENT)
+    ));
+    ACTIVE_RESULT.set(OK);
 }

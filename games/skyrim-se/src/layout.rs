@@ -25,6 +25,21 @@ pub(crate) const OWNER_CONTEXT: usize = 64;
 pub(crate) const OWNER_WINDOW: usize = 72;
 pub(crate) const OWNER_SWAPCHAIN: usize = 96;
 
+pub(crate) const NATIVE_FRAME: usize = 0x333_63f4;
+pub(crate) const ACTIVE_WINDOW: usize = 0x333_0198;
+
+pub(crate) fn target_slot(base: usize, index: usize) -> usize {
+    base + (0x333_1f40 + 0xa58) + index * 0x30
+}
+
+pub(crate) fn before_device(base: usize, read: impl Fn(usize) -> Option<usize>) -> Option<bool> {
+    if base == 0 {
+        return None;
+    }
+    let owner = read(base.checked_add(OWNER)?)?;
+    Some(owner == 0 || read(owner.checked_add(OWNER_DEVICE)?)? == 0)
+}
+
 /// Second supported creation route: Display Tweaks 0.5.25 rewrites only the E8 displacement at
 /// `CREATE_CALL` to an SKSE relay `jmp [rip+0]` that lands on its pre/post wrapper, which calls the
 /// unchanged game thunk through a retained slot.

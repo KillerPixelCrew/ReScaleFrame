@@ -31,8 +31,13 @@ bool rsf_skyrim_cpu_consumption_proven(const rsf_skyrim_cpu_frame_input*) noexce
 uint64_t rsf_skyrim_cpu_next_source() noexcept;
 uint32_t rsf_skyrim_cpu_bad_screen_query(const rsf_skyrim_creation_platform*, uintptr_t base) noexcept;
 rsf_screen_class rsf_skyrim_cpu_screen(uintptr_t main, bool primary, rsf_skyrim_cpu_menus) noexcept;
-bool rsf_skyrim_cpu_begin_render(rsf_skyrim_cpu_render_state*, rsf_screen_class) noexcept;
-void rsf_skyrim_cpu_end_render(rsf_skyrim_cpu_render_state*, uint64_t previous_scope) noexcept;
+struct rsf_skyrim_cpu_render_receipt {
+    uint64_t scope;
+    rsf_screen_class screen;
+};
+bool rsf_skyrim_cpu_begin_render(rsf_skyrim_cpu_render_state*, rsf_screen_class,
+    rsf_skyrim_cpu_render_receipt*) noexcept;
+void rsf_skyrim_cpu_end_render(rsf_skyrim_cpu_render_state*, const rsf_skyrim_cpu_render_receipt*) noexcept;
 bool rsf_skyrim_cpu_begin_world(rsf_skyrim_cpu_render_state*, const rsf_game_render_pass*,
     uintptr_t base, uintptr_t caller, uint32_t output) noexcept;
 void rsf_skyrim_cpu_world_screen(rsf_skyrim_cpu_render_state*, rsf_screen_class) noexcept;

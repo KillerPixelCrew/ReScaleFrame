@@ -7,7 +7,7 @@ use std::cell::Cell;
 use std::ffi::{c_char, c_void};
 use std::slice;
 
-use crate::layout::{OWNER, OWNER_DEVICE};
+use crate::layout;
 
 const SHA256: &[u8; 64] = b"10ba95e6b1cd6b675ce74d1d681fae41e667bdd8b7b5ba8c362e657511097827";
 const TIMESTAMP: u32 = 0x6ab5_1a9f;
@@ -174,15 +174,9 @@ unsafe extern "C" fn rsf_skyrim_cs_profile(
 }
 
 fn before_device(game: usize, read: Read) -> Option<bool> {
-    if game == 0 {
-        return None;
-    }
-    let owner = usize::from_le_bytes(read_native(read, game.checked_add(OWNER)?)?);
-    if owner == 0 {
-        return Some(true);
-    }
-    let device = usize::from_le_bytes(read_native(read, owner.checked_add(OWNER_DEVICE)?)?);
-    Some(device == 0)
+    layout::before_device(game, |address| {
+        Some(usize::from_le_bytes(read_native(read, address)?))
+    })
 }
 
 fn features_inactive(base: usize, check_hdr: bool, read: Read) -> Option<bool> {

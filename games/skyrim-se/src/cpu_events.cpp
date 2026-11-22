@@ -39,7 +39,8 @@ static_assert(sizeof(CpuServices) == sizeof(rsf_game_host_services) + 8 &&
 static_assert(sizeof(CpuStartRefusal) == 16);
 }
 extern "C" {
-bool rsf_skyrim_cpu_rust_prepare(const rsf_game_host_services*, const rsf_skyrim_creation_platform*,
+bool rsf_skyrim_cpu_rust_bind(const rsf_game_host_services*) noexcept;
+bool rsf_skyrim_cpu_rust_prepare(const rsf_skyrim_creation_platform*,
     const CpuHookLeaves*) noexcept;
 bool rsf_skyrim_cpu_rust_start(const rsf_skyrim_creation_platform*, const CpuHookLeaves*, CpuStartRefusal*) noexcept;
 void rsf_skyrim_cpu_rust_quiesce() noexcept;
@@ -740,10 +741,10 @@ void player_camera_update(void* camera)
 uintptr_t render(void* main)
 {
     Entry lease;
-    const auto previous_scope = current ? current->render.scope : 0;
+    rsf_skyrim_cpu_render_receipt previous{};
     if (current) {
         const auto screen = rsf_skyrim_cpu_screen(uintptr_t(main), false, query_menus);
-        if (rsf_skyrim_cpu_begin_render(&current->render, screen)) {
+        if (rsf_skyrim_cpu_begin_render(&current->render, screen, &previous)) {
             emit(*current, RSF_GAME_CPU_SIMULATION_END);
         }
     }
@@ -752,15 +753,20 @@ uintptr_t render(void* main)
     const auto result = continuation<uintptr_t (*)(void*)>(render_hook)(main);
     if (current) (void)cpu_render_identity(pass);
     report_render(pass, 0);
-    if (current) rsf_skyrim_cpu_end_render(&current->render, previous_scope);
+    if (current) rsf_skyrim_cpu_end_render(&current->render, &previous);
     return result;
 }
 }
 
-bool cpu_prepare(const rsf_game_host_services& host, const rsf_skyrim_creation_platform* platform)
+bool cpu_prepare(const rsf_skyrim_creation_platform* platform)
 {
-    return rsf_skyrim_cpu_rust_prepare(&host, platform, &cpu_hook_leaves);
+    return rsf_skyrim_cpu_rust_prepare(platform, &cpu_hook_leaves);
 }
+bool cpu_bind(const rsf_game_host_services& host)
+{
+    return rsf_skyrim_cpu_rust_bind(&host);
+}
+
 bool cpu_start(const rsf_skyrim_creation_platform* platform)
 {
     CpuStartRefusal refusal{};

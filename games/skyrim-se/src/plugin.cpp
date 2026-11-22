@@ -237,7 +237,8 @@ bool subsystem(uint32_t operation, const rsf_game_host_services* services, int32
         rsf_skyrim_reset_render_observations();
         flag(true);
         break;
-    case RSF_SKYRIM_CPU_PREPARE: flag(services && cpu_prepare(*services, creation_platform())); break;
+    case RSF_SKYRIM_CPU_PREPARE: flag(cpu_prepare(creation_platform())); break;
+    case RSF_SKYRIM_CPU_BIND: flag(services && cpu_bind(*services)); break;
     case RSF_SKYRIM_CPU_START: flag(cpu_start(creation_platform())); break;
     case RSF_SKYRIM_CPU_QUIESCE: cpu_quiesce(); flag(true); break;
     case RSF_SKYRIM_CPU_DISABLE: flag(cpu_disable()); break;

@@ -152,12 +152,14 @@ struct Control {
     hooks: HookSet<{ HOOKS.len() }>,
     base: usize,
     pinned: bool,
+    frequency: u64,
 }
 
 static CONTROL: Mutex<Control> = Mutex::new(Control {
     hooks: HookSet::new(),
     base: 0,
     pinned: false,
+    frequency: 0,
 });
 // Separate short lock: enabling or disabling hooks can suspend native threads, and calls
 // into the engine or host may nest other CPU detours. They never hold this lock.
@@ -213,13 +215,7 @@ impl Control {
         });
     }
 
-    fn prepare(
-        &mut self,
-        table: *const Platform,
-        platform: &Platform,
-        leaves: &Leaves,
-        host: rsf_game_host_services,
-    ) -> bool {
+    fn prepare(&mut self, table: *const Platform, platform: &Platform, leaves: &Leaves) -> bool {
         if rsf_skyrim_cpu_active() || rsf_skyrim_cpu_rust_busy() || !self.hooks.is_disabled() {
             return false;
         }
@@ -255,8 +251,8 @@ impl Control {
             return false;
         }
         self.pinned = true;
-        *SERVICES.lock().unwrap_or_else(PoisonError::into_inner) =
-            Some(Services { host, frequency });
+        self.frequency = frequency;
+        *SERVICES.lock().unwrap_or_else(PoisonError::into_inner) = None;
         true
     }
 
@@ -317,18 +313,27 @@ fn valid(leaves: &Leaves) -> bool {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_cpu_rust_prepare(
-    host: &rsf_game_host_services,
-    table: *const Platform,
-    leaves: &Leaves,
-) -> bool {
+unsafe extern "C" fn rsf_skyrim_cpu_rust_prepare(table: *const Platform, leaves: &Leaves) -> bool {
     let Some(platform) = (unsafe { platform::inspect(table) }).filter(|_| valid(leaves)) else {
         return false;
     };
     CONTROL
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .prepare(table, platform, leaves, *host)
+        .prepare(table, platform, leaves)
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_skyrim_cpu_rust_bind(host: &rsf_game_host_services) -> bool {
+    let control = CONTROL.lock().unwrap_or_else(PoisonError::into_inner);
+    if control.frequency == 0 || !control.hooks.is_disabled() || rsf_skyrim_cpu_rust_busy() {
+        return false;
+    }
+    *SERVICES.lock().unwrap_or_else(PoisonError::into_inner) = Some(Services {
+        host: *host,
+        frequency: control.frequency,
+    });
+    true
 }
 
 #[unsafe(no_mangle)]

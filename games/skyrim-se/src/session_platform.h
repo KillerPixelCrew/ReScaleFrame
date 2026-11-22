@@ -8,14 +8,14 @@
 // services. The leaves keep the C++ subsystems, the detours and their engine facts.
 #include "observer_platform.h"
 
-#define RSF_SKYRIM_SESSION_LEAVES_VERSION 1u
+#define RSF_SKYRIM_SESSION_LEAVES_VERSION 2u
 
 // Native subsystem operations (plugin.cpp). value is 0 or 1 unless stated. services is read only
 // by the operations marked "services".
 #define RSF_SKYRIM_ADMIT_OBSERVERS 0u      /* 1 admitted, 0 refused, negative unavailable */
 #define RSF_SKYRIM_OBSERVERS_BUSY 1u       /* an observer detour is in flight */
 #define RSF_SKYRIM_RESET_OBSERVATIONS 2u   /* value is always 1 */
-#define RSF_SKYRIM_CPU_PREPARE 3u          /* services */
+#define RSF_SKYRIM_CPU_PREPARE 3u
 #define RSF_SKYRIM_CPU_START 4u
 #define RSF_SKYRIM_CPU_QUIESCE 5u          /* value is always 1 */
 #define RSF_SKYRIM_CPU_DISABLE 6u
@@ -31,6 +31,7 @@
 #define RSF_SKYRIM_PRESENTATION_BUSY 16u
 #define RSF_SKYRIM_RESOLUTION_OWNED 17u
 #define RSF_SKYRIM_AUXILIARIES_PENDING 18u
+#define RSF_SKYRIM_CPU_BIND 19u             /* services */
 
 // Every guarded leaf returns false only when its native call threw; its result goes to the out
 // parameter. The table lives for the process.
