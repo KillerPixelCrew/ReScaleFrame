@@ -506,3 +506,35 @@ census files, the native fixture driver and the real RTTI specimen, using Window
 10.0.26100.0 and the [CMake-pinned MinHook header](https://raw.githubusercontent.com/TsudaKageyu/minhook/c3fcafdc10146beb5919319d0683e44e3c30d537/include/MinHook.h).
 The public headers and `PORT.md` are unchanged. Builds, runtime tests and device runs were
 left to the user.
+
+## Census leaves in C11 and layout probes
+
+The four native census files are now C11 translation units: `census_platform.c`,
+`hook_platform.c`, `guarded_platform.c` and `d3d_guarded_platform.c`. They keep what Rust cannot
+express: SEH around borrowed memory and vendor calls, MinHook, the TEB getter, and COM calls on
+borrowed D3D12, D3D11 and DXGI objects. `census_internal.h` is now a C header with the descriptor
+X-macros, an `rsf_census_fn` enum (`RSF_FN_*`, replacing `Fn`) and prefixed declarations in place
+of the old `rsf_census` namespace. The C++ `guard` lambda helper is gone, so every guarded call
+owns its `__try` block. The COM calls go through `lpVtbl` with the same slot guards as before.
+The Rust-visible tables, the hook platform struct and the generated bindings are unchanged, and no
+platform header changed, so the bindings did not need regeneration.
+
+`tests/loader/vendor_census_native.c` replaces the C++ fixture driver. Fake `ID3D12Resource` and
+Streamline frame-token objects are C vtable structs. The DXGI and D3D12 slot numbers come from
+`offsetof` on the Windows SDK `*Vtbl` structures. The `std::thread` call is a `CreateThread`, the
+observer log is a fixed array, and payload writes use a `PUT` macro. The only C++ left is
+`tests/loader/vendor_census_ngx_platform.cpp`: `NVSDK_NGX_Parameter` is a C++ class whose
+virtual slots follow MSVC overload ordering, so the compiler has to select them. It exposes four
+typed setters and the slot check through `ngx_param_probe.h`.
+
+`tests/loader/vendor_layout_facts.c` now measures FidelityFX, XeSS and Vulkan from their C
+declarations (FidelityFX types need the `struct` keyword). Streamline's `sl::` types and the FSR 2
+`Fsr212::` types are C++ only, so `vendor_layout_facts.cpp` keeps just those two sections behind
+`RSF_CENSUS_LAYOUT_CXX`. The RTTI specimen `module_dump_rtti_fixture.cpp` stays C++ because only a C++
+compiler emits MSVC RTTI and a real vftable.
+
+Checked on this change: all four census leaves compile at `/W4 /WX`, `vendor_census` and its
+budget, Vulkan and Streamline, FidelityFX API, DllMain and creation-identity modes pass, and the
+five SDK layout tests (sl, ffx, xess, fsr2, vk) pass, none skipped. The tip needed two unrelated
+build fixes and one fixture type annotation to configure and link locally; they are not part of
+this change.

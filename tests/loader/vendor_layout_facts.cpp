@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
-// Extract SDK facts using the actual vendor declarations.
+// Extract the Streamline and FSR 2 facts using the actual vendor declarations. Both SDKs declare
+// C++ types (namespaces, constructors and virtual members), so they cannot be measured from C.
+// The other SDKs are measured in vendor_layout_facts.c.
 
 #include <windows.h>
 
@@ -14,26 +16,11 @@
 #include <sl_pcl.h>
 #include <sl_reflex.h>
 #endif
-#if defined(RSF_CENSUS_LAYOUT_FFX)
-#include <dx12/ffx_api_dx12.h>
-#include <dx12/ffx_api_framegeneration_dx12.h>
-#include <ffx_api.h>
-#include <ffx_framegeneration.h>
-#include <ffx_upscale.h>
-#endif
-#if defined(RSF_CENSUS_LAYOUT_XESS)
-#include <xess_d3d12.h>
-#endif
-#if defined(RSF_CENSUS_LAYOUT_VK)
-#include <vulkan/vulkan.h>
-#endif
 #if defined(RSF_CENSUS_LAYOUT_FSR2)
 #include <ffx_fsr2.h>
 #endif
 
 using Visit = void (*)(void*, uint32_t, const size_t*, size_t);
-using Collect = void (*)(void*, Visit);
-extern "C" int rsf_test_census_layouts(Collect);
 
 namespace {
 
@@ -47,7 +34,9 @@ size_t member_offset(M T::*member) {
 
 #define OFFSET(Type, member) member_offset(&Type::member)
 
-void collect(void* context, Visit visit) {
+} // namespace
+
+extern "C" void rsf_test_layout_facts_cxx(void* context, Visit visit) {
     (void)context;
     (void)visit;
 #if defined(RSF_CENSUS_LAYOUT_SL)
@@ -124,135 +113,6 @@ void collect(void* context, Visit visit) {
         visit(context, 0, values, sizeof(values) / sizeof(values[0]));
     }
 #endif
-#if defined(RSF_CENSUS_LAYOUT_FFX)
-    {
-        const size_t values[] = {
-            sizeof(FfxApiResource),
-            OFFSET(ffxDispatchDescUpscale, commandList),
-            OFFSET(ffxDispatchDescUpscale, color),
-            OFFSET(ffxDispatchDescUpscale, output),
-            OFFSET(ffxDispatchDescUpscale, jitterOffset),
-            OFFSET(ffxDispatchDescUpscale, renderSize),
-            OFFSET(ffxDispatchDescUpscale, upscaleSize),
-            OFFSET(ffxDispatchDescUpscale, enableSharpening),
-            OFFSET(ffxDispatchDescUpscale, sharpness),
-            OFFSET(ffxDispatchDescUpscale, reset),
-            OFFSET(ffxDispatchDescUpscale, cameraNear),
-            OFFSET(ffxDispatchDescUpscale, viewSpaceToMetersFactor),
-            OFFSET(ffxDispatchDescUpscale, flags),
-            sizeof(ffxDispatchDescUpscale),
-            OFFSET(ffxDispatchDescFrameGeneration, presentColor),
-            OFFSET(ffxDispatchDescFrameGeneration, numGeneratedFrames),
-            OFFSET(ffxDispatchDescFrameGeneration, reset),
-            OFFSET(ffxDispatchDescFrameGeneration, frameID),
-            sizeof(ffxDispatchDescFrameGeneration),
-            OFFSET(ffxConfigureDescFrameGeneration, swapChain),
-            OFFSET(ffxConfigureDescFrameGeneration, frameGenerationEnabled),
-            OFFSET(ffxConfigureDescFrameGeneration, HUDLessColor),
-            OFFSET(ffxConfigureDescFrameGeneration, flags),
-            OFFSET(ffxConfigureDescFrameGeneration, frameID),
-            OFFSET(ffxDispatchDescFrameGenerationPrepareV2, frameID),
-            OFFSET(ffxDispatchDescFrameGenerationPrepareV2, commandList),
-            OFFSET(ffxDispatchDescFrameGenerationPrepareV2, renderSize),
-            OFFSET(ffxDispatchDescFrameGenerationPrepareV2, depth),
-            OFFSET(ffxCreateContextDescUpscale, flags),
-            OFFSET(ffxCreateContextDescUpscale, maxRenderSize),
-            OFFSET(ffxCreateContextDescUpscale, maxUpscaleSize),
-            OFFSET(ffxCreateContextDescFrameGeneration, flags),
-            OFFSET(ffxCreateContextDescFrameGeneration, displaySize),
-            OFFSET(ffxCreateContextDescFrameGeneration, maxRenderSize),
-            OFFSET(ffxCreateContextDescFrameGeneration, backBufferFormat),
-            OFFSET(ffxCreateContextDescFrameGenerationSwapChainWrapDX12, swapchain),
-            OFFSET(ffxCreateContextDescFrameGenerationSwapChainWrapDX12, gameQueue),
-            OFFSET(ffxCreateContextDescFrameGenerationSwapChainNewDX12, desc),
-            OFFSET(ffxCreateContextDescFrameGenerationSwapChainNewDX12, gameQueue),
-            OFFSET(ffxCreateContextDescFrameGenerationSwapChainForHwndDX12, hwnd),
-            OFFSET(ffxCreateContextDescFrameGenerationSwapChainForHwndDX12, desc),
-            OFFSET(ffxCreateContextDescFrameGenerationSwapChainForHwndDX12, gameQueue),
-            OFFSET(ffxCreateBackendDX12Desc, device),
-            FFX_API_DISPATCH_DESC_TYPE_UPSCALE,
-            FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION,
-            FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION,
-            FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE_V2,
-            FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_NEW_DX12,
-            FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_FOR_HWND_DX12,
-            FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12,
-        };
-        visit(context, 1, values, sizeof(values) / sizeof(values[0]));
-    }
-#endif
-#if defined(RSF_CENSUS_LAYOUT_XESS)
-    {
-        const size_t values[] = {
-            OFFSET(xess_d3d12_execute_params_t, pColorTexture),
-            OFFSET(xess_d3d12_execute_params_t, pOutputTexture),
-            OFFSET(xess_d3d12_execute_params_t, jitterOffsetX),
-            OFFSET(xess_d3d12_execute_params_t, exposureScale),
-            OFFSET(xess_d3d12_execute_params_t, resetHistory),
-            OFFSET(xess_d3d12_execute_params_t, inputWidth),
-            OFFSET(xess_d3d12_execute_params_t, inputColorBase),
-            OFFSET(xess_d3d12_execute_params_t, pDescriptorHeap),
-            OFFSET(xess_d3d12_init_params_t, outputResolution),
-            OFFSET(xess_d3d12_init_params_t, qualitySetting),
-            OFFSET(xess_d3d12_init_params_t, initFlags),
-            OFFSET(xess_d3d12_init_params_t, creationNodeMask),
-            OFFSET(xess_d3d12_init_params_t, visibleNodeMask),
-        };
-        visit(context, 2, values, sizeof(values) / sizeof(values[0]));
-    }
-#endif
-#if defined(RSF_CENSUS_LAYOUT_VK)
-    {
-        const size_t values[] = {
-            OFFSET(VkInstanceCreateInfo, pApplicationInfo),
-            OFFSET(VkInstanceCreateInfo, enabledLayerCount),
-            OFFSET(VkInstanceCreateInfo, ppEnabledLayerNames),
-            OFFSET(VkInstanceCreateInfo, enabledExtensionCount),
-            OFFSET(VkInstanceCreateInfo, ppEnabledExtensionNames),
-            OFFSET(VkApplicationInfo, pApplicationName),
-            OFFSET(VkApplicationInfo, applicationVersion),
-            OFFSET(VkApplicationInfo, pEngineName),
-            OFFSET(VkApplicationInfo, engineVersion),
-            OFFSET(VkApplicationInfo, apiVersion),
-            OFFSET(VkDeviceCreateInfo, queueCreateInfoCount),
-            OFFSET(VkDeviceCreateInfo, pQueueCreateInfos),
-            OFFSET(VkDeviceCreateInfo, enabledLayerCount),
-            OFFSET(VkDeviceCreateInfo, enabledExtensionCount),
-            OFFSET(VkDeviceCreateInfo, ppEnabledExtensionNames),
-            sizeof(VkDeviceQueueCreateInfo),
-            OFFSET(VkDeviceQueueCreateInfo, queueFamilyIndex),
-            OFFSET(VkDeviceQueueCreateInfo, queueCount),
-            OFFSET(VkDeviceQueueInfo2, queueFamilyIndex),
-            OFFSET(VkDeviceQueueInfo2, queueIndex),
-            sizeof(VkSubmitInfo),
-            OFFSET(VkSubmitInfo, waitSemaphoreCount),
-            OFFSET(VkSubmitInfo, commandBufferCount),
-            OFFSET(VkSubmitInfo, signalSemaphoreCount),
-            sizeof(VkSubmitInfo2),
-            OFFSET(VkSubmitInfo2, waitSemaphoreInfoCount),
-            OFFSET(VkSubmitInfo2, commandBufferInfoCount),
-            OFFSET(VkSubmitInfo2, signalSemaphoreInfoCount),
-            OFFSET(VkPresentInfoKHR, waitSemaphoreCount),
-            OFFSET(VkPresentInfoKHR, swapchainCount),
-            OFFSET(VkPresentInfoKHR, pSwapchains),
-            OFFSET(VkPresentInfoKHR, pImageIndices),
-            OFFSET(VkSwapchainCreateInfoKHR, surface),
-            OFFSET(VkSwapchainCreateInfoKHR, minImageCount),
-            OFFSET(VkSwapchainCreateInfoKHR, imageFormat),
-            OFFSET(VkSwapchainCreateInfoKHR, imageColorSpace),
-            OFFSET(VkSwapchainCreateInfoKHR, imageExtent),
-            OFFSET(VkSwapchainCreateInfoKHR, imageArrayLayers),
-            OFFSET(VkSwapchainCreateInfoKHR, imageUsage),
-            OFFSET(VkSwapchainCreateInfoKHR, imageSharingMode),
-            OFFSET(VkSwapchainCreateInfoKHR, preTransform),
-            OFFSET(VkSwapchainCreateInfoKHR, compositeAlpha),
-            OFFSET(VkSwapchainCreateInfoKHR, presentMode),
-            OFFSET(VkSwapchainCreateInfoKHR, clipped),
-            OFFSET(VkSwapchainCreateInfoKHR, oldSwapchain),
-        };
-        visit(context, 3, values, sizeof(values) / sizeof(values[0]));
-    }
-#endif
 #if defined(RSF_CENSUS_LAYOUT_FSR2)
     {
         const size_t values[] = {
@@ -274,7 +134,3 @@ void collect(void* context, Visit visit) {
     }
 #endif
 }
-
-} // namespace
-
-int main() { return rsf_test_census_layouts(collect); }

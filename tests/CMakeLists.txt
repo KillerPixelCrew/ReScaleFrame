@@ -960,7 +960,7 @@ if(TARGET rsf_vendor_census)
     target_link_libraries(rsf_census_asi PRIVATE
         rsf_loader_fixtures_rust ReScaleFrame::VendorCensus rsf_build_options)
 
-    add_executable(rsf_vendor_census_test loader/vendor_census_native.cpp)
+    add_executable(rsf_vendor_census_test loader/vendor_census_native.c loader/vendor_census_ngx_platform.cpp)
     target_link_libraries(rsf_vendor_census_test PRIVATE
         rsf_loader_fixtures_rust ReScaleFrame::VendorCensus rsf_census_fx_fsr2 rsf_build_options)
     add_dependencies(rsf_vendor_census_test rsf_census_fx_ngx rsf_census_fx_nvapi rsf_census_fx_xess rsf_census_fx_vk rsf_census_fx_sl rsf_census_fx_ffx rsf_census_fx_creation rsf_census_asi)
@@ -999,8 +999,13 @@ if(TARGET rsf_vendor_census)
     # tests compare the restated offsets with the headers where an untracked checkout provides them.
     function(rsf_census_layout_check suffix define probe)
         if(EXISTS "${probe}")
-            add_executable(rsf_vendor_census_layouts_${suffix} loader/vendor_layout_facts.cpp)
+            add_executable(rsf_vendor_census_layouts_${suffix} loader/vendor_layout_facts.c)
             target_compile_definitions(rsf_vendor_census_layouts_${suffix} PRIVATE ${define})
+            # Streamline and FSR 2 declare C++ types; their facts come from the C++ leaf.
+            if(suffix STREQUAL "sl" OR suffix STREQUAL "fsr2")
+                target_sources(rsf_vendor_census_layouts_${suffix} PRIVATE loader/vendor_layout_facts.cpp)
+                target_compile_definitions(rsf_vendor_census_layouts_${suffix} PRIVATE RSF_CENSUS_LAYOUT_CXX)
+            endif()
             target_include_directories(rsf_vendor_census_layouts_${suffix} SYSTEM PRIVATE ${ARGN})
             target_link_libraries(rsf_vendor_census_layouts_${suffix} PRIVATE
                 rsf_loader_fixtures_rust rsf_build_options)

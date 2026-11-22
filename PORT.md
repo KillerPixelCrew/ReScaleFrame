@@ -462,21 +462,22 @@ Move the API census, static scan and diagnostic capture behind the loader's Rust
 
 - [x] [loader/census/src/decode_d3d_platform.cpp](loader/census/src/decode_d3d_platform.cpp) (introduced D3D resource query leaf)
 - [x] [tests/loader/vendor_census_ngx_platform.cpp](tests/loader/vendor_census_ngx_platform.cpp) (introduced SDK fixture leaf)
-- [ ] [loader/census/src/census_platform.cpp](loader/census/src/census_platform.cpp) (native startup and vendor boundary)
-- [ ] [loader/census/src/hook_platform.cpp](loader/census/src/hook_platform.cpp) (native MinHook and loader facts)
-- [ ] [loader/census/src/guarded_platform.cpp](loader/census/src/guarded_platform.cpp) (guarded native call and record leaves)
-- [ ] [loader/census/src/d3d_guarded_platform.cpp](loader/census/src/d3d_guarded_platform.cpp) (guarded DXGI and D3D12 calls)
+- [x] [loader/census/src/census_platform.cpp](loader/census/src/census_platform.cpp) (converted to the C11 leaf `census_platform.c`: native descriptor catalog, vendor tables and guarded NGX and Streamline calls; `census_internal.h` is now a C header)
+- [x] [loader/census/src/hook_platform.cpp](loader/census/src/hook_platform.cpp) (converted to the C11 leaf `hook_platform.c`: MinHook calls and the TEB getter)
+- [x] [loader/census/src/guarded_platform.cpp](loader/census/src/guarded_platform.cpp) (converted to the C11 leaf `guarded_platform.c`: SEH reads, code-pointer and vtable-slot checks; the `guard` lambda helper is gone, each guarded call owns its `__try`)
+- [x] [loader/census/src/d3d_guarded_platform.cpp](loader/census/src/d3d_guarded_platform.cpp) (converted to the C11 leaf `d3d_guarded_platform.c`: guarded QueryInterface, Release and description reads through `lpVtbl`)
 
 **Fixtures (10)**
 
-- [ ] [tests/loader/vendor_census_native.cpp](tests/loader/vendor_census_native.cpp) (independent native SDK and WARP fixture facts)
+- [x] [tests/loader/vendor_census_native.cpp](tests/loader/vendor_census_native.cpp) (converted to `tests/loader/vendor_census_native.c`: C vtable fake resource and token objects, DXGI and D3D12 slots from SDK `*Vtbl` offsets, `CreateThread`, `PUT` payload writes; the remaining C++ is the next entry)
+- [ ] [tests/loader/vendor_census_ngx_platform.cpp](tests/loader/vendor_census_ngx_platform.cpp) (new, blocked: `NVSDK_NGX_Parameter` is a C++ class whose virtual slots follow MSVC overload ordering, so only a C++ compiler can select the Set overload slots; the called probe is `rsf_test_ngx_check_slots` and four typed setters declared in the C header `tests/loader/ngx_param_probe.h`, caller `vendor_census_native.c` run_ngx and check_vtable_slots)
 - [x] [tests/census_present_coexistence.cpp](tests/census_present_coexistence.cpp)
-- [ ] [tests/loader/module_dump_rtti_fixture.cpp](tests/loader/module_dump_rtti_fixture.cpp) (native RTTI specimen)
+- [ ] [tests/loader/module_dump_rtti_fixture.cpp](tests/loader/module_dump_rtti_fixture.cpp) (native RTTI specimen; blocked: the `module_dump_v2` test needs a compiler-emitted MSVC RTTI type descriptor, complete object locator and vftable, which only a C++ compiler produces, and the call is `rsf_test_module_dump_v2` with the vftable RVA of a derived class; the file is 25 lines)
 - [x] [tests/module_dump_v2.cpp](tests/module_dump_v2.cpp)
 - [x] [tests/vendor_census.cpp](tests/vendor_census.cpp)
 - [x] [tests/vendor_census_asi.cpp](tests/vendor_census_asi.cpp)
 - [x] [tests/vendor_census_fixture.cpp](tests/vendor_census_fixture.cpp)
-- [ ] [tests/loader/vendor_layout_facts.cpp](tests/loader/vendor_layout_facts.cpp) (native SDK layout evidence)
+- [ ] [tests/loader/vendor_layout_facts.cpp](tests/loader/vendor_layout_facts.cpp) (native SDK layout evidence; FidelityFX, XeSS and Vulkan moved to `vendor_layout_facts.c`, which also owns `main`; blocked for the rest: `sl.h` declares the `sl::` namespace types and the FSR 2 header declares `Fsr212::` types, both C++ only, and the Streamline structs need measurement on real storage because they have constructors; the C driver calls `rsf_test_layout_facts_cxx` when `RSF_CENSUS_LAYOUT_CXX` is set for the sl and fsr2 targets)
 - [x] [tests/vendor_census_layouts.cpp](tests/vendor_census_layouts.cpp)
 - [x] [tests/vendor_census_ngx_params.h](tests/vendor_census_ngx_params.h)
 

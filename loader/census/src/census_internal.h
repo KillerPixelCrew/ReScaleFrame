@@ -1,15 +1,13 @@
-// SPDX-License-Identifier: MIT
-// Internal types shared by the census translation units. Nothing here crosses the DLL boundary.
-#pragma once
+/* SPDX-License-Identifier: MIT */
+/* Native declarations shared by the census platform leaves. Nothing here crosses the DLL boundary. */
+#ifndef RSF_CENSUS_INTERNAL_H
+#define RSF_CENSUS_INTERNAL_H
 
 #include <windows.h>
 
-#include <atomic>
-#include <cstddef>
-#include <cstdint>
-#include <cstdio>
-#include <cstring>
-#include <type_traits>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
 #include "rescaleframe/vendor_census.h"
 #include "decode_platform.h"
@@ -18,13 +16,10 @@
 #include "session_platform.h"
 #include "stats_platform.h"
 
-namespace rsf_census {
-
-// ---- Intercepted functions --------------------------------------------------------------------
-// X(id, api, export name or nullptr, modules). `modules` is a '|' separated list of lowercase
-// module basenames whose exports are detoured when the module loads. An entry with no export name
-// is bound by the DXGI and Vulkan code that learns the address at run time.
-
+/* ---- Intercepted functions ------------------------------------------------------------------ */
+/* X(id, api, export name or NULL, modules). `modules` is a '|' separated list of lowercase
+   module basenames whose exports are detoured when the module loads. An entry with no export name
+   is bound by the DXGI and Vulkan code that learns the address at run time. */
 #define RSF_NGX_FUNCS(X, A, API, MODS)                                                          \
     X(Ngx##A##Init, API, "NVSDK_NGX_" #A "_Init", MODS)                                        \
     X(Ngx##A##InitExt, API, "NVSDK_NGX_" #A "_Init_Ext", MODS)                                 \
@@ -48,18 +43,18 @@ namespace rsf_census {
     X(CreateDXGIFactory1, "dxgi", "CreateDXGIFactory1", "dxgi.dll")                             \
     X(CreateDXGIFactory2, "dxgi", "CreateDXGIFactory2", "dxgi.dll")                             \
     X(D3D12CreateDevice, "d3d12", "D3D12CreateDevice", "d3d12.dll")                             \
-    X(DxgiFactoryCreateSwapChain, "dxgi", nullptr, "")                                          \
-    X(DxgiFactoryCreateSwapChainForHwnd, "dxgi", nullptr, "")                                   \
-    X(DxgiFactoryCreateSwapChainForCoreWindow, "dxgi", nullptr, "")                             \
-    X(DxgiSwapChainPresent, "dxgi", nullptr, "")                                                \
-    X(DxgiSwapChainPresent1, "dxgi", nullptr, "")                                               \
-    X(DxgiSwapChainResizeBuffers, "dxgi", nullptr, "")                                          \
-    X(DxgiSwapChainResizeBuffers1, "dxgi", nullptr, "")                                         \
-    X(DxgiSwapChainSetColorSpace1, "dxgi", nullptr, "")                                         \
-    X(DxgiSwapChainSetFullscreenState, "dxgi", nullptr, "")                                     \
-    X(DxgiSwapChainGetFrameLatencyWaitableObject, "dxgi", nullptr, "")                          \
-    X(D3d12DeviceCreateCommandQueue, "d3d12", nullptr, "")                                      \
-    X(D3d12QueueExecuteCommandLists, "d3d12", nullptr, "")                                      \
+    X(DxgiFactoryCreateSwapChain, "dxgi", NULL, "")                                          \
+    X(DxgiFactoryCreateSwapChainForHwnd, "dxgi", NULL, "")                                   \
+    X(DxgiFactoryCreateSwapChainForCoreWindow, "dxgi", NULL, "")                             \
+    X(DxgiSwapChainPresent, "dxgi", NULL, "")                                                \
+    X(DxgiSwapChainPresent1, "dxgi", NULL, "")                                               \
+    X(DxgiSwapChainResizeBuffers, "dxgi", NULL, "")                                          \
+    X(DxgiSwapChainResizeBuffers1, "dxgi", NULL, "")                                         \
+    X(DxgiSwapChainSetColorSpace1, "dxgi", NULL, "")                                         \
+    X(DxgiSwapChainSetFullscreenState, "dxgi", NULL, "")                                     \
+    X(DxgiSwapChainGetFrameLatencyWaitableObject, "dxgi", NULL, "")                          \
+    X(D3d12DeviceCreateCommandQueue, "d3d12", NULL, "")                                      \
+    X(D3d12QueueExecuteCommandLists, "d3d12", NULL, "")                                      \
     X(VkGetInstanceProcAddr, "vulkan", "vkGetInstanceProcAddr", "vulkan-1.dll")                 \
     X(VkGetDeviceProcAddr, "vulkan", "vkGetDeviceProcAddr", "vulkan-1.dll")                     \
     X(VkCreateInstance, "vulkan", "vkCreateInstance", "")                                       \
@@ -150,13 +145,13 @@ namespace rsf_census {
     X(SlPclSetMarker, "streamline", "slPCLSetMarker", "sl.interposer.dll")                      \
     X(SlPclSetOptions, "streamline", "slPCLSetOptions", "sl.interposer.dll")                    \
     X(NvapiQueryInterface, "nvapi", "nvapi_QueryInterface", "nvapi64.dll")                      \
-    X(NvapiSetSleepMode, "nvapi_reflex", nullptr, "")                                           \
-    X(NvapiSleep, "nvapi_reflex", nullptr, "")                                                  \
-    X(NvapiSetLatencyMarker, "nvapi_reflex", nullptr, "")                                       \
-    X(NvapiGetLatency, "nvapi_reflex", nullptr, "")                                             \
-    X(NvapiD3D12SetAsyncFrameMarker, "nvapi_reflex", nullptr, "")                               \
-    X(D3d12DebugMessage, "d3d12_debug", nullptr, "")                                            \
-    X(CensusEvent, "census", nullptr, "")                                                       \
+    X(NvapiSetSleepMode, "nvapi_reflex", NULL, "")                                           \
+    X(NvapiSleep, "nvapi_reflex", NULL, "")                                                  \
+    X(NvapiSetLatencyMarker, "nvapi_reflex", NULL, "")                                       \
+    X(NvapiGetLatency, "nvapi_reflex", NULL, "")                                             \
+    X(NvapiD3D12SetAsyncFrameMarker, "nvapi_reflex", NULL, "")                               \
+    X(D3d12DebugMessage, "d3d12_debug", NULL, "")                                            \
+    X(CensusEvent, "census", NULL, "")                                                       \
     X(NvllInitialize, "nvll_vk", "NvLL_VK_Initialize", "nvlowlatencyvk.dll")                    \
     X(NvllInitLowLatencyDevice, "nvll_vk", "NvLL_VK_InitLowLatencyDevice",                      \
       "nvlowlatencyvk.dll")                                                                     \
@@ -176,59 +171,35 @@ namespace rsf_census {
     "amd_fidelityfx_upscaler_dx12.dll|amd_fidelityfx_framegeneration_dx12.dll"
 #define RSF_XESS_MODULES "libxess.dll|libxess_dx11.dll"
 
-enum class Fn : uint16_t {
-#define X(id, api, name, mods) id,
+typedef enum rsf_census_fn {
+#define X(id, api, name, mods) RSF_FN_##id,
     RSF_CENSUS_FUNCTIONS(X)
 #undef X
-        Count
-};
+    RSF_FN_COUNT
+} rsf_census_fn;
 
-using FnDesc = rsf_census_hook_desc;
+extern const rsf_census_hook_desc rsf_census_functions[RSF_FN_COUNT];
 
-constexpr size_t kFnCount = static_cast<size_t>(Fn::Count);
-extern const FnDesc kFns[kFnCount];
+/* ---- Safe memory access --------------------------------------------------------------------- */
+bool rsf_census_safe_read(const void* src, void* dst, size_t n);
+bool rsf_census_safe_read_cstr(const char* src, char* dst, size_t cap);
+bool rsf_census_safe_read_wstr(const wchar_t* src, wchar_t* dst, size_t cap);
+bool rsf_census_plausible_ptr(const void* p);
+/* True when `p` is committed executable memory. */
+bool rsf_census_is_code_ptr(const void* p);
+/* Read a vtable entry: `obj` points at an object whose first word is the vtable. Returns NULL
+   unless the entry points at executable memory, so a bad object is never called. */
+void* rsf_census_vtable_slot(const void* obj, size_t slot);
+/* Read a narrow or wide string argument; returns false when unreadable. */
+bool rsf_census_read_arg_string(const void* p, char* out, size_t cap);
+bool rsf_census_read_arg_wstring(const void* p, wchar_t* out, size_t cap);
 
-// ---- Safe memory access -----------------------------------------------------------------------
-bool safe_read(const void* src, void* dst, size_t n) noexcept;
-bool safe_read_cstr(const char* src, char* dst, size_t cap) noexcept;
-bool safe_read_wstr(const wchar_t* src, wchar_t* dst, size_t cap) noexcept;
-bool plausible_ptr(const void* p) noexcept;
+/* Hook installation entry points of each translation unit. */
+void rsf_census_register_wrappers_d3d(void** table);
 
-template <class T>
-inline bool rd(const void* p, T& out) noexcept {
-    return safe_read(p, &out, sizeof(T));
-}
-// True when `p` is committed executable memory.
-bool is_code_ptr(const void* p) noexcept;
-// Read a vtable entry: `obj` points at an object whose first word is the vtable. Returns null
-// unless the entry points at executable memory, so a bad object is never called.
-void* vtable_slot(const void* obj, size_t slot) noexcept;
+extern const rsf_census_hook_platform rsf_census_hook_platform_table;
 
-// Run `fn(ctx)` under SEH. Returns false when it faulted.
-bool guarded(void (*fn)(void*), void* ctx) noexcept;
-template <class L>
-inline bool guard(L&& lambda) noexcept {
-    using T = std::remove_reference_t<L>;
-    return guarded([](void* c) { (*static_cast<T*>(c))(); }, &lambda);
-}
+void rsf_census_describe_d3d_resource(rsf_census_json* json, const char* key, const void* resource,
+                                      bool d3d12);
 
-// Hook installation entry points of each translation unit.
-void register_wrappers_d3d(void** table) noexcept;
-
-extern const rsf_census_hook_platform kHookPlatform;
-
-void describe_d3d_resource(rsf_census_json* json, const char* key, const void* resource,
-                           bool d3d12) noexcept;
-// Read a narrow or wide string argument; returns false when unreadable.
-inline bool read_arg_string(const void* p, char* out, size_t cap) noexcept {
-    if (!cap) return false;
-    out[0] = 0;
-    return plausible_ptr(p) && safe_read_cstr(static_cast<const char*>(p), out, cap);
-}
-inline bool read_arg_wstring(const void* p, wchar_t* out, size_t cap) noexcept {
-    if (!cap) return false;
-    out[0] = 0;
-    return plausible_ptr(p) && safe_read_wstr(static_cast<const wchar_t*>(p), out, cap);
-}
-
-} // namespace rsf_census
+#endif
