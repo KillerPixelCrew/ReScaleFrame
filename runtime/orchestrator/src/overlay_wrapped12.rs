@@ -2,7 +2,7 @@
 use crate::com_ref::ComRef;
 use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats};
 use crate::overlay_native12_abi::{
-    rsf_overlay11on12_device, rsf_overlay11on12_platform as Platform, rsf_overlay11on12_target,
+    rsf_overlay11on12_device, rsf_overlay11on12_platform as RawPlatform, rsf_overlay11on12_target,
     rsf_overlay12_log,
 };
 use crate::sr_session::has_capacity;
@@ -11,6 +11,62 @@ use std::ptr;
 use std::sync::Mutex;
 #[cfg(not(test))]
 pub(super) mod native;
+
+// Production constructs this table with required pointers. Only the legacy
+// C entry points admit a nullable table.
+#[derive(Clone, Copy)]
+struct Platform {
+    create: unsafe extern "C" fn(
+        device: *mut c_void,
+        queue: *mut c_void,
+        out: *mut rsf_overlay11on12_device,
+    ) -> i32,
+    window: unsafe extern "C" fn(chain: *mut c_void, window: *mut *mut c_void) -> u32,
+    start: unsafe extern "C" fn(
+        device: *mut c_void,
+        window: *mut c_void,
+        log: rsf_overlay12_log,
+        user: *mut c_void,
+    ) -> i32,
+    admit: unsafe extern "C" fn(show_hud: u32, visible: *mut u32, hint: *mut f32) -> i32,
+    target: unsafe extern "C" fn(
+        device: *mut c_void,
+        interop: *mut c_void,
+        chain: *mut c_void,
+        out: *mut rsf_overlay11on12_target,
+    ) -> u32,
+    acquire: unsafe extern "C" fn(interop: *mut c_void, wrapped: *mut c_void),
+    draw: unsafe extern "C" fn(
+        context: *mut c_void,
+        view: *mut c_void,
+        width: u32,
+        height: u32,
+        stats: *const rsf_overlay_stats,
+        intent: *mut rsf_overlay_intent,
+        visible: u32,
+        hint: f32,
+    ) -> i32,
+    release: unsafe extern "C" fn(interop: *mut c_void, wrapped: *mut c_void),
+    flush: unsafe extern "C" fn(context: *mut c_void),
+    stop: unsafe extern "C" fn(device: *mut c_void),
+}
+
+impl Platform {
+    fn admit(raw: &RawPlatform) -> Option<Self> {
+        Some(Self {
+            create: raw.create?,
+            window: raw.window?,
+            start: raw.start?,
+            admit: raw.admit?,
+            target: raw.target?,
+            acquire: raw.acquire?,
+            draw: raw.draw?,
+            release: raw.release?,
+            flush: raw.flush?,
+            stop: raw.stop?,
+        })
+    }
+}
 
 const NOT_SUPPORTED: i32 = -7;
 
@@ -46,7 +102,7 @@ struct Wrapped<'a> {
 impl Drop for Wrapped<'_> {
     fn drop(&mut self) {
         unsafe {
-            (self.platform.release.unwrap())(
+            (self.platform.release)(
                 self.binding.interop.as_ptr(),
                 self.resource.as_ref().unwrap().as_ptr(),
             );
@@ -54,7 +110,7 @@ impl Drop for Wrapped<'_> {
             // destruction, so they do not hold a backbuffer across ResizeBuffers.
             self.view = None;
             self.resource = None;
-            (self.platform.flush.unwrap())(self.binding.context.as_ptr());
+            (self.platform.flush)(self.binding.context.as_ptr());
         }
     }
 }
@@ -102,8 +158,7 @@ impl State {
         }
         if self.binding.is_none() {
             let mut native: rsf_overlay11on12_device = unsafe { std::mem::zeroed() };
-            let result =
-                unsafe { (platform.create.unwrap())(frame.device, frame.queue, &mut native) };
+            let result = unsafe { (platform.create)(frame.device, frame.queue, &mut native) };
             if result == NOT_SUPPORTED {
                 return self.refuse(
                     frame,
@@ -136,13 +191,11 @@ impl State {
         }
         if !binding.started {
             let mut window = frame.input_window;
-            if window.is_null()
-                && unsafe { (platform.window.unwrap())(frame.chain, &mut window) } == 0
-            {
+            if window.is_null() && unsafe { (platform.window)(frame.chain, &mut window) } == 0 {
                 return 0;
             }
             if unsafe {
-                (platform.start.unwrap())(binding.device.as_ptr(), window, frame.logger, frame.user)
+                (platform.start)(binding.device.as_ptr(), window, frame.logger, frame.user)
             } == 0
             {
                 return self.refuse(
@@ -154,15 +207,14 @@ impl State {
             frame.log(c"Shared overlay attached to D3D12 queue and window; Insert opens presets.");
         }
         let (mut visible, mut hint) = (0, 0.0);
-        if unsafe {
-            (platform.admit.unwrap())(frame.stats.show_performance_hud, &mut visible, &mut hint)
-        } == 0
+        if unsafe { (platform.admit)(frame.stats.show_performance_hud, &mut visible, &mut hint) }
+            == 0
         {
             return 0;
         }
         let mut native: rsf_overlay11on12_target = unsafe { std::mem::zeroed() };
         if unsafe {
-            (platform.target.unwrap())(
+            (platform.target)(
                 binding.device.as_ptr(),
                 binding.interop.as_ptr(),
                 frame.chain,
@@ -179,7 +231,7 @@ impl State {
         ) else {
             return 0;
         };
-        unsafe { (platform.acquire.unwrap())(binding.interop.as_ptr(), resource.as_ptr()) };
+        unsafe { (platform.acquire)(binding.interop.as_ptr(), resource.as_ptr()) };
         let wrapped = Wrapped {
             platform,
             binding,
@@ -188,7 +240,7 @@ impl State {
             _backbuffer: backbuffer,
         };
         unsafe {
-            (platform.draw.unwrap())(
+            (platform.draw)(
                 binding.context.as_ptr(),
                 wrapped.view.as_ref().unwrap().as_ptr(),
                 native.width,
@@ -205,14 +257,13 @@ impl State {
         if let Some(binding) = &self.binding
             && binding.started
         {
-            unsafe { (platform.stop.unwrap())(binding.device.as_ptr()) };
+            unsafe { (platform.stop)(binding.device.as_ptr()) };
         }
         *self = Self::default();
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay11on12_frame(
+unsafe fn render_frame(
     platform: &Platform,
     device: Handle,
     queue: Handle,
@@ -254,9 +305,45 @@ unsafe extern "C" fn rsf_core_overlay11on12_frame(
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay11on12_stop(platform: &Platform) {
+fn stop(platform: &Platform) {
     OWNER.lock().unwrap().stop(platform);
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_overlay11on12_frame(
+    raw: &RawPlatform,
+    device: Handle,
+    queue: Handle,
+    chain: Handle,
+    input_window: Handle,
+    stats: *const rsf_overlay_stats,
+    intent: *mut rsf_overlay_intent,
+    logger: rsf_overlay12_log,
+    user: Handle,
+) -> i32 {
+    let Some(platform) = Platform::admit(raw) else {
+        return 0;
+    };
+    unsafe {
+        render_frame(
+            &platform,
+            device,
+            queue,
+            chain,
+            input_window,
+            stats,
+            intent,
+            logger,
+            user,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_overlay11on12_stop(raw: &RawPlatform) {
+    if let Some(platform) = Platform::admit(raw) {
+        stop(&platform);
+    }
 }
 
 #[cfg(test)]
@@ -374,16 +461,16 @@ mod tests {
     #[test]
     fn refused_draw_releases_the_backbuffer_and_foreign_queue_cannot_wrap() {
         let platform = Platform {
-            create: Some(create),
-            window: Some(window),
-            start: Some(start),
-            admit: Some(admit),
-            target: Some(target),
-            acquire: Some(acquire),
-            draw: Some(draw),
-            release: Some(release),
-            flush: Some(flush),
-            stop: Some(stop),
+            create,
+            window,
+            start,
+            admit,
+            target,
+            acquire,
+            draw,
+            release,
+            flush,
+            stop,
         };
         let mut device_vtable = &VTABLE;
         let mut queue_vtable = &VTABLE;
@@ -404,7 +491,7 @@ mod tests {
         owner.stop(&platform);
         assert_eq!(owner.render(&platform, &frame), 0);
         let hidden = Platform {
-            admit: Some(deny),
+            admit: deny,
             ..platform
         };
         assert_eq!(owner.render(&hidden, &frame), 0);

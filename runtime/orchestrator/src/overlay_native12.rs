@@ -11,7 +11,7 @@ use crate::overlay_host_abi::{
 };
 use crate::overlay_native12_abi::{
     RSF_OVERLAY12_TEXTURE_LIMIT, rsf_overlay12_draw as Draw, rsf_overlay12_draw_call as DrawCall,
-    rsf_overlay12_frame as FrameTable, rsf_overlay12_log, rsf_overlay12_platform as Platform,
+    rsf_overlay12_frame as FrameTable, rsf_overlay12_log, rsf_overlay12_platform as RawPlatform,
     rsf_overlay12_target as Target,
 };
 use crate::overlay_panel::{OpenPanel, PanelEntries, elapsed_seconds, open_panel};
@@ -32,6 +32,86 @@ use windows_sys::Win32::{
 
 #[cfg(not(test))]
 pub(crate) mod native;
+
+// Production constructs this table with required pointers. Only the legacy
+// C entry points admit a nullable table.
+#[derive(Clone, Copy)]
+struct Platform {
+    window: unsafe extern "C" fn(chain: *mut c_void) -> *mut c_void,
+    initialize: unsafe extern "C" fn(
+        device: *mut c_void,
+        queue: *mut c_void,
+        fence: *mut *mut c_void,
+    ) -> *mut c_void,
+    create_frame: unsafe extern "C" fn(panel: *mut c_void, frame: *mut FrameTable) -> u32,
+    install_input:
+        unsafe extern "C" fn(window: *mut c_void, log: rsf_overlay12_log, user: *mut c_void) -> u32,
+    stop_input: unsafe extern "C" fn() -> u32,
+    destroy: unsafe extern "C" fn(panel: *mut c_void),
+    visible: unsafe extern "C" fn() -> u32,
+    set_visible: unsafe extern "C" fn(visible: u32),
+    completed: unsafe extern "C" fn(fence: *mut c_void) -> u64,
+    arm: unsafe extern "C" fn(fence: *mut c_void, event: *mut c_void, value: u64) -> u32,
+    begin: unsafe extern "C" fn(
+        frame: *const FrameTable,
+        chain: *mut c_void,
+        target: *mut Target,
+    ) -> *mut c_void,
+    create_pipeline: unsafe extern "C" fn(panel: *mut c_void, format: u32) -> *mut c_void,
+    create_upload:
+        unsafe extern "C" fn(panel: *mut c_void, bytes: u64, capacity: *mut u64) -> *mut c_void,
+    collect_input: unsafe extern "C" fn(
+        input: *mut rsf_overlay_input,
+        width: u32,
+        height: u32,
+        elapsed: f32,
+    ) -> u32,
+    create_texture:
+        unsafe extern "C" fn(panel: *mut c_void, width: u32, height: u32) -> *mut c_void,
+    upload_texture: unsafe extern "C" fn(
+        panel: *mut c_void,
+        frame: *const FrameTable,
+        resource: *mut c_void,
+        update: *const rsf_overlay_texture_update,
+    ) -> *mut c_void,
+    record: unsafe extern "C" fn(
+        panel: *mut c_void,
+        frame: *const FrameTable,
+        binding: *const Draw,
+        textures: *const *mut c_void,
+        texture_count: u32,
+        calls: *const DrawCall,
+        call_count: u32,
+    ) -> u32,
+    execute: unsafe extern "C" fn(panel: *mut c_void, frame: *const FrameTable),
+    signal: unsafe extern "C" fn(panel: *mut c_void, fence: *mut c_void, value: u64) -> u32,
+}
+
+impl Platform {
+    fn admit(raw: &RawPlatform) -> Option<Self> {
+        Some(Self {
+            window: raw.window?,
+            initialize: raw.initialize?,
+            create_frame: raw.create_frame?,
+            install_input: raw.install_input?,
+            stop_input: raw.stop_input?,
+            destroy: raw.destroy?,
+            visible: raw.visible?,
+            set_visible: raw.set_visible?,
+            completed: raw.completed?,
+            arm: raw.arm?,
+            begin: raw.begin?,
+            create_pipeline: raw.create_pipeline?,
+            create_upload: raw.create_upload?,
+            collect_input: raw.collect_input?,
+            create_texture: raw.create_texture?,
+            upload_texture: raw.upload_texture?,
+            record: raw.record?,
+            execute: raw.execute?,
+            signal: raw.signal?,
+        })
+    }
+}
 
 const SLOTS: usize = 3;
 const TEXTURES: usize = RSF_OVERLAY12_TEXTURE_LIMIT as usize;
@@ -128,7 +208,7 @@ unsafe impl Send for Fence {}
 
 impl Fence {
     fn completed(&self, platform: &Platform) -> u64 {
-        unsafe { (platform.completed.unwrap())(self.reference.as_ptr()) }
+        unsafe { (platform.completed)(self.reference.as_ptr()) }
     }
 
     fn wait_for_slot(&mut self, platform: &Platform, value: u64) -> bool {
@@ -143,7 +223,7 @@ impl Fence {
             return false;
         };
         let event = event.as_raw_handle();
-        if unsafe { (platform.arm.unwrap())(self.reference.as_ptr(), event, value) } == 0 {
+        if unsafe { (platform.arm)(self.reference.as_ptr(), event, value) } == 0 {
             return false;
         }
         self.armed = Some(value);
@@ -182,13 +262,8 @@ fn upload(
         return Some(buffer.resource.as_ptr());
     }
     let mut capacity = 0;
-    let resource = unsafe {
-        ComRef::from_owned((platform.create_upload.unwrap())(
-            native,
-            bytes,
-            &mut capacity,
-        ))
-    }?;
+    let resource =
+        unsafe { ComRef::from_owned((platform.create_upload)(native, bytes, &mut capacity)) }?;
     if capacity < bytes {
         return None;
     }
@@ -264,7 +339,7 @@ impl Graphics {
             .is_none_or(|(active, _)| *active != format)
         {
             let pipeline =
-                unsafe { ComRef::from_owned((platform.create_pipeline.unwrap())(native, format)) }?;
+                unsafe { ComRef::from_owned((platform.create_pipeline)(native, format)) }?;
             self.pipeline = Some((format, pipeline));
         }
         let (_, pipeline) = self.pipeline.as_ref()?;
@@ -320,7 +395,7 @@ impl Atlas {
                 return None;
             }
             let resource = unsafe {
-                ComRef::from_owned((platform.create_texture.unwrap())(
+                ComRef::from_owned((platform.create_texture)(
                     native,
                     update.width,
                     update.height,
@@ -343,7 +418,7 @@ impl Atlas {
             return None;
         }
         let upload = unsafe {
-            ComRef::from_owned((platform.upload_texture.unwrap())(
+            ComRef::from_owned((platform.upload_texture)(
                 native,
                 &lease.frame,
                 texture.resource.as_ptr(),
@@ -418,7 +493,7 @@ impl Atlas {
             self.retained[lease.slot].push(texture.resource.clone());
         }
         let recorded = unsafe {
-            (platform.record.unwrap())(
+            (platform.record)(
                 native,
                 &lease.frame,
                 binding,
@@ -503,8 +578,7 @@ impl Renderer {
                 srv: null_mut(),
                 rtv: null_mut(),
             };
-            let created =
-                unsafe { (platform.create_frame.unwrap())(self.handle.as_ptr(), &mut table) };
+            let created = unsafe { (platform.create_frame)(self.handle.as_ptr(), &mut table) };
             *frame = unsafe { Frame::adopt(table) };
             if created == 0 || frame.table().is_none() {
                 return None;
@@ -585,24 +659,24 @@ impl Started {
         logger: rsf_overlay12_log,
         user: *mut c_void,
     ) -> Option<Self> {
-        let window = unsafe { (platform.window.unwrap())(chain) };
+        let window = unsafe { (platform.window)(chain) };
         if window.is_null() {
             return None;
         }
         let mut ui = Ui::open()?;
         let mut fence = null_mut();
-        let native = unsafe { (platform.initialize.unwrap())(device, queue, &mut fence) };
+        let native = unsafe { (platform.initialize)(device, queue, &mut fence) };
         let fence = unsafe { ComRef::from_owned(fence) };
         let mut renderer = Renderer {
             handle: NonNull::new(native)?,
-            destroy: platform.destroy.unwrap(),
+            destroy: platform.destroy,
             frames: std::array::from_fn(|_| Frame::default()),
         };
         let reference = fence?;
         // A refusal releases the fence, then the created frames and the renderer, as the native
         // initialization failure did. Nothing has been submitted yet.
         renderer.create_frames(platform)?;
-        if unsafe { (platform.install_input.unwrap())(window, logger, user) } == 0 {
+        if unsafe { (platform.install_input)(window, logger, user) } == 0 {
             return None;
         }
         ui.publish();
@@ -646,7 +720,7 @@ impl Started {
     fn fail(&mut self, platform: &Platform) {
         self.failed = true;
         READY.store(false, Ordering::Release);
-        unsafe { (platform.set_visible.unwrap())(0) };
+        unsafe { (platform.set_visible)(0) };
         self.log(c"Native D3D12 overlay refused graphics work; see validation evidence.");
     }
 
@@ -656,7 +730,7 @@ impl Started {
             if let Some(value) = self.unsignalled {
                 // Signal on the retained original queue behind the already executed list.
                 if unsafe {
-                    (platform.signal.unwrap())(
+                    (platform.signal)(
                         self.renderer.handle.as_ptr(),
                         self.fence.reference.as_ptr(),
                         value,
@@ -672,7 +746,7 @@ impl Started {
                 return false;
             }
         }
-        self.fence.finish_event(platform, 0) && unsafe { (platform.stop_input.unwrap())() != 0 }
+        self.fence.finish_event(platform, 0) && unsafe { (platform.stop_input)() != 0 }
     }
 }
 
@@ -696,27 +770,24 @@ impl Panel {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay12_visible(platform: &Platform) -> u32 {
+fn panel_visible(platform: &Platform) -> u32 {
     if READY.load(Ordering::Acquire) {
-        unsafe { (platform.visible.unwrap())() }
+        unsafe { (platform.visible)() }
     } else {
         0
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay12_toggle(platform: &Platform) {
+fn panel_toggle(platform: &Platform) {
     if let Ok(_panel) = PANEL.try_lock()
         && READY.load(Ordering::Acquire)
     {
-        let visible = unsafe { (platform.visible.unwrap())() };
-        unsafe { (platform.set_visible.unwrap())(u32::from(visible == 0)) };
+        let visible = unsafe { (platform.visible)() };
+        unsafe { (platform.set_visible)(u32::from(visible == 0)) };
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay12_present(
+unsafe fn panel_present(
     platform: &Platform,
     device: *mut c_void,
     queue: *mut c_void,
@@ -788,6 +859,35 @@ unsafe extern "C" fn rsf_core_overlay12_present(
     0
 }
 
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_overlay12_visible(raw: &RawPlatform) -> u32 {
+    Platform::admit(raw).map_or(0, |platform| panel_visible(&platform))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_overlay12_toggle(raw: &RawPlatform) {
+    if let Some(platform) = Platform::admit(raw) {
+        panel_toggle(&platform);
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_overlay12_present(
+    raw: &RawPlatform,
+    device: *mut c_void,
+    queue: *mut c_void,
+    chain: *mut c_void,
+    stats: *const rsf_overlay_stats,
+    intent: *mut rsf_overlay_intent,
+    logger: rsf_overlay12_log,
+    user: *mut c_void,
+) -> i32 {
+    let Some(platform) = Platform::admit(raw) else {
+        return 0;
+    };
+    unsafe { panel_present(&platform, device, queue, chain, stats, intent, logger, user) }
+}
+
 impl Started {
     unsafe fn present(
         &mut self,
@@ -797,7 +897,7 @@ impl Started {
     ) -> Option<rsf_overlay_intent> {
         let now = unsafe { GetTickCount64() };
         let active_for = now.saturating_sub(self.started);
-        let visible = unsafe { (platform.visible.unwrap())() } != 0;
+        let visible = unsafe { (platform.visible)() } != 0;
         if !visible && unsafe { (*stats).show_performance_hud } == 0 && active_for >= STARTUP_MS {
             return None;
         }
@@ -826,9 +926,8 @@ impl Started {
             height: 0,
             format: 0,
         };
-        let target = unsafe {
-            ComRef::from_owned((platform.begin.unwrap())(&lease.frame, chain, &mut frame))
-        };
+        let target =
+            unsafe { ComRef::from_owned((platform.begin)(&lease.frame, chain, &mut frame)) };
         let Some(target) = target else {
             self.fail(platform);
             return None;
@@ -867,9 +966,7 @@ impl Started {
             struct_size: size_of::<rsf_overlay_input>() as u32,
             ..Default::default()
         };
-        if unsafe {
-            (platform.collect_input.unwrap())(&mut input, frame.width, frame.height, elapsed)
-        } == 0
+        if unsafe { (platform.collect_input)(&mut input, frame.width, frame.height, elapsed) } == 0
         {
             self.fail(platform);
             return None;
@@ -884,7 +981,7 @@ impl Started {
         }
         self.previous = now;
         if decided.close_requested != 0 {
-            unsafe { (platform.set_visible.unwrap())(0) };
+            unsafe { (platform.set_visible)(0) };
         }
         if trace {
             self.log(c"Overlay12: atlas uploads and draw recording");
@@ -930,8 +1027,8 @@ impl Started {
             self.log(c"Overlay12: queue submission begin");
         }
         let fence = self.fence.reference.as_ptr();
-        unsafe { (platform.execute.unwrap())(native, &lease.frame) };
-        if unsafe { (platform.signal.unwrap())(native, fence, value) } == 0 {
+        unsafe { (platform.execute)(native, &lease.frame) };
+        if unsafe { (platform.signal)(native, fence, value) } == 0 {
             // Execute already happened. The failed owner stays alive until a signal proves retirement.
             self.unsignalled = Some(value);
             self.fail(platform);
@@ -1055,26 +1152,54 @@ mod tests {
         )
     }
 
+    // These atlas and retirement fixtures replace only the leaves they drive.
+    macro_rules! unused {
+        ($(fn $name:ident($($arg:tt)*) $(-> $result:ty)?;)*) => {
+            $(unsafe extern "C" fn $name($($arg)*) $(-> $result)? {
+                unreachable!(concat!("fixture did not supply ", stringify!($name)))
+            })*
+        };
+    }
+
+    unused! {
+        fn unused_window(_: *mut c_void) -> *mut c_void;
+        fn unused_initialize(_: *mut c_void, _: *mut c_void, _: *mut *mut c_void) -> *mut c_void;
+        fn unused_create_frame(_: *mut c_void, _: *mut FrameTable) -> u32;
+        fn unused_install_input(_: *mut c_void, _: rsf_overlay12_log, _: *mut c_void) -> u32;
+        fn unused_stop_input() -> u32;
+        fn unused_destroy(_: *mut c_void);
+        fn unused_visible() -> u32;
+        fn unused_set_visible(_: u32);
+        fn unused_completed(_: *mut c_void) -> u64;
+        fn unused_arm(_: *mut c_void, _: *mut c_void, _: u64) -> u32;
+        fn unused_begin(_: *const FrameTable, _: *mut c_void, _: *mut Target) -> *mut c_void;
+        fn unused_create_pipeline(_: *mut c_void, _: u32) -> *mut c_void;
+        fn unused_create_upload(_: *mut c_void, _: u64, _: *mut u64) -> *mut c_void;
+        fn unused_collect_input(_: *mut rsf_overlay_input, _: u32, _: u32, _: f32) -> u32;
+        fn unused_execute(_: *mut c_void, _: *const FrameTable);
+        fn unused_signal(_: *mut c_void, _: *mut c_void, _: u64) -> u32;
+    }
+
     const PLATFORM: Platform = Platform {
-        window: None,
-        initialize: None,
-        create_frame: None,
-        install_input: None,
-        stop_input: None,
-        destroy: None,
-        visible: None,
-        set_visible: None,
-        completed: None,
-        arm: None,
-        begin: None,
-        create_pipeline: None,
-        create_upload: None,
-        collect_input: None,
-        create_texture: Some(create),
-        upload_texture: Some(upload),
-        record: Some(draw),
-        execute: None,
-        signal: None,
+        window: unused_window,
+        initialize: unused_initialize,
+        create_frame: unused_create_frame,
+        install_input: unused_install_input,
+        stop_input: unused_stop_input,
+        destroy: unused_destroy,
+        visible: unused_visible,
+        set_visible: unused_visible,
+        completed: unused_completed,
+        arm: unused_arm,
+        begin: unused_begin,
+        create_pipeline: unused_create_pipeline,
+        create_upload: unused_create_upload,
+        collect_input: unused_collect_input,
+        create_texture: create,
+        upload_texture: upload,
+        record: draw,
+        execute: unused_execute,
+        signal: unused_signal,
     };
 
     unsafe extern "C" fn destroy_ui(_: *mut rsf_overlay) {}
@@ -1297,7 +1422,7 @@ mod tests {
     }
 
     const FRAME_PLATFORM: Platform = Platform {
-        create_frame: Some(create_frame),
+        create_frame: create_frame,
         ..PLATFORM
     };
 
@@ -1412,9 +1537,9 @@ mod tests {
             retry: None,
         };
         let platform = Platform {
-            completed: Some(pending),
-            signal: Some(signal),
-            stop_input: Some(stop_input),
+            completed: pending,
+            signal: signal,
+            stop_input: stop_input,
             ..FRAME_PLATFORM
         };
         panel.retire_failed(&platform, 42);
@@ -1424,7 +1549,7 @@ mod tests {
         assert!(panel.started.is_some());
         panel.retire_failed(
             &Platform {
-                completed: Some(completed),
+                completed: completed,
                 ..platform
             },
             44,

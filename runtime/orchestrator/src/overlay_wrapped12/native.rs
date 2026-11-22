@@ -248,19 +248,19 @@ unsafe extern "C" {
 }
 
 const PLATFORM: Platform = Platform {
-    create: Some(create_wrapped_device),
-    window: Some(window),
-    start: Some(rsf_overlay_host_start_device),
-    admit: Some(rsf_overlay_host_admit_target),
-    target: Some(target),
-    acquire: Some(acquire),
-    draw: Some(rsf_overlay_host_draw_admitted_target),
-    release: Some(release),
-    flush: Some(graphics::flush),
-    stop: Some(rsf_overlay_host_stop_device),
+    create: create_wrapped_device,
+    window,
+    start: rsf_overlay_host_start_device,
+    admit: rsf_overlay_host_admit_target,
+    target,
+    acquire,
+    draw: rsf_overlay_host_draw_admitted_target,
+    release,
+    flush: graphics::flush,
+    stop: rsf_overlay_host_stop_device,
 };
 const PRESENT: Platform = Platform {
-    target: Some(target_present),
+    target: target_present,
     ..PLATFORM
 };
 
@@ -275,7 +275,7 @@ unsafe extern "C" fn rsf_overlay_d3d12_frame(
     user: Handle,
 ) -> i32 {
     unsafe {
-        rsf_core_overlay11on12_frame(
+        render_frame(
             &PLATFORM,
             device,
             queue,
@@ -304,7 +304,7 @@ pub(crate) unsafe extern "C" fn rsf_overlay_d3d12_frame_for_window(
         return -1;
     }
     unsafe {
-        rsf_core_overlay11on12_frame(
+        render_frame(
             &PRESENT, device, queue, backbuffer, window, stats, intent, log, user,
         )
     }
@@ -312,7 +312,7 @@ pub(crate) unsafe extern "C" fn rsf_overlay_d3d12_frame_for_window(
 
 #[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_overlay_d3d12_stop() {
-    rsf_core_overlay11on12_stop(&PLATFORM);
+    stop(&PLATFORM);
 }
 
 #[unsafe(no_mangle)]

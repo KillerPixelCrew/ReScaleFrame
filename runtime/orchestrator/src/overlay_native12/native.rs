@@ -624,35 +624,35 @@ unsafe extern "C" fn signal(gpu: *mut c_void, fence: *mut c_void, value: u64) ->
 }
 
 static PLATFORM: Platform = Platform {
-    window: Some(window),
-    initialize: Some(create_renderer),
-    create_frame: Some(create_frame),
-    install_input: Some(install),
-    stop_input: Some(stop),
-    destroy: Some(destroy),
-    visible: Some(rsf_overlay_input_visible),
-    set_visible: Some(rsf_overlay_input_set_visible),
-    completed: Some(completed),
-    arm: Some(arm),
-    begin: Some(begin),
-    create_pipeline: Some(create_pipeline),
-    create_upload: Some(create_upload),
-    collect_input: Some(collect),
-    create_texture: Some(create_texture),
-    upload_texture: Some(upload_texture),
-    record: Some(record),
-    execute: Some(execute),
-    signal: Some(signal),
+    window,
+    initialize: create_renderer,
+    create_frame,
+    install_input: install,
+    stop_input: stop,
+    destroy,
+    visible: rsf_overlay_input_visible,
+    set_visible: rsf_overlay_input_set_visible,
+    completed,
+    arm,
+    begin,
+    create_pipeline,
+    create_upload,
+    collect_input: collect,
+    create_texture,
+    upload_texture,
+    record,
+    execute,
+    signal,
 };
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_overlay_native12_visible() -> u32 {
-    rsf_core_overlay12_visible(&PLATFORM)
+    panel_visible(&PLATFORM)
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_overlay_native12_toggle() {
-    rsf_core_overlay12_toggle(&PLATFORM);
+    panel_toggle(&PLATFORM);
 }
 
 #[unsafe(no_mangle)]
@@ -665,5 +665,5 @@ pub(crate) unsafe extern "C" fn rsf_overlay_native12_present(
     log: rsf_overlay12_log,
     user: *mut c_void,
 ) -> i32 {
-    unsafe { rsf_core_overlay12_present(&PLATFORM, device, queue, chain, stats, intent, log, user) }
+    unsafe { panel_present(&PLATFORM, device, queue, chain, stats, intent, log, user) }
 }

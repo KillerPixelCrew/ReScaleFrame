@@ -54,78 +54,64 @@ impl Default for Targets {
         }
     }
 }
-#[derive(Default, Copy, Clone)]
+#[derive(Copy, Clone)]
 struct Platform {
     #[cfg(test)]
-    load_panel:
-        Option<unsafe extern "C" fn(out: *mut rsf_overlay_host_panel, error: *mut u32) -> u32>,
-    chain_device: Option<unsafe extern "C" fn(chain: *mut c_void, device: *mut *mut c_void) -> i32>,
-    chain_buffer:
-        Option<unsafe extern "C" fn(chain: *mut c_void, texture: *mut *mut c_void) -> i32>,
-    chain_window: Option<unsafe extern "C" fn(chain: *mut c_void) -> *mut c_void>,
-    same_object: Option<unsafe extern "C" fn(first: *mut c_void, second: *mut c_void) -> u32>,
-    immediate_context: Option<unsafe extern "C" fn(device: *mut c_void) -> *mut c_void>,
-    texture_device: Option<unsafe extern "C" fn(texture: *mut c_void) -> *mut c_void>,
-    texture_desc: Option<unsafe extern "C" fn(texture: *mut c_void, out: *mut TextureDesc)>,
-    create_view: Option<
-        unsafe extern "C" fn(
-            device: *mut c_void,
-            texture: *mut c_void,
-            view: *mut *mut c_void,
-        ) -> i32,
-    >,
-    save_targets: Option<unsafe extern "C" fn(context: *mut c_void, out: *mut Targets)>,
-    bind_target: Option<unsafe extern "C" fn(context: *mut c_void, view: *mut c_void)>,
-    restore_targets: Option<unsafe extern "C" fn(context: *mut c_void, saved: *const Targets)>,
-    renderer_create: Option<
-        unsafe extern "C" fn(
-            device: *mut c_void,
-            log: Log,
-            user: *mut c_void,
-            out: *mut *mut c_void,
-        ) -> i32,
-    >,
-    renderer_upload: Option<
-        unsafe extern "C" fn(
-            renderer: *mut c_void,
-            context: *mut c_void,
-            update: *const rsf_overlay_texture_update,
-        ) -> i32,
-    >,
-    renderer_free: Option<unsafe extern "C" fn(renderer: *mut c_void, id: u64)>,
-    renderer_draw: Option<
-        unsafe extern "C" fn(
-            renderer: *mut c_void,
-            context: *mut c_void,
-            data: *const rsf_overlay_draw_data,
-            width: u32,
-            height: u32,
-        ) -> i32,
-    >,
-    renderer_destroy: Option<unsafe extern "C" fn(renderer: *mut c_void)>,
-    input_install: Option<
-        unsafe extern "C" fn(
-            window: *mut c_void,
-            toggle_key: u32,
-            log: Log,
-            user: *mut c_void,
-        ) -> i32,
-    >,
-    input_uninstall: Option<unsafe extern "C" fn()>,
-    input_visible: Option<unsafe extern "C" fn() -> u32>,
-    input_set_visible: Option<unsafe extern "C" fn(visible: u32)>,
-    input_collect: Option<
-        unsafe extern "C" fn(
-            out: *mut rsf_overlay_input,
-            width: u32,
-            height: u32,
-            delta_seconds: f32,
-        ),
-    >,
-    tick: Option<unsafe extern "C" fn() -> u64>,
-    counter: Option<unsafe extern "C" fn(value: *mut i64) -> u32>,
-    frequency: Option<unsafe extern "C" fn(value: *mut i64) -> u32>,
-    thread_id: Option<unsafe extern "C" fn() -> u32>,
+    load_panel: unsafe extern "C" fn(out: *mut rsf_overlay_host_panel, error: *mut u32) -> u32,
+    chain_device: unsafe extern "C" fn(chain: *mut c_void, device: *mut *mut c_void) -> i32,
+    chain_buffer: unsafe extern "C" fn(chain: *mut c_void, texture: *mut *mut c_void) -> i32,
+    chain_window: unsafe extern "C" fn(chain: *mut c_void) -> *mut c_void,
+    same_object: unsafe extern "C" fn(first: *mut c_void, second: *mut c_void) -> u32,
+    immediate_context: unsafe extern "C" fn(device: *mut c_void) -> *mut c_void,
+    texture_device: unsafe extern "C" fn(texture: *mut c_void) -> *mut c_void,
+    texture_desc: unsafe extern "C" fn(texture: *mut c_void, out: *mut TextureDesc),
+    create_view: unsafe extern "C" fn(
+        device: *mut c_void,
+        texture: *mut c_void,
+        view: *mut *mut c_void,
+    ) -> i32,
+    save_targets: unsafe extern "C" fn(context: *mut c_void, out: *mut Targets),
+    bind_target: unsafe extern "C" fn(context: *mut c_void, view: *mut c_void),
+    restore_targets: unsafe extern "C" fn(context: *mut c_void, saved: *const Targets),
+    renderer_create: unsafe extern "C" fn(
+        device: *mut c_void,
+        log: Log,
+        user: *mut c_void,
+        out: *mut *mut c_void,
+    ) -> i32,
+    renderer_upload: unsafe extern "C" fn(
+        renderer: *mut c_void,
+        context: *mut c_void,
+        update: *const rsf_overlay_texture_update,
+    ) -> i32,
+    renderer_free: unsafe extern "C" fn(renderer: *mut c_void, id: u64),
+    renderer_draw: unsafe extern "C" fn(
+        renderer: *mut c_void,
+        context: *mut c_void,
+        data: *const rsf_overlay_draw_data,
+        width: u32,
+        height: u32,
+    ) -> i32,
+    renderer_destroy: unsafe extern "C" fn(renderer: *mut c_void),
+    input_install: unsafe extern "C" fn(
+        window: *mut c_void,
+        toggle_key: u32,
+        log: Log,
+        user: *mut c_void,
+    ) -> i32,
+    input_uninstall: unsafe extern "C" fn(),
+    input_visible: unsafe extern "C" fn() -> u32,
+    input_set_visible: unsafe extern "C" fn(visible: u32),
+    input_collect: unsafe extern "C" fn(
+        out: *mut rsf_overlay_input,
+        width: u32,
+        height: u32,
+        delta_seconds: f32,
+    ),
+    tick: unsafe extern "C" fn() -> u64,
+    counter: unsafe extern "C" fn(value: *mut i64) -> u32,
+    frequency: unsafe extern "C" fn(value: *mut i64) -> u32,
+    thread_id: unsafe extern "C" fn() -> u32,
 }
 
 /* The key that opens the panel. F6 through F11 are already claimed by the bridge, and the input
@@ -149,10 +135,6 @@ const STARTUP_FADE_MS: u64 = 1000;
 struct DrawAdmission {
     visible: bool,
     hint: f32,
-}
-
-fn leaf<T>(entry: Option<T>) -> T {
-    entry.expect("overlay host platform entry")
 }
 
 struct Logger {
@@ -231,8 +213,8 @@ struct SavedTargets<'a> {
 impl<'a> SavedTargets<'a> {
     fn bind(platform: &'a Platform, context: Handle, view: Handle) -> Self {
         let mut targets = Targets::default();
-        unsafe { leaf(platform.save_targets)(context, &mut targets) };
-        unsafe { leaf(platform.bind_target)(context, view) };
+        unsafe { (platform.save_targets)(context, &mut targets) };
+        unsafe { (platform.bind_target)(context, view) };
         Self {
             platform,
             context,
@@ -243,7 +225,7 @@ impl<'a> SavedTargets<'a> {
 
 impl Drop for SavedTargets<'_> {
     fn drop(&mut self) {
-        unsafe { leaf(self.platform.restore_targets)(self.context, &self.targets) };
+        unsafe { (self.platform.restore_targets)(self.context, &self.targets) };
         for saved in self.targets.views.into_iter().chain([self.targets.depth]) {
             drop(unsafe { ComRef::from_owned(saved) });
         }
@@ -298,7 +280,7 @@ impl Host {
             let loaded = {
                 let mut api = rsf_overlay_host_panel::default();
                 let mut error = 0;
-                let status = unsafe { leaf(_platform.load_panel)(&mut api, &mut error) } as i32;
+                let status = unsafe { (_platform.load_panel)(&mut api, &mut error) } as i32;
                 match status {
                     RSF_OVERLAY_HOST_PANEL_LOADED => {
                         PanelEntries::admit(api).ok_or(LoadError::MissingExports)
@@ -347,7 +329,7 @@ impl Host {
         }
         let mut renderer = null_mut();
         let built = unsafe {
-            leaf(p.renderer_create)(
+            (p.renderer_create)(
                 device.as_ptr(),
                 Some(log_from_module),
                 null_mut(),
@@ -365,23 +347,22 @@ impl Host {
             refusals.say(refusals.window);
             None
         } else {
-            let installed = unsafe {
-                leaf(p.input_install)(window, TOGGLE_KEY, Some(log_from_module), null_mut())
-            };
+            let installed =
+                unsafe { (p.input_install)(window, TOGGLE_KEY, Some(log_from_module), null_mut()) };
             if installed != 0 {
                 refusals.say_input(installed);
             }
             Some(installed)
         };
         if installed != Some(0) {
-            unsafe { leaf(p.renderer_destroy)(renderer) };
+            unsafe { (p.renderer_destroy)(renderer) };
             unsafe { (api.destroy)(panel) };
             self.failed = true;
             return 0;
         }
 
         let mut frequency = 0;
-        if unsafe { leaf(p.frequency)(&mut frequency) } == 0 {
+        if unsafe { (p.frequency)(&mut frequency) } == 0 {
             frequency = 0;
         }
         self.panel = panel;
@@ -402,7 +383,7 @@ impl Host {
             return 0;
         }
         let mut raw = null_mut();
-        let got = unsafe { leaf(p.chain_device)(chain, &mut raw) };
+        let got = unsafe { (p.chain_device)(chain, &mut raw) };
         let device = unsafe { ComRef::from_owned(raw) };
         let Some(device) = device.filter(|_| got >= 0) else {
             say(format_args!(
@@ -416,7 +397,7 @@ impl Host {
             Pointer(chain),
             Pointer(device.as_ptr())
         ));
-        let window = || unsafe { leaf(p.chain_window)(chain) };
+        let window = || unsafe { (p.chain_window)(chain) };
         if self.build(p, device, window, Refusals::CHAIN) == 0 {
             return 0;
         }
@@ -448,14 +429,14 @@ impl Host {
             self.failed = false;
             return 0;
         }
-        self.hint_begin = unsafe { leaf(p.tick)() };
+        self.hint_begin = unsafe { (p.tick)() };
         say("overlay: shared panel ready on supplied device; Insert opens it");
         1
     }
 
     fn seconds_since_last_frame(&mut self, p: &Platform) -> f32 {
         let mut now = 0;
-        if self.frequency == 0 || unsafe { leaf(p.counter)(&mut now) } == 0 {
+        if self.frequency == 0 || unsafe { (p.counter)(&mut now) } == 0 {
             return elapsed_seconds(0.0);
         }
         if self.last_frame == 0 {
@@ -475,7 +456,7 @@ impl Host {
                 (api.texture_updates)(self.panel, updates.as_mut_ptr(), UPDATE_BATCH as u32)
             } as usize;
             for update in &updates[..count.min(UPDATE_BATCH)] {
-                if unsafe { leaf(p.renderer_upload)(self.renderer, context, update) } != 0 {
+                if unsafe { (p.renderer_upload)(self.renderer, context, update) } != 0 {
                     say("overlay: an atlas update was refused, so some text will be missing");
                 }
             }
@@ -492,7 +473,7 @@ impl Host {
                 (api.textures_to_free)(self.panel, finished.as_mut_ptr(), UPDATE_BATCH as u32)
             } as usize;
             for &id in &finished[..count.min(UPDATE_BATCH)] {
-                unsafe { leaf(p.renderer_free)(self.renderer, id) };
+                unsafe { (p.renderer_free)(self.renderer, id) };
             }
             if count < UPDATE_BATCH {
                 break;
@@ -514,7 +495,7 @@ impl Host {
             ..Default::default()
         };
         let delta = self.seconds_since_last_frame(p);
-        unsafe { leaf(p.input_collect)(&mut input, width, height, delta) };
+        unsafe { (p.input_collect)(&mut input, width, height, delta) };
         input.startup_hint_alpha = hint;
         let mut data = rsf_overlay_draw_data {
             struct_size: size_of::<rsf_overlay_draw_data>() as u32,
@@ -533,7 +514,7 @@ impl Host {
             return None;
         }
         if decided.close_requested != 0 {
-            unsafe { leaf(p.input_set_visible)(0) };
+            unsafe { (p.input_set_visible)(0) };
         }
         Some((data, decided))
     }
@@ -551,7 +532,7 @@ impl Host {
         let (width, height) = dimensions;
         let result = {
             let _targets = SavedTargets::bind(p, context, target);
-            unsafe { leaf(p.renderer_draw)(self.renderer, context, data, width, height) }
+            unsafe { (p.renderer_draw)(self.renderer, context, data, width, height) }
         };
         // egui may use a retiring texture in this frame's draw data.
         self.free_textures(p, api);
@@ -562,8 +543,8 @@ impl Host {
         if !self.started || self.failed || self.api.is_none() {
             return None;
         }
-        let visible = unsafe { leaf(p.input_visible)() } != 0;
-        let elapsed = unsafe { leaf(p.tick)() }.wrapping_sub(self.hint_begin);
+        let visible = unsafe { (p.input_visible)() } != 0;
+        let elapsed = unsafe { (p.tick)() }.wrapping_sub(self.hint_begin);
         (visible || hud || elapsed < STARTUP_HINT_MS).then(|| DrawAdmission {
             visible,
             hint: if visible { 0.0 } else { hint_alpha(elapsed) },
@@ -598,7 +579,7 @@ impl Host {
         if trace {
             say(format_args!(
                 "D3D11-on-12 overlay: laying out panel on thread {}",
-                unsafe { leaf(p.thread_id)() }
+                unsafe { (p.thread_id)() }
             ));
         }
         let dimensions = (width, height);
@@ -626,7 +607,7 @@ impl Host {
 
     fn close_after_failure(&mut self, p: &Platform) -> i32 {
         self.failed = true;
-        unsafe { leaf(p.input_set_visible)(0) };
+        unsafe { (p.input_set_visible)(0) };
         0
     }
 
@@ -644,8 +625,8 @@ impl Host {
         if chain.is_null() {
             return 0;
         }
-        let visible = unsafe { leaf(p.input_visible)() } != 0;
-        let now = unsafe { leaf(p.tick)() };
+        let visible = unsafe { (p.input_visible)() } != 0;
+        let now = unsafe { (p.tick)() };
         if visible || (self.hint_begin != 0 && now.wrapping_sub(self.hint_begin) >= STARTUP_HINT_MS)
         {
             self.hint_dismissed = true;
@@ -659,15 +640,15 @@ impl Host {
         if trace {
             say(format_args!(
                 "overlay frame: visible on thread {}, acquiring the back buffer",
-                unsafe { leaf(p.thread_id)() }
+                unsafe { (p.thread_id)() }
             ));
         }
         let mut raw = null_mut();
-        let got = unsafe { leaf(p.chain_device)(chain, &mut raw) };
+        let got = unsafe { (p.chain_device)(chain, &mut raw) };
         let chain_device = unsafe { ComRef::from_owned(raw) };
         let same = |first: Option<&ComRef>, second: Option<&ComRef>| match (first, second) {
             (Some(first), Some(second)) => {
-                (unsafe { leaf(p.same_object)(first.as_ptr(), second.as_ptr()) }) != 0
+                (unsafe { (p.same_object)(first.as_ptr(), second.as_ptr()) }) != 0
             }
             _ => false,
         };
@@ -687,12 +668,12 @@ impl Host {
         }
         let chain_device = chain_device.expect("matched device");
         let Some(context) =
-            (unsafe { ComRef::from_owned(leaf(p.immediate_context)(chain_device.as_ptr())) })
+            (unsafe { ComRef::from_owned((p.immediate_context)(chain_device.as_ptr())) })
         else {
             return 0;
         };
         let mut raw = null_mut();
-        let got = unsafe { leaf(p.chain_buffer)(chain, &mut raw) };
+        let got = unsafe { (p.chain_buffer)(chain, &mut raw) };
         let buffer = unsafe { ComRef::from_owned(raw) };
         let Some(buffer) = buffer.filter(|_| got >= 0) else {
             if trace {
@@ -701,7 +682,7 @@ impl Host {
             }
             return 0;
         };
-        let owner = unsafe { ComRef::from_owned(leaf(p.texture_device)(buffer.as_ptr())) };
+        let owner = unsafe { ComRef::from_owned((p.texture_device)(buffer.as_ptr())) };
         if !same(Some(&chain_device), owner.as_ref()) {
             say(format_args!(
                 "overlay: back buffer {} belongs to device {}, chain device {}. Closing panel",
@@ -712,7 +693,7 @@ impl Host {
             return self.close_after_failure(p);
         }
         let mut desc = TextureDesc::default();
-        unsafe { leaf(p.texture_desc)(buffer.as_ptr(), &mut desc) };
+        unsafe { (p.texture_desc)(buffer.as_ptr(), &mut desc) };
         if desc.width == 0 || desc.height == 0 {
             return 0;
         }
@@ -731,7 +712,7 @@ impl Host {
             ));
         }
         let mut raw = null_mut();
-        let made = unsafe { leaf(p.create_view)(chain_device.as_ptr(), buffer.as_ptr(), &mut raw) };
+        let made = unsafe { (p.create_view)(chain_device.as_ptr(), buffer.as_ptr(), &mut raw) };
         let view = unsafe { ComRef::from_owned(raw) };
         if trace {
             say(format_args!(
@@ -796,10 +777,10 @@ impl Host {
             return;
         }
         self.started = false;
-        unsafe { leaf(p.input_set_visible)(0) };
-        unsafe { leaf(p.input_uninstall)() };
+        unsafe { (p.input_set_visible)(0) };
+        unsafe { (p.input_uninstall)() };
         if !self.renderer.is_null() {
-            unsafe { leaf(p.renderer_destroy)(self.renderer) };
+            unsafe { (p.renderer_destroy)(self.renderer) };
             self.renderer = null_mut();
         }
         if !self.panel.is_null() {
@@ -962,7 +943,7 @@ fn rsf_core_overlay_host_visible(platform: &Platform) -> u32 {
     if !STARTED.load(Ordering::Acquire) {
         return 0;
     }
-    unsafe { leaf(platform.input_visible)() }
+    unsafe { (platform.input_visible)() }
 }
 
 fn rsf_core_overlay_host_toggle(platform: &Platform) {
@@ -970,8 +951,8 @@ fn rsf_core_overlay_host_toggle(platform: &Platform) {
         say("overlay: not running, so there is nothing to open");
         return;
     }
-    let visible = unsafe { leaf(platform.input_visible)() };
-    unsafe { leaf(platform.input_set_visible)((visible == 0) as u32) };
+    let visible = unsafe { (platform.input_visible)() };
+    unsafe { (platform.input_set_visible)((visible == 0) as u32) };
 }
 
 unsafe fn rsf_core_overlay_host_present(
@@ -986,7 +967,7 @@ unsafe fn rsf_core_overlay_host_present(
     let Some(mut host) = try_hold() else {
         say(format_args!(
             "overlay frame: thread {} skipped, another is already drawing the panel",
-            unsafe { leaf(platform.thread_id)() }
+            unsafe { (platform.thread_id)() }
         ));
         return 0;
     };
