@@ -97,7 +97,7 @@ void capture_record(void* graphics, void* commands, const rsf_srvk_image* image,
 }
 
 void capture_parameters(const rsf_srvk_frame* frame, uint32_t reset) {
-    rsf::capture_sr_parameters(*frame->record, RSF_SR_FSR4, frame->motion_scale_x, frame->motion_scale_y, frame->pre_exposure, reset);
+    rsf_capture_sr_parameters(frame->record, RSF_SR_FSR4, frame->motion_scale_x, frame->motion_scale_y, frame->pre_exposure, reset);
 }
 
 int32_t capture_flush(void* graphics) { return static_cast<Graphics*>(graphics)->capture.flush() ? 1 : 0; }

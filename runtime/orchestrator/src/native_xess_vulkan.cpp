@@ -259,7 +259,7 @@ void capture_record(Native* native, void* commands, const rsf_srvk_image* image,
 }
 
 void capture_parameters(const rsf_srvk_frame* frame, uint32_t backend, uint32_t reset) noexcept try {
-    rsf::capture_sr_parameters(*frame->record, backend, frame->motion_scale_x, frame->motion_scale_y, frame->pre_exposure, reset);
+    rsf_capture_sr_parameters(frame->record, backend, frame->motion_scale_x, frame->motion_scale_y, frame->pre_exposure, reset);
 } catch (...) {}
 
 void retire_commands(Native* native, void* commands) noexcept {

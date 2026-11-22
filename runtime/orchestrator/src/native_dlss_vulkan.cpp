@@ -136,7 +136,7 @@ int32_t tag(void* native, uintptr_t token, void* commands, const rsf_srvk_frame*
         RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
 void capture_parameters(void*, const rsf_srvk_frame* input, uint32_t reset) {
-    rsf::capture_sr_parameters(*input->record, RSF_SR_DLSS, input->motion_scale_x,
+    rsf_capture_sr_parameters(input->record, RSF_SR_DLSS, input->motion_scale_x,
         input->motion_scale_y, input->pre_exposure, reset);
 }
 

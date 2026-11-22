@@ -440,7 +440,6 @@ void hooked_viewport_draw(void* viewport, uint8_t should_present)
     submitting_viewport = saved;
 }
 thread_local bool controller_poll_scope{};
-rsf::windows::XInputFacts controller_facts;
 void controller_received() {
     auto* self=installed.load(std::memory_order_acquire);
     if (controller_poll_scope && self && self->active.load() && input_source_frame)
@@ -454,7 +453,7 @@ void hooked_poll_input(void* slate)
         input_sampled = true;
         cpu_event(self, input_source_frame, RSF_GAME_CPU_INPUT_SAMPLE);
     }
-    if (self && self->active.load()) controller_facts.install_loaded(controller_received);
+    if (self && self->active.load()) rsf_xinput_facts_install_loaded(controller_received);
     const auto previous=controller_poll_scope; controller_poll_scope=inside_engine_tick;
     reinterpret_cast<void(*)(void*)>(sites[hook_poll_input].original)(slate);
     controller_poll_scope=previous;
@@ -2708,8 +2707,8 @@ rsf_ac7_renderer_leaves renderer_leaves()
         self->input_hook = nullptr;
         return true;
     };
-    leaves.controller_disable = []() noexcept { controller_facts.disable(); };
-    leaves.controller_remove = []() noexcept { return controller_facts.remove(); };
+    leaves.controller_disable = []() noexcept { rsf_xinput_facts_disable(); };
+    leaves.controller_remove = []() noexcept { return rsf_xinput_facts_remove(); };
     leaves.truesky_restore = [](Renderer* self) noexcept { return restore_truesky(*self); };
     return leaves;
 }

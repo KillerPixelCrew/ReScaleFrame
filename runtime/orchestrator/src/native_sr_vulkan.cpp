@@ -334,7 +334,7 @@ constexpr Platform native{
         },
         [](FfxNative* owner, uint64_t frame) -> int32_t { return owner->capture.wants(frame); },
         [](const rsf_srvk_frame* frame, uint32_t backend, uint32_t reset) {
-            rsf::capture_sr_parameters(*frame->record, backend, frame->motion_scale_x, frame->motion_scale_y, frame->pre_exposure, reset);
+            rsf_capture_sr_parameters(frame->record, backend, frame->motion_scale_x, frame->motion_scale_y, frame->pre_exposure, reset);
         },
         [](FfxNative* owner, void* commands) {
             owner->sharpen.retire(commands);

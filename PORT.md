@@ -246,7 +246,7 @@ Port settings storage, formatting, hashes and shared utilities. Consolidate sett
 
 **Port files (6)**
 
-- [ ] [runtime/common/include/rescaleframe/capture_names.h](runtime/common/include/rescaleframe/capture_names.h)
+- [x] [runtime/common/include/rescaleframe/capture_names.h](runtime/common/include/rescaleframe/capture_names.h)
 - [ ] [runtime/common/include/rescaleframe/log.h](runtime/common/include/rescaleframe/log.h)
 - [ ] [runtime/common/include/rescaleframe/sha256_file.h](runtime/common/include/rescaleframe/sha256_file.h)
 - [x] [runtime/orchestrator/src/render_settings_store.cpp](runtime/orchestrator/src/render_settings_store.cpp)
@@ -2744,7 +2744,7 @@ Port the Steam chain and Windows input facts, coordinating shared Steam interfac
 - [ ] [integrations/steam/include/rescaleframe/steam_d3d11_chain.h](integrations/steam/include/rescaleframe/steam_d3d11_chain.h)
 - [x] [integrations/steam/src/d3d11_chain.cpp](integrations/steam/src/d3d11_chain.cpp)
 - [x] [integrations/steam/src/d3d11_chain_platform.h](integrations/steam/src/d3d11_chain_platform.h)
-- [ ] [integrations/windows/xinput_facts.h](integrations/windows/xinput_facts.h)
+- [x] [integrations/windows/xinput_facts.h](integrations/windows/xinput_facts.h)
 
 **Rust review findings (2)**
 
