@@ -423,6 +423,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsf-ac7-capture-fixture"
+version = "0.1.2"
+dependencies = [
+ "rsf-game-sys",
+ "windows",
+]
+
+[[package]]
 name = "rsf-anomaly"
 version = "0.1.2"
 dependencies = [
