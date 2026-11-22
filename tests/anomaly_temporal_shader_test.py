@@ -72,6 +72,7 @@ class CoreTests(unittest.TestCase):
                 shutil.rmtree(target)
 
 
+@unittest.skipUnless(SOURCE.exists(), 'licensed local fixture unavailable')
 class NativeCompilerTests(unittest.TestCase):
     def test_native_fxc_static_and_skin_and_pixel_contract(self):
         tool = load_tool()
