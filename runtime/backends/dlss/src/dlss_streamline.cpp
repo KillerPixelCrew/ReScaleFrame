@@ -508,9 +508,8 @@ int32_t release_viewport(void* native, uint32_t slot) noexcept try
 
 int32_t shutdown(void* native) noexcept try
 {
-    // The legacy route treats a returned shutdown result as terminal.
-    static_cast<Native*>(native)->sl.shutdown();
-    return RSF_DLSS_OK;
+    return static_cast<Native*>(native)->sl.shutdown() == sl::Result::eOk
+        ? RSF_DLSS_OK : RSF_DLSS_ERROR_FEATURE_FAILED;
 } catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
 
 void destroy(void* native) noexcept

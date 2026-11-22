@@ -1,5 +1,11 @@
 # Implementation tracker
 
+The D3D11 Streamline signature check is restored for the shared DLL and
+linked consumers. Owned D3D11 shutdown now retains the session and closes
+SDK admission on failure. Source checks cover both feature branches.
+Compilation, linking and SDK shutdown remain unverified.
+[ABI and retirement checks](rust-migration.md#fast-path-to-a-verified-candidate)
+
 Native D3D12 DLSS retains its owned Streamline registration and
 dependencies if SDK shutdown fails, including during startup rollback.
 Source review confirmed the public destroy signature and borrowed-owner

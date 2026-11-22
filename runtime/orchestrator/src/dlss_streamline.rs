@@ -349,8 +349,15 @@ struct Session {
     route: Route,
     features: u32,
     applied: [Option<Options>; 2],
+    shutdown_failure: Option<i32>,
     _module: Option<SdkModule>,
     _directories: [Option<Vec<u16>>; 2],
+}
+
+impl Session {
+    fn active(&self) -> bool {
+        self.shutdown_failure.is_none()
+    }
 }
 
 // Native calls and access to the borrowed graphics host are serialized here. The caller keeps the
@@ -380,8 +387,8 @@ unsafe extern "C" fn rsf_core_dlss_streamline_load(
     let Ok(mut state) = SESSION.try_lock() else {
         return NOT_READY;
     };
-    if state.is_some() {
-        return OK;
+    if let Some(session) = state.as_ref() {
+        return session.shutdown_failure.unwrap_or(OK);
     }
     if !unsafe { GetModuleHandleW(w!("sl.interposer.dll")) }.is_null() {
         if let Some(log) = setup.log
@@ -421,6 +428,7 @@ unsafe extern "C" fn rsf_core_dlss_streamline_load(
         route: Route::Owned(None),
         features: 0,
         applied: [None; 2],
+        shutdown_failure: None,
         _module: Some(module),
         _directories: directories,
     });
@@ -452,6 +460,7 @@ unsafe extern "C" fn rsf_core_dlss_streamline_share_host(
         route: Route::Shared { host, device },
         features: OPTIMAL | OPTIONS,
         applied: [None; 2],
+        shutdown_failure: None,
         _module: None,
         _directories: [None, None],
     });
@@ -475,7 +484,7 @@ unsafe extern "C" fn rsf_core_dlss_streamline_set_device(
     if device.is_null() {
         return INVALID;
     }
-    let Some(session) = state.as_mut() else {
+    let Some(session) = state.as_mut().filter(|session| session.active()) else {
         return NOT_READY;
     };
     let mut capabilities = 0;
@@ -501,7 +510,7 @@ unsafe extern "C" fn rsf_core_dlss_streamline_support(
     let Ok(state) = SESSION.try_lock() else {
         return NOT_READY;
     };
-    let Some(session) = state.as_ref() else {
+    let Some(session) = state.as_ref().filter(|session| session.active()) else {
         return NOT_READY;
     };
     let Some(device) = session.route.device() else {
@@ -539,7 +548,7 @@ unsafe extern "C" fn rsf_core_dlss_streamline_plan(plan: *mut Plan, platform: &P
     };
     let Some(session) = state
         .as_ref()
-        .filter(|session| session.features & OPTIMAL != 0)
+        .filter(|session| session.active() && session.features & OPTIMAL != 0)
     else {
         return NOT_READY;
     };
@@ -564,7 +573,7 @@ unsafe extern "C" fn rsf_core_dlss_streamline_present(
     let Ok(state) = SESSION.try_lock() else {
         return NOT_READY;
     };
-    let Some(session) = state.as_ref() else {
+    let Some(session) = state.as_ref().filter(|session| session.active()) else {
         return NOT_READY;
     };
     if !session.route.host().is_null() {
@@ -608,7 +617,7 @@ unsafe extern "C" fn rsf_core_dlss_streamline_evaluate(
     }
     let Some(session) = state
         .as_mut()
-        .filter(|session| session.features & OPTIONS != 0)
+        .filter(|session| session.active() && session.features & OPTIONS != 0)
     else {
         return NOT_READY;
     };
@@ -660,7 +669,7 @@ unsafe extern "C" fn rsf_core_dlss_streamline_release(viewport: u32, platform: &
     let Ok(mut state) = SESSION.try_lock() else {
         return NOT_READY;
     };
-    let Some(session) = state.as_mut() else {
+    let Some(session) = state.as_mut().filter(|session| session.active()) else {
         return NOT_READY;
     };
     let host = session.route.host();
@@ -680,13 +689,19 @@ unsafe extern "C" fn rsf_core_dlss_streamline_shutdown(platform: &Platform) -> i
     let Ok(mut state) = SESSION.try_lock() else {
         return NOT_READY;
     };
-    let Some(session) = state.as_ref() else {
+    let Some(session) = state.as_mut() else {
         return NOT_READY;
     };
+    if let Some(failure) = session.shutdown_failure {
+        return failure;
+    }
     let native = session.native.as_ptr();
     if matches!(&session.route, Route::Owned(_)) {
         let stopped = unsafe { (platform.shutdown)(native) };
         if stopped != OK {
+            // Shutdown can fail after partial teardown. Keep the dependencies
+            // alive and close admission to every subsequent SDK operation.
+            session.shutdown_failure = Some(stopped);
             return stopped;
         }
     }

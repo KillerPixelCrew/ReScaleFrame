@@ -31,6 +31,18 @@ plugin path for the process. This also covers startup rollback
 after successful SDK initialization. Borrowed routes still leave
 SDK shutdown to their owner. Public destroy signatures are unchanged.
 
+D3D11 now retains its owned Streamline session and refuses further SDK
+calls if shutdown fails. The interposer signature check was restored
+in `14dcc896`, repairing the preprocessor branches for both build
+configurations and the enabled SDK callers.
+
+At `97c2738f`, bindgen 0.72.1 regenerated all 61 entries in the binding
+generator. The 10 Anomaly files matched directly. The AC7 sites and Unity
+package bindings differed only in import formatting and matched after
+Rust 1.94.1 formatting. Each of the 99 Runtime Rust export directives had
+one source definition. The tracked GameSDK and Runtime headers and carrier
+definition files matched `2ceec77`. Binary linkage and ABI remain open.
+
 ## Remaining integration ports
 
 Carry the same Rust ownership and public C ABI through every in-tree game
