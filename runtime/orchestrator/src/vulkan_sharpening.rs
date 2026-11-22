@@ -400,28 +400,28 @@ unsafe extern "C" {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sharpenvk_host_destroy(host: &mut Host) {
+pub(super) unsafe extern "C" fn rsf_sharpenvk_host_destroy(host: &mut Host) {
     unsafe { rsf_core_sharpenvk_destroy(host.owner.cast()) };
     *host = Host::default();
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sharpenvk_host_clear(host: &mut Host) {
+pub(super) unsafe extern "C" fn rsf_sharpenvk_host_clear(host: &mut Host) {
     unsafe { rsf_core_sharpenvk_clear(host.owner.cast()) };
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sharpenvk_host_retire(host: &mut Host, commands: *mut c_void) {
+pub(super) unsafe extern "C" fn rsf_sharpenvk_host_retire(host: &mut Host, commands: *mut c_void) {
     unsafe { rsf_core_sharpenvk_retire(host.owner.cast(), commands) };
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sharpenvk_host_dispatches(host: &Host) -> u64 {
+pub(super) unsafe extern "C" fn rsf_sharpenvk_host_dispatches(host: &Host) -> u64 {
     unsafe { rsf_core_sharpenvk_dispatches(host.owner.cast()) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sharpenvk_host_run(
+pub(super) unsafe extern "C" fn rsf_sharpenvk_host_run(
     host: &mut Host,
     setup: &Setup,
     commands: *mut c_void,

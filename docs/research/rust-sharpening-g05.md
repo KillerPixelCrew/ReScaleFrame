@@ -151,6 +151,11 @@ Remaining G05 paths with implementation code are
   existing payload bridge marshals the C settings record into the licensed
   calculator. It exposes HLSL and SPIR-V from their original arrays and
   preserves the original activation and packing logic.
+- `tests/sharpening_vulkan_cpu.cpp` was replaced by a Rust fixture that
+  supplies the 31 typed Vulkan functions to the production host. It
+  checks shader mode and entry point, view formats, descriptor and
+  barrier order, constants, failure latching and resource retirement.
+  The fake now keeps separate host memory per allocation.
 
 The GPL HLSL, SPIR-V and `options.h` inputs match `82b39a63` byte for byte.
 The calculator and adaptive ramp in `options.h` are upstream-derived
