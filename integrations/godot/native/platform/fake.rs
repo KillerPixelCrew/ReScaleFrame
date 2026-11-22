@@ -548,13 +548,15 @@ unsafe extern "C" fn vulkan_sr_plan(
 unsafe extern "C" fn vulkan_sr_record(
     _: *mut c_void,
     context: *mut c_void,
-    _: *const Sharpening,
+    sharpening: *const Sharpening,
     provider: *mut i32,
     output: *mut i32,
     next: *mut *mut c_void,
 ) -> u32 {
     let mut commands = 0x20;
     if !context.is_null() {
+        // The owner lends the resolved options for the evaluation it records.
+        VK_SHARPENING.set(unsafe { sharpening.as_ref() }.copied());
         let split = vk_is_split(context);
         let result = if split && !VK_SPLIT_RECORD.get() {
             -8

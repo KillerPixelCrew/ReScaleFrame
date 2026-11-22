@@ -172,8 +172,9 @@ fn a_throwing_stage_is_retired_with_every_earlier_stage() {
     );
     assert_eq!(DISABLED.get(), 5);
     assert!(!session.enabled);
-    // A throw keeps the reason set before admission, as the former catch did.
-    assert_eq!(session.reason, START_IDENTITY.as_ptr());
+    // A throw keeps the reason set before admission, as the former catch did. Compare the text:
+    // a const's string has no guaranteed single address.
+    assert_eq!(unsafe { CStr::from_ptr(session.reason) }, START_IDENTITY);
 }
 
 #[test]

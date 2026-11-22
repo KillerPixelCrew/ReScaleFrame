@@ -88,7 +88,7 @@ fn frame_begin_attaches_the_procedure_once() {
     let begin = reported(RSF_GAME_CPU_FRAME_BEGIN);
     assert_eq!(
         fake::take_cpu_events(),
-        [begin, reported(RSF_GAME_CPU_INPUT_SAMPLE), begin, begin]
+        [reported(RSF_GAME_CPU_INPUT_SAMPLE), begin, begin]
     );
 }
 

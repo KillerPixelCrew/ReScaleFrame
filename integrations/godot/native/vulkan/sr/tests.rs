@@ -66,8 +66,9 @@ fn pass(device: usize, output: (u32, u32)) -> VkSrPass {
     }
 }
 
+// vulkan/native.rs calls the SR section with the owner guard held.
 fn render(vulkan: &Vulkan, pass: &VkSrPass) -> c_int {
-    vulkan.sr_render(&fake::LEAVES, pass)
+    fake::LEAVES.vulkan_locked(|| vulkan.sr_render(&fake::LEAVES, pass))
 }
 
 fn status(vulkan: &Vulkan) -> Status {
@@ -454,6 +455,8 @@ fn auto_without_a_servable_provider_takes_the_spatial_fallback() {
         software: 1,
         reserved: 0,
     }));
+    // The fake answers for the Runtime's provider policy.
+    fake::SR_SELECTED.set(0);
     assert_eq!(render(&vulkan, &pass(DEVICE, OUTPUT)), 1);
     assert_eq!(
         fake::take_vk_sr_calls(),
@@ -496,6 +499,8 @@ fn a_changed_auto_resolution_retires_the_context() {
         streamline_ready: 1,
         ..fake::VK_FACTS.get()
     });
+    // The fake answers for the Runtime's provider policy.
+    fake::SR_SELECTED.set(SR_DLSS);
     assert_eq!(render(&vulkan, &pass(DEVICE, OUTPUT)), 1);
     let calls = fake::take_vk_sr_calls();
     assert_eq!(
