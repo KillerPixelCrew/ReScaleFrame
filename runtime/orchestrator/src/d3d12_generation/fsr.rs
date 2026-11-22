@@ -737,9 +737,7 @@ fn select_version(handle: Raw, setup: &Setup, query: QueryVersions) -> Option<Ve
         return None;
     }
     let versions = versions.get(..usize::try_from(count).ok()?)?;
-    ffx_version::select(versions, setup.feature_major, setup.version_id)
-        .filter(|version| version.id != 0)
-        .copied()
+    ffx_version::admitted(versions, setup.feature_major, setup.version_id)
 }
 
 #[unsafe(no_mangle)]
@@ -766,11 +764,11 @@ unsafe extern "C" fn rsf_core_fsr12_create(
         return result;
     }
     let setup = unsafe { &*setup };
-    if setup.streamline_host.is_null() && unsafe { (ops.check.streamline_loaded)() } != 0 {
-        return NEEDS_RESTART;
-    }
-    if !matches!(setup.feature_major, 3 | 4) || !matches!(setup.chain.ui_mode, UI_NONE | HUDLESS) {
-        return UNSUPPORTED;
+    if let Err(result) = ops.check.preflight(
+        setup,
+        matches!(setup.feature_major, 3 | 4) && matches!(setup.chain.ui_mode, UI_NONE | HUDLESS),
+    ) {
+        return result;
     }
     let sdk = match Bindings::open(setup, ops.check, MODULE, None, ops.resolve, ops.close) {
         Ok(sdk) => sdk,
@@ -864,7 +862,9 @@ unsafe extern "C" fn rsf_core_fsr12_create(
         }
     }
     if result != OK {
-        unsafe { destroy::<Fsr>(session.cast()) };
+        if unsafe { destroy_checked::<Fsr>(session.cast()) } != OK {
+            unsafe { out.write(session.cast()) };
+        }
         return result;
     }
     unsafe {

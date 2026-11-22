@@ -7629,3 +7629,12 @@ Provider switch logs distinguish a committed FidelityFX version from a
 candidate still under review. See [D03 source evidence](research/rust-sr-sessions-bridge-port.md)
 for the D01 startup dependency, pending Anomaly Auto admission and fixture
 coverage. Build, test, lint and device execution remain pending.
+
+### D04 D3D12 host source port
+
+The shared hosts preserve fence failure codes, retry provider teardown before
+replacement, and carry SR capture identity through evaluation. The C11 FG12 and
+SR12 ABI fixtures preserve their DLL and embedded registrations. The
+[D04 source record](research/d04-d3d12-host-port.md) lists the five remaining
+C++ paths and the Rust review resolutions. Verification covers source syntax,
+bindings and pinned formatting. Build, test and device execution remain pending.

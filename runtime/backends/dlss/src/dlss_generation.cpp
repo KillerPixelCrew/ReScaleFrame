@@ -823,7 +823,7 @@ rsf_backend_result prepare(void* session, void* command, const rsf_fg_frame* fra
 rsf_backend_result after(void* session) { return rsf_core_slhost_session_after(session, &platform); }
 void destroy(void* session) { rsf_core_slhost_session_destroy(session, &platform); }
 const rsf_generation_provider provider{sizeof(provider), create, configure, begin, session_marker, prepare, after,
-    rsf_core_slhost_session_status, rsf_core_slhost_session_retirement, destroy, rsf_core_slhost_session_abort};
+    rsf_core_slhost_session_status, rsf_core_slhost_session_retirement, destroy, rsf_core_slhost_session_abort, nullptr};
 }
 
 // Internal to this backend module: shared D3D12 DLSS SR sets this frame's common constants.

@@ -78,7 +78,7 @@ enum PhysicalCreation {
     Creating,
 }
 
-const FG_OFF: rsf_fg_options = rsf_fg_options {
+pub(super) const FG_OFF: rsf_fg_options = rsf_fg_options {
     struct_size: size_of::<rsf_fg_options>() as u32,
     abi_version: RSF_FG_ABI_VERSION,
     mode: RSF_FG_OFF,
@@ -342,7 +342,28 @@ fn generation() -> u64 {
 
 fn provider_api(platform: &Platform, backend: u32) -> Option<&'static Provider> {
     let family = family(backend)?;
-    unsafe { (platform.provider_table)(family).as_ref() }
+    let table = unsafe { (platform.provider_table)(family) };
+    if table.is_null() || unsafe { table.cast::<u32>().read() } < size_of::<Provider>() as u32 {
+        return None;
+    }
+    unsafe { table.as_ref() }
+}
+
+fn destroy_provider(api: Option<&Provider>, session: Raw) -> i32 {
+    if session.is_null() {
+        return OK;
+    }
+    let Some(api) = api else {
+        return NOT_SUPPORTED;
+    };
+    if let Some(destroy) = api.destroy_checked {
+        return unsafe { destroy(session) };
+    }
+    let Some(destroy) = api.destroy else {
+        return NOT_SUPPORTED;
+    };
+    unsafe { destroy(session) };
+    OK
 }
 
 fn read_guard() -> Option<std::sync::RwLockReadGuard<'static, ()>> {
@@ -634,6 +655,8 @@ pub(crate) struct Owner {
     application_latency: AtomicU32,
     application_presents: AtomicU32,
     provider_retirement: Mutex<ProviderRetirement>,
+    switch_fullscreen: Mutex<Option<i32>>,
+    unpublished_provider: Mutex<Option<(u32, usize)>>,
     failed_buffer_reports: AtomicU32,
     post_switch_frames: AtomicU32,
     last_normalized_sync: AtomicU32,
@@ -668,6 +691,8 @@ impl Owner {
             application_latency: AtomicU32::new(1),
             application_presents: AtomicU32::new(0),
             provider_retirement: Mutex::default(),
+            switch_fullscreen: Mutex::default(),
+            unpublished_provider: Mutex::default(),
             failed_buffer_reports: AtomicU32::new(0),
             post_switch_frames: AtomicU32::new(0),
             last_normalized_sync: AtomicU32::new(0),
@@ -848,7 +873,31 @@ impl Owner {
         lock(&self.physical).take()
     }
 
+    fn retire_unpublished(&self) -> i32 {
+        let mut pending = lock(&self.unpublished_provider);
+        let Some((backend, session)) = *pending else {
+            return OK;
+        };
+        let result = destroy_provider(provider_api(self.p(), backend), session as Raw);
+        if result == OK {
+            *pending = None;
+        }
+        result
+    }
+
+    fn discard_unpublished(&self, backend: u32, session: Raw) -> i32 {
+        if session.is_null() {
+            return OK;
+        }
+        *lock(&self.unpublished_provider) = Some((backend, session as usize));
+        self.retire_unpublished()
+    }
+
     fn create_physical(&self, backend: u32) -> i32 {
+        let retired = self.retire_unpublished();
+        if retired != OK {
+            return retired;
+        }
         let p = self.p();
         if backend == 0 {
             let facts = self.facts();
@@ -884,9 +933,7 @@ impl Owner {
         let Some(api) = provider_api(p, backend) else {
             return NOT_SUPPORTED;
         };
-        let (Some(create), Some(configure), Some(destroy)) =
-            (api.create, api.configure, api.destroy)
-        else {
+        let (Some(create), Some(configure)) = (api.create, api.configure) else {
             return NOT_SUPPORTED;
         };
         let mut provider = null_mut();
@@ -921,10 +968,10 @@ impl Owner {
             self.provider_backend.store(backend, Ordering::Relaxed);
             self.provider.store(provider, Ordering::Release);
         } else {
-            if !provider.is_null() {
-                unsafe { destroy(provider) };
+            let retired = self.discard_unpublished(backend, provider);
+            if retired != OK {
+                return retired;
             }
-            self.provider.store(null_mut(), Ordering::Release);
         }
         result
     }
@@ -1020,6 +1067,11 @@ impl Owner {
             SWITCH_RESULT.store(result, Ordering::SeqCst);
             ACTIVE_BACKEND.store(0, Ordering::SeqCst);
             if self.create_physical(0) != OK {
+                if lock(&self.unpublished_provider).is_some() {
+                    self.physical_creation
+                        .store(PhysicalCreation::Pending as u8, Ordering::Release);
+                    return Err(DXGI_ERROR_WAS_STILL_DRAWING);
+                }
                 self.faulted.store(true, Ordering::Release);
                 self.physical_creation
                     .store(PhysicalCreation::Idle as u8, Ordering::Release);
@@ -1436,7 +1488,9 @@ impl Owner {
             SWITCH_RESULT.store(NOT_SUPPORTED, Ordering::SeqCst);
             return;
         }
-        if backend == ACTIVE_BACKEND.load(Ordering::SeqCst) {
+        if backend == ACTIVE_BACKEND.load(Ordering::SeqCst)
+            && lock(&self.switch_fullscreen).is_none()
+        {
             SWITCH_RESULT.store(0, Ordering::SeqCst);
             return;
         }
@@ -1450,25 +1504,35 @@ impl Owner {
             }
         };
         let previous = ACTIVE_BACKEND.load(Ordering::SeqCst);
-        let mut result = if failed(self.drain()) { NOT_READY } else { OK };
-        if result == OK && backend != 0 && backend != DLSS {
+        let mut result = if failed(self.drain()) {
+            NOT_READY
+        } else {
+            self.retire_unpublished()
+        };
+        if result == OK
+            && lock(&self.switch_fullscreen).is_none()
+            && backend != 0
+            && backend != DLSS
+        {
             let mut probe_setup = self.generation_setup(backend);
             probe_setup.chain.hwnd = null_mut();
-            result = match provider_api(p, backend).map(|api| (api.create, api.destroy)) {
-                Some((Some(create), Some(destroy))) => {
+            result = match provider_api(p, backend).and_then(|api| api.create) {
+                Some(create) => {
                     let mut probe = null_mut();
                     let mut probe_chain = null_mut();
                     let created = unsafe { create(&probe_setup, &mut probe, &mut probe_chain) };
-                    if !probe.is_null() {
-                        unsafe { destroy(probe) };
-                    }
-                    created
+                    let retired = self.discard_unpublished(backend, probe);
+                    if retired == OK { created } else { retired }
                 }
                 _ => NOT_SUPPORTED,
             };
         }
         if result != OK {
             SWITCH_RESULT.store(result, Ordering::SeqCst);
+            if lock(&self.switch_fullscreen).is_some() || lock(&self.unpublished_provider).is_some()
+            {
+                Self::defer_switch(backend);
+            }
             return;
         }
         let outgoing = {
@@ -1484,7 +1548,7 @@ impl Owner {
             }
             current.take()
         };
-        let mut fullscreen = 0;
+        let mut fullscreen = lock(&self.switch_fullscreen).unwrap_or(0);
         let old_chain = outgoing
             .as_ref()
             .map_or(null_mut(), |pair| pair.chain.as_ptr());
@@ -1504,12 +1568,15 @@ impl Owner {
         drop(outgoing);
         ACTIVE_SESSION.store(null_mut(), Ordering::Release);
         HOST_PACED.store(false, Ordering::SeqCst);
-        let provider = self.provider.swap(null_mut(), Ordering::AcqRel);
-        if !provider.is_null()
-            && let Some(destroy) = self.api().and_then(|api| api.destroy)
-        {
-            unsafe { destroy(provider) };
+        let retired = destroy_provider(self.api(), self.provider());
+        if retired != OK {
+            *lock(&self.switch_fullscreen) = Some(fullscreen);
+            SWITCH_RESULT.store(retired, Ordering::SeqCst);
+            Self::defer_switch(backend);
+            return;
         }
+        *lock(&self.switch_fullscreen) = None;
+        self.provider.store(null_mut(), Ordering::Release);
         self.provider_backend.store(0, Ordering::Relaxed);
         CREATING.set(true);
         let host = self.host();
@@ -1529,6 +1596,13 @@ impl Owner {
             if self.create_physical(previous) != OK {
                 effective = 0;
                 if self.create_physical(0) != OK {
+                    if lock(&self.unpublished_provider).is_some() {
+                        CREATING.set(false);
+                        *lock(&self.switch_fullscreen) = Some(fullscreen);
+                        SWITCH_RESULT.store(NOT_READY, Ordering::SeqCst);
+                        Self::defer_switch(backend);
+                        return;
+                    }
                     self.faulted.store(true, Ordering::Release);
                 }
             }
@@ -1699,6 +1773,10 @@ impl Owner {
                 |error| error,
                 |physical| unsafe { (p.physical_present)(physical.chain.as_ptr(), sync, flags) },
             );
+        }
+        // An incomplete provider teardown has no physical chain to present on.
+        if lock(&self.switch_fullscreen).is_some() {
+            self.switch_if_requested();
         }
         self.receipt("application-enter", S_OK);
         let physical = match self.ensure_physical() {
@@ -2231,7 +2309,7 @@ impl Owner {
             published
         };
         // On device failure retain GPU-reachable storage for the process rather than free it.
-        if failed(self.drain()) {
+        if failed(self.drain()) || self.retire_unpublished() != OK {
             // Initializing owners can fail after creating a provider but before publication.
             RETIREMENT_PENDING.store(true, Ordering::Release);
             log("presentation bridge: retirement failed; retaining provider and shared inputs");
@@ -2245,23 +2323,39 @@ impl Owner {
             unsafe { (p.retain_all)(b) };
             return;
         }
+        let checked = self.api().is_some_and(|api| api.destroy_checked.is_some());
+        // Keep native buffers on the facade until teardown for a checked provider.
         let buffers = self.take_application_buffers();
-        // Shared textures precede the fence and physical chain. Direct render buffers had
-        // facade lifetime and follow provider and host teardown.
-        let direct_buffers = if self.native12() {
+        let retained_buffers = if self.native12() || checked {
             Some(buffers)
         } else {
             drop(buffers);
             None
         };
         let physical = self.take_physical();
-        unsafe { (p.release_presentation)(b) };
+        if !checked {
+            unsafe { (p.release_presentation)(b) };
+        }
         drop(physical);
-        let provider = self.provider.swap(null_mut(), Ordering::AcqRel);
-        if !provider.is_null()
-            && let Some(destroy) = self.api().and_then(|api| api.destroy)
-        {
-            unsafe { destroy(provider) };
+        if destroy_provider(self.api(), self.provider()) != OK {
+            RETIREMENT_PENDING.store(true, Ordering::Release);
+            log("presentation bridge: provider teardown refused; retaining shared inputs");
+            std::mem::forget(retained_buffers);
+            std::mem::forget(self.take_command_slots());
+            std::mem::forget(std::mem::take(&mut *lock(&self.sync)));
+            std::mem::forget(lock(&self.provider_retirement).fence.take());
+            unsafe { (p.retain_all)(b) };
+            return;
+        }
+        self.provider.store(null_mut(), Ordering::Release);
+        let direct_buffers = if self.native12() {
+            retained_buffers
+        } else {
+            drop(retained_buffers);
+            None
+        };
+        if checked {
+            unsafe { (p.release_presentation)(b) };
         }
         // The host also serves SR and CPU callbacks and stays loaded while it is the published one.
         let host = self.host();

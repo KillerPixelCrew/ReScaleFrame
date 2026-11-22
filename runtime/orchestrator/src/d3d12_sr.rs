@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Shared D3D12 SR provider owners. Native leaves keep the vendor types and COM calls.
 use crate::allocate_handle;
+use crate::ffx_version::{MAX_VERSIONS, Version as ProviderVersion};
 use crate::render_abi::{rsf_sr_frame as Frame, rsf_sr_open_desc as Open};
 use crate::sdk_module::SdkModule;
 use std::ffi::{c_char, c_void};
@@ -15,7 +16,18 @@ mod xess;
 type Raw = *mut c_void;
 type Extent = [u32; 2];
 type Load = unsafe extern "C" fn(*const Open) -> Raw;
+type ValidateFrame = unsafe extern "C" fn(*const Frame) -> i32;
 type ValidateResources = unsafe extern "C" fn(*const Frame, Raw) -> i32;
+static VALIDATION: std::sync::OnceLock<(ValidateFrame, ValidateResources)> =
+    std::sync::OnceLock::new();
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_d3d12_sr_bind_validation(
+    frame: ValidateFrame,
+    resources: ValidateResources,
+) {
+    let _ = VALIDATION.set((frame, resources));
+}
 
 const OK: i32 = 0;
 const INVALID: i32 = -1;
@@ -114,9 +126,14 @@ unsafe extern "C" fn rsf_core_d3d12_sr_provider_evaluate(
     session: Raw,
     commands: Raw,
     frame: *const Frame,
-    validate_resources: ValidateResources,
 ) -> i32 {
-    // The native facade validates the frame before checking the session/list.
+    let Some(&(validate_frame, validate_resources)) = VALIDATION.get() else {
+        return INVALID;
+    };
+    let result = unsafe { validate_frame(frame) };
+    if result != OK {
+        return result;
+    }
     if session.is_null() || commands.is_null() {
         return INVALID;
     }
@@ -160,4 +177,38 @@ unsafe extern "C" fn rsf_core_d3d12_sr_provider_version(
         name.write(version.name.as_ptr());
     }
     OK
+}
+
+pub(super) unsafe fn query_d3d12(
+    query: ffx_abi::PfnFfxQuery,
+    device: *mut std::ffi::c_void,
+    kind: u64,
+    versions: &mut [ProviderVersion; MAX_VERSIONS],
+) -> Option<&[ProviderVersion]> {
+    use crate::ffx_version::from_sdk;
+    use ffx_abi::*;
+    use std::ptr::{null, null_mut};
+
+    let mut ids = [0; MAX_VERSIONS];
+    let mut names = [null(); MAX_VERSIONS];
+    let mut count = MAX_VERSIONS as u64;
+    let mut desc = ffxQueryDescGetVersions {
+        header: ffxApiHeader {
+            type_: u64::from(FFX_API_QUERY_DESC_TYPE_GET_VERSIONS),
+            pNext: null_mut(),
+        },
+        createDescType: kind,
+        device,
+        outputCount: &mut count,
+        versionIds: ids.as_mut_ptr(),
+        versionNames: names.as_mut_ptr(),
+    };
+    if unsafe { query?(null_mut(), (&raw mut desc).cast()) } != FFX_API_RETURN_OK as u32 {
+        return None;
+    }
+    let versions = versions.get_mut(..usize::try_from(count).ok()?)?;
+    for ((version, id), name) in versions.iter_mut().zip(ids).zip(names) {
+        *version = unsafe { from_sdk(id, name) };
+    }
+    Some(versions)
 }

@@ -171,6 +171,16 @@ impl Frame {
         self.markers[marker as usize] != Attempt::Idle
     }
 
+    fn unsubmitted_before(self, source: Source) -> bool {
+        self.id != 0
+            && self.id < source.id
+            && self.session == source.session
+            && !self.failed
+            && !self.submitted
+            && !self.attempted(RSF_NFG_CPU_SUBMIT_START)
+            && !self.pacing_in_flight()
+    }
+
     fn pacing_in_flight(self) -> bool {
         self.pacing == Attempt::Pending
     }
@@ -321,6 +331,20 @@ pub(crate) fn progress(p: &Platform, source: u64) -> (bool, bool) {
     }
 }
 
+pub(super) fn retire_unsubmitted(session: u64, id: u64, abort_token: impl Fn(u64) -> i32) {
+    let source = Source { session, id };
+    for frame in &mut lock(&LEDGER).frames {
+        // The Streamline abort only removes the token from its CPU ledger. Hold
+        // admission across that operation so render and pacing cannot claim the source.
+        if frame.unsubmitted_before(source)
+            && frame.source().facts().is_some_and(|facts| facts.ended != 0)
+            && abort_token(frame.id) == OK
+        {
+            frame.failed = true;
+        }
+    }
+}
+
 fn frame_acquire(p: &Platform, source: Source) -> i32 {
     if source.id == 0 {
         return INVALID;
@@ -335,14 +359,7 @@ fn frame_acquire(p: &Platform, source: Source) -> i32 {
         .iter()
         .copied()
         .filter(|f| {
-            f.id != 0
-                && f.id < source.id
-                && f.session == source.session
-                && !f.failed
-                && !f.attempted(RSF_NFG_CPU_SUBMIT_START)
-                && !f.submitted
-                && !f.pacing_in_flight()
-                && f.source().facts().is_some_and(|facts| facts.ended != 0)
+            f.unsubmitted_before(source) && f.source().facts().is_some_and(|facts| facts.ended != 0)
         })
         .min_by_key(|f| f.id);
     if let Some(oldest) = oldest
@@ -1425,15 +1442,7 @@ unsafe extern "C" fn rsf_core_native_fg_submission(pass: *const Pass, begin: u32
         // Queued older frames may release CPU tokens once their reporting
         // ended without opening RHI submission. Never retire a sleeper.
         for (id, frame) in dropped.iter_mut().zip(&mut ledger.frames) {
-            if frame.id != 0
-                && frame.session == source.session
-                && frame.id < source.id
-                && frame.ended
-                && !frame.submitted
-                && !frame.attempted(RSF_NFG_CPU_SUBMIT_START)
-                && !frame.failed
-                && !frame.pacing_in_flight()
-            {
+            if frame.ended && frame.unsubmitted_before(source) {
                 frame.failed = true;
                 *id = frame.id;
             }
@@ -1472,6 +1481,12 @@ extern "C" fn rsf_core_native_latency_render(id: u64, begin: u32, p: &Platform) 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_native_latency_present(id: u64, chain: Handle, begin: u32, p: &Platform) {
     latency_present(p, id, chain, begin != 0);
+    if begin == 0 && id != 0 {
+        let host = call!(p, host);
+        if !host.is_null() {
+            call!(p, host_abort, host, id);
+        }
+    }
 }
 
 fn empty_routes() -> Routes {

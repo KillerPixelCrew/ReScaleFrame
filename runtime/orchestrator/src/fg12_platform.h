@@ -83,7 +83,6 @@ typedef struct rsf_fg12_calls {
     void (*latency_graphics)(uint32_t);
     void (*latency_render)(uint64_t, uint32_t);
     void (*latency_present)(uint64_t, void*, uint32_t);
-    void (*latency_retire)(uint64_t, uint64_t);
     void (*latency_end_session)(uint64_t);
     int (*cpu_dispatch)(const rsf_game_cpu_event*, rsf_game_cpu_event_fn, void*);
     void (*dump_poll)(void);

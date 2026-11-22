@@ -369,7 +369,7 @@ struct State {
     view_formats: [u32; 3],
     validated_generation: u32,
     validated_list: Option<ComRef>,
-    exposure_input: Option<ComRef>,
+    exposure_input: Option<(ComRef, u32)>,
     exposure_initialized: bool,
     history: History,
     captured: [Captured; SLOTS],
@@ -729,7 +729,8 @@ impl Sr12 {
             if !unsafe { self.owned(pass.exposure) } || !exposure_accepted(&desc) {
                 return false;
             }
-            state.exposure_input = unsafe { retain(pass.exposure) };
+            state.exposure_input =
+                unsafe { retain(pass.exposure) }.map(|texture| (texture, desc.srv_format));
         }
         let pointers = [pass.color_input, pass.depth, pass.motion, pass.color_output];
         let checked = |index: usize| index != OUTPUT || self.backend != SR_NONE;
@@ -853,6 +854,9 @@ impl Sr12 {
             } else {
                 0
             };
+        if pass.source_frame_id == 0 {
+            record.flags |= RSF_FRAME_FLAG_AMBIGUOUS_ID;
+        }
         record
     }
 
@@ -893,16 +897,12 @@ impl Sr12 {
             for (index, &input) in inputs.iter().enumerate() {
                 (p.write_srv)(device, heap, index as u32, input, state.view_formats[index]);
             }
-            let exposure_input = if self.external_exposure {
-                raw(state.exposure_input.as_ref())
-            } else {
-                ptr::null_mut()
-            };
-            let exposure_view = if exposure_input.is_null() {
-                R32_FLOAT
-            } else {
-                describe(p, exposure_input).srv_format
-            };
+            let (exposure_input, exposure_view) = state
+                .exposure_input
+                .as_ref()
+                .map_or((ptr::null_mut(), R32_FLOAT), |(texture, view)| {
+                    (texture.as_ptr(), *view)
+                });
             (p.write_srv)(device, heap, EXPOSURE_SRV, exposure_input, exposure_view);
             for (index, texture) in self.gpu.normalized.iter().enumerate() {
                 (p.write_uav)(
@@ -1018,12 +1018,8 @@ impl Sr12 {
         let record = self.record(pass, reset);
         let normalized = self.gpu.normalized.each_ref().map(ComRef::as_ptr);
         let view = preview(self.input_sdr);
-        let mut identity = record;
-        if pass.source_frame_id == 0 {
-            identity.flags |= RSF_FRAME_FLAG_AMBIGUOUS_ID;
-        }
         unsafe {
-            if (p.dump_begin_record)(&identity, self.backend) != 0 {
+            if (p.dump_begin_record)(&record, self.backend) != 0 {
                 (p.dump_pass_metadata)(pass);
                 let none = NO_PREVIEW;
                 for (source, role, shown) in [

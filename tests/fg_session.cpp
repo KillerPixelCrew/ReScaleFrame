@@ -45,7 +45,7 @@ void destroy(void* c)
     delete context;
 }
 rsf_backend_result abort_frame(void*, uint64_t) { return RSF_BACKEND_OK; }
-const rsf_generation_provider provider{sizeof(provider), create, configure, begin, marker, prepare, after, status, retire, destroy, abort_frame};
+const rsf_generation_provider provider{sizeof(provider), create, configure, begin, marker, prepare, after, status, retire, destroy, abort_frame, nullptr};
 rsf_backend_result quiesce(void*)
 {
     // A host stopping CPU producers must be able to observe the transition without deadlocking.

@@ -83,6 +83,8 @@ struct Fake {
     status: rsf_fg_status,
     drain_result: i32,
     retirement_result: i32,
+    checked_provider: bool,
+    refused_destroy: Raw,
     verify_result: i32,
     unpublish_alias_on_lookup: bool,
     client: (u32, u32),
@@ -154,6 +156,8 @@ impl Fake {
             status,
             drain_result: S_OK,
             retirement_result: OK,
+            checked_provider: false,
+            refused_destroy: null_mut(),
             verify_result: S_OK,
             unpublish_alias_on_lookup: false,
             client: (800, 600),
@@ -281,6 +285,14 @@ unsafe extern "C" fn p_retirement(_: Raw, retirement: *mut rsf_fg_retirement) ->
 unsafe extern "C" fn p_destroy(session: Raw) {
     call(format!("destroy {:x}", session as usize));
 }
+unsafe extern "C" fn p_destroy_checked(session: Raw) -> i32 {
+    if with(|fake| fake.refused_destroy == session) {
+        call(format!("refused destroy {:x}", session as usize));
+        return NOT_READY;
+    }
+    unsafe { p_destroy(session) };
+    OK
+}
 unsafe extern "C" fn p_abort(_: Raw, id: u64) -> i32 {
     call(format!("abort_frame {id}"));
     OK
@@ -289,7 +301,7 @@ unsafe extern "C" fn p_prepare(_: Raw, _: Raw, _: *const rsf_fg_frame) -> i32 {
     OK
 }
 
-static PROVIDER: Provider = Provider {
+const PROVIDER_BASE: Provider = Provider {
     struct_size: size_of::<Provider>() as u32,
     create: Some(p_create),
     configure: Some(p_configure),
@@ -301,6 +313,13 @@ static PROVIDER: Provider = Provider {
     retirement: Some(p_retirement),
     destroy: Some(p_destroy),
     abort_frame: Some(p_abort),
+    destroy_checked: None,
+};
+
+static PROVIDER: Provider = PROVIDER_BASE;
+static CHECKED_PROVIDER: Provider = Provider {
+    destroy_checked: Some(p_destroy_checked),
+    ..PROVIDER_BASE
 };
 
 // Leaves ------------------------------------------------------------------------------------
@@ -310,7 +329,13 @@ struct FakeBridge {
 }
 
 unsafe extern "C" fn provider_table(family: u32) -> *const Provider {
-    if family == 0 { null() } else { &PROVIDER }
+    if family == 0 {
+        null()
+    } else if with(|fake| fake.checked_provider) {
+        &CHECKED_PROVIDER
+    } else {
+        &PROVIDER
+    }
 }
 unsafe extern "C" fn observer_present(event: *mut Event) {
     call(if unsafe { (*event).completed } != 0 {
@@ -1935,6 +1960,44 @@ fn switch_probe_refusal_keeps_and_double_refusal_presents_plain() {
     assert_eq!(rsf_core_d3d11p_generation(), 2);
     assert!(rsf_core_d3d11p_session().is_null());
     assert_eq!(present(bridge, 1, 0), S_OK, "plain presentation continues");
+    unsafe { bridge_release_owned(bridge) };
+}
+
+#[test]
+fn provider_teardown_refusal_defers_replacement_until_retry_succeeds() {
+    let _guard = reset();
+    assert_eq!(prepare(&setup(XESS, 1)), 1);
+    with(|fake| {
+        fake.native12 = true;
+        fake.checked_provider = true;
+    });
+    let bridge = create();
+    assert_eq!(present(bridge, 1, 0), S_OK);
+    let outgoing = rsf_core_d3d11p_session();
+    assert!(!outgoing.is_null());
+    take_calls();
+
+    with(|fake| fake.refused_destroy = outgoing);
+    assert_eq!(rsf_core_d3d11p_request(FSR3), OK);
+    assert_eq!(present(bridge, 1, 0), S_OK);
+    assert_eq!(rsf_core_d3d11p_switch_result(), NOT_READY);
+    assert_eq!(rsf_core_d3d11p_generation(), 1);
+    assert!(rsf_core_d3d11p_session().is_null());
+    let refused = format!("refused destroy {:x}", outgoing as usize);
+    let calls = take_calls();
+    assert!(calls.contains(&refused));
+    assert!(!calls.iter().any(|call| call == "create 3"));
+
+    with(|fake| fake.refused_destroy = null_mut());
+    assert_eq!(present(bridge, 1, 0), S_OK);
+    assert_eq!(rsf_core_d3d11p_switch_result(), OK);
+    assert_eq!(rsf_core_d3d11p_backend(), FSR3);
+    assert_eq!(rsf_core_d3d11p_generation(), 2);
+    let calls = take_calls();
+    let destroyed = format!("destroy {:x}", outgoing as usize);
+    let retired = calls.iter().position(|call| call == &destroyed).unwrap();
+    let created = calls.iter().position(|call| call == "create 3").unwrap();
+    assert!(retired < created);
     unsafe { bridge_release_owned(bridge) };
 }
 

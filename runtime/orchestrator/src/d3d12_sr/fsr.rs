@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::ffx_version::{self, MAX_VERSIONS, Version as ProviderVersion};
+use crate::ffx_version;
 use std::ffi::{CStr, CString};
 use std::ptr::NonNull;
 
@@ -181,27 +181,18 @@ impl Owner {
     }
 
     fn select_version(&self, desc: &Open) -> Result<Version, i32> {
-        let mut ids = [0; MAX_VERSIONS];
-        let mut names = [std::ptr::null(); MAX_VERSIONS];
-        let mut count = MAX_VERSIONS as u64;
-        let mut query = ffxQueryDescGetVersions {
-            header: header(FFX_API_QUERY_DESC_TYPE_GET_VERSIONS),
-            createDescType: u64::from(RSF_FFX_CREATE_UPSCALE as u32),
-            device: desc.device,
-            outputCount: &mut count,
-            versionIds: ids.as_mut_ptr(),
-            versionNames: names.as_mut_ptr(),
-        };
-        if unsafe { self.sdk.query(null_mut(), (&raw mut query).cast()) } != FFX_OK
-            || count > MAX_VERSIONS as u64
-        {
-            return Err(NOT_SUPPORTED);
+        let mut versions = [ProviderVersion::default(); MAX_VERSIONS];
+        let versions = unsafe {
+            query_d3d12(
+                self.sdk.query,
+                desc.device,
+                u64::from(RSF_FFX_CREATE_UPSCALE as u32),
+                &mut versions,
+            )
         }
-        let versions: [ProviderVersion; MAX_VERSIONS] =
-            std::array::from_fn(|index| unsafe { ffx_version::from_sdk(ids[index], names[index]) });
-        let versions = &versions[..count as usize];
-        let best = ffx_version::select(versions, self.major, desc.version_id);
-        if let Some(best) = best.filter(|best| best.id != 0) {
+        .ok_or(NOT_SUPPORTED)?;
+        let count = versions.len();
+        if let Some(best) = ffx_version::admitted(versions, self.major, desc.version_id) {
             let name = unsafe { CStr::from_ptr(best.name) };
             return Ok(Version::new(best.id, name.to_bytes()));
         }

@@ -1400,38 +1400,7 @@ unsafe extern "C" fn rsf_core_native_fg_prepare(
             held.evaluate_ticks,
         );
     }
-    // The requested limit is the interval of rendered frames, before generation. With generation
-    // active the driver's Reflex limiter counts every presented frame (measured: 10000 us requested
-    // at 2x paced rendered frames 19.9 ms apart), so it is given the interval between presents. This
-    // follows the frame's eligibility, not the SDK's activity report: waiting for that report left
-    // the undivided interval in place for the first generated frame, which the driver doubled into
-    // one 25 ms frame at every activation. The cost of deciding early is a looser limit on eligible
-    // frames the SDK is not yet generating for.
-    let generated = options.generated_frames.min(status.max_generated_frames);
-    let presents_per_frame =
-        if status.pacing_owner == RSF_PACING_REFLEX && valid && options.mode == RSF_FG_FIXED {
-            generated + 1
-        } else {
-            1
-        };
-    let paced = status.pacing_owner != RSF_PACING_NONE;
-    let mut configured = rsf_fg_options {
-        struct_size: size_of::<rsf_fg_options>() as u32,
-        abi_version: RSF_FG_ABI_VERSION,
-        mode: if valid { options.mode } else { RSF_FG_OFF },
-        generated_frames: generated,
-        dynamic_target_fps: 0.0,
-        reflex_mode: if paced {
-            options.reflex_mode
-        } else {
-            RSF_REFLEX_OFF
-        },
-        frame_limit_us: if paced {
-            options.frame_limit_us / presents_per_frame
-        } else {
-            0
-        },
-    };
+    let mut configured = provider_options(&options, &status, valid);
     // Options are owner-thread calls. The provider handles transition-only SDK option updates.
     let row = format!(
         "prepare-configure selected_source={} window_native={} screen={} pass_flags={} window_flags={} inputs={} pass_reset={} pass_no_fg={} window_no_fg={} continuous={} \
@@ -1947,6 +1916,45 @@ unsafe extern "C" fn rsf_core_native_fg_dump_inputs(
         }
     }
     written
+}
+
+pub(super) fn provider_options(
+    options: &Options,
+    status: &ProviderStatus,
+    valid: bool,
+) -> rsf_fg_options {
+    // The requested limit is the interval of rendered frames, before generation. With generation
+    // active the driver's Reflex limiter counts every presented frame (measured: 10000 us requested
+    // at 2x paced rendered frames 19.9 ms apart), so it is given the interval between presents. This
+    // follows the frame's eligibility, not the SDK's activity report: waiting for that report left
+    // the undivided interval in place for the first generated frame, which the driver doubled into
+    // one 25 ms frame at every activation. The cost of deciding early is a looser limit on eligible
+    // frames the SDK is not yet generating for.
+    let generated = options.generated_frames.min(status.max_generated_frames);
+    let presents_per_frame =
+        if status.pacing_owner == RSF_PACING_REFLEX && valid && options.mode == RSF_FG_FIXED {
+            generated.saturating_add(1)
+        } else {
+            1
+        };
+    let paced = status.pacing_owner != RSF_PACING_NONE;
+    rsf_fg_options {
+        struct_size: size_of::<rsf_fg_options>() as u32,
+        abi_version: RSF_FG_ABI_VERSION,
+        mode: if valid { options.mode } else { RSF_FG_OFF },
+        generated_frames: generated,
+        dynamic_target_fps: 0.0,
+        reflex_mode: if paced {
+            options.reflex_mode
+        } else {
+            RSF_REFLEX_OFF
+        },
+        frame_limit_us: if paced {
+            options.frame_limit_us / presents_per_frame
+        } else {
+            0
+        },
+    }
 }
 
 #[cfg(test)]

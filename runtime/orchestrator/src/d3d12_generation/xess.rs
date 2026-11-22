@@ -347,13 +347,13 @@ impl Session for Xess {
         let Some(frame) = latency.ids.get(id) else {
             return NOT_READY;
         };
-        if kind == INPUT_SAMPLE {
-            if frame.input_sampled {
-                return OK;
-            }
-            frame.input_sampled = true;
+        if kind == INPUT_SAMPLE && frame.input_sampled {
+            return OK;
         }
         if unsafe { (self.ops.marker)(self.sdk.raw, self.xell.get(), frame.sdk, kind) } == 0 {
+            if kind == INPUT_SAMPLE {
+                frame.input_sampled = true;
+            }
             OK
         } else {
             FEATURE_FAILED
@@ -509,11 +509,8 @@ unsafe extern "C" fn rsf_core_xeg12_create(
         return result;
     }
     let setup = unsafe { &*setup };
-    if setup.chain.ui_mode == UI_LAYER {
-        return UNSUPPORTED;
-    }
-    if setup.streamline_host.is_null() && unsafe { (ops.check.streamline_loaded)() } != 0 {
-        return NEEDS_RESTART;
+    if let Err(result) = ops.check.preflight(setup, setup.chain.ui_mode != UI_LAYER) {
+        return result;
     }
     let sdk = match Bindings::open(
         setup,
@@ -556,7 +553,9 @@ unsafe extern "C" fn rsf_core_xeg12_create(
     };
     let result = unsafe { owner.initialize(setup) };
     if result != OK {
-        unsafe { destroy::<Xess>(session.cast()) };
+        if unsafe { destroy_checked::<Xess>(session.cast()) } != OK {
+            unsafe { out.write(session.cast()) };
+        }
         return result;
     }
     unsafe {

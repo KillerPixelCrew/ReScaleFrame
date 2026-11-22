@@ -423,7 +423,6 @@ pub struct rsf_fg12_calls {
     pub latency_present: ::core::option::Option<
         unsafe extern "C" fn(arg1: u64, arg2: *mut ::core::ffi::c_void, arg3: u32),
     >,
-    pub latency_retire: ::core::option::Option<unsafe extern "C" fn(arg1: u64, arg2: u64)>,
     pub latency_end_session: ::core::option::Option<unsafe extern "C" fn(arg1: u64)>,
     pub cpu_dispatch: ::core::option::Option<
         unsafe extern "C" fn(
@@ -453,7 +452,7 @@ pub struct rsf_fg12_calls {
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_fg12_calls"][::core::mem::size_of::<rsf_fg12_calls>() - 360usize];
+    ["Size of rsf_fg12_calls"][::core::mem::size_of::<rsf_fg12_calls>() - 352usize];
     ["Alignment of rsf_fg12_calls"][::core::mem::align_of::<rsf_fg12_calls>() - 8usize];
     ["Offset of field: rsf_fg12_calls::struct_size"]
         [::core::mem::offset_of!(rsf_fg12_calls, struct_size) - 0usize];
@@ -527,22 +526,20 @@ const _: () = {
         [::core::mem::offset_of!(rsf_fg12_calls, latency_render) - 272usize];
     ["Offset of field: rsf_fg12_calls::latency_present"]
         [::core::mem::offset_of!(rsf_fg12_calls, latency_present) - 280usize];
-    ["Offset of field: rsf_fg12_calls::latency_retire"]
-        [::core::mem::offset_of!(rsf_fg12_calls, latency_retire) - 288usize];
     ["Offset of field: rsf_fg12_calls::latency_end_session"]
-        [::core::mem::offset_of!(rsf_fg12_calls, latency_end_session) - 296usize];
+        [::core::mem::offset_of!(rsf_fg12_calls, latency_end_session) - 288usize];
     ["Offset of field: rsf_fg12_calls::cpu_dispatch"]
-        [::core::mem::offset_of!(rsf_fg12_calls, cpu_dispatch) - 304usize];
+        [::core::mem::offset_of!(rsf_fg12_calls, cpu_dispatch) - 296usize];
     ["Offset of field: rsf_fg12_calls::dump_poll"]
-        [::core::mem::offset_of!(rsf_fg12_calls, dump_poll) - 312usize];
+        [::core::mem::offset_of!(rsf_fg12_calls, dump_poll) - 304usize];
     ["Offset of field: rsf_fg12_calls::dump_begin_record"]
-        [::core::mem::offset_of!(rsf_fg12_calls, dump_begin_record) - 320usize];
+        [::core::mem::offset_of!(rsf_fg12_calls, dump_begin_record) - 312usize];
     ["Offset of field: rsf_fg12_calls::dump_current"]
-        [::core::mem::offset_of!(rsf_fg12_calls, dump_current) - 328usize];
+        [::core::mem::offset_of!(rsf_fg12_calls, dump_current) - 320usize];
     ["Offset of field: rsf_fg12_calls::dump_requested"]
-        [::core::mem::offset_of!(rsf_fg12_calls, dump_requested) - 336usize];
+        [::core::mem::offset_of!(rsf_fg12_calls, dump_requested) - 328usize];
     ["Offset of field: rsf_fg12_calls::dump_complete"]
-        [::core::mem::offset_of!(rsf_fg12_calls, dump_complete) - 344usize];
+        [::core::mem::offset_of!(rsf_fg12_calls, dump_complete) - 336usize];
     ["Offset of field: rsf_fg12_calls::dump_result"]
-        [::core::mem::offset_of!(rsf_fg12_calls, dump_result) - 352usize];
+        [::core::mem::offset_of!(rsf_fg12_calls, dump_result) - 344usize];
 };

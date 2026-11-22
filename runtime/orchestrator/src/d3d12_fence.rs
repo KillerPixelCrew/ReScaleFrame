@@ -2,12 +2,20 @@
 use std::ffi::c_void;
 use std::time::Instant;
 use windows_sys::Win32::{
-    Foundation::{E_FAIL, S_OK, WAIT_OBJECT_0},
+    Foundation::{E_FAIL, GetLastError, S_OK, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
     System::Threading::{INFINITE, WaitForSingleObject},
 };
 
 const DEVICE_REMOVED: i32 = 0x887a_0005_u32 as i32;
-const DEVICE_HUNG: i32 = 0x887a_0006_u32 as i32;
+const fn win32_hresult(code: u32) -> i32 {
+    if code as i32 <= 0 {
+        code as i32
+    } else {
+        ((code & 0xffff) | 0x8007_0000) as i32
+    }
+}
+
+const TIMED_OUT: i32 = win32_hresult(WAIT_TIMEOUT);
 type Handle = *mut c_void;
 
 #[derive(PartialEq, Eq)]
@@ -42,28 +50,32 @@ pub(super) fn wait_for_value(
     timeout_ms: u32,
     mut completed: impl FnMut() -> u64,
     arm: impl FnOnce() -> i32,
-    mut wait: impl FnMut(u32) -> bool,
+    mut wait: impl FnMut(u32) -> i32,
 ) -> i32 {
     if let Some(result) = completion_result(completed(), value) {
         return result;
     }
-    if arm() < 0 {
-        return E_FAIL;
+    let armed = arm();
+    if armed < 0 {
+        return armed;
     }
     let start = Instant::now();
     let mut remaining = timeout_ms;
     loop {
-        let woke = wait(remaining);
+        let waited = wait(remaining);
+        if waited < 0 && waited != TIMED_OUT {
+            return waited;
+        }
         if let Some(result) = completion_result(completed(), value) {
             return result;
         }
-        if !woke {
-            return DEVICE_HUNG;
+        if waited == TIMED_OUT {
+            return TIMED_OUT;
         }
         if timeout_ms != INFINITE {
             let elapsed = start.elapsed().as_millis();
             if elapsed >= u128::from(timeout_ms) {
-                return DEVICE_HUNG;
+                return TIMED_OUT;
             }
             remaining = timeout_ms - elapsed as u32;
         }
@@ -92,7 +104,19 @@ unsafe extern "C" fn rsf_core_d3d12_wait_fence(
         timeout_ms,
         || unsafe { completed(fence) },
         || unsafe { arm(fence, value, event) },
-        |remaining| unsafe { WaitForSingleObject(event, remaining) == WAIT_OBJECT_0 },
+        |remaining| match unsafe { WaitForSingleObject(event, remaining) } {
+            WAIT_OBJECT_0 => S_OK,
+            WAIT_TIMEOUT => TIMED_OUT,
+            WAIT_FAILED => {
+                let error = unsafe { GetLastError() };
+                if error == 0 {
+                    E_FAIL
+                } else {
+                    win32_hresult(error)
+                }
+            }
+            _ => E_FAIL,
+        },
     )
 }
 
@@ -111,7 +135,7 @@ mod tests {
             || S_OK,
             |_| {
                 waits += 1;
-                true
+                S_OK
             },
         );
         assert_eq!(result, S_OK);
@@ -122,9 +146,18 @@ mod tests {
     fn removal_and_timeout_are_distinct_from_completion() {
         let mut values = [0, u64::MAX].into_iter();
         assert_eq!(
-            wait_for_value(7, 1, || values.next().unwrap(), || S_OK, |_| true),
+            wait_for_value(7, 1, || values.next().unwrap(), || S_OK, |_| S_OK),
             DEVICE_REMOVED
         );
-        assert_eq!(wait_for_value(7, 0, || 3, || S_OK, |_| true), DEVICE_HUNG);
+        assert_eq!(wait_for_value(7, 0, || 3, || S_OK, |_| S_OK), TIMED_OUT);
+        let invalid_handle = win32_hresult(6);
+        assert_eq!(
+            wait_for_value(7, 1, || 3, || S_OK, |_| invalid_handle),
+            invalid_handle
+        );
+        assert_eq!(
+            wait_for_value(7, 1, || 3, || invalid_handle, |_| unreachable!()),
+            invalid_handle
+        );
     }
 }

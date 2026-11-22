@@ -32,6 +32,14 @@ pub(super) fn select(versions: &[Version], major: u32, wanted: u64) -> Option<&V
     best
 }
 
+#[cfg(windows)]
+#[allow(dead_code)] // This module is also compiled into the standalone FSR4 archive.
+pub(super) fn admitted(versions: &[Version], major: u32, wanted: u64) -> Option<Version> {
+    select(versions, major, wanted)
+        .filter(|version| version.id != 0)
+        .copied()
+}
+
 // SDK names start with a three-component version and may append a label.
 #[cfg(windows)]
 #[allow(dead_code)] // The standalone Vulkan SR archive also includes this module.

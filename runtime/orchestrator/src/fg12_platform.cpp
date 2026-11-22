@@ -221,7 +221,6 @@ void bind_platform()
         .latency_graphics = rsf_native_latency_graphics,
         .latency_render = rsf_native_latency_render,
         .latency_present = rsf_native_latency_present,
-        .latency_retire = rsf_native_latency_retire,
         .latency_end_session = rsf_native_latency_end_session,
         .cpu_dispatch = rsf_native_cpu_dispatch,
         .dump_poll = rsf_input_dump_poll,

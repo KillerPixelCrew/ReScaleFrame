@@ -139,7 +139,7 @@ inline const rsf_generation_provider* not_compiled_provider()
         static rsf_backend_result abort_frame(void*, uint64_t) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
     };
     static const rsf_generation_provider provider{sizeof(provider), Stub::create, Stub::configure, Stub::begin,
-        Stub::marker, Stub::prepare, Stub::after, Stub::status, Stub::retirement, Stub::destroy, Stub::abort_frame};
+        Stub::marker, Stub::prepare, Stub::after, Stub::status, Stub::retirement, Stub::destroy, Stub::abort_frame, nullptr};
     return &provider;
 }
 }
