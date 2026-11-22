@@ -63,29 +63,10 @@ pub unsafe fn from_result(status: HRESULT, object: *mut c_void) -> Option<IUnkno
     let owned = unsafe { owned(object) };
     if status.is_ok() { owned } else { None }
 }
-// C callers own these leases explicitly. Forget the Rust owner on retain and adopt
-// that same reference on release. Both entry points accept an absent resource.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_resource_retain(resource: *mut c_void) {
-    if !resource.is_null() {
-        unsafe { retain(resource) }.into_raw();
-    }
-}
-
+// The AC7 carrier is C and drops the back buffer reference it was handed here.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_resource_release(resource: *mut c_void) {
     drop(unsafe { owned(resource) });
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_create_render_target_view(
-    device: *mut c_void,
-    texture: *mut c_void,
-) -> *mut c_void {
-    if device.is_null() || texture.is_null() {
-        return std::ptr::null_mut();
-    }
-    unsafe { crate::sys::rsf_d3d11_output_create_rtv(device, texture) }
 }
 
 #[unsafe(no_mangle)]
