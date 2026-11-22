@@ -16,9 +16,13 @@ include = sdk / "Kits" / "FidelityFX"
 result = subprocess.check_output([
     bindgen, str(include / "framegeneration/include/ffx_framegeneration.h"),
     "--allowlist-type", "PfnFfxQuery|ffxQueryDescGetVersions|ffxQueryGetProviderVersion|"
-    "ffxDispatchDescFrameGenerationPrepareV2",
+    "ffxDispatchDescFrameGenerationPrepareV2|ffxOverrideVersion|"
+    "ffxCreateContextDescFrameGeneration(Version)?|ffxConfigureDescFrameGeneration|"
+    "FfxApiCreateContextFramegenerationFlags",
     "--allowlist-var", "FFX_API_QUERY_DESC_TYPE_GET_(VERSIONS|PROVIDER_VERSION)|"
-    "FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION|FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE_V2",
+    "FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION(_VERSION)?|"
+    "FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION|FFX_API_DESC_TYPE_OVERRIDE_VERSION|"
+    "FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE_V2",
     "--no-prepend-enum-name", "--with-derive-default", "--no-derive-debug", "--no-doc-comments",
     "--use-core", "--rust-edition", "2024", "--rust-target", "1.85",
     "--raw-line", "#![allow(dead_code, non_camel_case_types)]",

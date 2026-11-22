@@ -17,6 +17,19 @@ extern "C" int32_t rsf_core_fsr4fg_sdk_provider(PfnFfxQuery, ffxContext*, uint64
 extern "C" void rsf_core_fsr4fg_sdk_prepare(const rsf_fsr4fg_frame*, uint64_t, uint32_t,
     ffxDispatchDescFrameGenerationPrepareV2*);
 
+extern "C" void rsf_core_fsr4fg_sdk_generation(const rsf_fsr4fg_create*, uint64_t, uint32_t, uint32_t,
+    ffxApiHeader*, ffxOverrideVersion*, ffxCreateContextDescFrameGenerationVersion*,
+    ffxCreateContextDescFrameGeneration*);
+extern "C" void rsf_core_fsr4fg_sdk_configure(void*, uint64_t, uint32_t, uint32_t, uint32_t,
+    FfxApiFrameGenerationDispatchFunc, void*, ffxConfigureDescFrameGeneration*);
+
+static_assert(FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION == 0x20001 &&
+    FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION == 0x20002 &&
+    FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE_V2 == 0x2000c &&
+    FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION_VERSION == 0x2000e);
+static_assert(sizeof(ffxOverrideVersion) == 24 && sizeof(ffxCreateContextDescFrameGenerationVersion) == 24 &&
+    sizeof(ffxCreateContextDescFrameGeneration) == 40 && sizeof(ffxConfigureDescFrameGeneration) == 144 &&
+    offsetof(ffxConfigureDescFrameGeneration, HUDLessColor) == 64);
 static_assert(sizeof(ffxQueryDescGetVersions) == 56 && sizeof(ffxQueryGetProviderVersion) == 32);
 static_assert(sizeof(ffxDispatchDescFrameGenerationPrepareV2) == 232 &&
     offsetof(ffxDispatchDescFrameGenerationPrepareV2, commandList) == 32 &&
@@ -135,21 +148,11 @@ int32_t versions(Native* self, rsf_ffx_version* out, uint64_t* count) {
 }
 
 int32_t create_generation(Native* self, const rsf_fsr4fg_create* setup, uint64_t provider) {
-    self->override_version.header.type = FFX_API_DESC_TYPE_OVERRIDE_VERSION;
-    self->override_version.versionId = provider;
     self->backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12;
-    self->backend.header.pNext = &self->override_version.header;
     self->backend.device = self->device;
-    self->api_version.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION_VERSION;
-    self->api_version.header.pNext = &self->backend.header;
-    self->api_version.version = FFX_FRAMEGENERATION_VERSION;
-    self->description.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;
-    self->description.header.pNext = &self->api_version.header;
-    self->description.displaySize = self->description.maxRenderSize = {setup->width, setup->height};
-    self->description.backBufferFormat = ffxApiGetSurfaceFormatDX12(DXGI_FORMAT_B8G8R8A8_UNORM);
-    self->description.flags = (setup->depth_inverted ? FFX_FRAMEGENERATION_ENABLE_DEPTH_INVERTED : 0u) |
-        (setup->depth_infinite ? FFX_FRAMEGENERATION_ENABLE_DEPTH_INFINITE : 0u) |
-        (setup->motion_jittered ? FFX_FRAMEGENERATION_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION : 0u);
+    rsf_core_fsr4fg_sdk_generation(setup, provider, FFX_FRAMEGENERATION_VERSION,
+        ffxApiGetSurfaceFormatDX12(DXGI_FORMAT_B8G8R8A8_UNORM), &self->backend.header,
+        &self->override_version, &self->api_version, &self->description);
     return static_cast<int32_t>(self->create(&self->generation, &self->description.header, nullptr));
 }
 
@@ -278,13 +281,7 @@ ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* desc, void* user) {
 
 int32_t configure(Native* self, uint64_t sequence, uint32_t width, uint32_t height, uint32_t enabled, void* hudless) {
     ffxConfigureDescFrameGeneration config{};
-    config.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
-    config.swapChain = self->chain;
-    config.frameID = sequence;
-    config.frameGenerationEnabled = enabled != 0;
-    config.frameGenerationCallback = generate;
-    config.frameGenerationCallbackUserContext = self;
-    config.generationRect = {0, 0, static_cast<int32_t>(width), static_cast<int32_t>(height)};
+    rsf_core_fsr4fg_sdk_configure(self->chain, sequence, width, height, enabled, generate, self, &config);
     if (enabled) {
         config.HUDLessColor = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(hudless), FFX_API_RESOURCE_STATE_COMPUTE_READ);
     }

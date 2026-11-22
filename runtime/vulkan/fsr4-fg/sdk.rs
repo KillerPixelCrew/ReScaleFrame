@@ -1,13 +1,21 @@
 // SPDX-License-Identifier: MIT
 
 use super::{
-    BridgeFrame, Handle, INVALID, MAX_VERSIONS, Record, UNSUPPORTED, Version, ffx_version,
+    BridgeCreate, BridgeFrame, Handle, INVALID, MAX_VERSIONS, Record, UNSUPPORTED, Version,
+    ffx_version,
 };
 use std::ptr;
 
 #[path = "sdk_abi.rs"]
 mod abi;
 use abi::*;
+
+// Bindgen skips the SDK's function-like descriptor macros. The native
+// consumer checks these IDs against the header selected for that build.
+const FG_CREATE: u32 = 0x20001;
+const FG_CONFIGURE: u32 = 0x20002;
+const FG_PREPARE_V2: u32 = 0x2000c;
+const FG_VERSION: u32 = 0x2000e;
 
 fn header(type_: u32) -> ffxApiHeader {
     ffxApiHeader {
@@ -37,13 +45,13 @@ unsafe extern "C" fn rsf_core_fsr4fg_sdk_versions(
     let mut names = [ptr::null(); MAX_VERSIONS];
     let mut request = ffxQueryDescGetVersions {
         header: header(FFX_API_QUERY_DESC_TYPE_GET_VERSIONS),
-        createDescType: u64::from(FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION),
+        createDescType: u64::from(FG_CREATE),
         device,
         outputCount: count,
         versionIds: ids.as_mut_ptr(),
         versionNames: names.as_mut_ptr(),
     };
-    if unsafe { query(ptr::null_mut(), &mut request.header) } != 0 {
+    if unsafe { query(ptr::null_mut(), &raw mut request.header) } != 0 {
         return UNSUPPORTED;
     }
     let actual = unsafe { count.read() };
@@ -54,6 +62,89 @@ unsafe extern "C" fn rsf_core_fsr4fg_sdk_versions(
         unsafe { output.add(index).write(ffx_version::from_sdk(id, name)) };
     }
     0
+}
+
+/// Writes the retained generation descriptors in their final native storage.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4fg_sdk_generation(
+    setup: &BridgeCreate,
+    provider: u64,
+    api_version: u32,
+    format: u32,
+    backend: *mut ffxApiHeader,
+    selection: *mut ffxOverrideVersion,
+    version: *mut ffxCreateContextDescFrameGenerationVersion,
+    description: *mut ffxCreateContextDescFrameGeneration,
+) {
+    let dimensions = FfxApiDimensions2D {
+        width: setup.width,
+        height: setup.height,
+    };
+    let flags = |enabled: u32, flag: FfxApiCreateContextFramegenerationFlags| {
+        if enabled != 0 { flag as u32 } else { 0 }
+    };
+    unsafe {
+        selection.write(ffxOverrideVersion {
+            header: header(FFX_API_DESC_TYPE_OVERRIDE_VERSION),
+            versionId: provider,
+        });
+        (*backend).pNext = &raw mut (*selection).header;
+        version.write(ffxCreateContextDescFrameGenerationVersion {
+            header: ffxApiHeader {
+                pNext: backend,
+                ..header(FG_VERSION)
+            },
+            version: api_version,
+        });
+        description.write(ffxCreateContextDescFrameGeneration {
+            header: ffxApiHeader {
+                pNext: &raw mut (*version).header,
+                ..header(FG_CREATE)
+            },
+            flags: flags(
+                setup.depth_inverted,
+                FFX_FRAMEGENERATION_ENABLE_DEPTH_INVERTED,
+            ) | flags(
+                setup.depth_infinite,
+                FFX_FRAMEGENERATION_ENABLE_DEPTH_INFINITE,
+            ) | flags(
+                setup.motion_jittered,
+                FFX_FRAMEGENERATION_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION,
+            ),
+            displaySize: dimensions,
+            maxRenderSize: dimensions,
+            backBufferFormat: format,
+        });
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4fg_sdk_configure(
+    swapchain: Handle,
+    sequence: u64,
+    width: u32,
+    height: u32,
+    enabled: u32,
+    generate: FfxApiFrameGenerationDispatchFunc,
+    context: Handle,
+    output: *mut ffxConfigureDescFrameGeneration,
+) {
+    let desc = ffxConfigureDescFrameGeneration {
+        header: header(FG_CONFIGURE),
+        swapChain: swapchain,
+        frameID: sequence,
+        frameGenerationEnabled: enabled != 0,
+        frameGenerationCallback: generate,
+        frameGenerationCallbackUserContext: context,
+        generationRect: FfxApiRect2D {
+            left: 0,
+            top: 0,
+            width: width as i32,
+            height: height as i32,
+        },
+        ..Default::default()
+    };
+    unsafe { output.write(desc) };
 }
 
 /// Queries the provider selected by the SDK on the live effect.
@@ -71,7 +162,7 @@ unsafe extern "C" fn rsf_core_fsr4fg_sdk_provider(
         header: header(FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION),
         ..Default::default()
     };
-    let code = unsafe { query(context, &mut request.header) } as i32;
+    let code = unsafe { query(context, &raw mut request.header) } as i32;
     if code == 0 {
         unsafe { version.write(request.versionId) };
     }
@@ -92,7 +183,7 @@ fn prepare(
         1.0
     };
     ffxDispatchDescFrameGenerationPrepareV2 {
-        header: header(FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE_V2),
+        header: header(FG_PREPARE_V2),
         frameID: sequence,
         renderSize: FfxApiDimensions2D {
             width: record.render_width,
@@ -166,10 +257,7 @@ mod tests {
             );
             let request = &mut *input.cast::<ffxQueryDescGetVersions>();
             assert_eq!(request.device, fake_handle(123));
-            assert_eq!(
-                request.createDescType,
-                u64::from(FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION)
-            );
+            assert_eq!(request.createDescType, u64::from(FG_CREATE));
             if mode == 2 {
                 return 1;
             }
@@ -269,10 +357,7 @@ mod tests {
         };
         let mut desc = ffxDispatchDescFrameGenerationPrepareV2::default();
         unsafe { rsf_core_fsr4fg_sdk_prepare(&frame, 70, 0, &mut desc) };
-        assert_eq!(
-            desc.header.type_,
-            u64::from(FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE_V2)
-        );
+        assert_eq!(desc.header.type_, u64::from(FG_PREPARE_V2));
         assert!(desc.frameID == 70 && !desc.reset);
         assert_eq!([desc.renderSize.width, desc.renderSize.height], [426, 240]);
         assert_eq!(desc.cameraPosition, [2.0, 3.0, 4.0]);

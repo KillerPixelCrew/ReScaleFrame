@@ -4,6 +4,7 @@
 #![allow(non_snake_case, non_upper_case_globals)]
 
 pub const FFX_API_QUERY_DESC_TYPE_GET_VERSIONS: u32 = 4;
+pub const FFX_API_DESC_TYPE_OVERRIDE_VERSION: u32 = 5;
 pub const FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION: u32 = 6;
 pub type ffxContext = *mut ::core::ffi::c_void;
 pub type ffxReturnCode_t = u32;
@@ -30,6 +31,8 @@ impl Default for ffxApiHeader {
         }
     }
 }
+pub type ffxCreateContextDescHeader = ffxApiHeader;
+pub type ffxConfigureDescHeader = ffxApiHeader;
 pub type ffxQueryDescHeader = ffxApiHeader;
 pub type ffxDispatchDescHeader = ffxApiHeader;
 #[repr(C)]
@@ -62,6 +65,30 @@ const _: () = {
         [::core::mem::offset_of!(ffxQueryDescGetVersions, versionNames) - 48usize];
 };
 impl Default for ffxQueryDescGetVersions {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct ffxOverrideVersion {
+    pub header: ffxApiHeader,
+    pub versionId: u64,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of ffxOverrideVersion"][::core::mem::size_of::<ffxOverrideVersion>() - 24usize];
+    ["Alignment of ffxOverrideVersion"][::core::mem::align_of::<ffxOverrideVersion>() - 8usize];
+    ["Offset of field: ffxOverrideVersion::header"]
+        [::core::mem::offset_of!(ffxOverrideVersion, header) - 0usize];
+    ["Offset of field: ffxOverrideVersion::versionId"]
+        [::core::mem::offset_of!(ffxOverrideVersion, versionId) - 16usize];
+};
+impl Default for ffxOverrideVersion {
     fn default() -> Self {
         let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
         unsafe {
@@ -134,6 +161,24 @@ const _: () = {
         [::core::mem::offset_of!(FfxApiFloatCoords2D, x) - 0usize];
     ["Offset of field: FfxApiFloatCoords2D::y"]
         [::core::mem::offset_of!(FfxApiFloatCoords2D, y) - 4usize];
+};
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct FfxApiRect2D {
+    pub left: i32,
+    pub top: i32,
+    pub width: i32,
+    pub height: i32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of FfxApiRect2D"][::core::mem::size_of::<FfxApiRect2D>() - 16usize];
+    ["Alignment of FfxApiRect2D"][::core::mem::align_of::<FfxApiRect2D>() - 4usize];
+    ["Offset of field: FfxApiRect2D::left"][::core::mem::offset_of!(FfxApiRect2D, left) - 0usize];
+    ["Offset of field: FfxApiRect2D::top"][::core::mem::offset_of!(FfxApiRect2D, top) - 4usize];
+    ["Offset of field: FfxApiRect2D::width"][::core::mem::offset_of!(FfxApiRect2D, width) - 8usize];
+    ["Offset of field: FfxApiRect2D::height"]
+        [::core::mem::offset_of!(FfxApiRect2D, height) - 12usize];
 };
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -278,6 +323,235 @@ impl Default for FfxApiResource {
         }
     }
 }
+pub const FFX_FRAMEGENERATION_ENABLE_ASYNC_WORKLOAD_SUPPORT:
+    FfxApiCreateContextFramegenerationFlags = 1;
+pub const FFX_FRAMEGENERATION_ENABLE_DISPLAY_RESOLUTION_MOTION_VECTORS:
+    FfxApiCreateContextFramegenerationFlags = 2;
+pub const FFX_FRAMEGENERATION_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION:
+    FfxApiCreateContextFramegenerationFlags = 4;
+pub const FFX_FRAMEGENERATION_ENABLE_DEPTH_INVERTED: FfxApiCreateContextFramegenerationFlags = 8;
+pub const FFX_FRAMEGENERATION_ENABLE_DEPTH_INFINITE: FfxApiCreateContextFramegenerationFlags = 16;
+pub const FFX_FRAMEGENERATION_ENABLE_HIGH_DYNAMIC_RANGE: FfxApiCreateContextFramegenerationFlags =
+    32;
+pub const FFX_FRAMEGENERATION_ENABLE_DEBUG_CHECKING: FfxApiCreateContextFramegenerationFlags = 64;
+pub type FfxApiCreateContextFramegenerationFlags = ::core::ffi::c_int;
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct ffxCreateContextDescFrameGeneration {
+    pub header: ffxCreateContextDescHeader,
+    pub flags: u32,
+    pub displaySize: FfxApiDimensions2D,
+    pub maxRenderSize: FfxApiDimensions2D,
+    pub backBufferFormat: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of ffxCreateContextDescFrameGeneration"]
+        [::core::mem::size_of::<ffxCreateContextDescFrameGeneration>() - 40usize];
+    ["Alignment of ffxCreateContextDescFrameGeneration"]
+        [::core::mem::align_of::<ffxCreateContextDescFrameGeneration>() - 8usize];
+    ["Offset of field: ffxCreateContextDescFrameGeneration::header"]
+        [::core::mem::offset_of!(ffxCreateContextDescFrameGeneration, header) - 0usize];
+    ["Offset of field: ffxCreateContextDescFrameGeneration::flags"]
+        [::core::mem::offset_of!(ffxCreateContextDescFrameGeneration, flags) - 16usize];
+    ["Offset of field: ffxCreateContextDescFrameGeneration::displaySize"]
+        [::core::mem::offset_of!(ffxCreateContextDescFrameGeneration, displaySize) - 20usize];
+    ["Offset of field: ffxCreateContextDescFrameGeneration::maxRenderSize"]
+        [::core::mem::offset_of!(ffxCreateContextDescFrameGeneration, maxRenderSize) - 28usize];
+    ["Offset of field: ffxCreateContextDescFrameGeneration::backBufferFormat"]
+        [::core::mem::offset_of!(ffxCreateContextDescFrameGeneration, backBufferFormat) - 36usize];
+};
+impl Default for ffxCreateContextDescFrameGeneration {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct ffxCallbackDescFrameGenerationPresent {
+    pub header: ffxDispatchDescHeader,
+    pub device: *mut ::core::ffi::c_void,
+    pub commandList: *mut ::core::ffi::c_void,
+    pub currentBackBuffer: FfxApiResource,
+    pub currentUI: FfxApiResource,
+    pub outputSwapChainBuffer: FfxApiResource,
+    pub isGeneratedFrame: bool,
+    pub frameID: u64,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of ffxCallbackDescFrameGenerationPresent"]
+        [::core::mem::size_of::<ffxCallbackDescFrameGenerationPresent>() - 192usize];
+    ["Alignment of ffxCallbackDescFrameGenerationPresent"]
+        [::core::mem::align_of::<ffxCallbackDescFrameGenerationPresent>() - 8usize];
+    ["Offset of field: ffxCallbackDescFrameGenerationPresent::header"]
+        [::core::mem::offset_of!(ffxCallbackDescFrameGenerationPresent, header) - 0usize];
+    ["Offset of field: ffxCallbackDescFrameGenerationPresent::device"]
+        [::core::mem::offset_of!(ffxCallbackDescFrameGenerationPresent, device) - 16usize];
+    ["Offset of field: ffxCallbackDescFrameGenerationPresent::commandList"]
+        [::core::mem::offset_of!(ffxCallbackDescFrameGenerationPresent, commandList) - 24usize];
+    ["Offset of field: ffxCallbackDescFrameGenerationPresent::currentBackBuffer"][::core::mem::offset_of!(
+        ffxCallbackDescFrameGenerationPresent,
+        currentBackBuffer
+    ) - 32usize];
+    ["Offset of field: ffxCallbackDescFrameGenerationPresent::currentUI"]
+        [::core::mem::offset_of!(ffxCallbackDescFrameGenerationPresent, currentUI) - 80usize];
+    ["Offset of field: ffxCallbackDescFrameGenerationPresent::outputSwapChainBuffer"][::core::mem::offset_of!(
+        ffxCallbackDescFrameGenerationPresent,
+        outputSwapChainBuffer
+    ) - 128usize];
+    ["Offset of field: ffxCallbackDescFrameGenerationPresent::isGeneratedFrame"][::core::mem::offset_of!(
+        ffxCallbackDescFrameGenerationPresent,
+        isGeneratedFrame
+    ) - 176usize];
+    ["Offset of field: ffxCallbackDescFrameGenerationPresent::frameID"]
+        [::core::mem::offset_of!(ffxCallbackDescFrameGenerationPresent, frameID) - 184usize];
+};
+impl Default for ffxCallbackDescFrameGenerationPresent {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct ffxDispatchDescFrameGeneration {
+    pub header: ffxDispatchDescHeader,
+    pub commandList: *mut ::core::ffi::c_void,
+    pub presentColor: FfxApiResource,
+    pub outputs: [FfxApiResource; 4usize],
+    pub numGeneratedFrames: u32,
+    pub reset: bool,
+    pub backbufferTransferFunction: u32,
+    pub minMaxLuminance: [f32; 2usize],
+    pub generationRect: FfxApiRect2D,
+    pub frameID: u64,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of ffxDispatchDescFrameGeneration"]
+        [::core::mem::size_of::<ffxDispatchDescFrameGeneration>() - 312usize];
+    ["Alignment of ffxDispatchDescFrameGeneration"]
+        [::core::mem::align_of::<ffxDispatchDescFrameGeneration>() - 8usize];
+    ["Offset of field: ffxDispatchDescFrameGeneration::header"]
+        [::core::mem::offset_of!(ffxDispatchDescFrameGeneration, header) - 0usize];
+    ["Offset of field: ffxDispatchDescFrameGeneration::commandList"]
+        [::core::mem::offset_of!(ffxDispatchDescFrameGeneration, commandList) - 16usize];
+    ["Offset of field: ffxDispatchDescFrameGeneration::presentColor"]
+        [::core::mem::offset_of!(ffxDispatchDescFrameGeneration, presentColor) - 24usize];
+    ["Offset of field: ffxDispatchDescFrameGeneration::outputs"]
+        [::core::mem::offset_of!(ffxDispatchDescFrameGeneration, outputs) - 72usize];
+    ["Offset of field: ffxDispatchDescFrameGeneration::numGeneratedFrames"]
+        [::core::mem::offset_of!(ffxDispatchDescFrameGeneration, numGeneratedFrames) - 264usize];
+    ["Offset of field: ffxDispatchDescFrameGeneration::reset"]
+        [::core::mem::offset_of!(ffxDispatchDescFrameGeneration, reset) - 268usize];
+    ["Offset of field: ffxDispatchDescFrameGeneration::backbufferTransferFunction"][::core::mem::offset_of!(
+        ffxDispatchDescFrameGeneration,
+        backbufferTransferFunction
+    ) - 272usize];
+    ["Offset of field: ffxDispatchDescFrameGeneration::minMaxLuminance"]
+        [::core::mem::offset_of!(ffxDispatchDescFrameGeneration, minMaxLuminance) - 276usize];
+    ["Offset of field: ffxDispatchDescFrameGeneration::generationRect"]
+        [::core::mem::offset_of!(ffxDispatchDescFrameGeneration, generationRect) - 284usize];
+    ["Offset of field: ffxDispatchDescFrameGeneration::frameID"]
+        [::core::mem::offset_of!(ffxDispatchDescFrameGeneration, frameID) - 304usize];
+};
+impl Default for ffxDispatchDescFrameGeneration {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+pub type FfxApiPresentCallbackFunc = ::core::option::Option<
+    unsafe extern "C" fn(
+        params: *mut ffxCallbackDescFrameGenerationPresent,
+        pUserCtx: *mut ::core::ffi::c_void,
+    ) -> ffxReturnCode_t,
+>;
+pub type FfxApiFrameGenerationDispatchFunc = ::core::option::Option<
+    unsafe extern "C" fn(
+        params: *mut ffxDispatchDescFrameGeneration,
+        pUserCtx: *mut ::core::ffi::c_void,
+    ) -> ffxReturnCode_t,
+>;
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct ffxConfigureDescFrameGeneration {
+    pub header: ffxConfigureDescHeader,
+    pub swapChain: *mut ::core::ffi::c_void,
+    pub presentCallback: FfxApiPresentCallbackFunc,
+    pub presentCallbackUserContext: *mut ::core::ffi::c_void,
+    pub frameGenerationCallback: FfxApiFrameGenerationDispatchFunc,
+    pub frameGenerationCallbackUserContext: *mut ::core::ffi::c_void,
+    pub frameGenerationEnabled: bool,
+    pub allowAsyncWorkloads: bool,
+    pub HUDLessColor: FfxApiResource,
+    pub flags: u32,
+    pub onlyPresentGenerated: bool,
+    pub generationRect: FfxApiRect2D,
+    pub frameID: u64,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of ffxConfigureDescFrameGeneration"]
+        [::core::mem::size_of::<ffxConfigureDescFrameGeneration>() - 144usize];
+    ["Alignment of ffxConfigureDescFrameGeneration"]
+        [::core::mem::align_of::<ffxConfigureDescFrameGeneration>() - 8usize];
+    ["Offset of field: ffxConfigureDescFrameGeneration::header"]
+        [::core::mem::offset_of!(ffxConfigureDescFrameGeneration, header) - 0usize];
+    ["Offset of field: ffxConfigureDescFrameGeneration::swapChain"]
+        [::core::mem::offset_of!(ffxConfigureDescFrameGeneration, swapChain) - 16usize];
+    ["Offset of field: ffxConfigureDescFrameGeneration::presentCallback"]
+        [::core::mem::offset_of!(ffxConfigureDescFrameGeneration, presentCallback) - 24usize];
+    ["Offset of field: ffxConfigureDescFrameGeneration::presentCallbackUserContext"][::core::mem::offset_of!(
+        ffxConfigureDescFrameGeneration,
+        presentCallbackUserContext
+    ) - 32usize];
+    ["Offset of field: ffxConfigureDescFrameGeneration::frameGenerationCallback"][::core::mem::offset_of!(
+        ffxConfigureDescFrameGeneration,
+        frameGenerationCallback
+    ) - 40usize];
+    ["Offset of field: ffxConfigureDescFrameGeneration::frameGenerationCallbackUserContext"][::core::mem::offset_of!(
+        ffxConfigureDescFrameGeneration,
+        frameGenerationCallbackUserContext
+    )
+        - 48usize];
+    ["Offset of field: ffxConfigureDescFrameGeneration::frameGenerationEnabled"][::core::mem::offset_of!(
+        ffxConfigureDescFrameGeneration,
+        frameGenerationEnabled
+    ) - 56usize];
+    ["Offset of field: ffxConfigureDescFrameGeneration::allowAsyncWorkloads"]
+        [::core::mem::offset_of!(ffxConfigureDescFrameGeneration, allowAsyncWorkloads) - 57usize];
+    ["Offset of field: ffxConfigureDescFrameGeneration::HUDLessColor"]
+        [::core::mem::offset_of!(ffxConfigureDescFrameGeneration, HUDLessColor) - 64usize];
+    ["Offset of field: ffxConfigureDescFrameGeneration::flags"]
+        [::core::mem::offset_of!(ffxConfigureDescFrameGeneration, flags) - 112usize];
+    ["Offset of field: ffxConfigureDescFrameGeneration::onlyPresentGenerated"]
+        [::core::mem::offset_of!(ffxConfigureDescFrameGeneration, onlyPresentGenerated) - 116usize];
+    ["Offset of field: ffxConfigureDescFrameGeneration::generationRect"]
+        [::core::mem::offset_of!(ffxConfigureDescFrameGeneration, generationRect) - 120usize];
+    ["Offset of field: ffxConfigureDescFrameGeneration::frameID"]
+        [::core::mem::offset_of!(ffxConfigureDescFrameGeneration, frameID) - 136usize];
+};
+impl Default for ffxConfigureDescFrameGeneration {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct ffxDispatchDescFrameGenerationPrepareV2 {
@@ -363,6 +637,32 @@ const _: () = {
     ) - 220usize];
 };
 impl Default for ffxDispatchDescFrameGenerationPrepareV2 {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct ffxCreateContextDescFrameGenerationVersion {
+    pub header: ffxCreateContextDescHeader,
+    pub version: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of ffxCreateContextDescFrameGenerationVersion"]
+        [::core::mem::size_of::<ffxCreateContextDescFrameGenerationVersion>() - 24usize];
+    ["Alignment of ffxCreateContextDescFrameGenerationVersion"]
+        [::core::mem::align_of::<ffxCreateContextDescFrameGenerationVersion>() - 8usize];
+    ["Offset of field: ffxCreateContextDescFrameGenerationVersion::header"]
+        [::core::mem::offset_of!(ffxCreateContextDescFrameGenerationVersion, header) - 0usize];
+    ["Offset of field: ffxCreateContextDescFrameGenerationVersion::version"]
+        [::core::mem::offset_of!(ffxCreateContextDescFrameGenerationVersion, version) - 16usize];
+};
+impl Default for ffxCreateContextDescFrameGenerationVersion {
     fn default() -> Self {
         let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
         unsafe {
