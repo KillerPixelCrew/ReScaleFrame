@@ -1,152 +1,116 @@
 // SPDX-License-Identifier: MIT
-#[path = "schedule_abi.rs"]
-mod abi;
+//! The case lists of the far and tessellation-chain fixtures.
 
-use abi::*;
-use std::ffi::{CStr, c_char, c_void};
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_core_schedule(
-    scene: *const c_void,
-    run: rsf_anomaly_motion_core_case_fn,
-) -> i32 {
-    let Some(run) = run else { return 1 };
-    for phase in [
-        RSF_ANOMALY_MOTION_ROOTS,
-        RSF_ANOMALY_MOTION_FOLIAGE_LAYOUTS,
-        RSF_ANOMALY_MOTION_CORE_DRAW,
-        RSF_ANOMALY_MOTION_TREE_DRAW,
-        RSF_ANOMALY_MOTION_DETAIL_DRAW,
-    ] {
-        if !unsafe { run(scene, phase as u32) } {
-            return 1;
-        }
-    }
-    0
+/// One G-buffer VS/PS pair X-Ray draws a skinned model with, on one side of r__dtex_range.
+pub(super) struct FarCase {
+    pub(super) vertex: &'static str,
+    pub(super) pixel: &'static str,
+    /// "LQ" (beyond r__dtex_range) or "HQ".
+    pub(super) element: &'static str,
+    pub(super) skin: i32,
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_far_schedule(
-    run: rsf_anomaly_motion_far_case_fn,
-    pairs: &mut u32,
-    lq: &mut u32,
-    worst: &mut f64,
-) -> i32 {
-    let Some(run) = run else { return 1 };
-    // Use the engine's cached SKIN modes, including detail only for SKIN_0..2.
+/// Every cached SKIN mode of the LQ and HQ pairs, and the detail pairs only for SKIN_0..2.
+pub(super) fn far_cases() -> Vec<FarCase> {
     let low = [
-        (c"deffer_model_bump.vs", c"deffer_base_bump.ps"),
-        (c"deffer_model_bump.vs", c"deffer_base_aref_bump.ps"),
-        (c"deffer_model_flat.vs", c"deffer_base_flat.ps"),
-        (c"deffer_model_flat.vs", c"deffer_base_aref_flat.ps"),
+        ("deffer_model_bump.vs", "deffer_base_bump.ps"),
+        ("deffer_model_bump.vs", "deffer_base_aref_bump.ps"),
+        ("deffer_model_flat.vs", "deffer_base_flat.ps"),
+        ("deffer_model_flat.vs", "deffer_base_aref_flat.ps"),
     ];
     let high = [
-        (c"deffer_model_bump-hq.vs", c"deffer_base_bump-hq.ps"),
-        (c"deffer_model_bump-hq.vs", c"deffer_base_steep-hq.ps"),
-        (c"deffer_model_bump-hq.vs", c"deffer_base_aref_bump-hq.ps"),
+        ("deffer_model_bump-hq.vs", "deffer_base_bump-hq.ps"),
+        ("deffer_model_bump-hq.vs", "deffer_base_steep-hq.ps"),
+        ("deffer_model_bump-hq.vs", "deffer_base_aref_bump-hq.ps"),
     ];
     let detail = [
-        (c"deffer_model_bump_d-hq.vs", c"deffer_base_bump_d-hq.ps"),
-        (c"deffer_model_bump_d-hq.vs", c"deffer_base_bump_db-hq.ps"),
+        ("deffer_model_bump_d-hq.vs", "deffer_base_bump_d-hq.ps"),
+        ("deffer_model_bump_d-hq.vs", "deffer_base_bump_db-hq.ps"),
     ];
-    let mut draw = |skin, element: &CStr, (vertex, pixel): (&CStr, &CStr)| {
-        let case = rsf_anomaly_motion_far_case {
-            vertex: vertex.as_ptr(),
-            pixel: pixel.as_ptr(),
-            element: element.as_ptr(),
-            skin,
-        };
-        let mut far = 0.;
-        if !unsafe { run(&case, &mut far) } {
-            return false;
-        }
-        *worst = worst.max(far);
-        *lq += u32::from(element == c"LQ");
-        *pairs += 1;
-        true
+    let case = |skin, element, (vertex, pixel): (&'static str, &'static str)| FarCase {
+        vertex,
+        pixel,
+        element,
+        skin,
     };
+    let mut cases = Vec::new();
     for skin in 0..=4 {
-        for pair in low {
-            if !draw(skin, c"LQ", pair) {
-                return 1;
-            }
-        }
-        for pair in high {
-            if !draw(skin, c"HQ", pair) {
-                return 1;
-            }
-        }
+        cases.extend(low.iter().map(|&pair| case(skin, "LQ", pair)));
+        cases.extend(high.iter().map(|&pair| case(skin, "HQ", pair)));
     }
     for skin in 0..=2 {
-        for pair in detail {
-            if !draw(skin, c"HQ", pair) {
-                return 1;
-            }
-        }
+        cases.extend(detail.iter().map(|&pair| case(skin, "HQ", pair)));
     }
-    0
+    cases
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_tess_schedule(
-    run: rsf_anomaly_motion_tess_case_fn,
-    include_hm: bool,
-    diagnose: bool,
-    create: *const c_char,
-) -> i32 {
-    let Some(run) = run else { return 1 };
-    let pn = [c"TESS_PN".as_ptr()];
-    let detail = [
-        c"TESS_PN".as_ptr(),
-        c"USE_TDETAIL".as_ptr(),
-        c"USE_TDETAIL_BUMP".as_ptr(),
+/// One tessellation permutation: what r_TessPass adds to all four stages.
+pub(super) struct TessCase {
+    pub(super) name: &'static str,
+    pub(super) skin: i32,
+    pub(super) defines: &'static [&'static str],
+}
+
+const PN: &[&str] = &["TESS_PN"];
+const DETAIL: &[&str] = &["TESS_PN", "USE_TDETAIL", "USE_TDETAIL_BUMP"];
+const HM: &[&str] = &["TESS_PN", "TESS_HM", "USE_TDETAIL"];
+
+/// The HM cases stay opt-in because creating the stock HS can crash the driver.
+pub(super) fn tess_cases(include_hm: bool) -> Vec<TessCase> {
+    let mut cases = vec![
+        TessCase {
+            name: "SKIN_0 TESS_PN",
+            skin: 0,
+            defines: PN,
+        },
+        TessCase {
+            name: "SKIN_1 TESS_PN",
+            skin: 1,
+            defines: PN,
+        },
+        TessCase {
+            name: "SKIN_2 TESS_PN",
+            skin: 2,
+            defines: PN,
+        },
+        TessCase {
+            name: "SKIN_3 TESS_PN",
+            skin: 3,
+            defines: PN,
+        },
+        TessCase {
+            name: "SKIN_4 TESS_PN",
+            skin: 4,
+            defines: PN,
+        },
+        TessCase {
+            name: "SKIN_2 TESS_PN+USE_TDETAIL+USE_TDETAIL_BUMP",
+            skin: 2,
+            defines: DETAIL,
+        },
+        TessCase {
+            name: "SKIN_3 TESS_PN+USE_TDETAIL+USE_TDETAIL_BUMP",
+            skin: 3,
+            defines: DETAIL,
+        },
     ];
-    let hm = [
-        c"TESS_PN".as_ptr(),
-        c"TESS_HM".as_ptr(),
-        c"USE_TDETAIL".as_ptr(),
-    ];
-    let pn_cases = [
-        (c"SKIN_0 TESS_PN", 0),
-        (c"SKIN_1 TESS_PN", 1),
-        (c"SKIN_2 TESS_PN", 2),
-        (c"SKIN_3 TESS_PN", 3),
-        (c"SKIN_4 TESS_PN", 4),
-    ];
-    let detail_cases = [
-        (c"SKIN_2 TESS_PN+USE_TDETAIL+USE_TDETAIL_BUMP", 2),
-        (c"SKIN_3 TESS_PN+USE_TDETAIL+USE_TDETAIL_BUMP", 3),
-    ];
-    let hm_cases = [
-        (c"SKIN_1 TESS_PN+TESS_HM+USE_TDETAIL", 1),
-        (c"SKIN_2 TESS_PN+TESS_HM+USE_TDETAIL", 2),
-    ];
-    let draw =
-        |(name, skin): (&CStr, i32), defines: &[*const c_char], create: *const c_char, diagnose| {
-            let case = rsf_anomaly_motion_tess_case {
-                name: name.as_ptr(),
-                skin,
-                defines: defines.as_ptr(),
-                define_count: defines.len(),
-            };
-            unsafe { run(&case, create, diagnose) }
-        };
-    if !create.is_null() {
-        return i32::from(!draw(hm_cases[0], &hm, create, false));
+    if include_hm {
+        cases.extend(hm_cases());
     }
-    for (cases, defines) in [
-        (pn_cases.as_slice(), pn.as_slice()),
-        (detail_cases.as_slice(), detail.as_slice()),
-        (
-            if include_hm { hm_cases.as_slice() } else { &[] },
-            hm.as_slice(),
-        ),
-    ] {
-        for &case in cases {
-            if !draw(case, defines, std::ptr::null(), diagnose) && !diagnose {
-                return 1;
-            }
-        }
-    }
-    0
+    cases
+}
+
+pub(super) fn hm_cases() -> [TessCase; 2] {
+    [
+        TessCase {
+            name: "SKIN_1 TESS_PN+TESS_HM+USE_TDETAIL",
+            skin: 1,
+            defines: HM,
+        },
+        TessCase {
+            name: "SKIN_2 TESS_PN+TESS_HM+USE_TDETAIL",
+            skin: 2,
+            defines: HM,
+        },
+    ]
 }

@@ -2,7 +2,6 @@
 //! Private call-scoped ABI with motion_stage_platform.h.
 use super::*;
 use crate::motion_device::{Platform as DevicePlatform, ReplayPlatform};
-use crate::motion_device_abi::rsf_anomaly_motion_device_view as DeviceView;
 use crate::motion_target::Platform as BindPlatform;
 use crate::motion_target_abi::rsf_anomaly_motion_bind_layout as BindLayout;
 use crate::shader_loader::{EngineIncludeOps, EngineShaderProfile, FrameLayout, Read};

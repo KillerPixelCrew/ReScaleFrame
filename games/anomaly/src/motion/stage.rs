@@ -12,6 +12,8 @@ mod report;
 pub(super) mod shaders;
 
 use self::abi::*;
+// Both globs below export a Platform; the stage means its own native table.
+use self::abi::Platform;
 use self::capture::Capture;
 use self::options::Settings;
 use self::report::Counters;

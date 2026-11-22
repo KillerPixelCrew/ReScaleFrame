@@ -49,7 +49,7 @@ extern "C" fn rsf_anomaly_shader_snapshot_view(snapshot: Option<&Snapshot>) -> O
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_shader_snapshot_keeps_buffer_sizes(
+pub(super) extern "C" fn rsf_anomaly_shader_snapshot_keeps_buffer_sizes(
     stock: Option<&Snapshot>,
     variant: Option<&Snapshot>,
 ) -> bool {

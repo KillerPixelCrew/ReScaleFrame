@@ -17,6 +17,10 @@ use std::slice;
 #[cfg(windows)]
 mod d3d11;
 mod replay;
+#[cfg(all(windows, feature = "motion-device-fixture"))]
+pub(crate) use d3d11::{
+    rsf_anomaly_motion_device_platform_get, rsf_anomaly_motion_replay_platform_get,
+};
 #[cfg(windows)]
 pub(crate) use replay::{
     Platform as ReplayPlatform, REPLAY_NO_DEPTH_WRITE, REPLAY_READY, ReplayScope,

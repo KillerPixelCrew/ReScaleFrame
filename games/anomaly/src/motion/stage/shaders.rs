@@ -501,7 +501,8 @@ impl<'a> Creation<'a> {
         if !read(address, &mut stock) {
             return None;
         }
-        let stock = ptr::with_exposed_provenance_mut(usize::from_ne_bytes(stock));
+        let stock =
+            ptr::with_exposed_provenance_mut::<std::ffi::c_void>(usize::from_ne_bytes(stock));
         if stock.is_null() {
             return None;
         }

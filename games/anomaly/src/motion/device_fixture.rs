@@ -1,10 +1,17 @@
 // SPDX-License-Identifier: MIT
-//! Device admission and scenario scheduling for the deployed motion fixtures.
+//! Device admission and the three deployed motion fixtures. The C11 launchers in tests/ call
+//! rsf_anomaly_motion_device_fixture, rsf_anomaly_motion_far_device_fixture and
+//! rsf_anomaly_motion_tess_chain_device_fixture.
+mod core_device;
 mod draw;
+mod far_device;
 mod foliage;
+mod harness;
 mod model;
+mod scene;
 mod schedule;
-use std::ffi::c_void;
+mod tess_chain_device;
+use harness::Gpu;
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_UNKNOWN, D3D_DRIVER_TYPE_WARP,
     D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_11_0,
@@ -16,16 +23,10 @@ use windows::Win32::Graphics::Dxgi::{
 };
 use windows::core::Interface;
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_fixture_hardware(
-    try_debug: bool,
-    device: &mut *mut c_void,
-    context: &mut *mut c_void,
-    debug_layer: &mut bool,
-) -> bool {
-    let Ok(factory) = (unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }) else {
-        return false;
-    };
+/// A hardware D3D11.0 device, NVIDIA first, with the debug layer when `try_debug` and it is installed.
+/// Returns the device and whether the debug layer is on.
+fn hardware(try_debug: bool) -> Option<(Gpu, bool)> {
+    let factory = unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }.ok()?;
     // Preserve NVIDIA preference across both debug and non-debug attempts.
     for vendor in [Some(0x10de), None] {
         for debug in [true, false] {
@@ -63,14 +64,15 @@ extern "C" fn rsf_anomaly_motion_fixture_hardware(
                     "device: {name} (vendor {:#06x}, debug layer {debug_name}){fallback}",
                     desc.VendorId
                 );
-                *device = candidate.into_raw();
-                *context = immediate.into_raw();
-                *debug_layer = debug;
-                return true;
+                let gpu = Gpu {
+                    device: candidate,
+                    context: immediate,
+                };
+                return Some((gpu, debug));
             }
         }
     }
-    false
+    None
 }
 
 fn create_device(
@@ -115,28 +117,25 @@ fn first_nvidia() -> Option<IDXGIAdapter1> {
         })
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_fixture_default(
-    device: &mut *mut c_void,
-    context: &mut *mut c_void,
-    feature_level: &mut i32,
-) -> bool {
+/// The NVIDIA adapter (else the default hardware adapter, else WARP), debug layer first, any feature level.
+fn default_device() -> Option<(Gpu, D3D_FEATURE_LEVEL)> {
     let adapter = first_nvidia();
     let driver = if adapter.is_some() {
         D3D_DRIVER_TYPE_UNKNOWN
     } else {
         D3D_DRIVER_TYPE_HARDWARE
     };
-    let (result, debug, warp) =
-        if let Some(result) = create_device(adapter.as_ref(), driver, true, None) {
-            (result, true, false)
-        } else if let Some(result) = create_device(adapter.as_ref(), driver, false, None) {
-            (result, false, false)
-        } else if let Some(result) = create_device(None, D3D_DRIVER_TYPE_WARP, false, None) {
-            (result, false, true)
-        } else {
-            return false;
-        };
+    let (result, debug, warp) = match create_device(adapter.as_ref(), driver, true, None) {
+        Some(result) => (result, true, false),
+        None => match create_device(adapter.as_ref(), driver, false, None) {
+            Some(result) => (result, false, false),
+            None => (
+                create_device(None, D3D_DRIVER_TYPE_WARP, false, None)?,
+                false,
+                true,
+            ),
+        },
+    };
     let (candidate, immediate, level) = result;
     let desc = candidate
         .cast::<IDXGIDevice>()
@@ -146,10 +145,11 @@ extern "C" fn rsf_anomaly_motion_fixture_default(
     let driver_name = if warp { "WARP" } else { "hardware" };
     let debug_name = if debug { "on" } else { "off" };
     println!("device: {name} ({driver_name}, debug layer {debug_name})");
-    *device = candidate.into_raw();
-    *context = immediate.into_raw();
-    *feature_level = level.0;
-    true
+    let gpu = Gpu {
+        device: candidate,
+        context: immediate,
+    };
+    Some((gpu, level))
 }
 
 fn adapter_name(description: &[u16]) -> String {

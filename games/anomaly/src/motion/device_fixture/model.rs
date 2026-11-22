@@ -2,10 +2,11 @@
 use super::super::*;
 use crate::motion_device::{Owner, rsf_anomaly_motion_device_upload};
 use crate::motion_device_abi::{RSF_MOTION_CORE, RSF_MOTION_PIXEL, RSF_MOTION_TESS};
-use std::ffi::c_void;
+use std::ffi::{CStr, c_void};
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_model_upload(
+/// Uploads VS (and DS) b13 for a skinned mover through the production policy and packers.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn model_upload(
     owner: &mut Owner,
     context: *mut c_void,
     view: &[f64; 16],
@@ -15,7 +16,7 @@ extern "C" fn rsf_anomaly_motion_model_upload(
     tessellated: bool,
     skin: i32,
     extent: u32,
-) -> *const c_char {
+) -> Result<(), &'static CStr> {
     let camera = CameraSample {
         view: Mat4(*view),
         projection: Mat4(*projection),
@@ -49,7 +50,7 @@ extern "C" fn rsf_anomaly_motion_model_upload(
         },
     };
     let Ok(decision) = (unsafe { decide_core(&input) }) else {
-        return c"policy accepts the skinned mover".as_ptr();
+        return Err(c"policy accepts the skinned mover");
     };
     let (mut vertex, mut domain, mut pixel) = (
         MaybeUninit::uninit(),
@@ -68,7 +69,7 @@ extern "C" fn rsf_anomaly_motion_model_upload(
         }
         .is_err()
         {
-            return c"pack VS b13".as_ptr();
+            return Err(c"pack VS b13");
         }
         if tessellated
             && !rsf_anomaly_motion_pack_tess(
@@ -78,7 +79,7 @@ extern "C" fn rsf_anomaly_motion_model_upload(
                 &mut domain,
             )
         {
-            return c"pack DS b13".as_ptr();
+            return Err(c"pack DS b13");
         }
     } else {
         rsf_anomaly_motion_pack_core_invalid(&mut vertex);
@@ -93,7 +94,7 @@ extern "C" fn rsf_anomaly_motion_model_upload(
         },
         &mut pixel,
     ) {
-        return c"pack PS b13".as_ptr();
+        return Err(c"pack PS b13");
     }
     let mut upload = |kind, bytes: &[u8]| {
         rsf_anomaly_motion_device_upload(
@@ -108,7 +109,7 @@ extern "C" fn rsf_anomaly_motion_model_upload(
         || (tessellated && !upload(RSF_MOTION_TESS, unsafe { domain.assume_init_ref() }))
         || !upload(RSF_MOTION_PIXEL, unsafe { pixel.assume_init_ref() })
     {
-        return c"b13 uploads".as_ptr();
+        return Err(c"b13 uploads");
     }
-    ptr::null()
+    Ok(())
 }

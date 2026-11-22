@@ -272,7 +272,7 @@ unsafe extern "system" fn include_close(this: *mut c_void, data: *const c_void) 
     })
 }
 
-fn compile_tree(
+pub(super) fn compile_tree(
     entry: FARPROC,
     tree: &Path,
     request: &Request,

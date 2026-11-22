@@ -21,11 +21,6 @@ target_compile_options(rsf_game_anomaly PRIVATE $<$<AND:$<COMPILE_LANGUAGE:C>,$<
 
 # Motion MRT (src/motion_stage.h): verified shader variants at create_shader, b13 packers, RTV2 binder, draw-time
 # history and the invalidation replay. Inert unless [Anomaly] Motion=1.
-if(BUILD_TESTING)
-    # The native fixtures use this facade to call the Rust motion owner.
-    add_library(rsf_anomaly_motion_bridge STATIC src/motion_bridge.cpp)
-    target_link_libraries(rsf_anomaly_motion_bridge PRIVATE rsf_anomaly_rust rsf_build_options)
-endif()
 target_sources(rsf_game_anomaly PRIVATE src/motion_stage.cpp)
 target_link_libraries(rsf_game_anomaly PRIVATE bcrypt dxguid)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)

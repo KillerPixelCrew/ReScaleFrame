@@ -172,7 +172,7 @@ unsafe extern "C" fn bind(raw: Raw, buffer: Raw, stage: std::ffi::c_char) -> u32
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_device_platform_get() -> &'static Platform {
+pub(crate) extern "C" fn rsf_anomaly_motion_device_platform_get() -> &'static Platform {
     static PLATFORM: Platform = Platform {
         retain,
         release,
@@ -275,7 +275,7 @@ unsafe extern "C" fn shader(raw: Raw, pixel: Raw, classes: *const Raw, count: u3
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_replay_platform_get() -> &'static ReplayPlatform {
+pub(crate) extern "C" fn rsf_anomaly_motion_replay_platform_get() -> &'static ReplayPlatform {
     static PLATFORM: ReplayPlatform = ReplayPlatform {
         release,
         read_depth,

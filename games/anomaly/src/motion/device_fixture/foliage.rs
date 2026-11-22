@@ -5,43 +5,43 @@ use super::super::foliage::{
 use super::super::stage::abi::FoliageLayout;
 use super::super::*;
 use crate::shader_loader::Reflection;
+use std::ffi::CStr;
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_foliage_fixture_layout(
+pub(super) fn foliage_layout(
     stock: Option<&Reflection>,
     family: u8,
     check_fields: bool,
     still: bool,
-) -> *const c_char {
+) -> Result<(), &'static CStr> {
     let Some(stock) = stock else {
-        return c"stock reflection missing".as_ptr();
+        return Err(c"stock reflection missing");
     };
     let layout = FoliageLayout::from_stock(family, stock);
     if !layout.usable {
-        return c"the engine's staged constants cannot be located from the stock reflection"
-            .as_ptr();
+        return Err(c"the engine's staged constants cannot be located from the stock reflection");
     }
     if check_fields {
         if family == FOLIAGE_TREE && (!layout.xform.present || layout.xform.size < 48) {
-            return c"m_xform is three registers".as_ptr();
+            return Err(c"m_xform is three registers");
         }
         if !layout.consts.present {
-            return c"consts missing".as_ptr();
+            return Err(c"consts missing");
         }
         if family == FOLIAGE_DETAIL {
             if layout.array.size != 3904 {
-                return c"array[61 * 4]".as_ptr();
+                return Err(c"array[61 * 4]");
             }
             if layout.wave.present == still || layout.wind.present == still {
-                return c"wave set".as_ptr();
+                return Err(c"wave set");
             }
         }
     }
-    ptr::null()
+    Ok(())
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_detail_fixture_bytes(
+/// Rows of the current batch and the packed detail history after the production remap.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn detail_bytes(
     extent: u32,
     include_b: bool,
     before: &FoliageConstants,
@@ -50,7 +50,7 @@ extern "C" fn rsf_anomaly_motion_detail_fixture_bytes(
     current_groups: &[[f32; 16]; 2],
     rows: &mut MaybeUninit<Rows>,
     bytes: &mut MaybeUninit<[u8; FOLIAGE_BYTES]>,
-) -> *const c_char {
+) -> Result<(), &'static CStr> {
     const ROUTE: u64 = 0xfeed;
     let mut history = History::default();
     let mut previous = MaybeUninit::uninit();
@@ -76,10 +76,10 @@ extern "C" fn rsf_anomaly_motion_detail_fixture_bytes(
     let remap = unsafe { remap.assume_init() };
     if include_b {
         if !(remap.live == 2 && remap.matched == 2 && remap.route_found) {
-            return c"both plants remapped".as_ptr();
+            return Err(c"both plants remapped");
         }
     } else if !(remap.live == 2 && remap.matched == 1 && remap.unmatched == 1) {
-        return c"only plant A has history".as_ptr();
+        return Err(c"only plant A has history");
     }
     if !unsafe {
         rsf_anomaly_motion_pack_detail(
@@ -96,7 +96,7 @@ extern "C" fn rsf_anomaly_motion_detail_fixture_bytes(
         } else {
             c"pack partial history"
         };
-        return message.as_ptr();
+        return Err(message);
     }
-    ptr::null()
+    Ok(())
 }

@@ -13,19 +13,22 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32G32B32A32_FLOAT;
 use windows::core::Interface;
 
 #[derive(Default)]
-struct Bindings {
+pub(in crate::motion::device_fixture) struct Bindings {
     buffers: Vec<ID3D11Buffer>,
     views: Vec<ID3D11ShaderResourceView>,
     samplers: Vec<ID3D11SamplerState>,
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_fixture_bindings_new() -> *mut Bindings {
+pub(in crate::motion::device_fixture) extern "C" fn rsf_anomaly_motion_fixture_bindings_new()
+-> *mut Bindings {
     Box::into_raw(Box::new(Bindings::default()))
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_fixture_bindings_drop(handle: *mut Bindings) {
+pub(in crate::motion::device_fixture) unsafe extern "C" fn rsf_anomaly_motion_fixture_bindings_drop(
+    handle: *mut Bindings,
+) {
     if !handle.is_null() {
         drop(unsafe { Box::from_raw(handle) });
     }
@@ -225,7 +228,7 @@ fn bind(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_fixture_bind_stage(
+pub(in crate::motion::device_fixture) unsafe extern "C" fn rsf_anomaly_motion_fixture_bind_stage(
     keep: &mut Bindings,
     device: Raw,
     context: Raw,
@@ -264,7 +267,7 @@ unsafe extern "C" fn rsf_anomaly_motion_fixture_bind_stage(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_fixture_bind_core(
+pub(in crate::motion::device_fixture) unsafe extern "C" fn rsf_anomaly_motion_fixture_bind_core(
     keep: &mut Bindings,
     device: Raw,
     context: Raw,
@@ -399,7 +402,7 @@ fn patch_core(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_fixture_patch_core(
+pub(in crate::motion::device_fixture) unsafe extern "C" fn rsf_anomaly_motion_fixture_patch_core(
     keep: &mut Bindings,
     device: Raw,
     context: Raw,

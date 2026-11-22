@@ -20,7 +20,11 @@ overlay-device-fixture = [
 ]
 motion-hooks-fixture = []
 motion-binder-fixture = []
-motion-device-fixture = ["windows/Win32_Graphics_Direct3D_Fxc", "windows/Win32_Graphics_Dxgi"]
+motion-device-fixture = [
+  "windows/Win32_Graphics_Direct3D_Fxc",
+  "windows/Win32_Graphics_Dxgi",
+  "windows-sys/Win32_System_Kernel",
+]
 native-entry = []
 native-hook-fixture = []
 sr-fixtures = ["windows/Win32_Graphics_Dxgi"]

@@ -106,7 +106,7 @@ fn targets(device: &ID3D11Device, size: u32, stencil: bool) -> Result<Targets, &
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_fixture_make_targets(
+pub(in crate::motion::device_fixture) unsafe extern "C" fn rsf_anomaly_motion_fixture_make_targets(
     device: Raw,
     size: u32,
     stencil: bool,
@@ -125,7 +125,7 @@ unsafe extern "C" fn rsf_anomaly_motion_fixture_make_targets(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_fixture_make_layout(
+pub(in crate::motion::device_fixture) unsafe extern "C" fn rsf_anomaly_motion_fixture_make_layout(
     device: Raw,
     signature: *const D3D11_SIGNATURE_PARAMETER_DESC,
     count: u32,

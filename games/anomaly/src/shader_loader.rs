@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 mod d3d;
+#[cfg(feature = "motion-device-fixture")]
+pub(crate) mod deployed;
 mod engine_include_abi;
 #[cfg(feature = "motion-binder-fixture")]
 mod fixture;

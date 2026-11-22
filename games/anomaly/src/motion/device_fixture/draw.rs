@@ -6,7 +6,19 @@ mod bindings;
 mod resources;
 
 use crate::sr_fixture_readback::rsf_anomaly_sr_fixture_readback;
-use abi::{rsf_anomaly_motion_fixture_input as Input, rsf_anomaly_motion_fixture_output as Output};
+pub(super) use abi::{
+    rsf_anomaly_motion_fixture_input as Input, rsf_anomaly_motion_fixture_output as Output,
+    rsf_anomaly_motion_fixture_override as Override, rsf_anomaly_motion_fixture_targets as Targets,
+};
+pub(super) use bindings::Bindings;
+pub(super) use bindings::{
+    rsf_anomaly_motion_fixture_bind_core, rsf_anomaly_motion_fixture_bind_stage,
+    rsf_anomaly_motion_fixture_bindings_drop, rsf_anomaly_motion_fixture_bindings_new,
+    rsf_anomaly_motion_fixture_patch_core,
+};
+pub(super) use resources::{
+    rsf_anomaly_motion_fixture_make_layout, rsf_anomaly_motion_fixture_make_targets,
+};
 use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use windows::Win32::Graphics::Direct3D::{
@@ -18,7 +30,7 @@ use windows::core::Interface;
 type Raw = *mut c_void;
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_fixture_read(
+pub(super) unsafe extern "C" fn rsf_anomaly_motion_fixture_read(
     device: Raw,
     context: Raw,
     texture: Raw,
@@ -31,7 +43,11 @@ unsafe extern "C" fn rsf_anomaly_motion_fixture_read(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_fixture_clear(raw: Raw, targets: &Output, stencil: bool) {
+pub(super) unsafe extern "C" fn rsf_anomaly_motion_fixture_clear(
+    raw: Raw,
+    targets: &Output,
+    stencil: bool,
+) {
     let Some(context) = (unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }) else {
         return;
     };
@@ -60,7 +76,7 @@ unsafe extern "C" fn rsf_anomaly_motion_fixture_clear(raw: Raw, targets: &Output
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_fixture_input_bind(raw: Raw, input: &Input) {
+pub(super) unsafe extern "C" fn rsf_anomaly_motion_fixture_input_bind(raw: Raw, input: &Input) {
     let Some(context) = (unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }) else {
         return;
     };
@@ -86,7 +102,7 @@ unsafe extern "C" fn rsf_anomaly_motion_fixture_input_bind(raw: Raw, input: &Inp
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_fixture_output_bind(raw: Raw, targets: &Output) {
+pub(super) unsafe extern "C" fn rsf_anomaly_motion_fixture_output_bind(raw: Raw, targets: &Output) {
     let Some(context) = (unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }) else {
         return;
     };
@@ -108,14 +124,18 @@ unsafe extern "C" fn rsf_anomaly_motion_fixture_output_bind(raw: Raw, targets: &
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_fixture_draw(raw: Raw, count: u32) {
+pub(super) unsafe extern "C" fn rsf_anomaly_motion_fixture_draw(raw: Raw, count: u32) {
     if let Some(context) = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) } {
         unsafe { context.Draw(count, 0) };
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_fixture_draw_quad(raw: Raw, buffer: Raw, stride: u32) {
+pub(super) unsafe extern "C" fn rsf_anomaly_motion_fixture_draw_quad(
+    raw: Raw,
+    buffer: Raw,
+    stride: u32,
+) {
     if let Some(context) = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) } {
         unsafe {
             (context.vtable().IASetVertexBuffers)(raw, 0, 1, &buffer, &stride, &0);
