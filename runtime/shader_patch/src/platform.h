@@ -33,6 +33,8 @@ enum {
 typedef void (*rsf_patch_json_visit)(void* user, uint32_t kind, uint64_t number, const char* text,
                                      size_t size);
 
+int32_t rsf_patch_parse_json(rsf_patch_bytes text, void* user, rsf_patch_json_visit visit);
+
 /* Returns 0 when D3DCompile's include should receive these bytes, borrowed for the compile. */
 typedef int32_t (*rsf_patch_include_fn)(void* user, const char* name, const void** data,
                                         size_t* size);
@@ -113,7 +115,8 @@ typedef struct rsf_patch_platform {
     /* MH_CreateHook and MH_EnableHook. Return 1 on success. */
     int32_t (*hook_create)(void* target, void* detour, void** original);
     int32_t (*hook_enable)(void* target);
-    /* MH_DisableHook then MH_RemoveHook. */
+    void (*hook_disable)(void* target);
+    /* MH_RemoveHook for a hook that has never been enabled. */
     void (*hook_remove)(void* target);
 } rsf_patch_platform;
 

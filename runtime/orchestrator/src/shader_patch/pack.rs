@@ -30,13 +30,6 @@ impl Json {
             _ => None,
         }
     }
-
-    pub(crate) fn items(value: Option<&Json>) -> &[Json] {
-        match value {
-            Some(Json::Arr(items)) => items,
-            _ => &[],
-        }
-    }
 }
 
 /// An unsigned read of an integer, or 0 for anything else, as the schema has always read it.
@@ -44,14 +37,6 @@ pub(crate) fn uint(value: Option<&Json>) -> u64 {
     match value {
         Some(Json::Int(n)) => *n,
         _ => 0,
-    }
-}
-
-/// A string read through a C string: the bytes up to the first NUL.
-pub(crate) fn c_text(value: Option<&Json>) -> Option<&[u8]> {
-    match value {
-        Some(Json::Str(s)) => Some(s.split(|&b| b == 0).next().unwrap_or_default()),
-        _ => None,
     }
 }
 
@@ -257,21 +242,6 @@ impl Pack {
             rules,
             payload,
         })
-    }
-
-    /// Source hashes of every allowlisted root, sorted and unique.
-    pub(crate) fn claims(&self) -> Outcome<Vec<Vec<u8>>> {
-        let Some(Json::Arr(roots)) = self.rules.get(b"roots") else {
-            return Err(refuse(FORMAT, "root allowlist"));
-        };
-        let mut claims = Vec::with_capacity(roots.len());
-        for entry in roots {
-            let name = text(Some(entry), b"name")?;
-            claims.push(text(self.rules.get(b"sources"), name)?.to_vec());
-        }
-        claims.sort_unstable();
-        claims.dedup();
-        Ok(claims)
     }
 
     /// Applies every file rule to the acquired originals, then adds the authored payload.

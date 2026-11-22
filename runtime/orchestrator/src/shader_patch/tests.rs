@@ -1,172 +1,23 @@
 // SPDX-License-Identifier: MIT
-//! Owner tests with fake leaves. JSON text is parsed by a small test reader standing in for
-//! yyjson; the MSVC shader patch fixtures exercise the real leaves.
+//! Owner tests with production JSON parsing and fake compiler and device leaves.
 
 use super::reflection::{Binding, Buffer, Parameter, Shader, compare};
 use super::*;
 use crate::shader_patch_abi::{
-    RSF_PATCH_CPU_ACCESS_WRITE, RSF_PATCH_JSON_ARRAY, RSF_PATCH_JSON_OBJECT, RSF_PATCH_JSON_OTHER,
-    RSF_PATCH_JSON_SINT, RSF_PATCH_JSON_STRING, RSF_PATCH_JSON_UINT, RSF_PATCH_SIGNATURE_OUTPUT,
-    RSF_PATCH_USAGE_DYNAMIC, rsf_patch_binding, rsf_patch_define, rsf_patch_json_visit,
-    rsf_patch_parameter, rsf_patch_reflection,
+    RSF_PATCH_CPU_ACCESS_WRITE, RSF_PATCH_SIGNATURE_OUTPUT, RSF_PATCH_USAGE_DYNAMIC,
+    rsf_patch_binding, rsf_patch_define, rsf_patch_json_visit, rsf_patch_parameter,
+    rsf_patch_reflection,
 };
 use std::ffi::CStr;
 use std::os::windows::ffi::OsStrExt;
 use std::sync::atomic::AtomicUsize;
 
-enum Node {
-    Str(Vec<u8>),
-    Int(u64, bool),
-    Other,
-    Arr(Vec<Node>),
-    Obj(Vec<(Vec<u8>, Node)>),
-}
-
-struct Reader<'a>(&'a [u8], usize);
-
-impl Reader<'_> {
-    fn skip(&mut self) {
-        while self.0.get(self.1).is_some_and(|c| c.is_ascii_whitespace()) {
-            self.1 += 1;
-        }
-    }
-    fn eat(&mut self, c: u8) -> Option<()> {
-        self.skip();
-        (self.0.get(self.1) == Some(&c)).then(|| self.1 += 1)
-    }
-    fn string(&mut self) -> Option<Vec<u8>> {
-        self.eat(b'"')?;
-        let mut out = Vec::new();
-        loop {
-            let c = *self.0.get(self.1)?;
-            self.1 += 1;
-            match c {
-                b'"' => return Some(out),
-                b'\\' => {
-                    let e = *self.0.get(self.1)?;
-                    self.1 += 1;
-                    match e {
-                        b'n' => out.push(b'\n'),
-                        b'u' => {
-                            let hex = std::str::from_utf8(self.0.get(self.1..self.1 + 4)?).ok()?;
-                            out.push(u8::from_str_radix(hex, 16).ok()?);
-                            self.1 += 4;
-                        }
-                        other => out.push(other),
-                    }
-                }
-                _ => out.push(c),
-            }
-        }
-    }
-    fn value(&mut self) -> Option<Node> {
-        self.skip();
-        match *self.0.get(self.1)? {
-            b'"' => self.string().map(Node::Str),
-            b'[' => {
-                self.1 += 1;
-                let mut items = Vec::new();
-                if self.eat(b']').is_some() {
-                    return Some(Node::Arr(items));
-                }
-                loop {
-                    items.push(self.value()?);
-                    if self.eat(b']').is_some() {
-                        return Some(Node::Arr(items));
-                    }
-                    self.eat(b',')?;
-                }
-            }
-            b'{' => {
-                self.1 += 1;
-                let mut members = Vec::new();
-                if self.eat(b'}').is_some() {
-                    return Some(Node::Obj(members));
-                }
-                loop {
-                    let key = self.string()?;
-                    self.eat(b':')?;
-                    members.push((key, self.value()?));
-                    if self.eat(b'}').is_some() {
-                        return Some(Node::Obj(members));
-                    }
-                    self.eat(b',')?;
-                }
-            }
-            b'-' | b'0'..=b'9' => {
-                let start = self.1;
-                self.1 += 1;
-                while self.0.get(self.1).is_some_and(u8::is_ascii_digit) {
-                    self.1 += 1;
-                }
-                let text = std::str::from_utf8(&self.0[start..self.1]).ok()?;
-                let n: i128 = text.parse().ok()?;
-                Some(Node::Int(n as u64, n < 0))
-            }
-            _ => {
-                for word in [&b"true"[..], b"false", b"null"] {
-                    if self.0[self.1..].starts_with(word) {
-                        self.1 += word.len();
-                        return Some(Node::Other);
-                    }
-                }
-                None
-            }
-        }
-    }
-}
-
-fn emit(
-    node: &Node,
-    user: *mut c_void,
-    visit: unsafe extern "C" fn(*mut c_void, u32, u64, *const c_char, usize),
-) {
-    let call = |kind: i32, n: u64, s: &[u8], size: usize| unsafe {
-        visit(user, kind as u32, n, s.as_ptr().cast(), size)
-    };
-    match node {
-        Node::Str(s) => call(RSF_PATCH_JSON_STRING, 0, s, s.len()),
-        Node::Int(n, signed) => call(
-            if *signed {
-                RSF_PATCH_JSON_SINT
-            } else {
-                RSF_PATCH_JSON_UINT
-            },
-            *n,
-            &[],
-            0,
-        ),
-        Node::Other => call(RSF_PATCH_JSON_OTHER, 0, &[], 0),
-        Node::Arr(items) => {
-            call(RSF_PATCH_JSON_ARRAY, 0, &[], items.len());
-            items.iter().for_each(|item| emit(item, user, visit));
-        }
-        Node::Obj(members) => {
-            call(RSF_PATCH_JSON_OBJECT, 0, &[], members.len());
-            for (key, value) in members {
-                call(RSF_PATCH_JSON_STRING, 0, key, key.len());
-                emit(value, user, visit);
-            }
-        }
-    }
-}
-
-unsafe extern "C" fn fake_parse(
-    text: rsf_patch_bytes,
-    user: *mut c_void,
-    visit: rsf_patch_json_visit,
-) -> i32 {
-    let data = bytes(text).unwrap_or_default();
-    let mut reader = Reader(data, 0);
-    let Some(node) = reader.value() else {
-        return -1;
-    };
-    reader.skip();
-    if reader.1 != data.len() {
-        return -1;
-    }
-    emit(&node, user, visit.unwrap());
-    0
+unsafe extern "C" {
+    fn rsf_patch_parse_json(
+        text: rsf_patch_bytes,
+        user: *mut c_void,
+        visit: rsf_patch_json_visit,
+    ) -> i32;
 }
 
 const E_FAIL: i32 = 0x8000_4005_u32 as i32;
@@ -282,6 +133,8 @@ unsafe extern "C" fn fake_desc(_: *mut c_void, width: *mut u32, usage: *mut u32,
 
 static UPLOADS: AtomicUsize = AtomicUsize::new(0);
 static BINDS: AtomicUsize = AtomicUsize::new(0);
+static DISABLED: AtomicUsize = AtomicUsize::new(0);
+static FAIL_ENABLE: AtomicUsize = AtomicUsize::new(0);
 static REMOVED: AtomicUsize = AtomicUsize::new(0);
 
 unsafe extern "C" fn fake_upload(_: *mut c_void, _: *mut c_void, _: rsf_patch_bytes) -> i32 {
@@ -321,8 +174,12 @@ unsafe extern "C" fn fake_hook(
     1
 }
 
-unsafe extern "C" fn fake_enable(_: *mut c_void) -> i32 {
-    1
+unsafe extern "C" fn fake_enable(target: *mut c_void) -> i32 {
+    i32::from(target as usize != FAIL_ENABLE.load(Ordering::Relaxed))
+}
+
+unsafe extern "C" fn fake_disable(_: *mut c_void) {
+    DISABLED.fetch_add(1, Ordering::Relaxed);
 }
 
 unsafe extern "C" fn fake_remove(_: *mut c_void) {
@@ -331,7 +188,7 @@ unsafe extern "C" fn fake_remove(_: *mut c_void) {
 
 static FAKE: rsf_patch_platform = rsf_patch_platform {
     struct_size: size_of::<rsf_patch_platform>() as u32,
-    parse_json: Some(fake_parse),
+    parse_json: Some(rsf_patch_parse_json),
     compile: Some(fake_compile),
     reflect: Some(fake_reflect),
     disassemble: Some(fake_disassemble),
@@ -343,6 +200,7 @@ static FAKE: rsf_patch_platform = rsf_patch_platform {
     hooks_ready: Some(fake_ready),
     hook_create: Some(fake_hook),
     hook_enable: Some(fake_enable),
+    hook_disable: Some(fake_disable),
     hook_remove: Some(fake_remove),
 };
 
@@ -473,7 +331,17 @@ fn json_admission_refuses_duplicates_nul_keys_and_deep_nesting() {
     assert_eq!(code(load(r#"{"schema":1,"schema":1}"#)), FORMAT);
     assert_eq!(code(load(r#"{"schema":1,"a":{"k":1,"k":2}}"#)), FORMAT);
     assert_eq!(code(load(r#"{"schema":1,"a\u0000":1}"#)), FORMAT);
-    assert_eq!(code(load(r#"{"schema":1,}"#)), FORMAT, "invalid JSON");
+    assert_eq!(code(load(r#"{"schema":1,}"#)), FORMAT, "trailing comma");
+    assert_eq!(
+        code(load(r#"{"schema":1,"a":"\q"}"#)),
+        FORMAT,
+        "invalid escape"
+    );
+    let escaped = load(r#"{"schema":1,"a":"\uD83D\uDE00"}"#).unwrap();
+    assert_eq!(
+        text(Some(&escaped.rules), b"a").unwrap(),
+        "\u{1f600}".as_bytes()
+    );
     let nested = |depth: usize| {
         format!(
             r#"{{"schema":1,"x":{}0{}}}"#,
@@ -854,10 +722,10 @@ fn sessions_prove_originals_reuse_verified_cache_and_count_refusals() {
     };
     let wrap = r#"{"op":"wrap","prefix":"","suffix":"\nTEXCOORD12 b13\n"}"#;
     let patched_twin = hash(&[twin.as_slice(), b"\nTEXCOORD12 b13\n"].concat());
-    // The first root has no patched hash, so prepare skips that check and root() refuses it.
+    // The first root has optional metadata and no authored patched hash.
     let rules = format!(
-        r#"{{"schema":1,"roots":[{{"name":"session.vs","original_sha256":"o","tag":"core","stage":"v"}},
-        {{"name":"twin.vs","original_sha256":"o","patched_sha256":"{patched_twin}","tag":"é","stage":"ÿ"}}],
+        r#"{{"schema":1,"roots":[{{"name":"session.vs","tag":"core","stage":"v"}},
+        {{"name":"twin.vs","patched_sha256":"{patched_twin}","tag":"\u00e9","stage":"\u00ff"}}],
         "sources":{{"session.vs":{},"twin.vs":{},"shared.h":{}}},
         "files":{{"session.vs":{wrap},"twin.vs":{wrap}}},
         "allowed_bindings":[{{"name":"rsf_motion","point":13,"type":0,"count":1}}],
@@ -881,9 +749,14 @@ fn sessions_prove_originals_reuse_verified_cache_and_count_refusals() {
     };
     assert_eq!(
         unsafe { (api.root.unwrap())(session, 0, &mut entry) },
-        FORMAT,
-        "missing root field"
+        OK,
+        "missing optional root field"
     );
+    assert_eq!(
+        unsafe { c_bytes(entry.source_sha256) },
+        hash(&root).as_bytes()
+    );
+    assert_eq!(unsafe { c_bytes(entry.patched_sha256) }, b"");
     assert_eq!(unsafe { (api.root.unwrap())(session, 1, &mut entry) }, OK);
     assert_eq!(unsafe { c_bytes(entry.tag) }, "\u{e9}".as_bytes());
     assert_eq!(
@@ -1151,6 +1024,16 @@ fn creation_hooks_inventory_engine_shaders_and_skip_replacements() {
         removed + 2,
         "created hooks rolled back"
     );
+    FAIL_ENABLE.store(vtable[13], Ordering::Relaxed);
+    let disabled = DISABLED.load(Ordering::Relaxed);
+    assert_eq!(unsafe { (api.attach_d3d11.unwrap())(device) }, INTERNAL);
+    assert_eq!(DISABLED.load(Ordering::Relaxed), disabled + 2);
+    assert_eq!(
+        REMOVED.load(Ordering::Relaxed),
+        removed + 2,
+        "trampolines retained"
+    );
+    FAIL_ENABLE.store(0, Ordering::Relaxed);
     assert_eq!(unsafe { (api.attach_d3d11.unwrap())(device) }, OK);
     assert_eq!(
         unsafe { (api.attach_d3d11.unwrap())(device) },
@@ -1221,6 +1104,12 @@ fn creation_hooks_inventory_engine_shaders_and_skip_replacements() {
         fs::read(directory.join(format!("{name}.asm"))).unwrap(),
         [b"asm:", &engine_code[..]].concat()
     );
+    let dxbc = directory.join(format!("{name}.dxbc"));
+    fs::remove_file(&dxbc).unwrap();
+    fs::create_dir(&dxbc).unwrap();
+    assert_eq!(unsafe { (api.dump.unwrap())(wide.as_ptr()) }, INTERNAL);
+    let report = fs::read_to_string(directory.join("inventory-report.txt")).unwrap();
+    assert!(report.contains(&format!("{name}.dxbc")));
     assert_eq!(unsafe { (api.dump.unwrap())(ptr::null()) }, ARGUMENT);
     let _ = fs::remove_dir_all(&directory);
 }

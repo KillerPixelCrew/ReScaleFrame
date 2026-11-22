@@ -294,11 +294,13 @@ pub struct rsf_patch_platform {
     >,
     pub hook_enable:
         ::core::option::Option<unsafe extern "C" fn(target: *mut ::core::ffi::c_void) -> i32>,
+    pub hook_disable:
+        ::core::option::Option<unsafe extern "C" fn(target: *mut ::core::ffi::c_void)>,
     pub hook_remove: ::core::option::Option<unsafe extern "C" fn(target: *mut ::core::ffi::c_void)>,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_patch_platform"][::core::mem::size_of::<rsf_patch_platform>() - 112usize];
+    ["Size of rsf_patch_platform"][::core::mem::size_of::<rsf_patch_platform>() - 120usize];
     ["Alignment of rsf_patch_platform"][::core::mem::align_of::<rsf_patch_platform>() - 8usize];
     ["Offset of field: rsf_patch_platform::struct_size"]
         [::core::mem::offset_of!(rsf_patch_platform, struct_size) - 0usize];
@@ -326,8 +328,10 @@ const _: () = {
         [::core::mem::offset_of!(rsf_patch_platform, hook_create) - 88usize];
     ["Offset of field: rsf_patch_platform::hook_enable"]
         [::core::mem::offset_of!(rsf_patch_platform, hook_enable) - 96usize];
+    ["Offset of field: rsf_patch_platform::hook_disable"]
+        [::core::mem::offset_of!(rsf_patch_platform, hook_disable) - 104usize];
     ["Offset of field: rsf_patch_platform::hook_remove"]
-        [::core::mem::offset_of!(rsf_patch_platform, hook_remove) - 104usize];
+        [::core::mem::offset_of!(rsf_patch_platform, hook_remove) - 112usize];
 };
 pub type rsf_patch_file_sink = ::core::option::Option<
     unsafe extern "C" fn(

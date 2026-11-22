@@ -21,7 +21,7 @@ use crate::shader_patch_abi::{
     rsf_patch_request, rsf_patch_root, rsf_patch_session, rsf_patch_sink, rsf_shader_patch_api,
 };
 use crate::sr_session::has_capacity;
-use pack::{Json, Pack, bytes, c_text, text};
+use pack::{Json, Pack, bytes, string, text};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::ffi::{CString, c_char, c_void};
@@ -247,23 +247,45 @@ struct Root {
     stage: u32,
 }
 
-fn root_strings(entry: &Json) -> Option<Root> {
-    let field = |key: &[u8]| c_text(entry.get(key)).and_then(|s| CString::new(s).ok());
-    let stage = c_text(entry.get(b"stage"))?.first()?;
-    Some(Root {
-        name: field(b"name")?,
-        source: field(b"original_sha256")?,
-        patched: field(b"patched_sha256")?,
-        tag: field(b"tag")?,
-        // The first letter of the target, widened from a signed char as it always has been.
-        stage: *stage as i8 as u32,
-    })
+fn admit_roots(pack: &Pack) -> Outcome<Vec<Root>> {
+    let Some(Json::Arr(entries)) = pack.rules.get(b"roots") else {
+        return Err(refuse(FORMAT, "root allowlist"));
+    };
+    let mut names = std::collections::BTreeSet::new();
+    let mut roots = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let name = text(Some(entry), b"name")?;
+        check(names.insert(name), FORMAT, "duplicate root name")?;
+        let source = text(pack.rules.get(b"sources"), name)?;
+        let optional = |key: &[u8]| -> Outcome<&[u8]> {
+            entry.get(key).map_or(Ok(&[]), |value| string(Some(value)))
+        };
+        if entry.get(b"original_sha256").is_some() {
+            check(
+                optional(b"original_sha256")? == source,
+                FORMAT,
+                "root source hash differs from source list",
+            )?;
+        }
+        let stage = optional(b"stage")?.first().copied().unwrap_or_default();
+        let c_string =
+            |bytes: &[u8]| CString::new(bytes).map_err(|_| refuse(FORMAT, "embedded NUL"));
+        roots.push(Root {
+            name: c_string(name)?,
+            source: c_string(source)?,
+            patched: c_string(optional(b"patched_sha256")?)?,
+            tag: c_string(optional(b"tag")?)?,
+            // Widen the first byte as a signed char to preserve the v1 ABI.
+            stage: stage as i8 as u32,
+        });
+    }
+    Ok(roots)
 }
 
 struct Session {
     pack: Pack,
     hash: CString,
-    roots: Vec<Option<Root>>,
+    roots: Vec<Root>,
     // Empty when the host supplied no cache directory.
     cache: PathBuf,
     compiler: *mut c_void,
@@ -300,13 +322,15 @@ fn open_session(
     } else {
         unsafe { wide_path(cache) }
     };
-    let compiler_hash = compiler_identity(compiler)?;
-    let claims = pack.claims()?;
-    claim(&pack.id, &claims)?;
-    let roots = Json::items(pack.rules.get(b"roots"))
+    let roots = admit_roots(&pack)?;
+    let mut claims: Vec<_> = roots
         .iter()
-        .map(root_strings)
+        .map(|root| root.source.to_bytes().to_vec())
         .collect();
+    claims.sort_unstable();
+    claims.dedup();
+    let compiler_hash = compiler_identity(compiler)?;
+    claim(&pack.id, &claims)?;
     let hash = CString::new(pack.hash.clone()).unwrap_or_default();
     Ok(Session {
         pack,
@@ -374,8 +398,7 @@ unsafe extern "C" fn root(
     };
     match s.roots.get(index as usize) {
         None => ARGUMENT,
-        Some(None) => FORMAT,
-        Some(Some(root)) => {
+        Some(root) => {
             *out = rsf_patch_root {
                 struct_size: size_of::<rsf_patch_root>() as u32,
                 abi_version: VERSION,
@@ -514,19 +537,17 @@ fn prepare_variant(
     let patched = s.pack.transform(&originals)?;
     let source = bytes(r.source)?;
     let stock = bytes(r.original_bytecode)?;
-    let Some(Json::Arr(roots)) = rules.get(b"roots") else {
-        return Err(refuse(FORMAT, "root allowlist"));
-    };
     let mut root_name: Option<&[u8]> = None;
-    for candidate in roots {
-        let name = text(Some(candidate), b"name")?;
+    for candidate in &s.roots {
+        let name = candidate.name.to_bytes();
         if originals
             .get(name)
             .is_some_and(|original| original == source)
         {
             check(root_name.is_none(), HASH, "ambiguous root")?;
             root_name = Some(name);
-            if let Some(expected) = c_text(candidate.get(b"patched_sha256")) {
+            let expected = candidate.patched.to_bytes();
+            if !expected.is_empty() {
                 let matches = sha256(&patched[name])?.as_bytes() == expected;
                 check(matches, HASH, "patched root hash")?;
             }

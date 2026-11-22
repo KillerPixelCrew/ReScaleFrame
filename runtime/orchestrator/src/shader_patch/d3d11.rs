@@ -30,7 +30,14 @@ const E_INVALIDARG: i32 = 0x8007_0057_u32 as i32;
 
 static ORIGINALS: [AtomicPtr<c_void>; 6] = [const { AtomicPtr::new(ptr::null_mut()) }; 6];
 // Hooked creation entry points, recorded as addresses. Zero while detached.
-static TARGETS: Mutex<[usize; 6]> = Mutex::new([0; 6]);
+struct Hooks {
+    targets: [usize; 6],
+    active: bool,
+}
+static HOOKS: Mutex<Hooks> = Mutex::new(Hooks {
+    targets: [0; 6],
+    active: false,
+});
 // First bytecode seen for each SHA-256, for authoring dumps.
 static INVENTORY: Mutex<BTreeMap<String, Vec<u8>>> = Mutex::new(BTreeMap::new());
 
@@ -78,38 +85,47 @@ pub(super) unsafe extern "C" fn attach(device: *mut c_void) -> i32 {
         return ARGUMENT;
     }
     let p = platform();
-    let mut targets = lock(&TARGETS);
+    let mut hooks = lock(&HOOKS);
     let vtable = unsafe { *device.cast::<*const usize>() };
-    let entry = |i: usize| unsafe { *vtable.add(SLOTS[i]) };
-    if targets[0] != 0 {
-        let same = (0..6).all(|i| targets[i] == entry(i));
-        return if same { OK } else { ARGUMENT };
-    }
-    if unsafe { (p.hooks_ready.unwrap())() } == 0 {
-        return INTERNAL;
-    }
-    let mut count = 0;
-    while count < 6 {
-        let detour = DETOURS[count] as *mut c_void;
-        let original = ORIGINALS[count].as_ptr();
-        if unsafe { (p.hook_create.unwrap())(entry(count) as *mut c_void, detour, original) } == 0 {
-            break;
+    let entries = SLOTS.map(|slot| unsafe { *vtable.add(slot) });
+    if hooks.targets[0] != 0 {
+        if hooks.targets != entries {
+            return ARGUMENT;
         }
-        targets[count] = entry(count);
-        count += 1;
-    }
-    if count == 6 {
-        let failed =
-            (0..6).find(|&i| unsafe { (p.hook_enable.unwrap())(targets[i] as *mut c_void) } == 0);
-        count = failed.unwrap_or(6);
-    }
-    if count != 6 {
-        for target in targets.iter_mut().filter(|t| **t != 0) {
-            unsafe { (p.hook_remove.unwrap())(*target as *mut c_void) };
-            *target = 0;
+        if hooks.active {
+            return OK;
         }
-        return INTERNAL;
+    } else {
+        if unsafe { (p.hooks_ready.unwrap())() } == 0 {
+            return INTERNAL;
+        }
+        for (i, (&entry, detour)) in entries.iter().zip(DETOURS).enumerate() {
+            let mut original = ptr::null_mut();
+            if unsafe {
+                (p.hook_create.unwrap())(entry as *mut c_void, detour as *mut c_void, &mut original)
+            } == 0
+            {
+                for &created in &entries[..i] {
+                    // These hooks have never been enabled.
+                    unsafe { (p.hook_remove.unwrap())(created as *mut c_void) };
+                }
+                return INTERNAL;
+            }
+            ORIGINALS[i].store(original, Ordering::Release);
+        }
+        hooks.targets = entries;
     }
+    for (i, &entry) in entries.iter().enumerate() {
+        if unsafe { (p.hook_enable.unwrap())(entry as *mut c_void) } == 0 {
+            for &enabled in &entries[..i] {
+                unsafe { (p.hook_disable.unwrap())(enabled as *mut c_void) };
+            }
+            // A detour already on another thread can still call its trampoline. Keep
+            // every trampoline and retry these same targets on the next attach.
+            return INTERNAL;
+        }
+    }
+    hooks.active = true;
     OK
 }
 
@@ -201,7 +217,7 @@ unsafe extern "C" fn append(user: *mut c_void, data: *const c_void, size: usize)
     }
 }
 
-/// Writes every inventoried bytecode and its disassembly. Individual file failures are ignored.
+/// Writes every inventoried bytecode and its disassembly, recording individual failures.
 pub(super) unsafe extern "C" fn dump(directory: *const u16) -> i32 {
     if directory.is_null() {
         return ARGUMENT;
@@ -213,15 +229,29 @@ pub(super) unsafe extern "C" fn dump(directory: *const u16) -> i32 {
         }
         let snapshot = lock(&INVENTORY).clone();
         let disassemble = platform().disassemble.unwrap();
+        let mut report = String::new();
+        use std::fmt::Write as _;
         for (hash, code) in snapshot {
-            let _ = fs::write(root.join(format!("{hash}.dxbc")), &code);
+            if let Err(error) = fs::write(root.join(format!("{hash}.dxbc")), &code) {
+                let _ = writeln!(report, "{hash}.dxbc: {error}");
+            }
             let mut text = Vec::new();
-            let written = unsafe { disassemble(raw(&code), (&raw mut text).cast(), Some(append)) };
-            if written == 0 {
-                let _ = fs::write(root.join(format!("{hash}.asm")), &text);
+            let status = unsafe { disassemble(raw(&code), (&raw mut text).cast(), Some(append)) };
+            if status != 0 || text.is_empty() {
+                let _ = writeln!(report, "{hash}.asm: disassembly failed ({status})");
+            } else if let Err(error) = fs::write(root.join(format!("{hash}.asm")), &text) {
+                let _ = writeln!(report, "{hash}.asm: {error}");
             }
         }
-        OK
+        let complete = report.is_empty();
+        if complete {
+            report.push_str("Inventory complete.\n");
+        }
+        if fs::write(root.join("inventory-report.txt"), report).is_err() || !complete {
+            INTERNAL
+        } else {
+            OK
+        }
     })
 }
 

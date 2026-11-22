@@ -1,11 +1,9 @@
 set(RSF_PATCH_YYJSON "${PROJECT_SOURCE_DIR}/vendor/shader-patch/yyjson")
 include("${CMAKE_CURRENT_SOURCE_DIR}/yyjson.cmake")
-add_library(rsf_patch_json STATIC "${RSF_PATCH_YYJSON}/src/yyjson.c")
-target_include_directories(rsf_patch_json SYSTEM PUBLIC "${RSF_PATCH_YYJSON}/src")
 # The Rust owner in rsf-orchestrator decides; platform.cpp holds its yyjson, D3DCompiler, D3D11 and MinHook leaves.
 add_library(rsf_shader_patch STATIC src/platform.cpp)
 target_include_directories(rsf_shader_patch PUBLIC include PRIVATE src)
-target_link_libraries(rsf_shader_patch PUBLIC rsf_orchestrator_rust PRIVATE rsf_patch_json rsf_build_options d3dcompiler dxguid minhook)
+target_link_libraries(rsf_shader_patch PUBLIC rsf_orchestrator_rust PRIVATE rsf_build_options d3dcompiler dxguid minhook)
 target_compile_definitions(rsf_shader_patch PRIVATE RSF_RUNTIME_BUILD)
 target_sources(rsf_orchestrator PRIVATE src/export.cpp)
 target_include_directories(rsf_orchestrator PUBLIC include)

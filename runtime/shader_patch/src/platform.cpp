@@ -7,7 +7,6 @@
 #include <d3dcompiler.h>
 #include <wrl/client.h>
 #include <MinHook.h>
-#include <yyjson.h>
 #include <climits>
 #include <cstring>
 #include <vector>
@@ -26,55 +25,6 @@ extern "C" int32_t rsf_shader_patch_rewrite_dxbc(rsf_patch_bytes, const char*, c
     size_t, const uint32_t*, size_t, void*, rsf_patch_sink, char*);
 
 namespace {
-// Pre-order walk with an explicit stack; the owner limits nesting.
-void visit_json(yyjson_val* root, void* user, rsf_patch_json_visit visit)
-{
-    struct Level { yyjson_val* next; size_t left; bool object; };
-    std::vector<Level> stack;
-    yyjson_val* value = root;
-    for (;;) {
-        if (yyjson_is_str(value)) {
-            visit(user, RSF_PATCH_JSON_STRING, 0, yyjson_get_str(value), yyjson_get_len(value));
-        } else if (yyjson_is_uint(value)) {
-            visit(user, RSF_PATCH_JSON_UINT, yyjson_get_uint(value), nullptr, 0);
-        } else if (yyjson_is_sint(value)) {
-            visit(user, RSF_PATCH_JSON_SINT, yyjson_get_uint(value), nullptr, 0);
-        } else if (yyjson_is_arr(value)) {
-            const auto size = yyjson_arr_size(value);
-            visit(user, RSF_PATCH_JSON_ARRAY, 0, nullptr, size);
-            if (size) stack.push_back({yyjson_arr_get_first(value), size, false});
-        } else if (yyjson_is_obj(value)) {
-            const auto size = yyjson_obj_size(value);
-            visit(user, RSF_PATCH_JSON_OBJECT, 0, nullptr, size);
-            // yyjson stores an object's members as consecutive key and value nodes.
-            if (size) stack.push_back({unsafe_yyjson_get_first(value), size, true});
-        } else {
-            visit(user, RSF_PATCH_JSON_OTHER, 0, nullptr, 0);
-        }
-        while (!stack.empty() && !stack.back().left) stack.pop_back();
-        if (stack.empty()) return;
-        auto& level = stack.back();
-        --level.left;
-        if (level.object) {
-            auto* key = level.next;
-            visit(user, RSF_PATCH_JSON_STRING, 0, yyjson_get_str(key), yyjson_get_len(key));
-            value = key + 1;
-        } else {
-            value = level.next;
-        }
-        level.next = unsafe_yyjson_get_next(value);
-    }
-}
-
-int32_t parse_json(rsf_patch_bytes text, void* user, rsf_patch_json_visit visit) noexcept try
-{
-    auto* doc = yyjson_read(static_cast<const char*>(text.data), text.size, 0);
-    if (!doc) return -1;
-    visit_json(yyjson_doc_get_root(doc), user, visit);
-    yyjson_doc_free(doc);
-    return 0;
-} catch (...) { return -1; }
-
 class Includes final : public ID3DInclude {
     const rsf_patch_compile& call_;
 public:
@@ -225,18 +175,16 @@ int32_t hook_create(void* target, void* detour, void** original) noexcept
 {
     return MH_CreateHook(target, detour, original) == MH_OK;
 }
-int32_t hook_enable(void* target) noexcept { return MH_EnableHook(target) == MH_OK; }
-void hook_remove(void* target) noexcept
-{
-    MH_DisableHook(target);
-    MH_RemoveHook(target);
-}
+int32_t hook_enable(void* target) noexcept { const auto status = MH_EnableHook(target);
+    return status == MH_OK || status == MH_ERROR_ENABLED; }
+void hook_disable(void* target) noexcept { MH_DisableHook(target); }
+void hook_remove(void* target) noexcept { MH_RemoveHook(target); }
 
 void bind()
 {
-    static const rsf_patch_platform platform{sizeof(platform), parse_json, compile, reflect, disassemble,
+    static const rsf_patch_platform platform{sizeof(platform), rsf_patch_parse_json, compile, reflect, disassemble,
         create_shader, create_constant_buffer, buffer_desc, upload, bind_constant, hooks_ready, hook_create,
-        hook_enable, hook_remove};
+        hook_enable, hook_disable, hook_remove};
     static const bool bound = (rsf_shader_patch_bind(&platform), true);
     (void)bound;
 }

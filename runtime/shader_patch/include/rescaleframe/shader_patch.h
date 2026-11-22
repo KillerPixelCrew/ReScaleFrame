@@ -36,9 +36,9 @@ typedef struct rsf_patch_root {
     uint32_t struct_size, abi_version;
     const char* name;
     const char* source_sha256;
-    const char* patched_sha256;
-    const char* tag; /* Caller-owned meaning; the core does not interpret it. */
-    uint32_t stage; /* First letter of the native target. */
+    const char* patched_sha256; /* Empty if no patched hash was authored. */
+    const char* tag; /* Optional caller-defined tag; empty when absent. */
+    uint32_t stage; /* First letter of the native target, or 0 when absent. */
 } rsf_patch_root;
 typedef struct rsf_patch_counters {
     uint32_t struct_size, abi_version;
@@ -59,6 +59,7 @@ typedef struct rsf_shader_patch_api {
     int32_t (*upload_constant)(void* context, void* buffer, rsf_patch_bytes);
     int32_t (*bind_constant)(void* context, uint32_t stage, uint32_t slot, void* buffer);
     int32_t (*counters)(rsf_patch_counters*);
+    /* Returns INTERNAL for an incomplete inventory. inventory-report.txt lists per-hash failures. */
     int32_t (*dump)(const wchar_t* directory);
 } rsf_shader_patch_api;
 typedef int32_t (*rsf_get_shader_patch_api_fn)(rsf_shader_patch_api*);
