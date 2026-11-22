@@ -182,12 +182,6 @@ fn abort(services: Services, source: u64, reason: u32) {
     );
 }
 
-fn release(source: u64) -> Reservation {
-    let mut released = Reservation::EMPTY;
-    rsf_skyrim_sources_release(&mut released, source);
-    released
-}
-
 fn job() -> JobTicket {
     JOBS.snapshot()
 }
@@ -209,8 +203,7 @@ fn begin_frame(main: usize) -> Receipt {
         return Receipt::None;
     };
     // Only a sampled late poll whose native job joined normally can be adopted.
-    let mut reservation = Reservation::EMPTY;
-    rsf_skyrim_sources_adopt(&mut reservation, services.host.session_id, JOBS.retired());
+    let reservation = rsf_skyrim_sources_adopt(services.host.session_id, JOBS.retired());
     let mut queued = None;
     let (source, entry_readable) = if reservation.source != 0 {
         queued = queued_move();
@@ -243,15 +236,14 @@ fn finish_frame(frame: NonNull<Frame>, returned: bool) {
         (frame.source, frame.services, frame.reservation)
     };
     if facts.source != 0 {
-        let owned = release(source);
+        let owned = rsf_skyrim_sources_release(source);
         if owned.phase == Phase::Bound {
             rsf_skyrim_worker_release();
         }
         if !returned {
             abort(services, owned.source, RSF_GAME_CPU_ABORT_NOT_CONSUMED);
         } else if services.host.log.is_some() && PROSPECTIVE_REPORTS.fetch_add(1, Relaxed) < 16 {
-            let mut worker = WorkerCounts::default();
-            rsf_skyrim_worker_counts(&mut worker);
+            let worker = rsf_skyrim_worker_counts();
             let message = {
                 let frame = unsafe { frame.as_ref() };
                 format!(
@@ -320,7 +312,7 @@ fn begin_submit(caller: usize) -> Receipt {
                 if refusal != 0 {
                     abort(
                         services,
-                        release(source).source,
+                        rsf_skyrim_sources_release(source).source,
                         RSF_GAME_CPU_ABORT_NOT_CONSUMED,
                     );
                 } else if rsf_skyrim_sources_bind(source, stamp().generation) {
@@ -329,7 +321,7 @@ fn begin_submit(caller: usize) -> Receipt {
                 } else {
                     abort(
                         services,
-                        release(source).source,
+                        rsf_skyrim_sources_release(source).source,
                         RSF_GAME_CPU_ABORT_STATE_CHANGED,
                     );
                 }
@@ -453,13 +445,7 @@ fn prepare_poll(mut poll: NonNull<Poll>) {
         }
         if scheduled {
             let source = rsf_skyrim_cpu_next_source();
-            let mut receipt = Reserve {
-                reserved: Reservation::EMPTY,
-                withdrawn: 0,
-                overlap: false,
-            };
-            rsf_skyrim_sources_reserve(
-                &mut receipt,
+            let receipt = rsf_skyrim_sources_reserve(
                 source,
                 provenance.submitting_source,
                 provenance.session,
@@ -653,8 +639,7 @@ pub(crate) fn render_diagnostic(stage: &CStr, pass: &rsf_game_render_pass) {
     {
         return;
     }
-    let mut owned = Reservation::EMPTY;
-    rsf_skyrim_sources_owned(&mut owned);
+    let owned = rsf_skyrim_sources_owned();
     let message = {
         let frame = unsafe { frame.as_ref() };
         let render = &frame.render;

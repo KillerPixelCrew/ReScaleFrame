@@ -514,14 +514,13 @@ const _: () = {
 };
 
 pub(crate) fn rsf_skyrim_sources_reserve(
-    out: &mut Reserve,
     source: u64,
     predecessor: u64,
     session: u64,
     job_generation: u64,
     poll_generation: u64,
-) {
-    *out = lock_store(&PRODUCTION).reserve(Reservation {
+) -> Reserve {
+    lock_store(&PRODUCTION).reserve(Reservation {
         source,
         predecessor,
         session,
@@ -529,7 +528,7 @@ pub(crate) fn rsf_skyrim_sources_reserve(
         poll_generation,
         phase: Phase::Polling,
         ..Reservation::EMPTY
-    });
+    })
 }
 
 pub(crate) fn rsf_skyrim_sources_still_reserved(source: u64) -> bool {
@@ -544,20 +543,20 @@ pub(crate) fn rsf_skyrim_sources_withdraw_pending(only: u64) -> u64 {
     lock_store(&PRODUCTION).withdraw_pending(only)
 }
 
-pub(crate) fn rsf_skyrim_sources_adopt(out: &mut Reservation, session: u64, joined: u64) {
-    *out = lock_store(&PRODUCTION).adopt(session, joined);
+pub(crate) fn rsf_skyrim_sources_adopt(session: u64, joined: u64) -> Reservation {
+    lock_store(&PRODUCTION).adopt(session, joined)
 }
 
 pub(crate) fn rsf_skyrim_sources_bind(source: u64, completed: u64) -> bool {
     lock_store(&PRODUCTION).bind(source, completed)
 }
 
-pub(crate) fn rsf_skyrim_sources_owned(out: &mut Reservation) {
-    *out = lock_store(&PRODUCTION).owned;
+pub(crate) fn rsf_skyrim_sources_owned() -> Reservation {
+    lock_store(&PRODUCTION).owned
 }
 
-pub(crate) fn rsf_skyrim_sources_release(out: &mut Reservation, source: u64) {
-    *out = lock_store(&PRODUCTION).release(source);
+pub(crate) fn rsf_skyrim_sources_release(source: u64) -> Reservation {
+    lock_store(&PRODUCTION).release(source)
 }
 
 // Counts of observed native call envelopes for diagnostics. These never reach
@@ -635,13 +634,13 @@ pub(crate) fn rsf_skyrim_worker_record_consumer(stamp: &Stamp, consumer: Consume
     }
 }
 
-pub(crate) fn rsf_skyrim_worker_counts(out: &mut WorkerCounts) {
-    *out = WorkerCounts {
+pub(crate) fn rsf_skyrim_worker_counts() -> WorkerCounts {
+    WorkerCounts {
         movement: WORKERS.movement.load(SeqCst),
         player_update: WORKERS.player_update.load(SeqCst),
         camera: WORKERS.camera.load(SeqCst),
         mismatched: WORKERS.mismatched.load(SeqCst),
-    };
+    }
 }
 
 pub(crate) fn clear_proof(drained: bool) {
