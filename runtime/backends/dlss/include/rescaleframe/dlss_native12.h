@@ -7,8 +7,8 @@
 typedef struct rsf_dlss_native12 rsf_dlss_native12;
 typedef struct rsf_dlss_native12_registration rsf_dlss_native12_registration;
 /* Keep NGX/Streamline initialization alive across SR-context changes when a native game also
-   owns NGX handles. Context destruction frees only its feature resources. The registration
-   outlives every borrowed context and the game's own NGX resources. */
+   owns NGX handles. Each context owns a separate viewport and frees its feature resources on
+   destruction. The registration outlives every borrowed context and the game's own NGX resources. */
 rsf_backend_result rsf_dlss_native12_registration_create(void* device, const rsf_dlss_setup*, rsf_dlss_native12_registration**);
 // Borrow the already initialized engine SDK. Never initializes, registers another
 // device, shuts down, or performs Present bookkeeping for that SDK.

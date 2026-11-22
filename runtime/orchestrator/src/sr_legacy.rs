@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::motion_resolve_params::dense_resolve_params;
 use crate::render_abi::*;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
@@ -235,19 +236,14 @@ impl Adapter {
             self.generation = self.generation.wrapping_add(1);
             unsafe { (self.services.destroy_resolve)(previous) };
         }
-        let params = rsf_motion_resolve_params {
-            struct_size: size_of::<rsf_motion_resolve_params>() as u32,
-            clip_to_previous: input.clip_to_prev_clip,
-            // Current-minus-previous UV to previous-minus-current render pixels.
-            decoded_to_pixels: [
-                -(input.render_width as f32) * input.motion_scale_x,
-                -(input.render_height as f32) * input.motion_scale_y,
-            ],
-            sentinel: input.motion_invalid_value,
-            has_sentinel,
-            depth_layer: input.motion_depth_layer,
-            jitter_pixels: [0.0; 2],
-        };
+        let params = dense_resolve_params(
+            input.clip_to_prev_clip,
+            [input.render_width, input.render_height],
+            [input.motion_scale_x, input.motion_scale_y],
+            (input.motion_invalid_value, has_sentinel),
+            input.motion_depth_layer,
+            [0.0; 2],
+        );
         if unsafe {
             (self.services.resolve)(self.resolve, context, input.motion, input.depth, &params)
         } == 0
@@ -261,6 +257,7 @@ impl Adapter {
         &mut self,
         context: *mut c_void,
         input: &Frame,
+        submitted: &mut Frame,
         sentinel: u32,
         sharpness: f32,
     ) -> i32 {
@@ -307,17 +304,16 @@ impl Adapter {
         if !input.transparency_hint.is_null() {
             frame.transparency = render_resource(input.transparency_hint);
         }
+        *submitted = Frame {
+            depth,
+            motion,
+            motion_scale_x: 1.0,
+            motion_scale_y: 1.0,
+            camera_motion_included: 1,
+            ..*input
+        };
         if unsafe { (self.services.dump_active)() } != 0 {
-            let submitted = Frame {
-                struct_size: size_of::<Frame>() as u32,
-                depth,
-                motion,
-                motion_scale_x: 1.0,
-                motion_scale_y: 1.0,
-                camera_motion_included: 1,
-                ..*input
-            };
-            unsafe { (self.services.dump_frame)(context, &submitted, self.status().effective) };
+            unsafe { (self.services.dump_frame)(context, submitted, self.status().effective) };
         }
         // These normalized textures are borrowed by the bridge only for this call.
         unsafe { (self.services.evaluate)(self.bridge, context, &frame) }
@@ -349,21 +345,18 @@ pub(super) unsafe extern "C" fn rsf_sr_legacy_select(
     result
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_sr_legacy_evaluate(
+pub(super) unsafe fn rsf_sr_legacy_evaluate(
     adapter: *mut Adapter,
     context: *mut c_void,
-    input: *const Frame,
+    input: &Frame,
+    submitted: &mut Frame,
     sentinel: u32,
     sharpness: f32,
 ) -> i32 {
     let Some(adapter) = (unsafe { adapter.as_mut() }) else {
         return INVALID;
     };
-    if input.is_null() || (unsafe { input.cast::<u32>().read() } as usize) < size_of::<Frame>() {
-        return INVALID;
-    }
-    adapter.evaluate(context, unsafe { &*input }, sentinel, sharpness)
+    adapter.evaluate(context, input, submitted, sentinel, sharpness)
 }
 
 #[unsafe(no_mangle)]
@@ -430,6 +423,7 @@ pub(super) mod fake {
     thread_local! {
         pub(in crate) static SELECT: Cell<i32> = const { Cell::new(0) };
         pub(in crate) static RENDER: Cell<[u32; 2]> = const { Cell::new([320, 180]) };
+        pub(in crate) static EVALUATE_RESULT: Cell<i32> = const { Cell::new(0) };
         pub(in crate) static EVALUATIONS: Cell<u32> = const { Cell::new(0) };
         pub(in crate) static DESTROYED: Cell<u32> = const { Cell::new(0) };
     }
@@ -458,7 +452,7 @@ pub(super) mod fake {
     }
     unsafe extern "C" fn evaluate(_: *mut Bridge, _: *mut c_void, _: *const rsf_sr_frame) -> i32 {
         EVALUATIONS.set(EVALUATIONS.get() + 1);
-        0
+        EVALUATE_RESULT.get()
     }
     unsafe extern "C" fn warm_up(_: *mut Bridge, _: u32, _: u32, _: u32, _: u32, _: u32) -> i32 {
         0

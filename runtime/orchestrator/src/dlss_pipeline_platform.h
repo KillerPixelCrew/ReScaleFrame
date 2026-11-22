@@ -11,6 +11,8 @@
 extern "C" {
 #endif
 
+rsf_dlss_pipeline_result rsf_dlss_pipeline_start_backend(void*, const rsf_dlss_pipeline_setup*, uint32_t);
+
 /* Private D3D11 SR pipeline bridge. dlss_pipeline.rs owns the provider session, backend and
    quality switching, frame sequencing, reset and fallback, resource leases, output publication,
    the layer feature and teardown. Every entry below is one existing SDK, graphics or diagnostic
@@ -18,17 +20,6 @@ extern "C" {
    reference. The Rust mirror in dlss_pipeline_abi.rs is hand-written and checked by the size
    assertions in dlss_pipeline.cpp. */
 typedef void (*rsf_dlssp_log_fn)(void* user, const char* message);
-
-/* rsf_dlss_plan's answer. */
-typedef struct rsf_dlssp_range {
-    uint32_t width, height, min_width, min_height, max_width, max_height;
-} rsf_dlssp_range;
-
-/* rsf_dlss_support's answer. */
-typedef struct rsf_dlssp_support {
-    uint32_t supported, driver_out_of_date, os_out_of_date, no_supported_adapter;
-    uint32_t required_major, required_minor, detected_major, detected_minor;
-} rsf_dlssp_support;
 
 /* The frame facts the D3D11 sharpening pass reads besides its options. */
 typedef struct rsf_dlssp_sharpen_frame {
@@ -40,11 +31,10 @@ typedef struct rsf_dlssp_platform {
     /* Streamline and the DLSS feature. Results are rsf_dlss_result. */
     void* (*present_host)(void);
     int32_t (*share_host)(void* host, rsf_dlssp_log_fn log, void* user);
-    int32_t (*load)(const rsf_dlss_pipeline_setup* setup, const char* interposer, const char* plugins,
-        rsf_dlssp_log_fn log);
+    int32_t (*load)(const rsf_dlss_setup* setup);
     int32_t (*set_device)(void* device);
-    int32_t (*query_support)(rsf_dlssp_support* support);
-    int32_t (*plan)(uint32_t output_width, uint32_t output_height, uint32_t quality, rsf_dlssp_range* range);
+    int32_t (*query_support)(rsf_dlss_support* support);
+    int32_t (*plan)(rsf_dlss_plan* plan);
     int32_t (*release_resources)(void);
     int32_t (*release_viewport)(uint32_t viewport);
     int32_t (*shutdown)(void);

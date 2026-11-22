@@ -6,14 +6,15 @@
 #include <sl_dlss.h>
 // Internal to this backend module, never part of the public DLL or game ABI.
 bool rsf_streamline_common_set(rsf_streamline_host*, uint64_t, uint32_t, const sl::Constants&);
+extern "C" void rsf_streamline_camera_forward(const float*, const float*, float, float*);
 namespace rsf {
 // Perspective clip W encodes the view-space forward sign. Preserve each caller's existing
 // orthographic behavior when W is independent of Z; no engine identity is inferred here.
-inline sl::float3 sl_camera_forward(const rsf_camera_frame& camera,float orthographic_sign)
+inline sl::float3 sl_camera_forward(const rsf_camera_frame& camera, float orthographic_sign)
 {
-    const auto w= camera.view_to_clip[11];
-    const float sign=w<0?-1.0f:(w>0?1.0f:orthographic_sign);
-    return {sign*camera.view_to_world[8],sign*camera.view_to_world[9],sign*camera.view_to_world[10]};
+    float forward[3]{};
+    rsf_streamline_camera_forward(camera.view_to_world, camera.view_to_clip, orthographic_sign, forward);
+    return {forward[0], forward[1], forward[2]};
 }
 // Row major on both sides, so a copy rather than a transpose.
 inline sl::float4x4 sl_matrix(const float* values)

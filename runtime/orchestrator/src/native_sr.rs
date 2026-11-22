@@ -8,6 +8,7 @@ use crate::d3d11_output_abi::{
 };
 use crate::fg_scene::with_scene;
 use crate::frame_assembly::rsf_assemble_dlss_frame;
+use crate::motion_resolve_params::{dense_resolve_params, has_motion_sentinel};
 use crate::native_composition::rsf_native_composition_release;
 use crate::native_cpu::rsf_native_cpu_release;
 use crate::native_exposure::rsf_core_native_exposure_release;
@@ -341,20 +342,14 @@ unsafe fn capture_on_stream(
             if unsafe { (fg.decode)(inputs.decode.raw(), context, vectors, motion) } == 0 {
                 return None;
             }
-            let resolve = rsf_motion_resolve_params {
-                struct_size: size_of::<rsf_motion_resolve_params>() as u32,
-                clip_to_previous: source.clip_to_previous_clip,
-                decoded_to_pixels: [
-                    -(width as f32) * pass.motion_to_uv[0],
-                    -(height as f32) * pass.motion_to_uv[1],
-                ],
-                has_sentinel: u32::from(
-                    motion.zero_means_unwritten != 0 || motion.validity_enabled != 0,
-                ),
-                sentinel: motion.invalid_value,
-                depth_layer: std::ptr::null_mut(),
-                jitter_pixels: source.jitter_pixels,
-            };
+            let resolve = dense_resolve_params(
+                source.clip_to_previous_clip,
+                [width, height],
+                pass.motion_to_uv,
+                (motion.invalid_value, has_motion_sentinel(motion)),
+                std::ptr::null_mut(),
+                source.jitter_pixels,
+            );
             stage(c"normalize-resolve");
             let decoded = unsafe { (fg.decoded_texture)(inputs.decode.raw()) };
             if unsafe { (fg.resolve)(inputs.resolve.raw(), context, decoded, depth, &resolve) } == 0

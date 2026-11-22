@@ -157,11 +157,6 @@ enum Route {
 }
 
 impl Route {
-    fn viewport(&self) -> u32 {
-        // The shared presentation host reserves zero for completed-frame generation.
-        u32::from(!matches!(self, Self::Owned))
-    }
-
     fn module(
         &self,
         platform: &Platform,
@@ -302,7 +297,7 @@ impl DeviceRegistration {
                 flags: (1 << 2) | (1 << 7),
                 engine_version: setup.engine_version_utf8,
                 project_id: setup.project_id_utf8,
-                engine: if setup.engine == 2 { 2 } else { 0 },
+                engine: crate::streamline_policy::engine_type(setup.engine),
                 application_id: setup.application_id,
                 render_api: 1,
                 feature: 0,
@@ -392,21 +387,41 @@ impl Drop for DeviceRegistration {
 
 struct Registration(Arc<DeviceRegistration>);
 
+// Viewports 0 and 1 can be used by generation or D3D11 SR on a shared host.
+static NEXT_VIEWPORT: AtomicU32 = AtomicU32::new(2);
+
+fn reserve_viewport(next: &AtomicU32) -> Option<u32> {
+    next.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .ok()
+}
+
+#[test]
+fn independent_viewports_do_not_alias_or_wrap_to_reserved_ids() {
+    let next = AtomicU32::new(2);
+    assert_eq!(reserve_viewport(&next), Some(2));
+    assert_eq!(reserve_viewport(&next), Some(3));
+    next.store(u32::MAX - 1, Ordering::Relaxed);
+    assert_eq!(reserve_viewport(&next), Some(u32::MAX - 1));
+    assert_eq!(reserve_viewport(&next), None);
+}
+
 struct Context {
     registration: Arc<DeviceRegistration>,
     quality: AtomicU32,
     preset: u32,
     sdr: AtomicBool,
+    viewport: u32,
     used_viewport: AtomicBool,
 }
 
 impl Context {
-    fn new(registration: Arc<DeviceRegistration>, preset: u32) -> Self {
+    fn new(registration: Arc<DeviceRegistration>, preset: u32, viewport: u32) -> Self {
         Self {
             registration,
             quality: AtomicU32::new(QUALITY),
             preset,
             sdr: AtomicBool::new(false),
+            viewport,
             used_viewport: AtomicBool::new(false),
         }
     }
@@ -417,10 +432,7 @@ impl Drop for Context {
         if *self.used_viewport.get_mut() {
             let registration = &self.registration;
             unsafe {
-                (registration.platform.free_viewport)(
-                    registration.native.as_ptr(),
-                    registration.route.viewport(),
-                );
+                (registration.platform.free_viewport)(registration.native.as_ptr(), self.viewport);
             }
         }
     }
@@ -431,7 +443,10 @@ fn publish_context(
     preset: u32,
     out: &mut *mut Context,
 ) -> i32 {
-    *out = crate::allocate_handle(Context::new(registration, preset));
+    let Some(viewport) = reserve_viewport(&NEXT_VIEWPORT) else {
+        return INIT_FAILED;
+    };
+    *out = crate::allocate_handle(Context::new(registration, preset, viewport));
     if (*out).is_null() { INIT_FAILED } else { OK }
 }
 
@@ -575,7 +590,7 @@ unsafe extern "C" fn rsf_core_dlss_native12_evaluate(
         Err(result) => return result,
     };
     let native = registration.native.as_ptr();
-    let viewport = registration.route.viewport();
+    let viewport = context.viewport;
     let camera = &record.camera;
     let mut previous_to_current = [0.0; 16];
     let determinant =
@@ -583,11 +598,6 @@ unsafe extern "C" fn rsf_core_dlss_native12_evaluate(
     if !determinant.is_finite() || determinant.abs() < 1e-12 {
         return INVALID;
     }
-    let sign = if camera.view_to_clip[11] > 0.0 {
-        1.0
-    } else {
-        -1.0
-    };
     let constants = Constants {
         frame,
         previous_to_current,
@@ -595,7 +605,11 @@ unsafe extern "C" fn rsf_core_dlss_native12_evaluate(
             1.0 / record.render_width as f32,
             1.0 / record.render_height as f32,
         ],
-        forward: [8, 9, 10].map(|index| sign * camera.view_to_world[index]),
+        forward: crate::streamline_policy::camera_forward(
+            &camera.view_to_world,
+            &camera.view_to_clip,
+            -1.0,
+        ),
         aspect: record.output_width as f32 / record.output_height as f32,
         invalid_motion: f32::MAX,
     };

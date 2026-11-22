@@ -29,7 +29,8 @@ static_assert(sizeof(Preferences) == 40 && sizeof(ConstantsInput) == 104 &&
     offsetof(ConstantsInput, aspect) == 92);
 static_assert(uint64_t(sl::PreferenceFlags::eUseManualHooking) == (1ull << 2) &&
     uint64_t(sl::PreferenceFlags::eUseFrameBasedResourceTagging) == (1ull << 7) &&
-    uint32_t(sl::EngineType::eCustom) == 0 && uint32_t(sl::EngineType::eUnity) == RSF_DLSS_ENGINE_UNITY &&
+    uint32_t(sl::EngineType::eCustom) == 0 && uint32_t(sl::EngineType::eUnreal) == RSF_DLSS_ENGINE_UNREAL &&
+    uint32_t(sl::EngineType::eUnity) == RSF_DLSS_ENGINE_UNITY &&
     uint32_t(sl::RenderAPI::eD3D12) == 1 && sl::kFeatureDLSS == 0 && uint32_t(sl::Result::eOk) == 0);
 
 namespace {
@@ -269,15 +270,7 @@ rsf_backend_result native_constants(void* handle, void* token_ptr, uint32_t view
 rsf_backend_result native_options(void* handle, uint32_t viewport, const rsf_streamline_sr_options* input) noexcept try
 {
     const auto& native = *static_cast<Native*>(handle);
-    sl::DLSSOptions options{};
-    options.mode = static_cast<sl::DLSSMode>(input->mode);
-    const auto preset = static_cast<sl::DLSSPreset>(input->preset);
-    options.dlaaPreset = options.qualityPreset = options.balancedPreset = preset;
-    options.performancePreset = options.ultraPerformancePreset = options.ultraQualityPreset = preset;
-    options.outputWidth = input->width;
-    options.outputHeight = input->height;
-    options.colorBuffersHDR = input->hdr ? sl::Boolean::eTrue : sl::Boolean::eFalse;
-    options.useAutoExposure = input->auto_exposure ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+    const auto options = rsf::sr_options(*input);
     return native.options(sl::ViewportHandle(viewport), options) == sl::Result::eOk ?
         RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }

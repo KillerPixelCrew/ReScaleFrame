@@ -218,7 +218,7 @@ typedef struct rsf_dlss_frame {
 
     /* Appended in ABI 3. Which of the two viewports this frame is for: 0 is the scene, 1 is a
        second feature with its own history, such as a translucency layer integrated at one to one.
-       Each viewport keeps its own options, constants and resources. */
+       Each viewport keeps its own options, constants and resources. Other IDs are rejected. */
     uint32_t viewport;
     /* Carry the alpha channel through the reconstruction as well as the colour. For a layer
        composited by its alpha afterwards. */

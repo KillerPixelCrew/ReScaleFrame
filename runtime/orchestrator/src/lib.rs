@@ -102,6 +102,8 @@ mod motion_decode;
 #[cfg(windows)]
 mod motion_resolve;
 #[cfg(windows)]
+mod motion_resolve_params;
+#[cfg(windows)]
 mod native_composition;
 #[cfg(windows)]
 mod native_cpu;
@@ -266,6 +268,8 @@ mod sr_session;
 mod streamline_host;
 #[cfg(windows)]
 mod streamline_log;
+#[cfg(windows)]
+mod streamline_policy;
 #[cfg(windows)]
 mod streamline_sr;
 #[cfg(all(windows, test))]

@@ -560,6 +560,7 @@ fn legacy_failure_log_names_frame_and_role() {
 
 #[test]
 fn general_matches_iostream_precision_nine() {
+    assert_eq!(general(f64::NAN.copysign(-1.0)), "-nan");
     for (value, text) in [
         (0.0, "0"),
         (1.0, "1"),

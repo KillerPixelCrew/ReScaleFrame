@@ -39,6 +39,8 @@ int main(int argc, char** argv)
     setup.xess_directory_utf8 = argv[3]; setup.view_space_to_meters = 1; setup.log = log_line;
     auto result = rsf_dlss_pipeline_start(device.Get(), &setup);
     if (result != 0) { std::fprintf(stderr, "pipeline start refused: %d\n", result); return 1; }
+    void* const initial_output = rsf_dlss_pipeline_output_texture();
+    if (!initial_output) return 1;
     ComPtr<ID3D11Texture2D> textures[3];
     for (uint32_t i = 0; i < 3; ++i) {
         D3D11_TEXTURE2D_DESC desc{};
@@ -71,6 +73,17 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "select %u: %d\n", backend, result);
         if (backend == 4 && result == RSF_BACKEND_ERROR_NOT_SUPPORTED) continue;
         if (result != 0) { passed = false; continue; }
+        rsf_dlss_pipeline_status status{};
+        status.struct_size = sizeof(status);
+        const bool switched = rsf_dlss_pipeline_get_status(&status) == RSF_DLSS_PIPELINE_OK &&
+            status.backend == backend && status.requested_backend == backend &&
+            status.output_width == 512 && status.output_height == 512 &&
+            rsf_dlss_pipeline_output_texture() == initial_output;
+        if (!switched) {
+            std::fprintf(stderr, "backend %u did not preserve the output lease or report its selection\n", backend);
+            passed = false;
+            continue;
+        }
         for (uint32_t i = 0; i < 3; ++i) {
             camera.jitter_pixels[0] = i % 2 ? -0.25f : 0.25f;
             rsf_d3d11_state saved{}; rsf_d3d11_state_save(context.Get(), &saved);

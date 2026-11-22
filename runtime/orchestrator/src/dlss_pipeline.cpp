@@ -37,7 +37,7 @@ static_assert(sizeof(rsf_dlss_pipeline_status) == 96 && offsetof(rsf_dlss_pipeli
     offsetof(rsf_dlss_pipeline_status, last_switch_result) == 92);
 static_assert(sizeof(rsf_dlss_pipeline_layer) == 40 && offsetof(rsf_dlss_pipeline_layer, width) == 24 &&
     offsetof(rsf_dlss_pipeline_layer, camera) == 32);
-static_assert(sizeof(rsf_dlssp_range) == 24 && sizeof(rsf_dlssp_support) == 32 && sizeof(rsf_dlssp_sharpen_frame) == 20);
+static_assert(sizeof(rsf_dlssp_sharpen_frame) == 20);
 static_assert(sizeof(rsf_dlssp_platform) == 43 * sizeof(void*));
 static_assert(sizeof(rsf_dlss_engine) == 4 && sizeof(rsf_dlss_quality) == 4);
 static_assert(RSF_DLSS_PIPELINE_ABI_VERSION == 5u && RSF_FRAME_ASSEMBLY_ABI_VERSION == 1u && RSF_SHARPENING_ABI_VERSION == 1u);
@@ -55,7 +55,7 @@ static_assert(RSF_DLSS_PIPELINE_OK == 0 && RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUM
     RSF_DLSS_PIPELINE_ERROR_EVALUATE_FAILED == -10);
 
 extern "C" {
-int32_t rsf_core_dlss_pipeline_start(const rsf_dlssp_platform*, void*, const rsf_dlss_pipeline_setup*);
+int32_t rsf_core_dlss_pipeline_start(const rsf_dlssp_platform*, void*, const rsf_dlss_pipeline_setup*, uint32_t);
 int32_t rsf_core_dlss_pipeline_on_frame(const rsf_dlssp_platform*, void*, const rsf_dlss_pipeline_frame*);
 void* rsf_core_dlss_pipeline_output_texture(void);
 int32_t rsf_core_dlss_pipeline_request_dump(const char*);
@@ -84,53 +84,17 @@ int32_t share_host(void* host, rsf_dlssp_log_fn sink, void* user) noexcept try
 }
 catch (...) { return RSF_DLSS_ERROR_LOAD_FAILED; }
 
-int32_t load(const rsf_dlss_pipeline_setup* setup, const char* interposer, const char* plugins,
-    rsf_dlssp_log_fn sink) noexcept try
-{
-    rsf_dlss_setup dlss{};
-    dlss.struct_size = uint32_t(sizeof(dlss));
-    dlss.abi_version = RSF_DLSS_ABI_VERSION;
-    dlss.interposer_path_utf8 = interposer;
-    dlss.plugin_directory_utf8 = plugins;
-    dlss.log_directory_utf8 = setup->streamline_log_directory_utf8;
-    dlss.application_id = 0;
-    dlss.engine = setup->engine;
-    dlss.engine_version_utf8 = setup->engine_version_utf8;
-    dlss.project_id_utf8 = setup->project_id_utf8;
-    dlss.require_signature = setup->require_signature;
-    dlss.log = sink;
-    return rsf_dlss_load(&dlss);
-}
+int32_t load(const rsf_dlss_setup* setup) noexcept try { return rsf_dlss_load(setup); }
 catch (...) { return RSF_DLSS_ERROR_LOAD_FAILED; }
 
 int32_t set_device(void* device) noexcept try { return rsf_dlss_set_device(device); }
 catch (...) { return RSF_DLSS_ERROR_INIT_FAILED; }
 
-int32_t query_support(rsf_dlssp_support* out) noexcept try
-{
-    rsf_dlss_support support{};
-    support.struct_size = uint32_t(sizeof(support));
-    const rsf_dlss_result result = rsf_dlss_query_support(&support);
-    *out = {support.supported, support.driver_out_of_date, support.os_out_of_date, support.no_supported_adapter,
-        support.required_driver_major, support.required_driver_minor, support.detected_driver_major,
-        support.detected_driver_minor};
-    return result;
-}
+int32_t query_support(rsf_dlss_support* support) noexcept try { return rsf_dlss_query_support(support); }
 catch (...) { return RSF_DLSS_ERROR_INIT_FAILED; }
 
-int32_t plan_render(uint32_t output_width, uint32_t output_height, uint32_t quality, rsf_dlssp_range* out) noexcept try
-{
-    rsf_dlss_plan request{};
-    request.struct_size = uint32_t(sizeof(request));
-    request.output_width = output_width;
-    request.output_height = output_height;
-    request.quality = quality;
-    const rsf_dlss_result result = rsf_dlss_plan_render_size(&request);
-    *out = {request.render_width, request.render_height, request.render_width_min, request.render_height_min,
-        request.render_width_max, request.render_height_max};
-    return result;
-}
-catch (...) { *out = {}; return RSF_DLSS_ERROR_NOT_READY; }
+int32_t plan_render(rsf_dlss_plan* plan) noexcept try { return rsf_dlss_plan_render_size(plan); }
+catch (...) { return RSF_DLSS_ERROR_NOT_READY; }
 
 int32_t release_resources() noexcept try { return rsf_dlss_release_resources(); }
 catch (...) { return RSF_DLSS_ERROR_NOT_READY; }
@@ -390,9 +354,15 @@ constexpr rsf_dlssp_platform leaves{
 
 } // namespace
 
+extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_start_backend(
+    void* device, const rsf_dlss_pipeline_setup* setup, uint32_t backend)
+{
+    return rsf_core_dlss_pipeline_start(&leaves, device, setup, backend);
+}
+
 extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_start(void* device, const rsf_dlss_pipeline_setup* setup)
 {
-    return rsf_core_dlss_pipeline_start(&leaves, device, setup);
+    return rsf_dlss_pipeline_start_backend(device, setup, RSF_SR_DLSS);
 }
 
 extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_on_frame(void* context, const rsf_dlss_pipeline_frame* frame)

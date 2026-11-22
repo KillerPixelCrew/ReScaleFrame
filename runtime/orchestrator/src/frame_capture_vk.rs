@@ -585,7 +585,12 @@ pub(crate) fn general(value: f64) -> String {
 pub(crate) fn general_precision(value: f64, precision: i32) -> String {
     let precision = precision.max(1);
     if value.is_nan() {
-        return "nan".into();
+        return if value.is_sign_negative() {
+            "-nan"
+        } else {
+            "nan"
+        }
+        .into();
     }
     if value.is_infinite() {
         return if value < 0.0 { "-inf" } else { "inf" }.into();

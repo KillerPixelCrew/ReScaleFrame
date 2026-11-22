@@ -29,9 +29,6 @@ const OPTIMAL: u32 = 1;
 const OPTIONS: u32 = 2;
 const USE_MANUAL_HOOKING: u64 = 1 << 2;
 const USE_FRAME_BASED_RESOURCE_TAGGING: u64 = 1 << 7;
-const ENGINE_CUSTOM: u32 = 0;
-const ENGINE_UNREAL: u32 = 1;
-const ENGINE_UNITY: u32 = 2;
 const RENDER_D3D11: u32 = 0;
 const LOG_DEFAULT: u32 = 1;
 const FEATURE_DLSS: u32 = 0;
@@ -212,11 +209,7 @@ impl Startup {
             engine_version: setup.engine_version_utf8,
             project_id: setup.project_id_utf8,
             flags: USE_MANUAL_HOOKING | USE_FRAME_BASED_RESOURCE_TAGGING,
-            engine: match setup.engine {
-                ENGINE_UNREAL => ENGINE_UNREAL,
-                ENGINE_UNITY => ENGINE_UNITY,
-                _ => ENGINE_CUSTOM,
-            },
+            engine: crate::streamline_policy::engine_type(setup.engine),
             application_id: setup.application_id,
             render_api: RENDER_D3D11,
             log_level: LOG_DEFAULT,
@@ -364,10 +357,6 @@ impl Session {
 // shared host alive until SR shutdown, and each COM device is retained until its route is retired.
 unsafe impl Send for Session {}
 static SESSION: Mutex<Option<Session>> = Mutex::new(None);
-
-fn viewport_slot(viewport: u32) -> u32 {
-    if viewport < 2 { viewport } else { 0 }
-}
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_dlss_streamline_load(
@@ -609,6 +598,9 @@ unsafe extern "C" fn rsf_core_dlss_streamline_evaluate(
     if frame.abi_version != RSF_DLSS_ABI_VERSION {
         return ABI_MISMATCH;
     }
+    if frame.viewport >= 2 {
+        return INVALID;
+    }
     if [frame.color_in, frame.color_out, frame.depth, frame.motion]
         .into_iter()
         .any(|input| input.is_null())
@@ -628,7 +620,7 @@ unsafe extern "C" fn rsf_core_dlss_streamline_evaluate(
     if token.is_null() {
         return if shared { NOT_READY } else { FEATURE_FAILED };
     }
-    let slot = viewport_slot(frame.viewport);
+    let slot = frame.viewport;
     let constants = platform
         .frame
         .set_constants(native, host, token, source, slot, frame);
@@ -666,6 +658,9 @@ unsafe extern "C" fn rsf_core_dlss_streamline_evaluate(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_dlss_streamline_release(viewport: u32, platform: &Platform) -> i32 {
+    if viewport >= 2 {
+        return INVALID;
+    }
     let Ok(mut state) = SESSION.try_lock() else {
         return NOT_READY;
     };
@@ -676,9 +671,8 @@ unsafe extern "C" fn rsf_core_dlss_streamline_release(viewport: u32, platform: &
     if !host.is_null() && unsafe { (platform.drain)(host) } == 0 {
         return FEATURE_FAILED;
     }
-    let slot = viewport_slot(viewport);
-    session.applied[slot as usize] = None;
-    unsafe { (platform.release_viewport)(session.native.as_ptr(), slot) }
+    session.applied[viewport as usize] = None;
+    unsafe { (platform.release_viewport)(session.native.as_ptr(), viewport) }
 }
 
 #[unsafe(no_mangle)]
