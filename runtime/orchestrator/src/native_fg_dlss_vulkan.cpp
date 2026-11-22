@@ -7,10 +7,10 @@
 #include <vulkan/vulkan.h>
 #include <sl.h>
 #include "../../vulkan/streamline/sdk_fg_options_checks.h"
+#include "../../vulkan/streamline/sdk_records_checks.h"
 #include <DirectXMath.h>
 #include <cmath>
 #include <cstring>
-#include <limits>
 #include <memory>
 #include "native_fg_dlss_vulkan_capture.h"
 #include "vulkan_fg_copy.h"
@@ -20,20 +20,13 @@
 extern "C" uint64_t VulkanStorySlWorkerTimeoutEpoch();
 namespace {
 template<class T> T entry(void* module, const char* name) { return reinterpret_cast<T>(GetProcAddress(static_cast<HMODULE>(module), name)); }
-sl::float4x4 matrix(const float* values) {
-    sl::float4x4 result{};
-    for (uint32_t row = 0; row < 4; ++row) for (uint32_t column = 0; column < 4; ++column)
-        (&result[row].x)[column] = values[row * 4 + column];
-    return result;
-}
-
 using Image = rsf_vkfg_image;
 const sl::ViewportHandle viewport(0);
 void on_error(const sl::APIError& error) { rsf_core_dlgvk_report_api_error(static_cast<int32_t>(error.vkRes)); }
 
 struct Native {
     rsf_fgvk_setup setup{};
-    VkSwapchainCreateInfoKHR info{};
+    VkSurfaceKHR surface{};
     rsf::vkfg::Device gpu;
     PFN_vkCmdPipelineBarrier barrier = nullptr;
     PFN_vkCmdCopyImage copy = nullptr;
@@ -50,6 +43,7 @@ struct Native {
 static_assert(sizeof(rsf_dlgvk_sample) == 40);
 static_assert(sizeof(rsf_dlgvk_tag) == 24);
 static_assert(sizeof(rsf_dlgvk_sdk_call) == 96);
+static_assert(offsetof(rsf_dlgvk_sdk_call, camera) == 64);
 static_assert(offsetof(rsf_dlgvk_sdk_call, tags) == 80);
 static_assert(offsetof(rsf_dlgvk_sdk_call, options) == 88);
 static_assert(sizeof(rsf_dlgvk_chain_support) == 8);
@@ -118,30 +112,16 @@ sl::Resource resource(const Image& image) {
 rsf_backend_result constants(void*, uintptr_t token, void* user) {
     auto& call = *static_cast<rsf_dlgvk_sdk_call*>(user);
     const auto& self = *static_cast<Native*>(call.native);
-    const auto& input = *call.input; const auto& record = *call.record; const auto& camera = record.camera;
     if (!token) return RSF_BACKEND_ERROR_NOT_READY;
-    DirectX::XMFLOAT4X4 previous{}, inverse{}; std::memcpy(&previous, camera.clip_to_previous_clip, sizeof(previous));
+    DirectX::XMFLOAT4X4 previous{}, inverse{}; std::memcpy(&previous, call.camera->clip_to_previous, sizeof(previous));
     DirectX::XMVECTOR determinant{};
     DirectX::XMStoreFloat4x4(&inverse, DirectX::XMMatrixInverse(&determinant, DirectX::XMLoadFloat4x4(&previous)));
     const auto det = DirectX::XMVectorGetX(determinant);
     if (!std::isfinite(det) || std::abs(det) < 1e-12f) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    sl::Constants constants{}; constants.cameraViewToClip = matrix(camera.view_to_clip); constants.clipToCameraView = matrix(camera.clip_to_view);
-    constants.clipToPrevClip = matrix(camera.clip_to_previous_clip); constants.prevClipToClip = matrix(&inverse.m[0][0]);
-    constants.cameraPos = {camera.view_to_world[12], camera.view_to_world[13], camera.view_to_world[14]};
-    constants.cameraRight = {camera.view_to_world[0], camera.view_to_world[1], camera.view_to_world[2]};
-    constants.cameraUp = {camera.view_to_world[4], camera.view_to_world[5], camera.view_to_world[6]};
-    constants.cameraFwd = {-camera.view_to_world[8], -camera.view_to_world[9], -camera.view_to_world[10]};
-    constants.cameraNear = camera.near_plane; constants.cameraFar = camera.far_plane > 0 ? camera.far_plane : std::numeric_limits<float>::max();
-    constants.cameraFOV = camera.vertical_fov_radians; constants.cameraAspectRatio = float(self.info.imageExtent.width) / self.info.imageExtent.height;
-    constants.jitterOffset = {camera.jitter_pixels[0], camera.jitter_pixels[1]}; constants.cameraPinholeOffset = {0, 0};
-    // The adapter's scale already accounts for the engine motion convention.
-    // As in DLSS SR, convert its pixel scale to normalized texture coordinates.
-    constants.mvecScale = {input.motion_scale_x / record.render_width, input.motion_scale_y / record.render_height};
-    constants.depthInverted = camera.depth_inverted ? sl::Boolean::eTrue : sl::Boolean::eFalse;
-    constants.cameraMotionIncluded = sl::Boolean::eTrue; constants.motionVectors3D = sl::Boolean::eFalse;
-    constants.motionVectorsJittered = camera.motion_jittered ? sl::Boolean::eTrue : sl::Boolean::eFalse;
-    constants.motionVectorsInvalidValue = std::numeric_limits<float>::max();
-    constants.reset = (record.flags & RSF_FRAME_FLAG_RESET) ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+    sl::Constants constants{};
+    std::memcpy(static_cast<void*>(&constants), call.camera, sizeof(constants));
+    static_assert(sizeof(constants.prevClipToClip) == sizeof(inverse));
+    std::memcpy(static_cast<void*>(&constants.prevClipToClip), &inverse, sizeof(inverse));
     auto& frame = *reinterpret_cast<sl::FrameToken*>(token);
     return sdk_result(call, self.constants(constants, frame, viewport));
 }
@@ -170,7 +150,7 @@ rsf_backend_result release(void*, uintptr_t, void* user) {
 rsf_backend_result open(const rsf_fgvk_setup* setup, void** out) noexcept try {
     auto self = std::make_unique<Native>();
     self->setup = *setup;
-    self->info = *static_cast<const VkSwapchainCreateInfoKHR*>(setup->create_info);
+    self->surface = static_cast<const VkSwapchainCreateInfoKHR*>(setup->create_info)->surface;
     *out = self.release();
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
@@ -191,7 +171,7 @@ rsf_backend_result prepare_chain(void* user, rsf_dlgvk_chain_support* support, v
     if (!self->capture.initialize(static_cast<VkDevice>(graphics.device), graphics.device_proc, memory)) return RSF_BACKEND_ERROR_INIT_FAILED;
     const auto capabilities = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR>(graphics.instance_proc(graphics.instance, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR"));
     VkSurfaceCapabilitiesKHR supported{};
-    if (!capabilities || capabilities(static_cast<VkPhysicalDevice>(graphics.physical_device), self->info.surface, &supported) != VK_SUCCESS)
+    if (!capabilities || capabilities(static_cast<VkPhysicalDevice>(graphics.physical_device), self->surface, &supported) != VK_SUCCESS)
         return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     *support = {supported.supportedUsageFlags, self->capture.enabled() ? 1u : 0u};
     *gpu = &self->gpu;

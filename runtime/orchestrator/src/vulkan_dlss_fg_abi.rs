@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::vulkan_dlss_fg::sdk_fg_options::Packed;
-use crate::vulkan_fg_abi::{
-    rsf_dlssgvk_status as Status, rsf_fgvk_frame as Frame, rsf_fgvk_setup as Setup,
-};
+use crate::vulkan_dlss_fg::sdk_records_abi::rsf_slvk_sdk_constants;
+use crate::vulkan_fg_abi::{rsf_dlssgvk_status as Status, rsf_fgvk_setup as Setup};
 use crate::vulkan_fg_copy::{BarrierFn, CopyFn};
 use crate::vulkan_fg_resources_abi::{rsf_vkfg_image as Image, rsf_vkfg_platform as Gpu};
 use crate::vulkan_latency_abi::{rsf_slvk_call, rsf_slvk_callback};
@@ -41,7 +40,7 @@ pub(super) struct SdkCall {
     pub result: i32,
     pub sample: Sample,
     pub commands: Handle,
-    pub input: *const Frame,
+    pub camera: *const rsf_slvk_sdk_constants,
     pub record: *const Record,
     pub tags: *const Tag,
     pub options: *const Packed,
@@ -82,6 +81,7 @@ const _: () = {
     assert!(size_of::<Sample>() == 40);
     assert!(size_of::<Tag>() == 24);
     assert!(size_of::<SdkCall>() == 96);
+    assert!(std::mem::offset_of!(SdkCall, camera) == 64);
     assert!(std::mem::offset_of!(SdkCall, tags) == 80);
     assert!(std::mem::offset_of!(SdkCall, options) == 88);
     assert!(size_of::<ChainSupport>() == 8);

@@ -20,6 +20,8 @@ mod frame_generation;
 mod frame_token;
 #[cfg(any(windows, test))]
 mod lifecycle;
+#[cfg(any(windows, test))]
+mod sdk_camera_defaults;
 #[cfg(windows)]
 mod sdk_fg_options;
 #[cfg(any(windows, test))]

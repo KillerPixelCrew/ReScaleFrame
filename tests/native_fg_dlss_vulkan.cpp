@@ -62,6 +62,11 @@ sl::Result state(const sl::ViewportHandle&, sl::DLSSGState& value, const sl::DLS
 sl::Result set_constants(const sl::Constants& data, const sl::FrameToken& token, const sl::ViewportHandle&) {
     require(&token == reinterpret_cast<const sl::FrameToken*>(&sdk_token), "constants borrow the original SDK token");
     require(data.mvecScale.x == 0.5f && data.mvecScale.y == -0.5f, "motion scale uses the render dimensions");
+    require(data.structVersion == sl::kStructVersion2 && data.cameraAspectRatio == 1280.0f / 720.0f &&
+        data.clipToLensClip[0].x == sl::INVALID_FLOAT && data.cameraMotionIncluded == sl::Boolean::eTrue,
+        "packed camera keeps SDK defaults and the presented aspect ratio");
+    require(data.prevClipToClip[0].x == 1.0f && data.prevClipToClip[3].w == 1.0f,
+        "native inverse fills the packed camera before dispatch");
     return sl::Result::eOk;
 }
 sl::Result set_tags(const sl::FrameToken& token, const sl::ViewportHandle&, const sl::ResourceTag* tags, uint32_t count, sl::CommandBuffer* commands) {

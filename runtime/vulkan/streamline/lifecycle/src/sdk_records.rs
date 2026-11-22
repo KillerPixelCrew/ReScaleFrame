@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Data construction for the pinned Streamline 2.14.1 C++ call leaves.
+use crate::sdk_camera_defaults;
 use crate::sdk_records_abi::{
     rsf_slvk_legacy_camera, rsf_slvk_legacy_image, rsf_slvk_sdk_constants, rsf_slvk_sdk_header,
     rsf_slvk_sdk_log, rsf_slvk_sdk_pcl_options, rsf_slvk_sdk_preferences,
@@ -17,15 +18,6 @@ const PREFERENCES: rsf_slvk_sdk_header = rsf_slvk_sdk_header {
     type_hi: 0x432b,
     type_tail: [0x8d, 0xa1, 0x67, 0x16, 0xd8, 0x79, 0xfb, 0x14],
     version: 1,
-};
-
-const CONSTANTS: rsf_slvk_sdk_header = rsf_slvk_sdk_header {
-    next: ptr::null_mut(),
-    type_lo: 0xdcd3_5ad7,
-    type_mid: 0x4e4a,
-    type_hi: 0x4bad,
-    type_tail: [0xa9, 0x0c, 0xe0, 0xc4, 0x9e, 0xb2, 0x3a, 0xfe],
-    version: 2,
 };
 
 const RESOURCE: rsf_slvk_sdk_header = rsf_slvk_sdk_header {
@@ -153,15 +145,12 @@ unsafe extern "C" fn rsf_slvk_pack_legacy_camera(
     }
     let copy = |matrix: *const f32| unsafe { matrix.cast::<[f32; 16]>().read() };
     let constants = rsf_slvk_sdk_constants {
-        base: CONSTANTS,
         view_to_clip: copy(view_to_clip),
         clip_to_view: copy(clip_to_view),
-        clip_to_lens: [f32::MAX; 16],
         clip_to_previous: copy(clip_to_previous),
         previous_to_clip: copy(previous_to_clip),
         jitter: camera.jitter,
         motion_scale: camera.motion_scale,
-        pinhole: [0.0; 2],
         position: camera.position,
         up: camera.up,
         right: camera.right,
@@ -170,15 +159,8 @@ unsafe extern "C" fn rsf_slvk_pack_legacy_camera(
         far_plane: camera.far_plane,
         fov: camera.fov,
         aspect: camera.aspect,
-        invalid_motion: f32::MAX,
-        depth_inverted: 0,
-        motion_includes_camera: 1,
-        motion_3d: 0,
         reset: u8::from(camera.reset != 0),
-        orthographic: 0,
-        motion_dilated: 0,
-        motion_jittered: 0,
-        min_relative_depth_separation: 40.0,
+        ..sdk_camera_defaults::constants()
     };
     unsafe { output.write(constants) };
     1

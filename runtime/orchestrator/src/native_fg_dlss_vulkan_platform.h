@@ -20,7 +20,7 @@ struct rsf_dlgvk_sdk_call {
     int32_t result;
     rsf_dlgvk_sample sample;
     void* commands;
-    const rsf_fgvk_frame* input;
+    const rsf_slvk_sdk_constants* camera;
     const rsf_frame_record* record;
     const rsf_dlgvk_tag* tags; // Two tags for the leased recording.
     const rsf_slvk_sdk_fg_options* options;
