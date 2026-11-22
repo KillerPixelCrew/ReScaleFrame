@@ -4,14 +4,12 @@ set(RSF_ANOMALY_FG_SRC "${PROJECT_SOURCE_DIR}/games/anomaly/src")
 
 # The device fixture: the adapter's production FG stage and SR TemporalDriver against the real Runtime DLL, on the
 # NVIDIA adapter, with the vendor package from RSF_ANOMALY_SR_VENDOR_ROOT (anomaly_support.cmake).
-rsf_add_rust_static(rsf_anomaly_fg_fixture_rust rsf_rust_anomaly_fg_fixture
-    rsf-anomaly rsf_anomaly --features fg-fixture)
 add_executable(rsf_anomaly_fg_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_fg_device.c")
 set_target_properties(rsf_anomaly_fg_device_test PROPERTIES LINKER_LANGUAGE CXX)
 target_include_directories(rsf_anomaly_fg_device_test PRIVATE "${RSF_ANOMALY_FG_SRC}"
     "${PROJECT_SOURCE_DIR}/runtime/backends/dlss/include"
     "$<TARGET_PROPERTY:rsf_orchestrator,INTERFACE_INCLUDE_DIRECTORIES>")
-target_link_libraries(rsf_anomaly_fg_device_test PRIVATE rsf_anomaly_fg_fixture_rust
+target_link_libraries(rsf_anomaly_fg_device_test PRIVATE rsf_anomaly_fixtures_rust
     "$<TARGET_LINKER_FILE:rsf_orchestrator>" ReScaleFrame::GameSDK
     ReScaleFrame::Contract ReScaleFrame::GraphicsLeaves ReScaleFrame::Graphics d3d11 dxgi dxguid rsf_build_options)
 add_dependencies(rsf_anomaly_fg_device_test rsf_orchestrator)

@@ -1,18 +1,13 @@
 # The plugin and linked carriers call the same Rust reader through the existing view C ABI.
-if(BUILD_TESTING)
-    rsf_add_rust_static(rsf_ac7_rust rsf_rust_ac7 rsf-ac7 rsf_ac7 --features warp-fixture)
-else()
-    rsf_add_rust_static(rsf_ac7_rust rsf_rust_ac7 rsf-ac7 rsf_ac7)
-endif()
+rsf_add_rust_static(rsf_ac7_rust rsf_rust_ac7 rsf-ac7 rsf_ac7)
 # TrueSky's Rust D3D11 owner uses the shared System32 shader compiler entry. The crate's guarded
 # engine reads are the SEH leaf rsf_ac7_memory, so every consumer of the archive links it. The D3D11
 # leaves it calls come from ReScaleFrame::GraphicsLeaves or, in carriers and fixtures that link the
 # Runtime archive, from that archive; each binary links exactly one of the two.
 target_link_libraries(rsf_ac7_rust INTERFACE rsf_shader_compiler rsf_ac7_memory)
-add_library(rsf_ac7_view INTERFACE)
-target_include_directories(rsf_ac7_view INTERFACE include)
-target_link_libraries(rsf_ac7_view INTERFACE rsf_ac7_rust)
-add_library(ReScaleFrame::AC7View ALIAS rsf_ac7_view)
+target_include_directories(rsf_ac7_rust INTERFACE include)
+add_library(ReScaleFrame::AC7View ALIAS rsf_ac7_rust)
+add_library(ReScaleFrame::AC7UIRules ALIAS rsf_ac7_rust)
 
 # Exact-build identity, the GameSDK table and the renderer lifecycle are the Rust crate rsf-ac7
 # (src/lib.rs, src/lifecycle.rs). plugin.c keeps the export and lends the renderer leaf snapshot
@@ -27,25 +22,20 @@ add_library(ReScaleFrame::AC7View ALIAS rsf_ac7_view)
 # The crate also owns the queued render scopes (src/render_scope.rs) and exports
 # ac7_render_scope.h except its two C create calls, which pass the C11 SEH exception leaves
 # of render_scope_entry.c (src/ac7_scope_owner.h). Every target that calls that header links
-# rsf_ac7_rust after rsf_ac7_render_scope: this DLL and the render scope, D3D11 present bridge and
-# native graph fixtures. The carriers use the crate through AC7View without pulling render_scope_entry.c.
+# rsf_ac7_rust (or the fixture archive) after rsf_ac7_render_scope, which links neither: this DLL and
+# the render scope, D3D11 present bridge and native graph fixtures. The carriers use the crate through AC7View without pulling render_scope_entry.c.
 add_library(rsf_game_ac7 SHARED src/plugin.c)
 set_target_properties(rsf_game_ac7 PROPERTIES LINKER_LANGUAGE CXX)
-target_link_libraries(rsf_game_ac7 PRIVATE ReScaleFrame::GameSDK rsf_ac7_view rsf_ac7_render_scope rsf_ac7_rust
+target_link_libraries(rsf_game_ac7 PRIVATE ReScaleFrame::GameSDK rsf_ac7_render_scope rsf_ac7_rust
     ReScaleFrame::GraphicsLeaves rsf_build_options)
 set_target_properties(rsf_game_ac7 PROPERTIES OUTPUT_NAME "ReScaleFrame.Game.AC7")
 
-# The Rust UI rules classify frame-tap facts and check the captured shader fingerprint.
-add_library(rsf_ac7_ui_rules INTERFACE)
-target_include_directories(rsf_ac7_ui_rules INTERFACE include)
-target_link_libraries(rsf_ac7_ui_rules INTERFACE rsf_ac7_rust)
-add_library(ReScaleFrame::AC7UIRules ALIAS rsf_ac7_ui_rules)
-
-# Capture-derived scene selection stays with the game; graphics supplies only draw observations.
-add_library(rsf_ac7_scene_color INTERFACE)
-target_include_directories(rsf_ac7_scene_color INTERFACE include)
-target_link_libraries(rsf_ac7_scene_color INTERFACE ReScaleFrame::Graphics rsf_ac7_rust)
-add_library(ReScaleFrame::AC7SceneColor ALIAS rsf_ac7_scene_color)
+# Capture-derived scene selection and the velocity replay stay with the game; graphics supplies only
+# draw observations and the shared binding-state lease.
+add_library(rsf_ac7_graphics INTERFACE)
+target_link_libraries(rsf_ac7_graphics INTERFACE ReScaleFrame::Graphics rsf_ac7_rust)
+add_library(ReScaleFrame::AC7SceneColor ALIAS rsf_ac7_graphics)
+add_library(ReScaleFrame::AC7VelocityPass ALIAS rsf_ac7_graphics)
 
 add_library(rsf_ac7_memory STATIC src/ac7_memory.c)
 target_include_directories(rsf_ac7_memory PUBLIC include)
@@ -66,13 +56,8 @@ add_library(ReScaleFrame::AC7MotionCapture ALIAS rsf_ac7_motion_capture)
 
 add_library(rsf_ac7_render_scope STATIC src/render_scope_entry.c src/native_renderer_platform.c)
 target_include_directories(rsf_ac7_render_scope PUBLIC include)
-target_link_libraries(rsf_ac7_render_scope PUBLIC ReScaleFrame::GameSDK PRIVATE rsf_ac7_view rsf_ac7_memory rsf_windows_input_facts minhook rsf_build_options ReScaleFrame::RuntimeCommon)
+target_link_libraries(rsf_ac7_render_scope PUBLIC ReScaleFrame::GameSDK PRIVATE rsf_ac7_memory rsf_windows_input_facts minhook rsf_build_options ReScaleFrame::RuntimeCommon)
 # The shader compiler is available without linking the Graphics library.
 target_link_libraries(rsf_ac7_render_scope PUBLIC rsf_shader_compiler)
 target_include_directories(rsf_ac7_render_scope PRIVATE "${CMAKE_SOURCE_DIR}/runtime/graphics/include")
 add_library(ReScaleFrame::AC7RenderScope ALIAS rsf_ac7_render_scope)
-# The AC7 Rust replay uses the shared graphics binding-state lease.
-add_library(rsf_ac7_velocity_pass INTERFACE)
-target_include_directories(rsf_ac7_velocity_pass INTERFACE include)
-target_link_libraries(rsf_ac7_velocity_pass INTERFACE ReScaleFrame::Graphics rsf_ac7_rust)
-add_library(ReScaleFrame::AC7VelocityPass ALIAS rsf_ac7_velocity_pass)

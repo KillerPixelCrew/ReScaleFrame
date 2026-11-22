@@ -1,13 +1,34 @@
 add_library(rsf_sdk_c_header OBJECT sdk_c_header.c)
 rsf_rust_fixture_externs(RSF_FIXTURE_EXTERNS)
-rsf_add_rust_static(rsf_d3d11_host_device_fixtures_rust rsf_rust_d3d11_host_device_fixtures
-    rsf-presentation-fixtures rsf_presentation_fixtures --features d3d11-host-device-fixtures)
+
+# One archive per fixture crate, built with every one of its fixture features. The features only
+# add optional dependencies and windows-sys flags, and each executable names its entry symbol at
+# compile time, so the linker pulls in only what an executable references.
+rsf_add_rust_static(rsf_presentation_fixtures_rust rsf_rust_presentation_fixtures
+    rsf-presentation-fixtures rsf_presentation_fixtures
+    --features d3d11-host-device-fixtures,gl-device-fixture)
+rsf_add_rust_static(rsf_game_sdk_fixtures_rust rsf_rust_game_sdk_fixtures
+    rsf-game-sdk-fixtures rsf_game_sdk_fixtures
+    --features render-host-fixtures,cpu-fixtures,unity-sr-d3d12-fixture,plugin-session-fixture,fg-cpu-fixture,d3d11-host-fixture,vk-latency-fixtures,xell-fixture)
+rsf_add_rust_static(rsf_vulkan_fg_fixtures_rust rsf_rust_vulkan_fg_fixtures
+    rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures
+    --features dispatch,ffx,wsi-dispatch,fsr4-state,dlss,streamline-selected,streamline-dispatch,xess-sr,xess-input-range,xess-device)
+rsf_add_rust_static(rsf_capture_fixtures_rust rsf_rust_capture_fixtures
+    rsf-capture-fixtures rsf_capture_fixtures
+    --features metadata,d3d12,d3d11,vulkan,vulkan-cpu,texture)
+# rsf-ac7 with the engine-address overrides the WARP fixtures need. It replaces the shipping
+# rsf_ac7_rust archive in those executables, after rsf_ac7_render_scope, which does not link either.
+rsf_add_rust_static(rsf_ac7_fixture_rust rsf_rust_ac7_fixture rsf-ac7 rsf_ac7 --features warp-fixture)
+target_link_libraries(rsf_ac7_fixture_rust INTERFACE rsf_shader_compiler rsf_ac7_memory)
+rsf_add_rust_static(rsf_anomaly_fixtures_rust rsf_rust_anomaly_fixtures
+    rsf-anomaly rsf_anomaly
+    --features fg-fixture,input-hook-fixture,overlay-device-fixture,motion-hooks-fixture,motion-binder-fixture,motion-device-fixture,native-hook-fixture,sr-fixtures)
 include("${CMAKE_CURRENT_SOURCE_DIR}/d3d11_host_rendered_fg_device.cmake")
 # Explicit regression investigation only: requires a scratch vendor-SDK root and NVIDIA GPU.
 add_executable(rsf_d3d11_host_shared_sr_device EXCLUDE_FROM_ALL d3d11_host_shared_sr_device.c)
 set_target_properties(rsf_d3d11_host_shared_sr_device PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_d3d11_host_shared_sr_device PRIVATE
-    rsf_d3d11_host_device_fixtures_rust rsf_orchestrator rsf_build_options d3d11 dxgi dxguid)
+    rsf_presentation_fixtures_rust rsf_orchestrator rsf_build_options d3d11 dxgi dxguid)
 find_program(RSF_TEST_RUSTC rustc REQUIRED)
 if(MSVC)
     set(rsf_test_rust_target x86_64-pc-windows-msvc)
@@ -35,19 +56,15 @@ target_compile_definitions(rsf_shader_patch_device_test PRIVATE RSF_SHADER_PATCH
 target_link_libraries(rsf_shader_patch_device_test PRIVATE rsf_shader_patch rsf_build_options)
 add_test(NAME shader_patch_synthetic_device COMMAND rsf_shader_patch_device_test)
 include("${CMAKE_CURRENT_SOURCE_DIR}/d3d11_present_api.cmake")
-rsf_add_rust_static(rsf_render_host_fixtures_rust rsf_rust_render_host_fixtures
-    rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features render-host-fixtures)
 add_executable(rsf_native_window_test game-sdk/cpu_fixture_main.c)
 target_compile_definitions(rsf_native_window_test PRIVATE RSF_CPU_FIXTURE=rsf_test_native_window)
-target_link_libraries(rsf_native_window_test PRIVATE rsf_render_host_fixtures_rust "$<TARGET_LINKER_FILE:rsf_orchestrator>" rsf_build_options)
+target_link_libraries(rsf_native_window_test PRIVATE rsf_game_sdk_fixtures_rust "$<TARGET_LINKER_FILE:rsf_orchestrator>" rsf_build_options)
 add_dependencies(rsf_native_window_test rsf_orchestrator)
 add_test(NAME native_window_contract COMMAND rsf_native_window_test)
 rsf_add_rust_static(rsf_generation_fixtures_rust rsf_rust_generation_fixtures
     rsf-generation-fixtures rsf_generation_fixtures)
 include("${CMAKE_CURRENT_SOURCE_DIR}/d3d11_fg_api.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/overlay_dll_api.cmake")
-rsf_add_rust_static(rsf_cpu_fixtures_rust rsf_rust_cpu_fixtures
-    rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features cpu-fixtures)
 include("${CMAKE_CURRENT_SOURCE_DIR}/anomaly_support.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/anomaly_fg.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/thin_loader.cmake")
@@ -61,11 +78,9 @@ target_compile_definitions(rsf_anomaly_lifecycle_test PRIVATE RSF_ANOMALY_LIFECY
 target_link_libraries(rsf_anomaly_lifecycle_test PRIVATE rsf_game_sdk_fixtures_rust ReScaleFrame::GameSDK rsf_build_options)
 add_dependencies(rsf_anomaly_lifecycle_test rsf_game_anomaly)
 add_test(NAME anomaly_lifecycle_contract COMMAND rsf_anomaly_lifecycle_test "$<TARGET_FILE:rsf_game_anomaly>")
-rsf_add_rust_static(rsf_anomaly_hook_fixture_rust rsf_rust_anomaly_hook_fixture
-    rsf-anomaly rsf_anomaly --features native-hook-fixture)
 add_executable(rsf_anomaly_native_hooks_test anomaly_native_hook_leaves.c ../games/anomaly/src/native_hooks_platform.c)
 target_include_directories(rsf_anomaly_native_hooks_test PRIVATE ../games/anomaly/src)
-target_link_libraries(rsf_anomaly_native_hooks_test PRIVATE rsf_anomaly_hook_fixture_rust minhook rsf_build_options)
+target_link_libraries(rsf_anomaly_native_hooks_test PRIVATE rsf_anomaly_fixtures_rust minhook rsf_build_options)
 add_test(NAME anomaly_native_hooks_contract COMMAND rsf_anomaly_native_hooks_test)
 set_tests_properties(anomaly_native_hooks_contract PROPERTIES TIMEOUT 30)
 set(rsf_anomaly_bootstrap_exe "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/rsf_anomaly_bootstrap_test.exe")
@@ -90,8 +105,6 @@ if(RSF_PWSH_EXECUTABLE)
 endif()
 target_link_libraries(rsf_sdk_c_header PRIVATE ReScaleFrame::GameSDK rsf_build_options)
 
-rsf_add_rust_static(rsf_game_sdk_fixtures_rust rsf_rust_game_sdk_fixtures
-    rsf-game-sdk-fixtures rsf_game_sdk_fixtures)
 add_executable(rsf_plugin_contract game-sdk/contract_main.c)
 
 add_executable(rsf_wingman_camera wingman_camera.c)
@@ -105,8 +118,6 @@ add_test(NAME game_fallout4_plugin_contract COMMAND rsf_plugin_contract
     "$<TARGET_FILE_NAME:rsf_game_fallout4>" fallout4)
 set_tests_properties(game_fallout4_plugin_contract PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:rsf_game_fallout4>")
-rsf_add_rust_static(rsf_unity_sr_d3d12_fixture_rust rsf_rust_unity_sr_d3d12_fixture
-    rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features unity-sr-d3d12-fixture)
 add_executable(rsf_unity_sr_d3d12_test unity_sr_d3d12_preset.c)
 set_target_properties(rsf_unity_sr_d3d12_test PROPERTIES LINKER_LANGUAGE CXX)
 # The toolchain CRT calls the C ABI main from the fixture archive.
@@ -116,23 +127,23 @@ elseif(MINGW)
     target_link_options(rsf_unity_sr_d3d12_test PRIVATE "LINKER:--undefined=main")
 endif()
 target_include_directories(rsf_unity_sr_d3d12_test PRIVATE ../games/unity-mono/include)
-target_link_libraries(rsf_unity_sr_d3d12_test PRIVATE rsf_unity_sr_d3d12_fixture_rust rsf_rdr2_rust rsf_orchestrator rsf_build_options minhook d3d12 dxgi)
+target_link_libraries(rsf_unity_sr_d3d12_test PRIVATE rsf_game_sdk_fixtures_rust rsf_rdr2_rust rsf_orchestrator rsf_build_options minhook d3d12 dxgi)
 add_test(NAME unity_sr_d3d12_contract COMMAND rsf_unity_sr_d3d12_test)
 add_executable(rsf_render_frontend_test game-sdk/cpu_fixture_main.c)
 target_compile_definitions(rsf_render_frontend_test PRIVATE RSF_CPU_FIXTURE=rsf_test_render_frontend)
-target_link_libraries(rsf_render_frontend_test PRIVATE rsf_render_host_fixtures_rust rsf_orchestrator rsf_build_options)
+target_link_libraries(rsf_render_frontend_test PRIVATE rsf_game_sdk_fixtures_rust rsf_orchestrator rsf_build_options)
 add_test(NAME render_frontend_contract COMMAND rsf_render_frontend_test)
 add_executable(rsf_render_frontend_embedded_test game-sdk/cpu_fixture_main.c)
 target_compile_definitions(rsf_render_frontend_embedded_test PRIVATE RSF_CPU_FIXTURE=rsf_test_render_frontend)
-target_link_libraries(rsf_render_frontend_embedded_test PRIVATE rsf_render_host_fixtures_rust ReScaleFrame::OrchestratorCore rsf_build_options)
+target_link_libraries(rsf_render_frontend_embedded_test PRIVATE rsf_game_sdk_fixtures_rust ReScaleFrame::OrchestratorCore rsf_build_options)
 add_test(NAME render_frontend_embedded COMMAND rsf_render_frontend_embedded_test)
 add_executable(rsf_callback_host_abi_test game-sdk/cpu_fixture_main.c)
 target_compile_definitions(rsf_callback_host_abi_test PRIVATE RSF_CPU_FIXTURE=rsf_test_callback_host_abi)
-target_link_libraries(rsf_callback_host_abi_test PRIVATE rsf_render_host_fixtures_rust rsf_orchestrator rsf_build_options)
+target_link_libraries(rsf_callback_host_abi_test PRIVATE rsf_game_sdk_fixtures_rust rsf_orchestrator rsf_build_options)
 add_test(NAME callback_host_abi COMMAND rsf_callback_host_abi_test)
 add_executable(rsf_callback_host_abi_embedded_test game-sdk/cpu_fixture_main.c)
 target_compile_definitions(rsf_callback_host_abi_embedded_test PRIVATE RSF_CPU_FIXTURE=rsf_test_callback_host_abi)
-target_link_libraries(rsf_callback_host_abi_embedded_test PRIVATE rsf_render_host_fixtures_rust ReScaleFrame::OrchestratorCore rsf_build_options)
+target_link_libraries(rsf_callback_host_abi_embedded_test PRIVATE rsf_game_sdk_fixtures_rust ReScaleFrame::OrchestratorCore rsf_build_options)
 add_test(NAME callback_host_abi_embedded COMMAND rsf_callback_host_abi_embedded_test)
 set_tests_properties(callback_host_abi callback_host_abi_embedded PROPERTIES TIMEOUT 30)
 add_executable(rsf_orchestrator_domains loader/main.c)
@@ -159,10 +170,8 @@ add_executable(rsf_gpu_policy_embedded_test generation/main.c)
 target_compile_definitions(rsf_gpu_policy_embedded_test PRIVATE RSF_GENERATION_FIXTURE=rsf_test_gpu_policy)
 target_link_libraries(rsf_gpu_policy_embedded_test PRIVATE rsf_generation_fixtures_rust ReScaleFrame::OrchestratorCore rsf_build_options)
 add_test(NAME gpu_sr_policy_embedded COMMAND rsf_gpu_policy_embedded_test)
-rsf_add_rust_static(rsf_plugin_session_fixture_rust rsf_rust_plugin_session_fixture
-    rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features plugin-session-fixture)
 add_library(rsf_plugin_session_fixture SHARED plugin_session_fixture_throw.c)
-target_link_libraries(rsf_plugin_session_fixture PRIVATE rsf_plugin_session_fixture_rust ReScaleFrame::GameSDK rsf_build_options)
+target_link_libraries(rsf_plugin_session_fixture PRIVATE rsf_game_sdk_fixtures_rust ReScaleFrame::GameSDK rsf_build_options)
 add_executable(rsf_plugin_session_test game-sdk/session_main.c)
 target_link_libraries(rsf_plugin_session_test PRIVATE rsf_game_sdk_fixtures_rust rsf_orchestrator rsf_build_options)
 add_dependencies(rsf_plugin_session_test rsf_plugin_session_fixture)
@@ -227,40 +236,38 @@ target_link_libraries(rsf_module_dump_self PRIVATE ReScaleFrame::LoaderDiagnosti
 target_compile_definitions(rsf_module_dump_self PRIVATE _CRT_SECURE_NO_WARNINGS)
 add_test(NAME module_dump_self COMMAND rsf_module_dump_self "${CMAKE_CURRENT_BINARY_DIR}")
 
-function(rsf_add_capture_fixture target entry feature source)
-    rsf_add_rust_static(${target}_rust ${target}_rust_build
-        rsf-capture-fixtures rsf_capture_fixtures --features ${feature})
+function(rsf_add_capture_fixture target entry source)
     add_executable(${target} ${source})
     target_compile_definitions(${target} PRIVATE RSF_CAPTURE_FIXTURE=${entry})
-    target_link_libraries(${target} PRIVATE ${target}_rust rsf_build_options)
+    target_link_libraries(${target} PRIVATE rsf_capture_fixtures_rust rsf_build_options)
 endfunction()
 
-rsf_add_capture_fixture(rsf_texture_dump rsf_fixture_texture_dump texture capture_fixture_main.c)
+rsf_add_capture_fixture(rsf_texture_dump rsf_fixture_texture_dump capture_fixture_main.c)
 target_link_libraries(rsf_texture_dump PRIVATE ReScaleFrame::GraphicsLeaves ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME texture_dump COMMAND rsf_texture_dump "${CMAKE_CURRENT_BINARY_DIR}")
 
-rsf_add_capture_fixture(rsf_input_dump_test rsf_fixture_input_dump_d3d11 d3d11 capture_fixture_main.c)
+rsf_add_capture_fixture(rsf_input_dump_test rsf_fixture_input_dump_d3d11 capture_fixture_main.c)
 add_library(rsf_input_dump_c_header OBJECT input_dump_c_header.c)
 target_link_libraries(rsf_input_dump_c_header PRIVATE ReScaleFrame::FrameDump rsf_build_options)
 target_link_libraries(rsf_input_dump_test PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options windowscodecs ole32)
 add_test(NAME input_dump COMMAND rsf_input_dump_test "${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties(input_dump PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
-rsf_add_capture_fixture(rsf_input_dump_d3d12 rsf_fixture_input_dump_d3d12 d3d12 capture_fixture_main.c)
+rsf_add_capture_fixture(rsf_input_dump_d3d12 rsf_fixture_input_dump_d3d12 capture_fixture_main.c)
 target_compile_definitions(rsf_input_dump_d3d12 PRIVATE RSF_FRAME_DUMP_STATIC)
 target_link_libraries(rsf_input_dump_d3d12 PRIVATE ReScaleFrame::FrameDump rsf_build_options d3d12 dxgi)
 add_test(NAME input_dump_d3d12 COMMAND rsf_input_dump_d3d12 "${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties(input_dump_d3d12 PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
 if(RSF_FRAME_DUMP_VULKAN_INCLUDE)
-    rsf_add_capture_fixture(rsf_input_dump_vulkan_cpu rsf_fixture_input_dump_vulkan_cpu vulkan-cpu
+    rsf_add_capture_fixture(rsf_input_dump_vulkan_cpu rsf_fixture_input_dump_vulkan_cpu
         capture_vulkan_fixture_main.c)
     target_link_libraries(rsf_input_dump_vulkan_cpu PRIVATE ReScaleFrame::NativeVulkan rsf_build_options)
     add_test(NAME input_dump_vulkan_cpu_linked COMMAND rsf_input_dump_vulkan_cpu "${CMAKE_CURRENT_BINARY_DIR}")
 
     add_executable(rsf_input_dump_vulkan_cpu_dll capture_vulkan_fixture_main.c)
     target_compile_definitions(rsf_input_dump_vulkan_cpu_dll PRIVATE RSF_CAPTURE_FIXTURE=rsf_fixture_input_dump_vulkan_cpu)
-    target_link_libraries(rsf_input_dump_vulkan_cpu_dll PRIVATE rsf_input_dump_vulkan_cpu_rust)
+    target_link_libraries(rsf_input_dump_vulkan_cpu_dll PRIVATE rsf_capture_fixtures_rust)
     target_include_directories(rsf_input_dump_vulkan_cpu_dll PRIVATE
         "$<TARGET_PROPERTY:rsf_frame_dump,INTERFACE_INCLUDE_DIRECTORIES>")
     target_include_directories(rsf_input_dump_vulkan_cpu_dll SYSTEM PRIVATE "${RSF_FRAME_DUMP_VULKAN_INCLUDE}")
@@ -269,7 +276,7 @@ if(RSF_FRAME_DUMP_VULKAN_INCLUDE)
     add_dependencies(rsf_input_dump_vulkan_cpu_dll rsf_orchestrator)
     add_test(NAME input_dump_vulkan_cpu_dll COMMAND rsf_input_dump_vulkan_cpu_dll "${CMAKE_CURRENT_BINARY_DIR}")
 
-    rsf_add_capture_fixture(rsf_input_dump_vulkan rsf_fixture_input_dump_vulkan vulkan
+    rsf_add_capture_fixture(rsf_input_dump_vulkan rsf_fixture_input_dump_vulkan
         capture_vulkan_fixture_main.c)
     target_include_directories(rsf_input_dump_vulkan SYSTEM PRIVATE "${RSF_FRAME_DUMP_VULKAN_INCLUDE}")
     target_compile_definitions(rsf_input_dump_vulkan PRIVATE RSF_RUNTIME_BUILD)
@@ -288,7 +295,7 @@ set_target_properties(rsf_ac7_velocity_shader_test PROPERTIES LINKER_LANGUAGE CX
 if(MINGW)
     target_link_options(rsf_ac7_velocity_shader_test PRIVATE -municode)
 endif()
-target_link_libraries(rsf_ac7_velocity_shader_test PRIVATE ReScaleFrame::AC7RenderScope ReScaleFrame::AC7VelocityPass ReScaleFrame::RuntimeCommon
+target_link_libraries(rsf_ac7_velocity_shader_test PRIVATE ReScaleFrame::AC7RenderScope rsf_ac7_fixture_rust ReScaleFrame::Graphics ReScaleFrame::RuntimeCommon
     ReScaleFrame::GraphicsLeaves rsf_build_options d3d11)
 add_test(NAME ac7_velocity_shader COMMAND rsf_ac7_velocity_shader_test)
 set_tests_properties(ac7_velocity_shader PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
@@ -370,8 +377,6 @@ add_test(NAME fsr_backend COMMAND rsf_fsr_backend)
 
 # Whether a D3D11 texture can be opened by a D3D12 device here at all. Skips with 77 and the
 # HRESULTs when the two runtimes disagree, which under Wine is a fact about the environment.
-rsf_add_rust_static(rsf_presentation_fixtures_rust rsf_rust_presentation_fixtures
-    rsf-presentation-fixtures rsf_presentation_fixtures)
 add_executable(rsf_shared_surface presentation/shared_surface_main.c)
 set_target_properties(rsf_shared_surface PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON
     LINKER_LANGUAGE CXX)
@@ -421,14 +426,12 @@ add_test(NAME skyrim_input_contract COMMAND rsf_skyrim_input)
 
 add_executable(rsf_native_cpu_reservation_test game-sdk/cpu_fixture_main.c)
 target_compile_definitions(rsf_native_cpu_reservation_test PRIVATE RSF_CPU_FIXTURE=rsf_cpu_reservation_fixture)
-target_link_libraries(rsf_native_cpu_reservation_test PRIVATE rsf_cpu_fixtures_rust rsf_native_cpu rsf_build_options)
+target_link_libraries(rsf_native_cpu_reservation_test PRIVATE rsf_game_sdk_fixtures_rust rsf_native_cpu rsf_build_options)
 add_test(NAME native_cpu_reservation_contract COMMAND rsf_native_cpu_reservation_test)
 
-rsf_add_rust_static(rsf_fg_cpu_fixture_rust rsf_rust_fg_cpu_fixture
-    rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features fg-cpu-fixture)
 add_executable(rsf_native_fg_cpu_test game-sdk/cpu_fixture_main.c)
 target_compile_definitions(rsf_native_fg_cpu_test PRIVATE RSF_CPU_FIXTURE=rsf_native_fg_cpu_fixture)
-target_link_libraries(rsf_native_fg_cpu_test PRIVATE rsf_fg_cpu_fixture_rust ReScaleFrame::OrchestratorCore rsf_build_options)
+target_link_libraries(rsf_native_fg_cpu_test PRIVATE rsf_game_sdk_fixtures_rust ReScaleFrame::OrchestratorCore rsf_build_options)
 add_test(NAME native_fg_cpu_contract COMMAND rsf_native_fg_cpu_test)
 set_tests_properties(native_fg_cpu_contract PROPERTIES TIMEOUT 15)
 
@@ -439,13 +442,11 @@ target_link_libraries(rsf_sampler_bias PRIVATE rsf_orchestrator_rust ReScaleFram
 add_test(NAME sampler_bias_device COMMAND rsf_sampler_bias)
 set_tests_properties(sampler_bias_device PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
 
-rsf_add_rust_static(rsf_d3d11_host_fixture_rust rsf_rust_d3d11_host_fixture
-    rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features d3d11-host-fixture)
 add_executable(rsf_d3d11_host_test d3d11_host_c_header.c)
 set_target_properties(rsf_d3d11_host_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON
     LINKER_LANGUAGE CXX)
 target_include_directories(rsf_d3d11_host_test PRIVATE "$<TARGET_PROPERTY:rsf_orchestrator,INTERFACE_INCLUDE_DIRECTORIES>")
-target_link_libraries(rsf_d3d11_host_test PRIVATE rsf_d3d11_host_fixture_rust "$<TARGET_LINKER_FILE:rsf_orchestrator>" rsf_build_options)
+target_link_libraries(rsf_d3d11_host_test PRIVATE rsf_game_sdk_fixtures_rust "$<TARGET_LINKER_FILE:rsf_orchestrator>" rsf_build_options)
 add_dependencies(rsf_d3d11_host_test rsf_orchestrator)
 add_test(NAME d3d11_host_contract COMMAND rsf_d3d11_host_test)
 
@@ -653,7 +654,7 @@ add_test(NAME shared_fg_present_bridge COMMAND rsf_fg_present_bridge_test)
 set_tests_properties(shared_fg_present_bridge PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 target_compile_definitions(rsf_d3d11_present_bridge_test PRIVATE RSF_STREAMLINE_HOST_BUILD)
 # The render scope calls other than create are exported by the rsf-ac7 crate (render_scope.rs).
-target_link_libraries(rsf_d3d11_present_bridge_test PRIVATE rsf_presentation_fixtures_rust rsf_orchestrator_core ReScaleFrame::AC7RenderScope rsf_ac7_rust rsf_build_options d3d11 dxgi dxguid)
+target_link_libraries(rsf_d3d11_present_bridge_test PRIVATE rsf_presentation_fixtures_rust rsf_orchestrator_core ReScaleFrame::AC7RenderScope rsf_ac7_fixture_rust rsf_build_options d3d11 dxgi dxguid)
 # Graphics fixtures must not load game-facing proxy DLLs from the shared artifact directory.
 set_target_properties(rsf_d3d11_present_bridge_test PROPERTIES LINKER_LANGUAGE CXX
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/fixtures/fg/$<CONFIG>")
@@ -677,8 +678,6 @@ set(rsf_vulkan_latency_test_endpoints
     rsf_fgvk_latency_sleep=rsf_test_fgvk_latency_sleep
     rsf_fgvk_latency_marker=rsf_test_fgvk_latency_marker
     rsf_fgvk_latency_get_status=rsf_test_fgvk_latency_get_status)
-rsf_add_rust_static(rsf_vk_latency_fixtures_rust rsf_rust_vk_latency_fixtures
-    rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features vk-latency-fixtures)
 add_executable(rsf_native_latency_vulkan_test game-sdk/cpu_fixture_main.c ../runtime/orchestrator/src/native_latency_vulkan.c)
 target_sources(rsf_native_latency_vulkan_test PRIVATE
     ../runtime/orchestrator/src/latency_amd_vulkan.c
@@ -687,7 +686,7 @@ target_include_directories(rsf_native_latency_vulkan_test PRIVATE ../runtime/orc
 target_compile_definitions(rsf_native_latency_vulkan_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_STREAMLINE_VK=1
     RSF_CPU_FIXTURE=rsf_native_latency_vulkan_fixture
     ${rsf_vulkan_latency_test_endpoints})
-target_link_libraries(rsf_native_latency_vulkan_test PRIVATE rsf_vk_latency_fixtures_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_native_cpu rsf_build_options)
+target_link_libraries(rsf_native_latency_vulkan_test PRIVATE rsf_game_sdk_fixtures_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_native_cpu rsf_build_options)
 add_test(NAME native_latency_vulkan_contract COMMAND rsf_native_latency_vulkan_test)
 find_program(RSF_DOTNET_EXECUTABLE NAMES dotnet)
 if(RSF_DOTNET_EXECUTABLE)
@@ -739,19 +738,15 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_FFX_INCLUDE}
     add_test(NAME native_sr_fsr4_state_contract COMMAND rsf_native_sr_fsr4_state_test)
 endif()
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_XESS_VK_INCLUDE}/xess_fg/xefg_swapchain_d3d12.h" AND EXISTS "${RSF_XESS_VK_INCLUDE}/xell/xell_d3d12.h")
-    rsf_add_rust_static(rsf_xess_device_fixture_rust rsf_rust_xess_device_fixture
-        rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures --features xess-device)
     add_executable(rsf_native_fg_xess_vulkan_test native_fg_xess_vulkan_interop.c)
     set_target_properties(rsf_native_fg_xess_vulkan_test PROPERTIES LINKER_LANGUAGE CXX)
     if(MINGW)
         target_link_options(rsf_native_fg_xess_vulkan_test PRIVATE -municode)
     endif()
-    target_link_libraries(rsf_native_fg_xess_vulkan_test PRIVATE rsf_xess_device_fixture_rust ReScaleFrame::NativeVulkan rsf_build_options)
+    target_link_libraries(rsf_native_fg_xess_vulkan_test PRIVATE rsf_vulkan_fg_fixtures_rust ReScaleFrame::NativeVulkan rsf_build_options)
     add_test(NAME native_fg_xess_vulkan_contract COMMAND rsf_native_fg_xess_vulkan_test)
 endif()
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
-    rsf_add_rust_static(rsf_vulkan_fg_fixtures_rust rsf_rust_vulkan_fg_fixtures
-        rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures --features wsi-dispatch)
     add_executable(rsf_ffx_vulkan_wsi_dispatch_test ffx_vulkan_wsi_dispatch.c)
     set_target_properties(rsf_ffx_vulkan_wsi_dispatch_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON
         LINKER_LANGUAGE CXX)
@@ -759,8 +754,6 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
     target_link_libraries(rsf_ffx_vulkan_wsi_dispatch_test PRIVATE rsf_vulkan_fg_fixtures_rust rsf_build_options)
     add_test(NAME ffx_vulkan_wsi_dispatch COMMAND rsf_ffx_vulkan_wsi_dispatch_test)
     if(EXISTS "${RSF_FFX_VK_INCLUDE}/ffx_api/vk/ffx_api_vk.h")
-        rsf_add_rust_static(rsf_native_ffx_fixtures_rust rsf_rust_native_ffx_fixtures
-            rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures --features ffx)
         # The scenarios replace the SDK module through the host table, so the
         # production leaf is linked without RSF_HAVE_FFX_VK and its host.
         add_executable(rsf_native_ffx_vulkan_fixture vulkan-fg/ffx_fixture.c
@@ -769,7 +762,7 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
             LINKER_LANGUAGE CXX)
         target_include_directories(rsf_native_ffx_vulkan_fixture PRIVATE ../runtime/orchestrator/include)
         target_compile_definitions(rsf_native_ffx_vulkan_fixture PRIVATE RSF_RUNTIME_BUILD)
-        target_link_libraries(rsf_native_ffx_vulkan_fixture PRIVATE rsf_native_ffx_fixtures_rust rsf_orchestrator_rust
+        target_link_libraries(rsf_native_ffx_vulkan_fixture PRIVATE rsf_vulkan_fg_fixtures_rust rsf_orchestrator_rust
             ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::FrameDump rsf_build_options)
         add_test(NAME native_ffx_vulkan_reset_contract COMMAND rsf_native_ffx_vulkan_fixture 0)
         add_test(NAME native_ffx_vulkan_submission_contract COMMAND rsf_native_ffx_vulkan_fixture 1)
@@ -782,7 +775,7 @@ set_tests_properties(latency_host PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
 add_executable(rsf_render_links_test game-sdk/cpu_fixture_main.c)
 target_compile_definitions(rsf_render_links_test PRIVATE RSF_CPU_FIXTURE=rsf_test_render_links)
-target_link_libraries(rsf_render_links_test PRIVATE rsf_render_host_fixtures_rust rsf_orchestrator rsf_build_options)
+target_link_libraries(rsf_render_links_test PRIVATE rsf_game_sdk_fixtures_rust rsf_orchestrator rsf_build_options)
 add_test(NAME render_links COMMAND rsf_render_links_test)
 set_tests_properties(render_links PROPERTIES TIMEOUT 120)
 
@@ -828,16 +821,14 @@ set_source_files_properties("${ac7_view_fixture_object}" PROPERTIES GENERATED TR
 # rsf-ac7 crate builds with its warp-fixture feature beside games/ac7/src/native_renderer.rs.
 add_executable(rsf_ac7_native_graph_test ac7_native_graph.c "${ac7_view_fixture_object}")
 set_target_properties(rsf_ac7_native_graph_test PROPERTIES LINKER_LANGUAGE CXX)
-target_link_libraries(rsf_ac7_native_graph_test PRIVATE ReScaleFrame::AC7RenderScope rsf_ac7_rust ReScaleFrame::GraphicsLeaves rsf_orchestrator minhook rsf_build_options)
+target_link_libraries(rsf_ac7_native_graph_test PRIVATE ReScaleFrame::AC7RenderScope rsf_ac7_fixture_rust ReScaleFrame::GraphicsLeaves rsf_orchestrator minhook rsf_build_options)
 add_test(NAME ac7_native_graph COMMAND rsf_ac7_native_graph_test)
 set_tests_properties(ac7_native_graph PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
-rsf_add_rust_static(rsf_gl_fixtures_rust rsf_rust_gl_fixtures
-    rsf-presentation-fixtures rsf_presentation_fixtures --features gl-device-fixture)
 add_executable(rsf_gl_shared_surface_test presentation/gl_shared_surface_main.c)
 set_target_properties(rsf_gl_shared_surface_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON
     LINKER_LANGUAGE CXX)
-target_link_libraries(rsf_gl_shared_surface_test PRIVATE rsf_gl_fixtures_rust rsf_minecraft_rust ReScaleFrame::OrchestratorCore rsf_build_options opengl32)
+target_link_libraries(rsf_gl_shared_surface_test PRIVATE rsf_presentation_fixtures_rust rsf_minecraft_rust ReScaleFrame::OrchestratorCore rsf_build_options opengl32)
 add_test(NAME gl_shared_surface COMMAND rsf_gl_shared_surface_test)
 set_tests_properties(gl_shared_surface PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
 
@@ -852,46 +843,40 @@ add_test(NAME native_vulkan_device COMMAND rsf_native_vulkan_test --device)
 add_test(NAME native_vulkan_dlss_device COMMAND rsf_native_vulkan_test --dlss)
 set_tests_properties(native_vulkan_device native_vulkan_dlss_device PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
-rsf_add_rust_static(rsf_xess_sr_fixture_rust rsf_rust_xess_sr_fixture
-    rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures --features xess-sr)
 add_executable(rsf_native_xess_vulkan_test native_xess_vulkan_main.c)
 set_target_properties(rsf_native_xess_vulkan_test PROPERTIES LINKER_LANGUAGE CXX)
-target_link_libraries(rsf_native_xess_vulkan_test PRIVATE rsf_xess_sr_fixture_rust ReScaleFrame::NativeVulkan rsf_build_options)
+target_link_libraries(rsf_native_xess_vulkan_test PRIVATE rsf_vulkan_fg_fixtures_rust ReScaleFrame::NativeVulkan rsf_build_options)
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_XESS_VK_INCLUDE}/xess/xess_vk.h")
     target_compile_definitions(rsf_native_xess_vulkan_test PRIVATE RSF_TEST_VULKAN=1)
 endif()
 add_test(NAME native_xess_vulkan_contract COMMAND rsf_native_xess_vulkan_test)
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_XESS_VK_INCLUDE}/xess/xess_vk.h" AND EXISTS "${RSF_FFX_VK_INCLUDE}/ffx_api/vk/ffx_api_vk.h")
-    rsf_add_rust_static(rsf_xess_input_range_fixture_rust rsf_rust_xess_input_range_fixture
-        rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures --features xess-input-range)
     add_executable(rsf_native_xess_input_range_test game-sdk/cpu_fixture_main.c)
     set_target_properties(rsf_native_xess_input_range_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON LINKER_LANGUAGE CXX)
     target_compile_definitions(rsf_native_xess_input_range_test PRIVATE RSF_CPU_FIXTURE=rsf_fixture_xess_input_range)
-    target_link_libraries(rsf_native_xess_input_range_test PRIVATE rsf_xess_input_range_fixture_rust ReScaleFrame::NativeVulkan rsf_build_options)
+    target_link_libraries(rsf_native_xess_input_range_test PRIVATE rsf_vulkan_fg_fixtures_rust ReScaleFrame::NativeVulkan rsf_build_options)
     add_test(NAME native_xess_input_range_contract COMMAND rsf_native_xess_input_range_test)
 endif()
-rsf_add_rust_static(rsf_vulkan_dispatch_fixtures_rust rsf_rust_vulkan_dispatch_fixtures
-    rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures --features dispatch)
 add_executable(rsf_native_fg_vulkan_dispatch_test vulkan-fg/dispatch_fixture.c
     ../runtime/orchestrator/src/native_fg_vulkan_dispatch.c)
 set_target_properties(rsf_native_fg_vulkan_dispatch_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON LINKER_LANGUAGE CXX)
 target_compile_definitions(rsf_native_fg_vulkan_dispatch_test PRIVATE RSF_RUNTIME_BUILD)
 target_include_directories(rsf_native_fg_vulkan_dispatch_test PRIVATE ../runtime/orchestrator/include)
-target_link_libraries(rsf_native_fg_vulkan_dispatch_test PRIVATE rsf_vulkan_dispatch_fixtures_rust rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_build_options)
+target_link_libraries(rsf_native_fg_vulkan_dispatch_test PRIVATE rsf_vulkan_fg_fixtures_rust rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_build_options)
 add_test(NAME native_fg_vulkan_dispatch_contract COMMAND rsf_native_fg_vulkan_dispatch_test)
 add_executable(rsf_native_fg_vulkan_dispatch_xess_test vulkan-fg/dispatch_fixture.c
     ../runtime/orchestrator/src/native_fg_vulkan_dispatch.c)
 set_target_properties(rsf_native_fg_vulkan_dispatch_xess_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON LINKER_LANGUAGE CXX)
 target_compile_definitions(rsf_native_fg_vulkan_dispatch_xess_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_XESS_FG_VK=1)
 target_include_directories(rsf_native_fg_vulkan_dispatch_xess_test PRIVATE ../runtime/orchestrator/include)
-target_link_libraries(rsf_native_fg_vulkan_dispatch_xess_test PRIVATE rsf_vulkan_dispatch_fixtures_rust rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_build_options)
+target_link_libraries(rsf_native_fg_vulkan_dispatch_xess_test PRIVATE rsf_vulkan_fg_fixtures_rust rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_build_options)
 add_test(NAME native_fg_vulkan_dispatch_xess_contract COMMAND rsf_native_fg_vulkan_dispatch_xess_test)
 add_executable(rsf_native_fg_vulkan_dispatch_fsr4_test vulkan-fg/dispatch_fixture.c
     ../runtime/orchestrator/src/native_fg_vulkan_dispatch.c)
 set_target_properties(rsf_native_fg_vulkan_dispatch_fsr4_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON LINKER_LANGUAGE CXX)
 target_compile_definitions(rsf_native_fg_vulkan_dispatch_fsr4_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_FSR4_FG_VK=1)
 target_include_directories(rsf_native_fg_vulkan_dispatch_fsr4_test PRIVATE ../runtime/orchestrator/include)
-target_link_libraries(rsf_native_fg_vulkan_dispatch_fsr4_test PRIVATE rsf_vulkan_dispatch_fixtures_rust rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_build_options)
+target_link_libraries(rsf_native_fg_vulkan_dispatch_fsr4_test PRIVATE rsf_vulkan_fg_fixtures_rust rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_build_options)
 # The Runtime archive defines the production rsf_fsr4gvk_* entries (vulkan_fsr4_fg.rs), so the
 # fixture's fakes carry a fixture prefix and this build of the dispatch calls them by that name.
 foreach(rsf_fsr4_entry create enable_options max_generated status images acquire prepare hudless submitted present_source present destroy drain)
@@ -909,12 +894,10 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_FFX_INCLUDE}
     target_link_libraries(rsf_native_fsr4_fg_bridge_test PRIVATE rsf_presentation_fixtures_rust
         ReScaleFrame::NativeVulkan rsf_build_options dxgi)
     add_test(NAME native_fsr4_fg_bridge_contract COMMAND rsf_native_fsr4_fg_bridge_test)
-    rsf_add_rust_static(rsf_fsr4_fg_state_fixtures_rust rsf_rust_fsr4_fg_state_fixtures
-        rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures --features fsr4-state)
     add_executable(rsf_native_fsr4_fg_state_test game-sdk/cpu_fixture_main.c)
     set_target_properties(rsf_native_fsr4_fg_state_test PROPERTIES LINKER_LANGUAGE CXX)
     target_compile_definitions(rsf_native_fsr4_fg_state_test PRIVATE RSF_CPU_FIXTURE=rsf_fixture_fsr4fg_wsi_state)
-    target_link_libraries(rsf_native_fsr4_fg_state_test PRIVATE rsf_fsr4_fg_state_fixtures_rust
+    target_link_libraries(rsf_native_fsr4_fg_state_test PRIVATE rsf_vulkan_fg_fixtures_rust
         ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_orchestrator_rust rsf_build_options)
     add_test(NAME native_fsr4_fg_state_contract COMMAND rsf_native_fsr4_fg_state_test)
 endif()
@@ -923,10 +906,8 @@ set_tests_properties(native_xess_vulkan_device PROPERTIES TIMEOUT 120 SKIP_RETUR
 
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
     add_executable(rsf_streamline_vulkan_dispatch_test streamline_vulkan_dispatch.cpp)
-    rsf_add_rust_static(rsf_sl_dispatch_fixture_rust rsf_rust_sl_dispatch_fixture
-        rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures --features streamline-dispatch)
     target_include_directories(rsf_streamline_vulkan_dispatch_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
-    target_link_libraries(rsf_streamline_vulkan_dispatch_test PRIVATE rsf_sl_dispatch_fixture_rust rsf_build_options)
+    target_link_libraries(rsf_streamline_vulkan_dispatch_test PRIVATE rsf_vulkan_fg_fixtures_rust rsf_build_options)
     add_test(NAME streamline_vulkan_dispatch_contract COMMAND rsf_streamline_vulkan_dispatch_test)
     add_executable(rsf_native_antilag_vulkan_test game-sdk/cpu_fixture_main.c
         ../runtime/orchestrator/src/native_latency_vulkan.c ../runtime/orchestrator/src/latency_amd_vulkan.c)
@@ -934,31 +915,27 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
         RSF_CPU_FIXTURE=rsf_native_antilag_vulkan_fixture
         ${rsf_vulkan_latency_test_endpoints})
     target_include_directories(rsf_native_antilag_vulkan_test PRIVATE ../runtime/orchestrator/include)
-    target_link_libraries(rsf_native_antilag_vulkan_test PRIVATE rsf_vk_latency_fixtures_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_native_cpu rsf_build_options)
+    target_link_libraries(rsf_native_antilag_vulkan_test PRIVATE rsf_game_sdk_fixtures_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_native_cpu rsf_build_options)
     add_test(NAME native_antilag_vulkan_contract COMMAND rsf_native_antilag_vulkan_test)
     set_tests_properties(native_antilag_vulkan_contract PROPERTIES TIMEOUT 20)
 endif()
 
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_STREAMLINE_INCLUDE}/sl.h")
     add_executable(rsf_streamline_selected_device_test streamline_selected_device.cpp)
-    rsf_add_rust_static(rsf_sl_selected_fixture_rust rsf_rust_sl_selected_fixture
-        rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures --features streamline-selected)
     get_filename_component(rsf_streamline_source_root "${RSF_STREAMLINE_INCLUDE}" DIRECTORY)
     target_include_directories(rsf_streamline_selected_device_test SYSTEM PRIVATE "${rsf_streamline_source_root}" "${RSF_STREAMLINE_INCLUDE}")
-    target_link_libraries(rsf_streamline_selected_device_test PRIVATE rsf_sl_selected_fixture_rust rsf_build_options)
+    target_link_libraries(rsf_streamline_selected_device_test PRIVATE rsf_vulkan_fg_fixtures_rust rsf_build_options)
     add_test(NAME streamline_selected_device_contract COMMAND rsf_streamline_selected_device_test)
     # The production DLSS-G table and its Rust leaves, with the Rust fixture's
     # Streamline session and SDK entries.
     add_executable(rsf_native_fg_dlss_vulkan_test game-sdk/cpu_fixture_main.c
         ../runtime/orchestrator/src/native_fg_dlss_vulkan.c)
     set_target_properties(rsf_native_fg_dlss_vulkan_test PROPERTIES LINKER_LANGUAGE CXX)
-    rsf_add_rust_static(rsf_dlss_vulkan_fixture_rust rsf_rust_dlss_vulkan_fixture
-        rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures --features dlss)
     target_compile_definitions(rsf_native_fg_dlss_vulkan_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_STREAMLINE_VK=1
         RSF_CPU_FIXTURE=rsf_fixture_dlss_run)
     target_include_directories(rsf_native_fg_dlss_vulkan_test PRIVATE ../runtime/orchestrator/include)
     target_include_directories(rsf_native_fg_dlss_vulkan_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
-    target_link_libraries(rsf_native_fg_dlss_vulkan_test PRIVATE rsf_dlss_vulkan_fixture_rust rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::FrameDump rsf_build_options)
+    target_link_libraries(rsf_native_fg_dlss_vulkan_test PRIVATE rsf_vulkan_fg_fixtures_rust rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::FrameDump rsf_build_options)
     add_test(NAME native_fg_dlss_vulkan_contract COMMAND rsf_native_fg_dlss_vulkan_test)
 endif()
 
@@ -1008,16 +985,14 @@ if(TARGET rsf_vendor_census)
     set_tests_properties(vendor_census vendor_census_budget vendor_census_vulkan_streamline vendor_census_fidelityfx_api vendor_census_dllmain PROPERTIES TIMEOUT 120)
 
     if(TARGET rsf_asi_rdr2)
-        rsf_add_rust_static(rsf_rdr2_camera_rust rsf_rust_rdr2_camera rsf-rdr2 rsf_rdr2
-            --features camera-fixture)
+        rsf_add_rust_static(rsf_rdr2_fixtures_rust rsf_rust_rdr2_fixtures rsf-rdr2 rsf_rdr2
+            --features camera-fixture,capture-fixture)
         add_executable(rsf_rdr2_camera rdr2_camera_main.c)
-        target_link_libraries(rsf_rdr2_camera PRIVATE rsf_rdr2_camera_rust minhook user32 rsf_build_options)
+        target_link_libraries(rsf_rdr2_camera PRIVATE rsf_rdr2_fixtures_rust minhook user32 rsf_build_options)
         add_test(NAME rdr2_camera COMMAND rsf_rdr2_camera "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/rdr2-camera-v1.bin")
-        rsf_add_rust_static(rsf_rdr2_capture_rust rsf_rust_rdr2_capture rsf-rdr2 rsf_rdr2
-            --features capture-fixture)
         add_executable(rsf_rdr2_capture rdr2_capture_main.c rdr2_capture_ngx.c ../games/rdr2/src/capture_ngx.c)
         target_compile_definitions(rsf_rdr2_capture PRIVATE RSF_RDR2_CAPTURE_FIXTURE)
-        target_link_libraries(rsf_rdr2_capture PRIVATE rsf_rdr2_capture_rust ReScaleFrame::VendorCensus minhook
+        target_link_libraries(rsf_rdr2_capture PRIVATE rsf_rdr2_fixtures_rust ReScaleFrame::VendorCensus minhook
             d3d12 dxgi d3dcompiler user32 rsf_build_options)
         add_dependencies(rsf_rdr2_capture rsf_census_fx_ngx)
         add_test(NAME rdr2_capture COMMAND rsf_rdr2_capture "${CMAKE_CURRENT_BINARY_DIR}/rdr2-capture")
@@ -1120,21 +1095,19 @@ if(TARGET rsf_godot AND TARGET rsf_unity_package)
 endif()
 
 
-rsf_add_capture_fixture(rsf_capture_metadata rsf_fixture_capture_metadata metadata capture_fixture_main.c)
+rsf_add_capture_fixture(rsf_capture_metadata rsf_fixture_capture_metadata capture_fixture_main.c)
 target_link_libraries(rsf_capture_metadata PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options windowscodecs ole32)
 add_test(NAME capture_metadata_contract COMMAND rsf_capture_metadata "${CMAKE_CURRENT_BINARY_DIR}")
 
 add_executable(rsf_input_receipts_test game-sdk/cpu_fixture_main.c)
 target_compile_definitions(rsf_input_receipts_test PRIVATE RSF_CPU_FIXTURE=rsf_input_receipts_fixture)
-target_link_libraries(rsf_input_receipts_test PRIVATE rsf_cpu_fixtures_rust rsf_native_cpu rsf_build_options)
+target_link_libraries(rsf_input_receipts_test PRIVATE rsf_game_sdk_fixtures_rust rsf_native_cpu rsf_build_options)
 add_test(NAME input_receipts_contract COMMAND rsf_input_receipts_test)
 if(EXISTS "${RSF_XESS_INCLUDE}/xell/xell_d3d12.h" AND
    EXISTS "${RSF_XESS_INCLUDE}/xess_fg/xefg_swapchain_d3d12.h")
-    rsf_add_rust_static(rsf_xell_fixture_rust rsf_rust_xell_fixture
-        rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features xell-fixture)
     add_executable(rsf_xell_sleep_concurrency game-sdk/cpu_fixture_main.c)
     target_compile_definitions(rsf_xell_sleep_concurrency PRIVATE RSF_CPU_FIXTURE=rsf_xell_fixture_run)
-    target_link_libraries(rsf_xell_sleep_concurrency PRIVATE rsf_xell_fixture_rust rsf_orchestrator_rust rsf_build_options)
+    target_link_libraries(rsf_xell_sleep_concurrency PRIVATE rsf_game_sdk_fixtures_rust rsf_orchestrator_rust rsf_build_options)
     add_test(NAME xell_sleep_concurrency_contract COMMAND rsf_xell_sleep_concurrency)
     set_tests_properties(xell_sleep_concurrency_contract PROPERTIES TIMEOUT 10)
 endif()

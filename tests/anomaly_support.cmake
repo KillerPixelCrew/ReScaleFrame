@@ -1,10 +1,8 @@
-rsf_add_rust_static(rsf_anomaly_sr_fixture_rust rsf_rust_anomaly_sr_fixture
-    rsf-anomaly rsf_anomaly --features sr-fixtures)
 
 # CPU history/planning contracts only; these tests do not prove game motion output.
 add_executable(rsf_anomaly_temporal_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_temporal_tests.c")
 target_include_directories(rsf_anomaly_temporal_test PRIVATE "${PROJECT_SOURCE_DIR}")
-target_link_libraries(rsf_anomaly_temporal_test PRIVATE rsf_anomaly_sr_fixture_rust rsf_build_options)
+target_link_libraries(rsf_anomaly_temporal_test PRIVATE rsf_anomaly_fixtures_rust rsf_build_options)
 add_test(NAME anomaly_temporal_contract COMMAND rsf_anomaly_temporal_test)
 add_test(NAME anomaly_temporal_unknown_selection COMMAND rsf_anomaly_temporal_test unknown-case)
 set_tests_properties(anomaly_temporal_unknown_selection PROPERTIES WILL_FAIL TRUE)
@@ -25,7 +23,7 @@ set(RSF_ANOMALY_GEOMETRY_SOURCES
     "${PROJECT_SOURCE_DIR}/games/anomaly/src/native_hooks_platform.c")
 add_executable(rsf_anomaly_geometry_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_geometry_tests.c" ${RSF_ANOMALY_GEOMETRY_SOURCES})
 target_include_directories(rsf_anomaly_geometry_test PRIVATE "${PROJECT_SOURCE_DIR}/games/anomaly/src")
-target_link_libraries(rsf_anomaly_geometry_test PRIVATE rsf_anomaly_sr_fixture_rust minhook rsf_build_options)
+target_link_libraries(rsf_anomaly_geometry_test PRIVATE rsf_anomaly_fixtures_rust minhook rsf_build_options)
 add_test(NAME anomaly_geometry_contract COMMAND rsf_anomaly_geometry_test)
 add_executable(rsf_anomaly_geometry_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_geometry_hooks.c" ${RSF_ANOMALY_GEOMETRY_SOURCES})
 target_include_directories(rsf_anomaly_geometry_hooks_test PRIVATE "${PROJECT_SOURCE_DIR}/games/anomaly/src")
@@ -41,7 +39,7 @@ set_target_properties(rsf_anomaly_overlay_hooks_test PROPERTIES C_STANDARD 11 C_
 target_include_directories(rsf_anomaly_overlay_hooks_test PRIVATE
     "${PROJECT_SOURCE_DIR}/games/anomaly/src" "${PROJECT_SOURCE_DIR}/runtime/orchestrator/include")
 target_link_libraries(rsf_anomaly_overlay_hooks_test PRIVATE
-    rsf_anomaly_overlay_fixture_rust ReScaleFrame::GameSDK ReScaleFrame::Contract minhook rsf_build_options d3d11 dxgi dinput8 dxguid)
+    rsf_anomaly_fixtures_rust ReScaleFrame::GameSDK ReScaleFrame::Contract minhook rsf_build_options d3d11 dxgi dinput8 dxguid)
 add_test(NAME anomaly_overlay_hooks_contract COMMAND rsf_anomaly_overlay_hooks_test)
 set_tests_properties(anomaly_overlay_hooks_contract PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
 
@@ -49,7 +47,7 @@ set_tests_properties(anomaly_overlay_hooks_contract PROPERTIES TIMEOUT 60 SKIP_R
 # tests/anomaly_sr_evidence.py --verify, which is not registered here because it needs the game install.
 add_executable(rsf_anomaly_sr_profile_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_profile.c")
 target_include_directories(rsf_anomaly_sr_profile_test PRIVATE "${PROJECT_SOURCE_DIR}/games/anomaly/src")
-target_link_libraries(rsf_anomaly_sr_profile_test PRIVATE rsf_anomaly_sr_fixture_rust rsf_build_options)
+target_link_libraries(rsf_anomaly_sr_profile_test PRIVATE rsf_anomaly_fixtures_rust rsf_build_options)
 add_test(NAME anomaly_sr_profile_contract COMMAND rsf_anomaly_sr_profile_test)
 set_tests_properties(anomaly_sr_profile_contract PROPERTIES TIMEOUT 30)
 # sr_profile.h is the native projection of sr_profile.rs; refuse any drift between them.
@@ -66,7 +64,7 @@ endif()
 set(RSF_ANOMALY_SR_SRC "${PROJECT_SOURCE_DIR}/games/anomaly/src")
 add_executable(rsf_anomaly_sr_swap_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_swap.c")
 target_include_directories(rsf_anomaly_sr_swap_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
-target_link_libraries(rsf_anomaly_sr_swap_test PRIVATE rsf_anomaly_sr_fixture_rust rsf_build_options)
+target_link_libraries(rsf_anomaly_sr_swap_test PRIVATE rsf_anomaly_fixtures_rust rsf_build_options)
 add_test(NAME anomaly_sr_swap_contract COMMAND rsf_anomaly_sr_swap_test)
 add_test(NAME anomaly_sr_swap_unknown_selection COMMAND rsf_anomaly_sr_swap_test unknown-case)
 set_tests_properties(anomaly_sr_swap_unknown_selection PROPERTIES WILL_FAIL TRUE)
@@ -81,7 +79,7 @@ target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE ReScaleFrame::GameSDK Re
 add_test(NAME anomaly_sr_hooks_contract COMMAND rsf_anomaly_sr_hooks_test)
 add_executable(rsf_anomaly_sr_roundtrip_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_roundtrip.c" "${RSF_ANOMALY_SR_SRC}/sr_d3d11_platform.c")
 target_include_directories(rsf_anomaly_sr_roundtrip_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
-target_link_libraries(rsf_anomaly_sr_roundtrip_test PRIVATE rsf_anomaly_sr_fixture_rust ReScaleFrame::GraphicsLeaves
+target_link_libraries(rsf_anomaly_sr_roundtrip_test PRIVATE rsf_anomaly_fixtures_rust ReScaleFrame::GraphicsLeaves
     ReScaleFrame::Graphics d3d11 dxgi rsf_build_options)
 add_test(NAME anomaly_sr_roundtrip_device COMMAND rsf_anomaly_sr_roundtrip_test)
 set_tests_properties(anomaly_sr_roundtrip_device PROPERTIES SKIP_RETURN_CODE 77)
@@ -94,31 +92,25 @@ set_tests_properties(anomaly_sr_swap_contract anomaly_sr_swap_unknown_selection 
 # deployed core variants (tools/anomaly_motion_deploy.py output, local only; 77 when absent) through the Rust
 # deployed-tree loader, b13 packers and invalidation replay. Neither runs game code.
 # The device fixtures are Rust (motion/device_fixture/*_device.rs) behind C11 launchers.
-rsf_add_rust_static(rsf_anomaly_motion_binder_fixture_rust rsf_rust_anomaly_motion_binder_fixture
-    rsf-anomaly rsf_anomaly --features motion-binder-fixture)
 add_executable(rsf_anomaly_motion_contract_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_contract_main.c")
 set_target_properties(rsf_anomaly_motion_contract_test PROPERTIES LINKER_LANGUAGE CXX)
-target_link_libraries(rsf_anomaly_motion_contract_test PRIVATE rsf_anomaly_motion_binder_fixture_rust
+target_link_libraries(rsf_anomaly_motion_contract_test PRIVATE rsf_anomaly_fixtures_rust
     bcrypt ReScaleFrame::GameSDK ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME anomaly_motion_contract COMMAND rsf_anomaly_motion_contract_test)
 add_test(NAME anomaly_motion_unknown_selection COMMAND rsf_anomaly_motion_contract_test unknown-case)
 set_tests_properties(anomaly_motion_unknown_selection PROPERTIES WILL_FAIL TRUE)
-rsf_add_rust_static(rsf_anomaly_motion_device_fixture_rust rsf_rust_anomaly_motion_device_fixture
-    rsf-anomaly rsf_anomaly --features motion-device-fixture)
 add_executable(rsf_anomaly_motion_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_device.c")
 set_target_properties(rsf_anomaly_motion_device_test PROPERTIES LINKER_LANGUAGE CXX)
-target_link_libraries(rsf_anomaly_motion_device_test PRIVATE rsf_anomaly_motion_device_fixture_rust ReScaleFrame::Graphics
+target_link_libraries(rsf_anomaly_motion_device_test PRIVATE rsf_anomaly_fixtures_rust ReScaleFrame::Graphics
     bcrypt d3d11 d3dcompiler dxgi dxguid rsf_build_options)
 add_test(NAME anomaly_motion_device COMMAND rsf_anomaly_motion_device_test)
 set_tests_properties(anomaly_motion_device PROPERTIES SKIP_RETURN_CODE 77)
 set_tests_properties(anomaly_motion_contract anomaly_motion_unknown_selection anomaly_motion_device PROPERTIES TIMEOUT 300)
 # The geometry flush detour (redirected onto a fixture) calls the motion stage's flush slot after the original.
-rsf_add_rust_static(rsf_anomaly_motion_hook_fixture_rust rsf_rust_anomaly_motion_hook_fixture
-    rsf-anomaly rsf_anomaly --features motion-hooks-fixture)
 add_executable(rsf_anomaly_motion_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_hooks_native.c"
     ${RSF_ANOMALY_GEOMETRY_SOURCES})
 target_include_directories(rsf_anomaly_motion_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
-target_link_libraries(rsf_anomaly_motion_hooks_test PRIVATE rsf_anomaly_motion_hook_fixture_rust
+target_link_libraries(rsf_anomaly_motion_hooks_test PRIVATE rsf_anomaly_fixtures_rust
     minhook rsf_build_options)
 add_test(NAME anomaly_motion_hooks_contract COMMAND rsf_anomaly_motion_hooks_test)
 set_tests_properties(anomaly_motion_hooks_contract PROPERTIES TIMEOUT 60)
@@ -129,7 +121,7 @@ if(MSVC)
 else()
     set(RSF_ANOMALY_MOTION_TESS_TRIPLE x86_64-pc-windows-gnu)
 endif()
-set(RSF_ANOMALY_MOTION_TESS_CARGO_DIR "${CMAKE_BINARY_DIR}/cargo/anomaly-motion-tess-device")
+set(RSF_ANOMALY_MOTION_TESS_CARGO_DIR "${CMAKE_BINARY_DIR}/cargo")
 set(RSF_ANOMALY_MOTION_TESS_PROFILE "$<IF:$<CONFIG:Debug>,debug,release>")
 set(RSF_ANOMALY_MOTION_TESS_EXE
     "${RSF_ANOMALY_MOTION_TESS_CARGO_DIR}/${RSF_ANOMALY_MOTION_TESS_TRIPLE}/${RSF_ANOMALY_MOTION_TESS_PROFILE}/examples/anomaly_motion_tess_device.exe")
@@ -146,7 +138,7 @@ set_tests_properties(anomaly_motion_tess_device PROPERTIES SKIP_RETURN_CODE 77 T
 # preferred; 77 without deployment, d3dcompiler_43 or hardware): a skinned PN/HM mover against the CPU model.
 add_executable(rsf_anomaly_motion_tess_chain_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_tess_chain_device.c")
 set_target_properties(rsf_anomaly_motion_tess_chain_device_test PROPERTIES LINKER_LANGUAGE CXX)
-target_link_libraries(rsf_anomaly_motion_tess_chain_device_test PRIVATE rsf_anomaly_motion_device_fixture_rust ReScaleFrame::Graphics
+target_link_libraries(rsf_anomaly_motion_tess_chain_device_test PRIVATE rsf_anomaly_fixtures_rust ReScaleFrame::Graphics
     bcrypt d3d11 d3dcompiler dxgi dxguid rsf_build_options)
 add_test(NAME anomaly_motion_tess_chain_device COMMAND rsf_anomaly_motion_tess_chain_device_test)
 set_tests_properties(anomaly_motion_tess_chain_device PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
@@ -154,7 +146,7 @@ set_tests_properties(anomaly_motion_tess_chain_device PROPERTIES SKIP_RETURN_COD
 # few-pixel mover 100 m away (local deployment, NVIDIA adapter preferred; 77 without deployment, d3dcompiler_43 or hardware).
 add_executable(rsf_anomaly_motion_far_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_far_device.c")
 set_target_properties(rsf_anomaly_motion_far_device_test PROPERTIES LINKER_LANGUAGE CXX)
-target_link_libraries(rsf_anomaly_motion_far_device_test PRIVATE rsf_anomaly_motion_device_fixture_rust ReScaleFrame::Graphics
+target_link_libraries(rsf_anomaly_motion_far_device_test PRIVATE rsf_anomaly_fixtures_rust ReScaleFrame::Graphics
     bcrypt d3d11 d3dcompiler dxgi dxguid rsf_build_options)
 add_test(NAME anomaly_motion_far_device COMMAND rsf_anomaly_motion_far_device_test)
 set_tests_properties(anomaly_motion_far_device PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
@@ -175,7 +167,7 @@ set_tests_properties(anomaly_sr_jitter_unknown_selection PROPERTIES WILL_FAIL TR
 add_executable(rsf_anomaly_sr_jitter_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_jitter_device.c")
 set_target_properties(rsf_anomaly_sr_jitter_device_test PROPERTIES LINKER_LANGUAGE CXX)
 target_include_directories(rsf_anomaly_sr_jitter_device_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
-target_link_libraries(rsf_anomaly_sr_jitter_device_test PRIVATE rsf_anomaly_sr_fixture_rust d3d11 dxgi rsf_build_options)
+target_link_libraries(rsf_anomaly_sr_jitter_device_test PRIVATE rsf_anomaly_fixtures_rust d3d11 dxgi rsf_build_options)
 add_test(NAME anomaly_sr_jitter_device COMMAND rsf_anomaly_sr_jitter_device_test)
 set_tests_properties(anomaly_sr_jitter_device PROPERTIES SKIP_RETURN_CODE 77)
 set_tests_properties(anomaly_sr_jitter_contract anomaly_sr_jitter_unknown_selection anomaly_sr_jitter_device PROPERTIES TIMEOUT 120)
@@ -194,14 +186,14 @@ foreach(rsf_sr5_client rsf_anomaly_sr_runtime_api_test rsf_anomaly_sr_temporal_d
     if(rsf_sr5_client STREQUAL "rsf_anomaly_sr_runtime_api_test")
         add_executable(${rsf_sr5_client} "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_runtime_api_bridge.c")
         set_target_properties(${rsf_sr5_client} PROPERTIES LINKER_LANGUAGE CXX)
-        target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_sr_fixture_rust "$<TARGET_LINKER_FILE:rsf_orchestrator>")
+        target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_fixtures_rust "$<TARGET_LINKER_FILE:rsf_orchestrator>")
         add_dependencies(${rsf_sr5_client} rsf_orchestrator)
     else()
         add_executable(${rsf_sr5_client} "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_temporal_device.c"
             "${RSF_ANOMALY_SR_SRC}/sr_d3d11_platform.c")
         # The fixture calls the Runtime's motion passes directly, which only the Runtime archive
         # defines; that archive also defines the SR API, so this test links it instead of the DLL.
-        target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_sr_fixture_rust rsf_orchestrator_rust
+        target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_fixtures_rust rsf_orchestrator_rust
             ReScaleFrame::Graphics d3d11 dxgi)
     endif()
     target_include_directories(${rsf_sr5_client} PRIVATE "${RSF_ANOMALY_SR_SRC}"
@@ -263,21 +255,19 @@ set_tests_properties(anomaly_sr_sun_cascades_contract PROPERTIES TIMEOUT 30)
 add_test(NAME anomaly_sr_reconstruction_window_contract COMMAND rsf_anomaly_sr_swap_test stage3_position_reconstruction)
 set_tests_properties(anomaly_sr_reconstruction_window_contract PROPERTIES TIMEOUT 30)
 
-target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE rsf_anomaly_sr_fixture_rust)
+target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE rsf_anomaly_fixtures_rust)
 
-rsf_add_rust_static(rsf_anomaly_input_fixture_rust rsf_rust_anomaly_input_fixture
-    rsf-anomaly rsf_anomaly --features input-hook-fixture)
 add_executable(rsf_anomaly_input_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_input_hooks.c")
 set_target_properties(rsf_anomaly_input_hooks_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)
 target_include_directories(rsf_anomaly_input_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
-target_link_libraries(rsf_anomaly_input_hooks_test PRIVATE rsf_anomaly_input_fixture_rust ReScaleFrame::GameSDK rsf_build_options)
+target_link_libraries(rsf_anomaly_input_hooks_test PRIVATE rsf_anomaly_fixtures_rust ReScaleFrame::GameSDK rsf_build_options)
 add_test(NAME anomaly_input_hooks_standard_contract COMMAND rsf_anomaly_input_hooks_test standard)
 add_test(NAME anomaly_input_hooks_avx_contract COMMAND rsf_anomaly_input_hooks_test avx)
 add_executable(rsf_latency_event_contract_test "${CMAKE_CURRENT_LIST_DIR}/game-sdk/cpu_fixture_main.c")
-target_link_libraries(rsf_latency_event_contract_test PRIVATE rsf_cpu_fixtures_rust rsf_native_cpu rsf_build_options)
+target_link_libraries(rsf_latency_event_contract_test PRIVATE rsf_game_sdk_fixtures_rust rsf_native_cpu rsf_build_options)
 target_compile_definitions(rsf_latency_event_contract_test PRIVATE RSF_CPU_FIXTURE=rsf_latency_events_fixture)
 add_test(NAME latency_input_event_contract COMMAND rsf_latency_event_contract_test)
 add_executable(rsf_latency_antilag_test "${CMAKE_CURRENT_LIST_DIR}/game-sdk/cpu_fixture_main.c")
 target_compile_definitions(rsf_latency_antilag_test PRIVATE RSF_CPU_FIXTURE=rsf_antilag_fixture)
-target_link_libraries(rsf_latency_antilag_test PRIVATE rsf_cpu_fixtures_rust rsf_orchestrator_rust rsf_build_options)
+target_link_libraries(rsf_latency_antilag_test PRIVATE rsf_game_sdk_fixtures_rust rsf_orchestrator_rust rsf_build_options)
 add_test(NAME latency_antilag2_contract COMMAND rsf_latency_antilag_test)

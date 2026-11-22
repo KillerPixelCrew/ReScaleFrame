@@ -1,3 +1,8 @@
+# Every archive builds in the one target directory, so each dependency compiles once. Cargo writes a
+# package's archive to <archive>.lib whatever its features, and a second build of the package
+# (the plugin entry, the fixtures) would overwrite the first, so each build copies its archive to a
+# file named for its own target. Builds of one package run one after another so that the copy is of
+# its own build.
 function(rsf_add_rust_static target build_target package archive)
     find_program(RSF_CARGO cargo REQUIRED)
     if(MSVC)
@@ -6,17 +11,23 @@ function(rsf_add_rust_static target build_target package archive)
         set(rust_target x86_64-pc-windows-gnu)
     endif()
     set(cargo_dir "${CMAKE_BINARY_DIR}/cargo")
-    if(ARGN)
-        set(cargo_dir "${cargo_dir}/${package}-${target}")
-    endif()
     set(profile "$<IF:$<CONFIG:Debug>,debug,release>")
-    set(rust_archive "${cargo_dir}/${rust_target}/${profile}/${CMAKE_STATIC_LIBRARY_PREFIX}${archive}${CMAKE_STATIC_LIBRARY_SUFFIX}")
+    set(artifacts "${cargo_dir}/${rust_target}/${profile}")
+    set(rust_archive "${artifacts}/archives/${CMAKE_STATIC_LIBRARY_PREFIX}${target}${CMAKE_STATIC_LIBRARY_SUFFIX}")
     add_custom_target(${build_target}
         COMMAND "${RSF_CARGO}" build --locked -p ${package} ${ARGN}
             --target ${rust_target} --target-dir "${cargo_dir}" $<$<NOT:$<CONFIG:Debug>>:--release>
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${artifacts}/archives"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${artifacts}/${CMAKE_STATIC_LIBRARY_PREFIX}${archive}${CMAKE_STATIC_LIBRARY_SUFFIX}" "${rust_archive}"
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
         BYPRODUCTS "${rust_archive}"
         COMMAND_EXPAND_LISTS VERBATIM)
+    get_property(previous GLOBAL PROPERTY RSF_RUST_BUILD_${package})
+    if(previous)
+        add_dependencies(${build_target} ${previous})
+    endif()
+    set_property(GLOBAL PROPERTY RSF_RUST_BUILD_${package} ${build_target})
     add_library(${target} INTERFACE)
     add_dependencies(${target} ${build_target})
     target_link_libraries(${target} INTERFACE "${rust_archive}" ntdll userenv ws2_32 dbghelp)
