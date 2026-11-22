@@ -160,17 +160,11 @@ if(Python3_Interpreter_FOUND)
         --measure-self-test)
     set_tests_properties(anomaly_sr_measure_self_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 endif()
-# SR Stages 4 and 5 (section 12). The pass contract checks sr_pass.h on the CPU. The Runtime API contract is a
+# SR Stages 4 and 5 (section 12). The Rust pass tests cover the CPU path. The Runtime API contract is a
 # client that imports ReScaleFrame.Runtime.dll like a carrier-loaded adapter and checks rsf_get_d3d11_sr_api plus the
 # adapter's table validation. The device fixture runs the production decode/resolve parameters and the prepare and
 # reinsert passes on any D3D11 device; its provider case needs the vendor runtimes in the package layout
 # (<root>/{streamline,fidelityfx,xess}) and an NVIDIA adapter, and is registered when RSF_ANOMALY_SR_VENDOR_ROOT exists.
-add_executable(rsf_anomaly_sr_pass_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_pass.cpp")
-target_include_directories(rsf_anomaly_sr_pass_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
-target_link_libraries(rsf_anomaly_sr_pass_test PRIVATE rsf_anomaly_rust ReScaleFrame::GameSDK ReScaleFrame::Graphics rsf_build_options)
-add_test(NAME anomaly_sr_pass_contract COMMAND rsf_anomaly_sr_pass_test)
-add_test(NAME anomaly_sr_pass_unknown_selection COMMAND rsf_anomaly_sr_pass_test unknown-case)
-set_tests_properties(anomaly_sr_pass_unknown_selection PROPERTIES WILL_FAIL TRUE)
 foreach(rsf_sr5_client rsf_anomaly_sr_runtime_api_test rsf_anomaly_sr_temporal_device_test)
     if(rsf_sr5_client STREQUAL "rsf_anomaly_sr_runtime_api_test")
         add_executable(${rsf_sr5_client} "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_runtime_api.cpp")
@@ -219,7 +213,7 @@ if(RSF_ANOMALY_SR_VENDOR_ROOT AND EXISTS "${RSF_ANOMALY_SR_VENDOR_ROOT}/fidelity
         COMMAND rsf_sr_backend_switch_device_test "${rsf_anomaly_sr_vendor_native}" fsr3-start)
     set_tests_properties(sr_backend_switch_fsr3_start PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
 endif()
-set_tests_properties(anomaly_sr_pass_contract anomaly_sr_pass_unknown_selection anomaly_sr_runtime_api_contract
+set_tests_properties(anomaly_sr_runtime_api_contract
     anomaly_sr_temporal_device PROPERTIES TIMEOUT 120)
 # Stage 5 is part of sr_stage.cpp, which the hooks contract links.
 target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE rsf_anomaly_sr_temporal)

@@ -285,7 +285,7 @@ generate("games/anomaly/src/sr_swap_abi.rs", "games/anomaly/src/sr_swap_platform
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]"])
 generate("games/anomaly/src/sr_stage_abi.rs", "games/anomaly/src/sr_stage_platform.h",
          "rsf_anomaly_sr_(log|settings|stage_(config|platform)|driver_config|jitter_(state|sample|uv|sequence)|burst_(gate|verdict)|plan|frame_reads|controller|"
-         "camera|pass(_inputs)?|planes|pose|reset_facts|motion_target|timer|choices)",
+         "camera|pass(_inputs)?|reset_facts|motion_target|timer|choices)",
          "RSF_ANOMALY_SR_.*", [],
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "use crate::sr_d3d11::DrawViews as rsf_sr_draw_views;",

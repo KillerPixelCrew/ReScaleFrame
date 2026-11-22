@@ -369,3 +369,38 @@ choose and default the Anomaly SR backend.**
   jitter, capture, threshold and backend-admission cases. This removes three
   native INI reader wrappers and the unused native scale setter. The native
   hook fixture still checks guard refusal and native lifecycle wiring.
+
+
+### SR pass fixture port and remaining native boundaries
+
+Removed `tests/anomaly_sr_pass.cpp`. The Rust pass fixtures in
+`games/anomaly/src/sr_pass/tests.rs` cover motion validity, finite standard
+depth, rectangles, resource identity, reprojection, pass refusals, reset
+precedence and camera cuts. The fixture also submits failed inputs through
+the retained C entry and checks that it clears the output record. The
+camera, pose and reset adapters used only by the old C++ fixture were
+removed from `sr_pass.h`, `sr_pass.rs`, the private stage header and its
+bindings. The remaining `sr_pass.h` interfaces build the typed device
+fixtures and provide their motion reference.
+
+`sr_stage.cpp`, `sr_stage.h` and `sr_stage_platform.h` retain the native
+read, hook, trampoline, D3D11 and bootstrap interfaces. Verified RVA and
+layout data in `sr_profile.h` continues to participate in Standard and AVX
+build profile tables, engine probes and the evidence scripts. The D3D11
+files retain COM and shader compiler calls, native descriptor handling and
+typed wrappers for the D3D11 device fixtures. The native hook, profile,
+Runtime API and GPU round-trip fixtures exercise those boundaries and
+remain in CMake. The CMake entries for the deleted CPU-only pass and
+reconstruction executables were removed. The tests replacing them now
+live in the Anomaly Cargo package.
+
+
+The source check matched all 75 stage, 11 swap and 23 D3D11 callback
+slots across the C declarations, Rust declarations and designated native
+initializers. Stage and swap offsets matched the checked-in assertions.
+It also matched the 72-byte position layout, 32-byte position callback
+table, admission ABI version, Auto value and exported startup and admission
+names. The named-table bind seam used by synthetic Runtime API fixtures
+continues to exercise legacy startup directly. Production Stage 5 requires
+the admission and selected-provider exports. Git whitespace checks passed.
+Binding regeneration, builds, lint, fixtures and device runs remain pending.

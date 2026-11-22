@@ -2,7 +2,7 @@
 #pragma once
 // SR Stages 4 and 5: what the adapter hands the shared RSF SR pipeline at the S-B seam
 // (docs/research/anomaly-sr-seam.md section 12). Pure rules, no engine memory and no D3D, so
-// tests/anomaly_sr_pass.cpp checks every one of them without the game.
+// the Rust pass fixtures exercise the record and camera math without the game.
 //
 // Conventions. X-Ray Fmatrix bytes are row-major with ROW vectors (clip = v * mView * mProject), which is also the
 // RSF camera convention (rsf_camera_frame, consumed by native_sr.cpp and the dense motion resolve as
@@ -66,58 +66,14 @@ struct ViewCamera {
     Matrix view{}, projection{};
     bool valid{};
 };
-// build_projection_HAT (xrCore/_matrix.h:632-659): _33 = Q = f/(f-n), _43 = -Q*n, _34 = 1, _44 = 0; standard
-// (not inverted) depth d = Q + _43 / z. Element (row r, column c) is index r*4+c.
-struct Planes { float near_plane{}, far_plane{}, vertical_fov{}; bool valid{}; };
-inline Planes projection_planes(const Matrix& p) noexcept {
-    float projection[16]{};
-    std::copy(p.begin(), p.end(), projection);
-    rsf_anomaly_sr_planes out{};
-    rsf_anomaly_sr_projection_planes(&projection, &out);
-    return {out.near_plane, out.far_plane, out.vertical_fov, out.valid};
-}
-
-// Camera position (row 3) and forward (row 2) of view_to_world = inverse(view).
-struct Pose { double position[3]{}, forward[3]{}; bool valid{}; };
-inline Pose pose_of(const Matrix& v) noexcept {
-    float view[16]{};
-    std::copy(v.begin(), v.end(), view);
-    rsf_anomaly_sr_pose out{};
-    rsf_anomaly_sr_pose_of(&view, &out);
-    return {{out.position[0], out.position[1], out.position[2]},
-        {out.forward[0], out.forward[1], out.forward[2]}, out.valid};
-}
-
-// Camera displacement in metres and change in forward direction in degrees.
-struct CutRule { float distance{4.0f}, degrees{45.0f}; };
-inline bool camera_cut(const Pose& previous, const Pose& current, const CutRule& rule) noexcept {
-    const auto to_c = [](const Pose& p) {
-        return rsf_anomaly_sr_pose{{p.position[0], p.position[1], p.position[2]},
-            {p.forward[0], p.forward[1], p.forward[2]}, p.valid};
-    };
-    const auto a = to_c(previous), b = to_c(current);
-    return rsf_anomaly_sr_camera_cut(&a, &b, rule.distance, rule.degrees);
-}
-
 // ---- history breaks --------------------------------------------------------------------------------------------------
 enum class ResetReason : uint8_t { None, First, Sequence, Cut, Settings, Device, Count };
-inline const char* reset_name(ResetReason reason) noexcept {
-    static constexpr const char* names[] = {"none", "first", "sequence", "cut", "settings", "device"};
-    const auto i = static_cast<std::size_t>(reason);
-    return i < std::size(names) ? names[i] : "unknown";
-}
 struct ResetFacts {
     bool first{}, device{}, settings{}, sequence{}, cut{};
 };
 inline rsf_anomaly_sr_reset_facts reset_facts(const ResetFacts& facts) noexcept {
     return {facts.first, facts.device, facts.settings, facts.sequence, facts.cut};
 }
-// The pipeline separately resets on rectangle, session or non-consecutive native_frame changes.
-inline ResetReason reset_reason(const ResetFacts& facts) noexcept {
-    const auto input = reset_facts(facts);
-    return static_cast<ResetReason>(rsf_anomaly_sr_reset_reason(&input));
-}
-
 // ---- the pass ----------------------------------------------------------------------------------------------------
 struct PassInputs {
     uint64_t session{};                 // adapter SR session (QPC at install)
@@ -136,13 +92,6 @@ struct PassInputs {
     void* exposure{};                   // 1x1 R32_FLOAT, or null for backend auto exposure
 };
 enum class PassError : uint8_t { None, Sizes, Camera, Projection, Jitter, Resources };
-inline const char* pass_error_name(PassError e) noexcept {
-    static constexpr const char* names[] = {"none", "sizes", "camera", "projection", "jitter", "resources"};
-    const auto i = static_cast<std::size_t>(e);
-    return i < std::size(names) ? names[i] : "unknown";
-}
-inline constexpr uint64_t main_view_key = RSF_ANOMALY_SR_MAIN_VIEW_KEY;
-
 inline rsf_anomaly_sr_pass_inputs pass_inputs(const PassInputs& in) noexcept {
     const auto camera = [](const ViewCamera& input) {
         rsf_anomaly_sr_camera out{};

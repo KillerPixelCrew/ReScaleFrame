@@ -530,46 +530,6 @@ impl Default for rsf_anomaly_sr_pass_inputs {
 }
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
-pub struct rsf_anomaly_sr_planes {
-    pub near_plane: f32,
-    pub far_plane: f32,
-    pub vertical_fov: f32,
-    pub valid: bool,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_anomaly_sr_planes"][::core::mem::size_of::<rsf_anomaly_sr_planes>() - 16usize];
-    ["Alignment of rsf_anomaly_sr_planes"]
-        [::core::mem::align_of::<rsf_anomaly_sr_planes>() - 4usize];
-    ["Offset of field: rsf_anomaly_sr_planes::near_plane"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_planes, near_plane) - 0usize];
-    ["Offset of field: rsf_anomaly_sr_planes::far_plane"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_planes, far_plane) - 4usize];
-    ["Offset of field: rsf_anomaly_sr_planes::vertical_fov"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_planes, vertical_fov) - 8usize];
-    ["Offset of field: rsf_anomaly_sr_planes::valid"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_planes, valid) - 12usize];
-};
-#[repr(C)]
-#[derive(Default, Copy, Clone)]
-pub struct rsf_anomaly_sr_pose {
-    pub position: [f64; 3usize],
-    pub forward: [f64; 3usize],
-    pub valid: bool,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_anomaly_sr_pose"][::core::mem::size_of::<rsf_anomaly_sr_pose>() - 56usize];
-    ["Alignment of rsf_anomaly_sr_pose"][::core::mem::align_of::<rsf_anomaly_sr_pose>() - 8usize];
-    ["Offset of field: rsf_anomaly_sr_pose::position"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_pose, position) - 0usize];
-    ["Offset of field: rsf_anomaly_sr_pose::forward"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_pose, forward) - 24usize];
-    ["Offset of field: rsf_anomaly_sr_pose::valid"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_pose, valid) - 48usize];
-};
-#[repr(C)]
-#[derive(Default, Copy, Clone)]
 pub struct rsf_anomaly_sr_reset_facts {
     pub first: bool,
     pub device: bool,

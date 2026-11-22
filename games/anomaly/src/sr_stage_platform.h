@@ -159,14 +159,6 @@ typedef struct rsf_anomaly_sr_pass_inputs {
     void *color, *color_output, *depth, *motion, *exposure;
 } rsf_anomaly_sr_pass_inputs;
 
-typedef struct rsf_anomaly_sr_planes {
-    float near_plane, far_plane, vertical_fov;
-    bool valid;
-} rsf_anomaly_sr_planes;
-typedef struct rsf_anomaly_sr_pose {
-    double position[3], forward[3];
-    bool valid;
-} rsf_anomaly_sr_pose;
 typedef struct rsf_anomaly_sr_reset_facts {
     bool first, device, settings, sequence, cut;
 } rsf_anomaly_sr_reset_facts;
@@ -187,10 +179,6 @@ typedef struct rsf_anomaly_sr_reset_facts {
 extern "C" {
 #endif
 uint8_t rsf_anomaly_sr_build_pass(const rsf_anomaly_sr_pass_inputs*, struct rsf_game_render_pass*);
-void rsf_anomaly_sr_projection_planes(const float (*projection)[16], rsf_anomaly_sr_planes*);
-void rsf_anomaly_sr_pose_of(const float (*view)[16], rsf_anomaly_sr_pose*);
-bool rsf_anomaly_sr_camera_cut(const rsf_anomaly_sr_pose*, const rsf_anomaly_sr_pose*, float distance, float degrees);
-uint8_t rsf_anomaly_sr_reset_reason(const rsf_anomaly_sr_reset_facts*);
 #ifdef __cplusplus
 }
 #endif

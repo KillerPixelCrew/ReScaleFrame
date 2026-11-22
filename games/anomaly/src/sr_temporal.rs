@@ -300,7 +300,7 @@ struct Setup {
     xess: CString,
 }
 
-fn motion_decode_params() -> rsf_motion_decode_params {
+pub(crate) fn motion_decode_params() -> rsf_motion_decode_params {
     rsf_motion_decode_params {
         struct_size: size_of::<rsf_motion_decode_params>() as u32,
         scale_x: 1.0,

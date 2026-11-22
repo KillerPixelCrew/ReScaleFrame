@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
-use crate::camera::{self, EngineMatrix};
+use crate::camera;
 use crate::sr_stage_abi::{
     RSF_ANOMALY_SR_MAIN_VIEW_KEY, RSF_ANOMALY_SR_MOTION_CAMERA_INCLUDED,
-    RSF_ANOMALY_SR_MOTION_TO_UV, rsf_anomaly_sr_pass_inputs, rsf_anomaly_sr_planes,
-    rsf_anomaly_sr_pose,
+    RSF_ANOMALY_SR_MOTION_TO_UV, rsf_anomaly_sr_pass_inputs,
 };
 use rsf_game_sys::{
     RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR,
@@ -16,6 +15,7 @@ pub(crate) type PassInputs = rsf_anomaly_sr_pass_inputs;
 
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(Debug))]
 pub(crate) enum ResetReason {
     None,
     First,
@@ -43,6 +43,7 @@ pub(crate) fn reset_reason(facts: &ResetFacts) -> ResetReason {
 
 #[repr(u8)]
 #[derive(Clone, Copy)]
+#[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 pub(crate) enum PassError {
     Sizes = 1,
     Camera,
@@ -169,51 +170,5 @@ extern "C" fn rsf_anomaly_sr_build_pass(
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_projection_planes(
-    projection: &EngineMatrix,
-    out: &mut MaybeUninit<rsf_anomaly_sr_planes>,
-) {
-    out.write(camera::projection_planes(projection).map_or_else(
-        rsf_anomaly_sr_planes::default,
-        |p| rsf_anomaly_sr_planes {
-            near_plane: p.near,
-            far_plane: p.far,
-            vertical_fov: p.vertical_fov,
-            valid: true,
-        },
-    ));
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_pose_of(
-    view: &EngineMatrix,
-    out: &mut MaybeUninit<rsf_anomaly_sr_pose>,
-) {
-    let pose = camera::pose(view);
-    out.write(rsf_anomaly_sr_pose {
-        position: pose.position,
-        forward: pose.forward,
-        valid: pose.valid,
-    });
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_camera_cut(
-    previous: &rsf_anomaly_sr_pose,
-    current: &rsf_anomaly_sr_pose,
-    distance: f32,
-    degrees: f32,
-) -> bool {
-    let pose = |p: &rsf_anomaly_sr_pose| camera::Pose {
-        position: p.position,
-        forward: p.forward,
-        valid: p.valid,
-    };
-    camera::camera_cut(pose(previous), pose(current), distance, degrees)
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_reset_reason(facts: &ResetFacts) -> u8 {
-    reset_reason(facts) as u8
-}
+#[cfg(test)]
+mod tests;
