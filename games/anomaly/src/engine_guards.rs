@@ -189,11 +189,6 @@ fn digit(value: u8) -> Option<u8> {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_guard_site(image: &Image, rva: u32, expected: &[u8; 16]) -> bool {
-    image.matches_site(rva, expected)
-}
-
-#[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_guard_first_person(
     image: &Image,
     set_p_call: u32,

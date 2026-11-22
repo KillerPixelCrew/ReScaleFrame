@@ -488,99 +488,6 @@ fn lane(id: u8) -> usize {
     usize::from(id == 1)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_history_create() -> *mut MotionHistoryState {
-    Box::into_raw(Box::new(MotionHistoryState::default()))
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_history_destroy(state: *mut MotionHistoryState) {
-    if !state.is_null() {
-        drop(unsafe { Box::from_raw(state) });
-    }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_begin(
-    state: *mut MotionHistoryState,
-    view: u8,
-    source: u64,
-    generation: u64,
-    width: u32,
-    height: u32,
-) -> bool {
-    unsafe { &mut *state }.begin(
-        lane(view),
-        FrameIdentity {
-            source,
-            generation,
-            width,
-            height,
-        },
-    )
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_active(state: *const MotionHistoryState, view: u8) -> bool {
-    unsafe { state.as_ref() }.is_some_and(|state| state.views[lane(view)].current.is_some())
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_observe(
-    state: *mut MotionHistoryState,
-    view: u8,
-    domain: u8,
-    sample: &CameraSample,
-) -> CameraStatus {
-    unsafe { state.as_mut() }.map_or(CameraStatus::NoFrame, |state| {
-        state.observe(lane(view), lane(domain), sample)
-    })
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_camera(
-    state: *const MotionHistoryState,
-    view: u8,
-    domain: u8,
-) -> *const CameraSample {
-    unsafe { state.as_ref() }
-        .and_then(|state| state.previous_camera(lane(view), lane(domain)))
-        .map_or(ptr::null(), ptr::from_ref)
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_record(
-    state: *mut MotionHistoryState,
-    view: u8,
-    key: &InstanceKey,
-    input: &SnapshotInput,
-    out: &mut MaybeUninit<DrawSnapshotView>,
-) {
-    let previous = unsafe { state.as_mut() }.and_then(|state| {
-        let snapshot = unsafe { Snapshot::borrow(input) };
-        state.record(lane(view), *key, input.domain, snapshot)
-    });
-    out.write(previous.map_or_else(DrawSnapshotView::default, Snapshot::draw_view));
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_retire(state: *mut MotionHistoryState, key: &InstanceKey) {
-    unsafe { &mut *state }.retire(*key);
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_reset(state: *mut MotionHistoryState) {
-    if let Some(state) = unsafe { state.as_mut() } {
-        // Resource and shader resets leave retirement watermarks intact.
-        state.views = Default::default();
-    }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_conflicts(state: *const MotionHistoryState) -> u64 {
-    unsafe { state.as_ref() }.map_or(0, |state| state.conflicts)
-}
-
 // b13 offsets are bytes, as reflected in the core and foliage shader families.
 const CORE_MAX_BONES: usize = 78;
 const CORE_BONES: usize = 64;
@@ -820,29 +727,9 @@ pub(crate) extern "C" fn rsf_anomaly_motion_pack_pixel(
     true
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_remove_jitter(
-    projection: &Mat4,
-    u: f32,
-    v: f32,
-    out: &mut MaybeUninit<Mat4>,
-) {
-    out.write(projection.remove_jitter(u, v));
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_from_engine(values: &[f32; 16], out: &mut MaybeUninit<Mat4>) {
-    out.write(Mat4(from_engine_matrix(values)));
-}
-
 /// Transposes a native row-vector Fmatrix for column-vector shader math.
 pub(crate) fn from_engine_matrix(values: &[f32; 16]) -> [f64; 16] {
     std::array::from_fn(|i| f64::from(values[i % 4 * 4 + i / 4]))
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_compose(a: &Mat4, b: &Mat4, out: &mut MaybeUninit<Mat4>) {
-    out.write(a.compose(b));
 }
 
 #[derive(Default, PartialEq)]
@@ -981,18 +868,6 @@ unsafe fn decide_core(input: &CoreDrawInput) -> Result<CoreDecision, HistoryReas
     })
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_decide_core(
-    input: &CoreDrawInput,
-    out: &mut MaybeUninit<CoreDecision>,
-) {
-    let decision = unsafe { decide_core(input) }.unwrap_or_else(|reason| CoreDecision {
-        reason,
-        ..Default::default()
-    });
-    out.write(decision);
-}
-
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq)]
 struct TreeRecord {
@@ -1031,27 +906,6 @@ struct DetailDrawInput {
     live_groups: u32,
     previous_jitter_u: f32,
     previous_jitter_v: f32,
-}
-
-#[repr(C)]
-struct FoliageDecision {
-    reason: HistoryReason,
-    previous_clip: Mat4,
-}
-
-impl From<Result<Mat4, HistoryReason>> for FoliageDecision {
-    fn from(result: Result<Mat4, HistoryReason>) -> Self {
-        match result {
-            Ok(previous_clip) => Self {
-                reason: HistoryReason::Valid,
-                previous_clip,
-            },
-            Err(reason) => Self {
-                reason,
-                previous_clip: Mat4::default(),
-            },
-        }
-    }
 }
 
 fn foliage_clip(camera: &CameraSample, u: f32, v: f32) -> Mat4 {
@@ -1124,22 +978,6 @@ unsafe fn decide_detail(input: &DetailDrawInput) -> Result<Mat4, HistoryReason> 
         input.previous_jitter_u,
         input.previous_jitter_v,
     ))
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_decide_tree(
-    input: &TreeDrawInput,
-    out: &mut MaybeUninit<FoliageDecision>,
-) {
-    out.write(unsafe { decide_tree(input) }.into());
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_decide_detail(
-    input: &DetailDrawInput,
-    out: &mut MaybeUninit<FoliageDecision>,
-) {
-    out.write(unsafe { decide_detail(input) }.into());
 }
 
 const DISTANCE_BANDS: [&std::ffi::CStr; 6] = [

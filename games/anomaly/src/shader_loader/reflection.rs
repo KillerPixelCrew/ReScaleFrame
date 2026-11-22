@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::{Bytes, Span};
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{CStr, c_void};
 use std::ptr;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::core::{HRESULT, Interface, PCSTR};
@@ -34,18 +34,6 @@ impl Snapshot {
     pub(crate) fn view(&self) -> &Reflection {
         &self.view
     }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_shader_snapshot_drop(snapshot: *mut Snapshot) {
-    if !snapshot.is_null() {
-        drop(unsafe { Box::from_raw(snapshot) });
-    }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_shader_snapshot_view(snapshot: Option<&Snapshot>) -> Option<&Reflection> {
-    snapshot.map(Snapshot::view)
 }
 
 #[unsafe(no_mangle)]
@@ -339,32 +327,6 @@ pub(super) enum Compatibility {
     Inputs,
     Outputs,
     PatchConstants,
-}
-
-const COMPATIBILITY_NAMES: [&CStr; 8] = [
-    c"ok",
-    c"version",
-    c"missing_binding",
-    c"extra_binding",
-    c"buffer",
-    c"inputs",
-    c"outputs",
-    c"patch_constants",
-];
-
-impl Compatibility {
-    pub(super) fn name(self) -> &'static [u8] {
-        COMPATIBILITY_NAMES[self as usize].to_bytes()
-    }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_shader_compatibility_name(value: u8) -> *const c_char {
-    COMPATIBILITY_NAMES
-        .get(value as usize)
-        .copied()
-        .unwrap_or(c"unknown")
-        .as_ptr()
 }
 
 // Previous clip, validity, previous object-space position and normal.

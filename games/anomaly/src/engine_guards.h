@@ -19,7 +19,6 @@ typedef struct rsf_anomaly_guard_image {
     rsf_anomaly_guard_read_fn read;
 } rsf_anomaly_guard_image;
 
-bool rsf_anomaly_guard_site(const rsf_anomaly_guard_image*, uint32_t rva, const uint8_t* expected) RSF_GUARD_NOEXCEPT;
 bool rsf_anomaly_guard_first_person(const rsf_anomaly_guard_image*, uint32_t set_p_call, uint32_t rm_near_call,
     uint32_t set_p, uint32_t rm_near) RSF_GUARD_NOEXCEPT;
 

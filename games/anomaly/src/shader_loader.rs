@@ -8,8 +8,9 @@ mod frame;
 mod manifest;
 mod reflection;
 mod runtime_pack;
+#[cfg(any(feature = "motion-binder-fixture", feature = "motion-device-fixture"))]
+mod tree;
 
-use rsf_windows::sha256_hex;
 pub(crate) use crate::sys::{
     rsf_anomaly_engine_include_ops as EngineIncludeOps,
     rsf_anomaly_engine_shader_profile as EngineShaderProfile,
@@ -20,16 +21,12 @@ pub(crate) use fixture::SHADER_CONTRACT_CASES;
 pub(crate) use frame::run_frame_fixture;
 pub(crate) use frame::{DecodedFrame, FrameLayout, Read, decode_frame};
 pub(crate) use manifest::{Entry, Manifest};
-use reflection::{Compatibility, rsf_anomaly_shader_compatible};
+use reflection::Compatibility;
 pub(crate) use reflection::{
     Reflection, Snapshot, rsf_anomaly_shader_linkable, rsf_anomaly_shader_tess_linkable,
 };
 pub(crate) use runtime_pack::RuntimePack;
-use std::ffi::{CStr, c_char};
-use std::fs::{self, OpenOptions};
-use std::io::Write;
-use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::ffi::CStr;
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -77,55 +74,11 @@ pub(crate) struct Request {
     bytecode: Bytes,
 }
 
-#[repr(C)]
-struct Identity {
-    namespace: Bytes,
-    original: Bytes,
-    motion: Bytes,
-    name: Bytes,
-    stage: u8,
-}
-
 const _: () = {
     assert!(size_of::<Request>() == 88);
     assert!(std::mem::offset_of!(Request, defines) == 40);
     assert!(std::mem::offset_of!(Request, bytecode) == 72);
 };
-
-unsafe fn rsf_anomaly_shader_match_request(
-    manifest: Option<&Manifest>,
-    source: Bytes,
-    target: Bytes,
-) -> Option<&Entry> {
-    let hash = sha256_hex(unsafe { source.as_slice() })?;
-    let entry = manifest?.find(&hash)?;
-    (unsafe { target.as_slice() }.first() == Some(&entry.stage)).then_some(entry)
-}
-
-fn cache_key(request: &Request, id: &Identity) -> Option<[u8; 64]> {
-    let stock_hash = sha256_hex(unsafe { request.bytecode.as_slice() })?;
-    let flags = request.flags.to_string();
-    let mut key = b"rsf-anomaly-motion-variant 1\n".to_vec();
-    for field in [
-        id.namespace,
-        id.original,
-        id.motion,
-        request.target,
-        request.entry,
-        Bytes::from(flags.as_bytes()),
-        Bytes::from(stock_hash.as_slice()),
-    ] {
-        key.extend_from_slice(unsafe { field.as_slice() });
-        key.push(b'\n');
-    }
-    for define in unsafe { request.defines.as_slice() } {
-        key.extend_from_slice(unsafe { define.name.as_slice() });
-        key.push(b'=');
-        key.extend_from_slice(unsafe { define.value.as_slice() });
-        key.push(b'\n');
-    }
-    sha256_hex(&key)
-}
 
 unsafe fn rsf_anomaly_shader_skin_mode(defines: Span<Define>) -> i32 {
     unsafe { defines.as_slice() }
@@ -142,6 +95,7 @@ unsafe fn rsf_anomaly_shader_skin_mode(defines: Span<Define>) -> i32 {
 enum Outcome {
     Replaced = 1,
     ReplacedFromCache = 2,
+    #[cfg(any(feature = "motion-binder-fixture", feature = "motion-device-fixture"))]
     OriginalCompileFailed = 5,
     OriginalMismatch = 6,
     MotionCompileFailed = 7,
@@ -172,146 +126,6 @@ fn outcome_label(value: u8) -> &'static CStr {
         .get(usize::from(value))
         .copied()
         .unwrap_or(c"unknown")
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_shader_outcome_name(value: u8) -> *const c_char {
-    outcome_label(value).as_ptr()
-}
-
-static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-fn write_cache(path: &Path, bytes: &[u8]) {
-    if let Some(directory) = path.parent() {
-        let _ = fs::create_dir_all(directory);
-    }
-    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let temp = path.with_extension(format!("dxbc.{}.{sequence}.tmp", std::process::id()));
-    // A failed or concurrent writer must never publish partial DXBC under the cache key.
-    if let Ok(mut file) = OpenOptions::new().write(true).create_new(true).open(&temp) {
-        let written = file.write_all(bytes).is_ok();
-        drop(file);
-        if !written || fs::rename(&temp, path).is_err() {
-            let _ = fs::remove_file(temp);
-        }
-    }
-}
-
-struct TreeResult<R> {
-    outcome: Outcome,
-    compatibility: Compatibility,
-    stock: Option<R>,
-    reflection: Option<R>,
-    bytes: Vec<u8>,
-    detail: Vec<u8>,
-}
-
-impl<R> TreeResult<R> {
-    fn refused(outcome: Outcome, detail: impl AsRef<[u8]>) -> Self {
-        Self {
-            outcome,
-            compatibility: Compatibility::Ok,
-            stock: None,
-            reflection: None,
-            bytes: Vec::new(),
-            detail: detail.as_ref().to_vec(),
-        }
-    }
-}
-
-fn prepare_tree<R>(
-    request: &Request,
-    id: &Identity,
-    deployment: &Path,
-    cache: Option<&Path>,
-    mut reflect: impl FnMut(bool, &[u8]) -> Option<R>,
-    view: impl Fn(&R) -> &Reflection,
-    mut compile: impl FnMut(bool, &[u8]) -> Result<Vec<u8>, Vec<u8>>,
-) -> TreeResult<R> {
-    let bytecode = unsafe { request.bytecode.as_slice() };
-    let Some(stock) = reflect(true, bytecode) else {
-        return TreeResult::refused(
-            Outcome::ReflectionMismatch,
-            b"stock bytecode does not reflect",
-        );
-    };
-    let cache_path = cache.and_then(|path| {
-        let key = cache_key(request, id)?;
-        Some(path.join(format!("{}.dxbc", std::str::from_utf8(&key).unwrap())))
-    });
-    let check = |variant: &R| rsf_anomaly_shader_compatible(id.stage, view(&stock), view(variant));
-    if let Some(path) = &cache_path
-        && path.is_file()
-        && let Ok(bytes) = fs::read(path)
-        && !bytes.is_empty()
-        && let Some(reflection) = reflect(false, &bytes)
-        && check(&reflection) == Compatibility::Ok
-    {
-        return TreeResult {
-            outcome: Outcome::ReplacedFromCache,
-            compatibility: Compatibility::Ok,
-            stock: Some(stock),
-            reflection: Some(reflection),
-            bytes,
-            detail: Vec::new(),
-        };
-    }
-
-    let mut prepare = || {
-        let compiled = compile(false, unsafe { request.source.as_slice() })
-            .map_err(|error| TreeResult::refused(Outcome::OriginalCompileFailed, error))?;
-        if compiled != bytecode {
-            return Err(TreeResult::refused(
-                Outcome::OriginalMismatch,
-                b"deployed original tree does not reproduce the engine bytecode",
-            ));
-        }
-        let mut root_path = deployment.join("motion").join("r3");
-        // Build individual path components so extended-length Windows paths keep native separators.
-        let root = std::str::from_utf8(unsafe { id.name.as_slice() })
-            .ok()
-            .and_then(|name| {
-                root_path.extend(name.split('/'));
-                fs::read(root_path).ok()
-            })
-            .filter(|bytes| {
-                sha256_hex(bytes).is_some_and(|hash| hash.as_slice() == unsafe { id.motion.as_slice() })
-            })
-            .ok_or_else(|| {
-                TreeResult::refused(
-                    Outcome::MotionCompileFailed,
-                    b"motion root missing or not the manifest's",
-                )
-            })?;
-        let bytes = compile(true, &root)
-            .map_err(|error| TreeResult::refused(Outcome::MotionCompileFailed, error))?;
-        let reflection = reflect(false, &bytes).ok_or_else(|| {
-            TreeResult::refused(Outcome::ReflectionMismatch, b"variant does not reflect")
-        })?;
-        let compatibility = check(&reflection);
-        if compatibility != Compatibility::Ok {
-            return Err(TreeResult {
-                compatibility,
-                ..TreeResult::refused(Outcome::ReflectionMismatch, compatibility.name())
-            });
-        }
-        if let Some(path) = &cache_path {
-            write_cache(path, &bytes);
-        }
-        Ok(TreeResult {
-            outcome: Outcome::Replaced,
-            compatibility,
-            stock: None,
-            reflection: Some(reflection),
-            bytes,
-            detail: Vec::new(),
-        })
-    };
-    let mut result = match prepare() {
-        Ok(result) | Err(result) => result,
-    };
-    result.stock = Some(stock);
-    result
 }
 
 fn runtime_refusal(status: i32) -> Option<Outcome> {

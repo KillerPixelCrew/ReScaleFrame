@@ -201,15 +201,6 @@ extern "C" fn rsf_anomaly_sr_stage_reset_pass(resources: Option<&mut StageResour
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_stage_drop_resources(owner: *mut StageResources) {
-    // The controller is the only caller authorized to retire twins. Static
-    // teardown may run with failed cleanup and borrowed engine fields still live.
-    if unsafe { owner.as_ref() }.is_some_and(|owner| owner.twins.is_none()) {
-        drop(unsafe { Box::from_raw(owner) });
-    }
-}
-
-#[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_sr_stage_pass(resources: Option<&StageResources>) -> *const Pass {
     resources
         .and_then(|resources| resources.pass.as_ref())

@@ -841,12 +841,6 @@ fn new_driver() -> Driver {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_destroy(driver: *mut Driver) {
-    // The facade destroys this handle after explicit, quiesced stop in the plugin lifecycle.
-    drop(unsafe { Box::from_raw(driver) });
-}
-
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_sr_configure(
     driver: &Driver,
     options: &rsf_anomaly_sr_driver_config,
@@ -1167,16 +1161,6 @@ extern "C" fn rsf_anomaly_sr_count_prepared(driver: &Driver, missing: bool) {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_sr_stop(driver: &Driver) {
     driver.stop(unsafe { &mut *driver.render.get() });
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_status(driver: &Driver, status: &mut Status) {
-    *status = driver.published().status;
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_counters(driver: &Driver, counters: &mut Counters) {
-    *counters = driver.published().counters;
 }
 
 #[unsafe(no_mangle)]

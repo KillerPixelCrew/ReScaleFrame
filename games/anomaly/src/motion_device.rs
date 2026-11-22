@@ -216,13 +216,6 @@ extern "C" fn rsf_anomaly_motion_device_new(platform: &'static Platform) -> *mut
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_device_drop(owner: *mut Owner) {
-    if !owner.is_null() {
-        drop(unsafe { Box::from_raw(owner) });
-    }
-}
-
-#[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_motion_device_create(
     owner: &mut Owner,
     device: *mut c_void,

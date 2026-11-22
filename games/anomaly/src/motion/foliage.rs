@@ -223,38 +223,6 @@ impl History {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_foliage_new() -> *mut History {
-    Box::into_raw(Box::new(History::default()))
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_foliage_drop(history: *mut History) {
-    if !history.is_null() {
-        drop(unsafe { Box::from_raw(history) });
-    }
-}
-
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_anomaly_foliage_begin(
-    history: &mut History,
-    view: u8,
-    source: u64,
-    generation: u64,
-    width: u32,
-    height: u32,
-) -> bool {
-    history.begin(
-        view,
-        FrameIdentity {
-            source,
-            generation,
-            width,
-            height,
-        },
-    )
-}
-
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_anomaly_foliage_active(history: Option<&History>, view: u8) -> bool {
     history.is_some_and(|h| h.views[lane(view)].current.is_some())
 }

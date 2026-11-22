@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Stable shader-family IDs used by admission, draw policy and counters.
 #[cfg(windows)]
-use std::ffi::{CStr, c_char};
+use std::ffi::CStr;
 
 macro_rules! families {
     ($(($id:ident, $number:literal, $name:literal, $stage:expr)),+ $(,)?) => {
@@ -56,16 +56,4 @@ pub(crate) fn diagnostic_family_name(id: u8) -> &'static str {
         return "other";
     }
     family_name(id).to_str().expect("family names are ASCII")
-}
-
-#[cfg(windows)]
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_shader_family_name(id: u8) -> *const c_char {
-    family_name(id).as_ptr()
-}
-
-#[cfg(windows)]
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_shader_family_stage(id: u8) -> u8 {
-    family(id).map_or(0, |row| row.2)
 }

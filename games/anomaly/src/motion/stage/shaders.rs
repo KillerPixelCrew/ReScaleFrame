@@ -346,18 +346,6 @@ impl FoliageLayout {
     }
 }
 
-// The native platform borrows the prepared stock reflection for this call; the contract fixtures
-// call it through make_foliage_layout.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_foliage_layout(
-    stock: &Reflection,
-    family: u8,
-    out: &mut FoliageLayout,
-) -> bool {
-    *out = FoliageLayout::from_stock(family, stock);
-    out.usable
-}
-
 struct Replacement {
     shader: Lease,
     reflection: Snapshot,

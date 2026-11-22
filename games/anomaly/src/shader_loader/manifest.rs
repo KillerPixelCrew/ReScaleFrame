@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! The admitted motion manifest. Rust owns its rows and the original-source digest index for
 //! both the fixture text form and the Runtime pack form. Native code holds the opaque object.
-use super::{Bytes, Identity};
+use super::Bytes;
+#[cfg(any(feature = "motion-binder-fixture", feature = "motion-device-fixture"))]
+use super::tree::Identity;
 use crate::shader_family::FAMILIES;
 use std::collections::HashSet;
 use std::ffi::c_void;
@@ -44,6 +46,7 @@ impl Entry {
         unsafe { self.original.as_slice() }
     }
 
+    #[cfg(any(feature = "motion-binder-fixture", feature = "motion-device-fixture"))]
     pub(super) fn identity(&self, namespace: &[u8]) -> Identity {
         Identity {
             namespace: Bytes::from(namespace),
@@ -189,6 +192,7 @@ impl<'a> Candidate<'a> {
     }
 }
 
+#[cfg(any(test, feature = "motion-binder-fixture", feature = "motion-device-fixture"))]
 pub(super) fn parse(text: &[u8]) -> Result<Manifest, String> {
     let mut namespace: &[u8] = &[];
     let mut candidate = Candidate::default();
@@ -275,61 +279,6 @@ pub(super) unsafe fn admit_pack(
         }
     }
     Ok(candidate.finish(namespace))
-}
-
-#[repr(C)]
-struct Refusal {
-    user: *mut c_void,
-    report: unsafe extern "C" fn(*mut c_void, Bytes),
-}
-
-/// Hands an admitted manifest to its native owner, or reports why the candidate was refused.
-fn publish(result: Result<Manifest, String>, refusal: &Refusal) -> *mut Manifest {
-    match result {
-        Ok(manifest) => Box::into_raw(Box::new(manifest)),
-        Err(error) => {
-            unsafe { (refusal.report)(refusal.user, Bytes::from(error.as_bytes())) };
-            std::ptr::null_mut()
-        }
-    }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_shader_manifest(text: Bytes, refusal: &Refusal) -> *mut Manifest {
-    publish(parse(unsafe { text.as_slice() }), refusal)
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_shader_admitted_free(manifest: *mut Manifest) {
-    if !manifest.is_null() {
-        drop(unsafe { Box::from_raw(manifest) });
-    }
-}
-
-#[repr(C)]
-struct View {
-    namespace: Bytes,
-    entries: *const Entry,
-    count: usize,
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_shader_admitted_view(manifest: &Manifest, out: &mut View) {
-    *out = View {
-        namespace: Bytes::from(manifest.namespace()),
-        entries: manifest.entries.as_ptr(),
-        count: manifest.entries.len(),
-    };
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_shader_admitted_find(
-    manifest: &Manifest,
-    original: Bytes,
-) -> *const Entry {
-    manifest
-        .find(unsafe { original.as_slice() })
-        .map_or(std::ptr::null(), std::ptr::from_ref)
 }
 
 #[cfg(test)]
@@ -420,11 +369,6 @@ mod tests {
         true
     }
 
-    unsafe extern "C" fn remember(user: *mut c_void, message: Bytes) {
-        let out = unsafe { &mut *user.cast::<String>() };
-        *out = String::from_utf8_lossy(unsafe { message.as_slice() }).into_owned();
-    }
-
     #[test]
     fn pack_admission_owns_runtime_metadata_and_reports_refusals() {
         let mut roots: Vec<(String, String, String, &str, u32)> = vec![
@@ -443,58 +387,32 @@ mod tests {
                 104,
             ),
         ];
-        let mut error = String::new();
-        let refusal = Refusal {
-            user: (&raw mut error).cast(),
-            report: remember,
-        };
         let admit = |roots: &Vec<_>, count| unsafe {
-            publish(
-                admit_pack(NS.as_bytes(), count, std::ptr::from_ref(roots).cast(), read),
-                &refusal,
-            )
+            admit_pack(NS.as_bytes(), count, std::ptr::from_ref(roots).cast(), read)
         };
-        let admitted = admit(&roots, 2);
-        assert!(!admitted.is_null());
+        let manifest = admit(&roots, 2).unwrap();
         // The Runtime strings may go away once admission returns.
         roots[0].0 = "changed".into();
         roots[0].1 = hash('7');
-        let manifest = unsafe { &*admitted };
-        let mut view = View {
-            namespace: Bytes::from(&[][..]),
-            entries: std::ptr::null(),
-            count: 0,
-        };
-        rsf_anomaly_shader_admitted_view(manifest, &mut view);
-        assert_eq!(view.count, 2);
-        let domain = unsafe {
-            rsf_anomaly_shader_admitted_find(manifest, Bytes::from(hash('2').as_bytes()))
-        };
-        assert_eq!(domain, unsafe { view.entries.add(1) });
-        let domain = unsafe { &*domain };
+        assert_eq!(manifest.namespace(), NS.as_bytes());
+        assert_eq!(manifest.entries().len(), 2);
+        let domain = manifest.find(hash('2').as_bytes()).unwrap();
+        assert!(std::ptr::eq(domain, &manifest.entries()[1]));
         assert_eq!(
             (domain.name(), domain.stage, domain.family),
             (&b"dx11/tess.ds"[..], b'd', 7)
         );
-        let found = unsafe {
-            rsf_anomaly_shader_admitted_find(manifest, Bytes::from(hash('7').as_bytes()))
-        };
-        assert!(found.is_null());
-        unsafe { rsf_anomaly_shader_admitted_free(admitted) };
+        assert!(manifest.find(hash('7').as_bytes()).is_none());
 
+        let refusal = |roots: &Vec<_>, count| admit(roots, count).err().unwrap();
         roots[0].1 = hash('1');
-        assert!(admit(&roots, 2).is_null());
-        assert_eq!(error, "ambiguous root source");
+        assert_eq!(refusal(&roots, 2), "ambiguous root source");
         roots[0].1 = hash('2');
         roots[0].4 = u32::from(b'h');
-        assert!(admit(&roots, 2).is_null());
-        assert_eq!(error, "invalid adapter root metadata");
-        assert!(admit(&roots, 3).is_null());
-        assert_eq!(error, "invalid adapter root metadata");
+        assert_eq!(refusal(&roots, 2), "invalid adapter root metadata");
+        assert_eq!(refusal(&roots, 3), "invalid adapter root metadata");
         roots[0].4 = u32::from(b'd');
-        assert!(admit(&roots, 3).is_null());
-        assert_eq!(error, "pack root metadata");
-        assert!(admit(&roots, 0).is_null());
-        assert_eq!(error, "incomplete pack manifest");
+        assert_eq!(refusal(&roots, 3), "pack root metadata");
+        assert_eq!(refusal(&roots, 0), "incomplete pack manifest");
     }
 }

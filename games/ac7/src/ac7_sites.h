@@ -78,12 +78,6 @@ bool rsf_ac7_velocity_apply(rsf_ac7_code_patches* patches, unsigned char* base,
     const rsf_ac7_code_leaves* leaves);
 // Restores owned velocity patches in reverse; false keeps the unrestored ones owned.
 bool rsf_ac7_velocity_restore(rsf_ac7_code_patches* patches, const rsf_ac7_code_leaves* leaves);
-// Activation: scene precision, then temporal velocity, at `base`. Applied patches stay owned when a
-// later one refuses.
-bool rsf_ac7_engine_patches_apply(rsf_ac7_code_patches* patches, unsigned char* base,
-    const rsf_ac7_code_leaves* leaves);
-// Retirement: temporal velocity, then scene precision. False, logged, keeps the renderer.
-bool rsf_ac7_engine_patches_restore(rsf_ac7_code_patches* patches, const rsf_ac7_code_leaves* leaves);
 
 // Native leaves of the renderer transaction (renderer.rs), lent by native_renderer.rs for one
 // call. The renderer object and its fields, MinHook, module pinning, the render scopes, the input

@@ -179,7 +179,6 @@ uint32_t rsf_anomaly_sr_stage_make_twins(struct rsf_sr_stage_resources**, const 
     void*) RSF_SR_D3D11_NOEXCEPT;
 void rsf_anomaly_sr_stage_retire_twins(struct rsf_sr_stage_resources*, uint32_t (*refs)(void*)) RSF_SR_D3D11_NOEXCEPT;
 void rsf_anomaly_sr_stage_reset_pass(struct rsf_sr_stage_resources*) RSF_SR_D3D11_NOEXCEPT;
-void rsf_anomaly_sr_stage_drop_resources(struct rsf_sr_stage_resources*) RSF_SR_D3D11_NOEXCEPT;
 const struct rsf_sr_pass* rsf_anomaly_sr_stage_pass(const struct rsf_sr_stage_resources*) RSF_SR_D3D11_NOEXCEPT;
 void* rsf_anomaly_sr_stage_depth(const struct rsf_sr_stage_resources*) RSF_SR_D3D11_NOEXCEPT;
 void rsf_anomaly_sr_stage_resource_stats(const struct rsf_sr_stage_resources*, uint64_t*, uint64_t*)

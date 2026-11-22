@@ -51,7 +51,6 @@ extern "C" {
 // frame, main view); `written` is false when the window did not get a usable target. All zero while the stage
 // is inactive.
 void rsf_anomaly_motion_stage_frame_target(rsf_anomaly_motion_frame_target*) RSF_MOTION_STAGE_NOEXCEPT;
-bool rsf_anomaly_motion_stage_enabled(void) RSF_MOTION_STAGE_NOEXCEPT;
 void rsf_anomaly_motion_stage_report(void (*emit)(void*, const char*), void* user) RSF_MOTION_STAGE_NOEXCEPT;
 
 #ifdef __cplusplus

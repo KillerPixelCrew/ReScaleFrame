@@ -249,25 +249,6 @@ impl BurstGate {
     }
 }
 
-// The native fixtures exercise these same rules through the private ABI.
-fn copy_plan(plan: Option<Plan>, out: &mut MaybeUninit<Plan>) -> bool {
-    out.write(plan.unwrap_or(Plan {
-        scale: 1.0,
-        ..Plan::default()
-    }));
-    plan.is_some()
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_make_plan(
-    ow: u32,
-    oh: u32,
-    scale: f32,
-    out: &mut MaybeUninit<Plan>,
-) -> bool {
-    copy_plan(make_plan(ow, oh, scale), out)
-}
-
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_sr_clamp_mip_offset(value: f32) -> f32 {
     clamp_mip_offset(value)
@@ -276,11 +257,6 @@ extern "C" fn rsf_anomaly_sr_clamp_mip_offset(value: f32) -> f32 {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_sr_mip_delta(render: u32, output: u32, offset: f32) -> f32 {
     mip_delta(render, output, offset)
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_halton(index: u32, base: u32) -> f64 {
-    halton(index, base)
 }
 
 #[unsafe(no_mangle)]

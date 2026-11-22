@@ -1200,6 +1200,7 @@ impl Stage {
                 || self.with(|state| state.native_depth_frame != Some(native_frame)))
     }
 
+    #[cfg(any(test, feature = "sr-fixtures"))]
     pub(crate) fn jitter(&self) -> JitterState {
         self.with(|state| state.published)
     }
@@ -2928,10 +2929,6 @@ fn live_options() -> [crate::overlay::rsf_anomaly_overlay_option; 13] {
 extern "C" fn rsf_anomaly_sr_stage_quiesce() -> bool {
     STAGE.quiesce()
 }
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_stage_active() -> bool {
-    STAGE.active()
-}
 #[cfg(windows)]
 pub(crate) fn owns_depth(native_frame: u32) -> bool {
     STAGE.owns_depth(native_frame)
@@ -2965,10 +2962,6 @@ extern "C" fn rsf_anomaly_sr_stage_position_setup(constant: *mut c_void) {
     STAGE.position_setup(constant);
 }
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_stage_rm_near() {
-    STAGE.rm_near();
-}
-#[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_sr_stage_frame_end() {
     STAGE.frame_end();
 }
@@ -2980,12 +2973,6 @@ unsafe extern "C" fn rsf_anomaly_sr_stage_report(emit: rsf_anomaly_sr_log, user:
             unsafe { emit(user, text.as_ptr()) };
         }
     });
-}
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_stage_jitter(out: *mut JitterState) {
-    if !out.is_null() {
-        unsafe { out.write(STAGE.jitter()) };
-    }
 }
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_sr_stage_jitter_uv(out: *mut rsf_anomaly_sr_jitter_uv) {

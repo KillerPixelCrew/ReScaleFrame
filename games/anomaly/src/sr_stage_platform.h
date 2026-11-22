@@ -103,10 +103,8 @@ extern "C" {
 #endif
 uint32_t rsf_anomaly_sr_correct_position_constant(
     const rsf_anomaly_position_layout*, const rsf_anomaly_position_platform*, uintptr_t, float, float);
-bool rsf_anomaly_sr_make_plan(uint32_t output_width, uint32_t output_height, float scale, rsf_anomaly_sr_plan*);
 float rsf_anomaly_sr_clamp_mip_offset(float);
 float rsf_anomaly_sr_mip_delta(uint32_t render_width, uint32_t output_width, float offset);
-double rsf_anomaly_sr_halton(uint32_t index, uint32_t base);
 uint32_t rsf_anomaly_sr_phase_count(uint32_t render_width, uint32_t output_width);
 rsf_anomaly_sr_jitter_sample rsf_anomaly_sr_jitter_sample_at(uint32_t index, uint32_t phases);
 rsf_anomaly_sr_jitter_sample rsf_anomaly_sr_sequence_next(rsf_anomaly_sr_jitter_sequence*,

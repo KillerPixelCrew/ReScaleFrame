@@ -702,13 +702,6 @@ extern "C" fn rsf_anomaly_motion_stage_quiesce() -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_stage_enabled() -> bool {
-    STAGE
-        .get()
-        .is_some_and(|s| s.active.load(Acquire) && s.enabled.load(Relaxed))
-}
-
-#[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_motion_stage_report(emit: rsf_game_log_fn, user: Raw) {
     if let Some(stage) = STAGE
         .get()

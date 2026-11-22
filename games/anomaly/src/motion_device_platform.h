@@ -73,7 +73,6 @@ const rsf_anomaly_motion_device_platform* rsf_anomaly_motion_device_platform_get
 const rsf_anomaly_motion_replay_platform* rsf_anomaly_motion_replay_platform_get(void);
 typedef struct rsf_anomaly_motion_device_owner rsf_anomaly_motion_device_owner;
 rsf_anomaly_motion_device_owner* rsf_anomaly_motion_device_new(const rsf_anomaly_motion_device_platform*);
-void rsf_anomaly_motion_device_drop(rsf_anomaly_motion_device_owner*);
 uint32_t rsf_anomaly_motion_device_create(rsf_anomaly_motion_device_owner*, void* device, rsf_anomaly_motion_log, void* user);
 int32_t rsf_anomaly_motion_device_target(rsf_anomaly_motion_device_owner*, uint32_t width, uint32_t height,
     uint32_t samples, uint32_t layers);

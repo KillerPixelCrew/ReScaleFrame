@@ -4,7 +4,11 @@ use super::reflection::fixture::{
     compatibility, core, foliage_layout, tess_compatibility, tess_linkage,
 };
 use super::runtime_pack::admit_runtime_variant;
+use super::tree::{cache_key, prepare_tree, rsf_anomaly_shader_match_request};
 use super::*;
+use rsf_windows::sha256_hex;
+use std::fs;
+use std::path::Path;
 use crate::shader_family::{CORE_STATIC, TESS_DOMAIN, TESS_HULL};
 use rsf_game_sys::{RSF_PATCH_OK, RSF_PATCH_ORIGINAL};
 use std::cell::Cell;

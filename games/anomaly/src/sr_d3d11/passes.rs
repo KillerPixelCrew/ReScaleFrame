@@ -352,30 +352,6 @@ impl Pass {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_create_pass(
-    platform: &'static Platform,
-    device: Ptr,
-    kind: u32,
-    log: Log,
-    user: Ptr,
-) -> *mut Pass {
-    Pass::new(platform, device, kind, log, user)
-        .map_or(null_mut(), |pass| Box::into_raw(Box::new(pass)))
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_drop_pass(owner: *mut Pass) {
-    if !owner.is_null() {
-        drop(unsafe { Box::from_raw(owner) });
-    }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_pass_device(owner: Option<&Pass>) -> Ptr {
-    owner.map_or(null_mut(), |pass| pass.device.as_ptr())
-}
-
-#[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_sr_temporal_ready(owner: Option<&Pass>) -> u32 {
     u32::from(owner.is_some_and(|pass| pass.temporal.is_some()))
 }

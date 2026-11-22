@@ -233,26 +233,5 @@ unsafe extern "C" fn rsf_ac7_velocity_restore(
         .is_some_and(|(patches, code)| velocity_restore(patches, &code))
 }
 
-/// # Safety
-/// See `native`. The leaves receive `base` plus each patch RVA.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_engine_patches_apply(
-    patches: *mut rsf_ac7_code_patches,
-    base: *mut u8,
-    leaves: *const rsf_ac7_code_leaves,
-) -> bool {
-    unsafe { native(patches, leaves) }.is_some_and(|(patches, code)| apply(patches, base, &code))
-}
-
-/// # Safety
-/// See `native`.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_engine_patches_restore(
-    patches: *mut rsf_ac7_code_patches,
-    leaves: *const rsf_ac7_code_leaves,
-) -> bool {
-    unsafe { native(patches, leaves) }.is_some_and(|(patches, code)| restore(patches, &code))
-}
-
 #[cfg(test)]
 mod tests;

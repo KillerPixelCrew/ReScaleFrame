@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 use super::d3d::Modules;
 use super::manifest::{Manifest, Root, admit_pack};
-use super::reflection::{Snapshot, reflect};
+use super::reflection::{Snapshot, reflect, rsf_anomaly_shader_compatible};
 use super::{
     Bytes, Compatibility, EngineIncludeOps, EngineShaderProfile, Outcome, Request,
-    rsf_anomaly_shader_compatible, rsf_anomaly_shader_skin_mode, runtime_refusal,
+    rsf_anomaly_shader_skin_mode, runtime_refusal,
 };
 use crate::motion_device::ConstantOps;
 use crate::runtime_module::{export, rsf_anomaly_runtime_module};

@@ -135,16 +135,6 @@ impl Target {
         }
     }
 
-    fn publish(
-        self,
-        descriptor: Texture,
-        format: u32,
-        owner: &mut *mut Self,
-        view: &mut TargetView,
-    ) {
-        *view = self.view(descriptor, format);
-        *owner = Box::into_raw(Box::new(self));
-    }
 }
 
 impl Texture {
@@ -455,84 +445,10 @@ impl TwinBatch {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_make_twin(
-    platform: &Platform,
-    device: Ptr,
-    input: &TwinInput,
-    owner: &mut *mut Target,
-    view: &mut TargetView,
-) -> Error {
-    match (Device {
-        platform,
-        handle: device,
-    })
-    .twin(input)
-    {
-        Ok((target, desc, format)) => {
-            target.publish(desc, format, owner, view);
-            Error::None
-        }
-        Err(error) => error,
-    }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_make_depth(
-    platform: &Platform,
-    device: Ptr,
-    engine: Ptr,
-    output: Extent,
-    render: Extent,
-    owner: &mut *mut Target,
-    view: &mut TargetView,
-) -> Error {
-    match (Device {
-        platform,
-        handle: device,
-    })
-    .depth(engine, output, render)
-    {
-        Ok((target, desc)) => {
-            target.publish(desc, 0, owner, view);
-            Error::None
-        }
-        Err(error) => error,
-    }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_make_scratch(
-    platform: &Platform,
-    device: Ptr,
-    engine: Ptr,
-    render: Extent,
-    owner: &mut *mut Target,
-    view: &mut TargetView,
-) -> Error {
-    match (Device {
-        platform,
-        handle: device,
-    })
-    .scratch(engine, render)
-    {
-        Ok((target, desc)) => {
-            target.publish(desc, 0, owner, view);
-            Error::None
-        }
-        Err(error) => error,
-    }
-}
-
-#[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_sr_drop_target(owner: *mut Target) {
     if !owner.is_null() {
         drop(unsafe { Box::from_raw(owner) });
     }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_twin_fields(view: &TargetView, fields: &mut Fields) {
-    *fields = view.fields();
 }
 
 #[cfg(test)]
@@ -682,33 +598,6 @@ impl TemporalTargets {
             && self.render == render
             && self.output_size == output
             && self.output_format == format
-    }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_make_temporal(
-    platform: &'static Platform,
-    device: Ptr,
-    render: Extent,
-    output: Extent,
-    format: u32,
-    owner: &mut *mut TemporalTargets,
-    view: &mut TemporalView,
-) -> Error {
-    match TemporalTargets::new(platform, device, render, output, format) {
-        Ok(targets) => {
-            *view = targets.view();
-            *owner = Box::into_raw(Box::new(targets));
-            Error::None
-        }
-        Err(error) => error,
-    }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_drop_temporal(owner: *mut TemporalTargets) {
-    if !owner.is_null() {
-        drop(unsafe { Box::from_raw(owner) });
     }
 }
 

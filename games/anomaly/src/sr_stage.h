@@ -24,7 +24,7 @@
    saves them.
 
    Jitter. The jitter published at the last phase_scene_prepare (all zero for scope frames and below Stage 3). The SR
-   pass reads rsf_anomaly_sr_stage_jitter; the motion stage reads rsf_anomaly_sr_stage_jitter_uv for its PS b13
+   pass reads it directly; the motion stage reads rsf_anomaly_sr_stage_jitter_uv for its PS b13
    rsf_jitter on every draw. A sample is in RENDER pixels, +X right, +Y down (rsf_camera_frame::jitter_pixels); in NDC
    it is (2x / W, -2y / H) and in the motion b13 it is (x / W, y / H) in viewport UV, Y down. */
 #include "sr_stage_platform.h"
@@ -48,10 +48,8 @@ extern "C" {
    immediately before the original IRenderDeviceRender::End (before Present). Report emits two log lines with the
    per-window deltas and the totals, nothing when inactive. */
 bool rsf_anomaly_sr_stage_quiesce(void) RSF_ANOMALY_SR_NOEXCEPT;
-bool rsf_anomaly_sr_stage_active(void) RSF_ANOMALY_SR_NOEXCEPT;
 void rsf_anomaly_sr_stage_frame_end(void) RSF_ANOMALY_SR_NOEXCEPT;
 void rsf_anomaly_sr_stage_report(rsf_anomaly_sr_log, void*) RSF_ANOMALY_SR_NOEXCEPT;
-void rsf_anomaly_sr_stage_jitter(rsf_anomaly_sr_jitter_state*) RSF_ANOMALY_SR_NOEXCEPT;
 void rsf_anomaly_sr_stage_jitter_uv(rsf_anomaly_sr_jitter_uv*) RSF_ANOMALY_SR_NOEXCEPT;
 
 #ifdef __cplusplus

@@ -1577,25 +1577,6 @@ extern "C" fn rsf_anomaly_swap_shutdown(swap: *mut Handle) -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_jitter_projection(
-    projection: Option<&Matrix>,
-    x: f32,
-    y: f32,
-    width: u32,
-    height: u32,
-    output: Option<&mut Matrix>,
-) -> bool {
-    let (Some(projection), Some(output)) = (projection, output) else {
-        return false;
-    };
-    let Some(jittered) = jitter_projection(projection, x, y, width, height) else {
-        return false;
-    };
-    *output = jittered;
-    true
-}
-
-#[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_swap_skip_name(skip: u32) -> *const c_char {
     SKIP_NAMES
         .get(skip as usize)
