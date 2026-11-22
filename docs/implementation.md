@@ -60,6 +60,12 @@ Shared-SR also uses Rust for staging readback. The native hardware scenarios
 and the host's native callback table remain. This replay has source and binding
 checks only.
 
+The integrated D3D11 host replay routes pipeline calls through D05's Rust
+owner, retains C03 sharpening, and uses D03's guarded ordered SR entry. Rust
+drives the shared-SR resource-only recovery and repeated rendered-FG phases.
+Both device fixtures use typed staging readback for their pixel checks.
+Foreign host callbacks and the remaining native fixture phases stay open.
+
 Rust owns the D3D11 graphics snapshots, resource and UI device operations,
 sampler changes, and native composition passes. The replay uses the integrated
 Rust output and capture paths. All eight G03 fixture bodies now use Rust. The source

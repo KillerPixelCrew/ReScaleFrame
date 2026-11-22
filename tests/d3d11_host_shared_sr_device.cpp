@@ -22,7 +22,6 @@
 #include <fstream>
 #include <iterator>
 #include <string>
-#include <thread>
 #include <cstring>
 
 using Microsoft::WRL::ComPtr;
@@ -348,83 +347,25 @@ int main(int argc, char** argv) {
     }
     rsf_dlss_pipeline_status status{}; status.struct_size = sizeof(status);
     if (rsf_dlss_pipeline_get_status(&status) != RSF_DLSS_PIPELINE_OK || status.frames_evaluated != 8 || status.frames_refused != 1) return failed(__LINE__);
-    // Resource-only recovery and requested-setting changes do not manufacture a
-    // temporal camera or retroactively reconfigure a committed reduced source.
-    for (uint64_t source=11;source<=12;++source) {
-        diagnostic_source=source; diagnostic_phase="resource-only-reserve-and-owner-negatives";
-        cpu(host,source,RSF_GAME_CPU_FRAME_BEGIN);
-        auto raster=last_pass; raster.native_frame=raster.source_frame_id=raster.submission_id=raster.scope_id=source;
-        raster.camera_valid=0; raster.depth_domains={};
-        // Reactivation changes requested_generation. Like a real producer, apply
-        // that generation through resource-only planning before querying/reserving.
-        diagnostic_phase="resource-only-planning";
-        auto resource_plan=raster; resource_plan.flags|=RSF_GAME_RENDER_RECONFIGURE;
-        if (host.process_upscale(host.user,context.Get(),&resource_plan)!=RSF_ERROR_NOT_READY) return failed(__LINE__);
-        diagnostic_phase="resource-only-reserve-and-owner-negatives";
-        rsf_game_render_config plan{sizeof(plan)};
-        if (!host.render_config(host.user,&plan) || !plan.enabled) return failed(__LINE__);
-        raster.render_rect[2]=int32_t(plan.render_width); raster.render_rect[3]=int32_t(plan.render_height);
-        raster.camera.render_width=plan.render_width; raster.camera.render_height=plan.render_height;
-        rsf_d3d11_auxiliary_surface raw{sizeof(raw),RSF_D3D11_AUXILIARY_COLOUR,motion.Get()};
-        for (unsigned j=0;j<4;++j) { raw.source_rect[j]=float(raster.render_rect[j]); raw.output_rect[j]=raster.output_rect[j]; }
-        rsf_d3d11_reduced_frame recovery{sizeof(recovery),RSF_D3D11_REDUCED_FRAME_ABI_VERSION,
-            RSF_D3D11_REDUCED_RESERVE,0,0,&raster,1,0,&raw};
-        if (rsf_d3d11_host_reduced_frame(host.user,context.Get(),&recovery)!=RSF_OK) return failed(__LINE__);
-        auto wrong_session=raster; ++wrong_session.session_id;
-        auto refused=recovery; refused.owner=&wrong_session; refused.operation=RSF_D3D11_REDUCED_SEAL;
-        if (rsf_d3d11_host_reduced_frame(host.user,reinterpret_cast<void*>(uintptr_t(1)),&refused)!=RSF_ERROR_NOT_READY) return failed(__LINE__);
-        auto resized=raster; --resized.output_rect[2];
-        refused=recovery; refused.owner=&resized; refused.operation=RSF_D3D11_REDUCED_SEAL;
-        if (rsf_d3d11_host_reduced_frame(host.user,reinterpret_cast<void*>(uintptr_t(1)),&refused)!=RSF_ERROR_NOT_READY) return failed(__LINE__);
-        auto changed_owner=raster; ++changed_owner.resource_generation;
-        refused.owner=&changed_owner;
-        if (rsf_d3d11_host_reduced_frame(host.user,reinterpret_cast<void*>(uintptr_t(1)),&refused)!=RSF_ERROR_NOT_READY) return failed(__LINE__);
-        ++changed_owner.view_key; refused.owner=&changed_owner;
-        if (rsf_d3d11_host_reduced_frame(host.user,reinterpret_cast<void*>(uintptr_t(1)),&refused)!=RSF_ERROR_NOT_READY) return failed(__LINE__);
-        int32_t thread_result{};
-        std::thread other([&] { auto request=recovery; request.operation=RSF_D3D11_REDUCED_SEAL;
-            thread_result=rsf_d3d11_host_reduced_frame(host.user,reinterpret_cast<void*>(uintptr_t(1)),&request); });
-        other.join(); if (thread_result!=RSF_ERROR_NOT_READY) return failed(__LINE__);
-        diagnostic_phase="resource-only-cancel-seal-skip";
-        if (source==12) {
-            recovery.operation=RSF_D3D11_REDUCED_CANCEL;
-            if (rsf_d3d11_host_reduced_frame(host.user,context.Get(),&recovery)!=RSF_OK ||
-                !(recovery.result_flags&RSF_D3D11_REDUCED_NEXT_REDUCTION_ALLOWED) ||
-                (recovery.result_flags&RSF_D3D11_REDUCED_FULL_OUTPUT_DEFINED)) return failed(__LINE__);
-            recovery.operation=RSF_D3D11_REDUCED_RESERVE; recovery.token=0;
-            if (rsf_d3d11_host_reduced_frame(host.user,context.Get(),&recovery)!=RSF_OK) return failed(__LINE__);
-        }
-        recovery.operation=RSF_D3D11_REDUCED_SEAL;
-        if (rsf_d3d11_host_reduced_frame(host.user,context.Get(),&recovery)!=RSF_OK) return failed(__LINE__);
-        if (source==11) {
-            if (host.process_upscale(host.user,context.Get(),&raster)!=RSF_ERROR_INVALID_ARGUMENT) return failed(__LINE__);
-        } else {
-            rsf_render_settings changed{sizeof(changed),RSF_RENDER_FRONTEND_ABI_VERSION};
-            if (overlay.settings_get(&changed)!=RSF_OK) return failed(__LINE__);
-            changed.sr_enabled=0;
-            if (overlay.settings_apply(&changed)!=RSF_OK) return failed(__LINE__);
-            auto temporal=raster; temporal.camera_valid=1;
-            auto a=raw; a.jitter_pixels[0]=temporal.camera.jitter_pixels[0];
-            const rsf_d3d11_auxiliary_pass request{sizeof(request),RSF_D3D11_HOST_ABI_VERSION,&temporal,1,&a};
-            if (rsf_d3d11_host_upscale_auxiliaries(host.user,context.Get(),&request)!=RSF_ERROR_NOT_READY) return failed(__LINE__);
-            auto planning=temporal; planning.flags|=RSF_GAME_RENDER_RECONFIGURE;
-            if (host.process_upscale(host.user,context.Get(),&planning)!=RSF_ERROR_BUSY) return failed(__LINE__);
-        }
-        diagnostic_phase="resource-only-finish-and-suspended-retire";
-        recovery.operation=RSF_D3D11_REDUCED_FINISH;
-        recovery.temporal_result=RSF_OK; recovery.result_flags=0xffffffffu; // Never caller success claims.
-        if (rsf_d3d11_host_reduced_frame(host.user,context.Get(),&recovery)!=RSF_OK ||
-            !(recovery.result_flags&RSF_D3D11_REDUCED_SPATIAL_OUTPUT) ||
-            (recovery.result_flags&RSF_D3D11_REDUCED_TEMPORAL_ATTEMPTED) || recovery.temporal_result!=RSF_ERROR_NOT_READY) return failed(__LINE__);
-        if (rsf_d3d11_host_set_active(host.user,0)!=RSF_OK) return failed(__LINE__);
-        recovery.operation=RSF_D3D11_REDUCED_RETIRE;
-        if (rsf_d3d11_host_reduced_frame(host.user,context.Get(),&recovery)!=RSF_OK ||
-            !(recovery.result_flags&RSF_D3D11_REDUCED_NEXT_REDUCTION_ALLOWED) ||
-            rsf_d3d11_host_set_active(host.user,1)!=RSF_OK) return failed(__LINE__);
-        if (FAILED(chain->Present(0,0))) return failed(__LINE__);
-        cpu(host,source,RSF_GAME_CPU_FRAME_END);
-        std::printf("PASS no-camera/frozen configuration recovery source=%llu\n",static_cast<unsigned long long>(source));
-    }
+    // The real graphics owner runs both resource-only recovery scenarios in Rust.
+    const auto disable_sr = [](void* user) noexcept -> int32_t {
+        try {
+            const auto& api = *static_cast<const rsf_overlay_api*>(user);
+            rsf_render_settings changed{sizeof(changed), RSF_RENDER_FRONTEND_ABI_VERSION};
+            const auto read = api.settings_get(&changed);
+            if (read != RSF_OK) return read;
+            changed.sr_enabled = 0;
+            return api.settings_apply(&changed);
+        } catch (...) { return RSF_ERROR_NOT_READY; }
+    };
+    const auto present_recovery = [](void* receiver) noexcept -> int32_t {
+        try { return static_cast<IDXGISwapChain*>(receiver)->Present(0, 0); }
+        catch (...) { return E_FAIL; }
+    };
+    diagnostic_phase="resource-only-recovery";
+    if (rsf_d3d11_host_fixture_recover(&host, context.Get(), chain.Get(), motion.Get(),
+        &last_pass, present_recovery, disable_sr, &overlay) != 0) return failed(__LINE__);
+    diagnostic_source=12;
     diagnostic_phase="final-counters-and-readback";
     rsf_dlss_pipeline_status after_recovery{sizeof(after_recovery)};
     if (rsf_dlss_pipeline_get_status(&after_recovery)!=RSF_DLSS_PIPELINE_OK ||
@@ -434,20 +375,14 @@ int main(int argc, char** argv) {
         generation.vendor.effective_mode != RSF_FG_OFF || generation.tagged_frames) return failed(__LINE__);
     std::printf("FG requested=%u effective=%u tagged=%llu\n", generation.requested.mode,
         generation.vendor.effective_mode, static_cast<unsigned long long>(generation.tagged_frames));
-    D3D11_TEXTURE2D_DESC readback_desc{}; output->GetDesc(&readback_desc);
-    readback_desc.BindFlags = 0; readback_desc.Usage = D3D11_USAGE_STAGING; readback_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-    ComPtr<ID3D11Texture2D> readback;
-    if (FAILED(device->CreateTexture2D(&readback_desc, nullptr, &readback))) return failed(__LINE__);
-    context->CopyResource(readback.Get(), output.Get());
-    D3D11_MAPPED_SUBRESOURCE mapped{};
-    if (FAILED(context->Map(readback.Get(), 0, D3D11_MAP_READ, 0, &mapped))) return failed(__LINE__);
-    const auto* pixel = reinterpret_cast<const uint16_t*>(static_cast<const unsigned char*>(mapped.pData) + mapped.RowPitch * (height / 2)) + (width / 2) * 4;
+    uint16_t pixel[4]{};
+    if (!rsf_d3d11_host_fixture_read_pixel(device.Get(), context.Get(), output.Get(),
+        width / 2, height / 2, uint32_t(sizeof(pixel)), pixel)) return failed(__LINE__);
     bool valid = true; const float expected[]{0.25f, 0.5f, 0.75f};
     for (unsigned i = 0; i < 3; ++i) {
         const auto value = DirectX::PackedVector::XMConvertHalfToFloat(pixel[i]);
         std::printf("Output channel%u=%g\n", i, value); valid &= std::isfinite(value) && std::fabs(value - expected[i]) < 0.15f;
     }
-    context->Unmap(readback.Get(), 0);
     if (diagnostics) for (UINT64 i = 0; i < diagnostics->GetNumStoredMessagesAllowedByRetrievalFilter(); ++i) {
         SIZE_T size{}; (void)diagnostics->GetMessage(i, nullptr, &size); std::vector<unsigned char> storage(size);
         auto* message = reinterpret_cast<D3D11_MESSAGE*>(storage.data());

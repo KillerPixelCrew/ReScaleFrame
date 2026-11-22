@@ -113,7 +113,7 @@ unsafe extern "C" fn rsf_native_fg_stage(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_fg_cpu(event: *const Event) {
+pub(crate) unsafe extern "C" fn rsf_native_fg_cpu(event: *const Event) {
     unsafe { rsf_core_native_fg_cpu(event, &rsf_native_fg_cpu_platform) };
 }
 
@@ -153,7 +153,7 @@ unsafe extern "C" fn rsf_native_latency_frame_get(out: *mut LatencyFrame) -> i32
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_latency_window_bind(binding: *const Window) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_native_latency_window_bind(binding: *const Window) -> i32 {
     unsafe { rsf_core_native_latency_window_bind(binding, &rsf_native_fg_cpu_platform) }
 }
 

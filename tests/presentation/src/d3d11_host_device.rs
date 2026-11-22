@@ -7,6 +7,51 @@ use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC};
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::core::Interface;
 
+#[path = "d3d11_host_device_abi.rs"]
+mod abi;
+#[path = "d3d11_host_device_recovery.rs"]
+mod recovery;
+use abi::*;
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_d3d11_host_fixture_run_phase(
+    phase: u32,
+    scoped: u32,
+    frame: rsf_d3d11_fixture_frame_fn,
+    user: *mut c_void,
+) {
+    let Some(frame) = frame else { return };
+    let count = match phase {
+        RSF_D3D11_FIXTURE_REDUCED_WARMUP | RSF_D3D11_FIXTURE_LATE_ENABLE => 10,
+        RSF_D3D11_FIXTURE_NATIVE_SR_OFF | RSF_D3D11_FIXTURE_NATIVE_SR_ON => 12,
+        RSF_D3D11_FIXTURE_FG_OFF => 3,
+        _ => return,
+    };
+    for index in 0..count {
+        let first = index == 0;
+        let (reconstruct, reset, expect_capture, cleanup) = match phase {
+            RSF_D3D11_FIXTURE_REDUCED_WARMUP => (true, first, 0, scoped != 0 && index == 9),
+            RSF_D3D11_FIXTURE_LATE_ENABLE => (true, false, if index < 2 { -1 } else { 1 }, false),
+            RSF_D3D11_FIXTURE_NATIVE_SR_OFF => (false, first, if first { -1 } else { 1 }, false),
+            RSF_D3D11_FIXTURE_NATIVE_SR_ON => (true, first, 1, false),
+            RSF_D3D11_FIXTURE_FG_OFF => (false, false, 0, false),
+            _ => unreachable!(),
+        };
+        if unsafe {
+            frame(
+                user,
+                reconstruct.into(),
+                reset.into(),
+                expect_capture,
+                cleanup.into(),
+            )
+        } != 0
+        {
+            break;
+        }
+    }
+}
+
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_d3d11_host_fixture_texture(
     device: *mut c_void,
@@ -47,14 +92,70 @@ unsafe extern "C" fn rsf_d3d11_host_fixture_read_texture(
     bytes: *mut u8,
     length: usize,
 ) -> i32 {
+    i32::from(unsafe {
+        read_texture(
+            device,
+            context,
+            source,
+            stride,
+            |source, pitch, width, height| {
+                let row_bytes = width * stride as usize;
+                if row_bytes.checked_mul(height) != Some(length) || length == 0 || bytes.is_null() {
+                    return false;
+                }
+                for y in 0..height {
+                    copy_nonoverlapping(source.add(y * pitch), bytes.add(y * row_bytes), row_bytes);
+                }
+                true
+            },
+        )
+    })
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_d3d11_host_fixture_read_pixel(
+    device: *mut c_void,
+    context: *mut c_void,
+    source: *mut c_void,
+    x: u32,
+    y: u32,
+    stride: u32,
+    pixel: *mut c_void,
+) -> i32 {
+    let (x, y) = (x as usize, y as usize);
+    i32::from(unsafe {
+        read_texture(
+            device,
+            context,
+            source,
+            stride,
+            |source, pitch, width, height| {
+                if x >= width || y >= height || pixel.is_null() {
+                    return false;
+                }
+                let stride = stride as usize;
+                copy_nonoverlapping(source.add(y * pitch + x * stride), pixel.cast(), stride);
+                true
+            },
+        )
+    })
+}
+
+unsafe fn read_texture(
+    device: *mut c_void,
+    context: *mut c_void,
+    source: *mut c_void,
+    stride: u32,
+    read: impl FnOnce(*const u8, usize, usize, usize) -> bool,
+) -> bool {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&device).unwrap() };
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&context).unwrap() };
     let source = unsafe { ID3D11Texture2D::from_raw_borrowed(&source).unwrap() };
     let mut desc = D3D11_TEXTURE2D_DESC::default();
     unsafe { source.GetDesc(&mut desc) };
-    let row_bytes = desc.Width as usize * stride as usize;
-    if row_bytes.checked_mul(desc.Height as usize) != Some(length) || length == 0 {
-        return 0;
+    let (width, height) = (desc.Width as usize, desc.Height as usize);
+    if width == 0 || height == 0 || stride == 0 {
+        return false;
     }
     desc.Usage = D3D11_USAGE_STAGING;
     desc.BindFlags = 0;
@@ -62,28 +163,22 @@ unsafe extern "C" fn rsf_d3d11_host_fixture_read_texture(
     desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
     let mut staging = None;
     if unsafe { device.CreateTexture2D(&desc, None, Some(&mut staging)) }.is_err() {
-        return 0;
+        return false;
     }
     let Some(staging) = staging else {
-        return 0;
+        return false;
     };
     unsafe { context.CopyResource(&staging, source) };
     let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
     if unsafe { context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped)) }.is_err() {
-        return 0;
+        return false;
     }
     let pitch = mapped.RowPitch as usize;
-    let valid = !mapped.pData.is_null() && pitch >= row_bytes;
-    if valid {
-        let source = mapped.pData.cast::<u8>();
-        for y in 0..desc.Height as usize {
-            unsafe {
-                copy_nonoverlapping(source.add(y * pitch), bytes.add(y * row_bytes), row_bytes)
-            };
-        }
-    }
+    let valid = !mapped.pData.is_null()
+        && pitch >= width * stride as usize
+        && read(mapped.pData.cast(), pitch, width, height);
     unsafe { context.Unmap(&staging, 0) };
-    i32::from(valid)
+    valid
 }
 
 #[unsafe(no_mangle)]

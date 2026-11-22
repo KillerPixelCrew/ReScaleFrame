@@ -5,7 +5,7 @@ use super::*;
 mod fixture;
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dlss_pipeline_start_backend(
+pub(crate) unsafe extern "C" fn rsf_dlss_pipeline_start_backend(
     device: Raw,
     setup: *const Setup,
     backend: u32,
@@ -29,7 +29,7 @@ unsafe extern "C" fn rsf_dlss_pipeline_request_dump(prefix: *const c_char) -> i3
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dlss_pipeline_get_status(status: *mut Status) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_dlss_pipeline_get_status(status: *mut Status) -> i32 {
     unsafe { PROCESS.status(status) }
 }
 
@@ -53,12 +53,12 @@ extern "C" fn rsf_dlss_pipeline_layer_output() -> Raw {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_dlss_pipeline_set_colour_correction(enabled: u32) {
+pub(crate) extern "C" fn rsf_dlss_pipeline_set_colour_correction(enabled: u32) {
     PROCESS.set_colour_correction(enabled);
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_dlss_pipeline_set_colour_transport(enabled: u32) {
+pub(crate) extern "C" fn rsf_dlss_pipeline_set_colour_transport(enabled: u32) {
     PROCESS.set_colour_transport(enabled);
 }
 
@@ -76,12 +76,12 @@ extern "C" fn rsf_core_dlss_pipeline_apply_sharpening(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dlss_pipeline_set_preset(preset: u32) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_dlss_pipeline_set_preset(preset: u32) -> i32 {
     unsafe { PROCESS.set_preset(&LEAVES, preset) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dlss_pipeline_set_quality(
+pub(crate) unsafe extern "C" fn rsf_dlss_pipeline_set_quality(
     quality: u32,
     width: *mut u32,
     height: *mut u32,
@@ -90,7 +90,7 @@ unsafe extern "C" fn rsf_dlss_pipeline_set_quality(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dlss_pipeline_resize_output(
+pub(crate) unsafe extern "C" fn rsf_dlss_pipeline_resize_output(
     output_width: u32,
     output_height: u32,
     width: *mut u32,
@@ -100,7 +100,7 @@ unsafe extern "C" fn rsf_dlss_pipeline_resize_output(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dlss_pipeline_select_backend(
+pub(crate) unsafe extern "C" fn rsf_dlss_pipeline_select_backend(
     backend: u32,
     width: *mut u32,
     height: *mut u32,

@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: MIT
-// Stable D3D11 host exports and the native leaf calls behind them. Admission,
-// callback leases, lifecycle, recovery and status live in d3d11_host.rs.
+// Stable D3D11 host create export and foreign callback guards. The Rust owner
+// handles admission, leases, lifecycle and recovery.
 #include "d3d11_host_platform.h"
 #include "d3d11_output_platform.h"
 #include <rescaleframe/native_sr.h>
-#include <rescaleframe/native_cpu.h>
 #include <rescaleframe/native_scene.h>
 #include <rescaleframe/native_fg.h>
 #include <rescaleframe/d3d11_present_bridge.h>
 #include <rescaleframe/dlss_pipeline.h>
-#include <rescaleframe/overlay_input.h>
 #include <rescaleframe/input_dump.h>
+#include <rescaleframe/overlay_input.h>
 #include <rescaleframe/frame_generation.h>
 #include "render_settings_store.h"
 #include "native_sr_completion.h"
@@ -79,11 +78,6 @@ int present_install_scoped(const rsf_d3d11_present_setup* setup) noexcept try
     return rsf_d3d11_present_install_scoped(setup);
 } catch (...) { return 0; }
 
-void fg_latency_event(void*, const rsf_observer_present_event* event) noexcept
-{
-    rsf_native_fg_present(event);
-}
-
 int32_t observer_install(rsf_game_log_fn log, void* user, rsf_d3d11h_present_fn present) noexcept try
 {
     rsf_observer_options observe{}; observe.struct_size = sizeof(observe); observe.abi_version = RSF_OBSERVER_ABI_VERSION;
@@ -107,85 +101,6 @@ int32_t wrap_native(void* device, void* native_chain, void** facade) noexcept tr
 {
     return rsf_d3d11_present_wrap_native_chain(device, native_chain, facade);
 } catch (...) { return E_FAIL; }
-
-void fg_frame(const rsf_game_render_pass* pass, uint32_t begin) noexcept { rsf_native_fg_frame(pass, begin); }
-void fg_submission(const rsf_game_render_pass* pass, uint32_t begin) noexcept { rsf_native_fg_submission(pass, begin); }
-void fg_final(void* context, const rsf_game_render_pass* pass) noexcept { rsf_native_fg_final(context, pass); }
-int32_t fg_capture(void* context, const rsf_game_render_pass* pass, const rsf_motion_decode_params* motion) noexcept
-{
-    return rsf_native_sr_capture_fg(context, pass, motion);
-}
-int32_t scene_pass(const rsf_game_render_pass* pass, uint32_t begin) noexcept { return rsf_native_scene_pass(pass, begin); }
-uint32_t scene_present_path(const rsf_game_render_pass* window) noexcept { return rsf_native_scene_present_path(window); }
-int32_t window_scope(const rsf_game_render_pass* pass, uint32_t begin) noexcept { return rsf_native_window_scope(pass, begin); }
-int32_t window_present(const rsf_observer_present_event* event) noexcept { return rsf_native_window_present(event); }
-int32_t window_last_present(rsf_native_present_record* record) noexcept { return rsf_native_window_last_present(record); }
-int32_t window_match(void* chain, rsf_game_render_pass* pass) noexcept { return rsf_native_window_match(chain, pass); }
-void latency_window_bind(uint64_t session_id, void* window) noexcept
-{
-    const rsf_native_latency_window latency_window{sizeof(latency_window), 1, session_id,
-        uint64_t(reinterpret_cast<uintptr_t>(window))};
-    (void)rsf_native_latency_window_bind(&latency_window);
-}
-int32_t cpu_dispatch_fg(const rsf_game_cpu_event* event) noexcept
-{
-    return rsf_native_cpu_dispatch(event, [](void*, const rsf_game_cpu_event* fact) { rsf_native_fg_cpu(fact); }, nullptr);
-}
-void cpu_event(const rsf_game_cpu_event* event) noexcept { (void)rsf_native_cpu_event(event); }
-
-int32_t dlss_native_present(void* chain, uint32_t sync_interval, uint32_t flags, uint32_t begin) noexcept
-{
-    return rsf_dlss_native_present(chain, sync_interval, flags, begin);
-}
-int32_t pipeline_start(void* device, const rsf_d3d11h_pipeline_start* request) noexcept try
-{
-    const auto& setup = *request->setup; const auto& text = *request->strings;
-    rsf_dlss_pipeline_setup create{}; create.struct_size = sizeof(create); create.abi_version = RSF_DLSS_PIPELINE_ABI_VERSION;
-    create.streamline_directory_utf8 = text.streamline; create.require_signature = 1;
-    create.output_width = request->output_width; create.output_height = request->output_height;
-    create.quality = request->quality; create.motion = setup.motion; create.log = request->log; create.log_user = request->user;
-    create.engine = setup.engine_type; create.engine_version_utf8 = text.engine_version; create.project_id_utf8 = text.project;
-    create.fsr2_directory_utf8 = create.fsr3_directory_utf8 = create.fsr4_directory_utf8 = text.fidelityfx;
-    create.xess_directory_utf8 = text.xess; create.view_space_to_meters = setup.units_to_meters;
-    create.standard_depth = !setup.depth_inverted;
-    return rsf_dlss_pipeline_start_backend(device, &create, request->backend);
-} catch (...) { return RSF_ERROR_NOT_READY; }
-int32_t pipeline_resize(uint32_t width, uint32_t height) noexcept try
-{
-    return rsf_dlss_pipeline_resize_output(width, height, nullptr, nullptr);
-} catch (...) { return RSF_ERROR_NOT_READY; }
-int32_t pipeline_select(uint32_t backend) noexcept try
-{
-    return rsf_dlss_pipeline_select_backend(backend, nullptr, nullptr);
-} catch (...) { return RSF_ERROR_NOT_READY; }
-int32_t pipeline_quality(uint32_t quality) noexcept try
-{
-    return rsf_dlss_pipeline_set_quality(quality, nullptr, nullptr);
-} catch (...) { return RSF_ERROR_NOT_READY; }
-int32_t pipeline_preset(uint32_t preset) noexcept try
-{
-    return rsf_dlss_pipeline_set_preset(preset);
-} catch (...) { return RSF_ERROR_NOT_READY; }
-int32_t pipeline_status(rsf_d3d11h_pipeline_status* output) noexcept try
-{
-    rsf_dlss_pipeline_status status{}; status.struct_size = sizeof(status);
-    const auto result = rsf_dlss_pipeline_get_status(&status);
-    *output = {status.running, status.output_width, status.output_height, status.render_width, status.render_height};
-    return result;
-} catch (...) { return RSF_ERROR_NOT_READY; }
-void pipeline_colour(uint32_t transport, uint32_t correction) noexcept try
-{
-    rsf_dlss_pipeline_set_colour_transport(transport);
-    rsf_dlss_pipeline_set_colour_correction(correction);
-} catch (...) {}
-void* pipeline_output() noexcept { return rsf_dlss_pipeline_output_texture(); }
-int32_t sr_evaluate(void* context, const rsf_game_render_pass* pass, uint32_t* ordered) noexcept try
-{
-    return rsf_native_sr_evaluate_ordered(context, pass, ordered);
-} catch (...) {
-    if (ordered) *ordered = 0;
-    return RSF_ERROR_NOT_READY;
-}
 
 void dump_configure(const rsf_d3d11h_strings* text, rsf_game_log_fn log, void* user) noexcept try
 {
@@ -240,7 +155,6 @@ void overlay_present(void* chain) noexcept try
 {
     if (overlay.present) (void)overlay.present(chain, nullptr);
 } catch (...) {}
-void overlay_poll_toggle() noexcept try { rsf_overlay_input_poll_toggle(); } catch (...) {}
 
 const rsf_d3d11h_platform& platform()
 {
@@ -259,7 +173,7 @@ const rsf_d3d11h_platform& platform()
         .present_install_scoped = present_install_scoped,
         .fg_prepare = rsf_native_fg_prepare,
         .fg_retire = rsf_native_fg_retire,
-        .fg_latency_event = fg_latency_event,
+        .fg_latency_event = rsf_d3d11h_fg_latency_event,
         .fg_rendered_source_set = rsf_native_fg_rendered_source_set,
         .fg_set_log = rsf_native_fg_set_log,
         .fg_options_set = rsf_native_fg_options_set,
@@ -272,30 +186,30 @@ const rsf_d3d11h_platform& platform()
         .com_identity = rsf_d3d11h_com_identity,
         .chain_present = rsf_d3d11h_chain_present,
         .com_release = rsf_d3d11h_com_release,
-        .fg_frame = fg_frame,
-        .fg_submission = fg_submission,
-        .fg_final = fg_final,
-        .fg_capture = fg_capture,
-        .scene_pass = scene_pass,
-        .scene_present_path = scene_present_path,
-        .window_scope = window_scope,
-        .window_present = window_present,
-        .window_last_present = window_last_present,
-        .window_match = window_match,
-        .latency_window_bind = latency_window_bind,
-        .cpu_dispatch_fg = cpu_dispatch_fg,
-        .cpu_event = cpu_event,
-        .dlss_native_present = dlss_native_present,
-        .pipeline_start = pipeline_start,
-        .pipeline_resize = pipeline_resize,
-        .pipeline_select = pipeline_select,
-        .pipeline_quality = pipeline_quality,
-        .pipeline_preset = pipeline_preset,
+        .fg_frame = rsf_native_fg_frame,
+        .fg_submission = rsf_native_fg_submission,
+        .fg_final = rsf_native_fg_final,
+        .fg_capture = rsf_native_sr_capture_fg,
+        .scene_pass = rsf_native_scene_pass,
+        .scene_present_path = rsf_native_scene_present_path,
+        .window_scope = rsf_native_window_scope,
+        .window_present = rsf_native_window_present,
+        .window_last_present = rsf_native_window_last_present,
+        .window_match = rsf_native_window_match,
+        .latency_window_bind = rsf_d3d11h_latency_window_bind,
+        .cpu_dispatch_fg = rsf_d3d11h_cpu_dispatch_fg,
+        .cpu_event = rsf_d3d11h_cpu_event,
+        .dlss_native_present = rsf_d3d11h_native_present,
+        .pipeline_start = rsf_d3d11h_start_pipeline,
+        .pipeline_resize = rsf_d3d11h_pipeline_resize,
+        .pipeline_select = rsf_d3d11h_pipeline_select,
+        .pipeline_quality = rsf_d3d11h_pipeline_quality,
+        .pipeline_preset = rsf_d3d11h_pipeline_preset,
         .pipeline_sharpen = rsf_core_dlss_pipeline_apply_sharpening,
-        .pipeline_status = pipeline_status,
-        .pipeline_colour = pipeline_colour,
-        .pipeline_output = pipeline_output,
-        .sr_evaluate = sr_evaluate,
+        .pipeline_status = rsf_d3d11h_read_pipeline_status,
+        .pipeline_colour = rsf_d3d11h_pipeline_colour,
+        .pipeline_output = rsf_dlss_pipeline_output_texture,
+        .sr_evaluate = rsf_native_sr_evaluate_ordered_guarded,
         .dump_configure = dump_configure,
         .dump_request = dump_request,
         .dump_requested = dump_requested,
@@ -309,7 +223,7 @@ const rsf_d3d11h_platform& platform()
         .dump_complete = dump_complete,
         .overlay_configure = overlay_configure,
         .overlay_present = overlay_present,
-        .overlay_poll_toggle = overlay_poll_toggle,
+        .overlay_poll_toggle = rsf_overlay_input_poll_toggle,
         .ini_read = rsf_d3d11h_ini_read,
         .ini_write = rsf_d3d11h_ini_write,
         .auxiliary = rsf_auxiliary_sr_platform(),

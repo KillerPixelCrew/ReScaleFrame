@@ -48,6 +48,14 @@ generate("loader/src/census/decode_abi.rs", "loader/census/src/decode_platform.h
          ["--with-derive-default"])
 generate("tests/presentation/src/fixture_device_abi.rs", "tests/presentation/device_fixture_bridge.h",
          "rsf_fg_fixture_inputs", "NOTHING", [])
+generate("tests/presentation/src/d3d11_host_device_abi.rs", "tests/d3d11_host_device_fixture.h",
+         "rsf_d3d11_fixture_.*_fn", "RSF_D3D11_FIXTURE_.*",
+         ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/graphics/include",
+          "-Iruntime/presentation/include"],
+         ["--no-recursive-allowlist",
+          "--allowlist-function", "rsf_d3d11_host_(reduced_frame|set_active|upscale_auxiliaries)",
+          "--raw-line", "use rsf_game_sys::d3d11_host_abi::rsf_d3d11_auxiliary_pass;",
+          "--raw-line", "use rsf_game_sys::d3d11_reduced_abi::rsf_d3d11_reduced_frame;"])
 generate("tests/presentation/src/d3d11_marker_abi.rs", "tests/presentation/d3d11_marker_bridge.h",
          "rsf_(d3d11_marker_fixture_calls|native_cpu_(frame|counters)|native_latency_frame)",
          "NOTHING", ["-Isdk/game/include", "-Iruntime/orchestrator/include"],

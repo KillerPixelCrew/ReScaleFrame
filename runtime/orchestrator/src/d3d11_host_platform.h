@@ -49,7 +49,21 @@ typedef struct rsf_d3d11h_pipeline_status {
     uint32_t running, output_width, output_height, render_width, render_height;
 } rsf_d3d11h_pipeline_status;
 
+int32_t rsf_d3d11h_native_present(void*, uint32_t, uint32_t, uint32_t);
+int32_t rsf_d3d11h_start_pipeline(void*, const rsf_d3d11h_pipeline_start*);
+int32_t rsf_d3d11h_pipeline_resize(uint32_t, uint32_t);
+int32_t rsf_d3d11h_pipeline_select(uint32_t);
+int32_t rsf_d3d11h_pipeline_quality(uint32_t);
+int32_t rsf_d3d11h_pipeline_preset(uint32_t);
+int32_t rsf_d3d11h_read_pipeline_status(rsf_d3d11h_pipeline_status*);
+void rsf_d3d11h_pipeline_colour(uint32_t, uint32_t);
+
 typedef void (*rsf_d3d11h_present_fn)(void* user, const rsf_observer_present_event*);
+
+void rsf_d3d11h_fg_latency_event(void*, const rsf_observer_present_event*);
+void rsf_d3d11h_latency_window_bind(uint64_t, void*);
+int32_t rsf_d3d11h_cpu_dispatch_fg(const rsf_game_cpu_event*);
+void rsf_d3d11h_cpu_event(const rsf_game_cpu_event*);
 
 typedef struct rsf_d3d11h_platform {
     /* COM, D3D11 and DXGI queries. */

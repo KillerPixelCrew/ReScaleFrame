@@ -2295,7 +2295,7 @@ extern "C" fn rsf_native_sr_set_surface(width: u32, height: u32) -> i32 {
 mod platform;
 
 #[cfg(not(test))]
-mod exports;
+pub(super) mod exports;
 
 #[cfg(test)]
 #[path = "dlss_pipeline_tests.rs"]

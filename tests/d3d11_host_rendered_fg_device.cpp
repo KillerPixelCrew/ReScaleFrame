@@ -539,6 +539,24 @@ int main(int argc, char** argv) {
         }
         MSG message{}; while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&message); DispatchMessageW(&message); }
     };
+    const auto phase_frame = [&](uint32_t reconstruct, uint32_t reset,
+        int32_t expect_capture, uint32_t cleanup) noexcept -> int32_t {
+        exercise_auxiliary_cleanup = cleanup != 0;
+        try {
+            if (!failed) frame(reconstruct != 0, true, reset != 0, expect_capture);
+        } catch (...) {
+            verify(false, "foreign frame callback raised an exception");
+        }
+        exercise_auxiliary_cleanup = false;
+        return failed;
+    };
+    const auto run_phase = [&](uint32_t phase) {
+        auto callback = phase_frame;
+        rsf_d3d11_host_fixture_run_phase(phase, uint32_t(scoped),
+            [](void* user, uint32_t reconstruct, uint32_t reset, int32_t capture, uint32_t cleanup) -> int32_t {
+                return (*static_cast<decltype(callback)*>(user))(reconstruct, reset, capture, cleanup);
+            }, &callback);
+    };
     // Presentation was bound above without claiming scene/SR admission. Bootstrap
     // is one complete source with FG/SR Off, not a hidden warmup or successful SR source.
     std::puts("Phase: one complete source-owned bootstrap scene, SR/FG Off");
@@ -556,23 +574,14 @@ int main(int argc, char** argv) {
     active_width = 640; active_height = 360; native_reinsertion = true;
     std::puts("Phase: bounded 10-source DLSS Quality warmup, render640x360 in960x540 native colour allocation, FG Off");
     const auto warmup_evaluated_before = sr_evaluated;
-    for (unsigned i = 0; i < 10 && !failed; ++i) {
-        exercise_auxiliary_cleanup=scoped && i==9;
-        frame(true,true,i==0,0);
-    }
-    exercise_auxiliary_cleanup=false;
+    run_phase(RSF_D3D11_FIXTURE_REDUCED_WARMUP);
     verify(sr_evaluated == warmup_evaluated_before + 10, "all bounded reduced warmup sources must evaluate SR");
     // Inspect an output pixel outside the active input rectangle: reinsertion must
     // overwrite the marker in the same R11G11B10 native allocation, not a side target.
-    D3D11_TEXTURE2D_DESC native_desc{}; color->GetDesc(&native_desc);
-    native_desc.BindFlags = 0; native_desc.Usage = D3D11_USAGE_STAGING; native_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-    ComPtr<ID3D11Texture2D> native_readback;
-    if (FAILED(device->CreateTexture2D(&native_desc, nullptr, &native_readback))) return fail("create native reinsertion readback");
-    context->CopyResource(native_readback.Get(), color.Get());
-    D3D11_MAPPED_SUBRESOURCE native_mapped{};
-    if (FAILED(context->Map(native_readback.Get(), 0, D3D11_MAP_READ, 0, &native_mapped))) return fail("map native reinsertion readback");
-    const auto outside_pixel = reinterpret_cast<const uint32_t*>(static_cast<const unsigned char*>(native_mapped.pData) + native_mapped.RowPitch * (height - 2))[width - 2];
-    context->Unmap(native_readback.Get(), 0);
+    uint32_t outside_pixel{};
+    if (!rsf_d3d11_host_fixture_read_pixel(device.Get(), context.Get(), color.Get(),
+        width - 2, height - 2, uint32_t(sizeof(outside_pixel)), &outside_pixel))
+        return fail("read native reinsertion outside-active pixel");
     std::printf("Native reinsertion outside-active pixel=0x%08x original_marker=0x%08x\n", outside_pixel, outside_marker.v);
     verify(outside_pixel != outside_marker.v, "DLSS reinsertion must overwrite native allocation outside reduced input rectangle");
     rsf_native_fg_status warmed{}; warmed.struct_size = sizeof(warmed);
@@ -584,7 +593,7 @@ int main(int argc, char** argv) {
     settings.fg_enabled = 1;
     if (overlay.settings_apply(&settings) != RSF_OK) return fail("enable FSR3 through public overlay after warmed reduced DLSS");
     std::puts("Phase: bounded 10-source late FSR3 activation over warmed reduced in-place DLSS");
-    for (unsigned i = 0; i < 10 && !failed; ++i) frame(true, true, false, i < 2 ? -1 : 1);
+    run_phase(RSF_D3D11_FIXTURE_LATE_ENABLE);
     rsf_native_fg_status late_enabled{}; late_enabled.struct_size = sizeof(late_enabled);
     verify(rsf_native_fg_status_get(&late_enabled) != 0, "read post-switch reduced FG status");
     std::printf("Late-enable receipt: backend=%u switch_result=%d generation=%llu previous_generation=%llu captures=%llu application_calls=%llu tags=%llu generated_callbacks=%llu statistics_flags=0x%x vendor_generated_presented=%llu\n",
@@ -607,7 +616,7 @@ int main(int argc, char** argv) {
     if (overlay.settings_apply(&settings) != RSF_OK) return fail("start original SR-Off generation phase");
     active_width = width; active_height = height; native_reinsertion = false;
     // More than the six-slot transfer ring; first source explicitly invalidates history.
-    for (unsigned i = 0; i < 12 && !failed; ++i) frame(false, true, i == 0, i == 0 ? -1 : 1);
+    run_phase(RSF_D3D11_FIXTURE_NATIVE_SR_OFF);
     rsf_native_fg_status off_sr{}; off_sr.struct_size = sizeof(off_sr);
     if (!rsf_native_fg_status_get(&off_sr)) return fail("query SR-Off FG status");
     const bool off_sr_generated = off_sr.tagged_frames > late_enabled.tagged_frames &&
@@ -620,7 +629,7 @@ int main(int argc, char** argv) {
     if (overlay.settings_get(&settings) != RSF_OK) return fail("read shared rendering settings");
     settings.sr_enabled = 1; settings.sr_quality = 0;
     if (overlay.settings_apply(&settings) != RSF_OK) return fail("apply shared rendering settings");
-    for (unsigned i = 0; i < 12 && !failed; ++i) frame(true, true, i == 0, true);
+    run_phase(RSF_D3D11_FIXTURE_NATIVE_SR_ON);
     // Explicit reset followed by continuity, then a non-primary source must not tag.
     rsf_native_fg_status before_reset{}; before_reset.struct_size = sizeof(before_reset);
     if (!rsf_native_fg_status_get(&before_reset)) return fail("query before-reset FG status");
@@ -661,7 +670,7 @@ int main(int argc, char** argv) {
     verify(after_invalid.tagged_frames == before_invalid.tagged_frames, "nonprimary source must not increment tag count");
     settings.fg_enabled = 0; settings.sr_enabled = 0;
     if (overlay.settings_apply(&settings) != RSF_OK) return fail("apply shared rendering settings");
-    for (unsigned i = 0; i < 3 && !failed; ++i) frame(false, true, false, false);
+    run_phase(RSF_D3D11_FIXTURE_FG_OFF);
     rsf_native_fg_status stopped{}; stopped.struct_size = sizeof(stopped);
     rsf_native_latency_status latency{}; latency.struct_size = sizeof(latency); latency.version = 1;
     const auto stopped_ok = rsf_native_fg_status_get(&stopped);

@@ -92,3 +92,42 @@ header still defines that table. The output platform header still supplies
 bindgen input and the C leaves used by the native SR pipeline. The Rust contract
 body and public host ABI are source-ported. The two hardware fixture bodies
 are partial ports. No hardware behavior was verified in this replay.
+
+## Integrated residual replay on `05133165`
+
+- `d3d11_host_platform.rs` now constructs the same D05 startup record that
+  `d3d11_host.cpp` built at the base. It passes the selected backend, signature
+  requirement, motion decoder, provider paths, engine metadata and depth flag
+  directly to the Rust pipeline. Resize, provider selection and quality keep
+  their null optional extent outputs. Status copies the same five fields and
+  colour transport is applied before correction. The production table uses
+  the integrated C03 sharpening entry with the same settings record.
+- The host table now binds the Rust FG, scene and window exports directly.
+  The CPU dispatch adapter still sends admitted facts to the existing FG sink
+  and passes the same version-1 window record to the latency owner. D03's
+  ordered SR entry keeps a C++ guard that clears the ordered receipt on failure.
+  FG capture still enters the D03 boundary with its existing graphics lease
+  checks. Public GameSDK records, FG admission and D02 exact-receiver dispatch
+  did not change.
+- The shared-SR device fixture moves sources 11 and 12 to Rust. They cover the
+  resource-only plan, invalid session, changed output rectangle, resource
+  generation, view and thread refusal, cancellation and re-reservation, the
+  frozen transaction after SR settings change, spatial finish, and retirement
+  while suspended. The native settings and actual swapchain Present callbacks
+  catch exceptions before returning to Rust.
+- The rendered-FG device fixture runs its five repeated phases in Rust.
+  The reduced warmup retains its scoped tenth-source auxiliary cleanup.
+  Late enable, native SR Off, native SR On and FG Off keep their original
+  counts, reset points and capture expectations. The native frame callback
+  catches exceptions before returning to Rust. Both fixtures now use typed
+  staging readback for their selected pixels and retain the original pixel
+  comparisons.
+
+`d3d11_host.cpp` and `d3d11_host_platform.h` still publish the private host
+table and the native observer, presentation, capture and overlay boundaries.
+`d3d11_output_platform.h` remains the declaration surface for the shared
+output leaves. The shared-SR fixture still builds its device and exercises
+sources 1 to 10 in C++. The rendered-FG fixture retains its external COM
+facade, native per-frame graphics and lease calls, and receipt assertions in
+C++. These paths remain open. This replay was checked by source comparison,
+pinned formatting, bindgen and locked offline Cargo metadata.

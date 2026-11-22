@@ -51,7 +51,7 @@ pub(super) unsafe extern "C" fn rsf_dlss_set_device(device: Handle) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dlss_native_present(
+pub(crate) unsafe extern "C" fn rsf_dlss_native_present(
     chain: Handle,
     interval: u32,
     flags: u32,

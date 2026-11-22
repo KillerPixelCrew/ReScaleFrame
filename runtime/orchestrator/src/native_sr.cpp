@@ -108,6 +108,15 @@ rsf_dlss_pipeline_result rsf_native_sr_evaluate_ordered(
     return rsf_core_native_sr_evaluate(context, pass, &sr_services, ordered);
 }
 
+extern "C" int32_t rsf_native_sr_evaluate_ordered_guarded(
+    void* context, const rsf_game_render_pass* pass, uint32_t* ordered) noexcept try
+{
+    return rsf_native_sr_evaluate_ordered(context, pass, ordered);
+} catch (...) {
+    if (ordered) *ordered = 0;
+    return RSF_ERROR_NOT_READY;
+}
+
 extern "C" RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_native_sr_evaluate(void* context,
     const rsf_game_render_pass* pass)
 {

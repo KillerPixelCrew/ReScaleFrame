@@ -1990,7 +1990,7 @@ unsafe extern "C" fn rsf_native_fg_retire(_user: Handle, session: Handle) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_fg_present(event: *const PresentEvent) {
+pub(super) unsafe extern "C" fn rsf_native_fg_present(event: *const PresentEvent) {
     let Some(event) = (unsafe { event.as_ref() }) else {
         return;
     };
