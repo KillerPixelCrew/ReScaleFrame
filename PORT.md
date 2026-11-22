@@ -1900,10 +1900,10 @@ Port bootstrap, profile admission and observer lifetime. Attribute each guarded 
 - [x] [games/anomaly/src/native_profile.h](games/anomaly/src/native_profile.h) (generated projection from the Rust profile owner)
 - [x] [games/anomaly/src/plugin.cpp](games/anomaly/src/plugin.cpp)
 - [x] [games/anomaly/src/runtime_module.h](games/anomaly/src/runtime_module.h)
-- [ ] [games/anomaly/temporal/frame_plan.h](games/anomaly/temporal/frame_plan.h)
-- [ ] [games/anomaly/temporal/history.h](games/anomaly/temporal/history.h)
-- [ ] [games/anomaly/temporal/math.h](games/anomaly/temporal/math.h)
-- [ ] [games/anomaly/temporal/planning.h](games/anomaly/temporal/planning.h)
+- [x] [games/anomaly/temporal/frame_plan.h](games/anomaly/temporal/frame_plan.h)
+- [x] [games/anomaly/temporal/history.h](games/anomaly/temporal/history.h)
+- [x] [games/anomaly/temporal/math.h](games/anomaly/temporal/math.h)
+- [x] [games/anomaly/temporal/planning.h](games/anomaly/temporal/planning.h)
 
 **Fixtures (6)**
 
@@ -2139,7 +2139,7 @@ Port the live SR stage, D3D11 pass and reconstruction, including refusing a fram
 - [x] [tests/anomaly_sr_plan.cpp](tests/anomaly_sr_plan.cpp)
 - [ ] [tests/anomaly_sr_profile.cpp](tests/anomaly_sr_profile.cpp)
 - [x] [tests/anomaly_sr_reconstruction.cpp](tests/anomaly_sr_reconstruction.cpp)
-- [ ] [tests/anomaly_sr_roundtrip.cpp](tests/anomaly_sr_roundtrip.cpp)
+- [x] [tests/anomaly_sr_roundtrip.cpp](tests/anomaly_sr_roundtrip.cpp)
 - [x] [tests/anomaly_sr_runtime_api.cpp](tests/anomaly_sr_runtime_api.cpp)
 
 **Rust review findings (18)**
@@ -2203,12 +2203,12 @@ Port swap ownership, projection jitter, temporal history and tonemap routing. Ad
 
 **Fixtures (6)**
 
-- [ ] [tests/anomaly_sr_jitter_reference.h](tests/anomaly_sr_jitter_reference.h) (independent native projection oracle)
+- [x] [tests/anomaly_sr_jitter_reference.h](tests/anomaly_sr_jitter_reference.h) (independent native projection oracle)
 - [x] [tests/anomaly_sr_jitter.cpp](tests/anomaly_sr_jitter.cpp)
 - [x] [tests/anomaly_sr_jitter_device.cpp](tests/anomaly_sr_jitter_device.cpp)
-- [ ] [tests/anomaly_sr_swap.cpp](tests/anomaly_sr_swap.cpp)
-- [ ] [tests/anomaly_sr_temporal_device.cpp](tests/anomaly_sr_temporal_device.cpp)
-- [ ] [tests/anomaly_temporal_tests.cpp](tests/anomaly_temporal_tests.cpp)
+- [x] [tests/anomaly_sr_swap.cpp](tests/anomaly_sr_swap.cpp)
+- [x] [tests/anomaly_sr_temporal_device.cpp](tests/anomaly_sr_temporal_device.cpp)
+- [x] [tests/anomaly_temporal_tests.cpp](tests/anomaly_temporal_tests.cpp)
 
 **Rust review findings (9)**
 
