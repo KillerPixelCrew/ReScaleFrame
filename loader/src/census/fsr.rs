@@ -873,7 +873,7 @@ extern "system" fn wrapper<const ENTRY: Entry>(
         ENTRY,
         unsafe extern "system" fn(u64, u64, u64, u64, u64, u64, u64, u64) -> u64
     );
-    let mut slot = MaybeUninit::zeroed();
+    let mut slot = MaybeUninit::uninit();
     let call = start(&mut slot, ENTRY, pc);
     let args = [a0, a1, a2, a3, a4, a5, a6, a7];
     if unsafe { (*call).full } {
@@ -891,7 +891,7 @@ extern "system" fn wrapper<const ENTRY: Entry>(
 
 fn xess_scale(entry: Entry, pc: Ptr, context: Ptr, x: f32, y: f32) -> i32 {
     let original = original!(entry, unsafe extern "system" fn(Ptr, f32, f32) -> i32);
-    let mut slot = MaybeUninit::zeroed();
+    let mut slot = MaybeUninit::uninit();
     let call = start(&mut slot, entry, pc);
     if unsafe { (*call).full } {
         let mut json = Json(unsafe { &mut (*call).json });
@@ -919,7 +919,7 @@ extern "system" fn exposure_scale(context: Ptr, scale: f32) -> i32 {
     let pc = caller!();
     let entry = RSF_FSR_XessSetExposureMultiplier;
     let original = original!(entry, unsafe extern "system" fn(Ptr, f32) -> i32);
-    let mut slot = MaybeUninit::zeroed();
+    let mut slot = MaybeUninit::uninit();
     let call = start(&mut slot, entry, pc);
     if unsafe { (*call).full } {
         let mut json = Json(unsafe { &mut (*call).json });
@@ -936,7 +936,7 @@ extern "system" fn upscale_ratio(mode: i32) -> f32 {
     let pc = caller!();
     let entry = RSF_FSR_Fsr2GetUpscaleRatio;
     let original = original!(entry, unsafe extern "system" fn(i32) -> f32);
-    let mut slot = MaybeUninit::zeroed();
+    let mut slot = MaybeUninit::uninit();
     let call = start(&mut slot, entry, pc);
     if unsafe { (*call).full } {
         Json(unsafe { &mut (*call).json }).signed(c"quality_mode", mode);

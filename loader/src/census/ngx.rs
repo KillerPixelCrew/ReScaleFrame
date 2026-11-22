@@ -459,7 +459,7 @@ extern "system" fn wrapper<const ENTRY: usize>(
     unsafe { RtlCaptureStackBackTrace(1, 1, &mut caller, null_mut()) };
     let entry = services().entries[ENTRY];
     let original = rsf_census_hook_original(entry);
-    let mut state = MaybeUninit::<rsf_census_call_state>::zeroed();
+    let mut state = MaybeUninit::<rsf_census_call_state>::uninit();
     let call = state.as_mut_ptr();
     unsafe { rsf_census_call_begin(call, entry, caller) };
     let api = ENTRY / GROUP;

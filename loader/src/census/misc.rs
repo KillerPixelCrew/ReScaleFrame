@@ -169,7 +169,7 @@ extern "system" fn nv_query(interface: u32) -> Ptr {
         RSF_MISC_NvapiQueryInterface,
         unsafe extern "system" fn(u32) -> Ptr
     );
-    let mut slot = MaybeUninit::zeroed();
+    let mut slot = MaybeUninit::uninit();
     let state = start(&mut slot, RSF_MISC_NvapiQueryInterface, pc);
     let result = original.map_or(null_mut(), |resolve| unsafe { resolve(interface) });
     let reflex = match interface {
@@ -672,7 +672,7 @@ extern "system" fn sl_get_feature(feature_id: u32, name: *const c_char, output: 
         entry,
         unsafe extern "system" fn(u32, *const c_char, *mut Ptr) -> i32
     );
-    let mut slot = MaybeUninit::zeroed();
+    let mut slot = MaybeUninit::uninit();
     let call = start(&mut slot, entry, pc);
     let mut text = [0u8; 64];
     let have_name = read_name(name as u64, &mut text);
@@ -716,7 +716,7 @@ extern "system" fn wrapper<const ENTRY: Entry>(
     let pc = caller!();
     type Original = unsafe extern "system" fn(u64, u64, u64, u64, u64, u64, u64, u64) -> u64;
     let original = original!(ENTRY, Original);
-    let mut slot = MaybeUninit::zeroed();
+    let mut slot = MaybeUninit::uninit();
     let call = start(&mut slot, ENTRY, pc);
     let args = [a0, a1, a2, a3, a4, a5, a6, a7];
     if unsafe { (*call).full } {

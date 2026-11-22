@@ -8,7 +8,9 @@ use super::json::{
 use super::json_abi::rsf_census_json;
 use super::output::*;
 use super::record::*;
-use super::record_abi::{RSF_CENSUS_RECORD_STACK_FRAMES, rsf_census_record_writer};
+use super::record_abi::{
+    RSF_CENSUS_RECORD_BODY_MAX, RSF_CENSUS_RECORD_STACK_FRAMES, rsf_census_record_writer,
+};
 use super::session_abi::*;
 use super::static_scan::rsf_census_static_scan;
 use super::stats::*;
@@ -89,7 +91,7 @@ static FATAL_REPORTS: AtomicU32 = AtomicU32::new(0);
 struct CrashCall(MaybeUninit<rsf_census_call_state>);
 // The guarded slot stays in process memory and records only borrowed code addresses.
 unsafe impl Send for CrashCall {}
-static CRASH_CALL: Mutex<CrashCall> = Mutex::new(CrashCall(MaybeUninit::zeroed()));
+static CRASH_CALL: Mutex<CrashCall> = Mutex::new(CrashCall(MaybeUninit::uninit()));
 
 #[derive(Clone, Copy)]
 struct Finding {
@@ -419,7 +421,7 @@ pub(super) unsafe extern "C" fn rsf_census_call_begin(
     let count = unsafe {
         RtlCaptureStackBackTrace(0, frames.len() as u32, frames.as_mut_ptr(), null_mut())
     } as usize;
-    let frames = &frames[..count];
+    let frames = &frames[..count.min(frames.len())];
     let first = frames
         .iter()
         .position(|&frame| frame == caller)
@@ -439,9 +441,14 @@ pub(super) unsafe extern "C" fn rsf_census_call_begin(
             (&raw mut (*state).stack).cast(),
             copied,
         );
-        let body = &mut *(&raw mut (*state).body)
-            .cast::<[u8; super::record_abi::RSF_CENSUS_RECORD_BODY_MAX as usize]>();
-        (*state).json = json_buffer(body, 0);
+        (*state).json = rsf_census_json {
+            buffer: (&raw mut (*state).body).cast(),
+            capacity: RSF_CENSUS_RECORD_BODY_MAX as usize,
+            length: 0,
+            comma: 0,
+            depth: 0,
+            overflow: false,
+        };
         Json(&mut (*state).json).open(None, b'{');
     }
 }
@@ -483,7 +490,11 @@ unsafe fn finish_record(state: *mut rsf_census_call_state, result: u64) {
         (*record).tid = (*state).tid;
         (*record).ret = result;
         (*record).stack_n = (*state).stack_n;
-        (*record).stack = (*state).stack;
+        ptr::copy_nonoverlapping(
+            (&raw const (*state).stack).cast::<*mut c_void>(),
+            (&raw mut (*record).stack).cast(),
+            (*state).stack_n as usize,
+        );
         rsf_census_thread_name(
             (*state).tid,
             (*state).t_us,
@@ -535,7 +546,7 @@ fn event(
     result: u64,
     fields: impl FnOnce(&mut Json<'_>),
 ) {
-    let mut call = MaybeUninit::<rsf_census_call_state>::zeroed();
+    let mut call = MaybeUninit::<rsf_census_call_state>::uninit();
     record_event(call.as_mut_ptr(), core, pc, name, result, fields);
 }
 
@@ -760,7 +771,7 @@ unsafe extern "C" fn rsf_census_install_impl(
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_census_flush() -> rsf_census_result {
-    if !EVER_INSTALLED.load(Acquire) {
+    if !EVER_INSTALLED.load(Acquire) || INITIALIZING.load(Acquire) {
         return NOT_INSTALLED;
     }
     if let Some(core) = CORE.get() {

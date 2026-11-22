@@ -269,3 +269,37 @@ The creation identity mode in `tests/vendor_census.cpp` now runs in Rust. It loa
 through the original LoadLibraryW path, checks the four early exports and verifies the four
 resolver pointers after post-load. The shared C++ functional, budget, Vulkan, FidelityFX and
 DllMain modes still need porting.
+
+## Inventory at the end of the 82b39a63 continuation
+
+Eleven additional baseline paths have source cutovers. The two public header paths retain
+their existing C declarations. The internal header retains the native catalog and platform
+declarations.
+
+- `loader/census/include/rescaleframe/census_d3d12_observer.h`
+- `loader/census/include/rescaleframe/vendor_census.h`
+- `loader/census/src/census_internal.h`
+- `loader/census/src/core.cpp`
+- `loader/census/src/hooks.cpp`
+- `loader/census/src/wrap_d3d.cpp`
+- `loader/census/src/wrap_fsr.cpp`
+- `loader/census/src/wrap_generic.h`
+- `loader/census/src/wrap_misc.cpp`
+- `loader/census/src/wrap_ngx.cpp`
+- `tests/vendor_census_layouts.cpp`
+
+Five baseline paths remain open.
+
+- `loader/diagnostics/include/rescaleframe/module_dump.h` and
+  `loader/diagnostics/src/module_dump_internal.h` still cover the native dump writer, RTTI and
+  other sidecar sections.
+- `loader/census/src/decode_d3d_platform.cpp` still owns the guarded COM resource queries.
+- `tests/loader/module_dump_rtti_fixture.cpp` supplies the compiler's RTTI specimen.
+- `tests/vendor_census.cpp` still owns the functional, budget, Vulkan, FidelityFX and DllMain
+  modes.
+
+The new native boundaries are `loader/census/src/census_platform.cpp`,
+`loader/census/src/hook_platform.cpp`, `loader/census/src/guarded_platform.cpp`,
+`loader/census/src/d3d_guarded_platform.cpp`, `loader/diagnostics/src/module_dump_writer.c`,
+and `tests/loader/vendor_layout_facts.cpp`. The Windows builds, fixture execution, lint and
+device checks remain user-owned.

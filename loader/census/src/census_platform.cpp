@@ -34,13 +34,13 @@ void register_wrappers_vk(void** table) noexcept {
         RSF_CENSUS_VK_ENTRIES(RSF_CENSUS_VK_MAP)
 #undef RSF_CENSUS_VK_MAP
     };
-    static_assert(std::size(entries) == RSF_CENSUS_VK_COUNT);
+    static_assert(std::size(entries) == static_cast<size_t>(RSF_CENSUS_VK_COUNT));
     static_assert(sizeof(rsf_census_call_state) <= sizeof(rsf_census_call_storage));
     static_assert(alignof(rsf_census_call_state) <= alignof(rsf_census_call_storage));
     static const rsf_census_wrapper_services services = {
         [](uint16_t entry) { return orig_by(entries[entry]); },
         [](rsf_census_call_storage* storage, uint16_t entry, void* caller) -> rsf_census_json* {
-            auto* call = ::new (static_cast<void*>(storage)) rsf_census_call_state{};
+            auto* call = ::new (static_cast<void*>(storage)) rsf_census_call_state;
             rsf_census_call_begin(call, static_cast<uint16_t>(entries[entry]), caller);
             return call->full ? &call->json : nullptr;
         },
@@ -75,7 +75,7 @@ void register_wrappers_ngx(void** table) noexcept {
         RSF_NGX_FUNCS(RSF_CENSUS_NGX_ID, VULKAN, nullptr, nullptr)
 #undef RSF_CENSUS_NGX_ID
     };
-    static_assert(std::size(entries) == RSF_CENSUS_NGX_ENTRIES);
+    static_assert(std::size(entries) == static_cast<size_t>(RSF_CENSUS_NGX_ENTRIES));
     static const rsf_census_ngx_platform platform = {
         safe_read,
         read_arg_string,
@@ -104,7 +104,7 @@ void register_wrappers_misc(void** table) noexcept {
         RSF_CENSUS_MISC_ENTRIES(RSF_CENSUS_MISC_ID)
 #undef RSF_CENSUS_MISC_ID
     };
-    static_assert(std::size(entries) == RSF_MISC_COUNT);
+    static_assert(std::size(entries) == static_cast<size_t>(RSF_MISC_COUNT));
     static const rsf_census_misc_platform platform = {
         safe_read, read_arg_string,
         [](const void* p, uint16_t* text, size_t capacity) {
@@ -136,7 +136,7 @@ void register_wrappers_fsr(void** table) noexcept {
         RSF_CENSUS_FSR_ENTRIES(RSF_CENSUS_FSR_ID)
 #undef RSF_CENSUS_FSR_ID
     };
-    static_assert(std::size(entries) == RSF_FSR_COUNT);
+    static_assert(std::size(entries) == static_cast<size_t>(RSF_FSR_COUNT));
     static const rsf_census_fsr_platform platform = {
         safe_read,
         [](rsf_census_json* state, const char* key, const void* object, bool require_slot) {

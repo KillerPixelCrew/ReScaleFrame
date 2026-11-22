@@ -98,7 +98,7 @@ void register_wrappers_d3d(void** table) noexcept {
         RSF_CENSUS_D3D_ENTRIES(RSF_CENSUS_D3D_ID)
 #undef RSF_CENSUS_D3D_ID
     };
-    static_assert(std::size(entries) == RSF_D3D_COUNT);
+    static_assert(std::size(entries) == static_cast<size_t>(RSF_D3D_COUNT));
     static const rsf_census_d3d_platform platform = {
         safe_read, safe_read_cstr, vtable_slot, query_interface, release_interface,
         queue_desc, swapchain_desc, enable_debug, info_queue,
