@@ -5,7 +5,6 @@ use crate::vulkan_sharpening_abi::rsf_sharpenvk_platform;
 use rsf_game_sys::rsf_frame_record;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
-use std::ffi::c_char;
 
 const DEVICE: usize = 0x1000;
 const OUTPUT: u64 = 0x2000;
@@ -18,6 +17,7 @@ struct Fake {
     events: Vec<String>,
     next: u64,
     live: BTreeSet<u64>,
+    inactive: bool,
     fail: Option<&'static str>,
     passes: Vec<(usize, PassCopy)>,
     facts: Vec<(u32, f32, [u32; 2])>,
@@ -202,23 +202,11 @@ unsafe extern "C" fn input_view(_: *mut c_void, image: u64, _: u32, out: *mut u6
     create(if image == DEPTH { "depth-view" } else { "view" }, out)
 }
 unsafe extern "C" fn options(request: *const Options, out: *mut Options) -> u32 {
-    let mut value = if request.is_null() {
-        Options {
-            struct_size: size_of::<Options>() as u32,
-            abi_version: 1,
-            ..unsafe { std::mem::zeroed() }
-        }
-    } else {
-        unsafe { *request }
+    let Some(request) = (unsafe { request.as_ref() }) else {
+        return 0;
     };
-    if value.mode > 4 {
-        value.mode = 0;
-    }
-    unsafe { out.write(value) };
-    u32::from(
-        (1..=3).contains(&value.mode)
-            && (value.sharpness > 0.0 || (value.mas != 0 && value.motion_sharpness > 0.0)),
-    )
+    unsafe { out.write(*request) };
+    u32::from(with(|fake| !fake.inactive))
 }
 unsafe extern "C" fn write_constants(mapped: *mut c_void, _: *const Options, facts: *const Facts) {
     assert!(!mapped.is_null());
@@ -255,29 +243,21 @@ unsafe extern "C" fn record(_: *mut c_void, commands: *mut c_void, pass: *const 
         ));
     });
 }
-unsafe extern "C" fn log(_: *const Frame, message: *const c_char) {
-    let message = unsafe { CStr::from_ptr(message) }
-        .to_string_lossy()
-        .into_owned();
-    with(|fake| fake.events.push(format!("log {message}")));
-}
-
-static PLATFORM: rsf_sharpenvk_platform = rsf_sharpenvk_platform {
+const PLATFORM: &rsf_sharpenvk_platform = &rsf_sharpenvk_platform {
     images: &IMAGES,
-    open,
-    close,
-    image_user,
-    create_layouts,
-    release_layouts,
-    create_pipeline,
-    destroy_pipeline,
-    create_uniform,
-    release_uniform,
-    create_view: input_view,
-    options,
-    write_constants,
-    record,
-    log,
+    open: Some(open),
+    close: Some(close),
+    image_user: Some(image_user),
+    create_layouts: Some(create_layouts),
+    release_layouts: Some(release_layouts),
+    create_pipeline: Some(create_pipeline),
+    destroy_pipeline: Some(destroy_pipeline),
+    create_uniform: Some(create_uniform),
+    release_uniform: Some(release_uniform),
+    create_view: Some(input_view),
+    options: Some(options),
+    write_constants: Some(write_constants),
+    record: Some(record),
 };
 
 struct Harness {
@@ -295,7 +275,7 @@ impl Harness {
         record.output_width = 33;
         record.output_height = 17;
         Self {
-            owner: unsafe { rsf_core_sharpenvk_create(&PLATFORM) },
+            owner: unsafe { rsf_core_sharpenvk_create(PLATFORM) },
             setup,
             record,
         }
@@ -326,7 +306,7 @@ impl Harness {
         frame
     }
 
-    fn run(&self, commands: usize, frame: &Frame, report: bool) -> bool {
+    fn run(&self, commands: usize, frame: &Frame) -> bool {
         unsafe {
             rsf_core_sharpenvk_record(
                 self.owner,
@@ -334,7 +314,6 @@ impl Harness {
                 commands as *mut c_void,
                 frame,
                 OUTPUT,
-                u32::from(report),
             ) != 0
         }
     }
@@ -360,20 +339,12 @@ impl Drop for Harness {
 }
 
 #[test]
-fn off_vendor_and_zero_strength_touch_nothing() {
+fn inactive_options_touch_nothing() {
     let h = Harness::new();
-    let mut frame = h.frame(0);
-    frame.sharpening.struct_size = 0;
-    assert!(h.run(1, &frame, true));
-    for mode in [0, 4, 9] {
-        assert!(h.run(1, &h.frame(mode), true));
-    }
-    let mut zero = h.frame(1);
-    zero.sharpening.sharpness = 0.0;
-    assert!(h.run(1, &zero, true));
-    // Without a device or command buffer the disabled modes still succeed.
+    with(|fake| fake.inactive = true);
+    assert!(h.run(0, &h.frame(1)));
     let blank: Frame = unsafe { std::mem::zeroed() };
-    assert!(h.run(0, &blank, true));
+    assert!(h.run(0, &blank));
     assert!(events().is_empty());
     assert_eq!(h.dispatches(), 0);
 }
@@ -402,19 +373,19 @@ fn admission_refuses_invalid_inputs_before_binding_the_device() {
     for (index, edit) in cases.into_iter().enumerate() {
         let mut frame = h.frame(1);
         edit(&mut frame);
-        assert!(!h.run(1, &frame, false), "case {index}");
+        assert!(!h.run(1, &frame), "case {index}");
     }
-    assert!(!h.run(0, &h.frame(2), false));
+    assert!(!h.run(0, &h.frame(2)));
     assert!(
         unsafe {
-            rsf_core_sharpenvk_record(h.owner, &h.setup, ptr::dangling_mut(), &h.frame(1), 0, 0)
+            rsf_core_sharpenvk_record(h.owner, &h.setup, ptr::dangling_mut(), &h.frame(1), 0)
         } == 0
     );
     let mut zero = h.record.clone();
     zero.output_width = 0;
     let mut frame = h.frame(1);
     frame.record = &*zero;
-    assert!(!h.run(1, &frame, false));
+    assert!(!h.run(1, &frame));
     assert!(events().is_empty(), "no device work before admission");
 }
 
@@ -427,7 +398,7 @@ fn records_the_effective_filter_and_reuses_retired_slots() {
     frame.exposure.width = 1;
     frame.exposure.height = 1;
     frame.exposure.format = R16_FLOAT;
-    assert!(h.run(7, &frame, true));
+    assert!(h.run(7, &frame));
     let created = events();
     assert_eq!(
         created[..8],
@@ -453,7 +424,7 @@ fn records_the_effective_filter_and_reuses_retired_slots() {
     frame.depth.image = 0;
     frame.exposure.image = 0;
     frame.pre_exposure = f32::NAN;
-    assert!(h.run(8, &frame, true));
+    assert!(h.run(8, &frame));
     let (_, fallback) = with(|fake| fake.passes[1]);
     assert_ne!(
         fallback.set, depth.set,
@@ -473,7 +444,7 @@ fn records_the_effective_filter_and_reuses_retired_slots() {
     h.retire(0);
     h.retire(99);
     assert_eq!(events(), ["-view", "-view", "-view", "-view"]);
-    assert!(h.run(9, &h.frame(3), true));
+    assert!(h.run(9, &h.frame(3)));
     let (_, reused) = with(|fake| fake.passes[2]);
     assert_eq!(reused.set, depth.set, "the retired slot is reused");
     assert_eq!(reused.scratch_initialized, 1);
@@ -481,23 +452,15 @@ fn records_the_effective_filter_and_reuses_retired_slots() {
 }
 
 #[test]
-fn slots_are_bounded_and_failure_is_reported_once() {
+fn slots_are_bounded_until_retired() {
     let h = Harness::new();
     let frame = h.frame(1);
     for commands in 1..=64 {
-        assert!(h.run(commands, &frame, true));
+        assert!(h.run(commands, &frame));
     }
-    events();
-    assert!(!h.run(65, &frame, false));
-    assert!(events().is_empty());
-    assert!(!h.run(65, &frame, true));
-    assert!(!h.run(66, &frame, true));
-    assert_eq!(
-        events(),
-        ["log Vulkan sharpening unavailable; retaining vendor output"]
-    );
+    assert!(!h.run(65, &frame));
     h.retire(3);
-    assert!(h.run(65, &frame, true));
+    assert!(h.run(65, &frame));
     assert_eq!(h.dispatches(), 65);
 }
 
@@ -506,9 +469,9 @@ fn failed_binding_latches_until_clear() {
     let h = Harness::new();
     let frame = h.frame(1);
     with(|fake| fake.fail = Some("pipeline2"));
-    assert!(!h.run(1, &frame, false));
+    assert!(!h.run(1, &frame));
     with(|fake| fake.fail = None);
-    assert!(!h.run(1, &frame, false));
+    assert!(!h.run(1, &frame));
     assert_eq!(events().iter().filter(|e| *e == "open").count(), 1);
     h.clear();
     assert_eq!(
@@ -516,7 +479,7 @@ fn failed_binding_latches_until_clear() {
         ["-pipeline", "-layout", "-layout", "close"],
         "partial pipelines and layouts are released"
     );
-    assert!(h.run(1, &frame, false));
+    assert!(h.run(1, &frame));
 }
 
 #[test]
@@ -524,21 +487,20 @@ fn unavailable_device_latches_and_a_bound_device_refuses_another() {
     let h = Harness::new();
     let frame = h.frame(1);
     with(|fake| fake.fail = Some("open"));
-    assert!(!h.run(1, &frame, false));
+    assert!(!h.run(1, &frame));
     with(|fake| fake.fail = None);
-    assert!(!h.run(1, &frame, false));
+    assert!(!h.run(1, &frame));
     h.clear();
     assert_eq!(events(), ["open"]);
-    assert!(h.run(1, &frame, false));
+    assert!(h.run(1, &frame));
     let mut moved = h.setup;
     moved.device = (DEVICE + 1) as *mut c_void;
     let mut foreign = frame;
     foreign.motion.image = 0;
     foreign.depth.image = 0;
     assert!(
-        unsafe {
-            rsf_core_sharpenvk_record(h.owner, &moved, 2 as *mut c_void, &foreign, OUTPUT, 0)
-        } == 0
+        unsafe { rsf_core_sharpenvk_record(h.owner, &moved, 2 as *mut c_void, &foreign, OUTPUT) }
+            == 0
     );
     assert_eq!(h.dispatches(), 1);
 }
@@ -548,15 +510,15 @@ fn refused_preparation_and_views_free_the_slot() {
     let h = Harness::new();
     let frame = h.frame(2);
     with(|fake| fake.fail = Some("memory"));
-    assert!(!h.run(1, &frame, false));
+    assert!(!h.run(1, &frame));
     with(|fake| fake.fail = Some("depth-view"));
-    assert!(!h.run(1, &frame, false));
+    assert!(!h.run(1, &frame));
     with(|fake| fake.fail = None);
     let live = with(|fake| fake.live.len());
     // Device objects plus one prepared slot: four uniform handles, scratch
     // image, memory and view. No input view survives the refusal.
     assert_eq!(live, 5 + 7);
-    assert!(h.run(2, &frame, false));
+    assert!(h.run(2, &frame));
     assert_eq!(with(|fake| fake.passes.len()), 1);
     assert_eq!(h.dispatches(), 1);
 }
@@ -565,8 +527,8 @@ fn refused_preparation_and_views_free_the_slot() {
 fn clear_releases_slots_before_pipelines_and_device() {
     let h = Harness::new();
     let frame = h.frame(1);
-    assert!(h.run(1, &frame, false));
-    assert!(h.run(2, &frame, false));
+    assert!(h.run(1, &frame));
+    assert!(h.run(2, &frame));
     events();
     h.clear();
     let released = events();

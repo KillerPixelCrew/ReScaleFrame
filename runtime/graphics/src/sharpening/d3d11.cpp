@@ -3,41 +3,12 @@
 #include "rcas.h"
 #include "da_rcas.h"
 #include "da_das.h"
-#include <rescaleframe/d3d11_state.h>
+#include "d3d11_platform.h"
 #include <rescaleframe/shader_compile.h>
 #include <wrl/client.h>
 
-struct rsf_sharpen11_draw {
-    void* views[4];
-    void* output;
-    void* scratch;
-    void* target;
-    void* constants;
-    void* shader;
-    uint32_t extent[6];
-    uint32_t exposure_texture;
-    uint32_t mode;
-};
-
-struct rsf_sharpen11_platform {
-    void* (*shader)(void*, uint32_t);
-    void* (*constants)(void*);
-    void (*scratch)(void*, uint32_t, uint32_t, uint32_t, uint32_t, void**);
-    decltype(&rsf_d3d11_state_save) save;
-    decltype(&rsf_d3d11_state_restore) restore;
-    void (*dispatch)(void*, const void*, const void*, const rsf_sharpen11_draw*);
-};
-
 static_assert(sizeof(rsf_sharpen11_draw) == 104);
 static_assert(sizeof(rsf_sharpen11_platform) == 6 * sizeof(void*));
-
-extern "C" {
-rsf_sharpen11* rsf_core_sharpen11_create();
-uint32_t rsf_core_sharpen11_run(rsf_sharpen11*, const rsf_sharpen11_platform*, void*, void* const*,
-    uint32_t, const void*, const void*);
-uint64_t rsf_core_sharpen11_count(const rsf_sharpen11*);
-void rsf_core_sharpen11_destroy(rsf_sharpen11*);
-}
 
 namespace rsf::sharpening {
 namespace {

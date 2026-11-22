@@ -3,13 +3,13 @@
 //! XeSS and FSR4 super-resolution services.
 //!
 //! Rust decides admission, the effective filter, slot reuse, device and
-//! pipeline lifetime, failure reporting and retirement. Native leaves in
+//! pipeline lifetime and retirement. Native leaves in
 //! `sharpening_vulkan.h` resolve Vulkan functions, create and record Vulkan
 //! objects, select the SPIR-V for a mode and pack the shader constants.
 use crate::render_abi::rsf_sharpening_options as Options;
 use crate::sharpening_policy::{FILTERS, effective_mode};
 use crate::vulkan_fg_resources::{ensure_image, rsf_core_vkfg_release_image};
-use crate::vulkan_fg_resources_abi::rsf_vkfg_image as OwnedImage;
+use crate::vulkan_fg_resources_abi::{rsf_vkfg_image as OwnedImage, rsf_vkfg_platform as ImageOps};
 use crate::vulkan_sharpening_abi::{
     rsf_sharpenvk_facts as Facts, rsf_sharpenvk_layouts as Layouts, rsf_sharpenvk_pass as Pass,
     rsf_sharpenvk_platform as Platform, rsf_sharpenvk_uniform as Uniform,
@@ -18,7 +18,7 @@ use crate::vulkan_sr::{R32_FLOAT, RGBA16_FLOAT, SHADER_READ, STORAGE_USAGE, TRAN
 use crate::vulkan_sr_abi::{
     rsf_srvk_frame as Frame, rsf_srvk_image as Image, rsf_srvk_setup as Setup,
 };
-use std::ffi::{CStr, c_void};
+use std::ffi::c_void;
 use std::ptr;
 
 const R16_FLOAT: u32 = 76;
@@ -26,7 +26,6 @@ const R16_FLOAT: u32 = 76;
 // exhausts the slots and keeps the vendor output.
 const MAX_SLOTS: usize = 64;
 const SCRATCH_USAGE: u32 = STORAGE_USAGE | TRANSFER_SRC_USAGE;
-const FAILURE: &CStr = c"Vulkan sharpening unavailable; retaining vendor output";
 
 #[derive(Default)]
 struct Slot {
@@ -51,7 +50,6 @@ pub(crate) struct Owner {
     device: Option<Device>,
     slots: Vec<Slot>,
     dispatches: u64,
-    failure_logged: bool,
 }
 
 fn admit_inputs(setup: &Setup, frame: &Frame) -> bool {
@@ -82,19 +80,25 @@ fn exposure_scale(pre_exposure: f32) -> f32 {
     }
 }
 
+fn image_ops(platform: &Platform) -> &ImageOps {
+    // Owner construction requires the native table and its non-null image table
+    // to stay alive for the lifetime of the owner.
+    unsafe { &*platform.images }
+}
+
 fn release_views(platform: &Platform, leaf: *mut c_void, views: &mut [u64; 4]) {
-    let user = unsafe { (platform.image_user)(leaf) };
+    let user = unsafe { platform.image_user.unwrap()(leaf) };
     for view in views.iter_mut().filter(|view| **view != 0) {
-        unsafe { (platform.images.destroy_view.unwrap())(user, *view) };
+        unsafe { (image_ops(platform).destroy_view.unwrap())(user, *view) };
         *view = 0;
     }
 }
 
 fn release_slot(platform: &Platform, leaf: *mut c_void, slot: &mut Slot) {
     release_views(platform, leaf, &mut slot.views);
-    let user = unsafe { (platform.image_user)(leaf) };
-    rsf_core_vkfg_release_image(platform.images, user, &mut slot.scratch);
-    unsafe { (platform.release_uniform)(leaf, &mut slot.uniform) };
+    let user = unsafe { platform.image_user.unwrap()(leaf) };
+    rsf_core_vkfg_release_image(image_ops(platform), user, &mut slot.scratch);
+    unsafe { platform.release_uniform.unwrap()(leaf, &mut slot.uniform) };
     *slot = Slot::default();
 }
 
@@ -106,7 +110,7 @@ impl Owner {
         }
         let platform = self.platform;
         let mut leaf = ptr::null_mut();
-        let opened = unsafe { (platform.open)(setup, &mut leaf) } == 0 && !leaf.is_null();
+        let opened = unsafe { platform.open.unwrap()(setup, &mut leaf) } == 0 && !leaf.is_null();
         let device = self.device.insert(Device {
             key: setup.device as usize,
             leaf,
@@ -114,12 +118,13 @@ impl Owner {
             pipelines: [0; 3],
             ready: false,
         });
-        if !opened || unsafe { (platform.create_layouts)(leaf, &mut device.layouts) } != 0 {
+        if !opened || unsafe { platform.create_layouts.unwrap()(leaf, &mut device.layouts) } != 0 {
             return false;
         }
         for (pipeline, mode) in device.pipelines.iter_mut().zip(FILTERS) {
-            if unsafe { (platform.create_pipeline)(leaf, device.layouts.pipeline, mode, pipeline) }
-                != 0
+            if unsafe {
+                platform.create_pipeline.unwrap()(leaf, device.layouts.pipeline, mode, pipeline)
+            } != 0
             {
                 return false;
             }
@@ -140,15 +145,10 @@ impl Owner {
     }
 
     // The slot is free, so every recording that used its resources has retired.
-    fn prepare(&mut self, index: usize, extent: [u32; 2]) -> bool {
-        let platform = self.platform;
-        let Some(device) = &self.device else {
-            return false;
-        };
-        let slot = &mut self.slots[index];
+    fn prepare(platform: &Platform, device: &Device, slot: &mut Slot, extent: [u32; 2]) -> bool {
         if slot.uniform.pool == 0
             && unsafe {
-                (platform.create_uniform)(
+                platform.create_uniform.unwrap()(
                     device.leaf,
                     device.layouts.descriptor_set,
                     &mut slot.uniform,
@@ -157,9 +157,9 @@ impl Owner {
         {
             return false;
         }
-        let user = unsafe { (platform.image_user)(device.leaf) };
+        let user = unsafe { platform.image_user.unwrap()(device.leaf) };
         ensure_image(
-            platform.images,
+            image_ops(platform),
             user,
             &mut slot.scratch,
             extent,
@@ -173,12 +173,13 @@ impl Owner {
             && slot.scratch.view != 0
     }
 
-    fn create_views(&mut self, index: usize, frame: &Frame, output: u64) -> bool {
-        let platform = self.platform;
-        let Some(device) = &self.device else {
-            return false;
-        };
-        let slot = &mut self.slots[index];
+    fn create_views(
+        platform: &Platform,
+        device: &Device,
+        slot: &mut Slot,
+        frame: &Frame,
+        output: u64,
+    ) -> bool {
         let requests = [
             (output, RGBA16_FLOAT),
             (frame.motion.image, frame.motion.format),
@@ -187,7 +188,7 @@ impl Owner {
         ];
         for (view, (image, format)) in slot.views.iter_mut().zip(requests) {
             if image != 0
-                && unsafe { (platform.create_view)(device.leaf, image, format, view) } != 0
+                && unsafe { platform.create_view.unwrap()(device.leaf, image, format, view) } != 0
             {
                 release_views(platform, device.leaf, &mut slot.views);
                 return false;
@@ -205,7 +206,7 @@ impl Owner {
             ptr::null()
         };
         // Off, Vendor and zero strength leave the output untouched.
-        if unsafe { (platform.options)(request, &mut options) } == 0 {
+        if unsafe { platform.options.unwrap()(request, &mut options) } == 0 {
             return true;
         }
         let Some(record) = (unsafe { frame.record.as_ref() }) else {
@@ -225,20 +226,15 @@ impl Owner {
         let Some(index) = self.free_slot() else {
             return false;
         };
-        if !self.prepare(index, extent) {
-            if let Some(device) = &self.device {
-                release_slot(platform, device.leaf, &mut self.slots[index]);
-            }
-            return false;
-        }
-        // A refusal before recording leaves the slot free and no view alive.
-        if !self.create_views(index, frame, output) {
-            return false;
-        }
-        let Some(device) = &self.device else {
-            return false;
-        };
+        let device = self.device.as_ref().expect("initialized device");
         let slot = &mut self.slots[index];
+        if !Self::prepare(platform, device, slot, extent) {
+            release_slot(platform, device.leaf, slot);
+            return false;
+        }
+        if !Self::create_views(platform, device, slot, frame, output) {
+            return false;
+        }
         let facts = Facts {
             width: extent[0],
             height: extent[1],
@@ -255,7 +251,7 @@ impl Owner {
             motion_x: frame.motion_scale_x,
             motion_y: frame.motion_scale_y,
         };
-        unsafe { (platform.write_constants)(slot.uniform.mapped, &options, &facts) };
+        unsafe { platform.write_constants.unwrap()(slot.uniform.mapped, &options, &facts) };
         let color = slot.views[0];
         let pass = Pass {
             set: slot.uniform.set,
@@ -274,7 +270,7 @@ impl Owner {
             scratch_initialized: slot.scratch.initialized,
             reserved: 0,
         };
-        unsafe { (platform.record)(device.leaf, commands, &pass) };
+        unsafe { platform.record.unwrap()(device.leaf, commands, &pass) };
         slot.commands = commands as usize;
         slot.scratch.initialized = 1;
         self.dispatches += 1;
@@ -317,10 +313,10 @@ impl Owner {
                 .into_iter()
                 .filter(|pipeline| *pipeline != 0)
             {
-                (platform.destroy_pipeline)(device.leaf, pipeline);
+                platform.destroy_pipeline.unwrap()(device.leaf, pipeline);
             }
-            (platform.release_layouts)(device.leaf, &mut device.layouts);
-            (platform.close)(device.leaf);
+            platform.release_layouts.unwrap()(device.leaf, &mut device.layouts);
+            platform.close.unwrap()(device.leaf);
         }
     }
 }
@@ -338,12 +334,14 @@ unsafe extern "C" fn rsf_core_sharpenvk_create(platform: *const Platform) -> *mu
     }
     // The native facade passes its static leaf table.
     let platform: &'static Platform = unsafe { &*platform };
+    if platform.images.is_null() {
+        return ptr::null_mut();
+    }
     crate::allocate_handle(Owner {
         platform,
         device: None,
         slots: Vec::new(),
         dispatches: 0,
-        failure_logged: false,
     })
 }
 
@@ -361,19 +359,13 @@ unsafe extern "C" fn rsf_core_sharpenvk_record(
     commands: *mut c_void,
     frame: *const Frame,
     output: u64,
-    report_failure: u32,
 ) -> u32 {
     let (Some(owner), Some(setup), Some(frame)) =
         (unsafe { (owner.as_mut(), setup.as_ref(), frame.as_ref()) })
     else {
         return 0;
     };
-    let recorded = owner.record(setup, commands, frame, output);
-    if !recorded && report_failure != 0 && !owner.failure_logged {
-        owner.failure_logged = true;
-        unsafe { (owner.platform.log)(frame, FAILURE.as_ptr()) };
-    }
-    u32::from(recorded)
+    u32::from(owner.record(setup, commands, frame, output))
 }
 
 #[unsafe(no_mangle)]

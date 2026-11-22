@@ -53,7 +53,6 @@ typedef struct rsf_sharpenvk_platform {
     uint32_t (*options)(const rsf_sharpening_options* request, rsf_sharpening_options* sanitized);
     void (*write_constants)(void* mapped, const rsf_sharpening_options*, const rsf_sharpenvk_facts*);
     void (*record)(void* device, void* commands, const rsf_sharpenvk_pass*);
-    void (*log)(const rsf_srvk_frame*, const char* message);
 } rsf_sharpenvk_platform;
 
 #ifdef __cplusplus
@@ -67,7 +66,7 @@ void rsf_core_sharpenvk_destroy(rsf_sharpenvk*);
    output holds the requested result, including Off and Vendor modes. A
    refusal records nothing and leaves the output unchanged. */
 uint32_t rsf_core_sharpenvk_record(rsf_sharpenvk*, const rsf_srvk_setup*, void* commands,
-    const rsf_srvk_frame*, uint64_t output, uint32_t report_failure);
+    const rsf_srvk_frame*, uint64_t output);
 /* Call after GPU completion and reset of every recording on commands. */
 void rsf_core_sharpenvk_retire(rsf_sharpenvk*, void* commands);
 /* Releases the device, pipelines and slots. Every user must be drained. */

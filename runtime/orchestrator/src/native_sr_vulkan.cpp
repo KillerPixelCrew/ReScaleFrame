@@ -76,7 +76,6 @@ struct FfxOps {
     void (*copy)(FfxNative*, void*, const rsf_vkfg_image_copy*);
     int32_t (*sharpen)(FfxNative*, const rsf_srvk_setup*, void*, const rsf_srvk_frame*, uint64_t);
     void (*clear_sharpen)(FfxNative*);
-    void (*log)(const rsf_srvk_frame*, const char*);
     void (*capture_provider)(FfxNative*, uint64_t, uint32_t);
     void (*capture_record)(FfxNative*, void*, const rsf_srvk_image*, const rsf_frame_record*, const char*, uint32_t);
     int32_t (*capture_wants)(FfxNative*, uint64_t);
@@ -94,7 +93,7 @@ struct Platform {
     int32_t (*dump_wants)(const rsf_frame_record*);
     void (*dump_result)(const rsf_frame_record*, const char*, uint32_t, int32_t);
 };
-static_assert(sizeof(FfxOps) == 30 * sizeof(void*) && sizeof(Platform) == 296 && sizeof(Blit) == 24);
+static_assert(sizeof(FfxOps) == 29 * sizeof(void*) && sizeof(Platform) == 288 && sizeof(Blit) == 24);
 static_assert(sizeof(FfxExports) == 4 * sizeof(void*) && sizeof(FfxDeviceEntries) == 9 * sizeof(void*));
 static_assert(offsetof(FfxOps, barrier) == 17 * 8 && offsetof(FfxOps, clear_color_zero) == 18 * 8 &&
     offsetof(FfxOps, dispatch) == 19 * 8 && offsetof(FfxOps, copy) == 20 * 8 && offsetof(FfxOps, sharpen) == 21 * 8);
@@ -396,15 +395,9 @@ constexpr Platform native{
         [](FfxNative* owner) { return owner->memory.memoryTypeCount; }, release,
         record_barrier, clear_color_zero, dispatch, record_copy,
         [](FfxNative* owner, const rsf_srvk_setup* setup, void* commands, const rsf_srvk_frame* frame, uint64_t output) -> int32_t {
-            return owner->sharpen.execute(*setup, commands, *frame, reinterpret_cast<VkImage>(output));
+            return owner->sharpen.run(*setup, commands, *frame, reinterpret_cast<VkImage>(output));
         },
         [](FfxNative* owner) { owner->sharpen.clear(); },
-        [](const rsf_srvk_frame* frame, const char* message) noexcept {
-            try {
-                if (frame->log) frame->log(frame->log_user, message);
-                else OutputDebugStringA(message);
-            } catch (...) {}
-        },
         [](FfxNative* owner, uint64_t version, uint32_t backend) { owner->capture.set_provider(version, backend); },
         [](FfxNative* owner, void* commands, const rsf_srvk_image* image,
             const rsf_frame_record* record, const char* role, uint32_t reset) {

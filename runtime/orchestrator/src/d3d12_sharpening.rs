@@ -2,27 +2,17 @@
 use crate::com_ref::ComRef;
 use crate::dxgi_format::{RGBA16_FLOAT, RGBA32_FLOAT};
 use crate::sharpening_policy::{FILTERS, effective_mode};
-use std::ffi::c_void;
-
-type Handle = *mut c_void;
 const SLOT_COUNT: usize = 3;
 const GROUP_EDGE: u32 = 16;
 const TEXTURE2D: u32 = 3;
 const DENY_SHADER_RESOURCE: u32 = 0x8;
 
-// Mirrors the private platform contract in graphics/src/sharpening/d3d12_platform.h.
-#[derive(Clone, Copy, Default)]
-#[repr(C)]
-struct Texture {
-    width: u64,
-    height: u32,
-    format: u32,
-    dimension: u32,
-    samples: u32,
-    flags: u32,
-    array_size: u16,
-    mip_levels: u16,
-}
+#[path = "d3d12_sharpening_abi.rs"]
+mod abi;
+use abi::{
+    rsf_sharpen12_call as Call, rsf_sharpen12_dispatch as Dispatch,
+    rsf_sharpen12_platform as Platform, rsf_sharpen12_texture as Texture,
+};
 
 impl Texture {
     fn shader_readable(&self) -> bool {
@@ -39,48 +29,6 @@ impl Texture {
         (self.width, self.height, self.format)
     }
 }
-
-#[repr(C)]
-struct Call {
-    commands: Handle,
-    textures: [Handle; 4],
-    options: *const c_void,
-    frame: *const c_void,
-    mode: u32,
-    active: u32,
-    slot: u32,
-}
-
-#[repr(C)]
-struct Dispatch {
-    root: Handle,
-    pipeline: Handle,
-    heap: Handle,
-    scratch: Handle,
-    descriptions: [Texture; 4],
-    mode: u32,
-    groups_x: u32,
-    groups_y: u32,
-}
-
-#[repr(C)]
-struct Platform {
-    child_device: unsafe extern "C" fn(Handle) -> Handle,
-    describe: unsafe extern "C" fn(Handle, &mut Texture),
-    create_root: unsafe extern "C" fn(Handle) -> Handle,
-    create_pipeline: unsafe extern "C" fn(Handle, Handle, u32) -> Handle,
-    create_heap: unsafe extern "C" fn(Handle) -> Handle,
-    create_scratch: unsafe extern "C" fn(Handle, u32, u32, u32) -> Handle,
-    dispatch: unsafe extern "C" fn(Handle, &Call, &Dispatch),
-    copy_back: unsafe extern "C" fn(Handle, Handle, Handle),
-}
-
-const _: () = {
-    assert!(size_of::<Texture>() == 32 && std::mem::offset_of!(Texture, array_size) == 28);
-    assert!(size_of::<Call>() == 72 && std::mem::offset_of!(Call, mode) == 56);
-    assert!(size_of::<Dispatch>() == 176 && std::mem::offset_of!(Dispatch, mode) == 160);
-    assert!(size_of::<Platform>() == 8 * size_of::<Handle>());
-};
 
 #[derive(Default)]
 struct Slot {
@@ -112,13 +60,13 @@ impl Sharpen12 {
             return None;
         }
         if self.root.is_none() {
-            self.root = Some(unsafe { ComRef::from_owned((platform.create_root)(device)) }?);
+            self.root = Some(unsafe { ComRef::from_owned(platform.create_root.unwrap()(device)) }?);
         }
         let root = self.root.as_ref()?.as_ptr();
         for (pipeline, filter) in self.pipelines.iter_mut().zip(FILTERS) {
             if pipeline.is_none() {
                 *pipeline = Some(unsafe {
-                    ComRef::from_owned((platform.create_pipeline)(device, root, filter))
+                    ComRef::from_owned(platform.create_pipeline.unwrap()(device, root, filter))
                 }?);
             }
         }
@@ -126,16 +74,16 @@ impl Sharpen12 {
         let pipeline = self.pipelines[selected].as_ref()?.as_ptr();
         let slot = &mut self.slots[slot];
         if slot.heap.is_none() {
-            slot.heap = Some(unsafe { ComRef::from_owned((platform.create_heap)(device)) }?);
+            slot.heap = Some(unsafe { ComRef::from_owned(platform.create_heap.unwrap()(device)) }?);
         }
         let output = descriptions[0];
         let mut old = Texture::default();
         if let Some(scratch) = &slot.scratch {
-            unsafe { (platform.describe)(scratch.as_ptr(), &mut old) };
+            unsafe { platform.describe.unwrap()(scratch.as_ptr(), &mut old) };
         }
         if old.scratch_key() != output.scratch_key() {
             let next = unsafe {
-                ComRef::from_owned((platform.create_scratch)(
+                ComRef::from_owned(platform.create_scratch.unwrap()(
                     device,
                     output.width as u32,
                     output.height,
@@ -167,17 +115,18 @@ fn record(owner: &mut *mut Sharpen12, platform: &Platform, call: &Call) -> Optio
     if call.commands.is_null() || output.is_null() || slot >= SLOT_COUNT {
         return None;
     }
-    let device = unsafe { ComRef::from_owned((platform.child_device)(call.commands)) }?;
+    let device = unsafe { ComRef::from_owned(platform.child_device.unwrap()(call.commands)) }?;
     let mut descriptions = [Texture::default(); 4];
     for (resource, desc) in call.textures.into_iter().zip(&mut descriptions) {
         if resource.is_null() {
             continue;
         }
-        let resource_device = unsafe { ComRef::from_owned((platform.child_device)(resource)) }?;
+        let resource_device =
+            unsafe { ComRef::from_owned(platform.child_device.unwrap()(resource)) }?;
         if resource_device.as_ptr() != device.as_ptr() {
             return None;
         }
-        unsafe { (platform.describe)(resource, desc) };
+        unsafe { platform.describe.unwrap()(resource, desc) };
         if !desc.shader_readable() {
             return None;
         }
@@ -193,9 +142,9 @@ fn record(owner: &mut *mut Sharpen12, platform: &Platform, call: &Call) -> Optio
     }
     let owner = unsafe { owner.as_mut() }?;
     let dispatch = owner.prepare(platform, &device, slot, descriptions, mode)?;
-    unsafe { (platform.dispatch)(device.as_ptr(), call, &dispatch) };
+    unsafe { platform.dispatch.unwrap()(device.as_ptr(), call, &dispatch) };
     owner.dispatches = owner.dispatches.wrapping_add(1);
-    unsafe { (platform.copy_back)(call.commands, output, dispatch.scratch) };
+    unsafe { platform.copy_back.unwrap()(call.commands, output, dispatch.scratch) };
     Some(())
 }
 

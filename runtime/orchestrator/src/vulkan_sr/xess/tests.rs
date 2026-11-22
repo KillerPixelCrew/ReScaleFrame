@@ -253,13 +253,6 @@ pub(in crate::vulkan_sr) static OPS: XessOps = XessOps {
         }
     ),
     clear_sharpen: leaf!(|_: Handle| -> () { push(Call::Clear) }),
-    log: leaf!(|_: &Frame, message: *const c_char| -> () {
-        push(Call::Log(
-            unsafe { CStr::from_ptr(message) }
-                .to_string_lossy()
-                .into_owned(),
-        ))
-    }),
     capture_provider: leaf!(|_: Handle, version: u64, backend: u32| -> () {
         assert_eq!(backend, RSF_SR_XESS);
         push(Call::Provider(version))
@@ -640,10 +633,9 @@ fn owner_sizes_the_cache_and_keys_history_on_identity_and_extent() {
             fake.calls
                 .contains(&Call::Execute(1280, 720, 1920, 1080, 1))
         );
-        let message = Call::Log("Vulkan sharpening unavailable; retaining vendor output".into());
-        assert!(fake.calls.contains(&message) && fake.calls.contains(&Call::Copy(output_copy)));
+        assert!(fake.calls.contains(&Call::Copy(output_copy)));
         assert_eq!(run(fake, [1280, 720], 6, &|_| {}), 0);
-        assert!(!fake.calls.contains(&message));
+        assert!(fake.calls.contains(&Call::Copy(output_copy)));
         assert!(
             fake.calls
                 .contains(&Call::Execute(1280, 720, 1920, 1080, 0))

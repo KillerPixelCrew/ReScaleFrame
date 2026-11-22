@@ -11,6 +11,7 @@
 #endif
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -213,8 +214,8 @@ struct Fixture {
         f.log = capture_log; f.log_user = &logs;
         return f;
     }
-    bool run(uintptr_t commands, const rsf_srvk_frame& f, bool report = true) {
-        return report ? pass.run(setup, fake<void*>(commands), f, output) : pass.execute(setup, fake<void*>(commands), f, output);
+    bool run(uintptr_t commands, const rsf_srvk_frame& f) {
+        return pass.run(setup, fake<void*>(commands), f, output);
     }
     size_t live(const char* kind) const {
         size_t count = 0; for (const auto& [handle, name] : g.live) count += name == kind; return count;
@@ -229,21 +230,37 @@ void disabled_and_refused_work() {
     require(f.run(1, off), "defaults are Off");
     require(f.run(1, f.frame(4)) && f.run(1, f.frame(9)), "Vendor and unknown modes leave the output");
     auto zero = f.frame(1); zero.sharpening.sharpness = 0; require(f.run(1, zero), "zero strength is a no-op");
-    auto refused = [&](auto edit, const char* message) { auto frame = f.frame(1); edit(frame); require(!f.run(1, frame, false), message); };
+    auto refused = [&](auto edit, const char* message) { auto frame = f.frame(1); edit(frame); require(!f.run(1, frame), message); };
     refused([](rsf_srvk_frame& x) { x.record = nullptr; }, "frame record required");
     refused([](rsf_srvk_frame& x) { x.motion.layout = VK_IMAGE_LAYOUT_GENERAL; }, "motion must be shader-read");
     refused([](rsf_srvk_frame& x) { x.depth.device = nullptr; }, "depth device must match");
     refused([](rsf_srvk_frame& x) { x.depth.width = 0; }, "depth must have an extent");
     refused([&](rsf_srvk_frame& x) { x.exposure = f.image(exposure, VK_FORMAT_R16_SFLOAT, 2, 1); }, "exposure must be 1x1");
     refused([&](rsf_srvk_frame& x) { x.exposure = f.image(exposure, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1); }, "exposure must be one float channel");
-    require(!f.pass.execute(f.setup, nullptr, f.frame(1), output), "commands required");
-    require(!f.pass.execute(f.setup, fake<void*>(1), f.frame(1), VK_NULL_HANDLE), "output required");
+    require(!f.pass.run(f.setup, nullptr, f.frame(1), output), "commands required");
+    require(!f.pass.run(f.setup, fake<void*>(1), f.frame(1), VK_NULL_HANDLE), "output required");
     require(g.calls.empty() && g.live.empty() && f.pass.dispatches() == 0, "refusals precede any Vulkan call");
+}
+
+void sanitized_options_activate_the_pass() {
+    Fixture f;
+    auto frame = f.frame(1);
+    frame.sharpening.sharpness = std::numeric_limits<float>::quiet_NaN();
+    require(f.run(1, frame) && f.pass.dispatches() == 1, "non-finite sharpness uses the active default");
+    rsf::sharpening::Constants constants{};
+    std::memcpy(&constants, g.mapped, sizeof(constants));
+    require(constants.sharpness == .4f, "default strength reaches the shader");
+    frame.sharpening.sharpness = 0;
+    frame.sharpening.mas = 1;
+    frame.sharpening.motion_sharpness = -.2f;
+    require(f.run(2, frame) && f.pass.dispatches() == 1, "negative MAS with zero strength is inactive");
+    frame.sharpening.motion_sharpness = .2f;
+    require(f.run(2, frame) && f.pass.dispatches() == 2, "positive MAS alone activates the pass");
 }
 
 void zero_extent_is_refused() {
     Fixture f; f.record.output_height = 0;
-    require(!f.run(1, f.frame(1), false), "zero output extent refused");
+    require(!f.run(1, f.frame(1)), "zero output extent refused");
     for (const auto& image : g.images) require(image.extent.width && image.extent.height, "no zero-extent image (VUID-VkImageCreateInfo-extent-00944)");
     f.pass.clear(); require(g.live.empty(), "clear after refusal");
 }
@@ -318,7 +335,6 @@ void records_exact_pass() {
 void bounded_slots_and_single_report() {
     Fixture f; const auto frame = f.frame(1);
     for (uintptr_t commands = 1; commands <= 64; ++commands) require(f.run(commands, frame), "64 in-flight recordings");
-    require(!f.run(65, frame, false) && f.logs.empty(), "execute does not report");
     require(!f.run(65, frame) && !f.run(66, frame) && f.logs.size() == 1 &&
         f.logs[0] == "Vulkan sharpening unavailable; retaining vendor output", "one report");
     f.pass.retire(fake<void*>(5));
@@ -329,21 +345,21 @@ void bounded_slots_and_single_report() {
 void failures_release_or_latch() {
     {
         Fixture f; g.fail = "vkCreateComputePipelines";
-        require(!f.run(1, f.frame(1), false), "pipeline failure refused");
+        require(!f.run(1, f.frame(1)), "pipeline failure refused");
         g.fail.clear(); const auto modules = g.shaders.size();
-        require(!f.run(1, f.frame(1), false) && g.shaders.size() == modules, "failed binding latched until clear");
+        require(!f.run(1, f.frame(1)) && g.shaders.size() == modules, "failed binding latched until clear");
         f.pass.clear(); require(g.live.empty(), "partial binding released");
-        require(f.run(1, f.frame(1), false), "rebinding after clear");
+        require(f.run(1, f.frame(1)), "rebinding after clear");
         f.pass.clear();
     }
     {
         Fixture f; g.fail = "vkCreateImage";
-        require(!f.run(1, f.frame(1), false), "scratch failure refused");
+        require(!f.run(1, f.frame(1)), "scratch failure refused");
         require(f.live("pool") == 0 && f.live("buffer") == 0 && f.live("memory") == 0, "failed slot released");
         g.fail = "depth view";
-        require(!f.run(2, f.frame(2), false), "view failure refused");
+        require(!f.run(2, f.frame(2)), "view failure refused");
         g.fail.clear(); f.pass.retire(fake<void*>(2));
-        require(f.run(3, f.frame(2), false) && f.pass.dispatches() == 1, "slot usable after refusals");
+        require(f.run(3, f.frame(2)) && f.pass.dispatches() == 1, "slot usable after refusals");
         f.pass.clear(); require(g.live.empty(), "no leak after refusals");
     }
 #ifndef RSF_SHARPENING_VULKAN_HEADER
@@ -359,6 +375,7 @@ void failures_release_or_latch() {
 
 int main() try {
     disabled_and_refused_work();
+    sanitized_options_activate_the_pass();
     zero_extent_is_refused();
     records_exact_pass();
     bounded_slots_and_single_report();

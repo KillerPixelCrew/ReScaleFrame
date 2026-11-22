@@ -377,7 +377,6 @@ struct FfxOps {
     copy: CopyFn,
     sharpen: unsafe extern "C" fn(Handle, &Setup, Handle, &Frame, u64) -> i32,
     clear_sharpen: unsafe extern "C" fn(Handle),
-    log: unsafe extern "C" fn(&Frame, *const c_char),
     capture_provider: unsafe extern "C" fn(Handle, u64, u32),
     capture_record: Capture,
     capture_wants: unsafe extern "C" fn(Handle, u64) -> i32,
@@ -406,7 +405,7 @@ struct FfxDispatch<'a> {
 }
 
 const _: () = {
-    assert!(size_of::<FfxOps>() == 30 * size_of::<usize>());
+    assert!(size_of::<FfxOps>() == 29 * size_of::<usize>());
     assert!(size_of::<FfxExports>() == 4 * size_of::<usize>());
     assert!(size_of::<FfxDeviceEntries>() == 9 * size_of::<usize>());
     assert!(std::mem::offset_of!(FfxOps, barrier) == 17 * 8);
@@ -414,7 +413,7 @@ const _: () = {
     assert!(std::mem::offset_of!(FfxOps, dispatch) == 19 * 8);
     assert!(std::mem::offset_of!(FfxOps, copy) == 20 * 8);
     assert!(std::mem::offset_of!(FfxOps, sharpen) == 21 * 8);
-    assert!(size_of::<Platform>() == 296);
+    assert!(size_of::<Platform>() == 288);
     assert!(size_of::<Blit>() == 24);
     assert!(size_of::<FfxDispatch>() == 144);
     assert!(std::mem::offset_of!(FfxDispatch, reset) == 136);
@@ -510,7 +509,6 @@ struct FidelityFx {
     output: StagingImage,
     zero_mask: StagingImage,
     history: History,
-    sharpen_failed: bool,
 }
 
 fn check(result: i32) -> Result<(), i32> {
@@ -578,7 +576,6 @@ impl FidelityFx {
             output: StagingImage::new(setup.device, output, RGBA16_FLOAT, GENERAL),
             zero_mask: StagingImage::new(setup.device, [0, 0], R8_UNORM, SHADER_READ),
             history: History::default(),
-            sharpen_failed: false,
         };
         check(dispatch_register(setup.device, setup.device_proc))?;
         owner.dispatch_lease = Some(DispatchLease(setup.device));
@@ -741,17 +738,7 @@ impl FidelityFx {
             self.history = History::default();
             return result;
         }
-        if unsafe { (ops.sharpen)(handle, setup, commands, frame, output.image) } == 0
-            && !self.sharpen_failed
-        {
-            self.sharpen_failed = true;
-            unsafe {
-                (ops.log)(
-                    frame,
-                    c"Vulkan sharpening unavailable; retaining vendor output".as_ptr(),
-                )
-            };
-        }
+        unsafe { (ops.sharpen)(handle, setup, commands, frame, output.image) };
         self.record_capture(commands, &output, record, c"sr-output-linear", reset);
         barrier(
             output.image,

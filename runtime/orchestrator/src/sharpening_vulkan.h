@@ -17,7 +17,7 @@ static_assert(sizeof(rsf_sharpenvk_uniform) == 40 && offsetof(rsf_sharpenvk_unif
 static_assert(sizeof(rsf_sharpenvk_layouts) == 16);
 static_assert(sizeof(rsf_sharpenvk_facts) == 56 && offsetof(rsf_sharpenvk_facts, near_plane) == 36);
 static_assert(sizeof(rsf_sharpenvk_pass) == 112 && offsetof(rsf_sharpenvk_pass, width) == 88);
-static_assert(sizeof(rsf_sharpenvk_platform) == 15 * sizeof(void*));
+static_assert(sizeof(rsf_sharpenvk_platform) == 14 * sizeof(void*));
 static_assert(sizeof(Constants) == 128);
 
 // Typed Vulkan leaves for the Rust owner in vulkan_sharpening.rs. They never
@@ -212,15 +212,16 @@ inline void record(void* user, void* raw, const rsf_sharpenvk_pass* pass) {
     barrier(d,commands,output,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_MEMORY_READ_BIT|VK_ACCESS_MEMORY_WRITE_BIT);
     barrier(d,commands,scratch,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,VK_ACCESS_TRANSFER_READ_BIT,0);
 }
-inline void report_failure(const rsf_srvk_frame* frame, const char* message) noexcept {
-    if (frame->log) frame->log(frame->log_user,message); else OutputDebugStringA(message);
-}
+inline void report_failure(const rsf_srvk_frame* frame, const char* message) noexcept try {
+    if (frame->log) frame->log(frame->log_user, message);
+    else OutputDebugStringA(message);
+} catch (...) {}
 inline const rsf_sharpenvk_platform platform{
     &rsf::vkfg::platform, open, [](void* user) { delete static_cast<Device*>(user); },
     [](void* user) -> void* { return &device(user).images; },
     create_layouts, release_layouts, create_pipeline,
     [](void* user, uint64_t pipeline) { auto& d=device(user); d.DestroyPipeline(d.device,handle<VkPipeline_T>(pipeline),nullptr); },
-    create_uniform, release_uniform, create_view, options, write_constants, record, report_failure,
+    create_uniform, release_uniform, create_view, options, write_constants, record,
 };
 }
 
@@ -229,18 +230,7 @@ inline const rsf_sharpenvk_platform platform{
 // clear() and destruction require every user drained.
 class Vulkan {
     rsf_sharpenvk* owner=nullptr;
-    rsf_sharpenvk* bound() {
-        if (!owner) owner=rsf_core_sharpenvk_create(&vulkan_leaf::platform);
-        return owner;
-    }
-    bool record(const rsf_srvk_setup& setup,void* raw,const rsf_srvk_frame& input,VkImage output,bool report) {
-        auto* target=bound();
-        if (!target) {
-            if (report) vulkan_leaf::report_failure(&input,"Vulkan sharpening unavailable; retaining vendor output");
-            return false;
-        }
-        return rsf_core_sharpenvk_record(target,&setup,raw,&input,vulkan_leaf::value(output),report?1u:0u)!=0;
-    }
+    bool failure_logged = false;
 public:
     Vulkan()=default;
     Vulkan(const Vulkan&)=delete;
@@ -250,7 +240,14 @@ public:
     void retire(void* commands) { if (owner) rsf_core_sharpenvk_retire(owner,commands); }
     uint64_t dispatches() const { return owner?rsf_core_sharpenvk_dispatches(owner):0; }
     // Logs the first failure through input.log, or the debugger when absent.
-    bool run(const rsf_srvk_setup& setup,void* raw,const rsf_srvk_frame& input,VkImage output) { return record(setup,raw,input,output,true); }
-    bool execute(const rsf_srvk_setup& setup,void* raw,const rsf_srvk_frame& input,VkImage output) { return record(setup,raw,input,output,false); }
+    bool run(const rsf_srvk_setup& setup, void* commands, const rsf_srvk_frame& input, VkImage output) {
+        if (!owner) owner = rsf_core_sharpenvk_create(&vulkan_leaf::platform);
+        if (owner && rsf_core_sharpenvk_record(owner, &setup, commands, &input, vulkan_leaf::value(output))) return true;
+        if (!failure_logged) {
+            failure_logged = true;
+            vulkan_leaf::report_failure(&input, "Vulkan sharpening unavailable; retaining vendor output");
+        }
+        return false;
+    }
 };
 }

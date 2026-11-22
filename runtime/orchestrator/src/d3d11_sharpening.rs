@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
-use crate::d3d11_output::{
-    RestoreBindings, SaveBindings, SavedBindings, same_device, texture_desc,
-};
+use crate::d3d11_output::{SavedBindings, same_device, texture_desc};
 use crate::d3d11_output_abi::{
     RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_FORMAT_RGBA16_FLOAT, RSF_D3D11_FORMAT_RGBA32_FLOAT,
     RSF_D3D11_USAGE_IMMUTABLE, rsf_d3d11_output_child_device, rsf_d3d11_output_create_srv,
@@ -16,33 +14,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 type Handle = *mut c_void;
 
-#[repr(C)]
-struct Draw {
-    views: [Handle; 4],
-    output: Handle,
-    scratch: Handle,
-    target: Handle,
-    constants: Handle,
-    shader: Handle,
-    extent: [u32; 6],
-    exposure_texture: u32,
-    mode: u32,
-}
-
-#[repr(C)]
-struct Platform {
-    shader: unsafe extern "C" fn(Handle, u32) -> Handle,
-    constants: unsafe extern "C" fn(Handle) -> Handle,
-    scratch: unsafe extern "C" fn(Handle, u32, u32, u32, u32, &mut [Handle; 2]),
-    save: SaveBindings,
-    restore: RestoreBindings,
-    dispatch: unsafe extern "C" fn(Handle, *const c_void, *const c_void, &Draw),
-}
-
-const _: () = {
-    assert!(size_of::<Draw>() == 104);
-    assert!(size_of::<Platform>() == 6 * size_of::<Handle>());
-};
+#[path = "d3d11_sharpening_abi.rs"]
+mod abi;
+use abi::{rsf_sharpen11_draw as Draw, rsf_sharpen11_platform as Platform};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct ScratchKey {
@@ -70,11 +44,13 @@ impl Device {
         let device = self.device.as_ptr();
         for (shader, mode) in self.shaders.iter_mut().zip(FILTERS) {
             if shader.is_none() {
-                *shader = Some(unsafe { ComRef::from_owned((platform.shader)(device, mode)) }?);
+                *shader =
+                    Some(unsafe { ComRef::from_owned(platform.shader.unwrap()(device, mode)) }?);
             }
         }
         if self.constants.is_none() {
-            self.constants = Some(unsafe { ComRef::from_owned((platform.constants)(device)) }?);
+            self.constants =
+                Some(unsafe { ComRef::from_owned(platform.constants.unwrap()(device)) }?);
         }
         let key = ScratchKey {
             width: output.width,
@@ -89,13 +65,13 @@ impl Device {
         {
             let mut pair = [null_mut(); 2];
             unsafe {
-                (platform.scratch)(
+                platform.scratch.unwrap()(
                     device,
                     key.width,
                     key.height,
                     key.format,
                     key.sample_quality,
-                    &mut pair,
+                    pair.as_mut_ptr(),
                 )
             };
             let [Some(texture), Some(target)] =
@@ -212,8 +188,10 @@ impl Owner {
             exposure_texture: u32::from(!exposure.is_null()),
             mode,
         };
-        let _bindings = unsafe { SavedBindings::new(context, platform.save, platform.restore) }?;
-        unsafe { (platform.dispatch)(context, options, frame, &draw) };
+        let _bindings = unsafe {
+            SavedBindings::new(context, platform.save.unwrap(), platform.restore.unwrap())
+        }?;
+        unsafe { platform.dispatch.unwrap()(context, options, frame, &draw) };
         self.dispatches.fetch_add(1, Ordering::Relaxed);
         Some(())
     }
@@ -269,20 +247,21 @@ mod tests {
     unsafe extern "C" fn constants(_: Handle) -> Handle {
         null_mut()
     }
-    unsafe extern "C" fn scratch(_: Handle, _: u32, _: u32, _: u32, _: u32, out: &mut [Handle; 2]) {
-        *out = SCRATCH_PAIR.get().map(|value| {
+    unsafe extern "C" fn scratch(_: Handle, _: u32, _: u32, _: u32, _: u32, out: *mut Handle) {
+        let pair = SCRATCH_PAIR.get().map(|value| {
             if value.is_null() {
                 value
             } else {
                 unsafe { ComRef::retain(value) }.into_raw()
             }
         });
+        unsafe { out.cast::<[Handle; 2]>().write(pair) };
     }
     unsafe extern "C" fn save(_: Handle, _: *mut crate::d3d11_output_abi::rsf_d3d11_state) -> u32 {
         0
     }
     unsafe extern "C" fn restore(_: Handle, _: *mut crate::d3d11_output_abi::rsf_d3d11_state) {}
-    unsafe extern "C" fn dispatch(_: Handle, _: *const c_void, _: *const c_void, _: &Draw) {}
+    unsafe extern "C" fn dispatch(_: Handle, _: *const c_void, _: *const c_void, _: *const Draw) {}
 
     #[test]
     fn scratch_view_refusal_releases_texture_and_allows_same_extent_retry() {
@@ -295,12 +274,12 @@ mod tests {
             device: retained,
         };
         let platform = Platform {
-            shader,
-            constants,
-            scratch,
-            save,
-            restore,
-            dispatch,
+            shader: Some(shader),
+            constants: Some(constants),
+            scratch: Some(scratch),
+            save: Some(save),
+            restore: Some(restore),
+            dispatch: Some(dispatch),
         };
         let desc = Texture {
             width: 16,

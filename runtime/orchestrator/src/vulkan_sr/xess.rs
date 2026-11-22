@@ -84,7 +84,6 @@ pub(super) struct XessOps {
     execute: unsafe extern "C" fn(Handle, Handle, &XessExecute) -> i32,
     sharpen: unsafe extern "C" fn(Handle, &Setup, Handle, &Frame, u64) -> i32,
     clear_sharpen: unsafe extern "C" fn(Handle),
-    log: unsafe extern "C" fn(&Frame, *const c_char),
     capture_provider: unsafe extern "C" fn(Handle, u64, u32),
     capture_record: Capture,
     capture_parameters: unsafe extern "C" fn(&Frame, u32, u32),
@@ -126,13 +125,13 @@ pub(super) struct XessExecute {
 }
 
 const _: () = {
-    assert!(size_of::<XessOps>() == 32 * 8);
+    assert!(size_of::<XessOps>() == 31 * 8);
     assert!(std::mem::offset_of!(XessOps, barrier) == 19 * 8);
     assert!(std::mem::offset_of!(XessOps, copy) == 20 * 8);
     assert!(std::mem::offset_of!(XessOps, execute) == 21 * 8);
     assert!(std::mem::offset_of!(XessOps, sharpen) == 22 * 8);
-    assert!(std::mem::offset_of!(XessOps, bind_entries) == 30 * 8);
-    assert!(std::mem::offset_of!(XessOps, lookup) == 31 * 8);
+    assert!(std::mem::offset_of!(XessOps, bind_entries) == 29 * 8);
+    assert!(std::mem::offset_of!(XessOps, lookup) == 30 * 8);
     assert!(size_of::<Entries>() == 10 * 8);
     assert!(size_of::<XessSetup>() == 16 && size_of::<XessInit>() == 16);
     assert!(size_of::<XessTexture>() == 32);
@@ -374,7 +373,6 @@ pub(super) struct XessOwner {
     active: [u32; 2],
     history: History,
     range_logged: bool,
-    sharpen_failed: bool,
     color: Private,
     depth: Private,
     motion: Private,
@@ -406,7 +404,6 @@ impl XessOwner {
             active: [0; 2],
             history: History::default(),
             range_logged: false,
-            sharpen_failed: false,
             color: Private::new(device, [0; 2], RGBA16_FLOAT),
             depth: Private::new(device, [0; 2], R32_FLOAT),
             motion: Private::new(device, [0; 2], RG16_FLOAT),
@@ -593,17 +590,7 @@ impl XessOwner {
             height: output[1],
             ..self.output.description
         };
-        if unsafe { (ops.sharpen)(native, &self.setup, commands, frame, private.image) } == 0
-            && !self.sharpen_failed
-        {
-            self.sharpen_failed = true;
-            unsafe {
-                (ops.log)(
-                    frame,
-                    c"Vulkan sharpening unavailable; retaining vendor output".as_ptr(),
-                )
-            };
-        }
+        unsafe { (ops.sharpen)(native, &self.setup, commands, frame, private.image) };
         self.record_capture(commands, &private, record, c"sr-output-linear", reset);
         // The caller already supplied its output in TRANSFER_DST_OPTIMAL.
         barrier(Barrier::new(output_image, GENERAL, TRANSFER_SRC));

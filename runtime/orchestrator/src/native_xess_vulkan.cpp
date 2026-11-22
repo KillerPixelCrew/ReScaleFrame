@@ -87,7 +87,6 @@ struct Ops {
     int32_t (*execute)(Native*, void*, const Execute*);
     int32_t (*sharpen)(Native*, const rsf_srvk_setup*, void*, const rsf_srvk_frame*, uint64_t);
     void (*clear_sharpen)(Native*);
-    void (*log)(const rsf_srvk_frame*, const char*);
     void (*capture_provider)(Native*, uint64_t, uint32_t);
     void (*capture_record)(Native*, void*, const rsf_srvk_image*, const rsf_frame_record*, const char*, uint32_t);
     void (*capture_parameters)(const rsf_srvk_frame*, uint32_t, uint32_t);
@@ -96,10 +95,10 @@ struct Ops {
     void (*bind_entries)(Library*, const Entries*);
     void* (*lookup)(void*, const char*);
 };
-static_assert(sizeof(Ops) == 32 * sizeof(void*) && sizeof(rsf_xessvk_setup) == 16 && sizeof(Init) == 16);
+static_assert(sizeof(Ops) == 31 * sizeof(void*) && sizeof(rsf_xessvk_setup) == 16 && sizeof(Init) == 16);
 static_assert(offsetof(Ops, barrier) == 19 * sizeof(void*) && offsetof(Ops, copy) == 20 * sizeof(void*) &&
     offsetof(Ops, execute) == 21 * sizeof(void*) && offsetof(Ops, sharpen) == 22 * sizeof(void*));
-static_assert(offsetof(Ops, bind_entries) == 30 * sizeof(void*) && offsetof(Ops, lookup) == 31 * sizeof(void*));
+static_assert(offsetof(Ops, bind_entries) == 29 * sizeof(void*) && offsetof(Ops, lookup) == 30 * sizeof(void*));
 static_assert(sizeof(Entries) == 10 * sizeof(void*));
 static_assert(sizeof(Texture) == 32);
 static_assert(sizeof(Execute) == 152 && offsetof(Execute, reset) == 148);
@@ -251,13 +250,8 @@ int32_t execute(Native* native, void* commands, const Execute* call) noexcept {
 }
 
 int32_t sharpen(Native* native, const rsf_srvk_setup* setup, void* commands, const rsf_srvk_frame* frame, uint64_t output) noexcept try {
-    return native->sharpen.execute(*setup, commands, *frame, reinterpret_cast<VkImage>(output));
+    return native->sharpen.run(*setup, commands, *frame, reinterpret_cast<VkImage>(output));
 } catch (...) { return 0; }
-
-void log(const rsf_srvk_frame* frame, const char* message) noexcept try {
-    if (frame->log) frame->log(frame->log_user, message);
-    else OutputDebugStringA(message);
-} catch (...) {}
 
 void capture_record(Native* native, void* commands, const rsf_srvk_image* image,
     const rsf_frame_record* record, const char* role, uint32_t reset) noexcept {
@@ -280,7 +274,7 @@ extern const Ops native_ops{
     open, [](Native* native) noexcept { delete native; }, create_context, initialize, resolution, destroy_context,
     bind_device, [](Native* native) -> void* { return &native->gpu; }, &rsf::vkfg::platform,
     velocity, record_barrier, record_copy, execute, sharpen,
-    [](Native* native) noexcept { native->sharpen.clear(); }, log,
+    [](Native* native) noexcept { native->sharpen.clear(); },
     [](Native* native, uint64_t provider, uint32_t backend) noexcept { native->capture.set_provider(provider, backend); },
     capture_record, capture_parameters, retire_commands,
     [](Native* native) noexcept { (void)native->capture.flush(); },
