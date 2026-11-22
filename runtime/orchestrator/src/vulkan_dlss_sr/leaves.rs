@@ -9,7 +9,6 @@ use crate::frame_capture_vk::{
     rsf_core_capture_vk_flush, rsf_core_capture_vk_initialize, rsf_core_capture_vk_provider,
     rsf_core_capture_vk_record, rsf_core_capture_vk_retire,
 };
-use crate::sys::rsf_sharpenvk_host as Sharpen;
 use crate::sys::rsf_vkfg_image as Image;
 use crate::sys::{rsf_srvk_frame as Frame, rsf_srvk_image as SourceImage, rsf_srvk_setup as Setup};
 use crate::sys::{
@@ -21,6 +20,7 @@ use crate::vulkan_fg_resources::device::{
     rsf_core_vkfg_platform,
 };
 use crate::vulkan_fg_resources::{rsf_core_vkfg_ensure_image_usage, rsf_core_vkfg_release_image};
+use crate::vulkan_sharpening::Host as Sharpen;
 use crate::vulkan_sharpening::{
     rsf_sharpenvk_host_clear, rsf_sharpenvk_host_destroy, rsf_sharpenvk_host_retire,
     rsf_sharpenvk_host_run,

@@ -9,9 +9,8 @@ mod native;
 use crate::sharpening_policy::{FILTERS, effective_mode};
 use crate::sys::rsf_sharpening_options as Options;
 use crate::sys::{
-    rsf_sharpenvk_facts as Facts, rsf_sharpenvk_host as Host, rsf_sharpenvk_layouts as Layouts,
-    rsf_sharpenvk_pass as Pass, rsf_sharpenvk_platform as Platform,
-    rsf_sharpenvk_uniform as Uniform,
+    rsf_sharpenvk_facts as Facts, rsf_sharpenvk_layouts as Layouts, rsf_sharpenvk_pass as Pass,
+    rsf_sharpenvk_platform as Platform, rsf_sharpenvk_uniform as Uniform,
 };
 use crate::sys::{rsf_srvk_frame as Frame, rsf_srvk_image as Image, rsf_srvk_setup as Setup};
 use crate::sys::{rsf_vkfg_image as OwnedImage, rsf_vkfg_platform as ImageOps};
@@ -397,29 +396,40 @@ unsafe extern "C" {
     );
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_sharpenvk_host_destroy(host: &mut Host) {
+/// A recording host serializes calls, retires completed and reset command buffers, and drains
+/// all users before clearing or destroying this state.
+pub(crate) struct Host {
+    owner: *mut c_void,
+    failure_logged: bool,
+}
+
+impl Default for Host {
+    fn default() -> Self {
+        Self {
+            owner: ptr::null_mut(),
+            failure_logged: false,
+        }
+    }
+}
+
+pub(crate) unsafe fn rsf_sharpenvk_host_destroy(host: &mut Host) {
     unsafe { rsf_core_sharpenvk_destroy(host.owner.cast()) };
     *host = Host::default();
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_sharpenvk_host_clear(host: &mut Host) {
+pub(crate) unsafe fn rsf_sharpenvk_host_clear(host: &mut Host) {
     unsafe { rsf_core_sharpenvk_clear(host.owner.cast()) };
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_sharpenvk_host_retire(host: &mut Host, commands: *mut c_void) {
+pub(crate) unsafe fn rsf_sharpenvk_host_retire(host: &mut Host, commands: *mut c_void) {
     unsafe { rsf_core_sharpenvk_retire(host.owner.cast(), commands) };
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_sharpenvk_host_dispatches(host: &Host) -> u64 {
+pub(crate) unsafe fn rsf_sharpenvk_host_dispatches(host: &Host) -> u64 {
     unsafe { rsf_core_sharpenvk_dispatches(host.owner.cast()) }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_sharpenvk_host_run(
+pub(crate) unsafe fn rsf_sharpenvk_host_run(
     host: &mut Host,
     setup: &Setup,
     commands: *mut c_void,
@@ -431,8 +441,8 @@ pub(super) unsafe extern "C" fn rsf_sharpenvk_host_run(
     }
     let result =
         unsafe { rsf_core_sharpenvk_record(host.owner.cast(), setup, commands, frame, output) };
-    if result == 0 && host.failure_logged == 0 {
-        host.failure_logged = 1;
+    if result == 0 && !host.failure_logged {
+        host.failure_logged = true;
         let text = c"Vulkan sharpening unavailable; retaining vendor output";
         if frame.log.is_some() {
             unsafe { rsf_call_native_log(frame.log, frame.log_user, text.as_ptr()) };

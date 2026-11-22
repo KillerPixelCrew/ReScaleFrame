@@ -3,8 +3,8 @@ use super::{TestResult, check};
 use crate::dxgi_format::half_to_f32;
 use crate::sharpening_policy::defaults;
 use crate::sys::rsf_sharpening_options as Options;
-use crate::sys::rsf_sharpenvk_host as Host;
 use crate::sys::{rsf_srvk_frame as Frame, rsf_srvk_image as Image, rsf_srvk_setup as Setup};
+use crate::vulkan_sharpening::Host;
 use crate::vulkan_sharpening::{
     rsf_sharpenvk_host_destroy, rsf_sharpenvk_host_dispatches, rsf_sharpenvk_host_retire,
     rsf_sharpenvk_host_run,

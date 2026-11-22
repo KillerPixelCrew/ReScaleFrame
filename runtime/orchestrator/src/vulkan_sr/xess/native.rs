@@ -20,10 +20,10 @@ use crate::frame_capture_vk::{
 use crate::sdk_module::{
     Loader, rsf_core_vk_sdk_load, rsf_core_vk_sdk_pin, rsf_core_vk_sdk_unload,
 };
-use crate::sys::rsf_sharpenvk_host as Sharpen;
 use crate::sys::rsf_vkfg_image_copy as ImageCopy;
 use crate::vulkan_fg_copy::Barrier;
 use crate::vulkan_fg_resources::device::rsf_core_vkfg_platform;
+use crate::vulkan_sharpening::Host as Sharpen;
 use crate::vulkan_sharpening::{
     rsf_sharpenvk_host_clear, rsf_sharpenvk_host_destroy, rsf_sharpenvk_host_retire,
     rsf_sharpenvk_host_run,
