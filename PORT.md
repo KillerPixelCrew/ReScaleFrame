@@ -410,6 +410,17 @@ for, so the cuts are repeated helpers, forwarding layers and C-shaped signatures
 - Kept, Skyrim `sources_*` functions: they scope the store lock, whose guard must drop before the host
   callback that receives the result; calling the methods inline would hold it across the callback.
 
+### Round 2: ui/overlay and tests
+
+- `ui/overlay/src/abi.rs`: the 150-line hand-written field-offset test is replaced by the eight struct sizes; bindgen already emits per-field offset assertions into `rsf-game-sys` (checked in the generated `sys.rs`), and any append moves a size.
+- `ui/overlay/src/overlay.rs`: dropped the egui texture-patch size/emptiness guard and the u32 vertex-overflow guard (egui's own tessellation, not untrusted input), the `sr_change_id` zero-wrap branch (4 billion UI changes) and the id masking of managed textures. Kept the `User` id high bit.
+- `ui/overlay/src/model.rs`, `ffi.rs`: removed `GenerationStats::effective_mode` (written, never read) and `Stats::set_quality` (a field assignment).
+- `ui/overlay/src/panel.rs`: nine copies of the `Segment { label, enabled, mark }` construction are one `choice()`; `Selection::quality()/enabled()` forwarders are fields. Kept the PCL receipt rows (Fallout 4 research notes read them), the refusal and pending state (`requested_*`, `sr_change_id`: a fix for the snap-back bug), `Controls` (the only way the unit tests tap widgets) and the FFI boundary (`ffi.rs`, decision D4).
+- `ui/overlay/src/ffi.rs` tests: the `RsfOverlayStats` literal naming a hundred fields is the ten the assertions read plus zeroed.
+- `tests/presentation`: `lib.rs` and `fixture_device.rs` each wrote the hardware-then-WARP `D3D11CreateDevice`; one `create11` now serves both. Three `d3d11_host_device_*` modules defined the same `require`; one in the parent.
+- `tests/vulkan_gpu.rs` (new, shared by `native_sr_vulkan.rs` and `sharpening_vulkan.rs`): loader `Library`/`entry`, physical-device choice with feature chain and device creation, memory-type allocation. Not shared: the FSR4 interop device (different error codes and extensions) and the fake-Vulkan CPU fixture.
+- `tests/overlay/src/hotkey.rs`: the five hand-declared `MH_*` externs now come from `rsf-minhook-sys`.
+- Reviewed and kept, in coverage terms: the other `tests/**` modules assert distinct contracts (scope and present lifetimes in `tests/game-sdk`, retirement order in `tests/presentation`, vendor ABI facts in `tests/vulkan-fg` and `tests/loader`). The survey's window-class and WARP-device copies differ in handle type (`windows` against `windows-sys`), swap-chain use or custom window procedures, so they were not merged. Not reached: `tools/exposure_probe/src/ngx.rs` still declares `MH_*` (outside this area), and the top-level `tests/*.rs` that build as standalone `rustc` units (`anomaly_bootstrap`, `engine_sharpening`, `native_vulkan_exports`, `unity_mono_runtime` hand-declare Win32 loaders because they have no dependencies).
 ## Scope
 
 - **375 C++ implementation files**, including 168 under `tests/`. All have the `.cpp` suffix in this revision.
