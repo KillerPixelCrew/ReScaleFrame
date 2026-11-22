@@ -39,6 +39,9 @@ use rsf_d3d11_texture_desc as Desc;
 
 type Raw = *mut c_void;
 
+/// # Safety
+///
+/// `resource` is null or a live `ID3D11Resource`; the caller owns the returned texture.
 pub unsafe fn rsf_d3d11_output_query_texture(resource: Raw) -> Raw {
     unsafe { ID3D11Resource::from_raw_borrowed(&resource) }
         .and_then(|resource| resource.cast::<ID3D11Texture2D>().ok())
@@ -54,6 +57,9 @@ pub unsafe extern "C" fn rsf_d3d11_output_child_device(child: Raw) -> Raw {
         .map_or(null_mut(), Interface::into_raw)
 }
 
+/// # Safety
+///
+/// `texture` is a live `ID3D11Texture2D` and `desc` is writable.
 pub unsafe extern "C" fn rsf_d3d11_output_texture_desc(texture: Raw, desc: *mut Desc) {
     let mut native = D3D11_TEXTURE2D_DESC::default();
     unsafe {
@@ -78,6 +84,9 @@ pub unsafe extern "C" fn rsf_d3d11_output_texture_desc(texture: Raw, desc: *mut 
     }
 }
 
+/// # Safety
+///
+/// `device` is a live `ID3D11Device` and `desc` is readable; the caller owns the result.
 pub unsafe extern "C" fn rsf_d3d11_output_create_texture(device: Raw, desc: *const Desc) -> Raw {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&device).unwrap() };
     let desc = unsafe { &*desc };
@@ -103,6 +112,10 @@ pub unsafe extern "C" fn rsf_d3d11_output_create_texture(device: Raw, desc: *con
     result.map_or(null_mut(), Interface::into_raw)
 }
 
+/// # Safety
+///
+/// `device` is a live `ID3D11Device` and `texture` a live resource of it; the caller owns
+/// the returned view.
 pub unsafe fn rsf_d3d11_output_create_srv(device: Raw, texture: Raw, format: u32) -> Raw {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&device).unwrap() };
     let texture = unsafe { ID3D11Resource::from_raw_borrowed(&texture).unwrap() };
@@ -179,16 +192,25 @@ pub unsafe extern "C" fn rsf_d3d11_output_is_immediate(context: Raw) -> u32 {
     unsafe { (context.GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE) as u32 }
 }
 
+/// # Safety
+///
+/// `context` is a live `ID3D11DeviceContext`.
 pub unsafe fn rsf_d3d11_output_clear_state(context: Raw) {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&context).unwrap() };
     unsafe { context.ClearState() };
 }
 
+/// # Safety
+///
+/// `context` is a live `ID3D11DeviceContext`.
 pub unsafe fn rsf_d3d11_output_unbind_targets(context: Raw) {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&context).unwrap() };
     unsafe { context.OMSetRenderTargets(None, None::<&ID3D11DepthStencilView>) };
 }
 
+/// # Safety
+///
+/// `context` is a live `ID3D11DeviceContext`; both resources are live resources of its device.
 pub unsafe fn rsf_d3d11_output_copy_resource(context: Raw, destination: Raw, source: Raw) {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&context).unwrap() };
     let destination = unsafe { ID3D11Resource::from_raw_borrowed(&destination).unwrap() };
@@ -196,6 +218,9 @@ pub unsafe fn rsf_d3d11_output_copy_resource(context: Raw, destination: Raw, sou
     unsafe { context.CopyResource(destination, source) };
 }
 
+/// # Safety
+///
+/// `context` is a live `ID3D11DeviceContext`; both resources are live resources of its device.
 pub unsafe fn rsf_d3d11_output_copy_region(
     context: Raw,
     destination: Raw,

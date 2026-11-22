@@ -754,7 +754,8 @@ impl Stage {
     }
 
     fn say(&self, state: &State, text: &str) {
-        rsf_game_sys::log_guarded(state.log, state.log_user.0, text);
+        // SAFETY: the host handed over the callback and its user pointer together.
+        unsafe { rsf_game_sys::log_guarded(state.log, state.log_user.0, text) };
     }
 
     fn live_mip_offset(&self) -> f32 {

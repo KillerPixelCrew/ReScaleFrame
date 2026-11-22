@@ -133,6 +133,10 @@ pub fn warp_d3d12() -> Result<(IDXGIFactory4, ID3D12Device)> {
 }
 
 /// The windows crate wraps DefWindowProcW in a Rust function; a window class needs the system ABI.
+///
+/// # Safety
+///
+/// Only the system calls it, as a window class procedure, with the arguments of a dispatched message.
 pub unsafe extern "system" fn default_window_procedure(
     window: HWND,
     message: u32,

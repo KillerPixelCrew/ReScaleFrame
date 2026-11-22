@@ -324,6 +324,9 @@ impl Drop for Update {
     }
 }
 
+/// # Safety
+///
+/// `query` and `out` are null or size-prefixed records of their stated sizes; `out` is writable.
 pub unsafe fn rsf_core_amd_vk_require(
     enabled: u32,
     query: *const Query,
@@ -361,6 +364,9 @@ pub unsafe fn rsf_core_amd_vk_require(
     0
 }
 
+/// # Safety
+///
+/// `facts` is null or a size-prefixed record whose device and create-info pointers are live.
 pub unsafe fn rsf_core_amd_vk_device_created(enabled: u32, facts: *const Created) -> i32 {
     if !unsafe { has_capacity(facts) } {
         return INVALID_ARGUMENT;

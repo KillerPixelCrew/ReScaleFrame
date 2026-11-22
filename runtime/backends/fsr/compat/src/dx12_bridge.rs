@@ -23,6 +23,9 @@ use windows::{
 
 pub type Handle = *mut c_void;
 
+/// # Safety
+///
+/// `raw` is a live COM interface of type `T` for the borrow.
 pub unsafe fn borrow<T: Interface>(raw: &Handle) -> &T {
     unsafe { T::from_raw_borrowed(raw) }.expect("live bridge COM interface")
 }
@@ -35,6 +38,9 @@ pub fn store_interface<T: Interface>(result: Result<T>, output: &mut Handle) -> 
     status(result.map(|owned| *output = owned.into_raw()))
 }
 
+/// # Safety
+///
+/// `adapter` is a live `IDXGIAdapter1`.
 pub unsafe fn create_device(
     adapter: Handle,
     feature_level: D3D_FEATURE_LEVEL,
@@ -58,12 +64,18 @@ pub fn create_list(
     unsafe { device.CreateCommandList(node_mask, kind, allocator, None) }
 }
 
+/// # Safety
+///
+/// `image` is null or an owned `ID3D12Resource` reference, which this releases.
 pub unsafe fn release_image(image: Handle) {
     if !image.is_null() {
         drop(unsafe { ID3D12Resource::from_raw(image) });
     }
 }
 
+/// # Safety
+///
+/// `device` is a live `ID3D12Device`; `owned_fence` is null or an owned `ID3D12Fence`.
 pub unsafe fn create_shared_fence(
     device: Handle,
     owned_fence: &mut Handle,
@@ -85,6 +97,9 @@ pub unsafe fn create_shared_fence(
     )
 }
 
+/// # Safety
+///
+/// `allocator` is a live `ID3D12CommandAllocator` that `list` may record into.
 pub unsafe fn reset_commands(list: &ID3D12GraphicsCommandList, allocator: Handle) -> Result<()> {
     let allocator: &ID3D12CommandAllocator = unsafe { borrow(&allocator) };
     unsafe { allocator.Reset()? };
@@ -156,12 +171,18 @@ pub fn transition(
     unsafe { commands.ResourceBarrier(&[barrier]) };
 }
 
+/// # Safety
+///
+/// `queue` is a live `ID3D12CommandQueue` and `list` a closed command list of its type.
 pub unsafe fn execute(queue: Handle, list: Handle) {
     let queue: &ID3D12CommandQueue = unsafe { borrow(&queue) };
     let list = ManuallyDrop::new(Some(unsafe { ID3D12CommandList::from_raw(list) }));
     unsafe { queue.ExecuteCommandLists(core::slice::from_ref(&*list)) };
 }
 
+/// # Safety
+///
+/// `queue` is a live `ID3D12CommandQueue` and `fence` a live `ID3D12Fence`.
 pub unsafe fn queue_fence(queue: Handle, fence: Handle, value: u64, signal: bool) -> i32 {
     let queue: &ID3D12CommandQueue = unsafe { borrow(&queue) };
     let Some(fence) = (unsafe { ID3D12Fence::from_raw_borrowed(&fence) }) else {
@@ -176,6 +197,8 @@ pub unsafe fn queue_fence(queue: Handle, fence: Handle, value: u64, signal: bool
     })
 }
 
+/// # Safety
+///
 /// The validated path is NUL-terminated and readable for this call. The
 /// receiving capsule owns the module reference even if export admission fails.
 pub unsafe fn load_module(path: *const u16) -> Result<HMODULE> {
@@ -188,12 +211,20 @@ pub unsafe fn load_module(path: *const u16) -> Result<HMODULE> {
     }
 }
 
+/// # Safety
+///
+/// `module` is a loaded module.
 pub unsafe fn module_export(module: HMODULE, name: &core::ffi::CStr) -> FARPROC {
     unsafe { GetProcAddress(module, PCSTR(name.as_ptr().cast())) }
 }
 
 /// Release the capsule's transferred COM references in the supplied order,
 /// then the event and library. The caller has already retired SDK consumers.
+///
+/// # Safety
+///
+/// Each non-null object is an owned COM reference, `event` is null or an owned event handle
+/// and `module` is null or an owned module reference; this releases all of them.
 pub unsafe fn release_objects(objects: &[*mut c_void], event: *mut c_void, module: *mut c_void) {
     for &object in objects {
         if !object.is_null() {

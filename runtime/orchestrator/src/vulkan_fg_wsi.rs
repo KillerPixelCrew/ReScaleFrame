@@ -67,6 +67,9 @@ pub(crate) unsafe fn rsf_core_vkfg_drain(
     if ready { 0 } else { NOT_READY }
 }
 
+/// # Safety
+///
+/// `callback` runs with `user` as given; `user` is whatever that callback expects.
 pub unsafe fn rsf_core_slvk_without_dlssg(
     scope: WsiScope,
     callback: rsf_vk_wsi_call,
@@ -81,6 +84,9 @@ pub unsafe fn rsf_core_slvk_without_dlssg(
     }
 }
 
+/// # Safety
+///
+/// `resolve` is a vkGetInstanceProcAddr for `instance`; `name` is null or NUL-terminated.
 pub unsafe fn rsf_core_latencyvk_instance_proc(
     resolve: rsf_vk_get_proc,
     instance: *mut c_void,
@@ -93,6 +99,10 @@ pub unsafe fn rsf_core_latencyvk_instance_proc(
     unsafe { resolve(instance, name) }
 }
 
+/// # Safety
+///
+/// `callback` is null or vkQueuePresentKHR; `queue` is a live queue and `info` a valid
+/// VkPresentInfoKHR for it.
 pub unsafe fn rsf_core_latencyvk_queue_present(
     synchronized: SynchronizedPresent,
     callback: rsf_vk_function,
@@ -117,6 +127,9 @@ pub unsafe fn rsf_core_latencyvk_queue_present(
     unsafe { present(vk::Queue::from_raw(queue as usize as u64), info.cast()).as_raw() }
 }
 
+/// # Safety
+///
+/// `user` is null or the record this scope's caller passed with `callback`.
 pub unsafe fn rsf_core_latencyvk_wsi_call(
     scope: WsiScope,
     callback: rsf_vk_wsi_call,

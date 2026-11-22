@@ -110,6 +110,10 @@ mod platform {
     }
 
     /// GetPrivateProfileIntW with its INT result taken as UINT.
+    #[allow(
+        clippy::not_unsafe_ptr_arg_deref,
+        reason = "callers pass w! literals and terminated paths"
+    )]
     pub fn profile_int(section: PCWSTR, name: PCWSTR, default: u32, file: PCWSTR) -> u32 {
         (unsafe { GetPrivateProfileIntW(section, name, default as i32, file) }) as u32
     }
@@ -139,6 +143,7 @@ mod platform {
 
     /// [UnitySR] `name` from `ini` as written, cut as GetPrivateProfileStringW cuts it for a
     /// buffer of `capacity` characters. Empty when unset.
+    #[allow(clippy::not_unsafe_ptr_arg_deref, reason = "callers pass w! literals")]
     pub fn string_setting(ini: &Ini, name: PCWSTR, capacity: usize) -> Vec<u16> {
         let read_capacity = rsf_game_sys::profile_text::read_capacity(capacity);
         let mut text = vec![0u16; read_capacity];

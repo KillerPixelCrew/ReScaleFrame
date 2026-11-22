@@ -769,7 +769,10 @@ fn fresh_pipeline_status() -> rsf_dlss_pipeline_status {
 impl RenderState {
     fn say(&self, text: &str) {
         if let Some(config) = &self.setup {
-            rsf_game_sys::log_guarded(config.template.log, config.template.log_user, text);
+            // SAFETY: the setup template carries the host's callback with its user pointer.
+            unsafe {
+                rsf_game_sys::log_guarded(config.template.log, config.template.log_user, text)
+            };
         }
     }
 
@@ -1192,104 +1195,98 @@ extern "C" fn rsf_anomaly_sr_report(
     let pass_errors = |index| delta(now.pass_errors[index], old.pass_errors[index]);
     let results = |index| delta(now.results[index], old.results[index]);
     let resets = |index| delta(now.resets[index], old.resets[index]);
-    rsf_game_sys::log_guarded(
-        log,
-        user,
-        &format!(
-            "Anomaly SR stage {stage} evaluated dlss={} fsr3={} fsr4={} xess={} | refused not_running={} disabled={} prepare={} \
+    // SAFETY: the driver passes the host's callback with its user pointer.
+    let say = |text: &str| unsafe { rsf_game_sys::log_guarded(log, user, text) };
+    say(&format!(
+        "Anomaly SR stage {stage} evaluated dlss={} fsr3={} fsr4={} xess={} | refused not_running={} disabled={} prepare={} \
          pass={} (sizes={} camera={} projection={} jitter={} resources={}) pipeline={} (invalid={} abi={} not_running={} \
          streamline={} not_supported={} resource={} decode={} frame={} evaluate={} other={}) reinsert={} | resets first={} \
          device={} settings={} sequence={} cut={} | prepared={} bilinear={} bilinear_failed={} motion_missing={}",
-            evaluated(DLSS),
-            evaluated(FSR3),
-            evaluated(FSR4),
-            evaluated(XESS),
-            refused(Refusal::NotRunning),
-            refused(Refusal::Disabled),
-            refused(Refusal::Prepare),
-            refused(Refusal::Pass),
-            pass_errors(1),
-            pass_errors(2),
-            pass_errors(3),
-            pass_errors(4),
-            pass_errors(5),
-            refused(Refusal::Pipeline),
-            results(1),
-            results(2),
-            results(4),
-            results(5),
-            results(6),
-            results(7),
-            results(8),
-            results(9),
-            results(10),
-            results(11) + results(3),
-            refused(Refusal::Reinsert),
-            resets(1),
-            resets(5),
-            resets(4),
-            resets(2),
-            resets(3),
-            delta(now.prepared, old.prepared),
-            delta(now.bilinear, old.bilinear),
-            delta(now.bilinear_failed, old.bilinear_failed),
-            delta(now.motion_missing, old.motion_missing)
-        ),
-    );
+        evaluated(DLSS),
+        evaluated(FSR3),
+        evaluated(FSR4),
+        evaluated(XESS),
+        refused(Refusal::NotRunning),
+        refused(Refusal::Disabled),
+        refused(Refusal::Prepare),
+        refused(Refusal::Pass),
+        pass_errors(1),
+        pass_errors(2),
+        pass_errors(3),
+        pass_errors(4),
+        pass_errors(5),
+        refused(Refusal::Pipeline),
+        results(1),
+        results(2),
+        results(4),
+        results(5),
+        results(6),
+        results(7),
+        results(8),
+        results(9),
+        results(10),
+        results(11) + results(3),
+        refused(Refusal::Reinsert),
+        resets(1),
+        resets(5),
+        resets(4),
+        resets(2),
+        resets(3),
+        delta(now.prepared, old.prepared),
+        delta(now.bilinear, old.bilinear),
+        delta(now.bilinear_failed, old.bilinear_failed),
+        delta(now.motion_missing, old.motion_missing)
+    ));
     if stage == 5 {
         let pipeline = status.pipeline;
-        rsf_game_sys::log_guarded(
-            log,
-            user,
-            &format!(
-                "Anomaly SR stage 5 pipeline bound={} running={} backend={} requested={} switch={} quality={}/{} preset={} \
+        say(&format!(
+            "Anomaly SR stage 5 pipeline bound={} running={} backend={} requested={} switch={} quality={}/{} preset={} \
              render={}x{} output={}x{} frames_evaluated={} frames_refused={} last={} ({}) | starts={} start_failed={} \
              (last {}) stops={} selects={}/{} qualities={}/{} presets={} resizes={}/{} | announced={} longest_select_ms={} \
              pending={} | SR={} exposure={} first_person_zero={} | {}",
-                u8::from(status.bound),
-                pipeline.running,
-                backend_name(pipeline.backend),
-                backend_name(status.requested.backend),
-                pipeline.last_switch_result,
-                status.applied.quality,
-                status.requested.quality,
-                status.applied.preset,
-                pipeline.render_width,
-                pipeline.render_height,
-                pipeline.output_width,
-                pipeline.output_height,
-                pipeline.frames_evaluated,
-                pipeline.frames_refused,
-                pipeline.last_result,
-                result_name(pipeline.last_result),
-                now.starts,
-                now.start_failures,
-                status.start_result,
-                now.stops,
-                now.selects - now.select_failures,
-                now.selects,
-                now.qualities - now.quality_failures,
-                now.qualities,
-                now.presets,
-                now.resizes - now.resize_failures,
-                now.resizes,
-                now.select_announced,
-                now.longest_select_ms,
-                backend_name(status.pending_backend),
-                u8::from(status.requested.enabled),
-                if exposure_auto {
-                    "auto"
-                } else {
-                    "constant(1.0)"
-                },
-                u8::from(first_person_zero),
-                if status.reason[0] == 0 {
-                    "ok"
-                } else {
-                    status.reason_text()
-                }
-            ),
-        );
+            u8::from(status.bound),
+            pipeline.running,
+            backend_name(pipeline.backend),
+            backend_name(status.requested.backend),
+            pipeline.last_switch_result,
+            status.applied.quality,
+            status.requested.quality,
+            status.applied.preset,
+            pipeline.render_width,
+            pipeline.render_height,
+            pipeline.output_width,
+            pipeline.output_height,
+            pipeline.frames_evaluated,
+            pipeline.frames_refused,
+            pipeline.last_result,
+            result_name(pipeline.last_result),
+            now.starts,
+            now.start_failures,
+            status.start_result,
+            now.stops,
+            now.selects - now.select_failures,
+            now.selects,
+            now.qualities - now.quality_failures,
+            now.qualities,
+            now.presets,
+            now.resizes - now.resize_failures,
+            now.resizes,
+            now.select_announced,
+            now.longest_select_ms,
+            backend_name(status.pending_backend),
+            u8::from(status.requested.enabled),
+            if exposure_auto {
+                "auto"
+            } else {
+                "constant(1.0)"
+            },
+            u8::from(first_person_zero),
+            if status.reason[0] == 0 {
+                "ok"
+            } else {
+                status.reason_text()
+            }
+        ));
     }
 }
 

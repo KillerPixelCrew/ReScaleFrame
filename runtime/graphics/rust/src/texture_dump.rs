@@ -510,6 +510,11 @@ unsafe fn dump(
 }
 
 /// texture_dump.h: a Targa of `source`, with an optional report.
+///
+/// # Safety
+///
+/// Every handle is a live D3D11 object of its role (device, its immediate context, a source
+/// texture); `options` and `report` are null or valid records of their stated size.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_dump_texture(
     device: Handle,
@@ -522,6 +527,11 @@ pub unsafe extern "C" fn rsf_dump_texture(
 }
 
 /// texture_dump.h: a PNG of `source`, with an optional report.
+///
+/// # Safety
+///
+/// Every handle is a live D3D11 object of its role (device, its immediate context, a source
+/// texture); `options` and `report` are null or valid records of their stated size.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_dump_texture_png(
     device: Handle,
@@ -534,6 +544,11 @@ pub unsafe extern "C" fn rsf_dump_texture_png(
 }
 
 /// texture_dump.h: the packed rows of `source` and their sidecar.
+///
+/// # Safety
+///
+/// Every handle is a live D3D11 object of its role (device, its immediate context, a source
+/// texture); `options` and `report` are null or valid records of their stated size.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_dump_texture_bytes(
     device: Handle,
@@ -554,6 +569,11 @@ pub unsafe extern "C" fn rsf_dump_texture_bytes(
 }
 
 /// texture_dump.h: a PNG of CPU pixels, with an optional report.
+///
+/// # Safety
+///
+/// `pixels` is null or a valid record whose rows are readable; `options` and `report` are null
+/// or valid records of their stated size.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_dump_pixels_png(
     pixels: *const Pixels,

@@ -62,12 +62,17 @@ pub mod xm;
 /// callback threw.
 #[cfg(windows)]
 pub fn host_log(host: &rsf_game_host_services, text: &str) -> bool {
-    log_guarded(host.log, host.user, text)
+    // SAFETY: the services table pairs the callback with its user pointer.
+    unsafe { log_guarded(host.log, host.user, text) }
 }
 
 /// `host_log` for a log callback and user pointer held apart from their services table.
+///
+/// # Safety
+///
+/// `user` must be the pointer the host paired with `log`, valid for the callback.
 #[cfg(windows)]
-pub fn log_guarded(log: rsf_game_log_fn, user: *mut std::ffi::c_void, text: &str) -> bool {
+pub unsafe fn log_guarded(log: rsf_game_log_fn, user: *mut std::ffi::c_void, text: &str) -> bool {
     if log.is_none() {
         return true;
     }

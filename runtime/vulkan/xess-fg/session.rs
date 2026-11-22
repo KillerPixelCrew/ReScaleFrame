@@ -17,7 +17,7 @@ mod capture;
 #[allow(
     unused_imports,
     clippy::ptr_offset_with_cast,
-    clippy::useless_transmute
+    clippy::missing_safety_doc
 )]
 #[path = "sdk_abi.rs"]
 pub mod sdk;

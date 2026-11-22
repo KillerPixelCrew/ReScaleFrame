@@ -675,6 +675,10 @@ pub(crate) fn rsf_unity_frames_set_policy(engine_spatial: u32, quality: u32) -> 
 }
 
 /// The Mono host's policy request (rsf_game_unity_policy::request_policy).
+///
+/// # Safety
+///
+/// `generation` is null or writable.
 pub unsafe extern "C" fn rsf_unity_mono_request_policy(
     engine_spatial: u32,
     quality: u32,
@@ -691,6 +695,9 @@ pub unsafe extern "C" fn rsf_unity_mono_request_policy(
     1
 }
 
+/// # Safety
+///
+/// `render_width` and `render_height` are null or writable.
 pub unsafe extern "C" fn rsf_unity_mono_spatial_extent(
     quality: u32,
     width: u32,
@@ -812,6 +819,10 @@ pub(crate) fn rsf_unity_frames_dispatch_d3d12(
 }
 
 /// The Mono host's query for the policy generation being delivered on this thread.
+///
+/// # Safety
+///
+/// `generation` is null or writable.
 pub unsafe extern "C" fn rsf_unity_mono_drained_generation(generation: *mut u32) -> c_int {
     let delivered = DELIVERED_GENERATION.get();
     if generation.is_null() || delivered == 0 {

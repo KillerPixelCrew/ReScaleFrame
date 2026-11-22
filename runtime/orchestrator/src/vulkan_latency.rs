@@ -268,6 +268,9 @@ fn initialize(
     OK
 }
 
+/// # Safety
+///
+/// `setup` is null or a size-prefixed record of its stated size.
 pub unsafe fn rsf_core_latencyvk_initialize(
     platform: &Platform,
     setup: *const rsf_latencyvk_setup,
@@ -282,6 +285,9 @@ pub unsafe fn rsf_core_latencyvk_initialize(
     initialize(platform, setup.runtime_directory_utf8, setup.project_id, 0)
 }
 
+/// # Safety
+///
+/// `setup` is null or a size-prefixed record of its stated size.
 pub unsafe fn rsf_core_slvk_initialize(
     platform: &Platform,
     setup: *const rsf_slvk_setup,
@@ -301,6 +307,9 @@ pub unsafe fn rsf_core_slvk_initialize(
     )
 }
 
+/// # Safety
+///
+/// `call` is null or a size-prefixed record of its stated size.
 pub unsafe fn rsf_core_slvk_invoke(platform: &Platform, call: *const rsf_slvk_call) -> i32 {
     if !unsafe { has_capacity(call) } {
         return INVALID_ARGUMENT;
@@ -525,6 +534,9 @@ unsafe extern "C" fn fact(user: *mut c_void, event: *const rsf_game_cpu_event) {
     }
 }
 
+/// # Safety
+///
+/// `event` is null or a size-prefixed CPU event of its stated size.
 pub unsafe fn rsf_core_latencyvk_cpu(platform: &Platform, event: *const rsf_game_cpu_event) {
     if !unsafe { has_capacity(event) } {
         return;
@@ -579,6 +591,9 @@ pub fn rsf_core_latencyvk_present(platform: &Platform, begin: u32) {
     }
 }
 
+/// # Safety
+///
+/// `pass` is null or a valid render pass record for this call.
 pub unsafe fn rsf_core_latencyvk_submit(
     platform: &Platform,
     pass: *const rsf_game_render_pass,
@@ -608,6 +623,9 @@ pub unsafe fn rsf_core_latencyvk_submit(
     OK
 }
 
+/// # Safety
+///
+/// `output` is null or a writable size-prefixed status record.
 pub unsafe fn rsf_core_latencyvk_get_status(
     platform: &Platform,
     output: *mut rsf_latencyvk_status,
