@@ -79,6 +79,8 @@ generate("tests/loader/src/windows/vendor_census_asi_abi.rs",
          "loader/census/include/rescaleframe/vendor_census.h",
          "rsf_census_(options|counters)", "RSF_CENSUS_(ABI_VERSION|FLAG_NO_(STATIC_SCAN|DXGI|VULKAN))",
          [], ["--with-derive-default"])
+generate("tests/loader/src/windows/census_facts_abi.rs", "tests/loader/census_facts.h",
+         "rsf_test_census_functional_facts", "NOTHING", [], ["--with-derive-default"])
 generate("loader/src/census/wrapper_abi.rs", "loader/census/src/wrapper_platform.h",
          "rsf_census_(vk_entry|call_storage|wrapper_services)", "NOTHING", [],
          ["--no-prepend-enum-name", "--blocklist-type", "rsf_census_json",

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Vendor call census test.
+// Native payload, SDK slot and caller-address evidence for the Rust census fixture.
 //
 // Fake vendor DLLs are called through a direct import, through
 // LoadLibrary plus GetProcAddress and through nvapi_QueryInterface, with the census installed. The
@@ -20,8 +20,6 @@
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
-#include <fstream>
-#include <sstream>
 #include <string>
 #include <thread>
 #include <utility>
@@ -29,9 +27,13 @@
 
 #include "rescaleframe/vendor_census.h"
 #include "rescaleframe/census_d3d12_observer.h"
-#include "vendor_census_ngx_params.h"
+#include "../vendor_census_ngx_params.h"
+#include "census_facts.h"
 
 extern "C" {
+int rsf_test_census_functional(const char*, decltype(&rsf_census_install), decltype(&rsf_census_flush),
+                               decltype(&rsf_census_get_counters), decltype(&rsf_census_shutdown),
+                               int (*)(), int (*)(rsf_test_census_functional_facts*), int (*)());
 int rsf_test_census_budget(const char*, decltype(&rsf_census_install), decltype(&rsf_census_flush),
                            decltype(&rsf_census_get_counters), decltype(&rsf_census_shutdown), int (*)(int));
 int rsf_test_census_dllmain(const char*, void (*)(int*));
@@ -67,225 +69,6 @@ int g_failures = 0;
         }                                                                                      \
     } while (0)
 
-// ---- A small JSON reader ----------------------------------------------------------------------
-struct Json {
-    enum class Type { Null, Bool, Num, Str, Arr, Obj } type = Type::Null;
-    bool b = false;
-    double n = 0;
-    std::string s;
-    std::vector<Json> a;
-    std::vector<std::pair<std::string, Json>> o;
-
-    const Json* get(const char* key) const {
-        for (const auto& kv : o) {
-            if (kv.first == key) return &kv.second;
-        }
-        return nullptr;
-    }
-    const Json* at(std::initializer_list<const char*> path) const {
-        const Json* cur = this;
-        for (const char* k : path) {
-            if (!cur) return nullptr;
-            cur = cur->get(k);
-        }
-        return cur;
-    }
-    bool is(const char* v) const { return type == Type::Str && s == v; }
-    bool has_string(const char* v) const {
-        for (const Json& e : a) {
-            if (e.is(v)) return true;
-        }
-        return false;
-    }
-};
-
-struct Parser {
-    const char* p;
-    const char* end;
-    bool ok = true;
-
-    void ws() {
-        while (p < end && (*p == ' ' || *p == '\n' || *p == '\r' || *p == '\t')) ++p;
-    }
-    bool lit(const char* t) {
-        size_t n = std::strlen(t);
-        if (static_cast<size_t>(end - p) >= n && !std::memcmp(p, t, n)) {
-            p += n;
-            return true;
-        }
-        return false;
-    }
-    std::string str() {
-        std::string r;
-        ++p; // opening quote
-        while (p < end && *p != '"') {
-            if (*p == '\\' && p + 1 < end) {
-                ++p;
-                switch (*p) {
-                case 'n': r += '\n'; break;
-                case 't': r += '\t'; break;
-                case 'u': {
-                    unsigned v = 0;
-                    std::sscanf(p + 1, "%4x", &v);
-                    r += static_cast<char>(v);
-                    p += 4;
-                    break;
-                }
-                default: r += *p; break;
-                }
-                ++p;
-            } else {
-                r += *p++;
-            }
-        }
-        if (p < end) ++p;
-        return r;
-    }
-    Json value() {
-        Json j;
-        ws();
-        if (p >= end) {
-            ok = false;
-            return j;
-        }
-        if (*p == '{') {
-            j.type = Json::Type::Obj;
-            ++p;
-            ws();
-            if (*p == '}') {
-                ++p;
-                return j;
-            }
-            for (;;) {
-                ws();
-                if (*p != '"') {
-                    ok = false;
-                    return j;
-                }
-                std::string k = str();
-                ws();
-                if (*p != ':') {
-                    ok = false;
-                    return j;
-                }
-                ++p;
-                j.o.emplace_back(std::move(k), value());
-                ws();
-                if (*p == ',') {
-                    ++p;
-                    continue;
-                }
-                if (*p == '}') {
-                    ++p;
-                    return j;
-                }
-                ok = false;
-                return j;
-            }
-        }
-        if (*p == '[') {
-            j.type = Json::Type::Arr;
-            ++p;
-            ws();
-            if (*p == ']') {
-                ++p;
-                return j;
-            }
-            for (;;) {
-                j.a.push_back(value());
-                ws();
-                if (*p == ',') {
-                    ++p;
-                    continue;
-                }
-                if (*p == ']') {
-                    ++p;
-                    return j;
-                }
-                ok = false;
-                return j;
-            }
-        }
-        if (*p == '"') {
-            j.type = Json::Type::Str;
-            j.s = str();
-            return j;
-        }
-        if (lit("true")) {
-            j.type = Json::Type::Bool;
-            j.b = true;
-            return j;
-        }
-        if (lit("false")) {
-            j.type = Json::Type::Bool;
-            return j;
-        }
-        if (lit("null")) return j;
-        char* e = nullptr;
-        j.n = std::strtod(p, &e);
-        if (e == p) {
-            ok = false;
-            return j;
-        }
-        j.type = Json::Type::Num;
-        p = e;
-        return j;
-    }
-};
-
-bool parse_json(const std::string& text, Json& out) {
-    Parser ps{text.data(), text.data() + text.size()};
-    out = ps.value();
-    ps.ws();
-    return ps.ok && ps.p == ps.end;
-}
-
-std::string read_file(const std::string& path) {
-    std::ifstream f(path, std::ios::binary);
-    std::stringstream ss;
-    ss << f.rdbuf();
-    return ss.str();
-}
-
-std::vector<Json> read_records(const std::string& path, int& bad_lines) {
-    std::vector<Json> r;
-    std::ifstream f(path, std::ios::binary);
-    std::string line;
-    bad_lines = 0;
-    while (std::getline(f, line)) {
-        if (line.empty()) continue;
-        Json j;
-        if (parse_json(line, j)) {
-            r.push_back(std::move(j));
-        } else {
-            ++bad_lines;
-        }
-    }
-    return r;
-}
-
-std::vector<const Json*> by_fn(const std::vector<Json>& all, const char* fn) {
-    std::vector<const Json*> r;
-    for (const Json& j : all) {
-        const Json* f = j.get("fn");
-        if (f && f->is(fn)) r.push_back(&j);
-    }
-    return r;
-}
-
-std::string hexs(const void* p) {
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "0x%llx", static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(p)));
-    return buf;
-}
-
-std::string exe_basename() {
-    char path[MAX_PATH];
-    GetModuleFileNameA(nullptr, path, MAX_PATH);
-    const char* slash = std::strrchr(path, '\\');
-    return slash ? slash + 1 : path;
-}
-
 std::wstring exe_dir() {
     wchar_t path[MAX_PATH];
     GetModuleFileNameW(nullptr, path, MAX_PATH);
@@ -299,11 +82,6 @@ uint32_t image_size() {
     auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
     auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
     return nt->OptionalHeader.SizeOfImage;
-}
-
-uint64_t parse_hex(const Json* j) {
-    if (!j || j->type != Json::Type::Str) return ~0ull;
-    return std::strtoull(j->s.c_str(), nullptr, 16);
 }
 
 // ---- A fake ID3D12Resource ---------------------------------------------------------------------
@@ -842,335 +620,14 @@ bool run_dxgi(uint64_t& dispatch_calls, Frame& frame) {
     return true;
 }
 
-// ---- Assertions on the output ------------------------------------------------------------------
-void check_fsr2_records(const std::vector<Json>& all, const std::string& exe) {
-    auto recs = by_fn(all, "ffxFsr2ContextDispatch");
-    CHECK(recs.size() >= 7);
-    const uint32_t size = image_size();
-    int ok_records = 0, failed_records = 0, named_thread = 0;
-    for (const Json* r : recs) {
-        const Json* module = r->get("module");
-        CHECK(module && module->is(exe.c_str()));
-        const uint64_t rva = parse_hex(r->get("rva"));
-        CHECK(rva > 0x1000 && rva < size);
-        CHECK(r->get("api") && r->get("api")->is("fsr2"));
-        CHECK(r->get("tid") && r->get("tid")->n > 0);
-        CHECK(parse_hex(r->get("ret")) == 0x1234ABCD);
-        const Json* thread = r->get("thread");
-        if (thread && thread->is("census-worker")) ++named_thread;
-        const Json* check = r->at({"args", "layout_check"});
-        if (check && check->is("ok")) {
-            ++ok_records;
-            const Json* res = r->at({"args", "resources"});
-            CHECK(res != nullptr);
-            CHECK(res->at({"color", "name"}) && res->at({"color", "name"})->is("FSR2_InputColor"));
-            CHECK(res->at({"depth", "name"}) && res->at({"depth", "name"})->is("FSR2_InputDepth"));
-            CHECK(res->at({"output", "name"}) && res->at({"output", "name"})->is("FSR2_OutputUpscaledColor"));
-            CHECK(res->at({"color", "width"}) && res->at({"color", "width"})->n == 1280);
-            CHECK(res->at({"output", "height"}) && res->at({"output", "height"})->n == 1080);
-            CHECK(res->at({"depth", "is_depth"}) && res->at({"depth", "is_depth"})->b);
-            CHECK(res->at({"color", "d3d12", "format_name"}) &&
-                  res->at({"color", "d3d12", "format_name"})->is("R16G16B16A16_FLOAT"));
-            CHECK(res->at({"depth", "d3d12", "format_name"}) && res->at({"depth", "d3d12", "format_name"})->is("D32_FLOAT"));
-            CHECK(res->at({"output", "d3d12", "width"}) && res->at({"output", "d3d12", "width"})->n == 1920);
-            CHECK(res->at({"reactive", "ptr"}) && res->at({"reactive", "ptr"})->type == Json::Type::Null);
-            const Json* sc = r->at({"args", "scalars"});
-            CHECK(sc != nullptr);
-            CHECK_NEAR(sc->get("jitter_x")->n, 0.25);
-            CHECK_NEAR(sc->get("jitter_y")->n, -0.375);
-            CHECK_NEAR(sc->get("mv_scale_x")->n, 1280.0);
-            CHECK(sc->get("render_width")->n == 1280 && sc->get("render_height")->n == 720);
-            CHECK(sc->get("enable_sharpening")->b);
-            CHECK_NEAR(sc->get("sharpness")->n, 0.5);
-            CHECK_NEAR(sc->get("frame_time_delta_ms")->n, 16.6);
-            CHECK_NEAR(sc->get("pre_exposure")->n, 1.0);
-            CHECK(!sc->get("reset")->b);
-            CHECK_NEAR(sc->get("camera_far")->n, 5000.0);
-            CHECK_NEAR(sc->get("camera_fov_vertical")->n, 1.0);
-        } else if (check && check->is("failed")) {
-            ++failed_records;
-            CHECK(r->at({"args", "raw_bytes_len"}) && r->at({"args", "raw_bytes_len"})->n == 1352);
-            CHECK(r->at({"args", "resources"}) == nullptr);
-        }
-    }
-    CHECK(ok_records >= 4);
-    CHECK(failed_records == 1);
-    CHECK(named_thread == 1);
-}
-
-void check_ngx_records(const std::vector<Json>& all) {
-    auto creates = by_fn(all, "NVSDK_NGX_D3D12_CreateFeature");
-    CHECK(creates.size() == 1);
-    if (creates.size() == 1) {
-        const Json* a = creates[0]->get("args");
-        CHECK(a && a->get("feature") && a->get("feature")->is("SuperSampling"));
-        const Json* c = a->get("create");
-        CHECK(c != nullptr);
-        CHECK(c->get("Width")->n == 1280 && c->get("Height")->n == 720);
-        CHECK(c->get("OutWidth")->n == 1920 && c->get("OutHeight")->n == 1080);
-        CHECK(c->get("PerfQualityValue")->n == 2 && c->get("quality")->is("MaxQuality"));
-        const Json* names = c->get("create_flag_names");
-        CHECK(names && names->has_string("IsHDR") && names->has_string("MVLowRes") && names->has_string("MVJittered") &&
-              names->has_string("DepthInverted") && names->has_string("AutoExposure"));
-        CHECK(!names->has_string("AlphaUpscaling"));
-        CHECK(a->get("handle") && a->get("handle")->type == Json::Type::Str);
-        CHECK(parse_hex(a->get("command_list_or_context")) == 0x1111);
-    }
-    auto evals = by_fn(all, "NVSDK_NGX_D3D12_EvaluateFeature");
-    CHECK(evals.size() == 2);
-    if (!evals.empty()) {
-        const Json* a = evals[0]->get("args");
-        CHECK(parse_hex(a->get("command_list_or_context")) == 0x2222);
-        const Json* res = a->get("resources");
-        CHECK(res != nullptr);
-        CHECK(res->at({"Color", "format_name"})->is("R16G16B16A16_FLOAT"));
-        CHECK(res->at({"Color", "width"})->n == 1280 && res->at({"Color", "height"})->n == 720);
-        CHECK(res->at({"Output", "width"})->n == 1920);
-        CHECK(res->at({"Depth", "format_name"})->is("D32_FLOAT"));
-        CHECK(res->at({"MotionVectors", "format_name"})->is("R16G16_FLOAT"));
-        CHECK(res->at({"ExposureTexture", "format_name"})->is("R32_FLOAT"));
-        CHECK(res->get("TransparencyMask") == nullptr);
-        const Json* sc = a->get("scalars");
-        CHECK(sc != nullptr);
-        CHECK_NEAR(sc->get("Jitter.Offset.X")->n, -0.125);
-        CHECK_NEAR(sc->get("Jitter.Offset.Y")->n, 0.0625);
-        CHECK_NEAR(sc->get("MV.Scale.X")->n, 1280.0);
-        CHECK(sc->get("Reset")->n == 1);
-        CHECK_NEAR(sc->get("Sharpness")->n, 0.35);
-        CHECK(sc->get("DLSS.Render.Subrect.Dimensions.Width")->n == 1280);
-        CHECK_NEAR(sc->get("DLSS.Pre.Exposure")->n, 1.5);
-        CHECK_NEAR(sc->get("FrameTimeDeltaInMsec")->n, 16.6);
-        CHECK(sc->get("DLSS.Input.Color.Subrect.Base.X")->n == 16);
-        CHECK(evals[0]->get("module")->is(exe_basename().c_str()));
-    }
-}
-
-void check_other_records(const std::vector<Json>& all) {
-    auto qi = by_fn(all, "nvapi_QueryInterface");
-    CHECK(qi.size() >= 3);
-    bool saw_marker_id = false;
-    for (const Json* r : qi) {
-        if (r->at({"args", "id"}) && r->at({"args", "id"})->is("0xd9984c05")) {
-            saw_marker_id = true;
-            CHECK(r->at({"args", "reflex_entry"})->is("NvapiSetLatencyMarker"));
-        }
-    }
-    CHECK(saw_marker_id);
-    auto marker = by_fn(all, "NvapiSetLatencyMarker");
-    CHECK(marker.size() == 1);
-    if (marker.size() == 1) {
-        const Json* a = marker[0]->get("args");
-        CHECK(a->get("frame_id")->n == 77);
-        CHECK(a->get("marker_type")->n == 4 && a->get("marker")->is("PRESENT_START"));
-        CHECK(parse_hex(a->get("device_or_queue")) == 0xD3D3);
-        CHECK(parse_hex(marker[0]->get("ret")) == 0x5151);
-    }
-    auto sleep_mode = by_fn(all, "NvapiSetSleepMode");
-    CHECK(sleep_mode.size() == 1);
-    if (sleep_mode.size() == 1) {
-        const Json* a = sleep_mode[0]->get("args");
-        CHECK(a->get("low_latency_mode")->b && a->get("low_latency_boost")->b);
-        CHECK(a->get("minimum_interval_us")->n == 8333);
-    }
-    auto jitter = by_fn(all, "xessSetJitterScale");
-    CHECK(jitter.size() == 1);
-    if (jitter.size() == 1) {
-        CHECK_NEAR(jitter[0]->at({"args", "x"})->n, 0.25);
-        CHECK_NEAR(jitter[0]->at({"args", "y"})->n, -0.5);
-    }
-    auto exec = by_fn(all, "xessD3D12Execute");
-    CHECK(exec.size() == 2);
-    if (!exec.empty()) {
-        const Json* a = exec[0]->get("args");
-        CHECK(a->at({"resources", "color", "format_name"})->is("R16G16B16A16_FLOAT"));
-        CHECK(a->at({"resources", "velocity", "format_name"})->is("R16G16_FLOAT"));
-        CHECK(a->at({"resources", "output", "width"})->n == 1920);
-        CHECK(a->at({"resources", "exposure_scale", "ptr"}) == nullptr ||
-              a->at({"resources", "exposure_scale"})->type == Json::Type::Null);
-        CHECK_NEAR(a->at({"scalars", "jitter_x"})->n, 0.125);
-        CHECK(a->at({"scalars", "input_width"})->n == 1280);
-        CHECK(parse_hex(exec[0]->get("ret")) == 0x77);
-    }
-}
-
-bool entry_modified(const Json& summary, const char* fn) {
-    const Json* hooks = summary.get("hooks");
-    if (!hooks) return false;
-    for (const Json& hk : hooks->a) {
-        const Json* m = hk.get("entry_modified");
-        if (hk.get("function")->is(fn) && m && m->b) return true;
-    }
-    return false;
-}
-
-void check_dxgi_records(const std::vector<Json>& all, const Json& summary) {
-    auto factory = by_fn(all, "CreateDXGIFactory1");
-    CHECK(factory.size() == 1);
-    CHECK(by_fn(all, "D3D12CreateDevice").size() == 1);
-    auto queues = by_fn(all, "D3d12DeviceCreateCommandQueue");
-    CHECK(queues.size() == 1);
-    if (!queues.empty()) CHECK(queues[0]->at({"args", "type_name"})->is("DIRECT"));
-    auto hwnd = by_fn(all, "DxgiFactoryCreateSwapChainForHwnd");
-    CHECK(hwnd.size() == 1);
-    if (!hwnd.empty()) {
-        const Json* a = hwnd[0]->get("args");
-        CHECK(a->at({"desc", "width"})->n == 640 && a->at({"desc", "height"})->n == 360);
-        CHECK(a->at({"desc", "format_name"})->is("B8G8R8A8_UNORM"));
-        CHECK(a->at({"desc", "buffer_count"})->n == 2);
-        CHECK(a->at({"desc", "swap_effect"})->n == static_cast<double>(DXGI_SWAP_EFFECT_FLIP_DISCARD));
-    }
-    // An overlay (RTSS, Steam, Discord) that hooks Present after the census can overwrite the
-    // census' detour at the function entry. The census reports that instead of hiding it, so a
-    // missing record is only acceptable when the summary flags the entry as modified.
-    const bool present_modified = entry_modified(summary, "DxgiSwapChainPresent");
-    auto p0 = by_fn(all, "DxgiSwapChainPresent");
-    auto p1 = by_fn(all, "DxgiSwapChainPresent1");
-    if (present_modified) {
-        std::printf("NOTE: another hook layer overwrote the Present detour (overlay in process); "
-                    "present-count assertions relaxed, entry_modified reported\n");
-        CHECK(!p0.empty() || !p1.empty());
-    } else {
-        CHECK(p0.size() == 3); // two frames plus the test present
-        CHECK(p1.size() == 1);
-        if (p0.size() == 3) {
-            CHECK(p0[0]->get("present")->n == 1);
-            CHECK(p0[0]->at({"args", "swapchain_desc", "width"})->n == 640);
-            CHECK(p0[0]->at({"args", "swapchain_desc", "format_name"})->is("B8G8R8A8_UNORM"));
-            CHECK(p0[0]->at({"args", "present_flags"}) != nullptr);
-            CHECK(p0[0]->at({"args", "last_color_space_set"}) != nullptr);
-            CHECK(p0[1]->get("present")->n == 3);
-            CHECK(p0[2]->get("present")->n == 3); // the test present is not counted
-            CHECK(p0[2]->at({"args", "present_flag_names"})->has_string("TEST"));
-        }
-        if (!p1.empty()) CHECK(p1[0]->get("present")->n == 2);
-    }
-    auto cs = by_fn(all, "DxgiSwapChainSetColorSpace1");
-    CHECK(cs.size() == 1);
-    CHECK(by_fn(all, "DxgiSwapChainResizeBuffers").size() == 1);
-    auto exec = by_fn(all, "D3d12QueueExecuteCommandLists");
-    CHECK(exec.size() >= 4); // the caller may be an overlay hook, so several calls can share a site
-
-    // Queue statistics and the calls-per-present histogram.
-    const Json* qs = summary.get("queues");
-    CHECK(qs && qs->a.size() == 1);
-    if (qs && qs->a.size() == 1) {
-        const Json& q = qs->a[0];
-        CHECK(q.get("kind")->is("d3d12"));
-        CHECK(q.get("type")->n == 0);
-        CHECK(q.get("submit_calls")->n == 6);
-        if (!present_modified) {
-            const Json* h = q.at({"calls_per_present", "2"});
-            CHECK(h && h->n == 3);
-        }
-    }
-}
-
-void check_summary(const Json& summary, const std::string& exe, uint64_t dispatch_calls, bool had_dxgi) {
-    const Json* sites = summary.get("sites");
-    CHECK(sites && sites->type == Json::Type::Arr);
-    if (!sites) return;
-    double dispatch_total = 0, helper_site = 0, pointer_site = 0;
-    size_t helper_threads = 0;
-    bool saw_ret_in_exe = false;
-    for (const Json& s : sites->a) {
-        const Json* fn = s.get("function");
-        if (!fn || !fn->is("ffxFsr2ContextDispatch")) continue;
-        CHECK(s.get("module")->is(exe.c_str()));
-        CHECK(s.get("api")->is("fsr2"));
-        const double count = s.get("count")->n;
-        dispatch_total += count;
-        saw_ret_in_exe = true;
-        if (s.get("threads")->a.size() == 2) {
-            helper_site = count;
-            helper_threads = 2;
-        } else {
-            pointer_site = count;
-        }
-        CHECK(s.get("first_present")->n <= s.get("last_present")->n);
-    }
-    CHECK(saw_ret_in_exe);
-    CHECK(dispatch_total == static_cast<double>(dispatch_calls));
-    CHECK(helper_threads == 2);
-    CHECK(pointer_site == 2);
-    CHECK(helper_site == static_cast<double>(dispatch_calls) - 2);
-
-    // Histogram: the calls made between presents.
-    if (had_dxgi && !entry_modified(summary, "DxgiSwapChainPresent")) {
-        const Json* hs = summary.get("histograms");
-        CHECK(hs != nullptr);
-        for (const Json& h : hs->a) {
-            if (!h.get("function")->is("ffxFsr2ContextDispatch")) continue;
-            CHECK(h.get("calls")->n == static_cast<double>(dispatch_calls));
-            const Json* by = h.get("calls_per_present");
-            CHECK(by && by->get("2") && by->get("2")->n == 2);
-            char first[16];
-            std::snprintf(first, sizeof(first), "%llu", static_cast<unsigned long long>(dispatch_calls - 6 + 2));
-            CHECK(by->get(first) && by->get(first)->n == 1);
-        }
-        CHECK(summary.get("present_index")->n == 3);
-    }
-
-    // Threads and hooks.
-    const Json* threads = summary.get("threads");
-    bool named = false;
-    if (threads) {
-        for (const Json& t : threads->a) {
-            if (t.get("name") && t.get("name")->is("census-worker")) named = true;
-        }
-    }
-    CHECK(named);
-    CHECK(summary.get("hooks") && summary.get("hooks")->a.size() > 5);
-    const Json* mods = summary.get("modules_hooked");
-    CHECK(mods && mods->has_string("ffx_fsr2_api_x64.dll") && mods->has_string("_nvngx.dll") &&
-          mods->has_string("libxess.dll"));
-    // The nvapi fixture is not on the detour list, so it was bound by a GetProcAddress thunk.
-    bool thunk = false;
-    for (const Json& h : summary.get("hooks")->a) {
-        if (h.get("function")->is("nvapi_QueryInterface") && h.get("binding")->is("getprocaddress_thunk")) thunk = true;
-    }
-    CHECK(thunk);
-}
-
-void check_static_findings(const Json& summary) {
-    const Json* f = summary.get("static_findings");
-    CHECK(f != nullptr);
-    if (!f) return;
-    bool xref = false;
-    const uint64_t base = reinterpret_cast<uint64_t>(GetModuleHandleW(nullptr));
-    const uint64_t anchor = reinterpret_cast<uint64_t>(&static_anchor) - base;
-    for (const Json& e : f->a) {
-        if (e.get("vendor")->is("fsr2") && e.get("what")->s.rfind("xref to FSR2_InputColor", 0) == 0) {
-            // The anchor function is a leaf, so its start comes from the padding before it.
-            if (parse_hex(e.get("function_rva")) == anchor && parse_hex(e.get("rva")) >= anchor &&
-                parse_hex(e.get("rva")) < anchor + 0x40) {
-                xref = true;
-            }
-        }
-    }
-    CHECK(xref);
-}
-
-int functional(const std::string& dir) {
+int probe_vtable() {
     check_vtable_slots();
+    const int failures = g_failures;
+    g_failures = 0;
+    return failures;
+}
 
-    rsf_census_options opt{};
-    opt.struct_size = sizeof(opt);
-    opt.abi_version = RSF_CENSUS_ABI_VERSION;
-    opt.output_dir_utf8 = dir.c_str();
-    opt.byte_budget = 8u << 20;
-    opt.full_record_cap = 4;
-    opt.sample_interval = 10;
-    opt.summary_period_ms = 50;
-
-    rsf_census_options bad = opt;
-    bad.abi_version = 99;
-    CHECK(rsf_census_install(&bad) == RSF_CENSUS_ERROR_ABI_MISMATCH);
-    bad = opt;
-    bad.struct_size = 4;
-    CHECK(rsf_census_install(&bad) == RSF_CENSUS_ERROR_INVALID_ARGUMENT);
-
-    CHECK(rsf_census_install(&opt) == RSF_CENSUS_OK);
-    CHECK(rsf_census_install(&opt) == RSF_CENSUS_ERROR_ALREADY_INSTALLED);
+int probe_functional(rsf_test_census_functional_facts* facts) {
     // Referenced after install so the scan sees it in the loaded image.
     CHECK(static_anchor() == kAnchorName);
 
@@ -1187,56 +644,15 @@ int functional(const std::string& dir) {
 
     const bool had_dxgi = run_dxgi(dispatch_calls, frame);
     if (!had_dxgi) std::printf("SKIPPED: DXGI/D3D12 WARP path unavailable on this machine\n");
-
-    // The static scan runs on the writer thread; wait for it.
-    rsf_census_counters counters{sizeof(counters), RSF_CENSUS_ABI_VERSION};
-    for (int i = 0; i < 400; ++i) {
-        rsf_census_get_counters(&counters);
-        if (counters.static_findings > 0) break;
-        Sleep(50);
-    }
-    CHECK(rsf_census_flush() == RSF_CENSUS_OK);
-    rsf_census_get_counters(&counters);
-
-    const std::string exe = exe_basename();
-    int bad_lines = 0;
-    const std::vector<Json> all = read_records(dir + "\\census.jsonl", bad_lines);
-    CHECK(bad_lines == 0);
-    CHECK(!all.empty() && all[0].get("type") && all[0].get("type")->is("census_start"));
-    Json summary;
-    CHECK(parse_json(read_file(dir + "\\census-summary.json"), summary));
-
-    check_fsr2_records(all, exe);
-    check_ngx_records(all);
-    check_other_records(all);
-    check_summary(summary, exe, dispatch_calls, had_dxgi);
-    if (had_dxgi) check_dxgi_records(all, summary);
-    check_static_findings(summary);
-
-    // Sampling: calls 0..3 in full, then calls 4, 14, ..., 94.
-    CHECK(by_fn(all, "ffxFsr2GetJitterOffset").size() == 1 + 14); // one direct call earlier, 100 at the noise site
-    // Sequence numbers are dense and increase.
-    double last_seq = -1;
-    for (const Json& j : all) {
-        if (const Json* s = j.get("seq")) {
-            CHECK(s->n == last_seq + 1);
-            last_seq = s->n;
-        }
-    }
-    CHECK(counters.records_dropped_queue == 0 && counters.records_dropped_budget == 0 && counters.records_dropped_size == 0);
-    CHECK(counters.records_written == all.size() - 1);
-    CHECK(counters.calls_seen > 100);
-    CHECK(counters.hooks_installed > 10);
-    CHECK(counters.sites > 10);
-    CHECK(counters.static_findings > 0);
-
-    CHECK(rsf_census_shutdown() == RSF_CENSUS_OK);
-    // After shutdown the hooks are off and calls pass straight through.
-    CHECK(dispatch_site(nullptr) == 0x1234ABCD);
-
-    std::printf("vendor_census functional: %d failure(s)\n", g_failures);
-    return g_failures ? 1 : 0;
+    facts->dispatch_calls = dispatch_calls;
+    facts->had_dxgi = had_dxgi ? 1u : 0u;
+    facts->image_size = image_size();
+    facts->anchor_rva = reinterpret_cast<uintptr_t>(&static_anchor) -
+                        reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    return g_failures;
 }
+
+int probe_after_shutdown() { return dispatch_site(nullptr); }
 
 // Vulkan entry points reached through vkGetInstanceProcAddr and vkGetDeviceProcAddr, and the
 // Streamline feature functions handed out by slGetFeatureFunction. Structures are built from the
@@ -1542,7 +958,11 @@ int main(int argc, char** argv) {
         return 2;
     }
     const std::string mode = argv[1];
-    if (mode == "functional") return functional(argv[2]);
+    if (mode == "functional") {
+        return rsf_test_census_functional(argv[2], rsf_census_install, rsf_census_flush,
+                                          rsf_census_get_counters, rsf_census_shutdown,
+                                          probe_vtable, probe_functional, probe_after_shutdown);
+    }
     if (mode == "budget") return rsf_test_census_budget(argv[2], rsf_census_install, rsf_census_flush,
                                                            rsf_census_get_counters, rsf_census_shutdown, jitter_noise);
     if (mode == "vulkan") return rsf_test_census_vulkan(argv[2], rsf_census_install, rsf_census_flush, rsf_census_shutdown, probe_vulkan);

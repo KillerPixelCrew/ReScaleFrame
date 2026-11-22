@@ -26,6 +26,8 @@ macro_rules! expect {
     };
 }
 
+mod functional;
+
 #[derive(Default)]
 struct Checks(u32);
 

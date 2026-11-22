@@ -290,6 +290,16 @@ queue histograms, Streamline matrices and axes, feature thunks, FidelityFX chain
 resource descriptions. The original native producers and their pass-through assertions were
 compared byte for byte after extraction.
 
+## Functional vendor census fixture
+
+`tests/vendor_census.cpp` is replaced by Rust mode drivers and record assertions plus
+`tests/loader/vendor_census_native.cpp` for native evidence. The functional mode still
+checks the public ABI errors, static scan, RVA and module attribution, sampling cadence,
+ordinal continuity, vendor records and WARP present and queue behavior. The same native
+SDK vtable probes, fake COM resources, noinline caller anchors, mock payloads and WARP calls
+provide independent input and pass-through evidence. The native probe returns the actual
+PE image size, linked anchor RVA, dispatch count and availability of WARP.
+
 ## Inventory at the end of the 82b39a63 continuation
 
 Eleven additional baseline paths have source cutovers. The two public header paths retain
