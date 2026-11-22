@@ -774,6 +774,7 @@ dependencies = [
  "rsf-runtime-submission",
  "rsf-shader-compiler",
  "rsf-streamline-vk",
+ "rsf-test-support",
  "rsf-vk-xess-fg",
  "serde",
  "serde_json",
@@ -925,6 +926,7 @@ name = "rsf-translucency-fixtures"
 version = "0.1.2"
 dependencies = [
  "rsf-game-sys",
+ "rsf-test-support",
  "windows",
 ]
 

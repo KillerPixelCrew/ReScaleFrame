@@ -41,15 +41,6 @@ fn with<T>(f: impl FnOnce(&mut Calls) -> T) -> T {
     CALLS.with(|calls| f(&mut calls.borrow_mut()))
 }
 
-macro_rules! check {
-    ($calls:expr, $value:expr) => {
-        if !$value {
-            eprintln!("{}: {}", line!(), stringify!($value));
-            $calls.failures += 1;
-        }
-    };
-}
-
 fn fake(id: usize) -> Handle {
     ptr::without_provenance_mut(id)
 }
@@ -347,16 +338,6 @@ fn reset(provider: u64) {
             ..Calls::default()
         }
     });
-}
-
-macro_rules! expect {
-    ($value:expr) => {{
-        let passed = $value;
-        if !passed {
-            eprintln!("{}: {}", line!(), stringify!($value));
-            with(|c| c.failures += 1);
-        }
-    }};
 }
 
 fn retirement() {

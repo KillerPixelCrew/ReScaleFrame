@@ -10,10 +10,8 @@ use std::mem::ManuallyDrop;
 use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::ptr;
 use windows::Win32::Foundation::HANDLE;
-use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
-use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIAdapter, IDXGIFactory4};
 use windows::core::Interface;
 use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
 use windows_sys::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
@@ -77,17 +75,8 @@ struct Fixture {
 
 impl Fixture {
     fn start() -> TestResult<Self> {
-        let mut debug: Option<ID3D12Debug> = None;
-        if unsafe { D3D12GetDebugInterface(&mut debug) }.is_ok()
-            && let Some(debug) = debug
-        {
-            unsafe { debug.EnableDebugLayer() };
-        }
-        let factory: IDXGIFactory4 = unsafe { CreateDXGIFactory1() }?;
-        let warp: IDXGIAdapter = unsafe { factory.EnumWarpAdapter() }?;
-        let mut device: Option<ID3D12Device> = None;
-        unsafe { D3D12CreateDevice(&warp, D3D_FEATURE_LEVEL_11_0, &mut device) }?;
-        let device = device.ok_or("null WARP device")?;
+        rsf_test_support::enable_d3d12_debug_layer();
+        let (_, device) = rsf_test_support::warp_d3d12()?;
         let queue = unsafe { device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC::default()) }?;
         let fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }?;
         let event = unsafe { owned_win32_handle(CreateEventW(ptr::null(), 0, 0, ptr::null())) }

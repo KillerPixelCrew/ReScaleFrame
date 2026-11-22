@@ -10,10 +10,8 @@ use std::mem::ManuallyDrop;
 use std::os::windows::io::AsRawHandle;
 use std::{ptr, slice};
 use windows::Win32::Foundation::HANDLE;
-use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
-use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIAdapter, IDXGIFactory4};
 use windows::core::Interface;
 use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
 use windows_sys::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
@@ -165,11 +163,7 @@ fn record_upload(
 }
 
 fn run(api: &Services) -> TestResult {
-    let factory: IDXGIFactory4 = unsafe { CreateDXGIFactory1() }?;
-    let adapter: IDXGIAdapter = unsafe { factory.EnumWarpAdapter() }?;
-    let mut device: Option<ID3D12Device> = None;
-    unsafe { D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_11_0, &mut device) }?;
-    let device = device.ok_or("null WARP device")?;
+    let (_, device) = rsf_test_support::warp_d3d12()?;
     let queue_desc = D3D12_COMMAND_QUEUE_DESC {
         Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
         ..Default::default()

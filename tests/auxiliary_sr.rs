@@ -6,9 +6,8 @@ use rsf_game_sys::{
     RSF_D3D11_AUXILIARY_RESTORE_CONTENTS as RESTORE,
 };
 use std::cell::Cell;
-use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::{
-    Direct3D::{D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL_11_0, D3D_PRIMITIVE_TOPOLOGY_POINTLIST},
+    Direct3D::{D3D_FEATURE_LEVEL_11_0, D3D_PRIMITIVE_TOPOLOGY_POINTLIST},
     Direct3D11::*,
     Dxgi::Common::*,
 };
@@ -29,25 +28,6 @@ const DSV: D3D11_BIND_FLAG = D3D11_BIND_DEPTH_STENCIL;
 const SRV: D3D11_BIND_FLAG = D3D11_BIND_SHADER_RESOURCE;
 const NO_BIND: D3D11_BIND_FLAG = D3D11_BIND_FLAG(0);
 const PACKED: DXGI_FORMAT = DXGI_FORMAT_R11G11B10_FLOAT;
-
-fn create_warp(context: Option<*mut Option<ID3D11DeviceContext>>) -> Option<ID3D11Device> {
-    let mut device = None;
-    unsafe {
-        D3D11CreateDevice(
-            None,
-            D3D_DRIVER_TYPE_WARP,
-            HMODULE::default(),
-            D3D11_CREATE_DEVICE_FLAG(0),
-            Some(&[D3D_FEATURE_LEVEL_11_0]),
-            D3D11_SDK_VERSION,
-            Some(&mut device),
-            None,
-            context,
-        )
-    }
-    .ok()?;
-    device
-}
 
 struct Device {
     device: ID3D11Device,
@@ -830,9 +810,9 @@ fn run(rig: &Device) -> Option<()> {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_auxiliary_sr_fixture() -> i32 {
-    let mut context = None;
-    let device = create_warp(Some(&mut context));
-    let (Some(device), Some(context)) = (device, context) else {
+    let Ok((device, context)) =
+        rsf_test_support::warp_d3d11(D3D11_CREATE_DEVICE_FLAG(0), Some(&[D3D_FEATURE_LEVEL_11_0]))
+    else {
         return 77;
     };
     let rig = Device {

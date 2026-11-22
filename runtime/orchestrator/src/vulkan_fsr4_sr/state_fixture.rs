@@ -68,23 +68,6 @@ thread_local! {
 fn with<T>(f: impl FnOnce(&mut Calls) -> T) -> T {
     CALLS.with(|c| f(&mut c.borrow_mut()))
 }
-macro_rules! check {
-    ($calls:expr, $value:expr) => {
-        if !$value {
-            eprintln!("{}: {}", line!(), stringify!($value));
-            $calls.failures += 1;
-        }
-    };
-}
-macro_rules! expect {
-    ($value:expr) => {{
-        let passed = $value;
-        if !passed {
-            eprintln!("{}: {}", line!(), stringify!($value));
-            with(|c| c.failures += 1);
-        }
-    }};
-}
 macro_rules! leaf {
     (|$($name:tt : $ty:ty),*| $(-> $ret:ty)? { $($body:tt)* }) => {{
         unsafe extern "C" fn callback($($name: $ty),*) $(-> $ret)? { $($body)* }

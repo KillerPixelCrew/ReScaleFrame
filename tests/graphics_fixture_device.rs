@@ -29,26 +29,9 @@ impl Device {
         driver: D3D_DRIVER_TYPE,
         levels: Option<&[D3D_FEATURE_LEVEL]>,
     ) -> Option<Self> {
-        let mut device = None;
-        let mut context = None;
-        unsafe {
-            D3D11CreateDevice(
-                None,
-                driver,
-                Default::default(),
-                D3D11_CREATE_DEVICE_FLAG(0),
-                levels,
-                D3D11_SDK_VERSION,
-                Some(&mut device),
-                None,
-                Some(&mut context),
-            )
-        }
-        .ok()?;
-        Some(Self {
-            device: device?,
-            context: context?,
-        })
+        let (device, context) =
+            rsf_test_support::d3d11_device(driver, D3D11_CREATE_DEVICE_FLAG(0), levels).ok()?;
+        Some(Self { device, context })
     }
 
     pub(super) fn desc(

@@ -144,7 +144,10 @@ fn mask_scenarios(
         ),
         "out-of-resource temporal mask rectangle refused",
     );
-    let second = create_warp(None);
+    let second =
+        rsf_test_support::warp_d3d11(D3D11_CREATE_DEVICE_FLAG(0), Some(&[D3D_FEATURE_LEVEL_11_0]))
+            .ok()
+            .map(|(device, _)| device);
     rig.check(
         second.is_some(),
         "second device for foreign temporal resource checks",

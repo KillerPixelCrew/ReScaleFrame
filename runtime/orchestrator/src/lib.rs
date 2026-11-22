@@ -168,6 +168,9 @@ mod fg_scene;
 mod fg_session;
 #[cfg(windows)]
 mod fg_status;
+#[cfg(all(windows, feature = "test-fixtures"))]
+#[macro_use]
+mod fixture_checks;
 #[cfg(windows)]
 mod frame_assembly;
 #[cfg(windows)]

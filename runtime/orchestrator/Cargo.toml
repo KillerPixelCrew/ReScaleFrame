@@ -24,7 +24,7 @@ serde_json = { version = "=1.0.154", features = ["unbounded_depth"] }
 
 [features]
 # Fixture exports called only by the ctest executables; the shipping archive is built without them.
-test-fixtures = []
+test-fixtures = ["dep:rsf-test-support"]
 # CMake's vendor-header detection (runtime/orchestrator/CMakeLists.txt): the D3D12 FidelityFX SR and
 # legacy FG, FidelityFX FG, XeSS SR and legacy FG, and XeSS-FG providers. Without one, its provider
 # reports NOT_COMPILED.
@@ -53,6 +53,8 @@ workspace = true
 
 [target."cfg(windows)".dependencies]
 rsf-vk-xess-fg = { path = "../vulkan/xess-fg" }
+# The fixture exports call its WARP helpers; absent from the shipping build.
+rsf-test-support = { path = "../../tests/support", optional = true }
 ash = { workspace = true }
 rsf-shader-compiler = { path = "../shader_patch/compiler" }
 windows = { workspace = true, features = [
