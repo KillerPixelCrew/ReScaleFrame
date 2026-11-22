@@ -32,7 +32,7 @@ RSF_RUNTIME_API rsf_backend_result rsf_sr_bridge_evaluate(rsf_sr_bridge* bridge,
    queue signal) and the device was not removed, the first error is returned and the dispatch stays
    pending with its resources and the SDK context alive. While it is pending, warm_up, select
    (including RSF_SR_NONE), a set_auto_exposure change and evaluate return
-   RSF_BACKEND_ERROR_NOT_READY, and destroy keeps the bridge until process exit. Each of those calls
+   RSF_BACKEND_ERROR_NOT_READY, and close returns NOT_READY without consuming the bridge. Each of those calls
    first checks the dispatch's own fence, re-signalled behind it on the bridge queue if the first
    signal failed, or device removal; evaluate only polls, the others wait up to 10 s. Once either is
    observed the resources are released and the bridge is usable again. */
@@ -40,6 +40,10 @@ RSF_RUNTIME_API rsf_backend_result rsf_sr_bridge_warm_up(rsf_sr_bridge* bridge, 
     uint32_t render_height, uint32_t output_width, uint32_t output_height, uint32_t manual_exposure);
 RSF_RUNTIME_API rsf_backend_result rsf_sr_bridge_get_status(const rsf_sr_bridge* bridge,
     rsf_sr_session_status* status);
+/* OK consumes the bridge. NOT_READY leaves it owned by the caller, which may retry
+   close on the immediate-context owner thread. Null returns INVALID_ARGUMENT. */
+RSF_RUNTIME_API rsf_backend_result rsf_sr_bridge_close(rsf_sr_bridge* bridge);
+/* Compatibility entry point for callers that cannot retry retirement. */
 RSF_RUNTIME_API void rsf_sr_bridge_destroy(rsf_sr_bridge* bridge);
 #ifdef __cplusplus
 }

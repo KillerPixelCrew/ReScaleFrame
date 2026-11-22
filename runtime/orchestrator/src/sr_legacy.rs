@@ -130,7 +130,6 @@ unsafe extern "C" fn rsf_core_sr_legacy_create(
     setup.open.dynamic_resolution = 1;
     setup.open.auto_exposure = u32::from(auto_exposure != 0);
     setup.open.inverted_depth = u32::from(standard_depth == 0);
-    setup.open.depth_infinite = setup.open.inverted_depth;
     let mut adapter = Adapter {
         services,
         bridge: ptr::null_mut(),

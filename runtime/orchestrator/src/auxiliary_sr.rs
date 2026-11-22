@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::auxiliary_sr_abi::*;
 use crate::com_ref::ComRef;
+use crate::d3d11_output::SavedBindings;
 use rsf_game_sys::d3d11_host_abi::rsf_d3d11_auxiliary_surface;
 use rsf_game_sys::{rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::c_void;
@@ -241,26 +242,19 @@ struct Frame {
 struct Bindings<'a> {
     platform: &'a rsf_aux_platform,
     context: *mut c_void,
-    saved: rsf_d3d11_state,
-    entered: bool,
+    _saved: SavedBindings,
 }
 
 impl<'a> Bindings<'a> {
-    fn new(platform: &'a rsf_aux_platform, context: *mut c_void) -> Self {
-        Self {
+    fn new(platform: &'a rsf_aux_platform, context: *mut c_void) -> Option<Self> {
+        let saved = unsafe { SavedBindings::new(context, platform.save?, platform.restore?) }?;
+        let bindings = Self {
             platform,
             context,
-            saved: rsf_d3d11_state::default(),
-            entered: false,
-        }
-    }
-
-    fn save_and_clear(&mut self) -> bool {
-        self.entered = unsafe { self.platform.save.unwrap()(self.context, &mut self.saved) != 0 };
-        if self.entered {
-            self.clear();
-        }
-        self.entered
+            _saved: saved,
+        };
+        bindings.clear();
+        Some(bindings)
     }
 
     fn clear(&self) {
@@ -269,19 +263,6 @@ impl<'a> Bindings<'a> {
 
     fn copy(&self, destination: Texture, source: Texture) {
         unsafe { self.platform.copy.unwrap()(self.context, destination, source) };
-    }
-
-    fn restore(&mut self) {
-        if self.entered {
-            unsafe { self.platform.restore.unwrap()(self.context, &mut self.saved) };
-            self.entered = false;
-        }
-    }
-}
-
-impl Drop for Bindings<'_> {
-    fn drop(&mut self) {
-        self.restore();
     }
 }
 
@@ -681,10 +662,9 @@ impl AuxiliarySr {
         if !capture {
             frame.phase = Phase::Sealed;
         }
-        let mut bindings = Bindings::new(&self.platform, owner.context.0.as_ptr());
-        if !bindings.save_and_clear() {
+        let Some(bindings) = Bindings::new(&self.platform, owner.context.0.as_ptr()) else {
             return false;
-        }
+        };
         if capture {
             frame.phase = Phase::Capturing;
             for (index, original) in frame.originals.iter().enumerate() {
@@ -789,10 +769,12 @@ impl AuxiliarySr {
         } else {
             frame.count
         };
-        let mut bindings = Bindings::new(&self.platform, owner.context.0.as_ptr());
-        if count > prepared || !bindings.save_and_clear() {
+        if count > prepared {
             return false;
         }
+        let Some(bindings) = Bindings::new(&self.platform, owner.context.0.as_ptr()) else {
+            return false;
+        };
         frame.phase = Phase::Publishing;
         if frame.depth_restore.is_some()
             && unsafe { self.platform.depth_commit.unwrap()(self.depth) }
@@ -828,10 +810,9 @@ impl AuxiliarySr {
         if owner.thread != current_thread() {
             return false;
         }
-        let mut bindings = Bindings::new(&self.platform, owner.context.0.as_ptr());
-        if !bindings.save_and_clear() {
+        let Some(bindings) = Bindings::new(&self.platform, owner.context.0.as_ptr()) else {
             return false;
-        }
+        };
         let accepted = frame.phase == Phase::Accepted;
         if let Some(restore) = frame.depth_restore {
             let depth_release = if accepted && !restore {
@@ -877,7 +858,7 @@ impl AuxiliarySr {
         }
         // Release frame references after the game's bindings are back.
         // Leaving this scope also restores them on every failure.
-        bindings.restore();
+        drop(bindings);
         self.frame = None;
         true
     }
@@ -1096,33 +1077,19 @@ unsafe extern "C" fn rsf_auxiliary_sr_restore(handle: *mut AuxiliarySr) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::Cell;
-
-    #[repr(C)]
-    struct Vtable {
-        query_interface: usize,
-        add_ref: unsafe extern "system" fn(*mut FakeCom) -> u32,
-        release: unsafe extern "system" fn(*mut FakeCom) -> u32,
-    }
-
-    static VTABLE: Vtable = Vtable {
-        query_interface: 0,
-        add_ref,
-        release,
-    };
+    use crate::com_ref::test::{Fake, add_ref};
+    use crate::d3d11_output_abi::rsf_d3d11_state;
 
     #[repr(C)]
     struct FakeCom {
-        vtable: &'static Vtable,
-        refs: Cell<u32>,
+        com: Fake,
         width: u32,
     }
 
     impl FakeCom {
         fn new(width: u32) -> Self {
             Self {
-                vtable: &VTABLE,
-                refs: Cell::new(1),
+                com: Fake::new(),
                 width,
             }
         }
@@ -1130,18 +1097,6 @@ mod tests {
         fn raw(&self) -> *mut c_void {
             ptr::from_ref(self).cast_mut().cast()
         }
-    }
-
-    unsafe extern "system" fn add_ref(object: *mut FakeCom) -> u32 {
-        let refs = &unsafe { &*object }.refs;
-        refs.set(refs.get() + 1);
-        refs.get()
-    }
-
-    unsafe extern "system" fn release(object: *mut FakeCom) -> u32 {
-        let refs = &unsafe { &*object }.refs;
-        refs.set(refs.get() - 1);
-        refs.get()
     }
 
     unsafe extern "C" fn retain(object: *mut c_void) -> *mut c_void {
@@ -1236,9 +1191,9 @@ mod tests {
         );
         assert!(owner.backups[0].is_some());
         assert!(owner.frame.is_none());
-        assert_eq!(main.refs.get(), 1);
-        assert_eq!(unreadable.refs.get(), 1);
-        assert_eq!(auxiliary.refs.get(), 1);
+        assert_eq!(main.com.refs.get(), 1);
+        assert_eq!(unreadable.com.refs.get(), 1);
+        assert_eq!(auxiliary.com.refs.get(), 1);
 
         pass.color_output_readable = ptr::null_mut();
         assert!(
@@ -1246,12 +1201,12 @@ mod tests {
                 .reserve(context.raw(), &pass, &inputs, None, ptr::null_mut(), false)
                 .is_some()
         );
-        assert_eq!(main.refs.get(), 2);
-        assert_eq!(auxiliary.refs.get(), 2);
+        assert_eq!(main.com.refs.get(), 2);
+        assert_eq!(auxiliary.com.refs.get(), 2);
         assert!(owner.cancel());
-        assert_eq!(main.refs.get(), 1);
-        assert_eq!(auxiliary.refs.get(), 1);
+        assert_eq!(main.com.refs.get(), 1);
+        assert_eq!(auxiliary.com.refs.get(), 1);
         drop(owner);
-        assert_eq!(context.refs.get(), 1);
+        assert_eq!(context.com.refs.get(), 1);
     }
 }

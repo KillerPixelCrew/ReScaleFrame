@@ -12,6 +12,7 @@ use crate::dxgi_format::{
 use crate::gl_pipeline_abi::{rsf_dlss_setup, rsf_sr12_setup as Setup};
 use crate::render_abi::*;
 use crate::sharpening_policy;
+use crate::sr_session::checked;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_RESET,
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, RSF_GAME_RENDER_NO_FG,
@@ -1287,11 +1288,6 @@ impl Sr12 {
     }
 }
 
-unsafe fn full_pass<'a>(pass: *const Pass) -> Option<&'a Pass> {
-    (!pass.is_null() && unsafe { pass.cast::<u32>().read() } as usize >= size_of::<Pass>())
-        .then(|| unsafe { &*pass })
-}
-
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_sr12_create(
     setup: *const Setup,
@@ -1462,7 +1458,7 @@ unsafe extern "C" fn rsf_core_sr12_evaluate(
     pass: *const Pass,
     slot: u32,
 ) -> i32 {
-    let (Some(owner), Some(pass)) = (unsafe { owner.as_ref() }, unsafe { full_pass(pass) }) else {
+    let (Some(owner), Some(pass)) = (unsafe { owner.as_ref() }, unsafe { checked(pass) }) else {
         return INVALID;
     };
     if list.is_null() || slot as usize >= SLOTS {
@@ -1565,7 +1561,7 @@ unsafe extern "C" fn rsf_core_sr12_capture_scene(
     pass: *const Pass,
     slot: u32,
 ) -> i32 {
-    let (Some(owner), Some(pass)) = (unsafe { owner.as_ref() }, unsafe { full_pass(pass) }) else {
+    let (Some(owner), Some(pass)) = (unsafe { owner.as_ref() }, unsafe { checked(pass) }) else {
         return INVALID;
     };
     if list.is_null() || slot as usize >= SLOTS || pass.color_input.is_null() {

@@ -3,58 +3,29 @@
 // No D3D12 device, shader compiler or vendor SDK is involved, so these establish admission,
 // ownership, ordering, history and handoff policy only.
 use super::*;
+use crate::com_ref::test::{Fake as ComHeader, release};
 use std::cell::{Cell, RefCell};
 
 // Read only through the COM calls in com_ref.cpp.
-#[allow(dead_code)]
-#[repr(C)]
-struct Vtable {
-    query: unsafe extern "system" fn(*mut Fake, *const c_void, *mut Handle) -> i32,
-    add_ref: unsafe extern "system" fn(*mut Fake) -> u32,
-    release: unsafe extern "system" fn(*mut Fake) -> u32,
-}
-
-// IUnknown layout: the vtable pointer first.
 #[repr(C)]
 struct Fake {
-    vtable: &'static Vtable,
-    refs: Cell<u32>,
+    com: ComHeader,
     name: String,
     desc: TextureDesc,
     device: Cell<usize>,
 }
 
-unsafe extern "system" fn query(_: *mut Fake, _: *const c_void, out: *mut Handle) -> i32 {
-    unsafe { out.write(ptr::null_mut()) };
-    0x8000_4002_u32 as i32
+// The header is the first field of the enclosing fake allocation.
+unsafe fn last_release(header: *mut ComHeader) {
+    event(format!(
+        "release {}",
+        unsafe { &*header.cast::<Fake>() }.name
+    ));
 }
-
-unsafe extern "system" fn add_ref(this: *mut Fake) -> u32 {
-    let refs = unsafe { &(*this).refs };
-    refs.set(refs.get() + 1);
-    refs.get()
-}
-
-unsafe extern "system" fn release(this: *mut Fake) -> u32 {
-    let fake = unsafe { &*this };
-    assert!(fake.refs.get() > 0, "over-released {}", fake.name);
-    fake.refs.set(fake.refs.get() - 1);
-    if fake.refs.get() == 0 {
-        event(format!("release {}", fake.name));
-    }
-    fake.refs.get()
-}
-
-static VTABLE: Vtable = Vtable {
-    query,
-    add_ref,
-    release,
-};
 
 fn fake(name: &str, desc: TextureDesc, device: Handle) -> Handle {
     Box::into_raw(Box::new(Fake {
-        vtable: &VTABLE,
-        refs: Cell::new(1),
+        com: ComHeader::with_last_release(Some(last_release)),
         name: name.to_owned(),
         desc,
         device: Cell::new(device as usize),

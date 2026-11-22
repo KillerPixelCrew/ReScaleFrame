@@ -8,6 +8,7 @@ use crate::com_ref::ComRef;
 use crate::cpu_abi::rsf_native_cpu_frame;
 use crate::fg12_abi::rsf_fg12_setup;
 use crate::gl_pipeline_abi::*;
+use crate::owned_handle::OwnedHandle as Owned;
 use crate::render_abi::{
     RSF_DLSS_ABI_VERSION, RSF_FG_BACKEND_AUTO, RSF_FG_OFF, RSF_REFLEX_OFF, rsf_backend_log_fn,
     rsf_native_fg_options, rsf_native_fg_status, rsf_sharpening_options,
@@ -21,7 +22,7 @@ use rsf_game_sys::{
 };
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::mem::MaybeUninit;
-use std::ptr::{self, NonNull};
+use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{Mutex, MutexGuard, TryLockError};
 
@@ -145,28 +146,6 @@ impl Platform {
 
 fn failed(result: i32) -> bool {
     result < 0
-}
-
-// A platform object released by its own destroy call.
-struct Owned {
-    handle: NonNull<c_void>,
-    release: unsafe extern "C" fn(Handle),
-}
-
-impl Owned {
-    fn new(handle: Handle, release: unsafe extern "C" fn(Handle)) -> Option<Self> {
-        NonNull::new(handle).map(|handle| Self { handle, release })
-    }
-
-    fn get(&self) -> Handle {
-        self.handle.as_ptr()
-    }
-}
-
-impl Drop for Owned {
-    fn drop(&mut self) {
-        unsafe { (self.release)(self.handle.as_ptr()) };
-    }
 }
 
 // Strings, the caller's log and the presentation window that SDK and presentation hooks reach

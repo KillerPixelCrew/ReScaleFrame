@@ -23,6 +23,7 @@ use crate::render_abi::{
     RSF_FG_FIXED, RSF_PACING_NONE, RSF_PACING_REFLEX, RSF_PACING_XELL, RSF_REFLEX_OFF,
     rsf_fg_status as Status,
 };
+use crate::sr_session::has_capacity;
 use rsf_game_sys::*;
 use std::cell::Cell;
 use std::ffi::c_void;
@@ -1471,10 +1472,6 @@ extern "C" fn rsf_core_native_latency_render(id: u64, begin: u32, p: &Platform) 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_native_latency_present(id: u64, chain: Handle, begin: u32, p: &Platform) {
     latency_present(p, id, chain, begin != 0);
-}
-
-unsafe fn has_capacity<T>(value: *const T) -> bool {
-    !value.is_null() && unsafe { value.cast::<u32>().read() } >= size_of::<T>() as u32
 }
 
 fn empty_routes() -> Routes {

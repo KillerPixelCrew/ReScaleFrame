@@ -24,6 +24,7 @@ use crate::native_sr_state::{
 };
 use crate::native_translucency::rsf_core_native_translucency_release;
 use crate::native_window::rsf_native_window_reset;
+use crate::owned_handle::OwnedHandle;
 use crate::render_abi::{
     rsf_dlss_frame as DlssFrame, rsf_frame_resources, rsf_motion_resolve_params,
 };
@@ -32,7 +33,6 @@ use rsf_game_sys::{
     RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR, rsf_camera_frame, rsf_game_render_pass as Pass,
 };
 use std::ffi::{c_char, c_void};
-use std::ptr::NonNull;
 
 const INVALID: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
@@ -106,11 +106,24 @@ unsafe fn input_is_local(pass: &Pass, depth_layout: i32) -> bool {
         })
 }
 
-fn discard_history(result: i32) -> i32 {
+fn discard_history(owner: u32, result: i32) -> i32 {
     if result != LEAF_FAULT {
-        reset_history(SR);
+        reset_history(owner);
     }
     result
+}
+
+unsafe fn prepare_regions(
+    services: &Services,
+    context: Texture,
+    pass: &Pass,
+) -> Result<[Texture; 3], i32> {
+    let mut textures = [std::ptr::null_mut(); 3];
+    match unsafe { (services.prepare_regions)(context, pass, textures.as_mut_ptr()) } {
+        1 if textures.iter().all(|texture| !texture.is_null()) => Ok(textures),
+        LEAF_FAULT => Err(LEAF_FAULT),
+        _ => Err(RESOURCE_FAILED),
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -125,7 +138,7 @@ unsafe extern "C" fn rsf_core_native_sr_evaluate(
         unsafe { ordered.write(u32::from(result != LEAF_FAULT)) };
     }
     if result == LEAF_FAULT {
-        discard_history(RESOURCE_FAILED)
+        discard_history(SR, RESOURCE_FAILED)
     } else {
         result
     }
@@ -169,17 +182,17 @@ unsafe fn evaluate(context: *mut c_void, pass: *const Pass, services: &Services)
     unsafe { (services.clear_predication)(context) };
     let resized = unsafe { (services.resize_output)(output_width, output_height) };
     if resized != 0 {
-        return discard_history(resized);
+        return discard_history(SR, resized);
     }
 
-    let mut textures = [pass.color_input, pass.depth, pass.motion];
-    if !unsafe { input_is_local(pass, depth_layout) } {
-        match unsafe { (services.prepare_regions)(context, pass, textures.as_mut_ptr()) } {
-            0 => return RESOURCE_FAILED,
-            LEAF_FAULT => return LEAF_FAULT,
-            _ => {}
+    let textures = if unsafe { input_is_local(pass, depth_layout) } {
+        [pass.color_input, pass.depth, pass.motion]
+    } else {
+        match unsafe { prepare_regions(services, context, pass) } {
+            Ok(textures) => textures,
+            Err(code) => return code,
         }
-    }
+    };
     let mut frame = Frame {
         struct_size: size_of::<Frame>() as u32,
         abi_version: RSF_DLSS_PIPELINE_ABI_VERSION,
@@ -221,12 +234,12 @@ unsafe fn evaluate(context: *mut c_void, pass: *const Pass, services: &Services)
         (services.evaluate_pipeline)(context, &frame)
     });
     if result != 0 {
-        return discard_history(result);
+        return discard_history(SR, result);
     }
     // The provider output stays private until the current immediate stream
     // publishes it into the adapter's leased native destinations.
     match unsafe { (services.publish_output)(context, pass) } {
-        0 => return discard_history(RESOURCE_FAILED),
+        0 => return discard_history(SR, RESOURCE_FAILED),
         LEAF_FAULT => return LEAF_FAULT,
         _ => {}
     }
@@ -256,33 +269,9 @@ struct FgServices {
     refuse: unsafe extern "C" fn(*const Pass),
 }
 
-struct MotionPass {
-    handle: NonNull<c_void>,
-    destroy: unsafe extern "C" fn(Texture),
-}
-
-impl MotionPass {
-    fn new(handle: Texture, destroy: unsafe extern "C" fn(Texture)) -> Option<Self> {
-        Some(Self {
-            handle: NonNull::new(handle)?,
-            destroy,
-        })
-    }
-
-    fn raw(&self) -> Texture {
-        self.handle.as_ptr()
-    }
-}
-
-impl Drop for MotionPass {
-    fn drop(&mut self) {
-        unsafe { (self.destroy)(self.raw()) };
-    }
-}
-
 struct FgInputs {
-    decode: MotionPass,
-    resolve: MotionPass,
+    decode: OwnedHandle,
+    resolve: OwnedHandle,
     extent: [u32; 2],
     device: ComRef,
 }
@@ -318,11 +307,11 @@ unsafe fn capture_on_stream(
             } else {
                 *cache = None;
                 reset_history(FG);
-                let decode = MotionPass::new(
+                let decode = OwnedHandle::new(
                     unsafe { (fg.create_decode)(device.as_ptr(), width, height) },
                     fg.destroy_decode,
                 )?;
-                let resolve = MotionPass::new(
+                let resolve = OwnedHandle::new(
                     unsafe { (fg.create_resolve)(device.as_ptr(), width, height) },
                     fg.destroy_resolve,
                 )?;
@@ -334,12 +323,15 @@ unsafe fn capture_on_stream(
                 })
             };
             stage(c"normalize-regions-decode");
-            let mut textures: [Texture; 3] = [std::ptr::null_mut(); 3];
-            if unsafe { (sr.prepare_regions)(context, pass, textures.as_mut_ptr()) } == 0 {
-                return None;
-            }
-            let [color, depth, vectors] = textures;
-            if unsafe { (fg.decode)(inputs.decode.raw(), context, vectors, motion) } == 0 {
+            let [color, depth, vectors] = match unsafe { prepare_regions(sr, context, pass) } {
+                Ok(textures) => textures,
+                Err(LEAF_FAULT) => {
+                    reset_history(FG);
+                    return None;
+                }
+                Err(_) => return None,
+            };
+            if unsafe { (fg.decode)(inputs.decode.get(), context, vectors, motion) } == 0 {
                 return None;
             }
             let resolve = dense_resolve_params(
@@ -351,8 +343,8 @@ unsafe fn capture_on_stream(
                 source.jitter_pixels,
             );
             stage(c"normalize-resolve");
-            let decoded = unsafe { (fg.decoded_texture)(inputs.decode.raw()) };
-            if unsafe { (fg.resolve)(inputs.resolve.raw(), context, decoded, depth, &resolve) } == 0
+            let decoded = unsafe { (fg.decoded_texture)(inputs.decode.get()) };
+            if unsafe { (fg.resolve)(inputs.resolve.get(), context, decoded, depth, &resolve) } == 0
             {
                 return None;
             }
@@ -364,8 +356,8 @@ unsafe fn capture_on_stream(
                 struct_size: size_of::<rsf_frame_resources>() as u32,
                 color_in: color,
                 color_out: color,
-                depth: unsafe { (fg.depth)(inputs.resolve.raw()) },
-                motion: unsafe { (fg.motion)(inputs.resolve.raw()) },
+                depth: unsafe { (fg.depth)(inputs.resolve.get()) },
+                motion: unsafe { (fg.motion)(inputs.resolve.get()) },
                 exposure: std::ptr::null_mut(),
                 render_width: width,
                 render_height: height,
@@ -439,12 +431,12 @@ unsafe fn capture_validated(
     match unsafe { (sr.validate_device)(context, pass) } {
         0 => return INVALID,
         1 => {}
-        LEAF_FAULT => return discard_history(NOT_READY),
+        LEAF_FAULT => return discard_history(FG, NOT_READY),
         _ => return NOT_READY,
     }
     match unsafe { (sr.depth_layout)(pass) } {
         -1 => return INVALID,
-        LEAF_FAULT => return discard_history(NOT_READY),
+        LEAF_FAULT => return discard_history(FG, NOT_READY),
         n if n < 0 => return NOT_READY,
         _ => {}
     }

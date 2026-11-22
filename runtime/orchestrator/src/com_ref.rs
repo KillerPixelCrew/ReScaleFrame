@@ -62,7 +62,8 @@ pub(crate) mod test {
 
     #[repr(C)]
     struct Vtable {
-        query_interface: usize,
+        query_interface:
+            unsafe extern "system" fn(*mut Fake, *const c_void, *mut *mut c_void) -> i32,
         add_ref: unsafe extern "system" fn(*mut Fake) -> u32,
         release: unsafe extern "system" fn(*mut Fake) -> u32,
     }
@@ -71,6 +72,7 @@ pub(crate) mod test {
     pub(crate) struct Fake {
         vtable: &'static Vtable,
         pub(crate) refs: Cell<u32>,
+        last_release: Option<unsafe fn(*mut Fake)>,
     }
 
     pub(crate) unsafe extern "system" fn add_ref(object: *mut Fake) -> u32 {
@@ -79,23 +81,54 @@ pub(crate) mod test {
         refs.get()
     }
 
-    unsafe extern "system" fn release(object: *mut Fake) -> u32 {
+    unsafe extern "system" fn query_interface(
+        _: *mut Fake,
+        _: *const c_void,
+        out: *mut *mut c_void,
+    ) -> i32 {
+        if !out.is_null() {
+            unsafe { out.write(ptr::null_mut()) };
+        }
+        0x8000_4002_u32 as i32
+    }
+
+    pub(crate) unsafe extern "system" fn release(object: *mut Fake) -> u32 {
         let refs = unsafe { &(*object).refs };
-        refs.set(refs.get() - 1);
-        refs.get()
+        let count = refs
+            .get()
+            .checked_sub(1)
+            .expect("over-released fake COM object");
+        refs.set(count);
+        if count == 0
+            && let Some(released) = unsafe { (*object).last_release }
+        {
+            unsafe { released(object) };
+        }
+        count
     }
 
     static VTABLE: Vtable = Vtable {
-        query_interface: 0,
+        query_interface,
         add_ref,
         release,
     };
 
+    impl Fake {
+        pub(crate) fn new() -> Self {
+            Self::with_last_release(None)
+        }
+
+        pub(crate) fn with_last_release(last_release: Option<unsafe fn(*mut Self)>) -> Self {
+            Self {
+                vtable: &VTABLE,
+                refs: Cell::new(1),
+                last_release,
+            }
+        }
+    }
+
     pub(crate) fn fake() -> Box<Fake> {
-        Box::new(Fake {
-            vtable: &VTABLE,
-            refs: Cell::new(1),
-        })
+        Box::new(Fake::new())
     }
 
     pub(crate) fn raw(object: &Fake) -> *mut c_void {

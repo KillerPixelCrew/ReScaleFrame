@@ -445,6 +445,8 @@ generate("runtime/orchestrator/src/auxiliary_sr_abi.rs", "runtime/orchestrator/s
           "-Iruntime/presentation/include", "-Isdk/game/include"],
          ["--blocklist-type", "rsf_game_log_fn",
           "--blocklist-type", "rsf_d3d11_auxiliary_surface",
+          "--blocklist-type", "rsf_d3d11_state",
+          "--raw-line", "use crate::d3d11_output_abi::rsf_d3d11_state;",
           "--raw-line", "use rsf_game_sys::rsf_game_log_fn;",
           "--raw-line", "pub use rsf_game_sys::d3d11_reduced_abi::{rsf_d3d11_auxiliary_surface, "
           "RSF_D3D11_AUXILIARY_DEPTH_STENCIL, RSF_D3D11_AUXILIARY_COLOUR, RSF_D3D11_AUXILIARY_RESTORE_CONTENTS};",

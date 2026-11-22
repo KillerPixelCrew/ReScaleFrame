@@ -2,6 +2,7 @@
 use crate::capture_names::{ALPHA, DENSE_MOTION, DEPTH, HDR, SCALAR};
 use crate::com_ref::ComRef;
 use crate::render_abi::{rsf_backend_log_fn, rsf_dlss_frame, rsf_fg_frame, rsf_sr_frame};
+use crate::sr_session::checked;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION,
     RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_PRIMARY,
@@ -742,11 +743,6 @@ fn valid_name(name: &str) -> bool {
         && name
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-'))
-}
-
-pub(super) unsafe fn checked<'a, T>(input: *const T) -> Option<&'a T> {
-    (!input.is_null() && unsafe { input.cast::<u32>().read() } as usize >= size_of::<T>())
-        .then(|| unsafe { &*input })
 }
 
 unsafe fn record<'a>(input: *const rsf_frame_record) -> Option<&'a rsf_frame_record> {

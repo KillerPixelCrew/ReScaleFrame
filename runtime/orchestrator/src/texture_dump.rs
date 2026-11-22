@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
-use crate::input_dump::{Log, MAX_IMAGE_BYTES, Pixels, TextureOptions, checked};
+use crate::input_dump::{Log, MAX_IMAGE_BYTES, Pixels, TextureOptions};
+use crate::sr_session::checked;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::mem::{offset_of, size_of};
 use std::ptr::NonNull;

@@ -5,6 +5,7 @@
 use crate::cpu_abi::*;
 use crate::cpu_reservations::Book;
 use crate::input_receipts::Window as ReceiptWindow;
+use crate::sr_session::has_capacity;
 use rsf_game_sys::*;
 use std::ffi::c_void;
 use std::mem::{offset_of, zeroed};
@@ -224,10 +225,6 @@ fn qpc_now() -> u64 {
     let mut now = 0i64;
     unsafe { windows_sys::Win32::System::Performance::QueryPerformanceCounter(&mut now) };
     now as u64
-}
-
-unsafe fn has_capacity<T>(value: *const T) -> bool {
-    !value.is_null() && (unsafe { value.cast::<u32>().read() } as usize) >= size_of::<T>()
 }
 
 struct Dispatcher {

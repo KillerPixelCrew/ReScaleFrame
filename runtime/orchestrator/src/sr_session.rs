@@ -59,6 +59,11 @@ pub(crate) unsafe fn has_capacity<T>(value: *const T) -> bool {
     !value.is_null() && (unsafe { value.cast::<u32>().read() } as usize) >= size_of::<T>()
 }
 
+// The caller supplies a suitably aligned, readable record with its size at offset zero.
+pub(crate) unsafe fn checked<'a, T>(value: *const T) -> Option<&'a T> {
+    unsafe { has_capacity(value) }.then(|| unsafe { &*value })
+}
+
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_sr_session_create(
     setup: *const rsf_sr_session_setup,

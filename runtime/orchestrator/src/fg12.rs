@@ -3,6 +3,7 @@ use crate::com_ref::ComRef;
 use crate::cpu_abi::rsf_native_cpu_frame;
 use crate::fg_leases::{FencePoint, FenceState};
 use crate::fg12_abi::*;
+use crate::sr_session::{checked, has_capacity};
 
 use crate::native_cpu::rsf_native_cpu_read;
 use crate::overlay_abi::rsf_native_latency_status;
@@ -85,14 +86,6 @@ fn empty_record() -> rsf_frame_record {
         struct_size: size_of::<rsf_frame_record>() as u32,
         ..unsafe { std::mem::zeroed() }
     }
-}
-
-unsafe fn full_prefix<T>(input: *const T) -> bool {
-    !input.is_null() && (unsafe { input.cast::<u32>().read() } as usize) >= size_of::<T>()
-}
-
-unsafe fn checked<'a, T>(input: *const T) -> Option<&'a T> {
-    unsafe { full_prefix(input) }.then(|| unsafe { &*input })
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -1214,7 +1207,7 @@ extern "C" fn rsf_core_fg12_end_session(session: u64) -> i32 {
 }
 
 unsafe fn status_snapshot(output: *mut rsf_native_fg_status, wait: bool) -> i32 {
-    if !unsafe { full_prefix(output) } {
+    if !unsafe { has_capacity(output) } {
         return 0;
     }
     let owner = if wait {

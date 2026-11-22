@@ -38,6 +38,7 @@ use crate::sr_legacy::{
     Adapter, rsf_sr_legacy_destroy, rsf_sr_legacy_evaluate, rsf_sr_legacy_fg_inputs,
     rsf_sr_legacy_select, rsf_sr_legacy_warm_up,
 };
+use crate::sr_session::has_capacity;
 use std::ffi::{CStr, CString, c_char};
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
@@ -411,10 +412,6 @@ fn texture_desc(width: u32, height: u32, format: u32, bind_flags: u32) -> Textur
         bind_flags,
         ..Default::default()
     }
-}
-
-unsafe fn has_capacity<T>(value: *const T) -> bool {
-    !value.is_null() && unsafe { value.cast::<u32>().read() } as usize >= size_of::<T>()
 }
 
 unsafe fn copy_string(text: *const c_char) -> CString {

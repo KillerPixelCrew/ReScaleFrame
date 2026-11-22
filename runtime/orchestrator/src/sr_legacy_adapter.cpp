@@ -47,6 +47,8 @@ rsf_backend_result rsf_sr_legacy_create(void* device, uint32_t width, uint32_t h
     setup.open.device = device;
     setup.open.output_width = width;
     setup.open.output_height = height;
+    // The legacy pipeline setup does not carry the projection far-plane convention.
+    setup.open.depth_infinite = standard_depth == 0;
     setup.open.log = log;
     setup.open.log_user = user;
     setup.fsr2_directory_utf8 = fsr2;

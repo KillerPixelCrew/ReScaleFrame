@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::frame_sequencer::Ledger;
 use crate::render_abi::*;
+use crate::sr_session::has_capacity;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_RESET, RSF_FRAME_SOURCE_INPUT,
     RSF_FRAME_SOURCE_RENDERED, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
@@ -101,10 +102,6 @@ impl Drop for Context {
             unsafe { self.provider.destroy.unwrap()(self.handle) };
         }
     }
-}
-
-unsafe fn has_capacity<T>(value: *const T) -> bool {
-    !value.is_null() && (unsafe { value.cast::<u32>().read() } as usize) >= size_of::<T>()
 }
 
 fn valid_provider(p: &rsf_generation_provider) -> bool {

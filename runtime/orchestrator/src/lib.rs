@@ -129,6 +129,7 @@ mod native_regions;
 mod native_reinsert;
 #[cfg(windows)]
 mod native_translucency;
+mod owned_handle;
 
 #[cfg(windows)]
 mod ffx_version;
