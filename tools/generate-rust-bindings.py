@@ -369,8 +369,9 @@ generate("runtime/orchestrator/src/d3d12_sr/legacy_abi.rs", "runtime/contract/in
          "rsf_(fg_provider|fg_swapchain_result)", "NOTHING",
          ["-Isdk/game/include"],
          ["--no-recursive-allowlist", "--raw-line",
-          "use crate::render_abi::{rsf_backend_caps, rsf_backend_probe_desc, rsf_backend_result, "
-          "rsf_fg_frame, rsf_fg_swapchain_desc, rsf_latency_marker, rsf_ui_mode};"])
+          "use crate::render_abi::{\n"
+          "    rsf_backend_caps, rsf_backend_probe_desc, rsf_backend_result, rsf_fg_frame,\n"
+          "    rsf_fg_swapchain_desc, rsf_latency_marker, rsf_ui_mode,\n};"])
 generate("runtime/orchestrator/src/render_abi.rs", "runtime/orchestrator/include/rescaleframe/frame_assembly.h",
          "rsf_(frame_resources|pipeline_camera_frame|dlss_frame|fg_choice|render_link|sr_session_setup|sr_session_status|sr_provider|fg_host|fg_session_status|generation_provider|native_fg_status|motion_resolve_params|render_settings)",
          "RSF_(FRAME_ASSEMBLY_ABI_VERSION|DLSS_ABI_VERSION|FG_(BACKEND_(AUTO|ALL)|ABI_VERSION|OFF|FIXED|AUTO|DYNAMIC|STAT_(TOTAL_PRESENTED|GENERATED_PRESENTED|PRESENT_CALLBACKS|ACTIVITY))|NATIVE_FG_REASON_NONE|PACING_(NONE|REFLEX|XELL)|REFLEX_(OFF|BOOST)|RENDER_LINK_ABI_VERSION|SR_SESSION_ABI_VERSION|BACKEND_ABI_VERSION|API_D3D12|SR_(FSR2|XESS)|RENDER_FRONTEND_ABI_VERSION|SHARPENING_ABI_VERSION)",
