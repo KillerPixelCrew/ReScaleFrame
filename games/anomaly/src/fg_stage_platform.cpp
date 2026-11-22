@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include "fg_stage.h"
+#include "fg_stage_platform.h"
 #include "native_memory.h"
 #include <rescaleframe/d3d11_state.h>
+#include <windows.h>
 #include <cstddef>
 
 namespace rsf::anomaly::fg {
@@ -29,8 +31,8 @@ const rsf_anomaly_fg_platform& platform() noexcept {
 }
 }
 
-bool configure_ini(const wchar_t* ini, bool apply, HMODULE runtime, const BuildProfile& build,
+extern "C" bool rsf_anomaly_fg_configure_native(const wchar_t* ini, bool apply, void* runtime, uint32_t depth_rva,
     rsf_game_log_fn log) noexcept {
-    return rsf_anomaly_fg_configure_ini(ini, apply, runtime, build.sr->hw_base_zb_rva, log, &platform());
+    return rsf_anomaly_fg_configure_ini(ini, apply, runtime, depth_rva, log, &platform());
 }
 }

@@ -7,7 +7,6 @@
 // CInput calls a native function that may unwind through C++. Keep its invocation
 // inside a native scope so the in-flight ticket is retired during that unwind.
 #ifdef __cplusplus
-#include "engine_slots.h"
 #define RSF_INPUT_NOEXCEPT noexcept
 extern "C" {
 #else
@@ -29,10 +28,5 @@ void rsf_anomaly_overlay_set_input_observer(void (*)(uint8_t) RSF_INPUT_NOEXCEPT
 #ifdef __cplusplus
 }
 
-namespace rsf::anomaly::input {
-inline bool idle() noexcept { return rsf_anomaly_input_idle(); }
-inline bool enable() noexcept { return rsf_anomaly_slot_set(RSF_ANOMALY_INPUT_SLOT, true); }
-inline bool disable() noexcept { return rsf_anomaly_slot_set(RSF_ANOMALY_INPUT_SLOT, false); }
-}
 #endif
 #undef RSF_INPUT_NOEXCEPT

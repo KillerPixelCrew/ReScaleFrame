@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include "native_observer.h"
 #include "build_profile.h"
-#include "fg_stage.h"
+#include "engine_slots.h"
+#include "fg_stage_platform.h"
 #include "input_hooks.h"
 #include "motion_stage.h"
 #include "native_geometry.h"
@@ -142,7 +143,10 @@ const rsf_anomaly_observer_platform platform{
         const auto& build = build_profiles[engine->build];
         return motion::install(static_cast<std::byte*>(engine->image), build.image_size(), build);
     },
-    motion::quiesce, input::enable, input::disable, input::idle, read_frame, guarded_copy,
+    motion::quiesce,
+    []() noexcept { return rsf_anomaly_slot_set(RSF_ANOMALY_INPUT_SLOT, true); },
+    []() noexcept { return rsf_anomaly_slot_set(RSF_ANOMALY_INPUT_SLOT, false); },
+    rsf_anomaly_input_idle, read_frame, guarded_copy,
     rsf_anomaly_fg_stage_render_begin, sr::frame_end, rsf_anomaly_fg_stage_end_before, rsf_anomaly_fg_stage_end_after,
     rsf_anomaly_fg_stage_camera, rsf_anomaly_fg_stage_ui_boundary, rsf_anomaly_fg_stage_scope, rsf_anomaly_fg_stage_device_reset, log,
 };

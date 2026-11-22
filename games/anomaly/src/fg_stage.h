@@ -25,33 +25,16 @@
 // The shared frontend keys (FG, FGBackend, FGGeneratedFrames, Latency, FrameLimitUs) are also what the overlay saves.
 //
 // The native render and input callbacks run on the engine thread.
-#include "build_profile.h"
-#include "fg_stage_platform.h"
 #include <rescaleframe/game_api.h>
-#include <rescaleframe/d3d11_fg_api.h>
-#include <rescaleframe/d3d11_present_api.h>
-#include <windows.h>
-#include <cstdint>
+#include <stdbool.h>
+#include <stddef.h>
 
-namespace rsf::anomaly::fg {
-// Cold-start admission uses the exact BuildProfile selected by the native carrier.
-bool configure_ini(const wchar_t* ini, bool apply, HMODULE runtime, const BuildProfile& build,
-    rsf_game_log_fn log) noexcept;
-
-// The native bootstrap provides the overlay sink once. The engine-facing
-// swap chain is borrowed during the bridge's before_present callback.
-inline void set_overlay_sink(rsf_anomaly_fg_overlay_present sink) noexcept {
-    rsf_anomaly_fg_set_overlay_sink(sink, nullptr);
-}
-
-inline constexpr auto installed = rsf_anomaly_fg_installed;
-
-// Preserve the bootstrap callback signatures also declared by input_hooks.h.
-// OnFrame still reports input through the guarded native read and unwind boundary.
-inline void input_begin(uint32_t engine_frame) noexcept {
-    rsf_anomaly_fg_stage_input_begin(engine_frame);
-}
-inline void input_received(uint32_t kinds, uint32_t message) noexcept {
-    rsf_anomaly_fg_stage_input_received(kinds, message);
-}
-}
+#ifdef __cplusplus
+extern "C"
+#endif
+bool rsf_anomaly_fg_configure_native(const wchar_t*, bool apply, void* runtime, uint32_t depth_rva,
+    rsf_game_log_fn)
+#ifdef __cplusplus
+    noexcept
+#endif
+    ;

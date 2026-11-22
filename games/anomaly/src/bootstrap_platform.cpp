@@ -2,7 +2,9 @@
 // Native stage calls and the CInput detour's C++ unwind boundary.
 #include "bootstrap_platform.h"
 #include "build_profile.h"
+#include "engine_slots.h"
 #include "fg_stage.h"
+#include "fg_stage_platform.h"
 #include "input_hooks.h"
 #include "motion_stage.h"
 #include "native_hook_ops.h"
@@ -41,7 +43,7 @@ constexpr rsf_anomaly_bootstrap_platform leaves{
         motion::configure(ini, log, nullptr);
     },
     [](const wchar_t* ini, bool configure, void* runtime, size_t build, rsf_game_log_fn log) noexcept {
-        return fg::configure_ini(ini, configure, static_cast<HMODULE>(runtime), build_profiles[build], log);
+        return rsf_anomaly_fg_configure_native(ini, configure, runtime, build_profiles[build].sr->hw_base_zb_rva, log);
     },
     rsf_anomaly_fg_installed,
     [](const char** reason) noexcept {
