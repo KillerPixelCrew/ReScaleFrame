@@ -1,12 +1,8 @@
 rsf_add_rust_static(rsf_shader_compiler rsf_shader_compiler_build rsf-shader-compiler rsf_shader_compiler)
 add_library(rsf_graphics STATIC
     src/texture_dump.cpp
-    src/motion_decode.cpp
-    src/motion_resolve.cpp
     src/sharpening/d3d11.cpp
     src/sharpening/d3d12.cpp
-    src/colour_fidelity.cpp
-    src/colour_transport.cpp
     src/resource_ref.cpp
     src/depth_replay.cpp
     src/depth_scale.cpp

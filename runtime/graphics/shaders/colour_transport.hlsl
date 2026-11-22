@@ -1,9 +1,4 @@
-// SPDX-License-Identifier: MIT
-#include <rescaleframe/colour_transport.h>
-#include "colour_d3d11_platform.h"
 
-namespace {
-constexpr char shaders[] = R"(
 Texture2D<float4> Source : register(t0);
 Texture2D<float> Exposure : register(t1);
 Texture2D<float4> Scene : register(t2);
@@ -50,37 +45,4 @@ float exposure() {
         linearColour = lerp(linearColour, max(scene, min(linearColour, floorValue)), weight);
     }
     Result[id.xy] = float4(linearColour, colour.a);
-})";
-} // namespace
-
-extern "C" {
-int rsf_core_colour_transport_create(void*, rsf_colour_transport**, const char*, const rsf_colour11_platform*);
-int rsf_core_colour_transport_encode(rsf_colour_transport*, void*, void*, void*, uint32_t, uint32_t, void**);
-int rsf_core_colour_transport_decode(rsf_colour_transport*, void*, void*, void*, uint32_t, uint32_t,
-    void*, uint32_t, uint32_t, const float*);
-void rsf_core_colour_transport_destroy(rsf_colour_transport*);
-}
-
-extern "C" int rsf_colour_transport_create(void* device, rsf_colour_transport** out)
-{
-    return rsf_core_colour_transport_create(device, out, shaders, &rsf::colour11::platform);
-}
-
-extern "C" int rsf_colour_transport_encode(rsf_colour_transport* pass, void* context, void* source,
-    void* exposure, uint32_t width, uint32_t height, void** encoded)
-{
-    return rsf_core_colour_transport_encode(pass, context, source, exposure, width, height, encoded);
-}
-
-extern "C" int rsf_colour_transport_decode(rsf_colour_transport* pass, void* context, void* target,
-    void* exposure, uint32_t width, uint32_t height, void* scene, uint32_t scene_width,
-    uint32_t scene_height, const float jitter[2])
-{
-    return rsf_core_colour_transport_decode(pass, context, target, exposure, width, height,
-        scene, scene_width, scene_height, jitter);
-}
-
-extern "C" void rsf_colour_transport_destroy(rsf_colour_transport* pass)
-{
-    rsf_core_colour_transport_destroy(pass);
 }

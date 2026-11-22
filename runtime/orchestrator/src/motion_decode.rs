@@ -1,18 +1,31 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
-use crate::motion_d3d11::{GROUP_EDGE, Handle, MakeView, SourceInfo, SourceViews, copy_params};
+use crate::d3d11_output::SavedBindings;
+use crate::motion_d3d11::{
+    GROUP_EDGE, Handle, MakeView, SourceInfo, SourceViews, compute_shader, compute_texture,
+    constant_buffer, context_matches, copy_params, describe_source, dispatch_compute,
+    prepare_compute, rsf_d3d11_state_restore, rsf_d3d11_state_save, shader_code, source_view,
+    target_view,
+};
 use crate::render_abi::rsf_backend_log_fn as LogFn;
 use crate::sr_session::has_capacity;
 use rsf_game_sys::sr_abi::rsf_motion_decode_params as Params;
 use std::ffi::{CString, c_char, c_void};
 use std::ptr::{self, null_mut};
 use std::sync::{Mutex, TryLockError};
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11_MAP_WRITE_DISCARD, D3D11_MAPPED_SUBRESOURCE, ID3D11Buffer, ID3D11ComputeShader,
+    ID3D11Device, ID3D11DeviceContext,
+};
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_R16G16_FLOAT};
+use windows::core::Interface;
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 
 const ABI: u32 = 1;
 const OK: i32 = 0;
 const INVALID: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
+const SHADER_FAILED: i32 = -3;
 const RESOURCE_FAILED: i32 = -4;
 const SOURCE_MISMATCH: i32 = -5;
 const PARAMS_V1: usize = std::mem::offset_of!(Params, validity_enabled);
@@ -55,6 +68,121 @@ struct Platform {
         unsafe extern "C" fn(Handle, &Resources, Handle, *const c_void, usize, u32, u32) -> i32,
     log: unsafe extern "C" fn(LogFn, Handle, *const c_char),
 }
+
+unsafe extern "C" {
+    fn rsf_call_native_log(log: LogFn, user: Handle, text: *const c_char);
+}
+
+const SHADER: &[u8] = include_bytes!("../../graphics/shaders/motion_decode.hlsl");
+
+impl Setup {
+    fn say(&self, message: &str) {
+        if self.log.is_some()
+            && let Ok(message) = CString::new(message)
+        {
+            unsafe { rsf_call_native_log(self.log, self.log_user, message.as_ptr()) };
+        }
+    }
+}
+
+unsafe extern "C" fn make_resources(
+    device: Handle,
+    setup: &Setup,
+    bytes: u32,
+    out: &mut Resources,
+) -> i32 {
+    let device = unsafe { ID3D11Device::from_raw_borrowed(&device) }.expect("live device");
+    let shader = match shader_code(SHADER, c"motion_decode", c"main", c"cs_5_0", 0) {
+        Ok(code) => compute_shader(device, &code),
+        Err(message) => {
+            if !message.is_empty() {
+                setup.say(&message);
+            }
+            None
+        }
+    };
+    let Some(shader) = shader else {
+        setup.say("motion decode shader could not be created");
+        return SHADER_FAILED;
+    };
+    let format = if setup.output_format == 0 {
+        DXGI_FORMAT_R16G16_FLOAT
+    } else {
+        DXGI_FORMAT(setup.output_format as i32)
+    };
+    let Some(texture) = compute_texture(device, setup.width, setup.height, format) else {
+        setup.say("decoded motion target could not be created");
+        return RESOURCE_FAILED;
+    };
+    let Some(view) = target_view(device, &texture, 0) else {
+        setup.say("unordered access view could not be created");
+        return RESOURCE_FAILED;
+    };
+    let Some(buffer) = constant_buffer(device, bytes, true) else {
+        setup.say("constant buffer could not be created");
+        return RESOURCE_FAILED;
+    };
+    *out = [
+        shader.into_raw(),
+        texture.into_raw(),
+        view.into_raw(),
+        buffer.into_raw(),
+    ];
+    OK
+}
+
+unsafe extern "C" fn dispatch(
+    context: Handle,
+    resources: &Resources,
+    source: Handle,
+    constants: *const c_void,
+    bytes: usize,
+    x: u32,
+    y: u32,
+) -> i32 {
+    let raw = context;
+    let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.expect("live context");
+    let shader =
+        unsafe { ID3D11ComputeShader::from_raw_borrowed(&resources[0]) }.expect("live shader");
+    let buffer = unsafe { ID3D11Buffer::from_raw_borrowed(&resources[3]) }.expect("live buffer");
+    let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+    unsafe {
+        if context
+            .Map(buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))
+            .is_err()
+        {
+            return 0;
+        }
+        ptr::copy_nonoverlapping(constants.cast::<u8>(), mapped.pData.cast(), bytes);
+        context.Unmap(buffer, 0);
+    }
+    let Some(_saved) =
+        (unsafe { SavedBindings::new(raw, rsf_d3d11_state_save, rsf_d3d11_state_restore) })
+    else {
+        return 0;
+    };
+    prepare_compute(context);
+    dispatch_compute(
+        context,
+        shader,
+        &[source],
+        &[resources[2]],
+        Some(&[u32::MAX]),
+        [x, y],
+        false,
+        Some(resources[3]),
+    );
+    1
+}
+
+static PLATFORM: Platform = Platform {
+    make: make_resources,
+    context: context_matches,
+    describe: describe_source,
+    source_view,
+    dispatch,
+    log: rsf_call_native_log,
+};
 
 const _: () = {
     assert!(size_of::<Setup>() == 40);
@@ -111,11 +239,10 @@ fn constants(params: Params, width: u32, height: u32) -> Option<Constants> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_motion_decode_create(
+unsafe extern "C" fn rsf_motion_decode_create(
     device: Handle,
     setup: *const Setup,
     out: *mut *mut Pass,
-    platform: &'static Platform,
 ) -> i32 {
     if device.is_null() || out.is_null() || !unsafe { has_capacity(setup) } {
         return INVALID;
@@ -128,18 +255,19 @@ unsafe extern "C" fn rsf_core_motion_decode_create(
         return ABI_MISMATCH;
     }
     unsafe { out.write(null_mut()) };
+    let platform = &PLATFORM;
     let mut raw = [null_mut(); 4];
     let status = unsafe { (platform.make)(device, setup, size_of::<Constants>() as u32, &mut raw) };
-    let resources = raw.map(|handle| unsafe { ComRef::from_owned(handle) });
+    let resources = unsafe { ComRef::adopt_all(raw) };
     if status != OK {
         return status;
     }
-    let [Some(shader), Some(target), Some(uav), Some(constants)] = resources else {
+    let Some(resources) = resources else {
         return RESOURCE_FAILED;
     };
     let owner = crate::allocate_handle(Pass {
         sources: Mutex::new(SourceViews::new()),
-        resources: [shader, target, uav, constants],
+        resources,
         device: unsafe { ComRef::retain(device) },
         setup: *setup,
         platform,
@@ -156,7 +284,7 @@ unsafe extern "C" fn rsf_core_motion_decode_create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_motion_decode_run(
+unsafe extern "C" fn rsf_motion_decode_run(
     pass: *const Pass,
     context: Handle,
     texture: Handle,
@@ -223,12 +351,12 @@ unsafe extern "C" fn rsf_core_motion_decode_run(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_motion_decode_texture(pass: *const Pass) -> Handle {
+unsafe extern "C" fn rsf_motion_decode_texture(pass: *const Pass) -> Handle {
     unsafe { pass.as_ref() }.map_or(null_mut(), |pass| pass.resources[1].as_ptr())
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_motion_decode_destroy(pass: *mut Pass) {
+unsafe extern "C" fn rsf_motion_decode_destroy(pass: *mut Pass) {
     if !pass.is_null() {
         drop(unsafe { Box::from_raw(pass) });
     }

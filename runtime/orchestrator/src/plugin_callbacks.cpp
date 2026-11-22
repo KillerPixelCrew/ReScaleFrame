@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Contain exceptions from native plugins before control returns to Rust.
 #include <rescaleframe/game_api.h>
+extern "C" void rsf_call_native_log(rsf_game_log_fn log, void* user, const char* text) noexcept try
+{
+    if (log) log(user, text);
+} catch (...) {}
+
 extern "C" rsf_result rsf_plugin_call_query(rsf_get_game_plugin_api_fn entry,
     uint32_t version, rsf_game_plugin_api* api) noexcept try
 {

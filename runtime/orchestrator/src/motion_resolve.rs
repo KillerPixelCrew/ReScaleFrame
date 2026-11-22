@@ -1,10 +1,21 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
-use crate::motion_d3d11::{GROUP_EDGE, Handle, MakeView, SourceInfo, SourceViews, copy_params};
+use crate::d3d11_output::SavedBindings;
+use crate::motion_d3d11::{
+    GROUP_EDGE, Handle, MakeView, SourceInfo, SourceViews, compute_shader, compute_texture,
+    constant_buffer, context_matches, copy_params, describe_source, dispatch_compute,
+    prepare_compute, rsf_d3d11_state_restore, rsf_d3d11_state_save, shader_code, source_view,
+    target_view,
+};
 use crate::render_abi::rsf_motion_resolve_params as Params;
 use std::ffi::c_void;
 use std::ptr::{self, null_mut};
 use std::sync::{Mutex, TryLockError};
+use windows::Win32::Graphics::Direct3D11::{
+    ID3D11Buffer, ID3D11ComputeShader, ID3D11Device, ID3D11DeviceContext,
+};
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R32_FLOAT};
+use windows::core::Interface;
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 
 const PARAMS_V1: usize = std::mem::offset_of!(Params, jitter_pixels);
@@ -34,6 +45,82 @@ struct Platform {
     dispatch:
         unsafe extern "C" fn(Handle, &Resources, &[Handle; 3], *const c_void, u32, u32) -> i32,
 }
+
+const SHADER: &[u8] = include_bytes!("../../graphics/shaders/motion_resolve.hlsl");
+
+unsafe extern "C" fn make_resources(
+    device: Handle,
+    width: u32,
+    height: u32,
+    bytes: u32,
+    out: &mut Resources,
+) -> i32 {
+    let device = unsafe { ID3D11Device::from_raw_borrowed(&device) }.expect("live device");
+    let make = || {
+        let code = shader_code(SHADER, c"motion_resolve", c"main", c"cs_5_0", 0).ok()?;
+        let shader = compute_shader(device, &code)?;
+        let constants = constant_buffer(device, bytes, false)?;
+        // R16G16_FLOAT crosses into D3D12. Upstream decoding retains R32G32_FLOAT precision.
+        let motion = compute_texture(device, width, height, DXGI_FORMAT_R16G16_FLOAT)?;
+        let motion_view = target_view(device, &motion, 0)?;
+        let depth = compute_texture(device, width, height, DXGI_FORMAT_R32_FLOAT)?;
+        let depth_view = target_view(device, &depth, 0)?;
+        Some([
+            shader.into_raw(),
+            constants.into_raw(),
+            motion.into_raw(),
+            depth.into_raw(),
+            motion_view.into_raw(),
+            depth_view.into_raw(),
+        ])
+    };
+    let Some(resources) = make() else {
+        return 0;
+    };
+    *out = resources;
+    1
+}
+
+unsafe extern "C" fn dispatch(
+    context: Handle,
+    resources: &Resources,
+    sources: &[Handle; 3],
+    constants: *const c_void,
+    x: u32,
+    y: u32,
+) -> i32 {
+    let raw = context;
+    let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.expect("live context");
+    let shader =
+        unsafe { ID3D11ComputeShader::from_raw_borrowed(&resources[0]) }.expect("live shader");
+    let buffer = unsafe { ID3D11Buffer::from_raw_borrowed(&resources[1]) }.expect("live buffer");
+    unsafe { context.UpdateSubresource(buffer, 0, None, constants, 0, 0) };
+    let Some(_saved) =
+        (unsafe { SavedBindings::new(raw, rsf_d3d11_state_save, rsf_d3d11_state_restore) })
+    else {
+        return 0;
+    };
+    prepare_compute(context);
+    dispatch_compute(
+        context,
+        shader,
+        sources,
+        &[resources[4], resources[5]],
+        None,
+        [x, y],
+        false,
+        Some(resources[1]),
+    );
+    1
+}
+
+static PLATFORM: Platform = Platform {
+    make: make_resources,
+    context: context_matches,
+    describe: describe_source,
+    source_view,
+    dispatch,
+};
 
 const _: () = {
     assert!(size_of::<Constants>() == 112 && PARAMS_V1 == 96);
@@ -88,17 +175,17 @@ fn constants(params: &Params, width: u32, height: u32) -> Option<Constants> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_motion_resolve_create(
+unsafe extern "C" fn rsf_motion_resolve_create(
     device: Handle,
     width: u32,
     height: u32,
     out: *mut *mut Pass,
-    platform: &'static Platform,
 ) -> i32 {
     if device.is_null() || out.is_null() || width == 0 || height == 0 {
         return 0;
     }
     unsafe { out.write(null_mut()) };
+    let platform = &PLATFORM;
     let mut raw = [null_mut(); 6];
     let status = unsafe {
         (platform.make)(
@@ -109,24 +196,16 @@ unsafe extern "C" fn rsf_core_motion_resolve_create(
             &mut raw,
         )
     };
-    let resources = raw.map(|handle| unsafe { ComRef::from_owned(handle) });
+    let resources = unsafe { ComRef::adopt_all(raw) };
     if status == 0 {
         return 0;
     }
-    let [
-        Some(shader),
-        Some(constants),
-        Some(motion),
-        Some(depth),
-        Some(motion_view),
-        Some(depth_view),
-    ] = resources
-    else {
+    let Some(resources) = resources else {
         return 0;
     };
     let pass = crate::allocate_handle(Pass {
         sources: Mutex::new(SourceViews::new()),
-        resources: [shader, constants, motion, depth, motion_view, depth_view],
+        resources,
         device: unsafe { ComRef::retain(device) },
         width,
         height,
@@ -137,7 +216,7 @@ unsafe extern "C" fn rsf_core_motion_resolve_create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_motion_resolve_run(
+unsafe extern "C" fn rsf_motion_resolve_run(
     pass: *const Pass,
     context: Handle,
     motion: Handle,
@@ -165,10 +244,13 @@ unsafe extern "C" fn rsf_core_motion_resolve_run(
         return 0;
     };
     let layer = params.depth_layer;
-    let valid_layer = !layer.is_null()
-        && pass
+    if !layer.is_null()
+        && !pass
             .source(layer)
-            .is_some_and(|info| info.format == R32_FLOAT);
+            .is_some_and(|info| info.format == R32_FLOAT)
+    {
+        return 0;
+    }
     let mut sources = match pass.sources.try_lock() {
         Ok(sources) => sources,
         Err(TryLockError::Poisoned(error)) => error.into_inner(),
@@ -201,10 +283,15 @@ unsafe extern "C" fn rsf_core_motion_resolve_run(
     .cloned() else {
         return 0;
     };
-    let layer_view = if valid_layer {
-        unsafe { sources.get(device, layer, R32_FLOAT, now, platform.source_view) }.cloned()
-    } else {
+    let layer_view = if layer.is_null() {
         None
+    } else {
+        let Some(view) =
+            (unsafe { sources.get(device, layer, R32_FLOAT, now, platform.source_view) }).cloned()
+        else {
+            return 0;
+        };
+        Some(view)
     };
     constants.has_layer = layer_view.is_some().into();
     let bindings = [
@@ -225,20 +312,25 @@ unsafe extern "C" fn rsf_core_motion_resolve_run(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_motion_resolve_texture(pass: *const Pass, output: u32) -> Handle {
+unsafe fn resolve_texture(pass: *const Pass, output: usize) -> Handle {
     let Some(pass) = (unsafe { pass.as_ref() }) else {
         return null_mut();
     };
-    match output {
-        0 => pass.resources[2].as_ptr(),
-        1 => pass.resources[3].as_ptr(),
-        _ => null_mut(),
-    }
+    pass.resources[output].as_ptr()
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_motion_resolve_destroy(pass: *mut Pass) {
+unsafe extern "C" fn rsf_motion_resolve_motion(pass: *const Pass) -> Handle {
+    unsafe { resolve_texture(pass, 2) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_motion_resolve_depth(pass: *const Pass) -> Handle {
+    unsafe { resolve_texture(pass, 3) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_motion_resolve_destroy(pass: *mut Pass) {
     if !pass.is_null() {
         drop(unsafe { Box::from_raw(pass) });
     }

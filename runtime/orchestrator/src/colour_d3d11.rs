@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
-use crate::d3d11_output::{
-    RestoreBindings, SaveBindings, SavedBindings, same_device, texture_desc,
-};
+use crate::d3d11_output::{SavedBindings, same_device, texture_desc};
 use crate::d3d11_output_abi::{
     RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_FORMAT_R32_FLOAT, RSF_D3D11_FORMAT_RGBA16_FLOAT,
     RSF_D3D11_FORMAT_RGBA32_FLOAT, RSF_D3D11_USAGE_IMMUTABLE, rsf_d3d11_output_clear_state,
@@ -10,67 +8,77 @@ use crate::d3d11_output_abi::{
     rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format,
     rsf_d3d11_texture_desc as TextureDesc,
 };
-use crate::motion_d3d11::{GROUP_EDGE, Handle, MakeView, SourceViews};
-use std::ffi::{CStr, c_char, c_void};
+use crate::motion_d3d11::{
+    GROUP_EDGE, Handle, SourceViews, bind_compute_parameters, compute_shader, constant_buffer,
+    dispatch_compute, prepare_compute, rsf_d3d11_state_restore, rsf_d3d11_state_save, shader_code,
+    source_view, target_view,
+};
+use std::ffi::CStr;
 use std::ptr::{self, null_mut};
 use std::sync::Mutex;
+use windows::Win32::Graphics::Direct3D::Fxc::D3DCOMPILE_ENABLE_STRICTNESS;
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT, D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_FLOAT32_MAX,
+    D3D11_SAMPLER_DESC, D3D11_TEXTURE_ADDRESS_CLAMP, ID3D11Buffer, ID3D11ComputeShader,
+    ID3D11Device, ID3D11DeviceContext, ID3D11SamplerState, ID3D11Texture2D,
+};
+use windows::core::Interface;
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 
 const BIND_UNORDERED_ACCESS: u32 = 0x80;
 type Extent = [u32; 2];
 
-#[repr(C)]
-struct Platform {
-    compile: unsafe extern "C" fn(Handle, *const c_char, *const c_char, *const c_char) -> Handle,
-    constant_buffer: unsafe extern "C" fn(Handle, u32) -> Handle,
-    sampler: unsafe extern "C" fn(Handle, u32) -> Handle,
-    target_view: unsafe extern "C" fn(Handle, Handle, u32) -> Handle,
-    source_view: MakeView,
-    save: SaveBindings,
-    restore: RestoreBindings,
-    prepare_transport: unsafe extern "C" fn(Handle),
-    bind_parameters: unsafe extern "C" fn(Handle, Handle, Handle, *const c_void),
-    dispatch: unsafe extern "C" fn(Handle, Handle, *const Handle, u32, Handle, u32, u32, u32),
+const TRANSPORT_SHADER: &[u8] = include_bytes!("../../graphics/shaders/colour_transport.hlsl");
+const FIDELITY_SHADER: &[u8] = include_bytes!("../../graphics/shaders/colour_fidelity.hlsl");
+
+fn clamp_sampler(device: &ID3D11Device, mip_linear: bool) -> Option<ID3D11SamplerState> {
+    let desc = D3D11_SAMPLER_DESC {
+        Filter: if mip_linear {
+            D3D11_FILTER_MIN_MAG_MIP_LINEAR
+        } else {
+            D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT
+        },
+        AddressU: D3D11_TEXTURE_ADDRESS_CLAMP,
+        AddressV: D3D11_TEXTURE_ADDRESS_CLAMP,
+        AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,
+        MaxLOD: if mip_linear { D3D11_FLOAT32_MAX } else { 0.0 },
+        ..Default::default()
+    };
+    let mut sampler = None;
+    unsafe { device.CreateSamplerState(&desc, Some(&mut sampler)) }.ok()?;
+    sampler
 }
 
-const _: () = assert!(size_of::<Platform>() == 10 * size_of::<Handle>());
-
 struct Program {
-    shaders: [ComRef; 2],
-    constants: ComRef,
-    sampler: ComRef,
-    platform: &'static Platform,
+    shaders: [ID3D11ComputeShader; 2],
+    constants: ID3D11Buffer,
+    sampler: ID3D11SamplerState,
     device: ComRef,
 }
 
 impl Program {
     fn new<T>(
         device: Handle,
-        source: *const c_char,
+        source: &[u8],
         name: &CStr,
         entries: [&CStr; 2],
         mip_linear: bool,
-        platform: &'static Platform,
     ) -> Option<Self> {
         let device = unsafe { ComRef::retain(device) };
         let raw = device.as_ptr();
-        let compile = |entry: &CStr| unsafe {
-            ComRef::from_owned((platform.compile)(
-                raw,
-                source,
-                name.as_ptr(),
-                entry.as_ptr(),
-            ))
+        let native = unsafe { ID3D11Device::from_raw_borrowed(&raw) }?;
+        let compile = |entry: &CStr| {
+            let code =
+                shader_code(source, name, entry, c"cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS).ok()?;
+            compute_shader(native, &code)
         };
         let shaders = [compile(entries[0])?, compile(entries[1])?];
-        let constants =
-            unsafe { ComRef::from_owned((platform.constant_buffer)(raw, size_of::<T>() as u32)) }?;
-        let sampler = unsafe { ComRef::from_owned((platform.sampler)(raw, mip_linear.into())) }?;
+        let constants = constant_buffer(native, size_of::<T>() as u32, false)?;
+        let sampler = clamp_sampler(native, mip_linear)?;
         Some(Self {
             shaders,
             constants,
             sampler,
-            platform,
             device,
         })
     }
@@ -103,49 +111,58 @@ impl Program {
                 texture,
                 format,
                 GetTickCount64(),
-                self.platform.source_view,
+                source_view,
             )
         }
         .cloned()
     }
 
     fn save(&self, context: Handle) -> Option<SavedBindings> {
-        unsafe { SavedBindings::new(context, self.platform.save, self.platform.restore) }
+        unsafe { SavedBindings::new(context, rsf_d3d11_state_save, rsf_d3d11_state_restore) }
     }
 
     fn bind<T>(&self, context: Handle, constants: &T) {
+        let context =
+            unsafe { ID3D11DeviceContext::from_raw_borrowed(&context) }.expect("live context");
         unsafe {
-            (self.platform.bind_parameters)(
-                context,
-                self.constants.as_ptr(),
-                self.sampler.as_ptr(),
+            context.UpdateSubresource(
+                &self.constants,
+                0,
+                None,
                 ptr::from_ref(constants).cast(),
-            );
-        }
+                0,
+                0,
+            )
+        };
+        bind_compute_parameters(
+            context,
+            self.constants.as_raw(),
+            Some(self.sampler.as_raw()),
+        );
     }
 
     fn dispatch<const N: usize>(
         &self,
         context: Handle,
-        shader: &ComRef,
+        shader: &ID3D11ComputeShader,
         sources: &[Handle; N],
         target: &Target,
         [width, height]: Extent,
         clear_sources: bool,
     ) {
         const { assert!(N <= 4) }
-        unsafe {
-            (self.platform.dispatch)(
-                context,
-                shader.as_ptr(),
-                sources.as_ptr(),
-                N as u32,
-                target.view.as_ptr(),
-                width.div_ceil(GROUP_EDGE),
-                height.div_ceil(GROUP_EDGE),
-                clear_sources.into(),
-            );
-        }
+        let context =
+            unsafe { ID3D11DeviceContext::from_raw_borrowed(&context) }.expect("live context");
+        dispatch_compute(
+            context,
+            shader,
+            sources,
+            &[target.view.as_ptr()],
+            None,
+            [width.div_ceil(GROUP_EDGE), height.div_ceil(GROUP_EDGE)],
+            clear_sources,
+            None,
+        );
     }
 }
 
@@ -190,13 +207,11 @@ impl Target {
         };
         let texture =
             unsafe { ComRef::from_owned(rsf_d3d11_output_create_texture(device, &desc)) }?;
-        let view = unsafe {
-            ComRef::from_owned((program.platform.target_view)(
-                device,
-                texture.as_ptr(),
-                view_format,
-            ))
-        }?;
+        let raw = texture.as_ptr();
+        let native_device = unsafe { ID3D11Device::from_raw_borrowed(&device) }?;
+        let native_texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&raw) }?;
+        let view = target_view(native_device, native_texture, view_format)?;
+        let view = unsafe { ComRef::from_owned(view.into_raw()) }?;
         Some(Self { view, texture })
     }
 }
@@ -281,13 +296,15 @@ impl Transport {
     fn dispatch(
         &self,
         context: Handle,
-        shader: &ComRef,
+        shader: &ID3D11ComputeShader,
         views: &[Option<ComRef>; 3],
         target: &Target,
         constants: &TransportConstants,
     ) -> Option<()> {
         let _restore = self.program.save(context)?;
-        unsafe { (self.program.platform.prepare_transport)(context) };
+        let native =
+            unsafe { ID3D11DeviceContext::from_raw_borrowed(&context) }.expect("live context");
+        prepare_compute(native);
         self.program.bind(context, constants);
         let sources: [Handle; 3] =
             std::array::from_fn(|i| views[i].as_ref().map_or(null_mut(), ComRef::as_ptr));
@@ -415,7 +432,7 @@ impl FidelityTarget {
             0,
         )?;
         let source_view = unsafe {
-            ComRef::from_owned((program.platform.source_view)(
+            ComRef::from_owned(source_view(
                 program.device.as_ptr(),
                 target.texture.as_ptr(),
                 0,
@@ -581,11 +598,9 @@ unsafe fn create<T>(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_colour_transport_create(
+unsafe extern "C" fn rsf_colour_transport_create(
     device: Handle,
     out: *mut *mut Mutex<Transport>,
-    source: *const c_char,
-    platform: &'static Platform,
 ) -> i32 {
     unsafe {
         create(device, out, || {
@@ -595,11 +610,10 @@ unsafe extern "C" fn rsf_core_colour_transport_create(
                 scratch: None,
                 program: Program::new::<TransportConstants>(
                     device,
-                    source,
+                    TRANSPORT_SHADER,
                     c"ColourTransport",
                     [c"encode", c"decode"],
                     true,
-                    platform,
                 )?,
             })
         })
@@ -607,7 +621,7 @@ unsafe extern "C" fn rsf_core_colour_transport_create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_colour_transport_encode(
+unsafe extern "C" fn rsf_colour_transport_encode(
     pass: *const Mutex<Transport>,
     context: Handle,
     source: Handle,
@@ -633,7 +647,7 @@ unsafe extern "C" fn rsf_core_colour_transport_encode(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_colour_transport_decode(
+unsafe extern "C" fn rsf_colour_transport_decode(
     pass: *const Mutex<Transport>,
     context: Handle,
     target: Handle,
@@ -667,18 +681,16 @@ unsafe extern "C" fn rsf_core_colour_transport_decode(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_colour_transport_destroy(pass: *mut Mutex<Transport>) {
+unsafe extern "C" fn rsf_colour_transport_destroy(pass: *mut Mutex<Transport>) {
     if !pass.is_null() {
         drop(unsafe { Box::from_raw(pass) });
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_colour_fidelity_create(
+unsafe extern "C" fn rsf_colour_fidelity_create(
     device: Handle,
     out: *mut *mut Mutex<Fidelity>,
-    source: *const c_char,
-    platform: &'static Platform,
 ) -> i32 {
     unsafe {
         create(device, out, || {
@@ -687,11 +699,10 @@ unsafe extern "C" fn rsf_core_colour_fidelity_create(
                 targets: None,
                 program: Program::new::<FidelityConstants>(
                     device,
-                    source,
+                    FIDELITY_SHADER,
                     c"ColourFidelity",
                     [c"project", c"apply"],
                     false,
-                    platform,
                 )?,
             })
         })
@@ -699,7 +710,7 @@ unsafe extern "C" fn rsf_core_colour_fidelity_create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_colour_fidelity_run(
+unsafe extern "C" fn rsf_colour_fidelity_run(
     pass: *const Mutex<Fidelity>,
     context: Handle,
     scene: Handle,
@@ -726,7 +737,7 @@ unsafe extern "C" fn rsf_core_colour_fidelity_run(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_colour_fidelity_destroy(pass: *mut Mutex<Fidelity>) {
+unsafe extern "C" fn rsf_colour_fidelity_destroy(pass: *mut Mutex<Fidelity>) {
     if !pass.is_null() {
         drop(unsafe { Box::from_raw(pass) });
     }

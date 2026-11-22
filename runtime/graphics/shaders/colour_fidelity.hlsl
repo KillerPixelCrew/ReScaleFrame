@@ -1,9 +1,4 @@
-// SPDX-License-Identifier: MIT
-#include <rescaleframe/colour_fidelity.h>
-#include "colour_d3d11_platform.h"
 
-namespace {
-constexpr char shaders[] = R"(
 Texture2D<float4> Scene : register(t0);
 Texture2D<float4> Reconstructed : register(t1);
 Texture2D<float4> Residual : register(t2);
@@ -64,27 +59,4 @@ float surfaceConfidence(float lower, float upper) {
     // Only move toward the source's colour range. Existing reconstructed detail remains valid
     // when the residual is zero; correction cannot introduce brighter peaks or dark ringing.
     Result[id.xy] = float4(clamp(colour.rgb+correction,lower,upper),colour.a);
-})";
-} // namespace
-
-extern "C" {
-int rsf_core_colour_fidelity_create(void*, rsf_colour_fidelity**, const char*, const rsf_colour11_platform*);
-int rsf_core_colour_fidelity_run(rsf_colour_fidelity*, void*, void*, void*, void*, uint32_t, const float*);
-void rsf_core_colour_fidelity_destroy(rsf_colour_fidelity*);
-}
-
-extern "C" int rsf_colour_fidelity_create(void* device, rsf_colour_fidelity** out)
-{
-    return rsf_core_colour_fidelity_create(device, out, shaders, &rsf::colour11::platform);
-}
-
-extern "C" int rsf_colour_fidelity_run(rsf_colour_fidelity* pass, void* context, void* scene,
-    void* output, void* depth, uint32_t depth_inverted, const float jitter[2])
-{
-    return rsf_core_colour_fidelity_run(pass, context, scene, output, depth, depth_inverted, jitter);
-}
-
-extern "C" void rsf_colour_fidelity_destroy(rsf_colour_fidelity* pass)
-{
-    rsf_core_colour_fidelity_destroy(pass);
 }

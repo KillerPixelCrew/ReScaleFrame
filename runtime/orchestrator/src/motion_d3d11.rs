@@ -1,13 +1,250 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
-use std::ffi::c_void;
+use crate::d3d11_output::{same_device, texture_desc};
+use crate::d3d11_output_abi::{
+    rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format, rsf_d3d11_state,
+};
+use rsf_shader_compiler::{Compiler, Request, compile};
+use std::ffi::{CStr, c_void};
 use std::mem::MaybeUninit;
 use std::ptr;
+use windows::Win32::Graphics::Direct3D::D3D_SRV_DIMENSION_TEXTURE2D;
+use windows::Win32::Graphics::Direct3D11::*;
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC};
+use windows::core::Interface;
 
 pub(super) type Handle = *mut c_void;
 pub(super) type MakeView = unsafe extern "C" fn(Handle, Handle, u32) -> Handle;
 pub(super) const GROUP_EDGE: u32 = 8;
 const CACHE_IDLE_MS: u64 = 2000;
+
+unsafe extern "C" {
+    pub(super) fn rsf_d3d11_state_save(context: Handle, state: *mut rsf_d3d11_state) -> u32;
+    pub(super) fn rsf_d3d11_state_restore(context: Handle, state: *mut rsf_d3d11_state);
+}
+
+pub(super) fn shader_code(
+    source: &[u8],
+    name: &CStr,
+    entry: &CStr,
+    target: &CStr,
+    flags: u32,
+) -> Result<Vec<u8>, String> {
+    let compiler = Compiler::system("d3dcompiler_47.dll").ok_or_else(|| {
+        format!(
+            "shader {}: d3dcompiler_47 is not available",
+            name.to_string_lossy()
+        )
+    })?;
+    let entry_point = compiler.entry().ok_or_else(String::new)?;
+    let request = Request {
+        source,
+        name,
+        entry,
+        target,
+        flags,
+    };
+    let output = unsafe { compile(entry_point, request, &[], ptr::null_mut()) };
+    if output.status >= 0
+        && let Some(code) = output.code
+    {
+        return Ok(code);
+    }
+    let errors = output.errors.as_deref().unwrap_or_default();
+    let errors = errors.split(|&byte| byte == 0).next().unwrap_or_default();
+    Err(format!(
+        "shader {} ({}): compile failed 0x{:08x} {}",
+        name.to_string_lossy(),
+        entry.to_string_lossy(),
+        output.status as u32,
+        String::from_utf8_lossy(errors)
+    ))
+}
+
+pub(super) fn compute_shader(device: &ID3D11Device, code: &[u8]) -> Option<ID3D11ComputeShader> {
+    let mut shader = None;
+    unsafe { device.CreateComputeShader(code, None, Some(&mut shader)) }.ok()?;
+    shader
+}
+
+pub(super) fn constant_buffer(
+    device: &ID3D11Device,
+    bytes: u32,
+    dynamic: bool,
+) -> Option<ID3D11Buffer> {
+    let desc = D3D11_BUFFER_DESC {
+        ByteWidth: bytes,
+        Usage: if dynamic {
+            D3D11_USAGE_DYNAMIC
+        } else {
+            D3D11_USAGE_DEFAULT
+        },
+        BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
+        CPUAccessFlags: if dynamic {
+            D3D11_CPU_ACCESS_WRITE.0 as u32
+        } else {
+            0
+        },
+        ..Default::default()
+    };
+    let mut buffer = None;
+    unsafe { device.CreateBuffer(&desc, None, Some(&mut buffer)) }.ok()?;
+    buffer
+}
+
+pub(super) fn compute_texture(
+    device: &ID3D11Device,
+    width: u32,
+    height: u32,
+    format: DXGI_FORMAT,
+) -> Option<ID3D11Texture2D> {
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: width,
+        Height: height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: format,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        BindFlags: (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS).0 as u32,
+        ..Default::default()
+    };
+    let mut texture = None;
+    unsafe { device.CreateTexture2D(&desc, None, Some(&mut texture)) }.ok()?;
+    texture
+}
+
+pub(super) fn target_view(
+    device: &ID3D11Device,
+    texture: &ID3D11Texture2D,
+    format: u32,
+) -> Option<ID3D11UnorderedAccessView> {
+    let desc = D3D11_UNORDERED_ACCESS_VIEW_DESC {
+        Format: DXGI_FORMAT(format as i32),
+        ViewDimension: D3D11_UAV_DIMENSION_TEXTURE2D,
+        ..Default::default()
+    };
+    let mut view = None;
+    unsafe {
+        device.CreateUnorderedAccessView(
+            texture,
+            (format != 0).then_some(&desc as *const _),
+            Some(&mut view),
+        )
+    }
+    .ok()?;
+    view
+}
+
+pub(super) unsafe extern "C" fn source_view(device: Handle, source: Handle, format: u32) -> Handle {
+    let device = unsafe { ID3D11Device::from_raw_borrowed(&device) }.expect("live device");
+    let texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&source) }.expect("live texture");
+    let desc = D3D11_SHADER_RESOURCE_VIEW_DESC {
+        Format: DXGI_FORMAT(format as i32),
+        ViewDimension: D3D_SRV_DIMENSION_TEXTURE2D,
+        Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC_0 {
+            Texture2D: D3D11_TEX2D_SRV {
+                MostDetailedMip: 0,
+                MipLevels: 1,
+            },
+        },
+    };
+    let mut view = None;
+    if unsafe {
+        device.CreateShaderResourceView(
+            texture,
+            (format != 0).then_some(&desc as *const _),
+            Some(&mut view),
+        )
+    }
+    .is_err()
+    {
+        return ptr::null_mut();
+    }
+    view.map_or(ptr::null_mut(), Interface::into_raw)
+}
+
+pub(super) unsafe extern "C" fn context_matches(device: Handle, context: Handle) -> i32 {
+    i32::from(unsafe {
+        rsf_d3d11_output_is_immediate(context) != 0 && same_device(device, context)
+    })
+}
+
+pub(super) unsafe extern "C" fn describe_source(
+    device: Handle,
+    source: Handle,
+    out: &mut SourceInfo,
+) -> i32 {
+    if !unsafe { same_device(device, source) } {
+        return 0;
+    }
+    let desc = unsafe { texture_desc(source) };
+    *out = SourceInfo {
+        width: desc.width,
+        height: desc.height,
+        slices: desc.layers,
+        samples: desc.samples,
+        format: desc.format,
+        view_format: unsafe { rsf_d3d11_output_srv_format(desc.format) },
+    };
+    1
+}
+
+pub(super) fn prepare_compute(context: &ID3D11DeviceContext) {
+    unsafe {
+        context.SetPredication(None, false);
+        context.OMSetRenderTargets(None, None);
+    }
+}
+
+pub(super) fn bind_compute_parameters(
+    context: &ID3D11DeviceContext,
+    constants: Handle,
+    sampler: Option<Handle>,
+) {
+    unsafe {
+        let table = context.vtable();
+        (table.CSSetConstantBuffers)(context.as_raw(), 0, 1, &constants);
+        if let Some(sampler) = sampler {
+            (table.CSSetSamplers)(context.as_raw(), 0, 1, &sampler);
+        }
+    }
+}
+
+pub(super) fn dispatch_compute<const N: usize>(
+    context: &ID3D11DeviceContext,
+    shader: &ID3D11ComputeShader,
+    sources: &[Handle],
+    targets: &[Handle; N],
+    counts: Option<&[u32; N]>,
+    [width, height]: [u32; 2],
+    clear_sources: bool,
+    constants: Option<Handle>,
+) {
+    let table = context.vtable();
+    let raw = context.as_raw();
+    let counts = counts.map_or(ptr::null(), |counts| counts.as_ptr());
+    unsafe {
+        context.CSSetShader(shader, None);
+        (table.CSSetShaderResources)(raw, 0, sources.len() as u32, sources.as_ptr());
+        (table.CSSetUnorderedAccessViews)(raw, 0, N as u32, targets.as_ptr(), counts);
+        if let Some(constants) = constants {
+            (table.CSSetConstantBuffers)(raw, 0, 1, &constants);
+        }
+        context.Dispatch(width, height, 1);
+        (table.CSSetUnorderedAccessViews)(raw, 0, N as u32, [ptr::null_mut(); N].as_ptr(), counts);
+        if clear_sources {
+            (table.CSSetShaderResources)(
+                raw,
+                0,
+                sources.len() as u32,
+                [ptr::null_mut(); 4].as_ptr(),
+            );
+        }
+    }
+}
 
 #[repr(C)]
 #[derive(Default)]

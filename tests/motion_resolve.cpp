@@ -128,6 +128,18 @@ int main()
                   values[6] == 0 && values[7] == 0;
         context->Unmap(staging.Get(), 0);
     }
+    // A null layer is optional. A supplied layer must be usable.
+    layered.depth_layer = nullptr;
+    passed &= rsf_motion_resolve_run(pass, context.Get(), sources[0].Get(), depths[0].Get(), &layered) != 0;
+    layered.depth_layer = sources[0].Get();
+    passed &= !rsf_motion_resolve_run(pass, context.Get(), sources[0].Get(), depths[0].Get(), &layered);
+    D3D11_TEXTURE2D_DESC unreadable_desc{};
+    depths[1]->GetDesc(&unreadable_desc);
+    unreadable_desc.BindFlags = 0;
+    ComPtr<ID3D11Texture2D> unreadable;
+    if (FAILED(device->CreateTexture2D(&unreadable_desc, nullptr, &unreadable))) return 1;
+    layered.depth_layer = unreadable.Get();
+    passed &= !rsf_motion_resolve_run(pass, context.Get(), sources[0].Get(), depths[0].Get(), &layered);
     params.clip_to_previous[0] = std::numeric_limits<float>::quiet_NaN();
     passed &= !rsf_motion_resolve_run(pass, context.Get(), sources[0].Get(), sources[1].Get(), &params);
     rsf_motion_resolve_destroy(pass);
