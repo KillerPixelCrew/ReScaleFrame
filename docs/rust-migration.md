@@ -11,6 +11,14 @@ reuse the established C ABI, frame events and resource leases.
 Defer standalone cleanup while a coherent candidate awaits verification.
 The integration scope and acceptance criteria below still apply.
 
+Remove first-party C++ wherever Rust can preserve the required ABI,
+behavior and lifetime guarantees. A native boundary can be implemented
+in Rust. SDK calls, COM calls, JNI and an existing C++ wrapper are
+candidates for review. Retain a C++ leaf only for a concrete constraint
+that prevents a correct Rust replacement, and record that constraint
+with the affected caller. Missing migration work and pending verification
+remain open items.
+
 ### Candidate `9f53f1b0`
 
 This source revision includes the merged Streamline signature and
