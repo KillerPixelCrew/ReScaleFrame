@@ -135,7 +135,6 @@ unsafe extern "system" fn create_instance(
         output: output.cast(),
         extensions: info.pp_enabled_extension_names,
         extension_count: info.enabled_extension_count,
-        reserved: 0,
     };
     vk::Result::from_raw(
         crate::CONTROL
@@ -163,7 +162,6 @@ unsafe extern "system" fn create_device(
         output: output.cast(),
         extensions: info.pp_enabled_extension_names,
         extension_count: info.enabled_extension_count,
-        reserved: 0,
     };
     vk::Result::from_raw(
         crate::CONTROL
@@ -467,7 +465,6 @@ unsafe extern "C" fn adapter(
             vendor: value.vendor_id,
             device: value.device_id,
             software: u32::from(value.device_type == vk::PhysicalDeviceType::CPU),
-            reserved: 0,
         })
     };
     1

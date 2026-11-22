@@ -878,7 +878,6 @@ impl Platform {
             VkSrContext {
                 handle: owner,
                 result,
-                reserved: 0,
             },
         )
     }

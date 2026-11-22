@@ -6,8 +6,6 @@
 //! this crate. The Vulkan creation and compositor effect leaves are separate tables
 //! (`VkCreationLeaves`, `EffectLeaves`). The render pass and CPU event are the generated
 //! `rsf_game_render_pass` and `rsf_game_cpu_event` bindings.
-// Mirrored C layouts: the leaves and the engine module read fields this crate only writes.
-#![allow(dead_code)]
 use rsf_game_sys::{rsf_game_cpu_event, rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::{c_char, c_int, c_void};
 
@@ -181,7 +179,6 @@ pub(crate) struct WindowFacts {
     pub(crate) foreground_process_id: u32,
     pub(crate) current_process_id: u32,
     pub(crate) input_window_visible: u32,
-    pub(crate) reserved: u32,
 }
 
 /// `rsf_godot_window_identity`: the owner process and class of a candidate window, as read.
@@ -193,7 +190,6 @@ pub(crate) struct WindowIdentity {
     pub(crate) current_process_id: u32,
     /// `GetClassNameW` into `class_name`; zero on failure.
     pub(crate) class_length: u32,
-    pub(crate) reserved: u32,
     pub(crate) class_name: [u16; 64],
 }
 
@@ -203,7 +199,6 @@ impl Default for WindowIdentity {
             process_id: 0,
             current_process_id: 0,
             class_length: 0,
-            reserved: 0,
             class_name: [0; 64],
         }
     }
@@ -222,7 +217,6 @@ pub(crate) struct FgFacts {
     pub(crate) last_result: i32,
     pub(crate) switch_result: i32,
     pub(crate) backend: u32,
-    pub(crate) reserved: u32,
     pub(crate) tagged_frames: u64,
     pub(crate) total_presented: u64,
     pub(crate) generated_presented: u64,
@@ -240,14 +234,12 @@ pub(crate) struct LatencyFacts {
     pub(crate) pcl_available: u32,
     pub(crate) report_available: u32,
     pub(crate) owner: u32,
-    pub(crate) reserved: u32,
     pub(crate) paced_frames: u64,
     pub(crate) marker_calls: u64,
     pub(crate) inputs: InputFacts,
 }
 
-/// One evaluated D3D12 SR pass as `d3d12.rs` reports it to the status record. Formerly the
-/// `rsf_godot_sr_frame` record; no leaf reads it any more.
+/// One evaluated D3D12 SR pass as `d3d12.rs` reports it to the status record.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct SrFrame {
     pub(crate) requested_sr: u32,
@@ -271,7 +263,6 @@ pub(crate) struct SrCreate {
     pub(crate) output_height: u32,
     pub(crate) render_width: u32,
     pub(crate) render_height: u32,
-    pub(crate) reserved: u32,
     pub(crate) paths: Paths,
 }
 
@@ -283,7 +274,6 @@ pub(crate) struct SrContext {
     pub(crate) result: i32,
     pub(crate) desired_width: u32,
     pub(crate) desired_height: u32,
-    pub(crate) reserved: u32,
 }
 
 /// `rsf_godot_sr_evaluate`.
@@ -299,9 +289,6 @@ pub(crate) struct SrEvaluate {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct VkFacts {
-    /// Formerly `xess_device_ready` and `interop_device_ready`; the creation owner
-    /// (`vulkan/creation.rs`) keeps both now and the leaf leaves these zero.
-    pub(crate) reserved_creation: [u32; 2],
     pub(crate) graph_handoff: u32,
     pub(crate) fsr4_sr_compiled: u32,
     pub(crate) fsr4_fg_compiled: u32,
@@ -322,7 +309,6 @@ pub(crate) struct VkLatencyFacts {
     pub(crate) pcl_message: u32,
     pub(crate) mode: u32,
     pub(crate) owner: u32,
-    pub(crate) reserved: u32,
     pub(crate) sleep_calls: u64,
     pub(crate) marker_calls: u64,
 }
@@ -352,7 +338,6 @@ pub(crate) struct VkPresentFacts {
 }
 
 /// One SR pass of `rsfg_render_vulkan` as `vulkan/sr.rs` reports it to the status record.
-/// Formerly the `rsf_godot_vk_sr_frame` record; no leaf reads it any more.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct VkSrFrame {
     pub(crate) identity: u32,
@@ -396,7 +381,6 @@ pub(crate) struct VkSrCreate {
 pub(crate) struct VkSrContext {
     pub(crate) handle: *mut c_void,
     pub(crate) result: i32,
-    pub(crate) reserved: u32,
 }
 
 /// `RSF_GODOT_VK_SCOPE_*`.
@@ -415,8 +399,6 @@ pub(crate) use vulkan_negotiation::{
     VkFunction, VkInstanceCall, VkLatencyRequirements, VkProc,
 };
 
-/// `RSF_GODOT_EFFECT_VERSION`: the effect leaves and the effect status record.
-pub(crate) const EFFECT_VERSION: u32 = 2;
 /// `RSF_GODOT_EFFECT_MOTION_FORMAT`, `RenderingDevice::DATA_FORMAT_R16G16_SFLOAT`.
 pub(crate) const EFFECT_MOTION_FORMAT: i32 = 82;
 
@@ -433,7 +415,6 @@ pub(crate) struct EffectFrame {
     pub(crate) color_valid: u32,
     pub(crate) depth_valid: u32,
     pub(crate) motion_valid: u32,
-    pub(crate) reserved: [u32; 2],
     /// Basis rows, then the origin.
     pub(crate) camera_transform: [f64; 12],
     /// Columns.
@@ -461,7 +442,6 @@ impl Default for EffectFrame {
             color_valid: 0,
             depth_valid: 0,
             motion_valid: 0,
-            reserved: [0; 2],
             camera_transform,
             jittered_projection,
         }
@@ -498,8 +478,6 @@ impl Default for EffectResources {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct EffectStatus {
-    pub(crate) struct_size: u32,
-    pub(crate) version: u32,
     pub(crate) callbacks: u64,
     pub(crate) frame: EffectFrame,
     pub(crate) resources: EffectResources,
@@ -530,11 +508,8 @@ pub(crate) struct EffectReadback {
     pub(crate) groups_y: u32,
 }
 
-/// `rsf_godot_effect_leaves`, the godot-cpp leaves of `effect.cpp`.
-#[repr(C)]
+/// The Godot scene and RenderingDevice reads of the compositor effect (gdextension/effect.rs).
 pub(crate) struct EffectLeaves {
-    pub(crate) struct_size: u32,
-    pub(crate) version: u32,
     pub(crate) frame: unsafe extern "C" fn(*mut c_void, *mut EffectFrame) -> u32,
     pub(crate) resources: unsafe extern "C" fn(*mut c_void, *mut EffectResources) -> u32,
     pub(crate) read_motion:
@@ -551,7 +526,6 @@ pub(crate) const VK_LOG_INPUT_REFUSAL: u32 = 3;
 pub(crate) struct OptionField {
     pub(crate) name: *const c_char,
     pub(crate) conversion: u32,
-    pub(crate) reserved: u32,
 }
 
 /// `rsf_godot_option_value`.
@@ -602,20 +576,8 @@ pub(crate) mod fake;
 /// them, and a test fake with the same methods stands in under `cfg(test)`.
 pub(crate) struct Platform;
 
-/// The effect table from `effect.cpp`, when its header matches.
-///
-/// # Safety
-/// `table` is null or a process-lived `rsf_godot_effect_leaves`.
-pub(crate) unsafe fn effect_leaves(table: *const EffectLeaves) -> Option<&'static EffectLeaves> {
-    // SAFETY: the caller passes null or a table that lives for the process.
-    let table: &'static EffectLeaves = unsafe { table.as_ref() }?;
-    (table.struct_size as usize >= size_of::<EffectLeaves>() && table.version == EFFECT_VERSION)
-        .then_some(table)
-}
-
-// Each effect leaf is a complete entry of a checked table and catches its own C++ exceptions.
-// SAFETY for every unsafe block below: the entry is valid and `call` is the render callback's live
-// record, which outlives the owner's render call.
+// SAFETY for every unsafe block below: `call` is the render callback's live record, which outlives
+// the owner's render call.
 impl EffectLeaves {
     /// The frame facts; `None` without a RenderingDevice, scene buffers or scene data, or when the
     /// leaf threw.

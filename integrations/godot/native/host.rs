@@ -542,7 +542,6 @@ impl Platform {
             result: 0,
             desired_width: desired.0,
             desired_height: desired.1,
-            reserved: 0,
         };
         unsafe {
             created.result = rsf_sr12_create(&setup, &mut context);

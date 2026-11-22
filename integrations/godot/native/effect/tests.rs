@@ -2,7 +2,6 @@
 //! The effect owner against recording leaves. The godot-cpp reads and the readback compute pass
 //! are not exercised here; the Godot demo (`demo/main.gd`) covers them in a running engine.
 use super::*;
-use crate::platform::effect_leaves;
 use std::cell::{Cell, RefCell};
 
 thread_local! {
@@ -67,8 +66,6 @@ unsafe extern "C" fn leaf_read_motion(
 }
 
 static LEAVES: EffectLeaves = EffectLeaves {
-    struct_size: size_of::<EffectLeaves>() as u32,
-    version: EFFECT_VERSION,
     frame: leaf_frame,
     resources: leaf_resources,
     read_motion: leaf_read_motion,
@@ -290,8 +287,6 @@ fn a_request_without_readable_motion_is_answered_unsucceeded() {
 #[test]
 fn a_new_effect_publishes_the_probe_defaults() {
     let value = status(&Effect::default());
-    assert_eq!(value.struct_size as usize, size_of::<EffectStatus>());
-    assert_eq!(value.version, EFFECT_VERSION);
     assert_eq!(value.callbacks, 0);
     assert_eq!(value.frame, EffectFrame::default());
     assert_eq!(value.frame.camera_transform[0], 1.0);
@@ -318,41 +313,4 @@ fn a_new_effect_publishes_the_probe_defaults() {
         c"last_post_transparent_callback"
     );
     assert_eq!(text(value.reason), REASON);
-}
-
-#[test]
-fn the_exports_check_the_table_and_the_status_record() {
-    let mut wrong = EffectLeaves {
-        version: EFFECT_VERSION + 1,
-        ..LEAVES
-    };
-    // SAFETY: tables owned by this test.
-    assert!(unsafe { effect_leaves(&wrong) }.is_none());
-    wrong.version = EFFECT_VERSION;
-    wrong.struct_size = 8;
-    assert!(unsafe { effect_leaves(&wrong) }.is_none());
-    assert!(unsafe { effect_leaves(&LEAVES) }.is_some());
-
-    reset(Some(admitted()), samples(&SIX));
-    let effect = crate::rsf_godot_effect_create();
-    // SAFETY: the owner just created, used only on this thread and destroyed once below.
-    unsafe {
-        crate::rsf_godot_effect_request_capture(effect);
-        crate::rsf_godot_effect_render(effect, &LEAVES, CALL);
-        crate::rsf_godot_effect_render(effect, std::ptr::null(), CALL);
-        let mut value = status(&Effect::default());
-        value.version = EFFECT_VERSION + 1;
-        assert_eq!(crate::rsf_godot_effect_status_get(effect, &mut value), 0);
-        value.version = EFFECT_VERSION;
-        assert_eq!(crate::rsf_godot_effect_status_get(effect, &mut value), 1);
-        // A refused table publishes nothing.
-        assert_eq!((value.callbacks, value.captures), (1, 1));
-        assert_eq!(value.capture_succeeded, 1);
-        assert_eq!(
-            crate::rsf_godot_effect_status_get(std::ptr::null(), &mut value),
-            0
-        );
-        crate::rsf_godot_effect_destroy(effect);
-        crate::rsf_godot_effect_destroy(std::ptr::null_mut());
-    }
 }

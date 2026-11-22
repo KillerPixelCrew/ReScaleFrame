@@ -9,8 +9,7 @@ use super::sys::*;
 use super::{Dictionary, EFFECT_CLASS, Sink};
 use crate::effect::Effect;
 use crate::platform::{
-    EFFECT_MOTION_FORMAT, EFFECT_VERSION, EffectFrame, EffectLeaves, EffectReadback,
-    EffectResources,
+    EFFECT_MOTION_FORMAT, EffectFrame, EffectLeaves, EffectReadback, EffectResources,
 };
 use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
@@ -152,8 +151,6 @@ struct Call {
 }
 
 static LEAVES: EffectLeaves = EffectLeaves {
-    struct_size: size_of::<EffectLeaves>() as u32,
-    version: EFFECT_VERSION,
     frame: leaf_frame,
     resources: leaf_resources,
     read_motion: leaf_read_motion,

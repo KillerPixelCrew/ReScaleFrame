@@ -12,8 +12,7 @@
 //! CPU facts only, and no resource lease or GPU completion is implied. The effect reads no
 //! Runtime settings or status: `ReScaleFrameRuntime` reports active SR, FG and latency.
 use crate::platform::{
-    EFFECT_MOTION_FORMAT, EFFECT_VERSION, EffectFrame, EffectLeaves, EffectReadback,
-    EffectResources, EffectStatus,
+    EFFECT_MOTION_FORMAT, EffectFrame, EffectLeaves, EffectReadback, EffectResources, EffectStatus,
 };
 use crate::properties::Properties;
 use crate::sys::*;
@@ -133,8 +132,6 @@ impl Effect {
             (published.snapshot, published.capture)
         };
         EffectStatus {
-            struct_size: size_of::<EffectStatus>() as u32,
-            version: EFFECT_VERSION,
             callbacks: snapshot.callbacks,
             frame: snapshot.frame,
             resources: snapshot.resources,

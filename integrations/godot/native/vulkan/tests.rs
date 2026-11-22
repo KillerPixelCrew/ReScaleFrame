@@ -19,7 +19,6 @@ fn booted() -> Vulkan {
 /// Every provider and presenter fact present. Device readiness is the creation owner's.
 fn ready() -> VkFacts {
     VkFacts {
-        reserved_creation: [0; 2],
         graph_handoff: 1,
         fsr4_sr_compiled: 1,
         fsr4_fg_compiled: 1,
@@ -36,7 +35,6 @@ fn adapter(vendor: u32, software: u32) -> Option<VkAdapter> {
         vendor,
         device: 0x1234,
         software,
-        reserved: 0,
     })
 }
 
@@ -343,7 +341,6 @@ fn status_carries_the_latency_overlay() {
         pcl_message: 0xc123,
         mode: 2,
         owner: 3,
-        reserved: 0,
         sleep_calls: 5,
         marker_calls: 6,
     }));

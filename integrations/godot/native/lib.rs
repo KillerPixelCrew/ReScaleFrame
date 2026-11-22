@@ -45,10 +45,9 @@ mod vulkan;
 mod window;
 
 use control::Control;
-use effect::Effect;
 use platform::{
-    ABI_VERSION, EFFECT_VERSION, EffectLeaves, EffectStatus, EngineServices, Platform,
-    SETTINGS_ABI_VERSION, Settings, Setup, Status, VkFunction, VkProc,
+    ABI_VERSION, EngineServices, Platform, SETTINGS_ABI_VERSION, Settings, Setup, Status,
+    VkFunction, VkProc,
 };
 use rsf_game_sys::{rsf_game_cpu_event, rsf_game_log_fn};
 use std::ffi::{c_char, c_int, c_void};
@@ -250,76 +249,5 @@ extern "C" fn rsfg_vk_window(window: *mut c_void) {
     if CONTROL.vulkan.booted() {
         CONTROL.window.accept(&Platform, window);
         CONTROL.vulkan.report_window(window);
-    }
-}
-
-// The compositor effect owner (effect.rs). Each ReScaleFrameEffect instance owns one directly
-// (gdextension/effect.rs); these C entries expose the same owner to the fixtures.
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_effect_create() -> *mut Effect {
-    Box::into_raw(Box::default())
-}
-
-/// # Safety
-/// `effect` is null or an owner from `rsf_godot_effect_create` that no other call is using and
-/// none uses afterwards.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_effect_destroy(effect: *mut Effect) {
-    if !effect.is_null() {
-        // SAFETY: the caller's guarantee; the owner came from Box::into_raw.
-        drop(unsafe { Box::from_raw(effect) });
-    }
-}
-
-/// `ReScaleFrameEffect.request_motion_capture`.
-///
-/// # Safety
-/// `effect` is null or a live owner from `rsf_godot_effect_create`.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_effect_request_capture(effect: *const Effect) {
-    // SAFETY: the caller's guarantee.
-    if let Some(effect) = unsafe { effect.as_ref() } {
-        effect.request_capture();
-    }
-}
-
-/// `ReScaleFrameEffect._render_callback` after its callback type check.
-///
-/// # Safety
-/// `effect` is null or a live owner; `leaves` is null or the effect table; `call` is the
-/// callback's record, live for the call.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_effect_render(
-    effect: *const Effect,
-    leaves: *const EffectLeaves,
-    call: *mut c_void,
-) {
-    // SAFETY: the caller's guarantee.
-    if let (Some(effect), Some(leaves)) =
-        unsafe { (effect.as_ref(), platform::effect_leaves(leaves)) }
-    {
-        effect.render(leaves, call);
-    }
-}
-
-/// `ReScaleFrameEffect.get_status`.
-///
-/// # Safety
-/// `effect` is null or a live owner; `status` is null or a writable `rsf_godot_effect_status` of
-/// its stated size.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_effect_status_get(
-    effect: *const Effect,
-    status: *mut EffectStatus,
-) -> c_int {
-    // SAFETY: the caller's guarantee.
-    match unsafe { (effect.as_ref(), checked_output(status, EFFECT_VERSION)) } {
-        (Some(effect), Some(status)) => {
-            // SAFETY: checked_output established the record.
-            unsafe { status.write(effect.status()) };
-            1
-        }
-        _ => 0,
     }
 }

@@ -46,7 +46,6 @@ pub(crate) struct VkChainFacts {
     pub(crate) integer_dot_product: u32,
     pub(crate) enabled_features: u32,
     pub(crate) timeline_semaphore: u32,
-    pub(crate) reserved: u32,
 }
 
 /// `rsf_vk_device_derive`.
@@ -59,7 +58,6 @@ pub(crate) struct VkDeviceDerive {
     pub(crate) replace_next: u32,
     pub(crate) next: *mut c_void,
     pub(crate) clear_enabled_features: u32,
-    pub(crate) reserved: u32,
 }
 
 /// `rsf_vk_adapter`: the created device's physical device, as `vkGetPhysicalDeviceProperties`
@@ -70,7 +68,6 @@ pub(crate) struct VkAdapter {
     pub(crate) vendor: u32,
     pub(crate) device: u32,
     pub(crate) software: u32,
-    pub(crate) reserved: u32,
 }
 
 /// `rsf_vk_latency_requirements`.
@@ -93,7 +90,6 @@ pub(crate) struct VkInstanceCall {
     pub(crate) output: *mut c_void,
     pub(crate) extensions: *const *const c_char,
     pub(crate) extension_count: u32,
-    pub(crate) reserved: u32,
 }
 
 /// `rsf_vk_device_call`: one intercepted `vkCreateDevice`.
@@ -107,7 +103,6 @@ pub(crate) struct VkDeviceCall {
     pub(crate) output: *mut c_void,
     pub(crate) extensions: *const *const c_char,
     pub(crate) extension_count: u32,
-    pub(crate) reserved: u32,
 }
 
 /// `rsf_vk_creation_leaves`, the Vulkan-typed leaves of `vulkan_creation.cpp`.
@@ -493,7 +488,6 @@ impl<D: Fn(&CStr)> DeviceNegotiation<D> {
             replace_next: 1,
             next: features,
             clear_enabled_features: 1,
-            reserved: 0,
         };
         let handle = leaves.derive_device(call.call, VK_STAGE_XESS, &derive);
         if handle.is_null() {
@@ -547,7 +541,6 @@ impl<D: Fn(&CStr)> DeviceNegotiation<D> {
             replace_next: 0,
             next: ptr::null_mut(),
             clear_enabled_features: 0,
-            reserved: 0,
         };
         let handle = leaves.derive_device(call.call, VK_STAGE_INTEROP, &derive);
         if handle.is_null() {
@@ -614,7 +607,6 @@ impl<D: Fn(&CStr)> DeviceNegotiation<D> {
                 replace_next: 1,
                 next: requirements.features,
                 clear_enabled_features: 0,
-                reserved: 0,
             };
             actual = leaves.derive_device(call.call, VK_STAGE_LATENCY, &derive);
             if actual.is_null() {

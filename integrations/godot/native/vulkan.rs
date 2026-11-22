@@ -30,12 +30,12 @@ const FG_BACKEND_AUTO: u32 = 7;
 const SCREEN_FLIGHT: u32 = 4;
 /// The first registered window message; the PCL ping message is one when Streamline bound it.
 const REGISTERED_MESSAGE: u32 = 0xc000;
-/// `RSF_GODOT_VK_SR_*`: how an SR pass was counted.
 /// A Vulkan handle from the pointer-sized word the leaf records carry.
 pub(crate) fn handle<H: ash::vk::Handle>(pointer: *mut c_void) -> H {
     H::from_raw(pointer.addr() as u64)
 }
 
+/// How an SR pass was counted.
 pub(crate) const SR_EVALUATED: u32 = 1;
 pub(crate) const SR_REFUSED: u32 = 2;
 
@@ -209,14 +209,14 @@ impl Vulkan {
                 return 0;
             }
             {
-                // The generation keeps counting across sessions, as before.
+                // The generation keeps counting across sessions.
                 let mut state = self.state();
                 state.settings = default_settings();
                 state.status = initial_status();
                 state.status.session_id = platform.tick_count().wrapping_add(1);
                 state.status.fg_result = BACKEND_ERROR_NOT_SUPPORTED;
             }
-            // Each session logs its own refusals, as the start leaf's reset did.
+            // Each session logs its own refusals.
             self.contexts().reset_diagnostics();
             // The start leaf cleared the primary window first, also when it then refused.
             self.primary_window

@@ -53,7 +53,6 @@ const NVIDIA: VkAdapter = VkAdapter {
     vendor: 0x10de,
     device: 0x2684,
     software: 0,
-    reserved: 0,
 };
 /// The calls a successful device creation ends with after its latency report.
 const ADAPTER_READ: [&str; 2] = [
@@ -439,7 +438,6 @@ fn instance_call(output: *mut *mut c_void, list: &[*const c_char]) -> VkInstance
         output: output.cast(),
         extensions: list.as_ptr(),
         extension_count: list.len() as u32,
-        reserved: 0,
     }
 }
 
@@ -452,7 +450,6 @@ fn device_call(output: *mut *mut c_void, list: &[*const c_char]) -> VkDeviceCall
         output: output.cast(),
         extensions: list.as_ptr(),
         extension_count: list.len() as u32,
-        reserved: 0,
     }
 }
 
@@ -887,7 +884,6 @@ fn created_devices_replace_the_adapter_facts_and_failures_keep_them() {
         vendor: 0x10005,
         device: 0,
         software: 1,
-        reserved: 0,
     };
     ADAPTER.set(Some(software));
     assert_eq!(creation.create_device(&LEAVES, &call), VK_SUCCESS);

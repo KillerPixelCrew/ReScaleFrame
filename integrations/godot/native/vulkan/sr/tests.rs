@@ -453,7 +453,6 @@ fn auto_without_a_servable_provider_takes_the_spatial_fallback() {
         vendor: 0x10005,
         device: 0,
         software: 1,
-        reserved: 0,
     }));
     // The fake answers for the Runtime's provider policy.
     fake::SR_SELECTED.set(0);
@@ -493,7 +492,6 @@ fn a_changed_auto_resolution_retires_the_context() {
         vendor: 0x10de,
         device: 0x2684,
         software: 0,
-        reserved: 0,
     }));
     fake::VK_FACTS.set(VkFacts {
         streamline_ready: 1,

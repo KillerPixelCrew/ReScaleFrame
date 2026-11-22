@@ -248,7 +248,6 @@ impl Platform {
             foreground_process_id: 10,
             current_process_id: 10,
             input_window_visible: 1,
-            reserved: 0,
         }
     }
 
@@ -298,7 +297,6 @@ impl Platform {
             result: 0,
             desired_width: desired.0,
             desired_height: desired.1,
-            reserved: 0,
         };
         match REFUSED.get() {
             Some((backend, result)) if backend == request.backend => context.result = result,
@@ -406,7 +404,6 @@ impl Platform {
         let mut created = VkSrContext {
             handle: ptr::null_mut(),
             result: 0,
-            reserved: 0,
         };
         let split = request.backend == 4;
         if split && VK_SPLIT_OPEN_RESULT.get() != 0 {

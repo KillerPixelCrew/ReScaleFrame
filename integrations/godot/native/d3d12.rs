@@ -407,7 +407,6 @@ impl D3d12 {
             output_height: output.1,
             render_width: render.0,
             render_height: render.1,
-            reserved: 0,
             paths,
         };
         let plan = self.ledger().plan;

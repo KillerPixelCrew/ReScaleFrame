@@ -46,7 +46,6 @@ const fn field(name: &'static CStr, conversion: u32) -> OptionField {
     OptionField {
         name: name.as_ptr(),
         conversion,
-        reserved: 0,
     }
 }
 
