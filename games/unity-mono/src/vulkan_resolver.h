@@ -11,7 +11,9 @@
 #define RSF_UNITY_VK_CREATE_SWAPCHAIN 4u
 #define RSF_UNITY_VK_DESTROY_SWAPCHAIN 5u
 #define RSF_UNITY_VK_PRESENT 6u
-#define RSF_UNITY_VK_SLOTS 7u
+#define RSF_UNITY_VK_CREATE_SURFACE 7u
+#define RSF_UNITY_VK_DESTROY_SURFACE 8u
+#define RSF_UNITY_VK_SLOTS 9u
 
 /* Rust (vulkan_resolver.rs) owns the resolver keys and their instance and device routes, the
    registered interceptors, the saved loader functions, the interop extension selection and the

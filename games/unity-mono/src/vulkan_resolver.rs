@@ -15,7 +15,9 @@ const CREATE_DEVICE: u32 = 3;
 const CREATE_SWAPCHAIN: u32 = 4;
 const DESTROY_SWAPCHAIN: u32 = 5;
 const PRESENT: u32 = 6;
-const SLOTS: usize = PRESENT as usize + 1;
+const CREATE_SURFACE: u32 = 7;
+const DESTROY_SURFACE: u32 = 8;
+const SLOTS: usize = DESTROY_SURFACE as usize + 1;
 
 const SUCCESS: i32 = 0;
 const OUT_OF_HOST_MEMORY: i32 = -1;
@@ -23,12 +25,14 @@ const INITIALIZATION_FAILED: i32 = -3;
 
 /// Resolver keys by slot. vkGetInstanceProcAddr itself is never routed, and vkGetDeviceProcAddr
 /// only from the instance resolver.
-const KEYS: [(u32, &CStr); 5] = [
+const KEYS: [(u32, &CStr); 7] = [
     (DEVICE_PROC, c"vkGetDeviceProcAddr"),
     (CREATE_DEVICE, c"vkCreateDevice"),
     (CREATE_SWAPCHAIN, c"vkCreateSwapchainKHR"),
     (DESTROY_SWAPCHAIN, c"vkDestroySwapchainKHR"),
     (PRESENT, c"vkQueuePresentKHR"),
+    (CREATE_SURFACE, c"vkCreateWin32SurfaceKHR"),
+    (DESTROY_SURFACE, c"vkDestroySurfaceKHR"),
 ];
 
 /// The device extensions the shared memory and fence imports need.
@@ -90,7 +94,7 @@ fn resolver() -> MutexGuard<'static, Resolver> {
 
 fn route(name: &CStr, from_instance: bool) -> u32 {
     match KEYS.iter().find(|(_, key)| *key == name) {
-        Some(&(DEVICE_PROC, _)) if !from_instance => FORWARD,
+        Some(&(DEVICE_PROC | CREATE_SURFACE | DESTROY_SURFACE, _)) if !from_instance => FORWARD,
         Some(&(slot, _)) => slot,
         None => FORWARD,
     }

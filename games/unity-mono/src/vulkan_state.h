@@ -38,9 +38,7 @@ typedef struct rsf_unity_vulkan_frame {
     rsf_game_host_services services;
 } rsf_unity_vulkan_frame;
 /* Stores the player window frame. Zero when the bridge faulted or is closing. */
-uint32_t rsf_unity_vulkan_set_window(const rsf_unity_vulkan_frame* frame);
-/* Copies the stored window frame and its services. Zero without a frame or after a fault. */
-uint32_t rsf_unity_vulkan_window(rsf_unity_vulkan_frame* frame);
+uint32_t rsf_unity_vulkan_set_window(const rsf_unity_vulkan_frame* frame, uint64_t instance, void* device, uint64_t queue, void* parent);
 
 /* Copies frame into a free event slot of this kind. Returns the copy's address, which Unity hands
    back to the queue callback as identity only, and its slot for the caller's images; NULL when
@@ -157,7 +155,10 @@ void* rsf_unity_vulkan_surface_window(void);
 /* Publishes a complete swapchain with one present-ready semaphore per image, waiting for the lease
    to end. Zero for a null handle or array, no images or a handle already published; the caller then
    destroys what it created. */
-uint32_t rsf_unity_vulkan_swapchain_register(void* device, uint64_t chain, uint32_t width, uint32_t height,
+void rsf_unity_vulkan_surface_register(uint64_t instance, uint64_t surface, void* parent);
+void rsf_unity_vulkan_surface_forget(uint64_t instance, uint64_t surface);
+void rsf_unity_vulkan_swapchain_supersede(void* device, uint64_t chain);
+uint32_t rsf_unity_vulkan_swapchain_register(void* device, uint64_t chain, uint64_t surface, uint32_t width, uint32_t height,
     const uint64_t* images, const uint64_t* present_ready, uint32_t count);
 /* Detaches the swapchain and retires pending semaphores for device when wait_idle proves
    completion or reports device loss. Returns the Vulkan wait result. */
@@ -173,9 +174,10 @@ typedef struct rsf_unity_vulkan_present_source {
     uint32_t height;
 } rsf_unity_vulkan_present_source;
 /* Waits for and takes the lease, which the caller always ends with
-   rsf_unity_vulkan_presentation_end. Non-zero, with source filled, when chain is published and
-   index names one of its images. */
-uint32_t rsf_unity_vulkan_present_begin(void* device, uint64_t chain, uint32_t index, rsf_unity_vulkan_present_source* source);
+   rsf_unity_vulkan_presentation_end. Consumes one matching window receipt when the chain and
+   image are published. */
+uint32_t rsf_unity_vulkan_present_begin(void* device, uint64_t queue, uint64_t chain, uint32_t index,
+    rsf_unity_vulkan_present_source* source, rsf_unity_vulkan_frame* frame);
 /* Takes the lease without waiting for a surface update or queue callback. */
 uint32_t rsf_unity_vulkan_presentation_try_begin(void);
 void rsf_unity_vulkan_presentation_end(void);

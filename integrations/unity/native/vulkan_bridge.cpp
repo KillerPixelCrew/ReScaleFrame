@@ -551,14 +551,18 @@ VkResult present_admitted(PFN_vkQueuePresentKHR original_present, VkQueue vk_que
     DeviceView graphics;
     const auto unchanged = [&] { return original_present(vk_queue, info); };
     const HWND window = surface_window();
-    if (!window || !rsf_unity_vulkan_window(&frame) || !frame.services.render_pass || info->swapchainCount != 1 ||
-        initialize(graphics, &frame.services) != RSF_UNITY_VULKAN_DEVICE_READY) return unchanged();
-    // The lease is held from the lookup through the forwarded Present, also when the swapchain is
-    // unknown or the index out of range and the Present is forwarded unchanged.
+    if (!window || !unity || info->swapchainCount != 1 || !info->pSwapchains || !info->pImageIndices)
+        return unchanged();
+    const auto instance = unity->Instance();
+    if (instance.graphicsQueue != vk_queue) return unchanged();
+    // Pair the packet with the native swapchain before creating resources or reporting a source.
     rsf_unity_vulkan_present_source source{};
-    const bool found = rsf_unity_vulkan_present_begin(graphics.vk_device(), handle_id(info->pSwapchains[0]), info->pImageIndices[0], &source) != 0;
+    const bool found = rsf_unity_vulkan_present_begin(instance.device, handle_id(vk_queue),
+        handle_id(info->pSwapchains[0]), info->pImageIndices[0], &source, &frame) != 0;
     PresentationLease lease;
-    if (!found) return unchanged();
+    if (!found || !frame.services.render_pass ||
+        initialize(graphics, &frame.services) != RSF_UNITY_VULKAN_DEVICE_READY ||
+        graphics.vk_device() != instance.device || graphics.vk_queue() != vk_queue) return unchanged();
     auto* chain = static_cast<IDXGISwapChain3*>(rsf_unity_vulkan_configure_surface(source.width, source.height, &surface_ops));
     if (!chain) return unchanged();
     const VkImage presented = from_id<VkImage>(source.image);
@@ -604,7 +608,7 @@ VKAPI_ATTR VkResult VKAPI_CALL intercept_present(VkQueue vk_queue, const VkPrese
 {
     // Unlike vkGetDeviceProcAddr, the loader export accepts any queue and dispatches to
     // its owning device. A present on a different queue must retain that native path.
-    constexpr PFN_vkQueuePresentKHR original_present = vkQueuePresentKHR;
+    const PFN_vkQueuePresentKHR original_present = vkQueuePresentKHR;
     if (!info) return VK_ERROR_INITIALIZATION_FAILED;
     BridgeEntry entry;
     return entry.admitted ? present_admitted(original_present, vk_queue, info) : original_present(vk_queue, info);
@@ -669,6 +673,8 @@ VKAPI_ATTR VkResult VKAPI_CALL intercept_create_swapchain(VkDevice vk_device, co
     const auto original_create_swapchain = device_proc<PFN_vkCreateSwapchainKHR>(RSF_UNITY_VK_CREATE_SWAPCHAIN, vk_device);
     if (!original_create_swapchain || !info || !output) return VK_ERROR_INITIALIZATION_FAILED;
     const auto destroy = device_proc<PFN_vkDestroySwapchainKHR>(RSF_UNITY_VK_DESTROY_SWAPCHAIN, vk_device);
+    // Vulkan retires oldSwapchain even if creating the successor fails.
+    rsf_unity_vulkan_swapchain_supersede(vk_device, handle_id(info->oldSwapchain));
     if (!destroy) return original_create_swapchain(vk_device, info, allocator, output);
 
     auto request = *info; request.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
@@ -712,7 +718,7 @@ VKAPI_ATTR VkResult VKAPI_CALL intercept_create_swapchain(VkDevice vk_device, co
     std::vector<uint64_t> image_ids(count), ready_ids(count);
     for (uint32_t i = 0; i < count; ++i) { image_ids[i] = handle_id(images[i]); ready_ids[i] = handle_id(present_ready[i]); }
     // A refused publication (a handle already published) rolls back like any other step.
-    if (!rsf_unity_vulkan_swapchain_register(vk_device, handle_id(pending.chain), request.imageExtent.width, request.imageExtent.height,
+    if (!rsf_unity_vulkan_swapchain_register(vk_device, handle_id(pending.chain), handle_id(request.surface), request.imageExtent.width, request.imageExtent.height,
         image_ids.data(), ready_ids.data(), count)) return VK_ERROR_INITIALIZATION_FAILED;
     *output = pending.chain;
     pending.chain = VK_NULL_HANDLE;
@@ -738,6 +744,27 @@ VKAPI_ATTR void VKAPI_CALL intercept_destroy_swapchain(VkDevice vk_device, VkSwa
     if (destroy) destroy(vk_device, swapchain, allocator);
 }
 
+VKAPI_ATTR VkResult VKAPI_CALL intercept_create_surface(VkInstance instance, const VkWin32SurfaceCreateInfoKHR* info,
+    const VkAllocationCallbacks* allocator, VkSurfaceKHR* output)
+{
+    const auto get = saved_proc<PFN_vkGetInstanceProcAddr>(RSF_UNITY_VK_INSTANCE_PROC);
+    const auto create = get ? reinterpret_cast<PFN_vkCreateWin32SurfaceKHR>(get(instance, "vkCreateWin32SurfaceKHR")) : nullptr;
+    if (!create || !info || !output) return VK_ERROR_INITIALIZATION_FAILED;
+    const auto result = create(instance, info, allocator, output);
+    if (result == VK_SUCCESS) rsf_unity_vulkan_surface_register(handle_id(instance), handle_id(*output), info->hwnd);
+    return result;
+}
+VKAPI_ATTR void VKAPI_CALL intercept_destroy_surface(VkInstance instance, VkSurfaceKHR surface,
+    const VkAllocationCallbacks* allocator)
+{
+    const auto get = saved_proc<PFN_vkGetInstanceProcAddr>(RSF_UNITY_VK_INSTANCE_PROC);
+    const auto destroy = get ? reinterpret_cast<PFN_vkDestroySurfaceKHR>(get(instance, "vkDestroySurfaceKHR")) : nullptr;
+    if (destroy) {
+        rsf_unity_vulkan_surface_forget(handle_id(instance), handle_id(surface));
+        destroy(instance, surface, allocator);
+    }
+}
+
 // Rust routes each resolved name to the interceptor registered for its slot (vulkan_resolver.rs).
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL get_device_proc(VkDevice vk_device, const char* name)
 {
@@ -759,7 +786,8 @@ PFN_vkGetInstanceProcAddr UNITY_INTERFACE_API initialize_intercept(PFN_vkGetInst
     // Indexed by the vulkan_resolver.h slots; Rust copies the table with the loader's resolver.
     const PFN_vkVoidFunction interceptors[RSF_UNITY_VK_SLOTS]{nullptr, as_void(get_instance_proc),
         as_void(get_device_proc), as_void(intercept_create_device), as_void(intercept_create_swapchain),
-        as_void(intercept_destroy_swapchain), as_void(intercept_present)};
+        as_void(intercept_destroy_swapchain), as_void(intercept_present), as_void(intercept_create_surface),
+        as_void(intercept_destroy_surface)};
     return reinterpret_cast<PFN_vkGetInstanceProcAddr>(
         rsf_unity_vk_bind_resolver(as_void(original), interceptors, RSF_UNITY_VK_SLOTS));
 }
@@ -841,7 +869,11 @@ bool rsf_uvk_render(int event_id, const rsf_unity_packet& packet, const rsf_game
     const rsf_unity_vulkan_frame frame{packet, services};
     const uint32_t kind = event_id == base_event + 1 ? RSF_UNITY_VULKAN_EVENT_WINDOW :
         event_id == base_event + 2 ? RSF_UNITY_VULKAN_EVENT_HUDLESS : RSF_UNITY_VULKAN_EVENT_SR;
-    if (kind == RSF_UNITY_VULKAN_EVENT_WINDOW && !rsf_unity_package_is_editor()) return rsf_unity_vulkan_set_window(&frame) != 0;
+    if (kind == RSF_UNITY_VULKAN_EVENT_WINDOW && !rsf_unity_package_is_editor()) {
+        const auto instance = unity->Instance();
+        return rsf_unity_vulkan_set_window(&frame, handle_id(instance.instance), instance.device, handle_id(instance.graphicsQueue),
+            GetParent(surface_window())) != 0;
+    }
     std::array<UnityVulkanImage, 4> textures{};
     void* pointers[] = {packet.color, packet.depth, packet.motion, packet.output};
     for (uint32_t i = 0; i < 4; ++i) {

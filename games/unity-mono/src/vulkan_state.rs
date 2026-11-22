@@ -291,6 +291,12 @@ impl Drop for Surface {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PresentIdentity {
+    queue: u64,
+    swapchain: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Admission {
     Open,
     Retiring,
@@ -308,8 +314,8 @@ struct State {
     events: [Event; EVENTS],
     /// Present interceptions and surface updates in progress.
     entries: u32,
-    /// The last player window frame, whose identity the present interception renders under.
-    window: Option<Frame>,
+    /// One player window frame bound to a native queue and swapchain publication.
+    window: Option<(PresentIdentity, Frame)>,
     surface: Option<Surface>,
     images: [Option<Image>; SHARED_IMAGES],
     /// Images whose barriers are recorded in the current command buffer.
@@ -350,20 +356,19 @@ impl State {
         !self.faulted && self.admission != Admission::Closed
     }
 
-    fn set_window(&mut self, frame: &Frame) -> bool {
-        if !self.open() {
+    fn set_window(&mut self, identity: PresentIdentity, frame: &Frame) -> bool {
+        if !self.open() || frame.packet.frame_id == 0 {
             return false;
         }
-        self.window = Some(*frame);
+        self.window = Some((identity, *frame));
         true
     }
 
-    /// The window frame, once one with a frame identity arrived, until a fault or release.
-    fn window(&self) -> Option<Frame> {
-        if self.faulted {
+    fn take_window(&mut self, identity: PresentIdentity) -> Option<Frame> {
+        if !self.open() || self.window.as_ref()?.0 != identity {
             return None;
         }
-        self.window.filter(|frame| frame.packet.frame_id != 0)
+        self.window.take().map(|(_, frame)| frame)
     }
 
     fn admit_event(&mut self, frame: &Frame, kind: u32, reconfigure: bool) -> Option<usize> {
@@ -504,23 +509,27 @@ impl State {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_vulkan_set_window(frame: *const Frame) -> u32 {
+unsafe extern "C" fn rsf_unity_vulkan_set_window(
+    frame: *const Frame,
+    instance: u64,
+    device: *mut c_void,
+    queue: u64,
+    parent: *mut c_void,
+) -> u32 {
     let Some(frame) = (unsafe { frame.as_ref() }) else {
         return 0;
     };
-    u32::from(lock().set_window(frame))
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_vulkan_window(frame: *mut Frame) -> u32 {
-    if frame.is_null() {
+    let registry = presentation();
+    let mut state = lock();
+    // A new event supersedes any previous receipt, including when the target changed.
+    state.window = None;
+    if instance == 0 || device.is_null() || queue == 0 || parent.is_null() {
         return 0;
     }
-    let Some(window) = lock().window() else {
+    let Some(swapchain) = registry.window_target(instance, device as usize, parent as usize) else {
         return 0;
     };
-    unsafe { frame.write(window) };
-    1
+    u32::from(state.set_window(PresentIdentity { queue, swapchain }, frame))
 }
 
 #[unsafe(no_mangle)]
@@ -928,6 +937,9 @@ struct Swapchain {
     device: usize,
     chain: u64,
     detached: bool,
+    active: bool,
+    surface: u64,
+    publication: u64,
     width: u32,
     height: u32,
     images: Vec<u64>,
@@ -953,6 +965,8 @@ struct Presentation {
     /// The presentation lease is held.
     leased: bool,
     swapchains: Vec<Swapchain>,
+    surfaces: Vec<(u64, u64, usize)>,
+    next_publication: u64,
 }
 
 // The window is a Win32 handle kept as identity; this module never dereferences it.
@@ -988,6 +1002,8 @@ impl Presentation {
             window: ptr::null_mut(),
             leased: false,
             swapchains: Vec::new(),
+            surfaces: Vec::new(),
+            next_publication: 1,
         }
     }
 
@@ -1003,8 +1019,9 @@ impl Presentation {
     }
 
     /// Publishes a complete swapchain: one present-ready semaphore per image, a new handle.
-    fn register(&mut self, swapchain: Swapchain) -> bool {
-        if swapchain.chain == 0
+    fn register(&mut self, mut swapchain: Swapchain) -> bool {
+        if self.next_publication == 0
+            || swapchain.chain == 0
             || swapchain.images.is_empty()
             || swapchain.images.len() != swapchain.present_ready.len()
             || self.swapchains.iter().any(|known| {
@@ -1016,22 +1033,37 @@ impl Presentation {
         {
             return false;
         }
+        swapchain.publication = self.next_publication;
+        self.next_publication = self.next_publication.wrapping_add(1);
         self.swapchains.push(swapchain);
         true
     }
 
-    fn source(&self, device: usize, chain: u64, index: u32) -> Option<PresentSource> {
-        let swapchain = self
-            .swapchains
-            .iter()
-            .find(|known| !known.detached && known.device == device && known.chain == chain)?;
+    fn window_target(&self, instance: u64, device: usize, parent: usize) -> Option<u64> {
+        let mut active = self.swapchains.iter().filter(|chain| {
+            !chain.detached
+                && chain.active
+                && chain.device == device
+                && self.surfaces.contains(&(instance, chain.surface, parent))
+        });
+        let target = active.next()?;
+        active.next().is_none().then_some(target.publication)
+    }
+
+    fn source(&self, device: usize, chain: u64, index: u32) -> Option<(u64, PresentSource)> {
+        let swapchain = self.swapchains.iter().find(|known| {
+            !known.detached && known.active && known.device == device && known.chain == chain
+        })?;
         let index = index as usize;
-        Some(PresentSource {
-            image: *swapchain.images.get(index)?,
-            present_ready: swapchain.present_ready[index],
-            width: swapchain.width,
-            height: swapchain.height,
-        })
+        Some((
+            swapchain.publication,
+            PresentSource {
+                image: *swapchain.images.get(index)?,
+                present_ready: swapchain.present_ready[index],
+                width: swapchain.width,
+                height: swapchain.height,
+            },
+        ))
     }
 
     /// The native swapchain can disappear even if an idle wait fails. Its semaphores remain
@@ -1062,9 +1094,38 @@ extern "C" fn rsf_unity_vulkan_surface_window() -> *mut c_void {
 }
 
 #[unsafe(no_mangle)]
+extern "C" fn rsf_unity_vulkan_surface_register(instance: u64, surface: u64, parent: *mut c_void) {
+    let mut registry = presentation();
+    if registry.surfaces.try_reserve(1).is_ok() {
+        registry.surfaces.push((instance, surface, parent as usize));
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_vulkan_surface_forget(instance: u64, surface: u64) {
+    presentation()
+        .surfaces
+        .retain(|&(owner, handle, _)| owner != instance || handle != surface);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_vulkan_swapchain_supersede(device: *mut c_void, chain: u64) {
+    if chain == 0 {
+        return;
+    }
+    let mut registry = unleased();
+    for known in &mut registry.swapchains {
+        if known.device == device as usize && known.chain == chain {
+            known.active = false;
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_unity_vulkan_swapchain_register(
     device: *mut c_void,
     chain: u64,
+    surface: u64,
     width: u32,
     height: u32,
     images: *const u64,
@@ -1085,16 +1146,20 @@ unsafe extern "C" fn rsf_unity_vulkan_swapchain_register(
     // Allocation refusal leaves the native rollback owner in charge of every handle.
     image_copy.extend_from_slice(unsafe { slice::from_raw_parts(images, count) });
     semaphore_copy.extend_from_slice(unsafe { slice::from_raw_parts(present_ready, count) });
+    let mut registry = unleased();
     let swapchain = Swapchain {
         device: device as usize,
         chain,
         detached: false,
+        active: true,
+        surface,
+        publication: 0,
         width,
         height,
         images: image_copy,
         present_ready: semaphore_copy,
     };
-    u32::from(unleased().register(swapchain))
+    u32::from(registry.register(swapchain))
 }
 
 #[unsafe(no_mangle)]
@@ -1146,19 +1211,27 @@ unsafe extern "C" fn rsf_unity_vulkan_swapchain_retire(
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_unity_vulkan_present_begin(
     device: *mut c_void,
+    queue: u64,
     chain: u64,
     index: u32,
     source: *mut PresentSource,
+    frame: *mut Frame,
 ) -> u32 {
-    let mut presentation = unleased();
-    presentation.leased = true;
-    let Some(found) = presentation.source(device as usize, chain, index) else {
-        return 0;
-    };
-    if source.is_null() {
+    let mut registry = unleased();
+    registry.leased = true;
+    if source.is_null() || frame.is_null() {
         return 0;
     }
-    unsafe { source.write(found) };
+    let Some((swapchain, found)) = registry.source(device as usize, chain, index) else {
+        return 0;
+    };
+    let Some(receipt) = lock().take_window(PresentIdentity { queue, swapchain }) else {
+        return 0;
+    };
+    unsafe {
+        source.write(found);
+        frame.write(receipt);
+    }
     1
 }
 
@@ -1182,6 +1255,10 @@ mod tests {
     use super::*;
 
     const EVENT_SR: u32 = 0;
+    const IDENTITY: PresentIdentity = PresentIdentity {
+        queue: 42,
+        swapchain: 1,
+    };
 
     fn work(frame_id: u64) -> Frame {
         let mut frame = EMPTY_FRAME;
@@ -1311,7 +1388,7 @@ mod tests {
         let mut state = State::new();
         let slot = state.admit_event(&work(4), EVENT_HUDLESS, false).unwrap();
         let address = state.event_address(slot);
-        assert!(state.set_window(&work(5)));
+        assert!(state.set_window(IDENTITY, &work(5)));
         assert!(!state.idle());
         let (started, stored, kind, reconfigure) = state.start_event(address).unwrap();
         assert_eq!(
@@ -1319,7 +1396,10 @@ mod tests {
             (slot, 4, EVENT_HUDLESS, false)
         );
         assert_eq!(stored.services.session_id, 104);
-        assert_eq!(state.window().unwrap().services.session_id, 105);
+        assert_eq!(
+            state.take_window(IDENTITY).unwrap().services.session_id,
+            105
+        );
         // A running event is not started twice and still blocks retirement.
         assert!(state.start_event(address).is_none());
         assert!(!state.idle());
@@ -1351,29 +1431,46 @@ mod tests {
     #[test]
     fn a_fault_discards_queued_events_and_the_window_frame() {
         let mut state = State::new();
-        assert!(state.set_window(&work(8)));
+        assert!(state.set_window(IDENTITY, &work(8)));
         let slot = state.admit_event(&work(9), EVENT_SR, false).unwrap();
         assert!(state.fault());
         assert!(!state.fault());
-        assert!(state.window().is_none());
-        assert!(!state.set_window(&work(10)));
+        assert!(state.take_window(IDENTITY).is_none());
+        assert!(!state.set_window(IDENTITY, &work(10)));
         assert!(state.admit_event(&work(11), EVENT_SR, false).is_none());
         assert!(state.start_event(state.event_address(slot)).is_none());
         assert!(state.idle());
         assert!(state.close());
         state.release();
         assert!(!state.faulted);
-        assert!(state.window().is_none());
+        assert!(state.take_window(IDENTITY).is_none());
     }
 
     #[test]
     fn the_window_frame_needs_a_frame_identity() {
         let mut state = State::new();
-        assert!(state.window().is_none());
-        assert!(state.set_window(&work(0)));
-        assert!(state.window().is_none());
-        assert!(state.set_window(&work(12)));
-        assert_eq!(state.window().unwrap().packet.frame_id, 12);
+        assert!(state.take_window(IDENTITY).is_none());
+        assert!(!state.set_window(IDENTITY, &work(0)));
+        assert!(state.take_window(IDENTITY).is_none());
+        assert!(state.set_window(IDENTITY, &work(12)));
+        assert!(
+            state
+                .take_window(PresentIdentity {
+                    queue: 43,
+                    ..IDENTITY
+                })
+                .is_none()
+        );
+        assert!(
+            state
+                .take_window(PresentIdentity {
+                    swapchain: 2,
+                    ..IDENTITY
+                })
+                .is_none()
+        );
+        assert_eq!(state.take_window(IDENTITY).unwrap().packet.frame_id, 12);
+        assert!(state.take_window(IDENTITY).is_none());
     }
 
     #[test]
@@ -1401,7 +1498,7 @@ mod tests {
         assert!(!state.enter());
         assert!(!state.claim_device());
         assert!(state.admit_event(&work(1), EVENT_SR, false).is_none());
-        assert!(!state.set_window(&work(1)));
+        assert!(!state.set_window(IDENTITY, &work(1)));
         state.reopen();
         assert!(state.enter());
         state.leave();
@@ -1458,8 +1555,12 @@ mod tests {
         assert_eq!(rsf_unity_vulkan_enter(), 1);
         assert!(!lock().close());
         rsf_unity_vulkan_leave();
-        assert_eq!(unsafe { rsf_unity_vulkan_window(ptr::null_mut()) }, 0);
-        assert_eq!(unsafe { rsf_unity_vulkan_set_window(ptr::null()) }, 0);
+        assert_eq!(
+            unsafe {
+                rsf_unity_vulkan_set_window(ptr::null(), 0, ptr::null_mut(), 0, ptr::null_mut())
+            },
+            0
+        );
         assert!(lock().close());
         lock().release();
         assert_eq!(rsf_unity_vulkan_enter(), 0);
@@ -1471,6 +1572,9 @@ mod tests {
             device: 1,
             chain,
             detached: false,
+            active: true,
+            surface: 33,
+            publication: 0,
             width: 640,
             height: 360,
             images: (1..=count).map(|image| chain * 100 + image).collect(),
@@ -1490,15 +1594,25 @@ mod tests {
         assert!(!presentation.register(swapchain(3, 3)));
         assert_eq!(
             presentation.source(1, 3, 1),
-            Some(PresentSource {
-                image: 302,
-                present_ready: 3002,
-                width: 640,
-                height: 360,
-            })
+            Some((
+                1,
+                PresentSource {
+                    image: 302,
+                    present_ready: 3002,
+                    width: 640,
+                    height: 360,
+                }
+            ))
         );
         assert!(presentation.source(1, 3, 2).is_none());
         assert!(presentation.source(1, 4, 0).is_none());
+        presentation.surfaces.push((55, 33, 99));
+        assert_eq!(presentation.window_target(55, 1, 99), Some(1));
+        assert_eq!(presentation.window_target(56, 1, 99), None);
+        assert_eq!(presentation.window_target(55, 1, 100), None);
+        presentation.detach(1, 3);
+        assert!(presentation.register(swapchain(3, 2)));
+        assert_eq!(presentation.window_target(55, 1, 99), Some(2));
         presentation.detach(1, 3);
         assert!(presentation.source(1, 3, 0).is_none());
     }
@@ -1536,6 +1650,7 @@ mod tests {
                 rsf_unity_vulkan_swapchain_register(
                     device,
                     7,
+                    33,
                     4,
                     2,
                     images.as_ptr(),
@@ -1547,26 +1662,27 @@ mod tests {
         );
         assert_eq!(
             unsafe {
-                rsf_unity_vulkan_swapchain_register(device, 8, 4, 2, ptr::null(), ready.as_ptr(), 2)
+                rsf_unity_vulkan_swapchain_register(
+                    device,
+                    8,
+                    33,
+                    4,
+                    2,
+                    ptr::null(),
+                    ready.as_ptr(),
+                    2,
+                )
             },
             0
         );
         let mut source = PresentSource::default();
+        let mut frame = EMPTY_FRAME;
+        // A present without a receipt still holds the lease while forwarding.
         assert_eq!(
-            unsafe { rsf_unity_vulkan_present_begin(device, 7, 1, &mut source) },
-            1
-        );
-        assert_eq!((source.image, source.present_ready), (72, 82));
-        assert_eq!(rsf_unity_vulkan_presentation_try_begin(), 0);
-        rsf_unity_vulkan_presentation_end();
-        // A miss still holds the lease: the C++ forwards the present under it.
-        assert_eq!(
-            unsafe { rsf_unity_vulkan_present_begin(device, 7, 2, &mut source) },
+            unsafe { rsf_unity_vulkan_present_begin(device, 42, 7, 1, &mut source, &mut frame) },
             0
         );
         assert_eq!(rsf_unity_vulkan_presentation_try_begin(), 0);
-        rsf_unity_vulkan_presentation_end();
-        assert_eq!(rsf_unity_vulkan_presentation_try_begin(), 1);
         rsf_unity_vulkan_presentation_end();
         unsafe extern "C" fn failed(_: *mut c_void) -> i32 {
             -1
