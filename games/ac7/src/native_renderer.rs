@@ -2,7 +2,7 @@
 //! The AC7 native renderer, formerly native_renderer.cpp: the renderer object, the detours on the
 //! exact-build engine sites (sites.rs) and their engine relays, the queued pass leases and the
 //! TrueSky relay handlers. renderer.rs owns the prepare/start/quiesce/stop transaction and reaches
-//! this module through the unchanged `rsf_ac7_renderer_leaves` table (ac7_sites.h).
+//! the leaves of native_renderer/leaves.rs directly.
 //!
 //! Every detour keeps the former signature, guard kind, engine offsets, refusals and log text.
 //! Engine memory is read through the SEH-guarded C leaf (ac7_memory.c) exactly where the former
@@ -48,8 +48,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 mod evidence;
 mod frame;
 mod graph;
-mod leaves;
-pub(crate) use leaves::renderer_leaves;
+pub(crate) mod leaves;
 mod particles;
 mod shaders;
 mod sky;

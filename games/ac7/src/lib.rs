@@ -118,36 +118,30 @@ const STATUS: &CStr =
 
 static LIFECYCLE: Lifecycle = Lifecycle::new();
 
-/// The native renderer, through a fresh leaf snapshot (with the loaded image base) per operation.
+/// The native renderer (renderer.rs over native_renderer/leaves.rs).
 struct Native;
 
 impl Leaves for Native {
     fn prepare(&self, options: &rsf_ac7_native_renderer_options) -> (Renderer, bool) {
         let mut created = null_mut();
-        let leaves = native_renderer::renderer_leaves();
-        let prepared =
-            unsafe { renderer::rsf_ac7_renderer_prepare(options, &mut created, &leaves) };
+        let prepared = unsafe { renderer::rsf_ac7_renderer_prepare(options, &mut created) };
         (created, prepared)
     }
 
     fn start(&self, renderer: Renderer) -> bool {
-        unsafe { renderer::rsf_ac7_renderer_start(renderer, &native_renderer::renderer_leaves()) }
+        unsafe { renderer::rsf_ac7_renderer_start(renderer) }
     }
 
     fn is_active(&self, renderer: Renderer) -> bool {
-        unsafe {
-            renderer::rsf_ac7_renderer_is_active(renderer, &native_renderer::renderer_leaves())
-        }
+        unsafe { renderer::rsf_ac7_renderer_is_active(renderer) }
     }
 
     fn quiesce(&self, renderer: Renderer) {
-        unsafe {
-            renderer::rsf_ac7_renderer_quiesce(renderer, &native_renderer::renderer_leaves())
-        };
+        unsafe { renderer::rsf_ac7_renderer_quiesce(renderer) };
     }
 
     fn stop(&self, renderer: Renderer) -> bool {
-        unsafe { renderer::rsf_ac7_renderer_stop(renderer, &native_renderer::renderer_leaves()) }
+        unsafe { renderer::rsf_ac7_renderer_stop(renderer) }
     }
 }
 

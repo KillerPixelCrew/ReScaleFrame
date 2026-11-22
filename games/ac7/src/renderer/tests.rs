@@ -608,32 +608,3 @@ fn stop_retries_continue_from_the_refused_step() {
     assert_eq!(fake.image.writes.get(), writes, "nothing is restored twice");
     assert!(fake.installed.get().is_null() && !fake.live.get() && fake.created_count() == 0);
 }
-
-#[test]
-fn incomplete_leaf_tables_refuse() {
-    // SAFETY: all-zero is a table without leaves.
-    let leaves: rsf_ac7_renderer_leaves = unsafe { std::mem::zeroed() };
-    assert!(unsafe { NativeLeaves::new(&leaves) }.is_none());
-    assert!(unsafe { NativeLeaves::new(std::ptr::null()) }.is_none());
-    let options = Fake::options();
-    let mut out: Renderer = dangling_mut();
-    // SAFETY: the arguments are live for the call.
-    unsafe {
-        assert!(!rsf_ac7_renderer_prepare(&options, &mut out, &leaves));
-        assert!(!rsf_ac7_renderer_prepare(
-            std::ptr::null(),
-            &mut out,
-            &leaves
-        ));
-        assert!(!rsf_ac7_renderer_start(dangling_mut(), &leaves));
-        assert!(!rsf_ac7_renderer_is_active(dangling_mut(), &leaves));
-        rsf_ac7_renderer_quiesce(dangling_mut(), &leaves);
-        assert!(!rsf_ac7_renderer_stop(dangling_mut(), &leaves));
-        assert!(rsf_ac7_renderer_stop(null_mut(), &leaves));
-    }
-    assert_eq!(
-        out,
-        dangling_mut(),
-        "a refused prepare leaves the output alone"
-    );
-}

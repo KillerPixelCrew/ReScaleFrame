@@ -2,8 +2,7 @@
 //! The native renderer transaction behind the five calls of ac7_native_renderer.h: prepare,
 //! start, is_active, quiesce and stop.
 //!
-//! native_renderer.rs (formerly native_renderer.cpp) lends the native leaves
-//! (`rsf_ac7_renderer_leaves`): the renderer object and its fields, MinHook, module pinning, the
+//! native_renderer/leaves.rs (formerly native_renderer.cpp) holds the native leaves: the renderer object and its fields, MinHook, module pinning, the
 //! render scopes, the input hook, the controller facts and the TrueSky restore, which takes the
 //! renderer's cloud resolution lock and calls truesky.rs. This module decides their order and
 //! refusals. It reuses the existing owners and their state:
@@ -22,10 +21,11 @@
 //!   exactly what is still owned.
 use crate::guards::rsf_ac7_guards_held;
 use crate::lifecycle::{PENDING_CAPACITY, Renderer};
+use crate::native_renderer::leaves;
 use crate::patches;
 use crate::sites::{self, Code, CodeView, HOOK_SITES, NativeCode};
 use crate::sys::{RSF_AC7_DIAG_PIXEL_BINDINGS, rsf_ac7_native_renderer_options};
-use crate::sys::{RSF_AC7_HOOK_SITE_COUNT, rsf_ac7_code_patches, rsf_ac7_renderer_leaves};
+use crate::sys::{RSF_AC7_HOOK_SITE_COUNT, rsf_ac7_code_patches};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::ptr::null_mut;
@@ -283,83 +283,21 @@ pub(crate) fn stop(native: &impl Native, renderer: Renderer) -> bool {
     true
 }
 
-/// The validated leaf table of one call. Every native leaf is present.
+/// The native renderer leaves (native_renderer/leaves.rs) for one call, with the loaded image base.
+/// It logs nowhere until `log_to`.
 struct NativeLeaves {
     code: NativeCode,
     base: *mut u8,
-    installed: unsafe extern "C" fn() -> Renderer,
-    install: unsafe extern "C" fn(Renderer),
-    create: unsafe extern "C" fn(*const rsf_ac7_native_renderer_options) -> Renderer,
-    release: unsafe extern "C" fn(Renderer),
-    options: unsafe extern "C" fn(Renderer) -> *const rsf_ac7_native_renderer_options,
-    patches: unsafe extern "C" fn(Renderer) -> *mut rsf_ac7_code_patches,
-    active: unsafe extern "C" fn(Renderer) -> bool,
-    set_active: unsafe extern "C" fn(Renderer, bool),
-    quiescing: unsafe extern "C" fn(Renderer) -> bool,
-    set_quiescing: unsafe extern "C" fn(Renderer),
-    scopes_create: unsafe extern "C" fn(Renderer, u32) -> bool,
-    scopes_quiesce: unsafe extern "C" fn(Renderer),
-    scopes_idle: unsafe extern "C" fn(Renderer) -> bool,
-    scopes_destroy: unsafe extern "C" fn(Renderer) -> bool,
-    hooks_initialize: unsafe extern "C" fn() -> bool,
-    hook_bind: unsafe extern "C" fn(u32, *mut u8),
-    hook_create: unsafe extern "C" fn(u32) -> bool,
-    hook_enable: unsafe extern "C" fn(u32) -> bool,
-    hook_created: unsafe extern "C" fn(u32) -> bool,
-    hook_disable: unsafe extern "C" fn(u32) -> bool,
-    hook_remove: unsafe extern "C" fn(u32) -> bool,
-    pin: unsafe extern "C" fn(),
-    drain: unsafe extern "C" fn(Renderer),
-    outstanding: unsafe extern "C" fn(Renderer) -> bool,
-    retired: unsafe extern "C" fn(Renderer) -> bool,
-    input_unhook: unsafe extern "C" fn(Renderer) -> bool,
-    controller_disable: unsafe extern "C" fn(),
-    controller_remove: unsafe extern "C" fn() -> bool,
-    truesky_restore: unsafe extern "C" fn(Renderer) -> bool,
 }
 
 impl NativeLeaves {
-    /// The table when every leaf is present. It logs nowhere until `log_to`.
-    ///
-    /// # Safety
-    /// `leaves` is null or valid for the call, and its leaves keep the contracts of ac7_sites.h.
-    unsafe fn new(leaves: *const rsf_ac7_renderer_leaves) -> Option<Self> {
-        let leaves = unsafe { leaves.as_ref() }?;
-        let mut code = unsafe { NativeCode::new(&leaves.code) }?;
+    fn new() -> Option<Self> {
+        let mut code = unsafe { NativeCode::new(&leaves::code_leaves(None, null_mut())) }?;
         code.view.log = None;
         code.view.user = null_mut();
         Some(Self {
             code,
-            base: leaves.base,
-            installed: leaves.installed?,
-            install: leaves.install?,
-            create: leaves.create?,
-            release: leaves.release?,
-            options: leaves.options?,
-            patches: leaves.patches?,
-            active: leaves.active?,
-            set_active: leaves.set_active?,
-            quiescing: leaves.quiescing?,
-            set_quiescing: leaves.set_quiescing?,
-            scopes_create: leaves.scopes_create?,
-            scopes_quiesce: leaves.scopes_quiesce?,
-            scopes_idle: leaves.scopes_idle?,
-            scopes_destroy: leaves.scopes_destroy?,
-            hooks_initialize: leaves.hooks_initialize?,
-            hook_bind: leaves.hook_bind?,
-            hook_create: leaves.hook_create?,
-            hook_enable: leaves.hook_enable?,
-            hook_created: leaves.hook_created?,
-            hook_disable: leaves.hook_disable?,
-            hook_remove: leaves.hook_remove?,
-            pin: leaves.pin?,
-            drain: leaves.drain?,
-            outstanding: leaves.outstanding?,
-            retired: leaves.retired?,
-            input_unhook: leaves.input_unhook?,
-            controller_disable: leaves.controller_disable?,
-            controller_remove: leaves.controller_remove?,
-            truesky_restore: leaves.truesky_restore?,
+            base: leaves::base(),
         })
     }
 
@@ -377,7 +315,7 @@ impl NativeLeaves {
         }
         // SAFETY: a nonnull renderer handed back by the lifecycle is live until stop deletes it,
         // and its options live inside it.
-        match unsafe { (self.options)(renderer).as_ref() } {
+        match unsafe { leaves::options(renderer).as_ref() } {
             Some(options) => self.log_to(options),
             None => self,
         }
@@ -400,95 +338,95 @@ impl Code for NativeLeaves {
     }
 }
 
-// SAFETY, for every call below: the leaves were lent for this call with the contracts of
-// ac7_sites.h, and a renderer argument is one the native side created and has not released.
+// SAFETY, for every call below: the leaves keep the contracts of native_renderer/leaves.rs, and a
+// renderer argument is one the native side created and has not released.
 impl Native for NativeLeaves {
     fn base(&self) -> *mut u8 {
         self.base
     }
     fn installed(&self) -> Renderer {
-        unsafe { (self.installed)() }
+        unsafe { leaves::installed() }
     }
     fn install(&self, renderer: Renderer) {
-        unsafe { (self.install)(renderer) }
+        unsafe { leaves::install(renderer) }
     }
     fn create(&self, options: &rsf_ac7_native_renderer_options) -> Renderer {
-        unsafe { (self.create)(options) }
+        unsafe { leaves::create(options) }
     }
     fn release(&self, renderer: Renderer) {
-        unsafe { (self.release)(renderer) }
+        unsafe { leaves::release(renderer) }
     }
     fn patches(&self, renderer: Renderer) -> *mut rsf_ac7_code_patches {
-        unsafe { (self.patches)(renderer) }
+        unsafe { leaves::patches(renderer) }
     }
     fn active(&self, renderer: Renderer) -> bool {
-        unsafe { (self.active)(renderer) }
+        unsafe { leaves::active(renderer) }
     }
     fn set_active(&self, renderer: Renderer, active: bool) {
-        unsafe { (self.set_active)(renderer, active) }
+        unsafe { leaves::set_active(renderer, active) }
     }
     fn quiescing(&self, renderer: Renderer) -> bool {
-        unsafe { (self.quiescing)(renderer) }
+        unsafe { leaves::quiescing(renderer) }
     }
     fn set_quiescing(&self, renderer: Renderer) {
-        unsafe { (self.set_quiescing)(renderer) }
+        unsafe { leaves::set_quiescing(renderer) }
     }
     fn scopes_create(&self, renderer: Renderer, capacity: u32) -> bool {
-        unsafe { (self.scopes_create)(renderer, capacity) }
+        unsafe { leaves::scopes_create(renderer, capacity) }
     }
     fn scopes_quiesce(&self, renderer: Renderer) {
-        unsafe { (self.scopes_quiesce)(renderer) }
+        unsafe { leaves::scopes_quiesce(renderer) }
     }
     fn scopes_idle(&self, renderer: Renderer) -> bool {
-        unsafe { (self.scopes_idle)(renderer) }
+        unsafe { leaves::scopes_idle(renderer) }
     }
     fn scopes_destroy(&self, renderer: Renderer) -> bool {
-        unsafe { (self.scopes_destroy)(renderer) }
+        unsafe { leaves::scopes_destroy(renderer) }
     }
     fn hooks_initialize(&self) -> bool {
-        unsafe { (self.hooks_initialize)() }
+        unsafe { leaves::hooks_initialize() }
     }
     fn hook_bind(&self, hook: u32, target: *mut u8) {
-        unsafe { (self.hook_bind)(hook, target) }
+        unsafe { leaves::hook_bind(hook, target) }
     }
     fn hook_create(&self, hook: u32) -> bool {
-        unsafe { (self.hook_create)(hook) }
+        unsafe { leaves::hook_create(hook) }
     }
     fn hook_enable(&self, hook: u32) -> bool {
-        unsafe { (self.hook_enable)(hook) }
+        unsafe { leaves::hook_enable(hook) }
     }
     fn hook_created(&self, hook: u32) -> bool {
-        unsafe { (self.hook_created)(hook) }
+        unsafe { leaves::hook_created(hook) }
     }
     fn hook_disable(&self, hook: u32) -> bool {
-        unsafe { (self.hook_disable)(hook) }
+        unsafe { leaves::hook_disable(hook) }
     }
     fn hook_remove(&self, hook: u32) -> bool {
-        unsafe { (self.hook_remove)(hook) }
+        unsafe { leaves::hook_remove(hook) }
     }
     fn pin(&self) {
-        unsafe { (self.pin)() }
+        unsafe { leaves::pin() }
     }
     fn drain(&self, renderer: Renderer) {
-        unsafe { (self.drain)(renderer) }
+        unsafe { leaves::drain(renderer) }
     }
     fn outstanding(&self, renderer: Renderer) -> bool {
-        unsafe { (self.outstanding)(renderer) }
+        unsafe { leaves::outstanding(renderer) }
     }
     fn retired(&self, renderer: Renderer) -> bool {
-        unsafe { (self.retired)(renderer) }
+        unsafe { leaves::retired(renderer) }
     }
     fn input_unhook(&self, renderer: Renderer) -> bool {
-        unsafe { (self.input_unhook)(renderer) }
+        unsafe { leaves::input_unhook(renderer) }
     }
     fn controller_disable(&self) {
-        unsafe { (self.controller_disable)() }
+        unsafe { leaves::controller_disable() }
     }
     fn controller_remove(&self) -> bool {
-        unsafe { (self.controller_remove)() }
+        unsafe { leaves::controller_remove() }
     }
     fn truesky_restore(&self, renderer: Renderer) -> bool {
-        unsafe { (self.truesky_restore)(renderer) }
+        unsafe { leaves::truesky_restore(renderer) }
     }
     fn guards_held(&self, outer_too: bool) -> u32 {
         rsf_ac7_guards_held(outer_too)
@@ -517,11 +455,10 @@ impl Native for NativeLeaves {
 /// installed renderer. A refusal here leaves `*out` untouched.
 ///
 /// # Safety
-/// `options` and `out` are null or valid for the call; see `NativeLeaves::new` for `leaves`.
+/// `options` and `out` are null or valid for the call.
 pub(crate) unsafe fn rsf_ac7_renderer_prepare(
     options: *const rsf_ac7_native_renderer_options,
     out: *mut Renderer,
-    leaves: *const rsf_ac7_renderer_leaves,
 ) -> bool {
     if options.is_null()
         || unsafe { options.cast::<u32>().read() }
@@ -534,7 +471,7 @@ pub(crate) unsafe fn rsf_ac7_renderer_prepare(
     if options.session_id == 0 {
         return false;
     }
-    let Some(native) = (unsafe { NativeLeaves::new(leaves) }) else {
+    let Some(native) = NativeLeaves::new() else {
         return false;
     };
     let native = native.log_to(options);
@@ -548,44 +485,32 @@ pub(crate) unsafe fn rsf_ac7_renderer_prepare(
 }
 
 /// # Safety
-/// `renderer` is null or live; see `NativeLeaves::new` for `leaves`.
-pub(crate) unsafe fn rsf_ac7_renderer_start(
-    renderer: Renderer,
-    leaves: *const rsf_ac7_renderer_leaves,
-) -> bool {
+/// `renderer` is null or live.
+pub(crate) unsafe fn rsf_ac7_renderer_start(renderer: Renderer) -> bool {
     !renderer.is_null()
-        && unsafe { NativeLeaves::new(leaves) }
+        && NativeLeaves::new()
             .is_some_and(|native| start(&native.log_to_renderer(renderer), renderer))
 }
 
 /// # Safety
 /// As `rsf_ac7_renderer_start`.
-pub(crate) unsafe fn rsf_ac7_renderer_is_active(
-    renderer: Renderer,
-    leaves: *const rsf_ac7_renderer_leaves,
-) -> bool {
-    unsafe { NativeLeaves::new(leaves) }.is_some_and(|native| is_active(&native, renderer))
+pub(crate) unsafe fn rsf_ac7_renderer_is_active(renderer: Renderer) -> bool {
+    NativeLeaves::new().is_some_and(|native| is_active(&native, renderer))
 }
 
 /// # Safety
 /// As `rsf_ac7_renderer_start`.
-pub(crate) unsafe fn rsf_ac7_renderer_quiesce(
-    renderer: Renderer,
-    leaves: *const rsf_ac7_renderer_leaves,
-) {
-    if let Some(native) = unsafe { NativeLeaves::new(leaves) } {
+pub(crate) unsafe fn rsf_ac7_renderer_quiesce(renderer: Renderer) {
+    if let Some(native) = NativeLeaves::new() {
         quiesce(&native, renderer);
     }
 }
 
 /// # Safety
 /// As `rsf_ac7_renderer_start`.
-pub(crate) unsafe fn rsf_ac7_renderer_stop(
-    renderer: Renderer,
-    leaves: *const rsf_ac7_renderer_leaves,
-) -> bool {
+pub(crate) unsafe fn rsf_ac7_renderer_stop(renderer: Renderer) -> bool {
     renderer.is_null()
-        || unsafe { NativeLeaves::new(leaves) }
+        || NativeLeaves::new()
             .is_some_and(|native| stop(&native.log_to_renderer(renderer), renderer))
 }
 
