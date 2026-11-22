@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include <rescaleframe/frame_generation.h>
-#include "sr_helpers.h"
 #include <dxgi1_4.h>
-extern "C" rsf_backend_result rsf_core_fg12_frame(const rsf_fg_frame*, void*,
-    int (*allows_fg)(const rsf_frame_record*), int (*rendered)(const rsf_frame_record*));
+extern "C" rsf_backend_result rsf_core_fg12_frame(const rsf_fg_frame*, void*);
 extern "C" rsf_backend_result rsf_core_fg12_command(void*, void*);
 extern "C" rsf_backend_result rsf_core_fg12_setup_header(const rsf_generation_setup*, void**, void**);
 extern "C" void rsf_core_fg12_chain_description(const rsf_fg_swapchain_desc*, DXGI_SWAP_CHAIN_DESC1*);
@@ -17,7 +15,7 @@ inline rsf_backend_result fg_setup_header(const rsf_generation_setup* setup, voi
 }
 inline rsf_backend_result fg_frame(const rsf_fg_frame* frame, void* device)
 {
-    return rsf_core_fg12_frame(frame, device, rsf_frame_allows_fg, rsf_frame_has_rendered_source);
+    return rsf_core_fg12_frame(frame, device);
 }
 inline rsf_backend_result fg_command(void* command, void* device)
 {

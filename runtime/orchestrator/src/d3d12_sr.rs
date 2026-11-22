@@ -3,7 +3,7 @@
 use crate::allocate_handle;
 use crate::ffx_version::{MAX_VERSIONS, Version as ProviderVersion};
 use crate::render_abi::{rsf_sr_frame as Frame, rsf_sr_open_desc as Open};
-use crate::sdk_module::SdkModule;
+use crate::sdk_module::{SdkModule, d3d12_library_path, load_system_library};
 use std::ffi::{c_char, c_void};
 use std::mem::MaybeUninit;
 use std::ptr::null_mut;
@@ -257,40 +257,15 @@ pub(super) fn validate_resources(device: Raw, frame: &Frame) -> i32 {
 }
 
 fn load_runtime(desc: &Open, name: &str) -> Option<SdkModule> {
-    use windows_sys::Win32::Foundation::GetLastError;
-    use windows_sys::Win32::System::LibraryLoader::{
-        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
-    };
-
     if desc.runtime_directory_utf8.is_null() {
         return None;
     }
     let directory = unsafe { std::ffi::CStr::from_ptr(desc.runtime_directory_utf8) }
         .to_str()
         .ok()?;
-    const COLON: u16 = b':' as u16;
-    const SLASH: u16 = b'/' as u16;
-    const BACKSLASH: u16 = b'\\' as u16;
-    let mut wide: Vec<u16> = directory.encode_utf16().take(1024).collect();
-    if wide.len() == 1024
-        || !matches!(
-            wide.as_slice(),
-            [_, COLON, BACKSLASH | SLASH, ..] | [BACKSLASH, BACKSLASH, ..]
-        )
-    {
-        return None;
-    }
-    wide.push(BACKSLASH);
-    wide.extend(name.encode_utf16().chain([0]));
-    let module = unsafe {
-        LoadLibraryExW(
-            wide.as_ptr(),
-            null_mut(),
-            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
-        )
-    };
+    let path = d3d12_library_path(directory, name.encode_utf16())?;
+    let (module, error) = unsafe { load_system_library(&path) };
     if module.is_null() {
-        let error = unsafe { GetLastError() };
         crate::input_dump::Log::new(desc.log, desc.log_user).say(&format!(
             "could not load {directory}\\{name} (Windows error {error})"
         ));

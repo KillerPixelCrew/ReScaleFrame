@@ -2,11 +2,15 @@
 use super::*;
 use crate::d3d12_host::{borrow, owned_by};
 use crate::render_abi::{RSF_BACKEND_ABI_VERSION, rsf_fg_swapchain_desc};
+use crate::sdk_module::{d3d12_library_path, load_system_library};
+use rsf_game_sys::frame_policy::{rsf_frame_allows_fg, rsf_frame_has_rendered_source};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_RESET, RSF_FRAME_SOURCE_RENDERED,
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_camera_frame,
 };
+use std::ffi::CStr;
 use windows::Win32::Graphics::Direct3D12::*;
+use windows::core::PCWSTR;
 
 const UI_COMPLETE: u32 = 5;
 // The existing FG ABI admission cutoff, rounded to f32.
@@ -99,12 +103,7 @@ fn frame_resource(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fg12_frame(
-    frame: *const Frame,
-    device: Raw,
-    allows_fg: unsafe extern "C" fn(*const Record) -> i32,
-    has_rendered_source: unsafe extern "C" fn(*const Record) -> i32,
-) -> i32 {
+unsafe extern "C" fn rsf_core_fg12_frame(frame: *const Frame, device: Raw) -> i32 {
     if !unsafe { sized(frame) } {
         return INVALID;
     }
@@ -131,7 +130,7 @@ unsafe extern "C" fn rsf_core_fg12_frame(
         return INVALID;
     }
     let rendered = record.source_provenance == RSF_FRAME_SOURCE_RENDERED
-        && unsafe { has_rendered_source(record) } != 0;
+        && unsafe { rsf_frame_has_rendered_source(record) } != 0;
     if record.source_provenance > RSF_FRAME_SOURCE_RENDERED
         || (record.source_provenance == RSF_FRAME_SOURCE_RENDERED && !rendered)
     {
@@ -144,7 +143,7 @@ unsafe extern "C" fn rsf_core_fg12_frame(
         || record.resource_generation == 0
         || (record.input_qpc == 0 && !rendered)
         || record.phase != UI_COMPLETE
-        || unsafe { allows_fg(record) } == 0
+        || unsafe { rsf_frame_allows_fg(record) } == 0
         || record.flags & (RSF_FRAME_FLAG_RESET | RSF_FRAME_FLAG_AMBIGUOUS_ID) != 0
     {
         return NOT_READY;
@@ -226,20 +225,38 @@ unsafe extern "C" fn check_setup(setup: *const Setup, out: *mut Raw, chain: *mut
     }
 }
 
+unsafe extern "C" fn load_library(setup: &Setup, name: *const u16) -> Raw {
+    if setup.runtime_directory_utf8.is_null() || name.is_null() {
+        return null_mut();
+    }
+    let Ok(directory) = unsafe { CStr::from_ptr(setup.runtime_directory_utf8) }.to_str() else {
+        return null_mut();
+    };
+    let name = unsafe { PCWSTR(name).as_wide() };
+    let Some(path) = d3d12_library_path(directory, name.iter().copied()) else {
+        return null_mut();
+    };
+    let (module, error) = unsafe { load_system_library(&path) };
+    if module.is_null() {
+        let path = String::from_utf16_lossy(&path[..path.len() - 1]);
+        let message = format!("could not load {path} (Windows error {error})");
+        // The legacy C++ diagnostic used a 512-byte buffer including NUL.
+        let end = message.floor_char_boundary(511.min(message.len()));
+        crate::input_dump::Log::new(setup.chain.log, setup.chain.log_user).say(&message[..end]);
+    }
+    module
+}
+
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_fg12_generation_checks(
-    frame: unsafe extern "C" fn(*const Frame, Raw) -> i32,
-    load_library: unsafe extern "C" fn(&Setup, *const u16) -> Raw,
-) -> *const Checks {
-    // FidelityFX and XeSS use the same header-defined native loader and SDK frame predicates.
-    static CHECKS: std::sync::OnceLock<Checks> = std::sync::OnceLock::new();
-    CHECKS.get_or_init(|| Checks {
+extern "C" fn rsf_core_fg12_generation_checks() -> *const Checks {
+    static CHECKS: Checks = Checks {
         setup: check_setup,
-        frame,
+        frame: rsf_core_fg12_frame,
         command: rsf_core_fg12_command,
         streamline_loaded: rsf_core_fg12_streamline_loaded,
         load_library,
-    })
+    };
+    &CHECKS
 }
 
 #[unsafe(no_mangle)]

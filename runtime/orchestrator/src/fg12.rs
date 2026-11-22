@@ -96,13 +96,9 @@ static PLATFORM: OnceLock<&'static Platform> = OnceLock::new();
 mod native;
 
 #[cfg(not(test))]
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_fg12_platform_bind() {
+pub(super) fn bind_native_platform() {
     PLATFORM.get_or_init(|| &native::CALLS);
 }
-
-#[cfg(not(test))]
-pub(super) use rsf_fg12_platform_bind as bind_native_platform;
 
 macro_rules! native {
     ($operation:ident($($argument:expr),* $(,)?)) => {

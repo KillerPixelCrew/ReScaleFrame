@@ -4,7 +4,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::ptr::{NonNull, null_mut};
 use windows_sys::Win32::{
-    Foundation::{FARPROC, FreeLibrary},
+    Foundation::{FARPROC, FreeLibrary, GetLastError},
     System::LibraryLoader::{
         GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExW,
         GetProcAddress, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32,
@@ -38,6 +38,46 @@ pub(super) unsafe fn wide_path(path: *const c_char) -> Option<Vec<u16>> {
     }
     let path = unsafe { CStr::from_ptr(path) }.to_str().ok()?;
     (!path.is_empty()).then(|| path.encode_utf16().chain([0]).collect())
+}
+
+// D3D12 provider packages use a bounded absolute drive or UNC directory and
+// append their DLL name verbatim. The bound includes the terminating NUL.
+pub(super) fn d3d12_library_path(
+    directory: &str,
+    name: impl Iterator<Item = u16>,
+) -> Option<Vec<u16>> {
+    const DIRECTORY_CAPACITY: usize = 1024;
+    const PATH_CAPACITY: usize = 1200;
+    const COLON: u16 = b':' as u16;
+    const SLASH: u16 = b'/' as u16;
+    const BACKSLASH: u16 = b'\\' as u16;
+    let mut path: Vec<u16> = directory.encode_utf16().take(DIRECTORY_CAPACITY).collect();
+    if path.len() == DIRECTORY_CAPACITY
+        || !matches!(
+            path.as_slice(),
+            [_, COLON, BACKSLASH | SLASH, ..] | [BACKSLASH, BACKSLASH, ..]
+        )
+    {
+        return None;
+    }
+    path.push(BACKSLASH);
+    path.extend(name.take(PATH_CAPACITY - path.len()));
+    if path.len() == PATH_CAPACITY {
+        return None;
+    }
+    path.push(0);
+    Some(path)
+}
+
+// The caller supplies a NUL-terminated absolute path from d3d12_library_path.
+pub(super) unsafe fn load_system_library(path: &[u16]) -> (*mut c_void, u32) {
+    let module = unsafe { rsf_core_vk_sdk_load(path.as_ptr()) };
+    let error = if module.is_null() {
+        unsafe { GetLastError() }
+    } else {
+        0
+    };
+    (module, error)
 }
 
 pub(super) struct SdkModule {

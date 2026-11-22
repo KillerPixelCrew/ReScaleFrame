@@ -7914,8 +7914,11 @@ and the Vulkan input dump exports resolve directly to Rust.
 [D04 and G07 source evidence](research/rust-capture-native-followup.md#d04-and-g07-capture-ownership-at-6cb0c169)
 records the preserved submission and retirement order. The
 [D04 source record](research/d04-d3d12-host-port.md) lists all five paths and
-the remaining native adapters. Follow-up verification covers source review,
-binding regeneration, pinned formatting and locked offline metadata. Build,
+the remaining native adapters. FSR and XeSS now bind the Rust admission
+and loader table directly. The native D3D12 fence and Streamline descriptor
+adapters keep their existing defaults. Follow-up verification covers source
+review, focused syntax, binding regeneration, pinned formatting and locked
+offline metadata. Build,
 test, lint and device execution remain pending.
 
 ### Vulkan SR native port follow-up (V01)

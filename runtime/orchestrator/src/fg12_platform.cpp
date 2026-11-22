@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include "fg12_platform.h"
+#include <rescaleframe/d3d11_present_bridge.h>
 
 extern "C" void rsf_fg12_capture_attach();
 extern "C" void rsf_fg12_capture_detach();

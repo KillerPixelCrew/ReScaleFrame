@@ -14,10 +14,6 @@ typedef struct rsf_fg12_texture_desc {
     uint64_t width;
     uint32_t height, format;
 } rsf_fg12_texture_desc;
-/* Registers the table below once. Owners that hand inputs to FG12 inside the Rust core call it
-   first, exactly as the public FG12 entries do. */
-void rsf_fg12_platform_bind(void);
-
 /* Registered by the full presentation host. CPU-only binaries link the same Rust
    archive without pulling the DXGI facade or vendor backend objects. */
 typedef struct rsf_fg12_calls {

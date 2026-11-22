@@ -76,6 +76,35 @@ parameters. Rust 1.94.1 formatting, bindgen 0.72.1 regeneration of the FG12 ABI
 and locked offline Windows Cargo metadata were checked. Link, test and device
 verification are pending.
 
+## Typed provider admission and loader at fb27ab2f
+
+This pass starts from the D04/G07 capture cutover c7265405 and the shared
+GameSDK policy at 935757d5, both present at fb27ab2f. It applies a fresh
+source change with no cherry-picks.
+
+| D04 checklist path | Source evidence |
+| --- | --- |
+| runtime/backends/common/generation12_checks.h | Exposes a C declaration for the five-slot Rust table in d3d12_generation/admission.rs. The FSR provider and FSR4 capability probe in runtime/backends/fsr/src/fsr_generation.cpp and the XeSS provider in runtime/backends/xess/src/xess_generation.cpp call it solely under their existing SDK gates. The disabled calls still pass null and FSR retains its capture platform pointer. |
+| runtime/backends/common/fg_helpers.h | The D06 Streamline descriptor, setup, command and SDK-off adapters call the existing Rust entry points. Frame admission uses the same GameSDK predicates directly from Rust, with the established invalid, stale and not-ready precedence. The C++ SDK descriptor and other vendor leaves stay in their existing owners. |
+| runtime/backends/common/d3d12_helpers.h | Removes the unused C++ forwards for barriers, copies, lists and UAVs. Streamline and the Vulkan FidelityFX bridge retain the typed fence adapter with the same 10-second default, raw fence value and HRESULT. |
+| runtime/orchestrator/src/fg12_platform.cpp | Includes the presentation ABI directly. The explicit versus implicit install call remains inside its C++ exception boundary. The original module attach and detach hooks still enclose the Rust capture owner. FG12 binding is now a Rust-only function. |
+
+sdk_module.rs shares the D3D12 drive/UNC path and Windows loader with D07
+super resolution. Provider file names retain the 1,024 UTF-16 directory
+and 1,200 UTF-16 full-path limits from generation12_checks.h's legacy
+loader chain. LoadLibraryExW keeps the provider directory and System32
+search flags. FG retains its callback, the 511-byte diagnostic limit and
+the Windows error number. Non-ASCII paths in these diagnostics are now
+emitted as UTF-8, truncated at a complete character. Path refusal remains
+silent. No change was made to module adoption, partial binding cleanup,
+primary/latency module ordering or SDK teardown.
+
+MSVC 18 x64 /Zs /W4 /WX parsed the FG12 boundary and the FSR, XeSS and
+Streamline FG translation units with their SDK gates enabled and disabled.
+Rust 1.94.1 formatting, byte-for-byte bindgen 0.72.1 reproduction of the
+FG12 and XeLL bindings, and locked offline Windows Cargo metadata with all
+features passed. Link and runtime checks remain pending.
+
 ## Initial port verification
 
 - Pinned Rust 1.94.1 rustfmt checked the changed Rust sources. Bindgen CLI
