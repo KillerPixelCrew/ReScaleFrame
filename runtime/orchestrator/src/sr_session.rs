@@ -60,7 +60,6 @@ pub(crate) fn valid_unit_scale(units_to_meters: f32) -> bool {
 pub(crate) use rsf_game_sys::ffi_util::{checked, has_capacity};
 
 // Shared wire validation for direct provider calls, sessions and the D3D11 bridge.
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_validate_sr_frame(frame: *const rsf_sr_frame) -> i32 {
     let Some(frame) = (unsafe { checked(frame) }) else {
         return INVALID_ARGUMENT;

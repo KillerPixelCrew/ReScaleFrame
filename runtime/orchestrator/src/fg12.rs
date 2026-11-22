@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: MIT
+// The owner is reached through the native platform, which unit tests do not build; they cover
+// the retirement policy only.
+#![cfg_attr(test, allow(dead_code))]
 use crate::com_ref::ComRef;
 use crate::fg_leases::{FencePoint, FenceState};
 use crate::sr_session::{checked, has_capacity};
@@ -476,12 +479,10 @@ unsafe fn install(request: *const rsf_fg12_setup, explicit: bool) -> i32 {
     OK
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_fg12_install(request: *const rsf_fg12_setup) -> i32 {
     unsafe { install(request, false) }
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_fg12_install_explicit(
     request: *const rsf_fg12_setup,
 ) -> i32 {
@@ -533,14 +534,12 @@ unsafe extern "C" fn cpu_fact(_: *mut c_void, event: *const rsf_game_cpu_event) 
     }
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_fg12_cpu(event: *const rsf_game_cpu_event) {
     if unsafe { native!(has_owner()) } != 0 {
         unsafe { native!(cpu_dispatch(event, Some(cpu_fact), null_mut())) };
     }
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_fg12_latency(event: *const rsf_game_latency_event) -> i32 {
     let Some(event) = (unsafe { checked(event) }).filter(|event| event.session_id != 0) else {
         return INVALID_ARGUMENT;
@@ -598,7 +597,6 @@ fn start_render(timing: &mut Cpu, frame: Frame) {
     }
 }
 
-#[unsafe(no_mangle)]
 extern "C" fn rsf_core_fg12_render_begin(session: u64, id: u64) -> i32 {
     if session == 0 || id == 0 {
         return INVALID_ARGUMENT;
@@ -613,7 +611,6 @@ extern "C" fn rsf_core_fg12_render_begin(session: u64, id: u64) -> i32 {
     OK
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fg12_capture(
     list: *mut c_void,
     record: *const rsf_frame_record,
@@ -710,7 +707,6 @@ pub(crate) unsafe fn handoff_inputs(
     unsafe { rsf_core_fg12_capture(list, record, depth, motion) };
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_fg12_hudless(
     list: *mut c_void,
     pass: *const rsf_game_render_pass,
@@ -778,7 +774,6 @@ pub(super) unsafe extern "C" fn rsf_core_fg12_hudless(
     slot.pending_copy = true;
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_fg12_window(pass: *const rsf_game_render_pass) {
     let Some(pass) = (unsafe { checked(pass) }) else {
         return;
@@ -796,7 +791,6 @@ pub(super) unsafe extern "C" fn rsf_core_fg12_window(pass: *const rsf_game_rende
     start_render(&mut owner.cpu[view.frame.index(CPU_SLOTS)], view.frame);
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_fg12_submitted(session: u64, id: u64) {
     if id == 0 {
         return;
@@ -1233,7 +1227,6 @@ unsafe extern "C" fn retire(_: *mut c_void, context: *mut c_void) {
     }
 }
 
-#[unsafe(no_mangle)]
 extern "C" fn rsf_core_fg12_end_session(session: u64) -> i32 {
     if session == 0 {
         return 0;
@@ -1318,17 +1311,14 @@ unsafe fn status_snapshot(output: *mut rsf_native_fg_status, wait: bool) -> i32 
     1
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_fg12_status(output: *mut rsf_native_fg_status) -> i32 {
     unsafe { status_snapshot(output, true) }
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_fg12_status_try(output: *mut rsf_native_fg_status) -> i32 {
     unsafe { status_snapshot(output, false) }
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_fg12_options(request: *const rsf_native_fg_options) {
     let Some(request) = (unsafe { checked(request) }) else {
         return;
@@ -1340,7 +1330,6 @@ pub(super) unsafe extern "C" fn rsf_core_fg12_options(request: *const rsf_native
     OWNER.lock().unwrap().options = *request;
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_fg12_capture_outputs(directory: *const c_char) -> i32 {
     if directory.is_null() {
         return INVALID_ARGUMENT;

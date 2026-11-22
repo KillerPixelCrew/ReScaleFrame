@@ -547,12 +547,10 @@ pub(super) unsafe extern "C" fn rsf_core_capture12_destroy(owner: *mut Owner) {
     }
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_capture12_enabled(owner: *const Owner) -> i32 {
     i32::from(unsafe { self::owner(owner) }.is_some_and(|owner| owner.enabled()))
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_capture12_configure(
     owner: *const Owner,
     path: *const c_char,
@@ -570,7 +568,6 @@ pub(super) unsafe extern "C" fn rsf_core_capture12_wants(owner: *const Owner, fr
     i32::from(unsafe { self::owner(owner) }.is_some_and(|owner| owner.wants(frame)))
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_capture12_force_reset(
     owner: *const Owner,
     frame: u64,
@@ -650,7 +647,6 @@ pub(super) unsafe extern "C" fn rsf_core_capture12_flush(
     })
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_capture12_submitted(
     owner: *const Owner,
     queue: Handle,
@@ -662,7 +658,6 @@ pub(super) unsafe extern "C" fn rsf_core_capture12_submitted(
     })
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_capture12_abandon(owner: *const Owner, slot: u32) {
     if let Some(owner) = unsafe { self::owner(owner) } {
         owner.abandon(slot);

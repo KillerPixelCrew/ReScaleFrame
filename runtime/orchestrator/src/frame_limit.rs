@@ -27,7 +27,6 @@ static DISPLAY: Mutex<Display> = Mutex::new(Display {
 });
 static PACING_REFRESH: AtomicU32 = AtomicU32::new(0);
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_core_overlay_refresh_mhz(window: *mut c_void) -> u32 {
     if window.is_null() {
         return 0;

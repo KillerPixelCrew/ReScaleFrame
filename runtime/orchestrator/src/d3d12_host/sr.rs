@@ -9,7 +9,6 @@ use windows::Win32::Graphics::{
     Dxgi::{CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIAdapter1, IDXGIFactory4},
 };
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_core_sr12_adapter_identity(
     device: Raw,
     vendor: *mut u32,
@@ -144,7 +143,6 @@ fn normalization_shader(log: rsf_backend_log_fn, user: Raw) -> Option<Vec<u8>> {
     None
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_core_sr12_create_pipeline(
     device: Raw,
     log: rsf_backend_log_fn,
@@ -181,7 +179,6 @@ pub(crate) unsafe extern "C" fn rsf_core_sr12_create_pipeline(
     1
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_core_sr12_create_heap(device: Raw) -> Raw {
     let device: &ID3D12Device = unsafe { borrow(&device) };
     let desc = D3D12_DESCRIPTOR_HEAP_DESC {
@@ -196,7 +193,6 @@ pub(crate) unsafe extern "C" fn rsf_core_sr12_create_heap(device: Raw) -> Raw {
     .map_or(null_mut(), Interface::into_raw)
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_core_sr12_create_exposure_texture(device: Raw) -> Raw {
     let desc = texture_desc(1, 1, DXGI_FORMAT_R32_FLOAT);
     committed_resource(
@@ -229,7 +225,6 @@ fn buffer(
     committed_resource(device, heap, &desc, state)
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_core_sr12_create_exposure_upload(
     device: Raw,
     bytes: u64,
@@ -242,7 +237,6 @@ pub(crate) unsafe extern "C" fn rsf_core_sr12_create_exposure_upload(
     )
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_core_sr12_create_readback(device: Raw, bytes: u64) -> Raw {
     buffer(
         unsafe { borrow(&device) },
@@ -252,7 +246,6 @@ pub(crate) unsafe extern "C" fn rsf_core_sr12_create_readback(device: Raw, bytes
     )
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_core_sr12_owned_by(child: Raw, device: Raw) -> i32 {
     i32::from(owned_by(unsafe { borrow(&child) }, device))
 }

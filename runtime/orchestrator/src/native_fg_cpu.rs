@@ -390,6 +390,8 @@ pub(crate) fn progress(p: &Platform, source: u64) -> (bool, bool) {
     }
 }
 
+// Called by the fg12 owner, which unit tests do not reach.
+#[cfg_attr(test, allow(dead_code))]
 pub(super) fn retire_unsubmitted(session: u64, id: u64, abort_token: impl Fn(u64) -> i32) {
     let source = Source { session, id };
     for frame in &mut lock(&LEDGER).frames {

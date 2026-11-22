@@ -21,7 +21,6 @@ unsafe fn sized<T>(raw: *const T) -> bool {
     !raw.is_null() && unsafe { raw.cast::<u32>().read() } as usize >= size_of::<T>()
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fg12_setup(setup: *const Setup) -> i32 {
     let setup = unsafe { &*setup };
     let chain = &setup.chain;
@@ -184,7 +183,6 @@ unsafe extern "C" fn rsf_core_fg12_frame(frame: *const Frame, device: Raw) -> i3
     OK
 }
 
-#[unsafe(no_mangle)]
 extern "C" fn rsf_core_fg12_streamline_loaded() -> u32 {
     use windows::core::w;
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;

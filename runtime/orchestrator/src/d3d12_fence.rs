@@ -84,7 +84,6 @@ pub(super) fn wait_for_value(
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_core_d3d12_wait_fence(
     fence: Handle,
     value: u64,

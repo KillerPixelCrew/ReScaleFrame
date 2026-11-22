@@ -33,6 +33,7 @@ mod tests;
 
 // ABI values consumed by the SR planner and normalization pass.
 const MAX_QUALITY: u32 = 5;
+#[cfg(not(test))]
 const PLAN_ABI_VERSION: u32 = 1;
 
 const RG32_FLOAT: u32 = 16;
@@ -1305,7 +1306,6 @@ unsafe extern "C" fn rsf_core_sr12_create_planned_native(
     }
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_sr12_create(
     setup: *const Setup,
     out: *mut *mut Sr12,
@@ -1342,6 +1342,7 @@ extern "C" fn rsf_core_sr12_quality_supported(backend: u32, quality: u32) -> u32
     )
 }
 
+#[cfg(not(test))]
 unsafe fn create_checked(setup: &Setup, platform: &'static Platform) -> Result<Sr12, i32> {
     if rsf_core_sr12_quality_supported(setup.backend, setup.quality) == 0 {
         return Err(INVALID_ARGUMENT);
@@ -1357,7 +1358,7 @@ unsafe fn create_checked(setup: &Setup, platform: &'static Platform) -> Result<S
     Ok(owner)
 }
 
-#[unsafe(no_mangle)]
+#[cfg(not(test))]
 unsafe extern "C" fn rsf_core_sr12_create_planned(
     setup: *const Setup,
     plan: *mut PlanResult,

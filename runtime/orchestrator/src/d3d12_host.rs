@@ -62,6 +62,7 @@ pub(super) fn committed_resource(
     resource.map_or(null_mut(), Interface::into_raw)
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(super) fn texture_desc(width: u32, height: u32, format: DXGI_FORMAT) -> D3D12_RESOURCE_DESC {
     D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
@@ -90,7 +91,6 @@ fn transition(
     }
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_d3d12_transition(
     list: Raw,
     resource: Raw,
@@ -152,7 +152,7 @@ pub(super) unsafe extern "C" fn rsf_core_d3d12_copy_transitioned(
     );
 }
 
-#[unsafe(no_mangle)]
+#[cfg(not(test))]
 pub(super) unsafe extern "C" fn rsf_core_d3d12_create_uav_texture(
     device: Raw,
     width: u32,
@@ -192,4 +192,6 @@ pub(super) unsafe extern "C" fn rsf_core_d3d12_wait_native_fence(
 }
 
 pub(super) mod fg;
+// Called only by sr12's native platform, which unit tests do not build.
+#[cfg(not(test))]
 pub(super) mod sr;
