@@ -3,6 +3,8 @@
 mod adapter_options;
 #[cfg(windows)]
 mod bootstrap;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod bootstrap_abi;
 mod camera;
 #[cfg(windows)]
 mod capture_clock;
@@ -58,6 +60,8 @@ mod overlay_abi;
 mod overlay_hooks;
 #[cfg(windows)]
 mod overlay_native;
+#[cfg(all(windows, feature = "native-entry"))]
+mod plugin_entry;
 #[cfg(windows)]
 mod runtime_module;
 mod shader_family;
@@ -88,11 +92,7 @@ const ABI_MISMATCH: i32 = -2;
 const AMD64: u16 = 0x8664;
 const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
 
-#[repr(C)]
-struct BuildIdentity {
-    executable: *const c_char,
-    sha256: *const c_char,
-}
+use bootstrap_abi::rsf_anomaly_build_identity as BuildIdentity;
 
 fn match_build(builds: &[BuildIdentity], executable: &[u8], sha256: &[u8]) -> Option<usize> {
     builds.iter().position(|build| {

@@ -58,3 +58,69 @@ the generated SDK option layout. The public headers used by bindgen and
 the observer platform record are unchanged. Pinned Rust 1.94.1 formatting
 and `git diff --check` passed. Builds, fixture execution, lint and
 device or game verification remain open.
+
+## Native entry and fixture follow-up from `82b39a63`
+
+Rust now publishes the GameSDK, cold-start and observation exports.
+The adapter's module definition declares the existing names and ordinals
+1 through 3. The DLL links the feature-enabled Rust archive and the
+native fixture targets link archives without the DLL-only entry points.
+The generated bootstrap platform record supplies the existing exact
+profile table and downstream stage interfaces.
+
+Cold startup installs the DirectInput observation hook, publishes its
+receipt callback, and only then attempts the guarded CInput slot. Retry
+state covers all three operations. The Rust fixture observes the order
+and verifies one receipt publication when the engine slot needs a
+second attempt. The overlay and the SR and motion stage owners still
+provide their existing interfaces.
+
+Rust reads and extracts the DOS and NT header facts. The Win32 header
+types preserve the full read extent. Hook installation uses the
+mapped-region check and the exception-contained copy; observer
+preparation uses the exception-contained copy and verifies the exact
+profile and mapped instruction guards separately. The native observer
+detours keep their C++ invocation lifetime and original-call order so
+a foreign exception cannot cross into Rust. The native host-log leaf
+still catches foreign exceptions.
+
+| PORT path | Disposition |
+| --- | --- |
+| `games/anomaly/src/bootstrap.cpp` | Removed. Rust owns the export and input observation order. `bootstrap_platform.cpp` binds the native profile and stage calls. |
+| `games/anomaly/src/plugin.cpp` | Removed. Rust publishes the entry point and lifecycle callbacks using the existing GameSDK ABI. |
+| `games/anomaly/src/native_hooks.cpp` | PE projection and mapped-read policy are in Rust. The C++ HookSet facade and typed MinHook and guarded-copy calls remain. |
+| `tests/anomaly_plugin.cpp` and `tests/anomaly_lifecycle.cpp` | Removed. The existing GameSDK fixture archive loads the actual DLL and runs the recognition and lifecycle cases. The plugin contract also checks the three export ordinals. |
+| `tests/anomaly_native_hooks.cpp` | Removed. Rust owns the guarded-copy, live detour, concurrent retirement, mapping and profile checks. `anomaly_native_hook_leaves.cpp` supplies the compiler-emitted functions and exact profile banks. |
+| `tests/anomaly_bootstrap.cpp` | Closed by the earlier Rust subprocess port. |
+
+The following PORT paths remain open:
+
+- `games/anomaly/src/build_profile.h` and
+  `games/anomaly/src/native_profile.h` still supply the exact build
+  tables to the native input, geometry, motion and SR callers.
+- `games/anomaly/src/engine_guards.h`,
+  `games/anomaly/src/engine_slots.h`,
+  `games/anomaly/src/native_hook_ops.h`,
+  `games/anomaly/src/native_hooks.h`,
+  `games/anomaly/src/native_memory.h`,
+  `games/anomaly/src/native_observer.h`,
+  `games/anomaly/src/native_observer_platform.h` and
+  `games/anomaly/src/runtime_module.h` retain the native declarations,
+  typed MinHook calls and fault-contained copy and slot exchange.
+- `games/anomaly/src/native_observer_platform.cpp` still assembles
+  native detour sites, reads camera samples through the SEH leaf,
+  invokes engine originals and reports native stage diagnostics.
+- `tests/anomaly_build_select.h` still serves the native SR and
+  geometry fixture hosts.
+- `games/anomaly/temporal/frame_plan.h`,
+  `games/anomaly/temporal/history.h`, `games/anomaly/temporal/math.h`
+  and `games/anomaly/temporal/planning.h` still serve the native
+  temporal, motion, SR jitter and geometry callers and fixtures.
+
+Targeted bootstrap bindings were regenerated with bindgen 0.72.1.
+The full generator stops on the existing D3D11 SR admission invocation,
+which lacks the SDK include path for `rescaleframe/game_frame.h`.
+Checked source declarations, preserved CTest targets, scoped the two
+feature archives, ran Rust 1.94.1 formatting, locked offline Cargo
+metadata and `git diff --check`. Build, test execution, lint and
+device or game verification remain user-owned.

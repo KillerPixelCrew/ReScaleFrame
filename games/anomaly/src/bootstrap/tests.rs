@@ -6,6 +6,7 @@ static REGISTERED: AtomicU32 = AtomicU32::new(0);
 static SR: AtomicU32 = AtomicU32::new(0);
 static MOTION: AtomicU32 = AtomicU32::new(0);
 static FG: AtomicU32 = AtomicU32::new(0);
+static PUBLISHED: AtomicU32 = AtomicU32::new(0);
 static RECEIPTS: AtomicU32 = AtomicU32::new(0);
 static INPUT_ACCEPTS: AtomicBool = AtomicBool::new(false);
 static INPUT: AtomicU32 = AtomicU32::new(0);
@@ -57,8 +58,14 @@ unsafe extern "C" fn input_observation(_: *mut *const c_char) -> bool {
     RECEIPTS.fetch_add(1, SeqCst);
     true
 }
-unsafe extern "C" fn input_hook(_: usize, _: *mut *const c_char) -> bool {
-    INPUT.fetch_add(1, SeqCst);
+unsafe extern "C" fn publish_input_observer() {
+    PUBLISHED.fetch_add(1, SeqCst);
+}
+unsafe extern "C" fn input_hook(_: HMODULE, _: usize, _: *mut *const c_char) -> bool {
+    let attempt = INPUT.fetch_add(1, SeqCst);
+    if attempt <= 1 && PUBLISHED.load(SeqCst) != 1 {
+        OPTIONS_VALID.store(false, SeqCst);
+    }
     INPUT_ACCEPTS.load(SeqCst)
 }
 unsafe extern "C" fn overlay(_: HMODULE, _: *const u16, _: rsf_game_log_fn) -> bool {
@@ -134,15 +141,16 @@ fn retry_repeats_only_unfinished_steps() {
     let leaves = Leaves {
         builds: builds.as_ptr(),
         build_count: builds.len(),
-        label,
-        sr,
-        motion,
-        fg,
-        fg_installed,
-        input_observation,
-        input_hook,
-        overlay,
-        overlay_sink,
+        label: Some(label),
+        sr: Some(sr),
+        motion: Some(motion),
+        fg: Some(fg),
+        fg_installed: Some(fg_installed),
+        input_observation: Some(input_observation),
+        publish_input_observer: Some(publish_input_observer),
+        input_hook: Some(input_hook),
+        overlay: Some(overlay),
+        overlay_sink: Some(overlay_sink),
     };
     let ini: Vec<u16> = "C:\\anomaly.ini\0".encode_utf16().collect();
     let request = Request {
@@ -167,6 +175,7 @@ fn retry_repeats_only_unfinished_steps() {
     );
     assert_eq!(counts(), [1, 1, 1, 1, 1, 1, 1, 1, 0]);
     assert_eq!(RECEIPTS.load(SeqCst), 1);
+    assert_eq!(PUBLISHED.load(SeqCst), 1);
     INPUT_ACCEPTS.store(true, SeqCst);
     OVERLAY_ACCEPTS.store(true, SeqCst);
     assert_eq!(
@@ -176,6 +185,7 @@ fn retry_repeats_only_unfinished_steps() {
     assert!(entry.started && entry.observation == Observation::Active);
     assert_eq!(counts(), [1, 1, 1, 1, 2, 1, 1, 2, 1]);
     assert_eq!(RECEIPTS.load(SeqCst), 1);
+    assert_eq!(PUBLISHED.load(SeqCst), 1);
     assert!(OPTIONS_VALID.load(SeqCst));
 
     PREPARE_RESULT.store(-4, SeqCst);

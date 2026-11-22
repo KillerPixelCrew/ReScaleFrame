@@ -3,6 +3,13 @@ use std::ffi::{c_char, c_void};
 use std::ptr;
 use std::slice;
 use std::sync::{Mutex, MutexGuard, PoisonError};
+#[cfg(windows)]
+use windows_sys::Win32::System::{
+    Diagnostics::Debug::IMAGE_NT_HEADERS64, SystemServices::IMAGE_DOS_HEADER,
+};
+
+#[cfg(all(windows, feature = "native-hook-fixture"))]
+mod fixture;
 
 const MAX_SITES: usize = 24;
 const GUARD_BYTES: usize = 16;
@@ -17,6 +24,7 @@ type Address = *mut c_void;
 type Queue = unsafe extern "C" fn(Address, bool) -> bool;
 type Apply = unsafe extern "C" fn() -> bool;
 
+#[derive(Clone, Copy)]
 #[repr(C)]
 struct Site {
     _name: *const c_char,
@@ -371,6 +379,68 @@ unsafe extern "C" fn rsf_anomaly_hook_read_mapped(
         _ => false,
     };
     contained && readable && unsafe { copy(out, address, size) }
+}
+
+#[cfg(windows)]
+// The caller selects a PE header record whose fields accept every bit pattern.
+unsafe fn read_header<T: Default>(
+    owner: *const c_void,
+    address: *const c_void,
+    mapped: bool,
+    copy: crate::engine_guards::Read,
+) -> Option<T> {
+    let mut header = T::default();
+    let out = ptr::from_mut(&mut header).cast();
+    let complete = if mapped {
+        unsafe { rsf_anomaly_hook_read_mapped(owner, address, out, size_of::<T>(), false, copy) }
+    } else {
+        unsafe { copy(out, address, size_of::<T>()) }
+    };
+    complete.then_some(header)
+}
+
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_hook_read_dos(
+    module: *const c_void,
+    out: &mut DosFacts,
+    mapped: bool,
+    copy: crate::engine_guards::Read,
+) -> bool {
+    let Some(header): Option<IMAGE_DOS_HEADER> =
+        (unsafe { read_header(module, module, mapped, copy) })
+    else {
+        return false;
+    };
+    *out = DosFacts {
+        nt_offset: header.e_lfanew,
+        signature: header.e_magic,
+    };
+    true
+}
+
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_hook_read_pe(
+    module: *const c_void,
+    address: *const c_void,
+    out: &mut PeFacts,
+    mapped: bool,
+    copy: crate::engine_guards::Read,
+) -> bool {
+    const { assert!(size_of::<IMAGE_NT_HEADERS64>() == PE_HEADER_BYTES) };
+    let Some(header): Option<IMAGE_NT_HEADERS64> =
+        (unsafe { read_header(module, address, mapped, copy) })
+    else {
+        return false;
+    };
+    *out = PeFacts {
+        signature: header.Signature,
+        image_size: header.OptionalHeader.SizeOfImage,
+        machine: header.FileHeader.Machine,
+        optional_magic: header.OptionalHeader.Magic,
+    };
+    true
 }
 
 #[cfg(test)]

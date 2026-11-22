@@ -17,13 +17,22 @@ file(CONFIGURE OUTPUT "${RSF_ANOMALY_SR_GENERATED}/sr_upscale_hlsl.h"
 add_library(rsf_anomaly_sr_shaders INTERFACE)
 target_include_directories(rsf_anomaly_sr_shaders INTERFACE "${RSF_ANOMALY_SR_GENERATED}")
 
-add_library(rsf_game_anomaly SHARED src/plugin.cpp src/bootstrap.cpp src/native_observer_platform.cpp src/native_hooks.cpp
+add_library(rsf_game_anomaly SHARED src/plugin.def src/bootstrap_platform.cpp src/native_observer_platform.cpp src/native_hooks.cpp
     src/native_geometry.cpp src/geometry_feed.cpp
     src/overlay_hooks.cpp src/overlay_service.cpp
     src/sr_swap.cpp src/sr_d3d11.cpp src/sr_stage.cpp)
 rsf_add_rust_static(rsf_anomaly_rust rsf_rust_anomaly rsf-anomaly rsf_anomaly)
+rsf_add_rust_static(rsf_anomaly_plugin_rust rsf_rust_anomaly_plugin rsf-anomaly rsf_anomaly
+    --features native-entry)
+foreach(symbol IN ITEMS rsf_anomaly_start rsf_anomaly_observation rsf_get_game_plugin_api)
+    if(MSVC)
+        target_link_options(rsf_game_anomaly PRIVATE "LINKER:/INCLUDE:${symbol}")
+    elseif(MINGW)
+        target_link_options(rsf_game_anomaly PRIVATE "LINKER:--undefined=${symbol}")
+    endif()
+endforeach()
 target_include_directories(rsf_game_anomaly PRIVATE "${PROJECT_SOURCE_DIR}/runtime/orchestrator/include")
-target_link_libraries(rsf_game_anomaly PRIVATE rsf_anomaly_rust ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::RuntimeCommon minhook rsf_build_options)
+target_link_libraries(rsf_game_anomaly PRIVATE rsf_anomaly_plugin_rust ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::RuntimeCommon minhook rsf_build_options)
 # Stage 1 uses only the generic immediate-context state scope (d3d11_state) and the texture-dump view enum header.
 target_link_libraries(rsf_game_anomaly PRIVATE ReScaleFrame::Graphics rsf_anomaly_sr_shaders d3d11)
 set_target_properties(rsf_game_anomaly PROPERTIES OUTPUT_NAME "ReScaleFrame.Game.Anomaly")
@@ -51,7 +60,7 @@ add_library(rsf_anomaly_sr_temporal STATIC src/sr_temporal.cpp)
 target_include_directories(rsf_anomaly_sr_temporal PRIVATE
     "${PROJECT_SOURCE_DIR}/runtime/orchestrator/include" "${PROJECT_SOURCE_DIR}/runtime/backends/dlss/include")
 target_link_libraries(rsf_anomaly_sr_temporal PRIVATE
-    rsf_anomaly_rust ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::Graphics rsf_build_options)
+    ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::Graphics rsf_build_options)
 target_link_libraries(rsf_game_anomaly PRIVATE rsf_anomaly_sr_temporal)
 target_include_directories(rsf_game_anomaly PRIVATE "${PROJECT_SOURCE_DIR}/runtime/backends/dlss/include")
 

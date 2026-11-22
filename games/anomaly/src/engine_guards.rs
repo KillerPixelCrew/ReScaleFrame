@@ -34,7 +34,7 @@ pub(super) struct Image {
 pub(super) struct NativeSite {
     pub(super) name: *const c_char,
     pub(super) rva: u32,
-    expected: [u8; 16],
+    pub(super) expected: [u8; 16],
 }
 
 #[repr(C)]

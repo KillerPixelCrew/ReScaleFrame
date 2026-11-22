@@ -21,25 +21,18 @@ bool read_mapped(const void* owner, const void* address, void* out, size_t size,
 
 using Read = bool (*)(const void*, const void*, void*, size_t, bool) noexcept;
 
-template<Read read>
+extern "C" bool rsf_anomaly_hook_read_dos(const void*, DosFacts*, bool, decltype(&guarded_copy)) noexcept;
+extern "C" bool rsf_anomaly_hook_read_pe(const void*, const void*, PeFacts*, bool, decltype(&guarded_copy)) noexcept;
+
+template<bool mapped>
 constexpr ImageHeaders image_headers{
     [](const void* module, DosFacts* out) noexcept {
-        IMAGE_DOS_HEADER dos{};
-        if (!read(module, module, &dos, sizeof(dos), false)) return false;
-        *out = {dos.e_lfanew, dos.e_magic};
-        return true;
+        return rsf_anomaly_hook_read_dos(module, out, mapped, guarded_copy);
     },
     [](const void* module, const void* address, PeFacts* out) noexcept {
-        IMAGE_NT_HEADERS64 pe{};
-        if (!read(module, address, &pe, sizeof(pe), false)) return false;
-        *out = {pe.Signature, pe.OptionalHeader.SizeOfImage, pe.FileHeader.Machine, pe.OptionalHeader.Magic};
-        return true;
+        return rsf_anomaly_hook_read_pe(module, address, out, mapped, guarded_copy);
     },
 };
-
-bool read_guarded(const void*, const void* address, void* out, size_t size, bool) noexcept {
-    return guarded_copy(out, address, size);
-}
 
 struct Platform {
     ImageHeaders headers;
@@ -48,7 +41,7 @@ struct Platform {
 };
 static_assert(sizeof(Platform) == 64 && offsetof(Platform, hooks) == 24);
 constexpr Platform platform{
-    image_headers<read_mapped>,
+    image_headers<true>,
     read_mapped,
     hook_ops,
 };
@@ -60,7 +53,7 @@ extern "C" bool rsf_anomaly_hook_set_set_enabled(void**, const Platform*, bool) 
 extern "C" bool rsf_anomaly_hook_set_created(void* const*) noexcept;
 }
 
-const ImageHeaders guarded_image_headers = image_headers<read_guarded>;
+const ImageHeaders guarded_image_headers = image_headers<false>;
 
 bool HookSet::install(std::byte* module, uint32_t image_size, std::span<const HookSite> sites) noexcept {
     return rsf_anomaly_hook_set_install(&batch_, &platform, module, image_size, sites.data(), sites.size());
@@ -78,3 +71,10 @@ bool HookSet::created() const noexcept {
     return rsf_anomaly_hook_set_created(&batch_);
 }
 }
+
+#if defined(RSF_ANOMALY_HOOK_FIXTURE)
+// The native hook contract exercises the production MinHook operations.
+extern "C" const void* rsf_anomaly_hook_native_platform() noexcept {
+    return &rsf::anomaly::platform;
+}
+#endif

@@ -1043,6 +1043,12 @@ execution and live observer verification remain open.
 [Observer admission audit](research/rust-anomaly-native-observer.md#prepare-admission-from-3c73e3c4)
 [N01 source port](research/rust-anomaly-startup-n01.md)
 
+Anomaly's three DLL exports, DOS and NT header reads, and the native
+plugin, lifecycle and hook fixture policy now live in Rust. The native
+detours retain their exception and trampoline boundaries. Export and
+fixture verification remain open.
+[Native entry and fixture follow-up](research/rust-anomaly-startup-n01.md#native-entry-and-fixture-follow-up-from-82b39a63)
+
 ## Rust orchestrator and first Anomaly port
 
 Anomaly's Rust geometry owner now reads and interprets draw-time producer

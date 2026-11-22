@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include "build_identity.h"
 #include "geometry_profile.h"
 #include "motion_profile.h"
 #include "native_profile.h"
@@ -7,11 +8,6 @@
 #include "input_profile.h"
 #include <cstddef>
 #include <string_view>
-
-struct rsf_anomaly_build_identity {
-    const char* executable;
-    const char* sha256;
-};
 
 extern "C" size_t rsf_anomaly_match_build(const rsf_anomaly_build_identity*, size_t, const char*, size_t,
     const char*, size_t) noexcept;

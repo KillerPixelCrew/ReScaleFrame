@@ -1,0 +1,4 @@
+EXPORTS
+    rsf_anomaly_observation @1
+    rsf_anomaly_start @2
+    rsf_get_game_plugin_api @3

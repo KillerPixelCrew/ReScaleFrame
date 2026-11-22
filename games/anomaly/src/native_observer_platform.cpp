@@ -27,12 +27,6 @@ extern "C" {
 const char* rsf_anomaly_observer_identify(rsf_anomaly_observer_engine*, const rsf_anomaly_build_identity*,
     const rsf_anomaly_observer_profile*, size_t, const rsf::anomaly::ImageHeaders*,
     decltype(&rsf::anomaly::guarded_copy)) noexcept;
-rsf_result rsf_anomaly_observer_prepare(const rsf_game_prepare_args*, const rsf_anomaly_observer_platform*) noexcept;
-rsf_result rsf_anomaly_observer_start(const rsf_game_start_args*, const rsf_anomaly_observer_platform*) noexcept;
-rsf_result rsf_anomaly_observer_quiesce(const rsf_game_control_args*, const rsf_anomaly_observer_platform*) noexcept;
-rsf_result rsf_anomaly_observer_stop(const rsf_game_control_args*, const rsf_anomaly_observer_platform*) noexcept;
-rsf_result rsf_anomaly_observer_status(rsf_game_renderer_status*) noexcept;
-rsf_result rsf_anomaly_observer_read(rsf_anomaly_native_observation*) noexcept;
 bool rsf_anomaly_observer_enter() noexcept;
 void rsf_anomaly_observer_leave() noexcept;
 bool rsf_anomaly_observer_read_frame(const rsf_anomaly_guard_image*, uint32_t, uint32_t, uint32_t,
@@ -199,14 +193,8 @@ const rsf_anomaly_observer_platform platform{
     fg::camera, fg::ui_boundary, fg::scope_frame, fg::device_reset, log, report_stages,
 };
 }
-
-rsf_result prepare(const rsf_game_prepare_args* args) noexcept { return rsf_anomaly_observer_prepare(args, &platform); }
-rsf_result start(const rsf_game_start_args* args) noexcept { return rsf_anomaly_observer_start(args, &platform); }
-rsf_result quiesce(const rsf_game_control_args* args) noexcept { return rsf_anomaly_observer_quiesce(args, &platform); }
-rsf_result stop(const rsf_game_control_args* args) noexcept { return rsf_anomaly_observer_stop(args, &platform); }
-rsf_result status(rsf_game_renderer_status* out) noexcept { return rsf_anomaly_observer_status(out); }
 }
 
-extern "C" __declspec(dllexport) rsf_result rsf_anomaly_observation(rsf::anomaly::NativeObservation* out) noexcept {
-    return rsf_anomaly_observer_read(out);
+extern "C" const rsf_anomaly_observer_platform* rsf_anomaly_observer_native() noexcept {
+    return &rsf::anomaly::platform;
 }

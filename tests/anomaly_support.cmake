@@ -195,7 +195,7 @@ foreach(rsf_sr5_client rsf_anomaly_sr_runtime_api_test rsf_anomaly_sr_temporal_d
     target_include_directories(${rsf_sr5_client} PRIVATE "${RSF_ANOMALY_SR_SRC}"
         "${PROJECT_SOURCE_DIR}/runtime/backends/dlss/include"
         "$<TARGET_PROPERTY:rsf_orchestrator,INTERFACE_INCLUDE_DIRECTORIES>")
-    target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_sr_temporal "$<TARGET_LINKER_FILE:rsf_orchestrator>" ReScaleFrame::GameSDK ReScaleFrame::Contract
+    target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_sr_temporal rsf_anomaly_rust "$<TARGET_LINKER_FILE:rsf_orchestrator>" ReScaleFrame::GameSDK ReScaleFrame::Contract
         rsf_build_options)
     add_dependencies(${rsf_sr5_client} rsf_orchestrator)
 endforeach()

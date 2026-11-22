@@ -563,7 +563,7 @@ unsafe fn validate<T>(value: *const T, abi: u32) -> Result<(), rsf_result> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_observer_prepare(
+pub(crate) unsafe extern "C" fn rsf_anomaly_observer_prepare(
     args: *const rsf_game_prepare_args,
     platform: &Platform,
 ) -> rsf_result {
@@ -578,7 +578,7 @@ unsafe extern "C" fn rsf_anomaly_observer_prepare(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_observer_start(
+pub(crate) unsafe extern "C" fn rsf_anomaly_observer_start(
     args: *const rsf_game_start_args,
     platform: &Platform,
 ) -> rsf_result {
@@ -589,7 +589,7 @@ unsafe extern "C" fn rsf_anomaly_observer_start(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_observer_quiesce(
+pub(crate) unsafe extern "C" fn rsf_anomaly_observer_quiesce(
     args: *const rsf_game_control_args,
     platform: &Platform,
 ) -> rsf_result {
@@ -600,7 +600,7 @@ unsafe extern "C" fn rsf_anomaly_observer_quiesce(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_observer_stop(
+pub(crate) unsafe extern "C" fn rsf_anomaly_observer_stop(
     args: *const rsf_game_control_args,
     platform: &Platform,
 ) -> rsf_result {
@@ -611,7 +611,9 @@ unsafe extern "C" fn rsf_anomaly_observer_stop(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_observer_status(out: *mut rsf_game_renderer_status) -> rsf_result {
+pub(crate) unsafe extern "C" fn rsf_anomaly_observer_status(
+    out: *mut rsf_game_renderer_status,
+) -> rsf_result {
     if let Err(error) = unsafe { validate(out, RSF_GAME_ABI_VERSION) } {
         return error;
     }
@@ -623,7 +625,7 @@ unsafe extern "C" fn rsf_anomaly_observer_status(out: *mut rsf_game_renderer_sta
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_observer_read(out: *mut Observation) -> rsf_result {
+unsafe extern "C" fn rsf_anomaly_observation(out: *mut Observation) -> rsf_result {
     if let Err(error) = unsafe { validate(out, RSF_ANOMALY_OBSERVATION_ABI) } {
         return error;
     }

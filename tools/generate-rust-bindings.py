@@ -286,6 +286,9 @@ generate("games/anomaly/src/motion_target_abi.rs", "games/anomaly/src/motion_tar
 generate("games/anomaly/src/motion_device_abi.rs", "games/anomaly/src/motion_device_platform.h",
          "rsf_anomaly_motion_(device_(platform|view)|log)", "RSF_MOTION_.*", [],
          ["--with-derive-default"])
+generate("games/anomaly/src/bootstrap_abi.rs", "games/anomaly/src/bootstrap_platform.h",
+         "wchar_t|rsf_anomaly_(build_identity|bootstrap_platform)", "NOTHING", ["-Isdk/game/include"],
+         ["--no-recursive-allowlist", "--raw-line", "use rsf_game_sys::rsf_game_log_fn;"])
 generate("games/anomaly/src/native_observer_abi.rs", "games/anomaly/src/native_observer_platform.h",
          "rsf_anomaly_(native_observation|observer_(engine|frame|camera|platform))",
          "RSF_ANOMALY_OBSERVATION_ABI", ["-Isdk/game/include"],

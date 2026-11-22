@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #![cfg(windows)]
 
+mod anomaly;
 mod contract;
 mod domains;
 mod session;
