@@ -358,7 +358,7 @@ def main():
     try:
         if args.command == "stage-include":
             profile = json.loads(args.profile.read_text(encoding="utf-8"))
-            include = Path(__file__).with_name("anomaly_shader_constants.h").read_bytes()
+            include = Path(__file__).with_name("anomaly_shader_constants.hlsli").read_bytes()
             result = stage(args.source, args.output, profile, include)
             print(json.dumps({key: value for key, value in result.items() if key != "files"}))
         else:

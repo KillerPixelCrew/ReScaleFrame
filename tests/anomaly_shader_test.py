@@ -258,7 +258,7 @@ class CompilerFixtureTests(unittest.TestCase):
                   "source_corpus_sha256": corpus["corpus_sha256"], "variants": []}
         try:
             profile = json.loads((REPO / "tools/anomaly_shader_vanilla_profile.json").read_text())
-            tool.stage(source, target, profile, (REPO / "tools/anomaly_shader_constants.h").read_bytes())
+            tool.stage(source, target, profile, (REPO / "tools/anomaly_shader_constants.hlsli").read_bytes())
             binary_dir = target / "compile-check"
             binary_dir.mkdir()
             for index, (shader, shader_target, defines) in enumerate(cases):
