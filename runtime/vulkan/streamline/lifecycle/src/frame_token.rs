@@ -74,17 +74,15 @@ impl FrameToken {
         })
     }
 
-    pub(crate) fn begin(&self, acquire: impl FnOnce(&mut usize) -> i32) -> i32 {
-        let _lease = match self.lease(true, -1) {
-            Ok(lease) => lease,
-            Err(result) => return result,
-        };
+    pub(crate) fn begin(&self, acquire: impl FnOnce(&mut usize) -> i32) -> Result<usize, i32> {
+        let _lease = self.lease(true, -1)?;
         let mut token = 0;
         let result = acquire(&mut token);
-        if result == 0 {
-            self.state().current = token;
+        if result != 0 {
+            return Err(result);
         }
-        result
+        self.state().current = token;
+        Ok(token)
     }
 
     pub(crate) fn current(&self) -> usize {

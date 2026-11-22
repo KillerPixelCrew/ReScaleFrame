@@ -96,8 +96,8 @@ unsafe extern "C" fn rsf_slvk_life_shutdown(platform: &Platform) -> i32 {
 
 /// Unloads the interposer unless shutdown failed.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_slvk_life_unload(platform: &Platform) {
-    unsafe { LIFECYCLE.unload(&Win32, platform) };
+unsafe extern "C" fn rsf_slvk_life_unload(platform: &Platform) -> i32 {
+    unsafe { LIFECYCLE.unload(&Win32, platform) }
 }
 
 #[unsafe(no_mangle)]
@@ -201,10 +201,19 @@ unsafe extern "C" fn rsf_slvk_reflex_options(
 unsafe extern "C" fn rsf_slvk_token_begin(
     acquire: unsafe extern "C" fn(u32, *mut usize) -> i32,
     index: u32,
+    output: &mut usize,
 ) -> i32 {
-    LIFECYCLE
+    *output = 0;
+    match LIFECYCLE
         .frame_token
         .begin(|token| unsafe { acquire(index, token) })
+    {
+        Ok(token) => {
+            *output = token;
+            0
+        }
+        Err(result) => result,
+    }
 }
 
 #[unsafe(no_mangle)]

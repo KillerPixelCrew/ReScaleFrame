@@ -87,9 +87,8 @@ internal sealed unsafe class StreamlineRuntime : IDisposable
         string? setting) => ShouldLoadDlssG(preferredDeviceIndex, hasNvidiaAdapter, setting);
 
     private readonly nint _library;
-    private readonly delegate* unmanaged[Cdecl]<void> _shutdown;
     private readonly delegate* unmanaged[Cdecl]<int> _shutdownChecked;
-    private readonly delegate* unmanaged[Cdecl]<void> _unload;
+    private readonly delegate* unmanaged[Cdecl]<int> _unloadChecked;
     private readonly delegate* unmanaged[Cdecl]<Instance, byte*, nint> _instanceProc;
     private readonly delegate* unmanaged[Cdecl]<Device, byte*, nint> _deviceProc;
     private readonly delegate* unmanaged[Cdecl]<InstanceCreateInfo*, Instance*, Result> _createInstance;
@@ -110,8 +109,7 @@ internal sealed unsafe class StreamlineRuntime : IDisposable
     private readonly delegate* unmanaged[Cdecl]<uint> _pclWindowMessage;
     private readonly delegate* unmanaged[Cdecl]<PhysicalDevice, int> _isFrameGenerationSupported;
     private readonly delegate* unmanaged[Cdecl]<int, uint, int> _setReflex;
-    private readonly delegate* unmanaged[Cdecl]<uint, int> _beginFrame;
-    private readonly delegate* unmanaged[Cdecl]<nint> _currentFrameToken;
+    private readonly delegate* unmanaged[Cdecl]<uint, nint*, int> _beginFrameChecked;
     private readonly delegate* unmanaged[Cdecl]<int> _reflexSleep;
     private readonly delegate* unmanaged[Cdecl]<uint, int> _marker;
     private readonly delegate* unmanaged[Cdecl]<nint, uint, int> _markerForToken;
@@ -132,6 +130,10 @@ internal sealed unsafe class StreamlineRuntime : IDisposable
     private bool _shutdownComplete;
     private Exception? _shutdownFailure;
     private Exception? _disposalFailure;
+    private sealed class LifecycleBusyException(string operation) :
+        InvalidOperationException("Streamline " + operation + " is busy; retry after in-flight operations finish.")
+    {
+    }
     // Silk resolves table entries lazily. These final destruction commands must
     // already have addresses before slShutdown tears down the SDK's resolver state.
     private readonly Dictionary<string, VulkanTeardownCommand> _vulkanTeardown = new(StringComparer.Ordinal);
@@ -141,10 +143,8 @@ internal sealed unsafe class StreamlineRuntime : IDisposable
     {
         _library = library;
         nint Export(string name) => NativeLibrary.GetExport(library, name);
-        _shutdown = (delegate* unmanaged[Cdecl]<void>)Export("VulkanStorySlShutdown");
-        _shutdownChecked = NativeLibrary.TryGetExport(library, "VulkanStorySlShutdownChecked", out nint shutdownChecked)
-            ? (delegate* unmanaged[Cdecl]<int>)shutdownChecked : null;
-        _unload = (delegate* unmanaged[Cdecl]<void>)Export("VulkanStorySlUnload");
+        _shutdownChecked = (delegate* unmanaged[Cdecl]<int>)Export("VulkanStorySlShutdownChecked");
+        _unloadChecked = (delegate* unmanaged[Cdecl]<int>)Export("rsf_vk_sl_unload_checked");
         _instanceProc = (delegate* unmanaged[Cdecl]<Instance, byte*, nint>)Export("VulkanStorySlGetInstanceProcAddr");
         _deviceProc = (delegate* unmanaged[Cdecl]<Device, byte*, nint>)Export("VulkanStorySlGetDeviceProcAddr");
         _createInstance = (delegate* unmanaged[Cdecl]<InstanceCreateInfo*, Instance*, Result>)Export("VulkanStorySlCreateInstance");
@@ -167,8 +167,7 @@ internal sealed unsafe class StreamlineRuntime : IDisposable
             ? (delegate* unmanaged[Cdecl]<uint>)pclMessage : null;
         _isFrameGenerationSupported = (delegate* unmanaged[Cdecl]<PhysicalDevice, int>)Export("VulkanStorySlIsFrameGenerationSupported");
         _setReflex = (delegate* unmanaged[Cdecl]<int, uint, int>)Export("VulkanStorySlSetReflex");
-        _beginFrame = (delegate* unmanaged[Cdecl]<uint, int>)Export("VulkanStorySlBeginFrame");
-        _currentFrameToken = (delegate* unmanaged[Cdecl]<nint>)Export("VulkanStorySlCurrentFrameToken");
+        _beginFrameChecked = (delegate* unmanaged[Cdecl]<uint, nint*, int>)Export("rsf_vk_sl_begin_frame_checked");
         _reflexSleep = (delegate* unmanaged[Cdecl]<int>)Export("VulkanStorySlReflexSleep");
         _marker = (delegate* unmanaged[Cdecl]<uint, int>)Export("VulkanStorySlMarker");
         _markerForToken = (delegate* unmanaged[Cdecl]<nint, uint, int>)Export("VulkanStorySlMarkerForToken");
@@ -389,9 +388,13 @@ internal sealed unsafe class StreamlineRuntime : IDisposable
     /// <summary>Applies the native Reflex mode and a nonnegative maximum FPS.</summary>
     internal int SetReflex(int mode, int maxFps) => _setReflex(mode, (uint)Math.Max(maxFps, 0));
     /// <summary>Obtains Streamline frame identity using the low 32 bits of the renderer frame ID.</summary>
-    internal int BeginFrame(ulong id) => _beginFrame((uint)id);
-    /// <summary>Returns the bridge-held token for the frame begun most recently.</summary>
-    internal nint CurrentFrameToken() => _currentFrameToken();
+    internal int BeginFrame(ulong id, out nint token)
+    {
+        nint acquired = 0;
+        int result = _beginFrameChecked((uint)id, &acquired);
+        token = acquired;
+        return result;
+    }
     /// <summary>Invokes Reflex sleep for the current frame token before input collection.</summary>
     internal int ReflexSleep() => _reflexSleep();
     /// <summary>Emits a latency marker for the bridge-held current frame token.</summary>
@@ -470,18 +473,16 @@ internal sealed unsafe class StreamlineRuntime : IDisposable
         if (_shutdownComplete) return;
         try
         {
-            if (_shutdownChecked != null)
-            {
-                int result = _shutdownChecked();
-                Trace("streamline.shutdown.result", default, default,
-                    (nint)_shutdownChecked, result);
-                if (result != 0)
-                    throw new InvalidOperationException("Streamline shutdown failed (" + result + "); Vulkan owners remain live.");
-            }
-            else _shutdown();
+            int result = _shutdownChecked();
+            Trace("streamline.shutdown.result", default, default,
+                (nint)_shutdownChecked, result);
+            if (result == -7)
+                throw new LifecycleBusyException("shutdown");
+            if (result != 0)
+                throw new InvalidOperationException("Streamline shutdown failed (" + result + "); Vulkan owners remain live.");
             _shutdownComplete = true;
         }
-        catch (Exception failure) { _shutdownFailure = failure; throw; }
+        catch (Exception failure) when (failure is not LifecycleBusyException) { _shutdownFailure = failure; throw; }
     }
     /// <inheritdoc/>
     public void Dispose()
@@ -492,11 +493,15 @@ internal sealed unsafe class StreamlineRuntime : IDisposable
         try
         {
             Shutdown();
-            _unload();
+            int result = _unloadChecked();
+            if (result == -7)
+                throw new LifecycleBusyException("unload");
+            if (result != 0)
+                throw new InvalidOperationException("Streamline unload failed (" + result + "); the bridge remains loaded.");
             NativeLibrary.Free(_library);
             _vulkanTeardown.Clear();
             _disposed = true;
         }
-        catch (Exception failure) { _disposalFailure = failure; throw; }
+        catch (Exception failure) when (failure is not LifecycleBusyException) { _disposalFailure = failure; throw; }
     }
 }

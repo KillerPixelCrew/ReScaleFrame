@@ -56,7 +56,7 @@ extern "C" {
 int32_t rsf_slvk_life_initialize(const RsfSlLifecyclePlatform*, const wchar_t*, const char*,
     uint32_t, uint32_t, uint32_t);
 int32_t rsf_slvk_life_shutdown(const RsfSlLifecyclePlatform*);
-void rsf_slvk_life_unload(const RsfSlLifecyclePlatform*);
+int32_t rsf_slvk_life_unload(const RsfSlLifecyclePlatform*);
 uint32_t rsf_slvk_life_initialized();
 void* rsf_slvk_life_module();
 void* rsf_slvk_life_instance_proc();
@@ -75,7 +75,7 @@ int32_t rsf_slvk_fg_disable(const RsfSlFgPlatform*);
 int32_t rsf_slvk_fg_free(const RsfSlFgPlatform*);
 int32_t rsf_slvk_sdk_call(int32_t (*)(void*), void*, int32_t inactive);
 int32_t rsf_slvk_reflex_options(int32_t (*)(uint32_t, uint32_t), int32_t mode, uint32_t limit, uint32_t limitIsFps);
-int32_t rsf_slvk_token_begin(int32_t (*)(uint32_t, uintptr_t*), uint32_t);
+int32_t rsf_slvk_token_begin(int32_t (*)(uint32_t, uintptr_t*), uint32_t, uintptr_t*);
 uintptr_t rsf_slvk_token_current();
 int32_t rsf_slvk_token_call(uintptr_t, int32_t (*)(uintptr_t, void*), void*, int32_t inactive);
 }
@@ -409,7 +409,7 @@ constexpr RsfSlLifecyclePlatform lifecycle{
 
 extern "C" {
 /// @brief Loads the verified interposer and initializes the selected PCL/Reflex/DLSS feature set.
-/// @details The Rust lifecycle owns the module, the copied plugin path and project identity, and the sticky shutdown result. Repeated initialization while initialized returns zero. After VulkanStorySlShutdown the interposer stays loaded, so a later call re-runs slInit on that module, which must come from the same directory.
+/// @details A repeated request must match the active directory, project and feature set. After shutdown, a later call reinitializes the retained module from the same directory.
 /// @param directory Borrowed terminated directory path containing the private interposer/plugins.
 /// @param projectId Borrowed terminated project identity copied for SDK use.
 /// @param loadReflex Requests Reflex plus PCL when DLSS-G is not requested.
@@ -442,8 +442,11 @@ RSF_SL_VK_EXPORT void VulkanStorySlShutdown() {
 // Release its code only after the host has destroyed Vulkan and its API tables.
 /// @brief Unloads interposer code and clears Vulkan dispatch pointers.
 /// @details Call only after shutdown and after every Vulkan object/API table referencing this module is destroyed. Refused after a failed shutdown.
+RSF_SL_VK_EXPORT int rsf_vk_sl_unload_checked() {
+    return rsf_slvk_life_unload(&lifecycle);
+}
 RSF_SL_VK_EXPORT void VulkanStorySlUnload() {
-    rsf_slvk_life_unload(&lifecycle);
+    rsf_vk_sl_unload_checked();
 }
 
 /// @brief Returns an interposer instance/global Vulkan function address.
@@ -664,8 +667,13 @@ RSF_SL_VK_EXPORT int VulkanStorySlSetReflex(int mode, uint32_t maxFps) {
 /// @brief Obtains the current Streamline frame token for the supplied 32-bit renderer frame identity.
 /// @details Successful acquisition replaces the Rust lifecycle's borrowed pointer.
 /// @return SDK result, -1 without token acquisition or -7 for an overlapping acquisition.
+RSF_SL_VK_EXPORT int rsf_vk_sl_begin_frame_checked(uint32_t frameIndex, uintptr_t* token) {
+    if (!token) return -1;
+    return rsf_slvk_token_begin(acquireFrameToken, frameIndex, token);
+}
 RSF_SL_VK_EXPORT int VulkanStorySlBeginFrame(uint32_t frameIndex) {
-    return rsf_slvk_token_begin(acquireFrameToken, frameIndex);
+    uintptr_t token = 0;
+    return rsf_vk_sl_begin_frame_checked(frameIndex, &token);
 }
 /// @brief Returns the borrowed pointer to the most recently acquired SDK frame token.
 /// @details The caller must not free the token and must retain it only within the SDK frame lifetime.

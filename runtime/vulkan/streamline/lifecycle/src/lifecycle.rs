@@ -26,6 +26,7 @@ const OTHER_DIRECTORY: i32 = -6;
 // SDK callbacks can run host code on SDK threads. Lifecycle operations
 // refuse overlapping SDK calls instead of waiting.
 pub(crate) const BUSY: i32 = -7;
+const OTHER_CONFIGURATION: i32 = -8;
 
 // The bridge formatted the interposer path into a MAX_PATH buffer.
 const MAX_PATH: usize = 260;
@@ -88,6 +89,7 @@ struct Paths {
     // NUL-terminated plugin directory.
     directory: Vec<u16>,
     project: Box<CStr>,
+    features: u32,
     // The SDK receives this array's address as pathsToPlugins.
     plugin: [*const u16; 1],
 }
@@ -97,8 +99,7 @@ struct Session {
     // True between a successful slInit and the matching slShutdown. The module
     // can stay loaded after shutdown.
     initialized: bool,
-    shutdown_attempted: bool,
-    shutdown_result: i32,
+    shutdown_result: Option<i32>,
     paths: Option<Box<Paths>>,
     #[cfg(windows)]
     frame_generation: FrameGeneration,
@@ -165,8 +166,7 @@ impl Lifecycle {
             session: Mutex::new(Session {
                 module: None,
                 initialized: false,
-                shutdown_attempted: false,
-                shutdown_result: 0,
+                shutdown_result: None,
                 paths: None,
                 #[cfg(windows)]
                 frame_generation: FrameGeneration::new(),
@@ -246,26 +246,30 @@ impl Lifecycle {
         let Some(mut session) = self.session() else {
             return BUSY;
         };
-        if session.shutdown_attempted && session.shutdown_result != 0 {
-            return session.shutdown_result;
-        }
-        if session.initialized {
-            return 0;
+        if let Some(result) = session.shutdown_result.filter(|&result| result != 0) {
+            return result;
         }
         if directory.is_null() || project.is_null() {
             return INVALID_ARGUMENT;
         }
         let directory = unsafe { terminated(directory) };
+        let project = unsafe { CStr::from_ptr(project) };
         // A module kept after shutdown may still back Vulkan dispatch tables.
         // Only a module loaded by this call is released on failure.
         let loaded_here = session.module.is_none();
         let module = match session.module {
             Some(module) => {
-                let same = session.paths.as_ref().is_some_and(|paths| {
+                let Some(paths) = session.paths.as_ref().filter(|paths| {
                     paths.directory.strip_suffix(&[0]) == Some(directory.as_slice())
-                });
-                if !same {
+                }) else {
                     return OTHER_DIRECTORY;
+                };
+                if session.initialized {
+                    return if *paths.project == *project && paths.features == features {
+                        0
+                    } else {
+                        OTHER_CONFIGURATION
+                    };
                 }
                 module
             }
@@ -292,7 +296,8 @@ impl Lifecycle {
 
         let mut paths = Box::new(Paths {
             directory: directory.iter().copied().chain([0]).collect(),
-            project: unsafe { CStr::from_ptr(project) }.into(),
+            project: project.into(),
+            features,
             plugin: [null()],
         });
         paths.plugin[0] = paths.directory.as_ptr();
@@ -306,8 +311,7 @@ impl Lifecycle {
             return result;
         }
         session.initialized = true;
-        session.shutdown_attempted = false;
-        session.shutdown_result = 0;
+        session.shutdown_result = None;
         #[cfg(windows)]
         self.frame_token.open();
         self.published.initialized.store(true, Ordering::Release);
@@ -321,8 +325,8 @@ impl Lifecycle {
         if session.module.is_none() {
             return 0;
         }
-        if session.shutdown_attempted {
-            return session.shutdown_result;
+        if let Some(result) = session.shutdown_result {
+            return result;
         }
         #[cfg(windows)]
         if !self.frame_token.try_close() {
@@ -330,11 +334,13 @@ impl Lifecycle {
         }
         // An SDK failure may follow partial plugin destruction. Spend the attempt
         // before calling it; neither feature entry points nor retries remain valid.
-        session.shutdown_attempted = true;
+        session.shutdown_result = Some(0);
+        let mut result = 0;
         if session.initialized {
-            let mut result = 0;
-            if unsafe { (platform.shutdown)(&mut result) } != 0 {
-                session.shutdown_result = result;
+            let mut sdk_result = 0;
+            if unsafe { (platform.shutdown)(&mut sdk_result) } != 0 {
+                result = sdk_result;
+                session.shutdown_result = Some(result);
             }
         }
         session.initialized = false;
@@ -344,24 +350,27 @@ impl Lifecycle {
         self.reset_frame_generation(&mut session);
         unsafe { (platform.clear)() };
         self.diagnostics.present_error(0);
-        session.shutdown_result
+        result
     }
 
     // Call only after shutdown and after every Vulkan object and API table that
     // references the interposer is destroyed. A failed shutdown keeps the module.
-    pub(crate) unsafe fn unload(&self, system: &impl System, platform: &Platform) {
+    pub(crate) unsafe fn unload(&self, system: &impl System, platform: &Platform) -> i32 {
         let Some(mut session) = self.session() else {
-            return;
+            return BUSY;
         };
-        if session.shutdown_attempted && session.shutdown_result != 0 {
-            return;
+        if let Some(result) = session.shutdown_result.filter(|&result| result != 0) {
+            return result;
+        }
+        if session.initialized {
+            return BUSY;
         }
         #[cfg(windows)]
         if !self.frame_token.try_close() {
-            return;
+            return BUSY;
         }
-        session.initialized = false;
         unsafe { self.release(system, platform, &mut session) };
+        0
     }
 
     unsafe fn abandon(

@@ -161,6 +161,23 @@ fn verified_handle_spans_the_load_and_keeps_the_plugin_path() {
         );
     });
     assert_eq!(start(&lifecycle, "C:\\sl"), 0);
+    assert_eq!(start(&lifecycle, "C:\\other"), OTHER_DIRECTORY);
+    let directory = wide("C:\\sl");
+    let features = feature_mask(true, true, false);
+    for (project, features) in [(c"other", features), (c"project", FEATURE_PCL)] {
+        assert_eq!(
+            unsafe {
+                lifecycle.initialize(
+                    &Fake,
+                    &PLATFORM,
+                    directory.as_ptr(),
+                    project.as_ptr(),
+                    features,
+                )
+            },
+            OTHER_CONFIGURATION
+        );
+    }
     assert!(take_events().is_empty());
 }
 
@@ -206,7 +223,7 @@ fn shutdown_keeps_vulkan_dispatch_until_explicit_unload() {
     assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, 0);
     take_events();
 
-    unsafe { lifecycle.unload(&Fake, &PLATFORM) };
+    assert_eq!(unsafe { lifecycle.unload(&Fake, &PLATFORM) }, 0);
     assert_eq!(take_events(), ["clear", "free"]);
     assert!(lifecycle.instance_proc().is_null());
     assert!(lifecycle.device_proc().is_null());
@@ -222,7 +239,7 @@ fn failed_shutdown_is_sticky_and_refuses_unload() {
     assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, 5);
     assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, 5);
     assert_eq!(start(&lifecycle, "C:\\sl"), 5);
-    unsafe { lifecycle.unload(&Fake, &PLATFORM) };
+    assert_eq!(unsafe { lifecycle.unload(&Fake, &PLATFORM) }, 5);
     assert_eq!(take_events(), ["shutdown", "clear"]);
     assert_eq!(lifecycle.instance_proc().addr(), PROC);
 }
@@ -262,7 +279,7 @@ fn overlapping_lifecycle_call_is_refused_without_waiting() {
     let held = lifecycle.session.lock().unwrap();
     assert_eq!(start(&lifecycle, "C:\\sl"), BUSY);
     assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, BUSY);
-    unsafe { lifecycle.unload(&Fake, &PLATFORM) };
+    assert_eq!(unsafe { lifecycle.unload(&Fake, &PLATFORM) }, BUSY);
     drop(held);
     assert!(take_events().is_empty());
     assert_eq!(start(&lifecycle, "C:\\sl"), 0);
@@ -281,9 +298,9 @@ fn reflex_token_borrow_allows_older_present_and_defers_shutdown() {
             *token = 2;
             0
         }),
-        0
+        Ok(2)
     );
-    assert_eq!(tokens.begin(|_| 7), 7);
+    assert_eq!(tokens.begin(|_| 7), Err(7));
     take_events();
 
     thread::scope(|scope| {
@@ -301,7 +318,7 @@ fn reflex_token_borrow_allows_older_present_and_defers_shutdown() {
                 });
                 assert_eq!(receive.recv_timeout(Duration::from_secs(2)), Ok(0));
                 assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, BUSY);
-                unsafe { lifecycle.unload(&Fake, &PLATFORM) };
+                assert_eq!(unsafe { lifecycle.unload(&Fake, &PLATFORM) }, BUSY);
                 assert_eq!(lifecycle.module().addr(), MODULE);
                 assert!(take_events().is_empty());
                 0
@@ -335,6 +352,6 @@ fn symbol_lookups_follow_the_published_modules() {
         )
     });
     assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, 0);
-    unsafe { lifecycle.unload(&Fake, &PLATFORM) };
+    assert_eq!(unsafe { lifecycle.unload(&Fake, &PLATFORM) }, 0);
     assert!(unsafe { lifecycle.interposer_symbol(&Fake, name) }.is_null());
 }
