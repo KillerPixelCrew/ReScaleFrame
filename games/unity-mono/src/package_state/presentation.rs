@@ -206,18 +206,16 @@ impl Package {
 /// installs generation (services.rs).
 ///
 /// # Safety
-/// `ini` is null or a NUL-terminated UTF-16 path; `platform` is null or package.cpp's table.
+/// `platform` is null or package.cpp's table.
 #[cfg(windows)]
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_load(
-    ini: *const u16,
-    editor: u32,
-    platform: *const rsf_unity_package_platform,
-) {
+unsafe extern "C" fn rsf_unity_package_load(platform: *const rsf_unity_package_platform) {
     use crate::runtime_config::{Ini, path_setting, string_setting, utf8};
     use windows_sys::core::w;
     const PROFILE_TEXT: usize = 256;
 
+    let (editor, ini) = super::windows::startup_paths();
+    PACKAGE.services.editor.store(editor, SeqCst);
     let Some(leaves) = super::LEAVES.get().or_else(|| {
         let adopted = unsafe { Leaves::adopt(platform) }?;
         Some(super::LEAVES.get_or_init(|| adopted))
@@ -225,7 +223,7 @@ unsafe extern "C" fn rsf_unity_package_load(
         return;
     };
     let mut log = Vec::new();
-    if let Some(ini) = unsafe { Ini::new(ini) } {
+    if let Some(ini) = unsafe { Ini::new(ini.as_ptr()) } {
         let root = utf8(&path_setting(&ini, w!("Runtime")));
         let version = utf8(&string_setting(&ini, w!("EngineVersion"), PROFILE_TEXT));
         let project = utf8(&string_setting(&ini, w!("ProjectId"), PROFILE_TEXT));
@@ -234,7 +232,7 @@ unsafe extern "C" fn rsf_unity_package_load(
             .set_identity(Identity::new(&root, &version, &project));
         log = path_setting(&ini, w!("Log"));
     }
-    PACKAGE.loaded(leaves, editor != 0, &log);
+    PACKAGE.loaded(leaves, editor, &log);
 }
 
 #[cfg(test)]

@@ -240,11 +240,12 @@ void rsf_unity_package_sr_slot_reset(uint32_t bridge, void* commands, uint32_t s
 void rsf_unity_package_sr_slots_released(uint32_t bridge);
 
 /* Presentation, outside package.cpp's mutex except where a locked export calls it. load runs at
-   plugin load, before any session: it stores whether this is the Editor, reads the identity from
-   [UnitySR] of `ini` (NUL-terminated UTF-16): Runtime, resolved like every [UnitySR] path, and
+   plugin load, before any session: it records whether this is the Editor, reads the identity from
+   [UnitySR] beside the package DLL: Runtime, resolved like every [UnitySR] path, and
    EngineVersion and ProjectId, opens the [UnitySR] Log path when one is set, and installs
    generation in the player. */
-void rsf_unity_package_load(const wchar_t* ini, uint32_t editor, const rsf_unity_package_platform* platform);
+void rsf_unity_package_load(const rsf_unity_package_platform* platform);
+uint32_t rsf_unity_package_editor(void);
 /* A renderer bridge failure reported for the rest of the session. */
 void rsf_unity_package_bridge_failed(int32_t result);
 

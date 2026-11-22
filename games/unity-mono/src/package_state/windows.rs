@@ -1,19 +1,157 @@
 // SPDX-License-Identifier: MIT
-//! Win32 window ownership for the Unity package.
+//! Win32 platform operations and input-window ownership for the Unity package.
 use super::services::{Handle, report_window_message};
-use std::ffi::c_void;
-use std::ptr::{null_mut, without_provenance};
+use crate::runtime_config::{PATH_CAPACITY, file_name, terminated};
+use std::ffi::{CStr, c_char, c_void};
+use std::ptr::{null, null_mut, without_provenance};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering::SeqCst};
 use std::sync::{Mutex, PoisonError};
-use windows_sys::Win32::Foundation::{FreeLibrary, HMODULE, HWND, LPARAM, LRESULT, WPARAM};
-use windows_sys::Win32::System::LibraryLoader::{
-    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GetModuleHandleExW,
+use windows_sys::Win32::Foundation::{
+    CloseHandle, FreeLibrary, HANDLE, HMODULE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT, WPARAM,
 };
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateDirectoryW, CreateFileW, FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, OPEN_ALWAYS, WriteFile,
+};
+use windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringA;
+use windows_sys::Win32::System::Environment::GetEnvironmentVariableW;
+use windows_sys::Win32::System::LibraryLoader::{
+    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+    GetModuleFileNameW, GetModuleHandleExW,
+};
+use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
+use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 use windows_sys::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
+use windows_sys::Win32::UI::Input::{GetRawInputData, RAWINPUTHEADER, RID_HEADER};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, EnumWindows, GWLP_WNDPROC, GetClassNameW, GetWindowLongPtrW,
     GetWindowThreadProcessId, SetWindowLongPtrW, WM_NCDESTROY,
 };
+use windows_sys::core::w;
+
+fn module_path(module: HMODULE) -> Vec<u16> {
+    let mut path = vec![0u16; PATH_CAPACITY];
+    let length = unsafe { GetModuleFileNameW(module, path.as_mut_ptr(), PATH_CAPACITY as u32) };
+    path.truncate(if (length as usize) < PATH_CAPACITY {
+        length as usize
+    } else {
+        0
+    });
+    path
+}
+
+pub(super) fn startup_paths() -> (bool, Vec<u16>) {
+    let exe = module_path(null_mut());
+    let editor = String::from_utf16(file_name(&exe))
+        .is_ok_and(|name| name.eq_ignore_ascii_case("Unity.exe"));
+    let mut module = null_mut();
+    let anchor = (startup_paths as *const ()).cast();
+    unsafe {
+        GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            anchor,
+            &mut module,
+        );
+    }
+    let mut ini = module_path(module);
+    let file_len = file_name(&ini).len();
+    ini.truncate(ini.len() - file_len);
+    ini.extend("ReScaleFrame.Unity.ini".encode_utf16());
+    (editor, terminated(ini))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_package_session_seed() -> u64 {
+    unsafe { GetTickCount64() }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_package_raw_input_type(lparam: isize, kind: *mut u32) -> u32 {
+    let mut header = RAWINPUTHEADER::default();
+    let size = size_of::<RAWINPUTHEADER>() as u32;
+    let mut length = size;
+    let read = unsafe {
+        GetRawInputData(
+            lparam as *mut c_void,
+            RID_HEADER,
+            (&raw mut header).cast(),
+            &mut length,
+            size,
+        )
+    };
+    if read != size {
+        return 0;
+    }
+    unsafe { kind.write(header.dwType) };
+    1
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_package_timestamp(counter: *mut u64, frequency: *mut u64) {
+    let (mut now, mut ticks) = (0, 0);
+    unsafe {
+        QueryPerformanceCounter(&mut now);
+        QueryPerformanceFrequency(&mut ticks);
+        counter.write(now as u64);
+        frequency.write(ticks as u64);
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_package_local_app_data(output: *mut u16, capacity: u32) -> u32 {
+    let length = unsafe { GetEnvironmentVariableW(w!("LOCALAPPDATA"), output, capacity) };
+    if length < capacity { length } else { 0 }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_package_create_directory(path: *const u16) {
+    unsafe { CreateDirectoryW(path, null()) };
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_package_log_open(path: *const u16) -> HANDLE {
+    let file = unsafe {
+        CreateFileW(
+            path,
+            FILE_APPEND_DATA,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            null(),
+            OPEN_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL,
+            null_mut(),
+        )
+    };
+    if file == INVALID_HANDLE_VALUE {
+        null_mut()
+    } else {
+        file
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_package_log_write(file: HANDLE, text: *const c_char) {
+    unsafe {
+        OutputDebugStringA(text.cast());
+        OutputDebugStringA(c"\n".as_ptr().cast());
+        if !file.is_null() {
+            let mut written = 0;
+            let line = CStr::from_ptr(text).to_bytes();
+            WriteFile(
+                file,
+                line.as_ptr(),
+                line.len() as u32,
+                &mut written,
+                null_mut(),
+            );
+            WriteFile(file, b"\r\n".as_ptr(), 2, &mut written, null_mut());
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_package_log_close(file: HANDLE) {
+    unsafe { CloseHandle(file) };
+}
 
 struct Receipt {
     window: Handle,

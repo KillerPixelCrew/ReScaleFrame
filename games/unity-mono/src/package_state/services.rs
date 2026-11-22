@@ -480,6 +480,11 @@ extern "C" fn rsf_unity_package_preview_input() {
 }
 
 #[unsafe(no_mangle)]
+extern "C" fn rsf_unity_package_editor() -> u32 {
+    u32::from(PACKAGE.services.editor.load(SeqCst))
+}
+
+#[unsafe(no_mangle)]
 extern "C" fn rsf_unity_package_unload() {
     if let Some(leaves) = LEAVES.get() {
         PACKAGE.unload(leaves);

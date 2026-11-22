@@ -25,13 +25,19 @@
 #include <IUnityGraphicsD3D12.h>
 #include <wrl/client.h>
 #include <mutex>
-#include <string>
-#include <cstring>
 
 extern "C" void UNITY_INTERFACE_API rsf_unity_package_bridge_load(IUnityInterfaces*);
 extern "C" void UNITY_INTERFACE_API rsf_unity_package_bridge_unload();
 extern "C" int rsf_unity_set_engine_spatial(uint32_t, uint32_t) noexcept;
 
+extern "C" uint64_t rsf_unity_package_session_seed() noexcept;
+extern "C" uint32_t rsf_unity_package_raw_input_type(intptr_t, uint32_t*) noexcept;
+extern "C" void rsf_unity_package_timestamp(uint64_t*, uint64_t*) noexcept;
+extern "C" uint32_t rsf_unity_package_local_app_data(wchar_t*, uint32_t) noexcept;
+extern "C" void rsf_unity_package_create_directory(const wchar_t*) noexcept;
+extern "C" void* rsf_unity_package_log_open(const wchar_t*) noexcept;
+extern "C" void rsf_unity_package_log_write(void*, const char*) noexcept;
+extern "C" void rsf_unity_package_log_close(void*) noexcept;
 extern "C" void* rsf_unity_package_player_window() noexcept;
 extern "C" uint32_t rsf_unity_package_window_class(void* hwnd) noexcept;
 extern "C" uint32_t rsf_unity_package_subclass(void* hwnd) noexcept;
@@ -55,42 +61,9 @@ static_assert(WM_MOUSEFIRST == 0x0200 && WM_MOUSELAST == 0x020E && RIM_TYPEMOUSE
 namespace {
 using Microsoft::WRL::ComPtr;
 std::mutex guard;
-std::wstring ini;
-bool editor = false;
 IUnityInterfaces* registry = nullptr;
 IUnityGraphics* graphics = nullptr;
-uint32_t raw_input_type(intptr_t lparam, uint32_t* type) noexcept
-{
-    RAWINPUTHEADER header{}; UINT bytes = sizeof(header);
-    if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lparam), RID_HEADER, &header, &bytes, sizeof(header)) != sizeof(header)) return 0;
-    *type = header.dwType; return 1;
-}
-void timestamp(uint64_t* counter, uint64_t* frequency) noexcept
-{
-    LARGE_INTEGER now{}, ticks{}; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&ticks);
-    *counter = uint64_t(now.QuadPart); *frequency = uint64_t(ticks.QuadPart);
-}
-// rsf_unity_package_platform's log leaves. log is the package log in the Runtime's form.
 void log(void*, const char* text) { rsf_unity_package_log(text); }
-uint32_t local_app_data(wchar_t* output, uint32_t capacity) noexcept
-{
-    const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", output, capacity);
-    return length < capacity ? length : 0;
-}
-void* log_open(const wchar_t* path) noexcept
-{
-    const HANDLE file = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    return file == INVALID_HANDLE_VALUE ? nullptr : file;
-}
-void log_write(void* file, const char* text) noexcept
-{
-    OutputDebugStringA(text); OutputDebugStringA("\n");
-    if (file) {
-        DWORD written = 0;
-        WriteFile(file, text, static_cast<DWORD>(std::strlen(text)), &written, nullptr);
-        WriteFile(file, "\r\n", 2, &written, nullptr);
-    }
-}
 // rsf_unity_package_platform::accept_window, generation's window guard; routing.rs decides.
 int accept(void*, void* hwnd) { return rsf_unity_package_accept_window(hwnd); }
 int configuration(void*, rsf_game_render_config* output)
@@ -196,23 +169,23 @@ constexpr rsf_unity_package_platform platform{
     [](uint32_t backend) noexcept -> int32_t { return rsf_d3d11_present_request(backend); },
     fg_default_backend,
     bridge_open,
-    []() noexcept -> uint64_t { return GetTickCount64(); },
+    rsf_unity_package_session_seed,
     render,
     configuration,
     [](const rsf_game_host_services* services, rsf_unity_native_api* api) noexcept -> uint32_t {
         return rsf_unity_bridge_prepare(*services, api) ? 1u : 0u;
     },
-    local_app_data,
-    [](const wchar_t* path) noexcept { CreateDirectoryW(path, nullptr); },
-    log_open,
-    log_write,
-    [](void* file) noexcept { CloseHandle(file); },
+    rsf_unity_package_local_app_data,
+    rsf_unity_package_create_directory,
+    rsf_unity_package_log_open,
+    rsf_unity_package_log_write,
+    rsf_unity_package_log_close,
     rsf_unity_package_player_window,
     []() noexcept { return rsf_unity_preview_parent(); },
     rsf_unity_package_subclass,
     rsf_unity_package_restore,
-    raw_input_type,
-    timestamp,
+    rsf_unity_package_raw_input_type,
+    rsf_unity_package_timestamp,
     [](const rsf_game_cpu_event* event) noexcept { rsf_fg12_cpu(event); },
     [](uint64_t session, uint64_t frame) noexcept { rsf_fg12_submitted(session, frame); },
     [](const rsf_game_render_pass* pass) noexcept { rsf_fg12_window(pass); },
@@ -243,19 +216,6 @@ void UNITY_INTERFACE_API device_event(UnityGfxDeviceEventType type)
     std::lock_guard<std::mutex> lock(guard);
     rsf_unity_package_device_event(type == kUnityGfxDeviceEventInitialize ? 1u : 0u);
 }
-void preload()
-{
-    HMODULE module = nullptr;
-    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-        reinterpret_cast<LPCWSTR>(preload), &module);
-    wchar_t path[32768]{}; GetModuleFileNameW(module, path, 32768);
-    ini = path; ini.resize(ini.find_last_of(L"/\\") + 1); ini += L"ReScaleFrame.Unity.ini";
-    wchar_t executable[32768]{}; GetModuleFileNameW(nullptr, executable, 32768);
-    const auto* leaf = std::wcsrchr(executable, L'\\');
-    editor = leaf && _wcsicmp(leaf + 1, L"Unity.exe") == 0;
-    // The identity, the [UnitySR] Log file and the player's install.
-    rsf_unity_package_load(ini.c_str(), editor ? 1u : 0u, &platform);
-}
 }
 
 void rsf_unity_package_bridge_error(int32_t result, const char* message) noexcept
@@ -263,7 +223,7 @@ void rsf_unity_package_bridge_error(int32_t result, const char* message) noexcep
     rsf_unity_package_bridge_failed(result);
     log(nullptr, message);
 }
-bool rsf_unity_package_is_editor() noexcept { return editor; }
+bool rsf_unity_package_is_editor() noexcept { return rsf_unity_package_editor() != 0; }
 
 extern "C" __declspec(dllexport) int rsfu_initialize(const char* runtime, const char* engine, const char* id, rsf_unity_native_api* output) noexcept try
 {
@@ -310,7 +270,7 @@ extern "C" __declspec(dllexport) int rsfu_input(uint64_t frame, uint32_t kinds) 
 
 extern "C" __declspec(dllexport) int rsfu_shutdown() noexcept try
 {
-    if (editor) rsf_unity_preview_hide();
+    if (rsf_unity_package_is_editor()) rsf_unity_preview_hide();
     std::lock_guard<std::mutex> lock(guard);
     return rsf_unity_package_shutdown() ? 1 : 0;
 } catch (...) { return 0; }
@@ -324,7 +284,7 @@ extern "C" void UNITY_INTERFACE_EXPORT UNITY_INTERFACE_API UnityPluginLoad(IUnit
     }
     graphics = interfaces ? interfaces->Get<IUnityGraphics>() : nullptr;
     if (interfaces) rsf_uvk_preload(interfaces);
-    preload();
+    rsf_unity_package_load(&platform);
     if (graphics) { graphics->RegisterDeviceEventCallback(device_event); device_event(kUnityGfxDeviceEventInitialize); }
 }
 extern "C" void UNITY_INTERFACE_EXPORT UNITY_INTERFACE_API UnityPluginUnload()
