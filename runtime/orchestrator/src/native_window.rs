@@ -3,9 +3,11 @@ use crate::scene_abi::{
     RSF_NATIVE_SCENE_PRESENT_DIRECT, rsf_native_present_record, rsf_native_scene_identity,
     rsf_observer_present_event,
 };
+use crate::{com_ref::ComRef, native_scene::rsf_native_scene_for_window};
 use core::{
     cell::{Cell, RefCell},
     ffi::c_void,
+    ptr::null_mut,
 };
 use rsf_game_sys::{RSF_GAME_RENDER_WINDOW, rsf_game_render_pass};
 use windows_sys::Win32::{
@@ -13,13 +15,32 @@ use windows_sys::Win32::{
     System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency},
 };
 
+use windows_sys::core::GUID;
+
 const DXGI_PRESENT_TEST: u32 = 0x00000001;
 const WINDOW_SCOPE_CAPACITY: usize = 32;
 
-type CompareComIdentity = unsafe extern "C" fn(*mut c_void, *mut c_void) -> i32;
-type QueryScene =
-    unsafe extern "C" fn(*const rsf_game_render_pass, *mut rsf_native_scene_identity) -> i32;
-type ScenePresentPath = unsafe extern "C" fn(*const rsf_game_render_pass) -> u32;
+const IID_IUNKNOWN: GUID = GUID {
+    data1: 0,
+    data2: 0,
+    data3: 0,
+    data4: [0xc0, 0, 0, 0, 0, 0, 0, 0x46],
+};
+
+unsafe extern "C" {
+    fn rsf_native_scene_present_path(window: *const rsf_game_render_pass) -> u32;
+}
+
+unsafe fn com_identity(object: *mut c_void) -> Option<ComRef> {
+    type Query = unsafe extern "system" fn(*mut c_void, *const GUID, *mut *mut c_void) -> i32;
+    // IUnknown::QueryInterface is the first slot on every COM interface.
+    let query = unsafe { **object.cast::<*const Query>() };
+    let mut identity = null_mut();
+    if unsafe { query(object, &IID_IUNKNOWN, &mut identity) } < 0 {
+        return None;
+    }
+    unsafe { ComRef::from_owned(identity) }
+}
 
 struct WindowScopes {
     passes: [Option<rsf_game_render_pass>; WINDOW_SCOPE_CAPACITY],
@@ -118,52 +139,39 @@ unsafe extern "C" fn rsf_native_window_scope(pass: *const rsf_game_render_pass, 
     }))
 }
 
-unsafe fn match_window(
-    swapchain: *mut c_void,
-    same_com_identity: CompareComIdentity,
-) -> Option<rsf_game_render_pass> {
+unsafe fn match_window(swapchain: *mut c_void) -> Option<rsf_game_render_pass> {
     // The active scope leases its swapchain. Release the TLS borrow before calling COM.
     let current = SCOPES.with_borrow(|scopes| scopes.current().copied())?;
-    if unsafe { same_com_identity(swapchain, current.swapchain) } == 0 {
-        return None;
-    }
-    Some(current)
+    let observed = unsafe { com_identity(swapchain) }?;
+    let owned = unsafe { com_identity(current.swapchain) }?;
+    (observed.as_ptr() == owned.as_ptr()).then_some(current)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_window_match(
+unsafe extern "C" fn rsf_native_window_match(
     swapchain: *mut c_void,
     pass: *mut rsf_game_render_pass,
-    same_com_identity: CompareComIdentity,
 ) -> i32 {
     if swapchain.is_null() || !unsafe { has_capacity(pass) } {
         return 0;
     }
-    let Some(current) = (unsafe { match_window(swapchain, same_com_identity) }) else {
+    let Some(current) = (unsafe { match_window(swapchain) }) else {
         return 0;
     };
     unsafe { pass.write(current) };
     1
 }
 
-fn scene_for_window(
-    window: &rsf_game_render_pass,
-    query_scene: QueryScene,
-) -> Option<rsf_native_scene_identity> {
+fn scene_for_window(window: &rsf_game_render_pass) -> Option<rsf_native_scene_identity> {
     let mut scene = rsf_native_scene_identity {
         struct_size: size_of::<rsf_native_scene_identity>() as u32,
         ..Default::default()
     };
-    (unsafe { query_scene(window, &mut scene) } != 0).then_some(scene)
+    (unsafe { rsf_native_scene_for_window(window, &mut scene) } != 0).then_some(scene)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_window_present(
-    event: *const rsf_observer_present_event,
-    same_com_identity: CompareComIdentity,
-    query_scene: QueryScene,
-    scene_present_path: ScenePresentPath,
-) -> i32 {
+unsafe extern "C" fn rsf_native_window_present(event: *const rsf_observer_present_event) -> i32 {
     if !unsafe { has_capacity(event) } {
         return 0;
     }
@@ -186,7 +194,7 @@ unsafe extern "C" fn rsf_core_native_window_present(
         QueryPerformanceCounter(&mut counter);
         QueryPerformanceFrequency(&mut frequency);
     }
-    let window = unsafe { match_window(swapchain, same_com_identity) };
+    let window = unsafe { match_window(swapchain) };
     if completed == 0 {
         let mut record = rsf_native_present_record {
             struct_size: size_of::<rsf_native_present_record>() as u32,
@@ -204,14 +212,15 @@ unsafe extern "C" fn rsf_core_native_window_present(
             record.scope_id = window.scope_id;
             record.viewport_key = window.viewport_key;
             record.window_key = window.window_key;
-            if let Some(scene) = scene_for_window(&window, query_scene) {
+            if let Some(scene) = scene_for_window(&window) {
                 record.scene_matched = 1;
                 record.scene_submission_id = scene.submission_id;
                 record.scene_texture_bound = u32::from(
                     scene.texture_bound != 0 && scene.bound_window_key == window.window_key,
                 );
                 record.scene_direct_present = u32::from(
-                    unsafe { scene_present_path(&window) } == RSF_NATIVE_SCENE_PRESENT_DIRECT,
+                    unsafe { rsf_native_scene_present_path(&window) }
+                        == RSF_NATIVE_SCENE_PRESENT_DIRECT,
                 );
                 record.scene_view_key = scene.view_key;
                 record.scene_native_frame = scene.native_frame;
@@ -239,7 +248,7 @@ unsafe extern "C" fn rsf_core_native_window_present(
     }
     if let Some(window) = window
         && record.scene_matched != 0
-        && scene_for_window(&window, query_scene).is_none_or(|scene| {
+        && scene_for_window(&window).is_none_or(|scene| {
             scene.submission_id != record.scene_submission_id
                 || scene.view_key != record.scene_view_key
                 || scene.native_frame != record.scene_native_frame

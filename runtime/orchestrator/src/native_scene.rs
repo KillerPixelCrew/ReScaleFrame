@@ -168,7 +168,10 @@ fn find_window(window: &Pass) -> Option<Scene> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_scene_for_window(window: *const Pass, out: *mut Scene) -> i32 {
+pub(super) unsafe extern "C" fn rsf_native_scene_for_window(
+    window: *const Pass,
+    out: *mut Scene,
+) -> i32 {
     if !unsafe { full_prefix(window) && full_prefix(out) } {
         return 0;
     }
