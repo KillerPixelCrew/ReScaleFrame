@@ -21,6 +21,30 @@ typedef struct rsf_gen12_extent {
 
 struct rsf_core_capture12_platform;
 struct rsf_ffx_version;
+/* API versions the native leaf was compiled against, for Rust's startup records. */
+typedef struct rsf_fsr12_sdk {
+    uint32_t generation[3], swapchain[3];
+} rsf_fsr12_sdk;
+
+/* Generation context plan. Rust selects the version, extents and FFX create flags. */
+typedef struct rsf_fsr12_generation {
+    uint64_t version_id;
+    uint32_t width, height, max_render_width, max_render_height, format, flags;
+} rsf_fsr12_generation;
+
+/* Prepare constants planned in Rust; native copies them into the typed SDK descriptor. */
+typedef struct rsf_fsr12_prepare {
+    void* command;
+    void* depth;
+    void* motion;
+    uint64_t sequence;
+    uint32_t render_width, render_height;
+    float jitter[2], motion_scale[2];
+    float frame_time_ms, near_plane, far_plane, vertical_fov, view_space_to_meters;
+    uint32_t reset;
+    float position[3], right[3], up[3], forward[3];
+} rsf_fsr12_prepare;
+
 typedef struct rsf_fsr12_config {
     void* chain;
     void* user;
@@ -44,19 +68,22 @@ typedef struct rsf_fsr12_generated {
 typedef struct rsf_fsr12_ops {
     const rsf_gen12_checks* check;
     const struct rsf_core_capture12_platform* capture;
+    const rsf_fsr12_sdk* sdk;
     rsf_backend_result (*resolve)(const rsf_generation_setup*, void* module, void* latency, void**);
     void (*close)(void*);
     rsf_backend_result (*versions)(void*, const rsf_generation_setup*, struct rsf_ffx_version*, uint64_t*);
     uint32_t (*surface_format)(uint32_t);
-    rsf_backend_result (*create_generation)(void*, const rsf_gen12_extent*, const rsf_fg_status*, const char*, void**);
-    rsf_backend_result (*provider_matches)(void*, void*, uint64_t);
-    rsf_backend_result (*create_chain)(void*, const rsf_generation_setup*, void**, void**);
+    /* The next three return raw FFX codes; Rust owns admission and records. */
+    uint32_t (*create_generation)(void*, const rsf_fsr12_generation*, void**);
+    uint32_t (*provider_version)(void*, void*, uint64_t*);
+    /* Fails only before the SDK call (DXGI factory); FFX result and the SDK's chain come back. */
+    rsf_backend_result (*create_chain)(void*, const rsf_generation_setup*, void**, void**, uint32_t*);
     uint32_t (*destroy_context)(void*, void**);
     uint32_t (*wait)(void*, void*);
     int32_t (*chain_extent)(void*, rsf_gen12_extent*);
     uint32_t (*whole_texture)(const rsf_backend_resource*);
     uint32_t (*configure)(void*, void*, const rsf_fsr12_config*);
-    uint32_t (*prepare)(void*, void*, void*, const rsf_fg_frame*, uint64_t, uint32_t, float, float);
+    uint32_t (*prepare)(void*, void*, const rsf_fsr12_prepare*);
     uint32_t (*generate)(void*, void*, void*, rsf_fsr12_generated*);
     uint32_t (*copy_present)(void*);
     int32_t (*present_count)(void*, uint32_t*);
@@ -111,9 +138,11 @@ rsf_backend_result rsf_core_xeg12_create(const rsf_xeg12_ops*, const rsf_generat
 }
 static_assert(sizeof(rsf_gen12_checks) == 5 * sizeof(void*));
 static_assert(sizeof(rsf_gen12_extent) == 12);
+static_assert(sizeof(rsf_fsr12_sdk) == 24 && sizeof(rsf_fsr12_generation) == 32);
+static_assert(sizeof(rsf_fsr12_prepare) == 128);
 static_assert(sizeof(rsf_fsr12_config) == 48);
 static_assert(sizeof(rsf_fsr12_generated) == 104);
-static_assert(sizeof(rsf_fsr12_ops) == 18 * sizeof(void*));
+static_assert(sizeof(rsf_fsr12_ops) == 19 * sizeof(void*));
 static_assert(sizeof(rsf_xeg12_version) == 12 && sizeof(rsf_xeg12_present) == 12);
 static_assert(sizeof(rsf_xeg12_ops) == 24 * sizeof(void*));
 #endif
