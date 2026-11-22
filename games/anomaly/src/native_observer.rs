@@ -20,8 +20,8 @@ use crate::sys::{
 use rsf_game_sys::{
     RSF_ERROR_ABI_MISMATCH as ABI_MISMATCH, RSF_ERROR_BUSY as BUSY,
     RSF_ERROR_INVALID_ARGUMENT as INVALID_ARGUMENT, RSF_ERROR_NATIVE_REFUSED as NATIVE_REFUSED,
-    RSF_ERROR_NOT_READY as NOT_READY, RSF_GAME_ABI_VERSION, RSF_OK as OK, rsf_game_control_args,
-    rsf_game_host_services, rsf_game_log_fn, rsf_game_prepare_args, rsf_game_renderer_status,
+    RSF_ERROR_NOT_READY as NOT_READY, RSF_GAME_ABI_VERSION, RSF_OK as OK, rsf_game_host_services,
+    rsf_game_log_fn, rsf_game_renderer_status,
     rsf_game_start_args, rsf_result,
 };
 use std::ffi::{CStr, CString, c_char, c_void};
@@ -583,8 +583,9 @@ unsafe fn validate<T>(value: *const T, abi: u32) -> Result<(), rsf_result> {
     Ok(())
 }
 
+#[cfg(feature = "native-entry")]
 pub(crate) unsafe fn rsf_anomaly_observer_prepare(
-    args: *const rsf_game_prepare_args,
+    args: *const rsf_game_sys::rsf_game_prepare_args,
     platform: &Platform,
 ) -> rsf_result {
     if let Err(error) = unsafe { validate(args, RSF_GAME_ABI_VERSION) } {
@@ -607,8 +608,9 @@ pub(crate) unsafe fn rsf_anomaly_observer_start(
     }
 }
 
+#[cfg(feature = "native-entry")]
 pub(crate) unsafe fn rsf_anomaly_observer_quiesce(
-    args: *const rsf_game_control_args,
+    args: *const rsf_game_sys::rsf_game_control_args,
     platform: &Platform,
 ) -> rsf_result {
     match unsafe { validate(args, RSF_GAME_ABI_VERSION) } {
@@ -617,8 +619,9 @@ pub(crate) unsafe fn rsf_anomaly_observer_quiesce(
     }
 }
 
+#[cfg(feature = "native-entry")]
 pub(crate) unsafe fn rsf_anomaly_observer_stop(
-    args: *const rsf_game_control_args,
+    args: *const rsf_game_sys::rsf_game_control_args,
     platform: &Platform,
 ) -> rsf_result {
     match unsafe { validate(args, RSF_GAME_ABI_VERSION) } {
@@ -627,6 +630,7 @@ pub(crate) unsafe fn rsf_anomaly_observer_stop(
     }
 }
 
+#[cfg(feature = "native-entry")]
 pub(crate) unsafe extern "C" fn rsf_anomaly_observer_status(
     out: *mut rsf_game_renderer_status,
 ) -> rsf_result {
