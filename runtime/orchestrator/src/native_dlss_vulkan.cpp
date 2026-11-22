@@ -18,11 +18,6 @@
 namespace {
 const sl::ViewportHandle viewport(1);
 using Image = rsf_vkfg_image;
-sl::DLSSMode mode(uint32_t quality) {
-    constexpr sl::DLSSMode modes[] = {sl::DLSSMode::eDLAA, sl::DLSSMode::eMaxQuality, sl::DLSSMode::eBalanced,
-        sl::DLSSMode::eMaxPerformance, sl::DLSSMode::eUltraPerformance};
-    return modes[quality];
-}
 template<class T> T entry(void* module, const char* name) { return reinterpret_cast<T>(GetProcAddress(static_cast<HMODULE>(module), name)); }
 }
 #include "sharpening_vulkan.h"
@@ -49,6 +44,7 @@ struct Init {
     Native& native;
     uint32_t& width;
     uint32_t& height;
+    const rsf_vkdlss_options& options;
 };
 
 rsf_backend_result initialize(void* module, uintptr_t, void* user) {
@@ -65,8 +61,8 @@ rsf_backend_result initialize(void* module, uintptr_t, void* user) {
     if (feature(sl::kFeatureDLSS, "slDLSSGetOptimalSettings", optimal) != sl::Result::eOk ||
         feature(sl::kFeatureDLSS, "slDLSSSetOptions", options) != sl::Result::eOk || !optimal || !options) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
     self.optimal = reinterpret_cast<PFun_slDLSSGetOptimalSettings*>(optimal); self.options = reinterpret_cast<PFun_slDLSSSetOptions*>(options);
-    sl::DLSSOptions request{}; request.mode = mode(self.setup.quality);
-    request.outputWidth = self.setup.output_width; request.outputHeight = self.setup.output_height;
+    sl::DLSSOptions request{};
+    std::memcpy(static_cast<void*>(&request), &init.options, sizeof(request));
     sl::DLSSOptimalSettings plan{};
     if (self.optimal(request, plan) != sl::Result::eOk || !plan.optimalRenderWidth || !plan.optimalRenderHeight) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     init.width = plan.optimalRenderWidth; init.height = plan.optimalRenderHeight;
@@ -87,13 +83,10 @@ int32_t set_constants(void* native, uintptr_t token, const rsf_slvk_sdk_constant
     return self.constants(constants, frame, viewport) == sl::Result::eOk ?
         RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
-int32_t set_options(void* native, const rsf_srvk_frame* input, uint32_t preset_hint) {
+int32_t set_options(void* native, const rsf_vkdlss_options* input) {
     auto& self = *static_cast<Native*>(native);
-    const auto& record = *input->record;
-    sl::DLSSOptions options{}; options.mode = mode(self.setup.quality); options.outputWidth = record.output_width; options.outputHeight = record.output_height;
-    options.colorBuffersHDR = sl::Boolean::eTrue; options.useAutoExposure = sl::Boolean::eTrue; options.preExposure = input->pre_exposure;
-    const auto preset = static_cast<sl::DLSSPreset>(preset_hint);
-    options.dlaaPreset = options.qualityPreset = options.balancedPreset = options.performancePreset = options.ultraPerformancePreset = options.ultraQualityPreset = preset;
+    sl::DLSSOptions options{};
+    std::memcpy(static_cast<void*>(&options), input, sizeof(options));
     return self.options(viewport, options) == sl::Result::eOk ?
         RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
@@ -122,10 +115,11 @@ void capture_record(void* native, void* commands, const rsf_srvk_image* image,
     (void)static_cast<Native*>(native)->capture.record(
         static_cast<VkCommandBuffer>(commands), *image, *record, role, reset);
 }
-int32_t open(const rsf_srvk_setup* setup, void** out, uint32_t* width, uint32_t* height, rsf_vkdlss_commands* commands) noexcept try {
+int32_t open(const rsf_srvk_setup* setup, void** out, uint32_t* width, uint32_t* height, rsf_vkdlss_commands* commands,
+    const rsf_vkdlss_options* options) noexcept try {
     auto self = std::make_unique<Native>();
     self->setup = *setup;
-    Init init{*self, *width, *height};
+    Init init{*self, *width, *height, *options};
     const rsf_slvk_call call{sizeof(call), RSF_SLVK_ABI_VERSION, 0, 0, initialize, &init};
     const auto result = rsf_slvk_invoke(&call);
     if (result != RSF_BACKEND_OK) return result;
@@ -196,4 +190,34 @@ static_assert(sizeof(rsf_vkdlss_tag) == 24);
 static_assert(sl::kBufferTypeDepth == 0 && sl::kBufferTypeMotionVectors == 1 &&
     sl::kBufferTypeScalingInputColor == 3 && sl::kBufferTypeScalingOutputColor == 4 &&
     sl::kBufferTypeBiasCurrentColorHint == 29);
+static_assert(sizeof(sl::DLSSOptions) == sizeof(rsf_vkdlss_options) &&
+    alignof(sl::DLSSOptions) == alignof(rsf_vkdlss_options) &&
+    __is_trivially_copyable(sl::DLSSOptions));
+static_assert(sl::DLSSOptions::s_structType.data1 == 0x6ac826e4);
+static_assert(uint32_t(sl::DLSSMode::eDLAA) == 6 && uint32_t(sl::DLSSMode::eMaxQuality) == 3 &&
+    uint32_t(sl::DLSSMode::eBalanced) == 2 && uint32_t(sl::DLSSMode::eMaxPerformance) == 1 &&
+    uint32_t(sl::DLSSMode::eUltraPerformance) == 4);
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Winvalid-offsetof"
+#endif
+#define RSF_SR_OPTION(vendor, wire) \
+    static_assert(offsetof(sl::DLSSOptions, vendor) == offsetof(rsf_vkdlss_options, wire))
+RSF_SR_OPTION(mode, mode);
+RSF_SR_OPTION(outputWidth, width);
+RSF_SR_OPTION(outputHeight, height);
+RSF_SR_OPTION(preExposure, pre_exposure);
+RSF_SR_OPTION(exposureScale, exposure_scale);
+RSF_SR_OPTION(colorBuffersHDR, hdr);
+RSF_SR_OPTION(indicatorInvertAxisX, invert_x);
+RSF_SR_OPTION(indicatorInvertAxisY, invert_y);
+RSF_SR_OPTION(dlaaPreset, presets);
+static_assert(offsetof(sl::DLSSOptions, ultraQualityPreset) ==
+    offsetof(rsf_vkdlss_options, presets) + 5 * sizeof(uint32_t));
+RSF_SR_OPTION(useAutoExposure, auto_exposure);
+RSF_SR_OPTION(alphaUpscalingEnabled, alpha_upscaling);
+#undef RSF_SR_OPTION
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 #endif

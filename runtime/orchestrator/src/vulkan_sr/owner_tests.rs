@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::vulkan_dlss_sr_abi::{rsf_vkdlss_commands, rsf_vkdlss_platform, rsf_vkdlss_tag};
+use crate::vulkan_dlss_sr_abi::{
+    rsf_vkdlss_commands, rsf_vkdlss_options, rsf_vkdlss_platform, rsf_vkdlss_tag,
+};
 use crate::vulkan_fg_resources_abi::rsf_vkfg_image;
 use crate::vulkan_latency_abi::{RSF_SLVK_ABI_VERSION, rsf_slvk_call};
 use crate::vulkan_streamline_camera::rsf_slvk_sdk_constants;
@@ -185,9 +187,15 @@ static DLSS: rsf_vkdlss_platform = rsf_vkdlss_platform {
                       native: *mut Handle,
                       w: *mut u32,
                       h: *mut u32,
-                      commands: *mut rsf_vkdlss_commands|
+                      commands: *mut rsf_vkdlss_commands,
+                      options: *const rsf_vkdlss_options|
      -> i32 {
         unsafe {
+            assert_eq!(
+                ((*options).mode, (*options).width, (*options).height),
+                (3, 128, 72)
+            );
+            assert_eq!(((*options).hdr, (*options).auto_exposure), (1, 0));
             native.write((*setup).device);
             w.write(64);
             h.write(36);
@@ -243,10 +251,17 @@ static DLSS: rsf_vkdlss_platform = rsf_vkdlss_platform {
         0
     })),
     options: Some(leaf!(|native: Handle,
-                         _: *const Frame,
-                         preset: u32|
+                         options: *const rsf_vkdlss_options|
      -> i32 {
-        unsafe { fake(native).calls.push(Call::DlssOptions(preset)) };
+        let options = unsafe { &*options };
+        assert_eq!(options.mode, 3);
+        assert_eq!((options.hdr, options.auto_exposure), (1, 1));
+        assert_eq!(options.presets, [11; 6]);
+        unsafe {
+            fake(native)
+                .calls
+                .push(Call::DlssOptions(options.presets[0]))
+        };
         0
     })),
     tag: Some(leaf!(|_: Handle,

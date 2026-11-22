@@ -6,7 +6,7 @@ mod sdk_camera_defaults;
 mod sdk_records_abi;
 
 use rsf_game_sys::rsf_frame_record;
-pub(super) use sdk_records_abi::rsf_slvk_sdk_constants;
+pub(super) use sdk_records_abi::{rsf_slvk_sdk_constants, rsf_slvk_sdk_header};
 
 pub(super) fn camera_constants(
     record: &rsf_frame_record,

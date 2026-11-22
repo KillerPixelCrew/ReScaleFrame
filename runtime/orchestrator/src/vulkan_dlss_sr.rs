@@ -4,7 +4,8 @@ use crate::frame_capture_vk::sr_capture_inputs;
 mod commands;
 use self::commands::Dispatch;
 use crate::vulkan_dlss_sr_abi::{
-    rsf_vkdlss_commands, rsf_vkdlss_images, rsf_vkdlss_platform as Platform, rsf_vkdlss_tag,
+    rsf_vkdlss_commands, rsf_vkdlss_images, rsf_vkdlss_options, rsf_vkdlss_platform as Platform,
+    rsf_vkdlss_tag,
 };
 use crate::vulkan_latency_abi::{RSF_SLVK_ABI_VERSION, rsf_slvk_call, rsf_slvk_callback};
 use crate::vulkan_ownership::Claim;
@@ -13,7 +14,7 @@ use crate::vulkan_sr::{
     STORAGE_USAGE, TRANSFER_DST_USAGE, TRANSFER_SRC_USAGE,
 };
 use crate::vulkan_sr_abi::{rsf_srvk_frame, rsf_srvk_image, rsf_srvk_setup};
-use crate::vulkan_streamline_camera::camera_constants;
+use crate::vulkan_streamline_camera::{camera_constants, rsf_slvk_sdk_header};
 use rsf_game_sys::rsf_frame_record;
 use std::ffi::c_void;
 use std::ptr;
@@ -26,6 +27,28 @@ const NOT_READY: i32 = -8;
 const R16: u32 = 76;
 const INPUT_USAGE: u32 = SAMPLED_USAGE | TRANSFER_DST_USAGE;
 const OUTPUT_USAGE: u32 = INPUT_USAGE | STORAGE_USAGE | TRANSFER_SRC_USAGE;
+// Streamline's DLAA, Quality, Balanced, Performance and Ultra Performance.
+const SDK_MODES: [u32; 5] = [6, 3, 2, 1, 4];
+
+fn options(mode: u32, width: u32, height: u32) -> rsf_vkdlss_options {
+    rsf_vkdlss_options {
+        base: rsf_slvk_sdk_header {
+            next: ptr::null_mut(),
+            type_lo: 0x6ac8_26e4,
+            type_mid: 0x4c61,
+            type_hi: 0x4101,
+            type_tail: [0xa9, 0x2d, 0x63, 0x8d, 0x42, 0x10, 0x57, 0xb8],
+            version: 3,
+        },
+        mode,
+        width,
+        height,
+        hdr: 1,
+        pre_exposure: 1.0,
+        exposure_scale: 1.0,
+        ..Default::default()
+    }
+}
 
 impl rsf_slvk_call {
     pub(super) fn for_record(
@@ -55,6 +78,7 @@ pub(super) struct Owner {
     dispatch: Option<Dispatch>,
     width: u32,
     height: u32,
+    mode: u32,
     images: rsf_vkdlss_images,
     history: History,
     preset: u32,
@@ -170,7 +194,11 @@ unsafe extern "C" fn evaluate(_: *mut c_void, token: usize, user: *mut c_void) -
     if result != 0 {
         return result;
     }
-    let result = unsafe { (platform.options.unwrap())(native, *input, owner.preset) };
+    let mut evaluate_options = options(owner.mode, record.output_width, record.output_height);
+    evaluate_options.auto_exposure = 1;
+    evaluate_options.pre_exposure = input.pre_exposure;
+    evaluate_options.presets = [owner.preset; 6];
+    let result = unsafe { (platform.options.unwrap())(native, &evaluate_options) };
     if result != 0 {
         return result;
     }
@@ -278,6 +306,7 @@ impl Owner {
         platform: &'static Platform,
         setup: &rsf_srvk_setup,
     ) -> Result<Box<Self>, i32> {
+        let mode = *SDK_MODES.get(setup.quality as usize).ok_or(INVALID)?;
         let claim = Claim::acquire(&OCCUPIED).ok_or(NOT_READY)?;
         let raw = allocate_handle(Self {
             _claim: claim,
@@ -286,6 +315,7 @@ impl Owner {
             dispatch: None,
             width: 0,
             height: 0,
+            mode,
             images: rsf_vkdlss_images::default(),
             history: History::default(),
             preset: 0,
@@ -296,6 +326,7 @@ impl Owner {
         }
         let mut owner = unsafe { Box::from_raw(raw) };
         let mut commands = rsf_vkdlss_commands::default();
+        let plan_options = options(mode, setup.output_width, setup.output_height);
         let result = unsafe {
             (platform.open.unwrap())(
                 setup,
@@ -303,6 +334,7 @@ impl Owner {
                 &mut owner.width,
                 &mut owner.height,
                 &mut commands,
+                &plan_options,
             )
         };
         if result != 0 {
