@@ -15,6 +15,7 @@ typedef void (*rsf_ac7_capture_log_fn)(void* user, const char* message);
    The capture forwards engine decisions unchanged. F9 arms 60 present intervals; pipeline
    samples are taken in intervals 0, 30 and 59. Guarded post-process and widget producer scopes
    are saved to native.jsonl. GPU and CPU timelines remain separately labelled. */
+/* Shared C entry points used by the carrier and the fixture. Rust owns capture state and records. */
 void rsf_ac7_motion_capture_configure(const char* directory, rsf_ac7_capture_log_fn log, void* user);
 int rsf_ac7_motion_capture_install(void);
 void rsf_ac7_motion_capture_shutdown(void);

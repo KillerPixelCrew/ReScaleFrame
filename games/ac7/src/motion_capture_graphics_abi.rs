@@ -3,10 +3,209 @@
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
 use crate::d3d11_observer_layout_abi::rsf_observer_layout_element;
+use rsf_game_sys::rsf_game_render_pass;
 
 pub const RSF_TEXTURE_DUMP_ABI_VERSION: u32 = 2;
 pub const RSF_OBSERVER_ABI_VERSION: u32 = 8;
 pub const RSF_FRAME_TAP_ABI_VERSION: u32 = 15;
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_camera_frame {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub view_to_clip: [f32; 16usize],
+    pub clip_to_view: [f32; 16usize],
+    pub view_to_world: [f32; 16usize],
+    pub world_to_view: [f32; 16usize],
+    pub clip_to_previous_clip: [f32; 16usize],
+    pub jitter_pixels: [f32; 2usize],
+    pub previous_jitter_pixels: [f32; 2usize],
+    pub render_width: u32,
+    pub render_height: u32,
+    pub output_width: u32,
+    pub output_height: u32,
+    pub near_plane: f32,
+    pub far_plane: f32,
+    pub vertical_fov_radians: f32,
+    pub depth_inverted: u32,
+    pub motion_jittered: u32,
+    pub frame_time_seconds: f32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_camera_frame"][::core::mem::size_of::<rsf_camera_frame>() - 384usize];
+    ["Alignment of rsf_camera_frame"][::core::mem::align_of::<rsf_camera_frame>() - 4usize];
+    ["Offset of field: rsf_camera_frame::struct_size"]
+        [::core::mem::offset_of!(rsf_camera_frame, struct_size) - 0usize];
+    ["Offset of field: rsf_camera_frame::abi_version"]
+        [::core::mem::offset_of!(rsf_camera_frame, abi_version) - 4usize];
+    ["Offset of field: rsf_camera_frame::view_to_clip"]
+        [::core::mem::offset_of!(rsf_camera_frame, view_to_clip) - 8usize];
+    ["Offset of field: rsf_camera_frame::clip_to_view"]
+        [::core::mem::offset_of!(rsf_camera_frame, clip_to_view) - 72usize];
+    ["Offset of field: rsf_camera_frame::view_to_world"]
+        [::core::mem::offset_of!(rsf_camera_frame, view_to_world) - 136usize];
+    ["Offset of field: rsf_camera_frame::world_to_view"]
+        [::core::mem::offset_of!(rsf_camera_frame, world_to_view) - 200usize];
+    ["Offset of field: rsf_camera_frame::clip_to_previous_clip"]
+        [::core::mem::offset_of!(rsf_camera_frame, clip_to_previous_clip) - 264usize];
+    ["Offset of field: rsf_camera_frame::jitter_pixels"]
+        [::core::mem::offset_of!(rsf_camera_frame, jitter_pixels) - 328usize];
+    ["Offset of field: rsf_camera_frame::previous_jitter_pixels"]
+        [::core::mem::offset_of!(rsf_camera_frame, previous_jitter_pixels) - 336usize];
+    ["Offset of field: rsf_camera_frame::render_width"]
+        [::core::mem::offset_of!(rsf_camera_frame, render_width) - 344usize];
+    ["Offset of field: rsf_camera_frame::render_height"]
+        [::core::mem::offset_of!(rsf_camera_frame, render_height) - 348usize];
+    ["Offset of field: rsf_camera_frame::output_width"]
+        [::core::mem::offset_of!(rsf_camera_frame, output_width) - 352usize];
+    ["Offset of field: rsf_camera_frame::output_height"]
+        [::core::mem::offset_of!(rsf_camera_frame, output_height) - 356usize];
+    ["Offset of field: rsf_camera_frame::near_plane"]
+        [::core::mem::offset_of!(rsf_camera_frame, near_plane) - 360usize];
+    ["Offset of field: rsf_camera_frame::far_plane"]
+        [::core::mem::offset_of!(rsf_camera_frame, far_plane) - 364usize];
+    ["Offset of field: rsf_camera_frame::vertical_fov_radians"]
+        [::core::mem::offset_of!(rsf_camera_frame, vertical_fov_radians) - 368usize];
+    ["Offset of field: rsf_camera_frame::depth_inverted"]
+        [::core::mem::offset_of!(rsf_camera_frame, depth_inverted) - 372usize];
+    ["Offset of field: rsf_camera_frame::motion_jittered"]
+        [::core::mem::offset_of!(rsf_camera_frame, motion_jittered) - 376usize];
+    ["Offset of field: rsf_camera_frame::frame_time_seconds"]
+        [::core::mem::offset_of!(rsf_camera_frame, frame_time_seconds) - 380usize];
+};
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_game_depth_domain {
+    pub classify_min: f32,
+    pub classify_max: f32,
+    pub endpoint_flags: u32,
+    pub reserved: u32,
+    pub viewport_xywh: [f32; 4usize],
+    pub viewport_min_depth: f32,
+    pub viewport_max_depth: f32,
+    pub source_clip_to_target_clip: [f32; 16usize],
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_game_depth_domain"][::core::mem::size_of::<rsf_game_depth_domain>() - 104usize];
+    ["Alignment of rsf_game_depth_domain"]
+        [::core::mem::align_of::<rsf_game_depth_domain>() - 4usize];
+    ["Offset of field: rsf_game_depth_domain::classify_min"]
+        [::core::mem::offset_of!(rsf_game_depth_domain, classify_min) - 0usize];
+    ["Offset of field: rsf_game_depth_domain::classify_max"]
+        [::core::mem::offset_of!(rsf_game_depth_domain, classify_max) - 4usize];
+    ["Offset of field: rsf_game_depth_domain::endpoint_flags"]
+        [::core::mem::offset_of!(rsf_game_depth_domain, endpoint_flags) - 8usize];
+    ["Offset of field: rsf_game_depth_domain::reserved"]
+        [::core::mem::offset_of!(rsf_game_depth_domain, reserved) - 12usize];
+    ["Offset of field: rsf_game_depth_domain::viewport_xywh"]
+        [::core::mem::offset_of!(rsf_game_depth_domain, viewport_xywh) - 16usize];
+    ["Offset of field: rsf_game_depth_domain::viewport_min_depth"]
+        [::core::mem::offset_of!(rsf_game_depth_domain, viewport_min_depth) - 32usize];
+    ["Offset of field: rsf_game_depth_domain::viewport_max_depth"]
+        [::core::mem::offset_of!(rsf_game_depth_domain, viewport_max_depth) - 36usize];
+    ["Offset of field: rsf_game_depth_domain::source_clip_to_target_clip"]
+        [::core::mem::offset_of!(rsf_game_depth_domain, source_clip_to_target_clip) - 40usize];
+};
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_game_depth_domains {
+    pub struct_size: u32,
+    pub version: u32,
+    pub domain_count: u32,
+    pub clear_enabled: u32,
+    pub clear_value: f32,
+    pub reserved: [u32; 3usize],
+    pub domains: [rsf_game_depth_domain; 2usize],
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_game_depth_domains"][::core::mem::size_of::<rsf_game_depth_domains>() - 240usize];
+    ["Alignment of rsf_game_depth_domains"]
+        [::core::mem::align_of::<rsf_game_depth_domains>() - 4usize];
+    ["Offset of field: rsf_game_depth_domains::struct_size"]
+        [::core::mem::offset_of!(rsf_game_depth_domains, struct_size) - 0usize];
+    ["Offset of field: rsf_game_depth_domains::version"]
+        [::core::mem::offset_of!(rsf_game_depth_domains, version) - 4usize];
+    ["Offset of field: rsf_game_depth_domains::domain_count"]
+        [::core::mem::offset_of!(rsf_game_depth_domains, domain_count) - 8usize];
+    ["Offset of field: rsf_game_depth_domains::clear_enabled"]
+        [::core::mem::offset_of!(rsf_game_depth_domains, clear_enabled) - 12usize];
+    ["Offset of field: rsf_game_depth_domains::clear_value"]
+        [::core::mem::offset_of!(rsf_game_depth_domains, clear_value) - 16usize];
+    ["Offset of field: rsf_game_depth_domains::reserved"]
+        [::core::mem::offset_of!(rsf_game_depth_domains, reserved) - 20usize];
+    ["Offset of field: rsf_game_depth_domains::domains"]
+        [::core::mem::offset_of!(rsf_game_depth_domains, domains) - 32usize];
+};
+pub type rsf_ac7_capture_log_fn = ::core::option::Option<
+    unsafe extern "C" fn(user: *mut ::core::ffi::c_void, message: *const ::core::ffi::c_char),
+>;
+unsafe extern "C" {
+    pub fn rsf_ac7_motion_capture_configure(
+        directory: *const ::core::ffi::c_char,
+        log: rsf_ac7_capture_log_fn,
+        user: *mut ::core::ffi::c_void,
+    );
+}
+unsafe extern "C" {
+    pub fn rsf_ac7_motion_capture_install() -> ::core::ffi::c_int;
+}
+unsafe extern "C" {
+    pub fn rsf_ac7_motion_capture_shutdown();
+}
+unsafe extern "C" {
+    pub fn rsf_ac7_motion_capture_shader(
+        shader: *mut ::core::ffi::c_void,
+        stage: u32,
+        bytes: *const ::core::ffi::c_void,
+        size: u32,
+    );
+}
+unsafe extern "C" {
+    pub fn rsf_ac7_motion_capture_buffer(
+        user: *mut ::core::ffi::c_void,
+        buffer: *mut ::core::ffi::c_void,
+        initial: *const ::core::ffi::c_void,
+        bytes: u32,
+        bind_flags: u32,
+    );
+}
+unsafe extern "C" {
+    pub fn rsf_ac7_motion_capture_upload(
+        buffer: *mut ::core::ffi::c_void,
+        bytes: *const ::core::ffi::c_void,
+        size: u32,
+    );
+}
+unsafe extern "C" {
+    pub fn rsf_ac7_motion_capture_layout(
+        layout: *mut ::core::ffi::c_void,
+        elements: *const rsf_observer_layout_element,
+        copied: u32,
+        count: u32,
+    );
+}
+unsafe extern "C" {
+    pub fn rsf_ac7_motion_capture_geometry(draw: *const rsf_frame_tap_geometry);
+}
+unsafe extern "C" {
+    pub fn rsf_ac7_motion_capture_request();
+}
+unsafe extern "C" {
+    pub fn rsf_ac7_motion_capture_native_owner(enabled: u32);
+}
+unsafe extern "C" {
+    pub fn rsf_ac7_motion_capture_native_pass(pass: *const rsf_game_render_pass, begin: u32);
+}
+unsafe extern "C" {
+    pub fn rsf_ac7_motion_capture_present(
+        swapchain: *mut ::core::ffi::c_void,
+        prefix: *mut ::core::ffi::c_char,
+        capacity: u32,
+    ) -> ::core::ffi::c_int;
+}
 pub type rsf_dump_texture_result = i32;
 pub type rsf_dump_log_fn = ::core::option::Option<
     unsafe extern "C" fn(user: *mut ::core::ffi::c_void, message: *const ::core::ffi::c_char),

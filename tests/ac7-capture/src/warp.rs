@@ -19,46 +19,6 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{BOOL, Interface, PCSTR, PCWSTR, s, w};
 
 type Test<T> = Result<T, String>;
-type Log = unsafe extern "C" fn(*mut c_void, *const c_char);
-
-unsafe extern "C" {
-    fn rsf_ac7_motion_capture_configure(
-        directory: *const c_char,
-        log: Option<Log>,
-        user: *mut c_void,
-    );
-    fn rsf_ac7_motion_capture_install() -> i32;
-    fn rsf_ac7_motion_capture_shutdown();
-    fn rsf_ac7_motion_capture_request();
-    fn rsf_ac7_motion_capture_present(
-        chain: *mut c_void,
-        prefix: *mut c_char,
-        capacity: u32,
-    ) -> i32;
-    fn rsf_ac7_motion_capture_shader(
-        shader: *mut c_void,
-        stage: u32,
-        bytes: *const c_void,
-        size: u32,
-    );
-    fn rsf_ac7_motion_capture_buffer(
-        user: *mut c_void,
-        buffer: *mut c_void,
-        bytes: *const c_void,
-        size: u32,
-        bind_flags: u32,
-    );
-    fn rsf_ac7_motion_capture_upload(buffer: *mut c_void, bytes: *const c_void, size: u32);
-    fn rsf_ac7_motion_capture_layout(
-        layout: *mut c_void,
-        elements: *const rsf_observer_layout_element,
-        copied: u32,
-        count: u32,
-    );
-    fn rsf_ac7_motion_capture_geometry(draw: *const rsf_frame_tap_geometry);
-    fn rsf_ac7_motion_capture_native_pass(pass: *const rsf_game_render_pass, begin: u32);
-}
-
 static STAGES: AtomicU32 = AtomicU32::new(0);
 
 unsafe extern "C" fn shader_seen(
