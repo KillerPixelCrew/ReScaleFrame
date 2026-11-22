@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::Setup;
 use crate::dx12_vulkan_platform::lookup;
+use crate::vulkan_fg_copy::{Barrier, rsf_core_vkfg_record_barrier, rsf_core_vkfg_record_copy};
+use crate::vulkan_fg_resources_abi::rsf_vkfg_image_copy as ImageCopy;
 use ash::vk::{self, Handle as _};
 use std::{ffi::c_void, mem};
 
@@ -15,6 +17,8 @@ pub(super) struct Wsi {
     present: vk::PFN_vkQueuePresentKHR,
     idle: vk::PFN_vkDeviceWaitIdle,
     wait_inputs: vk::PFN_vkWaitSemaphores,
+    barrier: vk::PFN_vkCmdPipelineBarrier,
+    copy: vk::PFN_vkCmdCopyImage,
 }
 
 impl Wsi {
@@ -66,6 +70,8 @@ impl Wsi {
             present: entry!(c"vkQueuePresentKHR", PFN_vkQueuePresentKHR),
             idle: entry!(c"vkDeviceWaitIdle", PFN_vkDeviceWaitIdle),
             wait_inputs: entry!(c"vkWaitSemaphores", PFN_vkWaitSemaphores),
+            barrier: entry!(c"vkCmdPipelineBarrier", PFN_vkCmdPipelineBarrier),
+            copy: entry!(c"vkCmdCopyImage", PFN_vkCmdCopyImage),
         })
     }
 
@@ -137,4 +143,34 @@ impl Wsi {
             .values(&values);
         unsafe { (self.wait_inputs)(self.device, &info, 15_000_000_000) }.as_raw()
     }
+}
+
+pub(super) unsafe extern "C" fn record_barrier(
+    user: *mut c_void,
+    commands: *mut c_void,
+    plan: *const Barrier,
+) {
+    let wsi = unsafe { &*user.cast::<Wsi>() };
+    unsafe {
+        rsf_core_vkfg_record_barrier(
+            wsi.barrier,
+            vk::CommandBuffer::from_raw(commands as u64),
+            &*plan,
+        )
+    };
+}
+
+pub(super) unsafe extern "C" fn record_copy(
+    user: *mut c_void,
+    commands: *mut c_void,
+    plan: *const ImageCopy,
+) {
+    let wsi = unsafe { &*user.cast::<Wsi>() };
+    unsafe {
+        rsf_core_vkfg_record_copy(
+            wsi.copy,
+            vk::CommandBuffer::from_raw(commands as u64),
+            &*plan,
+        )
+    };
 }

@@ -13,7 +13,6 @@
 #include <cstring>
 #include <memory>
 #include "native_fg_dlss_vulkan_capture.h"
-#include "vulkan_fg_copy.h"
 #include "vulkan_fg_resources_native.h"
 #include "../../backends/common/frame_capture_vk.h"
 
@@ -27,8 +26,6 @@ void on_error(const sl::APIError& error) { rsf_core_dlgvk_report_api_error(stati
 struct Native {
     rsf_fgvk_setup setup{};
     rsf::vkfg::Device gpu;
-    PFN_vkCmdPipelineBarrier barrier = nullptr;
-    PFN_vkCmdCopyImage copy = nullptr;
     PFun_slSetConstants* constants = nullptr;
     PFun_slSetTagForFrame* tags = nullptr;
     PFun_slFreeResources* release = nullptr;
@@ -46,7 +43,7 @@ static_assert(sizeof(rsf_dlgvk_sdk_call) == 96);
 static_assert(offsetof(rsf_dlgvk_sdk_call, camera) == 64);
 static_assert(offsetof(rsf_dlgvk_sdk_call, tags) == 80);
 static_assert(offsetof(rsf_dlgvk_sdk_call, options) == 88);
-static_assert(sizeof(rsf_dlgvk_platform) == 160);
+static_assert(sizeof(rsf_dlgvk_platform) == 144);
 static_assert(VK_IMAGE_USAGE_TRANSFER_SRC_BIT == 1 && VK_IMAGE_USAGE_TRANSFER_DST_BIT == 2 &&
     VK_FORMAT_R8G8B8A8_UNORM == 37 && VK_FORMAT_B8G8R8A8_UNORM == 44);
 static_assert(sl::kBufferTypeDepth == 0 && sl::kBufferTypeMotionVectors == 1 &&
@@ -156,9 +153,6 @@ rsf_backend_result open(const rsf_fgvk_setup* setup, void** out) noexcept try {
 rsf_backend_result prepare_chain(void* user, uint32_t* capture_enabled, void** gpu) noexcept try {
     auto* self = static_cast<Native*>(user);
     const auto& graphics = self->setup.graphics;
-#define RSF_LOAD(member, function) self->member = reinterpret_cast<PFN_##function>(graphics.device_proc(graphics.device, #function)); if (!self->member) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT
-    RSF_LOAD(barrier, vkCmdPipelineBarrier); RSF_LOAD(copy, vkCmdCopyImage);
-#undef RSF_LOAD
     auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(graphics.instance_proc(graphics.instance, "vkGetPhysicalDeviceMemoryProperties"));
     if (!properties) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
     VkPhysicalDeviceMemoryProperties memory{};
@@ -184,12 +178,6 @@ constexpr rsf_dlgvk_platform platform{
         } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
     },
     rsf_slvk_invoke, initialize, configure, sample, constants, tag, release,
-    [](void* user, void* commands, const rsf_vkfg_barrier* plan) {
-        rsf_core_vkfg_record_barrier(static_cast<Native*>(user)->barrier, static_cast<VkCommandBuffer>(commands), plan);
-    },
-    [](void* user, void* commands, const rsf_vkfg_image_copy* plan) {
-        rsf_core_vkfg_record_copy(static_cast<Native*>(user)->copy, static_cast<VkCommandBuffer>(commands), plan);
-    },
     [](void* user, void* commands, const rsf_srvk_image* image, const rsf_frame_record* record, uint32_t role, uint64_t group) {
         static constexpr const char* roles[] = {"fg-depth", "fg-motion-uv", "fg-hudless-color"};
         auto& self = *static_cast<Native*>(user);

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::vulkan_dlss_fg::sdk_fg_options::Packed;
 use crate::vulkan_fg_abi::{rsf_dlssgvk_status as Status, rsf_fgvk_setup as Setup};
-use crate::vulkan_fg_copy::{BarrierFn, CopyFn};
 use crate::vulkan_fg_resources_abi::{rsf_vkfg_image as Image, rsf_vkfg_platform as Gpu};
 use crate::vulkan_latency_abi::{rsf_slvk_call, rsf_slvk_callback};
 use crate::vulkan_sr_abi::rsf_srvk_image as SourceImage;
@@ -60,8 +59,6 @@ pub(super) struct Platform {
     pub constants: rsf_slvk_callback,
     pub tag: rsf_slvk_callback,
     pub release: rsf_slvk_callback,
-    pub barrier: BarrierFn,
-    pub copy: CopyFn,
     pub capture: unsafe extern "C" fn(Handle, Handle, *const SourceImage, *const Record, u32, u64),
     pub remember: unsafe extern "C" fn(Handle, *const Record, *const Status, u32),
     pub capture_group: unsafe extern "C" fn(Handle, u64, u32),
@@ -77,5 +74,5 @@ const _: () = {
     assert!(std::mem::offset_of!(SdkCall, camera) == 64);
     assert!(std::mem::offset_of!(SdkCall, tags) == 80);
     assert!(std::mem::offset_of!(SdkCall, options) == 88);
-    assert!(size_of::<Platform>() == 160);
+    assert!(size_of::<Platform>() == 144);
 };

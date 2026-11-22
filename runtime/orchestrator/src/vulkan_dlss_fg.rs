@@ -170,6 +170,7 @@ fn invoke(
 
 struct RecordWork<'a> {
     platform: &'a Platform,
+    wsi: &'a Wsi,
     sdk: SdkCall,
     input: &'a Frame,
     images: &'a mut [Image],
@@ -248,9 +249,9 @@ unsafe extern "C" fn record_inputs(module: Handle, token: usize, user: Handle) -
     for (source, image) in work.sources.iter().zip(work.images.iter_mut()) {
         unsafe {
             record_shader_read_copy(
-                work.platform.barrier,
-                work.platform.copy,
-                sdk.native,
+                wsi::record_barrier,
+                wsi::record_copy,
+                ptr::from_ref(work.wsi).cast_mut().cast(),
                 sdk.commands,
                 source.image,
                 image,
@@ -484,6 +485,7 @@ impl Owner {
         };
         let mut work = RecordWork {
             platform: self.platform,
+            wsi: self.wsi.as_ref().unwrap(),
             input,
             sdk: SdkCall {
                 native: self.native,

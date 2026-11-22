@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::vulkan_fg_copy::{Barrier, ImageCopy};
 
 #[derive(Default)]
 struct Harness {
@@ -195,8 +194,29 @@ unsafe extern "C" fn sdk_release(_: Handle, _: usize, user: Handle) -> i32 {
     test.release_result
 }
 
-unsafe extern "C" fn barrier(_: Handle, _: Handle, _: *const Barrier) {}
-unsafe extern "C" fn copy(_: Handle, _: Handle, _: *const ImageCopy) {}
+unsafe extern "system" fn barrier(
+    _: vk::CommandBuffer,
+    _: vk::PipelineStageFlags,
+    _: vk::PipelineStageFlags,
+    _: vk::DependencyFlags,
+    _: u32,
+    _: *const vk::MemoryBarrier<'_>,
+    _: u32,
+    _: *const vk::BufferMemoryBarrier<'_>,
+    _: u32,
+    _: *const vk::ImageMemoryBarrier<'_>,
+) {
+}
+unsafe extern "system" fn copy(
+    _: vk::CommandBuffer,
+    _: vk::Image,
+    _: vk::ImageLayout,
+    _: vk::Image,
+    _: vk::ImageLayout,
+    _: u32,
+    _: *const vk::ImageCopy,
+) {
+}
 unsafe extern "C" fn capture(
     _: Handle,
     _: Handle,
@@ -264,6 +284,8 @@ unsafe extern "C" fn proc(
         name if name == c"vkGetSwapchainImagesKHR" => entry!(PFN_vkGetSwapchainImagesKHR, images),
         name if name == c"vkAcquireNextImageKHR" => entry!(PFN_vkAcquireNextImageKHR, acquire),
         name if name == c"vkQueuePresentKHR" => entry!(PFN_vkQueuePresentKHR, present),
+        name if name == c"vkCmdPipelineBarrier" => entry!(PFN_vkCmdPipelineBarrier, barrier),
+        name if name == c"vkCmdCopyImage" => entry!(PFN_vkCmdCopyImage, copy),
         name if name == c"vkDeviceWaitIdle" => entry!(PFN_vkDeviceWaitIdle, idle),
         name if name == c"vkWaitSemaphores" => entry!(PFN_vkWaitSemaphores, wait_inputs),
         _ => None,
@@ -286,8 +308,6 @@ const PLATFORM: Platform = Platform {
     constants: None,
     tag: None,
     release: Some(sdk_release),
-    barrier,
-    copy,
     capture,
     remember,
     capture_group: group,

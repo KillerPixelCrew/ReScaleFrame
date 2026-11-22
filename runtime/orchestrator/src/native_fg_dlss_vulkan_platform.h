@@ -26,9 +26,6 @@ struct rsf_dlgvk_sdk_call {
     const rsf_slvk_sdk_fg_options* options;
 };
 
-struct rsf_vkfg_barrier;
-struct rsf_vkfg_image_copy;
-
 struct rsf_dlgvk_platform {
     const rsf_vkfg_platform* gpu;
     rsf_backend_result (*open)(const rsf_fgvk_setup*, void**);
@@ -37,8 +34,6 @@ struct rsf_dlgvk_platform {
     rsf_backend_result (*start_capture)(void*);
     rsf_backend_result (*invoke)(const rsf_slvk_call*);
     rsf_slvk_callback initialize, configure, sample, constants, tag, release;
-    void (*barrier)(void*, void*, const rsf_vkfg_barrier*);
-    void (*copy)(void*, void*, const rsf_vkfg_image_copy*);
     void (*capture)(void*, void*, const rsf_srvk_image*, const rsf_frame_record*, uint32_t role, uint64_t group);
     void (*remember)(void*, const rsf_frame_record*, const rsf_dlssgvk_status*, uint32_t configured);
     void (*capture_group)(void*, uint64_t, uint32_t complete);
