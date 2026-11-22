@@ -105,11 +105,11 @@ void bind_platform()
 extern "C" void rsf_core_dump_capture_sr_parameters(const rsf_frame_record*, uint32_t,
     float, float, float, uint32_t);
 
-void rsf::capture_sr_parameters(const rsf_frame_record& record, uint32_t backend, float x,
+extern "C" void rsf_capture_sr_parameters(const rsf_frame_record* record, uint32_t backend, float x,
     float y, float exposure, uint32_t reset)
 {
     bind_platform();
-    rsf_core_dump_capture_sr_parameters(&record, backend, x, y, exposure, reset);
+    rsf_core_dump_capture_sr_parameters(record, backend, x, y, exposure, reset);
 }
 
 // Forward the public symbols through this archive so embedded and DLL builds

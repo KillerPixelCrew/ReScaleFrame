@@ -5,7 +5,7 @@
 # in the orchestrator because it is a pure function over what the vendors said: no devices, no
 # loading, no state. That is what lets the awkward vendor combinations be tested on a machine that
 # has none of the hardware, which matters because those are exactly the combinations nobody can try.
-# Internal header-only helpers, defined first so every runtime library can link them.
+# Internal utility helpers, defined first so every runtime library can link them.
 add_subdirectory("${CMAKE_SOURCE_DIR}/runtime/common" "${CMAKE_BINARY_DIR}/runtime/common")
 add_library(rsf_contract STATIC src/negotiate.cpp)
 rsf_add_rust_static(rsf_contract_rust rsf_rust_contract rsf-contract rsf_contract)

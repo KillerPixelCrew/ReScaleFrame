@@ -5,6 +5,7 @@ members = [
   "runtime/backends/fsr/compat",
   "runtime/vulkan/ngx",
   "runtime/vulkan/streamline/lifecycle",
+  "runtime/common",
   "runtime/contract",
   "runtime/orchestrator",
   "sdk/game",

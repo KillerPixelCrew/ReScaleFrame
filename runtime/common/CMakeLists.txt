@@ -1,7 +1,6 @@
-# Header-only helpers shared by the runtime libraries that cannot depend on one another: graphics,
-# presentation, orchestrator and the vendor backend libraries. Internal, not part of any ABI.
+# Helpers shared by runtime libraries and independently linked adapters and carriers.
 add_library(rsf_runtime_common INTERFACE)
 target_include_directories(rsf_runtime_common INTERFACE include)
-# sha256_file.h calls BCrypt.
-target_link_libraries(rsf_runtime_common INTERFACE bcrypt)
+rsf_add_rust_static(rsf_common_rust rsf_rust_common rsf-runtime-common rsf_runtime_common)
+target_link_libraries(rsf_runtime_common INTERFACE rsf_common_rust bcrypt)
 add_library(ReScaleFrame::RuntimeCommon ALIAS rsf_runtime_common)

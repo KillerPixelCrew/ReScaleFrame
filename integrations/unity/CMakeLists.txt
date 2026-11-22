@@ -34,6 +34,6 @@ if(EXISTS "${RSF_UNITY_NATIVE_INCLUDE}/IUnityGraphicsD3D12.h")
     # package_state/services.rs, runtime_config.rs, via native/package_state.h). Only those symbols are
     # referenced here; the game plugin's Runtime setup reaches the Runtime through its own native
     # leaves.
-    target_link_libraries(rsf_unity_package PRIVATE rsf_orchestrator_core rsf_unity_mono_rust rsf_build_options d3d12 d3d11)
+    target_link_libraries(rsf_unity_package PRIVATE rsf_orchestrator_core rsf_unity_mono_rust ReScaleFrame::RuntimeCommon rsf_build_options d3d12 d3d11)
     set_target_properties(rsf_unity_package PROPERTIES OUTPUT_NAME "ReScaleFrame.Unity.Native")
 endif()

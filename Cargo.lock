@@ -485,6 +485,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsf-runtime-common"
+version = "0.1.2"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
 name = "rsf-skyrim-se"
 version = "0.1.2"
 dependencies = [

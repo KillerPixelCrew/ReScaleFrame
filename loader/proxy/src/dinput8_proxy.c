@@ -35,7 +35,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <wchar.h>
-#include <bcrypt.h>
+#include <rescaleframe/sha256_file.h>
 
 extern IMAGE_DOS_HEADER __ImageBase;
 
@@ -48,30 +48,12 @@ static uint32_t preferred_quality = 3;
 static int executable_sha256(char output[65])
 {
     wchar_t path[MAX_PATH];
-    BCRYPT_ALG_HANDLE algorithm = NULL;
-    BCRYPT_HASH_HANDLE hash = NULL;
-    HANDLE file = INVALID_HANDLE_VALUE;
-    unsigned char digest[32], buffer[65536];
-    DWORD read = 0;
-    int ok = 0;
+    unsigned char digest[32];
     unsigned i;
-    if (!GetModuleFileNameW(NULL, path, MAX_PATH)) return 0;
-    file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (file == INVALID_HANDLE_VALUE || BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, NULL, 0) < 0 ||
-        BCryptCreateHash(algorithm, &hash, NULL, 0, NULL, 0, 0) < 0) goto done;
-    for (;;) {
-        if (!ReadFile(file, buffer, sizeof(buffer), &read, NULL)) goto done;
-        if (!read) break;
-        if (BCryptHashData(hash, buffer, read, 0) < 0) goto done;
-    }
-    if (read || BCryptFinishHash(hash, digest, sizeof(digest), 0) < 0) goto done;
+    if (!GetModuleFileNameW(NULL, path, MAX_PATH) ||
+        !rsf_common_sha256_file(path, FILE_SHARE_READ, digest)) return 0;
     for (i = 0; i < 32; ++i) snprintf(output + i * 2, 3, "%02x", digest[i]);
-    ok = 1;
-done:
-    if (hash) BCryptDestroyHash(hash);
-    if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
-    if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
-    return ok;
+    return 1;
 }
 
 static void note(const char* format, ...)

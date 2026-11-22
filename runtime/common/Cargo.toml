@@ -1,0 +1,21 @@
+[package]
+name = "rsf-runtime-common"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["staticlib"]
+
+[lints]
+workspace = true
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Security",
+  "Win32_Security_Cryptography",
+  "Win32_Storage_FileSystem",
+  "Win32_System_IO",
+] }

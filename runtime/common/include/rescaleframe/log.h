@@ -2,7 +2,7 @@
 #pragma once
 /* The printf-style log helper every library had its own copy of. The sinks are all
    `void (*)(void* user, const char* message)`, so one function covers them whatever the typedef is
-   called. Messages longer than 512 bytes are truncated by vsnprintf, as in the copies. */
+   called. This native variadic facade uses CRT formatting and keeps up to 511 bytes plus the terminator. */
 #include <cstdarg>
 #include <cstdio>
 
@@ -19,7 +19,7 @@ inline void say(void (*log)(void* user, const char* message), void* user, const 
     if (!log) {
         return;
     }
-    char message[512];
+    char message[512]{};
     va_list arguments;
     va_start(arguments, format);
     std::vsnprintf(message, sizeof(message), format, arguments);
