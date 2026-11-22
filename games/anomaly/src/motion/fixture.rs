@@ -4,8 +4,9 @@ mod mover;
 
 use super::*;
 use crate::geometry_registry_abi::RSF_ANOMALY_DRAW_UNIDENTIFIED_DYNAMIC;
+use crate::motion_profile::{MotionProfile, PROFILES};
 use crate::native_geometry_abi::SOFTWARE_SKINNED;
-use crate::shader_loader::{FrameLayout, SHADER_CONTRACT_CASES, run_frame_fixture};
+use crate::shader_loader::{SHADER_CONTRACT_CASES, run_frame_fixture};
 use std::ffi::CStr;
 
 const CORE: &str = include_str!("../../shaders/core/README.md");
@@ -615,7 +616,7 @@ fn far_diagnostics() {
     let mut current = old;
     let mut world = Mat4::IDENTITY;
     let previous = draw_view(&Mat4::IDENTITY, &old);
-    let stale = |world, bones| unsafe {
+    let stale = |world: &Mat4, bones: &[Mat4]| unsafe {
         rsf_anomaly_motion_stale_palette(&previous, &draw_view(world, bones), 0.001)
     };
     assert!(!stale(&world, &current));
@@ -659,11 +660,8 @@ enum Case {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_contract(
-    selection: *const c_char,
-    standard: &FrameLayout,
-    avx: &FrameLayout,
-) -> i32 {
+unsafe extern "C" fn rsf_anomaly_motion_contract(selection: *const c_char) -> i32 {
+    let [standard, avx] = PROFILES.each_ref().map(MotionProfile::frame_layout);
     let mut cases = MOTION_CASES
         .iter()
         .chain(SHADER_CONTRACT_CASES)
@@ -673,7 +671,7 @@ unsafe extern "C" fn rsf_anomaly_motion_contract(
         let result = std::panic::catch_unwind(|| match body {
             Case::Rust(body) => body(),
             Case::Frame => {
-                run_frame_fixture(standard, avx).expect("compiler caller-frame contract")
+                run_frame_fixture(&standard, &avx).expect("compiler caller-frame contract")
             }
         });
         if result.is_err() {

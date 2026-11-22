@@ -19,6 +19,7 @@ use self::options::Settings;
 use self::report::Counters;
 use self::shaders::{Chain, Loader, Pack, Registry};
 use super::{foliage, window, *};
+use crate::engine_guards::{Image, motion_guard_failure};
 use crate::geometry_registry::RetirementQueue;
 use crate::host_log::Log;
 use crate::lease::Lease;
@@ -27,12 +28,14 @@ use crate::motion_device_abi::{
     RSF_MOTION_CREATED, RSF_MOTION_MULTISAMPLED, RSF_MOTION_READY,
     rsf_anomaly_motion_device_view as DeviceView,
 };
+use crate::motion_profile::MotionProfile;
 use crate::motion_target::{rsf_anomaly_motion_bind_close, rsf_anomaly_motion_bind_draw};
 use crate::motion_target_abi::{
     RSF_ANOMALY_MOTION_BIND_ALREADY_BOUND as ALREADY_BOUND, RSF_ANOMALY_MOTION_BIND_BOUND as BOUND,
     RSF_ANOMALY_MOTION_BIND_CONFLICT as CONFLICT, RSF_ANOMALY_MOTION_BIND_FAULT as FAULT,
     RSF_ANOMALY_MOTION_BIND_UNBOUND as UNBOUND, rsf_anomaly_motion_bind_state as BindState,
 };
+use crate::native_hooks::Site as HookSite;
 use crate::sr_stage::DX10_MSAA;
 use rsf_game_sys::rsf_game_log_fn;
 use std::ffi::{CStr, CString};
@@ -135,15 +138,16 @@ fn wide_path(path: &Path) -> Vec<u16> {
 #[derive(Clone, Copy)]
 struct Build {
     image: usize,
-    profile: usize,
+    /// native_profile.rs index; the motion and SR records share it.
+    index: usize,
+    size: u32,
+    motion: &'static MotionProfile,
+    engine: native::Engine,
 }
 
 impl Build {
     fn image(self) -> Raw {
         self.image as Raw
-    }
-    fn profile(self) -> Raw {
-        self.profile as Raw
     }
 }
 
@@ -210,7 +214,7 @@ impl Render {
             &mut self.binder,
             p.bind,
             context,
-            &p.bind_layout,
+            &native::BIND_LAYOUT,
             backend.cast(),
             rtv,
         );
@@ -228,7 +232,7 @@ impl Render {
             &mut self.binder,
             p.bind,
             self.window.context,
-            &p.bind_layout,
+            &native::BIND_LAYOUT,
             backend.cast(),
             wanted.into(),
             if self.window.open {
@@ -312,24 +316,26 @@ impl Stage {
         *lock(&self.logger)
     }
 
-    fn install(&self, build: Build, size: u32, expected: u32, hash: *const c_char) -> bool {
+    fn install(&self, build: Build, hash: *const c_char) -> bool {
         let _lifecycle = lock(&self.lifecycle);
         if self.active.load(Acquire) {
             return true;
         }
         let log = self.log();
         let p = self.platform;
-        if build.image == 0 || size < 16 || size != expected || build.profile == 0 {
+        let size = build.size;
+        if build.image == 0 || size < 16 {
             log.text(c"Anomaly motion refused: image size differs from the verified build.");
             return false;
         }
         let old = *lock(&self.build);
-        if old.is_some_and(|old| old.profile != build.profile || old.image != build.image) {
+        if old.is_some_and(|old| old.index != build.index || old.image != build.image) {
             log.text(c"Anomaly motion refused: a different build than the installed hooks.");
             return false;
         }
         if !unsafe { (p.hooks_created)() } {
-            let failure = unsafe { (p.guards)(build.image(), size, build.profile()) };
+            let image = Image::new(build.image as *const u8, size, p.copy);
+            let failure = motion_guard_failure(&image, build.motion);
             if !failure.is_null() {
                 let site = unsafe { CStr::from_ptr(failure) }.to_string_lossy();
                 log.say(format!(
@@ -353,7 +359,23 @@ impl Stage {
             (p.foliage_identity)(foliage);
         }
         self.active.store(true, Release);
-        if !unsafe { (p.install_hooks)(build.image(), size, build.profile()) } {
+        let sites = build.motion.sites.each_ref().map(|site| HookSite {
+            _name: site.name,
+            rva: site.rva,
+            expected: site.expected,
+            replacement: ptr::null_mut(),
+            original: ptr::null_mut(),
+        });
+        let installed = unsafe {
+            (p.install_hooks)(
+                build.image(),
+                size,
+                &build.engine,
+                sites.as_ptr(),
+                sites.len(),
+            )
+        };
+        if !installed {
             self.stop_observing();
             lock(&self.render).reset_history();
             log.text(
@@ -648,24 +670,32 @@ unsafe extern "C" fn rsf_anomaly_motion_stage_configure(
 unsafe extern "C" fn rsf_anomaly_motion_stage_install(
     platform: *const Platform,
     image: Raw,
-    size: u32,
-    profile: Raw,
-    expected: u32,
-    hash: *const c_char,
+    build: usize,
 ) -> bool {
-    unsafe { checked_platform(platform) }.is_some_and(|platform| {
-        Stage::get(platform).install(
-            Build {
-                image: image as usize,
-                profile: profile as usize,
-            },
-            size,
-            expected,
-            hash,
-        )
-    })
+    let Some(platform) = (unsafe { checked_platform(platform) }) else {
+        return false;
+    };
+    let stage = Stage::get(platform);
+    let records = (
+        crate::native_profile::PROFILES.get(build),
+        MotionProfile::of(build),
+        native::Engine::of(build),
+    );
+    let (Some(native), Some(motion), Some(engine)) = records else {
+        stage
+            .log()
+            .text(c"Anomaly motion refused: no motion profile for the verified build.");
+        return false;
+    };
+    let selected = Build {
+        image: image as usize,
+        index: build,
+        size: native.image_size,
+        motion,
+        engine,
+    };
+    stage.install(selected, native.sha256.as_ptr())
 }
-
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_motion_stage_quiesce() -> bool {
     STAGE.get().is_none_or(Stage::quiesce)

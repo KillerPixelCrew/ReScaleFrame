@@ -407,3 +407,85 @@ drivers and the installed windows 0.62.2 signatures. Pinned Rust formatting,
 unchanged scoped binder bindgen output, Python parsing, locked offline Windows
 Cargo metadata and whitespace checks were used. Build, link, fixture execution
 and visual or device acceptance are outside this source-only check.
+
+### Final N04 port: device fixtures and the motion profile
+
+The three deployed device fixtures are now Rust (`motion/device_fixture/core_device.rs`,
+`far_device.rs`, `tess_chain_device.rs`) behind C11 launchers in `tests/`. Each case was ported line by
+line from the C++ driver it replaces: the same deployment lookup (`RSF_ANOMALY_MOTION_DEPLOY`, then
+`.local/anomaly/motion-deploy[-tess]` under the repository root, now from `CARGO_MANIFEST_DIR`), skip code
+77 conditions, define sets, geometry, CPU models, tolerances, coverage minima and debug-layer rules. The
+deployed-tree shader path goes through `shader_loader/deployed.rs`, a fixture-only Rust facade over the
+same `compile_tree`/`prepare_tree` code the removed C++ projection reached through the C ABI. The scene
+math and the octahedron mover shared by the far and tessellation-chain drivers live in `scene.rs`; the
+GPU, readback, binding and owner helpers in `harness.rs`.
+
+One check changed form. The C++ driver threw a C++ exception out of the replay redraw to show that the
+native scope restored the OM state on unwind. The Rust driver panics out of the redraw inside
+`catch_unwind` (panic hook silenced) and checks the same restored state: the replay scope's `Drop` now
+does the restoring, which is what the Rust owner needs to prove. The tessellation driver's crash filter
+(`SetUnhandledExceptionFilter`) and its RSF_TESS_* diagnostics are kept.
+
+The per-build motion profile moved from `motion_profile.h` to `motion_profile.rs`, in native_profile.rs
+build order with each build stating its own sites, guards, caller frame and hex guards. Rust now runs the
+guard check (`engine_guards/motion.rs` over the Rust record), derives the caller-frame layout and the
+engine compiler profile, and lends the three detour sites to the native leaf, which only adds its
+trampolines. The stage selects the record from the SHA-256 the native installer passes, and refuses when
+none matches. `rsf_anomaly_motion_platform` is ABI 13 (272 bytes): `guards`, `shader_profile` and
+`frame_layout` are gone, `copy` (the guarded copy behind the guard image) and the site list in
+`install_hooks` are new. `tests/anomaly_motion_evidence.py` and the motion case of
+`tests/anomaly_profile_evidence.py` parse the Rust profile; the parser was checked offline against both
+build sections (5 sites, 12 integer fields, 3 hex guards, 2 hull/domain sites, 1 unique guard per build,
+hex lengths equal to the removed C++ table). The evidence scripts themselves need the installed
+executables and were not run.
+
+`motion_stage.h` and `motion_stage_platform.h` now hold only C declarations. `build_profile.h` no longer
+carries a motion record and the motion code no longer includes it; it still has C++ users through the
+geometry (`geometry_profile.h`) and SR (`sr_profile.h`) records (N03, N06 and their fixtures).
+
+After N03 (C11 geometry producer, `bff85670`) and N06 (`sr_profile.rs`, `rsf_anomaly_sr_stage_jitter_uv`)
+landed, nothing in `motion_stage.cpp` needed C++ any more, so it became the C11 leaf
+`motion_stage_platform.c`:
+
+- The create_shader detour still lends `_ReturnAddress()` and `_AddressOfReturnAddress() + 8` (the caller's
+  rsp at the call) to Rust's frame decoder. The G-buffer window detours are unchanged.
+- The four immediate-context draw detours share one `draw_call` record. The draw scope and the replay scope
+  are retired on return and during a C++ unwind out of the engine's draw: `__try/__finally` under MSVC, a
+  cleanup handler under GCC (`-fexceptions`, already set for the anomaly C leaves). As in the C++ RAII
+  version, the draw scope closes after the replay, with `completed` set once the engine's draw returned.
+- The engine includer is called through its vtable inside `__try/__except`, as before.
+- The engine reads use `rsf_anomaly_motion_engine`, which Rust fills at install from `native_profile.rs`
+  (Device.dwFrame) and `sr_profile.rs` (HW device and context, RCache, RImplementation.Target, CRender::o
+  word 3, rt_Position, the CRT RTV and surface offsets, RCache.xforms m_v and m_p). The RTV2 binder layout
+  (`BACKEND_RT_OFFSET`, `BACKEND_ZB_OFFSET`, `BACKEND_RT_CHANGED_OFFSET`) is Rust's own constant now.
+- `rsf_anomaly_motion_stage_install` takes the build index the observer admitted; Rust resolves the native,
+  SR and motion records from it and refuses an unknown index. The platform is ABI 13, 256 bytes.
+
+`tests/anomaly_motion_hooks_native.cpp` became `tests/anomaly_motion_hooks_native.c` over the geometry C API.
+Its only C++ input was the flush site index from `geometry_profile.h`; the Rust fixture now finds the
+`CBackend::constants.flush` site in `geometry_profile.rs` and passes the index to the launcher's install.
+
+Checks: `cargo fmt --all -- --check`; `cargo clippy -p rsf-anomaly --locked` with the default features and
+each of `motion-binder-fixture`, `motion-hooks-fixture`, `motion-device-fixture`, `native-entry` and
+`native-hook-fixture` (no new warnings in N04 files; two N02/N08 compile errors at the tip were patched
+locally, not committed, so the crate type-checks). The crate's lib test target does not compile at the tip
+because of other chunks' test modules, so `cargo test` could not run. MSVC 14.44 `/Zs /W4 /WX` passed for
+`motion_stage_platform.c`, the five C11 launchers, `sr_stage.cpp`, `tests/anomaly_sr_profile.cpp`,
+`tests/anomaly_native_hook_leaves.cpp` and C and C++ units including the stage headers; MinGW GCC
+`-fsyntax-only -std=c11 -Wall -Wextra -Werror -fexceptions` passed for the leaf and the launchers.
+
+`rsf_anomaly_motion_hooks_test` was built (CMake needed two local, uncommitted fixes in
+`tests/CMakeLists.txt` and `tests/anomaly_fg.cmake` to configure at the tip) and CTest
+`anomaly_motion_hooks_contract` passed. Every executable that links the crate fails to start at the tip with
+0xc0000139 because the overlay's window subclassing imports `comctl32.dll!GetWindowSubclass`, which only
+Common Controls v6 exports, and the test executables carry no v6 manifest; the pass was measured after merging
+a Common Controls v6 dependency into that one built executable with `mt.exe`. The contract, device and plugin
+targets could not link: they depend on `rsf_rust_core` (orchestrator), which does not compile at the tip. The
+device fixtures were not run, per the port rules.
+
+Two fixtures outside N04 lent the C++ motion record to their Rust checks and were changed with it:
+`tests/anomaly_sr_profile.cpp` (its contract now reads the motion sites, calls and unique guard from
+`motion_profile.rs`; the native projection drops the motion owner and banks) and
+`tests/anomaly_native_hook_leaves.cpp` (lends only the SR bank; the Rust hook fixture installs the motion
+sites from `motion_profile.rs`). `sr_stage.cpp` reads the motion target through
+`rsf_anomaly_motion_stage_frame_target`.

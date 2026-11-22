@@ -1,4 +1,4 @@
-"""Motion MRT sites: read-only check of every games/anomaly/src/motion_profile.h value against the installed exe.
+"""Motion MRT sites: read-only check of every games/anomaly/src/motion_profile.rs value against the installed exe.
 
 Checks --exe standard (default) or --exe avx. Needs the selected installed executable (D:/Anomaly 1.5.3) and capstone, so it is not registered in CTest
 (same as tests/anomaly_sr_evidence.py). Nothing is patched or executed; the file is only read and disassembled.
@@ -31,26 +31,69 @@ import capstone
 from capstone import x86
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-PROFILE = ROOT / 'games/anomaly/src/motion_profile.h'
+PROFILE = ROOT / 'games/anomaly/src/motion_profile.rs'
 _spec = importlib.util.spec_from_file_location('anomaly_geometry_evidence', ROOT / 'tests/anomaly_geometry_evidence.py')
 geometry = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(geometry)
 
 geometry.build_from_args()
 CRENDER_RENDER = geometry.CRENDER_RENDER
-COMPILER = 'd3dcompiler_43.dll'   # games/anomaly/src/motion_profile.h engine_compiler_module
+COMPILER = 'd3dcompiler_43.dll'   # games/anomaly/src/motion_profile.rs ENGINE_COMPILER
 SET_MAX_ANISOTROPY = 0x7f7a70 if geometry.BUILD == "avx" else 0x7fe060
 
 
-def parse_profile(text):
-    sites = {m[1]: (int(m[2], 16), bytes.fromhex(m[3])) for m in
-             re.finditer(r'\{"([^"]+)", (0x[0-9a-f]+), signature\("([0-9a-f]{32})"\)\}', text)}
-    ints = {m[1]: int(m[2], 0) for m in re.finditer(r'inline constexpr uint32_t (\w+) = (0x[0-9a-f]+|\d+);', text)}
-    hexes = {}
-    for m in re.finditer(r'inline constexpr char (\w+)\[\] =\s*((?:"[0-9a-f]*"\s*)+);', text):
-        hexes[m[1]] = ''.join(re.findall(r'"([0-9a-f]*)"', m[2]))
-    return sites, ints, hexes
+FRAME_FIELDS = ('source_offset', 'length_offset', 'entry_offset', 'flags_offset', 'defines_offset')
 
+
+def c_string(literal):
+    """A Rust c"..." literal body without its backslash-newline continuations."""
+    return re.sub(r'\\\n\s*', '', literal)
+
+
+def profile_section(path):
+    """motion_profile.rs and the selected build's section ("// ---- Standard ..." / "// ---- AVX ...")."""
+    text = pathlib.Path(path).read_text(encoding='utf-8')
+    start = text.index('// ---- ' + geometry.BUILDS[geometry.BUILD]['section'] + ' 1.5.3 DX11')
+    end = text.find('// ---- ', start + 10)
+    return text, text[start:len(text) if end < 0 else end]
+
+
+def parse_profile(path):
+    """Sites, integer fields, hex guards, hull/domain creation sites, unique guards and the engine compiler."""
+    text, section = profile_section(path)
+    sites = {m[1]: (int(m[2], 16), bytes.fromhex(m[3])) for m in
+             re.finditer(r'\bsite\(\s*c"([^"]+)",\s*(0x[0-9a-f]+),\s*b"([0-9a-f]{32})",?\s*\)', section)}
+    ints = {name.lower(): int(re.search(r'pub\(crate\) const ' + name + r': \w+ = (0x[0-9a-f]+|\d+);', text)[1], 0)
+            for name in ('CALL_LENGTH', 'FRAME_DEFINES_CAPACITY', 'SHADER_OBJECT_OFFSET')}
+    for m in re.finditer(r'\b(\w+_(?:rva|offset)): (0x[0-9a-f]+),', section):
+        ints[('frame_' if m[1] in FRAME_FIELDS else '') + m[1]] = int(m[2], 16)
+    hexes = {m[1]: c_string(m[2]) for m in
+             re.finditer(r'\b(shader_compile_prologue|d3dcompile_setup|tess_dispatch):\s*c"((?:[^"\\]|\\\n)*)"', section)}
+    tess = [(m[1], m[2], int(m[3], 16), c_string(m[4]), int(m[5], 16), c_string(m[6])) for m in re.finditer(
+        r'tess_site\(\s*c"(create_shader<S([HD])S>[^"]*)",\s*(0x[0-9a-f]+),\s*c"((?:[^"\\]|\\\n)*)",\s*(0x[0-9a-f]+),'
+        r'\s*c"((?:[^"\\]|\\\n)*)",?\s*\)', section)]
+    unique = [(m[1], int(m[2], 16), bytes.fromhex(m[3])) for m in
+              re.finditer(r'UniqueGuard::new\(\s*c"([^"]+)",\s*(0x[0-9a-f]+),\s*c"([0-9a-f]+)",?\s*\)', section)]
+    compiler = re.search(r'ENGINE_COMPILER: \*const u16 = w!\("([^"]+)"\)', text)[1].lower()
+    return sites, ints, hexes, tess, unique, compiler
+
+
+def verify_unique_guards(pe, guards, sites):
+    """Each extended guard matches the image, is unique in .text and minimal, and extends the 16-byte guard of the
+    same site; every site whose 16 bytes are not unique has one (same rules as the geometry and SR profiles)."""
+    assert guards, 'missing extended unique guards'
+    by_rva = {}
+    for name, rva, raw in guards:
+        assert pe.read(rva, len(raw)) == raw, ('unique guard bytes', name)
+        assert pe.code.count(raw) == 1, ('unique guard not unique', name)
+        assert len(raw) > 16 and pe.code.count(raw[:-1]) > 1, ('unique guard is not minimal', name, len(raw))
+        by_rva[rva] = (name, raw)
+    for name, rva, expected in sites:
+        expected = bytes.fromhex(expected)
+        if rva in by_rva:
+            assert by_rva[rva][0] == name and by_rva[rva][1].startswith(expected), ('unique guard does not extend the site', name)
+        else:
+            assert pe.code.count(expected) == 1, ('16-byte guard not unique and no extended guard', name)
 
 class Image(geometry.PE):
     def __init__(self):
@@ -140,11 +183,11 @@ def mem(op):
 
 
 def verify(pe, log):
-    sites, ints, hexes = parse_profile(geometry.legacy_profile(PROFILE))
+    sites, ints, hexes, tess, unique, compiler = parse_profile(PROFILE)
     for name, h in hexes.items():
         assert pe.code.count(bytes.fromhex(h)) == 1, ('non-unique code guard', name)
     all_sites = [(n, r, h.hex()) for n, (r, h) in sites.items()]
-    geometry.verify_unique_guards(pe, geometry.profile_text(PROFILE), 'motion', all_sites)
+    verify_unique_guards(pe, unique, all_sites)
     geometry.verify_detour_prefix(pe, all_sites[:3])
     names = ['create_shader', 'CRenderTarget::phase_scene_begin', 'CRenderTarget::phase_scene_end']
     for name in names:
@@ -170,7 +213,6 @@ def verify(pe, log):
     outparams = [i for i in code if i.mnemonic == 'lea' and mem(i.operands[1]) and i.operands[1].mem.base == x86.X86_REG_R15
                  and i.operands[1].mem.disp == shader_offset]
     assert len(outparams) >= 3, ('shader object out-parameter lea [r15+0x10]', len(outparams))
-    compiler = re.search(r'engine_compiler_module\[\] = L"([^"]+)"', geometry.legacy_profile(PROFILE))[1].lower()
     assert compiler == COMPILER, ('engine compiler', compiler)
     imported = [pe.import_of(i) for i in code if i.mnemonic == 'call']
     assert imported.count((COMPILER, 'D3DReflect')) >= 3, ('D3DReflect calls', imported)
@@ -277,24 +319,20 @@ def verify(pe, log):
     assert first.operands[0].imm == SET_MAX_ANISOTROPY and one, 'phase_scene_end starts with SetMaxAnisotropy(1)'
     log('window: phase_scene_begin callers %s, phase_scene_end callers %s, all in CRender::Render' %
         ([hex(c) for c in begin_calls], [hex(c) for c in end_calls]))
-    verify_tessellation(pe, log, ints, hexes)
+    verify_tessellation(pe, log, ints, hexes, tess, create)
     return True
 
 
-TESS_SITE = re.compile(r'\{"(create_shader<S([HD])S>[^"]*)", (0x[0-9a-f]+),\s*((?:"[0-9a-f]+"\s*)+),\s*(0x[0-9a-f]+), "([0-9a-f]+)"\}')
+
 RC_DEST = {'H': 0x10, 'D': 0x20}               # RC_dest_hull, RC_dest_domain (r_constants.h)
 DEVICE_SLOT = {'H': 0x80, 'D': 0x88}           # ID3D11Device::CreateHullShader, CreateDomainShader
 
 
-def verify_tessellation(pe, log, ints, hexes):
+def verify_tessellation(pe, log, ints, hexes, sites, create):
     """Hull/domain shader creation (r4_enable_tessellation). The create_shader detour sees 'hs_5_0'/'ds_5_0' too; these
     guards prove that create_shader hands them to create_shader<SHS>/<SDS>, which leave the D3D11 object at
     shader_object_offset of the engine object like the VS/PS paths."""
-    text = geometry.legacy_profile(PROFILE)
-    sites = [(m[1], m[2], int(m[3], 16), ''.join(re.findall(r'"([0-9a-f]+)"', m[4])), int(m[5], 16), m[6])
-             for m in TESS_SITE.finditer(text)]
     assert sorted(s[1] for s in sites) == ['D', 'H'], ('tess_create_sites', sites)
-    create = int(re.search(r'\{"create_shader", (0x[0-9a-f]+)', text)[1], 16)
     dispatch = ints['tess_dispatch_rva']
     raw = hexes['tess_dispatch']
     assert pe.read(dispatch, len(raw) // 2).hex() == raw, 'tess dispatch guard'
@@ -346,7 +384,7 @@ def main():
         PROFILE = args.profile
     pe = Image()
     verify(pe, print)
-    print('anomaly motion evidence: all motion_profile.h sites verified against', geometry.EXE)
+    print('anomaly motion evidence: all motion_profile.rs sites verified against', geometry.EXE)
 
 
 if __name__ == '__main__':

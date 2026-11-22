@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 //! The native fixture lends the real flush detour and the two scoped calls.
+use crate::geometry_profile;
 use crate::geometry_registry_abi::{
     RSF_ANOMALY_DRAW_UNIDENTIFIED_DYNAMIC, RSF_ANOMALY_TYPE_SKELETON_ST,
 };
 use crate::native_geometry_abi::{FIRST_PERSON, HARDWARE_SKINNED, SCOPE, UNSET, WORLD};
 use std::cell::RefCell;
+use std::ffi::CStr;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -22,7 +24,7 @@ type Sink = unsafe extern "C" fn(*const Facts);
 
 #[repr(C)]
 struct Fixture {
-    install: unsafe extern "C" fn(Sink) -> bool,
+    install: unsafe extern "C" fn(Sink, usize) -> bool,
     observe: unsafe extern "C" fn(bool),
     flush: unsafe extern "C" fn(),
     flush_scoped: unsafe extern "C" fn() -> bool,
@@ -47,8 +49,14 @@ fn check(condition: bool, message: &'static str) -> Result<(), &'static str> {
 }
 
 fn exercise(fixture: &Fixture) -> Result<(), &'static str> {
+    // The flush site of the standard build; the launcher retargets it at its own function.
+    let flush_site = geometry_profile::PROFILES[0]
+        .sites
+        .iter()
+        .position(|site| unsafe { CStr::from_ptr(site.name) } == c"CBackend::constants.flush")
+        .ok_or("flush site in the geometry profile")?;
     check(
-        unsafe { (fixture.install)(receive) },
+        unsafe { (fixture.install)(receive, flush_site) },
         "redirected flush detour installs",
     )?;
     unsafe { (fixture.flush)() };

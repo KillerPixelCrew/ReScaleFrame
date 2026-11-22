@@ -65,7 +65,7 @@ The whole chain is swapped per draw, and only when all four stages have verified
   - `tess_chain_linkable(vs, hs, ds, ps)`: each control-point interface links by name, index, register and mask, and every
     domain patch-constant input is a hull patch-constant output.
   - The byte-exact original recompile and the disk cache are the same as for VS/PS.
-- **Hook sites** (`motion_profile.h`): `CreateShader<SHS/SDS>` (`ShaderResourceTraits.h`) calls the same
+- **Hook sites** (`motion_profile.rs`, formerly `motion_profile.h`): `CreateShader<SHS/SDS>` (`ShaderResourceTraits.h`) calls the same
   `CRender::shader_compile`, which calls the already detoured `create_shader` (0x838de0) with `hs_5_0`/`ds_5_0`. The caller
   frame, the defines and the recompile proof are therefore those of VS/PS, and no new detour is installed. New guards
   are checked at install:
@@ -116,7 +116,7 @@ active only with `TESS_HM` and `USE_TDETAIL`, and no cached permutation uses it.
 
 ## Tests
 
-- `anomaly_motion_tess_chain_device` (new, `tests/anomaly_motion_tess_chain_device.cpp`): runs on the NVIDIA adapter
+- `anomaly_motion_tess_chain_device` (new, now `motion/device_fixture/tess_chain_device.rs` behind `tests/anomaly_motion_tess_chain_device.c`): runs on the NVIDIA adapter
   with the debug layer, against a deployment with the tess roots (`.local/anomaly/motion-deploy-tess` by default). For
   all seven cached permutations:
   - The production loader proves the original and checks the variant.

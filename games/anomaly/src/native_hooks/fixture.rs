@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::engine_guards::{NativeSite, Read};
+use crate::motion_profile::{MotionProfile, PROFILES as MOTION};
 use crate::native_profile::{PROFILES, Profile};
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
@@ -340,19 +341,21 @@ struct SiteBank {
     count: usize,
 }
 
+/// The SR site bank of one build; the motion sites come from motion_profile.rs.
 #[repr(C)]
 struct FixtureProfile {
-    banks: [SiteBank; 2],
+    sr: SiteBank,
 }
 
 const _: () = {
     assert!(size_of::<SiteBank>() == 16);
-    assert!(size_of::<FixtureProfile>() == 32);
+    assert!(size_of::<FixtureProfile>() == 16);
 };
 
 fn profile_contract(
     platform: &Platform,
     profile: &Profile,
+    motion: &MotionProfile,
     fixture: &FixtureProfile,
     sr_indices: &[usize; 5],
 ) {
@@ -363,10 +366,8 @@ fn profile_contract(
     let size = profile.image_size;
     let image = Image::new(size, PAGE_EXECUTE_READWRITE);
     image.write_headers(size);
-    let [motion, sr] = fixture
-        .banks
-        .each_ref()
-        .map(|bank| unsafe { slice::from_raw_parts(bank.sites, bank.count) });
+    let motion = &motion.sites[..];
+    let sr = unsafe { slice::from_raw_parts(fixture.sr.sites, fixture.sr.count) };
     let count = profile.sites.len() + motion.len() + sr_indices.len();
     let mut originals = vec![ptr::null_mut(); count];
     let mut sites: Vec<_> = profile
@@ -427,8 +428,8 @@ unsafe extern "C" fn rsf_test_anomaly_native_hooks(
         mapping_contract(platform, page);
         assert_eq!(count, PROFILES.len());
         let fixtures = unsafe { slice::from_raw_parts(profiles, count) };
-        for (profile, fixture) in PROFILES.iter().zip(fixtures) {
-            profile_contract(platform, profile, fixture, sr_indices);
+        for ((profile, motion), fixture) in PROFILES.iter().zip(&MOTION).zip(fixtures) {
+            profile_contract(platform, profile, motion, fixture, sr_indices);
         }
         println!("Anomaly guarded native hooks: PASS");
         0

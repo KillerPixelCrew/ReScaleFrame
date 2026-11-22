@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Consistency checks on the stage profiles lent by the native fixture.
 use crate::engine_guards::{NativeSite, UniqueGuard};
+use crate::motion_profile::{MotionProfile, PROFILES as MOTION, SITE_CREATE_SHADER};
 use std::ffi::{CStr, c_char, c_void};
 use std::slice;
 
@@ -47,12 +48,12 @@ struct Profile {
     executable: *const c_char,
     sha256: *const c_char,
     image_size: u32,
-    owners: [*const c_void; 4],
-    sites: [Bank<NativeSite>; 7],
-    guards: [Bank<UniqueGuard>; 4],
+    // Native, geometry and SR records; the motion record is Rust-owned (motion_profile.rs).
+    owners: [*const c_void; 3],
+    sites: [Bank<NativeSite>; 5],
+    guards: [Bank<UniqueGuard>; 3],
     first_person: Bank<FirstPersonSite>,
     required_rvas: [u32; 2],
-    shader_target: u32,
     sun_target: u32,
     sr_near_index: u32,
     geometry_near_index: u32,
@@ -63,9 +64,9 @@ struct Profile {
 }
 
 const _: () = {
-    assert!(size_of::<Profile>() == 456 && std::mem::offset_of!(Profile, sites) == 64);
-    assert!(std::mem::offset_of!(Profile, ssao_code) == 280);
-    assert!(std::mem::offset_of!(Profile, relations) == 296);
+    assert!(size_of::<Profile>() == 400 && std::mem::offset_of!(Profile, sites) == 56);
+    assert!(std::mem::offset_of!(Profile, ssao_code) == 224);
+    assert!(std::mem::offset_of!(Profile, relations) == 240);
     assert!(size_of::<FirstPersonSite>() == 24 && size_of::<TargetSlot>() == 16);
 };
 
@@ -154,12 +155,18 @@ fn ssao_reaches_viewport(profile: &Profile) -> bool {
         == i64::from(profile.ssao_viewport)
 }
 
-fn check_profile(profile: &Profile, target_slots: usize) {
-    let [native, geometry, layout, sr, sr_calls, motion, motion_calls] = profile
+fn check_profile(profile: &Profile, motion_profile: &MotionProfile, target_slots: usize) {
+    let [native, geometry, layout, sr, sr_calls] = profile
         .sites
         .each_ref()
         .map(|bank| unsafe { bank.values() });
-    let [native_guards, geometry_guards, sr_guards, motion_guards] = profile
+    let (motion, motion_calls) = (
+        &motion_profile.sites[..],
+        &motion_profile.create_shader_calls[..],
+    );
+    let motion_guards = &motion_profile.unique_guards[..];
+    let shader_target = motion_profile.sites[SITE_CREATE_SHADER].rva;
+    let [native_guards, geometry_guards, sr_guards] = profile
         .guards
         .each_ref()
         .map(|bank| unsafe { bank.values() });
@@ -173,11 +180,13 @@ fn check_profile(profile: &Profile, target_slots: usize) {
         "{label} required RVA"
     );
     assert!(
-        profile.sites.iter().all(|bank| {
-            unsafe { bank.values() }
-                .iter()
-                .all(|site| in_image(site.rva))
-        }),
+        profile
+            .sites
+            .iter()
+            .flat_map(|bank| unsafe { bank.values() })
+            .chain(motion)
+            .chain(motion_calls)
+            .all(|site| in_image(site.rva)),
         "{label} site outside image"
     );
     assert!(
@@ -202,7 +211,7 @@ fn check_profile(profile: &Profile, target_slots: usize) {
     assert!(
         motion_calls
             .iter()
-            .all(|call| call_reaches(call, profile.shader_target))
+            .all(|call| call_reaches(call, shader_target))
     );
     assert!(
         native_guards
@@ -262,7 +271,11 @@ fn check_profiles(profiles: &[Profile; 2], slots: &[TargetSlot]) {
     });
     assert_ne!(standard.image_size, avx.image_size);
     assert!(standard.owners.iter().zip(avx.owners).all(|(&a, b)| a != b));
-    for (profile, canonical) in profiles.iter().zip(&crate::native_profile::PROFILES) {
+    for ((profile, canonical), motion) in profiles
+        .iter()
+        .zip(&crate::native_profile::PROFILES)
+        .zip(&MOTION)
+    {
         assert_eq!(unsafe { CStr::from_ptr(profile.label) }, canonical.label);
         assert_eq!(
             unsafe { CStr::from_ptr(profile.executable) },
@@ -290,7 +303,7 @@ fn check_profiles(profiles: &[Profile; 2], slots: &[TargetSlot]) {
                 CStr::from_ptr(guard.expected_hex)
             });
         }
-        check_profile(profile, slots.len());
+        check_profile(profile, motion, slots.len());
     }
     let name = |slot: &TargetSlot| unsafe { CStr::from_ptr(slot.name) };
     for (i, slot) in slots.iter().enumerate() {

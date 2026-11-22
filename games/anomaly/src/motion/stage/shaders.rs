@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::digest::sha256;
+use crate::motion_profile::SHADER_OBJECT_OFFSET;
 use crate::shader_family::{FAMILY_COUNT, NO_FAMILY, diagnostic_family_name};
 use crate::shader_loader::{
-    DecodedFrame, Entry, FrameLayout, Manifest, OUTCOME_NAMES, Reflection, RuntimePack, Snapshot,
-    decode_frame, outcome_name,
+    DecodedFrame, Entry, Manifest, OUTCOME_NAMES, Reflection, RuntimePack, Snapshot, decode_frame,
+    outcome_name,
 };
 use crate::shader_loader::{rsf_anomaly_shader_linkable, rsf_anomaly_shader_tess_linkable};
 use rsf_game_sys::shader_patch_abi::{RSF_PATCH_OK, rsf_patch_counters};
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::mem::MaybeUninit;
 use std::sync::Arc;
 
 const NOT_ALLOWLISTED: u8 = 0;
 const CREATE_FAILED: u8 = 9;
 const NAMES_LIMIT: usize = 16_384;
-const SHADER_OBJECT_OFFSET: usize = 0x10;
 const FILENAME_CAPACITY: usize = 520;
 
 pub(in crate::motion) struct Variant {
@@ -229,11 +228,7 @@ unsafe impl Send for Pack {}
 
 impl Pack {
     pub fn open(platform: &Platform, build: Build, root: &Path) -> Result<Self, String> {
-        let mut profile = MaybeUninit::uninit();
-        let profile = unsafe {
-            (platform.shader_profile)(build.profile(), profile.as_mut_ptr());
-            profile.assume_init()
-        };
+        let profile = build.motion.shader_profile();
         let pack = wide_path(&root.join("motion.rsfpatch"));
         let cache = wide_path(&root.join("cache"));
         unsafe { RuntimePack::open_engine(&pack, &cache, build.image, profile, platform.includes) }
@@ -632,21 +627,24 @@ impl Stage {
 
     fn shader_created(&self, call: Creation<'_>) {
         let p = self.platform;
+        // The installed build; a creation before install has no caller frame to decode.
+        let Some(build) = *lock(&self.build) else {
+            return;
+        };
         lock(&self.registry).remember(call.stock, call.file);
         let mut guard = lock(&self.loader);
         // Split the guard so pack preparation and counter updates can borrow separate fields.
         let loader = &mut *guard;
         let Some(pack) = &mut loader.pack else { return };
-        let mut layout = MaybeUninit::<FrameLayout>::uninit();
-        let module = unsafe { (p.frame_layout)(layout.as_mut_ptr()) };
-        let layout = unsafe { layout.assume_init() };
+        let layout = build.motion.frame_layout();
+        let module = build.image;
         let read = |address: usize, bytes: &mut [u8]| unsafe {
             (p.read_engine)(ptr::null(), address, bytes.as_mut_ptr(), bytes.len())
         };
         let file = String::from_utf8_lossy(call.file);
         let frame = match decode_frame(
             &layout,
-            module as usize,
+            module,
             call.return_address as usize,
             call.stack as usize,
             read,

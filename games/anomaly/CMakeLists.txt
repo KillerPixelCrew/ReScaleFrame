@@ -21,7 +21,7 @@ target_compile_options(rsf_game_anomaly PRIVATE $<$<AND:$<COMPILE_LANGUAGE:C>,$<
 
 # Motion MRT (src/motion_stage.h): verified shader variants at create_shader, b13 packers, RTV2 binder, draw-time
 # history and the invalidation replay. Inert unless [Anomaly] Motion=1.
-target_sources(rsf_game_anomaly PRIVATE src/motion_stage.cpp)
+target_sources(rsf_game_anomaly PRIVATE src/motion_stage_platform.c)
 target_link_libraries(rsf_game_anomaly PRIVATE bcrypt dxguid)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 file(GLOB_RECURSE RSF_ANOMALY_PATCH_INPUTS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/patches/motion/*")

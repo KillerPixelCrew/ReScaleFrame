@@ -1,63 +1,21 @@
 // SPDX-License-Identifier: MIT
-use super::{Image, NativeSite, UniqueGuard};
-use crate::ffi::borrow_span;
+use super::Image;
+use crate::motion_profile::MotionProfile;
 use std::ffi::c_char;
 use std::{ptr, slice};
 
-#[repr(C)]
-struct TessCreateSite {
-    name: *const c_char,
-    rva: u32,
-    prologue: *const c_char,
-    wrapper_rva: u32,
-    wrapper: *const c_char,
-}
-
-#[repr(C)]
-struct Profile<'a> {
-    sites: &'a [NativeSite; 3],
-    unique: *const UniqueGuard,
-    unique_count: usize,
-    create_shader_calls: &'a [NativeSite; 2],
-    tess_create_sites: &'a [TessCreateSite; 2],
-    shader_compile_prologue: *const c_char,
-    d3dcompile_setup: *const c_char,
-    tess_dispatch: *const c_char,
-    shader_compile_rva: u32,
-    d3dcompile_setup_rva: u32,
-    tess_dispatch_rva: u32,
-    source_name_rva: u32,
-}
-
-const _: () = {
-    assert!(size_of::<TessCreateSite>() == 40);
-    assert!(std::mem::offset_of!(TessCreateSite, prologue) == 16);
-    assert!(std::mem::offset_of!(TessCreateSite, wrapper_rva) == 24);
-    assert!(std::mem::offset_of!(TessCreateSite, wrapper) == 32);
-    assert!(size_of::<Profile>() == 80);
-    assert!(std::mem::offset_of!(Profile, create_shader_calls) == 24);
-    assert!(std::mem::offset_of!(Profile, shader_compile_prologue) == 40);
-    assert!(std::mem::offset_of!(Profile, shader_compile_rva) == 64);
-    assert!(std::mem::offset_of!(Profile, source_name_rva) == 76);
-};
-
-/// The facade lends the selected build's immutable records and terminated guard strings.
-/// The returned site name is borrowed from the profile or is one of the static names below.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_guard_failure(
-    image: &Image,
-    profile: &Profile<'_>,
-) -> *const c_char {
-    let unique = unsafe { borrow_span(profile.unique, profile.unique_count) };
-    let hex = |rva, code| unsafe { image.matches_hex_guard(rva, code) };
+/// The name of the first mismatching check of the selected build, or null. Names are borrowed from the
+/// static profile or are the static names below.
+pub(crate) fn motion_guard_failure(image: &Image, profile: &MotionProfile) -> *const c_char {
+    let hex = |rva, code: &std::ffi::CStr| unsafe { image.matches_hex_guard(rva, code.as_ptr()) };
     // Detour entries first: the 16 expected bytes, then any unique prefix at the same RVA.
-    for site in profile.sites {
-        if !unsafe { image.matches_sites(slice::from_ref(site), unique) } {
+    for site in &profile.sites {
+        if !unsafe { image.matches_sites(slice::from_ref(site), &profile.unique_guards) } {
             return site.name;
         }
     }
     // The two create_shader calls whose return addresses admit the caller frame.
-    for site in profile.create_shader_calls {
+    for site in &profile.create_shader_calls {
         if !image.matches_site(site.rva, &site.expected) {
             return site.name;
         }
@@ -73,9 +31,9 @@ unsafe extern "C" fn rsf_anomaly_motion_guard_failure(
     if !hex(profile.tess_dispatch_rva, profile.tess_dispatch) {
         return c"create_shader hull/domain dispatch".as_ptr();
     }
-    for site in profile.tess_create_sites {
+    for site in &profile.tess_create_sites {
         if !hex(site.rva, site.prologue) {
-            return site.name;
+            return site.name.as_ptr();
         }
         if !hex(site.wrapper_rva, site.wrapper) {
             return c"CreateHWShader (hull/domain)".as_ptr();
@@ -87,10 +45,11 @@ unsafe extern "C" fn rsf_anomaly_motion_guard_failure(
     }
     ptr::null()
 }
-
 #[cfg(test)]
 mod tests {
+    use super::super::{NativeSite, UniqueGuard};
     use super::*;
+    use crate::motion_profile::{CallerFrame, TessCreateSite};
     use std::ffi::{CStr, CString, c_void};
 
     unsafe extern "C" fn copy(out: *mut c_void, input: *const c_void, size: usize) -> bool {
@@ -114,41 +73,48 @@ mod tests {
             rva,
             expected: bytes[rva as usize..rva as usize + 16].try_into().unwrap(),
         };
-        let unique_code = hex(0x20, 0x14);
-        let (prologue, setup, dispatch) = (hex(0x60, 8), hex(0x70, 8), hex(0x80, 8));
-        let tess_code = [hex(0x90, 8), hex(0xa0, 8), hex(0xb0, 8), hex(0xc0, 8)];
+        let leak = |text: CString| -> &'static CStr { Box::leak(text.into_boxed_c_str()) };
+        let unique_code = leak(hex(0x20, 0x14));
+        let (prologue, setup, dispatch) =
+            (leak(hex(0x60, 8)), leak(hex(0x70, 8)), leak(hex(0x80, 8)));
+        let tess_code = [0x90, 0xa0, 0xb0, 0xc0].map(|rva| leak(hex(rva, 8)));
         let sites = [site(c"s0", 0), site(c"s1", 0x10), site(c"s2", 0x20)];
-        let unique = [UniqueGuard {
-            name: c"s2".as_ptr(),
-            rva: 0x20,
-            expected_hex: unique_code.as_ptr(),
-        }];
         let calls = [site(c"c0", 0x40), site(c"c1", 0x50)];
         let tess =
             [(c"hull", 0x90, 0), (c"domain", 0xb0, 2)].map(|(name, rva, code)| TessCreateSite {
-                name: name.as_ptr(),
+                name,
                 rva,
-                prologue: tess_code[code].as_ptr(),
+                prologue: tess_code[code],
                 wrapper_rva: rva + 0x10,
-                wrapper: tess_code[code + 1].as_ptr(),
+                wrapper: tess_code[code + 1],
             });
-        let profile = Profile {
-            sites: &sites,
-            unique: unique.as_ptr(),
-            unique_count: unique.len(),
-            create_shader_calls: &calls,
-            tess_create_sites: &tess,
-            shader_compile_prologue: prologue.as_ptr(),
-            d3dcompile_setup: setup.as_ptr(),
-            tess_dispatch: dispatch.as_ptr(),
+        let profile = MotionProfile {
+            sites,
+            unique_guards: [UniqueGuard {
+                name: c"s2".as_ptr(),
+                rva: 0x20,
+                expected_hex: unique_code.as_ptr(),
+            }],
             shader_compile_rva: 0x60,
+            shader_compile_prologue: prologue,
+            create_shader_calls: calls,
+            frame: CallerFrame {
+                source_offset: 0,
+                length_offset: 0,
+                entry_offset: 0,
+                flags_offset: 0,
+                defines_offset: 0,
+            },
             d3dcompile_setup_rva: 0x70,
-            tess_dispatch_rva: 0x80,
+            d3dcompile_setup: setup,
             source_name_rva: 0xd0,
+            tess_dispatch_rva: 0x80,
+            tess_dispatch: dispatch,
+            tess_create_sites: tess,
         };
         let failure = |bytes: &[u8; 0x100]| {
             let image = Image::new(bytes.as_ptr(), bytes.len() as u32, copy);
-            let name = unsafe { rsf_anomaly_motion_guard_failure(&image, &profile) };
+            let name = motion_guard_failure(&image, &profile);
             (!name.is_null()).then(|| unsafe { CStr::from_ptr(name) }.to_str().unwrap())
         };
         assert_eq!(failure(&bytes), None);

@@ -95,8 +95,8 @@ set_tests_properties(anomaly_sr_swap_contract anomaly_sr_swap_unknown_selection 
 # The device fixtures are Rust (motion/device_fixture/*_device.rs) behind C11 launchers.
 rsf_add_rust_static(rsf_anomaly_motion_binder_fixture_rust rsf_rust_anomaly_motion_binder_fixture
     rsf-anomaly rsf_anomaly --features motion-binder-fixture)
-add_executable(rsf_anomaly_motion_contract_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_contract_main.cpp")
-target_include_directories(rsf_anomaly_motion_contract_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
+add_executable(rsf_anomaly_motion_contract_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_contract_main.c")
+set_target_properties(rsf_anomaly_motion_contract_test PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_anomaly_motion_contract_test PRIVATE rsf_anomaly_motion_binder_fixture_rust
     bcrypt ReScaleFrame::GameSDK ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME anomaly_motion_contract COMMAND rsf_anomaly_motion_contract_test)
@@ -114,7 +114,7 @@ set_tests_properties(anomaly_motion_contract anomaly_motion_unknown_selection an
 # The geometry flush detour (redirected onto a fixture) calls the motion stage's flush slot after the original.
 rsf_add_rust_static(rsf_anomaly_motion_hook_fixture_rust rsf_rust_anomaly_motion_hook_fixture
     rsf-anomaly rsf_anomaly --features motion-hooks-fixture)
-add_executable(rsf_anomaly_motion_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_hooks_native.cpp"
+add_executable(rsf_anomaly_motion_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_hooks_native.c"
     ${RSF_ANOMALY_GEOMETRY_SOURCES})
 target_include_directories(rsf_anomaly_motion_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
 target_link_libraries(rsf_anomaly_motion_hooks_test PRIVATE rsf_anomaly_motion_hook_fixture_rust
@@ -158,7 +158,7 @@ target_link_libraries(rsf_anomaly_motion_far_device_test PRIVATE rsf_anomaly_mot
 add_test(NAME anomaly_motion_far_device COMMAND rsf_anomaly_motion_far_device_test)
 set_tests_properties(anomaly_motion_far_device PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
 # rsf_anomaly_sr_hooks_test links the native observer, which installs/reports/quiesces the motion stage.
-target_sources(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}/motion_stage.cpp")
+target_sources(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}/motion_stage_platform.c")
 target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE bcrypt dxguid d3dcompiler)
 # SR Stage 3 (jitter and mip bias). The jitter test checks the Halton sequence, the row-vector NDC offset, the
 # first-person rule, the mip bias delta and the published motion/SR state on the CPU; the Stage 3 swap cases (projection

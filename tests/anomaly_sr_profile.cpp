@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-// Native projection of the independent profile contract's inputs.
+// Native projection of the independent profile contract's inputs. The motion record is Rust-owned
+// (motion_profile.rs); the contract reads it there.
 #include "build_profile.h"
 
 namespace {
@@ -14,18 +15,18 @@ struct Profile {
     const char* executable;
     const char* sha256;
     uint32_t image_size;
-    const void* owners[4];
-    SiteBank sites[7];
-    GuardBank guards[4];
+    const void* owners[3];
+    SiteBank sites[5];
+    GuardBank guards[3];
     FirstPersonBank first_person;
     uint32_t required_rvas[2];
-    uint32_t shader_target, sun_target, sr_near_index, geometry_near_index;
+    uint32_t sun_target, sr_near_index, geometry_near_index;
     const char* ssao_code;
     uint32_t ssao_function, ssao_viewport;
     Relation relations[13];
 };
-static_assert(sizeof(Profile) == 456 && offsetof(Profile, sites) == 64 &&
-    offsetof(Profile, ssao_code) == 280 && offsetof(Profile, relations) == 296);
+static_assert(sizeof(Profile) == 400 && offsetof(Profile, sites) == 56 &&
+    offsetof(Profile, ssao_code) == 224 && offsetof(Profile, relations) == 240);
 static_assert(sizeof(sr::FirstPersonSite) == 24 && sizeof(sr::TargetSlot) == 16);
 
 constexpr auto profiles = [] {
@@ -35,20 +36,17 @@ constexpr auto profiles = [] {
         const auto& n = *b.native;
         const auto& g = *b.geometry;
         const auto& s = *b.sr;
-        const auto& m = *b.motion;
         result[i] = {
-            b.label, b.executable, b.sha256, b.image_size(), {b.native, b.geometry, b.sr, b.motion},
+            b.label, b.executable, b.sha256, b.image_size(), {b.native, b.geometry, b.sr},
             {{n.native_sites.data(), n.native_sites.size()}, {g.geometry_sites.data(), g.geometry_sites.size()},
              {g.geometry_layout_sites.data(), g.geometry_layout_sites.size()},
-             {s.sr_function_sites.data(), s.sr_function_sites.size()}, {s.sr_call_sites.data(), s.sr_call_sites.size()},
-             {m.motion_sites.data(), m.motion_sites.size()}, {m.create_shader_calls.data(), m.create_shader_calls.size()}},
+             {s.sr_function_sites.data(), s.sr_function_sites.size()}, {s.sr_call_sites.data(), s.sr_call_sites.size()}},
             {{n.native_unique_guards.data(), n.native_unique_guards.size()},
              {g.geometry_unique_guards.data(), g.geometry_unique_guards.size()},
-             {s.sr_unique_guards.data(), s.sr_unique_guards.size()},
-             {m.motion_unique_guards.data(), m.motion_unique_guards.size()}},
+             {s.sr_unique_guards.data(), s.sr_unique_guards.size()}},
             {s.sr_first_person_sites.data(), s.sr_first_person_sites.size()},
             {s.get_constant_buffer_rva, s.position_setup_vtable_rva},
-            m.motion_sites[motion::site_create_shader].rva, s.sr_function_sites[sr::site_sun_cascades].rva,
+            s.sr_function_sites[sr::site_sun_cascades].rva,
             sr::site_rm_near, geometry::geometry_site_rm_near,
             s.ssao_set_viewport_code, s.ssao_set_viewport_rva, s.ssao_viewport_rva,
             {{s.backend_rva, sr::backend_xforms_offset, g.world_matrix_rva},

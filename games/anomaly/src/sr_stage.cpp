@@ -428,7 +428,8 @@ const rsf_anomaly_sr_stage_platform platform{
     .temporal_ready = [] { return rsf_anomaly_sr_temporal_ready(host.pass()) && host.depth_texture(); },
     .temporal_platform = []() -> const void* { return rsf_anomaly_sr_d3d11_platform(); },
     .motion_target = [](rsf_anomaly_sr_motion_target* out) {
-        const auto target = motion::frame_target();
+        rsf_anomaly_motion_frame_target target{};
+        rsf_anomaly_motion_stage_frame_target(&target);
         *out = {target.texture, target.written, target.main, target.frame, target.width, target.height};
         return target.texture != nullptr;
     },

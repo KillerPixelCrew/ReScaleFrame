@@ -42,6 +42,8 @@ mod motion_device;
 mod motion_device_abi;
 #[cfg(windows)]
 mod motion_frame_target_abi;
+#[cfg(windows)]
+mod motion_profile;
 mod motion_target;
 mod motion_target_abi;
 mod native_geometry;

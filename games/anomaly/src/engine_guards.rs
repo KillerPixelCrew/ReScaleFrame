@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
+#[cfg(windows)]
 mod motion;
 mod sr;
+
+#[cfg(windows)]
+pub(crate) use motion::motion_guard_failure;
 
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::with_exposed_provenance;

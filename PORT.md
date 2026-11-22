@@ -142,7 +142,7 @@ A sweep of `git ls-files '*.cpp'` on 2026-11-22 found first-party C++ that the p
 - [x] [runtime/graphics/src/observer_exception_guards.c](runtime/graphics/src/observer_exception_guards.c) (G01; C++ removed, C11 SEH leaf; the three private observer headers now hold C declarations only)
 - [x] [runtime/orchestrator/src/d3d11_host_foreign.c](runtime/orchestrator/src/d3d11_host_foreign.c) (D01; C++ removed; C11 SEH leaf that contains only the MSVC C++ exception code 0xE06D7363, entries that were noexcept without a handler abort on that code)
 - [x] [tests/ac7_render_scope_exceptions.cpp](tests/ac7_render_scope_exceptions.cpp) (A02; the throwing callbacks are C in `tests/ac7_render_scope.c` and raise the MSVC C++ exception code)
-- [ ] [tests/anomaly_motion_contract_main.cpp](tests/anomaly_motion_contract_main.cpp) (N04)
+- [x] [tests/anomaly_motion_contract_main.cpp](tests/anomaly_motion_contract_main.cpp) (N04; now the C11 launcher `tests/anomaly_motion_contract_main.c`, the caller-frame layouts come from `motion_profile.rs`)
 - [x] [tests/anomaly_sr_swap_profile.cpp](tests/anomaly_sr_swap_profile.cpp) (N07; removed: the swap launcher takes the Rust engine layout built from sr_profile.rs, `rsf_anomaly_sr_engine_layout`)
 - [ ] [tests/dlss_sr_layout_facts.cpp](tests/dlss_sr_layout_facts.cpp) (D05; C++-only vendor header layout check; blocked: `sl.h` declares `sl::` types with constructors and a virtual member, so the layout, GUID and default checks need a C++ compiler. It holds `static_assert`s against the pinned headers and two reporting functions that `dlss_sr_layout_main.c` hands to the Rust comparison in `streamline_sr/sdk/layout_fixture.rs`; test only, no runtime caller)
 
@@ -1901,7 +1901,7 @@ Port bootstrap, profile admission and observer lifetime. Attribute each guarded 
 
 - [x] [games/anomaly/src/bootstrap_platform.cpp](games/anomaly/src/bootstrap_platform.cpp) (native profile and stage table; replaced by the C11 leaf `bootstrap_platform.c`)
 - [x] [games/anomaly/src/bootstrap.cpp](games/anomaly/src/bootstrap.cpp)
-- [ ] [games/anomaly/src/build_profile.h](games/anomaly/src/build_profile.h) (blocked: aggregates the C++ `constexpr` records of `geometry_profile.h`, `sr_profile.h` and `motion_profile.h`, which use `std::array`, `std::span` and the `consteval` decoder, for the C++ callers `native_geometry.cpp` (N03), `motion_stage.cpp` (N04), `sr_stage.cpp` (N06) and the fixtures `anomaly_sr_profile.cpp`, `anomaly_sr_hook_bridge.cpp`, `anomaly_geometry_hooks.cpp`, `anomaly_motion_hooks_native.cpp` and `anomaly_native_hook_leaves.cpp`; closes once those records have a C or Rust projection like `native_profile.h`)
+- [ ] [games/anomaly/src/build_profile.h](games/anomaly/src/build_profile.h) (blocked: aggregates the C++ `constexpr` records of `geometry_profile.h` and `sr_profile.h` (the motion record moved to `motion_profile.rs` in N04), which use `std::array`, `std::span` and the `consteval` decoder, for the C++ callers `native_geometry.cpp` (N03), `sr_stage.cpp` (N06) and the fixtures `anomaly_sr_profile.cpp`, `anomaly_sr_hook_bridge.cpp`, `anomaly_geometry_hooks.cpp` and `anomaly_native_hook_leaves.cpp` (the N04 motion stage and hook fixture no longer include it); closes once those records have a C or Rust projection like `native_profile.h`)
 - [x] [games/anomaly/src/engine_guards.h](games/anomaly/src/engine_guards.h) (C declarations only)
 - [x] [games/anomaly/src/engine_slots.h](games/anomaly/src/engine_slots.h)
 - [x] [games/anomaly/src/native_hook_ops.h](games/anomaly/src/native_hook_ops.h) (C declarations only)
@@ -1924,7 +1924,7 @@ Port bootstrap, profile admission and observer lifetime. Attribute each guarded 
 - [x] [tests/anomaly_bootstrap.cpp](tests/anomaly_bootstrap.cpp)
 - [x] [tests/anomaly_build_select.h](tests/anomaly_build_select.h) (C declarations only)
 - [x] [tests/anomaly_lifecycle.cpp](tests/anomaly_lifecycle.cpp)
-- [ ] [tests/anomaly_native_hook_leaves.cpp](tests/anomaly_native_hook_leaves.cpp) (native detour fixture functions; blocked: lends the motion and SR site banks and the five `sr::site_*` indices from the C++ `motion_profile.h` and `sr_profile.h` records through `build_profile.h`; its target functions, guarded copy and platform pointer are already C-compatible)
+- [ ] [tests/anomaly_native_hook_leaves.cpp](tests/anomaly_native_hook_leaves.cpp) (native detour fixture functions; blocked: lends the SR site bank and the five `sr::site_*` indices from the C++ `sr_profile.h` record through `build_profile.h` (the motion sites now come from `motion_profile.rs`); its target functions, guarded copy and platform pointer are already C-compatible)
 - [x] [tests/anomaly_native_hooks.cpp](tests/anomaly_native_hooks.cpp)
 - [x] [tests/anomaly_plugin.cpp](tests/anomaly_plugin.cpp)
 
@@ -2033,8 +2033,8 @@ Port motion draw hooks, target ownership and foliage history. Use the draw and d
 
 **Port files (16)**
 
-- [ ] [games/anomaly/src/motion_bridge.cpp](games/anomaly/src/motion_bridge.cpp)
-- [ ] [games/anomaly/src/motion_constants.h](games/anomaly/src/motion_constants.h)
+- [x] [games/anomaly/src/motion_bridge.cpp](games/anomaly/src/motion_bridge.cpp) (deleted with the C++ device fixtures)
+- [x] [games/anomaly/src/motion_constants.h](games/anomaly/src/motion_constants.h) (deleted with the C++ device fixtures)
 - [x] [games/anomaly/src/motion_d3d11.cpp](games/anomaly/src/motion_d3d11.cpp)
 - [x] [games/anomaly/src/motion_d3d11.h](games/anomaly/src/motion_d3d11.h)
 - [x] [games/anomaly/src/motion_device_platform.h](games/anomaly/src/motion_device_platform.h)
@@ -2042,10 +2042,10 @@ Port motion draw hooks, target ownership and foliage history. Use the draw and d
 - [x] [games/anomaly/src/motion_foliage.h](games/anomaly/src/motion_foliage.h)
 - [x] [games/anomaly/src/motion_history.h](games/anomaly/src/motion_history.h)
 - [x] [games/anomaly/src/motion_policy.h](games/anomaly/src/motion_policy.h)
-- [ ] [games/anomaly/src/motion_profile.h](games/anomaly/src/motion_profile.h)
-- [ ] [games/anomaly/src/motion_stage.cpp](games/anomaly/src/motion_stage.cpp)
-- [ ] [games/anomaly/src/motion_stage.h](games/anomaly/src/motion_stage.h)
-- [ ] [games/anomaly/src/motion_stage_platform.h](games/anomaly/src/motion_stage_platform.h)
+- [x] [games/anomaly/src/motion_profile.h](games/anomaly/src/motion_profile.h) (deleted; the per-build record is `motion_profile.rs`, read by the stage, the guard check and the evidence scripts)
+- [x] [games/anomaly/src/motion_stage.cpp](games/anomaly/src/motion_stage.cpp) (C++ removed; C11 leaf `motion_stage_platform.c` with the create_shader, G-buffer window and draw detours, `__try/__finally` (MSVC) or cleanup-handler (GCC) draw and replay scopes and the SEH includer. Rust lends it the build's engine addresses from `sr_profile.rs` and `native_profile.rs`; geometry and SR jitter go through their C entries)
+- [x] [games/anomaly/src/motion_stage.h](games/anomaly/src/motion_stage.h) (C declarations only: the published frame-target read, enabled and report)
+- [x] [games/anomaly/src/motion_stage_platform.h](games/anomaly/src/motion_stage_platform.h) (C declarations only, `rsf_anomaly_motion_platform` ABI 13)
 - [x] [games/anomaly/src/motion_target.cpp](games/anomaly/src/motion_target.cpp)
 - [x] [games/anomaly/src/motion_target.h](games/anomaly/src/motion_target.h)
 - [x] [games/anomaly/src/motion_target_platform.h](games/anomaly/src/motion_target_platform.h)
@@ -2054,11 +2054,11 @@ Port motion draw hooks, target ownership and foliage history. Use the draw and d
 
 - [x] [tests/anomaly_foliage_shader_device.cpp](tests/anomaly_foliage_shader_device.cpp)
 - [x] [tests/anomaly_motion_contract.cpp](tests/anomaly_motion_contract.cpp)
-- [ ] [tests/anomaly_motion_device.cpp](tests/anomaly_motion_device.cpp)
-- [ ] [tests/anomaly_motion_far_device.cpp](tests/anomaly_motion_far_device.cpp)
-- [ ] [tests/anomaly_motion_hooks_native.cpp](tests/anomaly_motion_hooks_native.cpp) (native detour fixture driver)
+- [x] [tests/anomaly_motion_device.cpp](tests/anomaly_motion_device.cpp) (Rust `motion/device_fixture/core_device.rs`, C11 launcher)
+- [x] [tests/anomaly_motion_far_device.cpp](tests/anomaly_motion_far_device.cpp) (Rust `motion/device_fixture/far_device.rs`, C11 launcher)
+- [x] [tests/anomaly_motion_hooks_native.cpp](tests/anomaly_motion_hooks_native.cpp) (native detour fixture driver; now the C11 launcher `tests/anomaly_motion_hooks_native.c` over the geometry C API; Rust names the flush site from `geometry_profile.rs`)
 - [x] [tests/anomaly_motion_hooks.cpp](tests/anomaly_motion_hooks.cpp)
-- [ ] [tests/anomaly_motion_tess_chain_device.cpp](tests/anomaly_motion_tess_chain_device.cpp)
+- [x] [tests/anomaly_motion_tess_chain_device.cpp](tests/anomaly_motion_tess_chain_device.cpp) (Rust `motion/device_fixture/tess_chain_device.rs`, C11 launcher)
 - [x] [tests/anomaly_motion_tess_device.cpp](tests/anomaly_motion_tess_device.cpp)
 
 **Rust review findings (12)**
@@ -2151,7 +2151,7 @@ Port the live SR stage, D3D11 pass and reconstruction, including refusing a fram
 - [x] [tests/anomaly_sr_hooks.cpp](tests/anomaly_sr_hooks.cpp)
 - [x] [tests/anomaly_sr_pass.cpp](tests/anomaly_sr_pass.cpp)
 - [x] [tests/anomaly_sr_plan.cpp](tests/anomaly_sr_plan.cpp)
-- [ ] [tests/anomaly_sr_profile.cpp](tests/anomaly_sr_profile.cpp) (open: the contract relates the native, geometry, SR and motion records, and `geometry_profile.h` (N03) and `motion_profile.h` (N04) are still C++ `constexpr` data. Its SR-only layout `static_assert`s moved to compile-time checks in `sr_profile.rs`)
+- [ ] [tests/anomaly_sr_profile.cpp](tests/anomaly_sr_profile.cpp) (open: the contract relates the native, geometry and SR records, and `geometry_profile.h` (N03) is still C++ `constexpr` data; the motion record is Rust (`motion_profile.rs`) and the Rust contract reads it there. Its SR-only layout `static_assert`s moved to compile-time checks in `sr_profile.rs`)
 - [x] [tests/anomaly_sr_reconstruction.cpp](tests/anomaly_sr_reconstruction.cpp)
 - [x] [tests/anomaly_sr_roundtrip.cpp](tests/anomaly_sr_roundtrip.cpp)
 - [x] [tests/anomaly_sr_runtime_api.cpp](tests/anomaly_sr_runtime_api.cpp)

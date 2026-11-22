@@ -14,7 +14,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 CASES = {
     'geometry': ('geometry_profile.h', 'world_matrix_rva'),
     'sr': ('sr_profile.h', 'device_project_rva'),
-    'motion': ('motion_profile.h', 'source_offset'),
+    'motion': ('motion_profile.rs', 'source_offset'),
     'fg': ('native_profile.h', 'image_size'),
 }
 
@@ -36,14 +36,19 @@ def main():
             result = run(domain, build)
             assert result.returncode == 0, (domain, build, result.stdout, result.stderr)
             checks += 1
-            text = (ROOT / 'games/anomaly/src' / header).read_text()
+            text = (ROOT / 'games/anomaly/src' / header).read_text(encoding='utf-8')
+            rust = header.endswith('.rs')
             start = text.index('// ---- ' + section + ' 1.5.3 DX11')
             end = text.find('// ---- ', start + 10)
             end = len(text) if end < 0 else end
             selected = text[start:end]
             guard = re.search(r'b"([0-9a-f]{32})"', selected)
-            rva = re.search(r'\{"[^"]+", (0x[0-9a-f]+), signature', selected)
-            layout = re.search(r'\.' + field + r' = (0x[0-9a-f]+)', selected)
+            if rust:
+                rva = re.search(r'\bsite\(\s*c"[^"]+",\s*(0x[0-9a-f]+)', selected)
+                layout = re.search(r'\b' + field + r': (0x[0-9a-f]+)', selected)
+            else:
+                rva = re.search(r'\{"[^"]+", (0x[0-9a-f]+), signature', selected)
+                layout = re.search(r'\.' + field + r' = (0x[0-9a-f]+)', selected)
             assert guard and rva and layout, (domain, field)
             mutations = [('guard', guard), ('rva', rva), ('layout', layout)]
             if domain == 'sr':
@@ -77,7 +82,7 @@ def main():
                         new = hex(int(old, 16) + 1)
                     altered = selected[:match.start(group)] + new + selected[match.end(group):]
                     path = pathlib.Path(temp) / header
-                    path.write_text(text[:start] + altered + text[end:])
+                    path.write_text(text[:start] + altered + text[end:], encoding='utf-8')
                     result = run(domain, build, path)
                     assert result.returncode != 0 and 'AssertionError' in result.stderr, (domain, build, kind, result.stdout, result.stderr)
                     checks += 1

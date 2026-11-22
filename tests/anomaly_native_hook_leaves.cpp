@@ -18,18 +18,18 @@ struct SiteBank {
     const NativeSite* sites;
     size_t count;
 };
+// The SR site bank of each build; the motion sites are Rust-owned (motion_profile.rs).
 struct FixtureProfile {
-    SiteBank banks[2];
+    SiteBank sr;
 };
 static_assert(sizeof(SiteBank) == 16);
-static_assert(sizeof(FixtureProfile) == 32);
+static_assert(sizeof(FixtureProfile) == 16);
 constexpr auto fixture_profiles = [] {
     std::array<FixtureProfile, build_profiles.size()> result{};
     for (size_t build = 0; build < build_profiles.size(); ++build) {
         const auto& profile = build_profiles[build];
-        const auto& motion = profile.motion->motion_sites;
         const auto& sr = profile.sr->sr_function_sites;
-        result[build] = {{{motion.data(), motion.size()}, {sr.data(), sr.size()}}};
+        result[build] = {{sr.data(), sr.size()}};
     }
     return result;
 }();
