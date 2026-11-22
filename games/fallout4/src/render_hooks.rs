@@ -34,7 +34,7 @@ use crate::render_records::{
 };
 use crate::resolution::{is_busy as resolution_busy, rsf_fallout4_resolution_verify};
 use crate::screen::rsf_fallout4_verify_screen_queries;
-use crate::{MH_OK, Ops, image, read};
+use crate::{MH_OK, Ops, copy_pass, image, read};
 use rsf_game_sys::{rsf_game_host_services, rsf_game_render_pass};
 use std::ffi::{CStr, c_void};
 use std::mem::offset_of;
@@ -554,7 +554,7 @@ extern "C" fn rsf_fallout4_render_capture_recovery(
     };
     let world = World::read(facts);
     // SAFETY: the callback reports the current thread's FRAME record.
-    let basis = unsafe { *world.frame_pass };
+    let basis = copy_pass(unsafe { &*world.frame_pass });
     if frame.native_frame != basis.native_frame
         || frame.window_key != basis.window_key
         || frame.context.as_raw() != world.context
@@ -567,7 +567,7 @@ extern "C" fn rsf_fallout4_render_capture_recovery(
     // The identity comparison can call native COM. Read the current receipt facts
     // at the same point as the former native capture before invoking the export.
     let world = World::read(facts);
-    let basis = unsafe { *world.frame_pass };
+    let basis = copy_pass(unsafe { &*world.frame_pass });
     let request = rsf_d3d11_host_capture {
         struct_size: size_of::<rsf_d3d11_host_capture>() as u32,
         abi_version: RSF_D3D11_HOST_ABI_VERSION,

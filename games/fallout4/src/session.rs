@@ -253,7 +253,7 @@ impl Session {
         };
         self.host = Some(bound);
         let services = bound.services;
-        if !creation::prepare(&services, &build) {
+        if !creation::prepare(ops, &services, &build) {
             return self.refuse(
                 ops,
                 host,

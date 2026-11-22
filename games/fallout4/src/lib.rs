@@ -295,6 +295,16 @@ pub(crate) fn image() -> usize {
     unsafe { GetModuleHandleW(std::ptr::null()) as usize }
 }
 
+/// A bitwise copy of a pass record inside one synchronous native callback. The SDK record is not
+/// `Copy` because its pointers are borrowed for that callback; every caller here stays inside the
+/// callback lease and never retains the copy past it.
+pub(crate) fn copy_pass(
+    pass: &rsf_game_sys::rsf_game_render_pass,
+) -> rsf_game_sys::rsf_game_render_pass {
+    // SAFETY: the record holds integers, floats and raw pointers, all valid to copy bitwise.
+    unsafe { std::ptr::read(pass) }
+}
+
 /// Pins the module that contains `address` for the process.
 pub(crate) fn pin(address: *const c_void) -> bool {
     let mut module = null_mut();

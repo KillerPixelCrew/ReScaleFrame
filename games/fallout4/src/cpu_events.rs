@@ -622,7 +622,7 @@ fn native_cycle(
                 f[6],
                 f[7],
                 t.known(1),
-                P(worker),
+                P(worker_address),
                 t.known(3),
                 P(vtable),
                 t.known(5),
@@ -1242,7 +1242,7 @@ fn reserve_worker_poll(
     };
     let host = host_services();
     let mut copy = Future::ZERO;
-    let mut bits = 0;
+    let bits;
     let mut registered = false;
     {
         let mut guard = worker();

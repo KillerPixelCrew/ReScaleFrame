@@ -3,7 +3,6 @@
 //! and the guarded input-state snapshot. Every value belongs to the exact recognized build; the
 //! evidence is in games/fallout4/engine.json and docs/research/fallout4-*.
 use crate::{Plain, image, read};
-use std::ffi::c_void;
 
 // Hooked functions, in RSF_FALLOUT4_CPU_HOOK_* order.
 pub(super) const HOOK_ENTRIES: [(usize, &[u8]); 10] = [

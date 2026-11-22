@@ -24,7 +24,7 @@ use crate::resolution_stages::{
     RSF_FALLOUT4_STAGE_EVALUATED as EVALUATED, RSF_FALLOUT4_STAGE_OUTPUT_READY as OUTPUT_READY,
 };
 use crate::screen::NativeScreen as Screen;
-use crate::{RSF_ERROR_NATIVE_REFUSED, RSF_ERROR_NOT_READY, RSF_OK, image, message};
+use crate::{RSF_ERROR_NATIVE_REFUSED, RSF_ERROR_NOT_READY, RSF_OK, copy_pass, image, message};
 use rsf_game_sys::d3d11_reduced_abi::{
     RSF_D3D11_AUXILIARY_COLOUR, RSF_D3D11_AUXILIARY_DEPTH_STENCIL,
     RSF_D3D11_AUXILIARY_RESTORE_CONTENTS, rsf_d3d11_auxiliary_surface as Surface,
@@ -257,7 +257,7 @@ pub(super) fn emit_sr(leaves: &Leaves, recovery: &RecoveryLeaves) -> SrOutcome {
     }
     let lease = leaves.inputs();
     // SAFETY: the input lease always names its pass.
-    let mut pass = unsafe { *lease.pass };
+    let mut pass = copy_pass(unsafe { &*lease.pass });
     identify(&mut pass, &world.cpu);
     pass.role = RSF_GAME_RENDER_SR;
     pass.pass_key = (image() + SR_PASS) as u64;
@@ -290,7 +290,7 @@ pub(super) fn emit_sr(leaves: &Leaves, recovery: &RecoveryLeaves) -> SrOutcome {
         );
         return SrOutcome::Refused;
     }
-    let mut planning = pass;
+    let mut planning = copy_pass(&pass);
     planning.flags |= RSF_GAME_RENDER_RECONFIGURE;
     if !unsafe { (leaves.plan)(&planning) } {
         return SrOutcome::Refused;
@@ -312,7 +312,7 @@ pub(super) fn emit_sr(leaves: &Leaves, recovery: &RecoveryLeaves) -> SrOutcome {
         && requested.output_width == pass.camera.output_width
         && requested.output_height == pass.camera.output_height;
     unsafe { (leaves.retain_inputs)(&pass) };
-    let mut fg = pass;
+    let mut fg = copy_pass(&pass);
     let screen = screen_facts(leaves, recovery, &mut fg, true);
     if screen.refusals != 0 || screen.screen != SCREEN_GAMEPLAY || !recovery.same_source() {
         return SrOutcome::Refused;
@@ -507,7 +507,7 @@ fn emit_hudless_with<Lease>(
     }
     let world = leaves.world();
     // SAFETY: the World names its pass.
-    let pass = unsafe { *world.pass };
+    let pass = copy_pass(unsafe { &*world.pass });
     if frame.native_frame != pass.native_frame {
         refuse(1, "native-frame");
         return;
@@ -559,7 +559,7 @@ unsafe extern "C" fn rsf_fallout4_render_screen_facts(
     first: bool,
 ) {
     // Work on a copy: the leaves read the World while the verdict is formed.
-    let Some(mut copy) = (unsafe { pass.as_ref() }).copied() else {
+    let Some(mut copy) = (unsafe { pass.as_ref() }).map(copy_pass) else {
         return;
     };
     screen_facts(leaves, recovery, &mut copy, first);

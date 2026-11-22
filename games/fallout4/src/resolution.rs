@@ -9,7 +9,7 @@ use crate::depth_domains::{self, Snapshot};
 pub(crate) use crate::render_records::NativeOutputOwner as OutputOwner;
 use crate::render_records::NativeResolutionReceipt as Receipt;
 use crate::screen::{WORLD_LEASE_INVALID, rsf_fallout4_ordinary_screen_refusals};
-use crate::{Plain, image, read};
+use crate::{Plain, copy_pass, image, read};
 use rsf_game_sys::{
     RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_SR, rsf_game_host_services,
     rsf_game_render_config, rsf_game_render_pass,
@@ -435,7 +435,7 @@ fn configured_targets(
     context: *mut c_void,
     size: [u32; 2],
 ) -> Option<[u32; 2]> {
-    let mut planning = *frame;
+    let mut planning = copy_pass(frame);
     planning.role = RSF_GAME_RENDER_SR;
     planning.flags = RSF_GAME_RENDER_RECONFIGURE | RSF_GAME_RENDER_NO_FG;
     [planning.camera.output_width, planning.camera.output_height] = size;

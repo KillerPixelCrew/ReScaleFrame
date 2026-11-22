@@ -16,7 +16,6 @@ use crate::platform_abi::{
 };
 use crate::{
     EXECUTABLE, EXECUTABLE_SHA256, MH_CreateHook, MH_OK, Ops, Plain, RSF_ERROR_NOT_READY, RSF_OK,
-    Threw,
 };
 use crate::{image, message, ops, read};
 use rsf_game_sys::rsf_game_host_services;
@@ -204,7 +203,7 @@ pub(crate) fn busy() -> bool {
 
 /// Resolves the Runtime creation exports, prepares Steam's chain forwarding and creates the
 /// disabled creation hook.
-pub(crate) fn prepare(services: &rsf_game_host_services, _build: &ExactBuild) -> bool {
+pub(crate) fn prepare(ops: &Ops, services: &rsf_game_host_services, _build: &ExactBuild) -> bool {
     if !preflight() {
         return false;
     }

@@ -615,7 +615,7 @@ fn sample(cpu: &Identity, out: &mut Snapshot, stage: &mut Stage) -> bool {
         || out.depth_key == 0
         || !load(at(out.renderer_key, depth + 0x88), &mut out.depth_srv_key)
         || out.depth_srv_key == 0
-        || !load(at(context, 0x2410), &mut out.near_inverse_transposed)
+        || !load(at(context as u64, 0x2410), &mut out.near_inverse_transposed)
     {
         return false;
     }

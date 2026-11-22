@@ -174,7 +174,7 @@ unsafe extern "C" fn notify(pass: *const rsf_game_render_pass, context: *mut c_v
 unsafe extern "C" fn publish_inputs(scalar: *const rsf_game_render_pass) {
     event("publish_inputs", 0);
     with(|fake| {
-        fake.pass = unsafe { *scalar };
+        fake.pass = crate::copy_pass(unsafe { &*scalar });
         fake.inputs = true;
     });
 }
@@ -253,7 +253,7 @@ fn acquire_framebuffer() -> (bool, Framebuffer, FakeFramebufferLease) {
 unsafe extern "C" fn publish_window(texture: *mut c_void, window: *const rsf_game_render_pass) {
     event("publish_window", texture as usize as u32);
     with(|fake| {
-        fake.pass = unsafe { *window };
+        fake.pass = crate::copy_pass(unsafe { &*window });
         fake.window_open = true;
     });
 }

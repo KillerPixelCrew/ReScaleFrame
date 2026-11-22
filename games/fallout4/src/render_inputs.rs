@@ -27,7 +27,7 @@ use crate::render_records::{
     native_input_pipboy as SLOT_PIPBOY, native_input_refraction_normals as SLOT_REFRACTION_NORMALS,
     native_input_vats as SLOT_VATS,
 };
-use crate::{Plain, image, read};
+use crate::{Plain, copy_pass, image, read};
 use rsf_game_sys::RSF_SCREEN_UNKNOWN;
 use rsf_game_sys::{
     RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR, rsf_game_render_pass,
@@ -1302,7 +1302,7 @@ fn read_raster(
     {
         return None;
     }
-    let mut pass = *frame;
+    let mut pass = copy_pass(frame);
     pass.role = RSF_GAME_RENDER_SR;
     pass.pass_key = base.wrapping_add(RASTER_PASS_RVA) as u64;
     pass.flags |= RSF_GAME_RENDER_NO_FG;
