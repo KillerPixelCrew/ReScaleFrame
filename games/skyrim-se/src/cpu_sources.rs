@@ -2,7 +2,6 @@
 //! Native job and input producer proof, plus the two prospective source slots. The
 //! detours lend their thread-local scopes and make the native calls at their original sites.
 
-use std::ffi::c_void;
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering::SeqCst};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -259,115 +258,60 @@ impl InputEpochs {
 static JOBS: NativeJobs = NativeJobs::new();
 static EPOCHS: InputEpochs = InputEpochs::new();
 
-// A null handle selects the process state. Fixtures pass the live allocation of the same type.
-unsafe fn state<T>(handle: *const c_void, production: &T) -> &T {
-    unsafe { handle.cast::<T>().as_ref() }.unwrap_or(production)
-}
-
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_jobs_new() -> *mut c_void {
-    Box::into_raw(Box::new(NativeJobs::new())).cast()
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_jobs_free(handle: *mut c_void) {
-    drop(unsafe { Box::from_raw(handle.cast::<NativeJobs>()) });
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_jobs_publish(
-    handle: *const c_void,
+extern "C" fn rsf_skyrim_jobs_publish(
     out: &mut JobTicket,
     manager: usize,
     source: u64,
     session: u64,
     native_idle: bool,
 ) {
-    *out = unsafe { state(handle, &JOBS) }.publish(manager, source, session, native_idle);
+    *out = JOBS.publish(manager, source, session, native_idle);
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_jobs_snapshot(handle: *const c_void, out: &mut JobTicket) {
-    *out = unsafe { state(handle, &JOBS) }.snapshot();
+extern "C" fn rsf_skyrim_jobs_snapshot(out: &mut JobTicket) {
+    *out = JOBS.snapshot();
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_jobs_matches(handle: *const c_void, ticket: &JobTicket) -> bool {
-    unsafe { state(handle, &JOBS) }.matches(*ticket)
+extern "C" fn rsf_skyrim_jobs_matches(ticket: &JobTicket) -> bool {
+    JOBS.matches(*ticket)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_jobs_retire(handle: *const c_void, ticket: &JobTicket) -> bool {
-    unsafe { state(handle, &JOBS) }.retire(*ticket)
+extern "C" fn rsf_skyrim_jobs_retire(ticket: &JobTicket) -> bool {
+    JOBS.retire(*ticket)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_jobs_retired(handle: *const c_void) -> u64 {
-    unsafe { state(handle, &JOBS) }.retired.load(SeqCst)
+extern "C" fn rsf_skyrim_jobs_retired() -> u64 {
+    JOBS.retired.load(SeqCst)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_jobs_invalidate(handle: *const c_void) {
-    unsafe { state(handle, &JOBS) }.invalidate();
+extern "C" fn rsf_skyrim_jobs_invalidate() {
+    JOBS.invalidate();
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_jobs_reset(handle: *const c_void) {
-    unsafe { state(handle, &JOBS) }.reset();
+extern "C" fn rsf_skyrim_epochs_snapshot(out: &mut Stamp) {
+    *out = EPOCHS.snapshot();
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_epochs_new() -> *mut c_void {
-    Box::into_raw(Box::new(InputEpochs::new())).cast()
+extern "C" fn rsf_skyrim_epochs_begin_write() {
+    EPOCHS.begin_write();
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_epochs_free(handle: *mut c_void) {
-    drop(unsafe { Box::from_raw(handle.cast::<InputEpochs>()) });
+extern "C" fn rsf_skyrim_epochs_end_write() {
+    EPOCHS.end_write();
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_epochs_begin_poll(handle: *const c_void, out: &mut PollTicket) {
-    *out = unsafe { state(handle, &EPOCHS) }.begin_poll();
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_epochs_end_poll(
-    handle: *const c_void,
-    poll: &PollTicket,
-    produced: bool,
-) {
-    unsafe { state(handle, &EPOCHS) }.end_poll(*poll, produced);
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_epochs_owns_poll(handle: *const c_void, poll: &PollTicket) -> bool {
-    unsafe { state(handle, &EPOCHS) }.owns_poll(*poll)
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_epochs_snapshot(handle: *const c_void, out: &mut Stamp) {
-    *out = unsafe { state(handle, &EPOCHS) }.snapshot();
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_epochs_unchanged(handle: *const c_void, stamp: &Stamp) -> bool {
-    unsafe { state(handle, &EPOCHS) }.unchanged(*stamp)
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_epochs_begin_write(handle: *const c_void) {
-    unsafe { state(handle, &EPOCHS) }.begin_write();
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_epochs_end_write(handle: *const c_void) {
-    unsafe { state(handle, &EPOCHS) }.end_write();
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_epochs_invalidate(handle: *const c_void) {
-    unsafe { state(handle, &EPOCHS) }.invalidate();
+extern "C" fn rsf_skyrim_epochs_invalidate() {
+    EPOCHS.invalidate();
 }
 
 pub(crate) fn unchanged(stamp: Stamp) -> bool {
@@ -630,12 +574,6 @@ extern "C" fn rsf_skyrim_poll_sample_status(scope: &PollScope, source: u64) -> P
     }
 }
 
-// A null handle selects the process-lived store. A fixture owns a private allocation.
-// Non-null handles must have come from new and remain live through every borrowed call.
-unsafe fn lock<'a>(store: *const c_void) -> MutexGuard<'a, Sources> {
-    lock_store(unsafe { state(store, &PRODUCTION) })
-}
-
 const _: () = {
     assert!(size_of::<Reservation>() == 56);
     assert!(std::mem::offset_of!(Reservation, phase) == 40);
@@ -644,20 +582,7 @@ const _: () = {
 };
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_sources_new() -> *mut c_void {
-    Box::into_raw(Box::new(Mutex::new(Sources::EMPTY))).cast()
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_sources_free(store: *mut c_void) {
-    if !store.is_null() {
-        drop(unsafe { Box::from_raw(store.cast::<Store>()) });
-    }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_sources_reserve(
-    store: *const c_void,
+extern "C" fn rsf_skyrim_sources_reserve(
     out: &mut Reserve,
     source: u64,
     predecessor: u64,
@@ -665,7 +590,7 @@ unsafe extern "C" fn rsf_skyrim_sources_reserve(
     job_generation: u64,
     poll_generation: u64,
 ) {
-    *out = unsafe { lock(store) }.reserve(Reservation {
+    *out = lock_store(&PRODUCTION).reserve(Reservation {
         source,
         predecessor,
         session,
@@ -677,61 +602,38 @@ unsafe extern "C" fn rsf_skyrim_sources_reserve(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_sources_still_reserved(store: *const c_void, source: u64) -> bool {
-    unsafe { lock(store) }.pending.polling(source)
+extern "C" fn rsf_skyrim_sources_still_reserved(source: u64) -> bool {
+    lock_store(&PRODUCTION).pending.polling(source)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_sources_sample(
-    store: *const c_void,
-    source: u64,
-    produced: bool,
-    kinds: u32,
-) -> bool {
-    unsafe { lock(store) }.sample(source, produced, kinds)
+extern "C" fn rsf_skyrim_sources_sample(source: u64, produced: bool, kinds: u32) -> bool {
+    lock_store(&PRODUCTION).sample(source, produced, kinds)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_sources_withdraw_pending(store: *const c_void, only: u64) -> u64 {
-    unsafe { lock(store) }.withdraw_pending(only)
+extern "C" fn rsf_skyrim_sources_withdraw_pending(only: u64) -> u64 {
+    lock_store(&PRODUCTION).withdraw_pending(only)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_sources_adopt(
-    store: *const c_void,
-    out: &mut Reservation,
-    session: u64,
-    joined: u64,
-) {
-    *out = unsafe { lock(store) }.adopt(session, joined);
+extern "C" fn rsf_skyrim_sources_adopt(out: &mut Reservation, session: u64, joined: u64) {
+    *out = lock_store(&PRODUCTION).adopt(session, joined);
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_sources_bind(
-    store: *const c_void,
-    source: u64,
-    completed: u64,
-) -> bool {
-    unsafe { lock(store) }.bind(source, completed)
+extern "C" fn rsf_skyrim_sources_bind(source: u64, completed: u64) -> bool {
+    lock_store(&PRODUCTION).bind(source, completed)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_sources_owned(store: *const c_void, out: &mut Reservation) {
-    *out = unsafe { lock(store) }.owned;
+extern "C" fn rsf_skyrim_sources_owned(out: &mut Reservation) {
+    *out = lock_store(&PRODUCTION).owned;
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_sources_release(
-    store: *const c_void,
-    out: &mut Reservation,
-    source: u64,
-) {
-    *out = unsafe { lock(store) }.release(source);
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_sources_reset(store: *const c_void) {
-    *unsafe { lock(store) } = Sources::EMPTY;
+extern "C" fn rsf_skyrim_sources_release(out: &mut Reservation, source: u64) {
+    *out = lock_store(&PRODUCTION).release(source);
 }
 
 // Counts of observed native call envelopes for diagnostics. These never reach

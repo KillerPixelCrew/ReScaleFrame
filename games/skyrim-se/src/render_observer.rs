@@ -32,7 +32,7 @@ type Bind = unsafe extern "C" fn(*mut c_void, &PresentationBinding) -> i32;
 static OBSERVATIONS: AtomicU64 = AtomicU64::new(0);
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_reset_render_observations() {
+pub(crate) extern "C" fn rsf_skyrim_reset_render_observations() {
     OBSERVATIONS.store(0, Ordering::Relaxed);
     crate::postprocess::reset_observations();
 }

@@ -3,15 +3,8 @@
 #include <rescaleframe/game_api.h>
 #include <cstdint>
 namespace rsf::skyrim {
-bool cpu_prepare();
-bool cpu_bind(const rsf_game_host_services&);
-bool cpu_start();
-void cpu_quiesce();
-// Disable and drain while retaining prepared services for retry.
-bool cpu_disable();
-// Release services only after every adapter stop refusal check has passed.
-bool cpu_stop();
-bool cpu_busy();
+bool cpu_prepare() noexcept;
+bool cpu_start() noexcept;
 uint64_t cpu_source();
 bool cpu_render_identity(rsf_game_render_pass&);
 // Bounded producer receipts at actual FG_INPUTS/WINDOW emission, with no policy changes.

@@ -3,7 +3,7 @@
 // the lifecycle order, results and reasons, the Runtime host setup and its original-session reuse,
 // DPI startup, the observer hook record and the borrowed services, which the detours lease under
 // the session lock. This file keeps the native observer detours, return-address acquisition,
-// MinHook and the exception boundary for callbacks supplied to Rust.
+// and the exception boundary for callbacks supplied to Rust.
 #include <rescaleframe/game_api.h>
 #include <windows.h>
 #include <atomic>
@@ -18,16 +18,7 @@
 #endif
 
 extern "C" bool rsf_skyrim_presentation_guard() noexcept;
-extern "C" bool rsf_skyrim_presentation_start(const rsf_game_host_services*) noexcept;
-extern "C" void rsf_skyrim_presentation_quiesce() noexcept;
-extern "C" bool rsf_skyrim_presentation_busy() noexcept;
-extern "C" bool rsf_skyrim_presentation_stop() noexcept;
 extern "C" bool rsf_skyrim_sampling_guard() noexcept;
-extern "C" bool rsf_skyrim_sampling_start(const rsf_game_host_services*) noexcept;
-extern "C" void rsf_skyrim_sampling_quiesce() noexcept;
-extern "C" bool rsf_skyrim_sampling_busy() noexcept;
-extern "C" bool rsf_skyrim_sampling_stop() noexcept;
-extern "C" bool rsf_skyrim_resolution_owned() noexcept;
 extern "C" bool rsf_skyrim_resolution_controls(uintptr_t) noexcept;
 
 extern "C" bool rsf_skyrim_render_allowed() noexcept {
@@ -154,7 +145,7 @@ void observe_upload(void* renderer, uint8_t flags) noexcept
     calls.fetch_sub(1, std::memory_order_acq_rel);
 }
 
-int32_t admit_observers()
+int32_t admit_observers() noexcept
 {
     rsf_skyrim_observer_targets sites{};
     const auto result = rsf_skyrim_observer_admit(
@@ -212,46 +203,13 @@ constexpr rsf_skyrim_observer_leaves observer_leaves{
     },
 };
 
-// A subsystem call that throws reports false; the Rust session then retires what it started and
-// answers RSF_ERROR_NOT_READY as the former catch did.
-bool subsystem(uint32_t operation, const rsf_game_host_services* services, int32_t* value) noexcept try
-{
-    using namespace rsf::skyrim;
-    const auto flag = [value](bool result) { *value = result ? 1 : 0; };
-    switch (operation) {
-    case RSF_SKYRIM_ADMIT_OBSERVERS: *value = admit_observers(); break;
-    case RSF_SKYRIM_OBSERVERS_BUSY: flag(calls.load(std::memory_order_acquire) != 0); break;
-    case RSF_SKYRIM_RESET_OBSERVATIONS:
-        rsf_skyrim_reset_render_observations();
-        flag(true);
-        break;
-    case RSF_SKYRIM_CPU_PREPARE: flag(cpu_prepare()); break;
-    case RSF_SKYRIM_CPU_BIND: flag(services && cpu_bind(*services)); break;
-    case RSF_SKYRIM_CPU_START: flag(cpu_start()); break;
-    case RSF_SKYRIM_CPU_QUIESCE: cpu_quiesce(); flag(true); break;
-    case RSF_SKYRIM_CPU_DISABLE: flag(cpu_disable()); break;
-    case RSF_SKYRIM_CPU_STOP: flag(cpu_stop()); break;
-    case RSF_SKYRIM_CPU_BUSY: flag(cpu_busy()); break;
-    case RSF_SKYRIM_SAMPLING_START: flag(services && rsf_skyrim_sampling_start(services)); break;
-    case RSF_SKYRIM_SAMPLING_QUIESCE: rsf_skyrim_sampling_quiesce(); flag(true); break;
-    case RSF_SKYRIM_SAMPLING_STOP: flag(rsf_skyrim_sampling_stop()); break;
-    case RSF_SKYRIM_SAMPLING_BUSY: flag(rsf_skyrim_sampling_busy()); break;
-    case RSF_SKYRIM_PRESENTATION_START: flag(services && rsf_skyrim_presentation_start(services)); break;
-    case RSF_SKYRIM_PRESENTATION_QUIESCE: rsf_skyrim_presentation_quiesce(); flag(true); break;
-    case RSF_SKYRIM_PRESENTATION_STOP: flag(rsf_skyrim_presentation_stop()); break;
-    case RSF_SKYRIM_PRESENTATION_BUSY: flag(rsf_skyrim_presentation_busy()); break;
-    case RSF_SKYRIM_RESOLUTION_OWNED: flag(rsf_skyrim_resolution_owned()); break;
-    case RSF_SKYRIM_AUXILIARIES_PENDING: flag(rsf_skyrim_render_cleanup_pending()); break;
-    default: flag(false); break;
-    }
-    return true;
-}
-catch (...) { return false; }
-
 const rsf_skyrim_session_leaves session_leaves{
     sizeof(rsf_skyrim_session_leaves), RSF_SKYRIM_SESSION_LEAVES_VERSION,
     rsf::skyrim::creation_platform(), &observer_leaves,
-    subsystem,
+    admit_observers,
+    []() noexcept { return calls.load(std::memory_order_acquire) != 0; },
+    rsf::skyrim::cpu_prepare,
+    rsf::skyrim::cpu_start,
     [](const char** refusal, bool arm) noexcept {
         return rsf::skyrim::compatibility_checkpoint(*refusal, arm ? &rsf_skyrim_session_withdraw : nullptr);
     },

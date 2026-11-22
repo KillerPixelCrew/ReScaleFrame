@@ -13,7 +13,7 @@ struct rsf_skyrim_cpu_render_state {
 };
 
 struct rsf_skyrim_cpu_frame_input {
-    rsf::skyrim::InputOwnership::Stamp consumed{};
+    rsf::skyrim::InputStamp consumed{};
     uint32_t camera_updates{}, movement_calls{}, player_update_calls{}, player_camera_updates{};
     bool ambiguous{};
 };
@@ -23,7 +23,7 @@ using rsf_skyrim_cpu_menus = bool (*)(uintptr_t open, uintptr_t frozen, uintptr_
     uintptr_t loading_name, uintptr_t main_name, rsf::skyrim::NativeScreenFacts*);
 
 extern "C" {
-void rsf_skyrim_cpu_record_consumer(rsf_skyrim_cpu_frame_input*, const rsf::skyrim::InputOwnership::Stamp*,
+void rsf_skyrim_cpu_record_consumer(rsf_skyrim_cpu_frame_input*, const rsf::skyrim::InputStamp*,
     rsf::skyrim::CpuConsumer, bool mapped) noexcept;
 bool rsf_skyrim_cpu_consumption_proven(const rsf_skyrim_cpu_frame_input*) noexcept;
 uint64_t rsf_skyrim_cpu_next_source() noexcept;

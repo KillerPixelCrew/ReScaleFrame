@@ -95,6 +95,10 @@ const OBSERVERS: observers::Leaves = observers::Leaves {
     log: observer_log,
 };
 
+unsafe extern "C" fn admit() -> i32 {
+    1
+}
+
 fn leaves() -> Leaves {
     Leaves {
         _struct_size: size_of::<Leaves>() as u32,
@@ -102,6 +106,10 @@ fn leaves() -> Leaves {
         // Start never reads the creation platform; the CPU stage fails before creation.
         platform: ptr::null(),
         observers: &OBSERVERS,
+        admit_observers: admit,
+        observers_busy: yes,
+        cpu_prepare: yes,
+        cpu_start: yes,
         subsystem,
         checkpoint,
         compatibility_status,

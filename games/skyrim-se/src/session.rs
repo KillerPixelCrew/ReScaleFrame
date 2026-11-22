@@ -31,7 +31,7 @@ const NOT_READY: rsf_result = -3;
 const BUSY: rsf_result = -4;
 const NATIVE_REFUSED: rsf_result = -5;
 
-const LEAVES_VERSION: u32 = 3;
+const LEAVES_VERSION: u32 = 4;
 // Native subsystem operations, RSF_SKYRIM_* in session_platform.h.
 const ADMIT_OBSERVERS: u32 = 0;
 const OBSERVERS_BUSY: u32 = 1;
@@ -96,6 +96,11 @@ pub(crate) struct Leaves {
     _version: u32,
     platform: *const Platform,
     observers: *const observers::Leaves,
+    admit_observers: unsafe extern "C" fn() -> i32,
+    observers_busy: unsafe extern "C" fn() -> bool,
+    cpu_prepare: unsafe extern "C" fn() -> bool,
+    cpu_start: unsafe extern "C" fn() -> bool,
+    #[cfg(test)]
     subsystem: unsafe extern "C" fn(u32, *const rsf_game_host_services, *mut i32) -> bool,
     checkpoint: unsafe extern "C" fn(*mut *const c_char, bool) -> bool,
     compatibility_status: unsafe extern "C" fn() -> *const c_char,
@@ -111,7 +116,7 @@ pub(crate) struct Leaves {
 }
 
 const _: () = {
-    assert!(size_of::<Leaves>() == 8 + 10 * size_of::<usize>());
+    assert!(size_of::<Leaves>() == 8 + (13 + cfg!(test) as usize) * size_of::<usize>());
 };
 
 /// A native leaf threw. A lifecycle entry reports RSF_ERROR_NOT_READY as the former C++ catch did.
@@ -128,6 +133,7 @@ impl Leaves {
         unsafe { &*self.observers }
     }
 
+    #[cfg(test)]
     fn run(&self, operation: u32, services: Option<&rsf_game_host_services>) -> Result<i32, Threw> {
         let services = services.map_or(ptr::null(), ptr::from_ref);
         let mut value = 0;
@@ -136,6 +142,52 @@ impl Leaves {
         } else {
             Err(Threw)
         }
+    }
+
+    #[cfg(not(test))]
+    fn run(&self, operation: u32, services: Option<&rsf_game_host_services>) -> Result<i32, Threw> {
+        use crate::{cpu_hooks, postprocess, presentation, render_observer, resolution, sampling};
+
+        let result = match operation {
+            ADMIT_OBSERVERS => return Ok(unsafe { (self.admit_observers)() }),
+            OBSERVERS_BUSY => unsafe { (self.observers_busy)() },
+            RESET_OBSERVATIONS => {
+                render_observer::rsf_skyrim_reset_render_observations();
+                true
+            }
+            CPU_PREPARE => unsafe { (self.cpu_prepare)() },
+            CPU_BIND => services.is_some_and(|host| cpu_hooks::rsf_skyrim_cpu_rust_bind(host)),
+            CPU_START => unsafe { (self.cpu_start)() },
+            CPU_QUIESCE => {
+                cpu_hooks::rsf_skyrim_cpu_rust_quiesce();
+                true
+            }
+            CPU_DISABLE => cpu_hooks::rsf_skyrim_cpu_rust_disable(),
+            CPU_STOP => cpu_hooks::rsf_skyrim_cpu_rust_stop(),
+            CPU_BUSY => cpu_hooks::rsf_skyrim_cpu_rust_busy(),
+            SAMPLING_START => {
+                services.is_some_and(|host| sampling::rsf_skyrim_sampling_start(host))
+            }
+            SAMPLING_QUIESCE => {
+                sampling::rsf_skyrim_sampling_quiesce();
+                true
+            }
+            SAMPLING_STOP => sampling::rsf_skyrim_sampling_stop(),
+            SAMPLING_BUSY => sampling::rsf_skyrim_sampling_busy(),
+            PRESENTATION_START => {
+                services.is_some_and(|host| presentation::rsf_skyrim_presentation_start(host))
+            }
+            PRESENTATION_QUIESCE => {
+                presentation::rsf_skyrim_presentation_quiesce();
+                true
+            }
+            PRESENTATION_STOP => presentation::rsf_skyrim_presentation_stop(),
+            PRESENTATION_BUSY => presentation::rsf_skyrim_presentation_busy(),
+            RESOLUTION_OWNED => resolution::rsf_skyrim_resolution_owned(),
+            AUXILIARIES_PENDING => postprocess::rsf_skyrim_render_cleanup_pending(),
+            _ => false,
+        };
+        Ok(i32::from(result))
     }
 
     fn check(&self, operation: u32) -> Result<bool, Threw> {

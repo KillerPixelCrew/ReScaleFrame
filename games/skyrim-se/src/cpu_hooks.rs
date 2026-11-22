@@ -347,7 +347,7 @@ extern "C" fn rsf_skyrim_cpu_rust_prepare(detours: &Detours) -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_rust_bind(host: &rsf_game_host_services) -> bool {
+pub(crate) extern "C" fn rsf_skyrim_cpu_rust_bind(host: &rsf_game_host_services) -> bool {
     let control = CONTROL.lock().unwrap_or_else(PoisonError::into_inner);
     if control.frequency == 0 || !control.hooks.is_disabled() || rsf_skyrim_cpu_rust_busy() {
         return false;
@@ -379,14 +379,14 @@ extern "C" fn rsf_skyrim_cpu_rust_start(refusal: &mut StartRefusal) -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_rust_quiesce() {
+pub(crate) extern "C" fn rsf_skyrim_cpu_rust_quiesce() {
     PRODUCERS.fetch_and(ENTERED, Ordering::AcqRel);
     // Runtime closes reservations at session release. There is no engine event at quiesce.
     rsf_skyrim_cpu_clear_proof(false);
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_rust_disable() -> bool {
+pub(crate) extern "C" fn rsf_skyrim_cpu_rust_disable() -> bool {
     CONTROL
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
@@ -394,7 +394,7 @@ extern "C" fn rsf_skyrim_cpu_rust_disable() -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_rust_stop() -> bool {
+pub(crate) extern "C" fn rsf_skyrim_cpu_rust_stop() -> bool {
     let mut control = CONTROL.lock().unwrap_or_else(PoisonError::into_inner);
     if !control.disable() {
         return false;
@@ -418,7 +418,7 @@ extern "C" fn rsf_skyrim_cpu_active() -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_rust_busy() -> bool {
+pub(crate) extern "C" fn rsf_skyrim_cpu_rust_busy() -> bool {
     PRODUCERS.load(Ordering::Acquire) & ENTERED != 0
 }
 

@@ -404,7 +404,7 @@ extern "C" fn rsf_skyrim_presentation_guard() -> bool {
 
 /// Lifecycle calls are serialized by the adapter session.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_presentation_start(host: &rsf_game_host_services) -> bool {
+pub(crate) extern "C" fn rsf_skyrim_presentation_start(host: &rsf_game_host_services) -> bool {
     if rsf_skyrim_presentation_busy() {
         return false;
     }
@@ -436,17 +436,17 @@ extern "C" fn rsf_skyrim_presentation_start(host: &rsf_game_host_services) -> bo
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_presentation_quiesce() {
+pub(crate) extern "C" fn rsf_skyrim_presentation_quiesce() {
     HOOK.live.store(false, Ordering::Release);
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_presentation_busy() -> bool {
+pub(crate) extern "C" fn rsf_skyrim_presentation_busy() -> bool {
     CALLS.load(Ordering::Acquire) != 0 || WINDOWS.load(Ordering::Acquire) != 0
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_presentation_stop() -> bool {
+pub(crate) extern "C" fn rsf_skyrim_presentation_stop() -> bool {
     rsf_skyrim_presentation_quiesce();
     if HOOK.original.load(Ordering::Acquire).is_null() {
         return !rsf_skyrim_presentation_busy();

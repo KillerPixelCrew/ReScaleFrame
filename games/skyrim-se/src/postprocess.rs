@@ -95,7 +95,7 @@ pub(crate) fn reset_observations() {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_render_cleanup_pending() -> bool {
+pub(crate) extern "C" fn rsf_skyrim_render_cleanup_pending() -> bool {
     let Some(platform) = platform::get() else {
         return crate::auxiliary::pending();
     };

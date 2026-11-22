@@ -240,7 +240,7 @@ fn upload(base: usize, extent: [u32; 2], flags: u8) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_resolution_owned() -> bool {
+pub(crate) extern "C" fn rsf_skyrim_resolution_owned() -> bool {
     state().owner.is_some()
 }
 

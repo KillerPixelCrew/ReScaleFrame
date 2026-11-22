@@ -182,7 +182,7 @@ extern "C" fn rsf_skyrim_sampling_guard() -> bool {
 
 /// Lifecycle calls are serialized by the adapter session.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_sampling_start(host: &rsf_game_host_services) -> bool {
+pub(crate) extern "C" fn rsf_skyrim_sampling_start(host: &rsf_game_host_services) -> bool {
     let Some(platform) = platform::get() else {
         return false;
     };
@@ -213,17 +213,17 @@ extern "C" fn rsf_skyrim_sampling_start(host: &rsf_game_host_services) -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_sampling_quiesce() {
+pub(crate) extern "C" fn rsf_skyrim_sampling_quiesce() {
     HOOK.live.store(false, Ordering::Release);
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_sampling_busy() -> bool {
+pub(crate) extern "C" fn rsf_skyrim_sampling_busy() -> bool {
     PENDING.load(Ordering::Acquire) || CALLS.load(Ordering::Acquire) != 0
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_sampling_stop() -> bool {
+pub(crate) extern "C" fn rsf_skyrim_sampling_stop() -> bool {
     rsf_skyrim_sampling_quiesce();
     if rsf_skyrim_sampling_busy() {
         return false;
