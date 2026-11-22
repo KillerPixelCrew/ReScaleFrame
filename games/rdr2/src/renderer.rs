@@ -349,14 +349,15 @@ fn process(ctx: &Context, request: &Request, d: &Evaluation, history: &mut Histo
         reset,
         motion_jittered: request.flags & NGX_MV_JITTERED != 0,
     };
-    let mut decoded = CameraResult::default();
-    if !camera::decode(&camera, &input, &mut decoded) || !decoded.projection_jitter_matches {
+    let Some(decoded) =
+        camera::decode(&camera, &input).filter(|decoded| decoded.projection_jitter_matches)
+    else {
         return refusal(
             host,
             RSF_GAME_RENDER_FEEDBACK_CAMERA_JITTER_INVALID,
             "RDR2 SR native fallback: render projection is invalid or its jitter is frozen.",
         );
-    }
+    };
     // Source identity comes from observed native input/simulation/render markers. Actual Present
     // still requires the later scene/resource match on the submission thread.
     let source = scene::source(frame);
@@ -959,8 +960,7 @@ pub(crate) fn status(status: &mut rsf_game_renderer_status) {
     status.prepared = u32::from(PREPARED.load(Ordering::SeqCst));
     status.active = u32::from(ACTIVE.load(Ordering::SeqCst));
     status.rendering_ready = 0;
-    status.reason = c"Native DLSS SR replacement implemented; FSR2 export routing, live acceptance and FG remain pending."
-        .as_ptr();
+    status.reason = crate::STATUS.as_ptr();
 }
 
 #[cfg(test)]

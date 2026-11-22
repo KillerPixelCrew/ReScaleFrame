@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::Fixture;
-use crate::camera::{CameraInputs, CameraResult, decode};
+use crate::camera::{CameraInputs, decode};
 use rsf_game_sys::rsf_camera_frame;
 use std::ffi::OsString;
 use std::io::{self, Write};
@@ -27,10 +27,7 @@ fn capture(bytes: &[u8], arguments: &[OsString]) -> Option<()> {
         reset: argument(8)?.parse::<i32>().ok()? != 0,
         ..CameraInputs::default()
     };
-    let mut result = CameraResult::default();
-    if !decode(bytes, &input, &mut result) {
-        return None;
-    }
+    let result = decode(bytes, &input)?;
     let camera = result.camera;
     let mut out = io::stdout().lock();
     write!(
@@ -54,11 +51,11 @@ fn check_fixture(bytes: &[u8]) -> bool {
     let Some(fixture) = Fixture::parse(bytes) else {
         return false;
     };
-    let mut result = CameraResult::default();
-    decode(fixture.view, &fixture.input, &mut result)
-        && result.camera.struct_size as usize == size_of::<rsf_camera_frame>()
-        && result.projection_jitter_matches == fixture.jitter_matches
-        && (result.camera.vertical_fov_radians - fixture.fov).abs() < 1e-5
+    decode(fixture.view, &fixture.input).is_some_and(|result| {
+        result.camera.struct_size as usize == size_of::<rsf_camera_frame>()
+            && result.projection_jitter_matches == fixture.jitter_matches
+            && (result.camera.vertical_fov_radians - fixture.fov).abs() < 1e-5
+    })
 }
 
 fn run() -> Option<bool> {

@@ -14,7 +14,6 @@ type Matrix = [f64; 16];
 mod fixture;
 
 #[derive(Clone, Copy, Default)]
-#[repr(C)]
 pub(crate) struct CameraInputs {
     pub(crate) render_width: u32,
     pub(crate) render_height: u32,
@@ -28,17 +27,11 @@ pub(crate) struct CameraInputs {
 }
 
 #[derive(Clone, Copy)]
-#[repr(C)]
 pub(crate) struct CameraResult {
     pub(crate) camera: rsf_camera_frame,
     pub(crate) previous_clip_to_clip: [f32; 16],
     pub(crate) projection_jitter_matches: bool,
 }
-
-const _: () = {
-    assert!(size_of::<CameraInputs>() == 40);
-    assert!(size_of::<CameraResult>() == size_of::<rsf_camera_frame>() + 68);
-};
 
 impl Default for CameraResult {
     fn default() -> Self {
@@ -90,19 +83,8 @@ fn valid_extent(value: u32) -> bool {
     value != 0 && value <= 16384
 }
 
-/// Decodes a copied RAGE worker view. A refusal leaves `result` zeroed.
-pub(crate) fn decode(bytes: &[u8], input: &CameraInputs, result: &mut CameraResult) -> bool {
-    *result = CameraResult::default();
-    match decode_view(bytes, input) {
-        Some(decoded) => {
-            *result = decoded;
-            true
-        }
-        None => false,
-    }
-}
-
-fn decode_view(raw: &[u8], input: &CameraInputs) -> Option<CameraResult> {
+/// Decodes a copied RAGE worker view; `None` refuses it.
+pub(crate) fn decode(raw: &[u8], input: &CameraInputs) -> Option<CameraResult> {
     if raw.len() < view::BYTES
         || !valid_extent(input.render_width)
         || !valid_extent(input.render_height)

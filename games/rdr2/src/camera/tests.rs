@@ -15,8 +15,7 @@ fn fixture() -> Fixture<'static> {
 #[test]
 fn decodes_a_valid_rage_camera() {
     let fixture = fixture();
-    let mut output = CameraResult::default();
-    assert!(decode(fixture.view, &fixture.input, &mut output));
+    let output = decode(fixture.view, &fixture.input).unwrap();
     assert_eq!(output.projection_jitter_matches, fixture.jitter_matches);
     let camera = &output.camera;
     assert_eq!(camera.struct_size as usize, size_of::<rsf_camera_frame>());
@@ -63,8 +62,7 @@ fn decodes_a_valid_rage_camera() {
 fn reset_clears_reprojection_and_seeds_jitter_history() {
     let mut fixture = fixture();
     fixture.input.reset = true;
-    let mut output = CameraResult::default();
-    assert!(decode(fixture.view, &fixture.input, &mut output));
+    let output = decode(fixture.view, &fixture.input).unwrap();
     for (index, value) in output.camera.clip_to_previous_clip.iter().enumerate() {
         assert_eq!(*value, if index % 5 == 0 { 1.0 } else { 0.0 });
     }
@@ -78,41 +76,34 @@ fn reset_clears_reprojection_and_seeds_jitter_history() {
 fn frozen_projection_jitter_stays_explicit() {
     let mut fixture = fixture();
     fixture.input.jitter[0] = -0.25;
-    let mut output = CameraResult::default();
-    assert!(decode(fixture.view, &fixture.input, &mut output));
+    let output = decode(fixture.view, &fixture.input).unwrap();
     assert!(!output.projection_jitter_matches);
 }
 
 #[test]
-fn refusals_leave_a_zeroed_result() {
+fn invalid_views_are_refused() {
     let mut fixture = fixture();
-    let mut output = CameraResult::default();
     let original_jitter = fixture.input.jitter[0];
     fixture.input.jitter[0] = f32::NAN;
     assert!(
-        !decode(fixture.view, &fixture.input, &mut output),
+        decode(fixture.view, &fixture.input).is_none(),
         "non-finite vendor jitter"
     );
     fixture.input.jitter[0] = original_jitter;
     assert!(
-        !decode(&fixture.view[..16], &fixture.input, &mut output),
+        decode(&fixture.view[..16], &fixture.input).is_none(),
         "short copied view"
     );
     let mut inactive = fixture.view.to_vec();
     inactive[0x671] = 0;
-    assert!(
-        !decode(&inactive, &fixture.input, &mut output),
-        "inactive view"
-    );
+    assert!(decode(&inactive, &fixture.input).is_none(), "inactive view");
     // Row 0 of the projection becomes zero.
     let mut singular = fixture.view.to_vec();
     put(&mut singular, 0x80, 0.0);
     assert!(
-        !decode(&singular, &fixture.input, &mut output),
+        decode(&singular, &fixture.input).is_none(),
         "singular projection"
     );
-    assert_eq!(output.camera.struct_size, 0);
-    assert!(!output.projection_jitter_matches);
 }
 
 #[test]

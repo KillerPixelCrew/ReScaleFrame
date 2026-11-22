@@ -60,8 +60,7 @@ pub(crate) use rsf_game_sys::{
 };
 use rsf_game_sys::{RSF_GAME_RECOGNIZED as RECOGNIZED, RSF_GAME_UNKNOWN as UNKNOWN};
 const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
-const STATUS: &CStr =
-    c"Native DLSS SR replacement implemented; game acceptance, FSR routing and FG pending.";
+const STATUS: &CStr = c"Native DLSS SR replacement implemented; FSR2 export routing, live acceptance and FG remain pending.";
 
 unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> i32 {
     let valid = unsafe { validate(args) };
