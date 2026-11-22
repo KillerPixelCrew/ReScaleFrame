@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: MIT
+#[path = "xess_native.rs"]
+mod native;
+
 use super::*;
 use crate::com_ref::ComRef;
 use crate::render_abi::{

@@ -35,6 +35,16 @@ def main():
              r"_?xess_(2d|coord|d3d12_init_params|d3d12_execute_params|quality_settings|init_flags|version|result)_t",
              root / "runtime/orchestrator/src/d3d12_sr/xess_abi.rs", aliases, [])
 
+
+    generate(bindgen, args.xess / "xess_fg/xefg_swapchain_d3d12.h",
+             r"_?xefg_swapchain_(d3d12_resource_data|version|2d|frame_constant_data|properties|"
+             r"present_status|result|resource_type|resource_validity)_t|xefg_swapchain_ui_composition_state_t|"
+             r"_?xell_sleep_params_t",
+             root / "runtime/orchestrator/src/d3d12_generation/xess_abi.rs",
+             ["#![allow(clippy::useless_transmute)]",
+              "type ID3D12Resource = ::core::ffi::c_void;", "type D3D12_RESOURCE_STATES = u32;"],
+             ["-x", "c++", "-std=c++20", "-include", "d3d12.h", "-include", "dxgi1_5.h",
+              "-include", str(args.xess / "xell/xell.h")])
     api = args.fidelityfx / "api/include"
     generate(bindgen, root / "runtime/backends/fsr/src/ffx_descriptor_types.h",
              r"ffx(ApiHeader|StructType_t|ApiMessage|Context|ReturnCode_t|AllocationCallbacks|Alloc|Dealloc|"
