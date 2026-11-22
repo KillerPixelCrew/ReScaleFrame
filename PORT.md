@@ -2480,7 +2480,7 @@ Port camera and renderer facts, frame routing and presentation observation. Repa
 - [x] [games/rdr2/src/plugin.cpp](games/rdr2/src/plugin.cpp)
 - [x] [games/rdr2/src/render_camera.h](games/rdr2/src/render_camera.h)
 - [x] [games/rdr2/src/social_club.cpp](games/rdr2/src/social_club.cpp)
-- [ ] [games/rdr2/src/social_club_guard.cpp](games/rdr2/src/social_club_guard.cpp) (MSVC SEH around Social Club COM call)
+- [x] [games/rdr2/src/social_club_guard.cpp](games/rdr2/src/social_club_guard.cpp) (MSVC SEH around Social Club COM call)
 - [x] [games/rdr2/src/social_club.h](games/rdr2/src/social_club.h)
 
 **Fixtures (1)**
