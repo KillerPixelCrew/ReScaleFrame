@@ -1118,10 +1118,15 @@ generate("tests/game-sdk/src/unity_sr_d3d12_abi.rs", "tests/unity_sr_d3d12_abi.h
           "streamline_host_(adopt|acquire|marker|sleep|destroy)|fg12_status|native_latency_(status_get|ping)|"
           "render_(host_create|settings_(get|apply)|overlay_(toggle|visible))|rdr2_fill_runtime_setup)",
           "--no-recursive-allowlist", "--with-derive-default", "--no-prepend-enum-name",
-          "--raw-line", "use rsf_game_sys::{render_host_abi::rsf_render_host_setup, rsf_camera_frame, "
-          "rsf_game_cpu_event, rsf_game_host_services, rsf_game_render_pass};",
-          "--raw-line", "type wchar_t = u16; type rsf_backend_result = i32; type rsf_result = i32;",
-          "--raw-line", "type rsf_backend_log_fn = Option<unsafe extern \"C\" fn(*mut ::core::ffi::c_void, *const ::core::ffi::c_char)>;"])
+          "--raw-line", "use rsf_game_sys::{\n"
+          "    render_host_abi::rsf_render_host_setup, rsf_camera_frame, rsf_game_cpu_event,\n"
+          "    rsf_game_host_services, rsf_game_render_pass,\n"
+          "};",
+          "--raw-line", "type wchar_t = u16;",
+          "--raw-line", "type rsf_backend_result = i32;",
+          "--raw-line", "type rsf_result = i32;",
+          "--raw-line", "type rsf_backend_log_fn =\n"
+          "    Option<unsafe extern \"C\" fn(*mut ::core::ffi::c_void, *const ::core::ffi::c_char)>;"])
 
 generate("tests/game-sdk/src/render_host_fixture_abi.rs", "tests/game-sdk/render_host_fixture_abi.h",
          "rsf_(render_(settings|status|links?)|native_present_record|observer_present_event)",
