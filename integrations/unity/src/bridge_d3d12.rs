@@ -56,9 +56,7 @@ impl Drop for Event {
 }
 
 fn log(host: &rsf_game_host_services, text: &CStr) {
-    if let Some(log) = host.log {
-        unsafe { log(host.user, text.as_ptr()) };
-    }
+    unsafe { rsf_game_sys::rsf_game_log_guarded(host.log, host.user, text.as_ptr()) };
 }
 
 fn source(pass: &rsf_game_render_pass) -> rsf_unity_source_submission {

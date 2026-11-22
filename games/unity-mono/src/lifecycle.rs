@@ -147,7 +147,9 @@ pub(crate) unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> r
         return OK;
     }
     if let Some(log) = host_services.log {
-        unsafe { log(host_services.user, state.reason.as_ptr()) };
+        unsafe {
+            rsf_game_sys::rsf_game_log_guarded(Some(log), host_services.user, state.reason.as_ptr())
+        };
     }
     if unsafe { rsf_unity_mono_try_close() } != 0 {
         unsafe { rsf_unity_mono_release() };

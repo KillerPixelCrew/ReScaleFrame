@@ -135,7 +135,7 @@ unsafe extern "C" fn log(message: *const c_char) {
         && let Some(host) = host()
         && let Some(log) = host.log
     {
-        unsafe { log(host.user, message) };
+        unsafe { rsf_game_sys::rsf_game_log_guarded(Some(log), host.user, message) };
     }
 }
 
@@ -464,7 +464,7 @@ extern "C" fn rsf_unity_get_render_event() -> *mut c_void {
                     && let Some(log) = host.log
                 {
                     unsafe {
-                        log(host.user, c"Unity native registry matched through player PDB, SHA256 and expected-byte guards.".as_ptr())
+                        rsf_game_sys::rsf_game_log_guarded(Some(log), host.user, c"Unity native registry matched through player PDB, SHA256 and expected-byte guards.".as_ptr())
                     };
                 }
             }

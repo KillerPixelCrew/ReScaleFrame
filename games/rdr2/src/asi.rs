@@ -530,9 +530,7 @@ pub(crate) unsafe extern "C" fn rsf_rdr2_asi_report_startup(
         &results.frame,
         &results.census,
     ] {
-        if let Ok(text) = std::ffi::CString::new(message.as_bytes()) {
-            unsafe { log(user, text.as_ptr()) };
-        }
+        rsf_game_sys::log_guarded(Some(log), user, message);
     }
 }
 

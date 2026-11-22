@@ -264,9 +264,7 @@ impl Drop for Recording<'_> {
 }
 
 fn log(host: &rsf_game_host_services, text: &CStr) {
-    if let Some(log) = host.log {
-        unsafe { log(host.user, text.as_ptr()) };
-    }
+    unsafe { rsf_game_sys::rsf_game_log_guarded(host.log, host.user, text.as_ptr()) };
 }
 
 unsafe fn surface(

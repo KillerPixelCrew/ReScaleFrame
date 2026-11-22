@@ -186,7 +186,7 @@ extern "C" fn rsf_unity_package_bridge_finish_retirement(commit: u32) {
             && let Some(log) = host.0.log
         {
             unsafe {
-                log(host.0.user, c"Unity DX11 bridge release refused without a checked close; its graphics remain owned.".as_ptr())
+                rsf_game_sys::rsf_game_log_guarded(Some(log), host.0.user, c"Unity DX11 bridge release refused without a checked close; its graphics remain owned.".as_ptr())
             };
         }
     }
