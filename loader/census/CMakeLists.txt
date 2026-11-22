@@ -10,7 +10,6 @@ endif()
 add_library(rsf_vendor_census STATIC
     src/census_platform.c
     src/guarded_platform.c
-    src/hook_platform.c
     src/d3d_guarded_platform.c)
 target_include_directories(rsf_vendor_census PUBLIC include PRIVATE src)
 target_link_libraries(rsf_vendor_census PRIVATE rsf_loader_rust ReScaleFrame::GameSDK minhook rsf_build_options)

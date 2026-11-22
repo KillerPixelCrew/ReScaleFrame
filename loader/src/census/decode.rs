@@ -4,7 +4,7 @@ use super::json::{
     rsf_census_json_string, rsf_census_json_u64,
 };
 use crate::sys::rsf_census_json;
-use crate::sys::rsf_census_resource_reads;
+use crate::sys::rsf_census_platform;
 use std::ffi::{c_char, c_void};
 use windows::Win32::Graphics::{
     Direct3D11::{D3D11_RESOURCE_DIMENSION_TEXTURE2D, D3D11_TEXTURE2D_DESC},
@@ -68,13 +68,13 @@ pub(super) fn rsf_census_dxgi_format_name(format: u32) -> *const c_char {
     .as_ptr()
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_census_json_resource(
+/// A resource's description as a JSON object, read through the platform's guarded calls.
+pub(super) unsafe fn rsf_census_json_resource(
     json: &mut rsf_census_json,
     key: *const c_char,
     resource: *const c_void,
     d3d12: bool,
-    reads: &rsf_census_resource_reads,
+    reads: &rsf_census_platform,
 ) {
     if resource.is_null() {
         unsafe { rsf_census_json_raw(json, key, c"null".as_ptr()) };
@@ -112,11 +112,11 @@ unsafe fn texture_fields(json: &mut rsf_census_json, format: u32, width: u64, he
 unsafe fn describe12(
     json: &mut rsf_census_json,
     resource: *const c_void,
-    reads: &rsf_census_resource_reads,
+    reads: &rsf_census_platform,
 ) -> bool {
     let mut desc = D3D12_RESOURCE_DESC::default();
     if !reads
-        .d3d12_description
+        .resource12_desc
         .is_some_and(|read| unsafe { read(resource, (&raw mut desc).cast()) })
     {
         return false;
@@ -139,11 +139,11 @@ unsafe fn describe12(
 unsafe fn describe11(
     json: &mut rsf_census_json,
     resource: *const c_void,
-    reads: &rsf_census_resource_reads,
+    reads: &rsf_census_platform,
 ) -> bool {
     let mut dimension = 0;
     if !reads
-        .d3d11_dimension
+        .resource11_dimension
         .is_some_and(|read| unsafe { read(resource, &mut dimension) })
     {
         return false;
@@ -154,7 +154,7 @@ unsafe fn describe11(
     }
     let mut desc = D3D11_TEXTURE2D_DESC::default();
     if !reads
-        .d3d11_texture_description
+        .resource11_desc
         .is_some_and(|read| unsafe { read(resource, (&raw mut desc).cast()) })
     {
         return false;

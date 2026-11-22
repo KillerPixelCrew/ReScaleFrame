@@ -4,8 +4,7 @@
 
 fn main() {
     let census = [
-        "json", "decode", "wrapper", "hook", "record", "stats", "session", "vendor", "ngx", "d3d",
-        "misc", "fsr",
+        "census", "json", "wrapper", "record", "stats", "session", "d3d", "misc", "fsr",
     ]
     .map(|name| format!("loader/census/src/{name}_platform.h"));
     let headers: Vec<&str> = census

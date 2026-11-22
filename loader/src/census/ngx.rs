@@ -5,10 +5,11 @@ use super::json::{
     rsf_census_json_open, rsf_census_json_raw, rsf_census_json_string, rsf_census_json_u64,
     rsf_census_json_wide,
 };
+use super::platform;
 use super::session::{rsf_census_call_begin, rsf_census_call_finish};
+use crate::sys::RSF_CENSUS_NGX_ENTRIES;
 use crate::sys::rsf_census_call_state;
 use crate::sys::rsf_census_json;
-use crate::sys::{RSF_CENSUS_NGX_ENTRIES, rsf_census_ngx_platform};
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::{MaybeUninit, transmute};
 use std::ptr::{null, null_mut};
@@ -31,7 +32,6 @@ const D3D11: usize = 1;
 const SUCCESS: u32 = 1;
 
 struct Services {
-    platform: rsf_census_ngx_platform,
     entries: [u16; ENTRIES],
 }
 static SERVICES: OnceLock<Services> = OnceLock::new();
@@ -117,15 +117,14 @@ fn read<const N: usize>(address: u64) -> Option<[u8; N]> {
         return None;
     }
     let mut data = [0; N];
-    unsafe { services().platform.read.unwrap()(address as _, data.as_mut_ptr().cast(), N) }
-        .then_some(data)
+    unsafe { platform().read.unwrap()(address as _, data.as_mut_ptr().cast(), N) }.then_some(data)
 }
 
 fn parameter<T: Default>(params: u64, slot: usize, name: &CStr) -> Option<T> {
     let mut out = T::default();
     let mut code = 0;
     let returned = unsafe {
-        services().platform.parameter.unwrap()(
+        platform().parameter.unwrap()(
             params as _,
             slot,
             name.as_ptr(),
@@ -175,24 +174,13 @@ impl Json<'_> {
     }
     fn scalar(&mut self, params: u64, key: &CStr, prefer_float: bool) {
         if let Some(value) = number(params, key, prefer_float) {
-            unsafe {
-                emit_decimal(
-                    self.0,
-                    key.as_ptr(),
-                    value,
-                    services().platform.decimal.unwrap(),
-                )
-            };
+            unsafe { emit_decimal(self.0, key.as_ptr(), value, platform().decimal.unwrap()) };
         }
     }
     fn string(&mut self, key: &CStr, address: u64) {
         let mut text = [0; 128];
         if unsafe {
-            services().platform.read_string.unwrap()(
-                address as _,
-                text.as_mut_ptr().cast(),
-                text.len(),
-            )
+            platform().read_string.unwrap()(address as _, text.as_mut_ptr().cast(), text.len())
         } && let Ok(value) = CStr::from_bytes_until_nul(&text)
         {
             self.text(Some(key), value);
@@ -200,9 +188,8 @@ impl Json<'_> {
     }
     fn path(&mut self, address: u64) {
         let mut text = [0u16; 260];
-        if unsafe {
-            services().platform.read_wstring.unwrap()(address as _, text.as_mut_ptr(), text.len())
-        } && text[0] != 0
+        if unsafe { platform().read_wstring.unwrap()(address as _, text.as_mut_ptr(), text.len()) }
+            && text[0] != 0
         {
             unsafe { rsf_census_json_wide(self.0, c"data_path".as_ptr(), text.as_ptr()) };
         }
@@ -355,11 +342,12 @@ fn resource(json: &mut Json<'_>, api: usize, params: u64, name: &CStr) {
     if let Some(resource) = resource {
         if api == D3D12 || api == D3D11 {
             unsafe {
-                services().platform.d3d_resource.unwrap()(
+                super::decode::rsf_census_json_resource(
                     json.0,
                     name.as_ptr(),
                     resource as _,
                     api == D3D12,
+                    platform(),
                 );
             }
         } else {
@@ -523,15 +511,8 @@ macro_rules! group {
     };
 }
 
-pub(super) unsafe fn rsf_census_ngx_bind(
-    platform: &rsf_census_ngx_platform,
-    entries: &[u16; ENTRIES],
-    output: &mut [Ptr; ENTRIES],
-) {
-    let _ = SERVICES.set(Services {
-        platform: *platform,
-        entries: *entries,
-    });
+pub(super) unsafe fn rsf_census_ngx_bind(entries: &[u16; ENTRIES], output: &mut [Ptr; ENTRIES]) {
+    let _ = SERVICES.set(Services { entries: *entries });
     for (slots, functions) in
         output
             .chunks_exact_mut(GROUP)

@@ -6,6 +6,7 @@ use super::json::{
     rsf_census_json_open, rsf_census_json_raw, rsf_census_json_string, rsf_census_json_u64,
     rsf_census_json_wide,
 };
+use super::platform;
 use super::session::{rsf_census_call_begin, rsf_census_call_finish};
 use crate::sys::rsf_census_call_state;
 use crate::sys::rsf_census_json;
@@ -23,17 +24,10 @@ type Entry = rsf_census_misc_entry;
 const COUNT: usize = RSF_MISC_COUNT as usize;
 const SL_HEADER: usize = 32;
 struct Services {
-    platform: rsf_census_misc_platform,
     entries: [u16; COUNT],
 }
 static SERVICES: OnceLock<Services> = OnceLock::new();
 
-fn platform() -> &'static rsf_census_misc_platform {
-    &SERVICES
-        .get()
-        .expect("vendor wrappers require registration")
-        .platform
-}
 fn id(entry: Entry) -> u16 {
     SERVICES.get().unwrap().entries[entry as usize]
 }
@@ -364,7 +358,13 @@ fn tags(json: &mut Json<'_>, address: u64, count: u32) {
             );
             if resource[32] == 0 && native != 0 {
                 unsafe {
-                    platform().d3d_resource.unwrap()(json.0, c"native".as_ptr(), native as _)
+                    super::decode::rsf_census_json_resource(
+                        json.0,
+                        c"native".as_ptr(),
+                        native as _,
+                        true,
+                        platform(),
+                    )
                 };
             } else if native == 0 {
                 json.raw(c"native_ptr", c"null");
@@ -737,15 +737,8 @@ extern "system" fn wrapper<const ENTRY: Entry>(
     result
 }
 
-pub(super) unsafe fn rsf_census_misc_bind(
-    platform: &rsf_census_misc_platform,
-    entries: &[u16; COUNT],
-    output: &mut [Ptr; COUNT],
-) {
-    let _ = SERVICES.set(Services {
-        platform: *platform,
-        entries: *entries,
-    });
+pub(super) unsafe fn rsf_census_misc_bind(entries: &[u16; COUNT], output: &mut [Ptr; COUNT]) {
+    let _ = SERVICES.set(Services { entries: *entries });
     *output = [
         nv_query as Ptr,
         wrapper::<RSF_MISC_NvapiSetSleepMode> as Ptr,

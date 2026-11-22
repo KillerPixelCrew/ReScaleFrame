@@ -2,8 +2,6 @@
 #ifndef RSF_CENSUS_FSR_PLATFORM_H
 #define RSF_CENSUS_FSR_PLATFORM_H
 
-#include "json_platform.h"
-
 #define RSF_CENSUS_FSR_ENTRIES(X) \
     X(Fsr2ContextCreate) X(Fsr2ContextDispatch) X(Fsr2ContextGenerateReactiveMask) \
     X(Fsr2ContextDestroy) X(Fsr2GetJitterOffset) X(Fsr2GetJitterPhaseCount) \
@@ -28,12 +26,5 @@ typedef enum rsf_census_fsr_entry {
 #undef RSF_CENSUS_FSR_VALUE
     RSF_FSR_COUNT
 } rsf_census_fsr_entry;
-
-typedef struct rsf_census_fsr_platform {
-    bool (*read)(const void*, void*, size_t);
-    void* (*slot)(const void*, size_t);
-    void (*resource)(rsf_census_json*, const char* key, const void*);
-    int (*decimal)(char* output, size_t capacity, double value);
-} rsf_census_fsr_platform;
 
 #endif

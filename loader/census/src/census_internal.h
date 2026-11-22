@@ -11,8 +11,7 @@
 #include <stdint.h>
 
 #include "rescaleframe/vendor_census.h"
-#include "decode_platform.h"
-#include "hook_platform.h"
+#include "census_platform.h"
 #include "record_platform.h"
 #include "session_platform.h"
 #include "stats_platform.h"
@@ -195,12 +194,12 @@ void* rsf_census_vtable_slot(const void* obj, size_t slot);
 bool rsf_census_read_arg_string(const void* p, char* out, size_t cap);
 bool rsf_census_read_arg_wstring(const void* p, wchar_t* out, size_t cap);
 
-/* Hook installation entry points of each translation unit. */
-void rsf_census_register_wrappers_d3d(void** table);
-
-extern const rsf_census_hook_platform rsf_census_hook_platform_table;
-
-void rsf_census_describe_d3d_resource(rsf_census_json* json, const char* key, const void* resource,
-                                      bool d3d12);
-
+/* SEH-guarded calls through D3D12, D3D11 and DXGI vtables (d3d_guarded_platform.c). */
+int32_t rsf_census_query_interface(void* object, const void* iid, void** result);
+void rsf_census_release_interface(void* object);
+bool rsf_census_queue_desc(const void* queue, void* description);
+bool rsf_census_swapchain_desc(const void* chain, void* description);
+bool rsf_census_resource12_desc(const void* resource, void* description);
+bool rsf_census_resource11_dimension(const void* resource, int32_t* dimension);
+bool rsf_census_resource11_desc(const void* resource, void* description);
 #endif

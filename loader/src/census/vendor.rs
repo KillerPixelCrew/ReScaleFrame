@@ -1,26 +1,22 @@
 // SPDX-License-Identifier: MIT
+use super::d3d::rsf_census_d3d_bind;
 use super::fsr::rsf_census_fsr_bind;
 use super::misc::rsf_census_misc_bind;
 use super::ngx::rsf_census_ngx_bind;
 use super::vulkan::rsf_census_vk_bind;
-use crate::sys::rsf_census_vendor_platform;
+use crate::sys::rsf_census_platform;
 use std::ffi::c_void;
 use std::ptr::null_mut;
 
 type Wrapper = *mut c_void;
-type Bind<P, const N: usize> = unsafe fn(&P, &[u16; N], &mut [Wrapper; N]);
+type Bind<const N: usize> = unsafe fn(&[u16; N], &mut [Wrapper; N]);
 
-unsafe fn register<P, const N: usize>(
+unsafe fn register<const N: usize>(
     table: &mut [Wrapper],
     entries: *const u16,
-    platform: *const P,
-    bind: Bind<P, N>,
+    bind: Bind<N>,
 ) -> bool {
-    let (Some(entries), Some(platform)) =
-        (unsafe { entries.cast::<[u16; N]>().as_ref() }, unsafe {
-            platform.as_ref()
-        })
-    else {
+    let Some(entries) = (unsafe { entries.cast::<[u16; N]>().as_ref() }) else {
         return false;
     };
     if entries
@@ -30,36 +26,25 @@ unsafe fn register<P, const N: usize>(
         return false;
     }
     let mut wrappers = [null_mut(); N];
-    unsafe { bind(platform, entries, &mut wrappers) };
+    unsafe { bind(entries, &mut wrappers) };
     for (&entry, wrapper) in entries.iter().zip(wrappers) {
-        table[usize::from(entry)] = wrapper;
+        if !wrapper.is_null() {
+            table[usize::from(entry)] = wrapper;
+        }
     }
     true
 }
 
+/// Binds every wrapper family to its function ids in the census table.
 pub(super) unsafe fn register_vendors(
-    platform: &rsf_census_vendor_platform,
+    platform: &rsf_census_platform,
     table: &mut [Wrapper],
 ) -> bool {
     unsafe {
-        register(table, platform.vk_entries, platform.vk, rsf_census_vk_bind)
-            && register(
-                table,
-                platform.ngx_entries,
-                platform.ngx,
-                rsf_census_ngx_bind,
-            )
-            && register(
-                table,
-                platform.fsr_entries,
-                platform.fsr,
-                rsf_census_fsr_bind,
-            )
-            && register(
-                table,
-                platform.misc_entries,
-                platform.misc,
-                rsf_census_misc_bind,
-            )
+        register(table, platform.d3d_entries, rsf_census_d3d_bind)
+            && register(table, platform.vk_entries, rsf_census_vk_bind)
+            && register(table, platform.ngx_entries, rsf_census_ngx_bind)
+            && register(table, platform.fsr_entries, rsf_census_fsr_bind)
+            && register(table, platform.misc_entries, rsf_census_misc_bind)
     }
 }

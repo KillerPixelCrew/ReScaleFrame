@@ -6,7 +6,6 @@ use super::json::{
 use super::session::rsf_census_active;
 use super::vendor::register_vendors;
 use crate::sys::rsf_census_json;
-use crate::sys::rsf_census_vendor_platform;
 use crate::sys::*;
 use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_void};
@@ -36,7 +35,7 @@ const NAME_CAP: usize = 40;
 const HOOK_OK: i32 = 0;
 
 struct Config {
-    platform: rsf_census_hook_platform,
+    platform: rsf_census_platform,
     flags: u32,
     names: [u16; ENTRIES],
     wrappers: [usize; ENTRIES],
@@ -119,7 +118,7 @@ fn book() -> std::sync::MutexGuard<'static, Book> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-fn platform() -> &'static rsf_census_hook_platform {
+fn platform() -> &'static rsf_census_platform {
     &CONFIG
         .get()
         .expect("hook platform must be published before detours")
@@ -443,7 +442,7 @@ fn intercept(real: FARPROC, name: *const u8) -> FARPROC {
     let last_error = unsafe { GetLastError() };
     let mut buffer = [0u8; 256];
     let valid = unsafe {
-        cfg.platform.read_name.unwrap()(name.cast(), buffer.as_mut_ptr().cast(), buffer.len())
+        cfg.platform.read_string.unwrap()(name.cast(), buffer.as_mut_ptr().cast(), buffer.len())
     };
     let mut result = real;
     if valid
@@ -520,17 +519,12 @@ fn install_api(module: *const u16, name: &CStr, detour: Ptr, slot: &AtomicPtr<c_
     true
 }
 
-pub(super) unsafe fn rsf_census_hooks_install(
-    value: &rsf_census_hook_platform,
-    vendors: &rsf_census_vendor_platform,
-    flags: u32,
-) -> bool {
+pub(super) unsafe fn rsf_census_hooks_install(value: &rsf_census_platform, flags: u32) -> bool {
     if usize::from(value.count) >= ENTRIES || unsafe { value.initialize.unwrap()() } != HOOK_OK {
         return false;
     }
     let mut wrappers = [null_mut(); ENTRIES];
-    unsafe { value.register_d3d.unwrap()(wrappers.as_mut_ptr()) };
-    if !unsafe { register_vendors(vendors, &mut wrappers[..usize::from(value.count)]) } {
+    if !unsafe { register_vendors(value, &mut wrappers[..usize::from(value.count)]) } {
         return false;
     }
     let mut cfg = Config {

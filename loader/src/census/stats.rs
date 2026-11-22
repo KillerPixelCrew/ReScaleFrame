@@ -5,7 +5,7 @@ use super::json::{
 };
 use crate::sys::rsf_census_hook_desc;
 use crate::sys::rsf_census_json;
-use crate::sys::{rsf_census_sample, rsf_census_stats_names};
+use crate::sys::rsf_census_sample;
 use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_void};
 use std::io::Write;
@@ -276,8 +276,7 @@ pub(super) fn rsf_census_stats_present_index() -> u64 {
 
 thread_local! { static PRESENT_DEPTH: Cell<u32> = const { Cell::new(0) }; }
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_census_present_enter(test: bool) -> bool {
+pub(super) fn rsf_census_present_enter(test: bool) -> bool {
     let outer = PRESENT_DEPTH
         .try_with(|depth| {
             let old = depth.get();
@@ -291,8 +290,7 @@ pub(super) extern "C" fn rsf_census_present_enter(test: bool) -> bool {
     outer
 }
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_census_present_leave() {
+pub(super) fn rsf_census_present_leave() {
     let _ = PRESENT_DEPTH.try_with(|depth| depth.set(depth.get().wrapping_sub(1)));
 }
 
@@ -359,10 +357,7 @@ fn function_name(desc: &rsf_census_hook_desc) -> *const c_char {
     }
 }
 
-pub(super) unsafe fn rsf_census_stats_sites(
-    output: &mut rsf_census_json,
-    names: &rsf_census_stats_names,
-) {
+pub(super) unsafe fn rsf_census_stats_sites(output: &mut rsf_census_json) {
     let mut json = Json(output);
     json.open(Some(c"sites"), b'[');
     for site in &SITES {
@@ -372,12 +367,15 @@ pub(super) unsafe fn rsf_census_stats_sites(
         }
         let entry = (key >> 48) as usize;
         let module = (key >> 32) as u16;
-        let desc = unsafe { &*names.entries.add(entry) };
+        let desc = unsafe { &*super::platform().entries.add(entry) };
         json.open(None, b'{');
         unsafe {
             json.raw_text(c"api", desc.api);
             json.raw_text(c"function", function_name(desc));
-            json.raw_text(c"module", names.module_name.unwrap()(module.into()));
+            json.raw_text(
+                c"module",
+                super::identity::rsf_census_module_name(module.into()),
+            );
         }
         json.hex(c"rva", u64::from(key as u32));
         json.open(Some(c"threads"), b'[');

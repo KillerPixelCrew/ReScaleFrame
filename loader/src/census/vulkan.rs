@@ -4,6 +4,7 @@ use super::json::{
     rsf_census_json_close, rsf_census_json_hex, rsf_census_json_open, rsf_census_json_raw,
     rsf_census_json_string, rsf_census_json_u64,
 };
+use super::platform;
 use super::session::{rsf_census_active, rsf_census_call_begin, rsf_census_call_finish};
 use super::stats::{
     rsf_census_present_enter, rsf_census_present_leave, rsf_census_stats_queue_describe,
@@ -27,7 +28,6 @@ const COUNT: usize = RSF_CENSUS_VK_COUNT as usize;
 const VULKAN_QUEUE: u8 = 2;
 
 struct Services {
-    platform: rsf_census_vk_platform,
     entries: [u16; COUNT],
 }
 static SERVICES: OnceLock<Services> = OnceLock::new();
@@ -155,8 +155,7 @@ fn read<const N: usize>(address: Info, offset: usize) -> Option<[u8; N]> {
     }
     let address = base.checked_add(offset)? as Info;
     let mut bytes = [0; N];
-    unsafe { services().platform.read.unwrap()(address, bytes.as_mut_ptr().cast(), N) }
-        .then_some(bytes)
+    unsafe { platform().read.unwrap()(address, bytes.as_mut_ptr().cast(), N) }.then_some(bytes)
 }
 
 fn number(bytes: &[u8], offset: usize) -> u32 {
@@ -168,9 +167,7 @@ fn word(bytes: &[u8], offset: usize) -> u64 {
 }
 
 fn read_name(source: Info, output: &mut [u8; 96]) -> bool {
-    unsafe {
-        services().platform.read_string.unwrap()(source, output.as_mut_ptr().cast(), output.len())
-    }
+    unsafe { platform().read_string.unwrap()(source, output.as_mut_ptr().cast(), output.len()) }
 }
 
 fn name_list(json: &mut Json<'_>, key: &CStr, names: Info, count: u32) {
@@ -596,15 +593,8 @@ extern "system" fn create_swapchain(
     result
 }
 
-pub(super) unsafe fn rsf_census_vk_bind(
-    platform: &rsf_census_vk_platform,
-    ids: &[u16; COUNT],
-    wrappers: &mut [Handle; COUNT],
-) {
-    let _ = SERVICES.set(Services {
-        platform: *platform,
-        entries: *ids,
-    });
+pub(super) unsafe fn rsf_census_vk_bind(ids: &[u16; COUNT], wrappers: &mut [Handle; COUNT]) {
+    let _ = SERVICES.set(Services { entries: *ids });
     let entries: [(Entry, Handle); COUNT] = [
         (
             RSF_CENSUS_VkGetInstanceProcAddr,

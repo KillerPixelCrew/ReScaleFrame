@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MIT
+use super::identity::{rsf_census_module_base, rsf_census_module_name_from_base};
 use super::json::{
     rsf_census_json_close, rsf_census_json_hex, rsf_census_json_open, rsf_census_json_string,
     rsf_census_json_u64,
 };
+use super::platform;
+use super::session::{append_line, drop_line};
 use crate::sys::rsf_census_json;
 use crate::sys::{
     RSF_CENSUS_RECORD_BODY_MAX, RSF_CENSUS_RECORD_STACK_FRAMES, rsf_census_queued_record,
-    rsf_census_record_writer,
 };
 use std::cell::UnsafeCell;
 use std::ffi::{CStr, c_char};
@@ -107,16 +109,11 @@ pub(super) fn rsf_census_record_publish(position: usize) {
         .store(position.wrapping_add(1), Release);
 }
 
-unsafe fn write_line(
-    writer: &rsf_census_record_writer,
-    record: &rsf_census_queued_record,
-    seq: u64,
-    line: &mut [u8; LINE_BYTES],
-) {
+unsafe fn write_line(record: &rsf_census_queued_record, seq: u64, line: &mut [u8; LINE_BYTES]) {
     let fi = usize::from(record.fn_);
     let body = record.len as usize;
-    if fi >= writer.entry_count || body > record.body.len() {
-        unsafe { writer.drop_size.unwrap()() };
+    if fi >= usize::from(platform().count) || body > record.body.len() {
+        drop_line();
         return;
     }
     let mut json = rsf_census_json {
@@ -128,8 +125,8 @@ unsafe fn write_line(
         overflow: false,
     };
     unsafe {
-        let desc = &*writer.entries.add(fi);
-        let module = writer.module_name.unwrap()(record.base);
+        let desc = &*platform().entries.add(fi);
+        let module = rsf_census_module_name_from_base(record.base);
         rsf_census_json_open(&mut json, null(), b'{' as c_char);
         rsf_census_json_u64(&mut json, c"seq".as_ptr(), seq);
         rsf_census_json_u64(&mut json, c"t_us".as_ptr(), record.t_us);
@@ -151,11 +148,11 @@ unsafe fn write_line(
         if record.stack_n != 0 {
             rsf_census_json_open(&mut json, c"stack".as_ptr(), b'[' as c_char);
             for &frame in record.stack.iter().take(record.stack_n as usize) {
-                let base = writer.frame_base.unwrap()(frame);
+                let base = rsf_census_module_base(frame);
                 let mut label = [0u8; 96];
                 let mut output = &mut label[..95];
                 if base != 0 {
-                    let module = CStr::from_ptr(writer.module_name.unwrap()(base));
+                    let module = CStr::from_ptr(rsf_census_module_name_from_base(base));
                     let _ = output.write_all(module.to_bytes());
                     let _ = write!(output, "+{:#x}", (frame as u64).wrapping_sub(base));
                 } else {
@@ -167,7 +164,7 @@ unsafe fn write_line(
         }
     }
     if json.overflow || json.length + body + 12 > line.len() {
-        unsafe { writer.drop_size.unwrap()() };
+        drop_line();
         return;
     }
     let record_body = unsafe { slice::from_raw_parts(record.body.as_ptr().cast::<u8>(), body) };
@@ -176,10 +173,10 @@ unsafe fn write_line(
         line[offset..offset + part.len()].copy_from_slice(part);
         offset += part.len();
     }
-    unsafe { writer.append.unwrap()(line.as_ptr().cast(), offset) };
+    unsafe { append_line(line.as_ptr().cast(), offset) };
 }
 
-pub(super) unsafe fn rsf_census_record_drain(writer: &rsf_census_record_writer) {
+pub(super) unsafe fn rsf_census_record_drain() {
     let Some(ring) = RING.get() else { return };
     let mut ticket = ring.read.0.load(Relaxed);
     loop {
@@ -192,7 +189,6 @@ pub(super) unsafe fn rsf_census_record_drain(writer: &rsf_census_record_writer) 
         let record = unsafe { (&*slot.record.get()).assume_init_ref() };
         unsafe {
             write_line(
-                writer,
                 record,
                 ring.sequence.fetch_add(1, Relaxed),
                 &mut *ring.line.0.get(),

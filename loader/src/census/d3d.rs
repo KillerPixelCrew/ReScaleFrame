@@ -5,10 +5,14 @@ use super::json::{
     rsf_census_json_close, rsf_census_json_hex, rsf_census_json_i64, rsf_census_json_open,
     rsf_census_json_raw, rsf_census_json_string, rsf_census_json_u64,
 };
+use super::platform;
 use super::session::{
     rsf_census_active, rsf_census_call_begin, rsf_census_call_finish, rsf_census_flags,
 };
-use super::stats::{rsf_census_stats_queue_describe, rsf_census_stats_queue_submit};
+use super::stats::{
+    rsf_census_present_enter, rsf_census_present_leave, rsf_census_stats_queue_describe,
+    rsf_census_stats_queue_submit,
+};
 use crate::sys::RSF_CENSUS_FLAG_D3D12_DEBUG_ONLY;
 use crate::sys::rsf_census_call_state;
 use crate::sys::rsf_census_json;
@@ -59,7 +63,6 @@ const E_FAIL: i32 = 0x8000_4005u32 as i32;
 const DEBUG_LAYER: u32 = 8;
 
 struct Services {
-    platform: rsf_census_d3d_platform,
     entries: [u16; COUNT],
 }
 static SERVICES: OnceLock<Services> = OnceLock::new();
@@ -115,9 +118,6 @@ fn notify_submit(observer: &AtomicPtr<c_void>, queue: Ptr, count: u32, lists: *c
 
 fn services() -> &'static Services {
     SERVICES.get().expect("D3D wrappers require registration")
-}
-fn platform() -> &'static rsf_census_d3d_platform {
-    &services().platform
 }
 fn id(entry: Entry) -> u16 {
     services().entries[entry as usize]
@@ -858,7 +858,7 @@ extern "system" fn create_core_window(
 struct PresentLease;
 impl Drop for PresentLease {
     fn drop(&mut self) {
-        unsafe { platform().present_leave.unwrap()() };
+        rsf_census_present_leave();
     }
 }
 
@@ -909,7 +909,7 @@ extern "system" fn present(chain: Ptr, sync: u32, flags: u32) -> i32 {
     let entry = RSF_D3D_DxgiSwapChainPresent;
     let original = original!(entry, unsafe extern "system" fn(Ptr, u32, u32) -> i32);
     let test = flags & 1 != 0;
-    let outer = unsafe { platform().present_enter.unwrap()(test) };
+    let outer = rsf_census_present_enter(test);
     let _lease = PresentLease;
     if outer && !test {
         notify_object(&BEFORE_PRESENT, chain);
@@ -937,7 +937,7 @@ extern "system" fn present1(
         entry,
         unsafe extern "system" fn(Ptr, u32, u32, *const DXGI_PRESENT_PARAMETERS) -> i32
     );
-    unsafe { platform().present_enter.unwrap()(flags & 1 != 0) };
+    rsf_census_present_enter(flags & 1 != 0);
     let _lease = PresentLease;
     let mut slot = MaybeUninit::uninit();
     let mut call = Call::begin(&mut slot, entry, pc);
@@ -1079,16 +1079,8 @@ extern "system" fn waitable(chain: Ptr) -> Ptr {
     handle
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_census_d3d_bind(
-    platform: &rsf_census_d3d_platform,
-    entries: &[u16; COUNT],
-    output: &mut [Ptr; COUNT],
-) {
-    let _ = SERVICES.set(Services {
-        platform: *platform,
-        entries: *entries,
-    });
+pub(super) unsafe fn rsf_census_d3d_bind(entries: &[u16; COUNT], output: &mut [Ptr; COUNT]) {
+    let _ = SERVICES.set(Services { entries: *entries });
     for (entry, wrapper) in [
         (RSF_D3D_CreateDXGIFactory, factory as Ptr),
         (RSF_D3D_CreateDXGIFactory1, factory1 as Ptr),

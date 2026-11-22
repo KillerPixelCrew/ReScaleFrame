@@ -13,11 +13,9 @@ use super::record::*;
 use super::static_scan::rsf_census_static_scan;
 use super::stats::*;
 use crate::sys::rsf_census_json;
+use crate::sys::rsf_census_sample;
 use crate::sys::*;
-use crate::sys::{
-    RSF_CENSUS_RECORD_BODY_MAX, RSF_CENSUS_RECORD_STACK_FRAMES, rsf_census_record_writer,
-};
-use crate::sys::{rsf_census_sample, rsf_census_stats_names};
+use crate::sys::{RSF_CENSUS_RECORD_BODY_MAX, RSF_CENSUS_RECORD_STACK_FRAMES};
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::MaybeUninit;
 use std::ptr::{self, null, null_mut};
@@ -60,7 +58,7 @@ struct Writer {
 }
 
 struct Core {
-    platform: rsf_census_core_platform,
+    platform: rsf_census_platform,
     flags: u32,
     budget: u64,
     cap: u32,
@@ -208,15 +206,7 @@ impl Core {
     }
 
     fn drain(&self) {
-        let writer = rsf_census_record_writer {
-            entries: self.platform.functions,
-            entry_count: self.platform.count.into(),
-            module_name: Some(rsf_census_module_name_from_base),
-            frame_base: Some(rsf_census_module_base),
-            append: Some(append_line),
-            drop_size: Some(drop_line),
-        };
-        unsafe { rsf_census_record_drain(&writer) };
+        unsafe { rsf_census_record_drain() };
     }
 
     fn flush(&self, writer: &mut Writer) {
@@ -226,12 +216,12 @@ impl Core {
     }
 }
 
-unsafe extern "C" fn append_line(data: *const c_char, size: usize) {
+pub(super) unsafe fn append_line(data: *const c_char, size: usize) {
     if let Some(core) = CORE.get() {
         unsafe { rsf_census_output_append(data, size, core.now()) };
     }
 }
-extern "C" fn drop_line() {
+pub(super) fn drop_line() {
     DROPPED_SIZE.fetch_add(1, Relaxed);
 }
 
@@ -314,13 +304,9 @@ impl Writer {
         json.number(c"sites", sites.into());
         json.number(c"site_overflow", overflow.into());
         json.close(b'}');
-        let names = rsf_census_stats_names {
-            entries: core.platform.functions,
-            module_name: Some(rsf_census_module_name),
-        };
         unsafe {
-            rsf_census_stats_sites(json.0, &names);
-            rsf_census_stats_histograms(json.0, core.platform.functions);
+            rsf_census_stats_sites(json.0);
+            rsf_census_stats_histograms(json.0, core.platform.entries);
             rsf_census_threads_summary(json.0);
             rsf_census_stats_queues(json.0);
             rsf_census_hooks_summary(json.0);
@@ -648,7 +634,7 @@ unsafe extern "system" fn fatal_exception(info: *mut EXCEPTION_POINTERS) -> i32 
 
 fn configure(
     options: &rsf_census_options,
-    platform: &rsf_census_core_platform,
+    platform: &rsf_census_platform,
     mut dir: [u16; PATH_CAP],
 ) -> Result<Core, i32> {
     make_directories(&mut dir);
@@ -709,7 +695,7 @@ fn configure(
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_census_install_impl(
     options: *const rsf_census_options,
-    platform: &rsf_census_core_platform,
+    platform: &rsf_census_platform,
 ) -> rsf_census_result {
     if options.is_null()
         || unsafe { options.cast::<u32>().read() } < size_of::<rsf_census_options>() as u32
@@ -720,6 +706,7 @@ unsafe extern "C" fn rsf_census_install_impl(
     if options.abi_version != RSF_CENSUS_ABI_VERSION {
         return ABI_MISMATCH;
     }
+    super::publish(platform);
     if EVER_INSTALLED
         .compare_exchange(false, true, AcqRel, Acquire)
         .is_err()
@@ -755,9 +742,7 @@ unsafe extern "C" fn rsf_census_install_impl(
     core.writer_tid.store(tid, Release);
     core.writer_handle.store(worker, Release);
     unsafe { AddVectoredExceptionHandler(1, Some(fatal_exception)) };
-    if !unsafe {
-        rsf_census_hooks_install(&*core.platform.hooks, &*core.platform.vendors, core.flags)
-    } {
+    if !unsafe { rsf_census_hooks_install(&core.platform, core.flags) } {
         return HOOK_ERROR;
     }
     if core.flags & RSF_CENSUS_FLAG_NO_STATIC_SCAN == 0 {

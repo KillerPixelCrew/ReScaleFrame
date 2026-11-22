@@ -8,6 +8,7 @@ use super::json::{
     rsf_census_json_i64, rsf_census_json_open, rsf_census_json_raw, rsf_census_json_string,
     rsf_census_json_u64, rsf_census_json_wide,
 };
+use super::platform;
 use super::session::{rsf_census_call_begin, rsf_census_call_finish};
 use crate::sys::rsf_census_call_state;
 use crate::sys::rsf_census_json;
@@ -37,13 +38,9 @@ const RESOURCE_KEYS: [&CStr; 7] = [
 ];
 
 struct Services {
-    platform: rsf_census_fsr_platform,
     entries: [u16; COUNT],
 }
 static SERVICES: OnceLock<Services> = OnceLock::new();
-fn platform() -> &'static rsf_census_fsr_platform {
-    &SERVICES.get().unwrap().platform
-}
 fn id(entry: Entry) -> u16 {
     SERVICES.get().unwrap().entries[entry as usize]
 }
@@ -170,7 +167,15 @@ impl Json<'_> {
         {
             return;
         }
-        unsafe { platform().resource.unwrap()(self.0, key.as_ptr(), address as _) };
+        unsafe {
+            super::decode::rsf_census_json_resource(
+                self.0,
+                key.as_ptr(),
+                address as _,
+                true,
+                platform(),
+            )
+        };
     }
     fn args(&mut self, args: &[u64]) {
         self.open(Some(c"raw_args"), b'[');
@@ -961,15 +966,8 @@ extern "system" fn upscale_ratio(mode: i32) -> f32 {
     result
 }
 
-pub(super) unsafe fn rsf_census_fsr_bind(
-    platform: &rsf_census_fsr_platform,
-    entries: &[u16; COUNT],
-    output: &mut [Ptr; COUNT],
-) {
-    let _ = SERVICES.set(Services {
-        platform: *platform,
-        entries: *entries,
-    });
+pub(super) unsafe fn rsf_census_fsr_bind(entries: &[u16; COUNT], output: &mut [Ptr; COUNT]) {
+    let _ = SERVICES.set(Services { entries: *entries });
     *output = [
         wrapper::<RSF_FSR_Fsr2ContextCreate> as Ptr,
         wrapper::<RSF_FSR_Fsr2ContextDispatch> as Ptr,

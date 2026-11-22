@@ -18,9 +18,4 @@ typedef enum rsf_census_vk_entry {
     RSF_CENSUS_VK_COUNT
 } rsf_census_vk_entry;
 
-typedef struct rsf_census_vk_platform {
-    bool (*read)(const void*, void*, size_t);
-    bool (*read_string)(const void*, char*, size_t);
-} rsf_census_vk_platform;
-
 #endif
