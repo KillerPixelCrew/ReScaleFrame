@@ -7,17 +7,26 @@
 //! retains that binding for the process, admits every SR, interpolation and
 //! swapchain call, owns the interpolation/swapchain pairing with its checked
 //! disable, drain and UI release ordering, and owns checked retirement of all
-//! three owners. Typed FidelityFX effects and descriptors, the replacement
-//! swapchain function table, the Vulkan loader lookup, the resource mapping and
-//! the presentation callback shell stay native behind the private tables in
-//! `bridge_platform.h`. The callback reads the bound table through
-//! `rsf_core_fsr3_sdk`.
+//! three owners. The Windows platform module builds descriptors and invokes the
+//! signed SDK using bindings generated from the pinned Vulkan ABI.
 
-use std::alloc::{Layout, alloc, dealloc};
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::offset_of;
 use std::ptr::{self, NonNull};
 use std::sync::OnceLock;
+
+// The standalone DLL is built directly by rustc. Import the same source
+// used by rsf_game_sys without adding an rlib or Cargo build dependency.
+#[path = "../../../sdk/game/src/ffi_util.rs"]
+#[cfg_attr(test, allow(dead_code))]
+mod ffi_util;
+use ffi_util::try_box;
+
+#[cfg(not(test))]
+mod exports;
+#[cfg(not(test))]
+#[path = "platform.rs"]
+mod platform_win32;
 
 type Handle = *mut c_void;
 
@@ -327,20 +336,6 @@ unsafe fn fg_platform(ops: *const FgPlatform) -> Option<&'static FgPlatform> {
         .then_some(ops)
 }
 
-/// Allocates without aborting, so exhaustion maps to the bridge's -2.
-fn try_box<T>(value: T) -> Option<NonNull<T>> {
-    const { assert!(size_of::<T>() != 0) };
-    let owner = NonNull::new(unsafe { alloc(Layout::new::<T>()) }.cast::<T>())?;
-    unsafe { owner.as_ptr().write(value) };
-    Some(owner)
-}
-
-/// # Safety
-/// `owner` came from `try_box` and is not used afterwards.
-unsafe fn release_box<T>(owner: NonNull<T>) {
-    drop(unsafe { Box::from_raw(owner.as_ptr()) });
-}
-
 /// # Safety
 /// A non-null table must stay valid for the process lifetime.
 unsafe fn platform(ops: *const Platform) -> Option<&'static Platform> {
@@ -357,8 +352,8 @@ struct Context {
 }
 
 /// Returns the bound SDK table, or an all-null table before a successful open.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_fsr3_sdk() -> *const Sdk {
+#[cfg(test)]
+fn rsf_core_fsr3_sdk() -> *const Sdk {
     sdk()
 }
 
@@ -370,7 +365,6 @@ extern "C" fn rsf_core_fsr3_sdk() -> *const Sdk {
 ///
 /// # Safety
 /// `ops` is the static platform table; `runtime` is null or a loaded module.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr3_open(ops: *const Platform, runtime: Handle) -> i32 {
     if runtime.is_null() {
         return -1;
@@ -411,7 +405,6 @@ unsafe extern "C" fn rsf_core_fsr3_open(ops: *const Platform, runtime: Handle) -
 ///
 /// # Safety
 /// `ops` is the static platform table; non-null outputs must be writable.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr3_plan(
     ops: *const Platform,
     display_width: u32,
@@ -449,7 +442,6 @@ unsafe extern "C" fn rsf_core_fsr3_plan(
 ///
 /// # Safety
 /// `ops` is the static platform table; `request` and `result` are null or valid.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr3_create(
     ops: *const Platform,
     request: *const Request,
@@ -477,16 +469,12 @@ unsafe extern "C" fn rsf_core_fsr3_create(
     let Some(native) = NonNull::new(unsafe { (ops.allocate)() }) else {
         return -2;
     };
-    let context = unsafe { alloc(Layout::new::<Context>()) }.cast::<Context>();
-    if context.is_null() {
+    let Some(context) = try_box(Context { ops, native }) else {
         unsafe { (ops.release)(native.as_ptr()) };
         return -2;
-    }
+    };
     let failed = |code: i32| {
-        unsafe {
-            (ops.release)(native.as_ptr());
-            dealloc(context.cast(), Layout::new::<Context>());
-        }
+        unsafe { (ops.release)(native.as_ptr()) };
         code
     };
     let vulkan = unsafe { (ops.bind_vulkan)(request.device) };
@@ -497,10 +485,7 @@ unsafe extern "C" fn rsf_core_fsr3_create(
     if code != 0 {
         return failed(code);
     }
-    unsafe {
-        context.write(Context { ops, native });
-        result.write(context);
-    }
+    unsafe { result.write(Box::into_raw(context)) };
     0
 }
 
@@ -511,7 +496,6 @@ unsafe extern "C" fn rsf_core_fsr3_create(
 ///
 /// # Safety
 /// Non-null pointers must be a live context and a readable 184-byte frame.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr3_evaluate(context: *mut Context, frame: *const Frame) -> i32 {
     let (Some(context), Some(frame)) = (unsafe { context.as_ref() }, unsafe { frame.as_ref() })
     else {
@@ -539,7 +523,6 @@ unsafe extern "C" fn rsf_core_fsr3_evaluate(context: *mut Context, frame: *const
 ///
 /// # Safety
 /// `context` is null or a live context from `rsf_core_fsr3_create`.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr3_destroy(context: *mut Context) -> i32 {
     let Some(owner) = (unsafe { context.as_ref() }) else {
         return 0;
@@ -611,7 +594,6 @@ unsafe fn has_context(swapchain: *mut Swapchain) -> bool {
 /// # Safety
 /// `ops` is the static platform table; `request` is valid with a null or
 /// readable `info`; `result` is null or writable.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr3_swapchain_create(
     ops: *const FgPlatform,
     request: *const WsiRequest,
@@ -644,14 +626,14 @@ unsafe extern "C" fn rsf_core_fsr3_swapchain_create(
         unsafe { (ops.wsi_release)(native.as_ptr()) };
         return -2;
     };
+    let owner = Box::into_raw(owner);
     let failed = |code: i32| {
         unsafe {
             (ops.wsi_release)(native.as_ptr());
-            release_box(owner);
+            drop(Box::from_raw(owner));
         }
         code
     };
-    let owner = owner.as_ptr();
     // The SDK writes the created chain through the owner's slot.
     let code = unsafe {
         (ops.wsi_create)(
@@ -685,7 +667,6 @@ unsafe extern "C" fn rsf_core_fsr3_swapchain_create(
 ///
 /// # Safety
 /// `value` is null or a live swapchain owner.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr3_swapchain_handle(value: *mut Swapchain) -> Vk {
     if value.is_null() {
         0
@@ -699,7 +680,6 @@ unsafe extern "C" fn rsf_core_fsr3_swapchain_handle(value: *mut Swapchain) -> Vk
 ///
 /// # Safety
 /// `value` is null or a live owner; non-null `info` and `chain` are valid.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr3_swapchain_recreate(
     value: *mut Swapchain,
     info: *const u8,
@@ -729,7 +709,6 @@ unsafe extern "C" fn rsf_core_fsr3_swapchain_recreate(
 ///
 /// # Safety
 /// `value` is null or a live owner; the pointers follow the Vulkan contract.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr3_swapchain_get_images(
     value: *mut Swapchain,
     chain: Vk,
@@ -757,7 +736,6 @@ unsafe extern "C" fn rsf_core_fsr3_swapchain_get_images(
 ///
 /// # Safety
 /// `value` is null or a live owner; the handles follow the Vulkan contract.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr3_swapchain_acquire(
     value: *mut Swapchain,
     chain: Vk,
@@ -789,7 +767,6 @@ unsafe extern "C" fn rsf_core_fsr3_swapchain_acquire(
 ///
 /// # Safety
 /// `value` is null or a live owner; `info` is null or a valid present info.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr3_swapchain_present(
     value: *mut Swapchain,
     queue: Handle,
@@ -813,7 +790,6 @@ unsafe extern "C" fn rsf_core_fsr3_swapchain_present(
 ///
 /// # Safety
 /// `value` is null or a live owner whose `active_fg` is null or live.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr3_swapchain_prepare_destroy(
     value: *mut Swapchain,
     chain: Vk,
@@ -842,7 +818,6 @@ unsafe extern "C" fn rsf_core_fsr3_swapchain_prepare_destroy(
 ///
 /// # Safety
 /// As `rsf_core_fsr3_swapchain_prepare_destroy`.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr3_swapchain_destroy_chain(
     value: *mut Swapchain,
     chain: Vk,
@@ -872,7 +847,6 @@ unsafe extern "C" fn rsf_core_fsr3_swapchain_destroy_chain(
 ///
 /// # Safety
 /// `value` is null or a live owner.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr3_swapchain_last_present_count(
     value: *mut Swapchain,
     chain: Vk,
@@ -891,7 +865,6 @@ unsafe extern "C" fn rsf_core_fsr3_swapchain_last_present_count(
 ///
 /// # Safety
 /// `value` is null or a live owner whose `active_fg` is null or live.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr3_swapchain_destroy(value: *mut Swapchain) -> i32 {
     if value.is_null() {
         return 0;
@@ -912,7 +885,7 @@ unsafe extern "C" fn rsf_core_fsr3_swapchain_destroy(value: *mut Swapchain) -> i
             return code;
         }
         ((*value).ops.wsi_release)(native);
-        release_box(NonNull::new_unchecked(value));
+        drop(Box::from_raw(value));
     }
     0
 }
@@ -926,7 +899,6 @@ unsafe extern "C" fn rsf_core_fsr3_swapchain_destroy(value: *mut Swapchain) -> i
 ///
 /// # Safety
 /// `ops` is the static platform table; `request` and `result` are null or valid.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr3_fg_create(
     ops: *const FgPlatform,
     request: *const FgRequest,
@@ -965,10 +937,7 @@ unsafe extern "C" fn rsf_core_fsr3_fg_create(
         return -2;
     };
     let failed = |code: i32| {
-        unsafe {
-            (ops.fg_release)(native.as_ptr());
-            release_box(owner);
-        }
+        unsafe { (ops.fg_release)(native.as_ptr()) };
         code
     };
     if unsafe { (ops.fg_bind_vulkan)() } == 0 {
@@ -978,7 +947,7 @@ unsafe extern "C" fn rsf_core_fsr3_fg_create(
     if code != 0 {
         return failed(code);
     }
-    unsafe { result.write(owner.as_ptr()) };
+    unsafe { result.write(Box::into_raw(owner)) };
     0
 }
 
@@ -1036,7 +1005,6 @@ unsafe fn fg_disable(context: *mut FgContext) -> i32 {
 ///
 /// # Safety
 /// As `fg_disable`.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr3_fg_disable(
     context: *mut FgContext,
     _swapchain: *mut Swapchain,
@@ -1055,7 +1023,6 @@ unsafe extern "C" fn rsf_core_fsr3_fg_disable(
 /// # Safety
 /// `context` is null or a live owner; `frame` is null or a readable 248-byte
 /// record whose `swapchain_context` is null or a live swapchain owner.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr3_fg_evaluate(
     context: *mut FgContext,
     frame: *const FgFrame,
@@ -1123,7 +1090,6 @@ unsafe extern "C" fn rsf_core_fsr3_fg_evaluate(
 ///
 /// # Safety
 /// As `rsf_core_fsr3_fg_evaluate`.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr3_fg_evaluate_direct(
     context: *mut FgContext,
     frame: *const FgFrame,
@@ -1143,7 +1109,6 @@ unsafe extern "C" fn rsf_core_fsr3_fg_evaluate_direct(
 ///
 /// # Safety
 /// `context` is null or a live owner; the host has retired direct-mode work.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr3_fg_destroy(context: *mut FgContext) -> i32 {
     if context.is_null() {
         return 0;
@@ -1165,7 +1130,7 @@ unsafe extern "C" fn rsf_core_fsr3_fg_destroy(context: *mut FgContext) -> i32 {
             return code;
         }
         (ops.fg_release)(native);
-        release_box(NonNull::new_unchecked(context));
+        drop(Box::from_raw(context));
     }
     0
 }
