@@ -549,7 +549,7 @@ static struct {
     int enabled;
     int site_verified;
     DWORD rva;
-    /* The main-view stub, when the gate opens through it rather than for every view. */
+    /* The optional render-extent filter for the compatibility jitter gate. */
     unsigned char* stub;
     int32_t stub_rel32;
     volatile LONG* stub_width;
@@ -560,7 +560,7 @@ static struct {
     volatile LONG* stub_last_denied;
 } jitter_patch;
 
-/* Open the gate for the main view only.
+/* Filter compatibility jitter by the last observed render extent.
 
    Measured 26 September 2026: with the gate open for every view, the briefing's holographic
    terrain and its aircraft symbols, and the main menu, shimmered at a reduced render scale while
@@ -571,10 +571,9 @@ static struct {
    The jitter code reads the view's rectangle right before the gate (`ViewRect` at view+0x70..0x7C,
    the view in rsi) to scale the sample. So instead of stepping over the anti-aliasing check, the
    gate jumps to this stub, which keeps the game's own answer for a view that really runs temporal
-   AA, and otherwise lets the jitter through only for a view whose rectangle is the main view's
-   render size, as the reconstruction's last pass carried it. Anything rendered at another size is
-   left unjittered. Before the first pass the size is zero and every view passes, which is the
-   previous behaviour. rax is saved around the test; both exits start by overwriting the flags.
+   AA. Otherwise the stub compares ViewRect dimensions with the last reconstruction input
+   observation. Equal-sized views can pass. Before the first observation the size is zero and
+   the filter accepts every view. rax is saved around the test; both exits overwrite the flags.
 
      je   continue             ; flags from cmp [rsi+0x13c0], 2: temporal AA, the game's own path
      push rax
@@ -589,7 +588,7 @@ static struct {
      sub  eax, [rsi+0x74]
      cmp  eax, [height]
      jne  deny
-   allow: mov [view], rsi       ; the main view, for this frame's jitter sample
+   allow: mov [view], rsi       ; last view admitted by this branch, with no C consumer
      pop rax
      jmp  continue             ; the jitter code, gate + 6
    deny:  pop rax
@@ -630,7 +629,7 @@ static int build_jitter_stub(DWORD rva)
 }
 
 /* Keep the stub's main-view size in step with the reconstruction, on the render thread. */
-static void update_jitter_main_view(void)
+static void update_jitter_render_extent(void)
 {
     unsigned long width = 0;
     unsigned long height = 0;
@@ -662,7 +661,7 @@ static void update_jitter_main_view(void)
         InterlockedExchange(jitter_patch.stub_width, (LONG)width);
         InterlockedExchange(jitter_patch.stub_height, (LONG)height);
         if (width != 0) {
-            note("jitter: main view is %lux%lu; views of any other size stay unjittered", width,
+            note("jitter: compatibility extent %lux%lu; the game's temporal AA keeps its own jitter", width,
                  height);
         }
     }
@@ -717,7 +716,7 @@ static unsigned long action_jitter_available(void)
    every result taken before this. Mode 1 follows the reconstruction. Both verify the expected
    bytes here, by opening the gate and closing it again, so a game update is reported at startup
    rather than at the first transition, when whoever is looking is looking at something else. */
-static void install_jitter(int32_t mode, uint32_t rva, int main_view_only)
+static void install_jitter(int32_t mode, uint32_t rva, int filter_by_extent)
 {
     jitter_patch.mode = mode;
     if (jitter_patch.mode == 0) {
@@ -726,11 +725,11 @@ static void install_jitter(int32_t mode, uint32_t rva, int main_view_only)
     jitter_patch.rva = rva;
     jitter_patch.site_verified = 1;
     jitter_patch.enabled = 0;
-    if (main_view_only) {
+    if (filter_by_extent) {
         if (build_jitter_stub(jitter_patch.rva)) {
-            note("jitter: main view only, through a stub at %p", (void*)jitter_patch.stub);
+            note("jitter: filtering compatibility views by render extent through a stub at %p", (void*)jitter_patch.stub);
         } else {
-            note("jitter: no memory near the game for the main-view stub, so every view is "
+            note("jitter: no memory near the game for the extent filter, so every view is "
                  "jittered as before");
         }
     }
@@ -1412,7 +1411,7 @@ static void action_maintain_renderer(void)
 {
     static ULONGLONG last_check;
     if (rsf_bridge_native_owned()) return;
-    update_jitter_main_view();
+    update_jitter_render_extent();
     const ULONGLONG now = GetTickCount64();
     if (now - last_check >= 500) {
         last_check = now;

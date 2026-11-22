@@ -66,6 +66,43 @@ precedes the qualifying draw, or missing producer leaves the existing native-col
 available. The compatibility bridge was not wired to this opt-in facility. The native family/view
 producer and final camera PORT finding stay with A02.
 
+## Compatibility producer audit at cb8a0e0c
+
+G02 entered this base at `7249a2a1`. The source audit revisited the
+[pinned AC7 and UE 4.18.3 evidence](../../.agents/skills/ue418-render-integration/references/ac7-native-ownership.md)
+and followed the carrier and installed detours to the actual recombine consumer.
+
+| Site | What it establishes on this base |
+| --- | --- |
+| Carrier jitter gate RVA `0x112b1f3` | This is a native site reachable in compatibility mode. Its optional relay checks `rsi`'s view rectangle at +0x70 through +0x7c against the previously observed tap extent. Zero width admits all; equal-size views can pass; native TAA takes its own branch. The relay stores the last admitted raw view pointer at relay +96 with no production reader, lifetime lease, family/frame read, or link to a later upload or draw. It provides extent filtering. |
+| Native submission RVA `0x112ff00` and graph RVAs `0xffb900` / `0x10b3970` | The active renderer can join a submitted source to the renderer's family and concrete view. `make_plan` matches the composition context view to `hooked_postprocess`'s view, reads family at view +0 and native frame at family +0x68, and uses the actual graph resources. `dlss_bridge.c::rsf_bridge_start` sets `native_owner` after successful activation and then omits the compatibility pass/input/target/candidate callbacks. When activation refuses, the native renderer's active-gated producers cannot provide the compatibility receipt. |
+| Native uniform evidence RVAs `0xe97d80`, `0xe39520`, `0xe1f8d0` | The hooks supply null-enqueue diagnostics, RHI pixel setter slot/uniform arguments, and resource-table requirements within the active native renderer. They establish neither a retained D3D11 constant-buffer object for the compatibility draw nor a match to its source frame/view/family. UE's RHI uniform pointer, a shader resource-table slot, and the actual bound D3D11 buffer are distinct evidence. |
+| Compatibility `on_pass`, `observe_constants`, and `on_gate` | The tap's role signature and later PS-size hint identify candidates. The upload observer has no native identity. `open_gates_for` calls `on_gate` in the render-target binding path before forwarding the bind. A DRAW receipt from that recombine's own post-draw callback would arrive after the evaluation and seed decision. `on_pass` runs from `consider_bound_set` outside the DRAW receipt scope. |
+
+The earliest usable G02 consumer requires a proven scene draw before the recombine
+gate. The matching adapter producer must name the concrete scene pass, native session,
+source/native frame, primary view, family and rectangle, plus the actual immediate
+context, PS slot and buffer. It must arm that exact buffer on the registering render
+thread before the verified upload. The dedicated observer copies camera data with
+UPLOAD. An earlier, verified direct scene draw must confirm DRAW against that same
+adapter identity. The recombine gate can then require CURRENT to equal both IDs before
+passing the camera to the backend. A receipt from a different draw, a gate that comes
+first, or a write outside the observed coverage leaves the native-colour seed available.
+The current source and retained evidence supply no such earlier draw and live adapter
+producer together.
+
+The carrier now describes the optional jitter filter as an extent filter in its
+diagnostics and comments. Its gate bytes and relay behavior are unchanged. The bridge
+continues to use the existing compatibility candidate path, including
+`rsf_promote_seed(..., 0)` on refusal. G02 remains opt-in and unarmed on this route.
+No compatibility primary-camera or family identity is claimed. PORT line 1754 stays open.
+
+The follow-up reproduced the carrier and frame-tap bindings with bindgen 0.72.1,
+checked Rust 1.94.1 formatting and locked offline metadata, and syntax-checked both
+carrier C translation units. The carrier check suppresses MinGW's function-pointer
+cast warning for the existing DbgHelp imports. The jitter relay byte array was
+compared against the base without comments and matches exactly.
+
 Checks are source-only. The Context1 DiscardResource and PSGetConstantBuffers1 slots were
 matched to 117 and 129 in the Windows SDK 10.0.26100.0 C vtable. The default PS getter is slot 77.
 Targeted bindgen 0.72.1, pinned Rust 1.94.1 formatting, isolated Rust source analysis, locked

@@ -112,7 +112,7 @@ const TRANSLUCENT_VELOCITY_RVA: u32 = 0x11823de;
 const SEPARATE_TRANSLUCENCY_RVA: u32 = 0x10be329;
 const SCALE_IMMEDIATE_OFFSET: u32 = 7;
 const JITTER_GATE: &[u8; 6] = b"\x0f\x85\xdd\x03\x00\x00";
-// Main-view relay from the carrier's verified jitter gate. External exits use rel32.
+// Render-extent filter from the carrier's verified jitter gate. External exits use rel32.
 const JITTER_RELAY: [u8; 82] = [
     0x0F, 0x84, 0, 0, 0, 0,    // 0  je continue
     0x50, // 6  push rax
