@@ -159,3 +159,14 @@ three swapchain image views retain their formats, extents and barriers.
 A failed drain retains the original owner and the heap-stable queue
 callback user. The views retire before the presenter can destroy its
 images. All public bridge and WSI names stay in place.
+
+The integrated DX12 bridge uses the Runtime's typed capture implementation
+for resource descriptions, copyable footprints, readback allocation, COM
+release, copy, map and unmap. Readback allocation, transition and unmap reuse
+the existing helpers. Present description, transition and color copy use
+the same typed interfaces and record on the bridge's original command
+list. The session still gates publication on its own queue completion, and
+the private platform table layout and SDK callback ABI stay fixed. The
+standalone bridge continues to link the Rust session directly with its
+native DX12 call leaves. Both bridge configurations passed MinGW syntax
+checking with the pre-existing FARPROC cast warning left nonfatal.

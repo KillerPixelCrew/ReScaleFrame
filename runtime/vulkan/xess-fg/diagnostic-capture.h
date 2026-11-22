@@ -70,6 +70,21 @@ inline uint32_t Digest(void* module, unsigned char* sha256) {
     return rsf_common_sha256_file(path, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, sha256);
 }
 
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+extern "C" {
+void rsf_core_xess_d3d12_capture_describe(void*, rsf_xess_capture_desc*);
+int32_t rsf_core_xess_d3d12_capture_footprint(void*, void*, uint64_t*, void**);
+void* rsf_core_xess_d3d12_capture_readback(void*, uint64_t);
+void rsf_core_xess_d3d12_capture_release(void*);
+void rsf_core_xess_d3d12_capture_copy(void*, void*, void*, const void*, uint32_t);
+int32_t rsf_core_xess_d3d12_capture_map(void*, uint64_t, const uint8_t**);
+void rsf_core_xess_d3d12_capture_unmap(void*);
+void rsf_core_xess_d3d12_present_describe(void*, rsf_xess_bridge_resource_desc*);
+void rsf_core_xess_d3d12_present_transition(void*, void*, uint32_t, uint32_t);
+void rsf_core_xess_d3d12_present_copy(void*, void*, void*);
+}
+#else
+// Standalone bridge links the Rust session directly without the Runtime crate.
 inline void Describe(void* resource, rsf_xess_capture_desc* output) {
     const D3D12_RESOURCE_DESC desc = static_cast<ID3D12Resource*>(resource)->GetDesc();
     output->width = desc.Width;
@@ -148,4 +163,5 @@ inline void UnmapReadback(void* readback) {
     const D3D12_RANGE written{0, 0};
     static_cast<ID3D12Resource*>(readback)->Unmap(0, &written);
 }
+#endif
 }

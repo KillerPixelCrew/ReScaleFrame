@@ -13,6 +13,8 @@ use windows::Win32::Graphics::Dxgi::DXGI_ERROR_DEVICE_REMOVED;
 use windows::core::Interface;
 use windows_sys::Win32::{Foundation::CloseHandle, System::Threading::CreateEventW};
 
+mod xess;
+
 fn allocate(source: &ID3D12Resource, single_slice: bool) -> Option<(ID3D12Resource, Layout)> {
     let desc = unsafe { source.GetDesc() };
     if desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D
@@ -38,6 +40,22 @@ fn allocate(source: &ID3D12Resource, single_slice: bool) -> Option<(ID3D12Resour
             Some(&mut bytes),
         );
     }
+    let buffer = readback_buffer(&device, bytes)?;
+    let fields = footprint.Footprint;
+    Some((
+        buffer,
+        Layout {
+            bytes,
+            offset: footprint.Offset,
+            width: fields.Width,
+            height: fields.Height,
+            format: fields.Format.0 as u32,
+            row_pitch: fields.RowPitch,
+        },
+    ))
+}
+
+fn readback_buffer(device: &ID3D12Device, bytes: u64) -> Option<ID3D12Resource> {
     let heap = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_READBACK,
         ..Default::default()
@@ -67,18 +85,7 @@ fn allocate(source: &ID3D12Resource, single_slice: bool) -> Option<(ID3D12Resour
         )
     }
     .ok()?;
-    let fields = footprint.Footprint;
-    Some((
-        buffer?,
-        Layout {
-            bytes,
-            offset: footprint.Offset,
-            width: fields.Width,
-            height: fields.Height,
-            format: fields.Format.0 as u32,
-            row_pitch: fields.RowPitch,
-        },
-    ))
+    buffer
 }
 
 unsafe fn allocate_raw(source: Handle, out: *mut Layout, single_slice: bool) -> Handle {

@@ -16,7 +16,7 @@ mod capture;
 #[path = "../../orchestrator/src/d3d12_generation/xess_abi.rs"]
 mod sdk;
 #[path = "session_records_abi.rs"]
-mod session_records_abi;
+pub(crate) mod session_records_abi;
 #[path = "../timeline_pair.rs"]
 mod timeline_pair;
 #[path = "timing.rs"]

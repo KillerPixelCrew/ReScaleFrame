@@ -587,6 +587,7 @@ extern "C" __declspec(dllexport) int VulkanStoryXessFgSignalSharedFence(
     return code < 0 ? code : 0;
 }
 
+#if !defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
 /// @brief Records an all-subresource state transition for a borrowed DX12 resource.
 static void Transition(ID3D12GraphicsCommandList* list, ID3D12Resource* resource,
     D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
@@ -598,6 +599,8 @@ static void Transition(ID3D12GraphicsCommandList* list, ID3D12Resource* resource
     barrier.Transition.StateAfter = after;
     list->ResourceBarrier(1, &barrier);
 }
+
+#endif
 
 namespace {
 /// @brief Lazily creates opt-in timestamp queries, readback storage and post-present command lists.
@@ -654,10 +657,13 @@ void HarvestGpuTiming(VulkanStoryXessFg* value, uint32_t slot) {
 static_assert(DXGI_FORMAT_B8G8R8A8_UNORM == 87 && DXGI_FORMAT_R16G16_FLOAT == 34 &&
     DXGI_FORMAT_D32_FLOAT == 40 && DXGI_FORMAT_R32_FLOAT == 41);
 
+#if !defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
 static void DescribePresentResource(void* resource, rsf_xess_bridge_resource_desc* output) {
     const D3D12_RESOURCE_DESC desc = static_cast<ID3D12Resource*>(resource)->GetDesc();
     *output = {desc.Width, desc.Height, static_cast<uint32_t>(desc.Format)};
 }
+
+#endif
 
 static int32_t ResetPresentCommands(VulkanStoryXessFg* value, uint32_t slot) {
     const HRESULT result = value->allocators[slot]->Reset();
@@ -670,8 +676,12 @@ static_assert(D3D12_RESOURCE_STATE_COMMON == 0 && D3D12_RESOURCE_STATE_PRESENT =
 
 static void TransitionPresentResource(VulkanStoryXessFg* value, void* resource,
     uint32_t before, uint32_t after) {
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+    rsf_xess_capture::rsf_core_xess_d3d12_present_transition(value->commandList, resource, before, after);
+#else
     Transition(value->commandList, static_cast<ID3D12Resource*>(resource),
         static_cast<D3D12_RESOURCE_STATES>(before), static_cast<D3D12_RESOURCE_STATES>(after));
+#endif
 }
 
 static int32_t AcquireBackbuffer(VulkanStoryXessFg* value, void** output) {
@@ -683,8 +693,12 @@ static int32_t AcquireBackbuffer(VulkanStoryXessFg* value, void** output) {
 }
 
 static void CopyPresentColor(VulkanStoryXessFg* value, void* backbuffer, void* color) {
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+    rsf_xess_capture::rsf_core_xess_d3d12_present_copy(value->commandList, backbuffer, color);
+#else
     value->commandList->CopyResource(static_cast<ID3D12Resource*>(backbuffer),
         static_cast<ID3D12Resource*>(color));
+#endif
 }
 
 static void ExecutePresentCommands(VulkanStoryXessFg* value) {
@@ -774,7 +788,11 @@ static constexpr rsf_xess_bridge_platform Platform{
     .has_shared_queue = [](const VulkanStoryXessFg* value) -> uint32_t {
         return value->queue && value->sharedFence;
     },
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+    .describe_present_resource = rsf_xess_capture::rsf_core_xess_d3d12_present_describe,
+#else
     .describe_present_resource = DescribePresentResource,
+#endif
     .reset_commands = ResetPresentCommands,
     .transition_present_resource = TransitionPresentResource,
     .acquire_backbuffer = AcquireBackbuffer,
@@ -819,6 +837,15 @@ static constexpr rsf_xess_bridge_platform Platform{
     .attach_capture = [](VulkanStoryXessFg* value, rsf_xess_capture_owner* capture) { value->capture = capture; },
     .register_diagnostics = RegisterDiagnostics,
     .capture_digest = rsf_xess_capture::Digest,
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+    .capture_describe = rsf_xess_capture::rsf_core_xess_d3d12_capture_describe,
+    .capture_footprint = rsf_xess_capture::rsf_core_xess_d3d12_capture_footprint,
+    .capture_readback = rsf_xess_capture::rsf_core_xess_d3d12_capture_readback,
+    .capture_release = rsf_xess_capture::rsf_core_xess_d3d12_capture_release,
+    .capture_copy = rsf_xess_capture::rsf_core_xess_d3d12_capture_copy,
+    .capture_map = rsf_xess_capture::rsf_core_xess_d3d12_capture_map,
+    .capture_unmap = rsf_xess_capture::rsf_core_xess_d3d12_capture_unmap,
+#else
     .capture_describe = rsf_xess_capture::Describe,
     .capture_footprint = rsf_xess_capture::QueryFootprint,
     .capture_readback = rsf_xess_capture::CreateReadback,
@@ -826,6 +853,7 @@ static constexpr rsf_xess_bridge_platform Platform{
     .capture_copy = rsf_xess_capture::RecordCopy,
     .capture_map = rsf_xess_capture::MapReadback,
     .capture_unmap = rsf_xess_capture::UnmapReadback,
+#endif
     .lookup_export = [](void* module, const char* name) -> void* {
         return reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(module), name));
     },
