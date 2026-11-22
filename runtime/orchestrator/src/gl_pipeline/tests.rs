@@ -435,7 +435,13 @@ unsafe extern "C" fn overlay_configure(_: *const rsf_overlay_service_setup) -> i
     NOT_READY
 }
 unsafe extern "C" fn overlay_present(
-    _: Handle, _: Handle, _: Handle, _: Handle, _: Handle, _: Log, _: Handle,
+    _: Handle,
+    _: Handle,
+    _: Handle,
+    _: Handle,
+    _: Handle,
+    _: Log,
+    _: Handle,
 ) -> i32 {
     NOT_READY
 }
@@ -604,9 +610,11 @@ fn refused_chain_resize_restores_the_published_window_extent() {
     world(|world| world.chain_resize_refused = true);
     assert_eq!(configure(1280, 720), FEATURE_FAILED);
     let calls = events();
-    assert!(calls.windows(3).any(|calls| calls == [
-        "window 1280x720", "chain 1280x720", "window 640x480"
-    ]));
+    assert!(
+        calls
+            .windows(3)
+            .any(|calls| calls == ["window 1280x720", "chain 1280x720", "window 640x480"])
+    );
     assert_eq!(surfaces(pipeline).composed, previous.composed);
     assert_eq!(configure(640, 480), OK);
     assert_eq!(status(pipeline).sr_result, OK);
@@ -741,10 +749,7 @@ fn automatic_selection_keeps_first_created_backend_then_falls_back_to_off() {
         OK
     );
     let created = world(|world| std::mem::take(&mut world.created_backends));
-    assert_eq!(
-        created,
-        [SR_DLSS, SR_FSR3, SR_XESS, SR_NONE]
-    );
+    assert_eq!(created, [SR_DLSS, SR_FSR3, SR_XESS, SR_NONE]);
     let fallback = status(pipeline);
     assert_eq!(
         (
@@ -896,8 +901,14 @@ fn failed_chain_open_returns_a_cleanup_handle_if_retirement_refuses() {
         INIT_FAILED
     );
     assert!(!pipeline.is_null());
-    assert_eq!(unsafe { rsf_gl_pipeline_present(pipeline, 1, 0) }, NOT_READY);
-    assert_eq!(unsafe { rsf_gl_pipeline_input(pipeline, 1, 1, 0) }, NOT_READY);
+    assert_eq!(
+        unsafe { rsf_gl_pipeline_present(pipeline, 1, 0) },
+        NOT_READY
+    );
+    assert_eq!(
+        unsafe { rsf_gl_pipeline_input(pipeline, 1, 1, 0) },
+        NOT_READY
+    );
     events();
     world(|world| world.close_refused = false);
     assert_eq!(unsafe { rsf_gl_pipeline_close(pipeline) }, OK);

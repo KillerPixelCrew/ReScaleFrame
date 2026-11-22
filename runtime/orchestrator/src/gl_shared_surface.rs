@@ -409,7 +409,12 @@ impl Context {
                 submitted: true,
             };
         }
-        let Phase::AwaitingAcquire { handoff, value, submitted } = state.phase else {
+        let Phase::AwaitingAcquire {
+            handoff,
+            value,
+            submitted,
+        } = state.phase
+        else {
             return matches!(state.phase, Phase::Idle);
         };
         let result = self.acquire(value, &handoff.batch);
@@ -449,7 +454,10 @@ impl Context {
             self.failure("GL semaphore release", released);
             return FEATURE_FAILED;
         }
-        let handoff = Handoff { slot: index, batch: *batch };
+        let handoff = Handoff {
+            slot: index,
+            batch: *batch,
+        };
         let waited = unsafe { (l.queue_wait)(self.queue.as_ptr(), self.fence.as_ptr(), ready) };
         if failed(waited) {
             self.failure("D3D12 queue wait", waited as u32);

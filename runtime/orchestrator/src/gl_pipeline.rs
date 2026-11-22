@@ -133,7 +133,8 @@ pub(crate) struct Platform {
     fg_default_backend: unsafe extern "C" fn(u32, u32) -> u32,
     depth_domains_requested: unsafe extern "C" fn(*const Pass) -> u32,
     overlay_configure: unsafe extern "C" fn(*const rsf_overlay_service_setup) -> i32,
-    overlay_present: unsafe extern "C" fn(Handle, Handle, Handle, Handle, Handle, Log, Handle) -> i32,
+    overlay_present:
+        unsafe extern "C" fn(Handle, Handle, Handle, Handle, Handle, Log, Handle) -> i32,
     overlay_notify: unsafe extern "C" fn(u32) -> i32,
 }
 
@@ -203,7 +204,10 @@ impl Shared {
     }
 
     fn detach_log(&self) {
-        *self.logger.lock().unwrap_or_else(|error| error.into_inner()) = (None, 0);
+        *self
+            .logger
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = (None, 0);
     }
 }
 
@@ -943,8 +947,10 @@ fn open(
             put_registration(shared);
             return Err(NEEDS_RESTART);
         }
-        *shared.logger.lock().unwrap_or_else(|error| error.into_inner()) =
-            (setup.log, setup.user as usize);
+        *shared
+            .logger
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = (setup.log, setup.user as usize);
     }
     let guard = reused.is_none().then(|| {
         let streamline = concat(root, "/streamline");
@@ -1087,7 +1093,10 @@ fn open(
 }
 
 fn reject_open(pipeline: Pipeline, cleanup: &mut Option<Pipeline>) {
-    pipeline.shared.window.store(ptr::null_mut(), Ordering::Release);
+    pipeline
+        .shared
+        .window
+        .store(ptr::null_mut(), Ordering::Release);
     pipeline.shared.detach_log();
     let result = {
         let mut state = pipeline.state.lock().unwrap();
@@ -1230,7 +1239,9 @@ unsafe extern "C" fn rsf_gl_pipeline_input(
     message: u32,
 ) -> i32 {
     match unsafe { pipeline.as_ref() } {
-        Some(pipeline) if pipeline.ready.load(Ordering::Acquire) => pipeline.input(frame, kinds, message),
+        Some(pipeline) if pipeline.ready.load(Ordering::Acquire) => {
+            pipeline.input(frame, kinds, message)
+        }
         Some(_) => NOT_READY,
         None => INVALID,
     }

@@ -33,8 +33,16 @@ unsafe extern "C" fn rsf_core_gl_chain_resize(
     format: u32,
 ) -> i32 {
     let chain = unsafe { borrow::<IDXGISwapChain3>(&chain) };
-    unsafe { chain.ResizeBuffers(buffers, width, height, DXGI_FORMAT(format as i32), DXGI_SWAP_CHAIN_FLAG(0)) }
-        .map_or_else(|error| error.code().0, |()| 0)
+    unsafe {
+        chain.ResizeBuffers(
+            buffers,
+            width,
+            height,
+            DXGI_FORMAT(format as i32),
+            DXGI_SWAP_CHAIN_FLAG(0),
+        )
+    }
+    .map_or_else(|error| error.code().0, |()| 0)
 }
 
 #[unsafe(no_mangle)]
@@ -61,10 +69,14 @@ unsafe extern "C" fn rsf_core_gl_adapter_identity(
             .and_then(|factory| factory.EnumAdapterByLuid::<IDXGIAdapter1>(device.GetAdapterLuid()))
             .and_then(|adapter| adapter.GetDesc1())
     };
-    let Ok(description) = description else { return 0 };
+    let Ok(description) = description else {
+        return 0;
+    };
     unsafe {
         vendor.write(description.VendorId);
-        software.write(u32::from(description.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0));
+        software.write(u32::from(
+            description.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0,
+        ));
     }
     1
 }

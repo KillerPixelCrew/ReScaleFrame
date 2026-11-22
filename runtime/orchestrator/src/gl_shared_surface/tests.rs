@@ -619,9 +619,20 @@ fn refused_gl_acquire_retries_the_signalled_value() {
     events();
     world(|world| world.fail_acquire = true);
     assert_eq!(submit(context, &[output]), FEATURE_FAILED);
-    assert_eq!(events(), ["close list7", "execute list7", "signal 2", "acquire 2 [3]"]);
+    assert_eq!(
+        events(),
+        ["close list7", "execute list7", "signal 2", "acquire 2 [3]"]
+    );
     assert_eq!(begin(context, &[output]).0, OK);
-    assert_eq!(events(), ["acquire 2 [3]", "reset list9", "release 3 [3]", "queue wait 3"]);
+    assert_eq!(
+        events(),
+        [
+            "acquire 2 [3]",
+            "reset list9",
+            "release 3 [3]",
+            "queue wait 3"
+        ]
+    );
     assert_eq!(submit(context, &[output]), OK);
     close_all(context, &[output]);
 }

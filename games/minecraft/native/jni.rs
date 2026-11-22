@@ -4,14 +4,14 @@
 use crate::frame::{self, Configuration};
 use crate::observer;
 use crate::platform_abi::{
-    rsf_gl_pipeline, rsf_gl_pipeline_abort, rsf_gl_pipeline_close, rsf_gl_pipeline_configure_legacy,
-    rsf_gl_pipeline_configure_settings, rsf_gl_pipeline_cpu, rsf_gl_pipeline_evaluate,
-    rsf_gl_pipeline_get_surfaces, rsf_gl_pipeline_hudless, rsf_gl_pipeline_input,
-    rsf_gl_pipeline_open, rsf_gl_pipeline_present, rsf_gl_pipeline_settings_open,
-    rsf_gl_pipeline_settings_revision, rsf_gl_pipeline_setup, rsf_gl_pipeline_status,
-    rsf_gl_pipeline_status_get, rsf_gl_pipeline_surfaces, rsf_gl_window_create,
-    rsf_gl_window_destroy, rsf_input_dump_configure, rsf_native_latency_status,
-    rsf_native_latency_status_get,
+    rsf_gl_pipeline, rsf_gl_pipeline_abort, rsf_gl_pipeline_close,
+    rsf_gl_pipeline_configure_legacy, rsf_gl_pipeline_configure_settings, rsf_gl_pipeline_cpu,
+    rsf_gl_pipeline_evaluate, rsf_gl_pipeline_get_surfaces, rsf_gl_pipeline_hudless,
+    rsf_gl_pipeline_input, rsf_gl_pipeline_open, rsf_gl_pipeline_present,
+    rsf_gl_pipeline_settings_open, rsf_gl_pipeline_settings_revision, rsf_gl_pipeline_setup,
+    rsf_gl_pipeline_status, rsf_gl_pipeline_status_get, rsf_gl_pipeline_surfaces,
+    rsf_gl_window_create, rsf_gl_window_destroy, rsf_input_dump_configure,
+    rsf_native_latency_status, rsf_native_latency_status_get,
 };
 use crate::runtime_directory;
 use crate::status::{STATUS_MINIMUM, status_values};
@@ -242,9 +242,14 @@ unsafe extern "system" fn configure(
     debug: jboolean,
     sharpening: jfloatArray,
 ) -> jintArray {
-    let Some(configuration) =
-        (unsafe { configuration(env, [sr, quality, preset, fg, count, reflex, limit], debug, sharpening) })
-    else {
+    let Some(configuration) = (unsafe {
+        configuration(
+            env,
+            [sr, quality, preset, fg, count, reflex, limit],
+            debug,
+            sharpening,
+        )
+    }) else {
         return null_mut();
     };
     let pipeline = pipeline(handle);
@@ -280,9 +285,14 @@ unsafe extern "system" fn open_settings(
     debug: jboolean,
     sharpening: jfloatArray,
 ) -> jint {
-    let Some(configuration) =
-        (unsafe { configuration(env, [sr, quality, preset, fg, count, reflex, limit], debug, sharpening) })
-    else {
+    let Some(configuration) = (unsafe {
+        configuration(
+            env,
+            [sr, quality, preset, fg, count, reflex, limit],
+            debug,
+            sharpening,
+        )
+    }) else {
         return -1;
     };
     if path.is_null() {

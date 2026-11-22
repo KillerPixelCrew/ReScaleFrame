@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::overlay_abi::{
-    RSF_OVERLAY_API_VERSION, RSF_OVERLAY_SERVICE_OPTION_TOGGLE, rsf_overlay_service_option,
-    rsf_overlay_service_setup, rsf_overlay_sr_report, RSF_OVERLAY_SR_INPUT_COLOR,
-    RSF_OVERLAY_SR_INPUT_DEPTH, RSF_OVERLAY_SR_INPUT_MOTION,
+    RSF_OVERLAY_API_VERSION, RSF_OVERLAY_SERVICE_OPTION_TOGGLE, RSF_OVERLAY_SR_INPUT_COLOR,
+    RSF_OVERLAY_SR_INPUT_DEPTH, RSF_OVERLAY_SR_INPUT_MOTION, rsf_overlay_service_option,
+    rsf_overlay_service_setup, rsf_overlay_sr_report,
 };
 use crate::overlay_service::{settings_apply, settings_get};
 use crate::render_abi::{
@@ -99,21 +99,35 @@ unsafe extern "C" fn option_changed(user: Handle, index: u32, value: i32) -> i32
     1
 }
 
-pub(super) fn present(pipeline: &Pipeline, state: &State, chain: Handle, buffer: Handle, frame: u64) {
+pub(super) fn present(
+    pipeline: &Pipeline,
+    state: &State,
+    chain: Handle,
+    buffer: Handle,
+    frame: u64,
+) {
     let (Some(settings), Some(active)) = (pipeline.settings.get(), state.active.as_ref()) else {
         return;
     };
     let active_sr = state.evaluated_frame == frame && state.status.effective_sr != SR_NONE;
     *settings.report.lock().unwrap() = rsf_overlay_sr_report {
         struct_size: size_of::<rsf_overlay_sr_report>() as u32,
-        effective_backend: if active_sr { state.status.effective_sr } else { SR_NONE },
+        effective_backend: if active_sr {
+            state.status.effective_sr
+        } else {
+            SR_NONE
+        },
         effective_quality: active.shape.quality,
         render_width: active.render_width,
         render_height: active.render_height,
         output_width: state.width,
         output_height: state.height,
         frames_evaluated: state.status.evaluated as u32,
-        last_result: if state.status.sr_result == OK { state.evaluation_result } else { state.status.sr_result },
+        last_result: if state.status.sr_result == OK {
+            state.evaluation_result
+        } else {
+            state.status.sr_result
+        },
         inputs: if active_sr {
             RSF_OVERLAY_SR_INPUT_COLOR | RSF_OVERLAY_SR_INPUT_DEPTH | RSF_OVERLAY_SR_INPUT_MOTION
         } else {
@@ -123,8 +137,13 @@ pub(super) fn present(pipeline: &Pipeline, state: &State, chain: Handle, buffer:
     };
     unsafe {
         (pipeline.platform.overlay_present)(
-            state.device, state.queue, chain, buffer, pipeline.parent,
-            Some(hook_log), ptr::from_ref(pipeline.shared).cast_mut().cast(),
+            state.device,
+            state.queue,
+            chain,
+            buffer,
+            pipeline.parent,
+            Some(hook_log),
+            ptr::from_ref(pipeline.shared).cast_mut().cast(),
         );
     }
 }
@@ -138,8 +157,12 @@ unsafe extern "C" fn rsf_gl_pipeline_settings_open(
     legacy: *const rsf_gl_pipeline_options,
     limit_fps: u32,
 ) -> i32 {
-    let Some(legacy) = (unsafe { read_sized(legacy) }) else { return INVALID };
-    if path.is_null() || section.is_null() || identity.is_null()
+    let Some(legacy) = (unsafe { read_sized(legacy) }) else {
+        return INVALID;
+    };
+    if path.is_null()
+        || section.is_null()
+        || identity.is_null()
         || unsafe { *path == 0 || *section == 0 }
     {
         return INVALID;
@@ -151,10 +174,17 @@ unsafe extern "C" fn rsf_gl_pipeline_settings_open(
         let path = unsafe { wide(path) };
         let section = unsafe { wide(section) };
         let file = std::path::PathBuf::from(std::ffi::OsString::from_wide(&path[..path.len() - 1]));
-        let migrate = std::fs::metadata(file).is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
-        let debug = u32::from(unsafe {
-            rsf_settings_store_read_fg_debug(path.as_ptr(), section.as_ptr(), legacy.generation.debug)
-        } != 0);
+        let migrate = std::fs::metadata(file)
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
+        let debug = u32::from(
+            unsafe {
+                rsf_settings_store_read_fg_debug(
+                    path.as_ptr(),
+                    section.as_ptr(),
+                    legacy.generation.debug,
+                )
+            } != 0,
+        );
         let settings = pipeline.settings.get_or_init(|| Managed {
             path,
             section,
@@ -166,24 +196,39 @@ unsafe extern "C" fn rsf_gl_pipeline_settings_open(
             struct_size: size_of::<rsf_render_settings>() as u32,
             abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
             sr_enabled: u32::from(legacy.sr_backend != SR_NONE),
-            sr_backend: if legacy.sr_backend != SR_NONE { legacy.sr_backend } else { SR_AUTO },
+            sr_backend: if legacy.sr_backend != SR_NONE {
+                legacy.sr_backend
+            } else {
+                SR_AUTO
+            },
             sr_quality: legacy.quality,
             dlss_preset: legacy.dlss_preset,
             fg_enabled: u32::from(legacy.fg_backend != 0),
-            fg_backend: if legacy.fg_backend != 0 { legacy.fg_backend } else { RSF_FG_BACKEND_AUTO },
+            fg_backend: if legacy.fg_backend != 0 {
+                legacy.fg_backend
+            } else {
+                RSF_FG_BACKEND_AUTO
+            },
             generated_frames: legacy.generation.generated_frames,
             latency: legacy.generation.reflex_mode,
             frame_limit_us: interval(limit_fps),
             ..unsafe { std::mem::zeroed() }
         };
-        let sharpening = if legacy.sharpening.struct_size != 0 { legacy.sharpening } else {
+        let sharpening = if legacy.sharpening.struct_size != 0 {
+            legacy.sharpening
+        } else {
             sharpening_policy::defaults()
         };
         set_sharpening(&mut defaults, &sharpening);
         let option = rsf_overlay_service_option {
             label_utf8: c"Frame generation debug".as_ptr(),
             kind: RSF_OVERLAY_SERVICE_OPTION_TOGGLE,
-            value: debug as i32, minimum: 0, maximum: 1, step: 1, divisor: 1, restart: 0,
+            value: debug as i32,
+            minimum: 0,
+            maximum: 1,
+            step: 1,
+            divisor: 1,
+            restart: 0,
         };
         let setup = rsf_overlay_service_setup {
             struct_size: size_of::<rsf_overlay_service_setup>() as u32,
@@ -217,10 +262,15 @@ unsafe extern "C" fn rsf_gl_pipeline_settings_open(
         if migrate {
             let saved = unsafe { settings_apply(&defaults) };
             let debug_saved = unsafe {
-                rsf_settings_store_write_fg_debug(settings.path.as_ptr(), settings.section.as_ptr(), debug)
+                rsf_settings_store_write_fg_debug(
+                    settings.path.as_ptr(),
+                    settings.section.as_ptr(),
+                    debug,
+                )
             };
             if saved != OK || debug_saved != OK {
-                pipeline.log("OpenGL: legacy settings could not be saved to the shared configuration.");
+                pipeline
+                    .log("OpenGL: legacy settings could not be saved to the shared configuration.");
             }
         }
         OK
@@ -237,9 +287,13 @@ unsafe extern "C" fn rsf_gl_pipeline_settings_revision(pipeline: *mut Pipeline) 
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_gl_pipeline_configure_settings(
-    pipeline: *mut Pipeline, width: u32, height: u32,
+    pipeline: *mut Pipeline,
+    width: u32,
+    height: u32,
 ) -> i32 {
-    let Some(settings) = (unsafe { pipeline.as_ref() }).and_then(|pipeline| pipeline.settings.get()) else {
+    let Some(settings) =
+        (unsafe { pipeline.as_ref() }).and_then(|pipeline| pipeline.settings.get())
+    else {
         return NOT_READY;
     };
     let mut requested = rsf_render_settings {
@@ -247,14 +301,24 @@ unsafe extern "C" fn rsf_gl_pipeline_configure_settings(
         abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
         ..unsafe { std::mem::zeroed() }
     };
-    if settings.revision.load(Ordering::Acquire) == 0 || unsafe { settings_get(&mut requested) } != OK {
+    if settings.revision.load(Ordering::Acquire) == 0
+        || unsafe { settings_get(&mut requested) } != OK
+    {
         return NOT_READY;
     }
     let options = rsf_gl_pipeline_options {
         struct_size: size_of::<rsf_gl_pipeline_options>() as u32,
-        sr_backend: if requested.sr_enabled != 0 { requested.sr_backend } else { SR_NONE },
+        sr_backend: if requested.sr_enabled != 0 {
+            requested.sr_backend
+        } else {
+            SR_NONE
+        },
         quality: requested.sr_quality,
-        fg_backend: if requested.fg_enabled != 0 { requested.fg_backend } else { 0 },
+        fg_backend: if requested.fg_enabled != 0 {
+            requested.fg_backend
+        } else {
+            0
+        },
         generation: rsf_native_fg_options {
             struct_size: size_of::<rsf_native_fg_options>() as u32,
             mode: mode(requested.fg_enabled != 0),
@@ -271,10 +335,15 @@ unsafe extern "C" fn rsf_gl_pipeline_configure_settings(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_gl_pipeline_configure_legacy(
-    pipeline: *mut Pipeline, options: *const rsf_gl_pipeline_options, limit_fps: u32,
-    width: u32, height: u32,
+    pipeline: *mut Pipeline,
+    options: *const rsf_gl_pipeline_options,
+    limit_fps: u32,
+    width: u32,
+    height: u32,
 ) -> i32 {
-    let Some(mut options) = (unsafe { read_sized(options) }) else { return INVALID };
+    let Some(mut options) = (unsafe { read_sized(options) }) else {
+        return INVALID;
+    };
     options.generation.mode = mode(options.fg_backend != 0);
     options.generation.frame_limit_us = interval(limit_fps);
     unsafe { rsf_gl_pipeline_configure(pipeline, &options, width, height) }

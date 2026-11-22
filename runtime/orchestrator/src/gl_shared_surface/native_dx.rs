@@ -8,7 +8,7 @@ use windows::Win32::{
     Graphics::{
         Direct3D::D3D_FEATURE_LEVEL,
         Direct3D12::*,
-        Dxgi::{CreateDXGIFactory1, IDXGIAdapter1, IDXGIFactory4, Common::*},
+        Dxgi::{Common::*, CreateDXGIFactory1, IDXGIAdapter1, IDXGIFactory4},
     },
 };
 use windows::core::{Interface, PCWSTR, Result};
@@ -46,8 +46,14 @@ unsafe extern "C" fn adapter_find(factory: Handle, luid: *const u8, out: *mut Ha
 unsafe extern "C" fn device_create(adapter: Handle, level: u32, out: *mut Handle) -> i32 {
     let adapter = unsafe { borrow::<IDXGIAdapter1>(&adapter) };
     let mut device = None::<ID3D12Device>;
-    let result = unsafe { D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL(level as i32), &mut device) };
-    unsafe { publish(result.and_then(|()| device.ok_or_else(|| E_FAIL.into())), out) }
+    let result =
+        unsafe { D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL(level as i32), &mut device) };
+    unsafe {
+        publish(
+            result.and_then(|()| device.ok_or_else(|| E_FAIL.into())),
+            out,
+        )
+    }
 }
 
 unsafe extern "C" fn queue_create(device: Handle, out: *mut Handle) -> i32 {
@@ -68,12 +74,22 @@ unsafe extern "C" fn queue_device(queue: Handle, out: *mut Handle) -> i32 {
     let queue = unsafe { borrow::<ID3D12CommandQueue>(&queue) };
     let mut device = None::<ID3D12Device>;
     let result = unsafe { queue.GetDevice(&mut device) };
-    unsafe { publish(result.and_then(|()| device.ok_or_else(|| E_FAIL.into())), out) }
+    unsafe {
+        publish(
+            result.and_then(|()| device.ok_or_else(|| E_FAIL.into())),
+            out,
+        )
+    }
 }
 
 unsafe extern "C" fn fence_create(device: Handle, out: *mut Handle) -> i32 {
     let device = unsafe { borrow::<ID3D12Device>(&device) };
-    unsafe { publish(device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_SHARED), out) }
+    unsafe {
+        publish(
+            device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_SHARED),
+            out,
+        )
+    }
 }
 
 unsafe extern "C" fn shared_handle(device: Handle, object: Handle, out: *mut Handle) -> i32 {
@@ -99,9 +115,13 @@ unsafe extern "C" fn slot_create(device: Handle, allocator: *mut Handle, list: *
         list.write(null_mut());
     }
     status((|| unsafe {
-        let commands = device.CreateCommandAllocator::<ID3D12CommandAllocator>(D3D12_COMMAND_LIST_TYPE_DIRECT)?;
+        let commands = device
+            .CreateCommandAllocator::<ID3D12CommandAllocator>(D3D12_COMMAND_LIST_TYPE_DIRECT)?;
         let recorded: ID3D12GraphicsCommandList = device.CreateCommandList(
-            0, D3D12_COMMAND_LIST_TYPE_DIRECT, &commands, None::<&ID3D12PipelineState>,
+            0,
+            D3D12_COMMAND_LIST_TYPE_DIRECT,
+            &commands,
+            None::<&ID3D12PipelineState>,
         )?;
         recorded.Close()?;
         allocator.write(commands.into_raw());
@@ -113,7 +133,11 @@ unsafe extern "C" fn slot_create(device: Handle, allocator: *mut Handle, list: *
 unsafe extern "C" fn slot_reset(allocator: Handle, list: Handle) -> i32 {
     let allocator = unsafe { borrow::<ID3D12CommandAllocator>(&allocator) };
     let list = unsafe { borrow::<ID3D12GraphicsCommandList>(&list) };
-    status(unsafe { allocator.Reset().and_then(|()| list.Reset(allocator, None::<&ID3D12PipelineState>)) })
+    status(unsafe {
+        allocator
+            .Reset()
+            .and_then(|()| list.Reset(allocator, None::<&ID3D12PipelineState>))
+    })
 }
 
 unsafe extern "C" fn list_close(list: Handle) -> i32 {
@@ -131,13 +155,20 @@ unsafe extern "C" fn fence_arm(fence: Handle, value: u64, event: Handle) -> i32 
 unsafe extern "C" fn fence_wait(fence: Handle, value: u64, event: Handle, timeout: u32) -> i32 {
     i32::from(unsafe {
         crate::d3d12_fence::rsf_core_d3d12_wait_fence(
-            fence, value, event, timeout, fence_completed, fence_arm,
+            fence,
+            value,
+            event,
+            timeout,
+            fence_completed,
+            fence_arm,
         ) >= 0
     })
 }
 
 unsafe extern "C" fn queue_wait(queue: Handle, fence: Handle, value: u64) -> i32 {
-    status(unsafe { borrow::<ID3D12CommandQueue>(&queue).Wait(borrow::<ID3D12Fence>(&fence), value) })
+    status(unsafe {
+        borrow::<ID3D12CommandQueue>(&queue).Wait(borrow::<ID3D12Fence>(&fence), value)
+    })
 }
 
 unsafe extern "C" fn queue_execute(queue: Handle, list: Handle) {
@@ -148,11 +179,17 @@ unsafe extern "C" fn queue_execute(queue: Handle, list: Handle) {
 }
 
 unsafe extern "C" fn queue_signal(queue: Handle, fence: Handle, value: u64) -> i32 {
-    status(unsafe { borrow::<ID3D12CommandQueue>(&queue).Signal(borrow::<ID3D12Fence>(&fence), value) })
+    status(unsafe {
+        borrow::<ID3D12CommandQueue>(&queue).Signal(borrow::<ID3D12Fence>(&fence), value)
+    })
 }
 
 unsafe extern "C" fn resource_create(
-    device: Handle, width: u32, height: u32, format: u32, out: *mut Handle,
+    device: Handle,
+    width: u32,
+    height: u32,
+    format: u32,
+    out: *mut Handle,
 ) -> i32 {
     let device = unsafe { borrow::<ID3D12Device>(&device) };
     let desc = D3D12_RESOURCE_DESC {
@@ -162,8 +199,12 @@ unsafe extern "C" fn resource_create(
         DepthOrArraySize: 1,
         MipLevels: 1,
         Format: DXGI_FORMAT(format as i32),
-        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
-        Flags: D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Flags: D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET
+            | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS
             | D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS,
         ..Default::default()
     };
@@ -176,10 +217,20 @@ unsafe extern "C" fn resource_create(
     let mut resource = None::<ID3D12Resource>;
     let result = unsafe {
         device.CreateCommittedResource(
-            &heap, D3D12_HEAP_FLAG_SHARED, &desc, D3D12_RESOURCE_STATE_COMMON, None, &mut resource,
+            &heap,
+            D3D12_HEAP_FLAG_SHARED,
+            &desc,
+            D3D12_RESOURCE_STATE_COMMON,
+            None,
+            &mut resource,
         )
     };
-    unsafe { publish(result.and_then(|()| resource.ok_or_else(|| E_FAIL.into())), out) }
+    unsafe {
+        publish(
+            result.and_then(|()| resource.ok_or_else(|| E_FAIL.into())),
+            out,
+        )
+    }
 }
 
 pub(super) static NATIVE: Leaves = Leaves {

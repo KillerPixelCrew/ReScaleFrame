@@ -24,7 +24,12 @@ unsafe extern "system" fn surface_window(
         WM_ERASEBKGND => 1,
         RESIZE => unsafe {
             SetWindowPos(
-                hwnd, null_mut(), 0, 0, wparam as i32, lparam as i32,
+                hwnd,
+                null_mut(),
+                0,
+                0,
+                wparam as i32,
+                lparam as i32,
                 SWP_NOACTIVATE | SWP_NOZORDER,
             ) as LRESULT
         },
@@ -55,8 +60,17 @@ extern "C" fn rsf_gl_window_create(parent: HWND) -> HWND {
         }
         CreateWindowExW(
             WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
-            class.lpszClassName, w!(""), WS_CHILD | WS_CLIPSIBLINGS, 0, 0,
-            INITIAL_EXTENT as i32, INITIAL_EXTENT as i32, parent, null_mut(), class.hInstance, null(),
+            class.lpszClassName,
+            w!(""),
+            WS_CHILD | WS_CLIPSIBLINGS,
+            0,
+            0,
+            INITIAL_EXTENT as i32,
+            INITIAL_EXTENT as i32,
+            parent,
+            null_mut(),
+            class.hInstance,
+            null(),
         )
     }
 }
@@ -65,7 +79,13 @@ fn surface_message(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
     let mut result = 0;
     let sent = unsafe {
         SendMessageTimeoutW(
-            hwnd, message, wparam, lparam, SMTO_BLOCK | SMTO_ABORTIFHUNG, 5000, &mut result,
+            hwnd,
+            message,
+            wparam,
+            lparam,
+            SMTO_BLOCK | SMTO_ABORTIFHUNG,
+            5000,
+            &mut result,
         )
     };
     sent != 0 && result != 0
@@ -80,7 +100,8 @@ extern "C" fn rsf_gl_window_destroy(window: HWND) -> i32 {
 extern "C" fn rsf_core_gl_window_child_of(child: HWND, parent: HWND) -> i32 {
     i32::from(unsafe {
         GetParent(child) == parent
-            && GetWindowThreadProcessId(child, null_mut()) == GetWindowThreadProcessId(parent, null_mut())
+            && GetWindowThreadProcessId(child, null_mut())
+                == GetWindowThreadProcessId(parent, null_mut())
     })
 }
 

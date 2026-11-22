@@ -1074,11 +1074,8 @@ unsafe extern "C" fn present(chain: *mut c_void, drawn: *mut u32) -> i32 {
     }
 }
 
-type DrawBound = unsafe extern "C" fn(
-    *mut c_void,
-    *const rsf_overlay_stats,
-    *mut rsf_overlay_intent,
-) -> i32;
+type DrawBound =
+    unsafe extern "C" fn(*mut c_void, *const rsf_overlay_stats, *mut rsf_overlay_intent) -> i32;
 type FgStatusGet = unsafe extern "C" fn(*mut FgStatus) -> i32;
 
 #[unsafe(no_mangle)]
@@ -1090,9 +1087,13 @@ unsafe extern "C" fn rsf_core_overlay_present_bound(
     user: *mut c_void,
 ) -> i32 {
     unsafe {
-        present_inner(chain, input_window, null_mut(), Some(status_get), |stats, intent| {
-            draw(user, stats, intent)
-        })
+        present_inner(
+            chain,
+            input_window,
+            null_mut(),
+            Some(status_get),
+            |stats, intent| draw(user, stats, intent),
+        )
     }
 }
 
@@ -1121,7 +1122,11 @@ unsafe fn present_inner(
     if chain_window.is_null() || config.deferred == input_window.is_null() {
         return INVALID_ARGUMENT;
     }
-    let window = if input_window.is_null() { chain_window } else { input_window };
+    let window = if input_window.is_null() {
+        chain_window
+    } else {
+        input_window
+    };
     if config
         .callbacks
         .accept

@@ -1006,7 +1006,8 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
     }
 
     heading(ui, "Provider");
-    let pending = generation.requested_backend != 7 && generation.requested_backend != generation.backend;
+    let pending =
+        generation.requested_backend != 7 && generation.requested_backend != generation.backend;
     let items: Vec<Segment> = FG_PROVIDERS
         .iter()
         .filter(|(id, _)| *id != 7 || generation.backend_choices & (1 << id) != 0)

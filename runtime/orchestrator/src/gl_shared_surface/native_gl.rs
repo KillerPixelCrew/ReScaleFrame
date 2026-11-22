@@ -14,12 +14,10 @@ const FENCE_VALUE: u32 = 0x9595;
 const CLAMP_TO_EDGE: i32 = 0x812f;
 
 macro_rules! entry {
-    ($gl:expr, $index:literal, $signature:ty) => {
-        {
-            let table = &*$gl;
-            std::mem::transmute::<*const c_void, $signature>(table.0[$index])
-        }
-    };
+    ($gl:expr, $index:literal, $signature:ty) => {{
+        let table = &*$gl;
+        std::mem::transmute::<*const c_void, $signature>(table.0[$index])
+    }};
 }
 
 pub(super) extern "C" fn current() -> Handle {
@@ -50,7 +48,11 @@ pub(super) unsafe extern "C" fn luid(gl: *const GlProcs, luid: *mut u8) {
     unsafe { query(DEVICE_LUID, luid) };
 }
 
-pub(super) unsafe extern "C" fn semaphore_import(gl: *const GlProcs, handle: Handle, name: *mut u32) -> u32 {
+pub(super) unsafe extern "C" fn semaphore_import(
+    gl: *const GlProcs,
+    handle: Handle,
+    name: *mut u32,
+) -> u32 {
     unsafe {
         let generate = entry!(gl, 7, unsafe extern "system" fn(i32, *mut u32));
         let import = entry!(gl, 9, unsafe extern "system" fn(u32, u32, Handle));
@@ -64,7 +66,11 @@ pub(super) unsafe extern "C" fn semaphore_delete(gl: *const GlProcs, name: u32) 
     unsafe { entry!(gl, 8, unsafe extern "system" fn(i32, *const u32))(1, &name) };
 }
 
-pub(super) unsafe extern "C" fn memory_import(gl: *const GlProcs, handle: Handle, memory: *mut u32) -> u32 {
+pub(super) unsafe extern "C" fn memory_import(
+    gl: *const GlProcs,
+    handle: Handle,
+    memory: *mut u32,
+) -> u32 {
     unsafe {
         let create = entry!(gl, 2, unsafe extern "system" fn(i32, *mut u32));
         let parameter = entry!(gl, 4, unsafe extern "system" fn(u32, u32, *const i32));
@@ -81,14 +87,23 @@ pub(super) unsafe extern "C" fn memory_delete(gl: *const GlProcs, name: u32) {
 }
 
 pub(super) unsafe extern "C" fn texture_store(
-    gl: *const GlProcs, memory: u32, format: u32, width: u32, height: u32, texture: *mut u32,
+    gl: *const GlProcs,
+    memory: u32,
+    format: u32,
+    width: u32,
+    height: u32,
+    texture: *mut u32,
 ) -> u32 {
     let (Ok(width), Ok(height)) = (i32::try_from(width), i32::try_from(height)) else {
         return GL_INVALID_VALUE;
     };
     let mut previous = 0;
     unsafe {
-        let store = entry!(gl, 6, unsafe extern "system" fn(u32, i32, u32, i32, i32, u32, u64));
+        let store = entry!(
+            gl,
+            6,
+            unsafe extern "system" fn(u32, i32, u32, i32, i32, u32, u64)
+        );
         glGetIntegerv(GL_TEXTURE_BINDING_2D, &mut previous);
         glGenTextures(1, texture);
         glBindTexture(GL_TEXTURE_2D, *texture);
@@ -110,13 +125,22 @@ type Transfer = unsafe extern "system" fn(u32, u32, *const u32, u32, *const u32,
 
 unsafe fn set_fence(gl: *const GlProcs, semaphore: u32, value: u64) -> u32 {
     unsafe {
-        entry!(gl, 10, unsafe extern "system" fn(u32, u32, *const u64))(semaphore, FENCE_VALUE, &value);
+        entry!(gl, 10, unsafe extern "system" fn(u32, u32, *const u64))(
+            semaphore,
+            FENCE_VALUE,
+            &value,
+        );
         glGetError()
     }
 }
 
 pub(super) unsafe extern "C" fn release(
-    gl: *const GlProcs, semaphore: u32, value: u64, count: u32, textures: *const u32, layouts: *const u32,
+    gl: *const GlProcs,
+    semaphore: u32,
+    value: u64,
+    count: u32,
+    textures: *const u32,
+    layouts: *const u32,
 ) -> u32 {
     unsafe {
         let status = set_fence(gl, semaphore, value);
@@ -134,7 +158,12 @@ pub(super) unsafe extern "C" fn release(
 }
 
 pub(super) unsafe extern "C" fn acquire(
-    gl: *const GlProcs, semaphore: u32, value: u64, count: u32, textures: *const u32, layouts: *const u32,
+    gl: *const GlProcs,
+    semaphore: u32,
+    value: u64,
+    count: u32,
+    textures: *const u32,
+    layouts: *const u32,
 ) -> u32 {
     unsafe {
         let status = set_fence(gl, semaphore, value);

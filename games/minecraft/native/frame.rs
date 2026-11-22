@@ -3,8 +3,8 @@
 //! settings to Runtime options. No calls; the JNI bridge supplies the Runtime values.
 
 use crate::platform_abi::{
-    RSF_SHARPENING_ABI_VERSION, rsf_gl_pipeline_options,
-    rsf_gl_pipeline_surfaces, rsf_native_fg_options, rsf_sharpening_options,
+    RSF_SHARPENING_ABI_VERSION, rsf_gl_pipeline_options, rsf_gl_pipeline_surfaces,
+    rsf_native_fg_options, rsf_sharpening_options,
 };
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_RESET,
