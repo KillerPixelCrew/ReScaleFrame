@@ -2,11 +2,9 @@
 
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
-type wchar_t = u16;
 pub use rsf_game_sys::d3d11_host_abi::{
     rsf_d3d11_creation_scope, rsf_d3d11_host_setup, rsf_d3d11_native_chain,
 };
-use rsf_game_sys::rsf_game_host_services;
 pub use rsf_game_sys::sr_abi::rsf_motion_decode_params;
 
 pub const RSF_D3D11_HOST_ABI_VERSION: u32 = 8;
@@ -35,34 +33,6 @@ const _: () = {
     ["Offset of field: rsf_d3d11_presentation_binding::swapchain"]
         [::core::mem::offset_of!(rsf_d3d11_presentation_binding, swapchain) - 8usize];
 };
-pub type rsf_fallout4_host_create_fn = ::core::option::Option<
-    unsafe extern "C" fn(
-        arg1: *const rsf_d3d11_host_setup,
-        arg2: *mut rsf_game_host_services,
-    ) -> i32,
->;
-pub type rsf_fallout4_host_active_fn = ::core::option::Option<
-    unsafe extern "C" fn(services_user: *mut ::core::ffi::c_void, active: u32) -> i32,
->;
-pub type rsf_fallout4_creation_begin_fn = ::core::option::Option<
-    unsafe extern "C" fn(
-        services_user: *mut ::core::ffi::c_void,
-        arg1: *mut rsf_d3d11_creation_scope,
-    ) -> i32,
->;
-pub type rsf_fallout4_creation_end_fn = ::core::option::Option<
-    unsafe extern "C" fn(
-        services_user: *mut ::core::ffi::c_void,
-        arg1: *const rsf_d3d11_creation_scope,
-        arg2: *const rsf_d3d11_native_chain,
-    ) -> i32,
->;
-pub type rsf_fallout4_bind_presentation_fn = ::core::option::Option<
-    unsafe extern "C" fn(
-        services_user: *mut ::core::ffi::c_void,
-        arg1: *const rsf_d3d11_presentation_binding,
-    ) -> i32,
->;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_fallout4_create_call {

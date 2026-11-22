@@ -36,9 +36,7 @@ mod session;
 
 use platform_abi::{
     rsf_d3d11_creation_scope, rsf_d3d11_host_setup, rsf_d3d11_native_chain,
-    rsf_d3d11_presentation_binding, rsf_fallout4_bind_presentation_fn,
-    rsf_fallout4_creation_begin_fn, rsf_fallout4_creation_end_fn, rsf_fallout4_host_active_fn,
-    rsf_fallout4_host_create_fn,
+    rsf_d3d11_presentation_binding,
 };
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_detection, rsf_game_hooks_api, rsf_game_host_services, rsf_game_info,
@@ -99,32 +97,32 @@ unsafe extern "C" {
         message: *const ::core::ffi::c_char,
     ) -> bool;
     fn rsf_fallout4_native_host_create(
-        create: rsf_fallout4_host_create_fn,
+        create: session::Create,
         setup: *const rsf_d3d11_host_setup,
         services: *mut rsf_game_host_services,
         result: *mut i32,
     ) -> bool;
     fn rsf_fallout4_native_host_set_active(
-        activate: rsf_fallout4_host_active_fn,
+        activate: session::Activate,
         services_user: *mut ::core::ffi::c_void,
         active: u32,
         result: *mut i32,
     ) -> bool;
     fn rsf_fallout4_native_creation_begin(
-        begin: rsf_fallout4_creation_begin_fn,
+        begin: creation::Begin,
         services_user: *mut ::core::ffi::c_void,
         scope: *mut rsf_d3d11_creation_scope,
         result: *mut i32,
     ) -> bool;
     fn rsf_fallout4_native_creation_end(
-        end: rsf_fallout4_creation_end_fn,
+        end: creation::End,
         services_user: *mut ::core::ffi::c_void,
         scope: *const rsf_d3d11_creation_scope,
         outputs: *const rsf_d3d11_native_chain,
         result: *mut i32,
     ) -> bool;
     fn rsf_fallout4_native_bind_presentation(
-        bind: rsf_fallout4_bind_presentation_fn,
+        bind: creation::Bind,
         services_user: *mut ::core::ffi::c_void,
         binding: *const rsf_d3d11_presentation_binding,
         result: *mut i32,
@@ -179,7 +177,7 @@ impl Ops {
 
     pub(crate) fn host_create(
         &self,
-        create: rsf_fallout4_host_create_fn,
+        create: session::Create,
         setup: &rsf_d3d11_host_setup,
         services: &mut rsf_game_host_services,
     ) -> Result<rsf_result, Threw> {
@@ -192,7 +190,7 @@ impl Ops {
 
     pub(crate) fn host_set_active(
         &self,
-        activate: rsf_fallout4_host_active_fn,
+        activate: session::Activate,
         user: *mut c_void,
         active: u32,
     ) -> Result<rsf_result, Threw> {
@@ -210,9 +208,7 @@ impl Ops {
         scope: &mut rsf_d3d11_creation_scope,
     ) -> Result<rsf_result, Threw> {
         let mut result = RSF_ERROR_NOT_READY;
-        completed(unsafe {
-            rsf_fallout4_native_creation_begin(Some(begin), user, scope, &mut result)
-        })?;
+        completed(unsafe { rsf_fallout4_native_creation_begin(begin, user, scope, &mut result) })?;
         Ok(result)
     }
 
@@ -226,7 +222,7 @@ impl Ops {
         let outputs = outputs.map_or(std::ptr::null(), std::ptr::from_ref);
         let mut result = RSF_ERROR_NOT_READY;
         completed(unsafe {
-            rsf_fallout4_native_creation_end(Some(end), user, scope, outputs, &mut result)
+            rsf_fallout4_native_creation_end(end, user, scope, outputs, &mut result)
         })?;
         Ok(result)
     }
@@ -239,7 +235,7 @@ impl Ops {
     ) -> Result<rsf_result, Threw> {
         let mut result = RSF_ERROR_NOT_READY;
         completed(unsafe {
-            rsf_fallout4_native_bind_presentation(Some(bind), user, binding, &mut result)
+            rsf_fallout4_native_bind_presentation(bind, user, binding, &mut result)
         })?;
         Ok(result)
     }

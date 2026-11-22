@@ -20,25 +20,25 @@ extern "C" bool rsf_fallout4_native_log(rsf_game_log_fn log, void* user, const c
 
 extern "C" bool rsf_fallout4_native_host_create(rsf_fallout4_host_create_fn create, const rsf_d3d11_host_setup* setup, rsf_game_host_services* services,
         int32_t* result) noexcept {
-    return guarded([&] { *result = create ? create(setup, services) : RSF_ERROR_NOT_READY; });
+    return guarded([&] { *result = create(setup, services); });
 }
 
 extern "C" bool rsf_fallout4_native_host_set_active(rsf_fallout4_host_active_fn activate, void* user, uint32_t active, int32_t* result) noexcept {
-    return guarded([&] { *result = activate ? activate(user, active) : RSF_ERROR_NOT_READY; });
+    return guarded([&] { *result = activate(user, active); });
 }
 
 extern "C" bool rsf_fallout4_native_creation_begin(rsf_fallout4_creation_begin_fn begin, void* user, rsf_d3d11_creation_scope* scope, int32_t* result) noexcept {
-    return guarded([&] { *result = begin ? begin(user, scope) : RSF_ERROR_NOT_READY; });
+    return guarded([&] { *result = begin(user, scope); });
 }
 
 extern "C" bool rsf_fallout4_native_creation_end(rsf_fallout4_creation_end_fn end, void* user, const rsf_d3d11_creation_scope* scope,
         const rsf_d3d11_native_chain* outputs, int32_t* result) noexcept {
-    return guarded([&] { *result = end ? end(user, scope, outputs) : RSF_ERROR_NOT_READY; });
+    return guarded([&] { *result = end(user, scope, outputs); });
 }
 
 extern "C" bool rsf_fallout4_native_bind_presentation(rsf_fallout4_bind_presentation_fn bind, void* user, const rsf_d3d11_presentation_binding* binding,
         int32_t* result) noexcept {
-    return guarded([&] { *result = bind ? bind(user, binding) : RSF_ERROR_NOT_READY; });
+    return guarded([&] { *result = bind(user, binding); });
 }
 
 // Enforce the original native exception boundary before an exception can reach Rust.

@@ -39,6 +39,7 @@ typedef struct rsf_fallout4_create_call {
 } rsf_fallout4_create_call;
 
 // Linked native exception guards. False signals a native exception.
+// Runtime function arguments must be resolved before calling these guards. The log is optional.
 #ifdef __cplusplus
 bool rsf_fallout4_native_log(rsf_game_log_fn log, void* user, const char* message) noexcept;
 bool rsf_fallout4_native_host_create(rsf_fallout4_host_create_fn create, const rsf_d3d11_host_setup* setup,

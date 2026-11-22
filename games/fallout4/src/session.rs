@@ -8,8 +8,7 @@
 use crate::creation::{self, rsf_fallout4_accept_window};
 use crate::platform_abi::{
     RSF_D3D11_HOST_ABI_VERSION, RSF_D3D11_HOST_CAP_FG_INPUTS, RSF_D3D11_HOST_CAP_INPUT_TIMELINE,
-    rsf_d3d11_host_setup, rsf_fallout4_host_active_fn, rsf_fallout4_host_create_fn,
-    rsf_motion_decode_params,
+    rsf_d3d11_host_setup, rsf_motion_decode_params,
 };
 use crate::{
     EXECUTABLE_SHA256, Ops, PENDING, RSF_ERROR_BUSY, RSF_ERROR_INVALID_ARGUMENT,
@@ -43,17 +42,22 @@ const PRESENTATION_BRIDGE_SCOPED: u32 = 3;
 // Native colour, transport Off, unless a saved ColourTransport value exists.
 const COLOUR_TRANSPORT_NATIVE: u32 = 1;
 
-type Create =
+pub(crate) type Create =
     unsafe extern "C" fn(*const rsf_d3d11_host_setup, *mut rsf_game_host_services) -> rsf_result;
-type Activate = unsafe extern "C" fn(*mut c_void, u32) -> rsf_result;
+pub(crate) type Activate = unsafe extern "C" fn(*mut c_void, u32) -> rsf_result;
+
+#[derive(Clone, Copy)]
+struct BoundHost {
+    // The prepare host that created the process-lived Runtime host, and the services it returned.
+    upstream: rsf_game_host_services,
+    services: rsf_game_host_services,
+    activate: Activate,
+}
 
 struct Session {
     prepared: bool,
     active: bool,
-    // The prepare host that created the process-lived Runtime host, and the services it returned.
-    upstream: rsf_game_host_services,
-    services: rsf_game_host_services,
-    activate: Option<Activate>,
+    host: Option<BoundHost>,
     reason: &'static CStr,
 }
 // SAFETY: the services are process-lived Runtime and host state, used under the session lock.
@@ -62,10 +66,7 @@ unsafe impl Send for Session {}
 static SESSION: Mutex<Session> = Mutex::new(Session {
     prepared: false,
     active: false,
-    // SAFETY: the services table is plain data; all-zero is its empty state.
-    upstream: unsafe { std::mem::zeroed() },
-    services: unsafe { std::mem::zeroed() },
-    activate: None,
+    host: None,
     reason: PENDING,
 });
 
@@ -100,10 +101,10 @@ impl Session {
         creation::quiesce();
         render_hooks::quiesce();
         cpu_events::quiesce();
-        if let Some(activate) = self.activate
-            && !self.services.user.is_null()
+        if let Some(host) = self.host
+            && !host.services.user.is_null()
         {
-            ops.host_set_active(Some(activate), self.services.user, 0)?;
+            ops.host_set_active(host.activate, host.services.user, 0)?;
         }
         self.active = false;
         Ok(())
@@ -121,22 +122,22 @@ impl Session {
 
     // The Runtime's scoped D3D11 host for this process, with this adapter's facts.
     fn create_host(
-        &mut self,
         ops: &Ops,
         runtime: *mut c_void,
         create: Create,
+        activate: Activate,
         host: &rsf_game_host_services,
-    ) -> Result<rsf_result, Threw> {
+    ) -> Result<BoundHost, rsf_result> {
         let mut path = [0u16; 32768];
         let length = unsafe { GetModuleFileNameW(runtime, path.as_mut_ptr(), 32768) } as usize;
         if length == 0 || length >= path.len() {
-            return Ok(RSF_ERROR_NOT_READY);
+            return Err(RSF_ERROR_NOT_READY);
         }
         let Some(separator) = path[..length]
             .iter()
             .rposition(|&unit| unit == u16::from(b'\\'))
         else {
-            return Ok(RSF_ERROR_NOT_READY);
+            return Err(RSF_ERROR_NOT_READY);
         };
         let directory = wide(&path[..separator], "");
         let ini = wide(&path[..separator], "\\ReScaleFrame.ini");
@@ -169,14 +170,17 @@ impl Session {
         // Implemented producer declarations for cold admission tests, not acceptance.
         setup.capabilities = RSF_D3D11_HOST_CAP_FG_INPUTS | RSF_D3D11_HOST_CAP_INPUT_TIMELINE;
         let mut bound = *host;
-        let create: rsf_fallout4_host_create_fn = Some(create);
-        let result = ops.host_create(create, &setup, &mut bound)?;
+        let result = ops
+            .host_create(create, &setup, &mut bound)
+            .map_err(|_| RSF_ERROR_NOT_READY)?;
         if result != RSF_OK {
-            return Ok(result);
+            return Err(result);
         }
-        self.services = bound;
-        self.upstream = *host;
-        Ok(RSF_OK)
+        Ok(BoundHost {
+            upstream: *host,
+            services: bound,
+            activate,
+        })
     }
 
     fn prepare(&mut self, ops: &Ops, host: &rsf_game_host_services) -> Result<rsf_result, Threw> {
@@ -223,28 +227,32 @@ impl Session {
         let runtime = unsafe { GetModuleHandleW(w!("ReScaleFrame.Runtime.dll")) };
         // SAFETY: the process-lived Runtime exports these signatures in d3d11_host.h.
         let create = unsafe { typed_export::<Create>(runtime, c"rsf_d3d11_host_create") };
-        self.activate = unsafe { typed_export::<Activate>(runtime, c"rsf_d3d11_host_set_active") };
-        let (Some(create), Some(_)) = (create, self.activate) else {
+        let activate = unsafe { typed_export::<Activate>(runtime, c"rsf_d3d11_host_set_active") };
+        let (Some(create), Some(activate)) = (create, activate) else {
             return Ok(RSF_ERROR_NOT_READY);
         };
         if !pin(runtime.cast_const()) {
             return Ok(RSF_ERROR_NOT_READY);
         }
-        if !self.services.user.is_null() {
-            if !same_upstream_identity(&self.upstream, host) {
+        let bound = if let Some(bound) = self.host
+            && !bound.services.user.is_null()
+        {
+            if !same_upstream_identity(&bound.upstream, host) {
                 return self.refuse(
                     ops,
                     host,
                     c"Fallout4 process-lived creation host requires the original session.",
                 );
             }
+            bound
         } else {
-            let result = self.create_host(ops, runtime, create, host)?;
-            if result != RSF_OK {
-                return Ok(result);
+            match Self::create_host(ops, runtime, create, activate, host) {
+                Ok(bound) => bound,
+                Err(result) => return Ok(result),
             }
-        }
-        let services = self.services;
+        };
+        self.host = Some(bound);
+        let services = bound.services;
         if !creation::prepare(&services, &build) {
             return self.refuse(
                 ops,
@@ -278,6 +286,9 @@ impl Session {
         if self.active {
             return Ok(RSF_OK);
         }
+        let Some(host) = self.host else {
+            return Ok(RSF_ERROR_NOT_READY);
+        };
         let failed = if !cpu_events::start(ops) {
             Some(c"Fallout4 start refused: CPU source/input guards or hooks.")
         } else if !render_hooks::start(ops) {
@@ -291,10 +302,9 @@ impl Session {
             self.suspend(ops)?;
             let _ = self.release_hooks(ops);
             self.prepared = false;
-            return self.refuse(ops, failed);
+            return self.refuse(ops, &host.upstream, failed);
         }
-        let activate: rsf_fallout4_host_active_fn = self.activate;
-        let result = ops.host_set_active(activate, self.services.user, 1)?;
+        let result = ops.host_set_active(host.activate, host.services.user, 1)?;
         if result != RSF_OK {
             self.suspend(ops)?;
             let _ = self.release_hooks(ops);
