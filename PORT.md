@@ -440,23 +440,24 @@ Move the API census, static scan and diagnostic capture behind the loader's Rust
 - [ ] [loader/census/src/wrap_generic.h](loader/census/src/wrap_generic.h)
 - [ ] [loader/census/src/wrap_misc.cpp](loader/census/src/wrap_misc.cpp)
 - [ ] [loader/census/src/wrap_ngx.cpp](loader/census/src/wrap_ngx.cpp)
-- [ ] [loader/census/src/wrap_vk.cpp](loader/census/src/wrap_vk.cpp)
+- [x] [loader/census/src/wrap_vk.cpp](loader/census/src/wrap_vk.cpp)
 - [x] [loader/diagnostics/include/rescaleframe/frame_capture.h](loader/diagnostics/include/rescaleframe/frame_capture.h)
 - [ ] [loader/diagnostics/include/rescaleframe/module_dump.h](loader/diagnostics/include/rescaleframe/module_dump.h)
 - [ ] [loader/diagnostics/src/module_dump_internal.h](loader/diagnostics/src/module_dump_internal.h)
 
 - [ ] [loader/census/src/decode_d3d_platform.cpp](loader/census/src/decode_d3d_platform.cpp) (introduced D3D resource query leaf)
-- [ ] [tests/loader/vendor_census_ngx_platform.cpp](tests/loader/vendor_census_ngx_platform.cpp) (introduced SDK fixture leaf)
+- [x] [tests/loader/vendor_census_ngx_platform.cpp](tests/loader/vendor_census_ngx_platform.cpp) (introduced SDK fixture leaf)
 
-**Fixtures (7)**
+**Fixtures (8)**
 
-- [ ] [tests/census_present_coexistence.cpp](tests/census_present_coexistence.cpp)
-- [ ] [tests/module_dump_v2.cpp](tests/module_dump_v2.cpp)
+- [x] [tests/census_present_coexistence.cpp](tests/census_present_coexistence.cpp)
+- [ ] [tests/loader/module_dump_rtti_fixture.cpp](tests/loader/module_dump_rtti_fixture.cpp) (native RTTI specimen)
+- [x] [tests/module_dump_v2.cpp](tests/module_dump_v2.cpp)
 - [ ] [tests/vendor_census.cpp](tests/vendor_census.cpp)
 - [x] [tests/vendor_census_asi.cpp](tests/vendor_census_asi.cpp)
 - [x] [tests/vendor_census_fixture.cpp](tests/vendor_census_fixture.cpp)
 - [ ] [tests/vendor_census_layouts.cpp](tests/vendor_census_layouts.cpp)
-- [ ] [tests/vendor_census_ngx_params.h](tests/vendor_census_ngx_params.h)
+- [x] [tests/vendor_census_ngx_params.h](tests/vendor_census_ngx_params.h)
 
 <a id="o01"></a>
 
