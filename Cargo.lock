@@ -755,6 +755,8 @@ dependencies = [
  "rsf-shader-compiler",
  "rsf-streamline-vk",
  "rsf-vk-xess-fg",
+ "serde",
+ "serde_json",
  "windows",
  "windows-sys",
 ]

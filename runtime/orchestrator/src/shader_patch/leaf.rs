@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Internal compiler, reflection and device dispatch shared with owner fixtures.
 
-use crate::sys::{rsf_patch_bytes, rsf_patch_define, rsf_patch_json_visit};
+use crate::sys::{rsf_patch_bytes, rsf_patch_define};
 use std::ffi::{c_char, c_void};
 
 pub(super) type Sink = Option<unsafe fn(*mut c_void, *const c_void, usize)>;
@@ -62,11 +62,7 @@ pub(super) struct ReflectionSink {
 }
 
 pub(super) struct Platform {
-    pub parse_json: unsafe extern "C" fn(
-        text: rsf_patch_bytes,
-        user: *mut c_void,
-        visit: rsf_patch_json_visit,
-    ) -> i32,
+
     pub compile: unsafe fn(call: *const CompileCall) -> i32,
     pub reflect: unsafe fn(code: rsf_patch_bytes, sink: *const ReflectionSink) -> i32,
     pub disassemble: unsafe fn(code: rsf_patch_bytes, user: *mut c_void, text: Sink) -> i32,

@@ -53,7 +53,7 @@ fn source_operations() -> Test<()> {
             r#"{{"schema":1,"sources":{{"fixture.h":"{}"}},"files":{{"fixture.h":{rule}}}}}"#,
             sha256(source.as_bytes())?
         );
-        let parsed = Pack::load(platform(), &pack(&rules))?;
+        let parsed = Pack::load(&pack(&rules))?;
         let inputs = Files::from([(b"fixture.h".to_vec(), source.as_bytes().to_vec())]);
         let mut first = parsed.transform(&inputs)?;
         check(
@@ -359,7 +359,7 @@ struct O{float4 p:SV_Position;float v:TEXCOORD12;};O main(uint id:SV_VertexID){O
         wrap(&suffix.replace("o.v=1", "o.v=2")),
     );
     let blob = pack(&rules);
-    let parsed = Pack::load(platform(), &blob).map_err(describe)?;
+    let parsed = Pack::load(&blob).map_err(describe)?;
     let patched = parsed.transform(&originals).map_err(describe)?;
     expect(
         pack::find(&patched[b"fixture.vs".as_slice()], b"stock_main", 0).is_some(),
@@ -419,7 +419,7 @@ struct O{float4 p:SV_Position;float v:TEXCOORD12;};O main(uint id:SV_VertexID){O
 
     for size in 0..blob.len() {
         expect(
-            Pack::load(platform(), &blob[..size])
+            Pack::load(&blob[..size])
                 .err()
                 .is_some_and(|error| error.code == FORMAT),
             "truncated pack must refuse",

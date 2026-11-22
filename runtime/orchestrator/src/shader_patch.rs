@@ -311,12 +311,11 @@ fn compiler_identity(compiler: *mut c_void) -> Outcome<String> {
 }
 
 fn open_session(
-    platform: &Platform,
     blob: rsf_patch_bytes,
     cache: *const u16,
     compiler: *mut c_void,
 ) -> Outcome<Session> {
-    let pack = Pack::load(platform, bytes(blob)?)?;
+    let pack = Pack::load(bytes(blob)?)?;
     let cache = if cache.is_null() {
         PathBuf::new()
     } else {
@@ -357,7 +356,7 @@ unsafe extern "C" fn open(
         if out.is_null() || compiler.is_null() {
             return ARGUMENT;
         }
-        let session = match open_session(platform(), blob, cache, compiler) {
+        let session = match open_session(blob, cache, compiler) {
             Ok(session) => session,
             Err(refusal) => return refusal.code,
         };

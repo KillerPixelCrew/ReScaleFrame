@@ -3,8 +3,8 @@
 The generic C API is `include/rescaleframe/shader_patch.h`. The Runtime exports
 `rsf_get_shader_patch_api`. Its owner is Rust, in
 `runtime/orchestrator/src/shader_patch.rs`. The compiler, D3D11 and MinHook
-calls are in Rust. The pinned yyjson parser uses a small C visitor shared by the
-Runtime and the Rust fixtures. See [the port notes](../../docs/research/rust-shader-patch.md).
+calls are in Rust, and pack JSON is read with serde_json. See
+[the port notes](../../docs/research/rust-shader-patch.md).
 Callers borrow returned metadata/bytes until the stated
 session lifetime and release returned D3D11 COM objects themselves. Devices,
 contexts and compiler entry points are borrowed. Calls use the graphics owner

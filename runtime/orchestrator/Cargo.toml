@@ -18,6 +18,9 @@ rsf-streamline-vk = { path = "../vulkan/streamline/lifecycle" }
 rsf-graphics = { path = "../graphics/rust" }
 rsf-minhook-sys = { path = "../../third_party/minhook" }
 rsf-runtime-submission = { path = "../graphics/submission" }
+serde = "1"
+# Shader-pack metadata and rules. The reader bounds nesting itself (shader_patch/pack.rs).
+serde_json = { version = "=1.0.154", features = ["unbounded_depth"] }
 
 [features]
 # Fixture exports called only by the ctest executables; the shipping archive is built without them.

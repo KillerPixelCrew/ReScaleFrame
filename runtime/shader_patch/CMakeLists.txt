@@ -1,5 +1,3 @@
-set(RSF_PATCH_YYJSON "${PROJECT_SOURCE_DIR}/vendor/shader-patch/yyjson")
-include("${CMAKE_CURRENT_SOURCE_DIR}/yyjson.cmake")
 add_library(rsf_shader_patch INTERFACE)
 target_include_directories(rsf_shader_patch INTERFACE include)
 target_link_libraries(rsf_shader_patch INTERFACE rsf_orchestrator_rust)

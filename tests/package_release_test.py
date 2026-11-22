@@ -71,11 +71,7 @@ class ReleasePackageTest(unittest.TestCase):
         stamp = int(self.git("show", "-s", "--format=%ct", "HEAD")) + 5
         for path in package.required_outputs("9.8.7"):
             os.utime(path, (stamp, stamp))
-        self.addition = self.write("vendor/shader-patch/yyjson/src/yyjson.c", "pinned fixture")
-        self.loader = mock.patch.object(package, "load_packager", return_value=mock.Mock(
-            source_additions=lambda: {"vendor/shader-patch/yyjson/src/yyjson.c": self.addition}))
-        self.loader.start()
-        self.addCleanup(self.loader.stop)
+
         self.packagers = mock.patch.object(package, "run_packager", side_effect=self.stub_packager)
         self.runner = self.packagers.start()
         self.addCleanup(self.packagers.stop)
@@ -116,7 +112,6 @@ class ReleasePackageTest(unittest.TestCase):
             self.assertEqual(asset["size"], path.stat().st_size)
         with zipfile.ZipFile(self.args.output / expected[-1]) as bundle:
             self.assertEqual(bundle.read("ReScaleFrame-2.3.4/VERSION"), b"2.3.4\n")
-            self.assertEqual(bundle.read("ReScaleFrame-2.3.4/vendor/shader-patch/yyjson/src/yyjson.c"), b"pinned fixture")
             self.assertFalse(any(".git/" in name for name in bundle.namelist()))
         notes = (self.args.output / "release-notes.md").read_text(encoding="utf-8")
         self.assertEqual(notes.count("**Played on this build: not yet played.**"), 5)
@@ -272,11 +267,6 @@ class ExistingPackagerCompatibilityTest(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, "commit changed"):
                         module.main(["--streamline-root", "unused"], release_revision="old", game_only=True)
 
-    def test_pinned_source_additions_refuse_mutation(self):
-        module = package.load_packager("Anomaly")
-        with mock.patch.object(module, "digest", return_value="0" * 64):
-            with self.assertRaisesRegex(RuntimeError, "differs from its pin"):
-                module.source_additions()
 
 
 if __name__ == "__main__":

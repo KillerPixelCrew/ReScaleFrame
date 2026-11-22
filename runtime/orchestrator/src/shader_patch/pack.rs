@@ -1,23 +1,21 @@
 // SPDX-License-Identifier: MIT
 //! `.rsfpatch` v1 admission and the JSON source rules it carries.
 
-use super::leaf::Platform;
 use super::{ANCHOR, FORMAT, Files, HASH, Outcome, SOURCE, check, refuse, sha256};
-use crate::sys::{
-    RSF_PATCH_JSON_ARRAY, RSF_PATCH_JSON_OBJECT, RSF_PATCH_JSON_OTHER, RSF_PATCH_JSON_SINT,
-    RSF_PATCH_JSON_STRING, RSF_PATCH_JSON_UINT, rsf_patch_bytes,
-};
+use crate::sys::rsf_patch_bytes;
+use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::{c_char, c_void};
+use std::fmt;
 
 // Values nested this deep are refused, so the root and 127 levels below it are accepted.
 const JSON_DEPTH: usize = 128;
 const BOM: &[u8] = b"\xef\xbb\xbf";
 
-/// A parsed JSON value. Strings and keys are raw UTF-8 bytes as yyjson accepted them.
+/// A parsed JSON value. Strings and keys are UTF-8 bytes.
 pub(crate) enum Json {
     Other,
-    // yyjson keeps signed and unsigned integers apart but reads both as a 64-bit pattern.
+    // Signed and unsigned integers both read as their 64-bit pattern.
     Int(u64),
     Str(Vec<u8>),
     Arr(Vec<Json>),
@@ -61,144 +59,122 @@ pub(crate) fn text<'a>(value: Option<&'a Json>, key: &[u8]) -> Outcome<&'a [u8]>
     string(value.and_then(|v| v.get(key)))
 }
 
-enum Frame {
-    Arr(Vec<Json>, usize),
-    Obj(
-        Vec<(Vec<u8>, Json)>,
-        usize,
-        Option<Vec<u8>>,
-        BTreeSet<Vec<u8>>,
-    ),
+/// One JSON value at `depth` containers below the root. Keys and nesting are checked as the text
+/// is read; `failed` names the rule that refused it.
+struct Node<'a> {
+    depth: usize,
+    failed: &'a Cell<Option<&'static str>>,
 }
 
-#[derive(Default)]
-struct Builder {
-    stack: Vec<Frame>,
-    root: Option<Json>,
-    failed: Option<&'static str>,
-}
-
-impl Builder {
-    fn node(&mut self, kind: u32, number: u64, bytes: &[u8], size: usize) {
-        if self.failed.is_some() {
-            return;
-        }
-        if let Some(Frame::Obj(_, _, key @ None, keys)) = self.stack.last_mut() {
-            if kind != RSF_PATCH_JSON_STRING as u32 || bytes.contains(&0) {
-                self.failed = Some("embedded NUL");
-            } else if !keys.insert(bytes.to_vec()) {
-                self.failed = Some("duplicate JSON key");
-            } else {
-                *key = Some(bytes.to_vec());
-            }
-            return;
-        }
-        if self.stack.len() >= JSON_DEPTH {
-            self.failed = Some("JSON nesting");
-            return;
-        }
-        let value = match kind {
-            k if k == RSF_PATCH_JSON_UINT as u32 || k == RSF_PATCH_JSON_SINT as u32 => {
-                Json::Int(number)
-            }
-            k if k == RSF_PATCH_JSON_STRING as u32 => Json::Str(bytes.to_vec()),
-            k if k == RSF_PATCH_JSON_ARRAY as u32 && size > 0 => {
-                self.stack.push(Frame::Arr(Vec::new(), size));
-                return;
-            }
-            k if k == RSF_PATCH_JSON_OBJECT as u32 && size > 0 => {
-                let keys = BTreeSet::new();
-                self.stack.push(Frame::Obj(Vec::new(), size, None, keys));
-                return;
-            }
-            k if k == RSF_PATCH_JSON_ARRAY as u32 => Json::Arr(Vec::new()),
-            k if k == RSF_PATCH_JSON_OBJECT as u32 => Json::Obj(Vec::new()),
-            k if k == RSF_PATCH_JSON_OTHER as u32 => Json::Other,
-            _ => {
-                self.failed = Some("unknown JSON event");
-                return;
-            }
-        };
-        self.complete(value);
+impl Node<'_> {
+    fn refuse<E: de::Error>(&self, reason: &'static str) -> E {
+        self.failed.set(Some(reason));
+        E::custom(reason)
     }
 
-    fn complete(&mut self, mut value: Json) {
-        loop {
-            let done = match self.stack.last_mut() {
-                None => {
-                    self.root = Some(value);
-                    return;
-                }
-                Some(Frame::Arr(items, left)) => {
-                    items.push(value);
-                    *left -= 1;
-                    *left == 0
-                }
-                Some(Frame::Obj(members, left, key, _)) => {
-                    members.push((key.take().unwrap_or_default(), value));
-                    *left -= 1;
-                    *left == 0
-                }
-            };
-            if !done {
-                return;
-            }
-            value = match self.stack.pop() {
-                Some(Frame::Arr(items, _)) => Json::Arr(items),
-                Some(Frame::Obj(members, ..)) => Json::Obj(members),
-                None => return,
-            };
+    fn child(&self) -> Self {
+        Node {
+            depth: self.depth + 1,
+            failed: self.failed,
         }
+    }
+}
+
+impl<'de> DeserializeSeed<'de> for Node<'_> {
+    type Value = Json;
+
+    fn deserialize<D: Deserializer<'de>>(self, reader: D) -> Result<Json, D::Error> {
+        if self.depth >= JSON_DEPTH {
+            return Err(self.refuse("JSON nesting"));
+        }
+        reader.deserialize_any(self)
+    }
+}
+
+impl<'de> Visitor<'de> for Node<'_> {
+    type Value = Json;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("a JSON value")
+    }
+
+    fn visit_bool<E>(self, _: bool) -> Result<Json, E> {
+        Ok(Json::Other)
+    }
+
+    fn visit_unit<E>(self) -> Result<Json, E> {
+        Ok(Json::Other)
+    }
+
+    fn visit_f64<E>(self, _: f64) -> Result<Json, E> {
+        Ok(Json::Other)
+    }
+
+    fn visit_u64<E>(self, number: u64) -> Result<Json, E> {
+        Ok(Json::Int(number))
+    }
+
+    fn visit_i64<E>(self, number: i64) -> Result<Json, E> {
+        Ok(Json::Int(number as u64))
+    }
+
+    fn visit_str<E>(self, text: &str) -> Result<Json, E> {
+        Ok(Json::Str(text.as_bytes().to_vec()))
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut items: A) -> Result<Json, A::Error> {
+        let mut values = Vec::new();
+        while let Some(value) = items.next_element_seed(self.child())? {
+            values.push(value);
+        }
+        Ok(Json::Arr(values))
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut entries: A) -> Result<Json, A::Error> {
+        let mut members = Vec::new();
+        let mut keys = BTreeSet::new();
+        while let Some(key) = entries.next_key::<String>()? {
+            if key.contains('\0') {
+                return Err(self.refuse("embedded NUL"));
+            }
+            if !keys.insert(key.clone()) {
+                return Err(self.refuse("duplicate JSON key"));
+            }
+            members.push((key.into_bytes(), entries.next_value_seed(self.child())?));
+        }
+        Ok(Json::Obj(members))
     }
 }
 
 #[cfg(test)]
 #[test]
-fn builder_rejects_duplicate_keys_and_embedded_nuls() {
-    let object = RSF_PATCH_JSON_OBJECT as u32;
-    let string = RSF_PATCH_JSON_STRING as u32;
-    let uint = RSF_PATCH_JSON_UINT as u32;
-    let mut builder = Builder::default();
-    builder.node(object, 0, b"", 2);
-    builder.node(string, 0, b"key", 3);
-    builder.node(uint, 1, b"", 0);
-    builder.node(string, 0, b"key", 3);
-    assert_eq!(builder.failed, Some("duplicate JSON key"));
-
-    let mut builder = Builder::default();
-    builder.node(object, 0, b"", 1);
-    builder.node(string, 0, b"\0", 1);
-    assert_eq!(builder.failed, Some("embedded NUL"));
+fn reader_rejects_duplicate_keys_nuls_and_deep_nesting() {
+    let reason = |text: &str| json(text.as_bytes()).err().map(|refusal| refusal.reason.into_owned());
+    assert_eq!(reason(r#"{"key":1,"key":2}"#), Some(b"duplicate JSON key".to_vec()));
+    assert_eq!(reason(r#"{"\u0000":1}"#), Some(b"embedded NUL".to_vec()));
+    assert_eq!(reason(&"[".repeat(JSON_DEPTH + 1)), Some(b"JSON nesting".to_vec()));
+    let deepest = "[".repeat(JSON_DEPTH) + &"]".repeat(JSON_DEPTH);
+    assert!(json(deepest.as_bytes()).is_ok());
+    assert_eq!(reason("{} x"), Some(b"invalid JSON".to_vec()));
 }
 
-unsafe extern "C" fn visit(
-    user: *mut c_void,
-    kind: u32,
-    number: u64,
-    text: *const c_char,
-    size: usize,
-) {
-    let builder = unsafe { &mut *user.cast::<Builder>() };
-    let bytes = if kind == RSF_PATCH_JSON_STRING as u32 && size > 0 {
-        unsafe { std::slice::from_raw_parts(text.cast::<u8>(), size) }
-    } else {
-        &[]
-    };
-    builder.node(kind, number, bytes, size);
-}
-
-pub(crate) fn json(platform: &Platform, data: &[u8]) -> Outcome<Json> {
-    let mut builder = Builder::default();
-    let text = super::raw(data);
-    let parse = platform.parse_json;
-    let parsed = unsafe { parse(text, (&raw mut builder).cast(), Some(visit)) } == 0;
-    check(parsed, FORMAT, "invalid JSON")?;
-    if let Some(reason) = builder.failed {
-        return Err(refuse(FORMAT, reason));
+pub(crate) fn json(data: &[u8]) -> Outcome<Json> {
+    let failed = Cell::new(None);
+    let mut reader = serde_json::Deserializer::from_slice(data);
+    // Node bounds the depth itself: the root and 127 levels below it.
+    reader.disable_recursion_limit();
+    let parsed = Node {
+        depth: 0,
+        failed: &failed,
     }
-    builder.root.ok_or_else(|| refuse(FORMAT, "invalid JSON"))
+    .deserialize(&mut reader)
+    .and_then(|root| reader.end().map(|()| root));
+    match (parsed, failed.get()) {
+        (_, Some(reason)) => Err(refuse(FORMAT, reason)),
+        (Ok(root), None) => Ok(root),
+        (Err(_), None) => Err(refuse(FORMAT, "invalid JSON")),
+    }
 }
-
 fn integer(data: &[u8], at: u64, n: u64) -> Outcome<u64> {
     let len = data.len() as u64;
     check(at <= len && n <= len - at, FORMAT, "truncated integer")?;
@@ -220,7 +196,7 @@ pub(crate) struct Pack {
 }
 
 impl Pack {
-    pub(crate) fn load(platform: &Platform, data: &[u8]) -> Outcome<Pack> {
+    pub(crate) fn load(data: &[u8]) -> Outcome<Pack> {
         check(
             slice(data, 0, 8)? == b"RSFPATCH" && integer(data, 8, 4)? == 1,
             FORMAT,
@@ -262,9 +238,9 @@ impl Pack {
         else {
             return Err(refuse(FORMAT, "missing section"));
         };
-        let id = text(Some(&json(platform, meta)?), b"id")?.to_vec();
+        let id = text(Some(&json(meta)?), b"id")?.to_vec();
         check(!id.is_empty(), FORMAT, "empty pack id")?;
-        let rules = json(platform, rules)?;
+        let rules = json(rules)?;
         check(uint(rules.get(b"schema")) == 1, FORMAT, "rule schema")?;
         let payload = payload(files)?;
         Ok(Pack {

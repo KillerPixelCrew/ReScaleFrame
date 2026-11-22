@@ -209,21 +209,8 @@ def verify_minecraft(path, args, mod_version):
                     raise RuntimeError("Minecraft embeds stale/different release input: " + name)
 
 
-def source_archive(output, revision, version, commit_time):
+def source_archive(output, revision, version):
     command(["git", "archive", "--format=zip", f"--prefix=ReScaleFrame-{version}/", "-o", output, revision])
-    stamp = time.gmtime(commit_time)[:6]
-    additions = load_packager("Anomaly").source_additions()
-    with zipfile.ZipFile(output, "a") as bundle:
-        existing = set(bundle.namelist())
-        for name, path in sorted(additions.items()):
-            safe_name(name)
-            name = f"ReScaleFrame-{version}/" + name
-            if name in existing:
-                raise RuntimeError("Source addition duplicates committed source: " + name)
-            entry = zipfile.ZipInfo(name, stamp)
-            entry.compress_type = zipfile.ZIP_DEFLATED
-            entry.external_attr = 0o100644 << 16
-            bundle.writestr(entry, path.read_bytes(), compresslevel=9)
     verify_zip(output)
 
 
@@ -257,8 +244,7 @@ def assemble(args):
     inputs = {path: digest(path) for path in set(required_outputs(mod_version)) | set(minecraft_inputs(args).values())}
     jar = ROOT / f"games/minecraft/build/libs/rescaleframecraft-{mod_version}.jar"
     verify_minecraft(jar, args, mod_version)
-    # Check source additions even in a dry run, without emitting an archive.
-    load_packager("Anomaly").source_additions()
+
     names = asset_names(version, mod_version)
     summary = {"version": version, "commit": revision, "tag": "v" + version,
                "minecraft_version": mod_version, "output": str(output), "dry_run": args.dry_run,
@@ -281,7 +267,7 @@ def assemble(args):
             verify_game(archive, revision, version, game)
             shutil.copyfile(archive, final / archive.name)
         shutil.copyfile(jar, final / jar.name)
-        source_archive(final / names[-1], revision, version, commit_time)
+        source_archive(final / names[-1], revision, version)
         (final / "release-notes.md").write_text(release_notes(version, revision, mod_version), encoding="utf-8", newline="\n")
         assets = [record(final / name) for name in names]
         sums = final / "SHA256SUMS.txt"

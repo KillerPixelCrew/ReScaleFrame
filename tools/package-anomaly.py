@@ -82,7 +82,7 @@ MOTION_NOTICE = """# Anomaly runtime shader patch rules
 
 The package contains only RSF-authored rules and additions. Original shader source
 and includes come from the installed game's own filesystem. Generated variants
-and cloned source remain local and are not distributed. yyjson is MIT licensed.
+and cloned source remain local and are not distributed.
 """
 
 
@@ -147,7 +147,6 @@ def input_plan(args):
         'ReScaleFrame/licenses/GameSDK-MIT.txt': ROOT / 'sdk/game/LICENSE',
         'ReScaleFrame/licenses/AMD-Anti-Lag-2-MIT.txt': ROOT / 'runtime/orchestrator/ANTILAG2-LICENSE.txt',
         'ReScaleFrame/licenses/MFG-Unlocker-MIT.txt': ROOT / 'runtime/backends/dlss/third_party/mfg_unlocker/LICENSE',
-        'ReScaleFrame/licenses/yyjson-MIT.txt': ROOT / 'vendor/shader-patch/yyjson/LICENSE',
         'ReScaleFrame/licenses/ShaderPatch-THIRD_PARTY.md': ROOT / 'runtime/shader_patch/THIRD_PARTY.md',
         'ReScaleFrame/licenses/MinHook.txt': ROOT / 'build/windows-x64/_deps/minhook-src/LICENSE.txt',
         'ReScaleFrame/licenses/Sharpening-THIRD_PARTY.md': ROOT / 'runtime/graphics/src/sharpening/THIRD_PARTY.md',
@@ -198,19 +197,6 @@ def archive_stage(stage, archive, stamp):
                 entry.compress_type = zipfile.ZIP_DEFLATED
                 entry.external_attr = 0o100644 << 16
                 bundle.writestr(entry, path.read_bytes(), compresslevel=9)
-
-
-def source_additions():
-    """Only the reviewed, hash-pinned incorporated MIT source, never a game shader corpus."""
-    lock = json.loads((ROOT / 'runtime/shader_patch/yyjson.lock.json').read_text(encoding='utf-8'))
-    additions = {}
-    for name, expected in lock['files'].items():
-        relative = safe_relative('vendor/shader-patch/yyjson/' + name)
-        path = ROOT / relative
-        if path.is_symlink() or digest(path) != expected:
-            raise RuntimeError('Incorporated yyjson source differs from its pin: ' + name)
-        additions[str(relative)] = path
-    return additions
 
 
 def main(argv=None, *, release_revision=None, game_only=False):
@@ -274,13 +260,6 @@ def main(argv=None, *, release_revision=None, game_only=False):
                    cwd=ROOT, check=True)
     # Corresponding source is the committed authored rules and additions in git archive.
     # Never append generated game-source trees or a local compiled cache.
-    # Include the incorporated MIT dependency at the location CMake expects.
-    with zipfile.ZipFile(source, 'a') as bundle:
-        for name, path in source_additions().items():
-            entry = zipfile.ZipInfo(f'ReScaleFrame-{version}/' + name, stamp)
-            entry.compress_type = zipfile.ZIP_DEFLATED
-            entry.external_attr = 0o100644 << 16
-            bundle.writestr(entry, path.read_bytes(), compresslevel=9)
     with zipfile.ZipFile(source) as bundle:
         if len(bundle.namelist()) != len(set(bundle.namelist())) or bundle.testzip() is not None:
             raise RuntimeError('Corresponding-source archive duplicate entry or CRC failure.')

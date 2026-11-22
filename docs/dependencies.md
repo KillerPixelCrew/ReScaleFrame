@@ -192,11 +192,8 @@ and [current status](current-status.md).
 
 ## Runtime shader patching
 
-yyjson is MIT licensed at ebb8d7e5aaa51bea4edefb39ee73a235066b0023. The source,
-header and licence are pinned by runtime/shader_patch/yyjson.lock.json and staged
-under ignored vendor/shader-patch/yyjson. CMake downloads only missing pinned files
-and refuses changed bytes. The Anomaly packager includes its original MIT licence
-and runtime/shader_patch/THIRD_PARTY.md. No game shader bodies are included.
+Shader-pack JSON is read with serde_json (MIT or Apache-2.0), pinned in Cargo.lock. The Anomaly
+packager includes runtime/shader_patch/THIRD_PARTY.md. No game shader bodies are included.
 
 3Dmigoto 8f329bd94fecc9bbcb9211ffd42a95dd7fe6b43e (GPLv3) and Zstandard
 f8745da6ff1ad1e7bab384bd1f9d742439278e99 (BSD option) were downloaded for evaluation

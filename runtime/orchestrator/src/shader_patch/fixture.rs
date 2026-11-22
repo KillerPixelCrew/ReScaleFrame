@@ -212,7 +212,7 @@ fn corpus(args: &[OsString]) -> Test<()> {
     let oracle = Path::new(&args[2]).join("motion").join("r3");
     let mut inputs = Files::new();
     collect_files(corpus, corpus, &mut inputs)?;
-    let pack = Pack::load(platform(), &pack_data).map_err(describe)?;
+    let pack = Pack::load(&pack_data).map_err(describe)?;
     let output = pack.transform(&inputs).map_err(describe)?;
     let mut count = 0;
     for (name, data) in output {
@@ -243,7 +243,7 @@ fn corpus(args: &[OsString]) -> Test<()> {
     )?;
     for size in 0..24 {
         expect(
-            Pack::load(platform(), &[b'x'; 24][..size]).is_err(),
+            Pack::load(&[b'x'; 24][..size]).is_err(),
             "truncated pack must refuse",
         )?;
     }

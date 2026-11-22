@@ -47,8 +47,7 @@ must match the Streamline payload passed to the release builder. No game install
 Successful incremental builds may reuse older unchanged binaries; the JSON summary lists them. `--dry-run` and
 `--build` cannot be combined. Never run this build option in a directory another worker has reserved.
 
-The tool writes one `ReScaleFrame-<version>-source.zip` using `git archive` of the recorded commit and adds the
-incorporated yyjson source/header/license after checking their pinned hashes. It never adds local game shader trees,
+The tool writes one `ReScaleFrame-<version>-source.zip` using `git archive` of the recorded commit. It never adds local game shader trees,
 licensed engine source or compiled caches. Archives receive CRC/path/duplicate checks and asset hashes are streamed.
 The JSON summary reports version, commit, tag, names, sizes and SHA-256 values. A dry run reports planned names with
 null sizes/hashes and creates no release files.

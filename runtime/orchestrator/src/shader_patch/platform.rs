@@ -2,7 +2,7 @@
 //! Windows implementations of the shader patch service's injectable leaves.
 
 use super::leaf::*;
-use crate::sys::{rsf_patch_bytes, rsf_patch_json_visit};
+use crate::sys::rsf_patch_bytes;
 use rsf_shader_compiler::{Request, blob_bytes, compile as compile_shader};
 use std::ffi::{CStr, c_void};
 use std::ptr;
@@ -16,13 +16,6 @@ use windows::core::{HRESULT, Interface, PCSTR};
 const E_FAIL: HRESULT = HRESULT(0x8000_4005_u32 as i32);
 const E_INVALIDARG: HRESULT = HRESULT(0x8007_0057_u32 as i32);
 
-unsafe extern "C" {
-    pub(super) fn rsf_patch_parse_json(
-        text: rsf_patch_bytes,
-        user: *mut c_void,
-        visit: rsf_patch_json_visit,
-    ) -> i32;
-}
 
 use rsf_minhook_sys::{
     MH_CreateHook, MH_DisableHook, MH_ERROR_ALREADY_INITIALIZED, MH_ERROR_ENABLED, MH_EnableHook,
@@ -325,7 +318,6 @@ pub(super) const CPU_WRITE: u32 = D3D11_CPU_ACCESS_WRITE.0 as u32;
 pub(super) const CONSTANT_SLOTS: u32 = D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT;
 
 pub(super) static PLATFORM: Platform = Platform {
-    parse_json: rsf_patch_parse_json,
     compile,
     reflect,
     disassemble,

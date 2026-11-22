@@ -1,21 +1,14 @@
 // SPDX-License-Identifier: MIT
-//! Owner tests with production JSON parsing and fake compiler and device leaves.
+//! Owner tests with fake compiler and device leaves.
 
 use super::leaf::*;
 use super::reflection::{Binding, Buffer, Parameter, Shader, compare};
 use super::*;
-use crate::sys::{rsf_patch_define, rsf_patch_json_visit};
+use crate::sys::rsf_patch_define;
 use std::ffi::CStr;
 use std::os::windows::ffi::OsStrExt;
 use std::sync::atomic::AtomicUsize;
 
-unsafe extern "C" {
-    fn rsf_patch_parse_json(
-        text: rsf_patch_bytes,
-        user: *mut c_void,
-        visit: rsf_patch_json_visit,
-    ) -> i32;
-}
 
 pub(super) const DYNAMIC_USAGE: u32 = 2;
 pub(super) const CPU_WRITE: u32 = 0x10000;
@@ -180,7 +173,6 @@ unsafe fn fake_remove(_: *mut c_void) {
 }
 
 pub(super) static FAKE: Platform = Platform {
-    parse_json: rsf_patch_parse_json,
     compile: fake_compile,
     reflect: fake_reflect,
     disassemble: fake_disassemble,
@@ -257,7 +249,7 @@ fn hash(s: &[u8]) -> String {
 }
 
 fn load(rules: &str) -> Outcome<Pack> {
-    Pack::load(&FAKE, &container("fixture", rules))
+    Pack::load(&container("fixture", rules))
 }
 
 fn transform_one(source: &[u8], rule: &str) -> Outcome<Vec<u8>> {
@@ -284,26 +276,26 @@ fn code(result: Outcome<impl Sized>) -> i32 {
 #[test]
 fn pack_container_refuses_every_truncation_and_malformed_table() {
     let valid = container("fixture", r#"{"schema":1}"#);
-    assert!(Pack::load(&FAKE, &valid).is_ok());
+    assert!(Pack::load(&valid).is_ok());
     for size in 0..valid.len() {
         assert_eq!(
-            code(Pack::load(&FAKE, &valid[..size])),
+            code(Pack::load(&valid[..size])),
             FORMAT,
             "truncated to {size}"
         );
     }
     let mut overlapping = valid.clone();
     overlapping[24 + 8] = 90; // metadata begins inside the section table
-    assert_eq!(code(Pack::load(&FAKE, &overlapping)), FORMAT);
+    assert_eq!(code(Pack::load(&overlapping)), FORMAT);
     let mut reserved = valid.clone();
     reserved[24 + 4] = 1;
-    assert_eq!(code(Pack::load(&FAKE, &reserved)), FORMAT);
+    assert_eq!(code(Pack::load(&reserved)), FORMAT);
     let mut duplicate = valid.clone();
     duplicate[48] = 1; // the rules section claims to be metadata
-    assert_eq!(code(Pack::load(&FAKE, &duplicate)), FORMAT);
+    assert_eq!(code(Pack::load(&duplicate)), FORMAT);
     let mut version = valid;
     version[8] = 2;
-    assert_eq!(code(Pack::load(&FAKE, &version)), FORMAT);
+    assert_eq!(code(Pack::load(&version)), FORMAT);
     assert_eq!(code(load(r#"{"schema":2}"#)), FORMAT, "rule schema");
     assert_eq!(
         code(load(r#"{"schema":-1}"#)),
@@ -311,7 +303,7 @@ fn pack_container_refuses_every_truncation_and_malformed_table() {
         "a signed schema reads as its bit pattern"
     );
     assert_eq!(
-        code(Pack::load(&FAKE, &container("", r#"{"schema":1}"#))),
+        code(Pack::load(&container("", r#"{"schema":1}"#))),
         FORMAT,
         "empty id"
     );
@@ -455,7 +447,7 @@ fn source_hashes_inputs_and_payload_are_checked() {
 
 #[test]
 fn reflection_admits_only_declared_additions() {
-    let rules = |json: &str| pack::json(&FAKE, json.as_bytes()).unwrap();
+    let rules = |json: &str| pack::json(json.as_bytes()).unwrap();
     let declared = rules(
         r#"{"allowed_bindings":[{"name":"rsf_motion","point":13,"type":0,"count":1}],"added_semantics":{"TEXCOORD":[12]}}"#,
     );

@@ -1,7 +1,4 @@
 // SPDX-License-Identifier: MIT
-use std::path::PathBuf;
-use std::process::Command;
-
 /// A C11 build without the default C runtime library, as every C leaf here needs. MSVC takes its
 /// flags directly; the others take `-std=c11`.
 fn c11() -> cc::Build {
@@ -12,42 +9,6 @@ fn c11() -> cc::Build {
         build.std("c11");
     }
     build
-}
-fn shader_patch_parser() {
-    let shader_patch = PathBuf::from("../shader_patch");
-    let vendor = PathBuf::from("../../vendor/shader-patch/yyjson");
-    let yyjson = if vendor.join("src/yyjson.c").exists() {
-        vendor
-    } else {
-        PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo output directory")).join("yyjson")
-    };
-    for file in [
-        "src/json.c",
-        "src/json.h",
-        "include/rescaleframe/shader_patch.h",
-        "yyjson.cmake",
-        "yyjson.lock.json",
-    ] {
-        println!(
-            "cargo:rerun-if-changed={}",
-            shader_patch.join(file).display()
-        );
-    }
-    let status = Command::new("cmake")
-        .arg(format!("-DRSF_PATCH_YYJSON={}", yyjson.display()))
-        .arg("-P")
-        .arg(shader_patch.join("yyjson.cmake"))
-        .status()
-        .expect("run CMake to provision the pinned shader-pack parser");
-    assert!(status.success(), "shader-pack parser provisioning failed");
-    let mut build = c11();
-    build
-        .include(yyjson.join("src"))
-        .include(shader_patch.join("include"))
-        .file(yyjson.join("src/yyjson.c"))
-        .file(shader_patch.join("src/json.c"))
-        .warnings(false)
-        .compile("rsf_patch_json");
 }
 
 fn sharpening_payload() {
@@ -169,7 +130,6 @@ fn bindings() {
         "runtime/backends/dlss/src/streamline_generation_records.h",
         "runtime/backends/dlss/src/streamline_sr_records.h",
         "runtime/backends/common/generation12_platform.h",
-        "runtime/shader_patch/src/json.h",
         "runtime/vulkan/fsr4-fg/bridge_api.h",
         // Compiled into this crate through tests/graphics_fixture.rs.
         "tests/native_sr_fsr4_vulkan_fixture.h",
@@ -188,7 +148,6 @@ fn bindings() {
             "runtime/graphics/src",
             "runtime/backends/dlss/src",
             "runtime/backends/common",
-            "runtime/shader_patch/src",
             "runtime/vulkan/fsr4-fg",
             "tests/native_sr_fsr4_vulkan_fixture.h",
         ],
@@ -222,7 +181,6 @@ fn main() {
     println!("cargo:rerun-if-changed=src/plugin_callbacks.c");
     println!("cargo:rerun-if-changed=../../sdk/game/include");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        shader_patch_parser();
         sharpening_payload();
         plugin_callbacks();
         native_leaves();
