@@ -189,21 +189,21 @@ Port control and rendering callbacks, session selection and frontend wiring acro
 
 **Port files (8)**
 
-- [ ] [runtime/orchestrator/include/rescaleframe/callback_render_host.h](runtime/orchestrator/include/rescaleframe/callback_render_host.h)
-- [ ] [runtime/orchestrator/include/rescaleframe/native_window.h](runtime/orchestrator/include/rescaleframe/native_window.h)
-- [ ] [runtime/orchestrator/include/rescaleframe/render_frontend.h](runtime/orchestrator/include/rescaleframe/render_frontend.h)
-- [ ] [runtime/orchestrator/include/rescaleframe/render_host.h](runtime/orchestrator/include/rescaleframe/render_host.h)
-- [ ] [runtime/orchestrator/include/rescaleframe/render_links.h](runtime/orchestrator/include/rescaleframe/render_links.h)
+- [x] [runtime/orchestrator/include/rescaleframe/callback_render_host.h](runtime/orchestrator/include/rescaleframe/callback_render_host.h)
+- [x] [runtime/orchestrator/include/rescaleframe/native_window.h](runtime/orchestrator/include/rescaleframe/native_window.h)
+- [x] [runtime/orchestrator/include/rescaleframe/render_frontend.h](runtime/orchestrator/include/rescaleframe/render_frontend.h)
+- [x] [runtime/orchestrator/include/rescaleframe/render_host.h](runtime/orchestrator/include/rescaleframe/render_host.h)
+- [x] [runtime/orchestrator/include/rescaleframe/render_links.h](runtime/orchestrator/include/rescaleframe/render_links.h)
 - [ ] [runtime/orchestrator/src/callback_render_host_platform.cpp](runtime/orchestrator/src/callback_render_host_platform.cpp)
 - [x] [runtime/orchestrator/src/native_window_platform.cpp](runtime/orchestrator/src/native_window_platform.cpp)
 - [ ] [runtime/orchestrator/src/render_host_platform.cpp](runtime/orchestrator/src/render_host_platform.cpp)
 
 **Fixtures (4)**
 
-- [ ] [tests/callback_host_abi.cpp](tests/callback_host_abi.cpp)
-- [ ] [tests/native_window.cpp](tests/native_window.cpp)
-- [ ] [tests/render_frontend.cpp](tests/render_frontend.cpp)
-- [ ] [tests/render_links.cpp](tests/render_links.cpp)
+- [x] [tests/callback_host_abi.cpp](tests/callback_host_abi.cpp)
+- [x] [tests/native_window.cpp](tests/native_window.cpp)
+- [x] [tests/render_frontend.cpp](tests/render_frontend.cpp)
+- [x] [tests/render_links.cpp](tests/render_links.cpp)
 
 **Rust review findings (14)**
 
