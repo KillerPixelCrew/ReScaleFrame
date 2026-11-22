@@ -18,7 +18,7 @@ unsafe extern "C" {
     fn rsf_motion_resolve_destroy(pass: Handle);
 }
 
-fn read_motion(warp: &Warp, pass: &Pass) -> TestResult<Vec<f32>> {
+fn read_motion(warp: &Device, pass: &Pass) -> TestResult<Vec<f32>> {
     let raw = unsafe { rsf_motion_resolve_motion(pass.raw) };
     let output =
         unsafe { ID3D11Texture2D::from_raw_borrowed(&raw) }.ok_or("missing motion output")?;
@@ -33,7 +33,7 @@ fn read_motion(warp: &Warp, pass: &Pass) -> TestResult<Vec<f32>> {
         .collect())
 }
 
-fn read_depth(warp: &Warp, pass: &Pass) -> TestResult<Vec<f32>> {
+fn read_depth(warp: &Device, pass: &Pass) -> TestResult<Vec<f32>> {
     let raw = unsafe { rsf_motion_resolve_depth(pass.raw) };
     let output =
         unsafe { ID3D11Texture2D::from_raw_borrowed(&raw) }.ok_or("missing depth output")?;
@@ -45,13 +45,13 @@ fn read_depth(warp: &Warp, pass: &Pass) -> TestResult<Vec<f32>> {
     unsafe { warp.read(output, &desc, 1) }
 }
 
-fn run(warp: &Warp) -> TestResult {
+fn run(warp: &Device) -> TestResult {
     let size = [8, 8];
     let mut pixels = [[-1000.0_f32; 2]; 64];
     pixels[0] = [0.0; 2];
     pixels[1] = [0.5, -0.5];
-    let motion_desc = Warp::desc(size, DXGI_FORMAT_R32G32_FLOAT, D3D11_BIND_SHADER_RESOURCE);
-    let depth_desc = Warp::desc(size, DXGI_FORMAT_R32_FLOAT, D3D11_BIND_SHADER_RESOURCE);
+    let motion_desc = Device::desc(size, DXGI_FORMAT_R32G32_FLOAT, D3D11_BIND_SHADER_RESOURCE);
+    let depth_desc = Device::desc(size, DXGI_FORMAT_R32_FLOAT, D3D11_BIND_SHADER_RESOURCE);
     let motion = warp.initialized(&motion_desc, &pixels, 64)?;
     let depth = warp.initialized(&depth_desc, &[0.5_f32; 64], 32)?;
     let mut raw = ptr::null_mut();
@@ -92,7 +92,7 @@ fn run(warp: &Warp) -> TestResult {
     passed &= read_depth(warp, &pass)?[0] == 0.5;
 
     // Canonical UV motion with no sentinel and native D24 depth.
-    let native_desc = Warp::desc(
+    let native_desc = Device::desc(
         size,
         DXGI_FORMAT_R24G8_TYPELESS,
         D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_DEPTH_STENCIL,
@@ -146,7 +146,7 @@ fn run(warp: &Warp) -> TestResult {
     )?;
     layered.depth_layer = small.as_raw();
     passed &= !resolve(&sky, &layered);
-    let other = Warp::new().ok_or("second WARP device unavailable")?;
+    let other = Device::warp().ok_or("second WARP device unavailable")?;
     let foreign = other.texture(&depth_desc, None)?;
     layered.depth_layer = foreign.as_raw();
     passed &= !resolve(&sky, &layered);

@@ -458,6 +458,10 @@ generate("runtime/orchestrator/src/auxiliary_sr_abi.rs", "runtime/orchestrator/s
           "--raw-line", "pub use rsf_game_sys::d3d11_reduced_abi::{rsf_d3d11_auxiliary_surface, "
           "RSF_D3D11_AUXILIARY_DEPTH_STENCIL, RSF_D3D11_AUXILIARY_COLOUR, RSF_D3D11_AUXILIARY_RESTORE_CONTENTS};",
           "--with-derive-default"])
+generate("runtime/orchestrator/src/graphics_pass_abi.rs", "runtime/graphics/include/rescaleframe/fullscreen_pass.h",
+         "rsf_(fullscreen_(setup|draw)|present_blit_setup|motion_decode_setup)", "RSF_(FULLSCREEN_PASS|PRESENT_BLIT|MOTION_DECODE)_ABI_VERSION",
+         ["-Iruntime/graphics/include", "-include", "rescaleframe/motion_decode.h",
+          "-include", "rescaleframe/present_blit.h"])
 generate("runtime/orchestrator/src/native_sr_abi.rs", "runtime/orchestrator/include/rescaleframe/native_sr.h",
          "rsf_(dlss_pipeline_frame|native_translucency_masks)", "NOTHING",
          ["-include", "rescaleframe/native_translucency.h", "-Iruntime/orchestrator/include",

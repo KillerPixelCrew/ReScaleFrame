@@ -7,7 +7,10 @@ use crate::graphics_d3d11::{
     prepare_compute, rsf_d3d11_state_restore, rsf_d3d11_state_save, shader_code, source_view,
     target_view,
 };
-use crate::render_abi::rsf_backend_log_fn as LogFn;
+use crate::graphics_pass_abi::{
+    RSF_MOTION_DECODE_ABI_VERSION as ABI, rsf_motion_decode_log_fn as LogFn,
+    rsf_motion_decode_setup as Setup,
+};
 use crate::sr_session::has_capacity;
 use rsf_game_sys::sr_abi::rsf_motion_decode_params as Params;
 use std::ffi::{CString, c_char, c_void};
@@ -21,7 +24,6 @@ use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_R16G16_FLO
 use windows::core::Interface;
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 
-const ABI: u32 = 1;
 const OK: i32 = 0;
 const INVALID: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
@@ -29,18 +31,6 @@ const SHADER_FAILED: i32 = -3;
 const RESOURCE_FAILED: i32 = -4;
 const SOURCE_MISMATCH: i32 = -5;
 const PARAMS_V1: usize = std::mem::offset_of!(Params, validity_enabled);
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct Setup {
-    struct_size: u32,
-    abi_version: u32,
-    width: u32,
-    height: u32,
-    output_format: u32,
-    log: LogFn,
-    log_user: Handle,
-}
 
 type Resources = [Handle; 4];
 

@@ -29,7 +29,7 @@ unsafe extern "C" {
     fn rsf_colour_transport_destroy(pass: Handle);
 }
 
-fn read_red(warp: &Warp, source: &ID3D11Texture2D) -> TestResult<Vec<f32>> {
+fn read_red(warp: &Device, source: &ID3D11Texture2D) -> TestResult<Vec<f32>> {
     let mut desc = D3D11_TEXTURE2D_DESC::default();
     unsafe { source.GetDesc(&mut desc) };
     if desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT {
@@ -45,16 +45,16 @@ fn read_red(warp: &Warp, source: &ID3D11Texture2D) -> TestResult<Vec<f32>> {
     }
 }
 
-fn run(warp: &Warp) -> TestResult {
+fn run(warp: &Device) -> TestResult {
     let values = [0.0, 0.001, 0.02, 0.18, 1.0, 10.0];
     let exposure_value = 5.0_f32;
     let count = values.len() as u32;
-    let colour_desc = Warp::desc(
+    let colour_desc = Device::desc(
         [count, 1],
         DXGI_FORMAT_R32G32B32A32_FLOAT,
         D3D11_BIND_SHADER_RESOURCE,
     );
-    let exposure_desc = Warp::desc([1, 1], DXGI_FORMAT_R32_FLOAT, D3D11_BIND_SHADER_RESOURCE);
+    let exposure_desc = Device::desc([1, 1], DXGI_FORMAT_R32_FLOAT, D3D11_BIND_SHADER_RESOURCE);
     let source = values.map(|value| [value, value, value, 1.0]);
     let colour = warp.initialized(&colour_desc, &source, count * 16)?;
     let exposure = warp.initialized(&exposure_desc, &[exposure_value], 4)?;
@@ -98,7 +98,7 @@ fn run(warp: &Warp) -> TestResult {
         .map(|&value| [value, value, value, 1.0])
         .collect();
     let output_bind = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-    let output_desc = Warp::desc([count, 1], DXGI_FORMAT_R32G32B32A32_FLOAT, output_bind);
+    let output_desc = Device::desc([count, 1], DXGI_FORMAT_R32G32B32A32_FLOAT, output_bind);
     let output = warp.initialized(&output_desc, &staged, count * 16)?;
     passed &= unsafe {
         rsf_colour_transport_decode(
@@ -120,8 +120,8 @@ fn run(warp: &Warp) -> TestResult {
         passed &= (decoded - value).abs() <= 0.02 * value + 1e-5;
     }
 
-    let pixel_desc = Warp::desc([1, 1], DXGI_FORMAT_R32G32B32A32_FLOAT, output_bind);
-    let scene_desc = Warp::desc(
+    let pixel_desc = Device::desc([1, 1], DXGI_FORMAT_R32G32B32A32_FLOAT, output_bind);
+    let scene_desc = Device::desc(
         [1, 1],
         DXGI_FORMAT_R32G32B32A32_FLOAT,
         D3D11_BIND_SHADER_RESOURCE,

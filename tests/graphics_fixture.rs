@@ -1,17 +1,40 @@
 // SPDX-License-Identifier: MIT
 use std::ffi::c_void;
 use std::{ptr, slice};
-use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_WARP;
+use windows::Win32::Graphics::Direct3D::{
+    D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL,
+    D3D_FEATURE_LEVEL_11_0,
+};
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 #[path = "colour_transport.rs"]
 mod colour_transport;
+#[path = "depth_scale.rs"]
+mod depth_scale;
+#[path = "fullscreen_pass.rs"]
+mod fullscreen_pass;
+#[path = "motion_decode.rs"]
+mod motion_decode;
 #[path = "motion_resolve.rs"]
 mod motion_resolve;
 
 type Handle = *mut c_void;
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
+
+fn check(condition: bool, what: &str) -> TestResult {
+    if !condition {
+        return Err(what.into());
+    }
+    Ok(())
+}
+
+fn near(got: f32, wanted: f32, budget: f32, what: &str) -> TestResult {
+    check(
+        (got - wanted).abs() <= budget,
+        &format!("{what}: got {got}, expected {wanted}"),
+    )
+}
 
 struct Pass {
     raw: Handle,
@@ -24,22 +47,32 @@ impl Drop for Pass {
     }
 }
 
-struct Warp {
+struct Device {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
 }
 
-impl Warp {
-    fn new() -> Option<Self> {
+impl Device {
+    fn warp() -> Option<Self> {
+        Self::create(D3D_DRIVER_TYPE_WARP, None)
+    }
+
+    fn feature_11() -> Option<Self> {
+        let levels = &[D3D_FEATURE_LEVEL_11_0];
+        Self::create(D3D_DRIVER_TYPE_HARDWARE, Some(levels))
+            .or_else(|| Self::create(D3D_DRIVER_TYPE_WARP, Some(levels)))
+    }
+
+    fn create(driver: D3D_DRIVER_TYPE, levels: Option<&[D3D_FEATURE_LEVEL]>) -> Option<Self> {
         let mut device = None;
         let mut context = None;
         unsafe {
             D3D11CreateDevice(
                 None,
-                D3D_DRIVER_TYPE_WARP,
+                driver,
                 Default::default(),
                 D3D11_CREATE_DEVICE_FLAG(0),
-                None,
+                levels,
                 D3D11_SDK_VERSION,
                 Some(&mut device),
                 None,
@@ -157,8 +190,8 @@ fn half_to_f32(bits: u16) -> f32 {
     f32::from_bits(sign | magnitude)
 }
 
-fn run_warp(name: &str, run: impl FnOnce(&Warp) -> TestResult) -> i32 {
-    let Some(warp) = Warp::new() else {
+fn run_warp(name: &str, run: impl FnOnce(&Device) -> TestResult) -> i32 {
+    let Some(warp) = Device::warp() else {
         return 77;
     };
     match run(&warp) {

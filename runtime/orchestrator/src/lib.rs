@@ -105,6 +105,8 @@ mod graphics_d3d11;
 #[path = "../../../tests/graphics_fixture.rs"]
 mod graphics_fixture;
 #[cfg(windows)]
+mod graphics_pass_abi;
+#[cfg(windows)]
 mod mfg_state;
 #[cfg(windows)]
 mod motion_decode;

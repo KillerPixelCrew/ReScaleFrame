@@ -3,7 +3,11 @@ use crate::com_ref::ComRef;
 use crate::d3d11_output::same_device;
 use crate::d3d11_output_abi::rsf_d3d11_output_is_immediate;
 use crate::graphics_d3d11::rsf_call_native_log;
-use crate::render_abi::rsf_backend_log_fn as LogFn;
+use crate::graphics_pass_abi::{
+    RSF_FULLSCREEN_PASS_ABI_VERSION as ABI, RSF_PRESENT_BLIT_ABI_VERSION,
+    rsf_fullscreen_draw as Draw, rsf_fullscreen_setup as Setup,
+    rsf_present_blit_setup as PresentSetup,
+};
 use crate::sr_session::has_capacity;
 use std::ffi::{CStr, c_void};
 use std::ptr::null_mut;
@@ -14,7 +18,6 @@ use windows::core::Interface;
 type Handle = *mut c_void;
 #[path = "fullscreen_pass/d3d11.rs"]
 mod d3d11;
-const ABI: u32 = 1;
 const OK: i32 = 0;
 const INVALID: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
@@ -31,24 +34,6 @@ const POINT: u32 = 0;
 const LINEAR: u32 = 1;
 
 #[repr(C)]
-#[derive(Clone, Copy)]
-struct Setup {
-    struct_size: u32,
-    abi_version: u32,
-    log: LogFn,
-    log_user: Handle,
-}
-
-#[repr(C)]
-struct Draw {
-    struct_size: u32,
-    mode: u32,
-    exposure: f32,
-    width: u32,
-    height: u32,
-}
-
-#[repr(C)]
 struct Constants {
     mode: u32,
     exposure: f32,
@@ -57,6 +42,7 @@ struct Constants {
 
 const _: () = {
     assert!(size_of::<Setup>() == 24 && size_of::<Draw>() == 20);
+    assert!(size_of::<Setup>() == size_of::<PresentSetup>() && ABI == RSF_PRESENT_BLIT_ABI_VERSION);
     assert!(size_of::<Constants>() == 16);
 };
 
@@ -173,10 +159,10 @@ unsafe extern "C" fn rsf_fullscreen_pass_create(
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_present_blit_create(
     device: Handle,
-    setup: *const Setup,
+    setup: *const PresentSetup,
     out: *mut *mut Pass,
 ) -> i32 {
-    unsafe { create(device, setup, out, LINEAR) }
+    unsafe { create(device, setup.cast::<Setup>(), out, LINEAR) }
 }
 
 #[unsafe(no_mangle)]
