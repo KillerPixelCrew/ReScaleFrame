@@ -47,6 +47,7 @@ fn sharpening_payload() {
     let directory = "../graphics/src/sharpening";
     for file in [
         "pass_payload.cpp",
+        "d3d11.h",
         "options.h",
         "rcas.h",
         "da_rcas.h",
@@ -55,6 +56,8 @@ fn sharpening_payload() {
     ] {
         println!("cargo:rerun-if-changed={directory}/{file}");
     }
+    println!("cargo:rerun-if-changed=src/sharpening_pass_options.h");
+    println!("cargo:rerun-if-changed=include/rescaleframe/sharpening_settings.h");
     let mut build = cc::Build::new();
     if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
         build.flags(["/EHsc", "/Zl"]);
@@ -62,6 +65,7 @@ fn sharpening_payload() {
     build
         .cpp(true)
         .std("c++17")
+        .include("include")
         .warnings_into_errors(true)
         .file(format!("{directory}/pass_payload.cpp"))
         .compile("rsf_sharpening_payload");

@@ -20,6 +20,8 @@ mod fullscreen_pass;
 mod motion_decode;
 #[path = "motion_resolve.rs"]
 mod motion_resolve;
+#[path = "sharpening.rs"]
+mod sharpening;
 
 type Handle = *mut c_void;
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;

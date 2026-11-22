@@ -1,7 +1,6 @@
 rsf_add_rust_static(rsf_shader_compiler rsf_shader_compiler_build rsf-shader-compiler rsf_shader_compiler)
 add_library(rsf_graphics STATIC
     src/texture_dump.cpp
-    src/sharpening/d3d11.cpp
     src/resource_ref.cpp
     src/d3d11_state.cpp
     src/ui_layer.cpp

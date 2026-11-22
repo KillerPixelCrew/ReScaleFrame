@@ -399,11 +399,9 @@ generate("runtime/orchestrator/src/vulkan_fg_resources_abi.rs", "runtime/orchest
          ["--no-recursive-allowlist", "--with-derive-default",
           "--with-derive-custom-struct", "rsf_vkfg_barrier=Debug,PartialEq,Eq",
           "--with-derive-custom-struct", "rsf_vkfg_image_copy=Debug,PartialEq,Eq"])
-generate("runtime/orchestrator/src/d3d11_sharpening_abi.rs", "runtime/graphics/src/sharpening/d3d11_platform.h",
-         "rsf_sharpen11_(draw|platform)", "NOTHING",
-         ["-Iruntime/graphics/include"],
-         ["--no-recursive-allowlist", "--blocklist-type", "rsf_d3d11_state",
-          "--raw-line", "use crate::d3d11_output_abi::rsf_d3d11_state;"])
+generate("runtime/orchestrator/src/d3d11_sharpening_abi.rs", "runtime/graphics/src/sharpening/d3d11.h",
+         "rsf_sharpen11_frame", "NOTHING", ["-Iruntime/orchestrator/include"],
+         ["--no-recursive-allowlist"])
 generate("runtime/orchestrator/src/d3d12_sharpening_abi.rs", "runtime/graphics/src/sharpening/d3d12_platform.h",
          "rsf_sharpen12_call", "NOTHING", [], ["--no-recursive-allowlist"])
 generate("runtime/orchestrator/src/vulkan_sharpening_abi.rs", "runtime/orchestrator/src/sharpening_vulkan_core.h",

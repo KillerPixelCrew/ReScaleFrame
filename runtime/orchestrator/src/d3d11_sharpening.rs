@@ -6,17 +6,41 @@ use crate::d3d11_output_abi::{
     RSF_D3D11_USAGE_IMMUTABLE, rsf_d3d11_output_child_device, rsf_d3d11_output_create_srv,
     rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format, rsf_d3d11_texture_desc as Texture,
 };
+use crate::graphics_d3d11::{
+    compute_shader, constant_buffer, dispatch_compute, rsf_d3d11_state_restore,
+    rsf_d3d11_state_save, shader_code, target_view,
+};
+use crate::render_abi::rsf_sharpening_options as Options;
 use crate::sharpening_policy::{FILTERS, effective_mode};
-use std::ffi::c_void;
+use std::ffi::{CStr, c_char, c_void};
 use std::ptr::null_mut;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use windows::Win32::Graphics::Direct3D::Fxc::D3DCOMPILE_ENABLE_STRICTNESS;
+use windows::Win32::Graphics::Direct3D11::*;
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC};
+use windows::core::Interface;
 
 type Handle = *mut c_void;
 
 #[path = "d3d11_sharpening_abi.rs"]
 mod abi;
-use abi::{rsf_sharpen11_draw as Draw, rsf_sharpen11_platform as Platform};
+pub(super) use abi::rsf_sharpen11_frame as Frame;
+const CONSTANT_WORDS: usize = 32;
+const UAV_SLOTS: usize = 8;
+
+unsafe extern "C" {
+    fn rsf_sharpening_hlsl(mode: u32) -> *const c_char;
+    fn rsf_sharpen11_active(options: &Options) -> u32;
+    pub(super) fn rsf_sharpen11_pack(
+        options: &Options,
+        frame: &Frame,
+        extent: *const u32,
+        exposure_texture: u32,
+        mode: u32,
+        packed: *mut u32,
+    );
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct ScratchKey {
@@ -40,17 +64,33 @@ struct Device {
 }
 
 impl Device {
-    fn prepare(&mut self, platform: &Platform, output: &Texture) -> Option<()> {
-        let device = self.device.as_ptr();
+    fn prepare(&mut self, output: &Texture) -> Option<()> {
+        let raw = self.device.as_ptr();
+        let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }?;
         for (shader, mode) in self.shaders.iter_mut().zip(FILTERS) {
             if shader.is_none() {
-                *shader =
-                    Some(unsafe { ComRef::from_owned(platform.shader.unwrap()(device, mode)) }?);
+                let source = unsafe { rsf_sharpening_hlsl(mode) };
+                if source.is_null() {
+                    return None;
+                }
+                let bytes = unsafe { CStr::from_ptr(source) }.to_bytes();
+                let code = shader_code(
+                    bytes,
+                    c"Sharpening",
+                    c"CSMain",
+                    c"cs_5_0",
+                    D3DCOMPILE_ENABLE_STRICTNESS,
+                )
+                .ok()?;
+                *shader = unsafe { ComRef::from_owned(compute_shader(device, &code)?.into_raw()) };
             }
         }
         if self.constants.is_none() {
-            self.constants =
-                Some(unsafe { ComRef::from_owned(platform.constants.unwrap()(device)) }?);
+            self.constants = unsafe {
+                ComRef::from_owned(
+                    constant_buffer(device, CONSTANT_WORDS as u32 * 4, false)?.into_raw(),
+                )
+            };
         }
         let key = ScratchKey {
             width: output.width,
@@ -63,31 +103,43 @@ impl Device {
             .as_ref()
             .is_none_or(|scratch| scratch.key != key)
         {
-            let mut pair = [null_mut(); 2];
-            unsafe {
-                platform.scratch.unwrap()(
-                    device,
-                    key.width,
-                    key.height,
-                    key.format,
-                    key.sample_quality,
-                    pair.as_mut_ptr(),
-                )
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: key.width,
+                Height: key.height,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT(key.format as i32),
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: key.sample_quality,
+                },
+                BindFlags: D3D11_BIND_UNORDERED_ACCESS.0 as u32,
+                ..Default::default()
             };
-            let [Some(texture), Some(target)] =
-                pair.map(|value| unsafe { ComRef::from_owned(value) })
-            else {
-                return None;
-            };
-            // A texture without its view must never be cached as a usable scratch target.
-            self.scratch = Some(Scratch {
-                target,
-                texture,
+            let mut texture = None;
+            unsafe { device.CreateTexture2D(&desc, None, Some(&mut texture)) }.ok()?;
+            let texture = texture?;
+            self.scratch = Some(complete_scratch(
                 key,
-            });
+                unsafe { ComRef::from_owned(texture.clone().into_raw()) }?,
+                || unsafe { ComRef::from_owned(target_view(device, &texture, 0)?.into_raw()) },
+            )?);
         }
         Some(())
     }
+}
+
+// A texture without its view must never become the cached scratch target.
+fn complete_scratch(
+    key: ScratchKey,
+    texture: ComRef,
+    create_view: impl FnOnce() -> Option<ComRef>,
+) -> Option<Scratch> {
+    Some(Scratch {
+        key,
+        texture,
+        target: create_view()?,
+    })
 }
 
 #[derive(Default)]
@@ -108,12 +160,10 @@ fn input_texture(device: Handle, texture: Handle) -> Option<Texture> {
 impl Owner {
     fn run(
         &self,
-        platform: &Platform,
         context: Handle,
         inputs: &[Handle; 4],
-        request: u32,
-        options: *const c_void,
-        frame: *const c_void,
+        options: &Options,
+        frame: &Frame,
     ) -> Option<()> {
         let [output, motion, depth, exposure] = *inputs;
         if context.is_null()
@@ -122,7 +172,7 @@ impl Owner {
         {
             return None;
         }
-        let mode = effective_mode(request, !depth.is_null())?;
+        let mode = effective_mode(options.mode, !depth.is_null())?;
         let device = unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(context)) }?;
         let native = device.as_ptr();
         let desc = input_texture(native, output)?;
@@ -173,61 +223,106 @@ impl Owner {
             });
         }
         let cache = cache.as_mut()?;
-        cache.prepare(platform, &desc)?;
+        cache.prepare(&desc)?;
         let scratch = cache.scratch.as_ref()?;
-        let draw = Draw {
-            views: views
-                .each_ref()
-                .map(|view| view.as_ref().map_or(null_mut(), ComRef::as_ptr)),
-            output,
-            scratch: scratch.texture.as_ptr(),
-            target: scratch.target.as_ptr(),
-            constants: cache.constants.as_ref()?.as_ptr(),
-            shader: cache.shaders[(mode - 1) as usize].as_ref()?.as_ptr(),
-            extent,
-            exposure_texture: u32::from(!exposure.is_null()),
-            mode,
-        };
-        let _bindings = unsafe {
-            SavedBindings::new(context, platform.save.unwrap(), platform.restore.unwrap())
-        }?;
-        unsafe { platform.dispatch.unwrap()(context, options, frame, &draw) };
+        let sources = views
+            .each_ref()
+            .map(|view| view.as_ref().map_or(null_mut(), ComRef::as_ptr));
+        let shader = cache.shaders[(mode - 1) as usize].as_ref()?.as_ptr();
+        let buffer = cache.constants.as_ref()?.as_ptr();
+        let scratch_texture = scratch.texture.as_ptr();
+        let context_native = unsafe { ID3D11DeviceContext::from_raw_borrowed(&context) }?;
+        let shader = unsafe { ID3D11ComputeShader::from_raw_borrowed(&shader) }?;
+        let native_buffer = unsafe { ID3D11Buffer::from_raw_borrowed(&buffer) }?;
+        let output_texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&output) }?;
+        let scratch_texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&scratch_texture) }?;
+        let _bindings =
+            unsafe { SavedBindings::new(context, rsf_d3d11_state_save, rsf_d3d11_state_restore) }?;
+        let mut constants = [0; CONSTANT_WORDS];
+        unsafe {
+            rsf_sharpen11_pack(
+                options,
+                frame,
+                extent.as_ptr(),
+                u32::from(!exposure.is_null()),
+                mode,
+                constants.as_mut_ptr(),
+            );
+            // Detach inherited output bindings before binding the same texture as an SRV.
+            let vtable = context_native.vtable();
+            let empty = [null_mut(); UAV_SLOTS];
+            (vtable.OMSetRenderTargetsAndUnorderedAccessViews)(
+                context,
+                0,
+                std::ptr::null(),
+                null_mut(),
+                0,
+                UAV_SLOTS as u32,
+                empty.as_ptr(),
+                std::ptr::null(),
+            );
+            (vtable.CSSetUnorderedAccessViews)(
+                context,
+                0,
+                UAV_SLOTS as u32,
+                empty.as_ptr(),
+                std::ptr::null(),
+            );
+            context_native.UpdateSubresource(
+                native_buffer,
+                0,
+                None,
+                constants.as_ptr().cast(),
+                0,
+                0,
+            );
+        }
+        dispatch_compute(
+            context_native,
+            shader,
+            &sources,
+            &[scratch.target.as_ptr()],
+            None,
+            [extent[0].div_ceil(16), extent[1].div_ceil(16)],
+            true,
+            Some(buffer),
+        );
+        unsafe { context_native.CopyResource(output_texture, scratch_texture) };
         self.dispatches.fetch_add(1, Ordering::Relaxed);
         Some(())
     }
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_sharpen11_create() -> *mut Owner {
-    crate::allocate_handle(Owner::default())
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sharpen11_run(
-    owner: &Owner,
-    platform: &Platform,
+pub(super) unsafe extern "C" fn rsf_core_sharpen11_run(
+    owner: &mut Handle,
     context: Handle,
     inputs: &[Handle; 4],
-    mode: u32,
-    options: *const c_void,
-    frame: *const c_void,
+    options: &Options,
+    frame: &Frame,
 ) -> u32 {
-    u32::from(
-        owner
-            .run(platform, context, inputs, mode, options, frame)
-            .is_some(),
-    )
+    if unsafe { rsf_sharpen11_active(options) } == 0 {
+        return 1;
+    }
+    if owner.is_null() {
+        *owner = crate::allocate_handle(Owner::default()).cast();
+    }
+    let Some(owner) = (unsafe { owner.cast::<Owner>().as_ref() }) else {
+        return 0;
+    };
+    u32::from(owner.run(context, inputs, options, frame).is_some())
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sharpen11_count(owner: *const Owner) -> u64 {
-    unsafe { owner.as_ref() }.map_or(0, |owner| owner.dispatches.load(Ordering::Relaxed))
+pub(super) unsafe extern "C" fn rsf_core_sharpen11_count(owner: Handle) -> u64 {
+    unsafe { owner.cast::<Owner>().as_ref() }
+        .map_or(0, |owner| owner.dispatches.load(Ordering::Relaxed))
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sharpen11_destroy(owner: *mut Owner) {
+pub(super) unsafe extern "C" fn rsf_core_sharpen11_destroy(owner: Handle) {
     if !owner.is_null() {
-        drop(unsafe { Box::from_raw(owner) });
+        drop(unsafe { Box::from_raw(owner.cast::<Owner>()) });
     }
 }
 
@@ -235,66 +330,23 @@ unsafe extern "C" fn rsf_core_sharpen11_destroy(owner: *mut Owner) {
 mod tests {
     use super::*;
     use crate::com_ref::test::{fake, raw};
-    use std::cell::Cell;
-
-    thread_local! {
-        static SCRATCH_PAIR: Cell<[Handle; 2]> = const { Cell::new([null_mut(); 2]) };
-    }
-
-    unsafe extern "C" fn shader(_: Handle, _: u32) -> Handle {
-        null_mut()
-    }
-    unsafe extern "C" fn constants(_: Handle) -> Handle {
-        null_mut()
-    }
-    unsafe extern "C" fn scratch(_: Handle, _: u32, _: u32, _: u32, _: u32, out: *mut Handle) {
-        let pair = SCRATCH_PAIR.get().map(|value| {
-            if value.is_null() {
-                value
-            } else {
-                unsafe { ComRef::retain(value) }.into_raw()
-            }
-        });
-        unsafe { out.cast::<[Handle; 2]>().write(pair) };
-    }
-    unsafe extern "C" fn save(_: Handle, _: *mut crate::d3d11_output_abi::rsf_d3d11_state) -> u32 {
-        0
-    }
-    unsafe extern "C" fn restore(_: Handle, _: *mut crate::d3d11_output_abi::rsf_d3d11_state) {}
-    unsafe extern "C" fn dispatch(_: Handle, _: *const c_void, _: *const c_void, _: *const Draw) {}
-
     #[test]
     fn scratch_view_refusal_releases_texture_and_allows_same_extent_retry() {
-        let (device, texture, target) = (fake(), fake(), fake());
-        let retained = unsafe { ComRef::retain(raw(&device)) };
-        let mut cached = Device {
-            shaders: std::array::from_fn(|_| Some(retained.clone())),
-            constants: Some(retained.clone()),
-            scratch: None,
-            device: retained,
-        };
-        let platform = Platform {
-            shader: Some(shader),
-            constants: Some(constants),
-            scratch: Some(scratch),
-            save: Some(save),
-            restore: Some(restore),
-            dispatch: Some(dispatch),
-        };
-        let desc = Texture {
+        let (texture, target) = (fake(), fake());
+        let key = ScratchKey {
             width: 16,
             height: 16,
             format: RSF_D3D11_FORMAT_RGBA16_FLOAT,
-            ..Texture::default()
+            sample_quality: 0,
         };
-        SCRATCH_PAIR.set([raw(&texture), null_mut()]);
-        assert!(cached.prepare(&platform, &desc).is_none());
-        assert!(cached.scratch.is_none());
+        let retain_texture = || unsafe { ComRef::retain(raw(&texture)) };
+        assert!(complete_scratch(key, retain_texture(), || None).is_none());
         assert_eq!(texture.refs.get(), 1);
 
-        SCRATCH_PAIR.set([raw(&texture), raw(&target)]);
-        assert!(cached.prepare(&platform, &desc).is_some());
-        let scratch = cached.scratch.as_ref().unwrap();
+        let scratch = complete_scratch(key, retain_texture(), || {
+            Some(unsafe { ComRef::retain(raw(&target)) })
+        })
+        .unwrap();
         assert_eq!(scratch.texture.as_ptr(), raw(&texture));
         assert_eq!(scratch.target.as_ptr(), raw(&target));
     }

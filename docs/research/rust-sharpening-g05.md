@@ -96,3 +96,36 @@ These conclusions come from source comparison, regenerated bindings and
 pinned formatting. The C++ shader payloads and GPL options header were
 compared against the follow-up baseline without differences. Compilation and
 fixture execution remain pending.
+
+## D3D11 and WARP follow-up from `4a531cda`
+
+- `runtime/graphics/src/sharpening/d3d11.cpp` was removed. The Rust pass
+  reuses the G04 compiler, constant buffer, view and compute dispatch helpers.
+  It preserves immediate-context admission, full state save and restoration,
+  explicit OM and CS UAV unbinding before SRV binding, and the scratch-to-output
+  copy. The scratch texture and UAV still enter the cache together. The
+  synthetic scratch regression retains refusal cleanup and same-key retry.
+- `runtime/graphics/src/sharpening/d3d11.h` is now a private C contract. The
+  DLSS pipeline supplies the same depth, near/far and motion facts and keeps
+  the pass handle with the pipeline. Bindgen generates the frame-facts record.
+  The derived GPL activation and constants remain in the native payload bridge.
+- `tests/sharpening.cpp` was replaced by `tests/sharpening.rs` and the shared
+  G04 C test entry. The existing CTest name, timeout and WARP skip code are
+  preserved. The Rust fixture exercises the actual pass and the original GPL
+  constant calculations, including the MAS ramp, all filter modes, the
+  missing-depth fallback, disabled dispatches, HDR and SDR color, clamp
+  behavior and alpha. CPU assertion failures are reported even when WARP is
+  unavailable.
+
+The independent commits replay in this order on `4a531cda`: `84aa8607`
+(`d1580012`), `bce8a510` (`797fd9a2`), and `098bc0a3` (`e5e7b151`).
+This keeps the engine fixture, D3D12 host and FidelityFX normalization
+independently reviewable before the D3D11 slice.
+
+Remaining G05 paths with implementation code are
+`runtime/graphics/src/sharpening/d3d12.h`,
+`runtime/graphics/src/sharpening/options.h` (GPL calculator),
+`runtime/orchestrator/src/sharpening_pass_options.h`,
+`runtime/orchestrator/src/sharpening_vulkan.h`,
+`tests/sharpening_d3d12.cpp`, `tests/sharpening_settings.cpp`,
+`tests/sharpening_vulkan.cpp` and `tests/sharpening_vulkan_cpu.cpp`.
