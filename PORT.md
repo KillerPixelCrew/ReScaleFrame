@@ -2466,20 +2466,21 @@ Port camera and renderer facts, frame routing and presentation observation. Repa
 
 - ASI and renderer session ownership and submitted capture resources ([R01](#r01), [R03](#r03)).
 
-**Port files (8)**
+**Port files (9)**
 
 - [x] [games/rdr2/src/camera_probe.cpp](games/rdr2/src/camera_probe.cpp)
-- [ ] [games/rdr2/src/camera_probe.h](games/rdr2/src/camera_probe.h)
+- [x] [games/rdr2/src/camera_probe.h](games/rdr2/src/camera_probe.h)
 - [x] [games/rdr2/src/native_platform.cpp](games/rdr2/src/native_platform.cpp)
 - [x] [games/rdr2/src/native_platform.h](games/rdr2/src/native_platform.h)
 - [x] [games/rdr2/src/plugin.cpp](games/rdr2/src/plugin.cpp)
-- [ ] [games/rdr2/src/render_camera.h](games/rdr2/src/render_camera.h)
-- [ ] [games/rdr2/src/social_club.cpp](games/rdr2/src/social_club.cpp)
-- [ ] [games/rdr2/src/social_club.h](games/rdr2/src/social_club.h)
+- [x] [games/rdr2/src/render_camera.h](games/rdr2/src/render_camera.h)
+- [x] [games/rdr2/src/social_club.cpp](games/rdr2/src/social_club.cpp)
+- [ ] [games/rdr2/src/social_club_guard.cpp](games/rdr2/src/social_club_guard.cpp) (MSVC SEH around Social Club COM call)
+- [x] [games/rdr2/src/social_club.h](games/rdr2/src/social_club.h)
 
 **Fixtures (1)**
 
-- [ ] [tests/rdr2_camera.cpp](tests/rdr2_camera.cpp)
+- [x] [tests/rdr2_camera.cpp](tests/rdr2_camera.cpp)
 
 **Rust review findings (12)**
 
