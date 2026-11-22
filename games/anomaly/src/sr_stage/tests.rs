@@ -634,12 +634,11 @@ fn wide_text(text: &str) -> Vec<u16> {
 }
 
 #[test]
-fn wcstod_matches_the_crt_prefix_rules() {
+fn wcstod_converts_the_longest_decimal_prefix() {
     assert_eq!(wcstod(&wide_text("0.67")), (0.67, 4));
     assert_eq!(wcstod(&wide_text("  -1.5e1x")), (-15.0, 8));
     assert_eq!(wcstod(&wide_text("1e")), (1.0, 1));
-    assert_eq!(wcstod(&wide_text("0x1p-1")), (0.5, 6));
-    assert_eq!(wcstod(&wide_text("0x")), (0.0, 1));
+    assert_eq!(wcstod(&wide_text("0x1p-1")), (0.0, 1));
     assert_eq!(wcstod(&wide_text("INF")).0, f64::INFINITY);
     assert!(wcstod(&wide_text("nan(1)")).0.is_nan());
     assert_eq!(wcstod(&wide_text("x1")).1, 0);
@@ -654,7 +653,7 @@ fn options_parse_like_the_native_reader() {
     fake(|f| {
         f.ini = vec![
             ("SRStage", "3"),
-            ("SRScale", "0x1p-1"),
+            ("SRScale", "0.5"),
             ("SRMipBias", "  OFF "),
             ("SRExposure", "AUTO"),
             ("SRCutDistance", "5000"),

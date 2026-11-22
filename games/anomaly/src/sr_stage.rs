@@ -62,13 +62,12 @@ const BACKEND_DLSS: u32 = 1;
 const BACKENDS: u32 = RSF_ANOMALY_SR_ADAPTER_BACKENDS | (1 << BACKEND_AUTO);
 const QUALITIES: u32 = RSF_ANOMALY_SR_ADAPTER_QUALITIES;
 const MAX_PATH: usize = 260;
-// The vendor runtime directories, in Paths::vendors order. Production code destructures the
-// array; the indices name its slots for the tests.
-#[allow(dead_code)]
+// The vendor runtime directories, in Paths::vendors order, as the tests index them.
+#[cfg(test)]
 const STREAMLINE: usize = 0;
-#[allow(dead_code)]
+#[cfg(test)]
 const FIDELITYFX: usize = 1;
-#[allow(dead_code)]
+#[cfg(test)]
 const XESS: usize = 2;
 // Temporal driver refusal transport values.
 const REFUSAL_PREPARE: u8 = 2;
@@ -242,123 +241,19 @@ fn is_space(c: u16) -> bool {
     matches!(c, 0x20 | 0x09..=0x0d)
 }
 
-// The prefix of `text` that the CRT's wcstod converts, and its value. Zero length: no conversion.
+// The longest prefix of `text` that converts as a decimal number (after leading white space, as wcstod skips it),
+// and its value. Zero length: no conversion.
 fn wcstod(text: &[u16]) -> (f64, usize) {
-    let at = |i: usize| text.get(i).copied().unwrap_or(0);
-    let lower = |i: usize| {
-        let c = at(i);
-        if (b'A' as u16..=b'Z' as u16).contains(&c) {
-            c + 32
-        } else {
-            c
-        }
-    };
-    let word = |i: usize, w: &str| w.bytes().enumerate().all(|(k, b)| lower(i + k) == b as u16);
-    let digit = |c: u16| (b'0' as u16..=b'9' as u16).contains(&c);
-    let hex = |c: u16| -> Option<u32> { char::from_u32(c as u32).and_then(|c| c.to_digit(16)) };
-    let mut i = 0;
-    while is_space(at(i)) {
-        i += 1;
-    }
-    let start = i;
-    let negative = at(i) == b'-' as u16;
-    if negative || at(i) == b'+' as u16 {
-        i += 1;
-    }
-    let sign = if negative { -1.0 } else { 1.0 };
-    if word(i, "infinity") {
-        return (sign * f64::INFINITY, i + 8);
-    }
-    if word(i, "inf") {
-        return (sign * f64::INFINITY, i + 3);
-    }
-    if word(i, "nan") {
-        let mut end = i + 3;
-        if at(end) == b'(' as u16 {
-            let mut k = end + 1;
-            while char::from_u32(at(k) as u32)
-                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
-            {
-                k += 1;
-            }
-            if at(k) == b')' as u16 {
-                end = k + 1;
-            }
-        }
-        return (f64::NAN, end);
-    }
-    if at(i) == b'0' as u16 && lower(i + 1) == b'x' as u16 {
-        let mut k = i + 2;
-        let (mut mantissa, mut exponent, mut digits) = (0.0f64, 0i64, 0);
-        while let Some(d) = hex(at(k)) {
-            mantissa = mantissa * 16.0 + f64::from(d);
-            digits += 1;
-            k += 1;
-        }
-        if at(k) == b'.' as u16 {
-            k += 1;
-            while let Some(d) = hex(at(k)) {
-                mantissa = mantissa * 16.0 + f64::from(d);
-                exponent -= 4;
-                digits += 1;
-                k += 1;
-            }
-        }
-        if digits > 0 {
-            if lower(k) == b'p' as u16 {
-                let mut e = k + 1;
-                let negative_exponent = at(e) == b'-' as u16;
-                if negative_exponent || at(e) == b'+' as u16 {
-                    e += 1;
-                }
-                if digit(at(e)) {
-                    let mut value = 0i64;
-                    while digit(at(e)) {
-                        value = (value * 10 + i64::from(at(e) - b'0' as u16)).min(100_000);
-                        e += 1;
-                    }
-                    exponent += if negative_exponent { -value } else { value };
-                    k = e;
-                }
-            }
-            let exponent = exponent.clamp(-100_000, 100_000) as i32;
-            return (sign * mantissa * 2f64.powi(exponent), k);
-        }
-        // "0x" without a hex digit converts the "0".
-        return (0.0 * sign, i + 1);
-    }
-    let mut k = i;
-    let mut digits = 0;
-    while digit(at(k)) {
-        k += 1;
-        digits += 1;
-    }
-    if at(k) == b'.' as u16 {
-        k += 1;
-        while digit(at(k)) {
-            k += 1;
-            digits += 1;
-        }
-    }
-    if digits == 0 {
-        return (0.0, 0);
-    }
-    if lower(k) == b'e' as u16 {
-        let mut e = k + 1;
-        if at(e) == b'-' as u16 || at(e) == b'+' as u16 {
-            e += 1;
-        }
-        if digit(at(e)) {
-            while digit(at(e)) {
-                e += 1;
-            }
-            k = e;
-        }
-    }
-    let literal: String = text[start..k].iter().map(|&c| c as u8 as char).collect();
-    (literal.parse().unwrap_or(0.0), k)
+    let start = text.iter().position(|&c| !is_space(c)).unwrap_or(text.len());
+    let ascii: String = text[start..]
+        .iter()
+        .map_while(|&c| char::from_u32(c.into()).filter(char::is_ascii))
+        .collect();
+    (1..=ascii.len())
+        .rev()
+        .find_map(|n| ascii[..n].parse().ok().map(|value| (value, start + n)))
+        .unwrap_or((0.0, 0))
 }
-
 struct Ini<'a> {
     platform: &'a Platform,
     ini: *const c_void,
