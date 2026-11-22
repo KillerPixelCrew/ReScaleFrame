@@ -107,11 +107,11 @@ pub(crate) extern "C" fn rsf_unity_package_bridge_try_close() -> u32 {
     }
     {
         let _locked = host_lock();
-        if rsf_unity_frames_try_close() == 0 {
+        if !rsf_unity_frames_try_close() {
             return 0;
         }
         let drained = match route {
-            Route::D3d12 => rsf_unity_frames_drained(bridge_d3d12::completed()) != 0,
+            Route::D3d12 => rsf_unity_frames_drained(bridge_d3d12::completed()),
             Route::Vulkan => true,
             Route::D3d11 | Route::None => d3d11_state::try_close(),
         };
@@ -173,12 +173,11 @@ pub(super) fn render(
 ) {
     match route() {
         Route::Vulkan => {
-            let mut change = 0;
-            let reconfigure =
-                offset == 0 && unsafe { rsf_unity_frames_pending_change(&mut change) } != 0;
+            let change = rsf_unity_frames_pending_change().filter(|_| offset == 0);
+            let reconfigure = change.is_some();
             let delivered =
                 vulkan_state::bridge::render_event(id, event_id(), packet, host, reconfigure);
-            if delivered && reconfigure {
+            if let Some(change) = change.filter(|_| delivered) {
                 rsf_unity_frames_settle_change(change);
             }
         }

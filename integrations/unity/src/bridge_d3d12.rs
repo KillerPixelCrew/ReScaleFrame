@@ -10,8 +10,8 @@ use crate::bridge_state::{
 use crate::d3d11_pass::build_d3d12_pass;
 use crate::sys::rsf_unity_d3d12_engine;
 use crate::sys::{
-    RSF_UNITY_FRAMES_SLOTS, RSF_UNITY_PACKET_HUDLESS, RSF_UNITY_PACKET_WINDOW,
-    rsf_unity_frame_admission, rsf_unity_packet, rsf_unity_source_submission,
+    RSF_UNITY_FRAMES_SLOTS, RSF_UNITY_PACKET_HUDLESS, RSF_UNITY_PACKET_WINDOW, rsf_unity_packet,
+    rsf_unity_source_submission,
 };
 use rsf_game_sys::{
     RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_WINDOW, rsf_game_host_services,
@@ -134,13 +134,11 @@ unsafe fn capture(
     let mut pass = build_d3d12_pass(&packet);
     pass.role = RSF_GAME_RENDER_FINAL_SCENE;
     let recorded = source(&pass);
-    if unsafe { rsf_unity_frames_can_record_source(&recorded) } == 0 {
+    if !rsf_unity_frames_can_record_source(&recorded) {
         return None;
     }
-    unsafe {
-        host.render_pass.unwrap()(host.user, list, &pass, 1);
-        rsf_unity_frames_record_source(&recorded, completion);
-    }
+    unsafe { host.render_pass.unwrap()(host.user, list, &pass, 1) };
+    rsf_unity_frames_record_source(&recorded, completion);
     static REPORTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     if REPORTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 3 {
         let desc = unsafe { ID3D12Resource::from_raw_borrowed(&packet.color)?.GetDesc() };
@@ -164,13 +162,7 @@ unsafe fn reconstruct(
     if !unsafe { frame_fence(engine) } {
         return None;
     }
-    let mut admission = rsf_unity_frame_admission {
-        slot: 0,
-        pending_generation: 0,
-    };
-    if unsafe { rsf_unity_frames_admit_frame(packet, completed(), &mut admission) } == 0 {
-        return None;
-    }
+    let admission = rsf_unity_frames_admit_frame(packet, completed())?;
     let index = admission.slot as usize;
     let mut slot = Slot {
         index,
@@ -224,9 +216,7 @@ unsafe fn reconstruct(
     if hudless {
         pass.role = RSF_GAME_RENDER_FINAL_SCENE;
     }
-    if !unsafe {
-        rsf_unity_frames_dispatch_d3d12(host, list, &mut pass, admission.pending_generation)
-    } {
+    if !rsf_unity_frames_dispatch_d3d12(host, list, &mut pass, admission.pending_generation) {
         let _ = unsafe { commands.list.Close() };
         return None;
     }
@@ -255,7 +245,7 @@ unsafe fn reconstruct(
     }
     let complete =
         unsafe { engine.execute.unwrap()(list, count as u32, resources.as_ptr(), states.as_ptr()) };
-    if unsafe { rsf_unity_frames_submitted(&admission, complete, &source(&pass)) } == 0 {
+    if !rsf_unity_frames_submitted(&admission, complete, &source(&pass)) {
         log(
             host,
             c"Unity D3D12 submission could not be tracked; adapter stopped and remains owned.",
@@ -274,7 +264,7 @@ pub(crate) unsafe fn render_packet(
         return;
     }
     let _event = Event;
-    if rsf_unity_frames_active() == 0 || host.render_pass.is_none() {
+    if !rsf_unity_frames_active() || host.render_pass.is_none() {
         return;
     }
     let raw = unsafe { engine.device.unwrap()() };
@@ -290,10 +280,8 @@ pub(crate) unsafe fn render_packet(
         pass.swapchain = unsafe { engine.swapchain.unwrap()() };
         let queue = unsafe { engine.queue.unwrap()() };
         // Unity synchronizes workers and flushes recorded lists before granting this event the queue.
-        unsafe {
-            rsf_unity_frames_flush_sources(host, queue, &pass);
-            host.render_pass.unwrap()(host.user, queue, &pass, 1);
-        }
+        rsf_unity_frames_flush_sources(host, queue, &pass);
+        unsafe { host.render_pass.unwrap()(host.user, queue, &pass, 1) };
     } else {
         let _ = unsafe { reconstruct(engine, host, device, packet, hudless) };
     }

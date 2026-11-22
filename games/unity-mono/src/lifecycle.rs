@@ -11,6 +11,7 @@ use rsf_game_sys::{
     rsf_game_control_args, rsf_game_prepare_args, rsf_game_renderer_status, rsf_game_start_args,
     rsf_result,
 };
+use rsf_unity::bridge_native::{mono_prepare, mono_release, mono_try_close};
 use std::ffi::CStr;
 use std::ptr;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -74,15 +75,6 @@ static STATE: Mutex<State> = Mutex::new(State {
     },
 });
 
-unsafe extern "C" {
-    fn rsf_unity_mono_prepare(
-        host: *const rsf_game_sys::rsf_game_host_services,
-        api: *mut rsf_unity_native_api,
-    ) -> u32;
-    fn rsf_unity_mono_try_close() -> u32;
-    fn rsf_unity_mono_release();
-}
-
 fn lock() -> MutexGuard<'static, State> {
     STATE.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -131,7 +123,7 @@ pub(crate) unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> r
     if state.bridge_owned {
         return BUSY;
     }
-    if unsafe { rsf_unity_mono_prepare(host, &raw mut state.api) } == 0 {
+    if !unsafe { mono_prepare(host, &raw mut state.api) } {
         return NOT_READY;
     }
     state.bridge_owned = true;
@@ -151,8 +143,8 @@ pub(crate) unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> r
             rsf_game_sys::rsf_game_log_guarded(Some(log), host_services.user, state.reason.as_ptr())
         };
     }
-    if unsafe { rsf_unity_mono_try_close() } != 0 {
-        unsafe { rsf_unity_mono_release() };
+    if mono_try_close() {
+        mono_release();
         state.bridge_owned = false;
         NOT_READY
     } else {
@@ -199,10 +191,10 @@ pub(crate) unsafe extern "C" fn stop(args: *const rsf_game_control_args) -> rsf_
     }
     // Close admission before releasing any of the host's borrowed services.
     if state.bridge_owned {
-        if unsafe { rsf_unity_mono_try_close() } == 0 || !mono::stop() {
+        if !mono_try_close() || !mono::stop() {
             return BUSY;
         }
-        unsafe { rsf_unity_mono_release() };
+        mono_release();
         state.bridge_owned = false;
     }
     state.prepared = false;

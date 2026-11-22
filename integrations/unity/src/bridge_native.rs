@@ -3,15 +3,14 @@
 
 use crate::bridge_d3d12;
 use crate::bridge_state::*;
+use crate::sys::rsf_unity_packet;
 use crate::sys::{
     RSF_UNITY_D3D12_EVENT_FLUSH, RSF_UNITY_D3D12_EVENT_MODIFIES, RSF_UNITY_D3D12_EVENT_SYNC,
     rsf_unity_d3d12_engine,
 };
 use crate::sys::{RSF_UNITY_NATIVE_ABI_VERSION, rsf_unity_native_api};
-use crate::sys::{rsf_unity_packet, rsf_unity_texture_ops};
 use rsf_game_sys::*;
 use std::ffi::{c_char, c_int, c_void};
-use std::mem::MaybeUninit;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicI32, AtomicPtr, AtomicU64, Ordering::SeqCst};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -70,11 +69,6 @@ static D3D12_EVENT_ID: AtomicI32 = AtomicI32::new(0);
 static INPUT_SOURCE: AtomicU64 = AtomicU64::new(0);
 static MESSAGE_HOOK: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 
-const TEXTURES: rsf_unity_texture_ops = rsf_unity_texture_ops {
-    retain: Some(rsf_unity_retain_texture),
-    release: Some(rsf_unity_release_texture),
-};
-
 fn host_lock() -> MutexGuard<'static, Option<Services>> {
     HOST.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -87,11 +81,7 @@ struct Callback;
 
 impl Callback {
     fn enter() -> Option<Self> {
-        if rsf_unity_frames_callback_enter() != 0 {
-            Some(Self)
-        } else {
-            None
-        }
+        rsf_unity_frames_callback_enter().then_some(Self)
     }
 }
 
@@ -108,15 +98,8 @@ struct Packet {
 
 impl Packet {
     fn take(address: *mut c_void) -> Option<Self> {
-        let mut packet = MaybeUninit::uninit();
-        let mut slot = 0;
-        if unsafe { rsf_unity_frames_take_packet(address, packet.as_mut_ptr(), &mut slot) } == 0 {
-            return None;
-        }
-        Some(Self {
-            packet: unsafe { packet.assume_init() },
-            slot,
-        })
+        let (slot, packet) = rsf_unity_frames_take_packet(address)?;
+        Some(Self { packet, slot })
     }
 }
 
@@ -124,10 +107,6 @@ impl Drop for Packet {
     fn drop(&mut self) {
         rsf_unity_frames_end_packet(self.slot);
     }
-}
-
-fn active() -> bool {
-    rsf_unity_frames_active() != 0
 }
 
 unsafe extern "C" fn log(message: *const c_char) {
@@ -156,10 +135,9 @@ unsafe extern "C" fn enqueue(packet: *const crate::sys::rsf_unity_packet) -> *mu
     let session = locked.as_ref().map_or(0, |host| host.0.session_id);
     #[cfg(not(feature = "mono-plugin"))]
     if !matches!(route(), Route::D3d11 | Route::D3d12) {
-        let mut slot = 0;
-        return unsafe { rsf_unity_frames_admit_packet(packet.cast(), session, &mut slot) };
+        return unsafe { rsf_unity_frames_admit_packet(packet, session) };
     }
-    unsafe { rsf_unity_frames_admit_leased_packet(packet.cast(), session, &TEXTURES) }
+    unsafe { rsf_unity_frames_admit_leased_packet(packet, session) }
 }
 
 unsafe extern "system" fn render(id: c_int, address: *mut c_void) {
@@ -182,7 +160,7 @@ unsafe extern "system" fn render(id: c_int, address: *mut c_void) {
             }
         }
         #[cfg(not(feature = "mono-plugin"))]
-        Route::D3d11 | Route::Vulkan if active() => {
+        Route::D3d11 | Route::Vulkan if rsf_unity_frames_active() => {
             package::render(id, offset, &host, &packet.packet)
         }
         _ => {}
@@ -206,7 +184,7 @@ unsafe extern "system" fn received_message(
     if let Some(_callback) = Callback::enter()
         && code >= 0
         && removed == PM_REMOVE as WPARAM
-        && active()
+        && rsf_unity_frames_active()
         && let Some(host) = host()
         && let Some(deliver) = host.cpu_event
     {
@@ -243,7 +221,7 @@ unsafe extern "C" fn cpu_fact(fact: *const rsf_game_cpu_event) {
     let Some(_callback) = Callback::enter() else {
         return;
     };
-    if !active()
+    if !rsf_unity_frames_active()
         || fact.is_null()
         || unsafe { fact.cast::<u32>().read() } < size_of::<rsf_game_cpu_event>() as u32
     {
@@ -294,7 +272,7 @@ unsafe extern "C" fn cpu_event(stage: u32, frame_id: u64) {
         return;
     };
     let Some(host) = host() else { return };
-    if !active() || frame_id == 0 || host.cpu_event.is_none() {
+    if !rsf_unity_frames_active() || frame_id == 0 || host.cpu_event.is_none() {
         return;
     }
     let (now, frequency) = timestamp();
@@ -303,7 +281,7 @@ unsafe extern "C" fn cpu_event(stage: u32, frame_id: u64) {
         INPUT_SOURCE.store(frame_id, SeqCst);
         open_message_hook();
     }
-    unsafe { rsf_unity_frames_cpu_stage(&host, stage, frame_id, now, frequency) };
+    rsf_unity_frames_cpu_stage(&host, stage, frame_id, now, frequency);
     if d3d12 && stage == RSF_GAME_CPU_FRAME_END {
         INPUT_SOURCE.store(0, SeqCst);
     }
@@ -353,25 +331,26 @@ fn release_d3d12() {
     rsf_unity_frames_release();
 }
 
+/// The game plugin's session start: stores the host and writes the managed API.
+///
+/// # Safety
+/// host and pi are null or valid for the call; the host outlives the session.
 #[cfg(feature = "mono-plugin")]
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_mono_prepare(
+pub unsafe fn mono_prepare(
     host: *const rsf_game_host_services,
     api: *mut rsf_unity_native_api,
-) -> u32 {
-    unsafe { prepare(host, api) }
+) -> bool {
+    unsafe { prepare(host, api) != 0 }
 }
 
 #[cfg(feature = "mono-plugin")]
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_mono_try_close() -> u32 {
+pub fn mono_try_close() -> bool {
     let _locked = host_lock();
     rsf_unity_frames_try_close_completed(bridge_d3d12::completed())
 }
 
 #[cfg(feature = "mono-plugin")]
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_mono_release() {
+pub fn mono_release() {
     release_d3d12();
 }
 
@@ -393,8 +372,8 @@ extern "C" fn rsf_unity_d3d12_configure_events(package: bool) {
 }
 
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_unity_set_engine_spatial(spatial: u32, quality: u32) -> c_int {
-    rsf_unity_frames_set_policy(spatial, quality)
+pub extern "C" fn rsf_unity_set_engine_spatial(spatial: u32, quality: u32) -> c_int {
+    c_int::from(rsf_unity_frames_set_policy(spatial, quality))
 }
 
 #[unsafe(no_mangle)]

@@ -275,11 +275,7 @@ mod d3d11 {
     pub(crate) fn apply_pending_change(plan: &mut PassPlan) -> bool {
         apply_change(
             plan,
-            || {
-                let mut generation = 0;
-                (unsafe { rsf_unity_frames_pending_change(&mut generation) } != 0)
-                    .then_some(generation)
-            },
+            rsf_unity_frames_pending_change,
             || {
                 let submitted = D3D11.lock().submitted();
                 wait_completion(submitted)

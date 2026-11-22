@@ -34,7 +34,7 @@ mod bridge_interop;
 // Unity SDK dispatch over the C leaves in native/render_bridge.c, which need the untracked Unity
 // native headers; unit tests cover the packet state and policy it drives.
 #[cfg(all(windows, not(test)))]
-mod bridge_native;
+pub mod bridge_native;
 pub mod bridge_state;
 mod d3d11_pass;
 #[cfg(any(test, not(feature = "mono-plugin")))]

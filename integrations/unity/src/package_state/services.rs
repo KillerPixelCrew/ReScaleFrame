@@ -44,10 +44,9 @@ struct InputCallback;
 
 impl InputCallback {
     fn enter() -> Option<Self> {
-        if rsf_unity_frames_callback_enter() == 0 {
-            return None;
-        }
-        Some(Self).filter(|_| rsf_unity_frames_active() != 0)
+        rsf_unity_frames_callback_enter()
+            .then_some(Self)
+            .filter(|_| rsf_unity_frames_active())
     }
 }
 

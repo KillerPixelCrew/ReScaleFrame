@@ -1,21 +1,26 @@
 // SPDX-License-Identifier: MIT
 //! Loader entry points, UnitySR settings and the bounded wait for Mono. This module passes the
 //! owned executable identity and adapter callbacks to the Runtime already loaded by the carrier.
+use crate::bridge_state::rsf_unity_mono_drained_generation;
 use crate::generation::{self, RSF_DLSS_ENGINE_UNITY, Sources};
 use crate::runtime_config::{
     Ini, PATH_CAPACITY, file_name, path_setting, preferences_path, profile_int, setting,
     terminated, utf8,
 };
 use crate::startup_policy::{self, MONO_DEADLINE, wait_for_sr};
+// The carrier already loaded the Runtime. The plugin target links its import library.
 use crate::sys::{
     RSF_DLSS_PRESET_MASK, RSF_FG_BACKEND_ALL, RSF_FG_FIXED, RSF_REFLEX_OFF, RSF_SR_AUTO,
     RSF_SR_DLSS, RSF_SR_FSR2, RSF_SR_FSR3, RSF_SR_FSR4, RSF_SR_SPATIAL, RSF_SR_XESS,
-    rsf_backend_result, rsf_fg_choice, rsf_fg12_setup, rsf_native_fg_options,
+    rsf_backend_result, rsf_callback_host_start, rsf_callback_host_stop, rsf_fg_choice_get,
+    rsf_fg_choice_start, rsf_fg12_capture_outputs, rsf_fg12_install, rsf_fg12_setup,
+    rsf_native_fg_options, rsf_overlay_saved_options_unregister,
 };
 use rsf_game_sys::{
     RSF_CALLBACK_HOST_ABI_VERSION_V2, rsf_callback_host_setup, rsf_callback_host_setup_v2,
     rsf_game_probe,
 };
+use rsf_unity::bridge_native::rsf_unity_set_engine_spatial;
 use std::ffi::{CStr, OsString, c_char, c_int, c_void};
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -68,19 +73,6 @@ static DIAGNOSTICS_INI: Mutex<Vec<u16>> = Mutex::new(Vec::new());
 
 const ENGINE_VERSION: &CStr = c"6000.3";
 const PROJECT_ID: &CStr = c"57a42c7e-faf0-4bda-a9f9-892870948ac1";
-
-// The carrier already loaded this Runtime. The plugin target links its import library.
-unsafe extern "C" {
-    fn rsf_fg_choice_start(path: *const u16, fallback: u32, choices: u32) -> u32;
-    fn rsf_fg_choice_get() -> rsf_fg_choice;
-    fn rsf_fg12_install(setup: *const rsf_fg12_setup) -> rsf_backend_result;
-    fn rsf_fg12_capture_outputs(directory: *const c_char) -> rsf_backend_result;
-    fn rsf_callback_host_start(setup: *const rsf_callback_host_setup) -> u32;
-    fn rsf_callback_host_stop() -> u32;
-    fn rsf_unity_set_engine_spatial(spatial: u32, quality: u32) -> c_int;
-    fn rsf_unity_mono_drained_generation(generation: *mut u32) -> c_int;
-    fn rsf_overlay_saved_options_unregister(scope: *mut c_void) -> i32;
-}
 
 unsafe extern "C" fn capture_directory_changed(
     _: *mut c_void,

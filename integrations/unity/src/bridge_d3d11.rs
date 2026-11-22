@@ -528,7 +528,7 @@ pub(crate) unsafe fn render_packet(
     editor: bool,
     packet: &rsf_unity_packet,
 ) {
-    if rsf_unity_frames_active() == 0 {
+    if !rsf_unity_frames_active() {
         return;
     }
     let mut device = DeviceHandles::EMPTY;

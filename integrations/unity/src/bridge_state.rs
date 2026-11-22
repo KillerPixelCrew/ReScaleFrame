@@ -461,6 +461,7 @@ impl State {
         true
     }
 
+    #[cfg(any(test, feature = "mono-plugin"))]
     fn try_close_completed(&mut self, active: bool, completed: u64) -> bool {
         completed != u64::MAX && self.drained(completed) && self.try_close(active)
     }
@@ -508,6 +509,7 @@ impl State {
     }
 }
 
+/// render_bridge.c deactivates the bridge when its Unity interfaces unload.
 #[unsafe(no_mangle)]
 pub extern "C" fn rsf_unity_frames_activate(enabled: u32) {
     let mut state = lock();
@@ -517,12 +519,11 @@ pub extern "C" fn rsf_unity_frames_activate(enabled: u32) {
     ACTIVE.store(enabled != 0, Ordering::SeqCst);
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_unity_frames_active() -> u32 {
-    u32::from(ACTIVE.load(Ordering::SeqCst))
+pub(crate) fn rsf_unity_frames_active() -> bool {
+    ACTIVE.load(Ordering::SeqCst)
 }
 
-#[unsafe(no_mangle)]
+/// The managed adapter's stage report (rsf_unity_native_api::managed_state).
 pub(crate) extern "C" fn rsf_unity_frames_report_managed(stage: u32) {
     let state = lock();
     if !state.closed {
@@ -530,108 +531,72 @@ pub(crate) extern "C" fn rsf_unity_frames_report_managed(stage: u32) {
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn rsf_unity_frames_managed_stage() -> u32 {
+pub fn rsf_unity_frames_managed_stage() -> u32 {
     MANAGED_STAGE.load(Ordering::SeqCst)
 }
 
-/// The admission both exports share: the stored slot and the address Unity hands back.
-unsafe fn admit(
-    packet: *const rsf_unity_packet,
-    session_id: u64,
-    lease: Option<rsf_unity_texture_ops>,
-) -> Option<(usize, *mut c_void)> {
-    if packet.is_null() {
-        return None;
-    }
-    // Only the size field is readable from a short packet.
-    if unsafe { packet.cast::<u32>().read_unaligned() } != size_of::<rsf_unity_packet>() as u32 {
-        return None;
-    }
-    let packet = unsafe { packet.read_unaligned() };
-    let mut state = lock();
-    if state.closed || !ACTIVE.load(Ordering::SeqCst) {
-        return None;
-    }
-    let index = match lease {
-        Some(ops) => state.admit_leased(&packet, session_id, ops),
-        None => state.admit_packet(&packet, session_id),
-    }?;
-    Some((index, state.packet_address(index)))
-}
-
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_unity_frames_admit_packet(
-    packet: *const rsf_unity_packet,
-    session_id: u64,
-    slot: *mut u32,
-) -> *mut c_void {
-    if slot.is_null() {
-        return ptr::null_mut();
-    }
-    let Some((index, address)) = (unsafe { admit(packet, session_id, None) }) else {
-        return ptr::null_mut();
-    };
-    unsafe { slot.write(index as u32) };
-    address
-}
-
-/// Admission with native texture references. The returned address
-/// already holds the packet's lease.
+/// The admission both entry points share: the stored slot and the address Unity hands back.
 ///
 /// # Safety
 /// `packet` is null or readable for its leading size field, and for a whole packet when that
 /// field matches. `ops` must accept every non-null resource the packet names.
-unsafe fn admit_leased_packet(
+unsafe fn admit(
     packet: *const rsf_unity_packet,
     session_id: u64,
-    ops: rsf_unity_texture_ops,
+    lease: Option<rsf_unity_texture_ops>,
 ) -> *mut c_void {
-    unsafe { admit(packet, session_id, Some(ops)) }.map_or(ptr::null_mut(), |(_, address)| address)
-}
-
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_unity_frames_take_packet(
-    address: *const c_void,
-    packet: *mut rsf_unity_packet,
-    slot: *mut u32,
-) -> u32 {
-    if packet.is_null() || slot.is_null() {
-        return 0;
-    }
-    let Some((index, stored)) = lock().take_packet(address) else {
-        return 0;
-    };
-    unsafe {
-        packet.write(stored);
-        slot.write(index as u32);
-    }
-    1
-}
-
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_unity_frames_admit_leased_packet(
-    packet: *const rsf_unity_packet,
-    session_id: u64,
-    ops: *const rsf_unity_texture_ops,
-) -> *mut c_void {
-    let Some(ops) = (unsafe { ops.as_ref() }) else {
+    if packet.is_null() {
         return ptr::null_mut();
+    }
+    // Only the size field is readable from a short packet.
+    if unsafe { packet.cast::<u32>().read_unaligned() } != size_of::<rsf_unity_packet>() as u32 {
+        return ptr::null_mut();
+    }
+    let packet = unsafe { packet.read_unaligned() };
+    let mut state = lock();
+    if state.closed || !ACTIVE.load(Ordering::SeqCst) {
+        return ptr::null_mut();
+    }
+    let slot = match lease {
+        Some(ops) => state.admit_leased(&packet, session_id, ops),
+        None => state.admit_packet(&packet, session_id),
     };
-    unsafe { admit_leased_packet(packet, session_id, *ops) }
+    slot.map_or(ptr::null_mut(), |slot| state.packet_address(slot))
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_unity_frames_cpu_stage(
-    services: *const rsf_game_host_services,
+/// Stores a packet whose resources are borrowed identities.
+#[cfg(not(feature = "mono-plugin"))]
+pub(crate) unsafe fn rsf_unity_frames_admit_packet(
+    packet: *const rsf_unity_packet,
+    session_id: u64,
+) -> *mut c_void {
+    unsafe { admit(packet, session_id, None) }
+}
+
+/// Stores a packet and retains its native textures. The returned address already holds the lease.
+#[cfg(windows)]
+pub(crate) unsafe fn rsf_unity_frames_admit_leased_packet(
+    packet: *const rsf_unity_packet,
+    session_id: u64,
+) -> *mut c_void {
+    unsafe { admit(packet, session_id, Some(TEXTURES)) }
+}
+
+/// Copies out the queued packet stored at `address` with its slot.
+pub(crate) fn rsf_unity_frames_take_packet(
+    address: *const c_void,
+) -> Option<(u32, rsf_unity_packet)> {
+    let (slot, packet) = lock().take_packet(address)?;
+    Some((slot as u32, packet))
+}
+
+pub(crate) fn rsf_unity_frames_cpu_stage(
+    services: &rsf_game_host_services,
     stage: u32,
     source: u64,
     timestamp_qpc: u64,
     qpc_frequency: u64,
 ) {
-    let Some(services) = (unsafe { services.as_ref() }) else {
-        return;
-    };
     if source == 0 || !ACTIVE.load(Ordering::SeqCst) {
         return;
     }
@@ -655,17 +620,19 @@ pub(crate) unsafe extern "C" fn rsf_unity_frames_cpu_stage(
 
 /// The render event that took a leased packet from `slot` has ended: free the slot, then release
 /// the lease outside the state mutex.
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_unity_frames_end_packet(slot: u32) {
+pub(crate) fn rsf_unity_frames_end_packet(slot: u32) {
     let lease = lock().end_packet(slot as usize);
     if let Some(lease) = lease {
         lease.end();
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_unity_frames_config(
-    services: *const rsf_game_host_services,
+/// Fills the managed adapter's config from the host's render config and the current policy.
+///
+/// # Safety
+/// `output` is null or the managed adapter's config record, readable for its header.
+pub(crate) unsafe fn rsf_unity_frames_config(
+    services: &rsf_game_host_services,
     output_width: u32,
     output_height: u32,
     output: *mut rsf_unity_config,
@@ -679,9 +646,6 @@ pub(crate) unsafe extern "C" fn rsf_unity_frames_config(
     {
         return 0;
     }
-    let Some(services) = (unsafe { services.as_ref() }) else {
-        return 0;
-    };
     let Some(render_config) = services.render_config else {
         return 0;
     };
@@ -707,13 +671,11 @@ pub(crate) unsafe extern "C" fn rsf_unity_frames_config(
     1
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_unity_frames_set_policy(engine_spatial: u32, quality: u32) -> c_int {
-    let mut state = lock();
-    c_int::from(state.set_policy(engine_spatial, quality, ACTIVE.load(Ordering::SeqCst)))
+pub(crate) fn rsf_unity_frames_set_policy(engine_spatial: u32, quality: u32) -> bool {
+    lock().set_policy(engine_spatial, quality, ACTIVE.load(Ordering::SeqCst))
 }
 
-#[unsafe(no_mangle)]
+/// The Mono host's policy request (rsf_game_unity_policy::request_policy).
 pub unsafe extern "C" fn rsf_unity_mono_request_policy(
     engine_spatial: u32,
     quality: u32,
@@ -730,7 +692,6 @@ pub unsafe extern "C" fn rsf_unity_mono_request_policy(
     1
 }
 
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_unity_mono_spatial_extent(
     quality: u32,
     width: u32,
@@ -753,91 +714,57 @@ pub unsafe extern "C" fn rsf_unity_mono_spatial_extent(
     1
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_unity_frames_pending_change(generation: *mut u32) -> u32 {
-    if generation.is_null() {
-        return 0;
-    }
-    let Some(pending) = lock().pending_change() else {
-        return 0;
-    };
-    unsafe { generation.write(pending) };
-    1
+/// The generation of the pending policy change, for the package's D3D11 and Vulkan events.
+#[cfg(not(feature = "mono-plugin"))]
+pub(crate) fn rsf_unity_frames_pending_change() -> Option<u32> {
+    lock().pending_change()
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_unity_frames_settle_change(generation: u32) -> u32 {
-    u32::from(lock().settle_change(generation))
+#[cfg(not(feature = "mono-plugin"))]
+pub(crate) fn rsf_unity_frames_settle_change(generation: u32) -> bool {
+    lock().settle_change(generation)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_unity_frames_admit_frame(
-    packet: *const rsf_unity_packet,
+pub(crate) fn rsf_unity_frames_admit_frame(
+    packet: &rsf_unity_packet,
     completed: u64,
-    admission: *mut rsf_unity_frame_admission,
-) -> u32 {
-    let Some(packet) = (unsafe { packet.as_ref() }) else {
-        return 0;
-    };
-    if admission.is_null() {
-        return 0;
-    }
-    let Some(admitted) = lock().admit_frame(packet, completed) else {
-        return 0;
-    };
-    unsafe { admission.write(admitted) };
-    1
+) -> Option<rsf_unity_frame_admission> {
+    lock().admit_frame(packet, completed)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_unity_frames_submitted(
-    admission: *const rsf_unity_frame_admission,
+/// Records a submission. One that gives no completion stops the bridge.
+pub(crate) fn rsf_unity_frames_submitted(
+    admission: &rsf_unity_frame_admission,
     complete: u64,
-    source: *const rsf_unity_source_submission,
-) -> u32 {
-    let Some(admission) = (unsafe { admission.as_ref() }) else {
-        return 0;
-    };
-    let Some(source) = (unsafe { source.as_ref() }) else {
-        return 0;
-    };
+    source: &rsf_unity_source_submission,
+) -> bool {
     if lock().submitted(admission, complete, source) {
-        return 1;
+        return true;
     }
     ACTIVE.store(false, Ordering::SeqCst);
-    0
+    false
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_unity_frames_can_record_source(
-    source: *const rsf_unity_source_submission,
-) -> u32 {
-    u32::from(unsafe { source.as_ref() }.is_some_and(|source| lock().can_record_source(source)))
+pub(crate) fn rsf_unity_frames_can_record_source(source: &rsf_unity_source_submission) -> bool {
+    lock().can_record_source(source)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_unity_frames_record_source(
-    source: *const rsf_unity_source_submission,
+pub(crate) fn rsf_unity_frames_record_source(
+    source: &rsf_unity_source_submission,
     inline_fence: u64,
 ) {
-    if let Some(source) = unsafe { source.as_ref() } {
-        let recorded = lock().record_source(source, inline_fence);
-        debug_assert!(
-            recorded,
-            "the event checked inline receipt capacity before recording"
-        );
-    }
+    let recorded = lock().record_source(source, inline_fence);
+    debug_assert!(
+        recorded,
+        "the event checked inline receipt capacity before recording"
+    );
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_unity_frames_flush_sources(
-    services: *const rsf_game_host_services,
+pub(crate) fn rsf_unity_frames_flush_sources(
+    services: &rsf_game_host_services,
     queue: *mut c_void,
-    window: *const rsf_game_render_pass,
+    window: &rsf_game_render_pass,
 ) {
-    let (Some(services), Some(window)) = (unsafe { (services.as_ref(), window.as_ref()) }) else {
-        return;
-    };
     let Some(render) = services.render_pass else {
         return;
     };
@@ -857,16 +784,12 @@ pub(crate) unsafe extern "C" fn rsf_unity_frames_flush_sources(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_unity_frames_dispatch_d3d12(
-    services: *const rsf_game_host_services,
+pub(crate) fn rsf_unity_frames_dispatch_d3d12(
+    services: &rsf_game_host_services,
     commands: *mut c_void,
-    pass: *mut rsf_game_render_pass,
+    pass: &mut rsf_game_render_pass,
     generation: u32,
 ) -> bool {
-    let (Some(services), Some(pass)) = (unsafe { (services.as_ref(), pass.as_mut()) }) else {
-        return false;
-    };
     let Some(render) = services.render_pass else {
         return false;
     };
@@ -889,8 +812,8 @@ pub(crate) unsafe extern "C" fn rsf_unity_frames_dispatch_d3d12(
     true
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_mono_drained_generation(generation: *mut u32) -> c_int {
+/// The Mono host's query for the policy generation being delivered on this thread.
+pub unsafe extern "C" fn rsf_unity_mono_drained_generation(generation: *mut u32) -> c_int {
     let delivered = DELIVERED_GENERATION.get();
     if generation.is_null() || delivered == 0 {
         return 0;
@@ -899,60 +822,53 @@ unsafe extern "C" fn rsf_unity_mono_drained_generation(generation: *mut u32) -> 
     1
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_unity_frames_begin_d3d12_event() -> bool {
+pub(crate) fn rsf_unity_frames_begin_d3d12_event() -> bool {
     D3D12_RECORDING
         .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
         .is_ok()
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_unity_frames_end_d3d12_event() {
+pub(crate) fn rsf_unity_frames_end_d3d12_event() {
     D3D12_RECORDING.store(false, Ordering::Release);
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_unity_frames_callback_enter() -> u32 {
+pub(crate) fn rsf_unity_frames_callback_enter() -> bool {
     let mut state = lock();
     if state.closed {
-        return 0;
+        return false;
     }
     state.callbacks += 1;
-    1
+    true
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_unity_frames_callback_leave() {
+pub(crate) fn rsf_unity_frames_callback_leave() {
     lock().callbacks -= 1;
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_unity_frames_open_callbacks() {
+#[cfg(feature = "mono-plugin")]
+pub(crate) fn rsf_unity_frames_open_callbacks() {
     lock().closed = false;
 }
 
 /// Keep queued packet delivery open until all packets have been taken
 /// and every leased packet's render event has ended.
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_unity_frames_try_close() -> u32 {
-    let mut state = lock();
-    u32::from(state.try_close(ACTIVE.load(Ordering::SeqCst)))
+#[cfg(not(feature = "mono-plugin"))]
+pub(crate) fn rsf_unity_frames_try_close() -> bool {
+    lock().try_close(ACTIVE.load(Ordering::SeqCst))
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_unity_frames_try_close_completed(completed: u64) -> u32 {
-    let mut state = lock();
-    u32::from(state.try_close_completed(ACTIVE.load(Ordering::SeqCst), completed))
+#[cfg(feature = "mono-plugin")]
+pub(crate) fn rsf_unity_frames_try_close_completed(completed: u64) -> bool {
+    lock().try_close_completed(ACTIVE.load(Ordering::SeqCst), completed)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_unity_frames_drained(completed: u64) -> u32 {
+#[cfg(not(feature = "mono-plugin"))]
+pub(crate) fn rsf_unity_frames_drained(completed: u64) -> bool {
     let state = lock();
-    u32::from(state.callbacks == 0 && state.drained(completed))
+    state.callbacks == 0 && state.drained(completed)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_unity_frames_release() {
+pub(crate) fn rsf_unity_frames_release() {
     let leases = lock().release();
     MANAGED_STAGE.store(0, Ordering::SeqCst);
     for lease in leases.into_iter().flatten() {
@@ -961,8 +877,13 @@ pub(crate) extern "C" fn rsf_unity_frames_release() {
 }
 
 #[cfg(windows)]
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_unity_retain_texture(texture: *mut c_void) {
+const TEXTURES: rsf_unity_texture_ops = rsf_unity_texture_ops {
+    retain: Some(rsf_unity_retain_texture),
+    release: Some(rsf_unity_release_texture),
+};
+
+#[cfg(windows)]
+unsafe extern "C" fn rsf_unity_retain_texture(texture: *mut c_void) {
     use windows::core::{IUnknown, Interface};
     if let Some(resource) = unsafe { IUnknown::from_raw_borrowed(&texture) } {
         let _ = resource.clone().into_raw();
@@ -970,14 +891,12 @@ pub(crate) unsafe extern "C" fn rsf_unity_retain_texture(texture: *mut c_void) {
 }
 
 #[cfg(windows)]
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_unity_release_texture(texture: *mut c_void) {
+unsafe extern "C" fn rsf_unity_release_texture(texture: *mut c_void) {
     use windows::core::{IUnknown, Interface};
     if !texture.is_null() {
         drop(unsafe { IUnknown::from_raw(texture) });
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
