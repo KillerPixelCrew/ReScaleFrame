@@ -83,7 +83,7 @@ const EXECUTABLE_SHA256: &CStr =
 const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
 const PENDING: &CStr = c"Guarded native/reduced SR callbacks; game quality, FG admission and measured latency pending validation.";
 
-/// A native leaf threw; the lifecycle entry reports RSF_ERROR_NOT_READY as the former native catch did.
+/// A native leaf threw; the lifecycle entry reports RSF_ERROR_NOT_READY.
 pub(crate) struct Threw;
 
 // MinHook.h, MH_STATUS. The native CMake target links the same MinHook instance for all seams.

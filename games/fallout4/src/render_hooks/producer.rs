@@ -241,7 +241,7 @@ fn after_prepass(
         return;
     }
     let _ = unsafe { (leaves.capture_raster)(&call.identity) };
-    // The stack-owned snapshot, as the C++ value-initialized one.
+    // The stack-owned, value-initialized snapshot.
     let mut snapshot = EMPTY;
     if unsafe { (leaves.capture_depth)(&call.identity, &mut snapshot) }
         && source_current(&call.identity)

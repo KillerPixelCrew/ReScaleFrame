@@ -133,7 +133,7 @@ mod subsystems {
 #[cfg(test)]
 use tests::subsystems;
 
-/// A native leaf threw. A lifecycle entry reports RSF_ERROR_NOT_READY as the former C++ catch did.
+/// A native leaf threw. A lifecycle entry reports RSF_ERROR_NOT_READY.
 struct Threw;
 
 fn log(host: &rsf_game_host_services, message: *const c_char) -> Result<(), Threw> {
@@ -206,7 +206,7 @@ fn quiesce_subsystems(creation_first: bool) {
 }
 
 /// The per-monitor-v2 startup request, once per process before any observer hook exists. A
-/// request that does not verify is logged; prepare continues as before.
+/// request that does not verify is logged; prepare continues.
 fn request_dpi(host: &rsf_game_host_services) -> Result<(), Threw> {
     let startup = rsf_game_sys::dpi::request_per_monitor_v2(true);
     if host.log.is_some() {
@@ -642,7 +642,7 @@ pub(crate) unsafe extern "C" fn quiesce(args: *const rsf_game_control_args) -> r
     if valid != OK {
         return valid;
     }
-    // Withdraw first, as before, so a lifecycle call holding the lock cannot delay it.
+    // Withdraw first, so a lifecycle call holding the lock cannot delay it.
     ACCEPTING.store(false, Ordering::Release);
     run(Session::quiesce)
 }

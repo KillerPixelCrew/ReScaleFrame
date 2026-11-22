@@ -39,7 +39,6 @@ fn request(host: &rsf_game_host_services) -> Result<Option<&'static CStr>, Threw
     let startup = rsf_game_sys::dpi::request_per_monitor_v2(cold);
     if host.log.is_some() {
         let flag = |value: bool| u32::from(value);
-        // Pointer fields keep the MSVC %p rendering of the previous native report.
         let text = message(format!(
             "Fallout4 DPI startup PMv2 requested={} accepted={} prior_compatible={} verified={} error={} owner_read={} device_absent={} window_absent={} windows_read={} process_windows={} process_before={:016X} thread_before={:016X} process_after={:016X} thread_after={:016X}; prepare before host graphics setup.",
             flag(startup.requested),

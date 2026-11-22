@@ -209,7 +209,7 @@ fn log(host: &rsf_game_host_services, text: String) {
     let _ = crate::log_host(host, &message(text));
 }
 
-/// A pointer as the previous native MSVC %p rendering.
+/// A pointer as MSVC %p renders it.
 struct P(usize);
 impl std::fmt::Display for P {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -2370,7 +2370,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_swap_exit(scope: *mut rsf_fallout4_cpu_sco
 }
 
 /// The Swap scope close, run by the shell's destructor on return and on a native unwind, as the
-/// previous native Exit guard was.
+/// Exit guard does.
 ///
 /// # Safety
 /// `scope` is the receipt its entry wrote.

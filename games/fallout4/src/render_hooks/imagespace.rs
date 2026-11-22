@@ -245,7 +245,7 @@ fn gate_taa(leaves: &Leaves, recovery: &RecoveryLeaves, original: bool) -> bool 
             u32::from(active),
             recovery::token(),
         ));
-        recovery.report_text(&text);
+        recovery.report(&text);
     }
     active
 }

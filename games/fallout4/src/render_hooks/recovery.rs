@@ -132,11 +132,8 @@ pub(super) struct Leaves {
 const _: () = assert!(size_of::<Leaves>() == 15 * size_of::<usize>());
 
 impl Leaves {
+    /// Reports a terminated message, usually from `crate::message`.
     pub(super) fn report(&self, text: &CStr) {
-        unsafe { (self.report)(text.as_ptr()) }
-    }
-    /// Reports a terminated message from `crate::message`.
-    pub(super) fn report_text(&self, text: &CStr) {
         unsafe { (self.report)(text.as_ptr()) }
     }
     pub(super) fn refuse(&self) {
@@ -181,7 +178,7 @@ impl Leaves {
     }
 }
 
-/// Discards the candidate lease when a step returns, as the C++ stack lease did.
+/// Discards the candidate lease when a step returns.
 struct Candidate<'a>(&'a Leaves);
 
 impl Drop for Candidate<'_> {
@@ -313,7 +310,7 @@ fn call(leaves: &Leaves, operation: u32) -> bool {
                 request.temporal_result,
                 u32::from(request.result_flags & TEMPORAL_ATTEMPTED != 0),
             ));
-            unsafe { (leaves.report)(text.as_ptr()) };
+            leaves.report(&text);
         }
     }
     if result == RSF_OK
@@ -343,7 +340,6 @@ fn reserve(leaves: &Leaves, planned: &rsf_game_render_pass) -> bool {
         return refusal(leaves, 0);
     }
     let _candidate = Candidate(leaves);
-    // The preflight records the output owner directly, as the C++ owner field did.
     let mut owner = state().owner;
     let preflighted =
         leaves.read_raster(false) && leaves.preflight(planned, facts.context, &mut owner);

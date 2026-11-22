@@ -169,7 +169,7 @@ const NO_RASTER: CameraRaster = CameraRaster {
     crop: [0; 4],
 };
 
-/// Reader refusal stages in the C++ order. The once-per-process receipt mask is indexed by them.
+/// Reader refusal stages. The once-per-process receipt mask is indexed by them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u32)]
 enum Stage {
@@ -245,7 +245,7 @@ const NAMES: [&CStr; 33] = [
 ];
 const _: () = assert!(Stage::ProducerChanged as usize + 1 == NAMES.len() && NAMES.len() <= 64);
 
-/// Framebuffer refusal stages in the C++ order, with their own receipt mask.
+/// Framebuffer refusal stages, with their own receipt mask.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u32)]
 enum Framebuffer {
@@ -453,7 +453,7 @@ fn state(out: &mut State) -> Result<(), Stage> {
 }
 
 /// The one bound viewport: `(admitted, count, viewport)`. The count is the copied count when the
-/// first count was one, as the C++ reported it.
+/// first count was one.
 fn active_full_viewport(
     context: usize,
     width: u32,
@@ -506,7 +506,7 @@ struct ViewCheck<'a> {
     device_match: &'a mut u32,
 }
 
-#[allow(clippy::too_many_arguments)] // the C++ view_texture arguments and its facts
+#[allow(clippy::too_many_arguments)] // the view, its expectations and the receipt facts
 fn view_texture(
     lease: &mut native::NativeLease,
     slot: u32,

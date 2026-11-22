@@ -49,7 +49,7 @@ const ZERO_BOUND: CameraDepthBound = CameraDepthBound {
 };
 
 // Ordered comparisons that are false for NaN, spelled as calls so `!above(x, 0.0)` keeps the
-// C++ `!(x>0)` meaning.
+// `!(x>0)` meaning.
 pub(crate) fn above(value: f32, bound: f32) -> bool {
     value > bound
 }
@@ -193,7 +193,7 @@ pub(crate) fn projection_jitter(
 }
 
 /// `outputs` arrive zeroed with history invalid. A refusal may leave fields already written,
-/// exactly as the C++ did; callers discard the frame on refusal.
+/// callers discard the frame on refusal.
 fn frame(
     native: &NativeCamera,
     width: u32,
@@ -257,7 +257,7 @@ fn frame(
     let mut raster_matrix = [0.0; 16];
     let mut previous_raster_matrix = [0.0; 16];
     if let Some(current) = current {
-        // The C++ compared int32 differences against int32_t(width); wrap like it did.
+        // int32 differences compared against int32_t(width); wrap the same way.
         if current.crop[2].wrapping_sub(current.crop[0]) != width as i32
             || current.crop[3].wrapping_sub(current.crop[1]) != height as i32
         {
@@ -349,7 +349,7 @@ fn frame(
     output.vertical_fov_radians = ((1.0 - p[9]) / p[5]).atan() - ((-1.0 - p[9]) / p[5]).atan();
     output.depth_inverted = 0;
     output.motion_jittered = 0;
-    // The C++ bound 3.14159265f rounds to the same single as PI.
+    // 3.14159265f rounds to the same single as PI.
     let fov = output.vertical_fov_radians;
     fov.is_finite() && fov > 0.0 && fov < PI
 }

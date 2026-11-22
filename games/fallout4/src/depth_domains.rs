@@ -162,7 +162,7 @@ const NO_CAMERA: DepthCamera = DepthCamera {
     port: [0.0; 4],
 };
 
-/// The C++ value-initialized snapshot.
+/// The value-initialized snapshot.
 pub(crate) const EMPTY: Snapshot = Snapshot {
     identity: NO_IDENTITY,
     native_frame: 0,
@@ -254,7 +254,7 @@ const NO_DOMAINS: rsf_game_depth_domains = rsf_game_depth_domains {
     domains: [NO_DOMAIN; 2],
 };
 
-/// Refusal stages in the C++ order; the lease receipt prints the number.
+/// Refusal stages; the lease receipt prints the number.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u32)]
 enum Stage {
@@ -334,7 +334,7 @@ const NAMES: [&CStr; 35] = [
 ];
 const _: () = assert!(Stage::NearBasis as usize + 1 == NAMES.len() && NAMES.len() <= 64);
 
-/// `key + offset` with the C++ unsigned wraparound.
+/// `key + offset` with unsigned wraparound.
 fn at(key: u64, offset: usize) -> usize {
     (key as usize).wrapping_add(offset)
 }
@@ -554,7 +554,7 @@ fn sample(cpu: &Identity, out: &mut Snapshot, stage: &mut Stage) -> bool {
     if r.iter().any(|v| !v.is_finite()) {
         return false;
     }
-    // Finite here, so the C++ `!(r1>0 && r1<1)` is `r1<=0 || r1>=1`.
+    // Finite here, so `!(r1>0 && r1<1)` is `r1<=0 || r1>=1`.
     if r[0] != 0.0 || r[1] <= 0.0 || r[1] >= 1.0 || r[2] != r[1] || r[3] != 1.0 {
         return false;
     }

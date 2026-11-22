@@ -150,7 +150,7 @@ impl Drop for Finish<'_> {
     }
 }
 
-/// Releases the SR input lease when the SR step returns, as the C++ stack lease ended.
+/// Releases the SR input lease when the SR step returns.
 struct InputLease<'a>(&'a Leaves);
 
 impl Drop for InputLease<'_> {
@@ -196,9 +196,9 @@ fn screen_facts(
             facts.refusals,
             facts.camera_index,
         ));
-        recovery.report_text(&text);
+        recovery.report(&text);
     }
-    // The source and World reads are pure, so evaluating them together keeps the C++ verdict.
+    // The source and World reads are pure, so evaluating them together gives one verdict.
     let changed = facts.refusals != 0
         || facts.screen != SCREEN_GAMEPLAY
         || !recovery.same_source()
@@ -222,7 +222,7 @@ fn screen_facts(
 pub(super) enum SrOutcome {
     Refused,
     Published,
-    // A Runtime call that the C++ owner let propagate threw.
+    // A Runtime call threw.
     Failed,
 }
 
@@ -496,7 +496,7 @@ fn emit_hudless_with<Lease>(
             pointer(frame.chain as usize),
             pointer(world.chain as usize),
         ));
-        recovery.report_text(&text);
+        recovery.report(&text);
     };
     // A failed logical-0 read is not evidence that any identity comparison failed.
     if !acquired {
