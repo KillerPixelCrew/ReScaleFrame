@@ -63,7 +63,6 @@ namespace {
 
 constexpr uint32_t kSiteCapacity = 8192;
 constexpr uint32_t kSiteThreads = 6;
-constexpr uint32_t kRingCells = 1024;
 constexpr uint32_t kModuleCapacity = 512;
 constexpr uint32_t kThreadCapacity = 256;
 constexpr uint32_t kQueueCapacity = 128;
@@ -119,25 +118,6 @@ struct Finding {
     uint64_t function_rva;
 };
 
-struct Cell {
-    std::atomic<size_t> seq;
-    uint32_t len;
-    uint16_t fn;
-    uint16_t pad;
-    uint64_t t_us;
-    uint64_t present;
-    uint64_t ord;
-    uint64_t site_ord;
-    uint64_t base;
-    uint64_t ret;
-    uint32_t rva;
-    uint32_t tid;
-    uint32_t stack_n;
-    void* stack[kStackFrames];
-    char thread[40];
-    char body[kBodyMax];
-};
-
 struct State {
     std::atomic<bool> active{false};
     std::atomic<bool> ever_installed{false};
@@ -153,13 +133,6 @@ struct State {
     LARGE_INTEGER qpc_freq{};
     LARGE_INTEGER qpc_start{};
     std::atomic<uint64_t> present{0};
-
-    Cell* cells = nullptr;
-    char pad0[64]{};
-    std::atomic<size_t> enq{0};
-    char pad1[64]{};
-    std::atomic<size_t> deq{0};
-    char pad2[64]{};
 
     Site* sites = nullptr;
     std::atomic<uint32_t> site_count{0};
@@ -188,7 +161,6 @@ struct State {
     char* file_buf = nullptr;
     size_t file_len = 0;
     char* summary_buf = nullptr;
-    uint64_t seq = 0;
     uint64_t last_summary_us = 0;
     uint64_t last_write_us = 0;
 
@@ -311,30 +283,6 @@ const char* thread_name(uint64_t now) noexcept {
     return t.name;
 }
 
-// ---- Record queue (bounded multi-producer ring) ------------------------------------------------
-Cell* queue_acquire(size_t& pos) noexcept {
-    pos = g.enq.load(std::memory_order_relaxed);
-    for (;;) {
-        Cell& c = g.cells[pos & (kRingCells - 1)];
-        size_t seq = c.seq.load(std::memory_order_acquire);
-        intptr_t diff = static_cast<intptr_t>(seq) - static_cast<intptr_t>(pos);
-        if (diff == 0) {
-            if (g.enq.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed)) return &c;
-        } else if (diff < 0) {
-            return nullptr;
-        } else {
-            pos = g.enq.load(std::memory_order_relaxed);
-        }
-    }
-}
-
-Cell* queue_peek(size_t& pos) noexcept {
-    pos = g.deq.load(std::memory_order_relaxed);
-    Cell& c = g.cells[pos & (kRingCells - 1)];
-    size_t seq = c.seq.load(std::memory_order_acquire);
-    return static_cast<intptr_t>(seq) - static_cast<intptr_t>(pos + 1) == 0 ? &c : nullptr;
-}
-
 // ---- Writer -----------------------------------------------------------------------------------
 void file_flush_locked() noexcept {
     if (g.file == INVALID_HANDLE_VALUE || g.file_len == 0) return;
@@ -357,70 +305,23 @@ void file_append_locked(const char* data, size_t n) noexcept {
     g.written.fetch_add(1, std::memory_order_relaxed);
 }
 
-void compose_line_locked(const Cell& c) noexcept {
-    // Only the thread holding g.io gets here, so one static buffer is enough.
-    // Reserve the decoded body independently of the escaped module names in the stack.
-    static char line[kBodyMax + 768 + kStackFrames * 192];
-    const uint32_t fi = c.fn;
-    const uint32_t mi = module_index(c.base);
-    resolve_module_name(mi);
-    Json h(line, sizeof(line) - 16);
-    h.obj();
-    h.u64("seq", g.seq++);
-    h.u64("t_us", c.t_us);
-    h.u64("present", c.present);
-    h.str("api", kFns[fi].api);
-    h.str("fn", kFns[fi].name ? kFns[fi].name : kFns[fi].id);
-    h.u64("ord", c.ord);
-    h.u64("site_ord", c.site_ord);
-    h.str("module", g.modules[mi].name);
-    h.hex("rva", c.rva);
-    h.u64("tid", c.tid);
-    h.str("thread", c.thread);
-    h.hex("ret", c.ret);
-    if (c.stack_n) {
-        h.arr("stack");
-        for (uint32_t i = 0; i < c.stack_n && i < kStackFrames; ++i) {
-            PVOID frame_base = nullptr;
-            if (g.pc_to_header) g.pc_to_header(c.stack[i], &frame_base);
-            char frame[96];
-            if (frame_base) {
-                const uint32_t fm = module_index(reinterpret_cast<uint64_t>(frame_base));
-                resolve_module_name(fm);
-                std::snprintf(frame, sizeof(frame), "%s+0x%llx", g.modules[fm].name,
-                              static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(c.stack[i]) -
-                                                              reinterpret_cast<uintptr_t>(frame_base)));
-            } else {
-                std::snprintf(frame, sizeof(frame), "0x%llx",
-                              static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(c.stack[i])));
-            }
-            h.str(nullptr, frame);
-        }
-        h.end_arr();
-    }
-    if (!h.ok() || h.size() + c.len + 12 > sizeof(line)) {
-        g.dropped_size.fetch_add(1, std::memory_order_relaxed);
-        return;
-    }
-    size_t n = h.size();
-    std::memcpy(line + n, ",\"args\":", 8);
-    n += 8;
-    std::memcpy(line + n, c.body, c.len);
-    n += c.len;
-    line[n++] = '}';
-    line[n++] = '\n';
-    file_append_locked(line, n);
-}
-
 void drain_locked() noexcept {
-    for (;;) {
-        size_t pos;
-        Cell* c = queue_peek(pos);
-        if (!c) break;
-        g.deq.store(pos + 1, std::memory_order_relaxed);
-        compose_line_locked(*c);
-        c->seq.store(pos + kRingCells, std::memory_order_release);
-    }
+    static const rsf_census_record_writer writer = {
+        kFns, kFnCount,
+        [](uint64_t base) -> const char* {
+            const uint32_t module = module_index(base);
+            resolve_module_name(module);
+            return g.modules[module].name;
+        },
+        [](void* address) -> uint64_t {
+            PVOID base = nullptr;
+            if (g.pc_to_header) g.pc_to_header(address, &base);
+            return reinterpret_cast<uint64_t>(base);
+        },
+        file_append_locked,
+        []() { g.dropped_size.fetch_add(1, std::memory_order_relaxed); },
+    };
+    rsf_census_record_drain(&writer);
 }
 
 void roll_hist(std::atomic<uint32_t>& cur, std::atomic<uint64_t>* hist) noexcept {
@@ -667,79 +568,6 @@ void make_dirs(wchar_t* path) noexcept {
 
 } // namespace
 
-// ---- Safe memory ------------------------------------------------------------------------------
-bool safe_read(const void* src, void* dst, size_t n) noexcept {
-    __try {
-        std::memcpy(dst, src, n);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-}
-
-bool safe_read_cstr(const char* src, char* dst, size_t cap) noexcept {
-    if (!cap) return false;
-    __try {
-        size_t i = 0;
-        for (; i + 1 < cap; ++i) {
-            char c = src[i];
-            dst[i] = c;
-            if (!c) return true;
-        }
-        dst[i] = 0;
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        dst[0] = 0;
-        return false;
-    }
-}
-
-bool safe_read_wstr(const wchar_t* src, wchar_t* dst, size_t cap) noexcept {
-    if (!cap) return false;
-    __try {
-        size_t i = 0;
-        for (; i + 1 < cap; ++i) {
-            wchar_t c = src[i];
-            dst[i] = c;
-            if (!c) return true;
-        }
-        dst[i] = 0;
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        dst[0] = 0;
-        return false;
-    }
-}
-
-bool plausible_ptr(const void* p) noexcept {
-    const uintptr_t v = reinterpret_cast<uintptr_t>(p);
-    return v >= 0x10000 && v < 0x00007FFFFFFF0000ull;
-}
-
-bool is_code_ptr(const void* p) noexcept {
-    if (!plausible_ptr(p)) return false;
-    MEMORY_BASIC_INFORMATION mbi;
-    if (VirtualQuery(p, &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
-    constexpr DWORD kExec = PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
-    return mbi.State == MEM_COMMIT && (mbi.Protect & kExec) != 0 && (mbi.Protect & PAGE_GUARD) == 0;
-}
-
-void* vtable_slot(const void* obj, size_t slot) noexcept {
-    void* const* vt = nullptr;
-    if (!plausible_ptr(obj) || !rd(obj, vt) || !plausible_ptr(vt)) return nullptr;
-    void* fn = nullptr;
-    return rd(vt + slot, fn) && is_code_ptr(fn) ? fn : nullptr;
-}
-
-bool guarded(void (*fn)(void*), void* ctx) noexcept {
-    __try {
-        fn(ctx);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-}
-
 // ---- Json -------------------------------------------------------------------------------------
 void Json::f32(const char* key, double v) noexcept {
     if (!std::isfinite(v)) {
@@ -816,7 +644,7 @@ void Call::finish(uint64_t ret) noexcept {
         return;
     }
     size_t pos;
-    Cell* c = queue_acquire(pos);
+    rsf_census_queued_record* c = rsf_census_record_acquire(&pos);
     if (!c) {
         g.dropped_queue.fetch_add(1, std::memory_order_relaxed);
         SetLastError(last_error);
@@ -837,7 +665,7 @@ void Call::finish(uint64_t ret) noexcept {
     std::strncpy(c->thread, thread_name(t_us_), sizeof(c->thread) - 1);
     c->thread[sizeof(c->thread) - 1] = 0;
     std::memcpy(c->body, buf_, c->len);
-    c->seq.store(pos + 1, std::memory_order_release);
+    rsf_census_record_publish(pos);
     g.queued.fetch_add(1, std::memory_order_relaxed);
     SetLastError(last_error);
 }
@@ -944,16 +772,14 @@ rsf_census_result core_install(const rsf_census_options* opt) noexcept {
             GetProcAddress(nt, "RtlPcToFileHeader"));
     }
 
-    g.cells = static_cast<Cell*>(VirtualAlloc(nullptr, sizeof(Cell) * kRingCells,
-                                              MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    if (!rsf_census_record_init()) return RSF_CENSUS_ERROR_IO;
     g.sites = static_cast<Site*>(VirtualAlloc(nullptr, sizeof(Site) * kSiteCapacity,
                                               MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
     g.file_buf = static_cast<char*>(VirtualAlloc(nullptr, kFileBuffer, MEM_COMMIT | MEM_RESERVE,
                                                  PAGE_READWRITE));
     g.summary_buf = static_cast<char*>(VirtualAlloc(nullptr, kSummaryCapacity, MEM_COMMIT | MEM_RESERVE,
                                                     PAGE_READWRITE));
-    if (!g.cells || !g.sites || !g.file_buf || !g.summary_buf) return RSF_CENSUS_ERROR_IO;
-    for (uint32_t i = 0; i < kRingCells; ++i) new (&g.cells[i].seq) std::atomic<size_t>(i);
+    if (!g.sites || !g.file_buf || !g.summary_buf) return RSF_CENSUS_ERROR_IO;
     for (uint32_t i = 0; i < kSiteCapacity; ++i) new (&g.sites[i]) Site();
 
     wchar_t path[MAX_PATH + 32];

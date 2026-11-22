@@ -14,6 +14,7 @@
 #include "rescaleframe/vendor_census.h"
 #include "decode_platform.h"
 #include "hook_platform.h"
+#include "record_platform.h"
 
 namespace rsf_census {
 
@@ -272,9 +273,9 @@ private:
 };
 
 // ---- Per-call recording -----------------------------------------------------------------------
-constexpr size_t kBodyMax = 6144;
+constexpr size_t kBodyMax = RSF_CENSUS_RECORD_BODY_MAX;
 // D3D12 validation can consume more than 16 frames before reaching the game's recording call.
-constexpr uint32_t kStackFrames = 32;
+constexpr uint32_t kStackFrames = RSF_CENSUS_RECORD_STACK_FRAMES;
 
 class Call {
 public:

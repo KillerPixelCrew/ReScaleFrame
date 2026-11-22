@@ -163,3 +163,16 @@ module arrays for that sample instead of waiting on the hook record lock.
 Source checks compare resolver entry names, data-file flags, root exclusions, summary keys,
 patch length, and exact descriptor sharing. Builds and the existing DllMain, creation identity,
 Vulkan and injected-overlay fixture runs remain user-owned.
+
+## Record producer and writer boundary
+
+The Rust queue keeps the 1,024 sequence-stamped slots, separate cache lines for producer and
+consumer positions, the 6,144-byte argument budget, and 32 captured stack frames. Native
+wrappers fill a reserved record and publish its ticket. Rust consumes published records under
+the existing writer lock, serializes the same JSONL envelope and sends the resulting byte span
+to the current file writer. The line scratch buffer belongs to the queue so fatal-error
+draining does not put a full JSONL line on the crash thread's stack.
+
+The SEH and executable-memory probes live in a separate native platform file. The C++
+census core still owns installation, sampling and aggregation, native writer scheduling,
+and the on-disk byte budget.

@@ -9,6 +9,7 @@ endif()
 add_library(rsf_vendor_census STATIC
     src/core.cpp
     src/decode_d3d_platform.cpp
+    src/guarded_platform.cpp
     src/hook_platform.cpp
     src/wrap_d3d.cpp
     src/wrap_fsr.cpp
