@@ -19,14 +19,14 @@ int rsf_ac7_carrier_probe(rsf_game_probe* probe, const char* sha256);
 typedef int32_t (*rsf_ac7_carrier_patch_fn)(uint32_t rva, const uint8_t* bytes, uint32_t count,
     const uint8_t* expected, uint32_t expected_count, uint8_t* previous);
 
-#define RSF_AC7_CARRIER_ABI_VERSION 2u
+#define RSF_AC7_CARRIER_ABI_VERSION 3u
 typedef struct rsf_ac7_carrier_leaves {
     uint32_t struct_size;
     uint32_t abi_version;
     uint32_t (*read_number)(const char* name, uint32_t fallback);
     rsf_ac7_carrier_patch_fn patch;
     rsf_game_log_fn log;
-    void (*install_jitter)(int32_t mode, uint32_t rva, int main_view_only);
+    void (*install_jitter)(int32_t mode, uint32_t rva);
     void (*set_depth_conformed)(int conformed);
     void (*register_translucency_scale)(uint32_t rva, uint32_t immediate_offset);
     int (*prepare_native_game)(void);
@@ -49,7 +49,7 @@ void rsf_ac7_carrier_try_auto_start(int enabled, int started, unsigned long (*re
     int (*present_extent)(uint32_t* width, uint32_t* height), void (*start)(uint32_t width, uint32_t height));
 /* Numeric startup choices defined by the adapter. A returned key and label live for the process.
    Returns null at the end of the list without writing the output pointers. */
-#define RSF_AC7_CARRIER_START_OPTION_COUNT 8u
+#define RSF_AC7_CARRIER_START_OPTION_COUNT 7u
 const char* rsf_ac7_carrier_start_option(uint32_t index, const char** label,
     uint32_t* fallback, uint32_t* maximum);
 
@@ -57,23 +57,11 @@ const char* rsf_ac7_carrier_start_option(uint32_t index, const char** label,
 void rsf_ac7_carrier_override_start_extent(uint32_t (*read_number)(const char* name, uint32_t fallback),
     uint32_t* width, uint32_t* height);
 
-/* Opens or closes the verified gate. stub_rel32 is null for the all-views instruction.
-   previous must have room for six bytes. Returns the native patch result. */
+/* Opens or closes the verified gate. previous must have room for six bytes. Returns the native
+   patch result. */
 int32_t rsf_ac7_carrier_patch_jitter(rsf_ac7_carrier_patch_fn patch, uint32_t rva, int enabled,
-    const int32_t* stub_rel32, uint8_t previous[6]);
+    uint8_t previous[6]);
 
-/* Emit the verified main-view relay into the caller's executable page and return the entry
-   displacement. A refusal leaves both outputs alone. The caller owns the page and cache flush. */
-#define RSF_AC7_JITTER_RELAY_WIDTH 88u
-#define RSF_AC7_JITTER_RELAY_HEIGHT 92u
-#define RSF_AC7_JITTER_RELAY_VIEW 96u
-#define RSF_AC7_JITTER_RELAY_ALLOWED 104u
-#define RSF_AC7_JITTER_RELAY_DENIED 108u
-#define RSF_AC7_JITTER_RELAY_LAST_DENIED 112u
-int rsf_ac7_carrier_emit_jitter_relay(uintptr_t base, uint32_t rva,
-    uint8_t* page, size_t size, int32_t* entry_rel32);
-
-int32_t rsf_ac7_carrier_jitter_samples(float percentage);
 /* Reports the requested scale before applying the 100% ceiling for missing depth conformance. */
 float rsf_ac7_carrier_translucency_scale(uint32_t render_percent, uint32_t target_percent,
     uint32_t override_percent, int depth_conformed, float* depth_limited_request);

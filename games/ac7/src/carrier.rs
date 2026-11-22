@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! AC7 policy shared by the dedicated and combined DirectInput carriers.
-use crate::scene_color::rsf_ac7_translucency_scale;
 use crate::sites::DEPTH_GATES;
 use crate::sys::{
-    RSF_AC7_CARRIER_ABI_VERSION, RSF_AC7_CARRIER_START_OPTION_COUNT, RSF_AC7_JITTER_RELAY_ALLOWED,
-    RSF_AC7_JITTER_RELAY_DENIED, RSF_AC7_JITTER_RELAY_HEIGHT, RSF_AC7_JITTER_RELAY_LAST_DENIED,
-    RSF_AC7_JITTER_RELAY_VIEW, RSF_AC7_JITTER_RELAY_WIDTH, rsf_ac7_carrier_leaves as CarrierLeaves,
+    RSF_AC7_CARRIER_ABI_VERSION, RSF_AC7_CARRIER_START_OPTION_COUNT,
+    rsf_ac7_carrier_leaves as CarrierLeaves,
 };
 use crate::{AMD64, EXECUTABLE};
 use rsf_game_sys::ffi_util::ascii_wide;
@@ -39,8 +37,7 @@ const JITTER: StartupOption = StartupOption::new(
     1,
     2,
 );
-const JITTER_ALL_VIEWS: StartupOption =
-    StartupOption::new(c"RSF_JITTER_ALL_VIEWS", c"Jitter all views", 0, 1);
+
 const TRANSLUCENT_VELOCITY: StartupOption = StartupOption::new(
     c"RSF_TRANSLUCENT_VELOCITY",
     c"Allow translucent velocity",
@@ -69,7 +66,6 @@ const OUTPUT_HEIGHT: StartupOption = StartupOption::new(
 );
 const STARTUP_OPTIONS: [StartupOption; RSF_AC7_CARRIER_START_OPTION_COUNT as usize] = [
     JITTER,
-    JITTER_ALL_VIEWS,
     TRANSLUCENT_VELOCITY,
     FULL_TRANSLUCENCY,
     MOTION_CAPTURE,
@@ -112,30 +108,6 @@ const TRANSLUCENT_VELOCITY_RVA: u32 = 0x11823de;
 const SEPARATE_TRANSLUCENCY_RVA: u32 = 0x10be329;
 const SCALE_IMMEDIATE_OFFSET: u32 = 7;
 const JITTER_GATE: &[u8; 6] = b"\x0f\x85\xdd\x03\x00\x00";
-// Render-extent filter from the carrier's verified jitter gate. External exits use rel32.
-const JITTER_RELAY: [u8; 82] = [
-    0x0F, 0x84, 0, 0, 0, 0,    // 0  je continue
-    0x50, // 6  push rax
-    0x8B, 0x05, 75, 0, 0, 0, // 7  mov eax, [width]
-    0x85, 0xC0, // 13 test eax, eax
-    0x74, 28, // 15 je allow
-    0x8B, 0x46, 0x78, // 17 mov eax, [rsi+78]
-    0x2B, 0x46, 0x70, // 20 sub eax, [rsi+70]
-    0x3B, 0x05, 59, 0, 0, 0, // 23 cmp eax, [width]
-    0x75, 33, // 29 jne deny
-    0x8B, 0x46, 0x7C, // 31 mov eax, [rsi+7c]
-    0x2B, 0x46, 0x74, // 34 sub eax, [rsi+74]
-    0x3B, 0x05, 49, 0, 0, 0, // 37 cmp eax, [height]
-    0x75, 19, // 43 jne deny
-    0x48, 0x89, 0x35, 44, 0, 0, 0, // 45 allow: mov [view], rsi
-    0xFF, 0x05, 46, 0, 0, 0,    // 52 inc dword [allowed]
-    0x58, // 58 pop rax
-    0xE9, 0, 0, 0, 0, // 59 jmp continue
-    0x89, 0x05, 42, 0, 0, 0, // 64 deny: mov [last], eax
-    0xFF, 0x05, 32, 0, 0, 0,    // 70 inc dword [denied]
-    0x58, // 76 pop rax
-    0xE9, 0, 0, 0, 0, // 77 jmp skip
-];
 const NOP6: &[u8; 6] = b"\x66\x0f\x1f\x44\x00\x00";
 const TRANSLUCENT_VELOCITY_GATE: &[u8; 6] = b"\x0f\x87\x68\x03\x00\x00";
 const SEPARATE_TRANSLUCENCY_GATE: &[u8; 15] =
@@ -181,66 +153,19 @@ unsafe extern "C" fn rsf_ac7_carrier_wait_decrypted(
     }
 }
 
-fn rel32(target: usize, next: usize) -> Option<i32> {
-    (target as i128 - next as i128).try_into().ok()
-}
-
-fn jitter_relay(gate: usize, stub: usize) -> Option<([u8; JITTER_RELAY.len()], i32)> {
-    let resume = gate.checked_add(JITTER_GATE.len())?;
-    let skip_delta = i32::from_le_bytes(JITTER_GATE[2..].try_into().ok()?);
-    let skip = resume.checked_add_signed(skip_delta as isize)?;
-    let entry = rel32(stub, gate.checked_add(5)?)?;
-    let mut relay = JITTER_RELAY;
-    for (end, target) in [(6, resume), (64, resume), (82, skip)] {
-        let displacement = rel32(target, stub.checked_add(end)?)?;
-        relay[end - 4..end].copy_from_slice(&displacement.to_le_bytes());
-    }
-    Some((relay, entry))
-}
-
-/// The page is freshly allocated by the carrier and writable for one page.
+/// The separate translucency multiplier that puts the layer at `target_percent` of native when
+/// the scene renders at `render_percent`. Zero render means native, zero target means the scene's.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_carrier_emit_jitter_relay(
-    base: usize,
-    rva: u32,
-    page: *mut u8,
-    size: usize,
-    entry_rel32: *mut i32,
-) -> c_int {
-    if base == 0 || rva != JITTER_RVA || page.is_null() || size != 0x1000 || entry_rel32.is_null() {
-        return 0;
+extern "C" fn rsf_ac7_translucency_scale(render_percent: u32, target_percent: u32) -> f32 {
+    if target_percent == 0 {
+        return 1.0;
     }
-    let Some(gate) = base.checked_add(rva as usize) else {
-        return 0;
+    let render = if render_percent == 0 {
+        100
+    } else {
+        render_percent
     };
-    let Some((relay, entry)) = jitter_relay(gate, page.addr()) else {
-        return 0;
-    };
-    let page = unsafe { std::slice::from_raw_parts_mut(page, size) };
-    page.fill(0xcc);
-    page[..relay.len()].copy_from_slice(&relay);
-    for (offset, width) in [
-        (RSF_AC7_JITTER_RELAY_WIDTH, 4),
-        (RSF_AC7_JITTER_RELAY_HEIGHT, 4),
-        (RSF_AC7_JITTER_RELAY_VIEW, 8),
-        (RSF_AC7_JITTER_RELAY_ALLOWED, 4),
-        (RSF_AC7_JITTER_RELAY_DENIED, 4),
-        (RSF_AC7_JITTER_RELAY_LAST_DENIED, 4),
-    ] {
-        let offset = offset as usize;
-        page[offset..offset + width].fill(0);
-    }
-    unsafe { entry_rel32.write(entry) };
-    1
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_carrier_jitter_samples(percentage: f32) -> i32 {
-    if !percentage.is_finite() || percentage <= 0.0 {
-        return 0;
-    }
-    let ratio = 100.0 / percentage;
-    ((8.0 * ratio * ratio + 0.5) as i32).max(8)
+    target_percent as f32 / render as f32
 }
 
 /// A nonnull depth report points to a writable float.
@@ -343,31 +268,21 @@ impl PatchIo {
     }
 }
 
-/// A supplied `previous` points to a six-byte output. `stub_rel32`, when set, points to the
-/// native relay's displacement from the end of the five-byte jump.
+/// A supplied `previous` points to a six-byte output.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_ac7_carrier_patch_jitter(
     patch: Option<Patch>,
     rva: u32,
     enabled: c_int,
-    stub_rel32: *const i32,
     previous: *mut u8,
 ) -> i32 {
     let Some(patch) = patch else {
         return PATCH_INVALID_ARGUMENT;
     };
-    let mut jump = [0xe9, 0, 0, 0, 0, 0x90];
-    let open = match unsafe { stub_rel32.as_ref() } {
-        Some(displacement) => {
-            jump[1..5].copy_from_slice(&displacement.to_le_bytes());
-            &jump
-        }
-        None => NOP6,
-    };
     let (bytes, expected) = if enabled != 0 {
-        (open, JITTER_GATE)
+        (NOP6, JITTER_GATE)
     } else {
-        (JITTER_GATE, open)
+        (JITTER_GATE, NOP6)
     };
     let count = JITTER_GATE.len() as u32;
     unsafe {
@@ -485,12 +400,10 @@ unsafe extern "C" fn rsf_ac7_carrier_install_decrypted(leaves: *const CarrierLea
     let mode = number(JITTER.key, JITTER.fallback) as i32;
     if mode != 0 {
         let rva = number(c"RSF_JITTER_RVA", JITTER_RVA);
-        let main_only =
-            rva == JITTER_RVA && number(JITTER_ALL_VIEWS.key, JITTER_ALL_VIEWS.fallback) == 0;
-        unsafe { jitter(mode, rva, c_int::from(main_only)) };
+        unsafe { jitter(mode, rva) };
     } else {
         // Reset the native mode just as the carrier did before skipping the other jitter settings.
-        unsafe { jitter(0, 0, 0) };
+        unsafe { jitter(0, 0) };
     }
     if number(TRANSLUCENT_VELOCITY.key, TRANSLUCENT_VELOCITY.fallback) != 0 {
         apply_translucent_velocity(

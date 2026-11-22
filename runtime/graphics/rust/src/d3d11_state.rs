@@ -75,16 +75,6 @@ struct Snapshot {
     stencil_reference: u32,
 }
 
-#[repr(C)]
-struct DepthSnapshot {
-    targets: [Option<ComRef>; TARGETS],
-    depth: Option<ComRef>,
-    state: Option<ComRef>,
-    reference: u32,
-    shader: Option<ComRef>,
-    classes: [Option<ComRef>; INTERFACES],
-    class_count: u32,
-}
 
 #[repr(C)]
 struct DrawSnapshot {
@@ -125,8 +115,7 @@ struct Platform {
     read: unsafe extern "C" fn(Handle, &mut Snapshot),
     clear: unsafe extern "C" fn(Handle, u32),
     write: unsafe extern "C" fn(Handle, &Snapshot, u32),
-    read_depth: unsafe extern "C" fn(Handle, *mut DepthSnapshot),
-    write_depth: unsafe extern "C" fn(Handle, *const DepthSnapshot),
+
     read_draw: unsafe extern "C" fn(Handle, *mut DrawSnapshot),
     write_draw: unsafe extern "C" fn(Handle, *const DrawSnapshot),
 }
@@ -145,11 +134,10 @@ const _: () = {
     assert!(size_of::<Snapshot>() == 22904);
     assert!(std::mem::offset_of!(Snapshot, stages) == 608);
     assert!(std::mem::offset_of!(Snapshot, targets) == 22784);
-    assert!(size_of::<DepthSnapshot>() == 2128 && size_of::<DrawSnapshot>() == 832);
+    assert!(size_of::<DrawSnapshot>() == 832);
     assert!(size_of::<Features>() == 8);
-    assert!(size_of::<Platform>() == 11 * size_of::<Handle>());
+    assert!(size_of::<Platform>() == 9 * size_of::<Handle>());
     // The narrow snapshots and the full scope live in the caller's storage.
-    assert!(size_of::<DepthSnapshot>() <= size_of::<State>());
     assert!(size_of::<DrawSnapshot>() <= size_of::<State>());
     assert!(size_of::<Scope>() <= size_of::<State>());
     assert!(align_of::<Snapshot>() <= align_of::<State>());
@@ -329,21 +317,6 @@ unsafe fn restore_inline<T>(
     }
 }
 
-unsafe fn rsf_core_d3d11_depth_state_save(
-    context: Handle,
-    storage: *mut State,
-    platform: &Platform,
-) -> u32 {
-    unsafe { save_inline(context, storage, platform.read_depth) }
-}
-
-unsafe fn rsf_core_d3d11_depth_state_restore(
-    context: Handle,
-    storage: *mut State,
-    platform: &Platform,
-) {
-    unsafe { restore_inline(context, storage, platform.write_depth) }
-}
 
 unsafe fn rsf_core_d3d11_draw_state_save(
     context: Handle,
@@ -417,13 +390,6 @@ mod tests {
         WRITTEN.set([target_count, snapshot.uav_count]);
     }
 
-    unsafe extern "C" fn read_depth(_: Handle, snapshot: *mut DepthSnapshot) {
-        unsafe { (*snapshot).depth = retained() };
-    }
-
-    unsafe extern "C" fn write_depth(_: Handle, _: *const DepthSnapshot) {
-        WRITES.set(WRITES.get() + 1);
-    }
 
     unsafe extern "C" fn read_draw(_: Handle, snapshot: *mut DrawSnapshot) {
         unsafe { (*snapshot).raster = retained() };
@@ -441,8 +407,7 @@ mod tests {
         read,
         clear,
         write,
-        read_depth,
-        write_depth,
+
         read_draw,
         write_draw,
     };
@@ -507,18 +472,9 @@ mod tests {
     fn narrow_scopes_release_what_they_saved() {
         let object = fake();
         start(&object);
-        let context = CONTEXT as Handle;
         let deferred = DEFERRED as Handle;
         let mut state = State::default();
         unsafe {
-            assert_eq!(
-                rsf_core_d3d11_depth_state_save(context, &mut state, &PLATFORM),
-                1
-            );
-            assert_eq!(object.refs.get(), 2);
-            rsf_core_d3d11_depth_state_restore(context, &mut state, &PLATFORM);
-            assert!(empty(&state) && object.refs.get() == 1);
-
             // A deferred context is allowed here.
             assert_eq!(
                 rsf_core_d3d11_draw_state_save(deferred, &mut state, &PLATFORM),

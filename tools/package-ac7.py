@@ -92,7 +92,7 @@ def main(argv=None, *, release_revision=None, game_only=False):
     (stage / "ReScaleFrame/licenses/RenderDoc-header.txt").write_text(header[:header.index("#pragma once")], encoding="utf-8")
     dependency_notices(stage)
     config = (stage / "ReScaleFrame.ini").read_text()
-    if re.search(r"^RSF_BRIEFING_CAPTURE_PREFIX=|^RSF_DUMP_DIR=|[A-Z]:\\", config, re.M):
+    if re.search(r"^RSF_DUMP_DIR=|[A-Z]:\\", config, re.M):
         raise RuntimeError("A developer capture setting or local path entered the package.")
     # Game-validated DLSS colour defaults on 4 October: transport on, post-DLSS correction off.
     for key, value in (("RSF_DLSS_TONEMAP", "1"), ("RSF_DLSS_COLOUR_CORRECTION", "0")):

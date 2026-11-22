@@ -7,7 +7,6 @@ rsf_add_rust_static(rsf_ac7_rust rsf_rust_ac7 rsf-ac7 rsf_ac7)
 target_link_libraries(rsf_ac7_rust INTERFACE rsf_shader_compiler rsf_ac7_memory)
 target_include_directories(rsf_ac7_rust INTERFACE include)
 add_library(ReScaleFrame::AC7View ALIAS rsf_ac7_rust)
-add_library(ReScaleFrame::AC7UIRules ALIAS rsf_ac7_rust)
 
 # Exact-build identity, the GameSDK table and the renderer lifecycle are the Rust crate rsf-ac7
 # (src/lib.rs, src/lifecycle.rs). plugin.c keeps the export and lends the renderer leaf snapshot
@@ -30,11 +29,10 @@ target_link_libraries(rsf_game_ac7 PRIVATE ReScaleFrame::GameSDK rsf_ac7_render_
     ReScaleFrame::GraphicsLeaves rsf_build_options)
 set_target_properties(rsf_game_ac7 PROPERTIES OUTPUT_NAME "ReScaleFrame.Game.AC7")
 
-# Capture-derived scene selection and the velocity replay stay with the game; graphics supplies only
-# draw observations and the shared binding-state lease.
+# The velocity replay stays with the game; graphics supplies only draw observations and the shared
+# binding-state lease.
 add_library(rsf_ac7_graphics INTERFACE)
 target_link_libraries(rsf_ac7_graphics INTERFACE ReScaleFrame::Graphics rsf_ac7_rust)
-add_library(ReScaleFrame::AC7SceneColor ALIAS rsf_ac7_graphics)
 add_library(ReScaleFrame::AC7VelocityPass ALIAS rsf_ac7_graphics)
 
 add_library(rsf_ac7_memory STATIC src/ac7_memory.c)

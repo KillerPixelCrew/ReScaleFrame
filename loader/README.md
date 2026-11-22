@@ -97,10 +97,7 @@ post-process graph. Do not apply this flat AC7 configuration format to Unity's `
 | `RSF_JITTER_RVA` | Default address `0x112b1f3` |
 | `RSF_TRANSLUCENT_VELOCITY` | `0`; set `1` to let translucent draws reach the velocity pass |
 | `RSF_TRANSLUCENT_VELOCITY_RVA` | Default address `0x11823de` |
-| `RSF_SCREEN_PERCENTAGE` | Legacy diagnostic setting; consumer startup uses the selected DLSS preset |
 | `RSF_DLSS_PRESET` | DLSS model request: 0 Default, 5 E, 6 F, 10 J, 11 K, 12 L, 13 M. Separate from quality/render scale. Insert saves this in the user's AC7 preferences. Driver overrides may replace the request. |
-| `RSF_CONSOLE_SINGLETON_RVA` | Default address `0x3a8b290` |
-| `RSF_CONSOLE_FIND_SLOT` | Default byte offset `0x90` |
 | `RSF_STREAMLINE_BIN` | Directory containing the vendor runtime |
 | `RSF_DLSS_QUALITY` | `3`: Performance; backend enum is Native=0, Quality=1, Balanced=2, Performance=3, Ultra Performance=4 |
 | `RSF_DLSS_TONEMAP` | `1`: DLSS receives an invertible display-range encoding with HDR input off, decoded back to linear; removes the dark banding of DLSS 310's auto-exposing presets on any preset or driver override. `0` sends linear HDR, for comparison only |
@@ -117,8 +114,7 @@ post-process graph. Do not apply this flat AC7 configuration format to Unity's `
 The keys the [representation plan](../docs/representation-plan.md) introduces (`RSF_UI_*`, `RSF_POLICY_*`, `RSF_PRESENTATION`, `RSF_FG*`, `RSF_SR_VENDOR`, vendor runtime directories) are documented here as each milestone lands, not before.
 
 Quality selection derives input dimensions from the selected SDK and sizes the renderer
-through engine-owned views. A refused native activation leaves the game running without SR. `RSF_SCREEN_PERCENTAGE`
-is a legacy diagnostic override, not a second independent consumer quality setting.
+through engine-owned views. A refused native activation leaves the game running without SR.
 
 ## Startup and diagnostics
 

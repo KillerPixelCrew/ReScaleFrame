@@ -58,13 +58,11 @@ mod native_renderer;
 mod patches;
 mod render_scope;
 mod renderer;
-mod scene_color;
 mod scope_facts;
 #[path = "../../../runtime/graphics/src/shader_hash.rs"]
 mod shader_hash;
 mod sites;
 mod truesky;
-mod ui;
 mod velocity_commit;
 mod velocity_container;
 #[cfg(windows)]

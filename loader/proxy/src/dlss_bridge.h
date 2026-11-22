@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT */
-/* The research proxy's DLSS path, kept behind four functions so the proxy itself stays readable.
+/* The research proxy's native SR path, kept behind a few functions so the proxy itself stays readable.
 
    This is not a public interface. It exists inside the loader because the loader is what gets into
    the game today, and every part of it belongs elsewhere: see the comment at the top of
@@ -33,14 +33,12 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
    once. */
 void rsf_bridge_report(void);
 
-/* Ask for the next evaluated frame's output to be written out. */
+/* Ask for the next evaluated frame's output and the native route to be written out. */
 void rsf_bridge_request_dump(const char* prefix);
 
-/* The Present callback the observer should be given, so the display above has a place to draw. */
+/* The Present callbacks the observer should be given. */
 rsf_observer_present_fn rsf_bridge_present_hook(void);
 rsf_observer_present_event_fn rsf_bridge_present_event_hook(void);
-/* Hands each created shader to the motion capture. */
-rsf_observer_shader_fn rsf_bridge_shader_hook(void);
 /* Last presenting extent reported by the observer. Width zero means no presenting size yet. */
 int rsf_bridge_present_extent(uint32_t* width, uint32_t* height);
 
@@ -51,12 +49,6 @@ int rsf_bridge_present_extent(uint32_t* width, uint32_t* height);
 #define RSF_AC7_ENGINE_VERSION "4.18.3"
 #define RSF_AC7_PROJECT_ID "a3ed1f08-3542-4698-b85c-e1a9908e861a"
 
-/* Ask for an action to run on the render thread at the next present, rather than on the caller's.
-   For the hotkey worker: starting the backend creates resources and touches the game's immediate
-   context, which is not thread safe. */
-#define RSF_BRIDGE_REQUEST_START 0x1u
-void rsf_bridge_request(unsigned long requests);
-
 /* Where this speaks, set at install rather than at F8.
 
    Starting the backend used to be the first thing that gave the bridge a log sink, which was fine
@@ -65,9 +57,14 @@ void rsf_bridge_request(unsigned long requests);
    silent, and would not come up at all. */
 void rsf_bridge_set_log(rsf_bridge_log_fn log, void* log_user);
 
+/* Resource creation hooks for the observer: input layouts feed the motion capture and the velocity
+   pass, shaders the motion capture. */
+rsf_observer_layout_fn rsf_bridge_layout_hook(void);
+rsf_observer_shader_fn rsf_bridge_shader_hook(void);
+
 /* What the overlay can ask for that this file does not own.
 
-   Starting the backend, the render scale and frame capture all live in the carrier, because they
+   Starting the backend and frame capture live in the carrier, because they
    need its environment parsing, its console-variable addresses and its RenderDoc handle. The
    overlay runs from the present hook in here, so the panel's requests arrive here and are handed
    back out through these. Any member may be null, and a request for a null one is refused out loud
@@ -78,23 +75,13 @@ struct rsf_overlay_host_option;
 typedef struct rsf_bridge_actions {
     void (*start_backend)(void);
     void (*start_backend_at_extent)(uint32_t width, uint32_t height);
-    int (*set_render_scale)(unsigned long percent);
     void (*trigger_dump)(void);
     void (*trigger_capture)(void);
     unsigned long (*capture_count)(void);
-    unsigned long (*render_scale_percent)(void);
-    /* The engine's temporal jitter, which on this game is ours: AC7 runs no temporal AA, so a
-       patched gate is what makes the projection move at all. Opening it where nothing resolves the
-       offset shows as a shimmer, and the front end is where that shows, because it holds still.
-
-       Luma's Unreal path never has the problem because it never manufactures the jitter: it runs
-       only where the engine already ran temporal AA and treats a frame without it as a camera cut.
-       We cannot copy that, but we can copy the discipline, which is what `set_jitter` is for. The
-       bridge opens the gate when it starts resolving frames and the panel and F4 can override.
-
-       `jitter_open` and `jitter_available` report; the second is zero when the patch could not
-       find its site, so the panel refuses instead of offering a switch that does nothing. Null
-       means this build has no jitter control and the panel shows it greyed. */
+    /* The carrier's patched temporal jitter gate. The native renderer supplies its own jitter, so
+       the bridge shuts the gate when SR starts; the panel and F4 can override. `jitter_available`
+       is zero when the patch could not find its site, so the panel refuses instead of offering a
+       switch that does nothing. Null means this build has no jitter control. */
     void (*set_jitter)(unsigned long open);
     unsigned long (*jitter_open)(void);
     unsigned long (*jitter_available)(void);

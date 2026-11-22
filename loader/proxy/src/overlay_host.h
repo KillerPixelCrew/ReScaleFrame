@@ -53,7 +53,7 @@ void rsf_overlay_host_toggle(void);
 
    Returns zero when both panel and startup hint are hidden, has not started, or could not draw. Drawing binds the
    back buffer, because the renderer deliberately never rebinds a render target, and puts back the
-   targets that were bound the way `present_blit` does at the same point in the frame. */
+   targets that were bound afterwards. */
 int rsf_overlay_host_present(void* swapchain, const rsf_overlay_stats* stats,
                              rsf_overlay_intent* intent);
 

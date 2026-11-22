@@ -287,8 +287,6 @@ mod temporary_ini;
 #[cfg(windows)]
 use rsf_graphics::texture_dump;
 #[cfg(windows)]
-mod ui_identify;
-#[cfg(windows)]
 mod vulkan_antilag;
 #[cfg(windows)]
 mod vulkan_capture_commands;

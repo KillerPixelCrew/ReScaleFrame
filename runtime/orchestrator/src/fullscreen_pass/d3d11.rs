@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: MIT
 use super::{Constants, Handle, RESOURCE_FAILED, SHADER_FAILED, Setup};
 use crate::com_ref::ComRef;
-use crate::d3d11_output::{SavedBindings, same_device};
+use crate::d3d11_output::SavedBindings;
 use crate::graphics_d3d11::{
     constant_buffer, depth_state, pixel_shader, rasterizer, rsf_call_native_log,
-    rsf_d3d11_state_restore, shader_with_log, source_view, vertex_shader,
+    rsf_d3d11_state_restore, shader_with_log, vertex_shader,
 };
 use crate::sys::rsf_d3d11_state;
 use rsf_shader_compiler::Request;
 use std::ptr;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D11::*;
-use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
 use windows::core::Interface;
 
 const SHADER: &[u8] = include_bytes!("../../../graphics/shaders/fullscreen_pass.hlsl");
@@ -239,31 +238,4 @@ pub(super) unsafe fn draw(
         context.Draw(3, 0);
     }
     Some(())
-}
-
-pub(super) unsafe fn back_buffer(chain: Handle) -> Option<(ID3D11Texture2D, [u32; 2])> {
-    let chain = unsafe { IDXGISwapChain::from_raw_borrowed(&chain) }?;
-    let texture: ID3D11Texture2D = unsafe { chain.GetBuffer(0) }.ok()?;
-    let mut desc = D3D11_TEXTURE2D_DESC::default();
-    unsafe { texture.GetDesc(&mut desc) };
-    Some((texture, [desc.Width, desc.Height]))
-}
-
-pub(super) unsafe fn present_views(
-    device: Handle,
-    buffer: &ID3D11Texture2D,
-    source: Handle,
-) -> Option<(ID3D11RenderTargetView, ComRef)> {
-    if !unsafe { same_device(device, buffer.as_raw()) } {
-        return None;
-    }
-    let native = unsafe { ID3D11Device::from_raw_borrowed(&device) }?;
-    let mut target = None;
-    unsafe { native.CreateRenderTargetView(buffer, None, Some(&mut target)) }.ok()?;
-    let target = target?;
-    if !unsafe { same_device(device, source) } {
-        return None;
-    }
-    let source = unsafe { ComRef::from_owned(source_view(device, source, 0)) }?;
-    Some((target, source))
 }

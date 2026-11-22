@@ -8,8 +8,6 @@ target_link_libraries(rsf_proxy_ac7 PRIVATE
     ReScaleFrame::LoaderDiagnostics
     ReScaleFrame::Graphics
     ReScaleFrame::OrchestratorCore
-    ReScaleFrame::AC7SceneColor
-    ReScaleFrame::AC7UIRules
     ReScaleFrame::AC7View
     ReScaleFrame::AC7MotionCapture
     ReScaleFrame::AC7VelocityPass

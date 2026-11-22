@@ -464,47 +464,6 @@ unsafe extern "C" fn write(context: Handle, state: &Snapshot, targets: u32) {
     }
 }
 
-unsafe extern "C" fn read_depth(context: Handle, snapshot: *mut DepthSnapshot) {
-    let api = unsafe { vtable::<ID3D11DeviceContext>(&context) };
-    let state = unsafe { &mut *snapshot };
-    unsafe {
-        (api.OMGetRenderTargets)(
-            context,
-            TARGETS as u32,
-            state.targets.as_mut_ptr().cast(),
-            out(&mut state.depth),
-        );
-        (api.OMGetDepthStencilState)(context, out(&mut state.state), &mut state.reference);
-        state.class_count = INTERFACES as u32;
-        (api.PSGetShader)(
-            context,
-            out(&mut state.shader),
-            state.classes.as_mut_ptr().cast(),
-            &mut state.class_count,
-        );
-    }
-}
-
-unsafe extern "C" fn write_depth(context: Handle, snapshot: *const DepthSnapshot) {
-    let api = unsafe { vtable::<ID3D11DeviceContext>(&context) };
-    let state = unsafe { &*snapshot };
-    unsafe {
-        (api.OMSetRenderTargets)(
-            context,
-            TARGETS as u32,
-            state.targets.as_ptr().cast(),
-            raw(&state.depth),
-        );
-        (api.OMSetDepthStencilState)(context, raw(&state.state), state.reference);
-        (api.PSSetShader)(
-            context,
-            raw(&state.shader),
-            state.classes.as_ptr().cast(),
-            state.class_count,
-        );
-    }
-}
-
 unsafe extern "C" fn read_draw(context: Handle, snapshot: *mut DrawSnapshot) {
     let api = unsafe { vtable::<ID3D11DeviceContext>(&context) };
     let state = unsafe { &mut *snapshot };
@@ -601,8 +560,6 @@ const PLATFORM: Platform = Platform {
     read,
     clear,
     write,
-    read_depth,
-    write_depth,
     read_draw,
     write_draw,
 };
@@ -620,16 +577,6 @@ unsafe extern "C" fn rsf_d3d11_state_save_independent(context: Handle, storage: 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_d3d11_state_restore(context: Handle, storage: *mut State) {
     unsafe { rsf_core_d3d11_state_restore(context, storage, &PLATFORM) }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_depth_state_save(context: Handle, storage: *mut State) -> u32 {
-    unsafe { rsf_core_d3d11_depth_state_save(context, storage, &PLATFORM) }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_depth_state_restore(context: Handle, storage: *mut State) {
-    unsafe { rsf_core_d3d11_depth_state_restore(context, storage, &PLATFORM) }
 }
 
 #[unsafe(no_mangle)]

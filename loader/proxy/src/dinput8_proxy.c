@@ -12,7 +12,6 @@
 #include <rescaleframe/overlay_input.h>
 #include <rescaleframe/texture_dump.h>
 #include <rescaleframe/ac7_carrier.h>
-#include <rescaleframe/ac7_scene_color.h>
 #include <rescaleframe/ac7_motion_capture.h>
 #include <rescaleframe/native_fg.h>
 #include <rescaleframe/input_dump.h>
@@ -476,6 +475,8 @@ static void start_observer(void)
     rsf_bridge_set_log(observer_note, NULL);
     register_overlay_actions();
 
+    /* Input layouts feed the velocity pass and the motion capture; shaders only the capture. */
+    options.on_layout = rsf_bridge_layout_hook();
     if (motion_capture) {
         options.on_shader = rsf_bridge_shader_hook();
     }
@@ -516,84 +517,7 @@ static struct {
     int enabled;
     int site_verified;
     DWORD rva;
-    /* The optional render-extent filter for the compatibility jitter gate. */
-    unsigned char* stub;
-    int32_t stub_rel32;
-    volatile LONG* stub_width;
-    volatile LONG* stub_height;
-    /* Views let through and turned away, and the width or height that last failed the test. */
-    volatile LONG* stub_allowed;
-    volatile LONG* stub_denied;
-    volatile LONG* stub_last_denied;
 } jitter_patch;
-
-/* Filter compatibility jitter by the last observed render extent.
-
-   Measured 26 September 2026: with the gate open for every view, the briefing's holographic
-   terrain and its aircraft symbols, and the main menu, shimmered at a reduced render scale while
-   the scene around them held still. They are scene-in-scene: views the game renders into a texture
-   and shows inside the main one. They take the same jitter, and nothing resolves it, because the
-   reconstruction only sees the main view; the upscale then magnifies the wobble.
-
-   The jitter code reads the view's rectangle right before the gate (`ViewRect` at view+0x70..0x7C,
-   the view in rsi) to scale the sample. So instead of stepping over the anti-aliasing check, the
-   gate jumps to this stub, which keeps the game's own answer for a view that really runs temporal
-   AA. Otherwise the stub compares ViewRect dimensions with the last reconstruction input
-   observation. Equal-sized views can pass. Before the first observation the size is zero and
-   the filter accepts every view. rax is saved around the test; both exits overwrite the flags.
-
-     je   continue             ; flags from cmp [rsi+0x13c0], 2: temporal AA, the game's own path
-     push rax
-     mov  eax, [width]
-     test eax, eax
-     je   allow                ; no size yet: every view, as before
-     mov  eax, [rsi+0x78]
-     sub  eax, [rsi+0x70]
-     cmp  eax, [width]
-     jne  deny
-     mov  eax, [rsi+0x7c]
-     sub  eax, [rsi+0x74]
-     cmp  eax, [height]
-     jne  deny
-   allow: mov [view], rsi       ; last view admitted by this branch, with no C consumer
-     pop rax
-     jmp  continue             ; the jitter code, gate + 6
-   deny:  pop rax
-     jmp  skip                 ; where the stock jne went
-*/
-static int build_jitter_stub(DWORD rva)
-{
-    unsigned char* base = (unsigned char*)GetModuleHandleW(NULL);
-    unsigned char* stub = NULL;
-    uintptr_t candidate;
-    if (!base) {
-        return 0;
-    }
-    for (candidate = ((uintptr_t)base & ~(uintptr_t)0xFFFF) - 0x10000;
-         candidate > (uintptr_t)base - 0x70000000u; candidate -= 0x10000) {
-        stub = (unsigned char*)VirtualAlloc((void*)candidate, 0x1000, MEM_RESERVE | MEM_COMMIT,
-                                            PAGE_EXECUTE_READWRITE);
-        if (stub) {
-            break;
-        }
-    }
-    if (!stub) {
-        return 0;
-    }
-    if (!rsf_ac7_carrier_emit_jitter_relay((uintptr_t)base, rva, stub, 0x1000,
-            &jitter_patch.stub_rel32)) {
-        VirtualFree(stub, 0, MEM_RELEASE);
-        return 0;
-    }
-    jitter_patch.stub = stub;
-    jitter_patch.stub_width = (volatile LONG*)(void*)(stub + RSF_AC7_JITTER_RELAY_WIDTH);
-    jitter_patch.stub_height = (volatile LONG*)(void*)(stub + RSF_AC7_JITTER_RELAY_HEIGHT);
-    jitter_patch.stub_allowed = (volatile LONG*)(void*)(stub + RSF_AC7_JITTER_RELAY_ALLOWED);
-    jitter_patch.stub_denied = (volatile LONG*)(void*)(stub + RSF_AC7_JITTER_RELAY_DENIED);
-    jitter_patch.stub_last_denied = (volatile LONG*)(void*)(stub + RSF_AC7_JITTER_RELAY_LAST_DENIED);
-    FlushInstructionCache(GetCurrentProcess(), stub, 0x1000);
-    return 1;
-}
 
 /* Write the gate open or closed. Idempotent, and announced on every transition: a jitter that
    silently stopped and a jitter that was never on look identical in the image. */
@@ -605,11 +529,10 @@ static void set_jitter_enabled(int enabled)
     if (jitter_patch.enabled == (enabled != 0)) {
         return;
     }
-    const int32_t* stub_rel32 = jitter_patch.stub ? &jitter_patch.stub_rel32 : NULL;
     uint8_t previous[6] = {0};
 
     const rsf_dump_result result =
-        rsf_ac7_carrier_patch_jitter(rsf_patch_code, jitter_patch.rva, enabled, stub_rel32, previous);
+        rsf_ac7_carrier_patch_jitter(rsf_patch_code, jitter_patch.rva, enabled, previous);
     if (result == RSF_DUMP_OK) {
         jitter_patch.enabled = (enabled != 0);
         note("jitter %s at rva 0x%lx", enabled ? "on" : "off", (unsigned long)jitter_patch.rva);
@@ -644,7 +567,7 @@ static unsigned long action_jitter_available(void)
    every result taken before this. Mode 1 follows the reconstruction. Both verify the expected
    bytes here, by opening the gate and closing it again, so a game update is reported at startup
    rather than at the first transition, when whoever is looking is looking at something else. */
-static void install_jitter(int32_t mode, uint32_t rva, int filter_by_extent)
+static void install_jitter(int32_t mode, uint32_t rva)
 {
     jitter_patch.mode = mode;
     if (jitter_patch.mode == 0) {
@@ -653,15 +576,6 @@ static void install_jitter(int32_t mode, uint32_t rva, int filter_by_extent)
     jitter_patch.rva = rva;
     jitter_patch.site_verified = 1;
     jitter_patch.enabled = 0;
-    if (filter_by_extent) {
-        if (build_jitter_stub(jitter_patch.rva)) {
-            note("jitter: filtering compatibility views by render extent through a stub at %p", (void*)jitter_patch.stub);
-        } else {
-            note("jitter: no memory near the game for the extent filter, so every view is "
-                 "jittered as before");
-        }
-    }
-
     set_jitter_enabled(1);
     if (!jitter_patch.enabled) {
         jitter_patch.site_verified = 0;
@@ -951,98 +865,6 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
     return 0;
 }
 
-/* Lengthen the jitter sequence to match the render scale.
-
-   A reconstruction wants each output pixel covered by about the same number of distinct samples
-   however many render pixels sit behind it, so the sequence has to grow with the area ratio: eight
-   at full scale, thirty two at half. Unreal 4.18 will not do that by itself. It takes the count
-   from r.TemporalAASamples and that value does not move with screen percentage, so halving the
-   scale without this leaves the sequence a quarter as long as it should be.
-
-   The offset comes from the float variable that was just set, because TConsoleVariableData keeps
-   its two thread copies at the same place for every variable of the same element size. Searching
-   for the value the way the float path does would not work here: an integer 8 occurs all over the
-   object, and replacing every match would corrupt it. */
-static void set_jitter_sequence_length(float percentage, uint32_t value_offset)
-{
-    if (rsf_bridge_native_owned()) return;
-    static int32_t previous_samples = 8;
-    const int32_t samples = rsf_ac7_carrier_jitter_samples(percentage);
-    if (samples == 0) return;
-
-    rsf_dump_result result =
-        rsf_console_set_int("r.TemporalAASamples", previous_samples, samples, value_offset,
-                            read_number("RSF_CONSOLE_SINGLETON_RVA", 0x3a8b290),
-                            read_number("RSF_CONSOLE_FIND_SLOT", 0x90));
-    if (result != RSF_DUMP_OK && previous_samples != 8) {
-        result = rsf_console_set_int("r.TemporalAASamples", 8, samples, value_offset,
-                                    read_number("RSF_CONSOLE_SINGLETON_RVA", 0x3a8b290),
-                                    read_number("RSF_CONSOLE_FIND_SLOT", 0x90));
-    }
-    if (result == RSF_DUMP_OK) {
-        previous_samples = samples;
-        note("jitter sequence length set to %d at object offset 0x%lx", (int)samples,
-             (unsigned long)value_offset);
-    } else {
-        /* Refusing is the designed outcome when the object does not hold 8 in both slots, which
-           covers a different default, a different layout, and the wrong object. */
-        note("jitter sequence length NOT set (result %d), offset 0x%lx did not hold 8 twice",
-             (int)result, (unsigned long)value_offset);
-    }
-}
-
-/* Halve the render resolution, the way the engine's own screen percentage does.
-
-   In 4.18 that one cvar is the whole mechanism: it shrinks the scene buffers, makes ViewRect
-   differ from UnscaledViewRect so the upscale pass appears, and the jitter formula divides by
-   ViewRect so the offset rescales to render resolution by itself. Resizing render targets behind
-   the engine's back would instead leave BufferSizeAndInvSize and ScreenPositionScaleBias
-   describing a buffer that no longer exists, and every shader does its UV maths with those. */
-static unsigned long requested_scale_percent;
-
-static int set_screen_percentage(float value)
-{
-    uint32_t offset = 0;
-    const float previous = requested_scale_percent ? (float)requested_scale_percent : 100.0f;
-    rsf_dump_result result =
-        rsf_console_set_float("r.ScreenPercentage", previous, value,
-                              read_number("RSF_CONSOLE_SINGLETON_RVA", 0x3a8b290),
-                              read_number("RSF_CONSOLE_FIND_SLOT", 0x90), &offset);
-    if (result != RSF_DUMP_OK && previous != 100.0f) {
-        result = rsf_console_set_float("r.ScreenPercentage", 100.0f, value,
-                                      read_number("RSF_CONSOLE_SINGLETON_RVA", 0x3a8b290),
-                                      read_number("RSF_CONSOLE_FIND_SLOT", 0x90), &offset);
-    }
-    if (result == RSF_DUMP_OK) {
-        requested_scale_percent = (unsigned long)value;
-        note("screen percentage set to %d, value found at object offset 0x%lx", (int)value,
-             (unsigned long)offset);
-        set_jitter_sequence_length(value, offset);
-        set_separate_translucency_scale();
-        return 1;
-    }
-
-    /* Say what actually went wrong rather than leaving one code to mean several things, and show
-       the object, because guessing a layout for a vendor branch is what failed the first time. */
-    uint64_t manager = 0, variable = 0;
-    float floats[32];
-    memset(floats, 0, sizeof(floats));
-    const rsf_dump_result probed =
-        rsf_console_probe("r.ScreenPercentage", read_number("RSF_CONSOLE_SINGLETON_RVA", 0x3a8b290),
-                          read_number("RSF_CONSOLE_FIND_SLOT", 0x90), &manager, &variable, floats,
-                          32);
-    note("screen percentage not set (set result %d, probe result %d): manager=0x%llx "
-         "variable=0x%llx", (int)result, (int)probed, (unsigned long long)manager,
-         (unsigned long long)variable);
-    if (probed == RSF_DUMP_OK) {
-        for (int row = 0; row < 8; ++row) {
-            note("  +0x%02x: %12.5f %12.5f %12.5f %12.5f", row * 16, floats[row * 4],
-                 floats[row * 4 + 1], floats[row * 4 + 2], floats[row * 4 + 3]);
-        }
-    }
-    return 0;
-}
-
 /* Start on the render thread after decryption and the first presenting device are ready. */
 static void start_dlss_at_extent(uint32_t width, uint32_t height)
 {
@@ -1097,11 +919,8 @@ static void start_dlss(void)
 
    These are the actions that used to be function keys. They run on the render thread, called from
    the present hook where the panel was drawn, which is the boundary the review finding wants and
-   is why the panel can drive them safely when a hotkey worker cannot.
+   is why the panel can drive them safely when a hotkey worker cannot. */
 
-   The scale one remembers what was asked so the panel can show what is in effect. Without it the
-   only answer available is the environment default, which stops being true the moment anything
-   changes it. */
 
 /* The separate translucency scale, as the patch below leaves it: a four byte immediate inside the
    instruction stream, which is why it can be changed while the game runs.
@@ -1147,8 +966,8 @@ static void set_separate_translucency_scale(void)
         return;
     }
 
-    /* Before a preset has actually changed the game, its scene is still native. */
-    render_percent = requested_scale_percent ? requested_scale_percent : 100;
+    /* The native renderer owns the scene size; the carrier no longer changes it. */
+    render_percent = 100;
     target = read_number("RSF_TRANSLUCENCY_TARGET", 100);
 
     /* Above scene resolution only when the patched engine can build matching depth. */
@@ -1198,19 +1017,6 @@ static void register_translucency_scale(uint32_t rva, uint32_t immediate_offset)
          "adjustable while the game runs",
          (unsigned long)rva, (void*)immediate);
     set_separate_translucency_scale();
-}
-
-static int action_set_render_scale(unsigned long percent)
-{
-    if (percent == 0 || percent > 100) {
-        return 0;
-    }
-    return set_screen_percentage((float)percent);
-}
-
-static unsigned long action_render_scale_percent(void)
-{
-    return requested_scale_percent;
 }
 
 static void action_trigger_dump(void)
@@ -1307,11 +1113,9 @@ static void register_overlay_actions(void)
     memset(&actions, 0, sizeof(actions));
     actions.start_backend = start_dlss;
     actions.start_backend_at_extent = start_dlss_at_extent;
-    actions.set_render_scale = action_set_render_scale;
     actions.trigger_dump = action_trigger_dump;
     actions.trigger_capture = action_trigger_capture;
     actions.capture_count = action_capture_count;
-    actions.render_scale_percent = action_render_scale_percent;
     actions.set_jitter = action_set_jitter;
     actions.jitter_open = action_jitter_open;
     actions.jitter_available = action_jitter_available;

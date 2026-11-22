@@ -33,15 +33,7 @@ unsafe extern "C" {
         callback: rsf_frame_tap_constant_observer_fn,
         user: Handle,
     ) -> i32;
-    fn rsf_constant_twins_create(device: Handle, bytes: u32) -> Handle;
-    fn rsf_constant_twins_write(
-        twins: Handle,
-        context: Handle,
-        original: Handle,
-        data: *const c_void,
-    ) -> Handle;
-    fn rsf_constant_twins_find(twins: Handle, original: Handle) -> Handle;
-    fn rsf_constant_twins_destroy(twins: Handle);
+
 }
 
 unsafe extern "system" {
@@ -621,23 +613,6 @@ extern "C" fn rsf_fixture_main() -> i32 {
             context.constant(method_slot, index).0 == bindings.extra,
             "Later-stage original constants must be restored after the draw.",
         );
-    }
-
-    // A view's old address can now name a smaller material constant buffer.
-    unsafe {
-        let twins = rsf_constant_twins_create(device.0, 4096);
-        let view = [0.0_f32; 1024];
-        checks.check(
-            !twins.is_null()
-                && !rsf_constant_twins_write(twins, context.0, bindings.vs, view.as_ptr().cast())
-                    .is_null(),
-            "The cache fixture must contain an old view entry.",
-        );
-        checks.check(
-            rsf_constant_twins_find(twins, bindings.vs).is_null(),
-            "A material buffer must not receive a stale 4096-byte twin.",
-        );
-        rsf_constant_twins_destroy(twins);
     }
 
     stage("uploading constant buffers");

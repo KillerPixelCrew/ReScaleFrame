@@ -348,7 +348,7 @@ set_source_files_properties("${ac7_session_object}" PROPERTIES GENERATED TRUE EX
 add_executable(rsf_ac7_session fixture_main.c "${ac7_session_object}")
 target_compile_definitions(rsf_ac7_session PRIVATE RSF_FIXTURE_ENTRY=rsf_ac7_session_fixture)
 set_target_properties(rsf_ac7_session PROPERTIES LINKER_LANGUAGE CXX)
-target_link_libraries(rsf_ac7_session PRIVATE ReScaleFrame::AC7SceneColor ReScaleFrame::GraphicsLeaves rsf_build_options)
+target_link_libraries(rsf_ac7_session PRIVATE ReScaleFrame::AC7View ReScaleFrame::GraphicsLeaves rsf_build_options)
 add_test(NAME ac7_session COMMAND rsf_ac7_session)
 
 include(g02/fixture.cmake)
@@ -356,12 +356,6 @@ rsf_add_g02_fixture(rsf_constant_override constant_override.rs)
 target_link_libraries(rsf_constant_override PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options d3dcompiler)
 add_test(NAME constant_override COMMAND rsf_constant_override)
 set_tests_properties(constant_override PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
-
-# No device: the classifier is a pure function over shadowed facts, which is the point of it.
-add_executable(rsf_ac7_ui_rules_test ac7_ui_rules.c)
-set_target_properties(rsf_ac7_ui_rules_test PROPERTIES LINKER_LANGUAGE CXX)
-target_link_libraries(rsf_ac7_ui_rules_test PRIVATE ReScaleFrame::AC7UIRules ReScaleFrame::GraphicsLeaves rsf_build_options)
-add_test(NAME ac7_ui_rules COMMAND rsf_ac7_ui_rules_test)
 
 # A vendor that is not compiled in still has to answer, and has to answer differently from one
 # whose runtime is missing. Runs in both configurations.
@@ -380,7 +374,7 @@ target_link_libraries(rsf_shared_surface PRIVATE rsf_presentation_fixtures_rust
 add_test(NAME shared_surface COMMAND rsf_shared_surface)
 set_tests_properties(shared_surface PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
-# The composite's arithmetic, which nothing covered while it lived in present_blit.
+# The composite's arithmetic.
 add_executable(rsf_fullscreen_pass fixture_main.c)
 target_compile_definitions(rsf_fullscreen_pass PRIVATE RSF_FIXTURE_ENTRY=rsf_fullscreen_pass_fixture)
 target_link_libraries(rsf_fullscreen_pass PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options)
@@ -450,13 +444,6 @@ target_link_libraries(rsf_motion_decode PRIVATE rsf_orchestrator_rust ReScaleFra
 add_test(NAME motion_decode COMMAND rsf_motion_decode)
 set_tests_properties(motion_decode PROPERTIES TIMEOUT 120)
 
-add_executable(rsf_frame_tap frame_tap.c)
-set_target_properties(rsf_frame_tap PROPERTIES LINKER_LANGUAGE CXX)
-# The frame tap's depth replay is Runtime code, so the Runtime archive also supplies the leaves.
-target_link_libraries(rsf_frame_tap PRIVATE ReScaleFrame::AC7SceneColor rsf_orchestrator_rust ReScaleFrame::Graphics
-    rsf_build_options)
-add_test(NAME frame_tap COMMAND rsf_frame_tap)
-set_tests_properties(frame_tap PROPERTIES TIMEOUT 120)
 
 add_executable(rsf_d3d11_state fixture_main.c)
 target_compile_definitions(rsf_d3d11_state PRIVATE RSF_FIXTURE_ENTRY=rsf_d3d11_state_fixture)
@@ -464,10 +451,6 @@ target_link_libraries(rsf_d3d11_state PRIVATE rsf_orchestrator_rust ReScaleFrame
 add_test(NAME d3d11_state COMMAND rsf_d3d11_state)
 set_tests_properties(d3d11_state PROPERTIES TIMEOUT 120)
 
-rsf_add_g02_fixture(rsf_scene_promote scene_promote.rs)
-target_link_libraries(rsf_scene_promote PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options)
-add_test(NAME scene_promote COMMAND rsf_scene_promote)
-set_tests_properties(scene_promote PROPERTIES TIMEOUT 120)
 
 add_executable(rsf_d3d11_observer d3d11_observer.c)
 set_target_properties(rsf_d3d11_observer PROPERTIES LINKER_LANGUAGE CXX)

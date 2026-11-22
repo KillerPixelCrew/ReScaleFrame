@@ -1,40 +1,36 @@
 /* SPDX-License-Identifier: MIT */
 /* Research carrier for standalone AC7. The runtime loads and prepares the game DLL before
-   graphics activation. With native ownership, the game DLL supplies graph inputs, frame/view
-   identity and output pools; the runtime evaluates SR on the queued RHI stream. A refused native
-   activation leaves the game running without SR. */
+   graphics activation. The game DLL supplies graph inputs, frame/view identity and output pools;
+   the runtime evaluates SR on the queued RHI stream. A refused native activation runs without SR. */
 
 #include <windows.h>
-#include <dxgiformat.h>
 #include <dxgi.h>
-#include <d3d11.h>
 
 #include <rescaleframe/ac7_carrier.h>
-#include <rescaleframe/ac7_view.h>
 #include <rescaleframe/ac7_motion_capture.h>
+#include <rescaleframe/ac7_velocity_pass.h>
 #include <rescaleframe/d3d11_observer.h>
 #include <rescaleframe/dlss_pipeline.h>
-#include <rescaleframe/native_cpu.h>
-#include <rescaleframe/native_fg.h>
-#include <rescaleframe/fg_choice.h>
-#include <rescaleframe/texture_dump.h>
-#include <rescaleframe/ac7_velocity_pass.h>
+#include <rescaleframe/sr_session.h>
 #include <rescaleframe/frame_tap.h>
+#include <rescaleframe/native_fg.h>
 #include <rescaleframe/input_dump.h>
+#include <rescaleframe/fg_choice.h>
 #include <rescaleframe/overlay_fg_stats.h>
 #include "../../../runtime/orchestrator/src/sharpening_overlay.h"
 #include <rescaleframe/overlay_api.h>
 #include <rescaleframe/resource_ref.h>
+#include <rescaleframe/texture_dump.h>
 #include <rescaleframe/plugin_session.h>
 #include <rescaleframe/native_sr.h>
 #include <rescaleframe/native_translucency.h>
 #include <rescaleframe/native_composition.h>
+#include <rescaleframe/native_cpu.h>
 #include <rescaleframe/native_window.h>
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <math.h>
 
 #include "dlss_bridge.h"
 #include "overlay_host.h"
@@ -88,7 +84,6 @@ int rsf_bridge_prepare_game(const wchar_t* plugin_path, const rsf_game_probe* pr
     return result == RSF_OK;
 }
 
-
 static struct {
     int started;
     void* device;
@@ -108,21 +103,21 @@ static struct {
     unsigned long reported_evaluated;
 
     uint64_t application_presented_frames;
+    uint32_t native_input_mask;
+    int has_jitter;
+    float jitter_pixels[2];
     int enabled_requested;
     const char* setting_error;
-    /* Which of colour, depth, motion and exposure the last native SR pass carried, and its camera. */
-    uint32_t native_input_mask;
-    rsf_pipeline_camera_frame held_camera;
 
-    /* A route dump: the pictures at the gates for a few consecutive frames, written from the render
-       thread as the frame passes them, with the upscaler running. RenderDoc cannot do this here:
+    /* A route dump: the pictures of the native passes for a few consecutive frames, written from
+       the render thread as the frame passes them, with DLSS running. RenderDoc cannot do this here:
        Streamline crashes inside RenderDoc's device wrapper the moment it is handed the device. */
     char route_dump_prefix[520];
     unsigned long route_dump_frames;
     unsigned long route_dump_frame;
     unsigned long route_dump_serial;
 
-    /* The presented size. */
+    /* The presented size the backend outputs at. */
     unsigned long output_width;
     unsigned long output_height;
 
@@ -137,9 +132,13 @@ static struct {
     rsf_bridge_actions actions;
 } bridge;
 
-/* Declared here because the resource creation hooks below are defined before it and have things
-   worth saying. */
-static void say(const char* format, ...);
+static void on_layout_created(void* user, void* layout, const rsf_observer_layout_element* elements,
+                              uint32_t copied, uint32_t count)
+{
+    (void)user;
+    rsf_ac7_motion_capture_layout(layout, elements, copied, count);
+    rsf_ac7_velocity_layout_seen(layout, elements, copied, count);
+}
 
 static void on_shader_created(void* user, void* shader, uint32_t stage, const void* bytecode,
                               uint32_t bytes)
@@ -221,8 +220,8 @@ static void on_native_pass(void* user, void* list, const rsf_game_render_pass* p
     ++bridge.passes;
     bridge.native_input_mask = (pass->color_input ? 1u : 0u) | (pass->depth ? 2u : 0u) |
         (pass->motion ? 4u : 0u) | (pass->exposure ? 8u : 0u);
-    bridge.held_camera.has_jitter = pass->camera_valid;
-    memcpy(bridge.held_camera.jitter_pixels, pass->camera.jitter_pixels, 8);
+    bridge.has_jitter = pass->camera_valid;
+    memcpy(bridge.jitter_pixels, pass->camera.jitter_pixels, sizeof(bridge.jitter_pixels));
     bridge.last_result = rsf_native_sr_evaluate(bridge.context, pass);
     rsf_input_dump_sr_result(bridge.last_result);
     if (bridge.route_dump_frames) {
@@ -240,10 +239,6 @@ static void on_native_pass(void* user, void* list, const rsf_game_render_pass* p
     }
 }
 
-/* Turn what the view buffer says into what a backend is told. Only the fields the reader actually
-   established: the pipeline fills the motion ones because it is the code that decodes them, and
-   inventing the rest here would be exactly the kind of plausible wrong value this project keeps
-   catching. */
 static char sdk_directories[4][1024];
 void rsf_bridge_set_sdk_directories(const char* fsr2, const char* fsr3, const char* fsr4, const char* xess)
 {
@@ -252,12 +247,24 @@ void rsf_bridge_set_sdk_directories(const char* fsr2, const char* fsr3, const ch
     for (i = 0; i < 4; ++i) snprintf(sdk_directories[i], sizeof(sdk_directories[i]), "%s", paths[i] ? paths[i] : "");
 }
 
+/* AC7 motion capture: the frame tap's geometry reports, and the uploads the capture asked for. */
 static void on_geometry(void* user, const rsf_frame_tap_geometry* draw)
 {
     (void)user;
     rsf_ac7_motion_capture_geometry(draw);
     rsf_ac7_velocity_geometry(draw);
 }
+
+static void observe_constants(void* user, void* buffer, const void* contents, uint32_t bytes)
+{
+    (void)user;
+    rsf_ac7_motion_capture_upload(buffer, contents, bytes);
+}
+
+/* Whether RSF_MOTION_CAPTURE is on, told by the proxy that reads the setting. The constant watch
+   only feeds the motion capture, so it is armed only when a capture was asked for. */
+static volatile LONG motion_capture_on;
+void rsf_bridge_set_motion_capture(int on) { InterlockedExchange(&motion_capture_on, on != 0); }
 
 /* Write one texture of the route for the frame being dumped. Through a staging copy, so the
    frame's state is left alone; a stall, which a capture can afford. */
@@ -288,22 +295,6 @@ static void route_dump(void* context, void* texture, const char* name)
     }
 }
 
-/* Whether RSF_MOTION_CAPTURE is on, told by the proxy that reads the setting. */
-static volatile LONG motion_capture_on;
-void rsf_bridge_set_motion_capture(int on) { InterlockedExchange(&motion_capture_on, on != 0); }
-
-/* The constant watch only feeds the motion capture, so it is armed only when a capture was asked for. */
-static void observe_constants(void* user, void* buffer, const void* contents, uint32_t bytes)
-{
-    (void)user;
-    rsf_ac7_motion_capture_upload(buffer, contents, bytes);
-}
-
-/* Everything the panel displays, gathered from where it actually lives.
-
-   It is filled every frame the panel is open rather than kept as state, because a number the panel
-   shows and a number the bridge holds disagreeing is the failure this is meant to catch, not to
-   introduce. */
 /* Refresh rate of the display the game is on, for the panel's VRR cap. Read only while the
    panel is open, and at most once a second. */
 static uint32_t display_refresh_mhz(void)
@@ -326,6 +317,8 @@ static uint32_t display_refresh_mhz(void)
     return cached;
 }
 
+/* Everything the panel displays, gathered from where it actually lives, every frame the panel is
+   open rather than kept as state. */
 static void fill_overlay_stats(rsf_overlay_stats* stats)
 {
     rsf_dlss_pipeline_status pipeline;
@@ -355,9 +348,7 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
     stats->backend_name = pipeline.backend == 2 ? "FSR2" : pipeline.backend == 3 ? "FSR3" :
         pipeline.backend == 4 ? "FSR4" : pipeline.backend == 5 ? "XeSS" : "DLSS";
 
-    /* Why nothing is happening, in the order the pipeline actually fails. A backend that is running
-       and evaluating nothing is the normal outcome of an unjittered projection, and saying so is
-       the entire reason this field exists. */
+    /* Why nothing is happening, in the order the pipeline actually fails. */
     if (!bridge.started) {
         stats->refusal_reason = rsf_ac7_carrier_startup_attempted() ?
             "DLSS could not start; see the log" : "Waiting for the renderer";
@@ -375,9 +366,9 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
     stats->have_motion = (bridge.native_input_mask & 4u) != 0;
     stats->have_exposure = (bridge.native_input_mask & 8u) != 0;
     stats->motion_decoded = bridge.evaluated > 0;
-    stats->jitter_active = bridge.held_camera.has_jitter;
-    stats->jitter_pixels[0] = bridge.held_camera.jitter_pixels[0];
-    stats->jitter_pixels[1] = bridge.held_camera.jitter_pixels[1];
+    stats->jitter_active = (uint32_t)bridge.has_jitter;
+    stats->jitter_pixels[0] = bridge.jitter_pixels[0];
+    stats->jitter_pixels[1] = bridge.jitter_pixels[1];
     {
         rsf_native_fg_status fg = {0}; fg.struct_size = sizeof(fg);
         const int have_fg = rsf_native_fg_status_get(&fg);
@@ -392,43 +383,30 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
         stats->show_performance_hud = performance_hud_enabled;
     }
     stats->ui_preferences = overlay_ui_preferences;
-    stats->enabled = rsf_bridge_native_owned() ? (uint32_t)bridge.enabled_requested : 0u;
-    stats->reinsert_on = stats->enabled;
+    stats->enabled = (uint32_t)bridge.enabled_requested;
+    stats->reinsert_on = (uint32_t)bridge.enabled_requested;
     stats->reinsert_available = (uint32_t)bridge.started;
     stats->quality = (rsf_overlay_quality)bridge.quality;
     stats->dlss_preset = (uint32_t)bridge.dlss_preset;
     stats->dlss_preset_available = 1;
     rsf_overlay_fill_sharpening_stats(stats, &bridge.sharpening);
-
-    if (rsf_bridge_native_owned()) {
+    {
         rsf_game_render_config config = {0}; config.struct_size = sizeof(config);
         stats->render_scale_percent = rsf_native_sr_render_config(NULL, &config) && config.output_width ?
             (uint32_t)(((uint64_t)config.render_width * 100u + config.output_width - 1u) / config.output_width) : 0u;
-    } else {
-        stats->render_scale_percent = bridge.actions.render_scale_percent ? (uint32_t)bridge.actions.render_scale_percent() : 0u;
     }
     stats->captures_written =
         bridge.actions.capture_count ? (uint32_t)bridge.actions.capture_count() : 0u;
-    stats->jitter_on = rsf_bridge_native_owned() ? (uint32_t)bridge.enabled_requested :
-        bridge.actions.jitter_open ? (uint32_t)bridge.actions.jitter_open() : 0u;
+    stats->jitter_on = (uint32_t)bridge.enabled_requested;
     stats->jitter_available =
         bridge.actions.jitter_available ? (uint32_t)bridge.actions.jitter_available() : 0u;
     if (bridge.setting_error) {
         stats->refusal_reason = bridge.setting_error;
     } else if (!bridge.enabled_requested) {
         stats->refusal_reason = NULL;
-    } else if (bridge.started && !stats->reinsert_on && !stats->refusal_reason) {
-        stats->refusal_reason = "Waiting for the scene's upscale path";
     }
 }
 
-/* Lay the panel out and draw it, and report what was clicked without acting on it.
-
-   Nothing here applies an intent yet. The panel can already change quality and toggle
-   reconstruction in its own model, and wiring those to the bridge means a settings change crossing
-   from the message thread to the render thread at a defined point, which is the open review finding
-   about F7 and F8 and is not made better by adding a third way in. So this says what was asked for
-   and leaves the hotkeys as the way to ask. */
 int rsf_bridge_select_sharpening(const rsf_sharpening_options* options)
 {
     if (rsf_dlss_pipeline_set_sharpening(options) != RSF_DLSS_PIPELINE_OK) return 0;
@@ -461,11 +439,8 @@ int rsf_bridge_select_quality(unsigned long quality)
             bridge.setting_error = "DLSS did not accept this preset";
             return 0;
         }
-        const unsigned long x = (width * 100ul + bridge.output_width - 1) / bridge.output_width;
-        const unsigned long y = (height * 100ul + bridge.output_height - 1) / bridge.output_height;
-        const unsigned long percent = x > y ? x : y;
-        say("preset %lu applied: requested %ux%u, output %lux%lu, screen percentage %lu",
-            quality, width, height, bridge.output_width, bridge.output_height, percent);
+        say("preset %lu applied: requested %ux%u, output %lux%lu", quality, width, height,
+            bridge.output_width, bridge.output_height);
     }
     bridge.quality = quality;
     if (bridge.started) rsf_native_sr_set_surface((uint32_t)bridge.output_width, (uint32_t)bridge.output_height);
@@ -507,6 +482,8 @@ void rsf_bridge_set_enabled(int enabled)
 static uint32_t pending_fg_save = UINT32_MAX;
 static uint32_t overlay_sr_change_id, overlay_sr_change_status;
 
+/* Lay the panel out and draw it, and apply what was clicked here, on the render thread, at the
+   point in the frame the overlay was drawn from. */
 static void overlay_tick(void* swapchain)
 {
     rsf_overlay_stats stats;
@@ -575,10 +552,6 @@ static void overlay_tick(void* swapchain)
     }
     if (intent.performance_hud_changed) performance_hud_enabled = intent.performance_hud != 0;
     if (intent.ui_preferences_changed) overlay_ui_preferences = intent.ui_preferences;
-    /* Applied here, on the render thread, at the point in the frame the overlay was drawn from.
-       That is the boundary the review finding asks for: the panel records what was clicked and the
-       change happens where the rendering already is, rather than from the message thread while a
-       frame is in flight. */
     if (intent.start_requested) {
         if (bridge.actions.start_backend) {
             bridge.actions.start_backend();
@@ -587,11 +560,7 @@ static void overlay_tick(void* swapchain)
         }
     }
     if (intent.scale_requested && intent.scale_percent > 0) {
-        if (!rsf_bridge_native_owned() && bridge.actions.set_render_scale) {
-            bridge.actions.set_render_scale(intent.scale_percent);
-        } else {
-            say("overlay: nothing is registered to set the render scale");
-        }
+        say("overlay: nothing is registered to set the render scale");
     }
     if (intent.dump_requested) {
         if (bridge.actions.trigger_dump) {
@@ -644,15 +613,6 @@ static void overlay_tick(void* swapchain)
     }
 }
 
-/* Called before the game's own Present, from the observer. */
-/* Requests from the hotkey worker, run on this thread at the next present. */
-static volatile LONG pending_requests;
-
-void rsf_bridge_request(unsigned long requests)
-{
-    InterlockedOr(&pending_requests, (LONG)requests);
-}
-
 int rsf_bridge_present_extent(uint32_t* width, uint32_t* height)
 {
     rsf_observer_status status;
@@ -664,14 +624,6 @@ int rsf_bridge_present_extent(uint32_t* width, uint32_t* height)
     *width = status.present_width;
     *height = status.present_height;
     return 1;
-}
-
-static void run_pending_requests(void)
-{
-    const LONG requests = InterlockedExchange(&pending_requests, 0);
-    if ((requests & RSF_BRIDGE_REQUEST_START) && bridge.actions.start_backend) {
-        bridge.actions.start_backend();
-    }
 }
 
 void rsf_bridge_request_shutdown(void)
@@ -702,6 +654,7 @@ static int drain_shutdown(void)
     return 1;
 }
 
+/* Called before the game's own Present, from the observer. */
 static void on_present(void* user, void* swapchain)
 {
     (void)user;
@@ -718,8 +671,6 @@ static void on_present(void* user, void* swapchain)
         }
     }
 
-    /* First, so a key pressed since the last frame acts on this one, on this thread. */
-    run_pending_requests();
     {
         char motion_prefix[640];
         if (rsf_ac7_motion_capture_present(swapchain, motion_prefix, sizeof(motion_prefix))) {
@@ -764,8 +715,8 @@ static void on_present(void* user, void* swapchain)
         rsf_input_dump_present(swapchain, bridge.context, matched ? &window : NULL);
     }
 
-    /* Last, so the panel is drawn over the finished frame. It takes no part in the reconstruction
-       and is never one of its inputs. */
+    /* Last, so the panel is drawn over the finished frame. It takes no part in the
+       reconstruction and is never one of its inputs. */
     overlay_tick(swapchain);
 }
 
@@ -795,7 +746,9 @@ void rsf_bridge_set_log(rsf_bridge_log_fn log, void* log_user)
     rsf_ac7_velocity_set_log(log, log_user);
 }
 
+rsf_observer_layout_fn rsf_bridge_layout_hook(void) { return on_layout_created; }
 rsf_observer_shader_fn rsf_bridge_shader_hook(void) { return on_shader_created; }
+
 void rsf_bridge_set_actions(const rsf_bridge_actions* actions)
 {
     if (actions) {
@@ -804,17 +757,6 @@ void rsf_bridge_set_actions(const rsf_bridge_actions* actions)
         memset(&bridge.actions, 0, sizeof(bridge.actions));
     }
 }
-
-/* Build the substitutions for the tail as it currently stands and hand them to the tap.
-
-   Separate from the toggle because it is also what a stalled plan needs. Nothing here decides
-   whether reinsertion should be on; it only makes the plan describe the frame that is actually
-   being drawn now. */
-typedef enum reinsert_plan_result {
-    REINSERT_PLAN_FAILED,
-    REINSERT_PLAN_APPLIED,
-    REINSERT_PLAN_ATTACHED
-} reinsert_plan_result;
 
 int rsf_bridge_start(const char* streamline_directory, unsigned long output_width,
                      unsigned long output_height, unsigned long quality, rsf_bridge_log_fn log,
@@ -832,6 +774,10 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
     }
     if (!streamline_directory || !streamline_directory[0]) {
         say("dlss bridge: RSF_STREAMLINE_BIN is not set, nothing to load");
+        return 0;
+    }
+    if (!game_session || !game_prepared) {
+        say("dlss bridge: the native AC7 renderer is not prepared, so SR stays off");
         return 0;
     }
 
@@ -883,38 +829,31 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
         return 0;
     }
 
-    /* SR runs only through the native AC7 controller. A refused activation leaves the game
-       running without SR. */
     bridge.started = 1;
-    if (!game_session || !game_prepared || rsf_plugin_session_start(game_session) != RSF_OK) {
+    if (rsf_plugin_session_start(game_session) != RSF_OK) {
         say("native AC7 controller activation refused; SR stays off");
-        rsf_dlss_pipeline_stop();
-        bridge.started = 0;
+        rsf_dlss_pipeline_stop(); bridge.started = 0; publish_native_settings();
         return 0;
     }
     InterlockedExchange(&native_owner, 1);
     say("native AC7 renderer owns SR: graph insertion, engine output pools and downstream rectangles");
+    bridge.output_width = output_width;
+    bridge.output_height = output_height;
+
     memset(&tap, 0, sizeof(tap));
     tap.struct_size = sizeof(tap);
     tap.abi_version = RSF_FRAME_TAP_ABI_VERSION;
     tap.on_geometry = on_geometry;
-    bridge.output_width = output_width;
-    bridge.output_height = output_height;
     tap.log = log;
     tap.log_user = log_user;
-    tap.view_constant_bytes = RSF_AC7_VIEW_BUFFER_BYTES;
-    tap.output_width = (uint32_t)output_width;
-    tap.output_height = (uint32_t)output_height;
-
     tapped = rsf_frame_tap_install(bridge.context, &tap);
-    if (tapped == RSF_FRAME_TAP_OK && InterlockedCompareExchange(&motion_capture_on, 0, 0)) {
-        rsf_frame_tap_set_constant_observer(0u, observe_constants, NULL);
-    }
-
     if (tapped != RSF_FRAME_TAP_OK) {
         say("dlss bridge: frame tap not installed, result %d", (int)tapped);
         rsf_dlss_pipeline_stop(); bridge.started = 0; publish_native_settings();
         return 0;
+    }
+    if (InterlockedCompareExchange(&motion_capture_on, 0, 0)) {
+        rsf_frame_tap_set_constant_observer(0u, observe_constants, NULL);
     }
 
     if (!rsf_bridge_select_quality(bridge.quality)) {
@@ -923,8 +862,7 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
         bridge.started = 0; publish_native_settings();
         return 0;
     }
-    /* After the tap is installed, not before: the jitter is only worth having once there is
-       something reading the frames it belongs to. */
+    /* The native renderer supplies its own jitter, so the carrier's gate stays shut. */
     if (bridge.actions.set_jitter) {
         bridge.actions.set_jitter(0);
     }
@@ -955,9 +893,9 @@ void rsf_bridge_report(void)
             status.output_width, status.output_height,
             (unsigned long long)status.frames_evaluated,
             (unsigned long long)status.frames_refused);
-
-        /* Whether this is upscaling at all: a backend fed the presented size is doing antialiasing
-           instead, which looks clean precisely because nothing was reconstructed from less. */
+        /* Whether this is upscaling at all. A backend fed the presented size is doing antialiasing
+           instead, which looks clean and sharp precisely because nothing was reconstructed from
+           less, so it has to be said rather than seen. */
         if (status.render_width != 0 && status.output_width != 0 &&
             status.render_width >= status.output_width) {
             say("note: the game is rendering at the presented size, so this is antialiasing at "
@@ -971,7 +909,8 @@ void rsf_bridge_request_dump(const char* prefix)
     if (bridge.started) {
         /* A disabled-backend capture must not label a later enabled frame with this prefix. */
         if (bridge.enabled_requested) rsf_dlss_pipeline_request_dump(prefix);
-        /* And the route's own pictures, for consecutive frames. */
+        /* And the route's own pictures, for consecutive frames: whether the layer or the
+           reconstruction moves between them is what a shimmer complaint needs answered. */
         snprintf(bridge.route_dump_prefix, sizeof(bridge.route_dump_prefix), "%s_route", prefix);
         bridge.route_dump_frame = 0;
         bridge.route_dump_serial = 0;
