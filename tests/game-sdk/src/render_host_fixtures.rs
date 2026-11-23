@@ -67,7 +67,7 @@ extern "C" fn rsf_test_callback_host_abi() -> i32 {
     let preferences = scratch.path("preferences.ini");
     let missing_plugin = scratch.path("missing-plugin.dll");
     let unwritable = scratch.path("missing-directory/host.log");
-    let relative: Vec<u16> = "Adapter.dll".encode_utf16().chain([0]).collect();
+    let relative = rsf_game_sys::ffi_util::wide("Adapter.dll");
     let probe = rsf_game_probe {
         struct_size: size_of::<rsf_game_probe>() as u32,
         pe_machine: 0x8664,

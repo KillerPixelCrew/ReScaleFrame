@@ -6,6 +6,7 @@ use crate::xess_bridge_abi::{
     rsf_xess_bridge_create,
 };
 use ash::{Entry, StaticFn, vk, vk::Handle as _};
+use rsf_game_sys::ffi_util::wide;
 use std::{
     ffi::{c_char, c_void},
     mem,
@@ -82,7 +83,7 @@ fn contract() -> i32 {
         return 11;
     }
     create.abi_version = RSF_XESS_BRIDGE_ABI_VERSION;
-    let relative: Vec<_> = "relative\0".encode_utf16().collect();
+    let relative = wide("relative");
     create.runtime_directory = relative.as_ptr();
     if unsafe { RsfXessBridgeCreate(&create, &mut output) } != RSF_XESS_BRIDGE_INVALID_ARGUMENT
         || !output.is_null()
@@ -279,7 +280,7 @@ fn exercise(
 }
 
 fn device(runtime: *const u16, present: bool) -> i32 {
-    let name: Vec<_> = "vulkan-1.dll\0".encode_utf16().collect();
+    let name = wide("vulkan-1.dll");
     let loader = unsafe { LoadLibraryW(name.as_ptr()) };
     if loader.is_null() {
         return 20;
@@ -332,7 +333,7 @@ fn device(runtime: *const u16, present: bool) -> i32 {
 
 fn argument_matches(argument: *const u16, expected: &str) -> bool {
     let mut argument = argument;
-    for unit in expected.encode_utf16().chain([0]) {
+    for unit in wide(expected) {
         if unsafe { *argument } != unit {
             return false;
         }

@@ -45,12 +45,12 @@ impl Ini {
         Self {
             path,
             wide,
-            section: section.encode_utf16().chain([0]).collect(),
+            section: ffi_util::wide(section),
         }
     }
 
     fn read(&self, key: &str) -> u32 {
-        let key: Vec<_> = key.encode_utf16().chain([0]).collect();
+        let key = ffi_util::wide(key);
         unsafe {
             GetPrivateProfileIntW(
                 self.section.as_ptr(),
@@ -62,8 +62,7 @@ impl Ini {
     }
 
     fn write(&self, key: &str, value: &str) -> bool {
-        let key: Vec<_> = key.encode_utf16().chain([0]).collect();
-        let value: Vec<_> = value.encode_utf16().chain([0]).collect();
+        let (key, value) = (ffi_util::wide(key), ffi_util::wide(value));
         unsafe {
             WritePrivateProfileStringW(
                 self.section.as_ptr(),
