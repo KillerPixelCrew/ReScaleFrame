@@ -665,10 +665,15 @@ unsafe fn prepare_from_abi(
     catch_unwind(AssertUnwindSafe(|| prepare(unsafe { &*host }, cold_owner))).unwrap_or(false)
 }
 
-// MinHook must already be initialized. The callback is borrowed for the duration of the call
-// and must return without unwinding. The dispatch service's opaque user stays valid for hooks.
-// Exported for games/fallout4/src/creation.rs, which links this crate as the CMake archive
-// rsf_steam_d3d11_chain; Skyrim, which depends on the crate, calls it by path.
+/// Prepares the Steam overlay's D3D11 chain hooks. Exported for games/fallout4/src/creation.rs,
+/// which links this crate as the CMake archive rsf_steam_d3d11_chain; Skyrim, which depends on the
+/// crate, calls it by path.
+///
+/// # Safety
+///
+/// MinHook must already be initialized and `host` is null or a live host services record. The
+/// callback is borrowed for the duration of the call and must return without unwinding. The
+/// dispatch service's opaque user stays valid for hooks.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_steam_d3d11_chain_prepare(
     host: *const rsf_game_host_services,
