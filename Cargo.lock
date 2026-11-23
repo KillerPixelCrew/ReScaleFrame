@@ -988,7 +988,6 @@ dependencies = [
  "rsf-bindgen",
  "rsf-game-sys",
  "rsf-orchestrator",
- "rsf-vk-fsr3",
  "windows-sys",
 ]
 

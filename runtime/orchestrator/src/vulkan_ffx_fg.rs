@@ -7,6 +7,8 @@ use rsf_game_sys::backend_result::{
     ABI_MISMATCH, FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, NOT_COMPILED, NOT_READY,
     NOT_SUPPORTED, OK,
 };
+#[cfg(feature = "test-fixtures")]
+mod fixture;
 mod sdk;
 mod startup;
 
@@ -791,12 +793,10 @@ impl Owner {
 /// hooks, which receive no device. Returns null without a published leaf,
 /// once retirement has closed the route, or for another device. Each non-null
 /// result is paired with one `rsf_core_ffxgvk_wsi_return`.
-#[unsafe(no_mangle)]
 extern "C" fn rsf_core_ffxgvk_wsi_borrow(device: Handle, match_device: u32) -> Handle {
     ptr::with_exposed_provenance_mut(route().borrow(device.addr(), match_device != 0))
 }
 
-#[unsafe(no_mangle)]
 extern "C" fn rsf_core_ffxgvk_wsi_return() {
     route().give_back();
 }
@@ -808,7 +808,6 @@ unsafe fn live<'a>(owner: *mut Owner) -> Option<&'a mut Owner> {
 /// Creates an owner over the SDK leaf with `host`, which outlives every owner (`sdk::NATIVE_HOST`,
 /// or a fixture's table). A null host is the
 /// disabled build, which validates the arguments and reports NOT_COMPILED.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_ffxgvk_create_sdk(
     host: *const Host,
     setup: *const Setup,
@@ -821,7 +820,8 @@ unsafe extern "C" fn rsf_core_ffxgvk_create_sdk(
 
 /// The provider entry: the production host when CMake found the FidelityFX Vulkan headers (the
 /// `ffx-vk` feature), otherwise the disabled build.
-#[unsafe(no_mangle)]
+// vulkan_fg.rs dispatches here; its unit tests route to the dispatch_tests doubles instead.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) unsafe extern "C" fn rsf_ffxgvk_create(
     setup: *const Setup,
     output: *mut *mut Owner,
@@ -914,7 +914,6 @@ unsafe fn create(
     OK
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_ffxgvk_images(
     owner: *mut Owner,
     count: *mut u32,
@@ -926,7 +925,8 @@ pub(crate) unsafe extern "C" fn rsf_ffxgvk_images(
     }
 }
 
-#[unsafe(no_mangle)]
+// vulkan_fg.rs dispatches here; its unit tests route to the dispatch_tests doubles instead.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) unsafe extern "C" fn rsf_ffxgvk_acquire(
     owner: *mut Owner,
     timeout: u64,
@@ -949,7 +949,6 @@ pub(crate) unsafe extern "C" fn rsf_ffxgvk_acquire(
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_ffxgvk_enable(owner: *mut Owner, enabled: u32) -> i32 {
     match unsafe { owner.as_mut() } {
         Some(owner) if enabled <= 1 => {
@@ -979,7 +978,6 @@ unsafe fn with_frame(
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_ffxgvk_prepare(
     owner: *mut Owner,
     commands: Handle,
@@ -988,7 +986,6 @@ pub(crate) unsafe extern "C" fn rsf_ffxgvk_prepare(
     unsafe { with_frame(owner, commands, frame, Owner::prepare) }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_ffxgvk_hudless(
     owner: *mut Owner,
     commands: Handle,
@@ -997,7 +994,6 @@ pub(crate) unsafe extern "C" fn rsf_ffxgvk_hudless(
     unsafe { with_frame(owner, commands, frame, Owner::hudless) }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_ffxgvk_submitted(
     owner: *mut Owner,
     commands: *const Handle,
@@ -1021,12 +1017,14 @@ unsafe fn present_native(
     unsafe { rsf_core_ffxgvk_present(owner, info, chain, source, explicit_source) }
 }
 
-#[unsafe(no_mangle)]
+// vulkan_fg.rs dispatches here; its unit tests route to the dispatch_tests doubles instead.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) unsafe extern "C" fn rsf_ffxgvk_present(owner: *mut Owner, info: *const c_void) -> i32 {
     unsafe { present_native(owner, info, ptr::null(), 0) }
 }
 
-#[unsafe(no_mangle)]
+// vulkan_fg.rs dispatches here; its unit tests route to the dispatch_tests doubles instead.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) unsafe extern "C" fn rsf_ffxgvk_present_source(
     owner: *mut Owner,
     info: *const c_void,
@@ -1074,7 +1072,6 @@ extern "C" fn rsf_core_ffxgvk_note_generated(native: Handle) {
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_ffxgvk_get_status(
     owner: *const Owner,
     status: *mut Status,
@@ -1099,7 +1096,6 @@ pub(crate) unsafe extern "C" fn rsf_ffxgvk_get_status(
     OK
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_ffxgvk_drain(owner: *mut Owner) -> i32 {
     match unsafe { owner.as_mut() } {
         Some(owner) if !owner.native.is_null() => owner.drain(),
@@ -1107,7 +1103,6 @@ pub(crate) unsafe extern "C" fn rsf_ffxgvk_drain(owner: *mut Owner) -> i32 {
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_ffxgvk_destroy(owner: *mut Owner) -> i32 {
     let Some(state) = (unsafe { owner.as_mut() }) else {
         return OK;

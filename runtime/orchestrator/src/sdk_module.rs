@@ -145,7 +145,6 @@ impl Drop for SdkModule {
     }
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_vk_sdk_load(path: *const u16) -> *mut c_void {
     unsafe {
         LoadLibraryExW(
@@ -156,7 +155,6 @@ pub(super) unsafe extern "C" fn rsf_core_vk_sdk_load(path: *const u16) -> *mut c
     }
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_vk_sdk_unload(module: *mut c_void) {
     unsafe { FreeLibrary(module) };
 }
@@ -175,7 +173,6 @@ pub(super) unsafe extern "C" fn rsf_core_vk_sdk_pin(module: *mut c_void) -> u32 
 }
 
 // Shared C callback for the FidelityFX SR and FG platform tables.
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_vkffx_symbol(
     module: *mut c_void,
     name: *const c_char,

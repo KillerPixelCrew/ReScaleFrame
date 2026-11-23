@@ -1,16 +1,31 @@
 // SPDX-License-Identifier: MIT
-// Fake FidelityFX 3 SDK module for the production Rust SDK leaf. The fixture
-// host table replaces module loading and symbol lookup; everything else, the
-// SDK descriptor records, the WSI hooks, the backend resolver, the game-queue
-// submit and the generation callback, comes from the production leaf. The
-// WSI registration keeps the last registered hooks, as the corrected SDK's
-// copied table entry does, so a late hook can still be driven after teardown.
-use crate::ffx_gpu::{
-    rsf_fixture_ffx_acquire, rsf_fixture_ffx_images, rsf_fixture_ffx_present_count, state,
+//! Fake FidelityFX 3 SDK module for the production Rust SDK leaf. The fixture
+//! host table replaces module loading and symbol lookup; everything else, the
+//! SDK descriptor records, the WSI hooks, the backend resolver, the game-queue
+//! submit and the generation callback, comes from the production leaf. The
+//! WSI registration keeps the last registered hooks, as the corrected SDK's
+//! copied table entry does, so a late hook can still be driven after teardown.
+use super::fake_gpu::{
+    rsf_fixture_ffx_acquire, rsf_fixture_ffx_images, rsf_fixture_ffx_lock, rsf_fixture_ffx_lookup,
+    rsf_fixture_ffx_present_count, rsf_fixture_ffx_submit, rsf_fixture_ffx_unlock,
+    rsf_fixture_wsi_entry, rsf_fixture_wsi_lookup, rsf_fixture_wsi_route_state, state,
 };
-use crate::ffx_sdk_abi as sdk;
-use crate::sys::*;
+use super::rsf_fixture_ffx_refused_second_owner;
+use crate::sdk_module::Loader;
+use crate::sys::{
+    RSF_FGVK_ABI_VERSION, RSF_SRVK_ABI_VERSION, rsf_fgvk_setup, rsf_vk_function, rsf_vkfg_platform,
+};
+use crate::vulkan_ffx_fg::sdk::{Host, rsf_ffxgvk_guard_memory, rsf_ffxgvk_guard_resolve};
+use crate::vulkan_ffx_fg::{
+    Owner, rsf_core_ffxgvk_create_sdk, rsf_core_ffxgvk_wsi_borrow, rsf_core_ffxgvk_wsi_return,
+};
+use crate::vulkan_fg_resources::device::{
+    Device, rsf_core_vkfg_device_memory, rsf_core_vkfg_load_device, rsf_core_vkfg_platform,
+};
+use crate::vulkan_fg_wsi::Callback;
 use ash::vk::{self, Handle};
+use rsf_game_sys::backend_result::{NOT_SUPPORTED as FIXTURE_NOT_SUPPORTED, OK as FIXTURE_OK};
+use rsf_vk_fsr3::sdk_abi as sdk;
 use std::cell::UnsafeCell;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
@@ -65,7 +80,7 @@ struct Sdk {
     device_proc: sdk::PFN_vkGetDeviceProcAddr,
     submit: sdk::PFN_vkQueueSubmitFFXAPI,
     hooks: Option<WsiDispatch>,
-    gpu: *mut rsf_vkfg_device,
+    gpu: *mut Device,
 }
 
 thread_local! {
@@ -91,9 +106,9 @@ fn recorded() -> *mut Sdk {
 }
 
 fn routed() -> *mut c_void {
-    let native = unsafe { rsf_core_ffxgvk_wsi_borrow(ptr::without_provenance(DEVICE), 1) };
+    let native = rsf_core_ffxgvk_wsi_borrow(ptr::without_provenance_mut(DEVICE), 1);
     if !native.is_null() {
-        unsafe { rsf_core_ffxgvk_wsi_return() };
+        rsf_core_ffxgvk_wsi_return();
     }
     native
 }
@@ -412,7 +427,7 @@ unsafe extern "C" fn set_wsi(setup: *const WsiDispatch) -> i32 {
             && setup.device.as_raw() as usize == DEVICE,
         "the dispatch uses this device and the corrected SDK ABI",
     );
-    let fixture = unsafe { rsf_fixture_wsi_route_state() };
+    let fixture = rsf_fixture_wsi_route_state();
     if setup.create.is_some() {
         require(
             setup.destroy.is_some()
@@ -443,7 +458,7 @@ unsafe extern "C" fn set_wsi(setup: *const WsiDispatch) -> i32 {
         "the route lends no leaf during unregistration",
     );
     require(
-        unsafe { rsf_fixture_ffx_refused_second_owner() } == FIXTURE_NOT_SUPPORTED,
+        rsf_fixture_ffx_refused_second_owner() == FIXTURE_NOT_SUPPORTED,
         "admission is held through unregistration",
     );
     unsafe {
@@ -480,11 +495,8 @@ unsafe extern "C" fn symbol(module: *mut c_void, name: *const c_char) -> rsf_vk_
     Some(unsafe { std::mem::transmute::<*const (), unsafe extern "C" fn()>(entry) })
 }
 
-unsafe extern "C" fn scope(
-    call: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
-    user: *mut c_void,
-) -> i32 {
-    unsafe { call.expect("scoped call")(user) }
+unsafe extern "C" fn scope(call: Callback, user: *mut c_void) -> i32 {
+    unsafe { call(user) }
 }
 
 unsafe extern "C" fn queue_present(
@@ -501,15 +513,14 @@ unsafe extern "C" fn queue_present(
 }
 
 // The production guards (vulkan_ffx_fg/sdk.rs) contain resolver exceptions.
-static HOST: rsf_ffxgvk_host = rsf_ffxgvk_host {
-    load: Some(load),
-    unload: Some(unload),
-    symbol: Some(symbol),
-    resolve: Some(rsf_ffxgvk_guard_resolve),
-    memory_properties: Some(rsf_ffxgvk_guard_memory),
-    without_dlssg: Some(scope),
-    wsi_call: Some(scope),
-    queue_present: Some(queue_present),
+static HOST: Host = Host {
+    loader: Loader { load, unload },
+    symbol,
+    resolve: rsf_ffxgvk_guard_resolve,
+    memory_properties: rsf_ffxgvk_guard_memory,
+    without_dlssg: scope,
+    wsi_call: scope,
+    queue_present,
 };
 
 unsafe extern "system" fn memory_properties(
@@ -598,10 +609,9 @@ impl Setup {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fixture_ffx_start(
+pub(super) unsafe fn rsf_fixture_ffx_start(
     route: bool,
-    out: *mut *mut rsf_ffxgvk,
+    out: *mut *mut Owner,
     chain: *mut u64,
 ) -> i32 {
     let setup = Setup::new();
@@ -612,24 +622,20 @@ unsafe extern "C" fn rsf_fixture_ffx_start(
     result
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_ffx_native() -> *mut c_void {
+pub(super) extern "C" fn rsf_fixture_ffx_native() -> *mut c_void {
     unsafe { (*recorded()).native }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_ffx_routed() -> *mut c_void {
+pub(super) extern "C" fn rsf_fixture_ffx_routed() -> *mut c_void {
     routed()
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_ffx_chain() -> u64 {
+pub(super) extern "C" fn rsf_fixture_ffx_chain() -> u64 {
     CHAIN as u64
 }
 
 // A resource table over the same fake GPU for the shared allocator scenarios.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_ffx_gpu() -> *mut c_void {
+pub(super) extern "C" fn rsf_fixture_ffx_gpu() -> *mut c_void {
     let sdk_state = recorded();
     unsafe {
         if (*sdk_state).gpu.is_null() {
@@ -641,24 +647,22 @@ extern "C" fn rsf_fixture_ffx_gpu() -> *mut c_void {
                 vk::PhysicalDevice::from_raw(PHYSICAL_DEVICE as u64),
                 &mut memory,
             );
-            rsf_core_vkfg_device_memory(gpu, ptr::from_ref(&memory).cast());
+            rsf_core_vkfg_device_memory(&mut *gpu, &memory);
             (*sdk_state).gpu = gpu;
         }
         (*sdk_state).gpu.cast()
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_ffx_platform() -> *const rsf_vkfg_platform {
-    &raw const rsf_core_vkfg_platform
+pub(super) fn rsf_fixture_ffx_platform() -> &'static rsf_vkfg_platform {
+    &rsf_core_vkfg_platform
 }
 
 fn hooks() -> WsiDispatch {
     unsafe { (*recorded()).hooks }.expect("registered WSI hooks")
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_wsi_create(device: u64, out: *mut u64) -> i32 {
+pub(super) extern "C" fn rsf_fixture_wsi_create(device: u64, out: *mut u64) -> i32 {
     let mut chain = vk::SwapchainKHR::null();
     let create = hooks().create.expect("create hook");
     let result = unsafe {
@@ -675,8 +679,7 @@ extern "C" fn rsf_fixture_wsi_create(device: u64, out: *mut u64) -> i32 {
     result.as_raw()
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_wsi_destroy(device: u64, chain: u64) {
+pub(super) extern "C" fn rsf_fixture_wsi_destroy(device: u64, chain: u64) {
     let destroy = hooks().destroy.expect("destroy hook");
     unsafe {
         destroy(
@@ -687,8 +690,7 @@ extern "C" fn rsf_fixture_wsi_destroy(device: u64, chain: u64) {
     };
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_wsi_acquire(device: u64, chain: u64, out: *mut u32) -> i32 {
+pub(super) extern "C" fn rsf_fixture_wsi_acquire(device: u64, chain: u64, out: *mut u32) -> i32 {
     let acquire = hooks().acquire.expect("acquire hook");
     unsafe {
         acquire(
@@ -703,8 +705,7 @@ extern "C" fn rsf_fixture_wsi_acquire(device: u64, chain: u64, out: *mut u32) ->
     .as_raw()
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_wsi_images(device: u64, chain: u64, count: *mut u32) -> i32 {
+pub(super) extern "C" fn rsf_fixture_wsi_images(device: u64, chain: u64, count: *mut u32) -> i32 {
     let images = hooks().images.expect("image hook");
     unsafe {
         images(
@@ -717,15 +718,13 @@ extern "C" fn rsf_fixture_wsi_images(device: u64, chain: u64, count: *mut u32) -
     .as_raw()
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_wsi_present(queue: u64) -> i32 {
+pub(super) extern "C" fn rsf_fixture_wsi_present(queue: u64) -> i32 {
     let present = hooks().present.expect("present hook");
     let info = vk::PresentInfoKHR::default();
     unsafe { present(vk::Queue::from_raw(queue), &info) }.as_raw()
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_wsi_device_proc(device: u64) -> i32 {
+pub(super) extern "C" fn rsf_fixture_wsi_device_proc(device: u64) -> i32 {
     let resolve = unsafe { (*recorded()).device_proc }.expect("backend resolver");
     let Some(entry) =
         (unsafe { resolve(handle(device as usize), c"vkBindImageMemory2KHR".as_ptr()) })
@@ -740,8 +739,7 @@ extern "C" fn rsf_fixture_wsi_device_proc(device: u64) -> i32 {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_wsi_graphics_submit(fence: u64) -> i32 {
+pub(super) extern "C" fn rsf_fixture_wsi_graphics_submit(fence: u64) -> i32 {
     let submit = unsafe { (*recorded()).submit }.expect("game-queue submit");
     unsafe { submit(0, ptr::null(), handle(fence as usize)) }
 }

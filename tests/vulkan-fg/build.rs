@@ -2,11 +2,7 @@
 /// Binds the Vulkan FG fixture headers. The Vulkan WSI dispatch binding stays in the committed
 /// src/wsi_abi.rs because its header needs the Vulkan SDK.
 fn bindings() {
-    let own = [
-        "tests/vulkan-fg/ffx_abi.h",
-        "tests/vulkan-fg/streamline_abi.h",
-        "tests/vulkan-fg/results.h",
-    ];
+    let own = ["tests/vulkan-fg/streamline_abi.h"];
     let builder = rsf_bindgen::owner(
         &own,
         &[],

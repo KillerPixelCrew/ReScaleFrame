@@ -1,37 +1,93 @@
 // SPDX-License-Identifier: MIT
-use crate::sys::{rsf_ffx_fixture_state, rsf_vk_function, rsf_wsi_route_fixture_state};
+//! Fake Vulkan device, queue and WSI entries for the FFX fixture, and the state it observes.
+use super::fake_sdk::{rsf_fixture_ffx_chain, rsf_fixture_ffx_routed};
+use super::rsf_fixture_ffx_refused_second_owner;
+use crate::sys::rsf_vk_function;
+use crate::vulkan_ffx_fg::{Owner, rsf_ffxgvk_destroy};
 use ash::vk::{self, Handle};
 use std::{
     cell::UnsafeCell,
     ffi::{CStr, c_char, c_void},
 };
 
+/// What the FFX scenarios steer and observe.
+pub(super) struct State {
+    pub(super) next: u64,
+    pub(super) resets: u32,
+    pub(super) submits: u32,
+    pub(super) waits: u32,
+    pub(super) copies: u32,
+    pub(super) sdk_records: u32,
+    pub(super) generated: u32,
+    pub(super) configurations: u32,
+    pub(super) activations: u32,
+    pub(super) present_calls: u32,
+    pub(super) drains: u32,
+    pub(super) idles: u32,
+    pub(super) locks: u32,
+    pub(super) unlocks: u32,
+    pub(super) effects_destroyed: u32,
+    pub(super) swapchains_destroyed: u32,
+    pub(super) chains_destroyed: u32,
+    pub(super) destroyed_images: u32,
+    pub(super) freed_memories: u32,
+    pub(super) destroyed_fences: u32,
+    pub(super) reject_prepare: bool,
+    pub(super) reject_wait: bool,
+    pub(super) reject_bind: bool,
+    pub(super) reject_drain: bool,
+    pub(super) reject_effect_destroy: bool,
+    pub(super) reject_swapchain_destroy: bool,
+    pub(super) reject_generate: bool,
+    pub(super) check_reset: bool,
+    pub(super) expected_reset: bool,
+    pub(super) enabled: bool,
+    pub(super) reject_submit: bool,
+    pub(super) configured_frame: u64,
+    pub(super) generated_frame: u64,
+    pub(super) present_result: i32,
+}
+
+/// What the WSI route scenario steers and observes.
+pub(super) struct RouteState {
+    pub(super) owner: *mut Owner,
+    pub(super) presents: u32,
+    pub(super) creates: u32,
+    pub(super) destroys: u32,
+    pub(super) acquires: u32,
+    pub(super) enumerations: u32,
+    pub(super) lookups: u32,
+    pub(super) unregistered: u32,
+    pub(super) registered: u32,
+    pub(super) destroy_inside: bool,
+    pub(super) refuse_unregister: bool,
+    pub(super) destroyed_inside: i32,
+    pub(super) created_inside: i32,
+    pub(super) routed_inside: *mut c_void,
+}
+
 // Scenario, SDK callbacks and fake Vulkan calls all execute on the initiating
 // thread. Use raw pointers because Present can synchronously reenter teardown.
 thread_local! {
-    static FIXTURE: UnsafeCell<rsf_ffx_fixture_state> = const { UnsafeCell::new(unsafe { std::mem::zeroed() }) };
-    static ROUTE: UnsafeCell<rsf_wsi_route_fixture_state> = const { UnsafeCell::new(unsafe { std::mem::zeroed() }) };
+    static FIXTURE: UnsafeCell<State> = const { UnsafeCell::new(unsafe { std::mem::zeroed() }) };
+    static ROUTE: UnsafeCell<RouteState> = const { UnsafeCell::new(unsafe { std::mem::zeroed() }) };
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_ffx_state() -> *mut rsf_ffx_fixture_state {
+pub(super) fn rsf_fixture_ffx_state() -> *mut State {
     state()
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_wsi_route_state() -> *mut rsf_wsi_route_fixture_state {
+pub(super) fn rsf_fixture_wsi_route_state() -> *mut RouteState {
     route()
 }
 
-pub(crate) unsafe extern "system" fn rsf_fixture_ffx_images(
+pub(super) unsafe extern "system" fn rsf_fixture_ffx_images(
     _: vk::Device,
     chain: vk::SwapchainKHR,
     count: *mut u32,
     images: *mut vk::Image,
 ) -> vk::Result {
-    assert_eq!(chain.as_raw(), unsafe {
-        crate::sys::rsf_fixture_ffx_chain()
-    });
+    assert_eq!(chain.as_raw(), rsf_fixture_ffx_chain());
     const IMAGE_COUNT: u32 = 3;
     // The pinned SDK leaves oversized counts unchanged on a fill.
     if images.is_null() {
@@ -52,7 +108,7 @@ pub(crate) unsafe extern "system" fn rsf_fixture_ffx_images(
     }
 }
 
-pub(crate) unsafe extern "system" fn rsf_fixture_ffx_acquire(
+pub(super) unsafe extern "system" fn rsf_fixture_ffx_acquire(
     _: vk::Device,
     _: vk::SwapchainKHR,
     _: u64,
@@ -64,12 +120,12 @@ pub(crate) unsafe extern "system" fn rsf_fixture_ffx_acquire(
     vk::Result::SUCCESS
 }
 
-pub(crate) extern "C" fn rsf_fixture_ffx_present_count(_: vk::SwapchainKHR) -> u64 {
+pub(super) extern "C" fn rsf_fixture_ffx_present_count(_: vk::SwapchainKHR) -> u64 {
     u64::from(unsafe { (*state()).present_calls })
 }
 
 // The FFX scenarios and their fake queue calls run on one thread.
-pub(super) fn state() -> *mut rsf_ffx_fixture_state {
+pub(super) fn state() -> *mut State {
     FIXTURE.with(UnsafeCell::get)
 }
 
@@ -81,7 +137,7 @@ fn next() -> u64 {
     }
 }
 
-fn route() -> *mut rsf_wsi_route_fixture_state {
+fn route() -> *mut RouteState {
     ROUTE.with(UnsafeCell::get)
 }
 
@@ -89,7 +145,6 @@ unsafe extern "system" fn wsi_present(
     queue: vk::Queue,
     _: *const vk::PresentInfoKHR<'_>,
 ) -> vk::Result {
-    use crate::sys::*;
     assert_eq!(
         queue.as_raw(),
         22,
@@ -159,8 +214,7 @@ unsafe extern "system" fn wsi_images(
 
 // Initial route population queries this table directly. For subsequent
 // backend queries the loader below verifies promoted-name fallback.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fixture_wsi_entry(name: *const c_char) -> rsf_vk_function {
+pub(super) unsafe extern "C" fn rsf_fixture_wsi_entry(name: *const c_char) -> rsf_vk_function {
     macro_rules! entry {
         ($function:ident, $signature:ident) => {
             Some(unsafe {
@@ -180,8 +234,7 @@ unsafe extern "C" fn rsf_fixture_wsi_entry(name: *const c_char) -> rsf_vk_functi
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fixture_wsi_lookup(
+pub(super) unsafe extern "C" fn rsf_fixture_wsi_lookup(
     _: *mut c_void,
     name: *const c_char,
 ) -> rsf_vk_function {
@@ -250,8 +303,7 @@ unsafe extern "system" fn wait_fences(
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_ffx_submit(
+pub(super) extern "C" fn rsf_fixture_ffx_submit(
     _: *mut c_void,
     count: u32,
     submits: *const c_void,
@@ -273,12 +325,10 @@ extern "C" fn rsf_fixture_ffx_submit(
     .as_raw()
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_ffx_lock(_: *mut c_void) {
+pub(super) extern "C" fn rsf_fixture_ffx_lock(_: *mut c_void) {
     unsafe { (*state()).locks += 1 };
 }
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_ffx_unlock(_: *mut c_void) {
+pub(super) extern "C" fn rsf_fixture_ffx_unlock(_: *mut c_void) {
     unsafe { (*state()).unlocks += 1 };
 }
 
@@ -368,8 +418,7 @@ unsafe extern "system" fn idle(_: vk::Device) -> vk::Result {
     vk::Result::SUCCESS
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fixture_ffx_lookup(
+pub(super) unsafe extern "C" fn rsf_fixture_ffx_lookup(
     _: *mut c_void,
     name: *const c_char,
 ) -> rsf_vk_function {

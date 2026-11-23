@@ -1,6 +1,25 @@
 // SPDX-License-Identifier: MIT
-use crate::sys::*;
+//! The native_ffx_vulkan_* fixtures (test-fixtures only): the FFX owner and its production Rust
+//! SDK leaf over a fake FidelityFX 3 module (fake_sdk.rs) and fake Vulkan entries (fake_gpu.rs).
+mod fake_gpu;
+mod fake_sdk;
+
+use self::fake_gpu::{rsf_fixture_ffx_state, rsf_fixture_wsi_route_state};
+use self::fake_sdk::*;
+use super::{
+    Owner, rsf_ffxgvk_destroy, rsf_ffxgvk_drain, rsf_ffxgvk_enable, rsf_ffxgvk_get_status,
+    rsf_ffxgvk_hudless, rsf_ffxgvk_images, rsf_ffxgvk_prepare, rsf_ffxgvk_present,
+    rsf_ffxgvk_present_source, rsf_ffxgvk_submitted,
+};
+use crate::sys::{
+    RSF_FGVK_ABI_VERSION, rsf_fgvk_frame, rsf_fgvk_status, rsf_srvk_image, rsf_vkfg_image,
+};
+use crate::vulkan_fg_resources::{rsf_core_vkfg_ensure_image, rsf_core_vkfg_release_image};
 use ash::vk::{self, Handle};
+use rsf_game_sys::backend_result::{
+    FEATURE_FAILED as FIXTURE_FEATURE_FAILED, INVALID_ARGUMENT as FIXTURE_INVALID_ARGUMENT,
+    NOT_READY as FIXTURE_NOT_READY, NOT_SUPPORTED as FIXTURE_NOT_SUPPORTED, OK as FIXTURE_OK,
+};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_RESET,
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
@@ -95,7 +114,7 @@ fn status_record() -> rsf_fgvk_status {
 }
 
 unsafe fn complete(
-    owner: *mut rsf_ffxgvk,
+    owner: *mut Owner,
     record: &rsf_frame_record,
     prepare: *mut c_void,
     hudless: *mut c_void,
@@ -107,7 +126,7 @@ unsafe fn complete(
     }
 }
 
-fn start(route: bool) -> *mut rsf_ffxgvk {
+fn start(route: bool) -> *mut Owner {
     let mut owner = ptr::null_mut();
     let mut chain = 0;
     assert_eq!(
@@ -118,7 +137,6 @@ fn start(route: bool) -> *mut rsf_ffxgvk {
     owner
 }
 
-#[unsafe(no_mangle)]
 extern "C" fn rsf_fixture_ffx_refused_second_owner() -> i32 {
     let mut owner = ptr::null_mut();
     let mut chain = 0;
@@ -127,18 +145,19 @@ extern "C" fn rsf_fixture_ffx_refused_second_owner() -> i32 {
     result
 }
 
-unsafe fn implicit(owner: *mut rsf_ffxgvk, chain: u64) -> i32 {
+unsafe fn implicit(owner: *mut Owner, chain: u64) -> i32 {
     let chains = [vk::SwapchainKHR::from_raw(chain)];
     let info = vk::PresentInfoKHR::default().swapchains(&chains);
     unsafe { rsf_ffxgvk_present(owner, ptr::from_ref(&info).cast()) }
 }
-unsafe fn explicit(owner: *mut rsf_ffxgvk, chain: u64, source: *const rsf_frame_record) -> i32 {
+unsafe fn explicit(owner: *mut Owner, chain: u64, source: *const rsf_frame_record) -> i32 {
     let chains = [vk::SwapchainKHR::from_raw(chain)];
     let info = vk::PresentInfoKHR::default().swapchains(&chains);
     unsafe { rsf_ffxgvk_present_source(owner, ptr::from_ref(&info).cast(), source) }
 }
+
 fn routed() -> *mut c_void {
-    unsafe { rsf_fixture_ffx_routed() }
+    rsf_fixture_ffx_routed()
 }
 
 /// The launcher entry (tests/fixture_main_args.c): argv[1] selects the scenario. Capture and timing
@@ -154,7 +173,7 @@ unsafe extern "C" fn rsf_fixture_ffx_run(argc: c_int, argv: *const *const c_char
         std::env::remove_var("RSF_VULKAN_TIMING_FILE");
     }
     let scenario = unsafe { CStr::from_ptr(*argv.add(1)) }.to_bytes();
-    unsafe { (*crate::ffx_gpu::state()).next = 100 };
+    unsafe { (*fake_gpu::state()).next = 100 };
     match scenario {
         b"0" => reset(),
         b"1" => submission(),
@@ -164,7 +183,7 @@ unsafe extern "C" fn rsf_fixture_ffx_run(argc: c_int, argv: *const *const c_char
     0
 }
 fn reset() {
-    let fixture = unsafe { rsf_fixture_ffx_state() };
+    let fixture = rsf_fixture_ffx_state();
     macro_rules! f {
         ($field:ident) => {
             (*fixture).$field
@@ -329,7 +348,7 @@ fn reset() {
 }
 
 fn submission() {
-    let fixture = unsafe { rsf_fixture_ffx_state() };
+    let fixture = rsf_fixture_ffx_state();
     macro_rules! f {
         ($field:ident) => {
             (*fixture).$field
@@ -771,13 +790,13 @@ fn submission() {
 }
 
 fn wsi_route() {
-    let fixture = unsafe { rsf_fixture_ffx_state() };
+    let fixture = rsf_fixture_ffx_state();
     macro_rules! f {
         ($field:ident) => {
             (*fixture).$field
         };
     }
-    let route = unsafe { rsf_fixture_wsi_route_state() };
+    let route = rsf_fixture_wsi_route_state();
     macro_rules! r {
         ($field:ident) => {
             (*route).$field

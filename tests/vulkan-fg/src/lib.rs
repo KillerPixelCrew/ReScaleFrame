@@ -14,14 +14,6 @@ mod sys {
     include!(concat!(env!("OUT_DIR"), "/sys.rs"));
 }
 
-#[cfg(feature = "ffx")]
-mod ffx;
-#[cfg(feature = "ffx")]
-mod ffx_gpu;
-#[cfg(feature = "ffx")]
-mod ffx_sdk;
-#[cfg(feature = "ffx")]
-use rsf_vk_fsr3::sdk_abi as ffx_sdk_abi;
 #[cfg(feature = "streamline-dispatch")]
 mod streamline_dispatch;
 #[cfg(feature = "streamline-selected")]

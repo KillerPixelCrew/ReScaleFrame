@@ -12,7 +12,7 @@ rsf_add_rust_static(rsf_game_sdk_fixtures_rust rsf_rust_game_sdk_fixtures
     --features render-host-fixtures,cpu-fixtures,unity-sr-d3d12-fixture,plugin-session-fixture,d3d11-host-fixture,vk-latency-fixtures)
 rsf_add_rust_static(rsf_vulkan_fg_fixtures_rust rsf_rust_vulkan_fg_fixtures
     rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures
-    --features ffx,wsi-dispatch,streamline-selected,streamline-dispatch,xess-sr,xess-input-range,xess-device)
+    --features wsi-dispatch,streamline-selected,streamline-dispatch,xess-sr,xess-input-range,xess-device)
 rsf_add_rust_static(rsf_capture_fixtures_rust rsf_rust_capture_fixtures
     rsf-capture-fixtures rsf_capture_fixtures
     --features metadata,d3d12,d3d11,vulkan,vulkan-cpu,texture)
@@ -503,12 +503,12 @@ if(RSF_HAVE_VULKAN)
     target_link_libraries(rsf_ffx_vulkan_wsi_dispatch_test PRIVATE rsf_vulkan_fg_fixtures_rust rsf_build_options)
     add_test(NAME ffx_vulkan_wsi_dispatch COMMAND rsf_ffx_vulkan_wsi_dispatch_test)
     if(RSF_HAVE_FFX_VK)
-        # The scenarios replace the SDK module through their own host table (rsf_core_ffxgvk_create_sdk);
-        # the provider entries are the Runtime archive's (vulkan_ffx_fg.rs).
+        # vulkan_ffx_fg/fixture.rs in the test-fixtures orchestrator archive: the scenarios replace the SDK module
         add_executable(rsf_native_ffx_vulkan_fixture fixture_main_args.c)
         set_target_properties(rsf_native_ffx_vulkan_fixture PROPERTIES LINKER_LANGUAGE CXX)
         target_compile_definitions(rsf_native_ffx_vulkan_fixture PRIVATE RSF_FIXTURE_ENTRY=rsf_fixture_ffx_run)
-        target_link_libraries(rsf_native_ffx_vulkan_fixture PRIVATE rsf_vulkan_fg_fixtures_rust rsf_orchestrator_rust
+        # through their own host table; the provider entries and SDK leaf are the production ones.
+        target_link_libraries(rsf_native_ffx_vulkan_fixture PRIVATE rsf_orchestrator_rust
             ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::FrameDump rsf_build_options)
         add_test(NAME native_ffx_vulkan_reset_contract COMMAND rsf_native_ffx_vulkan_fixture 0)
         add_test(NAME native_ffx_vulkan_submission_contract COMMAND rsf_native_ffx_vulkan_fixture 1)
@@ -796,7 +796,7 @@ foreach(rsf_fixture_target
         rsf_sharpening_settings_test rsf_exposure_normalization_test rsf_native_vulkan_test rsf_dlss_backend
         rsf_dlss_sr_layout rsf_sr_session_test rsf_sr_bridge_test rsf_sr_pipeline_test rsf_sr_backend_switch_device_test
         rsf_shader_patch_test rsf_shader_patch_device_test rsf_native_sr_fsr4_state_test rsf_native_sr_fsr4_vulkan_test
-        rsf_native_fsr4_fg_state_test rsf_native_fg_cpu_test rsf_native_fg_dlss_vulkan_test rsf_xell_sleep_concurrency)
+        rsf_native_fsr4_fg_state_test rsf_native_fg_cpu_test rsf_native_fg_dlss_vulkan_test rsf_xell_sleep_concurrency rsf_native_ffx_vulkan_fixture)
     if(TARGET ${rsf_fixture_target})
         set_target_properties(${rsf_fixture_target} PROPERTIES RSF_ORCHESTRATOR_FIXTURES ON)
         add_dependencies(${rsf_fixture_target} rsf_rust_core_fixtures)

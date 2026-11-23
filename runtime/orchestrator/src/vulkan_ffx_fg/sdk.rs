@@ -82,7 +82,7 @@ const COMMAND_RETIREMENT: u32 = 1;
 
 const _: () = assert!(FFX_API_RETURN_OK == 0);
 
-/// Host services (rsf_ffxgvk_host; `NATIVE_HOST` in production). The table outlives
+/// Host services (`NATIVE_HOST` in production, the FFX fixture's table in tests). The table outlives
 /// every owner created with it.
 #[repr(C)]
 pub(super) struct Host {
@@ -99,8 +99,7 @@ pub(super) struct Host {
 const _: () = assert!(size_of::<Host>() == 8 * size_of::<Handle>());
 
 /// Resolves `name` through a host Vulkan resolver, which may throw: INIT_FAILED when a C++
-/// exception was contained. tests/vulkan-fg builds its host table with this entry.
-#[unsafe(no_mangle)]
+/// exception was contained. The FFX fixture (fixture/fake_sdk.rs) builds its host table with this entry.
 pub(crate) unsafe extern "C" fn rsf_ffxgvk_guard_resolve(
     resolve: rsf_vk_get_proc,
     object: Handle,
@@ -121,8 +120,7 @@ pub(crate) unsafe extern "C" fn rsf_ffxgvk_guard_resolve(
 }
 
 /// Calls the vkGetPhysicalDeviceMemoryProperties entry admission resolved, containing a C++
-/// exception as INIT_FAILED. tests/vulkan-fg builds its host table with this entry.
-#[unsafe(no_mangle)]
+/// exception as INIT_FAILED. The FFX fixture (fixture/fake_sdk.rs) builds its host table with this entry.
 pub(crate) unsafe extern "C" fn rsf_ffxgvk_guard_memory(
     query: rsf_vk_function,
     physical_device: Handle,
