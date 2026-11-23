@@ -142,16 +142,22 @@ pub(crate) fn admit(base: *const u8, code: &impl CodeView) -> bool {
 
 /// Evidence hooks run for every pixel uniform bind of every draw. Their sites are still verified,
 /// but they are hooked only when the pixel binding diagnostic is asked for.
-pub(crate) fn wanted(hook: u32, diagnostics: bool) -> bool {
+///
+/// The three site queries are C symbols only in warp-fixture builds: the WARP view fixture
+/// (tests/ac7_view_fixture.rs) is built into rsf-ac7, below this crate, and checks the table by name.
+#[cfg_attr(feature = "warp-fixture", unsafe(export_name = "rsf_ac7_hook_wanted"))]
+pub(crate) extern "C" fn wanted(hook: u32, diagnostics: bool) -> bool {
     hook < RSF_AC7_HOOK_SITE_COUNT
         && (diagnostics || !(RSF_AC7_EVIDENCE_FIRST..=RSF_AC7_EVIDENCE_LAST).contains(&hook))
 }
 
-pub(crate) fn rsf_ac7_hook_rva(hook: u32) -> u32 {
+#[cfg_attr(feature = "warp-fixture", unsafe(no_mangle))]
+pub(crate) extern "C" fn rsf_ac7_hook_rva(hook: u32) -> u32 {
     HOOK_SITES.get(hook as usize).map_or(0, |site| site.rva)
 }
 
-pub(crate) fn rsf_ac7_hook_role(hook: u32) -> u32 {
+#[cfg_attr(feature = "warp-fixture", unsafe(no_mangle))]
+pub(crate) extern "C" fn rsf_ac7_hook_role(hook: u32) -> u32 {
     PROCESS_ROLES.get(hook as usize).copied().unwrap_or(0)
 }
 
