@@ -132,7 +132,11 @@ unsafe extern "C" fn rsf_anomaly_temporal_planning_fixture(
     argv: *const *const c_char,
 ) -> i32 {
     // tests/fixture_main_args.c passes the command line; argv[1] selects one case.
-    let selection = if argc > 1 { unsafe { *argv.add(1) } } else { std::ptr::null() };
+    let selection = if argc > 1 {
+        unsafe { *argv.add(1) }
+    } else {
+        std::ptr::null()
+    };
     let selected = if selection.is_null() {
         None
     } else {

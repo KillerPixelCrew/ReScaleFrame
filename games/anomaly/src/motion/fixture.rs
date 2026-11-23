@@ -661,7 +661,11 @@ enum Case {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_motion_contract(argc: c_int, argv: *const *const c_char) -> i32 {
     // tests/fixture_main_args.c passes the command line; argv[1] selects one case.
-    let selection = if argc > 1 { unsafe { *argv.add(1) } } else { std::ptr::null() };
+    let selection = if argc > 1 {
+        unsafe { *argv.add(1) }
+    } else {
+        std::ptr::null()
+    };
     let [standard, avx] = PROFILES.each_ref().map(MotionProfile::frame_layout);
     let mut cases = MOTION_CASES
         .iter()
