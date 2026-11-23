@@ -168,24 +168,26 @@ target_link_libraries(rsf_module_dump_self PRIVATE ReScaleFrame::LoaderDiagnosti
 target_compile_definitions(rsf_module_dump_self PRIVATE _CRT_SECURE_NO_WARNINGS)
 add_test(NAME module_dump_self COMMAND rsf_module_dump_self "${CMAKE_CURRENT_BINARY_DIR}")
 
+# A capture fixture takes the output directory as its only argument. fixture_main_args.c passes the
+# command line to the Rust entry; capture_vulkan_fixture_main.c also hands over the linked Vulkan API.
 function(rsf_add_capture_fixture target entry source)
     add_executable(${target} ${source})
-    target_compile_definitions(${target} PRIVATE RSF_CAPTURE_FIXTURE=${entry})
+    target_compile_definitions(${target} PRIVATE RSF_FIXTURE_ENTRY=${entry})
     target_link_libraries(${target} PRIVATE rsf_capture_fixtures_rust rsf_build_options)
 endfunction()
 
-rsf_add_capture_fixture(rsf_texture_dump rsf_fixture_texture_dump capture_fixture_main.c)
+rsf_add_capture_fixture(rsf_texture_dump rsf_fixture_texture_dump fixture_main_args.c)
 target_link_libraries(rsf_texture_dump PRIVATE ReScaleFrame::GraphicsLeaves ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME texture_dump COMMAND rsf_texture_dump "${CMAKE_CURRENT_BINARY_DIR}")
 
-rsf_add_capture_fixture(rsf_input_dump_test rsf_fixture_input_dump_d3d11 capture_fixture_main.c)
+rsf_add_capture_fixture(rsf_input_dump_test rsf_fixture_input_dump_d3d11 fixture_main_args.c)
 add_library(rsf_input_dump_c_header OBJECT input_dump_c_header.c)
 target_link_libraries(rsf_input_dump_c_header PRIVATE ReScaleFrame::FrameDump rsf_build_options)
 target_link_libraries(rsf_input_dump_test PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options windowscodecs ole32)
 add_test(NAME input_dump COMMAND rsf_input_dump_test "${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties(input_dump PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
-rsf_add_capture_fixture(rsf_input_dump_d3d12 rsf_fixture_input_dump_d3d12 capture_fixture_main.c)
+rsf_add_capture_fixture(rsf_input_dump_d3d12 rsf_fixture_input_dump_d3d12 fixture_main_args.c)
 target_compile_definitions(rsf_input_dump_d3d12 PRIVATE RSF_FRAME_DUMP_STATIC)
 target_link_libraries(rsf_input_dump_d3d12 PRIVATE ReScaleFrame::FrameDump rsf_build_options d3d12 dxgi)
 add_test(NAME input_dump_d3d12 COMMAND rsf_input_dump_d3d12 "${CMAKE_CURRENT_BINARY_DIR}")
@@ -198,7 +200,7 @@ if(RSF_FRAME_DUMP_VULKAN_INCLUDE)
     add_test(NAME input_dump_vulkan_cpu_linked COMMAND rsf_input_dump_vulkan_cpu "${CMAKE_CURRENT_BINARY_DIR}")
 
     add_executable(rsf_input_dump_vulkan_cpu_dll capture_vulkan_fixture_main.c)
-    target_compile_definitions(rsf_input_dump_vulkan_cpu_dll PRIVATE RSF_CAPTURE_FIXTURE=rsf_fixture_input_dump_vulkan_cpu)
+    target_compile_definitions(rsf_input_dump_vulkan_cpu_dll PRIVATE RSF_FIXTURE_ENTRY=rsf_fixture_input_dump_vulkan_cpu)
     target_link_libraries(rsf_input_dump_vulkan_cpu_dll PRIVATE rsf_capture_fixtures_rust)
     target_include_directories(rsf_input_dump_vulkan_cpu_dll PRIVATE
         "$<TARGET_PROPERTY:rsf_frame_dump,INTERFACE_INCLUDE_DIRECTORIES>")
@@ -774,7 +776,7 @@ if(TARGET rsf_godot AND TARGET rsf_unity_package)
         "${rsf_process_dir}/rsf_engine_sharpening_test.exe" "$<TARGET_FILE:rsf_godot>" "$<TARGET_FILE:rsf_unity_package>")
 endif()
 
-rsf_add_capture_fixture(rsf_capture_metadata rsf_fixture_capture_metadata capture_fixture_main.c)
+rsf_add_capture_fixture(rsf_capture_metadata rsf_fixture_capture_metadata fixture_main_args.c)
 target_link_libraries(rsf_capture_metadata PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options windowscodecs ole32)
 add_test(NAME capture_metadata_contract COMMAND rsf_capture_metadata "${CMAKE_CURRENT_BINARY_DIR}")
 

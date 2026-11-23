@@ -47,6 +47,21 @@ use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 ))]
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 
+/// The output directory of a tests/fixture_main_args.c launch: argv[1] when it is the only argument.
+#[cfg(any(
+    feature = "d3d11",
+    feature = "d3d12",
+    feature = "metadata",
+    feature = "texture"
+))]
+unsafe fn directory_argument(argc: std::ffi::c_int, argv: *const *const c_char) -> *const c_char {
+    if argc == 2 {
+        unsafe { *argv.add(1) }
+    } else {
+        std::ptr::null()
+    }
+}
+
 fn entry(path: *const c_char, fixture: impl FnOnce(&Path) -> i32 + std::panic::UnwindSafe) -> i32 {
     if path.is_null() {
         return 2;

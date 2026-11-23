@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-use super::{bundles, contents, entry, root, utf8};
+use super::{bundles, contents, directory_argument, entry, root, utf8};
 use crate::sys::*;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_NO_SR, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
 };
-use std::ffi::{CStr, c_char};
+use std::ffi::{CStr, c_char, c_int};
 use std::mem::ManuallyDrop;
 use std::{fs, path::Path, ptr};
 use windows::Win32::Foundation::HANDLE;
@@ -347,6 +347,6 @@ fn run(path: &Path) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_input_dump_d3d12(path: *const c_char) -> i32 {
-    entry(path, run)
+unsafe extern "C" fn rsf_fixture_input_dump_d3d12(argc: c_int, argv: *const *const c_char) -> i32 {
+    entry(unsafe { directory_argument(argc, argv) }, run)
 }

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
-use super::{bundles, contents, entry, root, utf8};
+use super::{bundles, contents, directory_argument, entry, root, utf8};
 use crate::sys::*;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_GAME_CAMERA_ABI_VERSION,
     RSF_GAME_FRAME_ABI_VERSION, RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_SR,
     RSF_GAME_RENDER_WINDOW, rsf_frame_record, rsf_game_render_pass,
 };
-use std::ffi::{c_char, c_void};
+use std::ffi::{c_char, c_int, c_void};
 use std::{fs, path::Path, ptr};
 
 unsafe extern "C" fn count(user: *mut c_void, _: *const c_char) {
@@ -241,6 +241,6 @@ fn run(path: &Path) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_capture_metadata(path: *const c_char) -> i32 {
-    entry(path, run)
+unsafe extern "C" fn rsf_fixture_capture_metadata(argc: c_int, argv: *const *const c_char) -> i32 {
+    entry(unsafe { directory_argument(argc, argv) }, run)
 }

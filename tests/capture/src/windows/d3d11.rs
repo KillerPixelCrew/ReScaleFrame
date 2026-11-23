@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-use super::{bundles, contents, entry, root, utf8};
+use super::{bundles, contents, directory_argument, entry, root, utf8};
 use crate::sys::*;
 use rsf_test_support::{Window, warp_swapchain};
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{CStr, c_char, c_int, c_void};
 use std::os::windows::ffi::OsStrExt;
 use std::{fs, path::Path, ptr};
 use windows::Win32::Foundation::GENERIC_READ;
@@ -468,6 +468,6 @@ fn run(path: &Path) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_input_dump_d3d11(path: *const c_char) -> i32 {
-    entry(path, run)
+unsafe extern "C" fn rsf_fixture_input_dump_d3d11(argc: c_int, argv: *const *const c_char) -> i32 {
+    entry(unsafe { directory_argument(argc, argv) }, run)
 }

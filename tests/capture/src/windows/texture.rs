@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Dump known motion and mask textures through the native ABI and inspect the files.
-use super::{entry, utf8};
+use super::{directory_argument, entry, utf8};
 use crate::sys::*;
 use rsf_test_support::d3d11_device;
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{CStr, c_char, c_int, c_void};
 use std::{fs, path::Path, ptr};
 use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D11::*;
@@ -260,6 +260,6 @@ fn run(path: &Path) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_texture_dump(path: *const c_char) -> i32 {
-    entry(path, run)
+unsafe extern "C" fn rsf_fixture_texture_dump(argc: c_int, argv: *const *const c_char) -> i32 {
+    entry(unsafe { directory_argument(argc, argv) }, run)
 }
