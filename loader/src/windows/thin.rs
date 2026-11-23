@@ -262,6 +262,17 @@ unsafe extern "system" fn rsf_thin_create(
     if STARTING_THREAD.load(Ordering::Relaxed) != unsafe { GetCurrentThreadId() } {
         STARTUP.run(Some(start_once));
     }
+    unsafe { system_create(instance, version, iid, output, outer) }
+}
+
+/// The system DirectInput8Create, which both DirectInput carriers forward to.
+pub(super) unsafe fn system_create(
+    instance: HMODULE,
+    version: u32,
+    iid: *const GUID,
+    output: *mut *mut c_void,
+    outer: *mut c_void,
+) -> HRESULT {
     type Create = unsafe extern "system" fn(
         HMODULE,
         u32,

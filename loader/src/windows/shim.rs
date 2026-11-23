@@ -16,7 +16,7 @@ use windows_sys::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
 use windows_sys::Win32::System::WindowsProgramming::{
     GetPrivateProfileIntW, GetPrivateProfileStringW,
 };
-use windows_sys::core::BOOL;
+use windows_sys::core::{BOOL, GUID, HRESULT};
 
 const LOADER: [u16; 7] = ascii_wide(b"Loader\0");
 const FLAGS: u32 = LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS;
@@ -145,4 +145,17 @@ unsafe extern "C" fn rsf_shim_attach(instance: HMODULE, event: u32) -> BOOL {
     }
     spawn_startup(instance, Some(startup));
     1
+}
+
+/// The shim's DirectInput8Create (shim_exports.def). The shim starts from process attach, so the
+/// export only forwards to the system DirectInput.
+#[unsafe(no_mangle)]
+unsafe extern "system" fn rsf_shim_create(
+    instance: HMODULE,
+    version: u32,
+    iid: *const GUID,
+    output: *mut *mut c_void,
+    outer: *mut c_void,
+) -> HRESULT {
+    unsafe { super::thin::system_create(instance, version, iid, output, outer) }
 }
