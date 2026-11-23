@@ -5,7 +5,9 @@ use rsf_game_sys::{
     RSF_D3D11_AUXILIARY_COLOUR as COLOUR, RSF_D3D11_AUXILIARY_DEPTH_STENCIL as DEPTH,
     RSF_D3D11_AUXILIARY_RESTORE_CONTENTS as RESTORE,
 };
-use std::cell::Cell;
+use crate::d3d11_host_reduced::Products;
+use std::cell::{Cell, RefCell};
+use std::slice;
 use windows::Win32::Graphics::{
     Direct3D::{D3D_FEATURE_LEVEL_11_0, D3D_PRIMITIVE_TOPOLOGY_POINTLIST},
     Direct3D11::*,
@@ -164,26 +166,21 @@ fn scalar(bytes: &[u8], index: usize) -> f32 {
     f32::from_bits(word(bytes, index).unwrap_or_default())
 }
 
-struct Transaction(*mut AuxiliarySr);
+// One auxiliary SR owner driven through the Products interface the reduced host calls.
+struct Transaction(RefCell<AuxiliarySr>);
 
 impl Transaction {
     fn new() -> Self {
-        Self(unsafe { rsf_auxiliary_sr_create(platform::rsf_auxiliary_sr_platform()) })
+        let platform = unsafe { &*platform::rsf_auxiliary_sr_platform() };
+        Self(RefCell::new(
+            AuxiliarySr::new(platform).expect("the native platform is complete"),
+        ))
     }
 
     fn reserve(&self, rig: &Device, pass: &Pass, surfaces: &[Surface], recovery: bool) -> bool {
-        (unsafe {
-            rsf_auxiliary_sr_reserve(
-                self.0,
-                rig.context.as_raw(),
-                pass,
-                surfaces.len() as u32,
-                surfaces.as_ptr(),
-                None,
-                ptr::null_mut(),
-                u32::from(recovery),
-            )
-        }) != 0
+        let context = rig.context.as_raw();
+        let user = ptr::null_mut();
+        Products::reserve(&mut *self.0.borrow_mut(), context, pass, surfaces, None, user, recovery)
     }
 
     fn prepare(&self, rig: &Device, pass: &Pass, surfaces: &[Surface]) -> bool {
@@ -191,40 +188,31 @@ impl Transaction {
     }
 
     fn pending(&self) -> bool {
-        (unsafe { rsf_auxiliary_sr_pending(self.0) }) != 0
+        Products::pending(&*self.0.borrow())
     }
     fn seal(&self) -> bool {
-        (unsafe { rsf_auxiliary_sr_seal(self.0) }) != 0
+        Products::seal(&mut *self.0.borrow_mut())
     }
     fn cancel(&self) -> bool {
-        (unsafe { rsf_auxiliary_sr_cancel(self.0) }) != 0
+        Products::cancel(&mut *self.0.borrow_mut())
     }
     fn spatial(&self) -> bool {
-        (unsafe { rsf_auxiliary_sr_spatial_prepare(self.0) }) != 0
+        Products::spatial_prepare(&mut *self.0.borrow_mut())
     }
     fn commit(&self) -> bool {
-        (unsafe { rsf_auxiliary_sr_commit(self.0, 0) }) != 0
+        Products::commit(&mut *self.0.borrow_mut(), false)
     }
     fn restore(&self) -> bool {
-        (unsafe { rsf_auxiliary_sr_restore(self.0) }) != 0
+        Products::restore(&mut *self.0.borrow_mut())
     }
     fn matches(&self, frame: u64) -> bool {
-        (unsafe { rsf_auxiliary_sr_matches(self.0, 1, frame, 91) }) != 0
+        Products::matches(&*self.0.borrow(), [1, frame, 91])
     }
 
     fn temporal(&self, surfaces: &[Surface]) -> bool {
-        (unsafe {
-            rsf_auxiliary_sr_temporal_prepare(self.0, surfaces.len() as u32, surfaces.as_ptr())
-        }) != 0
+        Products::temporal_prepare(&mut *self.0.borrow_mut(), surfaces)
     }
 }
-
-impl Drop for Transaction {
-    fn drop(&mut self) {
-        unsafe { rsf_auxiliary_sr_destroy(self.0) };
-    }
-}
-
 fn pass(output: &Texture2D, frame: u64, in_place: bool) -> Pass {
     let mut pass: Pass = unsafe { std::mem::zeroed() };
     pass.color_output = output.as_raw();

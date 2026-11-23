@@ -16,7 +16,6 @@ use rsf_game_sys::rsf_d3d11_auxiliary_surface;
 use rsf_game_sys::{rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::c_void;
 use std::ptr;
-use std::slice;
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R11G11B10_FLOAT,
     DXGI_FORMAT_R16_FLOAT, DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R16G16B16A16_FLOAT,
@@ -1040,123 +1039,6 @@ impl Drop for AuxiliarySr {
 
 fn surface_size_valid(input: &rsf_d3d11_auxiliary_surface) -> bool {
     input.struct_size >= size_of::<rsf_d3d11_auxiliary_surface>() as u32
-}
-
-unsafe fn borrowed_surfaces<'a>(
-    count: u32,
-    inputs: *const rsf_d3d11_auxiliary_surface,
-    limit: usize,
-) -> Option<&'a [rsf_d3d11_auxiliary_surface]> {
-    let count = count as usize;
-    if inputs.is_null() || count > limit {
-        return None;
-    }
-    Some(unsafe { slice::from_raw_parts(inputs, count) })
-}
-
-// Private C++ facade calls serialize access, pass live borrowed interfaces and
-// supply the platform callbacks. The owner checks thread and frame state.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_auxiliary_sr_create(platform: *const AuxPlatform) -> *mut AuxiliarySr {
-    let Some(platform) = (unsafe { platform.as_ref() }) else {
-        return ptr::null_mut();
-    };
-    let Some(owner) = AuxiliarySr::new(platform) else {
-        return ptr::null_mut();
-    };
-    crate::allocate_handle(owner)
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_auxiliary_sr_destroy(handle: *mut AuxiliarySr) {
-    if !handle.is_null() {
-        drop(unsafe { Box::from_raw(handle) });
-    }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_auxiliary_sr_pending(handle: *const AuxiliarySr) -> i32 {
-    unsafe { handle.as_ref() }.is_some_and(|state| state.frame.is_some()) as i32
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_auxiliary_sr_matches(
-    handle: *const AuxiliarySr,
-    session: u64,
-    frame: u64,
-    view: u64,
-) -> i32 {
-    unsafe { handle.as_ref() }.is_some_and(|state| {
-        state.on_owner_thread()
-            && state
-                .frame
-                .as_ref()
-                .is_some_and(|f| f.scope == [session, frame, view])
-    }) as i32
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_auxiliary_sr_reserve(
-    handle: *mut AuxiliarySr,
-    context: *mut c_void,
-    pass: *const rsf_game_render_pass,
-    count: u32,
-    inputs: *const rsf_d3d11_auxiliary_surface,
-    log: rsf_game_log_fn,
-    user: *mut c_void,
-    recovery: u32,
-) -> i32 {
-    let (Some(state), Some(pass)) = (unsafe { handle.as_mut() }, unsafe { pass.as_ref() }) else {
-        return 0;
-    };
-    let limit = if recovery != 0 {
-        MAX_SURFACES
-    } else {
-        MAX_AUXILIARIES
-    };
-    let Some(inputs) = (unsafe { borrowed_surfaces(count, inputs, limit) }) else {
-        return 0;
-    };
-    state
-        .reserve(context, pass, inputs, log, user, recovery != 0)
-        .is_some() as i32
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_auxiliary_sr_seal(handle: *mut AuxiliarySr) -> i32 {
-    unsafe { handle.as_mut() }.is_some_and(|state| state.render(true, None)) as i32
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_auxiliary_sr_cancel(handle: *mut AuxiliarySr) -> i32 {
-    unsafe { handle.as_mut() }.is_some_and(AuxiliarySr::cancel) as i32
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_auxiliary_sr_temporal_prepare(
-    handle: *mut AuxiliarySr,
-    count: u32,
-    inputs: *const rsf_d3d11_auxiliary_surface,
-) -> i32 {
-    unsafe { handle.as_mut() }.is_some_and(|state| {
-        unsafe { borrowed_surfaces(count, inputs, MAX_SURFACES) }
-            .is_some_and(|inputs| state.render(false, Some(inputs)))
-    }) as i32
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_auxiliary_sr_spatial_prepare(handle: *mut AuxiliarySr) -> i32 {
-    unsafe { handle.as_mut() }.is_some_and(|state| state.render(false, None)) as i32
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_auxiliary_sr_commit(handle: *mut AuxiliarySr, temporal: u32) -> i32 {
-    unsafe { handle.as_mut() }.is_some_and(|state| state.commit(temporal != 0)) as i32
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_auxiliary_sr_restore(handle: *mut AuxiliarySr) -> i32 {
-    unsafe { handle.as_mut() }.is_none_or(AuxiliarySr::restore) as i32
 }
 
 #[cfg(test)]
