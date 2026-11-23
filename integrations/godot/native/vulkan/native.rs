@@ -371,7 +371,6 @@ unsafe extern "C" fn rsfg_boot_vulkan(setup: *const Setup) -> i32 {
     result
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_godot_vk_render_begin(frame: u64, explicit: u32) {
     if explicit == 0 {
         unsafe { rsf_latencyvk_render(frame) };
@@ -548,7 +547,6 @@ fn capture_present(owner: *mut rsf_fgvk, info: *const c_void, result: i32, begin
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_godot_vk_capture_present(
     info: *const c_void,
     result: i32,

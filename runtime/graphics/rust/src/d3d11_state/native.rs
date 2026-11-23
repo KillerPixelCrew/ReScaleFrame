@@ -485,7 +485,6 @@ pub unsafe extern "C" fn rsf_d3d11_state_save(context: Handle, storage: *mut Sta
 /// # Safety
 ///
 /// `context` is null or a live `ID3D11DeviceContext`; `storage` is null or a writable state record.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_d3d11_state_save_independent(
     context: Handle,
     storage: *mut State,

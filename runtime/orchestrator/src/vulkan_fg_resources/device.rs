@@ -116,7 +116,6 @@ pub(crate) unsafe extern "C" fn rsf_core_vkfg_load_device(
         .map_or(ptr::null_mut(), allocate_handle)
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_vkfg_bind_images(
     handle: *mut c_void,
     entries: &[rsf_vk_function; 6],

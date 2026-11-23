@@ -332,7 +332,6 @@ fn log_refusal(prefix: &str, refusal: Refusal) -> i32 {
     refusal.result
 }
 
-#[unsafe(no_mangle)]
 pub(crate) fn asi_start_runtime(module: HMODULE, fingerprint: Fingerprint) -> u32 {
     let Some((root, config)) =
         unsafe { module_path(module) }.and_then(|path| asi::deployment(path.units()))

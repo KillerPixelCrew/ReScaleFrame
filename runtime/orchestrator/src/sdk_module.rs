@@ -161,7 +161,6 @@ pub(super) unsafe extern "C" fn rsf_core_vk_sdk_unload(module: *mut c_void) {
     unsafe { FreeLibrary(module) };
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_vk_sdk_pin(module: *mut c_void) -> u32 {
     let mut pinned = null_mut();
     u32::from(

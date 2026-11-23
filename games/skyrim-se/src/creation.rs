@@ -163,12 +163,7 @@ fn guard(platform: &Platform) -> Result<usize, &'static CStr> {
 }
 
 #[cfg(not(test))]
-unsafe extern "C" {
-    fn rsf_steam_d3d11_chain_prepare(
-        host: *const rsf_game_host_services,
-        cold_owner: Option<unsafe extern "C" fn() -> bool>,
-    ) -> bool;
-}
+use rsf_steam::rsf_steam_d3d11_chain_prepare;
 
 fn prepare_steam(host: &rsf_game_host_services) -> bool {
     // Observer preparation initialized MinHook. Steam borrows the callback and retains the

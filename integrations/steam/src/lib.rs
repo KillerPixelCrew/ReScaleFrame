@@ -667,8 +667,10 @@ unsafe fn prepare_from_abi(
 
 // MinHook must already be initialized. The callback is borrowed for the duration of the call
 // and must return without unwinding. The dispatch service's opaque user stays valid for hooks.
+// Exported for games/fallout4/src/creation.rs, which links this crate as the CMake archive
+// rsf_steam_d3d11_chain; Skyrim, which depends on the crate, calls it by path.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_steam_d3d11_chain_prepare(
+pub unsafe extern "C" fn rsf_steam_d3d11_chain_prepare(
     host: *const rsf_game_host_services,
     cold_owner: Option<ColdOwner>,
 ) -> bool {

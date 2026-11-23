@@ -184,7 +184,6 @@ fn session() -> std::sync::MutexGuard<'static, Option<Arc<Library>>> {
     SESSION.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_xessvk_initialize(
     ops: Option<&'static XessOps>,
     setup: *const XessSetup,
@@ -287,7 +286,6 @@ unsafe extern "C" fn rsf_core_xessvk_device_requirements(
     status(sdk(result, INIT_FAILED))
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_xessvk_shutdown(ops: Option<&'static XessOps>) -> i32 {
     if ops.is_none() {
         return 0;

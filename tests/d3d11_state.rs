@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 use super::{Device, Handle, TestResult, check};
 use crate::sys::rsf_d3d11_state as State;
+use rsf_graphics::d3d11_state::{
+    rsf_d3d11_state_restore, rsf_d3d11_state_save, rsf_d3d11_state_save_independent,
+};
 use std::ptr::null_mut;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::{
@@ -13,12 +16,6 @@ use windows::core::Interface;
 
 type Save = unsafe extern "C" fn(Handle, *mut State) -> u32;
 type Restore = unsafe extern "C" fn(Handle, *mut State);
-
-unsafe extern "C" {
-    fn rsf_d3d11_state_save(context: Handle, state: *mut State) -> u32;
-    fn rsf_d3d11_state_save_independent(context: Handle, state: *mut State) -> u32;
-    fn rsf_d3d11_state_restore(context: Handle, state: *mut State);
-}
 
 struct Scope {
     context: Handle,

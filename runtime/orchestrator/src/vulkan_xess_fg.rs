@@ -628,7 +628,6 @@ pub(crate) unsafe extern "C" fn rsf_xessgvk_max_generated(owner: *const Owner) -
         (owner.vendor.ops.max_generated)(owner.vendor.bridge)
     })
 }
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_xessgvk_present(
     owner: *mut Owner,
     info: *const PresentInfo,

@@ -1035,7 +1035,6 @@ pub(crate) unsafe extern "C" fn rsf_ffxgvk_present_source(
     unsafe { present_native(owner, info, source, 1) }
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_ffxgvk_present(
     owner: *mut Owner,
     info: *const c_void,
@@ -1052,7 +1051,6 @@ unsafe extern "C" fn rsf_core_ffxgvk_present(
     }
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_ffxgvk_generation_record(
     native: Handle,
     frame: u64,
@@ -1069,7 +1067,6 @@ unsafe extern "C" fn rsf_core_ffxgvk_generation_record(
     1
 }
 
-#[unsafe(no_mangle)]
 extern "C" fn rsf_core_ffxgvk_note_generated(native: Handle) {
     let mut route = route();
     if route.matches_native(native) {

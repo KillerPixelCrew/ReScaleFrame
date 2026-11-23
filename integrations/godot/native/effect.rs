@@ -158,7 +158,8 @@ impl Effect {
 
 /// Only the SDK leaves can allocate, record and release Godot resources. Finish
 /// by releasing the resources created up to that point, even after a refusal.
-#[unsafe(no_mangle)]
+// Called only by the gdextension entry points, which unit tests do not build.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) unsafe extern "C" fn rsf_godot_effect_record_motion(
     call: *mut c_void,
     plan: *const EffectReadback,
@@ -193,7 +194,8 @@ pub(crate) unsafe extern "C" fn rsf_godot_effect_record_motion(
     u32::from(completed)
 }
 
-#[unsafe(no_mangle)]
+// Called only by the gdextension entry points, which unit tests do not build.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) unsafe extern "C" fn rsf_godot_effect_properties(
     effect: *const Effect,
     version: *const c_char,

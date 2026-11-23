@@ -155,8 +155,7 @@ unsafe extern "C" fn rsf_ac7_carrier_wait_decrypted(
 
 /// The separate translucency multiplier that puts the layer at `target_percent` of native when
 /// the scene renders at `render_percent`. Zero render means native, zero target means the scene's.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_translucency_scale(render_percent: u32, target_percent: u32) -> f32 {
+pub(crate) fn rsf_ac7_translucency_scale(render_percent: u32, target_percent: u32) -> f32 {
     if target_percent == 0 {
         return 1.0;
     }
@@ -170,7 +169,7 @@ extern "C" fn rsf_ac7_translucency_scale(render_percent: u32, target_percent: u3
 
 /// A nonnull depth report points to a writable float.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_carrier_translucency_scale(
+pub(crate) unsafe extern "C" fn rsf_ac7_carrier_translucency_scale(
     render_percent: u32,
     target_percent: u32,
     override_percent: u32,

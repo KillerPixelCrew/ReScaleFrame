@@ -153,7 +153,6 @@ pub(crate) fn admission(
 /// Compose the options from a borrowed Godot Dictionary, then call the registered
 /// engine service with the typed settings. Only the leaf can interpret Variants.
 #[cfg(all(windows, not(test)))]
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_godot_extension_configure(
     admitted: u32,
     viewport: u64,
@@ -175,7 +174,8 @@ pub(crate) unsafe extern "C" fn rsf_godot_extension_configure(
 
 /// The scripting status schema. Godot's callback materializes the scalar values
 /// as Variants in its own Dictionary.
-#[unsafe(no_mangle)]
+// Called only by the gdextension entry points, which unit tests do not build.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) unsafe extern "C" fn rsf_godot_extension_status(
     admitted: u32,
     dictionary: *mut c_void,

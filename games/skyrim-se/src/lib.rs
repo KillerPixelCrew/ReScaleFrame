@@ -24,9 +24,6 @@ mod sys {
     include!(concat!(env!("OUT_DIR"), "/sys.rs"));
 }
 
-// Links the Steam overlay forwarding the creation path calls (rsf_steam_d3d11_chain_prepare).
-use rsf_steam as _;
-
 mod auxiliary;
 mod camera;
 mod compatibility;
