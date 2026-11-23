@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /* Pinned Unity SDK renderer query and the D3D11 interface for the package bridge. */
 #include "bridge.h"
+#include <stdbool.h>
 #include <windows.h>
 #include <d3d11.h>
 #define RSF_UNITY_SDK_LEAF rsf_unity_package_bridge
