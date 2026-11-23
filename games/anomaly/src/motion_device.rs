@@ -17,14 +17,14 @@ use std::slice;
 #[cfg(windows)]
 mod d3d11;
 mod replay;
-#[cfg(all(windows, feature = "motion-device-fixture"))]
+#[cfg(windows)]
 pub(crate) use d3d11::{
-    rsf_anomaly_motion_device_platform_get, rsf_anomaly_motion_replay_platform_get,
+    clear_target, rsf_anomaly_motion_device_platform_get, rsf_anomaly_motion_replay_platform_get,
 };
 #[cfg(windows)]
 pub(crate) use replay::{
-    Platform as ReplayPlatform, REPLAY_NO_DEPTH_WRITE, REPLAY_READY, ReplayScope,
-    rsf_anomaly_motion_replay_begin, rsf_anomaly_motion_replay_end,
+    REPLAY_NO_DEPTH_WRITE, REPLAY_READY, ReplayScope, rsf_anomaly_motion_replay_begin,
+    rsf_anomaly_motion_replay_end,
 };
 
 struct Buffer {

@@ -561,6 +561,11 @@ impl Drop for Flight<'_> {
     }
 }
 
+/// Device resets the observer has counted, for the motion stage's history generation.
+pub(crate) fn resets() -> u64 {
+    OBSERVER.observation().resets
+}
+
 pub(crate) fn observe_window(report: impl FnOnce()) {
     OBSERVER.observe_window(report);
 }

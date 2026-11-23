@@ -4,8 +4,7 @@ use std::ptr::null_mut;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::core::{IUnknown, Interface};
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_target_facts(raw: Raw, out: *mut TargetFacts) -> bool {
+pub(super) unsafe fn target_facts(raw: Raw, out: *mut TargetFacts) -> bool {
     let Some(surface) = (unsafe { IUnknown::from_raw_borrowed(&raw) }) else {
         return false;
     };
@@ -25,12 +24,7 @@ unsafe extern "C" fn rsf_anomaly_motion_target_facts(raw: Raw, out: *mut TargetF
     true
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_bound_shaders(
-    raw: Raw,
-    out: &mut ShaderObjects,
-    all: bool,
-) {
+pub(super) unsafe fn bound_shaders(raw: Raw, out: &mut ShaderObjects, all: bool) {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
     let vtable = context.vtable();
     let get = |get: unsafe extern "system" fn(Raw, *mut Raw, *mut Raw, *mut u32)| {
@@ -59,8 +53,7 @@ unsafe extern "C" fn rsf_anomaly_motion_bound_shaders(
     };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_set_shaders(raw: Raw, shaders: &ShaderObjects, tess: bool) {
+pub(super) unsafe fn set_shaders(raw: Raw, shaders: &ShaderObjects, tess: bool) {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
     let vtable = context.vtable();
     unsafe {

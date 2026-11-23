@@ -111,7 +111,7 @@ impl WindowFacts {
         if !unsafe { (p.native_frame)(&mut frame) } || !unsafe { (p.render_view)(&mut view) } {
             return None;
         }
-        let generation = unsafe { (p.reset_generation)() };
+        let generation = crate::native_observer::resets();
         Some(Self {
             device,
             context,
@@ -344,7 +344,7 @@ impl Stage {
                 return false;
             }
         }
-        if !unsafe { (p.geometry_active)() } {
+        if !crate::native_geometry::rsf_anomaly_geometry_active() {
             log.text(c"Anomaly motion refused: geometry hooks (draw-time site) are not active.");
             return false;
         }
@@ -356,7 +356,7 @@ impl Stage {
         let foliage = self.foliage.load(Relaxed);
         unsafe {
             (p.observe_flush)(true);
-            (p.foliage_identity)(foliage);
+            crate::native_geometry::rsf_anomaly_geometry_set_foliage(foliage);
         }
         self.active.store(true, Release);
         let sites = build.motion.sites.each_ref().map(|site| HookSite {
@@ -421,8 +421,8 @@ impl Stage {
         drop(lock(&self.retirements).take());
         unsafe {
             (self.platform.observe_flush)(false);
-            (self.platform.foliage_identity)(false);
         }
+        crate::native_geometry::rsf_anomaly_geometry_set_foliage(false);
     }
 
     fn attach(&self) {
@@ -469,7 +469,9 @@ impl Stage {
             render.reset_history();
             lock(&self.registry).clear_links();
             let runtime = lock(&self.loader).pack.as_ref().map(Pack::constant_ops);
-            let owner = render.device.get_or_insert_with(|| Owner::new(p.device));
+            let owner = render
+                .device
+                .get_or_insert_with(|| Owner::new(rsf_anomaly_motion_device_platform_get()));
             let log = self.log();
             if !owner.create(facts.device, runtime, log.callback, log.user as Raw) {
                 log.text(c"Anomaly motion: device resources could not be created.");
@@ -498,7 +500,7 @@ impl Stage {
                 render.counters.options_unreadable += 1;
             } else if options & DX10_MSAA != 0 {
                 render.counters.msaa_frames += 1;
-            } else if !unsafe { (p.target_facts)(facts.position_surface, desc.as_mut_ptr()) } {
+            } else if !unsafe { d3d11::target_facts(facts.position_surface, desc.as_mut_ptr()) } {
                 render.counters.descriptor_unreadable += 1;
             } else {
                 let desc = unsafe { desc.assume_init() };
@@ -520,7 +522,7 @@ impl Stage {
             }
             if target_ok {
                 let view = render.device_view();
-                unsafe { (p.clear_target)(facts.context, view.rtv) };
+                unsafe { crate::motion_device::clear_target(facts.context, view.rtv) };
                 render.counters.clears += 1;
                 let identity = FrameIdentity {
                     source: u64::from(facts.frame),
@@ -588,7 +590,7 @@ impl Stage {
     fn cancel_draw(&self) {
         if let Some(draw) = window::take(ptr::null_mut()) {
             if let window::Action::Restore { stock, chain } = draw.action {
-                unsafe { (self.platform.set_shaders)(draw.context, &stock, chain.tessellated()) };
+                unsafe { d3d11::set_shaders(draw.context, &stock, chain.tessellated()) };
             }
             lock(&self.render).counters.stale_restores += 1;
         }
@@ -597,11 +599,10 @@ impl Stage {
     fn begin_draw(&'static self, context: Raw) -> Option<DrawFlight> {
         let draw = window::take(context)?;
         let live = self.active.load(Acquire);
-        let p = self.platform;
         let action = match draw.action {
             window::Action::Restore { stock, chain } => {
                 if !live {
-                    unsafe { (p.set_shaders)(context, &stock, chain.tessellated()) };
+                    unsafe { d3d11::set_shaders(context, &stock, chain.tessellated()) };
                 }
                 ActiveDraw::Restore {
                     stock,
@@ -616,9 +617,15 @@ impl Stage {
                 let view = render.device_view();
                 let leases =
                     [view.rtv, view.zero_shader, view.no_depth, view.equal_depth].map(|raw| {
-                        Lease::new(raw, p.device.release).inspect(|lease| {
-                            unsafe { (p.device.retain)(lease.as_ptr()) };
-                        })
+                        Lease::new(raw, rsf_anomaly_motion_device_platform_get().release).inspect(
+                            |lease| {
+                                unsafe {
+                                    (rsf_anomaly_motion_device_platform_get().retain)(
+                                        lease.as_ptr(),
+                                    )
+                                };
+                            },
+                        )
                     });
                 ActiveDraw::Replay {
                     view,
@@ -750,7 +757,7 @@ unsafe extern "C" fn rsf_anomaly_motion_stage_draw_end(scope: *mut DrawScope, co
         restore_after: true,
     } = flight.action
     {
-        unsafe { (flight.stage.platform.set_shaders)(flight.context, &stock, chain.tessellated()) };
+        unsafe { d3d11::set_shaders(flight.context, &stock, chain.tessellated()) };
         if completed {
             lock(&flight.stage.render).counters.restores += 1;
         }
@@ -771,7 +778,12 @@ unsafe extern "C" fn rsf_anomaly_motion_stage_replay_begin(
         return false;
     }
     let result = unsafe {
-        rsf_anomaly_motion_replay_begin(stage.platform.replay, view, flight.context, replay)
+        rsf_anomaly_motion_replay_begin(
+            rsf_anomaly_motion_replay_platform_get(),
+            view,
+            flight.context,
+            replay,
+        )
     };
     match result {
         REPLAY_READY => return true,

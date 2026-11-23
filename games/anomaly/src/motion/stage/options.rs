@@ -214,7 +214,7 @@ unsafe extern "C" fn foliage_set(value: i32) -> bool {
     }
     stage.foliage.store(enabled, Relaxed);
     if stage.active.load(Acquire) {
-        unsafe { (stage.platform.foliage_identity)(enabled) };
+        crate::native_geometry::rsf_anomaly_geometry_set_foliage(enabled);
     }
     true
 }

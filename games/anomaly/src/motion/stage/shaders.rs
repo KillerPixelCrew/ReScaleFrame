@@ -358,7 +358,6 @@ struct Replacement {
 
 impl Replacement {
     fn build(
-        platform: &Platform,
         pack: &mut Pack,
         request: &Request,
         identity: (u8, u8),
@@ -387,7 +386,7 @@ impl Replacement {
             pack.0
                 .create(device, request.target(), &result.bytecode, &mut shader)
         };
-        let shader = Lease::new(shader, platform.device.release);
+        let shader = Lease::new(shader, rsf_anomaly_motion_device_platform_get().release);
         let shader = shader
             .filter(|_| status == RSF_PATCH_OK)
             .ok_or((CREATE_FAILED, "Create*Shader failed".into()))?;
@@ -402,15 +401,9 @@ impl Replacement {
         })
     }
 
-    fn publish(
-        self,
-        platform: &Platform,
-        stock: Raw,
-        request: Arc<Request>,
-        device: Raw,
-    ) -> Arc<Variant> {
-        let release = platform.device.release;
-        let retain = platform.device.retain;
+    fn publish(self, stock: Raw, request: Arc<Request>, device: Raw) -> Arc<Variant> {
+        let calls = rsf_anomaly_motion_device_platform_get();
+        let (release, retain) = (calls.release, calls.retain);
         let stock = Lease::new(stock, release).expect("created stock shader is non-null");
         let device = Lease::new(device, release).expect("shader creation requires a device");
         unsafe {
@@ -589,13 +582,12 @@ impl Stage {
             }
             let device = old.device.as_ptr();
             let identity = (entry.stage, entry.family);
-            let replacement =
-                Replacement::build(p, &mut pack, &old.request, identity, device, false)
-                    .map_err(|(outcome, detail)| format!("{}: {detail}", outcome_name(outcome)))?;
+            let replacement = Replacement::build(&mut pack, &old.request, identity, device, false)
+                .map_err(|(outcome, detail)| format!("{}: {detail}", outcome_name(outcome)))?;
             let key = old.stock.as_ptr();
             next.insert(
                 key as usize,
-                replacement.publish(p, key, old.request.clone(), device),
+                replacement.publish(key, old.request.clone(), device),
             );
         }
         Ok((pack, next))
@@ -671,7 +663,7 @@ impl Stage {
                 })
                 .and_then(|request| {
                     let device = unsafe { (p.shader_device)() };
-                    Replacement::build(p, pack, &request, (stage, family_id), device, true)
+                    Replacement::build(pack, &request, (stage, family_id), device, true)
                         .map(|replacement| (replacement, request, device))
                 })
         } else {
@@ -696,7 +688,7 @@ impl Stage {
                         outcome_name(outcome)
                     ));
                 }
-                let variant = replacement.publish(p, call.stock, Arc::new(request), device);
+                let variant = replacement.publish(call.stock, Arc::new(request), device);
                 let previous = lock(&self.registry).put(variant);
                 drop(previous);
                 outcome

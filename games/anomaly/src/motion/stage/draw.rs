@@ -387,7 +387,7 @@ impl Stage {
             return;
         }
         let mut shaders = ShaderObjects::default();
-        unsafe { (self.platform.bound_shaders)(context, &mut shaders, false) };
+        unsafe { super::d3d11::bound_shaders(context, &mut shaders, false) };
         let vertex = lock(&self.registry).get(shaders.vs);
         if let Some(vertex) = vertex.filter(|v| v.family == FOLIAGE_DETAIL && v.foliage.usable) {
             render.poison_batch(self.platform, &vertex.foliage);
@@ -427,12 +427,11 @@ impl Stage {
         }
 
         let mut stock = ShaderObjects::default();
-        unsafe { (p.bound_shaders)(context, &mut stock, true) };
+        unsafe { super::d3d11::bound_shaders(context, &mut stock, true) };
         let staged = [stock.hs, stock.ds, stock.gs]
             .iter()
             .any(|shader| !shader.is_null());
-        let mut state = DrawState::default();
-        unsafe { (p.draw_state)(context, &mut state) };
+        let state = unsafe { super::native::draw_state(context) };
         let band = if facts.main_pass()
             && facts.in_visual
             && matches!(
@@ -544,7 +543,7 @@ impl Stage {
         } else if family == FOLIAGE_DETAIL {
             render.counters.detail_replaced += 1;
         }
-        unsafe { (p.set_shaders)(context, &chain.shaders(), tessellated) };
+        unsafe { super::d3d11::set_shaders(context, &chain.shaders(), tessellated) };
         window::arm(window::Draw {
             context,
             action: window::Action::Restore { stock, chain },

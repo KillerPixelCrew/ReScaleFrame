@@ -50,10 +50,6 @@ typedef struct rsf_anomaly_motion_shader_objects {
     void* gs;
 } rsf_anomaly_motion_shader_objects;
 
-typedef struct rsf_anomaly_motion_draw_state {
-    float viewport[4], jitter[4];
-} rsf_anomaly_motion_draw_state;
-
 typedef struct rsf_anomaly_motion_shader_creation {
     const char* target;
     const void* bytecode;
@@ -97,14 +93,12 @@ typedef struct rsf_anomaly_motion_engine {
     uint32_t projection_rva;     // RCache.xforms.m_p
 } rsf_anomaly_motion_engine;
 
+// The C leaves of the motion stage. Rust calls its own stage functions directly.
 typedef struct rsf_anomaly_motion_platform {
-    const rsf_anomaly_motion_device_platform* device;
     const rsf_anomaly_motion_bind_platform* bind;
     // Guarded engine-memory copy behind the guard image.
     rsf_anomaly_motion_guarded_copy copy;
-    bool (*geometry_active)(void);
     void (*observe_flush)(bool);
-    void (*foliage_identity)(bool);
     // Adopts `engine` for the leaf reads, then installs the lent sites with the leaf's detours and trampoline slots
     // filled in RSF_ANOMALY_MOTION_SITE_* order.
     bool (*install_hooks)(void* image, uint32_t size, const rsf_anomaly_motion_engine* engine,
@@ -116,21 +110,14 @@ typedef struct rsf_anomaly_motion_platform {
     bool (*position_views)(void*, rsf_anomaly_motion_position_pair*);
     bool (*native_frame)(uint32_t*);
     bool (*render_view)(uint8_t*);
-    uint64_t (*reset_generation)(void);
     bool (*options_word3)(uint32_t*);
-    bool (*target_facts)(void*, rsf_anomaly_motion_target_info*);
     void* (*backend)(void);
     void* (*context)(void);
     void* (*shader_device)(void);
-    void (*clear_target)(void*, void*);
-    void (*bound_shaders)(void*, rsf_anomaly_motion_shader_objects*, bool);
-    void (*set_shaders)(void*, const rsf_anomaly_motion_shader_objects*, bool);
-    const rsf_anomaly_motion_replay_platform* replay;
     bool (*camera)(float (*)[16], float (*)[16]);
     bool (*world)(float (*)[16]);
     bool (*read_constant)(uint32_t, uint32_t, uint32_t, void*, uint32_t);
     bool (*write_constant)(uint32_t, uint32_t, uint32_t, const void*, uint32_t);
-    void (*draw_state)(void*, rsf_anomaly_motion_draw_state*);
     const rsf_anomaly_engine_include_ops* includes;
     rsf_anomaly_shader_read read_engine;
 } rsf_anomaly_motion_platform;
@@ -142,10 +129,6 @@ bool rsf_anomaly_motion_stage_install(const rsf_anomaly_motion_platform*, void* 
 bool rsf_anomaly_motion_resolve_draws(rsf_anomaly_motion_guarded_copy, void*, void* (*)[4]) RSF_MOTION_NOEXCEPT;
 bool rsf_anomaly_motion_position_views(rsf_anomaly_motion_guarded_copy, void*, uint32_t, uint32_t, uint32_t,
     rsf_anomaly_motion_position_pair*) RSF_MOTION_NOEXCEPT;
-void rsf_anomaly_motion_viewport(void*, float (*)[4]) RSF_MOTION_NOEXCEPT;
-bool rsf_anomaly_motion_target_facts(void*, rsf_anomaly_motion_target_info*) RSF_MOTION_NOEXCEPT;
-void rsf_anomaly_motion_bound_shaders(void*, rsf_anomaly_motion_shader_objects*, bool) RSF_MOTION_NOEXCEPT;
-void rsf_anomaly_motion_set_shaders(void*, const rsf_anomaly_motion_shader_objects*, bool) RSF_MOTION_NOEXCEPT;
 void rsf_anomaly_motion_stage_cancel_draw(void) RSF_MOTION_NOEXCEPT;
 uint8_t rsf_anomaly_motion_stage_draw_begin(void*, rsf_anomaly_motion_draw_scope*) RSF_MOTION_NOEXCEPT;
 void rsf_anomaly_motion_stage_draw_end(rsf_anomaly_motion_draw_scope*, bool completed) RSF_MOTION_NOEXCEPT;

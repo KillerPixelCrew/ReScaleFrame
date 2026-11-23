@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Private call-scoped ABI with motion_stage_platform.h (rsf_anomaly_motion_platform).
 use super::*;
-use crate::motion_device::{Platform as DevicePlatform, ReplayPlatform};
 use crate::motion_target::Platform as BindPlatform;
 use crate::native_hooks::Site as HookSite;
 use crate::shader_loader::{EngineIncludeOps, Read};
@@ -72,12 +71,9 @@ pub(super) struct ShaderCreation {
 
 #[repr(C)]
 pub(super) struct Platform {
-    pub device: &'static DevicePlatform,
     pub bind: &'static BindPlatform,
     pub copy: GuardedCopy,
-    pub geometry_active: unsafe extern "C" fn() -> bool,
     pub observe_flush: unsafe extern "C" fn(bool),
-    pub foliage_identity: unsafe extern "C" fn(bool),
     pub install_hooks:
         unsafe extern "C" fn(Raw, u32, &super::native::Engine, *const HookSite, usize) -> bool,
     pub disable_hooks: unsafe extern "C" fn() -> bool,
@@ -87,21 +83,14 @@ pub(super) struct Platform {
     pub position_views: unsafe extern "C" fn(Raw, *mut PositionViews) -> bool,
     pub native_frame: unsafe extern "C" fn(&mut u32) -> bool,
     pub render_view: unsafe extern "C" fn(&mut u8) -> bool,
-    pub reset_generation: unsafe extern "C" fn() -> u64,
     pub options_word3: unsafe extern "C" fn(&mut u32) -> bool,
-    pub target_facts: unsafe extern "C" fn(Raw, *mut TargetFacts) -> bool,
     pub backend: unsafe extern "C" fn() -> Raw,
     pub context: unsafe extern "C" fn() -> Raw,
     pub shader_device: unsafe extern "C" fn() -> Raw,
-    pub clear_target: unsafe extern "C" fn(Raw, Raw),
-    pub bound_shaders: unsafe extern "C" fn(Raw, &mut ShaderObjects, bool),
-    pub set_shaders: unsafe extern "C" fn(Raw, &ShaderObjects, bool),
-    pub replay: &'static ReplayPlatform,
     pub camera: unsafe extern "C" fn(&mut [f32; 16], &mut [f32; 16]) -> bool,
     pub world: unsafe extern "C" fn(&mut [f32; 16]) -> bool,
     pub read_constant: unsafe extern "C" fn(u32, u32, u32, Raw, u32) -> bool,
     pub write_constant: unsafe extern "C" fn(u32, u32, u32, *const std::ffi::c_void, u32) -> bool,
-    pub draw_state: unsafe extern "C" fn(Raw, &mut DrawState),
     pub includes: &'static EngineIncludeOps,
     pub read_engine: Read,
 }
@@ -140,11 +129,11 @@ const _: () = {
     assert!(size_of::<FoliageLayout>() == 108);
     assert!(std::mem::offset_of!(FoliageLayout, usable) == 104);
     assert!(size_of::<FrameTarget>() == 24);
-    assert!(size_of::<Platform>() == 248);
-    assert!(std::mem::offset_of!(Platform, copy) == 16);
-    assert!(std::mem::offset_of!(Platform, install_hooks) == 48);
-    assert!(std::mem::offset_of!(Platform, render_target) == 80);
-    assert!(std::mem::offset_of!(Platform, target_facts) == 128);
-    assert!(std::mem::offset_of!(Platform, includes) == 232);
-    assert!(std::mem::offset_of!(Platform, read_engine) == 240);
+    assert!(size_of::<Platform>() == 168);
+    assert!(std::mem::offset_of!(Platform, copy) == 8);
+    assert!(std::mem::offset_of!(Platform, install_hooks) == 24);
+    assert!(std::mem::offset_of!(Platform, render_target) == 56);
+    assert!(std::mem::offset_of!(Platform, backend) == 96);
+    assert!(std::mem::offset_of!(Platform, includes) == 152);
+    assert!(std::mem::offset_of!(Platform, read_engine) == 160);
 };

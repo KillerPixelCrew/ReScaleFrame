@@ -5,8 +5,6 @@
 #include "motion_stage_platform.h"
 #include "native_geometry.h"
 #include "native_memory.h"
-#include "native_observer.h"
-#include "sr_stage.h"
 #include "stage_entries.h"
 #include <rescaleframe/game_frame.h>
 #define COBJMACROS
@@ -261,14 +259,6 @@ static bool render_view(uint8_t* out)
     *out = view;
     return true;
 }
-static uint64_t reset_generation(void)
-{
-    rsf_anomaly_native_observation observation;
-    memset(&observation, 0, sizeof(observation));
-    observation.struct_size = sizeof(observation);
-    observation.abi_version = RSF_ANOMALY_OBSERVATION_ABI;
-    return rsf_anomaly_observation(&observation) == RSF_OK ? observation.resets : 0;
-}
 static bool options_word3(uint32_t* options) { return read_global(engine.options_word3_rva, options, sizeof(*options)); }
 static bool camera(float (*view)[16], float (*projection)[16])
 {
@@ -276,16 +266,6 @@ static bool camera(float (*view)[16], float (*projection)[16])
         guarded_copy(projection, image + engine.projection_rva, sizeof(*projection));
 }
 static bool world(float (*out)[16]) { return rsf_anomaly_geometry_world_matrix(*out); }
-static void draw_state(void* context, rsf_anomaly_motion_draw_state* out)
-{
-    rsf_anomaly_motion_viewport(context, &out->viewport);
-    rsf_anomaly_sr_jitter_uv jitter = {0};
-    rsf_anomaly_sr_stage_jitter_uv(&jitter);
-    out->jitter[0] = jitter.current_u;
-    out->jitter[1] = jitter.current_v;
-    out->jitter[2] = jitter.previous_u;
-    out->jitter[3] = jitter.previous_v;
-}
 
 static uint32_t bind_read(void* host, const void* address, void* out, size_t size)
 {
@@ -343,12 +323,9 @@ static const rsf_anomaly_motion_platform* motion_platform(void)
     static bool ready;
     if (!ready) {
         platform = (rsf_anomaly_motion_platform){
-            .device = rsf_anomaly_motion_device_platform_get(),
             .bind = &bind_platform,
             .copy = copy_engine,
-            .geometry_active = rsf_anomaly_geometry_active,
             .observe_flush = observe_flush,
-            .foliage_identity = rsf_anomaly_geometry_set_foliage,
             .install_hooks = install_hooks,
             .disable_hooks = disable_hooks,
             .hooks_created = hooks_created,
@@ -357,21 +334,14 @@ static const rsf_anomaly_motion_platform* motion_platform(void)
             .position_views = position_views,
             .native_frame = native_frame,
             .render_view = render_view,
-            .reset_generation = reset_generation,
             .options_word3 = options_word3,
-            .target_facts = rsf_anomaly_motion_target_facts,
             .backend = backend,
             .context = hw_context,
             .shader_device = hw_device,
-            .clear_target = rsf_anomaly_motion_clear_target,
-            .bound_shaders = rsf_anomaly_motion_bound_shaders,
-            .set_shaders = rsf_anomaly_motion_set_shaders,
-            .replay = rsf_anomaly_motion_replay_platform_get(),
             .camera = camera,
             .world = world,
             .read_constant = rsf_anomaly_geometry_read_constants,
             .write_constant = rsf_anomaly_geometry_write_constants,
-            .draw_state = draw_state,
             .includes = &include_ops,
             .read_engine = read_engine,
         };
@@ -390,12 +360,12 @@ _Static_assert(sizeof(rsf_anomaly_engine_include_ops) == 24 && offsetof(rsf_anom
     "include ops");
 _Static_assert(sizeof(rsf_anomaly_motion_engine) == 56 && offsetof(rsf_anomaly_motion_engine, hw_device_rva) == 8 &&
     offsetof(rsf_anomaly_motion_engine, projection_rva) == 48, "motion engine");
-_Static_assert(sizeof(rsf_anomaly_motion_platform) == 248 && offsetof(rsf_anomaly_motion_platform, copy) == 16 &&
-    offsetof(rsf_anomaly_motion_platform, install_hooks) == 48 &&
-    offsetof(rsf_anomaly_motion_platform, render_target) == 80 &&
-    offsetof(rsf_anomaly_motion_platform, target_facts) == 128 &&
-    offsetof(rsf_anomaly_motion_platform, includes) == 232 &&
-    offsetof(rsf_anomaly_motion_platform, read_engine) == 240, "motion platform");
+_Static_assert(sizeof(rsf_anomaly_motion_platform) == 168 && offsetof(rsf_anomaly_motion_platform, copy) == 8 &&
+    offsetof(rsf_anomaly_motion_platform, install_hooks) == 24 &&
+    offsetof(rsf_anomaly_motion_platform, render_target) == 56 &&
+    offsetof(rsf_anomaly_motion_platform, backend) == 96 &&
+    offsetof(rsf_anomaly_motion_platform, includes) == 152 &&
+    offsetof(rsf_anomaly_motion_platform, read_engine) == 160, "motion platform");
 _Static_assert(sizeof(rsf_anomaly_motion_frame_target) == 24 && offsetof(rsf_anomaly_motion_frame_target, written) == 20 &&
     offsetof(rsf_anomaly_motion_frame_target, main) == 21, "frame target");
 _Static_assert(RSF_PHASE_RENDER_SUBMIT == 2 && RSF_DUMP_VIEW_DENSE_MOTION == 7, "frame phase and dump view");

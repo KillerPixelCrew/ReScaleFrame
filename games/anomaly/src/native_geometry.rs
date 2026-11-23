@@ -203,7 +203,7 @@ extern "C" fn rsf_anomaly_geometry_after_near(render: *mut c_void) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_geometry_set_foliage(enabled: bool) {
+pub(crate) extern "C" fn rsf_anomaly_geometry_set_foliage(enabled: bool) {
     FOLIAGE.store(enabled, Ordering::Relaxed);
 }
 

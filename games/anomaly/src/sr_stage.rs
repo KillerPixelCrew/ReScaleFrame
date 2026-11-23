@@ -2865,11 +2865,5 @@ pub(crate) unsafe extern "C" fn rsf_anomaly_sr_stage_report(
         }
     });
 }
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_stage_jitter_uv(out: *mut rsf_anomaly_sr_jitter_uv) {
-    if !out.is_null() {
-        unsafe { out.write(STAGE.jitter_uv()) };
-    }
-}
 #[cfg(test)]
 mod tests;

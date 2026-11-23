@@ -171,8 +171,7 @@ unsafe extern "C" fn bind(raw: Raw, buffer: Raw, stage: std::ffi::c_char) -> u32
     1
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_motion_device_platform_get() -> &'static Platform {
+pub(crate) fn rsf_anomaly_motion_device_platform_get() -> &'static Platform {
     static PLATFORM: Platform = Platform {
         retain,
         release,
@@ -227,8 +226,7 @@ unsafe extern "C" fn read_pixel(raw: Raw, out: &mut Pixel) {
     out.blend = owned(blend);
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_clear_target(raw: Raw, target: Raw) {
+pub(crate) unsafe fn clear_target(raw: Raw, target: Raw) {
     let (Some(context), Some(target)) = (unsafe {
         (
             ID3D11DeviceContext::from_raw_borrowed(&raw),
@@ -274,8 +272,7 @@ unsafe extern "C" fn shader(raw: Raw, pixel: Raw, classes: *const Raw, count: u3
     unsafe { (context.vtable().PSSetShader)(raw, pixel, classes, count) };
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_motion_replay_platform_get() -> &'static ReplayPlatform {
+pub(crate) fn rsf_anomaly_motion_replay_platform_get() -> &'static ReplayPlatform {
     static PLATFORM: ReplayPlatform = ReplayPlatform {
         release,
         read_depth,

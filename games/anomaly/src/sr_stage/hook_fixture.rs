@@ -2,13 +2,9 @@
 //! SR hook admission against synthetic images of the two production profiles. The C11 launcher lends the production
 //! leaf table and a real x64 target for the shared rmNear detour; the profile records are sr_profile.rs.
 use super::native::{BUILDS, Build, Native, rsf_anomaly_sr_stage_configure_native};
-use super::{
-    STAGE, rsf_anomaly_sr_stage_frame_end, rsf_anomaly_sr_stage_jitter_uv,
-    rsf_anomaly_sr_stage_report,
-};
+use super::{STAGE, rsf_anomaly_sr_stage_frame_end, rsf_anomaly_sr_stage_report};
 use crate::engine_guards::{NativeSite, UniqueGuard};
 use crate::sr_profile::{FirstPersonSite, PROFILES as SR};
-use crate::sys::rsf_anomaly_sr_jitter_uv as JitterUv;
 use std::ffi::{CStr, c_char, c_void};
 use std::os::windows::ffi::OsStrExt;
 use std::ptr;
@@ -304,8 +300,7 @@ impl Fixture<'_> {
             );
             self.refused(unsafe { CStr::from_ptr(site.name) }.to_str().unwrap());
         }
-        let mut uv = JitterUv::default();
-        unsafe { rsf_anomaly_sr_stage_jitter_uv(&mut uv) };
+        let uv = STAGE.jitter_uv();
         assert!(!STAGE.jitter().applied);
         assert_eq!(
             [uv.current_u, uv.current_v, uv.previous_u, uv.previous_v],

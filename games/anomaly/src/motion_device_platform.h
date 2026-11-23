@@ -66,11 +66,8 @@ typedef struct rsf_anomaly_motion_replay_scope {
 #ifdef __cplusplus
 extern "C" {
 #endif
-void rsf_anomaly_motion_clear_target(void* context, void* target);
 void rsf_anomaly_motion_bind_targets(void* context, void* const* targets, void* depth);
 void rsf_anomaly_motion_clear_targets(void* context);
-const rsf_anomaly_motion_device_platform* rsf_anomaly_motion_device_platform_get(void);
-const rsf_anomaly_motion_replay_platform* rsf_anomaly_motion_replay_platform_get(void);
 typedef struct rsf_anomaly_motion_device_owner rsf_anomaly_motion_device_owner;
 rsf_anomaly_motion_device_owner* rsf_anomaly_motion_device_new(const rsf_anomaly_motion_device_platform*);
 uint32_t rsf_anomaly_motion_device_create(rsf_anomaly_motion_device_owner*, void* device, rsf_anomaly_motion_log, void* user);

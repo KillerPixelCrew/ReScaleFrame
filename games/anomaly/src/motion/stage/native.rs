@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Guarded access to the engine profile and the SDK draw slots.
-use super::abi::{PositionViews, Raw};
+use super::abi::{DrawState, PositionViews, Raw};
 use crate::engine_guards::{Read, read_bytes};
 use crate::native_profile::PROFILES as NATIVE;
 use crate::sr_profile::{
@@ -128,22 +128,29 @@ extern "C" fn rsf_anomaly_motion_position_views(
     true
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_viewport(raw: Raw, out: &mut [f32; 4]) {
+/// The bound viewport of `raw` and the SR stage's current and previous jitter in viewport UV.
+pub(super) unsafe fn draw_state(raw: Raw) -> DrawState {
     use windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext;
     use windows::core::Interface;
 
-    let Some(context) = (unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }) else {
-        *out = [0.0; 4];
-        return;
-    };
-    let mut viewport = D3D11_VIEWPORT::default();
-    let mut count = 1;
-    unsafe { (context.vtable().RSGetViewports)(raw, &mut count, &mut viewport) };
-    *out = [
-        viewport.TopLeftX,
-        viewport.TopLeftY,
-        viewport.Width,
-        viewport.Height,
+    let mut state = DrawState::default();
+    if let Some(context) = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) } {
+        let mut viewport = D3D11_VIEWPORT::default();
+        let mut count = 1;
+        unsafe { (context.vtable().RSGetViewports)(raw, &mut count, &mut viewport) };
+        state.viewport = [
+            viewport.TopLeftX,
+            viewport.TopLeftY,
+            viewport.Width,
+            viewport.Height,
+        ];
+    }
+    let jitter = crate::sr_stage::STAGE.jitter_uv();
+    state.jitter = [
+        jitter.current_u,
+        jitter.current_v,
+        jitter.previous_u,
+        jitter.previous_v,
     ];
+    state
 }
