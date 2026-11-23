@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::sys::rsf_vkfg_image as Image;
+use crate::vulkan_fg_resources::Image;
 use ash::vk::{self, Handle as _};
 use std::ffi::c_void;
 

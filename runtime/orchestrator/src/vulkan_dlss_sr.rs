@@ -16,8 +16,9 @@ pub(crate) const fn native_leaves() -> Option<&'static Platform> {
 }
 use self::commands::Dispatch;
 use crate::sys::{RSF_SLVK_ABI_VERSION, rsf_slvk_call, rsf_slvk_callback};
-use crate::sys::{rsf_slvk_sdk_constants, rsf_vkdlss_options, rsf_vkfg_image};
+use crate::sys::{rsf_slvk_sdk_constants, rsf_vkdlss_options};
 use crate::sys::{rsf_srvk_frame, rsf_srvk_image, rsf_srvk_setup};
+use crate::vulkan_fg_resources::Image as rsf_vkfg_image;
 use crate::vulkan_ownership::Claim;
 use crate::vulkan_sr::{
     GENERAL, History, R32_FLOAT, RG16_FLOAT, RGBA16_FLOAT, SAMPLED_USAGE, SHADER_READ,

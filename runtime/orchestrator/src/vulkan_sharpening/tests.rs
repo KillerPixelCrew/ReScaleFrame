@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::sys::rsf_vkfg_platform as ImageOps;
+use crate::vulkan_fg_resources::Platform as ImageOps;
 use rsf_game_sys::rsf_frame_record;
 use std::cell::RefCell;
 use std::collections::BTreeSet;

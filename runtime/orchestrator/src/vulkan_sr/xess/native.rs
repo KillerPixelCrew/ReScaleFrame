@@ -22,7 +22,7 @@ use crate::sdk_module::{
 };
 use crate::vulkan_fg_copy::Barrier;
 use crate::vulkan_fg_copy::ImageCopy;
-use crate::vulkan_fg_resources::device::rsf_core_vkfg_platform;
+use crate::vulkan_fg_resources::device::DEVICE_PLATFORM;
 use crate::vulkan_sharpening::Host as Sharpen;
 use crate::vulkan_sharpening::{
     rsf_sharpenvk_host_clear, rsf_sharpenvk_host_destroy, rsf_sharpenvk_host_retire,
@@ -337,7 +337,7 @@ pub(super) static NATIVE_OPS: XessOps = XessOps {
     destroy_context,
     bind_device,
     image_user,
-    images: &rsf_core_vkfg_platform,
+    images: &DEVICE_PLATFORM,
     velocity,
     barrier: record_barrier,
     copy: record_copy,

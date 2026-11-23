@@ -1,17 +1,56 @@
 // SPDX-License-Identifier: MIT
-use crate::sys::{
-    RSF_FGVK_FRAME_SLOTS, rsf_fgvk_frame_slot as Slot, rsf_fgvk_submit_plan as SubmitPlan,
-    rsf_fgvk_timeline as Timeline,
-};
+
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_RESET,
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
 };
 use std::ffi::c_void;
 use std::mem::offset_of;
-use std::{ptr, slice};
+use std::ptr;
 
-const SLOTS: usize = RSF_FGVK_FRAME_SLOTS as usize;
+/// Recording slots per Vulkan FG owner.
+pub(crate) const FRAME_SLOTS: u32 = 6;
+const SLOTS: usize = FRAME_SLOTS as usize;
+
+/// One recording slot: the leased source record, its prepare and HUD-less command buffers and
+/// what was recorded, submitted and is still pending for them.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct FrameSlot {
+    pub(crate) record: rsf_frame_record,
+    pub(crate) recording_sequence: u64,
+    pub(crate) prepare_commands: *mut c_void,
+    pub(crate) hudless_commands: *mut c_void,
+    pub(crate) guides: u32,
+    pub(crate) prepared: u32,
+    pub(crate) hudless: u32,
+    pub(crate) submitted_prepare: u32,
+    pub(crate) submitted_hudless: u32,
+    pub(crate) recorded_prepare: u32,
+    pub(crate) recorded_hudless: u32,
+    pub(crate) source_pending: u32,
+    pub(crate) consumer_pending: u32,
+    pub(crate) completion_unknown: u32,
+}
+use self::FrameSlot as Slot;
+
+/// The owner's last prepared source and its recording and presented sequence numbers.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct Timeline {
+    pub(crate) last_prepared: rsf_frame_record,
+    pub(crate) recording_sequence: u64,
+    pub(crate) presented_sequence: u64,
+}
+
+/// What one submission notification did: fences to arm and recordings it discarded.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SubmitPlan {
+    pub(crate) fences: u32,
+    pub(crate) discarded_prepare: u32,
+    pub(crate) discarded_hudless: u32,
+}
 
 /// The recording slot of a frame ID, shared by every Vulkan FG provider.
 pub(crate) fn slot_index(frame: u64) -> usize {
@@ -188,17 +227,14 @@ fn unsubmitted(slot: &Slot) -> bool {
         || (slot.recorded_hudless != 0 && slot.submitted_hudless == 0)
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_core_fgvk_unsubmitted(slot: &Slot) -> u32 {
     u32::from(unsubmitted(slot))
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_core_fgvk_can_prepare(slot: &Slot) -> u32 {
     u32::from(slot.completion_unknown == 0 && !unsubmitted(slot))
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_core_fgvk_prepare_begin(
     timeline: &mut Timeline,
     slot: &mut Slot,
@@ -225,13 +261,11 @@ pub(super) extern "C" fn rsf_core_fgvk_prepare_begin(
     slot.hudless_commands = ptr::null_mut();
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_core_fgvk_prepare_accepted(timeline: &mut Timeline, slot: &mut Slot) {
     slot.guides = 1;
     timeline.last_prepared = slot.record;
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_core_fgvk_hudless_begin(
     slot: &mut Slot,
     record: &rsf_frame_record,
@@ -314,7 +348,8 @@ pub(super) fn submission_plan(
     out
 }
 
-#[unsafe(no_mangle)]
+// The former C entry over submission_plan; only the unit tests below still drive it.
+#[cfg(test)]
 unsafe extern "C" fn rsf_core_fgvk_submitted(
     slots: *const *mut Slot,
     commands: *const *mut c_void,
@@ -330,7 +365,7 @@ unsafe extern "C" fn rsf_core_fgvk_submitted(
         return;
     }
     let slots = unsafe { slots.cast::<[*mut Slot; SLOTS]>().read() };
-    let commands = unsafe { slice::from_raw_parts(commands, count as usize) };
+    let commands = unsafe { std::slice::from_raw_parts(commands, count as usize) };
     // The native caller supplies six distinct slots tied to its resource ring.
     *out = submission_plan(slots.map(|slot| unsafe { &mut *slot }), commands);
 }
@@ -339,7 +374,6 @@ fn matches_slot(slot: &Slot, source_frame: u64, identity_matches: u32) -> bool {
     identity_matches != 0 && source_frame != 0 && slot.record.frame_id == source_frame
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_core_fgvk_present_candidate(
     timeline: &Timeline,
     slot: &Slot,
@@ -360,7 +394,6 @@ pub(super) extern "C" fn rsf_core_fgvk_present_candidate(
     )
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_core_fgvk_presented(
     timeline: &mut Timeline,
     slot: &Slot,

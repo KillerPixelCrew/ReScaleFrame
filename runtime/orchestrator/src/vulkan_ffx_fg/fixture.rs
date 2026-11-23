@@ -11,9 +11,8 @@ use super::{
     rsf_ffxgvk_hudless, rsf_ffxgvk_images, rsf_ffxgvk_prepare, rsf_ffxgvk_present,
     rsf_ffxgvk_present_source, rsf_ffxgvk_submitted,
 };
-use crate::sys::{
-    RSF_FGVK_ABI_VERSION, rsf_fgvk_frame, rsf_fgvk_status, rsf_srvk_image, rsf_vkfg_image,
-};
+use crate::sys::{RSF_FGVK_ABI_VERSION, rsf_fgvk_frame, rsf_fgvk_status, rsf_srvk_image};
+use crate::vulkan_fg_resources::Image as rsf_vkfg_image;
 use crate::vulkan_fg_resources::{rsf_core_vkfg_ensure_image, rsf_core_vkfg_release_image};
 use ash::vk::{self, Handle};
 use rsf_game_sys::backend_result::{

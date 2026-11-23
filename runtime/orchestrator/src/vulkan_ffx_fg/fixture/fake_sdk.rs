@@ -12,15 +12,14 @@ use super::fake_gpu::{
 };
 use super::rsf_fixture_ffx_refused_second_owner;
 use crate::sdk_module::Loader;
-use crate::sys::{
-    RSF_FGVK_ABI_VERSION, RSF_SRVK_ABI_VERSION, rsf_fgvk_setup, rsf_vk_function, rsf_vkfg_platform,
-};
+use crate::sys::{RSF_FGVK_ABI_VERSION, RSF_SRVK_ABI_VERSION, rsf_fgvk_setup, rsf_vk_function};
 use crate::vulkan_ffx_fg::sdk::{Host, rsf_ffxgvk_guard_memory, rsf_ffxgvk_guard_resolve};
 use crate::vulkan_ffx_fg::{
     Owner, rsf_core_ffxgvk_create_sdk, rsf_core_ffxgvk_wsi_borrow, rsf_core_ffxgvk_wsi_return,
 };
+use crate::vulkan_fg_resources::Platform as rsf_vkfg_platform;
 use crate::vulkan_fg_resources::device::{
-    Device, rsf_core_vkfg_device_memory, rsf_core_vkfg_load_device, rsf_core_vkfg_platform,
+    DEVICE_PLATFORM, Device, rsf_core_vkfg_device_memory, rsf_core_vkfg_load_device,
 };
 use crate::vulkan_fg_wsi::Callback;
 use ash::vk::{self, Handle};
@@ -655,7 +654,7 @@ pub(super) extern "C" fn rsf_fixture_ffx_gpu() -> *mut c_void {
 }
 
 pub(super) fn rsf_fixture_ffx_platform() -> &'static rsf_vkfg_platform {
-    &rsf_core_vkfg_platform
+    &DEVICE_PLATFORM
 }
 
 fn hooks() -> WsiDispatch {

@@ -6,10 +6,11 @@
 use super::*;
 use crate::frame_capture_vk::sr_capture_inputs;
 use crate::sdk_module::{Loader, SdkModule};
-use crate::sys::{rsf_vkfg_image as OwnedImage, rsf_vkfg_platform as ImageOps};
 use crate::vulkan_fg_copy::{
     Barrier, BarrierFn, CopyFn, ImageCopy, TRANSFER_SRC, UNDEFINED, record_shader_read_copy,
 };
+use crate::vulkan_fg_resources::Image as OwnedImage;
+use crate::vulkan_fg_resources::Platform as ImageOps;
 use crate::vulkan_fg_resources::{ensure_image, rsf_core_vkfg_release_image};
 use rsf_game_sys::backend_result::{FEATURE_FAILED, LOAD_FAILED, MISSING_ENTRY_POINT};
 use std::ffi::CString;

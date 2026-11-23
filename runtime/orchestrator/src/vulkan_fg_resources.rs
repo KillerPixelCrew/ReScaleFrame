@@ -2,11 +2,54 @@
 use rsf_game_sys::backend_result::{INIT_FAILED, NOT_READY};
 pub(super) mod device;
 
-use crate::sys::rsf_fgvk_frame_slot as Slot;
-use crate::sys::{
-    rsf_vkfg_fences as Fences, rsf_vkfg_image as Image, rsf_vkfg_platform as Platform,
-};
+use crate::vulkan_fg_frames::FrameSlot as Slot;
 use std::ffi::c_void;
+
+type Device = *mut c_void;
+
+/// A private Vulkan image the Vulkan FG and SR owners allocate through `Platform`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Image {
+    pub(crate) image: u64,
+    pub(crate) memory: u64,
+    pub(crate) view: u64,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) format: u32,
+    pub(crate) usage: u32,
+    pub(crate) initialized: u32,
+}
+
+/// The source and consumer completion fences of one recording slot.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Fences {
+    pub(crate) source: u64,
+    pub(crate) consumer: u64,
+}
+
+/// Vulkan image, memory and fence leaves: `device::DEVICE_PLATFORM` in production, CPU
+/// fakes in the unit tests and fixtures. Every entry takes the device handle first.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Platform {
+    pub(crate) local_memory_types: Option<unsafe extern "C" fn(Device) -> u32>,
+    pub(crate) create_image:
+        Option<unsafe extern "C" fn(Device, u32, u32, u32, u32, *mut u64) -> i32>,
+    pub(crate) requirements: Option<unsafe extern "C" fn(Device, u64, *mut u64, *mut u32)>,
+    pub(crate) allocate: Option<unsafe extern "C" fn(Device, u64, u32, *mut u64) -> i32>,
+    pub(crate) bind: Option<unsafe extern "C" fn(Device, u64, u64) -> i32>,
+    pub(crate) create_view: Option<unsafe extern "C" fn(Device, u64, u32, *mut u64) -> i32>,
+    pub(crate) destroy_view: Option<unsafe extern "C" fn(Device, u64)>,
+    pub(crate) destroy_image: Option<unsafe extern "C" fn(Device, u64)>,
+    pub(crate) free_memory: Option<unsafe extern "C" fn(Device, u64)>,
+    pub(crate) create_fence: Option<unsafe extern "C" fn(Device, *mut u64) -> i32>,
+    pub(crate) destroy_fence: Option<unsafe extern "C" fn(Device, u64)>,
+    pub(crate) wait_fence: Option<unsafe extern "C" fn(Device, u64, u64) -> i32>,
+    pub(crate) reset_fence: Option<unsafe extern "C" fn(Device, u64) -> i32>,
+    pub(crate) submit_fence: Option<unsafe extern "C" fn(Device, u64) -> i32>,
+}
 
 const FENCE_TIMEOUT_NS: u64 = 15_000_000_000;
 pub(super) const SAMPLED_TRANSFER: u32 = 0x7;
@@ -23,7 +66,6 @@ impl Drop for Replacement<'_> {
     }
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_core_vkfg_release_image(
     platform: &Platform,
     user: *mut c_void,
@@ -43,7 +85,6 @@ pub(super) extern "C" fn rsf_core_vkfg_release_image(
     *image = Image::default();
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_core_vkfg_ensure_image(
     platform: &Platform,
     user: *mut c_void,
@@ -65,7 +106,6 @@ pub(super) extern "C" fn rsf_core_vkfg_ensure_image(
     )
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_vkfg_ensure_image_usage(
     platform: &Platform,
     user: *mut c_void,
@@ -209,7 +249,6 @@ fn wait_pending(platform: &Platform, user: *mut c_void, fence: u64, pending: u32
             && unsafe { (platform.wait_fence.unwrap())(user, fence, FENCE_TIMEOUT_NS) } == 0)
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_core_vkfg_prepare_fences(
     platform: &Platform,
     user: *mut c_void,
@@ -240,7 +279,6 @@ pub(super) extern "C" fn rsf_core_vkfg_prepare_fences(
     0
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_core_vkfg_fence_submission(
     platform: &Platform,
     user: *mut c_void,
@@ -266,7 +304,6 @@ pub(super) extern "C" fn rsf_core_vkfg_fence_submission(
     }
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_core_vkfg_release_fences(
     platform: &Platform,
     user: *mut c_void,

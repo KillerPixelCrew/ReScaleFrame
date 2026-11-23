@@ -111,8 +111,6 @@ fn bindings() {
         "runtime/orchestrator/src/fg12_platform.h",
         "runtime/orchestrator/src/native_fg_xess_vulkan.h",
         "runtime/orchestrator/src/render_host_foreign.h",
-        "runtime/orchestrator/src/vulkan_fg_resources.h",
-        "runtime/orchestrator/src/vulkan_fg_frames.h",
         "runtime/graphics/src/sharpening/d3d11.h",
         "runtime/vulkan/fsr4-fg/bridge_api.h",
         // Compiled into this crate through tests/graphics_fixture.rs.

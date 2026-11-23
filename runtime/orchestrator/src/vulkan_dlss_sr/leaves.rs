@@ -8,12 +8,12 @@ use crate::frame_capture_vk::{
     rsf_core_capture_vk_flush, rsf_core_capture_vk_initialize, rsf_core_capture_vk_provider,
     rsf_core_capture_vk_record, rsf_core_capture_vk_retire,
 };
-use crate::sys::rsf_vkfg_image as Image;
 use crate::sys::{rsf_srvk_frame as Frame, rsf_srvk_image as SourceImage, rsf_srvk_setup as Setup};
 use crate::sys::{rsf_vkdlss_optimal as Optimal, rsf_vkdlss_options as Options};
+use crate::vulkan_fg_resources::Image;
 use crate::vulkan_fg_resources::device::{
-    Device, rsf_core_vkfg_device_destroy, rsf_core_vkfg_device_memory, rsf_core_vkfg_load_device,
-    rsf_core_vkfg_platform,
+    DEVICE_PLATFORM, Device, rsf_core_vkfg_device_destroy, rsf_core_vkfg_device_memory,
+    rsf_core_vkfg_load_device,
 };
 use crate::vulkan_fg_resources::{rsf_core_vkfg_ensure_image_usage, rsf_core_vkfg_release_image};
 use crate::vulkan_sharpening::Host as Sharpen;
@@ -198,7 +198,7 @@ unsafe extern "C" fn rsf_core_vkdlss_sdk_allocate(
 ) -> u32 {
     let gpu = native(handle).gpu;
     rsf_core_vkfg_ensure_image_usage(
-        &rsf_core_vkfg_platform,
+        &DEVICE_PLATFORM,
         gpu.cast(),
         unsafe { &mut *image },
         width,
@@ -211,7 +211,7 @@ unsafe extern "C" fn rsf_core_vkdlss_sdk_allocate(
 
 unsafe extern "C" fn rsf_core_vkdlss_sdk_free_image(handle: *mut c_void, image: *mut Image) {
     let gpu = native(handle).gpu;
-    rsf_core_vkfg_release_image(&rsf_core_vkfg_platform, gpu.cast(), unsafe { &mut *image });
+    rsf_core_vkfg_release_image(&DEVICE_PLATFORM, gpu.cast(), unsafe { &mut *image });
 }
 
 unsafe extern "C" fn rsf_core_vkdlss_sdk_constants(

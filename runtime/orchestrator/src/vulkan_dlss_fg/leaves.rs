@@ -293,13 +293,7 @@ unsafe extern "C" fn rsf_core_dlgvk_sdk_start_capture(handle: Handle) -> i32 {
     let native = native(handle);
     unsafe { rsf_core_dlss_capture_close(native.present) };
     native.present = ptr::null_mut();
-    unsafe {
-        rsf_core_dlss_capture_open(
-            &CAPTURE_LEAVES,
-            &native.setup,
-            &mut native.present,
-        )
-    }
+    unsafe { rsf_core_dlss_capture_open(&CAPTURE_LEAVES, &native.setup, &mut native.present) }
 }
 
 unsafe extern "C" fn rsf_core_dlgvk_sdk_capture(
@@ -381,7 +375,7 @@ unsafe impl Sync for crate::vulkan_dlss_fg_abi::Platform {}
 /// fixture/sdk.rs copies it and replaces the SDK, session invoke and worker epoch entries.
 pub(super) static LEAVES: crate::vulkan_dlss_fg_abi::Platform =
     crate::vulkan_dlss_fg_abi::Platform {
-        gpu: &crate::vulkan_fg_resources::device::rsf_core_vkfg_platform,
+        gpu: &crate::vulkan_fg_resources::device::DEVICE_PLATFORM,
         open: rsf_core_dlgvk_sdk_open,
         close: rsf_core_dlgvk_sdk_close,
         prepare_chain: rsf_core_dlgvk_sdk_prepare_chain,

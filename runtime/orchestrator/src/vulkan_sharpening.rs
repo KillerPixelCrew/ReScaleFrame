@@ -10,7 +10,8 @@ use crate::sharpening_policy::{FILTERS, effective_mode};
 use crate::sys::rsf_sharpening_options as Options;
 
 use crate::sys::{rsf_srvk_frame as Frame, rsf_srvk_image as Image, rsf_srvk_setup as Setup};
-use crate::sys::{rsf_vkfg_image as OwnedImage, rsf_vkfg_platform as ImageOps};
+use crate::vulkan_fg_resources::Image as OwnedImage;
+use crate::vulkan_fg_resources::Platform as ImageOps;
 use crate::vulkan_fg_resources::{ensure_image, rsf_core_vkfg_release_image};
 use crate::vulkan_sr::{R32_FLOAT, RGBA16_FLOAT, SHADER_READ, STORAGE_USAGE, TRANSFER_SRC_USAGE};
 use std::ffi::{c_char, c_void};

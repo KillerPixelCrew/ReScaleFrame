@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::dx12_vulkan_platform::lookup;
-use crate::sys::rsf_vkfg_image as Image;
 use crate::sys::{rsf_srvk_image as Source, rsf_srvk_setup};
+use crate::vulkan_fg_resources::Image;
 use ash::vk::{self, Handle as _};
 use std::ffi::c_void;
 use std::{mem, ptr};

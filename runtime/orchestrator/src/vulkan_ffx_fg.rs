@@ -16,16 +16,18 @@ use crate::allocate_handle;
 use crate::sdk_module::{FIDELITYFX_DLL, SdkModule};
 use crate::sr_session::has_capacity;
 use crate::sys::{
-    RSF_FGVK_ABI_VERSION, RSF_FGVK_FRAME_SLOTS, rsf_fgvk_frame as Frame,
-    rsf_fgvk_frame_slot as Recording, rsf_fgvk_setup as Setup, rsf_fgvk_status as Status,
-    rsf_fgvk_timeline as RecordingTimeline,
+    RSF_FGVK_ABI_VERSION, rsf_fgvk_frame as Frame, rsf_fgvk_setup as Setup,
+    rsf_fgvk_status as Status,
 };
 use crate::sys::{RSF_SRVK_ABI_VERSION, rsf_srvk_image as Image};
-use crate::sys::{
-    rsf_vkfg_fences as Fences, rsf_vkfg_image as PrivateImage, rsf_vkfg_platform as Resources,
-};
 use crate::vulkan_fg_copy::{BarrierFn, CopyFn, SHADER_READ, record_shader_read_copy};
+use crate::vulkan_fg_frames::FRAME_SLOTS as RSF_FGVK_FRAME_SLOTS;
+use crate::vulkan_fg_frames::FrameSlot as Recording;
+use crate::vulkan_fg_frames::Timeline as RecordingTimeline;
 use crate::vulkan_fg_frames::*;
+use crate::vulkan_fg_resources::Fences;
+use crate::vulkan_fg_resources::Image as PrivateImage;
+use crate::vulkan_fg_resources::Platform as Resources;
 use crate::vulkan_fg_resources::{
     rsf_core_vkfg_ensure_image, rsf_core_vkfg_fence_submission, rsf_core_vkfg_prepare_fences,
     rsf_core_vkfg_release_fences, rsf_core_vkfg_release_image,

@@ -2,8 +2,8 @@
 use crate::allocate_handle;
 use crate::dx12_vulkan_platform::{device_local_mask, lookup};
 use crate::sys::rsf_fgvk_setup;
-use crate::sys::rsf_vkfg_platform;
 use crate::sys::{rsf_srvk_setup, rsf_vk_function};
+use crate::vulkan_fg_resources::Platform as rsf_vkfg_platform;
 use crate::vulkan_timing::{timing_begin, timing_end};
 use ash::vk::{self, Handle};
 use std::{
@@ -106,7 +106,6 @@ impl Device {
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_core_vkfg_load_device(
     graphics: &rsf_srvk_setup,
     fg: *const rsf_fgvk_setup,
@@ -126,14 +125,12 @@ pub(crate) extern "C" fn rsf_core_vkfg_bind_images(
     })
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_core_vkfg_device_destroy(device: *mut Device) {
     if !device.is_null() {
         unsafe { drop(Box::from_raw(device)) };
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_vkfg_device_memory(
     device: &mut Device,
     properties: &vk::PhysicalDeviceMemoryProperties,
@@ -141,7 +138,6 @@ pub(crate) extern "C" fn rsf_core_vkfg_device_memory(
     device.local_types = device_local_mask(properties);
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_core_vkfg_device_wait_timing(
     device: &mut Device,
     stage: *const c_char,
@@ -322,8 +318,7 @@ unsafe extern "C" fn submit_fence(user: *mut c_void, fence: u64) -> i32 {
     unsafe { (fences.submit)(fences.queue_user, 0, ptr::null(), fence) }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) static rsf_core_vkfg_platform: rsf_vkfg_platform = rsf_vkfg_platform {
+pub(crate) static DEVICE_PLATFORM: rsf_vkfg_platform = rsf_vkfg_platform {
     local_memory_types: Some(local_memory_types),
     create_image: Some(create_image),
     requirements: Some(requirements),

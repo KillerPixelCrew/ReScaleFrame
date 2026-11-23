@@ -25,8 +25,8 @@ use crate::sys::{rsf_vk_function, rsf_vk_get_proc};
 use crate::vulkan_fg_copy::ImageCopy;
 use crate::vulkan_fg_copy::{Barrier, rsf_core_vkfg_record_barrier, rsf_core_vkfg_record_copy};
 use crate::vulkan_fg_resources::device::{
-    Device, rsf_core_vkfg_device_destroy, rsf_core_vkfg_device_memory,
-    rsf_core_vkfg_device_wait_timing, rsf_core_vkfg_load_device, rsf_core_vkfg_platform,
+    DEVICE_PLATFORM, Device, rsf_core_vkfg_device_destroy, rsf_core_vkfg_device_memory,
+    rsf_core_vkfg_device_wait_timing, rsf_core_vkfg_load_device,
 };
 use crate::vulkan_fg_wsi::{
     QueuePresent, Scope, rsf_core_vkfg_device_proc, rsf_core_vkfg_drain,
@@ -1179,5 +1179,5 @@ pub(super) static OPS: Ops = Ops {
     fence_timing,
     timing_begin: rsf_core_vk_timing_begin,
     timing_end: rsf_core_vk_timing_end,
-    resources: &rsf_core_vkfg_platform,
+    resources: &DEVICE_PLATFORM,
 };

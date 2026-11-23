@@ -5,9 +5,10 @@ use crate::sharpening_policy;
 use crate::sr_session::has_capacity;
 use crate::sys::*;
 use crate::sys::{RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK, RSF_OVERLAY_SR_QUALITY_STANDARD_MASK};
-use crate::sys::{rsf_vkfg_image as OwnedImage, rsf_vkfg_platform as ImageOps};
 use crate::vulkan_dispatch::promoted_device_proc_alias;
 use crate::vulkan_fg_copy::{Barrier, BarrierFn, CopyFn, ImageCopy, TRANSFER_SRC, UNDEFINED};
+use crate::vulkan_fg_resources::Image as OwnedImage;
+use crate::vulkan_fg_resources::Platform as ImageOps;
 use crate::vulkan_fg_resources::{
     MemoryChoice, ensure_image_with_memory, rsf_core_vkfg_release_image,
 };
@@ -455,7 +456,7 @@ static NATIVE: Platform = Platform {
         destroy_effect: graphics::destroy_effect,
         plan: graphics::plan,
         image_user: graphics::images,
-        images: &crate::vulkan_fg_resources::device::rsf_core_vkfg_platform,
+        images: &crate::vulkan_fg_resources::device::DEVICE_PLATFORM,
         memory_type_count: graphics::memory_count,
         barrier: graphics::barrier,
         clear_color_zero: graphics::clear,

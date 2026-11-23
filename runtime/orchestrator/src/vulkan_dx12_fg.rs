@@ -3,16 +3,19 @@ use crate::allocate_handle;
 use crate::sr_session::has_capacity;
 use crate::sys::rsf_dx12vk_shared_image as SharedImage;
 use crate::sys::{
-    RSF_FGVK_ABI_VERSION, RSF_FGVK_FRAME_SLOTS, rsf_fgvk_frame as Frame,
-    rsf_fgvk_frame_slot as Recording, rsf_fgvk_setup as Setup, rsf_fgvk_status as Status,
-    rsf_fgvk_timeline as RecordingTimeline,
+    RSF_FGVK_ABI_VERSION, rsf_fgvk_frame as Frame, rsf_fgvk_setup as Setup,
+    rsf_fgvk_status as Status,
 };
 use crate::sys::{rsf_srvk_image as Image, rsf_srvk_setup as Graphics};
-use crate::sys::{rsf_vkfg_image as OwnedImage, rsf_vkfg_platform as ImageOps};
 use crate::vulkan_external_copy::{
     self, ALL_COMMANDS, Barrier, FAMILY_EXTERNAL, GENERAL, TRANSFER_DST, Transfer, UNDEFINED,
 };
+use crate::vulkan_fg_frames::FRAME_SLOTS as RSF_FGVK_FRAME_SLOTS;
+use crate::vulkan_fg_frames::FrameSlot as Recording;
+use crate::vulkan_fg_frames::Timeline as RecordingTimeline;
 use crate::vulkan_fg_frames::*;
+use crate::vulkan_fg_resources::Image as OwnedImage;
+use crate::vulkan_fg_resources::Platform as ImageOps;
 use crate::vulkan_fg_resources::{ensure_image, rsf_core_vkfg_release_image};
 use crate::vulkan_sr::{SAMPLED_USAGE, TRANSFER_SRC_USAGE, valid_image};
 use ash::vk;
@@ -56,9 +59,9 @@ const PRESENT_WAIT_LIMIT: usize = 16;
 const SUBMIT_WAIT_CAPACITY: usize = PRESENT_WAIT_LIMIT + 1;
 pub(super) const SLOT_COUNT: usize = RSF_FGVK_FRAME_SLOTS as usize;
 
-pub(crate) mod platform;
 #[cfg(feature = "test-fixtures")]
 mod fsr4_state_fixture;
+pub(crate) mod platform;
 
 pub(super) type Handle = *mut c_void;
 pub(super) type Release = unsafe extern "C" fn(Handle) -> i32;
