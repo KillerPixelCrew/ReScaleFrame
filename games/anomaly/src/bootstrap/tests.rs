@@ -27,49 +27,43 @@ static SESSION: u8 = 0;
 fn register_options(_: &[u16]) {
     REGISTERED.fetch_add(1, SeqCst);
 }
-unsafe extern "C" fn sr(_: *const u16, configure: bool, _: rsf_game_log_fn) -> bool {
+unsafe fn sr(_: *const u16, configure: bool, _: rsf_game_log_fn) -> bool {
     if configure {
         SR.fetch_add(1, SeqCst);
     }
     true
 }
-unsafe extern "C" fn motion(_: *const u16, _: rsf_game_log_fn) {
+unsafe fn motion(_: *const u16, _: rsf_game_log_fn) {
     MOTION.fetch_add(1, SeqCst);
 }
-unsafe extern "C" fn fg(
-    _: *const u16,
-    configure: bool,
-    _: HMODULE,
-    _: usize,
-    _: rsf_game_log_fn,
-) -> bool {
+unsafe fn fg(_: *const u16, configure: bool, _: HMODULE, _: usize, _: rsf_game_log_fn) -> bool {
     if configure {
         FG.fetch_add(1, SeqCst);
     }
     true
 }
-unsafe extern "C" fn fg_installed() -> bool {
+unsafe fn fg_installed() -> bool {
     FG.load(SeqCst) != 0
 }
-unsafe extern "C" fn input_observation(_: *mut *const c_char) -> bool {
+unsafe fn input_observation(_: *mut *const c_char) -> bool {
     RECEIPTS.fetch_add(1, SeqCst);
     true
 }
-unsafe extern "C" fn publish_input_observer() {
+unsafe fn publish_input_observer() {
     PUBLISHED.fetch_add(1, SeqCst);
 }
-unsafe extern "C" fn input_hook(_: HMODULE, _: usize, _: *mut *const c_char) -> bool {
+unsafe fn input_hook(_: HMODULE, _: usize, _: *mut *const c_char) -> bool {
     let attempt = INPUT.fetch_add(1, SeqCst);
     if attempt <= 1 && PUBLISHED.load(SeqCst) != 1 {
         OPTIONS_VALID.store(false, SeqCst);
     }
     INPUT_ACCEPTS.load(SeqCst)
 }
-unsafe extern "C" fn overlay(_: HMODULE, _: *const u16, _: rsf_game_log_fn) -> bool {
+unsafe fn overlay(_: HMODULE, _: *const u16, _: rsf_game_log_fn) -> bool {
     OVERLAY.fetch_add(1, SeqCst);
     OVERLAY_ACCEPTS.load(SeqCst)
 }
-unsafe extern "C" fn overlay_sink() {
+unsafe fn overlay_sink() {
     SINK.fetch_add(1, SeqCst);
 }
 unsafe extern "C" fn prepare(options: *const SessionOptions, session: *mut *mut c_void) -> i32 {
@@ -132,15 +126,15 @@ fn counts() -> [u32; 9] {
 #[test]
 fn retry_repeats_only_unfinished_steps() {
     let leaves = Leaves {
-        sr: Some(sr),
-        motion: Some(motion),
-        fg: Some(fg),
-        fg_installed: Some(fg_installed),
-        input_observation: Some(input_observation),
-        publish_input_observer: Some(publish_input_observer),
-        input_hook: Some(input_hook),
-        overlay: Some(overlay),
-        overlay_sink: Some(overlay_sink),
+        sr,
+        motion,
+        fg,
+        fg_installed,
+        input_observation,
+        publish_input_observer,
+        input_hook,
+        overlay,
+        overlay_sink,
     };
     let ini: Vec<u16> = "C:\\anomaly.ini\0".encode_utf16().collect();
     let request = Request {

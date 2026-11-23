@@ -17,8 +17,7 @@ extern "C" {
 // sr_stage_platform.c.
 bool rsf_anomaly_sr_configure_native(const wchar_t* ini, bool apply, rsf_game_log_fn) RSF_STAGE_NOEXCEPT;
 bool rsf_anomaly_sr_install_native(void* image, size_t build) RSF_STAGE_NOEXCEPT;
-// sr_stage.rs. HW.pBaseZB of the build (sr_profile.rs), or 0 for an unknown index.
-uint32_t rsf_anomaly_sr_depth_rva(size_t build) RSF_STAGE_NOEXCEPT;
+// sr_stage.rs.
 bool rsf_anomaly_sr_stage_quiesce(void) RSF_STAGE_NOEXCEPT;
 void rsf_anomaly_sr_stage_frame_end(void) RSF_STAGE_NOEXCEPT;
 

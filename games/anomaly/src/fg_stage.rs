@@ -11,6 +11,7 @@ mod tests;
 mod window;
 
 use self::camera::Camera;
+#[cfg(any(test, feature = "native-entry", feature = "fg-fixture"))]
 pub(crate) use self::options::CaptureSettings;
 use self::options::{Options, backend_name};
 use crate::fg_inputs::Frame as InputFrame;
@@ -119,7 +120,6 @@ impl EngineBindings {
         })
     }
 }
-
 
 struct Tables {
     present: PresentBindings,
@@ -764,11 +764,12 @@ fn install_runtime(runtime: HMODULE, depth_rva: u32, platform: *const Platform) 
         .is_some_and(|tables| Stage::install(options, log, tables, platform, depth_rva))
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_fg_installed() -> bool {
+#[cfg(feature = "native-entry")]
+pub(crate) fn rsf_anomaly_fg_installed() -> bool {
     installed().is_some()
 }
 
+#[cfg(feature = "native-entry")]
 pub(crate) fn scope_hold(fallback: u32) -> u32 {
     installed().map_or_else(
         || fallback.clamp(1, 64),
@@ -776,6 +777,7 @@ pub(crate) fn scope_hold(fallback: u32) -> u32 {
     )
 }
 
+#[cfg(feature = "native-entry")]
 pub(crate) fn set_scope_hold(frames: u32) {
     if let Some(stage) = installed() {
         stage
@@ -788,6 +790,7 @@ pub(crate) fn set_scope_hold(frames: u32) {
 }
 
 // The overlay caller holds the NUL-terminated path through the reload.
+#[cfg(feature = "native-entry")]
 pub(crate) unsafe fn reload_capture(ini: *const u16) {
     if let Some(stage) = installed() {
         let settings = unsafe { CaptureSettings::read(ini) };
@@ -1161,7 +1164,9 @@ fn stage_status() -> Status {
         fed: counts.fed,
         presented: counts.presented,
         unpresented: counts.unpresented,
-        runtime_tagged: stage.runtime_status().map_or(0, |runtime| runtime.tagged_frames),
+        runtime_tagged: stage
+            .runtime_status()
+            .map_or(0, |runtime| runtime.tagged_frames),
         captures: stage.options.capture.lock().unwrap().total,
     }
 }

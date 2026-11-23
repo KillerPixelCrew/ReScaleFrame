@@ -10,6 +10,7 @@ use crate::adapter_options::rsf_anomaly_sr_persist_text;
 use crate::engine_guards::{Image, sr_guard_failure};
 use crate::engine_slots::rsf_anomaly_slot_install;
 use crate::engine_slots::rsf_anomaly_slot_set;
+use crate::host_log::Log;
 use crate::ini::rsf_anomaly_sr_ini_int;
 use crate::ini::rsf_anomaly_sr_ini_text;
 use crate::native_geometry::rsf_anomaly_geometry_active;
@@ -50,14 +51,13 @@ use crate::sr_profile::{
     SITE_SET_P, SITE_SUN_CASCADES, WORLD_TARGETS, rsf_anomaly_sr_engine_layout,
 };
 use crate::sr_reconstruction::rsf_anomaly_sr_correct_position_constant;
-use crate::host_log::Log;
 use crate::sr_swap::{self as swap_owner, Handle};
 
 use crate::sys::{RSF_ANOMALY_OBSERVATION_ABI, rsf_anomaly_native_observation};
 use crate::sys::{
     RSF_ANOMALY_SWAP_MAKE_CREATED, RSF_ANOMALY_SWAP_MAKE_FAILED, RSF_ANOMALY_SWAP_SLOT_COUNT,
-    rsf_anomaly_swap_counters, rsf_anomaly_swap_request,
-    rsf_anomaly_swap_twins, rsf_anomaly_swap_view,
+    rsf_anomaly_swap_counters, rsf_anomaly_swap_request, rsf_anomaly_swap_twins,
+    rsf_anomaly_swap_view,
 };
 use crate::sys::{
     rsf_anomaly_sr_camera, rsf_anomaly_sr_controller, rsf_anomaly_sr_frame_facts,
@@ -212,7 +212,6 @@ fn context() -> Ptr {
     sr().and_then(|sr| read::<usize>(sr.hw_context_rva))
         .map_or(null_mut(), |value| value as Ptr)
 }
-
 
 // ---- the swap owner's host -----------------------------------------------------------------------------------------
 
@@ -937,7 +936,7 @@ extern "C" fn rsf_anomaly_sr_stage_install_build(
     STAGE.install(image, size, size, from_ref(selected).cast())
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_depth_rva(build: usize) -> u32 {
+#[cfg(feature = "native-entry")]
+pub(crate) fn rsf_anomaly_sr_depth_rva(build: usize) -> u32 {
     SR.get(build).map_or(0, |profile| profile.hw_base_zb_rva)
 }

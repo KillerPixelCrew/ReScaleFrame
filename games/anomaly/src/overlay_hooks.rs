@@ -691,8 +691,8 @@ unsafe extern "C" fn rsf_anomaly_overlay_before_resize(chain: *mut c_void) {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_overlay_install_default_input(
+#[cfg(feature = "native-entry")]
+pub(crate) fn rsf_anomaly_overlay_install_default_input(
     hooks: &HookOps,
     reason: &mut Reason,
 ) -> bool {

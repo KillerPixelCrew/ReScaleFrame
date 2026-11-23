@@ -78,7 +78,7 @@ impl Policy {
         }
     }
 
-    #[cfg(windows)]
+    #[cfg(all(windows, feature = "native-entry"))]
     pub(crate) fn scope_hold(&self) -> u32 {
         self.scope_hold
     }

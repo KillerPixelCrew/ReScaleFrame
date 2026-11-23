@@ -6,7 +6,6 @@
 /// Binds the Anomaly adapter's private headers. tests/game-sdk uses the observer records from here.
 fn bindings() {
     const HEADERS: &[&str] = &[
-        "bootstrap_platform.h",
         "engine_shader_includes.h",
         "fg_stage/fixture_platform.h",
         "fg_stage_platform.h",
