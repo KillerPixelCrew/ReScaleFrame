@@ -10,6 +10,7 @@ use rsf_game_sys::ffi_util::wide;
 use std::{
     ffi::{c_char, c_void},
     mem,
+    os::windows::ffi::OsStrExt,
     ptr::{self, null_mut},
     sync::OnceLock,
 };
@@ -331,35 +332,25 @@ fn device(runtime: *const u16, present: bool) -> i32 {
     result.0
 }
 
-fn argument_matches(argument: *const u16, expected: &str) -> bool {
-    let mut argument = argument;
-    for unit in wide(expected) {
-        if unsafe { *argument } != unit {
-            return false;
-        }
-        argument = unsafe { argument.add(1) };
-    }
-    true
-}
-
+/// The tests/fixture_main.c entry: no arguments runs the contract checks only;
+/// `--device <XeSS runtime> [--present]` also runs the device test.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fixture_xess_interop(argc: i32, argv: *const *const u16) -> i32 {
+extern "C" fn rsf_fixture_xess_interop() -> i32 {
     let result = contract();
     if result != 0 {
         return result;
     }
-    if argc == 1 {
+    let args: Vec<_> = std::env::args_os().collect();
+    if args.len() == 1 {
         println!(r#"{{"contract_checks":"passed","device_test":false}}"#);
         return 0;
     }
-    if !(3..=4).contains(&argc) {
-        return 13;
-    }
-    let args = unsafe { std::slice::from_raw_parts(argv, argc as usize) };
-    if !argument_matches(args[1], "--device")
-        || (argc == 4 && !argument_matches(args[3], "--present"))
+    if !(3..=4).contains(&args.len())
+        || args[1] != "--device"
+        || (args.len() == 4 && args[3] != "--present")
     {
         return 13;
     }
-    device(args[2], argc == 4)
+    let runtime: Vec<u16> = args[2].encode_wide().chain([0]).collect();
+    device(runtime.as_ptr(), args.len() == 4)
 }
