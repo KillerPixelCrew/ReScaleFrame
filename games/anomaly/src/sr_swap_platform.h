@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 // Records of the Rust swap owner (sr_swap.rs) that the SR stage leaves (sr_stage_platform.h) and the D3D11 host
-// share; build.rs binds them. sr_swap.h names the world slots of the same structures. Engine addresses are opaque
+// share; build.rs binds them. The world slots follow sr_profile.rs WORLD_TARGETS. Engine addresses are opaque
 // here: every engine read and write goes through the owner's guarded copies.
 #include <stdbool.h>
 #include <stddef.h>
