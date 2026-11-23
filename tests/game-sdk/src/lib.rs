@@ -20,14 +20,8 @@ mod sys {
 
 mod anomaly;
 mod contract;
-#[cfg(any(
-    feature = "cpu-fixtures",
-    feature = "vk-latency-fixtures"
-))]
-#[cfg(any(
-    feature = "cpu-fixtures",
-    feature = "vk-latency-fixtures"
-))]
+#[cfg(any(feature = "cpu-fixtures", feature = "vk-latency-fixtures"))]
+#[cfg(any(feature = "cpu-fixtures", feature = "vk-latency-fixtures"))]
 #[cfg(feature = "cpu-fixtures")]
 mod cpu_events;
 #[cfg(feature = "d3d11-host-fixture")]

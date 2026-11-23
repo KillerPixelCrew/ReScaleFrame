@@ -230,7 +230,11 @@ fn frame_policy() {
                 rsf_frame_allows_fg(&record) != 0,
             )
         };
-        assert_eq!((allows_sr, allows_fg), (sr, fg), "screen {screen} flags {flags}");
+        assert_eq!(
+            (allows_sr, allows_fg),
+            (sr, fg),
+            "screen {screen} flags {flags}"
+        );
     }
     // A record that advertises less than its full size allows nothing.
     record.flags = 0;

@@ -143,9 +143,9 @@ mod sync;
 mod wide;
 
 #[cfg(windows)]
-use rsf_game_sys::diagnostic_preferences;
-#[cfg(windows)]
 use rsf_fsr4_compat::ffx_version;
+#[cfg(windows)]
+use rsf_game_sys::diagnostic_preferences;
 #[cfg(all(windows, not(test)))]
 mod fg12;
 // Unit tests reach only the FG12 retirement policy; the owner calls native leaves.

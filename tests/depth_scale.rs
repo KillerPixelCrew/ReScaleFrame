@@ -279,7 +279,8 @@ fn run(gpu: &Device) -> TestResult {
         None,
     )?;
     check(
-        unsafe { rsf_depth_scale_reserve(raw.cast(), unsupported.as_raw()) } == 0 && read()? == original,
+        unsafe { rsf_depth_scale_reserve(raw.cast(), unsupported.as_raw()) } == 0
+            && read()? == original,
         "unsupported reserve refusal",
     )?;
 

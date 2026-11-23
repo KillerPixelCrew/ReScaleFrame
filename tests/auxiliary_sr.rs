@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use crate::d3d11_host_reduced::Products;
 use crate::native_regions::rsf_native_regions_release;
 use rsf_game_sys::{
     RSF_D3D11_AUXILIARY_COLOUR as COLOUR, RSF_D3D11_AUXILIARY_DEPTH_STENCIL as DEPTH,
     RSF_D3D11_AUXILIARY_RESTORE_CONTENTS as RESTORE,
 };
-use crate::d3d11_host_reduced::Products;
 use std::cell::{Cell, RefCell};
 use std::slice;
 use windows::Win32::Graphics::{
@@ -180,7 +180,15 @@ impl Transaction {
     fn reserve(&self, rig: &Device, pass: &Pass, surfaces: &[Surface], recovery: bool) -> bool {
         let context = rig.context.as_raw();
         let user = ptr::null_mut();
-        Products::reserve(&mut *self.0.borrow_mut(), context, pass, surfaces, None, user, recovery)
+        Products::reserve(
+            &mut *self.0.borrow_mut(),
+            context,
+            pass,
+            surfaces,
+            None,
+            user,
+            recovery,
+        )
     }
 
     fn prepare(&self, rig: &Device, pass: &Pass, surfaces: &[Surface]) -> bool {
