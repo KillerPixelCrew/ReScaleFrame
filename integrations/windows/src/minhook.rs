@@ -39,6 +39,8 @@ pub unsafe fn apply() -> bool {
     unsafe { MH_ApplyQueued() == OK }
 }
 
+// The XInput facts' enable and remove; the public calls below report the other outcomes.
+#[cfg(feature = "xinput-facts")]
 pub(crate) unsafe fn enable(target: *mut c_void) -> bool {
     unsafe { MH_EnableHook(target) == OK }
 }
@@ -49,6 +51,7 @@ pub unsafe fn disable(target: *mut c_void) -> bool {
     matches!(unsafe { MH_DisableHook(target) }, OK | ALREADY_DISABLED)
 }
 
+#[cfg(feature = "xinput-facts")]
 pub(crate) unsafe fn remove(target: *mut c_void) -> bool {
     unsafe { MH_RemoveHook(target) == OK }
 }

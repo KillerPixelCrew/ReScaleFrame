@@ -1,2 +1,2 @@
-rsf_add_rust_static(rsf_windows_input_facts rsf_rust_windows rsf-windows rsf_windows)
+rsf_add_rust_static(rsf_windows_input_facts rsf_rust_windows rsf-windows rsf_windows --features xinput-facts)
 target_link_libraries(rsf_windows_input_facts INTERFACE minhook bcrypt)

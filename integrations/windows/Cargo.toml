@@ -9,6 +9,10 @@ license.workspace = true
 [lib]
 crate-type = ["rlib", "staticlib"]
 
+[features]
+# The xinput_facts.h C exports, for the CMake rsf_windows_input_facts archive.
+xinput-facts = []
+
 [dependencies]
 rsf-game-sys = { path = "../../sdk/game" }
 rsf-minhook-sys = { path = "../../third_party/minhook" }
