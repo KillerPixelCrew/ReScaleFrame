@@ -84,7 +84,7 @@ def main():
              r"DESC_TYPE_OVERRIDE_VERSION)",
              # The SDK can throw C++ exceptions; callers contain them with
              # rsf_streamline_vk::sdk_api::guarded_or, which needs an unwinding ABI.
-             extra=["--override-abi", "C-unwind=PfnFfx(CreateContext|DestroyContext|Query|Dispatch)"])
+             extra=["--override-abi", "PfnFfx(CreateContext|DestroyContext|Query|Dispatch)=C-unwind"])
 
     generate(root / "runtime/backends/fsr/src/ffx_generation_descriptor_types.h",
              r"ffx(CreateContextDescFrameGeneration(Version|SwapChain(ForHwnd|Version)DX12)?|DispatchDescFrameGeneration(PrepareV2)?|"
