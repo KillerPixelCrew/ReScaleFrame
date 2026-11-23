@@ -49,8 +49,7 @@ static OCCUPIED: AtomicBool = AtomicBool::new(false);
 // The singleton owner consumes the latest code at its Present boundary.
 static API_ERROR: AtomicI32 = AtomicI32::new(0);
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_dlgvk_report_api_error(error: i32) {
+pub(super) fn rsf_core_dlgvk_report_api_error(error: i32) {
     API_ERROR.store(error, Ordering::SeqCst);
 }
 
@@ -721,10 +720,9 @@ unsafe fn matches_present(chain: u64, info: *const c_void) -> bool {
         .is_some_and(|present_chain| present_chain.as_raw() == chain)
 }
 
-/// Creates an owner over `platform`: `leaves::rsf_dlgvk_leaves` for [`rsf_dlssgvk_create`], a fixture's
-/// table in tests/vulkan-fg and owner_tests.rs.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlgvk_create(
+/// Creates an owner over `platform`: `leaves::LEAVES` for [`rsf_dlssgvk_create`], a fixture's table in
+/// fixture.rs and owner_tests.rs.
+unsafe fn rsf_core_dlgvk_create(
     platform: *const Platform,
     setup: *const Setup,
     out: *mut *mut Owner,
@@ -1025,7 +1023,7 @@ pub(crate) unsafe extern "C" fn rsf_dlssgvk_create(
     chain: *mut u64,
 ) -> i32 {
     let platform = if cfg!(feature = "streamline-vk") {
-        &leaves::rsf_dlgvk_leaves as *const Platform
+        &leaves::LEAVES as *const Platform
     } else {
         ptr::null()
     };
@@ -1063,5 +1061,7 @@ pub(crate) unsafe extern "C" fn rsf_dlssgvk_present_source(
 ) -> i32 {
     unsafe { present(owner, info, source, 1) }
 }
+#[cfg(feature = "test-fixtures")]
+mod fixture;
 #[cfg(test)]
 mod owner_tests;

@@ -23,7 +23,7 @@ pub(super) use commands::RsfFsr4FgReleaseImage;
 mod native;
 mod sdk;
 #[cfg(feature = "test-fixtures")]
-mod state_fixture;
+pub(crate) mod state_fixture;
 type Handle = *mut c_void;
 
 use crate::sys::{RSF_FSR4FG_ABI_MISMATCH as ABI_MISMATCH, RSF_FSR4FG_INVALID_ARGUMENT as INVALID};

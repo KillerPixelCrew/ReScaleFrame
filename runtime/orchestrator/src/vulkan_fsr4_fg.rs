@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::dx12_vulkan_interop::{self, Owner as Importer};
+use crate::dx12_vulkan_interop;
 use crate::fsr4_fg_bridge::{
     BRIDGE_ABI, BridgeCreate, BridgeFrame, BridgeInfo, BridgeStatus, RsfFsr4FgCreateFence,
     RsfFsr4FgCreateImage, RsfFsr4FgReleaseImage, UNSUPPORTED,
@@ -31,19 +31,23 @@ pub(crate) struct Options {
     pub(crate) generated_count: u32,
 }
 
+/// The bridge, importer and graphics entries the owner calls. PRODUCTION binds them; the
+/// test-fixtures state fixture (vulkan_dx12_fg/fsr4_state_fixture.rs) passes CPU doubles.
 #[repr(C)]
-struct Ops {
-    probe: unsafe extern "C" fn(u64, *const u16, *mut BridgeInfo) -> i32,
-    bridge_create: unsafe extern "C" fn(*const BridgeCreate, *mut Handle) -> i32,
-    bridge_info: unsafe extern "C" fn(Handle, *mut BridgeInfo) -> i32,
-    bridge_start: unsafe extern "C" fn(Handle, Handle) -> i32,
-    bridge_present: unsafe extern "C" fn(Handle, *const BridgeFrame, *mut BridgeStatus) -> i32,
-    bridge_drain: Release,
-    bridge_prepare_destroy: Release,
-    bridge_destroy: Release,
-    interop_create: unsafe extern "C" fn(*const Graphics, Handle, u64, u32, *mut Handle) -> i32,
-    importer: InteropOps,
-    graphics: GraphicsOps,
+pub(crate) struct Ops {
+    pub(crate) probe: unsafe extern "C" fn(u64, *const u16, *mut BridgeInfo) -> i32,
+    pub(crate) bridge_create: unsafe extern "C" fn(*const BridgeCreate, *mut Handle) -> i32,
+    pub(crate) bridge_info: unsafe extern "C" fn(Handle, *mut BridgeInfo) -> i32,
+    pub(crate) bridge_start: unsafe extern "C" fn(Handle, Handle) -> i32,
+    pub(crate) bridge_present:
+        unsafe extern "C" fn(Handle, *const BridgeFrame, *mut BridgeStatus) -> i32,
+    pub(crate) bridge_drain: Release,
+    pub(crate) bridge_prepare_destroy: Release,
+    pub(crate) bridge_destroy: Release,
+    pub(crate) interop_create:
+        unsafe extern "C" fn(*const Graphics, Handle, u64, u32, *mut Handle) -> i32,
+    pub(crate) importer: InteropOps,
+    pub(crate) graphics: GraphicsOps,
 }
 
 const _: () = {
@@ -78,17 +82,6 @@ unsafe extern "C" {
     fn rsf_dx12vk_interop_timeline(owner: Handle) -> u64;
     fn rsf_dx12vk_interop_destroy(owner: Handle, queues_drained: u32) -> i32;
     fn rsf_dx12vk_interop_release_guides(owner: Handle, depth: u64, motion: u64) -> i32;
-    fn rsf_dx12gvk_graphics() -> *const GraphicsOps;
-}
-
-unsafe extern "C" fn interop_create(
-    setup: *const Graphics,
-    bridge: Handle,
-    luid: u64,
-    enabled: u32,
-    output: *mut Handle,
-) -> i32 {
-    unsafe { rsf_fsr4gvk_interop_create(setup, bridge, luid, enabled, output.cast()) }
 }
 
 struct ProductionOps(Ops);
@@ -115,14 +108,14 @@ static PRODUCTION: LazyLock<ProductionOps> = LazyLock::new(|| {
             release_guides: rsf_dx12vk_interop_release_guides,
         },
         // A bitwise copy of the immutable shared table, as the native binding embedded it.
-        graphics: unsafe { ptr::read(rsf_dx12gvk_graphics()) },
+        graphics: unsafe { ptr::read(platform::graphics()) },
     })
 });
 
 /// Queries the matching DX12 device's exact major-4 provider without HWND or WSI calls.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fsr4gvk_probe(setup: *const Graphics, info: *mut BridgeInfo) -> i32 {
-    unsafe { rsf_core_fsr4gvk_probe(&PRODUCTION.0, setup, info) }
+    unsafe { probe(&PRODUCTION.0, setup, info) }
 }
 
 /// Rust admits the setup before it asks the shared graphics table to describe create_info.
@@ -133,16 +126,15 @@ pub(crate) unsafe extern "C" fn rsf_fsr4gvk_create(
     output: *mut *mut Owner,
     chain: *mut u64,
 ) -> i32 {
-    unsafe { rsf_core_fsr4gvk_create(&PRODUCTION.0, setup, options, output, chain) }
+    unsafe { create(&PRODUCTION.0, setup, options, output, chain) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4gvk_interop_create(
+unsafe extern "C" fn interop_create(
     setup: *const Graphics,
     bridge: Handle,
     luid: u64,
     enabled: u32,
-    output: *mut *mut Importer,
+    output: *mut Handle,
 ) -> i32 {
     let callbacks = ImportCallbacks {
         struct_size: size_of::<ImportCallbacks>() as u32,
@@ -153,7 +145,9 @@ unsafe extern "C" fn rsf_fsr4gvk_interop_create(
         release_image: Some(RsfFsr4FgReleaseImage),
         create_fence: Some(RsfFsr4FgCreateFence),
     };
-    unsafe { dx12_vulkan_interop::rsf_dx12vk_interop_create(setup, &callbacks, enabled, output) }
+    unsafe {
+        dx12_vulkan_interop::rsf_dx12vk_interop_create(setup, &callbacks, enabled, output.cast())
+    }
 }
 
 type Owner = shared::Owner<Fsr4>;
@@ -163,12 +157,8 @@ pub(crate) struct Fsr4 {
     directory: *const u16,
     bridge: Handle,
 }
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4gvk_probe(
-    ops: &'static Ops,
-    setup: *const Graphics,
-    info: *mut BridgeInfo,
-) -> i32 {
+
+unsafe fn probe(ops: &'static Ops, setup: *const Graphics, info: *mut BridgeInfo) -> i32 {
     if !unsafe { has_capacity(setup) } || info.is_null() {
         return INVALID;
     }
@@ -196,8 +186,7 @@ unsafe extern "C" fn rsf_core_fsr4gvk_probe(
     unsafe { (ops.probe)(luid, directory.as_ptr(), info) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4gvk_create(
+pub(crate) unsafe fn create(
     ops: &'static Ops,
     setup: *const Setup,
     options: *const Options,
@@ -473,8 +462,7 @@ pub(crate) unsafe extern "C" fn rsf_fsr4gvk_enable_options(
 pub(crate) extern "C" fn rsf_fsr4gvk_max_generated(owner: *const Owner) -> u32 {
     u32::from(!owner.is_null())
 }
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4gvk_present(
+unsafe fn present(
     owner: *mut Owner,
     info: *const PresentInfo,
     source: *const Record,
@@ -483,30 +471,26 @@ unsafe extern "C" fn rsf_core_fsr4gvk_present(
     unsafe { shared::present(owner, info, source, explicit) }
 }
 
-type PresentCallback = unsafe extern "C" fn(Handle, &PresentInfo, *const Record, u32) -> i32;
-
-unsafe extern "C" {
-    fn rsf_dx12gvk_present_marshaled(
-        call: PresentCallback,
-        owner: Handle,
-        info: *const c_void,
-        source: *const Record,
-        explicit: u32,
-    ) -> i32;
-}
-
 unsafe extern "C" fn present_marshaled(
     owner: Handle,
     info: &PresentInfo,
     source: *const Record,
     explicit: u32,
 ) -> i32 {
-    unsafe { rsf_core_fsr4gvk_present(owner.cast(), info, source, explicit) }
+    unsafe { present(owner.cast(), info, source, explicit) }
 }
 
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_fsr4gvk_present(owner: *mut Owner, info: *const c_void) -> i32 {
-    unsafe { rsf_dx12gvk_present_marshaled(present_marshaled, owner.cast(), info, ptr::null(), 0) }
+    unsafe {
+        platform::rsf_dx12gvk_present_marshaled(
+            present_marshaled,
+            owner.cast(),
+            info,
+            ptr::null(),
+            0,
+        )
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -515,7 +499,9 @@ pub(crate) unsafe extern "C" fn rsf_fsr4gvk_present_source(
     info: *const c_void,
     source: *const Record,
 ) -> i32 {
-    unsafe { rsf_dx12gvk_present_marshaled(present_marshaled, owner.cast(), info, source, 1) }
+    unsafe {
+        platform::rsf_dx12gvk_present_marshaled(present_marshaled, owner.cast(), info, source, 1)
+    }
 }
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_fsr4gvk_status(

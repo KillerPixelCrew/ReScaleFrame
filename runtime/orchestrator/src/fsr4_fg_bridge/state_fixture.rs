@@ -482,8 +482,8 @@ fn terminal() {
     expect!(with(|c| (c.destroys_generation, c.releases_chain, c.releases)) == (0, 0, 0));
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_fsr4fg_bridge_state() -> i32 {
+/// Run first by the FSR4 FG WSI state fixture (vulkan_dx12_fg/fsr4_state_fixture.rs).
+pub(crate) fn rsf_fixture_fsr4fg_bridge_state() -> i32 {
     with(|c| c.failures = 0);
     retirement();
     terminal();

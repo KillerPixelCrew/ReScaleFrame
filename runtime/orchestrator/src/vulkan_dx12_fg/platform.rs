@@ -663,8 +663,7 @@ unsafe extern "C" fn read_present(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dx12gvk_present_marshaled(
+pub(crate) unsafe fn rsf_dx12gvk_present_marshaled(
     call: PresentCallback,
     owner: Handle,
     native: *const c_void,
@@ -701,8 +700,8 @@ pub(crate) unsafe extern "C" fn rsf_dx12gvk_present_marshaled(
     status
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_dx12gvk_graphics() -> *const GraphicsOps {
+/// The Vulkan graphics entries the FSR4 and XeSS owners bind in production.
+pub(crate) fn graphics() -> &'static GraphicsOps {
     &GRAPHICS.0
 }
 

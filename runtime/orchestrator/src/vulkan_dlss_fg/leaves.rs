@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 //! Streamline DLSS-G call leaves, Vulkan device preparation and capture
-//! routing of the owner in vulkan_dlss_fg.rs, and `rsf_dlgvk_leaves`, the production platform table that
+//! routing of the owner in vulkan_dlss_fg.rs, and `LEAVES`, the production platform table that
 //! adds the session invoke and the Streamline worker epoch.
 use super::rsf_core_dlgvk_report_api_error;
 use super::sdk_fg_options::{self, Packed, State};
-use crate::dlss_vulkan_capture::leaves::rsf_core_dlss_capture_leaves;
+use crate::dlss_vulkan_capture::leaves::LEAVES as CAPTURE_LEAVES;
 use crate::dlss_vulkan_capture::{
     Owner as PresentCapture, rsf_core_dlss_capture_close, rsf_core_dlss_capture_detach,
     rsf_core_dlss_capture_flush, rsf_core_dlss_capture_open, rsf_core_dlss_capture_remember,
@@ -295,7 +295,7 @@ unsafe extern "C" fn rsf_core_dlgvk_sdk_start_capture(handle: Handle) -> i32 {
     native.present = ptr::null_mut();
     unsafe {
         rsf_core_dlss_capture_open(
-            &rsf_core_dlss_capture_leaves,
+            &CAPTURE_LEAVES,
             &native.setup,
             &mut native.present,
         )
@@ -378,10 +378,8 @@ unsafe extern "C" fn timeout_epoch() -> u64 {
 unsafe impl Sync for crate::vulkan_dlss_fg_abi::Platform {}
 
 /// The production Streamline table (`rsf_dlssgvk_create` with the `streamline-vk` feature).
-/// Exported for tests/vulkan-fg/src/dlss/sdk.rs, which wraps its entries.
-#[unsafe(no_mangle)]
-#[allow(non_upper_case_globals)]
-pub(super) static rsf_dlgvk_leaves: crate::vulkan_dlss_fg_abi::Platform =
+/// fixture/sdk.rs copies it and replaces the SDK, session invoke and worker epoch entries.
+pub(super) static LEAVES: crate::vulkan_dlss_fg_abi::Platform =
     crate::vulkan_dlss_fg_abi::Platform {
         gpu: &crate::vulkan_fg_resources::device::rsf_core_vkfg_platform,
         open: rsf_core_dlgvk_sdk_open,

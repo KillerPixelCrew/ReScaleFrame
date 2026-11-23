@@ -12,7 +12,7 @@ rsf_add_rust_static(rsf_game_sdk_fixtures_rust rsf_rust_game_sdk_fixtures
     --features render-host-fixtures,cpu-fixtures,unity-sr-d3d12-fixture,plugin-session-fixture,d3d11-host-fixture,vk-latency-fixtures,xell-fixture)
 rsf_add_rust_static(rsf_vulkan_fg_fixtures_rust rsf_rust_vulkan_fg_fixtures
     rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures
-    --features ffx,wsi-dispatch,fsr4-state,dlss,streamline-selected,streamline-dispatch,xess-sr,xess-input-range,xess-device)
+    --features ffx,wsi-dispatch,streamline-selected,streamline-dispatch,xess-sr,xess-input-range,xess-device)
 rsf_add_rust_static(rsf_capture_fixtures_rust rsf_rust_capture_fixtures
     rsf-capture-fixtures rsf_capture_fixtures
     --features metadata,d3d12,d3d11,vulkan,vulkan-cpu,texture)
@@ -603,7 +603,8 @@ if(RSF_HAVE_VULKAN AND RSF_HAVE_FFX_DX12_FG)
     add_executable(rsf_native_fsr4_fg_state_test fixture_main.c)
     set_target_properties(rsf_native_fsr4_fg_state_test PROPERTIES LINKER_LANGUAGE CXX)
     target_compile_definitions(rsf_native_fsr4_fg_state_test PRIVATE RSF_FIXTURE_ENTRY=rsf_fixture_fsr4fg_wsi_state)
-    target_link_libraries(rsf_native_fsr4_fg_state_test PRIVATE rsf_vulkan_fg_fixtures_rust
+    # The fixture is vulkan_dx12_fg/fsr4_state_fixture.rs in the test-fixtures orchestrator archive.
+    target_link_libraries(rsf_native_fsr4_fg_state_test PRIVATE
         ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_orchestrator_rust rsf_build_options)
     add_test(NAME native_fsr4_fg_state_contract COMMAND rsf_native_fsr4_fg_state_test)
 endif()
@@ -628,15 +629,12 @@ if(RSF_HAVE_VULKAN AND RSF_HAVE_STREAMLINE)
     target_include_directories(rsf_streamline_selected_device_test SYSTEM PRIVATE "${rsf_streamline_source_root}" "${RSF_STREAMLINE_INCLUDE}")
     target_link_libraries(rsf_streamline_selected_device_test PRIVATE rsf_vulkan_fg_fixtures_rust rsf_build_options)
     add_test(NAME streamline_selected_device_contract COMMAND rsf_streamline_selected_device_test)
-    # The production DLSS-G table (vulkan_dlss_fg/leaves.rs, selected with the streamline-vk feature that
-    # RSF_STREAMLINE_VK_DIGEST sets) and its Rust leaves, with the Rust fixture's Streamline session and SDK
-    # entries.
+    # The production DLSS-G table (vulkan_dlss_fg/leaves.rs) and its Rust leaves, with the fixture's
+    # Streamline session and SDK entries (vulkan_dlss_fg/fixture.rs in the test-fixtures orchestrator archive).
     add_executable(rsf_native_fg_dlss_vulkan_test fixture_main.c)
     set_target_properties(rsf_native_fg_dlss_vulkan_test PROPERTIES LINKER_LANGUAGE CXX)
-    target_compile_definitions(rsf_native_fg_dlss_vulkan_test PRIVATE RSF_RUNTIME_BUILD RSF_FIXTURE_ENTRY=rsf_fixture_dlss_run)
-    target_include_directories(rsf_native_fg_dlss_vulkan_test PRIVATE ../runtime/orchestrator/include)
-    target_include_directories(rsf_native_fg_dlss_vulkan_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
-    target_link_libraries(rsf_native_fg_dlss_vulkan_test PRIVATE rsf_vulkan_fg_fixtures_rust rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::FrameDump rsf_build_options)
+    target_compile_definitions(rsf_native_fg_dlss_vulkan_test PRIVATE RSF_FIXTURE_ENTRY=rsf_fixture_dlss_run)
+    target_link_libraries(rsf_native_fg_dlss_vulkan_test PRIVATE rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::FrameDump rsf_build_options)
     add_test(NAME native_fg_dlss_vulkan_contract COMMAND rsf_native_fg_dlss_vulkan_test)
 endif()
 
@@ -799,7 +797,7 @@ foreach(rsf_fixture_target
         rsf_sharpening_settings_test rsf_exposure_normalization_test rsf_native_vulkan_test rsf_dlss_backend
         rsf_dlss_sr_layout rsf_sr_session_test rsf_sr_bridge_test rsf_sr_pipeline_test rsf_sr_backend_switch_device_test
         rsf_shader_patch_test rsf_shader_patch_device_test rsf_native_sr_fsr4_state_test rsf_native_sr_fsr4_vulkan_test
-        rsf_native_fsr4_fg_state_test rsf_native_fg_cpu_test)
+        rsf_native_fsr4_fg_state_test rsf_native_fg_cpu_test rsf_native_fg_dlss_vulkan_test)
     if(TARGET ${rsf_fixture_target})
         set_target_properties(${rsf_fixture_target} PROPERTIES RSF_ORCHESTRATOR_FIXTURES ON)
         add_dependencies(${rsf_fixture_target} rsf_rust_core_fixtures)

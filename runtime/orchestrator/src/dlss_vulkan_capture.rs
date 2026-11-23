@@ -4,12 +4,9 @@
 // the readbacks. The production leaves for typed Vulkan, WSI, Streamline
 // registration and file output are in leaves.rs.
 use crate::allocate_handle;
-use crate::dlss_vulkan_capture_ledger::{AMBIGUOUS, Ledger};
-use crate::sys::rsf_dlss_capture_target as Target;
+use crate::dlss_vulkan_capture_ledger::{AMBIGUOUS, Ledger, Source};
 use crate::sys::rsf_srvk_image as Image;
-use crate::sys::{
-    rsf_dlss_capture_source as Source, rsf_dlssgvk_status as SdkStatus, rsf_fgvk_setup as Setup,
-};
+use crate::sys::{rsf_dlssgvk_status as SdkStatus, rsf_fgvk_setup as Setup};
 use ash::vk;
 use rsf_game_sys::backend_result::{INIT_FAILED, NOT_READY, OK};
 use rsf_game_sys::rsf_frame_record as Record;
@@ -34,36 +31,54 @@ const WAIT_NS: u64 = 15_000_000_000;
 type Handle = *mut c_void;
 type Callback = unsafe extern "C" fn(Handle, *const Packet) -> i32;
 
+/// The swapchain image a Present selects, as the target leaf reads it from the packet.
 #[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Target {
+    pub(crate) chain: u64,
+    pub(crate) index: u32,
+    pub(crate) selected: u32,
+    pub(crate) usage: u32,
+    pub(crate) layers: u32,
+    pub(crate) format: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
+
+/// The capture owner's native leaves: `leaves::LEAVES` in production; the DLSS-G fixture
+/// (vulkan_dlss_fg/fixture/sdk.rs) replaces open and the frame, readback and file entries.
+#[repr(C)]
+#[derive(Clone, Copy)]
 pub(crate) struct Platform {
     // Writes a null native handle and succeeds when capture is disabled.
-    open: unsafe extern "C" fn(*const Setup, *mut Handle) -> i32,
-    close: unsafe extern "C" fn(Handle),
+    pub(crate) open: unsafe extern "C" fn(*const Setup, *mut Handle) -> i32,
+    pub(crate) close: unsafe extern "C" fn(Handle),
     // A null callback clears the registration for the same device and user.
-    register: unsafe extern "C" fn(Handle, Option<Callback>, Handle) -> i32,
-    create_pool: unsafe extern "C" fn(Handle, u32, *mut u64) -> i32,
-    destroy_pool: unsafe extern "C" fn(Handle, u64),
-    allocate: unsafe extern "C" fn(Handle, u64, *mut Handle) -> i32,
-    reset_pool: unsafe extern "C" fn(Handle, u64) -> i32,
-    begin: unsafe extern "C" fn(Handle, Handle) -> i32,
-    end: unsafe extern "C" fn(Handle, Handle) -> i32,
-    create_fence: unsafe extern "C" fn(Handle, *mut u64) -> i32,
-    destroy_fence: unsafe extern "C" fn(Handle, u64),
-    reset_fence: unsafe extern "C" fn(Handle, u64) -> i32,
-    wait_fence: unsafe extern "C" fn(Handle, u64, u64) -> i32,
-    complete_readback: unsafe extern "C" fn(Handle, Handle),
-    wants: unsafe extern "C" fn(Handle, u64) -> u32,
-    readbacks: unsafe extern "C" fn(Handle) -> u64,
-    target: unsafe extern "C" fn(*const Packet, *mut Target),
-    images: unsafe extern "C" fn(*const Packet, u64, *mut u32, *mut u64) -> i32,
-    record: unsafe extern "C" fn(Handle, Handle, *const Image, *const Record, *const c_char) -> u32,
+    pub(crate) register: unsafe extern "C" fn(Handle, Option<Callback>, Handle) -> i32,
+    pub(crate) create_pool: unsafe extern "C" fn(Handle, u32, *mut u64) -> i32,
+    pub(crate) destroy_pool: unsafe extern "C" fn(Handle, u64),
+    pub(crate) allocate: unsafe extern "C" fn(Handle, u64, *mut Handle) -> i32,
+    pub(crate) reset_pool: unsafe extern "C" fn(Handle, u64) -> i32,
+    pub(crate) begin: unsafe extern "C" fn(Handle, Handle) -> i32,
+    pub(crate) end: unsafe extern "C" fn(Handle, Handle) -> i32,
+    pub(crate) create_fence: unsafe extern "C" fn(Handle, *mut u64) -> i32,
+    pub(crate) destroy_fence: unsafe extern "C" fn(Handle, u64),
+    pub(crate) reset_fence: unsafe extern "C" fn(Handle, u64) -> i32,
+    pub(crate) wait_fence: unsafe extern "C" fn(Handle, u64, u64) -> i32,
+    pub(crate) complete_readback: unsafe extern "C" fn(Handle, Handle),
+    pub(crate) wants: unsafe extern "C" fn(Handle, u64) -> u32,
+    pub(crate) readbacks: unsafe extern "C" fn(Handle) -> u64,
+    pub(crate) target: unsafe extern "C" fn(*const Packet, *mut Target),
+    pub(crate) images: unsafe extern "C" fn(*const Packet, u64, *mut u32, *mut u64) -> i32,
+    pub(crate) record:
+        unsafe extern "C" fn(Handle, Handle, *const Image, *const Record, *const c_char) -> u32,
     // Submits the copy behind the original Present wait semaphores.
-    submit: unsafe extern "C" fn(*const Packet, Handle, u64) -> i32,
+    pub(crate) submit: unsafe extern "C" fn(*const Packet, Handle, u64) -> i32,
     // Zero waits presents after the copy fence consumed the original waits.
-    present: unsafe extern "C" fn(*const Packet, u32) -> i32,
-    flush: unsafe extern "C" fn(Handle) -> u32,
-    failure: unsafe extern "C" fn(Handle, u64, *const c_char, i32),
-    append: unsafe extern "C" fn(Handle, *const c_char, *const u8, usize),
+    pub(crate) present: unsafe extern "C" fn(*const Packet, u32) -> i32,
+    pub(crate) flush: unsafe extern "C" fn(Handle) -> u32,
+    pub(crate) failure: unsafe extern "C" fn(Handle, u64, *const c_char, i32),
+    pub(crate) append: unsafe extern "C" fn(Handle, *const c_char, *const u8, usize),
 }
 
 const _: () = {
@@ -436,8 +451,7 @@ unsafe extern "C" fn present(user: Handle, packet: *const Packet) -> i32 {
 
 // Publishes no owner while capture is disabled. Registration is the last
 // step, so a refused setup never leaves a callback behind.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_dlss_capture_open(
+pub(crate) unsafe fn rsf_core_dlss_capture_open(
     ops: &'static Platform,
     setup: *const Setup,
     out: *mut *mut Owner,
@@ -474,8 +488,7 @@ pub(crate) unsafe extern "C" fn rsf_core_dlss_capture_open(
     OK
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_dlss_capture_remember(
+pub(crate) unsafe fn rsf_core_dlss_capture_remember(
     owner: *const Owner,
     record: *const Record,
     generated_count: u32,
@@ -491,21 +504,18 @@ pub(crate) unsafe extern "C" fn rsf_core_dlss_capture_remember(
 }
 
 // Presenter and GPU must already be drained.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_dlss_capture_flush(owner: *const Owner) {
+pub(crate) unsafe fn rsf_core_dlss_capture_flush(owner: *const Owner) {
     if let Some(owner) = unsafe { owner.as_ref() } {
         owner.flush();
     }
 }
 
 // Detach keeps the owner alive until close.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_dlss_capture_detach(owner: *const Owner) -> i32 {
+pub(crate) unsafe fn rsf_core_dlss_capture_detach(owner: *const Owner) -> i32 {
     unsafe { owner.as_ref() }.map_or(OK, Owner::detach)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_dlss_capture_close(owner: *mut Owner) {
+pub(crate) unsafe fn rsf_core_dlss_capture_close(owner: *mut Owner) {
     if !owner.is_null() {
         drop(unsafe { Box::from_raw(owner) });
     }

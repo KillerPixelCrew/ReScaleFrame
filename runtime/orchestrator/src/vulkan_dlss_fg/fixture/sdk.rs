@@ -5,19 +5,24 @@
 //! these entries, and runs the present capture owner with its real Vulkan,
 //! WSI and registration leaves. Only open, frame selection, readback recording
 //! and file output are synthetic.
-use crate::sys::*;
+use super::vulkan::{self, State};
+use super::{Handle, Platform, Setup};
+use crate::dlss_vulkan_capture::leaves::{LEAVES as CAPTURE_LEAVES, fixture_native};
+use crate::dlss_vulkan_capture::{Owner as Capture, Platform as CapturePlatform};
+use crate::sys::{
+    RSF_SLVK_ABI_VERSION, rsf_slvk_call, rsf_slvk_sdk_constants, rsf_slvk_sdk_fg_options,
+    rsf_slvk_sdk_fg_state, rsf_slvk_sdk_resource, rsf_slvk_sdk_tag, rsf_slvk_sdk_viewport,
+};
+use crate::vulkan_dlss_fg_abi::{Sdk, SdkCall};
+use rsf_game_sys::backend_result::{FEATURE_FAILED, NOT_READY, OK};
 use std::ffi::c_void;
 use std::process;
 use std::ptr;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicPtr, Ordering};
-
-type Handle = *mut c_void;
+use std::sync::{LazyLock, OnceLock};
 
 const SDK_OK: i32 = 0;
 const SDK_INVALID_PARAMETER: i32 = 25;
-const NOT_READY: i32 = -8;
-const FEATURE_FAILED: i32 = -9;
 const DLSS_G: u32 = 1000;
 const PREPARE_LIST: usize = 10;
 const COLOR_LIST: usize = 11;
@@ -31,15 +36,15 @@ fn require(condition: bool, message: &str) {
     }
 }
 
-fn fixture() -> &'static mut rsf_dlss_fixture_state {
-    unsafe { &mut *rsf_fixture_dlss_state() }
+fn fixture() -> &'static mut State {
+    unsafe { &mut *vulkan::state_ptr() }
 }
 
 fn sdk_token() -> *const c_void {
     ptr::from_ref(&SDK_TOKEN).cast()
 }
 
-unsafe extern "C" fn set_options(
+unsafe extern "C-unwind" fn set_options(
     view: *const rsf_slvk_sdk_viewport,
     value: *const rsf_slvk_sdk_fg_options,
 ) -> i32 {
@@ -84,7 +89,7 @@ unsafe extern "C" fn set_options(
     SDK_OK
 }
 
-unsafe extern "C" fn get_state(
+unsafe extern "C-unwind" fn get_state(
     _: *const rsf_slvk_sdk_viewport,
     value: *mut rsf_slvk_sdk_fg_state,
     _: *const rsf_slvk_sdk_fg_options,
@@ -100,7 +105,7 @@ unsafe extern "C" fn get_state(
     SDK_OK
 }
 
-unsafe extern "C" fn set_constants(
+unsafe extern "C-unwind" fn set_constants(
     data: *const rsf_slvk_sdk_constants,
     token: *const c_void,
     _: *const rsf_slvk_sdk_viewport,
@@ -128,7 +133,7 @@ unsafe extern "C" fn set_constants(
     SDK_OK
 }
 
-unsafe extern "C" fn set_tags(
+unsafe extern "C-unwind" fn set_tags(
     token: *const c_void,
     _: *const rsf_slvk_sdk_viewport,
     tags: *const rsf_slvk_sdk_tag,
@@ -182,7 +187,10 @@ unsafe extern "C" fn set_tags(
     }
 }
 
-unsafe extern "C" fn free_resources(feature: u32, view: *const rsf_slvk_sdk_viewport) -> i32 {
+unsafe extern "C-unwind" fn free_resources(
+    feature: u32,
+    view: *const rsf_slvk_sdk_viewport,
+) -> i32 {
     require(
         feature == DLSS_G && unsafe { (*view).value } == 0,
         "release addresses the shared viewport",
@@ -198,24 +206,23 @@ unsafe extern "C" fn free_resources(feature: u32, view: *const rsf_slvk_sdk_view
 
 /// Installs the synthetic entries at the start of the production native owner.
 unsafe extern "C" fn initialize(_: Handle, _: usize, user: Handle) -> i32 {
-    let call = unsafe { &*user.cast::<rsf_dlgvk_sdk_call>() };
-    let sdk = unsafe { &mut *call.native.cast::<rsf_dlgvk_sdk>() };
-    *sdk = rsf_dlgvk_sdk {
+    let call = unsafe { &*user.cast::<SdkCall>() };
+    let sdk = unsafe { &mut *call.native.cast::<Sdk>() };
+    *sdk = Sdk {
         set_constants: Some(set_constants),
         set_tags: Some(set_tags),
         free_resources: Some(free_resources),
         set_options: Some(set_options),
         get_state: Some(get_state),
     };
-    FIXTURE_OK
+    OK
 }
 
 /// The Streamline session invoke: versioned call, outside the host queue lock.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_slvk_invoke(call: *const rsf_slvk_call) -> i32 {
+unsafe extern "C" fn invoke(call: *const rsf_slvk_call) -> i32 {
     let call = unsafe { &*call };
     require(
-        unsafe { rsf_fixture_dlss_locked() } == 0
+        !vulkan::locked()
             && call.struct_size as usize == size_of::<rsf_slvk_call>()
             && call.abi_version == RSF_SLVK_ABI_VERSION,
         "worker receives versioned call outside the host queue lock",
@@ -234,7 +241,7 @@ unsafe extern "C" fn rsf_slvk_invoke(call: *const rsf_slvk_call) -> i32 {
     unsafe { (call.callback.unwrap())(ptr::without_provenance_mut(1), token, call.user) }
 }
 
-struct Tables([rsf_dlgvk_platform; 3]);
+struct Tables([Platform; 3]);
 // The tables hold static code and data addresses only.
 unsafe impl Sync for Tables {}
 unsafe impl Send for Tables {}
@@ -244,9 +251,8 @@ unsafe extern "C" fn prepare_with_capture(
     enabled: *mut u32,
     gpu: *mut Handle,
 ) -> i32 {
-    let prepare = unsafe { rsf_dlgvk_leaves.prepare_chain.unwrap() };
-    let result = unsafe { prepare(native, enabled, gpu) };
-    if result == FIXTURE_OK {
+    let result = unsafe { (super::leaves::LEAVES.prepare_chain)(native, enabled, gpu) };
+    if result == OK {
         unsafe { enabled.write(1) };
     }
     result
@@ -256,22 +262,25 @@ unsafe extern "C" fn refuse_capture(_: Handle) -> i32 {
     FEATURE_FAILED
 }
 
-fn tables() -> &'static [rsf_dlgvk_platform; 3] {
+fn tables() -> &'static [Platform; 3] {
     static TABLES: OnceLock<Tables> = OnceLock::new();
     &TABLES
         .get_or_init(|| {
-            let synthetic = rsf_dlgvk_platform {
+            // The production leaves with the synthetic SDK entries, session invoke and worker epoch.
+            let synthetic = Platform {
                 initialize: Some(initialize),
-                ..unsafe { rsf_dlgvk_leaves }
+                invoke,
+                timeout_epoch: vulkan::timeout_epoch,
+                ..super::leaves::LEAVES
             };
             Tables([
                 synthetic,
-                rsf_dlgvk_platform {
-                    prepare_chain: Some(prepare_with_capture),
+                Platform {
+                    prepare_chain: prepare_with_capture,
                     ..synthetic
                 },
-                rsf_dlgvk_platform {
-                    start_capture: Some(refuse_capture),
+                Platform {
+                    start_capture: refuse_capture,
                     ..synthetic
                 },
             ])
@@ -279,71 +288,67 @@ fn tables() -> &'static [rsf_dlgvk_platform; 3] {
         .0
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum Variant {
+    Normal,
+    CaptureRequired,
+    CaptureRefused,
+}
+
 /// The provider borrows the selected platform table until destruction.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fixture_dlss_create(
-    variant: rsf_dlss_fixture_variant,
-    setup: *const rsf_fgvk_setup,
-    owner: *mut *mut rsf_dlssgvk,
+pub(super) unsafe fn create(
+    variant: Variant,
+    setup: *const Setup,
+    owner: *mut *mut super::Owner,
     chain: *mut u64,
 ) -> i32 {
     let tables = tables();
     let selected = match variant {
-        RSF_DLSS_FIXTURE_CAPTURE_REQUIRED => &tables[1],
-        RSF_DLSS_FIXTURE_CAPTURE_REFUSED => &tables[2],
-        _ => &tables[0],
+        Variant::Normal => &tables[0],
+        Variant::CaptureRequired => &tables[1],
+        Variant::CaptureRefused => &tables[2],
     };
-    unsafe { rsf_core_dlgvk_create(selected, setup, owner, chain) }
+    unsafe { super::rsf_core_dlgvk_create(selected, setup, owner, chain) }
 }
 
 static SYNTHETIC_CAPTURE: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 
-unsafe extern "C" fn open_capture(_: *const rsf_fgvk_setup, out: *mut Handle) -> i32 {
+unsafe extern "C" fn open_capture(_: *const Setup, out: *mut Handle) -> i32 {
     unsafe { out.write(SYNTHETIC_CAPTURE.load(Ordering::Acquire)) };
-    FIXTURE_OK
+    OK
 }
 
 unsafe extern "C" fn wants(_: Handle, frame: u64) -> u32 {
     u32::from(frame == 42)
 }
 
-struct Capture(rsf_dlss_capture_platform);
-// The table holds static code addresses only.
-unsafe impl Sync for Capture {}
-unsafe impl Send for Capture {}
+/// The production capture leaves with a synthetic open, frame selection, readback recording and
+/// file output.
+static CAPTURE_TABLE: LazyLock<CapturePlatform> = LazyLock::new(|| CapturePlatform {
+    open: open_capture,
+    wants,
+    readbacks: vulkan::readbacks,
+    record: vulkan::record,
+    flush: vulkan::flush,
+    failure: vulkan::failure,
+    append: vulkan::append,
+    ..CAPTURE_LEAVES
+});
 
-fn capture_table() -> &'static rsf_dlss_capture_platform {
-    static TABLE: OnceLock<Capture> = OnceLock::new();
-    &TABLE
-        .get_or_init(|| {
-            Capture(rsf_dlss_capture_platform {
-                open: Some(open_capture),
-                wants: Some(wants),
-                readbacks: Some(rsf_fixture_dlss_readbacks),
-                record: Some(rsf_fixture_dlss_record),
-                flush: Some(rsf_fixture_dlss_flush),
-                failure: Some(rsf_fixture_dlss_failure),
-                append: Some(rsf_fixture_dlss_append),
-                ..unsafe { rsf_core_dlss_capture_leaves }
-            })
-        })
-        .0
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fixture_dlss_capture_open(
-    setup: *const rsf_fgvk_setup,
-    capture: *mut *mut rsf_dlss_capture,
-    calls: *mut rsf_dlss_fixture_capture_calls,
+pub(super) unsafe fn capture_open(
+    setup: *const Setup,
+    capture: *mut *mut Capture,
+    calls: &mut vulkan::CaptureCalls,
 ) -> i32 {
-    unsafe { rsf_fixture_dlss_capture_calls_init(calls) };
-    let native =
-        unsafe { rsf_core_dlss_capture_native(setup, Some(rsf_fixture_dlss_register_capture)) };
+    *calls = vulkan::capture_calls();
+    let native = unsafe { fixture_native(setup, vulkan::register_capture) };
     require(
         !native.is_null(),
         "synthetic capture resolves its command and fence operations",
     );
     SYNTHETIC_CAPTURE.store(native, Ordering::Release);
-    unsafe { rsf_fixture_dlss_reset_waited_fence() };
-    unsafe { rsf_core_dlss_capture_open(capture_table(), setup, capture) }
+    vulkan::reset_waited_fence();
+    unsafe {
+        crate::dlss_vulkan_capture::rsf_core_dlss_capture_open(&CAPTURE_TABLE, setup, capture)
+    }
 }

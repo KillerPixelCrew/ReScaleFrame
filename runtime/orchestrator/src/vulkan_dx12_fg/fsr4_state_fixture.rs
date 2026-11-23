@@ -1,11 +1,22 @@
 // SPDX-License-Identifier: MIT
-use crate::sys::*;
-use ash::vk::{self, Handle as _};
-use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record};
+//! CPU doubles for the FSR4 FG WSI owner: the bridge, importer and shared graphics entries of
+//! vulkan_fsr4_fg::Ops. Called by the native_fsr4_fg_state_contract ctest (test-fixtures only).
+use super::*;
+use crate::fsr4_fg_bridge::state_fixture::rsf_fixture_fsr4fg_bridge_state;
+use crate::sys::{
+    RSF_SRVK_ABI_VERSION, rsf_fsr4fg_create as BridgeCreate, rsf_fsr4fg_frame as BridgeFrame,
+    rsf_fsr4fg_info as BridgeInfo, rsf_fsr4fg_present_status as BridgeStatus, rsf_vk_function,
+};
+use crate::vulkan_fsr4_fg::{
+    Fsr4, Ops, Options, create as fsr4_create, rsf_fsr4gvk_acquire, rsf_fsr4gvk_destroy,
+    rsf_fsr4gvk_drain, rsf_fsr4gvk_enable_options, rsf_fsr4gvk_hudless, rsf_fsr4gvk_prepare,
+    rsf_fsr4gvk_present_source, rsf_fsr4gvk_status, rsf_fsr4gvk_submitted,
+};
+use ash::vk::Handle as _;
+use rsf_game_sys::rsf_frame_record;
 use std::{
     cell::{Cell, RefCell},
-    ffi::{CStr, c_char, c_void},
-    ptr,
+    ffi::CStr,
 };
 
 const TIMELINE: u64 = 40;
@@ -14,10 +25,9 @@ const INJECTED: i32 = -93;
 const ALL: u32 = vk::PipelineStageFlags::ALL_COMMANDS.as_raw();
 const NOT_READY: i32 = vk::Result::NOT_READY.as_raw();
 
-type Handle = *mut c_void;
-type Gpu = *mut rsf_dx12gvk_platform;
-type Bridge = *mut rsf_fsr4fg_bridge;
-type Owner = *mut rsf_fsr4gvk;
+type Gpu = Handle;
+type Bridge = Handle;
+type Fsr4Owner = *mut Owner<Fsr4>;
 
 struct Capture {
     commands: Handle,
@@ -77,11 +87,11 @@ macro_rules! check {
     };
 }
 
-// Define a typed C ABI fixture callback in place, using the generated table to check its signature.
+// Define a typed C ABI fixture callback in place, using the table field to check its signature.
 macro_rules! callback {
     (($($arg:tt : $ty:ty),*) $(-> $result:ty)? $body:block) => {{
         unsafe extern "C" fn call($($arg: $ty),*) $(-> $result)? $body
-        Some(call)
+        call
     }};
 }
 
@@ -111,32 +121,38 @@ fn fake<T>(id: u64) -> *mut T {
     ptr::without_provenance_mut(id as usize)
 }
 
-const IMAGES: rsf_vkfg_platform = rsf_vkfg_platform {
-    local_memory_types: callback!((_: Handle) -> u32 { 1 }),
-    create_image: callback!((_: Handle, _: u32, _: u32, _: u32, usage: u32, out: *mut u64) -> i32 {
-        let expected = vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::SAMPLED;
-        check!(vk::ImageUsageFlags::from_raw(usage).contains(expected));
-        unsafe { out.write(next()) };
-        0
-    }),
-    requirements: callback!((_: Handle, _: u64, bytes: *mut u64, types: *mut u32) {
-        unsafe { bytes.write(1); types.write(1); }
-    }),
-    allocate: callback!((_: Handle, _: u64, _: u32, out: *mut u64) -> i32 {
-        unsafe { out.write(next()) };
-        0
-    }),
-    bind: callback!((_: Handle, image: u64, memory: u64) -> i32 {
+const IMAGES: ImageOps = ImageOps {
+    local_memory_types: Some(callback!((_: Handle) -> u32 { 1 })),
+    create_image: Some(
+        callback!((_: Handle, _: u32, _: u32, _: u32, usage: u32, out: *mut u64) -> i32 {
+            let expected = vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::SAMPLED;
+            check!(vk::ImageUsageFlags::from_raw(usage).contains(expected));
+            unsafe { out.write(next()) };
+            0
+        }),
+    ),
+    requirements: Some(
+        callback!((_: Handle, _: u64, bytes: *mut u64, types: *mut u32) {
+            unsafe { bytes.write(1); types.write(1); }
+        }),
+    ),
+    allocate: Some(
+        callback!((_: Handle, _: u64, _: u32, out: *mut u64) -> i32 {
+            unsafe { out.write(next()) };
+            0
+        }),
+    ),
+    bind: Some(callback!((_: Handle, image: u64, memory: u64) -> i32 {
         check!(image != 0 && memory != 0);
         0
-    }),
+    })),
     create_view: None,
     destroy_view: None,
-    destroy_image: callback!((_: Handle, image: u64) {
+    destroy_image: Some(callback!((_: Handle, image: u64) {
         check!(image != 0);
         calls(|state| state.images_destroyed += 1);
-    }),
-    free_memory: callback!((_: Handle, memory: u64) { check!(memory != 0); }),
+    })),
+    free_memory: Some(callback!((_: Handle, memory: u64) { check!(memory != 0); })),
     create_fence: None,
     destroy_fence: None,
     wait_fence: None,
@@ -144,15 +160,15 @@ const IMAGES: rsf_vkfg_platform = rsf_vkfg_platform {
     submit_fence: None,
 };
 
-const PLATFORM: rsf_fsr4gvk_ops = rsf_fsr4gvk_ops {
-    probe: callback!((_: u64, _: *const u16, _: *mut rsf_fsr4fg_info) -> i32 { 0 }),
-    bridge_create: callback!((create: *const rsf_fsr4fg_create, out: *mut Bridge) -> i32 {
+const PLATFORM: Ops = Ops {
+    probe: callback!((_: u64, _: *const u16, _: *mut BridgeInfo) -> i32 { 0 }),
+    bridge_create: callback!((create: *const BridgeCreate, out: *mut Bridge) -> i32 {
         let create = unsafe { &*create };
         check!(create.adapter_luid == ADAPTER && create.generated_count == 1);
         unsafe { out.write(fake(1)) };
         0
     }),
-    bridge_info: callback!((_: *const rsf_fsr4fg_bridge, info: *mut rsf_fsr4fg_info) -> i32 {
+    bridge_info: callback!((_: Bridge, info: *mut BridgeInfo) -> i32 {
         let info = unsafe { &mut *info };
         info.adapter_luid = calls(|state| state.provider_luid);
         info.provider_version = 700;
@@ -165,30 +181,30 @@ const PLATFORM: rsf_fsr4gvk_ops = rsf_fsr4gvk_ops {
             if state.fail_start { INJECTED } else { 0 }
         })
     }),
-    bridge_present: Some(bridge_present),
+    bridge_present,
     bridge_drain: callback!((_: Bridge) -> i32 { 0 }),
     bridge_prepare_destroy: callback!((_: Bridge) -> i32 { 0 }),
     bridge_destroy: callback!((_: Bridge) -> i32 {
         calls(|state| state.releases += 1);
         0
     }),
-    interop_create: callback!((_: *const rsf_srvk_setup, _: Bridge, luid: u64, enabled: u32, out: *mut *mut rsf_dx12vk_interop) -> i32 {
+    interop_create: callback!((_: *const Graphics, _: Bridge, luid: u64, enabled: u32, out: *mut Handle) -> i32 {
         check!(luid == ADAPTER && enabled == 1);
         unsafe { out.write(fake(2)) };
         0
     }),
-    importer: rsf_dx12gvk_interop_ops {
-        image: callback!((_: *mut rsf_dx12vk_interop, format: u32, width: u32, height: u32, out: *mut rsf_dx12vk_shared_image) -> i32 {
+    importer: InteropOps {
+        image: callback!((_: Handle, format: u32, width: u32, height: u32, out: *mut SharedImage) -> i32 {
             let id = next();
-            unsafe { out.write(rsf_dx12vk_shared_image { image: id, dx12_resource: fake(id), format, width, height }) };
+            unsafe { out.write(SharedImage { image: id, dx12_resource: fake(id), format, width, height }) };
             0
         }),
-        timeline: callback!((_: *const rsf_dx12vk_interop) -> u64 { TIMELINE }),
-        destroy: callback!((_: *mut rsf_dx12vk_interop, drained: u32) -> i32 {
+        timeline: callback!((_: Handle) -> u64 { TIMELINE }),
+        destroy: callback!((_: Handle, drained: u32) -> i32 {
             check!(drained == 1);
             if calls(|state| state.fail_importer_destroy) { INJECTED } else { 0 }
         }),
-        release_guides: callback!((_: *mut rsf_dx12vk_interop, depth: u64, motion: u64) -> i32 {
+        release_guides: callback!((_: Handle, depth: u64, motion: u64) -> i32 {
             check!(depth != 0 || motion != 0);
             calls(|state| {
                 check!(state.waits.len() == 2 && state.marked_complete.len() == 2);
@@ -197,18 +213,18 @@ const PLATFORM: rsf_fsr4gvk_ops = rsf_fsr4gvk_ops {
             0
         }),
     },
-    graphics: rsf_dx12gvk_ops {
-        adapter_luid: callback!((_: *const rsf_srvk_setup, out: *mut u64) -> i32 {
+    graphics: GraphicsOps {
+        adapter_luid: callback!((_: *const Graphics, out: *mut u64) -> i32 {
             unsafe { out.write(ADAPTER) };
             0
         }),
-        platform_allocate: callback!((setup: *const rsf_fgvk_setup) -> Gpu {
+        platform_allocate: callback!((setup: *const Setup) -> Gpu {
             SWAPCHAIN.with(|info| check!(!setup.is_null()
                 && unsafe { (*setup).create_info } == ptr::from_ref(info).cast()));
             fake(3)
         }),
         platform_destroy: callback!((_: Gpu) {}),
-        platform_resolve: callback!((_: Gpu, graphics: *const rsf_srvk_setup) -> i32 {
+        platform_resolve: callback!((_: Gpu, graphics: *const Graphics) -> i32 {
             let graphics = unsafe { &*graphics };
             check!(graphics.device == fake(5) && graphics.instance_proc.is_some() && graphics.device_proc.is_some());
             0
@@ -218,7 +234,7 @@ const PLATFORM: rsf_fsr4gvk_ops = rsf_fsr4gvk_ops {
             check!(format == vk::Format::R8G8B8A8_UNORM || format == vk::Format::B8G8R8A8_UNORM);
             (vk::FormatFeatureFlags::BLIT_SRC | vk::FormatFeatureFlags::BLIT_DST).as_raw()
         }),
-        initialize_capture: callback!((_: Gpu, graphics: *const rsf_srvk_setup) -> i32 {
+        initialize_capture: callback!((_: Gpu, graphics: *const Graphics) -> i32 {
             check!(!graphics.is_null() && unsafe { (*graphics).device } == fake(5));
             0
         }),
@@ -231,7 +247,7 @@ const PLATFORM: rsf_fsr4gvk_ops = rsf_fsr4gvk_ops {
         }),
         begin: callback!((_: Gpu, _: Handle) -> i32 { 0 }),
         end: callback!((_: Gpu, _: Handle) -> i32 { 0 }),
-        barrier: callback!((_: Gpu, list: Handle, plan: *const rsf_dx12gvk_barrier) {
+        barrier: callback!((_: Gpu, list: Handle, plan: *const Barrier) {
             let plan = unsafe { &*plan };
             check!(!list.is_null() && plan.image != 0);
             check!(plan.source_stages == ALL && plan.target_stages == ALL);
@@ -239,14 +255,14 @@ const PLATFORM: rsf_fsr4gvk_ops = rsf_fsr4gvk_ops {
                 calls(|state| state.pending_initialized = u32::from(plan.old_layout == vk::ImageLayout::GENERAL.as_raw() as u32));
             }
         }),
-        copy: Some(transfer),
-        blit: Some(transfer),
+        copy: transfer,
+        blit: transfer,
         clear: callback!((_: Gpu, list: Handle, image: u64) {
             check!(!list.is_null() && image != 0);
             calls(|state| state.cleared += 1);
         }),
         acquire_submit: callback!((_: Gpu, _: u64, _: u64) -> i32 { 0 }),
-        present_submit: Some(present_submit),
+        present_submit,
         wait_timeline: callback!((_: Gpu, timeline: u64, value: u64, timeout: u64) -> i32 {
             check!(timeline == TIMELINE && timeout != 0 && value <= calls(|state| state.last_done));
             0
@@ -267,18 +283,18 @@ const PLATFORM: rsf_fsr4gvk_ops = rsf_fsr4gvk_ops {
         capture_provider: callback!((_: Gpu, provider: u64, backend: u32) {
             check!(provider == 700 && backend == 4);
         }),
-        capture_record: Some(capture_record),
+        capture_record,
         capture_complete: callback!((_: Gpu, group: u64) { calls(|state| state.marked_complete.push(group)); }),
         capture_discard: callback!((_: Gpu, group: u64) { calls(|state| state.discarded.push(group)); }),
         capture_flush: callback!((_: Gpu) -> i32 { 0 }),
-        describe: Some(describe),
+        describe,
     },
 };
 
 unsafe extern "C" fn bridge_present(
     _: Bridge,
-    frame: *const rsf_fsr4fg_frame,
-    status: *mut rsf_fsr4fg_present_status,
+    frame: *const BridgeFrame,
+    status: *mut BridgeStatus,
 ) -> i32 {
     let frame = unsafe { &*frame };
     calls(|state| {
@@ -317,18 +333,13 @@ unsafe extern "C" fn bridge_present(
     0
 }
 
-unsafe extern "C" fn transfer(_: Gpu, list: Handle, plan: *const rsf_dx12gvk_transfer) {
+unsafe extern "C" fn transfer(_: Gpu, list: Handle, plan: *const Transfer) {
     let plan = unsafe { &*plan };
     check!(!list.is_null() && plan.source != 0 && plan.target != 0);
     calls(|state| state.initialized_copies.push(state.pending_initialized));
 }
 
-unsafe extern "C" fn present_submit(
-    _: Gpu,
-    list: Handle,
-    plan: *const rsf_dx12gvk_present_submit,
-) -> i32 {
-    let plan = unsafe { &*plan };
+unsafe extern "C" fn present_submit(_: Gpu, list: Handle, plan: &PresentSubmit) -> i32 {
     let last = calls(|state| state.last_done);
     check!(!list.is_null() && plan.signal == TIMELINE && plan.ready == last + 1);
     check!(plan.waits[0] == 88 && plan.values[0] == 0 && plan.stages[0] == ALL);
@@ -344,8 +355,8 @@ unsafe extern "C" fn present_submit(
 unsafe extern "C" fn capture_record(
     _: Gpu,
     commands: Handle,
-    image: *const rsf_srvk_image,
-    source: *const rsf_frame_record,
+    image: *const Image,
+    source: *const Record,
     role: *const c_char,
     group: u64,
 ) {
@@ -364,12 +375,12 @@ unsafe extern "C" fn capture_record(
 }
 
 // Supply native swapchain facts to the admission owner using the real Vulkan layout.
-unsafe extern "C" fn describe(info: *const c_void, out: *mut rsf_dx12gvk_swapchain) {
+unsafe extern "C" fn describe(info: *const c_void, out: *mut Swapchain) {
     SWAPCHAIN.with(|expected| check!(info == ptr::from_ref(expected).cast()));
     let info = unsafe { &*info.cast::<vk::SwapchainCreateInfoKHR<'_>>() };
     check!(info.p_next.is_null());
     unsafe {
-        out.write(rsf_dx12gvk_swapchain {
+        out.write(Swapchain {
             width: info.image_extent.width,
             height: info.image_extent.height,
             format: info.image_format.as_raw() as u32,
@@ -387,7 +398,7 @@ unsafe extern "C" fn describe(info: *const c_void, out: *mut rsf_dx12gvk_swapcha
     };
 }
 
-fn create() -> (i32, Owner, u64) {
+fn create() -> (i32, Fsr4Owner, u64) {
     unsafe extern "C" fn lookup(_: Handle, _: *const c_char) -> rsf_vk_function {
         None
     }
@@ -395,18 +406,18 @@ fn create() -> (i32, Owner, u64) {
         0
     }
     unsafe extern "C" fn lock(_: Handle) {}
-    let options = rsf_fsr4gvk_options {
-        struct_size: size_of::<rsf_fsr4gvk_options>() as u32,
+    let options = Options {
+        struct_size: size_of::<Options>() as u32,
         abi_version: 1,
         window: fake(7),
         timeline_enabled: 1,
         generated_count: 1,
     };
-    let mut graphics = rsf_fgvk_setup {
-        struct_size: size_of::<rsf_fgvk_setup>() as u32,
+    let mut graphics = Setup {
+        struct_size: size_of::<Setup>() as u32,
         abi_version: RSF_FGVK_ABI_VERSION,
-        graphics: rsf_srvk_setup {
-            struct_size: size_of::<rsf_srvk_setup>() as u32,
+        graphics: Graphics {
+            struct_size: size_of::<Graphics>() as u32,
             abi_version: RSF_SRVK_ABI_VERSION,
             instance: fake(5),
             physical_device: fake(5),
@@ -427,8 +438,8 @@ fn create() -> (i32, Owner, u64) {
     let code = SWAPCHAIN.with(|info| {
         graphics.create_info = ptr::from_ref(info).cast();
         // The owner retains the process-lifetime platform table.
-        const OPS: &rsf_fsr4gvk_ops = &PLATFORM;
-        unsafe { rsf_core_fsr4gvk_create(OPS, &graphics, &options, &mut owner, &mut chain) }
+        const OPS: &Ops = &PLATFORM;
+        unsafe { fsr4_create(OPS, &graphics, &options, &mut owner, &mut chain) }
     });
     (code, owner, chain)
 }
@@ -452,8 +463,8 @@ fn source(frame: u64) -> rsf_frame_record {
     record
 }
 
-fn inputs(record: &rsf_frame_record) -> rsf_fgvk_frame {
-    let srv = |image, format: vk::Format, width, height| rsf_srvk_image {
+fn inputs(record: &rsf_frame_record) -> Frame {
+    let srv = |image, format: vk::Format, width, height| Image {
         device: fake(5),
         image,
         format: format.as_raw() as u32,
@@ -462,8 +473,8 @@ fn inputs(record: &rsf_frame_record) -> rsf_fgvk_frame {
         layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL.as_raw() as u32,
         copy_source: 1,
     };
-    rsf_fgvk_frame {
-        struct_size: size_of::<rsf_fgvk_frame>() as u32,
+    Frame {
+        struct_size: size_of::<Frame>() as u32,
         abi_version: RSF_FGVK_ABI_VERSION,
         record,
         depth: srv(
@@ -484,15 +495,15 @@ fn inputs(record: &rsf_frame_record) -> rsf_fgvk_frame {
     }
 }
 
-fn status() -> rsf_fgvk_status {
-    rsf_fgvk_status {
-        struct_size: size_of::<rsf_fgvk_status>() as u32,
+fn status() -> Status {
+    Status {
+        struct_size: size_of::<Status>() as u32,
         abi_version: RSF_FGVK_ABI_VERSION,
         ..Default::default()
     }
 }
 
-fn present(owner: Owner, chain: u64, source: *const rsf_frame_record, expected: u64, enabled: u32) {
+fn present(owner: Fsr4Owner, chain: u64, source: *const Record, expected: u64, enabled: u32) {
     let mut index = 0;
     check!(unsafe { rsf_fsr4gvk_acquire(owner, 100, 1, 0, &mut index) } == 0);
     let mut results = [vk::Result::INCOMPLETE];
@@ -548,9 +559,7 @@ fn prove_identity_and_completion() {
     let initial = inputs(&first);
     let mismatch = inputs(&invalid);
     check!(unsafe { rsf_fsr4gvk_prepare(owner, guides, &initial) } == 0);
-    check!(
-        unsafe { rsf_fsr4gvk_hudless(owner, hudless, &mismatch) } == RSF_FSR4FG_INVALID_ARGUMENT
-    );
+    check!(unsafe { rsf_fsr4gvk_hudless(owner, hudless, &mismatch) } == INVALID);
     check!(unsafe { rsf_fsr4gvk_hudless(owner, hudless, &initial) } == 0);
     let groups = calls(|state| {
         check!(state.captures.len() == 3);
@@ -690,13 +699,9 @@ fn prove_admission_and_retirement() {
     });
 }
 
-unsafe extern "C" {
-    fn rsf_fixture_fsr4fg_bridge_state() -> i32;
-}
-
 #[unsafe(no_mangle)]
 extern "C" fn rsf_fixture_fsr4fg_wsi_state() -> i32 {
-    FAILURES.set(unsafe { rsf_fixture_fsr4fg_bridge_state() });
+    FAILURES.set(rsf_fixture_fsr4fg_bridge_state());
     prove_identity_and_completion();
     prove_admission_and_retirement();
     if FAILURES.get() == 0 {

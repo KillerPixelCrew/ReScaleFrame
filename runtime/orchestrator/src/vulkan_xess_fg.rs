@@ -128,7 +128,6 @@ unsafe extern "C" {
     fn rsf_dx12vk_interop_timeline(owner: Handle) -> u64;
     fn rsf_dx12vk_interop_destroy(owner: Handle, queues_drained: u32) -> i32;
     fn rsf_dx12vk_interop_release_guides(owner: Handle, depth: u64, motion: u64) -> i32;
-    fn rsf_dx12gvk_graphics() -> *const GraphicsOps;
 }
 
 // V03 importer entries used by the shared presenter.
@@ -138,11 +137,6 @@ static IMPORTER: InteropOps = InteropOps {
     destroy: rsf_dx12vk_interop_destroy,
     release_guides: rsf_dx12vk_interop_release_guides,
 };
-
-// The V02 graphics table, a static in this crate.
-fn graphics() -> &'static GraphicsOps {
-    unsafe { &*rsf_dx12gvk_graphics() }
-}
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_xessvk_interop_image(
@@ -551,7 +545,7 @@ unsafe extern "C" fn rsf_core_xessgvk_create(
         timeline_enabled: options.timeline_enabled,
         generated_count: options.generated_count,
     };
-    let Some(swapchain) = shared::describe(graphics(), setup) else {
+    let Some(swapchain) = shared::describe(platform::graphics(), setup) else {
         return XESS_INVALID;
     };
     if !setup_valid(setup, &start)
@@ -562,7 +556,15 @@ unsafe extern "C" fn rsf_core_xessgvk_create(
     }
     let vendor = Xess::new(ops, options.intel_runtime_directory);
     status_result(unsafe {
-        shared::create(vendor, graphics(), setup, swapchain, start, output, chain)
+        shared::create(
+            vendor,
+            platform::graphics(),
+            setup,
+            swapchain,
+            start,
+            output,
+            chain,
+        )
     })
 }
 

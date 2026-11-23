@@ -1,28 +1,148 @@
 // SPDX-License-Identifier: MIT
-//! Ash doubles for the native DLSS-G and capture fixture.
+//! Ash doubles for the native DLSS-G and capture fixture, and the fixture's observed state.
 use super::{COLOR, DST, Handle, handle};
-use crate::sys::*;
+use crate::sys::{
+    RSF_SL_PRESENT_CAPTURE_ABI_VERSION, rsf_sl_present_capture_callback as Callback,
+    rsf_sl_present_capture_packet as Packet, rsf_sl_present_capture_registration as Registration,
+    rsf_srvk_image as SourceImage, rsf_vk_function,
+};
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::rsf_frame_record;
 use std::{
     cell::{Cell, UnsafeCell},
     ffi::{CStr, c_char},
-    mem, slice,
+    mem, ptr, slice,
 };
+
+/// What the provider scenarios read and steer between calls into the provider.
+#[derive(Default)]
+pub(super) struct State {
+    pub(super) lease_session: u64,
+    pub(super) lease_frame: u64,
+    pub(super) on_calls: u32,
+    pub(super) off_calls: u32,
+    pub(super) present_calls: u32,
+    pub(super) fence_submits: u32,
+    pub(super) destroyed_chains: u32,
+    pub(super) sdk_presented: u32,
+    pub(super) copies: u32,
+    pub(super) release_calls: u32,
+    pub(super) max_generated: u32,
+    pub(super) backbuffer_count: u32,
+    pub(super) surface_usage: u32,
+    pub(super) expected_chain_usage: u32,
+    pub(super) chain_creates: u32,
+    pub(super) inputs_waits: u32,
+    pub(super) refuse_create: bool,
+    pub(super) refuse_enumeration: bool,
+    pub(super) refuse_options: bool,
+    pub(super) refuse_submit: bool,
+    pub(super) refuse_tags: bool,
+    pub(super) refuse_release: bool,
+    pub(super) worker_timeout: bool,
+    pub(super) refuse_inputs_wait: bool,
+    pub(super) expected_inputs_value: u64,
+    pub(super) completion_value: u64,
+}
+
+/// The real present, image, submit and WSI entries the capture packet carries.
+#[derive(Default)]
+pub(super) struct CaptureCalls {
+    pub(super) present: usize,
+    pub(super) images: usize,
+    pub(super) submit: usize,
+    pub(super) wsi: usize,
+}
+
+/// What the present capture owner did through its real Vulkan, WSI and registration leaves.
+#[derive(Clone, Copy)]
+pub(super) struct CaptureState {
+    pub(super) user: Handle,
+    pub(super) registered: u32,
+    pub(super) registrations: u32,
+    pub(super) pool_family: u32,
+    pub(super) pool_flags: u32,
+    pub(super) begins: u32,
+    pub(super) ends: u32,
+    pub(super) destroyed_pools: u32,
+    pub(super) real_submits: u32,
+    pub(super) real_enumerations: u32,
+    pub(super) real_presents: u32,
+    pub(super) wsi_calls: u32,
+    pub(super) waits: usize,
+    pub(super) commands: usize,
+    pub(super) submitted_fence: usize,
+    pub(super) waited_fence: usize,
+    pub(super) destroyed_fence: usize,
+    pub(super) wait_count: u32,
+    pub(super) command_count: u32,
+    pub(super) stages: [u32; 2],
+    pub(super) timeout: u64,
+    pub(super) flushes: u32,
+    pub(super) metadata: u32,
+    pub(super) present_info: usize,
+    pub(super) present_waits: usize,
+    pub(super) present_extension: usize,
+    pub(super) present_chains: usize,
+    pub(super) present_indices: usize,
+    pub(super) present_wait_count: u32,
+    pub(super) present_chain_count: u32,
+    pub(super) failure: *const c_char,
+    pub(super) failure_result: i32,
+}
+
+impl Default for CaptureState {
+    fn default() -> Self {
+        Self {
+            user: ptr::null_mut(),
+            registered: 0,
+            registrations: 0,
+            pool_family: 0,
+            pool_flags: 0,
+            begins: 0,
+            ends: 0,
+            destroyed_pools: 0,
+            real_submits: 0,
+            real_enumerations: 0,
+            real_presents: 0,
+            wsi_calls: 0,
+            waits: 0,
+            commands: 0,
+            submitted_fence: 0,
+            waited_fence: 0,
+            destroyed_fence: 0,
+            wait_count: 0,
+            command_count: 0,
+            stages: [0; 2],
+            timeout: 0,
+            flushes: 0,
+            metadata: 0,
+            present_info: 0,
+            present_waits: 0,
+            present_extension: 0,
+            present_chains: 0,
+            present_indices: 0,
+            present_wait_count: 0,
+            present_chain_count: 0,
+            failure: ptr::null(),
+            failure_result: 0,
+        }
+    }
+}
 
 const SUCCESS: vk::Result = vk::Result::SUCCESS;
 const TIMEOUT_NS: u64 = 15_000_000_000;
 
 thread_local! {
-    static STATE: UnsafeCell<rsf_dlss_fixture_state> = UnsafeCell::new(rsf_dlss_fixture_state {
+    static STATE: UnsafeCell<State> = UnsafeCell::new(State {
         lease_session: 7, lease_frame: 42, max_generated: 3, backbuffer_count: 3,
         surface_usage: (COLOR | DST).as_raw(), expected_chain_usage: (COLOR | DST).as_raw(),
         expected_inputs_value: 9, completion_value: 9, ..Default::default()
     });
-    static CAPTURE: UnsafeCell<rsf_dlss_fixture_capture_state> = UnsafeCell::new(rsf_dlss_fixture_capture_state {
+    static CAPTURE: UnsafeCell<CaptureState> = UnsafeCell::new(CaptureState {
         pool_family: u32::MAX, ..Default::default()
     });
-    static CALLBACK: Cell<rsf_sl_present_capture_callback> = const { Cell::new(None) };
+    static CALLBACK: Cell<Callback> = const { Cell::new(None) };
     static READBACKS: Cell<u64> = const { Cell::new(0) };
     static NEXT: Cell<u64> = const { Cell::new(1000) };
     static TIMEOUT_EPOCH: Cell<u64> = const { Cell::new(0) };
@@ -30,11 +150,11 @@ thread_local! {
     static IN_WSI: Cell<bool> = const { Cell::new(false) };
 }
 
-fn state<R>(update: impl FnOnce(&mut rsf_dlss_fixture_state) -> R) -> R {
+fn state<R>(update: impl FnOnce(&mut State) -> R) -> R {
     STATE.with(|state| unsafe { update(&mut *state.get()) })
 }
 
-fn capture<R>(update: impl FnOnce(&mut rsf_dlss_fixture_capture_state) -> R) -> R {
+fn capture<R>(update: impl FnOnce(&mut CaptureState) -> R) -> R {
     CAPTURE.with(|state| unsafe { update(&mut *state.get()) })
 }
 
@@ -44,33 +164,28 @@ fn next() -> u64 {
     value
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_dlss_state() -> *mut rsf_dlss_fixture_state {
+pub(super) fn state_ptr() -> *mut State {
     STATE.with(UnsafeCell::get)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_vk_sl_worker_timeout_epoch() -> u64 {
+/// The Streamline worker epoch of the synthetic tables; a worker timeout advances it.
+pub(super) unsafe extern "C" fn timeout_epoch() -> u64 {
     TIMEOUT_EPOCH.get()
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_dlss_locked() -> u32 {
-    u32::from(LOCKED.get())
+pub(super) fn locked() -> bool {
+    LOCKED.get()
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_dlss_lock(_: Handle) {
+pub(super) unsafe extern "C" fn lock(_: Handle) {
     assert!(!LOCKED.replace(true), "broker lock is never nested");
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_dlss_unlock(_: Handle) {
+pub(super) unsafe extern "C" fn unlock(_: Handle) {
     assert!(LOCKED.replace(false), "broker unlock follows lock");
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_dlss_submit(
+pub(super) unsafe extern "C" fn submit(
     user: Handle,
     count: u32,
     commands: *const core::ffi::c_void,
@@ -520,34 +635,26 @@ unsafe extern "system" fn real_submit(
     SUCCESS
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_dlss_capture_calls_init(out: &mut rsf_dlss_fixture_capture_calls) {
-    *out = rsf_dlss_fixture_capture_calls {
+pub(super) fn capture_calls() -> CaptureCalls {
+    CaptureCalls {
         present: real_present as *const () as usize,
         images: real_images as *const () as usize,
         submit: real_submit as *const () as usize,
         wsi: wsi_lease as *const () as usize,
-    };
+    }
 }
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_dlss_capture_state(out: &mut rsf_dlss_fixture_capture_state) {
-    capture(|state| *out = *state);
+pub(super) fn capture_state() -> CaptureState {
+    capture(|state| *state)
 }
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_dlss_reset_waited_fence() {
+pub(super) fn reset_waited_fence() {
     capture(|state| state.waited_fence = 0);
 }
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fixture_dlss_capture_call(
-    packet: *const rsf_sl_present_capture_packet,
-) -> i32 {
+pub(super) unsafe fn capture_call(packet: *const Packet) -> i32 {
     let user = capture(|state| state.user);
     unsafe { CALLBACK.get().unwrap()(user, packet) }
 }
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_dlss_register_capture(
-    value: &rsf_sl_present_capture_registration,
-) -> i32 {
+pub(super) unsafe extern "C" fn register_capture(value: *const Registration) -> i32 {
+    let value = unsafe { &*value };
     assert_eq!(value.struct_size as usize, size_of_val(value));
     assert_eq!(value.abi_version, RSF_SL_PRESENT_CAPTURE_ABI_VERSION);
     capture(|state| {
@@ -563,14 +670,14 @@ extern "C" fn rsf_fixture_dlss_register_capture(
     CALLBACK.set(value.callback);
     SUCCESS.as_raw()
 }
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fixture_dlss_record(
+pub(super) unsafe extern "C" fn record(
     _: Handle,
     commands: Handle,
-    image: &rsf_srvk_image,
-    record: &rsf_frame_record,
+    image: *const SourceImage,
+    record: *const rsf_frame_record,
     role: *const c_char,
 ) -> u32 {
+    let (image, record) = unsafe { (&*image, &*record) };
     assert_eq!(commands, handle(0x501));
     assert_eq!(image.device, handle(1));
     assert_eq!(
@@ -596,24 +703,20 @@ unsafe extern "C" fn rsf_fixture_dlss_record(
     READBACKS.set(READBACKS.get() + 1);
     1
 }
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_dlss_readbacks(_: Handle) -> u64 {
+pub(super) unsafe extern "C" fn readbacks(_: Handle) -> u64 {
     READBACKS.get()
 }
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_dlss_flush(_: Handle) -> u32 {
+pub(super) unsafe extern "C" fn flush(_: Handle) -> u32 {
     capture(|state| state.flushes += 1);
     1
 }
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_dlss_failure(_: Handle, _: u64, reason: *const c_char, result: i32) {
+pub(super) unsafe extern "C" fn failure(_: Handle, _: u64, reason: *const c_char, result: i32) {
     capture(|state| {
         state.failure = reason;
         state.failure_result = result;
     });
 }
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fixture_dlss_append(
+pub(super) unsafe extern "C" fn append(
     _: Handle,
     file: *const c_char,
     bytes: *const u8,
@@ -639,8 +742,7 @@ unsafe extern "C" fn rsf_fixture_dlss_append(
     capture(|state| state.metadata += 1);
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fixture_dlss_proc(_: Handle, name: *const c_char) -> rsf_vk_function {
+pub(super) unsafe extern "C" fn proc_address(_: Handle, name: *const c_char) -> rsf_vk_function {
     let name = unsafe { CStr::from_ptr(name) };
     macro_rules! entries {
         ($($name:literal, $ty:ident, $call:ident);+ $(;)?) => {

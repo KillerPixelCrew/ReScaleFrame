@@ -1,6 +1,16 @@
 // SPDX-License-Identifier: MIT
-use crate::sys::rsf_dlss_capture_source as Source;
+use crate::sys::rsf_dlssgvk_status as SdkStatus;
+use rsf_game_sys::rsf_frame_record as Record;
 use std::collections::{BTreeMap, BTreeSet};
+
+/// One remembered DLSS-G source frame: its identity, the SDK status and the generated count.
+#[derive(Clone, Copy)]
+pub(crate) struct Source {
+    pub(crate) record: Record,
+    pub(crate) sdk: SdkStatus,
+    pub(crate) generated_count: u32,
+    pub(crate) configured: u32,
+}
 
 pub(crate) const AMBIGUOUS: u32 = 1;
 pub(crate) const TOKEN_RANGE: u32 = 2;

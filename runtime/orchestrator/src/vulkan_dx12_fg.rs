@@ -57,6 +57,8 @@ const SUBMIT_WAIT_CAPACITY: usize = PRESENT_WAIT_LIMIT + 1;
 pub(super) const SLOT_COUNT: usize = RSF_FGVK_FRAME_SLOTS as usize;
 
 pub(crate) mod platform;
+#[cfg(feature = "test-fixtures")]
+mod fsr4_state_fixture;
 
 pub(super) type Handle = *mut c_void;
 pub(super) type Release = unsafe extern "C" fn(Handle) -> i32;

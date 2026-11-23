@@ -15,8 +15,6 @@ test = false
 [features]
 ffx = ["dep:ash", "dep:rsf-vk-fsr3"]
 wsi-dispatch = ["dep:ash"]
-fsr4-state = ["dep:ash"]
-dlss = ["dep:ash"]
 streamline-selected = []
 streamline-dispatch = ["dep:ash"]
 xess-sr = ["dep:ash", "dep:windows-sys"]

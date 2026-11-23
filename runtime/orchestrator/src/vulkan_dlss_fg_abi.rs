@@ -61,6 +61,7 @@ pub(super) struct Sdk {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub(super) struct Platform {
     pub gpu: *const Gpu,
     pub open: unsafe extern "C" fn(*const Setup, *mut Handle) -> i32,

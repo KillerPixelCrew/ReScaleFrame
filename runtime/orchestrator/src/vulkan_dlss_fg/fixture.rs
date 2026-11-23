@@ -1,18 +1,23 @@
 // SPDX-License-Identifier: MIT
+//! The native_fg_dlss_vulkan_contract fixture (test-fixtures only): the production DLSS-G table
+//! and its Rust leaves with synthetic Streamline session and SDK entries and Ash doubles, and the
+//! present capture owner with its real Vulkan, WSI and registration leaves.
 mod sdk;
 mod vulkan;
 
-use crate::sys::*;
-use ash::vk::{self, Handle as _};
-use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record};
-use std::{
-    ffi::{CStr, c_void},
-    ptr,
+use self::sdk::Variant;
+use self::vulkan::capture_state;
+use super::*;
+use crate::dlss_vulkan_capture::{
+    rsf_core_dlss_capture_close, rsf_core_dlss_capture_detach, rsf_core_dlss_capture_remember,
 };
+use crate::sys::{
+    RSF_SL_PRESENT_CAPTURE_ABI_VERSION, rsf_sl_present_capture_packet, rsf_srvk_setup,
+};
+use rsf_game_sys::RSF_GAME_CAMERA_ABI_VERSION;
+use std::ffi::CStr;
 
-type Owner = *mut rsf_dlssgvk;
-type Handle = *mut c_void;
-const OK: i32 = FIXTURE_OK;
+type Fg = *mut Owner;
 const COLOR: vk::ImageUsageFlags = vk::ImageUsageFlags::COLOR_ATTACHMENT;
 const SRC: vk::ImageUsageFlags = vk::ImageUsageFlags::TRANSFER_SRC;
 const DST: vk::ImageUsageFlags = vk::ImageUsageFlags::TRANSFER_DST;
@@ -30,9 +35,9 @@ fn handle(id: usize) -> Handle {
     ptr::without_provenance_mut(id)
 }
 
-fn source(session: u64, id: u64) -> rsf_frame_record {
-    let mut record = rsf_frame_record {
-        struct_size: size_of::<rsf_frame_record>() as u32,
+fn source(session: u64, id: u64) -> Record {
+    let mut record = Record {
+        struct_size: size_of::<Record>() as u32,
         abi_version: RSF_GAME_FRAME_ABI_VERSION,
         session_id: session,
         frame_id: id,
@@ -59,8 +64,8 @@ fn source(session: u64, id: u64) -> rsf_frame_record {
     record
 }
 
-fn input(record: &rsf_frame_record) -> rsf_fgvk_frame {
-    let image = |image, format: vk::Format, extent: vk::Extent2D| rsf_srvk_image {
+fn input(record: &Record) -> Frame {
+    let image = |image, format: vk::Format, extent: vk::Extent2D| SourceImage {
         device: handle(1),
         image,
         format: format.as_raw() as u32,
@@ -69,8 +74,8 @@ fn input(record: &rsf_frame_record) -> rsf_fgvk_frame {
         layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL.as_raw() as u32,
         copy_source: 1,
     };
-    rsf_fgvk_frame {
-        struct_size: size_of::<rsf_fgvk_frame>() as u32,
+    Frame {
+        struct_size: size_of::<Frame>() as u32,
         abi_version: RSF_FGVK_ABI_VERSION,
         record,
         depth: image(99, vk::Format::R32_SFLOAT, RENDER),
@@ -81,9 +86,9 @@ fn input(record: &rsf_frame_record) -> rsf_fgvk_frame {
     }
 }
 
-fn status(owner: Owner) -> rsf_dlssgvk_status {
-    let mut result = rsf_dlssgvk_status {
-        struct_size: size_of::<rsf_dlssgvk_status>() as u32,
+fn status(owner: Fg) -> Status {
+    let mut result = Status {
+        struct_size: size_of::<Status>() as u32,
         abi_version: RSF_DLSSGVK_ABI_VERSION,
         ..Default::default()
     };
@@ -91,15 +96,9 @@ fn status(owner: Owner) -> rsf_dlssgvk_status {
     result
 }
 
-fn capture_state() -> rsf_dlss_fixture_capture_state {
-    let mut result = rsf_dlss_fixture_capture_state::default();
-    unsafe { rsf_fixture_dlss_capture_state(&mut result) };
-    result
-}
-
-fn verify_present_capture(setup: &rsf_fgvk_setup, record: &rsf_frame_record) {
+fn verify_present_capture(setup: &Setup, record: &Record) {
     let mut capture = ptr::null_mut();
-    let mut leaves = rsf_dlss_fixture_capture_calls::default();
+    let mut leaves = vulkan::CaptureCalls::default();
     let chain_info = vk::SwapchainCreateInfoKHR::default()
         .image_usage(SRC | DST)
         .image_format(FORMAT)
@@ -121,15 +120,12 @@ fn verify_present_capture(setup: &rsf_fgvk_setup, record: &rsf_frame_record) {
     };
     const SUBOPTIMAL: i32 = vk::Result::SUBOPTIMAL_KHR.as_raw();
     unsafe {
-        assert_eq!(
-            rsf_fixture_dlss_capture_open(setup, &mut capture, &mut leaves),
-            OK
-        );
+        assert_eq!(sdk::capture_open(setup, &mut capture, &mut leaves), OK);
         let admitted = capture_state();
         assert!(!capture.is_null() && admitted.user == capture.cast());
         assert_eq!((admitted.registered, admitted.registrations), (1, 1));
-        let sdk = rsf_dlssgvk_status {
-            struct_size: size_of::<rsf_dlssgvk_status>() as u32,
+        let sdk = Status {
+            struct_size: size_of::<Status>() as u32,
             abi_version: RSF_DLSSGVK_ABI_VERSION,
             ..Default::default()
         };
@@ -151,7 +147,7 @@ fn verify_present_capture(setup: &rsf_fgvk_setup, record: &rsf_frame_record) {
             native_submit: leaves.submit,
             native_wsi_call: leaves.wsi,
         };
-        assert_eq!(rsf_fixture_dlss_capture_call(&packet), SUBOPTIMAL);
+        assert_eq!(vulkan::capture_call(&packet), SUBOPTIMAL);
         let observed = capture_state();
         assert_eq!(
             (
@@ -207,7 +203,7 @@ fn verify_present_capture(setup: &rsf_fgvk_setup, record: &rsf_frame_record) {
         );
 
         packet.source_frame = 7;
-        assert_eq!(rsf_fixture_dlss_capture_call(&packet), SUBOPTIMAL);
+        assert_eq!(vulkan::capture_call(&packet), SUBOPTIMAL);
         let unmapped = capture_state();
         assert_eq!(
             (
@@ -220,7 +216,7 @@ fn verify_present_capture(setup: &rsf_fgvk_setup, record: &rsf_frame_record) {
         packet.source_frame = 42;
         let no_source = chain_info.image_usage(DST);
         packet.swapchain_info = ptr::from_ref(&no_source).cast();
-        assert_eq!(rsf_fixture_dlss_capture_call(&packet), SUBOPTIMAL);
+        assert_eq!(vulkan::capture_call(&packet), SUBOPTIMAL);
         let unchanged = capture_state();
         assert_eq!(
             (
@@ -241,7 +237,7 @@ fn verify_present_capture(setup: &rsf_fgvk_setup, record: &rsf_frame_record) {
         );
         packet.native_wsi_call = 0;
         assert_eq!(
-            rsf_fixture_dlss_capture_call(&packet),
+            vulkan::capture_call(&packet),
             vk::Result::ERROR_INITIALIZATION_FAILED.as_raw()
         );
         assert_eq!(capture_state().real_presents, 3);
@@ -263,7 +259,7 @@ extern "C" fn rsf_fixture_dlss_run() -> i32 {
     // Capture stays disabled for the provider scenarios.
     unsafe { std::env::remove_var("RSF_VULKAN_FRAME_CAPTURE_DIR") };
     // Read or mutate the native doubles only between calls into the provider.
-    let state = unsafe { rsf_fixture_dlss_state() };
+    let state = vulkan::state_ptr();
     macro_rules! f {
         ($field:ident) => {
             (*state).$field
@@ -278,8 +274,8 @@ extern "C" fn rsf_fixture_dlss_run() -> i32 {
         .image_format(FORMAT)
         .image_array_layers(1)
         .image_usage(COLOR);
-    let mut setup = rsf_fgvk_setup {
-        struct_size: size_of::<rsf_fgvk_setup>() as u32,
+    let mut setup = Setup {
+        struct_size: size_of::<Setup>() as u32,
         abi_version: RSF_FGVK_ABI_VERSION,
         graphics: rsf_srvk_setup {
             struct_size: size_of::<rsf_srvk_setup>() as u32,
@@ -287,8 +283,8 @@ extern "C" fn rsf_fixture_dlss_run() -> i32 {
             instance: handle(6),
             physical_device: handle(7),
             device,
-            instance_proc: Some(rsf_fixture_dlss_proc),
-            device_proc: Some(rsf_fixture_dlss_proc),
+            instance_proc: Some(vulkan::proc_address),
+            device_proc: Some(vulkan::proc_address),
             output_width: OUTPUT.width,
             output_height: OUTPUT.height,
             ..Default::default()
@@ -296,9 +292,9 @@ extern "C" fn rsf_fixture_dlss_run() -> i32 {
         queues: [queue, ptr::null_mut(), ptr::null_mut(), ptr::null_mut()],
         queue_user: queue,
         allocator: handle(4),
-        graphics_submit: Some(rsf_fixture_dlss_submit),
-        lock_queues: Some(rsf_fixture_dlss_lock),
-        unlock_queues: Some(rsf_fixture_dlss_unlock),
+        graphics_submit: Some(vulkan::submit),
+        lock_queues: Some(vulkan::lock),
+        unlock_queues: Some(vulkan::unlock),
         ..Default::default()
     };
     let mut owner = ptr::null_mut();
@@ -312,7 +308,7 @@ extern "C" fn rsf_fixture_dlss_run() -> i32 {
     let explicit = |owner, record| unsafe {
         rsf_dlssgvk_present_source(owner, ptr::from_ref(&info).cast(), record)
     };
-    let stage = |owner: Owner, record: &rsf_frame_record| {
+    let stage = |owner: Fg, record: &Record| {
         let input = input(record);
         assert_eq!(
             unsafe { rsf_dlssgvk_prepare(owner, commands[0], &input) },
@@ -328,19 +324,19 @@ extern "C" fn rsf_fixture_dlss_run() -> i32 {
     unsafe {
         assert_eq!(
             rsf_dlssgvk_create(ptr::null(), ptr::null_mut(), ptr::null_mut()),
-            FIXTURE_INVALID_ARGUMENT
+            INVALID
         );
         assert_eq!(
             rsf_dlssgvk_prepare(ptr::null_mut(), ptr::null_mut(), ptr::null()),
-            FIXTURE_INVALID_ARGUMENT
+            INVALID
         );
         assert_eq!(rsf_dlssgvk_destroy(ptr::null_mut()), OK);
 
         let bad_type = vk::StructureType::DEVICE_CREATE_INFO;
         setup.create_info = ptr::from_ref(&bad_type).cast();
         assert_eq!(
-            rsf_fixture_dlss_create(RSF_DLSS_FIXTURE_NORMAL, &setup, &mut owner, &mut chain_out),
-            FIXTURE_INVALID_ARGUMENT
+            sdk::create(Variant::Normal, &setup, &mut owner, &mut chain_out),
+            INVALID
         );
         assert!(
             owner.is_null() && chain_out == 0 && f!(chain_creates) == 0,
@@ -349,8 +345,8 @@ extern "C" fn rsf_fixture_dlss_run() -> i32 {
         let layered = create.image_array_layers(2);
         setup.create_info = ptr::from_ref(&layered).cast();
         assert_eq!(
-            rsf_fixture_dlss_create(RSF_DLSS_FIXTURE_NORMAL, &setup, &mut owner, &mut chain_out),
-            FIXTURE_INVALID_ARGUMENT
+            sdk::create(Variant::Normal, &setup, &mut owner, &mut chain_out),
+            INVALID
         );
         assert!(
             owner.is_null() && chain_out == 0 && f!(chain_creates) == 0,
@@ -358,20 +354,15 @@ extern "C" fn rsf_fixture_dlss_run() -> i32 {
         );
         setup.create_info = ptr::from_ref(&create).cast();
         assert_eq!(
-            rsf_fixture_dlss_create(RSF_DLSS_FIXTURE_NORMAL, &setup, &mut owner, &mut chain_out),
+            sdk::create(Variant::Normal, &setup, &mut owner, &mut chain_out),
             OK
         );
         assert!(!owner.is_null() && chain_out == chain.as_raw());
 
         let (mut second, mut second_chain) = (ptr::null_mut(), 0);
         assert_eq!(
-            rsf_fixture_dlss_create(
-                RSF_DLSS_FIXTURE_NORMAL,
-                &setup,
-                &mut second,
-                &mut second_chain
-            ),
-            FIXTURE_NOT_READY
+            sdk::create(Variant::Normal, &setup, &mut second, &mut second_chain),
+            NOT_READY
         );
         assert!(
             second.is_null() && second_chain == 0,
@@ -401,12 +392,9 @@ extern "C" fn rsf_fixture_dlss_run() -> i32 {
             layout,
             vk::ImageLayout::TRANSFER_SRC_OPTIMAL.as_raw() as u32
         );
-        assert_eq!(
-            rsf_dlssgvk_image_layout(owner, ptr::null_mut()),
-            FIXTURE_INVALID_ARGUMENT
-        );
-        assert_eq!(rsf_dlssgvk_enable(owner, 1, 4), FIXTURE_NOT_SUPPORTED);
-        assert_eq!(rsf_dlssgvk_enable(owner, 1, 0), FIXTURE_INVALID_ARGUMENT);
+        assert_eq!(rsf_dlssgvk_image_layout(owner, ptr::null_mut()), INVALID);
+        assert_eq!(rsf_dlssgvk_enable(owner, 1, 4), NOT_SUPPORTED);
+        assert_eq!(rsf_dlssgvk_enable(owner, 1, 0), INVALID);
         assert_eq!(rsf_dlssgvk_enable(owner, 1, 3), OK);
 
         f!(lease_frame) = 42;
@@ -459,7 +447,7 @@ extern "C" fn rsf_fixture_dlss_run() -> i32 {
         let previous = f!(copies);
         assert_eq!(
             rsf_dlssgvk_prepare(owner, commands[0], &input(&recycle)),
-            FIXTURE_NOT_READY
+            NOT_READY
         );
         assert_eq!(f!(copies), previous, "timeline timeout retains the slot");
         f!(refuse_inputs_wait) = false;
@@ -552,18 +540,15 @@ extern "C" fn rsf_fixture_dlss_run() -> i32 {
             "foreign chain stays outside WSI"
         );
         snapshot.abi_version = 99;
-        assert_eq!(
-            rsf_dlssgvk_get_status(owner, &mut snapshot),
-            FIXTURE_ABI_MISMATCH
-        );
+        assert_eq!(rsf_dlssgvk_get_status(owner, &mut snapshot), ABI_MISMATCH);
         assert_eq!(status(owner).requested_generated_frames, 3);
 
         f!(worker_timeout) = true;
-        assert_eq!(rsf_dlssgvk_destroy(owner), FIXTURE_NOT_READY);
+        assert_eq!(rsf_dlssgvk_destroy(owner), NOT_READY);
         assert_eq!((f!(destroyed_chains), f!(release_calls)), (0, 0));
         f!(worker_timeout) = false;
         f!(refuse_inputs_wait) = true;
-        assert_eq!(rsf_dlssgvk_destroy(owner), FIXTURE_NOT_READY);
+        assert_eq!(rsf_dlssgvk_destroy(owner), NOT_READY);
         assert_eq!((f!(destroyed_chains), f!(release_calls)), (0, 0));
         f!(refuse_inputs_wait) = false;
         assert_eq!(rsf_dlssgvk_drain(owner), OK);
@@ -572,25 +557,25 @@ extern "C" fn rsf_fixture_dlss_run() -> i32 {
         f!(refuse_tags) = true;
         assert_eq!(
             rsf_dlssgvk_prepare(owner, commands[0], &input(&source(8, 5))),
-            FIXTURE_FEATURE_FAILED
+            FEATURE_FAILED
         );
         f!(refuse_tags) = false;
         let previous = f!(off_calls);
-        assert_eq!(rsf_dlssgvk_destroy(owner), FIXTURE_NOT_READY);
+        assert_eq!(rsf_dlssgvk_destroy(owner), NOT_READY);
         assert_eq!((f!(destroyed_chains), f!(off_calls)), (0, previous));
         let previous = f!(fence_submits);
         submitted(owner, 1);
         assert_eq!(f!(fence_submits), previous + 1);
         assert_eq!(rsf_dlssgvk_drain(owner), OK);
         f!(refuse_release) = true;
-        assert_eq!(rsf_dlssgvk_destroy(owner), FIXTURE_FEATURE_FAILED);
+        assert_eq!(rsf_dlssgvk_destroy(owner), FEATURE_FAILED);
         assert_eq!((f!(release_calls), f!(destroyed_chains)), (1, 0));
         f!(refuse_release) = false;
         assert_eq!(rsf_dlssgvk_destroy(owner), OK);
         assert_eq!((f!(release_calls), f!(destroyed_chains)), (2, 1));
 
         assert_eq!(
-            rsf_fixture_dlss_create(RSF_DLSS_FIXTURE_NORMAL, &setup, &mut owner, &mut chain_out),
+            sdk::create(Variant::Normal, &setup, &mut owner, &mut chain_out),
             OK
         );
         assert_eq!(present(owner), OK);
@@ -599,37 +584,37 @@ extern "C" fn rsf_fixture_dlss_run() -> i32 {
         assert_eq!(f!(destroyed_chains), 2);
         let mut refused = |variant, expected, destroyed| {
             assert_eq!(
-                rsf_fixture_dlss_create(variant, &setup, &mut owner, &mut chain_out),
+                sdk::create(variant, &setup, &mut owner, &mut chain_out),
                 expected
             );
             assert!(owner.is_null() && chain_out == 0);
             // A fresh pointer, so the closure holds no borrow of the state.
-            assert_eq!((*rsf_fixture_dlss_state()).destroyed_chains, destroyed);
+            assert_eq!((*vulkan::state_ptr()).destroyed_chains, destroyed);
         };
         f!(max_generated) = 0;
-        refused(RSF_DLSS_FIXTURE_NORMAL, FIXTURE_NOT_SUPPORTED, 2);
+        refused(Variant::Normal, NOT_SUPPORTED, 2);
         f!(max_generated) = 3;
         f!(refuse_create) = true;
-        refused(RSF_DLSS_FIXTURE_NORMAL, FIXTURE_INIT_FAILED, 2);
+        refused(Variant::Normal, INIT_FAILED, 2);
         f!(refuse_create) = false;
         f!(refuse_enumeration) = true;
-        refused(RSF_DLSS_FIXTURE_NORMAL, FIXTURE_INIT_FAILED, 3);
+        refused(Variant::Normal, INIT_FAILED, 3);
         f!(refuse_enumeration) = false;
         f!(backbuffer_count) = 0;
-        refused(RSF_DLSS_FIXTURE_NORMAL, FIXTURE_INIT_FAILED, 4);
+        refused(Variant::Normal, INIT_FAILED, 4);
         f!(backbuffer_count) = 3;
         let previous = f!(chain_creates);
-        refused(RSF_DLSS_FIXTURE_CAPTURE_REQUIRED, FIXTURE_NOT_SUPPORTED, 4);
+        refused(Variant::CaptureRequired, NOT_SUPPORTED, 4);
         assert_eq!(f!(chain_creates), previous);
         f!(surface_usage) = (COLOR | SRC).as_raw();
-        refused(RSF_DLSS_FIXTURE_NORMAL, FIXTURE_NOT_SUPPORTED, 4);
+        refused(Variant::Normal, NOT_SUPPORTED, 4);
         assert_eq!(f!(chain_creates), previous);
         f!(surface_usage) |= DST.as_raw();
         f!(expected_chain_usage) = f!(surface_usage);
-        refused(RSF_DLSS_FIXTURE_CAPTURE_REFUSED, FIXTURE_FEATURE_FAILED, 5);
+        refused(Variant::CaptureRefused, FEATURE_FAILED, 5);
 
         assert_eq!(
-            rsf_fixture_dlss_create(RSF_DLSS_FIXTURE_NORMAL, &setup, &mut owner, &mut chain_out),
+            sdk::create(Variant::Normal, &setup, &mut owner, &mut chain_out),
             OK
         );
         assert_ne!(chain_out, 0);

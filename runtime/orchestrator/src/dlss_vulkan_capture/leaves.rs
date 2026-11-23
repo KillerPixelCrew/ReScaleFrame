@@ -3,14 +3,13 @@
 //! capture owner, formerly native_fg_dlss_vulkan_capture.cpp. The owner in
 //! dlss_vulkan_capture.rs decides admission, command and fence lifetime,
 //! submission order and retirement.
-use super::{Callback, Handle, Packet, Platform};
+use super::{Callback, Handle, Packet, Platform, Target};
 use crate::frame_capture_vk::{
     Owner as Capture, rsf_core_capture_vk_complete_group, rsf_core_capture_vk_create,
     rsf_core_capture_vk_destroy, rsf_core_capture_vk_enabled, rsf_core_capture_vk_flush,
     rsf_core_capture_vk_initialize, rsf_core_capture_vk_pending, rsf_core_capture_vk_provider,
     rsf_core_capture_vk_record, rsf_core_capture_vk_wants,
 };
-use crate::sys::rsf_dlss_capture_target as Target;
 use crate::sys::rsf_fgvk_setup as Setup;
 use crate::sys::rsf_srvk_image as Image;
 use crate::vulkan_capture_commands::Commands;
@@ -428,10 +427,9 @@ unsafe extern "C" fn append(handle: Handle, file: *const c_char, line: *const u8
     append_bytes(handle, &file, line);
 }
 
-/// The production leaves. The native fixture copies the table and replaces
+/// The production leaves. The DLSS-G fixture copies the table and replaces
 /// open and the frame, readback and file entries.
-#[unsafe(no_mangle)]
-pub(crate) static rsf_core_dlss_capture_leaves: Platform = Platform {
+pub(crate) static LEAVES: Platform = Platform {
     open,
     close,
     register,
@@ -459,12 +457,9 @@ pub(crate) static rsf_core_dlss_capture_leaves: Platform = Platform {
 };
 
 /// A capture native with the fixture's registration entry and no file output
-/// or capture initialization, for the native present-capture fixture.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_capture_native(
-    setup: *const Setup,
-    register: Register,
-) -> Handle {
+/// or capture initialization, for the DLSS-G present-capture fixture.
+#[cfg(feature = "test-fixtures")]
+pub(crate) unsafe fn fixture_native(setup: *const Setup, register: Register) -> Handle {
     let Some(setup) = (unsafe { setup.as_ref() }) else {
         return ptr::null_mut();
     };
