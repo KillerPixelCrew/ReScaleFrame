@@ -678,8 +678,9 @@ pub(crate) unsafe extern "C" fn rsf_xessgvk_present_source(
 }
 
 /// native_fg_xess_vulkan_present.c binds the XeSS bridge exports, which exist only in builds with the
-/// XeSS-FG SDK, and calls `rsf_core_xessgvk_create`.
-#[cfg(feature = "xess-fg-vk")]
+/// XeSS-FG SDK, and calls `rsf_core_xessgvk_create`. vulkan_fg dispatches to it outside unit tests,
+/// which substitute a fake.
+#[cfg(all(not(test), feature = "xess-fg-vk"))]
 pub(crate) use crate::sys::rsf_xessgvk_create;
 
 #[unsafe(no_mangle)]

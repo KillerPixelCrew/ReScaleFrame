@@ -147,7 +147,9 @@ unsafe impl Send for Log {}
 impl Log {
     fn emit(self, message: &CStr) {
         // The shared foreign-exception guard keeps a throwing carrier logger out of Rust.
-        unsafe { rsf_game_sys::rsf_game_log_guarded(Some(self.write), self.user, message.as_ptr()) };
+        unsafe {
+            rsf_game_sys::rsf_game_log_guarded(Some(self.write), self.user, message.as_ptr())
+        };
     }
 }
 

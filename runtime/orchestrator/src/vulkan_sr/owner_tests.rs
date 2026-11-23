@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use crate::sys::rsf_vkdlss_options;
 use crate::sys::rsf_vkfg_image;
 use crate::sys::{RSF_SLVK_ABI_VERSION, rsf_slvk_call};
-use crate::sys::rsf_vkdlss_options;
-use crate::vulkan_dlss_sr::{Init as rsf_vkdlss_init, Platform as rsf_vkdlss_platform, Tag as rsf_vkdlss_tag};
+use crate::vulkan_dlss_sr::{
+    Init as rsf_vkdlss_init, Platform as rsf_vkdlss_platform, Tag as rsf_vkdlss_tag,
+};
 use crate::vulkan_streamline_camera::rsf_slvk_sdk_constants;
 use ash::vk::{self, Handle as _};
 
@@ -611,15 +613,9 @@ fn ffx_owner_reuses_staging_and_only_publishes_an_accepted_output() {
         ]
     );
     let (mut width, mut height) = (0, 0);
-    assert_eq!(
-        unsafe { rsf_srvk_plan(owner, &mut width, &mut height) },
-        0
-    );
+    assert_eq!(unsafe { rsf_srvk_plan(owner, &mut width, &mut height) }, 0);
     assert_eq!((width, height), (64, 36));
-    assert_eq!(
-        unsafe { rsf_srvk_dlss_preset(owner, 11) },
-        NOT_SUPPORTED
-    );
+    assert_eq!(unsafe { rsf_srvk_dlss_preset(owner, 11) }, NOT_SUPPORTED);
 
     let commands = ptr::dangling_mut::<u8>().cast();
     let mut record = frame_record();
@@ -881,19 +877,10 @@ fn dlss_owner_routing_preserves_history_and_checked_release() {
         ]
     );
     let (mut width, mut height) = (0, 0);
-    assert_eq!(
-        unsafe { rsf_srvk_plan(owner, &mut width, &mut height) },
-        0
-    );
+    assert_eq!(unsafe { rsf_srvk_plan(owner, &mut width, &mut height) }, 0);
     assert_eq!([width, height], [64, 36]);
-    assert_eq!(
-        unsafe { rsf_srvk_dlss_preset(owner, FAKE_DLSS_PRESET) },
-        0
-    );
-    assert_eq!(
-        unsafe { rsf_srvk_dlss_preset(owner, 99) },
-        INVALID_ARGUMENT
-    );
+    assert_eq!(unsafe { rsf_srvk_dlss_preset(owner, FAKE_DLSS_PRESET) }, 0);
+    assert_eq!(unsafe { rsf_srvk_dlss_preset(owner, 99) }, INVALID_ARGUMENT);
     let commands = ptr::from_mut(&mut state).cast();
     let mut record = frame_record();
     for (frame_id, result, reset) in [(1, 0, 1), (2, FAILED, 0), (3, 0, 1)] {

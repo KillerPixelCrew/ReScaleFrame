@@ -25,7 +25,14 @@ impl Log {
     /// Interior NULs are dropped.
     pub(crate) fn say(self, text: impl Display) {
         if self.callback.is_some() {
-            rsf_game_sys::log_guarded(self.callback, self.user as *mut c_void, &text.to_string());
+            // SAFETY: the host handed over the callback with its user pointer.
+            unsafe {
+                rsf_game_sys::log_guarded(
+                    self.callback,
+                    self.user as *mut c_void,
+                    &text.to_string(),
+                )
+            };
         }
     }
 }

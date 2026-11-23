@@ -51,7 +51,8 @@ pub struct Streamline {
     pub initialize: Option<unsafe extern "C" fn(*const u16, *const c_char, u32, u32, u32) -> i32>,
     pub shutdown: Option<unsafe extern "C" fn() -> i32>,
     pub module: Option<unsafe extern "C" fn() -> *mut c_void>,
-    pub invoke: Option<unsafe extern "C" fn(rsf_slvk_callback, *mut c_void, usize, *mut c_void) -> i32>,
+    pub invoke:
+        Option<unsafe extern "C" fn(rsf_slvk_callback, *mut c_void, usize, *mut c_void) -> i32>,
     pub set_interval: Option<unsafe extern "C" fn(i32, u32) -> i32>,
     pub sleep: Option<unsafe extern "C" fn() -> i32>,
     pub tokens: TokenCalls,
@@ -288,10 +289,7 @@ pub unsafe fn rsf_core_latencyvk_initialize(
 /// # Safety
 ///
 /// `setup` is null or a size-prefixed record of its stated size.
-pub unsafe fn rsf_core_slvk_initialize(
-    platform: &Platform,
-    setup: *const rsf_slvk_setup,
-) -> i32 {
+pub unsafe fn rsf_core_slvk_initialize(platform: &Platform, setup: *const rsf_slvk_setup) -> i32 {
     if !unsafe { has_capacity(setup) } {
         return INVALID_ARGUMENT;
     }
@@ -772,8 +770,10 @@ mod streamline_bridge {
         ) -> i32;
         fn rsf_vk_sl_module() -> *mut c_void;
         fn rsf_vk_sl_shutdown_checked() -> i32;
-        fn rsf_vk_sl_get_instance_proc_addr(instance: *mut c_void, name: *const c_char)
-        -> rsf_vk_function;
+        fn rsf_vk_sl_get_instance_proc_addr(
+            instance: *mut c_void,
+            name: *const c_char,
+        ) -> rsf_vk_function;
         fn rsf_vk_sl_bind_reflex() -> i32;
         fn rsf_vk_sl_bind_pcl() -> i32;
         fn rsf_vk_sl_pcl_window_message() -> u32;
@@ -934,7 +934,10 @@ extern "C" fn rsf_latencyvk_shutdown() -> i32 {
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_slvk_without_dlssg(callback: rsf_vk_wsi_call, user: *mut c_void) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_slvk_without_dlssg(
+    callback: rsf_vk_wsi_call,
+    user: *mut c_void,
+) -> i32 {
     unsafe {
         crate::vulkan_fg_wsi::rsf_core_slvk_without_dlssg(
             streamline_bridge::WITHOUT_DLSS_G,
@@ -976,8 +979,13 @@ pub(crate) unsafe extern "C" fn rsf_latencyvk_queue_present(
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_latencyvk_wsi_call(callback: rsf_vk_wsi_call, user: *mut c_void) -> i32 {
-    unsafe { crate::vulkan_fg_wsi::rsf_core_latencyvk_wsi_call(streamline_bridge::WSI, callback, user) }
+pub(crate) unsafe extern "C" fn rsf_latencyvk_wsi_call(
+    callback: rsf_vk_wsi_call,
+    user: *mut c_void,
+) -> i32 {
+    unsafe {
+        crate::vulkan_fg_wsi::rsf_core_latencyvk_wsi_call(streamline_bridge::WSI, callback, user)
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -1004,7 +1012,9 @@ unsafe extern "C" fn rsf_latencyvk_require_device(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_latencyvk_device_created(facts: *const rsf_latencyvk_created_device) -> i32 {
+unsafe extern "C" fn rsf_latencyvk_device_created(
+    facts: *const rsf_latencyvk_created_device,
+) -> i32 {
     unsafe { rsf_core_amd_vk_device_created(ANTILAG, facts) }
 }
 

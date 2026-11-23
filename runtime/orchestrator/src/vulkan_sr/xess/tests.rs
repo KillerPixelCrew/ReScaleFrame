@@ -786,10 +786,7 @@ fn refused_creation_unwinds_partial_state_and_releases_the_sdk_reference() {
             rsf_srvk_plan(owner.cast(), &mut width, &mut height),
             NOT_READY
         );
-        assert_eq!(
-            rsf_srvk_evaluate(owner.cast(), handle(), &input),
-            NOT_READY
-        );
+        assert_eq!(rsf_srvk_evaluate(owner.cast(), handle(), &input), NOT_READY);
         edit_state(|fake| fake.destroy = XESS_SUCCESS);
         assert_eq!(rsf_srvk_destroy(owner.cast()), 0);
         assert_eq!(calls().last(), Some(&Call::Close));
@@ -817,10 +814,7 @@ fn shared_srvk_owner_routes_xess_and_refuses_presets() {
         edit_state(|fake| fake.calls.clear());
         let commands = ptr::dangling_mut::<u32>().cast();
         input.sharpening.struct_size = 1;
-        assert_eq!(
-            rsf_srvk_evaluate(owner, commands, &input),
-            INVALID_ARGUMENT
-        );
+        assert_eq!(rsf_srvk_evaluate(owner, commands, &input), INVALID_ARGUMENT);
         assert!(calls().is_empty());
         input.sharpening.struct_size = 0;
         assert_eq!(rsf_srvk_evaluate(owner, commands, &input), 0);

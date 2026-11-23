@@ -952,11 +952,7 @@ unsafe fn rsf_core_srvk_create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_srvk_plan(
-    owner: *const Owner,
-    width: *mut u32,
-    height: *mut u32,
-) -> i32 {
+unsafe extern "C" fn rsf_srvk_plan(owner: *const Owner, width: *mut u32, height: *mut u32) -> i32 {
     let Some(owner) = (unsafe { owner.as_ref() }) else {
         return INVALID_ARGUMENT;
     };

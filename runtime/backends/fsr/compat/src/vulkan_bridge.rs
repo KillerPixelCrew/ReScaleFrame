@@ -8,19 +8,19 @@
 use crate::ffx_version::{self, MAX_VERSIONS, Version};
 use core::ffi::{CStr, c_void};
 use core::ptr;
+use rsf_game_sys::ffi_util::try_box;
+use rsf_game_sys::windows_path::absolute_wide_path;
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R32_FLOAT,
 };
-use rsf_game_sys::windows_path::absolute_wide_path;
-use rsf_game_sys::ffi_util::try_box;
 
+use crate::dx12_bridge::{self as dx12, can_signal_done, next_local_completion};
 use crate::sys::{
     RSF_FSR4_BRIDGE_ABI_MISMATCH as ABI_MISMATCH,
     RSF_FSR4_BRIDGE_ABI_VERSION as BRIDGE_ABI_VERSION,
     RSF_FSR4_BRIDGE_INVALID_ARGUMENT as INVALID_ARGUMENT, rsf_fsr4_bridge_create as BridgeCreate,
     rsf_fsr4_bridge_frame as BridgeFrame, rsf_fsr4_bridge_info as BridgeInfo,
 };
-use crate::dx12_bridge::{self as dx12, can_signal_done, next_local_completion};
 mod native;
 use native::Capsule;
 mod sdk;
@@ -540,9 +540,7 @@ impl Session {
     ///
     /// Every failure still waits for producer readiness before signalling.
     fn finish(&mut self, ready: u64, done: u64, result: i32) -> i32 {
-        if !can_signal_done(ready, done, self.last_done)
-            || !self.has(QUEUE | SHARED_FENCE)
-        {
+        if !can_signal_done(ready, done, self.last_done) || !self.has(QUEUE | SHARED_FENCE) {
             return result;
         }
         let wait = self.native.wait_shared(ready);
@@ -686,12 +684,7 @@ pub unsafe fn sharpness(session: *mut Session, amount: f32) -> i32 {
 
 /// # Safety
 /// Non-null pointers must be a live bridge and writable outputs.
-pub unsafe fn plan(
-    session: *mut Session,
-    quality: u32,
-    width: *mut u32,
-    height: *mut u32,
-) -> i32 {
+pub unsafe fn plan(session: *mut Session, quality: u32, width: *mut u32, height: *mut u32) -> i32 {
     let Some(session) = (unsafe { session.as_mut() }) else {
         return INVALID_ARGUMENT;
     };
@@ -732,15 +725,14 @@ pub unsafe fn create_image(
     if !session.has(DEVICE) {
         return FAILED;
     }
-    session.native.create_image(width, height, format, writable, handle, resource)
+    session
+        .native
+        .create_image(width, height, format, writable, handle, resource)
 }
 
 /// # Safety
 /// Non-null pointers must be a live bridge and a writable handle.
-pub unsafe fn create_fence(
-    session: *mut Session,
-    handle: *mut Handle,
-) -> i32 {
+pub unsafe fn create_fence(session: *mut Session, handle: *mut Handle) -> i32 {
     let Some(session) = (unsafe { session.as_mut() }) else {
         return FAILED;
     };
@@ -764,10 +756,7 @@ fn frame_time_ms(delta: f32) -> f32 {
 
 /// # Safety
 /// Non-null pointers must be a live bridge and a readable legacy frame.
-unsafe fn evaluate_legacy(
-    session: *mut Session,
-    frame: *const LegacyFrame,
-) -> i32 {
+unsafe fn evaluate_legacy(session: *mut Session, frame: *const LegacyFrame) -> i32 {
     let (Some(session), Some(frame)) = (unsafe { session.as_mut() }, unsafe { frame.as_ref() })
     else {
         return FAILED;
@@ -803,10 +792,7 @@ unsafe fn evaluate_legacy(
 
 /// # Safety
 /// Non-null pointers must be a live bridge and a readable frame header.
-pub unsafe fn evaluate(
-    session: *mut Session,
-    frame: *const BridgeFrame,
-) -> i32 {
+pub unsafe fn evaluate(session: *mut Session, frame: *const BridgeFrame) -> i32 {
     let Some(session) = (unsafe { session.as_mut() }) else {
         return INVALID_ARGUMENT;
     };
@@ -1021,17 +1007,11 @@ mod tests {
     #[test]
     fn null_bridges_and_vendor_policy() {
         unsafe {
-            assert_eq!(
-                sharpness(ptr::null_mut(), 0.5),
-                INVALID_ARGUMENT
-            );
+            assert_eq!(sharpness(ptr::null_mut(), 0.5), INVALID_ARGUMENT);
             assert_eq!(wait_idle(ptr::null_mut()), 0);
             assert_eq!(prepare_destroy(ptr::null_mut()), 0);
             assert_eq!(destroy(ptr::null_mut()), 0);
-            assert_eq!(
-                evaluate_legacy(ptr::null_mut(), ptr::null()),
-                FAILED
-            );
+            assert_eq!(evaluate_legacy(ptr::null_mut(), ptr::null()), FAILED);
         }
         assert!(candidate(0x10de));
         assert!(!candidate(0x5143));

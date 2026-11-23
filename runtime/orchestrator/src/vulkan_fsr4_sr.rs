@@ -752,11 +752,7 @@ unsafe fn create_admitted(
     0
 }
 
-unsafe fn rsf_fsr4vk_plan(
-    owner: *const Owner,
-    width: *mut u32,
-    height: *mut u32,
-) -> i32 {
+unsafe fn rsf_fsr4vk_plan(owner: *const Owner, width: *mut u32, height: *mut u32) -> i32 {
     let Some(owner) = (unsafe { owner.as_ref() }) else {
         return INVALID;
     };
@@ -776,10 +772,7 @@ unsafe extern "C" fn rsf_fsr4vk_info(owner: *const Owner, info: *mut Info) -> i3
     unsafe { owner.as_ref() }.map_or(INVALID, |owner| owner.info(info))
 }
 
-unsafe fn public_info(
-    owner: *const Owner,
-    public: &mut rsf_srvk_fsr4_provider_info,
-) -> i32 {
+unsafe fn public_info(owner: *const Owner, public: &mut rsf_srvk_fsr4_provider_info) -> i32 {
     let mut native = Info {
         struct_size: size_of::<Info>() as u32,
         abi_version: RSF_FSR4_BRIDGE_ABI_VERSION,

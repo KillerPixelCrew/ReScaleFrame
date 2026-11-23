@@ -225,6 +225,7 @@ fn bind(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(in crate::motion::device_fixture) unsafe fn rsf_anomaly_motion_fixture_bind_stage(
     keep: &mut Bindings,
     device: Raw,

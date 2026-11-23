@@ -123,11 +123,11 @@ static INTEROP: InteropPlatform = InteropPlatform {
         });
     }),
     image_properties: entry!(|_: Handle,
-                             format: u32,
-                             usage: u32,
-                             allowed: *mut u32,
-                             width: *mut u32,
-                             height: *mut u32|
+                              format: u32,
+                              usage: u32,
+                              allowed: *mut u32,
+                              width: *mut u32,
+                              height: *mut u32|
      -> i32 {
         with(|c| {
             check!(c, FORMATS.get(c.queries) == Some(&format));
@@ -150,11 +150,11 @@ static INTEROP: InteropPlatform = InteropPlatform {
         0
     }),
     create_image: entry!(|_: Handle,
-                         format: u32,
-                         width: u32,
-                         height: u32,
-                         usage: u32,
-                         out: *mut u64|
+                          format: u32,
+                          width: u32,
+                          height: u32,
+                          usage: u32,
+                          out: *mut u64|
      -> i32 {
         let index = with(|c| {
             let index = c.images;
@@ -187,11 +187,11 @@ static INTEROP: InteropPlatform = InteropPlatform {
     }),
     device_local_types: entry!(|_: Handle| -> u32 { 0b1100 }),
     allocate_memory: entry!(|_: Handle,
-                            image: u64,
-                            _: Handle,
-                            bytes: u64,
-                            kind: u32,
-                            out: *mut u64|
+                             image: u64,
+                             _: Handle,
+                             bytes: u64,
+                             kind: u32,
+                             out: *mut u64|
      -> i32 {
         with(|c| check!(c, bytes == 256 && kind == 2));
         unsafe { out.write(image + 100) };
