@@ -2,6 +2,7 @@
 include_guard(GLOBAL)
 rsf_add_rust_static(rsf_loader_fixtures_rust rsf_rust_loader_fixtures
     rsf-loader-fixtures rsf_loader_fixtures)
+target_link_libraries(rsf_loader_fixtures_rust INTERFACE minhook)
 
 function(rsf_add_loader_test target entry)
     add_executable(${target} "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/fixture_main.c")
