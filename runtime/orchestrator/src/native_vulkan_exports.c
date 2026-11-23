@@ -1,6 +1,10 @@
 /* SPDX-License-Identifier: MIT */
 /* The Runtime DLL's exports of public Vulkan entry points that Rust defines (rsf_native_vulkan is
-   linked whole, so these directives always reach the DLL). */
+   linked whole, so these directives always reach the DLL). The headers declare them, which also
+   keeps the unit from being empty (C4206 under /WX). */
+#include <rescaleframe/native_latency_vulkan.h>
+#include <rescaleframe/native_streamline_vulkan.h>
+#include <rescaleframe/native_xess_vulkan_requirements.h>
 #include "rust_export.h"
 
 /* vulkan_latency.rs */

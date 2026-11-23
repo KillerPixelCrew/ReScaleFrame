@@ -436,7 +436,8 @@ rsf_add_fixture_test(rsf_latency_host_test NAME latency_host ENTRY rsf_test_late
 # The latency fixture drives the Rust latency owner with its own FG endpoints and fake Streamline table.
 add_executable(rsf_native_latency_vulkan_test fixture_main.c)
 target_compile_definitions(rsf_native_latency_vulkan_test PRIVATE RSF_FIXTURE_ENTRY=rsf_native_latency_vulkan_fixture)
-target_link_libraries(rsf_native_latency_vulkan_test PRIVATE rsf_game_sdk_fixtures_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_native_cpu rsf_build_options)add_test(NAME native_latency_vulkan_contract COMMAND rsf_native_latency_vulkan_test)
+target_link_libraries(rsf_native_latency_vulkan_test PRIVATE rsf_game_sdk_fixtures_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_native_cpu rsf_build_options)
+add_test(NAME native_latency_vulkan_contract COMMAND rsf_native_latency_vulkan_test)
 find_program(RSF_DOTNET_EXECUTABLE NAMES dotnet)
 if(RSF_DOTNET_EXECUTABLE)
     execute_process(COMMAND "${RSF_DOTNET_EXECUTABLE}" --list-sdks OUTPUT_VARIABLE rsf_dotnet_sdks ERROR_QUIET)
