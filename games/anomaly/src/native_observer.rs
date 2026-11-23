@@ -17,9 +17,9 @@ use crate::sys::{
     rsf_anomaly_observer_camera as Camera, rsf_anomaly_observer_engine as Engine,
     rsf_anomaly_observer_frame as Frame, rsf_anomaly_observer_platform as Platform,
 };
+use rsf_game_sys::call_header::{validate, validate_abi};
 use rsf_game_sys::{
-    RSF_ERROR_ABI_MISMATCH as ABI_MISMATCH, RSF_ERROR_BUSY as BUSY,
-    RSF_ERROR_INVALID_ARGUMENT as INVALID_ARGUMENT, RSF_ERROR_NATIVE_REFUSED as NATIVE_REFUSED,
+    RSF_ERROR_BUSY as BUSY, RSF_ERROR_NATIVE_REFUSED as NATIVE_REFUSED,
     RSF_ERROR_NOT_READY as NOT_READY, RSF_GAME_ABI_VERSION, RSF_OK as OK, rsf_game_host_services,
     rsf_game_log_fn, rsf_game_renderer_status, rsf_game_start_args, rsf_result,
 };
@@ -565,28 +565,19 @@ pub(crate) fn observe_window(report: impl FnOnce()) {
     OBSERVER.observe_window(report);
 }
 
-unsafe fn validate<T>(value: *const T, abi: u32) -> Result<(), rsf_result> {
-    let header = value.cast::<u32>();
-    if value.is_null() || unsafe { header.read() } < size_of::<T>() as u32 {
-        return Err(INVALID_ARGUMENT);
-    }
-    if unsafe { header.add(1).read() } != abi {
-        return Err(ABI_MISMATCH);
-    }
-    Ok(())
-}
-
 #[cfg(feature = "native-entry")]
 pub(crate) unsafe fn rsf_anomaly_observer_prepare(
     args: *const rsf_game_sys::rsf_game_prepare_args,
     platform: &Platform,
 ) -> rsf_result {
-    if let Err(error) = unsafe { validate(args, RSF_GAME_ABI_VERSION) } {
-        return error;
+    let result = unsafe { validate(args) };
+    if result != OK {
+        return result;
     }
     let host = unsafe { (*args).host };
-    if let Err(error) = unsafe { validate(host, RSF_GAME_ABI_VERSION) } {
-        return error;
+    let result = unsafe { validate(host) };
+    if result != OK {
+        return result;
     }
     OBSERVER.prepare(unsafe { &*host }, platform)
 }
@@ -595,9 +586,9 @@ pub(crate) unsafe fn rsf_anomaly_observer_start(
     args: *const rsf_game_start_args,
     platform: &Platform,
 ) -> rsf_result {
-    match unsafe { validate(args, RSF_GAME_ABI_VERSION) } {
-        Ok(()) => OBSERVER.start(platform),
-        Err(error) => error,
+    match unsafe { validate(args) } {
+        OK => OBSERVER.start(platform),
+        error => error,
     }
 }
 
@@ -606,9 +597,9 @@ pub(crate) unsafe fn rsf_anomaly_observer_quiesce(
     args: *const rsf_game_sys::rsf_game_control_args,
     platform: &Platform,
 ) -> rsf_result {
-    match unsafe { validate(args, RSF_GAME_ABI_VERSION) } {
-        Ok(()) => OBSERVER.control(platform, false),
-        Err(error) => error,
+    match unsafe { validate(args) } {
+        OK => OBSERVER.control(platform, false),
+        error => error,
     }
 }
 
@@ -617,9 +608,9 @@ pub(crate) unsafe fn rsf_anomaly_observer_stop(
     args: *const rsf_game_sys::rsf_game_control_args,
     platform: &Platform,
 ) -> rsf_result {
-    match unsafe { validate(args, RSF_GAME_ABI_VERSION) } {
-        Ok(()) => OBSERVER.control(platform, true),
-        Err(error) => error,
+    match unsafe { validate(args) } {
+        OK => OBSERVER.control(platform, true),
+        error => error,
     }
 }
 
@@ -627,8 +618,9 @@ pub(crate) unsafe fn rsf_anomaly_observer_stop(
 pub(crate) unsafe extern "C" fn rsf_anomaly_observer_status(
     out: *mut rsf_game_renderer_status,
 ) -> rsf_result {
-    if let Err(error) = unsafe { validate(out, RSF_GAME_ABI_VERSION) } {
-        return error;
+    let result = unsafe { validate(out) };
+    if result != OK {
+        return result;
     }
     let Some(status) = OBSERVER.status() else {
         return BUSY;
@@ -639,8 +631,9 @@ pub(crate) unsafe extern "C" fn rsf_anomaly_observer_status(
 
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_anomaly_observation(out: *mut Observation) -> rsf_result {
-    if let Err(error) = unsafe { validate(out, RSF_ANOMALY_OBSERVATION_ABI) } {
-        return error;
+    let result = unsafe { validate_abi(out, RSF_ANOMALY_OBSERVATION_ABI) };
+    if result != OK {
+        return result;
     }
     unsafe { out.write(OBSERVER.observation()) };
     OK
