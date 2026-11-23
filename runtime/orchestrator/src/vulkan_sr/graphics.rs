@@ -1,12 +1,20 @@
 // SPDX-License-Identifier: MIT
+//! The FidelityFX Vulkan SR leaves of vulkan_sr.rs: the SDK capsule, its guarded SDK calls and
+//! the Vulkan graphics, sharpening and capture state. `NATIVE` in vulkan_sr.rs names them.
 use super::ffx_descriptors::abi::{
-    PFN_vkVoidFunction, PfnFfxCreateContext, PfnFfxDestroyContext, PfnFfxDispatch, PfnFfxQuery,
-    VkDevice, ffxContext,
+    FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE, FFX_API_DESC_TYPE_OVERRIDE_VERSION,
+    FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION, FFX_API_QUERY_DESC_TYPE_GET_VERSIONS,
+    FFX_API_RETURN_OK, PFN_vkVoidFunction, PfnFfxCreateContext, PfnFfxDestroyContext,
+    PfnFfxDispatch, PfnFfxQuery, VkDevice, ffxApiHeader, ffxContext, ffxCreateBackendVKDesc,
+    ffxCreateContextDescUpscale, ffxDispatchDescUpscale, ffxQueryDescHeader,
+    ffxQueryDescUpscaleGetRenderResolutionFromQualityMode, ffxQueryGetProviderVersion,
 };
+use super::ffx_descriptors::{dispatch_desc, header, plan_desc, write_create_desc};
 use super::{
-    DISPATCH, FfxDeviceEntries, FfxExports, Frame, Handle, INIT_FAILED, Image, Setup,
-    lookup_device_proc, rsf_vk_function,
+    DISPATCH, FfxDeviceEntries, FfxDispatch, FfxExports, Frame, Handle, INIT_FAILED, Image,
+    NOT_SUPPORTED, Setup, lookup_device_proc, rsf_vk_function,
 };
+use crate::ffx_version::{self, MAX_VERSIONS, Version};
 use crate::frame_capture_vk::{
     Owner as Capture, rsf_core_capture_vk_create, rsf_core_capture_vk_destroy,
     rsf_core_capture_vk_flush, rsf_core_capture_vk_initialize, rsf_core_capture_vk_provider,
@@ -25,11 +33,16 @@ use crate::vulkan_sharpening::{
     rsf_sharpenvk_host_run,
 };
 use ash::vk::{self, Handle as _};
+use rsf_game_sys::backend_result::FEATURE_FAILED;
 use rsf_game_sys::rsf_frame_record;
-use std::{ffi::c_char, ptr};
+use rsf_streamline_vk::sdk_api::guarded_or;
+use std::ffi::{c_char, c_void};
+use std::ptr;
 
-// The native exception guards borrow this typed SDK state from the Rust owner.
-#[repr(C)]
+const SDK_OK: u32 = FFX_API_RETURN_OK as u32;
+
+/// The SDK exports and context. The entry types are C-unwind, so each call below runs inside
+/// `guarded_or`, whose C leaf (sdk_guard.c) turns a C++ exception into the given result.
 #[derive(Default)]
 struct Sdk {
     create: PfnFfxCreateContext,
@@ -39,14 +52,25 @@ struct Sdk {
     effect: ffxContext,
 }
 
-const _: () = {
-    assert!(size_of::<Sdk>() == 40 && align_of::<Sdk>() == 8);
-    assert!(std::mem::offset_of!(Sdk, create) == 0);
-    assert!(std::mem::offset_of!(Sdk, destroy) == 8);
-    assert!(std::mem::offset_of!(Sdk, query) == 16);
-    assert!(std::mem::offset_of!(Sdk, dispatch) == 24);
-    assert!(std::mem::offset_of!(Sdk, effect) == 32);
-};
+/// `ffxQueryDescGetVersions` and `ffxOverrideVersion` of ffx_api.h, which the pinned Vulkan
+/// bindings do not list.
+#[repr(C)]
+struct GetVersions {
+    header: ffxQueryDescHeader,
+    create_desc_type: u64,
+    device: *mut c_void,
+    output_count: *mut u64,
+    version_ids: *mut u64,
+    version_names: *mut *const c_char,
+}
+
+#[repr(C)]
+struct OverrideVersion {
+    header: ffxApiHeader,
+    version_id: u64,
+}
+
+const _: () = assert!(size_of::<GetVersions>() == 56 && size_of::<OverrideVersion>() == 24);
 
 #[derive(Default)]
 struct Native {
@@ -68,23 +92,25 @@ impl Native {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_srvk_native_allocate(_setup: &Setup) -> *mut Native {
-    crate::allocate_handle(Native::default())
+/// The capsule behind a handle from [`allocate`]; the owner serializes every call on it.
+fn native<'a>(owner: Handle) -> &'a mut Native {
+    unsafe { &mut *owner.cast::<Native>() }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_native_close(owner: *mut Native) {
+pub(super) unsafe extern "C" fn allocate(_setup: &Setup) -> Handle {
+    crate::allocate_handle(Native::default()).cast()
+}
+
+pub(super) unsafe extern "C" fn close(owner: Handle) {
     if !owner.is_null() {
-        drop(unsafe { Box::from_raw(owner) });
+        drop(unsafe { Box::from_raw(owner.cast::<Native>()) });
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_srvk_native_bind(owner: &mut Native, exports: &FfxExports) {
+pub(super) unsafe extern "C" fn bind(owner: Handle, exports: &FfxExports) {
     let [create, destroy, query, dispatch] = *exports;
     // Admission resolved these four non-null exports by their exact SDK names.
-    owner.sdk = unsafe {
+    native(owner).sdk = unsafe {
         Sdk {
             create: std::mem::transmute::<rsf_vk_function, PfnFfxCreateContext>(create),
             destroy: std::mem::transmute::<rsf_vk_function, PfnFfxDestroyContext>(destroy),
@@ -95,11 +121,151 @@ extern "C" fn rsf_core_srvk_native_bind(owner: &mut Native, exports: &FfxExports
     };
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_srvk_native_sdk(owner: &mut Native) -> *mut Sdk {
-    &raw mut owner.sdk
+pub(super) unsafe extern "C" fn versions(
+    owner: Handle,
+    out: &mut [Version; MAX_VERSIONS],
+    count: &mut u64,
+) -> i32 {
+    let Some(query) = native(owner).sdk.query else {
+        return INIT_FAILED;
+    };
+    guarded_or(INIT_FAILED, || {
+        let mut ids = [0_u64; MAX_VERSIONS];
+        let mut names = [ptr::null::<c_char>(); MAX_VERSIONS];
+        *count = MAX_VERSIONS as u64;
+        let mut request = GetVersions {
+            header: header(FFX_API_QUERY_DESC_TYPE_GET_VERSIONS, ptr::null_mut()),
+            create_desc_type: u64::from(FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE),
+            device: ptr::null_mut(),
+            output_count: &raw mut *count,
+            version_ids: ids.as_mut_ptr(),
+            version_names: names.as_mut_ptr(),
+        };
+        if unsafe { query(ptr::null_mut(), &raw mut request.header) } != SDK_OK
+            || *count > MAX_VERSIONS as u64
+        {
+            return NOT_SUPPORTED;
+        }
+        for (slot, (&id, &name)) in out
+            .iter_mut()
+            .zip(ids.iter().zip(&names))
+            .take(*count as usize)
+        {
+            *slot = unsafe { ffx_version::from_sdk(id, name) };
+        }
+        0
+    })
 }
 
+pub(super) unsafe extern "C" fn create_effect(
+    owner: Handle,
+    setup: &Setup,
+    id: u64,
+    flags: u32,
+) -> i32 {
+    let sdk = &mut native(owner).sdk;
+    let Some(create) = sdk.create else {
+        return INIT_FAILED;
+    };
+    guarded_or(INIT_FAILED, || {
+        let mut version = OverrideVersion {
+            header: header(FFX_API_DESC_TYPE_OVERRIDE_VERSION, ptr::null_mut()),
+            version_id: id,
+        };
+        let mut backend = ffxCreateBackendVKDesc::default();
+        let mut desc = ffxCreateContextDescUpscale::default();
+        write_create_desc(
+            setup,
+            flags,
+            &raw mut version.header,
+            &mut backend,
+            &mut desc,
+        );
+        if unsafe { create(&mut sdk.effect, &raw mut desc.header, ptr::null()) } == SDK_OK {
+            0
+        } else {
+            INIT_FAILED
+        }
+    })
+}
+
+pub(super) unsafe extern "C" fn effective_version(owner: Handle, out: &mut u64) -> i32 {
+    let sdk = &mut native(owner).sdk;
+    let Some(query) = sdk.query else {
+        return INIT_FAILED;
+    };
+    guarded_or(INIT_FAILED, || {
+        let mut desc = ffxQueryGetProviderVersion {
+            header: header(
+                FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION,
+                ptr::null_mut(),
+            ),
+            ..Default::default()
+        };
+        if unsafe { query(&mut sdk.effect, &raw mut desc.header) } != SDK_OK {
+            return NOT_SUPPORTED;
+        }
+        *out = desc.versionId;
+        0
+    })
+}
+
+pub(super) unsafe extern "C" fn destroy_effect(owner: Handle) -> i32 {
+    let sdk = &mut native(owner).sdk;
+    if sdk.effect.is_null() {
+        return 0;
+    }
+    let Some(destroy) = sdk.destroy else {
+        return FEATURE_FAILED;
+    };
+    guarded_or(FEATURE_FAILED, || {
+        if unsafe { destroy(&mut sdk.effect, ptr::null()) } != SDK_OK {
+            return FEATURE_FAILED;
+        }
+        sdk.effect = ptr::null_mut();
+        0
+    })
+}
+
+pub(super) unsafe extern "C" fn plan(
+    owner: Handle,
+    setup: &Setup,
+    width: &mut u32,
+    height: &mut u32,
+) -> i32 {
+    let sdk = &mut native(owner).sdk;
+    let Some(query) = sdk.query else {
+        return INIT_FAILED;
+    };
+    guarded_or(INIT_FAILED, || {
+        let mut desc: ffxQueryDescUpscaleGetRenderResolutionFromQualityMode =
+            plan_desc(setup, &raw mut *width, &raw mut *height);
+        if unsafe { query(&mut sdk.effect, &raw mut desc.header) } == SDK_OK {
+            0
+        } else {
+            NOT_SUPPORTED
+        }
+    })
+}
+
+pub(super) unsafe extern "C" fn dispatch(
+    owner: Handle,
+    commands: Handle,
+    call: &FfxDispatch<'_>,
+) -> i32 {
+    let sdk = &mut native(owner).sdk;
+    let Some(dispatch) = sdk.dispatch else {
+        return FEATURE_FAILED;
+    };
+    guarded_or(FEATURE_FAILED, || {
+        let desc: ffxDispatchDescUpscale = unsafe { dispatch_desc(commands, call) };
+        if unsafe { dispatch(&mut sdk.effect, &raw const desc.header) } == SDK_OK {
+            0
+        } else {
+            FEATURE_FAILED
+        }
+    })
+}
 pub(super) unsafe extern "C" fn sdk_device_proc(
     device: VkDevice,
     name: *const c_char,
@@ -190,9 +356,8 @@ fn command_buffer(commands: Handle) -> vk::CommandBuffer {
     vk::CommandBuffer::from_raw(commands as usize as u64)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_srvk_graphics_initialize(
-    owner: &mut Native,
+pub(super) unsafe extern "C" fn initialize_graphics(
+    owner: Handle,
     setup: &Setup,
     entries: &FfxDeviceEntries,
     properties: rsf_vk_function,
@@ -200,40 +365,25 @@ extern "C" fn rsf_core_srvk_graphics_initialize(
     let Some(graphics) = create(setup, entries, properties) else {
         return INIT_FAILED;
     };
-    owner.graphics = Some(graphics);
+    native(owner).graphics = Some(graphics);
     0
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_srvk_graphics_images(owner: &Native) -> Handle {
-    let graphics = owner.graphics();
-    graphics.images.cast()
+pub(super) unsafe extern "C" fn images(owner: Handle) -> Handle {
+    native(owner).graphics().images.cast()
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_srvk_graphics_memory_count(owner: &Native) -> u32 {
-    let graphics = owner.graphics();
-    graphics.memory_types
+pub(super) unsafe extern "C" fn memory_count(owner: Handle) -> u32 {
+    native(owner).graphics().memory_types
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_graphics_barrier(
-    owner: &Native,
-    commands: Handle,
-    plan: &Barrier,
-) {
-    let graphics = owner.graphics();
-    unsafe { rsf_core_vkfg_record_barrier(graphics.barrier, command_buffer(commands), plan) };
+pub(super) unsafe extern "C" fn barrier(owner: Handle, commands: Handle, plan: *const Barrier) {
+    let graphics = native(owner).graphics();
+    unsafe { rsf_core_vkfg_record_barrier(graphics.barrier, command_buffer(commands), &*plan) };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_graphics_clear(
-    owner: &Native,
-    commands: Handle,
-    image: u64,
-    layout: u32,
-) {
-    let graphics = owner.graphics();
+pub(super) unsafe extern "C" fn clear(owner: Handle, commands: Handle, image: u64, layout: u32) {
+    let graphics = native(owner).graphics();
     unsafe {
         (graphics.clear)(
             command_buffer(commands),
@@ -246,58 +396,45 @@ unsafe extern "C" fn rsf_core_srvk_graphics_clear(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_graphics_copy(
-    owner: &Native,
-    commands: Handle,
-    plan: &ImageCopy,
-) {
-    let graphics = owner.graphics();
-    unsafe { rsf_core_vkfg_record_copy(graphics.copy, command_buffer(commands), plan) };
+pub(super) unsafe extern "C" fn copy(owner: Handle, commands: Handle, plan: *const ImageCopy) {
+    let graphics = native(owner).graphics();
+    unsafe { rsf_core_vkfg_record_copy(graphics.copy, command_buffer(commands), &*plan) };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_graphics_sharpen(
-    owner: &mut Native,
+pub(super) unsafe extern "C" fn sharpen(
+    owner: Handle,
     setup: &Setup,
     commands: Handle,
     frame: &Frame,
     output: u64,
 ) -> i32 {
-    let graphics = owner.graphics_mut();
+    let graphics = native(owner).graphics_mut();
     i32::from(
         unsafe { rsf_sharpenvk_host_run(&mut graphics.sharpen, setup, commands, frame, output) }
             != 0,
     )
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_graphics_clear_sharpen(owner: &mut Native) {
-    if let Some(graphics) = owner.graphics.as_mut() {
+pub(super) unsafe extern "C" fn clear_sharpen(owner: Handle) {
+    if let Some(graphics) = native(owner).graphics.as_mut() {
         unsafe { rsf_sharpenvk_host_clear(&mut graphics.sharpen) };
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_graphics_capture_provider(
-    owner: &Native,
-    version: u64,
-    backend: u32,
-) {
-    let graphics = owner.graphics();
+pub(super) unsafe extern "C" fn capture_provider(owner: Handle, version: u64, backend: u32) {
+    let graphics = native(owner).graphics();
     unsafe { rsf_core_capture_vk_provider(graphics.capture, version, backend, 0) };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_graphics_capture_record(
-    owner: &Native,
+pub(super) unsafe extern "C" fn capture_record(
+    owner: Handle,
     commands: Handle,
     image: &Image,
     record: &rsf_frame_record,
     role: *const c_char,
     reset: u32,
 ) {
-    let graphics = owner.graphics();
+    let graphics = native(owner).graphics();
     unsafe {
         rsf_core_capture_vk_record(
             graphics.capture,
@@ -313,39 +450,29 @@ unsafe extern "C" fn rsf_core_srvk_graphics_capture_record(
     };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_graphics_capture_wants(owner: &Native, frame: u64) -> i32 {
-    let graphics = owner.graphics();
+pub(super) unsafe extern "C" fn capture_wants(owner: Handle, frame: u64) -> i32 {
+    let graphics = native(owner).graphics();
     unsafe { rsf_core_capture_vk_wants(graphics.capture, frame) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_graphics_retire(owner: &mut Native, commands: Handle) {
-    let graphics = owner.graphics_mut();
+pub(super) unsafe extern "C" fn retire(owner: Handle, commands: Handle) {
+    let graphics = native(owner).graphics_mut();
     unsafe {
         rsf_sharpenvk_host_retire(&mut graphics.sharpen, commands);
         rsf_core_capture_vk_retire(graphics.capture, commands);
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_graphics_flush(owner: &Native) {
-    if let Some(graphics) = owner.graphics.as_ref() {
+pub(super) unsafe extern "C" fn flush(owner: Handle) {
+    if let Some(graphics) = native(owner).graphics.as_ref() {
         unsafe { rsf_core_capture_vk_flush(graphics.capture, 0, ptr::null_mut()) };
     }
 }
 
-use crate::input_dump::abi::rsf_capture_sr_parameters;
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_graphics_capture_parameters(
-    frame: &Frame,
-    backend: u32,
-    reset: u32,
-) {
+pub(super) unsafe extern "C" fn capture_parameters(frame: &Frame, backend: u32, reset: u32) {
     // Use the same FrameDump entry, including its once-only service binding.
     unsafe {
-        rsf_capture_sr_parameters(
+        crate::input_dump::abi::rsf_capture_sr_parameters(
             frame.record,
             backend,
             frame.motion_scale_x,

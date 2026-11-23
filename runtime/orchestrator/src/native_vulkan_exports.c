@@ -27,6 +27,15 @@ RSF_EXPORT(rsf_slvk_initialize)
 RSF_EXPORT(rsf_slvk_invoke)
 RSF_EXPORT(rsf_slvk_without_dlssg)
 
+/* vulkan_sr.rs */
+RSF_EXPORT(rsf_srvk_create)
+RSF_EXPORT(rsf_srvk_plan)
+RSF_EXPORT(rsf_srvk_evaluate)
+RSF_EXPORT(rsf_srvk_retire_commands)
+RSF_EXPORT(rsf_srvk_destroy)
+RSF_EXPORT(rsf_srvk_dlss_preset)
+RSF_EXPORT(rsf_srvk_spatial_fallback)
+
 /* vulkan_sr_split.rs */
 RSF_EXPORT(rsf_srvk_fsr4_create)
 RSF_EXPORT(rsf_srvk_fsr4_plan)

@@ -4,6 +4,16 @@ use crate::frame_capture_vk::sr_capture_inputs;
 use rsf_game_sys::backend_result::{INIT_FAILED, INVALID_ARGUMENT, MISSING_ENTRY_POINT, NOT_READY};
 mod commands;
 mod leaves;
+
+/// The Streamline leaf table when CMake verified the corrected Streamline Vulkan runtime (the
+/// `streamline-vk` feature); without it DLSS SR reports NOT_COMPILED.
+pub(crate) const fn native_leaves() -> Option<&'static crate::sys::rsf_vkdlss_platform> {
+    if cfg!(feature = "streamline-vk") {
+        Some(&leaves::NATIVE)
+    } else {
+        None
+    }
+}
 use self::commands::Dispatch;
 use crate::sys::{RSF_SLVK_ABI_VERSION, rsf_slvk_call, rsf_slvk_callback};
 use crate::sys::{rsf_srvk_frame, rsf_srvk_image, rsf_srvk_setup};

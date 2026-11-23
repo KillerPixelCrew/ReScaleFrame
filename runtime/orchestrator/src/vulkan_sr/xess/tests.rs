@@ -548,7 +548,7 @@ fn owner_sizes_the_cache_and_keys_history_on_identity_and_extent() {
         );
         assert_eq!(rsf_core_xessvk_shutdown(Some(&OPS)), NOT_READY);
         let (mut width, mut height) = (0, 0);
-        assert_eq!(rsf_core_srvk_plan(owner.cast(), &mut width, &mut height), 0);
+        assert_eq!(rsf_srvk_plan(owner.cast(), &mut width, &mut height), 0);
         assert_eq!((width, height), (1130, 636));
 
         let commands = ptr::dangling_mut::<u16>().cast();
@@ -557,7 +557,7 @@ fn owner_sizes_the_cache_and_keys_history_on_identity_and_extent() {
             let mut input = frame(&record);
             edit(&mut input);
             edit_state(|fake| fake.calls.clear());
-            rsf_core_srvk_evaluate(owner.cast(), commands, &input)
+            rsf_srvk_evaluate(owner.cast(), commands, &input)
         };
         let extent = [1128, 632];
         let output_copy = ImageCopy::transfer(13, 23, [1920, 1080]);
@@ -644,11 +644,11 @@ fn owner_sizes_the_cache_and_keys_history_on_identity_and_extent() {
         jitter.camera.jitter_pixels[0] = 0.51;
         let input = frame(&jitter);
         assert_eq!(
-            rsf_core_srvk_evaluate(owner.cast(), commands, &input),
+            rsf_srvk_evaluate(owner.cast(), commands, &input),
             INVALID_ARGUMENT
         );
         assert_eq!(
-            rsf_core_srvk_evaluate(owner.cast(), ptr::null_mut(), &input),
+            rsf_srvk_evaluate(owner.cast(), ptr::null_mut(), &input),
             INVALID_ARGUMENT
         );
 
@@ -677,20 +677,20 @@ fn owner_sizes_the_cache_and_keys_history_on_identity_and_extent() {
             value.flags = RSF_FRAME_FLAG_RESET;
             let input = frame_input(&value);
             edit_state(|fake| fake.calls.clear());
-            assert_eq!(rsf_core_srvk_evaluate(owner.cast(), commands, &input), 0);
+            assert_eq!(rsf_srvk_evaluate(owner.cast(), commands, &input), 0);
             calls().contains(&Call::Execute(1280, 720, 1920, 1080, 1))
         };
         assert!(flagged(7));
 
-        rsf_core_srvk_retire_commands(owner.cast(), commands);
+        rsf_srvk_retire_commands(owner.cast(), commands);
         assert_eq!(calls().last(), Some(&Call::Retire(commands as usize)));
         edit_state(|fake| fake.calls.clear());
         edit_state(|fake| fake.destroy = -6);
-        assert_eq!(rsf_core_srvk_destroy(owner.cast()), FEATURE_FAILED);
+        assert_eq!(rsf_srvk_destroy(owner.cast()), FEATURE_FAILED);
         assert_eq!(calls(), [Call::Flush, Call::Destroy]);
         edit_state(|fake| fake.destroy = XESS_SUCCESS);
         edit_state(|fake| fake.calls.clear());
-        assert_eq!(rsf_core_srvk_destroy(owner.cast()), 0);
+        assert_eq!(rsf_srvk_destroy(owner.cast()), 0);
         assert_eq!(
             calls(),
             [
@@ -783,15 +783,15 @@ fn refused_creation_unwinds_partial_state_and_releases_the_sdk_reference() {
         let input = frame(&record);
         let (mut width, mut height) = (0, 0);
         assert_eq!(
-            rsf_core_srvk_plan(owner.cast(), &mut width, &mut height),
+            rsf_srvk_plan(owner.cast(), &mut width, &mut height),
             NOT_READY
         );
         assert_eq!(
-            rsf_core_srvk_evaluate(owner.cast(), handle(), &input),
+            rsf_srvk_evaluate(owner.cast(), handle(), &input),
             NOT_READY
         );
         edit_state(|fake| fake.destroy = XESS_SUCCESS);
-        assert_eq!(rsf_core_srvk_destroy(owner.cast()), 0);
+        assert_eq!(rsf_srvk_destroy(owner.cast()), 0);
         assert_eq!(calls().last(), Some(&Call::Close));
         // Cleanup released the last reference to the SDK context.
         assert_eq!(rsf_core_xessvk_shutdown(Some(&OPS)), 0);
@@ -809,25 +809,25 @@ fn shared_srvk_owner_routes_xess_and_refuses_presets() {
         );
         let owner = owner.cast::<Owner>();
         let (mut width, mut height) = (0, 0);
-        assert_eq!(rsf_core_srvk_plan(owner, &mut width, &mut height), 0);
+        assert_eq!(rsf_srvk_plan(owner, &mut width, &mut height), 0);
         assert_eq!((width, height), (1130, 636));
-        assert_eq!(rsf_core_srvk_dlss_preset(owner, 1), NOT_SUPPORTED);
+        assert_eq!(rsf_srvk_dlss_preset(owner, 1), NOT_SUPPORTED);
         let record = record([1100, 600], 1);
         let mut input = frame(&record);
         edit_state(|fake| fake.calls.clear());
         let commands = ptr::dangling_mut::<u32>().cast();
         input.sharpening.struct_size = 1;
         assert_eq!(
-            rsf_core_srvk_evaluate(owner, commands, &input),
+            rsf_srvk_evaluate(owner, commands, &input),
             INVALID_ARGUMENT
         );
         assert!(calls().is_empty());
         input.sharpening.struct_size = 0;
-        assert_eq!(rsf_core_srvk_evaluate(owner, commands, &input), 0);
+        assert_eq!(rsf_srvk_evaluate(owner, commands, &input), 0);
         assert!(calls().contains(&Call::Execute(1100, 600, 1920, 1080, 1)));
-        rsf_core_srvk_retire_commands(owner, commands);
+        rsf_srvk_retire_commands(owner, commands);
         assert_eq!(calls().last(), Some(&Call::Retire(commands as usize)));
-        assert_eq!(rsf_core_srvk_destroy(owner), 0);
+        assert_eq!(rsf_srvk_destroy(owner), 0);
         assert_eq!(calls().last(), Some(&Call::Close));
         assert_eq!(rsf_core_xessvk_shutdown(Some(&OPS)), 0);
     });

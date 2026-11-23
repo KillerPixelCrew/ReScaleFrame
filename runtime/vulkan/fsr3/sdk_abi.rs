@@ -144,32 +144,32 @@ impl Default for ffxAllocationCallbacks {
     }
 }
 pub type PfnFfxCreateContext = ::core::option::Option<
-    unsafe extern "C" fn(
+    unsafe extern "C-unwind" fn(
         context: *mut ffxContext,
         desc: *mut ffxCreateContextDescHeader,
         memCb: *const ffxAllocationCallbacks,
     ) -> ffxReturnCode_t,
 >;
 pub type PfnFfxDestroyContext = ::core::option::Option<
-    unsafe extern "C" fn(
+    unsafe extern "C-unwind" fn(
         context: *mut ffxContext,
         memCb: *const ffxAllocationCallbacks,
     ) -> ffxReturnCode_t,
 >;
 pub type PfnFfxConfigure = ::core::option::Option<
-    unsafe extern "C" fn(
+    unsafe extern "C-unwind" fn(
         context: *mut ffxContext,
         desc: *const ffxConfigureDescHeader,
     ) -> ffxReturnCode_t,
 >;
 pub type PfnFfxQuery = ::core::option::Option<
-    unsafe extern "C" fn(
+    unsafe extern "C-unwind" fn(
         context: *mut ffxContext,
         desc: *mut ffxQueryDescHeader,
     ) -> ffxReturnCode_t,
 >;
 pub type PfnFfxDispatch = ::core::option::Option<
-    unsafe extern "C" fn(
+    unsafe extern "C-unwind" fn(
         context: *mut ffxContext,
         desc: *const ffxDispatchDescHeader,
     ) -> ffxReturnCode_t,

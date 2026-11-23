@@ -620,8 +620,12 @@ impl Drop for XessOwner {
 }
 
 /// The production table when CMake found the XeSS Vulkan SDK headers (the xess-vk feature).
-fn native_ops() -> Option<&'static XessOps> {
-    cfg!(feature = "xess-vk").then_some(&native::rsf_xessvk_native_ops)
+pub(super) const fn native_ops() -> Option<&'static XessOps> {
+    if cfg!(feature = "xess-vk") {
+        Some(&native::NATIVE_OPS)
+    } else {
+        None
+    }
 }
 
 #[unsafe(no_mangle)]

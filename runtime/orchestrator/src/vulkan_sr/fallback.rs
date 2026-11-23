@@ -11,8 +11,7 @@ const LINEAR_BLIT: vk::FormatFeatureFlags = vk::FormatFeatureFlags::from_raw(
         | vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR.as_raw(),
 );
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_srvk_spatial_fallback(
+pub(super) unsafe fn rsf_core_srvk_spatial_fallback(
     lookup: Option<Lookup>,
     call: *const rsf_srvk_fallback,
 ) -> i32 {

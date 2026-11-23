@@ -56,6 +56,10 @@ endif()
 if(RSF_HAVE_VULKAN AND RSF_STREAMLINE_VK_DIGEST)
     list(APPEND rsf_orchestrator_features --features streamline-vk)
 endif()
+# The FidelityFX Vulkan SR table behind rsf_srvk_* (vulkan_sr.rs), as RSF_VULKAN_SR_ENABLED.
+if(RSF_HAVE_VULKAN AND RSF_HAVE_FFX_VK)
+    list(APPEND rsf_orchestrator_features --features ffx-vk)
+endif()
 # The Vulkan FSR 4 SR provider behind rsf_srvk_fsr4_* (vulkan_sr_split.rs), as RSF_VULKAN_FSR4_ENABLED.
 if(RSF_HAVE_VULKAN AND RSF_HAVE_FFX_DX12_SR)
     list(APPEND rsf_orchestrator_features --features fsr4-vk)
@@ -97,7 +101,7 @@ target_link_libraries(rsf_orchestrator_core PRIVATE d3dcompiler bcrypt)
 target_link_libraries(rsf_orchestrator_core PUBLIC ReScaleFrame::FrameDump)
 add_library(ReScaleFrame::OrchestratorCore ALIAS rsf_orchestrator_core)
 
-add_library(rsf_native_vulkan STATIC src/native_sr_vulkan.c src/native_dlss_vulkan.c src/native_xess_vulkan.c src/native_fg_vulkan.c src/native_fg_vulkan_dispatch.c src/native_fg_dlss_vulkan.c
+add_library(rsf_native_vulkan STATIC src/native_sr_vulkan.c src/native_xess_vulkan.c src/native_fg_vulkan.c src/native_fg_vulkan_dispatch.c src/native_fg_dlss_vulkan.c
     src/native_vulkan_exports.c)
 if(RSF_HAVE_VULKAN)
     target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
@@ -144,7 +148,8 @@ if(RSF_STREAMLINE_VK_DIGEST)
     # The interposer lifecycle is Rust (rsf-streamline-vk, inside the Runtime archive); the standalone
     # bridge links the same crate.
     target_link_libraries(rsf_native_vulkan PRIVATE rsf_orchestrator_rust wintrust advapi32)
-endif()add_library(ReScaleFrame::NativeVulkan ALIAS rsf_native_vulkan)
+endif()
+add_library(ReScaleFrame::NativeVulkan ALIAS rsf_native_vulkan)
 if(RSF_FRAME_DUMP_VULKAN_INCLUDE)
     # The C file only carries export directives. Link it as an object in each
     # consumer so the linker sees the exports before extracting the Rust archive.

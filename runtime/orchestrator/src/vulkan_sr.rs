@@ -364,18 +364,17 @@ impl History {
 type Handle = *mut c_void;
 type Capture = unsafe extern "C" fn(Handle, Handle, &Image, &rsf_frame_record, *const c_char, u32);
 
-// Private platform ABI. Rust owns the public handle and sequences these leaves.
-#[repr(C)]
+/// The leaves the owner sequences: the DLSS, XeSS and FidelityFX backends and the FrameDump
+/// record calls. [`NATIVE`] is the production table; owner_tests.rs substitutes fakes.
 struct Platform {
     dlss: Option<&'static crate::sys::rsf_vkdlss_platform>,
     xess: Option<&'static xess::XessOps>,
     ffx: FfxOps,
-    dump_begin: unsafe extern "C" fn(&rsf_frame_record, u32) -> i32,
-    dump_wants: unsafe extern "C" fn(&rsf_frame_record) -> i32,
-    dump_result: unsafe extern "C" fn(&rsf_frame_record, *const c_char, u32, i32),
+    dump_begin: unsafe extern "C" fn(*const rsf_frame_record, u32) -> i32,
+    dump_wants: unsafe extern "C" fn(*const rsf_frame_record) -> i32,
+    dump_result: unsafe extern "C" fn(*const rsf_frame_record, *const c_char, u32, i32),
 }
 
-#[repr(C)]
 struct FfxOps {
     loader: Loader,
     allocate: unsafe extern "C" fn(&Setup) -> Handle,
@@ -409,7 +408,6 @@ struct FfxOps {
     flush_capture: unsafe extern "C" fn(Handle),
 }
 
-#[repr(C)]
 struct FfxDispatch<'a> {
     frame: &'a Frame,
     reactive: Image,
@@ -420,19 +418,69 @@ struct FfxDispatch<'a> {
     reset: u32,
 }
 
-const _: () = {
-    assert!(size_of::<FfxOps>() == 28 * size_of::<usize>());
-    assert!(size_of::<FfxExports>() == 4 * size_of::<usize>());
-    assert!(size_of::<FfxDeviceEntries>() == 9 * size_of::<usize>());
-    assert!(std::mem::offset_of!(FfxOps, barrier) == 16 * 8);
-    assert!(std::mem::offset_of!(FfxOps, clear_color_zero) == 17 * 8);
-    assert!(std::mem::offset_of!(FfxOps, dispatch) == 18 * 8);
-    assert!(std::mem::offset_of!(FfxOps, copy) == 19 * 8);
-    assert!(std::mem::offset_of!(FfxOps, sharpen) == 20 * 8);
-    assert!(size_of::<Platform>() == 264);
-    assert!(size_of::<FfxDispatch>() == 144);
-    assert!(std::mem::offset_of!(FfxDispatch, reset) == 136);
+/// Resolves `name` through a host procedure callback, which may throw: 1 with `result` written,
+/// 0 when a C++ exception was contained.
+unsafe extern "C" fn call_device_proc(
+    proc: DeviceProc,
+    device: Device,
+    name: *const c_char,
+    result: *mut rsf_vk_function,
+) -> i32 {
+    // The host callback, called with the C-unwind ABI so the guard can contain an exception.
+    type ProcUnwind = unsafe extern "C-unwind" fn(Device, *const c_char) -> rsf_vk_function;
+    let proc = unsafe { std::mem::transmute::<DeviceProc, ProcUnwind>(proc) };
+    rsf_streamline_vk::sdk_api::guarded_or(0, || {
+        unsafe { result.write(proc(device, name)) };
+        1
+    })
+}
+
+static NATIVE: Platform = Platform {
+    dlss: crate::vulkan_dlss_sr::native_leaves(),
+    xess: xess::native_ops(),
+    ffx: FfxOps {
+        loader: Loader {
+            load: crate::sdk_module::rsf_core_vk_sdk_load,
+            unload: crate::sdk_module::rsf_core_vk_sdk_unload,
+        },
+        allocate: graphics::allocate,
+        close: graphics::close,
+        symbol: crate::sdk_module::rsf_vkffx_symbol,
+        bind_sdk: graphics::bind,
+        lookup: call_device_proc,
+        initialize_graphics: graphics::initialize_graphics,
+        versions: graphics::versions,
+        create_effect: graphics::create_effect,
+        effective_version: graphics::effective_version,
+        destroy_effect: graphics::destroy_effect,
+        plan: graphics::plan,
+        image_user: graphics::images,
+        images: &crate::vulkan_fg_resources::device::rsf_core_vkfg_platform,
+        memory_type_count: graphics::memory_count,
+        barrier: graphics::barrier,
+        clear_color_zero: graphics::clear,
+        dispatch: graphics::dispatch,
+        copy: graphics::copy,
+        sharpen: graphics::sharpen,
+        clear_sharpen: graphics::clear_sharpen,
+        capture_provider: graphics::capture_provider,
+        capture_record: graphics::capture_record,
+        capture_wants: graphics::capture_wants,
+        capture_parameters: graphics::capture_parameters,
+        retire_commands: graphics::retire,
+        flush_capture: graphics::flush,
+    },
+    dump_begin: crate::input_dump::abi::rsf_input_dump_begin_record,
+    dump_wants: crate::input_dump::abi::rsf_input_dump_wants,
+    dump_result: crate::input_dump::abi::rsf_input_dump_result,
 };
+
+/// The table of this build: none without the FidelityFX Vulkan SR runtime (the `ffx-vk`
+/// feature, which CMake sets beside RSF_VULKAN_SR_ENABLED), so every backend reports
+/// NOT_COMPILED, as the C platform selection did.
+fn platform() -> Option<&'static Platform> {
+    cfg!(feature = "ffx-vk").then_some(&NATIVE)
+}
 
 fn image_descriptor(device: Device, image: &OwnedImage, layout: u32) -> Image {
     Image {
@@ -862,7 +910,18 @@ impl Owner {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_create(
+unsafe extern "C" fn rsf_srvk_create(setup: *const Setup, out: *mut Handle) -> i32 {
+    unsafe { rsf_core_srvk_create(platform(), setup, out) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_srvk_spatial_fallback(call: *const rsf_srvk_fallback) -> i32 {
+    // Spatial recovery resolves its commands through the same guarded lookup.
+    let lookup = cfg!(feature = "ffx-vk").then_some(call_device_proc as Lookup);
+    unsafe { fallback::rsf_core_srvk_spatial_fallback(lookup, call) }
+}
+
+unsafe fn rsf_core_srvk_create(
     platform: Option<&'static Platform>,
     setup: *const Setup,
     out: *mut Handle,
@@ -893,7 +952,7 @@ unsafe extern "C" fn rsf_core_srvk_create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_plan(
+unsafe extern "C" fn rsf_srvk_plan(
     owner: *const Owner,
     width: *mut u32,
     height: *mut u32,
@@ -915,7 +974,7 @@ unsafe extern "C" fn rsf_core_srvk_plan(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_evaluate(
+unsafe extern "C" fn rsf_srvk_evaluate(
     owner: *mut Owner,
     commands: Handle,
     frame: *const Frame,
@@ -950,7 +1009,7 @@ unsafe extern "C" fn rsf_core_srvk_evaluate(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_retire_commands(owner: *mut Owner, commands: Handle) {
+unsafe extern "C" fn rsf_srvk_retire_commands(owner: *mut Owner, commands: Handle) {
     if commands.is_null() {
         return;
     }
@@ -967,7 +1026,7 @@ unsafe extern "C" fn rsf_core_srvk_retire_commands(owner: *mut Owner, commands: 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_destroy(owner: *mut Owner) -> i32 {
+unsafe extern "C" fn rsf_srvk_destroy(owner: *mut Owner) -> i32 {
     let Some(raw) = NonNull::new(owner) else {
         return 0;
     };
@@ -983,7 +1042,7 @@ unsafe extern "C" fn rsf_core_srvk_destroy(owner: *mut Owner) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_dlss_preset(owner: *mut Owner, preset: u32) -> i32 {
+unsafe extern "C" fn rsf_srvk_dlss_preset(owner: *mut Owner, preset: u32) -> i32 {
     let Some(owner) = (unsafe { owner.as_mut() }) else {
         return INVALID_ARGUMENT;
     };

@@ -14,11 +14,4 @@ typedef struct rsf_ffx_version {
 
 #ifdef __cplusplus
 static_assert(sizeof(rsf_ffx_version) == 32 && offsetof(rsf_ffx_version, major) == 16);
-extern "C" {
-#endif
-
-bool rsf_fsr4_parse_version(uint64_t id, const char* name, rsf_ffx_version* out);
-
-#ifdef __cplusplus
-}
 #endif

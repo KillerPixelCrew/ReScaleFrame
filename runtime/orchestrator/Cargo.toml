@@ -38,6 +38,9 @@ xess-vk = []
 streamline-vk = []
 # AMD Anti-Lag 2 for Vulkan, built with the Vulkan headers.
 antilag-vk = []
+# The Vulkan SR platform table (vulkan_sr.rs), built with the FidelityFX Vulkan headers; without it
+# rsf_srvk_* report NOT_COMPILED.
+ffx-vk = []
 # The Vulkan FSR 4 SR provider (vulkan_fsr4_sr.rs); without it rsf_srvk_fsr4_* report NOT_COMPILED.
 fsr4-vk = []
 

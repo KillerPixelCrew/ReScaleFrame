@@ -8,15 +8,15 @@ use std::ptr;
 pub(super) use crate::ffx_vk_abi as abi;
 use abi::*;
 
-fn header(kind: u32, next: *mut ffxApiHeader) -> ffxApiHeader {
+pub(super) fn header(kind: u32, next: *mut ffxApiHeader) -> ffxApiHeader {
     ffxApiHeader {
         type_: u64::from(kind),
         pNext: next,
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_srvk_ffx_create_desc(
+/// Fills the backend and upscale create records, chaining `version` behind the backend.
+pub(super) fn write_create_desc(
     setup: &Setup,
     flags: u32,
     version: *mut ffxApiHeader,
@@ -45,14 +45,12 @@ extern "C" fn rsf_core_srvk_ffx_create_desc(
     };
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_srvk_ffx_plan_desc(
+pub(super) fn plan_desc(
     setup: &Setup,
     width: *mut u32,
     height: *mut u32,
-    query: &mut ffxQueryDescUpscaleGetRenderResolutionFromQualityMode,
-) {
-    *query = ffxQueryDescUpscaleGetRenderResolutionFromQualityMode {
+) -> ffxQueryDescUpscaleGetRenderResolutionFromQualityMode {
+    ffxQueryDescUpscaleGetRenderResolutionFromQualityMode {
         header: header(
             FFX_API_QUERY_DESC_TYPE_UPSCALE_GETRENDERRESOLUTIONFROMQUALITYMODE,
             ptr::null_mut(),
@@ -62,7 +60,7 @@ extern "C" fn rsf_core_srvk_ffx_plan_desc(
         qualityMode: setup.quality,
         pOutRenderWidth: width,
         pOutRenderHeight: height,
-    };
+    }
 }
 
 fn resource(image: &Image, output: bool) -> FfxApiResource {
@@ -103,18 +101,18 @@ fn resource(image: &Image, output: bool) -> FfxApiResource {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_ffx_dispatch_desc(
+/// # Safety
+/// `call.frame.record` must be the record Vulkan SR admission validated for this evaluation.
+pub(super) unsafe fn dispatch_desc(
     commands: Handle,
     call: &FfxDispatch<'_>,
-    data: &mut ffxDispatchDescUpscale,
-) {
+) -> ffxDispatchDescUpscale {
     let frame = call.frame;
     // Vulkan SR admission validated this borrowed record for the evaluation.
     let record = unsafe { &*frame.record };
     let [jitter_x, jitter_y] = record.camera.jitter_pixels;
     let (enable_sharpening, sharpness) = ffx_sharpening(call.sharpness);
-    *data = ffxDispatchDescUpscale {
+    ffxDispatchDescUpscale {
         header: header(FFX_API_DISPATCH_DESC_TYPE_UPSCALE, ptr::null_mut()),
         commandList: commands,
         color: resource(&frame.color, false),
@@ -149,5 +147,5 @@ unsafe extern "C" fn rsf_core_srvk_ffx_dispatch_desc(
         sharpness,
         reset: call.reset != 0,
         ..ffxDispatchDescUpscale::default()
-    };
+    }
 }

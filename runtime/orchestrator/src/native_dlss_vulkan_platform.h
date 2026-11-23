@@ -41,16 +41,3 @@ typedef struct rsf_vkdlss_platform {
     void (*retire)(void*, void* commands);
     int32_t (*preset_valid)(uint32_t preset);
 } rsf_vkdlss_platform;
-
-/* The Streamline leaf table in native_dlss_vulkan.c, selected by CMake for the
-   Vulkan SR platform. Its leaves are Rust (vulkan_dlss_sr/leaves.rs). */
-#if defined(RSF_HAVE_STREAMLINE_VK)
-#ifdef __cplusplus
-extern "C" const rsf_vkdlss_platform rsf_vkdlss_native_leaves;
-#else
-extern const rsf_vkdlss_platform rsf_vkdlss_native_leaves;
-#endif
-#define RSF_VKDLSS_NATIVE_PLATFORM (&rsf_vkdlss_native_leaves)
-#else
-#define RSF_VKDLSS_NATIVE_PLATFORM ((const rsf_vkdlss_platform*)0)
-#endif

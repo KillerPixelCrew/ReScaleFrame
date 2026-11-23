@@ -310,15 +310,3 @@ pub unsafe fn rsf_fsr4_compat_release(lease: *const CompatLease) {
         drop(unsafe { Arc::from_raw(lease.cast::<Lease>()) });
     }
 }
-
-#[cfg(windows)]
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4_parse_version(
-    id: u64,
-    name: *const core::ffi::c_char,
-    out: &mut ffx_version::Version,
-) -> bool {
-    let (version, parsed) = unsafe { ffx_version::parse_sdk(id, name) };
-    *out = version;
-    parsed
-}

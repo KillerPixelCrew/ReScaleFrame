@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Streamline DLSS SR call leaves, device preparation, private images,
-//! sharpening and capture of the Vulkan DLSS SR owner. native_dlss_vulkan.c
-//! lists them in the production platform table with the session invoke, the FrameDump parameter call and
-//! the SDK preset policy.
+//! sharpening and capture of the Vulkan DLSS SR owner, and `NATIVE`, the production table
+//! that adds the session invoke, the FrameDump parameter call and the SDK preset policy.
 use crate::frame_capture_vk::{
     Owner as Capture, rsf_core_capture_vk_create, rsf_core_capture_vk_destroy,
     rsf_core_capture_vk_flush, rsf_core_capture_vk_initialize, rsf_core_capture_vk_provider,
@@ -90,7 +89,6 @@ fn optimal_settings() -> Optimal {
     }
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_vkdlss_sdk_open(setup: *const Setup, out: *mut *mut c_void) -> i32 {
     let native = Box::new(Native {
         sharpen: Sharpen::default(),
@@ -103,14 +101,12 @@ unsafe extern "C" fn rsf_core_vkdlss_sdk_open(setup: *const Setup, out: *mut *mu
     OK
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_vkdlss_sdk_close(handle: *mut c_void) {
     if !handle.is_null() {
         drop(unsafe { Box::from_raw(handle.cast::<Native>()) });
     }
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_vkdlss_sdk_initialize(
     module: *mut c_void,
     _: usize,
@@ -158,7 +154,6 @@ unsafe extern "C" fn rsf_core_vkdlss_sdk_initialize(
     OK
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_vkdlss_sdk_prepare(handle: *mut c_void) -> i32 {
     let native = native(handle);
     let device = unsafe { rsf_core_vkfg_load_device(&native.setup, ptr::null(), true) };
@@ -195,7 +190,6 @@ unsafe extern "C" fn rsf_core_vkdlss_sdk_prepare(handle: *mut c_void) -> i32 {
     OK
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_vkdlss_sdk_allocate(
     handle: *mut c_void,
     image: *mut Image,
@@ -217,13 +211,11 @@ unsafe extern "C" fn rsf_core_vkdlss_sdk_allocate(
     )
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_vkdlss_sdk_free_image(handle: *mut c_void, image: *mut Image) {
     let gpu = native(handle).gpu;
     rsf_core_vkfg_release_image(&rsf_core_vkfg_platform, gpu.cast(), unsafe { &mut *image });
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_vkdlss_sdk_constants(
     handle: *mut c_void,
     token: usize,
@@ -242,7 +234,6 @@ unsafe extern "C" fn rsf_core_vkdlss_sdk_constants(
     }))
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_vkdlss_sdk_options(
     handle: *mut c_void,
     input: *const Options,
@@ -254,7 +245,6 @@ unsafe extern "C" fn rsf_core_vkdlss_sdk_options(
     feature_result(guarded(|| unsafe { set_options(&viewport, input) }))
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_vkdlss_sdk_tag(
     handle: *mut c_void,
     token: usize,
@@ -288,7 +278,6 @@ unsafe extern "C" fn rsf_core_vkdlss_sdk_tag(
     }))
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_vkdlss_sdk_evaluate(
     handle: *mut c_void,
     token: usize,
@@ -305,7 +294,6 @@ unsafe extern "C" fn rsf_core_vkdlss_sdk_evaluate(
     }))
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_vkdlss_sdk_capture_record(
     handle: *mut c_void,
     commands: *mut c_void,
@@ -329,7 +317,6 @@ unsafe extern "C" fn rsf_core_vkdlss_sdk_capture_record(
     };
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_vkdlss_sdk_sharpen(
     handle: *mut c_void,
     commands: *mut c_void,
@@ -349,7 +336,6 @@ unsafe extern "C" fn rsf_core_vkdlss_sdk_sharpen(
 }
 
 /// The release callback runs under the session invoke with the native as user.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_vkdlss_sdk_release(
     _: *mut c_void,
     _: usize,
@@ -364,7 +350,6 @@ unsafe extern "C" fn rsf_core_vkdlss_sdk_release(
     }))
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_vkdlss_sdk_flush(handle: *mut c_void) {
     let native = native(handle);
     unsafe {
@@ -373,7 +358,6 @@ unsafe extern "C" fn rsf_core_vkdlss_sdk_flush(handle: *mut c_void) {
     }
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_vkdlss_sdk_retire(handle: *mut c_void, commands: *mut c_void) {
     let native = native(handle);
     unsafe {
@@ -386,4 +370,43 @@ const _: () = {
     assert!(size_of::<Tag>() == 24);
     assert!(size_of::<Options>() == 88);
     assert!(size_of::<Optimal>() == 64);
+};
+
+unsafe extern "C" fn capture_parameters(_: *mut c_void, input: *const Frame, reset: u32) {
+    let input = unsafe { &*input };
+    unsafe {
+        crate::input_dump::abi::rsf_capture_sr_parameters(
+            input.record,
+            SR_DLSS,
+            input.motion_scale_x,
+            input.motion_scale_y,
+            input.pre_exposure,
+            reset,
+        )
+    };
+}
+
+unsafe extern "C" fn preset_valid(preset: u32) -> i32 {
+    i32::from(crate::streamline_sr::preset_valid(preset))
+}
+
+pub(super) static NATIVE: crate::sys::rsf_vkdlss_platform = crate::sys::rsf_vkdlss_platform {
+    open: Some(rsf_core_vkdlss_sdk_open),
+    close: Some(rsf_core_vkdlss_sdk_close),
+    invoke: Some(crate::vulkan_latency::rsf_slvk_invoke),
+    initialize: Some(rsf_core_vkdlss_sdk_initialize),
+    prepare: Some(rsf_core_vkdlss_sdk_prepare),
+    allocate: Some(rsf_core_vkdlss_sdk_allocate),
+    free_image: Some(rsf_core_vkdlss_sdk_free_image),
+    constants: Some(rsf_core_vkdlss_sdk_constants),
+    options: Some(rsf_core_vkdlss_sdk_options),
+    tag: Some(rsf_core_vkdlss_sdk_tag),
+    evaluate: Some(rsf_core_vkdlss_sdk_evaluate),
+    capture_parameters: Some(capture_parameters),
+    capture_record: Some(rsf_core_vkdlss_sdk_capture_record),
+    sharpen: Some(rsf_core_vkdlss_sdk_sharpen),
+    release: Some(rsf_core_vkdlss_sdk_release),
+    flush: Some(rsf_core_vkdlss_sdk_flush),
+    retire: Some(rsf_core_vkdlss_sdk_retire),
+    preset_valid: Some(preset_valid),
 };

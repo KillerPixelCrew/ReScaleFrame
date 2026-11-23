@@ -39,6 +39,9 @@ result = bindgen(
     "--raw-line", "type VkStructureType = ::core::ffi::c_int;",
     "--raw-line", "type VkFormat = ::core::ffi::c_int;",
     "--no-prepend-enum-name", "--with-derive-default",
+    # The SDK can throw C++ exceptions; the Runtime contains them with
+    # rsf_streamline_vk::sdk_api::guarded_or, which needs an unwinding ABI.
+    "--override-abi", "C-unwind=PfnFfx(CreateContext|DestroyContext|Configure|Query|Dispatch)",
     clang=["-x", "c++", "-include", "stddef.h", "-include", "ffx_api/ffx_upscale.h",
            "-include", "ffx_api/ffx_framegeneration.h",
            "-I" + str(include), "-I" + str(vulkan / "Include")],

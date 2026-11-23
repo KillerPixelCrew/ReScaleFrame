@@ -3,7 +3,7 @@
    owns the public entry points, export lookup, the SDK session, typed SDK calls,
    contexts and teardown. This unit checks the SDK C layouts and values that the
    Rust owner mirrors while those records are hand-written. */
-#include "native_xess_vulkan.h"
+#include <rescaleframe/native_xess_vulkan_requirements.h>
 
 #if defined(RSF_HAVE_XESS_VK)
 #define VK_NO_PROTOTYPES

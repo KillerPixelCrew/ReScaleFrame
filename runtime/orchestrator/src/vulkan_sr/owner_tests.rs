@@ -520,9 +520,9 @@ pub(super) static PLATFORM: Platform = Platform {
             unsafe { fake(handle).calls.push(Call::Flush) }
         }),
     },
-    dump_begin: leaf!(|_: &rsf_frame_record, _: u32| -> i32 { 1 }),
-    dump_wants: leaf!(|_: &rsf_frame_record| -> i32 { 1 }),
-    dump_result: leaf!(|_: &rsf_frame_record, _: *const c_char, _: u32, _: i32| -> () {}),
+    dump_begin: leaf!(|_: *const rsf_frame_record, _: u32| -> i32 { 1 }),
+    dump_wants: leaf!(|_: *const rsf_frame_record| -> i32 { 1 }),
+    dump_result: leaf!(|_: *const rsf_frame_record, _: *const c_char, _: u32, _: i32| -> () {}),
 };
 
 #[cfg_attr(test, allow(dead_code))]
@@ -611,12 +611,12 @@ fn ffx_owner_reuses_staging_and_only_publishes_an_accepted_output() {
     );
     let (mut width, mut height) = (0, 0);
     assert_eq!(
-        unsafe { rsf_core_srvk_plan(owner, &mut width, &mut height) },
+        unsafe { rsf_srvk_plan(owner, &mut width, &mut height) },
         0
     );
     assert_eq!((width, height), (64, 36));
     assert_eq!(
-        unsafe { rsf_core_srvk_dlss_preset(owner, 11) },
+        unsafe { rsf_srvk_dlss_preset(owner, 11) },
         NOT_SUPPORTED
     );
 
@@ -632,14 +632,14 @@ fn ffx_owner_reuses_staging_and_only_publishes_an_accepted_output() {
             refused.depth.width += 1;
             let previous = state.calls.len();
             assert_eq!(
-                unsafe { rsf_core_srvk_evaluate(owner, commands, &refused) },
+                unsafe { rsf_srvk_evaluate(owner, commands, &refused) },
                 INVALID_ARGUMENT
             );
             assert_eq!(state.calls.len(), previous);
         }
         let previous = state.calls.len();
         assert_eq!(
-            unsafe { rsf_core_srvk_evaluate(owner, commands, &frame) },
+            unsafe { rsf_srvk_evaluate(owner, commands, &frame) },
             state.dispatch_result
         );
         let mut expected = vec![Call::Capture("sr-source-jittered".into())];
@@ -680,11 +680,11 @@ fn ffx_owner_reuses_staging_and_only_publishes_an_accepted_output() {
         }
         assert_eq!(&state.calls[previous..], expected.as_slice());
     }
-    unsafe { rsf_core_srvk_retire_commands(owner, commands) };
+    unsafe { rsf_srvk_retire_commands(owner, commands) };
     assert_eq!(state.calls.last(), Some(&Call::Retire(commands as usize)));
 
     state.destroy_result = FAILED;
-    assert_eq!(unsafe { rsf_core_srvk_destroy(owner) }, FAILED);
+    assert_eq!(unsafe { rsf_srvk_destroy(owner) }, FAILED);
     assert!(state.calls.ends_with(&[Call::Flush, Call::Destroy]));
     assert!(
         DISPATCH
@@ -694,7 +694,7 @@ fn ffx_owner_reuses_staging_and_only_publishes_an_accepted_output() {
     );
     assert!(!state.calls.contains(&Call::Close));
     state.destroy_result = 0;
-    assert_eq!(unsafe { rsf_core_srvk_destroy(owner) }, 0);
+    assert_eq!(unsafe { rsf_srvk_destroy(owner) }, 0);
     assert!(state.calls.ends_with(&[
         Call::Destroy,
         Call::Clear,
@@ -793,17 +793,17 @@ fn ffx_create_preserves_cleanup_owner_when_the_effect_refuses_rollback() {
 
     let (mut width, mut height) = (0, 0);
     assert_eq!(
-        unsafe { rsf_core_srvk_plan(owner, &mut width, &mut height) },
+        unsafe { rsf_srvk_plan(owner, &mut width, &mut height) },
         NOT_READY
     );
     let record = frame_record();
     let input = frame_input(&setup, &record);
     assert_eq!(
-        unsafe { rsf_core_srvk_evaluate(owner, setup.device, &input) },
+        unsafe { rsf_srvk_evaluate(owner, setup.device, &input) },
         NOT_READY
     );
     state.destroy_result = 0;
-    assert_eq!(unsafe { rsf_core_srvk_destroy(owner) }, 0);
+    assert_eq!(unsafe { rsf_srvk_destroy(owner) }, 0);
     assert!(state.calls.ends_with(&[
         Call::Clear,
         Call::ReleaseImage(14),
@@ -881,16 +881,16 @@ fn dlss_owner_routing_preserves_history_and_checked_release() {
     );
     let (mut width, mut height) = (0, 0);
     assert_eq!(
-        unsafe { rsf_core_srvk_plan(owner, &mut width, &mut height) },
+        unsafe { rsf_srvk_plan(owner, &mut width, &mut height) },
         0
     );
     assert_eq!([width, height], [64, 36]);
     assert_eq!(
-        unsafe { rsf_core_srvk_dlss_preset(owner, FAKE_DLSS_PRESET) },
+        unsafe { rsf_srvk_dlss_preset(owner, FAKE_DLSS_PRESET) },
         0
     );
     assert_eq!(
-        unsafe { rsf_core_srvk_dlss_preset(owner, 99) },
+        unsafe { rsf_srvk_dlss_preset(owner, 99) },
         INVALID_ARGUMENT
     );
     let commands = ptr::from_mut(&mut state).cast();
@@ -905,7 +905,7 @@ fn dlss_owner_routing_preserves_history_and_checked_release() {
             frame.bias_current_color.image = 0;
         }
         assert_eq!(
-            unsafe { rsf_core_srvk_evaluate(owner, commands, &frame) },
+            unsafe { rsf_srvk_evaluate(owner, commands, &frame) },
             result
         );
         let mut expected = vec![
@@ -938,12 +938,12 @@ fn dlss_owner_routing_preserves_history_and_checked_release() {
         assert_eq!(state.calls, expected);
     }
     state.calls.clear();
-    unsafe { rsf_core_srvk_retire_commands(owner, commands) };
+    unsafe { rsf_srvk_retire_commands(owner, commands) };
     state.destroy_result = FAILED;
-    assert_eq!(unsafe { rsf_core_srvk_destroy(owner) }, FAILED);
+    assert_eq!(unsafe { rsf_srvk_destroy(owner) }, FAILED);
     assert_eq!(state.calls, [Call::Retire(commands as usize)]);
     state.destroy_result = 0;
-    assert_eq!(unsafe { rsf_core_srvk_destroy(owner) }, 0);
+    assert_eq!(unsafe { rsf_srvk_destroy(owner) }, 0);
     assert_eq!(
         state.calls,
         [

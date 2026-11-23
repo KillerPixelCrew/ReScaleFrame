@@ -856,7 +856,7 @@ unsafe extern "C" fn rsf_slvk_initialize(setup: *const rsf_slvk_setup) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_slvk_invoke(call: *const rsf_slvk_call) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_slvk_invoke(call: *const rsf_slvk_call) -> i32 {
     unsafe { rsf_core_slvk_invoke(&PLATFORM, call) }
 }
 

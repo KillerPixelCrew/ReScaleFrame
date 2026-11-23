@@ -177,7 +177,7 @@ pub(super) unsafe extern "C" fn rsf_core_vk_sdk_pin(module: *mut c_void) -> u32 
 
 // Shared C callback for the FidelityFX SR and FG platform tables.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_vkffx_symbol(
+pub(crate) unsafe extern "C" fn rsf_vkffx_symbol(
     module: *mut c_void,
     name: *const c_char,
 ) -> crate::sys::rsf_vk_function {
