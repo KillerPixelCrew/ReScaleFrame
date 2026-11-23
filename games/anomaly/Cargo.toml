@@ -14,6 +14,7 @@ crate-type = ["staticlib", "rlib"]
 fg-fixture = ["windows/Win32_Graphics_Dxgi"]
 input-hook-fixture = []
 overlay-device-fixture = [
+  "dep:rsf-test-support",
   "windows/std",
   "windows/Win32_Devices_HumanInterfaceDevice",
   "windows/Win32_Graphics_Dxgi",
@@ -37,6 +38,8 @@ rsf-game-sys = { path = "../../sdk/game" }
 [target."cfg(windows)".dependencies]
 rsf-windows = { path = "../../integrations/windows" }
 rsf-shader-compiler = { path = "../../runtime/shader_patch/compiler" }
+# The overlay device fixture's WARP swap chain; absent from the shipping build.
+rsf-test-support = { path = "../../tests/support", optional = true }
 windows = { workspace = true, features = [
   "Win32_Graphics_Direct3D",
   "Win32_Graphics_Direct3D11",
@@ -71,6 +74,8 @@ rsf-bindgen = { path = "../../tools/bindgen" }
 workspace = true
 
 [target."cfg(windows)".dev-dependencies]
+# The device examples' D3D11 device helper.
+rsf-test-support = { path = "../../tests/support" }
 windows = { workspace = true, features = [
   "std",
   "Win32_Graphics_Direct3D_Fxc",

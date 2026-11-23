@@ -12,7 +12,7 @@ license.workspace = true
 crate-type = ["staticlib", "rlib"]
 
 [features]
-warp-fixture = []
+warp-fixture = ["dep:rsf-test-support"]
 # The view probe and session launchers' Rust halves (tests/ac7_view_probe.rs, tests/ac7_session.rs).
 view-fixtures = []
 
@@ -27,6 +27,8 @@ rsf-bindgen = { path = "../../tools/bindgen" }
 
 [target."cfg(windows)".dependencies]
 rsf-windows = { path = "../../integrations/windows" }
+# The WARP fixtures' device; absent from the shipping build.
+rsf-test-support = { path = "../../tests/support", optional = true }
 windows = { workspace = true, features = [
   "Win32_Graphics_Direct3D_Fxc",
   "Win32_Graphics_Direct3D11",

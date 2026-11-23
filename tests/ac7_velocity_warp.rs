@@ -42,24 +42,10 @@ struct Warp {
 
 impl Warp {
     fn new() -> Option<Self> {
-        let (mut device, mut c) = (None, None);
-        unsafe {
-            D3D11CreateDevice(
-                None,
-                D3D_DRIVER_TYPE_WARP,
-                Default::default(),
-                Default::default(),
-                None,
-                D3D11_SDK_VERSION,
-                Some(&mut device),
-                None,
-                Some(&mut c),
-            )
-        }
-        .ok()?;
+        let (device, c) = rsf_test_support::warp_d3d11(Default::default(), None).ok()?;
         Some(Self {
-            device: device?,
-            c: c?,
+            device,
+            c,
             ok: Cell::new(true),
         })
     }

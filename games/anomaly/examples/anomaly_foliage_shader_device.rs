@@ -389,31 +389,17 @@ mod fixture {
                 (D3D_DRIVER_TYPE_HARDWARE, "hardware"),
                 (D3D_DRIVER_TYPE_WARP, "WARP"),
             ] {
-                let (mut device, mut context) = (None, None);
-                let mut level = D3D_FEATURE_LEVEL::default();
-                if unsafe {
-                    D3D11CreateDevice(
-                        None::<&windows::Win32::Graphics::Dxgi::IDXGIAdapter>,
-                        driver,
-                        Default::default(),
-                        D3D11_CREATE_DEVICE_FLAG(0),
-                        None,
-                        D3D11_SDK_VERSION,
-                        Some(&mut device),
-                        Some(&mut level),
-                        Some(&mut context),
-                    )
-                }
-                .is_err()
-                {
+                let Ok((device, context)) =
+                    rsf_test_support::d3d11_device(driver, D3D11_CREATE_DEVICE_FLAG(0), None)
+                else {
                     continue;
-                }
+                };
+                let level = unsafe { device.GetFeatureLevel() };
                 require(
                     level.0 >= D3D_FEATURE_LEVEL_11_0.0,
                     "feature level 11 required",
                 )?;
-                let device = device.ok_or("D3D11CreateDevice returned no device")?;
-                let context = context.ok_or("D3D11CreateDevice returned no context")?;
+
                 let dxgi = device.cast::<IDXGIDevice>()?;
                 let adapter = unsafe { dxgi.GetAdapter()?.GetDesc()? };
                 let name_end = adapter

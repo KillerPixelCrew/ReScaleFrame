@@ -44,21 +44,12 @@ fn device_query(directory: &str) -> bool {
         eprintln!("streamline did not initialise here (result {loaded}), skipping");
         return true;
     }
-    let mut device = None;
-    let created = unsafe {
-        D3D11CreateDevice(
-            None,
-            D3D_DRIVER_TYPE_HARDWARE,
-            Default::default(),
-            D3D11_CREATE_DEVICE_FLAG(0),
-            Some(&[D3D_FEATURE_LEVEL_11_0]),
-            D3D11_SDK_VERSION,
-            Some(&mut device),
-            None,
-            None,
-        )
-    };
-    let Some(device) = device.filter(|_| created.is_ok()) else {
+    let created = rsf_test_support::d3d11_device(
+        D3D_DRIVER_TYPE_HARDWARE,
+        D3D11_CREATE_DEVICE_FLAG(0),
+        Some(&[D3D_FEATURE_LEVEL_11_0]),
+    );
+    let Ok((device, _)) = created else {
         eprintln!("no hardware device available, skipping the support query");
         unsafe { rsf_dlss_shutdown() };
         return true;

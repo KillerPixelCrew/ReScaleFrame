@@ -91,27 +91,13 @@ impl Graphics {
             },
             ..Default::default()
         };
-        let (mut chain, mut device, mut context) = (None, None, None);
-        unsafe {
-            D3D11CreateDeviceAndSwapChain(
-                None::<&IDXGIAdapter>,
-                driver,
-                Default::default(),
-                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                None,
-                D3D11_SDK_VERSION,
-                Some(&desc),
-                Some(&mut chain),
-                Some(&mut device),
-                None,
-                Some(&mut context),
-            )
-        }
-        .ok()?;
+        let (device, context, chain) =
+            rsf_test_support::d3d11_swapchain(driver, D3D11_CREATE_DEVICE_BGRA_SUPPORT, &desc)
+                .ok()?;
         Some(Self {
-            chain: chain?,
-            device: device?,
-            context: context?,
+            chain,
+            device,
+            context,
         })
     }
 }

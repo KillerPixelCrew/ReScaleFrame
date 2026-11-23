@@ -28,13 +28,11 @@ use std::ffi::{CStr, c_char, c_int, c_void};
 use std::mem::{offset_of, size_of, zeroed};
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, AtomicU32, Ordering};
-use windows::Win32::Foundation::HMODULE;
-use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_WARP;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_READ,
-    D3D11_CREATE_DEVICE_FLAG, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION,
-    D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING, D3D11CreateDevice, ID3D11Device,
-    ID3D11DeviceContext, ID3D11RenderTargetView, ID3D11Texture2D,
+    D3D11_CREATE_DEVICE_FLAG, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_TEXTURE2D_DESC,
+    D3D11_USAGE_STAGING, ID3D11Device, ID3D11DeviceContext, ID3D11RenderTargetView,
+    ID3D11Texture2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_SAMPLE_DESC};
 use windows::Win32::System::Memory::{
@@ -867,25 +865,8 @@ unsafe extern "C" fn rsf_ac7_native_graph_fixture(calls: *const Calls) -> c_int 
         c"temporal gate preflight, idempotence and guarded retirement",
     );
     free(patch_image);
-    let (mut device, mut immediate) = (None::<ID3D11Device>, None::<ID3D11DeviceContext>);
-    if unsafe {
-        D3D11CreateDevice(
-            None::<&windows::Win32::Graphics::Dxgi::IDXGIAdapter>,
-            D3D_DRIVER_TYPE_WARP,
-            HMODULE::default(),
-            D3D11_CREATE_DEVICE_FLAG(0),
-            None,
-            D3D11_SDK_VERSION,
-            Some(&mut device),
-            None,
-            Some(&mut immediate),
-        )
-    }
-    .is_err()
-    {
-        return 77;
-    }
-    let (Some(device), Some(immediate)) = (device, immediate) else {
+    let Ok((device, immediate)) = rsf_test_support::warp_d3d11(D3D11_CREATE_DEVICE_FLAG(0), None)
+    else {
         return 77;
     };
     let replayed = replay_graph(calls, &device, &immediate);

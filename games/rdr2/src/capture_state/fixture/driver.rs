@@ -11,10 +11,7 @@ use std::path::Path;
 use std::ptr::{null, null_mut};
 use windows::Win32::Foundation::{HANDLE, HWND, RECT};
 use windows::Win32::Graphics::{
-    Direct3D::{
-        D3D_FEATURE_LEVEL_11_0, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, Fxc::D3DCompile, ID3DBlob,
-        ID3DInclude,
-    },
+    Direct3D::{D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, Fxc::D3DCompile, ID3DBlob, ID3DInclude},
     Direct3D12::*,
     Dxgi::{Common::*, *},
 };
@@ -431,14 +428,7 @@ fn run(root: &Path, rgb10: bool, driver: Driver) -> Result {
     };
     require(unsafe { (driver.start)(&options) } == 0, "census install")?;
     session.0 = Some(driver.stop);
-    let factory: IDXGIFactory4 = hr(unsafe { CreateDXGIFactory1() }, "factory")?;
-    let adapter: IDXGIAdapter = hr(unsafe { factory.EnumWarpAdapter() }, "WARP")?;
-    let mut device: Option<ID3D12Device> = None;
-    hr(
-        unsafe { D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_11_0, &mut device) },
-        "device",
-    )?;
-    let device = device.ok_or("device returned no object")?;
+    let (factory, device) = hr(rsf_test_support::warp_d3d12(), "WARP D3D12 device")?;
     let info = device.cast::<ID3D12InfoQueue>().ok();
     let queue: ID3D12CommandQueue = hr(
         unsafe { device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC::default()) },

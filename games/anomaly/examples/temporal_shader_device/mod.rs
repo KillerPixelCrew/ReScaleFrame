@@ -5,7 +5,7 @@ use rsf_shader_compiler::{Compiler, Request, compile};
 use std::{env, ffi::CStr, fs, path::Path, ptr, slice};
 use windows::Win32::Graphics::Direct3D::{Fxc::*, *};
 use windows::Win32::Graphics::Direct3D11::*;
-use windows::Win32::Graphics::Dxgi::{Common::*, IDXGIAdapter};
+use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::{Interface, PCSTR};
 
 type Fixture<T> = Result<T, String>;
@@ -173,26 +173,12 @@ struct Gpu {
 impl Gpu {
     fn new() -> Fixture<Self> {
         let create = |driver, flags| {
-            let (mut device, mut context, mut level) = (None, None, D3D_FEATURE_LEVEL::default());
-            let status = unsafe {
-                D3D11CreateDevice(
-                    None::<&IDXGIAdapter>,
-                    driver,
-                    Default::default(),
-                    flags,
-                    None,
-                    D3D11_SDK_VERSION,
-                    Some(&mut device),
-                    Some(&mut level),
-                    Some(&mut context),
-                )
-            };
-            win(status, "D3D11CreateDevice")?;
-            Ok::<_, String>((
-                device.ok_or("missing device")?,
-                context.ok_or("missing context")?,
-                level,
-            ))
+            let (device, context) = win(
+                rsf_test_support::d3d11_device(driver, flags, None),
+                "D3D11CreateDevice",
+            )?;
+            let level = unsafe { device.GetFeatureLevel() };
+            Ok::<_, String>((device, context, level))
         };
         let (kind, (device, context, level)) =
             match create(D3D_DRIVER_TYPE_HARDWARE, D3D11_CREATE_DEVICE_DEBUG) {

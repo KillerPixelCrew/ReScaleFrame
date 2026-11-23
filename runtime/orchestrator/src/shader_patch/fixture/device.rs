@@ -3,11 +3,9 @@
 
 use super::*;
 use std::ffi::OsString;
-use windows::Win32::Graphics::Direct3D::{
-    D3D_DRIVER_TYPE_WARP, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
-};
+use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D11::*;
-use windows::Win32::Graphics::Dxgi::{Common::*, IDXGIAdapter};
+use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::Interface;
 
 fn win<T>(result: windows::core::Result<T>) -> Test<T> {
@@ -231,21 +229,11 @@ fn render(
 }
 
 fn warp(api: &rsf_shader_patch_api, stock: &[u8], pixel: &[u8], rewritten: &[u8]) -> Test<()> {
-    let (mut device, mut context) = (None, None);
+    let (device, context) = win(rsf_test_support::warp_d3d11(
+        D3D11_CREATE_DEVICE_FLAG(0),
+        None,
+    ))?;
     unsafe {
-        win(D3D11CreateDevice(
-            None::<&IDXGIAdapter>,
-            D3D_DRIVER_TYPE_WARP,
-            Default::default(),
-            D3D11_CREATE_DEVICE_FLAG(0),
-            None,
-            D3D11_SDK_VERSION,
-            Some(&mut device),
-            None,
-            Some(&mut context),
-        ))?;
-        let device = device.ok_or("WARP device")?;
-        let context = context.ok_or("WARP context")?;
         let d = device.as_raw();
         let c = context.as_raw();
         expect((api.attach_d3d11.unwrap())(d) == OK, "API interception")?;

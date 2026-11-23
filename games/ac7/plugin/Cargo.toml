@@ -11,7 +11,7 @@ license.workspace = true
 crate-type = ["staticlib"]
 
 [features]
-warp-fixture = ["rsf-ac7/warp-fixture"]
+warp-fixture = ["rsf-ac7/warp-fixture", "dep:rsf-test-support"]
 
 [dependencies]
 rsf-ac7 = { path = ".." }
@@ -19,6 +19,8 @@ rsf-game-sys = { path = "../../../sdk/game" }
 rsf-minhook-sys = { path = "../../../third_party/minhook" }
 
 [target."cfg(windows)".dependencies]
+# The native graph WARP fixture's device; absent from the shipping build.
+rsf-test-support = { path = "../../../tests/support", optional = true }
 windows = { workspace = true, features = [
   "Win32_Graphics_Direct3D_Fxc",
   "Win32_Graphics_Direct3D11",

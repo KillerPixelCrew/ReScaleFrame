@@ -14,7 +14,7 @@ crate-type = ["staticlib"]
 # dumps and RenderDoc frame probe: research tooling for developer builds, never in release.
 research = []
 camera-fixture = []
-capture-fixture = ["research", "windows/Win32_Graphics_Direct3D_Fxc"]
+capture-fixture = ["research", "dep:rsf-test-support", "windows/Win32_Graphics_Direct3D_Fxc"]
 
 [dependencies]
 rsf-game-sys = { path = "../../sdk/game" }
@@ -22,6 +22,8 @@ rsf-game-sys = { path = "../../sdk/game" }
 [target."cfg(windows)".dependencies]
 rsf-minhook-sys = { path = "../../third_party/minhook" }
 rsf-windows = { path = "../../integrations/windows" }
+# The capture fixture's WARP D3D12 device; absent from the shipping build.
+rsf-test-support = { path = "../../tests/support", optional = true }
 
 [target."cfg(windows)".dependencies.windows]
 workspace = true
