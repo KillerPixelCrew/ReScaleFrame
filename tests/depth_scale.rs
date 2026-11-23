@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use crate::depth_scale::rsf_depth_scale_reserve;
 use crate::sys::{
     RSF_DEPTH_SCALE_ABI_VERSION as ABI, rsf_depth_scale_frame as Frame,
     rsf_depth_scale_setup as Setup,
@@ -10,7 +11,6 @@ use windows::core::Interface;
 
 unsafe extern "C" {
     fn rsf_depth_scale_create(context: Handle, setup: *const Setup, scale: *mut Handle) -> i32;
-    fn rsf_depth_scale_reserve(scale: Handle, texture: Handle) -> u32;
     fn rsf_depth_scale_prepare(scale: Handle, frame: *const Frame) -> i32;
     fn rsf_depth_scale_commit(scale: Handle) -> i32;
     fn rsf_depth_scale_restore(scale: Handle) -> i32;
@@ -264,7 +264,7 @@ fn run(gpu: &Device) -> TestResult {
     };
     unsafe { gpu.context.RSSetViewports(Some(&[vp])) };
     check(
-        unsafe { rsf_depth_scale_reserve(raw, texture.as_raw()) } != 0,
+        unsafe { rsf_depth_scale_reserve(raw.cast(), texture.as_raw()) } != 0,
         "allocation-only reserve",
     )?;
     check(
@@ -279,7 +279,7 @@ fn run(gpu: &Device) -> TestResult {
         None,
     )?;
     check(
-        unsafe { rsf_depth_scale_reserve(raw, unsupported.as_raw()) } == 0 && read()? == original,
+        unsafe { rsf_depth_scale_reserve(raw.cast(), unsupported.as_raw()) } == 0 && read()? == original,
         "unsupported reserve refusal",
     )?;
 

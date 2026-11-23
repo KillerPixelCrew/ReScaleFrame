@@ -328,8 +328,9 @@ unsafe extern "C" fn rsf_depth_scale_create(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_depth_scale_reserve(scale: *const DepthScale, texture: Handle) -> u32 {
+// The depth-scale fixture reserves through the handle; the Runtime reserves on the owner.
+#[cfg(feature = "test-fixtures")]
+pub(crate) unsafe fn rsf_depth_scale_reserve(scale: *const DepthScale, texture: Handle) -> u32 {
     let Ok(scale) = (unsafe { owned(scale) }) else {
         return 0;
     };

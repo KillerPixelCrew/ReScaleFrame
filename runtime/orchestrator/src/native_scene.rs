@@ -278,7 +278,6 @@ pub(super) unsafe extern "C" fn rsf_native_scene_present_path(window: *const Pas
     unsafe { rsf_core_native_scene_present_path(window, backbuffer_identity) }
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_native_scene_classify_present(
     window: *const Pass,
     scene: *const Scene,

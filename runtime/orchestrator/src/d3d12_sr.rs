@@ -84,7 +84,6 @@ fn open_session(
     OK
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_d3d12_sr_provider_plan(
     session: Raw,
     quality: u32,
@@ -102,7 +101,6 @@ unsafe extern "C" fn rsf_core_d3d12_sr_provider_plan(
     }
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_d3d12_sr_provider_evaluate(
     session: Raw,
     commands: Raw,
@@ -127,7 +125,6 @@ unsafe extern "C" fn rsf_core_d3d12_sr_provider_evaluate(
     }
 }
 
-#[unsafe(no_mangle)]
 extern "C" fn rsf_core_d3d12_sr_provider_release(session: Raw) -> i32 {
     // The caller retires GPU work before close. There is no separate SDK release.
     if session.is_null() {
@@ -137,14 +134,12 @@ extern "C" fn rsf_core_d3d12_sr_provider_release(session: Raw) -> i32 {
     }
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_d3d12_sr_provider_close(session: Raw) {
     if !session.is_null() {
         drop(unsafe { Box::from_raw(session.cast::<Session>()) });
     }
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_d3d12_sr_provider_version(
     session: Raw,
     id: *mut u64,

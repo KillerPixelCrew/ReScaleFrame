@@ -4,17 +4,11 @@ use std::ptr;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::core::Interface;
 
-unsafe extern "C" {
-    fn rsf_sampler_bias_create() -> Handle;
-    fn rsf_sampler_bias_destroy(cache: Handle);
-    fn rsf_sampler_bias_apply(
-        cache: Handle,
-        context: Handle,
-        samplers: *const Handle,
-        slot_mask: u32,
-        bias: f32,
-        applied_mask: *mut u32,
-    ) -> i32;
+use crate::sampler_bias::{SamplerBias, rsf_sampler_bias_apply, rsf_sampler_bias_create};
+
+// The Runtime keeps its cache for the process; the fixture frees its own.
+unsafe extern "C" fn destroy(cache: Handle) {
+    drop(unsafe { Box::from_raw(cache.cast::<SamplerBias>()) });
 }
 
 fn sampler(gpu: &Device, desc: &D3D11_SAMPLER_DESC) -> TestResult<ID3D11SamplerState> {
@@ -52,11 +46,11 @@ fn run(gpu: &Device) -> TestResult {
         };
         state
     };
-    let raw = unsafe { rsf_sampler_bias_create() };
+    let raw = rsf_sampler_bias_create();
     check(!raw.is_null(), "sampler cache creation")?;
     let cache = Pass {
-        raw,
-        destroy: rsf_sampler_bias_destroy,
+        raw: raw.cast(),
+        destroy,
     };
     let mut baselines = [ptr::null_mut(); D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT as usize];
     baselines[..2].copy_from_slice(&[native.as_raw(), comparison.as_raw()]);
@@ -64,7 +58,7 @@ fn run(gpu: &Device) -> TestResult {
         let mut applied = u32::MAX;
         let ok = unsafe {
             rsf_sampler_bias_apply(
-                cache.raw,
+                cache.raw.cast(),
                 context.as_raw(),
                 entries.as_ptr(),
                 mask,

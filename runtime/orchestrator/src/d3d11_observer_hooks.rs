@@ -182,7 +182,6 @@ impl Hooks {
     }
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_graphics_replace_vtable_slot(
     address: *mut Handle,
     expected: Handle,
