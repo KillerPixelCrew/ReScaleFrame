@@ -8,10 +8,7 @@
 mod native;
 use crate::sharpening_policy::{FILTERS, effective_mode};
 use crate::sys::rsf_sharpening_options as Options;
-use crate::sys::{
-    rsf_sharpenvk_facts as Facts, rsf_sharpenvk_layouts as Layouts, rsf_sharpenvk_pass as Pass,
-    rsf_sharpenvk_platform as Platform, rsf_sharpenvk_uniform as Uniform,
-};
+
 use crate::sys::{rsf_srvk_frame as Frame, rsf_srvk_image as Image, rsf_srvk_setup as Setup};
 use crate::sys::{rsf_vkfg_image as OwnedImage, rsf_vkfg_platform as ImageOps};
 use crate::vulkan_fg_resources::{ensure_image, rsf_core_vkfg_release_image};
@@ -24,6 +21,100 @@ const R16_FLOAT: u32 = 76;
 // exhausts the slots and keeps the vendor output.
 const MAX_SLOTS: usize = 64;
 const SCRATCH_USAGE: u32 = STORAGE_USAGE | TRANSFER_SRC_USAGE;
+
+/// Per-recording uniform block and descriptor set. `mapped` is host coherent.
+#[repr(C)]
+pub(crate) struct Uniform {
+    pub(crate) pool: u64,
+    pub(crate) set: u64,
+    pub(crate) buffer: u64,
+    pub(crate) memory: u64,
+    pub(crate) mapped: *mut c_void,
+}
+
+impl Default for Uniform {
+    fn default() -> Self {
+        Self {
+            pool: 0,
+            set: 0,
+            buffer: 0,
+            memory: 0,
+            mapped: ptr::null_mut(),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub(crate) struct Layouts {
+    pub(crate) descriptor_set: u64,
+    pub(crate) pipeline: u64,
+}
+
+/// Facts for the shader constant block. Sizes are pixels.
+#[repr(C)]
+pub(crate) struct Facts {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) motion_width: u32,
+    pub(crate) motion_height: u32,
+    pub(crate) depth_width: u32,
+    pub(crate) depth_height: u32,
+    pub(crate) depth_inverted: u32,
+    pub(crate) exposure_texture: u32,
+    pub(crate) effective_mode: u32,
+    pub(crate) near_plane: f32,
+    pub(crate) far_plane: f32,
+    pub(crate) exposure: f32,
+    pub(crate) motion_x: f32,
+    pub(crate) motion_y: f32,
+}
+
+/// One filter pass. Sampled views fill bindings 1 to 4: output colour, motion, depth and
+/// exposure. The output is GENERAL before and after.
+#[repr(C)]
+pub(crate) struct Pass {
+    pub(crate) set: u64,
+    pub(crate) buffer: u64,
+    pub(crate) pipeline: u64,
+    pub(crate) pipeline_layout: u64,
+    pub(crate) sampled: [u64; 4],
+    pub(crate) scratch: u64,
+    pub(crate) scratch_view: u64,
+    pub(crate) output: u64,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) groups_x: u32,
+    pub(crate) groups_y: u32,
+    pub(crate) scratch_initialized: u32,
+    pub(crate) reserved: u32,
+}
+
+type Leaf = *mut c_void;
+
+/// The native Vulkan leaves of the owner: `native::PLATFORM` in production, a CPU fake in tests.
+/// Scratch images use the shared Vulkan image leaves.
+#[repr(C)]
+pub(crate) struct Platform {
+    pub(crate) images: *const ImageOps,
+    pub(crate) open: Option<unsafe extern "C" fn(*const Setup, *mut Leaf) -> i32>,
+    pub(crate) close: Option<unsafe extern "C" fn(Leaf)>,
+    pub(crate) image_user: Option<unsafe extern "C" fn(Leaf) -> *mut c_void>,
+    pub(crate) create_layouts: Option<unsafe extern "C" fn(Leaf, *mut Layouts) -> i32>,
+    pub(crate) release_layouts: Option<unsafe extern "C" fn(Leaf, *mut Layouts)>,
+    /// Mode 1 to 3 selects the RCAS, depth RCAS or depth DAS SPIR-V.
+    pub(crate) create_pipeline: Option<unsafe extern "C" fn(Leaf, u64, u32, *mut u64) -> i32>,
+    pub(crate) destroy_pipeline: Option<unsafe extern "C" fn(Leaf, u64)>,
+    pub(crate) create_uniform: Option<unsafe extern "C" fn(Leaf, u64, *mut Uniform) -> i32>,
+    pub(crate) release_uniform: Option<unsafe extern "C" fn(Leaf, *mut Uniform)>,
+    pub(crate) create_view: Option<unsafe extern "C" fn(Leaf, u64, u32, *mut u64) -> i32>,
+    /// Sanitizes the request, or the defaults when it is null. Returns nonzero when the options
+    /// require a filter dispatch.
+    pub(crate) options: Option<unsafe extern "C" fn(*const Options, *mut Options) -> u32>,
+    pub(crate) write_constants:
+        Option<unsafe extern "C" fn(*mut c_void, *const Options, *const Facts)>,
+    pub(crate) record: Option<unsafe extern "C" fn(Leaf, *mut c_void, *const Pass)>,
+}
 
 #[derive(Default)]
 struct Slot {
@@ -325,8 +416,7 @@ impl Drop for Owner {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sharpenvk_create(platform: *const Platform) -> *mut Owner {
+unsafe fn rsf_core_sharpenvk_create(platform: *const Platform) -> *mut Owner {
     if platform.is_null() {
         return ptr::null_mut();
     }
@@ -343,15 +433,13 @@ unsafe extern "C" fn rsf_core_sharpenvk_create(platform: *const Platform) -> *mu
     })
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sharpenvk_destroy(owner: *mut Owner) {
+unsafe fn rsf_core_sharpenvk_destroy(owner: *mut Owner) {
     if !owner.is_null() {
         drop(unsafe { Box::from_raw(owner) });
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sharpenvk_record(
+unsafe fn rsf_core_sharpenvk_record(
     owner: *mut Owner,
     setup: *const Setup,
     commands: *mut c_void,
@@ -366,22 +454,19 @@ unsafe extern "C" fn rsf_core_sharpenvk_record(
     u32::from(owner.record(setup, commands, frame, output))
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sharpenvk_retire(owner: *mut Owner, commands: *mut c_void) {
+unsafe fn rsf_core_sharpenvk_retire(owner: *mut Owner, commands: *mut c_void) {
     if let Some(owner) = unsafe { owner.as_mut() } {
         owner.retire(commands);
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sharpenvk_clear(owner: *mut Owner) {
+unsafe fn rsf_core_sharpenvk_clear(owner: *mut Owner) {
     if let Some(owner) = unsafe { owner.as_mut() } {
         owner.clear();
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sharpenvk_dispatches(owner: *const Owner) -> u64 {
+unsafe fn rsf_core_sharpenvk_dispatches(owner: *const Owner) -> u64 {
     unsafe { owner.as_ref() }.map_or(0, |owner| owner.dispatches)
 }
 

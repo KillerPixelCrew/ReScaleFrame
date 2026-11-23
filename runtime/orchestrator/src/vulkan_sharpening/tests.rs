@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::sys::rsf_sharpenvk_platform;
 use crate::sys::rsf_vkfg_platform as ImageOps;
 use rsf_game_sys::rsf_frame_record;
 use std::cell::RefCell;
@@ -243,7 +242,7 @@ unsafe extern "C" fn record(_: *mut c_void, commands: *mut c_void, pass: *const 
         ));
     });
 }
-const PLATFORM: &rsf_sharpenvk_platform = &rsf_sharpenvk_platform {
+const PLATFORM: &Platform = &Platform {
     images: &IMAGES,
     open: Some(open),
     close: Some(close),
