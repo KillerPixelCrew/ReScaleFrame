@@ -117,7 +117,6 @@ fn bindings() {
         "runtime/orchestrator/src/vulkan_fg_copy_abi.h",
         "runtime/orchestrator/src/vulkan_fg_frames.h",
         "runtime/graphics/src/sharpening/d3d11.h",
-        "runtime/backends/common/generation12_platform.h",
         "runtime/vulkan/fsr4-fg/bridge_api.h",
         // Compiled into this crate through tests/graphics_fixture.rs.
         "tests/native_sr_fsr4_vulkan_fixture.h",

@@ -1,16 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
-use crate::sys::*;
-use crate::sys::{
-    RSF_FG_ABI_VERSION, RSF_FG_FIXED, rsf_fg_options, rsf_generation_provider, rsf_generation_setup,
-};
-use std::ffi::c_void;
+//! The xell_sleep_concurrency_contract fixture (test-fixtures only): the XeSS FG owner over CPU
+//! doubles of its SDK entries, proving XeLL sleep, marker and configure admission.
+use super::*;
+use crate::sys::{RSF_FG_ABI_VERSION, RSF_REFLEX_ON, RSF_UI_MODE_NONE};
+use rsf_game_sys::backend_result::INVALID_ARGUMENT as INVALID;
 use std::ptr::{from_ref, null_mut};
 use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 use windows_sys::Win32::System::{LibraryLoader::LoadLibraryW, Threading::CreateEventW};
-
-type Raw = *mut c_void;
 
 #[repr(C)]
 struct UnknownVtable {
@@ -72,20 +70,16 @@ static QUEUE: MockCom = MockCom::new();
 static CHAIN: MockCom = MockCom::new();
 static FENCE: MockCom = MockCom::new();
 
-static CHECKS: rsf_gen12_checks = rsf_gen12_checks {
-    setup: Some(setup_outputs),
+static CHECKS: Checks = Checks {
+    setup: setup_outputs,
     // This fixture drives begin, configure and markers. Refuse unexpected prepare work.
-    frame: Some(refuse_frame),
-    command: Some(refuse_command),
-    streamline_loaded: Some(no_streamline),
-    load_library: Some(load_library),
+    frame: refuse_frame,
+    command: refuse_command,
+    streamline_loaded: no_streamline,
+    load_library,
 };
 
-unsafe extern "C" fn setup_outputs(
-    _: *const rsf_generation_setup,
-    out: *mut Raw,
-    chain: *mut Raw,
-) -> i32 {
+unsafe extern "C" fn setup_outputs(_: *const Setup, out: *mut Raw, chain: *mut Raw) -> i32 {
     unsafe {
         out.write(null_mut());
         chain.write(null_mut());
@@ -93,7 +87,7 @@ unsafe extern "C" fn setup_outputs(
     OK
 }
 
-unsafe extern "C" fn refuse_frame(_: *const crate::sys::rsf_fg_frame, _: Raw) -> i32 {
+unsafe extern "C" fn refuse_frame(_: *const Frame, _: Raw) -> i32 {
     INVALID
 }
 
@@ -105,46 +99,41 @@ unsafe extern "C" fn no_streamline() -> u32 {
     0
 }
 
-unsafe extern "C" fn load_library(_: *const rsf_generation_setup, _: *const u16) -> Raw {
+unsafe extern "C" fn load_library(_: &Setup, _: *const u16) -> Raw {
     // The owner retires these real module references without resolving SDK exports.
-    let kernel32 = crate::wide(std::ffi::OsStr::new("kernel32.dll"));
+    let kernel32 = rsf_game_sys::ffi_util::wide("kernel32.dll");
     unsafe { LoadLibraryW(kernel32.as_ptr()) }
 }
 
-struct MockOps(rsf_xeg12_ops);
-
-// The sole raw pointer is to the immutable CHECKS table.
-unsafe impl Sync for MockOps {}
-
-static OPS: MockOps = MockOps(rsf_xeg12_ops {
+static OPS: Ops = Ops {
     check: &CHECKS,
-    resolve: Some(resolve),
-    close: Some(close),
-    create_fg: Some(create_context),
-    create_xell: Some(create_context),
-    destroy_fg: Some(ok2),
-    destroy_xell: Some(ok2),
-    max_count: Some(max_count),
-    bind_xell: Some(bind_xell),
-    version: Some(version),
-    create_chain: Some(create_chain),
-    compose: Some(ok3),
-    count: Some(ok3),
-    enabled: Some(enabled),
-    sleep_mode: Some(sleep_mode),
-    sleep: Some(sleep),
-    marker: Some(marker),
-    present_id: Some(ok3),
-    tag: Some(tag),
-    constants: Some(constants),
-    present_status: Some(present_status),
-    create_fence: Some(create_fence),
-    create_event: Some(create_event),
-    drain: Some(drain),
-});
+    resolve,
+    close,
+    create_fg: create_context,
+    create_xell: create_context,
+    destroy_fg: ok2,
+    destroy_xell: ok2,
+    max_count,
+    bind_xell,
+    version,
+    create_chain,
+    compose: ok3,
+    count: ok3,
+    enabled,
+    sleep_mode,
+    sleep,
+    marker,
+    present_id: ok3,
+    tag,
+    constants,
+    present_status,
+    create_fence,
+    create_event,
+    drain,
+};
 
-unsafe extern "C" fn resolve(_: *const rsf_generation_setup, _: Raw, _: Raw, out: *mut Raw) -> i32 {
-    unsafe { out.write(DEVICE.raw()) };
+unsafe extern "C" fn resolve(_: &Setup, _: Raw, _: Raw, out: &mut Raw) -> i32 {
+    *out = DEVICE.raw();
     OK
 }
 
@@ -172,41 +161,22 @@ unsafe extern "C" fn bind_xell(_: Raw, _: Raw, _: Raw) -> i32 {
     OK
 }
 
-unsafe extern "C" fn version(_: Raw, _: *mut rsf_xeg12_version) {}
+unsafe extern "C" fn version(_: Raw, _: *mut Version) {}
 
-unsafe extern "C" fn create_chain(
-    _: Raw,
-    _: Raw,
-    _: *const rsf_generation_setup,
-    _: u32,
-    out: *mut Raw,
-) -> i32 {
+unsafe extern "C" fn create_chain(_: Raw, _: Raw, _: *const Setup, _: u32, out: *mut Raw) -> i32 {
     unsafe { out.write(CHAIN.retain()) };
     OK
 }
 
-unsafe extern "C" fn tag(
-    _: Raw,
-    _: Raw,
-    _: Raw,
-    _: u32,
-    _: u32,
-    _: *const crate::sys::rsf_backend_resource,
-) -> i32 {
+unsafe extern "C" fn tag(_: Raw, _: Raw, _: Raw, _: u32, _: u32, _: *const Resource) -> i32 {
     INVALID
 }
 
-unsafe extern "C" fn constants(
-    _: Raw,
-    _: Raw,
-    _: u32,
-    _: *const crate::sys::rsf_fg_frame,
-    _: u32,
-) -> i32 {
+unsafe extern "C" fn constants(_: Raw, _: Raw, _: u32, _: *const Frame, _: u32) -> i32 {
     INVALID
 }
 
-unsafe extern "C" fn present_status(_: Raw, _: Raw, _: *mut rsf_xeg12_present) -> i32 {
+unsafe extern "C" fn present_status(_: Raw, _: Raw, _: *mut Present) -> i32 {
     OK
 }
 
@@ -226,10 +196,6 @@ unsafe extern "C" fn drain(queue: Raw, fence: Raw, event: Raw, _: u64) -> i32 {
     }
 }
 
-const OK: i32 = 0;
-const INVALID: i32 = -1;
-const NOT_READY: i32 = -8;
-const FEATURE_FAILED: i32 = -9;
 const PRESENT_END: u32 = 5; // RSF_LATENCY_PRESENT_END in game_frame.h
 const TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -296,20 +262,20 @@ unsafe extern "C" fn enabled(_: Raw, _: Raw, _: u32) -> i32 {
     }
 }
 
-struct Session(*mut c_void);
+struct Session(Raw);
 
 // Only the owner's begin call is moved to the worker, and it joins before
 // destruction. The production owner admits marker/configure concurrently.
 unsafe impl Sync for Session {}
 
-fn provider() -> &'static rsf_generation_provider {
-    unsafe { &*rsf_core_xeg12_provider() }
+fn provider() -> &'static Provider {
+    &PROVIDER
 }
 
 impl Session {
     fn create(&mut self) {
         // The mock setup callback accepts the zeroed header used by this fixture.
-        let mut setup: rsf_generation_setup = unsafe { std::mem::zeroed() };
+        let mut setup: Setup = unsafe { std::mem::zeroed() };
         setup.chain.hwnd = CHAIN.raw();
         setup.chain.d3d12_device = DEVICE.raw();
         setup.chain.d3d12_queue = QUEUE.raw();
@@ -317,7 +283,7 @@ impl Session {
         setup.chain.max_generated_frames = 2;
         let mut present = null_mut();
         assert_eq!(
-            unsafe { rsf_core_xeg12_create(&OPS.0, &setup, &mut self.0, &mut present) },
+            unsafe { rsf_core_xeg12_create(&OPS, &setup, &mut self.0, &mut present) },
             OK,
         );
         assert_eq!(present, CHAIN.raw());
@@ -328,8 +294,8 @@ impl Session {
     }
 
     fn configure(&self, frames: u32, interval: u32) -> i32 {
-        let options = rsf_fg_options {
-            struct_size: size_of::<rsf_fg_options>() as u32,
+        let options = Options {
+            struct_size: size_of::<Options>() as u32,
             abi_version: RSF_FG_ABI_VERSION,
             mode: RSF_FG_FIXED,
             generated_frames: frames,
@@ -399,5 +365,5 @@ fn check() -> i32 {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_xell_fixture_run() -> i32 {
-    crate::run(check)
+    std::panic::catch_unwind(check).unwrap_or(1)
 }

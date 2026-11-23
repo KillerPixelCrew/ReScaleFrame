@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 #[path = "xess_native.rs"]
 mod native;
+#[cfg(feature = "test-fixtures")]
+#[path = "xell_fixture.rs"]
+mod xell_fixture;
 pub(crate) use native::rsf_generation_xess;
 
 use super::*;
@@ -494,13 +497,7 @@ impl Session for Xess {
 
 static PROVIDER: Provider = provider::<Xess>();
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_xeg12_provider() -> *const Provider {
-    &PROVIDER
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xeg12_create(
+unsafe fn rsf_core_xeg12_create(
     ops: &'static Ops,
     setup: *const Setup,
     out: *mut Raw,

@@ -726,11 +726,6 @@ impl Session for Fsr {
 
 static PROVIDER: Provider = provider::<Fsr>();
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_fsr12_provider() -> *const Provider {
-    &PROVIDER
-}
-
 fn select_version(handle: Raw, setup: &Setup, query: QueryVersions) -> Option<Version> {
     let mut versions = [Version::default(); MAX_VERSIONS];
     let mut count = 0;
@@ -741,8 +736,7 @@ fn select_version(handle: Raw, setup: &Setup, query: QueryVersions) -> Option<Ve
     ffx_version::admitted(versions, setup.feature_major, setup.version_id)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_fsr12_probe(checks: &Checks, setup: &Setup, query: QueryVersions) -> u32 {
+fn rsf_core_fsr12_probe(checks: &Checks, setup: &Setup, query: QueryVersions) -> u32 {
     let Some(module) = checks.module(setup, MODULE) else {
         return 0;
     };
@@ -753,8 +747,7 @@ extern "C" fn rsf_core_fsr12_probe(checks: &Checks, setup: &Setup, query: QueryV
     u32::from(select_version(entry as Raw, setup, query).is_some())
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr12_create(
+unsafe fn rsf_core_fsr12_create(
     ops: &'static Ops,
     setup: *const Setup,
     out: *mut Raw,
@@ -875,8 +868,7 @@ unsafe extern "C" fn rsf_core_fsr12_create(
     OK
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr12_generate(user: Raw, desc: Raw) -> u32 {
+unsafe fn rsf_core_fsr12_generate(user: Raw, desc: Raw) -> u32 {
     let owner = unsafe { &*user.cast::<Fsr>() };
     let context = owner.generation.load(Relaxed);
     if context.is_null() {
@@ -903,8 +895,7 @@ unsafe extern "C" fn rsf_core_fsr12_generate(user: Raw, desc: Raw) -> u32 {
     result
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr12_present(user: Raw, desc: Raw, generated: u32) -> u32 {
+unsafe fn rsf_core_fsr12_present(user: Raw, desc: Raw, generated: u32) -> u32 {
     let owner = unsafe { &*user.cast::<Fsr>() };
     let mut present = PresentFacts::default();
     unsafe { (owner.ops.present_facts)(desc, &mut present) };

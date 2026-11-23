@@ -41,8 +41,6 @@ mod session;
 mod unity_sr_d3d12;
 #[cfg(feature = "vk-latency-fixtures")]
 mod vk_latency;
-#[cfg(feature = "xell-fixture")]
-mod xell;
 
 use std::ffi::{CStr, OsStr};
 use std::os::windows::ffi::OsStrExt;

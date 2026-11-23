@@ -9,7 +9,7 @@ rsf_add_rust_static(rsf_presentation_fixtures_rust rsf_rust_presentation_fixture
     --features d3d11-host-device-fixtures,gl-device-fixture)
 rsf_add_rust_static(rsf_game_sdk_fixtures_rust rsf_rust_game_sdk_fixtures
     rsf-game-sdk-fixtures rsf_game_sdk_fixtures
-    --features render-host-fixtures,cpu-fixtures,unity-sr-d3d12-fixture,plugin-session-fixture,d3d11-host-fixture,vk-latency-fixtures,xell-fixture)
+    --features render-host-fixtures,cpu-fixtures,unity-sr-d3d12-fixture,plugin-session-fixture,d3d11-host-fixture,vk-latency-fixtures)
 rsf_add_rust_static(rsf_vulkan_fg_fixtures_rust rsf_rust_vulkan_fg_fixtures
     rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures
     --features ffx,wsi-dispatch,streamline-selected,streamline-dispatch,xess-sr,xess-input-range,xess-device)
@@ -782,8 +782,9 @@ rsf_add_fixture_test(rsf_input_receipts_test NAME input_receipts_contract ENTRY 
     LIBS rsf_game_sdk_fixtures_rust rsf_native_cpu)
 if(EXISTS "${RSF_XESS_INCLUDE}/xell/xell_d3d12.h" AND
    EXISTS "${RSF_XESS_INCLUDE}/xess_fg/xefg_swapchain_d3d12.h")
+    # d3d12_generation/xell_fixture.rs in the test-fixtures orchestrator archive.
     rsf_add_fixture_test(rsf_xell_sleep_concurrency NAME xell_sleep_concurrency_contract ENTRY rsf_xell_fixture_run
-        LIBS rsf_game_sdk_fixtures_rust rsf_orchestrator_rust TIMEOUT 10)
+        LIBS rsf_orchestrator_rust TIMEOUT 10)
 endif()
 
 # These executables call the fixture exports of the Rust orchestrator, which only the test-fixtures archive carries
@@ -795,7 +796,7 @@ foreach(rsf_fixture_target
         rsf_sharpening_settings_test rsf_exposure_normalization_test rsf_native_vulkan_test rsf_dlss_backend
         rsf_dlss_sr_layout rsf_sr_session_test rsf_sr_bridge_test rsf_sr_pipeline_test rsf_sr_backend_switch_device_test
         rsf_shader_patch_test rsf_shader_patch_device_test rsf_native_sr_fsr4_state_test rsf_native_sr_fsr4_vulkan_test
-        rsf_native_fsr4_fg_state_test rsf_native_fg_cpu_test rsf_native_fg_dlss_vulkan_test)
+        rsf_native_fsr4_fg_state_test rsf_native_fg_cpu_test rsf_native_fg_dlss_vulkan_test rsf_xell_sleep_concurrency)
     if(TARGET ${rsf_fixture_target})
         set_target_properties(${rsf_fixture_target} PROPERTIES RSF_ORCHESTRATOR_FIXTURES ON)
         add_dependencies(${rsf_fixture_target} rsf_rust_core_fixtures)
