@@ -2,7 +2,8 @@
 use super::*;
 use crate::sys::rsf_vkfg_image;
 use crate::sys::{RSF_SLVK_ABI_VERSION, rsf_slvk_call};
-use crate::sys::{rsf_vkdlss_init, rsf_vkdlss_options, rsf_vkdlss_platform, rsf_vkdlss_tag};
+use crate::sys::rsf_vkdlss_options;
+use crate::vulkan_dlss_sr::{Init as rsf_vkdlss_init, Platform as rsf_vkdlss_platform, Tag as rsf_vkdlss_tag};
 use crate::vulkan_streamline_camera::rsf_slvk_sdk_constants;
 use ash::vk::{self, Handle as _};
 

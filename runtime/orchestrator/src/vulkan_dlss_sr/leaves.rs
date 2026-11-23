@@ -2,6 +2,7 @@
 //! Streamline DLSS SR call leaves, device preparation, private images,
 //! sharpening and capture of the Vulkan DLSS SR owner, and `NATIVE`, the production table
 //! that adds the session invoke, the FrameDump parameter call and the SDK preset policy.
+use super::{Init, Tag};
 use crate::frame_capture_vk::{
     Owner as Capture, rsf_core_capture_vk_create, rsf_core_capture_vk_destroy,
     rsf_core_capture_vk_flush, rsf_core_capture_vk_initialize, rsf_core_capture_vk_provider,
@@ -9,10 +10,7 @@ use crate::frame_capture_vk::{
 };
 use crate::sys::rsf_vkfg_image as Image;
 use crate::sys::{rsf_srvk_frame as Frame, rsf_srvk_image as SourceImage, rsf_srvk_setup as Setup};
-use crate::sys::{
-    rsf_vkdlss_init as Init, rsf_vkdlss_optimal as Optimal, rsf_vkdlss_options as Options,
-    rsf_vkdlss_tag as Tag,
-};
+use crate::sys::{rsf_vkdlss_optimal as Optimal, rsf_vkdlss_options as Options};
 use crate::vulkan_fg_resources::device::{
     Device, rsf_core_vkfg_device_destroy, rsf_core_vkfg_device_memory, rsf_core_vkfg_load_device,
     rsf_core_vkfg_platform,
@@ -390,7 +388,7 @@ unsafe extern "C" fn preset_valid(preset: u32) -> i32 {
     i32::from(crate::streamline_sr::preset_valid(preset))
 }
 
-pub(super) static NATIVE: crate::sys::rsf_vkdlss_platform = crate::sys::rsf_vkdlss_platform {
+pub(super) static NATIVE: super::Platform = super::Platform {
     open: Some(rsf_core_vkdlss_sdk_open),
     close: Some(rsf_core_vkdlss_sdk_close),
     invoke: Some(crate::vulkan_latency::rsf_slvk_invoke),

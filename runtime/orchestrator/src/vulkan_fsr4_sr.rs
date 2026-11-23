@@ -34,7 +34,7 @@ use rsf_game_sys::backend_result::FEATURE_FAILED;
 /// rsf-fsr4-compat and the host split callback. [`NATIVE`] is the production table; the state
 /// fixture substitutes fakes for every entry.
 struct Platform {
-    interop: &'static rsf_dx12vk_platform,
+    interop: &'static InteropPlatform,
     open: Option<unsafe extern "C" fn(*const Setup, *mut Handle) -> i32>,
     close: Option<unsafe extern "C" fn(Handle)>,
     bridge_create: Option<unsafe extern "C" fn(*const BridgeCreate, *mut Handle) -> i32>,
@@ -718,9 +718,7 @@ unsafe fn create_admitted(
         ops,
         handle: graphics,
     };
-    let Some(interop_ops) = InteropPlatform::checked(ops.interop) else {
-        return INVALID;
-    };
+    let interop_ops = *ops.interop;
     let interop = match Interop::open(interop_ops, &setup, ops.release_image.unwrap()) {
         Ok(interop) => interop,
         Err(error) => return error,

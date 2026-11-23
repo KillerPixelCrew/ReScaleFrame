@@ -109,10 +109,8 @@ fn bindings() {
     const HEADERS: &[&str] = &[
         "runtime/orchestrator/src/d3d11_host_foreign.h",
         "runtime/orchestrator/src/fg12_platform.h",
-        "runtime/orchestrator/src/native_dlss_vulkan_platform.h",
         "runtime/orchestrator/src/native_fg_dlss_vulkan_capture_ledger.h",
         "runtime/orchestrator/src/native_fg_ffx_vulkan.h",
-        "runtime/orchestrator/src/native_dx12_vulkan_platform.h",
         "runtime/orchestrator/src/native_fg_xess_vulkan.h",
         "runtime/orchestrator/src/native_latency_vulkan_presentation.h",
         "runtime/orchestrator/src/render_host_foreign.h",

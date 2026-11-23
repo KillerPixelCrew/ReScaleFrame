@@ -7,7 +7,7 @@ mod leaves;
 
 /// The Streamline leaf table when CMake verified the corrected Streamline Vulkan runtime (the
 /// `streamline-vk` feature); without it DLSS SR reports NOT_COMPILED.
-pub(crate) const fn native_leaves() -> Option<&'static crate::sys::rsf_vkdlss_platform> {
+pub(crate) const fn native_leaves() -> Option<&'static Platform> {
     if cfg!(feature = "streamline-vk") {
         Some(&leaves::NATIVE)
     } else {
@@ -16,11 +16,8 @@ pub(crate) const fn native_leaves() -> Option<&'static crate::sys::rsf_vkdlss_pl
 }
 use self::commands::Dispatch;
 use crate::sys::{RSF_SLVK_ABI_VERSION, rsf_slvk_call, rsf_slvk_callback};
+use crate::sys::{rsf_slvk_sdk_constants, rsf_vkdlss_options, rsf_vkfg_image};
 use crate::sys::{rsf_srvk_frame, rsf_srvk_image, rsf_srvk_setup};
-use crate::sys::{
-    rsf_vkdlss_images, rsf_vkdlss_init, rsf_vkdlss_options, rsf_vkdlss_platform as Platform,
-    rsf_vkdlss_tag,
-};
 use crate::vulkan_ownership::Claim;
 use crate::vulkan_sr::{
     GENERAL, History, R32_FLOAT, RG16_FLOAT, RGBA16_FLOAT, SAMPLED_USAGE, SHADER_READ,
@@ -32,6 +29,73 @@ use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::AtomicBool;
 
+/// The owner's private images.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Images {
+    pub(crate) color: rsf_vkfg_image,
+    pub(crate) depth: rsf_vkfg_image,
+    pub(crate) motion: rsf_vkfg_image,
+    pub(crate) bias: rsf_vkfg_image,
+    pub(crate) output: rsf_vkfg_image,
+}
+
+/// One Streamline resource tag the `tag` leaf records.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct Tag {
+    pub(crate) image: *const rsf_vkfg_image,
+    pub(crate) kind: u32,
+    pub(crate) layout: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
+
+/// The `initialize` callback's user record.
+#[repr(C)]
+pub(crate) struct Init {
+    pub(crate) native: *mut c_void,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) options: *const rsf_vkdlss_options,
+}
+
+/// The owner's Streamline, device, image, sharpening and capture leaves: `leaves::NATIVE` in
+/// production, fakes in vulkan_sr/owner_tests.rs.
+pub(crate) struct Platform {
+    pub(crate) open: Option<unsafe extern "C" fn(*const rsf_srvk_setup, *mut *mut c_void) -> i32>,
+    pub(crate) close: Option<unsafe extern "C" fn(*mut c_void)>,
+    pub(crate) invoke: Option<unsafe extern "C" fn(*const rsf_slvk_call) -> i32>,
+    pub(crate) initialize: rsf_slvk_callback,
+    pub(crate) prepare: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
+    pub(crate) allocate:
+        Option<unsafe extern "C" fn(*mut c_void, *mut rsf_vkfg_image, u32, u32, u32, u32) -> u32>,
+    pub(crate) free_image: Option<unsafe extern "C" fn(*mut c_void, *mut rsf_vkfg_image)>,
+    pub(crate) constants:
+        Option<unsafe extern "C" fn(*mut c_void, usize, *const rsf_slvk_sdk_constants) -> i32>,
+    pub(crate) options: Option<unsafe extern "C" fn(*mut c_void, *const rsf_vkdlss_options) -> i32>,
+    pub(crate) tag:
+        Option<unsafe extern "C" fn(*mut c_void, usize, *mut c_void, *const Tag) -> i32>,
+    pub(crate) evaluate: Option<unsafe extern "C" fn(*mut c_void, usize, *mut c_void) -> i32>,
+    pub(crate) capture_parameters:
+        Option<unsafe extern "C" fn(*mut c_void, *const rsf_srvk_frame, u32)>,
+    pub(crate) capture_record: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            *mut c_void,
+            *const rsf_srvk_image,
+            *const rsf_frame_record,
+            *const std::ffi::c_char,
+            u32,
+        ),
+    >,
+    pub(crate) sharpen:
+        Option<unsafe extern "C" fn(*mut c_void, *mut c_void, *const rsf_srvk_frame, u64)>,
+    pub(crate) release: Option<unsafe extern "C" fn(*mut c_void, usize, *mut c_void) -> i32>,
+    pub(crate) flush: Option<unsafe extern "C" fn(*mut c_void)>,
+    pub(crate) retire: Option<unsafe extern "C" fn(*mut c_void, *mut c_void)>,
+    pub(crate) preset_valid: Option<unsafe extern "C" fn(u32) -> i32>,
+}
 const R16: u32 = 76;
 const INPUT_USAGE: u32 = SAMPLED_USAGE | TRANSFER_DST_USAGE;
 const OUTPUT_USAGE: u32 = INPUT_USAGE | STORAGE_USAGE | TRANSFER_SRC_USAGE;
@@ -85,7 +149,7 @@ pub(super) struct Owner {
     width: u32,
     height: u32,
     mode: u32,
-    images: rsf_vkdlss_images,
+    images: Images,
     history: History,
     preset: u32,
     resources: bool,
@@ -230,7 +294,7 @@ unsafe extern "C" fn evaluate(_: *mut c_void, token: usize, user: *mut c_void) -
         dispatch.initialize_output(*commands, &images.output);
         images.output.initialized = 1;
     }
-    let render_tag = |image, kind| rsf_vkdlss_tag {
+    let render_tag = |image, kind| Tag {
         image,
         kind,
         layout: SHADER_READ,
@@ -241,7 +305,7 @@ unsafe extern "C" fn evaluate(_: *mut c_void, token: usize, user: *mut c_void) -
         render_tag(&images.color, 3),
         render_tag(&images.depth, 0),
         render_tag(&images.motion, 1),
-        rsf_vkdlss_tag {
+        Tag {
             image: &images.output,
             kind: 4,
             layout: GENERAL,
@@ -327,7 +391,7 @@ impl Owner {
             width: 0,
             height: 0,
             mode,
-            images: rsf_vkdlss_images::default(),
+            images: Images::default(),
             history: History::default(),
             preset: 0,
             resources: false,
@@ -344,7 +408,7 @@ impl Owner {
             return Err(INIT_FAILED);
         }
         let request = options(mode, setup.output_width, setup.output_height);
-        let mut init = rsf_vkdlss_init {
+        let mut init = Init {
             native: owner.native,
             width: 0,
             height: 0,

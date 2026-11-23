@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::sys::rsf_dx12vk_platform;
+use crate::dx12_vulkan_interop::Platform;
 use crate::sys::{rsf_srvk_setup as Setup, rsf_vk_function, rsf_vk_get_proc};
 use ash::vk::{self, Handle as _};
 use std::ffi::{CStr, c_void};
@@ -324,26 +324,21 @@ unsafe extern "C" fn free_memory(opaque: Handle, memory: u64) {
     unsafe { (vk.free_memory)(vk.device, vk::DeviceMemory::from_raw(memory), ptr::null()) };
 }
 
-pub(super) static PLATFORM: rsf_dx12vk_platform = rsf_dx12vk_platform {
-    adapter_luid: Some(adapter_luid),
-    open: Some(open),
-    close: Some(close),
-    timeline_importable: Some(timeline_importable),
-    create_timeline: Some(create_timeline),
-    import_timeline: Some(import_timeline),
-    destroy_timeline: Some(destroy_timeline),
-    image_properties: Some(image_properties),
-    create_image: Some(create_image),
-    image_requirements: Some(image_requirements),
-    handle_memory_types: Some(handle_memory_types),
-    device_local_types: Some(device_local_types),
-    allocate_memory: Some(allocate_memory),
-    bind_image: Some(bind_image),
-    destroy_image: Some(destroy_image),
-    free_memory: Some(free_memory),
+pub(super) static PLATFORM: Platform = Platform {
+    adapter_luid,
+    open,
+    close,
+    timeline_importable,
+    create_timeline,
+    import_timeline,
+    destroy_timeline,
+    image_properties,
+    create_image,
+    image_requirements,
+    handle_memory_types,
+    device_local_types,
+    allocate_memory,
+    bind_image,
+    destroy_image,
+    free_memory,
 };
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_dx12vk_platform_ops() -> *const rsf_dx12vk_platform {
-    &PLATFORM
-}

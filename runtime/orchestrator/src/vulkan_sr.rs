@@ -367,7 +367,7 @@ type Capture = unsafe extern "C" fn(Handle, Handle, &Image, &rsf_frame_record, *
 /// The leaves the owner sequences: the DLSS, XeSS and FidelityFX backends and the FrameDump
 /// record calls. [`NATIVE`] is the production table; owner_tests.rs substitutes fakes.
 struct Platform {
-    dlss: Option<&'static crate::sys::rsf_vkdlss_platform>,
+    dlss: Option<&'static crate::vulkan_dlss_sr::Platform>,
     xess: Option<&'static xess::XessOps>,
     ffx: FfxOps,
     dump_begin: unsafe extern "C" fn(*const rsf_frame_record, u32) -> i32,

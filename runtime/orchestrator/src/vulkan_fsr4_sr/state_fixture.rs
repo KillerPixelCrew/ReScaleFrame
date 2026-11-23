@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Synthetic split-frame, external image and checked-retirement contract.
 use super::*;
-use crate::sys::rsf_dx12vk_platform;
 use crate::sys::rsf_sharpening_options;
 use ash::vk;
 use std::cell::RefCell;
@@ -68,6 +67,12 @@ thread_local! {
 fn with<T>(f: impl FnOnce(&mut Calls) -> T) -> T {
     CALLS.with(|c| f(&mut c.borrow_mut()))
 }
+macro_rules! entry {
+    (|$($name:tt : $ty:ty),*| $(-> $ret:ty)? { $($body:tt)* }) => {{
+        unsafe extern "C" fn callback($($name: $ty),*) $(-> $ret)? { $($body)* }
+        callback
+    }};
+}
 macro_rules! leaf {
     (|$($name:tt : $ty:ty),*| $(-> $ret:ty)? { $($body:tt)* }) => {{
         unsafe extern "C" fn callback($($name: $ty),*) $(-> $ret)? { $($body)* }
@@ -95,29 +100,29 @@ fn extent(index: usize) -> (u32, u32) {
     if index == 3 { OUTPUT } else { RENDER }
 }
 
-static INTEROP: rsf_dx12vk_platform = rsf_dx12vk_platform {
-    adapter_luid: leaf!(|_: *const Setup, out: *mut u64| -> i32 {
+static INTEROP: InteropPlatform = InteropPlatform {
+    adapter_luid: entry!(|_: *const Setup, out: *mut u64| -> i32 {
         unsafe { out.write(ADAPTER) };
         0
     }),
-    open: Some(open),
-    close: leaf!(|_: Handle| { with(|c| c.retirement.push(Step::Importer)) }),
-    timeline_importable: leaf!(|_: Handle| -> u32 { 1 }),
-    create_timeline: leaf!(|_: Handle, out: *mut u64| -> i32 {
+    open,
+    close: entry!(|_: Handle| { with(|c| c.retirement.push(Step::Importer)) }),
+    timeline_importable: entry!(|_: Handle| -> u32 { 1 }),
+    create_timeline: entry!(|_: Handle, out: *mut u64| -> i32 {
         unsafe { out.write(TIMELINE) };
         0
     }),
-    import_timeline: leaf!(|_: Handle, value: u64, handle: Handle| -> i32 {
+    import_timeline: entry!(|_: Handle, value: u64, handle: Handle| -> i32 {
         with(|c| check!(c, value == TIMELINE && !handle.is_null()));
         0
     }),
-    destroy_timeline: leaf!(|_: Handle, value: u64| {
+    destroy_timeline: entry!(|_: Handle, value: u64| {
         with(|c| {
             check!(c, value == TIMELINE);
             c.retirement.push(Step::Timeline);
         });
     }),
-    image_properties: leaf!(|_: Handle,
+    image_properties: entry!(|_: Handle,
                              format: u32,
                              usage: u32,
                              allowed: *mut u32,
@@ -144,7 +149,7 @@ static INTEROP: rsf_dx12vk_platform = rsf_dx12vk_platform {
         };
         0
     }),
-    create_image: leaf!(|_: Handle,
+    create_image: entry!(|_: Handle,
                          format: u32,
                          width: u32,
                          height: u32,
@@ -170,18 +175,18 @@ static INTEROP: rsf_dx12vk_platform = rsf_dx12vk_platform {
         unsafe { out.write(100 + index as u64) };
         0
     }),
-    image_requirements: leaf!(|_: Handle, _: u64, bytes: *mut u64, types: *mut u32| {
+    image_requirements: entry!(|_: Handle, _: u64, bytes: *mut u64, types: *mut u32| {
         unsafe {
             bytes.write(256);
             types.write(0b1101);
         }
     }),
-    handle_memory_types: leaf!(|_: Handle, _: Handle, out: *mut u32| -> i32 {
+    handle_memory_types: entry!(|_: Handle, _: Handle, out: *mut u32| -> i32 {
         unsafe { out.write(0b0110) };
         0
     }),
-    device_local_types: leaf!(|_: Handle| -> u32 { 0b1100 }),
-    allocate_memory: leaf!(|_: Handle,
+    device_local_types: entry!(|_: Handle| -> u32 { 0b1100 }),
+    allocate_memory: entry!(|_: Handle,
                             image: u64,
                             _: Handle,
                             bytes: u64,
@@ -192,14 +197,14 @@ static INTEROP: rsf_dx12vk_platform = rsf_dx12vk_platform {
         unsafe { out.write(image + 100) };
         0
     }),
-    bind_image: leaf!(|_: Handle, image: u64, memory: u64| -> i32 {
+    bind_image: entry!(|_: Handle, image: u64, memory: u64| -> i32 {
         with(|c| {
             check!(c, memory == image + 100);
             if image == c.bind_error_at { UNKNOWN } else { 0 }
         })
     }),
-    destroy_image: leaf!(|_: Handle, _: u64| { with(|c| c.retirement.push(Step::Image)) }),
-    free_memory: leaf!(|_: Handle, _: u64| { with(|c| c.retirement.push(Step::Memory)) }),
+    destroy_image: entry!(|_: Handle, _: u64| { with(|c| c.retirement.push(Step::Image)) }),
+    free_memory: entry!(|_: Handle, _: u64| { with(|c| c.retirement.push(Step::Memory)) }),
 };
 
 const PLATFORM: Platform = Platform {

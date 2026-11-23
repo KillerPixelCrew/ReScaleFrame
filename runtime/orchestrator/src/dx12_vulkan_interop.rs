@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-use ash::vk;
 use crate::allocate_handle;
 use crate::owned_win32_handle;
 use crate::sr_session::has_capacity;
 use crate::sys::*;
 use crate::sys::{RSF_SRVK_ABI_VERSION, rsf_srvk_setup};
+use ash::vk;
 use std::ffi::c_void;
 use std::os::windows::io::AsRawHandle;
 use std::ptr;
@@ -22,15 +22,18 @@ const IMAGE_SLOTS: usize = 24;
 
 type Handle = *mut c_void;
 type Callbacks = rsf_dx12vk_interop_callbacks;
-pub(super) struct Platform {
-    adapter_luid: unsafe extern "C" fn(*const rsf_srvk_setup, *mut u64) -> i32,
-    open: unsafe extern "C" fn(*const rsf_srvk_setup, *mut *mut c_void) -> i32,
-    close: unsafe extern "C" fn(*mut c_void),
-    timeline_importable: unsafe extern "C" fn(*mut c_void) -> u32,
-    create_timeline: unsafe extern "C" fn(*mut c_void, *mut u64) -> i32,
-    import_timeline: unsafe extern "C" fn(*mut c_void, u64, *mut c_void) -> i32,
-    destroy_timeline: unsafe extern "C" fn(*mut c_void, u64),
-    image_properties: unsafe extern "C" fn(
+/// The Vulkan leaves of the importer: `dx12_vulkan_platform::PLATFORM` in production, fakes in
+/// the FSR4 SR state fixture.
+#[derive(Clone, Copy)]
+pub(crate) struct Platform {
+    pub(crate) adapter_luid: unsafe extern "C" fn(*const rsf_srvk_setup, *mut u64) -> i32,
+    pub(crate) open: unsafe extern "C" fn(*const rsf_srvk_setup, *mut *mut c_void) -> i32,
+    pub(crate) close: unsafe extern "C" fn(*mut c_void),
+    pub(crate) timeline_importable: unsafe extern "C" fn(*mut c_void) -> u32,
+    pub(crate) create_timeline: unsafe extern "C" fn(*mut c_void, *mut u64) -> i32,
+    pub(crate) import_timeline: unsafe extern "C" fn(*mut c_void, u64, *mut c_void) -> i32,
+    pub(crate) destroy_timeline: unsafe extern "C" fn(*mut c_void, u64),
+    pub(crate) image_properties: unsafe extern "C" fn(
         *mut c_void,
         format: u32,
         extra_usage: u32,
@@ -38,7 +41,7 @@ pub(super) struct Platform {
         max_width: *mut u32,
         max_height: *mut u32,
     ) -> i32,
-    create_image: unsafe extern "C" fn(
+    pub(crate) create_image: unsafe extern "C" fn(
         *mut c_void,
         format: u32,
         width: u32,
@@ -46,11 +49,12 @@ pub(super) struct Platform {
         extra_usage: u32,
         *mut u64,
     ) -> i32,
-    image_requirements:
+    pub(crate) image_requirements:
         unsafe extern "C" fn(*mut c_void, image: u64, bytes: *mut u64, types: *mut u32),
-    handle_memory_types: unsafe extern "C" fn(*mut c_void, handle: *mut c_void, *mut u32) -> i32,
-    device_local_types: unsafe extern "C" fn(*mut c_void) -> u32,
-    allocate_memory: unsafe extern "C" fn(
+    pub(crate) handle_memory_types:
+        unsafe extern "C" fn(*mut c_void, handle: *mut c_void, *mut u32) -> i32,
+    pub(crate) device_local_types: unsafe extern "C" fn(*mut c_void) -> u32,
+    pub(crate) allocate_memory: unsafe extern "C" fn(
         *mut c_void,
         image: u64,
         handle: *mut c_void,
@@ -58,33 +62,11 @@ pub(super) struct Platform {
         type_: u32,
         *mut u64,
     ) -> i32,
-    bind_image: unsafe extern "C" fn(*mut c_void, image: u64, memory: u64) -> i32,
-    destroy_image: unsafe extern "C" fn(*mut c_void, u64),
-    free_memory: unsafe extern "C" fn(*mut c_void, u64),
+    pub(crate) bind_image: unsafe extern "C" fn(*mut c_void, image: u64, memory: u64) -> i32,
+    pub(crate) destroy_image: unsafe extern "C" fn(*mut c_void, u64),
+    pub(crate) free_memory: unsafe extern "C" fn(*mut c_void, u64),
 }
 
-impl Platform {
-    pub(super) fn checked(raw: &rsf_dx12vk_platform) -> Option<Self> {
-        Some(Self {
-            adapter_luid: raw.adapter_luid?,
-            open: raw.open?,
-            close: raw.close?,
-            timeline_importable: raw.timeline_importable?,
-            create_timeline: raw.create_timeline?,
-            import_timeline: raw.import_timeline?,
-            destroy_timeline: raw.destroy_timeline?,
-            image_properties: raw.image_properties?,
-            create_image: raw.create_image?,
-            image_requirements: raw.image_requirements?,
-            handle_memory_types: raw.handle_memory_types?,
-            device_local_types: raw.device_local_types?,
-            allocate_memory: raw.allocate_memory?,
-            bind_image: raw.bind_image?,
-            destroy_image: raw.destroy_image?,
-            free_memory: raw.free_memory?,
-        })
-    }
-}
 pub(super) type FenceFactory = unsafe extern "C" fn(Handle, *mut Handle) -> i32;
 pub(super) type ImageRelease = unsafe extern "C" fn(Handle);
 #[derive(Clone, Copy)]
@@ -382,9 +364,7 @@ pub(super) unsafe extern "C" fn rsf_dx12vk_interop_create(
     {
         return ABI_MISMATCH;
     }
-    let Some(platform) = Platform::checked(&crate::dx12_vulkan_platform::PLATFORM) else {
-        return INVALID;
-    };
+    let platform = crate::dx12_vulkan_platform::PLATFORM;
     let luid = match Owner::adapter_luid(&platform, setup) {
         Ok(luid) => luid,
         Err(error) => return error,
