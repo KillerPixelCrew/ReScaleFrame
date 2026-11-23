@@ -1,9 +1,36 @@
 // SPDX-License-Identifier: MIT
-pub(super) use crate::sys::rsf_vkfg_barrier as Barrier;
 use crate::sys::rsf_vkfg_image as Image;
-pub(super) use crate::sys::rsf_vkfg_image_copy as ImageCopy;
 use ash::vk::{self, Handle as _};
 use std::ffi::c_void;
+
+/// One planned single-image barrier; layouts, accesses and stages are raw Vulkan values.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Barrier {
+    pub(crate) image: u64,
+    pub(crate) old_layout: u32,
+    pub(crate) new_layout: u32,
+    pub(crate) source_family: u32,
+    pub(crate) target_family: u32,
+    pub(crate) source_access: u32,
+    pub(crate) target_access: u32,
+    pub(crate) source_stages: u32,
+    pub(crate) target_stages: u32,
+}
+
+/// One planned colour copy between two images of the same extent.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ImageCopy {
+    pub(crate) source: u64,
+    pub(crate) target: u64,
+    pub(crate) source_layout: u32,
+    pub(crate) target_layout: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
+
+const _: () = assert!(size_of::<Barrier>() == 40 && size_of::<ImageCopy>() == 32);
 
 pub(super) const COLOR_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
     aspect_mask: vk::ImageAspectFlags::COLOR,
@@ -13,8 +40,7 @@ pub(super) const COLOR_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRa
     layer_count: 1,
 };
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_vkfg_record_barrier(
+pub(super) unsafe fn rsf_core_vkfg_record_barrier(
     barrier: vk::PFN_vkCmdPipelineBarrier,
     commands: vk::CommandBuffer,
     plan: &Barrier,
@@ -44,8 +70,7 @@ pub(super) unsafe extern "C" fn rsf_core_vkfg_record_barrier(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_vkfg_record_copy(
+pub(super) unsafe fn rsf_core_vkfg_record_copy(
     copy: vk::PFN_vkCmdCopyImage,
     commands: vk::CommandBuffer,
     plan: &ImageCopy,

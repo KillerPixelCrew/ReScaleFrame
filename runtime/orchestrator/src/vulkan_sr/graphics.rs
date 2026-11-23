@@ -20,7 +20,7 @@ use crate::frame_capture_vk::{
     rsf_core_capture_vk_flush, rsf_core_capture_vk_initialize, rsf_core_capture_vk_provider,
     rsf_core_capture_vk_record, rsf_core_capture_vk_retire, rsf_core_capture_vk_wants,
 };
-use crate::sys::rsf_vkfg_image_copy as ImageCopy;
+use crate::vulkan_fg_copy::ImageCopy;
 use crate::vulkan_fg_copy::{
     Barrier, COLOR_RANGE, rsf_core_vkfg_record_barrier, rsf_core_vkfg_record_copy,
 };

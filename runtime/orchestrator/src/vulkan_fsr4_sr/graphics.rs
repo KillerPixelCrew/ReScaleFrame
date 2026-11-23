@@ -5,8 +5,8 @@ use crate::frame_capture_vk::{
     rsf_core_capture_vk_record, rsf_core_capture_vk_retire,
 };
 use crate::input_dump::abi::{rsf_capture_sr_parameters, rsf_input_dump_begin_record};
-use crate::sys::rsf_vkfg_image_copy as Copy;
 use crate::sys::{RSF_SR_FSR4, rsf_vk_function};
+use crate::vulkan_fg_copy::ImageCopy as Copy;
 use crate::vulkan_fg_copy::{rsf_core_vkfg_record_barrier, rsf_core_vkfg_record_copy};
 use crate::vulkan_sharpening::Host as Sharpen;
 use crate::vulkan_sharpening::{

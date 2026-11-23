@@ -344,6 +344,10 @@ pub mod vulkan_latency_api {
         rsf_core_latencyvk_render, rsf_core_latencyvk_shutdown, rsf_core_latencyvk_submit,
         rsf_core_latencyvk_submit_end, rsf_core_slvk_initialize, rsf_core_slvk_invoke,
     };
+    pub use crate::vulkan_presentation::{
+        rsf_core_fgvk_presentation_attach, rsf_core_fgvk_presentation_borrow,
+        rsf_core_fgvk_presentation_return,
+    };
 }
 #[cfg(windows)]
 mod vulkan_latency_frames;

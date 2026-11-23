@@ -165,8 +165,7 @@ impl Drop for ProviderOperation {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_core_fgvk_presentation_attach(context: Context) -> i32 {
+pub extern "C" fn rsf_core_fgvk_presentation_attach(context: Context) -> i32 {
     let mut state = binding();
     if context.is_null() {
         return INVALID_ARGUMENT;
@@ -177,7 +176,6 @@ pub(crate) extern "C" fn rsf_core_fgvk_presentation_attach(context: Context) -> 
     state.attach(context)
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_fgvk_presentation_unbind() -> i32 {
     let mut state = binding();
     if state.context.is_null() {
@@ -244,20 +242,22 @@ impl Drop for PresentationLease {
     }
 }
 
-// Native fixtures use the same registry to verify cross-language borrow ownership.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_fgvk_presentation_borrow(closing: *mut u32) -> Context {
+/// Borrows the attached context for the game-sdk Vulkan latency fixtures, which use the same
+/// registry to verify borrow ownership. Pair each non-null result with one return call.
+///
+/// # Safety
+///
+/// `closing` is writable.
+pub unsafe extern "C" fn rsf_core_fgvk_presentation_borrow(closing: *mut u32) -> Context {
     let (context, closed) = borrow();
     unsafe { closing.write(u32::from(closed)) };
     context
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_core_fgvk_presentation_return() {
+pub extern "C" fn rsf_core_fgvk_presentation_return() {
     return_borrow();
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_fgvk_presentation_shutdown_begin() -> i32 {
     match binding().begin(Operation::Shutdown) {
         Ok(()) => OK,
@@ -265,7 +265,6 @@ pub(crate) extern "C" fn rsf_core_fgvk_presentation_shutdown_begin() -> i32 {
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_fgvk_presentation_shutdown_end(success: u32) {
     binding().finish(Operation::Shutdown, success != 0);
 }

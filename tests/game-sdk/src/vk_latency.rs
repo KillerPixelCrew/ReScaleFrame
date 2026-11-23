@@ -149,7 +149,7 @@ impl PresentationLease {
 impl Drop for PresentationLease {
     fn drop(&mut self) {
         if !self.context.is_null() {
-            unsafe { rsf_core_fgvk_presentation_return() };
+            rsf_core_fgvk_presentation_return();
         }
     }
 }

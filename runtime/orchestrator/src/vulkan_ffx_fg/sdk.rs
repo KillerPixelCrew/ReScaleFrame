@@ -21,8 +21,8 @@ use crate::frame_capture_vk::{
     rsf_core_capture_vk_record, rsf_core_capture_vk_wants,
 };
 use crate::sdk_module::Loader;
-use crate::sys::rsf_vkfg_image_copy as ImageCopy;
 use crate::sys::{rsf_vk_function, rsf_vk_get_proc};
+use crate::vulkan_fg_copy::ImageCopy;
 use crate::vulkan_fg_copy::{Barrier, rsf_core_vkfg_record_barrier, rsf_core_vkfg_record_copy};
 use crate::vulkan_fg_resources::device::{
     Device, rsf_core_vkfg_device_destroy, rsf_core_vkfg_device_memory,

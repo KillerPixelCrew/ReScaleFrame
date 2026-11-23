@@ -15,15 +15,14 @@ use crate::vulkan_pcl::{
     rsf_core_latencyvk_pcl_status,
 };
 use crate::vulkan_presentation::*;
-use rsf_game_sys::backend_result::{
-    ABI_MISMATCH, FEATURE_FAILED, INVALID_ARGUMENT, LOAD_FAILED, NOT_READY, NOT_SUPPORTED, OK,
-};
-// The Rust definitions, not the header declarations crate::sys also provides.
 use crate::vulkan_presentation::{
     rsf_core_fgvk_presentation_attach, rsf_core_fgvk_presentation_shutdown_begin,
     rsf_core_fgvk_presentation_shutdown_end, rsf_core_fgvk_presentation_unbind,
 };
 use crate::vulkan_timing::{timing_begin, timing_end};
+use rsf_game_sys::backend_result::{
+    ABI_MISMATCH, FEATURE_FAILED, INVALID_ARGUMENT, LOAD_FAILED, NOT_READY, NOT_SUPPORTED, OK,
+};
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 use std::sync::Mutex;

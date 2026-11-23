@@ -111,22 +111,15 @@ fn bindings() {
         "runtime/orchestrator/src/fg12_platform.h",
         "runtime/orchestrator/src/native_fg_ffx_vulkan.h",
         "runtime/orchestrator/src/native_fg_xess_vulkan.h",
-        "runtime/orchestrator/src/native_latency_vulkan_presentation.h",
         "runtime/orchestrator/src/render_host_foreign.h",
         "runtime/orchestrator/src/vulkan_fg_resources.h",
-        "runtime/orchestrator/src/vulkan_fg_copy_abi.h",
         "runtime/orchestrator/src/vulkan_fg_frames.h",
         "runtime/graphics/src/sharpening/d3d11.h",
         "runtime/vulkan/fsr4-fg/bridge_api.h",
         // Compiled into this crate through tests/graphics_fixture.rs.
         "tests/native_sr_fsr4_vulkan_fixture.h",
     ];
-    fn derives(name: &str) -> &'static [&'static str] {
-        match name {
-            "rsf_vkfg_barrier" | "rsf_vkfg_image_copy" => &["Debug", "PartialEq", "Eq"],
-            _ => &[],
-        }
-    }
+
     let builder = rsf_bindgen::owner(
         HEADERS,
         &[],
@@ -146,7 +139,6 @@ fn bindings() {
         ],
         &[],
     )
-    .parse_callbacks(Box::new(rsf_bindgen::Derives(derives)))
     // The Vulkan FSR 4 owner stays an untyped handle on the Rust side, as before.
     // Declared by hand where they are called, with Rust reference or handle types.
     .blocklist_function(
