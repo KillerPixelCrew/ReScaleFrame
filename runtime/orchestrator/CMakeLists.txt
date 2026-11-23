@@ -108,8 +108,7 @@ target_link_libraries(rsf_orchestrator_core PRIVATE d3dcompiler bcrypt)
 target_link_libraries(rsf_orchestrator_core PUBLIC ReScaleFrame::FrameDump)
 add_library(ReScaleFrame::OrchestratorCore ALIAS rsf_orchestrator_core)
 
-add_library(rsf_native_vulkan STATIC src/native_sr_vulkan.c src/native_xess_vulkan.c
-    src/native_vulkan_exports.c)
+add_library(rsf_native_vulkan STATIC src/native_xess_vulkan.c src/native_vulkan_exports.c)
 if(RSF_HAVE_VULKAN)
     target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
 endif()
@@ -117,6 +116,8 @@ target_include_directories(rsf_native_vulkan PUBLIC include)
 target_compile_definitions(rsf_native_vulkan PUBLIC RSF_RUNTIME_BUILD)
 target_link_libraries(rsf_native_vulkan PUBLIC ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::FrameDump rsf_native_cpu PRIVATE rsf_build_options)
 if(RSF_HAVE_VULKAN AND RSF_HAVE_FFX_VK)
+    # native_sr_vulkan.c only checks the configured SDK headers' layouts, so it needs them.
+    target_sources(rsf_native_vulkan PRIVATE src/native_sr_vulkan.c)
     target_compile_definitions(rsf_native_vulkan PRIVATE RSF_HAVE_FFX_VK=1)
     target_link_libraries(rsf_native_vulkan PRIVATE rsf_orchestrator_rust)
     target_compile_definitions(rsf_native_vulkan PUBLIC RSF_VULKAN_SR_ENABLED=1)
