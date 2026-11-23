@@ -19,7 +19,7 @@ pub(crate) use crate::sys::{
 pub(crate) use fixture::SHADER_CONTRACT_CASES;
 #[cfg(feature = "motion-binder-fixture")]
 pub(crate) use frame::run_frame_fixture;
-pub(crate) use frame::{DecodedFrame, FrameLayout, Read, decode_frame};
+pub(crate) use frame::{DecodedFrame, FrameLayout, decode_frame};
 pub(crate) use manifest::{Entry, Manifest};
 use reflection::Compatibility;
 pub(crate) use reflection::{

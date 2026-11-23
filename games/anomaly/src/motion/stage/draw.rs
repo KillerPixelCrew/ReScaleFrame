@@ -47,7 +47,7 @@ fn engine_matrix(matrix: &[f32; 16]) -> Mat4 {
 fn camera(p: &Platform) -> Option<CameraSample> {
     let mut view = [0.; 16];
     let mut projection = [0.; 16];
-    unsafe { (p.camera)(&mut view, &mut projection) }.then(|| CameraSample {
+    unsafe { (p.camera.unwrap())(&mut view, &mut projection) }.then(|| CameraSample {
         view: engine_matrix(&view),
         projection: engine_matrix(&projection),
     })
@@ -55,14 +55,14 @@ fn camera(p: &Platform) -> Option<CameraSample> {
 
 fn world(p: &Platform) -> Option<[f32; 16]> {
     let mut matrix = [0.; 16];
-    unsafe { (p.world)(&mut matrix) }.then_some(matrix)
+    unsafe { (p.world.unwrap())(&mut matrix) }.then_some(matrix)
 }
 
 fn read_constant<T>(p: &Platform, var: &ConstantRef, dest: &mut T) -> bool {
     // Vars removed by the stock compiler leave their zero-initialized words.
     !var.present
         || unsafe {
-            (p.read_constant)(
+            (p.read_constant.unwrap())(
                 var.buffer,
                 var.buffer_size,
                 var.offset,
@@ -86,7 +86,7 @@ impl Render {
         // The completed flush already uploaded the live rows; the engine fills
         // its next batch before the next flush. Poison identifies the rest.
         if unsafe {
-            (p.write_constant)(
+            (p.write_constant.unwrap())(
                 array.buffer,
                 array.buffer_size,
                 array.offset,
@@ -404,13 +404,13 @@ impl Stage {
         if !self.active.load(Acquire) {
             return;
         }
-        let backend = unsafe { (p.backend)() };
+        let backend = unsafe { (p.backend.unwrap())() };
         if !render.window.open {
             if render.binder.cache_may_hold_motion != 0 && !render.device_view().rtv.is_null() {
                 render.bind_draw(p, backend, false);
             }
             if facts.detail {
-                self.poison_only(&mut render, unsafe { (p.context)() });
+                self.poison_only(&mut render, unsafe { (p.context.unwrap())() });
             }
             return;
         }

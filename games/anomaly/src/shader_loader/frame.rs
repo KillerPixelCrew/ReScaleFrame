@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 use super::{Bytes, Define, Request, Span};
-use std::ffi::c_void;
 
 pub(crate) use crate::sys::rsf_anomaly_shader_frame_layout as FrameLayout;
 
@@ -18,8 +17,6 @@ pub(crate) enum FrameStatus {
     BadSource,
     BadDefines,
 }
-
-pub(crate) type Read = unsafe extern "C" fn(*const c_void, usize, *mut u8, usize) -> bool;
 
 #[derive(Default)]
 pub(crate) struct DecodedFrame {

@@ -90,17 +90,17 @@ struct WindowFacts {
 
 impl WindowFacts {
     fn read(p: &Platform, target: Raw) -> Option<Self> {
-        let device = unsafe { (p.shader_device)() };
-        let context = unsafe { (p.context)() };
+        let device = unsafe { (p.shader_device.unwrap())() };
+        let context = unsafe { (p.context.unwrap())() };
         if target.is_null()
             || device.is_null()
             || context.is_null()
-            || unsafe { (p.render_target)() } != target
+            || unsafe { (p.render_target.unwrap())() } != target
         {
             return None;
         }
         let mut position = MaybeUninit::uninit();
-        if !unsafe { (p.position_views)(target, position.as_mut_ptr()) } {
+        if !unsafe { (p.position_views.unwrap())(target, position.as_mut_ptr()) } {
             return None;
         }
         let position = unsafe { position.assume_init() };
@@ -108,14 +108,16 @@ impl WindowFacts {
             return None;
         }
         let (mut frame, mut view) = (0, 0);
-        if !unsafe { (p.native_frame)(&mut frame) } || !unsafe { (p.render_view)(&mut view) } {
+        if !unsafe { (p.native_frame.unwrap())(&mut frame) }
+            || !unsafe { (p.render_view.unwrap())(&mut view) }
+        {
             return None;
         }
         let generation = crate::native_observer::resets();
         Some(Self {
             device,
             context,
-            backend: unsafe { (p.backend)() },
+            backend: unsafe { (p.backend.unwrap())() },
             position_rtv: position.rtv,
             position_surface: position.surface,
             generation,
@@ -192,7 +194,7 @@ impl Render {
             DrawHooks::Installed => true,
             DrawHooks::Refused => false,
             DrawHooks::Cold => {
-                let result = unsafe { (platform.install_draw_hooks)(context) };
+                let result = unsafe { (platform.install_draw_hooks.unwrap())(context) };
                 self.draw_hooks = if result {
                     DrawHooks::Installed
                 } else {
@@ -212,7 +214,8 @@ impl Render {
         let rtv = self.device_view().rtv;
         let result = rsf_anomaly_motion_bind_close(
             &mut self.binder,
-            p.bind,
+            // The leaf's bind table is a process-lifetime static; motion_target::Platform asserts its layout.
+            unsafe { &*p.bind.cast() },
             context,
             &native::BIND_LAYOUT,
             backend.cast(),
@@ -230,7 +233,8 @@ impl Render {
         let rtv = self.device_view().rtv;
         let action = rsf_anomaly_motion_bind_draw(
             &mut self.binder,
-            p.bind,
+            // The leaf's bind table is a process-lifetime static; motion_target::Platform asserts its layout.
+            unsafe { &*p.bind.cast() },
             self.window.context,
             &native::BIND_LAYOUT,
             backend.cast(),
@@ -333,8 +337,8 @@ impl Stage {
             log.text(c"Anomaly motion refused: a different build than the installed hooks.");
             return false;
         }
-        if !unsafe { (p.hooks_created)() } {
-            let image = Image::new(build.image as *const u8, size, p.copy);
+        if !unsafe { (p.hooks_created.unwrap())() } {
+            let image = Image::new(build.image as *const u8, size, p.copy.unwrap());
             let failure = motion_guard_failure(&image, build.motion);
             if !failure.is_null() {
                 let site = unsafe { CStr::from_ptr(failure) }.to_string_lossy();
@@ -355,7 +359,7 @@ impl Stage {
         *lock(&self.build) = Some(build);
         let foliage = self.foliage.load(Relaxed);
         unsafe {
-            (p.observe_flush)(true);
+            (p.observe_flush.unwrap())(true);
             crate::native_geometry::rsf_anomaly_geometry_set_foliage(foliage);
         }
         self.active.store(true, Release);
@@ -367,11 +371,12 @@ impl Stage {
             original: ptr::null_mut(),
         });
         let installed = unsafe {
-            (p.install_hooks)(
+            (p.install_hooks.unwrap())(
                 build.image(),
                 size,
                 &build.engine,
-                sites.as_ptr(),
+                // native_hooks::Site is the Rust layout of rsf_anomaly_hook_site (48 bytes, checked on both sides).
+                sites.as_ptr().cast(),
                 sites.len(),
             )
         };
@@ -402,7 +407,7 @@ impl Stage {
             return true;
         }
         self.stop_observing();
-        let disabled = unsafe { (self.platform.disable_hooks)() };
+        let disabled = unsafe { (self.platform.disable_hooks.unwrap())() };
         self.cancel_draw();
         let mut render = lock(&self.render);
         window::reset(&mut render.window);
@@ -420,7 +425,7 @@ impl Stage {
         self.active.store(false, Release);
         drop(lock(&self.retirements).take());
         unsafe {
-            (self.platform.observe_flush)(false);
+            (self.platform.observe_flush.unwrap())(false);
         }
         crate::native_geometry::rsf_anomaly_geometry_set_foliage(false);
     }
@@ -430,7 +435,7 @@ impl Stage {
             let p = self.platform;
             let loader = lock(&self.loader);
             if let Some(pack) = &loader.pack {
-                let device = unsafe { (p.shader_device)() };
+                let device = unsafe { (p.shader_device.unwrap())() };
                 if !device.is_null() {
                     unsafe { pack.attach(device) };
                 }
@@ -496,7 +501,7 @@ impl Stage {
             }
             let mut desc = MaybeUninit::uninit();
             let mut options = 0;
-            if !unsafe { (p.options_word3)(&mut options) } {
+            if !unsafe { (p.options_word3.unwrap())(&mut options) } {
                 render.counters.options_unreadable += 1;
             } else if options & DX10_MSAA != 0 {
                 render.counters.msaa_frames += 1;
@@ -558,7 +563,7 @@ impl Stage {
         }
         let p = self.platform;
         let context = render.window.context;
-        render.close_binding(p, context, unsafe { (p.backend)() });
+        render.close_binding(p, context, unsafe { (p.backend.unwrap())() });
         let texture = render.device_view().texture;
         let Render {
             capture,

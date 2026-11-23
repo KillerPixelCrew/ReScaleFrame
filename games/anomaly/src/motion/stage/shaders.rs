@@ -231,8 +231,10 @@ impl Pack {
         let profile = build.motion.shader_profile();
         let pack = wide_path(&root.join("motion.rsfpatch"));
         let cache = wide_path(&root.join("cache"));
-        unsafe { RuntimePack::open_engine(&pack, &cache, build.image, profile, platform.includes) }
-            .map(Self)
+        unsafe {
+            RuntimePack::open_engine(&pack, &cache, build.image, profile, &*platform.includes)
+        }
+        .map(Self)
     }
 
     pub(super) unsafe fn attach(&self, device: Raw) -> i32 {
@@ -596,7 +598,12 @@ impl Stage {
     pub(super) fn admit_shader_creation(&self, native: &ShaderCreation) {
         let mut filename = [0; FILENAME_CAPACITY];
         let call = Creation::read(native, &mut filename, |address, bytes| unsafe {
-            (self.platform.read_engine)(ptr::null(), address, bytes.as_mut_ptr(), bytes.len())
+            (self.platform.read_engine.unwrap())(
+                ptr::null(),
+                address,
+                bytes.as_mut_ptr(),
+                bytes.len(),
+            )
         });
         if let Some(call) = call
             && self.active.load(Acquire)
@@ -619,7 +626,7 @@ impl Stage {
         let layout = build.motion.frame_layout();
         let module = build.image;
         let read = |address: usize, bytes: &mut [u8]| unsafe {
-            (p.read_engine)(ptr::null(), address, bytes.as_mut_ptr(), bytes.len())
+            (p.read_engine.unwrap())(ptr::null(), address, bytes.as_mut_ptr(), bytes.len())
         };
         let file = String::from_utf8_lossy(call.file);
         let frame = match decode_frame(
@@ -662,7 +669,7 @@ impl Stage {
                     )
                 })
                 .and_then(|request| {
-                    let device = unsafe { (p.shader_device)() };
+                    let device = unsafe { (p.shader_device.unwrap())() };
                     Replacement::build(pack, &request, (stage, family_id), device, true)
                         .map(|replacement| (replacement, request, device))
                 })

@@ -1,13 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Private call-scoped ABI with motion_stage_platform.h (rsf_anomaly_motion_platform).
 use super::*;
-use crate::motion_target::Platform as BindPlatform;
-use crate::native_hooks::Site as HookSite;
-use crate::shader_loader::{EngineIncludeOps, Read};
 use std::ffi::c_char;
 
 pub(super) type Raw = *mut std::ffi::c_void;
-pub(super) type GuardedCopy = unsafe extern "C" fn(Raw, *const std::ffi::c_void, usize) -> bool;
 
 #[repr(C)]
 pub(super) struct DrawScope([std::mem::MaybeUninit<u64>; 22]);
@@ -69,31 +65,10 @@ pub(super) struct ShaderCreation {
     pub size: u32,
 }
 
-#[repr(C)]
-pub(super) struct Platform {
-    pub bind: &'static BindPlatform,
-    pub copy: GuardedCopy,
-    pub observe_flush: unsafe extern "C" fn(bool),
-    pub install_hooks:
-        unsafe extern "C" fn(Raw, u32, &super::native::Engine, *const HookSite, usize) -> bool,
-    pub disable_hooks: unsafe extern "C" fn() -> bool,
-    pub hooks_created: unsafe extern "C" fn() -> bool,
-    pub install_draw_hooks: unsafe extern "C" fn(Raw) -> bool,
-    pub render_target: unsafe extern "C" fn() -> Raw,
-    pub position_views: unsafe extern "C" fn(Raw, *mut PositionViews) -> bool,
-    pub native_frame: unsafe extern "C" fn(&mut u32) -> bool,
-    pub render_view: unsafe extern "C" fn(&mut u8) -> bool,
-    pub options_word3: unsafe extern "C" fn(&mut u32) -> bool,
-    pub backend: unsafe extern "C" fn() -> Raw,
-    pub context: unsafe extern "C" fn() -> Raw,
-    pub shader_device: unsafe extern "C" fn() -> Raw,
-    pub camera: unsafe extern "C" fn(&mut [f32; 16], &mut [f32; 16]) -> bool,
-    pub world: unsafe extern "C" fn(&mut [f32; 16]) -> bool,
-    pub read_constant: unsafe extern "C" fn(u32, u32, u32, Raw, u32) -> bool,
-    pub write_constant: unsafe extern "C" fn(u32, u32, u32, *const std::ffi::c_void, u32) -> bool,
-    pub includes: &'static EngineIncludeOps,
-    pub read_engine: Read,
-}
+/// The motion leaf table (motion_stage_platform.h).
+pub(super) use crate::sys::rsf_anomaly_motion_platform as Platform;
+// SAFETY: the leaf's table is an immutable process-lifetime static whose pointers name immutable static tables.
+unsafe impl Sync for Platform {}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -129,11 +104,4 @@ const _: () = {
     assert!(size_of::<FoliageLayout>() == 108);
     assert!(std::mem::offset_of!(FoliageLayout, usable) == 104);
     assert!(size_of::<FrameTarget>() == 24);
-    assert!(size_of::<Platform>() == 168);
-    assert!(std::mem::offset_of!(Platform, copy) == 8);
-    assert!(std::mem::offset_of!(Platform, install_hooks) == 24);
-    assert!(std::mem::offset_of!(Platform, render_target) == 56);
-    assert!(std::mem::offset_of!(Platform, backend) == 96);
-    assert!(std::mem::offset_of!(Platform, includes) == 152);
-    assert!(std::mem::offset_of!(Platform, read_engine) == 160);
 };

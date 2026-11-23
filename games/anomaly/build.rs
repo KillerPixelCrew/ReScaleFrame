@@ -11,6 +11,7 @@ fn bindings() {
         "fg_stage_platform.h",
         "geometry_registry_platform.h",
         "motion_device_platform.h",
+        "motion_stage_platform.h",
         "motion_frame_target.h",
         "motion_target_platform.h",
         "native_geometry/fixture_platform.h",

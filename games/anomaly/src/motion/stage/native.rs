@@ -12,29 +12,8 @@ use crate::sys::rsf_anomaly_motion_bind_layout as BindLayout;
 use std::ptr::{null_mut, with_exposed_provenance_mut};
 use windows::Win32::Graphics::Direct3D11::{D3D11_VIEWPORT, ID3D11DeviceContext_Vtbl};
 
-/// rsf_anomaly_motion_engine: the installed build's engine addresses the native leaf reads, image-relative.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(super) struct Engine {
-    pub build: usize,
-    pub hw_device_rva: u32,
-    pub hw_context_rva: u32,
-    pub backend_rva: u32,
-    pub render_target_rva: u32,
-    pub options_word3_rva: u32,
-    pub device_frame_rva: u32,
-    pub position_offset: u32,
-    pub crt_rtv_offset: u32,
-    pub crt_surface_offset: u32,
-    pub view_rva: u32,
-    pub projection_rva: u32,
-}
-
-const _: () = {
-    assert!(size_of::<Engine>() == 56);
-    assert!(std::mem::offset_of!(Engine, hw_device_rva) == 8);
-    assert!(std::mem::offset_of!(Engine, projection_rva) == 48);
-};
+/// The installed build's engine addresses the native leaf reads, image-relative (motion_stage_platform.h).
+pub(super) use crate::sys::rsf_anomaly_motion_engine as Engine;
 
 /// CBackend pRT/pZB and m_bChangedRTorZB, for the RTV2 binder.
 pub(super) const BIND_LAYOUT: BindLayout = BindLayout {
