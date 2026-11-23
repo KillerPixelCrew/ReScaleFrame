@@ -326,7 +326,7 @@ impl Harness {
     }
 
     fn dispatches(&self) -> u64 {
-        unsafe { rsf_core_sharpenvk_dispatches(self.owner) }
+        unsafe { self.owner.as_ref() }.map_or(0, |owner| owner.dispatches)
     }
 }
 

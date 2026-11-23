@@ -466,10 +466,6 @@ unsafe fn rsf_core_sharpenvk_clear(owner: *mut Owner) {
     }
 }
 
-unsafe fn rsf_core_sharpenvk_dispatches(owner: *const Owner) -> u64 {
-    unsafe { owner.as_ref() }.map_or(0, |owner| owner.dispatches)
-}
-
 #[cfg(test)]
 mod tests;
 
@@ -513,7 +509,7 @@ pub(crate) unsafe fn rsf_sharpenvk_host_retire(host: &mut Host, commands: *mut c
 // Read by the sharpening fixtures.
 #[cfg(feature = "test-fixtures")]
 pub(crate) unsafe fn rsf_sharpenvk_host_dispatches(host: &Host) -> u64 {
-    unsafe { rsf_core_sharpenvk_dispatches(host.owner.cast()) }
+    unsafe { host.owner.cast::<Owner>().as_ref() }.map_or(0, |owner| owner.dispatches)
 }
 
 pub(crate) unsafe fn rsf_sharpenvk_host_run(
