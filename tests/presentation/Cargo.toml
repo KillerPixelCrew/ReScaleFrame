@@ -7,6 +7,9 @@ publish.workspace = true
 license.workspace = true
 
 [features]
+# The AC7 render scope exports of rsf-ac7-plugin (WARP overrides), for the D3D11 present bridge
+# launcher: one archive, so rsf-ac7 is linked once.
+ac7-render-scope = ["dep:rsf-ac7-plugin"]
 d3d11-host-device-fixtures = []
 gl-device-fixture = [
   "windows/Win32_Graphics_OpenGL",
@@ -27,6 +30,7 @@ workspace = true
 
 [target."cfg(windows)".dependencies]
 rsf-ac7 = { path = "../../games/ac7" }
+rsf-ac7-plugin = { path = "../../games/ac7/plugin", features = ["warp-fixture"], optional = true }
 rsf-game-sys = { path = "../../sdk/game" }
 rsf-test-support = { path = "../support" }
 rsf-orchestrator = { path = "../../runtime/orchestrator" }

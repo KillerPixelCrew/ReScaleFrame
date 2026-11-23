@@ -7,8 +7,9 @@ publish.workspace = true
 license.workspace = true
 
 [lib]
-# ReScaleFrame.Game.AC7.dll's Rust archive; it carries the rsf-ac7 code the adapter uses.
-crate-type = ["staticlib"]
+# ReScaleFrame.Game.AC7.dll's Rust archive; it carries the rsf-ac7 code the adapter uses. The rlib
+# lets the presentation fixtures carry it in their archive (ac7-render-scope).
+crate-type = ["staticlib", "rlib"]
 
 [features]
 warp-fixture = ["rsf-ac7/warp-fixture", "dep:rsf-test-support"]

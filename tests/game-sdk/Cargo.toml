@@ -8,7 +8,7 @@ license.workspace = true
 
 [features]
 unity-sr-d3d12-fixture = [
-  "dep:windows", "windows-sys/Win32_System_Performance",
+  "dep:rsf-unity", "dep:windows", "windows-sys/Win32_System_Performance",
   "windows-sys/Win32_System_Threading", "windows-sys/Win32_System_WindowsProgramming",
 ]
 vk-latency-fixtures = ["dep:ash", "windows-sys/Win32_System_Performance", "windows-sys/Win32_System_Threading", "windows-sys/Win32_UI_WindowsAndMessaging"]
@@ -28,7 +28,7 @@ ash = { workspace = true, optional = true }
 rsf-anomaly = { path = "../../games/anomaly" }
 rsf-game-sys = { path = "../../sdk/game" }
 rsf-orchestrator = { path = "../../runtime/orchestrator" }
-rsf-unity = { path = "../../integrations/unity" }
+rsf-unity = { path = "../../integrations/unity", optional = true }
 windows = { workspace = true, optional = true, features = [
   "std",
   "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi",

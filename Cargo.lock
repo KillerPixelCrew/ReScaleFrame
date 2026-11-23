@@ -828,6 +828,7 @@ name = "rsf-presentation-fixtures"
 version = "0.1.2"
 dependencies = [
  "rsf-ac7",
+ "rsf-ac7-plugin",
  "rsf-bindgen",
  "rsf-game-sys",
  "rsf-orchestrator",

@@ -12,8 +12,13 @@ rsf_add_rust_static(rsf_presentation_gl_rust rsf_rust_presentation_gl
     rsf-presentation-fixtures rsf_presentation_fixtures --features gl-device-fixture)
 rsf_add_rust_static(rsf_presentation_d3d11_host_device_rust rsf_rust_presentation_d3d11_host_device
     rsf-presentation-fixtures rsf_presentation_fixtures --features d3d11-host-device-fixtures)
+# With rsf-ac7-plugin (warp-fixture) for the present bridge launcher, which needs both and could not link
+# two Rust archives that each carry rsf-ac7's exports.
+rsf_add_rust_static(rsf_presentation_ac7_rust rsf_rust_presentation_ac7
+    rsf-presentation-fixtures rsf_presentation_fixtures --features ac7-render-scope)
 # The crate links rsf-ac7, whose guarded engine reads are the rsf_ac7_memory SEH leaf.
-foreach(archive rsf_presentation_fixtures_rust rsf_presentation_gl_rust rsf_presentation_d3d11_host_device_rust)
+foreach(archive rsf_presentation_fixtures_rust rsf_presentation_gl_rust rsf_presentation_d3d11_host_device_rust
+        rsf_presentation_ac7_rust)
     target_link_libraries(${archive} INTERFACE rsf_ac7_memory)
 endforeach()
 # rsf-game-sdk-fixtures reaches the Runtime, Unity and Anomaly crates; one archive with every feature
@@ -31,6 +36,11 @@ rsf_add_rust_static(rsf_game_sdk_unity_sr_d3d12_rust rsf_rust_game_sdk_unity_sr_
     rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features unity-sr-d3d12-fixture)
 rsf_add_rust_static(rsf_game_sdk_d3d11_host_rust rsf_rust_game_sdk_d3d11_host
     rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features d3d11-host-fixture)
+# The archives carry the Rust Runtime, so they take the C leaves and MinHook rsf_orchestrator_rust takes.
+foreach(archive rsf_game_sdk_fixtures_rust rsf_game_sdk_render_host_rust rsf_game_sdk_cpu_rust
+        rsf_game_sdk_vk_latency_rust rsf_game_sdk_unity_sr_d3d12_rust rsf_game_sdk_d3d11_host_rust)
+    target_link_libraries(${archive} INTERFACE rsf_runtime_leaves minhook)
+endforeach()
 # rsf-vulkan-fg-fixtures: each provider fixture reaches its own SDK leaves and Runtime entries.
 foreach(feature wsi-dispatch streamline-selected streamline-dispatch xess-sr xess-input-range
         xess-device)
@@ -125,6 +135,10 @@ elseif(MINGW)
 endif()
 target_include_directories(rsf_unity_sr_d3d12_test PRIVATE ../integrations/unity/include)
 target_link_libraries(rsf_unity_sr_d3d12_test PRIVATE rsf_game_sdk_unity_sr_d3d12_rust rsf_rdr2_rust rsf_orchestrator rsf_build_options minhook d3d12 dxgi)
+# The rsf-unity code in the archive calls the package's Unity SDK leaves.
+if(TARGET rsf_unity_package_leaves)
+    target_link_libraries(rsf_unity_sr_d3d12_test PRIVATE rsf_unity_package_leaves rsf_unity_package_bridge)
+endif()
 add_test(NAME unity_sr_d3d12_contract COMMAND rsf_unity_sr_d3d12_test)
 rsf_add_fixture_test(rsf_render_frontend_test NAME render_frontend_contract ENTRY rsf_test_render_frontend
     LIBS rsf_game_sdk_render_host_rust rsf_orchestrator)
@@ -153,10 +167,13 @@ rsf_add_fixture_test(rsf_gpu_policy_test NAME gpu_sr_policy ENTRY rsf_test_gpu_p
 
 rsf_add_rust_static(rsf_plugin_session_fixture_rust rsf_rust_plugin_session_fixture
     rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features plugin-session-fixture)
+target_link_libraries(rsf_plugin_session_fixture_rust INTERFACE rsf_runtime_leaves minhook)
 add_library(rsf_plugin_session_fixture SHARED plugin_session_fixture_throw.c)
 target_link_libraries(rsf_plugin_session_fixture PRIVATE rsf_plugin_session_fixture_rust ReScaleFrame::GameSDK rsf_build_options)
 add_executable(rsf_plugin_session_test game-sdk/session_main.c)
-target_link_libraries(rsf_plugin_session_test PRIVATE rsf_plugin_session_fixture_rust rsf_orchestrator rsf_build_options)
+# The fixture archive carries the Rust Runtime whose session entries the C main hands to the fixture; the
+# Runtime DLL's import library would define them a second time.
+target_link_libraries(rsf_plugin_session_test PRIVATE rsf_game_sdk_fixtures_rust rsf_build_options)
 add_dependencies(rsf_plugin_session_test rsf_plugin_session_fixture)
 add_test(NAME plugin_session_lifetime COMMAND rsf_plugin_session_test $<TARGET_FILE:rsf_plugin_session_fixture>)
 set_tests_properties(plugin_session_lifetime PROPERTIES TIMEOUT 30)
@@ -338,9 +355,10 @@ target_include_directories(rsf_sampler_bias PRIVATE ../runtime/orchestrator/incl
 add_executable(rsf_d3d11_host_test d3d11_host_c_header.c)
 set_target_properties(rsf_d3d11_host_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON
     LINKER_LANGUAGE CXX)
+# The fixture archive carries the Rust Runtime, so the host calls and the two frame-record helpers the C
+# main checks resolve in it; the Runtime DLL's import library would define those helpers a second time.
 target_include_directories(rsf_d3d11_host_test PRIVATE "$<TARGET_PROPERTY:rsf_orchestrator,INTERFACE_INCLUDE_DIRECTORIES>")
-target_link_libraries(rsf_d3d11_host_test PRIVATE rsf_game_sdk_d3d11_host_rust "$<TARGET_LINKER_FILE:rsf_orchestrator>" rsf_build_options)
-add_dependencies(rsf_d3d11_host_test rsf_orchestrator)
+target_link_libraries(rsf_d3d11_host_test PRIVATE rsf_game_sdk_d3d11_host_rust rsf_build_options)
 add_test(NAME d3d11_host_contract COMMAND rsf_d3d11_host_test)
 
 
@@ -455,8 +473,9 @@ rsf_add_fixture_test(rsf_fg_present_bridge_test NAME shared_fg_present_bridge EN
 set_target_properties(rsf_fg_present_bridge_test PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/fixtures/fg/$<CONFIG>")
 target_compile_definitions(rsf_d3d11_present_bridge_test PRIVATE RSF_STREAMLINE_HOST_BUILD)
-# The render scope calls other than create are exported by the rsf-ac7 crate (render_scope.rs).
-target_link_libraries(rsf_d3d11_present_bridge_test PRIVATE rsf_presentation_fixtures_rust rsf_orchestrator_core ReScaleFrame::AC7RenderScope rsf_ac7_fixture_rust minhook rsf_build_options d3d11 dxgi dxguid)
+# The render scope calls other than create are exported by rsf-ac7-plugin (render_scope.rs), which the
+# fixture archive carries with ac7-render-scope.
+target_link_libraries(rsf_d3d11_present_bridge_test PRIVATE rsf_presentation_ac7_rust rsf_orchestrator_core ReScaleFrame::AC7RenderScope minhook rsf_build_options d3d11 dxgi dxguid)
 # Graphics fixtures must not load game-facing proxy DLLs from the shared artifact directory.
 set_target_properties(rsf_d3d11_present_bridge_test PROPERTIES LINKER_LANGUAGE CXX
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/fixtures/fg/$<CONFIG>")

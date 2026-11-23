@@ -14,6 +14,7 @@
 mod sys {
     pub use rsf_anomaly::sys::*;
     pub use rsf_orchestrator::sys::*;
+    #[cfg(feature = "unity-sr-d3d12-fixture")]
     pub use rsf_unity::sys::*;
     include!(concat!(env!("OUT_DIR"), "/sys.rs"));
 }

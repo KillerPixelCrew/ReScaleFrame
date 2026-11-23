@@ -15,6 +15,9 @@ mod sys {
     include!(concat!(env!("OUT_DIR"), "/sys.rs"));
 }
 
+#[cfg(feature = "ac7-render-scope")]
+use rsf_ac7_plugin as _;
+
 mod d3d11_bridge_sr;
 mod d3d11_device_checks;
 mod d3d11_fixture_loop;

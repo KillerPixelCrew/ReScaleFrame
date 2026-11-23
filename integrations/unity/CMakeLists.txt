@@ -7,9 +7,10 @@ if(EXISTS "${RSF_UNITY_NATIVE_INCLUDE}/IUnityGraphicsD3D12.h")
     target_include_directories(rsf_unity_package_bridge SYSTEM PRIVATE "${RSF_UNITY_NATIVE_INCLUDE}")
     target_compile_definitions(rsf_unity_package_bridge PRIVATE RSF_HAVE_UNITY_NATIVE=1 RSF_UNITY_PACKAGE_BRIDGE)
     target_link_libraries(rsf_unity_package_bridge PRIVATE ReScaleFrame::GameSDK ReScaleFrame::RuntimeCommon rsf_build_options)
-    add_library(rsf_unity_package SHARED native/bridge.def native/package.c native/bridge.c native/vulkan_bridge.c
-        $<TARGET_OBJECTS:rsf_unity_package_bridge>)
-    target_compile_definitions(rsf_unity_package PRIVATE VK_USE_PLATFORM_WIN32_KHR RSF_STREAMLINE_HOST_BUILD)
+    # The package's other C leaves, as objects: the package DLL links them all (UnityPluginLoad is among them),
+    # and the Unity SR D3D12 fixture links them beside the rsf-unity code that calls them.
+    add_library(rsf_unity_package_leaves OBJECT native/package.c native/bridge.c native/vulkan_bridge.c)
+    target_compile_definitions(rsf_unity_package_leaves PRIVATE VK_USE_PLATFORM_WIN32_KHR RSF_STREAMLINE_HOST_BUILD)
     # The public header pin has no D3D11 swapchain getter; some provisioned headers declare it.
     include(CheckCSourceCompiles)
     set(CMAKE_REQUIRED_INCLUDES "${RSF_UNITY_NATIVE_INCLUDE}")
@@ -22,16 +23,20 @@ int main(void) { IUnityGraphicsD3D11* unity = 0; return unity && unity->GetSwapC
 ]] RSF_UNITY_D3D11_HAS_SWAPCHAIN)
     unset(CMAKE_REQUIRED_INCLUDES)
     if(RSF_UNITY_D3D11_HAS_SWAPCHAIN)
-        target_compile_definitions(rsf_unity_package PRIVATE RSF_UNITY_D3D11_SWAPCHAIN=1)
+        target_compile_definitions(rsf_unity_package_leaves PRIVATE RSF_UNITY_D3D11_SWAPCHAIN=1)
     endif()
-    target_include_directories(rsf_unity_package SYSTEM PRIVATE "${Vulkan_INCLUDE_DIRS}")
+    target_include_directories(rsf_unity_package_leaves SYSTEM PRIVATE "${Vulkan_INCLUDE_DIRS}")
+    target_include_directories(rsf_unity_package_leaves PRIVATE native include)
+    target_include_directories(rsf_unity_package_leaves SYSTEM PRIVATE "${RSF_UNITY_NATIVE_INCLUDE}")
+    target_link_libraries(rsf_unity_package_leaves PRIVATE rsf_orchestrator_core ReScaleFrame::RuntimeCommon rsf_build_options
+        PUBLIC Vulkan::Vulkan d3d12 d3d11)
+    add_library(rsf_unity_package SHARED native/bridge.def $<TARGET_OBJECTS:rsf_unity_package_leaves>
+        $<TARGET_OBJECTS:rsf_unity_package_bridge>)
     target_link_libraries(rsf_unity_package PRIVATE Vulkan::Vulkan)
     if(MSVC)
         target_link_libraries(rsf_unity_package PRIVATE delayimp)
         target_link_options(rsf_unity_package PRIVATE /DELAYLOAD:vulkan-1.dll)
     endif()
-    target_include_directories(rsf_unity_package PRIVATE native include)
-    target_include_directories(rsf_unity_package SYSTEM PRIVATE "${RSF_UNITY_NATIVE_INCLUDE}")
     # The package's native sources are C11 leaves: Unity SDK calls and foreign exception guards.
     # native/unity_sdk.h keeps each leaf's copy of the Unity interface
     # GUIDs distinct so they link into one module. The shared D3D12 bridge keeps its frame state in
