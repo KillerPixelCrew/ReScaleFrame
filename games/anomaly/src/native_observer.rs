@@ -21,8 +21,7 @@ use rsf_game_sys::{
     RSF_ERROR_ABI_MISMATCH as ABI_MISMATCH, RSF_ERROR_BUSY as BUSY,
     RSF_ERROR_INVALID_ARGUMENT as INVALID_ARGUMENT, RSF_ERROR_NATIVE_REFUSED as NATIVE_REFUSED,
     RSF_ERROR_NOT_READY as NOT_READY, RSF_GAME_ABI_VERSION, RSF_OK as OK, rsf_game_host_services,
-    rsf_game_log_fn, rsf_game_renderer_status,
-    rsf_game_start_args, rsf_result,
+    rsf_game_log_fn, rsf_game_renderer_status, rsf_game_start_args, rsf_result,
 };
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr;
@@ -328,14 +327,10 @@ impl Observer {
         let _flight = Flight(self);
         drop(control);
         if sr_refused {
-            session.emit(
-                c"Anomaly SR stage not installed; rendering is stock.",
-            );
+            session.emit(c"Anomaly SR stage not installed; rendering is stock.");
         }
         if motion_refused {
-            session.emit(
-                c"Anomaly motion stage not installed; shaders stay stock.",
-            );
+            session.emit(c"Anomaly motion stage not installed; shaders stay stock.");
         }
         if !input_enabled {
             return NATIVE_REFUSED;

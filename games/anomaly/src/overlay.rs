@@ -12,9 +12,9 @@ use crate::native_hooks::HookOps;
 use crate::sys::*;
 /// Rust-only records of the adapter options and chain identity.
 pub(crate) mod records;
+use crate::host_log::Log;
 use crate::sr_stage::{OverlayChoices, STAGE};
 use crate::sys::rsf_anomaly_sr_settings;
-use crate::host_log::Log;
 use crate::{overlay_hooks, overlay_native};
 pub(crate) use records::*;
 use rsf_game_sys::rsf_overlay_sr_report;
@@ -71,7 +71,6 @@ fn text(reason: *const c_char) -> String {
             .into_owned()
     }
 }
-
 
 // ---- adapter options ---------------------------------------------------------------------------------------------
 

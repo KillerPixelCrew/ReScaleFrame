@@ -458,15 +458,7 @@ fn runtime_start_and_capture_report_refusals() {
             capture: Some(capture),
             ..table()
         };
-        assert_eq!(
-            service(
-                &api,
-                Log::default(),
-                None
-            )
-            .capture_bits(),
-            expected
-        );
+        assert_eq!(service(&api, Log::default(), None).capture_bits(), expected);
     }
 }
 

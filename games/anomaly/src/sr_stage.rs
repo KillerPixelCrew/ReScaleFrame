@@ -242,7 +242,10 @@ fn is_space(c: u16) -> bool {
 // The longest prefix of `text` that converts as a decimal number (after leading white space, as wcstod skips it),
 // and its value. Zero length: no conversion.
 fn wcstod(text: &[u16]) -> (f64, usize) {
-    let start = text.iter().position(|&c| !is_space(c)).unwrap_or(text.len());
+    let start = text
+        .iter()
+        .position(|&c| !is_space(c))
+        .unwrap_or(text.len());
     let ascii: String = text[start..]
         .iter()
         .map_while(|&c| char::from_u32(c.into()).filter(char::is_ascii))

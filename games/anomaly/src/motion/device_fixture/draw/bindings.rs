@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
+use super::Override;
 use super::Raw;
 use crate::ffi::borrow_span;
-use super::Override;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{null, null_mut};
 use windows::Win32::Graphics::Direct3D::Fxc::D3DReflect;
@@ -19,8 +19,8 @@ pub(in crate::motion::device_fixture) struct Bindings {
     samplers: Vec<ID3D11SamplerState>,
 }
 
-pub(in crate::motion::device_fixture) fn rsf_anomaly_motion_fixture_bindings_new()
--> *mut Bindings {
+pub(in crate::motion::device_fixture) fn rsf_anomaly_motion_fixture_bindings_new() -> *mut Bindings
+{
     Box::into_raw(Box::new(Bindings::default()))
 }
 

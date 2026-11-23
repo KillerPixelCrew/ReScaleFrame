@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::Raw;
-use crate::ffi::borrow_span;
 use super::Targets;
+use crate::ffi::borrow_span;
 use std::ffi::{CStr, c_char};
 use std::mem::MaybeUninit;
 use std::ptr::null;

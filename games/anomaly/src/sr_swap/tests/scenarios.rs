@@ -239,7 +239,6 @@ fn reset_resize() {
     );
 }
 
-
 fn globals(c: &Case, width: u32, height: u32) {
     let tw = c.view().twins;
     assert_eq!(c.engine().device_size, [width, height]);

@@ -97,7 +97,6 @@ fn copy_text(out: &mut [c_char], text: &str) {
     out[count] = 0;
 }
 
-
 type LegacyStart = unsafe extern "C" fn(Raw, *const rsf_dlss_pipeline_setup) -> i32;
 type Select = unsafe extern "C" fn(u32, *mut u32, *mut u32) -> i32;
 
@@ -290,7 +289,6 @@ impl Status {
             .expect("SR status reason is UTF-8")
     }
 }
-
 
 #[derive(Default)]
 struct Published {
@@ -852,11 +850,11 @@ unsafe extern "C" fn rsf_anomaly_sr_bind_runtime(driver: &Driver, runtime: Raw) 
     };
     let admission = unsafe { admission_export(runtime) };
     let result = query_api(query).and_then(|(api, _)| {
-            let (Some(start), Some(admit)) = (start_backend, admission) else {
-                return Err(c"Runtime SR admission or selected-provider startup export missing");
-            };
-            Ok((api, Startup::Runtime { start, admit }))
-        });
+        let (Some(start), Some(admit)) = (start_backend, admission) else {
+            return Err(c"Runtime SR admission or selected-provider startup export missing");
+        };
+        Ok((api, Startup::Runtime { start, admit }))
+    });
     // Configuration and binding run on the serialized render side.
     let render = unsafe { &mut *driver.render.get() };
     let bound = driver.bind(render, result, rsf_anomaly_sr_session_id());

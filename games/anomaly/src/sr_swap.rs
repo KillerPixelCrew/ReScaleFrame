@@ -50,7 +50,6 @@ const GENERIC1: usize = 5;
 const POINTER: u32 = size_of::<*mut c_void>() as u32;
 const MAX_CACHE_SLOTS: u32 = 16;
 
-
 /// An engine address or a pointer value read from engine memory. The native leaf validates every access.
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]

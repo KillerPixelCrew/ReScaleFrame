@@ -78,11 +78,7 @@ pub(super) unsafe fn rsf_anomaly_motion_fixture_read(
     }
 }
 
-pub(super) unsafe fn rsf_anomaly_motion_fixture_clear(
-    raw: Raw,
-    targets: &Output,
-    stencil: bool,
-) {
+pub(super) unsafe fn rsf_anomaly_motion_fixture_clear(raw: Raw, targets: &Output, stencil: bool) {
     let Some(context) = (unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }) else {
         return;
     };
@@ -162,11 +158,7 @@ pub(super) unsafe fn rsf_anomaly_motion_fixture_draw(raw: Raw, count: u32) {
     }
 }
 
-pub(super) unsafe fn rsf_anomaly_motion_fixture_draw_quad(
-    raw: Raw,
-    buffer: Raw,
-    stride: u32,
-) {
+pub(super) unsafe fn rsf_anomaly_motion_fixture_draw_quad(raw: Raw, buffer: Raw, stride: u32) {
     if let Some(context) = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) } {
         unsafe {
             (context.vtable().IASetVertexBuffers)(raw, 0, 1, &buffer, &stride, &0);
