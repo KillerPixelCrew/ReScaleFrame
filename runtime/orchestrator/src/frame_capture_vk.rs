@@ -709,7 +709,6 @@ pub(super) unsafe extern "C" fn rsf_core_capture_vk_destroy(owner: *mut Owner) {
     }
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_capture_vk_enabled(owner: *const Owner) -> i32 {
     i32::from(unsafe { self::owner(owner) }.is_some_and(|owner| owner.lock().legacy.enabled()))
 }
@@ -723,7 +722,6 @@ pub(super) unsafe extern "C" fn rsf_core_capture_vk_pending(owner: *const Owner)
     unsafe { self::owner(owner) }.map_or(0, |owner| owner.lock().pending.len() as u64)
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_capture_vk_provider(
     owner: *const Owner,
     version: u64,
@@ -784,7 +782,6 @@ pub(super) unsafe extern "C" fn rsf_core_capture_vk_record(
     i32::from(recorded)
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_capture_vk_complete_group(
     owner: *const Owner,
     group: u64,
@@ -794,7 +791,6 @@ pub(super) unsafe extern "C" fn rsf_core_capture_vk_complete_group(
     }
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_capture_vk_discard_group(owner: *const Owner, group: u64) {
     if let Some(owner) = unsafe { self::owner(owner) } {
         owner.discard_group(group);

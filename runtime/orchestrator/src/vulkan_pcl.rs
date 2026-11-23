@@ -57,14 +57,12 @@ static PCL: Mutex<Pcl> = Mutex::new(Pcl {
     registered: None,
 });
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_latencyvk_pcl_reset() {
     if PCL.lock().unwrap().registered.take().is_some() {
         rsf_native_cpu_ping_message(0);
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_latencyvk_pcl_status() -> Status {
     PCL.lock()
         .unwrap()
@@ -75,7 +73,6 @@ pub(crate) extern "C" fn rsf_core_latencyvk_pcl_status() -> Status {
 
 // The native caller serializes vendor registration against SDK initialization
 // and shutdown. The PCL lock is never held for a vendor call.
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_latencyvk_pcl_bind(use_input_thread: u32, sdk: &Sdk) -> i32 {
     let thread = unsafe { GetCurrentThreadId() };
     let previous = {
@@ -135,7 +132,6 @@ pub(crate) extern "C" fn rsf_core_latencyvk_pcl_bind(use_input_thread: u32, sdk:
     i32::from(posted)
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_latencyvk_pcl_ping(window: HWND) -> i32 {
     let id = rsf_core_latencyvk_pcl_status().message;
     i32::from(!window.is_null() && id != 0 && unsafe { PostMessageW(window, id, 0, 0) } != 0)

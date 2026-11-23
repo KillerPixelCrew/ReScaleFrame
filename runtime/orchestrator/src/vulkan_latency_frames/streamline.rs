@@ -71,7 +71,6 @@ fn emit(sdk: &SdkTokens, token: &mut Token, kind: u32) -> i32 {
     0
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_latencyvk_token_begin(session: u64, id: u64, sdk: &SdkTokens) {
     let frame = Frame { session, id };
     let index = {
@@ -109,7 +108,6 @@ pub(crate) extern "C" fn rsf_core_latencyvk_token_begin(session: u64, id: u64, s
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_latencyvk_token_lookup(
     session: u64,
     id: u64,
@@ -118,7 +116,6 @@ pub(crate) extern "C" fn rsf_core_latencyvk_token_lookup(
     validated(sdk, session, id).map_or(0, |token| token.handle)
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_latencyvk_token_pace_begin(
     session: u64,
     id: u64,
@@ -140,17 +137,14 @@ pub(crate) extern "C" fn rsf_core_latencyvk_token_pace_begin(
     1
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_latencyvk_token_pace_end() {
     FRAMES.lock().unwrap().streamline.pacing = false;
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_latencyvk_token_pacing() -> i32 {
     i32::from(FRAMES.lock().unwrap().streamline.pacing)
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_latencyvk_token_mark(
     session: u64,
     id: u64,
@@ -162,7 +156,6 @@ pub(crate) extern "C" fn rsf_core_latencyvk_token_mark(
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_latencyvk_token_input(
     session: u64,
     id: u64,

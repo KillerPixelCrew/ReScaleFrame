@@ -501,7 +501,6 @@ fn bind(handle: *mut c_void, update: UpdateDevice) -> i32 {
     0
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_amd_vk_status() -> Status {
     let state = STATE.lock().unwrap();
     Status {
@@ -512,7 +511,6 @@ pub(crate) extern "C" fn rsf_core_amd_vk_status() -> Status {
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_amd_vk_options(mode: u32, interval: u32) {
     let update = {
         let mut state = STATE.lock().unwrap();
@@ -538,7 +536,6 @@ pub(crate) extern "C" fn rsf_core_amd_vk_options(mode: u32, interval: u32) {
     update.call();
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_amd_vk_begin(session: u64, frame: u64) {
     let mut state = STATE.lock().unwrap();
     if state.device.is_none() || state.phase != Phase::Open || session == 0 || frame == 0 {
@@ -558,7 +555,6 @@ pub(crate) extern "C" fn rsf_core_amd_vk_begin(session: u64, frame: u64) {
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_amd_vk_cancel(session: u64, frame: u64) {
     let mut state = STATE.lock().unwrap();
     if state.session == session
@@ -568,7 +564,6 @@ pub(crate) extern "C" fn rsf_core_amd_vk_cancel(session: u64, frame: u64) {
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_amd_vk_frame(session: u64, frame: u64, stage: u32) {
     if !matches!(stage, INPUT | PRESENT) {
         return;
@@ -597,7 +592,6 @@ fn close(retire_device: bool) {
     DRAINED.notify_all();
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_amd_vk_shutdown_begin() -> i32 {
     let mut state = STATE.lock().unwrap();
     if state.phase != Phase::Open || state.calls != 0 {
@@ -607,7 +601,6 @@ pub(crate) extern "C" fn rsf_core_amd_vk_shutdown_begin() -> i32 {
     0
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_amd_vk_shutdown_end(committed: u32) {
     if committed != 0 {
         close(false);

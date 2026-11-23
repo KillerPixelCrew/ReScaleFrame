@@ -224,7 +224,6 @@ unsafe extern "C" fn rsf_core_xessvk_initialize(
     0
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_xessvk_instance_requirements(
     ops: Option<&'static XessOps>,
     count: *mut u32,
@@ -251,7 +250,6 @@ unsafe extern "C" fn rsf_core_xessvk_instance_requirements(
     status(sdk(result, INIT_FAILED))
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_xessvk_device_requirements(
     ops: Option<&'static XessOps>,
     instance: Handle,

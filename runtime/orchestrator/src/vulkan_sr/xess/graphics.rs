@@ -52,7 +52,6 @@ impl Graphics {
     }
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_xessvk_graphics_bind(
     setup: &Setup,
     capture: *mut CaptureOwner,
@@ -70,21 +69,18 @@ pub(super) unsafe extern "C" fn rsf_core_xessvk_graphics_bind(
     if (*output).is_null() { INIT_FAILED } else { 0 }
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_xessvk_graphics_destroy(graphics: *mut Graphics) {
     if !graphics.is_null() {
         unsafe { drop(Box::from_raw(graphics)) };
     }
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_xessvk_graphics_images(graphics: *mut Graphics) -> Handle {
     unsafe { graphics.as_mut() }.map_or(std::ptr::null_mut(), |graphics| {
         (&raw mut graphics.images).cast()
     })
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_xessvk_graphics_barrier(
     graphics: &Graphics,
     commands: Handle,
@@ -99,7 +95,6 @@ pub(super) unsafe extern "C" fn rsf_core_xessvk_graphics_barrier(
     };
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_xessvk_graphics_copy(
     graphics: &Graphics,
     commands: Handle,

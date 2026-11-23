@@ -777,6 +777,7 @@ dependencies = [
  "rsf-shader-compiler",
  "rsf-streamline-vk",
  "rsf-test-support",
+ "rsf-vk-fsr3",
  "rsf-vk-xess-fg",
  "serde",
  "serde_json",
@@ -983,6 +984,7 @@ dependencies = [
  "rsf-bindgen",
  "rsf-game-sys",
  "rsf-orchestrator",
+ "rsf-vk-fsr3",
  "windows-sys",
 ]
 
