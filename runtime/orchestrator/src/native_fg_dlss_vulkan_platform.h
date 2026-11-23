@@ -57,21 +57,10 @@ typedef struct rsf_dlgvk_platform {
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* Production Streamline table in native_fg_dlss_vulkan.c; its leaves are Rust
-   (vulkan_dlss_fg/leaves.rs). */
+/* The production table, defined in Rust (vulkan_dlss_fg/leaves.rs). */
 extern const rsf_dlgvk_platform rsf_dlgvk_leaves;
 void rsf_core_dlgvk_report_api_error(int32_t error);
 rsf_backend_result rsf_core_dlgvk_create(const rsf_dlgvk_platform*, const rsf_fgvk_setup*, rsf_dlssgvk**, uint64_t*);
-int32_t rsf_core_dlgvk_images(rsf_dlssgvk*, uint32_t*, uint64_t*);
-int32_t rsf_core_dlgvk_acquire(rsf_dlssgvk*, uint64_t, uint64_t, uint64_t, uint32_t*);
-rsf_backend_result rsf_core_dlgvk_image_layout(const rsf_dlssgvk*, uint32_t*);
-rsf_backend_result rsf_core_dlgvk_enable(rsf_dlssgvk*, uint32_t, uint32_t);
-rsf_backend_result rsf_core_dlgvk_record(rsf_dlssgvk*, void*, const rsf_fgvk_frame*, uint32_t hudless);
-void rsf_core_dlgvk_submitted(rsf_dlssgvk*, void* const*, uint32_t);
-int32_t rsf_core_dlgvk_present(rsf_dlssgvk*, const void*, const rsf_frame_record*, uint32_t explicit_source);
-rsf_backend_result rsf_core_dlgvk_status(rsf_dlssgvk*, rsf_dlssgvk_status*);
-rsf_backend_result rsf_core_dlgvk_drain(rsf_dlssgvk*);
-rsf_backend_result rsf_core_dlgvk_destroy(rsf_dlssgvk*);
 #ifdef __cplusplus
 }
 #endif

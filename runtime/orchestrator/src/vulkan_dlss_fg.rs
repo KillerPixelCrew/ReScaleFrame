@@ -115,7 +115,7 @@ impl Slot {
     }
 }
 
-struct Owner {
+pub(crate) struct Owner {
     _claim: Claim,
     platform: &'static Platform,
     gpu_platform: &'static Gpu,
@@ -721,6 +721,8 @@ unsafe fn matches_present(chain: u64, info: *const c_void) -> bool {
         .is_some_and(|present_chain| present_chain.as_raw() == chain)
 }
 
+/// Creates an owner over `platform`: `leaves::rsf_dlgvk_leaves` for [`rsf_dlssgvk_create`], a fixture's
+/// table in tests/vulkan-fg and owner_tests.rs.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_dlgvk_create(
     platform: *const Platform,
@@ -849,7 +851,7 @@ unsafe extern "C" fn rsf_core_dlgvk_create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlgvk_images(
+pub(crate) unsafe extern "C" fn rsf_dlssgvk_images(
     owner: *mut Owner,
     count: *mut u32,
     images: *mut u64,
@@ -865,7 +867,7 @@ unsafe extern "C" fn rsf_core_dlgvk_images(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlgvk_acquire(
+pub(crate) unsafe extern "C" fn rsf_dlssgvk_acquire(
     owner: *mut Owner,
     timeout: u64,
     semaphore: u64,
@@ -884,7 +886,10 @@ unsafe extern "C" fn rsf_core_dlgvk_acquire(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlgvk_image_layout(owner: *const Owner, layout: *mut u32) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_dlssgvk_image_layout(
+    owner: *const Owner,
+    layout: *mut u32,
+) -> i32 {
     if owner.is_null() || layout.is_null() {
         return INVALID;
     }
@@ -894,7 +899,11 @@ unsafe extern "C" fn rsf_core_dlgvk_image_layout(owner: *const Owner, layout: *m
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlgvk_enable(owner: *mut Owner, enabled: u32, count: u32) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_dlssgvk_enable(
+    owner: *mut Owner,
+    enabled: u32,
+    count: u32,
+) -> i32 {
     let Some(owner) = (unsafe { owner.as_mut() }) else {
         return INVALID;
     };
@@ -909,13 +918,7 @@ unsafe extern "C" fn rsf_core_dlgvk_enable(owner: *mut Owner, enabled: u32, coun
     OK
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlgvk_record(
-    owner: *mut Owner,
-    commands: Handle,
-    frame: *const Frame,
-    hudless: u32,
-) -> i32 {
+unsafe fn record(owner: *mut Owner, commands: Handle, frame: *const Frame, hudless: u32) -> i32 {
     let Some(owner) = (unsafe { owner.as_mut() }) else {
         return INVALID;
     };
@@ -937,7 +940,7 @@ unsafe extern "C" fn rsf_core_dlgvk_record(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlgvk_submitted(
+pub(crate) unsafe extern "C" fn rsf_dlssgvk_submitted(
     owner: *mut Owner,
     commands: *const Handle,
     count: u32,
@@ -949,8 +952,7 @@ unsafe extern "C" fn rsf_core_dlgvk_submitted(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlgvk_present(
+unsafe fn present(
     owner: *mut Owner,
     info: *const c_void,
     source: *const Record,
@@ -966,7 +968,10 @@ unsafe extern "C" fn rsf_core_dlgvk_present(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlgvk_status(owner: *mut Owner, status: *mut Status) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_dlssgvk_get_status(
+    owner: *mut Owner,
+    status: *mut Status,
+) -> i32 {
     let Some(owner) = (unsafe { owner.as_ref() }) else {
         return INVALID;
     };
@@ -981,12 +986,12 @@ unsafe extern "C" fn rsf_core_dlgvk_status(owner: *mut Owner, status: *mut Statu
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlgvk_drain(owner: *mut Owner) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_dlssgvk_drain(owner: *mut Owner) -> i32 {
     unsafe { owner.as_mut() }.map_or(OK, Owner::drain)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlgvk_destroy(owner: *mut Owner) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_dlssgvk_destroy(owner: *mut Owner) -> i32 {
     let Some(live) = (unsafe { owner.as_mut() }) else {
         return OK;
     };
@@ -1011,5 +1016,52 @@ unsafe extern "C" fn rsf_core_dlgvk_destroy(owner: *mut Owner) -> i32 {
     OK
 }
 
+/// The provider entry: the Streamline leaves when CMake verified the corrected Streamline Vulkan
+/// runtime (the `streamline-vk` feature), otherwise NOT_COMPILED after admission.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_dlssgvk_create(
+    setup: *const Setup,
+    out: *mut *mut Owner,
+    chain: *mut u64,
+) -> i32 {
+    let platform = if cfg!(feature = "streamline-vk") {
+        &leaves::rsf_dlgvk_leaves as *const Platform
+    } else {
+        ptr::null()
+    };
+    unsafe { rsf_core_dlgvk_create(platform, setup, out, chain) }
+}
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_dlssgvk_prepare(
+    owner: *mut Owner,
+    commands: Handle,
+    frame: *const Frame,
+) -> i32 {
+    unsafe { record(owner, commands, frame, 0) }
+}
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_dlssgvk_hudless(
+    owner: *mut Owner,
+    commands: Handle,
+    frame: *const Frame,
+) -> i32 {
+    unsafe { record(owner, commands, frame, 1) }
+}
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_dlssgvk_present(owner: *mut Owner, info: *const c_void) -> i32 {
+    unsafe { present(owner, info, ptr::null(), 0) }
+}
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_dlssgvk_present_source(
+    owner: *mut Owner,
+    info: *const c_void,
+    source: *const Record,
+) -> i32 {
+    unsafe { present(owner, info, source, 1) }
+}
 #[cfg(test)]
 mod owner_tests;

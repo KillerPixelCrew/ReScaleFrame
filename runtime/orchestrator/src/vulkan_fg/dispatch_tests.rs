@@ -1,6 +1,521 @@
 // SPDX-License-Identifier: MIT
-use crate::dispatch_drivers::{block_sleep, fixture_state, initialize, release_sleep, wait_sleep};
-use crate::sys::*;
+//! The provider-dispatch contract of vulkan_fg.rs over synthetic providers, without GPU or SDK
+//! calls. `fakes` stands in for the four provider modules under `cfg(test)`.
+
+pub(super) use fakes as dlss;
+pub(super) use fakes as ffx;
+pub(super) use fakes as fsr4;
+pub(super) use fakes as xess;
+
+/// The per-scenario fake state (formerly `rsf_dispatch_fixture_state`).
+pub(super) struct State {
+    ffx_creates: u32,
+    dlss_creates: u32,
+    destroys: u32,
+    enabled: u32,
+    generated_count: u32,
+    calls: u32,
+    explicit_presents: u32,
+    refuse_destroy: bool,
+    refuse_create: bool,
+    refuse_state: bool,
+    missing_owner: bool,
+    fail_after_create: bool,
+    fail_drain: bool,
+    borrowed_setup: *const rsf_fgvk_setup,
+    presented_source: *const rsf_frame_record,
+    fsr4_creates: u32,
+    xess_creates: u32,
+    fsr4_create_result: i32,
+    fsr4_partial: bool,
+    refuse_latency: bool,
+    xell: rsf_fgvk_latency_status,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        // Null pointers, zero counters and false flags.
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+pub(super) mod fakes {
+    use super::super::Handle;
+    use super::State;
+    use crate::sys::*;
+    pub(crate) use crate::vulkan_fsr4_fg::Options;
+    use crate::vulkan_presentation::{
+        rsf_core_fgvk_presentation_shutdown_begin, rsf_core_fgvk_presentation_shutdown_end,
+    };
+    use rsf_game_sys::backend_result::{
+        FEATURE_FAILED as FIXTURE_FEATURE_FAILED, INIT_FAILED as FIXTURE_INIT_FAILED,
+        NOT_READY as FIXTURE_NOT_READY, NOT_SUPPORTED as FIXTURE_NOT_SUPPORTED, OK as FIXTURE_OK,
+    };
+    use rsf_game_sys::rsf_frame_record;
+    use std::{
+        cell::UnsafeCell,
+        ffi::c_void,
+        ptr,
+        sync::{Condvar, Mutex},
+        time::Duration,
+    };
+
+    struct Fixture(UnsafeCell<State>);
+    // The scenario serializes provider calls. During the one blocked sleep it only
+    // probes the runtime's borrow gates, which must refuse before calling the fake.
+    unsafe impl Sync for Fixture {}
+    static STATE: Fixture = Fixture(UnsafeCell::new(unsafe { std::mem::zeroed() }));
+
+    pub(super) fn fixture_state() -> *mut State {
+        STATE.0.get()
+    }
+
+    pub(super) fn initialize() {
+        let state = State {
+            generated_count: 1,
+            xell: rsf_fgvk_latency_status {
+                struct_size: size_of::<rsf_fgvk_latency_status>() as u32,
+                abi_version: RSF_FGVK_LATENCY_ABI_VERSION,
+                available: 1,
+                mode: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        unsafe { fixture_state().write(state) };
+    }
+
+    macro_rules! f {
+        ($field:ident) => {
+            (*fixture_state()).$field
+        };
+    }
+
+    const FFX: usize = 33;
+    const DLSS: usize = 11;
+    const FSR4: usize = 44;
+    const XESS: usize = 55;
+    const SUBOPTIMAL: i32 = 1_000_001_003;
+    const OUT_OF_DATE: i32 = -1_000_001_004;
+
+    macro_rules! frame_callbacks {
+        ($owner:ty, $prepare:ident, $hudless:ident, $submitted:ident, $present:ident, $source:ident, $bits:literal, $result:expr) => {
+            pub(crate) unsafe fn $prepare(
+                _: *mut $owner,
+                _: *mut c_void,
+                _: *const rsf_fgvk_frame,
+            ) -> i32 {
+                unsafe { f!(calls) |= $bits };
+                FIXTURE_OK
+            }
+            pub(crate) unsafe fn $hudless(
+                _: *mut $owner,
+                _: *mut c_void,
+                _: *const rsf_fgvk_frame,
+            ) -> i32 {
+                unsafe { f!(calls) |= $bits << 1 };
+                FIXTURE_OK
+            }
+            pub(crate) unsafe fn $submitted(_: *mut $owner, _: *const *mut c_void, _: u32) {
+                unsafe { f!(calls) |= $bits << 2 };
+            }
+            pub(crate) unsafe fn $present(_: *mut $owner, _: *const c_void) -> i32 {
+                unsafe { f!(calls) |= $bits << 3 };
+                $result
+            }
+            pub(crate) unsafe fn $source(
+                owner: *mut $owner,
+                info: *const c_void,
+                source: *const rsf_frame_record,
+            ) -> i32 {
+                unsafe {
+                    f!(presented_source) = source;
+                    f!(explicit_presents) += 1;
+                    $present(owner, info)
+                }
+            }
+        };
+    }
+
+    frame_callbacks!(
+        c_void,
+        rsf_ffxgvk_prepare,
+        rsf_ffxgvk_hudless,
+        rsf_ffxgvk_submitted,
+        rsf_ffxgvk_present,
+        rsf_ffxgvk_present_source,
+        1,
+        SUBOPTIMAL
+    );
+    frame_callbacks!(
+        c_void,
+        rsf_dlssgvk_prepare,
+        rsf_dlssgvk_hudless,
+        rsf_dlssgvk_submitted,
+        rsf_dlssgvk_present,
+        rsf_dlssgvk_present_source,
+        16,
+        OUT_OF_DATE
+    );
+    frame_callbacks!(
+        c_void,
+        rsf_xessgvk_prepare,
+        rsf_xessgvk_hudless,
+        rsf_xessgvk_submitted,
+        rsf_xessgvk_present,
+        rsf_xessgvk_present_source,
+        256,
+        SUBOPTIMAL
+    );
+    frame_callbacks!(
+        c_void,
+        rsf_fsr4gvk_prepare,
+        rsf_fsr4gvk_hudless,
+        rsf_fsr4gvk_submitted,
+        rsf_fsr4gvk_present,
+        rsf_fsr4gvk_present_source,
+        4096,
+        SUBOPTIMAL
+    );
+
+    unsafe fn created<T>(owner: usize, out: *mut *mut T, chain: *mut u64) {
+        unsafe {
+            out.write(ptr::without_provenance_mut(owner));
+            chain.write(owner as u64);
+        }
+    }
+
+    pub(crate) unsafe fn rsf_ffxgvk_create(
+        setup: *const rsf_fgvk_setup,
+        out: *mut Handle,
+        chain: *mut u64,
+    ) -> i32 {
+        unsafe {
+            f!(ffx_creates) += 1;
+            f!(borrowed_setup) = setup;
+            if f!(refuse_create) {
+                return FIXTURE_INIT_FAILED;
+            }
+            chain.write(FFX as u64);
+            if f!(missing_owner) {
+                return FIXTURE_OK;
+            }
+            created(FFX, out, chain);
+            if f!(fail_after_create) {
+                FIXTURE_INIT_FAILED
+            } else {
+                FIXTURE_OK
+            }
+        }
+    }
+    pub(crate) unsafe fn rsf_dlssgvk_create(
+        setup: *const rsf_fgvk_setup,
+        out: *mut Handle,
+        chain: *mut u64,
+    ) -> i32 {
+        unsafe {
+            f!(dlss_creates) += 1;
+            f!(borrowed_setup) = setup;
+            created(DLSS, out, chain);
+        }
+        FIXTURE_OK
+    }
+    pub(crate) unsafe fn rsf_fsr4gvk_create(
+        setup: *const rsf_fgvk_setup,
+        options: *const crate::vulkan_fsr4_fg::Options,
+        out: *mut Handle,
+        chain: *mut u64,
+    ) -> i32 {
+        let options = unsafe { &*options };
+        assert_eq!(options.struct_size as usize, size_of_val(options));
+        assert_eq!(
+            (
+                options.abi_version,
+                options.window as usize,
+                options.timeline_enabled,
+                options.generated_count
+            ),
+            (1, 17, 1, 1)
+        );
+        unsafe {
+            assert_eq!(*(*setup).graphics.runtime_directory_utf8 as u8, b'F');
+            f!(fsr4_creates) += 1;
+            f!(borrowed_setup) = setup;
+            let result = f!(fsr4_create_result);
+            if result == 0 || f!(fsr4_partial) {
+                created(FSR4, out, chain);
+            }
+            result
+        }
+    }
+    pub(crate) unsafe fn rsf_xessgvk_create(
+        setup: *const rsf_fgvk_setup,
+        options: *const rsf_xessgvk_options,
+        out: *mut Handle,
+        chain: *mut u64,
+    ) -> i32 {
+        let options = unsafe { &*options };
+        assert_eq!(
+            (
+                options.window as usize,
+                options.timeline_enabled,
+                options.generated_count
+            ),
+            (17, 1, 3)
+        );
+        unsafe {
+            assert_eq!(*options.intel_runtime_directory, u16::from(b'D'));
+            f!(xess_creates) += 1;
+            f!(borrowed_setup) = setup;
+            created(XESS, out, chain);
+        }
+        FIXTURE_OK
+    }
+
+    macro_rules! images {
+        ($name:ident, $type:ty, $id:expr, $count:expr) => {
+            pub(crate) unsafe fn $name(owner: *mut $type, count: *mut u32, _: *mut u64) -> i32 {
+                assert_eq!(owner as usize, $id);
+                unsafe { count.write($count) };
+                FIXTURE_OK
+            }
+        };
+    }
+    images!(rsf_ffxgvk_images, c_void, FFX, 3);
+    images!(rsf_dlssgvk_images, c_void, DLSS, 4);
+    images!(rsf_fsr4gvk_images, c_void, FSR4, 3);
+    images!(rsf_xessgvk_images, c_void, XESS, 3);
+
+    macro_rules! acquire {
+        ($name:ident, $type:ty, $verify:expr, $index:expr, $result:expr) => {
+            pub(crate) unsafe fn $name(
+                _: *mut $type,
+                timeout: u64,
+                semaphore: u64,
+                fence: u64,
+                index: *mut u32,
+            ) -> i32 {
+                if $verify {
+                    assert_eq!((timeout, semaphore, fence), (123, 4, 5));
+                }
+                unsafe { index.write($index) };
+                $result
+            }
+        };
+    }
+    acquire!(rsf_ffxgvk_acquire, c_void, true, 2, 2);
+    acquire!(rsf_dlssgvk_acquire, c_void, false, 1, SUBOPTIMAL);
+    acquire!(rsf_fsr4gvk_acquire, c_void, true, 1, 2);
+    acquire!(rsf_xessgvk_acquire, c_void, false, 2, 2);
+
+    fn enabled(value: u32, count: u32) -> i32 {
+        unsafe {
+            f!(enabled) = value;
+            f!(generated_count) = count;
+        }
+        FIXTURE_OK
+    }
+    pub(crate) unsafe fn rsf_ffxgvk_enable(_: Handle, value: u32) -> i32 {
+        enabled(value, 1)
+    }
+    pub(crate) unsafe fn rsf_dlssgvk_enable(_: Handle, value: u32, count: u32) -> i32 {
+        if count > 3 {
+            FIXTURE_NOT_SUPPORTED
+        } else {
+            enabled(value, count)
+        }
+    }
+    pub(crate) unsafe fn rsf_fsr4gvk_enable_options(_: Handle, value: u32, count: u32) -> i32 {
+        assert_eq!(count, 1);
+        enabled(value, count)
+    }
+    pub(crate) unsafe fn rsf_xessgvk_enable_options(_: Handle, value: u32, count: u32) -> i32 {
+        if count > 5 {
+            -77
+        } else {
+            enabled(value, count)
+        }
+    }
+    pub(crate) unsafe fn rsf_fsr4gvk_max_generated(_: Handle) -> u32 {
+        1
+    }
+    pub(crate) unsafe fn rsf_xessgvk_max_generated(_: Handle) -> u32 {
+        5
+    }
+    pub(crate) unsafe fn rsf_dlssgvk_image_layout(_: Handle, layout: *mut u32) -> i32 {
+        unsafe { layout.write(1_000_001_002) };
+        FIXTURE_OK
+    }
+
+    macro_rules! status {
+        ($name:ident, $type:ty, $prepared:expr, $error:expr) => {
+            pub(crate) unsafe fn $name(_: *mut $type, status: *mut rsf_fgvk_status) -> i32 {
+                let status = unsafe { &mut *status };
+                status.prepared = $prepared;
+                if let Some(error) = $error {
+                    status.result = error;
+                }
+                FIXTURE_OK
+            }
+        };
+    }
+    status!(rsf_ffxgvk_get_status, c_void, 30, None);
+    status!(rsf_fsr4gvk_status, c_void, 40, Some(-77));
+    status!(rsf_xessgvk_status, c_void, 50, Some(-77));
+
+    pub(crate) unsafe fn rsf_dlssgvk_get_status(_: Handle, status: *mut rsf_dlssgvk_status) -> i32 {
+        let status = unsafe { &mut *status };
+        if unsafe { f!(refuse_state) } {
+            return FIXTURE_NOT_READY;
+        }
+        status.presentation = rsf_fgvk_status {
+            struct_size: size_of::<rsf_fgvk_status>() as u32,
+            abi_version: RSF_FGVK_ABI_VERSION,
+            prepared: 10,
+            ..Default::default()
+        };
+        status.max_generated_frames = 3;
+        FIXTURE_OK
+    }
+
+    fn refusal(error: i32) -> i32 {
+        if unsafe { f!(refuse_destroy) } {
+            error
+        } else {
+            FIXTURE_OK
+        }
+    }
+    fn retire() -> i32 {
+        let result = refusal(FIXTURE_NOT_READY);
+        if result == FIXTURE_OK {
+            unsafe { f!(destroys) += 1 };
+        }
+        result
+    }
+    pub(crate) unsafe fn rsf_ffxgvk_drain(_: Handle) -> i32 {
+        if unsafe { f!(fail_drain) } {
+            let result = rsf_core_fgvk_presentation_shutdown_begin();
+            if result == FIXTURE_OK {
+                rsf_core_fgvk_presentation_shutdown_end(0);
+            }
+            assert_ne!(
+                result, FIXTURE_OK,
+                "latency SDK shutdown cannot overlap a provider drain"
+            );
+            return FIXTURE_FEATURE_FAILED;
+        }
+        refusal(FIXTURE_NOT_READY)
+    }
+    pub(crate) unsafe fn rsf_dlssgvk_drain(_: Handle) -> i32 {
+        refusal(FIXTURE_NOT_READY)
+    }
+    pub(crate) unsafe fn rsf_ffxgvk_destroy(_: Handle) -> i32 {
+        retire()
+    }
+    pub(crate) unsafe fn rsf_dlssgvk_destroy(_: Handle) -> i32 {
+        retire()
+    }
+    pub(crate) unsafe fn rsf_fsr4gvk_destroy(owner: Handle) -> i32 {
+        assert_eq!(owner as usize, FSR4);
+        refusal(-77)
+    }
+    pub(crate) unsafe fn rsf_fsr4gvk_drain(_: Handle) -> i32 {
+        refusal(-77)
+    }
+    pub(crate) unsafe fn rsf_xessgvk_destroy(_: Handle) -> i32 {
+        refusal(-77)
+    }
+    pub(crate) unsafe fn rsf_xessgvk_drain(_: Handle) -> i32 {
+        refusal(2)
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Sleep {
+        Idle,
+        Armed,
+        Entered,
+    }
+    static SLEEP: Mutex<Sleep> = Mutex::new(Sleep::Idle);
+    static CHANGED: Condvar = Condvar::new();
+
+    pub(super) fn block_sleep() {
+        *SLEEP.lock().unwrap() = Sleep::Armed;
+    }
+    pub(super) fn wait_sleep() -> bool {
+        let (sleep, _) = CHANGED
+            .wait_timeout_while(SLEEP.lock().unwrap(), Duration::from_secs(2), |state| {
+                *state != Sleep::Entered
+            })
+            .unwrap();
+        *sleep == Sleep::Entered
+    }
+    pub(super) fn release_sleep() {
+        *SLEEP.lock().unwrap() = Sleep::Idle;
+        CHANGED.notify_all();
+    }
+    fn latency_result() -> i32 {
+        unsafe {
+            let result = if f!(refuse_latency) { -77 } else { FIXTURE_OK };
+            f!(xell).result = result;
+            result
+        }
+    }
+
+    pub(crate) unsafe fn rsf_xessgvk_latency_options(_: Handle, mode: u32, interval: u32) -> i32 {
+        assert_eq!(interval, 5000);
+        let result = latency_result();
+        if result == FIXTURE_OK {
+            unsafe { f!(xell).mode = mode };
+        }
+        result
+    }
+    pub(crate) unsafe fn rsf_xessgvk_sleep(_: Handle, frame: u32) -> i32 {
+        assert_eq!(frame, 42);
+        let result = latency_result();
+        if result == FIXTURE_OK {
+            unsafe { f!(xell).sleep_calls += 1 };
+        }
+        let mut sleep = SLEEP.lock().unwrap();
+        if *sleep == Sleep::Armed {
+            *sleep = Sleep::Entered;
+            CHANGED.notify_all();
+            drop(
+                CHANGED
+                    .wait_while(sleep, |state| *state == Sleep::Entered)
+                    .unwrap(),
+            );
+        }
+        result
+    }
+    pub(crate) unsafe fn rsf_xessgvk_latency(_: Handle, frame: u32, marker: u32) -> i32 {
+        assert!(frame == 42 && marker <= 6);
+        let result = latency_result();
+        if result == FIXTURE_OK {
+            unsafe { f!(xell).marker_calls += 1 };
+        }
+        result
+    }
+    pub(crate) unsafe fn rsf_xessgvk_latency_status(
+        _: Handle,
+        status: *mut rsf_fgvk_latency_status,
+    ) -> i32 {
+        unsafe { *status = f!(xell) };
+        FIXTURE_OK
+    }
+}
+
+use self::fakes::{block_sleep, fixture_state, initialize, release_sleep, wait_sleep};
+use super::*;
+use crate::vulkan_presentation::{
+    rsf_core_fgvk_presentation_attach, rsf_core_fgvk_presentation_borrow,
+    rsf_core_fgvk_presentation_return, rsf_core_fgvk_presentation_unbind,
+};
+use rsf_game_sys::backend_result::{
+    ABI_MISMATCH as FIXTURE_ABI_MISMATCH, FEATURE_FAILED as FIXTURE_FEATURE_FAILED,
+    INIT_FAILED as FIXTURE_INIT_FAILED, INVALID_ARGUMENT as FIXTURE_INVALID_ARGUMENT,
+    NOT_COMPILED as FIXTURE_NOT_COMPILED, NOT_READY as FIXTURE_NOT_READY,
+    NOT_SUPPORTED as FIXTURE_NOT_SUPPORTED, OK as FIXTURE_OK,
+};
 use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record};
 use std::ptr;
 
@@ -23,7 +538,7 @@ impl Lease {
 impl Drop for Lease {
     fn drop(&mut self) {
         if !self.owner.is_null() {
-            unsafe { rsf_core_fgvk_presentation_return() };
+            rsf_core_fgvk_presentation_return();
         }
     }
 }
@@ -74,8 +589,7 @@ fn verify_sleep_borrow(owner: *mut rsf_fgvk) {
     });
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
+fn run(platform: &Platform, fsr4: bool, xess: bool) {
     // Access the fixture record only between provider calls.
     initialize();
     let fixture = fixture_state();
@@ -103,21 +617,44 @@ extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
         let mut owner = ptr::null_mut();
         let mut chain = 0;
         assert!(
-            rsf_fgvk_create_for_backend(ptr::null(), 1, 1, &mut owner, &mut chain)
-                == FIXTURE_INVALID_ARGUMENT
+            create(
+                platform,
+                ptr::null(),
+                1,
+                1,
+                ptr::null(),
+                &mut owner,
+                &mut chain
+            ) == FIXTURE_INVALID_ARGUMENT
                 && owner.is_null()
                 && chain == 0,
             "null setup clears outputs"
         );
         setup.struct_size -= 1;
         assert!(
-            rsf_fgvk_create(&setup, &mut owner, &mut chain) == FIXTURE_INVALID_ARGUMENT,
+            create(
+                platform,
+                &setup,
+                FFX,
+                1,
+                ptr::null(),
+                &mut owner,
+                &mut chain
+            ) == FIXTURE_INVALID_ARGUMENT,
             "short setup refused"
         );
         setup.struct_size += 1;
         setup.abi_version += 1;
         assert!(
-            rsf_fgvk_create(&setup, &mut owner, &mut chain) == FIXTURE_ABI_MISMATCH,
+            create(
+                platform,
+                &setup,
+                FFX,
+                1,
+                ptr::null(),
+                &mut owner,
+                &mut chain
+            ) == FIXTURE_ABI_MISMATCH,
             "setup ABI refused"
         );
         setup.abi_version -= 1;
@@ -125,37 +662,69 @@ extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
         invalid.abi_version += 1;
         invalid.graphics = Default::default();
         assert!(
-            rsf_fgvk_create(&invalid, &mut owner, &mut chain) == FIXTURE_ABI_MISMATCH,
+            create(
+                platform,
+                &invalid,
+                FFX,
+                1,
+                ptr::null(),
+                &mut owner,
+                &mut chain
+            ) == FIXTURE_ABI_MISMATCH,
             "outer ABI mismatch takes precedence over embedded size"
         );
         invalid = setup;
         invalid.graphics.struct_size -= 1;
         invalid.graphics.abi_version += 1;
         assert!(
-            rsf_fgvk_create(&invalid, &mut owner, &mut chain) == FIXTURE_INVALID_ARGUMENT,
+            create(
+                platform,
+                &invalid,
+                FFX,
+                1,
+                ptr::null(),
+                &mut owner,
+                &mut chain
+            ) == FIXTURE_INVALID_ARGUMENT,
             "embedded size takes precedence over embedded ABI"
         );
         invalid = setup;
         invalid.graphics.abi_version += 1;
         assert!(
-            rsf_fgvk_create(&invalid, &mut owner, &mut chain) == FIXTURE_ABI_MISMATCH,
+            create(
+                platform,
+                &invalid,
+                FFX,
+                1,
+                ptr::null(),
+                &mut owner,
+                &mut chain
+            ) == FIXTURE_ABI_MISMATCH,
             "embedded ABI refused"
         );
         assert!(
-            rsf_fgvk_create_for_backend(&setup, 2, 1, &mut owner, &mut chain)
+            create(platform, &setup, 2, 1, ptr::null(), &mut owner, &mut chain)
                 == FIXTURE_NOT_SUPPORTED
                 && f!(ffx_creates) == 0
                 && f!(dlss_creates) == 0,
             "unsupported FG provider never allocates a concrete owner"
         );
         assert!(
-            rsf_fgvk_create_for_backend(&setup, 3, 2, &mut owner, &mut chain)
+            create(platform, &setup, 3, 2, ptr::null(), &mut owner, &mut chain)
                 == FIXTURE_NOT_SUPPORTED
                 && f!(ffx_creates) == 0,
             "FFX unsupported MFG request never clamps or allocates"
         );
         assert!(
-            rsf_fgvk_create(&setup, &mut owner, &mut chain) == FIXTURE_OK
+            create(
+                platform,
+                &setup,
+                FFX,
+                1,
+                ptr::null(),
+                &mut owner,
+                &mut chain
+            ) == FIXTURE_OK
                 && !owner.is_null()
                 && chain == 33
                 && f!(borrowed_setup) == ptr::from_ref(&setup)
@@ -178,8 +747,15 @@ extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
         let mut second = ptr::null_mut();
         let mut second_chain = 0;
         assert!(
-            rsf_fgvk_create_for_backend(&setup, 1, 3, &mut second, &mut second_chain)
-                == FIXTURE_NOT_READY
+            create(
+                platform,
+                &setup,
+                1,
+                3,
+                ptr::null(),
+                &mut second,
+                &mut second_chain
+            ) == FIXTURE_NOT_READY
                 && second.is_null()
                 && second_chain == 0
                 && f!(dlss_creates) == 0,
@@ -252,8 +828,15 @@ extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
             "failed destroy retains concrete owner"
         );
         assert!(
-            rsf_fgvk_create_for_backend(&setup, 1, 3, &mut second, &mut second_chain)
-                == FIXTURE_NOT_READY
+            create(
+                platform,
+                &setup,
+                1,
+                3,
+                ptr::null(),
+                &mut second,
+                &mut second_chain
+            ) == FIXTURE_NOT_READY
                 && f!(dlss_creates) == 0,
             "failed destroy retains global admission"
         );
@@ -263,7 +846,7 @@ extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
             "FFX retirement retry succeeds"
         );
         assert!(
-            rsf_fgvk_create_for_backend(&setup, 1, 3, &mut owner, &mut chain) == FIXTURE_OK
+            create(platform, &setup, 1, 3, ptr::null(), &mut owner, &mut chain) == FIXTURE_OK
                 && chain == 11
                 && f!(generated_count) == 3,
             "DLSS creation forwards MFG count3"
@@ -320,13 +903,22 @@ extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
         f!(refuse_destroy) = true;
         owner = ptr::null_mut();
         assert!(
-            rsf_fgvk_create_for_backend(&setup, 1, 4, &mut owner, &mut chain) == FIXTURE_NOT_READY
+            create(platform, &setup, 1, 4, ptr::null(), &mut owner, &mut chain)
+                == FIXTURE_NOT_READY
                 && !owner.is_null()
                 && chain == 11,
             "failed unsupported-count cleanup returns retained owner for retry"
         );
         assert!(
-            rsf_fgvk_create(&setup, &mut second, &mut second_chain) == FIXTURE_NOT_READY
+            create(
+                platform,
+                &setup,
+                FFX,
+                1,
+                ptr::null(),
+                &mut second,
+                &mut second_chain
+            ) == FIXTURE_NOT_READY
                 && second.is_null(),
             "partial failed creation retains global admission"
         );
@@ -349,20 +941,36 @@ extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
         );
         f!(refuse_create) = true;
         assert!(
-            rsf_fgvk_create(&setup, &mut owner, &mut chain) == FIXTURE_INIT_FAILED
+            create(
+                platform,
+                &setup,
+                FFX,
+                1,
+                ptr::null(),
+                &mut owner,
+                &mut chain
+            ) == FIXTURE_INIT_FAILED
                 && owner.is_null()
                 && chain == 0,
             "concrete create error releases clean generic admission"
         );
         f!(refuse_create) = false;
         assert!(
-            rsf_fgvk_create(&setup, &mut owner, &mut chain) == FIXTURE_OK
+            create(
+                platform,
+                &setup,
+                FFX,
+                1,
+                ptr::null(),
+                &mut owner,
+                &mut chain
+            ) == FIXTURE_OK
                 && rsf_fgvk_destroy(owner) == FIXTURE_OK,
             "creation resumes after clean factory failure"
         );
         owner = ptr::null_mut();
         assert!(
-            rsf_fgvk_create_for_backend(&setup, 4, 3, &mut owner, &mut chain)
+            create(platform, &setup, 4, 3, ptr::null(), &mut owner, &mut chain)
                 == FIXTURE_NOT_SUPPORTED
                 && owner.is_null()
                 && chain == 0,
@@ -370,14 +978,14 @@ extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
         );
         if fsr4 {
             assert!(
-                rsf_fgvk_create_for_backend(&setup, 4, 1, &mut owner, &mut chain)
+                create(platform, &setup, 4, 1, ptr::null(), &mut owner, &mut chain)
                     == FIXTURE_INVALID_ARGUMENT
                     && f!(fsr4_creates) == 0,
                 "FSR4 needs explicit host contract"
             );
             let mut fsr4_host = host_options(ptr::null());
             assert!(
-                rsf_fgvk_create_with_host(&setup, 4, 1, &fsr4_host, &mut owner, &mut chain)
+                create(platform, &setup, 4, 1, &fsr4_host, &mut owner, &mut chain)
                     == FIXTURE_INVALID_ARGUMENT
                     && f!(fsr4_creates) == 0,
                 "FSR4 requires FidelityFX runtime directory rather than Intel host path"
@@ -385,21 +993,21 @@ extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
             setup.graphics.runtime_directory_utf8 = c"FidelityFX".as_ptr();
             fsr4_host.struct_size -= 1;
             assert!(
-                rsf_fgvk_create_with_host(&setup, 4, 1, &fsr4_host, &mut owner, &mut chain)
+                create(platform, &setup, 4, 1, &fsr4_host, &mut owner, &mut chain)
                     == FIXTURE_INVALID_ARGUMENT,
                 "short FSR4 host refused"
             );
             fsr4_host.struct_size += 1;
             fsr4_host.abi_version += 1;
             assert!(
-                rsf_fgvk_create_with_host(&setup, 4, 1, &fsr4_host, &mut owner, &mut chain)
+                create(platform, &setup, 4, 1, &fsr4_host, &mut owner, &mut chain)
                     == FIXTURE_ABI_MISMATCH,
                 "FSR4 host ABI refused"
             );
             fsr4_host.abi_version -= 1;
             fsr4_host.timeline_enabled = 0;
             assert!(
-                rsf_fgvk_create_with_host(&setup, 4, 1, &fsr4_host, &mut owner, &mut chain)
+                create(platform, &setup, 4, 1, &fsr4_host, &mut owner, &mut chain)
                     == FIXTURE_INVALID_ARGUMENT,
                 "FSR4 external timeline must be enabled"
             );
@@ -407,7 +1015,7 @@ extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
             let before_fsr4_ffx = f!(ffx_creates);
             f!(fsr4_create_result) = RSF_FSR4FG_NOT_SUPPORTED;
             assert!(
-                rsf_fgvk_create_with_host(&setup, 4, 1, &fsr4_host, &mut owner, &mut chain)
+                create(platform, &setup, 4, 1, &fsr4_host, &mut owner, &mut chain)
                     == FIXTURE_NOT_SUPPORTED
                     && owner.is_null()
                     && chain == 0
@@ -416,8 +1024,7 @@ extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
             );
             f!(fsr4_create_result) = 0;
             assert!(
-                rsf_fgvk_create_with_host(&setup, 4, 1, &fsr4_host, &mut owner, &mut chain)
-                    == FIXTURE_OK
+                create(platform, &setup, 4, 1, &fsr4_host, &mut owner, &mut chain) == FIXTURE_OK
                     && chain == 44
                     && f!(borrowed_setup) == ptr::from_ref(&setup)
                     && f!(enabled) == 0
@@ -469,7 +1076,15 @@ extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
             assert!(
                 rsf_fgvk_drain(owner) == FIXTURE_FEATURE_FAILED
                     && rsf_fgvk_destroy(owner) == FIXTURE_FEATURE_FAILED
-                    && rsf_fgvk_create(&setup, &mut second, &mut second_chain) == FIXTURE_NOT_READY,
+                    && create(
+                        platform,
+                        &setup,
+                        FFX,
+                        1,
+                        ptr::null(),
+                        &mut second,
+                        &mut second_chain
+                    ) == FIXTURE_NOT_READY,
                 "FSR4 failed retirement preserves owner and process admission"
             );
             f!(refuse_destroy) = false;
@@ -481,7 +1096,7 @@ extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
             f!(fsr4_partial) = true;
             f!(refuse_destroy) = true;
             assert!(
-                rsf_fgvk_create_with_host(&setup, 4, 1, &fsr4_host, &mut owner, &mut chain)
+                create(platform, &setup, 4, 1, &fsr4_host, &mut owner, &mut chain)
                     == FIXTURE_FEATURE_FAILED
                     && !owner.is_null()
                     && chain == 44,
@@ -496,7 +1111,7 @@ extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
             f!(fsr4_create_result) = 0;
         } else {
             assert!(
-                rsf_fgvk_create_for_backend(&setup, 4, 1, &mut owner, &mut chain)
+                create(platform, &setup, 4, 1, ptr::null(), &mut owner, &mut chain)
                     == FIXTURE_NOT_COMPILED
                     && owner.is_null()
                     && chain == 0,
@@ -505,7 +1120,7 @@ extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
         }
         if xess {
             assert!(
-                rsf_fgvk_create_for_backend(&setup, 5, 3, &mut owner, &mut chain)
+                create(platform, &setup, 5, 3, ptr::null(), &mut owner, &mut chain)
                     == FIXTURE_INVALID_ARGUMENT
                     && f!(xess_creates) == 0,
                 "legacy creation cannot select XeSS without its host contract"
@@ -514,22 +1129,21 @@ extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
             let mut host = host_options(intel.as_ptr());
             host.struct_size -= 1;
             assert!(
-                rsf_fgvk_create_with_host(&setup, 5, 3, &host, &mut owner, &mut chain)
+                create(platform, &setup, 5, 3, &host, &mut owner, &mut chain)
                     == FIXTURE_INVALID_ARGUMENT,
                 "short host contract refused"
             );
             host.struct_size += 1;
             host.abi_version += 1;
             assert!(
-                rsf_fgvk_create_with_host(&setup, 5, 3, &host, &mut owner, &mut chain)
+                create(platform, &setup, 5, 3, &host, &mut owner, &mut chain)
                     == FIXTURE_ABI_MISMATCH,
                 "host ABI mismatch refused"
             );
             host.abi_version -= 1;
             setup.graphics.backend = 1;
             assert!(
-                rsf_fgvk_create_with_host(&setup, 5, 3, &host, &mut owner, &mut chain)
-                    == FIXTURE_OK
+                create(platform, &setup, 5, 3, &host, &mut owner, &mut chain) == FIXTURE_OK
                     && chain == 55
                     && f!(generated_count) == 3,
                 "explicit XeSS FG remains independent of DLSS SR and preserves requested count"
@@ -544,7 +1158,15 @@ extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
                 "XeSS owner/layout/native count dispatched"
             );
             assert!(
-                rsf_fgvk_create(&setup, &mut second, &mut second_chain) == FIXTURE_NOT_READY,
+                create(
+                    platform,
+                    &setup,
+                    FFX,
+                    1,
+                    ptr::null(),
+                    &mut second,
+                    &mut second_chain
+                ) == FIXTURE_NOT_READY,
                 "XeSS shares process owner admission"
             );
             assert!(
@@ -626,7 +1248,15 @@ extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
             assert!(
                 rsf_fgvk_drain(owner) == FIXTURE_FEATURE_FAILED
                     && rsf_fgvk_destroy(owner) == FIXTURE_FEATURE_FAILED
-                    && rsf_fgvk_create(&setup, &mut second, &mut second_chain) == FIXTURE_NOT_READY,
+                    && create(
+                        platform,
+                        &setup,
+                        FFX,
+                        1,
+                        ptr::null(),
+                        &mut second,
+                        &mut second_chain
+                    ) == FIXTURE_NOT_READY,
                 "XeSS failed retirement preserves process owner"
             );
             f!(refuse_destroy) = false;
@@ -636,7 +1266,7 @@ extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
             );
         } else {
             assert!(
-                rsf_fgvk_create_for_backend(&setup, 5, 3, &mut owner, &mut chain)
+                create(platform, &setup, 5, 3, ptr::null(), &mut owner, &mut chain)
                     == FIXTURE_NOT_COMPILED
                     && owner.is_null()
                     && chain == 0,
@@ -651,14 +1281,31 @@ extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
         owner = ptr::null_mut();
         chain = 0;
         assert!(
-            rsf_fgvk_create(&setup, &mut owner, &mut chain) == FIXTURE_NOT_READY
+            create(
+                platform,
+                &setup,
+                FFX,
+                1,
+                ptr::null(),
+                &mut owner,
+                &mut chain
+            ) == FIXTURE_NOT_READY
                 && owner.is_null()
                 && chain == 0,
             "attachment collision rolls provider creation back"
         );
         f!(refuse_destroy) = true;
         assert!(
-            rsf_fgvk_create(&setup, &mut owner, &mut chain) != FIXTURE_OK && !owner.is_null(),
+            create(
+                platform,
+                &setup,
+                FFX,
+                1,
+                ptr::null(),
+                &mut owner,
+                &mut chain
+            ) != FIXTURE_OK
+                && !owner.is_null(),
             "failed rollback retains partial provider owner"
         );
         f!(refuse_destroy) = false;
@@ -679,7 +1326,15 @@ extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
         );
         f!(missing_owner) = true;
         assert!(
-            rsf_fgvk_create(&setup, &mut owner, &mut chain) == FIXTURE_INIT_FAILED
+            create(
+                platform,
+                &setup,
+                FFX,
+                1,
+                ptr::null(),
+                &mut owner,
+                &mut chain
+            ) == FIXTURE_INIT_FAILED
                 && owner.is_null()
                 && chain == 0,
             "success without a provider is refused and does not publish the chain"
@@ -688,7 +1343,15 @@ extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
         f!(fail_after_create) = true;
         let before_partial = f!(destroys);
         assert!(
-            rsf_fgvk_create(&setup, &mut owner, &mut chain) == FIXTURE_INIT_FAILED
+            create(
+                platform,
+                &setup,
+                FFX,
+                1,
+                ptr::null(),
+                &mut owner,
+                &mut chain
+            ) == FIXTURE_INIT_FAILED
                 && owner.is_null()
                 && chain == 0
                 && f!(destroys) == before_partial + 1,
@@ -696,7 +1359,15 @@ extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
         );
         f!(fail_after_create) = false;
         assert!(
-            rsf_fgvk_create(&setup, &mut owner, &mut chain) == FIXTURE_OK,
+            create(
+                platform,
+                &setup,
+                FFX,
+                1,
+                ptr::null(),
+                &mut owner,
+                &mut chain
+            ) == FIXTURE_OK,
             "claim is reusable after early failures"
         );
         f!(fail_drain) = true;
@@ -722,5 +1393,27 @@ extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
             "null retirement remains idempotent"
         );
     }
-    0
+}
+
+/// The three CMake variants of the former link-substitution contract: no optional provider, FSR4
+/// and XeSS. They share the process-wide admission, so they run in sequence.
+#[test]
+fn dispatch_admission_routing_and_retirement() {
+    static BASE: Platform = Platform {
+        dlss: Some(&DLSS_PROVIDER),
+        ffx: Some(&FFX_PROVIDER),
+        fsr4: None,
+        xess: None,
+    };
+    static WITH_FSR4: Platform = Platform {
+        fsr4: Some(&FSR4_PROVIDER),
+        ..BASE
+    };
+    static WITH_XESS: Platform = Platform {
+        xess: Some(&XESS_PROVIDER),
+        ..BASE
+    };
+    run(&BASE, false, false);
+    run(&WITH_FSR4, true, false);
+    run(&WITH_XESS, false, true);
 }

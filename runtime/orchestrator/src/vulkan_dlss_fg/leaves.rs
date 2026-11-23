@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Streamline DLSS-G call leaves, Vulkan device preparation and capture
-//! routing of the owner in vulkan_dlss_fg.rs. native_fg_dlss_vulkan.c lists
-//! them in the production platform table with the session invoke and worker epoch.
+//! routing of the owner in vulkan_dlss_fg.rs, and `rsf_dlgvk_leaves`, the production platform table that
+//! adds the session invoke and the Streamline worker epoch.
 use super::rsf_core_dlgvk_report_api_error;
 use super::sdk_fg_options::{self, Packed, State};
 use crate::dlss_vulkan_capture::leaves::rsf_core_dlss_capture_leaves;
@@ -86,7 +86,6 @@ unsafe extern "C" fn on_error(error: *const i32) {
     }
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_dlgvk_sdk_initialize(module: Handle, _: usize, user: Handle) -> i32 {
     let call = call(user);
     let native = native(call.native);
@@ -120,7 +119,6 @@ unsafe extern "C" fn rsf_core_dlgvk_sdk_initialize(module: Handle, _: usize, use
     OK
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_dlgvk_sdk_configure(_: Handle, _: usize, user: Handle) -> i32 {
     let call = call(user);
     let Some(set_options) = native(call.native).sdk.set_options else {
@@ -139,7 +137,6 @@ unsafe extern "C" fn rsf_core_dlgvk_sdk_configure(_: Handle, _: usize, user: Han
     sdk_result(call, result)
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_dlgvk_sdk_sample(_: Handle, _: usize, user: Handle) -> i32 {
     let call = call(user);
     let Some(get_state) = native(call.native).sdk.get_state else {
@@ -164,7 +161,6 @@ unsafe extern "C" fn rsf_core_dlgvk_sdk_sample(_: Handle, _: usize, user: Handle
     result
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_dlgvk_sdk_constants(_: Handle, token: usize, user: Handle) -> i32 {
     let call = call(user);
     if token == 0 {
@@ -182,7 +178,6 @@ unsafe extern "C" fn rsf_core_dlgvk_sdk_constants(_: Handle, token: usize, user:
     sdk_result(call, result)
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_dlgvk_sdk_tag(_: Handle, token: usize, user: Handle) -> i32 {
     let call = call(user);
     let Some(set_tags) = native(call.native).sdk.set_tags else {
@@ -216,7 +211,6 @@ unsafe extern "C" fn rsf_core_dlgvk_sdk_tag(_: Handle, token: usize, user: Handl
     sdk_result(call, result)
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_dlgvk_sdk_release(_: Handle, _: usize, user: Handle) -> i32 {
     let call = call(user);
     let Some(free_resources) = native(call.native).sdk.free_resources else {
@@ -227,7 +221,6 @@ unsafe extern "C" fn rsf_core_dlgvk_sdk_release(_: Handle, _: usize, user: Handl
     sdk_result(call, result)
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_dlgvk_sdk_open(setup: *const Setup, out: *mut Handle) -> i32 {
     let native = Box::new(Native {
         sdk: Sdk::default(),
@@ -240,14 +233,12 @@ unsafe extern "C" fn rsf_core_dlgvk_sdk_open(setup: *const Setup, out: *mut Hand
     OK
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_dlgvk_sdk_close(handle: Handle) {
     if !handle.is_null() {
         drop(unsafe { Box::from_raw(handle.cast::<Native>()) });
     }
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_dlgvk_sdk_prepare_chain(
     handle: Handle,
     capture_enabled: *mut u32,
@@ -298,7 +289,6 @@ unsafe extern "C" fn rsf_core_dlgvk_sdk_prepare_chain(
     OK
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_dlgvk_sdk_start_capture(handle: Handle) -> i32 {
     let native = native(handle);
     unsafe { rsf_core_dlss_capture_close(native.present) };
@@ -312,7 +302,6 @@ unsafe extern "C" fn rsf_core_dlgvk_sdk_start_capture(handle: Handle) -> i32 {
     }
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_dlgvk_sdk_capture(
     handle: Handle,
     commands: Handle,
@@ -341,7 +330,6 @@ unsafe extern "C" fn rsf_core_dlgvk_sdk_capture(
     };
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_dlgvk_sdk_remember(
     handle: Handle,
     record: *const Record,
@@ -354,7 +342,6 @@ unsafe extern "C" fn rsf_core_dlgvk_sdk_remember(
     };
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_dlgvk_sdk_capture_group(handle: Handle, group: u64, complete: u32) {
     let capture = native(handle).capture;
     unsafe {
@@ -366,7 +353,6 @@ unsafe extern "C" fn rsf_core_dlgvk_sdk_capture_group(handle: Handle, group: u64
     }
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_dlgvk_sdk_flush(handle: Handle) {
     let native = native(handle);
     unsafe {
@@ -375,7 +361,44 @@ unsafe extern "C" fn rsf_core_dlgvk_sdk_flush(handle: Handle) {
     }
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_dlgvk_sdk_detach_capture(handle: Handle) -> i32 {
     unsafe { rsf_core_dlss_capture_detach(native(handle).present) }
 }
+
+unsafe extern "C" {
+    // rsf-streamline-vk's bridge export (sl.def), linked from the same Runtime archive.
+    fn rsf_vk_sl_worker_timeout_epoch() -> u64;
+}
+
+unsafe extern "C" fn timeout_epoch() -> u64 {
+    unsafe { rsf_vk_sl_worker_timeout_epoch() }
+}
+
+// SAFETY: the table holds function pointers and the address of an immutable static.
+unsafe impl Sync for crate::vulkan_dlss_fg_abi::Platform {}
+
+/// The production Streamline table (`rsf_dlssgvk_create` with the `streamline-vk` feature).
+/// Exported for tests/vulkan-fg/src/dlss/sdk.rs, which wraps its entries.
+#[unsafe(no_mangle)]
+#[allow(non_upper_case_globals)]
+pub(super) static rsf_dlgvk_leaves: crate::vulkan_dlss_fg_abi::Platform =
+    crate::vulkan_dlss_fg_abi::Platform {
+        gpu: &crate::vulkan_fg_resources::device::rsf_core_vkfg_platform,
+        open: rsf_core_dlgvk_sdk_open,
+        close: rsf_core_dlgvk_sdk_close,
+        prepare_chain: rsf_core_dlgvk_sdk_prepare_chain,
+        start_capture: rsf_core_dlgvk_sdk_start_capture,
+        invoke: crate::vulkan_latency::rsf_slvk_invoke,
+        initialize: Some(rsf_core_dlgvk_sdk_initialize),
+        configure: Some(rsf_core_dlgvk_sdk_configure),
+        sample: Some(rsf_core_dlgvk_sdk_sample),
+        constants: Some(rsf_core_dlgvk_sdk_constants),
+        tag: Some(rsf_core_dlgvk_sdk_tag),
+        release: Some(rsf_core_dlgvk_sdk_release),
+        capture: rsf_core_dlgvk_sdk_capture,
+        remember: rsf_core_dlgvk_sdk_remember,
+        capture_group: rsf_core_dlgvk_sdk_capture_group,
+        flush: rsf_core_dlgvk_sdk_flush,
+        detach_capture: rsf_core_dlgvk_sdk_detach_capture,
+        timeout_epoch,
+    };

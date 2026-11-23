@@ -4,7 +4,6 @@
 /// the committed src/wsi_abi.rs because its header needs the Vulkan SDK.
 fn bindings() {
     let own = [
-        "tests/vulkan-fg/dispatch_abi.h",
         "tests/vulkan-fg/ffx_abi.h",
         "tests/vulkan-fg/dlss_abi.h",
         "tests/vulkan-fg/streamline_abi.h",
@@ -15,7 +14,7 @@ fn bindings() {
         "runtime/orchestrator/src/native_fg_dlss_vulkan_platform.h",
     ];
     let builder = rsf_bindgen::owner(
-        &own[..6],
+        &own[..5],
         &[],
         &own,
         &[

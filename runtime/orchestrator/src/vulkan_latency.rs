@@ -916,7 +916,7 @@ extern "C" fn rsf_latencyvk_shutdown() -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_slvk_without_dlssg(callback: rsf_vk_wsi_call, user: *mut c_void) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_slvk_without_dlssg(callback: rsf_vk_wsi_call, user: *mut c_void) -> i32 {
     unsafe {
         crate::vulkan_fg_wsi::rsf_core_slvk_without_dlssg(
             streamline_bridge::WITHOUT_DLSS_G,
@@ -942,7 +942,7 @@ unsafe extern "C" fn rsf_latencyvk_instance_proc(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_latencyvk_queue_present(
+pub(crate) unsafe extern "C" fn rsf_latencyvk_queue_present(
     callback: rsf_vk_function,
     queue: *mut c_void,
     info: *const c_void,
@@ -958,7 +958,7 @@ unsafe extern "C" fn rsf_latencyvk_queue_present(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_latencyvk_wsi_call(callback: rsf_vk_wsi_call, user: *mut c_void) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_latencyvk_wsi_call(callback: rsf_vk_wsi_call, user: *mut c_void) -> i32 {
     unsafe { crate::vulkan_fg_wsi::rsf_core_latencyvk_wsi_call(streamline_bridge::WSI, callback, user) }
 }
 

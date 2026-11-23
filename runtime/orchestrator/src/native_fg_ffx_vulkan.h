@@ -26,8 +26,7 @@ typedef struct rsf_ffxgvk_host {
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* Provider entries for native_fg_vulkan_dispatch.c. native_fg_vulkan.c
-   forwards each to the Rust owner below. */
+/* Provider entries (vulkan_ffx_fg.rs), which vulkan_fg.rs dispatches to. */
 rsf_backend_result rsf_ffxgvk_create(const rsf_fgvk_setup*, rsf_ffxgvk**, uint64_t* chain);
 int32_t rsf_ffxgvk_images(rsf_ffxgvk*, uint32_t* count, uint64_t* images);
 int32_t rsf_ffxgvk_acquire(rsf_ffxgvk*, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t* index);
@@ -41,7 +40,7 @@ rsf_backend_result rsf_ffxgvk_get_status(rsf_ffxgvk*, rsf_fgvk_status*);
 rsf_backend_result rsf_ffxgvk_drain(rsf_ffxgvk*);
 rsf_backend_result rsf_ffxgvk_destroy(rsf_ffxgvk*);
 
-/* Native exception containment used by the production host table. */
+/* Exception containment for host Vulkan calls (vulkan_ffx_fg/sdk.rs), in the production host table. */
 int32_t rsf_ffxgvk_guard_resolve(rsf_vk_get_proc resolve, void* object, const char* name, rsf_vk_function* out);
 int32_t rsf_ffxgvk_guard_memory(rsf_vk_function query, void* physical_device, void* properties);
 
@@ -50,16 +49,6 @@ int32_t rsf_ffxgvk_guard_memory(rsf_vk_function query, void* physical_device, vo
    after validating the arguments. WSI steps return the VkResult unchanged. */
 rsf_backend_result rsf_core_ffxgvk_create_sdk(const rsf_ffxgvk_host*, const rsf_fgvk_setup*,
     rsf_ffxgvk**, uint64_t* chain);
-int32_t rsf_core_ffxgvk_images(rsf_ffxgvk*, uint32_t*, uint64_t*);
-int32_t rsf_core_ffxgvk_acquire(rsf_ffxgvk*, uint64_t, uint64_t, uint64_t, uint32_t*);
-rsf_backend_result rsf_core_ffxgvk_enable(rsf_ffxgvk*, uint32_t);
-rsf_backend_result rsf_core_ffxgvk_prepare(rsf_ffxgvk*, void*, const rsf_fgvk_frame*);
-rsf_backend_result rsf_core_ffxgvk_hudless(rsf_ffxgvk*, void*, const rsf_fgvk_frame*);
-void rsf_core_ffxgvk_submitted(rsf_ffxgvk*, void* const*, uint32_t);
-int32_t rsf_core_ffxgvk_present_native(rsf_ffxgvk*, const void* info, const rsf_frame_record*, uint32_t explicit_source);
-rsf_backend_result rsf_core_ffxgvk_status(rsf_ffxgvk*, rsf_fgvk_status*);
-rsf_backend_result rsf_core_ffxgvk_drain(rsf_ffxgvk*);
-rsf_backend_result rsf_core_ffxgvk_destroy(rsf_ffxgvk*);
 /* Scoped WSI borrow of the published SDK leaf. Returns null before
    publication, once retirement has closed the route, or, with match_device,
    for another device. Pair each non-null result with one return call. */

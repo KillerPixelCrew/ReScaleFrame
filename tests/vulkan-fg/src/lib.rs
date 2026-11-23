@@ -14,10 +14,6 @@ mod sys {
     include!(concat!(env!("OUT_DIR"), "/sys.rs"));
 }
 
-#[cfg(feature = "dispatch")]
-mod dispatch;
-#[cfg(feature = "dispatch")]
-mod dispatch_drivers;
 #[cfg(feature = "dlss")]
 mod dlss;
 #[cfg(feature = "ffx")]

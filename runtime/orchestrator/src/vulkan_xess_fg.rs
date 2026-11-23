@@ -14,7 +14,6 @@ use crate::vulkan_dx12_fg::{self as shared, *};
 use crate::vulkan_latency_frames::{Marker, legacy_present_source};
 use rsf_game_sys::{RSF_FRAME_FLAG_RESET, rsf_frame_record as Record};
 // Linking the XeSS session also provides the rsf_core_xess_bridge_* entries bridge.c calls.
-use rsf_vk_xess_fg::bridge_abi;
 use crate::sys::rsf_xessgvk_options as Options;
 use bridge_abi::{
     RSF_XESS_BRIDGE_ABI_MISMATCH as XESS_ABI_MISMATCH, RSF_XESS_BRIDGE_ABI_VERSION as BRIDGE_ABI,
@@ -22,6 +21,7 @@ use bridge_abi::{
     rsf_xess_bridge_frame as BridgeFrame, rsf_xess_bridge_present_status as BridgeStatus,
     rsf_xess_bridge_start as BridgeStart,
 };
+use rsf_vk_xess_fg::bridge_abi;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::{Mutex, MutexGuard};
@@ -215,7 +215,7 @@ struct PresentState {
 
 type Owner = shared::Owner<Xess>;
 
-struct Xess {
+pub(crate) struct Xess {
     ops: &'static Ops,
     directory: *const u16,
     bridge: Handle,
@@ -442,7 +442,7 @@ impl Vendor for Xess {
     }
 }
 
-struct XessSubmission<'a> {
+pub(crate) struct XessSubmission<'a> {
     vendor: &'a Xess,
     state: MutexGuard<'a, PresentState>,
     sdk_id: u32,
@@ -567,7 +567,7 @@ unsafe extern "C" fn rsf_core_xessgvk_create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xessgvk_images(
+pub(crate) unsafe extern "C" fn rsf_xessgvk_images(
     owner: *const Owner,
     count: *mut u32,
     out: *mut u64,
@@ -575,7 +575,7 @@ unsafe extern "C" fn rsf_core_xessgvk_images(
     unsafe { shared::images(owner, count, out) }
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xessgvk_acquire(
+pub(crate) unsafe extern "C" fn rsf_xessgvk_acquire(
     owner: *mut Owner,
     timeout: u64,
     semaphore: u64,
@@ -585,7 +585,7 @@ unsafe extern "C" fn rsf_core_xessgvk_acquire(
     unsafe { shared::acquire(owner, timeout, semaphore, fence, index) }
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xessgvk_prepare(
+pub(crate) unsafe extern "C" fn rsf_xessgvk_prepare(
     owner: *mut Owner,
     commands: Handle,
     frame: *const Frame,
@@ -593,7 +593,7 @@ unsafe extern "C" fn rsf_core_xessgvk_prepare(
     status_result(unsafe { shared::prepare(owner, commands, frame) })
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xessgvk_hudless(
+pub(crate) unsafe extern "C" fn rsf_xessgvk_hudless(
     owner: *mut Owner,
     commands: Handle,
     frame: *const Frame,
@@ -601,7 +601,7 @@ unsafe extern "C" fn rsf_core_xessgvk_hudless(
     status_result(unsafe { shared::hudless(owner, commands, frame) })
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xessgvk_submitted(
+pub(crate) unsafe extern "C" fn rsf_xessgvk_submitted(
     owner: *mut Owner,
     commands: *const Handle,
     count: u32,
@@ -609,11 +609,11 @@ unsafe extern "C" fn rsf_core_xessgvk_submitted(
     unsafe { shared::submitted(owner, commands, count) };
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xessgvk_enable(owner: *mut Owner, enabled: u32) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_xessgvk_enable(owner: *mut Owner, enabled: u32) -> i32 {
     status_result(unsafe { shared::enable(owner, enabled, None) })
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xessgvk_enable_options(
+pub(crate) unsafe extern "C" fn rsf_xessgvk_enable_options(
     owner: *mut Owner,
     enabled: u32,
     count: u32,
@@ -621,7 +621,7 @@ unsafe extern "C" fn rsf_core_xessgvk_enable_options(
     status_result(unsafe { shared::enable_options(owner, enabled, count) })
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xessgvk_max_generated(owner: *const Owner) -> u32 {
+pub(crate) unsafe extern "C" fn rsf_xessgvk_max_generated(owner: *const Owner) -> u32 {
     unsafe { owner.as_ref() }.map_or(0, |owner| unsafe {
         (owner.vendor.ops.max_generated)(owner.vendor.bridge)
     })
@@ -635,28 +635,84 @@ unsafe extern "C" fn rsf_core_xessgvk_present(
 ) -> i32 {
     unsafe { shared::present(owner, info, source, explicit) }
 }
+
+/// The marshaller's callback: the owner behind the provider handle.
+unsafe extern "C" fn present_owner(
+    owner: Handle,
+    info: &PresentInfo,
+    source: *const Record,
+    exact: u32,
+) -> i32 {
+    unsafe { rsf_core_xessgvk_present(owner.cast(), info, source, exact) }
+}
+
+/// Present routes through the shared V02 marshaller (vulkan_dx12_fg/platform.rs).
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xessgvk_status(owner: *const Owner, status: *mut Status) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_xessgvk_present(owner: *mut Owner, info: *const c_void) -> i32 {
+    unsafe {
+        crate::vulkan_dx12_fg::platform::rsf_dx12gvk_present_marshaled(
+            present_owner,
+            owner.cast(),
+            info,
+            ptr::null(),
+            0,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_xessgvk_present_source(
+    owner: *mut Owner,
+    info: *const c_void,
+    source: *const Record,
+) -> i32 {
+    unsafe {
+        crate::vulkan_dx12_fg::platform::rsf_dx12gvk_present_marshaled(
+            present_owner,
+            owner.cast(),
+            info,
+            source,
+            1,
+        )
+    }
+}
+
+/// native_fg_xess_vulkan_present.c binds the XeSS bridge exports, which exist only in builds with the
+/// XeSS-FG SDK, and calls `rsf_core_xessgvk_create`.
+#[cfg(feature = "xess-fg-vk")]
+pub(crate) use crate::sys::rsf_xessgvk_create;
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_xessgvk_status(
+    owner: *const Owner,
+    status: *mut Status,
+) -> i32 {
     status_result(unsafe { shared::status(owner, status) })
 }
+
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xessgvk_drain(owner: *mut Owner) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_xessgvk_drain(owner: *mut Owner) -> i32 {
     status_result(unsafe { shared::drain(owner) })
 }
+
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xessgvk_destroy(owner: *mut Owner) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_xessgvk_destroy(owner: *mut Owner) -> i32 {
     status_result(unsafe { shared::destroy(owner) })
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xessgvk_sleep(owner: *const Owner, id: u32) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_xessgvk_sleep(owner: *const Owner, id: u32) -> i32 {
     unsafe { owner.as_ref() }.map_or(XESS_INVALID, |owner| owner.vendor.sleep(id))
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xessgvk_latency(owner: *const Owner, id: u32, marker: u32) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_xessgvk_latency(
+    owner: *const Owner,
+    id: u32,
+    marker: u32,
+) -> i32 {
     unsafe { owner.as_ref() }.map_or(XESS_INVALID, |owner| owner.vendor.marker(id, marker))
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xessgvk_latency_options(
+pub(crate) unsafe extern "C" fn rsf_xessgvk_latency_options(
     owner: *const Owner,
     mode: u32,
     interval: u32,
@@ -664,7 +720,7 @@ unsafe extern "C" fn rsf_core_xessgvk_latency_options(
     unsafe { owner.as_ref() }.map_or(XESS_INVALID, |owner| owner.vendor.options(mode, interval))
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xessgvk_latency_status(
+pub(crate) unsafe extern "C" fn rsf_xessgvk_latency_status(
     owner: *const Owner,
     status: *mut LatencyStatus,
 ) -> i32 {

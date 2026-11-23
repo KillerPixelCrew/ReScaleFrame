@@ -246,14 +246,14 @@ impl Drop for PresentationLease {
 
 // Native fixtures use the same registry to verify cross-language borrow ownership.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fgvk_presentation_borrow(closing: *mut u32) -> Context {
+pub(crate) unsafe extern "C" fn rsf_core_fgvk_presentation_borrow(closing: *mut u32) -> Context {
     let (context, closed) = borrow();
     unsafe { closing.write(u32::from(closed)) };
     context
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_fgvk_presentation_return() {
+pub(crate) extern "C" fn rsf_core_fgvk_presentation_return() {
     return_borrow();
 }
 

@@ -13,7 +13,6 @@ crate-type = ["staticlib"]
 test = false
 
 [features]
-dispatch = []
 ffx = ["dep:ash", "dep:rsf-vk-fsr3"]
 wsi-dispatch = ["dep:ash"]
 fsr4-state = ["dep:ash"]

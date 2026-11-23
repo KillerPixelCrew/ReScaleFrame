@@ -262,7 +262,7 @@ impl Default for Slot {
 // The shared primary owner in vulkan_fg.rs serializes every call. The SDK's
 // generation callback runs inside the native present call and takes a copy
 // of the configured source from the route without borrowing this owner.
-struct Owner {
+pub(crate) struct Owner {
     ops: &'static Ops,
     host: &'static Host,
     native: Handle,
@@ -805,8 +805,8 @@ unsafe fn live<'a>(owner: *mut Owner) -> Option<&'a mut Owner> {
     unsafe { owner.as_mut() }.filter(|owner| !owner.retiring)
 }
 
-/// Creates an owner over the SDK leaf with the native host table from
-/// native_fg_vulkan.c. The table outlives every owner. A null host is the
+/// Creates an owner over the SDK leaf with `host`, which outlives every owner (`sdk::NATIVE_HOST`,
+/// or a fixture's table). A null host is the
 /// disabled build, which validates the arguments and reports NOT_COMPILED.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_ffxgvk_create_sdk(
@@ -817,6 +817,22 @@ unsafe extern "C" fn rsf_core_ffxgvk_create_sdk(
 ) -> i32 {
     let leaf = unsafe { host.as_ref() }.map(|host| (&sdk::OPS, host));
     unsafe { create(leaf, setup, output, chain) }
+}
+
+/// The provider entry: the production host when CMake found the FidelityFX Vulkan headers (the
+/// `ffx-vk` feature), otherwise the disabled build.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_ffxgvk_create(
+    setup: *const Setup,
+    output: *mut *mut Owner,
+    chain: *mut u64,
+) -> i32 {
+    let host = if cfg!(feature = "ffx-vk") {
+        &sdk::NATIVE_HOST as *const Host
+    } else {
+        ptr::null()
+    };
+    unsafe { rsf_core_ffxgvk_create_sdk(host, setup, output, chain) }
 }
 
 /// `leaf` is None in the disabled build.
@@ -886,7 +902,7 @@ unsafe fn create(
     if result != OK {
         state.status.result = result;
         // A refused cleanup retains the owner for the documented destroy retry.
-        if unsafe { rsf_core_ffxgvk_destroy(owner) } != OK {
+        if unsafe { rsf_ffxgvk_destroy(owner) } != OK {
             unsafe { output.write(owner) };
         }
         return result;
@@ -899,7 +915,7 @@ unsafe fn create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ffxgvk_images(
+pub(crate) unsafe extern "C" fn rsf_ffxgvk_images(
     owner: *mut Owner,
     count: *mut u32,
     images: *mut u64,
@@ -911,7 +927,7 @@ unsafe extern "C" fn rsf_core_ffxgvk_images(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ffxgvk_acquire(
+pub(crate) unsafe extern "C" fn rsf_ffxgvk_acquire(
     owner: *mut Owner,
     timeout: u64,
     semaphore: u64,
@@ -934,7 +950,7 @@ unsafe extern "C" fn rsf_core_ffxgvk_acquire(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ffxgvk_enable(owner: *mut Owner, enabled: u32) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_ffxgvk_enable(owner: *mut Owner, enabled: u32) -> i32 {
     match unsafe { owner.as_mut() } {
         Some(owner) if enabled <= 1 => {
             owner.enabled = enabled != 0;
@@ -964,7 +980,7 @@ unsafe fn with_frame(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ffxgvk_prepare(
+pub(crate) unsafe extern "C" fn rsf_ffxgvk_prepare(
     owner: *mut Owner,
     commands: Handle,
     frame: *const Frame,
@@ -973,7 +989,7 @@ unsafe extern "C" fn rsf_core_ffxgvk_prepare(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ffxgvk_hudless(
+pub(crate) unsafe extern "C" fn rsf_ffxgvk_hudless(
     owner: *mut Owner,
     commands: Handle,
     frame: *const Frame,
@@ -982,7 +998,7 @@ unsafe extern "C" fn rsf_core_ffxgvk_hudless(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ffxgvk_submitted(
+pub(crate) unsafe extern "C" fn rsf_ffxgvk_submitted(
     owner: *mut Owner,
     commands: *const Handle,
     count: u32,
@@ -994,8 +1010,7 @@ unsafe extern "C" fn rsf_core_ffxgvk_submitted(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ffxgvk_present_native(
+unsafe fn present_native(
     owner: *mut Owner,
     info: *const c_void,
     source: *const Record,
@@ -1004,6 +1019,20 @@ unsafe extern "C" fn rsf_core_ffxgvk_present_native(
     let chain = unsafe { crate::vulkan_fg_wsi::single_present_chain(info) }
         .map_or(0, |chain| chain.as_raw());
     unsafe { rsf_core_ffxgvk_present(owner, info, chain, source, explicit_source) }
+}
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_ffxgvk_present(owner: *mut Owner, info: *const c_void) -> i32 {
+    unsafe { present_native(owner, info, ptr::null(), 0) }
+}
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_ffxgvk_present_source(
+    owner: *mut Owner,
+    info: *const c_void,
+    source: *const Record,
+) -> i32 {
+    unsafe { present_native(owner, info, source, 1) }
 }
 
 #[unsafe(no_mangle)]
@@ -1049,7 +1078,10 @@ extern "C" fn rsf_core_ffxgvk_note_generated(native: Handle) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ffxgvk_status(owner: *const Owner, status: *mut Status) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_ffxgvk_get_status(
+    owner: *const Owner,
+    status: *mut Status,
+) -> i32 {
     let Some(owner) = (unsafe { owner.as_ref() }) else {
         return INVALID_ARGUMENT;
     };
@@ -1071,7 +1103,7 @@ unsafe extern "C" fn rsf_core_ffxgvk_status(owner: *const Owner, status: *mut St
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ffxgvk_drain(owner: *mut Owner) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_ffxgvk_drain(owner: *mut Owner) -> i32 {
     match unsafe { owner.as_mut() } {
         Some(owner) if !owner.native.is_null() => owner.drain(),
         _ => OK,
@@ -1079,7 +1111,7 @@ unsafe extern "C" fn rsf_core_ffxgvk_drain(owner: *mut Owner) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ffxgvk_destroy(owner: *mut Owner) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_ffxgvk_destroy(owner: *mut Owner) -> i32 {
     let Some(state) = (unsafe { owner.as_mut() }) else {
         return OK;
     };
@@ -1441,8 +1473,7 @@ mod tests {
         let mut setup = *setup;
         setup.create_info = ptr::from_ref(&info).cast();
         let (mut owner, mut chain) = (ptr::null_mut(), 0);
-        let result =
-            unsafe { super::create(Some((&OPS, &HOST)), &setup, &mut owner, &mut chain) };
+        let result = unsafe { super::create(Some((&OPS, &HOST)), &setup, &mut owner, &mut chain) };
         (result, owner, chain)
     }
 
@@ -1539,10 +1570,10 @@ mod tests {
             calls(|c| (c.effects_destroyed, c.chains_destroyed, c.closes)),
             (1, 1, 0)
         );
-        assert_eq!(unsafe { rsf_core_ffxgvk_drain(owner) }, OK);
+        assert_eq!(unsafe { rsf_ffxgvk_drain(owner) }, OK);
         assert_eq!(calls(|c| c.drains), 0);
         calls(|c| c.fail_swapchain_destroy = false);
-        assert_eq!(unsafe { rsf_core_ffxgvk_destroy(owner) }, OK);
+        assert_eq!(unsafe { rsf_ffxgvk_destroy(owner) }, OK);
         assert_eq!(
             calls(|c| (
                 c.effects_destroyed,
@@ -1563,10 +1594,10 @@ mod tests {
         let input = frame(&record);
         let list = command(10);
         unsafe {
-            assert_eq!(rsf_core_ffxgvk_enable(owner, 1), OK);
-            assert_eq!(rsf_core_ffxgvk_prepare(owner, list, &input), OK);
-            assert_eq!(rsf_core_ffxgvk_hudless(owner, list, &input), OK);
-            rsf_core_ffxgvk_submitted(owner, &list, 1);
+            assert_eq!(rsf_ffxgvk_enable(owner, 1), OK);
+            assert_eq!(rsf_ffxgvk_prepare(owner, list, &input), OK);
+            assert_eq!(rsf_ffxgvk_hudless(owner, list, &input), OK);
+            rsf_ffxgvk_submitted(owner, &list, 1);
         }
         assert_eq!(calls(|c| c.fence_submits), 1);
         assert_eq!(
@@ -1581,7 +1612,7 @@ mod tests {
         let mut status: Status = unsafe { std::mem::zeroed() };
         (status.struct_size, status.abi_version) =
             (size_of::<Status>() as u32, RSF_FGVK_ABI_VERSION);
-        assert_eq!(unsafe { rsf_core_ffxgvk_status(owner, &mut status) }, OK);
+        assert_eq!(unsafe { rsf_ffxgvk_get_status(owner, &mut status) }, OK);
         assert_eq!(
             (status.enabled, status.result, status.source_frame),
             (1, FEATURE_FAILED, 1)
@@ -1600,7 +1631,7 @@ mod tests {
             calls(|c| (c.fence_submits, c.configures.clone())),
             (2, vec![1, 0])
         );
-        assert_eq!(unsafe { rsf_core_ffxgvk_destroy(owner) }, OK);
+        assert_eq!(unsafe { rsf_ffxgvk_destroy(owner) }, OK);
     }
 
     #[test]
@@ -1611,18 +1642,18 @@ mod tests {
         let input = frame(&record);
         let list = command(11);
         unsafe {
-            assert_eq!(rsf_core_ffxgvk_enable(owner, 1), OK);
-            assert_eq!(rsf_core_ffxgvk_prepare(owner, list, &input), OK);
-            assert_eq!(rsf_core_ffxgvk_destroy(owner), NOT_READY);
+            assert_eq!(rsf_ffxgvk_enable(owner, 1), OK);
+            assert_eq!(rsf_ffxgvk_prepare(owner, list, &input), OK);
+            assert_eq!(rsf_ffxgvk_destroy(owner), NOT_READY);
         }
         assert_eq!(calls(|c| (c.drains, c.effects_destroyed)), (0, 0));
-        unsafe { rsf_core_ffxgvk_submitted(owner, &list, 1) };
+        unsafe { rsf_ffxgvk_submitted(owner, &list, 1) };
         calls(|c| c.fail_drain = true);
-        assert_eq!(unsafe { rsf_core_ffxgvk_destroy(owner) }, NOT_READY);
+        assert_eq!(unsafe { rsf_ffxgvk_destroy(owner) }, NOT_READY);
         assert_eq!(calls(|c| (c.drains, c.effects_destroyed)), (1, 0));
         calls(|c| (c.fail_drain, c.fail_effect_destroy) = (false, true));
-        assert_eq!(unsafe { rsf_core_ffxgvk_destroy(owner) }, FEATURE_FAILED);
-        assert_eq!(unsafe { rsf_core_ffxgvk_drain(owner) }, OK);
+        assert_eq!(unsafe { rsf_ffxgvk_destroy(owner) }, FEATURE_FAILED);
+        assert_eq!(unsafe { rsf_ffxgvk_drain(owner) }, OK);
         assert_eq!(calls(|c| c.drains), 2);
         let mut count = 0;
         unsafe {
@@ -1631,16 +1662,13 @@ mod tests {
                 VK_INITIALIZATION_FAILED
             );
             assert_eq!(
-                rsf_core_ffxgvk_images(owner, &mut count, ptr::null_mut()),
+                rsf_ffxgvk_images(owner, &mut count, ptr::null_mut()),
                 VK_INITIALIZATION_FAILED
             );
-            assert_eq!(
-                rsf_core_ffxgvk_prepare(owner, list, &input),
-                INVALID_ARGUMENT
-            );
+            assert_eq!(rsf_ffxgvk_prepare(owner, list, &input), INVALID_ARGUMENT);
         }
         calls(|c| c.fail_effect_destroy = false);
-        assert_eq!(unsafe { rsf_core_ffxgvk_destroy(owner) }, OK);
+        assert_eq!(unsafe { rsf_ffxgvk_destroy(owner) }, OK);
         assert_eq!(
             calls(|c| (
                 c.drains,
@@ -1672,7 +1700,7 @@ mod tests {
         // destroys the owner: every SDK context goes, but the leaf stays.
         let hook = rsf_core_ffxgvk_wsi_borrow(ptr::null_mut(), 0);
         assert_eq!(hook.addr(), NATIVE);
-        assert_eq!(unsafe { rsf_core_ffxgvk_destroy(first) }, NOT_READY);
+        assert_eq!(unsafe { rsf_ffxgvk_destroy(first) }, NOT_READY);
         assert_eq!(
             calls(|c| (c.effects_destroyed, c.swapchains_destroyed, c.closes)),
             (1, 1, 0)
@@ -1683,7 +1711,7 @@ mod tests {
         rsf_core_ffxgvk_wsi_return();
 
         // The retry repeats no SDK release and closes the leaf once.
-        assert_eq!(unsafe { rsf_core_ffxgvk_destroy(first) }, OK);
+        assert_eq!(unsafe { rsf_ffxgvk_destroy(first) }, OK);
         assert_eq!(
             calls(|c| (
                 c.effects_destroyed,
@@ -1697,7 +1725,7 @@ mod tests {
         let (next, successor, _) = create(&setup(), &SWAPCHAIN);
         assert_eq!(next, OK);
         assert_eq!(routed(DEVICE).addr(), NATIVE);
-        assert_eq!(unsafe { rsf_core_ffxgvk_destroy(successor) }, OK);
+        assert_eq!(unsafe { rsf_ffxgvk_destroy(successor) }, OK);
     }
 
     #[test]
@@ -1711,7 +1739,7 @@ mod tests {
         calls(|c| c.fail_open = false);
         let (result, owner, _) = create(&setup(), &SWAPCHAIN);
         assert_eq!(result, OK);
-        assert_eq!(unsafe { rsf_core_ffxgvk_destroy(owner) }, OK);
+        assert_eq!(unsafe { rsf_ffxgvk_destroy(owner) }, OK);
         assert_eq!(route().owner, 0);
     }
 }

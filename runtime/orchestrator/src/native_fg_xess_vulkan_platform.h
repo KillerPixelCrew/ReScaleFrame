@@ -56,30 +56,11 @@ int rsf_vk_xess_fg_create_shared_image(rsf_xess_bridge*, uint32_t, uint32_t, uin
 void rsf_vk_xess_fg_release_image(struct ID3D12Resource*);
 int rsf_vk_xess_fg_create_shared_fence(rsf_xess_bridge*, void** shared_handle);
 
-/* Rust owners (vulkan_xess_fg.rs, vulkan_dx12_fg/platform.rs). */
-typedef struct rsf_dx12gvk_present_info rsf_dx12gvk_present_info;
-typedef int32_t (*rsf_dx12gvk_present_fn)(void*, const rsf_dx12gvk_present_info*, const rsf_frame_record*, uint32_t);
-int32_t rsf_dx12gvk_present_marshaled(rsf_dx12gvk_present_fn, void*, const void*, const rsf_frame_record*, uint32_t);
+/* Rust owners (vulkan_xess_fg.rs). */
 int32_t rsf_core_xessvk_interop_create(const rsf_xessvk_import_create*, const rsf_srvk_setup*,
     rsf_xess_bridge*, uint32_t, rsf_xessvk_interop**);
 int32_t rsf_core_xessgvk_create(const rsf_xessgvk_ops*, const rsf_fgvk_setup*, const rsf_xessgvk_options*,
     rsf_xessgvk**, uint64_t*);
-int32_t rsf_core_xessgvk_images(const rsf_xessgvk*, uint32_t*, uint64_t*);
-int32_t rsf_core_xessgvk_acquire(rsf_xessgvk*, uint64_t, uint64_t, uint64_t, uint32_t*);
-int32_t rsf_core_xessgvk_prepare(rsf_xessgvk*, void*, const rsf_fgvk_frame*);
-int32_t rsf_core_xessgvk_hudless(rsf_xessgvk*, void*, const rsf_fgvk_frame*);
-void rsf_core_xessgvk_submitted(rsf_xessgvk*, void* const*, uint32_t);
-int32_t rsf_core_xessgvk_enable(rsf_xessgvk*, uint32_t);
-int32_t rsf_core_xessgvk_enable_options(rsf_xessgvk*, uint32_t, uint32_t);
-uint32_t rsf_core_xessgvk_max_generated(const rsf_xessgvk*);
-int32_t rsf_core_xessgvk_present(rsf_xessgvk*, const rsf_dx12gvk_present_info*, const rsf_frame_record*, uint32_t);
-int32_t rsf_core_xessgvk_status(const rsf_xessgvk*, rsf_fgvk_status*);
-int32_t rsf_core_xessgvk_drain(rsf_xessgvk*);
-int32_t rsf_core_xessgvk_destroy(rsf_xessgvk*);
-int32_t rsf_core_xessgvk_sleep(const rsf_xessgvk*, uint32_t);
-int32_t rsf_core_xessgvk_latency(const rsf_xessgvk*, uint32_t, uint32_t);
-int32_t rsf_core_xessgvk_latency_options(const rsf_xessgvk*, uint32_t, uint32_t);
-int32_t rsf_core_xessgvk_latency_status(const rsf_xessgvk*, rsf_fgvk_latency_status*);
 
 #ifdef __cplusplus
 }

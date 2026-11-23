@@ -500,7 +500,7 @@ unsafe extern "C" fn queue_present(
     unsafe { present(vk::Queue::from_raw(queue.addr() as u64), info.cast()) }.as_raw()
 }
 
-// The production guards from native_fg_vulkan.c contain resolver exceptions.
+// The production guards (vulkan_ffx_fg/sdk.rs) contain resolver exceptions.
 static HOST: rsf_ffxgvk_host = rsf_ffxgvk_host {
     load: Some(load),
     unload: Some(unload),

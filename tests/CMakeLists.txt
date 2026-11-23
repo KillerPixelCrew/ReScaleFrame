@@ -12,7 +12,7 @@ rsf_add_rust_static(rsf_game_sdk_fixtures_rust rsf_rust_game_sdk_fixtures
     --features render-host-fixtures,cpu-fixtures,unity-sr-d3d12-fixture,plugin-session-fixture,d3d11-host-fixture,vk-latency-fixtures,xell-fixture)
 rsf_add_rust_static(rsf_vulkan_fg_fixtures_rust rsf_rust_vulkan_fg_fixtures
     rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures
-    --features dispatch,ffx,wsi-dispatch,fsr4-state,dlss,streamline-selected,streamline-dispatch,xess-sr,xess-input-range,xess-device)
+    --features ffx,wsi-dispatch,fsr4-state,dlss,streamline-selected,streamline-dispatch,xess-sr,xess-input-range,xess-device)
 rsf_add_rust_static(rsf_capture_fixtures_rust rsf_rust_capture_fixtures
     rsf-capture-fixtures rsf_capture_fixtures
     --features metadata,d3d12,d3d11,vulkan,vulkan-cpu,texture)
@@ -502,10 +502,9 @@ if(RSF_HAVE_VULKAN)
     target_link_libraries(rsf_ffx_vulkan_wsi_dispatch_test PRIVATE rsf_vulkan_fg_fixtures_rust rsf_build_options)
     add_test(NAME ffx_vulkan_wsi_dispatch COMMAND rsf_ffx_vulkan_wsi_dispatch_test)
     if(RSF_HAVE_FFX_VK)
-        # The scenarios replace the SDK module through the host table, so the
-        # production leaf is linked without RSF_HAVE_FFX_VK and its host.
-        add_executable(rsf_native_ffx_vulkan_fixture vulkan-fg/ffx_fixture.c
-            ../runtime/orchestrator/src/native_fg_vulkan.c)
+        # The scenarios replace the SDK module through their own host table (rsf_core_ffxgvk_create_sdk);
+        # the provider entries are the Runtime archive's (vulkan_ffx_fg.rs).
+        add_executable(rsf_native_ffx_vulkan_fixture vulkan-fg/ffx_fixture.c)
         set_target_properties(rsf_native_ffx_vulkan_fixture PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON
             LINKER_LANGUAGE CXX)
         target_include_directories(rsf_native_ffx_vulkan_fixture PRIVATE ../runtime/orchestrator/include)
@@ -589,33 +588,7 @@ if(RSF_HAVE_VULKAN AND RSF_HAVE_XESS_VK AND RSF_HAVE_FFX_VK)
     target_link_libraries(rsf_native_xess_input_range_test PRIVATE rsf_vulkan_fg_fixtures_rust ReScaleFrame::NativeVulkan rsf_build_options)
     add_test(NAME native_xess_input_range_contract COMMAND rsf_native_xess_input_range_test)
 endif()
-add_executable(rsf_native_fg_vulkan_dispatch_test vulkan-fg/dispatch_fixture.c
-    ../runtime/orchestrator/src/native_fg_vulkan_dispatch.c)
-set_target_properties(rsf_native_fg_vulkan_dispatch_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON LINKER_LANGUAGE CXX)
-target_compile_definitions(rsf_native_fg_vulkan_dispatch_test PRIVATE RSF_RUNTIME_BUILD)
-target_include_directories(rsf_native_fg_vulkan_dispatch_test PRIVATE ../runtime/orchestrator/include)
-target_link_libraries(rsf_native_fg_vulkan_dispatch_test PRIVATE rsf_vulkan_fg_fixtures_rust rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_build_options)
-add_test(NAME native_fg_vulkan_dispatch_contract COMMAND rsf_native_fg_vulkan_dispatch_test)
-add_executable(rsf_native_fg_vulkan_dispatch_xess_test vulkan-fg/dispatch_fixture.c
-    ../runtime/orchestrator/src/native_fg_vulkan_dispatch.c)
-set_target_properties(rsf_native_fg_vulkan_dispatch_xess_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON LINKER_LANGUAGE CXX)
-target_compile_definitions(rsf_native_fg_vulkan_dispatch_xess_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_XESS_FG_VK=1)
-target_include_directories(rsf_native_fg_vulkan_dispatch_xess_test PRIVATE ../runtime/orchestrator/include)
-target_link_libraries(rsf_native_fg_vulkan_dispatch_xess_test PRIVATE rsf_vulkan_fg_fixtures_rust rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_build_options)
-add_test(NAME native_fg_vulkan_dispatch_xess_contract COMMAND rsf_native_fg_vulkan_dispatch_xess_test)
-add_executable(rsf_native_fg_vulkan_dispatch_fsr4_test vulkan-fg/dispatch_fixture.c
-    ../runtime/orchestrator/src/native_fg_vulkan_dispatch.c)
-set_target_properties(rsf_native_fg_vulkan_dispatch_fsr4_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON LINKER_LANGUAGE CXX)
-target_compile_definitions(rsf_native_fg_vulkan_dispatch_fsr4_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_FSR4_FG_VK=1)
-target_include_directories(rsf_native_fg_vulkan_dispatch_fsr4_test PRIVATE ../runtime/orchestrator/include)
-target_link_libraries(rsf_native_fg_vulkan_dispatch_fsr4_test PRIVATE rsf_vulkan_fg_fixtures_rust rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_build_options)
-# The Runtime archive defines the production rsf_fsr4gvk_* entries (vulkan_fsr4_fg.rs), so the
-# fixture's fakes carry a fixture prefix and this build of the dispatch calls them by that name.
-foreach(rsf_fsr4_entry create enable_options max_generated status images acquire prepare hudless submitted present_source present destroy drain)
-    target_compile_definitions(rsf_native_fg_vulkan_dispatch_fsr4_test PRIVATE
-        rsf_fsr4gvk_${rsf_fsr4_entry}=rsf_fixture_fsr4gvk_${rsf_fsr4_entry})
-endforeach()
-add_test(NAME native_fg_vulkan_dispatch_fsr4_contract COMMAND rsf_native_fg_vulkan_dispatch_fsr4_test)
+# The provider-dispatch contract is the vulkan_fg::dispatch_tests unit test.
 if(RSF_HAVE_VULKAN AND RSF_HAVE_FFX_DX12_FG)
     add_executable(rsf_native_fsr4_fg_bridge_test presentation/fsr4_fg_bridge_main.c)
     set_target_properties(rsf_native_fsr4_fg_bridge_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON
@@ -654,13 +627,12 @@ if(RSF_HAVE_VULKAN AND RSF_HAVE_STREAMLINE)
     target_include_directories(rsf_streamline_selected_device_test SYSTEM PRIVATE "${rsf_streamline_source_root}" "${RSF_STREAMLINE_INCLUDE}")
     target_link_libraries(rsf_streamline_selected_device_test PRIVATE rsf_vulkan_fg_fixtures_rust rsf_build_options)
     add_test(NAME streamline_selected_device_contract COMMAND rsf_streamline_selected_device_test)
-    # The production DLSS-G table and its Rust leaves, with the Rust fixture's
-    # Streamline session and SDK entries.
-    add_executable(rsf_native_fg_dlss_vulkan_test fixture_main.c
-        ../runtime/orchestrator/src/native_fg_dlss_vulkan.c)
+    # The production DLSS-G table (vulkan_dlss_fg/leaves.rs, selected with the streamline-vk feature that
+    # RSF_STREAMLINE_VK_DIGEST sets) and its Rust leaves, with the Rust fixture's Streamline session and SDK
+    # entries.
+    add_executable(rsf_native_fg_dlss_vulkan_test fixture_main.c)
     set_target_properties(rsf_native_fg_dlss_vulkan_test PROPERTIES LINKER_LANGUAGE CXX)
-    target_compile_definitions(rsf_native_fg_dlss_vulkan_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_STREAMLINE_VK=1
-        RSF_FIXTURE_ENTRY=rsf_fixture_dlss_run)
+    target_compile_definitions(rsf_native_fg_dlss_vulkan_test PRIVATE RSF_RUNTIME_BUILD RSF_FIXTURE_ENTRY=rsf_fixture_dlss_run)
     target_include_directories(rsf_native_fg_dlss_vulkan_test PRIVATE ../runtime/orchestrator/include)
     target_include_directories(rsf_native_fg_dlss_vulkan_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
     target_link_libraries(rsf_native_fg_dlss_vulkan_test PRIVATE rsf_vulkan_fg_fixtures_rust rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::FrameDump rsf_build_options)

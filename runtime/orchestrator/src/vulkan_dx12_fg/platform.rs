@@ -664,7 +664,7 @@ unsafe extern "C" fn read_present(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dx12gvk_present_marshaled(
+pub(crate) unsafe extern "C" fn rsf_dx12gvk_present_marshaled(
     call: PresentCallback,
     owner: Handle,
     native: *const c_void,

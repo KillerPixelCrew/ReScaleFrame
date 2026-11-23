@@ -28,13 +28,291 @@ const FFX: u32 = 3;
 const FSR4: u32 = 4;
 const XESS: u32 = 5;
 
+type Handle = *mut c_void;
+
+/// One frame-generation provider behind the public `rsf_fgvk_*` entries. Factory entries return
+/// backend results, operational entries the provider's result for [`Owner::result`], and the WSI
+/// entries the provider's VkResult unchanged.
+struct Provider {
+    create: unsafe fn(
+        *const rsf_fgvk_setup,
+        *const rsf_fgvk_host_options,
+        u32,
+        *mut Handle,
+        *mut u64,
+    ) -> i32,
+    enable: unsafe fn(Handle, u32, u32) -> i32,
+    images: unsafe fn(Handle, *mut u32, *mut u64) -> i32,
+    acquire: unsafe fn(Handle, u64, u64, u64, *mut u32) -> i32,
+    /// None selects the shader-read layout.
+    image_layout: Option<unsafe fn(Handle, *mut u32) -> i32>,
+    /// None selects a one-frame limit.
+    max_generated: Option<unsafe fn(Handle, *mut u32) -> i32>,
+    prepare: unsafe fn(Handle, Handle, *const rsf_fgvk_frame) -> i32,
+    hudless: unsafe fn(Handle, Handle, *const rsf_fgvk_frame) -> i32,
+    submitted: unsafe fn(Handle, *const Handle, u32),
+    present: unsafe fn(Handle, *const c_void) -> i32,
+    present_source: unsafe fn(Handle, *const c_void, *const rsf_frame_record) -> i32,
+    status: unsafe fn(Handle, *mut rsf_fgvk_status) -> i32,
+    drain: unsafe fn(Handle) -> i32,
+    destroy: unsafe fn(Handle) -> i32,
+    latency_options: Option<unsafe fn(Handle, u32, u32) -> i32>,
+    latency_sleep: Option<unsafe fn(Handle, u32) -> i32>,
+    latency_marker: Option<unsafe fn(Handle, u32, u32) -> i32>,
+    latency_status: Option<unsafe fn(Handle, *mut rsf_fgvk_latency_status) -> i32>,
+}
+
+/// The providers of a build; None reports NOT_COMPILED.
+struct Platform {
+    dlss: Option<&'static Provider>,
+    ffx: Option<&'static Provider>,
+    fsr4: Option<&'static Provider>,
+    xess: Option<&'static Provider>,
+}
+
+// The provider modules. The dispatch tests substitute fakes with the same entry names.
+#[cfg(all(not(test), feature = "xess-fg-vk"))]
+use crate::vulkan_xess_fg as xess;
+#[cfg(not(test))]
+use crate::{vulkan_dlss_fg as dlss, vulkan_ffx_fg as ffx, vulkan_fsr4_fg as fsr4};
+#[cfg(test)]
+use dispatch_tests::{dlss, ffx, fsr4, xess};
+
+/// Writes the provider's owner through `out` whatever the result, as each factory does.
+macro_rules! created {
+    ($out:expr, |$owner:ident| $call:expr) => {{
+        let mut $owner = ptr::null_mut();
+        let result = $call;
+        unsafe { $out.write($owner.cast()) };
+        result
+    }};
+}
+
+unsafe fn dlss_status(owner: Handle, status: &mut rsf_dlssgvk_status) -> i32 {
+    status.struct_size = size_of::<rsf_dlssgvk_status>() as u32;
+    status.abi_version = RSF_DLSSGVK_ABI_VERSION;
+    unsafe { dlss::rsf_dlssgvk_get_status(owner.cast(), status) }
+}
+
+static DLSS_PROVIDER: Provider = Provider {
+    create: |setup, _, _, out, chain| {
+        created!(out, |owner| unsafe {
+            dlss::rsf_dlssgvk_create(setup, &mut owner, chain)
+        })
+    },
+    enable: |owner, enabled, count| unsafe {
+        dlss::rsf_dlssgvk_enable(owner.cast(), enabled, count)
+    },
+    images: |owner, count, images| unsafe { dlss::rsf_dlssgvk_images(owner.cast(), count, images) },
+    acquire: |owner, timeout, semaphore, fence, index| unsafe {
+        dlss::rsf_dlssgvk_acquire(owner.cast(), timeout, semaphore, fence, index)
+    },
+    image_layout: Some(|owner, layout| unsafe {
+        dlss::rsf_dlssgvk_image_layout(owner.cast(), layout)
+    }),
+    max_generated: Some(|owner, count| {
+        let mut status = rsf_dlssgvk_status::default();
+        let result = unsafe { dlss_status(owner, &mut status) };
+        if result == OK {
+            unsafe { count.write(status.max_generated_frames) };
+        }
+        result
+    }),
+    prepare: |owner, commands, frame| unsafe {
+        dlss::rsf_dlssgvk_prepare(owner.cast(), commands, frame)
+    },
+    hudless: |owner, commands, frame| unsafe {
+        dlss::rsf_dlssgvk_hudless(owner.cast(), commands, frame)
+    },
+    submitted: |owner, commands, count| unsafe {
+        dlss::rsf_dlssgvk_submitted(owner.cast(), commands, count)
+    },
+    present: |owner, info| unsafe { dlss::rsf_dlssgvk_present(owner.cast(), info) },
+    present_source: |owner, info, source| unsafe {
+        dlss::rsf_dlssgvk_present_source(owner.cast(), info, source)
+    },
+    status: |owner, out| {
+        let mut status = rsf_dlssgvk_status::default();
+        let result = unsafe { dlss_status(owner, &mut status) };
+        if result == OK {
+            unsafe { out.write(status.presentation) };
+        }
+        result
+    },
+    drain: |owner| unsafe { dlss::rsf_dlssgvk_drain(owner.cast()) },
+    destroy: |owner| unsafe { dlss::rsf_dlssgvk_destroy(owner.cast()) },
+    latency_options: None,
+    latency_sleep: None,
+    latency_marker: None,
+    latency_status: None,
+};
+
+static FFX_PROVIDER: Provider = Provider {
+    create: |setup, _, _, out, chain| {
+        created!(out, |owner| unsafe {
+            ffx::rsf_ffxgvk_create(setup, &mut owner, chain)
+        })
+    },
+    // FidelityFX 3 generates one frame, so the requested count is not forwarded.
+    enable: |owner, enabled, _| unsafe { ffx::rsf_ffxgvk_enable(owner.cast(), enabled) },
+    images: |owner, count, images| unsafe { ffx::rsf_ffxgvk_images(owner.cast(), count, images) },
+    acquire: |owner, timeout, semaphore, fence, index| unsafe {
+        ffx::rsf_ffxgvk_acquire(owner.cast(), timeout, semaphore, fence, index)
+    },
+    image_layout: None,
+    max_generated: None,
+    prepare: |owner, commands, frame| unsafe {
+        ffx::rsf_ffxgvk_prepare(owner.cast(), commands, frame)
+    },
+    hudless: |owner, commands, frame| unsafe {
+        ffx::rsf_ffxgvk_hudless(owner.cast(), commands, frame)
+    },
+    submitted: |owner, commands, count| unsafe {
+        ffx::rsf_ffxgvk_submitted(owner.cast(), commands, count)
+    },
+    present: |owner, info| unsafe { ffx::rsf_ffxgvk_present(owner.cast(), info) },
+    present_source: |owner, info, source| unsafe {
+        ffx::rsf_ffxgvk_present_source(owner.cast(), info, source)
+    },
+    status: |owner, status| unsafe { ffx::rsf_ffxgvk_get_status(owner.cast(), status) },
+    drain: |owner| unsafe { ffx::rsf_ffxgvk_drain(owner.cast()) },
+    destroy: |owner| unsafe { ffx::rsf_ffxgvk_destroy(owner.cast()) },
+    latency_options: None,
+    latency_sleep: None,
+    latency_marker: None,
+    latency_status: None,
+};
+
+static FSR4_PROVIDER: Provider = Provider {
+    create: |setup, host, count, out, chain| {
+        // Admission requires the host record for FSR4.
+        let host = unsafe { &*host };
+        let options = fsr4::Options {
+            struct_size: size_of::<fsr4::Options>() as u32,
+            abi_version: 1,
+            window: host.window,
+            timeline_enabled: host.timeline_enabled,
+            generated_count: count,
+        };
+        let result = created!(out, |owner| unsafe {
+            fsr4::rsf_fsr4gvk_create(setup, (&raw const options).cast(), &mut owner, chain)
+        });
+        rsf_core_fgvk_provider_result(FSR4, result)
+    },
+    enable: |owner, enabled, count| unsafe {
+        fsr4::rsf_fsr4gvk_enable_options(owner.cast(), enabled, count)
+    },
+    images: |owner, count, images| unsafe { fsr4::rsf_fsr4gvk_images(owner.cast(), count, images) },
+    acquire: |owner, timeout, semaphore, fence, index| unsafe {
+        fsr4::rsf_fsr4gvk_acquire(owner.cast(), timeout, semaphore, fence, index)
+    },
+    image_layout: None,
+    max_generated: Some(|owner, count| {
+        unsafe { count.write(fsr4::rsf_fsr4gvk_max_generated(owner.cast())) };
+        OK
+    }),
+    prepare: |owner, commands, frame| unsafe {
+        fsr4::rsf_fsr4gvk_prepare(owner.cast(), commands, frame)
+    },
+    hudless: |owner, commands, frame| unsafe {
+        fsr4::rsf_fsr4gvk_hudless(owner.cast(), commands, frame)
+    },
+    submitted: |owner, commands, count| unsafe {
+        fsr4::rsf_fsr4gvk_submitted(owner.cast(), commands, count)
+    },
+    present: |owner, info| unsafe { fsr4::rsf_fsr4gvk_present(owner.cast(), info) },
+    present_source: |owner, info, source| unsafe {
+        fsr4::rsf_fsr4gvk_present_source(owner.cast(), info, source)
+    },
+    status: |owner, status| unsafe { fsr4::rsf_fsr4gvk_status(owner.cast(), status) },
+    drain: |owner| unsafe { fsr4::rsf_fsr4gvk_drain(owner.cast()) },
+    destroy: |owner| unsafe { fsr4::rsf_fsr4gvk_destroy(owner.cast()) },
+    latency_options: None,
+    latency_sleep: None,
+    latency_marker: None,
+    latency_status: None,
+};
+
+#[cfg(any(test, feature = "xess-fg-vk"))]
+static XESS_PROVIDER: Provider = Provider {
+    create: |setup, host, count, out, chain| {
+        // Admission requires the host record for XeSS.
+        let host = unsafe { &*host };
+        let options = rsf_xessgvk_options {
+            struct_size: size_of::<rsf_xessgvk_options>() as u32,
+            abi_version: 1,
+            window: host.window,
+            timeline_enabled: host.timeline_enabled,
+            generated_count: count,
+            intel_runtime_directory: host.intel_runtime_directory,
+        };
+        let result = created!(out, |owner| unsafe {
+            xess::rsf_xessgvk_create(setup, (&raw const options).cast(), &mut owner, chain)
+        });
+        rsf_core_fgvk_provider_result(XESS, result)
+    },
+    enable: |owner, enabled, count| unsafe {
+        xess::rsf_xessgvk_enable_options(owner.cast(), enabled, count)
+    },
+    images: |owner, count, images| unsafe { xess::rsf_xessgvk_images(owner.cast(), count, images) },
+    acquire: |owner, timeout, semaphore, fence, index| unsafe {
+        xess::rsf_xessgvk_acquire(owner.cast(), timeout, semaphore, fence, index)
+    },
+    image_layout: None,
+    max_generated: Some(|owner, count| {
+        unsafe { count.write(xess::rsf_xessgvk_max_generated(owner.cast())) };
+        OK
+    }),
+    prepare: |owner, commands, frame| unsafe {
+        xess::rsf_xessgvk_prepare(owner.cast(), commands, frame)
+    },
+    hudless: |owner, commands, frame| unsafe {
+        xess::rsf_xessgvk_hudless(owner.cast(), commands, frame)
+    },
+    submitted: |owner, commands, count| unsafe {
+        xess::rsf_xessgvk_submitted(owner.cast(), commands, count)
+    },
+    present: |owner, info| unsafe { xess::rsf_xessgvk_present(owner.cast(), info) },
+    present_source: |owner, info, source| unsafe {
+        xess::rsf_xessgvk_present_source(owner.cast(), info, source)
+    },
+    status: |owner, status| unsafe { xess::rsf_xessgvk_status(owner.cast(), status) },
+    drain: |owner| unsafe { xess::rsf_xessgvk_drain(owner.cast()) },
+    destroy: |owner| unsafe { xess::rsf_xessgvk_destroy(owner.cast()) },
+    latency_options: Some(|owner, mode, interval| unsafe {
+        xess::rsf_xessgvk_latency_options(owner.cast(), mode, interval)
+    }),
+    latency_sleep: Some(|owner, frame| unsafe { xess::rsf_xessgvk_sleep(owner.cast(), frame) }),
+    latency_marker: Some(|owner, frame, marker| unsafe {
+        xess::rsf_xessgvk_latency(owner.cast(), frame, marker)
+    }),
+    latency_status: Some(|owner, status| unsafe {
+        xess::rsf_xessgvk_latency_status(owner.cast(), status)
+    }),
+};
+
+/// The production providers. CMake's header detection selects FSR4 (`fsr4-fg-vk`, the former
+/// RSF_HAVE_FSR4_FG_VK) and XeSS (`xess-fg-vk`, RSF_HAVE_XESS_FG_VK, whose bridge is C).
+static NATIVE: Platform = Platform {
+    dlss: Some(&DLSS_PROVIDER),
+    ffx: Some(&FFX_PROVIDER),
+    fsr4: if cfg!(feature = "fsr4-fg-vk") {
+        Some(&FSR4_PROVIDER)
+    } else {
+        None
+    },
+    #[cfg(feature = "xess-fg-vk")]
+    xess: Some(&XESS_PROVIDER),
+    #[cfg(not(feature = "xess-fg-vk"))]
+    xess: None,
+};
+
 // The FSR4 and XeSS providers report VkResult values and their bridge's own codes in one channel;
 // the bridge codes sit outside the VkResult range because backend codes overlap it (-1, -2 and -7
 // are also VkResult errors). This is the one place they become backend codes, every other failure
 // a feature failure. Factory guards use this as well, while keeping C++ exceptions on their side
 // of the ABI and preserving the separate initialization failure for throws.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_fgvk_provider_result(backend: u32, result: i32) -> i32 {
+fn rsf_core_fgvk_provider_result(backend: u32, result: i32) -> i32 {
     match (backend, result) {
         (_, OK) => OK,
         (FSR4, RSF_FSR4FG_INVALID_ARGUMENT) | (XESS, RSF_XESS_BRIDGE_INVALID_ARGUMENT) => INVALID,
@@ -54,7 +332,7 @@ static CLEANUP_ONLY: AtomicPtr<rsf_fgvk> = AtomicPtr::new(ptr::null_mut());
 // CPU latency borrows, including sleep, and refuses destruction while borrowed.
 struct Owner {
     _claim: Claim,
-    provider: &'static rsf_fgvk_provider,
+    provider: &'static Provider,
     context: *mut c_void,
     backend: u32,
     generated_count: AtomicU32,
@@ -72,7 +350,7 @@ impl Owner {
         if !supported_count(self.backend, count) {
             return NOT_SUPPORTED;
         }
-        let enable = self.provider.enable.expect("provider enable callback");
+        let enable = self.provider.enable;
         let result = self.result(unsafe { enable(self.context, enabled, count) });
         if result == OK {
             self.generated_count.store(count, Ordering::Relaxed);
@@ -101,12 +379,12 @@ unsafe fn work_owner<'a>(handle: *const rsf_fgvk) -> Result<&'a Owner, i32> {
 }
 
 unsafe fn admit(
-    platform: &rsf_fgvk_platform,
+    platform: &Platform,
     setup: *const rsf_fgvk_setup,
     backend: u32,
     count: u32,
     host: *const rsf_fgvk_host_options,
-) -> Result<&rsf_fgvk_provider, i32> {
+) -> Result<&'static Provider, i32> {
     if !unsafe { has_capacity(setup) } {
         return Err(INVALID);
     }
@@ -141,7 +419,7 @@ unsafe fn admit(
         XESS => platform.xess,
         _ => unreachable!("validated provider ID"),
     };
-    let provider = unsafe { registered.as_ref() }.ok_or(NOT_COMPILED)?;
+    let provider = registered.ok_or(NOT_COMPILED)?;
     if matches!(backend, FSR4 | XESS) {
         let host = unsafe { host.as_ref() }.ok_or(INVALID)?;
         if host.window.is_null() || host.timeline_enabled != 1 {
@@ -162,8 +440,39 @@ unsafe fn admit(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fgvk_create(
-    platform: *const rsf_fgvk_platform,
+unsafe extern "C" fn rsf_fgvk_create(
+    setup: *const rsf_fgvk_setup,
+    out: *mut *mut rsf_fgvk,
+    chain: *mut u64,
+) -> i32 {
+    unsafe { rsf_fgvk_create_for_backend(setup, FFX, 1, out, chain) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fgvk_create_for_backend(
+    setup: *const rsf_fgvk_setup,
+    backend: u32,
+    count: u32,
+    out: *mut *mut rsf_fgvk,
+    chain: *mut u64,
+) -> i32 {
+    unsafe { rsf_fgvk_create_with_host(setup, backend, count, ptr::null(), out, chain) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fgvk_create_with_host(
+    setup: *const rsf_fgvk_setup,
+    backend: u32,
+    count: u32,
+    host: *const rsf_fgvk_host_options,
+    out: *mut *mut rsf_fgvk,
+    chain: *mut u64,
+) -> i32 {
+    unsafe { create(&NATIVE, setup, backend, count, host, out, chain) }
+}
+
+unsafe fn create(
+    platform: &Platform,
     setup: *const rsf_fgvk_setup,
     backend: u32,
     count: u32,
@@ -181,8 +490,6 @@ unsafe extern "C" fn rsf_core_fgvk_create(
         return INVALID;
     }
 
-    // The native shim supplies immutable tables that live for the module lifetime.
-    let platform = unsafe { &*platform };
     let provider = match unsafe { admit(platform, setup, backend, count, host) } {
         Ok(provider) => provider,
         Err(error) => return error,
@@ -206,7 +513,7 @@ unsafe extern "C" fn rsf_core_fgvk_create(
     }
 
     let mut owned_chain = 0;
-    let create = provider.create.expect("provider create callback");
+    let create = provider.create;
     let mut result = unsafe {
         create(
             setup,
@@ -234,7 +541,7 @@ unsafe extern "C" fn rsf_core_fgvk_create(
             return result;
         }
 
-        let destroy = provider.destroy.expect("provider destroy callback");
+        let destroy = provider.destroy;
         let cleanup = rsf_core_fgvk_provider_result(backend, unsafe { destroy(context) });
         if cleanup == OK {
             unsafe { drop(Box::from_raw(owner)) };
@@ -263,7 +570,7 @@ unsafe extern "C" fn rsf_fgvk_images(
     if count.is_null() {
         return WSI_INITIALIZATION_FAILED;
     }
-    let call = owner.provider.images.expect("provider images callback");
+    let call = owner.provider.images;
     unsafe { call(owner.context, count, images) }
 }
 
@@ -281,7 +588,7 @@ unsafe extern "C" fn rsf_fgvk_acquire(
     if index.is_null() {
         return WSI_INITIALIZATION_FAILED;
     }
-    let call = owner.provider.acquire.expect("provider acquire callback");
+    let call = owner.provider.acquire;
     unsafe { call(owner.context, timeout, semaphore, fence, index) }
 }
 
@@ -306,7 +613,10 @@ unsafe extern "C" fn rsf_fgvk_enable_options(
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_fgvk_backend(handle: *const rsf_fgvk, backend: *mut u32) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_fgvk_backend(
+    handle: *const rsf_fgvk,
+    backend: *mut u32,
+) -> i32 {
     let Some(owner) = (unsafe { owner_ref(handle) }) else {
         return INVALID;
     };
@@ -442,7 +752,7 @@ unsafe extern "C" fn rsf_fgvk_prepare(
         Ok(owner) => owner,
         Err(result) => return result,
     };
-    let call = owner.provider.prepare.expect("provider prepare callback");
+    let call = owner.provider.prepare;
     owner.result(unsafe { call(owner.context, commands, frame) })
 }
 
@@ -456,7 +766,7 @@ unsafe extern "C" fn rsf_fgvk_hudless(
         Ok(owner) => owner,
         Err(result) => return result,
     };
-    let call = owner.provider.hudless.expect("provider HUD-less callback");
+    let call = owner.provider.hudless;
     owner.result(unsafe { call(owner.context, commands, frame) })
 }
 
@@ -467,10 +777,7 @@ unsafe extern "C" fn rsf_fgvk_submitted(
     count: u32,
 ) {
     if let Ok(owner) = unsafe { work_owner(handle) } {
-        let call = owner
-            .provider
-            .submitted
-            .expect("provider submitted callback");
+        let call = owner.provider.submitted;
         unsafe { call(owner.context, commands, count) };
     }
 }
@@ -483,7 +790,7 @@ unsafe extern "C" fn rsf_fgvk_present(handle: *mut rsf_fgvk, info: *const c_void
     if info.is_null() {
         return WSI_INITIALIZATION_FAILED;
     }
-    let call = owner.provider.present.expect("provider present callback");
+    let call = owner.provider.present;
     unsafe { call(owner.context, info) }
 }
 
@@ -499,10 +806,7 @@ unsafe extern "C" fn rsf_fgvk_present_source(
     if info.is_null() || !unsafe { PresentSource::valid_prefix(source) } {
         return WSI_INITIALIZATION_FAILED;
     }
-    let call = owner
-        .provider
-        .present_source
-        .expect("provider source present callback");
+    let call = owner.provider.present_source;
     unsafe { call(owner.context, info, source) }
 }
 
@@ -521,7 +825,7 @@ unsafe extern "C" fn rsf_fgvk_get_status(
     if unsafe { (*status).abi_version } != RSF_FGVK_ABI_VERSION {
         return ABI_MISMATCH;
     }
-    let call = owner.provider.status.expect("provider status callback");
+    let call = owner.provider.status;
     owner.result(unsafe { call(owner.context, status) })
 }
 
@@ -534,7 +838,7 @@ unsafe extern "C" fn rsf_fgvk_drain(handle: *mut rsf_fgvk) -> i32 {
         Ok(operation) => operation,
         Err(error) => return error,
     };
-    let drain = owner.provider.drain.expect("provider drain callback");
+    let drain = owner.provider.drain;
     owner.result(unsafe { drain(owner.context) })
 }
 
@@ -547,7 +851,7 @@ unsafe extern "C" fn rsf_fgvk_destroy(handle: *mut rsf_fgvk) -> i32 {
         Ok(operation) => operation,
         Err(error) => return error,
     };
-    let destroy = owner.provider.destroy.expect("provider destroy callback");
+    let destroy = owner.provider.destroy;
     let result = owner.result(unsafe { destroy(owner.context) });
     if result == OK {
         operation.destroyed();
@@ -558,3 +862,7 @@ unsafe extern "C" fn rsf_fgvk_destroy(handle: *mut rsf_fgvk) -> i32 {
     }
     result
 }
+
+#[cfg(test)]
+#[path = "vulkan_fg/dispatch_tests.rs"]
+mod dispatch_tests;

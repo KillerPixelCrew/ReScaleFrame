@@ -2,8 +2,8 @@
 // FidelityFX 3 Vulkan SDK leaf for the owner in vulkan_ffx_fg.rs. A leaf binds
 // the SDK module exports, holds both SDK contexts and the replacement chain,
 // registers the corrected SDK's WSI hooks and owns the frame capture. The host
-// table from native_fg_vulkan.c supplies module loading, guarded host Vulkan
-// calls and the latency scopes.
+// table (NATIVE_HOST below, or a fixture's) supplies module loading, guarded host
+// Vulkan calls and the latency scopes.
 //
 // Until the owner publishes the leaf to the WSI route only the opening thread
 // reaches it. Afterwards the hooks, the backend resolver and the generation
@@ -13,8 +13,7 @@
 // and every later step takes a shared reference.
 use super::startup::{self, CoreEntries, Platform, WsiEntries};
 use super::{
-    BGRA8, FEATURE_FAILED, Frame, Handle, INIT_FAILED, Image, OK, Ops, RGBA8, Record,
-    Setup,
+    BGRA8, FEATURE_FAILED, Frame, Handle, INIT_FAILED, Image, OK, Ops, RGBA8, Record, Setup,
 };
 use crate::frame_capture_vk::{
     Owner as Capture, rsf_core_capture_vk_create, rsf_core_capture_vk_destroy,
@@ -83,7 +82,7 @@ const COMMAND_RETIREMENT: u32 = 1;
 
 const _: () = assert!(FFX_API_RETURN_OK == 0);
 
-/// Host services from native_fg_vulkan.c (rsf_ffxgvk_host). The table outlives
+/// Host services (rsf_ffxgvk_host; `NATIVE_HOST` in production). The table outlives
 /// every owner created with it.
 #[repr(C)]
 pub(super) struct Host {
@@ -98,6 +97,69 @@ pub(super) struct Host {
 }
 
 const _: () = assert!(size_of::<Host>() == 8 * size_of::<Handle>());
+
+/// Resolves `name` through a host Vulkan resolver, which may throw: INIT_FAILED when a C++
+/// exception was contained. tests/vulkan-fg builds its host table with this entry.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_ffxgvk_guard_resolve(
+    resolve: rsf_vk_get_proc,
+    object: Handle,
+    name: *const c_char,
+    out: *mut rsf_vk_function,
+) -> i32 {
+    let Some(resolve) = resolve else {
+        return INIT_FAILED;
+    };
+    // The host callback, called with the C-unwind ABI so the guard can contain an exception.
+    type Resolve = unsafe extern "C" fn(Handle, *const c_char) -> rsf_vk_function;
+    type ResolveUnwind = unsafe extern "C-unwind" fn(Handle, *const c_char) -> rsf_vk_function;
+    let resolve = unsafe { std::mem::transmute::<Resolve, ResolveUnwind>(resolve) };
+    rsf_streamline_vk::sdk_api::guarded_or(INIT_FAILED, || {
+        unsafe { out.write(resolve(object, name)) };
+        OK
+    })
+}
+
+/// Calls the vkGetPhysicalDeviceMemoryProperties entry admission resolved, containing a C++
+/// exception as INIT_FAILED. tests/vulkan-fg builds its host table with this entry.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_ffxgvk_guard_memory(
+    query: rsf_vk_function,
+    physical_device: Handle,
+    properties: Handle,
+) -> i32 {
+    let Some(query) = query else {
+        return INIT_FAILED;
+    };
+    type Query = unsafe extern "C-unwind" fn(Handle, Handle);
+    let query = unsafe { std::mem::transmute::<unsafe extern "C" fn(), Query>(query) };
+    rsf_streamline_vk::sdk_api::guarded_or(INIT_FAILED, || {
+        unsafe { query(physical_device, properties) };
+        OK
+    })
+}
+
+unsafe extern "C" fn without_dlssg(call: crate::vulkan_fg_wsi::Callback, user: Handle) -> i32 {
+    unsafe { crate::vulkan_latency::rsf_slvk_without_dlssg(Some(call), user) }
+}
+
+unsafe extern "C" fn wsi_call(call: crate::vulkan_fg_wsi::Callback, user: Handle) -> i32 {
+    unsafe { crate::vulkan_latency::rsf_latencyvk_wsi_call(Some(call), user) }
+}
+
+/// The production host table, selected when CMake found the FidelityFX Vulkan headers.
+pub(super) static NATIVE_HOST: Host = Host {
+    loader: Loader {
+        load: crate::sdk_module::rsf_core_vk_sdk_load,
+        unload: crate::sdk_module::rsf_core_vk_sdk_unload,
+    },
+    symbol: crate::sdk_module::rsf_vkffx_symbol,
+    resolve: rsf_ffxgvk_guard_resolve,
+    memory_properties: rsf_ffxgvk_guard_memory,
+    without_dlssg,
+    wsi_call,
+    queue_present: crate::vulkan_latency::rsf_latencyvk_queue_present,
+};
 
 /// The corrected SDK's rsf_ffx_wsi_dispatch (runtime/vulkan/fsr3/wsi-dispatch.h).
 #[repr(C)]

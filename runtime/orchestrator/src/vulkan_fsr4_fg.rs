@@ -21,13 +21,14 @@ use std::ffi::{CStr, c_void};
 use std::ptr;
 use std::sync::LazyLock;
 
+/// rsf_fsr4gvk_options (native_fg_fsr4_vulkan.h).
 #[repr(C)]
-struct Options {
-    struct_size: u32,
-    abi_version: u32,
-    window: Handle,
-    timeline_enabled: u32,
-    generated_count: u32,
+pub(crate) struct Options {
+    pub(crate) struct_size: u32,
+    pub(crate) abi_version: u32,
+    pub(crate) window: Handle,
+    pub(crate) timeline_enabled: u32,
+    pub(crate) generated_count: u32,
 }
 
 #[repr(C)]
@@ -126,7 +127,7 @@ unsafe extern "C" fn rsf_fsr4gvk_probe(setup: *const Graphics, info: *mut Bridge
 
 /// Rust admits the setup before it asks the shared graphics table to describe create_info.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4gvk_create(
+pub(crate) unsafe extern "C" fn rsf_fsr4gvk_create(
     setup: *const Setup,
     options: *const Options,
     output: *mut *mut Owner,
@@ -157,7 +158,7 @@ unsafe extern "C" fn rsf_fsr4gvk_interop_create(
 
 type Owner = shared::Owner<Fsr4>;
 
-struct Fsr4 {
+pub(crate) struct Fsr4 {
     ops: &'static Ops,
     directory: *const u16,
     bridge: Handle,
@@ -363,7 +364,7 @@ impl Vendor for Fsr4 {
     }
 }
 
-struct Fsr4Submission<'a> {
+pub(crate) struct Fsr4Submission<'a> {
     vendor: &'a Fsr4,
     enabled: bool,
 }
@@ -414,7 +415,7 @@ impl Submission for Fsr4Submission<'_> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4gvk_images(
+pub(crate) unsafe extern "C" fn rsf_fsr4gvk_images(
     owner: *const Owner,
     count: *mut u32,
     out: *mut u64,
@@ -422,7 +423,7 @@ unsafe extern "C" fn rsf_fsr4gvk_images(
     unsafe { shared::images(owner, count, out) }
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4gvk_acquire(
+pub(crate) unsafe extern "C" fn rsf_fsr4gvk_acquire(
     owner: *mut Owner,
     timeout: u64,
     semaphore: u64,
@@ -432,7 +433,7 @@ unsafe extern "C" fn rsf_fsr4gvk_acquire(
     unsafe { shared::acquire(owner, timeout, semaphore, fence, index) }
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4gvk_prepare(
+pub(crate) unsafe extern "C" fn rsf_fsr4gvk_prepare(
     owner: *mut Owner,
     commands: Handle,
     frame: *const Frame,
@@ -440,7 +441,7 @@ unsafe extern "C" fn rsf_fsr4gvk_prepare(
     unsafe { shared::prepare(owner, commands, frame) }
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4gvk_hudless(
+pub(crate) unsafe extern "C" fn rsf_fsr4gvk_hudless(
     owner: *mut Owner,
     commands: Handle,
     frame: *const Frame,
@@ -448,7 +449,11 @@ unsafe extern "C" fn rsf_fsr4gvk_hudless(
     unsafe { shared::hudless(owner, commands, frame) }
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4gvk_submitted(owner: *mut Owner, commands: *const Handle, count: u32) {
+pub(crate) unsafe extern "C" fn rsf_fsr4gvk_submitted(
+    owner: *mut Owner,
+    commands: *const Handle,
+    count: u32,
+) {
     unsafe { shared::submitted(owner, commands, count) };
 }
 #[unsafe(no_mangle)]
@@ -457,7 +462,7 @@ unsafe extern "C" fn rsf_fsr4gvk_enable(owner: *mut Owner, enabled: u32) -> i32 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4gvk_enable_options(
+pub(crate) unsafe extern "C" fn rsf_fsr4gvk_enable_options(
     owner: *mut Owner,
     enabled: u32,
     count: u32,
@@ -465,7 +470,7 @@ unsafe extern "C" fn rsf_fsr4gvk_enable_options(
     unsafe { shared::enable_options(owner, enabled, count) }
 }
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fsr4gvk_max_generated(owner: *const Owner) -> u32 {
+pub(crate) extern "C" fn rsf_fsr4gvk_max_generated(owner: *const Owner) -> u32 {
     u32::from(!owner.is_null())
 }
 #[unsafe(no_mangle)]
@@ -500,12 +505,12 @@ unsafe extern "C" fn present_marshaled(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4gvk_present(owner: *mut Owner, info: *const c_void) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_fsr4gvk_present(owner: *mut Owner, info: *const c_void) -> i32 {
     unsafe { rsf_dx12gvk_present_marshaled(present_marshaled, owner.cast(), info, ptr::null(), 0) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4gvk_present_source(
+pub(crate) unsafe extern "C" fn rsf_fsr4gvk_present_source(
     owner: *mut Owner,
     info: *const c_void,
     source: *const Record,
@@ -513,14 +518,17 @@ unsafe extern "C" fn rsf_fsr4gvk_present_source(
     unsafe { rsf_dx12gvk_present_marshaled(present_marshaled, owner.cast(), info, source, 1) }
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4gvk_status(owner: *const Owner, status: *mut Status) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_fsr4gvk_status(
+    owner: *const Owner,
+    status: *mut Status,
+) -> i32 {
     unsafe { shared::status(owner, status) }
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4gvk_drain(owner: *mut Owner) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_fsr4gvk_drain(owner: *mut Owner) -> i32 {
     unsafe { shared::drain(owner) }
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4gvk_destroy(owner: *mut Owner) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_fsr4gvk_destroy(owner: *mut Owner) -> i32 {
     unsafe { shared::destroy(owner) }
 }

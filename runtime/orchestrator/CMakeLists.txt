@@ -60,6 +60,13 @@ endif()
 if(RSF_HAVE_VULKAN AND RSF_HAVE_FFX_VK)
     list(APPEND rsf_orchestrator_features --features ffx-vk)
 endif()
+# The Vulkan FSR 4 and XeSS FG providers of vulkan_fg.rs, as RSF_HAVE_FSR4_FG_VK and RSF_HAVE_XESS_FG_VK.
+if(RSF_HAVE_VULKAN AND RSF_HAVE_FFX_DX12_FG)
+    list(APPEND rsf_orchestrator_features --features fsr4-fg-vk)
+endif()
+if(RSF_HAVE_VULKAN AND RSF_HAVE_XESS_FG)
+    list(APPEND rsf_orchestrator_features --features xess-fg-vk)
+endif()
 # The Vulkan FSR 4 SR provider behind rsf_srvk_fsr4_* (vulkan_sr_split.rs), as RSF_VULKAN_FSR4_ENABLED.
 if(RSF_HAVE_VULKAN AND RSF_HAVE_FFX_DX12_SR)
     list(APPEND rsf_orchestrator_features --features fsr4-vk)
@@ -101,7 +108,7 @@ target_link_libraries(rsf_orchestrator_core PRIVATE d3dcompiler bcrypt)
 target_link_libraries(rsf_orchestrator_core PUBLIC ReScaleFrame::FrameDump)
 add_library(ReScaleFrame::OrchestratorCore ALIAS rsf_orchestrator_core)
 
-add_library(rsf_native_vulkan STATIC src/native_sr_vulkan.c src/native_xess_vulkan.c src/native_fg_vulkan.c src/native_fg_vulkan_dispatch.c src/native_fg_dlss_vulkan.c
+add_library(rsf_native_vulkan STATIC src/native_sr_vulkan.c src/native_xess_vulkan.c
     src/native_vulkan_exports.c)
 if(RSF_HAVE_VULKAN)
     target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")

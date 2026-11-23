@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 /* The FidelityFX scenarios drive the production Rust SDK leaf with a fake SDK
-   module and fake Vulkan entries (src/ffx_sdk.rs, src/ffx_gpu.rs). This
-   launcher links the production native_fg_vulkan.c for its provider entries
-   and exception guards, and keeps capture and timing output disabled. */
+   module and fake Vulkan entries (src/ffx_sdk.rs, src/ffx_gpu.rs). The provider
+   entries and exception guards are the Runtime archive's (vulkan_ffx_fg.rs); this
+   launcher keeps capture and timing output disabled. */
 #include "ffx_abi.h"
 #include <stdlib.h>
 #include <windows.h>

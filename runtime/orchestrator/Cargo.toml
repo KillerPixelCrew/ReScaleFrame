@@ -41,6 +41,11 @@ antilag-vk = []
 # The Vulkan SR platform table (vulkan_sr.rs), built with the FidelityFX Vulkan headers; without it
 # rsf_srvk_* report NOT_COMPILED.
 ffx-vk = []
+# The Vulkan FSR 4 and XeSS frame-generation providers of vulkan_fg.rs, built with the FidelityFX
+# DX12 FG and XeSS-FG SDKs (XeSS also links the C bridge); without them those backends report
+# NOT_COMPILED.
+fsr4-fg-vk = []
+xess-fg-vk = []
 # The Vulkan FSR 4 SR provider (vulkan_fsr4_sr.rs); without it rsf_srvk_fsr4_* report NOT_COMPILED.
 fsr4-vk = []
 

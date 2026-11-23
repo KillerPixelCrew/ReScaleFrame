@@ -352,7 +352,7 @@ fn create(test: &mut Harness) -> *mut Owner {
         OK
     );
     assert_eq!(chain, 3);
-    assert_eq!(unsafe { rsf_core_dlgvk_enable(owner, 1, 3) }, OK);
+    assert_eq!(unsafe { rsf_dlssgvk_enable(owner, 1, 3) }, OK);
     owner
 }
 
@@ -387,21 +387,18 @@ fn submission_proof_and_refused_teardown_keep_the_owner_live() {
     let present_info = vk::PresentInfoKHR::default().swapchains(&chains);
     let info = ptr::from_ref(&present_info).cast();
     recorded(unsafe { &mut *owner }, 1, commands);
-    unsafe { rsf_core_dlgvk_submitted(owner, &foreign, 1) };
-    assert_eq!(unsafe { rsf_core_dlgvk_destroy(owner) }, NOT_READY);
+    unsafe { rsf_dlssgvk_submitted(owner, &foreign, 1) };
+    assert_eq!(unsafe { rsf_dlssgvk_destroy(owner) }, NOT_READY);
     assert!(test.events.is_empty());
 
     recorded(unsafe { &mut *owner }, 2, commands);
-    unsafe { rsf_core_dlgvk_submitted(owner, &commands, 1) };
+    unsafe { rsf_dlssgvk_submitted(owner, &commands, 1) };
     assert_eq!(test.captures, [(2, 0), (3, 0)]);
     assert_eq!(test.events, ["fence"]);
-    assert_eq!(
-        unsafe { rsf_core_dlgvk_present(owner, info, ptr::null(), 0) },
-        OK
-    );
+    assert_eq!(unsafe { rsf_dlssgvk_present(owner, info) }, OK);
 
     test.detach_result = NOT_READY;
-    assert_eq!(unsafe { rsf_core_dlgvk_destroy(owner) }, NOT_READY);
+    assert_eq!(unsafe { rsf_dlssgvk_destroy(owner) }, NOT_READY);
     assert_eq!(test.captures, [(2, 0), (3, 0), (4, 1), (5, 1)]);
     assert!(
         test.events
@@ -411,13 +408,13 @@ fn submission_proof_and_refused_teardown_keep_the_owner_live() {
 
     test.detach_result = OK;
     test.release_result = FEATURE_FAILED;
-    assert_eq!(unsafe { rsf_core_dlgvk_destroy(owner) }, FEATURE_FAILED);
+    assert_eq!(unsafe { rsf_dlssgvk_destroy(owner) }, FEATURE_FAILED);
     assert!(test.events.ends_with(&["detach", "release"]));
     assert!(!test.events.contains(&"destroy fence"));
     assert!(!test.events.contains(&"close"));
 
     test.release_result = OK;
-    assert_eq!(unsafe { rsf_core_dlgvk_destroy(owner) }, OK);
+    assert_eq!(unsafe { rsf_dlssgvk_destroy(owner) }, OK);
     assert!(test.events.ends_with(&["destroy chain", "close"]));
 
     let mut test = Harness {
@@ -426,13 +423,13 @@ fn submission_proof_and_refused_teardown_keep_the_owner_live() {
     };
     let owner = create(&mut test);
     recorded(unsafe { &mut *owner }, 1, commands);
-    unsafe { rsf_core_dlgvk_submitted(owner, &commands, 1) };
+    unsafe { rsf_dlssgvk_submitted(owner, &commands, 1) };
     assert_eq!(
-        unsafe { rsf_core_dlgvk_present(owner, info, ptr::null(), 0) },
+        unsafe { rsf_dlssgvk_present(owner, info) },
         test.present_result
     );
     assert_eq!(unsafe { (*owner).status.presentation.enabled }, 0);
-    assert_eq!(unsafe { rsf_core_dlgvk_destroy(owner) }, OK);
+    assert_eq!(unsafe { rsf_dlssgvk_destroy(owner) }, OK);
     // A post-error sample can still contain the previous Present's semaphore.
     assert!(!test.events.contains(&"wait SDK"));
     assert!(
@@ -448,19 +445,13 @@ fn submission_proof_and_refused_teardown_keep_the_owner_live() {
         ..Default::default()
     };
     let owner = create(&mut test);
-    assert_eq!(
-        unsafe { rsf_core_dlgvk_present(owner, info, ptr::null(), 0) },
-        WSI_ERROR
-    );
+    assert_eq!(unsafe { rsf_dlssgvk_present(owner, info) }, WSI_ERROR);
     assert_eq!(unsafe { (*owner).status.asynchronous_present_result }, -4);
 
     test.configure_result = OK;
     test.configure_api_error = 0;
-    assert_eq!(
-        unsafe { rsf_core_dlgvk_present(owner, info, ptr::null(), 0) },
-        OK
-    );
+    assert_eq!(unsafe { rsf_dlssgvk_present(owner, info) }, OK);
     assert_eq!(unsafe { (*owner).status.asynchronous_present_result }, 0);
     assert_eq!(unsafe { (*owner).status.presentation.result }, OK);
-    assert_eq!(unsafe { rsf_core_dlgvk_destroy(owner) }, OK);
+    assert_eq!(unsafe { rsf_dlssgvk_destroy(owner) }, OK);
 }
