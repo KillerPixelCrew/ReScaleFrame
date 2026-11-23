@@ -77,13 +77,13 @@ if args.vulkan_sdk:
 else:
     print("skipped tests/vulkan-fg/src/wsi_abi.rs: pass --vulkan-sdk or set VULKAN_SDK")
 
-# hde64.h comes from the MinHook checkout CMake fetches (CMakeLists.txt pins v1.3.4).
+# hde64.h comes from the MinHook checkout CMake fetches (third_party/minhook/minhook.lock.json pins v1.3.4).
 hde = args.minhook / "src/hde/hde64.h"
 if hde.exists():
-    emit(root / "runtime/orchestrator/src/d3d11_observer_hooks/hde_abi.rs", bindgen(
+    emit(root / "third_party/minhook/src/hde.rs", bindgen(
         hde, "--allowlist-type", "hde64s",
         "--allowlist-var", "^F_(MODRM|IMM(8|16|32|64)|DISP32|RELATIVE|ERROR|PREFIX_67)$",
         "--allowlist-function", "hde64_disasm", "--with-derive-default"))
 else:
-    print(f"skipped runtime/orchestrator/src/d3d11_observer_hooks/hde_abi.rs: no {hde}")
+    print(f"skipped third_party/minhook/src/hde.rs: no {hde}")
 finish()
