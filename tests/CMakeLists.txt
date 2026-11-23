@@ -505,11 +505,9 @@ if(RSF_HAVE_VULKAN)
     if(RSF_HAVE_FFX_VK)
         # The scenarios replace the SDK module through their own host table (rsf_core_ffxgvk_create_sdk);
         # the provider entries are the Runtime archive's (vulkan_ffx_fg.rs).
-        add_executable(rsf_native_ffx_vulkan_fixture vulkan-fg/ffx_fixture.c)
-        set_target_properties(rsf_native_ffx_vulkan_fixture PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON
-            LINKER_LANGUAGE CXX)
-        target_include_directories(rsf_native_ffx_vulkan_fixture PRIVATE ../runtime/orchestrator/include)
-        target_compile_definitions(rsf_native_ffx_vulkan_fixture PRIVATE RSF_RUNTIME_BUILD)
+        add_executable(rsf_native_ffx_vulkan_fixture fixture_main_args.c)
+        set_target_properties(rsf_native_ffx_vulkan_fixture PROPERTIES LINKER_LANGUAGE CXX)
+        target_compile_definitions(rsf_native_ffx_vulkan_fixture PRIVATE RSF_FIXTURE_ENTRY=rsf_fixture_ffx_run)
         target_link_libraries(rsf_native_ffx_vulkan_fixture PRIVATE rsf_vulkan_fg_fixtures_rust rsf_orchestrator_rust
             ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::FrameDump rsf_build_options)
         add_test(NAME native_ffx_vulkan_reset_contract COMMAND rsf_native_ffx_vulkan_fixture 0)

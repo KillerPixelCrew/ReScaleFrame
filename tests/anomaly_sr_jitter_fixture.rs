@@ -11,7 +11,7 @@ use crate::sr_stage::math::rsf_anomaly_sr_sequence_next;
 use crate::sr_swap::{engine_mul, jitter_projection};
 use crate::sys::*;
 use rsf_game_sys::sampling::halton_f64 as halton;
-use std::ffi::{CStr, c_char};
+use std::ffi::{CStr, c_char, c_int};
 use std::mem::MaybeUninit;
 use std::panic::catch_unwind;
 
@@ -394,7 +394,9 @@ fn burst_gate() {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_jitter_fixture(selection: *const c_char) -> i32 {
+unsafe extern "C" fn rsf_anomaly_sr_jitter_fixture(argc: c_int, argv: *const *const c_char) -> i32 {
+    // tests/fixture_main_args.c passes the command line; argv[1] selects one case.
+    let selection = if argc > 1 { unsafe { *argv.add(1) } } else { std::ptr::null() };
     let filter = if selection.is_null() {
         None
     } else {

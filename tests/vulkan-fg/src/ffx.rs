@@ -5,7 +5,10 @@ use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_RESET,
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
 };
-use std::{ffi::c_void, ptr};
+use std::{
+    ffi::{CStr, c_char, c_int, c_void},
+    ptr,
+};
 
 const VK_SUCCESS: i32 = 0;
 const VK_INCOMPLETE: i32 = 5;
@@ -138,13 +141,24 @@ fn routed() -> *mut c_void {
     unsafe { rsf_fixture_ffx_routed() }
 }
 
+/// The launcher entry (tests/fixture_main_args.c): argv[1] selects the scenario. Capture and timing
+/// output stay disabled; the provider entries are the Runtime archive's (vulkan_ffx_fg.rs).
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_ffx_run(scenario: u32) -> i32 {
+unsafe extern "C" fn rsf_fixture_ffx_run(argc: c_int, argv: *const *const c_char) -> i32 {
+    if argc != 2 {
+        return 1;
+    }
+    // SAFETY: no other thread runs before the scenario starts.
+    unsafe {
+        std::env::remove_var("RSF_VULKAN_FRAME_CAPTURE_DIR");
+        std::env::remove_var("RSF_VULKAN_TIMING_FILE");
+    }
+    let scenario = unsafe { CStr::from_ptr(*argv.add(1)) }.to_bytes();
     unsafe { (*crate::ffx_gpu::state()).next = 100 };
     match scenario {
-        0 => reset(),
-        1 => submission(),
-        2 => wsi_route(),
+        b"0" => reset(),
+        b"1" => submission(),
+        b"2" => wsi_route(),
         _ => return 1,
     }
     0

@@ -12,7 +12,7 @@ use crate::sys::{
     rsf_anomaly_plan_token as Token, rsf_anomaly_plan_vec2 as Vec2, rsf_anomaly_plan_vec4 as Vec4,
 };
 use oracle::{Capture, History, Pose};
-use std::ffi::{CStr, c_char};
+use std::ffi::{CStr, c_char, c_int};
 use std::panic::catch_unwind;
 
 const MAIN: u8 = 0;
@@ -127,7 +127,12 @@ pub(crate) fn swap_camera(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_temporal_planning_fixture(selection: *const c_char) -> i32 {
+unsafe extern "C" fn rsf_anomaly_temporal_planning_fixture(
+    argc: c_int,
+    argv: *const *const c_char,
+) -> i32 {
+    // tests/fixture_main_args.c passes the command line; argv[1] selects one case.
+    let selection = if argc > 1 { unsafe { *argv.add(1) } } else { std::ptr::null() };
     let selected = if selection.is_null() {
         None
     } else {

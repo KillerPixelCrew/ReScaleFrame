@@ -7,7 +7,7 @@ use crate::motion_profile::{MotionProfile, PROFILES};
 use crate::native_geometry_abi::SOFTWARE_SKINNED;
 use crate::shader_loader::{SHADER_CONTRACT_CASES, run_frame_fixture};
 use crate::sys::RSF_ANOMALY_DRAW_UNIDENTIFIED_DYNAMIC;
-use std::ffi::CStr;
+use std::ffi::{CStr, c_int};
 
 const CORE: &str = include_str!("../../shaders/core/README.md");
 const FOLIAGE: &str = include_str!("../../shaders/foliage/README.md");
@@ -659,7 +659,9 @@ enum Case {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_contract(selection: *const c_char) -> i32 {
+unsafe extern "C" fn rsf_anomaly_motion_contract(argc: c_int, argv: *const *const c_char) -> i32 {
+    // tests/fixture_main_args.c passes the command line; argv[1] selects one case.
+    let selection = if argc > 1 { unsafe { *argv.add(1) } } else { std::ptr::null() };
     let [standard, avx] = PROFILES.each_ref().map(MotionProfile::frame_layout);
     let mut cases = MOTION_CASES
         .iter()

@@ -67,7 +67,7 @@ Standard DX11 executable only, every site guarded by expected bytes (`anomaly_ge
 
 ## Verification
 
-`tests/anomaly_temporal_tests.c` launches the Rust cases in
+`tests/fixture_main_args.c` launches the Rust cases in
 `games/anomaly/src/temporal_fixture/`. Each capture lends retained
 Rust snapshots to its case, which checks identity and frozen values
 across later source frames and retirement. The geometry fixture uses

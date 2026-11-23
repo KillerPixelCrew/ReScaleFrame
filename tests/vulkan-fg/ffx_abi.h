@@ -50,7 +50,6 @@ int32_t rsf_fixture_wsi_images(uint64_t, uint64_t, uint32_t*);
 int32_t rsf_fixture_wsi_present(uint64_t);
 int32_t rsf_fixture_wsi_device_proc(uint64_t);
 int32_t rsf_fixture_wsi_graphics_submit(uint64_t);
-int rsf_fixture_ffx_run(uint32_t scenario);
 #ifdef __cplusplus
 }
 #endif

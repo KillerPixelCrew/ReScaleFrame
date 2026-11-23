@@ -1,6 +1,7 @@
 
 # CPU history/planning contracts only; these tests do not prove game motion output.
-add_executable(rsf_anomaly_temporal_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_temporal_tests.c")
+add_executable(rsf_anomaly_temporal_test "${CMAKE_CURRENT_LIST_DIR}/fixture_main_args.c")
+target_compile_definitions(rsf_anomaly_temporal_test PRIVATE RSF_FIXTURE_ENTRY=rsf_anomaly_temporal_planning_fixture)
 target_include_directories(rsf_anomaly_temporal_test PRIVATE "${PROJECT_SOURCE_DIR}")
 target_link_libraries(rsf_anomaly_temporal_test PRIVATE rsf_anomaly_fixtures_rust rsf_build_options)
 add_test(NAME anomaly_temporal_contract COMMAND rsf_anomaly_temporal_test)
@@ -80,7 +81,8 @@ set_tests_properties(anomaly_sr_hooks_contract
 # deployed core variants (tools/anomaly_motion_deploy.py output, local only; 77 when absent) through the Rust
 # deployed-tree loader, b13 packers and invalidation replay. Neither runs game code.
 # The device fixtures are Rust (motion/device_fixture/*_device.rs) behind C11 launchers.
-add_executable(rsf_anomaly_motion_contract_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_contract_main.c")
+add_executable(rsf_anomaly_motion_contract_test "${CMAKE_CURRENT_LIST_DIR}/fixture_main_args.c")
+target_compile_definitions(rsf_anomaly_motion_contract_test PRIVATE RSF_FIXTURE_ENTRY=rsf_anomaly_motion_contract)
 set_target_properties(rsf_anomaly_motion_contract_test PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_anomaly_motion_contract_test PRIVATE rsf_anomaly_fixtures_rust
     bcrypt ReScaleFrame::GameSDK ReScaleFrame::Graphics rsf_build_options)
@@ -132,7 +134,8 @@ target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE bcrypt dxguid d3dcompile
 # first-person rule, the mip bias delta and the published motion/SR state on the CPU; the Stage 3 swap cases (projection
 # and bias restore on every exit path) are cargo tests in games/anomaly/src/sr_swap/tests. The device fixture runs the unchanged core
 # motion PS writer with production b13 bytes and jitter (77 when no D3D11 device exists). None of them runs game code.
-add_executable(rsf_anomaly_sr_jitter_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_jitter.c")
+add_executable(rsf_anomaly_sr_jitter_test "${CMAKE_CURRENT_LIST_DIR}/fixture_main_args.c")
+target_compile_definitions(rsf_anomaly_sr_jitter_test PRIVATE RSF_FIXTURE_ENTRY=rsf_anomaly_sr_jitter_fixture)
 set_target_properties(rsf_anomaly_sr_jitter_test PROPERTIES LINKER_LANGUAGE CXX)
 target_include_directories(rsf_anomaly_sr_jitter_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
 target_link_libraries(rsf_anomaly_sr_jitter_test PRIVATE rsf_anomaly_fixtures_rust rsf_build_options)
