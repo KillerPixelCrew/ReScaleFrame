@@ -4,8 +4,7 @@
 use super::*;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
-#[path = "sdk_abi.rs"]
-mod abi;
+use crate::sdk_abi as abi;
 use abi::*;
 
 const BGRA8_UNORM: i32 = 44;

@@ -54,6 +54,7 @@ rsf-bindgen = { path = "../../tools/bindgen" }
 workspace = true
 
 [target."cfg(windows)".dependencies]
+rsf-vk-fsr3 = { path = "../vulkan/fsr3" }
 rsf-vk-xess-fg = { path = "../vulkan/xess-fg" }
 # The fixture exports call its WARP helpers; absent from the shipping build.
 rsf-test-support = { path = "../../tests/support", optional = true }

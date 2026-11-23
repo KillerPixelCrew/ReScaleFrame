@@ -14,7 +14,7 @@ test = false
 
 [features]
 dispatch = []
-ffx = ["dep:ash"]
+ffx = ["dep:ash", "dep:rsf-vk-fsr3"]
 wsi-dispatch = ["dep:ash"]
 fsr4-state = ["dep:ash"]
 dlss = ["dep:ash"]
@@ -31,6 +31,7 @@ xess-device = [
 ash = { workspace = true, optional = true }
 rsf-game-sys = { path = "../../sdk/game" }
 rsf-orchestrator = { path = "../../runtime/orchestrator" }
+rsf-vk-fsr3 = { path = "../../runtime/vulkan/fsr3", optional = true }
 
 [target."cfg(windows)".dependencies]
 windows-sys = { workspace = true, features = [

@@ -22,6 +22,8 @@ mod exports;
 #[cfg(not(test))]
 #[path = "platform.rs"]
 mod platform_win32;
+/// The pinned FidelityFX SDK 1.1.4 Vulkan records (generate-bindings.py), shared with the Runtime.
+pub mod sdk_abi;
 
 type Handle = *mut c_void;
 
