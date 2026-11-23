@@ -103,6 +103,10 @@ unsafe fn unmap(context: Handle, buffer: Handle) {
     unsafe { unmap(context, buffer, 0) };
 }
 
+/// # Safety
+///
+/// Each handle is null or a live object of its role: `device` and its `context`, a constant
+/// `buffer` of that device, and `destination` writable for `bytes`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_read_constant_buffer(
     device: Handle,

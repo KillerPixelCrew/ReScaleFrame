@@ -474,11 +474,17 @@ const PLATFORM: Platform = Platform {
     write,
 };
 
+/// # Safety
+///
+/// `context` is null or a live `ID3D11DeviceContext`; `storage` is null or a writable state record.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_d3d11_state_save(context: Handle, storage: *mut State) -> u32 {
     unsafe { rsf_core_d3d11_state_save(context, storage, 0, &PLATFORM) }
 }
 
+/// # Safety
+///
+/// `context` is null or a live `ID3D11DeviceContext`; `storage` is null or a writable state record.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_d3d11_state_save_independent(
     context: Handle,
@@ -487,11 +493,18 @@ pub unsafe extern "C" fn rsf_d3d11_state_save_independent(
     unsafe { rsf_core_d3d11_state_save(context, storage, 1, &PLATFORM) }
 }
 
+/// # Safety
+///
+/// `context` is null or a live `ID3D11DeviceContext`; `storage` is null or a record a save on
+/// this context filled.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_d3d11_state_restore(context: Handle, storage: *mut State) {
     unsafe { rsf_core_d3d11_state_restore(context, storage, &PLATFORM) }
 }
 
+/// # Safety
+///
+/// Each handle is null or live; both resources belong to the context's device.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_d3d11_copy_resource(
     context: Handle,
@@ -505,6 +518,10 @@ pub unsafe extern "C" fn rsf_d3d11_copy_resource(
     }
 }
 
+/// # Safety
+///
+/// `device` is null or a live `ID3D11Device` and `texture` null or a live texture of it; the
+/// caller owns the returned view.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_d3d11_create_shader_view(device: Handle, texture: Handle) -> Handle {
     if device.is_null() || texture.is_null() {
