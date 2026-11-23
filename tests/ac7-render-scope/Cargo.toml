@@ -12,6 +12,8 @@ license.workspace = true
 name = "rsf_ac7_render_scope_fixture"
 path = "../ac7_render_scope.rs"
 crate-type = ["staticlib"]
+# Its unit-test harness would need the C launcher's symbols, which only the CMake link supplies.
+test = false
 
 [lints]
 workspace = true

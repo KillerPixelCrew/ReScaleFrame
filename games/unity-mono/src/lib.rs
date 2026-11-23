@@ -67,6 +67,34 @@ unsafe extern "C" fn rsf_get_game_plugin_api(
     unsafe { publish_api(requested_abi, out, info, detect, hooks) }
 }
 
+/// The Unity SDK leaves of integrations/unity/native/render_bridge.c, which CMake builds against
+/// the untracked Unity headers. rsf-unity's bridge_native calls them, so the unit-test binary
+/// needs the symbols; none of these tests reach the D3D12 route, and these report it absent.
+#[cfg(all(test, windows))]
+mod unity_sdk_absent {
+    use std::ffi::{c_int, c_void};
+    use std::ptr;
+
+    #[unsafe(no_mangle)]
+    extern "C" fn rsf_unity_d3d12_sdk_engine() -> *const c_void {
+        ptr::null()
+    }
+    #[unsafe(no_mangle)]
+    extern "C" fn rsf_unity_d3d12_sdk_reserve_events() -> c_int {
+        0
+    }
+    #[unsafe(no_mangle)]
+    extern "C" fn rsf_unity_d3d12_sdk_configure_event(_: c_int, _: bool, _: u32, _: bool) {}
+    #[unsafe(no_mangle)]
+    extern "C" fn rsf_unity_d3d12_sdk_available() -> bool {
+        false
+    }
+    #[unsafe(no_mangle)]
+    extern "C" fn rsf_unity_d3d12_sdk_lookup(_: *mut c_void) -> bool {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
