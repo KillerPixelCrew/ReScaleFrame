@@ -205,6 +205,39 @@ fn contract(fixture: &Fixture, module: &Module) {
     assert_eq!(unsafe { detect(null()) }, 0);
 }
 
+/// The frame policy of rsf-game-sys, through the public C functions.
+fn frame_policy() {
+    let cases = [
+        (RSF_SCREEN_FLIGHT, 0, true, true),
+        (RSF_SCREEN_VIDEO, 0, false, false),
+        (RSF_SCREEN_LOADING, 0, false, false),
+        (RSF_SCREEN_MENU, 0, true, false),
+        (RSF_SCREEN_UNKNOWN, 0, true, false),
+        (RSF_SCREEN_FLIGHT, RSF_FRAME_FLAG_NO_FG, true, false),
+        (RSF_SCREEN_FLIGHT, RSF_FRAME_FLAG_NO_SR, false, false),
+    ];
+    let mut record = rsf_frame_record {
+        struct_size: size_of::<rsf_frame_record>() as u32,
+        abi_version: RSF_GAME_FRAME_ABI_VERSION,
+        ..Default::default()
+    };
+    for (screen, flags, sr, fg) in cases {
+        record.screen = screen;
+        record.flags = flags;
+        let (allows_sr, allows_fg) = unsafe {
+            (
+                rsf_frame_allows_sr(&record) != 0,
+                rsf_frame_allows_fg(&record) != 0,
+            )
+        };
+        assert_eq!((allows_sr, allows_fg), (sr, fg), "screen {screen} flags {flags}");
+    }
+    // A record that advertises less than its full size allows nothing.
+    record.flags = 0;
+    record.struct_size = 8;
+    assert!(unsafe { rsf_frame_allows_sr(&record) == 0 && rsf_frame_allows_fg(&record) == 0 });
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn rsf_test_plugin_contract() -> i32 {
     run(|| {
@@ -220,6 +253,7 @@ extern "C" fn rsf_test_plugin_contract() -> i32 {
         };
         let module = Module::beside_executable(Path::new(&args[1]));
         contract(fixture, &module);
+        frame_policy();
         OK
     })
 }
