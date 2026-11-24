@@ -204,8 +204,8 @@ fn hex(value: *const c_void) -> String {
 struct Prepared {
     setup: Setup,
     _strings: [CString; 7],
+    // The adapter named a non-empty Streamline directory of its own.
     streamline_explicit: bool,
-    streamline_empty: bool,
     identity: bool,
 }
 
@@ -316,8 +316,7 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_prepare(
     copy.runtime_directory_utf8 = strings[6].as_ptr();
     let value = Box::new(Prepared {
         setup: copy,
-        streamline_explicit: !input.streamline_directory_utf8.is_null(),
-        streamline_empty: strings[3].is_empty(),
+        streamline_explicit: !input.streamline_directory_utf8.is_null() && !strings[3].is_empty(),
         identity: !strings[4].is_empty() && !strings[5].is_empty(),
         _strings: strings,
     });
@@ -765,21 +764,8 @@ impl Owner {
     }
 
     fn facts(&self) -> rsf_d3d11p_facts {
-        let mut facts = rsf_d3d11p_facts {
-            window: null_mut(),
-            width: 0,
-            height: 0,
-            format: 0,
-            buffer_count: 0,
-            flags: 0,
-            windowed: 0,
-            native12: 0,
-            tearing: 0,
-            graphics: NO_GRAPHICS,
-            direct_queue: null_mut(),
-            device11: null_mut(),
-            buffer_usage: 0,
-        };
+        // SAFETY: the record holds only pointers and integers.
+        let mut facts: rsf_d3d11p_facts = unsafe { std::mem::zeroed() };
         unsafe { leaf::facts(self.b(), &mut facts) };
         facts
     }
@@ -1335,8 +1321,7 @@ impl Owner {
                 adapter.vendor, adapter.device
             ));
         }
-        let explicit =
-            prepared().is_some_and(|value| value.streamline_explicit && !value.streamline_empty);
+        let explicit = prepared().is_some_and(|value| value.streamline_explicit);
         if native12 {
             // Native D3D12 plugins use the engine's device and queue.
             if setup.backend == DLSS && setup.runtime_switching == 0 {
@@ -2355,12 +2340,7 @@ impl Owner {
             log("presentation bridge: retirement failed; retaining provider and shared inputs");
             std::mem::forget(self.take_application_buffers());
             std::mem::forget(self.take_physical());
-            // Submitted lists and their allocators can still be GPU-reachable.
-            std::mem::forget(self.take_command_slots());
-            // A refused wait can leave the completion and application events armed.
-            std::mem::forget(std::mem::take(&mut *lock(&self.sync)));
-            std::mem::forget(lock(&self.provider_retirement).fence.take());
-            unsafe { leaf::retain_all(b) };
+            self.retain_shared_inputs(b);
             return;
         }
         let checked = self.api().is_some_and(|api| api.destroy_checked.is_some());
@@ -2381,10 +2361,7 @@ impl Owner {
             RETIREMENT_PENDING.store(true, Ordering::Release);
             log("presentation bridge: provider teardown refused; retaining shared inputs");
             std::mem::forget(retained_buffers);
-            std::mem::forget(self.take_command_slots());
-            std::mem::forget(std::mem::take(&mut *lock(&self.sync)));
-            std::mem::forget(lock(&self.provider_retirement).fence.take());
-            unsafe { leaf::retain_all(b) };
+            self.retain_shared_inputs(b);
             return;
         }
         self.provider.store(null_mut(), Ordering::Release);
@@ -2429,6 +2406,16 @@ impl Owner {
             unsafe { leaf::release_direct_graphics(b) };
             drop(sync.interop_queue.take());
         }
+    }
+
+    // Retirement could not prove GPU completion. Submitted lists and their allocators, the
+    // events a refused wait can leave armed, the retirement fence and the facade's device
+    // references stay alive for the process.
+    fn retain_shared_inputs(&self, b: Raw) {
+        std::mem::forget(self.take_command_slots());
+        std::mem::forget(std::mem::take(&mut *lock(&self.sync)));
+        std::mem::forget(lock(&self.provider_retirement).fence.take());
+        unsafe { leaf::retain_all(b) };
     }
 
     fn refuse(&self) {
@@ -3071,10 +3058,19 @@ struct Lease {
 }
 
 impl Lease {
-    fn context(&self) -> Option<(&'static Provider, Raw)> {
-        self.api
-            .filter(|_| !self.session.is_null())
-            .map(|api| (api, self.session))
+    // One provider entry with its live session.
+    fn entry<F>(&self, pick: impl FnOnce(&'static Provider) -> Option<F>) -> Option<(F, Raw)> {
+        let api = self.api.filter(|_| !self.session.is_null())?;
+        Some((pick(api)?, self.session))
+    }
+
+    // The shared host's result, or OK when no host is published.
+    fn host(&self, call: impl FnOnce(Raw) -> i32) -> i32 {
+        if self.host.is_null() {
+            OK
+        } else {
+            call(self.host)
+        }
     }
 }
 
@@ -3121,13 +3117,9 @@ pub(crate) unsafe extern "C" fn rsf_d3d11_present_begin(id: u64, out: *mut u64) 
             if HOST_PACED.load(Ordering::SeqCst) {
                 return leaf::host_sleep(lease.host.cast(), id);
             }
-            match lease
-                .context()
-                .and_then(|(api, session)| Some((api.begin_frame?, session)))
-            {
-                Some((begin, session)) => begin(session, id),
-                None => OK,
-            }
+            lease
+                .entry(|api| api.begin_frame)
+                .map_or(OK, |(begin, session)| begin(session, id))
         })
     }
 }
@@ -3159,8 +3151,7 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_pace(
                 }
                 RSF_PACING_REFLEX => NOT_READY,
                 RSF_PACING_XELL => lease
-                    .context()
-                    .and_then(|(api, session)| Some((api.begin_frame?, session)))
+                    .entry(|api| api.begin_frame)
                     .map_or(NOT_READY, |(begin, session)| begin(session, id)),
                 // Anti-Lag updates live in the core; none has no sleeper.
                 _ => OK,
@@ -3181,36 +3172,20 @@ pub(crate) unsafe extern "C" fn rsf_d3d11_present_marker(
             if expected != generation() {
                 return NOT_READY;
             }
-            let host = if lease.host.is_null() {
-                OK
-            } else {
-                leaf::host_marker(lease.host.cast(), id, marker, controller)
-            };
+            let host = lease.host(|host| leaf::host_marker(host.cast(), id, marker, controller));
             if host != OK || HOST_PACED.load(Ordering::SeqCst) {
                 return host;
             }
-            match lease
-                .context()
-                .and_then(|(api, session)| Some((api.marker?, session)))
-            {
-                Some((call, session)) => call(session, marker, id, controller),
-                None => host,
-            }
+            lease
+                .entry(|api| api.marker)
+                .map_or(host, |(call, session)| call(session, marker, id, controller))
         })
     }
 }
 
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_d3d11_present_acquire(id: u64) -> i32 {
-    unsafe {
-        with_provider(|lease| {
-            if lease.host.is_null() {
-                OK
-            } else {
-                leaf::host_acquire(lease.host.cast(), id)
-            }
-        })
-    }
+    unsafe { with_provider(|lease| lease.host(|host| leaf::host_acquire(host.cast(), id))) }
 }
 
 pub(crate) unsafe fn rsf_d3d11_present_receipt(
@@ -3234,23 +3209,13 @@ pub(crate) unsafe fn rsf_d3d11_present_receipt(
 pub(crate) unsafe extern "C" fn rsf_d3d11_present_input(id: u64, kinds: u32, message: u32) -> i32 {
     unsafe {
         with_provider(|lease| {
-            let result = if lease.host.is_null() {
-                OK
-            } else {
-                leaf::host_input(lease.host.cast(), id, kinds, message)
-            };
+            let result = lease.host(|host| leaf::host_input(host.cast(), id, kinds, message));
             if result != OK || HOST_PACED.load(Ordering::SeqCst) || kinds == 0 {
                 return result;
             }
-            match lease
-                .context()
-                .and_then(|(api, session)| Some((api.marker?, session)))
-            {
-                Some((call, session)) => {
-                    call(session, LATENCY_INPUT_SAMPLE, id, u32::from(kinds & 4 != 0))
-                }
-                None => result,
-            }
+            lease.entry(|api| api.marker).map_or(result, |(call, session)| {
+                call(session, LATENCY_INPUT_SAMPLE, id, u32::from(kinds & 4 != 0))
+            })
         })
     }
 }
@@ -3259,21 +3224,13 @@ pub(crate) unsafe extern "C" fn rsf_d3d11_present_input(id: u64, kinds: u32, mes
 pub(crate) unsafe extern "C" fn rsf_d3d11_present_abort(id: u64) -> i32 {
     unsafe {
         with_provider(|lease| {
-            let host = if lease.host.is_null() {
-                OK
-            } else {
-                leaf::host_abort(lease.host.cast(), id)
-            };
+            let host = lease.host(|host| leaf::host_abort(host.cast(), id));
             if HOST_PACED.load(Ordering::SeqCst) {
                 return host;
             }
-            match lease
-                .context()
-                .and_then(|(api, session)| Some((api.abort_frame?, session)))
-            {
-                Some((call, session)) => call(session, id),
-                None => host,
-            }
+            lease
+                .entry(|api| api.abort_frame)
+                .map_or(host, |(call, session)| call(session, id))
         })
     }
 }
