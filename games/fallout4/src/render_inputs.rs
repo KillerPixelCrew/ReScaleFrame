@@ -305,12 +305,25 @@ fn depth_at(renderer: usize, slot: u32) -> usize {
     renderer.wrapping_add(0x1d48 + slot as usize * 0x98)
 }
 
+/// The platform slots of the logical colour, motion and depth targets, bounds-checked.
+fn slot_maps() -> Option<[u32; 3]> {
+    let targets = image().wrapping_add(TARGETS_RVA);
+    let slot = |offset: usize, limit: u32| {
+        read::<u32>(targets.wrapping_add(offset)).filter(|&slot| slot < limit)
+    };
+    Some([
+        slot(0xdf4 + 4, 101)?,
+        slot(0xdf4 + 32 * 4, 101)?,
+        slot(0xf84 + 4, 13)?,
+    ])
+}
+
 /// The logical-to-platform colour map entry for `logical`.
 fn colour_map(logical: u32) -> usize {
     image().wrapping_add(TARGETS_RVA + 0xdf4 + logical as usize * 4)
 }
 
-/// `same_native_owner`: owner() reads only these fields.
+/// The fields `owner()` reads.
 fn same_native_owner(a: &State, b: &State) -> bool {
     a.renderer == b.renderer
         && a.device == b.device
@@ -322,7 +335,7 @@ fn same_native_owner(a: &State, b: &State) -> bool {
         && a.height == b.height
 }
 
-/// `same_native_state`: exact field bits for the floats, frame timing excluded.
+/// Every field by exact bits for the floats, frame timing excluded.
 fn same_native_state(a: &State, b: &State) -> bool {
     same_native_owner(a, b)
         && a.camera == b.camera
@@ -350,7 +363,7 @@ fn same_camera(a: &NativeCamera, b: &NativeCamera) -> bool {
         && bits(&a.jitter_ndc) == bits(&b.jitter_ndc)
 }
 
-/// `memcmp` equality of two rasters.
+/// Two matrices are finite and within a thousandth element by element.
 fn close_matrix(a: &Flat, b: &Flat) -> bool {
     rsf_game_sys::camera_math::finite_matrix_close(a, b, 0.001)
 }
@@ -544,6 +557,21 @@ fn view_texture(
         && format
 }
 
+/// The device and swap-chain device are the state's owner, read from the native chain.
+fn same_devices(devices: &DeviceFacts, before: &State) -> bool {
+    same_native(devices.device, before.device as u64)
+        && devices.chain_device_read != 0
+        && same_object(devices.device, devices.chain_device)
+}
+
+/// The swap chain was read and still has the state's window and size.
+fn swap_matches(swap: &SwapFacts, before: &State) -> bool {
+    swap.read != 0
+        && swap.window == before.window as u64
+        && swap.width == before.width
+        && swap.height == before.height
+}
+
 fn extent(facts: &ResourceFacts, width: u32, height: u32) -> bool {
     facts.width == width
         && facts.height == height
@@ -591,7 +619,7 @@ fn auxiliary(
     admitted
 }
 
-/// thread_local `History`: the previous admitted frame on this render thread.
+/// The previous admitted frame on this render thread.
 #[derive(Clone, Copy)]
 struct History {
     seen: bool,
@@ -916,10 +944,7 @@ fn read_inputs(
     if devices.immediate == 0 {
         return Err(Stage::Context);
     }
-    if !same_native(devices.device, before.device as u64)
-        || devices.chain_device_read == 0
-        || !same_object(devices.device, devices.chain_device)
-    {
+    if !same_devices(&devices, &before) {
         return Err(Stage::Device);
     }
     let full = producer.is_none();
@@ -940,12 +965,7 @@ fn read_inputs(
     let [c, m, d] = r.receipt.views;
     r.receipt.swap = native::swap(before.chain);
     let swap = r.receipt.swap;
-    if swap.read == 0
-        || swap.window != before.window as u64
-        || swap.width != before.width
-        || swap.height != before.height
-        || colour.rtv == 0
-    {
+    if !swap_matches(&swap, &before) || colour.rtv == 0 {
         return Err(Stage::Swap);
     }
     validate_views(
@@ -1163,7 +1183,6 @@ fn read_raster(
     producer: Option<&Snapshot>,
 ) -> Option<rsf_game_render_pass> {
     let base = image();
-    let targets = base.wrapping_add(TARGETS_RVA);
     let mut before = State::default();
     let (mut graph, mut view) = (0usize, 0u64);
     if !VERIFIED.load(Ordering::Acquire)
@@ -1188,35 +1207,16 @@ fn read_raster(
     {
         return None;
     }
-    let (mut colour_slot, mut motion_slot, mut depth_slot) = (0u32, 0u32, 0u32);
-    if !load(targets.wrapping_add(0xdf4 + 4), &mut colour_slot)
-        || colour_slot >= 101
-        || !load(targets.wrapping_add(0xdf4 + 32 * 4), &mut motion_slot)
-        || motion_slot >= 101
-        || !load(targets.wrapping_add(0xf84 + 4), &mut depth_slot)
-        || depth_slot >= 13
-    {
-        return None;
-    }
-    let slots = [colour_slot, motion_slot, depth_slot];
+    let slots = slot_maps()?;
     let records = InputRecords::read(before.renderer, slots)?;
     let colour = records.colour;
     let depth_texture = records.depth;
     let devices = native::owner(lease, before.context, before.chain);
-    if devices.immediate == 0
-        || !same_native(devices.device, before.device as u64)
-        || devices.chain_device_read == 0
-        || !same_object(devices.device, devices.chain_device)
-    {
+    if devices.immediate == 0 || !same_devices(&devices, &before) {
         return None;
     }
     let swap = native::swap(before.chain);
-    if swap.read == 0
-        || swap.window != before.window as u64
-        || swap.width != before.width
-        || swap.height != before.height
-        || !creation::accept_window(before.window as *mut c_void)
-    {
+    if !swap_matches(&swap, &before) || !creation::accept_window(before.window as *mut c_void) {
         return None;
     }
     let mut receipt = Reading::new().receipt;
@@ -1250,19 +1250,13 @@ fn read_raster(
     }
     let mut after = State::default();
     let (mut confirmed_graph, mut confirmed_view) = (0usize, 0u64);
-    let (mut confirmed_colour, mut confirmed_motion, mut confirmed_depth) = (0u32, 0u32, 0u32);
     if owner(&mut after).is_err()
         || !same_native_owner(&before, &after)
         || !load(base.wrapping_add(WORLD_GRAPH_POINTER), &mut confirmed_graph)
         || confirmed_graph != graph
         || !load(graph.wrapping_add(0x140), &mut confirmed_view)
         || confirmed_view != view
-        || !load(targets.wrapping_add(0xdf4 + 4), &mut confirmed_colour)
-        || confirmed_colour != colour_slot
-        || !load(targets.wrapping_add(0xdf4 + 32 * 4), &mut confirmed_motion)
-        || confirmed_motion != motion_slot
-        || !load(targets.wrapping_add(0xf84 + 4), &mut confirmed_depth)
-        || confirmed_depth != depth_slot
+        || slot_maps() != Some(slots)
         || !records.current(before.renderer, slots)
     {
         return None;
@@ -1545,7 +1539,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stage_numbers_and_names_follow_the_cpp_order() {
+    fn stage_numbers_and_names_are_stable() {
         assert_eq!(Stage::Unverified as u32, 0);
         assert_eq!(Stage::CacheRead as u32, 13);
         assert_eq!(Stage::Accepted as u32, 30);
