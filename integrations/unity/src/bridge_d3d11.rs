@@ -106,11 +106,11 @@ unsafe fn prepare_device(host: &rsf_game_host_services, out: &mut DeviceHandles)
     Some(())
 }
 
-unsafe extern "C" fn create(host: *const rsf_game_host_services, out: *mut DeviceHandles) -> bool {
+pub(super) unsafe fn create(host: *const rsf_game_host_services, out: *mut DeviceHandles) -> bool {
     unsafe { prepare_device(&*host, &mut *out) }.is_some()
 }
 
-unsafe extern "C" fn destroy(shared: *const DeviceHandles) {
+pub(super) unsafe fn destroy(shared: *const DeviceHandles) {
     let shared = unsafe { &*shared };
     unsafe {
         rsf_shared_fence_destroy(shared.sharing.cast());
@@ -140,11 +140,11 @@ unsafe fn prepare_slot(shared: &DeviceHandles, out: &mut CommandSlot) -> Option<
     unsafe { borrowed::<ID3D12GraphicsCommandList>(&out.list).Close() }.ok()
 }
 
-unsafe extern "C" fn create_slot(shared: *const DeviceHandles, out: *mut CommandSlot) -> bool {
+pub(super) unsafe fn create_slot(shared: *const DeviceHandles, out: *mut CommandSlot) -> bool {
     unsafe { prepare_slot(&*shared, &mut *out) }.is_some()
 }
 
-unsafe extern "C" fn destroy_slot(slot: *const CommandSlot) {
+pub(super) unsafe fn destroy_slot(slot: *const CommandSlot) {
     let slot = unsafe { &*slot };
     unsafe {
         release(slot.list);
@@ -152,19 +152,19 @@ unsafe extern "C" fn destroy_slot(slot: *const CommandSlot) {
     }
 }
 
-unsafe extern "C" fn completed(shared: *const DeviceHandles) -> u64 {
+pub(super) unsafe fn completed(shared: *const DeviceHandles) -> u64 {
     let shared = unsafe { &*shared };
     unsafe { ID3D12Fence::from_raw_borrowed(&shared.completion) }
         .map_or(0, |fence| unsafe { fence.GetCompletedValue() })
 }
 
-unsafe extern "C" fn shared_completed(shared: *const DeviceHandles) -> u64 {
+pub(super) unsafe fn shared_completed(shared: *const DeviceHandles) -> u64 {
     let raw = unsafe { rsf_shared_fence_d3d11((*shared).sharing.cast()) };
     unsafe { ID3D11Fence::from_raw_borrowed(&raw) }
         .map_or(0, |fence| unsafe { fence.GetCompletedValue() })
 }
 
-unsafe extern "C" fn wait(shared: *const DeviceHandles, value: u64) -> bool {
+pub(super) unsafe fn wait(shared: *const DeviceHandles, value: u64) -> bool {
     let shared = unsafe { &*shared };
     let Some(fence) = (unsafe { ID3D12Fence::from_raw_borrowed(&shared.completion) }) else {
         return false;
@@ -186,7 +186,7 @@ unsafe extern "C" fn wait(shared: *const DeviceHandles, value: u64) -> bool {
     ready && fence_status(unsafe { fence.GetCompletedValue() }, value) == FenceStatus::Complete
 }
 
-unsafe extern "C" fn create_surface(
+pub(super) unsafe fn create_surface(
     shared: *const DeviceHandles,
     host: *const rsf_game_host_services,
     width: u32,
@@ -215,21 +215,9 @@ unsafe extern "C" fn create_surface(
     result == RSF_SHARED_OK
 }
 
-unsafe extern "C" fn destroy_surface(surface: *mut c_void) {
+pub(super) unsafe fn destroy_surface(surface: *mut c_void) {
     unsafe { rsf_shared_surface_destroy(surface.cast()) };
 }
-
-const OPS: DeviceOps = DeviceOps {
-    create,
-    destroy,
-    create_slot,
-    destroy_slot,
-    completed,
-    shared_completed,
-    wait,
-    create_surface,
-    destroy_surface,
-};
 
 struct SurfaceLease;
 
@@ -509,7 +497,7 @@ pub(crate) unsafe fn render_packet(
     if !rsf_unity_frames_active() {
         return;
     }
-    let ready = initialize(host, &OPS);
+    let ready = initialize(host);
     if matches!(ready, Device::Failed) {
         // RSF_BACKEND_ERROR_INIT_FAILED is a C cast macro.
         rsf_unity_package_bridge_failed(-6);

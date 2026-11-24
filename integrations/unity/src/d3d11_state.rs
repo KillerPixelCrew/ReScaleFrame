@@ -35,6 +35,11 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 #[path = "bridge_d3d11.rs"]
 pub(crate) mod graphics;
+// The D3D11/D3D12 leaves: graphics' functions, the recording fakes under test.
+#[cfg(not(test))]
+use graphics as ops;
+#[cfg(test)]
+use tests as ops;
 
 const SLOTS: usize = RSF_UNITY_FRAMES_SLOTS as usize;
 /// Colour, depth, motion, output, the HUD-less scene and the Editor preview source.
@@ -105,31 +110,8 @@ impl CommandSlot {
     }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct DeviceOps {
-    create: unsafe extern "C" fn(*const rsf_game_host_services, *mut DeviceHandles) -> bool,
-    destroy: unsafe extern "C" fn(*const DeviceHandles),
-    create_slot: unsafe extern "C" fn(*const DeviceHandles, *mut CommandSlot) -> bool,
-    destroy_slot: unsafe extern "C" fn(*const CommandSlot),
-    completed: unsafe extern "C" fn(*const DeviceHandles) -> u64,
-    shared_completed: unsafe extern "C" fn(*const DeviceHandles) -> u64,
-    wait: unsafe extern "C" fn(*const DeviceHandles, u64) -> bool,
-    create_surface: unsafe extern "C" fn(
-        *const DeviceHandles,
-        *const rsf_game_host_services,
-        u32,
-        u32,
-        u32,
-        *mut *mut c_void,
-    ) -> bool,
-    destroy_surface: unsafe extern "C" fn(*mut c_void),
-}
-
-const _: () = assert!(size_of::<DeviceOps>() == 9 * size_of::<usize>());
-
-/// The fence readers and the view they read, copied out for a check outside the state mutex.
-type Proof = (DeviceHandles, DeviceOps);
+/// The view the fence readers read, copied out for a check outside the state mutex.
+type Proof = DeviceHandles;
 
 /// The source texture description a surface was created for: three fields of
 /// `D3D11_TEXTURE2D_DESC`. The shared format derived from them is not part of the key.
@@ -149,17 +131,15 @@ struct Surface {
 
 struct SharedDevice {
     handles: DeviceHandles,
-    ops: DeviceOps,
     slots: [CommandSlot; SLOTS],
     /// Created on a slot's first use and replaced when its source description changes.
     surfaces: [Option<Surface>; SURFACES],
 }
 
 impl SharedDevice {
-    fn new(ops: DeviceOps) -> Self {
+    fn new() -> Self {
         Self {
             handles: DeviceHandles::EMPTY,
-            ops,
             slots: [CommandSlot::EMPTY; SLOTS],
             surfaces: [None; SURFACES],
         }
@@ -167,11 +147,11 @@ impl SharedDevice {
 
     /// The device, then every slot. Stops at the first refusal; drop destroys what exists.
     fn prepare(&mut self, services: *const rsf_game_host_services) -> bool {
-        if !unsafe { (self.ops.create)(services, &mut self.handles) } || !self.handles.complete() {
+        if !unsafe { ops::create(services, &mut self.handles) } || !self.handles.complete() {
             return false;
         }
         self.slots.iter_mut().all(|slot| {
-            let created = unsafe { (self.ops.create_slot)(&self.handles, slot) };
+            let created = unsafe { ops::create_slot(&self.handles, slot) };
             created && slot.complete()
         })
     }
@@ -182,12 +162,12 @@ impl Drop for SharedDevice {
         // Surfaces first, while the devices they were created on are still referenced.
         // Then the lists, which reference their allocators and the device.
         for surface in self.surfaces.iter().flatten() {
-            unsafe { (self.ops.destroy_surface)(surface.handle) };
+            unsafe { ops::destroy_surface(surface.handle) };
         }
         for slot in &self.slots {
-            unsafe { (self.ops.destroy_slot)(slot) };
+            unsafe { ops::destroy_slot(slot) };
         }
-        unsafe { (self.ops.destroy)(&self.handles) };
+        unsafe { ops::destroy(&self.handles) };
     }
 }
 
@@ -253,15 +233,9 @@ impl State {
         self.creation.device.as_ref().map(|device| device.handles)
     }
 
-    /// The published view and its leaves for a frame callback's completion wait.
+    /// The published view for a frame callback's completion wait.
     fn waiter(&self) -> Option<Proof> {
-        if self.closed {
-            return None;
-        }
-        self.creation
-            .device
-            .as_ref()
-            .map(|device| (device.handles, device.ops))
+        self.view()
     }
 
     fn slot(&self, index: usize) -> Option<CommandSlot> {
@@ -339,12 +313,7 @@ impl State {
             return None;
         }
         self.closed = true;
-        Some(
-            self.creation
-                .device
-                .as_ref()
-                .map(|device| (device.handles, device.ops)),
-        )
+        Some(self.creation.device.as_ref().map(|device| device.handles))
     }
 
     /// The record to destroy outside the mutex, once closed and not creating.
@@ -390,7 +359,7 @@ enum Device {
     Stopped,
 }
 
-fn initialize(services: *const rsf_game_host_services, ops: &DeviceOps) -> Device {
+fn initialize(services: *const rsf_game_host_services) -> Device {
     // Bind first, so the state guard ends before any arm runs.
     let claim = lock().claim();
     match claim {
@@ -400,7 +369,7 @@ fn initialize(services: *const rsf_game_host_services, ops: &DeviceOps) -> Devic
         Claim::Create => {}
     }
 
-    let mut device = SharedDevice::new(*ops);
+    let mut device = SharedDevice::new();
     if !device.prepare(services) {
         // Roll back before ending the claim, so a later caller never sees partial objects.
         drop(device);
@@ -441,7 +410,7 @@ fn prepare_surface(
     shared_format: u32,
     ring: &SubmissionHandle,
 ) -> Option<*mut c_void> {
-    let (retire, handles, ops) = {
+    let (retire, handles) = {
         let mut state = lock_state(state);
         let retire = match state.surface_claim(index, key) {
             SurfaceClaim::Borrowed(surface) => return Some(surface),
@@ -449,24 +418,24 @@ fn prepare_surface(
             SurfaceClaim::Create { retire } => retire,
         };
         let device = state.creation.device.as_ref()?;
-        (retire, device.handles, device.ops)
+        (retire, device.handles)
     };
     // A replacement needs the D3D12 queue and Unity's D3D11 copy timeline. A first
     // creation has no previous owner to retire.
     if retire {
         let submitted = ring.lock().submitted();
-        if !unsafe { (ops.wait)(&handles, submitted) } {
+        if !unsafe { ops::wait(&handles, submitted) } {
             return None;
         }
         let (completed, shared) =
-            unsafe { ((ops.completed)(&handles), (ops.shared_completed)(&handles)) };
+            unsafe { (ops::completed(&handles), ops::shared_completed(&handles)) };
         if !retired(ring, completed, shared) {
             return None;
         }
     }
     let mut created: *mut c_void = ptr::null_mut();
     let accepted = unsafe {
-        (ops.create_surface)(
+        ops::create_surface(
             &handles,
             services,
             key.width,
@@ -477,7 +446,7 @@ fn prepare_surface(
     };
     if !accepted || created.is_null() {
         // The previous surface stays published.
-        unsafe { (ops.destroy_surface)(created) };
+        unsafe { ops::destroy_surface(created) };
         return None;
     }
     let published = lock_state(state).publish_surface(
@@ -490,12 +459,12 @@ fn prepare_surface(
     match published {
         Ok(previous) => {
             if let Some(previous) = previous {
-                unsafe { (ops.destroy_surface)(previous.handle) };
+                unsafe { ops::destroy_surface(previous.handle) };
             }
             Some(created)
         }
         Err(refused) => {
-            unsafe { (ops.destroy_surface)(refused.handle) };
+            unsafe { ops::destroy_surface(refused.handle) };
             None
         }
     }
@@ -522,10 +491,10 @@ fn shared_surface(
 /// leaf outside the state mutex. The callback keeps the record published. False without one.
 #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 pub(crate) fn wait_completion(value: u64) -> bool {
-    let Some((handles, ops)) = lock().waiter() else {
+    let Some(handles) = lock().waiter() else {
         return false;
     };
-    unsafe { (ops.wait)(&handles, value) }
+    unsafe { ops::wait(&handles, value) }
 }
 
 /// Fence reads run outside the state mutex. The closed callback admission and this close keep
@@ -535,8 +504,8 @@ pub(crate) fn try_close() -> bool {
     let Some(proof) = lock().close() else {
         return false;
     };
-    let (completed, shared) = proof.map_or((0, 0), |(handles, ops)| unsafe {
-        ((ops.completed)(&handles), (ops.shared_completed)(&handles))
+    let (completed, shared) = proof.map_or((0, 0), |handles| unsafe {
+        (ops::completed(&handles), ops::shared_completed(&handles))
     });
     retired(&D3D11, completed, shared)
 }
@@ -584,7 +553,7 @@ mod tests {
         CALLS.with(|calls| std::mem::take(&mut *calls.borrow_mut()))
     }
 
-    unsafe extern "C" fn create(_: *const rsf_game_host_services, out: *mut DeviceHandles) -> bool {
+    pub(super) unsafe fn create(_: *const rsf_game_host_services, out: *mut DeviceHandles) -> bool {
         let out = unsafe { &mut *out };
         out.device11 = handle(1);
         out.context11 = handle(2);
@@ -599,7 +568,7 @@ mod tests {
         true
     }
 
-    unsafe extern "C" fn destroy(shared: *const DeviceHandles) {
+    pub(super) unsafe fn destroy(shared: *const DeviceHandles) {
         called(if unsafe { (*shared).queue12.is_null() } {
             "destroy partial"
         } else {
@@ -607,7 +576,7 @@ mod tests {
         });
     }
 
-    unsafe extern "C" fn create_slot(_: *const DeviceHandles, out: *mut CommandSlot) -> bool {
+    pub(super) unsafe fn create_slot(_: *const DeviceHandles, out: *mut CommandSlot) -> bool {
         let out = unsafe { &mut *out };
         out.allocator = handle(7);
         if !called("create_slot") {
@@ -617,7 +586,7 @@ mod tests {
         true
     }
 
-    unsafe extern "C" fn destroy_slot(slot: *const CommandSlot) {
+    pub(super) unsafe fn destroy_slot(slot: *const CommandSlot) {
         let slot = unsafe { *slot };
         called(if slot.complete() {
             "destroy_slot"
@@ -628,16 +597,16 @@ mod tests {
         });
     }
 
-    unsafe extern "C" fn completed(_: *const DeviceHandles) -> u64 {
+    pub(super) unsafe fn completed(_: *const DeviceHandles) -> u64 {
         0
     }
 
-    unsafe extern "C" fn wait(_: *const DeviceHandles, _: u64) -> bool {
+    pub(super) unsafe fn wait(_: *const DeviceHandles, _: u64) -> bool {
         called("wait")
     }
 
     /// Each surface's handle is its width, so a test can tell replacements apart.
-    unsafe extern "C" fn create_surface(
+    pub(super) unsafe fn create_surface(
         _: *const DeviceHandles,
         _: *const rsf_game_host_services,
         width: u32,
@@ -652,7 +621,7 @@ mod tests {
         true
     }
 
-    unsafe extern "C" fn destroy_surface(surface: *mut c_void) {
+    pub(super) unsafe fn destroy_surface(surface: *mut c_void) {
         called(if surface.is_null() {
             "destroy_surface empty"
         } else {
@@ -660,17 +629,7 @@ mod tests {
         });
     }
 
-    const OPS: DeviceOps = DeviceOps {
-        create,
-        destroy,
-        create_slot,
-        destroy_slot,
-        completed,
-        shared_completed: completed,
-        wait,
-        create_surface,
-        destroy_surface,
-    };
+    pub(super) use completed as shared_completed;
 
     fn key(width: u32) -> SurfaceKey {
         SurfaceKey {
@@ -683,7 +642,7 @@ mod tests {
     /// A state with a published record and no calls recorded.
     fn published() -> Mutex<State> {
         let mut state = State::new();
-        let mut device = SharedDevice::new(OPS);
+        let mut device = SharedDevice::new();
         assert!(device.prepare(ptr::null()));
         state.creation.device = Some(device);
         calls();
@@ -707,7 +666,7 @@ mod tests {
 
     #[test]
     fn the_device_and_every_slot_are_created_together() {
-        let mut device = SharedDevice::new(OPS);
+        let mut device = SharedDevice::new();
         assert!(device.prepare(ptr::null()));
         assert!(device.handles.complete());
         assert!(device.slots.iter().all(|slot| slot.complete()));
@@ -725,7 +684,7 @@ mod tests {
     #[test]
     fn a_refused_slot_rolls_back_the_whole_record() {
         refuse("create_slot");
-        let mut device = SharedDevice::new(OPS);
+        let mut device = SharedDevice::new();
         assert!(!device.prepare(ptr::null()));
         assert_eq!(calls(), ["create", "create_slot"]);
         drop(device);
@@ -744,7 +703,7 @@ mod tests {
     #[test]
     fn a_refused_device_destroys_its_partial_transfer() {
         refuse("create");
-        let mut device = SharedDevice::new(OPS);
+        let mut device = SharedDevice::new();
         assert!(!device.prepare(ptr::null()));
         assert_eq!(calls(), ["create"]);
         drop(device);
@@ -782,7 +741,7 @@ mod tests {
     fn a_published_record_is_lent_until_close() {
         let mut state = State::new();
         assert_eq!(state.claim(), Claim::Create);
-        let mut device = SharedDevice::new(OPS);
+        let mut device = SharedDevice::new();
         assert!(device.prepare(ptr::null()));
         let handles = device.handles;
         assert!(state.creation.publish(device).is_none());
@@ -790,8 +749,8 @@ mod tests {
         assert_eq!(state.view(), Some(handles));
         assert!(state.slot(SLOTS - 1).unwrap().complete());
         assert!(state.slot(SLOTS).is_none());
-        assert_eq!(state.waiter().map(|(view, _)| view), Some(handles));
-        let (proof, _) = state.close().unwrap().unwrap();
+        assert_eq!(state.waiter(), Some(handles));
+        let proof = state.close().unwrap().unwrap();
         assert_eq!(proof, handles);
         assert!(state.view().is_none());
         assert!(state.waiter().is_none());
@@ -912,7 +871,7 @@ mod tests {
         let mut state = State::new();
         // Nothing to lend before publication.
         assert!(!state.begin_surfaces());
-        let mut device = SharedDevice::new(OPS);
+        let mut device = SharedDevice::new();
         assert!(device.prepare(ptr::null()));
         state.creation.device = Some(device);
         assert!(state.begin_surfaces());
