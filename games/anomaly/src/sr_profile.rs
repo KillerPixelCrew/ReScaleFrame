@@ -290,7 +290,8 @@ pub(crate) struct Profile {
     pub(crate) unique_guards: &'static [UniqueGuard],
     pub(crate) call_sites: [NativeSite; SR_CALL_SITE_COUNT],
     pub(crate) first_person_sites: [FirstPersonSite; SR_FIRST_PERSON_SITE_COUNT],
-    #[allow(dead_code)] // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+    // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+    #[allow(dead_code)]
     pub(crate) crender_vtable_rva: u32,
     pub(crate) device_view_rva: u32,
     pub(crate) device_project_rva: u32,
@@ -299,7 +300,8 @@ pub(crate) struct Profile {
     pub(crate) load_screen_registered_rva: u32,
     pub(crate) hw_device_rva: u32,
     pub(crate) hw_context_rva: u32,
-    #[allow(dead_code)] // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+    // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+    #[allow(dead_code)]
     pub(crate) hw_swap_chain_rva: u32,
     pub(crate) hw_base_rt_rva: u32,
     pub(crate) hw_base_zb_rva: u32,
@@ -308,12 +310,15 @@ pub(crate) struct Profile {
     #[cfg_attr(not(feature = "sr-fixtures"), allow(dead_code))]
     pub(crate) render_options_word0_rva: u32,
     pub(crate) render_options_word3_rva: u32,
-    #[allow(dead_code)] // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+    // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+    #[allow(dead_code)]
     pub(crate) sunshafts_mode_rva: u32,
     pub(crate) sampler_cache_rva: u32,
-    #[allow(dead_code)] // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+    // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+    #[allow(dead_code)]
     pub(crate) user_mip_bias_rva: u32,
-    #[allow(dead_code)] // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+    // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+    #[allow(dead_code)]
     pub(crate) user_anisotropy_rva: u32,
     pub(crate) ssao_set_viewport_rva: u32,
     pub(crate) ssao_viewport_rva: u32,
