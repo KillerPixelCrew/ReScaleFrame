@@ -2,7 +2,6 @@
 
 pub use crate::sys::rsf_slvk_sdk_fg_options as Packed;
 #[cfg(windows)]
-#[allow(unused_imports)] // The Vulkan Runtime consumes its own present timing sample.
 pub use crate::sys::rsf_slvk_sdk_fg_sample as Sample;
 #[cfg(windows)]
 pub use crate::sys::rsf_slvk_sdk_fg_state as State;
