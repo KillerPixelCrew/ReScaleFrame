@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-use super::super::{address, fail, load, null, null_mut, require, wide};
+use super::super::{address, fail, load, null, null_mut, require};
 use super::{Status, create_object, create_proc, release};
+use rsf_test_support::wide_os;
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
@@ -70,7 +71,7 @@ fn junction(link: &Path, target: &Path) {
     );
     unsafe {
         let directory = CreateFileW(
-            wide(link).as_ptr(),
+            wide_os(link).as_ptr(),
             GENERIC_WRITE,
             0,
             null(),
@@ -234,7 +235,7 @@ fn scenario_config(mode: &str, valid: &str, nonce: &str) -> (Vec<u8>, &'static [
 }
 
 fn environment(name: *const u16, value: Option<&OsStr>) {
-    let value = value.map(wide);
+    let value = value.map(wide_os);
     require(
         unsafe {
             SetEnvironmentVariableW(name, value.as_ref().map_or(null(), |units| units.as_ptr()))

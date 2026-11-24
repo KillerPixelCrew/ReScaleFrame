@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-use super::{named, wide};
+use super::named;
 use crate::sys::{RSF_CENSUS_ABI_VERSION, RSF_CENSUS_FLAG_NO_STATIC_SCAN, rsf_census_options};
+use rsf_test_support::wide_os;
 use std::ffi::{c_char, c_void};
 use std::mem::transmute;
 use windows_sys::Win32::{Foundation::FARPROC, System::LibraryLoader::LoadLibraryW};
@@ -12,7 +13,7 @@ fn check_creation() -> Option<bool> {
     let path = std::env::current_exe()
         .ok()?
         .with_file_name("rsf_fixture_creation.dll");
-    let path = wide(path);
+    let path = wide_os(path);
     let module = unsafe { LoadLibraryW(path.as_ptr()) };
     if module.is_null() {
         return None;

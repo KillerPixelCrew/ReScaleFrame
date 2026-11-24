@@ -8,89 +8,43 @@ use ash::{
     vk::{self, Handle as _},
 };
 use rsf_game_sys::{RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, rsf_frame_record};
-use std::{
-    ffi::c_void,
-    mem,
-    ptr::{null, null_mut},
-};
-use windows_sys::Win32::{
-    Foundation::{HINSTANCE, HWND},
-    System::LibraryLoader::GetModuleHandleW,
-    UI::WindowsAndMessaging::{
-        CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, MSG,
-        PM_REMOVE, PeekMessageW, RegisterClassW, SW_SHOWNORMAL, SetForegroundWindow, ShowWindow,
-        TranslateMessage, UnregisterClassW, WNDCLASSW, WS_OVERLAPPEDWINDOW,
-    },
+use rsf_test_support::Window;
+use std::{ffi::c_void, mem, ptr::null_mut};
+use windows::Win32::UI::WindowsAndMessaging::WS_OVERLAPPEDWINDOW;
+use windows::core::w;
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, SW_SHOWNORMAL, SetForegroundWindow, ShowWindow,
+    TranslateMessage,
 };
 
 type Handle = *mut c_void;
 
-const WINDOW_CLASS: *const u16 = windows_sys::w!("RsfXeSSInteropFixture");
-
-struct Window {
-    handle: HWND,
-    instance: HINSTANCE,
+/// The fixture's window: shown and brought to the foreground, then pumped between frames.
+fn open_window() -> Result<Window, i32> {
+    let window = Window::new(
+        w!("RsfXeSSInteropFixture"),
+        w!("ReScaleFrame XeSS interop fixture"),
+        WS_OVERLAPPEDWINDOW,
+        1296,
+        759,
+    )
+    .map_err(|_| 100)?;
+    unsafe {
+        ShowWindow(window.handle.0, SW_SHOWNORMAL);
+        SetForegroundWindow(window.handle.0);
+    }
+    Ok(window)
 }
 
-impl Window {
-    fn open() -> Result<Self, i32> {
-        let instance = unsafe { GetModuleHandleW(null()) };
-        let class = WNDCLASSW {
-            lpfnWndProc: Some(DefWindowProcW),
-            hInstance: instance,
-            lpszClassName: WINDOW_CLASS,
-            ..Default::default()
-        };
-        if unsafe { RegisterClassW(&class) } == 0 {
-            return Err(100);
-        }
-        let handle = unsafe {
-            CreateWindowExW(
-                0,
-                WINDOW_CLASS,
-                windows_sys::w!("ReScaleFrame XeSS interop fixture"),
-                WS_OVERLAPPEDWINDOW,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                1296,
-                759,
-                null_mut(),
-                null_mut(),
-                instance,
-                null(),
-            )
-        };
-        if handle.is_null() {
-            unsafe { UnregisterClassW(WINDOW_CLASS, instance) };
-            return Err(101);
-        }
+fn pump() {
+    let mut message = MSG::default();
+    while unsafe { PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE) } != 0 {
         unsafe {
-            ShowWindow(handle, SW_SHOWNORMAL);
-            SetForegroundWindow(handle);
-        }
-        Ok(Self { handle, instance })
-    }
-
-    fn pump() {
-        let mut message = MSG::default();
-        while unsafe { PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE) } != 0 {
-            unsafe {
-                TranslateMessage(&message);
-                DispatchMessageW(&message);
-            }
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
         }
     }
 }
-
-impl Drop for Window {
-    fn drop(&mut self) {
-        unsafe {
-            DestroyWindow(self.handle);
-            UnregisterClassW(WINDOW_CLASS, self.instance);
-        }
-    }
-}
-
 unsafe extern "C" {
     fn rsf_xessgvk_create(
         setup: *const rsf_fgvk_setup,
@@ -167,7 +121,7 @@ fn present_frames(
         let swapchains = [vk::SwapchainKHR::from_raw(chain)];
         let mut initialized_images = [false; 3];
         for frame in 0..12 {
-            Window::pump();
+            pump();
             device.device_wait_idle().map_err(vk::Result::as_raw)?;
             let id = frame + 1;
             check(rsf_xessgvk_sleep(owner, id))?;
@@ -242,7 +196,7 @@ pub(crate) fn run(
     runtime: *const u16,
     retired: &mut bool,
 ) -> i32 {
-    let window = match Window::open() {
+    let window = match open_window() {
         Ok(window) => window,
         Err(code) => return code,
     };
@@ -281,7 +235,7 @@ pub(crate) fn run(
     let options = rsf_xessgvk_options {
         struct_size: size_of::<rsf_xessgvk_options>() as u32,
         abi_version: 1,
-        window: window.handle,
+        window: window.handle.0,
         timeline_enabled: 1,
         generated_count: 1,
         intel_runtime_directory: runtime,

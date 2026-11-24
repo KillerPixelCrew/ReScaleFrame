@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 use super::census_creation::rsf_test_census_creation;
-use super::{named, wide};
+use super::named;
 use crate::sys::rsf_test_census_native;
 use crate::sys::*;
+use rsf_test_support::wide_os;
 use serde_json::Value;
 use std::{
     ffi::{CStr, c_char},
@@ -607,7 +608,7 @@ fn load_asi() -> Option<Asi> {
     let path = std::env::current_exe()
         .ok()?
         .with_file_name("rsf_census_asi.dll");
-    let path = wide(path);
+    let path = wide_os(path);
     let module = unsafe { LoadLibraryW(path.as_ptr()) };
     if module.is_null() {
         return None;

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Opt-in desktop fixture for an injected overlay alongside the vendor census.
 use crate::sys::{RSF_CENSUS_ABI_VERSION, rsf_census_options};
+use ::windows::Win32::UI::WindowsAndMessaging::{WS_OVERLAPPEDWINDOW, WS_VISIBLE};
 use ::windows::Win32::{
-    Foundation::{E_FAIL, HANDLE, HWND},
+    Foundation::{E_FAIL, HANDLE},
     Graphics::{
         Direct3D::D3D_FEATURE_LEVEL_11_0,
         Direct3D12::*,
@@ -10,8 +11,9 @@ use ::windows::Win32::{
     },
 };
 use ::windows::core::{Interface, PCSTR, w};
+use rsf_test_support::Window;
+use rsf_test_support::d3d12::transition_barrier;
 use std::ffi::{CStr, c_char, c_void};
-use std::mem::ManuallyDrop;
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
 use windows_sys::Win32::{
@@ -21,10 +23,7 @@ use windows_sys::Win32::{
         LibraryLoader::GetModuleHandleW,
         Threading::{CreateEventW, WaitForSingleObject},
     },
-    UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, MSG, PM_REMOVE,
-        PeekMessageW, RegisterClassW, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
-    },
+    UI::WindowsAndMessaging::{DispatchMessageW, MSG, PM_REMOVE, PeekMessageW},
 };
 
 const SLOTS: u32 = 3;
@@ -55,39 +54,16 @@ unsafe extern "system" fn on_message(
 }
 
 fn create_window() -> Option<Window> {
-    let class = WNDCLASSW {
-        lpfnWndProc: Some(DefWindowProcW),
-        hInstance: unsafe { GetModuleHandleW(null()) },
-        lpszClassName: w!("RsfCensusCoexistence").as_ptr(),
-        ..Default::default()
-    };
-    unsafe { RegisterClassW(&class) };
-    let hwnd = unsafe {
-        CreateWindowExW(
-            0,
-            class.lpszClassName,
-            w!("census coexistence").as_ptr(),
-            WS_VISIBLE | WS_OVERLAPPEDWINDOW,
-            100,
-            100,
-            1280,
-            720,
-            null_mut(),
-            null_mut(),
-            class.hInstance,
-            null(),
-        )
-    };
-    (!hwnd.is_null()).then_some(Window(HWND(hwnd)))
+    let style = WS_VISIBLE | WS_OVERLAPPEDWINDOW;
+    Window::new(
+        w!("RsfCensusCoexistence"),
+        w!("census coexistence"),
+        style,
+        1280,
+        720,
+    )
+    .ok()
 }
-
-struct Window(HWND);
-impl Drop for Window {
-    fn drop(&mut self) {
-        unsafe { DestroyWindow(self.0.0) };
-    }
-}
-
 struct Event(HANDLE);
 impl Drop for Event {
     fn drop(&mut self) {
@@ -141,28 +117,6 @@ fn handle(heap: &ID3D12DescriptorHeap, index: u32, step: u32) -> D3D12_CPU_DESCR
     handle
 }
 
-fn barrier(
-    resource: &ID3D12Resource,
-    before: D3D12_RESOURCE_STATES,
-    after: D3D12_RESOURCE_STATES,
-) -> D3D12_RESOURCE_BARRIER {
-    D3D12_RESOURCE_BARRIER {
-        Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
-        Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
-        Anonymous: D3D12_RESOURCE_BARRIER_0 {
-            Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
-                // The command list borrows the live back buffer for this barrier.
-                pResource: ManuallyDrop::new(Some(unsafe {
-                    ID3D12Resource::from_raw(resource.as_raw())
-                })),
-                Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                StateBefore: before,
-                StateAfter: after,
-            }),
-        },
-    }
-}
-
 fn wait(fence: &ID3D12Fence, value: u64, event: &Event) -> bool {
     unsafe { fence.SetEventOnCompletion(value, event.0) }.is_ok()
         && unsafe { WaitForSingleObject(event.0.0, 5000) } == WAIT_OBJECT_0
@@ -212,7 +166,7 @@ fn render(window: &Window, frames: u32) -> ::windows::core::Result<Counts> {
         ..Default::default()
     };
     let swapchain: IDXGISwapChain3 = unsafe {
-        factory.CreateSwapChainForHwnd(&queue, window.0, &desc, None, None::<&IDXGIOutput>)
+        factory.CreateSwapChainForHwnd(&queue, window.handle, &desc, None, None::<&IDXGIOutput>)
     }?
     .cast()?;
     let rtvs: ID3D12DescriptorHeap = unsafe {
@@ -279,9 +233,9 @@ fn render(window: &Window, frames: u32) -> ::windows::core::Result<Counts> {
         let after = D3D12_RESOURCE_STATE_RENDER_TARGET;
         let colour = [0.1, 0.2 + 0.3 * (frame % 60) as f32 / 60.0, 0.4, 1.0];
         unsafe {
-            list.ResourceBarrier(&[barrier(&buffers[slot], before, after)]);
+            list.ResourceBarrier(&[transition_barrier(&buffers[slot], before, after)]);
             list.ClearRenderTargetView(handle(&rtvs, index, step), &colour, None);
-            list.ResourceBarrier(&[barrier(&buffers[slot], after, before)]);
+            list.ResourceBarrier(&[transition_barrier(&buffers[slot], after, before)]);
             list.Close()?;
             queue.ExecuteCommandLists(&commands);
         }

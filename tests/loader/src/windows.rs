@@ -20,19 +20,15 @@ mod vendor_census_fixture;
 #[cfg(target_env = "msvc")]
 mod vendor_layouts;
 
+use rsf_test_support::wide_os;
 use std::ffi::{CStr, OsStr};
-use std::os::windows::ffi::OsStrExt;
 use std::ptr::{null, null_mut};
 use windows_sys::Win32::Foundation::{FARPROC, GetLastError, HMODULE, MAX_PATH};
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryExW};
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 
-fn wide(value: impl AsRef<OsStr>) -> Vec<u16> {
-    value.as_ref().encode_wide().chain([0]).collect()
-}
-
 fn load(path: impl AsRef<OsStr>, flags: u32) -> HMODULE {
-    unsafe { LoadLibraryExW(wide(path).as_ptr(), null_mut(), flags) }
+    unsafe { LoadLibraryExW(wide_os(path).as_ptr(), null_mut(), flags) }
 }
 
 fn system_path(name: &str) -> Vec<u16> {
