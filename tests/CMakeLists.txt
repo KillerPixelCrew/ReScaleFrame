@@ -36,10 +36,15 @@ rsf_add_rust_static(rsf_game_sdk_unity_sr_d3d12_rust rsf_rust_game_sdk_unity_sr_
     rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features unity-sr-d3d12-fixture)
 rsf_add_rust_static(rsf_game_sdk_d3d11_host_rust rsf_rust_game_sdk_d3d11_host
     rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features d3d11-host-fixture)
-# The archives carry the Rust Runtime, so they take the C leaves and MinHook rsf_orchestrator_rust takes.
+# The archives carry the Rust Runtime, so they take the C leaves and MinHook rsf_orchestrator_rust takes,
+# and rsf-anomaly, so the Common Controls 6 manifest its window leaves need.
+set(rsf_anomaly_comctl6 "${PROJECT_SOURCE_DIR}/games/anomaly/comctl6.manifest")
 foreach(archive rsf_game_sdk_fixtures_rust rsf_game_sdk_render_host_rust rsf_game_sdk_cpu_rust
         rsf_game_sdk_vk_latency_rust rsf_game_sdk_unity_sr_d3d12_rust rsf_game_sdk_d3d11_host_rust)
     target_link_libraries(${archive} INTERFACE rsf_runtime_leaves minhook)
+    if(MSVC)
+        target_sources(${archive} INTERFACE "${rsf_anomaly_comctl6}")
+    endif()
 endforeach()
 # rsf-vulkan-fg-fixtures: each provider fixture reaches its own SDK leaves and Runtime entries.
 foreach(feature wsi-dispatch streamline-selected streamline-dispatch xess-sr xess-input-range
@@ -67,6 +72,9 @@ rsf_add_rust_static(rsf_anomaly_fixtures_rust rsf_rust_anomaly_fixtures
     --features fg-fixture,input-hook-fixture,overlay-device-fixture,motion-hooks-fixture,motion-binder-fixture,motion-device-fixture,native-hook-fixture,sr-fixtures)
 # rsf-minhook-sys leaves MinHook to the CMake link; native_memory.h includes the GameSDK headers.
 target_link_libraries(rsf_anomaly_fixtures_rust INTERFACE minhook ReScaleFrame::GameSDK)
+if(MSVC)
+    target_sources(rsf_anomaly_fixtures_rust INTERFACE "${rsf_anomaly_comctl6}")
+endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/d3d11_host_rendered_fg_device.cmake")
 # Explicit regression investigation only: requires a scratch vendor-SDK root and NVIDIA GPU.
 add_executable(rsf_d3d11_host_shared_sr_device EXCLUDE_FROM_ALL d3d11_host_shared_sr_device.c)
@@ -170,6 +178,9 @@ rsf_add_fixture_test(rsf_gpu_policy_test NAME gpu_sr_policy ENTRY rsf_test_gpu_p
 rsf_add_rust_static(rsf_plugin_session_fixture_rust rsf_rust_plugin_session_fixture
     rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features plugin-session-fixture)
 target_link_libraries(rsf_plugin_session_fixture_rust INTERFACE rsf_runtime_leaves minhook)
+if(MSVC)
+    target_sources(rsf_plugin_session_fixture_rust INTERFACE "${rsf_anomaly_comctl6}")
+endif()
 add_library(rsf_plugin_session_fixture SHARED plugin_session_fixture_throw.c)
 target_link_libraries(rsf_plugin_session_fixture PRIVATE rsf_plugin_session_fixture_rust ReScaleFrame::GameSDK rsf_build_options)
 add_executable(rsf_plugin_session_test game-sdk/session_main.c)

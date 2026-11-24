@@ -3,6 +3,11 @@ add_library(rsf_game_anomaly SHARED src/plugin.def src/bootstrap_platform.c src/
     src/sr_d3d11_platform.c src/sr_stage_platform.c)
 rsf_add_rust_static(rsf_anomaly_plugin_rust rsf_rust_anomaly_plugin rsf-anomaly rsf_anomaly
     --features native-entry)
+# Binaries that carry rsf-anomaly bind Common Controls 6 (comctl6.manifest); the DLL's own manifest
+# governs its imports whatever the host process declares.
+if(MSVC)
+    target_sources(rsf_anomaly_plugin_rust INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/comctl6.manifest")
+endif()
 foreach(symbol IN ITEMS rsf_anomaly_start rsf_anomaly_observation rsf_get_game_plugin_api)
     if(MSVC)
         target_link_options(rsf_game_anomaly PRIVATE "LINKER:/INCLUDE:${symbol}")
