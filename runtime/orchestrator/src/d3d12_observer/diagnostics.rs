@@ -4,7 +4,8 @@ use super::{Handle, foreign};
 use crate::com_ref;
 use crate::sync::lock;
 use crate::win32_diagnostics::module_location;
-use std::ffi::{CStr, CString, c_char, c_void};
+use rsf_graphics::dump_options::Log as Sink;
+use std::ffi::{CStr, c_char, c_void};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -53,9 +54,9 @@ use tests as leaf;
 
 // DRED node storage is borrowed until the owning interface is released.
 #[cfg_attr(test, allow(dead_code))]
-unsafe extern "C" fn breadcrumb(node: *const c_void, out: &mut Breadcrumb) {
+unsafe fn breadcrumb(node: *const c_void) -> Breadcrumb {
     let node = unsafe { &*node.cast::<D3D12_AUTO_BREADCRUMB_NODE>() };
-    *out = Breadcrumb {
+    Breadcrumb {
         next: node.pNext.cast(),
         list: node
             .pCommandList
@@ -70,7 +71,7 @@ unsafe extern "C" fn breadcrumb(node: *const c_void, out: &mut Breadcrumb) {
             .unwrap_or(0),
         count: node.BreadcrumbCount,
         name: node.pCommandListDebugNameA.cast(),
-    };
+    }
 }
 
 #[cfg_attr(test, allow(dead_code))]
@@ -88,28 +89,6 @@ fn debug_interface<T: Interface>() -> Option<IUnknown> {
     unsafe { com_ref::owned(object) }.filter(|_| result >= 0)
 }
 
-#[derive(Clone, Copy)]
-struct Sink {
-    log: Log,
-    user: Handle,
-}
-
-// The diagnostics entry borrows a process-lifetime context that the caller
-// supplies for invocation by device and queue callbacks on other threads.
-unsafe impl Send for Sink {}
-
-impl Sink {
-    fn say(self, message: &CStr) {
-        unsafe { (self.log)(self.user, message.as_ptr()) };
-    }
-
-    fn line(self, message: String) {
-        if let Ok(message) = CString::new(message) {
-            self.say(&message);
-        }
-    }
-}
-
 static SINK: OnceLock<Mutex<Sink>> = OnceLock::new();
 static REMOVAL_REPORTED: AtomicBool = AtomicBool::new(false);
 static COUNTS: [AtomicU8; MESSAGE_IDS] = [const { AtomicU8::new(0) }; MESSAGE_IDS];
@@ -123,7 +102,9 @@ pub(crate) extern "C" fn rsf_d3d12_diagnostics_enable(log: Option<Log>, user: Ha
     let Some(log) = log else {
         return -1;
     };
-    let selected = Sink { log, user };
+    // A process-lifetime context the caller supplies for device and queue callbacks on other
+    // threads.
+    let selected = Sink::new(Some(log), user);
     *lock(SINK.get_or_init(|| Mutex::new(selected))) = selected;
     let settings = debug_interface::<ID3D12DeviceRemovedExtendedDataSettings>();
     if let Some(settings) = &settings {
@@ -136,10 +117,10 @@ pub(crate) extern "C" fn rsf_d3d12_diagnostics_enable(log: Option<Log>, user: Ha
     let enabled = debug.is_some_and(|debug| unsafe { foreign::debug_layer(debug.as_raw()) } != 0);
     drop(settings);
     if !enabled {
-        selected.say(c"D3D12 diagnostics: debug layer unavailable; DRED requested.");
+        selected.say("D3D12 diagnostics: debug layer unavailable; DRED requested.");
         return -2;
     }
-    selected.say(c"D3D12 diagnostics: validation layer and DRED requested before device creation.");
+    selected.say("D3D12 diagnostics: validation layer and DRED requested before device creation.");
     0
 }
 
@@ -180,7 +161,7 @@ unsafe extern "system" fn debug_message(
         return;
     };
     let description = unsafe { message(description.0.cast()) };
-    sink.line(format!(
+    sink.say(&format!(
         "D3D12 validation severity={severity} id={id}: {description}"
     ));
     if severity <= ERROR && previous < 2 {
@@ -190,7 +171,7 @@ unsafe extern "system" fn debug_message(
         };
         for (i, address) in stack.into_iter().take(usize::from(count)).enumerate() {
             if let Some((module, offset)) = module_location(address.addr()) {
-                sink.line(format!(
+                sink.say(&format!(
                     "D3D12 validation stack[{i}] {module}+0x{offset:x}."
                 ));
             }
@@ -223,7 +204,7 @@ pub(super) fn report_removal(queue: Handle) {
     if REMOVAL_REPORTED.swap(true, Ordering::Relaxed) {
         return;
     }
-    sink.line(format!(
+    sink.say(&format!(
         "D3D12 device removal reason=0x{:08x}.",
         reason as u32
     ));
@@ -239,15 +220,14 @@ fn report_dred(device: Handle, sink: Sink) {
         if node.is_null() {
             break;
         }
-        let mut row = Breadcrumb::default();
-        unsafe { leaf::breadcrumb(node, &mut row) };
+        let row = unsafe { leaf::breadcrumb(node) };
         let next_operation = if row.completed < row.count {
             unsafe { leaf::operation(node, row.completed) }
         } else {
             u32::MAX
         };
         let name = unsafe { message(row.name) };
-        sink.line(format!(
+        sink.say(&format!(
             "DRED list={:p} queue={:p} completed={}/{} next_operation={next_operation} name={name}.",
             row.list, row.queue, row.completed, row.count
         ));
@@ -255,7 +235,7 @@ fn report_dred(device: Handle, sink: Sink) {
     }
     let mut address = 0;
     if unsafe { leaf::page_fault(dred.as_raw(), &mut address) } >= 0 {
-        sink.line(format!("DRED page fault address=0x{address:x}."));
+        sink.say(&format!("DRED page fault address=0x{address:x}."));
     }
 }
 
@@ -291,15 +271,15 @@ mod tests {
         without_provenance(1)
     }
 
-    pub(super) unsafe extern "C" fn row(node: *const c_void, out: &mut Breadcrumb) {
+    pub(super) unsafe fn row(node: *const c_void) -> Breadcrumb {
         let first = node.addr() == 1;
-        *out = Breadcrumb {
+        Breadcrumb {
             next: without_provenance(if first { 2 } else { 1 }),
             completed: u32::from(!first),
             count: 1,
             name: c"fixture".as_ptr(),
             ..Breadcrumb::default()
-        };
+        }
     }
 
     pub(super) unsafe extern "C" fn operation(_: *const c_void, _: u32) -> u32 {
@@ -319,10 +299,7 @@ mod tests {
     #[test]
     fn dred_walk_is_bounded_and_skips_operations_at_the_end_of_a_list() {
         let device = fake();
-        let sink = Sink {
-            log,
-            user: null_mut(),
-        };
+        let sink = Sink::new(Some(log), null_mut());
         report_dred(raw(&device), sink);
         assert_eq!(device.refs.get(), 1);
         assert_eq!(OPERATIONS.get(), 32);

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{
-    Handle, attachment, bind, diagnostics, enter, leave, original, submit_begin, submit_end,
+    CHAIN, DEVICE, FACTORY, Handle, QUEUE, attachment, bind, diagnostics, enter, leave, original,
+    submit_begin, submit_end,
 };
 use std::ptr;
 use windows::Win32::Foundation::HWND;
@@ -29,10 +30,6 @@ original_method!(Device, ID3D12Device_Vtbl, CreateCommandQueue,
 original_method!(Queue, ID3D12CommandQueue_Vtbl, ExecuteCommandLists, (Handle, u32, *const Handle) -> ());
 original_method!(Present, IDXGISwapChain_Vtbl, Present, (Handle, u32, DXGI_PRESENT) -> HRESULT);
 
-const FACTORY: u32 = 0;
-const DEVICE: u32 = 1;
-const QUEUE: u32 = 2;
-const CHAIN: u32 = 3;
 const FAIL: HRESULT = HRESULT(0x8000_4005u32 as i32);
 
 struct Scope {

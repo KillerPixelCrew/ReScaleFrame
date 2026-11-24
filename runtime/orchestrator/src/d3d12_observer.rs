@@ -13,6 +13,11 @@ pub(super) mod diagnostics;
 mod foreign;
 
 type Handle = *mut c_void;
+// Hooked interface kinds, indexing BINDINGS.
+const FACTORY: u32 = 0;
+const DEVICE: u32 = 1;
+const QUEUE: u32 = 2;
+const CHAIN: u32 = 3;
 const KINDS: usize = 4;
 const CAPACITY: usize = 8;
 

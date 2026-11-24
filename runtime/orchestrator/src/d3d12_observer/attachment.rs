@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
-use super::{Handle, OBSERVER, Observer, diagnostics, foreign, notify_present};
+use super::{
+    CHAIN, DEVICE, FACTORY, Handle, OBSERVER, Observer, QUEUE, diagnostics, foreign, notify_present,
+};
 use crate::com_ref;
 use std::ptr;
 use windows::Win32::Graphics::Direct3D12::{
@@ -9,10 +11,6 @@ use windows::Win32::Graphics::Dxgi::{IDXGIFactory2_Vtbl, IDXGISwapChain_Vtbl};
 use windows::core::IUnknown;
 use windows::core::Interface;
 
-const FACTORY: u32 = 0;
-const DEVICE: u32 = 1;
-const QUEUE: u32 = 2;
-const CHAIN: u32 = 3;
 const DIRECT: u32 = D3D12_COMMAND_LIST_TYPE_DIRECT.0 as u32;
 const CREATE_SWAPCHAIN_FOR_HWND: usize =
     std::mem::offset_of!(IDXGIFactory2_Vtbl, CreateSwapChainForHwnd) / size_of::<Handle>();
