@@ -80,26 +80,6 @@ impl Encoding {
     }
 }
 
-#[repr(C)]
-pub(crate) struct NamedRequest {
-    struct_size: u32,
-    abi_version: u32,
-    directory: *const c_char,
-    name: *const c_char,
-    view: u32,
-    scale: f32,
-    log: rsf_backend_log_fn,
-    log_user: *mut c_void,
-}
-
-#[repr(C)]
-pub(crate) struct NamedReport {
-    struct_size: u32,
-    width: u32,
-    height: u32,
-    dxgi_format: u32,
-}
-
 fn clock() -> Clock {
     let mut facts = Clock::default();
     native::read_clock(&mut facts);

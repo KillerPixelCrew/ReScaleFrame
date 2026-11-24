@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use crate::sys::{rsf_named_frame_dump, rsf_named_frame_dump_report};
 use crate::texture_dump::{PackedRows, pixel_bytes};
 use windows::core::Interface;
 
@@ -309,13 +310,13 @@ pub(crate) unsafe extern "C" fn rsf_input_dump_texture_record(
 pub(crate) unsafe extern "C" fn rsf_input_dump_named_texture(
     context: *mut c_void,
     source: *mut c_void,
-    request: *const NamedRequest,
-    report: *mut NamedReport,
+    request: *const rsf_named_frame_dump,
+    report: *mut rsf_named_frame_dump_report,
 ) -> i32 {
     let Some(request) = (unsafe { checked(request) }) else {
         return INVALID;
     };
-    let (Some(directory), Some(name)) = (unsafe { string(request.directory) }, unsafe {
+    let (Some(directory), Some(name)) = (unsafe { string(request.directory_utf8) }, unsafe {
         string(request.name)
     }) else {
         return INVALID;
@@ -357,7 +358,7 @@ pub(crate) unsafe extern "C" fn rsf_input_dump_named_texture(
     unsafe { native::encode_texture(context, texture.as_raw(), &options, 0, &mut encoding) };
     if encoding.preview == 0
         && !report.is_null()
-        && unsafe { report.cast::<u32>().read() } as usize >= size_of::<NamedReport>()
+        && unsafe { report.cast::<u32>().read() } as usize >= size_of::<rsf_named_frame_dump_report>()
     {
         unsafe {
             std::ptr::addr_of_mut!((*report).width).write(surface.width);

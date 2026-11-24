@@ -154,7 +154,5 @@ pub(super) unsafe fn dump_named(
         log,
         log_user: user,
     };
-    // input_dump mirrors rsf_named_frame_dump as its own NamedRequest.
-    let request = (&raw const request).cast();
-    unsafe { rsf_input_dump_named_texture(context, texture, request, null_mut()) }
+    unsafe { rsf_input_dump_named_texture(context, texture, &request, null_mut()) }
 }
