@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! D3D11 creation interception, the bytecode inventory and generic constant buffers.
 
-#[cfg(not(test))]
-use super::platform::{CONSTANT_SLOTS, CPU_WRITE, DYNAMIC_USAGE};
-#[cfg(test)]
-use super::tests::{CONSTANT_SLOTS, CPU_WRITE, DYNAMIC_USAGE};
-use super::{
-    ARGUMENT, COMPILE, COUNTERS, INTERNAL, OK, guarded, lock, native, raw, sha256, wide_path,
-};
+use super::{ARGUMENT, COMPILE, COUNTERS, INTERNAL, OK, guarded, lock, sha256, wide_path};
 use crate::sys::rsf_patch_bytes;
+use rsf_minhook_sys::{
+    MH_CreateHook, MH_DisableHook, MH_ERROR_ALREADY_INITIALIZED, MH_ERROR_ENABLED, MH_EnableHook,
+    MH_Initialize, MH_OK, MH_RemoveHook,
+};
+use rsf_shader_compiler::blob_bytes;
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::ffi::{c_char, c_void};
@@ -16,6 +15,11 @@ use std::fs;
 use std::ptr;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicPtr, Ordering};
+use windows::Win32::Graphics::Direct3D::Fxc::{
+    D3D_DISASM_ENABLE_INSTRUCTION_NUMBERING, D3DDisassemble,
+};
+use windows::Win32::Graphics::Direct3D11::*;
+use windows::core::{Interface, PCSTR};
 
 type Create = unsafe extern "system" fn(
     *mut c_void,
@@ -28,7 +32,6 @@ type Create = unsafe extern "system" fn(
 // ID3D11Device vtable slots of CreateVertex, Pixel, Geometry, Hull, Domain and ComputeShader.
 const SLOTS: [usize; 6] = [12, 15, 13, 16, 17, 18];
 const STAGES: &[u8] = b"vpghdc";
-const E_INVALIDARG: i32 = 0x8007_0057_u32 as i32;
 
 static ORIGINALS: [AtomicPtr<c_void>; 6] = [const { AtomicPtr::new(ptr::null_mut()) }; 6];
 // Hooked creation entry points, recorded as addresses. Zero while detached.
@@ -72,7 +75,7 @@ unsafe extern "system" fn create<const I: usize>(
     unsafe { original(device, code, size, linkage, out) }
 }
 
-pub(super) const DETOURS: [Create; 6] = [
+const DETOURS: [Create; 6] = [
     create::<0>,
     create::<1>,
     create::<2>,
@@ -97,18 +100,20 @@ pub(super) unsafe extern "C" fn attach(device: *mut c_void) -> i32 {
             return OK;
         }
     } else {
-        if unsafe { native::hooks_ready() } == 0 {
+        if !matches!(
+            unsafe { MH_Initialize() },
+            MH_OK | MH_ERROR_ALREADY_INITIALIZED
+        ) {
             return INTERNAL;
         }
         for (i, (&entry, detour)) in entries.iter().zip(DETOURS).enumerate() {
             let mut original = ptr::null_mut();
-            if unsafe {
-                native::hook_create(entry as *mut c_void, detour as *mut c_void, &mut original)
-            } == 0
+            if unsafe { MH_CreateHook(entry as *mut c_void, detour as *mut c_void, &mut original) }
+                != MH_OK
             {
                 for &created in &entries[..i] {
                     // These hooks have never been enabled.
-                    unsafe { native::hook_remove(created as *mut c_void) };
+                    unsafe { MH_RemoveHook(created as *mut c_void) };
                 }
                 return INTERNAL;
             }
@@ -117,9 +122,12 @@ pub(super) unsafe extern "C" fn attach(device: *mut c_void) -> i32 {
         hooks.targets = entries;
     }
     for (i, &entry) in entries.iter().enumerate() {
-        if unsafe { native::hook_enable(entry as *mut c_void) } == 0 {
+        if !matches!(
+            unsafe { MH_EnableHook(entry as *mut c_void) },
+            MH_OK | MH_ERROR_ENABLED
+        ) {
             for &enabled in &entries[..i] {
-                unsafe { native::hook_disable(enabled as *mut c_void) };
+                unsafe { MH_DisableHook(enabled as *mut c_void) };
             }
             // A detour already on another thread can still call its trampoline. Keep
             // every trampoline and retry these same targets on the next attach.
@@ -148,15 +156,22 @@ pub(super) unsafe extern "C" fn create_shader(
     {
         return ARGUMENT;
     }
-    let stage = unsafe { *target.cast::<u8>() };
+    let device = unsafe { ID3D11Device::from_raw_borrowed(&device) }.unwrap();
+    let code = unsafe { std::slice::from_raw_parts(code.data.cast::<u8>(), code.size) };
     INTERNAL_CREATE.set(true);
-    let result = if STAGES.contains(&stage) {
-        unsafe { native::create_shader(device, u32::from(stage), code, shader) }
-    } else {
-        E_INVALIDARG
+    let result = unsafe {
+        match *target.cast::<u8>() {
+            b'v' => device.CreateVertexShader(code, None, Some(shader.cast())),
+            b'p' => device.CreatePixelShader(code, None, Some(shader.cast())),
+            b'g' => device.CreateGeometryShader(code, None, Some(shader.cast())),
+            b'h' => device.CreateHullShader(code, None, Some(shader.cast())),
+            b'd' => device.CreateDomainShader(code, None, Some(shader.cast())),
+            b'c' => device.CreateComputeShader(code, None, Some(shader.cast())),
+            _ => Err(windows::core::Error::empty()),
+        }
     };
     INTERNAL_CREATE.set(false);
-    if result >= 0 { OK } else { COMPILE }
+    if result.is_ok() { OK } else { COMPILE }
 }
 
 pub(super) unsafe extern "C" fn constant_buffer(
@@ -170,29 +185,47 @@ pub(super) unsafe extern "C" fn constant_buffer(
     if device.is_null() || out.is_null() || size == 0 || !size.is_multiple_of(16) || size > 65536 {
         return ARGUMENT;
     }
-    let created = unsafe { native::create_constant_buffer(device, size, out) };
-    if created >= 0 { OK } else { INTERNAL }
+    let device = unsafe { ID3D11Device::from_raw_borrowed(&device) }.unwrap();
+    let desc = D3D11_BUFFER_DESC {
+        ByteWidth: size,
+        Usage: D3D11_USAGE_DYNAMIC,
+        BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
+        CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
+        ..Default::default()
+    };
+    match unsafe { device.CreateBuffer(&desc, None, Some(out.cast())) } {
+        Ok(()) => OK,
+        Err(_) => INTERNAL,
+    }
 }
 
 /// Replaces a whole dynamic, CPU-writable buffer with WRITE_DISCARD.
 pub(super) unsafe extern "C" fn upload_constant(
     context: *mut c_void,
     buffer: *mut c_void,
-    bytes: rsf_patch_bytes,
+    data: rsf_patch_bytes,
 ) -> i32 {
-    if context.is_null() || buffer.is_null() || bytes.data.is_null() {
+    if context.is_null() || buffer.is_null() || data.data.is_null() {
         return ARGUMENT;
     }
-    let (mut width, mut usage, mut access) = (0, 0, 0);
-    unsafe { native::buffer_desc(buffer, &mut width, &mut usage, &mut access) };
-    let writable = usage == DYNAMIC_USAGE && access & CPU_WRITE != 0;
-    if bytes.size != width as usize || !writable {
+    let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&context) }.unwrap();
+    let buffer = unsafe { ID3D11Buffer::from_raw_borrowed(&buffer) }.unwrap();
+    let mut desc = D3D11_BUFFER_DESC::default();
+    unsafe { buffer.GetDesc(&mut desc) };
+    let writable = desc.Usage == D3D11_USAGE_DYNAMIC
+        && desc.CPUAccessFlags & D3D11_CPU_ACCESS_WRITE.0 as u32 != 0;
+    if data.size != desc.ByteWidth as usize || !writable {
         return ARGUMENT;
     }
-    if unsafe { native::upload(context, buffer, bytes) } != 0 {
+    let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+    if unsafe { context.Map(buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped)) }.is_err() {
         return INTERNAL;
     }
-    OK
+    if !mapped.pData.is_null() {
+        unsafe { ptr::copy_nonoverlapping(data.data.cast::<u8>(), mapped.pData.cast(), data.size) };
+    }
+    unsafe { context.Unmap(buffer, 0) };
+    if mapped.pData.is_null() { INTERNAL } else { OK }
 }
 
 pub(super) unsafe extern "C" fn bind_constant(
@@ -202,18 +235,24 @@ pub(super) unsafe extern "C" fn bind_constant(
     buffer: *mut c_void,
 ) -> i32 {
     let known = u8::try_from(stage).is_ok_and(|s| STAGES.contains(&s));
-    if context.is_null() || slot >= CONSTANT_SLOTS || !known {
+    if context.is_null() || slot >= D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT || !known {
         return ARGUMENT;
     }
-    unsafe { native::bind_constant(context, stage, slot, buffer) };
-    OK
-}
-
-unsafe fn append(user: *mut c_void, data: *const c_void, size: usize) {
-    let out = unsafe { &mut *user.cast::<Vec<u8>>() };
-    if size != 0 {
-        out.extend_from_slice(unsafe { std::slice::from_raw_parts(data.cast::<u8>(), size) });
+    let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&context) }.unwrap();
+    // Option<ID3D11Buffer> is pointer-sized with null for None. Borrow the raw
+    // pointer slot so the incoming COM reference is neither acquired nor released.
+    let buffers = Some(unsafe { std::slice::from_raw_parts((&raw const buffer).cast(), 1) });
+    unsafe {
+        match stage as u8 {
+            b'v' => context.VSSetConstantBuffers(slot, buffers),
+            b'p' => context.PSSetConstantBuffers(slot, buffers),
+            b'g' => context.GSSetConstantBuffers(slot, buffers),
+            b'h' => context.HSSetConstantBuffers(slot, buffers),
+            b'd' => context.DSSetConstantBuffers(slot, buffers),
+            _ => context.CSSetConstantBuffers(slot, buffers),
+        }
     }
+    OK
 }
 
 /// Writes every inventoried bytecode and its disassembly, recording individual failures.
@@ -227,19 +266,34 @@ pub(super) unsafe extern "C" fn dump(directory: *const u16) -> i32 {
             return INTERNAL;
         }
         let snapshot = lock(&INVENTORY).clone();
-        let disassemble = native::disassemble;
         let mut report = String::new();
         use std::fmt::Write as _;
         for (hash, code) in snapshot {
             if let Err(error) = fs::write(root.join(format!("{hash}.dxbc")), &code) {
                 let _ = writeln!(report, "{hash}.dxbc: {error}");
             }
-            let mut text = Vec::new();
-            let status = unsafe { disassemble(raw(&code), (&raw mut text).cast(), Some(append)) };
-            if status != 0 || text.is_empty() {
-                let _ = writeln!(report, "{hash}.asm: disassembly failed ({status})");
-            } else if let Err(error) = fs::write(root.join(format!("{hash}.asm")), &text) {
-                let _ = writeln!(report, "{hash}.asm: {error}");
+            let assembly = unsafe {
+                D3DDisassemble(
+                    code.as_ptr().cast(),
+                    code.len(),
+                    D3D_DISASM_ENABLE_INSTRUCTION_NUMBERING,
+                    PCSTR::null(),
+                )
+            };
+            let assembly = assembly.ok();
+            match assembly
+                .as_ref()
+                .map(blob_bytes)
+                .filter(|text| !text.is_empty())
+            {
+                None => {
+                    let _ = writeln!(report, "{hash}.asm: disassembly failed");
+                }
+                Some(text) => {
+                    if let Err(error) = fs::write(root.join(format!("{hash}.asm")), text) {
+                        let _ = writeln!(report, "{hash}.asm: {error}");
+                    }
+                }
             }
         }
         let complete = report.is_empty();
@@ -252,9 +306,4 @@ pub(super) unsafe extern "C" fn dump(directory: *const u16) -> i32 {
             OK
         }
     })
-}
-
-#[cfg(test)]
-pub(super) fn inventory_contains(hash: &str) -> bool {
-    lock(&INVENTORY).contains_key(hash)
 }

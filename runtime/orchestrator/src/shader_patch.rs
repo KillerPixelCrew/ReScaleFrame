@@ -9,10 +9,7 @@ mod d3d11;
 mod dxbc;
 #[cfg(all(feature = "test-fixtures", not(test)))]
 mod fixture;
-mod leaf;
 mod pack;
-#[cfg(not(test))]
-mod platform;
 mod reflection;
 #[cfg(test)]
 mod tests;
@@ -25,17 +22,19 @@ use crate::sys::{
     RSF_PATCH_SOURCE, RSF_SHADER_PATCH_VERSION, rsf_patch_bytes, rsf_patch_counters,
     rsf_patch_output, rsf_patch_request, rsf_patch_root, rsf_patch_session, rsf_shader_patch_api,
 };
-use leaf::CompileCall;
 use pack::{Json, Pack, bytes, string, text};
+use rsf_shader_compiler::Request;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
-use std::ffi::{CString, c_char, c_void};
+use std::ffi::{CStr, CString, c_char, c_void};
 use std::os::windows::ffi::OsStringExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{fs, ptr};
+use windows::Win32::Graphics::Direct3D::{D3D_INCLUDE_TYPE, D3D_SHADER_MACRO, ID3DInclude_Vtbl};
+use windows::core::{HRESULT, PCSTR};
 use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::Security::Cryptography::{BCRYPT_SHA256_ALG_HANDLE, BCryptHash};
 use windows_sys::Win32::System::LibraryLoader::{
@@ -58,6 +57,8 @@ const VERSION: u32 = RSF_SHADER_PATCH_VERSION;
 // Bump when transform semantics change within one product version.
 const CACHE_PREFIX: &str = concat!("rsf-source-cache-1:", env!("CARGO_PKG_VERSION"), ":");
 const COMPILE_ERROR_LIMIT: usize = 240;
+const E_FAIL: HRESULT = HRESULT(0x8000_4005_u32 as i32);
+const E_INVALIDARG: HRESULT = HRESULT(0x8007_0057_u32 as i32);
 
 /// Virtual file name to contents, ordered by bytes.
 type Files = BTreeMap<Vec<u8>, Vec<u8>>;
@@ -109,13 +110,6 @@ static OWNERS: Mutex<Owners> = Mutex::new(BTreeMap::new());
 
 // Distinguishes concurrent cache writers within this process.
 static TEMPORARY: AtomicU64 = AtomicU64::new(0);
-
-// Production calls the compiler, reflection, device and MinHook leaves in platform.rs; unit tests
-// call same-named fakes.
-#[cfg(not(test))]
-use platform as native;
-#[cfg(test)]
-use tests::native;
 
 /// Admits a caller record by its leading `struct_size`, then its `abi_version`, before any
 /// reference covers the whole record. A short caller may supply only the size field.
@@ -399,24 +393,32 @@ unsafe extern "C" fn root(
     }
 }
 
-struct Compilation<'a> {
+/// The ID3DInclude D3DCompile reads includes through, over the virtual file tree.
+#[repr(C)]
+struct Includes<'a> {
+    vtable: &'static ID3DInclude_Vtbl,
     files: &'a Files,
-    code: Option<Vec<u8>>,
-    errors: Option<Vec<u8>>,
 }
 
-fn compilation<'a, 'b>(user: *mut c_void) -> &'a mut Compilation<'b> {
-    unsafe { &mut *user.cast::<Compilation>() }
-}
+static INCLUDE_VTABLE: ID3DInclude_Vtbl = ID3DInclude_Vtbl {
+    Open: include_open,
+    Close: include_close,
+};
 
 /// D3DCompile resolves includes case-insensitively with either separator.
-unsafe fn include(
-    user: *mut c_void,
-    name: *const c_char,
-    data: *mut *const c_void,
-    size: *mut usize,
-) -> i32 {
-    let mut key = unsafe { c_bytes(name) }.to_vec();
+unsafe extern "system" fn include_open(
+    this: *mut c_void,
+    _: D3D_INCLUDE_TYPE,
+    name: PCSTR,
+    _: *const c_void,
+    data: *mut *mut c_void,
+    size: *mut u32,
+) -> HRESULT {
+    if name.is_null() || data.is_null() || size.is_null() {
+        return E_INVALIDARG;
+    }
+    let files = unsafe { (*this.cast::<Includes<'_>>()).files };
+    let mut key = unsafe { name.as_bytes() }.to_vec();
     for c in &mut key {
         *c = if *c == b'\\' {
             b'/'
@@ -424,30 +426,21 @@ unsafe fn include(
             c.to_ascii_lowercase()
         };
     }
-    let Some(found) = compilation(user).files.get(&key) else {
-        return -1;
+    let Some(found) = files.get(&key) else {
+        return E_FAIL;
+    };
+    let Ok(length) = u32::try_from(found.len()) else {
+        return E_FAIL;
     };
     unsafe {
-        *data = found.as_ptr().cast();
-        *size = found.len();
+        *data = found.as_ptr().cast_mut().cast();
+        *size = length;
     }
-    0
+    HRESULT(0)
 }
 
-fn copy(data: *const c_void, size: usize) -> Vec<u8> {
-    if size == 0 {
-        Vec::new()
-    } else {
-        unsafe { std::slice::from_raw_parts(data.cast::<u8>(), size) }.to_vec()
-    }
-}
-
-unsafe fn code(user: *mut c_void, data: *const c_void, size: usize) {
-    compilation(user).code = Some(copy(data, size));
-}
-
-unsafe fn errors(user: *mut c_void, data: *const c_void, size: usize) {
-    compilation(user).errors = Some(copy(data, size));
+unsafe extern "system" fn include_close(_: *mut c_void, _: *const c_void) -> HRESULT {
+    HRESULT(0)
 }
 
 /// Compiles `source` with the caller's inputs and includes from `files`.
@@ -457,37 +450,46 @@ fn compile(
     files: &Files,
     source: &[u8],
 ) -> Outcome<Vec<u8>> {
-    if r.define_count != 0 {
-        let defines = unsafe { std::slice::from_raw_parts(r.defines, r.define_count) };
-        let complete = defines
-            .iter()
-            .all(|d| !d.name.is_null() && !d.value.is_null());
-        check(complete, ARGUMENT, "null define")?;
-    }
-    let mut state = Compilation {
+    let defines = if r.define_count == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(r.defines, r.define_count) }
+    };
+    let complete = defines
+        .iter()
+        .all(|d| !d.name.is_null() && !d.value.is_null());
+    check(complete, ARGUMENT, "null define")?;
+    let mut macros: Vec<_> = defines
+        .iter()
+        .map(|d| D3D_SHADER_MACRO {
+            Name: PCSTR(d.name.cast()),
+            Definition: PCSTR(d.value.cast()),
+        })
+        .collect();
+    macros.push(D3D_SHADER_MACRO::default());
+    let mut includes = Includes {
+        vtable: &INCLUDE_VTABLE,
         files,
-        code: None,
-        errors: None,
     };
-    let call = CompileCall {
-        compiler,
-        source: raw(source),
-        defines: r.defines,
-        define_count: r.define_count,
-        entry: r.entry,
-        target: r.target,
-        flags: r.flags,
-        user: (&raw mut state).cast(),
-        include: Some(include),
-        code: Some(code),
-        errors: Some(errors),
+    let output = unsafe {
+        rsf_shader_compiler::compile(
+            compiler,
+            Request {
+                source,
+                name: c"",
+                entry: CStr::from_ptr(r.entry),
+                target: CStr::from_ptr(r.target),
+                flags: r.flags,
+            },
+            &macros,
+            (&raw mut includes).cast(),
+        )
     };
-    let result = unsafe { native::compile(&call) };
-    match state.code {
-        Some(code) if result >= 0 => Ok(code),
+    match output.code {
+        Some(code) if output.status >= 0 => Ok(code),
         _ => Err(Refusal {
             code: COMPILE,
-            reason: match state.errors {
+            reason: match output.errors {
                 Some(mut text) => {
                     text.truncate(COMPILE_ERROR_LIMIT);
                     Cow::Owned(text)

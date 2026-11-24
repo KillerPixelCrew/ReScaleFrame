@@ -2,13 +2,12 @@
 //! Variant admission: native resources, buffers and stage interfaces stay as compiled, and only
 //! the pack's declared bindings and interpolants may be added.
 
-use super::leaf::{
-    BindingRecord, ParameterRecord, RSF_PATCH_SIGNATURE_INPUT, RSF_PATCH_SIGNATURE_OUTPUT,
-    ReflectionSink,
-};
 use super::pack::{Json, text, uint};
-use super::{Outcome, REFLECTION, check, raw, refuse};
-use std::ffi::{CStr, c_char, c_void};
+use super::{Outcome, REFLECTION, check, refuse};
+use std::ptr;
+use windows::Win32::Graphics::Direct3D::Fxc::D3DReflect;
+use windows::Win32::Graphics::Direct3D11::*;
+use windows::core::{Interface, PCSTR};
 
 #[derive(Clone, Default)]
 pub(crate) struct Binding {
@@ -48,77 +47,87 @@ pub(crate) struct Shader {
     pub(crate) patch_constants: Vec<Parameter>,
 }
 
-fn name(text: *const c_char) -> Vec<u8> {
+fn name(text: PCSTR) -> Vec<u8> {
     if text.is_null() {
         return Vec::new();
     }
-    unsafe { CStr::from_ptr(text) }.to_bytes().to_vec()
+    unsafe { text.as_bytes() }.to_vec()
 }
 
-fn shader<'a>(user: *mut c_void) -> &'a mut Shader {
-    unsafe { &mut *user.cast::<Shader>() }
-}
-
-unsafe fn on_shader(user: *mut c_void, version: u32) {
-    shader(user).version = version;
-}
-
-unsafe fn on_binding(user: *mut c_void, b: *const BindingRecord) {
-    let b = unsafe { &*b };
-    shader(user).bindings.push(Binding {
-        name: name(b.name),
-        kind: b.type_,
-        point: b.point,
-        count: b.count,
-        return_type: b.return_type,
-        dimension: b.dimension,
-    });
-}
-
-unsafe fn on_buffer(user: *mut c_void, text: *const c_char, size: u32) {
-    shader(user).buffers.push(Buffer {
-        name: name(text),
-        size,
-        variables: Vec::new(),
-    });
-}
-
-unsafe fn on_variable(user: *mut c_void, text: *const c_char, offset: u32, size: u32) {
-    if let Some(buffer) = shader(user).buffers.last_mut() {
-        buffer.variables.push((name(text), offset, size));
-    }
-}
-
-unsafe fn on_parameter(user: *mut c_void, signature: u32, p: *const ParameterRecord) {
-    let p = unsafe { &*p };
-    let parameter = Parameter {
-        semantic: name(p.semantic),
-        index: p.index,
-        register: p.reg,
-        system_value: p.system_value,
-        component_type: p.component_type,
-        mask: p.mask,
-    };
-    let s = shader(user);
-    match signature {
-        x if x == RSF_PATCH_SIGNATURE_INPUT as u32 => s.inputs.push(parameter),
-        x if x == RSF_PATCH_SIGNATURE_OUTPUT as u32 => s.outputs.push(parameter),
-        _ => s.patch_constants.push(parameter),
+fn parameter(p: &D3D11_SIGNATURE_PARAMETER_DESC) -> Parameter {
+    Parameter {
+        semantic: name(p.SemanticName),
+        index: p.SemanticIndex,
+        register: p.Register,
+        system_value: p.SystemValueType.0 as u32,
+        component_type: p.ComponentType.0 as u32,
+        mask: u32::from(p.Mask),
     }
 }
 
 pub(crate) fn reflect(code: &[u8]) -> Option<Shader> {
-    let mut shader = Shader::default();
-    let sink = ReflectionSink {
-        user: (&raw mut shader).cast(),
-        shader: Some(on_shader),
-        binding: Some(on_binding),
-        buffer: Some(on_buffer),
-        variable: Some(on_variable),
-        parameter: Some(on_parameter),
-    };
-    let reflect = super::native::reflect;
-    (unsafe { reflect(raw(code), &sink) } == 0).then_some(shader)
+    unsafe {
+        let mut raw = ptr::null_mut();
+        D3DReflect(
+            code.as_ptr().cast(),
+            code.len(),
+            &ID3D11ShaderReflection::IID,
+            &mut raw,
+        )
+        .ok()?;
+        if raw.is_null() {
+            return None;
+        }
+        let reflection = ID3D11ShaderReflection::from_raw(raw);
+        let mut desc = D3D11_SHADER_DESC::default();
+        reflection.GetDesc(&mut desc).ok()?;
+        let mut shader = Shader {
+            version: desc.Version,
+            ..Default::default()
+        };
+        for i in 0..desc.BoundResources {
+            let mut b = D3D11_SHADER_INPUT_BIND_DESC::default();
+            reflection.GetResourceBindingDesc(i, &mut b).ok()?;
+            shader.bindings.push(Binding {
+                name: name(b.Name),
+                kind: b.Type.0 as u32,
+                point: b.BindPoint,
+                count: b.BindCount,
+                return_type: b.ReturnType.0 as u32,
+                dimension: b.Dimension.0 as u32,
+            });
+        }
+        for i in 0..desc.ConstantBuffers {
+            let buffer = reflection.GetConstantBufferByIndex(i)?;
+            let mut b = D3D11_SHADER_BUFFER_DESC::default();
+            buffer.GetDesc(&mut b).ok()?;
+            let mut variables = Vec::new();
+            for j in 0..b.Variables {
+                let mut v = D3D11_SHADER_VARIABLE_DESC::default();
+                buffer.GetVariableByIndex(j)?.GetDesc(&mut v).ok()?;
+                variables.push((name(v.Name), v.StartOffset, v.Size));
+            }
+            shader.buffers.push(Buffer {
+                name: name(b.Name),
+                size: b.Size,
+                variables,
+            });
+        }
+        let mut p = D3D11_SIGNATURE_PARAMETER_DESC::default();
+        for i in 0..desc.InputParameters {
+            reflection.GetInputParameterDesc(i, &mut p).ok()?;
+            shader.inputs.push(parameter(&p));
+        }
+        for i in 0..desc.OutputParameters {
+            reflection.GetOutputParameterDesc(i, &mut p).ok()?;
+            shader.outputs.push(parameter(&p));
+        }
+        for i in 0..desc.PatchConstantParameters {
+            reflection.GetPatchConstantParameterDesc(i, &mut p).ok()?;
+            shader.patch_constants.push(parameter(&p));
+        }
+        Some(shader)
+    }
 }
 
 /// Checks a compiled variant against the stock shader it replaces.
