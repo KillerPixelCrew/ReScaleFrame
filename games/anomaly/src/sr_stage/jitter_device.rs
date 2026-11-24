@@ -3,7 +3,7 @@
 use super::math::{JitterSequence, jitter_to_uv, next_jitter};
 use crate::motion::{PixelInputs, rsf_anomaly_motion_pack_pixel};
 use crate::sr_fixture_device::Device;
-use crate::sr_fixture_readback::rsf_anomaly_sr_fixture_readback;
+use crate::sr_fixture_readback::readback;
 use crate::sr_swap::{engine_mul, jitter_projection};
 use rsf_shader_compiler::{Request, compile_system_checked};
 use std::ffi::CStr;
@@ -11,7 +11,7 @@ use std::mem::MaybeUninit;
 use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
-use windows::core::{Interface, s};
+use windows::core::s;
 
 const WIDTH: u32 = 96;
 const HEIGHT: u32 = 54;
@@ -272,24 +272,22 @@ impl Fixture {
             );
             ctx.Draw(6, 0);
         }
-        let mut pixels = vec![[0u16; 4]; PIXELS];
+        // RGBA16F texels, little-endian halves.
+        let mut bytes = vec![0u8; PIXELS * 8];
         check(
-            unsafe {
-                rsf_anomaly_sr_fixture_readback(
-                    device.device.as_raw(),
-                    ctx.as_raw(),
-                    self.target.as_raw(),
-                    self.staging.as_raw(),
-                    pixels.as_mut_ptr().cast(),
-                    size_of_val(pixels.as_slice()),
-                )
-            },
+            readback(
+                &device.device,
+                ctx,
+                &self.target,
+                Some(&self.staging),
+                &mut bytes,
+            ),
             "readback",
         )?;
         check(device.debug_errors() == 0, "debug-layer errors")?;
-        Ok(pixels
-            .into_iter()
-            .map(|[u, v, valid, _]| [u, v, valid].map(half))
+        Ok(bytes
+            .chunks_exact(8)
+            .map(|texel| [0, 2, 4].map(|at| half(u16::from_le_bytes([texel[at], texel[at + 1]]))))
             .collect())
     }
 }

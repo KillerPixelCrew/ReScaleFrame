@@ -3,7 +3,7 @@
 use super::targets::{Device as Targets, Error, Target, TargetView, TwinInput};
 use super::{DrawViews, Extent, Pass, ROUND_TRIP, UPSCALE};
 use crate::sr_fixture_device::Device;
-use crate::sr_fixture_readback::rsf_anomaly_sr_fixture_readback;
+use crate::sr_fixture_readback::readback;
 use crate::sr_tonemap::roundtrip_fixture::{
     UpscaleReadback, rsf_anomaly_sr_float_to_half as half, rsf_anomaly_sr_roundtrip_numerics,
     rsf_anomaly_sr_upscale_numerics,
@@ -50,17 +50,7 @@ fn read(
     bytes: usize,
 ) -> Option<Vec<u8>> {
     let mut output = vec![0; texels(size) * bytes];
-    unsafe {
-        rsf_anomaly_sr_fixture_readback(
-            device.device.as_raw(),
-            device.context.as_raw(),
-            texture.as_raw(),
-            null_mut(),
-            output.as_mut_ptr(),
-            output.len(),
-        )
-    }
-    .then_some(output)
+    readback(&device.device, &device.context, texture, None, &mut output).then_some(output)
 }
 
 fn round_trip_views(

@@ -5,7 +5,7 @@ mod provider;
 
 use super::{DrawViews, Extent, PREPARE, Pass, REINSERT, TemporalTargets, UPSCALE};
 use crate::sr_fixture_device::Device;
-use crate::sr_fixture_readback::rsf_anomaly_sr_fixture_readback;
+use crate::sr_fixture_readback::readback;
 use crate::sr_pass::PassInputs;
 use crate::sr_stage::FIRST_PERSON_DEPTH_BITS;
 use crate::sr_tonemap::roundtrip_fixture::{half_to_float, rsf_anomaly_sr_float_to_half as half};
@@ -72,17 +72,10 @@ fn read<T: Word>(d: &Device, texture: &ID3D11Texture2D, channels: usize) -> Vec<
     let mut desc = D3D11_TEXTURE2D_DESC::default();
     unsafe { texture.GetDesc(&mut desc) };
     let mut bytes = vec![0; texels([desc.Width, desc.Height]) * channels * size_of::<T>()];
-    let ok = unsafe {
-        rsf_anomaly_sr_fixture_readback(
-            d.device.as_raw(),
-            d.context.as_raw(),
-            texture.as_raw(),
-            null_mut(),
-            bytes.as_mut_ptr(),
-            bytes.len(),
-        )
-    };
-    assert!(ok, "texture readback");
+    assert!(
+        readback(&d.device, &d.context, texture, None, &mut bytes),
+        "texture readback"
+    );
     bytes
         .chunks_exact(size_of::<T>())
         .map(T::from_bytes)

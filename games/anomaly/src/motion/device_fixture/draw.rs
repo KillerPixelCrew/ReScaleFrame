@@ -3,8 +3,6 @@
 mod bindings;
 mod resources;
 
-use crate::sr_fixture_readback::rsf_anomaly_sr_fixture_readback;
-
 pub(super) use bindings::Bindings;
 pub(super) use bindings::{
     rsf_anomaly_motion_fixture_bind_core, rsf_anomaly_motion_fixture_bind_stage,
@@ -15,7 +13,7 @@ pub(super) use resources::{
     rsf_anomaly_motion_fixture_make_layout, rsf_anomaly_motion_fixture_make_targets,
 };
 use std::ffi::{c_char, c_void};
-use std::ptr::{null, null_mut};
+use std::ptr::null;
 use windows::Win32::Graphics::Direct3D::{
     D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
 };
@@ -64,18 +62,6 @@ pub(super) struct Targets {
     pub(super) depth_view: Raw,
     pub(super) depth_state: Raw,
     pub(super) raster: Raw,
-}
-
-pub(super) unsafe fn rsf_anomaly_motion_fixture_read(
-    device: Raw,
-    context: Raw,
-    texture: Raw,
-    out: Raw,
-    bytes: usize,
-) -> bool {
-    unsafe {
-        rsf_anomaly_sr_fixture_readback(device, context, texture, null_mut(), out.cast(), bytes)
-    }
 }
 
 pub(super) unsafe fn rsf_anomaly_motion_fixture_clear(raw: Raw, targets: &Output, stencil: bool) {

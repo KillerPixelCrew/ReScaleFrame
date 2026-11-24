@@ -152,19 +152,16 @@ impl Gpu {
         Ok(())
     }
 
-    /// The fixture texture as `SIZE * SIZE` elements of `T`.
+    /// The fixture texture as `SIZE * SIZE` elements of `T`, which must accept every bit pattern of its texel.
     pub(super) fn read<T: Copy + Default>(&self, texture: *mut c_void) -> Outcome<Vec<T>> {
         let mut out = vec![T::default(); PIXELS];
-        let ok = unsafe {
-            draw::rsf_anomaly_motion_fixture_read(
-                self.device.as_raw(),
-                self.context.as_raw(),
-                texture,
-                out.as_mut_ptr().cast(),
-                size_of_val(out.as_slice()),
-            )
+        // The texture is a live fixture target, and the byte view covers `out` exactly.
+        let texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&texture) }
+            .ok_or("staging readback failed")?;
+        let bytes = unsafe {
+            std::slice::from_raw_parts_mut(out.as_mut_ptr().cast(), size_of_val(out.as_slice()))
         };
-        if ok {
+        if crate::sr_fixture_readback::readback(&self.device, &self.context, texture, None, bytes) {
             Ok(out)
         } else {
             Err("staging readback failed".into())
