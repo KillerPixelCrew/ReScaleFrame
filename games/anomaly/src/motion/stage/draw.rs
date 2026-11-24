@@ -81,8 +81,7 @@ fn read_foliage(layout: &FoliageLayout, out: &mut FoliageConstants) -> bool {
 
 impl Render {
     fn poison_batch(&mut self, layout: &FoliageLayout) {
-        let mut rows = MaybeUninit::<foliage::Rows>::uninit();
-        foliage::rsf_anomaly_foliage_poison(&mut rows);
+        let rows = foliage::poisoned();
         let array = &layout.array;
         // The completed flush already uploaded the live rows; the engine fills
         // its next batch before the next flush. Poison identifies the rest.
@@ -154,7 +153,7 @@ impl Render {
             })
             .flatten()
             .map_or(ptr::null(), ptr::from_ref);
-        let active = known && foliage::rsf_anomaly_foliage_active(Some(&self.foliage), facts.view);
+        let active = known && self.foliage.active(facts.view);
         let [_, _, previous_u, previous_v] = draw.state.jitter;
         let mut current = FoliageConstants::default();
         if vertex.family == FOLIAGE_TREE {
@@ -170,12 +169,9 @@ impl Render {
                 lod: facts.tree_lod,
             };
             let previous = if constants_ok && active {
-                foliage::rsf_anomaly_foliage_tree(
-                    Some(&mut self.foliage),
-                    facts.view,
-                    facts.visual,
-                    &current,
-                )
+                self.foliage
+                    .tree(facts.view, facts.visual, &current)
+                    .map_or(ptr::null(), ptr::from_ref)
             } else {
                 ptr::null()
             };
@@ -225,18 +221,9 @@ impl Render {
                     (route ^ u64::from(w.to_bits())).wrapping_mul(1_099_511_628_211)
                 });
             if active {
-                let mut output = MaybeUninit::uninit();
-                foliage::rsf_anomaly_foliage_detail(
-                    Some(&mut self.foliage),
-                    facts.view,
-                    route,
-                    &current,
-                    &rows,
-                    &mut output,
-                );
-                remap = unsafe { output.assume_init() };
+                remap = self.foliage.detail(facts.view, route, &current, &rows);
             } else {
-                remap.live = foliage::rsf_anomaly_foliage_count(&rows);
+                remap.live = foliage::live_count(&rows);
             }
             self.poison_batch(layout);
             self.counters.detail_items += u64::from(remap.live);

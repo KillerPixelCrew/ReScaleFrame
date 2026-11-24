@@ -5,8 +5,6 @@ use super::{
 };
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::mem::MaybeUninit;
-use std::ptr;
 
 const POISON: f32 = f32::from_bits(0x7fc5_a5a5);
 // Preserve the previous table's 90% cap on 2^19 slots.
@@ -53,7 +51,7 @@ fn live_groups(rows: &Rows) -> &[[f32; 16]] {
     &rows[..count]
 }
 
-fn group_scale(group: &[f32; 16]) -> f32 {
+pub(super) fn group_scale(group: &[f32; 16]) -> f32 {
     let [x, y, z] = [group[0], group[1], group[2]].map(f64::from);
     (x * x + y * y + z * z).sqrt() as f32
 }
@@ -119,8 +117,8 @@ impl View {
 #[derive(Default)]
 pub(super) struct History {
     views: [View; 2],
-    conflicts: u64,
-    overflows: u64,
+    pub(super) conflicts: u64,
+    pub(super) overflows: u64,
 }
 
 impl History {
@@ -128,7 +126,29 @@ impl History {
         self.views[lane(view)].begin(id)
     }
 
-    fn tree(&mut self, view: u8, visual: u64, record: &TreeRecord) -> Option<&TreeRecord> {
+    pub(super) fn active(&self, view: u8) -> bool {
+        self.views[lane(view)].current.is_some()
+    }
+
+    pub(super) fn reset(&mut self) {
+        self.views = Default::default();
+    }
+
+    /// The items recorded for the view's current frame.
+    #[cfg(feature = "motion-binder-fixture")]
+    pub(super) fn recorded(&self, view: u8) -> usize {
+        self.views[lane(view)]
+            .current
+            .as_ref()
+            .map_or(0, |frame| frame.items.len())
+    }
+
+    pub(super) fn tree(
+        &mut self,
+        view: u8,
+        visual: u64,
+        record: &TreeRecord,
+    ) -> Option<&TreeRecord> {
         let slot = &mut self.views[lane(view)];
         if visual == 0 {
             return None;
@@ -147,17 +167,17 @@ impl History {
         slot.previous.as_ref()?.trees.get(&visual)?.as_ref()
     }
 
-    fn detail(
+    pub(super) fn detail(
         &mut self,
         view: u8,
         route: u64,
         constants: &FoliageConstants,
         rows: &Rows,
-        out: &mut DetailRemap,
-    ) {
+    ) -> DetailRemap {
+        let mut out = DetailRemap::empty();
         let slot = &mut self.views[lane(view)];
         let Some(current) = &mut slot.current else {
-            return;
+            return out;
         };
         let live = live_groups(rows);
         out.live = live.len() as u32;
@@ -185,13 +205,13 @@ impl History {
         }
         out.unmatched = out.live;
         let Some(previous) = &slot.previous else {
-            return;
+            return out;
         };
         let Some(Some(previous_route)) = previous.routes.get(&route) else {
-            return;
+            return out;
         };
         if current_route.is_none() {
-            return;
+            return out;
         }
         out.route_found = true;
         out.previous = *previous_route;
@@ -219,72 +239,16 @@ impl History {
             out.matched += 1;
             out.unmatched -= 1;
         }
+        out
     }
 }
 
-pub(super) extern "C" fn rsf_anomaly_foliage_active(history: Option<&History>, view: u8) -> bool {
-    history.is_some_and(|h| h.views[lane(view)].current.is_some())
-}
-
-pub(super) extern "C" fn rsf_anomaly_foliage_reset(history: Option<&mut History>) {
-    if let Some(history) = history {
-        history.views = Default::default();
-    }
-}
-
-pub(super) extern "C" fn rsf_anomaly_foliage_tree(
-    history: Option<&mut History>,
-    view: u8,
-    visual: u64,
-    record: &TreeRecord,
-) -> *const TreeRecord {
-    history
-        .and_then(|h| h.tree(view, visual, record))
-        .map_or(ptr::null(), ptr::from_ref)
-}
-
-pub(super) extern "C" fn rsf_anomaly_foliage_detail(
-    history: Option<&mut History>,
-    view: u8,
-    route: u64,
-    constants: &FoliageConstants,
-    rows: &Rows,
-    out: &mut MaybeUninit<DetailRemap>,
-) {
-    let out = out.write(DetailRemap::empty());
-    if let Some(history) = history {
-        history.detail(view, route, constants, rows, out);
-    }
-}
-
-#[cfg(feature = "motion-binder-fixture")]
-pub(super) extern "C" fn rsf_anomaly_foliage_conflicts(history: Option<&History>) -> u64 {
-    history.map_or(0, |h| h.conflicts)
-}
-
-pub(super) extern "C" fn rsf_anomaly_foliage_overflows(history: Option<&History>) -> u64 {
-    history.map_or(0, |h| h.overflows)
-}
-
-#[cfg(feature = "motion-binder-fixture")]
-pub(super) extern "C" fn rsf_anomaly_foliage_recorded(
-    history: Option<&History>,
-    view: u8,
-) -> usize {
-    history
-        .and_then(|h| h.views[lane(view)].current.as_ref())
-        .map_or(0, |frame| frame.items.len())
-}
-
-pub(super) extern "C" fn rsf_anomaly_foliage_count(rows: &Rows) -> u32 {
+/// The engine-filled group count of a batch.
+pub(super) fn live_count(rows: &Rows) -> u32 {
     live_groups(rows).len() as u32
 }
 
-pub(super) extern "C" fn rsf_anomaly_foliage_poison(rows: &mut MaybeUninit<Rows>) {
-    rows.write([[POISON; 16]; FOLIAGE_MAX_GROUPS]);
-}
-
-#[cfg(feature = "motion-binder-fixture")]
-pub(super) extern "C" fn rsf_anomaly_foliage_scale(group: &[f32; 16]) -> f32 {
-    group_scale(group)
+/// An all-poison batch: no group is live.
+pub(super) fn poisoned() -> Rows {
+    [[POISON; 16]; FOLIAGE_MAX_GROUPS]
 }

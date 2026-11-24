@@ -41,22 +41,3 @@ typedef struct rsf_anomaly_motion_replay_scope {
     uint64_t storage[273];
 } rsf_anomaly_motion_replay_scope;
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-void rsf_anomaly_motion_bind_targets(void* context, void* const* targets, void* depth);
-void rsf_anomaly_motion_clear_targets(void* context);
-typedef struct rsf_anomaly_motion_device_owner rsf_anomaly_motion_device_owner;
-rsf_anomaly_motion_device_owner* rsf_anomaly_motion_device_new(void);
-uint32_t rsf_anomaly_motion_device_create(rsf_anomaly_motion_device_owner*, void* device, rsf_anomaly_motion_log, void* user);
-int32_t rsf_anomaly_motion_device_target(rsf_anomaly_motion_device_owner*, uint32_t width, uint32_t height,
-    uint32_t samples, uint32_t layers);
-void rsf_anomaly_motion_device_get(const rsf_anomaly_motion_device_owner*, rsf_anomaly_motion_device_view*);
-uint32_t rsf_anomaly_motion_device_upload(rsf_anomaly_motion_device_owner*, void* context, int32_t kind,
-    const void* data, size_t size);
-uint8_t rsf_anomaly_motion_replay_begin(const rsf_anomaly_motion_device_view*, void* context,
-    rsf_anomaly_motion_replay_scope*);
-void rsf_anomaly_motion_replay_end(rsf_anomaly_motion_replay_scope*);
-#ifdef __cplusplus
-}
-#endif

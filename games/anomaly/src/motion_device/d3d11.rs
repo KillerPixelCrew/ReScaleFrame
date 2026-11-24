@@ -4,21 +4,12 @@ use super::Raw;
 use super::replay::{CLASS_INTERFACES, Depth, Pixel, RENDER_TARGETS};
 use std::ptr::null_mut;
 use windows::Win32::Graphics::Direct3D11::*;
-use windows::core::{IUnknown, Interface};
+use windows::core::Interface;
 
 const _: () = {
     assert!(RENDER_TARGETS == D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT as usize);
     assert!(CLASS_INTERFACES == D3D11_SHADER_MAX_INTERFACES as usize);
 };
-
-pub(crate) unsafe extern "C" fn retain(raw: Raw) {
-    let unknown = unsafe { IUnknown::from_raw_borrowed(&raw) }.unwrap();
-    unsafe { (unknown.vtable().AddRef)(raw) };
-}
-
-pub(crate) unsafe extern "C" fn release(raw: Raw) {
-    drop(unsafe { IUnknown::from_raw(raw) });
-}
 
 fn owned<T: Interface>(value: Option<T>) -> Raw {
     value.map_or(null_mut(), Interface::into_raw)
@@ -30,7 +21,7 @@ pub(super) mod device {
     use super::{Raw, owned};
     use crate::host_log::Log as HostLog;
     use crate::motion_device::Log;
-    use rsf_shader_compiler::{Compiler, Request, compile};
+    use rsf_shader_compiler::{Request, compile_system_checked};
     use std::ptr::{copy_nonoverlapping, null_mut};
     use windows::Win32::Graphics::Direct3D11::*;
     use windows::Win32::Graphics::Dxgi::Common::{
@@ -38,7 +29,7 @@ pub(super) mod device {
     };
     use windows::core::Interface;
 
-    pub(in crate::motion_device) use super::{release, retain};
+    pub(in crate::motion_device) use crate::com::{release, retain};
 
     pub(in crate::motion_device) unsafe fn buffer(raw: Raw, size: u32) -> Raw {
         let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap();
@@ -61,30 +52,19 @@ pub(super) mod device {
             callback,
             user: user as usize,
         };
-        let Some(compiler) = Compiler::system("d3dcompiler_47.dll") else {
-            log.text(c"shader rsf_anomaly_zero_motion: d3dcompiler_47 is not available");
-            return null_mut();
-        };
-        let Some(entry) = compiler.entry() else {
-            log.text(c"shader rsf_anomaly_zero_motion: D3DCompile is not available");
-            return null_mut();
-        };
-        let request = Request {
+        let compiled = compile_system_checked(Request {
             source: b"float4 main() : SV_Target2 { return float4(0, 0, 0, 0); }",
             name: c"rsf_anomaly_zero_motion",
             entry: c"main",
             target: c"ps_5_0",
             flags: 1 << 11, // D3DCOMPILE_ENABLE_STRICTNESS
-        };
-        let compiled = unsafe { compile(entry, request, &[], null_mut()) };
-        let Some(code) = compiled.code.filter(|_| compiled.status >= 0) else {
-            let errors = compiled.errors.as_deref().unwrap_or_default();
-            log.say(format!(
-                "shader rsf_anomaly_zero_motion (main): compile failed 0x{:08x} {}",
-                compiled.status as u32,
-                String::from_utf8_lossy(errors).trim_end_matches('\0'),
-            ));
-            return null_mut();
+        });
+        let code = match compiled {
+            Ok(code) => code,
+            Err(reason) => {
+                log.say(format!("shader rsf_anomaly_zero_motion (main): {reason}"));
+                return null_mut();
+            }
         };
         let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap();
         let mut result = None;
@@ -244,7 +224,6 @@ pub(crate) unsafe fn clear_target(raw: Raw, target: Raw) {
     unsafe { context.ClearRenderTargetView(target, &[0.0; 4]) };
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_anomaly_motion_bind_targets(
     raw: Raw,
     views: *const Raw,
@@ -255,7 +234,6 @@ pub(crate) unsafe extern "C" fn rsf_anomaly_motion_bind_targets(
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_anomaly_motion_clear_targets(raw: Raw) {
     if !raw.is_null() {
         unsafe { targets(raw, 0, std::ptr::null(), null_mut()) };

@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 #[cfg(windows)]
 use super::d3d11::{
-    blend as set_blend, depth as set_depth, read_depth, read_pixel, release, shader as set_shader,
+    blend as set_blend, depth as set_depth, read_depth, read_pixel, shader as set_shader,
     targets as set_targets,
 };
 use super::{Raw, View};
+#[cfg(windows)]
+use crate::com::release;
 use std::mem::{MaybeUninit, align_of};
 use std::ptr::{drop_in_place, null, null_mut};
 
@@ -121,8 +123,7 @@ const _: () = {
 };
 
 /// A successful begin moves the saved state into the native frame.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_anomaly_motion_replay_begin(
+pub(crate) unsafe fn rsf_anomaly_motion_replay_begin(
     view: &View,
     context: Raw,
     scope: *mut ReplayScope,
@@ -169,7 +170,6 @@ pub(crate) unsafe extern "C" fn rsf_anomaly_motion_replay_begin(
     REPLAY_READY
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_anomaly_motion_replay_end(scope: *mut ReplayScope) {
+pub(crate) unsafe fn rsf_anomaly_motion_replay_end(scope: *mut ReplayScope) {
     unsafe { drop_in_place(scope.cast::<Saved>()) };
 }

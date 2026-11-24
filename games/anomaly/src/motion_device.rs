@@ -10,16 +10,15 @@ use crate::sys::{
 use rsf_game_sys::rsf_shader_patch_api;
 use rsf_game_sys::{RSF_PATCH_OK, rsf_patch_bytes};
 use std::ffi::{c_char, c_void};
-use std::mem::MaybeUninit;
-use std::slice;
 
 #[cfg(windows)]
 mod d3d11;
 mod replay;
 #[cfg(windows)]
+pub(crate) use crate::com::{release, retain};
+#[cfg(windows)]
 pub(crate) use d3d11::{
-    clear_target, release, retain, rsf_anomaly_motion_bind_targets,
-    rsf_anomaly_motion_clear_targets,
+    clear_target, rsf_anomaly_motion_bind_targets, rsf_anomaly_motion_clear_targets,
 };
 #[cfg(windows)]
 pub(crate) use replay::{
@@ -169,118 +168,86 @@ impl Owner {
         self.device = Device::new(device, runtime, log, user);
         self.device.is_some()
     }
-}
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_device_new() -> *mut Owner {
-    Box::into_raw(Box::new(Owner::new()))
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_device_create(
-    owner: &mut Owner,
-    device: *mut c_void,
-    log: Log,
-    user: *mut c_void,
-) -> u32 {
-    u32::from(owner.create(device, None, log, user))
-}
-
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_motion_device_target(
-    owner: Option<&mut Owner>,
-    width: u32,
-    height: u32,
-    samples: u32,
-    layers: u32,
-) -> i32 {
-    let Some(owner) = owner else {
-        return RSF_MOTION_FAILED;
-    };
-    let Some(device) = &mut owner.device else {
-        return RSF_MOTION_FAILED;
-    };
-    if samples != 1 || layers != 1 {
-        return RSF_MOTION_MULTISAMPLED;
-    }
-    device
-        .ensure_target([width, height])
-        .unwrap_or(RSF_MOTION_FAILED)
-}
-
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_motion_device_get(
-    owner: Option<&Owner>,
-    out: &mut MaybeUninit<View>,
-) {
-    let out = out.write(View::default());
-    let Some(owner) = owner else { return };
-    out.uploads = owner.uploads;
-    out.upload_skips = owner.upload_skips;
-    let Some(device) = &owner.device else { return };
-    out.device = device.device.as_ptr();
-    out.zero_shader = device.zero_shader.as_ptr();
-    out.no_depth = device.no_depth.as_ptr();
-    out.equal_depth = device.equal_depth.as_ptr();
-    if let Some(target) = &device.target {
-        out.rtv = target.view.as_ptr();
-        out.texture = target.texture.as_ptr();
-        [out.width, out.height] = target.extent;
-    }
-}
-
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_motion_device_upload(
-    owner: Option<&mut Owner>,
-    context: *mut c_void,
-    kind: i32,
-    data: *const u8,
-    size: usize,
-) -> u32 {
-    if context.is_null() || data.is_null() {
-        return 0;
-    }
-    let Some(owner) = owner else { return 0 };
-    let Some(device) = &mut owner.device else {
-        return 0;
-    };
-    let index = match kind {
-        RSF_MOTION_CORE => 0,
-        RSF_MOTION_FOLIAGE => 1,
-        RSF_MOTION_PIXEL => 2,
-        RSF_MOTION_TESS => 3,
-        _ => return 0,
-    };
-    let buffer = &mut device.buffers[index];
-    if size != buffer.last.len() {
-        return 0;
-    }
-    let bytes = unsafe { slice::from_raw_parts(data, size) };
-    let resource = buffer.resource.as_ptr();
-    if buffer.uploaded && *buffer.last == *bytes {
-        owner.upload_skips += 1;
-    } else {
-        buffer.uploaded = if let Some(runtime) = device.runtime {
-            let input = rsf_patch_bytes {
-                data: data.cast(),
-                size,
-            };
-            unsafe { (runtime.upload)(context, resource, input) == RSF_PATCH_OK }
-        } else {
-            unsafe { leaves::upload(context, resource, data.cast(), size) != 0 }
+    /// Sizes the motion target: RSF_MOTION_READY, _CREATED, _MULTISAMPLED or _FAILED.
+    pub(crate) fn target(&mut self, width: u32, height: u32, samples: u32, layers: u32) -> i32 {
+        let Some(device) = &mut self.device else {
+            return RSF_MOTION_FAILED;
         };
-        if !buffer.uploaded {
-            return 0;
+        if samples != 1 || layers != 1 {
+            return RSF_MOTION_MULTISAMPLED;
         }
-        buffer.last.copy_from_slice(bytes);
-        owner.uploads += 1;
+        device
+            .ensure_target([width, height])
+            .unwrap_or(RSF_MOTION_FAILED)
     }
-    if let Some(runtime) = device.runtime {
-        u32::from(
-            unsafe { (runtime.bind)(context, buffer.stage as u32, 13, resource) } == RSF_PATCH_OK,
-        )
-    } else {
-        unsafe { leaves::bind(context, resource, buffer.stage) }
+
+    pub(crate) fn view(&self) -> View {
+        let mut out = View {
+            uploads: self.uploads,
+            upload_skips: self.upload_skips,
+            ..View::default()
+        };
+        let Some(device) = &self.device else {
+            return out;
+        };
+        out.device = device.device.as_ptr();
+        out.zero_shader = device.zero_shader.as_ptr();
+        out.no_depth = device.no_depth.as_ptr();
+        out.equal_depth = device.equal_depth.as_ptr();
+        if let Some(target) = &device.target {
+            out.rtv = target.view.as_ptr();
+            out.texture = target.texture.as_ptr();
+            [out.width, out.height] = target.extent;
+        }
+        out
+    }
+
+    /// Uploads one b13 block (skipped when unchanged) and binds it.
+    pub(crate) fn upload(&mut self, context: Raw, kind: i32, bytes: &[u8]) -> bool {
+        if context.is_null() {
+            return false;
+        }
+        let Some(device) = &mut self.device else {
+            return false;
+        };
+        let index = match kind {
+            RSF_MOTION_CORE => 0,
+            RSF_MOTION_FOLIAGE => 1,
+            RSF_MOTION_PIXEL => 2,
+            RSF_MOTION_TESS => 3,
+            _ => return false,
+        };
+        let buffer = &mut device.buffers[index];
+        if bytes.len() != buffer.last.len() {
+            return false;
+        }
+        let resource = buffer.resource.as_ptr();
+        if buffer.uploaded && *buffer.last == *bytes {
+            self.upload_skips += 1;
+        } else {
+            buffer.uploaded = if let Some(runtime) = device.runtime {
+                let input = rsf_patch_bytes {
+                    data: bytes.as_ptr().cast(),
+                    size: bytes.len(),
+                };
+                unsafe { (runtime.upload)(context, resource, input) == RSF_PATCH_OK }
+            } else {
+                unsafe {
+                    leaves::upload(context, resource, bytes.as_ptr().cast(), bytes.len()) != 0
+                }
+            };
+            if !buffer.uploaded {
+                return false;
+            }
+            buffer.last.copy_from_slice(bytes);
+            self.uploads += 1;
+        }
+        if let Some(runtime) = device.runtime {
+            unsafe { (runtime.bind)(context, buffer.stage as u32, 13, resource) == RSF_PATCH_OK }
+        } else {
+            unsafe { leaves::bind(context, resource, buffer.stage) != 0 }
+        }
     }
 }
 

@@ -7,10 +7,7 @@ use super::draw::{
     rsf_anomaly_motion_fixture_make_layout, rsf_anomaly_motion_fixture_make_targets,
     rsf_anomaly_motion_fixture_patch_core,
 };
-use crate::motion_device::{
-    Owner, rsf_anomaly_motion_device_get, rsf_anomaly_motion_device_target,
-    rsf_anomaly_motion_device_upload,
-};
+use crate::motion_device::Owner;
 use crate::shader_loader::deployed::{
     Deployed, Prepared, REPLACED, REPLACED_FROM_CACHE, ShaderRequest, outcome_name, parse_manifest,
 };
@@ -537,23 +534,15 @@ impl Motion {
     }
 
     pub(super) fn target(&mut self, width: u32, height: u32, samples: u32, layers: u32) -> i32 {
-        rsf_anomaly_motion_device_target(Some(&mut self.0), width, height, samples, layers)
+        self.0.target(width, height, samples, layers)
     }
 
     pub(super) fn view(&self) -> View {
-        let mut view = MaybeUninit::uninit();
-        rsf_anomaly_motion_device_get(Some(&self.0), &mut view);
-        unsafe { view.assume_init() }
+        self.0.view()
     }
 
     pub(super) fn upload(&mut self, gpu: &Gpu, kind: i32, bytes: &[u8]) -> bool {
-        rsf_anomaly_motion_device_upload(
-            Some(&mut self.0),
-            gpu.context_raw(),
-            kind,
-            bytes.as_ptr(),
-            bytes.len(),
-        ) != 0
+        self.0.upload(gpu.context_raw(), kind, bytes)
     }
 
     pub(super) fn owner(&mut self) -> &mut Owner {

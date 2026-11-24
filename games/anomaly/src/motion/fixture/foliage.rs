@@ -10,9 +10,7 @@ fn group([x, y, z]: [f32; 3], scale: f32, sun: f32, hemi: f32) -> [f32; 16] {
 }
 
 fn batch(groups: &[[f32; 16]]) -> Rows {
-    let mut out = MaybeUninit::uninit();
-    rsf_anomaly_foliage_poison(&mut out);
-    let mut out = unsafe { out.assume_init() };
+    let mut out = poisoned();
     out[..groups.len()].copy_from_slice(groups);
     out
 }
@@ -157,9 +155,7 @@ fn detail(
     constants: &FoliageConstants,
     rows: &Rows,
 ) -> DetailRemap {
-    let mut out = MaybeUninit::uninit();
-    rsf_anomaly_foliage_detail(Some(history), view, route, constants, rows, &mut out);
-    unsafe { out.assume_init() }
+    history.detail(view, route, constants, rows)
 }
 
 pub(super) fn identity() {
@@ -186,7 +182,7 @@ pub(super) fn identity() {
         (3, 0, 3, false)
     );
     detail(&mut history, 0, route, &w0, &batch(&[p4, p5]));
-    assert_eq!(rsf_anomaly_foliage_recorded(Some(&history), 0), 5);
+    assert_eq!(history.recorded(0), 5);
 
     assert!(history.begin(0, frame(11, 0, 640, 360)));
     let next = batch(&[
@@ -233,7 +229,7 @@ pub(super) fn identity() {
     assert_eq!(detail(&mut history, 0, route, &w1, &moved).conflicts, 0);
     let changed = batch(&[group([5., 0., 5.], 0.5, 0.3, 0.7)]);
     let remap = detail(&mut history, 0, route, &w1, &changed);
-    assert!(remap.conflicts == 1 && rsf_anomaly_foliage_conflicts(Some(&history)) == 1);
+    assert!(remap.conflicts == 1 && history.conflicts == 1);
     assert!(remap.matched == 0 && !remap.items[0].valid);
     assert!(history.begin(0, frame(13, 0, 640, 360)));
     let remap = detail(&mut history, 0, route, &w1, &moved);
@@ -243,11 +239,8 @@ pub(super) fn identity() {
     assert_eq!(detail(&mut history, 0, route, &w1, &batch(&[])).live, 0);
     let mut garbage = batch(&[group([7., 0., 7.], 1., 0.1, 0.1)]);
     garbage[1][5] = f32::NAN;
-    assert_eq!(rsf_anomaly_foliage_count(&garbage), 1);
-    assert_eq!(
-        rsf_anomaly_foliage_scale(&group([0.; 3], 0.75, 0., 0.)),
-        0.75
-    );
+    assert_eq!(live_count(&garbage), 1);
+    assert_eq!(group_scale(&group([0.; 3], 0.75, 0., 0.)), 0.75);
 
     assert!(history.begin(0, frame(14, 0, 640, 360)));
     assert!(detail(&mut history, 0, route, &w1, &moved).route_found);
@@ -258,12 +251,12 @@ pub(super) fn identity() {
     let split = frame(18, 1, 1280, 720);
     assert!(history.begin(0, split) && history.begin(0, split));
     assert!(!history.begin(0, frame(3, 1, 1280, 720)));
-    assert!(!rsf_anomaly_foliage_active(Some(&history), 1));
+    assert!(!history.active(1));
     history.begin(1, frame(20, 0, 320, 180));
     assert_eq!(detail(&mut history, 1, route, &w1, &moved).live, 1);
     assert!(!detail(&mut history, 1, route, &w1, &moved).route_found);
-    rsf_anomaly_foliage_reset(Some(&mut history));
-    assert!(!rsf_anomaly_foliage_active(Some(&history), 0));
+    history.reset();
+    assert!(!history.active(0));
 
     history.begin(0, frame(21, 1, 640, 360));
     detail(&mut history, 0, route, &w0, &first);
@@ -286,7 +279,9 @@ pub(super) fn identity() {
         ..previous
     };
     let tree = |history: &mut History, visual, sample: &TreeRecord| {
-        rsf_anomaly_foliage_tree(Some(history), 0, visual, sample)
+        history
+            .tree(0, visual, sample)
+            .map_or(std::ptr::null(), std::ptr::from_ref)
     };
     history.begin(0, frame(30, 0, 640, 360));
     assert!(tree(&mut history, 0xabc0, &previous).is_null());
@@ -297,9 +292,9 @@ pub(super) fn identity() {
     );
     assert_eq!(tree(&mut history, 0xabc0, &current), before);
     let conflict = TreeRecord { lod: 4, ..current };
-    let count = rsf_anomaly_foliage_conflicts(Some(&history));
+    let count = history.conflicts;
     assert!(tree(&mut history, 0xabc0, &conflict).is_null());
-    assert_eq!(rsf_anomaly_foliage_conflicts(Some(&history)), count + 1);
+    assert_eq!(history.conflicts, count + 1);
     assert!(tree(&mut history, 0xdef0, &current).is_null());
     assert!(history.begin(0, frame(32, 0, 640, 360)));
     assert!(tree(&mut history, 0xabc0, &current).is_null());

@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::super::foliage::{
-    History, Rows, rsf_anomaly_foliage_detail, rsf_anomaly_foliage_poison,
-};
+use super::super::foliage::{History, Rows, poisoned};
 use super::super::stage::abi::FoliageLayout;
 use super::super::*;
 use crate::shader_loader::Reflection;
@@ -53,12 +51,8 @@ pub(super) fn detail_bytes(
 ) -> Result<(), &'static CStr> {
     const ROUTE: u64 = 0xfeed;
     let mut history = History::default();
-    let mut previous = MaybeUninit::uninit();
-    let mut remap = MaybeUninit::uninit();
-    rsf_anomaly_foliage_poison(&mut previous);
-    rsf_anomaly_foliage_poison(rows);
-    let previous = unsafe { previous.assume_init_mut() };
-    let rows = unsafe { rows.assume_init_mut() };
+    let previous = &mut poisoned();
+    let rows = rows.write(poisoned());
     let count = if include_b { 2 } else { 1 };
     previous[..count].copy_from_slice(&previous_groups[..count]);
     rows[..2].copy_from_slice(current_groups);
@@ -70,10 +64,9 @@ pub(super) fn detail_bytes(
         height: extent,
     };
     history.begin(0, frame(1));
-    rsf_anomaly_foliage_detail(Some(&mut history), 0, ROUTE, before, previous, &mut remap);
+    history.detail(0, ROUTE, before, previous);
     history.begin(0, frame(2));
-    rsf_anomaly_foliage_detail(Some(&mut history), 0, ROUTE, current, rows, &mut remap);
-    let remap = unsafe { remap.assume_init() };
+    let remap = history.detail(0, ROUTE, current, rows);
     if include_b {
         if !(remap.live == 2 && remap.matched == 2 && remap.route_found) {
             return Err(c"both plants remapped");

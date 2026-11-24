@@ -33,27 +33,6 @@
 //   and, for a swapped chain, HS and DS) back so the engine's shader cache matches the device again.
 // The SR seam and SR-off FG read the published target with its engine frame and view identity.
 //
-// Startup and quiesce enter through stage_entries.h. This header holds the C reads of the published state
-// (motion/stage.rs).
+// Startup and quiesce enter through stage_entries.h. The SR and FG stages read the published frame target through
+// motion::stage::frame_target() (motion_frame_target.h is the record).
 #include "motion_frame_target.h"
-#include <stdbool.h>
-
-#ifdef __cplusplus
-#define RSF_MOTION_STAGE_NOEXCEPT noexcept
-extern "C" {
-#else
-#define RSF_MOTION_STAGE_NOEXCEPT
-#endif
-
-// Read-only view of the motion target the last G-buffer window cleared and wrote, for SR and FG. Render thread
-// only. `texture` is the R16G16B16A16_FLOAT target (ID3D11Texture2D*, owned by the stage, not reference
-// counted, valid until the next window resizes it or quiesce); `frame` and `main` identify that window (engine
-// frame, main view); `written` is false when the window did not get a usable target. All zero while the stage
-// is inactive.
-void rsf_anomaly_motion_stage_frame_target(rsf_anomaly_motion_frame_target*) RSF_MOTION_STAGE_NOEXCEPT;
-void rsf_anomaly_motion_stage_report(void (*emit)(void*, const char*), void* user) RSF_MOTION_STAGE_NOEXCEPT;
-
-#ifdef __cplusplus
-}
-#endif
-#undef RSF_MOTION_STAGE_NOEXCEPT

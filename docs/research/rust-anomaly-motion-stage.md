@@ -488,5 +488,5 @@ Two fixtures outside N04 lent the C++ motion record to their Rust checks and wer
 `tests/anomaly_sr_profile.cpp` (its contract now reads the motion sites, calls and unique guard from
 `motion_profile.rs`; the native projection drops the motion owner and banks) and
 `tests/anomaly_native_hook_leaves.cpp` (lends only the SR bank; the Rust hook fixture installs the motion
-sites from `motion_profile.rs`). `sr_stage.cpp` reads the motion target through
-`rsf_anomaly_motion_stage_frame_target`.
+sites from `motion_profile.rs`). The SR stage reads the motion target through
+`motion::stage::frame_target()`.

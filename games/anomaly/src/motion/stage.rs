@@ -33,7 +33,7 @@ use crate::sys::{
     RSF_ANOMALY_MOTION_BIND_UNBOUND as UNBOUND, rsf_anomaly_motion_bind_state as BindState,
 };
 use crate::sys::{
-    RSF_MOTION_CREATED, RSF_MOTION_MULTISAMPLED, RSF_MOTION_READY,
+    RSF_MOTION_CREATED, RSF_MOTION_FAILED, RSF_MOTION_MULTISAMPLED, RSF_MOTION_READY,
     rsf_anomaly_motion_device_view as DeviceView,
 };
 use rsf_game_sys::rsf_game_log_fn;
@@ -177,13 +177,13 @@ unsafe impl Send for Render {}
 impl Render {
     fn reset_history(&mut self) {
         self.history.views = Default::default();
-        foliage::rsf_anomaly_foliage_reset(Some(&mut self.foliage));
+        self.foliage.reset();
     }
 
     fn device_view(&self) -> DeviceView {
-        let mut out = MaybeUninit::uninit();
-        rsf_anomaly_motion_device_get(self.device.as_ref(), &mut out);
-        unsafe { out.assume_init() }
+        self.device
+            .as_ref()
+            .map_or_else(DeviceView::default, Owner::view)
     }
 
     fn install_draw_hooks(&mut self, context: Raw, log: Log) -> bool {
@@ -252,8 +252,9 @@ impl Render {
     }
 
     fn upload<const N: usize>(&mut self, context: Raw, kind: i32, bytes: &[u8; N]) -> bool {
-        rsf_anomaly_motion_device_upload(self.device.as_mut(), context, kind, bytes.as_ptr(), N)
-            != 0
+        self.device
+            .as_mut()
+            .is_some_and(|device| device.upload(context, kind, bytes))
     }
 }
 
@@ -356,7 +357,7 @@ impl Stage {
         }
         self.active.store(true, Release);
         let sites = build.motion.sites.each_ref().map(|site| HookSite {
-            _name: site.name,
+            name: site.name,
             rva: site.rva,
             expected: site.expected,
             replacement: ptr::null_mut(),
@@ -367,7 +368,7 @@ impl Stage {
                 build.image(),
                 size,
                 &build.engine,
-                // native_hooks::Site is the Rust layout of rsf_anomaly_hook_site (48 bytes, checked on both sides).
+                // native_hooks::Site is the bound rsf_anomaly_hook_site.
                 sites.as_ptr().cast(),
                 sites.len(),
             )
@@ -497,13 +498,9 @@ impl Stage {
                 render.counters.descriptor_unreadable += 1;
             } else {
                 let desc = unsafe { desc.assume_init() };
-                match rsf_anomaly_motion_device_target(
-                    render.device.as_mut(),
-                    desc.width,
-                    desc.height,
-                    desc.samples,
-                    desc.layers,
-                ) {
+                match render.device.as_mut().map_or(RSF_MOTION_FAILED, |device| {
+                    device.target(desc.width, desc.height, desc.samples, desc.layers)
+                }) {
                     RSF_MOTION_CREATED => {
                         render.counters.target_created += 1;
                         target_ok = true;
@@ -525,8 +522,7 @@ impl Stage {
                 };
                 render.history.begin(lane(facts.view), identity);
                 render.foliage.begin(facts.view, identity);
-                render.counters.foliage_table_overflows =
-                    foliage::rsf_anomaly_foliage_overflows(Some(&render.foliage));
+                render.counters.foliage_table_overflows = render.foliage.overflows;
             }
             render.counters.frames += 1;
             if facts.view == MAIN {
@@ -665,13 +661,12 @@ unsafe extern "C" fn rsf_anomaly_motion_stage_install(image: Raw, build: usize) 
     };
     stage.install(selected, native.sha256.as_ptr())
 }
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_motion_stage_quiesce() -> bool {
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn rsf_anomaly_motion_stage_quiesce() -> bool {
     STAGE.get().is_none_or(Stage::quiesce)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_motion_stage_report(emit: rsf_game_log_fn, user: Raw) {
+pub(crate) fn rsf_anomaly_motion_stage_report(emit: rsf_game_log_fn, user: Raw) {
     if let Some(stage) = STAGE
         .get()
         .filter(|s| s.active.load(Acquire) && emit.is_some())
@@ -687,13 +682,6 @@ pub(crate) fn frame_target() -> FrameTarget {
     STAGE
         .get()
         .map_or_else(FrameTarget::default, Stage::frame_target)
-}
-
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_motion_stage_frame_target(
-    target: &mut MaybeUninit<FrameTarget>,
-) {
-    target.write(frame_target());
 }
 
 #[unsafe(no_mangle)]

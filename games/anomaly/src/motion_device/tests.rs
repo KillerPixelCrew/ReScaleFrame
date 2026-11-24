@@ -63,13 +63,10 @@ pub(super) unsafe extern "C" fn bind(context: *mut c_void, _: *mut c_void, stage
 
 pub(super) use {resource as buffer, resource as depth_state, shader as zero_shader};
 
-fn make_owner(calls: &Calls) -> Box<Owner> {
-    let mut owner = unsafe { Box::from_raw(rsf_anomaly_motion_device_new()) };
+fn make_owner(calls: &Calls) -> Owner {
+    let mut owner = Owner::new();
     let device = ptr::from_ref(calls).cast_mut().cast();
-    assert_eq!(
-        rsf_anomaly_motion_device_create(&mut owner, device, None, ptr::null_mut()),
-        1
-    );
+    assert!(owner.create(device, None, None, ptr::null_mut()));
     owner
 }
 
@@ -78,30 +75,16 @@ fn refused_view_releases_the_candidate_and_retry_publishes_a_complete_target() {
     let calls = Calls::default();
     let mut owner = make_owner(&calls);
     let device_leases = calls.leases.get();
-    assert_eq!(
-        rsf_anomaly_motion_device_target(Some(&mut owner), 20, 10, 1, 1),
-        RSF_MOTION_CREATED
-    );
+    assert_eq!(owner.target(20, 10, 1, 1), RSF_MOTION_CREATED);
     assert_eq!(calls.leases.get(), device_leases + 2);
-    assert_eq!(
-        rsf_anomaly_motion_device_target(Some(&mut owner), 20, 10, 1, 1),
-        RSF_MOTION_READY
-    );
+    assert_eq!(owner.target(20, 10, 1, 1), RSF_MOTION_READY);
     calls.reject_view.set(true);
-    assert_eq!(
-        rsf_anomaly_motion_device_target(Some(&mut owner), 40, 20, 1, 1),
-        RSF_MOTION_FAILED
-    );
+    assert_eq!(owner.target(40, 20, 1, 1), RSF_MOTION_FAILED);
     assert_eq!(calls.leases.get(), device_leases);
-    let mut snapshot = MaybeUninit::uninit();
-    rsf_anomaly_motion_device_get(Some(&owner), &mut snapshot);
-    let snapshot = unsafe { snapshot.assume_init() };
+    let snapshot = owner.view();
     assert!(snapshot.texture.is_null() && snapshot.rtv.is_null());
     calls.reject_view.set(false);
-    assert_eq!(
-        rsf_anomaly_motion_device_target(Some(&mut owner), 40, 20, 1, 1),
-        RSF_MOTION_CREATED
-    );
+    assert_eq!(owner.target(40, 20, 1, 1), RSF_MOTION_CREATED);
     drop(owner);
     assert_eq!(calls.leases.get(), 0);
 }
@@ -111,15 +94,8 @@ fn a_failed_upload_invalidates_the_cache_and_the_next_success_rebinds() {
     let calls = Calls::default();
     let context = ptr::from_ref(&calls).cast_mut().cast();
     let mut owner = make_owner(&calls);
-    let mut submit = |bytes: &[u8; TESS_BYTES]| {
-        rsf_anomaly_motion_device_upload(
-            Some(&mut owner),
-            context,
-            RSF_MOTION_TESS,
-            bytes.as_ptr(),
-            bytes.len(),
-        )
-    };
+    let mut submit =
+        |bytes: &[u8; TESS_BYTES]| u32::from(owner.upload(context, RSF_MOTION_TESS, bytes));
     let bytes = [1; TESS_BYTES];
     assert_eq!(submit(&bytes), 1);
     assert_eq!(calls.bound_stage.get(), b'd' as c_char);

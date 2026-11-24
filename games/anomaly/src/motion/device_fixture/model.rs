@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::super::*;
-use crate::motion_device::{Owner, rsf_anomaly_motion_device_upload};
+use crate::motion_device::Owner;
 use crate::sys::{RSF_MOTION_CORE, RSF_MOTION_PIXEL, RSF_MOTION_TESS};
 use std::ffi::{CStr, c_void};
 
@@ -96,15 +96,7 @@ pub(super) fn model_upload(
     ) {
         return Err(c"pack PS b13");
     }
-    let mut upload = |kind, bytes: &[u8]| {
-        rsf_anomaly_motion_device_upload(
-            Some(&mut *owner),
-            context,
-            kind,
-            bytes.as_ptr(),
-            bytes.len(),
-        ) != 0
-    };
+    let mut upload = |kind, bytes: &[u8]| owner.upload(context, kind, bytes);
     if !upload(RSF_MOTION_CORE, unsafe { vertex.assume_init_ref() })
         || (tessellated && !upload(RSF_MOTION_TESS, unsafe { domain.assume_init_ref() }))
         || !upload(RSF_MOTION_PIXEL, unsafe { pixel.assume_init_ref() })

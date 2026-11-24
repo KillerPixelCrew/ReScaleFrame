@@ -105,8 +105,8 @@ impl<'a> Cache<'a> {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_motion_bind_draw(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn rsf_anomaly_motion_bind_draw(
     state: &mut State,
     platform: &Platform,
     host: *mut c_void,
@@ -174,8 +174,7 @@ pub(crate) extern "C" fn rsf_anomaly_motion_bind_draw(
     if gbuffer { BOUND } else { UNBOUND }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_motion_bind_close(
+pub(crate) fn rsf_anomaly_motion_bind_close(
     state: &mut State,
     platform: &Platform,
     host: *mut c_void,
