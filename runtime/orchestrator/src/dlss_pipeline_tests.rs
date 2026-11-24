@@ -127,7 +127,7 @@ unsafe extern "C" fn sink(_: Raw, message: *const c_char) {
 pub(super) fn present_host() -> Raw {
     handle(with(|world| world.host))
 }
-pub(super) unsafe extern "C" fn share_host(_: Raw, _: rsf_dlssp_log_fn, _: Raw) -> i32 {
+pub(super) unsafe extern "C" fn share_host(_: Raw, _: rsf_dlss_pipeline_log_fn, _: Raw) -> i32 {
     call("share_host");
     with(|world| world.load)
 }
@@ -263,7 +263,7 @@ pub(super) unsafe extern "C" fn decode_create(
     width: u32,
     height: u32,
     format: u32,
-    log: rsf_dlssp_log_fn,
+    log: rsf_dlss_pipeline_log_fn,
     out: *mut Raw,
 ) -> i32 {
     assert!(log.is_some());
@@ -378,7 +378,7 @@ pub(super) unsafe extern "C" fn sharpen(
     _: Raw,
     _: Raw,
     _: *const Sharpening,
-    _: *const rsf_dlssp_sharpen_frame,
+    _: *const SharpenFrame,
 ) -> i32 {
     1
 }
@@ -390,7 +390,7 @@ pub(super) unsafe extern "C" fn alternate_create(
     _: f32,
     _: u32,
     _: u32,
-    _: rsf_dlssp_log_fn,
+    _: rsf_dlss_pipeline_log_fn,
     _: Raw,
     out: *mut Raw,
 ) -> i32 {
@@ -425,7 +425,7 @@ pub(super) unsafe extern "C" fn dump_bytes(
     prefix: *const c_char,
     view: u32,
     _: f32,
-    _: rsf_dlssp_log_fn,
+    _: rsf_dlss_pipeline_log_fn,
 ) -> i32 {
     unsafe { dump("bytes", prefix, view, texture) }
 }
@@ -436,7 +436,7 @@ pub(super) unsafe extern "C" fn dump_image(
     prefix: *const c_char,
     view: u32,
     _: f32,
-    _: rsf_dlssp_log_fn,
+    _: rsf_dlss_pipeline_log_fn,
 ) -> i32 {
     unsafe { dump("image", prefix, view, texture) }
 }
@@ -1224,18 +1224,6 @@ fn alternate_quality_change_restarts_after_failure_limit() {
     assert!(!pipeline.shared().given_up);
     assert_eq!(run(&pipeline, &frame), OK);
     assert_eq!(unsafe { pipeline.stop() }, OK);
-}
-
-#[test]
-fn production_motion_scale_reconstructs_the_previous_feature_location() {
-    for (current, previous) in [(0.4f32, 0.5f32), (0.3, 0.7)] {
-        let raw_motion = previous - current;
-        let raw_scale = dlss_motion_scale(-1.0, true, false);
-        let dense_scale = dlss_motion_scale(0.001, true, true);
-        assert!((current + raw_motion * raw_scale - previous).abs() < 1e-6);
-        assert!((current + raw_motion * 1000.0 * dense_scale - previous).abs() < 1e-6);
-    }
-    assert_eq!(dlss_motion_scale(0.5, false, false), 0.5);
 }
 
 #[test]

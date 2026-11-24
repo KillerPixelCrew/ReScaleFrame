@@ -39,7 +39,8 @@ use crate::sys::{
 };
 use crate::sys::{
     RSF_FRAME_ASSEMBLY_ABI_VERSION, RSF_SHARPENING_ABI_VERSION, rsf_dlss_frame as DlssFrame,
-    rsf_frame_resources, rsf_pipeline_camera_frame as Camera, rsf_sharpening_options as Sharpening,
+    rsf_frame_resources, rsf_pipeline_camera_frame as Camera, rsf_sharpen11_frame as SharpenFrame,
+    rsf_sharpening_options as Sharpening,
 };
 use std::ffi::{CStr, CString, c_char};
 use std::ptr::{null, null_mut};
@@ -351,6 +352,16 @@ impl Owned {
 
     fn output(&self) -> Raw {
         self.output.as_ref().map_or(null_mut(), Interface::as_raw)
+    }
+
+    // The decode pass and the feature behind it are built for one render size.
+    unsafe fn release_decode(&mut self) {
+        if !self.decode.is_null() {
+            unsafe { leaf::decode_destroy(self.decode) };
+        }
+        self.decode = null_mut();
+        self.decode_extent = [0; 2];
+        self.decode_failed = [0; 2];
     }
 
     fn directory_pointers(&self) -> [*const c_char; 4] {
@@ -749,12 +760,7 @@ impl Pipeline {
             owned.hints_reported = false;
             owned.clouds_reported = false;
             owned.dense_extent = [0; 2];
-            if !owned.decode.is_null() {
-                leaf::decode_destroy(owned.decode);
-            }
-            owned.decode = null_mut();
-            owned.decode_extent = [0; 2];
-            owned.decode_failed = [0; 2];
+            owned.release_decode();
         }
         drop(self.set_output(owned, None));
         self.release_layer(owned);
@@ -976,9 +982,7 @@ impl Pipeline {
                 "render size moved from {}x{} to {rw}x{rh}, rebuilding",
                 o.decode_extent[0], o.decode_extent[1]
             ));
-            unsafe { leaf::decode_destroy(o.decode) };
-            o.decode = null_mut();
-            o.decode_extent = [0; 2];
+            unsafe { o.release_decode() };
             if o.dlss_evaluation_attempted && unsafe { leaf::release_resources() } == 0 {
                 o.dlss_evaluation_attempted = false;
             }
@@ -1487,7 +1491,6 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     unsafe fn sharpen(
         &self,
         o: &mut Owned,
@@ -1501,7 +1504,10 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         if backend != RSF_SR_DLSS {
             unsafe { rsf_sr_legacy_fg_inputs(o.alternate, &mut depth, &mut motion) };
         }
-        let mapping = rsf_dlssp_sharpen_frame {
+        let mapping = SharpenFrame {
+            depth_linear: 0,
+            hdr: 1,
+            exposure: 1.0,
             depth_inverted: dlss.depth_inverted,
             motion_x: if backend == RSF_SR_DLSS {
                 frame.render_width as f32 * dlss.motion_scale_x
@@ -1891,13 +1897,11 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         self.count(true, OK)
     }
 
-    #[cfg_attr(test, allow(dead_code))]
     pub(super) fn set_colour_correction(&self, enabled: u32) {
         self.colour_correction
             .store(enabled != 0, Ordering::Release);
     }
 
-    #[cfg_attr(test, allow(dead_code))]
     pub(super) fn set_colour_transport(&self, enabled: u32) {
         self.colour_transport.store(enabled != 0, Ordering::Release);
     }
@@ -2058,12 +2062,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         unsafe { leaf::clear_black(o.device(), replacement.as_raw()) };
         let previous_output = self.set_output(o, Some(replacement));
         let previous_alternate = std::mem::replace(&mut o.alternate, next_alternate);
-        if !o.decode.is_null() {
-            unsafe { leaf::decode_destroy(o.decode) };
-        }
-        o.decode = null_mut();
-        o.decode_extent = [0; 2];
-        o.decode_failed = [0; 2];
+        unsafe { o.release_decode() };
         {
             let mut shared = self.shared();
             shared.restart_history();

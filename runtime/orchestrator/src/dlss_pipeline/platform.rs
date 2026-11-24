@@ -14,7 +14,7 @@ pub(super) use crate::d3d11_output_platform::{
 };
 pub(super) use crate::d3d11_present::rsf_d3d11_present_host as present_host;
 pub(super) use crate::d3d11_sharpening::rsf_core_sharpen11_destroy as sharpen_destroy;
-use crate::d3d11_sharpening::{Frame as SharpenFrame, rsf_core_sharpen11_run};
+use crate::d3d11_sharpening::rsf_core_sharpen11_run;
 pub(super) use crate::dlss_streamline::exports::{
     rsf_dlss_evaluate as evaluate_layer, rsf_dlss_load as load, rsf_dlss_plan_render_size as plan,
     rsf_dlss_query_support as query_support, rsf_dlss_release_resources as release_resources,
@@ -110,7 +110,7 @@ pub(super) unsafe fn decode_create(
     width: u32,
     height: u32,
     format: u32,
-    log: rsf_dlssp_log_fn,
+    log: rsf_dlss_pipeline_log_fn,
     out: *mut Raw,
 ) -> i32 {
     let setup = DecodeSetup {
@@ -261,26 +261,15 @@ pub(super) unsafe fn sharpen(
     depth: Raw,
     exposure: Raw,
     request: *const Sharpening,
-    frame: *const rsf_dlssp_sharpen_frame,
+    frame: *const SharpenFrame,
 ) -> i32 {
     let request = unsafe { &*request };
     if unsafe { rsf_sharpening_requested(request) } == 0 {
         return 1;
     }
-    let frame = unsafe { &*frame };
-    let mapping = SharpenFrame {
-        depth_linear: 0,
-        hdr: 1,
-        exposure: 1.0,
-        depth_inverted: frame.depth_inverted,
-        motion_x: frame.motion_x,
-        motion_y: frame.motion_y,
-        near_plane: frame.near_plane,
-        far_plane: frame.far_plane,
-    };
     let inputs = [output, motion, depth, exposure];
     i32::from(
-        unsafe { rsf_core_sharpen11_run(&mut *pass, context, &inputs, request, &mapping) } != 0,
+        unsafe { rsf_core_sharpen11_run(&mut *pass, context, &inputs, request, &*frame) } != 0,
     )
 }
 
@@ -293,7 +282,7 @@ pub(super) unsafe fn alternate_create(
     units: f32,
     standard_depth: u32,
     auto_exposure: u32,
-    log: rsf_dlssp_log_fn,
+    log: rsf_dlss_pipeline_log_fn,
     user: Raw,
     out: *mut Raw,
 ) -> i32 {
@@ -328,7 +317,7 @@ pub(super) unsafe fn dump_bytes(
     prefix: *const c_char,
     view: u32,
     scale: f32,
-    log: rsf_dlssp_log_fn,
+    log: rsf_dlss_pipeline_log_fn,
 ) -> i32 {
     let options = TextureOptions::new(
         unsafe { CStr::from_ptr(prefix) },
@@ -346,7 +335,7 @@ pub(super) unsafe fn dump_image(
     prefix: *const c_char,
     view: u32,
     scale: f32,
-    log: rsf_dlssp_log_fn,
+    log: rsf_dlss_pipeline_log_fn,
 ) -> i32 {
     let options = TextureOptions::new(
         unsafe { CStr::from_ptr(prefix) },
