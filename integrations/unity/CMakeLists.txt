@@ -1,7 +1,9 @@
 if(EXISTS "${RSF_UNITY_NATIVE_INCLUDE}/IUnityGraphicsD3D12.h")
     find_package(Vulkan REQUIRED)
-    # The package's Rust state (src/, the rsf-unity crate; the Mono plugin bundles its subset).
-    rsf_add_rust_static(rsf_unity_rust rsf_rust_unity rsf-unity rsf_unity)
+    # The package's Rust state (src/, the rsf-unity crate; the Mono plugin bundles its subset), with the Runtime the
+    # package DLL embeds (the package feature).
+    rsf_add_rust_static(rsf_unity_rust rsf_rust_unity rsf-unity rsf_unity --features package
+        CARRIES "rsf_orchestrator_rust;rsf_common_rust;rsf_graphics_rust")
     add_library(rsf_unity_package_bridge OBJECT native/render_bridge.c)
     target_include_directories(rsf_unity_package_bridge PRIVATE include)
     target_include_directories(rsf_unity_package_bridge SYSTEM PRIVATE "${RSF_UNITY_NATIVE_INCLUDE}")

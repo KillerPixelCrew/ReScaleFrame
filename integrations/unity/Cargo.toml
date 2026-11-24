@@ -14,6 +14,9 @@ crate-type = ["staticlib", "rlib"]
 # The Mono plugin's subset: its D3D12 callbacks without the package's D3D11, Vulkan and preview
 # bridges (enabled by rsf-unity-mono).
 mono-plugin = []
+# The package DLL's archive: it embeds the Runtime, so the archive carries it and the DLL links one
+# Rust archive. The Mono plugin imports the Runtime DLL instead.
+package = ["dep:rsf-orchestrator"]
 
 [dependencies]
 rsf-windows = { path = "../../integrations/windows" }
@@ -22,6 +25,7 @@ rsf-runtime-submission = { path = "../../runtime/graphics/submission" }
 
 [target."cfg(windows)".dependencies]
 ash = { workspace = true }
+rsf-orchestrator = { path = "../../runtime/orchestrator", optional = true }
 windows = { workspace = true, features = [
   "Win32_Graphics_Direct3D",
   "Win32_Graphics_Direct3D11",

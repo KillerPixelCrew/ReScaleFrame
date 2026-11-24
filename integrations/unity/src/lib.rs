@@ -7,8 +7,9 @@
 // The unit-test build leaves out the native bridges that call most of the state modules.
 #![cfg_attr(test, allow(dead_code))]
 
-// The plugins get the Runtime from CMake; unit tests link the crate.
-#[cfg(all(test, windows))]
+// The package archive carries the Runtime its DLL embeds; the Mono plugin imports the Runtime DLL,
+// and unit tests link the crate.
+#[cfg(all(windows, any(test, feature = "package")))]
 use rsf_orchestrator as _;
 #[cfg(all(test, windows))]
 use rsf_runtime_common as _;
