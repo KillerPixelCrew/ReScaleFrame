@@ -76,12 +76,12 @@ pub(super) unsafe extern "C" fn release(object: *mut c_void) {
     }
 }
 
-pub(super) unsafe extern "C" fn describe(texture: *mut c_void, out: *mut Description) {
-    unsafe { out.write((*texture.cast::<Texture>()).desc) };
+pub(super) unsafe fn describe(texture: *mut c_void) -> Description {
+    unsafe { (*texture.cast::<Texture>()).desc }
 }
 
-pub(super) unsafe extern "C" fn same_device(texture: *mut c_void, device: *mut c_void) -> u32 {
-    u32::from(unsafe { (*texture.cast::<Texture>()).owner } == device)
+pub(super) unsafe fn same_device(texture: *mut c_void, device: *mut c_void) -> bool {
+    unsafe { (*texture.cast::<Texture>()).owner == device }
 }
 
 pub(super) unsafe extern "C" fn shader(device: *mut c_void, _: Log, _: *mut c_void) -> *mut c_void {
@@ -154,7 +154,7 @@ pub(super) unsafe fn dispatch(
     values: *const Constants,
     groups_x: u32,
     groups_y: u32,
-) -> u32 {
+) -> bool {
     let state = self::context(context);
     let values = unsafe { &*values };
     let pipeline = unsafe { &*pipeline };
@@ -168,14 +168,12 @@ pub(super) unsafe fn dispatch(
     .map(label);
     state.submissions.set(state.submissions.get() + 1);
     state.last_motion.set(values.has_motion);
-    u32::from(
-        label(pipeline.shader) == "shader"
-            && label(pipeline.constants) == "constants"
-            && bound == [SET[0], SET[3], SET[4], SET[5]]
-            && (values.has_motion == 0.0) == motion.is_null()
-            && groups_x == (values.size[0] as u32).div_ceil(8)
-            && groups_y == (values.size[1] as u32).div_ceil(8),
-    )
+    label(pipeline.shader) == "shader"
+        && label(pipeline.constants) == "constants"
+        && bound == [SET[0], SET[3], SET[4], SET[5]]
+        && (values.has_motion == 0.0) == motion.is_null()
+        && groups_x == (values.size[0] as u32).div_ceil(8)
+        && groups_y == (values.size[1] as u32).div_ceil(8)
 }
 
 const SET: [&str; 6] = [

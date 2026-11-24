@@ -217,12 +217,6 @@ impl Owner {
         Some([set.depth.as_ptr(), set.motion.as_ptr()])
     }
 
-    fn describe(&self, texture: *mut c_void) -> Description {
-        let mut desc = Description::default();
-        unsafe { leaves::describe(texture, &mut desc) };
-        desc
-    }
-
     fn ensure_targets(&mut self, device: *mut c_void, extent: [u32; 2]) -> Option<&SurfaceSet> {
         if self.surfaces.as_ref().is_none_or(|s| s.extent != extent) {
             // The new set is complete before the older one drops.
@@ -242,7 +236,7 @@ impl Owner {
         if context.is_null() || frame.depth.is_null() || frame.width == 0 || frame.height == 0 {
             return Result::Resources;
         }
-        let depth = self.describe(frame.depth);
+        let depth = unsafe { leaves::describe(frame.depth) };
         if !matches!(depth.format, R24G8_TYPELESS | D24_UNORM_S8_UINT)
             || depth.samples != 1
             || depth.layers != 1
@@ -259,7 +253,7 @@ impl Owner {
             return Result::Resources;
         };
         let device = d3d.as_ptr();
-        if unsafe { leaves::same_device(frame.depth, device) } == 0 {
+        if !unsafe { leaves::same_device(frame.depth, device) } {
             return Result::Resources;
         }
         if self
@@ -299,12 +293,12 @@ impl Owner {
         let motion_view = if frame.motion.is_null() {
             None
         } else {
-            let desc = self.describe(frame.motion);
+            let desc = unsafe { leaves::describe(frame.motion) };
             if desc.format == RGBA16_FLOAT
                 && [desc.width, desc.height] == extent
                 && desc.samples == 1
                 && desc.layers == 1
-                && unsafe { leaves::same_device(frame.motion, device) } != 0
+                && unsafe { leaves::same_device(frame.motion, device) }
             {
                 Lease::new(
                     unsafe { leaves::motion_view(device, frame.motion) },
@@ -336,7 +330,7 @@ impl Owner {
                 frame.height.div_ceil(8),
             )
         };
-        self.ready = accepted != 0;
+        self.ready = accepted;
         if self.ready {
             Result::Ok
         } else {

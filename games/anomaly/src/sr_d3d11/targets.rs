@@ -430,7 +430,7 @@ impl TwinBatch {
 }
 
 #[cfg(test)]
-extern "C" fn rsf_anomaly_sr_drop_target(owner: *mut Target) {
+fn rsf_anomaly_sr_drop_target(owner: *mut Target) {
     if !owner.is_null() {
         drop(unsafe { Box::from_raw(owner) });
     }

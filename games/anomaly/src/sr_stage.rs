@@ -2660,7 +2660,7 @@ pub(crate) static STAGE: Stage = Stage::new();
 // ---- the private C ABI the native leaves call (sr_stage/native.rs binds the C11 leaf's table) ---------------------
 // `ini` is null (nothing selected) or a NUL-terminated UTF-16 path that stays readable for the call: the carrier's
 // configuration path at cold start, or a fixture's INI.
-unsafe extern "C" fn rsf_anomaly_sr_stage_configure_ini(
+unsafe fn rsf_anomaly_sr_stage_configure_ini(
     ini: *const u16,
     apply: bool,
     log: rsf_anomaly_sr_log,

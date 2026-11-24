@@ -29,7 +29,7 @@ fn owned<T: Interface>(value: Option<T>) -> Raw {
     value.map_or(ptr::null_mut(), Interface::into_raw)
 }
 
-pub(super) unsafe extern "C" fn device(raw: Raw) -> Raw {
+pub(super) unsafe fn device(raw: Raw) -> Raw {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
     if unsafe { context.GetType() } != D3D11_DEVICE_CONTEXT_IMMEDIATE {
         return ptr::null_mut();
@@ -37,35 +37,31 @@ pub(super) unsafe extern "C" fn device(raw: Raw) -> Raw {
     owned(unsafe { context.GetDevice() }.ok())
 }
 
-pub(super) unsafe extern "C" fn describe(raw: Raw, out: *mut Description) {
+pub(super) unsafe fn describe(raw: Raw) -> Description {
     let texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&raw) }.unwrap();
     let mut desc = D3D11_TEXTURE2D_DESC::default();
-    unsafe {
-        texture.GetDesc(&mut desc);
-        out.write(Description {
-            format: desc.Format.0 as u32,
-            width: desc.Width,
-            height: desc.Height,
-            samples: desc.SampleDesc.Count,
-            layers: desc.ArraySize,
-            mips: desc.MipLevels,
-        });
+    unsafe { texture.GetDesc(&mut desc) };
+    Description {
+        format: desc.Format.0 as u32,
+        width: desc.Width,
+        height: desc.Height,
+        samples: desc.SampleDesc.Count,
+        layers: desc.ArraySize,
+        mips: desc.MipLevels,
     }
 }
 
-pub(super) unsafe extern "C" fn same_device(texture: Raw, device: Raw) -> u32 {
+pub(super) unsafe fn same_device(texture: Raw, device: Raw) -> bool {
     let texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&texture) }.unwrap();
     let Ok(owner) = (unsafe { texture.GetDevice() }) else {
-        return 0;
+        return false;
     };
     if owner.as_raw() == device {
-        return 1;
+        return true;
     }
     let device = unsafe { ID3D11Device::from_raw_borrowed(&device) }.unwrap();
-    u32::from(
-        matches!((owner.cast::<IUnknown>(), device.cast::<IUnknown>()),
-        (Ok(actual), Ok(expected)) if actual.as_raw() == expected.as_raw()),
-    )
+    matches!((owner.cast::<IUnknown>(), device.cast::<IUnknown>()),
+        (Ok(actual), Ok(expected)) if actual.as_raw() == expected.as_raw())
 }
 
 fn shader_code(log: Log, user: Raw) -> Option<Vec<u8>> {
@@ -84,7 +80,7 @@ fn shader_code(log: Log, user: Raw) -> Option<Vec<u8>> {
     })
     .ok()
 }
-pub(super) unsafe extern "C" fn shader(raw: Raw, log: Log, user: Raw) -> Raw {
+pub(super) unsafe fn shader(raw: Raw, log: Log, user: Raw) -> Raw {
     let Some(code) = shader_code(log, user) else {
         return ptr::null_mut();
     };
@@ -98,7 +94,7 @@ pub(super) unsafe extern "C" fn shader(raw: Raw, log: Log, user: Raw) -> Raw {
     owned(shader)
 }
 
-pub(super) unsafe extern "C" fn constant_buffer(raw: Raw) -> Raw {
+pub(super) unsafe fn constant_buffer(raw: Raw) -> Raw {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap();
     let desc = D3D11_BUFFER_DESC {
         ByteWidth: size_of::<Constants>() as u32,
@@ -139,7 +135,7 @@ pub(crate) fn create_texture(
     texture
 }
 
-pub(super) unsafe extern "C" fn texture(
+pub(super) unsafe fn texture(
     raw: Raw,
     width: u32,
     height: u32,
@@ -155,7 +151,7 @@ pub(super) unsafe extern "C" fn texture(
     ))
 }
 
-pub(super) unsafe extern "C" fn depth_view(raw: Raw, texture: Raw) -> Raw {
+pub(super) unsafe fn depth_view(raw: Raw, texture: Raw) -> Raw {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap();
     let texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&texture) }.unwrap();
     let mut desc = D3D11_SHADER_RESOURCE_VIEW_DESC {
@@ -174,7 +170,7 @@ pub(super) unsafe extern "C" fn depth_view(raw: Raw, texture: Raw) -> Raw {
     owned(view)
 }
 
-pub(super) unsafe extern "C" fn unordered_view(raw: Raw, texture: Raw) -> Raw {
+pub(super) unsafe fn unordered_view(raw: Raw, texture: Raw) -> Raw {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap();
     let texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&texture) }.unwrap();
     let mut view = None;
@@ -184,7 +180,7 @@ pub(super) unsafe extern "C" fn unordered_view(raw: Raw, texture: Raw) -> Raw {
     owned(view)
 }
 
-pub(super) unsafe extern "C" fn motion_view(raw: Raw, texture: Raw) -> Raw {
+pub(super) unsafe fn motion_view(raw: Raw, texture: Raw) -> Raw {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap();
     let texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&texture) }.unwrap();
     let mut view = None;
@@ -205,14 +201,14 @@ pub(super) unsafe fn dispatch(
     values: *const Constants,
     groups_x: u32,
     groups_y: u32,
-) -> u32 {
+) -> bool {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
     let pipeline = unsafe { &*pipeline };
     let targets = unsafe { &*targets };
     let constants = unsafe { ID3D11Buffer::from_raw_borrowed(&pipeline.constants) }.unwrap();
     let mut state = rsf_d3d11_state::default();
     if unsafe { (scope.save)(raw, &mut state) } == 0 {
-        return 0;
+        return false;
     }
     let _saved = SavedState {
         context: raw,
@@ -222,11 +218,11 @@ pub(super) unsafe fn dispatch(
     let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
     if unsafe { context.Map(constants, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped)) }.is_err()
     {
-        return 0;
+        return false;
     }
     if mapped.pData.is_null() {
         unsafe { context.Unmap(constants, 0) };
-        return 0;
+        return false;
     }
     unsafe {
         ptr::copy_nonoverlapping(values, mapped.pData.cast(), 1);
@@ -252,5 +248,5 @@ pub(super) unsafe fn dispatch(
         context.CSSetUnorderedAccessViews(0, 2, Some([None, None].as_ptr()), None);
         context.CSSetShaderResources(0, Some(&[None, None]));
     }
-    1
+    true
 }

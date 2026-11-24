@@ -37,7 +37,7 @@ impl Snapshot {
 }
 
 #[cfg(feature = "motion-device-fixture")]
-pub(super) extern "C" fn rsf_anomaly_shader_snapshot_keeps_buffer_sizes(
+pub(super) fn rsf_anomaly_shader_snapshot_keeps_buffer_sizes(
     stock: Option<&Snapshot>,
     variant: Option<&Snapshot>,
 ) -> bool {
@@ -369,7 +369,7 @@ fn extends<const N: usize>(
     seen.into_iter().all(|present| present)
 }
 
-pub(super) extern "C" fn rsf_anomaly_shader_compatible(
+pub(super) fn rsf_anomaly_shader_compatible(
     stage: u8,
     stock: &Reflection,
     variant: &Reflection,
@@ -506,14 +506,14 @@ fn covers(outputs: &[Parameter], inputs: &[Parameter]) -> bool {
     })
 }
 
-pub(crate) extern "C" fn rsf_anomaly_shader_linkable(
+pub(crate) fn rsf_anomaly_shader_linkable(
     vertex: &Reflection,
     pixel: &Reflection,
 ) -> bool {
     covers(vertex.outputs(), pixel.inputs())
 }
 
-pub(crate) extern "C" fn rsf_anomaly_shader_tess_linkable(
+pub(crate) fn rsf_anomaly_shader_tess_linkable(
     vertex: &Reflection,
     hull: &Reflection,
     domain: &Reflection,
