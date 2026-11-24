@@ -16,7 +16,6 @@ fn bindings() {
         "motion_target_platform.h",
         "native_geometry/fixture_platform.h",
         "native_geometry_platform.h",
-        "native_hook_ops.h",
         "native_hooks.h",
         "native_observer_platform.h",
         "overlay_platform.h",

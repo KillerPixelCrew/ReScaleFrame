@@ -181,9 +181,7 @@ bool rsf_anomaly_sr_native_disable_hooks(void);
 // The cl_pos_decompress_params::setup vtable replacement (x64, so the engine's __fastcall is the C convention).
 void rsf_anomaly_sr_position_setup_detour(void* self, void* constant);
 
-// Rust entries of the leaf. `ini` is a NUL-terminated UTF-16 path; `build` the native_profile.rs index.
-bool rsf_anomaly_sr_stage_configure_native(const uint16_t* ini, bool apply, rsf_anomaly_sr_log log, void* user);
-bool rsf_anomaly_sr_stage_install_build(void* image, size_t build);
+// Rust entries of the leaf.
 void rsf_anomaly_sr_stage_prepare(void* target);
 void rsf_anomaly_sr_stage_prepared(void);
 void rsf_anomaly_sr_stage_seam(void* target);

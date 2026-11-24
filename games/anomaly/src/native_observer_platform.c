@@ -1,28 +1,14 @@
 // SPDX-License-Identifier: MIT
 // Native observer detours, typed trampoline calls and fault boundaries for the Rust observer (native_observer.rs).
 #include "native_observer.h"
-#include "engine_slots.h"
-#include "fg_stage_platform.h"
-#include "input_hooks.h"
-#include "native_hooks.h"
+#include "native_geometry.h"
 #include "native_memory.h"
-#include "stage_entries.h"
 
 // native_observer.rs.
-const char* rsf_anomaly_observer_identify(rsf_anomaly_observer_engine*, const rsf_anomaly_image_headers*,
-    rsf_anomaly_guard_read_fn);
 bool rsf_anomaly_observer_before(uint32_t boundary);
 void rsf_anomaly_observer_after(uint32_t boundary,
     const float* view, const float* projection, uint32_t target);
 void rsf_anomaly_observer_leave(void);
-typedef bool (*rsf_anomaly_observer_install_fn)(void*, uint32_t, const rsf_anomaly_hook_site*, size_t);
-bool rsf_anomaly_observer_install(const rsf_anomaly_observer_engine*, const rsf_anomaly_observer_binding*,
-    rsf_anomaly_observer_install_fn);
-bool rsf_anomaly_observer_read_frame(const rsf_anomaly_observer_engine*, rsf_anomaly_guard_read_fn,
-    rsf_anomaly_observer_frame*);
-
-_Static_assert(sizeof(rsf_anomaly_observer_binding) == 16 && offsetof(rsf_anomaly_observer_binding, original) == 8,
-    "observer binding layout");
 
 // Same order as native_sites in both exact-build records (native_profile.rs).
 enum { observer_site_count = RSF_ANOMALY_OBSERVER_RESET_END + 1 };
@@ -32,9 +18,10 @@ typedef void (*unary_fn)(void*);
 typedef void (*camera_fn)(void*, const float*, const float*);
 typedef void (*copy_target_fn)(void*, uint32_t);
 
-// MinHook writes each trampoline to untyped storage. Cast only at the native call site.
-static void* trampolines[observer_site_count];
-static rsf_anomaly_hook_set hooks;
+// native_observer.rs installs the detours below; MinHook writes each trampoline to this untyped storage. Cast only at
+// the native call site.
+void* rsf_anomaly_observer_trampolines[observer_site_count];
+#define trampolines rsf_anomaly_observer_trampolines
 
 // One detour invocation. Rust admits it before the original and records completion facts after it. Begin, End,
 // camera and target-copy facts follow their original calls; the other boundaries report before them.
@@ -142,63 +129,8 @@ static void reset_end(void* self)
     observe(&call);
 }
 
-const char* rsf_anomaly_observer_native_identify(rsf_anomaly_observer_engine* out)
-{
-    return rsf_anomaly_observer_identify(out, &rsf_anomaly_guarded_image_headers, guarded_copy);
-}
-
-static bool install_hooks(void* image, uint32_t image_size, const rsf_anomaly_hook_site* sites, size_t count)
-{
-    return rsf_anomaly_hooks_install(&hooks, image, image_size, sites, count);
-}
-
-static rsf_anomaly_observer_binding bind(void* replacement, uint32_t boundary)
-{
-    const rsf_anomaly_observer_binding binding = {replacement, &trampolines[boundary]};
-    return binding;
-}
-
-bool rsf_anomaly_observer_native_enable_hooks(const rsf_anomaly_observer_engine* engine)
-{
-    if (rsf_anomaly_hooks_created(&hooks)) return rsf_anomaly_hooks_enable(&hooks);
-    // MinHook takes code addresses as untyped pointers.
-    const rsf_anomaly_observer_binding bindings[observer_site_count] = {
-        bind((void*)(uintptr_t)&render_begin, RSF_ANOMALY_OBSERVER_BEGIN),
-        bind((void*)(uintptr_t)&render_end, RSF_ANOMALY_OBSERVER_END),
-        bind((void*)(uintptr_t)&camera, RSF_ANOMALY_OBSERVER_CAMERA),
-        bind((void*)(uintptr_t)&scene, RSF_ANOMALY_OBSERVER_SCENE),
-        bind((void*)(uintptr_t)&screen_ui, RSF_ANOMALY_OBSERVER_UI),
-        bind((void*)(uintptr_t)&target_copy, RSF_ANOMALY_OBSERVER_TARGET_COPY),
-        bind((void*)(uintptr_t)&reset_begin, RSF_ANOMALY_OBSERVER_RESET_BEGIN),
-        bind((void*)(uintptr_t)&reset_end, RSF_ANOMALY_OBSERVER_RESET_END),
-    };
-    return rsf_anomaly_observer_install(engine, bindings, install_hooks);
-}
-
-bool rsf_anomaly_observer_native_disable_hooks(void) { return rsf_anomaly_hooks_disable(&hooks); }
-
-bool rsf_anomaly_observer_native_install_geometry(const rsf_anomaly_observer_engine* engine)
-{
-    return rsf_anomaly_geometry_install_native(engine->image, engine->build);
-}
-bool rsf_anomaly_observer_native_install_sr(const rsf_anomaly_observer_engine* engine)
-{
-    return rsf_anomaly_sr_install_native(engine->image, engine->build);
-}
-bool rsf_anomaly_observer_native_install_motion(const rsf_anomaly_observer_engine* engine)
-{
-    return rsf_anomaly_motion_install_native(engine->image, engine->build);
-}
-bool rsf_anomaly_observer_native_enable_input(void) { return rsf_anomaly_slot_set(RSF_ANOMALY_INPUT_SLOT, true); }
-bool rsf_anomaly_observer_native_disable_input(void) { return rsf_anomaly_slot_set(RSF_ANOMALY_INPUT_SLOT, false); }
-
-bool rsf_anomaly_observer_native_read_frame(const rsf_anomaly_observer_engine* engine, rsf_anomaly_observer_frame* out)
-{
-    return rsf_anomaly_observer_read_frame(engine, guarded_copy, out);
-}
-
-
-bool rsf_anomaly_observer_native_copy(void* output, const void* input, size_t size)
-{
-    return guarded_copy(output, input, size);
-}
+// In RSF_ANOMALY_OBSERVER_* order. MinHook takes code addresses as untyped pointers.
+void* const rsf_anomaly_observer_detours[observer_site_count] = {
+    (void*)&render_begin, (void*)&render_end, (void*)&camera, (void*)&scene,
+    (void*)&screen_ui, (void*)&target_copy, (void*)&reset_begin, (void*)&reset_end,
+};

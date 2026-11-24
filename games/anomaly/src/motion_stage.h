@@ -33,6 +33,6 @@
 //   and, for a swapped chain, HS and DS) back so the engine's shader cache matches the device again.
 // The SR seam and SR-off FG read the published target with its engine frame and view identity.
 //
-// Startup and quiesce enter through stage_entries.h. The SR and FG stages read the published frame target through
+// Bootstrap configures the stage and the observer installs and quiesces it (motion/stage.rs). The SR and FG stages read the published frame target through
 // motion::stage::frame_target() (motion_frame_target.h is the record).
 #include "motion_frame_target.h"

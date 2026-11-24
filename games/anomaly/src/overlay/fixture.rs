@@ -294,11 +294,9 @@ fn directinput(checks: &mut Checks, format: *const DIDATAFORMAT) -> Option<()> {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_overlay_hooks_fixture(
-    hooks: &HookOps,
-    format: *const DIDATAFORMAT,
-) -> i32 {
-    // The C host supplies the pinned MinHook calls and the SDK mouse format.
+extern "C" fn rsf_anomaly_overlay_hooks_fixture(format: *const DIDATAFORMAT) -> i32 {
+    // The C host supplies the SDK mouse format.
+    let hooks = &crate::native_hooks::MINHOOK;
     let api = rsf_overlay_api {
         struct_size: size_of::<rsf_overlay_api>() as u32,
         abi_version: RSF_OVERLAY_API_VERSION,

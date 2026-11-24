@@ -606,6 +606,7 @@ version = "0.1.2"
 dependencies = [
  "rsf-bindgen",
  "rsf-game-sys",
+ "rsf-minhook-sys",
  "rsf-shader-compiler",
  "rsf-test-support",
  "rsf-windows",

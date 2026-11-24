@@ -11,7 +11,7 @@ use crate::fg_stage::rsf_anomaly_fg_set_overlay_sink;
 use crate::fg_stage::rsf_anomaly_fg_stage_input_received;
 use crate::input::rsf_anomaly_input_install;
 use crate::input::rsf_anomaly_input_received;
-use crate::native_hooks::HookOps;
+use crate::native_hooks::{HookOps, MINHOOK};
 use crate::native_profile::PROFILES;
 use crate::overlay::{rsf_anomaly_overlay_present, rsf_anomaly_overlay_start};
 use crate::overlay_hooks::{install_input, rsf_anomaly_overlay_set_input_observer};
@@ -40,16 +40,15 @@ const MODE_REFUSED: u32 = 7;
 const FAULT: u32 = 8;
 
 pub(super) use self::rsf_anomaly_bootstrap_input_hook as input_hook;
-pub(super) use self::rsf_anomaly_motion_configure_native as motion;
-pub(super) use self::rsf_anomaly_sr_configure_native as sr;
+pub(super) use crate::motion::stage::configure as motion;
+
+pub(super) unsafe fn sr(ini: *const u16, apply: bool, log: rsf_game_log_fn) -> bool {
+    unsafe {
+        crate::sr_stage::native::rsf_anomaly_sr_stage_configure_native(ini, apply, log, null_mut())
+    }
+}
 
 unsafe extern "C" {
-    pub(super) fn rsf_anomaly_sr_configure_native(
-        ini: *const u16,
-        apply: bool,
-        log: rsf_game_log_fn,
-    ) -> bool;
-    pub(super) fn rsf_anomaly_motion_configure_native(ini: *const u16, log: rsf_game_log_fn);
     fn rsf_anomaly_fg_configure_native(
         ini: *const u16,
         apply: bool,
@@ -63,7 +62,6 @@ unsafe extern "C" {
         build: usize,
         reason: *mut *const c_char,
     ) -> bool;
-    fn rsf_anomaly_minhook_ops() -> &'static HookOps;
 }
 
 pub(super) unsafe fn fg(
@@ -79,11 +77,11 @@ pub(super) unsafe fn fg(
 }
 
 pub(super) fn input_observation() -> Result<(), &'static std::ffi::CStr> {
-    install_input(unsafe { rsf_anomaly_minhook_ops() })
+    install_input(&MINHOOK)
 }
 
 pub(super) unsafe fn overlay(runtime: HMODULE, ini: *const u16, log: rsf_game_log_fn) -> bool {
-    unsafe { start_overlay(runtime, ini, log, rsf_anomaly_minhook_ops()) }
+    unsafe { start_overlay(runtime, ini, log, &MINHOOK) }
 }
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_bootstrap_install_input(

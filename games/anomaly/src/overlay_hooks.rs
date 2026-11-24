@@ -295,7 +295,7 @@ impl Hooks {
             .try_reserve_exact(batch.len())
             .map_err(|_| c"overlay hook table allocation failed")?;
         let _transaction = transaction();
-        if !unsafe { (platform.initialize.unwrap())() } {
+        if !unsafe { (platform.initialize)() } {
             return Err(c"MinHook initialization failed");
         }
         let mut targets = [std::ptr::null_mut(); MAX_HOOKS];
@@ -325,14 +325,9 @@ impl Hooks {
             state.modules[usize::from(matches!(binding, Binding::Present(_)))] = module;
             state.publish(binding, true);
         }
-        if !enable_batch(
-            &targets[..batch.len()],
-            platform.queue.unwrap(),
-            platform.apply.unwrap(),
-            || {
-                self.state().publish(binding, false);
-            },
-        ) {
+        if !enable_batch(&targets[..batch.len()], platform, || {
+            self.state().publish(binding, false);
+        }) {
             return Err(c"MinHook refused to enable the overlay hook batch");
         }
         Ok(())
@@ -669,15 +664,11 @@ mod tests {
         static REFUSE_CREATE: Cell<Address> = const { Cell::new(0) };
     }
 
-    unsafe extern "C" fn initialize() -> bool {
+    unsafe fn initialize() -> bool {
         true
     }
 
-    unsafe extern "C" fn create(
-        target: *mut c_void,
-        _detour: *mut c_void,
-        out: *mut *mut c_void,
-    ) -> bool {
+    unsafe fn create(target: *mut c_void, _detour: *mut c_void, out: *mut *mut c_void) -> bool {
         CALLS.with_borrow_mut(|calls| calls.push(('c', target.addr())));
         if REFUSE_CREATE.get() == target.addr() {
             return false;
@@ -686,16 +677,16 @@ mod tests {
         true
     }
 
-    unsafe extern "C" fn remove_unqueued(target: *mut c_void) {
+    unsafe fn remove_unqueued(target: *mut c_void) {
         CALLS.with_borrow_mut(|calls| calls.push(('r', target.addr())));
     }
 
-    unsafe extern "C" fn queue(target: *mut c_void, enable: bool) -> bool {
+    unsafe fn queue(target: *mut c_void, enable: bool) -> bool {
         CALLS.with_borrow_mut(|calls| calls.push((if enable { 'e' } else { 'd' }, target.addr())));
         true
     }
 
-    unsafe extern "C" fn apply() -> bool {
+    unsafe fn apply() -> bool {
         CALLS.with_borrow_mut(|calls| {
             calls.push(('a', 0));
             calls
@@ -731,11 +722,11 @@ mod tests {
     }
 
     const PLATFORM: HookOps = HookOps {
-        initialize: Some(initialize),
-        create: Some(create),
-        remove_unqueued: Some(remove_unqueued),
-        queue: Some(queue),
-        apply: Some(apply),
+        initialize,
+        create,
+        remove_unqueued,
+        queue,
+        apply,
     };
 
     const PRESENT: Binding = Binding::Present(PresentSink {

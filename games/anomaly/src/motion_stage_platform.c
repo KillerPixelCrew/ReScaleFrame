@@ -5,7 +5,6 @@
 #include "motion_stage_platform.h"
 #include "native_geometry.h"
 #include "native_memory.h"
-#include "stage_entries.h"
 #include <rescaleframe/game_frame.h>
 #define COBJMACROS
 #include <d3d11.h>
@@ -326,12 +325,3 @@ _Static_assert(sizeof(rsf_anomaly_motion_frame_target) == 24 && offsetof(rsf_ano
     offsetof(rsf_anomaly_motion_frame_target, main) == 21, "frame target");
 _Static_assert(RSF_PHASE_RENDER_SUBMIT == 2 && RSF_DUMP_VIEW_DENSE_MOTION == 7, "frame phase and dump view");
 
-// C entries for the bootstrap and observer leaves (stage_entries.h).
-void rsf_anomaly_motion_configure_native(const wchar_t* ini, rsf_game_log_fn log)
-{
-    rsf_anomaly_motion_stage_configure(ini, log, NULL);
-}
-bool rsf_anomaly_motion_install_native(void* module, size_t build)
-{
-    return rsf_anomaly_motion_stage_install(module, build);
-}

@@ -9,7 +9,6 @@
 #include "native_geometry.h"
 #include "native_hooks.h"
 #include "native_memory.h"
-#include "stage_entries.h"
 #include <rescaleframe/d3d11_state.h>
 #include <rescaleframe/texture_dump.h>
 #include <windows.h>
@@ -152,15 +151,3 @@ uintptr_t rsf_anomaly_sr_native_constant_buffer(void* function, void* constants,
 /* ---- memory ---------------------------------------------------------------------------------------------------- */
 bool rsf_anomaly_sr_native_copy(void* output, const void* input, size_t size) { return guarded_copy(output, input, size); }
 
-/* ---- C entries for the bootstrap and observer leaves (stage_entries.h) ---------------------------------------- */
-_Static_assert(sizeof(wchar_t) == sizeof(uint16_t), "UTF-16 INI path");
-
-bool rsf_anomaly_sr_configure_native(const wchar_t* ini, bool apply, rsf_game_log_fn log)
-{
-    return rsf_anomaly_sr_stage_configure_native((const uint16_t*)ini, apply, log, NULL);
-}
-
-bool rsf_anomaly_sr_install_native(void* image, size_t build)
-{
-    return rsf_anomaly_sr_stage_install_build(image, build);
-}

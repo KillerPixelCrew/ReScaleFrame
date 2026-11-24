@@ -121,9 +121,7 @@ bool rsf_anomaly_motion_native_include_copy(void*, const void*, size_t) RSF_MOTI
 void rsf_anomaly_motion_native_include_close(void* table, const void*) RSF_MOTION_NOEXCEPT;
 bool rsf_anomaly_motion_native_read_engine(const void*, uintptr_t address, uint8_t* out, size_t) RSF_MOTION_NOEXCEPT;
 
-void rsf_anomaly_motion_stage_configure(const wchar_t*, rsf_dump_log_fn, void*) RSF_MOTION_NOEXCEPT;
-// `build` is the native_profile.rs index the observer admitted.
-bool rsf_anomaly_motion_stage_install(void* image, size_t build) RSF_MOTION_NOEXCEPT;
+
 bool rsf_anomaly_motion_resolve_draws(rsf_anomaly_motion_guarded_copy, void*, void* (*)[4]) RSF_MOTION_NOEXCEPT;
 bool rsf_anomaly_motion_position_views(rsf_anomaly_motion_guarded_copy, void*, uint32_t, uint32_t, uint32_t,
     rsf_anomaly_motion_position_pair*) RSF_MOTION_NOEXCEPT;

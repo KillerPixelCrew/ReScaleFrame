@@ -14,6 +14,23 @@ use std::ptr::with_exposed_provenance;
 
 pub(super) type Read = unsafe extern "C" fn(*mut c_void, *const c_void, usize) -> bool;
 
+// The fault-contained engine copy (native_memory.h), exported by native_hooks_platform.c.
+#[cfg(not(test))]
+unsafe extern "C" {
+    #[link_name = "rsf_anomaly_guarded_copy"]
+    pub(crate) fn guarded_copy(output: *mut c_void, input: *const c_void, size: usize) -> bool;
+}
+/// Unit tests copy plain memory.
+#[cfg(test)]
+pub(crate) unsafe extern "C" fn guarded_copy(
+    output: *mut c_void,
+    input: *const c_void,
+    size: usize,
+) -> bool {
+    unsafe { std::ptr::copy_nonoverlapping(input.cast::<u8>(), output.cast(), size) };
+    true
+}
+
 pub(super) fn read_bytes<const N: usize>(read: Read, address: usize) -> Option<[u8; N]> {
     if address == 0 {
         return None;
@@ -31,7 +48,6 @@ pub(super) fn read_bytes<const N: usize>(read: Read, address: usize) -> Option<[
     .then_some(bytes)
 }
 
-#[repr(C)]
 pub(super) struct Image {
     base: *const u8,
     size: u32,
@@ -86,8 +102,6 @@ impl UniqueGuard {
 }
 
 const _: () = {
-    assert!(size_of::<Image>() == 24);
-    assert!(std::mem::offset_of!(Image, read) == 16);
     assert!(size_of::<NativeSite>() == 32);
     assert!(std::mem::offset_of!(NativeSite, rva) == 8);
     assert!(std::mem::offset_of!(NativeSite, expected) == 12);

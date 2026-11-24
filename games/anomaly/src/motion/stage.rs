@@ -617,23 +617,19 @@ impl Stage {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_stage_configure(
-    ini: *const u16,
-    log: rsf_game_log_fn,
-    user: Raw,
-) {
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) unsafe fn configure(ini: *const u16, log: rsf_game_log_fn) {
     Stage::get().configure(
         ini,
         Log {
             callback: log,
-            user: user as usize,
+            user: 0,
         },
     );
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_stage_install(image: Raw, build: usize) -> bool {
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn install(image: Raw, build: usize) -> bool {
     let stage = Stage::get();
     let records = (
         crate::native_profile::PROFILES.get(build),

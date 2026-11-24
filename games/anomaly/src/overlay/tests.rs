@@ -226,26 +226,6 @@ unsafe extern "C" fn dump(
     OK
 }
 
-const UNUSED_HOOKS: HookOps = HookOps {
-    initialize: Some(unused_initialize),
-    create: Some(unused_create),
-    remove_unqueued: Some(unused_remove),
-    queue: Some(unused_queue),
-    apply: Some(unused_initialize),
-};
-unsafe extern "C" fn unused_initialize() -> bool {
-    unreachable!()
-}
-unsafe extern "C" fn unused_create(_: *mut c_void, _: *mut c_void, _: *mut *mut c_void) -> bool {
-    unreachable!()
-}
-unsafe extern "C" fn unused_remove(_: *mut c_void) {
-    unreachable!()
-}
-unsafe extern "C" fn unused_queue(_: *mut c_void, _: bool) -> bool {
-    unreachable!()
-}
-
 const INI: &[u16] = &[
     b'C' as u16,
     b':' as u16,
@@ -466,12 +446,20 @@ fn a_hook_refusal_stays_refused_on_retry() {
     PRESENT_REFUSED.set(true);
     let overlay = Overlay::new();
     let first = overlay
-        .start(&options(&api, true), Some(&UNUSED_HOOKS), Vec::new())
+        .start(
+            &options(&api, true),
+            Some(&crate::native_hooks::MINHOOK),
+            Vec::new(),
+        )
         .unwrap_err();
     assert_eq!(first.status, HOOKS_REFUSED);
     assert_eq!(reason_of(first), "dummy swap chain creation failed");
     let retry = overlay
-        .start(&options(&api, true), Some(&UNUSED_HOOKS), Vec::new())
+        .start(
+            &options(&api, true),
+            Some(&crate::native_hooks::MINHOOK),
+            Vec::new(),
+        )
         .unwrap_err();
     assert_eq!(retry.status, HOOKS_REFUSED);
     assert!(reason_of(retry).contains("refused earlier"));

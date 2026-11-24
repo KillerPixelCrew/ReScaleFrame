@@ -33,7 +33,7 @@
 #include <stdint.h>
 #include <wchar.h>
 
-/* Bootstrap configures the stage and the native observer installs it through the C11 leaf's entries in stage_entries.h
-   (rsf_anomaly_sr_configure_native, rsf_anomaly_sr_install_native), which bind the leaf table first. Install verifies
+/* Bootstrap configures the stage and the native observer installs it (sr_stage/native.rs), binding the leaves first.
+   Install verifies
    every guard of the selected stage on the verified image and installs the hooks, or refuses and leaves the game stock;
    it returns true when nothing is selected. */

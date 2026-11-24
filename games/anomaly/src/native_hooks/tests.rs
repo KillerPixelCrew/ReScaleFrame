@@ -24,8 +24,8 @@ enum Operation {
 }
 
 struct Fake {
-    dos: Option<DosFacts>,
-    pe: Option<PeFacts>,
+    dos: Option<IMAGE_DOS_HEADER>,
+    pe: Option<IMAGE_NT_HEADERS64>,
     code_available: bool,
     initialize: bool,
     create_failure: Option<usize>,
@@ -37,17 +37,20 @@ struct Fake {
 
 impl Default for Fake {
     fn default() -> Self {
+        let mut pe = IMAGE_NT_HEADERS64 {
+            Signature: PE_SIGNATURE,
+            ..Default::default()
+        };
+        pe.FileHeader.Machine = crate::AMD64;
+        pe.OptionalHeader.Magic = PE32_PLUS;
+        pe.OptionalHeader.SizeOfImage = IMAGE;
         Self {
-            dos: Some(DosFacts {
-                nt_offset: 64,
-                signature: DOS_SIGNATURE,
+            dos: Some(IMAGE_DOS_HEADER {
+                e_magic: DOS_SIGNATURE,
+                e_lfanew: 64,
+                ..Default::default()
             }),
-            pe: Some(PeFacts {
-                signature: PE_SIGNATURE,
-                image_size: IMAGE,
-                machine: AMD64,
-                optional_magic: PE32_PLUS,
-            }),
+            pe: Some(pe),
             code_available: true,
             initialize: true,
             create_failure: None,
@@ -63,62 +66,53 @@ thread_local! {
     static FAKE: RefCell<Fake> = RefCell::new(Fake::default());
 }
 
-const PLATFORM: Platform = Platform {
-    headers: ImageHeaders {
-        dos: Some(dos),
-        pe: Some(pe),
-    },
-    read: Some(read),
-    hooks: HookOps {
-        initialize: Some(initialize),
-        create: Some(create),
-        remove_unqueued: Some(remove),
-        queue: Some(queue),
-        apply: Some(apply),
-    },
+const OPS: HookOps = HookOps {
+    initialize,
+    create,
+    remove_unqueued: remove,
+    queue,
+    apply,
 };
 
-unsafe extern "C" fn dos(_: *const c_void, out: *mut DosFacts) -> bool {
-    FAKE.with_borrow(|fake| {
-        let Some(dos) = fake.dos else { return false };
-        unsafe { out.write(dos) };
-        true
-    })
-}
-
-unsafe extern "C" fn pe(_: *const c_void, _: *const c_void, out: *mut PeFacts) -> bool {
-    FAKE.with_borrow(|fake| {
-        let Some(pe) = fake.pe else { return false };
-        unsafe { out.write(pe) };
-        true
-    })
-}
-
-unsafe extern "C" fn read(
-    _: *const c_void,
-    _: *const c_void,
-    out: Address,
+// The headers sit at the module base and its NT offset; any executable read is site code.
+unsafe fn read(
+    module: Address,
+    address: *const c_void,
+    out: *mut c_void,
     size: usize,
-    executable: bool,
+    code: bool,
 ) -> bool {
-    assert_eq!(size, CODE.len());
-    assert!(executable);
-    FAKE.with_borrow(|fake| {
-        if fake.code_available {
-            unsafe { out.cast::<[u8; GUARD_BYTES]>().write(CODE) };
+    FAKE.with_borrow(|fake| unsafe {
+        if code {
+            assert_eq!(size, CODE.len());
+            if fake.code_available {
+                out.cast::<[u8; GUARD_BYTES]>().write(CODE);
+            }
+            return fake.code_available;
         }
-        fake.code_available
+        let nt = |dos: IMAGE_DOS_HEADER| module.addr().wrapping_add(dos.e_lfanew as usize);
+        match (fake.dos, fake.pe) {
+            (Some(dos), _) if size == size_of_val(&dos) && address == module.cast_const() => {
+                out.cast::<IMAGE_DOS_HEADER>().write(dos);
+                true
+            }
+            (Some(dos), Some(pe)) if size == size_of_val(&pe) && address.addr() == nt(dos) => {
+                out.cast::<IMAGE_NT_HEADERS64>().write(pe);
+                true
+            }
+            _ => false,
+        }
     })
 }
 
-unsafe extern "C" fn initialize() -> bool {
+unsafe fn initialize() -> bool {
     FAKE.with_borrow_mut(|fake| {
         fake.calls.push(Operation::Initialize);
         fake.initialize
     })
 }
 
-unsafe extern "C" fn create(address: Address, _: Address, out: *mut Address) -> bool {
+unsafe fn create(address: Address, _: Address, out: *mut Address) -> bool {
     let address = address as usize;
     FAKE.with_borrow_mut(|fake| {
         fake.calls.push(Operation::Create(address));
@@ -131,7 +125,7 @@ unsafe extern "C" fn create(address: Address, _: Address, out: *mut Address) -> 
     })
 }
 
-unsafe extern "C" fn remove(address: Address) {
+unsafe fn remove(address: Address) {
     FAKE.with_borrow_mut(|fake| {
         fake.calls.push(Operation::Remove(address as usize));
         let hook = fake.hooks.remove(&(address as usize)).unwrap();
@@ -139,7 +133,7 @@ unsafe extern "C" fn remove(address: Address) {
     });
 }
 
-unsafe extern "C" fn queue(address: Address, enable: bool) -> bool {
+unsafe fn queue(address: Address, enable: bool) -> bool {
     let address = address as usize;
     FAKE.with_borrow_mut(|fake| {
         fake.calls.push(Operation::Queue(address, enable));
@@ -155,7 +149,7 @@ unsafe extern "C" fn queue(address: Address, enable: bool) -> bool {
     })
 }
 
-unsafe extern "C" fn apply() -> bool {
+unsafe fn apply() -> bool {
     FAKE.with_borrow_mut(|fake| {
         fake.calls.push(Operation::Apply);
         let failure = fake.apply_failures.pop_front();
@@ -175,51 +169,36 @@ unsafe extern "C" fn apply() -> bool {
 }
 
 #[derive(Default)]
-struct Handle(Address);
+struct Handle(HookSet);
 
 impl Handle {
-    fn install(&mut self, sites: &[Site]) -> bool {
+    fn install(&self, sites: &[Site]) -> bool {
         self.install_image(MODULE, IMAGE, sites)
     }
 
-    fn install_image(&mut self, module: usize, size: u32, sites: &[Site]) -> bool {
-        unsafe {
-            rsf_anomaly_hook_set_install(
-                &mut self.0,
-                &PLATFORM,
-                module as Address,
-                size,
-                sites.as_ptr(),
-                sites.len(),
-            )
-        }
+    fn install_image(&self, module: usize, size: u32, sites: &[Site]) -> bool {
+        install_with(&self.0, &OPS, read, module as Address, size, sites)
     }
 
-    fn resolved(&mut self, targets: &[Target]) -> bool {
-        unsafe {
-            rsf_anomaly_hook_set_install_resolved(
-                &mut self.0,
-                &PLATFORM,
-                targets.as_ptr(),
-                targets.len(),
-            )
-        }
+    fn resolved(&self, targets: &[Target]) -> bool {
+        install_resolved_with(&self.0, &OPS, targets)
     }
 
-    fn enabled(&mut self, enable: bool) -> bool {
-        unsafe { rsf_anomaly_hook_set_set_enabled(&mut self.0, &PLATFORM, enable) }
+    fn enabled(&self, enable: bool) -> bool {
+        set_enabled_with(&self.0, &OPS, enable)
     }
 
     fn created(&self) -> bool {
-        unsafe { rsf_anomaly_hook_set_created(&self.0) }
+        created(&self.0)
     }
 }
 
 impl Drop for Handle {
     fn drop(&mut self) {
         // The fake creates no executable trampolines.
-        if !self.0.is_null() {
-            drop(unsafe { Box::from_raw(self.0.cast::<Batch>()) });
+        let batch = *self.0.get_mut();
+        if !batch.is_null() {
+            drop(unsafe { Box::from_raw(batch.cast::<Batch>()) });
         }
     }
 }
@@ -255,7 +234,7 @@ fn detours() -> Vec<(bool, bool)> {
 fn exact_preflight_limits_and_late_guard_refusals() {
     let mut originals = [ptr::null_mut(); MAX_SITES + 1];
     let mut sites = sites(&mut originals);
-    let mut batch = Handle::default();
+    let batch = Handle::default();
     assert!(!batch.enabled(true));
     assert!(batch.enabled(false));
     assert!(!batch.install(&[]));
@@ -300,17 +279,17 @@ fn exact_preflight_limits_and_late_guard_refusals() {
 fn dos_and_pe_headers_refuse_before_minhook() {
     let mut originals = [ptr::null_mut()];
     let sites = sites(&mut originals);
-    let mut batch = Handle::default();
+    let batch = Handle::default();
     let failures: [fn(&mut Fake); 10] = [
         |f| f.dos = None,
-        |f| f.dos.as_mut().unwrap().signature ^= 1,
-        |f| f.dos.as_mut().unwrap().nt_offset = -1,
-        |f| f.dos.as_mut().unwrap().nt_offset = (MIN_IMAGE_BYTES - PE_HEADER_BYTES + 1) as i32,
+        |f| f.dos.as_mut().unwrap().e_magic ^= 1,
+        |f| f.dos.as_mut().unwrap().e_lfanew = -1,
+        |f| f.dos.as_mut().unwrap().e_lfanew = (MIN_IMAGE_BYTES - PE_HEADER_BYTES + 1) as i32,
         |f| f.pe = None,
-        |f| f.pe.as_mut().unwrap().signature ^= 1,
-        |f| f.pe.as_mut().unwrap().machine ^= 1,
-        |f| f.pe.as_mut().unwrap().optional_magic ^= 1,
-        |f| f.pe.as_mut().unwrap().image_size += 1,
+        |f| f.pe.as_mut().unwrap().Signature ^= 1,
+        |f| f.pe.as_mut().unwrap().FileHeader.Machine ^= 1,
+        |f| f.pe.as_mut().unwrap().OptionalHeader.Magic ^= 1,
+        |f| f.pe.as_mut().unwrap().OptionalHeader.SizeOfImage += 1,
         |f| f.code_available = false,
     ];
     for fail in failures {
@@ -323,14 +302,14 @@ fn dos_and_pe_headers_refuse_before_minhook() {
     }
     FAKE.with_borrow_mut(|fake| {
         *fake = Fake::default();
-        fake.dos.as_mut().unwrap().nt_offset = (MIN_IMAGE_BYTES - PE_HEADER_BYTES) as i32;
+        fake.dos.as_mut().unwrap().e_lfanew = (MIN_IMAGE_BYTES - PE_HEADER_BYTES) as i32;
     });
     assert!(!batch.install_image(usize::MAX - 1, IMAGE, &sites));
-    FAKE.with_borrow_mut(|fake| fake.dos.as_mut().unwrap().nt_offset = 0);
+    FAKE.with_borrow_mut(|fake| fake.dos.as_mut().unwrap().e_lfanew = 0);
     assert!(!batch.install_image(usize::MAX - 1, IMAGE, &sites));
     no_minhook_calls();
     FAKE.with_borrow_mut(|fake| {
-        fake.dos.as_mut().unwrap().nt_offset = (MIN_IMAGE_BYTES - PE_HEADER_BYTES) as i32;
+        fake.dos.as_mut().unwrap().e_lfanew = (MIN_IMAGE_BYTES - PE_HEADER_BYTES) as i32;
     });
     assert!(batch.install(&sites));
 }
@@ -341,7 +320,7 @@ fn creation_failure_removes_only_unqueued_members_and_allows_retry() {
     let second = first + GUARD_BYTES;
     let mut originals = [ptr::null_mut(); 2];
     let sites = sites(&mut originals);
-    let mut batch = Handle::default();
+    let batch = Handle::default();
 
     FAKE.with_borrow_mut(|fake| fake.initialize = false);
     assert!(!batch.install(&sites));
@@ -374,7 +353,7 @@ fn creation_failure_removes_only_unqueued_members_and_allows_retry() {
 fn failed_enable_queue_cancels_prior_members_without_releasing_trampolines() {
     let mut originals = [ptr::null_mut(); 2];
     let sites = sites(&mut originals);
-    let mut batch = Handle::default();
+    let batch = Handle::default();
     FAKE.with_borrow_mut(|fake| {
         fake.queue_failure = Some((MODULE + RVA as usize + GUARD_BYTES, true));
     });
@@ -392,7 +371,7 @@ fn failed_enable_queue_cancels_prior_members_without_releasing_trampolines() {
 fn partial_apply_retains_originals_and_another_batch_cannot_enable_the_failed_set() {
     let mut originals = [ptr::null_mut(); 2];
     let sites = sites(&mut originals);
-    let mut batch = Handle::default();
+    let batch = Handle::default();
     FAKE.with_borrow_mut(|fake| fake.apply_failures.extend([1, 0]));
     assert!(!batch.install(&sites));
     assert!(batch.created());
@@ -405,7 +384,7 @@ fn partial_apply_retains_originals_and_another_batch_cannot_enable_the_failed_se
         replacement: ptr::dangling_mut(),
         original: &mut draw_original,
     };
-    let mut other = Handle::default();
+    let other = Handle::default();
     assert!(!other.resolved(&[draw, draw]));
     assert!(other.resolved(&[draw]));
     assert_eq!(detours(), [(false, false), (false, false), (true, true)]);
@@ -416,7 +395,7 @@ fn partial_apply_retains_originals_and_another_batch_cannot_enable_the_failed_se
 fn failed_disable_apply_does_not_short_circuit_the_next_enable() {
     let mut originals = [ptr::null_mut(); 2];
     let sites = sites(&mut originals);
-    let mut batch = Handle::default();
+    let batch = Handle::default();
     assert!(batch.install(&sites));
     let published = originals;
     FAKE.with_borrow_mut(|fake| fake.apply_failures.push_back(1));

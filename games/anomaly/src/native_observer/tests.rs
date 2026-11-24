@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use std::slice;
 use std::sync::atomic::AtomicBool;
 
 static INPUT_IDLE: AtomicBool = AtomicBool::new(false);
@@ -39,49 +38,34 @@ fn camera_copy_refusal_keeps_the_last_complete_sample() {
     assert_eq!(observation.projection, projection);
 }
 
-unsafe extern "C" fn check_selected_hooks(
-    image: *mut c_void,
-    size: u32,
-    sites: *const Site,
-    count: usize,
-) -> bool {
-    let sites = unsafe { slice::from_raw_parts(sites, count) };
-    image.addr() == 0x1234
-        && size == PROFILES[1].image_size
-        && count == HOOK_COUNT
-        && sites.iter().enumerate().all(|(i, site)| {
-            site.rva == PROFILES[1].sites[i].rva
-                && site.expected == PROFILES[1].sites[i].expected
-                && site.replacement.addr() == 0x2000 + i
-                && site.original.addr() == 0x4000 + i * size_of::<usize>()
-        })
-}
-
 #[test]
 fn verified_profile_stays_with_the_hook_batch() {
-    let bindings = std::array::from_fn(|i| Binding {
-        replacement: ptr::without_provenance_mut(0x2000 + i),
-        original: ptr::without_provenance_mut(0x4000 + i * size_of::<usize>()),
-    });
-    let mut engine = Engine {
-        image: ptr::without_provenance_mut(0x1234),
-        build: 1,
-        ..Engine::default()
-    };
-    assert!(unsafe { rsf_anomaly_observer_install(&engine, &bindings, check_selected_hooks) });
-    engine.build = PROFILES.len();
-    assert!(!unsafe { rsf_anomaly_observer_install(&engine, &bindings, check_selected_hooks) });
+    let detours = std::array::from_fn(|i| ptr::without_provenance_mut(0x2000 + i));
+    let trampolines = ptr::without_provenance_mut(0x4000);
+    let (size, sites) = sites(1, &detours, trampolines).unwrap();
+    assert_eq!(size, PROFILES[1].image_size);
+    assert!(sites.iter().enumerate().all(|(i, site)| {
+        site.rva == PROFILES[1].sites[i].rva
+            && site.expected == PROFILES[1].sites[i].expected
+            && site.replacement.addr() == 0x2000 + i
+            && site.original.addr() == 0x4000 + i * size_of::<usize>()
+    }));
+    assert!(super::sites(PROFILES.len(), &detours, trampolines).is_none());
 }
 
-pub(crate) unsafe extern "C" fn disable_input() -> bool {
+const NO_ENGINE: Engine = Engine {
+    image: ptr::null_mut(),
+    build: 0,
+};
+pub(crate) fn disable_input() -> bool {
     lock(&TEARDOWN).push("input");
     true
 }
-pub(crate) unsafe extern "C" fn disable_hooks() -> bool {
+pub(crate) fn disable_hooks() -> bool {
     lock(&TEARDOWN).push("hooks");
     true
 }
-pub(crate) unsafe extern "C" fn disable_geometry() -> bool {
+pub(crate) fn disable_geometry() -> bool {
     lock(&TEARDOWN).push("geometry");
     true
 }
@@ -128,7 +112,7 @@ fn window_facts_share_observer_admission_and_retirement() {
 fn stop_drains_native_and_input_invocations_before_retiring_the_stages() {
     let observer = Observer::new(|| FG_FRAME_OPEN.load(Ordering::Relaxed), retire_fg_inputs);
     lock(&observer.state).session = Some(Session {
-        engine: Engine::default(),
+        engine: NO_ENGINE,
         log: None,
         user: ptr::null_mut(),
     });
@@ -189,24 +173,21 @@ fn stop_drains_native_and_input_invocations_before_retiring_the_stages() {
 static FRAME_READS: AtomicU32 = AtomicU32::new(0);
 static FG_SAMPLE: Mutex<Option<(u32, u32, u32)>> = Mutex::new(None);
 
-pub(crate) unsafe extern "C" fn read_frame(_: *const Engine, out: *mut Frame) -> bool {
+pub(crate) fn read_frame(_: &Engine) -> Option<Frame> {
+    // The second read faults.
     let reads = FRAME_READS.fetch_add(1, Ordering::Relaxed);
-    // Write partial data on the second call to exercise the native fault case.
-    unsafe {
-        out.write(Frame {
-            id: 81 + reads,
-            width: 1600,
-            height: 900,
-        });
-    }
-    reads == 0
+    (reads == 0).then_some(Frame {
+        id: 81,
+        width: 1600,
+        height: 900,
+    })
 }
 
 #[test]
 fn observation_and_fg_share_one_guarded_source_frame_sample() {
     let observer = Observer::new(|| false, || true);
     lock(&observer.state).session = Some(Session {
-        engine: Engine::default(),
+        engine: NO_ENGINE,
         log: None,
         user: ptr::null_mut(),
     });
@@ -267,22 +248,19 @@ pub(super) mod leaves {
         disable_geometry, disable_hooks, disable_input, read_frame, sample_copy as guarded_copy,
     };
 
-    pub(crate) unsafe fn identify(_: *mut Engine) -> *const c_char {
-        unreachable!("observer identity in a unit test")
-    }
-    pub(crate) unsafe fn enable_hooks(_: *const Engine) -> bool {
+    pub(crate) fn enable_hooks(_: &Engine) -> bool {
         unreachable!("observer hooks in a unit test")
     }
-    pub(crate) unsafe fn install_geometry(_: *const Engine) -> bool {
+    pub(crate) fn install_geometry(_: &Engine) -> bool {
         unreachable!("geometry install in a unit test")
     }
-    pub(crate) unsafe fn install_sr(_: *const Engine) -> bool {
+    pub(crate) fn install_sr(_: &Engine) -> bool {
         unreachable!("SR install in a unit test")
     }
-    pub(crate) unsafe fn install_motion(_: *const Engine) -> bool {
+    pub(crate) fn install_motion(_: &Engine) -> bool {
         unreachable!("motion install in a unit test")
     }
-    pub(crate) unsafe fn enable_input() -> bool {
+    pub(crate) fn enable_input() -> bool {
         unreachable!("input slot in a unit test")
     }
 }

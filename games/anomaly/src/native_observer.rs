@@ -5,36 +5,73 @@ mod report;
 #[cfg(test)]
 mod tests;
 
-// The C leaves of native_observer_platform.c (the observer hook set, the stage installs and the guarded reads) and
-// the Rust stages the native boundaries drive, called directly; the tests' fakes under test.
+// The native installs, the observer hook set and the guarded reads; the tests' fakes under test.
 #[cfg(not(test))]
 mod leaves {
-    use super::{Engine, Frame};
-    use std::ffi::{c_char, c_void};
+    use super::{Engine, Frame, HOOK_COUNT, PROFILES};
+    use crate::engine_guards::Image;
+    pub(super) use crate::engine_guards::guarded_copy;
+    use crate::native_hooks::{self, HookSet};
+    use std::ffi::c_void;
+    use std::ptr;
 
     unsafe extern "C" {
-        #[link_name = "rsf_anomaly_observer_native_identify"]
-        pub(super) fn identify(engine: *mut Engine) -> *const c_char;
-        #[link_name = "rsf_anomaly_observer_native_enable_hooks"]
-        pub(super) fn enable_hooks(engine: *const Engine) -> bool;
-        #[link_name = "rsf_anomaly_observer_native_disable_hooks"]
-        pub(super) fn disable_hooks() -> bool;
-        #[link_name = "rsf_anomaly_observer_native_install_geometry"]
-        pub(super) fn install_geometry(engine: *const Engine) -> bool;
-        #[link_name = "rsf_anomaly_geometry_disable_native"]
-        pub(super) fn disable_geometry() -> bool;
-        #[link_name = "rsf_anomaly_observer_native_install_sr"]
-        pub(super) fn install_sr(engine: *const Engine) -> bool;
-        #[link_name = "rsf_anomaly_observer_native_install_motion"]
-        pub(super) fn install_motion(engine: *const Engine) -> bool;
-        #[link_name = "rsf_anomaly_observer_native_enable_input"]
-        pub(super) fn enable_input() -> bool;
-        #[link_name = "rsf_anomaly_observer_native_disable_input"]
-        pub(super) fn disable_input() -> bool;
-        #[link_name = "rsf_anomaly_observer_native_read_frame"]
-        pub(super) fn read_frame(engine: *const Engine, out: *mut Frame) -> bool;
-        #[link_name = "rsf_anomaly_observer_native_copy"]
-        pub(super) fn guarded_copy(output: *mut c_void, input: *const c_void, size: usize) -> bool;
+        // native_observer_platform.c: the detours in RSF_ANOMALY_OBSERVER_* order and their trampoline slots.
+        static rsf_anomaly_observer_detours: [*mut c_void; HOOK_COUNT];
+        static mut rsf_anomaly_observer_trampolines: [*mut c_void; HOOK_COUNT];
+        // native_geometry_platform.c.
+        fn rsf_anomaly_geometry_install_native(image: *mut c_void, build: usize) -> bool;
+        fn rsf_anomaly_geometry_disable_native() -> bool;
+    }
+
+    static HOOKS: HookSet = HookSet::new(ptr::null_mut());
+
+    pub(super) fn enable_hooks(engine: &Engine) -> bool {
+        if native_hooks::created(&HOOKS) {
+            return native_hooks::set_enabled(&HOOKS, true);
+        }
+        let trampolines = (&raw mut rsf_anomaly_observer_trampolines).cast::<*mut c_void>();
+        let detours = unsafe { &*(&raw const rsf_anomaly_observer_detours) };
+        super::sites(engine.build, detours, trampolines)
+            .is_some_and(|(size, sites)| native_hooks::install(&HOOKS, engine.image, size, &sites))
+    }
+
+    pub(super) fn disable_hooks() -> bool {
+        native_hooks::set_enabled(&HOOKS, false)
+    }
+
+    pub(super) fn install_geometry(engine: &Engine) -> bool {
+        unsafe { rsf_anomaly_geometry_install_native(engine.image, engine.build) }
+    }
+
+    pub(super) fn disable_geometry() -> bool {
+        unsafe { rsf_anomaly_geometry_disable_native() }
+    }
+
+    pub(super) fn install_sr(engine: &Engine) -> bool {
+        crate::sr_stage::native::rsf_anomaly_sr_stage_install_build(engine.image, engine.build)
+    }
+
+    pub(super) fn install_motion(engine: &Engine) -> bool {
+        crate::motion::stage::install(engine.image, engine.build)
+    }
+
+    pub(super) fn enable_input() -> bool {
+        crate::engine_slots::rsf_anomaly_slot_set(crate::engine_slots::INPUT as u32, true)
+    }
+
+    pub(super) fn disable_input() -> bool {
+        crate::engine_slots::rsf_anomaly_slot_set(crate::engine_slots::INPUT as u32, false)
+    }
+
+    pub(super) fn read_frame(engine: &Engine) -> Option<Frame> {
+        let profile = PROFILES.get(engine.build)?;
+        let image = Image::new(engine.image.cast(), profile.image_size, guarded_copy);
+        Some(Frame {
+            id: u32::from_le_bytes(image.copy(profile.device_frame_rva)?),
+            width: u32::from_le_bytes(image.copy(profile.device_width_rva)?),
+            height: u32::from_le_bytes(image.copy(profile.device_height_rva)?),
+        })
     }
 }
 #[cfg(test)]
@@ -56,18 +93,16 @@ mod stages {
 #[cfg(test)]
 use tests::stages;
 
-use crate::engine_guards::{Image, Read};
+use crate::engine_guards::{Image, guarded_copy};
 use crate::executable::observer_build;
 use crate::lock;
-use crate::native_hooks::{ImageHeaders, Site};
+use crate::native_hooks::{Site, image_matches, read_guarded};
 use crate::native_profile::{HOOK_COUNT, PROFILES};
 use crate::sys::{
     RSF_ANOMALY_OBSERVATION_ABI, RSF_ANOMALY_OBSERVER_BEGIN, RSF_ANOMALY_OBSERVER_CAMERA,
     RSF_ANOMALY_OBSERVER_END, RSF_ANOMALY_OBSERVER_RESET_BEGIN, RSF_ANOMALY_OBSERVER_RESET_END,
     RSF_ANOMALY_OBSERVER_SCENE, RSF_ANOMALY_OBSERVER_TARGET_COPY, RSF_ANOMALY_OBSERVER_UI,
-    rsf_anomaly_native_observation as Observation, rsf_anomaly_observer_binding as Binding,
-    rsf_anomaly_observer_camera as Camera, rsf_anomaly_observer_engine as Engine,
-    rsf_anomaly_observer_frame as Frame,
+    rsf_anomaly_native_observation as Observation,
 };
 use rsf_game_sys::call_header::{validate, validate_abi};
 use rsf_game_sys::{
@@ -75,7 +110,7 @@ use rsf_game_sys::{
     RSF_ERROR_NOT_READY as NOT_READY, RSF_GAME_ABI_VERSION, RSF_OK as OK, rsf_game_host_services,
     rsf_game_log_fn, rsf_game_renderer_status, rsf_game_start_args, rsf_result,
 };
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{CStr, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, TryLockError};
@@ -84,94 +119,57 @@ use windows_sys::Win32::System::LibraryLoader::{
     GetModuleHandleW,
 };
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_observer_identify(
-    out: &mut Engine,
-    headers: &ImageHeaders,
-    read: Read,
-) -> *const c_char {
-    let build = match observer_build() {
-        Ok(build) => build,
-        Err(reason) => return reason.as_ptr(),
-    };
-    let Some(profile) = PROFILES.get(build) else {
-        return c"Native observer build index is out of range.".as_ptr();
-    };
-    let image = unsafe { GetModuleHandleW(ptr::null()) };
-    // Hook-set installation adds a mapped-region check and an NT header extent check.
-    if !headers.matches(image, profile.image_size, usize::MAX) {
-        return c"Running image size differs from the verified build.".as_ptr();
-    }
-    let checked = Image::new(image.cast(), profile.image_size, read);
-    if !unsafe { checked.matches_sites(&profile.sites, &profile.guards) } {
-        return c"A native hook's expected instructions do not match; no hook was written."
-            .as_ptr();
-    }
-    *out = Engine {
-        image,
-        build,
-        label: profile.label.as_ptr(),
-        executable: profile.executable.as_ptr(),
-    };
-    ptr::null()
+/// The running image and the exact build prepare() selected.
+#[derive(Clone, Copy)]
+struct Engine {
+    #[cfg_attr(test, allow(dead_code))]
+    image: *mut c_void,
+    build: usize,
 }
 
-type Install = unsafe extern "C" fn(*mut c_void, u32, *const Site, usize) -> bool;
+#[derive(Clone, Copy, Default)]
+struct Frame {
+    id: u32,
+    width: u32,
+    height: u32,
+}
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_observer_install(
-    engine: &Engine,
-    bindings: &[Binding; HOOK_COUNT],
-    install: Install,
-) -> bool {
-    let Some(profile) = PROFILES.get(engine.build) else {
-        return false;
-    };
-    let sites: [Site; HOOK_COUNT] = std::array::from_fn(|index| {
+fn identify() -> Result<Engine, &'static CStr> {
+    let build = observer_build()?;
+    let profile = PROFILES
+        .get(build)
+        .ok_or(c"Native observer build index is out of range.")?;
+    let image = unsafe { GetModuleHandleW(ptr::null()) };
+    // Hook-set installation adds a mapped-region check and an NT header extent check.
+    if !image_matches(read_guarded, image, profile.image_size, usize::MAX) {
+        return Err(c"Running image size differs from the verified build.");
+    }
+    let checked = Image::new(image.cast(), profile.image_size, guarded_copy);
+    if !unsafe { checked.matches_sites(&profile.sites, &profile.guards) } {
+        return Err(c"A native hook's expected instructions do not match; no hook was written.");
+    }
+    Ok(Engine { image, build })
+}
+
+/// The profile's observer sites with the native detours and their trampoline slots, and the image size.
+fn sites(
+    build: usize,
+    detours: &[*mut c_void; HOOK_COUNT],
+    trampolines: *mut *mut c_void,
+) -> Option<(u32, [Site; HOOK_COUNT])> {
+    let profile = PROFILES.get(build)?;
+    let sites = std::array::from_fn(|index| {
         let site = &profile.sites[index];
-        let binding = &bindings[index];
         Site {
             name: site.name,
             rva: site.rva,
             expected: site.expected,
-            replacement: binding.replacement,
-            original: binding.original,
+            replacement: detours[index],
+            original: trampolines.wrapping_add(index),
         }
     });
-    unsafe {
-        install(
-            engine.image,
-            profile.image_size,
-            sites.as_ptr(),
-            sites.len(),
-        )
-    }
+    Some((profile.image_size, sites))
 }
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_observer_read_frame(
-    engine: &Engine,
-    read: Read,
-    out: &mut Frame,
-) -> bool {
-    let Some(profile) = PROFILES.get(engine.build) else {
-        return false;
-    };
-    let image = Image::new(engine.image.cast(), profile.image_size, read);
-    let sample = || {
-        Some(Frame {
-            id: u32::from_le_bytes(image.copy(profile.device_frame_rva)?),
-            width: u32::from_le_bytes(image.copy(profile.device_width_rva)?),
-            height: u32::from_le_bytes(image.copy(profile.device_height_rva)?),
-        })
-    };
-    let Some(frame) = sample() else {
-        return false;
-    };
-    *out = frame;
-    true
-}
-
 // One atomic records whether entry was admitted and registers that invocation.
 // Inactive invocations also count until they return from the native trampoline.
 const ACTIVE: u32 = 1 << 31;
@@ -297,13 +295,13 @@ impl Observer {
         {
             return BUSY;
         }
-        let mut engine = Engine::default();
-        let refusal = unsafe { leaves::identify(&mut engine) };
-        if !refusal.is_null() {
-            // Admission returns only static string literals.
-            control.reason = unsafe { CStr::from_ptr(refusal) };
-            return NATIVE_REFUSED;
-        }
+        let engine = match identify() {
+            Ok(engine) => engine,
+            Err(reason) => {
+                control.reason = reason;
+                return NATIVE_REFUSED;
+            }
+        };
         lock(&self.state).session = Some(Session {
             engine,
             log: host.log,
@@ -346,15 +344,14 @@ impl Observer {
         }
         let engine = &session.engine;
         control.retirement = Retirement::Live;
-        if !unsafe { leaves::enable_hooks(engine) } {
+        if !leaves::enable_hooks(engine) {
             control.reason = c"Guarded native detour installation refused.";
             return NATIVE_REFUSED;
         }
-        control.geometry_installed = unsafe { leaves::install_geometry(engine) };
-        let sr_refused =
-            crate::sr_stage::STAGE.selected() && !unsafe { leaves::install_sr(engine) };
-        let motion_refused = !unsafe { leaves::install_motion(engine) };
-        let input_enabled = unsafe { leaves::enable_input() };
+        control.geometry_installed = leaves::install_geometry(engine);
+        let sr_refused = crate::sr_stage::STAGE.selected() && !leaves::install_sr(engine);
+        let motion_refused = !leaves::install_motion(engine);
+        let input_enabled = leaves::enable_input();
         let geometry_installed = control.geometry_installed;
         if input_enabled {
             crate::overlay::resume();
@@ -383,8 +380,9 @@ impl Observer {
         if !input_enabled {
             return NATIVE_REFUSED;
         }
-        let label = unsafe { CStr::from_ptr(engine.label) }.to_string_lossy();
-        let executable = unsafe { CStr::from_ptr(engine.executable) }.to_string_lossy();
+        let profile = &PROFILES[engine.build];
+        let label = profile.label.to_string_lossy();
+        let executable = profile.executable.to_string_lossy();
         let geometry = if geometry_installed {
             ", including geometry identity"
         } else {
@@ -405,7 +403,7 @@ impl Observer {
             control.retirement = Retirement::Input;
         }
         if control.retirement == Retirement::Input {
-            if !unsafe { leaves::disable_input() } {
+            if !leaves::disable_input() {
                 return NATIVE_REFUSED;
             }
             control.retirement = Retirement::Overlay;
@@ -435,13 +433,13 @@ impl Observer {
             control.retirement = Retirement::ObserverHooks;
         }
         if control.retirement == Retirement::ObserverHooks {
-            if !unsafe { leaves::disable_hooks() } {
+            if !leaves::disable_hooks() {
                 return NATIVE_REFUSED;
             }
             control.retirement = Retirement::Geometry;
         }
         if control.retirement == Retirement::Geometry {
-            if control.geometry_installed && !unsafe { leaves::disable_geometry() } {
+            if control.geometry_installed && !leaves::disable_geometry() {
                 return NATIVE_REFUSED;
             }
             control.geometry_installed = false;
@@ -499,18 +497,17 @@ impl Observer {
         let Some(session) = self.session() else {
             return;
         };
-        let mut frame = Frame::default();
-        let read = unsafe { leaves::read_frame(&session.engine, &mut frame) };
+        let frame = leaves::read_frame(&session.engine);
         {
             let mut state = lock(&self.state);
             let o = &mut state.observation;
             o.render_frames = o.render_frames.wrapping_add(1);
-            let sample = if read { frame } else { Frame::default() };
+            let sample = frame.unwrap_or_default();
             o.engine_frame = sample.id;
             o.width = sample.width;
             o.height = sample.height;
         }
-        if read {
+        if let Some(frame) = frame {
             stages::render_begin(frame.id, frame.width, frame.height);
         }
     }
@@ -555,17 +552,17 @@ impl Observer {
         if view.is_null() || projection.is_null() {
             return;
         }
-        let mut sample = Camera::default();
+        let (mut sample_view, mut sample_projection) = ([0f32; 16], [0f32; 16]);
         let copy = leaves::guarded_copy;
         let read = unsafe {
             copy(
-                sample.view.as_mut_ptr().cast(),
+                sample_view.as_mut_ptr().cast(),
                 view.cast(),
-                size_of_val(&sample.view),
+                size_of_val(&sample_view),
             ) && copy(
-                sample.projection.as_mut_ptr().cast(),
+                sample_projection.as_mut_ptr().cast(),
                 projection.cast(),
-                size_of_val(&sample.projection),
+                size_of_val(&sample_projection),
             )
         };
         {
@@ -574,19 +571,18 @@ impl Observer {
             o.camera_finite = 0;
             if read {
                 o.camera_updates = o.camera_updates.wrapping_add(1);
-                o.view = sample.view;
-                o.projection = sample.projection;
+                o.view = sample_view;
+                o.projection = sample_projection;
                 o.camera_finite = u32::from(
-                    sample
-                        .view
+                    sample_view
                         .iter()
-                        .chain(&sample.projection)
+                        .chain(&sample_projection)
                         .all(|v| v.is_finite()),
                 );
             }
         }
         if read {
-            unsafe { stages::camera(sample.view.as_ptr(), sample.projection.as_ptr()) };
+            unsafe { stages::camera(sample_view.as_ptr(), sample_projection.as_ptr()) };
         }
     }
 

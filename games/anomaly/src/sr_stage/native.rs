@@ -775,7 +775,6 @@ pub(crate) mod leaves {
     };
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe fn rsf_anomaly_sr_stage_configure_native(
     ini: *const u16,
     apply: bool,
@@ -786,8 +785,8 @@ pub(crate) unsafe fn rsf_anomaly_sr_stage_configure_native(
     unsafe { rsf_anomaly_sr_stage_configure_ini(ini, apply, log, user) }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_stage_install_build(image: Ptr, build: usize) -> bool {
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn rsf_anomaly_sr_stage_install_build(image: Ptr, build: usize) -> bool {
     let Some(selected) = BUILDS.get(build) else {
         return false;
     };

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::engine_guards::Read;
+use crate::engine_guards::guarded_copy;
 use crate::motion_profile::{MotionProfile, PROFILES as MOTION};
 use crate::native_profile::{PROFILES, Profile};
 use crate::sr_profile::{self, PROFILES as SR, Profile as SrProfile};
@@ -69,7 +69,7 @@ impl Image {
             Signature: PE_SIGNATURE,
             ..Default::default()
         };
-        pe.FileHeader.Machine = AMD64;
+        pe.FileHeader.Machine = crate::AMD64;
         pe.OptionalHeader.Magic = PE32_PLUS;
         pe.OptionalHeader.SizeOfImage = size;
         unsafe {
@@ -115,17 +115,17 @@ fn bytes(address: Address) -> [u8; GUARD_BYTES] {
     unsafe { address.cast::<[u8; GUARD_BYTES]>().read() }
 }
 
-fn copy_contract(copy: Read, page: u32) {
+fn copy_contract(page: u32) {
     let inaccessible = Image::new(page, PAGE_NOACCESS);
     let original = 0x73u8;
     let mut copied = 0u8;
     let out = ptr::from_mut(&mut copied).cast();
     let from = ptr::from_ref(&original).cast();
-    assert!(unsafe { copy(out, from, 1) });
+    assert!(unsafe { guarded_copy(out, from, 1) });
     assert_eq!(copied, original);
     unsafe { SetLastError(0x525346) };
-    let input_refused = !unsafe { copy(out, inaccessible.0, 1) };
-    let output_refused = !unsafe { copy(inaccessible.0, from, 1) };
+    let input_refused = !unsafe { guarded_copy(out, inaccessible.0, 1) };
+    let output_refused = !unsafe { guarded_copy(inaccessible.0, from, 1) };
     let last_error = unsafe { GetLastError() };
     assert!(input_refused && output_refused);
     if cfg!(target_env = "gnu") {
@@ -144,81 +144,40 @@ fn fixture_site(module: Address, function: Function, original: *mut Address) -> 
     }
 }
 
-fn install(
-    batch: &mut Address,
-    platform: &Platform,
-    base: Address,
-    size: u32,
-    sites: &[Site],
-) -> bool {
-    unsafe {
-        rsf_anomaly_hook_set_install(batch, platform, base, size, sites.as_ptr(), sites.len())
-    }
-}
-
-fn enabled(batch: &mut Address, platform: &Platform, enable: bool) -> bool {
-    unsafe { rsf_anomaly_hook_set_set_enabled(batch, platform, enable) }
-}
-
-fn executable_contract(platform: &Platform, target: Function, untouched: Function) {
+fn executable_contract(target: Function, untouched: Function) {
     let module = unsafe { GetModuleHandleW(ptr::null()) };
-    let mut dos = DosFacts::default();
-    let mut pe = PeFacts::default();
-    assert!(unsafe { (platform.headers.dos.unwrap())(module, &mut dos) });
-    assert!(unsafe {
-        (platform.headers.pe.unwrap())(
-            module,
-            module.wrapping_byte_add(dos.nt_offset as usize),
-            &mut pe,
-        )
-    });
+    // This executable's own headers, read directly.
+    let size = unsafe {
+        let dos = &*module.cast::<IMAGE_DOS_HEADER>();
+        let pe = &*module
+            .wrapping_byte_add(dos.e_lfanew as usize)
+            .cast::<IMAGE_NT_HEADERS64>();
+        pe.OptionalHeader.SizeOfImage
+    };
+    assert!(image_matches(read_mapped, module, size, usize::MAX));
+    assert!(image_matches(read_guarded, module, size, usize::MAX));
     let mut original = ptr::null_mut();
     let mut site = fixture_site(module, target, &raw mut original);
     let entry = target as Address;
     let expected = site.expected;
-    let mut batch = ptr::null_mut();
+    let batch = HookSet::default();
     site.expected[GUARD_BYTES - 1] ^= 1;
-    assert!(!install(
-        &mut batch,
-        platform,
-        module,
-        pe.image_size,
-        slice::from_ref(&site)
-    ));
-    assert!(batch.is_null() && original.is_null());
+    assert!(!install(&batch, module, size, slice::from_ref(&site)));
+    assert!(!created(&batch) && original.is_null());
     assert_eq!(unsafe { target(2) }, 9);
     assert_eq!(bytes(entry), expected);
     site.expected = expected;
+    assert!(!install(&batch, module, size, &[site, site]));
     assert!(!install(
-        &mut batch,
-        platform,
+        &batch,
         module,
-        pe.image_size,
-        &[site, site]
-    ));
-    assert!(!install(
-        &mut batch,
-        platform,
-        module,
-        pe.image_size,
-        &[
-            site,
-            Site {
-                rva: pe.image_size,
-                ..site
-            }
-        ],
+        size,
+        &[site, Site { rva: size, ..site }],
     ));
     assert_eq!(unsafe { target(2) }, 9);
     assert_eq!(bytes(entry), expected);
-    assert!(install(
-        &mut batch,
-        platform,
-        module,
-        pe.image_size,
-        &[site]
-    ));
-    assert!(!batch.is_null() && !original.is_null());
+    assert!(install(&batch, module, size, &[site]));
+    assert!(created(&batch) && !original.is_null());
     ORIGINAL.store(original, Ordering::Release);
     assert_eq!(unsafe { target(2) }, 12);
     assert_eq!(unsafe { call(original, 2) }, 9);
@@ -229,7 +188,7 @@ fn executable_contract(platform: &Platform, target: Function, untouched: Functio
     *FLIGHT.lock().unwrap() = Some(Flight { entered, resume });
     let thread = std::thread::spawn(move || unsafe { target(2) });
     wait_enter.recv().unwrap();
-    let restored = enabled(&mut batch, platform, false);
+    let restored = set_enabled(&batch, false);
     resume_detour.send(()).unwrap();
     assert_eq!(thread.join().unwrap(), 12);
     assert!(restored);
@@ -239,17 +198,11 @@ fn executable_contract(platform: &Platform, target: Function, untouched: Functio
 
     let mut fresh = ptr::null_mut();
     let mut conflict = ptr::null_mut();
-    let mut other = ptr::null_mut();
+    let other = HookSet::default();
     let new = fixture_site(module, untouched, &raw mut fresh);
     let already_registered = fixture_site(module, target, &raw mut conflict);
-    assert!(!install(
-        &mut other,
-        platform,
-        module,
-        pe.image_size,
-        &[new, already_registered]
-    ));
-    assert!(other.is_null() && fresh.is_null() && conflict.is_null());
+    assert!(!install(&other, module, size, &[new, already_registered]));
+    assert!(!created(&other) && fresh.is_null() && conflict.is_null());
     assert_eq!(original, trampoline);
     assert_eq!(bytes(untouched as Address), new.expected);
     let resolved = Target {
@@ -257,17 +210,17 @@ fn executable_contract(platform: &Platform, target: Function, untouched: Functio
         replacement: new.replacement,
         original: new.original,
     };
-    assert!(unsafe { rsf_anomaly_hook_set_install_resolved(&mut other, platform, &resolved, 1) });
-    assert!(!fresh.is_null() && enabled(&mut other, platform, false));
+    assert!(install_resolved_with(&other, &MINHOOK, &[resolved]));
+    assert!(!fresh.is_null() && set_enabled(&other, false));
     assert_eq!(unsafe { call(fresh, 2) }, 21);
-    assert!(enabled(&mut batch, platform, true));
+    assert!(set_enabled(&batch, true));
     assert_eq!(original, trampoline);
     assert_eq!(unsafe { target(2) }, 12);
-    assert!(enabled(&mut batch, platform, false));
+    assert!(set_enabled(&batch, false));
     assert_eq!(unsafe { target(2) }, 9);
 }
 
-fn mapping_contract(platform: &Platform, page: u32) {
+fn mapping_contract(page: u32) {
     let size = page * 3;
     let image = Image::new(size, PAGE_READWRITE);
     let dos = image.write_headers(size);
@@ -287,11 +240,11 @@ fn mapping_contract(platform: &Platform, page: u32) {
         replacement: replacement as Address,
         original: &raw mut original,
     };
-    let mut batch = ptr::null_mut();
-    assert!(!install(&mut batch, platform, image.0, size, &[site]));
+    let batch = HookSet::default();
+    assert!(!install(&batch, image.0, size, &[site]));
     for protection in [PAGE_EXECUTE, PAGE_EXECUTE_READ | PAGE_GUARD, PAGE_NOACCESS] {
         image.protect(page, page, protection);
-        assert!(!install(&mut batch, platform, image.0, size, &[site]));
+        assert!(!install(&batch, image.0, size, &[site]));
         if protection & PAGE_GUARD != 0 {
             let mut info = MEMORY_BASIC_INFORMATION::default();
             assert_ne!(
@@ -303,12 +256,11 @@ fn mapping_contract(platform: &Platform, page: u32) {
     }
     image.protect(page, page, PAGE_EXECUTE_READ);
     unsafe { (*dos).e_lfanew = (page - 1) as i32 };
-    assert!(!install(&mut batch, platform, image.0, size, &[site]));
+    assert!(!install(&batch, image.0, size, &[site]));
     unsafe { (*dos).e_lfanew = 64 };
     image.protect(2 * page, page, PAGE_EXECUTE_READWRITE);
     assert!(!install(
-        &mut batch,
-        platform,
+        &batch,
         image.0,
         size,
         &[Site { rva: split, ..site }]
@@ -318,8 +270,7 @@ fn mapping_contract(platform: &Platform, page: u32) {
         0
     );
     assert!(!install(
-        &mut batch,
-        platform,
+        &batch,
         image.0,
         size,
         &[Site {
@@ -327,11 +278,11 @@ fn mapping_contract(platform: &Platform, page: u32) {
             ..site
         }]
     ));
-    assert!(!install(&mut batch, platform, image.at(1), size, &[site]));
-    assert!(batch.is_null() && original.is_null());
+    assert!(!install(&batch, image.at(1), size, &[site]));
+    assert!(!created(&batch) && original.is_null());
     image.protect(0, page, PAGE_READONLY);
-    assert!(install(&mut batch, platform, image.0, size, &[site]));
-    assert!(!original.is_null() && enabled(&mut batch, platform, false));
+    assert!(install(&batch, image.0, size, &[site]));
+    assert!(!original.is_null() && set_enabled(&batch, false));
     assert_eq!(unsafe { call(original, 2) }, 9);
     assert_eq!(bytes(image.at(valid)), expected);
 }
@@ -345,12 +296,7 @@ const SR_DETOURS: [usize; 5] = [
     sr_profile::SITE_SUN_CASCADES,
 ];
 
-fn profile_contract(
-    platform: &Platform,
-    profile: &Profile,
-    motion: &MotionProfile,
-    sr_profile: &SrProfile,
-) {
+fn profile_contract(profile: &Profile, motion: &MotionProfile, sr_profile: &SrProfile) {
     let sr_indices = &SR_DETOURS;
     println!(
         "Anomaly HookSet profile: {}",
@@ -386,38 +332,33 @@ fn profile_contract(
         })
         .collect();
     image.flush(size);
-    let mut batch = ptr::null_mut();
+    let batch = HookSet::default();
     for index in 0..sites.len() {
         sites[index].expected[GUARD_BYTES - 1] ^= 1;
-        assert!(!install(&mut batch, platform, image.0, size, &sites) && batch.is_null());
+        assert!(!install(&batch, image.0, size, &sites) && !created(&batch));
         sites[index].expected[GUARD_BYTES - 1] ^= 1;
     }
     assert!(originals.iter().all(|address| address.is_null()));
-    assert!(install(&mut batch, platform, image.0, size, &sites));
+    assert!(install(&batch, image.0, size, &sites));
     for (site, original) in sites.iter().zip(&originals) {
         assert!(!original.is_null());
         assert_ne!(bytes(image.at(site.rva)), site.expected);
     }
-    assert!(enabled(&mut batch, platform, false));
+    assert!(set_enabled(&batch, false));
     for site in sites {
         assert_eq!(bytes(image.at(site.rva)), site.expected);
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_test_anomaly_native_hooks(
-    platform: &Platform,
-    copy: Read,
-    target: Function,
-    untouched: Function,
-) -> i32 {
+unsafe extern "C" fn rsf_test_anomaly_native_hooks(target: Function, untouched: Function) -> i32 {
     std::panic::catch_unwind(|| {
         let page = page_size();
-        copy_contract(copy, page);
-        executable_contract(platform, target, untouched);
-        mapping_contract(platform, page);
+        copy_contract(page);
+        executable_contract(target, untouched);
+        mapping_contract(page);
         for ((profile, motion), sr) in PROFILES.iter().zip(&MOTION).zip(&SR) {
-            profile_contract(platform, profile, motion, sr);
+            profile_contract(profile, motion, sr);
         }
         println!("Anomaly guarded native hooks: PASS");
         0
