@@ -1,7 +1,3 @@
-# The orchestrator's code lives in an object library so it can be linked both into the runtime DLL
-# and directly into the research proxy, which is what actually gets loaded into the game today.
-# Compiling it twice, or requiring the runtime DLL beside the game executable before anything works,
-# would both be worse.
 # The capture readers (rsf_input_dump*) are Rust exports in the Runtime archive; this target carries
 # their headers and that archive.
 add_library(rsf_frame_dump INTERFACE)
@@ -29,6 +25,8 @@ target_link_libraries(rsf_runtime_leaves PUBLIC rsf_native_cpu ReScaleFrame::Gam
     ReScaleFrame::Graphics ReScaleFrame::FSR ReScaleFrame::XeSS ReScaleFrame::Presentation
     ReScaleFrame::FrameDump PRIVATE rsf_build_options d3dcompiler bcrypt)
 
+# The orchestrator's code lives in an object library so it can be linked both into the runtime DLL
+# and directly into the carriers that embed it, without compiling it twice.
 add_library(rsf_orchestrator_core OBJECT
     src/rust_exports.c
 )
@@ -44,7 +42,8 @@ if(RSF_HAVE_VULKAN AND RSF_HAVE_STREAMLINE AND EXISTS "${RSF_STREAMLINE_VK_RUNTI
     include("${CMAKE_SOURCE_DIR}/runtime/vulkan/streamline/verify-receipt.cmake")
     rsf_streamline_receipt("${RSF_STREAMLINE_VK_RUNTIME}" RSF_STREAMLINE_VK_DIGEST)
     set(rsf_orchestrator_env ENV "RSF_CORRECTED_STREAMLINE_SHA256=${RSF_STREAMLINE_VK_DIGEST}")
-endif()# The vendor headers cmake/vendor.cmake found select the D3D12 FidelityFX and XeSS providers, the
+endif()
+# The vendor headers cmake/vendor.cmake found select the D3D12 FidelityFX and XeSS providers, the
 # XeSS Vulkan SR table, AMD Anti-Lag 2 for Vulkan and, with a verified runtime, Streamline Vulkan.
 set(rsf_orchestrator_features)
 if(RSF_HAVE_VULKAN AND RSF_HAVE_XESS_VK)
@@ -201,5 +200,3 @@ else()
     target_sources(rsf_orchestrator PRIVATE "${CMAKE_SOURCE_DIR}/runtime/shader_patch/shader_patch.def")
     target_link_options(rsf_orchestrator PRIVATE "LINKER:--undefined,rsf_get_shader_patch_api")
 endif()
-
-# Anti-Lag 2 driver calls are Rust (src/latency_antilag_sdk.rs); no SDK headers are needed.
