@@ -4,7 +4,6 @@ use crate::lease::Lease;
 use std::ffi::CStr;
 use std::ptr::{NonNull, null_mut};
 
-#[repr(C)]
 #[derive(Clone, Copy)]
 pub(crate) struct DrawViews {
     pub(crate) output: Extent,
@@ -15,8 +14,6 @@ pub(crate) struct DrawViews {
     pub(crate) first_person_depth: u32,
     pub(crate) first_person_zero: u32,
 }
-
-const _: () = assert!(size_of::<DrawViews>() == 96);
 
 impl Default for DrawViews {
     fn default() -> Self {
@@ -330,13 +327,11 @@ impl Pass {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_sr_temporal_ready(owner: Option<&Pass>) -> u32 {
+pub(crate) fn rsf_anomaly_sr_temporal_ready(owner: Option<&Pass>) -> u32 {
     u32::from(owner.is_some_and(|pass| pass.temporal.is_some()))
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_sr_run_pass(
+pub(crate) fn rsf_anomaly_sr_run_pass(
     owner: Option<&Pass>,
     context: Ptr,
     kind: u32,

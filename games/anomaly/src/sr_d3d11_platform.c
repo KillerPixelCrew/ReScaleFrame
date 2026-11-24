@@ -1,25 +1,15 @@
 /* SPDX-License-Identifier: MIT */
 /* Native leaves of the SR D3D11 calls. Rust owns every typed COM call; this file keeps the pipeline-state snapshot
-   (sr_d3d11/native.rs calls it) and the descriptor layout checks against the Windows SDK. */
+   (sr_d3d11/native.rs calls it) and checks the SDK values the Rust owners hard-code. */
 #include "native_memory.h"
 #include "sr_d3d11_platform.h"
 #include "sr_swap_platform.h"
 #include <rescaleframe/d3d11_state.h>
 #include <windows.h>
 #include <d3d11.h>
-#include <stddef.h>
 #include <stdlib.h>
 
-_Static_assert(sizeof(D3D11_TEXTURE2D_DESC) == RSF_ANOMALY_SWAP_DESC_SIZE &&
-    sizeof(rsf_sr_texture) == RSF_ANOMALY_SWAP_DESC_SIZE, "D3D11_TEXTURE2D_DESC size");
-_Static_assert(offsetof(D3D11_TEXTURE2D_DESC, MipLevels) == offsetof(rsf_sr_texture, mips) &&
-    offsetof(D3D11_TEXTURE2D_DESC, ArraySize) == offsetof(rsf_sr_texture, layers) &&
-    offsetof(D3D11_TEXTURE2D_DESC, Format) == offsetof(rsf_sr_texture, format) &&
-    offsetof(D3D11_TEXTURE2D_DESC, SampleDesc) == offsetof(rsf_sr_texture, samples) &&
-    offsetof(D3D11_TEXTURE2D_DESC, Usage) == offsetof(rsf_sr_texture, usage) &&
-    offsetof(D3D11_TEXTURE2D_DESC, BindFlags) == offsetof(rsf_sr_texture, bindings) &&
-    offsetof(D3D11_TEXTURE2D_DESC, CPUAccessFlags) == offsetof(rsf_sr_texture, cpu_access) &&
-    offsetof(D3D11_TEXTURE2D_DESC, MiscFlags) == offsetof(rsf_sr_texture, misc), "D3D11_TEXTURE2D_DESC fields");
+_Static_assert(sizeof(D3D11_TEXTURE2D_DESC) == RSF_ANOMALY_SWAP_DESC_SIZE, "D3D11_TEXTURE2D_DESC size");
 _Static_assert(DXGI_FORMAT_UNKNOWN == 0 && DXGI_FORMAT_R16G16B16A16_FLOAT == 10 && DXGI_FORMAT_R32_FLOAT == 41 &&
     DXGI_FORMAT_R24G8_TYPELESS == 44 && DXGI_FORMAT_D24_UNORM_S8_UINT == 45, "DXGI formats used by the twins");
 _Static_assert(DXGI_FORMAT_R8G8B8A8_TYPELESS == 27 && DXGI_FORMAT_R8G8B8A8_UNORM == 28 &&

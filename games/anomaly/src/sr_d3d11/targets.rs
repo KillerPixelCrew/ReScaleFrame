@@ -41,8 +41,7 @@ pub(crate) enum Error {
 }
 
 // The names the stage log uses for TwinBatchInfo::cause.
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_sr_twin_error_name(cause: u8) -> *const std::ffi::c_char {
+pub(crate) fn rsf_anomaly_sr_twin_error_name(cause: u8) -> *const std::ffi::c_char {
     const NAMES: [&std::ffi::CStr; 7] = [
         c"none",
         c"not_texture",
@@ -59,7 +58,6 @@ pub(crate) extern "C" fn rsf_anomaly_sr_twin_error_name(cause: u8) -> *const std
         .as_ptr()
 }
 
-#[repr(C)]
 pub(super) struct TwinInput {
     pub(super) texture: Ptr,
     pub(super) rtv: Ptr,
@@ -80,12 +78,13 @@ pub(super) struct Target {
     texture: Lease,
 }
 
-#[repr(C)]
 pub(super) struct TargetView {
     pub(super) texture: Ptr,
     pub(super) rtv: Ptr,
     pub(super) srv: Ptr,
     pub(super) uav: Ptr,
+    // Read only by the round-trip device fixture.
+    #[cfg_attr(not(feature = "sr-fixtures"), allow(dead_code))]
     pub(super) dsv: Ptr,
     pub(super) size: Extent,
     pub(super) format: u32,
@@ -103,7 +102,7 @@ impl TargetView {
             format: self.format,
             texture_surface: self.texture,
             desc_cache: self.texture,
-            // Texture mirrors the initialized 44-byte D3D11_TEXTURE2D_DESC.
+            // Texture has the layout of the initialized 44-byte D3D11_TEXTURE2D_DESC (checked in native.rs).
             desc: unsafe { std::mem::transmute::<Texture, [u8; 44]>(self.descriptor) },
             srv: self.srv,
             ..Fields::default()
@@ -300,7 +299,6 @@ pub(super) struct TwinBatch {
     _scratch: Option<Target>,
 }
 
-#[repr(C)]
 #[derive(Default)]
 pub(crate) struct TwinBatchInfo {
     pub(crate) bytes: u64,
@@ -309,11 +307,6 @@ pub(crate) struct TwinBatchInfo {
     pub(crate) cause: Error,
     pub(crate) pass_refused: bool,
 }
-
-const _: () = {
-    assert!(size_of::<TwinBatchInfo>() == 24);
-    assert!(std::mem::offset_of!(TwinBatchInfo, cause) == 16);
-};
 
 impl TwinBatchInfo {
     fn refuse(&mut self, index: usize, error: Error) -> u32 {
@@ -453,26 +446,16 @@ fn rsf_anomaly_sr_release_twin_view(owner: &mut Target, kind: u32) {
     }
 }
 
-#[repr(C)]
 pub(crate) struct TemporalView {
     pub(crate) colour: Ptr,
     pub(crate) motion: Ptr,
     pub(crate) output: Ptr,
     pub(crate) exposure: Ptr,
-    empty_motion: Ptr,
     pub(crate) colour_rtv: Ptr,
     pub(crate) motion_rtv: Ptr,
-    colour_srv: Ptr,
-    motion_srv: Ptr,
     pub(crate) output_srv: Ptr,
     pub(crate) empty_motion_srv: Ptr,
 }
-
-const _: () = {
-    assert!(size_of::<TwinInput>() == 56);
-    assert!(size_of::<TargetView>() == 96);
-    assert!(size_of::<TemporalView>() == 88);
-};
 
 pub(crate) struct TemporalTargets {
     // The owned textures keep the creating device alive.
@@ -482,15 +465,14 @@ pub(crate) struct TemporalTargets {
     output_format: u32,
     colour_rtv: Lease,
     motion_rtv: Lease,
-    colour_srv: Lease,
-    motion_srv: Lease,
     output_srv: Lease,
     empty_motion_srv: Lease,
     colour: Lease,
     motion: Lease,
     output: Lease,
     exposure: Lease,
-    empty_motion: Lease,
+    // The zero texture behind empty_motion_srv, owned for the view's lifetime.
+    _empty_motion: Lease,
 }
 
 // These free-threaded D3D11 references move only under the stage lock.
@@ -521,8 +503,6 @@ impl TemporalTargets {
         let motion = device.texture(&desc, null(), 0)?;
         let colour_rtv = device.view(&colour, RTV, None)?;
         let motion_rtv = device.view(&motion, RTV, None)?;
-        let colour_srv = device.view(&colour, SRV, None)?;
-        let motion_srv = device.view(&motion, SRV, None)?;
 
         // An unset validity channel asks the Runtime to reconstruct camera motion.
         let mut zeros = Vec::<u16>::new();
@@ -556,15 +536,13 @@ impl TemporalTargets {
             output_format,
             colour_rtv,
             motion_rtv,
-            colour_srv,
-            motion_srv,
             output_srv,
             empty_motion_srv,
             colour,
             motion,
             output,
             exposure,
-            empty_motion,
+            _empty_motion: empty_motion,
         })
     }
 
@@ -574,11 +552,8 @@ impl TemporalTargets {
             motion: self.motion.as_ptr(),
             output: self.output.as_ptr(),
             exposure: self.exposure.as_ptr(),
-            empty_motion: self.empty_motion.as_ptr(),
             colour_rtv: self.colour_rtv.as_ptr(),
             motion_rtv: self.motion_rtv.as_ptr(),
-            colour_srv: self.colour_srv.as_ptr(),
-            motion_srv: self.motion_srv.as_ptr(),
             output_srv: self.output_srv.as_ptr(),
             empty_motion_srv: self.empty_motion_srv.as_ptr(),
         }

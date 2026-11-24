@@ -193,8 +193,6 @@ fn temporal_targets_are_keyed_by_device_both_extents_and_output_format() {
             Call::Texture(colour, 0, None),
             Call::View(RTV, None),
             Call::View(RTV, None),
-            Call::View(SRV, None),
-            Call::View(SRV, None),
             Call::Texture(empty, render.width * 8, Some(0)),
             Call::View(SRV, None),
             Call::Texture(Texture::target(output, format, BIND_SRV), 0, None),
@@ -212,7 +210,7 @@ fn temporal_targets_are_keyed_by_device_both_extents_and_output_format() {
     assert!(!targets.matches(ptr(DEVICE), render, render, format));
     assert!(!targets.matches(ptr(DEVICE), render, output, RGBA16F));
     assert!(!targets.matches(null_mut(), render, output, format));
-    assert_eq!(fake(|state| state.owned.len()), 11);
+    assert_eq!(fake(|state| state.owned.len()), 9);
     drop(targets);
     assert!(fake(|state| state.owned.is_empty()));
 }

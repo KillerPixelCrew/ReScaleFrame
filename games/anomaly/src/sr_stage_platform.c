@@ -9,7 +9,6 @@
 #include "native_geometry.h"
 #include "native_hooks.h"
 #include "native_memory.h"
-#include "sr_d3d11_platform.h"
 #include "stage_entries.h"
 #include <rescaleframe/d3d11_state.h>
 #include <rescaleframe/texture_dump.h>

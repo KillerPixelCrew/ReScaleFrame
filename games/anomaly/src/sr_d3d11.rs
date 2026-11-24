@@ -44,7 +44,8 @@ impl Extent {
     }
 }
 
-// D3D11_TEXTURE2D_DESC, checked field by field in sr_d3d11_platform.c.
+// D3D11_TEXTURE2D_DESC field for field (checked in native.rs): the owners stay free of the windows crate, and the twin
+// fields copy these bytes into the engine's CTexture::desc cache.
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub(crate) struct Texture {
@@ -60,7 +61,6 @@ pub(crate) struct Texture {
     pub(crate) misc: u32,
 }
 
-#[repr(C)]
 #[derive(Default)]
 pub(crate) struct View {
     texture2d: u32,
@@ -69,7 +69,6 @@ pub(crate) struct View {
     descriptor: [u32; 6],
 }
 
-#[repr(C)]
 pub(crate) struct Draw {
     vertex: Ptr,
     pixel: Ptr,
@@ -80,12 +79,7 @@ pub(crate) struct Draw {
     size: Extent,
 }
 
-const _: () = {
-    assert!(size_of::<Extent>() == 8);
-    assert!(size_of::<Texture>() == 44);
-    assert!(size_of::<View>() == 36);
-    assert!(size_of::<Draw>() == 56);
-};
+const _: () = assert!(size_of::<Texture>() == 44);
 
 // The typed D3D11 calls: native.rs and the C pipeline-state leaves, the recording fakes under test.
 #[cfg(not(test))]
@@ -112,8 +106,7 @@ pub(crate) struct StageResources {
     drop_refs: u64,
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_sr_stage_make_twins(
+pub(crate) fn rsf_anomaly_sr_stage_make_twins(
     handle: &mut *mut StageResources,
     device: Ptr,
     request: &Request,
@@ -159,8 +152,7 @@ pub(crate) extern "C" fn rsf_anomaly_sr_stage_make_twins(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_sr_stage_retire_twins(
+pub(crate) fn rsf_anomaly_sr_stage_retire_twins(
     resources: Option<&mut StageResources>,
     refs: unsafe extern "C" fn(Ptr) -> u32,
 ) {
@@ -169,31 +161,25 @@ pub(crate) extern "C" fn rsf_anomaly_sr_stage_retire_twins(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_sr_stage_reset_pass(resources: Option<&mut StageResources>) {
+pub(crate) fn rsf_anomaly_sr_stage_reset_pass(resources: Option<&mut StageResources>) {
     if let Some(resources) = resources {
         resources.pass = None;
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_sr_stage_pass(
-    resources: Option<&StageResources>,
-) -> *const Pass {
+pub(crate) fn rsf_anomaly_sr_stage_pass(resources: Option<&StageResources>) -> *const Pass {
     resources
         .and_then(|resources| resources.pass.as_ref())
         .map_or(null(), from_ref)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_sr_stage_depth(resources: Option<&StageResources>) -> Ptr {
+pub(crate) fn rsf_anomaly_sr_stage_depth(resources: Option<&StageResources>) -> Ptr {
     resources
         .and_then(|resources| resources.twins.as_ref())
         .map_or(null_mut(), TwinBatch::depth_texture)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_sr_stage_resource_stats(
+pub(crate) fn rsf_anomaly_sr_stage_resource_stats(
     resources: Option<&StageResources>,
     bytes: &mut u64,
     refs: &mut u64,
@@ -203,7 +189,7 @@ pub(crate) extern "C" fn rsf_anomaly_sr_stage_resource_stats(
     });
 }
 
-// These values are checked against the SDK in the native leaves.
+// The view and pass kinds the owners and their native calls share.
 const RTV: u32 = 0;
 const SRV: u32 = 1;
 const UAV: u32 = 2;

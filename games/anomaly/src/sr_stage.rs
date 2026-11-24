@@ -2828,8 +2828,8 @@ fn live_options() -> [crate::overlay::rsf_anomaly_overlay_option; 13] {
         },
     ]
 }
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_sr_stage_quiesce() -> bool {
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn rsf_anomaly_sr_stage_quiesce() -> bool {
     STAGE.quiesce()
 }
 #[cfg(windows)]
@@ -2864,15 +2864,12 @@ extern "C" fn rsf_anomaly_sr_stage_sun_end(suspended: bool) {
 extern "C" fn rsf_anomaly_sr_stage_position_setup(constant: *mut c_void) {
     STAGE.position_setup(constant);
 }
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_sr_stage_frame_end() {
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn rsf_anomaly_sr_stage_frame_end() {
     STAGE.frame_end();
 }
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_anomaly_sr_stage_report(
-    emit: rsf_anomaly_sr_log,
-    user: *mut c_void,
-) {
+/// Emits two log lines with the per-window deltas and the totals, nothing when inactive.
+pub(crate) unsafe fn rsf_anomaly_sr_stage_report(emit: rsf_anomaly_sr_log, user: *mut c_void) {
     let Some(emit) = emit else { return };
     STAGE.report(&mut |text| {
         if let Ok(text) = CString::new(text) {

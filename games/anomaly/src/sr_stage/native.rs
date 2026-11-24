@@ -8,8 +8,8 @@
 #![cfg_attr(test, allow(dead_code))]
 use super::{STAGE, rsf_anomaly_sr_stage_configure_ini};
 use crate::engine_guards::{Image, sr_guard_failure};
-use crate::engine_slots::rsf_anomaly_slot_install;
 use crate::engine_slots::rsf_anomaly_slot_set;
+use crate::engine_slots::slot_install;
 use crate::host_log::Log;
 use crate::native_geometry::rsf_anomaly_geometry_active;
 use crate::native_geometry::rsf_anomaly_geometry_set_near;
@@ -705,7 +705,7 @@ pub(crate) unsafe extern "C" fn install_hooks() -> bool {
         let site = &build.sr.function_sites[index];
         // The leaf fills `replacement` and `original`.
         HookSite {
-            _name: site.name,
+            name: site.name,
             rva: site.rva,
             expected: site.expected,
             replacement: null_mut(),
@@ -716,8 +716,7 @@ pub(crate) unsafe extern "C" fn install_hooks() -> bool {
         c::install_hooks(
             image as Ptr,
             build.native.image_size,
-            // The header only forward-declares rsf_anomaly_hook_site; native_hooks::Site is its layout (48 bytes, checked
-            // on both sides).
+            // native_hooks::Site is the bound rsf_anomaly_hook_site, which this leaf's header forward-declares.
             sites.as_mut_ptr().cast(),
             sites.len(),
         )
@@ -734,7 +733,7 @@ pub(crate) unsafe extern "C" fn install_position_slot() -> bool {
     let checked = Image::new(image as *const u8, build.native.image_size, c::copy);
     // The slot must hold the profiled function, and the function its guard.
     checked.matches(site) && {
-        rsf_anomaly_slot_install(
+        slot_install(
             POSITION_SLOT,
             &checked,
             build.sr.position_setup_vtable_rva,
@@ -791,6 +790,7 @@ pub(crate) mod leaves {
     pub(crate) use crate::adapter_options::{
         rsf_anomaly_sr_persist_int as persist_int, rsf_anomaly_sr_persist_text as persist_text,
     };
+    pub(crate) use crate::com::release;
     pub(crate) use crate::ini::{
         rsf_anomaly_sr_ini_int as ini_int, rsf_anomaly_sr_ini_text as ini_text,
     };
@@ -798,7 +798,7 @@ pub(crate) mod leaves {
         rsf_anomaly_sr_context_device as context_device,
         rsf_anomaly_sr_copy_subresource as copy_subresource,
         rsf_anomaly_sr_immediate_context as immediate_context, rsf_anomaly_sr_map_read as map_read,
-        rsf_anomaly_sr_release as release, rsf_anomaly_sr_timer_clock as timer_clock,
+        rsf_anomaly_sr_timer_clock as timer_clock,
         rsf_anomaly_sr_timer_create_query as timer_create_query,
         rsf_anomaly_sr_timer_issue as timer_issue,
         rsf_anomaly_sr_timer_retain_device as timer_retain_device,
