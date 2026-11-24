@@ -404,30 +404,16 @@ unsafe extern "C" fn capture_record(
     }
 }
 
-// Supply native swapchain facts to the admission owner using the real Vulkan layout.
+// Supply native swapchain facts to the admission owner through the production reader.
 unsafe extern "C" fn describe(info: *const c_void, out: *mut Swapchain) {
     SWAPCHAIN.with(|expected| check!(info == ptr::from_ref(expected).cast()));
-    let info = unsafe { &*info.cast::<vk::SwapchainCreateInfoKHR<'_>>() };
-    check!(info.p_next.is_null());
-    unsafe {
-        out.write(Swapchain {
-            width: info.image_extent.width,
-            height: info.image_extent.height,
-            format: info.image_format.as_raw() as u32,
-            usage: info.image_usage.as_raw(),
-            color_space: info.image_color_space.as_raw() as u32,
-            layers: info.image_array_layers,
-            sharing_mode: info.image_sharing_mode.as_raw() as u32,
-            min_images: info.min_image_count,
-            flags: info.flags.as_raw(),
-            present_mode: info.present_mode.as_raw() as u32,
-            extension_count: 0,
-            extension_type: 0,
-            old_chain: info.old_swapchain.as_raw(),
-        })
-    };
+    check!(
+        unsafe { &*info.cast::<vk::SwapchainCreateInfoKHR<'_>>() }
+            .p_next
+            .is_null()
+    );
+    unsafe { super::platform::describe(info, out) };
 }
-
 fn create() -> (i32, Fsr4Owner, u64) {
     unsafe extern "C" fn lookup(_: Handle, _: *const c_char) -> rsf_vk_function {
         None

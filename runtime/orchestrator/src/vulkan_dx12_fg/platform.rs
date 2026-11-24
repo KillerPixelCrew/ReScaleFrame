@@ -567,7 +567,7 @@ unsafe extern "C" fn idle(platform: Handle) -> i32 {
     }
 }
 
-unsafe extern "C" fn describe(native: *const c_void, output: *mut Swapchain) {
+pub(super) unsafe extern "C" fn describe(native: *const c_void, output: *mut Swapchain) {
     let info = unsafe { &*native.cast::<vk::SwapchainCreateInfoKHR<'_>>() };
     let extra = unsafe { info.p_next.cast::<vk::BaseInStructure<'_>>().as_ref() };
     let (extension_count, extension_type) = extra.map_or((0, 0), |extra| {
