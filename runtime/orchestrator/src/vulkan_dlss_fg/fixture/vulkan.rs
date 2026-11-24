@@ -8,6 +8,7 @@ use crate::sys::{
 };
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::rsf_frame_record;
+use rsf_test_support::ignore_pipeline_barrier;
 use std::{
     cell::{Cell, UnsafeCell},
     ffi::{CStr, c_char},
@@ -447,19 +448,7 @@ unsafe extern "system" fn destroy_view(
     _: *const vk::AllocationCallbacks<'_>,
 ) {
 }
-unsafe extern "system" fn barrier(
-    _: vk::CommandBuffer,
-    _: vk::PipelineStageFlags,
-    _: vk::PipelineStageFlags,
-    _: vk::DependencyFlags,
-    _: u32,
-    _: *const vk::MemoryBarrier<'_>,
-    _: u32,
-    _: *const vk::BufferMemoryBarrier<'_>,
-    _: u32,
-    _: *const vk::ImageMemoryBarrier<'_>,
-) {
-}
+
 unsafe extern "system" fn copy_image(
     _: vk::CommandBuffer,
     source: vk::Image,
@@ -777,7 +766,7 @@ pub(super) unsafe extern "C" fn proc_address(_: Handle, name: *const c_char) -> 
         c"vkBindImageMemory", PFN_vkBindImageMemory, bind_image;
         c"vkCreateImageView", PFN_vkCreateImageView, create_view;
         c"vkDestroyImageView", PFN_vkDestroyImageView, destroy_view;
-        c"vkCmdPipelineBarrier", PFN_vkCmdPipelineBarrier, barrier;
+        c"vkCmdPipelineBarrier", PFN_vkCmdPipelineBarrier, ignore_pipeline_barrier;
         c"vkCmdCopyImage", PFN_vkCmdCopyImage, copy_image;
         c"vkGetPhysicalDeviceMemoryProperties", PFN_vkGetPhysicalDeviceMemoryProperties, memory_properties;
         c"vkGetPhysicalDeviceSurfaceCapabilitiesKHR", PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR, surface_capabilities;

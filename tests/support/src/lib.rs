@@ -28,6 +28,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{HSTRING, IUnknown, PCSTR, PCWSTR, Param, Result};
 
+use ash::vk;
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record, rsf_game_cpu_event,
 };
@@ -124,6 +125,22 @@ pub fn cpu_event(
         render_expected: 1,
         ..Default::default()
     }
+}
+
+/// A `vkCmdPipelineBarrier` that records nothing, for fake Vulkan entry tables.
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "system" fn ignore_pipeline_barrier(
+    _: vk::CommandBuffer,
+    _: vk::PipelineStageFlags,
+    _: vk::PipelineStageFlags,
+    _: vk::DependencyFlags,
+    _: u32,
+    _: *const vk::MemoryBarrier<'_>,
+    _: u32,
+    _: *const vk::BufferMemoryBarrier<'_>,
+    _: u32,
+    _: *const vk::ImageMemoryBarrier<'_>,
+) {
 }
 
 /// A D3D11 device and its immediate context on `driver`. Fixtures that prefer hardware call this

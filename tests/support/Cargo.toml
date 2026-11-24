@@ -8,6 +8,7 @@ license.workspace = true
 
 # Helpers the Windows fixture crates share. Never linked into a shipped binary.
 [dependencies]
+ash.workspace = true
 rsf-game-sys = { path = "../../sdk/game" }
 
 [target."cfg(windows)".dependencies]

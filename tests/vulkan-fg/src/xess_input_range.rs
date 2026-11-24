@@ -12,7 +12,7 @@ use crate::xess_sdk_abi::{
 };
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, rsf_frame_record};
-use rsf_test_support::frame_record;
+use rsf_test_support::{frame_record, ignore_pipeline_barrier};
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
@@ -361,21 +361,6 @@ unsafe extern "system" fn destroy_view(_: vk::Device, _: vk::ImageView, _: *cons
     DESTROYED_VIEWS.fetch_add(1, Relaxed);
 }
 
-#[allow(clippy::too_many_arguments)]
-unsafe extern "system" fn barrier(
-    _: vk::CommandBuffer,
-    _: vk::PipelineStageFlags,
-    _: vk::PipelineStageFlags,
-    _: vk::DependencyFlags,
-    _: u32,
-    _: *const c_void,
-    _: u32,
-    _: *const c_void,
-    _: u32,
-    _: *const c_void,
-) {
-}
-
 unsafe extern "system" fn copy(
     _: vk::CommandBuffer,
     _: vk::Image,
@@ -421,7 +406,10 @@ unsafe extern "C" fn device_proc(_: Handle, name: *const c_char) -> rsf_vk_funct
         (c"vkBindImageMemory", bind as *const ()),
         (c"vkCreateImageView", create_view as *const ()),
         (c"vkDestroyImageView", destroy_view as *const ()),
-        (c"vkCmdPipelineBarrier", barrier as *const ()),
+        (
+            c"vkCmdPipelineBarrier",
+            ignore_pipeline_barrier as *const (),
+        ),
         (c"vkCmdCopyImage", copy as *const ()),
     ];
     let name = unsafe { CStr::from_ptr(name) };

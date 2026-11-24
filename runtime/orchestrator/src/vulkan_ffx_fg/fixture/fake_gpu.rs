@@ -5,6 +5,7 @@ use super::rsf_fixture_ffx_refused_second_owner;
 use crate::sys::rsf_vk_function;
 use crate::vulkan_ffx_fg::{Owner, rsf_ffxgvk_destroy};
 use ash::vk::{self, Handle};
+use rsf_test_support::ignore_pipeline_barrier;
 use std::{
     cell::UnsafeCell,
     ffi::{CStr, c_char, c_void},
@@ -389,19 +390,7 @@ unsafe extern "system" fn bind(
         vk::Result::SUCCESS
     }
 }
-unsafe extern "system" fn barrier(
-    _: vk::CommandBuffer,
-    _: vk::PipelineStageFlags,
-    _: vk::PipelineStageFlags,
-    _: vk::DependencyFlags,
-    _: u32,
-    _: *const vk::MemoryBarrier<'_>,
-    _: u32,
-    _: *const vk::BufferMemoryBarrier<'_>,
-    _: u32,
-    _: *const vk::ImageMemoryBarrier<'_>,
-) {
-}
+
 unsafe extern "system" fn copy(
     _: vk::CommandBuffer,
     _: vk::Image,
@@ -442,7 +431,7 @@ pub(super) unsafe extern "C" fn rsf_fixture_ffx_lookup(
         b"vkDestroyFence" => function!(destroy_fence, PFN_vkDestroyFence),
         b"vkResetFences" => function!(reset_fences, PFN_vkResetFences),
         b"vkWaitForFences" => function!(wait_fences, PFN_vkWaitForFences),
-        b"vkCmdPipelineBarrier" => function!(barrier, PFN_vkCmdPipelineBarrier),
+        b"vkCmdPipelineBarrier" => function!(ignore_pipeline_barrier, PFN_vkCmdPipelineBarrier),
         b"vkCmdCopyImage" => function!(copy, PFN_vkCmdCopyImage),
         b"vkDeviceWaitIdle" => function!(idle, PFN_vkDeviceWaitIdle),
         _ => None,

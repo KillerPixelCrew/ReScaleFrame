@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::rsf_vk_function;
 use ash::vk::{self, Handle as _};
+use rsf_test_support::ignore_pipeline_barrier;
 use std::cell::UnsafeCell;
 use std::ffi::{CStr, c_char, c_void};
 use std::mem;
@@ -422,19 +423,6 @@ unsafe extern "system" fn map(
 }
 
 unsafe extern "system" fn unmap(_: vk::Device, _: vk::DeviceMemory) {}
-unsafe extern "system" fn barrier(
-    _: vk::CommandBuffer,
-    _: vk::PipelineStageFlags,
-    _: vk::PipelineStageFlags,
-    _: vk::DependencyFlags,
-    _: u32,
-    _: *const vk::MemoryBarrier<'_>,
-    _: u32,
-    _: *const vk::BufferMemoryBarrier<'_>,
-    _: u32,
-    _: *const vk::ImageMemoryBarrier<'_>,
-) {
-}
 
 unsafe extern "system" fn copy(
     commands: vk::CommandBuffer,
@@ -484,7 +472,7 @@ define_proc! {
     c"vkBindBufferMemory" => PFN_vkBindBufferMemory, bind;
     c"vkMapMemory" => PFN_vkMapMemory, map;
     c"vkUnmapMemory" => PFN_vkUnmapMemory, unmap;
-    c"vkCmdPipelineBarrier" => PFN_vkCmdPipelineBarrier, barrier;
+    c"vkCmdPipelineBarrier" => PFN_vkCmdPipelineBarrier, ignore_pipeline_barrier;
     c"vkCmdCopyImageToBuffer" => PFN_vkCmdCopyImageToBuffer, copy;
 }
 
