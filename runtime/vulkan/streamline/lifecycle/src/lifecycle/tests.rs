@@ -11,7 +11,7 @@ const HANDLE: usize = 0x3000;
 struct State {
     events: Vec<&'static str>,
     verified: bool,
-    resolve: i32,
+    resolve: bool,
     init: i32,
     shutdown: i32,
     features: Vec<u32>,
@@ -24,7 +24,7 @@ thread_local! {
         RefCell::new(State {
             events: Vec::new(),
             verified: true,
-            resolve: 0,
+            resolve: true,
             init: 0,
             shutdown: 0,
             features: Vec::new(),
@@ -84,7 +84,7 @@ pub(super) unsafe fn open_verified(_: *const u16) -> *mut c_void {
     }
 }
 
-pub(super) unsafe fn resolve(_: *mut c_void) -> i32 {
+pub(super) unsafe fn resolve(_: *mut c_void) -> bool {
     STATE.with_borrow(|state| state.resolve)
 }
 
@@ -108,10 +108,9 @@ pub(super) unsafe fn init(preferences: *const rsf_slvk_sdk_preferences, version:
     })
 }
 
-pub(super) unsafe fn shutdown(result: *mut i32) -> u32 {
+pub(super) unsafe fn shutdown() -> Option<i32> {
     record("shutdown");
-    unsafe { *result = STATE.with_borrow(|state| state.shutdown) };
-    1
+    Some(STATE.with_borrow(|state| state.shutdown))
 }
 
 pub(super) unsafe fn clear() {
@@ -249,7 +248,7 @@ fn failed_initialization_releases_only_a_module_it_loaded() {
         MODULE
     );
 
-    configure(|state| state.resolve = -1);
+    configure(|state| state.resolve = false);
     assert_eq!(start(&lifecycle, "C:\\sl"), MISSING_EXPORT);
     assert_eq!(take_events(), ["clear"]);
     assert_eq!(lifecycle.device_proc().addr(), PROC);

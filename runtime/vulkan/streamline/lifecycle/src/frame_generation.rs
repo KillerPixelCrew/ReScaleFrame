@@ -96,7 +96,7 @@ impl FrameGeneration {
         if !enabled && !self.enabled {
             return 0;
         }
-        if unsafe { fg_options_bound() } == 0 {
+        if !fg_options_bound() {
             return -1;
         }
         if enabled && requested.count == 0 {
@@ -141,7 +141,7 @@ impl FrameGeneration {
     }
 
     pub(crate) unsafe fn free(&mut self) -> i32 {
-        if !self.resources_may_exist || unsafe { fg_options_bound() } == 0 {
+        if !self.resources_may_exist || !fg_options_bound() {
             return 0;
         }
         if self.enabled {

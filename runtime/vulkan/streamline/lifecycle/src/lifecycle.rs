@@ -258,7 +258,7 @@ impl Lifecycle {
                 Err(result) => return result,
             },
         };
-        let resolved = unsafe { leaf::resolve(module.as_ptr()) } == 0;
+        let resolved = unsafe { leaf::resolve(module.as_ptr()) };
         let instance = unsafe { leaf::symbol(module.as_ptr(), c"vkGetInstanceProcAddr".as_ptr()) };
         let device = unsafe { leaf::symbol(module.as_ptr(), c"vkGetDeviceProcAddr".as_ptr()) };
         if !resolved || instance.is_null() || device.is_null() {
@@ -321,8 +321,7 @@ impl Lifecycle {
         session.shutdown_result = Some(0);
         let mut result = 0;
         if session.initialized {
-            let mut sdk_result = 0;
-            if unsafe { leaf::shutdown(&mut sdk_result) } != 0 {
+            if let Some(sdk_result) = unsafe { leaf::shutdown() } {
                 result = sdk_result;
                 session.shutdown_result = Some(result);
             }

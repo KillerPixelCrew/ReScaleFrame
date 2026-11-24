@@ -126,18 +126,18 @@ pub(crate) mod lifecycle_leaf {
         unsafe { crate::admission::open_by_digest(path) }
     }
 
-    pub(crate) unsafe fn resolve(module: *mut c_void) -> i32 {
+    /// Publishes the core entry points; true when every one the lifecycle needs resolved.
+    pub(crate) unsafe fn resolve(module: *mut c_void) -> bool {
         let entries = unsafe { Entries::resolve(module) };
         *CORE.write().unwrap_or_else(PoisonError::into_inner) = Some(entries);
-        let resolved = entries.init.is_some()
+        entries.init.is_some()
             && entries.shutdown.is_some()
             && entries.get_feature_function.is_some()
             && entries.get_new_frame_token.is_some()
             && entries.is_feature_supported.is_some()
             && entries.set_tag_for_frame.is_some()
             && entries.set_constants.is_some()
-            && entries.free_resources.is_some();
-        if resolved { 0 } else { -1 }
+            && entries.free_resources.is_some()
     }
 
     pub(crate) unsafe fn init(request: *const rsf_slvk_sdk_preferences, version: u64) -> i32 {
@@ -147,14 +147,10 @@ pub(crate) mod lifecycle_leaf {
         guarded(|| unsafe { init(request, version) })
     }
 
-    /// Nonzero when slShutdown was called; result receives its result.
-    pub(crate) unsafe fn shutdown(result: *mut i32) -> u32 {
-        let Some(shutdown) = super::core().shutdown else {
-            return 0;
-        };
-        let code = guarded(|| unsafe { shutdown() });
-        unsafe { result.write(code) };
-        1
+    /// slShutdown's result, or None when the entry point is not bound.
+    pub(crate) unsafe fn shutdown() -> Option<i32> {
+        let shutdown = super::core().shutdown?;
+        Some(guarded(|| unsafe { shutdown() }))
     }
 
     /// Clears the SDK entry points that slShutdown, a failed slInit or unload
@@ -181,8 +177,8 @@ unsafe extern "C" fn present_error(error: *const i32) {
 
 // Frame-generation leaves. Rust invokes them only under the initialized session.
 
-pub(crate) unsafe fn fg_options_bound() -> u32 {
-    u32::from(FG_OPTIONS.get().is_some())
+pub(crate) fn fg_options_bound() -> bool {
+    FG_OPTIONS.get().is_some()
 }
 
 pub(crate) unsafe fn fg_apply(request: &Packed) -> i32 {
