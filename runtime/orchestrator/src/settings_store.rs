@@ -11,6 +11,7 @@ use crate::sys::{
     rsf_sharpening_options as Sharpening,
 };
 pub(crate) use crate::wide::from_str as wide;
+use rsf_game_sys::ffi_util::checked;
 use std::ffi::{CStr, c_char};
 use std::ptr::null;
 use std::sync::Mutex;
@@ -446,15 +447,7 @@ fn write_sharpening(
 // A full rsf_sharpening_options of this ABI, or None. Only the leading struct_size is read until
 // it shows the whole structure is present.
 unsafe fn sharpening_options<'a>(options: *const Sharpening) -> Option<&'a Sharpening> {
-    if options.is_null() {
-        return None;
-    }
-    let size = unsafe { options.cast::<u32>().read() } as usize;
-    if size < size_of::<Sharpening>() {
-        return None;
-    }
-    let options = unsafe { &*options };
-    (options.abi_version == RSF_SHARPENING_ABI_VERSION).then_some(options)
+    unsafe { checked(options) }.filter(|options| options.abi_version == RSF_SHARPENING_ABI_VERSION)
 }
 
 /// Reads the owned keys. Missing frontend values take `defaults`, missing post-pass values take

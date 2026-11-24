@@ -23,6 +23,7 @@ use crate::sys::{
 };
 use crate::sys::{rsf_native_present_record, rsf_observer_present_event};
 use crate::wide::copy_nul as wide_copy;
+use rsf_game_sys::ffi_util::{checked, has_capacity};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_GAME_ABI_VERSION,
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_EVENT_VERSION_SOURCE,
@@ -32,7 +33,7 @@ use rsf_game_sys::{
     RSF_GAME_RENDER_SUBMISSION, RSF_GAME_RENDER_WINDOW, rsf_camera_frame, rsf_frame_record,
     rsf_game_cpu_event, rsf_game_host_services, rsf_game_render_config, rsf_game_render_feedback,
 };
-use std::ffi::{CStr, CString, c_char, c_int, c_void};
+use std::ffi::{CStr, CString, c_char, c_int};
 use std::mem::offset_of;
 use std::ptr::{self, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
@@ -100,10 +101,6 @@ fn zeroed_settings() -> rsf_render_settings {
 fn rect_extent([left, top, right, bottom]: [i32; 4]) -> Option<[u32; 2]> {
     (left >= 0 && top >= 0 && right > left && bottom > top)
         .then(|| [(right - left) as u32, (bottom - top) as u32])
-}
-
-unsafe fn prefix_size(object: *const c_void) -> u32 {
-    unsafe { object.cast::<u32>().read() }
 }
 
 fn ptr_of(object: &Option<IUnknown>) -> Raw {
@@ -1673,8 +1670,7 @@ impl Host {
         if !g.configured
             || g.execution_thread != current_thread()
             || context.is_null()
-            || request.owner.is_null()
-            || unsafe { prefix_size(request.owner.cast()) } < size_of::<Pass>() as u32
+            || !unsafe { has_capacity(request.owner) }
             || unsafe { (*request.owner).session_id } != self.upstream.session_id
         {
             return NOT_READY;
@@ -1898,12 +1894,9 @@ impl Host {
         // Keep startup receipts, plus bounded late stage samples and the first refusal
         // of each stage. Read no extension fields until its declared size/version allows it.
         // This host owns normalization; the same fact is not dispatched upstream twice.
-        if event.is_null()
-            || unsafe { prefix_size(event.cast()) } < size_of::<rsf_game_cpu_event>() as u32
-        {
+        let Some(fact) = (unsafe { checked(event) }) else {
             return;
-        }
-        let fact = unsafe { &*event };
+        };
         let source_event =
             (RSF_GAME_CPU_SOURCE_RESERVE..=RSF_GAME_CPU_SOURCE_ABORT).contains(&fact.stage);
         let qualified = fact.stage <= RSF_GAME_CPU_SOURCE_ABORT
@@ -2124,9 +2117,7 @@ unsafe extern "C" fn host_changed(user: Raw, settings: *const rsf_render_setting
 
 unsafe extern "C" fn host_sr_report(user: Raw, output: *mut rsf_overlay_sr_report) -> c_int {
     let host = unsafe { host(user) };
-    if output.is_null()
-        || unsafe { prefix_size(output.cast()) } < size_of::<rsf_overlay_sr_report>() as u32
-    {
+    if !unsafe { has_capacity(output) } {
         return 0;
     }
     unsafe { *output = host.shared().report };
@@ -2147,13 +2138,10 @@ unsafe extern "C" fn host_accept_window(user: Raw, window: Raw) -> c_int {
 
 unsafe extern "C" fn host_passes(user: Raw, context: Raw, pass: *const Pass, begin: u32) {
     let host = unsafe { host(user) };
-    let Some(pass) = (unsafe { pass.as_ref() }) else {
+    let Some(pass) = (unsafe { checked(pass) }) else {
         return;
     };
-    if pass.struct_size < size_of::<Pass>() as u32
-        || begin > 1
-        || pass.session_id != host.upstream.session_id
-    {
+    if begin > 1 || pass.session_id != host.upstream.session_id {
         return;
     }
     host.passes(context, pass, begin);
@@ -2161,12 +2149,10 @@ unsafe extern "C" fn host_passes(user: Raw, context: Raw, pass: *const Pass, beg
 
 unsafe extern "C" fn host_config(user: Raw, output: *mut rsf_game_render_config) -> c_int {
     let host = unsafe { host(user) };
-    let Some(output) = (unsafe { output.as_mut() }) else {
-        return 0;
-    };
-    if output.struct_size < size_of::<rsf_game_render_config>() as u32 {
+    if !unsafe { has_capacity(output) } {
         return 0;
     }
+    let output = unsafe { &mut *output };
     let shared = host.shared();
     *output = shared.planned;
     output.enabled =
@@ -2176,12 +2162,10 @@ unsafe extern "C" fn host_config(user: Raw, output: *mut rsf_game_render_config)
 
 unsafe extern "C" fn host_feedback(user: Raw, event: *const rsf_game_render_feedback) {
     let host = unsafe { host(user) };
-    let Some(event) = (unsafe { event.as_ref() }) else {
+    let Some(event) = (unsafe { checked(event) }) else {
         return;
     };
-    if event.struct_size < size_of::<rsf_game_render_feedback>() as u32
-        || event.session_id != host.upstream.session_id
-    {
+    if event.session_id != host.upstream.session_id {
         return;
     }
     if event.reason != 0 {
@@ -2219,11 +2203,10 @@ unsafe extern "C" fn host_present(user: Raw, event: *const rsf_observer_present_
 }
 
 unsafe extern "C" fn host_process(user: Raw, context: Raw, pass: *const Pass) -> i32 {
-    let Some(pass) = (unsafe { pass.as_ref() }) else {
+    let Some(pass) = (unsafe { checked(pass) }) else {
         return INVALID;
     };
     if context.is_null()
-        || pass.struct_size < size_of::<Pass>() as u32
         || pass.role != RSF_GAME_RENDER_SR
         || pass.swapchain.is_null()
         || (pass.camera_valid == 0 && pass.flags & RSF_GAME_RENDER_RECONFIGURE == 0)
@@ -2237,7 +2220,7 @@ unsafe extern "C" fn host_process(user: Raw, context: Raw, pass: *const Pass) ->
 
 // Size, then version, are checked before any other field is read.
 unsafe fn admitted<T>(object: *const T, version: u32) -> Result<&'static T, i32> {
-    if object.is_null() || unsafe { prefix_size(object.cast()) } < size_of::<T>() as u32 {
+    if !unsafe { has_capacity(object) } {
         return Err(INVALID);
     }
     let abi = unsafe { object.cast::<u32>().add(1).read() };
@@ -2253,14 +2236,11 @@ unsafe extern "C" fn rsf_d3d11_host_create(
     services: *mut rsf_game_host_services,
 ) -> i32 {
     const LEGACY_SETUP_SIZE: usize = offset_of!(rsf_d3d11_host_setup, depth_far_plane);
-    if setup.is_null()
-        || unsafe { prefix_size(setup.cast()) } < LEGACY_SETUP_SIZE as u32
-        || services.is_null()
-        || unsafe { prefix_size(services.cast()) } < size_of::<rsf_game_host_services>() as u32
-    {
+    if setup.is_null() || !unsafe { has_capacity(services) } {
         return INVALID;
     }
-    let size = unsafe { prefix_size(setup.cast()) } as usize;
+    // The legacy prefix or the full record; nothing in between.
+    let size = unsafe { setup.cast::<u32>().read() } as usize;
     if size != LEGACY_SETUP_SIZE && size < size_of::<rsf_d3d11_host_setup>() {
         return INVALID;
     }
@@ -2381,9 +2361,7 @@ extern "C" fn rsf_d3d11_host_set_active(user: Raw, active: u32) -> i32 {
 }
 
 unsafe fn dispatch_chain(host: &Host, request: *mut rsf_d3d11_chain_dispatch) -> i32 {
-    if request.is_null()
-        || unsafe { prefix_size(request.cast()) } < size_of::<rsf_d3d11_chain_dispatch>() as u32
-    {
+    if !unsafe { has_capacity(request) } {
         return INVALID;
     }
     let request = unsafe { &mut *request };
@@ -2423,9 +2401,7 @@ unsafe extern "C" fn rsf_d3d11_host_dispatch_present(
     let Some(host) = owner(user) else {
         return INVALID;
     };
-    if request.is_null()
-        || unsafe { prefix_size(request.cast()) } < size_of::<rsf_d3d11_present_dispatch>() as u32
-    {
+    if !unsafe { has_capacity(request) } {
         return INVALID;
     }
     let request = unsafe { &mut *request };
@@ -2590,14 +2566,11 @@ unsafe extern "C" fn rsf_d3d11_host_bind_presentation(
     let Some(host) = owner(user) else {
         return INVALID;
     };
-    if binding.is_null()
-        || unsafe { prefix_size(binding.cast()) }
-            < size_of::<rsf_d3d11_presentation_binding>() as u32
-        || unsafe { (*binding).swapchain }.is_null()
-    {
+    let Some(binding) =
+        (unsafe { checked(binding) }).filter(|binding| !binding.swapchain.is_null())
+    else {
         return INVALID;
-    }
-    let binding = unsafe { &*binding };
+    };
     if binding.abi_version != RSF_D3D11_HOST_ABI_VERSION {
         return ABI_MISMATCH;
     }
@@ -2632,22 +2605,20 @@ unsafe extern "C" fn rsf_d3d11_host_upscale_auxiliaries(
     let Some(host) = owner(user) else {
         return INVALID;
     };
-    if context.is_null()
-        || request.is_null()
-        || unsafe { prefix_size(request.cast()) } < size_of::<rsf_d3d11_auxiliary_pass>() as u32
-    {
+    if context.is_null() {
         return INVALID;
     }
-    let request = unsafe { &*request };
+    let Some(request) = (unsafe { checked(request) }) else {
+        return INVALID;
+    };
     if request.abi_version != RSF_D3D11_HOST_ABI_VERSION {
         return ABI_MISMATCH;
     }
-    let Some(pass) = (unsafe { request.pass.as_ref() }) else {
+    let Some(pass) = (unsafe { checked(request.pass) }) else {
         return INVALID;
     };
     let count = request.surface_count as usize;
-    if pass.struct_size < size_of::<Pass>() as u32
-        || pass.role != RSF_GAME_RENDER_SR
+    if pass.role != RSF_GAME_RENDER_SR
         || pass.camera_valid == 0
         || pass.swapchain.is_null()
         || pass.flags & RSF_GAME_RENDER_RECONFIGURE != 0

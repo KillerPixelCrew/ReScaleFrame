@@ -40,6 +40,7 @@ use rsf_game_sys::{
     rsf_game_cpu_event as CpuEvent, rsf_game_host_services as Services,
     rsf_game_render_config as Config, rsf_game_render_pass as Pass,
 };
+use rsf_game_sys::ffi_util::{checked, has_capacity};
 use rsf_game_sys::{
     RSF_PLUGIN_SESSION_ABI_VERSION as SESSION_ABI_VERSION,
     rsf_plugin_session_options as SessionOptions,
@@ -811,7 +812,7 @@ unsafe extern "C" fn log(owner: *mut c_void, message: *const c_char) {
 }
 
 unsafe extern "C" fn configuration(owner: *mut c_void, output: *mut Config) -> c_int {
-    if output.is_null() || (unsafe { output.cast::<u32>().read() } as usize) < size_of::<Config>() {
+    if !unsafe { has_capacity(output) } {
         return 0;
     }
     let plan = host_from(owner).lock().plan;
@@ -825,13 +826,12 @@ unsafe extern "C" fn configuration(owner: *mut c_void, output: *mut Config) -> c
 }
 
 unsafe extern "C" fn render(owner: *mut c_void, commands: Handle, pass: *const Pass, begin: u32) {
-    if commands.is_null()
-        || pass.is_null()
-        || (unsafe { pass.cast::<u32>().read() } as usize) < size_of::<Pass>()
-    {
+    if commands.is_null() {
         return;
     }
-    host_from(owner).render(commands, unsafe { &*pass }, begin != 0);
+    if let Some(pass) = unsafe { checked(pass) } {
+        host_from(owner).render(commands, pass, begin != 0);
+    }
 }
 
 unsafe extern "C" fn cpu_event(_: *mut c_void, event: *const CpuEvent) {
@@ -841,11 +841,10 @@ unsafe extern "C" fn cpu_event(_: *mut c_void, event: *const CpuEvent) {
 // Admission and host construction, before any plugin is loaded. Err is the public refusal code:
 // 1 incomplete or mismatched setup, 2 invalid choice, 4 log unavailable, 8 adapter policy refused.
 unsafe fn describe(setup: *const Setup) -> Result<Host, u32> {
-    if setup.is_null() || (unsafe { setup.cast::<u32>().read() } as usize) < size_of::<Setup>() {
-        return Err(1);
-    }
     let setup_ptr = setup;
-    let setup = unsafe { &*setup };
+    let Some(setup) = (unsafe { checked(setup) }) else {
+        return Err(1);
+    };
     let Some(set_engine_spatial) = setup.set_engine_spatial else {
         return Err(1);
     };

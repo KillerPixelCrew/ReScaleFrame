@@ -65,6 +65,7 @@ use crate::{
         rsf_sharpening_options as Sharpening,
     },
 };
+use rsf_game_sys::ffi_util::has_capacity;
 use rsf_game_sys::{RSF_FRAME_SOURCE_RENDERED, RSF_SR_AUTO, rsf_game_log_fn};
 use std::{
     ffi::{CStr, CString, c_char, c_void},
@@ -191,11 +192,6 @@ impl Drop for ApplyAdmission {
 
 const fn abi_size<T>() -> u32 {
     size_of::<T>() as u32
-}
-
-// Inspect the prefix before making a typed reference. Clients may pass just a size word.
-unsafe fn fits<T>(ptr: *const T) -> bool {
-    !ptr.is_null() && unsafe { ptr.cast::<u32>().read() } >= abi_size::<T>()
 }
 
 fn has(mask: u32, id: u32) -> bool {
@@ -592,7 +588,7 @@ pub(super) unsafe extern "C" fn rsf_overlay_configure_bound(
 }
 
 unsafe fn configure_inner(setup: *const rsf_overlay_service_setup, deferred: bool) -> i32 {
-    if !unsafe { fits(setup) } {
+    if !unsafe { has_capacity(setup) } {
         return INVALID_ARGUMENT;
     }
     let setup = unsafe { &*setup };
@@ -1387,7 +1383,7 @@ extern "C" fn toggle() -> i32 {
 }
 
 unsafe extern "C" fn capture(out: *mut rsf_overlay_capture) -> i32 {
-    if !unsafe { fits(out) } {
+    if !unsafe { has_capacity(out) } {
         return INVALID_ARGUMENT;
     }
     let started = started();
@@ -1412,7 +1408,7 @@ unsafe extern "C" fn capture(out: *mut rsf_overlay_capture) -> i32 {
 }
 
 unsafe extern "C" fn status(out: *mut Status) -> i32 {
-    if !unsafe { fits(out) } {
+    if !unsafe { has_capacity(out) } {
         return INVALID_ARGUMENT;
     }
     if unsafe { (*out).abi_version } != RSF_RENDER_FRONTEND_ABI_VERSION {
@@ -1430,7 +1426,7 @@ unsafe extern "C" fn status(out: *mut Status) -> i32 {
 }
 
 pub(crate) unsafe extern "C" fn settings_get(out: *mut Settings) -> i32 {
-    if !unsafe { fits(out) } {
+    if !unsafe { has_capacity(out) } {
         return INVALID_ARGUMENT;
     }
     if unsafe { (*out).abi_version } != RSF_RENDER_FRONTEND_ABI_VERSION {
@@ -1449,7 +1445,7 @@ pub(crate) unsafe extern "C" fn settings_apply(request: *const Settings) -> i32 
         return INVALID_ARGUMENT;
     }
     let config = CONFIG.get();
-    if !unsafe { fits(request) } {
+    if !unsafe { has_capacity(request) } {
         log_apply(config, None, "api", INVALID_ARGUMENT);
         return INVALID_ARGUMENT;
     }
@@ -1467,7 +1463,7 @@ pub(crate) unsafe extern "C" fn settings_apply(request: *const Settings) -> i32 
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_get_overlay_diagnostics(out: *mut rsf_overlay_diagnostics) -> i32 {
-    if !unsafe { fits(out) } {
+    if !unsafe { has_capacity(out) } {
         return INVALID_ARGUMENT;
     }
     let started = started();
@@ -1517,7 +1513,7 @@ unsafe extern "C" fn rsf_get_overlay_diagnostics(out: *mut rsf_overlay_diagnosti
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_get_overlay_api(api: *mut rsf_overlay_api) -> i32 {
-    if !unsafe { fits(api) } {
+    if !unsafe { has_capacity(api) } {
         return INVALID_ARGUMENT;
     }
     if unsafe { (*api).abi_version } != RSF_OVERLAY_API_VERSION {

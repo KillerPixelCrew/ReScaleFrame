@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use crate::sr_session::has_capacity;
 use crate::sys::{rsf_named_frame_dump, rsf_named_frame_dump_report};
 use crate::texture_dump::{PackedRows, pixel_bytes};
 use windows::core::Interface;
@@ -112,9 +113,7 @@ pub(crate) unsafe extern "C" fn rsf_input_dump_current(output: *mut rsf_frame_re
     else {
         return 0;
     };
-    if output.is_null()
-        || (unsafe { output.cast::<u32>().read() } as usize) < size_of::<rsf_frame_record>()
-    {
+    if !unsafe { has_capacity(output) } {
         return 0;
     }
     unsafe { output.write(selected) };
@@ -356,11 +355,7 @@ pub(crate) unsafe extern "C" fn rsf_input_dump_named_texture(
     );
     let mut encoding = Encoding::INVALID;
     unsafe { native::encode_texture(context, texture.as_raw(), &options, 0, &mut encoding) };
-    if encoding.preview == 0
-        && !report.is_null()
-        && unsafe { report.cast::<u32>().read() } as usize
-            >= size_of::<rsf_named_frame_dump_report>()
-    {
+    if encoding.preview == 0 && unsafe { has_capacity(report) } {
         unsafe {
             std::ptr::addr_of_mut!((*report).width).write(surface.width);
             std::ptr::addr_of_mut!((*report).height).write(surface.height);

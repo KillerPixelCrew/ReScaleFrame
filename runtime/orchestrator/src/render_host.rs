@@ -43,6 +43,7 @@ use rsf_game_sys::{
     rsf_game_latency_event as LatencyEvent, rsf_game_log_fn, rsf_game_render_feedback as Feedback,
     rsf_game_render_pass as Pass,
 };
+use rsf_game_sys::ffi_util::{checked, has_capacity};
 use rsf_game_sys::{
     RSF_RENDER_HOST_ABI_VERSION as HOST_ABI_VERSION,
     RSF_RENDER_HOST_ENGINE_PRESENTATION as ENGINE_PRESENTATION, rsf_render_host_setup as Setup,
@@ -634,10 +635,9 @@ impl Host {
     }
 
     fn process(&self, commands: Handle, pass: *const Pass) -> i32 {
-        if pass.is_null() || unsafe { pass.cast::<u32>().read() } < size_of::<Pass>() as u32 {
+        let Some(pass) = (unsafe { checked(pass) }) else {
             return INVALID;
-        }
-        let pass = unsafe { &*pass };
+        };
         if commands.is_null() || pass.camera_valid == 0 || pass.session_id != self.session {
             return INVALID;
         }
@@ -1366,11 +1366,10 @@ unsafe extern "C" fn render_pass(
     pass: *const Pass,
     begin: u32,
 ) {
-    if pass.is_null() || unsafe { pass.cast::<u32>().read() } < size_of::<Pass>() as u32 {
+    let Some(pass) = (unsafe { checked(pass) }) else {
         return;
-    }
+    };
     let host = host_from(user);
-    let pass = unsafe { &*pass };
     if pass.role == RSF_GAME_RENDER_FINAL_SCENE && begin == 0 {
         host.scene(commands, pass);
     }
@@ -1385,12 +1384,10 @@ unsafe extern "C" fn cpu_event(_: *mut c_void, event: *const CpuEvent) {
 
 unsafe extern "C" fn process_latency(user: *mut c_void, event: *const LatencyEvent) -> i32 {
     let host = host_from(user);
-    if event.is_null()
-        || unsafe { event.cast::<u32>().read() } < size_of::<LatencyEvent>() as u32
-        || unsafe { (*event).session_id } != host.session
-    {
+    let Some(fact) = (unsafe { checked(event) }).filter(|fact| fact.session_id == host.session)
+    else {
         return INVALID;
-    }
+    };
     {
         let mut s = host.lock();
         host.poll(&mut s);
@@ -1401,11 +1398,10 @@ unsafe extern "C" fn process_latency(user: *mut c_void, event: *const LatencyEve
         BACKEND_NOT_READY
     };
     if result == BACKEND_OK && host.latency_reports.fetch_add(1, Ordering::Relaxed) < 12 {
-        let event = unsafe { &*event };
         host.log(&format!(
             "Native renderer latency boundary={} source={} thread={} owned=1.",
-            event.marker,
-            event.source_frame_id,
+            fact.marker,
+            fact.source_frame_id,
             unsafe { GetCurrentThreadId() }
         ));
     }
@@ -1414,13 +1410,10 @@ unsafe extern "C" fn process_latency(user: *mut c_void, event: *const LatencyEve
 
 unsafe extern "C" fn render_feedback(user: *mut c_void, event: *const Feedback) {
     let host = host_from(user);
-    if event.is_null()
-        || unsafe { event.cast::<u32>().read() } < size_of::<Feedback>() as u32
-        || unsafe { (*event).session_id } != host.session
-    {
+    let Some(event) = (unsafe { checked(event) }).filter(|event| event.session_id == host.session)
+    else {
         return;
-    }
-    let event = unsafe { &*event };
+    };
     let mut s = host.lock();
     s.renderer_reason = event.reason;
     s.feedback_tick = unsafe { leaf::tick() };
@@ -1572,10 +1565,9 @@ fn install(host: &Host, setup: &Setup) -> i32 {
 }
 
 unsafe fn create(setup: *const Setup, services: *mut Services) -> i32 {
-    if setup.is_null() || unsafe { setup.cast::<u32>().read() } < size_of::<Setup>() as u32 {
+    let Some(s) = (unsafe { checked(setup) }) else {
         return INVALID;
-    }
-    let s = unsafe { &*setup };
+    };
     if s.configuration_path.is_null()
         || s.runtime_directory.is_null()
         || s.configuration_section.is_null()
@@ -1583,8 +1575,7 @@ unsafe fn create(setup: *const Setup, services: *mut Services) -> i32 {
         || s.engine_version_utf8.is_null()
         || s.presentation_owner > ENGINE_PRESENTATION
         || s.sr_backend_choices == 0
-        || services.is_null()
-        || unsafe { services.cast::<u32>().read() } < size_of::<Services>() as u32
+        || !unsafe { has_capacity(services) }
         || unsafe { (*services).session_id } == 0
     {
         return INVALID;
@@ -1756,7 +1747,7 @@ unsafe extern "C" fn rsf_render_host_native_object(user: *mut c_void, object: Ha
 /// `output` is null or readable for its leading `struct_size`.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_render_status_get(output: *mut Status) -> i32 {
-    if output.is_null() || unsafe { output.cast::<u32>().read() } < size_of::<Status>() as u32 {
+    if !unsafe { has_capacity(output) } {
         return INVALID;
     }
     if unsafe { (*output).abi_version } != RSF_RENDER_FRONTEND_ABI_VERSION {
@@ -1778,7 +1769,7 @@ unsafe extern "C" fn rsf_render_status_get(output: *mut Status) -> i32 {
 /// `output` is null or readable for its leading `struct_size`.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_render_settings_get(output: *mut Settings) -> i32 {
-    if output.is_null() || unsafe { output.cast::<u32>().read() } < size_of::<Settings>() as u32 {
+    if !unsafe { has_capacity(output) } {
         return INVALID;
     }
     if unsafe { (*output).abi_version } != RSF_RENDER_FRONTEND_ABI_VERSION {
@@ -1800,10 +1791,9 @@ unsafe extern "C" fn rsf_render_settings_get(output: *mut Settings) -> i32 {
 /// `request` is null or readable for its leading `struct_size`.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_render_settings_apply(request: *const Settings) -> i32 {
-    if request.is_null() || unsafe { request.cast::<u32>().read() } < size_of::<Settings>() as u32 {
+    let Some(request) = (unsafe { checked(request) }) else {
         return INVALID;
-    }
-    let request = unsafe { &*request };
+    };
     if request.abi_version != RSF_RENDER_FRONTEND_ABI_VERSION {
         return ABI_MISMATCH;
     }
