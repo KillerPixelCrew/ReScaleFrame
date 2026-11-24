@@ -11,7 +11,6 @@
 // inside an SDK call. Only the SDK-written contexts, the chain and the
 // replacement table change after publication, so they are UnsafeCell fields
 // and every later step takes a shared reference.
-use super::startup::{self, CoreEntries, Platform, WsiEntries};
 use super::{BGRA8, FEATURE_FAILED, Frame, Handle, INIT_FAILED, Image, OK, RGBA8, Record, Setup};
 use crate::dx12_vulkan_platform::typed;
 use crate::frame_capture_vk::{
@@ -21,6 +20,7 @@ use crate::frame_capture_vk::{
 };
 use crate::sdk_module::Loader;
 use crate::sys::{rsf_vk_function, rsf_vk_get_proc};
+use crate::vulkan_dispatch::succeeded;
 use crate::vulkan_fg_copy::ImageCopy;
 use crate::vulkan_fg_copy::{Barrier, rsf_core_vkfg_record_barrier, rsf_core_vkfg_record_copy};
 use crate::vulkan_fg_resources::device::{
@@ -36,7 +36,7 @@ use crate::vulkan_timing::{timing_begin, timing_end};
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::RSF_FRAME_FLAG_RESET;
 use std::cell::UnsafeCell;
-use std::ffi::{c_char, c_void};
+use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 
 use crate::ffx_vk_abi as abi;
@@ -188,8 +188,8 @@ struct Sdk {
     dispatch: PfnFfxDispatch,
 }
 
-// startup::open binds every SDK, device and WSI entry before it returns the
-// leaf, so a published leaf never holds a null entry.
+// open binds every SDK, device and WSI entry before it returns the leaf, so a
+// published leaf never holds a null entry.
 macro_rules! bound {
     ($entry:expr) => {
         $entry.expect("bound FidelityFX Vulkan entry")
@@ -253,11 +253,6 @@ impl Native {
 // A published leaf is only read through shared references; see the file header.
 unsafe fn leaf<'a>(native: Handle) -> &'a Native {
     unsafe { &*native.cast::<Native>() }
-}
-
-// Only startup::open calls this, before the leaf is published.
-unsafe fn unpublished<'a>(native: Handle) -> &'a mut Native {
-    unsafe { &mut *native.cast::<Native>() }
 }
 
 fn header(kind: u32, next: *mut ffxApiHeader) -> ffxApiHeader {
@@ -549,16 +544,153 @@ unsafe extern "C" fn generate(
     dispatched
 }
 
-unsafe extern "C" fn allocate(
+pub(super) unsafe extern "C" fn close(native: Handle) {
+    if !native.is_null() {
+        drop(unsafe { Box::from_raw(native.cast::<Native>()) });
+    }
+}
+
+/// Typed `T` (`typed` pairs each name with its signature): MISSING_ENTRY_POINT when absent.
+unsafe fn required<T: Copy>(function: rsf_vk_function) -> Result<T, i32> {
+    unsafe { typed(function) }.ok_or(MISSING_ENTRY_POINT)
+}
+
+impl Native {
+    // Resolves through the host's guarded resolver; `aliases` adds the promoted core names.
+    unsafe fn lookup_device(&self, name: &CStr, aliases: bool) -> Result<rsf_vk_function, i32> {
+        let graphics = &self.setup.graphics;
+        let mut out = None;
+        succeeded(unsafe {
+            if aliases {
+                rsf_core_vkfg_device_proc(
+                    self.host.resolve,
+                    graphics.device_proc,
+                    graphics.device,
+                    name.as_ptr(),
+                    &mut out,
+                )
+            } else {
+                (self.host.resolve)(
+                    graphics.device_proc,
+                    graphics.device,
+                    name.as_ptr(),
+                    &mut out,
+                )
+            }
+        })?;
+        Ok(out)
+    }
+
+    /// Binds the SDK exports, the device and WSI entries, the memory properties, the resource
+    /// table and the capture, in that order, before the leaf is published.
+    unsafe fn bind(&mut self, module: Handle) -> Result<(), i32> {
+        let host = self.host;
+        let symbol = |name: &CStr| unsafe { (host.symbol)(module, name.as_ptr()) };
+        let sdk = [
+            c"ffxConfigure",
+            c"ffxCreateContext",
+            c"ffxDestroyContext",
+            c"ffxQuery",
+            c"ffxDispatch",
+        ]
+        .map(symbol);
+        if sdk.iter().any(Option::is_none) {
+            return Err(MISSING_ENTRY_POINT);
+        }
+        let [configure, create, destroy, query, dispatch] = sdk;
+        unsafe {
+            self.sdk = Sdk {
+                configure: typed(configure),
+                create: typed(create),
+                destroy: typed(destroy),
+                query: typed(query),
+                dispatch: typed(dispatch),
+            };
+            self.barrier = Some(required(
+                self.lookup_device(c"vkCmdPipelineBarrier", true)?,
+            )?);
+            self.copy = Some(required(self.lookup_device(c"vkCmdCopyImage", true)?)?);
+            self.idle = Some(required(self.lookup_device(c"vkDeviceWaitIdle", true)?)?);
+        }
+        let graphics = &self.setup.graphics;
+        let mut memory = None;
+        succeeded(unsafe {
+            (self.host.resolve)(
+                graphics.instance_proc,
+                graphics.instance,
+                c"vkGetPhysicalDeviceMemoryProperties".as_ptr(),
+                &mut memory,
+            )
+        })?;
+        if memory.is_none() {
+            return Err(MISSING_ENTRY_POINT);
+        }
+        succeeded(unsafe {
+            (self.host.memory_properties)(
+                memory,
+                graphics.physical_device,
+                (&raw mut self.memory_properties).cast(),
+            )
+        })?;
+        let device = unsafe { rsf_core_vkfg_load_device(&self.setup.graphics, &self.setup, false) };
+        let Some(device) = (unsafe { device.as_mut() }) else {
+            return Err(MISSING_ENTRY_POINT);
+        };
+        self.gpu = device;
+        rsf_core_vkfg_device_memory(device, &self.memory_properties);
+        let graphics = &self.setup.graphics;
+        let ready = unsafe {
+            rsf_core_capture_vk_initialize(
+                self.capture,
+                graphics.device,
+                graphics.device_proc,
+                &self.memory_properties,
+            )
+        };
+        if ready == 0 {
+            return Err(INIT_FAILED);
+        }
+        self.wsi_dispatch = Some(unsafe { required(symbol(c"rsfFfxSetVulkanWsiDispatch"))? });
+        // All five WSI names use the original device resolver, without alias promotion.
+        let mut wsi = [None; 5];
+        for (entry, name) in wsi.iter_mut().zip([
+            c"vkQueuePresentKHR",
+            c"vkAcquireNextImageKHR",
+            c"vkGetSwapchainImagesKHR",
+            c"vkCreateSwapchainKHR",
+            c"vkDestroySwapchainKHR",
+        ]) {
+            *entry = unsafe { self.lookup_device(name, false)? };
+        }
+        if wsi.iter().any(Option::is_none) {
+            return Err(INIT_FAILED);
+        }
+        let [present, acquire, images, create, destroy] = wsi;
+        unsafe {
+            self.native_present = typed(present);
+            self.native_acquire = typed(acquire);
+            self.native_images = typed(images);
+            self.native_create = typed(create);
+            self.native_destroy = typed(destroy);
+        }
+        Ok(())
+    }
+}
+
+/// Opens a leaf over `module` and binds its entries; a failed step closes the unpublished leaf.
+pub(super) unsafe extern "C" fn open(
     setup: *const Setup,
-    host: *const Host,
+    host: &'static Host,
+    module: Handle,
     width: u32,
     height: u32,
-) -> Handle {
+    out: *mut Handle,
+    resources: *mut Handle,
+) -> i32 {
     // The owner validated the setup; the host table outlives the owner.
-    let (setup, host) = unsafe { (setup.read(), &*host) };
+    let setup = unsafe { setup.read() };
     let allocator = setup.allocator.cast_mut().cast();
-    crate::allocate_handle(Native {
+    let native = crate::allocate_handle(Native {
         setup,
         host,
         sdk: Sdk::default(),
@@ -581,159 +713,22 @@ unsafe extern "C" fn allocate(
         width,
         height,
         capture: rsf_core_capture_vk_create(COMMAND_RETIREMENT),
-    })
-    .cast()
-}
-
-pub(super) unsafe extern "C" fn close(native: Handle) {
-    if !native.is_null() {
-        drop(unsafe { Box::from_raw(native.cast::<Native>()) });
-    }
-}
-
-unsafe extern "C" fn lookup_device(
-    native: Handle,
-    name: *const c_char,
-    aliases: u32,
-    out: &mut rsf_vk_function,
-) -> i32 {
-    let leaf = unsafe { leaf(native) };
-    let graphics = &leaf.setup.graphics;
-    if aliases != 0 {
-        unsafe {
-            rsf_core_vkfg_device_proc(
-                leaf.host.resolve,
-                graphics.device_proc,
-                graphics.device,
-                name,
-                out,
-            )
-        }
-    } else {
-        unsafe { (leaf.host.resolve)(graphics.device_proc, graphics.device, name, out) }
-    }
-}
-
-unsafe extern "C" fn lookup_instance(
-    native: Handle,
-    name: *const c_char,
-    out: &mut rsf_vk_function,
-) -> i32 {
-    let leaf = unsafe { leaf(native) };
-    let graphics = &leaf.setup.graphics;
-    unsafe { (leaf.host.resolve)(graphics.instance_proc, graphics.instance, name, out) }
-}
-
-// startup::open resolved each slot by its exact SDK export or Vulkan command name; `typed`
-// pairs it with the field's signature.
-unsafe extern "C" fn bind_core(native: Handle, entries: &CoreEntries) {
-    let leaf = unsafe { unpublished(native) };
-    let [
-        configure,
-        create,
-        destroy,
-        query,
-        dispatch,
-        barrier,
-        copy,
-        idle,
-    ] = *entries;
-    leaf.sdk = Sdk {
-        configure: unsafe { typed(configure) },
-        create: unsafe { typed(create) },
-        destroy: unsafe { typed(destroy) },
-        query: unsafe { typed(query) },
-        dispatch: unsafe { typed(dispatch) },
-    };
-    leaf.barrier = unsafe { typed(barrier) };
-    leaf.copy = unsafe { typed(copy) };
-    leaf.idle = unsafe { typed(idle) };
-}
-
-unsafe extern "C" fn read_memory(native: Handle, query: rsf_vk_function) -> i32 {
-    let leaf = unsafe { unpublished(native) };
-    unsafe {
-        (leaf.host.memory_properties)(
-            query,
-            leaf.setup.graphics.physical_device,
-            (&raw mut leaf.memory_properties).cast(),
-        )
-    }
-}
-
-unsafe extern "C" fn load_resources(native: Handle) -> i32 {
-    let leaf = unsafe { unpublished(native) };
-    let device = unsafe { rsf_core_vkfg_load_device(&leaf.setup.graphics, &leaf.setup, false) };
-    let Some(device) = (unsafe { device.as_mut() }) else {
-        return MISSING_ENTRY_POINT;
-    };
-    unsafe { rsf_core_vkfg_device_destroy(leaf.gpu) };
-    leaf.gpu = device;
-    rsf_core_vkfg_device_memory(device, &leaf.memory_properties);
-    OK
-}
-
-unsafe extern "C" fn initialize_capture(native: Handle, resources: &mut Handle) -> i32 {
-    let leaf = unsafe { leaf(native) };
-    let graphics = &leaf.setup.graphics;
-    let ready = unsafe {
-        rsf_core_capture_vk_initialize(
-            leaf.capture,
-            graphics.device,
-            graphics.device_proc,
-            &leaf.memory_properties,
-        )
-    };
-    if ready == 0 {
+    });
+    let Some(leaf) = (unsafe { native.as_mut() }) else {
         return INIT_FAILED;
-    }
-    *resources = leaf.gpu.cast();
-    OK
-}
-
-unsafe extern "C" fn bind_wsi(native: Handle, entries: &WsiEntries) {
-    let leaf = unsafe { unpublished(native) };
-    let [dispatch, present, acquire, images, create, destroy] = *entries;
-    leaf.wsi_dispatch = unsafe { typed(dispatch) };
-    leaf.native_present = unsafe { typed(present) };
-    leaf.native_acquire = unsafe { typed(acquire) };
-    leaf.native_images = unsafe { typed(images) };
-    leaf.native_create = unsafe { typed(create) };
-    leaf.native_destroy = unsafe { typed(destroy) };
-}
-
-pub(super) unsafe extern "C" fn open(
-    setup: *const Setup,
-    host: &'static Host,
-    module: Handle,
-    width: u32,
-    height: u32,
-    out: *mut Handle,
-    resources: *mut Handle,
-) -> i32 {
-    let platform = Platform {
-        allocate,
-        close,
-        symbol: host.symbol,
-        device_proc: lookup_device,
-        instance_proc: lookup_instance,
-        bind_core,
-        read_memory,
-        load_resources,
-        initialize_capture,
-        bind_wsi,
     };
-    unsafe {
-        startup::open(
-            &platform,
-            setup,
-            host,
-            module,
-            width,
-            height,
-            &mut *out,
-            &mut *resources,
-        )
+    match unsafe { leaf.bind(module) } {
+        Ok(()) => {
+            unsafe {
+                resources.write(leaf.gpu.cast());
+                out.write(native.cast());
+            }
+            OK
+        }
+        Err(result) => {
+            unsafe { close(native.cast()) };
+            result
+        }
     }
 }
 

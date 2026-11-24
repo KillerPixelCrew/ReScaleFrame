@@ -10,7 +10,6 @@ use rsf_game_sys::backend_result::{
 #[cfg(feature = "test-fixtures")]
 mod fixture;
 mod sdk;
-mod startup;
 
 use crate::allocate_handle;
 use crate::sdk_module::{FIDELITYFX_DLL, SdkModule};
