@@ -34,6 +34,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 mod native;
+use native::texture_desc;
 
 macro_rules! native {
     ($operation:ident($($argument:expr),* $(,)?)) => {
@@ -404,10 +405,12 @@ unsafe fn install(request: *const rsf_fg12_setup, explicit: bool) -> i32 {
     OK
 }
 
+#[unsafe(export_name = "rsf_fg12_install")]
 pub(super) unsafe extern "C" fn rsf_core_fg12_install(request: *const rsf_fg12_setup) -> i32 {
     unsafe { install(request, false) }
 }
 
+#[unsafe(export_name = "rsf_fg12_install_explicit")]
 pub(super) unsafe extern "C" fn rsf_core_fg12_install_explicit(
     request: *const rsf_fg12_setup,
 ) -> i32 {
@@ -459,12 +462,14 @@ unsafe extern "C" fn cpu_fact(_: *mut c_void, event: *const rsf_game_cpu_event) 
     }
 }
 
+#[unsafe(export_name = "rsf_fg12_cpu")]
 pub(super) unsafe extern "C" fn rsf_core_fg12_cpu(event: *const rsf_game_cpu_event) {
     if native!(has_owner()) != 0 {
         unsafe { native!(cpu_dispatch(event, Some(cpu_fact), null_mut())) };
     }
 }
 
+#[unsafe(export_name = "rsf_fg12_latency")]
 pub(super) unsafe extern "C" fn rsf_core_fg12_latency(event: *const rsf_game_latency_event) -> i32 {
     let Some(event) = (unsafe { checked(event) }).filter(|event| event.session_id != 0) else {
         return INVALID_ARGUMENT;
@@ -522,6 +527,7 @@ fn start_render(timing: &mut Cpu, frame: Frame) {
     }
 }
 
+#[unsafe(export_name = "rsf_fg12_render_begin")]
 extern "C" fn rsf_core_fg12_render_begin(session: u64, id: u64) -> i32 {
     if session == 0 || id == 0 {
         return INVALID_ARGUMENT;
@@ -536,6 +542,7 @@ extern "C" fn rsf_core_fg12_render_begin(session: u64, id: u64) -> i32 {
     OK
 }
 
+#[unsafe(export_name = "rsf_fg12_capture")]
 unsafe extern "C" fn rsf_core_fg12_capture(
     list: *mut c_void,
     record: *const rsf_frame_record,
@@ -622,7 +629,6 @@ unsafe extern "C" fn rsf_core_fg12_capture(
 }
 
 // The D3D12 SR owner hands its accepted normalized depth and motion over inside the core.
-#[cfg(not(test))]
 pub(crate) unsafe fn handoff_inputs(
     list: *mut c_void,
     record: &rsf_frame_record,
@@ -632,6 +638,7 @@ pub(crate) unsafe fn handoff_inputs(
     unsafe { rsf_core_fg12_capture(list, record, depth, motion) };
 }
 
+#[unsafe(export_name = "rsf_fg12_hudless")]
 pub(super) unsafe extern "C" fn rsf_core_fg12_hudless(
     list: *mut c_void,
     pass: *const rsf_game_render_pass,
@@ -699,6 +706,7 @@ pub(super) unsafe extern "C" fn rsf_core_fg12_hudless(
     slot.pending_copy = true;
 }
 
+#[unsafe(export_name = "rsf_fg12_window")]
 pub(super) unsafe extern "C" fn rsf_core_fg12_window(pass: *const rsf_game_render_pass) {
     let Some(pass) = (unsafe { checked(pass) }) else {
         return;
@@ -716,6 +724,7 @@ pub(super) unsafe extern "C" fn rsf_core_fg12_window(pass: *const rsf_game_rende
     start_render(&mut owner.cpu[view.frame.index(CPU_SLOTS)], view.frame);
 }
 
+#[unsafe(export_name = "rsf_fg12_submitted")]
 pub(super) unsafe extern "C" fn rsf_core_fg12_submitted(session: u64, id: u64) {
     if id == 0 {
         return;
@@ -763,14 +772,6 @@ pub(crate) struct TextureDesc {
     pub(crate) width: u64,
     pub(crate) height: u32,
     pub(crate) format: u32,
-}
-
-unsafe fn texture_desc(resource: *mut c_void) -> TextureDesc {
-    let mut desc = std::mem::MaybeUninit::uninit();
-    unsafe {
-        native!(texture_desc(resource, desc.as_mut_ptr()));
-        desc.assume_init()
-    }
 }
 
 fn current_dump(view: View) -> Option<rsf_frame_record> {
@@ -1158,6 +1159,7 @@ unsafe extern "C" fn retire(_: *mut c_void, context: *mut c_void) {
     }
 }
 
+#[unsafe(export_name = "rsf_fg12_end_session")]
 extern "C" fn rsf_core_fg12_end_session(session: u64) -> i32 {
     if session == 0 {
         return 0;
@@ -1241,14 +1243,17 @@ unsafe fn status_snapshot(output: *mut rsf_native_fg_status, wait: bool) -> i32 
     1
 }
 
+#[unsafe(export_name = "rsf_fg12_status")]
 pub(super) unsafe extern "C" fn rsf_core_fg12_status(output: *mut rsf_native_fg_status) -> i32 {
     unsafe { status_snapshot(output, true) }
 }
 
+#[unsafe(export_name = "rsf_fg12_status_try")]
 pub(super) unsafe extern "C" fn rsf_core_fg12_status_try(output: *mut rsf_native_fg_status) -> i32 {
     unsafe { status_snapshot(output, false) }
 }
 
+#[unsafe(export_name = "rsf_fg12_options")]
 pub(super) unsafe extern "C" fn rsf_core_fg12_options(request: *const rsf_native_fg_options) {
     let Some(request) = (unsafe { checked(request) }) else {
         return;
@@ -1260,6 +1265,7 @@ pub(super) unsafe extern "C" fn rsf_core_fg12_options(request: *const rsf_native
     OWNER.lock().unwrap().options = *request;
 }
 
+#[unsafe(export_name = "rsf_fg12_capture_outputs")]
 pub(super) unsafe extern "C" fn rsf_core_fg12_capture_outputs(directory: *const c_char) -> i32 {
     if directory.is_null() {
         return INVALID_ARGUMENT;

@@ -12,18 +12,13 @@ pub(crate) unsafe extern "C" fn rsf_fg12_platform_buffer_index(chain: Raw) -> u3
         })
 }
 
-pub(crate) unsafe extern "C" fn rsf_fg12_platform_texture_desc(
-    resource: Raw,
-    output: *mut TextureDesc,
-) {
+pub(crate) unsafe fn rsf_fg12_platform_texture_desc(resource: Raw) -> TextureDesc {
     let desc = unsafe { borrow::<ID3D12Resource>(&resource).GetDesc() };
-    unsafe {
-        output.write(TextureDesc {
-            width: desc.Width,
-            height: desc.Height,
-            format: desc.Format.0 as u32,
-        })
-    };
+    TextureDesc {
+        width: desc.Width,
+        height: desc.Height,
+        format: desc.Format.0 as u32,
+    }
 }
 
 fn same_shape(a: &D3D12_RESOURCE_DESC, b: &D3D12_RESOURCE_DESC) -> bool {
