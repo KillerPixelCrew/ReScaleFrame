@@ -2,17 +2,16 @@
 use super::{bundles, contents, directory_argument, entry, root, utf8};
 use crate::sys::*;
 use rsf_game_sys::{RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_NO_SR, backend_result, rsf_frame_record};
-use rsf_test_support::d3d12::{buffer, committed, copy_location, footprint, transition};
+use rsf_test_support::d3d12::{
+    buffer, committed, copy_location, footprint, transition, validation_errors, wait_for_signal,
+};
 use rsf_test_support::frame_record;
-use std::ffi::{CStr, c_char, c_int};
+use std::ffi::{c_char, c_int};
 use std::{fs, path::Path, ptr};
-use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::core::Interface;
-use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
 use windows_sys::Win32::System::Environment::SetEnvironmentVariableW;
-use windows_sys::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 
 const PIXELS: [u32; 8] = [
     0x00ff0000, 0x8000ff00, 0xffff0000, 0xffffffff, 0, 0xff112233, 0xff445566, 0xff778899,
@@ -86,26 +85,6 @@ fn upload(
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
     );
     upload
-}
-
-fn debug_messages(device: &ID3D12Device) {
-    let Ok(info) = device.cast::<ID3D12InfoQueue>() else {
-        return;
-    };
-    for index in 0..unsafe { info.GetNumStoredMessages() } {
-        let mut length = 0;
-        unsafe { info.GetMessage(index, None, &mut length) }.unwrap();
-        let mut storage = vec![0usize; length.div_ceil(size_of::<usize>())];
-        let message = storage.as_mut_ptr().cast::<D3D12_MESSAGE>();
-        unsafe { info.GetMessage(index, Some(message), &mut length) }.unwrap();
-        let message = unsafe { &*message };
-        assert!(
-            message.Severity != D3D12_MESSAGE_SEVERITY_ERROR
-                && message.Severity != D3D12_MESSAGE_SEVERITY_CORRUPTION,
-            "{}",
-            unsafe { CStr::from_ptr(message.pDescription.cast()) }.to_string_lossy()
-        );
-    }
 }
 
 fn run(path: &Path) -> i32 {
@@ -184,13 +163,10 @@ fn run(path: &Path) -> i32 {
         queue.ExecuteCommandLists(&[Some(list.cast::<ID3D12CommandList>().unwrap())]);
         assert_eq!(rsf_input_dump12_submitted(capture, queue.as_raw(), 0), 0);
         let fence: ID3D12Fence = device.CreateFence(0, D3D12_FENCE_FLAG_NONE).unwrap();
-        let event = CreateEventW(ptr::null(), 0, 0, ptr::null());
-        assert!(!event.is_null());
-        let done = queue.Signal(&fence, 1).is_ok()
-            && fence.SetEventOnCompletion(1, HANDLE(event)).is_ok()
-            && WaitForSingleObject(event, 15_000) == WAIT_OBJECT_0;
-        CloseHandle(event);
-        assert!(done, "observe submitted GPU completion");
+        assert!(
+            wait_for_signal(&queue, &fence, 1, 15_000),
+            "observe submitted GPU completion"
+        );
         assert_eq!(rsf_input_dump12_poll(capture), 0);
         let expected: Vec<_> = PIXELS.into_iter().flat_map(u32::to_le_bytes).collect();
         assert_eq!(fs::read(bundle.join("final_color.bin")).unwrap(), expected);
@@ -238,7 +214,8 @@ fn run(path: &Path) -> i32 {
         rsf_input_dump_cancel(frame.session_id);
         println!("D3D12 core dump fixture: {}", bundle.display());
     }
-    debug_messages(&device);
+    let errors = validation_errors(&device).unwrap_or_default();
+    assert!(errors.is_empty(), "{}", errors.join("\n"));
     0
 }
 

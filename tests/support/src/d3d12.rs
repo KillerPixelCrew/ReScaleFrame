@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 //! D3D12 resource, barrier and copy-location helpers the fixture crates share.
+use std::ffi::CStr;
 use std::mem::ManuallyDrop;
-use windows::Win32::Foundation::E_POINTER;
+use windows::Win32::Foundation::{CloseHandle, E_POINTER, WAIT_OBJECT_0};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
-use windows::core::{Interface, Result};
+use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
+use windows::core::{Interface, PCWSTR, Result};
 
 /// A non-owning reference for the `ManuallyDrop<Option<ID3D12Resource>>` fields of barrier and
 /// copy-location records. The caller keeps `resource` alive until the GPU work that names it ends.
@@ -126,6 +128,64 @@ pub fn transition_barrier(
             }),
         },
     }
+}
+
+/// Signals `fence` to `value` on `queue` and waits up to `timeout_ms` for the GPU to reach it.
+pub fn wait_for_signal(
+    queue: &ID3D12CommandQueue,
+    fence: &ID3D12Fence,
+    value: u64,
+    timeout_ms: u32,
+) -> bool {
+    let Ok(event) = (unsafe { CreateEventW(None, false, false, PCWSTR::null()) }) else {
+        return false;
+    };
+    let reached = unsafe {
+        queue.Signal(fence, value).is_ok()
+            && fence.SetEventOnCompletion(value, event).is_ok()
+            && WaitForSingleObject(event, timeout_ms) == WAIT_OBJECT_0
+    };
+    let _ = unsafe { CloseHandle(event) };
+    reached
+}
+
+/// The messages stored in `device`'s info queue, oldest first, as (severity, description). `None`
+/// when the device has no info queue because the debug layer is off.
+pub fn debug_messages(device: &ID3D12Device) -> Option<Vec<(D3D12_MESSAGE_SEVERITY, String)>> {
+    let queue = device.cast::<ID3D12InfoQueue>().ok()?;
+    let mut messages = Vec::new();
+    for index in 0..unsafe { queue.GetNumStoredMessagesAllowedByRetrievalFilter() } {
+        let mut bytes = 0;
+        if unsafe { queue.GetMessage(index, None, &mut bytes) }.is_err()
+            || bytes < size_of::<D3D12_MESSAGE>()
+        {
+            continue;
+        }
+        // Word-aligned storage holds the record and the description string appended to it.
+        let mut storage = vec![0usize; bytes.div_ceil(size_of::<usize>())];
+        let message = storage.as_mut_ptr().cast::<D3D12_MESSAGE>();
+        if unsafe { queue.GetMessage(index, Some(message), &mut bytes) }.is_ok() {
+            let message = unsafe { &*message };
+            let text = (!message.pDescription.is_null())
+                .then(|| unsafe { CStr::from_ptr(message.pDescription.cast()) })
+                .map(|text| text.to_string_lossy().into_owned());
+            messages.push((message.Severity, text.unwrap_or_default()));
+        }
+    }
+    Some(messages)
+}
+
+/// The descriptions of the error and corruption messages in `device`'s info queue. `None` when the
+/// device has no info queue.
+pub fn validation_errors(device: &ID3D12Device) -> Option<Vec<String>> {
+    let messages = debug_messages(device)?;
+    Some(
+        messages
+            .into_iter()
+            .filter(|(severity, _)| severity.0 <= D3D12_MESSAGE_SEVERITY_ERROR.0)
+            .map(|(_, text)| text)
+            .collect(),
+    )
 }
 
 /// Records [`transition_barrier`] on `list`.

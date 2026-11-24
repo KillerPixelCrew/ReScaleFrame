@@ -5,14 +5,13 @@ use rsf_game_sys::backend_result::{NOT_COMPILED, NOT_SUPPORTED};
 use std::ffi::{c_char, c_int, c_ulong};
 use std::ptr::null_mut;
 use windows::Win32::{
-    Foundation::{CloseHandle, HWND, WAIT_OBJECT_0},
+    Foundation::HWND,
     Graphics::{
         Direct3D12::*,
         Dxgi::{Common::DXGI_FORMAT_R8G8B8A8_UNORM, *},
     },
-    System::Threading::{CreateEventW, WaitForSingleObject},
 };
-use windows::core::{Interface, PCWSTR, Result};
+use windows::core::{Interface, Result};
 
 pub(super) const SKIP: i32 = 77;
 pub(super) const WIDTH: u32 = 1920;
@@ -36,21 +35,6 @@ pub(super) fn factory() -> Result<IDXGIFactory4> {
     unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)) }
 }
 
-pub(super) fn adapter(factory: &IDXGIFactory4, vendor: u32) -> Result<Option<IDXGIAdapter1>> {
-    for index in 0..=u32::MAX {
-        let candidate: IDXGIAdapter1 = match unsafe { factory.EnumAdapters1(index) } {
-            Ok(candidate) => candidate,
-            Err(error) if error.code() == DXGI_ERROR_NOT_FOUND => return Ok(None),
-            Err(error) => return Err(error),
-        };
-        let desc = unsafe { candidate.GetDesc1()? };
-        if desc.VendorId == vendor && desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 == 0 {
-            return Ok(Some(candidate));
-        }
-    }
-    Ok(None)
-}
-
 pub(super) fn device_and_queue(
     adapter: &IDXGIAdapter1,
 ) -> Result<(ID3D12Device, ID3D12CommandQueue)> {
@@ -65,19 +49,6 @@ pub(super) fn device_and_queue(
 }
 
 pub(super) use rsf_test_support::Window;
-
-pub(super) fn drain(queue: &ID3D12CommandQueue, fence: &ID3D12Fence, value: u64) -> bool {
-    let Ok(event) = (unsafe { CreateEventW(None, false, false, PCWSTR::null()) }) else {
-        return false;
-    };
-    unsafe {
-        let complete = queue.Signal(fence, value).is_ok()
-            && fence.SetEventOnCompletion(value, event).is_ok()
-            && WaitForSingleObject(event, 15_000) == WAIT_OBJECT_0;
-        let _ = CloseHandle(event);
-        complete
-    }
-}
 
 pub(super) fn setup(window: HWND, device: Raw, queue: Raw, generated: u32) -> rsf_generation_setup {
     rsf_generation_setup {

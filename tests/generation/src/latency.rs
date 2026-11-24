@@ -6,7 +6,8 @@ use crate::sys::{
     RSF_STREAMLINE_HOST_ABI_VERSION, rsf_streamline_graphics, rsf_streamline_host_setup,
 };
 use rsf_game_sys::backend_result::{NOT_COMPILED, NOT_READY, NOT_SUPPORTED, OK};
-use rsf_test_support::d3d12::transition_barrier;
+use rsf_test_support::d3d12::{transition_barrier, wait_for_signal};
+use rsf_test_support::hardware_adapter;
 use std::ffi::{CStr, c_char, c_int};
 use std::ptr::null_mut;
 use windows::Win32::Graphics::{
@@ -200,7 +201,7 @@ fn render(host: Raw, profile: u32) -> Result<(), i32> {
             unsafe { swap.Present(0, DXGI_PRESENT(0)).ok() }.map_err(|_| 1)?;
             marker(host, id, LATENCY_PRESENT_END, 0)
         })();
-        if !device::drain(queue, &fence, u64::from(frame) + 1) {
+        if !wait_for_signal(queue, &fence, u64::from(frame) + 1, 15_000) {
             std::process::exit(1);
         }
         presented?;
@@ -242,7 +243,7 @@ unsafe extern "C" fn rsf_test_latency_host(argc: c_int, argv: *const *const c_ch
     let Ok(factory) = device::factory() else {
         return 1;
     };
-    let adapter = match device::adapter(&factory, vendor) {
+    let adapter = match hardware_adapter(&factory, vendor) {
         Ok(Some(adapter)) => adapter,
         Ok(None) => return SKIP,
         Err(_) => return 1,

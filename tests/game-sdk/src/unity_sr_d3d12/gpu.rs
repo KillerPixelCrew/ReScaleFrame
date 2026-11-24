@@ -1,23 +1,21 @@
 // SPDX-License-Identifier: MIT
 use super::{HEIGHT, Result, WIDTH, check, enabled};
 use rsf_game_sys::rsf_game_host_services;
-use rsf_test_support::d3d12::{buffer, committed, copy_location, footprint, transition};
-use std::{
-    ffi::{CStr, c_void},
-    os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
-    ptr,
+use rsf_test_support::d3d12::{
+    buffer, committed, copy_location, footprint, transition, validation_errors, wait_for_signal,
 };
+use rsf_test_support::{enable_d3d12_debug_layer, hardware_adapter};
+use std::{ffi::c_void, ptr};
 use windows::{
     Win32::{
-        Foundation::{HANDLE, HWND, WAIT_OBJECT_0},
+        Foundation::HWND,
         Graphics::{
             Direct3D::D3D_FEATURE_LEVEL_12_0,
             Direct3D12::*,
             Dxgi::{Common::*, *},
         },
-        System::Threading::{CreateEventW, WaitForSingleObject},
     },
-    core::{IUnknown, Interface, PCWSTR},
+    core::{IUnknown, Interface},
 };
 
 pub(super) const COPY_DEST: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_COPY_DEST;
@@ -37,37 +35,19 @@ pub(super) struct Gpu {
 
 impl Gpu {
     pub fn open(wanted_vendor: Option<u32>) -> Result<Option<Self>> {
-        if enabled("RSF_UNITY_GPU_DEBUG") {
-            let mut debug: Option<ID3D12Debug> = None;
-            if unsafe { D3D12GetDebugInterface(&mut debug) }.is_err() || debug.is_none() {
-                eprintln!("D3D12 debug interface unavailable.");
-                return Ok(None);
-            }
-            unsafe { debug.expect("debug interface present").EnableDebugLayer() };
+        if enabled("RSF_UNITY_GPU_DEBUG") && !enable_d3d12_debug_layer() {
+            eprintln!("D3D12 debug interface unavailable.");
+            return Ok(None);
         }
         let Ok(factory) = (unsafe { CreateDXGIFactory1::<IDXGIFactory4>() }) else {
             return Ok(None);
         };
-        let selected = if let Some(vendor) = wanted_vendor {
-            let mut found = None;
-            for index in 0.. {
-                let Ok(adapter) = (unsafe { factory.EnumAdapters1(index) }) else {
-                    break;
-                };
-                if let Ok(desc) = unsafe { adapter.GetDesc1() }
-                    && desc.VendorId == vendor
-                    && desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 == 0
-                {
-                    found = Some(adapter.cast::<IUnknown>()?);
-                    break;
-                }
-            }
-            if found.is_none() {
-                return Ok(None);
-            }
-            found
-        } else {
-            None
+        let selected = match wanted_vendor {
+            Some(vendor) => match hardware_adapter(&factory, vendor).ok().flatten() {
+                Some(adapter) => Some(adapter.cast::<IUnknown>()?),
+                None => return Ok(None),
+            },
+            None => None,
         };
         let mut device = None;
         if unsafe { D3D12CreateDevice(selected.as_ref(), D3D_FEATURE_LEVEL_12_0, &mut device) }
@@ -277,25 +257,11 @@ impl Gpu {
         if !enabled("RSF_UNITY_GPU_DEBUG") {
             return Ok(());
         }
-        let info: ID3D12InfoQueue = self.device.cast()?;
-        let mut ok = true;
-        for index in 0..unsafe { info.GetNumStoredMessagesAllowedByRetrievalFilter() } {
-            let mut bytes = 0;
-            unsafe { info.GetMessage(index, None, &mut bytes) }?;
-            check(
-                bytes >= size_of::<D3D12_MESSAGE>(),
-                "short D3D12 debug message",
-            )?;
-            let mut storage = vec![0usize; bytes.div_ceil(size_of::<usize>())];
-            let message = storage.as_mut_ptr().cast::<D3D12_MESSAGE>();
-            unsafe { info.GetMessage(index, Some(message), &mut bytes) }?;
-            let message = unsafe { &*message };
-            if message.Severity.0 <= D3D12_MESSAGE_SEVERITY_ERROR.0 {
-                let description = unsafe { CStr::from_ptr(message.pDescription.cast()) };
-                eprintln!("D3D12 validation: {}", description.to_string_lossy());
-                ok = false;
-            }
+        let errors = validation_errors(&self.device).ok_or("D3D12 info queue unavailable")?;
+        for description in &errors {
+            eprintln!("D3D12 validation: {description}");
         }
+        let ok = errors.is_empty();
         eprintln!(
             "D3D12 debug validation {}",
             if ok { "passed" } else { "failed" }
@@ -305,17 +271,10 @@ impl Gpu {
 }
 
 pub(super) fn wait(queue: &ID3D12CommandQueue, fence: &ID3D12Fence, value: u64) -> Result<()> {
-    let event = unsafe { CreateEventW(None, false, false, PCWSTR::null()) }?;
-    let event = unsafe { OwnedHandle::from_raw_handle(event.0) };
-    let raw = HANDLE(event.as_raw_handle());
-    unsafe {
-        queue.Signal(fence, value)?;
-        fence.SetEventOnCompletion(value, raw)?;
-        check(
-            WaitForSingleObject(raw, 30_000) == WAIT_OBJECT_0,
-            "D3D12 fence wait failed",
-        )
-    }
+    check(
+        wait_for_signal(queue, fence, value, 30_000),
+        "D3D12 fence wait failed",
+    )
 }
 pub(super) struct Readback {
     resource: ID3D12Resource,

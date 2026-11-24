@@ -3,6 +3,8 @@ use crate::device::{self, HEIGHT, SKIP, WIDTH, Window};
 use crate::session::{Raw, rsf_fg_session_create, rsf_fg_session_destroy, rsf_fg_session_select};
 use crate::sys::*;
 use rsf_game_sys::backend_result::{FEATURE_FAILED, INIT_FAILED, NOT_READY, OK};
+use rsf_test_support::d3d12::wait_for_signal;
+use rsf_test_support::hardware_adapter;
 use std::ffi::{c_char, c_int};
 use std::ptr::{from_mut, null, null_mut};
 use windows::Win32::UI::WindowsAndMessaging::WS_OVERLAPPEDWINDOW;
@@ -29,7 +31,7 @@ struct Host {
 unsafe extern "C" fn quiesce(user: Raw) -> i32 {
     let host = unsafe { &mut *user.cast::<Host>() };
     host.sequence += 1;
-    if device::drain(&host.queue, &host.fence, host.sequence) {
+    if wait_for_signal(&host.queue, &host.fence, host.sequence, 15_000) {
         OK
     } else {
         FEATURE_FAILED
@@ -97,7 +99,7 @@ unsafe extern "C" fn rsf_test_fg_switching(argc: c_int, argv: *const *const c_ch
     let Ok(factory) = device::factory() else {
         return 1;
     };
-    let adapter = match device::adapter(&factory, vendor) {
+    let adapter = match hardware_adapter(&factory, vendor) {
         Ok(Some(adapter)) => adapter,
         Ok(None) => return SKIP,
         Err(_) => return 1,

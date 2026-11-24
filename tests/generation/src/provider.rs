@@ -4,8 +4,9 @@ use crate::session::Raw;
 use crate::sys::rsf_fg_retirement;
 use crate::sys::*;
 use rsf_game_sys::backend_result::OK;
+use rsf_test_support::d3d12::{debug_messages, wait_for_signal};
+use rsf_test_support::{enable_d3d12_debug_layer, hardware_adapter};
 use std::ffi::{CStr, c_char, c_int};
-use std::mem::MaybeUninit;
 use std::ptr::null_mut;
 use windows::Win32::Graphics::{Direct3D12::*, Dxgi::IDXGIAdapter1};
 use windows::Win32::UI::WindowsAndMessaging::WS_OVERLAPPEDWINDOW;
@@ -75,28 +76,10 @@ impl Drop for DebugLog {
 }
 
 fn dump_last_messages(device: &ID3D12Device) {
-    let Ok(info) = device.cast::<ID3D12InfoQueue>() else {
-        return;
-    };
-    let count = unsafe { info.GetNumStoredMessages() };
-    for index in count.saturating_sub(12)..count {
-        let mut bytes = 0;
-        let _ = unsafe { info.GetMessage(index, None, &mut bytes) };
-        if bytes < size_of::<D3D12_MESSAGE>() {
-            continue;
-        }
-        // Use word-aligned storage for both the descriptor and the appended string.
-        let words = bytes.div_ceil(size_of::<usize>());
-        let mut storage = vec![MaybeUninit::<usize>::uninit(); words];
-        let message = storage.as_mut_ptr().cast::<D3D12_MESSAGE>();
-        if unsafe { info.GetMessage(index, Some(message), &mut bytes) }.is_ok() {
-            let description = unsafe { (*message).pDescription };
-            if !description.is_null() {
-                println!(
-                    "D3D12: {}",
-                    unsafe { CStr::from_ptr(description.cast()) }.to_string_lossy()
-                );
-            }
+    let messages = debug_messages(device).unwrap_or_default();
+    for (_, description) in &messages[messages.len().saturating_sub(12)..] {
+        if !description.is_empty() {
+            println!("D3D12: {description}");
         }
     }
 }
@@ -242,7 +225,7 @@ unsafe fn exercise(
     let fence = unsafe { device12.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) };
     if !fence
         .as_ref()
-        .is_ok_and(|fence| device::drain(queue, fence, 1))
+        .is_ok_and(|fence| wait_for_signal(queue, fence, 1, 15_000))
     {
         let removed = unsafe { device12.GetDeviceRemovedReason() }
             .map_or_else(|error| error.code().0, |()| 0);
@@ -284,16 +267,11 @@ unsafe extern "C" fn rsf_test_fg_provider(argc: c_int, argv: *const *const c_cha
     let provider = unsafe { device::rsf_fg_get_provider(backend).as_ref() };
     let Some(provider) = provider else { return 1 };
 
-    let mut debug: Option<ID3D12Debug> = None;
-    if unsafe { D3D12GetDebugInterface(&mut debug) }.is_ok()
-        && let Some(debug) = &debug
-    {
-        unsafe { debug.EnableDebugLayer() };
-    }
+    enable_d3d12_debug_layer();
     let Ok(factory) = device::factory() else {
         return 1;
     };
-    let adapter = match device::adapter(&factory, vendor) {
+    let adapter = match hardware_adapter(&factory, vendor) {
         Ok(Some(adapter)) => adapter,
         Ok(None) => {
             println!("SKIP: selected hardware unavailable");

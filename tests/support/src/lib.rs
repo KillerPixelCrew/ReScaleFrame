@@ -21,7 +21,8 @@ use windows::Win32::Graphics::Direct3D12::{
     D3D12CreateDevice, D3D12GetDebugInterface, ID3D12Debug, ID3D12Device,
 };
 use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory1, DXGI_SWAP_CHAIN_DESC, IDXGIAdapter, IDXGIFactory4, IDXGISwapChain,
+    CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, DXGI_ERROR_NOT_FOUND, DXGI_SWAP_CHAIN_DESC,
+    IDXGIAdapter, IDXGIAdapter1, IDXGIFactory1, IDXGIFactory4, IDXGISwapChain,
 };
 use windows::Win32::System::LibraryLoader::{
     GetModuleHandleW, GetProcAddress, LOAD_LIBRARY_FLAGS, LOAD_LIBRARY_SEARCH_SYSTEM32,
@@ -275,6 +276,23 @@ pub fn enable_d3d12_debug_layer() -> bool {
         unsafe { layer.EnableDebugLayer() };
         true
     })
+}
+
+/// The first hardware adapter of `factory` whose PCI vendor id is `vendor`, or `None` when there
+/// is none.
+pub fn hardware_adapter(factory: &IDXGIFactory1, vendor: u32) -> Result<Option<IDXGIAdapter1>> {
+    for index in 0.. {
+        let adapter = match unsafe { factory.EnumAdapters1(index) } {
+            Ok(adapter) => adapter,
+            Err(error) if error.code() == DXGI_ERROR_NOT_FOUND => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let desc = unsafe { adapter.GetDesc1() }?;
+        if desc.VendorId == vendor && desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 == 0 {
+            return Ok(Some(adapter));
+        }
+    }
+    unreachable!()
 }
 
 /// A feature level 11.0 D3D12 device on `adapter`.
