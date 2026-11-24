@@ -164,21 +164,11 @@ pub(crate) mod swap_host {
     };
 }
 
-pub(crate) unsafe fn swap_read(
-    _: Ptr,
-    address: *const c_void,
-    output: Ptr,
-    size: usize,
-) -> bool {
+pub(crate) unsafe fn swap_read(_: Ptr, address: *const c_void, output: Ptr, size: usize) -> bool {
     unsafe { c::copy(output, address, size) }
 }
 
-pub(crate) unsafe fn swap_write(
-    _: Ptr,
-    address: Ptr,
-    input: *const c_void,
-    size: usize,
-) -> bool {
+pub(crate) unsafe fn swap_write(_: Ptr, address: Ptr, input: *const c_void, size: usize) -> bool {
     unsafe { c::copy(address, input, size) }
 }
 
@@ -342,12 +332,7 @@ pub(crate) mod position {
     }
 }
 
-pub(crate) unsafe fn correct_position_constant(
-    _: Ptr,
-    constant: Ptr,
-    x: f32,
-    y: f32,
-) -> u32 {
+pub(crate) unsafe fn correct_position_constant(_: Ptr, constant: Ptr, x: f32, y: f32) -> u32 {
     rsf_anomaly_sr_correct_position_constant(&POSITION_LAYOUT, constant as usize, x, y)
 }
 
@@ -580,11 +565,7 @@ pub(crate) fn swap_counters() -> rsf_anomaly_sr_swap_counters {
 
 pub(crate) fn host_stats() -> (u64, u64) {
     let (mut bytes, mut refs) = (0, 0);
-    rsf_anomaly_sr_stage_resource_stats(
-        unsafe { resources().as_ref() },
-        &mut bytes,
-        &mut refs,
-    );
+    rsf_anomaly_sr_stage_resource_stats(unsafe { resources().as_ref() }, &mut bytes, &mut refs);
     (bytes, refs)
 }
 
@@ -596,10 +577,7 @@ pub(crate) unsafe fn pixel_bytes(format: u32) -> u32 {
     unsafe { c::pixel_bytes(format) }
 }
 
-pub(crate) unsafe fn draw_pass(
-    kind: u32,
-    views: *const crate::sr_d3d11::DrawViews,
-) -> bool {
+pub(crate) unsafe fn draw_pass(kind: u32, views: *const crate::sr_d3d11::DrawViews) -> bool {
     let pass = rsf_anomaly_sr_stage_pass(unsafe { resources().as_ref() });
     rsf_anomaly_sr_run_pass(unsafe { pass.as_ref() }, context(), kind, unsafe {
         &*views

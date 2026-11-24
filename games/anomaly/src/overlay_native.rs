@@ -50,7 +50,16 @@ pub(super) unsafe fn create_input(address: Symbol, iid: *const GUID, version: u3
         unsafe extern "system" fn(HMODULE, u32, *const GUID, *mut Object, Object) -> HRESULT;
     let create: Create = unsafe { transmute(address) };
     let mut input = null_mut();
-    if unsafe { create(GetModuleHandleW(null()), version, iid, &mut input, null_mut()) } < 0 {
+    if unsafe {
+        create(
+            GetModuleHandleW(null()),
+            version,
+            iid,
+            &mut input,
+            null_mut(),
+        )
+    } < 0
+    {
         return null_mut();
     }
     input

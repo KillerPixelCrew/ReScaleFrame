@@ -22,6 +22,7 @@ use crate::engine_guards::{Image, motion_guard_failure};
 use crate::geometry_registry::RetirementQueue;
 use crate::host_log::Log;
 use crate::lease::Lease;
+use crate::lock;
 use crate::motion_device::*;
 use crate::motion_profile::MotionProfile;
 use crate::motion_target::{rsf_anomaly_motion_bind_close, rsf_anomaly_motion_bind_draw};
@@ -44,7 +45,6 @@ use std::sync::atomic::{
     AtomicBool, AtomicU8,
     Ordering::{Acquire, Relaxed, Release},
 };
-use crate::lock;
 use std::sync::{Mutex, OnceLock};
 
 const MAIN: u8 = 0;
@@ -124,7 +124,6 @@ impl WindowFacts {
         })
     }
 }
-
 
 fn wide_path(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain([0]).collect()

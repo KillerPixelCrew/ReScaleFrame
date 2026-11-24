@@ -51,10 +51,7 @@ pub(crate) unsafe fn rsf_anomaly_sr_persist_int(key: *const c_char, value: i32) 
 }
 
 #[cfg_attr(test, allow(dead_code))]
-pub(crate) unsafe fn rsf_anomaly_sr_persist_text(
-    key: *const c_char,
-    value: *const c_char,
-) -> bool {
+pub(crate) unsafe fn rsf_anomaly_sr_persist_text(key: *const c_char, value: *const c_char) -> bool {
     PATH.get().is_some_and(|path| {
         let key = unsafe { ini::widen(key) };
         let value = unsafe { ini::widen(value) };

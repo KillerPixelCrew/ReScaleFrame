@@ -58,6 +58,7 @@ use tests::stages;
 
 use crate::engine_guards::{Image, Read};
 use crate::executable::observer_build;
+use crate::lock;
 use crate::native_hooks::{ImageHeaders, Site};
 use crate::native_profile::{HOOK_COUNT, PROFILES};
 use crate::sys::{
@@ -77,7 +78,6 @@ use rsf_game_sys::{
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
-use crate::lock;
 use std::sync::{Mutex, MutexGuard, TryLockError};
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExW,
@@ -228,7 +228,6 @@ struct Observer {
 
 static OBSERVER: Observer =
     Observer::new(crate::fg_stage::frame_open, crate::fg_stage::retire_inputs);
-
 
 impl Observer {
     const fn new(fg_frame_open: fn() -> bool, fg_retire_inputs: fn() -> bool) -> Self {

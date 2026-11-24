@@ -17,10 +17,10 @@ use crate::lease::Lease;
 use crate::native_hooks::{HookOps, Target, enable_batch, transaction};
 use crate::overlay::rsf_anomaly_overlay_capture_bits;
 use crate::overlay_native::{self as native, Object};
-use windows::Win32::Graphics::Dxgi::IDXGISwapChain1;
-use windows::core::Interface;
 use crate::runtime_module::Module;
 use std::mem::transmute;
+use windows::Win32::Graphics::Dxgi::IDXGISwapChain1;
+use windows::core::Interface;
 
 const MAX_HOOKS: usize = 32;
 
@@ -461,7 +461,9 @@ extern "C" fn rsf_anomaly_overlay_input_observer() -> Option<InputObserver> {
 
 // Each ANSI or Unicode DirectInput class reaches the original from its own vtable.
 unsafe fn real_method(object: Object, slot: usize) -> Address {
-    HOOKS.state().original(unsafe { native::slot(object, slot) })
+    HOOKS
+        .state()
+        .original(unsafe { native::slot(object, slot) })
 }
 
 // One registry lock for the four originals a device hook may forward to.

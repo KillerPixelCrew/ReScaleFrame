@@ -13,6 +13,7 @@ use tests as leaves;
 
 use crate::AMD64;
 use crate::executable::with_verified_build;
+use crate::lock;
 use crate::native_profile::PROFILES;
 #[cfg(test)]
 use rsf_game_sys::RSF_GAME_ABI_VERSION;
@@ -27,7 +28,6 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 use std::ptr;
-use crate::lock;
 use std::sync::Mutex;
 use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::System::LibraryLoader::{
@@ -101,7 +101,6 @@ impl Entry {
 }
 
 static LOG: Mutex<Option<PathBuf>> = Mutex::new(None);
-
 
 fn write_log(message: &[u8]) {
     let path = lock(&LOG);

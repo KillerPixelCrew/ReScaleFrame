@@ -95,12 +95,7 @@ pub(crate) unsafe fn stop() {
     unsafe { rsf_anomaly_sr_stop(&DRIVER.0) };
 }
 
-pub(crate) unsafe fn report(
-    exposure: bool,
-    first_person: bool,
-    log: rsf_game_log_fn,
-    user: Raw,
-) {
+pub(crate) unsafe fn report(exposure: bool, first_person: bool, log: rsf_game_log_fn, user: Raw) {
     rsf_anomaly_sr_report(&DRIVER.0, exposure, first_person, log, user);
 }
 

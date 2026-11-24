@@ -603,10 +603,7 @@ fn far_diagnostics() {
         (b"deffer_base_bump.vs", Unknown),
         (b"model_env_lq_0.vs", Unknown),
     ] {
-        assert_eq!(
-            rsf_anomaly_motion_model_element(root) as u8,
-            expected as u8
-        );
+        assert_eq!(rsf_anomaly_motion_model_element(root) as u8, expected as u8);
     }
     let old = [Mat4::IDENTITY; 4];
     let mut current = old;

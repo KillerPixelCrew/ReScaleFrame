@@ -506,10 +506,7 @@ fn covers(outputs: &[Parameter], inputs: &[Parameter]) -> bool {
     })
 }
 
-pub(crate) fn rsf_anomaly_shader_linkable(
-    vertex: &Reflection,
-    pixel: &Reflection,
-) -> bool {
+pub(crate) fn rsf_anomaly_shader_linkable(vertex: &Reflection, pixel: &Reflection) -> bool {
     covers(vertex.outputs(), pixel.inputs())
 }
 

@@ -12,6 +12,7 @@ use crate::sys::*;
 /// Rust-only records of the adapter options and chain identity.
 pub(crate) mod records;
 use crate::host_log::Log;
+use crate::lock;
 use crate::sys::rsf_anomaly_sr_settings;
 pub(crate) use records::*;
 use rsf_game_sys::rsf_overlay_sr_report;
@@ -22,7 +23,6 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use crate::lock;
 use std::sync::{LazyLock, Mutex, OnceLock};
 use windows_sys::core::w;
 
@@ -35,7 +35,6 @@ const API_MISSING: Status = RSF_ANOMALY_OVERLAY_API_MISSING as Status;
 const API_REFUSED: Status = RSF_ANOMALY_OVERLAY_API_REFUSED as Status;
 const CONFIGURE_REFUSED: Status = RSF_ANOMALY_OVERLAY_CONFIGURE_REFUSED as Status;
 const HOOKS_REFUSED: Status = RSF_ANOMALY_OVERLAY_HOOKS_REFUSED as Status;
-
 
 /// A refused start or binding: the status and a NUL-terminated reason that outlives the process's use of it.
 #[derive(Clone, Copy, Debug)]

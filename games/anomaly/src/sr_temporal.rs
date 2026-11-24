@@ -324,7 +324,6 @@ pub(crate) fn motion_decode_params() -> rsf_motion_decode_params {
     }
 }
 
-
 impl Setup {
     unsafe fn new(options: &rsf_anomaly_sr_driver_config, log: rsf_game_log_fn, user: Raw) -> Self {
         let directory = |path: *const c_char| {

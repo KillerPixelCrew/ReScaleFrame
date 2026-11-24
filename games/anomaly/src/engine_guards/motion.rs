@@ -6,7 +6,10 @@ use std::slice;
 
 /// The name of the first mismatching check of the selected build, or None. Names come from the static profile or
 /// are the static names below.
-pub(crate) fn motion_guard_failure(image: &Image, profile: &MotionProfile) -> Option<&'static CStr> {
+pub(crate) fn motion_guard_failure(
+    image: &Image,
+    profile: &MotionProfile,
+) -> Option<&'static CStr> {
     // The profile records hold static NUL-terminated names.
     let name = |name: *const c_char| Some(unsafe { CStr::from_ptr(name) });
     let hex = |rva, code: &std::ffi::CStr| unsafe { image.matches_hex_guard(rva, code.as_ptr()) };
