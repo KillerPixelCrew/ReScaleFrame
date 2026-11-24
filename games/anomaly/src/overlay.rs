@@ -1032,8 +1032,8 @@ fn service() -> Option<&'static Service> {
         .filter(|_| !OVERLAY.suspended.load(Ordering::Acquire))
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_anomaly_overlay_start(
+#[cfg_attr(test, allow(dead_code))]
+pub(super) unsafe fn rsf_anomaly_overlay_start(
     options: *const rsf_anomaly_overlay_options,
     hooks: Option<&HookOps>,
     reason: *mut *const c_char,
@@ -1067,7 +1067,7 @@ pub(super) extern "C" fn rsf_anomaly_overlay_capture_bits(_: *mut c_void) -> u32
 }
 
 /// Present-owner thread, immediately before the real Present (never for DXGI_PRESENT_TEST).
-#[unsafe(no_mangle)]
+#[cfg_attr(test, allow(dead_code))]
 pub(super) extern "C" fn rsf_anomaly_overlay_present(_: *mut c_void, chain: *mut c_void) {
     if chain.is_null() {
         return;

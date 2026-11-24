@@ -14,9 +14,7 @@ use crate::input::rsf_anomaly_input_received;
 use crate::native_hooks::HookOps;
 use crate::native_profile::PROFILES;
 use crate::overlay::{rsf_anomaly_overlay_present, rsf_anomaly_overlay_start};
-use crate::overlay_hooks::{
-    rsf_anomaly_overlay_install_default_input, rsf_anomaly_overlay_set_input_observer,
-};
+use crate::overlay_hooks::{install_input, rsf_anomaly_overlay_set_input_observer};
 use crate::sr_stage::native::rsf_anomaly_sr_depth_rva;
 use crate::sys::rsf_anomaly_fg_swap_chain;
 use crate::sys::{
@@ -81,7 +79,7 @@ pub(super) unsafe fn fg(
 }
 
 pub(super) unsafe fn input_observation(reason: *mut *const c_char) -> bool {
-    unsafe { rsf_anomaly_overlay_install_default_input(rsf_anomaly_minhook_ops(), &mut *reason) }
+    unsafe { install_input(rsf_anomaly_minhook_ops(), &mut *reason) }
 }
 
 pub(super) unsafe fn overlay(runtime: HMODULE, ini: *const u16, log: rsf_game_log_fn) -> bool {

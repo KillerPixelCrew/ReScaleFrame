@@ -312,7 +312,7 @@ impl Hooks {
             .try_reserve_exact(batch.len())
             .map_err(|_| c"overlay hook table allocation failed")?;
         let _transaction = transaction();
-        if !unsafe { (platform.initialize)() } {
+        if !unsafe { (platform.initialize.unwrap())() } {
             return Err(c"MinHook initialization failed");
         }
         let mut targets = [std::ptr::null_mut(); MAX_HOOKS];
@@ -344,8 +344,8 @@ impl Hooks {
         }
         if !enable_batch(
             &targets[..batch.len()],
-            platform.queue,
-            platform.apply,
+            platform.queue.unwrap(),
+            platform.apply.unwrap(),
             || {
                 self.state().publish(binding, false);
             },
@@ -478,8 +478,7 @@ extern "C" fn rsf_anomaly_overlay_input_gate() -> Address {
     HOOKS.state().gate
 }
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_anomaly_overlay_set_input_observer(observer: Option<InputObserver>) {
+pub(super) fn rsf_anomaly_overlay_set_input_observer(observer: Option<InputObserver>) {
     HOOKS.state().observer = observer;
 }
 
@@ -693,14 +692,6 @@ unsafe extern "C" fn rsf_anomaly_overlay_before_resize(chain: *mut c_void) {
     }
 }
 
-#[cfg(feature = "native-entry")]
-pub(crate) fn rsf_anomaly_overlay_install_default_input(
-    hooks: &HookOps,
-    reason: &mut Reason,
-) -> bool {
-    install_input(hooks, reason)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -773,11 +764,11 @@ mod tests {
     }
 
     const PLATFORM: HookOps = HookOps {
-        initialize,
-        create,
-        remove_unqueued,
-        queue,
-        apply,
+        initialize: Some(initialize),
+        create: Some(create),
+        remove_unqueued: Some(remove_unqueued),
+        queue: Some(queue),
+        apply: Some(apply),
     };
 
     const PRESENT: Binding = Binding::Present(PresentSink {

@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 #[cfg(windows)]
 use crate::engine_guards::{Image, NativeSite, Read};
 #[cfg(windows)]
-use crate::engine_slots::{Exchange, INPUT, input_counter, rsf_anomaly_slot_install};
+use crate::engine_slots::{Exchange, INPUT, input_counter, slot_install};
 
 #[cfg(windows)]
 mod profile;
@@ -36,8 +36,8 @@ struct InputProfile {
 }
 
 #[cfg(windows)]
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_input_install(
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn rsf_anomaly_input_install(
     image: &Image,
     build: usize,
     counter_rva: u32,
@@ -78,7 +78,7 @@ fn install(
         }
         return false;
     }
-    if !rsf_anomaly_slot_install(
+    if !slot_install(
         INPUT as u32,
         image,
         profile.slot_rva,
@@ -152,13 +152,12 @@ extern "C" fn rsf_anomaly_input_frame_exit(ticket: u32) {
     IN_FLIGHT.fetch_sub(1, Ordering::AcqRel);
 }
 
-pub(crate) extern "C" fn rsf_anomaly_input_activate(active: bool) {
+pub(crate) fn rsf_anomaly_input_activate(active: bool) {
     ACTIVE.store(active, Ordering::Release);
 }
 
 /// No `OnFrame` call is executing, so a retired hook can be left behind.
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_input_idle() -> bool {
+pub(crate) fn rsf_anomaly_input_idle() -> bool {
     IN_FLIGHT.load(Ordering::Acquire) == 0
 }
 
@@ -175,14 +174,11 @@ fn route(kind: u8) -> u32 {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_input_received(
-    kind: u8,
-    emit: unsafe extern "C" fn(u32, u32),
-) {
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn rsf_anomaly_input_received(kind: u8, emit: fn(u32, u32)) {
     let kinds = route(kind);
     if kinds != 0 {
-        unsafe { emit(kinds, 0) };
+        emit(kinds, 0);
     }
 }
 

@@ -188,8 +188,7 @@ fn digit(value: u8) -> Option<u8> {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_guard_first_person(
+pub(super) fn guard_first_person(
     image: &Image,
     set_p_call: u32,
     rm_near_call: u32,

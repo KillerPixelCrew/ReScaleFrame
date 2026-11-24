@@ -43,11 +43,7 @@ extern "C" {
 #else
 #define RSF_FG_NOEXCEPT
 #endif
-bool rsf_anomaly_fg_installed(void) RSF_FG_NOEXCEPT;
-void rsf_anomaly_fg_set_overlay_sink(rsf_anomaly_fg_overlay_present, void*) RSF_FG_NOEXCEPT;
 void rsf_anomaly_fg_stage_input_begin(uint32_t) RSF_FG_NOEXCEPT;
-void rsf_anomaly_fg_stage_input_received(uint32_t kinds, uint32_t message) RSF_FG_NOEXCEPT;
-void rsf_anomaly_fg_stage_report(rsf_game_log_fn emit, void* user) RSF_FG_NOEXCEPT;
 #ifdef __cplusplus
 }
 #endif

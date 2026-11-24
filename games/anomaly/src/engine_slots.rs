@@ -103,8 +103,7 @@ fn publish(kind: usize, enabled: bool) {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_slot_install(
+pub(crate) fn slot_install(
     kind: u32,
     image: &Image,
     slot_rva: u32,

@@ -798,11 +798,8 @@ pub(crate) unsafe fn reload_capture(ini: *const u16) {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_fg_set_overlay_sink(
-    sink: rsf_anomaly_fg_overlay_present,
-    user: Raw,
-) {
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn rsf_anomaly_fg_set_overlay_sink(sink: rsf_anomaly_fg_overlay_present, user: Raw) {
     let _ = OVERLAY.set((sink, user as usize));
 }
 
@@ -818,11 +815,8 @@ pub(crate) fn foreign_chain(chain: Raw) -> bool {
     })
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_anomaly_fg_stage_camera(
-    view: *const f32,
-    projection: *const f32,
-) {
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) unsafe fn rsf_anomaly_fg_stage_camera(view: *const f32, projection: *const f32) {
     if let Some(stage) = installed()
         && !view.is_null()
         && !projection.is_null()
@@ -868,8 +862,7 @@ extern "C" fn rsf_anomaly_fg_stage_input_begin(native_frame: u32) {
     stage.boundary(source, RSF_GAME_CPU_SIMULATION_BEGIN);
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_fg_stage_input_received(kinds: u32, message: u32) {
+pub(crate) fn rsf_anomaly_fg_stage_input_received(kinds: u32, message: u32) {
     let Some(stage) = installed() else { return };
     let (phase, source) = {
         let engine = stage.engine.lock().unwrap();
@@ -890,12 +883,8 @@ pub(crate) extern "C" fn rsf_anomaly_fg_stage_input_received(kinds: u32, message
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_fg_stage_render_begin(
-    native_frame: u32,
-    width: u32,
-    height: u32,
-) {
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn rsf_anomaly_fg_stage_render_begin(native_frame: u32, width: u32, height: u32) {
     let Some(stage) = installed() else { return };
     let phase = stage.engine.lock().unwrap().phase;
     if phase == Phase::Rendering {
@@ -943,8 +932,8 @@ pub(crate) extern "C" fn rsf_anomaly_fg_stage_render_begin(
     engine.phase = Phase::Rendering;
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_fg_stage_scope() {
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn rsf_anomaly_fg_stage_scope() {
     if let Some(stage) = installed() {
         let mut engine = stage.engine.lock().unwrap();
         if engine.phase == Phase::Rendering {
@@ -953,8 +942,8 @@ pub(crate) extern "C" fn rsf_anomaly_fg_stage_scope() {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_fg_stage_ui_boundary() {
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn rsf_anomaly_fg_stage_ui_boundary() {
     let Some(stage) = installed() else { return };
     let (render, previous, sr, mut scene) = {
         let mut engine = stage.engine.lock().unwrap();
@@ -1002,8 +991,8 @@ pub(crate) extern "C" fn rsf_anomaly_fg_stage_ui_boundary() {
     stage.maybe_dump(context, source, render.native_frame, decision);
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_fg_stage_end_before() {
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn rsf_anomaly_fg_stage_end_before() {
     let Some(stage) = installed() else { return };
     let (submission, mut window) = {
         let engine = stage.engine.lock().unwrap();
@@ -1034,8 +1023,8 @@ pub(crate) extern "C" fn rsf_anomaly_fg_stage_end_before() {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_fg_stage_end_after() {
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn rsf_anomaly_fg_stage_end_after() {
     let Some(stage) = installed() else { return };
     let (window, frame) = {
         let mut engine = stage.engine.lock().unwrap();
@@ -1061,8 +1050,8 @@ pub(crate) extern "C" fn rsf_anomaly_fg_stage_end_after() {
     stage.engine.lock().unwrap().phase = Phase::Idle;
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_fg_stage_device_reset() {
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn rsf_anomaly_fg_stage_device_reset() {
     if let Some(stage) = installed() {
         let (window, inputs) = stage.engine.lock().unwrap().reset_device();
         // The graphics owner must not lend the old frame's identity to later SR work.
@@ -1075,8 +1064,7 @@ pub(crate) extern "C" fn rsf_anomaly_fg_stage_device_reset() {
     }
 }
 
-#[unsafe(export_name = "rsf_anomaly_fg_stage_report")]
-pub(crate) extern "C" fn report(emit: rsf_game_log_fn, user: Raw) {
+pub(crate) fn report(emit: rsf_game_log_fn, user: Raw) {
     let Some(stage) = installed().filter(|_| emit.is_some()) else {
         return;
     };

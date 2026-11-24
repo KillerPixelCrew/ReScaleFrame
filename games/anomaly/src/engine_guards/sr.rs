@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::{Image, rsf_anomaly_guard_first_person};
+use super::{Image, guard_first_person};
 use crate::sr_profile::{
     Profile, SITE_PHASE_BLUR, SITE_PHASE_COMBINE, SITE_PHASE_SCENE_PREPARE, SITE_PHASE_SUNSHAFTS,
     SITE_POSITION_SETUP, SITE_RM_NEAR, SITE_SET_MIP_LOD_BIAS, SITE_SET_P, SITE_SUN_CASCADES,
@@ -45,7 +45,7 @@ pub(crate) fn sr_guard_failure(
             return set_mip_bias.name;
         }
         for site in &profile.first_person_sites {
-            if !rsf_anomaly_guard_first_person(
+            if !guard_first_person(
                 image,
                 site.set_p_call,
                 site.rm_near_call,
