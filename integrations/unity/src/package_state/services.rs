@@ -151,7 +151,7 @@ impl Services {
 // for the call only. Paths are terminated here.
 impl Leaves {
     fn bridge_open(&self, editor: bool) -> bool {
-        raw::bridge_open(u32::from(editor)) != 0
+        raw::bridge_open(editor)
     }
     fn session_seed(&self) -> u64 {
         raw::session_seed()

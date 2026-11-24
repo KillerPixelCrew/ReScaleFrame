@@ -37,14 +37,14 @@ pub(super) fn route() -> Route {
     }
 }
 
-pub(crate) unsafe fn rsf_unity_package_bridge_load(interfaces: *mut c_void) -> u32 {
+pub(crate) unsafe fn rsf_unity_package_bridge_load(interfaces: *mut c_void) -> bool {
     if interfaces.is_null() {
-        return 0;
+        return false;
     }
     let mut graphics = null_mut();
     let renderer = unsafe { rsf_unity_package_sdk_renderer(interfaces, &mut graphics) };
     if graphics.is_null() {
-        return 1;
+        return true;
     }
     RENDERER.store(renderer, SeqCst);
     match route() {
@@ -60,7 +60,7 @@ pub(crate) unsafe fn rsf_unity_package_bridge_load(interfaces: *mut c_void) -> u
         },
         Route::None => {}
     }
-    1
+    true
 }
 
 pub(crate) fn rsf_unity_package_bridge_unload() {
@@ -83,22 +83,22 @@ pub(crate) unsafe fn rsf_unity_package_bridge_prepare(
     unsafe { prepare(host, api) }
 }
 
-pub(crate) fn rsf_unity_package_bridge_open(editor: u32) -> u32 {
+pub(crate) fn rsf_unity_package_bridge_open(editor: bool) -> bool {
     match route() {
         Route::Vulkan => {
             vulkan_state::open();
-            u32::from(editor != 0 || vulkan_state::bridge::create_window())
+            editor || vulkan_state::bridge::create_window()
         }
         Route::D3d11 => {
             d3d11_state::open();
-            1
+            true
         }
-        Route::D3d12 => 1,
-        Route::None => 0,
+        Route::D3d12 => true,
+        Route::None => false,
     }
 }
 
-pub(crate) fn rsf_unity_package_bridge_try_close() -> u32 {
+pub(crate) fn rsf_unity_package_bridge_try_close() -> bool {
     rsf_unity_frames_activate(0);
     let route = route();
     let vulkan = matches!(route, Route::Vulkan);
@@ -108,7 +108,7 @@ pub(crate) fn rsf_unity_package_bridge_try_close() -> u32 {
     {
         let _locked = host_lock();
         if !rsf_unity_frames_try_close() {
-            return 0;
+            return false;
         }
         let drained = match route {
             Route::D3d12 => rsf_unity_frames_drained(bridge_d3d12::completed()),
@@ -116,23 +116,22 @@ pub(crate) fn rsf_unity_package_bridge_try_close() -> u32 {
             Route::D3d11 | Route::None => d3d11_state::try_close(),
         };
         if !drained {
-            return 0;
+            return false;
         }
     }
     if vulkan && !vulkan_state::try_close() {
-        return 0;
+        return false;
     }
     if !editor() || preview::rsf_unity_preview_drained() {
-        return 1;
+        return true;
     }
     if vulkan {
         vulkan_state::finish_retirement(false);
     }
-    0
+    false
 }
 
-pub(crate) fn rsf_unity_package_bridge_finish_retirement(commit: u32) {
-    let commit = commit != 0;
+pub(crate) fn rsf_unity_package_bridge_finish_retirement(commit: bool) {
     let route = route();
     let vulkan = matches!(route, Route::Vulkan);
     if commit && editor() {

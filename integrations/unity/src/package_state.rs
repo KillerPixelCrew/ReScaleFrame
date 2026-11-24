@@ -139,7 +139,7 @@ use tests as raw;
 // SAFETY for every call below: the leaves borrow their pointer arguments for the call only.
 impl Leaves {
     fn sharpening_valid(&self, options: &rsf_sharpening_options) -> bool {
-        unsafe { raw::sharpening_valid(options) != 0 }
+        raw::sharpening_valid(options)
     }
     fn dlss_preset_valid(&self, preset: u32) -> bool {
         unsafe { raw::dlss_preset_valid(preset) != 0 }
@@ -181,7 +181,7 @@ impl Leaves {
         raw::bridge_activate(u32::from(enabled))
     }
     fn bridge_try_close(&self) -> bool {
-        raw::bridge_try_close() != 0
+        raw::bridge_try_close()
     }
     fn end_session(&self, session: u64) -> bool {
         unsafe { raw::end_session(session) != 0 }
@@ -195,19 +195,16 @@ impl Leaves {
         commands: *mut c_void,
         setup: &mut rsf_unity_package_view_setup,
     ) -> Option<(i32, *mut rsf_sr12)> {
-        let (mut result, mut sr): (i32, *mut rsf_sr12) = (0, null_mut());
-        (unsafe { raw::sr_create(commands, setup, &mut result, &mut sr) } != 0)
-            .then_some((result, sr))
+        unsafe { raw::sr_create(commands, setup) }
     }
 
     /// The stored sharpening, or the Runtime defaults while its struct_size is zero.
     fn sharpening(&self, stored: &rsf_sharpening_options) -> rsf_sharpening_options {
         if stored.struct_size != 0 {
-            return *stored;
+            *stored
+        } else {
+            raw::sharpening_defaults()
         }
-        let mut defaults = rsf_sharpening_options::default();
-        unsafe { raw::sharpening_defaults(&mut defaults) };
-        defaults
     }
     /// The result is not read.
     fn sr_set_sharpening(&self, sr: *mut rsf_sr12, options: &rsf_sharpening_options) {
@@ -226,7 +223,7 @@ impl Leaves {
         unsafe { raw::sr_destroy(sr) }
     }
     fn bridge_finish_retirement(&self, commit: bool) {
-        raw::bridge_finish_retirement(u32::from(commit))
+        raw::bridge_finish_retirement(commit)
     }
 }
 
@@ -987,9 +984,9 @@ mod tests {
         CALLS.with(|calls| calls.borrow_mut().drain(..).collect())
     }
 
-    pub(super) unsafe fn sharpening_valid(_: *const rsf_sharpening_options) -> u32 {
+    pub(super) fn sharpening_valid(_: &rsf_sharpening_options) -> bool {
         call("sharpening".into());
-        fake().sharpening_valid.into()
+        fake().sharpening_valid
     }
     pub(super) unsafe fn dlss_preset_valid(_: u32) -> u32 {
         call("preset".into());
@@ -1057,11 +1054,11 @@ mod tests {
     pub(super) fn bridge_activate(enabled: u32) {
         call(format!("activate {enabled}"));
     }
-    pub(super) fn bridge_try_close() -> u32 {
+    pub(super) fn bridge_try_close() -> bool {
         assert!(!fake().close_held);
         call("close".into());
         set(|f| f.close_held = f.drained);
-        fake().close_held.into()
+        fake().close_held
     }
     pub(super) unsafe fn end_session(session: u64) -> c_int {
         assert!(fake().close_held);
@@ -1073,16 +1070,14 @@ mod tests {
     }
     pub(super) unsafe fn sr_create(
         _: *mut c_void,
-        setup: *mut rsf_unity_package_view_setup,
-        result: *mut i32,
-        output: *mut *mut rsf_sr12,
-    ) -> u32 {
-        let mut s = unsafe { *setup };
+        setup: &mut rsf_unity_package_view_setup,
+    ) -> Option<(i32, *mut rsf_sr12)> {
+        let mut s = *setup;
         let f = fake();
         if s.backend == RSF_SR_AUTO {
             call("default".into());
             if f.adapter == 0 {
-                return 0;
+                return None;
             }
             s.backend = f.adapter;
         }
@@ -1114,7 +1109,7 @@ mod tests {
         };
         create(s.backend);
         if !f.device {
-            return 0;
+            return None;
         }
         if s.backend != 0 && !f.vendor_creates {
             create(0);
@@ -1134,16 +1129,15 @@ mod tests {
         } else {
             null_mut()
         };
-        unsafe {
-            setup.write(s);
-            result.write(result_code);
-            output.write(context);
-        }
-        1
+        *setup = s;
+        Some((result_code, context))
     }
-    pub(super) unsafe fn sharpening_defaults(output: *mut rsf_sharpening_options) {
+    pub(super) fn sharpening_defaults() -> rsf_sharpening_options {
         call("defaults".into());
-        unsafe { (*output).struct_size = 56 };
+        rsf_sharpening_options {
+            struct_size: 56,
+            ..Default::default()
+        }
     }
     pub(super) unsafe fn sr_set_sharpening(
         _: *mut rsf_sr12,
@@ -1165,10 +1159,10 @@ mod tests {
     pub(super) unsafe fn sr_destroy(sr: *mut rsf_sr12) {
         call(format!("destroy {:#x}", sr as usize));
     }
-    pub(super) fn bridge_finish_retirement(commit: u32) {
+    pub(super) fn bridge_finish_retirement(commit: bool) {
         assert!(fake().close_held);
         set(|f| f.close_held = false);
-        call(if commit == 0 { "retain" } else { "release" }.into());
+        call(if commit { "release" } else { "retain" }.into());
     }
     pub(super) unsafe fn fg_install(setup: *const rsf_fg12_setup) -> i32 {
         let s = unsafe { *setup };
@@ -1215,21 +1209,17 @@ mod tests {
         call(format!("request {backend}"));
         fake().request_result
     }
-    pub(super) unsafe fn fg_default_backend(backend: *mut u32) -> u32 {
+    pub(super) fn fg_default_backend() -> Option<u32> {
         call("fg default".into());
-        let Some(adapter) = fake().fg_adapter else {
-            return 0;
-        };
-        unsafe { backend.write(adapter) };
-        1
+        fake().fg_adapter
     }
-    pub(super) fn bridge_open(editor: u32) -> u32 {
+    pub(super) fn bridge_open(editor: bool) -> bool {
         assert!(!fake().close_held);
-        if editor != 0 {
-            return 1;
+        if editor {
+            return true;
         }
         call("surface".into());
-        fake().surface.into()
+        fake().surface
     }
     pub(super) fn session_seed() -> u64 {
         call("seed".into());
@@ -1358,18 +1348,9 @@ mod tests {
         call(format!("present {:#x} {common}", resource as usize));
         fake().shown.into()
     }
-    pub(super) unsafe fn texture_desc(
-        resource: *mut c_void,
-        width: *mut u64,
-        height: *mut u32,
-        format: *mut u32,
-    ) {
+    pub(super) unsafe fn texture_desc(resource: *mut c_void) -> (u64, u32, u32) {
         call(format!("desc {:#x}", resource as usize));
-        unsafe {
-            width.write(640);
-            height.write(360);
-            format.write(10);
-        }
+        (640, 360, 10)
     }
     pub(super) fn preview_prepare(width: u32, height: u32) -> u32 {
         call(format!("preview prepare {width}x{height}"));
@@ -1391,9 +1372,9 @@ mod tests {
         call(format!("class {:#x}", window as usize));
         fake().class
     }
-    pub(super) unsafe fn bridge_load(_: *mut c_void) -> u32 {
+    pub(super) unsafe fn bridge_load(_: *mut c_void) -> bool {
         call("bridge load".into());
-        fake().registry.into()
+        fake().registry
     }
     pub(super) fn bridge_unload() {
         call("bridge unload".into());

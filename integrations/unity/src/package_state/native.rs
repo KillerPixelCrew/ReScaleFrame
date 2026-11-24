@@ -14,6 +14,7 @@ use crate::sys::{
 use crate::vulkan_state::bridge::rsf_uvk_bridge_update_window;
 use rsf_game_sys::backend_result;
 use std::ffi::{c_int, c_void};
+use std::ptr::null_mut;
 use std::sync::atomic::Ordering::SeqCst;
 use windows::Win32::Graphics::{
     Direct3D12::{ID3D12Device, ID3D12GraphicsCommandList, ID3D12Resource},
@@ -77,37 +78,26 @@ pub(super) mod raw {
     pub(in crate::package_state) use crate::vulkan_state::bridge::rsf_uvk_bridge_owns_window as vulkan_owns;
     pub(in crate::package_state) use rsf_windows::rsf_win32_input_kind as input_kind;
 }
-pub(super) unsafe fn sharpening_valid(options: *const rsf_sharpening_options) -> u32 {
-    let options = unsafe { *options };
-    u32::from(
-        options.struct_size as usize >= size_of::<rsf_sharpening_options>()
-            && unsafe { rsf_sharpening_core_valid(options) } != 0,
-    )
+pub(super) fn sharpening_valid(options: &rsf_sharpening_options) -> bool {
+    options.struct_size as usize >= size_of::<rsf_sharpening_options>()
+        && unsafe { rsf_sharpening_core_valid(*options) } != 0
 }
 
-pub(super) unsafe fn sharpening_defaults(output: *mut rsf_sharpening_options) {
-    unsafe { output.write(rsf_sharpening_core_defaults()) };
+pub(super) fn sharpening_defaults() -> rsf_sharpening_options {
+    unsafe { rsf_sharpening_core_defaults() }
 }
 
-/// Runs inside the bridge's admitted SR callback and borrows the recording list.
+/// Creates the view's SR context on the recording list's device: the creation result and the
+/// context, or None when the list has no device. Runs inside the bridge's admitted SR callback
+/// and borrows the recording list.
 pub(super) unsafe fn rsf_unity_package_create_view(
     commands: *mut c_void,
-    view: *mut rsf_unity_package_view_setup,
-    result: *mut i32,
-    output: *mut *mut rsf_sr12,
-) -> u32 {
-    let Some(commands) = (unsafe { ID3D12GraphicsCommandList::from_raw_borrowed(&commands) })
-    else {
-        return 0;
-    };
+    view: &mut rsf_unity_package_view_setup,
+) -> Option<(i32, *mut rsf_sr12)> {
+    let commands = unsafe { ID3D12GraphicsCommandList::from_raw_borrowed(&commands) }?;
     let mut device = None::<ID3D12Device>;
-    if unsafe { commands.GetDevice(&mut device) }.is_err() {
-        return 0;
-    }
-    let Some(device) = device else {
-        return 0;
-    };
-    let view = unsafe { &mut *view };
+    unsafe { commands.GetDevice(&mut device) }.ok()?;
+    let device = device?;
     let setup = rsf_sr12_setup {
         struct_size: size_of::<rsf_sr12_setup>() as u32,
         abi_version: 1,
@@ -146,54 +136,41 @@ pub(super) unsafe fn rsf_unity_package_create_view(
         abi_version: RSF_SR12_PLAN_ABI_VERSION,
         ..Default::default()
     };
-    let created = unsafe { rsf_sr12_create_planned(&setup, &mut plan, output) };
-    unsafe {
-        result.write(if plan.requested_result != backend_result::OK {
-            plan.requested_result
-        } else {
-            created
-        });
-    }
+    let mut output = null_mut();
+    let created = unsafe { rsf_sr12_create_planned(&setup, &mut plan, &mut output) };
     if created == backend_result::OK {
         view.backend = plan.backend;
         view.render_width = plan.render_width;
         view.render_height = plan.render_height;
     }
-    1
+    let result = if plan.requested_result != backend_result::OK {
+        plan.requested_result
+    } else {
+        created
+    };
+    Some((result, output))
 }
 
-pub(super) unsafe fn rsf_unity_package_default_fg(backend: *mut u32) -> u32 {
-    let Some((device, _queue)) = graphics() else {
-        return 0;
-    };
+/// Auto's generation provider for Unity's adapter; None when the device or adapter cannot be read.
+pub(super) fn rsf_unity_package_default_fg() -> Option<u32> {
+    let (device, _queue) = graphics()?;
     let desc = unsafe {
         CreateDXGIFactory1::<IDXGIFactory4>()
             .and_then(|factory| factory.EnumAdapterByLuid::<IDXGIAdapter1>(device.GetAdapterLuid()))
             .and_then(|adapter| adapter.GetDesc1())
-    };
-    let Ok(desc) = desc else {
-        return 0;
-    };
+    }
+    .ok()?;
     let software = desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0;
-    unsafe { backend.write(rsf_fg_default_backend(desc.VendorId, u32::from(software))) };
-    1
+    Some(unsafe { rsf_fg_default_backend(desc.VendorId, u32::from(software)) })
 }
 
-pub(super) unsafe fn rsf_unity_package_texture_desc(
-    resource: *mut c_void,
-    width: *mut u64,
-    height: *mut u32,
-    format: *mut u32,
-) {
+/// ID3D12Resource::GetDesc's width, height and format; zeros for a null resource.
+pub(super) unsafe fn rsf_unity_package_texture_desc(resource: *mut c_void) -> (u64, u32, u32) {
     let Some(resource) = (unsafe { ID3D12Resource::from_raw_borrowed(&resource) }) else {
-        return;
+        return (0, 0, 0);
     };
     let desc = unsafe { resource.GetDesc() };
-    unsafe {
-        width.write(desc.Width);
-        height.write(desc.Height);
-        format.write(desc.Format.0 as u32);
-    }
+    (desc.Width, desc.Height, desc.Format.0 as u32)
 }
 
 pub(super) fn rsf_unity_package_prepare_preview(width: u32, height: u32) -> u32 {

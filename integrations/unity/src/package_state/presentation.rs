@@ -114,8 +114,7 @@ impl Leaves {
     }
     /// Auto's provider for Unity's adapter; None when the device or adapter cannot be read.
     fn fg_default_backend(&self) -> Option<u32> {
-        let mut backend = 0u32;
-        (unsafe { raw::fg_default_backend(&mut backend) } != 0).then_some(backend)
+        raw::fg_default_backend()
     }
 }
 

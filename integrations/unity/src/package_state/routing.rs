@@ -44,9 +44,7 @@ impl Leaves {
     }
     /// ID3D12Resource::GetDesc's width, height and format.
     fn texture_desc(&self, resource: *mut c_void) -> (u64, u32, u32) {
-        let (mut width, mut height, mut format) = (0u64, 0u32, 0u32);
-        unsafe { raw::texture_desc(resource, &mut width, &mut height, &mut format) };
-        (width, height, format)
+        unsafe { raw::texture_desc(resource) }
     }
     fn preview_prepare(&self, width: u32, height: u32) -> bool {
         raw::preview_prepare(width, height) != 0
@@ -64,7 +62,7 @@ impl Leaves {
         raw::window_class(window)
     }
     fn bridge_load(&self) -> bool {
-        unsafe { raw::bridge_load(UNITY_INTERFACES.load(SeqCst)) != 0 }
+        unsafe { raw::bridge_load(UNITY_INTERFACES.load(SeqCst)) }
     }
     fn bridge_unload(&self) {
         raw::bridge_unload()
