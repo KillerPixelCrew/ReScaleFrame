@@ -28,10 +28,7 @@ impl Device {
             .or_else(|| Self::create(D3D_DRIVER_TYPE_WARP, Some(levels)))
     }
 
-    pub fn create(
-        driver: D3D_DRIVER_TYPE,
-        levels: Option<&[D3D_FEATURE_LEVEL]>,
-    ) -> Option<Self> {
+    pub fn create(driver: D3D_DRIVER_TYPE, levels: Option<&[D3D_FEATURE_LEVEL]>) -> Option<Self> {
         let (device, context) = d3d11_device(driver, D3D11_CREATE_DEVICE_FLAG(0), levels).ok()?;
         Some(Self { device, context })
     }

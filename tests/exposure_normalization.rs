@@ -3,12 +3,12 @@ use super::{Handle, TestResult, check};
 use crate::owned_win32_handle;
 use crate::sys::rsf_sr12_setup as Setup;
 use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, rsf_game_render_pass as RenderPass};
+use rsf_test_support::d3d12::{buffer, committed, copy_location, transition};
 use std::ffi::{CString, c_char};
 use std::fs;
 use std::io::Read;
-use std::mem::ManuallyDrop;
 use std::os::windows::io::AsRawHandle;
-use std::{ptr, slice};
+use std::ptr;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -36,36 +36,12 @@ impl Drop for Session<'_> {
     }
 }
 
-fn resource(
-    device: &ID3D12Device,
-    heap_type: D3D12_HEAP_TYPE,
-    desc: &D3D12_RESOURCE_DESC,
-    state: D3D12_RESOURCE_STATES,
-) -> TestResult<ID3D12Resource> {
-    let heap = D3D12_HEAP_PROPERTIES {
-        Type: heap_type,
-        ..Default::default()
-    };
-    let mut resource = None;
-    unsafe {
-        device.CreateCommittedResource(
-            &heap,
-            D3D12_HEAP_FLAG_NONE,
-            desc,
-            state,
-            None,
-            &mut resource,
-        )
-    }?;
-    resource.ok_or_else(|| "null committed resource".into())
-}
-
 fn texture(
     device: &ID3D12Device,
     size: u32,
     format: DXGI_FORMAT,
     state: D3D12_RESOURCE_STATES,
-) -> TestResult<ID3D12Resource> {
+) -> windows::core::Result<ID3D12Resource> {
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
         Width: u64::from(size),
@@ -79,7 +55,7 @@ fn texture(
         },
         ..Default::default()
     };
-    resource(device, D3D12_HEAP_TYPE_DEFAULT, &desc, state)
+    committed(device, D3D12_HEAP_TYPE_DEFAULT, &desc, state)
 }
 
 fn record_upload(
@@ -88,25 +64,7 @@ fn record_upload(
     exposure: &ID3D12Resource,
     values: &[f32; 4],
 ) -> TestResult<ID3D12Resource> {
-    let desc = D3D12_RESOURCE_DESC {
-        Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
-        Width: 256,
-        Height: 1,
-        DepthOrArraySize: 1,
-        MipLevels: 1,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
-        ..Default::default()
-    };
-    let upload = resource(
-        device,
-        D3D12_HEAP_TYPE_UPLOAD,
-        &desc,
-        D3D12_RESOURCE_STATE_GENERIC_READ,
-    )?;
+    let upload = buffer(device, 256, D3D12_HEAP_TYPE_UPLOAD)?;
     let mut mapped = ptr::null_mut();
     unsafe { upload.Map(0, Some(&D3D12_RANGE::default()), Some(&mut mapped)) }?;
     if mapped.is_null() {
@@ -117,48 +75,27 @@ fn record_upload(
         ptr::copy_nonoverlapping(values.as_ptr(), mapped.cast(), values.len());
         upload.Unmap(0, None);
     }
-    let mut source = D3D12_TEXTURE_COPY_LOCATION {
-        pResource: ManuallyDrop::new(Some(upload.clone())),
-        Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
-        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-            PlacedFootprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT {
-                Offset: 0,
-                Footprint: D3D12_SUBRESOURCE_FOOTPRINT {
-                    Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
-                    Width: 1,
-                    Height: 1,
-                    Depth: 1,
-                    RowPitch: 256,
-                },
+    let source = copy_location(
+        &upload,
+        Some(D3D12_PLACED_SUBRESOURCE_FOOTPRINT {
+            Offset: 0,
+            Footprint: D3D12_SUBRESOURCE_FOOTPRINT {
+                Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
+                Width: 1,
+                Height: 1,
+                Depth: 1,
+                RowPitch: 256,
             },
-        },
-    };
-    let mut target = D3D12_TEXTURE_COPY_LOCATION {
-        pResource: ManuallyDrop::new(Some(exposure.clone())),
-        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-            SubresourceIndex: 0,
-        },
-    };
-    let mut transition = D3D12_RESOURCE_BARRIER {
-        Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
-        Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
-        Anonymous: D3D12_RESOURCE_BARRIER_0 {
-            Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
-                pResource: ManuallyDrop::new(Some(exposure.clone())),
-                Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                StateBefore: D3D12_RESOURCE_STATE_COPY_DEST,
-                StateAfter: D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-            }),
-        },
-    };
-    unsafe {
-        list.CopyTextureRegion(&target, 0, 0, 0, &source, None);
-        list.ResourceBarrier(slice::from_ref(&transition));
-        ManuallyDrop::drop(&mut source.pResource);
-        ManuallyDrop::drop(&mut target.pResource);
-        ManuallyDrop::drop(&mut ManuallyDrop::take(&mut transition.Anonymous.Transition).pResource);
-    }
+        }),
+    );
+    let target = copy_location(exposure, None);
+    unsafe { list.CopyTextureRegion(&target, 0, 0, 0, &source, None) };
+    transition(
+        list,
+        exposure,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+    );
     Ok(upload)
 }
 

@@ -27,6 +27,7 @@ test = false
 ash = { workspace = true, optional = true }
 rsf-anomaly = { path = "../../games/anomaly" }
 rsf-game-sys = { path = "../../sdk/game" }
+rsf-graphics = { path = "../../runtime/graphics/rust" }
 rsf-orchestrator = { path = "../../runtime/orchestrator" }
 rsf-test-support = { path = "../support" }
 rsf-unity = { path = "../../integrations/unity", optional = true }

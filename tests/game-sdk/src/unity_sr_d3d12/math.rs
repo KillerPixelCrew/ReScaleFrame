@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
-use super::{HEIGHT, Result, WIDTH, check, dxgi_format::half_to_f32};
+use super::{HEIGHT, Result, WIDTH, check};
 use rsf_game_sys::{
     camera_math::{finite_matrix_close, inverse_4x4, multiply_4x4},
     rsf_game_render_pass,
 };
+use rsf_graphics::dxgi_format::half_to_f32;
 
 pub(super) const NEAR: f32 = 0.1;
 pub(super) const FAR: f32 = 1000.0;

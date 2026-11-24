@@ -5,8 +5,8 @@ use crate::d3d12_sharpening::{Sharpen12, transition};
 use crate::owned_win32_handle;
 use crate::sharpening_policy::defaults;
 use crate::sys::rsf_sharpening_options as Options;
+use rsf_test_support::d3d12::{buffer, committed, copy_location, footprint};
 use std::ffi::{CStr, c_void};
-use std::mem::ManuallyDrop;
 use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::ptr;
 use windows::Win32::Foundation::HANDLE;
@@ -29,32 +29,6 @@ type Image = Vec<f32>;
 struct Readback {
     buffer: ID3D12Resource,
     footprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT,
-}
-
-fn location(
-    resource: &ID3D12Resource,
-    footprint: Option<D3D12_PLACED_SUBRESOURCE_FOOTPRINT>,
-) -> D3D12_TEXTURE_COPY_LOCATION {
-    let (kind, details) = match footprint {
-        Some(footprint) => (
-            D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
-            D3D12_TEXTURE_COPY_LOCATION_0 {
-                PlacedFootprint: footprint,
-            },
-        ),
-        None => (
-            D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-            D3D12_TEXTURE_COPY_LOCATION_0 {
-                SubresourceIndex: 0,
-            },
-        ),
-    };
-    D3D12_TEXTURE_COPY_LOCATION {
-        // The command recording retains the resource through the fixture's slot.
-        pResource: ManuallyDrop::new(Some(unsafe { ID3D12Resource::from_raw(resource.as_raw()) })),
-        Type: kind,
-        Anonymous: details,
-    }
 }
 
 struct Slot {
@@ -126,70 +100,6 @@ impl Fixture {
         )
     }
 
-    fn resource(
-        &self,
-        heap: D3D12_HEAP_TYPE,
-        desc: &D3D12_RESOURCE_DESC,
-        state: D3D12_RESOURCE_STATES,
-    ) -> TestResult<ID3D12Resource> {
-        let mut result = None;
-        let properties = D3D12_HEAP_PROPERTIES {
-            Type: heap,
-            ..Default::default()
-        };
-        unsafe {
-            self.device.CreateCommittedResource(
-                &properties,
-                D3D12_HEAP_FLAG_NONE,
-                desc,
-                state,
-                None,
-                &mut result,
-            )
-        }?;
-        result.ok_or_else(|| "null committed resource".into())
-    }
-
-    fn buffer(&self, bytes: u64, heap: D3D12_HEAP_TYPE) -> TestResult<ID3D12Resource> {
-        let desc = D3D12_RESOURCE_DESC {
-            Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
-            Width: bytes,
-            Height: 1,
-            DepthOrArraySize: 1,
-            MipLevels: 1,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
-            ..Default::default()
-        };
-        let state = if heap == D3D12_HEAP_TYPE_READBACK {
-            COPY_DEST
-        } else {
-            D3D12_RESOURCE_STATE_GENERIC_READ
-        };
-        self.resource(heap, &desc, state)
-    }
-
-    fn footprint(&self, desc: &D3D12_RESOURCE_DESC) -> (D3D12_PLACED_SUBRESOURCE_FOOTPRINT, u64) {
-        let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
-        let mut bytes = 0;
-        unsafe {
-            self.device.GetCopyableFootprints(
-                desc,
-                0,
-                1,
-                0,
-                Some(&mut footprint),
-                None,
-                None,
-                Some(&mut bytes),
-            )
-        };
-        (footprint, bytes)
-    }
-
     fn texture(
         &mut self,
         slot: usize,
@@ -213,9 +123,9 @@ impl Fixture {
             Flags: D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
             ..Default::default()
         };
-        let texture = self.resource(D3D12_HEAP_TYPE_DEFAULT, &desc, UAV)?;
-        let (footprint, bytes) = self.footprint(&desc);
-        let upload = self.buffer(bytes, D3D12_HEAP_TYPE_UPLOAD)?;
+        let texture = committed(&self.device, D3D12_HEAP_TYPE_DEFAULT, &desc, UAV)?;
+        let (footprint, bytes) = footprint(&self.device, &desc);
+        let upload = buffer(&self.device, bytes, D3D12_HEAP_TYPE_UPLOAD)?;
         let row = size_of_val(pixels) / height;
         let mut mapped: *mut c_void = ptr::null_mut();
         unsafe { upload.Map(0, Some(&D3D12_RANGE::default()), Some(&mut mapped)) }?;
@@ -234,11 +144,11 @@ impl Fixture {
             upload.Unmap(0, None);
             list.ResourceBarrier(&[transition(&texture, UAV, COPY_DEST)]);
             list.CopyTextureRegion(
-                &location(&texture, None),
+                &copy_location(&texture, None),
                 0,
                 0,
                 0,
-                &location(&upload, Some(footprint)),
+                &copy_location(&upload, Some(footprint)),
                 None,
             );
             list.ResourceBarrier(&[transition(&texture, COPY_DEST, state)]);
@@ -248,17 +158,17 @@ impl Fixture {
     }
 
     fn capture(&self, slot: usize, texture: &ID3D12Resource) -> TestResult<Readback> {
-        let (footprint, bytes) = self.footprint(&unsafe { texture.GetDesc() });
-        let buffer = self.buffer(bytes, D3D12_HEAP_TYPE_READBACK)?;
+        let (footprint, bytes) = footprint(&self.device, &unsafe { texture.GetDesc() });
+        let buffer = buffer(&self.device, bytes, D3D12_HEAP_TYPE_READBACK)?;
         let list = &self.slots[slot].list;
         unsafe {
             list.ResourceBarrier(&[transition(texture, UAV, COPY_SOURCE)]);
             list.CopyTextureRegion(
-                &location(&buffer, Some(footprint)),
+                &copy_location(&buffer, Some(footprint)),
                 0,
                 0,
                 0,
-                &location(texture, None),
+                &copy_location(texture, None),
                 None,
             );
             list.ResourceBarrier(&[transition(texture, COPY_SOURCE, UAV)]);

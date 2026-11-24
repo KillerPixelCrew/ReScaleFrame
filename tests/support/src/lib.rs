@@ -2,6 +2,7 @@
 //! Window, WARP device and check helpers the Windows fixture crates share.
 #![cfg(windows)]
 
+pub mod d3d12;
 pub mod device;
 
 use std::ffi::{CStr, OsStr};
@@ -31,7 +32,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, UnregisterClassW,
     WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
 };
-use windows::core::{HSTRING, IUnknown, PCSTR, PCWSTR, Param, Result};
+use windows::core::{HSTRING, IUnknown, Interface, PCSTR, PCWSTR, Param, Result};
 
 use ash::vk;
 use rsf_game_sys::{
@@ -177,6 +178,15 @@ pub unsafe extern "system" fn ignore_pipeline_barrier(
     _: u32,
     _: *const vk::ImageMemoryBarrier<'_>,
 ) {
+}
+
+/// The COM interface `T` behind a raw pointer a fixture passes by value; the fixture keeps the
+/// object alive. A null pointer panics.
+///
+/// # Safety
+/// `raw` is a live COM pointer that supports `T`.
+pub unsafe fn borrow<T: Interface>(raw: &*mut std::ffi::c_void) -> &T {
+    unsafe { T::from_raw_borrowed(raw) }.unwrap()
 }
 
 /// A D3D11 device and its immediate context on `driver`. Fixtures that prefer hardware call this

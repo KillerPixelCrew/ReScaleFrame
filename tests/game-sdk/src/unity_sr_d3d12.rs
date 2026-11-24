@@ -1,7 +1,4 @@
 // SPDX-License-Identifier: MIT
-#[allow(dead_code)]
-#[path = "../../../runtime/graphics/rust/src/dxgi_format.rs"]
-mod dxgi_format;
 mod gpu;
 mod math;
 mod rdr2;
@@ -14,6 +11,8 @@ use rsf_game_sys::{
     RSF_GAME_RENDER_SR, rsf_camera_frame, rsf_game_host_services, rsf_game_render_pass,
     rsf_render_host_setup,
 };
+use rsf_graphics::dxgi_format::half_to_f32;
+use rsf_test_support::d3d12::transition;
 use std::{
     ffi::{CStr, CString, c_char, c_void},
     ptr,
@@ -155,9 +154,9 @@ impl Inputs {
         pass.camera.frame_time_seconds = 1.0 / 60.0;
         math::set_matrices(&mut pass)?;
         if backend == 0 {
-            gpu.barrier(&self.color, SHADER_READ, COPY_SOURCE);
+            transition(&gpu.list, &self.color, SHADER_READ, COPY_SOURCE);
             unsafe { gpu.list.CopyResource(&self.output, &self.color) };
-            gpu.barrier(&self.color, COPY_SOURCE, SHADER_READ);
+            transition(&gpu.list, &self.color, COPY_SOURCE, SHADER_READ);
             pass.color_output = ptr::null_mut();
             pass.role = RSF_GAME_RENDER_FG_INPUTS;
         }
@@ -447,7 +446,7 @@ fn run(args: &Args) -> Result<i32> {
             rdr2::live_switches(&gpu, &host, &mut pass, &inputs.output, &readback, ini)?;
         }
     }
-    let [r, g, b] = readback.center_rgb()?.map(dxgi_format::half_to_f32);
+    let [r, g, b] = readback.center_rgb()?.map(half_to_f32);
     eprintln!("GPU output center RGB {r:.4} {g:.4} {b:.4}");
     drop(sr);
     if let Some(shared) = shared {

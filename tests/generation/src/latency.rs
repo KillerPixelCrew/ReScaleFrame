@@ -5,8 +5,8 @@ use crate::sys::*;
 use crate::sys::{
     RSF_STREAMLINE_HOST_ABI_VERSION, rsf_streamline_graphics, rsf_streamline_host_setup,
 };
+use rsf_test_support::d3d12::transition_barrier;
 use std::ffi::{CStr, c_char, c_int};
-use std::mem::ManuallyDrop;
 use std::ptr::null_mut;
 use windows::Win32::Graphics::{
     Direct3D12::*,
@@ -73,20 +73,7 @@ fn record(
     rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     simulation: f32,
 ) {
-    let transition = |from, to| D3D12_RESOURCE_BARRIER {
-        Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
-        Anonymous: D3D12_RESOURCE_BARRIER_0 {
-            Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
-                pResource: ManuallyDrop::new(Some(unsafe {
-                    ID3D12Resource::from_raw(buffer.as_raw())
-                })),
-                Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                StateBefore: from,
-                StateAfter: to,
-            }),
-        },
-        ..Default::default()
-    };
+    let transition = |from, to| transition_barrier(buffer, from, to);
     unsafe {
         list.ResourceBarrier(&[transition(
             D3D12_RESOURCE_STATE_PRESENT,

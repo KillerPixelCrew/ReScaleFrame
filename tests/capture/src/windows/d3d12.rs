@@ -2,9 +2,9 @@
 use super::{bundles, contents, directory_argument, entry, root, utf8};
 use crate::sys::*;
 use rsf_game_sys::{RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_NO_SR, rsf_frame_record};
+use rsf_test_support::d3d12::{buffer, committed, copy_location, footprint, transition};
 use rsf_test_support::frame_record;
 use std::ffi::{CStr, c_char, c_int};
-use std::mem::ManuallyDrop;
 use std::{fs, path::Path, ptr};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -25,33 +25,8 @@ fn warp() -> Option<ID3D12Device> {
         .map(|(_, device)| device)
 }
 
-fn resource(
-    device: &ID3D12Device,
-    heap: D3D12_HEAP_TYPE,
-    desc: &D3D12_RESOURCE_DESC,
-    state: D3D12_RESOURCE_STATES,
-) -> ID3D12Resource {
-    let heap = D3D12_HEAP_PROPERTIES {
-        Type: heap,
-        ..Default::default()
-    };
-    let mut resource = None;
-    unsafe {
-        device.CreateCommittedResource(
-            &heap,
-            D3D12_HEAP_FLAG_NONE,
-            desc,
-            state,
-            None,
-            &mut resource,
-        )
-    }
-    .expect("allocate fixture resource");
-    resource.unwrap()
-}
-
 fn texture(device: &ID3D12Device) -> ID3D12Resource {
-    resource(
+    committed(
         device,
         D3D12_HEAP_TYPE_DEFAULT,
         &D3D12_RESOURCE_DESC {
@@ -70,32 +45,7 @@ fn texture(device: &ID3D12Device) -> ID3D12Resource {
         },
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
     )
-}
-
-fn borrow(resource: &ID3D12Resource) -> ManuallyDrop<Option<ID3D12Resource>> {
-    ManuallyDrop::new(Some(unsafe { ID3D12Resource::from_raw(resource.as_raw()) }))
-}
-
-fn transition(
-    list: &ID3D12GraphicsCommandList,
-    resource: &ID3D12Resource,
-    before: D3D12_RESOURCE_STATES,
-    after: D3D12_RESOURCE_STATES,
-) {
-    unsafe {
-        list.ResourceBarrier(&[D3D12_RESOURCE_BARRIER {
-            Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
-            Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
-            Anonymous: D3D12_RESOURCE_BARRIER_0 {
-                Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
-                    pResource: borrow(resource),
-                    Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                    StateBefore: before,
-                    StateAfter: after,
-                }),
-            },
-        }]);
-    }
+    .expect("allocate fixture resource")
 }
 
 fn upload(
@@ -103,37 +53,8 @@ fn upload(
     list: &ID3D12GraphicsCommandList,
     source: &ID3D12Resource,
 ) -> ID3D12Resource {
-    let (mut footprint, mut bytes) = (D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default(), 0);
-    unsafe {
-        device.GetCopyableFootprints(
-            &source.GetDesc(),
-            0,
-            1,
-            0,
-            Some(&mut footprint),
-            None,
-            None,
-            Some(&mut bytes),
-        )
-    };
-    let upload = resource(
-        device,
-        D3D12_HEAP_TYPE_UPLOAD,
-        &D3D12_RESOURCE_DESC {
-            Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
-            Width: bytes,
-            Height: 1,
-            DepthOrArraySize: 1,
-            MipLevels: 1,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
-            ..Default::default()
-        },
-        D3D12_RESOURCE_STATE_GENERIC_READ,
-    );
+    let (footprint, bytes) = footprint(device, &unsafe { source.GetDesc() });
+    let upload = buffer(device, bytes, D3D12_HEAP_TYPE_UPLOAD).expect("allocate fixture resource");
     let mut mapped = ptr::null_mut();
     unsafe { upload.Map(0, None, Some(&mut mapped)) }.expect("map padded source upload");
     assert!(!mapped.is_null());
@@ -155,20 +76,8 @@ fn upload(
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
         D3D12_RESOURCE_STATE_COPY_DEST,
     );
-    let from = D3D12_TEXTURE_COPY_LOCATION {
-        pResource: borrow(&upload),
-        Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
-        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-            PlacedFootprint: footprint,
-        },
-    };
-    let to = D3D12_TEXTURE_COPY_LOCATION {
-        pResource: borrow(source),
-        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-            SubresourceIndex: 0,
-        },
-    };
+    let from = copy_location(&upload, Some(footprint));
+    let to = copy_location(source, None);
     unsafe { list.CopyTextureRegion(&to, 0, 0, 0, &from, None) };
     transition(
         list,

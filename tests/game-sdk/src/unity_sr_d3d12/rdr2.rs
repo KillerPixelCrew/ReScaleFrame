@@ -8,6 +8,7 @@ use rsf_game_sys::{
     rsf_game_host_services, rsf_game_latency_event, rsf_game_render_pass,
 };
 use rsf_test_support::Window;
+use rsf_test_support::d3d12::transition;
 use std::{ptr, thread, time::Duration};
 use windows::{
     Win32::{
@@ -53,10 +54,10 @@ pub(super) fn record_scene(
     output: &ID3D12Resource,
 ) {
     if let Some(render) = host.render_pass {
-        gpu.barrier(output, COPY_DEST, RENDER_TARGET);
+        transition(&gpu.list, output, COPY_DEST, RENDER_TARGET);
         let scene = scene_pass(pass, output);
         unsafe { render(host.user, gpu.list.as_raw(), &scene, 0) };
-        gpu.barrier(output, RENDER_TARGET, COPY_DEST);
+        transition(&gpu.list, output, RENDER_TARGET, COPY_DEST);
     }
 }
 
@@ -120,7 +121,7 @@ pub(super) fn reuse_slot(
         "missing host submission receipt callback",
     )?;
     gpu.reset()?;
-    gpu.barrier(output, COPY_SOURCE, COPY_DEST);
+    transition(&gpu.list, output, COPY_SOURCE, COPY_DEST);
     pass.native_frame = 5;
     check(
         unsafe { upscale(host.user, gpu.list.as_raw(), pass) } == 0,
@@ -179,7 +180,7 @@ pub(super) fn live_switches(
         // Exercise the public live INI poll.
         thread::sleep(Duration::from_millis(1100));
         gpu.reset()?;
-        gpu.barrier(output, COPY_SOURCE, COPY_DEST);
+        transition(&gpu.list, output, COPY_SOURCE, COPY_DEST);
         pass.native_frame += 1;
         check(
             unsafe { upscale(host.user, gpu.list.as_raw(), pass) } == 0,
@@ -383,7 +384,7 @@ pub(super) fn cold_generation(
         let target: ID3D12Resource = unsafe { chain.GetBuffer(chain.GetCurrentBackBufferIndex()) }?;
         let handle = unsafe { rtv.GetCPUDescriptorHandleForHeapStart() };
         unsafe { gpu.device.CreateRenderTargetView(&target, None, handle) };
-        gpu.barrier(&target, PRESENT, RENDER_TARGET);
+        transition(&gpu.list, &target, PRESENT, RENDER_TARGET);
         unsafe {
             gpu.list
                 .ClearRenderTargetView(handle, &[0.25, 0.5, 0.75, 1.0], None)
@@ -391,7 +392,7 @@ pub(super) fn cold_generation(
         let mut scene = scene_pass(&pass, &target);
         scene.swapchain = chain.as_raw();
         unsafe { render(host.user, gpu.list.as_raw(), &scene, 0) };
-        gpu.barrier(&target, RENDER_TARGET, PRESENT);
+        transition(&gpu.list, &target, RENDER_TARGET, PRESENT);
         gpu.submit(host, frame)?;
         latency(
             host,

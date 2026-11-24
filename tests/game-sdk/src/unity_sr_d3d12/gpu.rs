@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 use super::{HEIGHT, Result, WIDTH, check, enabled};
 use rsf_game_sys::rsf_game_host_services;
+use rsf_test_support::d3d12::{buffer, committed, copy_location, footprint, transition};
 use std::{
     ffi::{CStr, c_void},
-    mem::ManuallyDrop,
     os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
     ptr,
 };
@@ -150,30 +150,6 @@ impl Gpu {
         wait(&self.queue, &self.fence, value)
     }
 
-    fn resource(
-        &self,
-        heap: D3D12_HEAP_TYPE,
-        desc: &D3D12_RESOURCE_DESC,
-        state: D3D12_RESOURCE_STATES,
-    ) -> Result<ID3D12Resource> {
-        let properties = D3D12_HEAP_PROPERTIES {
-            Type: heap,
-            ..Default::default()
-        };
-        let mut resource = None;
-        unsafe {
-            self.device.CreateCommittedResource(
-                &properties,
-                D3D12_HEAP_FLAG_NONE,
-                desc,
-                state,
-                None,
-                &mut resource,
-            )?;
-        }
-        resource.ok_or_else(|| "CreateCommittedResource returned null".into())
-    }
-
     pub fn texture(
         &self,
         width: u32,
@@ -190,7 +166,8 @@ impl Gpu {
         } else {
             format
         };
-        self.resource(
+        Ok(committed(
+            &self.device,
             D3D12_HEAP_TYPE_DEFAULT,
             &D3D12_RESOURCE_DESC {
                 Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
@@ -207,54 +184,12 @@ impl Gpu {
                 ..Default::default()
             },
             COPY_DEST,
-        )
-    }
-
-    fn buffer(&self, bytes: u64, heap: D3D12_HEAP_TYPE) -> Result<ID3D12Resource> {
-        let state = if heap == D3D12_HEAP_TYPE_READBACK {
-            COPY_DEST
-        } else {
-            D3D12_RESOURCE_STATE_GENERIC_READ
-        };
-        self.resource(
-            heap,
-            &D3D12_RESOURCE_DESC {
-                Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
-                Width: bytes,
-                Height: 1,
-                DepthOrArraySize: 1,
-                MipLevels: 1,
-                SampleDesc: DXGI_SAMPLE_DESC {
-                    Count: 1,
-                    Quality: 0,
-                },
-                Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
-                ..Default::default()
-            },
-            state,
-        )
-    }
-
-    fn footprint(&self, image: &ID3D12Resource) -> (D3D12_PLACED_SUBRESOURCE_FOOTPRINT, u64) {
-        let (mut layout, mut bytes) = (D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default(), 0);
-        unsafe {
-            self.device.GetCopyableFootprints(
-                &image.GetDesc(),
-                0,
-                1,
-                0,
-                Some(&mut layout),
-                None,
-                None,
-                Some(&mut bytes),
-            );
-        }
-        (layout, bytes)
+        )?)
     }
 
     pub fn upload(&self, image: &ID3D12Resource, pixel: &[u8]) -> Result<ID3D12Resource> {
-        let (layout, bytes) = self.footprint(image);
-        let buffer = self.buffer(bytes, D3D12_HEAP_TYPE_UPLOAD)?;
+        let (layout, bytes) = footprint(&self.device, &unsafe { image.GetDesc() });
+        let buffer = buffer(&self.device, bytes, D3D12_HEAP_TYPE_UPLOAD)?;
         let by = bytes as usize;
         let pitch = layout.Footprint.RowPitch as usize;
         let row_bytes = layout.Footprint.Width as usize * pixel.len();
@@ -277,20 +212,20 @@ impl Gpu {
         }
         unsafe { buffer.Unmap(0, None) };
         self.copy(image, None, &buffer, Some(layout));
-        self.barrier(image, COPY_DEST, SHADER_READ);
+        transition(&self.list, image, COPY_DEST, SHADER_READ);
         Ok(buffer)
     }
 
     pub fn readback(&self, image: &ID3D12Resource) -> Result<Readback> {
-        let (layout, bytes) = self.footprint(image);
+        let (layout, bytes) = footprint(&self.device, &unsafe { image.GetDesc() });
         Ok(Readback {
-            resource: self.buffer(bytes, D3D12_HEAP_TYPE_READBACK)?,
+            resource: buffer(&self.device, bytes, D3D12_HEAP_TYPE_READBACK)?,
             layout,
         })
     }
 
     pub fn copy_to_readback(&self, image: &ID3D12Resource, target: &Readback) {
-        self.barrier(image, COPY_DEST, COPY_SOURCE);
+        transition(&self.list, image, COPY_DEST, COPY_SOURCE);
         self.copy(&target.resource, Some(target.layout), image, None);
     }
 
@@ -303,35 +238,13 @@ impl Gpu {
     ) {
         unsafe {
             self.list.CopyTextureRegion(
-                &location(target, target_layout),
+                &copy_location(target, target_layout),
                 0,
                 0,
                 0,
-                &location(source, source_layout),
+                &copy_location(source, source_layout),
                 None,
             );
-        }
-    }
-
-    pub fn barrier(
-        &self,
-        resource: &ID3D12Resource,
-        before: D3D12_RESOURCE_STATES,
-        after: D3D12_RESOURCE_STATES,
-    ) {
-        unsafe {
-            self.list.ResourceBarrier(&[D3D12_RESOURCE_BARRIER {
-                Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
-                Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
-                Anonymous: D3D12_RESOURCE_BARRIER_0 {
-                    Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
-                        pResource: borrowed(resource),
-                        Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                        StateBefore: before,
-                        StateAfter: after,
-                    }),
-                },
-            }]);
         }
     }
 
@@ -391,36 +304,6 @@ impl Gpu {
     }
 }
 
-fn borrowed(resource: &ID3D12Resource) -> ManuallyDrop<Option<ID3D12Resource>> {
-    // Resource ownership stays with the frame fixture until its GPU fence completes.
-    ManuallyDrop::new(Some(unsafe { ID3D12Resource::from_raw(resource.as_raw()) }))
-}
-
-fn location(
-    resource: &ID3D12Resource,
-    layout: Option<D3D12_PLACED_SUBRESOURCE_FOOTPRINT>,
-) -> D3D12_TEXTURE_COPY_LOCATION {
-    let (kind, details) = match layout {
-        Some(footprint) => (
-            D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
-            D3D12_TEXTURE_COPY_LOCATION_0 {
-                PlacedFootprint: footprint,
-            },
-        ),
-        None => (
-            D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-            D3D12_TEXTURE_COPY_LOCATION_0 {
-                SubresourceIndex: 0,
-            },
-        ),
-    };
-    D3D12_TEXTURE_COPY_LOCATION {
-        pResource: borrowed(resource),
-        Type: kind,
-        Anonymous: details,
-    }
-}
-
 pub(super) fn wait(queue: &ID3D12CommandQueue, fence: &ID3D12Fence, value: u64) -> Result<()> {
     let event = unsafe { CreateEventW(None, false, false, PCWSTR::null()) }?;
     let event = unsafe { OwnedHandle::from_raw_handle(event.0) };
@@ -434,7 +317,6 @@ pub(super) fn wait(queue: &ID3D12CommandQueue, fence: &ID3D12Fence, value: u64) 
         )
     }
 }
-
 pub(super) struct Readback {
     resource: ID3D12Resource,
     layout: D3D12_PLACED_SUBRESOURCE_FOOTPRINT,

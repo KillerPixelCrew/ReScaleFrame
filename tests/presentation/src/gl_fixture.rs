@@ -2,8 +2,9 @@
 //! Hardware fixture for the bidirectional GL/D3D12 handoff on the current WGL context.
 use super::{FixtureError, log, require};
 use crate::sys::*;
+use rsf_test_support::d3d12::{copy_location, transition};
 use std::ffi::{CStr, c_char, c_void};
-use std::mem::{ManuallyDrop, transmute};
+use std::mem::transmute;
 use std::ptr::null_mut;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{GetDC, HDC, ReleaseDC};
@@ -124,29 +125,6 @@ impl Drop for Framebuffer {
     }
 }
 
-unsafe fn transition(
-    list: &ID3D12GraphicsCommandList,
-    resource: &ID3D12Resource,
-    from: D3D12_RESOURCE_STATES,
-    to: D3D12_RESOURCE_STATES,
-) {
-    let barrier = D3D12_RESOURCE_BARRIER {
-        Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
-        Anonymous: D3D12_RESOURCE_BARRIER_0 {
-            Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
-                pResource: ManuallyDrop::new(Some(unsafe {
-                    ID3D12Resource::from_raw(resource.as_raw())
-                })),
-                Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                StateBefore: from,
-                StateAfter: to,
-            }),
-        },
-        ..Default::default()
-    };
-    unsafe { list.ResourceBarrier(&[barrier]) };
-}
-
 unsafe fn readback(
     device: &ID3D12Device,
     resource: &ID3D12Resource,
@@ -220,20 +198,8 @@ unsafe fn verify_gl_clear(
             D3D12_RESOURCE_STATE_COMMON,
             D3D12_RESOURCE_STATE_COPY_SOURCE,
         );
-        let from = D3D12_TEXTURE_COPY_LOCATION {
-            pResource: ManuallyDrop::new(Some(ID3D12Resource::from_raw(texture.as_raw()))),
-            Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-                SubresourceIndex: 0,
-            },
-        };
-        let to = D3D12_TEXTURE_COPY_LOCATION {
-            pResource: ManuallyDrop::new(Some(ID3D12Resource::from_raw(readback.as_raw()))),
-            Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
-            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-                PlacedFootprint: footprint,
-            },
-        };
+        let from = copy_location(texture, None);
+        let to = copy_location(&readback, Some(footprint));
         list.CopyTextureRegion(&to, 0, 0, 0, &from, None);
         transition(
             list,

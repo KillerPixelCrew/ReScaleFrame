@@ -7,9 +7,9 @@ use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_SCREEN_FLIGHT, rsf_camera_frame, rsf_frame_record,
     rsf_game_render_pass,
 };
-use rsf_test_support::frame_record;
+use rsf_test_support::d3d12::{copy_location, transition};
+use rsf_test_support::{borrow, frame_record};
 use std::ffi::c_void;
-use std::mem::ManuallyDrop;
 use windows::Win32::Foundation::{HANDLE, RECT, WAIT_OBJECT_0};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::{
@@ -133,33 +133,18 @@ pub(super) unsafe extern "C" fn rsf_fg_bridge_fixture_submit(
     0
 }
 
-unsafe fn borrow<T: Interface>(value: &Raw) -> &T {
-    unsafe { T::from_raw_borrowed(value) }.unwrap()
-}
-
-unsafe fn resource_ref(raw: Raw) -> ManuallyDrop<Option<ID3D12Resource>> {
-    ManuallyDrop::new(Some(unsafe { ID3D12Resource::from_raw(raw) }))
-}
-
 unsafe fn barrier(
     list: &ID3D12GraphicsCommandList,
     resource: Raw,
     from: D3D12_RESOURCE_STATES,
     to: D3D12_RESOURCE_STATES,
 ) {
-    let transition = D3D12_RESOURCE_BARRIER {
-        Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
-        Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
-        Anonymous: D3D12_RESOURCE_BARRIER_0 {
-            Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
-                pResource: unsafe { resource_ref(resource) },
-                Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                StateBefore: from,
-                StateAfter: to,
-            }),
-        },
-    };
-    unsafe { list.ResourceBarrier(&[transition]) };
+    transition(
+        list,
+        unsafe { borrow::<ID3D12Resource>(&resource) },
+        from,
+        to,
+    );
 }
 
 #[unsafe(no_mangle)]
@@ -368,29 +353,20 @@ pub(super) unsafe extern "C" fn rsf_fg_bridge_fixture_capture_flip(
         readback = resource.into_raw();
         unsafe { readback_slot.write(readback) };
     }
-    let source = D3D12_TEXTURE_COPY_LOCATION {
-        pResource: unsafe { resource_ref(back) },
-        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-            SubresourceIndex: 0,
-        },
-    };
-    let target = D3D12_TEXTURE_COPY_LOCATION {
-        pResource: unsafe { resource_ref(readback) },
-        Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
-        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-            PlacedFootprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT {
-                Offset: 0,
-                Footprint: D3D12_SUBRESOURCE_FOOTPRINT {
-                    Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-                    Width: 1,
-                    Height: 1,
-                    Depth: 1,
-                    RowPitch: 256,
-                },
+    let source = copy_location(unsafe { borrow::<ID3D12Resource>(&back) }, None);
+    let target = copy_location(
+        unsafe { borrow::<ID3D12Resource>(&readback) },
+        Some(D3D12_PLACED_SUBRESOURCE_FOOTPRINT {
+            Offset: 0,
+            Footprint: D3D12_SUBRESOURCE_FOOTPRINT {
+                Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                Width: 1,
+                Height: 1,
+                Depth: 1,
+                RowPitch: 256,
             },
-        },
-    };
+        }),
+    );
     let pixel = D3D12_BOX {
         left: 0,
         top: 0,

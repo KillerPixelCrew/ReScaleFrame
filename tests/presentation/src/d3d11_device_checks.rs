@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Draw and readback checks for the linked D3D11 presentation fixture.
+use rsf_test_support::borrow;
 use std::ffi::c_void;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Direct3D11::*;
@@ -21,10 +22,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::Interface;
 
 type Raw = *mut c_void;
-
-unsafe fn borrowed<T: Interface>(value: &Raw) -> &T {
-    unsafe { T::from_raw_borrowed(value) }.unwrap()
-}
 
 fn texture(device: &ID3D11Device, desc: &D3D11_TEXTURE2D_DESC) -> Option<ID3D11Texture2D> {
     let mut texture = None;
@@ -95,8 +92,8 @@ pub(super) unsafe extern "C" fn rsf_d3d11_fixture_inputs(
 ) -> i32 {
     let inputs = unsafe {
         create_inputs(
-            borrowed::<ID3D11Device>(&device),
-            borrowed::<ID3D11DeviceContext>(&context),
+            borrow::<ID3D11Device>(&device),
+            borrow::<ID3D11DeviceContext>(&context),
         )
     };
     let Some(inputs) = inputs else {
@@ -144,9 +141,9 @@ pub(super) unsafe extern "C" fn rsf_d3d11_fixture_red_half(
     let mut red = 0;
     let _ = unsafe {
         stage(
-            borrowed::<ID3D11Device>(&device),
-            borrowed::<ID3D11DeviceContext>(&context),
-            borrowed::<ID3D11Texture2D>(&source),
+            borrow::<ID3D11Device>(&device),
+            borrow::<ID3D11DeviceContext>(&context),
+            borrow::<ID3D11Texture2D>(&source),
             |data| red = data.cast::<u16>().read_unaligned(),
         )
     };
@@ -160,7 +157,7 @@ pub(super) unsafe extern "C" fn rsf_d3d11_fixture_flip_source(
     target: Raw,
     frame: u64,
 ) {
-    let target = unsafe { borrowed::<ID3D11RenderTargetView>(&target) };
+    let target = unsafe { borrow::<ID3D11RenderTargetView>(&target) };
     let Ok(source) =
         (unsafe { target.GetResource() }).and_then(|res| res.cast::<ID3D11Texture2D>())
     else {
@@ -168,8 +165,8 @@ pub(super) unsafe extern "C" fn rsf_d3d11_fixture_flip_source(
     };
     let _ = unsafe {
         stage(
-            borrowed::<ID3D11Device>(&device),
-            borrowed::<ID3D11DeviceContext>(&context),
+            borrow::<ID3D11Device>(&device),
+            borrow::<ID3D11DeviceContext>(&context),
             &source,
             |data| {
                 let [r, g, b, a] = data.cast::<[u8; 4]>().read();
@@ -202,9 +199,9 @@ pub(super) unsafe extern "C" fn rsf_d3d11_fixture_clear_and_present(
 ) -> i32 {
     let (device, context, chain) = unsafe {
         (
-            borrowed::<ID3D11Device>(&device),
-            borrowed::<ID3D11DeviceContext>(&context),
-            borrowed::<IDXGISwapChain>(&chain),
+            borrow::<ID3D11Device>(&device),
+            borrow::<ID3D11DeviceContext>(&context),
+            borrow::<IDXGISwapChain>(&chain),
         )
     };
     if held_resize == 0 {
@@ -260,7 +257,7 @@ fn window_rect(hwnd: HWND, when: &str) -> RECT {
 
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_d3d11_fixture_borderless(chain: Raw, window: Raw) -> i32 {
-    let chain = unsafe { borrowed::<IDXGISwapChain>(&chain) };
+    let chain = unsafe { borrow::<IDXGISwapChain>(&chain) };
     let window = HWND(window);
     let Ok(buffer) = (unsafe { chain.GetBuffer::<ID3D11Texture2D>(0) }) else {
         return 1;
