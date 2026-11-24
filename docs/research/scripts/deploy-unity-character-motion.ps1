@@ -17,10 +17,10 @@ $taskAssetRelative = 'DragNWash_Data/globalgamemanagers.assets'
 $taskAsset = Join-Path $taskGame $taskAssetRelative
 $taskSource = Join-Path $taskPatch 'globalgamemanagers.assets'
 $taskDestination = Join-Path $taskGame 'ReScaleFrame/ReScaleFrame.Unity.Managed.dll'
-if ($taskManifest.game -ne 'drag-n-wash' -or $taskReport.source_sha256 -ne '0948b788c15132fccb447a120daa4ad991ebf7878db7365757381dbb7c0ab4f0' -or
-    $taskReport.shader -ne 'WalkNWashLit' -or $taskReport.pass_name -ne 'ReScaleFrameMotion' -or $taskReport.programs -ne 64 -or
-    @($taskReport.changed_objects).Count -ne 1 -or $taskReport.changed_objects[0] -ne 81) { throw 'Unrecognized character shader patch.' }
-if ((Get-FileHash -LiteralPath (Join-Path $taskGame 'DragNWash.exe')).Hash -ne '5FDFFFE386A2F43B77626CD3D70554D84C6588C94D309544924D6FAB088DDAFC') { throw 'Game executable fingerprint differs.' }
+# The patcher found the shader by name and changed only that object. No game build is pinned: the
+# staged patch must have been built from this installation's current asset (checked below).
+if ($taskManifest.game -ne 'drag-n-wash' -or $taskReport.shader -ne 'WalkNWashLit' -or $taskReport.pass_name -ne 'ReScaleFrameMotion' -or
+    @($taskReport.changed_objects).Count -ne 1) { throw 'Unrecognized character shader patch.' }
 if ((Get-FileHash -LiteralPath $taskSource).Hash -ne $taskReport.patched_sha256) { throw 'Staged shader patch hash differs.' }
 $taskCurrentAsset = (Get-FileHash -LiteralPath $taskAsset).Hash
 $taskExistingPatch = @()

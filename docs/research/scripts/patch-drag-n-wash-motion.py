@@ -23,7 +23,6 @@ import subprocess
 import UnityPy
 from UnityPy.helpers import CompressionHelper
 
-ASSET_SHA256 = "0948b788c15132fccb447a120daa4ad991ebf7878db7365757381dbb7c0ab4f0"
 SHADER = "WalkNWashLit"
 PASS = "ReScaleFrameMotion"
 CONTROL_REGISTER = 256
@@ -261,11 +260,13 @@ def main():
         raise ValueError("The output must be outside the game installation")
     source = args.source_asset or args.game / "DragNWash_Data/globalgamemanagers.assets"
     data = source.read_bytes()
-    if digest(data) != ASSET_SHA256:
-        raise ValueError("Refusing an unrecognized game asset fingerprint")
+    # The source hash is recorded in the report as evidence; the shader is found by name.
     args.output.mkdir(parents=True, exist_ok=True)
     env = UnityPy.load(str(source))
-    target = next(obj for obj in env.objects if obj.type.name == "Shader" and obj.read().m_ParsedForm.m_Name == SHADER)
+    shaders = [obj for obj in env.objects if obj.type.name == "Shader" and obj.read().m_ParsedForm.m_Name == SHADER]
+    if len(shaders) != 1:
+        raise ValueError(f"Expected one {SHADER} shader, found {len(shaders)}")
+    target = shaders[0]
     original_shader = target.read_typetree()
     patched, programs = build_shader(original_shader, args.decompiler.resolve(), args.output, args.reuse_compiled)
     target.save_typetree(patched)
