@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: MIT
 use crate::sys::{
-    RSF_NATIVE_SCENE_PRESENT_DIRECT, rsf_native_present_record, rsf_native_scene_identity,
-    rsf_observer_present_event,
+    RSF_NATIVE_SCENE_PRESENT_DIRECT, rsf_native_present_record, rsf_observer_present_event,
 };
 use crate::{
     com_ref,
-    native_scene::{rsf_native_scene_classify_present, rsf_native_scene_for_window},
+    native_scene::{find_window as scene_for_window, rsf_native_scene_classify_present},
 };
 use core::{
     cell::{Cell, RefCell},
@@ -139,14 +138,6 @@ pub(super) unsafe extern "C" fn rsf_native_window_match(
     };
     unsafe { pass.write(current) };
     1
-}
-
-fn scene_for_window(window: &rsf_game_render_pass) -> Option<rsf_native_scene_identity> {
-    let mut scene = rsf_native_scene_identity {
-        struct_size: size_of::<rsf_native_scene_identity>() as u32,
-        ..Default::default()
-    };
-    (unsafe { rsf_native_scene_for_window(window, &mut scene) } != 0).then_some(scene)
 }
 
 #[unsafe(no_mangle)]

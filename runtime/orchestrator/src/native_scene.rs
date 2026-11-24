@@ -149,7 +149,7 @@ unsafe fn rsf_core_native_scene_texture_binding(
     })
 }
 
-fn find_window(window: &Pass) -> Option<Scene> {
+pub(crate) fn find_window(window: &Pass) -> Option<Scene> {
     if window.role != RSF_GAME_RENDER_WINDOW
         || window.session_id == 0
         || window.source_frame_id == 0

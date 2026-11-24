@@ -226,13 +226,12 @@ pub(crate) unsafe fn rsf_sampler_bias_apply(
         slot_mask,
         bias,
         |original| {
-            let original_ptr = original;
-            let adjusted = unsafe { sampler_desc(original_ptr) }.MipLODBias + bias;
+            let adjusted = unsafe { sampler_desc(original) }.MipLODBias + bias;
             if !(D3D11_MIP_LOD_BIAS_MIN..=D3D11_MIP_LOD_BIAS_MAX).contains(&adjusted) {
                 return None;
             }
-            let replacement = unsafe { clone_sampler(device_ptr, original_ptr, adjusted) }?;
-            Some((unsafe { com_ref::retain(original_ptr) }, replacement))
+            let replacement = unsafe { clone_sampler(device_ptr, original, adjusted) }?;
+            Some((unsafe { com_ref::retain(original) }, replacement))
         },
         Interface::as_raw,
     ) else {
