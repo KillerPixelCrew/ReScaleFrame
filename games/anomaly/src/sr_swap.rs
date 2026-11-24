@@ -307,6 +307,12 @@ impl Swap {
         }
     }
 
+    /// The value at `address`, or None when the guarded copy fails.
+    fn get<T: Plain + Default>(&self, address: Addr) -> Option<T> {
+        let mut value = T::default();
+        self.read(address, &mut value).then_some(value)
+    }
+
     fn write<T: Plain>(&self, address: Addr, value: &T) -> bool {
         // The leaf copies size_of::<T>() bytes into engine memory under its access guard.
         unsafe {
@@ -524,8 +530,10 @@ impl Swap {
         }
         if stage == 2 {
             for offset in self.layout.absent {
-                let mut crt = Addr::default();
-                if !self.read(render_target.at(offset), &mut crt) || !crt.is_null() {
+                if self
+                    .get::<Addr>(render_target.at(offset))
+                    .is_none_or(|crt| !crt.is_null())
+                {
                     return None;
                 }
             }
@@ -626,11 +634,10 @@ impl Swap {
 
     /// MSVC magic static: 0 never initialised, -1 initialisation in progress, anything else initialised.
     fn viewport_initialised(&self) -> bool {
-        let mut guard = 0i32;
         !self.globals.viewport_guard.is_null()
-            && self.read(self.globals.viewport_guard, &mut guard)
-            && guard != 0
-            && guard != -1
+            && self
+                .get::<i32>(self.globals.viewport_guard)
+                .is_some_and(|guard| guard != 0 && guard != -1)
     }
 
     fn open_globals(&mut self) -> bool {
@@ -641,8 +648,7 @@ impl Swap {
             && self.write(g.base_rt, &Addr(self.view.twins.base_rt));
         if ok && !g.viewport.is_null() && self.viewport_initialised() {
             let size = g.viewport.at(self.layout.ssao_viewport_width);
-            let mut saved = [0f32; 2];
-            if self.read(size, &mut saved) {
+            if let Some(saved) = self.get::<[f32; 2]>(size) {
                 self.globals.viewport_size = saved;
                 // Before the write: a partial write is restored too.
                 self.globals.viewport_swapped = true;
@@ -666,19 +672,28 @@ impl Swap {
     /// replaced with output-size ones too.
     fn restore_globals(&mut self, checked: bool, engine_ran: bool) -> bool {
         let g = self.globals;
-        let mut size = [0u32; 2];
+        let window = [self.view.render_width, self.view.render_height];
         if checked
-            && self.read(g.device_size, &mut size)
-            && (size[0] != self.view.render_width || size[1] != self.view.render_height)
+            && self
+                .get::<[u32; 2]>(g.device_size)
+                .is_some_and(|size| size != window)
         {
             self.foreign(c"Device.dwWidth/dwHeight changed inside the world window.");
         }
-        let mut zb = Addr::default();
-        if checked && self.read(g.base_zb, &mut zb) && zb.0 != self.view.twins.depth_dsv {
+        let changed = |address, twin| {
+            checked
+                && self
+                    .get::<Addr>(address)
+                    .is_some_and(|value| value.0 != twin)
+        };
+        let (zb, rt) = (
+            changed(g.base_zb, self.view.twins.depth_dsv),
+            changed(g.base_rt, self.view.twins.base_rt),
+        );
+        if zb {
             self.foreign(c"HW.pBaseZB changed inside the world window.");
         }
-        let mut rt = Addr::default();
-        if checked && self.read(g.base_rt, &mut rt) && rt.0 != self.view.twins.base_rt {
+        if rt {
             self.foreign(c"HW.pBaseRT changed inside the world window.");
         }
         let mut ok = self.write_verified(g.device_size, &[g.width, g.height])
@@ -715,6 +730,11 @@ impl Swap {
         self.write(address, value) && self.read(address, &mut current) && current == *value
     }
 
+    /// The three matrices at `addresses`, read in order until one copy fails.
+    fn matrices(&self, [a, b, c]: [Addr; 3]) -> Option<(Matrix, Matrix, Matrix)> {
+        Some((self.get(a)?, self.get(b)?, self.get(c)?))
+    }
+
     fn write_matrix(&self, address: Addr, value: &Matrix) -> bool {
         let mut current = [0u32; 16];
         let bits = value.map(f32::to_bits);
@@ -739,15 +759,10 @@ impl Swap {
             self.projection.view = view_at;
             self.projection.project = project;
             self.projection.full = full;
-            let mut saved_project = Matrix::default();
-            let mut view = Matrix::default();
-            let mut saved_full = Matrix::default();
-            if !self.read(project, &mut saved_project)
-                || !self.read(view_at, &mut view)
-                || !self.read(full, &mut saved_full)
-            {
+            let Some((saved_project, view, saved_full)) = self.matrices([project, view_at, full])
+            else {
                 return false;
-            }
+            };
             self.projection.saved_project = saved_project;
             self.projection.saved_full = saved_full;
             match jitter_projection(
@@ -784,10 +799,9 @@ impl Swap {
         if facts.mip_bias && !facts.sampler_bias.is_null() {
             let field = Addr(facts.sampler_bias);
             self.bias.field = field;
-            let mut saved = 0f32;
-            if !self.read(field, &mut saved) {
+            let Some(saved) = self.get::<f32>(field) else {
                 return false;
-            }
+            };
             self.bias.saved = saved;
             if !saved.is_finite() {
                 return false;
@@ -799,8 +813,7 @@ impl Swap {
                 self.view.counters.mip_unchanged += 1;
             } else {
                 self.bias.applied = true;
-                let mut now = 0f32;
-                if !self.set_mip_bias(window) || !self.read(field, &mut now) || now != window {
+                if !self.set_mip_bias(window) || self.get::<f32>(field) != Some(window) {
                     return false;
                 }
                 self.view.counters.mip_applied += 1;
@@ -815,11 +828,11 @@ impl Swap {
         if p.written {
             // Outside the temporary sun window, first-person sites restore the jittered main projection themselves.
             // Anything else is foreign: restore anyway and refuse further swaps.
-            let mut current = Matrix::default();
             if !rollback
                 && !p.sun_suspended
-                && self.read(p.project, &mut current)
-                && current != p.jittered
+                && self
+                    .get::<Matrix>(p.project)
+                    .is_some_and(|current| current != p.jittered)
             {
                 self.foreign(c"Device.mProject changed inside the world window.");
             }
@@ -840,13 +853,15 @@ impl Swap {
         }
         let b = self.bias;
         if b.applied {
-            let mut current = 0f32;
-            if !rollback && self.read(b.field, &mut current) && current != b.window {
+            if !rollback
+                && self
+                    .get::<f32>(b.field)
+                    .is_some_and(|current| current != b.window)
+            {
                 self.foreign(c"The sampler mip bias changed inside the world window.");
             }
             // Also on shutdown: nothing else would ever put the user's bias back.
-            if self.set_mip_bias(b.saved) && self.read(b.field, &mut current) && current == b.saved
-            {
+            if self.set_mip_bias(b.saved) && self.get::<f32>(b.field) == Some(b.saved) {
                 self.view.counters.mip_restored += 1;
                 self.bias.applied = false;
             } else {
@@ -879,15 +894,13 @@ impl Swap {
             if !closing {
                 // A later cleanup retry must still see the original binding
                 // chain before it writes through saved engine addresses.
-                let mut crt = Addr::default();
-                let mut texture = Addr::default();
-                if !self.read(
-                    self.render_target.at(self.layout.world[slot].offset),
-                    &mut crt,
-                ) || crt.0 != target.crt
-                    || !self.read(crt.at(self.layout.crt_texture), &mut texture)
-                    || texture.0 != target.texture
-                {
+                let crt = self.get::<Addr>(self.render_target.at(self.layout.world[slot].offset));
+                if crt.is_none_or(|crt| {
+                    crt.0 != target.crt
+                        || self
+                            .get::<Addr>(crt.at(self.layout.crt_texture))
+                            .is_none_or(|texture| texture.0 != target.texture)
+                }) {
                     self.fault(c"The engine target changed before restoration could be verified.");
                     continue;
                 }
@@ -989,9 +1002,8 @@ impl Swap {
             return self.skip(RSF_ANOMALY_SWAP_SKIP_LAYOUT);
         };
         if stage2 {
-            let mut size = [0u32; 2];
-            if !self.read(Addr(facts.device_size), &mut size)
-                || size != [facts.device_width, facts.device_height]
+            if self.get::<[u32; 2]>(Addr(facts.device_size))
+                != Some([facts.device_width, facts.device_height])
             {
                 self.refuse(c"Device.dwWidth/dwHeight do not match the frame facts.");
                 return self.skip(RSF_ANOMALY_SWAP_SKIP_LAYOUT);
@@ -1226,12 +1238,13 @@ impl Swap {
         if !self.view.open || self.spatial_recovery || !p.applied || !p.written || p.sun_suspended {
             return false;
         }
-        let mut current = Matrix::default();
-        let mut sun_full = Matrix::default();
-        let mut ok = self.read(p.project, &mut current)
-            && current == p.jittered
-            && self.read(p.full, &mut sun_full);
-        if ok {
+        let sun_full = if self.get::<Matrix>(p.project) == Some(p.jittered) {
+            self.get::<Matrix>(p.full)
+        } else {
+            None
+        };
+        let mut ok = false;
+        if let Some(sun_full) = sun_full {
             self.projection.sun_full = sun_full;
             // Before the writes: the rollback restores partial writes too.
             self.projection.sun_suspended = true;
@@ -1287,16 +1300,10 @@ impl Swap {
         if self.spatial_recovery || !p.written || !p.applied || p.sun_suspended {
             return;
         }
-        let mut current = Matrix::default();
-        let mut view = Matrix::default();
-        let mut saved_full = Matrix::default();
-        if !self.read(p.project, &mut current)
-            || !self.read(p.view, &mut view)
-            || !self.read(p.full, &mut saved_full)
-        {
+        let Some((current, view, saved_full)) = self.matrices([p.project, p.view, p.full]) else {
             self.view.counters.fp_foreign += 1;
             return;
-        }
+        };
         match first_person_action(&current, &p.jittered, p.last_first_person.as_ref()) {
             FirstPerson::AlreadyJittered => {
                 self.view.counters.fp_already += 1;
