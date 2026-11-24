@@ -64,18 +64,21 @@ thread_local! {
 }
 
 const PLATFORM: Platform = Platform {
-    headers: ImageHeaders { dos, pe },
-    read,
+    headers: ImageHeaders {
+        dos: Some(dos),
+        pe: Some(pe),
+    },
+    read: Some(read),
     hooks: HookOps {
-        initialize,
-        create,
-        remove_unqueued: remove,
-        queue,
-        apply,
+        initialize: Some(initialize),
+        create: Some(create),
+        remove_unqueued: Some(remove),
+        queue: Some(queue),
+        apply: Some(apply),
     },
 };
 
-unsafe extern "C" fn dos(_: Address, out: *mut DosFacts) -> bool {
+unsafe extern "C" fn dos(_: *const c_void, out: *mut DosFacts) -> bool {
     FAKE.with_borrow(|fake| {
         let Some(dos) = fake.dos else { return false };
         unsafe { out.write(dos) };
@@ -83,7 +86,7 @@ unsafe extern "C" fn dos(_: Address, out: *mut DosFacts) -> bool {
     })
 }
 
-unsafe extern "C" fn pe(_: Address, _: Address, out: *mut PeFacts) -> bool {
+unsafe extern "C" fn pe(_: *const c_void, _: *const c_void, out: *mut PeFacts) -> bool {
     FAKE.with_borrow(|fake| {
         let Some(pe) = fake.pe else { return false };
         unsafe { out.write(pe) };
@@ -92,8 +95,8 @@ unsafe extern "C" fn pe(_: Address, _: Address, out: *mut PeFacts) -> bool {
 }
 
 unsafe extern "C" fn read(
-    _: Address,
-    _: Address,
+    _: *const c_void,
+    _: *const c_void,
     out: Address,
     size: usize,
     executable: bool,
@@ -226,7 +229,7 @@ fn sites(originals: &mut [Address]) -> Vec<Site> {
         .iter_mut()
         .enumerate()
         .map(|(i, original)| Site {
-            _name: ptr::null(),
+            name: ptr::null(),
             rva: RVA + (i * GUARD_BYTES) as u32,
             expected: CODE,
             replacement: ptr::dangling_mut(),

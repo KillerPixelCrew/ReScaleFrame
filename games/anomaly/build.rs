@@ -15,6 +15,9 @@ fn bindings() {
         "motion_frame_target.h",
         "motion_target_platform.h",
         "native_geometry/fixture_platform.h",
+        "native_geometry_platform.h",
+        "native_hook_ops.h",
+        "native_hooks.h",
         "native_observer_platform.h",
         "overlay_platform.h",
         "shader_frame_layout.h",
@@ -29,6 +32,7 @@ fn bindings() {
                 &["Eq", "Ord", "PartialEq", "PartialOrd"]
             }
             "rsf_anomaly_sr_settings" => &["PartialEq", "Eq"],
+            "rsf_anomaly_geometry_engine" => &["PartialEq"],
             "rsf_anomaly_plan_matrix"
             | "rsf_anomaly_plan_extent"
             | "rsf_anomaly_plan_vec2"

@@ -75,8 +75,7 @@ fn fault() {
     CAPTURE.store(false, Ordering::Release);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_geometry_binding() -> Engine {
+fn rsf_anomaly_geometry_binding() -> Engine {
     *ENGINE.read().unwrap()
 }
 
@@ -95,7 +94,11 @@ fn guard(platform: &Platform, engine: Engine, size: u32) -> bool {
     if size != image_size {
         return false;
     }
-    let image = Image::new(with_exposed_provenance(engine.module), size, platform.read);
+    let image = Image::new(
+        with_exposed_provenance(engine.module),
+        size,
+        platform.read.unwrap(),
+    );
     // The profile tables are static and their unique guards are NUL-terminated.
     unsafe {
         image.matches_sites(geometry.layout_sites, geometry.unique)
@@ -109,7 +112,7 @@ extern "C" fn rsf_anomaly_geometry_install(platform: &Platform, engine: Engine, 
     if HOOKS.load(Ordering::Acquire) || !guard(platform, engine, size) {
         return false;
     }
-    let created = unsafe { (platform.created)() };
+    let created = unsafe { (platform.created.unwrap())() };
     // Trampolines are pinned to the original exact executable and layout.
     if created && rsf_anomaly_geometry_binding() != engine {
         return false;
@@ -122,9 +125,9 @@ extern "C" fn rsf_anomaly_geometry_install(platform: &Platform, engine: Engine, 
     }
     let installed = unsafe {
         if created {
-            (platform.enable)()
+            (platform.enable.unwrap())()
         } else {
-            (platform.install)(engine, size)
+            (platform.install.unwrap())(engine, size)
         }
     };
     HOOKS.store(installed, Ordering::Release);
@@ -139,10 +142,10 @@ extern "C" fn rsf_anomaly_geometry_install(platform: &Platform, engine: Engine, 
 extern "C" fn rsf_anomaly_geometry_disable(platform: &Platform) -> bool {
     let _control = CONTROL.lock().unwrap();
     CAPTURE.store(false, Ordering::Release);
-    if !unsafe { (platform.created)() } {
+    if !unsafe { (platform.created.unwrap())() } {
         return false;
     }
-    let disabled = unsafe { (platform.disable)() };
+    let disabled = unsafe { (platform.disable.unwrap())() };
     if disabled {
         HOOKS.store(false, Ordering::Release);
     }
@@ -235,7 +238,7 @@ extern "C" fn rsf_anomaly_geometry_reset() {
 }
 
 fn read_pointer(platform: &Platform, address: usize) -> Option<usize> {
-    read_bytes(platform.read, address).map(usize::from_ne_bytes)
+    read_bytes(platform.read.unwrap(), address).map(usize::from_ne_bytes)
 }
 
 fn read_children(
@@ -254,14 +257,17 @@ fn read_children(
     }
     let address = visual.checked_add(HIERARCHY_CHILDREN_OFFSET)?;
     let size = size_of::<ChildRange>();
-    let borrowed = i32::from_ne_bytes(read_bytes(platform.read, address.checked_add(size)?)?);
+    let borrowed = i32::from_ne_bytes(read_bytes(
+        platform.read.unwrap(),
+        address.checked_add(size)?,
+    )?);
     if borrowed != 0 {
         return Some(range);
     }
     // The native vector is three pointer-sized addresses. The profiled layout is asserted
     // by the geometry evidence, and the copy is guarded even when an engine object has gone away.
     unsafe {
-        (platform.read)(
+        (platform.read.unwrap())(
             ptr::from_mut(&mut range).cast(),
             with_exposed_provenance(address),
             size,
@@ -378,7 +384,7 @@ extern "C" fn rsf_anomaly_geometry_model_delete(
 fn read_pass(platform: &Platform, engine: Engine) -> u8 {
     let phase = engine_layout(engine)
         .and_then(|layout| engine.module.checked_add(layout.phase as usize))
-        .and_then(|address| read_bytes(platform.read, address))
+        .and_then(|address| read_bytes(platform.read.unwrap(), address))
         .map(u32::from_ne_bytes);
     match phase {
         Some(0) => RSF_ANOMALY_PASS_MAIN as u8,
@@ -401,7 +407,7 @@ fn world_address(engine: Engine) -> Option<usize> {
 }
 
 fn read_world(platform: &Platform, address: usize) -> Option<NativeMatrix> {
-    let bytes = read_bytes::<64>(platform.read, address)?;
+    let bytes = read_bytes::<64>(platform.read.unwrap(), address)?;
     let (words, _) = bytes.as_chunks::<4>();
     Some(std::array::from_fn(|i| f32::from_ne_bytes(words[i])))
 }
@@ -424,7 +430,11 @@ fn skin_mode(platform: &Platform, skeleton: usize) -> Option<u16> {
     if skeleton == 0 {
         return None;
     }
-    read_bytes(platform.read, skeleton.checked_add(SKELETON_MODE_OFFSET)?).map(u16::from_ne_bytes)
+    read_bytes(
+        platform.read.unwrap(),
+        skeleton.checked_add(SKELETON_MODE_OFFSET)?,
+    )
+    .map(u16::from_ne_bytes)
 }
 
 fn affine_matrix(native: &NativeMatrix) -> Option<Matrix> {
@@ -468,7 +478,7 @@ unsafe extern "C" fn rsf_anomaly_geometry_visual_source_enter(
         .and_then(|offset| address.checked_add(offset))
         .unwrap_or(0);
     visual.kind = kind;
-    visual.visual_type = source as u8;
+    visual.type_ = source as u8;
     classify_visual(platform, visual);
     unsafe { scopes::enter_visual(node) };
 }
@@ -497,7 +507,7 @@ fn classify_visual(platform: &Platform, visual: &mut Visual) {
     }
     let verdict = classify(&Draw {
         pass: i32::from(pass),
-        visual_type: i32::from(visual.visual_type),
+        visual_type: i32::from(visual.type_),
         lookup: probe.lookup as i32,
         capturing: u32::from(capturing),
         world_readable: u32::from(world_for_classification.is_some()),
@@ -507,12 +517,12 @@ fn classify_visual(platform: &Platform, visual: &mut Visual) {
         ),
         foliage_identity: u32::from(rsf_anomaly_geometry_foliage()),
     });
-    visual.registry = &REGISTRY;
+    visual.registry = (&raw const REGISTRY).cast();
     visual.key = probe.key;
     visual.world = world;
     visual.pass = pass;
     visual.verdict = verdict as u8;
-    COUNTERS.draws[pass as usize][visual.visual_type as usize][verdict as usize].increment();
+    COUNTERS.draws[pass as usize][visual.type_ as usize][verdict as usize].increment();
     if probe.key.generation != 0 || verdict == RSF_ANOMALY_DRAW_IDENTIFIED_FOLIAGE {
         COUNTERS.draws_identified.increment();
     } else {
@@ -524,7 +534,11 @@ fn live(visual: &Visual) -> bool {
     let key = visual.key;
     // The registry is owned by the adapter or the enclosing native DrawScope.
     key.generation != 0
-        && find(unsafe { &*visual.registry }, key.owner, key.visual) == key.generation
+        && find(
+            unsafe { &*visual.registry.cast::<IdentityRegistry>() },
+            key.owner,
+            key.visual,
+        ) == key.generation
 }
 
 #[unsafe(no_mangle)]
@@ -541,7 +555,7 @@ fn palette(platform: &Platform, visual: &Visual) -> Option<(usize, u32)> {
     }
     let mode = skin_mode(platform, visual.skeleton)?;
     let count = u32::from_ne_bytes(read_bytes(
-        platform.read,
+        platform.read.unwrap(),
         visual.skeleton.checked_add(SKELETON_COUNT_OFFSET)?,
     )?);
     if !(2..=5).contains(&mode) || !(1..=MAX_CAPTURE_BONES).contains(&count) {
@@ -584,7 +598,7 @@ fn write_palette(read: ReadBones, instances: usize, output: &mut [Matrix]) -> bo
                 first,
                 BONE_INSTANCE_STRIDE,
                 output.len() as u32,
-                native.as_mut_ptr(),
+                native.as_mut_ptr().cast(),
             )
         } {
             return false;
@@ -619,17 +633,20 @@ fn snapshot(
         .and_then(affine_matrix);
     let (instances, count) = palette(platform, visual).unwrap_or_default();
     let storage = unsafe {
-        (writer.begin)(
+        (writer.begin.unwrap())(
             user,
             visual,
-            world.as_ref().map_or(ptr::null(), ptr::from_ref),
+            world
+                .as_ref()
+                .map_or(ptr::null(), |world| ptr::from_ref(world).cast()),
             count,
         )
     };
     let layout = if count != 0 && !storage.is_null() {
         // The native writer lends count live matrices exclusively until finish.
-        let output = unsafe { std::slice::from_raw_parts_mut(storage, count as usize) };
-        if write_palette(platform.bones, instances, output) {
+        let output =
+            unsafe { std::slice::from_raw_parts_mut(storage.cast::<Matrix>(), count as usize) };
+        if write_palette(platform.bones.unwrap(), instances, output) {
             SBONES_PALETTE_LAYOUT
         } else {
             0
@@ -638,7 +655,7 @@ fn snapshot(
         0
     };
     Some(Snapshot {
-        data: unsafe { (writer.finish)(user, layout) },
+        data: unsafe { (writer.finish.unwrap())(user, layout) },
         has_world: world.is_some(),
         has_palette: layout != 0,
     })
@@ -671,7 +688,7 @@ unsafe extern "C" fn rsf_anomaly_geometry_observe(
         tree_lod: -1,
         pass,
         visual_pass: RSF_ANOMALY_PASS_MAIN as u8,
-        visual_type: RSF_ANOMALY_TYPE_STATIC as u8,
+        type_: RSF_ANOMALY_TYPE_STATIC as u8,
         verdict: RSF_ANOMALY_DRAW_IDENTIFIED as u8,
         kind: RIGID,
         view,
@@ -682,15 +699,15 @@ unsafe extern "C" fn rsf_anomaly_geometry_observe(
     if let Some(visual) = visual {
         facts.visual = visual.visual;
         facts.visual_pass = visual.pass;
-        facts.visual_type = visual.visual_type;
+        facts.type_ = visual.type_;
         facts.verdict = visual.verdict;
         facts.kind = visual.kind;
         facts.view = visual.view;
         facts.domain = visual.domain;
-        if visual.visual_type == RSF_ANOMALY_TYPE_TREE_PM as u8 && visual.visual != 0 {
+        if visual.type_ == RSF_ANOMALY_TYPE_TREE_PM as u8 && visual.visual != 0 {
             facts.tree_lod = (visual.visual as usize)
                 .checked_add(TREE_PM_LAST_LOD_OFFSET)
-                .and_then(|address| read_bytes(platform.read, address))
+                .and_then(|address| read_bytes(platform.read.unwrap(), address))
                 .map_or(-1, |bytes| i64::from(u32::from_ne_bytes(bytes)));
         }
     }

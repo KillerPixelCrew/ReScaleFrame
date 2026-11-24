@@ -344,16 +344,6 @@ extern "C" fn rsf_anomaly_overlay_hooks_fixture(
     checks.exit()
 }
 
-const _: () = {
-    use std::mem::offset_of;
-
-    assert!(size_of::<HookOps>() == 40);
-    assert!(offset_of!(HookOps, create) == 8);
-    assert!(offset_of!(HookOps, remove_unqueued) == 16);
-    assert!(offset_of!(HookOps, queue) == 24);
-    assert!(offset_of!(HookOps, apply) == 32);
-};
-
 struct Com;
 impl Drop for Com {
     fn drop(&mut self) {

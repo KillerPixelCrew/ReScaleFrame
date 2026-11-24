@@ -51,10 +51,10 @@ pub(super) fn leave_factory() {
 fn view(platform: &Platform, engine: Engine) -> Option<u8> {
     let layout = engine_layout(engine)?;
     let viewport = engine.module.checked_add(layout.viewport as usize)?;
-    let [active] = read_bytes(platform.read, viewport)?;
-    let [delay] = read_bytes(platform.read, viewport.checked_add(1)?)?;
+    let [active] = read_bytes(platform.read.unwrap(), viewport)?;
+    let [delay] = read_bytes(platform.read.unwrap(), viewport.checked_add(1)?)?;
     let frame = u32::from_ne_bytes(read_bytes(
-        platform.read,
+        platform.read.unwrap(),
         engine.module.checked_add(layout.frame as usize)?,
     )?);
     Some(

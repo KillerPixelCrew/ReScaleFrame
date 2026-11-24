@@ -78,9 +78,9 @@ unsafe extern "C" fn rsf_anomaly_geometry_read_vertex(
     bytes: u32,
 ) -> bool {
     VertexConstantTable::bound()
-        .and_then(|table| table.data(slot, expected_size, offset, bytes, platform.read))
+        .and_then(|table| table.data(slot, expected_size, offset, bytes, platform.read.unwrap()))
         .is_some_and(|source| unsafe {
-            (platform.read)(out, ptr::with_exposed_provenance(source), bytes as usize)
+            (platform.read.unwrap())(out, ptr::with_exposed_provenance(source), bytes as usize)
         })
 }
 
@@ -99,9 +99,9 @@ unsafe extern "C" fn rsf_anomaly_geometry_write_vertex(
     bytes: u32,
 ) -> bool {
     VertexConstantTable::bound()
-        .and_then(|table| table.data(slot, expected_size, offset, bytes, platform.read))
+        .and_then(|table| table.data(slot, expected_size, offset, bytes, platform.read.unwrap()))
         .is_some_and(|target| unsafe {
-            (platform.read)(
+            (platform.read.unwrap())(
                 ptr::with_exposed_provenance_mut(target),
                 input,
                 bytes as usize,

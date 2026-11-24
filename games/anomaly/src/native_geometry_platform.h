@@ -7,7 +7,7 @@
 
 // Private adapter ABI between the Rust geometry owner (native_geometry.rs) and the C11 platform leaf
 // (native_geometry_platform.c). Engine addresses are opaque to Rust and profiles are opaque to the leaf: the leaf
-// names a build by its index. Declarations only; every layout is asserted on both sides.
+// names a build by its index. Declarations only; build.rs binds the records for Rust.
 #ifdef __cplusplus
 #define RSF_GEOMETRY_NOEXCEPT noexcept
 extern "C" {
@@ -116,7 +116,6 @@ typedef struct rsf_anomaly_geometry_coverage {
 bool rsf_anomaly_geometry_install(const rsf_anomaly_geometry_platform*, rsf_anomaly_geometry_engine, uint32_t);
 bool rsf_anomaly_geometry_disable(const rsf_anomaly_geometry_platform*);
 bool rsf_anomaly_geometry_active(void);
-rsf_anomaly_geometry_engine rsf_anomaly_geometry_binding(void);
 void rsf_anomaly_geometry_test_bind(rsf_anomaly_geometry_engine);
 void rsf_anomaly_geometry_set_retired(uintptr_t, rsf_anomaly_geometry_retire_fn);
 void rsf_anomaly_geometry_set_draw(uintptr_t, rsf_anomaly_geometry_draw_fn);

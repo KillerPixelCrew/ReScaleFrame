@@ -16,7 +16,7 @@ unsafe extern "C" fn read_bones(
     start: usize,
     stride: usize,
     count: u32,
-    out: *mut NativeMatrix,
+    out: *mut NativeBones,
 ) -> bool {
     assert_eq!(stride, 168);
     let offset = start - INSTANCES - 64;
@@ -32,7 +32,7 @@ unsafe extern "C" fn read_bones(
     for index in 0..count {
         let mut rows = ENGINE_IDENTITY;
         rows[12] = (first + index) as f32;
-        unsafe { out.add(index as usize).write(rows) };
+        unsafe { out.cast::<NativeMatrix>().add(index as usize).write(rows) };
     }
     true
 }

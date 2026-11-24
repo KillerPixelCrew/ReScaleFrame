@@ -4,13 +4,6 @@ use crate::native_geometry_abi::Engine;
 use crate::native_hooks::Site;
 use std::ffi::c_void;
 
-const _: () = {
-    assert!(size_of::<Site>() == 48);
-    assert!(std::mem::offset_of!(Site, expected) == 12);
-    assert!(std::mem::offset_of!(Site, replacement) == 32);
-    assert!(std::mem::offset_of!(Site, original) == 40);
-};
-
 /// Pairs each profiled detour entry of `build` with the native replacement and
 /// the address of the native original slot. The hook set uses those slots after
 /// this call. Refuses an unknown build or a table of the wrong length.
@@ -36,7 +29,7 @@ unsafe extern "C" fn rsf_anomaly_geometry_build_hook_sites(
     for (i, (site, &replacement)) in profile.sites.iter().zip(replacements).enumerate() {
         unsafe {
             sites.add(i).write(Site {
-                _name: site.name,
+                name: site.name,
                 rva: site.rva,
                 expected: site.expected,
                 replacement,

@@ -152,7 +152,7 @@ fn guard_lifecycle(
 
     let install = || rsf_anomaly_geometry_install(platform, engine, size);
     let disable = || rsf_anomaly_geometry_disable(platform);
-    let checked_image = Image::new(image, size, platform.read);
+    let checked_image = Image::new(image, size, platform.read.unwrap());
     let flip = |rva: u32, mask: u8| {
         checked_image.address(rva, 1)?;
         // No slice or Rust reference to the allocation remains live during native calls.

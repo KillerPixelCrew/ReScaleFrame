@@ -136,7 +136,7 @@ fn copy_contract(copy: Read, page: u32) {
 fn fixture_site(module: Address, function: Function, original: *mut Address) -> Site {
     let address = function as Address;
     Site {
-        _name: c"test executable fixture".as_ptr(),
+        name: c"test executable fixture".as_ptr(),
         rva: (address.addr() - module.addr()).try_into().unwrap(),
         expected: bytes(address),
         replacement: replacement as Address,
@@ -164,9 +164,9 @@ fn executable_contract(platform: &Platform, target: Function, untouched: Functio
     let module = unsafe { GetModuleHandleW(ptr::null()) };
     let mut dos = DosFacts::default();
     let mut pe = PeFacts::default();
-    assert!(unsafe { (platform.headers.dos)(module, &mut dos) });
+    assert!(unsafe { (platform.headers.dos.unwrap())(module, &mut dos) });
     assert!(unsafe {
-        (platform.headers.pe)(
+        (platform.headers.pe.unwrap())(
             module,
             module.wrapping_byte_add(dos.nt_offset as usize),
             &mut pe,
@@ -281,7 +281,7 @@ fn mapping_contract(platform: &Platform, page: u32) {
     }
     image.flush(size);
     let site = Site {
-        _name: c"mapped code fixture".as_ptr(),
+        name: c"mapped code fixture".as_ptr(),
         rva: valid,
         expected,
         replacement: replacement as Address,
@@ -377,7 +377,7 @@ fn profile_contract(
                     .write(site.expected)
             };
             Site {
-                _name: site.name,
+                name: site.name,
                 rva: site.rva,
                 expected: site.expected,
                 replacement: replacement as Address,

@@ -130,7 +130,7 @@ unsafe extern "C" fn rsf_anomaly_observer_install(
         let site = &profile.sites[index];
         let binding = &bindings[index];
         Site {
-            _name: site.name,
+            name: site.name,
             rva: site.rva,
             expected: site.expected,
             replacement: binding.replacement,

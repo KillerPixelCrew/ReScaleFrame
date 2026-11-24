@@ -7,16 +7,8 @@
 _Static_assert(sizeof(IMAGE_NT_HEADERS64) == 264 && IMAGE_DOS_SIGNATURE == 0x5a4d &&
     IMAGE_NT_SIGNATURE == 0x4550 && IMAGE_FILE_MACHINE_AMD64 == 0x8664 &&
     IMAGE_NT_OPTIONAL_HDR64_MAGIC == 0x20b, "PE64 facts");
-_Static_assert(sizeof(rsf_anomaly_dos_facts) == 8 && sizeof(rsf_anomaly_pe_facts) == 12, "PE facts layout");
-_Static_assert(sizeof(rsf_anomaly_image_headers) == 16 && offsetof(rsf_anomaly_image_headers, pe) == 8,
-    "image header layout");
-_Static_assert(sizeof(rsf_anomaly_hook_ops) == 40 && offsetof(rsf_anomaly_hook_ops, apply) == 32, "hook ops layout");
-_Static_assert(sizeof(rsf_anomaly_hook_platform) == 64 && offsetof(rsf_anomaly_hook_platform, hooks) == 24,
-    "hook platform layout");
-_Static_assert(sizeof(rsf_anomaly_hook_site) == 48 && offsetof(rsf_anomaly_hook_site, expected) == 12 &&
-    offsetof(rsf_anomaly_hook_site, replacement) == 32 && offsetof(rsf_anomaly_hook_site, original) == 40,
-    "hook site layout");
-_Static_assert(sizeof(rsf_anomaly_hook_target) == 24 && sizeof(rsf_anomaly_hook_set) == 8, "hook target layout");
+/* The Rust owner holds the set as one opaque pointer. */
+_Static_assert(sizeof(rsf_anomaly_hook_set) == 8, "hook set layout");
 _Static_assert(sizeof(rsf_anomaly_guard_image) == 24 && offsetof(rsf_anomaly_guard_image, read) == 16,
     "guard image layout");
 

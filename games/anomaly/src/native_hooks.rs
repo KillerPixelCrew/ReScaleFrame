@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use std::ffi::{c_char, c_void};
+use std::ffi::c_void;
 use std::ptr;
 use std::slice;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -24,77 +24,23 @@ type Address = *mut c_void;
 type Queue = unsafe extern "C" fn(Address, bool) -> bool;
 type Apply = unsafe extern "C" fn() -> bool;
 
-#[derive(Clone, Copy)]
-#[repr(C)]
-pub(crate) struct Site {
-    pub(crate) _name: *const c_char,
-    pub(crate) rva: u32,
-    pub(crate) expected: [u8; GUARD_BYTES],
-    pub(crate) replacement: Address,
-    pub(crate) original: *mut Address,
-}
-
-#[derive(Clone, Copy, Default)]
-#[repr(C)]
-pub(super) struct Target {
-    pub(super) address: Address,
-    pub(super) replacement: Address,
-    pub(super) original: *mut Address,
-}
-
-#[derive(Clone, Copy, Default)]
-#[repr(C)]
-struct DosFacts {
-    nt_offset: i32,
-    signature: u16,
-}
-
-#[derive(Clone, Copy, Default)]
-#[repr(C)]
-struct PeFacts {
-    signature: u32,
-    image_size: u32,
-    machine: u16,
-    optional_magic: u16,
-}
-
-#[repr(C)]
-pub(super) struct ImageHeaders {
-    dos: unsafe extern "C" fn(Address, *mut DosFacts) -> bool,
-    pe: unsafe extern "C" fn(Address, Address, *mut PeFacts) -> bool,
-}
-
-#[repr(C)]
-struct Platform {
-    headers: ImageHeaders,
-    read: unsafe extern "C" fn(Address, Address, Address, usize, bool) -> bool,
-    hooks: HookOps,
-}
-
-#[repr(C)]
-pub(super) struct HookOps {
-    pub(super) initialize: unsafe extern "C" fn() -> bool,
-    pub(super) create: unsafe extern "C" fn(Address, Address, *mut Address) -> bool,
-    pub(super) remove_unqueued: unsafe extern "C" fn(Address),
-    pub(super) queue: Queue,
-    pub(super) apply: Apply,
-}
-
-const _: () = {
-    assert!(size_of::<DosFacts>() == 8 && size_of::<PeFacts>() == 12);
-    assert!(size_of::<ImageHeaders>() == 16 && std::mem::offset_of!(ImageHeaders, pe) == 8);
-    assert!(size_of::<HookOps>() == 40);
-    assert!(size_of::<Platform>() == 64 && std::mem::offset_of!(Platform, hooks) == 24);
+// The records native_hooks.h and native_hook_ops.h declare, bound in crate::sys. C fills every function entry.
+use crate::sys::{
+    rsf_anomaly_dos_facts as DosFacts, rsf_anomaly_hook_platform as Platform,
+    rsf_anomaly_pe_facts as PeFacts,
 };
-
+pub(crate) use crate::sys::{
+    rsf_anomaly_hook_ops as HookOps, rsf_anomaly_hook_site as Site,
+    rsf_anomaly_hook_target as Target, rsf_anomaly_image_headers as ImageHeaders,
+};
 impl HookOps {
     // The caller holds the shared transaction and has validated the targets.
     pub(super) unsafe fn create_unqueued(&self, sites: &[Target]) -> bool {
         for (index, site) in sites.iter().enumerate() {
-            if !unsafe { (self.create)(site.address, site.replacement, site.original) } {
+            if !unsafe { (self.create.unwrap())(site.address, site.replacement, site.original) } {
                 for prior in &sites[..index] {
                     unsafe {
-                        (self.remove_unqueued)(prior.address);
+                        (self.remove_unqueued.unwrap())(prior.address);
                         prior.original.write(ptr::null_mut());
                     }
                 }
@@ -111,7 +57,7 @@ impl ImageHeaders {
             return false;
         }
         let mut dos = DosFacts::default();
-        if !unsafe { (self.dos)(module, &mut dos) } || dos.signature != DOS_SIGNATURE {
+        if !unsafe { (self.dos.unwrap())(module, &mut dos) } || dos.signature != DOS_SIGNATURE {
             return false;
         }
         let Ok(offset) = usize::try_from(dos.nt_offset) else {
@@ -121,7 +67,7 @@ impl ImageHeaders {
             return false;
         }
         let mut pe = PeFacts::default();
-        let read = unsafe { (self.pe)(module, module.wrapping_byte_add(offset), &mut pe) };
+        let read = unsafe { (self.pe.unwrap())(module, module.wrapping_byte_add(offset), &mut pe) };
         read && pe.signature == PE_SIGNATURE
             && pe.machine == AMD64
             && pe.optional_magic == PE32_PLUS
@@ -155,7 +101,7 @@ fn preflight(
         };
         let mut bytes = [0; GUARD_BYTES];
         if !unsafe {
-            (platform.read)(
+            (platform.read.unwrap())(
                 module,
                 target.address,
                 bytes.as_mut_ptr().cast(),
@@ -189,7 +135,7 @@ impl Batch {
                 return None;
             }
         }
-        if !unsafe { (platform.hooks.initialize)() } {
+        if !unsafe { (platform.hooks.initialize.unwrap())() } {
             return None;
         }
         let mut batch = Box::new(Self {
@@ -212,8 +158,8 @@ impl Batch {
         }
         self.enabled = enable_batch(
             &self.targets[..self.count],
-            platform.hooks.queue,
-            platform.hooks.apply,
+            platform.hooks.queue.unwrap(),
+            platform.hooks.apply.unwrap(),
             || {},
         );
         self.enabled
@@ -223,8 +169,8 @@ impl Batch {
         self.enabled = false;
         disable_batch(
             &self.targets[..self.count],
-            platform.hooks.queue,
-            platform.hooks.apply,
+            platform.hooks.queue.unwrap(),
+            platform.hooks.apply.unwrap(),
         )
     }
 }

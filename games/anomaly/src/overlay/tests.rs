@@ -248,11 +248,11 @@ unsafe extern "C" fn dump(
 }
 
 const UNUSED_HOOKS: HookOps = HookOps {
-    initialize: unused_initialize,
-    create: unused_create,
-    remove_unqueued: unused_remove,
-    queue: unused_queue,
-    apply: unused_initialize,
+    initialize: Some(unused_initialize),
+    create: Some(unused_create),
+    remove_unqueued: Some(unused_remove),
+    queue: Some(unused_queue),
+    apply: Some(unused_initialize),
 };
 unsafe extern "C" fn unused_initialize() -> bool {
     unreachable!()

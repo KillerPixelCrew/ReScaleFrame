@@ -25,21 +25,9 @@ enum {
     SITE_RENDER_EMISSIVE, SITE_RM_NEAR, SITE_RM_NORMAL, SITE_DETAIL_RENDER,
 };
 
-_Static_assert(sizeof(rsf_anomaly_geometry_engine) == 16 && sizeof(rsf_anomaly_geometry_context) == 16 &&
-    sizeof(rsf_anomaly_geometry_window) == 32 && sizeof(rsf_anomaly_geometry_visual) == 72, "scope layouts");
-_Static_assert(sizeof(rsf_anomaly_geometry_facts) == 32 && sizeof(rsf_anomaly_geometry_native_matrix) == 64 &&
-    sizeof(rsf_anomaly_geometry_matrix) == 128 && _Alignof(rsf_anomaly_geometry_matrix) == _Alignof(double) &&
-    offsetof(rsf_anomaly_geometry_matrix, values) == 0, "fact and matrix layouts");
-_Static_assert(sizeof(rsf_anomaly_geometry_snapshot) == 64 && offsetof(rsf_anomaly_geometry_snapshot, world) == 24 &&
-    offsetof(rsf_anomaly_geometry_snapshot, view) == 56 && offsetof(rsf_anomaly_geometry_snapshot, draw_kind) == 58,
-    "snapshot layout read by the motion owner");
-_Static_assert(sizeof(rsf_anomaly_geometry_writer) == 16 && sizeof(rsf_anomaly_geometry_platform) == 48 &&
-    offsetof(rsf_anomaly_geometry_platform, bones) == 40, "writer and platform layouts");
-_Static_assert(sizeof(rsf_anomaly_geometry_stats) == 40 && sizeof(rsf_anomaly_geometry_coverage) == 1472,
-    "counter layouts");
-_Static_assert(sizeof(rsf_anomaly_hook_site) == 48 && offsetof(rsf_anomaly_hook_site, expected) == 12 &&
-    offsetof(rsf_anomaly_hook_site, replacement) == 32 && offsetof(rsf_anomaly_hook_site, original) == 40,
-    "hook site layout");
+/* The matrices are plain arrays: the Rust owner reads them as [f32; 16] and [f64; 16]. */
+_Static_assert(sizeof(rsf_anomaly_geometry_native_matrix) == 64 && sizeof(rsf_anomaly_geometry_matrix) == 128 &&
+    _Alignof(rsf_anomaly_geometry_matrix) == _Alignof(double), "matrix layouts");
 
 /* The Microsoft x64 member ABI puts the visual's second argument in XMM1, which a plain (void*, float) function shares. */
 typedef void* (*create_fn)(void*, const char*, void*);
