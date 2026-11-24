@@ -100,16 +100,16 @@ fn host_setup(adapter: Raw) -> rsf_streamline_host_setup {
     }
 }
 
-unsafe extern "C" fn describe(state: Raw, out: *mut DXGI_SWAP_CHAIN_DESC) {
+pub(super) unsafe fn state_describe(state: Raw, out: *mut DXGI_SWAP_CHAIN_DESC) {
     let desc = *unsafe { capsule(state) }.description.read().unwrap();
     unsafe { out.write(desc) };
 }
 
-unsafe extern "C" fn parent(state: Raw) -> Raw {
+pub(super) unsafe fn state_parent(state: Raw) -> Raw {
     raw(&unsafe { &*capsule(state).resources.get() }.parent)
 }
 
-unsafe extern "C" fn device(state: Raw) -> Raw {
+pub(super) unsafe fn state_device(state: Raw) -> Raw {
     let s = unsafe { &*capsule(state).resources.get() };
     if s.native12 != 0 {
         raw(&s.direct_device)
@@ -118,16 +118,9 @@ unsafe extern "C" fn device(state: Raw) -> Raw {
     }
 }
 
-unsafe extern "C" fn destroy(capsule: Raw) {
+pub(super) unsafe fn state_destroy(capsule: Raw) {
     drop(unsafe { Box::from_raw(capsule.cast::<FacadeState>()) });
 }
-
-static STATE_OPS: NativeState = NativeState {
-    describe,
-    parent,
-    device,
-    destroy,
-};
 
 pub(super) unsafe extern "C" fn window_valid(window: Raw) -> u32 {
     u32::from(unsafe { IsWindow(Some(HWND(window))) }.as_bool())
@@ -162,9 +155,9 @@ pub(super) unsafe extern "C" fn bridge_new(chain: *mut Chain) -> Raw {
     if capsule.is_null() {
         return null_mut();
     }
-    let facade = unsafe { rsf_d3d11p_facade_create(chain, capsule, &STATE_OPS) };
+    let facade = rsf_d3d11p_facade_create(chain, capsule);
     if facade.is_null() {
-        unsafe { destroy(capsule) };
+        unsafe { state_destroy(capsule) };
     }
     facade
 }

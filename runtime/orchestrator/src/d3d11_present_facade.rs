@@ -13,6 +13,11 @@ use super::{
     rsf_core_d3d11p_release_physical, rsf_core_d3d11p_render_index, rsf_core_d3d11p_resize,
     rsf_core_d3d11p_set_fullscreen, rsf_core_d3d11p_set_max_latency, settings,
 };
+// The facade state's leaves; the unit test below fakes them.
+#[cfg(not(test))]
+use super::native::{state_describe, state_destroy, state_device, state_parent};
+#[cfg(test)]
+use tests::{state_describe, state_destroy, state_device, state_parent};
 use crate::allocate_handle;
 use crate::d3d11_present_abi::{Chain, Raw};
 use std::ffi::c_void;
@@ -34,20 +39,11 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::core::{BOOL, GUID, HRESULT, IUnknown_Vtbl, Interface};
 
 #[repr(C)]
-pub(super) struct NativeState {
-    pub(super) describe: unsafe extern "C" fn(Raw, *mut DXGI_SWAP_CHAIN_DESC),
-    pub(super) parent: unsafe extern "C" fn(Raw) -> Raw,
-    pub(super) device: unsafe extern "C" fn(Raw) -> Raw,
-    pub(super) destroy: unsafe extern "C" fn(Raw),
-}
-
-#[repr(C)]
 struct Facade {
     vtable: &'static IDXGISwapChain4_Vtbl,
     references: AtomicU32,
     chain: *mut Chain,
     state: Raw,
-    native: &'static NativeState,
 }
 
 const _: () = assert!(size_of::<IDXGISwapChain4_Vtbl>() == 41 * size_of::<Raw>());
@@ -60,7 +56,7 @@ impl Facade {
 
     fn snapshot_description(&self) -> DXGI_SWAP_CHAIN_DESC {
         let mut description = DXGI_SWAP_CHAIN_DESC::default();
-        unsafe { (self.native.describe)(self.state, &mut description) };
+        unsafe { state_describe(self.state, &mut description) };
         description
     }
 
@@ -109,17 +105,12 @@ fn switching() -> bool {
     settings().runtime_switching != 0
 }
 
-pub(super) unsafe extern "C" fn rsf_d3d11p_facade_create(
-    chain: *mut Chain,
-    state: Raw,
-    native: &'static NativeState,
-) -> Raw {
+pub(super) fn rsf_d3d11p_facade_create(chain: *mut Chain, state: Raw) -> Raw {
     allocate_handle(Facade {
         vtable: &VTABLE,
         references: AtomicU32::new(1),
         chain,
         state,
-        native,
     })
     .cast()
 }
@@ -151,12 +142,12 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_facade_release(this: Raw) -> u32 {
         .fetch_sub(1, Ordering::SeqCst)
         .wrapping_sub(1);
     if remaining == 0 {
-        let (chain, state, native) = (facade.chain, facade.state, facade.native);
+        let (chain, state) = (facade.chain, facade.state);
         // The owner may use native leaves while draining. Keep both addresses live
         // until the final GPU retirement callback returns.
         unsafe {
             rsf_core_d3d11p_chain_destroy(chain);
-            (native.destroy)(state);
+            state_destroy(state);
             drop(Box::from_raw(this.cast::<Facade>()));
         }
     }
@@ -206,13 +197,13 @@ forward!(set_hdr_metadata, IDXGISwapChain4, SetHDRMetaData, kind: DXGI_HDR_METAD
 
 unsafe extern "system" fn get_parent(this: Raw, iid: *const GUID, out: *mut Raw) -> HRESULT {
     let facade = unsafe { Facade::borrow(this) };
-    let parent = unsafe { (facade.native.parent)(facade.state) };
+    let parent = unsafe { state_parent(facade.state) };
     HRESULT(unsafe { query_buffer_interface(parent, iid.cast(), out) })
 }
 
 unsafe extern "system" fn get_device(this: Raw, iid: *const GUID, out: *mut Raw) -> HRESULT {
     let facade = unsafe { Facade::borrow(this) };
-    let device = unsafe { (facade.native.device)(facade.state) };
+    let device = unsafe { state_device(facade.state) };
     HRESULT(unsafe { query_buffer_interface(device, iid.cast(), out) })
 }
 
@@ -591,22 +582,19 @@ mod tests {
         destroys: AtomicU32,
     }
 
-    static NATIVE: NativeState = NativeState {
-        describe: fixture_describe,
-        parent: no_object,
-        device: no_object,
-        destroy: record_destroy,
-    };
-
-    unsafe extern "C" fn fixture_describe(state: Raw, out: *mut DXGI_SWAP_CHAIN_DESC) {
+    pub(super) unsafe fn state_describe(state: Raw, out: *mut DXGI_SWAP_CHAIN_DESC) {
         unsafe { out.write((*state.cast::<State>()).description) };
     }
 
-    unsafe extern "C" fn no_object(_: Raw) -> Raw {
+    pub(super) unsafe fn state_parent(_: Raw) -> Raw {
         null_mut()
     }
 
-    unsafe extern "C" fn record_destroy(state: Raw) {
+    pub(super) unsafe fn state_device(_: Raw) -> Raw {
+        null_mut()
+    }
+
+    pub(super) unsafe fn state_destroy(state: Raw) {
         unsafe { &*state.cast::<State>() }
             .destroys
             .fetch_add(1, Ordering::SeqCst);
@@ -622,9 +610,7 @@ mod tests {
             description,
             destroys: AtomicU32::new(0),
         };
-        let raw = unsafe {
-            rsf_d3d11p_facade_create(null_mut(), ptr::from_mut(&mut state).cast(), &NATIVE)
-        };
+        let raw = rsf_d3d11p_facade_create(null_mut(), ptr::from_mut(&mut state).cast());
         assert!(!raw.is_null());
         let chain = unsafe { IDXGISwapChain4::from_raw(raw) };
         let identity: IUnknown = chain.cast().unwrap();
