@@ -64,38 +64,33 @@ pub(crate) struct Init {
 /// The owner's Streamline, device, image, sharpening and capture leaves: `leaves::NATIVE` in
 /// production, fakes in vulkan_sr/owner_tests.rs.
 pub(crate) struct Platform {
-    pub(crate) open: Option<unsafe extern "C" fn(*const rsf_srvk_setup, *mut *mut c_void) -> i32>,
-    pub(crate) close: Option<unsafe extern "C" fn(*mut c_void)>,
-    pub(crate) invoke: Option<unsafe extern "C" fn(*const rsf_slvk_call) -> i32>,
+    pub(crate) open: unsafe extern "C" fn(*const rsf_srvk_setup, *mut *mut c_void) -> i32,
+    pub(crate) close: unsafe extern "C" fn(*mut c_void),
+    pub(crate) invoke: unsafe extern "C" fn(*const rsf_slvk_call) -> i32,
     pub(crate) initialize: rsf_slvk_callback,
-    pub(crate) prepare: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
+    pub(crate) prepare: unsafe extern "C" fn(*mut c_void) -> i32,
     pub(crate) allocate:
-        Option<unsafe extern "C" fn(*mut c_void, *mut rsf_vkfg_image, u32, u32, u32, u32) -> u32>,
-    pub(crate) free_image: Option<unsafe extern "C" fn(*mut c_void, *mut rsf_vkfg_image)>,
+        unsafe extern "C" fn(*mut c_void, *mut rsf_vkfg_image, u32, u32, u32, u32) -> u32,
+    pub(crate) free_image: unsafe extern "C" fn(*mut c_void, *mut rsf_vkfg_image),
     pub(crate) constants:
-        Option<unsafe extern "C" fn(*mut c_void, usize, *const rsf_slvk_sdk_constants) -> i32>,
-    pub(crate) options: Option<unsafe extern "C" fn(*mut c_void, *const rsf_vkdlss_options) -> i32>,
-    pub(crate) tag:
-        Option<unsafe extern "C" fn(*mut c_void, usize, *mut c_void, *const Tag) -> i32>,
-    pub(crate) evaluate: Option<unsafe extern "C" fn(*mut c_void, usize, *mut c_void) -> i32>,
-    pub(crate) capture_parameters:
-        Option<unsafe extern "C" fn(*mut c_void, *const rsf_srvk_frame, u32)>,
-    pub(crate) capture_record: Option<
-        unsafe extern "C" fn(
-            *mut c_void,
-            *mut c_void,
-            *const rsf_srvk_image,
-            *const rsf_frame_record,
-            *const std::ffi::c_char,
-            u32,
-        ),
-    >,
-    pub(crate) sharpen:
-        Option<unsafe extern "C" fn(*mut c_void, *mut c_void, *const rsf_srvk_frame, u64)>,
-    pub(crate) release: Option<unsafe extern "C" fn(*mut c_void, usize, *mut c_void) -> i32>,
-    pub(crate) flush: Option<unsafe extern "C" fn(*mut c_void)>,
-    pub(crate) retire: Option<unsafe extern "C" fn(*mut c_void, *mut c_void)>,
-    pub(crate) preset_valid: Option<unsafe extern "C" fn(u32) -> i32>,
+        unsafe extern "C" fn(*mut c_void, usize, *const rsf_slvk_sdk_constants) -> i32,
+    pub(crate) options: unsafe extern "C" fn(*mut c_void, *const rsf_vkdlss_options) -> i32,
+    pub(crate) tag: unsafe extern "C" fn(*mut c_void, usize, *mut c_void, *const Tag) -> i32,
+    pub(crate) evaluate: unsafe extern "C" fn(*mut c_void, usize, *mut c_void) -> i32,
+    pub(crate) capture_parameters: unsafe extern "C" fn(*mut c_void, *const rsf_srvk_frame, u32),
+    pub(crate) capture_record: unsafe extern "C" fn(
+        *mut c_void,
+        *mut c_void,
+        *const rsf_srvk_image,
+        *const rsf_frame_record,
+        *const std::ffi::c_char,
+        u32,
+    ),
+    pub(crate) sharpen: unsafe extern "C" fn(*mut c_void, *mut c_void, *const rsf_srvk_frame, u64),
+    pub(crate) release: rsf_slvk_callback,
+    pub(crate) flush: unsafe extern "C" fn(*mut c_void),
+    pub(crate) retire: unsafe extern "C" fn(*mut c_void, *mut c_void),
+    pub(crate) preset_valid: unsafe extern "C" fn(u32) -> i32,
 }
 const R16: u32 = 76;
 const INPUT_USAGE: u32 = SAMPLED_USAGE | TRANSFER_DST_USAGE;
@@ -171,16 +166,16 @@ impl Drop for Owner {
         ] {
             // A refused create allocated nothing; only images it holds are released.
             if image.image != 0 || image.memory != 0 || image.view != 0 {
-                unsafe { (platform.free_image.unwrap())(self.native, image) };
+                unsafe { (platform.free_image)(self.native, image) };
             }
         }
-        unsafe { (platform.close.unwrap())(self.native) };
+        unsafe { (platform.close)(self.native) };
     }
 }
 
 impl Owner {
     fn allocate(&mut self, setup: &rsf_srvk_setup) -> bool {
-        let allocate = self.platform.allocate.unwrap();
+        let allocate = self.platform.allocate;
         for (image, format) in [
             (&mut self.images.color, RGBA16_FLOAT),
             (&mut self.images.depth, R32_FLOAT),
@@ -218,7 +213,7 @@ impl Owner {
             return 0;
         }
         let call = slvk_call(None, self.platform.release, self.native);
-        let result = unsafe { (self.platform.invoke.unwrap())(&call) };
+        let result = unsafe { (self.platform.invoke)(&call) };
         if result == 0 {
             self.resources = false;
         }
@@ -264,7 +259,7 @@ unsafe extern "C" fn evaluate(_: *mut c_void, token: usize, user: *mut c_void) -
         [input.motion_scale_x, input.motion_scale_y],
         reset != 0,
     );
-    let result = unsafe { (platform.constants.unwrap())(native, token, &constants) };
+    let result = unsafe { (platform.constants)(native, token, &constants) };
     if result != 0 {
         return result;
     }
@@ -272,7 +267,7 @@ unsafe extern "C" fn evaluate(_: *mut c_void, token: usize, user: *mut c_void) -
     evaluate_options.auto_exposure = 1;
     evaluate_options.pre_exposure = input.pre_exposure;
     evaluate_options.presets = [owner.preset; 6];
-    let result = unsafe { (platform.options.unwrap())(native, &evaluate_options) };
+    let result = unsafe { (platform.options)(native, &evaluate_options) };
     if result != 0 {
         return result;
     }
@@ -323,18 +318,18 @@ unsafe extern "C" fn evaluate(_: *mut c_void, token: usize, user: *mut c_void) -
             29,
         ),
     ];
-    let result = unsafe { (platform.tag.unwrap())(native, token, *commands, tags.as_ptr()) };
+    let result = unsafe { (platform.tag)(native, token, *commands, tags.as_ptr()) };
     if result != 0 {
         return result;
     }
     owner.resources = true;
-    let result = unsafe { (platform.evaluate.unwrap())(native, token, *commands) };
+    let result = unsafe { (platform.evaluate)(native, token, *commands) };
     if result != 0 {
         owner.history = History::default();
         return result;
     }
-    unsafe { (platform.capture_parameters.unwrap())(native, *input, reset) };
-    let capture = platform.capture_record.unwrap();
+    unsafe { (platform.capture_parameters)(native, *input, reset) };
+    let capture = platform.capture_record;
     for (image, role) in sr_capture_inputs(input)
         .into_iter()
         .chain([(&input.bias_current_color, c"sr-bias-mask")])
@@ -362,7 +357,7 @@ unsafe extern "C" fn evaluate(_: *mut c_void, token: usize, user: *mut c_void) -
             c"sr-output-linear".as_ptr(),
             reset,
         );
-        (platform.sharpen.unwrap())(native, *commands, *input, images.output.image);
+        (platform.sharpen)(native, *commands, *input, images.output.image);
     }
     dispatch.publish(
         *commands,
@@ -401,7 +396,7 @@ impl Owner {
             return Err(INIT_FAILED);
         }
         let mut owner = unsafe { Box::from_raw(raw) };
-        let result = unsafe { (platform.open.unwrap())(setup, &mut owner.native) };
+        let result = unsafe { (platform.open)(setup, &mut owner.native) };
         if result != 0 {
             return Err(result);
         }
@@ -416,14 +411,14 @@ impl Owner {
             options: &request,
         };
         let call = slvk_call(None, platform.initialize, ptr::from_mut(&mut init).cast());
-        let result = unsafe { (platform.invoke.unwrap())(&call) };
+        let result = unsafe { (platform.invoke)(&call) };
         if result != 0 {
             return Err(result);
         }
         owner.width = init.width;
         owner.height = init.height;
         let dispatch = Dispatch::load(setup).ok_or(MISSING_ENTRY_POINT)?;
-        let result = unsafe { (platform.prepare.unwrap())(owner.native) };
+        let result = unsafe { (platform.prepare)(owner.native) };
         if result != 0 {
             return Err(result);
         }
@@ -452,7 +447,7 @@ impl Owner {
         {
             return INVALID_ARGUMENT;
         }
-        let invoke = self.platform.invoke.unwrap();
+        let invoke = self.platform.invoke;
         let mut evaluation = Evaluation {
             owner: self,
             commands,
@@ -467,10 +462,7 @@ impl Owner {
     }
 
     pub(super) fn set_preset(&mut self, preset: u32) -> i32 {
-        let Some(preset_valid) = self.platform.preset_valid else {
-            return INVALID_ARGUMENT;
-        };
-        if unsafe { preset_valid(preset) } == 0 {
+        if unsafe { (self.platform.preset_valid)(preset) } == 0 {
             return INVALID_ARGUMENT;
         }
         if self.preset == preset {
@@ -487,12 +479,12 @@ impl Owner {
     pub(super) fn destroy(&mut self) -> i32 {
         let result = self.release_effect();
         if result == 0 {
-            unsafe { (self.platform.flush.unwrap())(self.native) };
+            unsafe { (self.platform.flush)(self.native) };
         }
         result
     }
 
     pub(super) fn retire_commands(&self, commands: *mut c_void) {
-        unsafe { (self.platform.retire.unwrap())(self.native, commands) };
+        unsafe { (self.platform.retire)(self.native, commands) };
     }
 }

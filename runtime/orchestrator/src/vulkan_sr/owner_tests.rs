@@ -191,10 +191,10 @@ unsafe extern "C" fn dlss_proc(_: Handle, name: *const c_char) -> rsf_vk_functio
 }
 
 static DLSS: rsf_vkdlss_platform = rsf_vkdlss_platform {
-    open: Some(leaf!(|setup: *const Setup, native: *mut Handle| -> i32 {
+    open: leaf!(|setup: *const Setup, native: *mut Handle| -> i32 {
         unsafe { native.write((*setup).device) };
         0
-    })),
+    }),
     initialize: Some(leaf!(|_: Handle, token: usize, user: Handle| -> i32 {
         assert_eq!(token, 0);
         let init = unsafe { &mut *user.cast::<rsf_vkdlss_init>() };
@@ -205,22 +205,20 @@ static DLSS: rsf_vkdlss_platform = rsf_vkdlss_platform {
         init.height = 36;
         0
     })),
-    prepare: Some(leaf!(|_: Handle| -> i32 { 0 })),
-    close: Some(leaf!(|native: Handle| -> () {
-        unsafe { fake(native).calls.push(Call::Close) }
-    })),
-    invoke: Some(leaf!(|call: *const rsf_slvk_call| -> i32 {
+    prepare: leaf!(|_: Handle| -> i32 { 0 }),
+    close: leaf!(|native: Handle| -> () { unsafe { fake(native).calls.push(Call::Close) } }),
+    invoke: leaf!(|call: *const rsf_slvk_call| -> i32 {
         let call = unsafe { &*call };
         assert_eq!(call.abi_version, RSF_SLVK_ABI_VERSION);
         assert_eq!(call.session_id == 0, call.frame_id == 0);
         unsafe { (call.callback.unwrap())(ptr::null_mut(), call.frame_id as usize, call.user) }
-    })),
-    allocate: Some(leaf!(|native: Handle,
-                          image: *mut rsf_vkfg_image,
-                          width: u32,
-                          height: u32,
-                          format: u32,
-                          usage: u32|
+    }),
+    allocate: leaf!(|native: Handle,
+                     image: *mut rsf_vkfg_image,
+                     width: u32,
+                     height: u32,
+                     format: u32,
+                     usage: u32|
      -> u32 {
         let state = unsafe { fake(native) };
         let id = state.calls.len() as u64 + 1;
@@ -236,13 +234,13 @@ static DLSS: rsf_vkdlss_platform = rsf_vkdlss_platform {
             })
         };
         1
-    })),
-    free_image: Some(leaf!(|native: Handle, image: *mut rsf_vkfg_image| -> () {
+    }),
+    free_image: leaf!(|native: Handle, image: *mut rsf_vkfg_image| -> () {
         unsafe { fake(native).calls.push(Call::Release((*image).image, 0)) };
-    })),
-    constants: Some(leaf!(|native: Handle,
-                           token: usize,
-                           constants: *const rsf_slvk_sdk_constants|
+    }),
+    constants: leaf!(|native: Handle,
+                      token: usize,
+                      constants: *const rsf_slvk_sdk_constants|
      -> i32 {
         assert_ne!(token, 0);
         let reset = unsafe { (*constants).reset };
@@ -252,48 +250,46 @@ static DLSS: rsf_vkdlss_platform = rsf_vkdlss_platform {
                 .push(Call::DlssConstants(u32::from(reset)))
         };
         0
-    })),
-    options: Some(leaf!(|native: Handle,
-                         options: *const rsf_vkdlss_options|
-     -> i32 {
-        let options = unsafe { &*options };
-        assert_eq!(options.mode, 3);
-        assert_eq!((options.hdr, options.auto_exposure), (1, 1));
-        assert_eq!(options.presets, [FAKE_DLSS_PRESET; 6]);
-        unsafe {
-            fake(native)
-                .calls
-                .push(Call::DlssOptions(options.presets[0]))
-        };
-        0
-    })),
-    tag: Some(leaf!(|_: Handle,
-                     _: usize,
-                     _: Handle,
-                     tags: *const rsf_vkdlss_tag|
-     -> i32 {
-        let tags = unsafe { &*tags.cast::<[rsf_vkdlss_tag; 5]>() };
-        assert_eq!(tags.each_ref().map(|tag| tag.kind), [3, 0, 1, 4, 29]);
-        assert_eq!(unsafe { (*tags[0].image).initialized }, 1);
-        assert_eq!(unsafe { (*tags[3].image).initialized }, 1);
-        assert_eq!(
-            (tags[3].layout, tags[3].width, tags[3].height),
-            (GENERAL, 128, 72)
-        );
-        0
-    })),
-    evaluate: Some(leaf!(|native: Handle, _: usize, _: Handle| -> i32 {
+    }),
+    options: leaf!(
+        |native: Handle, options: *const rsf_vkdlss_options| -> i32 {
+            let options = unsafe { &*options };
+            assert_eq!(options.mode, 3);
+            assert_eq!((options.hdr, options.auto_exposure), (1, 1));
+            assert_eq!(options.presets, [FAKE_DLSS_PRESET; 6]);
+            unsafe {
+                fake(native)
+                    .calls
+                    .push(Call::DlssOptions(options.presets[0]))
+            };
+            0
+        }
+    ),
+    tag: leaf!(
+        |_: Handle, _: usize, _: Handle, tags: *const rsf_vkdlss_tag| -> i32 {
+            let tags = unsafe { &*tags.cast::<[rsf_vkdlss_tag; 5]>() };
+            assert_eq!(tags.each_ref().map(|tag| tag.kind), [3, 0, 1, 4, 29]);
+            assert_eq!(unsafe { (*tags[0].image).initialized }, 1);
+            assert_eq!(unsafe { (*tags[3].image).initialized }, 1);
+            assert_eq!(
+                (tags[3].layout, tags[3].width, tags[3].height),
+                (GENERAL, 128, 72)
+            );
+            0
+        }
+    ),
+    evaluate: leaf!(|native: Handle, _: usize, _: Handle| -> i32 {
         unsafe { fake(native).dispatch_result }
-    })),
-    capture_parameters: Some(leaf!(|native: Handle, _: *const Frame, reset: u32| -> () {
+    }),
+    capture_parameters: leaf!(|native: Handle, _: *const Frame, reset: u32| -> () {
         unsafe { fake(native).calls.push(Call::DlssParameters(reset)) };
-    })),
-    capture_record: Some(leaf!(|native: Handle,
-                                _: Handle,
-                                _: *const Image,
-                                _: *const rsf_frame_record,
-                                role: *const c_char,
-                                _: u32|
+    }),
+    capture_record: leaf!(|native: Handle,
+                           _: Handle,
+                           _: *const Image,
+                           _: *const rsf_frame_record,
+                           role: *const c_char,
+                           _: u32|
      -> () {
         unsafe {
             fake(native).calls.push(Call::Capture(
@@ -302,27 +298,19 @@ static DLSS: rsf_vkdlss_platform = rsf_vkdlss_platform {
                     .into_owned(),
             ))
         };
-    })),
-    sharpen: Some(leaf!(|native: Handle,
-                         _: Handle,
-                         _: *const Frame,
-                         _: u64|
-     -> () {
+    }),
+    sharpen: leaf!(|native: Handle, _: Handle, _: *const Frame, _: u64| -> () {
         unsafe { fake(native).calls.push(Call::Sharpen) };
-    })),
+    }),
     release: Some(leaf!(|_: Handle, token: usize, native: Handle| -> i32 {
         assert_eq!(token, 0);
         unsafe { fake(native).destroy_result }
     })),
-    flush: Some(leaf!(|native: Handle| -> () {
-        unsafe { fake(native).calls.push(Call::Flush) }
-    })),
-    retire: Some(leaf!(|native: Handle, commands: Handle| -> () {
+    flush: leaf!(|native: Handle| -> () { unsafe { fake(native).calls.push(Call::Flush) } }),
+    retire: leaf!(|native: Handle, commands: Handle| -> () {
         unsafe { fake(native).calls.push(Call::Retire(commands as usize)) }
-    })),
-    preset_valid: Some(leaf!(|preset: u32| -> i32 {
-        i32::from(preset == FAKE_DLSS_PRESET)
-    })),
+    }),
+    preset_valid: leaf!(|preset: u32| -> i32 { i32::from(preset == FAKE_DLSS_PRESET) }),
 };
 
 // Types 1 and 2 are compatible inside the three reported types; 2 and 3 are device-local.
@@ -840,14 +828,14 @@ fn dlss_owner_routing_preserves_history_and_checked_release() {
     let mut state = Fake::default();
     let setup = state.setup(RSF_SR_DLSS);
     static REFUSING: rsf_vkdlss_platform = rsf_vkdlss_platform {
-        invoke: Some(leaf!(|call: *const rsf_slvk_call| -> i32 {
+        invoke: leaf!(|call: *const rsf_slvk_call| -> i32 {
             let call = unsafe { &*call };
             assert_eq!(call.struct_size as usize, size_of::<rsf_slvk_call>());
             assert_eq!(call.abi_version, RSF_SLVK_ABI_VERSION);
             assert_eq!((call.session_id, call.frame_id), (0, 0));
             assert!(call.callback.is_some());
             NOT_READY
-        })),
+        }),
         ..DLSS
     };
     assert_eq!(
