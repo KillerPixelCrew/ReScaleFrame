@@ -3,13 +3,14 @@
 use super::{FixtureError, log, require};
 use crate::sys::*;
 use rsf_game_sys::backend_result::OK;
-use rsf_test_support::d3d12::{copy_location, transition};
+use rsf_test_support::d3d12::{buffer, copy_location, footprint, transition};
+use rsf_test_support::enable_d3d12_debug_layer;
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::transmute;
 use std::ptr::null_mut;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{GetDC, HDC, ReleaseDC};
-use windows::Win32::Graphics::{Direct3D12::*, Dxgi::Common::DXGI_SAMPLE_DESC, OpenGL::*};
+use windows::Win32::Graphics::{Direct3D12::*, OpenGL::*};
 use windows::Win32::UI::WindowsAndMessaging::WS_POPUP;
 use windows::core::{Interface, s, w};
 
@@ -41,13 +42,8 @@ fn enable_debug(gl_debug: bool) {
             glEnable(0x8242); // GL_DEBUG_OUTPUT_SYNCHRONOUS
             callback(debug_gl, std::ptr::null());
         }
-        let mut debug: Option<ID3D12Debug> = None;
-        if D3D12GetDebugInterface(&mut debug).is_ok()
-            && let Some(debug) = debug
-        {
-            debug.EnableDebugLayer();
-        }
     }
+    enable_d3d12_debug_layer();
 }
 
 /// What wglGetProcAddress returns for a present entry point.
@@ -125,50 +121,13 @@ impl Drop for Framebuffer {
     }
 }
 
-unsafe fn readback(
+fn readback(
     device: &ID3D12Device,
     resource: &ID3D12Resource,
 ) -> Result<(ID3D12Resource, D3D12_PLACED_SUBRESOURCE_FOOTPRINT, usize), FixtureError> {
-    let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
-    let mut bytes = 0;
-    let mut readback = None;
-    unsafe {
-        device.GetCopyableFootprints(
-            &resource.GetDesc(),
-            0,
-            1,
-            0,
-            Some(&mut footprint),
-            None,
-            None,
-            Some(&mut bytes),
-        );
-        device.CreateCommittedResource(
-            &D3D12_HEAP_PROPERTIES {
-                Type: D3D12_HEAP_TYPE_READBACK,
-                ..Default::default()
-            },
-            D3D12_HEAP_FLAG_NONE,
-            &D3D12_RESOURCE_DESC {
-                Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
-                Width: bytes,
-                Height: 1,
-                DepthOrArraySize: 1,
-                MipLevels: 1,
-                SampleDesc: DXGI_SAMPLE_DESC {
-                    Count: 1,
-                    Quality: 0,
-                },
-                Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
-                ..Default::default()
-            },
-            D3D12_RESOURCE_STATE_COPY_DEST,
-            None,
-            &mut readback,
-        )
-    }
-    .map_err(|_| FixtureError::Fail("create verification readback"))?;
-    let readback = readback.ok_or(FixtureError::Fail("readback resource missing"))?;
+    let (footprint, bytes) = footprint(device, &unsafe { resource.GetDesc() });
+    let readback = buffer(device, bytes, D3D12_HEAP_TYPE_READBACK)
+        .map_err(|_| FixtureError::Fail("create verification readback"))?;
     Ok((readback, footprint, bytes as usize))
 }
 
@@ -178,7 +137,7 @@ unsafe fn verify_gl_clear(
     device: &ID3D12Device,
     texture: &ID3D12Resource,
 ) -> Result<(), FixtureError> {
-    let (readback, footprint, bytes) = unsafe { readback(device, texture) }?;
+    let (readback, footprint, bytes) = readback(device, texture)?;
     let mut commands = null_mut();
     let mut slot = 0;
     unsafe {
