@@ -3,7 +3,7 @@ use super::*;
 
 pub(super) fn run() -> i32 {
     sample_native_thread();
-    rsf_core_native_fg_reflex_ordering_set(1);
+    platform::rsf_native_fg_reflex_ordering_set(1);
     assert!(send(fact(1, RSF_GAME_CPU_FRAME_BEGIN)));
     assert!(send(fact(1, RSF_GAME_CPU_INPUT_SAMPLE)));
     assert!(send(fact(1, RSF_GAME_CPU_SIMULATION_BEGIN)));
@@ -126,13 +126,13 @@ pub(super) fn run() -> i32 {
     assert!(rsf_native_latency_has_claim(1) == 0);
     let mut retired = request_frame(3);
     assert_eq!(
-        unsafe { rsf_core_native_latency_frame_get(&mut retired) },
+        unsafe { latency_frame_get(&mut retired) },
         0
     );
 
     let paced_before_rendered = pace_calls();
     rsf_native_fg_rendered_source_set(1);
-    rsf_core_native_fg_reflex_ordering_set(0);
+    platform::rsf_native_fg_reflex_ordering_set(0);
     let previous_markers = marker_count();
     assert!(send(fact(1, RSF_GAME_CPU_FRAME_BEGIN)));
     assert!(!send(fact(1, RSF_GAME_CPU_INPUT_SAMPLE)));

@@ -104,7 +104,7 @@ pub(crate) extern "C" fn rsf_native_fg_rendered_source_set(enabled: u32) {
 
 #[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_native_fg_reflex_ordering_set(threaded: u32) {
-    rsf_core_native_fg_reflex_ordering_set(threaded);
+    THREADED.store(threaded != 0, Ordering::Relaxed);
 }
 
 #[unsafe(no_mangle)]
@@ -134,7 +134,9 @@ pub(crate) unsafe extern "C" fn rsf_native_fg_submission(pass: *const Pass, begi
 
 #[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_native_latency_graphics(api: u32) {
-    rsf_core_native_latency_graphics(api);
+    if matches!(api, 11 | 12) {
+        GRAPHICS_API.store(api, Ordering::Relaxed);
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -154,7 +156,7 @@ pub(crate) unsafe extern "C" fn rsf_native_latency_status_get(out: *mut LatencyS
 
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_native_latency_frame_get(out: *mut LatencyFrame) -> i32 {
-    unsafe { rsf_core_native_latency_frame_get(out) }
+    unsafe { latency_frame_get(out) }
 }
 
 #[unsafe(no_mangle)]

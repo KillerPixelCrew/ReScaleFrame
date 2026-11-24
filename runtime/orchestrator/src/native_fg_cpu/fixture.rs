@@ -178,7 +178,7 @@ fn request_frame(source: u64) -> rsf_native_latency_frame {
 
 fn snapshot(source: u64) -> rsf_native_latency_frame {
     let mut out = request_frame(source);
-    assert_ne!(unsafe { rsf_core_native_latency_frame_get(&mut out) }, 0);
+    assert_ne!(unsafe { latency_frame_get(&mut out) }, 0);
     out
 }
 

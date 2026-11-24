@@ -25,7 +25,7 @@ use crate::sys::{
 use crate::sys::{
     RSF_REFLEX_ON, rsf_native_input_routes as Routes, rsf_native_latency_status as LatencyStatus,
 };
-use rsf_game_sys::backend_result::OK;
+use rsf_game_sys::backend_result::{ABI_MISMATCH, INVALID_ARGUMENT as INVALID, NOT_READY, OK};
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::mem::zeroed;
@@ -41,9 +41,6 @@ type Handle = *mut c_void;
 
 const CAPACITY: usize = 128;
 const D3D_CLAIM: u32 = 1;
-const NOT_READY: i32 = -8;
-const INVALID: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
 // The latency markers the presentation bridge takes, in frame order (rsf_d3d11_present_marker).
 const SIM_START: u32 = 0;
 const SIM_END: u32 = 1;
@@ -1350,17 +1347,15 @@ unsafe fn fg_frame(pass: *const Pass, begin: u32) {
     }
     {
         let mut ledger = lock(&LEDGER);
-        if ledger.exact(source).is_none() {
+        let Some(frame) = ledger.exact(source) else {
             return;
-        }
-        if begin != 0 && rendered_source() {
+        };
+        if begin == 0 {
+            frame.rhi_ends += 1;
+        } else if !rendered_source() {
+            frame.rhi_begins += 1;
+        } else {
             ledger.rendered_begin(pass, call!(generation), now_qpc(), win32::qpc_frequency());
-        } else if let Some(frame) = ledger.exact(source) {
-            if begin != 0 {
-                frame.rhi_begins += 1;
-            } else {
-                frame.rhi_ends += 1;
-            }
         }
     }
     if begin != 0 {
@@ -1458,16 +1453,6 @@ unsafe fn fg_submission(pass: *const Pass, begin: u32) {
     }
 }
 
-extern "C" fn rsf_core_native_fg_reflex_ordering_set(threaded: u32) {
-    THREADED.store(threaded != 0, Ordering::Relaxed);
-}
-
-extern "C" fn rsf_core_native_latency_graphics(api: u32) {
-    if matches!(api, 11 | 12) {
-        GRAPHICS_API.store(api, Ordering::Relaxed);
-    }
-}
-
 fn latency_render(id: u64, begin: u32) {
     if begin != 0 {
         start_render_marker(id);
@@ -1544,7 +1529,7 @@ pub(crate) unsafe extern "C" fn rsf_core_native_input_routes_get(out: *mut Route
     1
 }
 
-unsafe extern "C" fn rsf_core_native_latency_frame_get(out: *mut LatencyFrame) -> i32 {
+unsafe fn latency_frame_get(out: *mut LatencyFrame) -> i32 {
     if !unsafe { has_capacity(out) } || unsafe { (*out).version } != 1 {
         return 0;
     }
