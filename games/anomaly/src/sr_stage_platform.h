@@ -17,25 +17,6 @@ struct rsf_sr_draw_views;
 
 typedef void (*rsf_anomaly_sr_log)(void*, const char*);
 
-/* The verified engine layout and synchronous guarded reads borrowed by constant correction. */
-typedef struct rsf_anomaly_position_layout {
-    uint32_t destination, load, buffer_size, buffer_data, buffer_changed, buffer_slots;
-    uint32_t stage_bits[6], stage_shifts[6];
-} rsf_anomaly_position_layout;
-typedef struct rsf_anomaly_position_platform {
-    void* user;
-    bool (*read)(void*, uintptr_t, void*, size_t);
-    bool (*write)(void*, uintptr_t, const void*, size_t);
-    uintptr_t (*buffer)(void*, uintptr_t, uint32_t);
-} rsf_anomaly_position_platform;
-#ifdef __cplusplus
-static_assert(sizeof(rsf_anomaly_position_layout) == 72 && sizeof(rsf_anomaly_position_platform) == 32,
-    "position correction layout");
-#else
-_Static_assert(sizeof(rsf_anomaly_position_layout) == 72 && sizeof(rsf_anomaly_position_platform) == 32,
-    "position correction layout");
-#endif
-
 // Adapter settings supplied to the temporal driver.
 typedef struct rsf_anomaly_sr_settings {
     bool enabled;
@@ -101,8 +82,6 @@ typedef struct rsf_anomaly_sr_burst_verdict {
 #ifdef __cplusplus
 extern "C" {
 #endif
-uint32_t rsf_anomaly_sr_correct_position_constant(
-    const rsf_anomaly_position_layout*, const rsf_anomaly_position_platform*, uintptr_t, float, float);
 float rsf_anomaly_sr_clamp_mip_offset(float);
 float rsf_anomaly_sr_mip_delta(uint32_t render_width, uint32_t output_width, float offset);
 uint32_t rsf_anomaly_sr_phase_count(uint32_t render_width, uint32_t output_width);

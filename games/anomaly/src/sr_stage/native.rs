@@ -117,8 +117,6 @@ static RESOURCES: AtomicPtr<StageResources> = AtomicPtr::new(null_mut());
 static TWIN_LOG: AtomicPtr<Log> = AtomicPtr::new(null_mut());
 static SWAP: OnceLock<usize> = OnceLock::new();
 
-// RCache.constants (R_constants) inside CBackend.
-const BACKEND_CONSTANTS_OFFSET: u32 = 0x5c0;
 
 fn native() -> &'static Native {
     // Set by bind before the stage table is registered; the table is a static of the C leaf.
@@ -337,54 +335,40 @@ static POSITION_LAYOUT: crate::sr_reconstruction::Layout = crate::sr_reconstruct
     stage_shifts: [16, 12, 8, 20, 24, 28],
 };
 
-struct SyncPositionPlatform(crate::sr_reconstruction::Platform);
-// SAFETY: the record holds only function pointers and a null user.
-unsafe impl Sync for SyncPositionPlatform {}
+/// The engine memory and constant-buffer leaves of position correction (sr_reconstruction.rs).
+#[cfg(not(test))]
+pub(crate) mod position {
+    use super::*;
 
-static POSITION_PLATFORM: SyncPositionPlatform =
-    SyncPositionPlatform(crate::sr_reconstruction::Platform {
-        user: null_mut(),
-        read: position_read,
-        write: position_write,
-        buffer: position_buffer,
-    });
+    // RCache.constants (R_constants) inside CBackend.
+    const BACKEND_CONSTANTS_OFFSET: u32 = 0x5c0;
 
-unsafe extern "C" fn position_read(_: Ptr, address: usize, out: Ptr, size: usize) -> bool {
-    unsafe { (native().copy.unwrap())(out, address as *const c_void, size) }
-}
+    pub(crate) unsafe fn read(address: usize, out: Ptr, size: usize) -> bool {
+        unsafe { (native().copy.unwrap())(out, address as *const c_void, size) }
+    }
 
-unsafe extern "C" fn position_write(
-    _: Ptr,
-    address: usize,
-    input: *const c_void,
-    size: usize,
-) -> bool {
-    unsafe { (native().copy.unwrap())(address as Ptr, input, size) }
-}
+    pub(crate) unsafe fn write(address: usize, input: *const c_void, size: usize) -> bool {
+        unsafe { (native().copy.unwrap())(address as Ptr, input, size) }
+    }
 
-unsafe extern "C" fn position_buffer(_: Ptr, constant: usize, stage: u32) -> usize {
-    let function = CONSTANT_BUFFER.load(Ordering::Acquire);
-    let Some(sr) = sr().filter(|_| function != 0) else {
-        return 0;
-    };
-    unsafe {
-        (native().constant_buffer.unwrap())(
-            function as Ptr,
-            address(sr.backend_rva + BACKEND_CONSTANTS_OFFSET),
-            constant,
-            stage,
-        )
+    pub(crate) unsafe fn buffer(constant: usize, stage: u32) -> usize {
+        let function = CONSTANT_BUFFER.load(Ordering::Acquire);
+        let Some(sr) = sr().filter(|_| function != 0) else {
+            return 0;
+        };
+        unsafe {
+            (native().constant_buffer.unwrap())(
+                function as Ptr,
+                address(sr.backend_rva + BACKEND_CONSTANTS_OFFSET),
+                constant,
+                stage,
+            )
+        }
     }
 }
 
 unsafe extern "C" fn correct_position_constant(_: Ptr, constant: Ptr, x: f32, y: f32) -> u32 {
-    rsf_anomaly_sr_correct_position_constant(
-        &POSITION_LAYOUT,
-        &POSITION_PLATFORM.0,
-        constant as usize,
-        x,
-        y,
-    )
+    rsf_anomaly_sr_correct_position_constant(&POSITION_LAYOUT, constant as usize, x, y)
 }
 
 // ---- the stage leaves ----------------------------------------------------------------------------------------------

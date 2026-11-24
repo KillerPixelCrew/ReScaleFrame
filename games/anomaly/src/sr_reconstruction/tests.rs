@@ -2,7 +2,9 @@
 use super::*;
 use crate::sr_stage::jitter_sample;
 use crate::sr_swap::jitter_projection;
-use std::ptr::{copy_nonoverlapping, from_mut};
+use std::cell::Cell;
+use std::ffi::c_void;
+use std::ptr::{copy_nonoverlapping, from_mut, null_mut};
 
 const LAYOUT: Layout = Layout {
     destination: 0x10,
@@ -83,57 +85,53 @@ impl Engine {
     }
 
     fn correct(&mut self) -> u32 {
-        let platform = Platform {
-            user: from_mut(self).cast(),
-            read,
-            write,
-            buffer,
+        ENGINE.set(from_mut(self));
+        let result = rsf_anomaly_sr_correct_position_constant(&LAYOUT, CONSTANT, 0.25, -0.125);
+        ENGINE.set(null_mut());
+        result
+    }
+}
+
+thread_local! {
+    /// The engine of the running correction.
+    static ENGINE: Cell<*mut Engine> = const { Cell::new(null_mut()) };
+}
+
+/// The leaves over the running correction's engine memory.
+pub(super) mod engine {
+    use super::*;
+
+    pub(crate) unsafe fn read(address: usize, out: *mut c_void, size: usize) -> bool {
+        let engine = unsafe { &*ENGINE.get() };
+        let Some(bytes) = engine.memory.get(address..address.saturating_add(size)) else {
+            return false;
         };
-        rsf_anomaly_sr_correct_position_constant(&LAYOUT, &platform, CONSTANT, 0.25, -0.125)
+        unsafe { copy_nonoverlapping(bytes.as_ptr(), out.cast(), size) };
+        true
     }
-}
 
-unsafe extern "C" fn read(
-    user: *mut c_void,
-    address: usize,
-    out: *mut c_void,
-    size: usize,
-) -> bool {
-    let engine = unsafe { &*user.cast::<Engine>() };
-    let Some(bytes) = engine.memory.get(address..address.saturating_add(size)) else {
-        return false;
-    };
-    unsafe { copy_nonoverlapping(bytes.as_ptr(), out.cast(), size) };
-    true
-}
-
-unsafe extern "C" fn write(
-    user: *mut c_void,
-    address: usize,
-    input: *const c_void,
-    size: usize,
-) -> bool {
-    let engine = unsafe { &mut *user.cast::<Engine>() };
-    let write = engine.writes;
-    engine.writes += 1;
-    if engine
-        .fail_write
-        .is_some_and(|failure| failure == write || (engine.fail_restoration && write > failure))
-    {
-        return false;
+    pub(crate) unsafe fn write(address: usize, input: *const c_void, size: usize) -> bool {
+        let engine = unsafe { &mut *ENGINE.get() };
+        let write = engine.writes;
+        engine.writes += 1;
+        if engine.fail_write.is_some_and(|failure| {
+            failure == write || (engine.fail_restoration && write > failure)
+        }) {
+            return false;
+        }
+        let Some(bytes) = engine.memory.get_mut(address..address.saturating_add(size)) else {
+            return false;
+        };
+        unsafe { copy_nonoverlapping(input.cast(), bytes.as_mut_ptr(), size) };
+        true
     }
-    let Some(bytes) = engine.memory.get_mut(address..address.saturating_add(size)) else {
-        return false;
-    };
-    unsafe { copy_nonoverlapping(input.cast(), bytes.as_mut_ptr(), size) };
-    true
-}
 
-unsafe extern "C" fn buffer(user: *mut c_void, constant: usize, stage: u32) -> usize {
-    let engine = unsafe { &mut *user.cast::<Engine>() };
-    assert_eq!(constant, CONSTANT);
-    engine.gets += 1;
-    engine.selected[stage as usize]
+    pub(crate) unsafe fn buffer(constant: usize, stage: u32) -> usize {
+        let engine = unsafe { &mut *ENGINE.get() };
+        assert_eq!(constant, CONSTANT);
+        engine.gets += 1;
+        engine.selected[stage as usize]
+    }
 }
 
 #[test]
