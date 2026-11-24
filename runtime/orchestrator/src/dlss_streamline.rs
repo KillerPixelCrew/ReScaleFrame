@@ -33,8 +33,6 @@ use std::sync::Mutex;
 use windows::core::{IUnknown, Interface};
 
 type Handle = *mut c_void;
-const OPTIMAL: u32 = 1;
-const OPTIONS: u32 = 2;
 const LEGACY_SR_LOG: u32 = 0;
 
 fn say(text: &str) {
@@ -136,7 +134,7 @@ unsafe fn lookup(entries: &Entries, feature: u32, name: &CStr, out: &mut Handle)
     }
 }
 
-/// The DLSS feature functions, with the bits of those resolved.
+/// The DLSS feature functions.
 #[derive(Clone, Copy, Default)]
 struct Features {
     optimal: Option<GetOptimalSettings<DlssOptions, DlssOptimal>>,
@@ -144,10 +142,8 @@ struct Features {
 }
 
 impl Features {
-    fn bits(&self) -> u32 {
-        let optimal = if self.optimal.is_some() { OPTIMAL } else { 0 };
-        let options = if self.options.is_some() { OPTIONS } else { 0 };
-        optimal | options
+    fn complete(&self) -> bool {
+        self.optimal.is_some() && self.options.is_some()
     }
 }
 
@@ -192,7 +188,7 @@ fn shared_features_refuse_a_vendor_error_even_with_an_address() {
         Some(MISSING_ENTRY_POINT)
     );
     let features = unsafe { resolve_features(false, lookup) }.ok().unwrap();
-    assert_eq!(features.bits(), OPTIMAL | OPTIONS);
+    assert!(features.complete());
 }
 
 enum Route {
@@ -240,10 +236,6 @@ struct Session {
 impl Session {
     fn active(&self) -> bool {
         self.shutdown_failure.is_none()
-    }
-
-    fn features(&self) -> u32 {
-        self.features.bits()
     }
 }
 
@@ -408,7 +400,7 @@ unsafe fn rsf_core_dlss_streamline_share_host(host: Handle, log: Log, user: Hand
             lookup(&entries, FEATURE_DLSS, name, address)
         })
     } {
-        Ok(features) if features.bits() == OPTIMAL | OPTIONS => features,
+        Ok(features) if features.complete() => features,
         result => {
             streamline_log::clear(LEGACY_SR_LOG, 0);
             return match result {
@@ -479,7 +471,7 @@ unsafe fn rsf_core_dlss_streamline_set_device(device: Handle) -> i32 {
     session.route = Route::Owned(Some(unsafe { com_ref::retain(device) }));
     session.features = features;
     session.applied = [None; 2];
-    if features.bits() == OPTIMAL | OPTIONS {
+    if features.complete() {
         OK
     } else {
         say("DLSS feature functions are not available");
@@ -557,7 +549,7 @@ unsafe fn rsf_core_dlss_streamline_support(out: *mut Support) -> i32 {
     if supported { OK } else { NOT_SUPPORTED }
 }
 
-unsafe fn rsf_core_dlss_streamline_plan(plan: *mut Plan) -> i32 {
+pub(crate) unsafe fn rsf_dlss_plan_render_size(plan: *mut Plan) -> i32 {
     if !unsafe { has_capacity(plan) } {
         return INVALID_ARGUMENT;
     }
@@ -575,14 +567,12 @@ unsafe fn rsf_core_dlss_streamline_plan(plan: *mut Plan) -> i32 {
     let Ok(state) = SESSION.try_lock() else {
         return NOT_READY;
     };
-    let Some(session) = state
+    let Some(optimal) = state
         .as_ref()
-        .filter(|session| session.active() && session.features() & OPTIMAL != 0)
+        .filter(|session| session.active())
+        .and_then(|session| session.features.optimal)
     else {
         return NOT_READY;
-    };
-    let Some(optimal) = session.features.optimal else {
-        return FEATURE_FAILED;
     };
     let options = sdk::plan_options(&dimensions(quality, width, height));
     let mut sizes = sdk::dlss_optimal();
@@ -609,7 +599,7 @@ unsafe fn rsf_core_dlss_streamline_plan(plan: *mut Plan) -> i32 {
     OK
 }
 
-unsafe fn rsf_core_dlss_streamline_present(
+pub(crate) unsafe fn rsf_dlss_native_present(
     chain: Handle,
     interval: u32,
     flags: u32,
@@ -714,10 +704,10 @@ unsafe fn rsf_core_dlss_streamline_evaluate(
     {
         return INVALID_ARGUMENT;
     }
-    let Some(session) = state
-        .as_mut()
-        .filter(|session| session.active() && session.features() & OPTIONS != 0)
-    else {
+    let Some(session) = state.as_mut().filter(|session| session.active()) else {
+        return NOT_READY;
+    };
+    let Some(set_options) = session.features.options else {
         return NOT_READY;
     };
     let entries = session.entries;
@@ -772,10 +762,6 @@ unsafe fn rsf_core_dlss_streamline_evaluate(
     };
     let applied = &mut session.applied[slot as usize];
     if *applied != Some(options) {
-        let Some(set_options) = session.features.options else {
-            *applied = None;
-            return FEATURE_FAILED;
-        };
         if unsafe { set_options(&viewport, &sdk::options(&options.payload())) } != RESULT_OK {
             say("slDLSSSetOptions failed");
             *applied = None;
@@ -808,7 +794,7 @@ unsafe fn rsf_core_dlss_streamline_evaluate(
     OK
 }
 
-unsafe fn rsf_core_dlss_streamline_release(slot: u32) -> i32 {
+pub(crate) unsafe fn rsf_dlss_release_viewport(slot: u32) -> i32 {
     if slot >= 2 {
         return INVALID_ARGUMENT;
     }

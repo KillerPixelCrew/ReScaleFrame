@@ -16,10 +16,13 @@ pub(super) use crate::d3d11_present::rsf_d3d11_present_host as present_host;
 pub(super) use crate::d3d11_sharpening::rsf_core_sharpen11_destroy as sharpen_destroy;
 use crate::d3d11_sharpening::rsf_core_sharpen11_run;
 pub(super) use crate::dlss_streamline::exports::{
-    rsf_dlss_evaluate as evaluate_layer, rsf_dlss_load as load, rsf_dlss_plan_render_size as plan,
+    rsf_dlss_evaluate as evaluate_layer, rsf_dlss_load as load,
     rsf_dlss_query_support as query_support, rsf_dlss_release_resources as release_resources,
-    rsf_dlss_release_viewport as release_viewport, rsf_dlss_set_device as set_device,
-    rsf_dlss_share_host as share_host, rsf_dlss_shutdown as shutdown,
+    rsf_dlss_set_device as set_device, rsf_dlss_share_host as share_host,
+    rsf_dlss_shutdown as shutdown,
+};
+pub(super) use crate::dlss_streamline::{
+    rsf_dlss_plan_render_size as plan, rsf_dlss_release_viewport as release_viewport,
 };
 pub(super) use crate::input_dump::rsf_input_dump_texture as input_dump;
 use crate::input_dump::{Log, TextureOptions};

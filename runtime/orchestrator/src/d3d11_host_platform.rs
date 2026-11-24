@@ -33,7 +33,7 @@ pub(super) use crate::dlss_pipeline::exports::{
     rsf_dlss_pipeline_start_backend as pipeline_start,
 };
 pub(super) use crate::dlss_pipeline::rsf_core_dlss_pipeline_apply_sharpening as pipeline_sharpen;
-pub(super) use crate::dlss_streamline::exports::rsf_dlss_native_present as dlss_native_present;
+pub(super) use crate::dlss_streamline::rsf_dlss_native_present as dlss_native_present;
 pub(super) use crate::native_fg::{
     rsf_native_fg_final as fg_final, rsf_native_fg_options_set as fg_options_set,
     rsf_native_fg_retire as fg_retire, rsf_native_fg_set_log as fg_set_log,
