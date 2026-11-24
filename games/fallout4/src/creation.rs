@@ -16,14 +16,15 @@ use crate::sys::{
     rsf_d3d11_presentation_binding, rsf_fallout4_create_call,
 };
 use crate::{EXECUTABLE, EXECUTABLE_SHA256, Plain, RSF_ERROR_NOT_READY, RSF_OK};
-use crate::{image, message, read};
-use rsf_game_sys::rsf_game_host_services;
-use rsf_game_sys::win32::typed_export;
+use crate::{image, read};
+use rsf_game_sys::win32::{module_path, typed_export};
+use rsf_game_sys::windows_path::leaf_is;
+use rsf_game_sys::{host_log, rsf_game_host_services};
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Mutex, PoisonError};
 use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
-use windows_sys::Win32::System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW};
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 use windows_sys::core::w;
@@ -143,35 +144,20 @@ pub(crate) fn accept_window(candidate: *mut c_void) -> bool {
     owned && process == unsafe { GetCurrentProcessId() }
 }
 
-fn executable_name(leaf: &[u16]) -> bool {
-    let expected = EXECUTABLE.to_bytes();
-    leaf.len() == expected.len()
-        && leaf.iter().zip(expected).all(|(&actual, expected)| {
-            u8::try_from(actual).is_ok_and(|actual| actual.eq_ignore_ascii_case(expected))
-        })
-}
-
 /// Checks the executable name and recognized SHA-256 once for the preparing transaction.
 pub(crate) fn admit_build() -> bool {
     unsafe extern "C" {
         fn rsf_common_sha256_file_hex(path: *const u16, output: *mut [u8; 64]) -> u32;
     }
-    let mut path = [0u16; 32768];
-    let length = unsafe { GetModuleFileNameW(std::ptr::null_mut(), path.as_mut_ptr(), 32768) };
-    let length = length as usize;
-    if length == 0 || length >= path.len() {
+    let Some(path) = (unsafe { module_path(std::ptr::null_mut()) }) else {
         return false;
-    }
-    let name = &path[..length];
-    let leaf = name
-        .iter()
-        .rposition(|&unit| unit == u16::from(b'\\'))
-        .map_or(name, |separator| &name[separator + 1..]);
-    if !executable_name(leaf) {
+    };
+    if !leaf_is(path.units(), EXECUTABLE) {
         return false;
     }
     let mut digest = [0; 64];
-    let hashed = unsafe { rsf_common_sha256_file_hex(path.as_ptr(), &raw mut digest) } != 0;
+    let hashed =
+        unsafe { rsf_common_sha256_file_hex(path.terminated().as_ptr(), &raw mut digest) } != 0;
     hashed && digest == *EXECUTABLE_SHA256.to_bytes()
 }
 
@@ -320,11 +306,13 @@ fn close(
             }
         }
     }
-    let text = message(format!(
-        "Fallout4 cold creation native_HRESULT=0x{:08x} scope_end={admitted} binding={bound}; outer outputs retained, no scene/input producers",
-        native_result as u32
-    ));
-    let _ = crate::log_host(&scoped.host, &text);
+    host_log(
+        &scoped.host,
+        &format!(
+            "Fallout4 cold creation native_HRESULT=0x{:08x} scope_end={admitted} binding={bound}; outer outputs retained, no scene/input producers",
+            native_result as u32
+        ),
+    );
     unsafe { SetLastError(last_error) };
 }
 

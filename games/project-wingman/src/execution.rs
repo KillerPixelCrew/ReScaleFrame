@@ -6,6 +6,7 @@ use crate::windows::{
     disable_hook, enable_hook, image_base, rsf_wingman_acquire_texture,
     rsf_wingman_release_texture, rsf_wingman_report_execution, tick_count,
 };
+use rsf_game_sys::ffi_util::try_box;
 use rsf_game_sys::{
     RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR, rsf_game_host_services, rsf_game_render_pass,
 };
@@ -402,27 +403,20 @@ impl Command {
     fn acquire(pass: usize) -> Option<Box<Self>> {
         let packet = take_pass(pass)?;
         let host = observer::active_host()?;
-        // A failed diagnostic allocation must leave the native pass playable.
-        let raw = unsafe { std::alloc::alloc(std::alloc::Layout::new::<Self>()) }.cast::<Self>();
-        if raw.is_null() {
-            return None;
-        }
         let mut pass = packet.pass;
         pass.color_input = ptr::null_mut();
         pass.depth = ptr::null_mut();
         pass.motion = ptr::null_mut();
         pass.color_output = ptr::null_mut();
         pass.session_id = host.session_id;
-        unsafe {
-            raw.write(Self {
-                vtable: COMMAND_VTABLE.as_ptr(),
-                next: ptr::null_mut(),
-                pass,
-                host,
-                reserved: false,
-            });
-        }
-        let mut command = unsafe { Box::from_raw(raw) };
+        // A failed diagnostic allocation must leave the native pass playable.
+        let mut command = try_box(Self {
+            vtable: COMMAND_VTABLE.as_ptr(),
+            next: ptr::null_mut(),
+            pass,
+            host,
+            reserved: false,
+        })?;
         let pass = &mut command.pass;
         for (out, rdg) in [
             &mut pass.color_input,

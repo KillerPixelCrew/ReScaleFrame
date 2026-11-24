@@ -22,6 +22,17 @@ pub fn absolute_path(mut units: impl Iterator<Item = u16>) -> bool {
             .is_some_and(|share| ![0, backslash, slash].contains(&share))
 }
 
+/// The last component of `path` (split at `\` or `/`) is `name`, compared ASCII case-insensitively.
+pub fn leaf_is(path: &[u16], name: &std::ffi::CStr) -> bool {
+    let leaf = path.rsplit(|&unit| matches!(unit, 0x5c | 0x2f)).next();
+    leaf.is_some_and(|leaf| {
+        leaf.len() == name.count_bytes()
+            && leaf.iter().zip(name.to_bytes()).all(|(&unit, byte)| {
+                u8::try_from(unit).is_ok_and(|unit| unit.eq_ignore_ascii_case(byte))
+            })
+    })
+}
+
 /// Checks the root of a borrowed, NUL-terminated Windows path within a unit limit.
 ///
 /// # Safety
@@ -40,6 +51,20 @@ pub unsafe fn absolute_wide_path(path: *const u16, limit: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn leaf_matches_the_final_component_ignoring_ascii_case() {
+        let name = c"Game.exe";
+        assert!(leaf_is(&wide(r"C:\Games\GAME.EXE"), name));
+        assert!(leaf_is(&wide("Game.exe"), name));
+        assert!(!leaf_is(&wide(r"C:\Game.exe\other"), name));
+        assert!(!leaf_is(&wide(r"C:\xGame.exe"), name));
+        assert!(!leaf_is(&[0x0131; 8], name));
+    }
+
+    fn wide(text: &str) -> Vec<u16> {
+        text.encode_utf16().collect()
+    }
 
     #[test]
     fn requires_a_rooted_drive_or_unc() {

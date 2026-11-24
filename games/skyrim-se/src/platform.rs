@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Process platform and native exception boundary for the Skyrim adapter.
 use rsf_game_sys::rsf_game_host_services;
+use rsf_game_sys::win32::module_path;
 pub(crate) use rsf_game_sys::{
     rsf_d3d11_creation_scope as CreationScope, rsf_d3d11_native_chain as NativeChain,
 };
@@ -10,8 +11,8 @@ use std::path::Path;
 use std::ptr;
 use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
 use windows_sys::Win32::System::LibraryLoader::{
-    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleFileNameW,
-    GetModuleHandleExW, GetModuleHandleW, GetProcAddress,
+    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExW,
+    GetModuleHandleW, GetProcAddress,
 };
 use windows_sys::Win32::System::Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery};
 
@@ -100,20 +101,9 @@ pub(crate) fn get() -> Option<&'static Platform> {
 }
 
 pub(crate) use rsf_game_sys::ffi_util::wide;
-pub(crate) fn module_path(module: usize, path: &mut [u16]) -> usize {
-    let capacity = u32::try_from(path.len()).unwrap_or(u32::MAX);
-    unsafe { GetModuleFileNameW(module as _, path.as_mut_ptr(), capacity) as usize }
-}
 
 pub(super) fn hex_sha256(path: &Path) -> Option<[u8; 64]> {
-    let digest = rsf_windows::sha256_file(path)?;
-    let mut hex = [0; 64];
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    for (byte, pair) in digest.into_iter().zip(hex.chunks_exact_mut(2)) {
-        pair[0] = DIGITS[usize::from(byte >> 4)];
-        pair[1] = DIGITS[usize::from(byte & 0x0f)];
-    }
-    Some(hex)
+    rsf_windows::sha256_file_hex(path)?.first_chunk().copied()
 }
 
 impl Platform {
@@ -178,13 +168,8 @@ impl Platform {
     }
 
     pub(crate) fn module_sha256(&self, module: usize) -> Option<[u8; 64]> {
-        let mut path = [0u16; 32_768];
-        let length = module_path(module, &mut path);
-        if length == 0 || length >= path.len() {
-            return None;
-        }
-        let path = OsString::from_wide(&path[..length]);
-        hex_sha256(Path::new(&path))
+        let path = unsafe { module_path(module as _) }?;
+        hex_sha256(Path::new(&OsString::from_wide(path.units())))
     }
 
     pub(crate) fn pin_module(&self, address: usize) -> usize {

@@ -6,6 +6,7 @@ use super::{
     before_device, excluded_byte, features_inactive, profile_matches,
 };
 use crate::platform::{self, Platform};
+use rsf_game_sys::win32::module_path;
 use std::ffi::{CStr, OsString, c_char, c_void};
 use std::fs::OpenOptions;
 use std::os::windows::{ffi::OsStringExt, fs::OpenOptionsExt, io::AsRawHandle};
@@ -28,7 +29,6 @@ use windows_sys::Win32::System::Memory::{
     UnmapViewOfFile,
 };
 
-const PATH_LIMIT: usize = 32768;
 const MODULE_NAME: *const u16 = windows_sys::w!("CommunityShaders.dll");
 const EXCEPTION: &CStr = c"CS initializer exception; RSF coexistence refused for this process.";
 const ARMED: &CStr = c"CS initializer interception armed before module load; awaiting exact-profile initialization if present.";
@@ -149,11 +149,6 @@ impl Drop for Module {
     }
 }
 
-fn module_path(module: usize, buffer: &mut [u16; PATH_LIMIT]) -> Option<usize> {
-    let len = platform::module_path(module, buffer);
-    (len != 0 && len < PATH_LIMIT).then_some(len)
-}
-
 fn file_kind(path: &[u16]) -> u32 {
     let attributes = unsafe { GetFileAttributesW(path.as_ptr()) };
     if attributes != INVALID_FILE_ATTRIBUTES {
@@ -230,10 +225,9 @@ fn inspect_profile(path: &[u16], module: usize, read: Read) -> Option<bool> {
 }
 
 fn installed_profile() -> Result<(), &'static CStr> {
-    let mut path = [0; PATH_LIMIT];
     if let Some(module) = Module::borrow(0) {
-        return if module_path(module.0, &mut path)
-            .is_some_and(|len| inspect_profile(&path[..len], module.0, read) == Some(true))
+        return if unsafe { module_path(module.0 as _) }
+            .is_some_and(|path| inspect_profile(path.units(), module.0, read) == Some(true))
         {
             Err(c"Community Shaders 1.9.1 already present before interception; prior initialization cannot be excluded.")
         } else {
@@ -241,8 +235,9 @@ fn installed_profile() -> Result<(), &'static CStr> {
         };
     }
     let unavailable = c"Community Shaders presence check failed: executable directory unavailable.";
-    let length = module_path(0, &mut path).ok_or(unavailable)?;
-    let directory = path[..length]
+    let path = unsafe { module_path(ptr::null_mut()) }.ok_or(unavailable)?;
+    let path = path.units();
+    let directory = path
         .iter()
         .rposition(|&unit| unit == u16::from(b'\\'))
         .ok_or(unavailable)?
@@ -429,10 +424,9 @@ fn initialize(platform: &Platform, skse: *const c_void) -> bool {
         );
         return false;
     };
-    let mut path = [0; PATH_LIMIT];
-    let length = module_path(module, &mut path);
+    let path = unsafe { module_path(module as _) };
     if module.checked_add(INITIALIZE) != Some(original)
-        || length.is_none_or(|len| inspect_profile(&path[..len], module, read) != Some(true))
+        || path.is_none_or(|path| inspect_profile(path.units(), module, read) != Some(true))
         || features_inactive(module, false, read) != Some(true)
         || before_device(platform.main_module(), read) != Some(true)
     {

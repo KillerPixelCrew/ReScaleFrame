@@ -26,7 +26,7 @@ use crate::sys::{
     RSF_FALLOUT4_CPU_HOOK_WORKER_JOIN, RSF_FALLOUT4_CPU_HOOK_WRAPPER, RSF_FALLOUT4_CPU_SCOPE_WORDS,
     rsf_fallout4_cpu_identity, rsf_fallout4_cpu_scope,
 };
-use crate::{MH_OK, MH_RemoveHook, image, load, message, pin, read};
+use crate::{MH_OK, MH_RemoveHook, image, load, pin, read};
 use handoff::{
     CpuIdentity, Phase, WorkerCycle, WorkerTicket, active_join_matches, invalidates_render_source,
 };
@@ -41,7 +41,7 @@ use rsf_game_sys::{
     RSF_GAME_CPU_SOURCE_BIND, RSF_GAME_CPU_SOURCE_OVERLAPS_PREDECESSOR,
     RSF_GAME_CPU_SOURCE_PRODUCED, RSF_GAME_CPU_SOURCE_RESERVE, RSF_GAME_CPU_SOURCE_SAMPLED,
     RSF_GAME_CPU_WINDOW_MESSAGE, RSF_GAME_INPUT_CONTROLLER, RSF_GAME_INPUT_KEYBOARD,
-    RSF_GAME_INPUT_MOUSE, rsf_game_cpu_event, rsf_game_cpu_receipt_event,
+    RSF_GAME_INPUT_MOUSE, host_log, rsf_game_cpu_event, rsf_game_cpu_receipt_event,
     rsf_game_cpu_source_event, rsf_game_host_services,
 };
 use std::cell::Cell;
@@ -200,7 +200,7 @@ fn predicate_bits(terms: &[bool]) -> u32 {
 }
 
 fn log(host: &rsf_game_host_services, text: String) {
-    let _ = crate::log_host(host, &message(text));
+    host_log(host, &text);
 }
 
 /// A pointer as MSVC %p renders it.

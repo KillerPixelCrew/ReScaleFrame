@@ -17,16 +17,14 @@ use crate::{
 };
 use rsf_game_sys::call_header::validate;
 use rsf_game_sys::same_upstream_identity;
-use rsf_game_sys::win32::typed_export;
+use rsf_game_sys::win32::{module_path, typed_export};
 use rsf_game_sys::{
     rsf_game_control_args, rsf_game_host_services, rsf_game_prepare_args, rsf_game_renderer_status,
     rsf_game_start_args, rsf_result,
 };
 use std::ffi::{CStr, c_void};
 use std::sync::{Mutex, MutexGuard, PoisonError};
-use windows_sys::Win32::System::LibraryLoader::{
-    GetModuleFileNameW, GetModuleHandleW, GetProcAddress,
-};
+use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::core::{s, w};
 
 const ENGINE_VERSION: &CStr = c"1.11.240.0";
@@ -120,17 +118,12 @@ impl Session {
         activate: Activate,
         host: &rsf_game_host_services,
     ) -> Result<BoundHost, rsf_result> {
-        let mut path = [0u16; 32768];
-        let length = unsafe { GetModuleFileNameW(runtime, path.as_mut_ptr(), 32768) } as usize;
-        if length == 0 || length >= path.len() {
-            return Err(RSF_ERROR_NOT_READY);
-        }
-        let Some(separator) = path[..length]
+        let path = unsafe { module_path(runtime) }.ok_or(RSF_ERROR_NOT_READY)?;
+        let path = path.units();
+        let separator = path
             .iter()
             .rposition(|&unit| unit == u16::from(b'\\'))
-        else {
-            return Err(RSF_ERROR_NOT_READY);
-        };
+            .ok_or(RSF_ERROR_NOT_READY)?;
         let directory = wide(&path[..separator], "");
         let ini = wide(&path[..separator], "\\ReScaleFrame.ini");
         let reduction = unsafe { GetProcAddress(runtime, s!("rsf_d3d11_host_reduced_frame")) };

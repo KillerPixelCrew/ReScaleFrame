@@ -4,6 +4,8 @@ use crate::layout::{END, JITTER, PROCESS, PROCESS_CALL, RESET, RESOLUTION, UPLOA
 use crate::platform;
 use crate::session;
 use rsf_game_sys::session::{Probe, publish_api};
+use rsf_game_sys::win32::module_path;
+use rsf_game_sys::windows_path::leaf_is;
 use rsf_game_sys::{
     rsf_detection, rsf_game_hooks_api, rsf_game_info, rsf_game_plugin_api, rsf_game_probe,
     rsf_result,
@@ -18,21 +20,12 @@ const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
 const STATUS: &CStr =
     c"Experimental native-resolution SR; reduced-resolution SR, FG and latency remain incomplete.";
 
-fn executable(path: &[u16]) -> bool {
-    let leaf = path.rsplit(|&unit| unit == u16::from(b'\\')).next();
-    leaf.is_some_and(|leaf| {
-        leaf.len() == EXECUTABLE.count_bytes()
-            && leaf.iter().zip(EXECUTABLE.to_bytes()).all(|(&unit, byte)| {
-                u8::try_from(unit).is_ok_and(|unit| unit.eq_ignore_ascii_case(byte))
-            })
-    })
-}
-
 /// The public lifecycle serializes observer admission and installation.
 pub(crate) fn admit_observers() -> i32 {
-    let mut path = [0u16; 32_768];
-    let length = platform::module_path(0, &mut path);
-    if length == 0 || length >= path.len() || !executable(&path[..length]) {
+    let Some(path) = (unsafe { module_path(std::ptr::null_mut()) }) else {
+        return 0;
+    };
+    if !leaf_is(path.units(), EXECUTABLE) {
         return 0;
     }
     let Some(platform) = platform::get() else {

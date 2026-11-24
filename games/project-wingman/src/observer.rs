@@ -7,10 +7,10 @@ use crate::windows::{
     create_hook, disable_hook, enable_hook, image_base, tick_count, verify_executable,
 };
 use rsf_game_sys::{
-    rsf_game_control_args, rsf_game_host_services, rsf_game_prepare_args, rsf_game_renderer_status,
-    rsf_game_start_args, rsf_result,
+    host_log, rsf_game_control_args, rsf_game_host_services, rsf_game_prepare_args,
+    rsf_game_renderer_status, rsf_game_start_args, rsf_result,
 };
-use std::ffi::{CStr, CString, c_void};
+use std::ffi::{CStr, c_void};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -410,40 +410,41 @@ fn observe(
     } = inputs;
     let readable = u32::from(readable);
     let downsample = allow_downsample & 0xff;
-    if let Ok(message) = CString::new(format!(
-        concat!(
-            "PW temporal serial={} graph={:016X} view={:016X} history={:016X} readable={} cut={} ",
-            "render=({},{},{},{}) output=({},{},{},{}) jitter=({:.4},{:.4}) ",
-            "rdg=({:016X},{:016X},{:016X})->{:016X} half={:016X} half_rect=({},{},{},{}) downsample={} format={}"
+    host_log(
+        &host,
+        &format!(
+            concat!(
+                "PW temporal serial={} graph={:016X} view={:016X} history={:016X} readable={} cut={} ",
+                "render=({},{},{},{}) output=({},{},{},{}) jitter=({:.4},{:.4}) ",
+                "rdg=({:016X},{:016X},{:016X})->{:016X} half={:016X} half_rect=({},{},{},{}) downsample={} format={}"
+            ),
+            serial,
+            graph,
+            view,
+            history,
+            readable,
+            camera_cut,
+            x0,
+            y0,
+            x1,
+            y1,
+            ox0,
+            oy0,
+            ox1,
+            oy1,
+            jx,
+            jy,
+            colour,
+            depth,
+            velocity,
+            output,
+            half_output,
+            hx0,
+            hy0,
+            hx1,
+            hy1,
+            downsample,
+            downsample_format,
         ),
-        serial,
-        graph,
-        view,
-        history,
-        readable,
-        camera_cut,
-        x0,
-        y0,
-        x1,
-        y1,
-        ox0,
-        oy0,
-        ox1,
-        oy1,
-        jx,
-        jy,
-        colour,
-        depth,
-        velocity,
-        output,
-        half_output,
-        hx0,
-        hy0,
-        hx1,
-        hy1,
-        downsample,
-        downsample_format,
-    )) {
-        unsafe { rsf_game_sys::rsf_game_log_guarded(host.log, host.user, message.as_ptr()) };
-    }
+    );
 }

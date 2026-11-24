@@ -6,8 +6,8 @@
 use crate::build_layout::{
     RENDERER_DEVICE as DEVICE, RENDERER_POINTER as OWNER_RVA, RENDERER_WINDOW as WINDOW,
 };
-use crate::{Threw, image, message, read};
-use rsf_game_sys::rsf_game_host_services;
+use crate::{Threw, image, read};
+use rsf_game_sys::{host_log, rsf_game_host_services};
 use std::ffi::CStr;
 use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
 
@@ -39,7 +39,7 @@ fn request(host: &rsf_game_host_services) -> Result<Option<&'static CStr>, Threw
     let startup = rsf_game_sys::dpi::request_per_monitor_v2(cold);
     if host.log.is_some() {
         let flag = |value: bool| u32::from(value);
-        let text = message(format!(
+        let text = format!(
             "Fallout4 DPI startup PMv2 requested={} accepted={} prior_compatible={} verified={} error={} owner_read={} device_absent={} window_absent={} windows_read={} process_windows={} process_before={:016X} thread_before={:016X} process_after={:016X} thread_after={:016X}; prepare before host graphics setup.",
             flag(startup.requested),
             flag(startup.accepted),
@@ -55,8 +55,10 @@ fn request(host: &rsf_game_host_services) -> Result<Option<&'static CStr>, Threw
             startup.thread_before,
             startup.process_after,
             startup.thread_after,
-        ));
-        crate::log_host(host, &text)?;
+        );
+        if !host_log(host, &text) {
+            return Err(Threw);
+        }
     }
     Ok(if !cold {
         Some(c"Fallout4 DPI startup refused: native owner unreadable or window/device already created.")

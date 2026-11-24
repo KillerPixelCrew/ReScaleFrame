@@ -17,6 +17,7 @@ use crate::platform::{self, Platform};
 use crate::plugin::{INVALID_ARGUMENT, SHA256};
 use rsf_game_sys::call_header::validate;
 use rsf_game_sys::rsf_motion_decode_params as MotionDecode;
+use rsf_game_sys::win32::module_path;
 use rsf_game_sys::{
     RSF_ERROR_BUSY as BUSY, RSF_ERROR_NATIVE_REFUSED as NATIVE_REFUSED,
     RSF_ERROR_NOT_READY as NOT_READY, RSF_OK as OK,
@@ -32,7 +33,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 const RUNTIME_MODULE: &str = "ReScaleFrame.Runtime.dll";
-const PATH_CAPACITY: usize = 32_768;
 const ENGINE_VERSION: &CStr = c"1.7.104";
 const PROJECT_ID: &CStr = c"668392a0-ecfe-4d0c-9f58-c2838c5ca308";
 const UNITS_TO_METERS: f32 = 0.014_287_5;
@@ -374,28 +374,22 @@ impl Session {
         let create = export(c"rsf_d3d11_host_create");
         self.activate = export(c"rsf_d3d11_host_set_active");
         self.bind = export(c"rsf_d3d11_host_bind_presentation");
-        let mut path = vec![0u16; PATH_CAPACITY];
-        let length = if runtime == 0 {
-            0
-        } else {
-            platform::module_path(runtime, &mut path)
-        };
-        if create == 0
-            || self.activate == 0
-            || self.bind == 0
-            || length == 0
-            || length >= PATH_CAPACITY
-        {
+        let path = (runtime != 0)
+            .then(|| unsafe { module_path(runtime as _) })
+            .flatten()
+            .filter(|_| create != 0 && self.activate != 0 && self.bind != 0);
+        let Some(path) = path else {
             return Ok(NOT_READY);
-        }
-        let Some(separator) = path[..length]
+        };
+        let Some(separator) = path
+            .units()
             .iter()
             .rposition(|&unit| unit == u16::from(b'\\'))
         else {
             return Ok(NOT_READY);
         };
-        let directory = terminated(&path[..separator], "");
-        let ini = terminated(&path[..separator], "\\ReScaleFrame.ini");
+        let directory = terminated(&path.units()[..separator], "");
+        let ini = terminated(&path.units()[..separator], "\\ReScaleFrame.ini");
         let section = platform::wide("Rendering");
         let setup = HostSetup {
             struct_size: size_of::<HostSetup>() as u32,

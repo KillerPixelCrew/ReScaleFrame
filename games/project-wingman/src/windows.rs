@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Process identity, guarded native reads, MinHook and the native exception leaves.
 use rsf_game_sys::win32::module_path;
+use rsf_game_sys::windows_path::leaf_is;
 use rsf_game_sys::{rsf_game_host_services, rsf_game_render_pass};
 use std::ffi::{OsString, c_void};
 use std::os::windows::ffi::OsStringExt;
@@ -25,18 +26,6 @@ unsafe extern "C" {
     );
 }
 
-fn matches_executable(path: &[u16]) -> bool {
-    let leaf = path
-        .rsplit(|&unit| matches!(unit, 0x5c | 0x2f))
-        .next()
-        .unwrap_or_default();
-    let expected = crate::EXECUTABLE.to_bytes();
-    leaf.len() == expected.len()
-        && leaf.iter().zip(expected).all(|(&value, expected)| {
-            u8::try_from(value).is_ok_and(|value| value.eq_ignore_ascii_case(expected))
-        })
-}
-
 /// Also the native texture reader's copy.
 #[unsafe(export_name = "rsf_wingman_copy")]
 pub(crate) unsafe extern "C" fn copy(
@@ -49,7 +38,7 @@ pub(crate) unsafe extern "C" fn copy(
 
 pub(crate) fn verify_executable() -> bool {
     unsafe { module_path(null_mut()) }
-        .filter(|path| matches_executable(path.units()))
+        .filter(|path| leaf_is(path.units(), crate::EXECUTABLE))
         .and_then(|path| {
             rsf_windows::sha256_file_hex(&PathBuf::from(OsString::from_wide(path.units())))
         })
