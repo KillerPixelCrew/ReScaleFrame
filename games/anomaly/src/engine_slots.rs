@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::engine_guards::Image;
+use crate::engine_guards::{Image, Read};
 use crate::input::rsf_anomaly_input_activate;
 use std::ffi::c_void;
 use std::ptr::{null_mut, with_exposed_provenance, with_exposed_provenance_mut};
@@ -9,19 +9,7 @@ use std::sync::{Mutex, MutexGuard};
 pub(super) const INPUT: usize = 0;
 const POSITION: usize = 1;
 const SLOT_BYTES: usize = size_of::<usize>();
-const PAGE_READWRITE: u32 = 4;
-
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn VirtualProtect(
-        address: *mut c_void,
-        length: usize,
-        protection: u32,
-        previous: *mut u32,
-    ) -> i32;
-}
-
-type Read = unsafe extern "C" fn(*mut c_void, *const c_void, usize) -> bool;
+use windows_sys::Win32::System::Memory::{PAGE_READWRITE, VirtualProtect};
 pub(super) type Exchange =
     unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut *mut c_void) -> bool;
 
