@@ -39,6 +39,20 @@ fn owned(state: &rsf_ac7_truesky_patches) -> [bool; 5] {
     ]
 }
 
+/// The patched sites with their native bytes, at their image addresses.
+fn native_sites() -> [(usize, &'static [u8]); 5] {
+    [
+        (at(RESOLUTION_RVA), &RESOLUTION_EXPECTED),
+        (at(DEPTH_CALL_RVA), &DEPTH_CALL_EXPECTED),
+        (
+            at(DEPTH_BRANCH_RVA) - DEPTH_BRANCH_LEAD,
+            &DEPTH_BRANCH_EXPECTED,
+        ),
+        (at(DEPTH_FORMAT_RVA), &DEPTH_FORMAT_EXPECTED),
+        (at(MOTION_CALL_RVA), &MOTION_CALL_EXPECTED),
+    ]
+}
+
 /// A scripted plugin over a code image of the fingerprinted TrueSky DLL at `BASE`.
 struct Fake {
     image: Image,
@@ -60,15 +74,10 @@ struct Fake {
 impl Fake {
     fn new() -> Self {
         let image = Image::default();
-        image.put(at(RESOLUTION_RVA), &RESOLUTION_EXPECTED);
-        image.put(at(DEPTH_CALL_RVA), &DEPTH_CALL_EXPECTED);
-        image.put(
-            at(DEPTH_BRANCH_RVA) - DEPTH_BRANCH_LEAD,
-            &DEPTH_BRANCH_EXPECTED,
-        );
-        image.put(at(DEPTH_FORMAT_RVA), &DEPTH_FORMAT_EXPECTED);
+        for (address, bytes) in native_sites() {
+            image.put(address, bytes);
+        }
         image.put(at(MOTION_CALL_RVA) - MOTION_BEFORE.len(), &MOTION_BEFORE);
-        image.put(at(MOTION_CALL_RVA), &MOTION_CALL_EXPECTED);
         Self {
             image,
             loaded: Cell::new(true),
@@ -103,14 +112,9 @@ impl Fake {
 
     /// Every site holds its native bytes.
     fn native(&self) -> bool {
-        self.image.has(at(RESOLUTION_RVA), &RESOLUTION_EXPECTED)
-            && self.image.has(at(DEPTH_CALL_RVA), &DEPTH_CALL_EXPECTED)
-            && self.image.has(
-                at(DEPTH_BRANCH_RVA) - DEPTH_BRANCH_LEAD,
-                &DEPTH_BRANCH_EXPECTED,
-            )
-            && self.image.has(at(DEPTH_FORMAT_RVA), &DEPTH_FORMAT_EXPECTED)
-            && self.image.has(at(MOTION_CALL_RVA), &MOTION_CALL_EXPECTED)
+        native_sites()
+            .into_iter()
+            .all(|(address, bytes)| self.image.has(address, bytes))
     }
 
     /// Both relays, the depth route and, when ready, the full grid.
@@ -429,21 +433,19 @@ fn a_refused_format_keeps_the_route_owned_for_stop() {
 
 #[test]
 fn a_refused_divisor_keeps_native_cloud_resolution() {
-    let fake = Fake::new();
-    fake.ready.set(true);
-    fake.image.put(at(RESOLUTION_RVA) + 15, &[0]);
-    let mut state = unpatched();
-    apply(&mut state, &fake);
-    assert!(state.resolution_refused && state.resolution_site.is_null());
-    assert_eq!(fake.logged(RESOLUTION_REFUSED), 1);
-
-    let fake = Fake::new();
-    fake.ready.set(true);
-    fake.image.protected.set(Some(at(RESOLUTION_RVA)));
-    let mut state = unpatched();
-    apply(&mut state, &fake);
-    assert!(state.resolution_refused && state.resolution_site.is_null());
-    assert_eq!(fake.logged(RESOLUTION_REFUSED), 1);
+    let refusals: [&dyn Fn(&Fake); 2] = [
+        &|fake: &Fake| fake.image.put(at(RESOLUTION_RVA) + 15, &[0]),
+        &|fake: &Fake| fake.image.protected.set(Some(at(RESOLUTION_RVA))),
+    ];
+    for refuse in refusals {
+        let fake = Fake::new();
+        fake.ready.set(true);
+        refuse(&fake);
+        let mut state = unpatched();
+        apply(&mut state, &fake);
+        assert!(state.resolution_refused && state.resolution_site.is_null());
+        assert_eq!(fake.logged(RESOLUTION_REFUSED), 1);
+    }
 }
 
 #[test]

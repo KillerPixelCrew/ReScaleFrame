@@ -869,6 +869,7 @@ Code-quality pass over `games/ac7` (both crates, C leaves, headers) and `loader/
 - `velocity_history`, `velocity_stream`, `velocity_commit`: `ViewAction`, `Retired` and `Route` enums and bool flags replace u32 codes. Left: the `allow(dead_code)` on records the D3D11 replay constructs, which non-Windows test hosts need.
 - `velocity_tessellation`, `velocity_geometry`: two unused opcode constants. Left: the register out-parameters of the shader transforms, which the shader fixtures call.
 - F9 capture (`motion_capture_*`, trampolines, `hook_batch.rs`, `ac7_hooks.c`): read and left; `reset_records` keeps clearing in place so the snapshot's returned capacities are reused, and the MinHook batch stays per GM-G8.1. Stale `scope_abi.rs`/`sites_abi.rs` comments in `ac7_scope_owner.h`/`ac7_sites.h` now name build.rs.
+- Plugin unit tests (`tests.rs`, `lifecycle`, `patches`, `renderer`, `render_scope`, `sites`, `truesky`), read line by line: the lifecycle status returns its reason as `&CStr` (no `String` round trip), the patch and TrueSky image checks are one data-driven site list, the renderer fake has one scene-precision check, the render-scope tests share a counted lease builder and table their missing-owner refusals, and the TrueSky divisor refusals run as one loop. Every assertion is kept. Left: the scripted fakes (`Fake`, `Script`, `Image`) and the reason-text pins.
 
 ### Simplify pass: simp-orch-vulkan
 

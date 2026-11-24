@@ -24,16 +24,16 @@ fn native_image() -> Image {
     image
 }
 
-fn velocity_native(image: &Image) -> bool {
-    VELOCITY
-        .iter()
-        .all(|patch| image.has(BASE + patch.rva as usize, patch.native))
-}
-
-fn velocity_patched(image: &Image) -> bool {
-    VELOCITY
-        .iter()
-        .all(|patch| image.has(BASE + patch.rva as usize, patch.replacement))
+/// Whether every velocity site holds its native (or, when `patched`, its replacement) bytes.
+fn velocity_holds(image: &Image, patched: bool) -> bool {
+    VELOCITY.iter().all(|patch| {
+        let bytes = if patched {
+            patch.replacement
+        } else {
+            patch.native
+        };
+        image.has(BASE + patch.rva as usize, bytes)
+    })
 }
 
 const VELOCITY_ENABLED: &str = "AC7 temporal velocity: native pass enabled without TAA; small and fixed-root movable opaque geometry retained with native history, camera-cut and shader checks";
@@ -57,7 +57,7 @@ fn velocity_group_applies_completely_and_once() {
     assert!(velocity_apply(&mut state, base(), &image));
     assert_eq!(state.velocity_applied, 3);
     assert_eq!(state.velocity_module, base());
-    assert!(velocity_patched(&image) && image.logged(VELOCITY_ENABLED));
+    assert!(velocity_holds(&image, true) && image.logged(VELOCITY_ENABLED));
     assert!(velocity_apply(&mut state, base(), &image));
     assert_eq!(image.writes.get(), 3);
 }
@@ -83,7 +83,7 @@ fn velocity_write_failure_rolls_the_group_back() {
     assert!(!velocity_apply(&mut state, base(), &image));
     assert_eq!(state.velocity_applied, 0);
     assert!(state.velocity_module.is_null());
-    assert!(velocity_native(&image));
+    assert!(velocity_holds(&image, false));
     // The first patch was written and restored.
     assert_eq!(image.writes.get(), 2);
     assert!(!image.logged("AC7 temporal velocity rollback refused; patched module retained"));
@@ -101,7 +101,7 @@ fn velocity_restore_refuses_foreign_bytes_and_keeps_ownership() {
     image.put(BASE + 0x11838c4, &[0xeb]);
     assert!(velocity_restore(&mut state, &image));
     assert_eq!(state.velocity_applied, 0);
-    assert!(state.velocity_module.is_null() && velocity_native(&image));
+    assert!(state.velocity_module.is_null() && velocity_holds(&image, false));
 }
 
 #[test]
@@ -138,7 +138,7 @@ fn activation_orders_scene_precision_before_velocity() {
     image.put(BASE + SCENE_PRECISION_RVA as usize, &[0x00]);
     let mut state = owned();
     assert!(!apply(&mut state, base(), &image));
-    assert!(velocity_native(&image) && image.writes.get() == 0);
+    assert!(velocity_holds(&image, false) && image.writes.get() == 0);
 
     // A velocity refusal keeps the scene precision already applied, as the former start did.
     let image = native_image();
@@ -168,7 +168,7 @@ fn retirement_orders_velocity_before_scene_precision() {
     assert!(restore(&mut state, &image));
     assert_eq!(state.velocity_applied, 0);
     assert!(state.scene_precision_site.is_null() && state.velocity_module.is_null());
-    assert!(velocity_native(&image));
+    assert!(velocity_holds(&image, false));
     assert!(image.has(
         BASE + SCENE_PRECISION_RVA as usize,
         &SCENE_PRECISION_EXPECTED

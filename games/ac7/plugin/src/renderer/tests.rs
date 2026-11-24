@@ -100,19 +100,17 @@ impl Fake {
     }
 
     fn created_count(&self) -> usize {
-        self.created
-            .borrow()
-            .iter()
-            .filter(|created| **created)
-            .count()
+        self.created.borrow().iter().filter(|&&set| set).count()
     }
 
     fn enabled_count(&self) -> usize {
-        self.enabled
-            .borrow()
-            .iter()
-            .filter(|enabled| **enabled)
-            .count()
+        self.enabled.borrow().iter().filter(|&&set| set).count()
+    }
+
+    /// Whether the scene precision site holds its native bytes.
+    fn scene_precision_native(&self) -> bool {
+        self.image
+            .has(SCENE_PRECISION_RVA as usize, &SCENE_PRECISION_EXPECTED)
     }
 
     fn options() -> rsf_ac7_native_renderer_options {
@@ -470,10 +468,7 @@ fn start_refusal_keeps_applied_patches_for_stop() {
     );
     quiesce(&fake, renderer);
     assert!(stop(&fake, renderer));
-    assert!(
-        fake.image
-            .has(SCENE_PRECISION_RVA as usize, &SCENE_PRECISION_EXPECTED)
-    );
+    assert!(fake.scene_precision_native());
 }
 
 #[test]
@@ -530,10 +525,7 @@ fn stop_retires_in_the_former_order() {
         ]
     );
     assert_eq!(fake.created_count(), 0);
-    assert!(
-        fake.image
-            .has(SCENE_PRECISION_RVA as usize, &SCENE_PRECISION_EXPECTED)
-    );
+    assert!(fake.scene_precision_native());
     assert!(
         VELOCITY
             .iter()
@@ -582,10 +574,7 @@ fn stop_retries_continue_from_the_refused_step() {
     fake.truesky.set(false);
     assert!(!stop(&fake, fake.renderer));
     // The engine patches were restored once and stay restored on the retry.
-    assert!(
-        fake.image
-            .has(SCENE_PRECISION_RVA as usize, &SCENE_PRECISION_EXPECTED)
-    );
+    assert!(fake.scene_precision_native());
     fake.truesky.set(true);
 
     // A lease retired while the scopes were destroyed: the scopes are gone, the hooks stay.

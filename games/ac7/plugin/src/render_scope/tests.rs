@@ -87,6 +87,15 @@ impl Check {
     fn frames(&self) -> Vec<u64> {
         self.observed.borrow().iter().map(|entry| entry.2).collect()
     }
+
+    /// A lease counted by this check's resolve and release.
+    fn lease(&self) -> rsf_ac7_scope_lease {
+        rsf_ac7_scope_lease {
+            object: self.user(),
+            resolve: Some(lease_resolve),
+            release: Some(lease_release),
+        }
+    }
 }
 
 fn check<'a>(user: *mut c_void) -> &'a Check {
@@ -308,26 +317,23 @@ fn slate_scopes_need_their_owners_but_no_scene_view() {
     window.window_key = 0x200;
     window.rhi_viewport_key = 0x300;
     window.pass_key = 0x400;
-    let mut invalid = window;
-    invalid.window_key = 0;
-    assert!(open(scopes, &mut list, &invalid).is_null(), "window owner");
-    invalid = window;
-    invalid.rhi_viewport_key = 0;
-    assert!(
-        open(scopes, &mut list, &invalid).is_null(),
-        "native viewport"
-    );
-    invalid = window;
-    invalid.source_frame_id = 0;
-    assert!(open(scopes, &mut list, &invalid).is_null(), "source frame");
-    invalid = window;
-    invalid.pass_key = 0;
-    assert!(open(scopes, &mut list, &invalid).is_null(), "pass");
+    type Clear = fn(&mut rsf_ac7_render_scope);
+    let missing: [(&str, Clear); 4] = [
+        ("window owner", |scope| scope.window_key = 0),
+        ("native viewport", |scope| scope.rhi_viewport_key = 0),
+        ("source frame", |scope| scope.source_frame_id = 0),
+        ("pass", |scope| scope.pass_key = 0),
+    ];
+    for (owner, clear) in missing {
+        let mut invalid = window;
+        clear(&mut invalid);
+        assert!(open(scopes, &mut list, &invalid).is_null(), "{owner}");
+    }
     let outer = open(scopes, &mut list, &window);
     let mut binding = window;
     binding.role = RSF_GAME_RENDER_TEXTURE_BINDING;
     binding.rhi_viewport_key = 0;
-    invalid = binding;
+    let mut invalid = binding;
     invalid.viewport_key = 0;
     assert!(
         open(scopes, &mut list, &invalid).is_null(),
@@ -443,11 +449,7 @@ fn leases_resolve_at_both_markers_and_release_before_the_owner_goes_idle() {
     let check = Check::new();
     let scopes = create(&check, 2, Some(state), Some(pass), &CALLS);
     let mut list = List::new();
-    let lease = rsf_ac7_scope_lease {
-        object: check.user(),
-        resolve: Some(lease_resolve),
-        release: Some(lease_release),
-    };
+    let lease = check.lease();
     let ticket =
         unsafe { open_leased(scopes, list.raw(), &scene(1, 0x10), &lease) }.expect("opened");
     list.run();
@@ -476,11 +478,7 @@ fn a_throwing_resolve_skips_the_stack_and_callbacks_but_retires_the_ticket() {
     let check = Check::new();
     let scopes = create(&check, 1, Some(state), Some(pass), &THREW);
     let mut list = List::new();
-    let lease = rsf_ac7_scope_lease {
-        object: check.user(),
-        resolve: Some(lease_resolve),
-        release: Some(lease_release),
-    };
+    let lease = check.lease();
     let ticket =
         unsafe { open_leased(scopes, list.raw(), &scene(1, 0x10), &lease) }.expect("opened");
     assert!(close(ticket, &mut list));
@@ -518,11 +516,7 @@ fn a_refused_end_resolve_restores_state_without_delivering_a_pass() {
     let check = Check::new();
     let scopes = create(&check, 1, Some(state), Some(pass), &CALLS_WITH_REFUSED_END);
     let mut list = List::new();
-    let lease = rsf_ac7_scope_lease {
-        object: check.user(),
-        resolve: Some(lease_resolve),
-        release: Some(lease_release),
-    };
+    let lease = check.lease();
     let ticket =
         unsafe { open_leased(scopes, list.raw(), &scene(1, 0x10), &lease) }.expect("opened");
     assert!(close(ticket, &mut list));
@@ -600,11 +594,7 @@ fn adjacent_markers_admit_together_or_leave_the_lease_with_the_caller() {
     let scopes = create(&check, 1, Some(state), Some(pass), &CALLS);
     let mut list = List::new();
     let frame = scene(1, 0x10);
-    let lease = rsf_ac7_scope_lease {
-        object: check.user(),
-        resolve: Some(lease_resolve),
-        release: Some(lease_release),
-    };
+    let lease = check.lease();
     list.count = u32::MAX - 1;
     assert_eq!(
         unsafe { rsf_ac7_render_scope_enqueue_leased(scopes, list.raw(), &frame, &lease) },

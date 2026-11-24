@@ -66,25 +66,19 @@ fn host() -> rsf_game_host_services {
 }
 
 /// The status result, prepared, active and the reason text it points at.
-fn status(lifecycle: &Lifecycle, leaves: &Script) -> (rsf_result, u32, u32, String) {
+fn status(lifecycle: &Lifecycle, leaves: &Script) -> (rsf_result, u32, u32, &'static CStr) {
     // SAFETY: all-zero is an empty status.
     let mut output: rsf_game_renderer_status = unsafe { std::mem::zeroed() };
     output.rendering_ready = 7;
     let result = lifecycle.status(leaves, &mut output);
     assert_eq!(output.rendering_ready, if result == RSF_OK { 0 } else { 7 });
     let reason = if output.reason.is_null() {
-        String::new()
+        c""
     } else {
         // SAFETY: every reason is one of this module's static strings.
         unsafe { CStr::from_ptr(output.reason) }
-            .to_string_lossy()
-            .into_owned()
     };
     (result, output.prepared, output.active, reason)
-}
-
-fn text(reason: &CStr) -> String {
-    reason.to_string_lossy().into_owned()
 }
 
 #[test]
@@ -99,10 +93,7 @@ fn options_carry_the_host() {
 fn accepted_path_matches_the_former_plugin() {
     let lifecycle = Lifecycle::new();
     let leaves = Script::new();
-    assert_eq!(
-        status(&lifecycle, &leaves),
-        (RSF_OK, 0, 0, text(NOT_PREPARED))
-    );
+    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 0, 0, NOT_PREPARED));
     assert_eq!(lifecycle.start(&leaves), RSF_ERROR_NOT_READY);
     assert_eq!(leaves.calls.get(), 0);
     assert_eq!(lifecycle.prepare(&leaves, &host()), RSF_OK);
@@ -110,15 +101,15 @@ fn accepted_path_matches_the_former_plugin() {
         leaves.options.get().map(|options| options.session_id),
         Some(9)
     );
-    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 1, 0, text(PREPARED)));
+    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 1, 0, PREPARED));
     assert_eq!(lifecycle.prepare(&leaves, &host()), RSF_ERROR_BUSY);
     assert_eq!(lifecycle.start(&leaves), RSF_OK);
-    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 1, 1, text(STARTED)));
+    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 1, 1, STARTED));
     assert_eq!(lifecycle.stop(&leaves), RSF_ERROR_BUSY);
     assert_eq!(lifecycle.quiesce(&leaves), RSF_OK);
-    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 1, 0, text(QUIESCED)));
+    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 1, 0, QUIESCED));
     assert_eq!(lifecycle.stop(&leaves), RSF_OK);
-    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 0, 0, text(STOPPED)));
+    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 0, 0, STOPPED));
     // With no renderer, quiesce and stop complete without a native call.
     let calls = leaves.calls.get();
     assert_eq!(lifecycle.quiesce(&leaves), RSF_OK);
@@ -136,12 +127,12 @@ fn preparation_and_activation_refusals_are_distinct() {
         RSF_ERROR_NATIVE_REFUSED
     );
     // The native output is retained even on refusal, as the pinned partial activation needs.
-    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 0, 0, text(REFUSED)));
+    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 0, 0, REFUSED));
     assert_eq!(lifecycle.start(&leaves), RSF_ERROR_NOT_READY);
     assert_eq!(lifecycle.prepare(&leaves, &host()), RSF_ERROR_BUSY);
     leaves.stop = false;
     assert_eq!(lifecycle.stop(&leaves), RSF_ERROR_BUSY);
-    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 0, 0, text(DRAINING)));
+    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 0, 0, DRAINING));
     leaves.stop = true;
     assert_eq!(lifecycle.stop(&leaves), RSF_OK);
 
@@ -153,7 +144,7 @@ fn preparation_and_activation_refusals_are_distinct() {
         lifecycle.prepare(&leaves, &host()),
         RSF_ERROR_NATIVE_REFUSED
     );
-    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 0, 0, text(REFUSED)));
+    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 0, 0, REFUSED));
     assert_eq!(lifecycle.start(&leaves), RSF_ERROR_NOT_READY);
 
     let lifecycle = Lifecycle::new();
@@ -161,10 +152,7 @@ fn preparation_and_activation_refusals_are_distinct() {
     leaves.start = false;
     assert_eq!(lifecycle.prepare(&leaves, &host()), RSF_OK);
     assert_eq!(lifecycle.start(&leaves), RSF_ERROR_NOT_READY);
-    assert_eq!(
-        status(&lifecycle, &leaves),
-        (RSF_OK, 1, 0, text(START_REFUSED))
-    );
+    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 1, 0, START_REFUSED));
 
     let lifecycle = Lifecycle::new();
     let mut leaves = Script::new();
@@ -172,13 +160,10 @@ fn preparation_and_activation_refusals_are_distinct() {
     leaves.stop = false;
     assert_eq!(lifecycle.prepare(&leaves, &host()), RSF_OK);
     assert_eq!(lifecycle.start(&leaves), RSF_OK);
-    assert_eq!(
-        status(&lifecycle, &leaves),
-        (RSF_OK, 1, 0, text(DEACTIVATED))
-    );
+    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 1, 0, DEACTIVATED));
     assert_eq!(lifecycle.quiesce(&leaves), RSF_OK);
     assert_eq!(lifecycle.stop(&leaves), RSF_ERROR_BUSY);
-    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 1, 0, text(DRAINING)));
+    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 1, 0, DRAINING));
 }
 
 #[test]
