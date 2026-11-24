@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use super::memory::{read, u32_at};
 use super::rsf_census_json;
 use std::ffi::{CStr, c_char, c_void};
 use std::fmt::Write;
@@ -63,6 +64,29 @@ impl Json<'_> {
     }
     pub(super) fn raw(&mut self, key: impl Key, value: &CStr) {
         unsafe { rsf_census_json_raw(self.0, key.ptr(), value.as_ptr()) };
+    }
+    pub(super) fn flag(&mut self, key: &CStr, on: bool) {
+        self.raw(key, if on { c"true" } else { c"false" });
+    }
+    /// The 8-byte word at `address`, or null when it cannot be read.
+    pub(super) fn output(&mut self, key: &CStr, address: u64) {
+        if let Some(value) = read::<8>(address, 0) {
+            self.hex(Some(key), u64::from_le_bytes(value));
+        } else {
+            self.raw(key, c"null");
+        }
+    }
+    pub(super) fn fields(&mut self, data: &[u8], fields: &[(&CStr, usize)]) {
+        for &(key, offset) in fields {
+            self.number(key, u32_at(data, offset));
+        }
+    }
+    pub(super) fn args(&mut self, args: &[u64]) {
+        self.open(Some(c"raw_args"), b'[');
+        for &value in args {
+            self.hex(None, value);
+        }
+        self.close(b']');
     }
 }
 

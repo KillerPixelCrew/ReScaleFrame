@@ -49,16 +49,10 @@ fn label(names: &[&'static CStr], index: u32) -> &'static CStr {
 }
 
 trait MiscJson {
-    fn flag(&mut self, key: &CStr, value: bool);
     fn float(&mut self, key: Option<&CStr>, bytes: &[u8], offset: usize);
-    fn output(&mut self, key: &CStr, out: u64);
-    fn fields(&mut self, data: &[u8], fields: &[(&CStr, usize)]);
 }
 
 impl MiscJson for Json<'_> {
-    fn flag(&mut self, key: &CStr, value: bool) {
-        self.raw(key, if value { c"true" } else { c"false" });
-    }
     fn float(&mut self, key: Option<&CStr>, bytes: &[u8], offset: usize) {
         let value = f64::from(f32::from_bits(u32_at(bytes, offset)));
         unsafe {
@@ -69,18 +63,6 @@ impl MiscJson for Json<'_> {
                 platform().decimal.unwrap(),
             )
         };
-    }
-    fn output(&mut self, key: &CStr, out: u64) {
-        if let Some(result) = read::<8>(out, 0) {
-            self.hex(Some(key), u64::from_le_bytes(result));
-        } else {
-            self.raw(key, c"null");
-        }
-    }
-    fn fields(&mut self, data: &[u8], fields: &[(&CStr, usize)]) {
-        for &(key, offset) in fields {
-            self.number(key, u32_at(data, offset));
-        }
     }
 }
 

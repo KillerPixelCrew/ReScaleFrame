@@ -59,20 +59,13 @@ fn pointed_word(address: u64) -> Option<u64> {
 }
 
 trait FsrJson {
-    fn flag(&mut self, key: &CStr, on: bool);
     fn decimal(&mut self, key: &CStr, value: f32);
-    fn fields(&mut self, data: &[u8], fields: &[(&CStr, usize)]);
     fn decimals(&mut self, data: &[u8], fields: &[(&CStr, usize)]);
     fn ptr(&mut self, key: &CStr, address: u64);
-    fn output(&mut self, key: &CStr, address: u64);
     fn resource(&mut self, key: &CStr, address: u64, require_slot: bool);
-    fn args(&mut self, args: &[u64]);
 }
 
 impl FsrJson for Json<'_> {
-    fn flag(&mut self, key: &CStr, on: bool) {
-        self.raw(key, if on { c"true" } else { c"false" });
-    }
     fn decimal(&mut self, key: &CStr, value: f32) {
         unsafe {
             emit_decimal(
@@ -82,11 +75,6 @@ impl FsrJson for Json<'_> {
                 platform().decimal.unwrap(),
             )
         };
-    }
-    fn fields(&mut self, data: &[u8], fields: &[(&CStr, usize)]) {
-        for &(key, offset) in fields {
-            self.number(key, u32_at(data, offset));
-        }
     }
     fn decimals(&mut self, data: &[u8], fields: &[(&CStr, usize)]) {
         for &(key, offset) in fields {
@@ -98,13 +86,6 @@ impl FsrJson for Json<'_> {
             self.raw(key, c"null");
         } else {
             self.hex(Some(key), address);
-        }
-    }
-    fn output(&mut self, key: &CStr, address: u64) {
-        if let Some(value) = pointed_word(address) {
-            self.hex(Some(key), value);
-        } else {
-            self.raw(key, c"null");
         }
     }
     fn resource(&mut self, key: &CStr, address: u64, require_slot: bool) {
@@ -122,13 +103,6 @@ impl FsrJson for Json<'_> {
                 platform(),
             )
         };
-    }
-    fn args(&mut self, args: &[u64]) {
-        self.open(Some(c"raw_args"), b'[');
-        for &value in args {
-            self.hex(None, value);
-        }
-        self.close(b']');
     }
 }
 

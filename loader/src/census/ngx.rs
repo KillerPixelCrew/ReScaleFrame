@@ -133,8 +133,6 @@ trait NgxJson {
     fn scalar(&mut self, params: u64, key: &CStr, prefer_float: bool);
     fn string(&mut self, key: &CStr, address: u64);
     fn path(&mut self, address: u64);
-    fn output(&mut self, key: &CStr, address: u64);
-    fn args(&mut self, args: &[u64]);
 }
 
 impl NgxJson for Json<'_> {
@@ -159,20 +157,6 @@ impl NgxJson for Json<'_> {
         {
             unsafe { rsf_census_json_wide(self.0, c"data_path".as_ptr(), text.as_ptr()) };
         }
-    }
-    fn output(&mut self, key: &CStr, address: u64) {
-        if let Some(bytes) = read::<8>(address, 0) {
-            self.hex(Some(key), u64::from_le_bytes(bytes));
-        } else {
-            self.raw(key, c"null");
-        }
-    }
-    fn args(&mut self, args: &[u64]) {
-        self.open(Some(c"raw_args"), b'[');
-        for &value in args {
-            self.hex(None, value);
-        }
-        self.close(b']');
     }
 }
 

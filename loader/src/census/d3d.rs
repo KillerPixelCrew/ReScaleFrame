@@ -138,23 +138,13 @@ impl<'a> Call<'a> {
 }
 
 trait D3dJson {
-    fn flag(&mut self, key: &CStr, yes: bool);
     fn ptr(&mut self, key: &CStr, pointer: Info);
     fn fmt_code(&mut self, format: u32);
-    fn output(&mut self, key: &CStr, out: *mut Ptr);
+    fn written(&mut self, key: &CStr, out: *mut Ptr);
     fn guid(&mut self, iid: *const GUID);
 }
 
 impl D3dJson for Json<'_> {
-    fn flag(&mut self, key: &CStr, yes: bool) {
-        unsafe {
-            rsf_census_json_raw(
-                self.0,
-                key.as_ptr(),
-                if yes { c"true" } else { c"false" }.as_ptr(),
-            )
-        };
-    }
     fn ptr(&mut self, key: &CStr, pointer: Info) {
         self.hex(Some(key), pointer as u64);
     }
@@ -168,7 +158,7 @@ impl D3dJson for Json<'_> {
             )
         };
     }
-    fn output(&mut self, key: &CStr, out: *mut Ptr) {
+    fn written(&mut self, key: &CStr, out: *mut Ptr) {
         if let Some(value) = read_ptr(out) {
             self.hex(Some(key), value as u64);
         } else {
@@ -333,7 +323,7 @@ fn create_factory(
         .map_or(0, |function| unsafe { function(iid, out) })
     };
     if let Some(mut json) = call.json() {
-        json.output(c"factory", out);
+        json.written(c"factory", out);
     }
     if status >= 0
         && let Some(factory) = read_ptr(out)
@@ -521,7 +511,7 @@ extern "system" fn create_device(adapter: Ptr, level: i32, iid: *const GUID, out
         function(adapter, level, iid, out)
     });
     if let Some(mut json) = call.json() {
-        json.output(c"device", out);
+        json.written(c"device", out);
     }
     if status >= 0
         && let Some(device) = read_ptr(out)
@@ -599,7 +589,7 @@ extern "system" fn create_queue(
     }
     let status = original.map_or(0, |function| unsafe { function(device, desc, iid, out) });
     if let Some(mut json) = call.json() {
-        json.output(c"queue", out);
+        json.written(c"queue", out);
     }
     if status >= 0
         && let Some(queue) = read_ptr(out).filter(|ptr| !ptr.is_null())
@@ -701,7 +691,7 @@ fn desc1(json: &mut Json<'_>, desc: *const DXGI_SWAP_CHAIN_DESC1) {
 
 fn created_chain(mut call: Call<'_>, status: i32, out: *mut Ptr) -> i32 {
     if let Some(mut json) = call.json() {
-        json.output(c"swapchain", out);
+        json.written(c"swapchain", out);
     }
     if status >= 0
         && let Some(chain) = read_ptr(out)

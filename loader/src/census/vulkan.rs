@@ -70,19 +70,6 @@ impl<'a> Call<'a> {
     }
 }
 
-trait VulkanJson {
-    fn output(&mut self, key: &CStr, out: Info);
-}
-
-impl VulkanJson for Json<'_> {
-    fn output(&mut self, key: &CStr, out: Info) {
-        if let Some(bytes) = read::<8>(out, 0) {
-            self.hex(Some(key), u64::from_le_bytes(bytes));
-        } else {
-            self.raw(key, c"null");
-        }
-    }
-}
 
 fn read<const N: usize>(address: Info, offset: usize) -> Option<[u8; N]> {
     let base = address as usize;
@@ -205,7 +192,7 @@ extern "system" fn create_instance(info: Info, allocator: Info, out: *mut Handle
     }
     let result = original.map_or(0, |call| unsafe { call(info, allocator, out) });
     if let Some(mut json) = record.json() {
-        json.output(c"instance", out.cast());
+        json.output(c"instance", out as u64);
     }
     record.finish(u64::from(result as u32));
     result
@@ -257,7 +244,7 @@ extern "system" fn create_device(
     }
     let result = original.map_or(0, |call| unsafe { call(physical, info, allocator, out) });
     if let Some(mut json) = record.json() {
-        json.output(c"device", out.cast());
+        json.output(c"device", out as u64);
     }
     record.finish(u64::from(result as u32));
     result
@@ -282,7 +269,7 @@ extern "system" fn get_queue(device: Handle, family: u32, index: u32, out: *mut 
         unsafe { call(device, family, index, out) };
     }
     if let Some(mut json) = record.json() {
-        json.output(c"queue", out.cast());
+        json.output(c"queue", out as u64);
     }
     if let Some(queue) = get_queue_handle(out) {
         describe_queue(queue, family, index);
@@ -321,7 +308,7 @@ extern "system" fn get_queue2(device: Handle, info: Info, out: *mut Handle) {
         unsafe { call(device, info, out) };
     }
     if let Some(mut json) = record.json() {
-        json.output(c"queue", out.cast());
+        json.output(c"queue", out as u64);
     }
     if let Some(queue) = get_queue_handle(out)
         && let Some(info) = read::<32>(info, 0)
