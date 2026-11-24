@@ -115,37 +115,12 @@ struct PresentFacts {
 
 type Entry = Option<unsafe extern "system" fn() -> isize>;
 
-#[repr(C)]
-struct Ops {
-    check: &'static Checks,
-    sdk: &'static SdkApi,
-    resolve: Resolve,
-    close: unsafe extern "C" fn(Raw),
-    bind: unsafe extern "C" fn(Raw, *const Entry),
-    versions: QueryVersions,
-    surface_format: unsafe extern "C" fn(u32) -> u32,
-    create_generation: unsafe extern "C" fn(Raw, *const GenerationPlan, *mut Raw) -> u32,
-    provider_version: unsafe extern "C" fn(Raw, Raw, *mut u64) -> u32,
-    create_chain: unsafe extern "C" fn(Raw, *const Setup, *mut Raw, *mut Raw, *mut u32) -> i32,
-    destroy_context: unsafe extern "C" fn(Raw, *mut Raw) -> u32,
-    wait: unsafe extern "C" fn(Raw, Raw) -> u32,
-    chain_extent: unsafe extern "C" fn(Raw, *mut Extent) -> i32,
-    whole_texture: unsafe extern "C" fn(*const Resource) -> u32,
-    configure: unsafe extern "C" fn(Raw, Raw, *const Configuration) -> u32,
-    prepare: unsafe extern "C" fn(Raw, Raw, *const PreparePlan) -> u32,
-    generate: unsafe extern "C" fn(Raw, Raw, Raw, *mut Generated) -> u32,
-    present_facts: unsafe extern "C" fn(Raw, *mut PresentFacts),
-    copy: unsafe extern "C" fn(Raw, Raw, u32, Raw, u32),
-    present_count: unsafe extern "C" fn(Raw, *mut u32) -> i32,
-}
-
 const _: () = {
     assert!(size_of::<SdkApi>() == 24 && size_of::<GenerationPlan>() == 32);
     assert!(size_of::<PreparePlan>() == 128);
     assert!(size_of::<Configuration>() == 64);
     assert!(size_of::<Generated>() == 104 && size_of::<PresentFacts>() == 40);
     assert!(size_of::<Entry>() == size_of::<Raw>());
-    assert!(size_of::<Ops>() == 20 * size_of::<Raw>());
 };
 
 // rsf_fsr12_entry_index order. The shared names are create, destroy, query, dispatch.
@@ -269,7 +244,6 @@ struct Counters {
 }
 
 struct Fsr {
-    ops: &'static Ops,
     sdk: Bindings,
     device: IUnknown,
     queue: IUnknown,
@@ -316,7 +290,7 @@ impl Fsr {
 
     fn wait(&self) -> bool {
         let swapchain = self.swapchain.get();
-        swapchain.is_null() || unsafe { (self.ops.wait)(self.sdk.raw, swapchain) } == 0
+        swapchain.is_null() || unsafe { native::wait(self.sdk.raw, swapchain) } == 0
     }
 
     /// Creates the generation context for `extent`. `startup` is present only
@@ -334,9 +308,9 @@ impl Fsr {
             flags: self.create_flags,
         };
         let mut generation = null_mut();
-        let result = unsafe { (self.ops.create_generation)(self.sdk.raw, &plan, &mut generation) };
+        let result = unsafe { native::create_generation(self.sdk.raw, &plan, &mut generation) };
         if let Some(setup) = startup.filter(|setup| !setup.runtime_directory_utf8.is_null()) {
-            let [major, minor, patch] = self.ops.sdk.generation;
+            let [major, minor, patch] = native::SDK.generation;
             let (selected, root) = unsafe {
                 (
                     c_text(status.version_name.as_ptr()),
@@ -363,7 +337,7 @@ impl Fsr {
         if context.is_null() {
             return true;
         }
-        let result = unsafe { (self.ops.destroy_context)(self.sdk.raw, &mut context) };
+        let result = unsafe { native::destroy_context(self.sdk.raw, &mut context) };
         if result == 0 {
             self.generation.store(null_mut(), Relaxed);
         } else {
@@ -373,7 +347,7 @@ impl Fsr {
     }
 
     fn apply(&self, config: &Configuration) -> bool {
-        unsafe { (self.ops.configure)(self.sdk.raw, self.generation.load(Relaxed), config) == 0 }
+        unsafe { native::configure(self.sdk.raw, self.generation.load(Relaxed), config) == 0 }
     }
 
     /// Configuration for the next SDK sequence. An attached owner receives the
@@ -420,7 +394,7 @@ impl Fsr {
             return VENDOR_PARAMETER_ERROR;
         }
         if source != output {
-            unsafe { (self.ops.copy)(present.command, output, output_state, source, source_state) };
+            unsafe { native::copy(present.command, output, output_state, source, source_state) };
         }
         0
     }
@@ -530,7 +504,7 @@ impl Session for Fsr {
 
     unsafe fn prepare(&self, command: Raw, frame: *const Frame) -> i32 {
         let (frame, record) =
-            match unsafe { read_frame(self.ops.check, frame, self.device.as_raw()) } {
+            match unsafe { read_frame(&admission::NATIVE_CHECKS, frame, self.device.as_raw()) } {
                 Ok(frame) => frame,
                 Err(result) => return result,
             };
@@ -542,12 +516,13 @@ impl Session for Fsr {
         let enabled = frame.interpolate != 0 && before.mode() != RSF_FG_OFF;
         let hudless = enabled && self.ui_mode == HUDLESS;
         if enabled {
-            let result = unsafe { (self.ops.check.command)(command, self.device.as_raw()) };
+            let result =
+                unsafe { (admission::NATIVE_CHECKS.command)(command, self.device.as_raw()) };
             if result != OK {
                 return result;
             }
             let mut current = Extent::default();
-            if unsafe { (self.ops.chain_extent)(chain, &mut current) } < 0 {
+            if unsafe { native::chain_extent(chain, &mut current) } < 0 {
                 return FEATURE_FAILED;
             }
             if !self.generation_ready.get() || current != self.extent.get() {
@@ -572,7 +547,7 @@ impl Session for Fsr {
             for resource in [&frame.depth, &frame.motion, &frame.hudless] {
                 if !resource.resource.is_null()
                     && (resource.state != NON_PIXEL_READ
-                        || unsafe { (self.ops.whole_texture)(resource) } == 0)
+                        || unsafe { native::whole_texture(resource) } == 0)
                 {
                     return INVALID_ARGUMENT;
                 }
@@ -627,7 +602,7 @@ impl Session for Fsr {
             self.view_space_to_meters,
         );
         let dispatched =
-            unsafe { (self.ops.prepare)(self.sdk.raw, self.generation.load(Relaxed), &plan) };
+            unsafe { native::prepare(self.sdk.raw, self.generation.load(Relaxed), &plan) };
         self.capture
             .event(record, c"fsr-prepare", sequence, reset, dispatched as i32);
         if dispatched != 0 {
@@ -674,7 +649,7 @@ impl Session for Fsr {
         };
         counters.observed = generated;
         let mut count = 0;
-        let result = unsafe { (self.ops.present_count)(chain, &mut count) };
+        let result = unsafe { native::present_count(chain, &mut count) };
         if result >= 0 {
             let delta = crate::fsr4_fg_bridge::present_count_delta(counters.dxgi, count);
             counters.dxgi = count;
@@ -713,8 +688,7 @@ impl Session for Fsr {
         let chain = self.chain.borrow_mut().take();
         drop(chain);
         let mut context = self.swapchain.get();
-        if !context.is_null()
-            && unsafe { (self.ops.destroy_context)(self.sdk.raw, &mut context) } != 0
+        if !context.is_null() && unsafe { native::destroy_context(self.sdk.raw, &mut context) } != 0
         {
             self.swapchain.set(context);
             return false;
@@ -747,33 +721,35 @@ fn rsf_core_fsr12_probe(checks: &Checks, setup: &Setup, query: QueryVersions) ->
     u32::from(select_version(entry as Raw, setup, query).is_some())
 }
 
-unsafe fn rsf_core_fsr12_create(
-    ops: &'static Ops,
-    setup: *const Setup,
-    out: *mut Raw,
-    chain: *mut Raw,
-) -> i32 {
-    let result = unsafe { (ops.check.setup)(setup, out, chain) };
+unsafe fn rsf_core_fsr12_create(setup: *const Setup, out: *mut Raw, chain: *mut Raw) -> i32 {
+    let result = unsafe { (admission::NATIVE_CHECKS.setup)(setup, out, chain) };
     if result != OK {
         return result;
     }
     let setup = unsafe { &*setup };
-    if let Err(result) = ops.check.preflight(
+    if let Err(result) = admission::NATIVE_CHECKS.preflight(
         setup,
         matches!(setup.feature_major, 3 | 4) && matches!(setup.chain.ui_mode, UI_NONE | HUDLESS),
     ) {
         return result;
     }
-    let sdk = match Bindings::open(setup, ops.check, MODULE, None, ops.resolve, ops.close) {
+    let sdk = match Bindings::open(
+        setup,
+        &admission::NATIVE_CHECKS,
+        MODULE,
+        None,
+        native::resolve,
+        native::close,
+    ) {
         Ok(sdk) => sdk,
         Err(result) => return result,
     };
     let Some(entries) = resolve_entries(&sdk.module) else {
         return MISSING_ENTRY_POINT;
     };
-    unsafe { (ops.bind)(sdk.raw, entries.as_ptr()) };
+    unsafe { native::bind(sdk.raw, entries.as_ptr()) };
     let mut initial = initial_status(1);
-    let Some(version) = select_version(sdk.raw, setup, ops.versions) else {
+    let Some(version) = select_version(sdk.raw, setup, native::versions) else {
         return NOT_SUPPORTED;
     };
     initial.version_id = version.id;
@@ -785,7 +761,6 @@ unsafe fn rsf_core_fsr12_create(
         }
     }
     let session = crate::allocate_handle(Fsr {
-        ops,
         sdk,
         log: Log::new(setup),
         device: unsafe { com_ref::retain(setup.chain.d3d12_device) },
@@ -817,14 +792,14 @@ unsafe fn rsf_core_fsr12_create(
     let extent = Extent {
         width: setup.chain.width,
         height: setup.chain.height,
-        format: unsafe { (ops.surface_format)(setup.chain.format) },
+        format: unsafe { native::surface_format(setup.chain.format) },
     };
     let mut result = owner.create_generation(extent, Some(setup));
     if result == OK {
         // The SDK may fall back to another provider; only the selected one is admitted.
         let mut actual = 0;
         let queried = unsafe {
-            (ops.provider_version)(owner.sdk.raw, owner.generation.load(Relaxed), &mut actual)
+            native::provider_version(owner.sdk.raw, owner.generation.load(Relaxed), &mut actual)
         };
         if queried != 0 || actual != initial.version_id {
             result = NOT_SUPPORTED;
@@ -833,11 +808,11 @@ unsafe fn rsf_core_fsr12_create(
     if result == OK && !setup.chain.hwnd.is_null() {
         let (mut swapchain, mut created, mut ffx) = (null_mut(), null_mut(), u32::MAX);
         result = unsafe {
-            (ops.create_chain)(owner.sdk.raw, setup, &mut swapchain, &mut created, &mut ffx)
+            native::create_chain(owner.sdk.raw, setup, &mut swapchain, &mut created, &mut ffx)
         };
         owner.swapchain.set(swapchain);
         if result == OK {
-            let [major, minor, patch] = ops.sdk.swapchain;
+            let [major, minor, patch] = native::SDK.swapchain;
             let desc = &setup.chain;
             owner.log.write(format_args!(
                 "FSR FG create swapchain: FFX result={ffx} chain={} API={major}.{minor}.{patch} size={}x{} buffers={} format={}",
@@ -875,7 +850,7 @@ unsafe fn rsf_core_fsr12_generate(user: Raw, desc: Raw) -> u32 {
         return VENDOR_PARAMETER_ERROR;
     }
     let mut generated = Generated::default();
-    let result = unsafe { (owner.ops.generate)(owner.sdk.raw, context, desc, &mut generated) };
+    let result = unsafe { native::generate(owner.sdk.raw, context, desc, &mut generated) };
     if result == 0 {
         owner.capture_generated(&generated);
     }
@@ -898,7 +873,7 @@ unsafe fn rsf_core_fsr12_generate(user: Raw, desc: Raw) -> u32 {
 unsafe fn rsf_core_fsr12_present(user: Raw, desc: Raw, generated: u32) -> u32 {
     let owner = unsafe { &*user.cast::<Fsr>() };
     let mut present = PresentFacts::default();
-    unsafe { (owner.ops.present_facts)(desc, &mut present) };
+    unsafe { native::present_facts(desc, &mut present) };
     let result = owner.copy_present(&present);
     if result == 0 {
         owner.presented.fetch_add(1, Relaxed);

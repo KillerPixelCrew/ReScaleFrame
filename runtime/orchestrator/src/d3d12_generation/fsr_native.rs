@@ -41,7 +41,7 @@ struct SwapchainBindings {
     create: ffxCreateContextDescFrameGenerationSwapChainForHwndDX12,
 }
 
-static SDK: SdkApi = SdkApi {
+pub(super) static SDK: SdkApi = SdkApi {
     generation: [
         FFX_FRAMEGENERATION_VERSION_MAJOR,
         FFX_FRAMEGENERATION_VERSION_MINOR,
@@ -61,14 +61,14 @@ fn header(kind: u32) -> ffxApiHeader {
     }
 }
 
-unsafe extern "C" fn resolve(setup: &Setup, _: Raw, _: Raw, out: &mut Raw) -> i32 {
+pub(super) unsafe extern "C" fn resolve(setup: &Setup, _: Raw, _: Raw, out: &mut Raw) -> i32 {
     let sdk = Sdk::default();
     unsafe { (*sdk.description.get()).backend.device = setup.chain.d3d12_device };
     *out = crate::allocate_handle(sdk).cast();
     if out.is_null() { INIT_FAILED } else { OK }
 }
 
-unsafe extern "C" fn close(bindings: Raw) {
+pub(super) unsafe extern "C" fn close(bindings: Raw) {
     let sdk = unsafe { Box::from_raw(bindings.cast::<Sdk>()) };
     let chain = sdk.chain.get();
     if !chain.is_null() {
@@ -76,7 +76,7 @@ unsafe extern "C" fn close(bindings: Raw) {
     }
 }
 
-unsafe extern "C" fn bind(bindings: Raw, entries: *const Entry) {
+pub(super) unsafe extern "C" fn bind(bindings: Raw, entries: *const Entry) {
     let sdk = unsafe { &mut *bindings.cast::<Sdk>() };
     let [create, destroy, query, dispatch, configure] = unsafe { *entries.cast::<[Entry; 5]>() };
     // The owner has verified all five exports in the retained SDK module.
@@ -109,7 +109,7 @@ fn query_versions(
     OK
 }
 
-unsafe extern "C" fn versions(
+pub(super) unsafe extern "C" fn versions(
     bindings: Raw,
     setup: &Setup,
     out: &mut [Version; MAX_VERSIONS],
@@ -129,7 +129,7 @@ unsafe extern "C" fn probe_versions(
     query_versions(query, setup, out, count)
 }
 
-unsafe extern "C" fn create_generation(
+pub(super) unsafe extern "C" fn create_generation(
     bindings: Raw,
     plan: *const GenerationPlan,
     out: *mut Raw,
@@ -164,7 +164,11 @@ unsafe extern "C" fn create_generation(
     unsafe { sdk.create.unwrap()(out, (&raw mut data.generation).cast(), std::ptr::null()) }
 }
 
-unsafe extern "C" fn provider_version(bindings: Raw, mut context: Raw, out: *mut u64) -> u32 {
+pub(super) unsafe extern "C" fn provider_version(
+    bindings: Raw,
+    mut context: Raw,
+    out: *mut u64,
+) -> u32 {
     let sdk = unsafe { &*bindings.cast::<Sdk>() };
     let mut actual = ffxQueryGetProviderVersion {
         header: header(FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION),
@@ -175,7 +179,7 @@ unsafe extern "C" fn provider_version(bindings: Raw, mut context: Raw, out: *mut
     code
 }
 
-unsafe extern "C" fn create_chain(
+pub(super) unsafe extern "C" fn create_chain(
     bindings: Raw,
     setup: *const Setup,
     context: *mut Raw,
@@ -234,11 +238,11 @@ unsafe extern "C" fn create_chain(
     OK
 }
 
-unsafe extern "C" fn surface_format(format: u32) -> u32 {
+pub(super) unsafe extern "C" fn surface_format(format: u32) -> u32 {
     ffx_resource::surface_format(DXGI_FORMAT(format as i32))
 }
 
-unsafe extern "C" fn chain_extent(chain: Raw, out: *mut Extent) -> i32 {
+pub(super) unsafe extern "C" fn chain_extent(chain: Raw, out: *mut Extent) -> i32 {
     let chain = unsafe { IDXGISwapChain4::from_raw_borrowed(&chain) }.unwrap();
     match unsafe { chain.GetDesc1() } {
         Ok(desc) => {
@@ -255,7 +259,7 @@ unsafe extern "C" fn chain_extent(chain: Raw, out: *mut Extent) -> i32 {
     }
 }
 
-unsafe extern "C" fn whole_texture(resource: *const Resource) -> u32 {
+pub(super) unsafe extern "C" fn whole_texture(resource: *const Resource) -> u32 {
     let resource = unsafe { &*resource };
     let texture = unsafe { ID3D12Resource::from_raw_borrowed(&resource.resource) }.unwrap();
     let desc = unsafe { texture.GetDesc() };
@@ -267,7 +271,7 @@ unsafe extern "C" fn whole_texture(resource: *const Resource) -> u32 {
     )
 }
 
-unsafe extern "C" fn present_count(chain: Raw, count: *mut u32) -> i32 {
+pub(super) unsafe extern "C" fn present_count(chain: Raw, count: *mut u32) -> i32 {
     let chain = unsafe { IDXGISwapChain4::from_raw_borrowed(&chain) }.unwrap();
     match unsafe { chain.GetLastPresentCount() } {
         Ok(value) => {
@@ -278,7 +282,7 @@ unsafe extern "C" fn present_count(chain: Raw, count: *mut u32) -> i32 {
     }
 }
 
-unsafe extern "C" fn copy(
+pub(super) unsafe extern "C" fn copy(
     command: Raw,
     output: Raw,
     output_state: u32,
@@ -316,12 +320,12 @@ unsafe extern "C" fn copy(
     transition(source, D3D12_RESOURCE_STATE_COPY_SOURCE, source_state);
 }
 
-unsafe extern "C" fn destroy_context(bindings: Raw, context: *mut Raw) -> u32 {
+pub(super) unsafe extern "C" fn destroy_context(bindings: Raw, context: *mut Raw) -> u32 {
     let sdk = unsafe { &*bindings.cast::<Sdk>() };
     unsafe { sdk.destroy.unwrap()(context, std::ptr::null()) }
 }
 
-unsafe extern "C" fn wait(bindings: Raw, mut context: Raw) -> u32 {
+pub(super) unsafe extern "C" fn wait(bindings: Raw, mut context: Raw) -> u32 {
     let sdk = unsafe { &*bindings.cast::<Sdk>() };
     let desc = header(RSF_FFX_WAIT_GENERATION_PRESENT as u32);
     unsafe { sdk.dispatch.unwrap()(&mut context, &desc) }
@@ -342,7 +346,11 @@ fn resource(texture: Raw) -> FfxApiResource {
     unsafe { ffx_resource::describe(texture, FFX_API_RESOURCE_STATE_COMPUTE_READ as u32) }
 }
 
-unsafe extern "C" fn configure(bindings: Raw, mut context: Raw, plan: *const Configuration) -> u32 {
+pub(super) unsafe extern "C" fn configure(
+    bindings: Raw,
+    mut context: Raw,
+    plan: *const Configuration,
+) -> u32 {
     let sdk = unsafe { &*bindings.cast::<Sdk>() };
     let plan = unsafe { &*plan };
     let mut desc = ffxConfigureDescFrameGeneration {
@@ -372,7 +380,11 @@ unsafe extern "C" fn configure(bindings: Raw, mut context: Raw, plan: *const Con
     unsafe { sdk.configure.unwrap()(&mut context, (&raw const desc).cast()) }
 }
 
-unsafe extern "C" fn prepare(bindings: Raw, mut context: Raw, plan: *const PreparePlan) -> u32 {
+pub(super) unsafe extern "C" fn prepare(
+    bindings: Raw,
+    mut context: Raw,
+    plan: *const PreparePlan,
+) -> u32 {
     let sdk = unsafe { &*bindings.cast::<Sdk>() };
     let plan = unsafe { &*plan };
     let desc = ffxDispatchDescFrameGenerationPrepareV2 {
@@ -415,7 +427,7 @@ fn raw_resource(resource: FfxApiResource) -> SdkResource {
     }
 }
 
-unsafe extern "C" fn generate(
+pub(super) unsafe extern "C" fn generate(
     bindings: Raw,
     mut context: Raw,
     raw: Raw,
@@ -437,7 +449,7 @@ unsafe extern "C" fn generate(
     result
 }
 
-unsafe extern "C" fn present_facts(raw: Raw, out: *mut PresentFacts) {
+pub(super) unsafe extern "C" fn present_facts(raw: Raw, out: *mut PresentFacts) {
     let desc = unsafe { &*raw.cast::<ffxCallbackDescFrameGenerationPresent>() };
     unsafe {
         out.write(PresentFacts {
@@ -465,29 +477,6 @@ unsafe fn rsf_core_fsr12_native_supported(
     rsf_core_fsr12_probe(&admission::NATIVE_CHECKS, &setup, probe_versions)
 }
 
-static OPS: Ops = Ops {
-    check: &admission::NATIVE_CHECKS,
-    sdk: &SDK,
-    resolve,
-    close,
-    bind,
-    versions,
-    surface_format,
-    create_generation,
-    provider_version,
-    create_chain,
-    destroy_context,
-    wait,
-    chain_extent,
-    whole_texture,
-    configure,
-    prepare,
-    generate,
-    present_facts,
-    copy,
-    present_count,
-};
-
 fn rsf_core_fsr12_native_provider(compiled: u32) -> *const Provider {
     static NATIVE_PROVIDER: Provider = Provider {
         create: Some(create),
@@ -501,7 +490,7 @@ fn rsf_core_fsr12_native_provider(compiled: u32) -> *const Provider {
 }
 
 unsafe extern "C" fn create(setup: *const Setup, out: *mut Raw, chain: *mut Raw) -> i32 {
-    unsafe { rsf_core_fsr12_create(&OPS, setup, out, chain) }
+    unsafe { rsf_core_fsr12_create(setup, out, chain) }
 }
 
 // The ffx-fg feature is CMake's frame-generation header detection (runtime/orchestrator/CMakeLists.txt).
