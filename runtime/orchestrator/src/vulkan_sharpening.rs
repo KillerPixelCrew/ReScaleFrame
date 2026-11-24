@@ -8,6 +8,7 @@
 mod native;
 use crate::sharpening_policy::{FILTERS, effective_mode};
 use crate::sys::rsf_sharpening_options as Options;
+use rsf_game_sys::ffi_util::try_box;
 
 use crate::sys::{rsf_srvk_frame as Frame, rsf_srvk_image as Image, rsf_srvk_setup as Setup};
 use crate::vulkan_fg_resources::Image as OwnedImage;
@@ -165,6 +166,14 @@ fn release_slot(leaf: *mut c_void, slot: &mut Slot) {
 }
 
 impl Owner {
+    fn new() -> Self {
+        Self {
+            device: None,
+            slots: Vec::new(),
+            dispatches: 0,
+        }
+    }
+
     fn initialize(&mut self, setup: &Setup) -> bool {
         if let Some(device) = &self.device {
             // A failed bind or another device stays refused until clear().
@@ -376,47 +385,6 @@ impl Drop for Owner {
     }
 }
 
-fn rsf_core_sharpenvk_create() -> *mut Owner {
-    crate::allocate_handle(Owner {
-        device: None,
-        slots: Vec::new(),
-        dispatches: 0,
-    })
-}
-
-unsafe fn rsf_core_sharpenvk_destroy(owner: *mut Owner) {
-    if !owner.is_null() {
-        drop(unsafe { Box::from_raw(owner) });
-    }
-}
-
-unsafe fn rsf_core_sharpenvk_record(
-    owner: *mut Owner,
-    setup: *const Setup,
-    commands: *mut c_void,
-    frame: *const Frame,
-    output: u64,
-) -> u32 {
-    let (Some(owner), Some(setup), Some(frame)) =
-        (unsafe { (owner.as_mut(), setup.as_ref(), frame.as_ref()) })
-    else {
-        return 0;
-    };
-    u32::from(owner.record(setup, commands, frame, output))
-}
-
-unsafe fn rsf_core_sharpenvk_retire(owner: *mut Owner, commands: *mut c_void) {
-    if let Some(owner) = unsafe { owner.as_mut() } {
-        owner.retire(commands);
-    }
-}
-
-unsafe fn rsf_core_sharpenvk_clear(owner: *mut Owner) {
-    if let Some(owner) = unsafe { owner.as_mut() } {
-        owner.clear();
-    }
-}
-
 #[cfg(test)]
 mod tests;
 
@@ -430,37 +398,32 @@ unsafe extern "C" {
 
 /// A recording host serializes calls, retires completed and reset command buffers, and drains
 /// all users before clearing or destroying this state.
+#[derive(Default)]
 pub(crate) struct Host {
-    owner: *mut c_void,
+    owner: Option<Box<Owner>>,
     failure_logged: bool,
 }
 
-impl Default for Host {
-    fn default() -> Self {
-        Self {
-            owner: ptr::null_mut(),
-            failure_logged: false,
-        }
-    }
-}
-
 pub(crate) unsafe fn rsf_sharpenvk_host_destroy(host: &mut Host) {
-    unsafe { rsf_core_sharpenvk_destroy(host.owner.cast()) };
     *host = Host::default();
 }
 
 pub(crate) unsafe fn rsf_sharpenvk_host_clear(host: &mut Host) {
-    unsafe { rsf_core_sharpenvk_clear(host.owner.cast()) };
+    if let Some(owner) = &mut host.owner {
+        owner.clear();
+    }
 }
 
 pub(crate) unsafe fn rsf_sharpenvk_host_retire(host: &mut Host, commands: *mut c_void) {
-    unsafe { rsf_core_sharpenvk_retire(host.owner.cast(), commands) };
+    if let Some(owner) = &mut host.owner {
+        owner.retire(commands);
+    }
 }
 
 // Read by the sharpening fixtures.
 #[cfg(feature = "test-fixtures")]
 pub(crate) unsafe fn rsf_sharpenvk_host_dispatches(host: &Host) -> u64 {
-    unsafe { host.owner.cast::<Owner>().as_ref() }.map_or(0, |owner| owner.dispatches)
+    host.owner.as_ref().map_or(0, |owner| owner.dispatches)
 }
 
 pub(crate) unsafe fn rsf_sharpenvk_host_run(
@@ -470,12 +433,14 @@ pub(crate) unsafe fn rsf_sharpenvk_host_run(
     frame: &Frame,
     output: u64,
 ) -> u32 {
-    if host.owner.is_null() {
-        host.owner = rsf_core_sharpenvk_create().cast();
+    if host.owner.is_none() {
+        host.owner = try_box(Owner::new());
     }
-    let result =
-        unsafe { rsf_core_sharpenvk_record(host.owner.cast(), setup, commands, frame, output) };
-    if result == 0 && !host.failure_logged {
+    let recorded = host
+        .owner
+        .as_mut()
+        .is_some_and(|owner| owner.record(setup, commands, frame, output));
+    if !recorded && !host.failure_logged {
         host.failure_logged = true;
         let text = c"Vulkan sharpening unavailable; retaining vendor output";
         if frame.log.is_some() {
@@ -488,5 +453,5 @@ pub(crate) unsafe fn rsf_sharpenvk_host_run(
             };
         }
     }
-    result
+    u32::from(recorded)
 }

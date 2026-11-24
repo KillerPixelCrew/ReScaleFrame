@@ -275,7 +275,7 @@ pub(super) mod leaf {
 }
 
 struct Harness {
-    owner: *mut Owner,
+    owner: RefCell<Owner>,
     setup: Setup,
     record: Box<rsf_frame_record>,
 }
@@ -289,7 +289,7 @@ impl Harness {
         record.output_width = 33;
         record.output_height = 17;
         Self {
-            owner: rsf_core_sharpenvk_create(),
+            owner: RefCell::new(Owner::new()),
             setup,
             record,
         }
@@ -321,33 +321,27 @@ impl Harness {
     }
 
     fn run(&self, commands: usize, frame: &Frame) -> bool {
-        unsafe {
-            rsf_core_sharpenvk_record(
-                self.owner,
-                &self.setup,
-                commands as *mut c_void,
-                frame,
-                OUTPUT,
-            ) != 0
-        }
+        self.owner
+            .borrow_mut()
+            .record(&self.setup, commands as *mut c_void, frame, OUTPUT)
     }
 
     fn retire(&self, commands: usize) {
-        unsafe { rsf_core_sharpenvk_retire(self.owner, commands as *mut c_void) };
+        self.owner.borrow_mut().retire(commands as *mut c_void);
     }
 
     fn clear(&self) {
-        unsafe { rsf_core_sharpenvk_clear(self.owner) };
+        self.owner.borrow_mut().clear();
     }
 
     fn dispatches(&self) -> u64 {
-        unsafe { self.owner.as_ref() }.map_or(0, |owner| owner.dispatches)
+        self.owner.borrow().dispatches
     }
 }
 
 impl Drop for Harness {
     fn drop(&mut self) {
-        unsafe { rsf_core_sharpenvk_destroy(self.owner) };
+        self.owner.borrow_mut().clear();
         with(|fake| assert!(fake.live.is_empty(), "leaked {:x?}", fake.live));
     }
 }
@@ -391,9 +385,9 @@ fn admission_refuses_invalid_inputs_before_binding_the_device() {
     }
     assert!(!h.run(0, &h.frame(2)));
     assert!(
-        unsafe {
-            rsf_core_sharpenvk_record(h.owner, &h.setup, ptr::dangling_mut(), &h.frame(1), 0)
-        } == 0
+        !h.owner
+            .borrow_mut()
+            .record(&h.setup, ptr::dangling_mut(), &h.frame(1), 0)
     );
     let mut zero = h.record.clone();
     zero.output_width = 0;
@@ -513,8 +507,9 @@ fn unavailable_device_latches_and_a_bound_device_refuses_another() {
     foreign.motion.image = 0;
     foreign.depth.image = 0;
     assert!(
-        unsafe { rsf_core_sharpenvk_record(h.owner, &moved, 2 as *mut c_void, &foreign, OUTPUT) }
-            == 0
+        !h.owner
+            .borrow_mut()
+            .record(&moved, 2 as *mut c_void, &foreign, OUTPUT)
     );
     assert_eq!(h.dispatches(), 1);
 }
