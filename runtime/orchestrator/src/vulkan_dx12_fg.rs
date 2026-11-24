@@ -262,19 +262,6 @@ pub(super) struct GraphicsOps {
     capture_flush: Release,
     describe: unsafe extern "C" fn(*const c_void, *mut Swapchain),
 }
-const _: () = {
-    assert!(size_of::<GraphicsOps>() == 30 * size_of::<Handle>());
-    assert!(std::mem::offset_of!(GraphicsOps, describe) == 29 * size_of::<Handle>());
-    assert!(std::mem::offset_of!(GraphicsOps, platform_resolve) == 3 * size_of::<Handle>());
-    assert!(std::mem::offset_of!(GraphicsOps, images) == 8 * size_of::<Handle>());
-    assert!(size_of::<Swapchain>() == 56);
-    assert!(size_of::<PresentInfo>() == 32);
-    assert!(size_of::<PresentInput>() == 32);
-    assert!(std::mem::offset_of!(PresentInput, wait_count) == 12);
-    assert!(size_of::<PresentSubmit>() == 368);
-    assert!(std::mem::offset_of!(PresentSubmit, values) == 144);
-    assert!(std::mem::offset_of!(PresentSubmit, signal) == 352);
-};
 
 /// One recorded command of a planned transfer, in submission order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

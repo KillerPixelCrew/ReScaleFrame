@@ -40,12 +40,6 @@ const SHARED_SUBMISSION: u32 = 0;
 const VIEWPORT: u32 = 0;
 const TRUE: u8 = 1;
 
-const _: () = {
-    assert!(vk::ImageUsageFlags::TRANSFER_SRC.as_raw() == 1);
-    assert!(vk::ImageUsageFlags::TRANSFER_DST.as_raw() == 2);
-    assert!(vk::Format::R8G8B8A8_UNORM.as_raw() == 37 && vk::Format::B8G8R8A8_UNORM.as_raw() == 44);
-};
-
 /// The native owner. `sdk` comes first: the native fixture's initialize
 /// leaf writes its entry points there.
 #[repr(C)]

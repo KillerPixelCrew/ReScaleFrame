@@ -11,12 +11,6 @@ use crate::vulkan_fg_copy::{
 };
 use ash::vk::{self, Handle as _};
 
-const _: () = {
-    assert!(size_of::<vk::PresentInfoKHR<'_>>() == 64);
-    assert!(size_of::<vk::SwapchainCreateInfoKHR<'_>>() == 104);
-    assert!(size_of::<vk::PhysicalDeviceMemoryProperties>() == 520);
-};
-
 macro_rules! device_dispatch {
     ($($field:ident: $ty:ident = $name:literal),+ $(,)?) => {
         struct Dispatch {

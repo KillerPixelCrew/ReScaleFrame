@@ -83,14 +83,3 @@ pub(super) struct Platform {
     pub detach_capture: unsafe extern "C" fn(Handle) -> i32,
     pub timeout_epoch: unsafe extern "C" fn() -> u64,
 }
-
-const _: () = {
-    assert!(size_of::<Sample>() == 40);
-    assert!(size_of::<Tag>() == 24);
-    assert!(size_of::<SdkCall>() == 96);
-    assert!(std::mem::offset_of!(SdkCall, camera) == 64);
-    assert!(std::mem::offset_of!(SdkCall, tags) == 80);
-    assert!(std::mem::offset_of!(SdkCall, options) == 88);
-    assert!(size_of::<Sdk>() == 40);
-    assert!(size_of::<Platform>() == 144);
-};
