@@ -315,9 +315,7 @@ pub(crate) unsafe fn options(
     &unsafe { renderer_ref(renderer) }.options
 }
 
-pub(crate) unsafe fn patches(
-    renderer: *mut rsf_ac7_native_renderer,
-) -> *mut rsf_ac7_code_patches {
+pub(crate) unsafe fn patches(renderer: *mut rsf_ac7_native_renderer) -> *mut rsf_ac7_code_patches {
     unsafe { renderer_ref(renderer) }.patches.get()
 }
 
@@ -341,10 +339,7 @@ pub(crate) unsafe fn set_quiescing(renderer: *mut rsf_ac7_native_renderer) {
         .store(true, Ordering::SeqCst);
 }
 
-pub(crate) unsafe fn scopes_create(
-    renderer: *mut rsf_ac7_native_renderer,
-    capacity: u32,
-) -> bool {
+pub(crate) unsafe fn scopes_create(renderer: *mut rsf_ac7_native_renderer, capacity: u32) -> bool {
     let owner = unsafe { renderer_ref(renderer) };
     let options = &owner.options;
     let Some(create) = native().and_then(|calls| calls.scopes_create) else {
