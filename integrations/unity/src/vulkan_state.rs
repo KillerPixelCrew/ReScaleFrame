@@ -28,11 +28,6 @@
 use crate::bridge_interop::VULKAN;
 use crate::device_creation::{Claim, Creation};
 use crate::sys::{RSF_UNITY_FRAMES_PACKETS, RSF_UNITY_FRAMES_SLOTS, rsf_unity_packet};
-pub(super) use crate::sys::{
-    rsf_unity_vulkan_command_handles as CommandSlot,
-    rsf_unity_vulkan_device_handles as DeviceHandles,
-    rsf_unity_vulkan_image_handles as ImageHandles,
-};
 use crate::vulkan_resolver::{DEVICE_LOST, SUCCESS};
 use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::rsf_game_host_services;
@@ -107,6 +102,39 @@ struct Image {
     initialized: bool,
 }
 
+/// A shared image: its D3D12 resource reference and the Vulkan image bound to its memory.
+#[derive(Clone, Copy)]
+pub(crate) struct ImageHandles {
+    pub(crate) resource: *mut c_void,
+    pub(crate) image: u64,
+    pub(crate) memory: u64,
+}
+
+/// A view borrowed under the presentation lease. The pool owns both VkCommandBuffers.
+#[derive(Clone, Copy)]
+pub(crate) struct CommandSlot {
+    pub(crate) allocator: *mut c_void,
+    pub(crate) commands: *mut c_void,
+    pub(crate) vk: [u64; 2],
+    pub(crate) complete: u64,
+}
+
+/// Transferred COM references, dispatch and imported semaphore, plus borrowed Unity Vulkan
+/// device facts.
+#[derive(Clone, Copy)]
+pub(crate) struct DeviceHandles {
+    pub(crate) device: *mut c_void,
+    pub(crate) queue: *mut c_void,
+    pub(crate) fence: *mut c_void,
+    pub(crate) vk_device: u64,
+    pub(crate) vk_physical_device: u64,
+    pub(crate) vk_queue: u64,
+    pub(crate) vk_semaphore: u64,
+    pub(crate) vk_queue_family: u32,
+    /// Owned by the shared device, borrowed with this record.
+    pub(crate) dispatch: *mut c_void,
+}
+
 impl ImageHandles {
     const EMPTY: Self = Self {
         resource: ptr::null_mut(),
@@ -119,7 +147,7 @@ impl ImageHandles {
     }
 }
 
-// The pool owns the two Vulkan buffers. The slot owns the fence and the COM references.
+// The slot owns the fence and the COM references.
 impl CommandSlot {
     const EMPTY: Self = Self {
         allocator: ptr::null_mut(),
@@ -136,8 +164,7 @@ impl CommandSlot {
     }
 }
 
-// The COM references, dispatch and imported semaphore transfer to Rust. Unity lends the
-// Vulkan device and queue for the duration of the shared-device owner.
+// Unity lends the Vulkan device and queue for the duration of the shared-device owner.
 impl DeviceHandles {
     const EMPTY: Self = Self {
         device: ptr::null_mut(),
@@ -725,9 +752,7 @@ fn configure_surface(width: u32, height: u32) -> *mut c_void {
         )
     };
     if let Some(chain) = current {
-        let (mut current_width, mut current_height) = (0, 0);
-        unsafe { ops::chain_extent(chain, &mut current_width, &mut current_height) };
-        if (width, height) == (current_width, current_height)
+        if (width, height) == unsafe { ops::chain_extent(chain) }
             || (unsafe { ops::drain(&device) }
                 && unsafe { ops::chain_resize(chain, width, height) })
         {
@@ -1121,7 +1146,9 @@ mod tests {
         ) -> *mut c_void {
             ptr::null_mut()
         }
-        pub(crate) unsafe fn chain_extent(_: *mut c_void, _: *mut u32, _: *mut u32) {}
+        pub(crate) unsafe fn chain_extent(_: *mut c_void) -> (u32, u32) {
+            (0, 0)
+        }
         pub(crate) unsafe fn chain_resize(_: *mut c_void, _: u32, _: u32) -> bool {
             false
         }

@@ -8,7 +8,6 @@ fn main() {
         "integrations/unity/native/bridge.h",
         "integrations/unity/native/bridge_d3d12.h",
         "integrations/unity/native/bridge_state.h",
-        "integrations/unity/native/vulkan_state.h",
         "integrations/unity/native/package_state.h",
         "integrations/unity/native/vulkan_foreign.h",
     ];

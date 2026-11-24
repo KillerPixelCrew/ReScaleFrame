@@ -64,15 +64,27 @@ extern "C" fn rsf_uvk_bridge_retirement_fault() {
     stop(c"Unity Vulkan could not retire its present semaphores; ownership was retained.");
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_uvk_bridge_create_device(
+// vulkan_bridge.c: the loader lookups guarded against foreign exceptions.
+unsafe extern "system" {
+    fn rsf_uvk_foreign_instance_lookup(
+        instance: vk::Instance,
+        name: *const std::ffi::c_char,
+    ) -> vk::PFN_vkVoidFunction;
+    fn rsf_uvk_foreign_device_lookup(
+        device: *mut c_void,
+        name: *const std::ffi::c_char,
+    ) -> vk::PFN_vkVoidFunction;
+}
+
+/// Fills the shared device from Unity's Vulkan instance: its Vulkan facts, the interop check and
+/// the D3D12 objects on the same adapter.
+pub(super) unsafe fn create_device(
     services: *const rsf_game_host_services,
-    instance: *const rsf_uvk_engine_instance,
-    output: *mut DeviceHandles,
-    gipa: unsafe extern "C" fn(),
-    gdpa: unsafe extern "C" fn(),
+    output: &mut DeviceHandles,
 ) -> bool {
-    let instance = unsafe { &*instance };
+    let Some(instance) = instance() else {
+        return false;
+    };
     if instance.instance == 0
         || instance.device == 0
         || instance.physical_device == 0
@@ -80,28 +92,34 @@ unsafe extern "C" fn rsf_uvk_bridge_create_device(
     {
         return false;
     }
-    let output = unsafe { &mut *output };
     output.vk_device = instance.device;
     output.vk_physical_device = instance.physical_device;
     output.vk_queue = instance.queue;
     output.vk_queue_family = instance.queue_family;
-    // The native loader supplies these two exact Vulkan entry points on Windows x64.
-    let gipa = unsafe {
-        std::mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkGetInstanceProcAddr>(gipa)
-    };
-    let gdpa =
-        unsafe { std::mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkGetDeviceProcAddr>(gdpa) };
-    let lookup = unsafe {
-        std::mem::transmute::<vk::PFN_vkGetDeviceProcAddr, vulkan_resolver::Lookup>(gdpa)
-    };
-    if !vulkan_resolver::interop_ready(instance.device as *mut c_void, lookup) {
+    if !vulkan_resolver::interop_ready(
+        instance.device as *mut c_void,
+        rsf_uvk_foreign_device_lookup,
+    ) {
         log(
             services,
             c"Unity Vulkan device lacks enabled Win32 external-memory/semaphore extensions.",
         );
         return false;
     }
-    let created = unsafe { rsf_uvk_gpu_create_device(output, instance.instance, gipa, gdpa) };
+    // A VkDevice is the pointer-sized dispatchable handle the lookup takes.
+    let gdpa = unsafe {
+        std::mem::transmute::<vulkan_resolver::Lookup, vk::PFN_vkGetDeviceProcAddr>(
+            rsf_uvk_foreign_device_lookup,
+        )
+    };
+    let created = unsafe {
+        rsf_uvk_gpu_create_device(
+            output,
+            instance.instance,
+            rsf_uvk_foreign_instance_lookup,
+            gdpa,
+        )
+    };
     if created == 2 {
         log(services, c"Unity Vulkan adapter supplied no Windows LUID.");
     }
@@ -117,12 +135,11 @@ pub(super) unsafe fn report_created(services: *const rsf_game_host_services) {
 
 /// The device and surface leaves vulkan_state calls; its tests bind fakes with the same names.
 pub(super) mod ops {
-    pub(in crate::vulkan_state) use super::report_created;
+    pub(in crate::vulkan_state) use super::{create_device, report_created};
     pub(in crate::vulkan_state) use crate::package_state::{
         rsf_unity_package_sr_ring_begin as ring_begin,
         rsf_unity_package_sr_ring_retired as ring_retired,
     };
-    pub(in crate::vulkan_state) use crate::sys::rsf_uvk_foreign_create_device as create_device;
     pub(in crate::vulkan_state) use crate::vulkan_platform::surface::{
         rsf_uvk_gpu_chain_create as chain_create, rsf_uvk_gpu_chain_destroy as chain_destroy,
         rsf_uvk_gpu_chain_extent as chain_extent, rsf_uvk_gpu_chain_resize as chain_resize,
@@ -140,10 +157,6 @@ fn initialize(services: *const rsf_game_host_services) -> Device {
         return Device::Failed;
     }
     initialize_device(services)
-}
-
-fn configure_surface(width: u32, height: u32) -> *mut c_void {
-    super::configure_surface(width, height)
 }
 
 struct Entry;

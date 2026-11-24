@@ -28,19 +28,10 @@ bool rsf_uvk_foreign_queue(int event_id, void* event);
 bool rsf_uvk_foreign_pass(const rsf_game_host_services*, void*, const rsf_game_render_pass*, uint32_t phase);
 bool rsf_uvk_foreign_present(uint64_t queue, const void* info, int32_t* result);
 
-bool rsf_uvk_bridge_render(int event_id, int base_event, const rsf_unity_packet*, const rsf_game_host_services*, bool reconfigure);
+/* The Rust bridge entries vulkan_bridge.c calls. */
 void rsf_uvk_bridge_execute(const void* event);
 int32_t rsf_uvk_bridge_present(uint64_t queue, const void* info);
 void rsf_uvk_bridge_retirement_fault(void);
-bool rsf_uvk_bridge_graphics(void** device, void** queue);
-bool rsf_uvk_bridge_create_window(void);
-bool rsf_uvk_bridge_update_window(uint32_t width, uint32_t height);
-bool rsf_uvk_bridge_owns_window(void*);
-struct rsf_unity_vulkan_device_handles;
-bool rsf_uvk_foreign_create_device(const rsf_game_host_services*, struct rsf_unity_vulkan_device_handles*);
-bool rsf_uvk_bridge_create_device(const rsf_game_host_services*, const rsf_uvk_engine_instance*,
-    struct rsf_unity_vulkan_device_handles*,
-    void (*instance_lookup)(void), void (*device_lookup)(void));
 
 #ifdef __cplusplus
 }

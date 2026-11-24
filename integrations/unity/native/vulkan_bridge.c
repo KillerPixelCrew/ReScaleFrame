@@ -3,7 +3,6 @@
    exception guards around foreign calls at the Rust boundary (rescaleframe/foreign_guard.h:
    foreign C++ exceptions only; access violations and other faults still propagate). */
 #include "vulkan_foreign.h"
-#include "vulkan_state.h"
 #include <windows.h>
 #define RSF_UNITY_SDK_LEAF rsf_unity_package_vulkan
 #include "unity_sdk.h"
@@ -27,8 +26,7 @@ typedef struct rsf_unity_vk_hooks {
 } rsf_unity_vk_hooks;
 PFN_vkGetInstanceProcAddr rsf_unity_vk_install(PFN_vkGetInstanceProcAddr original, const rsf_unity_vk_hooks* hooks);
 
-/* vulkan_resolver.rs reads this table, and vulkan_platform.rs and vulkan_bridge.rs the records below.
-   The Vulkan structures themselves are ash's. */
+/* vulkan_resolver.rs reads this table. The Vulkan structures themselves are ash's. */
 _Static_assert(sizeof(rsf_unity_vk_hooks) == 8 * sizeof(void*), "hook table");
 _Static_assert(sizeof(VkSemaphore) == sizeof(uint64_t), "VkSemaphore");
 
@@ -49,7 +47,8 @@ static VKAPI_ATTR VkResult VKAPI_CALL intercept_present(VkQueue queue, const VkP
     return (VkResult)rsf_uvk_bridge_present((uint64_t)(uintptr_t)queue, info);
 }
 
-static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL instance_lookup(VkInstance instance, const char* name)
+/* The guarded loader lookups the Rust shared device resolves its dispatch through. */
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL rsf_uvk_foreign_instance_lookup(VkInstance instance, const char* name)
 {
     RSF_FOREIGN_TRY {
         return vkGetInstanceProcAddr(instance, name);
@@ -58,7 +57,7 @@ static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL instance_lookup(VkInstance insta
     }
 }
 
-static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL device_lookup(VkDevice device, const char* name)
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL rsf_uvk_foreign_device_lookup(VkDevice device, const char* name)
 {
     RSF_FOREIGN_TRY {
         return vkGetDeviceProcAddr(device, name);
@@ -70,7 +69,7 @@ static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL device_lookup(VkDevice device, c
 static PFN_vkGetInstanceProcAddr UNITY_INTERFACE_API initialize_intercept(PFN_vkGetInstanceProcAddr original, void* user)
 {
     (void)user;
-    const rsf_unity_vk_hooks hooks = {intercept_present, device_lookup, vkEnumerateDeviceExtensionProperties,
+    const rsf_unity_vk_hooks hooks = {intercept_present, rsf_uvk_foreign_device_lookup, vkEnumerateDeviceExtensionProperties,
         vkCreateDevice, vkCreateSemaphore, vkDestroySemaphore, vkDeviceWaitIdle, rsf_uvk_bridge_retirement_fault};
     return rsf_unity_vk_install(original, &hooks);
 }
@@ -93,12 +92,6 @@ bool rsf_uvk_foreign_instance(rsf_uvk_engine_instance* output)
     }
 }
 
-bool rsf_uvk_foreign_create_device(const rsf_game_host_services* services, rsf_unity_vulkan_device_handles* output)
-{
-    rsf_uvk_engine_instance instance = {0};
-    return rsf_uvk_foreign_instance(&instance) && rsf_uvk_bridge_create_device(services, &instance, output,
-        (void (*)(void))instance_lookup, (void (*)(void))device_lookup);
-}
 
 bool rsf_uvk_foreign_texture(void* texture, int32_t layout, uint32_t access, rsf_uvk_engine_image* output)
 {

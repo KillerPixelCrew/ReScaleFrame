@@ -15,7 +15,7 @@ const FORMAT: DXGI_FORMAT = DXGI_FORMAT_R8G8B8A8_UNORM;
 const BUFFER_COUNT: u32 = 3;
 
 pub(crate) unsafe fn rsf_uvk_gpu_chain_create(
-    shared: *const DeviceHandles,
+    shared: &DeviceHandles,
     window: *mut c_void,
     width: u32,
     height: u32,
@@ -35,7 +35,7 @@ pub(crate) unsafe fn rsf_uvk_gpu_chain_create(
         ..Default::default()
     };
     let chain = unsafe {
-        let queue = borrowed::<ID3D12CommandQueue>(&(*shared).queue);
+        let queue = borrowed::<ID3D12CommandQueue>(&shared.queue);
         CreateDXGIFactory1::<IDXGIFactory2>()
             .and_then(|factory| {
                 factory.CreateSwapChainForHwnd(
@@ -51,16 +51,9 @@ pub(crate) unsafe fn rsf_uvk_gpu_chain_create(
     chain.map_or(null_mut(), Interface::into_raw)
 }
 
-pub(crate) unsafe fn rsf_uvk_gpu_chain_extent(
-    chain: *mut c_void,
-    width: *mut u32,
-    height: *mut u32,
-) {
+pub(crate) unsafe fn rsf_uvk_gpu_chain_extent(chain: *mut c_void) -> (u32, u32) {
     let desc = unsafe { borrowed::<IDXGISwapChain3>(&chain).GetDesc1() }.unwrap_or_default();
-    unsafe {
-        width.write(desc.Width);
-        height.write(desc.Height);
-    }
+    (desc.Width, desc.Height)
 }
 
 pub(crate) unsafe fn rsf_uvk_gpu_chain_resize(chain: *mut c_void, width: u32, height: u32) -> bool {

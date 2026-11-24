@@ -105,7 +105,7 @@ fn on_window_thread(window: HWND) -> bool {
         && unsafe { GetWindowThreadProcessId(window, ptr::null_mut()) == GetCurrentThreadId() }
 }
 
-pub(crate) extern "C" fn rsf_uvk_bridge_owns_window(candidate: *mut c_void) -> bool {
+pub(crate) fn rsf_uvk_bridge_owns_window(candidate: *mut c_void) -> bool {
     let window = surface_window();
     !window.is_null() && window == candidate
 }
