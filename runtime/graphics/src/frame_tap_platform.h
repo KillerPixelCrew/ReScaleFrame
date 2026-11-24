@@ -86,11 +86,6 @@ typedef struct rsf_frame_tap_hook {
     void* replacement;
 } rsf_frame_tap_hook;
 
-/* D3D11_VIEWPORT. */
-typedef struct rsf_frame_tap_viewport {
-    float x, y, width, height, min_depth, max_depth;
-} rsf_frame_tap_viewport;
-
 /* The unordered access arguments of OMSetRenderTargetsAndUnorderedAccessViews. */
 typedef struct rsf_frame_tap_uavs {
     uint32_t start;

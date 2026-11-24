@@ -1,18 +1,15 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use crate::com_ref::vtable;
 use crate::d3d11_output::texture_desc;
 use crate::d3d11_output_platform::{rsf_d3d11_output_child_device, rsf_d3d11_output_query_texture};
-use windows::core::IUnknown;
+use std::ptr;
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11_RENDER_TARGET_VIEW_DESC, D3D11_SAMPLER_DESC, D3D11_VIEWPORT, ID3D11Device,
+    ID3D11DeviceContext, ID3D11DeviceContext1, ID3D11RenderTargetView, ID3D11SamplerState,
+    ID3D11View,
+};
 use windows_sys::Win32::System::Memory::{PAGE_EXECUTE_READWRITE, VirtualProtect};
-use windows_sys::core::GUID;
-
-// SDK 10.0.26100.0 d3d11.h and d3d11_1.h C vtables. Each use names the exact
-// native argument types (with opaque pointers for COM interfaces and input records).
-macro_rules! method {
-    ($object:expr, $index:expr, $ty:ty) => {
-        std::mem::transmute::<Handle, $ty>(slot($object, $index))
-    };
-}
 
 pub(super) unsafe fn patch_slot(vtable: *mut Handle, index: u32, replacement: Handle) -> i32 {
     let entry = unsafe { vtable.add(index as usize) };
@@ -37,36 +34,14 @@ pub(super) unsafe fn patch_slot(vtable: *mut Handle, index: u32, replacement: Ha
 }
 
 pub(super) unsafe fn context1(context: Handle) -> i32 {
-    i32::from(unsafe { context1_ref(context) }.is_some())
-}
-
-pub(super) unsafe fn context1_ref(context: Handle) -> Option<IUnknown> {
-    // IID_ID3D11DeviceContext1, d3d11_1.h.
-    const IID: GUID = GUID {
-        data1: 0xbb2c6faa,
-        data2: 0xb5fb,
-        data3: 0x4082,
-        data4: [0x8e, 0x6b, 0x38, 0x8b, 0x8c, 0xfa, 0x90, 0xe1],
-    };
-    type Query = unsafe extern "system" fn(Handle, *const GUID, *mut Handle) -> i32;
-    let query = unsafe { method!(context, 0, Query) };
-    let mut result = null_mut();
-    if unsafe { query(context, &IID, &mut result) } < 0 {
-        return None;
-    }
-    unsafe { com_ref::owned(result) }
-}
-
-unsafe fn view_resource(view: Handle) -> Handle {
-    type Get = unsafe extern "system" fn(Handle, *mut Handle);
-    let get = unsafe { method!(view, 7, Get) }; // ID3D11View::GetResource
-    let mut resource = null_mut();
-    unsafe { get(view, &mut resource) };
-    resource
+    let context = unsafe { IUnknown::from_raw_borrowed(&context) };
+    i32::from(context.is_some_and(|context| context.cast::<ID3D11DeviceContext1>().is_ok()))
 }
 
 pub(super) unsafe fn texture_behind(view: Handle) -> Handle {
-    let Some(resource) = (unsafe { com_ref::owned(view_resource(view)) }) else {
+    let mut resource = null_mut();
+    unsafe { (vtable::<ID3D11View>(&view).GetResource)(view, &mut resource) };
+    let Some(resource) = (unsafe { com_ref::owned(resource) }) else {
         return null_mut();
     };
     unsafe { rsf_d3d11_output_query_texture(resource.as_raw()) }
@@ -89,13 +64,9 @@ pub(super) unsafe fn texture_facts(texture: Handle, result: *mut rsf_texture_fac
 }
 
 pub(super) unsafe fn target_format(view: Handle) -> u32 {
-    // D3D11_RENDER_TARGET_VIEW_DESC, including the largest union member.
-    type Desc = [u32; 5];
-    type Get = unsafe extern "system" fn(Handle, *mut Desc);
-    let get = unsafe { method!(view, 8, Get) };
-    let mut desc = [0; 5];
-    unsafe { get(view, &mut desc) };
-    desc[0]
+    let mut desc = D3D11_RENDER_TARGET_VIEW_DESC::default();
+    unsafe { (vtable::<ID3D11RenderTargetView>(&view).GetDesc)(view, &mut desc) };
+    desc.Format.0 as u32
 }
 
 pub(super) unsafe fn buffer_width(resource: Handle, bind_flags: *mut u32) -> u32 {
@@ -108,18 +79,14 @@ pub(super) unsafe fn buffer_width(resource: Handle, bind_flags: *mut u32) -> u32
     width
 }
 
-type GetRange = unsafe extern "system" fn(Handle, u32, u32, *mut Handle);
-type SetRange = unsafe extern "system" fn(Handle, u32, u32, *const Handle);
-type GetViewport = unsafe extern "system" fn(Handle, *mut u32, *mut rsf_frame_tap_viewport);
-
 pub(super) unsafe fn shader_views(context: Handle, views: *mut Handle) {
-    let get = unsafe { method!(context, 73, GetRange) };
-    unsafe { get(context, 0, VIEWS as u32, views) };
+    let api = unsafe { vtable::<ID3D11DeviceContext>(&context) };
+    unsafe { (api.PSGetShaderResources)(context, 0, VIEWS as u32, views) };
 }
 
 pub(super) unsafe fn samplers(context: Handle, samplers: *mut Handle) {
-    let get = unsafe { method!(context, 75, GetRange) };
-    unsafe { get(context, 0, SAMPLERS as u32, samplers) };
+    let api = unsafe { vtable::<ID3D11DeviceContext>(&context) };
+    unsafe { (api.PSGetSamplers)(context, 0, SAMPLERS as u32, samplers) };
 }
 
 pub(super) unsafe fn set_shader_views(
@@ -129,6 +96,7 @@ pub(super) unsafe fn set_shader_views(
     count: u32,
     views: *const Handle,
 ) {
+    type SetRange = unsafe extern "system" fn(Handle, u32, u32, *const Handle);
     let set: SetRange = unsafe { std::mem::transmute(original) };
     unsafe { set(context, start, count, views) };
 }
@@ -172,48 +140,31 @@ pub(super) unsafe fn set_targets(
     }
 }
 
-pub(super) unsafe fn viewport(context: Handle, result: *mut rsf_frame_tap_viewport) -> u32 {
-    let get = unsafe { method!(context, 95, GetViewport) };
+pub(super) unsafe fn viewport(context: Handle, result: *mut D3D11_VIEWPORT) -> u32 {
+    let api = unsafe { vtable::<ID3D11DeviceContext>(&context) };
     let mut count = 1;
-    unsafe { get(context, &mut count, result) };
+    unsafe { (api.RSGetViewports)(context, &mut count, result) };
     count
 }
 
-#[repr(C)]
-#[derive(Default)]
-struct SamplerDesc {
-    filter: u32,
-    address_u: u32,
-    address_v: u32,
-    address_w: u32,
-    bias: f32,
-    anisotropy: u32,
-    comparison: u32,
-    border: [f32; 4],
-    min_lod: f32,
-    max_lod: f32,
-}
-
-const _: () = assert!(size_of::<SamplerDesc>() == 52);
-
 pub(super) unsafe fn clone_sampler(context: Handle, sampler: Handle, bias: f32) -> Handle {
-    type Get = unsafe extern "system" fn(Handle, *mut SamplerDesc);
-    type Create = unsafe extern "system" fn(Handle, *const SamplerDesc, *mut Handle) -> i32;
-    let mut desc = SamplerDesc::default();
-    unsafe { method!(sampler, 7, Get)(sampler, &mut desc) };
-    if desc.filter & 1 == 0
-        || desc.filter & 0x180 != 0
-        || desc.max_lod.partial_cmp(&desc.min_lod) != Some(std::cmp::Ordering::Greater)
+    let mut desc = D3D11_SAMPLER_DESC::default();
+    unsafe { (vtable::<ID3D11SamplerState>(&sampler).GetDesc)(sampler, &mut desc) };
+    if desc.Filter.0 & 1 == 0
+        || desc.Filter.0 & 0x180 != 0
+        || desc.MaxLOD.partial_cmp(&desc.MinLOD) != Some(std::cmp::Ordering::Greater)
     {
         return null_mut();
     }
-    desc.bias = (desc.bias + bias).clamp(-16.0, 15.99);
+    desc.MipLODBias = (desc.MipLODBias + bias).clamp(-16.0, 15.99);
     let Some(device) = (unsafe { com_ref::owned(rsf_d3d11_output_child_device(context)) }) else {
         return null_mut();
     };
     let device = device.as_raw();
     let mut sampler = null_mut();
-    unsafe { method!(device, 23, Create)(device, &desc, &mut sampler) };
+    let _ = unsafe {
+        (vtable::<ID3D11Device>(&device).CreateSamplerState)(device, &desc, &mut sampler)
+    };
     sampler
 }
 
@@ -224,8 +175,9 @@ unsafe fn release_range(buffer: *const Handle, count: usize) {
     }
 }
 
-unsafe fn get_constants(context: Handle, slot: usize, buffers: *mut Handle) {
-    let get = unsafe { method!(context, slot, GetRange) };
+type GetConstants = unsafe extern "system" fn(Handle, u32, u32, *mut Handle);
+
+unsafe fn get_constants(get: GetConstants, context: Handle, buffers: *mut Handle) {
     unsafe {
         get(context, 0, STAGE_CONSTANTS as u32, buffers);
         release_range(buffers, STAGE_CONSTANTS);
@@ -238,10 +190,11 @@ pub(super) unsafe fn stage_constants(
     hull: *mut Handle,
     domain: *mut Handle,
 ) {
+    let api = unsafe { vtable::<ID3D11DeviceContext>(&context) };
     unsafe {
-        get_constants(context, 81, geometry);
-        get_constants(context, 100, hull);
-        get_constants(context, 104, domain);
+        get_constants(api.GSGetConstantBuffers, context, geometry);
+        get_constants(api.HSGetConstantBuffers, context, hull);
+        get_constants(api.DSGetConstantBuffers, context, domain);
     }
 }
 
@@ -250,14 +203,10 @@ pub(super) unsafe fn seed_geometry(
     geometry: *mut rsf_frame_tap_geometry,
     pixel: *mut Handle,
 ) {
-    type GetVertex = unsafe extern "system" fn(Handle, u32, u32, *mut Handle, *mut u32, *mut u32);
-    type GetIndex = unsafe extern "system" fn(Handle, *mut Handle, *mut u32, *mut u32);
-    type GetLayout = unsafe extern "system" fn(Handle, *mut Handle);
-    type GetTopology = unsafe extern "system" fn(Handle, *mut u32);
-    type GetShader = unsafe extern "system" fn(Handle, *mut Handle, *mut Handle, *mut u32);
+    let api = unsafe { vtable::<ID3D11DeviceContext>(&context) };
     let geometry = unsafe { &mut *geometry };
     unsafe {
-        method!(context, 79, GetVertex)(
+        (api.IAGetVertexBuffers)(
             context,
             0,
             VERTEX_BUFFERS as u32,
@@ -266,25 +215,43 @@ pub(super) unsafe fn seed_geometry(
             geometry.offsets.as_mut_ptr(),
         );
         release_range(geometry.vertex_buffers.as_ptr(), VERTEX_BUFFERS);
-        method!(context, 80, GetIndex)(
+        (api.IAGetIndexBuffer)(
             context,
             &mut geometry.index_buffer,
-            &mut geometry.index_format,
+            ptr::from_mut(&mut geometry.index_format).cast(),
             &mut geometry.index_offset,
         );
         drop(com_ref::owned(geometry.index_buffer));
-        method!(context, 78, GetLayout)(context, &mut geometry.input_layout);
+        (api.IAGetInputLayout)(context, &mut geometry.input_layout);
         drop(com_ref::owned(geometry.input_layout));
-        method!(context, 83, GetTopology)(context, &mut geometry.topology);
-        method!(context, 76, GetShader)(
-            context,
-            &mut geometry.vertex_shader,
-            null_mut(),
-            null_mut(),
-        );
+        (api.IAGetPrimitiveTopology)(context, ptr::from_mut(&mut geometry.topology).cast());
+        (api.VSGetShader)(context, &mut geometry.vertex_shader, null_mut(), null_mut());
         drop(com_ref::owned(geometry.vertex_shader));
-        get_constants(context, 72, geometry.vertex_constants.as_mut_ptr());
-        get_constants(context, 77, pixel);
+        get_constants(
+            api.VSGetConstantBuffers,
+            context,
+            geometry.vertex_constants.as_mut_ptr(),
+        );
+        get_constants(api.PSGetConstantBuffers, context, pixel);
+    }
+}
+
+// PSGetShader, OMGetBlendState and OMGetDepthStencilState. Like the IA/VS queries above, these
+// only seed handles the context currently owns.
+pub(super) unsafe fn pipeline_objects(
+    context: Handle,
+    pixel_shader: &mut Handle,
+    blend: &mut Handle,
+    depth_stencil: &mut Handle,
+) {
+    let api = unsafe { vtable::<ID3D11DeviceContext>(&context) };
+    unsafe {
+        (api.PSGetShader)(context, pixel_shader, null_mut(), null_mut());
+        (api.OMGetBlendState)(context, blend, [0.0; 4].as_mut_ptr(), &mut 0);
+        (api.OMGetDepthStencilState)(context, depth_stencil, &mut 0);
+        for object in [*pixel_shader, *blend, *depth_stencil] {
+            drop(com_ref::owned(object));
+        }
     }
 }
 

@@ -241,7 +241,7 @@ unsafe extern "system" fn map(
     subresource: u32,
     kind: u32,
     flags: u32,
-    mapped: *mut MappedResource,
+    mapped: *mut D3D11_MAPPED_SUBRESOURCE,
 ) -> i32 {
     unsafe { rsf_core_frame_tap_map(context, resource, subresource, kind, flags, mapped) }
 }

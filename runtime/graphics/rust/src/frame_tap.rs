@@ -5,7 +5,6 @@ mod platform;
 pub use detours::rsf_frame_tap_set_sampler_bias;
 
 use crate::com_ref;
-use crate::constant_buffer_read::{MAP_WRITE_DISCARD, Map, MappedResource, Unmap, slot};
 use crate::sys::*;
 use std::cell::{Cell, UnsafeCell};
 use std::collections::BTreeMap;
@@ -16,6 +15,10 @@ use std::slice;
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release, SeqCst};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicUsize};
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11_BIND_CONSTANT_BUFFER, D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL,
+    D3D11_MAP_WRITE_DISCARD, D3D11_MAPPED_SUBRESOURCE, D3D11_VIEWPORT,
+};
 use windows::core::{IUnknown, Interface};
 
 type Handle = *mut c_void;
@@ -26,9 +29,6 @@ const ALREADY_INSTALLED: i32 = -3;
 const NOT_INSTALLED: i32 = -4;
 const PATCH_FAILED: i32 = -5;
 
-// D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, D3D11_MAP_WRITE_DISCARD, D3D11_BIND_CONSTANT_BUFFER.
-const KEEP_TARGETS: u32 = u32::MAX;
-const BIND_CONSTANT_BUFFER: u32 = 4;
 // Slot 13 is Draw. One comparison against its replacement says whether the runtime has rewritten
 // the work-submission family since the last look.
 const SLOT_DRAW: usize = 13;
@@ -60,7 +60,6 @@ const ZERO_FACTS: rsf_texture_facts = unsafe { zeroed() };
 const ZERO_GEOMETRY: rsf_frame_tap_geometry = unsafe { zeroed() };
 const ZERO_INPUT: rsf_frame_tap_input = unsafe { zeroed() };
 const ZERO_OPTIONS: rsf_frame_tap_options = unsafe { zeroed() };
-const ZERO_VIEWPORT: rsf_frame_tap_viewport = unsafe { zeroed() };
 
 thread_local! {
     // Callbacks bind resources of their own, which come straight back through these hooks. A depth
@@ -716,12 +715,12 @@ fn consider_target_draw(
     report.draw_index = ordinal;
     collect_inputs(render, &mut report, &mut inputs);
     // The one fact the shadow cannot supply, asked only on a reported draw.
-    let mut viewport = ZERO_VIEWPORT;
+    let mut viewport = D3D11_VIEWPORT::default();
     if unsafe { platform::viewport(context, &mut viewport) } >= 1 {
-        report.viewport_x = viewport.x;
-        report.viewport_y = viewport.y;
-        report.viewport_width = viewport.width as u32;
-        report.viewport_height = viewport.height as u32;
+        report.viewport_x = viewport.TopLeftX;
+        report.viewport_y = viewport.TopLeftY;
+        report.viewport_width = viewport.Width as u32;
+        report.viewport_height = viewport.Height as u32;
     }
     if !render.geometry_valid {
         seed_geometry(render, context);
@@ -796,32 +795,13 @@ fn seed_geometry(render: &mut Render, context: Handle) {
             context,
             &mut render.geometry,
             render.pixel_constants.as_mut_ptr(),
-        )
-    };
-    // ID3D11DeviceContext::PSGetShader, OMGetBlendState and OMGetDepthStencilState.
-    // Like the IA/VS queries above, these only seed handles the context currently owns.
-    type GetShader = unsafe extern "system" fn(Handle, *mut Handle, *mut Handle, *mut u32);
-    type GetBlend = unsafe extern "system" fn(Handle, *mut Handle, *mut f32, *mut u32);
-    type GetDepth = unsafe extern "system" fn(Handle, *mut Handle, *mut u32);
-    unsafe {
-        let get_shader: GetShader = std::mem::transmute(slot(context, 74));
-        let get_blend: GetBlend = std::mem::transmute(slot(context, 91));
-        let get_depth: GetDepth = std::mem::transmute(slot(context, 92));
-        get_shader(context, &mut render.pixel_shader, null_mut(), null_mut());
-        get_blend(
-            context,
-            &mut render.blend_state,
-            [0.0; 4].as_mut_ptr(),
-            &mut 0,
         );
-        get_depth(context, &mut render.depth_stencil_state, &mut 0);
-        for object in [
-            render.pixel_shader,
-            render.blend_state,
-            render.depth_stencil_state,
-        ] {
-            drop(com_ref::owned(object));
-        }
+        platform::pipeline_objects(
+            context,
+            &mut render.pixel_shader,
+            &mut render.blend_state,
+            &mut render.depth_stencil_state,
+        );
     }
     render.geometry_valid = true;
 }
@@ -958,7 +938,7 @@ fn watched_buffer(render: &mut Render, resource: Handle, watched: u32) -> u32 {
     } else {
         width == watched
     };
-    let bytes = if width != 0 && wanted && bind_flags & BIND_CONSTANT_BUFFER != 0 {
+    let bytes = if width != 0 && wanted && bind_flags & D3D11_BIND_CONSTANT_BUFFER.0 as u32 != 0 {
         width
     } else {
         0
@@ -1232,7 +1212,7 @@ unsafe fn rsf_core_frame_tap_targets(
     let admission = Admission::enter(context);
     unsafe { platform::set_targets(forward, context, count, views, depth, uavs) };
     // KEEP leaves the render targets alone, so the shadow leaves them too.
-    let keeps = !uavs.is_null() && count == KEEP_TARGETS;
+    let keeps = !uavs.is_null() && count == D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL;
     if inside() || admission.is_none() || keeps {
         return;
     }
@@ -1447,24 +1427,31 @@ unsafe fn rsf_core_frame_tap_map(
     subresource: u32,
     kind: u32,
     flags: u32,
-    mapped: *mut MappedResource,
+    mapped: *mut D3D11_MAPPED_SUBRESOURCE,
 ) -> i32 {
     refresh();
     let admission = Admission::enter(context);
-    let forward: Map = unsafe { std::mem::transmute(original(RSF_FRAME_TAP_HOOK_MAP as usize)) };
+    let forward: unsafe extern "system" fn(
+        Handle,
+        Handle,
+        u32,
+        u32,
+        u32,
+        *mut D3D11_MAPPED_SUBRESOURCE,
+    ) -> i32 = unsafe { std::mem::transmute(original(RSF_FRAME_TAP_HOOK_MAP as usize)) };
     let result = unsafe { forward(context, resource, subresource, kind, flags, mapped) };
     refresh();
     if result < 0
         || admission.is_none()
         || mapped.is_null()
         || resource.is_null()
-        || kind != MAP_WRITE_DISCARD
+        || kind != D3D11_MAP_WRITE_DISCARD.0 as u32
         || subresource != 0
         || inside()
     {
         return result;
     }
-    let data = unsafe { (*mapped).data };
+    let data = unsafe { (*mapped).pData };
     if data.is_null() {
         return result;
     }
@@ -1495,7 +1482,7 @@ unsafe fn rsf_core_frame_tap_map(
 unsafe fn rsf_core_frame_tap_unmap(context: Handle, resource: Handle, subresource: u32) {
     refresh();
     let admission = Admission::enter(context);
-    let forward: Unmap =
+    let forward: unsafe extern "system" fn(Handle, Handle, u32) =
         unsafe { std::mem::transmute(original(RSF_FRAME_TAP_HOOK_UNMAP as usize)) };
     if admission.is_some() && subresource == 0 {
         let entry = pending()

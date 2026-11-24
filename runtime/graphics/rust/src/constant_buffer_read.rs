@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: MIT
-use crate::com_ref;
+use crate::com_ref::{self, vtable};
 use crate::d3d11_output::same_device;
 use crate::d3d11_output_platform::rsf_d3d11_output_is_immediate;
 use std::ffi::c_void;
 use std::ptr;
-use windows::core::IUnknown;
-use windows::core::Interface;
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11_BUFFER_DESC, D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE,
+    D3D11_RESOURCE_DIMENSION, D3D11_RESOURCE_DIMENSION_BUFFER, D3D11_USAGE_STAGING, ID3D11Buffer,
+    ID3D11Device, ID3D11DeviceContext, ID3D11Resource,
+};
+use windows::core::{IUnknown, Interface};
 
 type Handle = *mut c_void;
 
@@ -16,91 +20,26 @@ const STAGING_FAILED: i32 = -4;
 const MAP_FAILED: i32 = -5;
 const FOREIGN_DEVICE: i32 = -6;
 
-// COM slots and descriptors verified against the C vtables in Windows SDK 10.0.26100.0 d3d11.h.
-/// # Safety
-///
-/// `object` must be a live COM interface whose vtable has more than `index` slots.
-pub unsafe fn slot(object: Handle, index: usize) -> Handle {
-    let table = unsafe { *object.cast::<*const Handle>() };
-    unsafe { *table.add(index) }
-}
-
-#[repr(C)]
-#[derive(Default)]
-struct BufferDesc {
-    byte_width: u32,
-    usage: u32,
-    bind_flags: u32,
-    cpu_access_flags: u32,
-    misc_flags: u32,
-    structure_stride: u32,
-}
-
-#[repr(C)]
-#[derive(Default)]
-pub struct MappedResource {
-    pub data: Handle,
-    row_pitch: u32,
-    depth_pitch: u32,
-}
-
-const _: () = {
-    assert!(size_of::<BufferDesc>() == 24);
-    assert!(size_of::<MappedResource>() == size_of::<Handle>() + 8);
-};
-
-pub const MAP_WRITE_DISCARD: u32 = 4;
-const MAP_READ: u32 = 1;
-const USAGE_STAGING: u32 = 3;
-const CPU_ACCESS_READ: u32 = 0x20000;
-const RESOURCE_DIMENSION_BUFFER: u32 = 1;
-
-unsafe fn buffer_desc(buffer: Handle) -> BufferDesc {
-    type GetDesc = unsafe extern "system" fn(Handle, *mut BufferDesc);
-    let get_desc: GetDesc = unsafe { std::mem::transmute(slot(buffer, 10)) };
-    let mut desc = BufferDesc::default();
-    unsafe { get_desc(buffer, &mut desc) };
-    desc
-}
-
-unsafe fn create_buffer(device: Handle, desc: &BufferDesc) -> Option<IUnknown> {
-    type CreateBuffer =
-        unsafe extern "system" fn(Handle, *const BufferDesc, Handle, *mut Handle) -> i32;
-    let create: CreateBuffer = unsafe { std::mem::transmute(slot(device, 3)) };
+unsafe fn create_buffer(device: Handle, desc: &D3D11_BUFFER_DESC) -> Option<IUnknown> {
     let mut buffer = ptr::null_mut();
-    if unsafe { create(device, desc, ptr::null_mut(), &mut buffer) } < 0 {
-        return None;
-    }
-    unsafe { com_ref::owned(buffer) }
+    let status = unsafe {
+        (vtable::<ID3D11Device>(&device).CreateBuffer)(device, desc, ptr::null(), &mut buffer)
+    };
+    unsafe { com_ref::from_result(status, buffer) }
 }
 
 /// # Safety
 ///
 /// `buffer` must be a live `ID3D11Resource`.
 pub unsafe fn resource_buffer_info(buffer: Handle) -> Option<(u32, u32, u32)> {
-    type GetType = unsafe extern "system" fn(Handle, *mut u32);
-    let get_type: GetType = unsafe { std::mem::transmute(slot(buffer, 7)) };
-    let mut dimension = 0;
-    unsafe { get_type(buffer, &mut dimension) };
-    if dimension != RESOURCE_DIMENSION_BUFFER {
+    let mut dimension = D3D11_RESOURCE_DIMENSION::default();
+    unsafe { (vtable::<ID3D11Resource>(&buffer).GetType)(buffer, &mut dimension) };
+    if dimension != D3D11_RESOURCE_DIMENSION_BUFFER {
         return None;
     }
-    let desc = unsafe { buffer_desc(buffer) };
-    Some((desc.byte_width, desc.bind_flags, desc.usage))
-}
-
-pub type Map = unsafe extern "system" fn(Handle, Handle, u32, u32, u32, *mut MappedResource) -> i32;
-pub type Unmap = unsafe extern "system" fn(Handle, Handle, u32);
-
-unsafe fn map(context: Handle, buffer: Handle, kind: u32) -> Option<MappedResource> {
-    let map: Map = unsafe { std::mem::transmute(slot(context, 14)) };
-    let mut mapped = MappedResource::default();
-    (unsafe { map(context, buffer, 0, kind, 0, &mut mapped) } >= 0).then_some(mapped)
-}
-
-unsafe fn unmap(context: Handle, buffer: Handle) {
-    let unmap: Unmap = unsafe { std::mem::transmute(slot(context, 15)) };
-    unsafe { unmap(context, buffer, 0) };
+    let mut desc = D3D11_BUFFER_DESC::default();
+    unsafe { (vtable::<ID3D11Buffer>(&buffer).GetDesc)(buffer, &mut desc) };
+    Some((desc.ByteWidth, desc.BindFlags, desc.Usage.0 as u32))
 }
 
 /// # Safety
@@ -136,37 +75,38 @@ pub unsafe extern "C" fn rsf_read_constant_buffer(
     if unsafe { rsf_d3d11_output_is_immediate(context) } == 0 {
         return MAP_FAILED;
     }
-    let Some(staging) = (unsafe {
+    let Some(staging_buffer) = (unsafe {
         create_buffer(
             device,
-            &BufferDesc {
-                byte_width: width,
-                usage: USAGE_STAGING,
-                cpu_access_flags: CPU_ACCESS_READ,
-                ..BufferDesc::default()
+            &D3D11_BUFFER_DESC {
+                ByteWidth: width,
+                Usage: D3D11_USAGE_STAGING,
+                CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                ..D3D11_BUFFER_DESC::default()
             },
         )
     }) else {
         return STAGING_FAILED;
     };
-    type CopyResource = unsafe extern "system" fn(Handle, Handle, Handle);
-    let copy: CopyResource = unsafe { std::mem::transmute(slot(context, 47)) };
-    unsafe { copy(context, staging.as_raw(), buffer) };
-    let Some(mapped) = (unsafe { map(context, staging.as_raw(), MAP_READ) }) else {
+    let staging = staging_buffer.as_raw();
+    let api = unsafe { vtable::<ID3D11DeviceContext>(&context) };
+    unsafe { (api.CopyResource)(context, staging, buffer) };
+    let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+    if unsafe { (api.Map)(context, staging, 0, D3D11_MAP_READ, 0, &mut mapped) }.is_err() {
         return MAP_FAILED;
-    };
-    let result = if mapped.data.is_null() {
+    }
+    let result = if mapped.pData.is_null() {
         MAP_FAILED
     } else {
         unsafe {
             ptr::copy_nonoverlapping(
-                mapped.data.cast::<u8>(),
+                mapped.pData.cast::<u8>(),
                 destination.cast::<u8>(),
                 bytes as usize,
             )
         };
         OK
     };
-    unsafe { unmap(context, staging.as_raw()) };
+    unsafe { (api.Unmap)(context, staging, 0) };
     result
 }
