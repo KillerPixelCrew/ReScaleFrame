@@ -32,6 +32,13 @@ jobs:
           Invoke-WebRequest -Uri 'https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/LLVM-22.1.8-win64.exe' -OutFile $installer
           Start-Process -FilePath $installer -ArgumentList '/S', "/D=$env:RUNNER_TEMP\llvm" -Wait
           "LIBCLANG_PATH=$env:RUNNER_TEMP\llvm\bin" | Out-File -FilePath $env:GITHUB_ENV -Append
+      # The runner image ships a newer bindgen; the committed-bindings check needs this exact version.
+      - name: Install pinned bindgen
+        shell: pwsh
+        run: |
+          cargo install bindgen-cli --version 0.72.1 --locked --force
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          bindgen --version
       - name: Verify native and Rust components
         shell: pwsh
         run: ./eng/verify.ps1 -Configuration Release
