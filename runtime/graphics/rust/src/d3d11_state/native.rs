@@ -141,18 +141,18 @@ fn stage_ops(api: &ID3D11DeviceContext_Vtbl) -> [StageOps; 6] {
     ]
 }
 
-unsafe extern "C" fn immediate(context: Handle) -> u32 {
+pub(super) unsafe fn immediate(context: Handle) -> u32 {
     u32::from(
         unsafe { (vtable::<ID3D11DeviceContext>(&context).GetType)(context) }
             == D3D11_DEVICE_CONTEXT_IMMEDIATE,
     )
 }
 
-unsafe extern "C" fn device(context: Handle) -> Handle {
+pub(super) unsafe fn device(context: Handle) -> Handle {
     unsafe { rsf_d3d11_output_child_device(context) }
 }
 
-unsafe extern "C" fn features(device: Handle, features: &mut Features) {
+pub(super) unsafe fn features(device: Handle, features: &mut Features) {
     let api = unsafe { vtable::<ID3D11Device>(&device) };
     let mut options = D3D11_FEATURE_DATA_D3D11_OPTIONS::default();
     let level = unsafe { (api.GetFeatureLevel)(device) };
@@ -173,7 +173,7 @@ unsafe extern "C" fn features(device: Handle, features: &mut Features) {
         u32::from(status.is_ok() && options.ConstantBufferOffsetting.as_bool());
 }
 
-unsafe extern "C" fn context1(context: Handle) -> Handle {
+pub(super) unsafe fn context1(context: Handle) -> Handle {
     let mut extended = null_mut();
     let status = unsafe {
         (vtable::<IUnknown>(&context).QueryInterface)(
@@ -209,7 +209,7 @@ unsafe fn set_ranges(context1: Handle, index: usize) -> SetRanges {
     ][index]
 }
 
-unsafe extern "C" fn read(context: Handle, state: &mut Snapshot) {
+pub(super) unsafe fn read(context: Handle, state: &mut Snapshot) {
     let api = unsafe { vtable::<ID3D11DeviceContext>(&context) };
     unsafe {
         (api.IAGetInputLayout)(context, out(&mut state.layout));
@@ -325,7 +325,7 @@ unsafe extern "C" fn read(context: Handle, state: &mut Snapshot) {
     }
 }
 
-unsafe extern "C" fn clear(context: Handle, uav_count: u32) {
+pub(super) unsafe fn clear(context: Handle, uav_count: u32) {
     let api = unsafe { vtable::<ID3D11DeviceContext>(&context) };
     let no_resources = [null_mut(); RESOURCES];
     let no_uavs = [null_mut(); UAVS];
@@ -365,7 +365,7 @@ unsafe extern "C" fn clear(context: Handle, uav_count: u32) {
     }
 }
 
-unsafe extern "C" fn write(context: Handle, state: &Snapshot, targets: u32) {
+pub(super) unsafe fn write(context: Handle, state: &Snapshot, targets: u32) {
     let api = unsafe { vtable::<ID3D11DeviceContext>(&context) };
     let uav_start = targets as usize;
     unsafe {
@@ -464,22 +464,12 @@ unsafe extern "C" fn write(context: Handle, state: &Snapshot, targets: u32) {
     }
 }
 
-const PLATFORM: Platform = Platform {
-    immediate,
-    device,
-    features,
-    context1,
-    read,
-    clear,
-    write,
-};
-
 /// # Safety
 ///
 /// `context` is null or a live `ID3D11DeviceContext`; `storage` is null or a writable state record.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_d3d11_state_save(context: Handle, storage: *mut State) -> u32 {
-    unsafe { rsf_core_d3d11_state_save(context, storage, 0, &PLATFORM) }
+    unsafe { rsf_core_d3d11_state_save(context, storage, 0) }
 }
 
 /// # Safety
@@ -489,7 +479,7 @@ pub unsafe extern "C" fn rsf_d3d11_state_save_independent(
     context: Handle,
     storage: *mut State,
 ) -> u32 {
-    unsafe { rsf_core_d3d11_state_save(context, storage, 1, &PLATFORM) }
+    unsafe { rsf_core_d3d11_state_save(context, storage, 1) }
 }
 
 /// # Safety
@@ -498,7 +488,7 @@ pub unsafe extern "C" fn rsf_d3d11_state_save_independent(
 /// this context filled.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_d3d11_state_restore(context: Handle, storage: *mut State) {
-    unsafe { rsf_core_d3d11_state_restore(context, storage, &PLATFORM) }
+    unsafe { rsf_core_d3d11_state_restore(context, storage) }
 }
 
 /// # Safety

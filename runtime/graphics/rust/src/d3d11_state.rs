@@ -1,10 +1,17 @@
 // SPDX-License-Identifier: MIT
 // D3D11 binding snapshots and ownership behind rescaleframe/d3d11_state.h.
+// Production calls the D3D11 leaves in `native`; unit tests call same-named fakes.
+#[cfg(not(test))]
 mod native;
+#[cfg(not(test))]
+use native as leaf;
+#[cfg(not(test))]
 pub use native::{
     rsf_d3d11_copy_resource, rsf_d3d11_create_shader_view, rsf_d3d11_state_restore,
     rsf_d3d11_state_save, rsf_d3d11_state_save_independent,
 };
+#[cfg(test)]
+use tests as leaf;
 
 use crate::com_ref;
 use crate::sys::rsf_d3d11_state as State;
@@ -88,17 +95,6 @@ struct Features {
     constant_ranges: u32,
 }
 
-#[repr(C)]
-struct Platform {
-    immediate: unsafe extern "C" fn(Handle) -> u32,
-    device: unsafe extern "C" fn(Handle) -> Handle,
-    features: unsafe extern "C" fn(Handle, &mut Features),
-    context1: unsafe extern "C" fn(Handle) -> Handle,
-    read: unsafe extern "C" fn(Handle, &mut Snapshot),
-    clear: unsafe extern "C" fn(Handle, u32),
-    write: unsafe extern "C" fn(Handle, &Snapshot, u32),
-}
-
 // What the full scope keeps in the caller's storage. The storage may move; it must not be copied.
 #[repr(C)]
 struct Scope {
@@ -114,7 +110,6 @@ const _: () = {
     assert!(std::mem::offset_of!(Snapshot, stages) == 608);
     assert!(std::mem::offset_of!(Snapshot, targets) == 22784);
     assert!(size_of::<Features>() == 8);
-    assert!(size_of::<Platform>() == 7 * size_of::<Handle>());
     // The scope lives in the caller's storage.
     assert!(size_of::<Scope>() <= size_of::<State>());
     assert!(align_of::<Snapshot>() <= align_of::<State>());
@@ -173,8 +168,8 @@ fn give_back(mut snapshot: Box<Snapshot>) {
     }
 }
 
-unsafe fn traits(platform: &Platform, context: Handle) -> Traits {
-    let device = unsafe { com_ref::owned((platform.device)(context)) };
+unsafe fn traits(context: Handle) -> Traits {
+    let device = unsafe { com_ref::owned(leaf::device(context)) };
     let address = device.as_ref().map_or(0, |device| device.as_raw() as usize);
     let cached = TRAITS.get();
     if cached.device == address {
@@ -182,7 +177,7 @@ unsafe fn traits(platform: &Platform, context: Handle) -> Traits {
     }
     let mut features = Features::default();
     if let Some(device) = &device {
-        unsafe { (platform.features)(device.as_raw(), &mut features) };
+        unsafe { leaf::features(device.as_raw(), &mut features) };
     }
     let traits = Traits {
         device: address,
@@ -193,17 +188,12 @@ unsafe fn traits(platform: &Platform, context: Handle) -> Traits {
     traits
 }
 
-unsafe fn rsf_core_d3d11_state_save(
-    context: Handle,
-    storage: *mut State,
-    independent: u32,
-    platform: &Platform,
-) -> u32 {
+unsafe fn rsf_core_d3d11_state_save(context: Handle, storage: *mut State, independent: u32) -> u32 {
     if context.is_null() || storage.is_null() {
         return 0;
     }
     unsafe { storage.write_bytes(0, 1) };
-    if unsafe { (platform.immediate)(context) } == 0 {
+    if unsafe { leaf::immediate(context) } == 0 {
         return 0;
     }
     let open = OPEN.get();
@@ -218,14 +208,14 @@ unsafe fn rsf_core_d3d11_state_save(
     if outermost {
         OPEN.set(context as usize);
     }
-    let traits = unsafe { traits(platform, context) };
+    let traits = unsafe { traits(context) };
     snapshot.uav_count = traits.uav_count;
     if traits.constant_ranges {
-        snapshot.context1 = unsafe { com_ref::owned((platform.context1)(context)) };
+        snapshot.context1 = unsafe { com_ref::owned(leaf::context1(context)) };
         snapshot.constant_ranges = snapshot.context1.is_some().into();
     }
     unsafe {
-        (platform.read)(context, &mut snapshot);
+        leaf::read(context, &mut snapshot);
         storage.cast::<Scope>().write(Scope {
             snapshot: Box::into_raw(snapshot),
             outermost,
@@ -234,7 +224,7 @@ unsafe fn rsf_core_d3d11_state_save(
     1
 }
 
-unsafe fn rsf_core_d3d11_state_restore(context: Handle, storage: *mut State, platform: &Platform) {
+unsafe fn rsf_core_d3d11_state_restore(context: Handle, storage: *mut State) {
     if context.is_null() || storage.is_null() {
         return;
     }
@@ -249,8 +239,8 @@ unsafe fn rsf_core_d3d11_state_restore(context: Handle, storage: *mut State, pla
             .map_or(0, |last| last + 1);
         // Foreign inputs and outputs go first so no saved binding conflicts with one.
         unsafe {
-            (platform.clear)(context, snapshot.uav_count);
-            (platform.write)(context, &snapshot, targets as u32);
+            leaf::clear(context, snapshot.uav_count);
+            leaf::write(context, &snapshot, targets as u32);
         }
         if scope.outermost {
             OPEN.set(0);
@@ -287,55 +277,45 @@ mod tests {
         Some(unsafe { com_ref::retain(OBJECT.get()) })
     }
 
-    unsafe extern "C" fn immediate(context: Handle) -> u32 {
+    pub(super) unsafe fn immediate(context: Handle) -> u32 {
         (context as usize != DEFERRED).into()
     }
 
-    unsafe extern "C" fn device(_: Handle) -> Handle {
+    pub(super) unsafe fn device(_: Handle) -> Handle {
         retained().map_or(null_mut(), Interface::into_raw)
     }
 
-    unsafe extern "C" fn features(_: Handle, out: &mut Features) {
+    pub(super) unsafe fn features(_: Handle, out: &mut Features) {
         out.uav_count = 8;
     }
 
-    unsafe extern "C" fn context1(_: Handle) -> Handle {
+    pub(super) unsafe fn context1(_: Handle) -> Handle {
         null_mut()
     }
 
-    unsafe extern "C" fn read(_: Handle, snapshot: &mut Snapshot) {
+    pub(super) unsafe fn read(_: Handle, snapshot: &mut Snapshot) {
         snapshot.targets[1] = retained();
         snapshot.stages[4].resources[3] = retained();
         READS.set(READS.get() + 1);
     }
 
-    unsafe extern "C" fn clear(_: Handle, _: u32) {}
+    pub(super) unsafe fn clear(_: Handle, _: u32) {}
 
-    unsafe extern "C" fn write(_: Handle, snapshot: &Snapshot, target_count: u32) {
+    pub(super) unsafe fn write(_: Handle, snapshot: &Snapshot, target_count: u32) {
         WRITES.set(WRITES.get() + 1);
         WRITTEN.set([target_count, snapshot.uav_count]);
     }
-
-    static PLATFORM: Platform = Platform {
-        immediate,
-        device,
-        features,
-        context1,
-        read,
-        clear,
-        write,
-    };
 
     fn empty(state: &State) -> bool {
         state.opaque.iter().all(|word| *word == 0)
     }
 
     fn save(context: usize, state: *mut State, independent: u32) -> u32 {
-        unsafe { rsf_core_d3d11_state_save(context as Handle, state, independent, &PLATFORM) }
+        unsafe { rsf_core_d3d11_state_save(context as Handle, state, independent) }
     }
 
     fn restore(context: usize, state: &mut State) {
-        unsafe { rsf_core_d3d11_state_restore(context as Handle, state, &PLATFORM) }
+        unsafe { rsf_core_d3d11_state_restore(context as Handle, state) }
     }
 
     #[test]
