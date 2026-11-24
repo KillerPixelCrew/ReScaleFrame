@@ -48,6 +48,7 @@ mod render_pass;
 pub mod sampling;
 pub mod session;
 pub mod shader_hash;
+pub mod signature;
 mod upstream;
 pub use upstream::same_upstream_identity;
 pub mod vendor_paths;

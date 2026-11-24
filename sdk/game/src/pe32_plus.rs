@@ -72,6 +72,35 @@ impl<'a> Pe32Plus<'a> {
         self.sections.len() / SECTION_SIZE
     }
 
+    /// Every section as (name, RVA, characteristics, bytes). A file's bytes are its raw data;
+    /// a `mapped` image (a loader-mapped dump, RVA equal to offset) is read at the RVA.
+    pub fn sections(&self, mapped: bool) -> Vec<([u8; 8], usize, u32, &'a [u8])> {
+        self.sections
+            .chunks_exact(SECTION_SIZE)
+            .filter_map(|section| {
+                let name = le::<8>(section, 0)?;
+                let virtual_size = u32::from_le_bytes(le(section, 8)?) as usize;
+                let rva = u32::from_le_bytes(le(section, 12)?) as usize;
+                let raw_size = u32::from_le_bytes(le(section, 16)?) as usize;
+                let raw_offset = u32::from_le_bytes(le(section, 20)?) as usize;
+                let (start, size) = if mapped {
+                    (rva, virtual_size)
+                } else {
+                    // Raw data past the virtual size is file alignment padding.
+                    let size = if virtual_size == 0 {
+                        raw_size
+                    } else {
+                        raw_size.min(virtual_size)
+                    };
+                    (raw_offset, size)
+                };
+                let end = start.checked_add(size)?.min(self.bytes.len());
+                let bytes = self.bytes.get(start..end)?;
+                Some((name, rva, u32::from_le_bytes(le(section, 36)?), bytes))
+            })
+            .collect()
+    }
+
     pub fn span(&self, rva: usize, count: usize) -> Option<(&'a [u8], u32)> {
         for section in self.sections.chunks_exact(SECTION_SIZE) {
             let virtual_size = u32::from_le_bytes(le(section, 8)?) as usize;
