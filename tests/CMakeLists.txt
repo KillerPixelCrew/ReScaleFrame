@@ -864,10 +864,19 @@ foreach(rsf_fixture_target
         rsf_sharpening_test rsf_sharpening_d3d12_test rsf_sharpening_vulkan_test rsf_sharpening_vulkan_cpu_test
         rsf_sharpening_settings_test rsf_exposure_normalization_test rsf_native_vulkan_test rsf_dlss_backend
         rsf_dlss_sr_layout rsf_sr_session_test rsf_sr_bridge_test rsf_sr_pipeline_test rsf_sr_backend_switch_device_test
-        rsf_shader_patch_test rsf_shader_patch_device_test rsf_native_sr_fsr4_state_test rsf_native_sr_fsr4_vulkan_test
-        rsf_native_fsr4_fg_state_test rsf_native_fg_cpu_test rsf_native_fg_dlss_vulkan_test rsf_xell_sleep_concurrency rsf_native_ffx_vulkan_fixture)
+        rsf_shader_patch_test rsf_shader_patch_device_test rsf_native_sr_fsr4_vulkan_test
+        rsf_native_fg_dlss_vulkan_test rsf_native_ffx_vulkan_fixture)
     if(TARGET ${rsf_fixture_target})
         set_target_properties(${rsf_fixture_target} PROPERTIES RSF_ORCHESTRATOR_FIXTURES ON)
         add_dependencies(${rsf_fixture_target} rsf_rust_core_fixtures)
+    endif()
+endforeach()
+# The state fixtures drive their owners through CPU doubles of the native leaves, which only the
+# fixture-leaves archive selects; every other executable keeps the real leaves.
+foreach(rsf_fixture_target
+        rsf_native_fsr4_fg_state_test rsf_native_sr_fsr4_state_test rsf_native_fg_cpu_test rsf_xell_sleep_concurrency)
+    if(TARGET ${rsf_fixture_target})
+        set_target_properties(${rsf_fixture_target} PROPERTIES RSF_ORCHESTRATOR_FIXTURE_LEAVES ON)
+        add_dependencies(${rsf_fixture_target} rsf_rust_core_fixture_leaves)
     endif()
 endforeach()

@@ -407,12 +407,13 @@ fn releases_partial_imports_and_allows_replacement_only_for_known_guides() {
         unsafe { rsf_dx12vk_interop_create(&graphics, &callbacks, 1, &mut owner) },
         0
     );
-    assert_eq!(unsafe { rsf_dx12vk_interop_timeline(owner) }, 30);
+    assert_eq!(unsafe { rsf_dx12vk_interop_timeline(owner.cast()) }, 30);
     handle_closed();
 
     let import = || {
         let mut output: Output = unsafe { std::mem::zeroed() };
-        let result = unsafe { rsf_dx12vk_interop_image(owner, R32_FLOAT, 32, 24, &mut output) };
+        let result =
+            unsafe { rsf_dx12vk_interop_image(owner.cast(), R32_FLOAT, 32, 24, &mut output) };
         handle_closed();
         (result, output)
     };
@@ -444,21 +445,24 @@ fn releases_partial_imports_and_allows_replacement_only_for_known_guides() {
     let (result, motion) = import();
     assert_eq!(result, 0);
     assert_eq!(
-        unsafe { rsf_dx12vk_interop_release_guides(owner, depth.image, 42) },
+        unsafe { rsf_dx12vk_interop_release_guides(owner.cast(), depth.image, 42) },
         INVALID
     );
     assert_eq!(
-        unsafe { rsf_dx12vk_interop_release_guides(owner, depth.image, depth.image) },
+        unsafe { rsf_dx12vk_interop_release_guides(owner.cast(), depth.image, depth.image) },
         INVALID
     );
-    assert_eq!(unsafe { rsf_dx12vk_interop_destroy(owner, 0) }, INVALID);
+    assert_eq!(
+        unsafe { rsf_dx12vk_interop_destroy(owner.cast(), 0) },
+        INVALID
+    );
     assert_eq!(live(), [2, 2, 2, 1]);
     assert_eq!(
-        unsafe { rsf_dx12vk_interop_release_guides(owner, depth.image, motion.image) },
+        unsafe { rsf_dx12vk_interop_release_guides(owner.cast(), depth.image, motion.image) },
         0
     );
     assert_eq!(live(), [0, 0, 0, 1]);
     assert_eq!(import().0, 0);
-    assert_eq!(unsafe { rsf_dx12vk_interop_destroy(owner, 1) }, 0);
+    assert_eq!(unsafe { rsf_dx12vk_interop_destroy(owner.cast(), 1) }, 0);
     assert_eq!(live(), [0; 4]);
 }

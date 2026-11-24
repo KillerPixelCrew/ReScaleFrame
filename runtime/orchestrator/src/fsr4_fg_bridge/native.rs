@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: MIT
+// The fixture-leaves archive calls the state fixture's doubles, so these leaves are unused there.
+#![cfg_attr(feature = "fixture-leaves", allow(dead_code))]
 //! Native capsule and exported entry points of the FSR 4 frame-generation bridge.
 //!
 //! The capsule keeps the provider module, both SDK contexts, the create
 //! descriptors the SDK retains until those contexts are destroyed, the DXGI
 //! swapchain description and the COM references filled by the command
 //! callbacks (commands.rs). The owner in fsr4_fg_bridge.rs reaches it only
-//! through the private platform table and releases it last.
+//! through the leaves below and releases it last.
 
 use super::commands::{self, Graphics};
 use super::sdk;
 use super::{
-    Bridge, BridgeCreate, BridgeFrame, BridgeInfo, GeneratedFn, Handle, INVALID, Platform,
-    SwapchainDesc, Version, rsf_core_fsr4fg_create, rsf_core_fsr4fg_probe,
+    Bridge, BridgeCreate, BridgeFrame, BridgeInfo, GeneratedFn, Handle, INVALID, SwapchainDesc,
+    Version, rsf_core_fsr4fg_create, rsf_core_fsr4fg_probe,
 };
 use crate::d3d12_generation::fsr_abi::*;
 use crate::d3d12_sr::ffx_abi::{self, *};
@@ -106,7 +108,7 @@ pub(super) unsafe fn graphics<'a>(native: Handle) -> &'a mut Graphics {
     unsafe { &mut capsule(native).graphics }
 }
 
-unsafe extern "C" fn allocate(telemetry: Handle, generated: GeneratedFn) -> Handle {
+pub(super) unsafe extern "C" fn allocate(telemetry: Handle, generated: GeneratedFn) -> Handle {
     let native = unsafe { alloc_zeroed(Layout::new::<Native>()) }.cast::<Native>();
     if let Some(native) = unsafe { native.as_mut() } {
         native.telemetry = telemetry;
@@ -115,7 +117,7 @@ unsafe extern "C" fn allocate(telemetry: Handle, generated: GeneratedFn) -> Hand
     native.cast()
 }
 
-unsafe extern "C" fn release(native: Handle) {
+pub(super) unsafe extern "C" fn release(native: Handle) {
     let owner = unsafe { capsule(native) };
     unsafe {
         sdk::release_provider_objects(&owner.graphics, owner.module);
@@ -123,7 +125,7 @@ unsafe extern "C" fn release(native: Handle) {
     }
 }
 
-unsafe extern "C" fn load(native: Handle, path: *const u16) -> i32 {
+pub(super) unsafe extern "C" fn load(native: Handle, path: *const u16) -> i32 {
     let native = unsafe { capsule(native) };
     let mut module = ptr::null_mut();
     let code = unsafe {
@@ -141,12 +143,16 @@ unsafe extern "C" fn load(native: Handle, path: *const u16) -> i32 {
     code
 }
 
-unsafe extern "C" fn versions(native: Handle, out: *mut Version, count: *mut u64) -> i32 {
+pub(super) unsafe extern "C" fn versions(
+    native: Handle,
+    out: *mut Version,
+    count: *mut u64,
+) -> i32 {
     let native = unsafe { capsule(native) };
     unsafe { sdk::sdk_versions(native.query, native.graphics.device, out, count) }
 }
 
-unsafe extern "C" fn create_generation(
+pub(super) unsafe extern "C" fn create_generation(
     native: Handle,
     setup: *const BridgeCreate,
     provider: u64,
@@ -176,12 +182,12 @@ unsafe extern "C" fn create_generation(
     }
 }
 
-unsafe extern "C" fn get_provider(native: Handle, actual: *mut u64) -> i32 {
+pub(super) unsafe extern "C" fn get_provider(native: Handle, actual: *mut u64) -> i32 {
     let native = unsafe { capsule(native) };
     unsafe { sdk::sdk_provider(native.query, &mut native.generation, actual) }
 }
 
-unsafe extern "C" fn objects(native: Handle) -> u32 {
+pub(super) unsafe extern "C" fn objects(native: Handle) -> u32 {
     let native = unsafe { capsule(native) };
     let graphics = &native.graphics;
     let local =
@@ -199,7 +205,7 @@ unsafe extern "C" fn objects(native: Handle) -> u32 {
     .fold(0, |objects, (_, bit)| objects | bit)
 }
 
-unsafe extern "C" fn create_swapchain(
+pub(super) unsafe extern "C" fn create_swapchain(
     native: Handle,
     window: Handle,
     setup: *const SwapchainDesc,
@@ -251,7 +257,7 @@ unsafe extern "C" fn describe_resource(resource: Handle, state: u32, out: *mut F
     }
 }
 
-unsafe extern "C" fn configure(
+pub(super) unsafe extern "C" fn configure(
     native: Handle,
     sequence: u64,
     width: u32,
@@ -278,7 +284,7 @@ unsafe extern "C" fn configure(
     }
 }
 
-unsafe extern "C" fn prepare(
+pub(super) unsafe extern "C" fn prepare(
     native: Handle,
     frame: *const BridgeFrame,
     sequence: u64,
@@ -298,7 +304,7 @@ unsafe extern "C" fn prepare(
     }
 }
 
-unsafe extern "C" fn wait_presents(native: Handle) -> i32 {
+pub(super) unsafe extern "C" fn wait_presents(native: Handle) -> i32 {
     let native = unsafe { capsule(native) };
     unsafe { sdk::sdk_wait_presents(native.dispatch, &mut native.swapchain) }
 }
@@ -314,67 +320,46 @@ fn destroy_context(destroy: PfnFfxDestroyContext, context: &mut ffxContext) -> i
     code as i32
 }
 
-unsafe extern "C" fn destroy_generation(native: Handle) -> i32 {
+pub(super) unsafe extern "C" fn destroy_generation(native: Handle) -> i32 {
     let native = unsafe { capsule(native) };
     destroy_context(native.destroy, &mut native.generation)
 }
 
-unsafe extern "C" fn destroy_swapchain(native: Handle) -> i32 {
+pub(super) unsafe extern "C" fn destroy_swapchain(native: Handle) -> i32 {
     let native = unsafe { capsule(native) };
     destroy_context(native.destroy, &mut native.swapchain)
 }
 
-static PLATFORM: Platform = Platform {
-    allocate,
-    release,
-    create_factory: commands::create_factory,
-    find_adapter: commands::find_adapter,
-    get_adapter_vendor: commands::get_adapter_vendor,
-    create_device: commands::create_device,
-    load,
-    versions,
-    create_generation,
-    get_provider,
-    create_queue: commands::create_queue,
-    create_allocator: commands::create_allocator,
-    create_command_list: commands::create_command_list,
-    create_completion_fence: commands::create_completion_fence,
-    create_event: commands::create_event,
-    objects,
-    create_swapchain,
-    create_image: commands::create_image,
-    create_fence: commands::create_fence,
-    describe_texture: commands::describe_texture,
-    reset_commands: commands::reset_commands,
-    close_commands: commands::close_commands,
-    configure,
-    shader_read: commands::shader_read,
-    prepare,
-    copy_to_backbuffer: commands::copy_to_backbuffer,
-    wait_shared: commands::wait_shared,
-    execute: commands::execute,
-    present: commands::present,
-    wait_presents,
-    signal: commands::signal,
-    wait_local: commands::wait_local,
-    get_present_count: commands::get_present_count,
-    destroy_generation,
-    release_chain: commands::release_chain,
-    destroy_swapchain,
-};
-
+/// The leaves the bridge owner calls, by the names the state fixture also uses.
+#[cfg(not(feature = "fixture-leaves"))]
+pub(super) mod leaf {
+    pub(in crate::fsr4_fg_bridge) use super::commands::{
+        close_commands, copy_to_backbuffer, create_allocator, create_command_list,
+        create_completion_fence, create_device, create_event, create_factory, create_fence,
+        create_image, create_queue, describe_texture, execute, find_adapter, get_adapter_vendor,
+        get_present_count, present, release_chain, reset_commands, shader_read, signal, wait_local,
+        wait_shared,
+    };
+    pub(in crate::fsr4_fg_bridge) use super::{
+        allocate, configure, create_generation, create_swapchain, destroy_generation,
+        destroy_swapchain, get_provider, load, objects, prepare, release, versions, wait_presents,
+    };
+}
 /// Creates a matching DX12 device and queries its exact major-4 providers
 /// without a window or WSI calls.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn RsfFsr4FgProbe(
+pub(crate) unsafe extern "C" fn RsfFsr4FgProbe(
     luid: u64,
     directory: *const u16,
     info: *mut BridgeInfo,
 ) -> i32 {
-    unsafe { rsf_core_fsr4fg_probe(&PLATFORM, luid, directory, info) }
+    unsafe { rsf_core_fsr4fg_probe(luid, directory, info) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn RsfFsr4FgCreate(setup: *const BridgeCreate, output: *mut *mut Bridge) -> i32 {
-    unsafe { rsf_core_fsr4fg_create(&PLATFORM, setup, output) }
+pub(crate) unsafe extern "C" fn RsfFsr4FgCreate(
+    setup: *const BridgeCreate,
+    output: *mut *mut Bridge,
+) -> i32 {
+    unsafe { rsf_core_fsr4fg_create(setup, output) }
 }

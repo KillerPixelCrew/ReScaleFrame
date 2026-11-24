@@ -19,10 +19,13 @@ use windows::Win32::Graphics::Dxgi::Common::{
 
 use rsf_fsr4_compat::dx12_bridge::{self as dx12, can_signal_done, next_local_completion};
 mod commands;
+#[cfg(not(feature = "fixture-leaves"))]
 pub(super) use commands::RsfFsr4FgReleaseImage;
 mod native;
+#[cfg(not(feature = "fixture-leaves"))]
+pub(crate) use native::{RsfFsr4FgCreate, RsfFsr4FgProbe};
 mod sdk;
-#[cfg(feature = "test-fixtures")]
+#[cfg(feature = "fixture-leaves")]
 pub(crate) mod state_fixture;
 type Handle = *mut c_void;
 
@@ -96,57 +99,14 @@ struct SwapchainDesc {
 }
 
 type GeneratedFn = unsafe extern "C" fn(Handle, i32, u32);
-type StatusOp = unsafe extern "C" fn(Handle) -> i32;
-type VoidOp = unsafe extern "C" fn(Handle);
-type FenceOp = unsafe extern "C" fn(Handle, u64) -> i32;
 
-#[repr(C)]
-struct Platform {
-    allocate: unsafe extern "C" fn(Handle, GeneratedFn) -> Handle,
-    release: VoidOp,
-    create_factory: unsafe extern "C" fn(Handle, u32) -> i32,
-    find_adapter: unsafe extern "C" fn(Handle, u64) -> i32,
-    get_adapter_vendor: unsafe extern "C" fn(Handle, *mut u32) -> i32,
-    create_device: unsafe extern "C" fn(Handle, u32) -> i32,
-    load: unsafe extern "C" fn(Handle, *const u16) -> i32,
-    versions: unsafe extern "C" fn(Handle, *mut Version, *mut u64) -> i32,
-    create_generation: unsafe extern "C" fn(Handle, *const BridgeCreate, u64) -> i32,
-    get_provider: unsafe extern "C" fn(Handle, *mut u64) -> i32,
-    create_queue: unsafe extern "C" fn(Handle, *const QueueDesc) -> i32,
-    create_allocator: unsafe extern "C" fn(Handle, u32) -> i32,
-    create_command_list: unsafe extern "C" fn(Handle, u32, u32) -> i32,
-    create_completion_fence: unsafe extern "C" fn(Handle, u64, u32) -> i32,
-    create_event: unsafe extern "C" fn(Handle, u32, u32) -> i32,
-    objects: unsafe extern "C" fn(Handle) -> u32,
-    create_swapchain: unsafe extern "C" fn(Handle, Handle, *const SwapchainDesc, u32) -> i32,
-    create_image: unsafe extern "C" fn(Handle, u32, u32, u32, *mut Handle, *mut Handle) -> i32,
-    create_fence: unsafe extern "C" fn(Handle, *mut Handle) -> i32,
-    describe_texture: unsafe extern "C" fn(Handle, *mut Texture),
-    reset_commands: StatusOp,
-    close_commands: StatusOp,
-    configure: unsafe extern "C" fn(Handle, u64, u32, u32, u32, Handle) -> i32,
-    shader_read: unsafe extern "C" fn(Handle, Handle, u32),
-    prepare: unsafe extern "C" fn(Handle, *const BridgeFrame, u64, u32) -> i32,
-    copy_to_backbuffer: unsafe extern "C" fn(Handle, Handle) -> i32,
-    wait_shared: FenceOp,
-    execute: VoidOp,
-    present: unsafe extern "C" fn(Handle, u32) -> i32,
-    wait_presents: StatusOp,
-    signal: unsafe extern "C" fn(Handle, u64, u32) -> i32,
-    wait_local: FenceOp,
-    get_present_count: unsafe extern "C" fn(Handle, *mut u32) -> i32,
-    destroy_generation: StatusOp,
-    release_chain: VoidOp,
-    destroy_swapchain: StatusOp,
-}
-
+// Production calls the native capsule and command leaves; the fixture-leaves archive calls the
+// state fixture's CPU doubles with the same names.
+#[cfg(not(feature = "fixture-leaves"))]
+use native::leaf;
+#[cfg(feature = "fixture-leaves")]
+use state_fixture as leaf;
 const _: () = {
-    assert!(size_of::<Platform>() == 36 * size_of::<Handle>());
-    assert!(std::mem::offset_of!(Platform, create_factory) == 2 * size_of::<Handle>());
-    assert!(std::mem::offset_of!(Platform, load) == 6 * size_of::<Handle>());
-    assert!(std::mem::offset_of!(Platform, create_queue) == 10 * size_of::<Handle>());
-    assert!(std::mem::offset_of!(Platform, create_swapchain) == 16 * size_of::<Handle>());
-    assert!(std::mem::offset_of!(Platform, close_commands) == 21 * size_of::<Handle>());
     assert!(size_of::<BridgeCreate>() == 48);
     assert!(size_of::<BridgeInfo>() == 32);
     assert!(size_of::<BridgeFrame>() == 80);
@@ -176,8 +136,7 @@ unsafe extern "C" fn generated(user: Handle, result: i32, count: u32) {
     }
 }
 
-struct Bridge {
-    ops: &'static Platform,
+pub(crate) struct Bridge {
     native: Handle,
     // The SDK callback borrows only this allocation. It can run while the
     // presenting thread is mutating the rest of the bridge.
@@ -206,20 +165,19 @@ impl Drop for Bridge {
     fn drop(&mut self) {
         // Owners with incomplete teardown are returned to C and never reach Drop.
         if !self.native.is_null() {
-            unsafe { (self.ops.release)(self.native) };
+            unsafe { leaf::release(self.native) };
         }
         drop(unsafe { Box::from_raw(self.generated) });
     }
 }
 
 impl Bridge {
-    fn new(ops: &'static Platform, luid: u64) -> Result<Box<Self>, i32> {
+    fn new(luid: u64) -> Result<Box<Self>, i32> {
         let telemetry = allocate_handle(Generated::default());
         if telemetry.is_null() {
             return Err(OUT_OF_MEMORY);
         }
         let bridge = allocate_handle(Self {
-            ops,
             native: ptr::null_mut(),
             generated: telemetry,
             luid,
@@ -245,7 +203,7 @@ impl Bridge {
             return Err(OUT_OF_MEMORY);
         }
         let mut bridge = unsafe { Box::from_raw(bridge) };
-        bridge.native = unsafe { (ops.allocate)(telemetry.cast(), generated) };
+        bridge.native = unsafe { leaf::allocate(telemetry.cast(), generated) };
         if bridge.native.is_null() {
             return Err(OUT_OF_MEMORY);
         }
@@ -253,26 +211,24 @@ impl Bridge {
     }
 
     fn open_device(&mut self) -> Result<(), i32> {
-        let p = self.ops;
         let native = self.native;
         unsafe {
-            checked((p.create_factory)(native, 0))?;
-            checked((p.find_adapter)(native, self.luid))?;
-            checked((p.get_adapter_vendor)(native, &mut self.vendor))?;
-            checked((p.create_device)(native, FEATURE_LEVEL_12_0))
+            checked(leaf::create_factory(native, 0))?;
+            checked(leaf::find_adapter(native, self.luid))?;
+            checked(leaf::get_adapter_vendor(native, &mut self.vendor))?;
+            checked(leaf::create_device(native, FEATURE_LEVEL_12_0))
         }
     }
 
     fn discover(&mut self, directory: *const u16) -> Result<(), i32> {
         let mut versions = [Version::default(); MAX_VERSIONS];
         let mut count = MAX_VERSIONS as u64;
-        let ops = self.ops;
         self.open_device()?;
         let mut path = [0; PROVIDER_PATH_CAPACITY];
         provider_path(directory, &mut path)?;
         unsafe {
-            checked((ops.load)(self.native, path.as_ptr()))?;
-            checked((ops.versions)(
+            checked(leaf::load(self.native, path.as_ptr()))?;
+            checked(leaf::versions(
                 self.native,
                 versions.as_mut_ptr(),
                 &mut count,
@@ -293,15 +249,14 @@ impl Bridge {
             flags: QUEUE_FLAGS_NONE,
             node_mask: 0,
         };
-        let p = self.ops;
         let native = self.native;
         unsafe {
-            checked((p.create_queue)(native, &queue))?;
-            checked((p.create_allocator)(native, COMMAND_LIST_DIRECT))?;
-            checked((p.create_command_list)(native, 0, COMMAND_LIST_DIRECT))?;
-            checked((p.close_commands)(native))?;
-            checked((p.create_completion_fence)(native, 0, FENCE_FLAGS_NONE))?;
-            checked((p.create_event)(native, 0, 0))
+            checked(leaf::create_queue(native, &queue))?;
+            checked(leaf::create_allocator(native, COMMAND_LIST_DIRECT))?;
+            checked(leaf::create_command_list(native, 0, COMMAND_LIST_DIRECT))?;
+            checked(leaf::close_commands(native))?;
+            checked(leaf::create_completion_fence(native, 0, FENCE_FLAGS_NONE))?;
+            checked(leaf::create_event(native, 0, 0))
         }
     }
 
@@ -312,10 +267,9 @@ impl Bridge {
         self.motion_jittered = setup.motion_jittered != 0;
         self.discover(setup.runtime_directory)?;
         let mut actual = 0;
-        let ops = self.ops;
         unsafe {
-            checked((ops.create_generation)(self.native, setup, self.provider))?;
-            if (ops.get_provider)(self.native, &mut actual) != 0 || actual != self.provider {
+            checked(leaf::create_generation(self.native, setup, self.provider))?;
+            if leaf::get_provider(self.native, &mut actual) != 0 || actual != self.provider {
                 return Err(UNSUPPORTED);
             }
         }
@@ -332,7 +286,7 @@ impl Bridge {
     }
 
     fn has(&self, objects: u32) -> bool {
-        (unsafe { (self.ops.objects)(self.native) } & objects) == objects
+        (unsafe { leaf::objects(self.native) } & objects) == objects
     }
 
     fn start(&mut self, window: Handle) -> i32 {
@@ -365,8 +319,7 @@ impl Bridge {
         // fields the original bridge set on each attempt when retrying.
         let first_attempt = u32::from(!self.swapchain_attempted);
         self.swapchain_attempted = true;
-        let code =
-            unsafe { (self.ops.create_swapchain)(self.native, window, &desc, first_attempt) };
+        let code = unsafe { leaf::create_swapchain(self.native, window, &desc, first_attempt) };
         if code == 0 && !self.has(CHAIN) {
             return UNEXPECTED;
         }
@@ -381,7 +334,7 @@ impl Bridge {
         let [width, height] = self.output;
         self.sequence = self.sequence.wrapping_add(1);
         checked(unsafe {
-            (self.ops.configure)(self.native, self.sequence, width, height, enabled, hudless)
+            leaf::configure(self.native, self.sequence, width, height, enabled, hudless)
         })?;
         self.configured = true;
         if enabled == 0 {
@@ -392,14 +345,14 @@ impl Bridge {
 
     fn wait_presents(&self) -> Result<(), i32> {
         if self.has(SWAPCHAIN) {
-            checked(unsafe { (self.ops.wait_presents)(self.native) })?;
+            checked(unsafe { leaf::wait_presents(self.native) })?;
         }
         Ok(())
     }
 
     fn wait_local(&self) -> Result<(), i32> {
         if self.completion != 0 {
-            checked(unsafe { (self.ops.wait_local)(self.native, self.completion) })?;
+            checked(unsafe { leaf::wait_local(self.native, self.completion) })?;
         }
         Ok(())
     }
@@ -409,7 +362,7 @@ impl Bridge {
             self.terminal = UNEXPECTED;
             return Err(UNEXPECTED);
         };
-        let code = unsafe { (self.ops.signal)(self.native, value, 0) };
+        let code = unsafe { leaf::signal(self.native, value, 0) };
         if code != 0 {
             self.terminal = code;
             return Err(code);
@@ -425,12 +378,12 @@ impl Bridge {
         {
             return result;
         }
-        let wait = unsafe { (self.ops.wait_shared)(self.native, frame.ready_value) };
+        let wait = unsafe { leaf::wait_shared(self.native, frame.ready_value) };
         if wait != 0 {
             self.terminal = wait;
             return wait;
         }
-        let signal = unsafe { (self.ops.signal)(self.native, frame.done_value, 1) };
+        let signal = unsafe { leaf::signal(self.native, frame.done_value, 1) };
         if signal != 0 {
             self.terminal = signal;
             return signal;
@@ -444,7 +397,7 @@ impl Bridge {
             return false;
         }
         let mut desc = Texture::default();
-        unsafe { (self.ops.describe_texture)(resource, &mut desc) };
+        unsafe { leaf::describe_texture(resource, &mut desc) };
         desc.dimension == TEXTURE_2D
             && desc.format == format
             && desc.width == u64::from(width)
@@ -524,7 +477,6 @@ impl Bridge {
     }
 
     fn record_frame(&mut self, frame: &BridgeFrame) -> Result<(), i32> {
-        let p = self.ops;
         let native = self.native;
         // The SDK requires Configure on every frame before PrepareV2, including resets.
         self.configure(frame.enabled, frame.hudless)?;
@@ -534,43 +486,42 @@ impl Bridge {
                 || record.frame_id != self.last_source.wrapping_add(1)
                 || record.flags & RSF_FRAME_FLAG_RESET != 0;
             for resource in [frame.depth, frame.motion, frame.hudless] {
-                unsafe { (p.shader_read)(native, resource, 1) };
+                unsafe { leaf::shader_read(native, resource, 1) };
             }
-            let code = unsafe { (p.prepare)(native, frame, self.sequence, u32::from(reset)) };
+            let code = unsafe { leaf::prepare(native, frame, self.sequence, u32::from(reset)) };
             if code != 0 {
                 self.history = false;
                 return Err(code);
             }
             for resource in [frame.depth, frame.motion] {
-                unsafe { (p.shader_read)(native, resource, 0) };
+                unsafe { leaf::shader_read(native, resource, 0) };
             }
         }
-        checked(unsafe { (p.copy_to_backbuffer)(native, frame.color) })
+        checked(unsafe { leaf::copy_to_backbuffer(native, frame.color) })
     }
 
     fn record_commands(&mut self, frame: &BridgeFrame) -> Result<(), i32> {
-        checked(unsafe { (self.ops.reset_commands)(self.native) })?;
+        checked(unsafe { leaf::reset_commands(self.native) })?;
         let recorded = self.record_frame(frame);
-        let closed = checked(unsafe { (self.ops.close_commands)(self.native) });
+        let closed = checked(unsafe { leaf::close_commands(self.native) });
         recorded.and(closed)
     }
 
     fn submit_frame(&mut self, frame: &BridgeFrame) -> Result<i32, i32> {
-        let p = self.ops;
         let native = self.native;
-        checked(unsafe { (p.wait_shared)(native, frame.ready_value) })?;
-        unsafe { (p.execute)(native) };
-        let presented = unsafe { (p.present)(native, frame.vsync) };
+        checked(unsafe { leaf::wait_shared(native, frame.ready_value) })?;
+        unsafe { leaf::execute(native) };
+        let presented = unsafe { leaf::present(native, frame.vsync) };
 
         // The SDK can still read HUD-less color after the DXGI Present call.
         self.wait_presents()?;
         self.signal_local()?;
         self.wait_local()?;
         if frame.enabled != 0 {
-            checked(unsafe { (p.reset_commands)(native) })?;
-            unsafe { (p.shader_read)(native, frame.hudless, 0) };
-            checked(unsafe { (p.close_commands)(native) })?;
-            unsafe { (p.execute)(native) };
+            checked(unsafe { leaf::reset_commands(native) })?;
+            unsafe { leaf::shader_read(native, frame.hudless, 0) };
+            checked(unsafe { leaf::close_commands(native) })?;
+            unsafe { leaf::execute(native) };
         }
         Ok(presented)
     }
@@ -607,7 +558,7 @@ impl Bridge {
         };
         let result = self.handoff(frame, reported);
         let mut count = 0;
-        if unsafe { (self.ops.get_present_count)(self.native, &mut count) } == 0 {
+        if unsafe { leaf::get_present_count(self.native, &mut count) } == 0 {
             status.frames_presented = present_count_delta(self.last_present_count, count);
             self.last_present_count = count;
         }
@@ -637,16 +588,15 @@ impl Bridge {
             self.configure(0, ptr::null_mut())?;
         }
         self.drain()?;
-        let p = self.ops;
         let native = self.native;
         if self.has(GENERATION) {
-            checked(unsafe { (p.destroy_generation)(native) })?;
+            checked(unsafe { leaf::destroy_generation(native) })?;
         }
         if self.has(CHAIN) {
-            unsafe { (p.release_chain)(native) };
+            unsafe { leaf::release_chain(native) };
         }
         if self.has(SWAPCHAIN) {
-            checked(unsafe { (p.destroy_swapchain)(native) })?;
+            checked(unsafe { leaf::destroy_swapchain(native) })?;
         }
         self.prepared_destroy = true;
         Ok(())
@@ -725,12 +675,7 @@ fn select_version(versions: &[Version], count: u64) -> u64 {
     ffx_version::select(&versions[..count as usize], 4, 0).map_or(0, |version| version.id)
 }
 
-unsafe fn rsf_core_fsr4fg_probe(
-    ops: &'static Platform,
-    luid: u64,
-    directory: *const u16,
-    out: *mut BridgeInfo,
-) -> i32 {
+unsafe fn rsf_core_fsr4fg_probe(luid: u64, directory: *const u16, out: *mut BridgeInfo) -> i32 {
     if let Err(code) = unsafe { check(out) } {
         return code;
     }
@@ -742,7 +687,7 @@ unsafe fn rsf_core_fsr4fg_probe(
     if luid == 0 || !unsafe { absolute_wide_path(directory, MAX_DIRECTORY) } {
         return INVALID;
     }
-    let result = Bridge::new(ops, luid).and_then(|mut bridge| {
+    let result = Bridge::new(luid).and_then(|mut bridge| {
         bridge.discover(directory)?;
         bridge.info(info);
         Ok(())
@@ -750,11 +695,7 @@ unsafe fn rsf_core_fsr4fg_probe(
     result.err().unwrap_or(0)
 }
 
-unsafe fn rsf_core_fsr4fg_create(
-    ops: &'static Platform,
-    setup: *const BridgeCreate,
-    output: *mut *mut Bridge,
-) -> i32 {
+unsafe fn rsf_core_fsr4fg_create(setup: *const BridgeCreate, output: *mut *mut Bridge) -> i32 {
     if output.is_null() {
         return INVALID;
     }
@@ -776,7 +717,7 @@ unsafe fn rsf_core_fsr4fg_create(
     {
         return INVALID;
     }
-    let mut bridge = match Bridge::new(ops, setup.adapter_luid) {
+    let mut bridge = match Bridge::new(setup.adapter_luid) {
         Ok(bridge) => bridge,
         Err(code) => return code,
     };
@@ -791,7 +732,7 @@ unsafe fn rsf_core_fsr4fg_create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn RsfFsr4FgInfo(bridge: *const Bridge, out: *mut BridgeInfo) -> i32 {
+pub(crate) unsafe extern "C" fn RsfFsr4FgInfo(bridge: *const Bridge, out: *mut BridgeInfo) -> i32 {
     if bridge.is_null() {
         return INVALID;
     }
@@ -803,7 +744,7 @@ unsafe extern "C" fn RsfFsr4FgInfo(bridge: *const Bridge, out: *mut BridgeInfo) 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn RsfFsr4FgStart(bridge: *mut Bridge, window: Handle) -> i32 {
+pub(crate) unsafe extern "C" fn RsfFsr4FgStart(bridge: *mut Bridge, window: Handle) -> i32 {
     let Some(bridge) = (unsafe { bridge.as_mut() }) else {
         return INVALID;
     };
@@ -838,7 +779,7 @@ pub(super) unsafe extern "C" fn RsfFsr4FgCreateImage(
         VK_RG16_FLOAT => RG16_FLOAT,
         _ => return INVALID,
     };
-    unsafe { (bridge.ops.create_image)(bridge.native, width, height, dxgi, handle, resource) }
+    unsafe { leaf::create_image(bridge.native, width, height, dxgi, handle, resource) }
 }
 
 #[unsafe(no_mangle)]
@@ -853,11 +794,11 @@ pub(super) unsafe extern "C" fn RsfFsr4FgCreateFence(bridge: Handle, handle: *mu
     if !bridge.has(DEVICE) || bridge.has(SHARED_FENCE) || bridge.prepared_destroy {
         return INVALID;
     }
-    unsafe { (bridge.ops.create_fence)(bridge.native, handle) }
+    unsafe { leaf::create_fence(bridge.native, handle) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn RsfFsr4FgPresent(
+pub(crate) unsafe extern "C" fn RsfFsr4FgPresent(
     bridge: *mut Bridge,
     frame: *const BridgeFrame,
     status: *mut BridgeStatus,
@@ -886,7 +827,7 @@ unsafe extern "C" fn RsfFsr4FgPresent(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn RsfFsr4FgDrain(bridge: *mut Bridge) -> i32 {
+pub(crate) unsafe extern "C" fn RsfFsr4FgDrain(bridge: *mut Bridge) -> i32 {
     let Some(bridge) = (unsafe { bridge.as_mut() }) else {
         return 0;
     };
@@ -894,7 +835,7 @@ unsafe extern "C" fn RsfFsr4FgDrain(bridge: *mut Bridge) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn RsfFsr4FgPrepareDestroy(bridge: *mut Bridge) -> i32 {
+pub(crate) unsafe extern "C" fn RsfFsr4FgPrepareDestroy(bridge: *mut Bridge) -> i32 {
     let Some(bridge) = (unsafe { bridge.as_mut() }) else {
         return 0;
     };
@@ -902,7 +843,7 @@ unsafe extern "C" fn RsfFsr4FgPrepareDestroy(bridge: *mut Bridge) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn RsfFsr4FgDestroy(bridge: *mut Bridge) -> i32 {
+pub(crate) unsafe extern "C" fn RsfFsr4FgDestroy(bridge: *mut Bridge) -> i32 {
     let code = unsafe { RsfFsr4FgPrepareDestroy(bridge) };
     if code == 0 && !bridge.is_null() {
         drop(unsafe { Box::from_raw(bridge) });

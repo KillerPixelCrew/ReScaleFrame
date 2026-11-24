@@ -59,8 +59,8 @@ const PRESENT_WAIT_LIMIT: usize = 16;
 const SUBMIT_WAIT_CAPACITY: usize = PRESENT_WAIT_LIMIT + 1;
 pub(super) const SLOT_COUNT: usize = RSF_FGVK_FRAME_SLOTS as usize;
 
-#[cfg(feature = "test-fixtures")]
-mod fsr4_state_fixture;
+#[cfg(feature = "fixture-leaves")]
+pub(crate) mod fsr4_state_fixture;
 pub(crate) mod platform;
 
 pub(super) type Handle = *mut c_void;
@@ -428,6 +428,14 @@ pub(super) struct InteropOps {
     pub(super) destroy: unsafe extern "C" fn(Handle, u32) -> i32,
     pub(super) release_guides: unsafe extern "C" fn(Handle, u64, u64) -> i32,
 }
+
+// The D3D12-Vulkan importer entries both vendors use.
+pub(super) static IMPORTER: InteropOps = InteropOps {
+    image: crate::dx12_vulkan_interop::rsf_dx12vk_interop_image,
+    timeline: crate::dx12_vulkan_interop::rsf_dx12vk_interop_timeline,
+    destroy: crate::dx12_vulkan_interop::rsf_dx12vk_interop_destroy,
+    release_guides: crate::dx12_vulkan_interop::rsf_dx12vk_interop_release_guides,
+};
 
 impl InteropOps {
     fn image(

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-//! CPU doubles for the bridge state machine, called by the native state fixture.
+//! CPU doubles for the bridge state machine: the leaves the owner calls in the fixture-leaves
+//! archive, driven by the native state fixture.
 use super::*;
 use std::cell::RefCell;
 
@@ -45,269 +46,315 @@ fn fake(id: usize) -> Handle {
     ptr::without_provenance_mut(id)
 }
 
-macro_rules! leaf {
-    (|$($name:tt : $ty:ty),*| $(-> $ret:ty)? { $($body:tt)* }) => {{
-        unsafe extern "C" fn callback($($name: $ty),*) $(-> $ret)? { $($body)* }
-        callback
-    }};
+pub(super) unsafe extern "C" fn allocate(telemetry: Handle, notify: GeneratedFn) -> Handle {
+    with(|c| c.notify = Some((telemetry, notify)));
+    fake(1)
 }
 
-static PLATFORM: Platform = Platform {
-    allocate: leaf!(|telemetry: Handle, notify: GeneratedFn| -> Handle {
-        with(|c| c.notify = Some((telemetry, notify)));
-        fake(1)
-    }),
-    release: leaf!(|_: Handle| { with(|c| c.releases += 1) }),
-    create_factory: leaf!(|_: Handle, flags: u32| -> i32 {
-        with(|c| check!(c, flags == 0));
-        0
-    }),
-    find_adapter: leaf!(|_: Handle, luid: u64| -> i32 {
-        with(|c| check!(c, luid == LUID));
-        0
-    }),
-    get_adapter_vendor: leaf!(|_: Handle, vendor: *mut u32| -> i32 {
-        unsafe { vendor.write(0x1002) };
-        0
-    }),
-    create_device: leaf!(|_: Handle, level: u32| -> i32 {
-        with(|c| {
-            check!(c, level == 0xc000);
-            c.objects |= DEVICE;
+pub(super) unsafe extern "C" fn release(_: Handle) {
+    with(|c| c.releases += 1)
+}
+
+pub(super) unsafe extern "C" fn create_factory(_: Handle, flags: u32) -> i32 {
+    with(|c| check!(c, flags == 0));
+    0
+}
+
+pub(super) unsafe extern "C" fn find_adapter(_: Handle, luid: u64) -> i32 {
+    with(|c| check!(c, luid == LUID));
+    0
+}
+
+pub(super) unsafe extern "C" fn get_adapter_vendor(_: Handle, vendor: *mut u32) -> i32 {
+    unsafe { vendor.write(0x1002) };
+    0
+}
+
+pub(super) unsafe extern "C" fn create_device(_: Handle, level: u32) -> i32 {
+    with(|c| {
+        check!(c, level == 0xc000);
+        c.objects |= DEVICE;
+    });
+    0
+}
+
+pub(super) unsafe extern "C" fn load(_: Handle, _: *const u16) -> i32 {
+    0
+}
+
+pub(super) unsafe extern "C" fn versions(_: Handle, out: *mut Version, count: *mut u64) -> i32 {
+    with(|c| check!(c, unsafe { count.read() } >= 1));
+    unsafe {
+        count.write(1);
+        out.write(Version {
+            id: PROVIDER,
+            name: c"4.0.1".as_ptr(),
+            major: 4,
+            minor: 0,
+            patch: 1,
         });
-        0
-    }),
-    load: leaf!(|_: Handle, _: *const u16| -> i32 { 0 }),
-    versions: leaf!(|_: Handle, out: *mut Version, count: *mut u64| -> i32 {
-        with(|c| check!(c, unsafe { count.read() } >= 1));
-        unsafe {
-            count.write(1);
-            out.write(Version {
-                id: PROVIDER,
-                name: c"4.0.1".as_ptr(),
-                major: 4,
-                minor: 0,
-                patch: 1,
-            });
+    }
+    0
+}
+
+pub(super) unsafe extern "C" fn create_generation(
+    _: Handle,
+    _: *const BridgeCreate,
+    provider: u64,
+) -> i32 {
+    with(|c| {
+        check!(c, provider == PROVIDER);
+        c.objects |= GENERATION;
+    });
+    0
+}
+
+pub(super) unsafe extern "C" fn get_provider(_: Handle, out: *mut u64) -> i32 {
+    unsafe { out.write(with(|c| c.reported_provider)) };
+    0
+}
+
+pub(super) unsafe extern "C" fn create_queue(_: Handle, desc: *const QueueDesc) -> i32 {
+    let d = unsafe { &*desc };
+    with(|c| {
+        check!(
+            c,
+            d.list_type == 0 && d.priority == 0 && d.flags == 0 && d.node_mask == 0
+        )
+    });
+    0
+}
+
+pub(super) unsafe extern "C" fn create_allocator(_: Handle, kind: u32) -> i32 {
+    with(|c| check!(c, kind == 0));
+    0
+}
+
+pub(super) unsafe extern "C" fn create_command_list(_: Handle, mask: u32, kind: u32) -> i32 {
+    with(|c| check!(c, mask == 0 && kind == 0));
+    0
+}
+
+pub(super) unsafe extern "C" fn create_completion_fence(_: Handle, value: u64, flags: u32) -> i32 {
+    with(|c| check!(c, value == 0 && flags == 0));
+    0
+}
+
+pub(super) unsafe extern "C" fn create_event(_: Handle, manual: u32, initial: u32) -> i32 {
+    with(|c| {
+        check!(c, manual == 0 && initial == 0);
+        c.objects |= LOCAL_FENCE;
+    });
+    0
+}
+
+pub(super) unsafe extern "C" fn objects(_: Handle) -> u32 {
+    with(|c| c.objects)
+}
+
+pub(super) unsafe extern "C" fn create_swapchain(
+    _: Handle,
+    _: Handle,
+    desc: *const SwapchainDesc,
+    first: u32,
+) -> i32 {
+    let d = unsafe { &*desc };
+    with(|c| {
+        check!(c, (d.width, d.height, d.format) == (640, 360, 87));
+        check!(
+            c,
+            (d.buffer_count, d.buffer_usage, d.swap_effect) == (3, 0x20, 4)
+        );
+        check!(c, (d.sample_count, d.sample_quality, d.stereo) == (1, 0, 0));
+        check!(c, (d.scaling, d.alpha_mode, d.flags, first) == (0, 0, 0, 1));
+        c.objects |= CHAIN | SWAPCHAIN;
+    });
+    0
+}
+
+pub(super) unsafe extern "C" fn create_image(
+    _: Handle,
+    _: u32,
+    _: u32,
+    _: u32,
+    _: *mut Handle,
+    _: *mut Handle,
+) -> i32 {
+    ERROR
+}
+
+pub(super) unsafe extern "C" fn create_fence(_: Handle, out: *mut Handle) -> i32 {
+    unsafe { out.write(fake(2)) };
+    with(|c| c.objects |= SHARED_FENCE);
+    0
+}
+
+pub(super) unsafe extern "C" fn describe_texture(resource: Handle, out: *mut Texture) {
+    let (width, height, format) = match resource.addr() {
+        DEPTH => (320, 180, 41),
+        MOTION => (320, 180, 34),
+        _ => {
+            with(|c| check!(c, resource == fake(COLOR) || resource == fake(HUDLESS)));
+            (640, 360, 87)
         }
-        0
-    }),
-    create_generation: leaf!(|_: Handle, _: *const BridgeCreate, provider: u64| -> i32 {
-        with(|c| {
-            check!(c, provider == PROVIDER);
-            c.objects |= GENERATION;
-        });
-        0
-    }),
-    get_provider: leaf!(|_: Handle, out: *mut u64| -> i32 {
-        unsafe { out.write(with(|c| c.reported_provider)) };
-        0
-    }),
-    create_queue: leaf!(|_: Handle, desc: *const QueueDesc| -> i32 {
-        let d = unsafe { &*desc };
-        with(|c| {
-            check!(
-                c,
-                d.list_type == 0 && d.priority == 0 && d.flags == 0 && d.node_mask == 0
-            )
-        });
-        0
-    }),
-    create_allocator: leaf!(|_: Handle, kind: u32| -> i32 {
-        with(|c| check!(c, kind == 0));
-        0
-    }),
-    create_command_list: leaf!(|_: Handle, mask: u32, kind: u32| -> i32 {
-        with(|c| check!(c, mask == 0 && kind == 0));
-        0
-    }),
-    create_completion_fence: leaf!(|_: Handle, value: u64, flags: u32| -> i32 {
-        with(|c| check!(c, value == 0 && flags == 0));
-        0
-    }),
-    create_event: leaf!(|_: Handle, manual: u32, initial: u32| -> i32 {
-        with(|c| {
-            check!(c, manual == 0 && initial == 0);
-            c.objects |= LOCAL_FENCE;
-        });
-        0
-    }),
-    objects: leaf!(|_: Handle| -> u32 { with(|c| c.objects) }),
-    create_swapchain: leaf!(|_: Handle,
-                             _: Handle,
-                             desc: *const SwapchainDesc,
-                             first: u32|
-     -> i32 {
-        let d = unsafe { &*desc };
-        with(|c| {
-            check!(c, (d.width, d.height, d.format) == (640, 360, 87));
-            check!(
-                c,
-                (d.buffer_count, d.buffer_usage, d.swap_effect) == (3, 0x20, 4)
-            );
-            check!(c, (d.sample_count, d.sample_quality, d.stereo) == (1, 0, 0));
-            check!(c, (d.scaling, d.alpha_mode, d.flags, first) == (0, 0, 0, 1));
-            c.objects |= CHAIN | SWAPCHAIN;
-        });
-        0
-    }),
-    create_image: leaf!(|_: Handle,
-                         _: u32,
-                         _: u32,
-                         _: u32,
-                         _: *mut Handle,
-                         _: *mut Handle|
-     -> i32 { ERROR }),
-    create_fence: leaf!(|_: Handle, out: *mut Handle| -> i32 {
-        unsafe { out.write(fake(2)) };
-        with(|c| c.objects |= SHARED_FENCE);
-        0
-    }),
-    describe_texture: leaf!(|resource: Handle, out: *mut Texture| {
-        let (width, height, format) = match resource.addr() {
-            DEPTH => (320, 180, 41),
-            MOTION => (320, 180, 34),
-            _ => {
-                with(|c| check!(c, resource == fake(COLOR) || resource == fake(HUDLESS)));
-                (640, 360, 87)
-            }
-        };
-        unsafe {
-            out.write(Texture {
-                width,
-                height,
-                format,
-                dimension: 3,
-                layers: 1,
-                samples: 1,
-            })
-        };
-    }),
-    reset_commands: leaf!(|_: Handle| -> i32 {
-        with(|c| c.steps.push(b'R'));
-        0
-    }),
-    close_commands: leaf!(|_: Handle| -> i32 {
-        with(|c| c.steps.push(b'C'));
-        0
-    }),
-    configure: leaf!(|_: Handle,
-                      sequence: u64,
-                      width: u32,
-                      height: u32,
-                      enabled: u32,
-                      image: Handle|
-     -> i32 {
-        with(|c| {
-            c.sequence += 1;
-            check!(c, (sequence, width, height) == (c.sequence, 640, 360));
-            check!(c, enabled == 0 || image == fake(HUDLESS));
-            c.steps.push(b'F');
-            c.configure_result
+    };
+    unsafe {
+        out.write(Texture {
+            width,
+            height,
+            format,
+            dimension: 3,
+            layers: 1,
+            samples: 1,
         })
-    }),
-    shader_read: leaf!(|_: Handle, image: Handle, enter: u32| {
-        with(|c| {
-            c.steps.push(if enter != 0 {
-                b'+'
-            } else if image == fake(HUDLESS) {
-                b'H'
-            } else {
-                b'-'
-            })
-        });
-    }),
-    prepare: leaf!(
-        |_: Handle, _: *const BridgeFrame, sequence: u64, reset: u32| -> i32 {
-            with(|c| {
-                check!(c, sequence == c.sequence);
-                c.resets.push(reset);
-                c.steps.push(b'G');
-            });
-            0
-        }
-    ),
-    copy_to_backbuffer: leaf!(|_: Handle, image: Handle| -> i32 {
-        with(|c| {
-            check!(c, image == fake(COLOR));
-            c.steps.push(b'B');
-        });
-        0
-    }),
-    wait_shared: leaf!(|_: Handle, ready: u64| -> i32 {
-        with(|c| {
-            check!(c, ready == c.done + 1);
-            c.steps.push(b'W');
-        });
-        0
-    }),
-    execute: leaf!(|_: Handle| { with(|c| c.steps.push(b'X')) }),
-    present: leaf!(|_: Handle, vsync: u32| -> i32 {
-        with(|c| {
-            check!(c, vsync == 1);
-            c.steps.push(b'P');
-            c.presents += 1;
-        });
-        0
-    }),
-    wait_presents: leaf!(|_: Handle| -> i32 {
-        with(|c| {
-            c.steps.push(b'A');
-            c.wait_result
+    };
+}
+
+pub(super) unsafe extern "C" fn reset_commands(_: Handle) -> i32 {
+    with(|c| c.steps.push(b'R'));
+    0
+}
+
+pub(super) unsafe extern "C" fn close_commands(_: Handle) -> i32 {
+    with(|c| c.steps.push(b'C'));
+    0
+}
+
+pub(super) unsafe extern "C" fn configure(
+    _: Handle,
+    sequence: u64,
+    width: u32,
+    height: u32,
+    enabled: u32,
+    image: Handle,
+) -> i32 {
+    with(|c| {
+        c.sequence += 1;
+        check!(c, (sequence, width, height) == (c.sequence, 640, 360));
+        check!(c, enabled == 0 || image == fake(HUDLESS));
+        c.steps.push(b'F');
+        c.configure_result
+    })
+}
+
+pub(super) unsafe extern "C" fn shader_read(_: Handle, image: Handle, enter: u32) {
+    with(|c| {
+        c.steps.push(if enter != 0 {
+            b'+'
+        } else if image == fake(HUDLESS) {
+            b'H'
+        } else {
+            b'-'
         })
-    }),
-    signal: leaf!(|_: Handle, value: u64, shared: u32| -> i32 {
-        with(|c| {
-            if shared != 0 {
-                check!(c, value == c.done + 2);
-                c.done = value;
-                c.steps.push(b'D');
-            } else {
-                c.completion += 1;
-                check!(c, value == c.completion);
-                c.steps.push(b'S');
-            }
-        });
-        0
-    }),
-    wait_local: leaf!(|_: Handle, value: u64| -> i32 {
-        with(|c| {
+    });
+}
+
+pub(super) unsafe extern "C" fn prepare(
+    _: Handle,
+    _: *const BridgeFrame,
+    sequence: u64,
+    reset: u32,
+) -> i32 {
+    with(|c| {
+        check!(c, sequence == c.sequence);
+        c.resets.push(reset);
+        c.steps.push(b'G');
+    });
+    0
+}
+
+pub(super) unsafe extern "C" fn copy_to_backbuffer(_: Handle, image: Handle) -> i32 {
+    with(|c| {
+        check!(c, image == fake(COLOR));
+        c.steps.push(b'B');
+    });
+    0
+}
+
+pub(super) unsafe extern "C" fn wait_shared(_: Handle, ready: u64) -> i32 {
+    with(|c| {
+        check!(c, ready == c.done + 1);
+        c.steps.push(b'W');
+    });
+    0
+}
+
+pub(super) unsafe extern "C" fn execute(_: Handle) {
+    with(|c| c.steps.push(b'X'))
+}
+
+pub(super) unsafe extern "C" fn present(_: Handle, vsync: u32) -> i32 {
+    with(|c| {
+        check!(c, vsync == 1);
+        c.steps.push(b'P');
+        c.presents += 1;
+    });
+    0
+}
+
+pub(super) unsafe extern "C" fn wait_presents(_: Handle) -> i32 {
+    with(|c| {
+        c.steps.push(b'A');
+        c.wait_result
+    })
+}
+
+pub(super) unsafe extern "C" fn signal(_: Handle, value: u64, shared: u32) -> i32 {
+    with(|c| {
+        if shared != 0 {
+            check!(c, value == c.done + 2);
+            c.done = value;
+            c.steps.push(b'D');
+        } else {
+            c.completion += 1;
             check!(c, value == c.completion);
-            c.steps.push(b'L');
-        });
+            c.steps.push(b'S');
+        }
+    });
+    0
+}
+
+pub(super) unsafe extern "C" fn wait_local(_: Handle, value: u64) -> i32 {
+    with(|c| {
+        check!(c, value == c.completion);
+        c.steps.push(b'L');
+    });
+    0
+}
+
+pub(super) unsafe extern "C" fn get_present_count(_: Handle, out: *mut u32) -> i32 {
+    unsafe { out.write(with(|c| c.presents)) };
+    0
+}
+
+pub(super) unsafe extern "C" fn destroy_generation(_: Handle) -> i32 {
+    with(|c| {
+        c.destroys_generation += 1;
+        if c.fail_generation_destroy {
+            return ERROR;
+        }
+        c.objects &= !GENERATION;
         0
-    }),
-    get_present_count: leaf!(|_: Handle, out: *mut u32| -> i32 {
-        unsafe { out.write(with(|c| c.presents)) };
+    })
+}
+
+pub(super) unsafe extern "C" fn release_chain(_: Handle) {
+    with(|c| {
+        c.releases_chain += 1;
+        c.objects &= !CHAIN;
+    })
+}
+
+pub(super) unsafe extern "C" fn destroy_swapchain(_: Handle) -> i32 {
+    with(|c| {
+        c.destroys_swapchain += 1;
+        if c.fail_swapchain_destroy {
+            return ERROR;
+        }
+        c.objects &= !SWAPCHAIN;
         0
-    }),
-    destroy_generation: leaf!(|_: Handle| -> i32 {
-        with(|c| {
-            c.destroys_generation += 1;
-            if c.fail_generation_destroy {
-                return ERROR;
-            }
-            c.objects &= !GENERATION;
-            0
-        })
-    }),
-    release_chain: leaf!(|_: Handle| {
-        with(|c| {
-            c.releases_chain += 1;
-            c.objects &= !CHAIN;
-        })
-    }),
-    destroy_swapchain: leaf!(|_: Handle| -> i32 {
-        with(|c| {
-            c.destroys_swapchain += 1;
-            if c.fail_swapchain_destroy {
-                return ERROR;
-            }
-            c.objects &= !SWAPCHAIN;
-            0
-        })
-    }),
-};
+    })
+}
 
 fn create() -> (i32, *mut Bridge) {
     let directory = [b'X' as u16, b':' as u16, b'\\' as u16, 0];
@@ -325,7 +372,7 @@ fn create() -> (i32, *mut Bridge) {
     };
     let mut bridge = ptr::null_mut();
     (
-        unsafe { rsf_core_fsr4fg_create(&PLATFORM, &setup, &mut bridge) },
+        unsafe { rsf_core_fsr4fg_create(&setup, &mut bridge) },
         bridge,
     )
 }

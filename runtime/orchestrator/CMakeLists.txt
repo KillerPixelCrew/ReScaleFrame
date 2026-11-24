@@ -86,12 +86,18 @@ if(BUILD_TESTING)
     # Runtime and the carriers never contain a fixture.
     rsf_add_rust_static(rsf_orchestrator_fixture_rust rsf_rust_core_fixtures rsf-orchestrator rsf_orchestrator
         ${rsf_orchestrator_env} --features test-fixtures ${rsf_orchestrator_features})
+    # A target that sets RSF_ORCHESTRATOR_FIXTURE_LEAVES links the fixture archive built with the state
+    # fixtures' CPU doubles in place of the native leaves (the fixture-leaves feature in Cargo.toml).
+    rsf_add_rust_static(rsf_orchestrator_fixture_leaves_rust rsf_rust_core_fixture_leaves rsf-orchestrator
+        rsf_orchestrator ${rsf_orchestrator_env} --features fixture-leaves ${rsf_orchestrator_features})
     get_target_property(rsf_orchestrator_libs rsf_orchestrator_rust INTERFACE_LINK_LIBRARIES)
     get_target_property(rsf_orchestrator_fixture_libs rsf_orchestrator_fixture_rust INTERFACE_LINK_LIBRARIES)
+    get_target_property(rsf_orchestrator_leaves_libs rsf_orchestrator_fixture_leaves_rust INTERFACE_LINK_LIBRARIES)
     list(POP_FRONT rsf_orchestrator_libs rsf_orchestrator_archive)
     list(POP_FRONT rsf_orchestrator_fixture_libs rsf_orchestrator_fixture_archive)
+    list(POP_FRONT rsf_orchestrator_leaves_libs rsf_orchestrator_leaves_archive)
     set_property(TARGET rsf_orchestrator_rust PROPERTY INTERFACE_LINK_LIBRARIES
-        "$<IF:$<BOOL:$<TARGET_PROPERTY:RSF_ORCHESTRATOR_FIXTURES>>,${rsf_orchestrator_fixture_archive},${rsf_orchestrator_archive}>"
+        "$<IF:$<BOOL:$<TARGET_PROPERTY:RSF_ORCHESTRATOR_FIXTURE_LEAVES>>,${rsf_orchestrator_leaves_archive},$<IF:$<BOOL:$<TARGET_PROPERTY:RSF_ORCHESTRATOR_FIXTURES>>,${rsf_orchestrator_fixture_archive},${rsf_orchestrator_archive}>>"
         ${rsf_orchestrator_libs})
 endif()
 # version: the provider version reads in mfg_provider.rs (forwarded by the dinput8 proxy itself).

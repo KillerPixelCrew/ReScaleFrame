@@ -117,25 +117,8 @@ unsafe extern "C" fn rsf_core_xessvk_interop_create(
     status_result(unsafe { (ops.create)(setup, &callbacks, timeline_enabled, output) })
 }
 
-unsafe extern "C" {
-    fn rsf_dx12vk_interop_image(
-        owner: Handle,
-        format: u32,
-        width: u32,
-        height: u32,
-        output: *mut InteropImage,
-    ) -> i32;
-    fn rsf_dx12vk_interop_timeline(owner: Handle) -> u64;
-    fn rsf_dx12vk_interop_destroy(owner: Handle, queues_drained: u32) -> i32;
-    fn rsf_dx12vk_interop_release_guides(owner: Handle, depth: u64, motion: u64) -> i32;
-}
-
-// V03 importer entries used by the shared presenter.
-static IMPORTER: InteropOps = InteropOps {
-    image: rsf_dx12vk_interop_image,
-    timeline: rsf_dx12vk_interop_timeline,
-    destroy: rsf_dx12vk_interop_destroy,
-    release_guides: rsf_dx12vk_interop_release_guides,
+use crate::dx12_vulkan_interop::{
+    rsf_dx12vk_interop_destroy, rsf_dx12vk_interop_image, rsf_dx12vk_interop_timeline,
 };
 
 #[unsafe(no_mangle)]

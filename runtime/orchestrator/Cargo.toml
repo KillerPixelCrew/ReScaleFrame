@@ -25,6 +25,10 @@ serde_json = { version = "=1.0.154", features = ["unbounded_depth"] }
 [features]
 # Fixture exports called only by the ctest executables; the shipping archive is built without them.
 test-fixtures = ["dep:rsf-test-support"]
+# The state fixtures' CPU doubles in place of the FSR4 FG bridge, FSR4 FG and SR Vulkan, D3D12-Vulkan
+# interop, D3D12 XeSS FG and FG CPU leaves. CMake builds a third archive with it for the four
+# state-fixture executables only, so the fixture archive's device fixtures keep the real leaves.
+fixture-leaves = ["test-fixtures"]
 # CMake's vendor-header detection (runtime/orchestrator/CMakeLists.txt): the D3D12 FidelityFX SR and
 # legacy FG, FidelityFX FG, XeSS SR and legacy FG, and XeSS-FG providers. Without one, its provider
 # reports NOT_COMPILED.

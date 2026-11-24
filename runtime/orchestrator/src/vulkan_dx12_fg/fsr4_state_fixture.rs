@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-//! CPU doubles for the FSR4 FG WSI owner: the bridge, importer and shared graphics entries of
-//! vulkan_fsr4_fg::Ops. Called by the native_fsr4_fg_state_contract ctest (test-fixtures only).
+//! CPU doubles for the FSR4 FG WSI owner: the bridge, importer and shared graphics leaves that
+//! vulkan_fsr4_fg calls in the fixture-leaves archive. Called by the native_fsr4_fg_state_contract
+//! ctest.
 use super::*;
 use crate::fsr4_fg_bridge::state_fixture::rsf_fixture_fsr4fg_bridge_state;
 use crate::sys::{
@@ -8,7 +9,7 @@ use crate::sys::{
     rsf_fsr4fg_info as BridgeInfo, rsf_fsr4fg_present_status as BridgeStatus, rsf_vk_function,
 };
 use crate::vulkan_fsr4_fg::{
-    Fsr4, Ops, Options, create as fsr4_create, rsf_fsr4gvk_acquire, rsf_fsr4gvk_destroy,
+    Fsr4, Options, create as fsr4_create, rsf_fsr4gvk_acquire, rsf_fsr4gvk_destroy,
     rsf_fsr4gvk_drain, rsf_fsr4gvk_enable_options, rsf_fsr4gvk_hudless, rsf_fsr4gvk_prepare,
     rsf_fsr4gvk_present_source, rsf_fsr4gvk_status, rsf_fsr4gvk_submitted,
 };
@@ -160,138 +161,167 @@ const IMAGES: ImageOps = ImageOps {
     submit_fence: None,
 };
 
-const PLATFORM: Ops = Ops {
-    probe: callback!((_: u64, _: *const u16, _: *mut BridgeInfo) -> i32 { 0 }),
-    bridge_create: callback!((create: *const BridgeCreate, out: *mut Bridge) -> i32 {
-        let create = unsafe { &*create };
-        check!(create.adapter_luid == ADAPTER && create.generated_count == 1);
-        unsafe { out.write(fake(1)) };
+pub(crate) unsafe extern "C" fn probe(_: u64, _: *const u16, _: *mut BridgeInfo) -> i32 {
+    0
+}
+
+pub(crate) unsafe extern "C" fn bridge_create(
+    create: *const BridgeCreate,
+    out: *mut Bridge,
+) -> i32 {
+    let create = unsafe { &*create };
+    check!(create.adapter_luid == ADAPTER && create.generated_count == 1);
+    unsafe { out.write(fake(1)) };
+    0
+}
+
+pub(crate) unsafe extern "C" fn bridge_info(_: Bridge, info: *mut BridgeInfo) -> i32 {
+    let info = unsafe { &mut *info };
+    info.adapter_luid = calls(|state| state.provider_luid);
+    info.provider_version = 700;
+    info.max_generated = 1;
+    0
+}
+
+pub(crate) unsafe extern "C" fn bridge_start(_: Bridge, _: Handle) -> i32 {
+    calls(|state| {
+        state.starts += 1;
+        if state.fail_start { INJECTED } else { 0 }
+    })
+}
+
+pub(crate) unsafe extern "C" fn bridge_drain(_: Bridge) -> i32 {
+    0
+}
+
+pub(crate) unsafe extern "C" fn bridge_prepare_destroy(_: Bridge) -> i32 {
+    0
+}
+
+pub(crate) unsafe extern "C" fn bridge_destroy(_: Bridge) -> i32 {
+    calls(|state| state.releases += 1);
+    0
+}
+
+pub(crate) unsafe extern "C" fn interop_create(
+    _: *const Graphics,
+    _: Bridge,
+    luid: u64,
+    enabled: u32,
+    out: *mut Handle,
+) -> i32 {
+    check!(luid == ADAPTER && enabled == 1);
+    unsafe { out.write(fake(2)) };
+    0
+}
+
+pub(crate) fn importer() -> &'static InteropOps {
+    &IMPORTER
+}
+
+pub(crate) fn graphics() -> &'static GraphicsOps {
+    &GRAPHICS
+}
+
+const IMPORTER: InteropOps = InteropOps {
+    image: callback!((_: Handle, format: u32, width: u32, height: u32, out: *mut SharedImage) -> i32 {
+        let id = next();
+        unsafe { out.write(SharedImage { image: id, dx12_resource: fake(id), format, width, height }) };
         0
     }),
-    bridge_info: callback!((_: Bridge, info: *mut BridgeInfo) -> i32 {
-        let info = unsafe { &mut *info };
-        info.adapter_luid = calls(|state| state.provider_luid);
-        info.provider_version = 700;
-        info.max_generated = 1;
-        0
+    timeline: callback!((_: Handle) -> u64 { TIMELINE }),
+    destroy: callback!((_: Handle, drained: u32) -> i32 {
+        check!(drained == 1);
+        if calls(|state| state.fail_importer_destroy) { INJECTED } else { 0 }
     }),
-    bridge_start: callback!((_: Bridge, _: Handle) -> i32 {
+    release_guides: callback!((_: Handle, depth: u64, motion: u64) -> i32 {
+        check!(depth != 0 || motion != 0);
         calls(|state| {
-            state.starts += 1;
-            if state.fail_start { INJECTED } else { 0 }
-        })
-    }),
-    bridge_present,
-    bridge_drain: callback!((_: Bridge) -> i32 { 0 }),
-    bridge_prepare_destroy: callback!((_: Bridge) -> i32 { 0 }),
-    bridge_destroy: callback!((_: Bridge) -> i32 {
-        calls(|state| state.releases += 1);
+            check!(state.waits.len() == 2 && state.marked_complete.len() == 2);
+            state.guide_releases += 1;
+        });
         0
     }),
-    interop_create: callback!((_: *const Graphics, _: Bridge, luid: u64, enabled: u32, out: *mut Handle) -> i32 {
-        check!(luid == ADAPTER && enabled == 1);
-        unsafe { out.write(fake(2)) };
-        0
-    }),
-    importer: InteropOps {
-        image: callback!((_: Handle, format: u32, width: u32, height: u32, out: *mut SharedImage) -> i32 {
-            let id = next();
-            unsafe { out.write(SharedImage { image: id, dx12_resource: fake(id), format, width, height }) };
-            0
-        }),
-        timeline: callback!((_: Handle) -> u64 { TIMELINE }),
-        destroy: callback!((_: Handle, drained: u32) -> i32 {
-            check!(drained == 1);
-            if calls(|state| state.fail_importer_destroy) { INJECTED } else { 0 }
-        }),
-        release_guides: callback!((_: Handle, depth: u64, motion: u64) -> i32 {
-            check!(depth != 0 || motion != 0);
-            calls(|state| {
-                check!(state.waits.len() == 2 && state.marked_complete.len() == 2);
-                state.guide_releases += 1;
-            });
-            0
-        }),
-    },
-    graphics: GraphicsOps {
-        adapter_luid: callback!((_: *const Graphics, out: *mut u64) -> i32 {
-            unsafe { out.write(ADAPTER) };
-            0
-        }),
-        platform_allocate: callback!((setup: *const Setup) -> Gpu {
-            SWAPCHAIN.with(|info| check!(!setup.is_null()
-                && unsafe { (*setup).create_info } == ptr::from_ref(info).cast()));
-            fake(3)
-        }),
-        platform_destroy: callback!((_: Gpu) {}),
-        platform_resolve: callback!((_: Gpu, graphics: *const Graphics) -> i32 {
-            let graphics = unsafe { &*graphics };
-            check!(graphics.device == fake(5) && graphics.instance_proc.is_some() && graphics.device_proc.is_some());
-            0
-        }),
-        format_features: callback!((_: Gpu, format: u32) -> u32 {
-            let format = vk::Format::from_raw(format as i32);
-            check!(format == vk::Format::R8G8B8A8_UNORM || format == vk::Format::B8G8R8A8_UNORM);
-            (vk::FormatFeatureFlags::BLIT_SRC | vk::FormatFeatureFlags::BLIT_DST).as_raw()
-        }),
-        initialize_capture: callback!((_: Gpu, graphics: *const Graphics) -> i32 {
-            check!(!graphics.is_null() && unsafe { (*graphics).device } == fake(5));
-            0
-        }),
-        create_pool: callback!((_: Gpu, out: *mut u64) -> i32 { unsafe { out.write(next()) }; 0 }),
-        destroy_pool: callback!((_: Gpu, _: u64) { calls(|state| state.pools_destroyed += 1); }),
-        images: &IMAGES,
-        allocate_commands: callback!((_: Gpu, _: u64, out: *mut Handle) -> i32 {
-            unsafe { out.write(fake(next())) };
-            0
-        }),
-        begin: callback!((_: Gpu, _: Handle) -> i32 { 0 }),
-        end: callback!((_: Gpu, _: Handle) -> i32 { 0 }),
-        barrier: callback!((_: Gpu, list: Handle, plan: *const Barrier) {
-            let plan = unsafe { &*plan };
-            check!(!list.is_null() && plan.image != 0);
-            check!(plan.source_stages == ALL && plan.target_stages == ALL);
-            if plan.new_layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL.as_raw() as u32 {
-                calls(|state| state.pending_initialized = u32::from(plan.old_layout == vk::ImageLayout::GENERAL.as_raw() as u32));
-            }
-        }),
-        copy: transfer,
-        blit: transfer,
-        clear: callback!((_: Gpu, list: Handle, image: u64) {
-            check!(!list.is_null() && image != 0);
-            calls(|state| state.cleared += 1);
-        }),
-        acquire_submit: callback!((_: Gpu, _: u64, _: u64) -> i32 { 0 }),
-        present_submit,
-        wait_timeline: callback!((_: Gpu, timeline: u64, value: u64, timeout: u64) -> i32 {
-            check!(timeline == TIMELINE && timeout != 0 && value <= calls(|state| state.last_done));
-            0
-        }),
-        create_fence: callback!((_: Gpu, out: *mut u64) -> i32 { unsafe { out.write(next()) }; 0 }),
-        mark_submit: callback!((_: Gpu, fence: u64) -> i32 {
-            calls(|state| {
-                state.markers.push(fence);
-                if state.fail_marker { INJECTED } else { 0 }
-            })
-        }),
-        wait_fence: callback!((_: Gpu, fence: u64, _: u64) -> i32 {
-            calls(|state| state.waits.push(fence));
-            0
-        }),
-        destroy_fence: callback!((_: Gpu, _: u64) {}),
-        idle: callback!((_: Gpu) -> i32 { calls(|state| state.idles += 1); 0 }),
-        capture_provider: callback!((_: Gpu, provider: u64, backend: u32) {
-            check!(provider == 700 && backend == 4);
-        }),
-        capture_record,
-        capture_complete: callback!((_: Gpu, group: u64) { calls(|state| state.marked_complete.push(group)); }),
-        capture_discard: callback!((_: Gpu, group: u64) { calls(|state| state.discarded.push(group)); }),
-        capture_flush: callback!((_: Gpu) -> i32 { 0 }),
-        describe,
-    },
 };
 
-unsafe extern "C" fn bridge_present(
+const GRAPHICS: GraphicsOps = GraphicsOps {
+    adapter_luid: callback!((_: *const Graphics, out: *mut u64) -> i32 {
+        unsafe { out.write(ADAPTER) };
+        0
+    }),
+    platform_allocate: callback!((setup: *const Setup) -> Gpu {
+        SWAPCHAIN.with(|info| check!(!setup.is_null()
+            && unsafe { (*setup).create_info } == ptr::from_ref(info).cast()));
+        fake(3)
+    }),
+    platform_destroy: callback!((_: Gpu) {}),
+    platform_resolve: callback!((_: Gpu, graphics: *const Graphics) -> i32 {
+        let graphics = unsafe { &*graphics };
+        check!(graphics.device == fake(5) && graphics.instance_proc.is_some() && graphics.device_proc.is_some());
+        0
+    }),
+    format_features: callback!((_: Gpu, format: u32) -> u32 {
+        let format = vk::Format::from_raw(format as i32);
+        check!(format == vk::Format::R8G8B8A8_UNORM || format == vk::Format::B8G8R8A8_UNORM);
+        (vk::FormatFeatureFlags::BLIT_SRC | vk::FormatFeatureFlags::BLIT_DST).as_raw()
+    }),
+    initialize_capture: callback!((_: Gpu, graphics: *const Graphics) -> i32 {
+        check!(!graphics.is_null() && unsafe { (*graphics).device } == fake(5));
+        0
+    }),
+    create_pool: callback!((_: Gpu, out: *mut u64) -> i32 { unsafe { out.write(next()) }; 0 }),
+    destroy_pool: callback!((_: Gpu, _: u64) { calls(|state| state.pools_destroyed += 1); }),
+    images: &IMAGES,
+    allocate_commands: callback!((_: Gpu, _: u64, out: *mut Handle) -> i32 {
+        unsafe { out.write(fake(next())) };
+        0
+    }),
+    begin: callback!((_: Gpu, _: Handle) -> i32 { 0 }),
+    end: callback!((_: Gpu, _: Handle) -> i32 { 0 }),
+    barrier: callback!((_: Gpu, list: Handle, plan: *const Barrier) {
+        let plan = unsafe { &*plan };
+        check!(!list.is_null() && plan.image != 0);
+        check!(plan.source_stages == ALL && plan.target_stages == ALL);
+        if plan.new_layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL.as_raw() as u32 {
+            calls(|state| state.pending_initialized = u32::from(plan.old_layout == vk::ImageLayout::GENERAL.as_raw() as u32));
+        }
+    }),
+    copy: transfer,
+    blit: transfer,
+    clear: callback!((_: Gpu, list: Handle, image: u64) {
+        check!(!list.is_null() && image != 0);
+        calls(|state| state.cleared += 1);
+    }),
+    acquire_submit: callback!((_: Gpu, _: u64, _: u64) -> i32 { 0 }),
+    present_submit,
+    wait_timeline: callback!((_: Gpu, timeline: u64, value: u64, timeout: u64) -> i32 {
+        check!(timeline == TIMELINE && timeout != 0 && value <= calls(|state| state.last_done));
+        0
+    }),
+    create_fence: callback!((_: Gpu, out: *mut u64) -> i32 { unsafe { out.write(next()) }; 0 }),
+    mark_submit: callback!((_: Gpu, fence: u64) -> i32 {
+        calls(|state| {
+            state.markers.push(fence);
+            if state.fail_marker { INJECTED } else { 0 }
+        })
+    }),
+    wait_fence: callback!((_: Gpu, fence: u64, _: u64) -> i32 {
+        calls(|state| state.waits.push(fence));
+        0
+    }),
+    destroy_fence: callback!((_: Gpu, _: u64) {}),
+    idle: callback!((_: Gpu) -> i32 { calls(|state| state.idles += 1); 0 }),
+    capture_provider: callback!((_: Gpu, provider: u64, backend: u32) {
+        check!(provider == 700 && backend == 4);
+    }),
+    capture_record,
+    capture_complete: callback!((_: Gpu, group: u64) { calls(|state| state.marked_complete.push(group)); }),
+    capture_discard: callback!((_: Gpu, group: u64) { calls(|state| state.discarded.push(group)); }),
+    capture_flush: callback!((_: Gpu) -> i32 { 0 }),
+    describe,
+};
+
+pub(crate) unsafe extern "C" fn bridge_present(
     _: Bridge,
     frame: *const BridgeFrame,
     status: *mut BridgeStatus,
@@ -437,9 +467,7 @@ fn create() -> (i32, Fsr4Owner, u64) {
     let mut chain = 0;
     let code = SWAPCHAIN.with(|info| {
         graphics.create_info = ptr::from_ref(info).cast();
-        // The owner retains the process-lifetime platform table.
-        const OPS: &Ops = &PLATFORM;
-        unsafe { fsr4_create(OPS, &graphics, &options, &mut owner, &mut chain) }
+        unsafe { fsr4_create(&graphics, &options, &mut owner, &mut chain) }
     });
     (code, owner, chain)
 }

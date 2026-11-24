@@ -393,13 +393,13 @@ pub(super) unsafe extern "C" fn rsf_dx12vk_interop_create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dx12vk_interop_timeline(owner: *const Owner) -> u64 {
-    unsafe { owner.as_ref() }.map_or(0, |owner| owner.timeline)
+pub(crate) unsafe extern "C" fn rsf_dx12vk_interop_timeline(owner: Handle) -> u64 {
+    unsafe { owner.cast::<Owner>().as_ref() }.map_or(0, |owner| owner.timeline)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dx12vk_interop_image(
-    owner: *mut Owner,
+pub(crate) unsafe extern "C" fn rsf_dx12vk_interop_image(
+    owner: Handle,
     format: u32,
     width: u32,
     height: u32,
@@ -417,7 +417,7 @@ unsafe extern "C" fn rsf_dx12vk_interop_image(
             height: 0,
         })
     };
-    let Some(owner) = (unsafe { owner.as_mut() }) else {
+    let Some(owner) = (unsafe { owner.cast::<Owner>().as_mut() }) else {
         return INVALID;
     };
     if width == 0 || height == 0 || !matches!(format, BGRA8_UNORM | R32_FLOAT | RG16_FLOAT) {
@@ -438,25 +438,28 @@ unsafe extern "C" fn rsf_dx12vk_interop_image(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dx12vk_interop_release_guides(
-    owner: *mut Owner,
+pub(crate) unsafe extern "C" fn rsf_dx12vk_interop_release_guides(
+    owner: Handle,
     depth: u64,
     motion: u64,
 ) -> i32 {
-    let Some(owner) = (unsafe { owner.as_mut() }) else {
+    let Some(owner) = (unsafe { owner.cast::<Owner>().as_mut() }) else {
         return INVALID;
     };
     owner.release_images([depth, motion]).err().unwrap_or(0)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dx12vk_interop_destroy(owner: *mut Owner, queues_drained: u32) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_dx12vk_interop_destroy(
+    owner: Handle,
+    queues_drained: u32,
+) -> i32 {
     if owner.is_null() {
         return 0;
     }
     if queues_drained != 1 {
         return INVALID;
     }
-    unsafe { drop(Box::from_raw(owner)) };
+    unsafe { drop(Box::from_raw(owner.cast::<Owner>())) };
     0
 }

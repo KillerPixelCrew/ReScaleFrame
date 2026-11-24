@@ -1,14 +1,8 @@
 // SPDX-License-Identifier: MIT
-use crate::dx12_vulkan_interop;
 use crate::fsr4_fg_bridge::{
-    BRIDGE_ABI, BridgeCreate, BridgeFrame, BridgeInfo, BridgeStatus, RsfFsr4FgCreateFence,
-    RsfFsr4FgCreateImage, RsfFsr4FgReleaseImage, UNSUPPORTED,
+    BRIDGE_ABI, BridgeCreate, BridgeFrame, BridgeInfo, BridgeStatus, UNSUPPORTED,
 };
 use crate::sr_session::has_capacity;
-use crate::sys::{
-    RSF_DX12VK_INTEROP_ABI_VERSION, rsf_dx12vk_interop_callbacks as ImportCallbacks,
-    rsf_dx12vk_shared_image as SharedImage,
-};
 use crate::sys::{
     RSF_FGVK_ABI_VERSION, rsf_fgvk_frame as Frame, rsf_fgvk_setup as Setup,
     rsf_fgvk_status as Status,
@@ -19,7 +13,6 @@ use crate::vulkan_fsr4_sr::directory;
 use rsf_game_sys::rsf_frame_record as Record;
 use std::ffi::{CStr, c_void};
 use std::ptr;
-use std::sync::LazyLock;
 
 /// rsf_fsr4gvk_options (native_fg_fsr4_vulkan.h).
 #[repr(C)]
@@ -31,91 +24,95 @@ pub(crate) struct Options {
     pub(crate) generated_count: u32,
 }
 
-/// The bridge, importer and graphics entries the owner calls. PRODUCTION binds them; the
-/// test-fixtures state fixture (vulkan_dx12_fg/fsr4_state_fixture.rs) passes CPU doubles.
-#[repr(C)]
-pub(crate) struct Ops {
-    pub(crate) probe: unsafe extern "C" fn(u64, *const u16, *mut BridgeInfo) -> i32,
-    pub(crate) bridge_create: unsafe extern "C" fn(*const BridgeCreate, *mut Handle) -> i32,
-    pub(crate) bridge_info: unsafe extern "C" fn(Handle, *mut BridgeInfo) -> i32,
-    pub(crate) bridge_start: unsafe extern "C" fn(Handle, Handle) -> i32,
-    pub(crate) bridge_present:
-        unsafe extern "C" fn(Handle, *const BridgeFrame, *mut BridgeStatus) -> i32,
-    pub(crate) bridge_drain: Release,
-    pub(crate) bridge_prepare_destroy: Release,
-    pub(crate) bridge_destroy: Release,
-    pub(crate) interop_create:
-        unsafe extern "C" fn(*const Graphics, Handle, u64, u32, *mut Handle) -> i32,
-    pub(crate) importer: InteropOps,
-    pub(crate) graphics: GraphicsOps,
-}
+// The bridge, importer and shared graphics leaves the owner calls: the crate's own functions in
+// production, the FSR4 FG state fixture's CPU doubles in the fixture-leaves archive.
+#[cfg(not(feature = "fixture-leaves"))]
+mod leaf {
+    use super::{
+        BridgeCreate, BridgeFrame, BridgeInfo, BridgeStatus, Graphics, Handle, InteropOps,
+    };
+    use crate::dx12_vulkan_interop;
+    use crate::fsr4_fg_bridge as bridge;
+    use crate::fsr4_fg_bridge::{
+        RsfFsr4FgCreateFence, RsfFsr4FgCreateImage, RsfFsr4FgReleaseImage,
+    };
+    use crate::sys::{
+        RSF_DX12VK_INTEROP_ABI_VERSION, rsf_dx12vk_interop_callbacks as ImportCallbacks,
+    };
+    use crate::vulkan_dx12_fg::{GraphicsOps, IMPORTER, platform};
+    pub(super) unsafe fn interop_create(
+        setup: *const Graphics,
+        bridge: Handle,
+        luid: u64,
+        enabled: u32,
+        output: *mut Handle,
+    ) -> i32 {
+        let callbacks = ImportCallbacks {
+            struct_size: size_of::<ImportCallbacks>() as u32,
+            abi_version: RSF_DX12VK_INTEROP_ABI_VERSION,
+            adapter_luid: luid,
+            user: bridge,
+            create_image: Some(RsfFsr4FgCreateImage),
+            release_image: Some(RsfFsr4FgReleaseImage),
+            create_fence: Some(RsfFsr4FgCreateFence),
+        };
+        unsafe {
+            dx12_vulkan_interop::rsf_dx12vk_interop_create(
+                setup,
+                &callbacks,
+                enabled,
+                output.cast(),
+            )
+        }
+    }
 
-const _: () = {
-    assert!(size_of::<Options>() == 24);
-    assert!(size_of::<Ops>() == 43 * size_of::<Handle>());
-    assert!(size_of::<BridgeCreate>() == 48 && size_of::<BridgeInfo>() == 32);
-    assert!(size_of::<BridgeFrame>() == 80 && size_of::<BridgeStatus>() == 32);
-};
-
-// The bridge, importer and shared graphics entries by address, as the
-// production table binds them. Each is defined in this crate.
-unsafe extern "C" {
-    fn RsfFsr4FgProbe(luid: u64, directory: *const u16, info: *mut BridgeInfo) -> i32;
-    fn RsfFsr4FgCreate(setup: *const BridgeCreate, output: *mut Handle) -> i32;
-    fn RsfFsr4FgInfo(bridge: Handle, info: *mut BridgeInfo) -> i32;
-    fn RsfFsr4FgStart(bridge: Handle, window: Handle) -> i32;
-    fn RsfFsr4FgPresent(
+    pub(super) unsafe fn probe(luid: u64, directory: *const u16, info: *mut BridgeInfo) -> i32 {
+        unsafe { bridge::RsfFsr4FgProbe(luid, directory, info) }
+    }
+    pub(super) unsafe fn bridge_create(setup: *const BridgeCreate, out: *mut Handle) -> i32 {
+        unsafe { bridge::RsfFsr4FgCreate(setup, out.cast()) }
+    }
+    pub(super) unsafe fn bridge_info(bridge: Handle, info: *mut BridgeInfo) -> i32 {
+        unsafe { bridge::RsfFsr4FgInfo(bridge.cast(), info) }
+    }
+    pub(super) unsafe fn bridge_start(bridge: Handle, window: Handle) -> i32 {
+        unsafe { bridge::RsfFsr4FgStart(bridge.cast(), window) }
+    }
+    pub(super) unsafe fn bridge_present(
         bridge: Handle,
         frame: *const BridgeFrame,
         status: *mut BridgeStatus,
-    ) -> i32;
-    fn RsfFsr4FgDrain(bridge: Handle) -> i32;
-    fn RsfFsr4FgPrepareDestroy(bridge: Handle) -> i32;
-    fn RsfFsr4FgDestroy(bridge: Handle) -> i32;
-    fn rsf_dx12vk_interop_image(
-        owner: Handle,
-        format: u32,
-        width: u32,
-        height: u32,
-        output: *mut SharedImage,
-    ) -> i32;
-    fn rsf_dx12vk_interop_timeline(owner: Handle) -> u64;
-    fn rsf_dx12vk_interop_destroy(owner: Handle, queues_drained: u32) -> i32;
-    fn rsf_dx12vk_interop_release_guides(owner: Handle, depth: u64, motion: u64) -> i32;
+    ) -> i32 {
+        unsafe { bridge::RsfFsr4FgPresent(bridge.cast(), frame, status) }
+    }
+    pub(super) unsafe fn bridge_drain(bridge: Handle) -> i32 {
+        unsafe { bridge::RsfFsr4FgDrain(bridge.cast()) }
+    }
+    pub(super) unsafe fn bridge_prepare_destroy(bridge: Handle) -> i32 {
+        unsafe { bridge::RsfFsr4FgPrepareDestroy(bridge.cast()) }
+    }
+    pub(super) unsafe fn bridge_destroy(bridge: Handle) -> i32 {
+        unsafe { bridge::RsfFsr4FgDestroy(bridge.cast()) }
+    }
+    pub(super) fn importer() -> &'static InteropOps {
+        &IMPORTER
+    }
+    pub(super) fn graphics() -> &'static GraphicsOps {
+        platform::graphics()
+    }
 }
+#[cfg(feature = "fixture-leaves")]
+use crate::vulkan_dx12_fg::fsr4_state_fixture as leaf;
 
-struct ProductionOps(Ops);
-
-// Immutable after initialization: function addresses and the static image table.
-unsafe impl Send for ProductionOps {}
-unsafe impl Sync for ProductionOps {}
-
-static PRODUCTION: LazyLock<ProductionOps> = LazyLock::new(|| {
-    ProductionOps(Ops {
-        probe: RsfFsr4FgProbe,
-        bridge_create: RsfFsr4FgCreate,
-        bridge_info: RsfFsr4FgInfo,
-        bridge_start: RsfFsr4FgStart,
-        bridge_present: RsfFsr4FgPresent,
-        bridge_drain: RsfFsr4FgDrain,
-        bridge_prepare_destroy: RsfFsr4FgPrepareDestroy,
-        bridge_destroy: RsfFsr4FgDestroy,
-        interop_create,
-        importer: InteropOps {
-            image: rsf_dx12vk_interop_image,
-            timeline: rsf_dx12vk_interop_timeline,
-            destroy: rsf_dx12vk_interop_destroy,
-            release_guides: rsf_dx12vk_interop_release_guides,
-        },
-        // A bitwise copy of the immutable shared table, as the native binding embedded it.
-        graphics: unsafe { ptr::read(platform::graphics()) },
-    })
-});
-
+const _: () = {
+    assert!(size_of::<Options>() == 24);
+    assert!(size_of::<BridgeCreate>() == 48 && size_of::<BridgeInfo>() == 32);
+    assert!(size_of::<BridgeFrame>() == 80 && size_of::<BridgeStatus>() == 32);
+};
 /// Queries the matching DX12 device's exact major-4 provider without HWND or WSI calls.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fsr4gvk_probe(setup: *const Graphics, info: *mut BridgeInfo) -> i32 {
-    unsafe { probe(&PRODUCTION.0, setup, info) }
+    unsafe { probe(setup, info) }
 }
 
 /// Rust admits the setup before it asks the shared graphics table to describe create_info.
@@ -126,39 +123,17 @@ pub(crate) unsafe extern "C" fn rsf_fsr4gvk_create(
     output: *mut *mut Owner,
     chain: *mut u64,
 ) -> i32 {
-    unsafe { create(&PRODUCTION.0, setup, options, output, chain) }
-}
-
-unsafe extern "C" fn interop_create(
-    setup: *const Graphics,
-    bridge: Handle,
-    luid: u64,
-    enabled: u32,
-    output: *mut Handle,
-) -> i32 {
-    let callbacks = ImportCallbacks {
-        struct_size: size_of::<ImportCallbacks>() as u32,
-        abi_version: RSF_DX12VK_INTEROP_ABI_VERSION,
-        adapter_luid: luid,
-        user: bridge,
-        create_image: Some(RsfFsr4FgCreateImage),
-        release_image: Some(RsfFsr4FgReleaseImage),
-        create_fence: Some(RsfFsr4FgCreateFence),
-    };
-    unsafe {
-        dx12_vulkan_interop::rsf_dx12vk_interop_create(setup, &callbacks, enabled, output.cast())
-    }
+    unsafe { create(setup, options, output, chain) }
 }
 
 type Owner = shared::Owner<Fsr4>;
 
 pub(crate) struct Fsr4 {
-    ops: &'static Ops,
     directory: *const u16,
     bridge: Handle,
 }
 
-unsafe fn probe(ops: &'static Ops, setup: *const Graphics, info: *mut BridgeInfo) -> i32 {
+unsafe fn probe(setup: *const Graphics, info: *mut BridgeInfo) -> i32 {
     if !unsafe { has_capacity(setup) } || info.is_null() {
         return INVALID;
     }
@@ -179,15 +154,14 @@ unsafe fn probe(ops: &'static Ops, setup: *const Graphics, info: *mut BridgeInfo
         Err(error) => return directory_error(error),
     };
     let mut luid = 0;
-    let result = unsafe { (ops.graphics.adapter_luid)(setup, &mut luid) };
+    let result = unsafe { (leaf::graphics().adapter_luid)(setup, &mut luid) };
     if result != 0 {
         return result;
     }
-    unsafe { (ops.probe)(luid, directory.as_ptr(), info) }
+    unsafe { leaf::probe(luid, directory.as_ptr(), info) }
 }
 
 pub(crate) unsafe fn create(
-    ops: &'static Ops,
     setup: *const Setup,
     options: *const Options,
     output: *mut *mut Owner,
@@ -208,7 +182,7 @@ pub(crate) unsafe fn create(
         return ABI_MISMATCH;
     }
     let graphics = &setup.graphics;
-    let Some(swapchain) = shared::describe(&ops.graphics, setup) else {
+    let Some(swapchain) = shared::describe(leaf::graphics(), setup) else {
         return INVALID;
     };
     let options = Start {
@@ -231,14 +205,13 @@ pub(crate) unsafe fn create(
             Err(error) => return directory_error(error),
         };
     let vendor = Fsr4 {
-        ops,
         directory: directory.as_ptr(),
         bridge: ptr::null_mut(),
     };
     unsafe {
         shared::create(
             vendor,
-            &ops.graphics,
+            leaf::graphics(),
             setup,
             swapchain,
             options,
@@ -279,7 +252,7 @@ impl Vendor for Fsr4 {
             motion_jittered: graphics.motion_jittered,
             generated_count: count,
         };
-        succeeded(unsafe { (self.ops.bridge_create)(&create, &mut self.bridge) })?;
+        succeeded(unsafe { leaf::bridge_create(&create, &mut self.bridge) })?;
         let mut info = BridgeInfo {
             struct_size: size_of::<BridgeInfo>() as u32,
             abi_version: BRIDGE_ABI,
@@ -288,7 +261,7 @@ impl Vendor for Fsr4 {
             vendor_id: 0,
             max_generated: 0,
         };
-        succeeded(unsafe { (self.ops.bridge_info)(self.bridge, &mut info) })?;
+        succeeded(unsafe { leaf::bridge_info(self.bridge, &mut info) })?;
         if info.adapter_luid != luid {
             return Err(INVALID_EXTERNAL_HANDLE);
         }
@@ -299,7 +272,7 @@ impl Vendor for Fsr4 {
     }
 
     fn start(&self, _: &Graphics, _: &Swapchain, options: Start) -> Result<(), i32> {
-        succeeded(unsafe { (self.ops.bridge_start)(self.bridge, options.window) })
+        succeeded(unsafe { leaf::bridge_start(self.bridge, options.window) })
     }
 
     fn capture_backend(&self) -> u32 {
@@ -321,21 +294,21 @@ impl Vendor for Fsr4 {
         if self.bridge.is_null() {
             return Ok(());
         }
-        succeeded(unsafe { (self.ops.bridge_drain)(self.bridge) })
+        succeeded(unsafe { leaf::bridge_drain(self.bridge) })
     }
 
     fn prepare_destroy(&mut self) -> Result<(), i32> {
         if self.bridge.is_null() {
             return Ok(());
         }
-        succeeded(unsafe { (self.ops.bridge_prepare_destroy)(self.bridge) })
+        succeeded(unsafe { leaf::bridge_prepare_destroy(self.bridge) })
     }
 
     fn destroy(&mut self) -> Result<(), i32> {
         if self.bridge.is_null() {
             return Ok(());
         }
-        succeeded(unsafe { (self.ops.bridge_destroy)(self.bridge) })?;
+        succeeded(unsafe { leaf::bridge_destroy(self.bridge) })?;
         self.bridge = ptr::null_mut();
         Ok(())
     }
@@ -343,13 +316,13 @@ impl Vendor for Fsr4 {
     fn import(&self, graphics: &Graphics, luid: u64, enabled: u32) -> Result<Handle, i32> {
         let mut importer = ptr::null_mut();
         succeeded(unsafe {
-            (self.ops.interop_create)(graphics, self.bridge, luid, enabled, &mut importer)
+            leaf::interop_create(graphics, self.bridge, luid, enabled, &mut importer)
         })?;
         Ok(importer)
     }
 
     fn importer_ops(&self) -> &InteropOps {
-        &self.ops.importer
+        leaf::importer()
     }
 }
 
@@ -388,8 +361,7 @@ impl Submission for Fsr4Submission<'_> {
             terminal: 0,
             generated_callbacks: 0,
         };
-        let result =
-            unsafe { (self.vendor.ops.bridge_present)(self.vendor.bridge, &input, &mut status) };
+        let result = unsafe { leaf::bridge_present(self.vendor.bridge, &input, &mut status) };
         (
             result,
             PresentStatus {

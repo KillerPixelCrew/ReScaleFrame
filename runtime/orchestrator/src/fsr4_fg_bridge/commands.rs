@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+// The fixture-leaves archive calls the state fixture's doubles, so these leaves are unused there.
+#![cfg_attr(feature = "fixture-leaves", allow(dead_code))]
 use super::native::graphics;
 use super::{Handle, QueueDesc, SwapchainDesc, Texture, dx12};
 use crate::d3d12_fence::wait_fence;
