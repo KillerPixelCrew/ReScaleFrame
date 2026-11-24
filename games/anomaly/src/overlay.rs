@@ -748,13 +748,11 @@ impl Service {
         if leaves::fg_foreign_chain(chain) {
             return;
         }
-        let mut info = rsf_anomaly_overlay_chain::default();
-        if unsafe { leaves::chain(chain, &mut info) } == 0
-            || info.window.is_null()
-            || !leaves::engine_window(info.window)
-        {
+        let Some(info) = (unsafe { leaves::chain(chain) })
+            .filter(|info| !info.window.is_null() && leaves::engine_window(info.window))
+        else {
             return;
-        }
+        };
         if panel.reset_pending {
             if unsafe { (self.api.notify)(chain, RSF_OVERLAY_NOTIFY_DEVICE_RESET) } != OK {
                 return;

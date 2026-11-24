@@ -17,9 +17,8 @@ pub(crate) struct rsf_anomaly_overlay_option {
 }
 
 // The borrowed D3D11 device address is used only as an identity.
-#[derive(Copy, Clone, Default)]
-#[repr(C)]
-pub(crate) struct rsf_anomaly_overlay_chain {
+#[derive(Copy, Clone)]
+pub(crate) struct ChainInfo {
     pub(crate) window: *mut c_void,
     pub(crate) device: *const c_void,
     pub(crate) width: u32,

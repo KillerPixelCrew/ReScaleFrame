@@ -176,19 +176,13 @@ pub(super) mod leaves {
     pub(in crate::overlay) fn fg_foreign_chain(_: *mut c_void) -> bool {
         false
     }
-    pub(in crate::overlay) unsafe extern "C" fn chain(
-        _: *mut c_void,
-        out: *mut rsf_anomaly_overlay_chain,
-    ) -> u32 {
-        unsafe {
-            out.write(rsf_anomaly_overlay_chain {
-                window: ptr::without_provenance_mut(0x20),
-                device: ptr::without_provenance(DEVICE.load(Ordering::SeqCst)),
-                width: 1920,
-                height: 1080,
-            })
-        };
-        1
+    pub(in crate::overlay) unsafe fn chain(_: *mut c_void) -> Option<ChainInfo> {
+        Some(ChainInfo {
+            window: ptr::without_provenance_mut(0x20),
+            device: ptr::without_provenance(DEVICE.load(Ordering::SeqCst)),
+            width: 1920,
+            height: 1080,
+        })
     }
     pub(in crate::overlay) unsafe extern "C" fn capture_backbuffer(
         _: *mut c_void,

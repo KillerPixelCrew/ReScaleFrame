@@ -16,7 +16,9 @@ use crate::input::{KEYBOARD, MOUSE};
 use crate::lease::Lease;
 use crate::native_hooks::{HookOps, Target, enable_batch, transaction};
 use crate::overlay::rsf_anomaly_overlay_capture_bits;
-use crate::overlay_native::{self as native, ChainObjects, Object};
+use crate::overlay_native::{self as native, Object};
+use windows::Win32::Graphics::Dxgi::IDXGISwapChain1;
+use windows::core::Interface;
 use crate::runtime_module::Module;
 use std::mem::transmute;
 
@@ -50,10 +52,6 @@ const SLOT_UNACQUIRE: usize = 8;
 const SLOT_GET_STATE: usize = 9;
 const SLOT_GET_DATA: usize = 10;
 const SLOT_COOPERATIVE: usize = 13;
-const SLOT_PRESENT: usize = 8;
-const SLOT_RESIZE_BUFFERS: usize = 13;
-const SLOT_RESIZE_TARGET: usize = 14;
-const SLOT_PRESENT1: usize = 22;
 
 const IID_DIRECT_INPUT8_A: GUID = GUID::from_u128(0xbf798030_483a_4da2_aa99_5d64ed369700);
 const IID_DIRECT_INPUT8_W: GUID = GUID::from_u128(0xbf798031_483a_4da2_aa99_5d64ed369700);
@@ -163,45 +161,31 @@ fn probe_present(registration: &mut Registration<'_>) -> Result<Module, Refusal>
         )
     };
     let window = Lease::new(window, destroy_dummy_window).ok_or(c"dummy window creation failed")?;
-    let mut objects = ChainObjects::default();
-    let result =
-        unsafe { native::create_warp_chain(create, window.as_ptr(), EXTENT as u32, &mut objects) };
-    // Release all returned objects in reverse order before destroying the window, even on failure.
-    let _device = Lease::new(objects.device, native::release);
-    let _context = Lease::new(objects.context, native::release);
-    let chain = Lease::new(objects.chain, native::release);
-    const CHAIN_FAILED: Refusal = c"dummy swap chain creation failed";
-    if result < 0 {
-        return Err(CHAIN_FAILED);
-    }
-    let chain = chain.ok_or(CHAIN_FAILED)?;
-
-    let chain1 = unsafe { native::query_chain1(chain.as_ptr()) };
-    let present1 = Lease::new(chain1, native::release).map_or(0, |chain1| unsafe {
-        native::slot(chain1.as_ptr(), SLOT_PRESENT1)
-    });
-    for (slot, detour, method) in [
+    // The chain is released before the window is destroyed, also on a refusal below.
+    let chain = unsafe { native::create_warp_chain(create, window.as_ptr(), EXTENT as u32) }
+        .ok_or(c"dummy swap chain creation failed")?;
+    let present1 = chain
+        .cast::<IDXGISwapChain1>()
+        .map_or(0, |chain1| chain1.vtable().Present1 as Address);
+    let vtable = chain.vtable();
+    for (target, detour, method) in [
         (
-            SLOT_PRESENT,
+            vtable.Present as Address,
             hook_present as *const () as Address,
             Method::Present,
         ),
         (
-            SLOT_RESIZE_BUFFERS,
+            vtable.ResizeBuffers as Address,
             hook_resize_buffers as *const () as Address,
             Method::ResizeBuffers,
         ),
         (
-            SLOT_RESIZE_TARGET,
+            vtable.ResizeTarget as Address,
             hook_resize_target as *const () as Address,
             Method::ResizeTarget,
         ),
     ] {
-        registration.add(
-            unsafe { native::slot(chain.as_ptr(), slot) },
-            detour,
-            method,
-        )?;
+        registration.add(target, detour, method)?;
     }
     if present1 != 0 {
         registration.add(
