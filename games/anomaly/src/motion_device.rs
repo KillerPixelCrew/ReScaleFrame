@@ -4,7 +4,7 @@ use crate::motion::{CORE_BYTES, FOLIAGE_BYTES, PIXEL_BYTES, TESS_BYTES};
 use crate::sys::{
     RSF_MOTION_CORE, RSF_MOTION_CREATED, RSF_MOTION_FAILED, RSF_MOTION_FOLIAGE,
     RSF_MOTION_MULTISAMPLED, RSF_MOTION_PIXEL, RSF_MOTION_READY, RSF_MOTION_TESS,
-    rsf_anomaly_motion_device_platform as NativePlatform, rsf_anomaly_motion_device_view as View,
+    rsf_anomaly_motion_device_view as View,
     rsf_anomaly_motion_log as Log,
 };
 #[cfg(windows)]
@@ -18,9 +18,7 @@ use std::slice;
 mod d3d11;
 mod replay;
 #[cfg(windows)]
-pub(crate) use d3d11::{
-    clear_target, rsf_anomaly_motion_device_platform_get, rsf_anomaly_motion_replay_platform_get,
-};
+pub(crate) use d3d11::{clear_target, release, retain};
 #[cfg(windows)]
 pub(crate) use replay::{
     REPLAY_NO_DEPTH_WRITE, REPLAY_READY, ReplayScope, rsf_anomaly_motion_replay_begin,
@@ -42,42 +40,11 @@ struct Target {
 
 type Raw = *mut c_void;
 
-#[repr(C)]
-pub(crate) struct Platform {
-    pub(crate) retain: unsafe extern "C" fn(Raw),
-    pub(crate) release: unsafe extern "C" fn(Raw),
-    buffer: unsafe extern "C" fn(Raw, u32) -> Raw,
-    zero_shader: unsafe extern "C" fn(Raw, Log, Raw) -> Raw,
-    depth_state: unsafe extern "C" fn(Raw, u32) -> Raw,
-    texture: unsafe extern "C" fn(Raw, u32, u32) -> Raw,
-    view: unsafe extern "C" fn(Raw, Raw) -> Raw,
-    upload: unsafe extern "C" fn(Raw, Raw, *const c_void, usize) -> u32,
-    bind: unsafe extern "C" fn(Raw, Raw, c_char) -> u32,
-}
-
-const _: () = {
-    assert!(size_of::<Platform>() == size_of::<NativePlatform>());
-    assert!(align_of::<Platform>() == align_of::<NativePlatform>());
-    assert!(std::mem::offset_of!(Platform, retain) == std::mem::offset_of!(NativePlatform, retain));
-    assert!(
-        std::mem::offset_of!(Platform, release) == std::mem::offset_of!(NativePlatform, release)
-    );
-    assert!(std::mem::offset_of!(Platform, buffer) == std::mem::offset_of!(NativePlatform, buffer));
-    assert!(
-        std::mem::offset_of!(Platform, zero_shader)
-            == std::mem::offset_of!(NativePlatform, zero_shader)
-    );
-    assert!(
-        std::mem::offset_of!(Platform, depth_state)
-            == std::mem::offset_of!(NativePlatform, depth_state)
-    );
-    assert!(
-        std::mem::offset_of!(Platform, texture) == std::mem::offset_of!(NativePlatform, texture)
-    );
-    assert!(std::mem::offset_of!(Platform, view) == std::mem::offset_of!(NativePlatform, view));
-    assert!(std::mem::offset_of!(Platform, upload) == std::mem::offset_of!(NativePlatform, upload));
-    assert!(std::mem::offset_of!(Platform, bind) == std::mem::offset_of!(NativePlatform, bind));
-};
+// The D3D11 resource leaves: d3d11.rs, the counting fakes under test.
+#[cfg(all(windows, not(test)))]
+use d3d11::device as leaves;
+#[cfg(test)]
+use tests as leaves;
 
 #[derive(Clone, Copy)]
 pub(crate) struct ConstantOps {
@@ -109,15 +76,14 @@ struct Device {
 
 impl Device {
     fn new(
-        platform: &Platform,
         pointer: Raw,
         runtime: Option<ConstantOps>,
         log: Log,
         user: Raw,
     ) -> Option<Self> {
-        let release = platform.release;
+        let release = leaves::release;
         let device = Lease::new(pointer, release)?;
-        unsafe { (platform.retain)(pointer) };
+        unsafe { leaves::retain(pointer) };
         let buffer = |size: usize, stage: u8| {
             let resource = if let Some(runtime) = runtime {
                 let mut handle = std::ptr::null_mut();
@@ -128,7 +94,7 @@ impl Device {
                 }
                 lease?
             } else {
-                let handle = unsafe { (platform.buffer)(pointer, size as u32) };
+                let handle = unsafe { leaves::buffer(pointer, size as u32) };
                 Lease::new(handle, release)?
             };
             Some(Buffer {
@@ -144,10 +110,10 @@ impl Device {
             buffer(PIXEL_BYTES, b'p')?,
             buffer(TESS_BYTES, b'd')?,
         ];
-        let shader = unsafe { (platform.zero_shader)(pointer, log, user) };
+        let shader = unsafe { leaves::zero_shader(pointer, log, user) };
         let zero_shader = Lease::new(shader, release)?;
         let depth = |equal| {
-            let handle = unsafe { (platform.depth_state)(pointer, equal) };
+            let handle = unsafe { leaves::depth_state(pointer, equal) };
             Lease::new(handle, release)
         };
         Some(Self {
@@ -161,16 +127,16 @@ impl Device {
         })
     }
 
-    fn ensure_target(&mut self, platform: &Platform, extent: [u32; 2]) -> Option<i32> {
+    fn ensure_target(&mut self, extent: [u32; 2]) -> Option<i32> {
         if self.target.as_ref().is_some_and(|t| t.extent == extent) {
             return Some(RSF_MOTION_READY);
         }
         self.target = None;
         let device = self.device.as_ptr();
-        let release = platform.release;
-        let texture = unsafe { (platform.texture)(device, extent[0], extent[1]) };
+        let release = leaves::release;
+        let texture = unsafe { leaves::texture(device, extent[0], extent[1]) };
         let texture = Lease::new(texture, release)?;
-        let view = unsafe { (platform.view)(device, texture.as_ptr()) };
+        let view = unsafe { leaves::view(device, texture.as_ptr()) };
         self.target = Some(Target {
             view: Lease::new(view, release)?,
             texture,
@@ -181,16 +147,14 @@ impl Device {
 }
 
 pub(crate) struct Owner {
-    platform: &'static Platform,
     device: Option<Device>,
     uploads: u64,
     upload_skips: u64,
 }
 
 impl Owner {
-    pub(crate) fn new(platform: &'static Platform) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            platform,
             device: None,
             uploads: 0,
             upload_skips: 0,
@@ -205,14 +169,14 @@ impl Owner {
         user: Raw,
     ) -> bool {
         self.device = None;
-        self.device = Device::new(self.platform, device, runtime, log, user);
+        self.device = Device::new(device, runtime, log, user);
         self.device.is_some()
     }
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_device_new(platform: &'static Platform) -> *mut Owner {
-    Box::into_raw(Box::new(Owner::new(platform)))
+extern "C" fn rsf_anomaly_motion_device_new() -> *mut Owner {
+    Box::into_raw(Box::new(Owner::new()))
 }
 
 #[unsafe(no_mangle)]
@@ -243,7 +207,7 @@ pub(crate) extern "C" fn rsf_anomaly_motion_device_target(
         return RSF_MOTION_MULTISAMPLED;
     }
     device
-        .ensure_target(owner.platform, [width, height])
+        .ensure_target([width, height])
         .unwrap_or(RSF_MOTION_FAILED)
 }
 
@@ -306,7 +270,7 @@ pub(crate) extern "C" fn rsf_anomaly_motion_device_upload(
             };
             unsafe { (runtime.upload)(context, resource, input) == RSF_PATCH_OK }
         } else {
-            unsafe { (owner.platform.upload)(context, resource, data.cast(), size) != 0 }
+            unsafe { leaves::upload(context, resource, data.cast(), size) != 0 }
         };
         if !buffer.uploaded {
             return 0;
@@ -319,7 +283,7 @@ pub(crate) extern "C" fn rsf_anomaly_motion_device_upload(
             unsafe { (runtime.bind)(context, buffer.stage as u32, 13, resource) } == RSF_PATCH_OK,
         )
     } else {
-        unsafe { (owner.platform.bind)(context, resource, buffer.stage) }
+        unsafe { leaves::bind(context, resource, buffer.stage) }
     }
 }
 

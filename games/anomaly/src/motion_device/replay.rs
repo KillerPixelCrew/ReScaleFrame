@@ -1,4 +1,9 @@
 // SPDX-License-Identifier: MIT
+#[cfg(windows)]
+use super::d3d11::{
+    blend as set_blend, depth as set_depth, read_depth, read_pixel, release, shader as set_shader,
+    targets as set_targets,
+};
 use super::{Raw, View};
 use std::mem::{MaybeUninit, align_of};
 use std::ptr::{drop_in_place, null, null_mut};
@@ -47,28 +52,15 @@ impl Default for Pixel {
     }
 }
 
-#[repr(C)]
-pub(crate) struct Platform {
-    pub(super) release: unsafe extern "C" fn(Raw),
-    pub(super) read_depth: unsafe extern "C" fn(Raw, &mut Depth),
-    pub(super) read_pixel: unsafe extern "C" fn(Raw, &mut Pixel),
-    pub(super) targets: unsafe extern "C" fn(Raw, u32, *const Raw, Raw),
-    pub(super) depth: unsafe extern "C" fn(Raw, Raw, u32),
-    pub(super) blend: unsafe extern "C" fn(Raw, Raw, *const f32, u32),
-    pub(super) shader: unsafe extern "C" fn(Raw, Raw, *const Raw, u32),
-}
-
 const _: () = {
     assert!(size_of::<Depth>() == 88);
     assert!(size_of::<Pixel>() == 2072);
     assert!(std::mem::offset_of!(Pixel, classes) == 40);
-    assert!(size_of::<Platform>() == 56);
 };
 
 // Get calls return owned references. The scope drops them even when a
 // read-only depth draw or a missing replay resource prevents rebinding.
 struct Saved {
-    platform: &'static Platform,
     context: Raw,
     depth: Depth,
     pixel: Pixel,
@@ -77,24 +69,23 @@ struct Saved {
 
 impl Drop for Saved {
     fn drop(&mut self) {
-        let p = self.platform;
         let ctx = self.context;
         if self.modified {
             unsafe {
-                (p.targets)(
+                set_targets(
                     ctx,
                     RENDER_TARGETS as u32,
                     self.depth.targets.as_ptr(),
                     self.depth.view,
                 );
-                (p.depth)(ctx, self.depth.state, self.depth.reference);
-                (p.blend)(
+                set_depth(ctx, self.depth.state, self.depth.reference);
+                set_blend(
                     ctx,
                     self.pixel.blend,
                     self.pixel.factor.as_ptr(),
                     self.pixel.mask,
                 );
-                (p.shader)(
+                set_shader(
                     ctx,
                     self.pixel.shader,
                     self.pixel.classes.as_ptr(),
@@ -116,7 +107,7 @@ impl Drop for Saved {
             ])
             .filter(|object| !object.is_null())
         {
-            unsafe { (p.release)(object) };
+            unsafe { release(object) };
         }
     }
 }
@@ -132,7 +123,6 @@ const _: () = {
 /// A successful begin moves the saved state into the native frame.
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_anomaly_motion_replay_begin(
-    platform: &'static Platform,
     view: &View,
     context: Raw,
     scope: *mut ReplayScope,
@@ -141,13 +131,12 @@ pub(crate) unsafe extern "C" fn rsf_anomaly_motion_replay_begin(
         return FAILED;
     }
     let mut saved = Saved {
-        platform,
         context,
         depth: Depth::default(),
         pixel: Pixel::default(),
         modified: false,
     };
-    unsafe { (platform.read_depth)(context, &mut saved.depth) };
+    unsafe { read_depth(context, &mut saved.depth) };
     let depth_state = if !saved.depth.view.is_null() && saved.depth.enabled {
         if !saved.depth.writable {
             return REPLAY_NO_DEPTH_WRITE;
@@ -159,22 +148,22 @@ pub(crate) unsafe extern "C" fn rsf_anomaly_motion_replay_begin(
     if depth_state.is_null() {
         return FAILED;
     }
-    unsafe { (platform.read_pixel)(context, &mut saved.pixel) };
+    unsafe { read_pixel(context, &mut saved.pixel) };
     if saved.pixel.count as usize > CLASS_INTERFACES {
         return FAILED;
     }
     let targets = [null_mut(), null_mut(), view.rtv];
     saved.modified = true;
     unsafe {
-        (platform.targets)(
+        set_targets(
             context,
             targets.len() as u32,
             targets.as_ptr(),
             saved.depth.view,
         );
-        (platform.depth)(context, depth_state, 0);
-        (platform.blend)(context, null_mut(), null(), u32::MAX);
-        (platform.shader)(context, view.zero_shader, null(), 0);
+        set_depth(context, depth_state, 0);
+        set_blend(context, null_mut(), null(), u32::MAX);
+        set_shader(context, view.zero_shader, null(), 0);
         scope.cast::<Saved>().write(saved);
     }
     REPLAY_READY

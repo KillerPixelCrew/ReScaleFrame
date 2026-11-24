@@ -476,7 +476,7 @@ impl Stage {
             let runtime = lock(&self.loader).pack.as_ref().map(Pack::constant_ops);
             let owner = render
                 .device
-                .get_or_insert_with(|| Owner::new(rsf_anomaly_motion_device_platform_get()));
+                .get_or_insert_with(Owner::new);
             let log = self.log();
             if !owner.create(facts.device, runtime, log.callback, log.user as Raw) {
                 log.text(c"Anomaly motion: device resources could not be created.");
@@ -622,15 +622,9 @@ impl Stage {
                 let view = render.device_view();
                 let leases =
                     [view.rtv, view.zero_shader, view.no_depth, view.equal_depth].map(|raw| {
-                        Lease::new(raw, rsf_anomaly_motion_device_platform_get().release).inspect(
-                            |lease| {
-                                unsafe {
-                                    (rsf_anomaly_motion_device_platform_get().retain)(
-                                        lease.as_ptr(),
-                                    )
-                                };
-                            },
-                        )
+                        Lease::new(raw, crate::motion_device::release).inspect(|lease| {
+                            unsafe { crate::motion_device::retain(lease.as_ptr()) };
+                        })
                     });
                 ActiveDraw::Replay {
                     view,
@@ -784,7 +778,6 @@ unsafe extern "C" fn rsf_anomaly_motion_stage_replay_begin(
     }
     let result = unsafe {
         rsf_anomaly_motion_replay_begin(
-            rsf_anomaly_motion_replay_platform_get(),
             view,
             flight.context,
             replay,

@@ -8,7 +8,7 @@ use super::draw::{
     rsf_anomaly_motion_fixture_patch_core,
 };
 use crate::motion_device::{
-    Owner, rsf_anomaly_motion_device_get, rsf_anomaly_motion_device_platform_get,
+    Owner, rsf_anomaly_motion_device_get,
     rsf_anomaly_motion_device_target, rsf_anomaly_motion_device_upload,
 };
 use crate::shader_loader::deployed::{
@@ -517,7 +517,7 @@ pub(super) struct Motion(Box<Owner>);
 
 impl Motion {
     pub(super) fn new(gpu: &Gpu, targets: &FixtureTargets) -> Outcome<Self> {
-        let mut owner = Box::new(Owner::new(rsf_anomaly_motion_device_platform_get()));
+        let mut owner = Box::new(Owner::new());
         ensure!(
             owner.create(gpu.device.as_raw(), None, None, null_mut()),
             "Rust motion owner create"

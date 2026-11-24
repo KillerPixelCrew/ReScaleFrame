@@ -12,30 +12,30 @@ struct Calls {
     bound_stage: Cell<c_char>,
 }
 
-unsafe extern "C" fn retain(handle: *mut c_void) {
+pub(super) unsafe extern "C" fn retain(handle: *mut c_void) {
     let calls = unsafe { &*handle.cast::<Calls>() };
     calls.leases.set(calls.leases.get() + 1);
 }
 
-unsafe extern "C" fn release(handle: *mut c_void) {
+pub(super) unsafe extern "C" fn release(handle: *mut c_void) {
     let calls = unsafe { &*handle.cast::<Calls>() };
     calls.leases.set(calls.leases.get() - 1);
 }
 
-unsafe extern "C" fn resource(device: *mut c_void, _: u32) -> *mut c_void {
+pub(super) unsafe extern "C" fn resource(device: *mut c_void, _: u32) -> *mut c_void {
     unsafe { retain(device) };
     device
 }
 
-unsafe extern "C" fn shader(device: *mut c_void, _: Log, _: *mut c_void) -> *mut c_void {
+pub(super) unsafe extern "C" fn shader(device: *mut c_void, _: Log, _: *mut c_void) -> *mut c_void {
     unsafe { resource(device, 0) }
 }
 
-unsafe extern "C" fn texture(device: *mut c_void, _: u32, _: u32) -> *mut c_void {
+pub(super) unsafe extern "C" fn texture(device: *mut c_void, _: u32, _: u32) -> *mut c_void {
     unsafe { resource(device, 0) }
 }
 
-unsafe extern "C" fn view(device: *mut c_void, _: *mut c_void) -> *mut c_void {
+pub(super) unsafe extern "C" fn view(device: *mut c_void, _: *mut c_void) -> *mut c_void {
     let calls = unsafe { &*device.cast::<Calls>() };
     if calls.reject_view.get() {
         ptr::null_mut()
@@ -44,7 +44,7 @@ unsafe extern "C" fn view(device: *mut c_void, _: *mut c_void) -> *mut c_void {
     }
 }
 
-unsafe extern "C" fn upload(
+pub(super) unsafe extern "C" fn upload(
     context: *mut c_void,
     _: *mut c_void,
     _: *const c_void,
@@ -55,26 +55,16 @@ unsafe extern "C" fn upload(
     u32::from(!calls.reject_upload.get())
 }
 
-unsafe extern "C" fn bind(context: *mut c_void, _: *mut c_void, stage: c_char) -> u32 {
+pub(super) unsafe extern "C" fn bind(context: *mut c_void, _: *mut c_void, stage: c_char) -> u32 {
     let calls = unsafe { &*context.cast::<Calls>() };
     calls.bound_stage.set(stage);
     1
 }
 
-static PLATFORM: Platform = Platform {
-    retain,
-    release,
-    buffer: resource,
-    zero_shader: shader,
-    depth_state: resource,
-    texture,
-    view,
-    upload,
-    bind,
-};
+pub(super) use {resource as buffer, resource as depth_state, shader as zero_shader};
 
 fn make_owner(calls: &Calls) -> Box<Owner> {
-    let mut owner = unsafe { Box::from_raw(rsf_anomaly_motion_device_new(&PLATFORM)) };
+    let mut owner = unsafe { Box::from_raw(rsf_anomaly_motion_device_new()) };
     let device = ptr::from_ref(calls).cast_mut().cast();
     assert_eq!(
         rsf_anomaly_motion_device_create(&mut owner, device, None, ptr::null_mut()),

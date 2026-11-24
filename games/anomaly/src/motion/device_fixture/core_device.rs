@@ -30,7 +30,6 @@ use super::harness::{
 };
 use crate::motion_device::{
     REPLAY_READY, ReplayScope, rsf_anomaly_motion_replay_begin, rsf_anomaly_motion_replay_end,
-    rsf_anomaly_motion_replay_platform_get,
 };
 use crate::shader_loader::deployed::{
     ORIGINAL_MISMATCH, REPLACED, ShaderRequest, keeps_buffer_sizes, outcome_name,
@@ -417,11 +416,10 @@ fn draw_scene(fx: &Fixture) -> Outcome {
         Ok(())
     };
     // The saved graphics state is restored by the scope's drop, also during an unwind out of the redraw.
-    let platform = rsf_anomaly_motion_replay_platform_get();
     let replay = |redraw: &mut dyn FnMut()| -> u8 {
         let mut scope = std::mem::MaybeUninit::<ReplayScope>::uninit();
         let result = unsafe {
-            rsf_anomaly_motion_replay_begin(platform, &view, gpu.context_raw(), scope.as_mut_ptr())
+            rsf_anomaly_motion_replay_begin(&view, gpu.context_raw(), scope.as_mut_ptr())
         };
         if result == REPLAY_READY {
             struct End(*mut ReplayScope);

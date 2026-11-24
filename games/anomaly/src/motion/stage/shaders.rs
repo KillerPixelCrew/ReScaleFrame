@@ -388,7 +388,7 @@ impl Replacement {
             pack.0
                 .create(device, request.target(), &result.bytecode, &mut shader)
         };
-        let shader = Lease::new(shader, rsf_anomaly_motion_device_platform_get().release);
+        let shader = Lease::new(shader, crate::motion_device::release);
         let shader = shader
             .filter(|_| status == RSF_PATCH_OK)
             .ok_or((CREATE_FAILED, "Create*Shader failed".into()))?;
@@ -404,8 +404,7 @@ impl Replacement {
     }
 
     fn publish(self, stock: Raw, request: Arc<Request>, device: Raw) -> Arc<Variant> {
-        let calls = rsf_anomaly_motion_device_platform_get();
-        let (release, retain) = (calls.release, calls.retain);
+        let (release, retain) = (crate::motion_device::release, crate::motion_device::retain);
         let stock = Lease::new(stock, release).expect("created stock shader is non-null");
         let device = Lease::new(device, release).expect("shader creation requires a device");
         unsafe {
