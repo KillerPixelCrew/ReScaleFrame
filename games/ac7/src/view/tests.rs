@@ -1,9 +1,19 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use std::ptr;
 
 const BYTES: usize = RSF_AC7_VIEW_BUFFER_BYTES as usize;
 const VIEW_STRUCT: u32 = size_of::<rsf_ac7_view>() as u32;
 type Buffer = [u8; BYTES];
+
+fn write_floats(data: &mut [u8], offset: usize, floats: &[f32]) {
+    for (bytes, value) in data[offset..offset + floats.len() * 4]
+        .chunks_exact_mut(4)
+        .zip(floats)
+    {
+        bytes.copy_from_slice(&value.to_le_bytes());
+    }
+}
 
 fn view_buffer(view: [f32; 2], target: [f32; 2]) -> Buffer {
     let mut buffer = [0; BYTES];
@@ -229,116 +239,4 @@ fn multiply(a: Mat, b: Mat) -> Mat {
         let (row, column) = (index / 4, index % 4);
         (0..4).map(|k| a[row * 4 + k] * b[k * 4 + column]).sum()
     })
-}
-
-fn projection_buffer([width, height, x, y]: [f64; 4], [jx, jy]: [f32; 2]) -> Buffer {
-    let (sin, cos) = 0.4_f64.sin_cos();
-    let camera = [
-        cos, 0.0, sin, 0.0, 0.0, 1.0, 0.0, 0.0, -sin, 0.0, cos, 0.0, 120.0, -40.0, 900.0, 1.0,
-    ];
-    let projection = [
-        1.2,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        2.1,
-        0.0,
-        0.0,
-        f64::from(jx),
-        f64::from(jy),
-        0.0,
-        1.0,
-        0.0,
-        0.0,
-        10.0,
-        0.0,
-    ];
-    let mut translation = identity();
-    translation[12..15].copy_from_slice(&[-5000.0, 250.0, 1200.0]);
-    let to_clip = multiply(camera, projection);
-    let world_to_clip = multiply(translation, to_clip);
-    let from_clip = inverse_4x4(&to_clip).unwrap();
-    let mut screen = projection;
-    screen[0] = 1.0;
-    screen[5] = 1.0;
-    screen[8] = 0.0;
-    screen[9] = 0.0;
-    let mut sv = identity();
-    sv[0] = 2.0 / width;
-    sv[5] = -2.0 / height;
-    sv[12] = -1.0 - 2.0 * x / width;
-    sv[13] = 1.0 + 2.0 * y / height;
-    let mut buffer = [0; BYTES];
-    for (offset, matrix) in [
-        (0x000, to_clip),
-        (0x040, world_to_clip),
-        (0x080, camera),
-        (0x180, projection),
-        (0x1c0, inverse_4x4(&projection).unwrap()),
-        (0x200, from_clip),
-        (0x240, multiply(sv, from_clip)),
-        (
-            0x280,
-            multiply(screen, inverse_4x4(&world_to_clip).unwrap()),
-        ),
-        (0x2c0, multiply(screen, from_clip)),
-    ] {
-        write_floats(&mut buffer, offset, &matrix.map(|value| value as f32));
-    }
-    write_floats(&mut buffer, 0x720, &[jx, jy]);
-    buffer
-}
-
-#[test]
-fn unjittered_layer_preserves_projection_and_pixel_world_positions() {
-    let unjitter = |source: &Buffer, target: &mut Buffer| unsafe {
-        rsf_ac7_view_remove_jitter(
-            source.as_ptr().cast(),
-            target.as_mut_ptr().cast(),
-            BYTES as u32,
-        )
-    };
-    for rect in [
-        [1024.0, 576.0, 0.0, 0.0],
-        [800.0, 450.0, 0.0, 0.0],
-        [1600.0, 900.0, 0.0, 0.0],
-        [1600.0, 904.0, 32.0, 16.0],
-    ] {
-        let jittered = projection_buffer(rect, [0.00031, -0.00052]);
-        let stable = projection_buffer(rect, [0.0; 2]);
-        let mut removed = [0; BYTES];
-        assert_eq!(unjitter(&jittered, &mut removed), 1);
-        for offset in [0x000, 0x040, 0x180, 0x1c0, 0x200, 0x240, 0x280, 0x2c0] {
-            for (actual, expected) in floats::<16>(&removed, offset)
-                .into_iter()
-                .zip(floats::<16>(&stable, offset))
-            {
-                near(actual, expected, 1e-4 * expected.abs().max(1.0));
-            }
-        }
-        assert_eq!(floats::<2>(&removed, 0x720), [0.0; 2]);
-        for depth in [0.01, 0.2, 0.8] {
-            let pixel = [
-                rect[2] + rect[0] * 0.37,
-                rect[3] + rect[1] * 0.61,
-                depth,
-                1.0,
-            ];
-            let unproject = |buffer: &[u8]| {
-                let matrix = floats::<16>(buffer, 0x240).map(f64::from);
-                let point: [f64; 4] = std::array::from_fn(|column| {
-                    (0..4)
-                        .map(|row| pixel[row] * matrix[row * 4 + column])
-                        .sum()
-                });
-                point.map(|value| value / point[3])
-            };
-            for (actual, expected) in unproject(&removed).into_iter().zip(unproject(&stable)) {
-                assert!((actual - expected).abs() <= 1e-5 * expected.abs().max(1.0));
-            }
-        }
-        assert_eq!(unjitter(&stable, &mut removed), 0);
-        assert!(removed == stable);
-    }
 }

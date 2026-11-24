@@ -128,7 +128,7 @@ pixel-to-clip times ClipToTranslatedWorld relationship at offset 0x240. They car
 1600x900 views, so they corroborate matrix construction, not the full-resolution briefing's
 per-draw jitter or shader use. Their error against the old fixture's construction is about 2.98.
 
-`rsf_ac7_view_remove_jitter` now corrects row 3 using ClipToTranslatedWorld rows 0/1, leaving the
+`rsf_ac7_view_remove_jitter` (since removed: nothing consumed it) corrected row 3 using ClipToTranslatedWorld rows 0/1, leaving the
 linear-depth screen matrices' row-2 correction intact. The regression also unprojects sample
 pixels at device depths 0.01, 0.2 and 0.8 for 800x450, 1600x900, and an offset rectangle in a
 1600x904 layer. The corrected results agree with independently constructed unjittered matrices.

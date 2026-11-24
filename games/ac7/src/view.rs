@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
-//! AC7's verified UE4.18 view buffer layout, camera decode and UI projection jitter removal.
+//! AC7's verified UE4.18 view buffer layout and camera decode.
 //! See docs/research/ac7-frame-capture.md.
 use crate::sys::{
     RSF_AC7_VIEW_ABI_VERSION, RSF_AC7_VIEW_BUFFER_BYTES, rsf_ac7_view, rsf_ac7_view_result,
 };
 use rsf_game_sys::camera_math::inverse_4x4;
 use std::ffi::c_void;
-use std::{ptr, slice};
+use std::slice;
 
 #[cfg(test)]
 mod tests;
@@ -17,15 +17,9 @@ const ABI_MISMATCH: rsf_ac7_view_result = -2;
 const NOT_A_VIEW: rsf_ac7_view_result = -3;
 const NOT_PERSPECTIVE: rsf_ac7_view_result = -4;
 
-const TRANSLATED_WORLD_TO_CLIP: usize = 0x000;
-const WORLD_TO_CLIP: usize = 0x040;
 const VIEW_TO_TRANSLATED_WORLD: usize = 0x0c0;
 const VIEW_TO_CLIP: usize = 0x180;
 const CLIP_TO_VIEW: usize = 0x1c0;
-const CLIP_TO_TRANSLATED_WORLD: usize = 0x200;
-const SV_POSITION_TO_TRANSLATED_WORLD: usize = 0x240;
-const SCREEN_TO_WORLD: usize = 0x280;
-const SCREEN_TO_TRANSLATED_WORLD: usize = 0x2c0;
 const VIEW_FORWARD: usize = 0x300;
 const VIEW_UP: usize = 0x310;
 const VIEW_RIGHT: usize = 0x320;
@@ -49,15 +43,6 @@ fn floats<const N: usize>(data: &[u8], offset: usize) -> [f32; N] {
             data[offset + 3],
         ])
     })
-}
-
-fn write_floats(data: &mut [u8], offset: usize, floats: &[f32]) {
-    for (bytes, value) in data[offset..offset + floats.len() * 4]
-        .chunks_exact_mut(4)
-        .zip(floats)
-    {
-        bytes.copy_from_slice(&value.to_le_bytes());
-    }
 }
 
 fn finite(value: f32) -> bool {
@@ -243,69 +228,4 @@ pub unsafe extern "C" fn rsf_ac7_view_read(
         }
         Err(result) => result,
     }
-}
-
-/// Add the clip-space correction to a row of an inverse/world-space matrix.
-fn add_rows(matrix: &mut Matrix, row: usize, basis: &[f32; 8], jx: f32, jy: f32) {
-    for column in 0..4 {
-        matrix[row * 4 + column] += jx * basis[column] + jy * basis[4 + column];
-    }
-}
-
-fn remove_jitter(data: &mut [u8]) -> bool {
-    let [jx, jy] = floats(data, JITTER);
-    if (jx == 0.0 && jy == 0.0) || !finite(jx) || !finite(jy) {
-        return false;
-    }
-    let projection: Matrix = floats(data, VIEW_TO_CLIP);
-    if [projection[3], projection[7], projection[11], projection[15]] != [0.0, 0.0, 1.0, 0.0] {
-        return false;
-    }
-    // For an into-clip matrix, multiply by the inverse of the jitter translation.
-    for offset in [TRANSLATED_WORLD_TO_CLIP, WORLD_TO_CLIP, VIEW_TO_CLIP] {
-        let mut matrix: Matrix = floats(data, offset);
-        for row in matrix.chunks_exact_mut(4) {
-            row[0] -= jx * row[3];
-            row[1] -= jy * row[3];
-        }
-        write_floats(data, offset, &matrix);
-    }
-    // The first two rows are unchanged by the inverse correction. SVPosition uses their
-    // world-space values with device depth, while ScreenToWorld uses linear depth.
-    let world_basis = floats(data, CLIP_TO_TRANSLATED_WORLD);
-    for (offset, row) in [
-        (CLIP_TO_VIEW, 3),
-        (CLIP_TO_TRANSLATED_WORLD, 3),
-        (SV_POSITION_TO_TRANSLATED_WORLD, 3),
-        (SCREEN_TO_WORLD, 2),
-        (SCREEN_TO_TRANSLATED_WORLD, 2),
-    ] {
-        let mut matrix = floats(data, offset);
-        let basis = if offset == SV_POSITION_TO_TRANSLATED_WORLD {
-            world_basis
-        } else {
-            floats(data, offset)
-        };
-        add_rows(&mut matrix, row, &basis, jx, jy);
-        write_floats(data, offset, &matrix);
-    }
-    write_floats(data, JITTER, &[0.0, 0.0]);
-    true
-}
-
-/// The caller lends readable and writable buffers of `bytes` each, or null.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_view_remove_jitter(
-    input: *const c_void,
-    output: *mut c_void,
-    bytes: u32,
-) -> u32 {
-    let bytes = bytes as usize;
-    if input.is_null() || output.is_null() || bytes < BUFFER_SIZE {
-        return 0;
-    }
-    let output = output.cast::<u8>();
-    unsafe { ptr::copy(input.cast::<u8>(), output, bytes) };
-    let data = unsafe { slice::from_raw_parts_mut(output, bytes) };
-    u32::from(remove_jitter(data))
 }
