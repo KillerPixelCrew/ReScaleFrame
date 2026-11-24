@@ -152,6 +152,18 @@ fn send(event: &impl Packet) -> bool {
     unsafe { rsf_native_cpu_dispatch(ptr::from_ref(event).cast(), Some(sink), null_mut()) != 0 }
 }
 
+/// Sends a plain keyed fact and asserts the ledger accepts it.
+#[track_caller]
+fn accept(source: u64, stage: u32, stamp: u64) {
+    assert!(send(&fact(source, stage, stamp, 0)));
+}
+
+/// Whether the reservation for source was aborted for reason.
+fn aborted(source: u64, reason: u32) -> bool {
+    let value = read(source);
+    value.state == RSF_NATIVE_CPU_RESERVATION_ABORTED && value.abort_reason == reason
+}
+
 fn reserve(source: u64, stamp: u64, predecessor: u64) -> bool {
     let mut event = source_fact(source, RSF_GAME_CPU_SOURCE_RESERVE, stamp, predecessor);
     event.header.flags = RSF_GAME_CPU_SOURCE_OVERLAPS_PREDECESSOR;

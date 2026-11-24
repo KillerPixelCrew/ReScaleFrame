@@ -55,6 +55,10 @@ fn imports_on12(module: &Module) -> bool {
     false
 }
 
+fn exports(module: &Module, name: &CStr) -> bool {
+    unsafe { GetProcAddress(module.0, name.as_ptr().cast()) }.is_some()
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn rsf_test_orchestrator_domains() -> i32 {
     run(|| {
@@ -65,10 +69,7 @@ extern "C" fn rsf_test_orchestrator_domains() -> i32 {
             c"rsf_callback_host_start",
             c"rsf_render_settings_get",
         ] {
-            assert!(
-                unsafe { GetProcAddress(runtime.0, name.as_ptr().cast()) }.is_some(),
-                "{name:?}"
-            );
+            assert!(exports(&runtime, name), "{name:?}");
         }
         for name in [
             c"rsf_unity_sr_start",
@@ -78,10 +79,7 @@ extern "C" fn rsf_test_orchestrator_domains() -> i32 {
             c"rsf_rdr2_settings_get",
             c"rsf_rage_sr_host_create",
         ] {
-            assert!(
-                unsafe { GetProcAddress(runtime.0, name.as_ptr().cast()) }.is_none(),
-                "{name:?}"
-            );
+            assert!(!exports(&runtime, name), "{name:?}");
         }
         let adapter = Module::beside_executable(Path::new("ReScaleFrame.Game.UnityMono.dll"));
         for name in [

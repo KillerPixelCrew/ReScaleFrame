@@ -176,13 +176,6 @@ fn count(stage: i32, source: u64) -> usize {
 fn last() -> Mark {
     *MARKS.lock().unwrap().last().unwrap()
 }
-fn present(source: u64) {
-    unsafe {
-        rsf_latencyvk_render(source);
-        rsf_latencyvk_present(1);
-        rsf_latencyvk_present(0);
-    }
-}
 fn arm(frame: u64) {
     BLOCKING_FRAME.store(frame, Relaxed);
     SLEEP.arm();

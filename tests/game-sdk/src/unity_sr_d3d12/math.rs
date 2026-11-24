@@ -13,7 +13,8 @@ const IDENTITY: [f32; 16] = [
     1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
 ];
 
-/// Direct3D row-vector projection that XMMatrixPerspectiveFovRH builds when the physical far and near\n/// planes are passed in reversed order, with depth 1 at the near plane and 0 at the far plane.
+/// Direct3D row-vector projection that XMMatrixPerspectiveFovRH builds when the physical far and near
+/// planes are passed in reversed order, with depth 1 at the near plane and 0 at the far plane.
 fn projection(fov: f32, aspect: f32, near: f32, far: f32) -> [f32; 16] {
     let (sin, cos) = (fov * 0.5).sin_cos();
     let height = cos / sin;

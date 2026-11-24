@@ -3,14 +3,9 @@
 use crate::d3d11_marker::append_native;
 use crate::sys::*;
 use std::ffi::c_void;
-use std::ptr::{self, null_mut};
+use std::ptr::null_mut;
 
 type Raw = *mut c_void;
-
-// These plain C records contain no owned resources. The fixture retains each input.
-fn source_copy(source: &rsf_game_render_pass) -> rsf_game_render_pass {
-    unsafe { ptr::read(source) }
-}
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_d3d11_fixture_scope_begin(
@@ -27,7 +22,7 @@ unsafe extern "C" fn rsf_d3d11_fixture_scope_begin(
     } else {
         RSF_NATIVE_SCENE_PRESENT_SAMPLED
     };
-    let mut pass = source_copy(source);
+    let mut pass = *source;
     pass.role = RSF_GAME_RENDER_FRAME;
     pass.family_key = 0;
     pass.view_key = 0;
@@ -41,7 +36,7 @@ unsafe fn scope_scene(
     source: &rsf_game_render_pass,
     submission: *mut *mut rsf_ac7_render_ticket,
 ) -> i32 {
-    let mut pass = source_copy(source);
+    let mut pass = *source;
     pass.role = RSF_GAME_RENDER_SUBMISSION;
     unsafe { (calls.open.unwrap())(scopes, commands, &pass, submission) }
 }
@@ -62,7 +57,7 @@ unsafe fn scope_window(
 ) -> i32 {
     let open = calls.open.unwrap();
     let close = calls.close.unwrap();
-    let mut final_pass = source_copy(source);
+    let mut final_pass = *source;
     final_pass.role = RSF_GAME_RENDER_FINAL_SCENE;
     final_pass.scene_surface = if direct != 0 { backbuffer } else { hudless };
     let mut final_ticket = null_mut();
@@ -208,11 +203,11 @@ unsafe extern "C" fn rsf_d3d11_fixture_queued_pass(
                         RSF_NATIVE_SCENE_PRESENT_NONE
                     };
                     accepted &= rsf_native_scene_present_path(pass) == expected;
-                    let mut stale = source_copy(pass);
+                    let mut stale = *pass;
                     stale.source_frame_id = stale.source_frame_id.wrapping_add(1);
                     accepted &=
                         rsf_native_scene_present_path(&stale) == RSF_NATIVE_SCENE_PRESENT_NONE;
-                    let mut other = source_copy(pass);
+                    let mut other = *pass;
                     other.viewport_key = other.viewport_key.wrapping_add(1);
                     accepted &=
                         rsf_native_scene_present_path(&other) == RSF_NATIVE_SCENE_PRESENT_NONE;

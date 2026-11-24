@@ -262,9 +262,7 @@ fn overlapping_sleep(setup: &rsf_latencyvk_setup) {
             cpu(3, BEGIN);
             assert_eq!(CURRENT.load(Relaxed), pacing_token);
             let before_present = marker_count();
-            rsf_latencyvk_render(1);
-            rsf_latencyvk_present(1);
-            rsf_latencyvk_present(0);
+            present(1);
             assert_eq!(marker_count(), before_present + 3);
             let last = *markers().last().unwrap();
             assert_eq!((last.frame, last.kind), (1, 5));
@@ -438,9 +436,7 @@ fn legacy_tokens() -> rsf_latencyvk_setup {
             rsf_latencyvk_input(1, 0, 0xc123) == OK,
             "registered latency ping"
         );
-        rsf_latencyvk_render(1);
-        rsf_latencyvk_present(1);
-        rsf_latencyvk_present(0);
+        present(1);
         let completed = marker_count();
         rsf_latencyvk_present(1);
         rsf_latencyvk_present(0);
@@ -472,9 +468,7 @@ fn legacy_tokens() -> rsf_latencyvk_setup {
             SLEPT.load(Relaxed) == 2 && OPTIONS.load(Relaxed) == 2,
             "unchanged options refreshed for a possible swapchain successor"
         );
-        rsf_latencyvk_render(2);
-        rsf_latencyvk_present(1);
-        rsf_latencyvk_present(0);
+        present(2);
         assert!(marker_count() == completed, "nonrendered frame aborted");
         for frame in 3..10 {
             cpu(frame, BEGIN);
@@ -488,9 +482,7 @@ fn legacy_tokens() -> rsf_latencyvk_setup {
             SLEPT.load(Relaxed) == 2,
             "late pacing event cannot sleep with a newer frame token"
         );
-        rsf_latencyvk_render(1);
-        rsf_latencyvk_present(1);
-        rsf_latencyvk_present(0);
+        present(1);
         assert!(
             marker_count() == completed,
             "expired SDK ring token refused"
@@ -540,9 +532,7 @@ fn legacy_tokens() -> rsf_latencyvk_setup {
         rsf_latencyvk_render(1);
         rsf_latencyvk_present(1);
         cpu(2, BEGIN);
-        rsf_latencyvk_render(2);
-        rsf_latencyvk_present(1);
-        rsf_latencyvk_present(0);
+        present(2);
         rsf_latencyvk_present(1);
         rsf_latencyvk_present(0);
         assert!(

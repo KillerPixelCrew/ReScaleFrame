@@ -225,7 +225,7 @@ fn run(path: &Path, api: &rsf_fixture_vk_capture_api) -> i32 {
         set(|q| q.fail_bind = false);
         let later = reserve(c"later_engine");
         assert_ne!(later, 0);
-        set(|q| q.ready = false);
+        set(|q| q.stalled = true);
         assert_eq!(snap(c"final_color"), NOT_READY);
         assert!(facts().pending && facts().last().live && facts().last().memory);
         assert_eq!((facts().maps, facts().frees), (1, 4));
@@ -250,7 +250,7 @@ fn run(path: &Path, api: &rsf_fixture_vk_capture_api) -> i32 {
             rsf_input_dump_gpu_ready(later, c"later_engine".as_ptr(), 3, raw),
             0
         );
-        set(|q| q.ready = true);
+        set(|q| q.stalled = false);
         assert_eq!(drain(owner), 0);
         assert_eq!(
             (
@@ -291,12 +291,12 @@ fn run(path: &Path, api: &rsf_fixture_vk_capture_api) -> i32 {
             assert!(!bundle.join(format!("{role}.bin")).exists());
             assert!(!legacy.join(format!("31-32-v33-g0-{role}-0.raw")).exists());
         }
-        set(|q| q.ready = false);
+        set(|q| q.stalled = true);
         assert_eq!(drain(owner), NOT_READY);
         assert_eq!((facts().markers, facts().pending), (3, true));
         assert_eq!(destroy(owner), NOT_READY);
         assert_eq!(facts().fence_destroys, 0);
-        set(|q| q.ready = true);
+        set(|q| q.stalled = false);
         assert_eq!(destroy(owner), 0);
         assert_eq!(
             (
@@ -315,7 +315,7 @@ fn run(path: &Path, api: &rsf_fixture_vk_capture_api) -> i32 {
         rsf_input_dump_request();
         assert_ne!(rsf_input_dump_begin_record(&frame, 2), 0);
         set(|q| {
-            q.ready = false;
+            q.stalled = true;
             q.lost_on_wait = true;
         });
         assert_eq!(

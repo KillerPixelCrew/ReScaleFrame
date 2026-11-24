@@ -5,7 +5,7 @@ use rsf_test_support::{ignore_pipeline_barrier, vk_entry};
 use std::cell::UnsafeCell;
 use std::ffi::{CStr, c_char, c_void};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub(super) struct Readback {
     pub live: bool,
     pub memory: bool,
@@ -13,8 +13,9 @@ pub(super) struct Readback {
     bytes: [u8; 4],
 }
 
+#[derive(Default)]
 pub(super) struct Queue {
-    valid: bool,
+    invalid: bool,
     readbacks: [Readback; 16],
     pub buffers: usize,
     pub frees: usize,
@@ -30,7 +31,8 @@ pub(super) struct Queue {
     pub copies_recorded: usize,
     pub timeout: u64,
     pub pending: bool,
-    pub ready: bool,
+    /// The submitted work does not complete until this is cleared.
+    pub stalled: bool,
     pub missing_wait: bool,
     pub fail_fence: bool,
     pub fail_bind: bool,
@@ -43,45 +45,6 @@ pub(super) struct Queue {
     queued: u64,
 }
 
-impl Default for Queue {
-    fn default() -> Self {
-        Self {
-            valid: true,
-            readbacks: [Readback {
-                live: false,
-                memory: false,
-                copied: false,
-                bytes: [64, 128, 255, 0],
-            }; 16],
-            buffers: 0,
-            frees: 0,
-            maps: 0,
-            invalid_maps: 0,
-            pools: 0,
-            pool_destroys: 0,
-            fence_destroys: 0,
-            resets: 0,
-            submits: 0,
-            markers: 0,
-            waits: 0,
-            copies_recorded: 0,
-            timeout: 0,
-            pending: false,
-            ready: true,
-            missing_wait: false,
-            fail_fence: false,
-            fail_bind: false,
-            fail_end: false,
-            submit_result: vk::Result::SUCCESS,
-            lost_on_wait: false,
-            signaled: false,
-            fence_reset: false,
-            recording: 0,
-            queued: 0,
-        }
-    }
-}
-
 impl Queue {
     pub fn last(&self) -> Readback {
         self.readbacks[self.buffers - 1]
@@ -89,11 +52,11 @@ impl Queue {
     fn check(&mut self, condition: bool, message: &str) {
         if !condition {
             eprintln!("{message}");
-            self.valid = false;
+            self.invalid = true;
         }
     }
     pub fn valid(&self) -> bool {
-        self.valid
+        !self.invalid
     }
 }
 
@@ -248,7 +211,7 @@ unsafe extern "system" fn wait_fences(
         q.pending = false;
         return vk::Result::ERROR_DEVICE_LOST;
     }
-    if q.pending && q.ready {
+    if q.pending && !q.stalled {
         if q.queued != 0 {
             q.readbacks[(q.queued - 1) as usize].copied = true;
         }
@@ -328,7 +291,11 @@ unsafe extern "system" fn create_buffer(
         info.size == 4 && info.usage == vk::BufferUsageFlags::TRANSFER_DST,
         "read back one RGBA pixel",
     );
-    q.readbacks[q.buffers].live = true;
+    q.readbacks[q.buffers] = Readback {
+        live: true,
+        bytes: [64, 128, 255, 0],
+        ..Default::default()
+    };
     q.buffers += 1;
     unsafe { out.write(vk::Buffer::from_raw(q.buffers as u64)) };
     vk::Result::SUCCESS

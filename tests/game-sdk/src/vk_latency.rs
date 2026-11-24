@@ -262,6 +262,14 @@ unsafe fn rsf_latencyvk_execution(pass: *const rsf_game_render_pass, begin: u32)
 unsafe fn rsf_latencyvk_get_status(status: *mut rsf_latencyvk_status) -> i32 {
     unsafe { rsf_core_latencyvk_get_status(platform(), status) }
 }
+/// Renders source and presents it once.
+fn present(source: u64) {
+    unsafe {
+        rsf_latencyvk_render(source);
+        rsf_latencyvk_present(1);
+        rsf_latencyvk_present(0);
+    }
+}
 unsafe fn rsf_latencyvk_shutdown() -> i32 {
     rsf_core_latencyvk_shutdown(platform())
 }
