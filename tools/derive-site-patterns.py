@@ -17,12 +17,19 @@ Output is one line per site: NAME KIND PATTERN [disp NEXT] -> RVA, the kind bein
 is the pattern start), `at+N` (the site is N bytes into the pattern) or `rip` (the site is the
 decoded RIP-relative target). Usage:
 
-  py -3 tools/derive-site-patterns.py IMAGE SPEC [--mapped]
+  py -3 tools/derive-site-patterns.py IMAGE SPEC [--mapped] [--also IMAGE ...]
 
-Requires capstone and numpy. The image is opened read-only.
+With `--also`, every spec line carries one RVA per image (IMAGE first, then LEN) and each pattern must resolve
+uniquely to its RVA in every image: one site description for several builds. Bytes that differ
+between the builds become wildcards, so the builds must encode each instruction with the same
+length; a function whose own entry diverges is found through a common call to it instead, and its
+common entry prefix is printed as `check`.
+
+Requires capstone and numpy. The images are opened read-only.
 """
 
 import argparse
+import itertools
 import re
 import struct
 import sys
@@ -126,32 +133,52 @@ def same(image, at, pattern):
         byte is None or byte == window[index] for index, byte in enumerate(pattern))
 
 
-def grow(image, start, min_length, max_bytes=MAX_BYTES):
-    """Extend a pattern instruction by instruction from start until it is unique.
+def common(images, starts, max_bytes=MAX_BYTES):
+    """Masked instructions from starts, merged across the images, while their lengths agree."""
+    streams = [DISASM.disasm(image.bytes[start:start + max_bytes + 16], start)
+               for image, start in zip(images, starts)]
+    for instructions in zip(*streams):
+        parts = [masked(instruction) for instruction in instructions]
+        if any(len(part) != len(parts[0]) for part in parts):
+            return
+        yield [byte if all(other[index] == byte for other in parts) else None
+               for index, byte in enumerate(parts[0])]
 
-    The candidate set of a longer pattern is a subset of its prefix's, so the image is searched
+
+def grow(images, starts, min_length, max_bytes=MAX_BYTES):
+    """Extend a pattern instruction by instruction from starts until it is unique in every image.
+
+    The candidate set of a longer pattern is a subset of its prefix's, so each image is searched
     once and later extensions only recheck the remaining candidates."""
     pattern = []
-    address = start
     candidates = None
-    for instruction in DISASM.disasm(image.bytes[start:start + max_bytes + 16], start):
-        if instruction.address != address:
-            break
-        pattern += masked(instruction)
-        address += instruction.size
+    for part in common(images, starts, max_bytes):
+        pattern += part
         if len(pattern) > max_bytes:
             return None
         if sum(byte is not None for byte in pattern) < MIN_FIXED:
             continue
         if candidates is None:
-            candidates = image.matches(regex_of(pattern), limit=1 << 30)
+            candidates = [image.matches(regex_of(pattern), limit=1 << 30) for image in images]
         else:
-            candidates = [at for at in candidates if same(image, at, pattern)]
-        if candidates == [start] and len(pattern) >= min_length:
+            candidates = [[at for at in found if same(image, at, pattern)]
+                          for image, found in zip(images, candidates)]
+        if all(found == [start] for found, start in zip(candidates, starts)) \
+                and len(pattern) >= min_length:
             return pattern
-        if start not in candidates:
+        if any(start not in found for found, start in zip(candidates, starts)):
             return None
     return None
+
+
+def entry(images, starts, length=MIN_CODE_LENGTH):
+    """The common masked entry of a function, at least `length` bytes when the builds agree."""
+    pattern = []
+    for part in common(images, starts):
+        pattern += part
+        if len(pattern) >= length:
+            break
+    return pattern
 
 
 def references(image, target):
@@ -213,30 +240,38 @@ def instruction_starts_before(image, rva, reach=64):
     return [begin for begin in reversed(starts) if rva - begin <= reach]
 
 
-def derive(image, kind, rva, length=0):
+def derive(images, kind, rvas, length=0):
     if kind == 'code':
         cover = max(MIN_CODE_LENGTH, length)
         limit = max(MAX_BYTES, cover + 32)
-        pattern = grow(image, rva, cover, limit)
+        pattern = grow(images, rvas, cover, limit)
         if pattern is not None:
             return ('at', pattern, None)
-        # Then a pattern that starts at an earlier instruction of the same function, and only
-        # then a longer one from the site, which may run into the next function.
-        for begin in instruction_starts_before(image, rva):
-            pattern = grow(image, begin, rva - begin + cover, limit + rva - begin)
+        # Then a pattern that starts at an earlier instruction of the same function (the same
+        # distance before the site in every image), and only then a longer one from the site,
+        # which may run into the next function.
+        before = [instruction_starts_before(image, rva) for image, rva in zip(images, rvas)]
+        for begin in before[0]:
+            delta = rvas[0] - begin
+            starts = [rva - delta for rva in rvas]
+            if not all(start in found for start, found in zip(starts, before)):
+                continue
+            pattern = grow(images, starts, delta + cover, limit + delta)
             if pattern is not None:
-                return (f'at+{rva - begin}', pattern, None)
-        pattern = grow(image, rva, cover, 2 * limit)
+                return (f'at+{delta}', pattern, None)
+        pattern = grow(images, rvas, cover, 2 * limit)
         if pattern is not None:
             return ('at', pattern, None)
     best = None
     # A few references are enough to choose a short unique one; heavily used globals have hundreds.
-    for begin, disp, size in references(image, rva)[:REFERENCES]:
-        pattern = grow(image, begin, 0)
-        if pattern is None:
-            continue
-        if best is None or len(pattern) < len(best[1]):
-            best = ('rip', pattern, (begin, disp, size))
+    # Across builds, only references with the same operand position can share a pattern.
+    found = [references(image, rva)[:REFERENCES] for image, rva in zip(images, rvas)]
+    for first in found[0]:
+        for others in itertools.product(*[[ref for ref in refs if ref[1:] == first[1:]]
+                                          for refs in found[1:]]):
+            pattern = grow(images, [first[0]] + [ref[0] for ref in others], 0)
+            if pattern is not None and (best is None or len(pattern) < len(best[1])):
+                best = ('rip', pattern, first)
     return best
 
 
@@ -257,27 +292,35 @@ def main():
     parser.add_argument('--mapped', action='store_true', help='RVAs equal file offsets (dump)')
     parser.add_argument('--references', type=int, default=REFERENCES,
                         help='references tried per data site')
+    parser.add_argument('--also', nargs='+', default=[], metavar='IMAGE',
+                        help='further builds; spec lines then carry one RVA per image')
     arguments = parser.parse_args()
     globals()['REFERENCES'] = arguments.references
-    image = Image(arguments.image, arguments.mapped)
+    images = [Image(path, arguments.mapped) for path in [arguments.image] + arguments.also]
     failed = 0
     with open(arguments.spec, encoding='utf-8') as spec:
         for line in spec:
             line = line.split('#', 1)[0].strip()
             if not line:
                 continue
-            kind, name, value, *length = line.split()
-            rva = int(value, 16)
-            result = derive(image, kind, rva, int(length[0]) if length else 0)
+            kind, name, *values = line.split()
+            # One RVA per image, then the optional covered length of a code site.
+            rvas = [int(value, 16) for value in values[:len(images)]]
+            length = int(values[len(images)]) if len(values) > len(images) else 0
+            assert len(rvas) == len(images), f'{name}: one RVA per image'
+            shown = '/'.join(f'{rva:#x}' for rva in rvas)
+            result = derive(images, kind, rvas, length)
             if result is None:
-                print(f'{name} {kind} NOT-FOUND -> {rva:#x}')
+                print(f'{name} {kind} NOT-FOUND -> {shown}')
                 failed += 1
                 continue
             found, pattern, operand = result
-            resolved = resolve(image, found, pattern, operand)
+            resolved = [resolve(image, found, pattern, operand) for image in images]
             suffix = '' if operand is None else f' disp={operand[1]} next={operand[2]}'
-            status = 'ok' if resolved == rva else f'MISMATCH {resolved}'
-            print(f'{name} {found} "{text(pattern)}"{suffix} -> {rva:#x} {status}')
+            if kind == 'code' and found == 'rip':
+                suffix += f' check="{text(entry(images, rvas))}"'
+            status = 'ok' if resolved == rvas else f'MISMATCH {resolved}'
+            print(f'{name} {found} "{text(pattern)}"{suffix} -> {shown} {status}')
             sys.stdout.flush()
     return 1 if failed else 0
 
