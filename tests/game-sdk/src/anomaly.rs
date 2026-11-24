@@ -29,47 +29,26 @@ fn plugin(module: &Module) {
     assert_eq!(api.info.rendering_ready, 0);
     let detect = api.detect.expect("Anomaly detection callback");
 
-    let standard = c"AnomalyDX11.exe";
-    let avx = c"AnomalyDX11AVX.exe";
-    let standard_hash = c"c857b6f49d32c62245611b26106862a773185533856e8b858a7d7e849ed2fb4e";
-    let avx_hash = c"2032acfc041e215508692ef4079ef504c7bbabf1793d5668084099f734b92f12";
+    // Detection admits the running process when its native sites are discovered, whatever the
+    // probe names; this fixture process has none, so every probe is refused.
     let mut probe = rsf_game_probe {
         struct_size: size_of::<rsf_game_probe>() as u32,
         pe_machine: 0x8664,
         reserved: 0,
-        executable_name_utf8: avx.as_ptr(),
-        sha256_hex: avx_hash.as_ptr(),
+        executable_name_utf8: c"AnomalyDX11AVX.exe".as_ptr(),
+        sha256_hex: c"2032acfc041e215508692ef4079ef504c7bbabf1793d5668084099f734b92f12".as_ptr(),
     };
-    for (name, hash, expected) in [
-        (standard, standard_hash, 1),
-        (avx, standard_hash, 0),
-        (avx, avx_hash, 1),
-        (standard, avx_hash, 0),
-        (
-            c"ANOMALYDX11AVX.EXE",
-            c"2032ACFC041E215508692EF4079EF504C7BBABF1793D5668084099F734B92F12",
-            1,
-        ),
-        (c"AnomalyDX10AVX.exe", avx_hash, 0),
-        (c"VerifiedDX11.exe", avx_hash, 0),
-    ] {
+    for name in [c"AnomalyDX11.exe", c"AnomalyDX11AVX.exe"] {
         probe.executable_name_utf8 = name.as_ptr();
-        probe.sha256_hex = hash.as_ptr();
-        assert_eq!(unsafe { detect(&probe) }, expected, "{name:?}, {hash:?}");
+        assert_eq!(unsafe { detect(&probe) }, 0, "{name:?} outside the game");
     }
-    probe.executable_name_utf8 = avx.as_ptr();
     probe.pe_machine = 0x14c;
     assert_eq!(unsafe { detect(&probe) }, 0, "x86 probe");
     probe.pe_machine = 0x8664;
     probe.struct_size -= 1;
     assert_eq!(unsafe { detect(&probe) }, 0, "short probe");
-    probe.struct_size += 1;
-    probe.sha256_hex = c"2032acfc041e215508692ef4079ef504c7bbabf1793d5668084099f734b92f1z".as_ptr();
-    assert_eq!(unsafe { detect(&probe) }, 0, "malformed digest");
-    probe.sha256_hex = null();
-    assert_eq!(unsafe { detect(&probe) }, 0, "null digest");
     assert_eq!(unsafe { detect(null()) }, 0, "null probe");
-    println!("Anomaly exact-build contract: PASS");
+    println!("Anomaly discovery contract: PASS");
 }
 
 fn lifecycle(module: &Module) {
