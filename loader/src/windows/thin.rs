@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 use super::config::{BAD_SIZE, MAX_SIZE, parse};
 use super::forwarding::InitOnce;
-use super::{entry, load_library, load_system, module_path, null, null_mut};
+use super::{entry, load_library, load_system, module_path, null, null_mut, wide};
+use rsf_game_sys::session::carrier_log::CarrierLog;
 use std::ffi::{CStr, CString, OsString, c_void};
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::Read;
 use std::os::windows::ffi::OsStringExt;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
@@ -13,8 +14,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use windows_sys::Win32::Foundation::{E_FAIL, FARPROC, GetLastError, HMODULE, SetLastError};
 use windows_sys::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
 use windows_sys::Win32::Storage::FileSystem::{
-    BY_HANDLE_FILE_INFORMATION, FILE_APPEND_DATA, FILE_ATTRIBUTE_DIRECTORY, FILE_NAME_NORMALIZED,
-    FILE_SHARE_READ, FILE_SHARE_WRITE, GetFileInformationByHandle, GetFinalPathNameByHandleW,
+    BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_NAME_NORMALIZED, FILE_SHARE_READ,
+    GetFileInformationByHandle, GetFinalPathNameByHandleW,
 };
 use windows_sys::Win32::System::Diagnostics::Debug::{
     GetThreadErrorMode, OutputDebugStringA, SEM_FAILCRITICALERRORS, SEM_NOOPENFILEERRORBOX,
@@ -25,6 +26,7 @@ use windows_sys::Win32::System::LibraryLoader::{
     GetModuleHandleExW, GetProcAddress, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
     LOAD_LIBRARY_SEARCH_SYSTEM32,
 };
+use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 use windows_sys::Win32::System::Threading::{GetCurrentThreadId, INIT_ONCE};
 use windows_sys::core::{BOOL, GUID, HRESULT};
 
@@ -54,19 +56,13 @@ fn quiet_load(path: *const u16, flags: u32) -> HMODULE {
 }
 
 fn note(root: &Path, message: &str) {
-    let message = format!("loader: {message}\r\n");
-    if let Ok(debug) = CString::new(message.as_str()) {
+    let message = format!("loader: {message}");
+    if let Ok(debug) = CString::new(format!("{message}\r\n")) {
         unsafe { OutputDebugStringA(debug.as_ptr().cast()) };
     }
-    if let Ok(mut file) = OpenOptions::new()
-        .append(true)
-        .create(true)
-        .access_mode(FILE_APPEND_DATA)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
-        .open(root.join("ReScaleFrame.Loader.log"))
-    {
-        let _ = file.write_all(message.as_bytes());
-    }
+    let log = CarrierLog::new();
+    log.set_path(&wide(root.join("ReScaleFrame.Loader.log")));
+    log.write(unsafe { GetTickCount64() }, message);
 }
 
 struct CheckedFile {
