@@ -159,7 +159,7 @@ static void STDMETHODCALLTYPE draw_instanced_hook(void* context, UINT count, UIN
     around_draw(&call);
 }
 
-static bool install_draw_hooks(void* context)
+bool rsf_anomaly_motion_native_install_draw_hooks(void* context)
 {
     void* targets[4] = {0};
     if (!rsf_anomaly_motion_resolve_draws(guarded_copy, context, &targets)) return false;
@@ -174,19 +174,19 @@ static bool install_draw_hooks(void* context)
     return rsf_anomaly_hooks_install_resolved(&draw_hooks, sites, 4);
 }
 
-static void* hw_device(void)
+void* rsf_anomaly_motion_native_shader_device(void)
 {
     void* device = NULL;
     (void)read_global(engine.hw_device_rva, &device, sizeof(device));
     return device;
 }
-static void* hw_context(void)
+void* rsf_anomaly_motion_native_context(void)
 {
     void* context = NULL;
     (void)read_global(engine.hw_context_rva, &context, sizeof(context));
     return context;
 }
-static void* backend(void) { return image ? image + engine.backend_rva : NULL; }
+void* rsf_anomaly_motion_native_backend(void) { return image ? image + engine.backend_rva : NULL; }
 
 static long long create_shader_hook(const char* target, const void* buffer, unsigned size, const char* file,
     void** result, char disasm)
@@ -218,10 +218,10 @@ static void flush(const rsf_anomaly_geometry_draw_facts* facts)
         facts->kind, facts->verdict, facts->view, facts->domain, facts->in_visual, facts->detail};
     rsf_anomaly_motion_stage_flush(&draw);
 }
-static void observe_flush(bool enabled) { rsf_anomaly_geometry_set_flush(enabled ? flush : NULL); }
+void rsf_anomaly_motion_native_observe_flush(bool enabled) { rsf_anomaly_geometry_set_flush(enabled ? flush : NULL); }
 
 // Rust lends the profile's sites in RSF_ANOMALY_MOTION_SITE_* order; this leaf supplies the detours.
-static bool install_hooks(void* module, uint32_t size, const rsf_anomaly_motion_engine* selected,
+bool rsf_anomaly_motion_native_install_hooks(void* module, uint32_t size, const rsf_anomaly_motion_engine* selected,
     const rsf_anomaly_hook_site* lent, size_t count)
 {
     if (count != RSF_ANOMALY_MOTION_SITE_COUNT || !lent || !selected) return false;
@@ -238,51 +238,48 @@ static bool install_hooks(void* module, uint32_t size, const rsf_anomaly_motion_
     }
     return rsf_anomaly_hooks_install(&hooks, image, size, sites, RSF_ANOMALY_MOTION_SITE_COUNT);
 }
-static bool disable_hooks(void) { return rsf_anomaly_hooks_disable(&hooks); }
-static bool hooks_created(void) { return rsf_anomaly_hooks_created(&hooks); }
+bool rsf_anomaly_motion_native_disable_hooks(void) { return rsf_anomaly_hooks_disable(&hooks); }
+bool rsf_anomaly_motion_native_hooks_created(void) { return rsf_anomaly_hooks_created(&hooks); }
 
-static void* render_target(void)
+void* rsf_anomaly_motion_native_render_target(void)
 {
     void* target = NULL;
     return read_global(engine.render_target_rva, &target, sizeof(target)) ? target : NULL;
 }
-static bool position_views(void* target, rsf_anomaly_motion_position_pair* views)
+bool rsf_anomaly_motion_native_position_views(void* target, rsf_anomaly_motion_position_pair* views)
 {
     return rsf_anomaly_motion_position_views(guarded_copy, target, engine.position_offset, engine.crt_rtv_offset,
         engine.crt_surface_offset, views);
 }
-static bool native_frame(uint32_t* frame) { return read_global(engine.device_frame_rva, frame, sizeof(*frame)); }
-static bool render_view(uint8_t* out)
+bool rsf_anomaly_motion_native_native_frame(uint32_t* frame) { return read_global(engine.device_frame_rva, frame, sizeof(*frame)); }
+bool rsf_anomaly_motion_native_render_view(uint8_t* out)
 {
     const uint8_t view = image ? rsf_anomaly_geometry_current_view(image, engine.build) : RSF_ANOMALY_GEOMETRY_UNSET;
     if (view == RSF_ANOMALY_GEOMETRY_UNSET) return false;
     *out = view;
     return true;
 }
-static bool options_word3(uint32_t* options) { return read_global(engine.options_word3_rva, options, sizeof(*options)); }
-static bool camera(float (*view)[16], float (*projection)[16])
+bool rsf_anomaly_motion_native_options_word3(uint32_t* options) { return read_global(engine.options_word3_rva, options, sizeof(*options)); }
+bool rsf_anomaly_motion_native_camera(float (*view)[16], float (*projection)[16])
 {
     return image && guarded_copy(view, image + engine.view_rva, sizeof(*view)) &&
         guarded_copy(projection, image + engine.projection_rva, sizeof(*projection));
 }
-static bool world(float (*out)[16]) { return rsf_anomaly_geometry_world_matrix(*out); }
+bool rsf_anomaly_motion_native_world(float (*out)[16]) { return rsf_anomaly_geometry_world_matrix(*out); }
 
-static uint32_t bind_read(void* host, const void* address, void* out, size_t size)
+uint32_t rsf_anomaly_motion_native_bind_read(void* host, const void* address, void* out, size_t size)
 {
     (void)host;
     return guarded_copy(out, address, size);
 }
-static uint32_t bind_write(void* host, void* address, const void* in, size_t size)
+uint32_t rsf_anomaly_motion_native_bind_write(void* host, void* address, const void* in, size_t size)
 {
     (void)host;
     return guarded_copy(address, in, size);
 }
-static const rsf_anomaly_motion_bind_platform bind_platform = {
-    bind_read, bind_write, rsf_anomaly_motion_bind_targets, rsf_anomaly_motion_clear_targets,
-};
 
 // The engine's includer is lent as its vtable pointer; the object is that pointer's storage.
-static bool include_open(void* table, const char* name, const void** data, uint32_t* size)
+bool rsf_anomaly_motion_native_include_open(void* table, const char* name, const void** data, uint32_t* size)
 {
     ID3DInclude* object = (ID3DInclude*)&table;
 #ifdef _MSC_VER
@@ -295,7 +292,7 @@ static bool include_open(void* table, const char* name, const void** data, uint3
     return SUCCEEDED(object->lpVtbl->Open(object, D3D_INCLUDE_LOCAL, name, NULL, data, size));
 #endif
 }
-static void include_close(void* table, const void* data)
+void rsf_anomaly_motion_native_include_close(void* table, const void* data)
 {
     ID3DInclude* object = (ID3DInclude*)&table;
 #ifdef _MSC_VER
@@ -307,48 +304,14 @@ static void include_close(void* table, const void* data)
     object->lpVtbl->Close(object, data);
 #endif
 }
-static bool include_copy(void* out, const void* in, size_t size) { return guarded_copy(out, in, size); }
-static const rsf_anomaly_engine_include_ops include_ops = {include_open, include_copy, include_close};
+bool rsf_anomaly_motion_native_include_copy(void* out, const void* in, size_t size) { return guarded_copy(out, in, size); }
 
-static bool read_engine(const void* owner, uintptr_t address, uint8_t* out, size_t size)
+bool rsf_anomaly_motion_native_read_engine(const void* owner, uintptr_t address, uint8_t* out, size_t size)
 {
     (void)owner;
     return guarded_copy(out, (const void*)address, size);
 }
-static bool copy_engine(void* out, const void* in, size_t size) { return guarded_copy(out, in, size); }
-
-static const rsf_anomaly_motion_platform* motion_platform(void)
-{
-    static rsf_anomaly_motion_platform platform;
-    static bool ready;
-    if (!ready) {
-        platform = (rsf_anomaly_motion_platform){
-            .bind = &bind_platform,
-            .copy = copy_engine,
-            .observe_flush = observe_flush,
-            .install_hooks = install_hooks,
-            .disable_hooks = disable_hooks,
-            .hooks_created = hooks_created,
-            .install_draw_hooks = install_draw_hooks,
-            .render_target = render_target,
-            .position_views = position_views,
-            .native_frame = native_frame,
-            .render_view = render_view,
-            .options_word3 = options_word3,
-            .backend = backend,
-            .context = hw_context,
-            .shader_device = hw_device,
-            .camera = camera,
-            .world = world,
-            .read_constant = rsf_anomaly_geometry_read_constants,
-            .write_constant = rsf_anomaly_geometry_write_constants,
-            .includes = &include_ops,
-            .read_engine = read_engine,
-        };
-        ready = true;
-    }
-    return &platform;
-}
+bool rsf_anomaly_motion_native_copy(void* out, const void* in, size_t size) { return guarded_copy(out, in, size); }
 
 _Static_assert(sizeof(rsf_anomaly_motion_position_pair) == 16 && sizeof(rsf_anomaly_motion_target_info) == 16 &&
     sizeof(rsf_anomaly_motion_draw_facts) == 32, "motion stage records");
@@ -360,12 +323,6 @@ _Static_assert(sizeof(rsf_anomaly_engine_include_ops) == 24 && offsetof(rsf_anom
     "include ops");
 _Static_assert(sizeof(rsf_anomaly_motion_engine) == 56 && offsetof(rsf_anomaly_motion_engine, hw_device_rva) == 8 &&
     offsetof(rsf_anomaly_motion_engine, projection_rva) == 48, "motion engine");
-_Static_assert(sizeof(rsf_anomaly_motion_platform) == 168 && offsetof(rsf_anomaly_motion_platform, copy) == 8 &&
-    offsetof(rsf_anomaly_motion_platform, install_hooks) == 24 &&
-    offsetof(rsf_anomaly_motion_platform, render_target) == 56 &&
-    offsetof(rsf_anomaly_motion_platform, backend) == 96 &&
-    offsetof(rsf_anomaly_motion_platform, includes) == 152 &&
-    offsetof(rsf_anomaly_motion_platform, read_engine) == 160, "motion platform");
 _Static_assert(sizeof(rsf_anomaly_motion_frame_target) == 24 && offsetof(rsf_anomaly_motion_frame_target, written) == 20 &&
     offsetof(rsf_anomaly_motion_frame_target, main) == 21, "frame target");
 _Static_assert(RSF_PHASE_RENDER_SUBMIT == 2 && RSF_DUMP_VIEW_DENSE_MOTION == 7, "frame phase and dump view");
@@ -373,9 +330,9 @@ _Static_assert(RSF_PHASE_RENDER_SUBMIT == 2 && RSF_DUMP_VIEW_DENSE_MOTION == 7, 
 // C entries for the bootstrap and observer leaves (stage_entries.h).
 void rsf_anomaly_motion_configure_native(const wchar_t* ini, rsf_game_log_fn log)
 {
-    rsf_anomaly_motion_stage_configure(motion_platform(), ini, log, NULL);
+    rsf_anomaly_motion_stage_configure(ini, log, NULL);
 }
 bool rsf_anomaly_motion_install_native(void* module, size_t build)
 {
-    return rsf_anomaly_motion_stage_install(motion_platform(), module, build);
+    return rsf_anomaly_motion_stage_install(module, build);
 }

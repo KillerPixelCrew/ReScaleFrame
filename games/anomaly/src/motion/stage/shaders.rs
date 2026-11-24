@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use super::native::leaf;
 use super::*;
 use crate::motion_profile::SHADER_OBJECT_OFFSET;
 use crate::shader_family::{FAMILY_COUNT, NO_FAMILY, diagnostic_family_name};
@@ -227,12 +228,12 @@ pub(super) struct Pack(RuntimePack);
 unsafe impl Send for Pack {}
 
 impl Pack {
-    pub fn open(platform: &Platform, build: Build, root: &Path) -> Result<Self, String> {
+    pub fn open(build: Build, root: &Path) -> Result<Self, String> {
         let profile = build.motion.shader_profile();
         let pack = wide_path(&root.join("motion.rsfpatch"));
         let cache = wide_path(&root.join("cache"));
         unsafe {
-            RuntimePack::open_engine(&pack, &cache, build.image, profile, &*platform.includes)
+            RuntimePack::open_engine(&pack, &cache, build.image, profile, &leaf::INCLUDES)
         }
         .map(Self)
     }
@@ -503,7 +504,7 @@ impl Stage {
         if loader.pack.is_some() {
             return true;
         }
-        let pack = match Pack::open(self.platform, build, &lock(&self.settings).shader_dir) {
+        let pack = match Pack::open(build, &lock(&self.settings).shader_dir) {
             Ok(pack) => pack,
             Err(error) => {
                 self.log()
@@ -570,8 +571,7 @@ impl Stage {
         build: Build,
         root: &Path,
     ) -> Result<(Pack, HashMap<usize, Arc<Variant>>), String> {
-        let p = self.platform;
-        let mut pack = Pack::open(p, build, root)?;
+        let mut pack = Pack::open(build, root)?;
         let previous: Vec<_> = lock(&self.registry).shaders.values().cloned().collect();
         let mut next = HashMap::new();
         for old in previous {
@@ -597,7 +597,7 @@ impl Stage {
     pub(super) fn admit_shader_creation(&self, native: &ShaderCreation) {
         let mut filename = [0; FILENAME_CAPACITY];
         let call = Creation::read(native, &mut filename, |address, bytes| unsafe {
-            (self.platform.read_engine.unwrap())(
+            leaf::read_engine(
                 ptr::null(),
                 address,
                 bytes.as_mut_ptr(),
@@ -612,7 +612,6 @@ impl Stage {
     }
 
     fn shader_created(&self, call: Creation<'_>) {
-        let p = self.platform;
         // The installed build; a creation before install has no caller frame to decode.
         let Some(build) = *lock(&self.build) else {
             return;
@@ -625,7 +624,7 @@ impl Stage {
         let layout = build.motion.frame_layout();
         let module = build.image;
         let read = |address: usize, bytes: &mut [u8]| unsafe {
-            (p.read_engine.unwrap())(ptr::null(), address, bytes.as_mut_ptr(), bytes.len())
+            leaf::read_engine(ptr::null(), address, bytes.as_mut_ptr(), bytes.len())
         };
         let file = String::from_utf8_lossy(call.file);
         let frame = match decode_frame(
@@ -668,7 +667,7 @@ impl Stage {
                     )
                 })
                 .and_then(|request| {
-                    let device = unsafe { (p.shader_device.unwrap())() };
+                    let device = unsafe { leaf::shader_device() };
                     Replacement::build(pack, &request, (stage, family_id), device, true)
                         .map(|replacement| (replacement, request, device))
                 })

@@ -236,14 +236,14 @@ pub(crate) unsafe fn clear_target(raw: Raw, target: Raw) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_bind_targets(raw: Raw, views: *const Raw, depth: Raw) {
+pub(crate) unsafe extern "C" fn rsf_anomaly_motion_bind_targets(raw: Raw, views: *const Raw, depth: Raw) {
     if !raw.is_null() {
         unsafe { targets(raw, 4, views, depth) };
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_clear_targets(raw: Raw) {
+pub(crate) unsafe extern "C" fn rsf_anomaly_motion_clear_targets(raw: Raw) {
     if !raw.is_null() {
         unsafe { targets(raw, 0, std::ptr::null(), null_mut()) };
     }

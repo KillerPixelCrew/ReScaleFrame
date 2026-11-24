@@ -18,7 +18,9 @@ use std::slice;
 mod d3d11;
 mod replay;
 #[cfg(windows)]
-pub(crate) use d3d11::{clear_target, release, retain};
+pub(crate) use d3d11::{
+    clear_target, release, retain, rsf_anomaly_motion_bind_targets, rsf_anomaly_motion_clear_targets,
+};
 #[cfg(windows)]
 pub(crate) use replay::{
     REPLAY_NO_DEPTH_WRITE, REPLAY_READY, ReplayScope, rsf_anomaly_motion_replay_begin,

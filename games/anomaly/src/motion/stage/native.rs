@@ -133,3 +133,177 @@ pub(super) unsafe fn draw_state(raw: Raw) -> DrawState {
     ];
     state
 }
+
+/// The C leaves of motion_stage_platform.c and the geometry constant reads. Unit tests never reach the motion stage's
+/// native side, so they link stand-ins.
+#[cfg(not(test))]
+pub(super) mod leaf {
+    use super::super::abi::{PositionViews, Raw};
+    use super::Engine;
+    use std::ffi::{c_char, c_void};
+
+    unsafe extern "C" {
+        #[link_name = "rsf_anomaly_motion_native_copy"]
+        pub(in crate::motion) fn copy(out: *mut c_void, input: *const c_void, size: usize) -> bool;
+        #[link_name = "rsf_anomaly_motion_native_observe_flush"]
+        pub(in crate::motion) fn observe_flush(enabled: bool);
+        #[link_name = "rsf_anomaly_motion_native_install_hooks"]
+        pub(in crate::motion) fn install_hooks(
+            image: Raw,
+            size: u32,
+            engine: *const Engine,
+            sites: *const c_void,
+            count: usize,
+        ) -> bool;
+        #[link_name = "rsf_anomaly_motion_native_disable_hooks"]
+        pub(in crate::motion) fn disable_hooks() -> bool;
+        #[link_name = "rsf_anomaly_motion_native_hooks_created"]
+        pub(in crate::motion) fn hooks_created() -> bool;
+        #[link_name = "rsf_anomaly_motion_native_install_draw_hooks"]
+        pub(in crate::motion) fn install_draw_hooks(context: Raw) -> bool;
+        #[link_name = "rsf_anomaly_motion_native_render_target"]
+        pub(in crate::motion) fn render_target() -> Raw;
+        #[link_name = "rsf_anomaly_motion_native_position_views"]
+        pub(in crate::motion) fn position_views(target: Raw, views: *mut PositionViews) -> bool;
+        #[link_name = "rsf_anomaly_motion_native_native_frame"]
+        pub(in crate::motion) fn native_frame(frame: *mut u32) -> bool;
+        #[link_name = "rsf_anomaly_motion_native_render_view"]
+        pub(in crate::motion) fn render_view(view: *mut u8) -> bool;
+        #[link_name = "rsf_anomaly_motion_native_options_word3"]
+        pub(in crate::motion) fn options_word3(options: *mut u32) -> bool;
+        #[link_name = "rsf_anomaly_motion_native_backend"]
+        pub(in crate::motion) fn backend() -> Raw;
+        #[link_name = "rsf_anomaly_motion_native_context"]
+        pub(in crate::motion) fn context() -> Raw;
+        #[link_name = "rsf_anomaly_motion_native_shader_device"]
+        pub(in crate::motion) fn shader_device() -> Raw;
+        #[link_name = "rsf_anomaly_motion_native_camera"]
+        pub(in crate::motion) fn camera(view: *mut [f32; 16], projection: *mut [f32; 16]) -> bool;
+        #[link_name = "rsf_anomaly_motion_native_world"]
+        pub(in crate::motion) fn world(matrix: *mut [f32; 16]) -> bool;
+        #[link_name = "rsf_anomaly_geometry_read_constants"]
+        pub(in crate::motion) fn read_constant(
+            stage: u32,
+            slot: u32,
+            offset: u32,
+            out: *mut c_void,
+            size: u32,
+        ) -> bool;
+        #[link_name = "rsf_anomaly_geometry_write_constants"]
+        pub(in crate::motion) fn write_constant(
+            stage: u32,
+            slot: u32,
+            offset: u32,
+            input: *const c_void,
+            size: u32,
+        ) -> bool;
+        #[link_name = "rsf_anomaly_motion_native_read_engine"]
+        pub(in crate::motion) fn read_engine(owner: *const c_void, address: usize, out: *mut u8, size: usize)
+        -> bool;
+        #[link_name = "rsf_anomaly_motion_native_bind_read"]
+        fn bind_read(host: Raw, address: *const c_void, out: Raw, size: usize) -> u32;
+        #[link_name = "rsf_anomaly_motion_native_bind_write"]
+        fn bind_write(host: Raw, address: Raw, input: *const c_void, size: usize) -> u32;
+        #[link_name = "rsf_anomaly_motion_native_include_open"]
+        fn include_open(table: Raw, name: *const c_char, data: *mut *const c_void, size: *mut u32) -> bool;
+        #[link_name = "rsf_anomaly_motion_native_include_copy"]
+        fn include_copy(out: Raw, input: *const c_void, size: usize) -> bool;
+        #[link_name = "rsf_anomaly_motion_native_include_close"]
+        fn include_close(table: Raw, data: *const c_void);
+    }
+
+    /// The RTV2 binder's engine calls: the leaf's guarded copies and the motion device's target bindings.
+    pub(in crate::motion) static BIND: crate::motion_target::Platform = crate::motion_target::Platform {
+        read: bind_read,
+        write: bind_write,
+        set_targets: crate::motion_device::rsf_anomaly_motion_bind_targets,
+        clear_targets: crate::motion_device::rsf_anomaly_motion_clear_targets,
+    };
+
+    /// The SEH-guarded engine includer the Runtime's shader patch API calls back.
+    pub(in crate::motion) static INCLUDES: crate::sys::rsf_anomaly_engine_include_ops =
+        crate::sys::rsf_anomaly_engine_include_ops {
+            open: Some(include_open),
+            copy: Some(include_copy),
+            close: Some(include_close),
+        };
+}
+
+#[cfg(test)]
+pub(super) mod leaf {
+    use super::super::abi::{PositionViews, Raw};
+    use super::Engine;
+    use std::ffi::c_void;
+
+    pub(in crate::motion) unsafe extern "C" fn copy(_: *mut c_void, _: *const c_void, _: usize) -> bool {
+        unreachable!("motion C leaf in a unit test")
+    }
+    pub(in crate::motion) unsafe fn observe_flush(_: bool) {
+        unreachable!("motion C leaf in a unit test")
+    }
+    pub(in crate::motion) unsafe fn install_hooks(_: Raw, _: u32, _: *const Engine, _: *const c_void, _: usize) -> bool {
+        unreachable!("motion C leaf in a unit test")
+    }
+    pub(in crate::motion) unsafe fn disable_hooks() -> bool {
+        unreachable!("motion C leaf in a unit test")
+    }
+    pub(in crate::motion) unsafe fn hooks_created() -> bool {
+        unreachable!("motion C leaf in a unit test")
+    }
+    pub(in crate::motion) unsafe fn install_draw_hooks(_: Raw) -> bool {
+        unreachable!("motion C leaf in a unit test")
+    }
+    pub(in crate::motion) unsafe fn render_target() -> Raw {
+        unreachable!("motion C leaf in a unit test")
+    }
+    pub(in crate::motion) unsafe fn position_views(_: Raw, _: *mut PositionViews) -> bool {
+        unreachable!("motion C leaf in a unit test")
+    }
+    pub(in crate::motion) unsafe fn native_frame(_: *mut u32) -> bool {
+        unreachable!("motion C leaf in a unit test")
+    }
+    pub(in crate::motion) unsafe fn render_view(_: *mut u8) -> bool {
+        unreachable!("motion C leaf in a unit test")
+    }
+    pub(in crate::motion) unsafe fn options_word3(_: *mut u32) -> bool {
+        unreachable!("motion C leaf in a unit test")
+    }
+    pub(in crate::motion) unsafe fn backend() -> Raw {
+        unreachable!("motion C leaf in a unit test")
+    }
+    pub(in crate::motion) unsafe fn context() -> Raw {
+        unreachable!("motion C leaf in a unit test")
+    }
+    pub(in crate::motion) unsafe fn shader_device() -> Raw {
+        unreachable!("motion C leaf in a unit test")
+    }
+    pub(in crate::motion) unsafe fn camera(_: *mut [f32; 16], _: *mut [f32; 16]) -> bool {
+        unreachable!("motion C leaf in a unit test")
+    }
+    pub(in crate::motion) unsafe fn world(_: *mut [f32; 16]) -> bool {
+        unreachable!("motion C leaf in a unit test")
+    }
+    pub(in crate::motion) unsafe fn read_constant(_: u32, _: u32, _: u32, _: *mut c_void, _: u32) -> bool {
+        unreachable!("motion C leaf in a unit test")
+    }
+    pub(in crate::motion) unsafe fn write_constant(_: u32, _: u32, _: u32, _: *const c_void, _: u32) -> bool {
+        unreachable!("motion C leaf in a unit test")
+    }
+    pub(in crate::motion) unsafe fn read_engine(_: *const c_void, _: usize, _: *mut u8, _: usize) -> bool {
+        unreachable!("motion C leaf in a unit test")
+    }
+    unsafe extern "C" fn bind_read(_: Raw, _: *const c_void, _: Raw, _: usize) -> u32 {
+        unreachable!("motion C leaf in a unit test")
+    }
+    unsafe extern "C" fn bind_write(_: Raw, _: Raw, _: *const c_void, _: usize) -> u32 {
+        unreachable!("motion C leaf in a unit test")
+    }
+    pub(in crate::motion) static BIND: crate::motion_target::Platform = crate::motion_target::Platform {
+        read: bind_read,
+        write: bind_write,
+        set_targets: crate::motion_device::rsf_anomaly_motion_bind_targets,
+        clear_targets: crate::motion_device::rsf_anomaly_motion_clear_targets,
+    };
+    pub(in crate::motion) static INCLUDES: crate::sys::rsf_anomaly_engine_include_ops =
+        crate::sys::rsf_anomaly_engine_include_ops { open: None, copy: None, close: None };
+}

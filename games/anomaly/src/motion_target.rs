@@ -3,7 +3,7 @@ use crate::sys::{
     RSF_ANOMALY_MOTION_BIND_ALREADY_BOUND as ALREADY_BOUND, RSF_ANOMALY_MOTION_BIND_BOUND as BOUND,
     RSF_ANOMALY_MOTION_BIND_CONFLICT as CONFLICT, RSF_ANOMALY_MOTION_BIND_FAULT as FAULT,
     RSF_ANOMALY_MOTION_BIND_NONE as NONE, RSF_ANOMALY_MOTION_BIND_UNBOUND as UNBOUND,
-    rsf_anomaly_motion_bind_layout as Layout, rsf_anomaly_motion_bind_platform as NativePlatform,
+    rsf_anomaly_motion_bind_layout as Layout,
     rsf_anomaly_motion_bind_state as State,
 };
 use std::ffi::c_void;
@@ -17,28 +17,14 @@ pub(crate) use fixture::run_binder_fixture;
 
 type Target = *mut c_void;
 
-#[repr(C)]
+/// The RTV2 binder's engine calls: guarded copies and the D3D11 target bindings. Two bindings meet in the fixture
+/// archive: the motion stage's (motion/stage/native.rs) and the binder fixture's fakes (motion_target/fixture.rs).
 pub(crate) struct Platform {
-    read: unsafe extern "C" fn(Target, *const c_void, Target, usize) -> u32,
-    write: unsafe extern "C" fn(Target, Target, *const c_void, usize) -> u32,
-    set_targets: unsafe extern "C" fn(Target, *const Target, Target),
-    clear_targets: unsafe extern "C" fn(Target),
+    pub(crate) read: unsafe extern "C" fn(Target, *const c_void, Target, usize) -> u32,
+    pub(crate) write: unsafe extern "C" fn(Target, Target, *const c_void, usize) -> u32,
+    pub(crate) set_targets: unsafe extern "C" fn(Target, *const Target, Target),
+    pub(crate) clear_targets: unsafe extern "C" fn(Target),
 }
-
-const _: () = {
-    assert!(size_of::<Platform>() == size_of::<NativePlatform>());
-    assert!(align_of::<Platform>() == align_of::<NativePlatform>());
-    assert!(std::mem::offset_of!(Platform, read) == std::mem::offset_of!(NativePlatform, read));
-    assert!(std::mem::offset_of!(Platform, write) == std::mem::offset_of!(NativePlatform, write));
-    assert!(
-        std::mem::offset_of!(Platform, set_targets)
-            == std::mem::offset_of!(NativePlatform, set_targets)
-    );
-    assert!(
-        std::mem::offset_of!(Platform, clear_targets)
-            == std::mem::offset_of!(NativePlatform, clear_targets)
-    );
-};
 
 fn cache_available(state: &State, backend: *mut u8, host: Target) -> bool {
     state.cache_may_hold_motion == 0 || (state.backend == backend.cast() && state.host == host)

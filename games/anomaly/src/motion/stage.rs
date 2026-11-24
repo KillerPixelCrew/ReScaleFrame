@@ -12,8 +12,7 @@ mod report;
 pub(super) mod shaders;
 
 use self::abi::*;
-// Both globs below export a Platform; the stage means its own native table.
-use self::abi::Platform;
+use self::native::leaf;
 use self::capture::Capture;
 use self::options::Settings;
 use self::report::Counters;
@@ -89,18 +88,18 @@ struct WindowFacts {
 }
 
 impl WindowFacts {
-    fn read(p: &Platform, target: Raw) -> Option<Self> {
-        let device = unsafe { (p.shader_device.unwrap())() };
-        let context = unsafe { (p.context.unwrap())() };
+    fn read(target: Raw) -> Option<Self> {
+        let device = unsafe { leaf::shader_device() };
+        let context = unsafe { leaf::context() };
         if target.is_null()
             || device.is_null()
             || context.is_null()
-            || unsafe { (p.render_target.unwrap())() } != target
+            || unsafe { leaf::render_target() } != target
         {
             return None;
         }
         let mut position = MaybeUninit::uninit();
-        if !unsafe { (p.position_views.unwrap())(target, position.as_mut_ptr()) } {
+        if !unsafe { leaf::position_views(target, position.as_mut_ptr()) } {
             return None;
         }
         let position = unsafe { position.assume_init() };
@@ -108,8 +107,8 @@ impl WindowFacts {
             return None;
         }
         let (mut frame, mut view) = (0, 0);
-        if !unsafe { (p.native_frame.unwrap())(&mut frame) }
-            || !unsafe { (p.render_view.unwrap())(&mut view) }
+        if !unsafe { leaf::native_frame(&mut frame) }
+            || !unsafe { leaf::render_view(&mut view) }
         {
             return None;
         }
@@ -117,7 +116,7 @@ impl WindowFacts {
         Some(Self {
             device,
             context,
-            backend: unsafe { (p.backend.unwrap())() },
+            backend: unsafe { leaf::backend() },
             position_rtv: position.rtv,
             position_surface: position.surface,
             generation,
@@ -189,12 +188,12 @@ impl Render {
         unsafe { out.assume_init() }
     }
 
-    fn install_draw_hooks(&mut self, platform: &Platform, context: Raw, log: Log) -> bool {
+    fn install_draw_hooks(&mut self, context: Raw, log: Log) -> bool {
         match self.draw_hooks {
             DrawHooks::Installed => true,
             DrawHooks::Refused => false,
             DrawHooks::Cold => {
-                let result = unsafe { (platform.install_draw_hooks.unwrap())(context) };
+                let result = unsafe { leaf::install_draw_hooks(context) };
                 self.draw_hooks = if result {
                     DrawHooks::Installed
                 } else {
@@ -210,12 +209,11 @@ impl Render {
         }
     }
 
-    fn close_binding(&mut self, p: &Platform, context: Raw, backend: Raw) -> bool {
+    fn close_binding(&mut self, context: Raw, backend: Raw) -> bool {
         let rtv = self.device_view().rtv;
         let result = rsf_anomaly_motion_bind_close(
             &mut self.binder,
-            // The leaf's bind table is a process-lifetime static; motion_target::Platform asserts its layout.
-            unsafe { &*p.bind.cast() },
+            &leaf::BIND,
             context,
             &native::BIND_LAYOUT,
             backend.cast(),
@@ -229,12 +227,11 @@ impl Render {
         result != FAULT
     }
 
-    fn bind_draw(&mut self, p: &Platform, backend: Raw, wanted: bool) {
+    fn bind_draw(&mut self, backend: Raw, wanted: bool) {
         let rtv = self.device_view().rtv;
         let action = rsf_anomaly_motion_bind_draw(
             &mut self.binder,
-            // The leaf's bind table is a process-lifetime static; motion_target::Platform asserts its layout.
-            unsafe { &*p.bind.cast() },
+            &leaf::BIND,
             self.window.context,
             &native::BIND_LAYOUT,
             backend.cast(),
@@ -263,7 +260,6 @@ impl Render {
 }
 
 struct Stage {
-    platform: &'static Platform,
     lifecycle: Mutex<()>,
     build: Mutex<Option<Build>>,
     settings: Mutex<Settings>,
@@ -294,9 +290,8 @@ pub(crate) fn record_retirement(key: InstanceKey) {
 }
 
 impl Stage {
-    fn get(platform: &'static Platform) -> &'static Self {
+    fn get() -> &'static Self {
         STAGE.get_or_init(|| Self {
-            platform,
             lifecycle: Default::default(),
             build: Default::default(),
             settings: Default::default(),
@@ -326,7 +321,6 @@ impl Stage {
             return true;
         }
         let log = self.log();
-        let p = self.platform;
         let size = build.size;
         if build.image == 0 || size < 16 {
             log.text(c"Anomaly motion refused: image size differs from the verified build.");
@@ -337,8 +331,8 @@ impl Stage {
             log.text(c"Anomaly motion refused: a different build than the installed hooks.");
             return false;
         }
-        if !unsafe { (p.hooks_created.unwrap())() } {
-            let image = Image::new(build.image as *const u8, size, p.copy.unwrap());
+        if !unsafe { leaf::hooks_created() } {
+            let image = Image::new(build.image as *const u8, size, leaf::copy);
             let failure = motion_guard_failure(&image, build.motion);
             if !failure.is_null() {
                 let site = unsafe { CStr::from_ptr(failure) }.to_string_lossy();
@@ -359,7 +353,7 @@ impl Stage {
         *lock(&self.build) = Some(build);
         let foliage = self.foliage.load(Relaxed);
         unsafe {
-            (p.observe_flush.unwrap())(true);
+            leaf::observe_flush(true);
             crate::native_geometry::rsf_anomaly_geometry_set_foliage(foliage);
         }
         self.active.store(true, Release);
@@ -371,7 +365,7 @@ impl Stage {
             original: ptr::null_mut(),
         });
         let installed = unsafe {
-            (p.install_hooks.unwrap())(
+            leaf::install_hooks(
                 build.image(),
                 size,
                 &build.engine,
@@ -407,7 +401,7 @@ impl Stage {
             return true;
         }
         self.stop_observing();
-        let disabled = unsafe { (self.platform.disable_hooks.unwrap())() };
+        let disabled = unsafe { leaf::disable_hooks() };
         self.cancel_draw();
         let mut render = lock(&self.render);
         window::reset(&mut render.window);
@@ -425,17 +419,16 @@ impl Stage {
         self.active.store(false, Release);
         drop(lock(&self.retirements).take());
         unsafe {
-            (self.platform.observe_flush.unwrap())(false);
+            leaf::observe_flush(false);
         }
         crate::native_geometry::rsf_anomaly_geometry_set_foliage(false);
     }
 
     fn attach(&self) {
         if self.active.load(Acquire) {
-            let p = self.platform;
             let loader = lock(&self.loader);
             if let Some(pack) = &loader.pack {
-                let device = unsafe { (p.shader_device.unwrap())() };
+                let device = unsafe { leaf::shader_device() };
                 if !device.is_null() {
                     unsafe { pack.attach(device) };
                 }
@@ -447,7 +440,6 @@ impl Stage {
         if !self.active.load(Acquire) {
             return;
         }
-        let p = self.platform;
         let mut render = lock(&self.render);
         if !self.active.load(Acquire) {
             return;
@@ -456,15 +448,15 @@ impl Stage {
         if !self.enabled.load(Relaxed) {
             return;
         }
-        let Some(facts) = WindowFacts::read(p, target) else {
+        let Some(facts) = WindowFacts::read(target) else {
             return;
         };
-        if !render.install_draw_hooks(p, facts.context, self.log()) {
+        if !render.install_draw_hooks(facts.context, self.log()) {
             return;
         }
         let current = render.device_view();
         if render.binder.cache_may_hold_motion != 0
-            && !render.close_binding(p, facts.context, facts.backend)
+            && !render.close_binding(facts.context, facts.backend)
         {
             window::reset(&mut render.window);
             return;
@@ -501,7 +493,7 @@ impl Stage {
             }
             let mut desc = MaybeUninit::uninit();
             let mut options = 0;
-            if !unsafe { (p.options_word3.unwrap())(&mut options) } {
+            if !unsafe { leaf::options_word3(&mut options) } {
                 render.counters.options_unreadable += 1;
             } else if options & DX10_MSAA != 0 {
                 render.counters.msaa_frames += 1;
@@ -561,9 +553,8 @@ impl Stage {
         if !window::close(&mut render.window) {
             return;
         }
-        let p = self.platform;
         let context = render.window.context;
-        render.close_binding(p, context, unsafe { (p.backend.unwrap())() });
+        render.close_binding(context, unsafe { leaf::backend() });
         let texture = render.device_view().texture;
         let Render {
             capture,
@@ -640,39 +631,20 @@ impl Stage {
     }
 }
 
-// The C leaf's static table; all leaves and their device/binder tables live for the adapter DLL.
-unsafe fn checked_platform(platform: *const Platform) -> Option<&'static Platform> {
-    unsafe { platform.as_ref() }
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_motion_stage_configure(ini: *const u16, log: rsf_game_log_fn, user: Raw) {
+    Stage::get().configure(
+        ini,
+        Log {
+            callback: log,
+            user: user as usize,
+        },
+    );
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_stage_configure(
-    platform: *const Platform,
-    ini: *const u16,
-    log: rsf_game_log_fn,
-    user: Raw,
-) {
-    if let Some(platform) = unsafe { checked_platform(platform) } {
-        Stage::get(platform).configure(
-            ini,
-            Log {
-                callback: log,
-                user: user as usize,
-            },
-        );
-    }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_stage_install(
-    platform: *const Platform,
-    image: Raw,
-    build: usize,
-) -> bool {
-    let Some(platform) = (unsafe { checked_platform(platform) }) else {
-        return false;
-    };
-    let stage = Stage::get(platform);
+unsafe extern "C" fn rsf_anomaly_motion_stage_install(image: Raw, build: usize) -> bool {
+    let stage = Stage::get();
     let records = (
         crate::native_profile::PROFILES.get(build),
         MotionProfile::of(build),

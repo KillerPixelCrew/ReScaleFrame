@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! Private call-scoped ABI with motion_stage_platform.h (rsf_anomaly_motion_platform).
+//! Private call-scoped records shared with motion_stage_platform.h.
 use super::*;
 use std::ffi::c_char;
 
@@ -64,11 +64,6 @@ pub(super) struct ShaderCreation {
     pub status: i32,
     pub size: u32,
 }
-
-/// The motion leaf table (motion_stage_platform.h).
-pub(super) use crate::sys::rsf_anomaly_motion_platform as Platform;
-// SAFETY: the leaf's table is an immutable process-lifetime static whose pointers name immutable static tables.
-unsafe impl Sync for Platform {}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]

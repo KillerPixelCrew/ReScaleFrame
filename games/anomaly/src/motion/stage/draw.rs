@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use super::native::leaf;
 use super::shaders::{Refusal, Variant, link_variants};
 use super::*;
 use crate::sys::RSF_ANOMALY_PASS_MAIN;
@@ -44,25 +45,25 @@ fn engine_matrix(matrix: &[f32; 16]) -> Mat4 {
     Mat4(from_engine_matrix(matrix))
 }
 
-fn camera(p: &Platform) -> Option<CameraSample> {
+fn camera() -> Option<CameraSample> {
     let mut view = [0.; 16];
     let mut projection = [0.; 16];
-    unsafe { (p.camera.unwrap())(&mut view, &mut projection) }.then(|| CameraSample {
+    unsafe { leaf::camera(&mut view, &mut projection) }.then(|| CameraSample {
         view: engine_matrix(&view),
         projection: engine_matrix(&projection),
     })
 }
 
-fn world(p: &Platform) -> Option<[f32; 16]> {
+fn world() -> Option<[f32; 16]> {
     let mut matrix = [0.; 16];
-    unsafe { (p.world.unwrap())(&mut matrix) }.then_some(matrix)
+    unsafe { leaf::world(&mut matrix) }.then_some(matrix)
 }
 
-fn read_constant<T>(p: &Platform, var: &ConstantRef, dest: &mut T) -> bool {
+fn read_constant<T>(var: &ConstantRef, dest: &mut T) -> bool {
     // Vars removed by the stock compiler leave their zero-initialized words.
     !var.present
         || unsafe {
-            (p.read_constant.unwrap())(
+            leaf::read_constant(
                 var.buffer,
                 var.buffer_size,
                 var.offset,
@@ -72,21 +73,21 @@ fn read_constant<T>(p: &Platform, var: &ConstantRef, dest: &mut T) -> bool {
         }
 }
 
-fn read_foliage(p: &Platform, layout: &FoliageLayout, out: &mut FoliageConstants) -> bool {
-    read_constant(p, &layout.consts, &mut out.consts)
-        && read_constant(p, &layout.wave, &mut out.wave)
-        && read_constant(p, &layout.wind, &mut out.wind)
+fn read_foliage(layout: &FoliageLayout, out: &mut FoliageConstants) -> bool {
+    read_constant(&layout.consts, &mut out.consts)
+        && read_constant(&layout.wave, &mut out.wave)
+        && read_constant(&layout.wind, &mut out.wind)
 }
 
 impl Render {
-    fn poison_batch(&mut self, p: &Platform, layout: &FoliageLayout) {
+    fn poison_batch(&mut self, layout: &FoliageLayout) {
         let mut rows = MaybeUninit::<foliage::Rows>::uninit();
         foliage::rsf_anomaly_foliage_poison(&mut rows);
         let array = &layout.array;
         // The completed flush already uploaded the live rows; the engine fills
         // its next batch before the next flush. Poison identifies the rest.
         if unsafe {
-            (p.write_constant.unwrap())(
+            leaf::write_constant(
                 array.buffer,
                 array.buffer_size,
                 array.offset,
@@ -100,7 +101,7 @@ impl Render {
         }
     }
 
-    fn record_history(&mut self, p: &Platform, facts: &DrawFacts) -> History {
+    fn record_history(&mut self, facts: &DrawFacts) -> History {
         let mut h = History::default();
         if !facts.main_pass()
             || !facts.context_known()
@@ -110,7 +111,7 @@ impl Render {
         }
         let view = lane(facts.view);
         let domain = lane(facts.domain);
-        h.sample = camera(p);
+        h.sample = camera();
         if let Some(sample) = &h.sample {
             h.conflict = matches!(
                 self.history.observe(view, domain, sample),
@@ -144,7 +145,6 @@ impl Render {
             return HistoryReason::Foliage;
         }
         let facts = draw.facts;
-        let p = stage.platform;
         let layout = &vertex.foliage;
         let known = facts.context_known();
         let camera = known
@@ -162,8 +162,8 @@ impl Render {
             let constants_ok = facts.in_visual
                 && facts.kind == TREE
                 && facts.visual != 0
-                && read_constant(p, &layout.xform, &mut xform)
-                && read_foliage(p, layout, &mut current);
+                && read_constant(&layout.xform, &mut xform)
+                && read_foliage(layout, &mut current);
             let current = TreeRecord {
                 xform,
                 constants: current,
@@ -204,7 +204,7 @@ impl Render {
             }
             return HistoryReason::FoliageNoConstants;
         }
-        let matrix = world(p);
+        let matrix = world();
         let world_identity = matrix.is_some_and(|m| {
             m.map(f32::to_bits)
                 == [
@@ -214,8 +214,8 @@ impl Render {
         });
         let mut rows = [[0.; 16]; FOLIAGE_MAX_GROUPS];
         let constants_ok = facts.detail
-            && read_foliage(p, layout, &mut current)
-            && read_constant(p, &layout.array, &mut rows);
+            && read_foliage(layout, &mut current)
+            && read_constant(&layout.array, &mut rows);
         let mut remap = foliage::DetailRemap::empty();
         if constants_ok {
             // Wave 0 and wave 1 can share the same shader permutation.
@@ -238,7 +238,7 @@ impl Render {
             } else {
                 remap.live = foliage::rsf_anomaly_foliage_count(&rows);
             }
-            self.poison_batch(p, layout);
+            self.poison_batch(layout);
             self.counters.detail_items += u64::from(remap.live);
             self.counters.detail_items_matched += u64::from(remap.matched);
             self.counters.detail_items_unmatched += u64::from(remap.unmatched);
@@ -390,7 +390,7 @@ impl Stage {
         unsafe { super::d3d11::bound_shaders(context, &mut shaders, false) };
         let vertex = lock(&self.registry).get(shaders.vs);
         if let Some(vertex) = vertex.filter(|v| v.family == FOLIAGE_DETAIL && v.foliage.usable) {
-            render.poison_batch(self.platform, &vertex.foliage);
+            render.poison_batch(&vertex.foliage);
         }
     }
 
@@ -399,26 +399,25 @@ impl Stage {
         if !self.active.load(Acquire) {
             return;
         }
-        let p = self.platform;
         let mut render = lock(&self.render);
         if !self.active.load(Acquire) {
             return;
         }
-        let backend = unsafe { (p.backend.unwrap())() };
+        let backend = unsafe { leaf::backend() };
         if !render.window.open {
             if render.binder.cache_may_hold_motion != 0 && !render.device_view().rtv.is_null() {
-                render.bind_draw(p, backend, false);
+                render.bind_draw(backend, false);
             }
             if facts.detail {
-                self.poison_only(&mut render, unsafe { (p.context.unwrap())() });
+                self.poison_only(&mut render, unsafe { leaf::context() });
             }
             return;
         }
         render.counters.window_draws += 1;
         let context = render.window.context;
         let wanted = render.window.target_ok && facts.main_pass();
-        render.bind_draw(p, backend, wanted);
-        let history = render.record_history(p, facts);
+        render.bind_draw(backend, wanted);
+        let history = render.record_history(facts);
         if render.binder.bound == 0 || context.is_null() {
             if facts.detail {
                 self.poison_only(&mut render, context);
@@ -438,8 +437,8 @@ impl Stage {
                 facts.kind,
                 HARDWARE_SKINNED | SINGLE_BONE | SOFTWARE_SKINNED
             ) {
-            let distance = world(p)
-                .zip(history.sample.or_else(|| camera(p)))
+            let distance = world()
+                .zip(history.sample.or_else(|| camera()))
                 .map_or(f64::NAN, |(w, camera)| {
                     rsf_anomaly_motion_camera_distance(&camera.view, &engine_matrix(&w))
                 });

@@ -93,39 +93,37 @@ typedef struct rsf_anomaly_motion_engine {
     uint32_t projection_rva;     // RCache.xforms.m_p
 } rsf_anomaly_motion_engine;
 
-// The C leaves of the motion stage. Rust calls its own stage functions directly.
-typedef struct rsf_anomaly_motion_platform {
-    const rsf_anomaly_motion_bind_platform* bind;
-    // Guarded engine-memory copy behind the guard image.
-    rsf_anomaly_motion_guarded_copy copy;
-    void (*observe_flush)(bool);
-    // Adopts `engine` for the leaf reads, then installs the lent sites with the leaf's detours and trampoline slots
-    // filled in RSF_ANOMALY_MOTION_SITE_* order.
-    bool (*install_hooks)(void* image, uint32_t size, const rsf_anomaly_motion_engine* engine,
-        const rsf_anomaly_hook_site*, size_t count);
-    bool (*disable_hooks)(void);
-    bool (*hooks_created)(void);
-    bool (*install_draw_hooks)(void*);
-    void* (*render_target)(void);
-    bool (*position_views)(void*, rsf_anomaly_motion_position_pair*);
-    bool (*native_frame)(uint32_t*);
-    bool (*render_view)(uint8_t*);
-    bool (*options_word3)(uint32_t*);
-    void* (*backend)(void);
-    void* (*context)(void);
-    void* (*shader_device)(void);
-    bool (*camera)(float (*)[16], float (*)[16]);
-    bool (*world)(float (*)[16]);
-    bool (*read_constant)(uint32_t, uint32_t, uint32_t, void*, uint32_t);
-    bool (*write_constant)(uint32_t, uint32_t, uint32_t, const void*, uint32_t);
-    const rsf_anomaly_engine_include_ops* includes;
-    rsf_anomaly_shader_read read_engine;
-} rsf_anomaly_motion_platform;
+// The C leaves motion/stage.rs calls: the guarded engine-memory copy and reads, the flush observer, the stage and draw
+// hook sets, the RTV2 binder's guarded copies and the SEH-guarded engine includer. install_hooks adopts `engine` for
+// the leaf reads, then installs the lent sites with the leaf's detours and trampoline slots in
+// RSF_ANOMALY_MOTION_SITE_* order.
+bool rsf_anomaly_motion_native_copy(void* out, const void* in, size_t size) RSF_MOTION_NOEXCEPT;
+void rsf_anomaly_motion_native_observe_flush(bool) RSF_MOTION_NOEXCEPT;
+bool rsf_anomaly_motion_native_install_hooks(void* image, uint32_t size, const rsf_anomaly_motion_engine* engine,
+    const rsf_anomaly_hook_site*, size_t count) RSF_MOTION_NOEXCEPT;
+bool rsf_anomaly_motion_native_disable_hooks(void) RSF_MOTION_NOEXCEPT;
+bool rsf_anomaly_motion_native_hooks_created(void) RSF_MOTION_NOEXCEPT;
+bool rsf_anomaly_motion_native_install_draw_hooks(void*) RSF_MOTION_NOEXCEPT;
+void* rsf_anomaly_motion_native_render_target(void) RSF_MOTION_NOEXCEPT;
+bool rsf_anomaly_motion_native_position_views(void*, rsf_anomaly_motion_position_pair*) RSF_MOTION_NOEXCEPT;
+bool rsf_anomaly_motion_native_native_frame(uint32_t*) RSF_MOTION_NOEXCEPT;
+bool rsf_anomaly_motion_native_render_view(uint8_t*) RSF_MOTION_NOEXCEPT;
+bool rsf_anomaly_motion_native_options_word3(uint32_t*) RSF_MOTION_NOEXCEPT;
+void* rsf_anomaly_motion_native_backend(void) RSF_MOTION_NOEXCEPT;
+void* rsf_anomaly_motion_native_context(void) RSF_MOTION_NOEXCEPT;
+void* rsf_anomaly_motion_native_shader_device(void) RSF_MOTION_NOEXCEPT;
+bool rsf_anomaly_motion_native_camera(float (*)[16], float (*)[16]) RSF_MOTION_NOEXCEPT;
+bool rsf_anomaly_motion_native_world(float (*)[16]) RSF_MOTION_NOEXCEPT;
+uint32_t rsf_anomaly_motion_native_bind_read(void* host, const void* address, void* out, size_t) RSF_MOTION_NOEXCEPT;
+uint32_t rsf_anomaly_motion_native_bind_write(void* host, void* address, const void* in, size_t) RSF_MOTION_NOEXCEPT;
+bool rsf_anomaly_motion_native_include_open(void* table, const char*, const void**, uint32_t*) RSF_MOTION_NOEXCEPT;
+bool rsf_anomaly_motion_native_include_copy(void*, const void*, size_t) RSF_MOTION_NOEXCEPT;
+void rsf_anomaly_motion_native_include_close(void* table, const void*) RSF_MOTION_NOEXCEPT;
+bool rsf_anomaly_motion_native_read_engine(const void*, uintptr_t address, uint8_t* out, size_t) RSF_MOTION_NOEXCEPT;
 
-void rsf_anomaly_motion_stage_configure(const rsf_anomaly_motion_platform*, const wchar_t*, rsf_dump_log_fn,
-    void*) RSF_MOTION_NOEXCEPT;
+void rsf_anomaly_motion_stage_configure(const wchar_t*, rsf_dump_log_fn, void*) RSF_MOTION_NOEXCEPT;
 // `build` is the native_profile.rs index the observer admitted.
-bool rsf_anomaly_motion_stage_install(const rsf_anomaly_motion_platform*, void* image, size_t build) RSF_MOTION_NOEXCEPT;
+bool rsf_anomaly_motion_stage_install(void* image, size_t build) RSF_MOTION_NOEXCEPT;
 bool rsf_anomaly_motion_resolve_draws(rsf_anomaly_motion_guarded_copy, void*, void* (*)[4]) RSF_MOTION_NOEXCEPT;
 bool rsf_anomaly_motion_position_views(rsf_anomaly_motion_guarded_copy, void*, uint32_t, uint32_t, uint32_t,
     rsf_anomaly_motion_position_pair*) RSF_MOTION_NOEXCEPT;
