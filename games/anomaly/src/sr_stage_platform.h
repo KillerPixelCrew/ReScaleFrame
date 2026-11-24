@@ -77,24 +77,6 @@ typedef struct rsf_anomaly_sr_burst_verdict {
     bool capture, discard;
 } rsf_anomaly_sr_burst_verdict;
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-float rsf_anomaly_sr_clamp_mip_offset(float);
-float rsf_anomaly_sr_mip_delta(uint32_t render_width, uint32_t output_width, float offset);
-uint32_t rsf_anomaly_sr_phase_count(uint32_t render_width, uint32_t output_width);
-rsf_anomaly_sr_jitter_sample rsf_anomaly_sr_jitter_sample_at(uint32_t index, uint32_t phases);
-rsf_anomaly_sr_jitter_sample rsf_anomaly_sr_sequence_next(rsf_anomaly_sr_jitter_sequence*,
-    const uint32_t (*dimensions)[4], uint64_t generation, bool continuous);
-void rsf_anomaly_sr_next_jitter(const rsf_anomaly_sr_jitter_state*, bool scope, bool applied,
-    const rsf_anomaly_sr_jitter_sample*, uint32_t render_width, uint32_t render_height, bool reset, rsf_anomaly_sr_jitter_state*);
-void rsf_anomaly_sr_jitter_to_uv(const rsf_anomaly_sr_jitter_state*, rsf_anomaly_sr_jitter_uv*);
-rsf_anomaly_sr_burst_verdict rsf_anomaly_sr_burst_frame(rsf_anomaly_sr_burst_gate*, bool loading, uint64_t without_world, bool taken);
-void rsf_anomaly_sr_burst_interrupted(rsf_anomaly_sr_burst_gate*);
-#ifdef __cplusplus
-}
-#endif
-
 /* The swap owner's frame facts. Rust fills admission, sizes, jitter and bias from the native reads. */
 typedef rsf_anomaly_swap_facts rsf_anomaly_sr_frame_facts;
 
@@ -153,14 +135,6 @@ typedef struct rsf_anomaly_sr_reset_facts {
 #define RSF_ANOMALY_SR_VIEW_SPACE_TO_METERS 1.0f
 #define RSF_ANOMALY_SR_ADAPTER_BACKENDS 0x3au
 #define RSF_ANOMALY_SR_ADAPTER_QUALITIES 0x1fu
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-uint8_t rsf_anomaly_sr_build_pass(const rsf_anomaly_sr_pass_inputs*, struct rsf_game_render_pass*);
-#ifdef __cplusplus
-}
-#endif
 
 typedef struct rsf_anomaly_sr_motion_target {
     void* texture;

@@ -1,28 +1,20 @@
 // SPDX-License-Identifier: MIT
-use crate::sr_stage::math::rsf_anomaly_sr_burst_frame;
-use crate::sr_stage::math::rsf_anomaly_sr_burst_interrupted;
-use crate::sr_stage::math::rsf_anomaly_sr_clamp_mip_offset;
-use crate::sr_stage::math::rsf_anomaly_sr_jitter_sample_at;
-use crate::sr_stage::math::rsf_anomaly_sr_jitter_to_uv;
-use crate::sr_stage::math::rsf_anomaly_sr_mip_delta;
-use crate::sr_stage::math::rsf_anomaly_sr_next_jitter;
-use crate::sr_stage::math::rsf_anomaly_sr_phase_count;
-use crate::sr_stage::math::rsf_anomaly_sr_sequence_next;
+use crate::sr_stage::math::{
+    clamp_mip_offset, jitter_sample, jitter_to_uv, mip_delta, next_jitter, phase_count,
+};
 use crate::sr_swap::{engine_mul, jitter_projection};
 use crate::sys::*;
 use rsf_game_sys::sampling::halton_f64 as halton;
 use std::ffi::{CStr, c_char, c_int};
-use std::mem::MaybeUninit;
 use std::panic::catch_unwind;
 
 type Sample = rsf_anomaly_sr_jitter_sample;
 type Sequence = rsf_anomaly_sr_jitter_sequence;
 type State = rsf_anomaly_sr_jitter_state;
-type Uv = rsf_anomaly_sr_jitter_uv;
 type Gate = rsf_anomaly_sr_burst_gate;
 
 fn sample(index: u32, phases: u32) -> Sample {
-    rsf_anomaly_sr_jitter_sample_at(index, phases)
+    jitter_sample(index, phases)
 }
 
 fn near(actual: f64, expected: f64, tolerance: f64) {
@@ -70,16 +62,15 @@ fn halton_sequence() {
         (100, 1920, 64),
         (1, u32::MAX, 64),
     ] {
-        assert_eq!(rsf_anomaly_sr_phase_count(render, output), expected);
+        assert_eq!(phase_count(render, output), expected);
     }
 }
 
 fn sequence_resets() {
     let mut seq = Sequence::default();
     let world = [1286, 724, 1920, 1080];
-    let next = |s: &mut Sequence, dims, generation, continuous| {
-        rsf_anomaly_sr_sequence_next(s, &dims, generation, continuous)
-    };
+    let next =
+        |s: &mut Sequence, dims, generation, continuous| s.next(dims, generation, continuous);
     let first = next(&mut seq, world, 0, true);
     assert_eq!(
         (first.index, first.phase_count, seq.reset, seq.resets),
@@ -218,14 +209,10 @@ fn mip_bias() {
         (0, 1920, 0.0, 0.0),
         (1286, 0, 0.0, 0.0),
     ] {
-        near(
-            rsf_anomaly_sr_mip_delta(rw, ow, offset).into(),
-            expected,
-            1e-6,
-        );
+        near(mip_delta(rw, ow, offset).into(), expected, 1e-6);
     }
     for (offset, expected) in [(-0.75, -0.75), (-9.0, -2.0), (3.0, 1.0)] {
-        assert_eq!(rsf_anomaly_sr_clamp_mip_offset(offset), expected);
+        assert_eq!(clamp_mip_offset(offset), expected);
     }
 }
 
@@ -237,17 +224,7 @@ fn next_state(
     extent: [u32; 2],
     reset: bool,
 ) -> State {
-    let mut out = MaybeUninit::uninit();
-    rsf_anomaly_sr_next_jitter(
-        state, scope, applied, &sample, extent[0], extent[1], reset, &mut out,
-    );
-    unsafe { out.assume_init() }
-}
-
-fn jitter_uv(state: &State) -> Uv {
-    let mut out = MaybeUninit::uninit();
-    rsf_anomaly_sr_jitter_to_uv(state, &mut out);
-    unsafe { out.assume_init() }
+    next_jitter(state, scope, applied, &sample, extent[0], extent[1], reset)
 }
 
 fn published_state() {
@@ -261,19 +238,19 @@ fn published_state() {
             && state.reset
             && state.current_x == s0.x
     );
-    let uv = jitter_uv(&state);
+    let uv = jitter_to_uv(&state);
     near(uv.current_u.into(), f64::from(s0.x) / 1286.0, 1e-7);
     near(uv.current_v.into(), f64::from(s0.y) / 724.0, 1e-7);
     assert_eq!((uv.previous_u, uv.previous_v), (0.0, 0.0));
     state = next_state(&state, false, true, s1, extent, false);
     assert!(state.frame == 2 && state.previous_applied);
     assert_eq!((state.previous_x, state.previous_y), (s0.x, s0.y));
-    let uv = jitter_uv(&state);
+    let uv = jitter_to_uv(&state);
     near(uv.previous_u.into(), f64::from(s0.x) / 1286.0, 1e-7);
     near(uv.current_u.into(), f64::from(s1.x) / 1286.0, 1e-7);
     let scope = next_state(&state, true, false, s2, extent, false);
     assert!(scope.scope && !scope.applied);
-    let uv = jitter_uv(&scope);
+    let uv = jitter_to_uv(&scope);
     assert_eq!(
         [uv.current_u, uv.current_v, uv.previous_u, uv.previous_v],
         [0.0; 4]
@@ -289,15 +266,15 @@ fn published_state() {
         (s1.x, 3, 2, 18)
     );
     state = next_state(&state, false, false, sample(3, 18), extent, false);
-    let uv = jitter_uv(&state);
+    let uv = jitter_to_uv(&state);
     assert!(!state.applied && uv.current_u == 0.0);
     near(uv.previous_u.into(), f64::from(s2.x) / 1286.0, 1e-7);
     let s4 = sample(4, 18);
     state = next_state(&state, false, true, s4, extent, false);
-    assert!(!state.previous_applied && jitter_uv(&state).previous_u == 0.0);
+    assert!(!state.previous_applied && jitter_to_uv(&state).previous_u == 0.0);
     let scaled = sample(0, 32);
     state = next_state(&state, false, true, scaled, [960, 540], true);
-    let uv = jitter_uv(&state);
+    let uv = jitter_to_uv(&state);
     near(uv.previous_u.into(), f64::from(s4.x) / 1286.0, 1e-7);
     near(uv.current_u.into(), f64::from(scaled.x) / 960.0, 1e-7);
 }
@@ -312,13 +289,13 @@ fn motion_cancellation() {
     let mut previous = None;
     let mut checked = 0;
     for _ in 0..20 {
-        let sample = rsf_anomaly_sr_sequence_next(&mut seq, &[w, h, 1280, 720], 0, true);
+        let sample = seq.next([w, h, 1280, 720], 0, true);
         state = next_state(&state, false, true, sample, [w, h], seq.reset);
         let projection =
             jitter_projection(&perspective(1280.0 / 720.0), sample.x, sample.y, w, h).unwrap();
         let full = engine_mul(&projection, &view);
         if let Some(previous) = previous {
-            let jitter = jitter_uv(&state);
+            let jitter = jitter_to_uv(&state);
             for point in [
                 [0.0, 0.0, 5.0, 1.0],
                 [-2.0, 1.5, 12.0, 1.0],
@@ -355,7 +332,7 @@ fn burst_gate() {
         ..Gate::default()
     };
     let step = |gate: &mut Gate, loading, without_world, taken| {
-        let v = rsf_anomaly_sr_burst_frame(gate, loading, without_world, taken);
+        let v = gate.frame(loading, without_world, taken);
         (v.capture, v.discard)
     };
     for _ in 0..1201 {
@@ -381,7 +358,7 @@ fn burst_gate() {
     for _ in 0..settle {
         step(&mut gate, false, 8, false);
     }
-    rsf_anomaly_sr_burst_interrupted(&mut gate);
+    gate.interrupted();
     assert_eq!((gate.clear, gate.restarts), (0, 3));
     assert_eq!(step(&mut gate, false, 8, false), (false, false));
     let mut quick = Gate {

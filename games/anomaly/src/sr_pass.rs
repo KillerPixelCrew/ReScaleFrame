@@ -8,7 +8,6 @@ use rsf_game_sys::{
     RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR,
     rsf_game_render_pass,
 };
-use std::mem::MaybeUninit;
 
 pub(crate) use crate::sys::rsf_anomaly_sr_reset_facts as ResetFacts;
 pub(crate) type PassInputs = rsf_anomaly_sr_pass_inputs;
@@ -149,25 +148,6 @@ pub(crate) fn build_pass(input: &PassInputs) -> Result<rsf_game_render_pass, Pas
         // The remaining SDK fields consist of numbers, arrays and nullable raw pointers.
         ..unsafe { std::mem::zeroed() }
     })
-}
-
-// Private fixture entry points. Production calls the same functions directly in Rust.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_build_pass(
-    input: &PassInputs,
-    out: &mut MaybeUninit<rsf_game_render_pass>,
-) -> u8 {
-    match build_pass(input) {
-        Ok(pass) => {
-            out.write(pass);
-            0
-        }
-        Err(error) => {
-            // A native caller may reuse the previous pass's storage after a refusal.
-            unsafe { out.as_mut_ptr().write_bytes(0, 1) };
-            error as u8
-        }
-    }
 }
 
 #[cfg(test)]

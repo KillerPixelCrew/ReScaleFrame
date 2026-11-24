@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: MIT
 use crate::sys::*;
 use rsf_game_sys::sampling::halton_f64 as halton;
-use std::mem::MaybeUninit;
 
 type Plan = rsf_anomaly_sr_plan;
 type Sample = rsf_anomaly_sr_jitter_sample;
 type Published = rsf_anomaly_sr_jitter_state;
 type Uv = rsf_anomaly_sr_jitter_uv;
 pub(crate) type JitterSequence = rsf_anomaly_sr_jitter_sequence;
-pub(super) type BurstGate = rsf_anomaly_sr_burst_gate;
+pub(crate) type BurstGate = rsf_anomaly_sr_burst_gate;
 pub(super) const DEFAULT_SCALE: f32 = RSF_ANOMALY_SR_DEFAULT_SCALE as f32;
 pub(super) const DEFAULT_MIP_OFFSET: f32 = RSF_ANOMALY_SR_DEFAULT_MIP_OFFSET as f32;
 const MIN_SCALE: f32 = RSF_ANOMALY_SR_MIN_SCALE as f32;
@@ -66,7 +65,7 @@ pub(crate) fn plan_for_render(ow: u32, oh: u32, rw: u32, rh: u32) -> Option<Plan
     })
 }
 
-pub(super) fn clamp_mip_offset(offset: f32) -> f32 {
+pub(crate) fn clamp_mip_offset(offset: f32) -> f32 {
     if !offset.is_finite() {
         DEFAULT_MIP_OFFSET
     } else {
@@ -74,7 +73,7 @@ pub(super) fn clamp_mip_offset(offset: f32) -> f32 {
     }
 }
 
-pub(super) fn mip_delta(render: u32, output: u32, offset: f32) -> f32 {
+pub(crate) fn mip_delta(render: u32, output: u32, offset: f32) -> f32 {
     if render == 0 || output == 0 {
         return 0.0;
     }
@@ -83,7 +82,7 @@ pub(super) fn mip_delta(render: u32, output: u32, offset: f32) -> f32 {
     delta.clamp(-3.0, 1.0) as f32
 }
 
-fn phase_count(render: u32, output: u32) -> u32 {
+pub(crate) fn phase_count(render: u32, output: u32) -> u32 {
     if render == 0 || render > output {
         return 8;
     }
@@ -179,7 +178,7 @@ pub(crate) fn next_jitter(
     }
 }
 
-pub(super) fn jitter_to_uv(state: &Published) -> Uv {
+pub(crate) fn jitter_to_uv(state: &Published) -> Uv {
     let pair = |enabled, x, y, width: u32, height: u32| {
         if enabled && width != 0 && height != 0 {
             (x / width as f32, y / height as f32)
@@ -217,7 +216,7 @@ impl BurstGate {
         }
     }
 
-    pub(super) fn frame(
+    pub(crate) fn frame(
         &mut self,
         loading: bool,
         without_world: u64,
@@ -242,75 +241,11 @@ impl BurstGate {
         }
     }
 
-    pub(super) fn interrupted(&mut self) {
+    pub(crate) fn interrupted(&mut self) {
         self.clear = 0;
         self.held = self.held.wrapping_add(1);
         self.restarts = self.restarts.wrapping_add(1);
     }
-}
-
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_sr_clamp_mip_offset(value: f32) -> f32 {
-    clamp_mip_offset(value)
-}
-
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_sr_mip_delta(render: u32, output: u32, offset: f32) -> f32 {
-    mip_delta(render, output, offset)
-}
-
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_sr_phase_count(render: u32, output: u32) -> u32 {
-    phase_count(render, output)
-}
-
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_sr_jitter_sample_at(index: u32, phases: u32) -> Sample {
-    jitter_sample(index, phases)
-}
-
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_sr_sequence_next(
-    sequence: &mut JitterSequence,
-    dimensions: &[u32; 4],
-    generation: u64,
-    continuous: bool,
-) -> Sample {
-    sequence.next(*dimensions, generation, continuous)
-}
-
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_sr_next_jitter(
-    last: &Published,
-    scope: bool,
-    applied: bool,
-    sample: &Sample,
-    rw: u32,
-    rh: u32,
-    reset: bool,
-    out: &mut MaybeUninit<Published>,
-) {
-    out.write(next_jitter(last, scope, applied, sample, rw, rh, reset));
-}
-
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_sr_jitter_to_uv(state: &Published, out: &mut MaybeUninit<Uv>) {
-    out.write(jitter_to_uv(state));
-}
-
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_sr_burst_frame(
-    gate: &mut BurstGate,
-    loading: bool,
-    without_world: u64,
-    taken: bool,
-) -> rsf_anomaly_sr_burst_verdict {
-    gate.frame(loading, without_world, taken)
-}
-
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_sr_burst_interrupted(gate: &mut BurstGate) {
-    gate.interrupted();
 }
 
 #[cfg(test)]
