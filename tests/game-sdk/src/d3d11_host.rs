@@ -39,6 +39,25 @@ unsafe extern "C" fn log(user: *mut c_void, _: *const c_char) {
     callbacks.foreign_user |= user != cookie();
 }
 
+/// A size-checked call refuses a short struct and a newer ABI version. `$call` is evaluated twice,
+/// against `$value` with each field changed in turn; the field is restored afterwards.
+macro_rules! refuses_malformed {
+    ($value:expr, $call:expr, $label:literal) => {{
+        $value.struct_size -= 1;
+        assert!(
+            $call == RSF_ERROR_INVALID_ARGUMENT,
+            concat!("Short ", $label, " refused")
+        );
+        $value.struct_size += 1;
+        $value.abi_version += 1;
+        assert!(
+            $call == RSF_ERROR_ABI_MISMATCH,
+            concat!($label, " ABI checked")
+        );
+        $value.abi_version -= 1;
+    }};
+}
+
 fn check() -> i32 {
     let cookie = cookie();
     let ini = crate::wide(OsStr::new("unused.ini"));
@@ -57,18 +76,11 @@ fn check() -> i32 {
             rsf_d3d11_host_capture_control(null_mut()) == RSF_ERROR_INVALID_ARGUMENT,
             "Null capture control refused"
         );
-        capture_control.struct_size -= 1;
-        assert!(
-            rsf_d3d11_host_capture_control(&capture_control) == RSF_ERROR_INVALID_ARGUMENT,
-            "Short capture control refused"
+        refuses_malformed!(
+            capture_control,
+            rsf_d3d11_host_capture_control(&capture_control),
+            "capture control"
         );
-        capture_control.struct_size += 1;
-        capture_control.abi_version += 1;
-        assert!(
-            rsf_d3d11_host_capture_control(&capture_control) == RSF_ERROR_ABI_MISMATCH,
-            "Capture control version checked"
-        );
-        capture_control.abi_version -= 1;
         capture_control.value = 0;
         assert!(
             rsf_d3d11_host_capture_control(&capture_control) == RSF_ERROR_INVALID_ARGUMENT,
@@ -127,18 +139,7 @@ fn check() -> i32 {
             "Setup ABI checked"
         );
         setup.abi_version -= 1;
-        host.struct_size -= 1;
-        assert!(
-            rsf_d3d11_host_create(&setup, &mut host) == RSF_ERROR_INVALID_ARGUMENT,
-            "Short services refused"
-        );
-        host.struct_size += 1;
-        host.abi_version += 1;
-        assert!(
-            rsf_d3d11_host_create(&setup, &mut host) == RSF_ERROR_ABI_MISMATCH,
-            "Services ABI checked"
-        );
-        host.abi_version -= 1;
+        refuses_malformed!(host, rsf_d3d11_host_create(&setup, &mut host), "services");
         setup.depth_far_plane = 3;
         assert!(
             rsf_d3d11_host_create(&setup, &mut host) == RSF_ERROR_INVALID_ARGUMENT,
@@ -334,20 +335,11 @@ fn check() -> i32 {
                 == RSF_ERROR_INVALID_ARGUMENT,
             "recovery validates host before graphics"
         );
-        recovery.struct_size -= 1;
-        assert!(
-            rsf_d3d11_host_reduced_frame(host.user, unreadable, &mut recovery)
-                == RSF_ERROR_INVALID_ARGUMENT,
-            "recovery validates size before graphics"
+        refuses_malformed!(
+            recovery,
+            rsf_d3d11_host_reduced_frame(host.user, unreadable, &mut recovery),
+            "recovery request"
         );
-        recovery.struct_size += 1;
-        recovery.abi_version += 1;
-        assert!(
-            rsf_d3d11_host_reduced_frame(host.user, unreadable, &mut recovery)
-                == RSF_ERROR_ABI_MISMATCH,
-            "independent recovery negotiation"
-        );
-        recovery.abi_version -= 1;
         recovery.operation = 5;
         assert!(
             rsf_d3d11_host_reduced_frame(host.user, unreadable, &mut recovery)
@@ -379,18 +371,11 @@ fn check() -> i32 {
             rsf_d3d11_host_restore_auxiliaries(cookie, &cleanup) == RSF_ERROR_INVALID_ARGUMENT,
             "Auxiliary cleanup verifies host user"
         );
-        cleanup.struct_size -= 1;
-        assert!(
-            rsf_d3d11_host_restore_auxiliaries(host.user, &cleanup) == RSF_ERROR_INVALID_ARGUMENT,
-            "Auxiliary cleanup verifies scope size"
+        refuses_malformed!(
+            cleanup,
+            rsf_d3d11_host_restore_auxiliaries(host.user, &cleanup),
+            "auxiliary cleanup scope"
         );
-        cleanup.struct_size += 1;
-        cleanup.abi_version += 1;
-        assert!(
-            rsf_d3d11_host_restore_auxiliaries(host.user, &cleanup) == RSF_ERROR_ABI_MISMATCH,
-            "Auxiliary cleanup verifies ABI before empty acknowledgement"
-        );
-        cleanup.abi_version -= 1;
         assert!(
             rsf_d3d11_host_restore_auxiliaries(host.user, &cleanup) == RSF_ERROR_NOT_READY,
             "Unbound graphics owner cannot acknowledge empty cleanup"
@@ -483,18 +468,11 @@ fn check() -> i32 {
                 && call.handled == 1,
             "Typed chain dispatch checks host before touching outputs"
         );
-        call.struct_size -= 1;
-        assert!(
-            rsf_d3d11_host_dispatch_chain(host.user, &mut call) == RSF_ERROR_INVALID_ARGUMENT,
-            "Short typed dispatch refused"
+        refuses_malformed!(
+            call,
+            rsf_d3d11_host_dispatch_chain(host.user, &mut call),
+            "typed dispatch"
         );
-        call.struct_size += 1;
-        call.abi_version += 1;
-        assert!(
-            rsf_d3d11_host_dispatch_chain(host.user, &mut call) == RSF_ERROR_ABI_MISMATCH,
-            "Typed dispatch ABI checked"
-        );
-        call.abi_version -= 1;
         call.method = 0;
         assert!(
             rsf_d3d11_host_dispatch_chain(host.user, &mut call) == RSF_ERROR_INVALID_ARGUMENT,
@@ -530,18 +508,11 @@ fn check() -> i32 {
                 && dispatch.native_result == 123,
             "Present dispatch validates owner before outputs"
         );
-        dispatch.struct_size -= 1;
-        assert!(
-            rsf_d3d11_host_dispatch_present(host.user, &mut dispatch) == RSF_ERROR_INVALID_ARGUMENT,
-            "Short Present dispatch refused before receiver dereference"
+        refuses_malformed!(
+            dispatch,
+            rsf_d3d11_host_dispatch_present(host.user, &mut dispatch),
+            "Present dispatch"
         );
-        dispatch.struct_size += 1;
-        dispatch.abi_version += 1;
-        assert!(
-            rsf_d3d11_host_dispatch_present(host.user, &mut dispatch) == RSF_ERROR_ABI_MISMATCH,
-            "Present dispatch ABI checked"
-        );
-        dispatch.abi_version -= 1;
         assert!(
             rsf_d3d11_host_dispatch_present(host.user, &mut dispatch) == RSF_OK
                 && dispatch.handled == 0
@@ -561,18 +532,11 @@ fn check() -> i32 {
             rsf_d3d11_host_creation_begin(cookie, &mut scope) == RSF_ERROR_INVALID_ARGUMENT,
             "Creation scope owner checked"
         );
-        scope.struct_size -= 1;
-        assert!(
-            rsf_d3d11_host_creation_begin(host.user, &mut scope) == RSF_ERROR_INVALID_ARGUMENT,
-            "Short creation scope refused"
+        refuses_malformed!(
+            scope,
+            rsf_d3d11_host_creation_begin(host.user, &mut scope),
+            "creation scope"
         );
-        scope.struct_size += 1;
-        scope.abi_version += 1;
-        assert!(
-            rsf_d3d11_host_creation_begin(host.user, &mut scope) == RSF_ERROR_ABI_MISMATCH,
-            "Creation scope ABI checked"
-        );
-        scope.abi_version -= 1;
         assert!(
             rsf_d3d11_host_creation_begin(host.user, &mut scope) == RSF_ERROR_NOT_READY
                 && scope.token == 0,
@@ -595,20 +559,11 @@ fn check() -> i32 {
                 == RSF_ERROR_INVALID_ARGUMENT,
             "Only returned host owner wraps outer native creation"
         );
-        native_creation_request.struct_size -= 1;
-        assert!(
-            rsf_d3d11_host_wrap_native_swapchain(host.user, &native_creation_request)
-                == RSF_ERROR_INVALID_ARGUMENT,
-            "Short outer creation call rejected before graphics access"
+        refuses_malformed!(
+            native_creation_request,
+            rsf_d3d11_host_wrap_native_swapchain(host.user, &native_creation_request),
+            "outer creation call"
         );
-        native_creation_request.struct_size += 1;
-        native_creation_request.abi_version += 1;
-        assert!(
-            rsf_d3d11_host_wrap_native_swapchain(host.user, &native_creation_request)
-                == RSF_ERROR_ABI_MISMATCH,
-            "Outer creation call ABI checked"
-        );
-        native_creation_request.abi_version -= 1;
         assert!(
             rsf_d3d11_host_wrap_native_swapchain(host.user, &native_creation_request)
                 == RSF_ERROR_NOT_READY
@@ -624,18 +579,11 @@ fn check() -> i32 {
             rsf_d3d11_host_bind_presentation(cookie, &binding) == RSF_ERROR_INVALID_ARGUMENT,
             "Presentation owner checked"
         );
-        binding.struct_size -= 1;
-        assert!(
-            rsf_d3d11_host_bind_presentation(host.user, &binding) == RSF_ERROR_INVALID_ARGUMENT,
-            "Presentation binding size checked"
+        refuses_malformed!(
+            binding,
+            rsf_d3d11_host_bind_presentation(host.user, &binding),
+            "presentation binding"
         );
-        binding.struct_size += 1;
-        binding.abi_version += 1;
-        assert!(
-            rsf_d3d11_host_bind_presentation(host.user, &binding) == RSF_ERROR_ABI_MISMATCH,
-            "Presentation binding ABI checked"
-        );
-        binding.abi_version -= 1;
         assert!(
             rsf_d3d11_host_set_active(host.user, 0) == RSF_OK
                 && rsf_d3d11_host_bind_presentation(host.user, &binding) == RSF_ERROR_NOT_READY,
@@ -661,18 +609,11 @@ fn check() -> i32 {
             rsf_d3d11_host_capture_texture(cookie, fake, &capture) == RSF_ERROR_INVALID_ARGUMENT,
             "Capture owner checked"
         );
-        capture.struct_size -= 1;
-        assert!(
-            rsf_d3d11_host_capture_texture(host.user, fake, &capture) == RSF_ERROR_INVALID_ARGUMENT,
-            "Capture size checked"
+        refuses_malformed!(
+            capture,
+            rsf_d3d11_host_capture_texture(host.user, fake, &capture),
+            "capture"
         );
-        capture.struct_size += 1;
-        capture.abi_version += 1;
-        assert!(
-            rsf_d3d11_host_capture_texture(host.user, fake, &capture) == RSF_ERROR_ABI_MISMATCH,
-            "Capture ABI checked"
-        );
-        capture.abi_version -= 1;
         assert!(
             rsf_d3d11_host_capture_texture(host.user, fake, &capture) == RSF_ERROR_NOT_READY,
             "An armed request without a matching scene capture must not dereference graphics pointers"
