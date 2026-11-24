@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 //! The xell_sleep_concurrency_contract fixture (test-fixtures only): the XeSS FG owner over CPU
 //! doubles of its SDK entries, proving XeLL sleep, marker and configure admission.
 use super::*;
