@@ -35,6 +35,7 @@ const NO_HANDLE: i32 = -4;
 const OPEN_FAILED: i32 = -5;
 pub(super) const ABI_VERSION: u32 = 2;
 
+// rsf_shared_surface_setup of rescaleframe/shared_surface.h.
 #[repr(C)]
 pub(super) struct SurfaceSetup {
     pub(super) struct_size: u32,
@@ -48,7 +49,6 @@ pub(super) struct SurfaceSetup {
     pub(super) unordered_access: u32,
 }
 
-#[repr(C)]
 pub(super) struct Platform {
     pub(super) texture: unsafe extern "C" fn(Handle, &SurfaceSetup, *mut Handle) -> i32,
     pub(super) target: Open,
@@ -65,7 +65,6 @@ const _: () = {
     assert!(size_of::<SurfaceSetup>() == 48);
     assert!(std::mem::offset_of!(SurfaceSetup, log) == 24);
     assert!(std::mem::offset_of!(SurfaceSetup, unordered_access) == 40);
-    assert!(size_of::<Platform>() == 9 * size_of::<Handle>());
 };
 
 // Use the SDK vtables directly so acquire() can adopt a non-null output even on failure.

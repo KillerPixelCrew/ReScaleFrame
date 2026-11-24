@@ -19,12 +19,12 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, PoisonError};
 
-const VK_SUCCESS: i32 = 0;
-const VK_INITIALIZATION_FAILED: i32 = -3;
-const VK_FORMAT_NOT_SUPPORTED: i32 = -11;
+const VK_SUCCESS: i32 = vk::Result::SUCCESS.as_raw();
+const VK_INITIALIZATION_FAILED: i32 = vk::Result::ERROR_INITIALIZATION_FAILED.as_raw();
+const VK_FORMAT_NOT_SUPPORTED: i32 = vk::Result::ERROR_FORMAT_NOT_SUPPORTED.as_raw();
 const TRANSFER_SOURCE: u32 = vk::ImageUsageFlags::TRANSFER_SRC.as_raw();
 const RGBA8: u32 = vk::Format::R8G8B8A8_UNORM.as_raw() as u32;
-const BGRA8: u32 = 44;
+const BGRA8: u32 = vk::Format::B8G8R8A8_UNORM.as_raw() as u32;
 const PRESENT_LAYOUT: u32 = vk::ImageLayout::PRESENT_SRC_KHR.as_raw() as u32;
 const WAIT_NS: u64 = 15_000_000_000;
 
@@ -32,7 +32,6 @@ type Handle = *mut c_void;
 type Callback = unsafe extern "C" fn(Handle, *const Packet) -> i32;
 
 /// The swapchain image a Present selects, as the target leaf reads it from the packet.
-#[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Target {
     pub(crate) chain: u64,
@@ -47,7 +46,6 @@ pub(crate) struct Target {
 
 /// The capture owner's native leaves: `leaves::LEAVES` in production; the DLSS-G fixture
 /// (vulkan_dlss_fg/fixture/sdk.rs) replaces open and the frame, readback and file entries.
-#[repr(C)]
 #[derive(Clone, Copy)]
 pub(crate) struct Platform {
     // Writes a null native handle and succeeds when capture is disabled.
@@ -80,10 +78,6 @@ pub(crate) struct Platform {
     pub(crate) failure: unsafe extern "C" fn(Handle, u64, *const c_char, i32),
     pub(crate) append: unsafe extern "C" fn(Handle, *const c_char, *const u8, usize),
 }
-
-const _: () = {
-    assert!(size_of::<Platform>() == 24 * size_of::<Handle>());
-};
 
 impl Platform {
     fn present_image(&self, packet: &Packet) -> Result<(Image, Target), (&'static CStr, i32)> {

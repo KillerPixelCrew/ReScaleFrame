@@ -37,13 +37,8 @@ pub(crate) type Register = unsafe extern "C" fn(*const Registration) -> i32;
 type WsiCallback = unsafe extern "C" fn(*mut c_void) -> i32;
 type WsiCall = unsafe extern "C" fn(WsiCallback, *mut c_void) -> i32;
 
-const _: () = {
-    assert!(size_of::<vk::Image>() == size_of::<u64>());
-    assert!(vk::ImageUsageFlags::TRANSFER_SRC.as_raw() == 1);
-    assert!(vk::Format::R8G8B8A8_UNORM.as_raw() == 37 && vk::Format::B8G8R8A8_UNORM.as_raw() == 44);
-    assert!(vk::ImageLayout::PRESENT_SRC_KHR.as_raw() == 1_000_001_002);
-    assert!(vk::Result::ERROR_FORMAT_NOT_SUPPORTED.as_raw() == -11);
-};
+// The image query writes vk::Image handles into the owner's u64 array.
+const _: () = assert!(size_of::<vk::Image>() == size_of::<u64>());
 
 /// The capture leaves' native handle.
 pub(crate) struct Native {
