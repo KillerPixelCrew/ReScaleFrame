@@ -6,9 +6,9 @@
 //! WSI registration keeps the last registered hooks, as the corrected SDK's
 //! copied table entry does, so a late hook can still be driven after teardown.
 use super::fake_gpu::{
-    rsf_fixture_ffx_acquire, rsf_fixture_ffx_images, rsf_fixture_ffx_lock, rsf_fixture_ffx_lookup,
-    rsf_fixture_ffx_present_count, rsf_fixture_ffx_submit, rsf_fixture_ffx_unlock,
-    rsf_fixture_wsi_entry, rsf_fixture_wsi_lookup, rsf_fixture_wsi_route_state, state,
+    route as route_state, rsf_fixture_ffx_acquire, rsf_fixture_ffx_images, rsf_fixture_ffx_lock,
+    rsf_fixture_ffx_lookup, rsf_fixture_ffx_present_count, rsf_fixture_ffx_submit,
+    rsf_fixture_ffx_unlock, rsf_fixture_wsi_entry, rsf_fixture_wsi_lookup, state,
 };
 use super::rsf_fixture_ffx_refused_second_owner;
 use crate::sdk_module::Loader;
@@ -412,7 +412,7 @@ unsafe extern "C" fn set_wsi(setup: *const WsiDispatch) -> i32 {
             && setup.device.as_raw() as usize == DEVICE,
         "the dispatch uses this device and the corrected SDK ABI",
     );
-    let fixture = rsf_fixture_wsi_route_state();
+    let fixture = route_state();
     if setup.create.is_some() {
         require(
             setup.destroy.is_some()
@@ -602,7 +602,7 @@ pub(super) unsafe fn rsf_fixture_ffx_start(
     let setup = Setup::new();
     let result = unsafe { create(Some(&HOST), &setup.value, out, chain) };
     if route && result == FIXTURE_OK {
-        unsafe { (*rsf_fixture_wsi_route_state()).owner = *out };
+        unsafe { (*route_state()).owner = *out };
     }
     result
 }

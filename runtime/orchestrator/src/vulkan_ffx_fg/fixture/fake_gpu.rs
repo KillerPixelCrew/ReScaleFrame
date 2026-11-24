@@ -80,14 +80,6 @@ thread_local! {
     static ROUTE: UnsafeCell<RouteState> = const { UnsafeCell::new(unsafe { std::mem::zeroed() }) };
 }
 
-pub(super) fn rsf_fixture_ffx_state() -> *mut State {
-    state()
-}
-
-pub(super) fn rsf_fixture_wsi_route_state() -> *mut RouteState {
-    route()
-}
-
 pub(super) unsafe extern "system" fn rsf_fixture_ffx_images(
     _: vk::Device,
     chain: vk::SwapchainKHR,
@@ -144,7 +136,7 @@ fn next() -> u64 {
     }
 }
 
-fn route() -> *mut RouteState {
+pub(super) fn route() -> *mut RouteState {
     ROUTE.with(UnsafeCell::get)
 }
 

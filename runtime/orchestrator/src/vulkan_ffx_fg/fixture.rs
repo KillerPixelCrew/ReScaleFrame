@@ -4,7 +4,7 @@
 mod fake_gpu;
 mod fake_sdk;
 
-use self::fake_gpu::{rsf_fixture_ffx_state, rsf_fixture_wsi_route_state};
+use self::fake_gpu::{route, state};
 use self::fake_sdk::*;
 use super::{
     Owner, rsf_ffxgvk_destroy, rsf_ffxgvk_drain, rsf_ffxgvk_enable, rsf_ffxgvk_get_status,
@@ -34,6 +34,13 @@ const VK_ERROR_DEVICE_LOST: i32 = -4;
 const VK_SUBOPTIMAL_KHR: i32 = 1_000_001_003;
 const VK_ERROR_OUT_OF_DATE_KHR: i32 = -1_000_001_004;
 const RGBA8: u32 = 37;
+
+/// A field of the fake FidelityFX and Vulkan state; read only between provider calls.
+macro_rules! f {
+    ($field:ident) => {
+        (*state()).$field
+    };
+}
 
 fn cmd(address: usize) -> *mut c_void {
     ptr::without_provenance_mut(address)
@@ -140,7 +147,7 @@ unsafe extern "C" fn rsf_fixture_ffx_run(argc: c_int, argv: *const *const c_char
         std::env::remove_var("RSF_VULKAN_TIMING_FILE");
     }
     let scenario = unsafe { CStr::from_ptr(*argv.add(1)) }.to_bytes();
-    unsafe { (*fake_gpu::state()).next = 100 };
+    unsafe { (*state()).next = 100 };
     match scenario {
         b"0" => reset(),
         b"1" => submission(),
@@ -150,12 +157,6 @@ unsafe extern "C" fn rsf_fixture_ffx_run(argc: c_int, argv: *const *const c_char
     0
 }
 fn reset() {
-    let fixture = rsf_fixture_ffx_state();
-    macro_rules! f {
-        ($field:ident) => {
-            (*fixture).$field
-        };
-    }
     unsafe {
         let owner = start(false);
         let chain = rsf_fixture_ffx_chain();
@@ -315,12 +316,6 @@ fn reset() {
 }
 
 fn submission() {
-    let fixture = rsf_fixture_ffx_state();
-    macro_rules! f {
-        ($field:ident) => {
-            (*fixture).$field
-        };
-    }
     unsafe {
         let owner = start(false);
         let mut second = ptr::null_mut();
@@ -759,13 +754,7 @@ fn submission() {
 }
 
 fn wsi_route() {
-    let fixture = rsf_fixture_ffx_state();
-    macro_rules! f {
-        ($field:ident) => {
-            (*fixture).$field
-        };
-    }
-    let route = rsf_fixture_wsi_route_state();
+    let route = route();
     macro_rules! r {
         ($field:ident) => {
             (*route).$field
