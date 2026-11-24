@@ -156,9 +156,12 @@ fn texture_valid(godot: &Godot, device: ObjectPtr, texture: u64) -> Option<u32> 
     unsafe { godot.value(Bind::TEXTURE_IS_VALID, device, &[arg(&texture)], 0u8) }.map(u32::from)
 }
 
-pub(crate) unsafe fn leaf_frame(call: *mut c_void, frame: *mut EffectFrame) -> u32 {
-    let (call, frame) = unsafe { (&mut *call.cast::<Call>(), &mut *frame) };
-    read_frame(call, frame).is_some().into()
+/// The frame facts; `None` without a RenderingDevice, scene buffers or scene data.
+pub(crate) unsafe fn leaf_frame(call: *mut c_void) -> Option<EffectFrame> {
+    let call = unsafe { &mut *call.cast::<Call>() };
+    let mut frame = EffectFrame::default();
+    read_frame(call, &mut frame)?;
+    Some(frame)
 }
 
 fn read_frame(call: &mut Call, frame: &mut EffectFrame) -> Option<()> {
@@ -216,9 +219,12 @@ fn read_frame(call: &mut Call, frame: &mut EffectFrame) -> Option<()> {
     Some(())
 }
 
-pub(crate) unsafe fn leaf_resources(call: *mut c_void, resources: *mut EffectResources) -> u32 {
-    let (call, resources) = unsafe { (&*call.cast::<Call>(), &mut *resources) };
-    read_resources(call, resources).is_some().into()
+/// The formats and native handle facts, or `None` when an engine read failed.
+pub(crate) unsafe fn leaf_resources(call: *mut c_void) -> Option<EffectResources> {
+    let call = unsafe { &*call.cast::<Call>() };
+    let mut resources = EffectResources::default();
+    read_resources(call, &mut resources)?;
+    Some(resources)
 }
 
 fn read_resources(call: &Call, resources: &mut EffectResources) -> Option<()> {
@@ -253,33 +259,23 @@ fn read_resources(call: &Call, resources: &mut EffectResources) -> Option<()> {
     Some(())
 }
 
-pub(crate) unsafe fn leaf_read_motion(
-    call: *mut c_void,
-    plan: *const EffectReadback,
-    data: *mut *const u8,
-    size: *mut u64,
-) -> u32 {
+/// The readback's bytes, kept in `call` until the callback returns; empty when the readback was
+/// refused.
+pub(crate) unsafe fn leaf_read_motion<'a>(call: *mut c_void, plan: &EffectReadback) -> &'a [u8] {
     let call = unsafe { &mut *call.cast::<Call>() };
-    unsafe {
-        *data = std::ptr::null();
-        *size = 0;
-    }
     let mut readback = Readback::new(call.godot, call.device, call.motion);
-    let recorded = readback.record(unsafe { &*plan });
+    let recorded = readback.record(plan);
     // The PackedByteArray owns the CPU copy until the callback returns.
     call.bytes = readback.bytes.take();
     drop(readback);
-    if !recorded {
-        return 0;
+    let Some(bytes) = call.bytes.as_ref().filter(|_| recorded) else {
+        return &[];
+    };
+    let (data, count) = bytes.data();
+    if data.is_null() || count == 0 {
+        return &[];
     }
-    if let Some(bytes) = &call.bytes {
-        let (bytes, count) = bytes.data();
-        unsafe {
-            *data = bytes;
-            *size = count;
-        }
-    }
-    1
+    unsafe { std::slice::from_raw_parts(data, count as usize) }
 }
 
 /// The capture's SDK objects and RIDs. Its references release after the RIDs were freed.

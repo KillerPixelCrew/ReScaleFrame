@@ -14,36 +14,20 @@ thread_local! {
 
 const CALL: *mut c_void = 0x40 as *mut c_void;
 
-pub(super) unsafe fn leaf_frame(call: *mut c_void, frame: *mut EffectFrame) -> u32 {
+pub(super) unsafe fn leaf_frame(call: *mut c_void) -> Option<EffectFrame> {
     assert_eq!(call, CALL);
     CALLS.with_borrow_mut(|calls| calls.push("frame"));
-    match FRAME.get() {
-        Some(value) => {
-            // SAFETY: the owner's record.
-            unsafe { frame.write(value) };
-            1
-        }
-        None => 0,
-    }
+    FRAME.get()
 }
 
-pub(super) unsafe fn leaf_resources(call: *mut c_void, resources: *mut EffectResources) -> u32 {
+pub(super) unsafe fn leaf_resources(call: *mut c_void) -> Option<EffectResources> {
     assert_eq!(call, CALL);
     CALLS.with_borrow_mut(|calls| calls.push("resources"));
-    // SAFETY: the owner's record.
-    unsafe { resources.write(RESOURCES.get()) };
-    1
+    Some(RESOURCES.get())
 }
 
-pub(super) unsafe fn leaf_read_motion(
-    call: *mut c_void,
-    plan: *const EffectReadback,
-    data: *mut *const u8,
-    size: *mut u64,
-) -> u32 {
+pub(super) unsafe fn leaf_read_motion<'a>(call: *mut c_void, plan: &EffectReadback) -> &'a [u8] {
     assert_eq!(call, CALL);
-    // SAFETY: the owner lends the plan for this call.
-    let plan = unsafe { &*plan };
     let frame = FRAME.get().expect("motion readback requires a frame");
     assert_eq!(u64::from(plan.bytes), pixels(&frame) * SAMPLE_BYTES as u64);
     assert_eq!(
@@ -55,14 +39,8 @@ pub(super) unsafe fn leaf_read_motion(
         frame.internal_height.unsigned_abs().div_ceil(8)
     );
     CALLS.with_borrow_mut(|calls| calls.push("read_motion"));
-    BYTES.with_borrow(|bytes| {
-        // SAFETY: the owner's outputs; the bytes are not touched until the call returns.
-        unsafe {
-            data.write(bytes.as_ptr());
-            size.write(bytes.len() as u64);
-        }
-    });
-    1
+    // SAFETY: the bytes are not touched until the render call returns.
+    BYTES.with_borrow(|bytes| unsafe { std::slice::from_raw_parts(bytes.as_ptr(), bytes.len()) })
 }
 
 fn resources(motion_format: i32) -> EffectResources {
