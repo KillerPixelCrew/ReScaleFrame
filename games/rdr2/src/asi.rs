@@ -68,7 +68,7 @@ pub(crate) fn install_diagnostic_hooks(
     sites: [layout::Site; 2],
     hooks: &[DiagnosticHook; 2],
 ) -> DiagnosticInstall {
-    use rsf_minhook_sys::{MH_CreateHook, MH_DisableHook, MH_EnableHook, MH_OK};
+    use rsf_minhook_sys::{MH_CreateHook, MH_OK};
     if image == 0
         || !sites
             .iter()
@@ -90,16 +90,13 @@ pub(crate) fn install_diagnostic_hooks(
             };
         }
     }
-    if targets
-        .iter()
-        .all(|&target| unsafe { MH_EnableHook(target as _) } == MH_OK)
-    {
+    if targets.iter().all(|&target| platform::enable(target)) {
         return DiagnosticInstall::Installed;
     }
     // A partially enabled set can leave a callback on the stack. Disable both sites and keep
     // their trampolines until process exit.
     for target in targets {
-        unsafe { MH_DisableHook(target as _) };
+        platform::disable(target);
     }
     DiagnosticInstall::Retained
 }

@@ -13,7 +13,7 @@ use crate::{camera_probe::rsf_rdr2_camera_request, layout, platform::lock};
 use std::{
     arch::naked_asm,
     cell::Cell,
-    ffi::{CStr, c_void},
+    ffi::c_void,
     ptr::{null, null_mut},
     sync::atomic::Ordering,
 };
@@ -94,18 +94,12 @@ pub(super) unsafe fn enable_hook(target: Raw) -> i32 {
 }
 pub(super) unsafe fn hook_report(slot: u32, target: Raw, result: i32) {
     let status = if result == hooks::DIFFERENT_TARGET {
-        c"unobserved vtable target"
+        "unobserved vtable target".to_owned()
     } else {
-        let raw = unsafe { rsf_minhook_sys::MH_StatusToString(result) };
-        if raw.is_null() {
-            c"unknown"
-        } else {
-            unsafe { CStr::from_ptr(raw) }
-        }
+        crate::asi::status_text(result)
     };
     owner().log(format_args!(
-        "hook slot={slot} target={target:p} result={}",
-        status.to_string_lossy()
+        "hook slot={slot} target={target:p} result={status}"
     ));
 }
 fn bind(role: Role, object: Raw, detour: *const c_void) {
